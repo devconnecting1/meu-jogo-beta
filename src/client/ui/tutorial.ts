@@ -1,5 +1,6 @@
 import { GameContext } from "shared/game/context";
-import { FONTS, PALETTE, makeButton, makeFrame, makeLabel, makePanel, makeScreen, setButtonEnabled } from "./widgets";
+import { RADIUS, TEXT, THEME, space } from "./theme";
+import { Button, Dialog, autoFocus, makeFrame, makeLabel, setButtonEnabled } from "./widgets";
 
 interface TutorialStep {
 	title: string;
@@ -31,47 +32,43 @@ const STEPS: Array<TutorialStep> = [
 
 const PANEL_W = 620;
 const PANEL_H = 390;
-const DOT_SIZE = 14;
-const DOT_GAP = 10;
+const DOT_W = 20;
+const DOT_H = 6;
+const DOT_GAP = space(2);
 
+/** tutorial: a popover dialog with a step indicator (current step = primary, others = secondary) */
 export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
-	const { root, body } = makeScreen(ctx.uiLayer, "Tutorial", {
-		color: PALETTE.overlay,
-		transparency: 0.35,
-		zIndex: 260,
-	});
-	const panel = makePanel(body, "Panel", 250, 120, PANEL_W, PANEL_H, { zIndex: 261 });
+	const dialog = Dialog(ctx.uiLayer, "Tutorial", { w: PANEL_W, h: PANEL_H, zIndex: 260 });
+	const panel = dialog.card;
+	const pad = space(6);
+	const innerW = PANEL_W - pad * 2;
 
-	const dotsWidth = STEPS.size() * DOT_SIZE + (STEPS.size() - 1) * DOT_GAP;
+	const dotsWidth = STEPS.size() * DOT_W + (STEPS.size() - 1) * DOT_GAP;
 	const dotsStartX = (PANEL_W - dotsWidth) / 2;
 	const dots: Array<Frame> = [];
 	for (let i = 0; i < STEPS.size(); i++) {
-		const dot = makeFrame(
-			panel,
-			`Dot${i}`,
-			dotsStartX + i * (DOT_SIZE + DOT_GAP),
-			24,
-			DOT_SIZE,
-			DOT_SIZE,
-			PALETTE.strokeSoft,
-			{ radius: DOT_SIZE, zIndex: 262 },
+		dots.push(
+			makeFrame(panel, `Dot${i}`, dotsStartX + i * (DOT_W + DOT_GAP), pad, DOT_W, DOT_H, THEME.secondary, {
+				radius: RADIUS.full,
+			}),
 		);
-		dots.push(dot);
 	}
-
-	const titleLabel = makeLabel(panel, "StepTitle", "", 40, 56, 540, 48, 26, PALETTE.accent, {
-		font: FONTS.display,
-		align: "left",
-		zIndex: 262,
+	const counter = makeLabel(panel, "StepCount", "", pad, pad + 20, innerW, 18, TEXT.xs, THEME.mutedForeground, {
+		font: "numeric",
 	});
-	const bodyLabel = makeLabel(panel, "StepBody", "", 40, 114, 540, 180, 18, PALETTE.text, {
-		font: FONTS.medium,
+	const titleLabel = makeLabel(panel, "StepTitle", "", pad, pad + 48, innerW, 40, TEXT.xl2, THEME.popoverForeground, {
+		font: "heading",
+		align: "left",
+	});
+	const bodyLabel = makeLabel(panel, "StepBody", "", pad, pad + 100, innerW, 160, TEXT.base, THEME.mutedForeground, {
 		align: "left",
 		valign: "top",
-		zIndex: 262,
 	});
 
 	let index = 0;
+	const cleanup = (): void => {
+		dialog.root.Destroy();
+	};
 	const finish = (): void => {
 		ctx.save.tutorialDone = true;
 		cleanup();
@@ -85,40 +82,33 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		const step = STEPS[index];
 		titleLabel.Text = step.title;
 		bodyLabel.Text = step.body;
+		counter.Text = `${index + 1} / ${STEPS.size()}`;
 		for (let i = 0; i < dots.size(); i++) {
-			dots[i].BackgroundColor3 = i === index ? PALETTE.accent : PALETTE.strokeSoft;
+			dots[i].BackgroundColor3 = i === index ? THEME.primary : THEME.secondary;
 		}
 		if (backBtn !== undefined) setButtonEnabled(backBtn, index > 0);
 		if (nextBtn !== undefined) nextBtn.Text = index >= STEPS.size() - 1 ? "Done" : "Next";
 	};
 
-	makeButton(panel, "Skip", "Skip", 40, 326, 120, 48, "ghost", (): void => finish(), { zIndex: 262 });
-	backBtn = makeButton(
-		panel,
-		"Back",
-		"Back",
-		250,
-		326,
-		140,
-		48,
-		"secondary",
-		(): void => {
+	const footerY = PANEL_H - pad - 44;
+	Button(panel, "Skip", "Skip", { x: pad, y: footerY, w: 110, variant: "ghost", onClick: (): void => finish() });
+	backBtn = Button(panel, "Back", "Back", {
+		x: PANEL_W - pad - 130 - space(2) - 130,
+		y: footerY,
+		w: 130,
+		variant: "secondary",
+		onClick: (): void => {
 			if (index <= 0) return;
 			index--;
 			show();
 		},
-		{ zIndex: 262 },
-	);
-	nextBtn = makeButton(
-		panel,
-		"Next",
-		"Next",
-		460,
-		326,
-		120,
-		48,
-		"primary",
-		(): void => {
+	});
+	nextBtn = Button(panel, "Next", "Next", {
+		x: PANEL_W - pad - 130,
+		y: footerY,
+		w: 130,
+		variant: "default",
+		onClick: (): void => {
 			if (index >= STEPS.size() - 1) {
 				finish();
 				return;
@@ -126,13 +116,9 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 			index++;
 			show();
 		},
-		{ zIndex: 262 },
-	);
+	});
 	show();
-
-	const cleanup = (): void => {
-		root.Destroy();
-	};
+	autoFocus(nextBtn);
 
 	return cleanup;
 }

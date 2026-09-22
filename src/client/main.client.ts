@@ -610,9 +610,10 @@ function showGameOverChoice(): void {
 			),
 		),
 		[
-			{ text: tr("Close"), style: "ghost" },
-			{ text: tr("New game"), style: "secondary", onClick: doNewRun },
-			{ text: `${tr("Rebirth")} · ${fmtInt(price)}`, style: "primary", onClick: doRebirth },
+			{ text: tr("Close"), variant: "outline" },
+			// starting over throws the current run away → destructive; paying to continue is the main action
+			{ text: tr("New game"), variant: "destructive", onClick: doNewRun },
+			{ text: `${tr("Rebirth")} · ${fmtInt(price)}`, variant: "default", onClick: doRebirth },
 		],
 	);
 }

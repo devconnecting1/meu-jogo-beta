@@ -1,126 +1,86 @@
 import { GameContext } from "shared/game/context";
-import {
-	ButtonStyle,
-	FONTS,
-	PALETTE,
-	makeAnchored,
-	makeButton,
-	makeFrame,
-	makeLabel,
-	makePanel,
-	makeScreen,
-	tween,
-} from "./widgets";
+import { TEXT, THEME, space } from "./theme";
+import { BUTTON_SIZE, Button, ButtonVariant, Dialog, ToastKind, autoFocus, makeLabel, showToast } from "./widgets";
+
+export type { ToastKind } from "./widgets";
 
 export interface PopupButtonSpec {
 	text: string;
-	style?: ButtonStyle;
+	/** default: the last button is the primary action ("default"), the others "secondary" */
+	variant?: ButtonVariant;
+	/** @deprecated previous kit names: "primary" = default, "ghost" = secondary (Close / Back), "danger" = destructive */
+	style?: ButtonVariant | "primary" | "danger";
 	onClick?: () => void;
 	/** keep the popup open after the click (default: close) */
 	keepOpen?: boolean;
 }
 
-/** modal dialog; returns the overlay (destroy it to close) */
+const DIALOG_W = 520;
+/** rough characters per line of the body at TEXT.base in the dialog width (for the height estimate) */
+const CHARS_PER_LINE = 54;
+
+function variantOf(spec: PopupButtonSpec, isLast: boolean): ButtonVariant {
+	if (spec.variant !== undefined) return spec.variant;
+	const style = spec.style;
+	if (style === "primary") return "default";
+	if (style === "danger") return "destructive";
+	if (style === "ghost") return "secondary";
+	if (style !== undefined) return style;
+	return isLast ? "default" : "secondary";
+}
+
+function bodyLines(body: string): number {
+	let lines = 0;
+	for (const line of body.split("\n")) {
+		lines += math.max(1, math.ceil(line.size() / CHARS_PER_LINE));
+	}
+	return math.max(1, lines);
+}
+
+/** modal dialog (popover card over a scrim); returns the overlay (destroy it to close) */
 export function popup(ctx: GameContext, title: string, body: string, buttons: Array<PopupButtonSpec>): Frame {
-	const { root, body: area } = makeScreen(ctx.uiLayer, "PopupOverlay", {
-		color: PALETTE.overlay,
-		transparency: 0.4,
-		zIndex: 300,
+	const bodyH = math.ceil(bodyLines(body) * TEXT.base * 1.45);
+	const footerH = BUTTON_SIZE.default.h;
+	// header (title) + body + footer, with the card's padding
+	const headerH = space(6) + math.ceil(TEXT.xl2 * 1.3) + space(4);
+	const h = headerH + bodyH + space(6) + footerH + space(6);
+	const dialog = Dialog(ctx.uiLayer, "PopupOverlay", { w: DIALOG_W, h, title, zIndex: 300 });
+	const card = dialog.card;
+	const pad = space(6);
+	const innerW = DIALOG_W - pad * 2;
+	makeLabel(card, "PopupBody", body, pad, dialog.contentY, innerW, bodyH, TEXT.base, THEME.mutedForeground, {
+		align: "left",
+		valign: "top",
 	});
-	const panel = makePanel(area, "PopupPanel", 290, 130, 540, 370, { color: PALETTE.surface });
-	makeLabel(panel, "PopupTitle", title, 32, 26, 476, 40, 26, PALETTE.text, { font: FONTS.display, align: "left" });
-	makeFrame(panel, "Rule", 32, 74, 476, 2, PALETTE.accent, { transparency: 0.4 });
-	makeLabel(panel, "PopupBody", body, 32, 92, 476, 180, 18, PALETTE.textDim, { align: "left", valign: "top" });
+
+	// DialogFooter: right-aligned, primary action last
 	const count = buttons.size();
-	const gap = 14;
-	const btnW = count > 0 ? math.min(200, (476 - gap * (count - 1)) / count) : 0;
-	let bx = 540 - 32 - (btnW * count + gap * math.max(count - 1, 0));
+	const gap = space(2);
+	const btnW = count > 0 ? math.min(200, (innerW - gap * (count - 1)) / count) : 0;
+	let bx = DIALOG_W - pad - (btnW * count + gap * math.max(count - 1, 0));
+	const footerY = h - pad - footerH;
+	let primary: TextButton | undefined;
 	for (let i = 0; i < count; i++) {
 		const spec = buttons[i];
-		const style: ButtonStyle = spec.style ?? (i === count - 1 ? "primary" : "secondary");
-		makeButton(panel, `PopupBtn${i}`, spec.text, bx, 294, btnW, 50, style, (): void => {
-			if (spec.keepOpen !== true) root.Destroy();
-			if (spec.onClick !== undefined) spec.onClick();
+		const variant = variantOf(spec, i === count - 1);
+		const b = Button(card, `PopupBtn${i}`, spec.text, {
+			x: bx,
+			y: footerY,
+			w: btnW,
+			variant,
+			onClick: (): void => {
+				if (spec.keepOpen !== true) dialog.close();
+				if (spec.onClick !== undefined) spec.onClick();
+			},
 		});
+		if (variant === "default") primary = b;
 		bx += btnW + gap;
 	}
-	return root;
+	if (primary !== undefined) autoFocus(primary);
+	return dialog.root;
 }
 
-export type ToastKind = "info" | "success" | "error" | "coin";
-
-const MAX_TOASTS = 4;
-const TOAST_TIME = 2.6;
-
-function toastStack(ctx: GameContext): Frame {
-	const existing = ctx.uiLayer.FindFirstChild("ToastStack");
-	if (existing !== undefined && existing.IsA("Frame")) return existing;
-	// top-centre, below the Roblox top bar and the HUD day box, above every panel/overlay of the UI layer
-	const stack = makeAnchored(ctx.uiLayer, "ToastStack", 0.5, 0, 460, 230, 0, 70, true);
-	stack.ZIndex = 1000;
-	const layout = new Instance("UIListLayout");
-	layout.SortOrder = Enum.SortOrder.LayoutOrder;
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center;
-	layout.Padding = new UDim(0.02, 0);
-	layout.Parent = stack;
-	return stack;
-}
-
-function accentOf(kind: ToastKind): Color3 {
-	if (kind === "success") return PALETTE.success;
-	if (kind === "error") return PALETTE.danger;
-	if (kind === "coin") return PALETTE.coin;
-	return PALETTE.info;
-}
-
-let toastOrder = 0;
-
-/** short notification on top of everything; at most 4 visible, identical texts are merged */
+/** sonner-style notification on top of everything; at most 4 visible, identical texts are merged */
 export function toast(ctx: GameContext, text: string, kind: ToastKind = "info"): void {
-	const stack = toastStack(ctx);
-	for (const child of stack.GetChildren()) {
-		if (child.IsA("Frame") && child.GetAttribute("Text") === text) {
-			// same message again: refresh it instead of stacking a copy
-			child.SetAttribute("Born", os.clock());
-			child.LayoutOrder = ++toastOrder;
-			return;
-		}
-	}
-	const live: Array<Frame> = [];
-	for (const child of stack.GetChildren()) {
-		if (child.IsA("Frame")) live.push(child);
-	}
-	live.sort((a, b) => a.LayoutOrder < b.LayoutOrder);
-	while (live.size() >= MAX_TOASTS) {
-		live.remove(0)?.Destroy();
-	}
-	const item = makeFrame(stack, "Toast", 0, 0, 460, 50, PALETTE.surface, {
-		radius: 25,
-		stroke: accentOf(kind),
-		strokeTransparency: 0.35,
-		transparency: 0.06,
-	});
-	item.Position = new UDim2();
-	item.ZIndex = 1001;
-	item.LayoutOrder = ++toastOrder;
-	item.SetAttribute("Text", text);
-	item.SetAttribute("Born", os.clock());
-	makeFrame(item, "Dot", 18, 19, 12, 12, accentOf(kind), { radius: 6, zIndex: 1002 });
-	const label = makeLabel(item, "Text", text, 40, 0, 404, 50, 17, PALETTE.text, {
-		font: FONTS.medium,
-		align: "left",
-		zIndex: 1002,
-	});
-	task.spawn(() => {
-		while (item.Parent !== undefined) {
-			const born = item.GetAttribute("Born");
-			if (typeIs(born, "number") && os.clock() - born >= TOAST_TIME) break;
-			task.wait(0.2);
-		}
-		if (item.Parent === undefined) return;
-		tween(item, 0.3, { BackgroundTransparency: 1 });
-		tween(label, 0.3, { TextTransparency: 1 });
-		task.wait(0.3);
-		item.Destroy();
-	});
+	showToast(ctx.uiLayer, text, kind);
 }

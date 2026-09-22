@@ -6,6 +6,9 @@
  * and rebuilds after each action. The one write it does itself is spending skill points.
  *
  * Levels: 2 = list of the current tab, 3 = item detail, 4 = recipe detail, 5 = skills.
+ *
+ * Look: a Card window with a Sidebar of categories on the left and the current list / detail on the right.
+ * Every colour is a theme token (THEME / GAME); hover, pressed and disabled states come from the kit.
  */
 import { GameContext } from "shared/game/context";
 import { WEAPONS, WeaponDef } from "shared/data/weapons";
@@ -18,26 +21,32 @@ import { AmmoPool, ItemKind, WeaponKind } from "shared/data/kinds";
 import { costumeForEquip } from "shared/data/shop";
 import { PlayerSaveData, equipSlotOf, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
 import { toast } from "./popup";
+import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, hex, space } from "./theme";
 import {
-	ButtonStyle,
-	FONTS,
-	PALETTE,
+	BUTTON_SIZE,
+	Badge,
+	Button,
+	ButtonVariant,
+	Card,
+	CardDescription,
+	CardTitle,
+	ListRowButton,
 	ScrollList,
+	Separator,
+	Sidebar,
+	SidebarHandle,
+	badgeWidth,
 	clearChildren,
-	darken,
 	fmtInt,
 	fmtNum,
 	fmtSeconds,
-	lighten,
-	makeButton,
 	makeFrame,
 	makeLabel,
 	makeListRow,
-	makePanel,
 	makeScreen,
 	makeScrollList,
+	setBadge,
 	setButtonEnabled,
-	setButtonStyle,
 	tween,
 } from "./widgets";
 
@@ -61,17 +70,46 @@ const MAT_START = 23;
 // layout (design units; the panel is a 1000 x 570 design space)
 const PANEL_W = 1000;
 const PANEL_H = 570;
-const PAD = 20;
-const INNER_W = PANEL_W - PAD * 2;
-const TABS_Y = 64;
-const TABS_H = 50;
-const CONTENT_Y = TABS_Y + TABS_H + 12;
-const CONTENT_H = PANEL_H - PAD - CONTENT_Y;
-const ROW_H = 50;
-const STRIP_H = 30;
-const LIST_GAP = 8;
+const PAD = space(5);
+const ICON_W = BUTTON_SIZE.icon.h;
+const HEADER_Y = space(3);
+const HEADER_H = ICON_W;
+const TITLE_W = 124;
+const SP_W = 72;
+const BODY_Y = HEADER_Y + HEADER_H + space(4);
+const BODY_H = PANEL_H - PAD - BODY_Y;
+// category sidebar on the left, content on the right
+const NAV_W = 180;
+const NAV_ITEM_H = 44;
+const CONTENT_X = PAD + NAV_W + space(5);
+const CONTENT_W = PANEL_W - PAD - CONTENT_X;
+const CONTENT_H = BODY_H;
+// list rows: glyph + two text lines (name, info) + right-hand columns
+const ROW_H = 56;
+const ROW_PAD = space(4);
+const GLYPH = 36;
+const ROW_TEXT_X = ROW_PAD + GLYPH + space(3);
+const BADGE_H = 24;
+const COUNT_W = 96;
+const STATION_W = 92;
+const STATUS_W = 72;
+const PLUS_W = 72;
+const LEVEL_W = 76;
+const PIP_W = 20;
+const PIP_H = 8;
+const PIP_GAP = 6;
+const MAX_PIPS = SKILLS.reduce((m, sk) => math.max(m, sk.maxLevel), 1);
+const STRIP_H = 36;
+const LIST_GAP = space(2);
+// detail pages
+const CHIP_W = 142;
+const CHIP_H = 64;
+const CHIP_GAP = space(3);
 const ACTION_W = 220;
-const ACTION_H = 54;
+const ACTION_H = BUTTON_SIZE.lg.h;
+const ING_W = 440;
+const ING_H = 40;
+const ING_COUNT_W = 110;
 
 const SLOT_NAMES = ["-", "Cloth", "Hand", "Gun", "Deco"];
 
@@ -81,6 +119,8 @@ interface ItemEntry {
 	name: string;
 	info: string;
 	count: string;
+	/** `count` is a quantity ("x 3"), not a word ("Default", "Costume") */
+	numeric: boolean;
 	equipped: boolean;
 }
 
@@ -154,15 +194,12 @@ function recipeMaking(kind: number, index: number): CraftRecipe | undefined {
 	return undefined;
 }
 
-function kindColor(kind: number): Color3 {
-	if (kind === ItemKind.Weapon) return PALETTE.danger;
-	if (kind === ItemKind.Equip) return PALETTE.info;
-	if (kind === ItemKind.Use) return PALETTE.success;
-	return PALETTE.accent;
-}
-
-function rowColor(index: number): Color3 {
-	return index % 2 === 0 ? PALETTE.surfaceAlt : lighten(PALETTE.surfaceAlt, 0.03);
+/** tone of an item kind: weapons destructive, equipment info, usables success, materials material */
+function kindTone(kind: number): Color3 {
+	if (kind === ItemKind.Weapon) return THEME.destructive;
+	if (kind === ItemKind.Equip) return GAME.info;
+	if (kind === ItemKind.Use) return GAME.success;
+	return GAME.material;
 }
 
 function escapeRich(s: string): string {
@@ -170,85 +207,57 @@ function escapeRich(s: string): string {
 }
 
 function colorTag(c: Color3, text: string): string {
-	const r = math.round(c.R * 255);
-	const g = math.round(c.G * 255);
-	const b = math.round(c.B * 255);
-	return `<font color="rgb(${r},${g},${b})">${escapeRich(text)}</font>`;
+	return `<font color="${hex(c)}">${escapeRich(text)}</font>`;
 }
 
 // ---------------------------------------------------------------- small local widgets
 
-/** coloured pill with a short caption (e.g. "EQUIPPED") */
-function makeTag(
-	parent: Instance,
-	name: string,
-	text: string,
-	x: number,
-	y: number,
-	w: number,
-	h: number,
-	color: Color3,
-) {
-	const f = makeFrame(parent, name, x, y, w, h, darken(color, 0.7), {
-		radius: h / 2,
-		stroke: color,
-		strokeTransparency: 0.35,
+/** first text line of a row: the name (SemiBold, stays legible on the accent hover) */
+function rowTitle(row: GuiObject, x: number, text: string, w: number, color: Color3): TextLabel {
+	return makeLabel(row, "Name", text, x, space(2), w, 22, TEXT.base, color, {
+		font: "heading",
+		align: "left",
 		zIndex: 2,
 	});
-	makeLabel(f, "Text", text, 0, 0, w, h, h * 0.46, lighten(color, 0.15), { font: FONTS.bold, zIndex: 3 });
+}
+
+/** second text line of a row: stats / ingredients / description */
+function rowSubtitle(row: GuiObject, x: number, text: string, w: number, rich = false): TextLabel {
+	return makeLabel(row, "Info", text, x, 31, w, 18, TEXT.sm, THEME.mutedForeground, {
+		weight: Enum.FontWeight.Medium,
+		align: "left",
+		rich,
+		zIndex: 2,
+	});
+}
+
+/** square tile with the item's initial: border and letter in the item kind's tone (muted: border + muted text) */
+function makeGlyph(parent: Instance, x: number, y: number, name: string, tone: Color3, muted: boolean): Frame {
+	const f = makeFrame(parent, "Glyph", x, y, GLYPH, GLYPH, THEME.card, {
+		radius: RADIUS.lg,
+		stroke: muted ? THEME.border : tone,
+		zIndex: 2,
+	});
+	makeLabel(f, "Letter", name.sub(1, 1).upper(), 0, 0, GLYPH, GLYPH, TEXT.lg, muted ? THEME.mutedForeground : tone, {
+		weight: Enum.FontWeight.Bold,
+		zIndex: 3,
+	});
 	return f;
 }
 
-/** rounded square with the item's initial, tinted by item kind */
-function makeGlyph(parent: Instance, x: number, y: number, size: number, name: string, color: Color3, muted: boolean) {
-	const f = makeFrame(parent, "Glyph", x, y, size, size, muted ? PALETTE.surfaceHi : darken(color, 0.6), {
-		radius: size * 0.25,
-		stroke: muted ? PALETTE.strokeSoft : color,
-		strokeTransparency: 0.45,
-		zIndex: 2,
-	});
-	makeLabel(
-		f,
-		"Letter",
-		name.sub(1, 1).upper(),
-		0,
-		0,
-		size,
-		size,
-		size * 0.5,
-		muted ? PALETTE.textMuted : lighten(color, 0.25),
-		{
-			font: FONTS.display,
-			zIndex: 3,
-		},
-	);
-	return f;
-}
-
-/** stat card: small caption over a big value */
-function makeChip(
-	parent: Instance,
-	name: string,
-	x: number,
-	y: number,
-	w: number,
-	h: number,
-	caption: string,
-	value: string,
-) {
-	const f = makeFrame(parent, name, x, y, w, h, PALETTE.surfaceAlt, { radius: 10, stroke: PALETTE.strokeSoft });
-	makeLabel(f, "Caption", caption.upper(), 14, 8, w - 28, 18, 12, PALETTE.textDim, {
-		font: FONTS.bold,
+/** stat tile: small caption over a monospaced value */
+function makeChip(parent: Instance, name: string, x: number, y: number, caption: string, value: string): Frame {
+	const f = Card(parent, name, { x, y, w: CHIP_W, h: CHIP_H, variant: "muted" });
+	const inner = CHIP_W - space(7);
+	makeLabel(f, "Caption", caption.upper(), space(3.5), space(2.5), inner, 16, TEXT.xs, THEME.mutedForeground, {
+		weight: Enum.FontWeight.Medium,
 		align: "left",
 	});
-	makeLabel(f, "Value", value, 14, 28, w - 28, 30, 22, PALETTE.text, { font: FONTS.bold, align: "left" });
+	makeLabel(f, "Value", value, space(3.5), 30, inner, 24, TEXT.xl, THEME.foreground, {
+		font: "numeric",
+		align: "left",
+	});
 	return f;
-}
-
-/** a full-row TextButton keeps the kit's hover/press feedback; its outline is toned down for lists */
-function quietStroke(b: TextButton): void {
-	const stroke = b.FindFirstChildOfClass("UIStroke");
-	if (stroke !== undefined) stroke.Color = PALETTE.strokeSoft;
 }
 
 // ---------------------------------------------------------------- backpack
@@ -270,12 +279,9 @@ export class Backpack {
 	private ctx: GameContext;
 	private root: Frame | undefined;
 	private content: Frame | undefined;
-	private spPill: Frame | undefined;
-	private spLabel: TextLabel | undefined;
-	private skillBadge: Frame | undefined;
-	private skillBadgeLabel: TextLabel | undefined;
+	private spBadge: Frame | undefined;
 	private backBtn: TextButton | undefined;
-	private tabs: Array<TextButton> = [];
+	private nav: SidebarHandle | undefined;
 	private list: ScrollList | undefined;
 	private listKey = "";
 	private scrollMemory = new Map<string, Vector2>();
@@ -300,71 +306,80 @@ export class Backpack {
 		this.scrollMemory.clear();
 
 		const screen = makeScreen(this.ctx.uiLayer, "Backpack", {
-			color: PALETTE.overlay,
-			transparency: 0.45,
+			color: THEME.background,
+			transparency: TRANSPARENCY.overlay,
 			zIndex: 200,
 		});
 		this.root = screen.root;
-		const panel = makePanel(screen.body, "Panel", 60, 30, PANEL_W, PANEL_H);
+		const panel = Card(screen.body, "Panel", { x: 60, y: 30, w: PANEL_W, h: PANEL_H });
 
-		// header
-		makeLabel(panel, "Title", "Backpack", 24, 12, 170, 44, 26, PALETTE.text, {
-			font: FONTS.display,
+		// header: title + skill points, key hint, back / close
+		makeLabel(panel, "Title", "Backpack", PAD, HEADER_Y, TITLE_W, HEADER_H, TEXT.xl2, THEME.foreground, {
+			font: "title",
 			align: "left",
 		});
-		const pill = makeFrame(panel, "SpPill", 200, 20, 88, 28, PALETTE.accent, { radius: 14 });
-		this.spPill = pill;
-		this.spLabel = makeLabel(pill, "Text", "", 0, 0, 88, 28, 15, PALETTE.textOnAccent, { font: FONTS.bold });
+		this.spBadge = Badge(panel, "SkillPoints", "", {
+			x: PAD + TITLE_W + space(3),
+			y: HEADER_Y + (HEADER_H - BADGE_H) / 2,
+			w: SP_W,
+			h: BADGE_H,
+			textSize: TEXT.sm,
+			color: GAME.xp,
+		});
+		const closeX = PANEL_W - PAD - ICON_W;
+		const navX = closeX - space(2) - ICON_W;
 		if (UserInputService.KeyboardEnabled) {
-			makeLabel(panel, "KeyHint", "Press B to close", 640, 20, 212, 28, 13, PALETTE.textMuted, {
-				align: "right",
-			});
-		}
-		this.backBtn = makeButton(panel, "Nav", "<", 868, 14, 52, 40, "ghost", (): void => this.goBack(), {
-			textSize: 20,
-		});
-		makeButton(panel, "Close", "X", 928, 14, 52, 40, "ghost", (): void => this.close(), { textSize: 18 });
-
-		// tabs: segmented control
-		const bar = makeFrame(panel, "Tabs", PAD, TABS_Y, INNER_W, TABS_H, PALETTE.bgRaised, {
-			radius: 12,
-			stroke: PALETTE.strokeSoft,
-		});
-		const gap = 4;
-		const tabW = (INNER_W - gap * 2 - gap * (CAT_NAMES.size() - 1)) / CAT_NAMES.size();
-		this.tabs = [];
-		for (let i = 0; i < CAT_NAMES.size(); i++) {
-			const index = i;
-			const tab = makeButton(
-				bar,
-				`Tab${i}`,
-				CAT_NAMES[i],
-				gap + i * (tabW + gap),
-				gap,
-				tabW,
-				TABS_H - gap * 2,
-				"secondary",
-				(): void => this.selectCat(index),
-				{ textSize: 16, radius: 10 },
+			const hintW = 220;
+			makeLabel(
+				panel,
+				"KeyHint",
+				"Press B to close",
+				navX - space(3) - hintW,
+				HEADER_Y,
+				hintW,
+				HEADER_H,
+				TEXT.sm,
+				THEME.mutedForeground,
+				{ font: "caption", align: "right" },
 			);
-			this.tabs.push(tab);
 		}
-		// unspent skill points badge on the Skills tab
-		const badgeX = gap + CAT_SKILLS * (tabW + gap) + tabW - 32;
-		const badge = makeFrame(bar, "SkillBadge", badgeX, 14, 22, 22, PALETTE.accent, { radius: 11, zIndex: 3 });
-		this.skillBadge = badge;
-		this.skillBadgeLabel = makeLabel(badge, "Count", "", 0, 0, 22, 22, 12, PALETTE.textOnAccent, {
-			font: FONTS.bold,
-			zIndex: 4,
+		this.backBtn = Button(panel, "Nav", "<", {
+			x: navX,
+			y: HEADER_Y,
+			w: ICON_W,
+			size: "icon",
+			variant: "secondary",
+			onClick: (): void => this.goBack(),
+		});
+		Button(panel, "Close", "X", {
+			x: closeX,
+			y: HEADER_Y,
+			w: ICON_W,
+			size: "icon",
+			variant: "secondary",
+			onClick: (): void => this.close(),
 		});
 
-		this.content = makeFrame(panel, "Content", PAD, CONTENT_Y, INNER_W, CONTENT_H, PALETTE.surface, {
+		// categories: sidebar on the left
+		const nav = Sidebar(panel, "Categories", {
+			x: PAD,
+			y: BODY_Y,
+			w: NAV_W,
+			h: BODY_H,
+			items: CAT_NAMES,
+			value: this.cat,
+			itemH: NAV_ITEM_H,
+			textSize: TEXT.base,
+			onChange: (index: number): void => this.selectCat(index),
+		});
+		this.nav = nav;
+		this.content = makeFrame(panel, "Content", CONTENT_X, BODY_Y, CONTENT_W, CONTENT_H, THEME.card, {
 			transparency: 1,
 		});
 
-		// entrance: fade the dim in, slide the panel up a little
+		// entrance: fade the scrim in, slide the panel up a little
 		screen.root.BackgroundTransparency = 1;
-		tween(screen.root, 0.15, { BackgroundTransparency: 0.45 });
+		tween(screen.root, 0.15, { BackgroundTransparency: TRANSPARENCY.overlay });
 		const target = panel.Position;
 		panel.Position = target.add(UDim2.fromScale(0, 0.025));
 		tween(panel, 0.18, { Position: target });
@@ -377,12 +392,9 @@ export class Backpack {
 		this.root.Destroy();
 		this.root = undefined;
 		this.content = undefined;
-		this.spPill = undefined;
-		this.spLabel = undefined;
-		this.skillBadge = undefined;
-		this.skillBadgeLabel = undefined;
+		this.spBadge = undefined;
 		this.backBtn = undefined;
-		this.tabs = [];
+		this.nav = undefined;
 		this.list = undefined;
 		this.listKey = "";
 	}
@@ -419,18 +431,17 @@ export class Backpack {
 
 	private refreshHeader(): void {
 		const sp = this.ctx.save.skillPoint;
-		if (this.spPill !== undefined && this.spLabel !== undefined) {
-			this.spLabel.Text = `SP ${sp}`;
-			this.spPill.BackgroundColor3 = sp > 0 ? PALETTE.accent : PALETTE.surfaceHi;
-			this.spLabel.TextColor3 = sp > 0 ? PALETTE.textOnAccent : PALETTE.textDim;
+		if (this.spBadge !== undefined) {
+			// xp badge while there are points to spend, secondary otherwise
+			setBadge(this.spBadge, `SP ${sp}`, sp > 0 ? GAME.xp : THEME.secondary);
 		}
-		if (this.skillBadge !== undefined && this.skillBadgeLabel !== undefined) {
-			this.skillBadge.Visible = sp > 0 && this.cat !== CAT_SKILLS;
-			this.skillBadgeLabel.Text = sp > 9 ? "9+" : `${sp}`;
-		}
-		for (let i = 0; i < this.tabs.size(); i++) {
-			setButtonStyle(this.tabs[i], i === this.cat ? "primary" : "secondary");
-		}
+		// unspent skill points on the Skills item of the rail
+		this.nav?.setBadge(
+			CAT_SKILLS,
+			sp > 0 && this.cat !== CAT_SKILLS ? (sp > 9 ? "9+" : `${sp}`) : undefined,
+			GAME.xp,
+		);
+		this.nav?.setActive(this.cat);
 		if (this.backBtn !== undefined) {
 			setButtonEnabled(this.backBtn, this.level === LEVEL_DETAIL || this.level === LEVEL_RECIPE);
 		}
@@ -461,7 +472,7 @@ export class Backpack {
 
 	/** scroll list for the current tab; restores where the player left it (e.g. after a detail page) */
 	private newList(content: Frame, y: number, h: number): ScrollList {
-		const list = makeScrollList(content, "List", 0, y, INNER_W, h);
+		const list = makeScrollList(content, "List", 0, y, CONTENT_W, h);
 		// keep the row outlines clear of the ScrollingFrame clipping
 		const pad = list.frame.FindFirstChildOfClass("UIPadding");
 		if (pad !== undefined) {
@@ -490,18 +501,24 @@ export class Backpack {
 		return list;
 	}
 
-	/** thin info bar above the craft / skills lists */
+	/** thin status bar above the craft / skills lists: coloured dot + one line of text */
 	private makeStrip(content: Frame, text: string, dot: Color3): void {
-		const strip = makeFrame(content, "Strip", 0, 0, INNER_W, STRIP_H, PALETTE.bgRaised, {
-			radius: 8,
-			stroke: PALETTE.strokeSoft,
-			strokeTransparency: 0.4,
-		});
-		makeFrame(strip, "Dot", 12, 10, 10, 10, dot, { radius: 5, zIndex: 2 });
-		makeLabel(strip, "Text", text, 32, 0, INNER_W - 44, STRIP_H, 14, PALETTE.textDim, {
-			align: "left",
-			zIndex: 2,
-		});
+		const strip = Card(content, "Strip", { x: 0, y: 0, w: CONTENT_W, h: STRIP_H, variant: "muted" });
+		const d = space(2);
+		makeFrame(strip, "Dot", space(3.5), (STRIP_H - d) / 2, d, d, dot, { radius: RADIUS.full, zIndex: 2 });
+		const textX = space(3.5) + d + space(2.5);
+		makeLabel(
+			strip,
+			"Text",
+			text,
+			textX,
+			0,
+			CONTENT_W - textX - space(3),
+			STRIP_H,
+			TEXT.sm,
+			THEME.mutedForeground,
+			{ align: "left", zIndex: 2 },
+		);
 	}
 
 	// ------------------------------------------------------------ item tabs
@@ -515,12 +532,14 @@ export class Backpack {
 				const count = save.invenWeapon[w.id] ?? 0;
 				let info = `${weaponKindName(w.kind)} · Damage ${damageText(w)}`;
 				if (!isMelee(w)) info += ` · Mag ${fmtInt(w.mag)}`;
+				const isDefault = w.id === 0 && count === 0;
 				out.push({
 					kind: ItemKind.Weapon,
 					id: w.id,
 					name: w.name,
 					info,
-					count: w.id === 0 && count === 0 ? "Default" : `x ${fmtInt(count)}`,
+					count: isDefault ? "Default" : `x ${fmtInt(count)}`,
+					numeric: !isDefault,
 					equipped: save.equipWeapon === w.id,
 				});
 			}
@@ -538,6 +557,7 @@ export class Backpack {
 					name: e.name,
 					info,
 					count: count > 0 ? `x ${fmtInt(count)}` : "Costume",
+					numeric: count > 0,
 					equipped: slotValue(save, slot) === e.id,
 				});
 			}
@@ -555,6 +575,7 @@ export class Backpack {
 					name: u.name,
 					info,
 					count: `x ${fmtInt(count)}`,
+					numeric: true,
 					equipped: false,
 				});
 			}
@@ -570,6 +591,7 @@ export class Backpack {
 					name: m.name,
 					info: uses > 0 ? `Material · used in ${uses} recipe${uses === 1 ? "" : "s"}` : "Material",
 					count: `x ${fmtInt(count)}`,
+					numeric: true,
 					equipped: false,
 				});
 			}
@@ -590,24 +612,27 @@ export class Backpack {
 	}
 
 	private itemRow(list: ScrollList, index: number, e: ItemEntry): void {
-		const color = rowColor(index);
-		const row = makeListRow(list, `Row${index}`, index, ROW_H, color);
-		row.BackgroundTransparency = 1;
-		const hit = makeButton(row, "Hit", "", 0, 0, INNER_W, ROW_H, color, (): void => this.openDetail(e.kind, e.id), {
-			radius: 10,
-		});
-		quietStroke(hit);
-		if (e.equipped) makeFrame(row, "Mark", 0, 10, 4, ROW_H - 20, PALETTE.success, { radius: 2, zIndex: 2 });
-		makeGlyph(row, 14, 9, 32, e.name, kindColor(e.kind), false);
-		makeLabel(row, "Name", e.name, 58, 0, 320, ROW_H, 17, PALETTE.text, {
-			font: FONTS.bold,
-			align: "left",
-			zIndex: 2,
-		});
-		makeLabel(row, "Info", e.info, 388, 0, 330, ROW_H, 13, PALETTE.textDim, { align: "left", zIndex: 2 });
-		if (e.equipped) makeTag(row, "Equipped", "EQUIPPED", 728, 12, 100, 26, PALETTE.success);
-		makeLabel(row, "Count", e.count, 840, 0, 100, ROW_H, 17, PALETTE.text, {
-			font: FONTS.bold,
+		const row = ListRowButton(list, `Row${index}`, index, ROW_H, (): void => this.openDetail(e.kind, e.id));
+		if (e.equipped) makeFrame(row, "Mark", 0, space(2), 3, ROW_H - space(4), GAME.success, { zIndex: 2 });
+		makeGlyph(row, ROW_PAD, (ROW_H - GLYPH) / 2, e.name, kindTone(e.kind), false);
+		const countX = CONTENT_W - ROW_PAD - COUNT_W;
+		const badgeW = badgeWidth("EQUIPPED", TEXT.sm, BADGE_H);
+		const badgeX = countX - space(3) - badgeW;
+		const textW = badgeX - space(3) - ROW_TEXT_X;
+		rowTitle(row, ROW_TEXT_X, e.name, textW, THEME.foreground);
+		rowSubtitle(row, ROW_TEXT_X, e.info, textW);
+		if (e.equipped) {
+			Badge(row, "Equipped", "EQUIPPED", {
+				x: badgeX,
+				y: (ROW_H - BADGE_H) / 2,
+				w: badgeW,
+				h: BADGE_H,
+				textSize: TEXT.sm,
+				color: GAME.success,
+			});
+		}
+		makeLabel(row, "Count", e.count, countX, 0, COUNT_W, ROW_H, TEXT.base, THEME.mutedForeground, {
+			font: e.numeric ? "numeric" : "label",
 			align: "right",
 			zIndex: 2,
 		});
@@ -629,13 +654,25 @@ export class Backpack {
 			title = "No usables yet";
 			body = "Search buildings and fallen zombies for food and medicine.";
 		}
-		const card = makePanel(content, "Empty", 200, 80, 560, 230, { color: PALETTE.bgRaised });
-		makeLabel(card, "Title", title, 30, 34, 500, 36, 22, PALETTE.text, { font: FONTS.bold });
-		makeLabel(card, "Body", body, 40, 78, 480, 60, 15, PALETTE.textDim);
+		const w = 520;
+		const titleY = space(7);
+		const titleH = 30;
+		const bodyY = titleY + titleH + space(3);
+		const bodyH = 44;
+		const buttonH = BUTTON_SIZE.default.h;
+		const h = bodyY + bodyH + space(7) + (craftShortcut ? buttonH + space(7) : 0);
+		const card = Card(content, "Empty", { x: (CONTENT_W - w) / 2, y: space(16), w, h });
+		CardTitle(card, title, { y: titleY, h: titleH, size: TEXT.xl2, align: "center" });
+		CardDescription(card, body, { y: bodyY, h: bodyH, size: TEXT.base, align: "center" });
 		if (craftShortcut) {
-			makeButton(card, "ToCraft", "Open Craft", 180, 156, 200, 46, "secondary", (): void =>
-				this.selectCat(CAT_CRAFT),
-			);
+			const buttonW = 180;
+			Button(card, "ToCraft", "Open Craft", {
+				x: (w - buttonW) / 2,
+				y: h - space(7) - buttonH,
+				w: buttonW,
+				variant: "outline",
+				onClick: (): void => this.selectCat(CAT_CRAFT),
+			});
 		}
 	}
 
@@ -659,40 +696,60 @@ export class Backpack {
 	}
 
 	private detailHeader(content: Frame, caption: string, name: string, equipped: boolean): void {
-		makeLabel(content, "Caption", caption, 0, 0, 700, 22, 13, PALETTE.textDim, { font: FONTS.bold, align: "left" });
-		makeLabel(content, "Name", name, 0, 24, 780, 50, 32, PALETTE.accent, { font: FONTS.display, align: "left" });
-		if (equipped) makeTag(content, "Equipped", "EQUIPPED", INNER_W - 140, 34, 140, 32, PALETTE.success);
+		makeLabel(content, "Caption", caption, 0, 0, CONTENT_W - 120, 20, TEXT.sm, THEME.mutedForeground, {
+			font: "label",
+			align: "left",
+		});
+		makeLabel(content, "Name", name, 0, 24, CONTENT_W - 120, 44, TEXT.xl3, THEME.foreground, {
+			font: "title",
+			align: "left",
+		});
+		if (equipped) {
+			const h = 26;
+			const w = badgeWidth("EQUIPPED", TEXT.sm, h);
+			Badge(content, "Equipped", "EQUIPPED", {
+				x: CONTENT_W - w,
+				y: 24 + (44 - h) / 2,
+				w,
+				h,
+				textSize: TEXT.sm,
+				color: GAME.success,
+			});
+		}
 	}
 
 	private detailStats(content: Frame, stats: Array<[string, string]>): void {
-		const w = 172;
-		const gap = 12;
 		for (let i = 0; i < stats.size(); i++) {
-			makeChip(content, `Stat${i}`, i * (w + gap), 88, w, 64, stats[i][0], stats[i][1]);
+			makeChip(content, `Stat${i}`, i * (CHIP_W + CHIP_GAP), 88, stats[i][0], stats[i][1]);
 		}
 	}
 
 	private detailBody(content: Frame, owned: string, ownedColor: Color3, help: string): void {
-		makeFrame(content, "Divider", 0, 170, INNER_W, 2, PALETTE.strokeSoft);
-		makeLabel(content, "Owned", owned, 0, 184, 600, 26, 18, ownedColor, { font: FONTS.bold, align: "left" });
-		makeLabel(content, "Help", help, 0, 218, INNER_W, 100, 16, PALETTE.textDim, { align: "left", valign: "top" });
+		Separator(content, "Divider", { x: 0, y: 170, length: CONTENT_W });
+		makeLabel(content, "Owned", owned, 0, 184, 600, 26, TEXT.lg, ownedColor, { font: "heading", align: "left" });
+		makeLabel(content, "Help", help, 0, 218, CONTENT_W, 100, TEXT.base, THEME.mutedForeground, {
+			align: "left",
+			valign: "top",
+		});
 	}
 
-	private detailAction(content: Frame, text: string, style: ButtonStyle, enabled: boolean, onClick: () => void) {
-		const b = makeButton(
-			content,
-			"Action",
-			text,
-			(INNER_W - ACTION_W) / 2,
-			CONTENT_H - ACTION_H - 12,
-			ACTION_W,
-			ACTION_H,
-			style,
+	/** the page's action button (centred at the bottom); disabled ones say why in their text */
+	private detailAction(
+		content: Frame,
+		text: string,
+		variant: ButtonVariant,
+		enabled: boolean,
+		onClick: () => void,
+	): TextButton {
+		return Button(content, "Action", text, {
+			x: (CONTENT_W - ACTION_W) / 2,
+			y: CONTENT_H - ACTION_H - space(3),
+			w: ACTION_W,
+			size: "lg",
+			variant,
+			disabled: !enabled,
 			onClick,
-			{ textSize: 20 },
-		);
-		if (!enabled) setButtonEnabled(b, false);
-		return b;
+		});
 	}
 
 	private weaponDetail(content: Frame, w: WeaponDef): void {
@@ -732,14 +789,14 @@ export class Backpack {
 		}
 		let ownedText = owned ? `Owned x ${fmtInt(count)}` : "Not owned";
 		if (id === 0 && count === 0) ownedText = "Default weapon";
-		this.detailBody(content, ownedText, owned ? PALETTE.text : PALETTE.textMuted, help.join(" "));
+		this.detailBody(content, ownedText, owned ? THEME.foreground : THEME.mutedForeground, help.join(" "));
 
 		if (!owned) {
-			this.detailAction(content, "Not owned", "secondary", false, (): void => {});
+			this.detailAction(content, "Not owned", "default", false, (): void => {});
 		} else if (equipped) {
-			this.detailAction(content, "Equipped", "success", true, (): void => {});
+			this.detailAction(content, "Equipped", "outline", false, (): void => {});
 		} else {
-			this.detailAction(content, "Equip", "primary", true, (): void => this.equipWeapon(id));
+			this.detailAction(content, "Equip", "default", true, (): void => this.equipWeapon(id));
 		}
 	}
 
@@ -777,16 +834,16 @@ export class Backpack {
 		let ownedText = "Not owned";
 		if (count > 0) ownedText = `Owned x ${fmtInt(count)}`;
 		else if (viaCostume) ownedText = "Unlocked by costume";
-		this.detailBody(content, ownedText, owned ? PALETTE.text : PALETTE.textMuted, help.join(" "));
+		this.detailBody(content, ownedText, owned ? THEME.foreground : THEME.mutedForeground, help.join(" "));
 
 		if (!owned) {
-			this.detailAction(content, "Not owned", "secondary", false, (): void => {});
+			this.detailAction(content, "Not owned", "default", false, (): void => {});
 		} else if (equipped) {
-			this.detailAction(content, "Unequip", "secondary", this.onUnequipItem !== undefined, (): void =>
+			this.detailAction(content, "Unequip", "outline", this.onUnequipItem !== undefined, (): void =>
 				this.unequipItem(id, slot),
 			);
 		} else {
-			this.detailAction(content, "Equip", "primary", true, (): void => this.equipItem(id, slot));
+			this.detailAction(content, "Equip", "default", true, (): void => this.equipItem(id, slot));
 		}
 	}
 
@@ -810,11 +867,11 @@ export class Backpack {
 		this.detailBody(
 			content,
 			`Owned x ${fmtInt(count)}`,
-			count > 0 ? PALETTE.text : PALETTE.textMuted,
+			count > 0 ? THEME.foreground : THEME.mutedForeground,
 			help.join(" "),
 		);
 
-		this.detailAction(content, count > 0 ? "Use" : "None left", "primary", count > 0, (): void => this.useItem(id));
+		this.detailAction(content, count > 0 ? "Use" : "None left", "default", count > 0, (): void => this.useItem(id));
 	}
 
 	private recipesUsing(etcId: number): Array<CraftRecipe> {
@@ -850,8 +907,13 @@ export class Backpack {
 			help = `Used to craft ${names.join(", ")}`;
 			help += uses.size() > shown ? ` and ${uses.size() - shown} more.` : ".";
 		}
-		this.detailBody(content, `Owned x ${fmtInt(count)}`, count > 0 ? PALETTE.text : PALETTE.textMuted, help);
-		this.detailAction(content, "Open Craft", "secondary", true, (): void => this.selectCat(CAT_CRAFT));
+		this.detailBody(
+			content,
+			`Owned x ${fmtInt(count)}`,
+			count > 0 ? THEME.foreground : THEME.mutedForeground,
+			help,
+		);
+		this.detailAction(content, "Open Craft", "outline", true, (): void => this.selectCat(CAT_CRAFT));
 	}
 
 	// ------------------------------------------------------------ actions (rules live in main.client)
@@ -915,14 +977,14 @@ export class Backpack {
 	private buildCraftList(content: Frame): void {
 		const fire = this.nearbyFire ? " A lit fire is nearby: smelting works." : " Smelting needs a lit fire.";
 		if (this.nearbyPro) {
-			this.makeStrip(content, `Pro craft desk nearby: every desk recipe works here.${fire}`, PALETTE.success);
+			this.makeStrip(content, `Pro craft desk nearby: every desk recipe works here.${fire}`, GAME.success);
 		} else if (this.nearbyDesk) {
-			this.makeStrip(content, `Craft desk nearby. Pro recipes need a pro desk.${fire}`, PALETTE.accent);
+			this.makeStrip(content, `Craft desk nearby. Pro recipes need a pro desk.${fire}`, GAME.warning);
 		} else {
 			this.makeStrip(
 				content,
 				`No craft desk nearby: hand recipes only.${fire}`,
-				this.nearbyFire ? PALETTE.accent : PALETTE.textMuted,
+				this.nearbyFire ? GAME.warning : THEME.mutedForeground,
 			);
 		}
 		const list = this.newList(content, STRIP_H + LIST_GAP, CONTENT_H - STRIP_H - LIST_GAP);
@@ -947,56 +1009,52 @@ export class Backpack {
 	private recipeRow(list: ScrollList, index: number, r: CraftRecipe): void {
 		const avail = this.recipeAvailable(r);
 		const enough = this.hasIngredients(r);
-		const color = rowColor(index);
-		const row = makeListRow(list, `Recipe${index}`, index, ROW_H, color);
-		row.BackgroundTransparency = 1;
 		const recipeId = r.id;
-		const hit = makeButton(row, "Hit", "", 0, 0, INNER_W, ROW_H, color, (): void => this.openRecipe(recipeId), {
-			radius: 10,
-		});
-		quietStroke(hit);
+		const row = ListRowButton(list, `Recipe${index}`, index, ROW_H, (): void => this.openRecipe(recipeId));
 		const name = this.resultName(r);
-		makeGlyph(row, 14, 9, 32, name, kindColor(r.resultKind), !avail);
-		makeLabel(row, "Name", name, 58, 0, 250, ROW_H, 16, avail ? PALETTE.text : PALETTE.textMuted, {
-			font: FONTS.bold,
-			align: "left",
-			zIndex: 2,
-		});
-		const parts: Array<string> = [];
+		makeGlyph(row, ROW_PAD, (ROW_H - GLYPH) / 2, name, kindTone(r.resultKind), !avail);
+		const statusX = CONTENT_W - ROW_PAD - STATUS_W;
+		const stationX = statusX - space(3) - STATION_W;
+		const textW = stationX - space(3) - ROW_TEXT_X;
+		rowTitle(row, ROW_TEXT_X, name, textW, avail ? THEME.foreground : THEME.mutedForeground);
+
+		// ingredients: have / need in success or destructive
+		const coloured: Array<string> = [];
+		const plain: Array<string> = [];
 		for (const ing of r.ingredients) {
 			const have = this.ingredientCount(ing.kind, ing.index);
-			const c = have >= ing.count ? PALETTE.success : PALETTE.danger;
-			parts.push(colorTag(c, `${nameOf(ing.kind, ing.index)} ${fmtInt(have)}/${fmtInt(ing.count)}`));
+			const text = `${nameOf(ing.kind, ing.index)} ${fmtInt(have)}/${fmtInt(ing.count)}`;
+			coloured.push(colorTag(have >= ing.count ? GAME.success : THEME.destructive, text));
+			plain.push(escapeRich(text));
 		}
-		makeLabel(
-			row,
-			"Ingredients",
-			parts.join(colorTag(PALETTE.textMuted, "  ·  ")),
-			318,
-			0,
-			390,
-			ROW_H,
-			13,
-			PALETTE.textDim,
-			{
-				align: "left",
-				rich: true,
-				zIndex: 2,
-			},
-		);
-		const station = stationTag(r);
-		makeTag(row, "Station", station.upper(), 716, 12, 104, 26, avail ? PALETTE.info : PALETTE.danger);
+		const richText = coloured.join(colorTag(THEME.mutedForeground, "  ·  "));
+		const plainText = plain.join("  ·  ");
+		const info = rowSubtitle(row, ROW_TEXT_X, richText, textW, true);
+		// the kit turns the row's labels accent-foreground on the accent hover / selection; <font> tags would keep
+		// their tones (unreadable on accent), so the line goes plain meanwhile
+		info.GetPropertyChangedSignal("TextColor3").Connect((): void => {
+			info.Text = info.TextColor3 === THEME.accentForeground ? plainText : richText;
+		});
+
+		Badge(row, "Station", stationTag(r).upper(), {
+			x: stationX,
+			y: (ROW_H - BADGE_H) / 2,
+			w: STATION_W,
+			h: BADGE_H,
+			textSize: TEXT.sm,
+			variant: avail ? "secondary" : "destructive",
+		});
 		let status = "Missing";
-		let statusColor = PALETTE.danger;
+		let statusColor = THEME.destructive;
 		if (!avail) {
 			status = "Locked";
-			statusColor = PALETTE.textMuted;
+			statusColor = THEME.mutedForeground;
 		} else if (enough) {
 			status = "Ready";
-			statusColor = PALETTE.success;
+			statusColor = GAME.success;
 		}
-		makeLabel(row, "Status", status, 830, 0, 110, ROW_H, 15, statusColor, {
-			font: FONTS.bold,
+		makeLabel(row, "Status", status, statusX, 0, STATUS_W, ROW_H, TEXT.sm, statusColor, {
+			font: "heading",
 			align: "right",
 			zIndex: 2,
 		});
@@ -1022,23 +1080,40 @@ export class Backpack {
 			["You have", fmtInt(this.ingredientCount(r.resultKind, r.resultIndex))],
 		]);
 
-		makeLabel(content, "IngTitle", "INGREDIENTS", 0, 170, 400, 20, 13, PALETTE.textDim, {
-			font: FONTS.bold,
+		makeLabel(content, "IngTitle", "INGREDIENTS", 0, 170, 400, 20, TEXT.xs, THEME.mutedForeground, {
+			weight: Enum.FontWeight.Medium,
 			align: "left",
 		});
 		for (let i = 0; i < r.ingredients.size(); i++) {
 			const ing = r.ingredients[i];
 			const have = this.ingredientCount(ing.kind, ing.index);
-			const ok = have >= ing.count;
-			const c = ok ? PALETTE.success : PALETTE.danger;
-			const line = makeFrame(content, `Ing${i}`, 0, 196 + i * 44, 600, 38, PALETTE.surfaceAlt, {
-				radius: 8,
-				stroke: c,
-				strokeTransparency: 0.6,
+			const tone = have >= ing.count ? GAME.success : THEME.destructive;
+			const line = Card(content, `Ing${i}`, {
+				x: 0,
+				y: 196 + i * (ING_H + space(2)),
+				w: ING_W,
+				h: ING_H,
+				variant: "muted",
+				border: tone,
 			});
-			makeLabel(line, "Name", nameOf(ing.kind, ing.index), 16, 0, 400, 38, 16, PALETTE.text, { align: "left" });
-			makeLabel(line, "Count", `${fmtInt(have)} / ${fmtInt(ing.count)}`, 420, 0, 164, 38, 16, c, {
-				font: FONTS.bold,
+			const nameW = ING_W - space(8) - ING_COUNT_W;
+			makeLabel(
+				line,
+				"Name",
+				nameOf(ing.kind, ing.index),
+				space(4),
+				0,
+				nameW,
+				ING_H,
+				TEXT.base,
+				THEME.foreground,
+				{
+					align: "left",
+				},
+			);
+			const count = `${fmtInt(have)} / ${fmtInt(ing.count)}`;
+			makeLabel(line, "Count", count, ING_W - space(4) - ING_COUNT_W, 0, ING_COUNT_W, ING_H, TEXT.base, tone, {
+				font: "numeric",
 				align: "right",
 			});
 		}
@@ -1051,17 +1126,24 @@ export class Backpack {
 		else if (r.needsFire === true && stationText === "No desk needed") stationText = "Lit fire nearby";
 		// the game's own check also covers things the list can't see (e.g. a build in progress)
 		const blocker = avail && enough ? this.craftCheck?.(r.id) : undefined;
-		const card = makeFrame(content, "Station", 630, 196, INNER_W - 630, 126, PALETTE.surfaceAlt, {
-			radius: 10,
-			stroke: avail ? PALETTE.strokeSoft : PALETTE.danger,
-			strokeTransparency: avail ? 0 : 0.5,
+		const cardX = ING_W + space(5);
+		const cardW = CONTENT_W - cardX;
+		const inner = cardW - space(8);
+		const card = Card(content, "Station", {
+			x: cardX,
+			y: 196,
+			w: cardW,
+			h: 136,
+			variant: "muted",
+			border: avail ? THEME.border : THEME.destructive,
 		});
-		makeLabel(card, "Caption", "STATION", 16, 12, 298, 18, 12, PALETTE.textDim, {
-			font: FONTS.bold,
+		makeLabel(card, "Caption", "STATION", space(4), space(3.5), inner, 16, TEXT.xs, THEME.mutedForeground, {
+			weight: Enum.FontWeight.Medium,
 			align: "left",
 		});
-		makeLabel(card, "Value", stationText, 16, 34, 298, 30, 18, avail ? PALETTE.success : PALETTE.danger, {
-			font: FONTS.bold,
+		const stationColor = avail ? GAME.success : THEME.destructive;
+		makeLabel(card, "Value", stationText, space(4), 36, inner, 26, TEXT.lg, stationColor, {
+			font: "heading",
 			align: "left",
 		});
 		makeLabel(
@@ -1074,12 +1156,12 @@ export class Backpack {
 					: r.needsFire === true && !this.nearbyFire
 						? "Light a campfire or brazier and stand next to it, then open the backpack again."
 						: "Stand next to the right desk, then open the backpack again.",
-			16,
+			space(4),
 			70,
-			298,
-			44,
-			13,
-			PALETTE.textDim,
+			inner,
+			52,
+			TEXT.sm,
+			THEME.mutedForeground,
 			{ align: "left", valign: "top" },
 		);
 
@@ -1096,7 +1178,7 @@ export class Backpack {
 		} else if (blocker !== undefined) {
 			label = "Can't craft";
 		}
-		this.detailAction(content, label, "primary", avail && enough && blocker === undefined, (): void => {
+		this.detailAction(content, label, "default", avail && enough && blocker === undefined, (): void => {
 			if (!this.recipeAvailable(r) || !this.hasIngredients(r)) return;
 			if (this.craftCheck?.(r.id) !== undefined) return;
 			this.onCraft?.(r.id);
@@ -1110,13 +1192,10 @@ export class Backpack {
 		const save = this.ctx.save;
 		const sp = save.skillPoint;
 		if (sp > 0) {
-			this.makeStrip(
-				content,
-				`${sp} skill point${sp === 1 ? "" : "s"} to spend. Press + to learn a level.`,
-				PALETTE.accent,
-			);
+			const text = `${sp} skill point${sp === 1 ? "" : "s"} to spend. Press + to learn a level.`;
+			this.makeStrip(content, text, GAME.xp);
 		} else {
-			this.makeStrip(content, "No skill points to spend. Level up to earn more.", PALETTE.textMuted);
+			this.makeStrip(content, "No skill points to spend. Level up to earn more.", THEME.mutedForeground);
 		}
 		const list = this.newList(content, STRIP_H + LIST_GAP, CONTENT_H - STRIP_H - LIST_GAP);
 		for (let i = 0; i < SKILLS.size(); i++) {
@@ -1129,46 +1208,60 @@ export class Backpack {
 		const lvl = save.skillLevels[sk.id] ?? 0;
 		const maxed = lvl >= sk.maxLevel;
 		const canBuy = save.skillPoint > 0 && !maxed;
-		const row = makeListRow(list, `Skill${index}`, index, ROW_H, rowColor(index));
-		makeLabel(row, "Name", sk.name, 20, 0, 220, ROW_H, 16, lvl > 0 ? PALETTE.text : PALETTE.textDim, {
-			font: FONTS.bold,
-			align: "left",
-		});
-		makeLabel(row, "Detail", sk.detail, 250, 0, 330, ROW_H, 13, PALETTE.textDim, { align: "left" });
+		const row = makeListRow(list, `Skill${index}`, index, ROW_H);
+		const plusX = CONTENT_W - ROW_PAD - PLUS_W;
+		const levelX = plusX - space(3) - LEVEL_W;
+		const pipsX = levelX - space(3) - (MAX_PIPS * PIP_W + (MAX_PIPS - 1) * PIP_GAP);
+		const textW = pipsX - space(3) - ROW_PAD;
+		rowTitle(row, ROW_PAD, sk.name, textW, lvl > 0 ? THEME.foreground : THEME.mutedForeground);
+		rowSubtitle(row, ROW_PAD, sk.detail, textW);
 		for (let p = 0; p < sk.maxLevel; p++) {
-			makeFrame(row, `Pip${p}`, 600 + p * 32, 20, 26, 10, p < lvl ? PALETTE.accent : PALETTE.surfaceHi, {
-				radius: 5,
-			});
+			makeFrame(
+				row,
+				`Pip${p}`,
+				pipsX + p * (PIP_W + PIP_GAP),
+				(ROW_H - PIP_H) / 2,
+				PIP_W,
+				PIP_H,
+				p < lvl ? GAME.xp : THEME.secondary,
+				{ radius: RADIUS.lg, zIndex: 2 },
+			);
 		}
 		makeLabel(
 			row,
 			"Level",
 			`Lv ${lvl} / ${sk.maxLevel}`,
-			706,
+			levelX,
 			0,
-			126,
+			LEVEL_W,
 			ROW_H,
-			15,
-			maxed ? PALETTE.success : PALETTE.textDim,
-			{
-				font: FONTS.bold,
-				align: "right",
-			},
+			TEXT.sm,
+			maxed ? GAME.success : THEME.mutedForeground,
+			{ font: "numeric", align: "right", zIndex: 2 },
 		);
-		const plus = makeButton(
-			row,
-			"Plus",
-			maxed ? "MAX" : "+",
-			850,
-			7,
-			90,
-			36,
-			canBuy ? "primary" : "secondary",
-			(): void => this.learnSkill(sk),
-			{ textSize: maxed ? 14 : 20 },
-		);
-		plus.ZIndex = 3;
-		if (!canBuy) setButtonEnabled(plus, false);
+		if (maxed) {
+			const w = badgeWidth("MAX", TEXT.sm, BADGE_H);
+			Badge(row, "Max", "MAX", {
+				x: plusX + PLUS_W - w,
+				y: (ROW_H - BADGE_H) / 2,
+				w,
+				h: BADGE_H,
+				textSize: TEXT.sm,
+				color: GAME.success,
+			});
+			return;
+		}
+		Button(row, "Plus", "+", {
+			x: plusX,
+			y: (ROW_H - BUTTON_SIZE.sm.h) / 2,
+			w: PLUS_W,
+			size: "sm",
+			variant: "outline",
+			disabled: !canBuy,
+			textSize: TEXT.lg,
+			zIndex: 3,
+			onClick: (): void => this.learnSkill(sk),
+		});
 	}
 
 	private learnSkill(sk: SkillDef): void {

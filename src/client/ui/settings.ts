@@ -1,258 +1,267 @@
 import { GameContext } from "shared/game/context";
+import { TEXT, THEME, space } from "./theme";
 import {
-	ButtonStyle,
-	FONTS,
-	PALETTE,
-	addAspect,
-	makeButton,
-	makeFrame,
+	BUTTON_SIZE,
+	Button,
+	Card,
+	CardHeader,
+	Slider,
+	SliderHandle,
+	Sidebar,
+	Tabs,
+	autoFocus,
 	makeLabel,
-	makePanel,
 	makeScreen,
-	setButtonStyle,
+	setButtonVariant,
 } from "./widgets";
 
-interface SliderHandle {
-	disconnect(): void;
+// ---------------------------------------------------------------- layout (1120 x 630 design units)
+
+const MARGIN_X = 40;
+/** header row: Back button and title share this vertical centre */
+const HEADER_Y = 32;
+/** section navigation (left) and the selected section's card (right) */
+const MAIN_Y = 96;
+const MAIN_H = 512;
+const NAV_W = 200;
+const CREDITS_H = BUTTON_SIZE.default.h;
+const NAV_H = MAIN_H - CREDITS_H - space(4);
+const CARD_X = MARGIN_X + NAV_W + space(4);
+const CARD_W = 1120 - MARGIN_X - CARD_X;
+
+/** one setting per row: label | control | value */
+const PAD = space(6);
+const ROW_H = 40;
+const ROW_STRIDE = ROW_H + space(4);
+const LABEL_W = 160;
+const VALUE_W = 72;
+const CONTROL_X = PAD + LABEL_W + space(4);
+const CONTROL_W = CARD_W - CONTROL_X - space(4) - VALUE_W - PAD;
+const VALUE_X = CONTROL_X + CONTROL_W + space(4);
+const SWITCH_W = 110;
+const LANG_W = 240;
+
+interface Section {
+	title: string;
+	description: string;
+	/** fills the section's card from `y` (below the CardHeader) */
+	build: (card: Frame, y: number) => void;
 }
 
-const PANEL_W = 500;
-const PANEL_H = 420;
-const LABEL_W = 120;
-const TRACK_X = 160;
-const TRACK_W = 230;
-const TRACK_H = 14;
-const KNOB_SIZE = 20;
-const VALUE_X = TRACK_X + TRACK_W + 16;
-const VALUE_W = 70;
-
-/** rounded track + accent fill + circular knob; drag via track InputBegan/InputEnded + UserInputService.InputChanged */
-function makeSlider(
-	panel: Frame,
-	name: string,
-	rowY: number,
-	get: () => number,
-	set: (v: number) => void,
-): SliderHandle {
-	const UIS = game.GetService("UserInputService");
-	const track = makeFrame(
-		panel,
-		`${name}Track`,
-		TRACK_X,
-		rowY + (30 - TRACK_H) / 2,
-		TRACK_W,
-		TRACK_H,
-		PALETTE.bgRaised,
-		{
-			radius: TRACK_H / 2,
-			stroke: PALETTE.stroke,
-			strokeTransparency: 0.2,
-		},
-	);
-	track.Active = true;
-	const fill = makeFrame(track, "Fill", 0, 0, TRACK_W, TRACK_H, PALETTE.accent, { radius: TRACK_H / 2 });
-	const knob = makeFrame(track, "Knob", 0, TRACK_H / 2, KNOB_SIZE, KNOB_SIZE, PALETTE.text, {
-		radius: KNOB_SIZE,
-		stroke: PALETTE.accent,
-		strokeThickness: 2,
-		zIndex: 3,
-	});
-	knob.AnchorPoint = new Vector2(0.5, 0.5);
-	addAspect(knob, 1);
-
-	const valueLabel = makeLabel(panel, `${name}Val`, "", VALUE_X, rowY, VALUE_W, 30, 16, PALETTE.text, {
-		font: FONTS.bold,
-		align: "right",
-	});
-
-	const refresh = (): void => {
-		const v = get();
-		fill.Size = UDim2.fromScale(v, 1);
-		knob.Position = UDim2.fromScale(v, 0.5);
-		valueLabel.Text = `${math.floor(v * 100 + 0.5)}%`;
-	};
-	const apply = (px: number): void => {
-		const rel = math.clamp((px - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1);
-		const v = math.clamp(math.round(rel / 0.05) * 0.05, 0, 1);
-		set(v);
-		refresh();
-	};
-	let dragging = false;
-	const connDown = track.InputBegan.Connect((input: InputObject): void => {
-		if (
-			input.UserInputType === Enum.UserInputType.MouseButton1 ||
-			input.UserInputType === Enum.UserInputType.Touch
-		) {
-			dragging = true;
-			apply(input.Position.X);
-		}
-	});
-	const connUp = track.InputEnded.Connect((input: InputObject): void => {
-		if (
-			input.UserInputType === Enum.UserInputType.MouseButton1 ||
-			input.UserInputType === Enum.UserInputType.Touch
-		) {
-			dragging = false;
-		}
-	});
-	const connMove = UIS.InputChanged.Connect((input: InputObject): void => {
-		if (
-			dragging &&
-			(input.UserInputType === Enum.UserInputType.MouseMovement ||
-				input.UserInputType === Enum.UserInputType.Touch)
-		) {
-			apply(input.Position.X);
-		}
-	});
-	refresh();
-	return {
-		disconnect(): void {
-			connDown.Disconnect();
-			connUp.Disconnect();
-			connMove.Disconnect();
-		},
-	};
-}
-
-function rowLabel(panel: Frame, text: string, y: number): void {
-	makeLabel(panel, text, text, 24, y, LABEL_W, 30, 18, PALETTE.textDim, { font: FONTS.medium, align: "left" });
+function pct(v: number): string {
+	return `${math.floor(v * 100 + 0.5)}%`;
 }
 
 export function showSettings(ctx: GameContext, onBack: () => void, onCredits: () => void): () => void {
-	const { root, body } = makeScreen(ctx.uiLayer, "Settings", { gradient: true });
+	const { root, body } = makeScreen(ctx.uiLayer, "Settings");
 	const s = ctx.save.settings;
+	/** sliders of the section on screen (disconnected when the section changes or the screen closes) */
 	const handles: Array<SliderHandle> = [];
 
-	makeButton(body, "Back", "‹  Back", 40, 28, 124, 50, "secondary", (): void => onBack());
-	makeLabel(body, "Title", "Settings", 184, 24, 400, 58, 36, PALETTE.text, { font: FONTS.display, align: "left" });
-
-	// --- Audio & display ---------------------------------------------------
-	const audioPanel = makePanel(body, "AudioPanel", 40, 100, PANEL_W, PANEL_H);
-	makeLabel(audioPanel, "AudioTitle", "Audio & display", 24, 16, PANEL_W - 48, 30, 20, PALETTE.text, {
-		font: FONTS.bold,
+	Button(body, "Back", "‹  Back", {
+		x: MARGIN_X,
+		y: HEADER_Y,
+		w: 124,
+		variant: "secondary",
+		onClick: (): void => onBack(),
+	});
+	makeLabel(body, "Title", "Settings", 184, HEADER_Y, 400, BUTTON_SIZE.default.h, TEXT.xl3, THEME.foreground, {
+		font: "title",
 		align: "left",
 	});
 
-	rowLabel(audioPanel, "SFX", 76);
-	handles.push(
-		makeSlider(
-			audioPanel,
+	const rowLabel = (card: Frame, text: string, y: number): void => {
+		makeLabel(card, `${text}Label`, text, PAD, y, LABEL_W, ROW_H, TEXT.sm, THEME.foreground, {
+			font: "label",
+			align: "left",
+		});
+	};
+
+	const sliderRow = (
+		card: Frame,
+		name: string,
+		label: string,
+		y: number,
+		get: () => number,
+		set: (v: number) => void,
+	): void => {
+		rowLabel(card, label, y);
+		const value = makeLabel(
+			card,
+			`${name}Value`,
+			pct(get()),
+			VALUE_X,
+			y,
+			VALUE_W,
+			ROW_H,
+			TEXT.base,
+			THEME.foreground,
+			{
+				font: "numeric",
+				align: "right",
+			},
+		);
+		handles.push(
+			Slider(card, name, {
+				x: CONTROL_X,
+				y,
+				w: CONTROL_W,
+				h: ROW_H,
+				get,
+				set: (v: number): void => {
+					set(v);
+					value.Text = pct(v);
+				},
+			}),
+		);
+	};
+
+	const buildAudio = (card: Frame, y: number): void => {
+		sliderRow(
+			card,
 			"Sfx",
-			76,
+			"SFX",
+			y,
 			() => s.soundEffect,
 			v => {
 				s.soundEffect = v;
 			},
-		),
-	);
-	rowLabel(audioPanel, "BGM", 156);
-	handles.push(
-		makeSlider(
-			audioPanel,
+		);
+		sliderRow(
+			card,
 			"Bgm",
-			156,
+			"BGM",
+			y + ROW_STRIDE,
 			() => s.bgm,
 			v => {
 				s.bgm = v;
 			},
-		),
-	);
-	rowLabel(audioPanel, "HUD size", 236);
-	handles.push(
-		makeSlider(
-			audioPanel,
+		);
+		sliderRow(
+			card,
 			"UiSize",
-			236,
+			"HUD size",
+			y + ROW_STRIDE * 2,
 			() => s.uiSize,
 			v => {
 				s.uiSize = v;
 			},
-		),
-	);
+		);
+		const langY = y + ROW_STRIDE * 3;
+		rowLabel(card, "Language", langY);
+		// langType 0 = English, 1 = Korean (any other value: neither is highlighted)
+		const current = s.langType === 0 ? 0 : s.langType === 1 ? 1 : -1;
+		Tabs(card, "Language", {
+			x: CONTROL_X,
+			y: langY,
+			w: LANG_W,
+			h: ROW_H,
+			items: ["English", "Korean"],
+			value: current,
+			onChange: (i: number): void => {
+				s.langType = i;
+			},
+		});
+	};
 
-	rowLabel(audioPanel, "Language", 316);
-	const engBtn = makeButton(audioPanel, "Eng", "English", TRACK_X, 310, 110, 40, "secondary", (): void => {
-		s.langType = 0;
-		setButtonStyle(engBtn, "primary");
-		setButtonStyle(korBtn, "secondary");
-	});
-	const korBtn = makeButton(audioPanel, "Kor", "Korean", TRACK_X + 120, 310, 110, 40, "secondary", (): void => {
-		s.langType = 1;
-		setButtonStyle(korBtn, "primary");
-		setButtonStyle(engBtn, "secondary");
-	});
-	setButtonStyle(engBtn, s.langType === 0 ? "primary" : "secondary");
-	setButtonStyle(korBtn, s.langType === 1 ? "primary" : "secondary");
-
-	// --- Mobile controls -----------------------------------------------------
-	const mobilePanel = makePanel(body, "MobilePanel", 580, 100, PANEL_W, PANEL_H);
-	makeLabel(mobilePanel, "MobileTitle", "Mobile controls", 24, 16, PANEL_W - 48, 30, 20, PALETTE.text, {
-		font: FONTS.bold,
-		align: "left",
-	});
-
-	rowLabel(mobilePanel, "Left size", 66);
-	handles.push(
-		makeSlider(
-			mobilePanel,
+	const buildMobile = (card: Frame, y: number): void => {
+		sliderRow(
+			card,
 			"LeftSize",
-			66,
+			"Left size",
+			y,
 			() => s.leftSize,
 			v => {
 				s.leftSize = v;
 			},
-		),
-	);
-	rowLabel(mobilePanel, "Left pos", 141);
-	handles.push(
-		makeSlider(
-			mobilePanel,
+		);
+		sliderRow(
+			card,
 			"LeftPos",
-			141,
+			"Left pos",
+			y + ROW_STRIDE,
 			() => s.leftPos,
 			v => {
 				s.leftPos = v;
 			},
-		),
-	);
-	rowLabel(mobilePanel, "Right size", 216);
-	handles.push(
-		makeSlider(
-			mobilePanel,
+		);
+		sliderRow(
+			card,
 			"RightSize",
-			216,
+			"Right size",
+			y + ROW_STRIDE * 2,
 			() => s.rightSize,
 			v => {
 				s.rightSize = v;
 			},
-		),
-	);
-	rowLabel(mobilePanel, "Right pos", 291);
-	handles.push(
-		makeSlider(
-			mobilePanel,
+		);
+		sliderRow(
+			card,
 			"RightPos",
-			291,
+			"Right pos",
+			y + ROW_STRIDE * 3,
 			() => s.rightPos,
 			v => {
 				s.rightPos = v;
 			},
-		),
-	);
+		);
+		const relY = y + ROW_STRIDE * 4;
+		rowLabel(card, "Relative", relY);
+		// switch: default (filled) when ON, outline when OFF
+		const relBtn = Button(card, "Relative", s.leftRelative ? "ON" : "OFF", {
+			x: CONTROL_X,
+			y: relY,
+			w: SWITCH_W,
+			h: ROW_H,
+			variant: s.leftRelative ? "default" : "outline",
+			onClick: (): void => {
+				s.leftRelative = !s.leftRelative;
+				relBtn.Text = s.leftRelative ? "ON" : "OFF";
+				setButtonVariant(relBtn, s.leftRelative ? "default" : "outline");
+			},
+		});
+	};
 
-	rowLabel(mobilePanel, "Relative", 366);
-	const relStyle = (): ButtonStyle => (s.leftRelative ? "primary" : "secondary");
-	const relBtn = makeButton(mobilePanel, "Relative", "", TRACK_X, 360, 110, 40, relStyle(), (): void => {
-		s.leftRelative = !s.leftRelative;
-		relBtn.Text = s.leftRelative ? "ON" : "OFF";
-		setButtonStyle(relBtn, relStyle());
+	const sections: Array<Section> = [
+		{ title: "Audio & display", description: "Volume, HUD size and language", build: buildAudio },
+		{ title: "Mobile controls", description: "Size and position of the touch controls", build: buildMobile },
+	];
+
+	let card: Frame | undefined;
+	const showSection = (index: number): void => {
+		for (const h of handles) h.disconnect();
+		handles.clear();
+		card?.Destroy();
+		const section = sections[index];
+		const c = Card(body, "Section", { x: CARD_X, y: MAIN_Y, w: CARD_W, h: MAIN_H });
+		card = c;
+		section.build(c, CardHeader(c, section.title, section.description));
+	};
+
+	const nav = Sidebar(body, "Sections", {
+		x: MARGIN_X,
+		y: MAIN_Y,
+		w: NAV_W,
+		h: NAV_H,
+		items: sections.map(sec => sec.title),
+		value: 0,
+		onChange: (i: number): void => showSection(i),
 	});
-	relBtn.Text = s.leftRelative ? "ON" : "OFF";
+	showSection(0);
 
-	makeButton(body, "Credits", "Credits", 40, 552, 160, 48, "secondary", (): void => onCredits());
+	Button(body, "Credits", "Credits", {
+		x: MARGIN_X,
+		y: MAIN_Y + MAIN_H - CREDITS_H,
+		w: NAV_W,
+		variant: "secondary",
+		onClick: (): void => onCredits(),
+	});
+
+	autoFocus(nav.items[0]);
 
 	return (): void => {
 		for (const h of handles) h.disconnect();
+		handles.clear();
 		root.Destroy();
 	};
 }

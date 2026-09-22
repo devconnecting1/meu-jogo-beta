@@ -7,17 +7,21 @@ import { EQUIPS } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
 import { onWalletChanged } from "../systems/saveClient";
 import { popup } from "./popup";
+import { GAME, RADIUS, TEXT, THEME, fontOf, hex, roleFont, space } from "./theme";
 import {
-	FONTS,
-	PALETTE,
+	Button,
+	Card,
+	CardHeader,
+	Dialog,
+	Progress,
+	Separator,
+	autoFocus,
+	buttonForeground,
 	fmtInt,
-	makeBar,
-	makeButton,
 	makeCoinPill,
 	makeFrame,
 	makeLabel,
 	makeListRow,
-	makePanel,
 	makeScreen,
 	makeScrollList,
 	nl,
@@ -68,30 +72,29 @@ function equipName(ctx: GameContext, slot: number): string {
 	return pick(save.equipDeco, EQUIPS);
 }
 
+const ACH_W = 660;
+const ACH_H = 530;
+const ACH_ROW_H = 60;
+
 function showAchievements(ctx: GameContext): void {
 	const lang = ctx.save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "Achievements", {
-		color: PALETTE.overlay,
-		transparency: 0.4,
-		zIndex: 300,
-	});
-	const panel = makePanel(body, "Panel", 230, 50, 660, 530);
 	const visible = ACHIEVEMENTS.filter(a => a.hidden !== true);
 	let done = 0;
 	for (const a of visible) {
 		if ((ctx.save.achievements[a.id] ?? 0) >= a.max) done++;
 	}
-	makeLabel(panel, "Title", tr("Achievements"), 28, 22, 400, 40, 28, PALETTE.text, {
-		font: FONTS.display,
-		align: "left",
+	const dialog = Dialog(ctx.uiLayer, "Achievements", {
+		w: ACH_W,
+		h: ACH_H,
+		title: tr("Achievements"),
+		description: `${done} / ${visible.size()}`,
+		zIndex: 300,
+		closeButton: true,
 	});
-	makeLabel(panel, "Count", `${done} / ${visible.size()}`, 430, 26, 110, 32, 18, PALETTE.accent, {
-		font: FONTS.bold,
-		align: "right",
-	});
-	makeButton(panel, "Close", "X", 572, 20, 60, 44, "ghost", (): void => root.Destroy());
-	const list = makeScrollList(panel, "List", 24, 80, 612, 426);
+	const pad = space(6);
+	const listW = ACH_W - pad * 2;
+	const list = makeScrollList(dialog.card, "List", pad, dialog.contentY, listW, ACH_H - dialog.contentY - pad);
 	// unfinished (closest to done first), then finished
 	const ordered = [...visible];
 	const ratio = (a: (typeof visible)[number]): number => (ctx.save.achievements[a.id] ?? 0) / math.max(a.max, 1);
@@ -104,21 +107,55 @@ function showAchievements(ctx: GameContext): void {
 		const a = ordered[i];
 		const cur = math.min(ctx.save.achievements[a.id] ?? 0, a.max);
 		const complete = cur >= a.max;
-		const row = makeListRow(list, `Ach${a.id}`, i, 58, complete ? PALETTE.surfaceHi : PALETTE.surfaceAlt);
-		makeFrame(row, "Badge", 14, 15, 28, 28, complete ? PALETTE.success : PALETTE.bgRaised, {
-			radius: 14,
-			stroke: complete ? PALETTE.success : PALETTE.stroke,
+		const row = makeListRow(list, `Ach${a.id}`, i, ACH_ROW_H);
+		const badge = makeFrame(row, "Badge", space(4), 16, 28, 28, complete ? GAME.success : THEME.muted, {
+			radius: RADIUS.full,
+			stroke: complete ? GAME.success : THEME.border,
 		});
-		if (complete) makeLabel(row, "Check", "✓", 14, 15, 28, 28, 18, PALETTE.text, { font: FONTS.bold });
-		makeLabel(row, "Name", tr(a.title), 56, 8, 330, 24, 17, complete ? PALETTE.text : PALETTE.textDim, {
-			font: FONTS.bold,
-			align: "left",
+		if (complete) {
+			makeLabel(badge, "Check", "✓", 0, 0, 28, 28, TEXT.base, THEME.background, {
+				weight: Enum.FontWeight.Bold,
+			});
+		}
+		const textX = space(4) + 28 + space(3);
+		makeLabel(
+			row,
+			"Name",
+			tr(a.title),
+			textX,
+			8,
+			330,
+			24,
+			TEXT.base,
+			complete ? THEME.foreground : THEME.mutedForeground,
+			{
+				font: "label",
+				align: "left",
+			},
+		);
+		const bar = Progress(row, "Progress", {
+			x: textX,
+			y: 38,
+			w: 360,
+			h: 8,
+			color: complete ? GAME.success : THEME.primary,
 		});
-		const bar = makeBar(row, "Progress", 56, 36, 380, 8, complete ? PALETTE.success : PALETTE.accent);
 		bar.setRatio(cur / math.max(a.max, 1));
-		makeLabel(row, "Value", `${fmtInt(cur)} / ${fmtInt(a.max)}`, 450, 14, 140, 30, 16, PALETTE.textDim, {
-			align: "right",
-		});
+		makeLabel(
+			row,
+			"Value",
+			`${fmtInt(cur)} / ${fmtInt(a.max)}`,
+			listW - 170,
+			14,
+			150,
+			32,
+			TEXT.sm,
+			THEME.mutedForeground,
+			{
+				font: "numeric",
+				align: "right",
+			},
+		);
 	}
 }
 
@@ -133,96 +170,177 @@ function showRecords(ctx: GameContext): void {
 		`${tr("Bosses defeated")}:  ${fmtInt(s.bossKills)}`,
 		`${tr("Rebirth")}:  ${s.deathCount}`,
 	];
-	popup(ctx, tr("Personal bests"), lines.join("\n"), [{ text: tr("Close") }]);
+	popup(ctx, tr("Personal bests"), lines.join("\n"), [{ text: tr("Close"), variant: "secondary" }]);
 }
+
+// layout (design units of the 1120 x 630 screen)
+const MARGIN = 40;
+const TOP = 124;
+const LEFT_W = 440;
+const RIGHT_X = 512;
+const RIGHT_W = 1080 - RIGHT_X;
+const TILE_GAP = space(2);
 
 export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: LobbyStatus): () => void {
 	const save = ctx.save;
 	const lang = save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "Lobby", { gradient: true });
+	const { root, body } = makeScreen(ctx.uiLayer, "Lobby");
 
-	// ---- header
-	makeLabel(body, "Title", `PROJECT <font color="#E8A838">Z</font>`, 40, 22, 460, 60, 46, PALETTE.text, {
-		font: FONTS.display,
+	// ---- header: logo + coins
+	makeLabel(
+		body,
+		"Title",
+		`PROJECT <font color="${hex(GAME.brand)}">Z</font>`,
+		MARGIN,
+		22,
+		460,
+		60,
+		TEXT.xl5,
+		THEME.foreground,
+		{
+			font: "display",
+			align: "left",
+			rich: true,
+		},
+	);
+	makeLabel(body, "Subtitle", tr("Zombie survival"), MARGIN + 2, 80, 400, 22, TEXT.sm, THEME.mutedForeground, {
 		align: "left",
-		rich: true,
 	});
-	makeLabel(body, "Subtitle", tr("Zombie survival"), 42, 78, 400, 22, 15, PALETTE.textDim, { align: "left" });
 	const coins = makeCoinPill(body, "Coins", 850, 28, 230, 52, () => ctx.save.money, handlers.onShop);
 	if (status?.loading === true) {
-		makeLabel(body, "Loading", tr("Loading your progress..."), 620, 88, 460, 22, 14, PALETTE.textDim, {
+		makeLabel(body, "Loading", tr("Loading your progress..."), 620, 88, 460, 22, TEXT.sm, THEME.mutedForeground, {
 			align: "right",
 		});
 	} else if (status?.offlineNote !== undefined) {
-		makeLabel(body, "Offline", status.offlineNote, 560, 88, 520, 22, 14, PALETTE.danger, { align: "right" });
-	}
-
-	// ---- survivor card (left)
-	const card = makePanel(body, "Survivor", 40, 124, 440, 420);
-	makeLabel(card, "CardTitle", tr("Survivor").upper(), 24, 16, 392, 22, 14, PALETTE.textMuted, {
-		font: FONTS.bold,
-		align: "left",
-	});
-	const tiles: Array<[string, string, Color3]> = [
-		[`${save.day}`, tr("Current day"), PALETTE.text],
-		[`${save.bestDay}`, tr("Best day"), PALETTE.accent],
-		[`${save.level}`, tr("Level"), PALETTE.exp],
-		[fmtInt(save.bossKills), tr("Bosses defeated"), PALETTE.danger],
-	];
-	for (let i = 0; i < tiles.size(); i++) {
-		const [value, caption, color] = tiles[i];
-		const tx = 24 + (i % 2) * 200;
-		const ty = 46 + math.floor(i / 2) * 80;
-		const tile = makeFrame(card, `Tile${i}`, tx, ty, 192, 72, PALETTE.surfaceAlt, { radius: 10 });
-		makeLabel(tile, "Value", value, 14, 6, 164, 36, 28, color, { font: FONTS.display, align: "left" });
-		makeLabel(tile, "Caption", caption, 14, 44, 164, 20, 13, PALETTE.textDim, { align: "left" });
-	}
-	const expMax = expMaxInit(save.level);
-	const exp = makeBar(card, "Exp", 24, 214, 392, 12, PALETTE.exp);
-	exp.setRatio(save.exp / math.max(expMax, 1));
-	makeLabel(card, "ExpText", `${fmtInt(save.exp)} / ${fmtInt(expMax)} XP`, 24, 230, 392, 18, 13, PALETTE.textDim, {
-		align: "right",
-	});
-	makeLabel(card, "LoadoutTitle", tr("Loadout").upper(), 24, 258, 392, 20, 13, PALETTE.textMuted, {
-		font: FONTS.bold,
-		align: "left",
-	});
-	const slotKeys = ["Weapon", "Clothes", "Hand", "Gun", "Deco"];
-	for (let i = 0; i < slotKeys.size(); i++) {
-		const y = 284 + i * 26;
-		makeLabel(card, `SlotTag${i}`, tr(slotKeys[i]), 24, y, 110, 22, 14, PALETTE.textDim, { align: "left" });
-		const name = equipName(ctx, i);
-		makeLabel(card, `SlotName${i}`, name, 134, y, 282, 22, 15, name === "—" ? PALETTE.textMuted : PALETTE.text, {
-			font: FONTS.medium,
-			align: "left",
+		makeLabel(body, "Offline", status.offlineNote, 560, 88, 520, 22, TEXT.sm, THEME.destructive, {
+			align: "right",
 		});
 	}
 
-	// ---- play (primary) + menu grid (right)
+	// ---- survivor card (left)
+	const card = Card(body, "Survivor", { x: MARGIN, y: TOP, w: LEFT_W, h: 420 });
+	const pad = space(6);
+	const innerW = LEFT_W - pad * 2;
+	const contentY = CardHeader(card, tr("Survivor"));
+	const tiles: Array<[string, string, Color3]> = [
+		[`${save.day}`, tr("Current day"), THEME.foreground],
+		[`${save.bestDay}`, tr("Best day"), THEME.foreground],
+		[`${save.level}`, tr("Level"), GAME.xp],
+		[fmtInt(save.bossKills), tr("Bosses defeated"), GAME.rare],
+	];
+	const tileW = (innerW - space(2)) / 2;
+	const tileH = 64;
+	for (let i = 0; i < tiles.size(); i++) {
+		const [value, caption, color] = tiles[i];
+		const tile = Card(card, `Tile${i}`, {
+			x: pad + (i % 2) * (tileW + space(2)),
+			y: contentY + math.floor(i / 2) * (tileH + space(2)),
+			w: tileW,
+			h: tileH,
+			variant: "muted",
+		});
+		makeLabel(tile, "Value", value, space(3), 6, tileW - space(6), 32, TEXT.xl2, color, {
+			font: "numeric",
+			align: "left",
+		});
+		makeLabel(tile, "Caption", caption, space(3), 40, tileW - space(6), 18, TEXT.xs, THEME.mutedForeground, {
+			align: "left",
+		});
+	}
+	const expY = contentY + tileH * 2 + space(2) + space(4);
+	const expMax = expMaxInit(save.level);
+	const exp = Progress(card, "Exp", { x: pad, y: expY, w: innerW, h: 8, color: GAME.xp });
+	exp.setRatio(save.exp / math.max(expMax, 1));
+	makeLabel(
+		card,
+		"ExpText",
+		`${fmtInt(save.exp)} / ${fmtInt(expMax)} XP`,
+		pad,
+		expY + 12,
+		innerW,
+		18,
+		TEXT.xs,
+		THEME.mutedForeground,
+		{
+			font: "numeric",
+			align: "right",
+		},
+	);
+	const loadoutY = expY + 40;
+	Separator(card, "LoadoutRule", { x: pad, y: loadoutY, length: innerW });
+	makeLabel(
+		card,
+		"LoadoutTitle",
+		tr("Loadout").upper(),
+		pad,
+		loadoutY + space(2),
+		innerW,
+		20,
+		TEXT.xs,
+		THEME.mutedForeground,
+		{
+			weight: Enum.FontWeight.SemiBold,
+			align: "left",
+		},
+	);
+	const slotKeys = ["Weapon", "Clothes", "Hand", "Gun", "Deco"];
+	for (let i = 0; i < slotKeys.size(); i++) {
+		const y = loadoutY + space(2) + 24 + i * 24;
+		makeLabel(card, `SlotTag${i}`, tr(slotKeys[i]), pad, y, 110, 22, TEXT.sm, THEME.mutedForeground, {
+			align: "left",
+		});
+		const name = equipName(ctx, i);
+		makeLabel(
+			card,
+			`SlotName${i}`,
+			name,
+			pad + 110,
+			y,
+			innerW - 110,
+			22,
+			TEXT.sm,
+			name === "—" ? THEME.mutedForeground : THEME.foreground,
+			{
+				font: fontOf("sans", Enum.FontWeight.Medium),
+				align: "left",
+			},
+		);
+	}
+
+	// ---- play (the primary action of the screen) + menu tiles (secondary)
 	const pending = totalPendingPacks(save);
 	const playTitle = save.runOver ? tr("Game over") : status?.suspended === true ? tr("Continue") : tr("Play");
 	let playSub = `${tr("Day")} ${save.day}`;
 	if (pending > 0) playSub = `${playSub}  ·  ${tr("Packs")} +${pending}`;
-	const play = makeButton(body, "Play", "", 512, 124, 568, 160, "primary", (): void => {
-		if (!ctx.save.tutorialDone && !ctx.save.runOver) {
-			popup(ctx, tr("How to play"), nl(tr("Do you want to#watch the tutorial?")), [
-				{
-					text: "No",
-					style: "secondary",
-					onClick: (): void => {
-						ctx.save.tutorialDone = true;
-						handlers.onPlay();
+	const play = Button(body, "Play", "", {
+		x: RIGHT_X,
+		y: TOP,
+		w: RIGHT_W,
+		h: 160,
+		size: "lg",
+		variant: "default",
+		onClick: (): void => {
+			if (!ctx.save.tutorialDone && !ctx.save.runOver) {
+				popup(ctx, tr("How to play"), nl(tr("Do you want to#watch the tutorial?")), [
+					{
+						text: "No",
+						variant: "secondary",
+						onClick: (): void => {
+							ctx.save.tutorialDone = true;
+							handlers.onPlay();
+						},
 					},
-				},
-				{ text: "Yes", onClick: (): void => handlers.onTutorial(true) },
-			]);
-		} else {
-			handlers.onPlay();
-		}
+					{ text: "Yes", variant: "default", onClick: (): void => handlers.onTutorial(true) },
+				]);
+			} else {
+				handlers.onPlay();
+			}
+		},
 	});
-	makeLabel(play, "PlayTitle", playTitle.upper(), 0, 26, 568, 70, 50, PALETTE.textOnAccent, { font: FONTS.display });
-	makeLabel(play, "PlaySub", playSub, 0, 100, 568, 30, 18, PALETTE.textOnAccent, { font: FONTS.medium });
+	const playFg = buttonForeground("default");
+	makeLabel(play, "PlayTitle", playTitle.upper(), 0, 30, RIGHT_W, 64, TEXT.xl5, playFg, { font: "display" });
+	makeLabel(play, "PlaySub", playSub, 0, 100, RIGHT_W, 28, TEXT.lg, playFg, { font: "label" });
 
 	let achDone = 0;
 	let achTotal = 0;
@@ -231,7 +349,7 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		achTotal++;
 		if ((save.achievements[a.id] ?? 0) >= a.max) achDone++;
 	}
-	const tiles2: Array<[string, string, () => void]> = [
+	const menu: Array<[string, string, () => void]> = [
 		[tr("Shop"), tr("Packs & costumes"), handlers.onShop],
 		[tr("Achievements"), `${achDone} / ${achTotal}`, (): void => showAchievements(ctx)],
 		[tr("Records"), `${tr("Best day")} ${save.bestDay}`, (): void => showRecords(ctx)],
@@ -239,23 +357,32 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		[tr("Settings"), "", handlers.onSettings],
 		[tr("Credits"), "", (): void => handlers.onCredits?.()],
 	];
-	for (let i = 0; i < tiles2.size(); i++) {
-		const [title, sub, fn] = tiles2[i];
-		const x = 512 + (i % 3) * 192;
-		const y = 300 + math.floor(i / 3) * 128;
-		const b = makeButton(body, `Menu${i}`, "", x, y, 184, 116, "secondary", fn);
-		makeLabel(b, "Title", title, 12, sub === "" ? 38 : 28, 160, 30, 19, PALETTE.text, { font: FONTS.bold });
-		if (sub !== "") makeLabel(b, "Sub", sub, 12, 62, 160, 22, 13, PALETTE.textDim);
+	const tileFg = buttonForeground("secondary");
+	const menuW = (RIGHT_W - TILE_GAP * 2) / 3;
+	const menuH = 122;
+	const menuY = TOP + 160 + space(4);
+	for (let i = 0; i < menu.size(); i++) {
+		const [title, sub, fn] = menu[i];
+		const x = RIGHT_X + (i % 3) * (menuW + TILE_GAP);
+		const y = menuY + math.floor(i / 3) * (menuH + TILE_GAP);
+		const b = Button(body, `Menu${i}`, "", { x, y, w: menuW, h: menuH, variant: "secondary", onClick: fn });
+		makeLabel(b, "Title", title, space(3), sub === "" ? 44 : 34, menuW - space(6), 30, TEXT.lg, tileFg, {
+			font: "label",
+		});
+		if (sub !== "") {
+			makeLabel(b, "Sub", sub, space(3), 66, menuW - space(6), 22, TEXT.sm, tileFg, { font: "body" });
+		}
 	}
 
 	// ---- tips ticker
-	const ticker = makePanel(body, "Ticker", 40, 562, 1040, 44, { color: PALETTE.bgRaised, radius: 22 });
-	ticker.ClipsDescendants = true;
+	const ticker = Card(body, "Ticker", { x: MARGIN, y: 562, w: 1040, h: 44, clips: true });
 	const tip = new Instance("TextLabel");
 	tip.Name = "Tip";
 	tip.BackgroundTransparency = 1;
-	tip.Font = FONTS.body;
-	tip.TextColor3 = PALETTE.textDim;
+	tip.BackgroundColor3 = THEME.card;
+	tip.FontFace = roleFont("body");
+	tip.TextColor3 = THEME.mutedForeground;
+	tip.TextStrokeColor3 = THEME.background;
 	tip.TextXAlignment = Enum.TextXAlignment.Left;
 	tip.AutomaticSize = Enum.AutomaticSize.X;
 	tip.Size = UDim2.fromScale(0, 1);
@@ -264,7 +391,7 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 	let tipX = 0;
 	const RunService = game.GetService("RunService");
 	const conn = RunService.RenderStepped.Connect((dt: number): void => {
-		tip.TextSize = math.max(10, math.round(15 * uiScale()));
+		tip.TextSize = math.max(10, math.round(TEXT.sm * uiScale()));
 		tipX += 70 * uiScale() * dt;
 		const w = tip.AbsoluteSize.X;
 		if (w > 10 && tipX > w / 2) tipX -= w / 2;
@@ -272,6 +399,7 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 	});
 
 	const unsubscribe = onWalletChanged(() => coins.refresh());
+	autoFocus(play);
 
 	return (): void => {
 		unsubscribe();

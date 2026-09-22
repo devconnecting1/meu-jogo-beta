@@ -1,27 +1,29 @@
 import { getCtx } from "../bootstrap";
-import { FONTS, PALETTE, makeLabel, makeScreen } from "./widgets";
+import { GAME, TEXT, THEME, hex } from "./theme";
+import { makeLabel, makeScreen } from "./widgets";
 
+/** splash: "PROJECT Z" (display, the Z in the brand colour) on the base background */
 export function showLogo(onDone: () => void): void {
 	const ctx = getCtx();
 	const TweenService = game.GetService("TweenService");
-	const { root, body } = makeScreen(ctx.uiLayer, "Logo", { zIndex: 500, gradient: true });
+	const { root, body } = makeScreen(ctx.uiLayer, "Logo", { zIndex: 500 });
 
 	const title = makeLabel(
 		body,
 		"LogoTitle",
-		`PROJECT <font color="#${PALETTE.accent.ToHex()}">Z</font>`,
+		`PROJECT <font color="${hex(GAME.brand)}">Z</font>`,
 		60,
 		230,
 		1000,
 		110,
 		84,
-		PALETTE.text,
-		{ font: FONTS.display, align: "center", rich: true },
+		THEME.foreground,
+		{ font: "display", align: "center", rich: true },
 	);
 	title.TextTransparency = 1;
 
-	const sub = makeLabel(body, "LogoSub", "Zombie Survival", 60, 350, 1000, 50, 24, PALETTE.textDim, {
-		font: FONTS.medium,
+	const sub = makeLabel(body, "LogoSub", "Zombie Survival", 60, 350, 1000, 50, TEXT.xl2, THEME.mutedForeground, {
+		font: "label",
 		align: "center",
 	});
 	sub.TextTransparency = 1;
