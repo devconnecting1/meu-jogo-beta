@@ -13,6 +13,11 @@ const UserInputService = game.GetService("UserInputService");
 const player = Players.LocalPlayer;
 const playerGui = player.WaitForChild("PlayerGui") as PlayerGui;
 
+const stale = playerGui.FindFirstChild("GameGui");
+if (stale !== undefined) {
+	stale.Destroy();
+}
+
 const screen = new Instance("ScreenGui");
 screen.Name = "GameGui";
 screen.ResetOnSpawn = false;

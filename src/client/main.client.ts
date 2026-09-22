@@ -311,13 +311,22 @@ pack.onEquipItem = id => {
 	}
 };
 
-loadPlayerSave().then(loaded => {
-	if (loaded) {
-		ctx.save = loaded;
+let started = false;
+const begin = () => {
+	if (started) {
+		return;
 	}
+	started = true;
 	showLogo(() => {
 		goLobby();
 	});
+};
+loadPlayerSave().then(loaded => {
+	if (!started && loaded) {
+		ctx.save = loaded;
+	}
+	begin();
 });
+task.delay(8, begin);
 
 print(`[${GAME_NAME}] client ready`);
