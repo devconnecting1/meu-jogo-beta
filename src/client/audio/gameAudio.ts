@@ -39,6 +39,8 @@ interface ZombieSnap {
 	x: number;
 	y: number;
 	detect: boolean;
+	/** seconds left of a group shout (shared/sim/ai/alert.ts); 0 when not shouting */
+	shout: number;
 }
 
 /** which shot is heard for a weapon kind */
@@ -182,7 +184,7 @@ export class GameAudio {
 		this.prevDead = p.dead;
 		this.zombies.clear();
 		for (const z of refs.zombies) {
-			if (z.hp > 0) this.zombies.set(z.id, { hp: z.hp, x: z.x, y: z.y, detect: z.detect });
+			if (z.hp > 0) this.zombies.set(z.id, { hp: z.hp, x: z.x, y: z.y, detect: z.detect, shout: z.shout ?? 0 });
 		}
 		this.bosses.clear();
 		for (const b of refs.bosses) {
@@ -237,9 +239,18 @@ export class GameAudio {
 			}
 			// in "full" mode the blood events already carry every hit
 			if (!full && z.hp < was.hp - 0.01) audio.play("hitFlesh", { x: z.x, y: z.y });
-			if (z.detect && !was.detect && this.alertCd <= 0) {
+			// The scream itself: one zombie in a group shouts and wakes the others (shared/sim/ai/alert.ts).
+			// That is the sound worth hearing -- it tells the player a GROUP is coming, and from where.
+			const shout = z.shout ?? 0;
+			if (shout > 0 && was.shout <= 0) {
 				this.alertCd = ALERT_COOLDOWN;
 				audio.play("zombieAlert", { x: z.x, y: z.y });
+				continue;
+			}
+			// a lone zombie that notices you without shouting (its shout is on cooldown) still makes a noise
+			if (z.detect && !was.detect && this.alertCd <= 0) {
+				this.alertCd = ALERT_COOLDOWN;
+				audio.play("zombieAlert", { x: z.x, y: z.y, scale: 0.7 });
 			}
 		}
 	}

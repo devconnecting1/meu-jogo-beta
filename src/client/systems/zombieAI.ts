@@ -16,26 +16,14 @@ import {
 import { ZombieState, zombieRadius } from "shared/game/entities";
 import { zombieDef } from "shared/data/zombies";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
-import { ALERT_COOLDOWN, ALERT_SHOUT_TIME, ALERT_SHOUTS_PER_TICK, hearers } from "shared/sim/ai/alert";
-import {
-	Congestion,
-	FLANK_FREE_LANE,
-	flankHeading,
-	JAM_MIN_DIST,
-	JAM_PATIENCE,
-	JAM_PROGRESS,
-	ORBIT_TIME,
-} from "shared/sim/ai/flank";
-import { forget, MindAction, report, searchPointX, searchPointY, see, SHOT_MEMORY, think } from "shared/sim/ai/memory";
-import {
-	decisionInterval,
-	inSightCone,
-	losInterval,
-	SenseRanges,
-	senseRanges,
-	TOUCH_RANGE,
-	visibleToSomeone,
-} from "shared/sim/ai/perception";
+// Namespace imports on purpose: roblox-ts emits ONE Luau local per named binding, and a module chunk may hold
+// at most 200 locals. These four modules were 24 of them and this file hit the ceiling, which the compiler
+// cannot see: it is a Luau LOAD-time limit, so the build stays green and the client fails to boot instead.
+// Keep them qualified, and count the top-level locals before adding a new named import here.
+import * as Alert from "shared/sim/ai/alert";
+import * as Flank from "shared/sim/ai/flank";
+import * as Mind from "shared/sim/ai/memory";
+import * as Sense from "shared/sim/ai/perception";
 import { fxBlood, fxDebris, fxShake, GameRefs, nearestPlayer, SPEED_SCALE } from "./types";
 
 /*
@@ -138,7 +126,7 @@ const STAGGER_TIME = 0.45;
 
 // --- module state (reset whenever a new world is loaded) ----------------------------------------
 const flow = new FlowField();
-const crowd = new Congestion();
+const crowd = new Flank.Congestion();
 let flowTimer = 0;
 let flowSolidCount = -1;
 let boundWorld: WorldData | undefined;
@@ -147,9 +135,9 @@ let seenMorning = -1;
 let frameNo = 0;
 /** line-of-sight rays left this frame, and shouts left this frame */
 let losBudget = LOS_BUDGET;
-let shoutsLeft = ALERT_SHOUTS_PER_TICK;
+let shoutsLeft = Alert.ALERT_SHOUTS_PER_TICK;
 /** how far each sense reaches this frame (light, weather and the survivor's Stealth skill) */
-let senses: SenseRanges = { sight: 0, cone: 0, smell: 0 };
+let senses: Sense.SenseRanges = { sight: 0, cone: 0, smell: 0 };
 const alertOut: Array<number> = [];
 /** zombies killed since the pacing director last looked (spawner.ts drains it) */
 let killCount = 0;
@@ -245,7 +233,7 @@ export function reactToHit(z: ZombieState, knockAngle: number, knockPower: numbe
 	if (z.rush !== true) z.stunned = math.max(z.stunned, stun);
 	z.hitFlash = 1;
 	showDetect(z);
-	report(z, z.x - math.cos(knockAngle) * SHOT_MEMORY, z.y - math.sin(knockAngle) * SHOT_MEMORY);
+	Mind.report(z, z.x - math.cos(knockAngle) * Mind.SHOT_MEMORY, z.y - math.sin(knockAngle) * Mind.SHOT_MEMORY);
 	if (knockPower >= STAGGER_KNOCK) {
 		z.stagger = math.max(z.stagger ?? 0, STAGGER_TIME);
 		cancelWindup(z);
@@ -322,7 +310,7 @@ function updateNoise(refs: GameRefs, dt: number): void {
 			if (actorDist(z.x, z.y, s.x, s.y) < s.r) {
 				// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks
 				showDetect(z);
-				report(z, s.x, s.y);
+				Mind.report(z, s.x, s.y);
 			}
 		}
 		if (s.r > s.rMax) sounds.remove(i);
@@ -584,21 +572,21 @@ function flankBias(z: ZombieState): number {
 function navDue(z: ZombieState, distP: number, dt: number): boolean {
 	z.navCd = (z.navCd ?? 0) - dt;
 	if ((z.navCd ?? 0) > 0 && z.navDir !== undefined) return false;
-	z.navCd = decisionInterval(distP) * (0.75 + ((z.id * 7) % 10) / 20);
+	z.navCd = Sense.decisionInterval(distP) * (0.75 + ((z.id * 7) % 10) / 20);
 	return true;
 }
 
 /**
  * Is this zombie actually getting anywhere? Its path cost to the survivor is exact (the flow field computed
  * it), so "has it dropped since last time?" is free and cannot be fooled by a body pushing it around. When it
- * has NOT dropped for JAM_PATIENCE seconds and there is a crowd around, this one is the twelfth in the queue
- * at a door: it commits to walking round the building for ORBIT_TIME instead (shared/sim/ai/flank.ts).
+ * has NOT dropped for Flank.JAM_PATIENCE seconds and there is a crowd around, this one is the twelfth in the queue
+ * at a door: it commits to walking round the building for Flank.ORBIT_TIME instead (shared/sim/ai/flank.ts).
  *
  * A zombie that is making progress — including one chewing through a barricade, which resets the timer when
  * it lands a hit — never leaves its lane.
  */
 function updateJam(z: ZombieState, distP: number, dt: number): void {
-	if ((z.orbit ?? 0) > 0 || distP < JAM_MIN_DIST || !flow.contains(z.x, z.y)) {
+	if ((z.orbit ?? 0) > 0 || distP < Flank.JAM_MIN_DIST || !flow.contains(z.x, z.y)) {
 		z.jamT = 0;
 		z.bestCells = undefined;
 		return;
@@ -609,16 +597,16 @@ function updateJam(z: ZombieState, distP: number, dt: number): void {
 		return;
 	}
 	const best = z.bestCells;
-	if (best === undefined || cells < best - JAM_PROGRESS) {
+	if (best === undefined || cells < best - Flank.JAM_PROGRESS) {
 		z.bestCells = cells;
 		z.jamT = 0;
 		return;
 	}
 	z.jamT = (z.jamT ?? 0) + dt;
-	if ((z.jamT ?? 0) >= JAM_PATIENCE && crowd.around(z.x, z.y) > FLANK_FREE_LANE) {
+	if ((z.jamT ?? 0) >= Flank.JAM_PATIENCE && crowd.around(z.x, z.y) > Flank.FLANK_FREE_LANE) {
 		z.jamT = 0;
 		z.bestCells = undefined;
-		z.orbit = ORBIT_TIME;
+		z.orbit = Flank.ORBIT_TIME;
 		z.orbitSide = flankBias(z) >= 0 ? 1 : -1;
 	}
 }
@@ -643,7 +631,7 @@ function chaseHeading(refs: GameRefs, z: ZombieState, p: PlayerState, r: number,
 		} else {
 			probeWorld = refs.world;
 			probeR = r;
-			h = flankHeading(flow, crowd, z.x, z.y, h, flankBias(z), probeFree);
+			h = Flank.flankHeading(flow, crowd, z.x, z.y, h, flankBias(z), probeFree);
 		}
 	}
 	z.navDir = h;
@@ -768,12 +756,12 @@ function updateCrowd(refs: GameRefs): void {
 /**
  * Can this zombie perceive its target right now? Touch and the night/rain smell are free; sight needs the
  * target inside the range AND the cone AND a clear line. The line is a raycast, so it is spent from a
- * per-frame budget and cached for losInterval(dist) seconds — a horde never pays 150 rays in one frame.
+ * per-frame budget and cached for Sense.losInterval(dist) seconds — a horde never pays 150 rays in one frame.
  */
 function perceive(refs: GameRefs, z: ZombieState, p: PlayerState, distP: number, dt: number): boolean {
-	if (distP < TOUCH_RANGE) return true;
+	if (distP < Sense.TOUCH_RANGE) return true;
 	if (distP < senses.smell) return true;
-	if (!inSightCone(distP, z.angleSlow, math.atan2(p.y - z.y, p.x - z.x), senses)) {
+	if (!Sense.inSightCone(distP, z.angleSlow, math.atan2(p.y - z.y, p.x - z.x), senses)) {
 		// out of the cone: drop the cached answer so it re-tests the moment the target comes back into it
 		z.losClear = false;
 		z.losCd = 0;
@@ -782,7 +770,7 @@ function perceive(refs: GameRefs, z: ZombieState, p: PlayerState, distP: number,
 	z.losCd = (z.losCd ?? 0) - dt;
 	if ((z.losCd ?? 0) <= 0 && losBudget > 0) {
 		losBudget--;
-		z.losCd = losInterval(distP) * (0.8 + ((z.id * 7) % 10) / 25);
+		z.losCd = Sense.losInterval(distP) * (0.8 + ((z.id * 7) % 10) / 25);
 		z.losClear = segmentClear(refs.world, z.x, z.y, p.x, p.y, blocksMovement);
 	}
 	return z.losClear === true;
@@ -795,15 +783,15 @@ function perceive(refs: GameRefs, z: ZombieState, p: PlayerState, distP: number,
 function shout(refs: GameRefs, z: ZombieState, p: PlayerState): void {
 	if (shoutsLeft <= 0 || (z.alertCd ?? 0) > 0) return;
 	shoutsLeft--;
-	z.alertCd = ALERT_COOLDOWN;
-	z.shout = ALERT_SHOUT_TIME;
-	const n = hearers(refs.zombies, z.x, z.y, z.id, alertOut);
+	z.alertCd = Alert.ALERT_COOLDOWN;
+	z.shout = Alert.ALERT_SHOUT_TIME;
+	const n = Alert.hearers(refs.zombies, z.x, z.y, z.id, alertOut);
 	for (let k = 0; k < n; k++) {
 		const o = refs.zombies[alertOut[k]];
 		// woken zombies also get the cooldown: an alert cannot relay itself across the map
-		o.alertCd = ALERT_COOLDOWN;
+		o.alertCd = Alert.ALERT_COOLDOWN;
 		o.detectShow = DETECT_SHOW_TIME;
-		report(o, p.x, p.y);
+		Mind.report(o, p.x, p.y);
 	}
 }
 
@@ -1191,11 +1179,11 @@ function faceAndAnimate(
  * Senses + memory for one zombie: what it perceives now, what it remembers, and the shout when it is the
  * first to spot the survivor. Returns what the body should do this frame.
  */
-function updateMind(refs: GameRefs, z: ZombieState, p: PlayerState, distP: number, dt: number): MindAction {
-	if (z.hp <= 0) return "chase"; // a lit exploder walks at you whatever it can see
+function updateMind(refs: GameRefs, z: ZombieState, p: PlayerState, distP: number, dt: number): Mind.MindAction {
+	if (z.hp <= 0) return "chase"; // a lit exploder walks at you whatever it can Mind.see
 	const wasDetect = z.detect;
 	const perceived = perceive(refs, z, p, distP, dt);
-	const action = think(z, dt, perceived, p.x, p.y, z.x, z.y);
+	const action = Mind.think(z, dt, perceived, p.x, p.y, z.x, z.y);
 	if (perceived && !wasDetect) {
 		z.detectShow = DETECT_SHOW_TIME;
 		shout(refs, z, p);
@@ -1204,7 +1192,7 @@ function updateMind(refs: GameRefs, z: ZombieState, p: PlayerState, distP: numbe
 	if (action !== "idle" && z.type === 1 && !z.wave) {
 		const fromSpawn = actorDist(z.x, z.y, z.spawnX, z.spawnY);
 		if (fromSpawn > LEASH_SPAWN && distP > LEASH_PLAYER) {
-			forget(z);
+			Mind.forget(z);
 			return "idle";
 		}
 	}
@@ -1256,7 +1244,7 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 		z.jamT = 0;
 		z.bestCells = undefined;
 	}
-	const drawn = visibleToSomeone(distP);
+	const drawn = Sense.visibleToSomeone(distP);
 
 	// ---- airborne jumper: flies its planned line, lands early on a wall -------------------------
 	if (z.type === 5 && z.jumping === true) {
@@ -1302,7 +1290,7 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 		jumperPoison(refs, z, r);
 		// the jumper never walks: it only moves by jumping
 	} else if ((z.windup ?? 0) > 0) {
-		// winding up: it pulls back, so the bite is something you can see coming and step out of
+		// winding up: it pulls back, so the bite is something you can Mind.see coming and step out of
 		heading = math.atan2(z.y - p.y, z.x - p.x);
 		speed = WINDUP_BACK * SPEED_SCALE;
 	} else if (!frozen || dying) {
@@ -1342,7 +1330,7 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 			speed = z.moveSpeed * SPEED_SCALE;
 		} else if (action === "search") {
 			const phase = (z.id * 2.399) % (math.pi * 2);
-			heading = gotoHeading(refs, z, r, searchPointX(z, phase), searchPointY(z, phase), distP, dt);
+			heading = gotoHeading(refs, z, r, Mind.searchPointX(z, phase), Mind.searchPointY(z, phase), distP, dt);
 			speed = z.moveSpeed * SEARCH_SPEED * SPEED_SCALE;
 		} else {
 			speed = wander(z, dt);
@@ -1434,9 +1422,9 @@ export function updateZombies(refs: GameRefs, dt: number): void {
 	syncWorld(refs);
 	frameNo++;
 	losBudget = LOS_BUDGET;
-	shoutsLeft = ALERT_SHOUTS_PER_TICK;
+	shoutsLeft = Alert.ALERT_SHOUTS_PER_TICK;
 	const dn = refs.daynight;
-	senses = senseRanges(
+	senses = Sense.senseRanges(
 		{ darkness: dn.darkAlpha, night: dn.isNight, raining: dn.isRaining },
 		refs.save.skillLevels[15] > 0,
 	);
@@ -1444,7 +1432,7 @@ export function updateZombies(refs: GameRefs, dt: number): void {
 	if (dn.morningCount !== seenMorning) {
 		seenMorning = dn.morningCount;
 		for (const z of refs.zombies) {
-			if (!z.wave) forget(z);
+			if (!z.wave) Mind.forget(z);
 		}
 	}
 	decayShakes(refs, dt);
@@ -1465,5 +1453,5 @@ export function updateZombies(refs: GameRefs, dt: number): void {
 
 /** a zombie that spawns already hunting knows where the survivor was when it arrived, not for ever */
 export function seedHunt(z: ZombieState, x: number, y: number): void {
-	see(z, x, y);
+	Mind.see(z, x, y);
 }

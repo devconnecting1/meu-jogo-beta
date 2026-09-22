@@ -207,6 +207,9 @@ function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<Extrac
 	return t;
 }
 
+/** a missed texture fetch is often transient; this is how long we wait before asking again */
+const RETRY_DELAY = 1;
+
 // ---------------------------------------------------------------- skin state (assets / fallback)
 
 function hasTexture(name: SkinTextureName): boolean {
@@ -409,7 +412,18 @@ function disableSkin(): void {
 	}
 }
 
-// the textures are a handful of tiny images: fetch them up front, and fall back to flat if any of them fails
+/*
+ * The textures are a handful of tiny images, fetched up front so the first panel is already skinned.
+ *
+ * Two things measured in Studio shape this:
+ *  - Preloading by CONTENT STRING reports Failure for every one of them, while preloading the ImageLabels
+ *    that will show them succeeds: given a string the engine has to guess the asset type, given the
+ *    instance it knows which property is being filled. So we preload throwaway ImageLabels.
+ *  - A fetch can miss and then succeed a moment later (same id, two runs, two answers). An ImageLabel with
+ *    a valid id draws as soon as the fetch lands, so a transient miss needs NO fallback -- it would only
+ *    cost the player the skin for the rest of the session. We therefore retry once and give up on the skin
+ *    only when EVERY texture is still missing, which is what a moderated or deleted upload looks like.
+ */
 if (skinOn) {
 	task.spawn(() => {
 		const ids: Array<string> = [];
@@ -418,16 +432,43 @@ if (skinOn) {
 			if (id !== "") ids.push(id);
 		}
 		if (ids.size() === 0) return;
-		let failed = false;
-		const [ok] = pcall(() =>
-			ContentProvider.PreloadAsync(ids, (_id: string, status: Enum.AssetFetchStatus) => {
-				if (status !== Enum.AssetFetchStatus.Success) failed = true;
-			}),
-		);
-		if (ok && failed) {
-			warn("[ui] skin textures failed to load: falling back to the flat UI");
-			disableSkin();
+
+		/** preloads `list` through real ImageLabels; returns the ids that did not arrive */
+		const fetchMissing = (list: Array<string>): Array<string> => {
+			const holder = new Instance("Folder");
+			holder.Parent = ContentProvider;
+			const probes: Array<ImageLabel> = [];
+			for (const id of list) {
+				const probe = new Instance("ImageLabel");
+				probe.Image = id;
+				probe.Parent = holder;
+				probes.push(probe);
+			}
+			const missing: Array<string> = [];
+			pcall(() =>
+				ContentProvider.PreloadAsync(probes, (id: string, status: Enum.AssetFetchStatus) => {
+					if (status !== Enum.AssetFetchStatus.Success) missing.push(id);
+				}),
+			);
+			holder.Destroy();
+			return missing;
+		};
+
+		let missing = fetchMissing(ids);
+		if (missing.size() > 0) {
+			task.wait(RETRY_DELAY);
+			missing = fetchMissing(missing);
 		}
+		if (missing.size() === 0) return;
+
+		if (missing.size() >= ids.size()) {
+			// none of them arrived twice over: the uploads themselves are unavailable
+			warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
+			disableSkin();
+			return;
+		}
+		// some arrived: keep the skin, the rest draw as soon as the engine gets them
+		warn(`[ui] ${missing.size()}/${ids.size()} skin textures are slow; keeping the skin`);
 	});
 }
 

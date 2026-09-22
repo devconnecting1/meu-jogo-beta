@@ -22,6 +22,9 @@ jobs:
       - name: Typecheck (roblox-ts)
         run: npm run build
 
+      - name: Luau register budget (a module chunk may hold 200 locals)
+        run: npm run check:registers
+
       - name: Lint
         run: npm run lint
 
@@ -45,6 +48,9 @@ jobs:
 
       - name: Zombie AI (perception, alert, flanking, pace director, cost)
         run: npm run test:ai
+
+      - name: Footstep cadence (the walk cycle drives the sound)
+        run: npm run test:footsteps
 
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
