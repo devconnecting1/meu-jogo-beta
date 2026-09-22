@@ -34,3 +34,10 @@ jobs:
           name: out
           path: out/
           if-no-files-found: error
+
+      - name: Upload rbxts include
+        uses: actions/upload-artifact@v4
+        with:
+          name: include
+          path: include/
+          if-no-files-found: error
