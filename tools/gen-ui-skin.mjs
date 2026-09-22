@@ -419,9 +419,10 @@ if (process.argv.includes("--assets")) {
 	lines.push("};");
 	lines.push("");
 	lines.push("/** every texture of the skin, for the preload pass */");
-	lines.push(
-		`export const SKIN_TEXTURE_NAMES: Array<SkinTextureName> = [${textures.map(t => `"${t.name}"`).join(", ")}];`,
-	);
+	// one name per line: the single-line form goes past Prettier's print width and `format:check` fails in CI
+	lines.push("export const SKIN_TEXTURE_NAMES: Array<SkinTextureName> = [");
+	for (const t of textures) lines.push(`\t"${t.name}",`);
+	lines.push("];");
 	lines.push("");
 	const out = join(ROOT, "src", "client", "ui", "skinAssets.ts");
 	writeFileSync(out, lines.join("\n"));

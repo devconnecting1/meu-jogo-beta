@@ -57,4 +57,18 @@ export const SKIN_TEXTURES: Record<SkinTextureName, SkinTextureAsset> = {
 };
 
 /** every texture of the skin, for the preload pass */
-export const SKIN_TEXTURE_NAMES: Array<SkinTextureName> = ["btnFace", "btnShade", "btnLight", "btnLightHot", "btnFacePress", "btnShadePress", "panelFill", "panelFrame", "panelEdge", "strip", "wellFill", "wellBorder", "focusRing"];
+export const SKIN_TEXTURE_NAMES: Array<SkinTextureName> = [
+	"btnFace",
+	"btnShade",
+	"btnLight",
+	"btnLightHot",
+	"btnFacePress",
+	"btnShadePress",
+	"panelFill",
+	"panelFrame",
+	"panelEdge",
+	"strip",
+	"wellFill",
+	"wellBorder",
+	"focusRing",
+];
