@@ -89,6 +89,43 @@ export const DESIGN = {
 
 	// building footprints (sprite * 4)
 	BUILDING_W: [428, 684, 808, 1068, 1064] as Array<number>,
+
+	/**
+	 * Seed of the procedural town. Fixed (like Dead Town's hand-made map) so the city, its shops
+	 * and the boss plazas are the same every session; 0 = a new random town each run.
+	 */
+	TOWN_SEED: 7331,
+} as const;
+
+/** Town layout (world units). Shared so AI/physics can reason about doors, walls and lanes. */
+export const TOWN = {
+	/** map border (dense forest/fence) thickness */
+	BORDER: 600,
+	ROAD_W: 3 * 128,
+	/** target lot size between roads (actual lots vary ±ROAD_JITTER) */
+	LOT_TARGET: 1536,
+	ROAD_JITTER: 96,
+	/** concrete band inside a lot along every road-facing edge */
+	SIDEWALK: 72,
+	/** gap between the sidewalk and a building's street face */
+	SETBACK: 48,
+	/** minimum alley between two buildings (player/zombie body is 36) */
+	BUILDING_GAP: 96,
+	/** building wall thickness and doorway width */
+	WALL_T: 20,
+	DOOR_W: 112,
+	/** tree trunk collision (original mask_50_50) and visual canopy radius range */
+	TREE_TRUNK: 44,
+	CANOPY_R_MIN: 75,
+	CANOPY_R_MAX: 86,
+	/** car collision (original mask_200_100) */
+	CAR_L: 200,
+	CAR_W: 100,
+	TRASH: 36,
+	/** radius kept free of buildings/trees/cars around each boss anchor */
+	BOSS_CLEAR: 560,
+	/** spatial grid cell for solids */
+	GRID_CELL: 512,
 } as const;
 
 /** seconds helpers: original frames at 30fps */
