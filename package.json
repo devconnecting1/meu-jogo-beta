@@ -1,0 +1,22 @@
+{
+	"name": "project-z",
+	"private": true,
+	"scripts": {
+		"build": "rbxtsc",
+		"watch": "rbxtsc -w",
+		"serve": "rojo serve",
+		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
+		"format": "prettier --write \"src/**/*.ts\"",
+		"format:check": "prettier --check \"src/**/*.ts\""
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@rbxts/compiler-types": "^3.0.0-types.0",
+		"@rbxts/types": "^1.0.953",
+		"eslint": "^10.11.0",
+		"prettier": "3.9.8",
+		"roblox-ts": "^3.0.0",
+		"typescript": "^5.9.3",
+		"typescript-eslint": "^8.70.1"
+	}
+}
