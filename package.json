@@ -8,6 +8,7 @@
 		"theme": "node tools/gen-theme.mjs",
 		"validate:world": "node tools/validate-world.mjs",
 		"test:net": "node tools/test-net.mjs",
+		"test:sim": "node tools/test-sim.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""

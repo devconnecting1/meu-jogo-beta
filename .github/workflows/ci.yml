@@ -34,6 +34,9 @@ jobs:
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 
+      - name: Simulation determinism (client prediction must match the server)
+        run: npm run test:sim
+
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
         with:
