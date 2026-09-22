@@ -29,14 +29,14 @@ jobs:
         run: npm run format:check
 
       - name: Upload compiled Luau
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: out
           path: out/
           if-no-files-found: error
 
       - name: Upload rbxts include
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: include
           path: include/
@@ -53,7 +53,7 @@ jobs:
         run: $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxl
 
       - name: Upload place file
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: place
           path: ProjectZ-ci.rbxl
