@@ -12,8 +12,8 @@
 |---|---|---|
 | D1 | **O servidor simula tudo**: jogadores, zumbis, chefes, relógio, ondas, itens, loot, portas, construções, combate, XP, inventário e moedas. O cliente envia **inputs e intenções**, e só desenha. | Pedido do autor: o máximo possível no servidor, para impedir trapaças. Não há Humanoid (`CharacterAutoLoads = false`): o "corpo" já é só dado, o que deixa o modelo autoritativo barato. |
 | D2 | **Movimento por inputs**: o cliente manda direção, mira e botões, **nunca a posição**. O servidor roda o mesmo `moveActor` compartilhado. O cliente prevê localmente e **reconcilia**. | Speedhack, teleporte e noclip ficam impossíveis por construção. A sensação continua instantânea para quem joga. |
-| D3 | **Tick fixo de 30 Hz** para toda a simulação. | Todas as regras foram escritas em "px/frame a 30 fps" (`SPEED_SCALE = 30`), então 30 Hz reproduz o quadro do original. Custo estimado de ~6 ms/tick com 6 jogadores e 150 zumbis. |
-| D4 | **Snapshots de 15 Hz** (anel próximo) e 7,5 Hz (anel médio), em `UnreliableRemoteEvent` com `buffer` binário de até 900 bytes. Eventos que não podem se perder vão em `RemoteEvent`. | Pior caso estimado em ~18 KB/s por cliente (6 jogadores, noite, horda máxima). Caso típico: ~6 KB/s. |
+| D3 | **Sem tick único de 30 Hz**: o cliente desenha **sem limite do jogo** (segue o FPS do próprio Roblox); o servidor simula em passo fixo de **60 Hz** o que o jogador sente (movimento, combate, colisões, dano, pickups); a IA dos zumbis usa **LOD de frequência** (30/15/5–10 Hz). Tabela completa em 0.1. | Decisão do autor (22 set 2026, revisão da anterior): a sensação de resposta não pode depender do hardware do jogador, e o balanceamento (`SPEED_SCALE = 30`) não muda, porque já converte tudo para por-segundo com `dt`. Custo estimado de ~3 ms/tick em média (p95 ≤ 6 ms) com 6 jogadores e 150 zumbis; acima disso, `SIM_HZ` cai para 30 sem mudar o protocolo. |
+| D4 | **Snapshots de 20 Hz** (anel próximo) e 10 Hz (anel médio), em `UnreliableRemoteEvent` com `buffer` binário de até 900 bytes. Eventos que não podem se perder vão em `RemoteEvent`. | Pior caso estimado em ~23 KB/s por cliente (6 jogadores, noite, horda máxima); a alavanca "anel médio a 5 Hz" (seção 4.7) traz de volta a ~20 KB/s se precisar. Caso típico: ~7–8 KB/s. |
 | D5 | **Combate resolvido no servidor**, com a **dispersão sorteada em segredo pelo servidor**. O cliente só prevê cosméticos (clarão, traçante, tranco). A **compensação de latência** do hitscan rebobina os zumbis em até **300 ms**. O melee **não rebobina**: ganha margem de **+12 u de alcance e ±6° de arco**. | Sem PvP, rebobinar só favorece o jogador. A dispersão secreta elimina o "no-spread". |
 | D6 | **Flow field multi-fonte**: um único Dijkstra (fila de Dial) semeado em **todos** os jogadores em pé, em tiles de 512 u alinhados ao mundo. Cada célula guarda a distância e **qual jogador** a alcançou (o alvo do zumbi). O orçamento é **por tempo** (≤ 2 ms/tick). | O custo cresce com a área coberta, não com o número de jogadores. O alvo passa a ser "o jogador mais próximo pelo caminho" e sai de graça do algoritmo. |
 | D7 | **População por aglomerado**: jogadores a ≤ 1500 u uns dos outros formam um aglomerado de *k* jogadores, com fator **S(k) = 1 + 0,5·(k − 1)**. O teto do servidor é **150 zumbis + 2 chefes**. | Solo (k = 1) fica idêntico a hoje. Um grupo enfrenta mais zumbis, mas menos que *k* vezes, o que recompensa jogar junto. |
@@ -23,6 +23,22 @@
 | D11 | **Derrubado (30 s) → reviver (segurar E por 4 s a ≤ 70 u) → morto → Rebirth pago, New game ou Espectar.** Sem aliado em pé, a espera é pulada. Sair derrubado conta como morte. | Decisão do autor, mais anti-"combat log". |
 | D12 | **Play solo** cria um servidor reservado (`TeleportAsync` com `ShouldReserveServer`). No Studio o teleporte não funciona e cai no servidor local. | Documentado: o TeleportService não roda em playtest do Studio. |
 | D13 | **Anti-cheat com resposta proporcional**: corrigir em silêncio → sinalizar com evidências no painel de admin → kick automático **só** para flood inequívoco → ban **só** por decisão humana. | Justo com a comunidade: falso positivo nunca bane ninguém. |
+
+### 0.1 Frequências (visão geral)
+
+> Decisão do autor (22 set 2026), substitui o "tick fixo de 30 Hz para toda a simulação" das versões anteriores deste documento.
+
+| Camada | Frequência | Onde |
+|---|---|---|
+| Desenho (render) no cliente | **Sem limite imposto pelo jogo** — segue a configuração de FPS do próprio Roblox, escolhida pelo jogador (60/120/144/240 Hz em dispositivo compatível; celular pode rodar a 30 Hz). Todo o render usa `dt` e interpolação, então funciona em qualquer FPS. | `client/view/*`, seção 5.1 |
+| Predição do próprio movimento no cliente | **60 Hz, passo fixo**, igual ao servidor | seção 2.2, 5.2 |
+| Amostragem de input / pacote `Input` (C→S) | **60/s**, com redundância de 3 comandos (o novo + 2 anteriores) | seção 2.2, 4.1 |
+| Simulação no servidor: movimento (inputs), tiros/golpes/projéteis, colisões, dano, pickups | **60 Hz fixo** (`TICK_DT = 1/60`); o Heartbeat do servidor tem teto de 60 FPS, então normalmente 1 tick por heartbeat, recuperando no máximo 2 | seção 3.1 |
+| `SIM_HZ` (fallback de orçamento) | Configurável; cai para **30 Hz** sem mudar o protocolo se o tick p95 passar do orçamento na F2 (p95 ≤ 6 ms de simulação com 6 jogadores e 150 zumbis) | seção 3.1, 3.2 |
+| Decisão/steering da IA dos zumbis | **30 Hz** a ≤ 800 u de algum jogador, **15 Hz** no anel médio (800–1600 u), **5–10 Hz** longe (> 1600 u). O movimento **integrado** (`moveActor`) continua todo tick, a 60 Hz — só a direção desejada troca com menos frequência. | seção 3.4 |
+| Flow field multi-fonte (recálculo completo) | **5–10 Hz** nos cenários comuns, com orçamento por tick (mais lento no pior caso de jogadores espalhados) | seção 3.3 |
+| Snapshot `Snap` (S→C) | **20 Hz** no anel próximo (a cada 3 ticks), **10 Hz** no anel médio (a cada 6 ticks) | seção 4.1, 4.3 |
+| Balanceamento (velocidades, cadências, dano) | **Inalterado**: continua "px/frame a 30 fps" (`SPEED_SCALE = 30`), convertido para por-segundo com `dt` — independente do tick da simulação | seção 1, D3 |
 
 Estimativa total: **~22–28 agente-dias** em 7 fases (F0–F6). Cada fase deixa o jogo jogável e testável (seção 11).
 
@@ -52,7 +68,7 @@ Estimativa total: **~22–28 agente-dias** em 7 fases (F0–F6). Cada fase deixa
 | API / limite | Fato | Uso aqui |
 |---|---|---|
 | `UnreliableRemoteEvent` | Payload > **1000 bytes é descartado**. Sem garantia de entrega nem de **ordem**. Indicado para dados efêmeros ou que mudam continuamente. O engine **codifica e comprime** buffers (o que dificulta medir o tamanho final). | Snapshots S→C e inputs C→S. Teto próprio de **900 bytes crus** por pacote. |
-| Throttling de remotes | ~**500 requisições/s por cliente**, **compartilhado entre remotes do mesmo tipo** (C→S) | Enviamos ~30 unreliable/s + ≤ 20 reliable/s por cliente. |
+| Throttling de remotes | ~**500 requisições/s por cliente**, **compartilhado entre remotes do mesmo tipo** (C→S) | Enviamos ~60 unreliable/s (`Input`, um por tick de 60 Hz) + ≤ 20 reliable/s por cliente — bem abaixo do teto de ~500/s. |
 | Banda por cliente | A documentação consultada **não fixa um número**. Recomenda enviar só o essencial, por mudança de estado, e testar com simulação de rede. | Referência prática da comunidade: ~50 KB/s por cliente (**não oficial**). Alvo: ≤ 20 KB/s no pior caso, medido na F2. |
 | `buffer` (Luau) | Armazenamento binário de tamanho fixo (`writeu8/u16/f32`, `readbits/writebits`…). Passa por RemoteEvents **como cópia**. Tipado em `@rbxts/types` (`roblox.d.ts`, `declare namespace buffer`). | Codec binário compartilhado (`shared/net/codec.ts`). |
 | `TeleportService:TeleportAsync` + `TeleportOptions.ShouldReserveServer = true` | Cria um servidor reservado novo. `ReservedServerAccessCode` leva a um reservado existente. Chamado **só no servidor**. Recomenda-se `pcall` + retentativa e `TeleportInitFailed`. **Não funciona em playtest do Studio** (é preciso publicar e testar no cliente Roblox). | Botão "Play solo" (seção 7.4). |
@@ -61,7 +77,7 @@ Estimativa total: **~22–28 agente-dias** em 7 fases (F0–F6). Cada fase deixa
 | `Players.MaxPlayers` | **Só configurável** nas configurações do place no Creator Dashboard, não por script | O autor ajusta para **6** manualmente (F5). |
 | `BindToClose` | Limite de **30 s** para salvar no desligamento | Já usamos 25 s (`SHUTDOWN_BUDGET`). |
 | `MessagingService` | Mensagem ≤ **1 024 caracteres**, entrega **best effort** (não garantida) | Opcional, só para avisos globais de admin (seção 10). |
-| Heartbeat do servidor | Limitado a **60 FPS**. Quedas indicam problema de CPU (MicroProfiler e Server Jobs). | O tick de 30 Hz roda em heartbeats alternados. |
+| Heartbeat do servidor | Limitado a **60 FPS**. Quedas indicam problema de CPU (MicroProfiler e Server Jobs). | O tick de 60 Hz roda 1 por heartbeat (recuperando no máximo 2 se o heartbeat atrasar). |
 | Latência típica | "A maioria dos jogadores tem 100–300 ms". A doc recomenda simular **50–150 ms em cada sentido** (entrada e saída) no Studio. | Tamanho da rebobinagem e plano de teste. |
 | Modo "Server & Clients" do Studio | Servidor com **1 a 8 clientes**. Janela do servidor com borda verde e dos clientes com borda azul. Encerrar em uma fecha todas. | Plano de teste (seção 12). |
 | Simulação de rede no Studio | Atraso de entrada/saída (one-way), jitter e perda de pacote; vale para o teste multi-cliente | Plano de teste. |
@@ -98,10 +114,10 @@ Estimativa total: **~22–28 agente-dias** em 7 fases (F0–F6). Cada fase deixa
 
 | Critério | A) Cliente manda posição + servidor valida | **B) Cliente manda input + servidor simula (escolhido)** |
 |---|---|---|
-| Speedhack | Validar velocidade exige tolerância (latência e jitter geram rajadas), e o trapaceiro vive dentro dela (+20–30%) | **Impossível**: o servidor consome no máximo 1 comando por tick (30/s) com velocidade calculada por ele |
+| Speedhack | Validar velocidade exige tolerância (latência e jitter geram rajadas), e o trapaceiro vive dentro dela (+20–30%) | **Impossível**: o servidor consome no máximo 1 comando por tick (60/s) com velocidade calculada por ele |
 | Teleporte / noclip | Exige raycast de cada deslocamento contra paredes, com casos de borda (portas, knockback) e falso positivo em lag | **Impossível**: não existe campo de posição no protocolo |
 | Knockback, lentidão (ácido, fome, dano) | O cliente pode "esquecer" de aplicar; o servidor precisa detectar | Aplicado pelo servidor; o cliente só prevê |
-| Custo de CPU | Baixo | 6 × 30 = 180 `moveActor`/s: **desprezível** |
+| Custo de CPU | Baixo | 6 × 60 = 360 `moveActor`/s: **desprezível** |
 | Sensação | Instantânea | Instantânea (predição) com correções raras e suaves |
 | Complexidade | Validação cheia de heurística e falso positivo | Reconciliação padrão (histórico de comandos) |
 | Robustez a lag switch | Rajada de posições "legítimas" depois do lag | O servidor segura o personagem parado; o que chega atrasado é descartado |
@@ -119,30 +135,30 @@ A escolha B também combina com o que já existe: o "personagem" é só dado (se
 | `held` | u8 | Bits: ataque segurado, ação (E) segurada, mira do sniper, reservados |
 | `edges` | u8 | 2 bits: nº de toques de ataque no tick (0–3); 2 bits: nº de solturas (arco/sniper); 2 bits: nº de toques de E; 2 bits: recarregar |
 
-Pacote C→S (`Input`, **UnreliableRemoteEvent**, 30/s): cabeçalho de 4 bytes (`count`, `viewTick u16`, `viewFrac u8`, com o tick do snapshot que o cliente desenhava, usado na rebobinagem) mais **3 comandos** (o novo e os 2 anteriores, como redundância). Total de 28 bytes. Duas perdas seguidas se recuperam sem retransmissão.
+Pacote C→S (`Input`, **UnreliableRemoteEvent**, 60/s): cabeçalho de 4 bytes (`count`, `viewTick u16`, `viewFrac u8`, com o tick do snapshot que o cliente desenhava, usado na rebobinagem) mais **3 comandos** (o novo e os 2 anteriores, como redundância — cobrindo 50 ms de comandos a 60 Hz). Total de 28 bytes. Duas perdas seguidas se recuperam sem retransmissão.
 
 > O cliente **quantiza o próprio input** exatamente como o servidor vai ler e só então roda a predição. Assim cliente e servidor aplicam o mesmo valor, bit a bit.
 
 #### Buffer de inputs no servidor
 
-- Uma fila por jogador, ordenada por `seq`, com **profundidade-alvo de 2** comandos (66 ms) e **máximo de 4** (133 ms).
+- Uma fila por jogador, ordenada por `seq`, com **profundidade-alvo de 2** comandos (33 ms) e **máximo de 4** (67 ms).
 - A cada tick o servidor **consome exatamente 1 comando** por jogador:
   - **Atrasado (fila vazia)**: repete o movimento do último comando por 1 tick e depois usa "parado". Esse slot é marcado como *preenchido*, e o comando real que chegar depois com esse `seq` é **descartado** (o servidor já simulou aquele tempo).
   - **Duplicado** (`seq` ≤ último consumido): ignorado. Acontece normalmente por causa da redundância.
   - **Fora de ordem**: inserido na posição correta, se ainda não foi consumido.
   - **Fila > 4** (relógio do cliente adiantado, rajada ou trapaça): descarta os mais antigos até 4 e incrementa o contador `inputOverflow`.
-- **Dilatação de tempo**: o snapshot devolve a profundidade da fila (`bufDepth`). O cliente ajusta seu ritmo de amostragem em ±2% (29,4–30,6 Hz) para manter a fila perto de 2, o mesmo método do Overwatch. Isso cobre deriva de relógio sem quebrar o determinismo, porque cada comando continua valendo 1/30 s.
-- **Limite de taxa**: token bucket de 60 pacotes/s (rajada de 20). O excesso é descartado e contado. Flood sustentado leva a kick (seção 8.2).
+- **Dilatação de tempo**: o snapshot devolve a profundidade da fila (`bufDepth`). O cliente ajusta seu ritmo de amostragem em ±2% (58,8–61,2 Hz) para manter a fila perto de 2, o mesmo método do Overwatch. Isso cobre deriva de relógio sem quebrar o determinismo, porque cada comando continua valendo 1/60 s.
+- **Limite de taxa**: token bucket de 120 pacotes/s (rajada de 40) — o dobro da taxa real de 60/s, a mesma margem de antes. O excesso é descartado e contado. Flood sustentado leva a kick (seção 8.2).
 
 **Por que isso elimina trapaça de movimento por construção:** o protocolo não tem posição nem dt. O servidor usa sua própria velocidade (`recalcMoveSpeed` com skills, equipamento, buffs, fome, dano e ácido), sua própria colisão e seu próprio relógio. O único jeito de "andar mais" seria o servidor consumir mais de 1 comando por tick, e isso nunca acontece.
 
 #### Reconciliação no cliente
 
 ```text
-a cada tick local (30 Hz, sincronizado ao servidor):
+a cada tick de predição (60 Hz, passo fixo, sincronizado ao servidor):
   cmd = amostrarInput()            -- já quantizado
   enviar(cmd + 2 anteriores)
-  estado = stepPlayer(mundoLocal, estado, cmd, 1/30)   -- shared/sim/playerMove.ts
+  estado = stepPlayer(mundoLocal, estado, cmd, 1/60)   -- shared/sim/playerMove.ts
   historico[cmd.seq] = estado
 
 ao receber snapshot (ackSeq, estadoServidor):
@@ -150,15 +166,15 @@ ao receber snapshot (ackSeq, estadoServidor):
   erro = estadoServidor.pos - historico[ackSeq].pos        -- métrica de divergência
   se |erro| > 0,01 u:
      e = estadoServidor
-     para cada cmd pendente (seq > ackSeq): e = stepPlayer(mundoLocal, e, cmd, 1/30)
+     para cada cmd pendente (seq > ackSeq): e = stepPlayer(mundoLocal, e, cmd, 1/60)
      offsetVisual += posDesenhada - e.pos      -- o que está na tela não pula
      estado = e
      se |offsetVisual| > 64 u: offsetVisual = 0 (teleporte/admin/knockback grande: snap)
 
-a cada quadro (60 fps):
+a cada quadro de desenho (no FPS do jogador — sem limite do jogo; 30 a 240 Hz):
   pos = lerp(estadoAnterior, estado, α) + offsetVisual
   offsetVisual *= exp(-dt / 0,1)                -- some em ~100 ms
-  -- extrapolação só de render: + velocidadeDoInputAtual × (t desde o tick), até 1 tick,
+  -- extrapolação só de render: + velocidadeDoInputAtual × (t desde o tick de predição), até 1 tick (1/60 s),
   -- colidida por moveActor; nunca volta para o estado
 ```
 
@@ -186,8 +202,8 @@ Fontes de divergência esperadas e como são tratadas:
 
 | Parâmetro | Valor | Motivo |
 |---|---|---|
-| Histórico | Anel de **12 ticks (400 ms)** com x, y de cada zumbi e chefe (e segmentos da centopeia) | Cobre a rebobinagem máxima com folga para interpolar |
-| Rebobinagem máxima | **300 ms** (9 ticks) | Latência típica de 100–300 ms (doc) + interpolação de 133 ms: cobre a maioria. Acima disso o jogador precisa antecipar um pouco (e lag switch deixa de compensar). |
+| Histórico | Anel de **24 ticks (400 ms a 60 Hz)** com x, y de cada zumbi e chefe (e segmentos da centopeia) | Cobre a rebobinagem máxima com folga para interpolar |
+| Rebobinagem máxima | **300 ms** (18 ticks a 60 Hz) | Latência típica de 100–300 ms (doc) + interpolação de 100 ms: cobre a maioria. Acima disso o jogador precisa antecipar um pouco (e lag switch deixa de compensar). |
 | Teto por jogador | `min(300 ms, RTT_medido/2 + atrasoInterp + 2 ticks)` com `Player:GetNetworkPing()` | Impede declarar um `viewTick` antigo de propósito para rebobinar mais |
 | Sem PvP | — | Sem o problema clássico de "levar tiro atrás da parede": rebobinar só ajuda quem atira |
 
@@ -227,32 +243,34 @@ Nada desta lista afeta outro jogador, o mundo ou a economia.
 
 ### 3.1 Tick
 
-- **30 Hz, passo fixo** (`TICK_DT = 1/30`), acumulado no `RunService.Heartbeat` (que tem teto de 60 FPS). Recupera no máximo **2 ticks por heartbeat**. Se o atraso passar disso, o mundo desacelera (o tempo é descartado e registrado) em vez de entrar em espiral de recuperação.
+- **60 Hz, passo fixo** (`TICK_DT = 1/60`), acumulado no `RunService.Heartbeat` (que tem teto de 60 FPS): normalmente **1 tick por heartbeat**. Recupera no máximo **2 ticks por heartbeat** se o heartbeat atrasar. Se o atraso passar disso, o mundo desacelera (o tempo é descartado e registrado) em vez de entrar em espiral de recuperação.
+- **`SIM_HZ` configurável** (constante em `shared/net/mpConfig.ts`, replicada no `WorldInit` para o cliente): **60** por padrão. Decisão do autor (22 set 2026): se a F2 medir `tick p95 > 6 ms` com 6 jogadores e 150 zumbis (orçamento da seção 3.2), `SIM_HZ` cai para **30** sem mudar o protocolo — o codec e o layout dos pacotes (seção 4) são os mesmos; só os divisores de replicação ("a cada N ticks", seção 4.1/4.3) se recalculam a partir de `SIM_HZ` para manter a cadência-alvo em Hz (20/10 Hz de snapshot) o mais perto possível do valor inteiro disponível. O balanceamento (D3, `SPEED_SCALE = 30`) não é afetado, porque já é por-segundo via `dt`.
 - **Ordem dentro do tick:**
   1. **Entrada**: para cada jogador no mundo, consome 1 comando (ou preenchimento) → `stepPlayer` (movimento, fome, HP, buffs) → máquina da arma (recarga, cadência, tiro com rebobinagem, varredura) → intenções com `atSeq` deste comando.
-  2. **Mundo**: relógio e ondas → população por aglomerado → flow field (orçamento por tempo) → zumbis (com LOD) → chefes → projéteis, explosões e poças → torretas e armadilhas → fogueiras, loot, cooldowns de árvore/carro → física de itens → sangramento e reviver.
+  2. **Mundo**: relógio e ondas → população por aglomerado → flow field (orçamento por tempo, recalculado a 5–10 Hz) → zumbis (movimento integrado todo tick; decisão/steering com LOD, seção 3.4) → chefes → projéteis, explosões e poças → torretas e armadilhas → fogueiras, loot, cooldowns de árvore/carro → física de itens → sangramento e reviver.
   3. **Histórico**: grava x, y dos zumbis e chefes no anel.
-  4. **Replicação** (ticks pares, 15 Hz): interesse → codificação por cliente → `FireClient`. Os deltas confiáveis acumulados no tick são enviados em lote a cada tick.
+  4. **Replicação** (a cada 3 ticks = **20 Hz**): interesse → codificação por cliente → `FireClient`. Os deltas confiáveis acumulados no tick são enviados em lote a cada tick.
   5. **Métricas e anti-cheat**: decaimento de contadores, tempo do tick e bytes enviados.
 
 ### 3.2 Orçamento de CPU por tick (6 jogadores, noite, 150 zumbis)
 
-Estimativas para validar na F2 com `os.clock()` por etapa (seção 12). O período do tick é 33,3 ms. Meta: **média ≤ 6 ms e p95 ≤ 10 ms** (≤ 20% de um núcleo), para o heartbeat seguir em 60.
+Estimativas para validar na F2 com `os.clock()` por etapa (seção 12). O período do tick é 16,7 ms. Meta (decisão do autor): **p95 ≤ 6 ms** de simulação por tick, com média estimada ≤ 3 ms (~18% de um núcleo), para o heartbeat seguir em 60. Acima disso, `SIM_HZ` cai para 30 (seção 3.1).
 
 | Etapa | Custo estimado | Notas |
 |---|---|---|
 | Entrada + movimento de 6 jogadores | 0,1 ms | 6 `moveActor` com ≤ 2 subpassos |
-| Combate (armas, hitscan com rebobinagem, projéteis, torretas) | 0,5 ms (pico 1,5) | Pico com 6 escopetas (5 projéteis cada) no mesmo tick |
-| IA de 150 zumbis | 2,5 ms | ~15 µs por zumbi (lógica + `moveActor`). **LOD**: zumbis a > 1600 u de todos os jogadores atualizam a 10 Hz. |
+| Combate (armas, hitscan com rebobinagem, projéteis, torretas) | 0,3 ms (pico 1,0) | Pico com 6 escopetas (5 projéteis cada) no mesmo tick; tick mais curto reduz quantos disparos se acumulam |
+| Movimento integrado de 150 zumbis (todo tick) | 0,8 ms | `moveActor` por zumbi (~5 µs cada), a 60 Hz mesmo quando a IA não decide de novo naquele tick |
+| Decisão de IA com LOD (steering, amortizada) | 1,0 ms | 30/15/5–10 Hz por anel (seção 3.4), escalonada por `zombieId % N` para não coincidir num só tick |
 | Separação por hash espacial (célula de 64 u) | 0,3 ms | Substitui o O(n²) |
-| Flow field multi-fonte | ≤ 2,0 ms | **Orçamento por tempo**, não por contagem |
+| Flow field multi-fonte | ≤ 2,0 ms nos ticks de recálculo (0,3 ms amortizado) | **Orçamento por tempo**, recalculado a 5–10 Hz (não todo tick, seção 3.3) |
 | Chefes, spawner, relógio, interação, itens, fogueiras | 0,3 ms | |
-| Anel de histórico | 0,05 ms | |
-| Replicação (6 clientes, só em ticks pares) | 1,0 ms (0,5 amortizado) | Consulta de interesse no hash + escrita em `buffer` |
+| Anel de histórico | 0,05 ms | Agora com 24 entradas (400 ms a 60 Hz) |
+| Replicação (6 clientes, a cada 3 ticks = 20 Hz) | 1,0 ms (0,33 amortizado) | Consulta de interesse no hash + escrita em `buffer` |
 | Anti-cheat e métricas | 0,05 ms | |
-| **Total** | **~6 ms médio / ~9 ms p95** | |
+| **Total** | **~3,5 ms médio / ~6 ms p95** | |
 
-Se passar do alvo, na ordem: LOD mais agressivo (10 Hz a partir de 1200 u), teto de 120 zumbis, `--!native` nos módulos de simulação e, por último, flow field em Actor (Parallel Luau).
+Se passar do alvo (p95 > 6 ms), na ordem: `SIM_HZ` cai para **30** (seção 3.1, sem mudar o protocolo), LOD de IA mais agressivo (cortar o anel médio para 600 u ou reduzir sua frequência), teto de 120 zumbis, `--!native` nos módulos de simulação e, por último, flow field em Actor (Parallel Luau).
 
 ### 3.3 IA: flow field multi-fonte
 
@@ -268,14 +286,14 @@ Se passar do alvo, na ordem: LOD mais agressivo (10 Hz a partir de 1200 u), teto
   - Jogadores no lobby, mortos, espectando ou em proteção de spawn **não são fontes**.
   - Cada célula guarda `dist` e **`owner`** (o índice do jogador que a alcançou primeiro). `owner` é o **alvo** do zumbi naquela célula: "o jogador mais próximo pelo caminho", de graça.
 - **Consulta:** `heading(x, y)` igual à de hoje (desce o gradiente e mira na célula mais distante em linha livre). Novo: `targetOf(x, y) → jogador`.
-- **Perseguição direta:** mantida quando o alvo está a < 72 u com linha livre, e ampliada para **< 200 u com linha livre** (o campo pode estar até 0,4 s velho).
-- **Orçamento:** o rebuild é *double-buffered* como hoje (consultas leem o último campo completo) e expande células até gastar **2 ms/tick**. Custo estimado de ~2 µs/célula interpretado (~0,7–1 µs com `--!native`; medir na F2).
+- **Perseguição direta:** mantida quando o alvo está a < 72 u com linha livre, e ampliada para **< 200 u com linha livre** (o campo pode estar até ~0,25 s velho nos cenários comuns, ~0,75 s no pior caso espalhado).
+- **Orçamento:** o rebuild é *double-buffered* como hoje (consultas leem o último campo completo) e expande células até gastar **2 ms/tick**. Como o servidor agora tick a 60 Hz (o dobro de ticks por segundo de antes), o mesmo orçamento por tick dobra o throughput total e aproxima o rebuild completo de **5–10 Hz** nos cenários leves — a frequência de recálculo decidida pelo autor (item 9, seção 14.2). Custo estimado de ~2 µs/célula interpretado (~0,7–1 µs com `--!native`; medir na F2).
 
 | Cenário | Células ativas | Rebuild completo a cada |
 |---|---|---|
-| Solo | ~6,4 mil–9 mil | ~0,4 s (igual a hoje) |
-| 6 jogadores juntos | ~12 mil–15 mil | ~0,4–0,5 s |
-| 6 jogadores espalhados (pior) | ~46 mil–55 mil | ~1,5 s interpretado, ~0,5 s nativo (degrada suave: só o caminho fica mais velho) |
+| Solo | ~6,4 mil–9 mil | ~0,15–0,2 s (**5–7 Hz**) |
+| 6 jogadores juntos | ~12 mil–15 mil | ~0,2–0,25 s (**4–5 Hz**) |
+| 6 jogadores espalhados (pior) | ~46 mil–55 mil | ~0,75 s interpretado (**~1,3 Hz**), ~0,25 s nativo (**~4 Hz**) (degrada suave: só o caminho fica mais velho) |
 
 - **Zumbi fora de qualquer tile ativo:** usa `steer` direto até o jogador mais próximo em linha reta, como hoje fora da janela.
 - **Coleira** (`LEASH_SPAWN` 2000 / `LEASH_PLAYER` 600), detecção por ruído (anéis de **todos** os jogadores), mira do cuspidor, pulo e investida passam a usar `targetOf(z)`, com o jogador mais próximo como fallback.
@@ -284,7 +302,15 @@ Se passar do alvo, na ordem: LOD mais agressivo (10 Hz a partir de 1200 u), teto
 
 - **Hash espacial** de zumbis (célula de 64 u, maior que 2 × o raio do zumbi grande de 23 u). Só testa pares em células vizinhas. Custo O(n) na prática.
 - O mesmo hash serve à consulta de interesse, ao `actorOverlapsRect` (fechar porta) e às armadilhas.
-- **LOD**: zumbi a > 1600 u de todos os jogadores atualiza a 10 Hz (dt de 0,1 s; `moveActor` subdivide sozinho), sem ruído nem alpha. Ninguém o vê.
+- **LOD de frequência da IA** (decisão do autor, item 9, seção 14.2): a distância ao jogador mais próximo define com que frequência o zumbi recalcula a direção desejada (`heading`/`targetOf`, steering). O **movimento integrado (`moveActor`) continua todo tick, a 60 Hz, para todo zumbi**, andando na última direção decidida — só a decisão muda de frequência:
+
+  | Anel | Distância | Decisão/steering |
+  |---|---|---|
+  | Próximo | ≤ 800 u de algum jogador | 30 Hz (a cada 2 ticks) |
+  | Médio | 800–1600 u | 15 Hz (a cada 4 ticks) |
+  | Longe | > 1600 u | 5–10 Hz (a cada 6–12 ticks), sem ruído nem alpha (ninguém o vê) |
+
+  Escalonado por `zombieId % N` para distribuir as recomputações ao longo dos ticks e evitar um pico de CPU concentrado num único tick (o mesmo espírito do orçamento por tempo do flow field).
 
 ### 3.5 População, spawn e ondas escalando com jogadores
 
@@ -331,12 +357,12 @@ O drop de zumbi usa a skill do **matador** (`skillLevels[9]`). O loot de prédio
 
 | Remote | Tipo | Sentido | Conteúdo | Taxa |
 |---|---|---|---|---|
-| `Input` | Unreliable | C→S | `buffer` de 28 B: 3 comandos + `viewTick` | 30/s |
+| `Input` | Unreliable | C→S | `buffer` de 28 B: 3 comandos + `viewTick` | 60/s |
 | `Intent` | RemoteEvent | C→S | `{k, atSeq, …}` (tabela pequena, validada) | Sob demanda, ≤ 20/s |
 | `ShopAction` | RemoteFunction | C→S | **Já existe** (loja, Rebirth, New game) | Existente |
-| `LoadRequest` / `LoadAck` | RemoteEvent | ↔ | **Já existe**. O `LoadAck` passa a trazer também as informações do servidor (modo, dia do mundo, seed, hash do mapa, `tick0`). | Existente |
-| `Snap` | Unreliable | S→C | `buffer` ≤ 900 B por parte (1–2 partes por snapshot, cada parte **autocontida**) | 15/s |
-| `Fx` | Unreliable | S→C | Lote por tick: `ShotResult`, `ProjSpawn/End`, sangue, impacto, explosão, tremida de sólido, som | ≤ 30/s |
+| `LoadRequest` / `LoadAck` | RemoteEvent | ↔ | **Já existe**. O `LoadAck` passa a trazer também as informações do servidor (modo, dia do mundo, seed, hash do mapa, `tick0`, `SIM_HZ`). | Existente |
+| `Snap` | Unreliable | S→C | `buffer` ≤ 900 B por parte (1–2 partes por snapshot, cada parte **autocontida**) | 20/s no anel próximo (a cada 3 ticks); zumbis do anel médio entram por completo a cada 2 pacotes, em rodízio → 10 Hz por entidade |
+| `Fx` | Unreliable | S→C | Lote por tick: `ShotResult`, `ProjSpawn/End`, sangue, impacto, explosão, tremida de sólido, som | ≤ 60/s |
 | `World` | RemoteEvent | S→C | Deltas do mundo (seção 4.5), `WorldInit` em blocos, relógio, anúncios, morte de zumbi, entrada e saída de jogador, derrubado/reviveu/morreu | Lote por tick, só quando há algo |
 | `Self` | RemoteEvent | S→C | Espelho do save próprio: deltas de inventário, XP/nível/skills, conquistas, carteira | Sob demanda |
 | `SaveRequest` / `SaveAck` | — | — | **Removidos na F3** | — |
@@ -352,7 +378,7 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 | Offset | Tipo | Campo |
 |---|---|---|
 | 0 | u8 | `kind` (4 bits) · `part` (2 bits) · `parts` (2 bits) |
-| 1 | u16 | `tick` do servidor (módulo 65 536; wrap a cada 36 min a 30 Hz, com comparação modular) |
+| 1 | u16 | `tick` do servidor (módulo 65 536; wrap a cada ≈18 min a 60 Hz, com comparação modular) |
 | 3 | u8 | `nPlayers` |
 | 4 | u8 | `nZombies` |
 | 5 | u8 | `nBosses` |
@@ -369,12 +395,12 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 
 **Fx:** `ShotResult` = `slot u8, weapon u8, n u8` + n × (`x u16, y u16, hit u8`), ou seja 3 + 5n B. `ProjSpawn` (12 B) = `projId u16, kind u8, ownerSlot u8, x u16, y u16, angle u16, speed u8, _`. `ProjEnd` (7 B). `Blood/Debris/Shake` (6–8 B).
 
-**Tamanho de um snapshot no pior caso:** 8 + 28 + 5×12 + 60×9 (anel próximo) + 30×9 (metade do anel médio por snapshot, em rodízio) + 2×14 ≈ **934 B** → 2 partes. Com menos zumbis visíveis, 1 parte.
+**Tamanho de um snapshot no pior caso:** 8 + 28 + 5×12 + 60×9 (anel próximo) + 30×9 (metade do anel médio por snapshot, em rodízio — pacotes a 20 Hz, anel médio completo a cada 2 pacotes = 10 Hz por entidade) + 2×14 ≈ **934 B** → 2 partes. Com menos zumbis visíveis, 1 parte. (O tamanho de cada pacote não muda com a frequência; só a cadência de envio mudou de 15/7,5 Hz para 20/10 Hz.)
 
 ### 4.3 Interest management (por jogador)
 
 - **Centro:** a posição do jogador, **ou** o aliado espectado (derrubado ou morto), **ou** a câmera do admin (seção 10).
-- **Anéis:** próximo **≤ 800 u** (15 Hz), médio **800–1500 u** (7,5 Hz: metade dos zumbis do anel em cada snapshot, em rodízio) e saída com histerese em **1650 u**. Cobrem uma tela de 1920 × 1080 (meia-diagonal ≈ 1100 u) com margem para telas largas.
+- **Anéis:** próximo **≤ 800 u** (20 Hz), médio **800–1500 u** (10 Hz: metade dos zumbis do anel em cada snapshot, em rodízio) e saída com histerese em **1650 u**. Cobrem uma tela de 1920 × 1080 (meia-diagonal ≈ 1100 u) com margem para telas largas.
 - **Visibilidade (anti-wallhack), avaliada por zumbi e por cliente:**
   1. **Dentro de prédio:** se o zumbi está dentro da planta de um prédio (`buildingAt`) e o jogador **não** está nesse prédio, ele não é enviado. O telhado já esconde o interior (EDI-04), então o cliente não perde nada visível.
   2. **Escuro:** à noite, ou na chuva com `darkAlpha` alto, o zumbi só é enviado se estiver dentro de **alguma** luz (a luz de 250 u de qualquer jogador, lanterna de 560 u em cone, lampião, fogueira, braseiro, clarão de tiro ou explosão, com a mesma tabela que `collectLights`/`updateAlpha` já usam), **ou** a ≤ 150 u do jogador (ele ouve e sente). O fade de alpha que já existe (3/s) esconde o surgimento.
@@ -409,7 +435,7 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 
 ### 4.6 Sincronização de relógio
 
-- **Tempo de simulação:** `tickEstimado = (workspace:GetServerTimeNow() − tick0Time) × 30`. O tempo de render dos outros é `agora − atrasoInterp`.
+- **Tempo de simulação:** `tickEstimado = (workspace:GetServerTimeNow() − tick0Time) × 60`. O tempo de render dos outros é `agora − atrasoInterp`.
 - **Relógio do jogo:** o cliente avança `dayTime` localmente com a mesma regra (`TIME_SPEED` ×0,8 de dia e ×1,2 de noite, em `shared/sim/clock.ts`) e se corrige a cada `Clock` (10 s ou mudança). Erros < 0,05 h se ajustam suavemente; maiores (admin mudou a hora) saltam.
 - **Ondas e anúncios:** vêm do servidor. O cliente não decide nada pelo relógio local.
 
@@ -419,23 +445,23 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 
 | Item | Quantidade | Bytes | Hz | B/s |
 |---|---|---|---|---|
-| Cabeçalho + bloco próprio | 1 | 36 | 15 | 540 |
-| Outros jogadores | 5 | 12 | 15 | 900 |
-| Zumbis, anel próximo | 60 | 9 | 15 | 8 100 |
-| Zumbis, anel médio | 60 | 9 | 7,5 | 4 050 |
-| Extras de especiais | 9 | 1 | 15 | 135 |
-| Chefes | 2 | 14 | 15 | 420 |
+| Cabeçalho + bloco próprio | 1 | 36 | 20 | 720 |
+| Outros jogadores | 5 | 12 | 20 | 1 200 |
+| Zumbis, anel próximo | 60 | 9 | 20 | 10 800 |
+| Zumbis, anel médio | 60 | 9 | 10 | 5 400 |
+| Extras de especiais | 9 | 1 | 20 | 180 |
+| Chefes | 2 | 14 | 20 | 560 |
 | `ShotResult` (6 jogadores, ~10 tiros/s, escopeta com 5 projéteis) | ~60/s | ~13 | — | 780 |
 | Projéteis (spawn e fim) | ~40/s | ~10 | — | 400 |
 | Sangue, impacto e morte | ~60/s | 8 | — | 480 |
 | Deltas confiáveis (morte de zumbi, HP de construção a 4 Hz, itens, portas) | — | — | — | 800 |
-| Overhead por evento (estimado em ~20 B × ~75 eventos/s) | | | | 1 500 |
-| **Total por cliente** | | | | **≈ 18 KB/s (≈ 146 kbit/s)** |
+| Overhead por evento (estimado em ~20 B × ~85 eventos/s, mais pacotes `Snap` a 20 Hz) | | | | 1 700 |
+| **Total por cliente** | | | | **≈ 23 KB/s (≈ 184 kbit/s)** |
 
-- **Servidor, saída:** 6 × 18 ≈ **110 KB/s**. **Entrada:** 6 × (30 × 28 B + overhead) ≈ **9 KB/s**.
-- **Cliente, subida:** ≈ **1,4 KB/s**.
-- **Caso típico** (dia, 3 jogadores, 25 zumbis visíveis): ≈ **5–6 KB/s** por cliente.
-- **Comparação:** a documentação não fixa limite de banda; a referência prática usada pela comunidade é ~50 KB/s por cliente. O pior caso fica em **~36%** disso, com folga para a compressão de buffers do engine (que só reduz o número). **Medir na F2** (seção 12). Alavancas, se precisar: anel médio a 5 Hz, codificação delta em relação ao último snapshot confirmado (o ack já viaja no `Input`) e teto de 120 zumbis.
+- **Servidor, saída:** 6 × 23 ≈ **138 KB/s**. **Entrada:** 6 × (60 × 28 B + overhead) ≈ **18 KB/s** (o dobro de antes, porque o `Input` agora sai a 60/s).
+- **Cliente, subida:** ≈ **3 KB/s**.
+- **Caso típico** (dia, 3 jogadores, 25 zumbis visíveis): ≈ **7–8 KB/s** por cliente.
+- **Comparação:** a documentação não fixa limite de banda; a referência prática usada pela comunidade é ~50 KB/s por cliente. O pior caso fica em **~46%** disso, com folga para a compressão de buffers do engine (que só reduz o número). **Isso passa do alvo informal de ≤ 20 KB/s** usado nas fases anteriores; a primeira alavanca abaixo (anel médio a 5 Hz) já traz o total de volta a ~20,3 KB/s. **Medir na F2** (seção 12). Alavancas, na ordem: anel médio a 5 Hz (em vez de 10 Hz, economiza ~2,7 KB/s), codificação delta em relação ao último snapshot confirmado (o ack já viaja no `Input`) e teto de 120 zumbis.
 
 ---
 
@@ -443,14 +469,14 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 
 ### 5.1 Interpolação e extrapolação (outros jogadores, zumbis, chefes)
 
-- **Buffer de interpolação:** padrão de **133 ms** (2 intervalos de snapshot a 15 Hz), **adaptativo**: `clamp(2 × intervalo + 2 × desvioDoJitter, 100, 250) ms`. A mudança é lenta (o relógio de render dilata ±5%), para não dar solavanco.
+- **Buffer de interpolação:** padrão de **100 ms** (2 intervalos de snapshot a 20 Hz), **adaptativo**: `clamp(2 × intervalo + 2 × desvioDoJitter, 80, 250) ms`. A mudança é lenta (o relógio de render dilata ±5%), para não dar solavanco. O render em si roda **sem limite de FPS do jogo** (o do Roblox escolhido pelo jogador); é só a janela de interpolação que segue os snapshots.
 - **Posição:** interpolação linear entre os dois snapshots que cercam `tempoRender`. **Ângulo:** pelo caminho mais curto.
 - **Buffer vazio** (perda): **extrapola até 100 ms** com a velocidade dos dois últimos snapshots, sem atravessar parede (checagem barata com `circleBlocked` do espelho). Depois segura parado. O próximo snapshot corrige com blend de 100 ms.
-- **Anel médio (7,5 Hz):** os mesmos 133 ms de atraso, só que com amostras mais espaçadas (interpolação mais longa). Aceitável, porque ficam longe do combate.
+- **Anel médio (10 Hz):** os mesmos 100 ms de atraso, só que com amostras mais espaçadas (interpolação mais longa). Aceitável, porque ficam longe do combate.
 
 ### 5.2 Predição do próprio movimento
 
-Seção 2.2. Resumo: passo fixo de 30 Hz igual ao do servidor, histórico de comandos, reconciliação com ressimulação e erro visual suavizado (τ = 100 ms, snap acima de 64 u). Há extrapolação de render de até 1 tick com o input vivo, para o movimento começar no mesmo quadro da tecla.
+Seção 2.2. Resumo: passo fixo de **60 Hz** igual ao do servidor, histórico de comandos, reconciliação com ressimulação e erro visual suavizado (τ = 100 ms, snap acima de 64 u). Há extrapolação de render de até 1 tick de predição (1/60 s) com o input vivo, para o movimento começar no mesmo quadro da tecla — o desenho em si segue o FPS do jogador, sem limite do jogo.
 
 A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barra de recarga e cadência. O bloco próprio de cada snapshot corrige.
 
@@ -585,7 +611,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 
 | Mensagem | Checagens no servidor |
 |---|---|
-| `Input` | É `buffer` com `len == 4 + 8n`, `n ≤ 3`. `seq` dentro de ±64 do último consumido. Token bucket de 60/s (rajada de 20). Os valores são bytes, logo sempre dentro da faixa (NaN impossível). |
+| `Input` | É `buffer` com `len == 4 + 8n`, `n ≤ 3`. `seq` dentro de ±64 do último consumido. Token bucket de 120/s (rajada de 40) — o dobro da taxa real de 60/s. Os valores são bytes, logo sempre dentro da faixa (NaN impossível). |
 | `switchWeapon(id)` | Possui a arma (`ownsWeapon`), não está derrubado nem posicionando construção, ≥ 0,1 s desde a última troca |
 | `reload` | A arma usa pente, há reserva e não está no máximo |
 | `pickup(itemId)` | O item existe, a distância do servidor é ≤ 40 + 10 u (folga de latência) e não está derrubado |
@@ -608,7 +634,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 
 | Canal | Limite | Excesso |
 |---|---|---|
-| `Input` | 60 pacotes/s (rajada de 20) | Descarta e conta |
+| `Input` | 120 pacotes/s (rajada de 40) | Descarta e conta |
 | `Intent` | 20/s (rajada de 30); por tipo, como na tabela acima | Descarta, conta e responde "rate" se for UI |
 | `ShopAction` | 2/s (rajada de 6), já existe | "rate" |
 | Admin | 10/s | "rate" |
@@ -739,7 +765,7 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
 
 | Frente | Dono | Arquivos |
 |---|---|---|
-| 1A Servidor | agente A | cria `server/net/remotes.ts`, `server/sim/simulation.ts` (tick de 30 Hz só com jogadores), `server/sim/players.ts` (entidades e fila de inputs), `server/net/replication.ts`, `server/net/interest.ts`; edita `server/main.server.ts` (só o boot) |
+| 1A Servidor | agente A | cria `server/net/remotes.ts`, `server/sim/simulation.ts` (tick de 60 Hz só com jogadores), `server/sim/players.ts` (entidades e fila de inputs), `server/net/replication.ts`, `server/net/interest.ts`; edita `server/main.server.ts` (só o boot) |
 | 1B Rede do cliente | agente B | cria `client/net/netClient.ts`, `client/net/commands.ts` (amostragem, redundância, dilatação), `client/net/prediction.ts`, `client/net/snapshotBuffer.ts` |
 | 1C View | agente C (dono de `gameLoop.ts`) | cria `client/view/playersView.ts` e o pool de nameplates; edita `gameLoop.ts` (posição do próprio jogador vinda da predição, outros jogadores, luz de todos) |
 
@@ -747,7 +773,7 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
   - 3 clientes no Studio com 100 ms simulados em cada sentido se veem andando **suavemente**.
   - Divergência p99 < 1 u; correções > 16 u < 1/min fora de knockback.
   - Um **cliente modificado** (debug) que envia 2× comandos **não** anda mais rápido e aparece em `inputOverflow`.
-  - Banda ≤ 2 KB/s por cliente.
+  - Banda ≤ 3 KB/s por cliente (o `Input` a 60/s eleva a subida em relação à estimativa anterior a 30/s).
 - **Riscos:** determinismo do `moveActor` entre instâncias (mitigado pelo autoteste por hash). Portas diferentes entre os mundos locais nesta fase (esperado; corrigido na F3).
 
 #### F2: Mundo e combate no servidor · **XL** · ~7 agente-dias
@@ -761,10 +787,10 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
 
 - **Aceitação:**
   - 3 clientes veem **os mesmos** zumbis (mesmos `netId`; posições ±4 u depois da interpolação).
-  - Tick **p95 ≤ 10 ms** com 150 zumbis (spawn de admin) e 6 jogadores (3 reais + 3 bots, seção 12).
+  - Tick **p95 ≤ 6 ms** de simulação (a 60 Hz) com 150 zumbis (spawn de admin) e 6 jogadores (3 reais + 3 bots, seção 12); se não bater, `SIM_HZ` cai para 30 (seção 3.1).
   - Com 150 ms de RTT, **≥ 95%** dos tiros que acertam na tela do atirador registram no servidor.
   - O XP só vem do servidor (os campos `level`, `exp`, `bossKills` e `day` dos relatórios passam a ser **ignorados**).
-  - Banda p95 ≤ 20 KB/s por cliente no pior cenário.
+  - Banda p95 ≤ 23 KB/s por cliente no pior cenário (ou ≤ 20 KB/s aplicando a alavanca do anel médio a 5 Hz, seção 4.7).
 - **Riscos:** CPU do flow field (orçamento por tempo + LOD). Sensação de combate (cosméticos previstos precisam ser bons). Zumbis "atrasados" parecendo morder de longe (flag de mordida justa).
 
 #### F3: Itens, interação, construção e inventário autoritativos; save v3 · **L** · ~5 agente-dias
@@ -842,8 +868,8 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
 
 | Métrica | Como | Alvo |
 |---|---|---|
-| Tempo de tick do servidor | `os.clock()` por etapa, num anel de 300 amostras. Publicado a cada 1 s em atributos (`workspace:SetAttribute("pz_tick_avg_ms" / "pz_tick_p95_ms")`) e no painel de admin. MicroProfiler e aba Server Jobs para confirmar que o heartbeat fica perto de 60. | média ≤ 6 ms, p95 ≤ 10 ms |
-| Banda por cliente | O servidor soma `buffer.len` + overhead estimado por `FireClient` (atributo `pz_out_Bps` por `Player`). No cliente, Performance Stats (Recv/Sent) e a aba Network do console. | p95 ≤ 20 KB/s no pior caso; ≤ 6 KB/s no típico |
+| Tempo de tick do servidor | `os.clock()` por etapa, num anel de 300 amostras. Publicado a cada 1 s em atributos (`workspace:SetAttribute("pz_tick_avg_ms" / "pz_tick_p95_ms")`) e no painel de admin. MicroProfiler e aba Server Jobs para confirmar que o heartbeat fica perto de 60. | média estimada ≤ 3 ms, **p95 ≤ 6 ms** (decisão do autor; acima disso, `SIM_HZ` cai para 30) |
+| Banda por cliente | O servidor soma `buffer.len` + overhead estimado por `FireClient` (atributo `pz_out_Bps` por `Player`). No cliente, Performance Stats (Recv/Sent) e a aba Network do console. | p95 ≤ 23 KB/s no pior caso (≤ 20 KB/s com a alavanca do anel médio a 5 Hz, seção 4.7); ≤ 7–8 KB/s no típico |
 | Divergência de posição | Em cada ack, `|previsto(ack) − servidor|` num anel no cliente. Overlay de debug + atributo `pz_pred_err_p99` no `LocalPlayer`. | p99 < 1 u; correções > 16 u < 1/min |
 | Concordância de acerto | Em debug, o cliente registra o `netId` que previu acertar por tiro; o `ShotResult` traz o real | ≥ 95% com 150 ms de RTT |
 | Fila de inputs | `bufDepth` e `inputOverflow` por jogador | profundidade média entre 1,5 e 2,5; overflow ≈ 0 |
@@ -902,7 +928,7 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
 
 | Risco | Impacto | Mitigação |
 |---|---|---|
-| CPU do servidor com 150 zumbis e flow field multi-fonte em Luau interpretado | Heartbeat < 60 e lag geral | Orçamento por tempo, LOD, hash espacial, teto ajustável, `--!native` e, por último, Actors |
+| CPU do servidor com 150 zumbis e flow field multi-fonte em Luau interpretado | Heartbeat < 60 e lag geral | `SIM_HZ` configurável (fallback para 30 Hz sem mudar o protocolo, seção 3.1), orçamento por tempo, LOD de IA (30/15/5–10 Hz), hash espacial, teto ajustável, `--!native` e, por último, Actors |
 | Sensação de combate com latência (traçante divergente, zumbi "atrasado") | Percepção de jogo "pesado" | Cosméticos previstos bem feitos, rebobinagem de 300 ms, mordida justa, interpolação adaptativa |
 | Divergência de predição (portas e construções de terceiros) | Tremidas | Deltas confiáveis rápidos, suavização de 100 ms, autoteste de determinismo |
 | Banda acima do previsto (overhead por evento desconhecido) | Lag em conexões ruins | Medir na F2; alavancas da seção 4.7 |
@@ -921,3 +947,4 @@ Os zumbis ainda são **locais em cada cliente**, com `MP_PHASE = 1` (só para te
 6. **Curva S(k):** 0,5 por jogador extra como ponto de partida; ajustar no playtest.
 7. **Colisão entre jogadores:** desligada (MP-02) — ninguém bloqueia portas de outros.
 8. **Dono de servidor VIP pode expulsar** do próprio servidor.
+9. **Frequências:** cliente sem limite de FPS (configuração do Roblox); servidor a 60 Hz para jogadores/combate; IA com LOD de 30/15/5–10 Hz; fallback `SIM_HZ` = 30 se exceder o orçamento.
