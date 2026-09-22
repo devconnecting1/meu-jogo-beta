@@ -88,8 +88,11 @@ function resize(): void {
 	let viewportY = 630;
 	const cam2 = game.GetService("Workspace").CurrentCamera;
 	if (cam2 !== undefined) {
-		viewportX = cam2.ViewportSize.X;
-		viewportY = cam2.ViewportSize.Y;
+		const vs = cam2.ViewportSize;
+		if (vs.X > 1 && vs.Y > 1) {
+			viewportX = vs.X;
+			viewportY = vs.Y;
+		}
 	}
 	ctx.viewW = viewportX;
 	ctx.viewH = viewportY;
@@ -99,6 +102,12 @@ function resize(): void {
 }
 
 resize();
+const bootCam = game.GetService("Workspace").CurrentCamera;
+if (bootCam !== undefined) {
+	bootCam.GetPropertyChangedSignal("ViewportSize").Connect(resize);
+}
+task.delay(1, resize);
+task.delay(3, resize);
 
 // --- input wiring ---
 function pressAttack(): void {

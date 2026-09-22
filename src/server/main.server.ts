@@ -6,12 +6,15 @@ const Players = game.GetService("Players");
 const DataStoreService = game.GetService("DataStoreService");
 const HttpService = game.GetService("HttpService");
 
+Players.CharacterAutoLoads = false;
+
 const DATA_STORE_NAME = "ProjectZ_Save_v1";
 const MAX_SAVE_LENGTH = 100000;
 const AUTOSAVE_INTERVAL = 150 / 30;
 
 const remotes = getRemotes();
-const dataStore = DataStoreService.GetDataStore(DATA_STORE_NAME);
+const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(DATA_STORE_NAME));
+const dataStore = storeOk ? (storeValue as DataStore) : undefined;
 const sessions = new Map<Player, PlayerSaveData>();
 
 function saveKey(player: Player): string {
@@ -27,6 +30,9 @@ function decodeSave(raw: string): PlayerSaveData {
 }
 
 function readSave(player: Player): PlayerSaveData {
+	if (dataStore === undefined) {
+		return defaultSave();
+	}
 	const [ok, raw] = pcall((): unknown => {
 		const [value] = dataStore.GetAsync<string>(saveKey(player));
 		return value;
@@ -38,6 +44,9 @@ function readSave(player: Player): PlayerSaveData {
 }
 
 function writeSave(player: Player, save: PlayerSaveData): boolean {
+	if (dataStore === undefined) {
+		return false;
+	}
 	const json = HttpService.JSONEncode(save);
 	if (json.size() >= MAX_SAVE_LENGTH) {
 		return false;

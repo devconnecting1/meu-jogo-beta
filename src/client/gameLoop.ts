@@ -21,14 +21,14 @@ import { GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
 
 export class GameLoop {
 	private world: WorldData = generateTown(0);
-	private player: PlayerState = createPlayer({} as PlayerSaveData, 0, 0);
-	private save: PlayerSaveData = {} as PlayerSaveData;
+	private player: PlayerState;
+	private save: PlayerSaveData;
 	private zombies: Array<ZombieState> = [];
 	private bosses: Array<BossState> = [];
 	private bullets: Array<Bullet> = [];
 	private tracers: Array<Tracer> = [];
 	private particles = new ParticleSystem();
-	private daynight: DayNight = new DayNight({} as PlayerSaveData);
+	private daynight: DayNight;
 	private combat = new Combat();
 	private spawner = new Spawner();
 	private interaction = new Interaction();
@@ -37,6 +37,10 @@ export class GameLoop {
 	private announceQueue: Array<string> = [];
 
 	constructor() {
+		const save = getCtx().save;
+		this.save = save;
+		this.player = createPlayer(save, 0, 0);
+		this.daynight = new DayNight(save);
 		this.refs = {
 			world: this.world,
 			player: this.player,
