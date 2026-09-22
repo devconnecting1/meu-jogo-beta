@@ -1,6 +1,6 @@
 import { GameContext } from "shared/game/context";
 import { RADIUS, TEXT, THEME, space } from "./theme";
-import { Button, Dialog, autoFocus, makeFrame, makeLabel, setButtonEnabled } from "./widgets";
+import { BUTTON_SIZE, Button, Dialog, autoFocus, makeFrame, makeLabel, setButtonEnabled } from "./widgets";
 
 interface TutorialStep {
 	title: string;
@@ -31,10 +31,43 @@ const STEPS: Array<TutorialStep> = [
 ];
 
 const PANEL_W = 620;
-const PANEL_H = 390;
 const DOT_W = 20;
 const DOT_H = 6;
 const DOT_GAP = space(2);
+
+// the footer (Skip / Back / Next) must sit right below the actual body text, not in a box sized for the
+// longest step: it used to leave a large empty gap for every shorter step (fixed PANEL_H, fixed footer y).
+/** y where the body text starts (pad(6) + dots row + counter + title, unchanged from the static layout above) */
+const BODY_Y = space(6) + 100;
+/** wrapped-line height estimate at TEXT.base, same ratio the popup dialog (popup.ts) uses for its body */
+const BODY_LINE_H = TEXT.base * 1.45;
+/** ~chars per wrapped line at PANEL_W's inner width (pad(6) each side), scaled from popup.ts's own estimate */
+const BODY_CHARS_PER_LINE = 65;
+/** theme-scale gap between the body text and the footer row (matches the card's own padding step) */
+const FOOTER_GAP = space(6);
+const FOOTER_H = BUTTON_SIZE.default.h;
+
+/** estimated rendered height (design px) of a step's body text, wrapped at the panel's inner width */
+function stepBodyHeight(body: string): number {
+	let lines = 0;
+	for (const line of body.split("\n")) {
+		lines += math.max(1, math.ceil(line.size() / BODY_CHARS_PER_LINE));
+	}
+	return math.ceil(math.max(1, lines) * BODY_LINE_H);
+}
+
+function maxStepBodyHeight(): number {
+	let max = 0;
+	for (const step of STEPS) max = math.max(max, stepBodyHeight(step.body));
+	return max;
+}
+
+/** longest step's body height, plus one line of buffer to absorb the wrap estimate's imprecision */
+const MAX_BODY_H = maxStepBodyHeight() + math.ceil(BODY_LINE_H);
+
+// panel height: content down to the longest step's body, plus the footer row and its gaps (no dead space
+// sized for text no step actually has).
+const PANEL_H = BODY_Y + MAX_BODY_H + FOOTER_GAP + FOOTER_H + space(6);
 
 /** tutorial: a popover dialog with a step indicator (current step = primary, others = secondary) */
 export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
@@ -60,10 +93,21 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		font: "heading",
 		align: "left",
 	});
-	const bodyLabel = makeLabel(panel, "StepBody", "", pad, pad + 100, innerW, 160, TEXT.base, THEME.mutedForeground, {
-		align: "left",
-		valign: "top",
-	});
+	const bodyLabel = makeLabel(
+		panel,
+		"StepBody",
+		"",
+		pad,
+		BODY_Y,
+		innerW,
+		MAX_BODY_H,
+		TEXT.base,
+		THEME.mutedForeground,
+		{
+			align: "left",
+			valign: "top",
+		},
+	);
 
 	let index = 0;
 	const cleanup = (): void => {
@@ -75,6 +119,11 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		onDone();
 	};
 
+	const skipX = pad;
+	const backX = PANEL_W - pad - 130 - space(2) - 130;
+	const nextX = PANEL_W - pad - 130;
+
+	let skipBtn: TextButton | undefined;
 	let backBtn: TextButton | undefined;
 	let nextBtn: TextButton | undefined;
 
@@ -86,15 +135,26 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		for (let i = 0; i < dots.size(); i++) {
 			dots[i].BackgroundColor3 = i === index ? THEME.primary : THEME.secondary;
 		}
+		// the footer follows this step's actual body height instead of a fixed y, so short steps never leave
+		// a gap between the text and the buttons
+		const footerY = BODY_Y + stepBodyHeight(step.body) + FOOTER_GAP;
+		if (skipBtn !== undefined) skipBtn.Position = UDim2.fromScale(skipX / PANEL_W, footerY / PANEL_H);
+		if (backBtn !== undefined) backBtn.Position = UDim2.fromScale(backX / PANEL_W, footerY / PANEL_H);
+		if (nextBtn !== undefined) nextBtn.Position = UDim2.fromScale(nextX / PANEL_W, footerY / PANEL_H);
 		if (backBtn !== undefined) setButtonEnabled(backBtn, index > 0);
 		if (nextBtn !== undefined) nextBtn.Text = index >= STEPS.size() - 1 ? "Done" : "Next";
 	};
 
-	const footerY = PANEL_H - pad - 44;
-	Button(panel, "Skip", "Skip", { x: pad, y: footerY, w: 110, variant: "ghost", onClick: (): void => finish() });
+	skipBtn = Button(panel, "Skip", "Skip", {
+		x: skipX,
+		y: 0,
+		w: 110,
+		variant: "ghost",
+		onClick: (): void => finish(),
+	});
 	backBtn = Button(panel, "Back", "Back", {
-		x: PANEL_W - pad - 130 - space(2) - 130,
-		y: footerY,
+		x: backX,
+		y: 0,
 		w: 130,
 		variant: "secondary",
 		onClick: (): void => {
@@ -104,8 +164,8 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		},
 	});
 	nextBtn = Button(panel, "Next", "Next", {
-		x: PANEL_W - pad - 130,
-		y: footerY,
+		x: nextX,
+		y: 0,
 		w: 130,
 		variant: "default",
 		onClick: (): void => {

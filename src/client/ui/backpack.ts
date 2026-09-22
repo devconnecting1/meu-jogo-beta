@@ -1236,7 +1236,9 @@ export class Backpack {
 			LEVEL_W,
 			ROW_H,
 			TEXT.sm,
-			maxed ? GAME.success : THEME.mutedForeground,
+			// GAME.success as text on the real background is only ~4.49:1 (< 4.5 AA); the "MAX" badge right next
+			// to this already carries the success accent on its border, so this falls back to `foreground`
+			maxed ? THEME.foreground : THEME.mutedForeground,
 			{ font: "numeric", align: "right", zIndex: 2 },
 		);
 		if (maxed) {

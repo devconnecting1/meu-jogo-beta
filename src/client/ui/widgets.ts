@@ -604,11 +604,15 @@ function refreshButton(b: TextButton): void {
 	let strokeT = s.strokeT;
 	let ring = focus;
 	if (disabled) {
-		// muted: bg-muted, text-muted-foreground, border kept so the control keeps its shape
-		bg = THEME.muted;
+		// disabled, every variant: transparent fill (bg-muted equals bg-background/card here, so an opaque
+		// muted fill used to disappear into the surface behind it) + opaque `border` outline so the control
+		// still reads as a control, and `muted-foreground` text. mutedForeground (#8c8c7d) on the real
+		// background (#10100e) is ~5.6:1 (>= 4.5:1 AA); no global transparency is applied to the text itself.
+		bg = THEME.background;
+		bgT = 1;
 		fg = THEME.mutedForeground;
 		stroke = THEME.border;
-		if (s.bgT < 1) strokeT = 0;
+		strokeT = 0;
 	} else if (hot) {
 		if (s.hover !== undefined) {
 			bg = s.hover;
@@ -903,7 +907,7 @@ export interface BadgeProps {
 	w?: number;
 	h?: number;
 	variant?: BadgeVariant;
-	/** solid tone from theme.GAME (e.g. success, xp, rare); text in foreground */
+	/** semantic accent from theme.GAME (e.g. success, xp, rare); drawn as the border, text stays `foreground` */
 	color?: Color3;
 	textSize?: number;
 	zIndex?: number;
@@ -916,12 +920,17 @@ export function badgeWidth(text: string, textSize = TEXT.xs, h = 22): number {
 	return math.max(h, math.ceil(chars * textSize * 0.6 + space(2) * 2));
 }
 
-function badgeColors(variant: BadgeVariant, color: Color3 | undefined): [Color3, number, Color3, number] {
-	if (color !== undefined) return [color, 0, THEME.foreground, 1];
-	if (variant === "secondary") return [THEME.secondary, 0, THEME.secondaryForeground, 1];
-	if (variant === "destructive") return [THEME.destructive, 0, THEME.destructiveForeground, 1];
-	if (variant === "outline") return [THEME.background, 1, THEME.foreground, 0];
-	return [THEME.primary, 0, THEME.primaryForeground, 1];
+function badgeColors(variant: BadgeVariant, color: Color3 | undefined): [Color3, number, Color3, Color3, number] {
+	// a GAME.* accent as a SOLID fill can't clear 4.5:1 against either foreground or background text (e.g.
+	// GAME.success only reaches ~4.2:1 on foreground, GAME.xp ~4.0:1) — read it as an outline chip instead:
+	// transparent fill, the accent as an opaque border, `foreground` text (~18.7:1 on the real background)
+	if (color !== undefined) return [THEME.background, 1, THEME.foreground, color, 0];
+	if (variant === "secondary") return [THEME.secondary, 0, THEME.secondaryForeground, THEME.border, 1];
+	// same reasoning as above: destructive-on-destructive only reaches ~3.7:1, so this badge reads as a
+	// destructive-bordered outline chip too instead of a solid destructive fill
+	if (variant === "destructive") return [THEME.background, 1, THEME.foreground, THEME.destructive, 0];
+	if (variant === "outline") return [THEME.background, 1, THEME.foreground, THEME.border, 0];
+	return [THEME.primary, 0, THEME.primaryForeground, THEME.border, 1];
 }
 
 /** shadcn Badge: small rounded-md label, text-xs font-medium */
@@ -929,12 +938,12 @@ export function Badge(parent: Instance, name: string, text: string, props: Badge
 	const h = props.h ?? 22;
 	const size = props.textSize ?? TEXT.xs;
 	const w = props.w ?? badgeWidth(text, size, h);
-	const [bg, bgT, fg, strokeT] = badgeColors(props.variant ?? "default", props.color);
+	const [bg, bgT, fg, border, strokeT] = badgeColors(props.variant ?? "default", props.color);
 	const zIndex = props.zIndex ?? 2;
 	const f = makeFrame(parent, name, props.x, props.y, w, h, bg, {
 		transparency: bgT,
 		radius: RADIUS.md,
-		stroke: THEME.border,
+		stroke: border,
 		strokeTransparency: strokeT,
 		zIndex,
 	});
@@ -945,11 +954,14 @@ export function Badge(parent: Instance, name: string, text: string, props: Badge
 	return f;
 }
 
-/** updates a Badge's text (and solid colour) */
+/** updates a Badge's text (and, for a custom-colour badge, its border accent — the fill stays transparent) */
 export function setBadge(badge: Frame, text: string, color?: Color3): void {
 	const label = badge.FindFirstChild("Text");
 	if (label !== undefined && label.IsA("TextLabel")) label.Text = text;
-	if (color !== undefined) badge.BackgroundColor3 = color;
+	if (color !== undefined) {
+		const stroke = badge.FindFirstChildOfClass("UIStroke");
+		if (stroke !== undefined) stroke.Color = color;
+	}
 }
 
 // ---------------------------------------------------------------- Separator
@@ -1537,22 +1549,27 @@ interface ToastStyle {
 	icon: Color3;
 	glyphColor: Color3;
 	glyph: string;
+	/** design text size (default TEXT.sm); errors read at body size, not the smaller label/caption size */
+	textSize: number;
 }
 
-/** popover toasts with a semantic icon; errors are destructive toasts */
+/**
+ * popover toasts with a semantic icon. Errors read as the same popover card as every other kind, with
+ * `destructive` only on the border/icon and the message in `foreground` (~18.7:1 on the popover background) —
+ * a solid `destructive` fill behind `destructive-foreground` text only reaches ~3.7:1, below the 4.5:1 floor.
+ */
 function toastStyle(kind: ToastKind): ToastStyle {
-	const base = { bg: THEME.popover, fg: THEME.popoverForeground, border: THEME.border, glyphColor: THEME.background };
+	const base = {
+		bg: THEME.popover,
+		fg: THEME.popoverForeground,
+		border: THEME.border,
+		glyphColor: THEME.background,
+		textSize: TEXT.sm,
+	};
 	if (kind === "success") return { ...base, icon: GAME.success, glyph: "✓" };
 	if (kind === "coin") return { ...base, icon: GAME.coin, glyph: "$" };
 	if (kind === "error") {
-		return {
-			bg: THEME.destructive,
-			fg: THEME.destructiveForeground,
-			border: THEME.destructive,
-			icon: THEME.destructiveForeground,
-			glyphColor: THEME.destructive,
-			glyph: "!",
-		};
+		return { ...base, border: THEME.destructive, icon: THEME.destructive, glyph: "!", textSize: TEXT.base };
 	}
 	return { ...base, icon: GAME.info, glyph: "i" };
 }
@@ -1612,11 +1629,18 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 		zIndex: 1004,
 	});
 	const textX = space(4) + ICON + space(3);
-	const label = makeLabel(card, "Text", text, textX, 0, TOAST_W - textX - space(4), TOAST_H, TEXT.sm, style.fg, {
-		font: "label",
-		align: "left",
-		zIndex: 1003,
-	});
+	const label = makeLabel(
+		card,
+		"Text",
+		text,
+		textX,
+		0,
+		TOAST_W - textX - space(4),
+		TOAST_H,
+		style.textSize,
+		style.fg,
+		{ font: "label", align: "left", zIndex: 1003 },
+	);
 	// enter: slide in from the right + fade (transient: the only use of transparency on toasts)
 	const stroke = card.FindFirstChildOfClass("UIStroke");
 	const fadeTargets: Array<[GuiObject, boolean]> = [
