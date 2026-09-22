@@ -30,6 +30,12 @@ export interface ZombieState {
 	wanderDir: number;
 	wave: boolean;
 	alpha: number;
+	/** walk-cycle phase (rad), advanced by the AI while moving; renderer animates feet with it */
+	feetCycle?: number;
+	/** 1 → 0 after a hit; renderer flashes/outlines while > 0 */
+	hitFlash?: number;
+	/** visual + hitbox scale (big variant = 1.4) */
+	scale?: number;
 	// spitter
 	attackCd?: number;
 	headX?: number;
@@ -67,6 +73,8 @@ export interface BossState {
 	angle: number;
 	attackCd: number;
 	dead: boolean;
+	/** 1 → 0 after a hit; renderer flashes while > 0 */
+	hitFlash?: number;
 	// boss1
 	bodyX?: Array<number>;
 	bodyY?: Array<number>;

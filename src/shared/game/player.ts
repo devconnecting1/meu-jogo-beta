@@ -43,6 +43,10 @@ export interface PlayerState {
 	attackCount: number;
 	swingerAngle: number;
 	swingerActive: boolean;
+	/** current melee reach in world units, set by combat; renderer draws the swing with it */
+	swingReach?: number;
+	/** 1 → 0 after taking damage; renderer flashes the player / vignette while > 0 */
+	hitFlash?: number;
 	vehicleId: number;
 	noMoveKill: number;
 	dead: boolean;

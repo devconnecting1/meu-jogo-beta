@@ -14,6 +14,24 @@ export interface Tracer {
 	life: number;
 }
 
+/** spitter acid puddle on the ground: slows the player while inside it */
+export interface Puddle {
+	x: number;
+	y: number;
+	r: number;
+	life: number;
+	lifeMax: number;
+}
+
+/** expanding noise ring: zombies it reaches start chasing (daytime stealth) */
+export interface SoundRing {
+	x: number;
+	y: number;
+	r: number;
+	rMax: number;
+	shot: boolean;
+}
+
 export interface GameRefs {
 	world: WorldData;
 	player: PlayerState;
@@ -29,4 +47,7 @@ export interface GameRefs {
 	announceQueue: Array<string>;
 	onMessage: (msg: string) => void;
 	onExp: (amount: number) => void;
+	/** created lazily by the AI/combat systems; the renderer draws them when present */
+	puddles?: Array<Puddle>;
+	sounds?: Array<SoundRing>;
 }

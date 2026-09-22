@@ -37,6 +37,10 @@ export interface Solid {
 	rot?: number;
 	destructible: boolean;
 	tags: string;
+	/** seconds of hit-shake left (tree/car/trash when struck); renderer offsets the sprite */
+	hitShake?: number;
+	/** true → ignored by collision (e.g. the building record whose walls are separate solids) */
+	passable?: boolean;
 }
 
 export interface GroundItem {
@@ -95,6 +99,12 @@ export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
 	const solid: Solid = { ...s, id: w.nextId++ };
 	w.solids.push(solid);
 	return solid;
+}
+
+/** Remove a solid (destroyed structure, etc.). Always go through here so spatial indexes stay in sync. */
+export function removeSolid(w: WorldData, s: Solid): void {
+	const i = w.solids.indexOf(s);
+	if (i >= 0) w.solids.remove(i);
 }
 
 export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid | undefined {

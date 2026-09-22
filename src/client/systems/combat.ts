@@ -1,6 +1,6 @@
 import { COLORS } from "shared/engine/colors";
 import { WeaponKind } from "shared/data/kinds";
-import { WeaponDef } from "shared/data/weapons";
+import { WeaponDef, WEAPONS } from "shared/data/weapons";
 import { angleDiff, radToDeg } from "shared/engine/vec2";
 import { chance, damageCal } from "shared/engine/rng";
 import { currentWeapon, damageToPlayer } from "shared/game/player";
@@ -126,6 +126,18 @@ function meleeSwing(refs: GameRefs, w: WeaponDef, aim: number): void {
 	addTracer(refs, p.x, p.y, p.x + math.cos(aim) * reach, p.y + math.sin(aim) * reach, COLORS.item);
 	p.swingerActive = true;
 	p.swingerAngle = aim;
+}
+
+/**
+ * Equip another weapon mid-run. Called by main.client (backpack); combat owns the rules
+ * (return loaded rounds to the pool, reset reload/bow/recoil state).
+ */
+export function switchWeapon(refs: GameRefs, weaponId: number): void {
+	const w = WEAPONS[weaponId];
+	if (w === undefined) return;
+	refs.save.equipWeapon = weaponId;
+	refs.player.weapon.pointer = weaponId;
+	refs.player.weapon.ammoCount = w.mag;
 }
 
 export class Combat {
