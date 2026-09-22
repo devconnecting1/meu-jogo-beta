@@ -66,21 +66,21 @@ function recipeById(recipeId: number): CraftRecipe | undefined {
  * when a craft fails, and by the UI to explain a greyed-out recipe.
  */
 export function craftBlocker(refs: GameRefs, r: CraftRecipe): string | undefined {
-	if (refs.pendingPlace >= 0) return "Termine a construção atual primeiro";
+	if (refs.pendingPlace >= 0) return "Finish the current build first";
 	if (r.needsPro) {
-		if (stationNear(refs, "pro") === undefined) return "Precisa de uma bancada profissional por perto";
+		if (stationNear(refs, "pro") === undefined) return "Needs a pro craft desk nearby";
 	} else if (r.needsDesk) {
-		if (stationNear(refs, "desk") === undefined) return "Precisa de uma bancada por perto";
+		if (stationNear(refs, "desk") === undefined) return "Needs a craft desk nearby";
 	}
 	if (r.needsFire === true && stationNear(refs, "fire") === undefined) {
-		return "Precisa de um braseiro aceso ou fornalha elétrica por perto";
+		return "Needs a lit fire nearby";
 	}
 	const missing: Array<string> = [];
 	for (const ing of r.ingredients) {
 		const have = countItem(refs.save, ing.kind, ing.index);
 		if (have < ing.count) missing.push(`${itemName(ing.kind, ing.index)} ${math.floor(have)}/${ing.count}`);
 	}
-	if (missing.size() > 0) return `Falta: ${missing.join(", ")}`;
+	if (missing.size() > 0) return `Missing: ${missing.join(", ")}`;
 	return undefined;
 }
 

@@ -208,7 +208,7 @@ function toggleLight(refs: GameRefs, s: Solid): string | undefined {
 	}
 	if (fuelOf(s) <= 0) {
 		if (countItem(refs.save, 4, WOOD_INDEX) < FIRE_WOOD) {
-			return `Falta: ${itemName(4, WOOD_INDEX)} ${math.floor(countItem(refs.save, 4, WOOD_INDEX))}/${FIRE_WOOD}`;
+			return `Missing: ${itemName(4, WOOD_INDEX)} ${math.floor(countItem(refs.save, 4, WOOD_INDEX))}/${FIRE_WOOD}`;
 		}
 		removeItem(refs.save, 4, WOOD_INDEX, FIRE_WOOD);
 		fireFuel.set(s, FIRE_TIME);
@@ -309,14 +309,14 @@ function tryRepair(refs: GameRefs, s: Solid): boolean {
 }
 
 const BUILDING_NAMES: Record<string, string> = {
-	house: "casa",
-	gas: "posto",
-	pharmacy: "farmácia",
-	market: "mercado",
-	gunshop: "loja de armas",
-	cloth: "loja de roupas",
-	restaurant: "restaurante",
-	school: "escola",
+	house: "house",
+	gas: "gas station",
+	pharmacy: "pharmacy",
+	market: "market",
+	gunshop: "gun shop",
+	cloth: "clothing store",
+	restaurant: "restaurant",
+	school: "school",
 	hospital: "hospital",
 };
 
@@ -330,34 +330,34 @@ export function interactHint(refs: GameRefs): string | undefined {
 	const item = findItem(refs);
 	if (item !== undefined) {
 		const n = itemName(item.kind, item.itemId);
-		return item.count > 1 ? `E: Pegar ${n} x${item.count}` : `E: Pegar ${n}`;
+		return item.count > 1 ? `E: Pick up ${n} x${item.count}` : `E: Pick up ${n}`;
 	}
 	const s = findSolid(refs);
 	if (s !== undefined) {
 		if (s.kind === "door" || s.kind === "iron_door") {
-			if (s.open === true) return actorOverlapsRect(refs, s) ? undefined : "E: Fechar porta";
-			return "E: Abrir porta";
+			if (s.open === true) return actorOverlapsRect(refs, s) ? undefined : "E: Close door";
+			return "E: Open door";
 		}
 		if (s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier") {
-			if (s.powered === true) return "E: Apagar";
-			if (isFire(s) && fuelOf(s) <= 0) return `E: Acender (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
-			return "E: Acender";
+			if (s.powered === true) return s.tags === "lamp" ? "E: Turn off" : "E: Put out";
+			if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
+			return s.tags === "lamp" ? "E: Turn on" : "E: Light";
 		}
-		if (s.kind === "tree") return "E: Sacudir árvore";
-		if (s.tags === "car") return "E: Revistar carro";
-		if (s.tags === "trash") return "E: Revirar lixo";
+		if (s.kind === "tree") return "E: Shake tree";
+		if (s.tags === "car") return "E: Search car";
+		if (s.tags === "trash") return "E: Search trash";
 		if (s.hp < s.hpMax && REPAIRABLE.includes(s.tags)) {
 			const mat = repairMaterial(s);
 			const have = refs.save.invenEtc[mat.index] ?? 0;
 			return have > 0
-				? `E: Reparar (${itemName(mat.kind, mat.index)})`
-				: `Reparar: falta ${itemName(mat.kind, mat.index)}`;
+				? `E: Repair (${itemName(mat.kind, mat.index)})`
+				: `Repair: needs ${itemName(mat.kind, mat.index)}`;
 		}
 		return undefined;
 	}
 	const b = findBuilding(refs);
 	if (b !== undefined && b.lootItems !== undefined && b.lootItems.size() > 0) {
-		return `E: Saquear ${BUILDING_NAMES[b.tags] ?? b.tags}`;
+		return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
 	}
 	return undefined;
 }
