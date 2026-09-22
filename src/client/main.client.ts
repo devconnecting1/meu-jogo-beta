@@ -9,6 +9,7 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { WeaponKind } from "shared/data/kinds";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice, SHOP_PACKS } from "shared/data/shop";
+import { USABLES } from "shared/data/usables";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
@@ -273,10 +274,11 @@ function lobbyStatus(): LobbyStatus {
 	};
 }
 
-function openShop(): void {
+/** `back` is where the shop's Back button goes: the lobby by default, or the paused run when opened from pause. */
+function openShop(back: () => void = goLobby): void {
 	clearScreen();
 	setPhase("shop");
-	cleanup = showShop(ctx, goLobby);
+	cleanup = showShop(ctx, back);
 }
 
 function openSettings(): void {
@@ -448,7 +450,11 @@ function openPause(): void {
 			onShop: () => {
 				stopGame();
 				net.requestSave("lobby");
-				openShop();
+				// opened from pause: Back should return to the paused run, not drop to the lobby
+				openShop(() => {
+					resumeRun();
+					openPause();
+				});
 			},
 			onSettings: () => {
 				stopGame();
@@ -563,6 +569,13 @@ function revive(): void {
 
 function doRebirth(): void {
 	if (actionBusy || !ctx.save.runOver) return; // a stale dialog: there is no game over to continue
+	// the Rebirth button stays clickable even when it's styled as "can't afford" (destructive) -
+	// check locally first so the player gets an exact, instant reason instead of just nothing happening
+	const price = rebirthPrice(ctx.save.deathCount);
+	if (ctx.save.money < price) {
+		toast(ctx, `${tr("Not enough coins")} (need ${fmtInt(price)})`, "error");
+		return;
+	}
 	if (!net.sessionReady()) {
 		// the save shown is the offline fallback: a rebirth would charge the real save
 		toast(ctx, tr("Still loading your progress"), "error");
@@ -601,21 +614,19 @@ function doNewRun(): void {
 
 function showGameOverChoice(): void {
 	const price = rebirthPrice(ctx.save.deathCount);
-	popup(
-		ctx,
-		tr("Your run is over"),
-		nl(
-			tr(
-				"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
-			),
-		),
-		[
-			{ text: tr("Close"), variant: "outline" },
-			// starting over throws the current run away → destructive; paying to continue is the main action
-			{ text: tr("New game"), variant: "destructive", onClick: doNewRun },
-			{ text: `${tr("Rebirth")} · ${fmtInt(price)}`, variant: "default", onClick: doRebirth },
-		],
+	const short = price - ctx.save.money;
+	let body = nl(
+		tr("Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."),
 	);
+	// the Rebirth button below stays enabled either way (destructive-styled when unaffordable); spell
+	// out the missing amount here so it isn't a silent no-op if the player taps it anyway
+	if (short > 0) body += `\n${tr("Not enough coins")} (need ${fmtInt(short)} more)`;
+	popup(ctx, tr("Your run is over"), body, [
+		{ text: tr("Close"), variant: "outline" },
+		// starting over throws the current run away → destructive; paying to continue is the main action
+		{ text: tr("New game"), variant: "destructive", onClick: doNewRun },
+		{ text: `${tr("Rebirth")} · ${fmtInt(price)}`, variant: "default", onClick: doRebirth },
+	]);
 }
 
 function startRun(): void {
@@ -642,7 +653,13 @@ function playPressed(): void {
 
 pack.onUse = id => {
 	if ((ctx.save.invenUse[id] ?? 0) <= 0) return;
-	if (!itemUseEffect(loop.getRefs().player, ctx.save, id)) toast(ctx, tr("You can't use that now"), "error");
+	if (itemUseEffect(loop.getRefs().player, ctx.save, id)) return;
+	// itemUseEffect only refuses a held, known item when it would do nothing (hp/hunger already
+	// maxed, no buff, no poison cure) — pick the wording that matches what the item targets.
+	const u = USABLES[id];
+	if (u !== undefined && u.hunger > 0) toast(ctx, tr("You're already full"), "error");
+	else if (u !== undefined && u.hp > 0) toast(ctx, tr("Already at full health"), "error");
+	else toast(ctx, tr("You can't use that now"), "error");
 };
 
 pack.onCraft = id => {

@@ -141,12 +141,20 @@ export function currentWeapon(p: PlayerState): WeaponDef {
 
 /**
  * Consume one usable from the backpack. Returns false (and does nothing) when the survivor has
- * none left or the id is unknown. `hp` heals, `hunger` feeds (the old code had them swapped).
+ * none left, the id is unknown, or the item would have no effect at all: a pure hp/hunger item
+ * (no buff, no poison cure) with both hp and hunger already at their max does nothing, so it is
+ * not worth burning. `hp` heals, `hunger` feeds (the old code had them swapped).
  */
 export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: number): boolean {
 	const u = USABLES[usableId];
 	if (u === undefined) return false;
 	if ((save.invenUse[usableId] ?? 0) <= 0) return false;
+
+	const hasBuff = u.speed > 0 || u.calm > 0 || u.pain > 0;
+	const healsHp = u.hp < 0 || (u.hp > 0 && p.hp < p.hpMax);
+	const feedsHunger = u.hunger !== 0 && p.hungry < p.hungryMax;
+	if (!hasBuff && !healsHp && !feedsHunger) return false;
+
 	p.hp = math.clamp(p.hp + u.hp, -1000, p.hpMax);
 	p.hungry = math.clamp(p.hungry + u.hunger, 0, p.hungryMax);
 	// buff lengths are minutes; using another one refreshes (never shortens) the buff

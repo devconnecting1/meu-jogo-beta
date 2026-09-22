@@ -10,6 +10,26 @@ const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
 const UserInputService = game.GetService("UserInputService");
 const GuiService = game.GetService("GuiService");
+const StarterGui = game.GetService("StarterGui");
+
+/**
+ * There is no character/tools in this game: the Backpack CoreGui's number-key hotbar collides
+ * with WEAPON_KEYS (1-5 below) and Health/EmotesMenu have nothing of ours to show, so we turn
+ * them off. Chat and PlayerList stay on (social). SetCoreGuiEnabled can fail if called before the
+ * CoreGui is ready, so retry a few times without blocking the rest of bootstrap.
+ */
+function disableCoreGui(guiType: Enum.CoreGuiType): void {
+	task.spawn(() => {
+		for (let attempt = 0; attempt < 5; attempt++) {
+			const [ok] = pcall(() => StarterGui.SetCoreGuiEnabled(guiType, false));
+			if (ok) return;
+			task.wait(0.2);
+		}
+	});
+}
+disableCoreGui(Enum.CoreGuiType.Backpack);
+disableCoreGui(Enum.CoreGuiType.Health);
+disableCoreGui(Enum.CoreGuiType.EmotesMenu);
 
 const player = Players.LocalPlayer;
 const playerGui = player.WaitForChild("PlayerGui") as PlayerGui;
