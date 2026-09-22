@@ -29,6 +29,8 @@ export interface SettingsData {
 	leftRelative: boolean;
 	rightSize: number;
 	rightPos: number;
+	/** left-handed: the move stick and the aim/fire pad swap sides (shared/engine/input.ts) */
+	mirror: boolean;
 	langType: number;
 }
 
@@ -42,6 +44,7 @@ export function defaultSettings(): SettingsData {
 		leftRelative: true,
 		rightSize: 0.5,
 		rightPos: 0.5,
+		mirror: false,
 		langType: 0,
 	};
 }
@@ -326,6 +329,7 @@ function readSettings(v: unknown, fb: SettingsData): SettingsData {
 		leftRelative: readBool(r.leftRelative, fb.leftRelative),
 		rightSize: readReal(r.rightSize, fb.rightSize, 0, 1),
 		rightPos: readReal(r.rightPos, fb.rightPos, 0, 1),
+		mirror: readBool(r.mirror, fb.mirror),
 		langType: readInt(r.langType, fb.langType, 0, 3),
 	};
 }
