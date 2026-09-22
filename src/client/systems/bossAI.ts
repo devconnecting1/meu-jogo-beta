@@ -1,8 +1,10 @@
 import { COLORS } from "shared/engine/colors";
 import { choose, rndRange } from "shared/engine/rng";
+import { angleDiff } from "shared/engine/vec2";
 import { damageToPlayer } from "shared/game/player";
-import { BossState } from "shared/game/entities";
+import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState } from "shared/game/entities";
 import { spawnGroundItem } from "shared/game/world";
+import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
 import { GameRefs, SPEED_SCALE, Tracer } from "./types";
 import { actorDist } from "./zombieAI";
@@ -32,6 +34,7 @@ function pushNeedle(refs: GameRefs, x: number, y: number, angle: number, damage:
 	});
 }
 
+/** XP (1000/800/800/1000 — see createBoss), message, blood and six loot drops */
 function killBoss(refs: GameRefs, b: BossState): void {
 	refs.onExp(b.exp);
 	refs.onMessage("You killed it");
@@ -62,7 +65,24 @@ function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
 	const bodyX = b.bodyX;
 	const bodyY = b.bodyY;
 	if (bodyX === undefined || bodyY === undefined) return;
-	moveToward(b, p.x, p.y, b.moveSpeed, dt);
+	// obj_boss1 steering: the head only turns 4° per body step (2° when not in attack mode, which
+	// toggles every 5 s) and wiggles inside 300 px, so it sweeps THROUGH the player in wide arcs
+	// instead of homing (the old port homed at 660 px/s and ground the player to death)
+	b.attackCd -= dt;
+	if (b.attackCd <= 0) {
+		b.attackCd = 5;
+		b.attack = b.attack === false;
+	}
+	const stepsPerSec = (b.moveSpeed * SPEED_SCALE) / 30;
+	const toP = math.atan2(p.y - b.y, p.x - b.x);
+	if (actorDist(p.x, p.y, b.x, b.y) < 300) {
+		b.angle += rndRange(-1, 1) * math.rad(1) * stepsPerSec * dt;
+	} else {
+		const rate = math.rad(b.attack === false ? 2 : 4) * stepsPerSec * dt;
+		b.angle += math.clamp(angleDiff(b.angle, toP), -rate, rate);
+	}
+	b.x += math.cos(b.angle) * b.moveSpeed * SPEED_SCALE * dt;
+	b.y += math.sin(b.angle) * b.moveSpeed * SPEED_SCALE * dt;
 	b.x = math.clamp(b.x, 0, refs.world.width);
 	b.y = math.clamp(b.y, 0, refs.world.height);
 	const n = bodyX.size();
@@ -78,12 +98,20 @@ function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
 	}
 	bodyX[0] = b.x;
 	bodyY[0] = b.y;
+	// obj_boss1: every 3rd segment grinds the player for `damage` hp PER FRAME (head: double),
+	// ignoring armour and i-frames → scaled to the frame time here
 	for (let i = 0; i < n; i += 3) {
 		const d = actorDist(p.x, p.y, bodyX[i], bodyY[i]);
-		if (d < 26) {
+		if (d < BOSS1_SEGMENT_RADIUS + PLAYER_RADIUS * 0.5) {
 			const ang = math.atan2(p.y - bodyY[i], p.x - bodyX[i]);
-			damageToPlayer(p, refs.save, i === 0 ? 6 : 3, true);
-			p.reactionDir = ang;
+			const perFrame = i === 0 ? b.damage * 2 : b.damage;
+			const wasHit = p.attacked;
+			damageToPlayer(p, refs.save, perFrame * SPEED_SCALE * dt, true);
+			if (!wasHit) {
+				p.reactionDir = ang;
+				refs.particles.bloodBurst(p.x, p.y, 4, "player");
+			}
+			break;
 		}
 	}
 }
@@ -91,10 +119,9 @@ function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
 function updateStationary(refs: GameRefs, b: BossState, dt: number): void {
 	const p = refs.player;
 	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < 110) {
+	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
 		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		damageToPlayer(p, refs.save, b.damage);
-		p.reactionDir = ang;
+		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
 	}
 	b.attackCd -= dt;
 	if (b.attackCd <= 0) {
@@ -103,14 +130,13 @@ function updateStationary(refs: GameRefs, b: BossState, dt: number): void {
 			const ang = math.atan2(p.y - b.y, p.x - b.x);
 			const tx = p.x + math.cos(ang + math.pi) * 90;
 			const ty = p.y + math.sin(ang + math.pi) * 90;
-			if (!refs.world.solids.some(s => tx >= s.x && tx <= s.x + s.w && ty >= s.y && ty <= s.y + s.h)) {
+			if (circleBlocked(refs.world, tx, ty, PLAYER_RADIUS) === undefined) {
 				p.x = tx;
 				p.y = ty;
 			}
-			damageToPlayer(p, refs.save, b.damage);
-			p.reactionDir = ang + math.pi;
+			if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang + math.pi;
 			makeTracer(refs, b.x, b.y, p.x, p.y, COLORS.boss, 0.3);
-			refs.particles.bloodBurst(p.x, p.y, 6);
+			refs.particles.bloodBurst(p.x, p.y, 6, "player");
 		}
 	}
 }
@@ -127,20 +153,18 @@ function updateChargerBoss(refs: GameRefs, b: BossState, dt: number): void {
 		moveToward(b, p.x, p.y, speed, dt);
 	}
 	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < 90) {
+	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
 		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		damageToPlayer(p, refs.save, b.damage);
-		p.reactionDir = ang;
+		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
 	}
 }
 
 function updateNeedleBoss(refs: GameRefs, b: BossState, dt: number): void {
 	const p = refs.player;
 	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < 80) {
+	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
 		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		damageToPlayer(p, refs.save, b.damage);
-		p.reactionDir = ang;
+		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
 	}
 	if (b.attack !== true) {
 		b.moveCount = (b.moveCount ?? 40) - dt * 30;
@@ -177,6 +201,7 @@ export function updateBosses(refs: GameRefs, dt: number): void {
 			refs.bosses.remove(i);
 			continue;
 		}
+		b.hitFlash = math.max(0, (b.hitFlash ?? 0) - dt);
 		b.hp = math.min(b.hpMax, b.hp + b.hpRecover * dt);
 		if (b.type === 1) updateSerpent(refs, b, dt);
 		else if (b.type === 2) updateStationary(refs, b, dt);

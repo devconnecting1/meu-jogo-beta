@@ -1,6 +1,7 @@
 import { damageCal, rnd, rndRange } from "shared/engine/rng";
 import { DESIGN } from "shared/engine/constants";
 import { difficultyOfDay } from "shared/game/save";
+import { zombieDef } from "shared/data/zombies";
 
 export type ZombieType = 1 | 2 | 3 | 4 | 5;
 
@@ -15,20 +16,27 @@ export interface ZombieState {
 	hpMax: number;
 	damage: number;
 	damageRush?: number;
+	/** px/frame @30fps (multiply by SPEED_SCALE for px/s) */
 	moveSpeed: number;
 	exp: number;
+	/** heading it wants to face (radians) */
 	angle: number;
+	/** heading actually drawn: turns towards `angle` at 150°/s, snaps on rush/jump/knockback */
 	angleSlow: number;
 	detect: boolean;
+	/** seconds left of the "!" bubble */
 	detectShow: number;
+	/** seconds of stun left (no voluntary movement; knockback still applies) */
 	stunned: number;
 	attacked: boolean;
 	iframe: number;
+	/** knockback speed in px/frame @30fps (decays by DESIGN.REACTION_FRICTION per second, max 9) */
 	reactionSpeed: number;
 	reactionDir: number;
 	wanderTimer: number;
 	wanderDir: number;
 	wave: boolean;
+	/** 0..1 visibility (darkness/lights), eased by the AI; renderer multiplies by it */
 	alpha: number;
 	/** walk-cycle phase (rad), advanced by the AI while moving; renderer animates feet with it */
 	feetCycle?: number;
@@ -36,10 +44,17 @@ export interface ZombieState {
 	hitFlash?: number;
 	/** visual + hitbox scale (big variant = 1.4) */
 	scale?: number;
+	/** true while the wander timer is a pause (standing still) */
+	wanderPause?: boolean;
 	// spitter
 	attackCd?: number;
+	/** head wind-up 0..10 before spitting (renderer may pull the head back by it) */
 	headX?: number;
+	/** where the spit will be aimed (predicted player position) */
+	aimX?: number;
+	aimY?: number;
 	// exploder
+	/** seconds until the dead exploder blows up; -1 = not lit */
 	fuse?: number;
 	// charger
 	rush?: boolean;
@@ -47,16 +62,31 @@ export interface ZombieState {
 	rushCd?: number;
 	rushSpeed?: number;
 	rushDir?: number;
+	/** seconds spent in the current rush */
+	rushTime?: number;
 	backstep?: boolean;
 	// jumper
 	jumping?: boolean;
 	jumpReady?: boolean;
+	/** seconds until the next take-off is allowed (counted from the previous take-off) */
 	jumpCd?: number;
 	jumpDir?: number;
 	jumpTargetX?: number;
 	jumpTargetY?: number;
+	/** visual lift in world px while airborne (renderer offsets sprite/shadow) */
 	jumpHeight?: number;
+	/** planned length and distance already covered by the current jump */
+	jumpLength?: number;
+	jumpTravel?: number;
+	jumpAir?: number;
 	special: boolean;
+}
+
+/** base zombie collision radius; the renderer should draw bodies about this big (× scale) */
+export const ZOMBIE_BASE_RADIUS = 16;
+
+export function zombieRadius(z: ZombieState): number {
+	return zombieDef(z.type).radius * (z.scale ?? 1);
 }
 
 export interface BossState {
@@ -66,6 +96,7 @@ export interface BossState {
 	y: number;
 	hp: number;
 	hpMax: number;
+	/** hp regenerated per second (original: per frame × 30) */
 	hpRecover: number;
 	damage: number;
 	exp: number;
@@ -88,6 +119,20 @@ export interface BossState {
 	attack?: boolean;
 }
 
+/** hit radius of the centipede (boss 1) body segments — original body_width 120 → 60, trimmed */
+export const BOSS1_SEGMENT_RADIUS = 34;
+
+/**
+ * Hit/contact radius of a boss body (world units). Boss 1 is a chain of segments: use
+ * BOSS1_SEGMENT_RADIUS on bodyX/bodyY instead. Renderer should draw bosses about this big.
+ */
+export function bossHitRadius(b: BossState): number {
+	if (b.type === 1) return BOSS1_SEGMENT_RADIUS + 6;
+	if (b.type === 2) return 65;
+	if (b.type === 3) return 45;
+	return 38;
+}
+
 let nextId = 1;
 
 export function resetEntityIds(): void {
@@ -96,21 +141,17 @@ export function resetEntityIds(): void {
 
 export function createZombie(typeId: ZombieType, x: number, y: number, day: number, wave = false): ZombieState {
 	const d = difficultyOfDay(day);
-	const base: Record<number, { sp: number; hp: number; dmg: number; exp: number }> = {
-		1: { sp: 3, hp: 100, dmg: 10, exp: 10 },
-		2: { sp: 2.5, hp: 100, dmg: 10, exp: 20 },
-		3: { sp: 1.7, hp: 150, dmg: 10, exp: 20 },
-		4: { sp: 2.5, hp: 150, dmg: 10, exp: 20 },
-		5: { sp: 2.5, hp: 100, dmg: 10, exp: 20 },
-	};
-	const b = base[typeId];
-	let sp = b.sp * (1 + d / 3);
+	const b = zombieDef(typeId);
+	let sp = b.speed * (1 + d / 3);
 	let hp = math.floor(b.hp * (1 + d));
+	let scale = 1;
+	// walker variants (obj_zombie Create): 10% fast & frail from day 2, 5% big & tough from day 3
 	if (typeId === 1 && day > 1 && rnd() * 10 < 1) {
 		sp *= 2;
 		hp = math.floor(hp / 2);
 	} else if (typeId === 1 && day > 2 && rnd() * 20 < 1) {
 		hp = math.floor(hp * 1.5);
+		scale = 1.4;
 	}
 	const z: ZombieState = {
 		id: nextId++,
@@ -126,7 +167,10 @@ export function createZombie(typeId: ZombieType, x: number, y: number, day: numb
 		exp: b.exp,
 		angle: rnd() * math.pi * 2,
 		angleSlow: 0,
-		detect: typeId === 1 && rnd() * 10 < 1,
+		// 10% of the walkers already hunt the player when they appear (obj_zombie "random detect") —
+		// but not on day 1, so the first daylight is about noise/proximity (the first hunter used to
+		// reach a brand-new player ~11 s after pressing Play)
+		detect: typeId === 1 && day > 1 && rnd() * 10 < 1,
 		detectShow: 0,
 		stunned: 0,
 		attacked: false,
@@ -137,13 +181,18 @@ export function createZombie(typeId: ZombieType, x: number, y: number, day: numb
 		wanderDir: rnd() * math.pi * 2,
 		wave,
 		alpha: 1,
+		feetCycle: 0,
+		hitFlash: 0,
+		scale,
 		special: typeId !== 1,
 	};
+	z.angleSlow = z.angle;
 	if (typeId === 4) {
-		z.damageRush = math.floor(20 * (1 + d));
+		z.damageRush = math.floor(b.rushDamage * (1 + d));
 		z.rushReady = true;
 		z.rushCd = 0;
 		z.rushSpeed = 5;
+		z.rushTime = 0;
 	}
 	if (typeId === 5) {
 		z.jumpReady = true;
@@ -160,6 +209,9 @@ export function createZombie(typeId: ZombieType, x: number, y: number, day: numb
 	return z;
 }
 
+/** XP per boss: centipede 1000, tentacle 800, charger 800, needle 1000 (the original's 3/4 gave 10 by a bug) */
+const BOSS_EXP: Record<number, number> = { 1: 1000, 2: 800, 3: 800, 4: 1000 };
+
 export function createBoss(typeId: number, x: number, y: number): BossState {
 	const b: BossState = {
 		id: nextId++,
@@ -168,13 +220,15 @@ export function createBoss(typeId: number, x: number, y: number): BossState {
 		y,
 		hp: 10000,
 		hpMax: 10000,
-		hpRecover: typeId === 3 ? 1.5 : 1,
+		// original: +1 hp per frame (+1.5 for boss 3) → per second
+		hpRecover: (typeId === 3 ? 1.5 : 1) * 30,
 		damage: typeId === 1 ? 3 : 25,
-		exp: typeId === 1 ? 1000 : typeId === 2 ? 800 : 10,
+		exp: BOSS_EXP[typeId] ?? 800,
 		moveSpeed: typeId === 1 ? 22 : typeId === 3 ? 14 : typeId === 4 ? 8 : 0,
 		angle: 0,
 		attackCd: 0,
 		dead: false,
+		hitFlash: 0,
 	};
 	if (typeId === 1) {
 		const bodyX: Array<number> = [];

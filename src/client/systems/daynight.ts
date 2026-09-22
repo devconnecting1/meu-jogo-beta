@@ -3,6 +3,9 @@ import { chance } from "shared/engine/rng";
 import { difficultyOfDay, PlayerSaveData } from "shared/game/save";
 import { getDayPopulation } from "shared/data/spawns";
 
+/** darkest overlay alpha at midnight */
+const MAX_DARK = 0.85;
+
 function crossed(prev: number, cur: number, t: number): boolean {
 	if (cur >= prev) {
 		return prev < t && cur >= t;
@@ -24,6 +27,8 @@ export class DayNight {
 	wave1Active = false;
 	wave2Active = false;
 	wave3Active = false;
+	/** +1 every time the clock passes 7:00 — zombieAI makes non-wave zombies lose the trail then */
+	morningCount = 0;
 	onAnnounce: (msg: string) => void = () => {};
 
 	private save: PlayerSaveData;
@@ -34,8 +39,21 @@ export class DayNight {
 		this.day = save.day;
 		this.dayTime = 7;
 		this.difficulty = difficultyOfDay(this.day);
-		this.isRaining = chance(DESIGN.WEATHER_PERCENT);
+		this.isRaining = this.rollRain();
 		this.refreshPopulation();
+	}
+
+	/** original: 10% rainy days, but never during the first four days (`if day<=4 weather = 0`) */
+	private rollRain(): boolean {
+		return this.day > 4 && chance(DESIGN.WEATHER_PERCENT);
+	}
+
+	/**
+	 * Daytime hours in which noise matters (sys_sound_view: 6 < t < 18 and no rain). At night and in
+	 * the rain every zombie already hunts the player, so footsteps/shots add nothing.
+	 */
+	soundMatters(): boolean {
+		return this.dayTime > 6 && this.dayTime < 18 && !this.isRaining;
 	}
 
 	private refreshPopulation(): void {
@@ -49,7 +67,10 @@ export class DayNight {
 		if (crossed(prev, cur, 19)) this.onAnnounce("Wave 1");
 		if (crossed(prev, cur, 22)) this.onAnnounce("Wave 2");
 		if (crossed(prev, cur, 1)) this.onAnnounce("Wave 3");
-		if (crossed(prev, cur, 7)) this.onAnnounce("Good morning");
+		if (crossed(prev, cur, 7)) {
+			this.morningCount += 1;
+			this.onAnnounce("Good morning");
+		}
 	}
 
 	private updateWaves(): void {
@@ -74,7 +95,12 @@ export class DayNight {
 		} else if (this.dayTime < 6) {
 			ramp = 6 - this.dayTime;
 		}
-		const cap = this.save.skillLevels[16] > 0 ? DESIGN.DARK_ALPHA_NIGHT_SKILL : DESIGN.DARK_ALPHA_MAX;
+		// deepest night is capped at 0.85 (the renderer punches light holes around the player and
+		// lamps/campfires into it); "Nocturnal" keeps the original 0.05 advantage
+		const cap =
+			this.save.skillLevels[16] > 0
+				? MAX_DARK - (DESIGN.DARK_ALPHA_MAX - DESIGN.DARK_ALPHA_NIGHT_SKILL)
+				: MAX_DARK;
 		let dark = math.min(cap, ramp * ((DESIGN.DARK_ALPHA_MAX / 6) * 3));
 		if (this.isRaining) {
 			dark = math.min(cap, math.max(dark, 0.5));
@@ -85,14 +111,15 @@ export class DayNight {
 	update(dt: number): void {
 		const night = this.dayTime > 19 || this.dayTime < 6;
 		this.isNight = night;
-		const speed = DESIGN.TIME_SPEED * (night ? 1 : 0.8);
+		// original: the night runs 1.2× and the day 0.8× the base clock speed
+		const speed = DESIGN.TIME_SPEED * (night ? 1.2 : 0.8);
 		const prev = this.dayTime;
 		this.dayTime += speed * dt;
 		if (this.dayTime >= 24) {
 			this.dayTime -= 24;
 			this.day += 1;
 			this.save.day = this.day;
-			this.isRaining = chance(DESIGN.WEATHER_PERCENT);
+			this.isRaining = this.rollRain();
 			this.refreshPopulation();
 		}
 		this.detectAnnounce(prev, this.dayTime);

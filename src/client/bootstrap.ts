@@ -9,6 +9,7 @@ import { GameContext, GamePhase } from "shared/game/context";
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
 const UserInputService = game.GetService("UserInputService");
+const GuiService = game.GetService("GuiService");
 
 const player = Players.LocalPlayer;
 const playerGui = player.WaitForChild("PlayerGui") as PlayerGui;
@@ -68,6 +69,8 @@ uiLayer.Parent = root;
 
 const cam = new Camera();
 const input = new InputState();
+// phones/tablets start in touch aim (the "mouse" location there is just the last finger)
+if (UserInputService.TouchEnabled && !UserInputService.MouseEnabled) input.aimMode = "touch";
 const renderer = new Renderer(worldLayer, "Sprites");
 const save: PlayerSaveData = defaultSave();
 
@@ -124,11 +127,72 @@ function releaseAttack(): void {
 	input.attackHeld = false;
 }
 
-UserInputService.InputBegan.Connect((inputObj, gpe) => {
-	if (gpe) return;
-	if (inputObj.UserInputType === Enum.UserInputType.MouseButton1) {
+// Several sources can hold the attack button at once (mouse + fire-zone fingers).
+// pressAttack/releaseAttack only fire on the 0→1 / 1→0 transition of this counter.
+let attackSources = 0;
+function addAttackSource(): void {
+	attackSources += 1;
+	if (attackSources === 1) {
 		pressAttack();
-	} else if (inputObj.UserInputType === Enum.UserInputType.MouseButton2) {
+	}
+}
+function removeAttackSource(): void {
+	if (attackSources <= 0) return;
+	attackSources -= 1;
+	if (attackSources === 0) {
+		releaseAttack();
+	}
+}
+
+/** keys 1–5 pick the 1st…5th weapon the survivor owns */
+const WEAPON_KEYS: Array<Enum.KeyCode> = [
+	Enum.KeyCode.One,
+	Enum.KeyCode.Two,
+	Enum.KeyCode.Three,
+	Enum.KeyCode.Four,
+	Enum.KeyCode.Five,
+];
+
+let mouseDown = false;
+/** finger InputObject → the zone it started in, so releasing one finger never affects another */
+const touchRoles = new Map<InputObject, "move" | "aim" | "fire" | "action">();
+
+/**
+ * Recomputes input.aimAngle from the live mouse position every frame (mouse mode only;
+ * touch mode is driven by the aim stick in handleTouchMove). Called by the combat system
+ * with the player's world position. Returns the resulting aim angle.
+ */
+export function refreshAim(px: number, py: number): number {
+	if (input.aimMode === "touch") {
+		// no aim stick held: face where the survivor walks (twin-stick fallback)
+		if (!input.aimStickActive && input.moveMagnitude > 0.2) {
+			const d = cam.screenDirToWorld(input.moveX, input.moveY);
+			if (d.x * d.x + d.y * d.y > 1e-6) input.aimAngle = math.atan2(d.y, d.x);
+		}
+		return input.aimAngle;
+	}
+	if (input.aimMode === "mouse") {
+		const m = UserInputService.GetMouseLocation();
+		const w = cam.screenToWorld(m.X, m.Y);
+		const dx = w.x - px;
+		const dy = w.y - py;
+		if (math.sqrt(dx * dx + dy * dy) > 1) {
+			input.aimAngle = math.atan2(dy, dx);
+		}
+	}
+	return input.aimAngle;
+}
+
+UserInputService.InputBegan.Connect((inputObj, gpe) => {
+	if (inputObj.UserInputType === Enum.UserInputType.MouseButton1) {
+		if (gpe) return;
+		mouseDown = true;
+		input.aimMode = "mouse";
+		addAttackSource();
+		return;
+	}
+	if (gpe) return;
+	if (inputObj.UserInputType === Enum.UserInputType.MouseButton2) {
 		input.actionPressed = true;
 	} else if (inputObj.UserInputType === Enum.UserInputType.Keyboard) {
 		const k = inputObj.KeyCode;
@@ -148,12 +212,16 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 		} else if (k === Enum.KeyCode.R) {
 			input.keyR = true;
 			input.reloadPressed = true;
-		} else if (k === Enum.KeyCode.Tab) {
-			input.keyTab = true;
+		} else if (k === Enum.KeyCode.B || k === Enum.KeyCode.Tab) {
+			// Tab/Esc are usually swallowed by Roblox's CoreGui; B/P always reach the game
+			if (k === Enum.KeyCode.Tab) input.keyTab = true;
 			input.backpackPressed = true;
-		} else if (k === Enum.KeyCode.Escape) {
-			input.keyEsc = true;
+		} else if (k === Enum.KeyCode.P || k === Enum.KeyCode.Escape) {
+			if (k === Enum.KeyCode.Escape) input.keyEsc = true;
 			input.pausePressed = true;
+		} else {
+			const slot = WEAPON_KEYS.indexOf(k);
+			if (slot >= 0) input.weaponSlotPressed = slot;
 		}
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
 		handleTouchBegin(inputObj);
@@ -162,7 +230,10 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 
 UserInputService.InputEnded.Connect(inputObj => {
 	if (inputObj.UserInputType === Enum.UserInputType.MouseButton1) {
-		releaseAttack();
+		if (mouseDown) {
+			mouseDown = false;
+			removeAttackSource();
+		}
 	} else if (inputObj.UserInputType === Enum.UserInputType.Keyboard) {
 		const k = inputObj.KeyCode;
 		if (k === Enum.KeyCode.W) input.keyW = false;
@@ -175,51 +246,69 @@ UserInputService.InputEnded.Connect(inputObj => {
 		else if (k === Enum.KeyCode.Tab) input.keyTab = false;
 		else if (k === Enum.KeyCode.Escape) input.keyEsc = false;
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
-		handleTouchEnd();
+		handleTouchEnd(inputObj);
 	}
 });
 
 UserInputService.InputChanged.Connect(inputObj => {
 	if (inputObj.UserInputType === Enum.UserInputType.MouseMovement) {
-		const pos = inputObj.Position;
-		const world = cam.screenToWorld(pos.X, pos.Y);
-		input.aimAngle = math.atan2(world.y - cam.y, world.x - cam.x);
+		input.aimMode = "mouse";
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
 		handleTouchMove(inputObj);
 	}
 });
 
+/** Touch positions come inset-relative; with IgnoreGuiInset=true GUI coords include the inset. */
+function touchPos(t: InputObject): { x: number; y: number } {
+	const [inset] = GuiService.GetGuiInset();
+	return { x: t.Position.X + inset.X, y: t.Position.Y + inset.Y };
+}
+
 function handleTouchBegin(t: InputObject): void {
-	const pos = t.Position;
-	if (pos.X < ctx.viewW * 0.45 && !input.joystickActive) {
+	// on a touch screen GetMouseLocation() is the last finger (e.g. the fire button): never aim with it
+	input.aimMode = "touch";
+	const pos = touchPos(t);
+	if (pos.x < ctx.viewW * 0.45 && !input.joystickActive) {
+		touchRoles.set(t, "move");
 		input.joystickActive = true;
-		input.joystickBaseX = pos.X;
-		input.joystickBaseY = pos.Y;
-		input.joystickX = pos.X;
-		input.joystickY = pos.Y;
+		input.joystickBaseX = pos.x;
+		input.joystickBaseY = pos.y;
+		input.joystickX = pos.x;
+		input.joystickY = pos.y;
 	} else {
 		const rightZone = ctx.viewW * 0.55;
-		if (pos.X >= rightZone) {
-			if (pos.Y > ctx.viewH * 0.55) {
-				pressAttack();
+		if (pos.x >= rightZone) {
+			if (pos.y > ctx.viewH * 0.55) {
+				touchRoles.set(t, "fire");
+				addAttackSource();
 			} else {
+				touchRoles.set(t, "aim");
+				input.aimMode = "touch";
+				input.aimStickActive = true;
 				input.aimDragActive = true;
-				input.aimDragLastX = pos.X;
-				input.aimDragLastY = pos.Y;
+				input.aimStickBaseX = pos.x;
+				input.aimStickBaseY = pos.y;
+				input.aimStickX = pos.x;
+				input.aimStickY = pos.y;
+				input.aimDragLastX = pos.x;
+				input.aimDragLastY = pos.y;
 			}
 		} else {
+			touchRoles.set(t, "action");
 			input.actionPressed = true;
 		}
 	}
 }
 
 function handleTouchMove(t: InputObject): void {
-	const pos = t.Position;
-	if (input.joystickActive) {
-		input.joystickX = pos.X;
-		input.joystickY = pos.Y;
-		const dx = pos.X - input.joystickBaseX;
-		const dy = pos.Y - input.joystickBaseY;
+	const role = touchRoles.get(t);
+	if (role === undefined) return;
+	const pos = touchPos(t);
+	if (role === "move") {
+		input.joystickX = pos.x;
+		input.joystickY = pos.y;
+		const dx = pos.x - input.joystickBaseX;
+		const dy = pos.y - input.joystickBaseY;
 		const dist = math.sqrt(dx * dx + dy * dy);
 		const ratio = math.min(dist / input.joystickRadius, 1);
 		input.moveMagnitude = ratio;
@@ -227,29 +316,62 @@ function handleTouchMove(t: InputObject): void {
 			input.moveX = dx / dist;
 			input.moveY = dy / dist;
 		}
-	} else if (input.aimDragActive) {
-		const dx = pos.X - input.aimDragLastX;
-		const dy = pos.Y - input.aimDragLastY;
-		input.aimAngle += (dx + dy) * 0.01;
-		input.aimDragLastX = pos.X;
-		input.aimDragLastY = pos.Y;
+	} else if (role === "aim") {
+		input.aimStickX = pos.x;
+		input.aimStickY = pos.y;
+		const dx = pos.x - input.aimStickBaseX;
+		const dy = pos.y - input.aimStickBaseY;
+		const dist = math.sqrt(dx * dx + dy * dy);
+		if (dist > 12) {
+			const a = cam.screenToWorld(input.aimStickBaseX, input.aimStickBaseY);
+			const b = cam.screenToWorld(pos.x, pos.y);
+			input.aimAngle = math.atan2(b.y - a.y, b.x - a.x);
+		}
+		input.aimDragLastX = pos.x;
+		input.aimDragLastY = pos.y;
 	}
 }
 
-function handleTouchEnd(): void {
-	if (input.joystickActive) {
+function handleTouchEnd(t: InputObject): void {
+	const role = touchRoles.get(t);
+	if (role === undefined) return;
+	touchRoles.delete(t);
+	if (role === "move") {
 		input.joystickActive = false;
 		input.moveX = 0;
 		input.moveY = 0;
 		input.moveMagnitude = 0;
-	}
-	if (input.aimDragActive) {
+	} else if (role === "aim") {
+		input.aimStickActive = false;
 		input.aimDragActive = false;
+	} else if (role === "fire") {
+		removeAttackSource();
 	}
+}
+
+UserInputService.WindowFocusReleased.Connect(() => {
+	input.keyW = false;
+	input.keyA = false;
+	input.keyS = false;
+	input.keyD = false;
+	input.keyShift = false;
+	input.keyE = false;
+	input.keyR = false;
+	input.keyTab = false;
+	input.keyEsc = false;
+	input.joystickActive = false;
+	input.moveX = 0;
+	input.moveY = 0;
+	input.moveMagnitude = 0;
+	input.aimStickActive = false;
+	input.aimDragActive = false;
 	if (input.attackHeld) {
 		releaseAttack();
 	}
-}
+	attackSources = 0;
+	mouseDown = false;
+	touchRoles.clear();
+});
 
 export function syncKeyboardMove(): void {
 	if (input.keyW || input.keyA || input.keyS || input.keyD) {

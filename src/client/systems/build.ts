@@ -2,7 +2,9 @@ import { COLORS, Z } from "shared/engine/colors";
 import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { InputState } from "shared/engine/input";
-import { SolidKind, addSolid } from "shared/game/world";
+import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
+import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
+import { SolidKind, addSolid, querySolids } from "shared/game/world";
 import { addItem } from "./items";
 import { GameRefs } from "./types";
 
@@ -66,6 +68,36 @@ export interface Ghost {
 	valid: boolean;
 }
 
+/** closest-point (rect×circle) overlap test */
+function rectCircleOverlap(
+	rx: number,
+	ry: number,
+	rw: number,
+	rh: number,
+	cx: number,
+	cy: number,
+	cr: number,
+): boolean {
+	const qx = math.clamp(cx, rx, rx + rw);
+	const qy = math.clamp(cy, ry, ry + rh);
+	const dx = cx - qx;
+	const dy = cy - qy;
+	return dx * dx + dy * dy < cr * cr;
+}
+
+/** the craftKind-1 recipe that produced `resultIndex`, preferring the one recorded at craft time */
+function recipeFor(refs: GameRefs, resultIndex: number): CraftRecipe | undefined {
+	const pendingId = refs.pendingRecipe;
+	if (pendingId !== undefined) {
+		const r = CRAFT_RECIPES[pendingId];
+		if (r !== undefined && r.craftKind === 1 && r.resultIndex === resultIndex) return r;
+	}
+	for (const r of CRAFT_RECIPES) {
+		if (r.craftKind === 1 && r.resultIndex === resultIndex) return r;
+	}
+	return undefined;
+}
+
 export class BuildSystem {
 	private ghostX = 0;
 	private ghostY = 0;
@@ -97,10 +129,12 @@ export class BuildSystem {
 		}
 		if (input.actionPressed) {
 			this.cancel(refs);
+			input.attackBlocked = true;
 			return true;
 		}
 		if (input.attackPressed) {
 			this.confirm(refs);
+			input.attackBlocked = true;
 			return true;
 		}
 		return true;
@@ -135,9 +169,22 @@ export class BuildSystem {
 		this.ghostH = h;
 		let valid = gx >= 0 && gy >= 0 && gx + w < refs.world.width && gy + h < refs.world.height;
 		if (valid) {
-			for (const s of refs.world.solids) {
-				if (s.kind === "door" && s.open) continue;
+			for (const s of querySolids(refs.world, gx, gy, gx + w, gy + h)) {
+				if (s.passable === true) continue;
 				if (gx < s.x + s.w && gx + w > s.x && gy < s.y + s.h && gy + h > s.y) {
+					valid = false;
+					break;
+				}
+			}
+		}
+		if (valid && rectCircleOverlap(gx, gy, w, h, p.x, p.y, PLAYER_RADIUS)) {
+			valid = false;
+		}
+		if (valid) {
+			for (const z of refs.zombies) {
+				if (z.hp <= 0) continue;
+				const zr = ZOMBIE_RADIUS * (z.scale ?? 1);
+				if (rectCircleOverlap(gx, gy, w, h, z.x, z.y, zr)) {
 					valid = false;
 					break;
 				}
@@ -166,15 +213,22 @@ export class BuildSystem {
 			powered: def.powered,
 		});
 		refs.pendingPlace = -1;
+		refs.pendingRecipe = undefined;
 		this.active = false;
 	}
 
 	private cancel(refs: GameRefs): void {
 		const id = refs.pendingPlace;
 		if (id >= 0) {
-			addItem(refs.save, 4, id, 1);
+			const r = recipeFor(refs, id);
+			if (r !== undefined) {
+				for (const ing of r.ingredients) {
+					addItem(refs.save, ing.kind, ing.index, ing.count);
+				}
+			}
 		}
 		refs.pendingPlace = -1;
+		refs.pendingRecipe = undefined;
 		this.active = false;
 	}
 

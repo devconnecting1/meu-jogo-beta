@@ -1,3 +1,8 @@
+/**
+ * Consumables. `hp` heals (negative hurts), `hunger` refills the stomach; speed/calm/pain are buff
+ * lengths in minutes. (tools/fix-usables.cjs swapped the columns once but skipped negative numbers,
+ * which left Rotten meat as "heals 20 / starves 10"; it is "fills 20 / hurts 10" like the original.)
+ */
 export interface UsableDef {
 	id: number;
 	name: string;
@@ -29,5 +34,5 @@ export const USABLES: Array<UsableDef> = [
 	{ id: 16, name: "Mushroom soup", hp: 0, hunger: 20, speed: 0, calm: 0, pain: 0, cook: -1 },
 	{ id: 17, name: "Apple", hp: 0, hunger: 20, speed: 0, calm: 0, pain: 0, cook: -1 },
 	{ id: 18, name: "Berry", hp: 0, hunger: 15, speed: 0, calm: 0, pain: 0, cook: -1 },
-	{ id: 19, name: "Rotten meat", hp: 20, hunger: -10, speed: 0, calm: 0, pain: 0, cook: -1 },
+	{ id: 19, name: "Rotten meat", hp: -10, hunger: 20, speed: 0, calm: 0, pain: 0, cook: -1 },
 ];
