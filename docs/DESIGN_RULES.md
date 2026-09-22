@@ -121,6 +121,28 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 - **CON-01** ❌ Nome, logo ou arte do Dead Town. ✅ Créditos mantêm "Inspired by Dead Town (Lemon Puppy Games)".
 - **CON-02** ❌ Marcas reais em lojas, carros ou produtos.
 
+## 14. Multiplayer (MP)
+
+O jogo é multiplayer nativo: mundo compartilhado por servidor (até 6 jogadores), simulado pelo servidor. Arquitetura completa em `docs/MULTIPLAYER.md`.
+
+- **MP-00 [revisão]** ✅ **O servidor decide tudo o que importa**: posição (o cliente envia só inputs), dano, XP, itens, moedas, cooldowns, munição, crafting, construção, loot e reviver. ❌ Qualquer valor de jogo vindo do cliente. O cliente só tem autoridade sobre câmera, UI e efeitos visuais previstos.
+- **MP-01 [revisão]** ✅ Só cooperação: tiros, flechas, fogo, choque e golpes **atravessam aliados**; torretas e armadilhas nunca afetam jogadores. ❌ Dano de jogador em jogador. Exceção (decisão do autor): a explosão do zumbi-bomba fere todos no raio, **aliados com 50%** do dano (P3: é o zumbi atacando).
+- **MP-02 [revisão]** ✅ Jogadores **não colidem entre si**. Exceção documentada a COL-01, por anti-griefing (ninguém bloqueia uma porta ou um beco com o corpo).
+- **MP-03 [revisão]** ✅ Derrubado: **rasteja a 20%** da velocidade, sem atacar nem usar itens; sangra por **30 s** (−3 s por mordida). Aliado em pé a **≤ 70 u** segura E por **4 s** para reviver (dano não interrompe); volta com 30% do HP. Sem aliado em pé no servidor, não há espera.
+- **MP-04 [revisão → auto na fase F1]** ✅ **Spawn seguro**: fora de prédio, sobre chão livre, a **≥ 900 u de qualquer zumbi**, com 3 s de proteção. ❌ Nascer à vista de um zumbi ou dentro de um sólido.
+- **MP-05 [revisão]** ✅ **Loot de prédio compartilhado** (decisão do autor): quem revistar primeiro leva; renasce a cada **12 h de jogo**. O conteúdo só é revelado a quem revista.
+- **MP-06 [revisão]** ✅ Itens no chão: o primeiro pedido válido leva. ❌ Item "reservado" para quem matou.
+- **MP-07 [revisão]** ✅ **O que o jogador não vê, o cliente não recebe**: interior de prédio com o telhado fechado, zumbi no escuro fora de toda luz, conteúdo de loot (anti-wallhack; coerente com EDI-04 e LUZ-03).
+- **MP-08 [revisão]** ✅ Legibilidade co-op: todo jogador tem placa com nome, nível e barra de HP; o derrubado mostra anel de reviver e contagem **visíveis no escuro**; a luz de cada jogador ilumina para todos.
+- **MP-09 [revisão]** ✅ A horda escala por grupo de jogadores próximos: **S(k) = 1 + 0,5·(k − 1)**, teto de 150 zumbis por servidor. ❌ Zumbi nascendo a menos de 720 u de qualquer jogador.
+- **MP-10 [revisão]** ✅ A **pausa** só congela o mundo se **todos** estiverem em menu. ❌ Um jogador congelar o mundo dos outros.
+- **MP-11 [revisão]** ✅ Construções só são danificadas por zumbis; **portas construídas podem ser trancadas pelo dono** (trancada, só o dono abre). ❌ Jogador destruir ou desmontar construção alheia.
+- **MP-12 [revisão]** ✅ **Sair derrubado conta como morte.** Sair em combate (dano nos últimos 5 s) exige 5 s de espera.
+- **MP-13 [revisão]** ✅ A HUD mostra o **dia do mundo** e o **dia da vida**. Recordes e moedas por dia são pessoais e exigem presença (≥ 50% do dia, sem AFK). Servidor **público começa no dia 1**; servidor **solo/privado continua no dia do dono**.
+- **MP-14 [revisão]** ✅ **Solo é o jogo de hoje**: com um jogador só, S(1) = 1, pausa real e sem espera de derrubado (P2: o multiplayer não pode piorar o solo).
+- **MP-15 [revisão]** ✅ XP compartilhado com sentido: **60% de assistência** para quem ajudou a matar; XP de chefe para **todos os participantes**.
+- **MP-16 [revisão]** ✅ Anti-trapaça proporcional: corrigir em silêncio → sinalizar com evidências no painel de admin → kick automático só para abuso inequívoco (flood de remotes). ❌ Ban automático (ban só por decisão humana).
+
 ## Como adicionar ou mudar uma regra
 
 1. Dê um ID novo na categoria certa (ou crie a categoria).
