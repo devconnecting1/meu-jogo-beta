@@ -9,10 +9,13 @@ import {
 	Progress,
 	addAspect,
 	badgeWidth,
+	fadeSurface,
+	fadeText,
 	fmtInt,
 	makeAnchored,
 	makeFrame,
 	makeLabel,
+	setSurfaceTransparency,
 	tween,
 } from "./widgets";
 
@@ -429,10 +432,15 @@ export class Hud {
 	private buildMessages(root: Frame, k: number): void {
 		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, 20 + 64 * k, true);
 		// the card is resized to the message in showBanner; the texts stay centred over it
-		const card = Card(bannerBox, "Card", { x: 0, y: 0, w: BANNER_W, h: BANNER_H, variant: "popover" });
-		card.BackgroundTransparency = 1;
-		const cardStroke = card.FindFirstChildOfClass("UIStroke");
-		if (cardStroke !== undefined) cardStroke.Transparency = 1;
+		const card = Card(bannerBox, "Card", {
+			x: 0,
+			y: 0,
+			w: BANNER_W,
+			h: BANNER_H,
+			variant: "popover",
+			transparency: TRANSPARENCY.hud,
+		});
+		setSurfaceTransparency(card, 1);
 		this.bannerCard = card;
 		const pad = space(6);
 		const banner = makeLabel(
@@ -690,23 +698,19 @@ export class Hud {
 		const h = subText === "" ? 70 + space(3) : BANNER_H;
 		card.Position = UDim2.fromScale((BANNER_W - w) / 2 / BANNER_W, 0);
 		card.Size = UDim2.fromScale(w / BANNER_W, h / BANNER_H);
-		const stroke = card.FindFirstChildOfClass("UIStroke");
-		card.BackgroundTransparency = 1;
-		if (stroke !== undefined) stroke.Transparency = 1;
+		setSurfaceTransparency(card, 1);
 		banner.TextTransparency = 1;
 		sub.TextTransparency = 1;
 		scale.Scale = 1.2;
-		tween(card, 0.2, { BackgroundTransparency: TRANSPARENCY.hud });
-		if (stroke !== undefined) tween(stroke, 0.2, { Transparency: 0 });
-		tween(banner, 0.25, { TextTransparency: 0 });
-		tween(sub, 0.35, { TextTransparency: 0 });
+		fadeSurface(card, 0.2, 0);
+		fadeText(banner, 0.25, 0);
+		fadeText(sub, 0.35, 0);
 		tween(scale, 0.3, { Scale: 1 });
 		task.delay(2.6, () => {
 			if (gen !== this.bannerGen || banner.Parent === undefined) return;
-			tween(card, 0.5, { BackgroundTransparency: 1 });
-			if (stroke !== undefined) tween(stroke, 0.5, { Transparency: 1 });
-			tween(banner, 0.5, { TextTransparency: 1 });
-			tween(sub, 0.5, { TextTransparency: 1 });
+			fadeSurface(card, 0.5, 1);
+			fadeText(banner, 0.5, 1);
+			fadeText(sub, 0.5, 1);
 		});
 	}
 
@@ -743,14 +747,11 @@ export class Hud {
 			font: "label",
 			zIndex: 2,
 		});
-		const stroke = line.FindFirstChildOfClass("UIStroke");
 		// enter: fade in
-		line.BackgroundTransparency = 1;
+		setSurfaceTransparency(line, 1);
 		label.TextTransparency = 1;
-		if (stroke !== undefined) stroke.Transparency = 1;
-		tween(line, 0.2, { BackgroundTransparency: TRANSPARENCY.hud });
-		tween(label, 0.2, { TextTransparency: 0 });
-		if (stroke !== undefined) tween(stroke, 0.2, { Transparency: 0 });
+		fadeSurface(line, 0.2, 0);
+		fadeText(label, 0.2, 0);
 		task.spawn(() => {
 			while (line.Parent !== undefined) {
 				const born = line.GetAttribute("Born");
@@ -760,9 +761,8 @@ export class Hud {
 			if (line.Parent === undefined) return;
 			// fading out: the same message arriving now gets a fresh line instead of refreshing this one
 			line.SetAttribute("Text", undefined);
-			tween(line, 0.4, { BackgroundTransparency: 1 });
-			tween(label, 0.4, { TextTransparency: 1 });
-			if (stroke !== undefined) tween(stroke, 0.4, { Transparency: 1 });
+			fadeSurface(line, 0.4, 1);
+			fadeText(label, 0.4, 1);
 			task.wait(0.4);
 			line.Destroy();
 		});

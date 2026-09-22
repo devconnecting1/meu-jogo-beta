@@ -1,6 +1,16 @@
 import { GameContext } from "shared/game/context";
 import { TEXT, THEME, space } from "./theme";
-import { BUTTON_SIZE, Button, ButtonVariant, Dialog, ToastKind, autoFocus, makeLabel, showToast } from "./widgets";
+import {
+	BUTTON_SIZE,
+	Button,
+	ButtonVariant,
+	Dialog,
+	ToastKind,
+	autoFocus,
+	cardHeaderHeight,
+	makeLabel,
+	showToast,
+} from "./widgets";
 
 export type { ToastKind } from "./widgets";
 
@@ -41,9 +51,8 @@ function bodyLines(body: string): number {
 export function popup(ctx: GameContext, title: string, body: string, buttons: Array<PopupButtonSpec>): Frame {
 	const bodyH = math.ceil(bodyLines(body) * TEXT.base * 1.45);
 	const footerH = BUTTON_SIZE.default.h;
-	// header (title) + body + footer, with the card's padding
-	const headerH = space(6) + math.ceil(TEXT.xl2 * 1.3) + space(4);
-	const h = headerH + bodyH + space(6) + footerH + space(6);
+	// title strip + body + footer, with the card's padding
+	const h = cardHeaderHeight() + bodyH + space(6) + footerH + space(6);
 	const dialog = Dialog(ctx.uiLayer, "PopupOverlay", { w: DIALOG_W, h, title, zIndex: 300 });
 	const card = dialog.card;
 	const pad = space(6);

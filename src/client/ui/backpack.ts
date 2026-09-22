@@ -7,8 +7,10 @@
  *
  * Levels: 2 = list of the current tab, 3 = item detail, 4 = recipe detail, 5 = skills.
  *
- * Look: a Card window with a Sidebar of categories on the left and the current list / detail on the right.
- * Every colour is a theme token (THEME / GAME); hover, pressed and disabled states come from the kit.
+ * Look: a panel window with the kit's TITLE STRIP across the top (skill points at its left, key cap / back /
+ * close at its right), a Sidebar of categories on the left and the current list / detail on the right. Lists,
+ * rows, glyphs, chips and pips are recessed "wells"; the one main action of a page is the raised `primary`
+ * plate. Every colour is a theme token (THEME / SURFACE / GAME); hover, pressed and disabled come from the kit.
  */
 import { GameContext } from "shared/game/context";
 import { WEAPONS, WeaponDef } from "shared/data/weapons";
@@ -21,7 +23,7 @@ import { AmmoPool, ItemKind, WeaponKind } from "shared/data/kinds";
 import { costumeForEquip } from "shared/data/shop";
 import { PlayerSaveData, equipSlotOf, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
 import { toast } from "./popup";
-import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, hex, space } from "./theme";
+import { GAME, SURFACE, TEXT, THEME, TRANSPARENCY, hex, space } from "./theme";
 import {
 	BUTTON_SIZE,
 	Badge,
@@ -29,6 +31,7 @@ import {
 	ButtonVariant,
 	Card,
 	CardDescription,
+	CardHeader,
 	CardTitle,
 	ListRowButton,
 	ScrollList,
@@ -36,6 +39,7 @@ import {
 	Sidebar,
 	SidebarHandle,
 	badgeWidth,
+	cardHeaderHeight,
 	clearChildren,
 	fmtInt,
 	fmtNum,
@@ -45,6 +49,7 @@ import {
 	makeListRow,
 	makeScreen,
 	makeScrollList,
+	makeSurface,
 	setBadge,
 	setButtonEnabled,
 	tween,
@@ -72,11 +77,26 @@ const PANEL_W = 1000;
 const PANEL_H = 570;
 const PAD = space(5);
 const ICON_W = BUTTON_SIZE.icon.h;
-const HEADER_Y = space(3);
-const HEADER_H = ICON_W;
-const TITLE_W = 124;
+/**
+ * Header = the kit's title strip (CardHeader): inset space(2) from the panel edge and
+ * ceil(TEXT.xl2 * 1.3) + space(3) tall. The strip draws the centred title; the skill points badge and the
+ * key cap / back / close buttons are laid over it (HEADER_Z), inside the width HEADER_ACTION reserves.
+ */
+const STRIP_INSET = space(2);
+const HEADER_Y = STRIP_INSET;
+const HEADER_H = math.ceil(TEXT.xl2 * 1.3) + space(3);
+/** icon buttons hang space(1) below the strip's top edge, like the kit's Dialog close button */
+const HEADER_BTN_Y = HEADER_Y + space(1);
+/** the badge and the buttons sit above the strip and its title */
+const HEADER_Z = 4;
 const SP_W = 72;
-const BODY_Y = HEADER_Y + HEADER_H + space(4);
+const BADGE_H = 24;
+/** the keyboard prompt of the reference art: a key cap next to the buttons it drives */
+const KEY_HINT = "B";
+const KEY_W = badgeWidth(KEY_HINT, TEXT.sm, BADGE_H);
+/** width the strip's title gives up on each side so it never runs into the badge or the buttons */
+const HEADER_ACTION = space(1) + ICON_W + space(2) + ICON_W + space(2) + KEY_W + space(2);
+const BODY_Y = cardHeaderHeight(TEXT.xl2);
 const BODY_H = PANEL_H - PAD - BODY_Y;
 // category sidebar on the left, content on the right
 const NAV_W = 180;
@@ -89,7 +109,6 @@ const ROW_H = 56;
 const ROW_PAD = space(4);
 const GLYPH = 36;
 const ROW_TEXT_X = ROW_PAD + GLYPH + space(3);
-const BADGE_H = 24;
 const COUNT_W = 96;
 const STATION_W = 92;
 const STATUS_W = 72;
@@ -99,7 +118,8 @@ const PIP_W = 20;
 const PIP_H = 8;
 const PIP_GAP = 6;
 const MAX_PIPS = SKILLS.reduce((m, sk) => math.max(m, sk.maxLevel), 1);
-const STRIP_H = 36;
+/** the status line above the craft / skills lists (a well, not the panel's title strip) */
+const NOTICE_H = 36;
 const LIST_GAP = space(2);
 // detail pages
 const CHIP_W = 142;
@@ -231,16 +251,22 @@ function rowSubtitle(row: GuiObject, x: number, text: string, w: number, rich = 
 	});
 }
 
-/** square tile with the item's initial: border and letter in the item kind's tone (muted: border + muted text) */
+/**
+ * Square well with the item's initial, outlined in the item kind's tone (muted: the plain well outline).
+ * Like the kit's accent Badge, the tone rides the BORDER and the letter stays `foreground` (~18.7:1 on the
+ * well fill): a GAME.* tone as text there would not clear 4.5:1 (success ~4.5:1, material ~3.4:1).
+ */
 function makeGlyph(parent: Instance, x: number, y: number, name: string, tone: Color3, muted: boolean): Frame {
-	const f = makeFrame(parent, "Glyph", x, y, GLYPH, GLYPH, THEME.card, {
-		radius: RADIUS.lg,
-		stroke: muted ? THEME.border : tone,
+	const f = makeSurface(parent, "Glyph", x, y, GLYPH, GLYPH, "well", {
+		fill: SURFACE.well,
+		border: muted ? SURFACE.line : tone,
 		zIndex: 2,
 	});
-	makeLabel(f, "Letter", name.sub(1, 1).upper(), 0, 0, GLYPH, GLYPH, TEXT.lg, muted ? THEME.mutedForeground : tone, {
+	const letter = muted ? THEME.mutedForeground : THEME.foreground;
+	makeLabel(f, "Letter", name.sub(1, 1).upper(), 0, 0, GLYPH, GLYPH, TEXT.lg, letter, {
 		weight: Enum.FontWeight.Bold,
 		zIndex: 3,
+		outline: true,
 	});
 	return f;
 }
@@ -313,57 +339,53 @@ export class Backpack {
 		this.root = screen.root;
 		const panel = Card(screen.body, "Panel", { x: 60, y: 30, w: PANEL_W, h: PANEL_H });
 
-		// header: title + skill points, key hint, back / close
-		makeLabel(panel, "Title", "Backpack", PAD, HEADER_Y, TITLE_W, HEADER_H, TEXT.xl2, THEME.foreground, {
-			font: "title",
-			align: "left",
-		});
+		// header: the title strip, with the skill points at its left and the key cap / back / close at its right
+		const contentY = CardHeader(panel, "Backpack", undefined, { action: HEADER_ACTION });
 		this.spBadge = Badge(panel, "SkillPoints", "", {
-			x: PAD + TITLE_W + space(3),
+			x: STRIP_INSET + space(2),
 			y: HEADER_Y + (HEADER_H - BADGE_H) / 2,
 			w: SP_W,
 			h: BADGE_H,
 			textSize: TEXT.sm,
 			color: GAME.xp,
+			zIndex: HEADER_Z,
 		});
-		const closeX = PANEL_W - PAD - ICON_W;
+		const closeX = PANEL_W - STRIP_INSET - space(1) - ICON_W;
 		const navX = closeX - space(2) - ICON_W;
 		if (UserInputService.KeyboardEnabled) {
-			const hintW = 220;
-			makeLabel(
-				panel,
-				"KeyHint",
-				"Press B to close",
-				navX - space(3) - hintW,
-				HEADER_Y,
-				hintW,
-				HEADER_H,
-				TEXT.sm,
-				THEME.mutedForeground,
-				{ font: "caption", align: "right" },
-			);
+			// a raised key cap (Badge "default"), not a caption: muted text would not clear 4.5:1 on the strip
+			Badge(panel, "KeyHint", KEY_HINT, {
+				x: navX - space(2) - KEY_W,
+				y: HEADER_Y + (HEADER_H - BADGE_H) / 2,
+				w: KEY_W,
+				h: BADGE_H,
+				textSize: TEXT.sm,
+				zIndex: HEADER_Z,
+			});
 		}
 		this.backBtn = Button(panel, "Nav", "<", {
 			x: navX,
-			y: HEADER_Y,
+			y: HEADER_BTN_Y,
 			w: ICON_W,
 			size: "icon",
 			variant: "secondary",
+			zIndex: HEADER_Z,
 			onClick: (): void => this.goBack(),
 		});
 		Button(panel, "Close", "X", {
 			x: closeX,
-			y: HEADER_Y,
+			y: HEADER_BTN_Y,
 			w: ICON_W,
 			size: "icon",
-			variant: "secondary",
+			variant: "destructive",
+			zIndex: HEADER_Z,
 			onClick: (): void => this.close(),
 		});
 
-		// categories: sidebar on the left
+		// categories: sidebar on the left (contentY is BODY_Y: the strip's height comes from the kit)
 		const nav = Sidebar(panel, "Categories", {
 			x: PAD,
-			y: BODY_Y,
+			y: contentY,
 			w: NAV_W,
 			h: BODY_H,
 			items: CAT_NAMES,
@@ -373,7 +395,7 @@ export class Backpack {
 			onChange: (index: number): void => this.selectCat(index),
 		});
 		this.nav = nav;
-		this.content = makeFrame(panel, "Content", CONTENT_X, BODY_Y, CONTENT_W, CONTENT_H, THEME.card, {
+		this.content = makeFrame(panel, "Content", CONTENT_X, contentY, CONTENT_W, CONTENT_H, THEME.card, {
 			transparency: 1,
 		});
 
@@ -501,20 +523,25 @@ export class Backpack {
 		return list;
 	}
 
-	/** thin status bar above the craft / skills lists: coloured dot + one line of text */
-	private makeStrip(content: Frame, text: string, dot: Color3): void {
-		const strip = Card(content, "Strip", { x: 0, y: 0, w: CONTENT_W, h: STRIP_H, variant: "muted" });
+	/** thin status line above the craft / skills lists: a well with a coloured pixel chip + one line of text */
+	private makeNotice(content: Frame, text: string, dot: Color3): void {
+		const notice = Card(content, "Notice", { x: 0, y: 0, w: CONTENT_W, h: NOTICE_H, variant: "muted" });
 		const d = space(2);
-		makeFrame(strip, "Dot", space(3.5), (STRIP_H - d) / 2, d, d, dot, { radius: RADIUS.full, zIndex: 2 });
+		makeSurface(notice, "Dot", space(3.5), (NOTICE_H - d) / 2, d, d, "well", {
+			fill: dot,
+			border: dot,
+			zIndex: 2,
+		});
 		const textX = space(3.5) + d + space(2.5);
+		// muted-foreground (#8c8c7d) on the well fill (#10100e) is ~5.6:1
 		makeLabel(
-			strip,
+			notice,
 			"Text",
 			text,
 			textX,
 			0,
 			CONTENT_W - textX - space(3),
-			STRIP_H,
+			NOTICE_H,
 			TEXT.sm,
 			THEME.mutedForeground,
 			{ align: "left", zIndex: 2 },
@@ -666,11 +693,12 @@ export class Backpack {
 		CardDescription(card, body, { y: bodyY, h: bodyH, size: TEXT.base, align: "center" });
 		if (craftShortcut) {
 			const buttonW = 180;
+			// navigation, not the "one main action" of a page: a raised `secondary` plate, not the green one
 			Button(card, "ToCraft", "Open Craft", {
 				x: (w - buttonW) / 2,
 				y: h - space(7) - buttonH,
 				w: buttonW,
-				variant: "outline",
+				variant: "secondary",
 				onClick: (): void => this.selectCat(CAT_CRAFT),
 			});
 		}
@@ -733,7 +761,12 @@ export class Backpack {
 		});
 	}
 
-	/** the page's action button (centred at the bottom); disabled ones say why in their text */
+	/**
+	 * The page's action button (centred at the bottom). Hierarchy: the real action of the page (Equip / Use /
+	 * Craft) is "default", the raised `primary` (green) plate of the reference art; neutral actions (Unequip,
+	 * Open Craft) are "secondary"; anything impossible is disabled, which the kit draws as a well with muted
+	 * text (~5.6:1) and whose label says why.
+	 */
 	private detailAction(
 		content: Frame,
 		text: string,
@@ -792,9 +825,9 @@ export class Backpack {
 		this.detailBody(content, ownedText, owned ? THEME.foreground : THEME.mutedForeground, help.join(" "));
 
 		if (!owned) {
-			this.detailAction(content, "Not owned", "default", false, (): void => {});
+			this.detailAction(content, "Not owned", "secondary", false, (): void => {});
 		} else if (equipped) {
-			this.detailAction(content, "Equipped", "outline", false, (): void => {});
+			this.detailAction(content, "Equipped", "secondary", false, (): void => {});
 		} else {
 			this.detailAction(content, "Equip", "default", true, (): void => this.equipWeapon(id));
 		}
@@ -837,9 +870,9 @@ export class Backpack {
 		this.detailBody(content, ownedText, owned ? THEME.foreground : THEME.mutedForeground, help.join(" "));
 
 		if (!owned) {
-			this.detailAction(content, "Not owned", "default", false, (): void => {});
+			this.detailAction(content, "Not owned", "secondary", false, (): void => {});
 		} else if (equipped) {
-			this.detailAction(content, "Unequip", "outline", this.onUnequipItem !== undefined, (): void =>
+			this.detailAction(content, "Unequip", "secondary", this.onUnequipItem !== undefined, (): void =>
 				this.unequipItem(id, slot),
 			);
 		} else {
@@ -913,7 +946,7 @@ export class Backpack {
 			count > 0 ? THEME.foreground : THEME.mutedForeground,
 			help,
 		);
-		this.detailAction(content, "Open Craft", "outline", true, (): void => this.selectCat(CAT_CRAFT));
+		this.detailAction(content, "Open Craft", "secondary", true, (): void => this.selectCat(CAT_CRAFT));
 	}
 
 	// ------------------------------------------------------------ actions (rules live in main.client)
@@ -977,17 +1010,17 @@ export class Backpack {
 	private buildCraftList(content: Frame): void {
 		const fire = this.nearbyFire ? " A lit fire is nearby: smelting works." : " Smelting needs a lit fire.";
 		if (this.nearbyPro) {
-			this.makeStrip(content, `Pro craft desk nearby: every desk recipe works here.${fire}`, GAME.success);
+			this.makeNotice(content, `Pro craft desk nearby: every desk recipe works here.${fire}`, GAME.success);
 		} else if (this.nearbyDesk) {
-			this.makeStrip(content, `Craft desk nearby. Pro recipes need a pro desk.${fire}`, GAME.warning);
+			this.makeNotice(content, `Craft desk nearby. Pro recipes need a pro desk.${fire}`, GAME.warning);
 		} else {
-			this.makeStrip(
+			this.makeNotice(
 				content,
 				`No craft desk nearby: hand recipes only.${fire}`,
 				this.nearbyFire ? GAME.warning : THEME.mutedForeground,
 			);
 		}
-		const list = this.newList(content, STRIP_H + LIST_GAP, CONTENT_H - STRIP_H - LIST_GAP);
+		const list = this.newList(content, NOTICE_H + LIST_GAP, CONTENT_H - NOTICE_H - LIST_GAP);
 		// craftable now first, then what this station allows, then recipes that need another desk
 		const ready: Array<CraftRecipe> = [];
 		const missing: Array<CraftRecipe> = [];
@@ -1135,7 +1168,8 @@ export class Backpack {
 			w: cardW,
 			h: 136,
 			variant: "muted",
-			border: avail ? THEME.border : THEME.destructive,
+			// the plain well outline while the station is fine, `destructive` when it is what blocks the craft
+			border: avail ? SURFACE.line : THEME.destructive,
 		});
 		makeLabel(card, "Caption", "STATION", space(4), space(3.5), inner, 16, TEXT.xs, THEME.mutedForeground, {
 			weight: Enum.FontWeight.Medium,
@@ -1193,11 +1227,11 @@ export class Backpack {
 		const sp = save.skillPoint;
 		if (sp > 0) {
 			const text = `${sp} skill point${sp === 1 ? "" : "s"} to spend. Press + to learn a level.`;
-			this.makeStrip(content, text, GAME.xp);
+			this.makeNotice(content, text, GAME.xp);
 		} else {
-			this.makeStrip(content, "No skill points to spend. Level up to earn more.", THEME.mutedForeground);
+			this.makeNotice(content, "No skill points to spend. Level up to earn more.", THEME.mutedForeground);
 		}
-		const list = this.newList(content, STRIP_H + LIST_GAP, CONTENT_H - STRIP_H - LIST_GAP);
+		const list = this.newList(content, NOTICE_H + LIST_GAP, CONTENT_H - NOTICE_H - LIST_GAP);
 		for (let i = 0; i < SKILLS.size(); i++) {
 			this.skillRow(list, i, SKILLS[i]);
 		}
@@ -1215,17 +1249,14 @@ export class Backpack {
 		const textW = pipsX - space(3) - ROW_PAD;
 		rowTitle(row, ROW_PAD, sk.name, textW, lvl > 0 ? THEME.foreground : THEME.mutedForeground);
 		rowSubtitle(row, ROW_PAD, sk.detail, textW);
+		// one recessed slot per level: learned ones are filled with the xp accent, the rest stay empty wells
 		for (let p = 0; p < sk.maxLevel; p++) {
-			makeFrame(
-				row,
-				`Pip${p}`,
-				pipsX + p * (PIP_W + PIP_GAP),
-				(ROW_H - PIP_H) / 2,
-				PIP_W,
-				PIP_H,
-				p < lvl ? GAME.xp : THEME.secondary,
-				{ radius: RADIUS.lg, zIndex: 2 },
-			);
+			const learned = p < lvl;
+			makeSurface(row, `Pip${p}`, pipsX + p * (PIP_W + PIP_GAP), (ROW_H - PIP_H) / 2, PIP_W, PIP_H, "well", {
+				fill: learned ? GAME.xp : SURFACE.well,
+				border: learned ? GAME.xp : SURFACE.line,
+				zIndex: 2,
+			});
 		}
 		makeLabel(
 			row,
@@ -1253,12 +1284,13 @@ export class Backpack {
 			});
 			return;
 		}
+		// a raised plate on the row's well: what you press stands out; without points the kit sinks it and mutes it
 		Button(row, "Plus", "+", {
 			x: plusX,
 			y: (ROW_H - BUTTON_SIZE.sm.h) / 2,
 			w: PLUS_W,
 			size: "sm",
-			variant: "outline",
+			variant: "secondary",
 			disabled: !canBuy,
 			textSize: TEXT.lg,
 			zIndex: 3,

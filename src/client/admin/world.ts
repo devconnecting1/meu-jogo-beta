@@ -580,7 +580,7 @@ export class LocalAdminWorld implements AdminWorld {
 		n += refs.puddles?.size() ?? 0;
 		refs.puddles?.clear();
 		refs.explosions?.clear();
-		refs.particles.clear();
+		this.loop.clearEffects();
 		return { ok: true, message: `Cleared blood, acid and ${n} leftovers` };
 	}
 

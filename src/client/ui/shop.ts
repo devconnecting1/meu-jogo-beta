@@ -249,7 +249,7 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 			[tr("Welcome gift"), ECONOMY.STARTING_COINS],
 		];
 		const pad = space(6);
-		const headerH = cardHeaderHeight(pad);
+		const headerH = cardHeaderHeight();
 		const listH = rows.size() * EARN_ROW_H + (rows.size() - 1) * EARN_ROW_GAP;
 		const cardH = headerH + listH + pad;
 		const card = Card(content, "Earn", { x: 0, y: 0, w: CONTENT_W, h: cardH, pad });

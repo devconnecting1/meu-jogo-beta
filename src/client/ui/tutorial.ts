@@ -1,6 +1,17 @@
 import { GameContext } from "shared/game/context";
-import { RADIUS, TEXT, THEME, space } from "./theme";
-import { BUTTON_SIZE, Button, Dialog, autoFocus, makeFrame, makeLabel, setButtonEnabled } from "./widgets";
+import { SURFACE, TEXT, THEME, space } from "./theme";
+import {
+	BUTTON_SIZE,
+	Button,
+	CARD_STRIP_INSET,
+	Dialog,
+	autoFocus,
+	cardStripHeight,
+	makeLabel,
+	makeSurface,
+	setButtonEnabled,
+	setSurface,
+} from "./widgets";
 
 interface TutorialStep {
 	title: string;
@@ -32,13 +43,17 @@ const STEPS: Array<TutorialStep> = [
 
 const PANEL_W = 620;
 const DOT_W = 20;
-const DOT_H = 6;
+const DOT_H = 10;
 const DOT_GAP = space(2);
 
 // the footer (Skip / Back / Next) must sit right below the actual body text, not in a box sized for the
 // longest step: it used to leave a large empty gap for every shorter step (fixed PANEL_H, fixed footer y).
-/** y where the body text starts (pad(6) + dots row + counter + title, unchanged from the static layout above) */
-const BODY_Y = space(6) + 100;
+/** the step title rides on the panel's title strip, with the dots and the counter under it */
+const STRIP_H = cardStripHeight();
+const DOTS_Y = CARD_STRIP_INSET + STRIP_H + space(3);
+const COUNTER_Y = DOTS_Y + DOT_H + space(2);
+/** y where the body text starts (title strip + dots row + counter) */
+const BODY_Y = COUNTER_Y + 18 + space(4);
 /** wrapped-line height estimate at TEXT.base, same ratio the popup dialog (popup.ts) uses for its body */
 const BODY_LINE_H = TEXT.base * 1.45;
 /** ~chars per wrapped line at PANEL_W's inner width (pad(6) each side), scaled from popup.ts's own estimate */
@@ -76,22 +91,29 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	const pad = space(6);
 	const innerW = PANEL_W - pad * 2;
 
+	// title strip of the reference art: the step title sits on it, centred
+	const stripW = PANEL_W - CARD_STRIP_INSET * 2;
+	const strip = makeSurface(panel, "TitleStrip", CARD_STRIP_INSET, CARD_STRIP_INSET, stripW, STRIP_H, "strip", {
+		zIndex: panel.ZIndex + 1,
+	});
+	const titleLabel = makeLabel(strip, "StepTitle", "", 0, 0, stripW, STRIP_H, TEXT.xl2, THEME.foreground, {
+		font: "title",
+		zIndex: strip.ZIndex + 1,
+	});
 	const dotsWidth = STEPS.size() * DOT_W + (STEPS.size() - 1) * DOT_GAP;
 	const dotsStartX = (PANEL_W - dotsWidth) / 2;
 	const dots: Array<Frame> = [];
 	for (let i = 0; i < STEPS.size(); i++) {
+		// step pips: the current one is a raised plate, the others stay sunk
 		dots.push(
-			makeFrame(panel, `Dot${i}`, dotsStartX + i * (DOT_W + DOT_GAP), pad, DOT_W, DOT_H, THEME.secondary, {
-				radius: RADIUS.full,
+			makeSurface(panel, `Dot${i}`, dotsStartX + i * (DOT_W + DOT_GAP), DOTS_Y, DOT_W, DOT_H, "well", {
+				fill: THEME.secondary,
+				border: SURFACE.line,
 			}),
 		);
 	}
-	const counter = makeLabel(panel, "StepCount", "", pad, pad + 20, innerW, 18, TEXT.xs, THEME.mutedForeground, {
+	const counter = makeLabel(panel, "StepCount", "", pad, COUNTER_Y, innerW, 18, TEXT.xs, THEME.mutedForeground, {
 		font: "numeric",
-	});
-	const titleLabel = makeLabel(panel, "StepTitle", "", pad, pad + 48, innerW, 40, TEXT.xl2, THEME.popoverForeground, {
-		font: "heading",
-		align: "left",
 	});
 	const bodyLabel = makeLabel(
 		panel,
@@ -133,7 +155,8 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		bodyLabel.Text = step.body;
 		counter.Text = `${index + 1} / ${STEPS.size()}`;
 		for (let i = 0; i < dots.size(); i++) {
-			dots[i].BackgroundColor3 = i === index ? THEME.primary : THEME.secondary;
+			if (i === index) setSurface(dots[i], "raised", { fill: THEME.primary });
+			else setSurface(dots[i], "well", { fill: THEME.secondary, border: SURFACE.line });
 		}
 		// the footer follows this step's actual body height instead of a fixed y, so short steps never leave
 		// a gap between the text and the buttons

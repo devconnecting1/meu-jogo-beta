@@ -7,7 +7,7 @@ import { EQUIPS } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
 import { onWalletChanged } from "../systems/saveClient";
 import { popup } from "./popup";
-import { GAME, RADIUS, TEXT, THEME, fontOf, hex, roleFont, space } from "./theme";
+import { GAME, TEXT, THEME, fontOf, hex, roleFont, space } from "./theme";
 import {
 	Button,
 	Card,
@@ -19,11 +19,11 @@ import {
 	buttonForeground,
 	fmtInt,
 	makeCoinPill,
-	makeFrame,
 	makeLabel,
 	makeListRow,
 	makeScreen,
 	makeScrollList,
+	makeSurface,
 	nl,
 	uiScale,
 } from "./widgets";
@@ -108,13 +108,17 @@ function showAchievements(ctx: GameContext): void {
 		const cur = math.min(ctx.save.achievements[a.id] ?? 0, a.max);
 		const complete = cur >= a.max;
 		const row = makeListRow(list, `Ach${a.id}`, i, ACH_ROW_H);
-		const badge = makeFrame(row, "Badge", space(4), 16, 28, 28, complete ? GAME.success : THEME.muted, {
-			radius: RADIUS.full,
-			stroke: complete ? GAME.success : THEME.border,
+		// pixel chip: filled in `success` when the achievement is done, an empty socket otherwise
+		const badge = makeSurface(row, "Badge", space(4), 16, 28, 28, "well", {
+			fill: complete ? GAME.success : THEME.background,
+			border: complete ? GAME.success : THEME.border,
+			zIndex: 2,
 		});
 		if (complete) {
 			makeLabel(badge, "Check", "✓", 0, 0, 28, 28, TEXT.base, THEME.background, {
 				weight: Enum.FontWeight.Bold,
+				zIndex: 3,
+				outline: false,
 			});
 		}
 		const textX = space(4) + 28 + space(3);
@@ -339,8 +343,9 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		},
 	});
 	const playFg = buttonForeground("default");
+	// the one green action of the screen: big contoured title over the relief face
 	makeLabel(play, "PlayTitle", playTitle.upper(), 0, 30, RIGHT_W, 64, TEXT.xl5, playFg, { font: "display" });
-	makeLabel(play, "PlaySub", playSub, 0, 100, RIGHT_W, 28, TEXT.lg, playFg, { font: "label" });
+	makeLabel(play, "PlaySub", playSub, 0, 100, RIGHT_W, 28, TEXT.lg, playFg, { font: "label", outline: true });
 
 	let achDone = 0;
 	let achTotal = 0;
@@ -368,9 +373,13 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		const b = Button(body, `Menu${i}`, "", { x, y, w: menuW, h: menuH, variant: "secondary", onClick: fn });
 		makeLabel(b, "Title", title, space(3), sub === "" ? 44 : 34, menuW - space(6), 30, TEXT.lg, tileFg, {
 			font: "label",
+			outline: true,
 		});
 		if (sub !== "") {
-			makeLabel(b, "Sub", sub, space(3), 66, menuW - space(6), 22, TEXT.sm, tileFg, { font: "body" });
+			makeLabel(b, "Sub", sub, space(3), 66, menuW - space(6), 22, TEXT.sm, tileFg, {
+				font: "body",
+				outline: true,
+			});
 		}
 	}
 

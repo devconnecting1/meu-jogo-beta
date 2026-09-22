@@ -8,15 +8,24 @@
  * - GAME: game meanings of the chart palette (HP, food, XP, heal, boss/rare, materials, coins)
  * - spacing (space(n) = n x 4), radius (4), borders, typography roles (TYPE) and fonts
  *
- * Colour rule: every colour written to a GuiObject / UIStroke is EXACTLY one of these tokens (no Lerp, no tints,
- * no literals). Transparency is only used where the UI sits over the game world (TRANSPARENCY, documented below)
- * and for enter/exit fades.
+ * Colour rule: every colour written to a GuiObject / UIStroke / ImageLabel is EXACTLY one of these tokens (no Lerp,
+ * no tints, no literals). Relief (highlights and shadows) comes from GREYSCALE + ALPHA skin textures tinted with
+ * ImageColor3 = a token (see skin.ts), never from mixed colours. Transparency is only used where the UI sits over
+ * the game world (TRANSPARENCY, documented below) and for enter/exit fades.
+ *
+ * CHANGE (Pixel Quest relief skin): the author moved the game's "primary" role from the near-white `foreground`
+ * to chart-1 (#2E8B57, green), with `foreground` (#FFFFE3) as its text colour. The one main action of a screen
+ * (Play / Continue, Equip, Use, Craft, Buy, Confirm) is now the green relief button of the reference art;
+ * `secondary` (#606055) keeps every other action and the active tab, `destructive` (#EF4444) the dangerous ones
+ * and Close. The neutral sidebar tokens became the surface palette (SURFACE below): panels, frames, strips and
+ * the recessed "wells" that hold lists and bars.
  *
  * Role map (author's spec):
  * - background / foreground: full-screen pages (lobby, shop, settings, credits) and default text
  * - card (+ border, radius): panels and windows (survivor card, backpack, shop cards, pause, game over, HUD)
  * - popover (+ border): dialogs, tutorial, toasts, tooltips, nameplate, round banners
- * - primary: the ONE main action of a screen; secondary: other actions (menu tiles, Back, Close) and the active tab
+ * - primary (chart-1 green): the ONE main action of a screen; secondary: other actions (menu tiles, Back) and the
+ *   active tab; destructive: dangerous actions and the Close (X) buttons
  * - accent: states only (hover / pressed of outline, ghost and inactive tabs; the selected list row);
  *   text on accent is SemiBold / Bold and >= 14 (contrast ~3.4:1)
  * - muted-foreground: secondary text (captions, counts, descriptions) and disabled controls
@@ -49,8 +58,10 @@ export const THEME = {
 	cardForeground: TOKENS.cardForeground,
 	popover: TOKENS.popover,
 	popoverForeground: TOKENS.popoverForeground,
-	primary: TOKENS.primary,
-	primaryForeground: TOKENS.primaryForeground,
+	/** primary = chart-1 (#2E8B57): the main action of a screen, drawn as a green relief button */
+	primary: TOKENS.chart1,
+	/** text on `primary`: foreground (#FFFFE3) with the dark contour of the skin (see skin.ts) */
+	primaryForeground: TOKENS.foreground,
 	secondary: TOKENS.secondary,
 	secondaryForeground: TOKENS.secondaryForeground,
 	muted: TOKENS.muted,
@@ -64,8 +75,23 @@ export const THEME = {
 	ring: TOKENS.ring,
 };
 
-/** navigation rails: item = foreground, selected = primary / primaryForeground, hover = accent */
+/** navigation rails: item = foreground, hover = sidebar-accent, selected = the raised `secondary` relief */
 export const SIDEBAR = SIDEBAR_TOKENS;
+
+/**
+ * Surface palette of the relief skin (the neutral sidebar tokens). Every window is a `panel` of `frame`d
+ * plates; what holds content (lists, rows, tracks, inactive tabs) is a `well` sunk into it, outlined in `line`.
+ */
+export const SURFACE = {
+	/** panel interior (#1A1A1A) */
+	panel: SIDEBAR_TOKENS.background,
+	/** thick panel frame and title strips (#303030); also the hover fill of recessed controls */
+	frame: SIDEBAR_TOKENS.accent,
+	/** outline of a well, of an inactive tab and of a list row (#404040) */
+	line: SIDEBAR_TOKENS.border,
+	/** the recessed fill itself: the darkest token (#10100E) */
+	well: TOKENS.background,
+};
 
 /**
  * Transparency presets (Roblox transparency = 1 - CSS alpha). Used ONLY where the UI sits over the game world,

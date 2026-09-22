@@ -6,13 +6,16 @@ import {
 	Badge,
 	Button,
 	ButtonVariant,
+	CARD_STRIP_INSET,
 	Card,
+	CardHeader,
 	CoinIcon,
-	Separator,
 	autoFocus,
+	cardStripHeight,
 	fmtInt,
 	makeLabel,
 	makeScreen,
+	makeSurface,
 	nl,
 } from "./widgets";
 
@@ -32,9 +35,11 @@ export interface PauseInfo {
 }
 
 const GAME_OVER_W = 460;
-const GAME_OVER_H = 420;
+const GAME_OVER_H = 440;
 const PAUSE_W = 360;
-const PAUSE_H = 450;
+const PAUSE_H = 470;
+/** the "P" key cap on the pause strip */
+const KEY_BADGE = 30;
 
 /** kind 0 = pause menu, kind 2 = game over; both are cards over a scrim */
 export function showPause(ctx: GameContext, kind: number, handlers: PauseHandlers, info?: PauseInfo): () => void {
@@ -51,30 +56,34 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		const w = GAME_OVER_W;
 		const innerW = w - pad * 2;
 		const panel = Card(body, "Panel", { x: (1120 - w) / 2, y: (630 - GAME_OVER_H) / 2, w, h: GAME_OVER_H });
-		makeLabel(panel, "Title", tr("Game over"), pad, pad, innerW, 44, TEXT.xl3, THEME.destructive, {
-			font: "title",
-		});
-		Separator(panel, "Rule", { x: pad, y: pad + 52, length: innerW });
+		// title strip of the reference art, in the destructive tone (the run is over)
+		const top = CardHeader(panel, tr("Game over"), undefined, { color: THEME.destructive });
 		const save = ctx.save;
 		const stats: Array<[string, string]> = [
 			[tr("Survival days"), `${save.day}`],
 			[tr("Best day"), `${save.bestDay}`],
 			[tr("Level"), `${save.level}`],
 		];
-		const statsY = pad + 64;
+		// the numbers of the run sit in a well, like the reference's stat panes
+		const statsH = stats.size() * 30 + space(4);
+		const statsWell = makeSurface(panel, "Stats", pad, top, innerW, statsH, "well");
 		for (let i = 0; i < stats.size(); i++) {
 			const [k, v] = stats[i];
-			const y = statsY + i * 30;
-			makeLabel(panel, `Stat${i}K`, k, pad, y, 260, 26, TEXT.base, THEME.mutedForeground, { align: "left" });
-			makeLabel(panel, `Stat${i}V`, v, w - pad - 140, y, 140, 26, TEXT.base, THEME.foreground, {
+			const y = space(2) + i * 30;
+			makeLabel(statsWell, `Stat${i}K`, k, space(3), y, 240, 26, TEXT.base, THEME.mutedForeground, {
+				align: "left",
+				zIndex: 2,
+			});
+			makeLabel(statsWell, `Stat${i}V`, v, innerW - space(3) - 140, y, 140, 26, TEXT.base, THEME.foreground, {
 				font: "numeric",
 				align: "right",
+				zIndex: 2,
 			});
 		}
 		// rebirth: coin price vs wallet
 		const price = rebirthPrice(save.deathCount);
 		const canAfford = save.money >= price;
-		const walletY = statsY + 3 * 30 + space(2);
+		const walletY = top + statsH + space(3);
 		CoinIcon(panel, "Coin", pad, walletY + 4, 18);
 		makeLabel(
 			panel,
@@ -134,11 +143,17 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		const w = PAUSE_W;
 		const innerW = w - pad * 2;
 		const panel = Card(body, "Panel", { x: (1120 - w) / 2, y: (630 - PAUSE_H) / 2, w, h: PAUSE_H });
-		makeLabel(panel, "Title", tr("Paused"), pad, pad, innerW - 40, 40, TEXT.xl3, THEME.cardForeground, {
-			font: "title",
-			align: "left",
+		const stripH = cardStripHeight();
+		const top = CardHeader(panel, tr("Paused"), undefined, { action: KEY_BADGE + space(2) });
+		// the "P" key cap rides on the title strip
+		Badge(panel, "KeyHint", "P", {
+			x: w - CARD_STRIP_INSET - space(2) - KEY_BADGE,
+			y: CARD_STRIP_INSET + (stripH - KEY_BADGE) / 2,
+			w: KEY_BADGE,
+			h: KEY_BADGE,
+			textSize: TEXT.sm,
+			zIndex: 4,
 		});
-		Badge(panel, "KeyHint", "P", { x: w - pad - 28, y: pad + 9, w: 28, variant: "outline" });
 		const items: Array<{ key: string; fn: (() => void) | undefined; variant: ButtonVariant }> = [
 			{ key: "Resume", fn: handlers.onResume, variant: "default" },
 			{ key: "Save", fn: handlers.onSave, variant: "secondary" },
@@ -152,7 +167,7 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 			const fn = item.fn;
 			const b = Button(panel, `Btn${i}`, tr(item.key), {
 				x: pad,
-				y: pad + 56 + i * (48 + space(3)),
+				y: top + i * (48 + space(3)),
 				w: innerW,
 				h: 48,
 				variant: item.variant,

@@ -1,148 +1,83 @@
 /*
  * Project Z UI kit: the shadcn/ui vocabulary (Button, Card, Badge, Progress, Tabs, Separator, Dialog, Slider,
- * Toast) rebuilt on Roblox GuiObjects, styled only through theme.ts.
+ * Toast) rebuilt on Roblox GuiObjects and dressed in the author's "Pixel Quest relief" skin (skin.ts).
+ *
+ * Look (from the reference art):
+ * - windows are PANELS: flat interior, thick frame, bitten pixel corners, a TITLE STRIP at the top
+ * - what holds content (lists, rows, tracks, inactive tabs, chips) is a WELL sunk into the panel
+ * - what you press is RAISED: flat face, light band on top, dark base (lip) under it; pressing drops the
+ *   face 2 skin pixels and eats the lip
+ * - titles, buttons and numbers carry a dark contour so they stay readable on any face
  *
  * Layout: every widget is placed in "design units" relative to its parent (the root screen is 1120 x 630);
  * positions/sizes are converted to Scale, so the layout follows the screen. Parents created here carry
  * DesignW/DesignH attributes so children can be placed in the parent's own design space.
  *
  * Rules:
- * - colours, fonts, radius and spacing come from theme.ts (never literals in the screens)
- * - flat, like the theme: no shadows; surfaces are separated by a 1 px `border` UIStroke; corners use --radius
+ * - colours, fonts, radius and spacing come from theme.ts (never literals in the screens); the relief itself
+ *   is a greyscale texture tinted with ImageColor3 = an exact token (skin.ts)
  * - text is TextScaled + UITextSizeConstraint (max = design size x current UI scale), so it never overflows its
- *   box on phones and is not tiny on 1080p/1440p; borders scale the same way (1 px up to ~1440p)
- * - buttons have hover / press / disabled states and a 2 px `ring` when selected with a gamepad or keyboard
+ *   box on phones and is not tiny on 1080p/1440p; skin pixels and borders scale the same way
+ * - buttons have hover / press / disabled states and a pixel `ring` when selected with a gamepad or keyboard
  *   (GuiService.SelectedObject), replacing Roblox's default selection highlight
  * - full screens use makeScreen(): the content is letterboxed at 16:9 inside the safe area (below the Roblox
  *   top bar); HUD clusters use makeAnchored() (corner anchored, fixed aspect ratio)
+ * - no skin textures (or a failed fetch) = the previous flat look, drawn from the same tokens (skin.ts)
  */
-import { BORDER, GAME, RADIUS, SIDEBAR, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
+import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
+import {
+	DESIGN_H,
+	DESIGN_W,
+	PRESS_DROP,
+	RaisedState,
+	SurfaceSpec,
+	clearSurface,
+	fadeSurface,
+	fadeText,
+	focusSurface,
+	hairline,
+	onLayoutChange,
+	paintSurface,
+	panelSurface,
+	raisedSurface,
+	scaleText,
+	setStrokeWidth,
+	setSurfaceTransparency,
+	skinEnabled,
+	skinPx,
+	stripSurface,
+	textOutline,
+	topInset,
+	uiScale,
+	viewportSize,
+	wellSurface,
+} from "./skin";
 
 const GuiService = game.GetService("GuiService");
 const TweenService = game.GetService("TweenService");
 const UserInputService = game.GetService("UserInputService");
-const Workspace = game.GetService("Workspace");
 
-export const DESIGN_W = 1120;
-export const DESIGN_H = 630;
-
-// ---------------------------------------------------------------- safe area & scale
-
-/** height (px) covered by the Roblox top bar; our ScreenGui ignores the inset, so we keep clear of it */
-export function topInset(): number {
-	const [topLeft] = GuiService.GetGuiInset();
-	let inset = topLeft.Y;
-	const [ok, value] = pcall(() => GuiService.TopbarInset);
-	if (ok) {
-		const rect = value as Rect;
-		if (rect.Height > 0) inset = math.max(inset, rect.Max.Y);
-	}
-	return math.max(0, inset);
-}
-
-export function viewportSize(): Vector2 {
-	const cam = Workspace.CurrentCamera;
-	if (cam !== undefined && cam.ViewportSize.X > 1 && cam.ViewportSize.Y > 1) return cam.ViewportSize;
-	return new Vector2(DESIGN_W, DESIGN_H);
-}
-
-/** pixels per design unit of a letterboxed 1120x630 layout on the current screen */
-export function uiScale(): number {
-	const v = viewportSize();
-	return math.max(0.35, math.min(v.X / DESIGN_W, (v.Y - topInset()) / DESIGN_H));
-}
-
-/** screen px for a border of `width` design px: 1 px up to ~1440p, thicker on 4K (like CSS px on a HiDPI screen) */
-export function hairline(width: number): number {
-	if (width <= 0) return 0;
-	return math.max(1, math.round((width * uiScale()) / 1.6));
-}
-
-const textConstraints = new Map<UITextSizeConstraint, number>();
-const strokeWidths = new Map<UIStroke, number>();
-
-function applyTextSize(c: UITextSizeConstraint, designSize: number): void {
-	const max = math.clamp(math.round(designSize * uiScale()), 6, 100);
-	c.MaxTextSize = max;
-	c.MinTextSize = math.clamp(math.floor(max * 0.5), 5, max);
-}
-
-/** TextScaled with a design-size cap (kept in sync with the screen size) */
-export function scaleText(obj: TextLabel | TextButton | TextBox, designSize: number): UITextSizeConstraint {
-	obj.TextScaled = true;
-	let c = obj.FindFirstChildOfClass("UITextSizeConstraint");
-	if (c === undefined) {
-		c = new Instance("UITextSizeConstraint");
-		const created = c;
-		created.Destroying.Connect(() => textConstraints.delete(created));
-		c.Parent = obj;
-	}
-	textConstraints.set(c, designSize);
-	applyTextSize(c, designSize);
-	return c;
-}
-
-/** sets a kit stroke's width in design px (kept in sync with the screen size) */
-export function setStrokeWidth(s: UIStroke, width: number): void {
-	if (!strokeWidths.has(s)) s.Destroying.Connect(() => strokeWidths.delete(s));
-	strokeWidths.set(s, width);
-	s.Thickness = hairline(width);
-}
-
-const insetListeners = new Set<() => void>();
-
-function refreshAll(): void {
-	for (const [c, size] of textConstraints) {
-		if (c.Parent === undefined) {
-			textConstraints.delete(c);
-		} else {
-			applyTextSize(c, size);
-		}
-	}
-	for (const [s, width] of strokeWidths) {
-		if (s.Parent === undefined) {
-			strokeWidths.delete(s);
-		} else {
-			s.Thickness = hairline(width);
-		}
-	}
-	for (const fn of insetListeners) fn();
-}
-
-let refreshQueued = false;
-function queueRefresh(): void {
-	if (refreshQueued) return;
-	refreshQueued = true;
-	task.defer(() => {
-		refreshQueued = false;
-		refreshAll();
-	});
-}
-
-let watchedCamera: Camera | undefined;
-let cameraConn: RBXScriptConnection | undefined;
-function watchCamera(): void {
-	const cam = Workspace.CurrentCamera;
-	if (cam === watchedCamera) return;
-	watchedCamera = cam;
-	cameraConn?.Disconnect();
-	cameraConn = cam?.GetPropertyChangedSignal("ViewportSize").Connect(queueRefresh);
-	queueRefresh();
-}
-watchCamera();
-Workspace.GetPropertyChangedSignal("CurrentCamera").Connect(watchCamera);
-pcall(() => GuiService.GetPropertyChangedSignal("TopbarInset").Connect(queueRefresh));
-
-/** runs `fn` now and whenever the screen size / top bar changes, until `owner` is destroyed */
-export function onLayoutChange(owner: Instance, fn: () => void): void {
-	insetListeners.add(fn);
-	owner.Destroying.Connect(() => insetListeners.delete(fn));
-	fn();
-}
+export {
+	DESIGN_H,
+	DESIGN_W,
+	fadeSurface,
+	fadeText,
+	hairline,
+	onLayoutChange,
+	scaleText,
+	setStrokeWidth,
+	setSurfaceTransparency,
+	skinEnabled,
+	skinPx,
+	textOutline,
+	topInset,
+	uiScale,
+	viewportSize,
+};
 
 // ---------------------------------------------------------------- focus (gamepad / keyboard selection)
 
-/** replaces Roblox's default selection highlight: the kit draws a `ring` stroke instead */
+/** replaces Roblox's default selection highlight: the kit draws the pixel focus ring instead */
 const NO_SELECTION_IMAGE = new Instance("Frame");
 NO_SELECTION_IMAGE.Name = "NoSelectionImage";
 NO_SELECTION_IMAGE.BackgroundTransparency = 1;
@@ -282,7 +217,7 @@ function resolveFont(spec: FontSpec | undefined, fallback: TextRole): Font {
 	return spec;
 }
 
-// ---------------------------------------------------------------- frames & text
+// ---------------------------------------------------------------- frames, surfaces & text
 
 export interface FrameOpts {
 	transparency?: number;
@@ -322,6 +257,54 @@ export function makeFrame(
 	return f;
 }
 
+/** the four surfaces of the skin (see skin.ts): a framed window, a sunk well, a title strip, a raised plate */
+export type SurfaceKind = "panel" | "well" | "strip" | "raised";
+
+export interface SurfaceOpts {
+	/** panel interior / well fill / strip colour / raised face (defaults per kind) */
+	fill?: Color3;
+	/** panel frame / well border (defaults per kind) */
+	border?: Color3;
+	transparency?: number;
+	zIndex?: number;
+	clips?: boolean;
+}
+
+function surfaceSpec(kind: SurfaceKind, opts?: SurfaceOpts): SurfaceSpec {
+	const t = opts?.transparency ?? 0;
+	if (kind === "panel") return panelSurface(opts?.fill ?? SURFACE.panel, opts?.border ?? SURFACE.frame, t);
+	if (kind === "strip") return stripSurface(opts?.fill ?? SURFACE.frame, t);
+	if (kind === "raised") return raisedSurface(opts?.fill ?? THEME.secondary);
+	return wellSurface(opts?.fill ?? SURFACE.well, opts?.border ?? SURFACE.line, t);
+}
+
+/** a skinned plate (panel / well / strip / raised) placed in the parent's design space */
+export function makeSurface(
+	parent: Instance,
+	name: string,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+	kind: SurfaceKind,
+	opts?: SurfaceOpts,
+): Frame {
+	const f = new Instance("Frame");
+	f.Name = name;
+	place(f, parent, x, y, w, h);
+	f.BorderSizePixel = 0;
+	if (opts?.zIndex !== undefined) f.ZIndex = opts.zIndex;
+	if (opts?.clips !== undefined) f.ClipsDescendants = opts.clips;
+	paintSurface(f, surfaceSpec(kind, opts));
+	f.Parent = parent;
+	return f;
+}
+
+/** repaints an existing surface (e.g. a card whose accent border changed) */
+export function setSurface(host: GuiObject, kind: SurfaceKind, opts?: SurfaceOpts): void {
+	paintSurface(host, surfaceSpec(kind, opts));
+}
+
 export type TextAlign = "left" | "center" | "right";
 
 export interface LabelOpts {
@@ -334,6 +317,8 @@ export interface LabelOpts {
 	valign?: "top" | "center" | "bottom";
 	rich?: boolean;
 	zIndex?: number;
+	/** dark pixel contour (default: titles, headings and numbers, plus anything >= TEXT.xl) */
+	outline?: boolean;
 }
 
 function xAlign(a: TextAlign | undefined): Enum.TextXAlignment {
@@ -349,6 +334,11 @@ function labelFont(opts: LabelOpts | undefined, fallback: TextRole): Font {
 		return fontOf(mono ? "mono" : "sans", opts?.weight ?? (mono ? Enum.FontWeight.Bold : Enum.FontWeight.Regular));
 	}
 	return roleFont(fallback);
+}
+
+/** roles that always carry the dark contour of the reference art */
+function outlinedRole(role: string | undefined): boolean {
+	return role === "display" || role === "title" || role === "heading" || role === "numeric";
 }
 
 export function makeLabel(
@@ -380,13 +370,22 @@ export function makeLabel(
 	else if (opts?.valign === "bottom") l.TextYAlignment = Enum.TextYAlignment.Bottom;
 	if (opts?.zIndex !== undefined) l.ZIndex = opts.zIndex;
 	scaleText(l, textSize * inheritedTextScale(parent));
+	const role = typeIs(opts?.font, "string") ? (opts?.font as string) : undefined;
+	if (opts?.outline ?? (outlinedRole(role) || textSize >= TEXT.xl)) textOutline(l);
 	l.Parent = parent;
 	return l;
 }
 
+/** the TextLabel a kit button draws its text with (buttons keep their own text invisible under the skin) */
+function buttonLabel(b: TextButton): TextLabel | undefined {
+	const l = b.FindFirstChild("Label");
+	return l !== undefined && l.IsA("TextLabel") ? l : undefined;
+}
+
 /** changes the design text size of a label/button created by this kit */
 export function setTextSize(obj: TextLabel | TextButton, designSize: number): void {
-	scaleText(obj, designSize * inheritedTextScale(obj));
+	const target = obj.IsA("TextButton") ? (buttonLabel(obj) ?? obj) : obj;
+	scaleText(target, designSize * inheritedTextScale(obj));
 }
 
 // ---------------------------------------------------------------- Button
@@ -406,26 +405,29 @@ export const BUTTON_SIZE: Record<ButtonSize, { h: number; text: number; padX: nu
 };
 
 /**
- * Colours of a variant, all exact theme tokens (no mixing):
- * - filled variants (default / secondary / destructive / active tab) keep their colours on hover and show the
- *   `ring` outline instead (the tweakcn palette has no hover shade for them);
- * - outline / ghost / inactive tab / list row switch to `accent` on hover, press and selection;
- * - sidebar items use the sidebar palette (hover = sidebar-accent, selected = sidebar-primary).
+ * Look of a variant, all exact theme tokens (no mixing; the relief comes from the skin textures):
+ * - raised variants (default / secondary / destructive / active tab / selected rail item) are plates with a
+ *   light band and a dark base; hovering brightens the band, pressing drops the face;
+ * - recessed variants (outline / tab / row / rail item / ghost) are wells that fill with `frame` on hover;
+ * - disabled is always a plain well with muted text.
  */
 interface VariantSpec {
-	bg: Color3;
-	/** 0 = filled, 1 = transparent until hovered */
-	bgT: number;
+	kind: "raised" | "well" | "ghost";
+	/** raised face / well fill */
+	face: Color3;
+	/** well border */
+	border: Color3;
 	fg: Color3;
-	stroke: Color3;
-	strokeT: number;
-	/** hover / press / selection background (undefined = keep the colours and show the ring) */
-	hover: Color3 | undefined;
-	hoverFg: Color3;
+	/** recessed variants: hover / focus fill and text */
+	hotFace: Color3;
+	hotBorder: Color3;
+	hotFg: Color3;
+	/** recessed variants: pressed fill */
+	pressFace: Color3;
 	ring: Color3;
-	/** inner ring (rows and rail items live in clipped containers) */
+	/** the control lives in a clipped container: the focus ring becomes its border instead of an outer ring */
 	ringInner: boolean;
-	/** recolour the button's own TextLabels to hoverFg while highlighted (rows) */
+	/** recolour the button's own TextLabels to hoverFg while highlighted (rows, rail items) */
 	recolorChildren: boolean;
 }
 
@@ -449,24 +451,16 @@ function toVariant(style: string): AnyVariant {
 	return "default";
 }
 
-function spec(
-	bg: Color3,
-	bgT: number,
-	fg: Color3,
-	stroke: Color3,
-	strokeT: number,
-	hover: Color3 | undefined,
-	hoverFg: Color3,
-	extra?: Partial<VariantSpec>,
-): VariantSpec {
+function raised(face: Color3, fg: Color3, extra?: Partial<VariantSpec>): VariantSpec {
 	return {
-		bg,
-		bgT,
+		kind: "raised",
+		face,
+		border: SURFACE.line,
 		fg,
-		stroke,
-		strokeT,
-		hover,
-		hoverFg,
+		hotFace: face,
+		hotBorder: SURFACE.line,
+		hotFg: fg,
+		pressFace: face,
 		ring: THEME.ring,
 		ringInner: false,
 		recolorChildren: false,
@@ -474,63 +468,47 @@ function spec(
 	};
 }
 
-/** shadcn/ui button recipes mapped onto the author's role spec (see theme.ts) */
+function sunk(fill: Color3, border: Color3, fg: Color3, extra?: Partial<VariantSpec>): VariantSpec {
+	return {
+		kind: "well",
+		face: fill,
+		border,
+		fg,
+		hotFace: SURFACE.frame,
+		hotBorder: THEME.secondary,
+		hotFg: THEME.accentForeground,
+		pressFace: SURFACE.line,
+		ring: THEME.ring,
+		ringInner: false,
+		recolorChildren: false,
+		...extra,
+	};
+}
+
+/** shadcn/ui button recipes mapped onto the author's relief spec (see theme.ts) */
 function variantSpec(v: AnyVariant): VariantSpec {
 	const t = THEME;
-	if (v === "secondary") {
-		return spec(t.secondary, 0, t.secondaryForeground, t.border, 1, undefined, t.secondaryForeground);
-	}
-	if (v === "destructive") {
-		return spec(t.destructive, 0, t.destructiveForeground, t.border, 1, undefined, t.destructiveForeground);
-	}
-	if (v === "outline") return spec(t.background, 1, t.foreground, t.border, 0, t.accent, t.accentForeground);
-	if (v === "ghost") return spec(t.background, 1, t.foreground, t.border, 1, t.accent, t.accentForeground);
-	if (v === "tab") {
-		return spec(t.background, 1, t.mutedForeground, t.border, 1, t.accent, t.accentForeground, { ringInner: true });
-	}
-	if (v === "tabActive") {
-		return spec(t.secondary, 0, t.secondaryForeground, t.border, 1, undefined, t.secondaryForeground, {
-			ringInner: true,
-		});
-	}
+	if (v === "secondary") return raised(t.secondary, t.secondaryForeground);
+	if (v === "destructive") return raised(t.destructive, t.destructiveForeground);
+	if (v === "outline") return sunk(SURFACE.well, t.border, t.foreground);
+	if (v === "ghost") return sunk(SURFACE.well, t.border, t.foreground, { kind: "ghost" });
+	if (v === "tab") return sunk(SURFACE.well, SURFACE.line, t.mutedForeground, { ringInner: true });
+	if (v === "tabActive") return raised(t.secondary, t.secondaryForeground, { ringInner: true });
 	if (v === "row") {
-		return spec(t.card, 0, t.cardForeground, t.border, 0, t.accent, t.accentForeground, {
+		return sunk(SURFACE.well, SURFACE.line, t.cardForeground, { ringInner: true, recolorChildren: true });
+	}
+	if (v === "nav") {
+		return sunk(SURFACE.well, SURFACE.line, SIDEBAR.foreground, {
+			kind: "ghost",
+			ring: SIDEBAR.ring,
 			ringInner: true,
 			recolorChildren: true,
 		});
 	}
-	if (v === "nav") {
-		return spec(
-			SIDEBAR.background,
-			1,
-			SIDEBAR.foreground,
-			SIDEBAR.border,
-			1,
-			SIDEBAR.accent,
-			SIDEBAR.accentForeground,
-			{
-				ring: SIDEBAR.ring,
-				ringInner: true,
-				recolorChildren: true,
-			},
-		);
-	}
 	if (v === "navActive") {
-		return spec(
-			SIDEBAR.primary,
-			0,
-			SIDEBAR.primaryForeground,
-			SIDEBAR.border,
-			1,
-			undefined,
-			SIDEBAR.primaryForeground,
-			{
-				ring: SIDEBAR.ring,
-				ringInner: true,
-			},
-		);
+		return raised(t.secondary, t.secondaryForeground, { ring: SIDEBAR.ring, ringInner: true });
 	}
-	return spec(t.primary, 0, t.primaryForeground, t.border, 1, undefined, t.primaryForeground);
+	return raised(t.primary, t.primaryForeground);
 }
 
 /** text colour of a variant (for custom content inside a button, e.g. a subtitle line) */
@@ -550,7 +528,7 @@ function variantOf(b: TextButton): AnyVariant {
 /** recolours the button's own TextLabels (and restores their colour when `color` is undefined) */
 function recolorLabels(b: TextButton, color: Color3 | undefined): void {
 	for (const child of b.GetChildren()) {
-		if (!child.IsA("TextLabel")) continue;
+		if (!child.IsA("TextLabel") || child.Name === "Label") continue;
 		const base = child.GetAttribute("BaseTextColor");
 		if (color !== undefined) {
 			if (!typeIs(base, "Color3")) child.SetAttribute("BaseTextColor", child.TextColor3);
@@ -562,32 +540,44 @@ function recolorLabels(b: TextButton, color: Color3 | undefined): void {
 	}
 }
 
-/** focus ring outside a button with a gap (ring-offset); created on first focus / hover */
+/** pixel focus ring around a button, with a 1 px gap (shadcn's ring-offset); created on first focus */
 function makeOffsetRing(b: TextButton): Frame {
 	const f = new Instance("Frame");
 	f.Name = "FocusRing";
 	f.AnchorPoint = new Vector2(0.5, 0.5);
 	f.Position = UDim2.fromScale(0.5, 0.5);
-	f.BackgroundColor3 = THEME.background;
-	f.BackgroundTransparency = 1;
 	f.BorderSizePixel = 0;
 	f.Active = false;
 	f.Selectable = false;
 	f.ZIndex = b.ZIndex;
-	const corner = b.FindFirstChildOfClass("UICorner");
-	if (corner !== undefined) {
-		const c = new Instance("UICorner");
-		c.CornerRadius = corner.CornerRadius;
-		c.Parent = f;
-	}
-	addStroke(f, THEME.ring, 0, BORDER.ring);
+	paintSurface(f, focusSurface(THEME.ring));
 	onLayoutChange(f, () => {
-		// ring (2) + offset gap (2), in screen px that follow the UI scale like every border
-		const grow = (hairline(BORDER.ring) + hairline(BORDER.ring)) * 2;
+		// ring (2 skin px) + gap (1 skin px) on each side
+		const grow = 2 * 3 * skinPx();
 		f.Size = new UDim2(1, grow, 1, grow);
 	});
 	f.Parent = b;
 	return f;
+}
+
+/** how far the content of a pressed raised button drops (screen px) */
+function pressShift(b: TextButton, on: boolean): void {
+	let pad = b.FindFirstChild("PressShift") as UIPadding | undefined;
+	if (!on) {
+		if (pad !== undefined) {
+			pad.PaddingTop = new UDim();
+			pad.PaddingBottom = new UDim();
+		}
+		return;
+	}
+	if (pad === undefined) {
+		pad = new Instance("UIPadding");
+		pad.Name = "PressShift";
+		pad.Parent = b;
+	}
+	const drop = PRESS_DROP * skinPx();
+	pad.PaddingTop = new UDim(0, drop);
+	pad.PaddingBottom = new UDim(0, -drop);
 }
 
 /** redraws a kit button from its variant, GuiState, disabled flag and focus (instant: tokens are never blended) */
@@ -596,61 +586,43 @@ function refreshButton(b: TextButton): void {
 	const disabled = isDisabled(b);
 	const state = b.GuiState;
 	const focus = isFocused(b) && !disabled;
-	const hot = !disabled && (focus || state === Enum.GuiState.Hover || state === Enum.GuiState.Press);
-	let bg = s.bg;
-	let bgT = s.bgT;
+	const pressed = !disabled && state === Enum.GuiState.Press;
+	const hot = !disabled && (focus || state === Enum.GuiState.Hover || pressed);
 	let fg = s.fg;
-	let stroke = s.stroke;
-	let strokeT = s.strokeT;
-	let ring = focus;
 	if (disabled) {
-		// disabled, every variant: transparent fill (bg-muted equals bg-background/card here, so an opaque
-		// muted fill used to disappear into the surface behind it) + opaque `border` outline so the control
-		// still reads as a control, and `muted-foreground` text. mutedForeground (#8c8c7d) on the real
-		// background (#10100e) is ~5.6:1 (>= 4.5:1 AA); no global transparency is applied to the text itself.
-		bg = THEME.background;
-		bgT = 1;
+		// disabled, every variant: a plain well with `muted-foreground` text. mutedForeground (#8c8c7d) on the
+		// well fill (#10100e) is ~5.6:1 (>= 4.5:1 AA); no transparency is applied to the text itself.
 		fg = THEME.mutedForeground;
-		stroke = THEME.border;
-		strokeT = 0;
-	} else if (hot) {
-		if (s.hover !== undefined) {
-			bg = s.hover;
-			bgT = 0;
-			fg = s.hoverFg;
-		} else {
-			ring = true;
-		}
+		paintSurface(b, wellSurface(SURFACE.well, SURFACE.line));
+		pressShift(b, false);
+	} else if (s.kind === "raised") {
+		const raisedState: RaisedState = pressed ? "press" : hot ? "hot" : "idle";
+		paintSurface(b, raisedSurface(s.face, raisedState));
+		pressShift(b, pressed);
+	} else {
+		const fill = pressed ? s.pressFace : hot ? s.hotFace : s.face;
+		const border = focus && s.ringInner ? s.ring : hot ? s.hotBorder : s.border;
+		if (s.kind === "ghost" && !hot && !(focus && s.ringInner)) clearSurface(b);
+		else paintSurface(b, wellSurface(fill, border));
+		if (hot) fg = s.hotFg;
+		pressShift(b, false);
 	}
-	b.BackgroundColor3 = bg;
-	b.BackgroundTransparency = bgT;
 	b.TextColor3 = fg;
-	// rows / tabs / rail items (clipped containers): the border itself becomes the ring;
-	// buttons: shadcn `ring-2 ring-offset-2`, a ring separated from the button by a gap (visible on any fill)
-	const innerRing = ring && s.ringInner;
-	const border = b.FindFirstChild("Border");
-	if (border !== undefined && border.IsA("UIStroke")) {
-		border.Color = innerRing ? s.ring : stroke;
-		border.Transparency = innerRing ? 0 : strokeT;
-		setStrokeWidth(border, innerRing ? BORDER.ring : BORDER.width);
-	}
+	const label = buttonLabel(b);
+	if (label !== undefined) label.TextColor3 = fg;
+	// buttons outside a clipped container get the ring-offset focus ring; rows / tabs / rail items turn their
+	// own border into the ring instead (an outer ring would be clipped away)
 	const offsetRing = b.FindFirstChild("FocusRing");
-	if (ring && !s.ringInner) {
+	if (focus && !s.ringInner) {
 		const f = offsetRing !== undefined && offsetRing.IsA("Frame") ? offsetRing : makeOffsetRing(b);
-		const rs = f.FindFirstChildOfClass("UIStroke");
-		if (rs !== undefined) rs.Color = s.ring;
+		paintSurface(f, focusSurface(s.ring));
 		f.Visible = true;
 	} else if (offsetRing !== undefined && offsetRing.IsA("Frame")) {
 		offsetRing.Visible = false;
 	}
 	if (disabled) recolorLabels(b, THEME.mutedForeground);
-	else if (hot && s.recolorChildren && s.hover !== undefined) recolorLabels(b, s.hoverFg);
+	else if (hot && s.recolorChildren) recolorLabels(b, s.hotFg);
 	else recolorLabels(b, undefined);
-	// press feedback without colour changes
-	const press = b.FindFirstChild("Press");
-	if (press !== undefined && press.IsA("UIScale")) {
-		tween(press, 0.06, { Scale: !disabled && state === Enum.GuiState.Press ? 0.97 : 1 });
-	}
 }
 
 export interface ButtonProps {
@@ -669,7 +641,7 @@ export interface ButtonProps {
 	font?: FontSpec;
 	align?: TextAlign;
 	zIndex?: number;
-	/** corner radius in design units (default RADIUS.lg) */
+	/** corner radius in design units (only used by the flat fallback; the skin has pixel corners) */
 	radius?: number;
 }
 
@@ -690,25 +662,41 @@ function buildButton(
 	else setDesign(b, w, h);
 	b.AutoButtonColor = false;
 	b.BorderSizePixel = 0;
+	b.BackgroundTransparency = 1;
+	b.BackgroundColor3 = THEME.background;
 	b.Text = text;
-	b.FontFace = resolveFont(props.font, "label");
-	b.TextWrapped = true;
-	b.TextXAlignment = xAlign(props.align);
+	b.TextTransparency = 1; // the skin sits above the button's own text: it is drawn by the Label below
+	b.TextColor3 = THEME.foreground;
 	b.TextStrokeColor3 = THEME.background;
+	if (props.zIndex !== undefined) b.ZIndex = props.zIndex;
+
+	// the button's text, drawn above the skin layers
+	const label = new Instance("TextLabel");
+	label.Name = "Label";
+	label.BackgroundTransparency = 1;
+	label.BackgroundColor3 = THEME.background;
+	label.BorderSizePixel = 0;
+	label.Size = UDim2.fromScale(1, 1);
+	label.Text = text;
+	label.TextColor3 = THEME.foreground;
+	label.TextStrokeColor3 = THEME.background;
+	label.FontFace = resolveFont(props.font, "label");
+	label.TextWrapped = true;
+	label.TextXAlignment = xAlign(props.align);
+	label.ZIndex = b.ZIndex;
 	if (props.align === "left" || props.align === "right") {
 		const pad = new Instance("UIPadding");
 		pad.PaddingLeft = new UDim(size.padX / w, 0);
 		pad.PaddingRight = new UDim(size.padX / w, 0);
-		pad.Parent = b;
+		pad.Parent = label;
 	}
-	if (props.zIndex !== undefined) b.ZIndex = props.zIndex;
-	scaleText(b, (props.textSize ?? size.text) * inheritedTextScale(parent));
-	addCorner(b, props.radius ?? RADIUS.lg, w, h);
-	const border = addStroke(b, THEME.border, 1);
-	border.Name = "Border";
-	const press = new Instance("UIScale");
-	press.Name = "Press";
-	press.Parent = b;
+	scaleText(label, (props.textSize ?? size.text) * inheritedTextScale(parent));
+	textOutline(label);
+	label.Parent = b;
+	b.GetPropertyChangedSignal("Text").Connect(() => {
+		label.Text = b.Text;
+	});
+
 	b.SetAttribute("Variant", variant);
 	b.SetAttribute("Disabled", props.disabled === true);
 	b.Interactable = props.disabled !== true;
@@ -749,11 +737,11 @@ export function setButtonEnabled(b: TextButton, enabled: boolean): void {
 	refreshButton(b);
 }
 
-// ---------------------------------------------------------------- Card
+// ---------------------------------------------------------------- Card (panel)
 
 /**
- * default: bg-card (panels and windows); hud: card over the game world (TRANSPARENCY.hud);
- * muted: bg-muted tile inside a card; popover: dialogs, toasts, tooltips, banners (always bordered)
+ * default: a framed panel; hud: the same panel over the game world (its interior at TRANSPARENCY.hud);
+ * muted: a well sunk into a panel; popover: dialogs, toasts, tooltips, banners (also a framed panel)
  */
 export type CardVariant = "default" | "hud" | "muted" | "popover";
 
@@ -763,29 +751,29 @@ export interface CardProps {
 	w: number;
 	h: number;
 	variant?: CardVariant;
-	/** background transparency (only for surfaces over the game world; default: 0, hud: TRANSPARENCY.hud) */
+	/** interior transparency (only for surfaces over the game world; default: 0, hud: TRANSPARENCY.hud) */
 	transparency?: number;
 	/** inner padding used by the Card* helpers (default space(6), like shadcn's px-6/py-6) */
 	pad?: number;
-	/** border colour override, a token (e.g. GAME.success for an owned item) */
+	/** frame / border colour override, a token (e.g. GAME.success for an owned item) */
 	border?: Color3;
 	zIndex?: number;
 	clips?: boolean;
 }
 
-function cardColors(variant: CardVariant): [Color3, Color3] {
-	if (variant === "popover") return [THEME.popover, THEME.popoverForeground];
-	if (variant === "muted") return [THEME.muted, THEME.foreground];
-	return [THEME.card, THEME.cardForeground];
+function cardForegroundOf(variant: CardVariant): Color3 {
+	if (variant === "popover") return THEME.popoverForeground;
+	return THEME.cardForeground;
 }
 
 export function Card(parent: Instance, name: string, props: CardProps): Frame {
 	const variant = props.variant ?? "default";
-	const [bg] = cardColors(variant);
-	const f = makeFrame(parent, name, props.x, props.y, props.w, props.h, bg, {
-		transparency: props.transparency ?? (variant === "hud" ? TRANSPARENCY.hud : 0),
-		radius: RADIUS.lg,
-		stroke: props.border ?? THEME.border,
+	const transparency = props.transparency ?? (variant === "hud" ? TRANSPARENCY.hud : 0);
+	const kind: SurfaceKind = variant === "muted" ? "well" : "panel";
+	const f = makeSurface(parent, name, props.x, props.y, props.w, props.h, kind, {
+		fill: variant === "muted" ? SURFACE.well : SURFACE.panel,
+		border: props.border ?? (variant === "muted" ? SURFACE.line : SURFACE.frame),
+		transparency,
 		zIndex: props.zIndex,
 		clips: props.clips,
 	});
@@ -802,7 +790,7 @@ function cardBox(card: Frame): [number, number, number] {
 
 function cardForeground(card: Frame): Color3 {
 	const v = card.GetAttribute("CardVariant");
-	return cardColors(v === "popover" || v === "muted" || v === "hud" ? v : "default")[1];
+	return cardForegroundOf(v === "popover" ? "popover" : "default");
 }
 
 export interface CardTextOpts {
@@ -816,7 +804,7 @@ export interface CardTextOpts {
 	zIndex?: number;
 }
 
-/** CardTitle: font-semibold, card-foreground (popover-foreground in a popover) */
+/** CardTitle: heading role (SemiBold + contour), card-foreground (popover-foreground in a popover) */
 export function CardTitle(card: Frame, text: string, opts?: CardTextOpts): TextLabel {
 	const [w, , pad] = cardBox(card);
 	const size = opts?.size ?? TEXT.xl;
@@ -858,30 +846,68 @@ export interface CardHeaderOpts {
 	action?: number;
 	/** lines of description to reserve (default 1) */
 	lines?: number;
+	/** title colour (default `foreground`; e.g. `destructive` for "Game over") */
+	color?: Color3;
+	/** strip colour (default SURFACE.frame; e.g. `destructive` for a dangerous window) */
+	stripColor?: Color3;
 }
 
-/** height of a CardHeader (from the card's top edge to where the content starts) for a card padding `pad` */
-export function cardHeaderHeight(pad = space(6), titleSize = TEXT.xl, descriptionLines = 0): number {
-	let y = pad + math.ceil(titleSize * 1.3);
-	if (descriptionLines > 0) y += space(1.5) + math.ceil(TEXT.sm * 1.5 * descriptionLines);
-	return y + space(4);
+/** margin between a panel's edge and its title strip (clears the frame at every UI scale) */
+export const CARD_STRIP_INSET = space(2);
+const STRIP_PAD = space(3);
+
+/** height of the title strip a CardHeader draws (design units), e.g. to place a button or badge on it */
+export function cardStripHeight(titleSize = TEXT.xl2): number {
+	return math.ceil(titleSize * 1.3) + STRIP_PAD;
 }
 
-/** CardHeader (title + optional description); returns the y where the content starts */
+const STRIP_INSET = CARD_STRIP_INSET;
+const stripHeight = cardStripHeight;
+
+/** height of a CardHeader: from the card's top edge to where the content starts (the skinned strip is fixed) */
+export function cardHeaderHeight(titleSize = TEXT.xl2, descriptionLines = 0): number {
+	let y = STRIP_INSET + stripHeight(titleSize) + space(3);
+	if (descriptionLines > 0) y += math.ceil(TEXT.sm * 1.5 * descriptionLines) + space(2);
+	return y;
+}
+
+/**
+ * CardHeader: the reference's TITLE STRIP across the top of the panel (big bold title, centred, contoured),
+ * with an optional muted description under it. Returns the y where the content starts.
+ */
 export function CardHeader(card: Frame, title: string, description?: string, opts?: CardHeaderOpts): number {
 	const [w, , pad] = cardBox(card);
-	const titleSize = opts?.titleSize ?? TEXT.xl;
-	const innerW = w - pad * 2 - (opts?.action ?? 0);
-	const titleH = math.ceil(titleSize * 1.3);
-	CardTitle(card, title, { w: innerW, size: titleSize });
-	let y = pad + titleH;
+	const titleSize = opts?.titleSize ?? TEXT.xl2;
+	const stripW = w - STRIP_INSET * 2;
+	const stripH = stripHeight(titleSize);
+	const strip = makeSurface(card, "TitleStrip", STRIP_INSET, STRIP_INSET, stripW, stripH, "strip", {
+		fill: opts?.stripColor,
+		zIndex: card.ZIndex + 1,
+	});
+	const action = opts?.action ?? 0;
+	makeLabel(
+		strip,
+		"Title",
+		title,
+		action,
+		0,
+		stripW - action * 2,
+		stripH,
+		titleSize,
+		opts?.color ?? THEME.foreground,
+		{
+			font: "title",
+			zIndex: strip.ZIndex + 1,
+		},
+	);
+	let y = STRIP_INSET + stripH + space(3);
 	if (description !== undefined && description !== "") {
 		const lines = opts?.lines ?? 1;
 		const descH = math.ceil(TEXT.sm * 1.5 * lines);
-		CardDescription(card, description, { y: y + space(1.5), w: innerW, h: descH });
-		y += space(1.5) + descH;
+		CardDescription(card, description, { y, w: w - pad * 2, h: descH });
+		y += descH + space(2);
 	}
-	return y + space(4);
+	return y;
 }
 
 /** CardContent: padded region from `y` (to the bottom padding when `h` is omitted) */
@@ -896,7 +922,7 @@ export function CardFooter(card: Frame, h: number): Frame {
 	return makeFrame(card, "CardFooter", pad, ch - pad - h, w - pad * 2, h, THEME.card, { transparency: 1 });
 }
 
-// ---------------------------------------------------------------- Badge
+// ---------------------------------------------------------------- Badge (chip)
 
 export type BadgeVariant = "default" | "secondary" | "outline" | "destructive";
 
@@ -907,7 +933,7 @@ export interface BadgeProps {
 	w?: number;
 	h?: number;
 	variant?: BadgeVariant;
-	/** semantic accent from theme.GAME (e.g. success, xp, rare); drawn as the border, text stays `foreground` */
+	/** semantic accent from theme.GAME (e.g. success, xp, rare); drawn as the chip border, text stays `foreground` */
 	color?: Color3;
 	textSize?: number;
 	zIndex?: number;
@@ -920,48 +946,40 @@ export function badgeWidth(text: string, textSize = TEXT.xs, h = 22): number {
 	return math.max(h, math.ceil(chars * textSize * 0.6 + space(2) * 2));
 }
 
-function badgeColors(variant: BadgeVariant, color: Color3 | undefined): [Color3, number, Color3, Color3, number] {
+/** [surface kind, fill, border, text] of a badge */
+function badgeLook(variant: BadgeVariant, color: Color3 | undefined): [SurfaceKind, Color3, Color3, Color3] {
 	// a GAME.* accent as a SOLID fill can't clear 4.5:1 against either foreground or background text (e.g.
-	// GAME.success only reaches ~4.2:1 on foreground, GAME.xp ~4.0:1) — read it as an outline chip instead:
-	// transparent fill, the accent as an opaque border, `foreground` text (~18.7:1 on the real background)
-	if (color !== undefined) return [THEME.background, 1, THEME.foreground, color, 0];
-	if (variant === "secondary") return [THEME.secondary, 0, THEME.secondaryForeground, THEME.border, 1];
-	// same reasoning as above: destructive-on-destructive only reaches ~3.7:1, so this badge reads as a
-	// destructive-bordered outline chip too instead of a solid destructive fill
-	if (variant === "destructive") return [THEME.background, 1, THEME.foreground, THEME.destructive, 0];
-	if (variant === "outline") return [THEME.background, 1, THEME.foreground, THEME.border, 0];
-	return [THEME.primary, 0, THEME.primaryForeground, THEME.border, 1];
+	// GAME.success only reaches ~4.2:1 on foreground, GAME.xp ~4.0:1) — read it as an outlined chip instead:
+	// the well fill, the accent as the border, `foreground` text (~18.7:1 on that fill)
+	if (color !== undefined) return ["well", SURFACE.well, color, THEME.foreground];
+	// "default" is the key cap of the reference art (the E prompt): a small raised plate
+	if (variant === "default") return ["raised", SURFACE.frame, SURFACE.line, THEME.foreground];
+	if (variant === "secondary") return ["well", THEME.secondary, SURFACE.line, THEME.secondaryForeground];
+	if (variant === "destructive") return ["well", SURFACE.well, THEME.destructive, THEME.foreground];
+	return ["well", SURFACE.well, THEME.border, THEME.foreground];
 }
 
-/** shadcn Badge: small rounded-md label, text-xs font-medium */
+/** shadcn Badge: a small chip (well or key cap), text-xs SemiBold with the dark contour */
 export function Badge(parent: Instance, name: string, text: string, props: BadgeProps): Frame {
 	const h = props.h ?? 22;
 	const size = props.textSize ?? TEXT.xs;
 	const w = props.w ?? badgeWidth(text, size, h);
-	const [bg, bgT, fg, border, strokeT] = badgeColors(props.variant ?? "default", props.color);
+	const [kind, fill, border, fg] = badgeLook(props.variant ?? "default", props.color);
 	const zIndex = props.zIndex ?? 2;
-	const f = makeFrame(parent, name, props.x, props.y, w, h, bg, {
-		transparency: bgT,
-		radius: RADIUS.md,
-		stroke: border,
-		strokeTransparency: strokeT,
-		zIndex,
-	});
+	const f = makeSurface(parent, name, props.x, props.y, w, h, kind, { fill, border, zIndex });
 	makeLabel(f, "Text", text, space(1.5), 0, w - space(3), h, size, fg, {
-		font: fontOf("sans", Enum.FontWeight.Medium),
+		font: fontOf("sans", Enum.FontWeight.Bold),
 		zIndex: zIndex + 1,
+		outline: true,
 	});
 	return f;
 }
 
-/** updates a Badge's text (and, for a custom-colour badge, its border accent — the fill stays transparent) */
+/** updates a Badge's text (and, for a custom-colour badge, its accent — the chip keeps the well fill) */
 export function setBadge(badge: Frame, text: string, color?: Color3): void {
 	const label = badge.FindFirstChild("Text");
 	if (label !== undefined && label.IsA("TextLabel")) label.Text = text;
-	if (color !== undefined) {
-		const stroke = badge.FindFirstChildOfClass("UIStroke");
-		if (stroke !== undefined) stroke.Color = color;
-	}
+	if (color !== undefined) setSurface(badge, "well", { fill: SURFACE.well, border: color });
 }
 
 // ---------------------------------------------------------------- Separator
@@ -976,17 +994,17 @@ export interface SeparatorProps {
 	zIndex?: number;
 }
 
-/** shadcn Separator: 1 px line in `border` colour */
+/** shadcn Separator: a 1 skin px rule in the surface `line` colour */
 export function Separator(parent: Instance, name: string, props: SeparatorProps): Frame {
 	const [dw, dh] = designOf(parent);
 	const f = new Instance("Frame");
 	f.Name = name;
-	f.BackgroundColor3 = props.color ?? THEME.border;
+	f.BackgroundColor3 = props.color ?? SURFACE.line;
 	f.BorderSizePixel = 0;
 	if (props.zIndex !== undefined) f.ZIndex = props.zIndex;
 	f.Position = UDim2.fromScale(props.x / dw, props.y / dh);
 	onLayoutChange(f, () => {
-		const px = hairline(BORDER.width);
+		const px = skinPx();
 		f.Size = props.vertical ? new UDim2(0, px, props.length / dh, 0) : new UDim2(props.length / dw, 0, 0, px);
 	});
 	f.Parent = parent;
@@ -1019,16 +1037,38 @@ export interface ProgressProps {
 	zIndex?: number;
 }
 
-/** shadcn Progress: `secondary` track + indicator in a semantic colour */
+/** inner area of a well, inset by its 1 skin px border (screen px, follows the UI scale) */
+function wellInner(host: GuiObject, name: string, zIndex: number): Frame {
+	const inner = new Instance("Frame");
+	inner.Name = name;
+	inner.BackgroundTransparency = 1;
+	inner.BackgroundColor3 = THEME.background;
+	inner.BorderSizePixel = 0;
+	inner.ZIndex = zIndex;
+	inner.ClipsDescendants = true;
+	onLayoutChange(inner, () => {
+		const px = skinEnabled() ? skinPx() : hairline(BORDER.width);
+		inner.Position = new UDim2(0, px, 0, px);
+		inner.Size = new UDim2(1, -px * 2, 1, -px * 2);
+	});
+	inner.Parent = host;
+	return inner;
+}
+
+/** shadcn Progress: a recessed track with a flat indicator (the reference's bars) */
 export function Progress(parent: Instance, name: string, props: ProgressProps): Bar {
 	const { w, h } = props;
-	const radius = math.min(RADIUS.lg, h / 2);
-	const frame = makeFrame(parent, name, props.x, props.y, w, h, THEME.secondary, {
-		radius,
-		zIndex: props.zIndex,
-	});
-	const fill = makeFrame(frame, "Fill", 0, 0, w, h, props.color ?? THEME.primary, { radius });
-	fill.ZIndex = frame.ZIndex + 1;
+	const zIndex = props.zIndex ?? 1;
+	const frame = makeSurface(parent, name, props.x, props.y, w, h, "well", { zIndex });
+	const inner = wellInner(frame, "Inner", zIndex + 1);
+	const fill = new Instance("Frame");
+	fill.Name = "Fill";
+	fill.BackgroundColor3 = props.color ?? THEME.primary;
+	fill.BorderSizePixel = 0;
+	fill.Position = new UDim2();
+	fill.Size = UDim2.fromScale(1, 1);
+	fill.ZIndex = zIndex + 2;
+	fill.Parent = inner;
 	let label: TextLabel | undefined;
 	if (props.label === true) {
 		label = makeLabel(
@@ -1041,13 +1081,8 @@ export function Progress(parent: Instance, name: string, props: ProgressProps): 
 			h,
 			props.textSize ?? h * 0.7,
 			THEME.foreground,
-			{
-				font: "numeric",
-				zIndex: frame.ZIndex + 2,
-			},
+			{ font: "numeric", zIndex: zIndex + 3, outline: true },
 		);
-		label.TextStrokeColor3 = GAME.textOutline;
-		label.TextStrokeTransparency = 0.55;
 	}
 	const bar: Bar = {
 		frame,
@@ -1092,14 +1127,10 @@ export interface TabsHandle {
 	setActive(index: number): void;
 }
 
-/** shadcn Tabs: TabsList (muted, bordered); active trigger = secondary, inactive = muted text, hover = accent */
+/** shadcn Tabs: a recessed tray; the active trigger is a raised plate, the inactive ones stay sunk */
 export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHandle {
 	const { w, h, items } = props;
-	const list = makeFrame(parent, name, props.x, props.y, w, h, THEME.muted, {
-		radius: RADIUS.lg,
-		stroke: THEME.border,
-		zIndex: props.zIndex,
-	});
+	const list = makeSurface(parent, name, props.x, props.y, w, h, "well", { zIndex: props.zIndex });
 	const gap = 3;
 	const n = math.max(items.size(), 1);
 	const triggerW = (w - gap * 2 - gap * (n - 1)) / n;
@@ -1123,7 +1154,6 @@ export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHand
 				w: triggerW,
 				h: h - gap * 2,
 				textSize: props.textSize ?? TEXT.sm,
-				radius: RADIUS.md,
 				zIndex: list.ZIndex + 1,
 				onClick: (): void => {
 					handle.setActive(index);
@@ -1167,17 +1197,10 @@ export interface SidebarHandle {
 
 const NAV_BADGE_H = 20;
 
-/**
- * Navigation rail with the neutral sidebar palette: bg sidebar + sidebar-border; items in sidebar-foreground,
- * hover = sidebar-accent, selected = sidebar-primary / sidebar-primary-foreground, focus ring = sidebar-ring.
- */
+/** Navigation rail: a well holding the items; the selected one is a raised `secondary` plate */
 export function Sidebar(parent: Instance, name: string, props: SidebarProps): SidebarHandle {
 	const { w, h, items } = props;
-	const rail = makeFrame(parent, name, props.x, props.y, w, h, SIDEBAR.background, {
-		radius: RADIUS.lg,
-		stroke: SIDEBAR.border,
-		zIndex: props.zIndex,
-	});
+	const rail = makeSurface(parent, name, props.x, props.y, w, h, "well", { zIndex: props.zIndex });
 	const pad = space(2);
 	const itemH = props.itemH ?? 40;
 	const buttons: Array<TextButton> = [];
@@ -1221,7 +1244,6 @@ export function Sidebar(parent: Instance, name: string, props: SidebarProps): Si
 				size: "sm",
 				align: "left",
 				textSize: props.textSize ?? TEXT.sm,
-				radius: RADIUS.md,
 				zIndex: rail.ZIndex + 1,
 				onClick: (): void => {
 					handle.setActive(index);
@@ -1340,21 +1362,21 @@ export interface DialogProps {
 	/** lines reserved for the description (default 1) */
 	descriptionLines?: number;
 	zIndex?: number;
-	/** top-right "X" (secondary icon button) */
+	/** top-right "X" (destructive icon button, as in the reference art) */
 	closeButton?: boolean;
 	onClose?: () => void;
 }
 
 export interface DialogHandle {
 	root: Frame;
-	/** DialogContent: a popover card */
+	/** DialogContent: a popover panel */
 	card: Frame;
 	/** y (card design units) where the content starts, below the header */
 	contentY: number;
 	close(): void;
 }
 
-/** shadcn Dialog: scrim (background at 80%) + centred popover card (zoom-in-95 / fade-in) with its header */
+/** shadcn Dialog: scrim (background at 80%) + centred panel with its title strip (zoom-in-95 / fade-in) */
 export function Dialog(layer: Instance, name: string, props: DialogProps): DialogHandle {
 	const { root, body } = makeScreen(layer, name, {
 		color: THEME.background,
@@ -1369,7 +1391,8 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 		variant: "popover",
 	});
 	let contentY = space(6);
-	const closeW = props.closeButton === true ? BUTTON_SIZE.icon.h : 0;
+	// the close button rides on the title strip, like the reference's red "X"
+	const closeW = props.closeButton === true ? cardStripHeight() - space(2) : 0;
 	if (props.title !== undefined) {
 		contentY = CardHeader(card, props.title, props.description, {
 			titleSize: TEXT.xl2,
@@ -1391,11 +1414,13 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 	};
 	if (closeW > 0) {
 		Button(card, "Close", "X", {
-			x: props.w - space(4) - closeW,
-			y: space(4),
+			x: props.w - CARD_STRIP_INSET - space(1) - closeW,
+			y: CARD_STRIP_INSET + space(1),
 			w: closeW,
+			h: closeW,
 			size: "icon",
-			variant: "secondary",
+			variant: "destructive",
+			zIndex: card.ZIndex + 3,
 			onClick: (): void => handle.close(),
 		});
 	}
@@ -1429,12 +1454,12 @@ export interface SliderHandle {
 	disconnect(): void;
 }
 
-const TRACK_H = 6;
-const THUMB = 18;
+const TRACK_H = 10;
+const THUMB = 20;
 
 /**
- * shadcn Slider: `input` track, `primary` range, background thumb with a primary border. Mouse/touch drag;
- * with a gamepad or the keyboard, select it and use left/right.
+ * shadcn Slider: a recessed track, a flat `primary` range and a raised knob. Mouse/touch drag; with a
+ * gamepad or the keyboard, select it and use left/right.
  */
 export function Slider(parent: Instance, name: string, props: SliderProps): SliderHandle {
 	const { w, h } = props;
@@ -1454,32 +1479,30 @@ export function Slider(parent: Instance, name: string, props: SliderProps): Slid
 	hit.SelectionBehaviorRight = Enum.SelectionBehavior.Stop;
 	const z = hit.ZIndex;
 	const inset = THUMB / 2;
-	const track = makeFrame(hit, "Track", inset, (h - TRACK_H) / 2, w - inset * 2, TRACK_H, THEME.input, {
-		radius: RADIUS.full,
+	const track = makeSurface(hit, "Track", inset, (h - TRACK_H) / 2, w - inset * 2, TRACK_H, "well", {
 		zIndex: z + 1,
 	});
-	const range = makeFrame(track, "Range", 0, 0, w - inset * 2, TRACK_H, THEME.primary, {
-		radius: RADIUS.full,
-		zIndex: z + 2,
-	});
-	const thumb = makeFrame(track, "Thumb", 0, TRACK_H / 2, THUMB, THUMB, THEME.background, {
-		radius: RADIUS.full,
-		stroke: THEME.primary,
-		zIndex: z + 3,
+	const inner = wellInner(track, "Inner", z + 2);
+	const range = new Instance("Frame");
+	range.Name = "Range";
+	range.BackgroundColor3 = THEME.primary;
+	range.BorderSizePixel = 0;
+	range.Size = UDim2.fromScale(1, 1);
+	range.ZIndex = z + 3;
+	range.Parent = inner;
+	const thumb = makeSurface(track, "Thumb", 0, (TRACK_H - THUMB) / 2, THUMB, THUMB, "raised", {
+		fill: THEME.foreground,
+		zIndex: z + 4,
 	});
 	thumb.AnchorPoint = new Vector2(0.5, 0.5);
 	addAspect(thumb, 1);
-	const thumbStroke = thumb.FindFirstChildOfClass("UIStroke");
 
 	const refresh = (): void => {
 		const v = math.clamp(props.get(), 0, 1);
 		range.Size = UDim2.fromScale(v, 1);
 		thumb.Position = UDim2.fromScale(v, 0.5);
-		if (thumbStroke !== undefined) {
-			const ring = isFocused(hit);
-			thumbStroke.Color = ring ? THEME.ring : THEME.primary;
-			setStrokeWidth(thumbStroke, ring ? BORDER.ring : BORDER.width);
-		}
+		const ring = isFocused(hit);
+		paintSurface(thumb, raisedSurface(ring ? THEME.ring : THEME.foreground, ring ? "hot" : "idle"));
 	};
 	const setValue = (v: number): void => {
 		props.set(math.clamp(math.round(v / step) * step, 0, 1));
@@ -1540,12 +1563,11 @@ const MAX_TOASTS = 4;
 const TOAST_TIME = 2.8;
 const TOAST_W = 360;
 const TOAST_H = 50;
-const ICON = 20;
+const ICON = 22;
 
 interface ToastStyle {
-	bg: Color3;
+	frame: Color3;
 	fg: Color3;
-	border: Color3;
 	icon: Color3;
 	glyphColor: Color3;
 	glyph: string;
@@ -1554,22 +1576,16 @@ interface ToastStyle {
 }
 
 /**
- * popover toasts with a semantic icon. Errors read as the same popover card as every other kind, with
- * `destructive` only on the border/icon and the message in `foreground` (~18.7:1 on the popover background) —
- * a solid `destructive` fill behind `destructive-foreground` text only reaches ~3.7:1, below the 4.5:1 floor.
+ * Popover toasts with a semantic chip. Errors read as the same panel as every other kind, with `destructive`
+ * only on the frame/chip and the message in `foreground` (~18.7:1 on the panel) — a solid `destructive` fill
+ * behind `destructive-foreground` text only reaches ~3.7:1, below the 4.5:1 floor.
  */
 function toastStyle(kind: ToastKind): ToastStyle {
-	const base = {
-		bg: THEME.popover,
-		fg: THEME.popoverForeground,
-		border: THEME.border,
-		glyphColor: THEME.background,
-		textSize: TEXT.sm,
-	};
+	const base = { frame: SURFACE.frame, fg: THEME.popoverForeground, glyphColor: THEME.background, textSize: TEXT.sm };
 	if (kind === "success") return { ...base, icon: GAME.success, glyph: "✓" };
 	if (kind === "coin") return { ...base, icon: GAME.coin, glyph: "$" };
 	if (kind === "error") {
-		return { ...base, border: THEME.destructive, icon: THEME.destructive, glyph: "!", textSize: TEXT.base };
+		return { ...base, frame: THEME.destructive, icon: THEME.destructive, glyph: "!", textSize: TEXT.base };
 	}
 	return { ...base, icon: GAME.info, glyph: "i" };
 }
@@ -1590,7 +1606,7 @@ function toastStack(layer: Instance): Frame {
 
 let toastOrder = 0;
 
-/** sonner-style toast: bordered popover card stacked in the top-right corner, newest first; duplicates merge */
+/** sonner-style toast: a small panel stacked in the top-right corner, newest first; duplicates merge */
 export function showToast(layer: Instance, text: string, kind: ToastKind = "info"): void {
 	const stack = toastStack(layer);
 	for (const child of stack.GetChildren()) {
@@ -1609,24 +1625,25 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 	while (live.size() >= MAX_TOASTS) live.remove(0)?.Destroy();
 
 	const style = toastStyle(kind);
-	const slot = makeFrame(stack, "Toast", 0, 0, TOAST_W, TOAST_H, style.bg, { transparency: 1 });
+	const slot = makeFrame(stack, "Toast", 0, 0, TOAST_W, TOAST_H, THEME.background, { transparency: 1 });
 	slot.Position = new UDim2();
 	slot.ZIndex = 1001;
 	slot.LayoutOrder = -++toastOrder;
 	slot.SetAttribute("Text", text);
 	slot.SetAttribute("Born", os.clock());
-	const card = makeFrame(slot, "Card", 0, 0, TOAST_W, TOAST_H, style.bg, {
-		radius: RADIUS.lg,
-		stroke: style.border,
+	const card = makeSurface(slot, "Card", 0, 0, TOAST_W, TOAST_H, "panel", {
+		border: style.frame,
 		zIndex: 1002,
 	});
-	const icon = makeFrame(card, "Icon", space(4), (TOAST_H - ICON) / 2, ICON, ICON, style.icon, {
-		radius: RADIUS.full,
+	const icon = makeSurface(card, "Icon", space(4), (TOAST_H - ICON) / 2, ICON, ICON, "well", {
+		fill: style.icon,
+		border: style.icon,
 		zIndex: 1003,
 	});
-	const glyph = makeLabel(icon, "Glyph", style.glyph, 0, 0, ICON, ICON, TEXT.xs, style.glyphColor, {
+	const glyph = makeLabel(icon, "Glyph", style.glyph, 0, 0, ICON, ICON, TEXT.sm, style.glyphColor, {
 		weight: Enum.FontWeight.Bold,
 		zIndex: 1004,
+		outline: false,
 	});
 	const textX = space(4) + ICON + space(3);
 	const label = makeLabel(
@@ -1639,29 +1656,20 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 		TOAST_H,
 		style.textSize,
 		style.fg,
-		{ font: "label", align: "left", zIndex: 1003 },
+		{ font: "label", align: "left", zIndex: 1003, outline: true },
 	);
 	// enter: slide in from the right + fade (transient: the only use of transparency on toasts)
-	const stroke = card.FindFirstChildOfClass("UIStroke");
-	const fadeTargets: Array<[GuiObject, boolean]> = [
-		[card, false],
-		[icon, false],
-		[glyph, true],
-		[label, true],
-	];
 	const setFade = (t: number, time: number): void => {
-		for (const [obj, isText] of fadeTargets) {
-			if (isText && obj.IsA("TextLabel")) tween(obj, time, { TextTransparency: t });
-			else tween(obj, time, { BackgroundTransparency: t });
-		}
-		if (stroke !== undefined) tween(stroke, time, { Transparency: t });
+		fadeSurface(card, time, t);
+		fadeSurface(icon, time, t);
+		fadeText(glyph, time, t);
+		fadeText(label, time, t);
 	};
 	card.Position = UDim2.fromScale(0.12, 0);
-	card.BackgroundTransparency = 1;
-	icon.BackgroundTransparency = 1;
+	setSurfaceTransparency(card, 1);
+	setSurfaceTransparency(icon, 1);
 	glyph.TextTransparency = 1;
 	label.TextTransparency = 1;
-	if (stroke !== undefined) stroke.Transparency = 1;
 	tween(card, 0.2, { Position: UDim2.fromScale(0, 0) });
 	setFade(0, 0.2);
 	task.spawn(() => {
@@ -1708,7 +1716,7 @@ export function makeScrollList(
 	f.CanvasSize = UDim2.fromOffset(0, 0);
 	f.AutomaticCanvasSize = Enum.AutomaticSize.Y;
 	f.ScrollBarThickness = 6;
-	f.ScrollBarImageColor3 = THEME.border;
+	f.ScrollBarImageColor3 = SURFACE.line;
 	f.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar;
 	f.SelectionImageObject = NO_SELECTION_IMAGE;
 	const layout = new Instance("UIListLayout");
@@ -1736,26 +1744,24 @@ function sizeRow(list: ScrollList, row: GuiObject, rowH: number): void {
 
 /**
  * Static row for a ScrollList: full width, `rowH` design units tall; children use a (list width) x rowH design
- * space. Card look: bg-card + 1 px border + radius.
+ * space. Look: a well sunk into the panel (flat fill + 1 px border).
  */
 export function makeListRow(list: ScrollList, name: string, order: number, rowH: number, color?: Color3): Frame {
 	const row = new Instance("Frame");
 	row.Name = name;
-	row.BackgroundColor3 = color ?? THEME.card;
 	row.BorderSizePixel = 0;
 	row.LayoutOrder = order;
 	setDesign(row, list.designW, rowH);
-	addCorner(row, RADIUS.lg, list.designW, rowH);
-	addStroke(row, THEME.border);
+	paintSurface(row, wellSurface(color ?? SURFACE.well, SURFACE.line));
 	sizeRow(list, row, rowH);
 	row.Parent = list.frame;
 	return row;
 }
 
 /**
- * Clickable row for a ScrollList (the row IS the button): bg-card + border; hover / press / gamepad selection =
- * accent, and its own TextLabels switch to accent-foreground meanwhile (put the row's labels directly inside it;
- * use >= TEXT.sm and SemiBold/Bold for what must stay legible on accent). Children use (list width) x rowH.
+ * Clickable row for a ScrollList (the row IS the button): a well that fills with the frame colour on hover /
+ * press / gamepad selection, and whose own TextLabels switch to accent-foreground meanwhile (put the row's
+ * labels directly inside it; use >= TEXT.sm and SemiBold/Bold). Children use (list width) x rowH.
  */
 export function ListRowButton(
 	list: ScrollList,
@@ -1778,17 +1784,23 @@ export interface CoinPill {
 	refresh(): void;
 }
 
-/** coin icon: chart-3 circle with a "$" in the background colour */
+/** coin icon: a chart-3 chip with a "$" in the background colour */
 export function CoinIcon(parent: Instance, name: string, x: number, y: number, size: number, zIndex?: number): Frame {
-	const icon = makeFrame(parent, name, x, y, size, size, GAME.coin, { radius: RADIUS.full, zIndex });
+	const z = zIndex ?? 2;
+	const icon = makeSurface(parent, name, x, y, size, size, "well", {
+		fill: GAME.coin,
+		border: GAME.coin,
+		zIndex: z,
+	});
 	makeLabel(icon, "Glyph", "$", 0, 0, size, size, size * 0.62, THEME.background, {
 		weight: Enum.FontWeight.ExtraBold,
-		zIndex: zIndex !== undefined ? zIndex + 1 : undefined,
+		zIndex: z + 1,
+		outline: false,
 	});
 	return icon;
 }
 
-/** coin balance: coin icon (chart-3) + amount in foreground mono; `onClick` makes it an outline button */
+/** coin balance: coin chip (chart-3) + amount in foreground mono; `onClick` makes it a pressable plate */
 export function makeCoinPill(
 	parent: Instance,
 	name: string,
@@ -1802,11 +1814,7 @@ export function makeCoinPill(
 	const frame: GuiObject =
 		onClick !== undefined
 			? Button(parent, name, "", { x, y, w, h, variant: "outline", onClick })
-			: makeFrame(parent, name, x, y, w, h, THEME.background, {
-					transparency: 1,
-					radius: RADIUS.lg,
-					stroke: THEME.border,
-				});
+			: makeSurface(parent, name, x, y, w, h, "well");
 	const iconSize = h - space(5);
 	CoinIcon(frame, "Icon", space(3), (h - iconSize) / 2, iconSize, frame.ZIndex + 1);
 	const textX = space(3) + iconSize + space(3);
