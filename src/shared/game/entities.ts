@@ -36,6 +36,45 @@ export interface ZombieState {
 	wanderTimer: number;
 	wanderDir: number;
 	wave: boolean;
+	// --- senses, memory and pack (shared/sim/ai/*): the original has none of this ------------------
+	/** last position where the target was perceived, or credibly reported (noise, shout, a bullet) */
+	lastSeenX?: number;
+	lastSeenY?: number;
+	/** seconds since the target was last perceived */
+	lostFor?: number;
+	/** seconds left of the search around the last known position; undefined = not searching */
+	searchTimer?: number;
+	/** seconds until the next line-of-sight ray (LOD budget, docs/MULTIPLAYER.md §3.4) */
+	losCd?: number;
+	/** result of the last line-of-sight ray, reused until `losCd` runs out */
+	losClear?: boolean;
+	/**
+	 * Heading decided by the last navigation step, and the seconds left before it is recomputed. The LOD ring
+	 * (docs/MULTIPLAYER.md §3.4) sets that interval: the body keeps walking `navDir` every tick meanwhile.
+	 */
+	navDir?: number;
+	navCd?: number;
+	/** best path cost (in flow-field cells) this zombie has reached, and how long it has not improved on it */
+	bestCells?: number;
+	jamT?: number;
+	/** seconds left of "walk around the building instead of queueing", and which way round */
+	orbit?: number;
+	orbitSide?: number;
+	/** seconds until this zombie may shout again (group alert) */
+	alertCd?: number;
+	/** seconds left of a shout: renderer may draw a louder "!" and the audio owner a roar */
+	shout?: number;
+	/** seconds left of a sidestep (spitter kiting, charger looking for a clear lane) */
+	strafe?: number;
+	/** which way that sidestep goes: +1 or −1 */
+	strafeSide?: number;
+	// --- telegraphed attack (the original bites the instant it touches you) -----------------------
+	/** seconds left of the bite wind-up; the body leans back while > 0 and cannot damage anyone */
+	windup?: number;
+	/** how long the current wind-up lasts, so the view can normalise it to 0…1 */
+	windupMax?: number;
+	/** seconds left of a heavy-hit stagger (the view flinches; the zombie cannot act) */
+	stagger?: number;
 	/** 0..1 visibility (darkness/lights), eased by the AI; renderer multiplies by it */
 	alpha: number;
 	/** walk-cycle phase (rad), advanced by the AI while moving; renderer animates feet with it */
@@ -65,6 +104,8 @@ export interface ZombieState {
 	/** seconds spent in the current rush */
 	rushTime?: number;
 	backstep?: boolean;
+	/** charges that found no clear lane in a row; after a few the charger repositions instead */
+	rushFail?: number;
 	// jumper
 	jumping?: boolean;
 	jumpReady?: boolean;
