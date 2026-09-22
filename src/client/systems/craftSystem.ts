@@ -5,8 +5,9 @@ import { USABLES } from "shared/data/usables";
 import { WEAPONS } from "shared/data/weapons";
 import { chance } from "shared/engine/rng";
 import { querySolids, Solid } from "shared/game/world";
-import { addItem, countItem, removeItem } from "./items";
-import { GameRefs } from "./types";
+import type { PlayerState } from "shared/game/player";
+import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import { fxMessage, GameRefs } from "./types";
 
 /** how close (edge distance) a desk / fire must be */
 const DESK_RANGE = 180;
@@ -23,9 +24,9 @@ function matchesStation(s: Solid, station: CraftStation): boolean {
 	return (s.tags === "brazier" && s.powered === true) || s.tags === "furnace";
 }
 
-/** nearest construction of that kind within DESK_RANGE of the player (edge distance) */
-export function stationNear(refs: GameRefs, station: CraftStation): Solid | undefined {
-	const p = refs.player;
+/** nearest construction of that kind within DESK_RANGE of the survivor (edge distance) */
+export function stationNear(refs: GameRefs, station: CraftStation, by: PlayerState = refs.player): Solid | undefined {
+	const p = by;
 	const pad = DESK_RANGE + 160;
 	stationBuf.clear();
 	querySolids(refs.world, p.x - pad, p.y - pad, p.x + pad, p.y + pad, stationBuf);
@@ -98,7 +99,7 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 	if (r === undefined) return false;
 	const why = craftBlocker(refs, r);
 	if (why !== undefined) {
-		refs.onMessage(why);
+		fxMessage(refs, why, refs.player);
 		return false;
 	}
 	for (const ing of r.ingredients) {

@@ -1,4 +1,3 @@
-import { COLORS } from "shared/engine/colors";
 import { DESIGN } from "shared/engine/constants";
 import { WeaponKind } from "shared/data/kinds";
 import { isChoppingTool, meleeReach, usesMagazine, WeaponDef, WEAPONS } from "shared/data/weapons";
@@ -12,8 +11,13 @@ import { Bullet } from "shared/game/bullets";
 import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState, ZombieState, zombieRadius } from "shared/game/entities";
 import { addPuddle, emitSound, reactToHit } from "./zombieAI";
 import { hitMapItem } from "./interaction";
-import { getCtx, refreshAim } from "../bootstrap";
-import { GameRefs, SPEED_SCALE, Tracer } from "./types";
+import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
+
+/*
+ * Weapons of the local survivor: magazine, cadence, spread, hitscan, melee sweep, projectiles and turrets.
+ * Everything cosmetic (muzzle kick, blood, debris, tracers) is asked for through refs.fx and played by the view,
+ * never drawn from here (docs/MULTIPLAYER.md §11.3 F0 0C → server/sim/combat.ts + client/predict/weaponFx.ts in F2).
+ */
 
 const DEG = math.pi / 180;
 
@@ -56,6 +60,9 @@ const CHAINSAW_WARMUP = 1.5;
 const CHAINSAW_MAX = 8;
 const CHAINSAW_OIL_PER_SEC = 0.1 * 30;
 const CHAINSAW_ARC = 25 * DEG;
+
+/** how long a shot line stays on screen (it also lights the night) */
+const TRACER_LIFE = 0.2;
 
 /** turrets (obj_turret / obj_trap_electric): 0.67 s between shots, 200 px */
 const TURRET_COOLDOWN = 20 / 30;
@@ -100,13 +107,9 @@ function reloadTime(refs: GameRefs, w: WeaponDef): number {
 // --------------------------------------------------------------------------------------------
 // shared hit helpers
 
-function addTracer(refs: GameRefs, x1: number, y1: number, x2: number, y2: number, color: Color3, life = 0.2): void {
-	const t: Tracer = { x1, y1, x2, y2, color, life };
-	refs.tracers.push(t);
-}
-
-function shake(magnitude: number, duration: number): void {
-	getCtx().cam.shake(magnitude, duration);
+/** the shooter's camera kick (combat runs for the local survivor, refs.player) */
+function shake(refs: GameRefs, magnitude: number, duration: number): void {
+	fxShake(refs, refs.player, magnitude, duration);
 }
 
 function hitZombie(refs: GameRefs, z: ZombieState, dmg: number, knock: number, blood = 3): void {
@@ -114,13 +117,13 @@ function hitZombie(refs: GameRefs, z: ZombieState, dmg: number, knock: number, b
 	const away = math.atan2(z.y - p.y, z.x - p.x);
 	z.hp -= dmg;
 	reactToHit(z, away, knock);
-	if (blood > 0) refs.particles.bloodBurst(z.x, z.y, blood, "zombie", away);
+	if (blood > 0) fxBlood(refs, z.x, z.y, blood, "zombie", away);
 }
 
 function hitBoss(refs: GameRefs, b: BossState, dmg: number, x: number, y: number, blood = 3): void {
 	b.hp -= dmg;
 	b.hitFlash = 1;
-	if (blood > 0) refs.particles.bloodBurst(x, y, blood);
+	if (blood > 0) fxBlood(refs, x, y, blood);
 }
 
 /** obj_bullet headshot (skill "Head shooter"): shot within 2° of the body centre, 10% → +50% */
@@ -130,7 +133,7 @@ function headshot(refs: GameRefs, shotAngle: number, z: ZombieState, dmg: number
 	const toZ = math.atan2(z.y - p.y, z.x - p.x);
 	if (math.abs(angleDiff(shotAngle, toZ)) >= 2 * DEG) return 0;
 	if (math.random() * 100 >= 10) return 0;
-	refs.particles.bloodBurst(z.x, z.y, 6);
+	fxBlood(refs, z.x, z.y, 6);
 	return math.floor(dmg / 2);
 }
 
@@ -407,10 +410,10 @@ export class Combat {
 				} else if (hit.boss !== undefined) {
 					hitBoss(refs, hit.boss, dmg, hit.x, hit.y);
 				} else if (hit.solid !== undefined) {
-					refs.particles.debrisBurst(hit.x, hit.y, 2, COLORS.shadow);
+					fxDebris(refs, hit.x, hit.y, 2, "impact");
 					if (hit.solid.kind === "car" && hit.solid.tags === "car") hitMapItem(refs, hit.solid, false);
 				}
-				addTracer(refs, mx, my, hit.x, hit.y, COLORS.bullet);
+				fxTracer(refs, mx, my, hit.x, hit.y, "bullet", TRACER_LIFE);
 			}
 		}
 		if (w.kind !== WeaponKind.Bow) {
@@ -418,7 +421,7 @@ export class Combat {
 			emitSound(refs, p.x, p.y, loud, true, true);
 		}
 		rt.angleRange = math.min(40, rt.angleRange + w.recoil);
-		shake(w.recoil / 10 + 1, 0.08);
+		shake(refs, w.recoil / 10 + 1, 0.08);
 	}
 
 	private fireFlame(refs: GameRefs, w: WeaponDef, aim: number, spread: number): void {
@@ -471,19 +474,19 @@ export class Combat {
 							math.abs(angleDiff(aim, math.atan2(b.y - p.y, b.x - p.x))) < cone
 						) {
 							hitBoss(refs, b, damageCal(w.dmg), b.x, b.y, 0);
-							addTracer(refs, p.x, p.y, b.x, b.y, COLORS.uiBlue, 0.15);
+							fxTracer(refs, p.x, p.y, b.x, b.y, "electric", 0.15);
 							return;
 						}
 					}
 					const miss = traceShot(refs, p.x, p.y, aim, w.range * 0.35);
-					addTracer(refs, p.x, p.y, miss.x, miss.y, COLORS.uiBlue, 0.1);
+					fxTracer(refs, p.x, p.y, miss.x, miss.y, "electric", 0.1);
 				}
 				return;
 			}
 			hitSet.add(best.id);
 			best.hp -= damageCal(w.dmg);
 			reactToHit(best, math.atan2(best.y - fromY, best.x - fromX), 0);
-			addTracer(refs, fromX, fromY, best.x, best.y, COLORS.uiBlue, 0.15);
+			fxTracer(refs, fromX, fromY, best.x, best.y, "electric", 0.15);
 			fromX = best.x;
 			fromY = best.y;
 			cone = math.pi;
@@ -530,7 +533,7 @@ export class Combat {
 				this.launchArrow(refs, w, aim, w.cone + rt.angleRange + this.moveSpread);
 				this.fireCd = w.cooldown;
 				rt.autoReloadIdle = 0;
-				shake(1, 0.05);
+				shake(refs, 1, 0.05);
 			}
 			this.drawTime = 0;
 			rt.bowCount = 0;
@@ -606,7 +609,7 @@ export class Combat {
 			s.hitIds.add(c.z.id);
 			hitZombie(refs, c.z, math.floor(damageCal(w.dmg) * bonus), knock, 4);
 			s.delay = HITSTOP;
-			shake(2, 0.06);
+			shake(refs, 2, 0.06);
 		}
 		// bosses (the original blade could not touch them)
 		for (const b of refs.bosses) {
@@ -622,7 +625,7 @@ export class Combat {
 			s.hitIds.add(-b.id);
 			hitBoss(refs, b, math.floor(damageCal(w.dmg) * bonus), touched.x, touched.y, 4);
 			s.delay = HITSTOP;
-			shake(2, 0.06);
+			shake(refs, 2, 0.06);
 		}
 		this.chopMapItems(refs, w, aim, fromDeg, toDeg, s.reach, false);
 	}
@@ -657,8 +660,8 @@ export class Combat {
 			if (rel + pad < fromDeg || rel - pad > toDeg) continue;
 			if (!continuous) this.swing.solidIds.add(s.id);
 			if (hitMapItem(refs, s, isChoppingTool(w))) {
-				refs.particles.debrisBurst(qx, qy, 3, s.kind === "tree" ? COLORS.treeTrunk : COLORS.car);
-				if (!continuous) shake(1.5, 0.05);
+				fxDebris(refs, qx, qy, 3, s.kind === "tree" ? "tree" : "car");
+				if (!continuous) shake(refs, 1.5, 0.05);
 			}
 		}
 	}
@@ -693,7 +696,7 @@ export class Combat {
 			if (math.abs(angleDiff(aim, math.atan2(dy, dx))) > CHAINSAW_ARC + pad) continue;
 			// damage_cal(10) every frame of contact → per second
 			hitZombie(refs, z, damageCal(w.dmg) * bonus * SPEED_SCALE * dt, knock, 0);
-			if (math.random() < 6 * dt) refs.particles.bloodBurst(z.x, z.y, 2);
+			if (math.random() < 6 * dt) fxBlood(refs, z.x, z.y, 2);
 			bit = true;
 		}
 		for (const b of refs.bosses) {
@@ -707,7 +710,7 @@ export class Combat {
 			hitBoss(refs, b, damageCal(w.dmg) * bonus * SPEED_SCALE * dt, tip.x, tip.y, 0);
 			bit = true;
 		}
-		if (bit) shake(1.5, 0.05);
+		if (bit) shake(refs, 1.5, 0.05);
 		this.chopMapItems(refs, w, aim, -CHAINSAW_ARC / DEG, CHAINSAW_ARC / DEG, reach, true);
 	}
 
@@ -751,7 +754,7 @@ export class Combat {
 			const z = hit.zombie;
 			z.hp -= damageCal(b.damage);
 			reactToHit(z, math.atan2(z.y - p.y, z.x - p.x), KNOCK_ARROW);
-			refs.particles.bloodBurst(hit.x, hit.y, 3);
+			fxBlood(refs, hit.x, hit.y, 3);
 			b.stuckTo = z.id;
 			b.stuckDX = (hit.x - z.x) * 0.5;
 			b.stuckDY = (hit.y - z.y) * 0.5;
@@ -803,7 +806,6 @@ export class Combat {
 	}
 
 	private updateEnemyShot(refs: GameRefs, b: Bullet, dt: number): boolean {
-		const p = refs.player;
 		const step = b.speed * dt;
 		b.life -= dt;
 		if (b.targetX !== undefined && b.targetY !== undefined) {
@@ -825,14 +827,16 @@ export class Combat {
 		b.x += math.cos(b.angle) * wall.dist;
 		b.y += math.sin(b.angle) * wall.dist;
 		b.travel += wall.dist;
-		const dx = p.x - b.x;
-		const dy = p.y - b.y;
+		// a boss needle hits whichever survivor it reaches first
 		const rr = PLAYER_RADIUS + 6;
-		if (dx * dx + dy * dy < rr * rr) {
+		for (const p of refs.players) {
+			const dx = p.x - b.x;
+			const dy = p.y - b.y;
+			if (dx * dx + dy * dy >= rr * rr) continue;
 			if (damageToPlayer(p, refs.save, b.damage)) {
 				// pushed along the needle's flight (the old code threw the player back at the boss)
 				p.reactionDir = b.angle;
-				refs.particles.bloodBurst(p.x, p.y, 3, "player");
+				fxBlood(refs, p.x, p.y, 3, "player");
 			}
 			return true;
 		}
@@ -894,14 +898,14 @@ export class Combat {
 					if (electric) {
 						target.hp -= damageCal(SHOCK_DAMAGE);
 						reactToHit(target, ang, 0, 0.4);
-						addTracer(refs, cx, cy, target.x, target.y, COLORS.uiBlue, 0.12);
+						fxTracer(refs, cx, cy, target.x, target.y, "electric", 0.12);
 					} else {
 						const a = ang + rndRange(-1, 1) * 10 * DEG;
 						const hit = traceShot(refs, cx, cy, a, TURRET_RANGE);
 						const dmg = damageCal(TURRET_DAMAGE * (1 + refs.save.skillLevels[13] / 2));
 						if (hit.zombie !== undefined) hitZombie(refs, hit.zombie, dmg, KNOCK_BULLET);
 						else if (hit.boss !== undefined) hitBoss(refs, hit.boss, dmg, hit.x, hit.y);
-						addTracer(refs, cx, cy, hit.x, hit.y, COLORS.bullet);
+						fxTracer(refs, cx, cy, hit.x, hit.y, "bullet", TRACER_LIFE);
 					}
 				} else {
 					cd = 0.15;
@@ -911,13 +915,6 @@ export class Combat {
 		}
 		for (const [s] of this.turretCd) {
 			if (s.removed === true) this.turretCd.delete(s);
-		}
-	}
-
-	private decayTracers(refs: GameRefs, dt: number): void {
-		for (let i = refs.tracers.size() - 1; i >= 0; i--) {
-			refs.tracers[i].life -= dt;
-			if (refs.tracers[i].life <= 0) refs.tracers.remove(i);
 		}
 	}
 
@@ -944,10 +941,8 @@ export class Combat {
 	update(refs: GameRefs, dt: number): void {
 		const p = refs.player;
 		const input = refs.input;
-		this.decayTracers(refs, dt);
 		p.hitFlash = math.max(0, (p.hitFlash ?? 0) - dt);
-		// aim from the PLAYER's position every frame, not only when the mouse moves
-		p.angle = refreshAim(p.x, p.y);
+		// the aim of this frame: the gameLoop refreshed it from the survivor's new position
 		const aim = p.angle;
 		this.trackMovement(p, dt, refs.save.skillLevels[18] > 0);
 		this.updateBullets(refs, dt);

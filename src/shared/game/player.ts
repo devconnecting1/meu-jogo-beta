@@ -61,6 +61,8 @@ export interface PlayerState {
 	dead: boolean;
 	/** admin panel "god mode" (and free camera): damageToPlayer does nothing */
 	godMode?: boolean;
+	/** admin panel "noclip": stepPlayer moves this survivor without collision (docs/MULTIPLAYER.md §10) */
+	noclip?: boolean;
 	/**
 	 * admin panel "infinite ammo": the magazine is refilled for free, so it must never turn into real ammo
 	 * (switching weapons does not return it to the pool, picked-up arrows are not added)

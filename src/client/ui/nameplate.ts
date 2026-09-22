@@ -7,11 +7,13 @@
  *
  * The owner (gameLoop) positions it every frame with update(); nothing is created there, and Text / Position /
  * Visible are only written when they change. Sizes follow the UI scale (text, padding, corner, border).
+ *
+ * The plate is built for the Player it is given (docs/MULTIPLAYER.md §5.3): in co-op there is one per survivor in
+ * the world, so it never reads LocalPlayer itself.
  */
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "./theme";
 import { addStroke, onLayoutChange, uiScale } from "./widgets";
 
-const Players = game.GetService("Players");
 const TweenService = game.GetService("TweenService");
 
 /** design sizes (scaled by the UI scale) */
@@ -54,9 +56,11 @@ export class Nameplate {
 	private pulses: Array<Tween> = [];
 	private pulseGen = 0;
 
-	/** parent: frame that covers the viewport (same space as cam.worldToScreen); zIndex: above world, below HUD */
-	constructor(parent: GuiObject, zIndex: number) {
-		const player = Players.LocalPlayer;
+	/**
+	 * parent: frame that covers the viewport (same space as cam.worldToScreen); zIndex: above world, below HUD;
+	 * player: the survivor this plate names (the local one today, any of them in co-op).
+	 */
+	constructor(parent: GuiObject, zIndex: number, player: Player) {
 		const displayName = player.DisplayName;
 		const userName = player.Name;
 		const showHandle = userName !== displayName && displayName.size() + userName.size() + 1 <= MAX_BOTH_CHARS;

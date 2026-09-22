@@ -1,8 +1,7 @@
-import { COLORS } from "shared/engine/colors";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, damageCal, rnd, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
-import { damageToPlayer } from "shared/game/player";
+import { damageToPlayer, PlayerState } from "shared/game/player";
 import { querySolids, removeSolid, Solid, spawnGroundItem, WorldData } from "shared/game/world";
 import {
 	blocksMovement,
@@ -17,8 +16,13 @@ import {
 import { ZombieState, zombieRadius } from "shared/game/entities";
 import { zombieDef } from "shared/data/zombies";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
-import { getCtx } from "../bootstrap";
-import { GameRefs, SPEED_SCALE } from "./types";
+import { fxBlood, fxDebris, fxShake, GameRefs, nearestPlayer, SPEED_SCALE } from "./types";
+
+/*
+ * Zombie AI and physics. Every survivor in refs.players is a possible target: each zombie hunts the nearest living
+ * one (F2 turns the flow field multi-source, docs/MULTIPLAYER.md §3.3). Cosmetics (blood, debris, camera shake) are
+ * asked for through refs.fx and played by the view — nothing here touches the camera or the particle system.
+ */
 
 // --- tuning (original values @30fps converted to seconds / px per second) ---------------------
 /** stunned_time 30 frames */
@@ -80,17 +84,32 @@ const flow = new FlowField();
 let flowTimer = 0;
 let flowSolidCount = -1;
 let boundWorld: WorldData | undefined;
-let lastPX: number | undefined;
-let lastPY = 0;
-let playerVX = 0;
-let playerVY = 0;
-let walkAccum = 0;
-let walkTimer = 0;
 let seenMorning = -1;
 /** frame counter used to stagger expensive per-zombie checks */
 let frameNo = 0;
 /** cached path heading per zombie id: [heading, seconds until refresh] */
 const navCache = new Map<number, { heading: number; t: number }>();
+
+/** footsteps and velocity of one survivor (the spitter leads its target with it) */
+interface PlayerTrack {
+	lastX?: number;
+	lastY: number;
+	vx: number;
+	vy: number;
+	walkAccum: number;
+	walkTimer: number;
+}
+
+const tracks = new Map<PlayerState, PlayerTrack>();
+
+function trackOf(p: PlayerState): PlayerTrack {
+	let t = tracks.get(p);
+	if (t === undefined) {
+		t = { lastY: 0, vx: 0, vy: 0, walkAccum: 0, walkTimer: 0 };
+		tracks.set(p, t);
+	}
+	return t;
+}
 const sepX: Array<number> = [];
 const sepY: Array<number> = [];
 const nearSolids: Array<Solid> = [];
@@ -124,10 +143,6 @@ export function actorDist(ax: number, ay: number, bx: number, by: number): numbe
 	const dx = ax - bx;
 	const dy = ay - by;
 	return math.sqrt(dx * dx + dy * dy);
-}
-
-function camShake(magnitude: number, duration: number): void {
-	getCtx().cam.shake(magnitude, duration);
 }
 
 function setDetect(z: ZombieState): void {
@@ -177,37 +192,40 @@ export function emitSound(refs: GameRefs, x: number, y: number, rMax: number, sh
 }
 
 function updateNoise(refs: GameRefs, dt: number): void {
-	const p = refs.player;
-	let moved = 0;
-	if (lastPX !== undefined && dt > 0) {
-		const dx = p.x - lastPX;
-		const dy = p.y - lastPY;
-		moved = math.sqrt(dx * dx + dy * dy);
-		// ignore teleports (respawn, boss grab) when estimating the running velocity
-		if (moved < 600 * dt + 50) {
-			playerVX = dx / dt;
-			playerVY = dy / dt;
-		}
-	}
-	lastPX = p.x;
-	lastPY = p.y;
-
-	if (refs.daynight.soundMatters()) {
-		// sound_view_walk(dist*30) every frame, flushed every walk_tempo frames (÷1.2, max 200)
-		walkAccum += moved * 30;
-		walkTimer += dt;
-		if (walkTimer >= WALK_TEMPO) {
-			walkTimer = 0;
-			if (walkAccum > 0) {
-				let rMax = math.min(WALK_RING_MAX, walkAccum / 1.2);
-				if (refs.save.skillLevels[15] > 0) rMax /= 2;
-				emitSound(refs, p.x, p.y, rMax, false);
+	const matters = refs.daynight.soundMatters();
+	for (const p of refs.players) {
+		const t = trackOf(p);
+		let moved = 0;
+		if (t.lastX !== undefined && dt > 0) {
+			const dx = p.x - t.lastX;
+			const dy = p.y - t.lastY;
+			moved = math.sqrt(dx * dx + dy * dy);
+			// ignore teleports (respawn, boss grab) when estimating the running velocity
+			if (moved < 600 * dt + 50) {
+				t.vx = dx / dt;
+				t.vy = dy / dt;
 			}
-			walkAccum = 0;
 		}
-	} else {
-		walkAccum = 0;
-		walkTimer = 0;
+		t.lastX = p.x;
+		t.lastY = p.y;
+
+		if (matters) {
+			// sound_view_walk(dist*30) every frame, flushed every walk_tempo frames (÷1.2, max 200)
+			t.walkAccum += moved * 30;
+			t.walkTimer += dt;
+			if (t.walkTimer >= WALK_TEMPO) {
+				t.walkTimer = 0;
+				if (t.walkAccum > 0) {
+					let rMax = math.min(WALK_RING_MAX, t.walkAccum / 1.2);
+					if (refs.save.skillLevels[15] > 0) rMax /= 2;
+					emitSound(refs, p.x, p.y, rMax, false);
+				}
+				t.walkAccum = 0;
+			}
+		} else {
+			t.walkAccum = 0;
+			t.walkTimer = 0;
+		}
 	}
 
 	const sounds = refs.sounds;
@@ -236,8 +254,9 @@ export function addPuddle(refs: GameRefs, x: number, y: number): void {
 }
 
 function updatePuddles(refs: GameRefs, dt: number): void {
-	const p = refs.player;
-	p.puddleSlow = math.max(0, (p.puddleSlow ?? 0) - dt);
+	for (const p of refs.players) {
+		p.puddleSlow = math.max(0, (p.puddleSlow ?? 0) - dt);
+	}
 	const puddles = refs.puddles;
 	if (puddles === undefined) return;
 	for (let i = puddles.size() - 1; i >= 0; i--) {
@@ -247,8 +266,10 @@ function updatePuddles(refs: GameRefs, dt: number): void {
 			puddles.remove(i);
 			continue;
 		}
-		if (actorDist(p.x, p.y, pd.x, pd.y) < pd.r) {
-			p.puddleSlow = 0.2;
+		for (const p of refs.players) {
+			if (actorDist(p.x, p.y, pd.x, pd.y) < pd.r) {
+				p.puddleSlow = 0.2;
+			}
 		}
 	}
 }
@@ -283,7 +304,7 @@ function dropLoot(refs: GameRefs, z: ZombieState): void {
 
 function killZombie(refs: GameRefs, z: ZombieState): void {
 	refs.onExp(z.exp);
-	refs.particles.bloodBurst(z.x, z.y, 10);
+	fxBlood(refs, z.x, z.y, 10);
 	dropLoot(refs, z);
 }
 
@@ -292,10 +313,11 @@ function explode(refs: GameRefs, z: ZombieState): void {
 	refs.explosions.push({ x: z.x, y: z.y, r: 0, rMax: BLAST_RADIUS, life: 0.4 });
 	refs.onExp(z.exp);
 	dropLoot(refs, z);
-	refs.particles.bloodBurst(z.x, z.y, 12);
-	refs.particles.debrisBurst(z.x, z.y, 18, COLORS.zombie3);
-	const p = refs.player;
-	if (actorDist(p.x, p.y, z.x, z.y) < 800) camShake(7, 0.3);
+	fxBlood(refs, z.x, z.y, 12);
+	fxDebris(refs, z.x, z.y, 18, "exploder");
+	for (const p of refs.players) {
+		if (actorDist(p.x, p.y, z.x, z.y) < 800) fxShake(refs, p, 7, 0.3);
+	}
 	emitSound(refs, z.x, z.y, 800, true);
 	// better than the original: the blast also throws and hurts the zombies around it
 	for (const o of refs.zombies) {
@@ -311,18 +333,18 @@ function explode(refs: GameRefs, z: ZombieState): void {
 function updateExplosions(refs: GameRefs, dt: number): void {
 	const list = refs.explosions;
 	if (list === undefined) return;
-	const p = refs.player;
 	for (let i = list.size() - 1; i >= 0; i--) {
 		const e = list[i];
 		if (e.r < e.rMax) {
 			e.r = math.min(e.rMax, e.r + BLAST_GROW * dt);
-			// obj_zombie3_boom: −6 hp every frame the player is inside the growing blast, ignoring i-frames
-			if (actorDist(p.x, p.y, e.x, e.y) < e.r + PLAYER_RADIUS * 0.5) {
+			// obj_zombie3_boom: −6 hp every frame a survivor is inside the growing blast, ignoring i-frames
+			for (const p of refs.players) {
+				if (actorDist(p.x, p.y, e.x, e.y) >= e.r + PLAYER_RADIUS * 0.5) continue;
 				const wasHit = p.attacked;
 				damageToPlayer(p, refs.save, BLAST_DPS * dt, true);
 				if (!wasHit) {
 					p.reactionDir = math.atan2(p.y - e.y, p.x - e.x);
-					refs.particles.bloodBurst(p.x, p.y, 4, "player");
+					fxBlood(refs, p.x, p.y, 4, "player");
 				}
 			}
 		} else {
@@ -341,9 +363,9 @@ export function damageStructure(refs: GameRefs, s: Solid, dmg: number): void {
 	s.hitShake = math.max(s.hitShake ?? 0, 8 / 30);
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
-	refs.particles.debrisBurst(cx, cy, 3, COLORS.barricade);
+	fxDebris(refs, cx, cy, 3, "structure");
 	if (s.hp <= 0) {
-		refs.particles.debrisBurst(cx, cy, 14, COLORS.barricade);
+		fxDebris(refs, cx, cy, 14, "structure");
 		removeSolid(refs.world, s);
 	}
 }
@@ -357,6 +379,7 @@ function findTrap(world: WorldData, x: number, y: number): Solid | undefined {
 	return undefined;
 }
 
+/** also fills nearSolids for collectLights (around the local survivor: this is what its screen shows) */
 function decayShakes(refs: GameRefs, dt: number): void {
 	const p = refs.player;
 	nearSolids.clear();
@@ -371,15 +394,17 @@ function decayShakes(refs: GameRefs, dt: number): void {
 
 function collectLights(refs: GameRefs): void {
 	lights.clear();
-	const p = refs.player;
 	const save = refs.save;
 	// "Nocturnal" (skill 16) and the torch widen what the survivor can make out in the dark
 	let r = PLAYER_LIGHT_R;
 	if (save.skillLevels[16] > 0) r *= 1.5;
 	if (save.equipHand === 15) r = math.max(r, 400);
-	lights.push({ x: p.x, y: p.y, r, kind: 1, angle: 0 });
-	if (save.equipHand === 13) {
-		lights.push({ x: p.x, y: p.y, r: FLASHLIGHT_R, kind: 2, angle: p.angle });
+	// every survivor carries their own light (F1+: their own save decides the radius)
+	for (const p of refs.players) {
+		lights.push({ x: p.x, y: p.y, r, kind: 1, angle: 0 });
+		if (save.equipHand === 13) {
+			lights.push({ x: p.x, y: p.y, r: FLASHLIGHT_R, kind: 2, angle: p.angle });
+		}
 	}
 	if (refs.daynight.darkAlpha <= 0.05) return;
 	for (const s of nearSolids) {
@@ -418,9 +443,7 @@ function syncWorld(refs: GameRefs): void {
 		flow.valid = false;
 		flowTimer = 0;
 		flowSolidCount = -1;
-		lastPX = undefined;
-		walkAccum = 0;
-		walkTimer = 0;
+		tracks.clear();
 		seenMorning = refs.daynight.morningCount;
 		navCache.clear();
 	}
@@ -440,6 +463,7 @@ function updateFlow(refs: GameRefs, dt: number): void {
 	if (!flow.building && (flowTimer <= 0 || count !== flowSolidCount || !flow.valid)) {
 		flowTimer = FLOW_INTERVAL;
 		flowSolidCount = count;
+		// one window centred on the local survivor; F2 makes the field multi-source (§3.3)
 		flow.startRebuild(refs.world, refs.player.x, refs.player.y);
 		if (!flow.valid) flow.step(1e9); // the very first field is built at once
 	}
@@ -460,9 +484,8 @@ function steer(world: WorldData, z: ZombieState, r: number, wanted: number): num
 	return wanted;
 }
 
-/** heading towards the player: straight when close, else along the flow field (doors!) */
-function chaseHeading(refs: GameRefs, z: ZombieState, r: number, distP: number): number {
-	const p = refs.player;
+/** heading towards the zombie's target: straight when close, else along the flow field (doors!) */
+function chaseHeading(refs: GameRefs, z: ZombieState, p: PlayerState, r: number, distP: number): number {
 	const direct = math.atan2(p.y - z.y, p.x - z.x);
 	if (distP < 72 && segmentClear(refs.world, z.x, z.y, p.x, p.y, blocksMovement)) return direct;
 	const cached = navCache.get(z.id);
@@ -543,9 +566,9 @@ function wander(z: ZombieState, dt: number): number {
 	return z.wanderPause === true ? 0 : ((z.moveSpeed * 2) / 3) * SPEED_SCALE;
 }
 
-function fireSpit(refs: GameRefs, z: ZombieState): void {
-	const tx = z.aimX ?? refs.player.x;
-	const ty = z.aimY ?? refs.player.y;
+function fireSpit(refs: GameRefs, z: ZombieState, p: PlayerState): void {
+	const tx = z.aimX ?? p.x;
+	const ty = z.aimY ?? p.y;
 	const ang = math.atan2(ty - z.y, tx - z.x);
 	refs.bullets.push({
 		id: -(1 + (z.id % 90000)),
@@ -566,10 +589,9 @@ function fireSpit(refs: GameRefs, z: ZombieState): void {
 	});
 }
 
-/** spitter: stays at range, winds its head back, spits where the player WILL be */
-function thinkSpitter(refs: GameRefs, z: ZombieState, dt: number, distP: number): void {
+/** spitter: stays at range, winds its head back, spits where its target WILL be */
+function thinkSpitter(refs: GameRefs, z: ZombieState, p: PlayerState, dt: number, distP: number): void {
 	z.attackCd = (z.attackCd ?? 0) - dt;
-	const p = refs.player;
 	const canSpit =
 		z.detect &&
 		z.stunned <= 0 &&
@@ -577,13 +599,14 @@ function thinkSpitter(refs: GameRefs, z: ZombieState, dt: number, distP: number)
 		(z.attackCd ?? 0) <= 0 &&
 		((z.headX ?? 0) > 0 || segmentClear(refs.world, z.x, z.y, p.x, p.y, blocksShots));
 	if (canSpit) {
-		z.aimX = p.x + playerVX * SPIT_LEAD;
-		z.aimY = p.y + playerVY * SPIT_LEAD;
+		const t = trackOf(p);
+		z.aimX = p.x + t.vx * SPIT_LEAD;
+		z.aimY = p.y + t.vy * SPIT_LEAD;
 		z.headX = (z.headX ?? 0) + 0.8 * SPEED_SCALE * dt;
 		if ((z.headX ?? 0) >= 10) {
 			z.headX = 0;
 			z.attackCd = SPIT_COOLDOWN;
-			fireSpit(refs, z);
+			fireSpit(refs, z, p);
 		}
 	} else {
 		z.headX = 0;
@@ -599,7 +622,7 @@ function endRush(z: ZombieState): void {
 }
 
 /** charger: keeps ~110 px away, then charges in a straight line when it has a clear run */
-function thinkCharger(refs: GameRefs, z: ZombieState, dt: number, distP: number): boolean {
+function thinkCharger(refs: GameRefs, z: ZombieState, p: PlayerState, dt: number, distP: number): boolean {
 	if (z.rush === true) {
 		z.rushTime = (z.rushTime ?? 0) + dt;
 		z.rushSpeed = math.min(RUSH_SPEED_MAX, (z.rushSpeed ?? RUSH_SPEED_MIN) + RUSH_ACCEL * dt);
@@ -613,7 +636,6 @@ function thinkCharger(refs: GameRefs, z: ZombieState, dt: number, distP: number)
 		if ((z.rushCd ?? 0) <= 0) z.rushReady = true;
 	}
 	if (!z.detect || z.stunned > 0) return false;
-	const p = refs.player;
 	const losCheck = (frameNo + z.id) % 6 === 0; // the long LOS ray is checked ~10×/s, not every frame
 	if (
 		z.rushReady === true &&
@@ -668,12 +690,12 @@ function startJump(refs: GameRefs, z: ZombieState, r: number, dir: number): bool
 	return false;
 }
 
-function thinkJumper(refs: GameRefs, z: ZombieState, r: number, dt: number, distP: number): void {
+function thinkJumper(refs: GameRefs, z: ZombieState, p: PlayerState, r: number, dt: number, distP: number): void {
 	z.jumpCd = (z.jumpCd ?? 0) - dt;
 	if ((z.jumpCd ?? 0) > 0 || z.stunned > 0) return;
 	let dir: number | undefined;
 	if (z.detect) {
-		dir = chaseHeading(refs, z, r, distP);
+		dir = chaseHeading(refs, z, p, r, distP);
 	} else if (z.wanderPause !== true) {
 		dir = z.wanderDir;
 	}
@@ -685,24 +707,24 @@ function thinkJumper(refs: GameRefs, z: ZombieState, r: number, dt: number, dist
 }
 
 function jumperPoison(refs: GameRefs, z: ZombieState, r: number): void {
-	const p = refs.player;
-	if (actorDist(z.x, z.y, p.x, p.y) < r + PLAYER_RADIUS + 6 && p.buffs.poison < POISON_TIME) {
-		p.buffs.poison = POISON_TIME;
+	for (const p of refs.players) {
+		if (actorDist(z.x, z.y, p.x, p.y) < r + PLAYER_RADIUS + 6 && p.buffs.poison < POISON_TIME) {
+			p.buffs.poison = POISON_TIME;
+		}
 	}
 }
 
 // --- contact with the player ----------------------------------------------------------------------
 
-function contactAttack(refs: GameRefs, z: ZombieState): void {
+function contactAttack(refs: GameRefs, z: ZombieState, p: PlayerState): void {
 	const rushing = z.rush === true;
 	if (z.stunned > 0 && !rushing) return;
-	const p = refs.player;
 	const dmg = rushing ? (z.damageRush ?? z.damage) : z.damage;
 	if (damageToPlayer(p, refs.save, dmg)) {
 		p.reactionDir = math.atan2(p.y - z.y, p.x - z.x);
 		if (rushing) p.reactionSpeed = math.max(p.reactionSpeed, DESIGN.REACTION_MAX + 4);
-		refs.particles.bloodBurst(p.x, p.y, 4, "player");
-		camShake(p.buffs.pain > 0 ? 3 : 5, 0.18);
+		fxBlood(refs, p.x, p.y, 4, "player");
+		fxShake(refs, p, p.buffs.pain > 0 ? 3 : 5, 0.18);
 		// obj_player_body: the zombie that landed the hit is stunned for stunned_time
 		z.stunned = STUN_TIME;
 	}
@@ -715,14 +737,13 @@ function contactAttack(refs: GameRefs, z: ZombieState): void {
 // --- main -------------------------------------------------------------------------------------
 
 function faceAndAnimate(
-	refs: GameRefs,
 	z: ZombieState,
+	p: PlayerState,
 	movedX: number,
 	movedY: number,
 	dt: number,
 	distP: number,
 ): void {
-	const p = refs.player;
 	const speed = dt > 0 ? math.sqrt(movedX * movedX + movedY * movedY) / dt : 0;
 	const walking = speed > SPEED_SCALE;
 	if (walking) z.angle = math.atan2(movedY, movedX);
@@ -762,7 +783,8 @@ function updateDetect(refs: GameRefs, z: ZombieState, distP: number): void {
 /** returns true when the zombie must be removed */
 function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boolean {
 	const world = refs.world;
-	const p = refs.player;
+	// the nearest living survivor is this zombie's target (a single survivor: always it)
+	const p = nearestPlayer(refs, z.x, z.y);
 	z.hitFlash = math.max(0, (z.hitFlash ?? 0) - dt);
 	if (z.detectShow > 0) z.detectShow = math.max(0, z.detectShow - dt);
 
@@ -811,8 +833,8 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 		}
 		distP = actorDist(z.x, z.y, p.x, p.y);
 		jumperPoison(refs, z, r);
-		if (distP <= r + PLAYER_RADIUS + 2) contactAttack(refs, z);
-		faceAndAnimate(refs, z, movedX, movedY, dt, distP);
+		if (distP <= r + PLAYER_RADIUS + 2) contactAttack(refs, z, p);
+		faceAndAnimate(z, p, movedX, movedY, dt, distP);
 		updateAlpha(refs, z, dt);
 		return false;
 	}
@@ -822,14 +844,14 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 	let speed = 0;
 	let wandering = false;
 	const dying = z.hp <= 0;
-	if (z.type === 2) thinkSpitter(refs, z, dt, distP);
-	const rushing = z.type === 4 && thinkCharger(refs, z, dt, distP);
+	if (z.type === 2) thinkSpitter(refs, z, p, dt, distP);
+	const rushing = z.type === 4 && thinkCharger(refs, z, p, dt, distP);
 
 	if (rushing) {
 		heading = z.rushDir ?? 0;
 		speed = (z.rushSpeed ?? RUSH_SPEED_MIN) * SPEED_SCALE;
 	} else if (z.type === 5) {
-		thinkJumper(refs, z, r, dt, distP);
+		thinkJumper(refs, z, p, r, dt, distP);
 		jumperPoison(refs, z, r);
 		// the jumper never walks: it only moves by jumping
 	} else if (z.stunned <= 0 || dying) {
@@ -846,7 +868,7 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 			heading = steer(world, z, r, heading);
 			speed = z.moveSpeed * SPEED_SCALE;
 		} else if (chase) {
-			heading = chaseHeading(refs, z, r, distP);
+			heading = chaseHeading(refs, z, p, r, distP);
 			speed = z.moveSpeed * SPEED_SCALE;
 		} else {
 			speed = wander(z, dt);
@@ -884,7 +906,7 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 			// obj_zombie4: a rush that meets a wall ends in a crash
 			endRush(z);
 			z.stunned = math.max(z.stunned, 0.5);
-			if (distP < 800) camShake(4, 0.2);
+			if (distP < 800) fxShake(refs, p, 4, 0.2);
 		}
 		if (wandering) z.wanderDir = rnd() * math.pi * 2;
 	}
@@ -908,14 +930,14 @@ function updateOne(refs: GameRefs, z: ZombieState, idx: number, dt: number): boo
 		z.y = back.y;
 		distP = actorDist(z.x, z.y, p.x, p.y);
 	}
-	if (distP <= minD + 3) contactAttack(refs, z);
+	if (distP <= minD + 3) contactAttack(refs, z, p);
 
 	// ---- floor trap: 40%/frame chance of a short stun (frame-rate independent) ------------------
 	if (z.stunned <= 0 && findTrap(world, z.x, z.y) !== undefined) {
 		if (rnd() < 1 - math.pow(0.6, dt * 30)) z.stunned = STUN_TIME / 4;
 	}
 
-	faceAndAnimate(refs, z, movedX, movedY, dt, distP);
+	faceAndAnimate(z, p, movedX, movedY, dt, distP);
 	updateAlpha(refs, z, dt);
 	return false;
 }

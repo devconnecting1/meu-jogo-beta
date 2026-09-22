@@ -4,7 +4,13 @@ import { randomRingPoint, spawnGroundItem, WorldData } from "shared/game/world";
 import { circleBlocked } from "shared/game/physics";
 import { createBoss, createZombie, ZombieState, ZombieType } from "shared/game/entities";
 import { BUILDING_SPAWNS, getDayPopulation } from "shared/data/spawns";
-import { GameRefs } from "./types";
+import { GameRefs, nearestPlayer } from "./types";
+
+/*
+ * Population: ambient walkers, specials, night waves, ground items and the bosses. Zombies and items live around the
+ * survivors — they are only recycled when they are far from ALL of them (docs/MULTIPLAYER.md §3.5 adds the S(k)
+ * cluster scaling in F2; with a single survivor this is the game as it was).
+ */
 
 const SPECIAL_TYPES: Array<number> = [2, 3, 4, 5];
 /** free radius required around a spawn point (original: 40×40 box free of solids) */
@@ -93,6 +99,7 @@ export class Spawner {
 	private specialWaveTimer = 0;
 
 	private spawnZombie(refs: GameRefs, zType: ZombieType, wave: boolean): boolean {
+		// F0: the ring of the local survivor (F2: round-robin over the cluster's survivors, §3.5)
 		const p = refs.player;
 		const pos = ringOpen(refs.world, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX);
 		if (pos === undefined) return false;
@@ -155,20 +162,27 @@ export class Spawner {
 		spawnGroundItem(refs.world, loot.kind, loot.index, loot.count, pos.x, pos.y);
 	}
 
+	/** inside the spawn square of at least one survivor */
+	private nearAnyPlayer(refs: GameRefs, x: number, y: number, range: number): boolean {
+		for (const p of refs.players) {
+			if (math.abs(x - p.x) <= range && math.abs(y - p.y) <= range) return true;
+		}
+		return false;
+	}
+
 	/**
 	 * Zombies that fell out of the spawn square: plain walkers vanish; wave walkers and specials are
 	 * moved back onto the spawn ring (original deactive/respawn), so a night wave or a rare special
 	 * is not lost just because the player ran.
 	 */
 	private cleanup(refs: GameRefs): void {
-		const p = refs.player;
 		for (let i = refs.zombies.size() - 1; i >= 0; i--) {
 			const z = refs.zombies[i];
-			const dx = math.abs(z.x - p.x);
-			const dy = math.abs(z.y - p.y);
-			if (dx <= DESIGN.ZOMBIE_SPAWN_MAX && dy <= DESIGN.ZOMBIE_SPAWN_MAX) continue;
+			if (this.nearAnyPlayer(refs, z.x, z.y, DESIGN.ZOMBIE_SPAWN_MAX)) continue;
 			if (z.hp <= 0) continue; // a lit exploder finishes its fuse
 			if (z.wave || z.special) {
+				// wave walkers and specials are not lost: back onto the ring of the nearest survivor
+				const p = nearestPlayer(refs, z.x, z.y);
 				const pos = ringOpen(refs.world, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX);
 				if (pos !== undefined) {
 					z.x = pos.x;
@@ -189,7 +203,7 @@ export class Spawner {
 		}
 		for (let i = refs.world.items.size() - 1; i >= 0; i--) {
 			const it = refs.world.items[i];
-			if (math.abs(it.x - p.x) > DESIGN.ITEM_SPAWN_MAX || math.abs(it.y - p.y) > DESIGN.ITEM_SPAWN_MAX) {
+			if (!this.nearAnyPlayer(refs, it.x, it.y, DESIGN.ITEM_SPAWN_MAX)) {
 				refs.world.items.remove(i);
 			}
 		}
@@ -197,13 +211,20 @@ export class Spawner {
 
 	private spawnBoss(refs: GameRefs): void {
 		if (refs.bosses.size() > 0) return;
-		const p = refs.player;
 		const day = refs.daynight.day;
 		for (const anchor of refs.world.bossAnchors) {
 			if (day < anchor.nextDay) continue;
-			const dx = anchor.x - p.x;
-			const dy = anchor.y - p.y;
-			if (math.sqrt(dx * dx + dy * dy) >= DESIGN.BOSS_LENGTH) continue;
+			// any survivor coming close to the anchor wakes it up
+			let near = false;
+			for (const p of refs.players) {
+				const dx = anchor.x - p.x;
+				const dy = anchor.y - p.y;
+				if (math.sqrt(dx * dx + dy * dy) < DESIGN.BOSS_LENGTH) {
+					near = true;
+					break;
+				}
+			}
+			if (!near) continue;
 			refs.bosses.push(createBoss(anchor.type, anchor.x, anchor.y));
 			anchor.nextDay = day + DESIGN.BOSS_RESPAWN_DAY;
 			break;

@@ -1,21 +1,27 @@
 import { DESIGN } from "shared/engine/constants";
 import { choose, chance, rndInt, rndRange } from "shared/engine/rng";
-import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
-import { buildingAt, GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
+import type { PlayerState } from "shared/game/player";
+import { GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
+import { gameHours } from "shared/sim/clock";
+import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import {
+	bodiesOverlapRect,
+	canRepair,
+	edgeDist,
+	InteractTarget,
+	interactTarget,
+	isFire,
+	repairMaterial,
+} from "shared/sim/interactQuery";
 import { itemName } from "./craftSystem";
-import { addItem, countItem, removeItem } from "./items";
-import { GameRefs } from "./types";
+import { fxMessage, GameRefs } from "./types";
 
-const REPAIRABLE: Array<string> = [
-	"craftdesk",
-	"craftdesk_pro",
-	"turret",
-	"barricade",
-	"iron_barricade",
-	"door",
-	"iron_door",
-];
+/*
+ * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, repair, loot a building.
+ * WHAT is in reach is a pure query (shared/sim/interactQuery.ts); this file applies the effect on the world and the
+ * backpack of the survivor that pressed E (docs/MULTIPLAYER.md §11.2 → server/sim/interaction.ts in F3).
+ */
 
 /** cooldown (seconds left) per map item (tree/car/trash) since its last hit */
 const hitCooldowns = new Map<Solid, number>();
@@ -47,10 +53,6 @@ const TRASH_LOOT: Array<LootEntry> = [
 	{ kind: 4, index: 30, amount: 0.1 },
 ];
 
-function isMapItem(s: Solid): boolean {
-	return s.kind === "tree" || s.tags === "car" || s.tags === "trash";
-}
-
 function lootTableFor(s: Solid): Array<LootEntry> | undefined {
 	if (s.kind === "tree") return TREE_LOOT;
 	if (s.tags === "car") return CAR_LOOT;
@@ -58,16 +60,15 @@ function lootTableFor(s: Solid): Array<LootEntry> | undefined {
 	return undefined;
 }
 
-/** spawn point: nearest point of the solid's rect to the player, pushed 24px further out towards them */
-function spawnFromSolid(refs: GameRefs, s: Solid, kind: number, index: number, count: number): void {
-	const p = refs.player;
-	const qx = math.clamp(p.x, s.x, s.x + s.w);
-	const qy = math.clamp(p.y, s.y, s.y + s.h);
-	let dx = p.x - qx;
-	let dy = p.y - qy;
+/** spawn point: nearest point of the solid's rect to the survivor, pushed 24px further out towards them */
+function spawnFromSolid(refs: GameRefs, by: PlayerState, s: Solid, kind: number, index: number, count: number): void {
+	const qx = math.clamp(by.x, s.x, s.x + s.w);
+	const qy = math.clamp(by.y, s.y, s.y + s.h);
+	let dx = by.x - qx;
+	let dy = by.y - qy;
 	let dist = math.sqrt(dx * dx + dy * dy);
 	if (dist < 1e-3) {
-		// player exactly on the rect edge: fall back to pushing away from its centre
+		// survivor exactly on the rect edge: fall back to pushing away from its centre
 		dx = qx - (s.x + s.w / 2);
 		dy = qy - (s.y + s.h / 2);
 		dist = math.sqrt(dx * dx + dy * dy);
@@ -89,9 +90,9 @@ function spawnFromSolid(refs: GameRefs, s: Solid, kind: number, index: number, c
 /**
  * A melee/ranged hit lands on a map item (tree/car/trash). Own cooldown per solid
  * (DESIGN.MAP_ITEM_HIT_TIME); while on cooldown this is a no-op. Otherwise shakes the sprite and,
- * with DESIGN.MAP_ITEM_PERCENT% chance, drops loot from the object's table.
+ * with DESIGN.MAP_ITEM_PERCENT% chance, drops loot from the object's table at `by`'s side.
  */
-export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean): boolean {
+export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean, by: PlayerState = refs.player): boolean {
 	const cd = hitCooldowns.get(s);
 	if (cd !== undefined && cd > 0) return false;
 	hitCooldowns.set(s, DESIGN.MAP_ITEM_HIT_TIME);
@@ -103,76 +104,23 @@ export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean): boo
 
 	if (choppingTool && s.kind === "tree") {
 		const count = 2 + (chance(50) ? 1 : 0);
-		spawnFromSolid(refs, s, 4, 23, count);
+		spawnFromSolid(refs, by, s, 4, 23, count);
 		return true;
 	}
 
 	const entry = choose(lootTable);
 	if (entry.amount < 1) {
 		if (!chance(entry.amount * 100)) return true;
-		spawnFromSolid(refs, s, entry.kind, entry.index, 1);
+		spawnFromSolid(refs, by, s, entry.kind, entry.index, 1);
 	} else {
-		spawnFromSolid(refs, s, entry.kind, entry.index, entry.amount);
+		spawnFromSolid(refs, by, s, entry.kind, entry.index, entry.amount);
 	}
 	return true;
 }
 
-/** absolute game clock in hours (day × 24 + time of day) — building loot respawn timestamps */
-function gameHours(refs: GameRefs): number {
-	return refs.daynight.day * 24 + refs.daynight.dayTime;
-}
-
-function edgeDist(s: Solid, x: number, y: number): number {
-	const cx = s.x + s.w / 2;
-	const cy = s.y + s.h / 2;
-	return math.max(math.abs(cx - x) - s.w / 2, math.abs(cy - y) - s.h / 2);
-}
-
-function findItem(refs: GameRefs): GroundItem | undefined {
-	const p = refs.player;
-	let best: GroundItem | undefined;
-	let bestD: number = DESIGN.ITEM_GET_DISTANCE;
-	for (const it of refs.world.items) {
-		const d = math.sqrt((it.x - p.x) * (it.x - p.x) + (it.y - p.y) * (it.y - p.y));
-		if (d < bestD) {
-			bestD = d;
-			best = it;
-		}
-	}
-	return best;
-}
-
-const INTERACT_RADIUS = 80;
-
-/** nearest non-building, non-passable solid within range (doors/lights/map-items/repairables) */
-function findSolid(refs: GameRefs): Solid | undefined {
-	const p = refs.player;
-	let best: Solid | undefined;
-	let bestD = 40;
-	for (const s of querySolids(
-		refs.world,
-		p.x - INTERACT_RADIUS,
-		p.y - INTERACT_RADIUS,
-		p.x + INTERACT_RADIUS,
-		p.y + INTERACT_RADIUS,
-	)) {
-		if (s.kind === "building" || s.passable === true) continue;
-		const isDoor = s.kind === "door" || s.kind === "iron_door";
-		const limit = isDoor ? 30 : 40;
-		const d = edgeDist(s, p.x, p.y);
-		if (d < limit && d < bestD) {
-			bestD = d;
-			best = s;
-		}
-	}
-	return best;
-}
-
-/** the building record (footprint) the player stands in or is within 40px of, if any */
-function findBuilding(refs: GameRefs): Solid | undefined {
-	// you loot a building from INSIDE it (leaning on the outer wall is not enough)
-	const p = refs.player;
-	return buildingAt(refs.world, p.x, p.y);
+/** absolute game clock in hours — building loot respawn timestamps */
+function worldHours(refs: GameRefs): number {
+	return gameHours(refs.daynight.day, refs.daynight.dayTime);
 }
 
 // --- fires (campfire / brazier) burn wood -------------------------------------------------------
@@ -185,10 +133,6 @@ const WOOD_INDEX = 23;
 const fireFuel = new Map<Solid, number>();
 let fireTick = 0;
 
-function isFire(s: Solid): boolean {
-	return s.tags === "campfire" || s.tags === "brazier";
-}
-
 function fuelOf(s: Solid): number {
 	return fireFuel.get(s) ?? FIRE_TIME;
 }
@@ -197,7 +141,7 @@ function fuelOf(s: Solid): number {
  * E on a light: lamps just switch; a fire goes out / relights while it still has wood, and an
  * empty fire takes 5 wood from the backpack. Returns a message when it cannot be lit.
  */
-function toggleLight(refs: GameRefs, s: Solid): string | undefined {
+function toggleLight(refs: GameRefs, by: PlayerState, s: Solid): string | undefined {
 	if (!isFire(s)) {
 		s.powered = !(s.powered ?? false);
 		return undefined;
@@ -238,34 +182,6 @@ function burnFires(refs: GameRefs, dt: number): void {
 	}
 }
 
-function rectCircleOverlap(
-	rx: number,
-	ry: number,
-	rw: number,
-	rh: number,
-	cx: number,
-	cy: number,
-	cr: number,
-): boolean {
-	const qx = math.clamp(cx, rx, rx + rw);
-	const qy = math.clamp(cy, ry, ry + rh);
-	const dx = cx - qx;
-	const dy = cy - qy;
-	return dx * dx + dy * dy < cr * cr;
-}
-
-/** true when the player's or a live zombie's body overlaps the solid's rect (blocks closing a door on them) */
-function actorOverlapsRect(refs: GameRefs, s: Solid): boolean {
-	const p = refs.player;
-	if (rectCircleOverlap(s.x, s.y, s.w, s.h, p.x, p.y, PLAYER_RADIUS)) return true;
-	for (const z of refs.zombies) {
-		if (z.hp <= 0) continue;
-		const zr = ZOMBIE_RADIUS * (z.scale ?? 1);
-		if (rectCircleOverlap(s.x, s.y, s.w, s.h, z.x, z.y, zr)) return true;
-	}
-	return false;
-}
-
 function takeItem(refs: GameRefs, it: GroundItem): void {
 	addItem(refs.save, it.kind, it.itemId, it.count);
 	const idx = refs.world.items.indexOf(it);
@@ -290,16 +206,8 @@ function rollLoot(s: Solid): void {
 	s.lootItems = loot;
 }
 
-function repairMaterial(s: Solid): { kind: number; index: number } {
-	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret") {
-		return { kind: 4, index: 26 };
-	}
-	return { kind: 4, index: 23 };
-}
-
 function tryRepair(refs: GameRefs, s: Solid): boolean {
-	if (s.hp >= s.hpMax) return false;
-	if (!REPAIRABLE.includes(s.tags)) return false;
+	if (!canRepair(s)) return false;
 	const mat = repairMaterial(s);
 	if (refs.save.invenEtc[mat.index] <= 0) return false;
 	refs.save.invenEtc[mat.index] = refs.save.invenEtc[mat.index] - 1;
@@ -320,85 +228,93 @@ const BUILDING_NAMES: Record<string, string> = {
 	hospital: "hospital",
 };
 
+/** the hint text for a target the survivor could use, or undefined when it does nothing */
+function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
+	if (target.kind === "item") {
+		const it = target.item;
+		const n = itemName(it.kind, it.itemId);
+		return it.count > 1 ? `E: Pick up ${n} x${it.count}` : `E: Pick up ${n}`;
+	}
+	if (target.kind === "door") {
+		const s = target.solid;
+		if (s.open === true) {
+			return bodiesOverlapRect(s, refs.players, refs.zombies) ? undefined : "E: Close door";
+		}
+		return "E: Open door";
+	}
+	if (target.kind === "light") {
+		const s = target.solid;
+		if (s.powered === true) return s.tags === "lamp" ? "E: Turn off" : "E: Put out";
+		if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
+		return s.tags === "lamp" ? "E: Turn on" : "E: Light";
+	}
+	if (target.kind === "mapItem") {
+		const s = target.solid;
+		if (s.kind === "tree") return "E: Shake tree";
+		return s.tags === "car" ? "E: Search car" : "E: Search trash";
+	}
+	if (target.kind === "solid") {
+		const s = target.solid;
+		if (!canRepair(s)) return undefined;
+		const mat = repairMaterial(s);
+		const have = refs.save.invenEtc[mat.index] ?? 0;
+		return have > 0
+			? `E: Repair (${itemName(mat.kind, mat.index)})`
+			: `Repair: needs ${itemName(mat.kind, mat.index)}`;
+	}
+	const b = target.building;
+	return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
+}
+
 /**
- * What the action button (E) would do right now, for the HUD — same priority as tryInteract:
- * ground item → door / light / tree-car-trash / repair → loot the building you are in.
+ * What the action button (E) would do right now, for the HUD — same priority as tryInteract.
  * undefined = nothing to do (hide the button).
  */
-export function interactHint(refs: GameRefs): string | undefined {
+export function interactHint(refs: GameRefs, by: PlayerState = refs.player): string | undefined {
 	if (refs.pendingPlace >= 0) return undefined;
-	const item = findItem(refs);
-	if (item !== undefined) {
-		const n = itemName(item.kind, item.itemId);
-		return item.count > 1 ? `E: Pick up ${n} x${item.count}` : `E: Pick up ${n}`;
-	}
-	const s = findSolid(refs);
-	if (s !== undefined) {
-		if (s.kind === "door" || s.kind === "iron_door") {
-			if (s.open === true) return actorOverlapsRect(refs, s) ? undefined : "E: Close door";
-			return "E: Open door";
-		}
-		if (s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier") {
-			if (s.powered === true) return s.tags === "lamp" ? "E: Turn off" : "E: Put out";
-			if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
-			return s.tags === "lamp" ? "E: Turn on" : "E: Light";
-		}
-		if (s.kind === "tree") return "E: Shake tree";
-		if (s.tags === "car") return "E: Search car";
-		if (s.tags === "trash") return "E: Search trash";
-		if (s.hp < s.hpMax && REPAIRABLE.includes(s.tags)) {
-			const mat = repairMaterial(s);
-			const have = refs.save.invenEtc[mat.index] ?? 0;
-			return have > 0
-				? `E: Repair (${itemName(mat.kind, mat.index)})`
-				: `Repair: needs ${itemName(mat.kind, mat.index)}`;
-		}
-		return undefined;
-	}
-	const b = findBuilding(refs);
-	if (b !== undefined && b.lootItems !== undefined && b.lootItems.size() > 0) {
-		return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
-	}
-	return undefined;
+	const target = interactTarget(refs.world, by.x, by.y);
+	if (target === undefined) return undefined;
+	return hintFor(refs, target);
 }
 
 export class Interaction {
-	tryInteract(refs: GameRefs): void {
+	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
 		if (refs.pendingPlace >= 0) return;
-		const item = findItem(refs);
-		if (item !== undefined) {
-			takeItem(refs, item);
+		const target = interactTarget(refs.world, by.x, by.y);
+		if (target === undefined) return;
+		if (target.kind === "item") {
+			takeItem(refs, target.item);
 			return;
 		}
-		const s = findSolid(refs);
-		if (s !== undefined) {
-			if (s.kind === "door" || s.kind === "iron_door") {
-				const willOpen = !(s.open ?? false);
-				if (!willOpen && actorOverlapsRect(refs, s)) return;
-				s.open = willOpen;
-				return;
-			}
-			if (s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier") {
-				const why = toggleLight(refs, s);
-				if (why !== undefined) refs.onMessage(why);
-				return;
-			}
-			if (isMapItem(s)) {
-				hitMapItem(refs, s, false);
-				return;
-			}
-			tryRepair(refs, s);
+		if (target.kind === "door") {
+			const s = target.solid;
+			const willOpen = !(s.open ?? false);
+			if (!willOpen && bodiesOverlapRect(s, refs.players, refs.zombies)) return;
+			s.open = willOpen;
 			return;
 		}
-		const b = findBuilding(refs);
-		if (b !== undefined && b.lootItems !== undefined && b.lootItems.size() > 0) {
-			for (const loot of b.lootItems) {
-				addItem(refs.save, loot.kind, loot.id, loot.count);
-			}
-			b.lootItems = [];
-			// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
-			b.lootTimer = gameHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;
+		if (target.kind === "light") {
+			const why = toggleLight(refs, by, target.solid);
+			if (why !== undefined) fxMessage(refs, why, by);
+			return;
 		}
+		if (target.kind === "mapItem") {
+			hitMapItem(refs, target.solid, false, by);
+			return;
+		}
+		if (target.kind === "solid") {
+			tryRepair(refs, target.solid);
+			return;
+		}
+		const b = target.building;
+		const loot = b.lootItems;
+		if (loot === undefined) return;
+		for (const drop of loot) {
+			addItem(refs.save, drop.kind, drop.id, drop.count);
+		}
+		b.lootItems = [];
+		// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
+		b.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;
 	}
 
 	update(refs: GameRefs, dt: number): void {
@@ -416,14 +332,16 @@ export class Interaction {
 			}
 		}
 
-		const p = refs.player;
 		const radius = 320;
-		for (const s of querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius)) {
-			if (s.kind !== "building") continue;
-			if (edgeDist(s, p.x, p.y) >= radius) continue;
-			const loot = s.lootItems;
-			if (loot !== undefined && loot.size() === 0 && gameHours(refs) >= (s.lootTimer ?? 0)) {
-				rollLoot(s);
+		const now = worldHours(refs);
+		for (const p of refs.players) {
+			for (const s of querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius)) {
+				if (s.kind !== "building") continue;
+				if (edgeDist(s, p.x, p.y) >= radius) continue;
+				const loot = s.lootItems;
+				if (loot !== undefined && loot.size() === 0 && now >= (s.lootTimer ?? 0)) {
+					rollLoot(s);
+				}
 			}
 		}
 	}

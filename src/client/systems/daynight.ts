@@ -2,17 +2,24 @@ import { DESIGN } from "shared/engine/constants";
 import { chance } from "shared/engine/rng";
 import { difficultyOfDay, PlayerSaveData } from "shared/game/save";
 import { getDayPopulation } from "shared/data/spawns";
+import {
+	advanceClock,
+	CLOCK_ANNOUNCEMENTS,
+	crossed,
+	darkAlphaAt,
+	HOURS_PER_DAY,
+	inWaveFillWindow,
+	isNightAt,
+	rainPossible,
+	soundMattersAt,
+	WAVE_FILL_FROM,
+	waveActive,
+} from "shared/sim/clock";
 
-/** darkest overlay alpha at midnight */
-const MAX_DARK = 0.85;
-
-function crossed(prev: number, cur: number, t: number): boolean {
-	if (cur >= prev) {
-		return prev < t && cur >= t;
-	}
-	return prev < t || cur >= t;
-}
-
+/**
+ * The run's clock, weather and night-wave queues. The clock rules themselves are pure and shared
+ * (shared/sim/clock.ts, docs/MULTIPLAYER.md §4.6); this class only holds the state and rolls the rain.
+ */
 export class DayNight {
 	dayTime = 7;
 	day = 1;
@@ -45,7 +52,7 @@ export class DayNight {
 
 	/** original: 10% rainy days, but never during the first four days (`if day<=4 weather = 0`) */
 	private rollRain(): boolean {
-		return this.day > 4 && chance(DESIGN.WEATHER_PERCENT);
+		return rainPossible(this.day) && chance(DESIGN.WEATHER_PERCENT);
 	}
 
 	/**
@@ -53,7 +60,7 @@ export class DayNight {
 	 * the rain every zombie already hunts the player, so footsteps/shots add nothing.
 	 */
 	soundMatters(): boolean {
-		return this.dayTime > 6 && this.dayTime < 18 && !this.isRaining;
+		return soundMattersAt(this.dayTime, this.isRaining);
 	}
 
 	private refreshPopulation(): void {
@@ -64,59 +71,41 @@ export class DayNight {
 	}
 
 	private detectAnnounce(prev: number, cur: number): void {
-		if (crossed(prev, cur, 19)) this.onAnnounce("Wave 1");
-		if (crossed(prev, cur, 22)) this.onAnnounce("Wave 2");
-		if (crossed(prev, cur, 1)) this.onAnnounce("Wave 3");
-		if (crossed(prev, cur, 7)) {
-			this.morningCount += 1;
-			this.onAnnounce("Good morning");
+		for (const a of CLOCK_ANNOUNCEMENTS) {
+			if (!crossed(prev, cur, a.hour)) continue;
+			if (a.morning) this.morningCount += 1;
+			this.onAnnounce(a.text);
 		}
 	}
 
 	private updateWaves(): void {
-		if (this.dayTime > 18 && this.dayTime < 18.5 && !this.fillDone) {
+		if (inWaveFillWindow(this.dayTime) && !this.fillDone) {
 			const pop = getDayPopulation(this.day);
 			this.waveQueues = [pop.wave1, pop.wave2, pop.wave3];
 			this.specialWaveQueues = [pop.specialWave1, pop.specialWave2, pop.specialWave3];
 			this.fillDone = true;
 		}
-		if (this.dayTime < 18) {
+		if (this.dayTime < WAVE_FILL_FROM) {
 			this.fillDone = false;
 		}
-		this.wave1Active = this.dayTime > 19;
-		this.wave2Active = this.dayTime > 22;
-		this.wave3Active = this.dayTime > 1 && this.dayTime < 6;
+		this.wave1Active = waveActive(1, this.dayTime);
+		this.wave2Active = waveActive(2, this.dayTime);
+		this.wave3Active = waveActive(3, this.dayTime);
 	}
 
 	private updateDark(): void {
-		let ramp = 0;
-		if (this.dayTime >= 18) {
-			ramp = this.dayTime - 18;
-		} else if (this.dayTime < 6) {
-			ramp = 6 - this.dayTime;
-		}
-		// deepest night is capped at 0.85 (the renderer punches light holes around the player and
-		// lamps/campfires into it); "Nocturnal" keeps the original 0.05 advantage
-		const cap =
-			this.save.skillLevels[16] > 0
-				? MAX_DARK - (DESIGN.DARK_ALPHA_MAX - DESIGN.DARK_ALPHA_NIGHT_SKILL)
-				: MAX_DARK;
-		let dark = math.min(cap, ramp * ((DESIGN.DARK_ALPHA_MAX / 6) * 3));
-		if (this.isRaining) {
-			dark = math.min(cap, math.max(dark, 0.5));
-		}
-		this.darkAlpha = dark;
+		// deepest night is capped (the renderer punches light holes around the player and lamps/campfires into
+		// it); "Nocturnal" keeps the original 0.05 advantage
+		this.darkAlpha = darkAlphaAt(this.dayTime, this.isRaining, this.save.skillLevels[16] > 0);
 	}
 
 	update(dt: number): void {
-		const night = this.dayTime > 19 || this.dayTime < 6;
-		this.isNight = night;
+		this.isNight = isNightAt(this.dayTime);
 		// original: the night runs 1.2× and the day 0.8× the base clock speed
-		const speed = DESIGN.TIME_SPEED * (night ? 1.2 : 0.8);
 		const prev = this.dayTime;
-		this.dayTime += speed * dt;
-		if (this.dayTime >= 24) {
-			this.dayTime -= 24;
+		this.dayTime = advanceClock(prev, dt);
+		if (this.dayTime >= HOURS_PER_DAY) {
+			this.dayTime -= HOURS_PER_DAY;
 			this.day += 1;
 			this.save.day = this.day;
 			this.isRaining = this.rollRain();

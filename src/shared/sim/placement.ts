@@ -1,0 +1,170 @@
+/*
+ * Constructions: what can be placed (PLACEABLES) and where (docs/MULTIPLAYER.md §8.1 "place", §11.2). Pure rules
+ * shared by the client's build ghost and, from F3 on, the server's validation of a `place` intent.
+ */
+import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
+import type { ZombieState } from "shared/game/entities";
+import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
+import type { PlayerState } from "shared/game/player";
+import { querySolids, Solid, SolidKind, WorldData } from "shared/game/world";
+
+export interface PlaceableDef {
+	tag: string;
+	kind: SolidKind;
+	w: number;
+	h: number;
+	hp: number;
+	destructible: boolean;
+	rotatable: boolean;
+	powered?: boolean;
+}
+
+function p(
+	tag: string,
+	kind: SolidKind,
+	w: number,
+	h: number,
+	hp: number,
+	destructible = true,
+	rotatable = false,
+	powered?: boolean,
+): PlaceableDef {
+	return { tag, kind, w, h, hp, destructible, rotatable, powered };
+}
+
+/** by ETC item index (the kit a craftKind-1 recipe produces) */
+export const PLACEABLES: Record<number, PlaceableDef> = {
+	0: p("craftdesk", "structure", 96, 72, 200),
+	1: p("craftdesk_pro", "structure", 112, 80, 400),
+	2: p("turret", "structure", 64, 64, 400),
+	3: p("turret_drone", "structure", 48, 48, 300),
+	4: p("lamp", "structure", 48, 48, 400, true, false, false),
+	5: p("lamp_drone", "structure", 40, 40, 300, true, false, false),
+	6: p("battery", "structure", 40, 40, 300),
+	7: p("generator", "structure", 72, 72, 500),
+	8: p("generator", "structure", 80, 80, 500),
+	9: p("generator", "structure", 72, 72, 500),
+	10: p("barricade", "barricade", 128, 32, 700, true, true),
+	11: p("door", "door", 96, 24, 500, true, true),
+	12: p("iron_barricade", "iron_barricade", 128, 32, 1700, true, true),
+	13: p("iron_door", "iron_door", 96, 24, 1500, true, true),
+	14: p("campfire", "structure", 64, 64, 400, true, false, true),
+	15: p("brazier", "structure", 64, 64, 400, true, false, true),
+	16: p("electric_turret", "structure", 64, 64, 400),
+	17: p("trap", "structure", 64, 64, 100),
+	18: p("gps", "structure", 48, 48, 100),
+	19: p("cooker", "structure", 56, 48, 300),
+	20: p("furnace", "structure", 56, 48, 300),
+	21: p("vehicle", "structure", 64, 40, 100),
+	22: p("vehicle", "structure", 72, 44, 120),
+	39: p("craftdesk", "structure", 96, 72, 240),
+	40: p("craftdesk_pro", "structure", 112, 80, 480),
+};
+
+/** the ghost sits this far in front of the survivor (along the aim) ... */
+export const PLACE_DISTANCE = 96;
+/** ... with its top-left corner snapped to this grid */
+export const PLACE_GRID = 128;
+
+/** axis-aligned footprint of a construction (top-left corner + size) */
+export interface PlaceRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/** closest-point (rect × circle) overlap test */
+export function rectCircleOverlap(
+	rx: number,
+	ry: number,
+	rw: number,
+	rh: number,
+	cx: number,
+	cy: number,
+	cr: number,
+): boolean {
+	const qx = math.clamp(cx, rx, rx + rw);
+	const qy = math.clamp(cy, ry, ry + rh);
+	const dx = cx - qx;
+	const dy = cy - qy;
+	return dx * dx + dy * dy < cr * cr;
+}
+
+/**
+ * Where the ghost of `def` goes for a survivor at (px, py) aiming at `aim`, with `rot` quarter turns
+ * (rotatable pieces swap width and height on turns 1 and 3).
+ */
+export function ghostRect(def: PlaceableDef, px: number, py: number, aim: number, rot: number): PlaceRect {
+	const cx = px + math.cos(aim) * PLACE_DISTANCE;
+	const cy = py + math.sin(aim) * PLACE_DISTANCE;
+	let w = def.w;
+	let h = def.h;
+	if (def.rotatable && (rot === 1 || rot === 3)) {
+		w = def.h;
+		h = def.w;
+	}
+	const gx = math.floor((cx - w / 2) / PLACE_GRID + 0.5) * PLACE_GRID;
+	const gy = math.floor((cy - h / 2) / PLACE_GRID + 0.5) * PLACE_GRID;
+	return { x: gx, y: gy, w, h };
+}
+
+/** inside the world, on no (non-passable) solid, and on no survivor's or live zombie's body */
+export function placementValid(
+	world: WorldData,
+	r: PlaceRect,
+	players: ReadonlyArray<PlayerState>,
+	zombies: ReadonlyArray<ZombieState>,
+): boolean {
+	const gx = r.x;
+	const gy = r.y;
+	const w = r.w;
+	const h = r.h;
+	if (!(gx >= 0 && gy >= 0 && gx + w < world.width && gy + h < world.height)) return false;
+	for (const s of querySolids(world, gx, gy, gx + w, gy + h)) {
+		if (s.passable === true) continue;
+		if (gx < s.x + s.w && gx + w > s.x && gy < s.y + s.h && gy + h > s.y) return false;
+	}
+	for (const pl of players) {
+		if (rectCircleOverlap(gx, gy, w, h, pl.x, pl.y, PLAYER_RADIUS)) return false;
+	}
+	for (const z of zombies) {
+		if (z.hp <= 0) continue;
+		const zr = ZOMBIE_RADIUS * (z.scale ?? 1);
+		if (rectCircleOverlap(gx, gy, w, h, z.x, z.y, zr)) return false;
+	}
+	return true;
+}
+
+/** the solid a placed construction becomes (doors start closed; lamps off, fires lit) */
+export function placedSolid(def: PlaceableDef, r: PlaceRect, rot: number): Omit<Solid, "id"> {
+	return {
+		kind: def.kind,
+		x: r.x,
+		y: r.y,
+		w: r.w,
+		h: r.h,
+		hp: def.hp,
+		hpMax: def.hp,
+		destructible: def.destructible,
+		tags: def.tag,
+		rot,
+		open: def.kind === "door" || def.kind === "iron_door" ? false : undefined,
+		powered: def.powered,
+	};
+}
+
+/**
+ * The craftKind-1 recipe that produced placeable `resultIndex` (cancelling refunds its ingredients), preferring
+ * the one recorded at craft time (`preferred`, a CRAFT_RECIPES id).
+ */
+export function placeRecipe(resultIndex: number, preferred?: number): CraftRecipe | undefined {
+	if (preferred !== undefined) {
+		const r = CRAFT_RECIPES[preferred];
+		if (r !== undefined && r.craftKind === 1 && r.resultIndex === resultIndex) return r;
+	}
+	for (const r of CRAFT_RECIPES) {
+		if (r.craftKind === 1 && r.resultIndex === resultIndex) return r;
+	}
+	return undefined;
+}

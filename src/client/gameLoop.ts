@@ -1,4 +1,4 @@
-import { getCtx, syncKeyboardMove } from "./bootstrap";
+import { getCtx, refreshAim, syncKeyboardMove } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN, TOWN } from "shared/engine/constants";
@@ -9,8 +9,9 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { isChoppingTool, WEAPONS } from "shared/data/weapons";
 import { expMaxInit, PlayerSaveData } from "shared/game/save";
-import { createPlayer, currentWeapon, PlayerState, recalcMoveSpeed } from "shared/game/player";
-import { moveActor, PLAYER_RADIUS } from "shared/game/physics";
+import { createPlayer, currentWeapon, PlayerState } from "shared/game/player";
+import { PLAYER_RADIUS } from "shared/game/physics";
+import type { GameContext } from "shared/game/context";
 import {
 	buildingAt,
 	createWorld,
@@ -42,8 +43,25 @@ import { updateBosses } from "./systems/bossAI";
 import { Combat } from "./systems/combat";
 import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
-import { Explosion, GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
+import { Explosion, GameRefs, Tracer } from "./systems/types";
+import { stepPlayer } from "shared/sim/playerMove";
+import {
+	DebrisMaterial,
+	FxEvent,
+	HELD_ACTION,
+	HELD_ATTACK,
+	InputCommand,
+	makeCommand,
+	packEdges,
+	SEQ_MOD,
+	TracerKind,
+} from "shared/sim/types";
 import { Nameplate } from "./ui/nameplate";
+
+const Players = game.GetService("Players");
+
+/** the local survivor's slot in refs.players: an FxEvent aimed at another survivor is not ours to play */
+const LOCAL_SLOT = 0;
 
 /** nameplate sits between the night light map (Dark, 80) and the HUD (90) so it stays readable at night */
 const NAMEPLATE_Z = 85;
@@ -83,6 +101,22 @@ const GROUND = {
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
 };
+/** what a debris burst is made of (FxEvent "debris") */
+const DEBRIS_COLOR: Record<DebrisMaterial, Color3> = {
+	impact: COLORS.shadow,
+	tree: COLORS.treeTrunk,
+	car: COLORS.car,
+	structure: COLORS.barricade,
+	exploder: COLORS.zombie3,
+	boss: COLORS.boss,
+};
+/** shot lines (FxEvent "tracer") */
+const TRACER_COLOR: Record<TracerKind, Color3> = {
+	bullet: COLORS.bullet,
+	electric: COLORS.uiBlue,
+	boss: COLORS.boss,
+};
+
 /** road markings: dash period/length, crosswalk stripe width/period */
 const DASH_PERIOD = 160;
 const DASH_LEN = 64;
@@ -345,6 +379,10 @@ export class GameLoop {
 	private bosses: Array<BossState> = [];
 	private bullets: Array<Bullet> = [];
 	private tracers: Array<Tracer> = [];
+	/** every survivor in this world (F0: only the local one, players[0]) */
+	private players: Array<PlayerState> = [];
+	/** cosmetic effects the systems asked for; played (and cleared) by playFx */
+	private fx: Array<FxEvent> = [];
 	private particles = new ParticleSystem();
 	private daynight: DayNight;
 	private combat = new Combat();
@@ -352,7 +390,6 @@ export class GameLoop {
 	private interaction = new Interaction();
 	private build = new BuildSystem();
 	private refs: GameRefs;
-	private announceQueue: Array<string> = [];
 
 	/** buildings whose roof is (or may be) not fully opaque; eased even off-screen */
 	private fadingRoofs = new Set<Solid>();
@@ -372,6 +409,8 @@ export class GameLoop {
 	private stuckRef = new Map<number, { a: number; seen: number }>();
 	private zombieById = new Map<number, ZombieState>();
 	private frameNo = 0;
+	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
+	private seq = 0;
 	/** a melee swing was drawn last frame, and its blade angle relative to the aim */
 	private swingDrawn = false;
 	private swingRel = 0;
@@ -380,20 +419,20 @@ export class GameLoop {
 		const save = getCtx().save;
 		this.save = save;
 		this.player = createPlayer(save, 0, 0);
+		this.players.push(this.player);
 		this.daynight = new DayNight(save);
 		this.refs = {
 			world: this.world,
+			players: this.players,
 			player: this.player,
 			save: this.save,
 			input: undefined as never,
 			zombies: this.zombies,
 			bosses: this.bosses,
 			bullets: this.bullets,
-			particles: this.particles,
 			daynight: this.daynight,
-			tracers: this.tracers,
 			pendingPlace: -1,
-			announceQueue: this.announceQueue,
+			fx: this.fx,
 			onMessage: () => {},
 			onExp: () => {},
 		};
@@ -410,26 +449,27 @@ export class GameLoop {
 		this.bullets.clear();
 		this.tracers.clear();
 		this.particles.clear();
-		this.announceQueue.clear();
 		const spawn = this.findSpawnPoint();
 		this.player = createPlayer(save, spawn.x, spawn.y);
+		this.players.clear();
+		this.players.push(this.player);
+		this.fx.clear();
 		this.daynight = new DayNight(save);
 		this.daynight.onAnnounce = msg => {
-			this.announceQueue.push(msg);
+			this.fx.push({ kind: "message", text: msg });
 		};
 		const refs = this.refs;
 		refs.world = this.world;
+		refs.players = this.players;
 		refs.player = this.player;
 		refs.save = save;
 		refs.input = getCtx().input;
 		refs.zombies = this.zombies;
 		refs.bosses = this.bosses;
 		refs.bullets = this.bullets;
-		refs.particles = this.particles;
 		refs.daynight = this.daynight;
-		refs.tracers = this.tracers;
 		refs.pendingPlace = -1;
-		refs.announceQueue = this.announceQueue;
+		refs.fx = this.fx;
 		refs.onMessage = msg => {
 			print(msg);
 		};
@@ -464,94 +504,115 @@ export class GameLoop {
 		return randomOpenPoint(w, cx - 800, cy - 800, cx + 800, cy + 800);
 	}
 
-	private updatePlayer(dt: number): void {
-		const ctx = getCtx();
-		const p = this.player;
-		const save = this.save;
+	/**
+	 * This frame's local input as a quantised command (docs/MULTIPLAYER.md §2.2). Quantising BEFORE stepping is
+	 * what makes the client and the server apply the very same numbers from F1 on.
+	 */
+	private sampleCommand(ctx: GameContext): InputCommand {
 		const input = ctx.input;
 		syncKeyboardMove();
-		p.angle = input.aimAngle;
-
 		// input is screen-space; in top-down it maps 1:1 to world (camera rotation undone)
-		let wdx = 0;
-		let wdy = 0;
+		let dx = 0;
+		let dy = 0;
+		// the admin's free camera freezes the survivor: a command with no movement, not a special case downstream
 		if (input.moveMagnitude > 0 && !this.admin.frozen) {
 			const d = ctx.cam.screenDirToWorld(input.moveX, input.moveY);
 			const l = math.sqrt(d.x * d.x + d.y * d.y);
 			if (l > 0.0001) {
-				wdx = d.x / l;
-				wdy = d.y / l;
+				dx = d.x / l;
+				dy = d.y / l;
 			}
 		}
-		const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;
-		const rx = math.cos(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-		const ry = math.sin(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-		if (p.reactionSpeed > 0) {
-			p.reactionSpeed = math.max(0, p.reactionSpeed - DESIGN.REACTION_FRICTION * dt);
-		}
-		const mvx = wdx * speed + rx;
-		const mvy = wdy * speed + ry;
-		const res = this.admin.noclip
-			? { x: p.x + mvx * dt, y: p.y + mvy * dt }
-			: moveActor(this.world, p.x, p.y, PLAYER_RADIUS, mvx * dt, mvy * dt);
-		const moved = math.sqrt((res.x - p.x) * (res.x - p.x) + (res.y - p.y) * (res.y - p.y));
-		p.x = clamp(res.x, 40, this.world.width - 40);
-		p.y = clamp(res.y, 40, this.world.height - 40);
-		const walking = moved > 0.05 && (wdx !== 0 || wdy !== 0);
-		this.walkPhase += moved * 0.09;
-		this.walkAmp = lerp(this.walkAmp, walking ? 1 : 0, ease(0.25, dt));
+		let held = 0;
+		if (input.attackHeld) held += HELD_ATTACK;
+		if (input.keyE) held += HELD_ACTION;
+		const edges = packEdges(
+			input.attackPressed ? 1 : 0,
+			input.attackReleased ? 1 : 0,
+			input.actionPressed ? 1 : 0,
+			input.reloadPressed ? 1 : 0,
+		);
+		this.seq = (this.seq + 1) % SEQ_MOD;
+		return makeCommand(this.seq, dx, dy, input.moveMagnitude, input.aimAngle, held, edges);
+	}
 
-		const hungerRate = 1 - save.skillLevels[8] / 3;
-		p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);
-		if (p.hungry <= 0) {
-			p.hp -= 0.02 * 30 * dt;
-		} else if (p.hp < p.hpMax) {
-			p.hp = math.min(p.hpMax, p.hp + 0.04 * 30 * (1 + save.skillLevels[1]) * dt);
+	/** one step of the local survivor with the shared simulation (the server runs the same one in F1) */
+	private stepLocalPlayer(ctx: GameContext, dt: number): void {
+		const p = this.player;
+		const cmd = this.sampleCommand(ctx);
+		// admin switch: noclip travels on the survivor (it arrives in the snapshot's modFlags from F1 on)
+		p.noclip = this.admin.noclip;
+		const step = stepPlayer(this.world, p, this.save, cmd, dt);
+		this.walkPhase += step.moved * 0.09;
+		this.walkAmp = lerp(this.walkAmp, step.walking ? 1 : 0, ease(0.25, dt));
+		if (step.died) ctx.phase = "dead";
+	}
+
+	/** shot lines age here (Combat did it until F0) so new ones live a full life */
+	private decayTracers(dt: number): void {
+		const list = this.tracers;
+		for (let i = list.size() - 1; i >= 0; i--) {
+			list[i].life -= dt;
+			if (list[i].life <= 0) list.remove(i);
 		}
-		if (p.buffs.poison > 0) {
-			p.buffs.poison -= dt;
-			p.hp -= 0.06 * 30 * (save.skillLevels[20] > 0 ? 0.5 : 1) * dt;
-		}
-		if (p.buffs.speed > 0) p.buffs.speed -= dt;
-		if (p.buffs.calm > 0) p.buffs.calm -= dt;
-		if (p.buffs.pain > 0) p.buffs.pain -= dt;
-		if (p.attacked) {
-			p.iframe -= dt;
-			if (p.iframe <= 0) {
-				p.attacked = false;
-				p.iframe = 0;
+	}
+
+	/**
+	 * Plays and clears what the simulation asked for (refs.fx): camera shake, blood, debris, tracers and HUD
+	 * messages. This is the only place in the client that turns simulation events into pixels.
+	 */
+	private playFx(ctx: GameContext): void {
+		const list = this.fx;
+		if (list.size() === 0) return;
+		for (const e of list) {
+			if (e.kind === "shake") {
+				if (e.player === LOCAL_SLOT) ctx.cam.shake(e.magnitude, e.duration);
+			} else if (e.kind === "blood") {
+				this.particles.bloodBurst(e.x, e.y, e.count, e.source, e.dir);
+			} else if (e.kind === "debris") {
+				this.particles.debrisBurst(e.x, e.y, e.count, DEBRIS_COLOR[e.material]);
+			} else if (e.kind === "tracer") {
+				this.tracers.push({
+					x1: e.x1,
+					y1: e.y1,
+					x2: e.x2,
+					y2: e.y2,
+					color: TRACER_COLOR[e.tracer],
+					life: e.life,
+				});
+			} else if (e.player === undefined || e.player === LOCAL_SLOT) {
+				this.refs.onMessage(e.text);
 			}
 		}
-		if (p.hp <= 0 && !p.dead) {
-			p.hp = 0;
-			p.dead = true;
-			getCtx().phase = "dead";
-		}
+		list.clear();
 	}
 
 	update(dt: number): void {
 		const ctx = getCtx();
 		const refs = this.refs;
-		if (this.player.dead) return;
+		const p = this.player;
+		if (p.dead) return;
 		this.clock += dt;
 		const handled = this.build.handleInput(refs, ctx.input);
 		if (!handled && ctx.input.actionPressed) {
 			this.interaction.tryInteract(refs);
 		}
 		this.build.update(refs);
-		this.updatePlayer(dt);
+		this.stepLocalPlayer(ctx, dt);
+		this.decayTracers(dt);
+		// aim from the survivor's NEW position every frame, not only when the mouse moves
+		p.angle = refreshAim(p.x, p.y);
 		this.combat.update(refs, dt);
 		updateZombies(refs, dt);
 		updateBosses(refs, dt);
 		this.spawner.update(refs, dt);
 		this.daynight.update(dt);
-		while (this.announceQueue.size() > 0) {
-			refs.onMessage(this.announceQueue.remove(0)!);
-		}
+		// shake before cam.update, particles before particles.update: same frame as before F0
+		this.playFx(ctx);
 		this.particles.update(dt);
 		updateGroundItems(this.world, dt);
 		this.interaction.update(refs, dt);
-		ctx.cam.follow(this.player.x, this.player.y, math.min(1, dt * 8));
+		ctx.cam.follow(p.x, p.y, math.min(1, dt * 8));
 		ctx.cam.update(dt);
 		this.updateWorldFx(ctx.cam, dt);
 		ctx.input.beginFrame();
@@ -1984,6 +2045,8 @@ export class GameLoop {
 
 	render(): void {
 		const ctx = getCtx();
+		// effects asked for outside the simulation step (crafting from the backpack, admin tools) still play
+		this.playFx(ctx);
 		const renderer = ctx.renderer;
 		const cam = ctx.cam;
 		renderer.beginFrame();
@@ -2012,7 +2075,7 @@ export class GameLoop {
 		if (this.nameplate === undefined) {
 			const root = ctx.darkLayer.Parent;
 			if (root === undefined || !root.IsA("GuiObject")) return;
-			this.nameplate = new Nameplate(root, NAMEPLATE_Z);
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z, Players.LocalPlayer);
 		}
 		const p = this.player;
 		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
@@ -2080,8 +2143,17 @@ export class GameLoop {
 		return this.refs;
 	}
 
+	/** admin panel "clear blood": particles and decals are view state, so the view clears them */
+	clearEffects(): void {
+		this.particles.clear();
+		this.fx.clear();
+	}
+
 	// ------------------------------------------------------------------ admin panel (src/client/admin)
 
-	/** admin switches read by updatePlayer: noclip = no collision, frozen = movement input ignored (free camera) */
+	/**
+	 * admin switches: noclip = the survivor's step skips collision (copied into PlayerState.noclip, which the
+	 * server will own in F1), frozen = the sampled command carries no movement (free camera)
+	 */
 	readonly admin = { noclip: false, frozen: false };
 }

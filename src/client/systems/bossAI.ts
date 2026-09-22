@@ -1,4 +1,3 @@
-import { COLORS } from "shared/engine/colors";
 import { choose, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
 import { damageToPlayer } from "shared/game/player";
@@ -6,15 +5,15 @@ import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState } from "shared/game/enti
 import { spawnGroundItem } from "shared/game/world";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
-import { GameRefs, SPEED_SCALE, Tracer } from "./types";
+import { fxBlood, fxDebris, fxMessage, fxTracer, GameRefs, nearestPlayer, SPEED_SCALE } from "./types";
 import { actorDist } from "./zombieAI";
 
-const fanCounters = new Map<number, number>();
+/*
+ * The four bosses. Each one chases the nearest living survivor and hurts whoever it touches (refs.players); the
+ * cosmetics go through refs.fx (docs/MULTIPLAYER.md §11.3 F0 0C → server/sim/bossAI.ts in F2).
+ */
 
-function makeTracer(refs: GameRefs, x1: number, y1: number, x2: number, y2: number, color: Color3, life: number): void {
-	const t: Tracer = { x1, y1, x2, y2, color, life };
-	refs.tracers.push(t);
-}
+const fanCounters = new Map<number, number>();
 
 function pushNeedle(refs: GameRefs, x: number, y: number, angle: number, damage: number, speed: number): void {
 	refs.bullets.push({
@@ -37,9 +36,9 @@ function pushNeedle(refs: GameRefs, x: number, y: number, angle: number, damage:
 /** XP (1000/800/800/1000 — see createBoss), message, blood and six loot drops */
 function killBoss(refs: GameRefs, b: BossState): void {
 	refs.onExp(b.exp);
-	refs.onMessage("You killed it");
-	refs.particles.bloodBurst(b.x, b.y, 30);
-	refs.particles.debrisBurst(b.x, b.y, 20, COLORS.boss);
+	fxMessage(refs, "You killed it");
+	fxBlood(refs, b.x, b.y, 30);
+	fxDebris(refs, b.x, b.y, 20, "boss");
 	for (let i = 0; i < 6; i++) {
 		const e = choose(BUILDING_SPAWNS[0]);
 		let count = 1;
@@ -60,8 +59,17 @@ function moveToward(b: BossState, tx: number, ty: number, speed: number, dt: num
 	b.y += math.sin(ang) * speed * SPEED_SCALE * dt;
 }
 
+/** body contact damage: whoever the boss touches takes it (a single survivor: as before) */
+function touchDamage(refs: GameRefs, b: BossState, reach: number): void {
+	for (const p of refs.players) {
+		if (actorDist(p.x, p.y, b.x, b.y) >= reach) continue;
+		const ang = math.atan2(p.y - b.y, p.x - b.x);
+		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
+	}
+}
+
 function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
-	const p = refs.player;
+	const target = nearestPlayer(refs, b.x, b.y);
 	const bodyX = b.bodyX;
 	const bodyY = b.bodyY;
 	if (bodyX === undefined || bodyY === undefined) return;
@@ -74,8 +82,8 @@ function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
 		b.attack = b.attack === false;
 	}
 	const stepsPerSec = (b.moveSpeed * SPEED_SCALE) / 30;
-	const toP = math.atan2(p.y - b.y, p.x - b.x);
-	if (actorDist(p.x, p.y, b.x, b.y) < 300) {
+	const toP = math.atan2(target.y - b.y, target.x - b.x);
+	if (actorDist(target.x, target.y, b.x, b.y) < 300) {
 		b.angle += rndRange(-1, 1) * math.rad(1) * stepsPerSec * dt;
 	} else {
 		const rate = math.rad(b.attack === false ? 2 : 4) * stepsPerSec * dt;
@@ -98,35 +106,34 @@ function updateSerpent(refs: GameRefs, b: BossState, dt: number): void {
 	}
 	bodyX[0] = b.x;
 	bodyY[0] = b.y;
-	// obj_boss1: every 3rd segment grinds the player for `damage` hp PER FRAME (head: double),
+	// obj_boss1: every 3rd segment grinds a survivor for `damage` hp PER FRAME (head: double),
 	// ignoring armour and i-frames → scaled to the frame time here
-	for (let i = 0; i < n; i += 3) {
-		const d = actorDist(p.x, p.y, bodyX[i], bodyY[i]);
-		if (d < BOSS1_SEGMENT_RADIUS + PLAYER_RADIUS * 0.5) {
-			const ang = math.atan2(p.y - bodyY[i], p.x - bodyX[i]);
-			const perFrame = i === 0 ? b.damage * 2 : b.damage;
-			const wasHit = p.attacked;
-			damageToPlayer(p, refs.save, perFrame * SPEED_SCALE * dt, true);
-			if (!wasHit) {
-				p.reactionDir = ang;
-				refs.particles.bloodBurst(p.x, p.y, 4, "player");
+	for (const p of refs.players) {
+		for (let i = 0; i < n; i += 3) {
+			const d = actorDist(p.x, p.y, bodyX[i], bodyY[i]);
+			if (d < BOSS1_SEGMENT_RADIUS + PLAYER_RADIUS * 0.5) {
+				const ang = math.atan2(p.y - bodyY[i], p.x - bodyX[i]);
+				const perFrame = i === 0 ? b.damage * 2 : b.damage;
+				const wasHit = p.attacked;
+				damageToPlayer(p, refs.save, perFrame * SPEED_SCALE * dt, true);
+				if (!wasHit) {
+					p.reactionDir = ang;
+					fxBlood(refs, p.x, p.y, 4, "player");
+				}
+				break;
 			}
-			break;
 		}
 	}
 }
 
 function updateStationary(refs: GameRefs, b: BossState, dt: number): void {
-	const p = refs.player;
-	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
-		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
-	}
+	const target = nearestPlayer(refs, b.x, b.y);
+	touchDamage(refs, b, bossHitRadius(b) + PLAYER_RADIUS);
 	b.attackCd -= dt;
 	if (b.attackCd <= 0) {
 		b.attackCd = 80 / 30;
-		if (d < 420) {
+		const p = target;
+		if (actorDist(p.x, p.y, b.x, b.y) < 420) {
 			const ang = math.atan2(p.y - b.y, p.x - b.x);
 			const tx = p.x + math.cos(ang + math.pi) * 90;
 			const ty = p.y + math.sin(ang + math.pi) * 90;
@@ -135,14 +142,14 @@ function updateStationary(refs: GameRefs, b: BossState, dt: number): void {
 				p.y = ty;
 			}
 			if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang + math.pi;
-			makeTracer(refs, b.x, b.y, p.x, p.y, COLORS.boss, 0.3);
-			refs.particles.bloodBurst(p.x, p.y, 6, "player");
+			fxTracer(refs, b.x, b.y, p.x, p.y, "boss", 0.3);
+			fxBlood(refs, p.x, p.y, 6, "player");
 		}
 	}
 }
 
 function updateChargerBoss(refs: GameRefs, b: BossState, dt: number): void {
-	const p = refs.player;
+	const target = nearestPlayer(refs, b.x, b.y);
 	b.moveCycle = ((b.moveCycle ?? 0) + dt * 60) % 360;
 	const cycle = b.moveCycle;
 	let speed = 14 / 6;
@@ -150,25 +157,17 @@ function updateChargerBoss(refs: GameRefs, b: BossState, dt: number): void {
 		speed = 14 * math.sin((cycle * math.pi) / 180);
 	}
 	if (speed > 0) {
-		moveToward(b, p.x, p.y, speed, dt);
+		moveToward(b, target.x, target.y, speed, dt);
 	}
-	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
-		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
-	}
+	touchDamage(refs, b, bossHitRadius(b) + PLAYER_RADIUS);
 }
 
 function updateNeedleBoss(refs: GameRefs, b: BossState, dt: number): void {
-	const p = refs.player;
-	const d = actorDist(p.x, p.y, b.x, b.y);
-	if (d < bossHitRadius(b) + PLAYER_RADIUS) {
-		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		if (damageToPlayer(p, refs.save, b.damage)) p.reactionDir = ang;
-	}
+	const target = nearestPlayer(refs, b.x, b.y);
+	touchDamage(refs, b, bossHitRadius(b) + PLAYER_RADIUS);
 	if (b.attack !== true) {
 		b.moveCount = (b.moveCount ?? 40) - dt * 30;
-		moveToward(b, p.x, p.y, b.moveSpeed, dt);
+		moveToward(b, target.x, target.y, b.moveSpeed, dt);
 		if ((b.moveCount ?? 0) <= 0) {
 			b.attack = true;
 			b.attackCd = 0.4;
@@ -186,7 +185,7 @@ function updateNeedleBoss(refs: GameRefs, b: BossState, dt: number): void {
 	}
 	fanCounters.set(b.id, fans + 1);
 	b.attackCd = 0.35;
-	const base = math.atan2(p.y - b.y, p.x - b.x);
+	const base = math.atan2(target.y - b.y, target.x - b.x);
 	for (let i = -3; i <= 3; i++) {
 		pushNeedle(refs, b.x, b.y, base + (i * 15 * math.pi) / 180, 10, 18 * SPEED_SCALE);
 	}
