@@ -1,15 +1,14 @@
 import { GameContext } from "shared/game/context";
-import { COLORS } from "shared/engine/colors";
-import { makeButton, makeFrame, makeLabel } from "./widgets";
+import { FONTS, PALETTE, makeButton, makeFrame, makeLabel, makeScreen } from "./widgets";
 
 const CREDIT_LINES = [
-	"DEAD TOWN",
-	"Zombie Survival - 2D port",
+	"PROJECT Z",
+	"Top-down zombie survival for Roblox",
 	"",
-	"Original game",
-	"Dead Town: Zombie Survival",
+	"Inspired by Dead Town",
+	"by Lemon Puppy Games",
 	"",
-	"Thanks to",
+	"Special thanks (original Dead Town credits)",
 	"Yoyo games",
 	"Crazy GM",
 	"Play GM",
@@ -18,27 +17,30 @@ const CREDIT_LINES = [
 	"sodium031",
 	"zizonpink",
 	"",
-	"Assets and music from community contributors",
-	"",
-	"Port built with roblox-ts",
+	"Built with roblox-ts",
 	"",
 	"Thank you for playing!",
 ];
 
 export function showCredits(ctx: GameContext, onBack: () => void): () => void {
-	const root = makeFrame(ctx.uiLayer, "Credits", 0, 0, 1120, 630, COLORS.bg);
-	makeFrame(root, "TopBar", 0, 0, 1120, 64, Color3.fromRGB(65, 65, 65));
-	const scroller = makeFrame(root, "Scroller", 0, 0, 1120, 630, COLORS.bg, { transparency: 1, clips: true });
-	const text = makeLabel(scroller, "CreditText", CREDIT_LINES.join("\n"), 260, 630, 600, 560, 20, COLORS.uiText);
-	text.TextYAlignment = Enum.TextYAlignment.Top;
-	makeButton(root, "Back", "Back", 970, 14, 120, 44, COLORS.uiPanelLight, (): void => onBack());
+	const { root, body } = makeScreen(ctx.uiLayer, "Credits", { gradient: true });
 
-	let scrollY = 630;
+	makeLabel(body, "Title", "Credits", 184, 24, 400, 58, 36, PALETTE.text, { font: FONTS.display, align: "left" });
+	makeButton(body, "Back", "‹  Back", 40, 28, 124, 50, "secondary", (): void => onBack());
+
+	const scroller = makeFrame(body, "Scroller", 260, 104, 600, 500, PALETTE.bg, { transparency: 1, clips: true });
+	const text = makeLabel(scroller, "CreditText", CREDIT_LINES.join("\n"), 0, 500, 600, 560, 20, PALETTE.text, {
+		font: FONTS.medium,
+		align: "center",
+		valign: "top",
+	});
+
+	let scrollY = 500;
 	const RunService = game.GetService("RunService");
 	const conn = RunService.RenderStepped.Connect((dt: number): void => {
 		scrollY -= 40 * dt;
-		if (scrollY < -580) scrollY = 630;
-		text.Position = new UDim2(0, 0, 0, scrollY);
+		if (scrollY < -580) scrollY = 500;
+		text.Position = UDim2.fromScale(0, scrollY / 500);
 	});
 
 	return (): void => {

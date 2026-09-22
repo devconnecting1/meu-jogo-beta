@@ -1,111 +1,751 @@
 import { GAME_NAME } from "shared/module";
-import { defaultSave, PlayerSaveData } from "shared/game/save";
-import { getRemotes } from "shared/net/net";
+import {
+	defaultSave,
+	enforceSaveInvariants,
+	PlayerSaveData,
+	resetRun,
+	SAVE_LIMITS,
+	sanitizeClientReport,
+	sanitizeStoredSave,
+	walletOf,
+} from "shared/game/save";
+import { COSTUMES, ECONOMY, rebirthPrice, SHOP_PACKS } from "shared/data/shop";
+import {
+	createRemotes,
+	LoadResult,
+	LoadStatus,
+	MAX_SAVE_PAYLOAD,
+	SAVE_MIN_INTERVAL,
+	SaveAckPayload,
+	SaveRejectReason,
+	ShopActionReason,
+	ShopActionResult,
+} from "shared/net/net";
+
+/*
+ * Server = source of truth for the economy and for what reaches the DataStore.
+ * - coins only change here (shop purchases, rebirth, rewards computed from validated progress)
+ * - progress reports from the client are schema-checked, clamped and rate/plausibility limited
+ * - DataStore: UpdateAsync with a session lock, autosave every 60 s, save on leave and on shutdown,
+ *   retries with backoff, and a read error NEVER turns into an overwrite (read-only session)
+ */
 
 const Players = game.GetService("Players");
 const DataStoreService = game.GetService("DataStoreService");
 const HttpService = game.GetService("HttpService");
+const RunService = game.GetService("RunService");
 
 Players.CharacterAutoLoads = false;
 
-const DATA_STORE_NAME = "ProjectZ_Save_v1";
-const MAX_SAVE_LENGTH = 100000;
-const AUTOSAVE_INTERVAL = 150 / 30;
+/**
+ * v2 documents ({ data, lock }) live in their own store: a server still running the v1 code expects a
+ * raw string there and would overwrite anything else with a blank save.
+ */
+const DATA_STORE_NAME = "ProjectZ_Save_v2";
+/** v1 store (raw JSON strings, written by the client-trusting server): read to migrate a first v2 session */
+const LEGACY_STORE_NAME = "ProjectZ_Save_v1";
+/** v1 balances were written by the client (free "+5" buttons / exploit): cap what is carried over */
+const LEGACY_MONEY_CAP = 500;
+const AUTOSAVE_INTERVAL = 60;
+/** waits between attempts of a DataStore call (4 attempts in total) */
+const RETRY_DELAYS = [1, 2, 4];
+const SHUTDOWN_RETRY_DELAYS = [0.5, 1];
+const SHUTDOWN_BUDGET = 25;
+/** a DataStore value may hold up to 4 MB */
+const MAX_STORED_LENGTH = 3900000;
+/** keep at least this many UpdateAsync requests for joins/leaves before autosaving */
+const AUTOSAVE_MIN_BUDGET = 4;
 
-const remotes = getRemotes();
+/** session lock: another server's lock is honoured while it is fresher than this (s) */
+const LOCK_STALE = 300;
+/** rewrite (refreshing the lock) at least this often even without changes (s) */
+const LOCK_REFRESH = 150;
+/** how long a join waits for another server to release the lock before taking it over (s) */
+const LOCK_WAIT = 15;
+const JOB_ID = game.JobId !== "" ? game.JobId : `studio-${HttpService.GenerateGUID(false)}`;
+
+/** client can re-request a failed load at most this often (s) */
+const LOAD_RETRY_COOLDOWN = 10;
+
+// Plausibility of client-simulated progress, as credits refilled by real session time.
+// A real in-game day takes ~8-11 min, so +1 day / 3 min never limits an honest player.
+const DAY_SECONDS = 180;
+const DAY_CREDIT_MAX = 5;
+const BOSS_SECONDS = 90;
+const BOSS_CREDIT_MAX = 4;
+/** 0: a fresh session (e.g. after reconnecting) never starts with reward credit */
+const BOSS_CREDIT_START = 0;
+const LEVEL_SECONDS = 20;
+const LEVEL_CREDIT_MAX = 15;
+const LEVEL_CREDIT_START = 5;
+
+/** shop/rebirth requests: token bucket */
+const ACTION_BURST = 6;
+const ACTION_PER_SECOND = 2;
+
+interface Credits {
+	day: number;
+	boss: number;
+	level: number;
+	at: number;
+}
+
+interface Session {
+	player: Player;
+	key: string;
+	sid: string;
+	loaded: boolean;
+	loading: boolean;
+	status: LoadStatus;
+	/** another server took the lock over: stop writing */
+	lockLost: boolean;
+	token: string;
+	save: PlayerSaveData;
+	dirty: boolean;
+	writing: boolean;
+	released: boolean;
+	lastWrite: number;
+	ackRequested: boolean;
+	lastAck: number;
+	lastReport: number;
+	pending: string | undefined;
+	pendingToken: string | undefined;
+	pendingScheduled: boolean;
+	/** end of the last load attempt */
+	lastLoadAttempt: number;
+	retryQueued: boolean;
+	credits: Credits;
+	actionTokens: number;
+	actionAt: number;
+	closed: boolean;
+}
+
+interface StoredLock {
+	job: string;
+	sid: string;
+	t: number;
+}
+
+interface StoredDoc {
+	data: unknown;
+	lock: StoredLock | undefined;
+}
+
+const remotes = createRemotes();
 const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(DATA_STORE_NAME));
 const dataStore = storeOk ? (storeValue as DataStore) : undefined;
-const sessions = new Map<Player, PlayerSaveData>();
+if (dataStore === undefined) {
+	warn(`[${GAME_NAME}] DataStore unavailable: ${tostring(storeValue)} — progress will not be saved`);
+}
+const [legacyOk, legacyValue] = pcall((): unknown => DataStoreService.GetDataStore(LEGACY_STORE_NAME));
+const legacyStore = legacyOk ? (legacyValue as DataStore) : undefined;
 
-function saveKey(player: Player): string {
-	return tostring(player.UserId);
+const sessions = new Map<Player, Session>();
+/** users whose previous session on this server is still writing its final save */
+const releasing = new Set<number>();
+let shuttingDown = false;
+
+// ---------------------------------------------------------------- session state helpers
+
+function persists(s: Session): boolean {
+	return (s.status === "ok" || s.status === "new") && !s.lockLost && dataStore !== undefined;
 }
 
-function decodeSave(raw: string): PlayerSaveData {
-	const [ok, value] = pcall((): unknown => HttpService.JSONDecode(raw));
-	if (ok && value !== undefined) {
-		return value as PlayerSaveData;
-	}
-	return defaultSave();
+function isReadOnly(s: Session): boolean {
+	return s.status === "error" || s.lockLost;
 }
 
-function readSave(player: Player): PlayerSaveData {
-	if (dataStore === undefined) {
-		return defaultSave();
-	}
-	const [ok, raw] = pcall((): unknown => {
-		const [value] = dataStore.GetAsync<string>(saveKey(player));
-		return value;
-	});
-	if (ok && typeIs(raw, "string")) {
-		return decodeSave(raw);
-	}
-	return defaultSave();
+function resetCredits(s: Session): void {
+	s.credits = { day: 0, boss: BOSS_CREDIT_START, level: LEVEL_CREDIT_START, at: os.clock() };
 }
 
-function writeSave(player: Player, save: PlayerSaveData): boolean {
-	if (dataStore === undefined) {
+function refillCredits(s: Session): void {
+	const now = os.clock();
+	const dt = math.max(0, now - s.credits.at);
+	s.credits.at = now;
+	s.credits.day = math.min(DAY_CREDIT_MAX, s.credits.day + dt / DAY_SECONDS);
+	s.credits.boss = math.min(BOSS_CREDIT_MAX, s.credits.boss + dt / BOSS_SECONDS);
+	s.credits.level = math.min(LEVEL_CREDIT_MAX, s.credits.level + dt / LEVEL_SECONDS);
+}
+
+function waitUntil(check: () => boolean, timeout: number): boolean {
+	const t0 = os.clock();
+	while (!check()) {
+		if (os.clock() - t0 >= timeout) return false;
+		task.wait(0.1);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------- DataStore documents
+
+function readLock(v: unknown): StoredLock | undefined {
+	if (!typeIs(v, "table")) return undefined;
+	const l = v as Record<string, unknown>;
+	if (!typeIs(l.job, "string") || !typeIs(l.sid, "string") || !typeIs(l.t, "number")) return undefined;
+	return { job: l.job, sid: l.sid, t: l.t };
+}
+
+/** v1 stored the raw JSON string; v2 stores { data = json, lock = {job, sid, t} } */
+function readDoc(old: unknown): StoredDoc | undefined {
+	if (old === undefined) return undefined;
+	if (typeIs(old, "string")) return { data: old, lock: undefined };
+	if (typeIs(old, "table")) {
+		const t = old as Record<string, unknown>;
+		return { data: t.data, lock: readLock(t.lock) };
+	}
+	return { data: undefined, lock: undefined };
+}
+
+/** [ok, value]: a stored value that is not valid JSON is reported as a failure (never replaced by a blank save) */
+function decodeData(data: unknown): [boolean, unknown] {
+	if (typeIs(data, "string")) {
+		const [ok, value] = pcall((): unknown => HttpService.JSONDecode(data));
+		if (ok && typeIs(value, "table")) return [true, value];
+		return [false, undefined];
+	}
+	return [typeIs(data, "table"), data];
+}
+
+type LoadOutcome = { kind: "found"; data: unknown } | { kind: "empty" } | { kind: "failed"; err: string };
+
+/** reads the save and takes the session lock in one UpdateAsync (retries with backoff) */
+function loadWithLock(s: Session): LoadOutcome {
+	const store = dataStore;
+	if (store === undefined) return { kind: "failed", err: "no DataStore" };
+	const deadline = os.clock() + LOCK_WAIT;
+	let attempt = 0;
+	while (true) {
+		let result = "empty" as "found" | "empty" | "locked";
+		let data: unknown;
+		const [ok, err] = pcall(() => {
+			store.UpdateAsync<unknown, unknown>(s.key, old => {
+				const doc = readDoc(old);
+				const now = os.time();
+				const lock = doc?.lock;
+				const foreign =
+					lock !== undefined &&
+					(lock.job !== JOB_ID || (lock.sid !== s.sid && releasing.has(s.player.UserId)));
+				if (lock !== undefined && foreign && now - lock.t < LOCK_STALE && os.clock() < deadline) {
+					result = "locked";
+					return $tuple(undefined);
+				}
+				data = doc?.data;
+				result = data === undefined ? "empty" : "found";
+				return $tuple({ data, lock: { job: JOB_ID, sid: s.sid, t: now } });
+			});
+		});
+		if (ok) {
+			if (result === "locked") {
+				// another server is still writing this player's last session: give it time to release
+				task.wait(2);
+				continue;
+			}
+			return result === "found" ? { kind: "found", data } : { kind: "empty" };
+		}
+		if (attempt >= RETRY_DELAYS.size()) return { kind: "failed", err: tostring(err) };
+		warn(`[${GAME_NAME}] load ${s.key} failed (attempt ${attempt + 1}): ${tostring(err)}`);
+		task.wait(RETRY_DELAYS[attempt]);
+		attempt++;
+	}
+}
+
+type WriteOutcome = "ok" | "lost" | "failed";
+
+function writeWithLock(s: Session, json: string, release: boolean, delays: Array<number>): WriteOutcome {
+	const store = dataStore;
+	if (store === undefined) return "failed";
+	for (let attempt = 0; ; attempt++) {
+		let lost = false as boolean;
+		const [ok, err] = pcall(() => {
+			store.UpdateAsync<unknown, unknown>(s.key, old => {
+				const lock = readDoc(old)?.lock;
+				if (lock === undefined || lock.job !== JOB_ID || lock.sid !== s.sid) {
+					// lock released or owned by another session (here or on another server): this copy is stale
+					lost = true;
+					return $tuple(undefined);
+				}
+				lost = false;
+				const nextLock = release ? undefined : { job: JOB_ID, sid: s.sid, t: os.time() };
+				return $tuple({ data: json, lock: nextLock });
+			});
+		});
+		if (ok) return lost ? "lost" : "ok";
+		if (attempt >= delays.size()) {
+			warn(`[${GAME_NAME}] save ${s.key} failed: ${tostring(err)}`);
+			return "failed";
+		}
+		task.wait(delays[attempt]);
+	}
+}
+
+/**
+ * Writes the session to the DataStore when needed. Calls are serialized per session.
+ * `release` also drops the session lock (player left / server closing).
+ */
+function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAYS): boolean {
+	if (!s.loaded || s.released) return true;
+	if (!persists(s)) return false;
+	if (!waitUntil(() => !s.writing, 30)) return false;
+	if (s.released) return true;
+	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
+	if (!release && !s.dirty && !refreshDue) return true;
+	const json = HttpService.JSONEncode(s.save);
+	if (json.size() > MAX_STORED_LENGTH) {
+		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
 		return false;
 	}
-	const json = HttpService.JSONEncode(save);
-	if (json.size() >= MAX_SAVE_LENGTH) {
+	s.writing = true;
+	const wasDirty = s.dirty;
+	s.dirty = false;
+	const outcome = writeWithLock(s, json, release, delays);
+	s.writing = false;
+	if (outcome === "ok") {
+		s.lastWrite = os.clock();
+		if (release) s.released = true;
+		return true;
+	}
+	if (outcome === "lost") {
+		s.lockLost = true;
+		warn(`[${GAME_NAME}] ${s.key}: session lock taken by another session; this copy is now read-only`);
 		return false;
 	}
-	const [ok] = pcall(() => {
-		dataStore.SetAsync(saveKey(player), json);
-	});
-	return ok;
+	s.dirty = s.dirty || wasDirty;
+	return false;
+}
+
+// ---------------------------------------------------------------- load
+
+function sendLoadAck(s: Session): void {
+	if (s.closed || !s.loaded) return;
+	s.lastAck = os.clock();
+	const result: LoadResult = {
+		status: s.status,
+		token: s.token,
+		persist: persists(s),
+		acceptsReports: !isReadOnly(s),
+		save: s.save,
+	};
+	remotes.loadAck.FireClient(s.player, result);
+}
+
+function freshSave(withGift: boolean): PlayerSaveData {
+	const save = defaultSave();
+	if (withGift) save.money = ECONOMY.STARTING_COINS;
+	return save;
+}
+
+/** reads a v1 save (raw JSON string) from the legacy store, with retries */
+function readLegacy(key: string): LoadOutcome {
+	const store = legacyStore;
+	if (store === undefined) return { kind: "failed", err: "no legacy DataStore" };
+	for (let attempt = 0; ; attempt++) {
+		const [ok, value] = pcall((): unknown => store.GetAsync<unknown>(key)[0]);
+		if (ok) return value === undefined ? { kind: "empty" } : { kind: "found", data: value };
+		if (attempt >= RETRY_DELAYS.size()) return { kind: "failed", err: tostring(value) };
+		task.wait(RETRY_DELAYS[attempt]);
+	}
+}
+
+function loadSession(s: Session): void {
+	if (s.loading) return;
+	s.loading = true;
+	waitUntil(() => !releasing.has(s.player.UserId), 20);
+	let status: LoadStatus;
+	let save: PlayerSaveData;
+	let migrated = false;
+	let outcome: LoadOutcome = dataStore === undefined ? { kind: "failed", err: "no DataStore" } : loadWithLock(s);
+	if (outcome.kind === "empty") {
+		// no v2 save yet: migrate the v1 one if there is one (a failed read must NOT look like a new player)
+		outcome = readLegacy(s.key);
+		migrated = outcome.kind === "found";
+	}
+	if (dataStore === undefined) {
+		status = "unavailable";
+		save = freshSave(true);
+	} else if (outcome.kind === "found") {
+		const [decoded, value] = decodeData(outcome.data);
+		if (decoded) {
+			status = "ok";
+			save = sanitizeStoredSave(value);
+			if (migrated && save.money > LEGACY_MONEY_CAP) {
+				warn(`[${GAME_NAME}] ${s.key}: v1 balance ${save.money} capped to ${LEGACY_MONEY_CAP} on migration`);
+				save.money = LEGACY_MONEY_CAP;
+			}
+		} else {
+			// unreadable data is still the player's data: never replace it with a blank save
+			warn(`[${GAME_NAME}] ${s.key}: stored save is not valid JSON; read-only session`);
+			status = "error";
+			save = defaultSave();
+		}
+	} else if (outcome.kind === "empty") {
+		status = "new";
+		save = freshSave(true);
+	} else if (RunService.IsStudio()) {
+		// Studio without API access: play normally in memory, never write
+		warn(`[${GAME_NAME}] Studio: DataStore read failed (${outcome.err}); progress will not be saved`);
+		status = "unavailable";
+		save = freshSave(true);
+	} else {
+		// the save exists but could not be read: do NOT start a fresh one that would overwrite it
+		warn(`[${GAME_NAME}] ${s.key}: load failed after retries (${outcome.err}); read-only session`);
+		status = "error";
+		save = defaultSave();
+	}
+	s.status = status;
+	s.save = save;
+	s.dirty = status === "new" || (status === "ok" && migrated);
+	s.lockLost = false;
+	s.token = HttpService.GenerateGUID(false);
+	s.pending = undefined;
+	s.pendingToken = undefined;
+	s.lastReport = -math.huge;
+	s.lastWrite = os.clock();
+	resetCredits(s);
+	s.lastLoadAttempt = os.clock();
+	s.loaded = true;
+	s.loading = false;
+	if (s.closed) {
+		// the player left while we were loading: drop the lock we just took
+		flush(s, true);
+		return;
+	}
+	if (s.ackRequested) sendLoadAck(s);
+}
+
+function newSession(player: Player): Session {
+	return {
+		player,
+		key: tostring(player.UserId),
+		sid: HttpService.GenerateGUID(false),
+		loaded: false,
+		loading: false,
+		status: "error",
+		lockLost: false,
+		token: "",
+		save: defaultSave(),
+		dirty: false,
+		writing: false,
+		released: false,
+		lastWrite: 0,
+		ackRequested: false,
+		lastAck: -math.huge,
+		lastReport: -math.huge,
+		pending: undefined,
+		pendingToken: undefined,
+		pendingScheduled: false,
+		lastLoadAttempt: -math.huge,
+		retryQueued: false,
+		credits: { day: 0, boss: 0, level: 0, at: os.clock() },
+		actionTokens: ACTION_BURST,
+		actionAt: os.clock(),
+		closed: false,
+	};
+}
+
+function onPlayerAdded(player: Player): void {
+	if (sessions.has(player)) return;
+	const s = newSession(player);
+	sessions.set(player, s);
+	loadSession(s);
 }
 
 remotes.loadRequest.OnServerEvent.Connect(player => {
-	const save = readSave(player);
-	sessions.set(player, save);
-	remotes.loadAck.FireClient(player, save);
-});
-
-remotes.saveRequest.OnServerEvent.Connect((player, saveJson) => {
-	if (!typeIs(saveJson, "string") || saveJson.size() >= MAX_SAVE_LENGTH) {
-		remotes.saveAck.FireClient(player, false);
+	const s = sessions.get(player);
+	if (s === undefined || s.closed) return;
+	s.ackRequested = true;
+	if (!s.loaded) return; // the ack goes out as soon as the load finishes
+	if (s.status === "error") {
+		// the player asked to retry a failed load: run it once the cooldown has passed
+		if (s.loading || s.retryQueued) return;
+		s.retryQueued = true;
+		const wait = math.max(0, LOAD_RETRY_COOLDOWN - (os.clock() - s.lastLoadAttempt));
+		task.delay(wait, () => {
+			s.retryQueued = false;
+			if (s.closed || s.status !== "error") return;
+			s.loaded = false;
+			loadSession(s);
+		});
 		return;
 	}
-	if (dataStore === undefined) {
-		remotes.saveAck.FireClient(player, false);
-		return;
-	}
-	const [ok] = pcall(() => {
-		dataStore.SetAsync(saveKey(player), saveJson);
-	});
-	if (ok) {
-		sessions.set(player, decodeSave(saveJson));
-	}
-	remotes.saveAck.FireClient(player, ok);
+	if (os.clock() - s.lastAck >= 1) sendLoadAck(s);
 });
 
-function onPlayerAdded(player: Player): void {
-	const save = readSave(player);
-	sessions.set(player, save);
+// ---------------------------------------------------------------- progress reports
+
+interface Reward {
+	coins: number;
+	days: number;
+	bosses: number;
+	/** part of the report was held back by the plausibility limits (the client should report again later) */
+	clamped: boolean;
 }
+
+/** time-based plausibility + coin rewards. Mutates `upd` (the sanitized report), `prev` is the trusted copy. */
+function applyProgressLimits(s: Session, prev: PlayerSaveData, upd: PlayerSaveData): Reward {
+	refillCredits(s);
+	const reward: Reward = { coins: 0, days: 0, bosses: 0, clamped: false };
+
+	// days: at most the credited amount; each new day pays, each new record multiple of 5 pays a bonus
+	if (upd.day > prev.day) {
+		const gained = math.min(upd.day - prev.day, math.floor(s.credits.day));
+		if (gained < upd.day - prev.day) reward.clamped = true;
+		s.credits.day -= gained;
+		upd.day = prev.day + gained;
+		reward.days = gained;
+		reward.coins += gained * ECONOMY.COINS_PER_DAY;
+	}
+	if (upd.day > prev.bestDay) {
+		for (let d = prev.bestDay + 1; d <= upd.day; d++) {
+			if (d % ECONOMY.MILESTONE_EVERY === 0) reward.coins += ECONOMY.MILESTONE_BONUS;
+		}
+	}
+	upd.bestDay = math.max(prev.bestDay, upd.day);
+
+	// bosses: lifetime counter, never decreases, limited per real minute
+	if (upd.bossKills < prev.bossKills) {
+		upd.bossKills = prev.bossKills;
+	} else if (upd.bossKills > prev.bossKills) {
+		const gained = math.min(upd.bossKills - prev.bossKills, math.floor(s.credits.boss));
+		if (gained < upd.bossKills - prev.bossKills) reward.clamped = true;
+		s.credits.boss -= gained;
+		upd.bossKills = prev.bossKills + gained;
+		reward.bosses = gained;
+		reward.coins += gained * ECONOMY.COINS_PER_BOSS;
+	}
+
+	// levels: limited per real minute (the rest is accepted by later reports as credit refills)
+	if (upd.level > prev.level) {
+		const gained = math.min(upd.level - prev.level, math.floor(s.credits.level));
+		s.credits.level -= gained;
+		if (gained < upd.level - prev.level) {
+			reward.clamped = true;
+			upd.level = prev.level + gained;
+			upd.exp = 0;
+		}
+	}
+
+	upd.money = math.min(prev.money + reward.coins, SAVE_LIMITS.MONEY_MAX);
+	enforceSaveInvariants(upd, prev);
+	return reward;
+}
+
+function sendSaveAck(s: Session, ack: SaveAckPayload): void {
+	if (!s.closed) remotes.saveAck.FireClient(s.player, ack);
+}
+
+function rejectReport(s: Session, reason: SaveRejectReason, withWallet = false): void {
+	sendSaveAck(s, {
+		ok: false,
+		reason,
+		earned: 0,
+		earnedDays: 0,
+		earnedBosses: 0,
+		clamped: false,
+		wallet: withWallet ? walletOf(s.save) : undefined,
+	});
+}
+
+function processReport(s: Session, json: string): void {
+	s.lastReport = os.clock();
+	const [ok, decoded] = pcall((): unknown => HttpService.JSONDecode(json));
+	if (!ok) {
+		rejectReport(s, "invalid");
+		return;
+	}
+	const prev = s.save;
+	if (typeIs(decoded, "table") && (decoded as Record<string, unknown>).runRev !== prev.runRev) {
+		// captured before the last rebirth / new run: it would bring the old run back
+		rejectReport(s, "outdated", true);
+		return;
+	}
+	const upd = sanitizeClientReport(decoded, prev);
+	if (upd === undefined) {
+		rejectReport(s, "invalid");
+		return;
+	}
+	const reward = applyProgressLimits(s, prev, upd);
+	s.save = upd;
+	s.dirty = true;
+	sendSaveAck(s, {
+		ok: true,
+		earned: reward.coins,
+		earnedDays: reward.days,
+		earnedBosses: reward.bosses,
+		clamped: reward.clamped,
+		wallet: walletOf(upd),
+	});
+}
+
+function processPending(s: Session): void {
+	const json = s.pending;
+	const token = s.pendingToken;
+	s.pending = undefined;
+	s.pendingToken = undefined;
+	if (json === undefined || !s.loaded || isReadOnly(s) || token !== s.token) return;
+	processReport(s, json);
+}
+
+remotes.saveRequest.OnServerEvent.Connect((player, token, json) => {
+	const s = sessions.get(player);
+	if (s === undefined || s.closed) return;
+	if (!s.loaded) {
+		rejectReport(s, "loading");
+		return;
+	}
+	if (!typeIs(token, "string") || !typeIs(json, "string") || json.size() > MAX_SAVE_PAYLOAD) {
+		rejectReport(s, "invalid");
+		return;
+	}
+	if (isReadOnly(s)) {
+		rejectReport(s, "readonly");
+		return;
+	}
+	if (token !== s.token) {
+		rejectReport(s, "stale");
+		return;
+	}
+	const since = os.clock() - s.lastReport;
+	if (since < SAVE_MIN_INTERVAL) {
+		// rate limit: keep only the latest report and process it when the window opens
+		s.pending = json;
+		s.pendingToken = token;
+		if (!s.pendingScheduled) {
+			s.pendingScheduled = true;
+			task.delay(SAVE_MIN_INTERVAL - since, () => {
+				s.pendingScheduled = false;
+				if (!s.closed) processPending(s);
+			});
+		}
+		return;
+	}
+	processReport(s, json);
+});
+
+// ---------------------------------------------------------------- shop / rebirth
+
+function isIndex(v: unknown, size: number): v is number {
+	return typeIs(v, "number") && v % 1 === 0 && v >= 0 && v < size;
+}
+
+function takeActionToken(s: Session): boolean {
+	const now = os.clock();
+	s.actionTokens = math.min(ACTION_BURST, s.actionTokens + (now - s.actionAt) * ACTION_PER_SECOND);
+	s.actionAt = now;
+	if (s.actionTokens < 1) return false;
+	s.actionTokens -= 1;
+	return true;
+}
+
+function fail(reason: ShopActionReason, s?: Session): ShopActionResult {
+	return { ok: false, reason, wallet: s !== undefined && s.loaded ? walletOf(s.save) : undefined };
+}
+
+function handleAction(player: Player, raw: unknown): ShopActionResult {
+	const s = sessions.get(player);
+	if (s === undefined || s.closed || !s.loaded) return fail("loading");
+	if (!takeActionToken(s)) return fail("rate", s);
+	if (isReadOnly(s)) return fail("readonly");
+	if (!typeIs(raw, "table")) return fail("invalid", s);
+	const req = raw as Record<string, unknown>;
+	const save = s.save;
+	let price: number;
+	if (req.kind === "buyPack") {
+		if (!isIndex(req.packId, SHOP_PACKS.size())) return fail("invalid", s);
+		const id = req.packId;
+		const pending = (save.packsBought[id] ?? 0) - (save.packsOpened[id] ?? 0);
+		if (pending >= ECONOMY.MAX_PENDING_PACKS) return fail("limit", s);
+		price = SHOP_PACKS[id].price;
+		if (save.money < price) return fail("funds", s);
+		save.money -= price;
+		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
+	} else if (req.kind === "buyCostume") {
+		if (!isIndex(req.costumeId, COSTUMES.size())) return fail("invalid", s);
+		const id = req.costumeId;
+		if ((save.costumes[id] ?? 0) > 0) return fail("owned", s);
+		price = COSTUMES[id].price;
+		if (save.money < price) return fail("funds", s);
+		save.money -= price;
+		save.costumes[id] = 1;
+	} else if (req.kind === "rebirth") {
+		// continue the current run after a game over; the price grows with every continue of the run.
+		// The request names the run it continues: a stale/duplicated request is refused (idempotent).
+		if (req.runRev !== save.runRev) return fail("outdated", s);
+		price = rebirthPrice(save.deathCount);
+		if (save.money < price) return fail("funds", s);
+		save.money -= price;
+		save.deathCount += 1;
+		save.runOver = false;
+		save.runRev += 1;
+	} else if (req.kind === "newRun") {
+		// give up the current run: day 1 with the starter kit (level, skills, coins, packs stay)
+		if (req.runRev !== save.runRev) return fail("outdated", s);
+		price = 0;
+		resetRun(save);
+		save.runRev += 1;
+	} else {
+		return fail("invalid", s);
+	}
+	s.dirty = true;
+	return { ok: true, price, wallet: walletOf(save) };
+}
+
+remotes.shopAction.OnServerInvoke = (player, request) => handleAction(player, request);
+
+// ---------------------------------------------------------------- lifecycle
 
 Players.PlayerAdded.Connect(onPlayerAdded);
 for (const player of Players.GetPlayers()) {
-	onPlayerAdded(player);
+	task.spawn(onPlayerAdded, player);
 }
 
 Players.PlayerRemoving.Connect(player => {
-	const save = sessions.get(player);
-	if (save !== undefined) {
-		writeSave(player, save);
-	}
+	const s = sessions.get(player);
+	if (s === undefined) return;
+	s.closed = true;
+	const userId = player.UserId;
+	releasing.add(userId);
+	waitUntil(() => s.loaded, 60);
+	if (s.pending !== undefined) processPending(s);
+	flush(s, true);
 	sessions.delete(player);
+	releasing.delete(userId);
+});
+
+game.BindToClose(() => {
+	shuttingDown = true;
+	const all: Array<Session> = [];
+	for (const [, s] of sessions) all.push(s);
+	let remaining = all.size();
+	for (const s of all) {
+		task.spawn(() => {
+			waitUntil(() => s.loaded, 10);
+			if (s.pending !== undefined) processPending(s);
+			// no report may land after the final state is captured
+			s.closed = true;
+			flush(s, true, SHUTDOWN_RETRY_DELAYS);
+			remaining -= 1;
+		});
+	}
+	waitUntil(() => remaining <= 0, SHUTDOWN_BUDGET);
 });
 
 task.spawn(() => {
-	while (true) {
+	while (!shuttingDown) {
 		task.wait(AUTOSAVE_INTERVAL);
-		for (const [player, save] of sessions) {
-			writeSave(player, save);
+		if (shuttingDown) break;
+		const due: Array<Session> = [];
+		for (const [, s] of sessions) {
+			if (!s.closed && s.loaded && persists(s)) due.push(s);
+		}
+		for (const s of due) {
+			if (shuttingDown || s.closed) continue;
+			const budget = DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync);
+			if (budget < AUTOSAVE_MIN_BUDGET) break; // keep the budget for joins/leaves; retry next round
+			task.spawn(() => flush(s, false));
+			task.wait(0.2);
 		}
 	}
 });
 
-print(`[${GAME_NAME}] server ready`);
+print(`[${GAME_NAME}] server ready (job ${JOB_ID})`);

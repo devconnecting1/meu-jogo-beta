@@ -1,16 +1,31 @@
 import { getCtx } from "../bootstrap";
-import { COLORS } from "shared/engine/colors";
-import { makeFrame, makeLabel } from "./widgets";
+import { FONTS, PALETTE, makeLabel, makeScreen } from "./widgets";
 
 export function showLogo(onDone: () => void): void {
 	const ctx = getCtx();
 	const TweenService = game.GetService("TweenService");
-	const root = makeFrame(ctx.uiLayer, "Logo", 0, 0, 1120, 630, COLORS.bg, { zIndex: 500 });
-	const title = makeLabel(root, "LogoTitle", "DEAD TOWN", 160, 230, 800, 100, 72, COLORS.uiText);
-	title.Font = Enum.Font.GothamBlack;
+	const { root, body } = makeScreen(ctx.uiLayer, "Logo", { zIndex: 500, gradient: true });
+
+	const title = makeLabel(
+		body,
+		"LogoTitle",
+		`PROJECT <font color="#${PALETTE.accent.ToHex()}">Z</font>`,
+		60,
+		230,
+		1000,
+		110,
+		84,
+		PALETTE.text,
+		{ font: FONTS.display, align: "center", rich: true },
+	);
 	title.TextTransparency = 1;
-	const sub = makeLabel(root, "LogoSub", "Zombie Survival", 160, 340, 800, 50, 24, COLORS.uiAccent);
+
+	const sub = makeLabel(body, "LogoSub", "Zombie Survival", 60, 350, 1000, 50, 24, PALETTE.textDim, {
+		font: FONTS.medium,
+		align: "center",
+	});
 	sub.TextTransparency = 1;
+
 	const info = new TweenInfo(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 	TweenService.Create(title, info, { TextTransparency: 0 }).Play();
 	task.delay(0.35, (): void => {

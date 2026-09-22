@@ -39,12 +39,6 @@
 				"FilteringEnabled": true
 			}
 		},
-		"HttpService": {
-			"$className": "HttpService",
-			"$properties": {
-				"HttpEnabled": true
-			}
-		},
 		"SoundService": {
 			"$className": "SoundService",
 			"$properties": {
