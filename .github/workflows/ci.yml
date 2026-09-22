@@ -41,3 +41,19 @@ jobs:
           name: include
           path: include/
           if-no-files-found: error
+
+      - name: Install Rojo
+        run: |
+          curl -L -o rojo.zip https://github.com/rojo-rbx/rojo/releases/download/v7.7.0/rojo-7.7.0-linux-x86_64.zip
+          unzip -o rojo.zip -d "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Rojo build
+        run: $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxl
+
+      - name: Upload place file
+        uses: actions/upload-artifact@v4
+        with:
+          name: place
+          path: ProjectZ-ci.rbxl
+          if-no-files-found: error
