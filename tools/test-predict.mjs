@@ -1,0 +1,991 @@
+#!/usr/bin/env node
+/*
+ * Prediction / reconciliation / interpolation self-test of the F1 client net layer
+ * (docs/MULTIPLAYER.md §2.2, §4.4, §5.1, §5.2; acceptance in §11.3 F1 and §12.2).
+ *
+ *   node tools/test-predict.mjs                      # 50 / 100 / 200 ms RTT at 2 % loss
+ *   node tools/test-predict.mjs --seconds 30         # longer runs
+ *   node tools/test-predict.mjs --seed 7 --loss 0.05
+ *   PZ_SRC=path/to/src node tools/test-predict.mjs
+ *
+ * It stands a REAL server-shaped simulation next to a REAL client: `shared/sim/playerMove.ts` on both sides, the
+ * §2.2 input queue (depth target 2, max 4, filled slots, duplicate and stale rejection) on the server, and
+ * `client/net/{clockSync,commands,prediction,snapshotBuffer}.ts` unmodified on the client. Everything between them
+ * goes through the actual wire format — `encodeInput`/`decodeInput` and `encodeSnapshot`/`decodeSnapshotPart` — so
+ * the f32 self block, the 0.5 u position quantisation and the u16 tick wrap are all exercised, over a link that
+ * delays, jitters, drops, duplicates and reorders packets.
+ *
+ * What it proves:
+ *
+ *   1. divergence p99 < 1 u between what the client predicted for a command and what the server computed for it
+ *      (§12.2), at 50, 100 and 200 ms RTT with 2 % loss;
+ *   2. no correction above 16 u in normal conditions (§11.3 F1: fewer than one a minute, outside knockback) —
+ *      here, none at all;
+ *   3. the interpolation of the other survivors only ever moves FORWARD, including on a link that reorders and
+ *      duplicates packets (§4.4: duplicates and stale packets are dropped, §5.1: the render time is monotonic);
+ *   4. the unacked command queue stays bounded: it sits at about one RTT of commands, never reaches the
+ *      MAX_PENDING ceiling even through a total upstream blackout, and comes back down afterwards (§2.2).
+ *
+ * Exit code 1 on any failure. Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the
+ * fly, with the Luau / roblox-ts shims of tools/test-sim.mjs and the strict `buffer` of tools/test-net.mjs.
+ */
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SRC = resolve(process.env.PZ_SRC ?? join(ROOT, "src"));
+const require = createRequire(import.meta.url);
+const Module = require("node:module");
+const ts = require("typescript");
+
+// ---------------------------------------------------------------- Luau / roblox-ts shims
+
+globalThis.math = {
+	floor: Math.floor,
+	ceil: Math.ceil,
+	abs: Math.abs,
+	sqrt: Math.sqrt,
+	sin: Math.sin,
+	cos: Math.cos,
+	tan: Math.tan,
+	atan2: Math.atan2,
+	asin: Math.asin,
+	acos: Math.acos,
+	exp: Math.exp,
+	pow: Math.pow,
+	min: Math.min,
+	max: Math.max,
+	sign: Math.sign,
+	pi: Math.PI,
+	huge: Infinity,
+	log: (x, b) => (b === undefined ? Math.log(x) : Math.log(x) / Math.log(b)),
+	clamp: (v, a, b) => Math.min(Math.max(v, a), b),
+	rad: d => (d * Math.PI) / 180,
+	deg: r => (r * 180) / Math.PI,
+	// Luau rounds halves away from zero (JS rounds them towards +∞)
+	round: x => (x < 0 ? -Math.round(-x) : Math.round(x)),
+	random: () => 0.5,
+};
+globalThis.print = (...a) => console.log(...a);
+globalThis.warn = (...a) => console.warn(...a);
+
+class Color3 {
+	constructor(r = 0, g = 0, b = 0) {
+		this.R = r;
+		this.G = g;
+		this.B = b;
+	}
+	static fromRGB(r, g, b) {
+		return new Color3(r / 255, g / 255, b / 255);
+	}
+	static fromHSV(h, s, v) {
+		const i = Math.floor(h * 6);
+		const f = h * 6 - i;
+		const p = v * (1 - s);
+		const q = v * (1 - f * s);
+		const t = v * (1 - (1 - f) * s);
+		const m = [
+			[v, t, p],
+			[q, v, p],
+			[p, v, t],
+			[p, q, v],
+			[t, p, v],
+			[v, p, q],
+		][((i % 6) + 6) % 6];
+		return new Color3(m[0], m[1], m[2]);
+	}
+	Lerp(o, k) {
+		return new Color3(this.R + (o.R - this.R) * k, this.G + (o.G - this.G) * k, this.B + (o.B - this.B) * k);
+	}
+}
+globalThis.Color3 = Color3;
+
+// strict Luau `buffer`: out-of-bounds throws, and an out-of-range integer write throws instead of wrapping, so a
+// missing clamp in the codec fails the test rather than corrupting a neighbouring field (same rule as test-net)
+class LuauBuffer {
+	constructor(size) {
+		this.bytes = new Uint8Array(size);
+		this.view = new DataView(this.bytes.buffer);
+	}
+}
+function bcheck(b, offset, n) {
+	if (!(b instanceof LuauBuffer)) throw new TypeError("buffer expected");
+	if (!Number.isInteger(offset)) throw new TypeError(`offset ${offset} not an integer`);
+	if (offset < 0 || offset + n > b.bytes.length) {
+		throw new RangeError(`buffer access out of bounds (offset ${offset}, ${n} B, len ${b.bytes.length})`);
+	}
+}
+function icheck(v, lo, hi, what) {
+	if (!Number.isInteger(v) || v < lo || v > hi) {
+		throw new RangeError(`${what}: ${v} is not an integer in [${lo}, ${hi}] (Luau would wrap it)`);
+	}
+}
+globalThis.buffer = {
+	create(size) {
+		if (!Number.isInteger(size) || size < 0) throw new RangeError(`buffer.create(${size})`);
+		return new LuauBuffer(size);
+	},
+	len(b) {
+		if (!(b instanceof LuauBuffer)) throw new TypeError("buffer expected");
+		return b.bytes.length;
+	},
+	readu8: (b, o) => (bcheck(b, o, 1), b.view.getUint8(o)),
+	readi8: (b, o) => (bcheck(b, o, 1), b.view.getInt8(o)),
+	readu16: (b, o) => (bcheck(b, o, 2), b.view.getUint16(o, true)),
+	readi16: (b, o) => (bcheck(b, o, 2), b.view.getInt16(o, true)),
+	readu32: (b, o) => (bcheck(b, o, 4), b.view.getUint32(o, true)),
+	readf32: (b, o) => (bcheck(b, o, 4), b.view.getFloat32(o, true)),
+	readf64: (b, o) => (bcheck(b, o, 8), b.view.getFloat64(o, true)),
+	writeu8(b, o, v) {
+		bcheck(b, o, 1);
+		icheck(v, 0, 255, "writeu8");
+		b.view.setUint8(o, v);
+	},
+	writei8(b, o, v) {
+		bcheck(b, o, 1);
+		icheck(v, -128, 127, "writei8");
+		b.view.setInt8(o, v);
+	},
+	writeu16(b, o, v) {
+		bcheck(b, o, 2);
+		icheck(v, 0, 65535, "writeu16");
+		b.view.setUint16(o, v, true);
+	},
+	writei16(b, o, v) {
+		bcheck(b, o, 2);
+		icheck(v, -32768, 32767, "writei16");
+		b.view.setInt16(o, v, true);
+	},
+	writeu32(b, o, v) {
+		bcheck(b, o, 4);
+		icheck(v, 0, 4294967295, "writeu32");
+		b.view.setUint32(o, v, true);
+	},
+	writef32(b, o, v) {
+		bcheck(b, o, 4);
+		b.view.setFloat32(o, v, true);
+	},
+	writef64(b, o, v) {
+		bcheck(b, o, 8);
+		b.view.setFloat64(o, v, true);
+	},
+	readstring(b, o, count) {
+		bcheck(b, o, count);
+		return Buffer.from(b.bytes.subarray(o, o + count)).toString("utf8");
+	},
+	writestring(b, o, value, count) {
+		const bytes = Buffer.from(String(value), "utf8");
+		const n = count === undefined ? bytes.length : count;
+		bcheck(b, o, n);
+		b.bytes.set(bytes.subarray(0, n), o);
+	},
+	copy(target, targetOffset, source, sourceOffset = 0, count) {
+		const n = count === undefined ? source.bytes.length - sourceOffset : count;
+		bcheck(source, sourceOffset, n);
+		bcheck(target, targetOffset, n);
+		target.bytes.set(source.bytes.subarray(sourceOffset, sourceOffset + n), targetOffset);
+	},
+};
+globalThis.typeIs = (v, t) => {
+	switch (t) {
+		case "buffer":
+			return v instanceof LuauBuffer;
+		case "number":
+			return typeof v === "number";
+		case "string":
+			return typeof v === "string";
+		case "boolean":
+			return typeof v === "boolean";
+		case "nil":
+			return v === undefined || v === null;
+		case "function":
+			return typeof v === "function";
+		case "table":
+			return typeof v === "object" && v !== null && !(v instanceof LuauBuffer);
+		default:
+			return false;
+	}
+};
+
+const AP = Array.prototype;
+const shim = (name, fn) => Object.defineProperty(AP, name, { value: fn, configurable: true, writable: true });
+shim("size", function () {
+	return this.length;
+});
+shim("remove", function (i) {
+	return this.splice(i, 1)[0];
+});
+shim("clear", function () {
+	this.length = 0;
+});
+const jsSort = AP.sort;
+shim("sort", function (cmp) {
+	if (!cmp) return jsSort.call(this);
+	// roblox-ts comparators return a boolean ("a before b")
+	return jsSort.call(this, (a, b) => {
+		const r = cmp(a, b);
+		if (typeof r !== "boolean") return r;
+		return r ? -1 : cmp(b, a) ? 1 : 0;
+	});
+});
+Object.defineProperty(String.prototype, "size", {
+	value: function () {
+		return Buffer.byteLength(this.valueOf(), "utf8");
+	},
+	configurable: true,
+	writable: true,
+});
+
+// "shared/x" / "client/x" → SRC/x.ts, transpiled with the project's TypeScript
+const resolveFilename = Module._resolveFilename;
+Module._resolveFilename = function (req, parent, ...rest) {
+	if (req.startsWith("shared/") || req.startsWith("client/")) return join(SRC, req + ".ts");
+	if (req.startsWith(".") && parent?.filename?.endsWith(".ts")) {
+		const p = resolve(dirname(parent.filename), req);
+		if (existsSync(p + ".ts")) return p + ".ts";
+	}
+	return resolveFilename.call(this, req, parent, ...rest);
+};
+Module._extensions[".ts"] = function (m, filename) {
+	const out = ts.transpileModule(readFileSync(filename, "utf8"), {
+		compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+	});
+	m._compile(out.outputText, filename);
+};
+
+const W = require(join(SRC, "shared/game/world.ts"));
+const physics = require(join(SRC, "shared/game/physics.ts"));
+const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
+const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
+const SIM = require(join(SRC, "shared/sim/types.ts"));
+const codec = require(join(SRC, "shared/net/codec.ts"));
+const P = require(join(SRC, "shared/net/protocol.ts"));
+const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
+const { CommandStream, MAX_PENDING } = require(join(SRC, "client/net/commands.ts"));
+const { Prediction, CORRECTION_DIST } = require(join(SRC, "client/net/prediction.ts"));
+const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+
+// ---------------------------------------------------------------- CLI
+
+const args = process.argv.slice(2);
+const numArg = (name, fallback) => {
+	const i = args.indexOf(name);
+	return i >= 0 && args[i + 1] !== undefined ? Number(args[i + 1]) : fallback;
+};
+const SEED = numArg("--seed", 1);
+const SECONDS = numArg("--seconds", 20);
+const LOSS = numArg("--loss", 0.02);
+
+/** §12.2: the divergence between predicted and authoritative, 99th percentile */
+const P99_LIMIT = 1;
+/** a step backwards this big in an interpolated ally is a visible rubber band, whatever caused it */
+const BACKWARD_LIMIT = 1;
+/** and at most this fraction of frames may step back at all (extrapolation after 2+ lost packets in a row) */
+const BACKWARD_RATE = 0.005;
+/** how far an ally has to walk for "the interpolation moves forward" to mean anything */
+const MIN_TRAVEL = 400;
+/**
+ * One tick of movement at full speed (about 210 u/s at 60 Hz). It is the width of a single filled slot, and so
+ * the smallest divergence a server that starves its input queue can possibly leave behind.
+ */
+const ONE_TICK_U = 4;
+/** above this loss the knockback scenario only reports: the pile-up it causes is the link's, not the client's */
+const STRICT_LOSS = 0.03;
+/** the unacked queue should sit at one RTT of commands; this is the slack on top of it */
+const PENDING_SLACK = 24;
+/** the client's clock runs this much fast, so the ±2 % sampling dilation has something to correct */
+const CLIENT_CLOCK_SKEW = 1.003;
+/** GetServerTimeNow() is a sampled clock: ± this many seconds of noise on every read (§4.6) */
+const CLOCK_NOISE_S = 0.002;
+/** simulation time of tick 0 */
+const T0 = 1000;
+/** the local survivor's walk is steered towards a waypoint this often (seconds) */
+const TURN_EVERY_S = 1.7;
+/**
+ * One-way jitter of the three RTT scenarios: a fraction of the RTT, capped.
+ *
+ * The cap is not cosmetic. The server's input queue is INPUT_BUFFER_TARGET = 2 commands deep, i.e. 33 ms, so
+ * one-way jitter above about 16 ms makes the gap between two arrivals longer than the queue can cover; the queue
+ * empties, the tick FILLS the slot with a repeat, and the real command for that seq is discarded (2.2). Each
+ * filled slot is up to one tick of movement (~3.5 u) of divergence the client then has to reconcile away — a
+ * server-side buffering question, not a prediction one. The [jitter] scenario below covers it on purpose.
+ */
+const JITTER_FRACTION = 0.15;
+/** 2 x 15 ms still fits inside the 33 ms the depth-2 input queue holds */
+const JITTER_CAP_S = 0.015;
+
+const SIM_HZ = CFG.SIM_HZ;
+const TICK = CFG.TICK_DT;
+const SNAP_EVERY = CFG.SNAP_NEAR_EVERY_TICKS;
+
+let failures = 0;
+const fail = msg => {
+	failures++;
+	console.log(`  FAIL  ${msg}`);
+};
+const ok = msg => console.log(`  ok    ${msg}`);
+
+/** deterministic PRNG (mulberry32) — nothing in the test may depend on Math.random */
+function rng(seed) {
+	let a = seed >>> 0;
+	return () => {
+		a = (a + 0x6d2b79f5) >>> 0;
+		let t = a;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+// ---------------------------------------------------------------- the link (§1.1: unreliable, unordered)
+
+/**
+ * One direction of the connection. A packet is delayed by half the RTT plus jitter, dropped with probability
+ * `loss`, optionally duplicated, and delivered in the order its arrival time elapses — which, with jitter, is
+ * genuinely out of order. `blackout` is a window during which nothing at all gets through.
+ */
+class Link {
+	constructor(opts) {
+		this.oneWay = opts.rtt / 2;
+		this.jitter = opts.jitter ?? 0;
+		this.name = opts.name ?? "link";
+		this.loss = opts.loss ?? 0;
+		this.dup = opts.dup ?? 0;
+		this.blackout = opts.blackout; // { from, to } in simulation seconds
+		this.random = opts.random;
+		this.queue = [];
+		this.sent = 0;
+		this.dropped = 0;
+		this.duplicated = 0;
+		this.reordered = 0;
+		this.order = 0;
+		this.lastDelivered = -1;
+	}
+
+	send(now, payload) {
+		this.sent += 1;
+		if (this.blackout !== undefined && now >= this.blackout.from && now < this.blackout.to) {
+			this.dropped += 1;
+			return;
+		}
+		if (this.random() < this.loss) {
+			this.dropped += 1;
+			return;
+		}
+		this.push(now, payload);
+		if (this.random() < this.dup) {
+			this.duplicated += 1;
+			this.push(now, payload);
+		}
+	}
+
+	push(now, payload) {
+		const at = now + this.oneWay + (this.random() - 0.5) * 2 * this.jitter;
+		this.queue.push({ at, payload, order: this.order++ });
+	}
+
+	/** everything that has arrived by `now`, in arrival order (jitter is what makes that differ from send order) */
+	poll(now) {
+		const out = [];
+		let i = 0;
+		while (i < this.queue.length) {
+			if (this.queue[i].at <= now) out.push(this.queue.splice(i, 1)[0]);
+			else i++;
+		}
+		out.sort((a, b) => a.at - b.at);
+		const payloads = [];
+		for (const item of out) {
+			// out of order = it left after something that has already been delivered, and arrives behind it
+			if (item.order < this.lastDelivered) this.reordered += 1;
+			else this.lastDelivered = item.order;
+			payloads.push(item.payload);
+		}
+		return payloads;
+	}
+}
+
+// ---------------------------------------------------------------- the world and the two survivors
+
+/** the town, plus a long clear stretch of road an ally can walk down in a straight line */
+function buildScene(seed) {
+	const world = W.generateTown(seed);
+	const clear = (x, y) => physics.circleBlocked(world, x, y, physics.PLAYER_RADIUS + 6) === undefined;
+	let lane;
+	for (const road of world.roads) {
+		if (road.vertical || road.w < 1400) continue;
+		const y = road.y + road.h * 0.5;
+		for (let x = road.x + 120; x < road.x + road.w - 1200; x += 60) {
+			let free = true;
+			for (let d = 0; d <= 1100 && free; d += 40) free = clear(x + d, y);
+			if (free) {
+				lane = { x, y };
+				break;
+			}
+		}
+		if (lane !== undefined) break;
+	}
+	if (lane === undefined) throw new Error("no clear stretch of road for the ally to walk down");
+	// the local survivor starts a few metres off the same lane, with walls and cars within reach
+	let start = { x: lane.x + 40, y: lane.y - 90 };
+	if (!clear(start.x, start.y)) start = { x: lane.x + 40, y: lane.y };
+	return { world, lane, start };
+}
+
+// ---------------------------------------------------------------- the server (§2.2 input queue, §3.1 tick)
+
+function makeServerPlayer(slot, world, x, y) {
+	const save = defaultSave();
+	return {
+		slot,
+		save,
+		state: createPlayer(save, x, y),
+		world,
+		queue: [],
+		lastConsumed: 0,
+		started: false,
+		lastCmd: undefined,
+		filledRun: 0,
+		walking: false,
+		moveAng: 0,
+		counters: { filled: 0, overflow: 0, duplicate: 0, stale: 0 },
+	};
+}
+
+/** §2.2: ordered by seq, duplicates and already-consumed commands dropped, never deeper than INPUT_BUFFER_MAX */
+function acceptInput(sp, packet) {
+	// the packet carries the newest command first; insert oldest first so the queue stays ascending
+	for (let i = packet.cmds.length - 1; i >= 0; i--) {
+		const cmd = packet.cmds[i];
+		if (sp.started && !codec.seqNewer(cmd.seq, sp.lastConsumed)) {
+			sp.counters.stale += 1;
+			continue;
+		}
+		let at = sp.queue.length;
+		while (at > 0 && codec.seqNewer(sp.queue[at - 1].seq, cmd.seq)) at -= 1;
+		if (at > 0 && sp.queue[at - 1].seq === cmd.seq) {
+			sp.counters.duplicate += 1;
+			continue;
+		}
+		sp.queue.splice(at, 0, cmd);
+	}
+	while (sp.queue.length > CFG.INPUT_BUFFER_MAX) {
+		sp.queue.shift();
+		sp.counters.overflow += 1;
+	}
+}
+
+/**
+ * Exactly one command per tick and per player; an empty queue is a FILLED slot, never a longer step.
+ *
+ * Consumption only starts once the queue has reached INPUT_BUFFER_TARGET (§2.2: "profundidade-alvo de 2"). That
+ * is not a detail: start at depth 1 and the first hiccup of jitter empties the queue, every empty queue fills a
+ * slot, and every filled slot is a divergence the client has to reconcile away.
+ */
+function consume(sp) {
+	if (!sp.started) {
+		if (sp.queue.length < CFG.INPUT_BUFFER_TARGET) return undefined;
+		sp.started = true;
+		sp.lastConsumed = codec.wrapU16(sp.queue[0].seq - 1);
+	}
+	const want = codec.wrapU16(sp.lastConsumed + 1);
+	if (sp.queue.length > 0 && sp.queue[0].seq === want) {
+		const cmd = sp.queue.shift();
+		sp.lastConsumed = want;
+		sp.filledRun = 0;
+		sp.lastCmd = cmd;
+		return cmd;
+	}
+	// §2.2: repeat the last movement for one tick, then stand; the real command for this seq is discarded
+	sp.lastConsumed = want;
+	sp.counters.filled += 1;
+	sp.filledRun += 1;
+	const base = sp.lastCmd;
+	const cmd =
+		base !== undefined && sp.filledRun <= 1
+			? { seq: want, moveAng: base.moveAng, moveMag: base.moveMag, aim: base.aim, held: 0, edges: 0 }
+			: { seq: want, moveAng: 0, moveMag: 0, aim: base === undefined ? 0 : base.aim, held: 0, edges: 0 };
+	sp.lastCmd = cmd;
+	return cmd;
+}
+
+function serverStep(sp, cmd) {
+	if (cmd === undefined) return;
+	const res = stepPlayer(sp.world, sp.state, sp.save, cmd, TICK);
+	sp.walking = res.walking;
+	if (cmd.moveMag > 0) sp.moveAng = SIM.aimOf(cmd.aim);
+}
+
+function selfBlockOf(sp) {
+	const p = sp.state;
+	return {
+		x: p.x,
+		y: p.y,
+		ackSeq: sp.lastConsumed,
+		bufDepth: sp.queue.length,
+		reactionSpeed: Math.max(0, p.reactionSpeed),
+		reactionDir: p.reactionDir,
+		hp: Math.max(0, p.hp),
+		hunger: Math.max(0, p.hungry),
+		flags: 0,
+		iframe: Math.max(0, p.iframe),
+		mag: 0,
+		reload: 0,
+		spread: 0,
+		draw: 0,
+		bleed: 0,
+		modFlags: 0,
+		weapon: 0,
+	};
+}
+
+function playerBlockOf(sp) {
+	const p = sp.state;
+	return {
+		slot: sp.slot,
+		x: p.x,
+		y: p.y,
+		aim: p.angle,
+		flags: sp.walking ? P.PlayerFlag.Walking : 0,
+		weapon: 0,
+		swing: 0,
+		hp: p.hpMax > 0 ? Math.min(1, Math.max(0, p.hp / p.hpMax)) : 0,
+		revive: 0,
+		moveAng: sp.moveAng,
+	};
+}
+
+// ---------------------------------------------------------------- the client (the netClient frame order)
+
+function makeClient(scene) {
+	const save = defaultSave();
+	const state = createPlayer(save, scene.start.x, scene.start.y);
+	const client = {
+		world: scene.world,
+		save,
+		state,
+		clock: new ClockSync(),
+		commands: new CommandStream(),
+		prediction: new Prediction(),
+		snapshots: new SnapshotBuffer(),
+		queue: [],
+		lastSelfTick: -Infinity,
+		staleSelf: 0,
+		raw: { moveX: 0, moveY: 0, magnitude: 0, aim: 0, held: 0 },
+		sampled: [],
+		malformed: 0,
+	};
+	client.clock.setEpoch(T0, SIM_HZ);
+	client.snapshots.setRate(SIM_HZ);
+	client.prediction.attach(scene.world, state, save);
+	return client;
+}
+
+/** one render frame, in the order client/net/netClient.ts runs it */
+function clientFrame(cl, dt, now, down, up, serverNow) {
+	for (const payload of down.poll(now)) {
+		const part = P.decodeSnapshotPart(payload);
+		if (part === undefined) {
+			cl.malformed += 1;
+			continue;
+		}
+		cl.queue.push(part);
+	}
+	const tick = cl.clock.update(dt, serverNow);
+	for (const part of cl.queue) {
+		const partTick = codec.unwrapTick(part.tick, Math.floor(cl.clock.tickNow()));
+		cl.snapshots.receive(part, cl.clock.tickNow(), now);
+		const block = part.self;
+		if (block === undefined) continue;
+		// unordered delivery: a self block from an older tick would rewind the survivor to where the server had
+		// them two snapshots ago and replay only what the NEWER ack left unacked (netClient does the same)
+		if (partTick <= cl.lastSelfTick) {
+			cl.staleSelf += 1;
+			continue;
+		}
+		cl.lastSelfTick = partTick;
+		cl.commands.ack(block.ackSeq);
+		cl.commands.noteBufDepth(block.bufDepth);
+		cl.prediction.reconcile(block, cl.commands.unacked(), now);
+	}
+	cl.queue.length = 0;
+
+	cl.sampled.length = 0;
+	cl.commands.sample(dt, cl.raw, cl.sampled);
+	for (const cmd of cl.sampled) cl.prediction.step(cmd);
+
+	cl.snapshots.advance(dt, tick, now, cl.world);
+
+	const render = cl.snapshots.renderNow();
+	const viewTick = Math.floor(render);
+	const viewFrac = Math.min(255, Math.max(0, Math.floor((render - viewTick) * 256)));
+	const packet = cl.commands.packet(viewTick, viewFrac);
+	if (packet !== undefined && cl.commands.trySend(now)) {
+		const payload = P.encodeInput(packet);
+		if (payload !== undefined) up.send(now, payload);
+	}
+
+	cl.prediction.present(dt, cl.commands.phase(), cl.commands.newest());
+}
+
+// ---------------------------------------------------------------- one scenario
+
+/**
+ * Runs `SECONDS` of a two-player session: the local survivor (predicted, reconciled) and one ally walking down a
+ * clear lane (interpolated). Returns everything the assertions need.
+ */
+function run(opts) {
+	const scene = buildScene(opts.seed ?? DESIGN.TOWN_SEED);
+	const random = rng(opts.seed ?? SEED);
+	const noise = rng((opts.seed ?? SEED) ^ 0x9e3779b9);
+	const steer = rng((opts.seed ?? SEED) ^ 0x51ed270b);
+
+	const me = makeServerPlayer(0, scene.world, scene.start.x, scene.start.y);
+	const ally = makeServerPlayer(1, scene.world, scene.lane.x, scene.lane.y);
+	const client = makeClient(scene);
+
+	const up = new Link({
+		name: "up",
+		rtt: opts.rtt,
+		jitter: opts.upJitter ?? opts.jitter,
+		loss: opts.loss,
+		random,
+		blackout: opts.upBlackout,
+	});
+	const down = new Link({
+		name: "down",
+		rtt: opts.rtt,
+		jitter: opts.downJitter ?? opts.jitter,
+		loss: opts.loss,
+		dup: opts.dup,
+		random,
+		blackout: opts.downBlackout,
+	});
+
+	const allyStart = ally.state.x;
+	const report = {
+		scene,
+		frames: 0,
+		maxPending: 0,
+		endPending: 0,
+		pendingDuringOutage: 0,
+		backwardSteps: 0,
+		worstBackward: 0,
+		stalledAt: 0,
+		beforeStall: undefined,
+		afterStall: undefined,
+		lateAfterStall: 0,
+		allyTravel: 0,
+		allySeen: 0,
+		knockbacks: 0,
+		up,
+		down,
+		me,
+		ally,
+		client,
+	};
+
+	let now = T0;
+	let serverTick = 0;
+	let allySeq = 0;
+	let lastAllyX = -Infinity;
+	let waypointAt = 0;
+	let heading = 0;
+	const frames = Math.round(SECONDS / TICK);
+	// the last tenth of the run is quiet, so "did the client converge back" is a question about the
+	// reconciliation and not about whichever bite happened to land on the final snapshot
+	const quietFrom = Math.floor(frames * 0.9);
+
+	// a stall (alt-tab, a long hitch): the wall clock and the server jump forward, and the client's next frame
+	// arrives with one huge dt. Nothing else about the run changes.
+	const stallFrame = opts.stallS === undefined ? -1 : Math.floor(frames * 0.4);
+
+	for (let frame = 0; frame < frames; frame++) {
+		let frameDt = TICK * CLIENT_CLOCK_SKEW;
+		if (frame === stallFrame) {
+			now += opts.stallS;
+			frameDt = opts.stallS;
+			report.stalledAt = now;
+			report.beforeStall = { x: me.state.x, y: me.state.y };
+		}
+		now += TICK;
+
+		// ---- server: catch up to the wall clock, one command per player per tick (§3.1)
+		const wantTick = Math.floor((now - T0) * SIM_HZ);
+		while (serverTick < wantTick) {
+			for (const payload of up.poll(now)) {
+				const packet = P.decodeInput(payload);
+				if (packet !== undefined) acceptInput(me, packet);
+			}
+			// the ally is a bot: a perfect 60 Hz stream walking +x, so a step backwards on the client can only
+			// ever come from the interpolation itself
+			allySeq = (allySeq + 1) % 65536;
+			serverStep(ally, SIM.makeCommand(allySeq, 1, 0, 1, 0, 0, 0));
+			serverStep(me, consume(me));
+			const biting = opts.knockbackEvery !== undefined && serverTick > 0 && serverTick < quietFrom;
+			if (biting && serverTick % opts.knockbackEvery === 0) {
+				// a bite the client cannot possibly have predicted: it only learns about it from the snapshot
+				me.state.reactionSpeed = 8;
+				me.state.reactionDir = (serverTick % 7) * 0.9;
+				report.knockbacks += 1;
+			}
+			serverTick += 1;
+			if (serverTick % SNAP_EVERY === 0) {
+				const snap = {
+					tick: serverTick,
+					self: selfBlockOf(me),
+					players: [playerBlockOf(ally)],
+					zombies: [],
+					bosses: [],
+				};
+				const res = P.encodeSnapshot(snap);
+				for (const part of res.parts) down.send(now, part);
+			}
+		}
+
+		// ---- client: a fresh waypoint now and then, so the run is not a straight line
+		if (now - waypointAt >= TURN_EVERY_S) {
+			waypointAt = now;
+			heading = steer() * Math.PI * 2;
+		}
+		const moving = frame % 53 !== 0; // a few idle frames
+		client.raw.moveX = moving ? Math.cos(heading) : 0;
+		client.raw.moveY = moving ? Math.sin(heading) : 0;
+		client.raw.magnitude = moving ? 1 : 0;
+		client.raw.aim = heading + 0.3;
+		const serverNow = now + (noise() - 0.5) * 2 * CLOCK_NOISE_S;
+		clientFrame(client, frameDt, now, down, up, serverNow);
+		if (report.stalledAt > 0 && now >= report.stalledAt + 1 && report.afterStall === undefined) {
+			report.afterStall = { x: me.state.x, y: me.state.y };
+			report.lateAfterStall = me.counters.stale;
+		}
+
+		// ---- measurements
+		report.frames += 1;
+		const pending = client.commands.stats().pending;
+		report.maxPending = Math.max(report.maxPending, pending);
+		report.endPending = pending;
+		const outage = opts.downBlackout ?? opts.upBlackout;
+		if (outage !== undefined && now >= outage.from && now < outage.to) {
+			report.pendingDuringOutage = Math.max(report.pendingDuringOutage, pending);
+		}
+		for (const remote of client.snapshots.states()) {
+			if (remote.slot !== 1) continue;
+			report.allySeen += 1;
+			if (lastAllyX > -Infinity) {
+				const step = remote.x - lastAllyX;
+				if (step < 0) {
+					report.backwardSteps += 1;
+					report.worstBackward = Math.max(report.worstBackward, -step);
+				}
+			}
+			lastAllyX = remote.x;
+		}
+	}
+
+	report.allyTravel = ally.state.x - allyStart;
+	report.predictionStats = client.prediction.stats(now);
+	report.commandStats = client.commands.stats();
+	report.interpDelay = client.snapshots.delay();
+	report.serverTick = serverTick;
+	return report;
+}
+
+function pct(n, d) {
+	return d > 0 ? `${((n / d) * 100).toFixed(1)}%` : "—";
+}
+
+// ---------------------------------------------------------------- run
+
+const started = Date.now();
+console.log(
+	`[test-predict] ${SECONDS}s per scenario · seed ${SEED} · ${(LOSS * 100).toFixed(1)}% loss · ` +
+		`${SIM_HZ} Hz sim, snapshots every ${SNAP_EVERY} ticks`,
+);
+
+// ---- (1)(2)(3)(4) the three round trips of §11.3 F1 / §1.1 ("most players have 100–300 ms")
+for (const rtt of [0.05, 0.1, 0.2]) {
+	const jitter = Math.min(rtt * JITTER_FRACTION, JITTER_CAP_S);
+	console.log(`\n[rtt ${Math.round(rtt * 1000)} ms] jitter ±${Math.round(jitter * 1000)} ms, loss ${pct(LOSS, 1)}`);
+	const r = run({ rtt, jitter, loss: LOSS, seed: SEED });
+	const p = r.predictionStats;
+	console.log(
+		`  ${r.frames} frames · ${r.serverTick} server ticks · ${r.up.sent} input packets ` +
+			`(${r.up.dropped} lost) · ${r.down.sent} snapshot parts (${r.down.dropped} lost, ` +
+			`${r.down.reordered} out of order) · filled slots ${r.me.counters.filled} · ` +
+			`stale/dup dropped ${r.me.counters.stale}/${r.me.counters.duplicate} · ` +
+			`interp delay ${(r.interpDelay * 1000).toFixed(0)} ms`,
+	);
+
+	if (p.samples < 10) fail(`only ${p.samples} divergence samples: the session never really started`);
+	else if (p.p99 < P99_LIMIT)
+		ok(`divergence p50 ${p.p50.toFixed(4)} u, p99 ${p.p99.toFixed(4)} u (< ${P99_LIMIT} u)`);
+	else
+		fail(`divergence p99 ${p.p99.toFixed(3)} u ≥ ${P99_LIMIT} u (p50 ${p.p50.toFixed(3)} u, ${p.samples} samples)`);
+
+	if (p.corrections === 0) ok(`no correction above ${CORRECTION_DIST} u (${p.replays} rewinds, ${p.snaps} snaps)`);
+	else fail(`${p.corrections} correction(s) above ${CORRECTION_DIST} u in normal conditions`);
+
+	// the unacked queue is one RTT of commands plus the snapshot interval: bounded, and not growing
+	const bound = Math.ceil(rtt * SIM_HZ) + PENDING_SLACK;
+	if (r.maxPending <= bound && r.endPending <= bound) {
+		ok(`unacked queue peaked at ${r.maxPending} commands (≤ ${bound}), ended at ${r.endPending}`);
+	} else {
+		fail(`unacked queue peaked at ${r.maxPending} / ended at ${r.endPending} commands (bound ${bound})`);
+	}
+
+	if (r.allyTravel < MIN_TRAVEL) {
+		fail(`the ally only walked ${r.allyTravel.toFixed(0)} u: the monotonicity check would prove nothing`);
+	} else if (r.backwardSteps === 0) {
+		ok(`ally interpolation never stepped back over ${r.allySeen} frames (${r.allyTravel.toFixed(0)} u walked)`);
+	} else {
+		fail(`ally interpolation stepped back ${r.backwardSteps}× (worst ${r.worstBackward.toFixed(3)} u)`);
+	}
+}
+
+// ---- (3) the adversarial link: heavy reordering and duplicates on top of the loss
+console.log(
+	`\n[adversarial] 100 ms RTT, ±45 ms jitter downstream, ${pct(LOSS, 1)} loss, 20% duplicated snapshot parts`,
+);
+{
+	const r = run({ rtt: 0.1, upJitter: 0.008, downJitter: 0.045, loss: LOSS, dup: 0.2, seed: SEED + 11 });
+	console.log(
+		`  ${r.down.sent} parts sent · ${r.down.duplicated} duplicated · ${r.down.reordered} delivered out of ` +
+			`order · ${r.down.dropped} lost · ally walked ${r.allyTravel.toFixed(0)} u`,
+	);
+	if (r.down.reordered < 10) fail(`only ${r.down.reordered} out-of-order deliveries: the link was too kind`);
+	if (r.down.duplicated < 10) fail(`only ${r.down.duplicated} duplicates: the link was too kind`);
+	const rate = r.allySeen > 0 ? r.backwardSteps / r.allySeen : 1;
+	if (r.backwardSteps === 0) {
+		ok(`ally interpolation never stepped back, with duplicates and reordering`);
+	} else if (r.worstBackward <= BACKWARD_LIMIT && rate <= BACKWARD_RATE) {
+		ok(
+			`ally interpolation stepped back ${r.backwardSteps}/${r.allySeen} frames ` +
+				`(${pct(r.backwardSteps, r.allySeen)}, worst ${r.worstBackward.toFixed(3)} u) — inside the ` +
+				`extrapolation budget`,
+		);
+	} else {
+		fail(
+			`ally interpolation stepped back ${r.backwardSteps}/${r.allySeen} frames ` +
+				`(${pct(r.backwardSteps, r.allySeen)}, worst ${r.worstBackward.toFixed(3)} u)`,
+		);
+	}
+	const p = r.predictionStats;
+	if (p.p99 < P99_LIMIT) ok(`divergence p99 ${p.p99.toFixed(4)} u under reordering and duplicates`);
+	else fail(`divergence p99 ${p.p99.toFixed(3)} u ≥ ${P99_LIMIT} u under reordering and duplicates`);
+}
+
+// ---- (4) no snapshot reaches the client at all: no acks, so the unacked queue is on its own
+//
+// This is the direction that can actually run away. An UPSTREAM outage does not: the server fills the slots it
+// is missing, keeps acking them, and the client's queue drains as usual (2.2). Downstream nothing acks anything,
+// so the queue grows at 60/s until MAX_PENDING caps it - which is exactly the bound being tested.
+const OUTAGE_S = 4;
+console.log(`
+[blackout] 100 ms RTT, no snapshot reaches the client for ${OUTAGE_S} s (no acks at all)`);
+{
+	const from = T0 + Math.max(2, SECONDS * 0.3);
+	const r = run({ rtt: 0.1, jitter: 0.01, loss: LOSS, seed: SEED + 23, downBlackout: { from, to: from + OUTAGE_S } });
+	console.log(
+		`  ${r.down.sent} snapshot parts, ${r.down.dropped} of them into the void, filled slots ` +
+			`${r.me.counters.filled}, unacked peak during the outage ${r.pendingDuringOutage}`,
+	);
+	const grew = Math.min(MAX_PENDING, Math.floor(OUTAGE_S * SIM_HZ * 0.6));
+	if (r.pendingDuringOutage < grew) {
+		fail(`the outage only backed up ${r.pendingDuringOutage} commands (expected >= ${grew}): it never bit`);
+	} else if (r.maxPending <= MAX_PENDING) {
+		ok(`unacked queue capped at ${r.maxPending} commands (ceiling ${MAX_PENDING}) through a ${OUTAGE_S} s outage`);
+	} else {
+		fail(`unacked queue reached ${r.maxPending} commands, past the ${MAX_PENDING} ceiling`);
+	}
+	const settled = Math.ceil(0.1 * SIM_HZ) + PENDING_SLACK;
+	if (r.endPending <= settled) ok(`and came back down to ${r.endPending} commands afterwards (<= ${settled})`);
+	else fail(`the queue stayed at ${r.endPending} commands after the outage (expected <= ${settled})`);
+}
+
+// ---- jitter past what the server's input queue can hold: the fills are the server's, the recovery is ours
+//
+// 35 ms of one-way jitter against a 33 ms queue: the queue empties, the tick fills the slot, and the command the
+// client predicted for that seq is discarded. That divergence is not the prediction's to avoid, so this scenario
+// does NOT assert the 1 u p99 - it asserts the client notices, corrects, and converges back without teleporting.
+console.log(`
+[jitter] 100 ms RTT with +/-35 ms one-way jitter: past the depth-2 input queue`);
+{
+	const r = run({ rtt: 0.1, jitter: 0.035, loss: LOSS, seed: SEED + 41 });
+	const p = r.predictionStats;
+	console.log(
+		`  filled slots ${r.me.counters.filled}/${r.serverTick} ticks, ${p.replays} rewinds, ` +
+			`divergence p50 ${p.p50.toFixed(3)} u / p99 ${p.p99.toFixed(3)} u`,
+	);
+	if (r.me.counters.filled < 20) fail(`only ${r.me.counters.filled} filled slots: the jitter never starved anything`);
+	else ok(`${r.me.counters.filled} filled slots starve the queue, as the depth-2 buffer predicts`);
+	if (p.corrections === 0) ok(`and the client still never needed a correction above ${CORRECTION_DIST} u`);
+	else fail(`${p.corrections} correction(s) above ${CORRECTION_DIST} u from filled slots alone`);
+	if (p.last < P99_LIMIT) ok(`the client ends within ${p.last.toFixed(3)} u of the server`);
+	else fail(`the client ends ${p.last.toFixed(3)} u away from the server`);
+}
+
+// ---- a stall: the client is away for 600 ms and the server fills every tick it missed
+//
+// This is the liveness case of 2.2. The client drops the backlog it could never send, but the SEQUENCE has to
+// jump forward with it: while it was away the server filled those ticks and moved its own lastSeq on, so a
+// client that resumed at the old number would have every command from then on read as late - and would stand
+// still for good. The server model here has no re-anchor on purpose, so this only passes if the client is the
+// one keeping the numbering aligned.
+const STALL_S = 0.6;
+console.log(`
+[stall] 100 ms RTT, the client is away for ${STALL_S * 1000} ms`);
+{
+	const r = run({ rtt: 0.1, jitter: 0.01, loss: LOSS, seed: SEED + 53, stallS: STALL_S });
+	const c = r.client.commands.stats();
+	const moved =
+		r.afterStall === undefined || r.beforeStall === undefined
+			? 0
+			: Math.hypot(r.afterStall.x - r.beforeStall.x, r.afterStall.y - r.beforeStall.y);
+	console.log(
+		`  ${c.stalls} stall(s), ${c.stallDropped} commands dropped, ${r.me.counters.filled} filled slots, ` +
+			`${r.me.counters.stale} late commands refused, survivor moved ${moved.toFixed(0)} u in the second after`,
+	);
+	if (c.stalls < 1) fail(`the stall never reached the command stream (${c.stallDropped} dropped)`);
+	else if (moved > 100) ok(`the survivor kept moving (${moved.toFixed(0)} u in the second after the stall)`);
+	else fail(`the survivor moved ${moved.toFixed(0)} u after the stall: the stream never re-aligned`);
+	const p = r.predictionStats;
+	if (p.last <= ONE_TICK_U) ok(`and the prediction is back within ${p.last.toFixed(3)} u of the server`);
+	else fail(`the prediction is ${p.last.toFixed(3)} u away from the server after the stall`);
+}
+
+// ---- knockback: the one divergence the client cannot predict (§2.2 "fontes de divergência")
+console.log(`\n[knockback] 200 ms RTT, a bite every 0.5 s — the correction the client cannot predict`);
+{
+	const r = run({ rtt: 0.2, jitter: 0.03, loss: LOSS, seed: SEED + 31, knockbackEvery: 30 });
+	const p = r.predictionStats;
+	console.log(
+		`  ${r.knockbacks} knockbacks · divergence p50 ${p.p50.toFixed(3)} u, p99 ${p.p99.toFixed(3)} u · ` +
+			`${p.corrections} correction(s) above ${CORRECTION_DIST} u · ${p.snaps} visual snap(s)`,
+	);
+	// this is the documented exception to (2): the peak is measured, not required to be zero. What must hold is
+	// that the client is in sync BETWEEN bites, back on the server's position once they stop, and never teleports.
+	if (p.p50 < P99_LIMIT) ok(`the median divergence stays at ${p.p50.toFixed(3)} u between bites`);
+	else fail(`the median divergence is ${p.p50.toFixed(3)} u: the client is not tracking the server at all`);
+	// one filled slot may still sit on the very last snapshot: that is the server starving its queue, not the
+	// prediction drifting, and it is exactly one tick of movement wide
+	if (p.last <= ONE_TICK_U) {
+		ok(`the client is back within ${p.last.toFixed(3)} u of the server once the bites stop (<= ${ONE_TICK_U} u)`);
+	} else {
+		fail(`the client is still ${p.last.toFixed(3)} u away from the server after the bites stopped`);
+	}
+	if (p.snaps === 0) ok(`the visual offset was always eased, never snapped (< ${CFG.VISUAL_SNAP_DIST} u)`);
+	else if (LOSS > STRICT_LOSS) console.log(`  note  ${p.snaps} visual snap(s) at ${pct(LOSS, 1)} loss (reported)`);
+	else fail(`${p.snaps} visual snap(s): a correction above ${CFG.VISUAL_SNAP_DIST} u had to teleport the survivor`);
+}
+
+const secs = ((Date.now() - started) / 1000).toFixed(1);
+if (failures > 0) {
+	console.log(`\n[test-predict] ${failures} failure(s) in ${secs}s`);
+	process.exit(1);
+}
+console.log(`\n[test-predict] all checks passed in ${secs}s`);

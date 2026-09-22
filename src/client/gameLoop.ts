@@ -1,9 +1,9 @@
-import { getCtx, refreshAim, syncKeyboardMove } from "./bootstrap";
+import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN, TOWN } from "shared/engine/constants";
 import { LightMap, LightSource, Renderer, SpriteOpts } from "shared/engine/renderer";
-import { angleDiff, clamp, lerp } from "shared/engine/vec2";
+import { clamp, lerp } from "shared/engine/vec2";
 import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
@@ -45,18 +45,15 @@ import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
 import { Explosion, GameRefs, Tracer } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
-import {
-	DebrisMaterial,
-	FxEvent,
-	HELD_ACTION,
-	HELD_ATTACK,
-	InputCommand,
-	makeCommand,
-	packEdges,
-	SEQ_MOD,
-	TracerKind,
-} from "shared/sim/types";
-import { Nameplate } from "./ui/nameplate";
+import { DebrisMaterial, FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD, TracerKind } from "shared/sim/types";
+import { Nameplate, profileOf } from "./ui/nameplate";
+import { playFxEvent } from "./audio";
+import { netActive, netBindAdmin, netReset, netUpdate, remotePlayers } from "./net/netClient";
+import { createRawInput, readRawInput } from "./net/localInput";
+import { RemotePlayerView } from "./net/netTypes";
+import { PlayersView } from "./view/playersView";
+import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
+import { FootCycle } from "./view/footsteps";
 
 const Players = game.GetService("Players");
 
@@ -79,10 +76,17 @@ const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 
 const HUMANOID_HALF_WIDTH = 18;
 /** spitter puddle size (zombieAI) — the landing marker of an acid blob uses it */
 const SPIT_MARK_R = 40;
-/** the chainsaw's weapon id: it cuts continuously instead of sweeping an arc */
-const CHAINSAW_ID = 5;
-/** longest motion trail behind a swinging blade (radians) */
-const SWING_TRAIL = 0.5;
+/** walk-cycle phase per world unit travelled (survivors, local and remote) */
+const FEET_CYCLE_PER_UNIT = 0.09;
+/**
+ * Speed (world units per second) above which the local survivor's feet swing in a server session. The single-
+ * player path asks the simulation itself (`StepResult.walking`), but a predicted frame is not a simulation step:
+ * it can hold 0, 1 or several of them plus the visual offset and the render lead, so there the walk cycle follows
+ * the position the view actually shows — exactly as an interpolated ally's does.
+ */
+const NET_WALK_SPEED = 8;
+/** nothing to draw when the session is not server-simulated */
+const NO_REMOTES = new Array<RemotePlayerView>();
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
 /** street furniture / ground palette, derived from the base colours */
@@ -411,9 +415,19 @@ export class GameLoop {
 	private frameNo = 0;
 	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
 	private seq = 0;
-	/** a melee swing was drawn last frame, and its blade angle relative to the aim */
-	private swingDrawn = false;
-	private swingRel = 0;
+	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
+	private readonly look = createLook();
+	private readonly swing = createSwingTrail();
+	private readonly raw = createRawInput();
+	/** the other survivors of a server session: bodies, pooled nameplates and their light (§5.3) */
+	private readonly playersView = new PlayersView();
+	/** last frame time, so render() can ease what it has to ease (update() may be skipped while paused) */
+	private lastDt = 1 / 60;
+	/** when the local survivor's foot lands (the walk cycle knows; client/view/footsteps.ts reports it) */
+	private readonly foot = new FootCycle();
+	/** the sun/light accessor handed to the views, bound once so a frame allocates no closure */
+	private readonly shadowFor = (x: number, y: number, len: number): { x: number; y: number } =>
+		this.shadowOffset(x, y, len);
 
 	constructor() {
 		const save = getCtx().save;
@@ -481,6 +495,11 @@ export class GameLoop {
 				save.skillPoint++;
 			}
 		};
+		// a new world: the session forgets its prediction history and re-attaches to this survivor (§5.2), and
+		// the admin switches travel by reference so the free camera freezes the survivor on both paths
+		netBindAdmin(this.admin);
+		netReset();
+		this.playersView.hide();
 		const ctx = getCtx();
 		ctx.cam.x = this.player.x;
 		ctx.cam.y = this.player.y;
@@ -510,22 +529,8 @@ export class GameLoop {
 	 */
 	private sampleCommand(ctx: GameContext): InputCommand {
 		const input = ctx.input;
-		syncKeyboardMove();
-		// input is screen-space; in top-down it maps 1:1 to world (camera rotation undone)
-		let dx = 0;
-		let dy = 0;
-		// the admin's free camera freezes the survivor: a command with no movement, not a special case downstream
-		if (input.moveMagnitude > 0 && !this.admin.frozen) {
-			const d = ctx.cam.screenDirToWorld(input.moveX, input.moveY);
-			const l = math.sqrt(d.x * d.x + d.y * d.y);
-			if (l > 0.0001) {
-				dx = d.x / l;
-				dy = d.y / l;
-			}
-		}
-		let held = 0;
-		if (input.attackHeld) held += HELD_ATTACK;
-		if (input.keyE) held += HELD_ACTION;
+		// the same reader the server session uses (client/net/localInput.ts), so the two paths cannot drift apart
+		const raw = readRawInput(ctx.cam, input, this.admin.frozen, this.raw);
 		const edges = packEdges(
 			input.attackPressed ? 1 : 0,
 			input.attackReleased ? 1 : 0,
@@ -533,7 +538,7 @@ export class GameLoop {
 			input.reloadPressed ? 1 : 0,
 		);
 		this.seq = (this.seq + 1) % SEQ_MOD;
-		return makeCommand(this.seq, dx, dy, input.moveMagnitude, input.aimAngle, held, edges);
+		return makeCommand(this.seq, raw.moveX, raw.moveY, raw.magnitude, raw.aim, raw.held, edges);
 	}
 
 	/** one step of the local survivor with the shared simulation (the server runs the same one in F1) */
@@ -543,9 +548,31 @@ export class GameLoop {
 		// admin switch: noclip travels on the survivor (it arrives in the snapshot's modFlags from F1 on)
 		p.noclip = this.admin.noclip;
 		const step = stepPlayer(this.world, p, this.save, cmd, dt);
-		this.walkPhase += step.moved * 0.09;
+		this.walkPhase += step.moved * FEET_CYCLE_PER_UNIT;
 		this.walkAmp = lerp(this.walkAmp, step.walking ? 1 : 0, ease(0.25, dt));
 		if (step.died) ctx.phase = "dead";
+	}
+
+	/**
+	 * The server-simulated path (docs/MULTIPLAYER.md §2.2, §5.2). `netUpdate` owns the whole thing: it samples the
+	 * input into 60 Hz commands, sends them with their redundancy, reconciles the last ack and writes the DRAWN
+	 * position (prediction + visual offset + render lead) onto the survivor. The loop only reads the result, so
+	 * the walk cycle follows the position on screen, like every interpolated ally's does.
+	 */
+	private stepNetPlayer(ctx: GameContext, dt: number): void {
+		const p = this.player;
+		// admin switch; the server's own noclip arrives in the snapshot's modFlags and overrides this
+		p.noclip = this.admin.noclip;
+		const fromX = p.x;
+		const fromY = p.y;
+		netUpdate(this.refs, dt);
+		const dx = p.x - fromX;
+		const dy = p.y - fromY;
+		const moved = math.sqrt(dx * dx + dy * dy);
+		this.walkPhase += moved * FEET_CYCLE_PER_UNIT;
+		const speed = dt > 0 ? moved / dt : 0;
+		this.walkAmp = lerp(this.walkAmp, speed > NET_WALK_SPEED ? 1 : 0, ease(0.25, dt));
+		if (p.dead) ctx.phase = "dead";
 	}
 
 	/** shot lines age here (Combat did it until F0) so new ones live a full life */
@@ -565,6 +592,9 @@ export class GameLoop {
 		const list = this.fx;
 		if (list.size() === 0) return;
 		for (const e of list) {
+			// audio reads the same channel the view does: one call, and client/audio/fxAudio.ts has every event
+			// (shots, hits, deaths, debris) instead of deriving half of them from the state (setFxAudioMode)
+			playFxEvent(e);
 			if (e.kind === "shake") {
 				if (e.player === LOCAL_SLOT) ctx.cam.shake(e.magnitude, e.duration);
 			} else if (e.kind === "blood") {
@@ -593,12 +623,17 @@ export class GameLoop {
 		const p = this.player;
 		if (p.dead) return;
 		this.clock += dt;
+		this.lastDt = dt;
 		const handled = this.build.handleInput(refs, ctx.input);
 		if (!handled && ctx.input.actionPressed) {
 			this.interaction.tryInteract(refs);
 		}
 		this.build.update(refs);
-		this.stepLocalPlayer(ctx, dt);
+		// F1: in a server session the survivor's position is the server's, predicted and reconciled by netUpdate;
+		// everything else in this loop (zombies, combat, the clock) is still simulated locally on every client
+		if (netActive()) this.stepNetPlayer(ctx, dt);
+		else this.stepLocalPlayer(ctx, dt);
+		this.foot.advance(this.walkPhase, this.walkAmp, p.x, p.y, true);
 		this.decayTracers(dt);
 		// aim from the survivor's NEW position every frame, not only when the mouse moves
 		p.angle = refreshAim(p.x, p.y);
@@ -1595,144 +1630,32 @@ export class GameLoop {
 		}
 	}
 
+	/**
+	 * The local survivor, through the very same `drawSurvivor` every ally goes through (docs/MULTIPLAYER.md §5.3).
+	 * There is exactly one body renderer in the client: an ally can never end up looking like a different species
+	 * than you, and a change to the silhouette lands on everyone at once.
+	 */
 	private drawPlayer(r: Renderer, cam: Camera): void {
 		const p = this.player;
-		const a = p.angle;
+		const look = this.look;
+		look.x = p.x;
+		look.y = p.y;
+		look.angle = p.angle;
+		look.weapon = currentWeapon(p);
+		look.feetPhase = this.walkPhase;
+		look.feetAmp = this.walkAmp;
+		look.flash = clamp(p.hitFlash ?? 0, 0, 1);
+		look.poisoned = p.buffs.poison > 0;
+		look.downed = false;
+		look.swinging = p.swingerActive;
+		look.swingAngle = p.swingerAngle;
+		look.swingReach = p.swingReach ?? 46;
+		look.clock = this.clock;
 		const so = this.shadowOffset(p.x, p.y, 10);
-		r.drawCircle(cam, p.x + so.x, p.y + so.y, 38, { color: BLACK, alpha: 0.3, zIndex: Z.actorShadow });
-		const flash = clamp(p.hitFlash ?? 0, 0, 1);
-		let body = p.buffs.poison > 0 ? COLORS.zombie5 : COLORS.player;
-		if (flash > 0) body = body.Lerp(COLORS.uiRed, 0.85 * flash);
-		const dark = COLORS.playerDark;
-		// feet
-		const step = math.sin(this.walkPhase) * 8 * this.walkAmp;
-		for (const side of [-1, 1]) {
-			this.part(r, cam, p.x, p.y, a, step * side, side * 9, {
-				w: 12,
-				h: 9,
-				color: dark.Lerp(BLACK, 0.4),
-				cornerRadius: 3,
-				zIndex: Z.player,
-			});
-		}
-		// weapon + hands
-		const w = currentWeapon(p);
-		const hands: Array<{ f: number; l: number }> = [];
-		const wasSwinging = this.swingDrawn;
-		this.swingDrawn = w.kind === WeaponKind.Melee && p.swingerActive;
-		if (w.kind === WeaponKind.Melee) {
-			const reach = p.swingReach ?? 46;
-			if (p.swingerActive) {
-				// Combat sweeps the hit test over [-cone, +cone] around the aim, and its first update
-				// already advances the blade. Draw the same arc: the first frame shows the blade at
-				// -cone (where the sweep began), later frames at the blade's angle clamped to +cone,
-				// and the trail only over the part already swept. The chainsaw does not sweep: its bar
-				// points at the aim and just vibrates (its bite is symmetric around the aim too).
-				const half = w.id === CHAINSAW_ID ? 0 : math.rad(w.cone);
-				let rel = clamp(angleDiff(a, p.swingerAngle), -half, half);
-				// a new sweep: nothing drawn last frame, or the blade went back (only moves forward)
-				const fresh = !wasSwinging || rel < this.swingRel - 0.01;
-				this.swingRel = rel;
-				if (fresh) rel = -half;
-				if (w.id === CHAINSAW_ID) rel = math.sin(this.clock * 90) * 0.03;
-				const sa = a + rel;
-				const swept = clamp(rel + half, 0, SWING_TRAIL);
-				// motion trail over the swept part of the arc, then the blade itself
-				for (const t of [
-					{ o: -swept, al: 0.15 },
-					{ o: -swept * 0.5, al: 0.3 },
-				]) {
-					const ta = sa + t.o;
-					r.drawSegment(
-						cam,
-						p.x + math.cos(ta) * 16,
-						p.y + math.sin(ta) * 16,
-						p.x + math.cos(ta) * reach,
-						p.y + math.sin(ta) * reach,
-						{ h: 8, color: WHITE, alpha: t.al, zIndex: Z.player + 1 },
-					);
-				}
-				r.drawSegment(
-					cam,
-					p.x + math.cos(sa) * 14,
-					p.y + math.sin(sa) * 14,
-					p.x + math.cos(sa) * reach,
-					p.y + math.sin(sa) * reach,
-					{ h: 6, color: COLORS.blade, stroke: COLORS.weapon, strokeThickness: 1, zIndex: Z.player + 1 },
-				);
-				hands.push({ f: 16 * math.cos(sa - a), l: 16 * math.sin(sa - a) });
-				hands.push({ f: 10, l: -14 });
-			} else {
-				// idle: blade held low in the right hand, pointing forward-out
-				const ha = a + 0.5;
-				const hx = p.x + math.cos(a) * 12 - math.sin(a) * 14;
-				const hy = p.y + math.sin(a) * 12 + math.cos(a) * 14;
-				const len = math.max(18, reach * 0.55);
-				r.drawSegment(cam, hx, hy, hx + math.cos(ha) * len, hy + math.sin(ha) * len, {
-					h: 5,
-					color: COLORS.blade,
-					stroke: COLORS.weapon,
-					strokeThickness: 1,
-					zIndex: Z.player + 1,
-				});
-				hands.push({ f: 12, l: 14 });
-				hands.push({ f: 10, l: -14 });
-			}
-		} else if (w.kind === WeaponKind.Bow) {
-			this.part(r, cam, p.x, p.y, a, 26, 0, {
-				w: 6,
-				h: 44,
-				color: COLORS.arrow.Lerp(BLACK, 0.3),
-				cornerRadius: 3,
-				zIndex: Z.player + 1,
-			});
-			hands.push({ f: 24, l: 0 });
-			hands.push({ f: 10, l: 8 });
-		} else {
-			let len = 42;
-			if (w.kind === WeaponKind.Pistol) len = 22;
-			else if (w.kind === WeaponKind.Shotgun) len = 40;
-			else if (w.kind === WeaponKind.MG) len = 50;
-			else if (w.kind === WeaponKind.Sniper) len = 56;
-			this.part(r, cam, p.x, p.y, a, 12 + len / 2, 3, {
-				w: len,
-				h: w.kind === WeaponKind.Pistol ? 6 : 7,
-				color: COLORS.weapon,
-				zIndex: Z.player + 1,
-			});
-			if (w.kind === WeaponKind.Pistol) {
-				hands.push({ f: 18, l: 6 });
-				hands.push({ f: 18, l: -2 });
-			} else {
-				hands.push({ f: 16, l: 7 });
-				hands.push({ f: 12 + len * 0.6, l: 3 });
-			}
-		}
-		// body (shoulders across the heading)
-		this.part(r, cam, p.x, p.y, a, 0, 0, {
-			w: 24,
-			h: 38,
-			color: body,
-			cornerRadius: 10,
-			stroke: flash > 0 ? COLORS.uiRed : dark,
-			strokeThickness: flash > 0 ? 3 : 2,
-			zIndex: Z.player + 2,
-		});
-		for (const hnd of hands) {
-			this.part(r, cam, p.x, p.y, a, hnd.f, hnd.l, {
-				w: 10,
-				h: 10,
-				circle: true,
-				color: COLORS.playerSkin,
-				zIndex: Z.player + 3,
-			});
-		}
-		r.drawCircle(cam, p.x + math.cos(a) * 1, p.y + math.sin(a) * 1, 22, {
-			color: dark,
-			stroke: dark.Lerp(BLACK, 0.4),
-			strokeThickness: 1,
-			zIndex: Z.player + 4,
-		});
+		look.shadowX = so.x;
+		look.shadowY = so.y;
+		look.z = Z.player;
+		drawSurvivor(r, cam, look, this.swing);
 	}
 
 	private drawBosses(r: Renderer, cam: Camera, v: ViewRect): void {
@@ -2052,11 +1975,15 @@ export class GameLoop {
 		renderer.beginFrame();
 		const view = cam.viewRect(32);
 		this.updateShadowDir();
+		// the allies of this frame, already interpolated for the render time (§5.1); empty when solo
+		const allies = netActive() ? remotePlayers() : NO_REMOTES;
 		this.drawGround(renderer, cam, view);
 		this.drawDecals(renderer, cam, view);
 		this.drawItems(renderer, cam, view);
 		this.drawSolids(renderer, cam, view);
 		this.drawZombies(renderer, cam, view);
+		// allies first, then you: at the same ZIndex the one who has to read cleanly is the one you steer
+		this.playersView.draw(renderer, cam, view, allies, this.lastDt, this.clock, this.shadowFor);
 		this.drawPlayer(renderer, cam);
 		this.drawBosses(renderer, cam, view);
 		this.drawBullets(renderer, cam, view);
@@ -2065,8 +1992,17 @@ export class GameLoop {
 		this.drawParticles(renderer, cam, view);
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
-		this.drawLight(cam, view);
+		this.drawLight(cam, view, allies);
 		this.drawNameplate(cam);
+		this.drawAllyPlates(cam, view, allies);
+	}
+
+	/** one pooled plate per ally, in the same layer and at the same ZIndex as the local survivor's (§5.3) */
+	private drawAllyPlates(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		if (allies.size() === 0 && this.playersView.count() === 0) return;
+		const root = getCtx().darkLayer.Parent;
+		if (root === undefined || !root.IsA("GuiObject")) return;
+		this.playersView.updatePlates(root, NAMEPLATE_Z, cam, v, allies, this.clock);
 	}
 
 	/** username + level pill under the player's body; world-anchored, so pause/backpack dim it with the world */
@@ -2075,7 +2011,7 @@ export class GameLoop {
 		if (this.nameplate === undefined) {
 			const root = ctx.darkLayer.Parent;
 			if (root === undefined || !root.IsA("GuiObject")) return;
-			this.nameplate = new Nameplate(root, NAMEPLATE_Z, Players.LocalPlayer);
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer));
 		}
 		const p = this.player;
 		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
@@ -2086,8 +2022,11 @@ export class GameLoop {
 	 * Night: a coarse light map instead of a flat overlay (Dead Town simply darkened everything).
 	 * The player always sees ~250 px around them; powered lamps / fires light their surroundings,
 	 * so building light sources becomes a real defensive choice. Muzzle flashes light up briefly.
+	 *
+	 * In co-op every standing ally lights the map for everyone (§5.3, MP-08): a group lights a street the way a
+	 * group should, and a light you can see but that does not light anything would be a lie.
 	 */
-	private drawLight(cam: Camera, v: ViewRect): void {
+	private drawLight(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
 		const ctx = getCtx();
 		ctx.darkLayer.BackgroundTransparency = 1;
 		if (this.lightMap === undefined) {
@@ -2104,6 +2043,7 @@ export class GameLoop {
 		if (!p.dead) {
 			lights.push({ x: p.x, y: p.y, r: PLAYER_LIGHT_R, inner: 0.4 });
 		}
+		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
 		const list = this.queryBuf;
 		list.clear();
 		querySolids(this.world, v.minX - 400, v.minY - 400, v.maxX + 400, v.maxY + 400, list);
@@ -2136,6 +2076,7 @@ export class GameLoop {
 		ctx.renderer.releaseAll();
 		this.lightMap?.hide();
 		this.nameplate?.update(0, 0, ctx.save.level, false);
+		this.playersView.hide();
 		ctx.darkLayer.BackgroundTransparency = 1;
 	}
 

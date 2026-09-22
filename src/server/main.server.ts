@@ -23,7 +23,9 @@ import {
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
+import { MP_PHASE } from "shared/net/mpConfig";
 import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
+import { MpHost, startMpHost } from "./net/mpHost";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -172,6 +174,8 @@ let shuttingDown = false;
 /** admin panel (server/admin/adminServer.ts), started at the end of this script */
 let admin: AdminServer | undefined;
 let adminPatchSerial = 0;
+/** authoritative simulation (server/net/mpHost.ts); undefined while MP_PHASE = 0 (docs/MULTIPLAYER.md §11.1) */
+let mpHost: MpHost | undefined;
 
 // ---------------------------------------------------------------- session state helpers
 
@@ -935,4 +939,30 @@ admin = startAdminServer({
 	},
 });
 
-print(`[${GAME_NAME}] server ready (job ${JOB_ID})`);
+// ---------------------------------------------------------------- authoritative simulation (§11.3 F1)
+
+/*
+ * MP_PHASE = 0 (today's build): nothing below runs, no MP remote exists and every client keeps simulating its
+ * own world — the save, economy, shop and admin code above is untouched either way.
+ * MP_PHASE >= 1: the host creates the remotes, admits each player at a safe spawn point once THIS file has
+ * loaded their save, runs the 60 Hz tick and replicates (snapshots at 20/10 Hz, reliable World deltas per tick).
+ * The host never reads or writes the DataStore: it only borrows the live save table of a loaded session, which
+ * is what `stepPlayer` reads the skill levels from.
+ */
+if (MP_PHASE >= 1) {
+	mpHost = startMpHost({
+		saveOf: player => {
+			const s = sessions.get(player);
+			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
+			// in single player. A session that is still loading, or already closing, is not admitted yet.
+			if (s === undefined || s.closed || !s.loaded) return undefined;
+			return s.save;
+		},
+	});
+	game.BindToClose(() => {
+		// stop simulating while the save flush above uses the remaining shutdown budget
+		if (mpHost !== undefined) mpHost.stop();
+	});
+}
+
+print(`[${GAME_NAME}] server ready (job ${JOB_ID}${MP_PHASE >= 1 ? `, MP phase ${MP_PHASE}` : ""})`);

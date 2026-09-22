@@ -8,8 +8,10 @@
  * The owner (gameLoop) positions it every frame with update(); nothing is created there, and Text / Position /
  * Visible are only written when they change. Sizes follow the UI scale (text, padding, corner, border).
  *
- * The plate is built for the Player it is given (docs/MULTIPLAYER.md §5.3): in co-op there is one per survivor in
- * the world, so it never reads LocalPlayer itself.
+ * The plate is built for the survivor it is given (docs/MULTIPLAYER.md §5.3): in co-op there is one per survivor in
+ * the world, so it never reads LocalPlayer itself. It takes a NameplateProfile rather than a Player, because an ally
+ * only reaches the client as a snapshot slot plus the name of its PlayerJoined delta — there may be no Player object
+ * for it at all (a spectated ally out of the roster, a replay, the offline harness).
  */
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "./theme";
 import { addStroke, onLayoutChange, uiScale } from "./widgets";
@@ -26,6 +28,23 @@ const MAX_BOTH_CHARS = 26;
 /** level-up pulse: flash + ring burst + pop, ~0.35 s */
 const PULSE_TIME = 0.35;
 const FLASH_TIME = 0.14;
+
+/**
+ * Who a plate names. A Player is NOT structurally one of these (its fields are `DisplayName` / `Name`), which is
+ * the point: a remote survivor is a slot in a snapshot, not a Player object, and `profileOf` is the one place that
+ * converts.
+ */
+export interface NameplateProfile {
+	/** the name on the pill */
+	displayName: string;
+	/** the "@handle"; pass the display name when there is no separate one to show */
+	name: string;
+}
+
+/** the local player (or any ally still in Players) as a profile */
+export function profileOf(player: Player): NameplateProfile {
+	return { displayName: player.DisplayName, name: player.Name };
+}
 
 function textLabel(name: string, order: number, color: Color3, font: Font, zIndex: number): TextLabel {
 	const l = new Instance("TextLabel");
@@ -58,11 +77,12 @@ export class Nameplate {
 
 	/**
 	 * parent: frame that covers the viewport (same space as cam.worldToScreen); zIndex: above world, below HUD;
-	 * player: the survivor this plate names (the local one today, any of them in co-op).
+	 * who: the survivor this plate names — `profileOf(Players.LocalPlayer)` for yourself, the ally's roster entry
+	 * in co-op.
 	 */
-	constructor(parent: GuiObject, zIndex: number, player: Player) {
-		const displayName = player.DisplayName;
-		const userName = player.Name;
+	constructor(parent: GuiObject, zIndex: number, who: NameplateProfile) {
+		const displayName = who.displayName;
+		const userName = who.name;
 		const showHandle = userName !== displayName && displayName.size() + userName.size() + 1 <= MAX_BOTH_CHARS;
 
 		const plate = new Instance("Frame");
