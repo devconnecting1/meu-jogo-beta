@@ -31,6 +31,9 @@ jobs:
       - name: World design rules (docs/DESIGN_RULES.md [auto])
         run: npm run validate:world
 
+      - name: Net protocol tests (round-trip, limits, fuzz)
+        run: npm run test:net
+
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
         with:
