@@ -12,6 +12,9 @@ import { rebirthPrice, SHOP_PACKS } from "shared/data/shop";
 import { USABLES } from "shared/data/usables";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
+import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
+import { onFootstep } from "./view/footsteps";
+import { attachRun, detachRun, runSummary, showRunSummary } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { switchWeapon } from "./systems/combat";
 import { interactHint } from "./systems/interaction";
@@ -262,8 +265,11 @@ function stopGame(): void {
 		heartbeat = undefined;
 		// leaving the game screen: no world sprites / night overlay behind the menus
 		loop.hideWorld();
+		// ...and nothing from the run keeps playing behind them either
+		gameAudio.stopRun();
 	}
 	hud.unmount();
+	detachRun();
 	pack.close();
 	closePause();
 	deathShown = false;
@@ -435,6 +441,7 @@ function warnNoAmmo(): void {
 	if (now - lastNoAmmo < NO_AMMO_COOLDOWN) return;
 	lastNoAmmo = now;
 	hud.showMessage("No ammo");
+	gameAudio.emptyMagazine(refs);
 }
 
 function openPause(): void {
@@ -475,7 +482,8 @@ function openDeath(): void {
 	closePause();
 	ctx.save.runOver = true;
 	net.requestSave("death");
-	pauseCleanup = showPause(ctx, 2, {
+	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
+	pauseCleanup = showRunSummary(ctx, runSummary(ctx, ctx.save.deathCount <= 1), {
 		onRebirth: doRebirth,
 		onNewRun: doNewRun,
 		onHome: goLobby,
@@ -495,6 +503,9 @@ function mountRun(): void {
 	hud.mount();
 	deathShown = false;
 	saveTimer = 0;
+	gameAudio.startRun(loop.getRefs());
+	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
+	attachRun(ctx, loop.getRefs());
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
@@ -504,12 +515,15 @@ function mountRun(): void {
 		}
 		// the world is frozen while the pause menu, the backpack or the game over screen is open
 		const simulate = ctx.phase === "playing" && pauseCleanup === undefined && !pack.isOpen();
+		const refs = loop.getRefs();
 		if (simulate) {
 			warnNoAmmo();
 			admin?.beforeUpdate(dt);
 			trackBefore();
+			gameAudio.beforeUpdate(refs);
 			loop.update(dt);
 			trackAfter();
+			gameAudio.afterUpdate(refs, dt);
 			admin?.afterUpdate(dt);
 			saveTimer += dt;
 			if (saveTimer >= AUTOSAVE_SEC) {
@@ -519,6 +533,9 @@ function mountRun(): void {
 		} else {
 			input.beginFrame();
 		}
+		// the listener follows the camera, and whatever is still queued in refs.fx is played before
+		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
+		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);
 		loop.render();
 		admin?.afterRender(dt);
 		pushHud();
@@ -534,7 +551,11 @@ function newWorld(): void {
 	loop.init(ctx.save);
 	runActive = true;
 	const refs = loop.getRefs();
-	refs.onMessage = msg => hud.showMessage(msg);
+	refs.onMessage = msg => {
+		hud.showMessage(msg);
+		// the clock announcements (waves at 19h/22h/1h, dawn at 7h) also carry the stingers
+		gameAudio.onMessage(msg);
+	};
 	lastDay = refs.daynight.day;
 	lastLevel = ctx.save.level;
 	lastWood = WOOD_ID >= 0 ? (ctx.save.invenEtc[WOOD_ID] ?? 0) : 0;
@@ -669,7 +690,8 @@ pack.onUse = id => {
 };
 
 pack.onCraft = id => {
-	craft(loop.getRefs(), id);
+	// a refused recipe answers with a message (and the UI's error toast): only a real craft is heard
+	if (craft(loop.getRefs(), id)) gameAudio.crafted();
 };
 
 pack.craftCheck = id => {
@@ -707,6 +729,14 @@ function begin(): void {
 		goLobby();
 	});
 }
+
+// audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
+// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the ScreenGui.
+audio.start();
+audio.bindSettings(() => ctx.save.settings);
+startUiAudio(ctx);
+// the walk cycle only reports the moment a foot lands; until something listens, nothing is heard
+onFootstep(playFootstep);
 
 // save patches / announcements for everyone; the admin panel only when the server marks this player as admin
 admin = startAdmin({

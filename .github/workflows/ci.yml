@@ -37,6 +37,15 @@ jobs:
       - name: Simulation determinism (client prediction must match the server)
         run: npm run test:sim
 
+      - name: Server simulation (authority, input abuse, hostile payloads)
+        run: npm run test:server-sim
+
+      - name: Client prediction (divergence under latency, loss and reordering)
+        run: npm run test:predict
+
+      - name: Zombie AI (perception, alert, flanking, pace director, cost)
+        run: npm run test:ai
+
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
         with:

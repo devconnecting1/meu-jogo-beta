@@ -9,6 +9,9 @@
 		"validate:world": "node tools/validate-world.mjs",
 		"test:net": "node tools/test-net.mjs",
 		"test:sim": "node tools/test-sim.mjs",
+		"test:server-sim": "node tools/test-server-sim.mjs",
+		"test:predict": "node tools/test-predict.mjs",
+		"test:ai": "node tools/test-ai.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""
