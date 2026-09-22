@@ -32,21 +32,25 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 | Tronco de árvore (colisão) | 44 | ~0,8 | |
 | Copa de árvore | 150–172 | 2,7–3,1 | aérea, não colide |
 | Rua (2 faixas) | 384 | ~7 | |
-| Calçada | 72 | ~1,3 | |
+| Avenida (2 + 2 faixas) | 768 | ~14 | canteiro central arborizado de 96 u |
+| Calçada | 128 | ~2,3 | 48 de faixa de serviço (junto ao meio-fio) + 80 de faixa livre; o tile de calçada do original também tem 128 |
+| Escola / hospital | 1064 × 812 | ~19 × 15 | sobra lote para pátio ou estacionamento |
 | Beco mínimo entre prédios | 96 | ~1,7 | passam 2 corpos |
+
+**Evidência do original** (`rom_play`: 1.658 instâncias analisadas): 85% das 220 árvores ficam na grama (quintais e parques); nenhuma fica na calçada residencial; as árvores de rua ficam a ~264 u do asfalto (calçada + jardim), com espaçamento mediano de 768 u. Lixeiras ficam na borda do meio-fio. Casas ficam a 240–496 u do asfalto; comércio a 0–240 u; os postos ficam em esquinas de avenida. **Não copiamos** do original: carros e barricadas dentro de cruzamentos, e carros ignorando a mão da via.
 
 ## 2. Ruas e calçadas (CID)
 
 - **CID-01 [auto]** ✅ Toda calçada tem uma **faixa livre contínua** onde um círculo de raio 18 passa de ponta a ponta. ❌ Nenhum sólido (tronco, lixeira, carro, poste) na faixa livre.
 - **CID-02 [auto]** ✅ Árvores de rua, postes, lixeiras e hidrantes ficam só na **faixa de serviço** (canteiro/covas junto ao meio-fio).
-- **CID-03 [auto]** ✅ Faixa de pedestre em cada braço de cruzamento. ❌ Nada estacionado ou plantado a menos de um carro (200 u) da esquina.
+- **CID-03 [auto]** ✅ Faixa de pedestre em cada braço de cruzamento. ❌ Nada estacionado ou plantado a menos de um carro (200 u) da esquina, medido a partir da borda do cruzamento.
 - **CID-04 [revisão]** ✅ Faixa central tracejada só em rua de mão dupla; avenidas podem ter canteiro central arborizado.
 - **CID-05 [auto]** ✅ Toda rua e todo lote são alcançáveis a pé a partir do ponto de nascimento. ❌ Becos sem saída sem motivo.
 
 ## 3. Vegetação (VEG)
 
 - **VEG-01 [auto]** ❌ Árvore na faixa livre da calçada, na pista, na frente de porta/garagem ou a menos de 200 u de uma esquina.
-- **VEG-02 [auto]** ✅ Árvores de rua só em covas na faixa de serviço, alinhadas e espaçadas regularmente (440–660 u, 8–12 m).
+- **VEG-02 [auto]** ✅ Árvores de rua só em covas na faixa de serviço, alinhadas e espaçadas regularmente (480–600 u, ~9–11 m); uma cova vazia conta como múltiplo do espaçamento.
 - **VEG-03 [revisão]** ✅ A maioria das árvores fica em **quintais** (laterais e fundos), **praças/parques** e **terrenos baldios**. Parques densos; zona comercial pouco arborizada.
 - **VEG-04 [auto]** ✅ A copa pode cobrir calçada e rua (é aérea); o **tronco nunca**. A copa fica translúcida quando há um ator embaixo.
 - **VEG-05 [revisão]** ❌ Árvore menor que o jogador ou do tamanho de um prédio.
@@ -54,7 +58,7 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 ## 4. Edifícios (EDI)
 
 - **EDI-01 [auto]** ✅ Porta sempre virada para a rua, com acesso livre: um círculo de raio 18 vai da calçada ao interior.
-- **EDI-02 [auto]** ✅ Recuo por tipo: **casa** com recuo frontal e quintal; **comércio** (mercado, farmácia, lojas, restaurante) junto à calçada; **posto** na esquina com área de bombas aberta; **escola/hospital** maiores, com pátio ou estacionamento.
+- **EDI-02 [auto]** ✅ Recuo por tipo: **casa** com jardim frontal de 112–176 u, caminho até a porta e quintal; **comércio** (mercado, farmácia, lojas, restaurante) a no máximo 16 u da calçada, com estacionamento nos fundos; **posto** na esquina com pátio de bombas de pelo menos 320 u; **escola/hospital** maiores, com pátio ou estacionamento.
 - **EDI-03 [auto]** ✅ Loot coerente com o tipo: farmácia/hospital → remédios; loja de armas → munição e pólvora; mercado/restaurante → comida; posto → óleo; oficina/"tech" → peças e chips. Cor do telhado e emblema identificam o tipo.
 - **EDI-04 [revisão]** ✅ De fora, o telhado esconde todo o interior; ele some **só com o jogador dentro** (regra do autor: dentro/fora puro, como o `par_building` do original).
 - **EDI-05 [auto]** ❌ Prédio invadindo calçada ou rua; prédios colados sem beco de pelo menos 96 u.
@@ -63,14 +67,14 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 
 ## 5. Veículos (VEI)
 
-- **VEI-01 [auto]** ✅ Carro estacionado fica paralelo ao meio-fio, na faixa de estacionamento, no sentido da mão (direita), com espaço de vaga entre carros.
+- **VEI-01 [auto]** ✅ Carro estacionado fica paralelo ao meio-fio (a ~12 u dele), na faixa de estacionamento, no sentido da mão (direita), com pelo menos 40 u entre carros. Em estacionamentos, vagas perpendiculares são permitidas.
 - **VEI-02 [auto]** ❌ Carro em cruzamento, faixa de pedestre, calçada ou na frente de porta/garagem.
-- **VEI-03 [auto]** ✅ Carros abandonados/batidos em ângulo no meio da rua são permitidos (é um apocalipse), mas **poucos** e sempre deixando pelo menos uma faixa livre.
+- **VEI-03 [auto]** ✅ Carros abandonados/batidos em ângulo no meio da rua são permitidos (é um apocalipse), mas **poucos** (no máximo 15% dos carros de rua) e sempre deixando pelo menos uma faixa livre contínua de 150 u por pista.
 - **VEI-04 [revisão]** ✅ Cores variadas e plausíveis (levemente dessaturadas). ❌ Neon, cores de desenho animado.
 
 ## 6. Mobiliário urbano e lixo (MOB)
 
-- **MOB-01 [auto]** ✅ Lixeira junto ao meio-fio perto de entradas, ou em becos e fundos de lote. ❌ No meio da faixa livre.
+- **MOB-01 [auto]** ✅ Lixeira junto ao meio-fio perto de entradas (até 400 u na mesma calçada), ou em becos e fundos de lote. ❌ No meio da faixa livre.
 - **MOB-02 [revisão]** ✅ Postes/lampiões na faixa de serviço, espaçados; iluminam só se tiverem motivo (ver LUZ-02).
 - **MOB-03 [revisão]** ✅ Todo objeto tem função ou história. ❌ Objetos soltos sem razão de estar ali.
 
@@ -92,6 +96,7 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 - **COL-02 [auto]** ✅ Aéreo não colide (copas, telhados); chão não colide (poças, manchas, faixas, canteiros de grama).
 - **COL-03 [auto]** ❌ Jogador, zumbi ou item nascendo dentro de um sólido.
 - **COL-04 [revisão]** ❌ Decoração escura que pareça sombra de um objeto que não existe (lição da mancha de grama).
+- **INT-01 [auto]** ✅ Integridade do gerador: nenhum sólido sobreposto, grade espacial consistente com a lista de sólidos, 4 paredes íntegras por prédio (com uma porta), praças dos chefes livres, e tudo alcançável a pé a partir do ponto de nascimento.
 
 ## 10. Luz, sombra e tempo (LUZ)
 

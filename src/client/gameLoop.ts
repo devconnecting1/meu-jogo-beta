@@ -12,10 +12,12 @@ import {
 	buildingAt,
 	createWorld,
 	generateTown,
+	GroundRect,
 	isOnRoad,
 	querySolids,
 	randomOpenPoint,
 	rectHitsSolid,
+	Road,
 	updateGroundItems,
 	WorldData,
 	Solid,
@@ -38,6 +40,12 @@ import { Combat } from "./systems/combat";
 import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
 import { Explosion, GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
+import { Nameplate } from "./ui/nameplate";
+
+/** nameplate sits between the night light map (Dark, 80) and the HUD (90) so it stays readable at night */
+const NAMEPLATE_Z = 85;
+/** world units from the player's centre to the top of the plate: clears the body and its shadow */
+const NAMEPLATE_GAP = 14;
 
 /** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
 const ROOF_LERP = 0.15;
@@ -52,6 +60,27 @@ const HUMANOID_HALF_WIDTH = 18;
 const SPIT_MARK_R = 40;
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
+/** street furniture / ground palette, derived from the base colours */
+const GROUND = {
+	plaza: COLORS.sidewalk.Lerp(WHITE, 0.1),
+	verge: COLORS.grass.Lerp(COLORS.grassLight, 0.4),
+	pit: COLORS.treeTrunk.Lerp(BLACK, 0.3),
+	walk: COLORS.sidewalk.Lerp(WHITE, 0.16),
+	drive: COLORS.sidewalk.Lerp(BLACK, 0.08),
+	apron: COLORS.sidewalk.Lerp(COLORS.road, 0.3),
+	parking: COLORS.road.Lerp(COLORS.sidewalk, 0.14),
+	stall: WHITE.Lerp(COLORS.road, 0.25),
+	playground: COLORS.dirtPath.Lerp(WHITE, 0.25),
+	ramp: COLORS.uiYellow.Lerp(COLORS.sidewalk, 0.35),
+	zebra: WHITE.Lerp(COLORS.road, 0.12),
+	lane: WHITE.Lerp(COLORS.road, 0.3),
+	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
+};
+/** road markings: dash period/length, crosswalk stripe width/period */
+const DASH_PERIOD = 160;
+const DASH_LEN = 64;
+const ZEBRA_W = 24;
+const ZEBRA_STEP = 48;
 
 /**
  * Target roof opacity for a building (0 = invisible, 1 = opaque), eased by the caller.
@@ -134,6 +163,7 @@ export class GameLoop {
 	private nightLight = false;
 	private clock = 0;
 	private lightMap?: LightMap;
+	private nameplate?: Nameplate;
 	private lights: Array<LightSource> = [];
 	/** stuck arrows: the victim's heading when the arrow went in, so it turns with the body */
 	private stuckRef = new Map<number, { a: number; seen: number }>();
@@ -448,6 +478,11 @@ export class GameLoop {
 
 	// ------------------------------------------------------------------ ground
 
+	/**
+	 * Ground: lots (sidewalk band, yard: grass or downtown paving, verges, tree pits, footpaths,
+	 * driveways, forecourts, parking lots), then roads (asphalt, curbs, medians, lane marks, zebras).
+	 * Nothing here collides; everything is clipped to the view.
+	 */
 	private drawGround(r: Renderer, cam: Camera, v: ViewRect): void {
 		const w = this.world;
 		for (const lot of w.lots) {
@@ -459,8 +494,9 @@ export class GameLoop {
 					zIndex: Z.ground,
 				});
 			}
+			const paved = lot.zone === "commercial";
 			this.drawClipped(r, cam, y.x, y.y, y.w, y.h, v, {
-				color: lot.kind === "park" ? COLORS.parkGrass : COLORS.grass,
+				color: paved ? GROUND.plaza : lot.kind === "park" ? COLORS.parkGrass : COLORS.grass,
 				zIndex: Z.ground + 1,
 			});
 			for (const p of lot.patches) {
@@ -482,50 +518,169 @@ export class GameLoop {
 					zIndex: Z.ground + 2,
 				});
 			}
+			for (const gr of lot.ground) {
+				if (overlaps(gr.x, gr.y, gr.w, gr.h, v)) this.drawGroundRect(r, cam, gr, v);
+			}
 		}
 		for (const road of w.roads) {
-			if (!overlaps(road.x, road.y, road.w, road.h, v)) continue;
-			this.drawClipped(r, cam, road.x, road.y, road.w, road.h, v, { color: COLORS.road, zIndex: Z.road });
-			const vertical = road.h > road.w;
-			const curb = 6;
-			if (vertical) {
-				this.drawClipped(r, cam, road.x, road.y, curb, road.h, v, { color: COLORS.curb, zIndex: Z.roadLine });
-				this.drawClipped(r, cam, road.x + road.w - curb, road.y, curb, road.h, v, {
-					color: COLORS.curb,
-					zIndex: Z.roadLine,
-				});
-			} else {
-				this.drawClipped(r, cam, road.x, road.y, road.w, curb, v, { color: COLORS.curb, zIndex: Z.roadLine });
-				this.drawClipped(r, cam, road.x, road.y + road.h - curb, road.w, curb, v, {
-					color: COLORS.curb,
+			if (overlaps(road.x, road.y, road.w, road.h, v)) this.drawRoad(r, cam, road, v);
+		}
+		for (const c of w.crossings) {
+			if (!overlaps(c.x, c.y, c.w, c.h, v)) continue;
+			// zebra: bars along the traffic, laid out across the road
+			const across = c.vertical ? c.w : c.h;
+			const n = math.floor((across - 16) / ZEBRA_STEP);
+			const first = (across - (n - 1) * ZEBRA_STEP) / 2;
+			for (let i = 0; i < n; i++) {
+				const t = first + i * ZEBRA_STEP;
+				r.drawRect(cam, c.vertical ? c.x + t : c.x + c.w / 2, c.vertical ? c.y + c.h / 2 : c.y + t, {
+					w: c.vertical ? ZEBRA_W : c.w,
+					h: c.vertical ? c.h : ZEBRA_W,
+					color: GROUND.zebra,
+					alpha: 0.9,
 					zIndex: Z.roadLine,
 				});
 			}
-			// dashed centre line, skipped inside intersections
-			const period = 160;
-			const dash = 64;
-			const a0 = vertical ? math.max(road.y, v.minY) : math.max(road.x, v.minX);
-			const a1 = vertical ? math.min(road.y + road.h, v.maxY) : math.min(road.x + road.w, v.maxX);
-			const mid = vertical ? road.x + road.w / 2 : road.y + road.h / 2;
-			for (let t = math.floor(a0 / period) * period; t < a1; t += period) {
-				let crossing = false;
-				for (const o of w.roads) {
-					if (o === road || o.h > o.w === vertical) continue;
-					const o0 = vertical ? o.y : o.x;
-					const o1 = o0 + (vertical ? o.h : o.w);
-					if (t + dash > o0 - 40 && t < o1 + 40) {
-						crossing = true;
-						break;
-					}
+		}
+	}
+
+	private drawGroundRect(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): void {
+		const k = g.kind;
+		if (k === "stall") {
+			r.drawRect(cam, g.x + g.w / 2, g.y + g.h / 2, {
+				w: g.w,
+				h: g.h,
+				color: GROUND.stall,
+				zIndex: Z.ground + 3,
+			});
+			return;
+		}
+		if (k === "pit") {
+			r.drawRect(cam, g.x + g.w / 2, g.y + g.h / 2, {
+				w: g.w,
+				h: g.h,
+				color: GROUND.pit,
+				cornerRadius: 6,
+				stroke: COLORS.curb,
+				strokeThickness: 1,
+				zIndex: Z.ground + 2,
+			});
+			return;
+		}
+		let color = GROUND.ramp;
+		if (k === "verge") color = GROUND.verge;
+		else if (k === "walk") color = GROUND.walk;
+		else if (k === "drive") color = GROUND.drive;
+		else if (k === "apron") color = GROUND.apron;
+		else if (k === "parking") color = GROUND.parking;
+		else if (k === "playground") color = GROUND.playground;
+		this.drawClipped(r, cam, g.x, g.y, g.w, g.h, v, { color, zIndex: Z.ground + 2 });
+	}
+
+	/**
+	 * Stretches of a road between its intersections that touch the view (along its axis), unclipped;
+	 * ja / jb: that end is an intersection (not the road's end at the map border).
+	 */
+	private roadStretches(road: Road, v: ViewRect): Array<{ a: number; b: number; ja: boolean; jb: boolean }> {
+		const vertical = road.vertical;
+		const lo = vertical ? v.minY : v.minX;
+		const hi = vertical ? v.maxY : v.maxX;
+		let start = vertical ? road.y : road.x;
+		let startJ = false;
+		let stop = vertical ? road.y + road.h : road.x + road.w;
+		let stopJ = false;
+		const cuts: Array<{ a: number; b: number }> = [];
+		for (const j of this.world.junctions) {
+			if (vertical ? j.x !== road.x : j.y !== road.y) continue;
+			const a = vertical ? j.y : j.x;
+			const b = a + (vertical ? j.h : j.w);
+			if (b <= lo) {
+				if (b > start) {
+					start = b;
+					startJ = true;
 				}
-				if (crossing) continue;
-				r.drawRect(cam, vertical ? mid : t + dash / 2, vertical ? t + dash / 2 : mid, {
-					w: vertical ? 5 : dash,
-					h: vertical ? dash : 5,
-					color: COLORS.roadLine,
-					alpha: 0.7,
-					zIndex: Z.roadLine,
-				});
+			} else if (a >= hi) {
+				if (a < stop) {
+					stop = a;
+					stopJ = true;
+				}
+			} else {
+				cuts.push({ a, b });
+			}
+		}
+		cuts.sort((p, q) => p.a < q.a);
+		const out: Array<{ a: number; b: number; ja: boolean; jb: boolean }> = [];
+		let at = start;
+		let atJ = startJ;
+		for (const c of cuts) {
+			if (c.a > at) out.push({ a: at, b: c.a, ja: atJ, jb: true });
+			if (c.b > at) {
+				at = c.b;
+				atJ = true;
+			}
+		}
+		if (stop > at) out.push({ a: at, b: stop, ja: atJ, jb: stopJ });
+		return out;
+	}
+
+	/** asphalt, curbs (never across a crossing road), planted median, dashed lane lines */
+	private drawRoad(r: Renderer, cam: Camera, road: Road, v: ViewRect): void {
+		const vertical = road.vertical;
+		this.drawClipped(r, cam, road.x, road.y, road.w, road.h, v, { color: COLORS.road, zIndex: Z.road });
+		const curb = 6;
+		const size = vertical ? road.w : road.h;
+		const base = vertical ? road.x : road.y;
+		const stretches = this.roadStretches(road, v);
+		for (const st of stretches) {
+			for (const off of [0, size - curb]) {
+				if (vertical) {
+					this.drawClipped(r, cam, base + off, st.a, curb, st.b - st.a, v, {
+						color: COLORS.curb,
+						zIndex: Z.roadLine,
+					});
+				} else {
+					this.drawClipped(r, cam, st.a, base + off, st.b - st.a, curb, v, {
+						color: COLORS.curb,
+						zIndex: Z.roadLine,
+					});
+				}
+			}
+		}
+		for (const m of road.medians) {
+			if (!overlaps(m.x, m.y, m.w, m.h, v)) continue;
+			this.drawClipped(r, cam, m.x, m.y, m.w, m.h, v, {
+				color: GROUND.verge,
+				stroke: COLORS.curb,
+				strokeThickness: 2,
+				zIndex: Z.roadLine,
+			});
+		}
+		// yellow centre line on two-lane streets, white lane lines on each avenue carriageway;
+		// the dashes stop before the crosswalks
+		const lines: Array<number> = [];
+		if (road.avenue) {
+			const carriage = (size - TOWN.MEDIAN_W) / 2;
+			lines.push(base + carriage / 2, base + size - carriage / 2);
+		} else {
+			lines.push(base + size / 2);
+		}
+		const color = road.avenue ? GROUND.lane : COLORS.roadLine;
+		const gap = TOWN.SIDEWALK + 24;
+		const lo = vertical ? v.minY : v.minX;
+		const hi = vertical ? v.maxY : v.maxX;
+		for (const st of stretches) {
+			const from = math.max(st.ja ? st.a + gap : st.a, lo - DASH_LEN);
+			const to = math.min(st.jb ? st.b - gap : st.b, hi + DASH_LEN);
+			for (let t = math.ceil(from / DASH_PERIOD) * DASH_PERIOD; t + DASH_LEN <= to; t += DASH_PERIOD) {
+				for (const mid of lines) {
+					r.drawRect(cam, vertical ? mid : t + DASH_LEN / 2, vertical ? t + DASH_LEN / 2 : mid, {
+						w: vertical ? 5 : DASH_LEN,
+						h: vertical ? DASH_LEN : 5,
+						color,
+						alpha: 0.7,
+						zIndex: Z.roadLine,
+					});
+				}
 			}
 		}
 	}
@@ -589,6 +744,7 @@ export class GameLoop {
 				this.drawTree(r, cam, s, v);
 			} else if (overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) {
 				if (s.tags === "bwall") this.drawWall(r, cam, s);
+				else if (s.tags === "pump") this.drawPump(r, cam, s);
 				else if (s.kind === "car" && s.tags === "trash") this.drawTrash(r, cam, s);
 				else if (s.kind === "car") this.drawCar(r, cam, s);
 				else this.drawStructure(r, cam, s);
@@ -796,16 +952,17 @@ export class GameLoop {
 		const cx = s.x + s.w / 2 + sh.x;
 		const cy = s.y + s.h / 2 + sh.y;
 		const vertical = s.h > s.w;
-		const L = vertical ? s.h : s.w;
-		const W = vertical ? s.w : s.h;
-		// heading picked from the position hash: parked either way along the lane
-		const flip = math.floor(s.x + s.y) % 2 === 0;
-		const a = (vertical ? math.pi / 2 : 0) + (flip ? math.pi : 0);
+		// generated cars carry their heading (right-hand parking, askew when abandoned); the body keeps
+		// the car's real size even when the collision box of an askew car is a bit larger
+		const heading = s.heading;
+		const L = heading !== undefined ? TOWN.CAR_L : vertical ? s.h : s.w;
+		const W = heading !== undefined ? TOWN.CAR_W : vertical ? s.w : s.h;
+		const a = heading ?? (vertical ? math.pi / 2 : 0);
 		const paint = s.tint ?? COLORS.car;
 		const so = this.shadowOffset(cx, cy, 10);
-		r.drawRect(cam, cx + so.x, cy + so.y, {
-			w: s.w,
-			h: s.h,
+		this.part(r, cam, cx + so.x, cy + so.y, a, 0, 0, {
+			w: L,
+			h: W,
 			color: BLACK,
 			alpha: 0.35,
 			cornerRadius: 18,
@@ -855,6 +1012,43 @@ export class GameLoop {
 				color: COLORS.carTail,
 				cornerRadius: 2,
 				zIndex: Z.structure + 2,
+			});
+		}
+	}
+
+	/** gas-station pump island: a raised concrete curb carrying two dispensers */
+	private drawPump(r: Renderer, cam: Camera, s: Solid): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const horizontal = s.w >= s.h;
+		const so = this.shadowOffset(cx, cy, 8);
+		r.drawRect(cam, cx + so.x, cy + so.y, {
+			w: s.w,
+			h: s.h,
+			color: BLACK,
+			alpha: 0.3,
+			cornerRadius: 8,
+			zIndex: Z.shadow,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: GROUND.island,
+			cornerRadius: 8,
+			stroke: COLORS.curb,
+			strokeThickness: 2,
+			zIndex: Z.structure,
+		});
+		for (const k of [-1, 1]) {
+			const off = (horizontal ? s.w : s.h) * 0.25 * k;
+			r.drawRect(cam, cx + (horizontal ? off : 0), cy + (horizontal ? 0 : off), {
+				w: horizontal ? 30 : 24,
+				h: horizontal ? 24 : 30,
+				color: COLORS.wallShop,
+				cornerRadius: 4,
+				stroke: COLORS.wallShop.Lerp(BLACK, 0.5),
+				strokeThickness: 1,
+				zIndex: Z.structure + 1,
 			});
 		}
 	}
@@ -1555,6 +1749,20 @@ export class GameLoop {
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
 		this.drawLight(cam, view);
+		this.drawNameplate(cam);
+	}
+
+	/** username + level pill under the player's body; world-anchored, so pause/backpack dim it with the world */
+	private drawNameplate(cam: Camera): void {
+		const ctx = getCtx();
+		if (this.nameplate === undefined) {
+			const root = ctx.darkLayer.Parent;
+			if (root === undefined || !root.IsA("GuiObject")) return;
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z);
+		}
+		const p = this.player;
+		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
+		this.nameplate.update(at.x, at.y, ctx.save.level, ctx.phase === "playing" && !p.dead);
 	}
 
 	/**
@@ -1610,6 +1818,7 @@ export class GameLoop {
 		const ctx = getCtx();
 		ctx.renderer.releaseAll();
 		this.lightMap?.hide();
+		this.nameplate?.update(0, 0, ctx.save.level, false);
 		ctx.darkLayer.BackgroundTransparency = 1;
 	}
 

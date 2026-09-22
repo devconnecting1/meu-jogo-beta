@@ -28,6 +28,9 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      - name: World design rules (docs/DESIGN_RULES.md [auto])
+        run: npm run validate:world
+
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
         with:
