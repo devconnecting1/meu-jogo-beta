@@ -8,3 +8,4 @@ out
 .history
 .vscode/launch.json
 .vscode/settings.json
+*.rbxl.lock
