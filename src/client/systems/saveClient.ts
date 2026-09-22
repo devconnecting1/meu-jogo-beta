@@ -56,6 +56,7 @@ const RETRY_OUTDATED_SEC = 1;
 const loadListeners = new Set<(info: LoadInfo) => void>();
 const ackListeners = new Set<(ack: SaveAckPayload, manual: boolean) => void>();
 const walletListeners = new Set<() => void>();
+const activateListeners = new Set<() => void>();
 
 function subscribe<T>(set: Set<T>, fn: T): () => void {
 	set.add(fn);
@@ -181,6 +182,13 @@ export function activate(info: LoadInfo): void {
 	persistEnabled = info.persist;
 	lastSentJson = "";
 	lastSentAt = -math.huge;
+	// deferred: the caller finishes adopting the save (ctx.save = info.save) before listeners run
+	for (const fn of activateListeners) task.defer(fn);
+}
+
+/** a LoadAck was just adopted as ctx.save (e.g. admin patches that arrived earlier are applied then) */
+export function onActivate(fn: () => void): () => void {
+	return subscribe(activateListeners, fn);
 }
 
 /** a LoadAck was adopted (the local save mirrors the server's) */

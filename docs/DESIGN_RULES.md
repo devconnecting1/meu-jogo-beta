@@ -114,7 +114,7 @@ Ordem de prioridade quando duas regras brigam: **legibilidade de gameplay → l�
 
 - **UI-01 [revisão]** ✅ Toda cor, fonte e raio vêm do tema do tweakcn (`design/tweakcn-theme.json` → `npm run theme` → `themeTokens.ts`). ❌ Cores ou fontes literais nas telas.
 - **UI-02 [revisão]** ❌ Nada sob a barra do Roblox; nenhuma tecla que o CoreGui captura (Esc, Tab).
-- **UI-03 [revisão]** ✅ Textos em inglês via `lang.ts` (EN/KR).
+- **UI-03 [revisão]** ✅ Textos em inglês via `lang.ts` (EN/KR). Exceção: o painel de admin (`src/client/admin`, ferramenta interna que só o desenvolvedor vê) usa inglês direto no código.
 
 ## 13. Conteúdo e propriedade intelectual (CON)
 

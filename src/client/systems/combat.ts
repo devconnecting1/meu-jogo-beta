@@ -225,7 +225,8 @@ export function switchWeapon(refs: GameRefs, weaponId: number): void {
 		return;
 	}
 	const old = currentWeapon(p);
-	if (usesMagazine(old) && !isFuelWeapon(old) && rt.ammoCount > 0) {
+	// (admin infinite ammo: that magazine was free, it does not go back to the pool)
+	if (usesMagazine(old) && !isFuelWeapon(old) && rt.ammoCount > 0 && p.infiniteAmmo !== true) {
 		poolAdd(refs, old, rt.ammoCount);
 	}
 	rt.ammoCount = 0;
@@ -736,7 +737,8 @@ export class Combat {
 			const dy = p.y - b.y;
 			const pick = DESIGN.ITEM_GET_DISTANCE + 20;
 			if ((b.age ?? 0) >= ARROW_PICKUP_DELAY && dx * dx + dy * dy < pick * pick) {
-				refs.save.ammoArrow += 1;
+				// with admin infinite ammo the shot cost nothing: picking it up must not create an arrow
+				if (p.infiniteAmmo !== true) refs.save.ammoArrow += 1;
 				return true;
 			}
 			b.life -= dt;

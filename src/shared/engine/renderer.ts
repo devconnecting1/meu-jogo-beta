@@ -407,25 +407,96 @@ export interface LightSource {
 	inner?: number;
 }
 
-/** transparency is quantised so a cell is only rewritten when its light visibly changes */
-const LIGHT_STEPS = 40;
+/** transparency is quantised so a strip is only rewritten when its light visibly changes */
+const LIGHT_STEPS = 64;
+/**
+ * Height of one light-map strip (screen px). Along a strip the light is interpolated between its
+ * gradient keys; across strips it steps by at most ~0.05 opacity at the steepest part of a falloff.
+ */
+const STRIP_H = 6;
+/**
+ * Spacing of the light samples (screen px). The light is sampled on this grid and interpolated
+ * bilinearly: vertically when a strip is built, horizontally by its gradient. At 32 px the error is
+ * under ~0.03 opacity even on the steepest falloff, from ~2× the samples of the old 48 px cell grid.
+ */
+const GRID = 32;
+/** the engine's cap on NumberSequence keypoints (UIGradient.Transparency) */
+const MAX_KEYS = 20;
+/** a sample column this close (in light) to the line through its neighbours adds nothing as a key */
+const KEY_EPS = 0.25 / LIGHT_STEPS;
+/**
+ * A strip is rewritten only when the new gradient differs from the shown one by more than this
+ * anywhere (2 quantisation steps, ≈ 0.03 opacity, ~4 levels of 8-bit colour): a fire's flicker or
+ * the camera walking past a lamp then costs about the writes of the old cell grid, and what is shown
+ * never drifts further than this from the computed light.
+ */
+const WRITE_EPS = 2 / LIGHT_STEPS;
+/** a light that moved or resized less than this (screen px) since it was sampled keeps its samples */
+const MOVE_EPS = 0.35;
+
+/** smoothstep falloff: 1 inside the lit core (r0), 0 at the radius */
+function falloff(d: number, r0: number, r: number): number {
+	if (d <= r0) return 1;
+	if (d >= r) return 0;
+	const t = (d - r0) / (r - r0);
+	return 1 - t * t * (3 - 2 * t);
+}
 
 /**
- * Coarse screen-space light map for the night: a grid of dark Frames (pooled, one per cell)
- * whose opacity = maxDark × (1 − light), where light is the brightest source covering the cell.
- * Replaces a flat overlay, so the player's surroundings and built lamps/fires stay readable.
+ * Screen-space light map for the night: full-width horizontal strips of the night colour, each with
+ * a UIGradient whose transparency follows the light across the strip, so every light has a smooth
+ * round edge instead of the blocks of a cell grid. Opacity = maxDark × (1 − light), where light is
+ * the brightest source at that point (a fire never darkens the player's own light).
+ *
+ * The light is sampled on a GRID-px lattice; a strip blends the two sample rows around its centre
+ * line and uses sample columns as its gradient keys (UIGradient interpolates between them), so the
+ * whole map is a continuous bilinear field. The key columns are chosen once per pair of sample
+ * rows, for all the strips between them: columns on a straight run of both rows are dropped, then
+ * the least significant ones until the engine's 20 are left. A blend of two rows is approximated at
+ * least as well as the worse of the two, and neighbouring strips share their keys (no streaks).
+ *
+ * Cost control: only sample rows reached by a light that changed since they were sampled are
+ * resampled, and only the strips over them rebuilt (a still camera costs nothing); a rebuilt strip is
+ * only rewritten when it would visibly differ from what it shows (WRITE_EPS).
  */
 export class LightMap {
 	readonly layer: Frame;
-	private cells: Array<Frame> = [];
-	private transp: Array<number> = [];
-	private cols = 0;
+	private strips: Array<Frame> = [];
+	private grads: Array<UIGradient> = [];
+	/** keys last written to each strip: x (screen px) and transparency */
+	private lastX: Array<Array<number>> = [];
+	private lastT: Array<Array<number>> = [];
 	private rows = 0;
-	private cell = 56;
 	private builtW = 0;
 	private builtH = 0;
 	private shown = false;
 	private color: Color3;
+	/** sample lattice: column x / row y positions (px, the last ones on the view's edge) */
+	private sx: Array<number> = [];
+	private sy: Array<number> = [];
+	/** light at each sample, row-major (sy.size() × sx.size()), and rows to resample this frame */
+	private samples: Array<number> = [];
+	private rowDirty: Array<boolean> = [];
+	/** key columns of the strips between sample rows r and r + 1 (indices into sx) */
+	private pairKeys: Array<Array<number>> = [];
+	/** this frame's lights in screen space (reused arrays, `nLights` valid entries) */
+	private lx: Array<number> = [];
+	private ly: Array<number> = [];
+	private lr: Array<number> = [];
+	private lin: Array<number> = [];
+	private lk: Array<number> = [];
+	private nLights = 0;
+	/** each light as it was last sampled (pn < 0: resample everything), and the darkness all strips were last built with */
+	private px: Array<number> = [];
+	private py: Array<number> = [];
+	private pr: Array<number> = [];
+	private pin: Array<number> = [];
+	private pk: Array<number> = [];
+	private pn = -1;
+	private pDark = -1;
+	/** keys of the strip being built: x and transparency */
+	private kx: Array<number> = [];
+	private kt: Array<number> = [];
 
 	constructor(parent: GuiObject, color: Color3) {
 		this.color = color;
@@ -438,35 +509,51 @@ export class LightMap {
 		this.layer.Parent = parent;
 	}
 
-	/** (re)build the grid when the viewport size changes; cells of ~48–64 px */
+	/** (re)build the strips and the sample lattice when the viewport size changes */
 	private ensureGrid(viewW: number, viewH: number): void {
 		if (viewW === this.builtW && viewH === this.builtH) return;
 		this.builtW = viewW;
 		this.builtH = viewH;
-		this.cell = math.clamp(math.ceil(math.max(viewW, viewH) / 32), 48, 64);
-		this.cols = math.ceil(viewW / this.cell);
-		this.rows = math.ceil(viewH / this.cell);
-		const need = this.cols * this.rows;
-		while (this.cells.size() < need) {
+		this.rows = math.ceil(viewH / STRIP_H);
+		this.sx.clear();
+		this.sy.clear();
+		for (let x = 0; x < viewW; x += GRID) this.sx.push(x);
+		this.sx.push(viewW);
+		for (let y = 0; y < viewH; y += GRID) this.sy.push(y);
+		this.sy.push(viewH);
+		this.samples.clear();
+		for (let i = 0; i < this.sx.size() * this.sy.size(); i++) this.samples.push(0);
+		this.rowDirty.clear();
+		for (let i = 0; i < this.sy.size(); i++) this.rowDirty.push(true);
+		while (this.pairKeys.size() < this.sy.size()) this.pairKeys.push([]);
+		// everything is resampled and rebuilt on the next update
+		this.pn = -1;
+		this.pDark = -1;
+		while (this.strips.size() < this.rows) {
 			const f = new Instance("Frame");
 			f.Name = "L";
 			f.BorderSizePixel = 0;
 			f.BackgroundColor3 = this.color;
 			f.BackgroundTransparency = 0;
+			const g = new Instance("UIGradient");
+			g.Parent = f;
 			f.Parent = this.layer;
-			this.cells.push(f);
-			this.transp.push(0);
+			this.strips.push(f);
+			this.grads.push(g);
+			this.lastX.push([]);
+			this.lastT.push([]);
 		}
-		for (let i = 0; i < this.cells.size(); i++) {
-			const f = this.cells[i];
-			if (i >= need) {
+		for (let i = 0; i < this.strips.size(); i++) {
+			const f = this.strips[i];
+			// key times are fractions of the width: a new width invalidates every strip
+			this.lastX[i].clear();
+			if (i >= this.rows) {
 				f.Visible = false;
 				continue;
 			}
-			const c = i % this.cols;
-			const r = math.floor(i / this.cols);
-			f.Position = UDim2.fromOffset(c * this.cell, r * this.cell);
-			f.Size = UDim2.fromOffset(this.cell, this.cell);
+			const y = i * STRIP_H;
+			f.Position = UDim2.fromOffset(0, y);
+			f.Size = UDim2.fromOffset(viewW, math.min(STRIP_H, viewH - y));
 			f.Visible = true;
 		}
 	}
@@ -493,50 +580,233 @@ export class LightMap {
 			this.layer.Visible = true;
 		}
 		// lights → screen space once; skip the ones that cannot reach the viewport
-		const lx: Array<number> = [];
-		const ly: Array<number> = [];
-		const lr: Array<number> = [];
-		const lin: Array<number> = [];
-		const lk: Array<number> = [];
+		let n = 0;
 		for (const l of lights) {
 			const s = cam.worldToScreen(l.x, l.y);
 			const r = l.r * cam.zoom;
-			if (s.x < -r || s.y < -r || s.x > cam.viewW + r || s.y > cam.viewH + r) continue;
-			lx.push(s.x);
-			ly.push(s.y);
-			lr.push(r);
-			lin.push(r * (l.inner ?? 0.45));
-			lk.push(clamp01(l.k ?? 1));
+			if (r < 1 || s.x < -r || s.y < -r || s.x > cam.viewW + r || s.y > cam.viewH + r) continue;
+			this.lx[n] = s.x;
+			this.ly[n] = s.y;
+			this.lr[n] = r;
+			// the fully lit core stays strictly inside the ring so the falloff never divides by 0
+			this.lin[n] = math.min(r * (l.inner ?? 0.45), r - 1);
+			this.lk[n] = clamp01(l.k ?? 1);
+			n++;
 		}
-		const n = lx.size();
-		const half = this.cell * 0.5;
+		this.nLights = n;
+		this.markDirty();
+		// dusk and dawn move the darkness a little every frame: the light samples do not depend on
+		// it, and the strips are rebuilt only once it has moved by half a quantisation step
+		const darkMoved = math.abs(maxDark - this.pDark) >= 0.5 / LIGHT_STEPS;
+		if (darkMoved) this.pDark = maxDark;
+		const nRows = this.sy.size();
+		for (let r = 0; r < nRows; r++) {
+			if (this.rowDirty[r]) this.sampleRow(r);
+		}
+		for (let r = 0; r < nRows - 1; r++) {
+			if (this.rowDirty[r] || this.rowDirty[r + 1]) this.selectKeys(r);
+		}
+		const viewW = this.builtW;
+		let r0 = 0;
 		for (let row = 0; row < this.rows; row++) {
-			const cy = row * this.cell + half;
-			for (let col = 0; col < this.cols; col++) {
-				const cx = col * this.cell + half;
-				let light = 0;
-				for (let i = 0; i < n; i++) {
-					const dx = cx - lx[i];
-					const dy = cy - ly[i];
-					const r = lr[i];
-					const d2 = dx * dx + dy * dy;
-					if (d2 >= r * r) continue;
-					const d = math.sqrt(d2);
-					const r0 = lin[i];
-					let l = lk[i];
-					if (d > r0) {
-						const t = (d - r0) / (r - r0);
-						l *= 1 - t * t * (3 - 2 * t);
-					}
-					if (l > light) light = l;
-				}
-				const tr = math.floor((1 - maxDark * (1 - light)) * LIGHT_STEPS + 0.5) / LIGHT_STEPS;
-				const idx = row * this.cols + col;
-				if (this.transp[idx] !== tr) {
-					this.transp[idx] = tr;
-					this.cells[idx].BackgroundTransparency = tr;
-				}
+			const y = row * STRIP_H;
+			const cy = y + math.min(STRIP_H, this.builtH - y) * 0.5;
+			while (r0 < nRows - 2 && this.sy[r0 + 1] <= cy) r0++;
+			if (!darkMoved && !this.rowDirty[r0] && !this.rowDirty[r0 + 1]) continue;
+			this.writeStrip(row, this.buildStrip(r0, cy, maxDark), viewW);
+		}
+		for (let r = 0; r < nRows; r++) this.rowDirty[r] = false;
+	}
+
+	/**
+	 * Flag the sample rows reached by a light that changed (beyond MOVE_EPS) since it was sampled,
+	 * old and new extent both. Only such lights update their remembered state, so a slow drift still
+	 * adds up to a resample instead of being lost frame by frame.
+	 */
+	private markDirty(): void {
+		const n = this.nLights;
+		const pn = this.pn;
+		const all = pn < 0;
+		for (let i = 0; i < math.max(n, pn); i++) {
+			const kept =
+				!all &&
+				i < n &&
+				i < pn &&
+				math.abs(this.lx[i] - this.px[i]) < MOVE_EPS &&
+				math.abs(this.ly[i] - this.py[i]) < MOVE_EPS &&
+				math.abs(this.lr[i] - this.pr[i]) < MOVE_EPS &&
+				math.abs(this.lin[i] - this.pin[i]) < MOVE_EPS &&
+				math.abs(this.lk[i] - this.pk[i]) < 0.5 / LIGHT_STEPS;
+			if (kept) continue;
+			if (i < n) {
+				this.markRows(this.ly[i], this.lr[i]);
+				this.px[i] = this.lx[i];
+				this.py[i] = this.ly[i];
+				this.pr[i] = this.lr[i];
+				this.pin[i] = this.lin[i];
+				this.pk[i] = this.lk[i];
+			}
+			if (i < pn) this.markRows(this.py[i], this.pr[i]);
+		}
+		if (all) {
+			for (let r = 0; r < this.sy.size(); r++) this.rowDirty[r] = true;
+		}
+		this.pn = n;
+	}
+
+	/** flag the sample rows within a light's reach (radius r around screen y) */
+	private markRows(y: number, r: number): void {
+		const first = math.max(0, math.ceil((y - r) / GRID));
+		const last = math.min(this.sy.size() - 1, math.floor((y + r) / GRID) + 1);
+		for (let row = first; row <= last; row++) this.rowDirty[row] = true;
+	}
+
+	/** light at every sample of one lattice row: the brightest source, each over its chord only */
+	private sampleRow(r: number): void {
+		const y = this.sy[r];
+		const cols = this.sx.size();
+		const base = r * cols;
+		for (let c = 0; c < cols; c++) this.samples[base + c] = 0;
+		for (let i = 0; i < this.nLights; i++) {
+			const dy = y - this.ly[i];
+			const rad = this.lr[i];
+			if (dy >= rad || dy <= -rad) continue;
+			const k = this.lk[i];
+			const r0 = this.lin[i];
+			const chord = math.sqrt(rad * rad - dy * dy);
+			const first = math.max(0, math.ceil((this.lx[i] - chord) / GRID));
+			const last = math.min(cols - 1, math.floor((this.lx[i] + chord) / GRID) + 1);
+			for (let c = first; c <= last; c++) {
+				const idx = base + c;
+				if (this.samples[idx] >= k) continue;
+				const dx = this.sx[c] - this.lx[i];
+				const d2 = dx * dx + dy * dy;
+				// inside the lit core no distance is needed
+				const l = d2 <= r0 * r0 ? k : k * falloff(math.sqrt(d2), r0, rad);
+				if (l > this.samples[idx]) this.samples[idx] = l;
 			}
 		}
+	}
+
+	/**
+	 * Choose the key columns shared by the strips between sample rows r and r + 1: every column
+	 * that is not on a straight run in both rows, then drop the one whose removal changes either row
+	 * least until at most MAX_KEYS are left.
+	 */
+	private selectKeys(r: number): void {
+		const sx = this.sx;
+		const s = this.samples;
+		const cols = sx.size();
+		const a = r * cols;
+		const b = a + cols;
+		const keys = this.pairKeys[r];
+		keys.clear();
+		keys.push(0);
+		for (let j = 1; j < cols - 1; j++) {
+			const q = keys[keys.size() - 1];
+			const u = (sx[j] - sx[q]) / (sx[j + 1] - sx[q]);
+			const ea = math.abs(s[a + q] + (s[a + j + 1] - s[a + q]) * u - s[a + j]);
+			const eb = math.abs(s[b + q] + (s[b + j + 1] - s[b + q]) * u - s[b + j]);
+			if (ea >= KEY_EPS || eb >= KEY_EPS) keys.push(j);
+		}
+		keys.push(cols - 1);
+		while (keys.size() > MAX_KEYS) {
+			let best = 1;
+			let bestErr = math.huge;
+			for (let i = 1; i < keys.size() - 1; i++) {
+				const p = keys[i - 1];
+				const j = keys[i];
+				const q = keys[i + 1];
+				const u = (sx[j] - sx[p]) / (sx[q] - sx[p]);
+				const ea = math.abs(s[a + p] + (s[a + q] - s[a + p]) * u - s[a + j]);
+				const eb = math.abs(s[b + p] + (s[b + q] - s[b + p]) * u - s[b + j]);
+				const err = math.max(ea, eb);
+				if (err < bestErr) {
+					bestErr = err;
+					best = i;
+				}
+			}
+			keys.remove(best);
+		}
+	}
+
+	/**
+	 * Keys of the strip whose centre line `cy` lies between sample rows r0 and r0 + 1: the two rows
+	 * blended at the pair's key columns. Returns the key count (in kx / kt).
+	 */
+	private buildStrip(r0: number, cy: number, maxDark: number): number {
+		const kx = this.kx;
+		const kt = this.kt;
+		const s = this.samples;
+		const keys = this.pairKeys[r0];
+		const cols = this.sx.size();
+		const y0 = this.sy[r0];
+		const f = math.clamp((cy - y0) / (this.sy[r0 + 1] - y0), 0, 1);
+		const a = r0 * cols;
+		const b = a + cols;
+		const m = keys.size();
+		for (let j = 0; j < m; j++) {
+			const c = keys[j];
+			const light = s[a + c] + (s[b + c] - s[a + c]) * f;
+			kx[j] = this.sx[c];
+			kt[j] = math.floor((1 - maxDark * (1 - light)) * LIGHT_STEPS + 0.5) / LIGHT_STEPS;
+		}
+		return m;
+	}
+
+	/**
+	 * Largest difference between the strip's shown gradient and the built keys. Both are piecewise
+	 * linear over [0, viewW], so the maximum sits on a key of one of them: exact, O(keys).
+	 */
+	private gap(row: number, m: number): number {
+		const ox = this.lastX[row];
+		const ot = this.lastT[row];
+		const on = ox.size();
+		if (on < 2) return math.huge;
+		const kx = this.kx;
+		const kt = this.kt;
+		let worst = 0;
+		// usual case: same key columns as shown, so the gap is the largest change at a key
+		let same = on === m;
+		for (let j = 0; same && j < m; j++) {
+			if (ox[j] !== kx[j]) same = false;
+			else worst = math.max(worst, math.abs(ot[j] - kt[j]));
+		}
+		if (same) return worst;
+		worst = 0;
+		let s = 0;
+		for (let j = 0; j < m; j++) {
+			const x = kx[j];
+			while (s < on - 2 && ox[s + 1] < x) s++;
+			const v = ot[s] + ((ot[s + 1] - ot[s]) * (x - ox[s])) / (ox[s + 1] - ox[s]);
+			worst = math.max(worst, math.abs(v - kt[j]));
+		}
+		s = 0;
+		for (let j = 0; j < on; j++) {
+			const x = ox[j];
+			while (s < m - 2 && kx[s + 1] < x) s++;
+			const v = kt[s] + ((kt[s + 1] - kt[s]) * (x - kx[s])) / (kx[s + 1] - kx[s]);
+			worst = math.max(worst, math.abs(v - ot[j]));
+		}
+		return worst;
+	}
+
+	/** push the built keys to the strip's gradient, unless it already shows them within WRITE_EPS */
+	private writeStrip(row: number, m: number, viewW: number): void {
+		if (this.gap(row, m) <= WRITE_EPS) return;
+		const px = this.lastX[row];
+		const pt = this.lastT[row];
+		px.clear();
+		pt.clear();
+		const keys: Array<NumberSequenceKeypoint> = [];
+		for (let j = 0; j < m; j++) {
+			const x = this.kx[j];
+			const t = this.kt[j];
+			px.push(x);
+			pt.push(t);
+			// the ends are exactly 0 and 1 (x = 0 and x = viewW), as the engine requires
+			keys.push(new NumberSequenceKeypoint(x / viewW, t));
+		}
+		this.grads[row].Transparency = new NumberSequence(keys);
 	}
 }

@@ -115,6 +115,11 @@ const STRUCTURE_LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, 
 const FLASHLIGHT_R = 560;
 const lights: Array<Light> = [];
 
+/** the chase flow field (read-only use: the admin panel's debug overlay draws it) */
+export function debugFlowField(): FlowField {
+	return flow;
+}
+
 export function actorDist(ax: number, ay: number, bx: number, by: number): number {
 	const dx = ax - bx;
 	const dy = ay - by;

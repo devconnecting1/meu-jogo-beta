@@ -59,6 +59,13 @@ export interface PlayerState {
 	vehicleId: number;
 	noMoveKill: number;
 	dead: boolean;
+	/** admin panel "god mode" (and free camera): damageToPlayer does nothing */
+	godMode?: boolean;
+	/**
+	 * admin panel "infinite ammo": the magazine is refilled for free, so it must never turn into real ammo
+	 * (switching weapons does not return it to the pool, picked-up arrows are not added)
+	 */
+	infiniteAmmo?: boolean;
 }
 
 export function createPlayer(save: PlayerSaveData, x: number, y: number): PlayerState {
@@ -172,7 +179,7 @@ export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: nu
  * The caller sets p.reactionDir (knockback direction).
  */
 export function damageToPlayer(p: PlayerState, save: PlayerSaveData, raw: number, bypassDef = false): boolean {
-	if (p.dead) return false;
+	if (p.dead || p.godMode === true) return false;
 	if (p.attacked && !bypassDef) return false;
 	let dd = raw;
 	if (!bypassDef) {

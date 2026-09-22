@@ -28,6 +28,7 @@ import { popup, toast } from "./ui/popup";
 import { fmtInt, nl } from "./ui/widgets";
 import { Backpack } from "./ui/backpack";
 import { Hud } from "./ui/hud";
+import { AdminHooks, startAdmin } from "./admin/adminClient";
 
 /*
  * Screen flow + run lifecycle.
@@ -63,6 +64,8 @@ let loadInfo: net.LoadInfo | undefined;
 let pendingLoad: net.LoadInfo | undefined;
 /** status message to show once the lobby is on screen */
 let pendingNotice: net.LoadInfo | undefined;
+/** admin layer (admin/adminClient.ts): frame hooks; the panel itself exists only for server-confirmed admins */
+let admin: AdminHooks | undefined;
 
 // per-run trackers (achievements, rewards, HUD)
 const aliveZombies: Array<ZombieState> = [];
@@ -503,9 +506,11 @@ function mountRun(): void {
 		const simulate = ctx.phase === "playing" && pauseCleanup === undefined && !pack.isOpen();
 		if (simulate) {
 			warnNoAmmo();
+			admin?.beforeUpdate(dt);
 			trackBefore();
 			loop.update(dt);
 			trackAfter();
+			admin?.afterUpdate(dt);
 			saveTimer += dt;
 			if (saveTimer >= AUTOSAVE_SEC) {
 				saveTimer = 0;
@@ -515,6 +520,7 @@ function mountRun(): void {
 			input.beginFrame();
 		}
 		loop.render();
+		admin?.afterRender(dt);
 		pushHud();
 		if (ctx.phase === "dead" && !deathShown) openDeath();
 	});
@@ -702,6 +708,16 @@ function begin(): void {
 	});
 }
 
+// save patches / announcements for everyone; the admin panel only when the server marks this player as admin
+admin = startAdmin({
+	ctx,
+	loop,
+	endRun: () => {
+		// an admin reset the save: the run in memory belonged to the old one
+		runActive = false;
+		goLobby();
+	},
+});
 net.startNet();
 task.delay(LOAD_FALLBACK_SEC, begin);
 

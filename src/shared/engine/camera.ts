@@ -38,6 +38,12 @@ export class Camera {
 	isoSquash = 0.5;
 	shakeMag = 0;
 	shakeT = 0;
+	/**
+	 * Free camera (admin panel): while true, follow() is ignored and whoever detached the camera moves x / y / zoom
+	 * itself. Everything that projects through the camera (renderer, light map, nameplate, aim) keeps working,
+	 * including at zoom ≠ 1 (sizes scale by `zoom`, culling uses viewRect()).
+	 */
+	detached = false;
 	private shakeX = 0;
 	private shakeY = 0;
 
@@ -47,8 +53,15 @@ export class Camera {
 	}
 
 	follow(tx: number, ty: number, lerpT: number): void {
+		if (this.detached) return;
 		this.x += (tx - this.x) * lerpT;
 		this.y += (ty - this.y) * lerpT;
+	}
+
+	/** detaches the camera at its current position (free camera) or re-attaches it at zoom 1 */
+	setDetached(on: boolean): void {
+		this.detached = on;
+		if (!on) this.zoom = 1;
 	}
 
 	shake(magnitude: number, duration: number): void {

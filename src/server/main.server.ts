@@ -21,6 +21,9 @@ import {
 	ShopActionReason,
 	ShopActionResult,
 } from "shared/net/net";
+import { isAdminUserId } from "shared/admin/config";
+import { AdminOp, applyAdminOps } from "shared/admin/ops";
+import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -83,6 +86,17 @@ const LEVEL_CREDIT_START = 5;
 const ACTION_BURST = 6;
 const ACTION_PER_SECOND = 2;
 
+/**
+ * After an admin edit the player's reports are refused until their client confirms the patch (AdminPatchAck),
+ * at most this long (s). runRev is bumped by the edit, so a report captured before it is refused anyway; the
+ * gate only covers a report that learnt the new runRev from a wallet before the patch itself was applied.
+ */
+const PATCH_ACK_TIMEOUT = 20;
+/** while the gate refuses reports, the patch is re-sent at most this often, and the gate only opens by timeout
+ * after this many re-sends went unanswered (a client that missed the patch gets it again instead) */
+const PATCH_RESEND_INTERVAL = 5;
+const PATCH_MIN_RESENDS = 3;
+
 interface Credits {
 	day: number;
 	boss: number;
@@ -118,6 +132,17 @@ interface Session {
 	actionTokens: number;
 	actionAt: number;
 	closed: boolean;
+	/** os.clock() when the player joined (admin panel) */
+	joinedAt: number;
+	/** admin patch waiting for the client's AdminPatchAck (undefined = none) */
+	patchRev: number | undefined;
+	patchDeadline: number;
+	/** re-sends the pending admin patch (set by adminServer) */
+	patchResend: (() => void) | undefined;
+	patchResentAt: number;
+	patchResends: number;
+	/** runRev of a run in which an admin used world tools: it earns no coins / achievements / records */
+	assistedRunRev: number | undefined;
 }
 
 interface StoredLock {
@@ -144,6 +169,9 @@ const sessions = new Map<Player, Session>();
 /** users whose previous session on this server is still writing its final save */
 const releasing = new Set<number>();
 let shuttingDown = false;
+/** admin panel (server/admin/adminServer.ts), started at the end of this script */
+let admin: AdminServer | undefined;
+let adminPatchSerial = 0;
 
 // ---------------------------------------------------------------- session state helpers
 
@@ -440,6 +468,13 @@ function newSession(player: Player): Session {
 		actionTokens: ACTION_BURST,
 		actionAt: os.clock(),
 		closed: false,
+		joinedAt: os.clock(),
+		patchRev: undefined,
+		patchDeadline: 0,
+		patchResend: undefined,
+		patchResentAt: 0,
+		patchResends: 0,
+		assistedRunRev: undefined,
 	};
 }
 
@@ -481,16 +516,30 @@ interface Reward {
 	clamped: boolean;
 }
 
-/** time-based plausibility + coin rewards. Mutates `upd` (the sanitized report), `prev` is the trusted copy. */
-function applyProgressLimits(s: Session, prev: PlayerSaveData, upd: PlayerSaveData): Reward {
+/**
+ * time-based plausibility + coin rewards. Mutates `upd` (the sanitized report), `prev` is the trusted copy.
+ * `trusted` (admins, see shared/admin/config.ts): the time limits are skipped — admin world tools (skip to night,
+ * spawn bosses...) legitimately advance faster than real time. Schema checks and save invariants still apply.
+ * `assisted` (a run in which an admin used world tools): the day may advance, but the run pays no coins and keeps
+ * the previous achievements and boss kills; the record (bestDay) only moves when the save invariant (bestDay ≥ day)
+ * forces it, and then without its milestone bonus.
+ */
+function applyProgressLimits(
+	s: Session,
+	prev: PlayerSaveData,
+	upd: PlayerSaveData,
+	trusted: boolean,
+	assisted: boolean,
+): Reward {
 	refillCredits(s);
 	const reward: Reward = { coins: 0, days: 0, bosses: 0, clamped: false };
+	const credit = (c: number): number => (trusted ? math.huge : math.floor(c));
 
 	// days: at most the credited amount; each new day pays, each new record multiple of 5 pays a bonus
 	if (upd.day > prev.day) {
-		const gained = math.min(upd.day - prev.day, math.floor(s.credits.day));
+		const gained = math.min(upd.day - prev.day, credit(s.credits.day));
 		if (gained < upd.day - prev.day) reward.clamped = true;
-		s.credits.day -= gained;
+		s.credits.day = math.max(0, s.credits.day - gained);
 		upd.day = prev.day + gained;
 		reward.days = gained;
 		reward.coins += gained * ECONOMY.COINS_PER_DAY;
@@ -506,9 +555,9 @@ function applyProgressLimits(s: Session, prev: PlayerSaveData, upd: PlayerSaveDa
 	if (upd.bossKills < prev.bossKills) {
 		upd.bossKills = prev.bossKills;
 	} else if (upd.bossKills > prev.bossKills) {
-		const gained = math.min(upd.bossKills - prev.bossKills, math.floor(s.credits.boss));
+		const gained = math.min(upd.bossKills - prev.bossKills, credit(s.credits.boss));
 		if (gained < upd.bossKills - prev.bossKills) reward.clamped = true;
-		s.credits.boss -= gained;
+		s.credits.boss = math.max(0, s.credits.boss - gained);
 		upd.bossKills = prev.bossKills + gained;
 		reward.bosses = gained;
 		reward.coins += gained * ECONOMY.COINS_PER_BOSS;
@@ -516,13 +565,22 @@ function applyProgressLimits(s: Session, prev: PlayerSaveData, upd: PlayerSaveDa
 
 	// levels: limited per real minute (the rest is accepted by later reports as credit refills)
 	if (upd.level > prev.level) {
-		const gained = math.min(upd.level - prev.level, math.floor(s.credits.level));
-		s.credits.level -= gained;
+		const gained = math.min(upd.level - prev.level, credit(s.credits.level));
+		s.credits.level = math.max(0, s.credits.level - gained);
 		if (gained < upd.level - prev.level) {
 			reward.clamped = true;
 			upd.level = prev.level + gained;
 			upd.exp = 0;
 		}
+	}
+
+	if (assisted) {
+		reward.coins = 0;
+		reward.days = 0;
+		reward.bosses = 0;
+		upd.bossKills = prev.bossKills;
+		upd.achievements = [...prev.achievements];
+		upd.bestDay = math.max(prev.bestDay, upd.day);
 	}
 
 	upd.money = math.min(prev.money + reward.coins, SAVE_LIMITS.MONEY_MAX);
@@ -546,6 +604,27 @@ function rejectReport(s: Session, reason: SaveRejectReason, withWallet = false):
 	});
 }
 
+/**
+ * An admin edit the client has not confirmed yet: its reports may predate it, so they are refused ("outdated": the
+ * client resends later) and the patch is re-sent. The gate only opens by timeout after several unanswered re-sends.
+ */
+function patchGateHolds(s: Session): boolean {
+	if (s.patchRev === undefined) return false;
+	const now = os.clock();
+	if (now >= s.patchDeadline && s.patchResends >= PATCH_MIN_RESENDS) {
+		warn(`[${GAME_NAME}] ${s.key}: admin patch ${s.patchRev} was never confirmed; accepting reports again`);
+		s.patchRev = undefined;
+		s.patchResend = undefined;
+		return false;
+	}
+	if (s.patchResend !== undefined && now - s.patchResentAt >= PATCH_RESEND_INTERVAL) {
+		s.patchResentAt = now;
+		s.patchResends += 1;
+		s.patchResend();
+	}
+	return true;
+}
+
 function processReport(s: Session, json: string): void {
 	s.lastReport = os.clock();
 	const [ok, decoded] = pcall((): unknown => HttpService.JSONDecode(json));
@@ -555,7 +634,11 @@ function processReport(s: Session, json: string): void {
 	}
 	const prev = s.save;
 	if (typeIs(decoded, "table") && (decoded as Record<string, unknown>).runRev !== prev.runRev) {
-		// captured before the last rebirth / new run: it would bring the old run back
+		// captured before the last rebirth / new run / admin edit: it would bring the old state back
+		rejectReport(s, "outdated", true);
+		return;
+	}
+	if (patchGateHolds(s)) {
 		rejectReport(s, "outdated", true);
 		return;
 	}
@@ -564,7 +647,8 @@ function processReport(s: Session, json: string): void {
 		rejectReport(s, "invalid");
 		return;
 	}
-	const reward = applyProgressLimits(s, prev, upd);
+	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
+	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	s.save = upd;
 	s.dirty = true;
 	sendSaveAck(s, {
@@ -575,6 +659,7 @@ function processReport(s: Session, json: string): void {
 		clamped: reward.clamped,
 		wallet: walletOf(upd),
 	});
+	admin?.onReport(s.player);
 }
 
 function processPending(s: Session): void {
@@ -603,6 +688,11 @@ remotes.saveRequest.OnServerEvent.Connect((player, token, json) => {
 	}
 	if (token !== s.token) {
 		rejectReport(s, "stale");
+		return;
+	}
+	if (patchGateHolds(s)) {
+		// refused on receipt too: a report queued now would otherwise be processed after the confirmation
+		rejectReport(s, "outdated", true);
 		return;
 	}
 	const since = os.clock() - s.lastReport;
@@ -676,6 +766,8 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		save.money -= price;
 		save.deathCount += 1;
 		save.runOver = false;
+		// a rebirth continues the same run: an assisted run stays assisted
+		if (s.assistedRunRev === save.runRev) s.assistedRunRev = save.runRev + 1;
 		save.runRev += 1;
 	} else if (req.kind === "newRun") {
 		// give up the current run: day 1 with the starter kit (level, skills, coins, packs stay)
@@ -683,6 +775,7 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		price = 0;
 		resetRun(save);
 		save.runRev += 1;
+		s.assistedRunRev = undefined;
 	} else {
 		return fail("invalid", s);
 	}
@@ -746,6 +839,100 @@ task.spawn(() => {
 			task.wait(0.2);
 		}
 	}
+});
+
+// ---------------------------------------------------------------- admin panel host
+
+/**
+ * Admin save edit (authorization is done by adminServer before this is called). `ops` undefined = reset to a new
+ * player's save (settings kept). The edit bumps runRev, so every report captured before it is refused as
+ * "outdated", drops a queued report, and arms the patch gate until the client confirms it applied the patch.
+ */
+function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOutcome {
+	const s = sessions.get(player);
+	const none = { ok: false, runRev: 0, rev: 0, persist: false };
+	if (s === undefined || s.closed) return { ...none, error: "that player is not in this server" };
+	if (!s.loaded) return { ...none, error: "that player's save is still loading" };
+	if (isReadOnly(s)) {
+		return { ...none, error: "read-only session (the save could not be loaded or the session lock was lost)" };
+	}
+	const before = s.save;
+	let edited: PlayerSaveData;
+	if (ops === undefined) {
+		edited = freshSave(true);
+		edited.settings = before.settings;
+	} else {
+		edited = sanitizeStoredSave(before);
+		applyAdminOps(edited, ops);
+	}
+	enforceSaveInvariants(edited);
+	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
+	// an edit keeps the run (still assisted if it was); a reset starts a new one
+	s.assistedRunRev = ops !== undefined && s.assistedRunRev === before.runRev ? edited.runRev : undefined;
+	s.save = edited;
+	s.dirty = true;
+	s.pending = undefined;
+	s.pendingToken = undefined;
+	adminPatchSerial += 1;
+	s.patchRev = adminPatchSerial;
+	s.patchDeadline = os.clock() + PATCH_ACK_TIMEOUT;
+	s.patchResend = undefined;
+	s.patchResentAt = os.clock();
+	s.patchResends = 0;
+	return { ok: true, runRev: edited.runRev, rev: adminPatchSerial, persist: persists(s), save: edited };
+}
+
+admin = startAdminServer({
+	jobId: JOB_ID,
+	session(player) {
+		const s = sessions.get(player);
+		if (s === undefined) return undefined;
+		return {
+			loaded: s.loaded,
+			status: s.status,
+			persist: s.loaded && persists(s),
+			readOnly: isReadOnly(s),
+			dirty: s.dirty,
+			save: s.save,
+			lastReport: s.lastReport,
+			joinedAt: s.joinedAt,
+			patchPending: s.patchRev !== undefined,
+		};
+	},
+	edit(player, ops) {
+		return adminEdit(player, ops);
+	},
+	ackPatch(player, rev) {
+		const s = sessions.get(player);
+		if (s === undefined || s.patchRev !== rev) return;
+		s.patchRev = undefined;
+		s.patchResend = undefined;
+		// a report queued while the gate was closed may predate the patch
+		s.pending = undefined;
+		s.pendingToken = undefined;
+	},
+	setPatchResend(player, rev, resend) {
+		const s = sessions.get(player);
+		if (s !== undefined && s.patchRev === rev) s.patchResend = resend;
+	},
+	markAssisted(player) {
+		const s = sessions.get(player);
+		if (s === undefined || !s.loaded || s.assistedRunRev === s.save.runRev) return false;
+		s.assistedRunRev = s.save.runRev;
+		return true;
+	},
+	dataStoreStatus() {
+		if (dataStore === undefined) return "unavailable (GetDataStore failed)";
+		let loaded = 0;
+		let persisted = 0;
+		for (const [, s] of sessions) {
+			if (!s.loaded) continue;
+			loaded++;
+			if (persists(s)) persisted++;
+		}
+		if (loaded > 0 && persisted === 0) return `reachable, but no session is persisted (${loaded} in memory only)`;
+		return `ok (${persisted}/${loaded} sessions persisted)`;
+	},
 });
 
 print(`[${GAME_NAME}] server ready (job ${JOB_ID})`);
