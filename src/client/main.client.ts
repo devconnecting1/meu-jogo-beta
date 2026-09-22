@@ -312,7 +312,7 @@ pack.onEquipItem = id => {
 };
 
 loadPlayerSave().then(loaded => {
-	if (loaded !== undefined && loaded !== null) {
+	if (loaded) {
 		ctx.save = loaded;
 	}
 	showLogo(() => {
