@@ -18,7 +18,7 @@ function makeTracer(refs: GameRefs, x1: number, y1: number, x2: number, y2: numb
 
 function pushNeedle(refs: GameRefs, x: number, y: number, angle: number, damage: number, speed: number): void {
 	refs.bullets.push({
-		id: -(100000 + refs.bullets.size()),
+		id: -(100001 + refs.bullets.size()),
 		x,
 		y,
 		angle,

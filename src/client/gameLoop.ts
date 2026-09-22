@@ -7,7 +7,7 @@ import { clamp, lerp } from "shared/engine/vec2";
 import { WeaponKind } from "shared/data/kinds";
 import { expMaxInit, PlayerSaveData } from "shared/game/save";
 import { createPlayer, currentWeapon, PlayerState, recalcMoveSpeed } from "shared/game/player";
-import { moveActor } from "shared/game/physics";
+import { moveActor, PLAYER_RADIUS } from "shared/game/physics";
 import {
 	buildingAt,
 	createWorld,
@@ -20,7 +20,14 @@ import {
 	WorldData,
 	Solid,
 } from "shared/game/world";
-import { resetEntityIds, BossState, ZombieState } from "shared/game/entities";
+import {
+	BOSS1_SEGMENT_RADIUS,
+	bossHitRadius,
+	resetEntityIds,
+	BossState,
+	ZombieState,
+	zombieRadius,
+} from "shared/game/entities";
 import { resetBullets, Bullet } from "shared/game/bullets";
 import { DayNight } from "./systems/daynight";
 import { ParticleSystem } from "./systems/particles";
@@ -30,10 +37,8 @@ import { updateBosses } from "./systems/bossAI";
 import { Combat } from "./systems/combat";
 import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
-import { GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
+import { Explosion, GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
 
-/** player collision radius (box 36×36 through physics.moveActor) */
-const PLAYER_RADIUS = 18;
 /** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
 const ROOF_LERP = 0.15;
 /** tree canopy opacity while someone stands under it (original obj_tree1 fades near the player) */
@@ -41,6 +46,10 @@ const CANOPY_SEE_THROUGH = 0.35;
 /** night light radii (world units): the player's own light and built light sources */
 const PLAYER_LIGHT_R = 250;
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/** humanoid sprites are 36 × scale wide at the shoulders: scale = hit radius / 18 matches the hitbox */
+const HUMANOID_HALF_WIDTH = 18;
+/** spitter puddle size (zombieAI) — the landing marker of an acid blob uses it */
+const SPIT_MARK_R = 40;
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
 
@@ -82,6 +91,11 @@ function itemColor(kind: number): Color3 {
 	return COLORS.item;
 }
 
+/** 1 while a blast grows, then fades over its remaining life (0.4 s in zombieAI) */
+function explosionFade(e: Explosion): number {
+	return e.r < e.rMax ? 1 : clamp(e.life / 0.4, 0, 1);
+}
+
 /** outward unit normal of a building wall */
 function sideNormal(side: string | undefined): { x: number; y: number } {
 	if (side === "top") return { x: 0, y: -1 };
@@ -121,6 +135,10 @@ export class GameLoop {
 	private clock = 0;
 	private lightMap?: LightMap;
 	private lights: Array<LightSource> = [];
+	/** stuck arrows: the victim's heading when the arrow went in, so it turns with the body */
+	private stuckRef = new Map<number, { a: number; seen: number }>();
+	private zombieById = new Map<number, ZombieState>();
+	private frameNo = 0;
 
 	constructor() {
 		const save = getCtx().save;
@@ -447,11 +465,12 @@ export class GameLoop {
 			});
 			for (const p of lot.patches) {
 				if (!overlaps(p.x, p.y, p.w, p.h, v)) continue;
+				// lighter, low-contrast tufts: a dark rounded blob here reads as the shadow of nothing
 				r.drawRect(cam, p.x + p.w / 2, p.y + p.h / 2, {
 					w: p.w,
 					h: p.h,
-					color: COLORS.grassDark,
-					alpha: 0.45,
+					color: COLORS.grassLight,
+					alpha: 0.3,
 					cornerRadius: math.min(p.w, p.h) / 2,
 					zIndex: Z.ground + 2,
 				});
@@ -953,9 +972,12 @@ export class GameLoop {
 		alpha: number,
 		phase: number,
 		z: number,
+		windup = 0,
+		outline?: Color3,
 	): void {
 		const body = flash > 0 ? color.Lerp(WHITE, 0.75 * flash) : color;
 		const dark = color.Lerp(BLACK, 0.3);
+		const edge = outline ?? (flash > 0 ? WHITE : dark);
 		const step = math.sin(phase) * 8 * sc;
 		for (const side of [-1, 1]) {
 			const along = step * side;
@@ -983,14 +1005,22 @@ export class GameLoop {
 			color: body,
 			alpha,
 			cornerRadius: 9 * sc,
-			stroke: flash > 0 ? WHITE : dark,
-			strokeThickness: flash > 0 ? 3 : 1.5,
+			stroke: edge,
+			strokeThickness: flash > 0 || outline !== undefined ? 3 : 1.5,
 			strokeAlpha: alpha,
 			zIndex: z + 2,
 		});
-		r.drawCircle(cam, x + math.cos(a) * 3 * sc, y + math.sin(a) * 3 * sc, 20 * sc, {
-			color: flash > 0 ? body : color.Lerp(BLACK, 0.12),
+		// head; a spitter winding up (windup 0..10) pulls it back and swells its acid sac
+		const k = clamp(windup / 10, 0, 1);
+		const headFwd = (3 - 9 * k) * sc;
+		let headColor = flash > 0 ? body : color.Lerp(BLACK, 0.12);
+		if (k > 0) headColor = headColor.Lerp(COLORS.acid, 0.7 * k);
+		r.drawCircle(cam, x + math.cos(a) * headFwd, y + math.sin(a) * headFwd, 20 * sc * (1 + 0.4 * k), {
+			color: headColor,
 			alpha,
+			stroke: k > 0 ? COLORS.bloodZombie : undefined,
+			strokeThickness: 2,
+			strokeAlpha: alpha * k,
 			zIndex: z + 3,
 		});
 	}
@@ -998,25 +1028,33 @@ export class GameLoop {
 	private drawZombies(r: Renderer, cam: Camera, v: ViewRect): void {
 		const up = cam.screenDirToWorld(0, -1);
 		for (const zb of this.zombies) {
-			const sc = zb.scale ?? 1;
-			if (!circleInView(zb.x, zb.y, 60 * sc, v)) continue;
+			const rad = zombieRadius(zb);
+			if (!circleInView(zb.x, zb.y, rad * 3.5 + 40, v)) continue;
 			const alpha = clamp(zb.alpha, 0, 1);
 			if (alpha <= 0.01) continue;
-			const lift = zb.jumpHeight ?? 0;
-			const liftScale = 1 + lift / 220;
-			const so = this.shadowOffset(zb.x, zb.y, 10 + lift * 0.3);
-			r.drawCircle(cam, zb.x + so.x, zb.y + so.y, (34 * sc) / liftScale, {
+			const sc = rad / HUMANOID_HALF_WIDTH;
+			// jumper: the body rises (0..28) and grows a little; the shadow stays on the ground
+			const lift = math.max(0, zb.jumpHeight ?? 0);
+			const liftScale = 1 + lift / 100;
+			const so = this.shadowOffset(zb.x, zb.y, 10);
+			r.drawCircle(cam, zb.x + so.x, zb.y + so.y, (rad * 2.1) / liftScale, {
 				color: BLACK,
-				alpha: 0.3 * alpha,
+				alpha: 0.3 * alpha * (1 - lift / 70),
 				zIndex: Z.actorShadow,
 			});
 			let color = zombieColor(zb.type);
+			let outline: Color3 | undefined;
 			const fuse = zb.fuse ?? -1;
-			if (zb.type === 3 && fuse > 0 && math.floor(this.clock * 10) % 2 === 0) {
-				color = color.Lerp(COLORS.uiYellow, 0.6);
+			if (zb.type === 3 && fuse > 0) {
+				// lit fuse: red blink that accelerates as it burns (frequency ∝ 1 / time left)
+				if (math.sin(math.pi * 2 * 3 * math.log(fuse + 0.1)) > 0) {
+					color = color.Lerp(COLORS.uiRed, 0.8);
+					outline = COLORS.uiYellow;
+				}
 			}
-			const bx = zb.x + up.x * lift * 0.5;
-			const by = zb.y + up.y * lift * 0.5;
+			const bx = zb.x + up.x * lift;
+			const by = zb.y + up.y * lift;
+			const standing = zb.hp > 0 || fuse > 0;
 			this.drawHumanoid(
 				r,
 				cam,
@@ -1028,13 +1066,15 @@ export class GameLoop {
 				clamp(zb.hitFlash ?? 0, 0, 1),
 				alpha,
 				zb.feetCycle ?? 0,
-				zb.hp > 0 ? Z.zombie : Z.zombie - 5,
+				standing ? Z.zombie : Z.zombie - 5,
+				zb.type === 2 ? (zb.headX ?? 0) : 0,
+				outline,
 			);
 			if (zb.detectShow > 0 && zb.hp > 0) {
 				// "!" made of two rects, always upright on screen
 				const k = math.min(1, zb.detectShow * 4);
-				const hx = zb.x + up.x * 44 * sc;
-				const hy = zb.y + up.y * 44 * sc;
+				const hx = zb.x + up.x * (rad * 2.6 + lift);
+				const hy = zb.y + up.y * (rad * 2.6 + lift);
 				r.drawRect(cam, hx + up.x * 6, hy + up.y * 6, {
 					w: 6,
 					h: 16,
@@ -1195,31 +1235,60 @@ export class GameLoop {
 				const bodyX = b.bodyX;
 				const bodyY = b.bodyY;
 				if (bodyX === undefined || bodyY === undefined) continue;
-				for (let i = bodyX.size() - 1; i >= 0; i--) {
-					const size = i === 0 ? 34 : i % 3 === 0 ? 22 : 16;
+				// centipede: every segment is drawn at its hit radius, the head at bossHitRadius
+				const n = bodyX.size();
+				const seg = BOSS1_SEGMENT_RADIUS * 2;
+				const head = bossHitRadius(b) * 2;
+				for (let i = n - 1; i >= 0; i--) {
+					const size = i === 0 ? head : seg;
 					if (!circleInView(bodyX[i], bodyY[i], size, v)) continue;
+					if (i > 0 && i % 3 === 0) {
+						// legs on every third segment, across the local body direction
+						const j0 = math.max(0, i - 1);
+						const j1 = math.min(n - 1, i + 1);
+						const da = math.atan2(bodyY[j0] - bodyY[j1], bodyX[j0] - bodyX[j1]);
+						const swing = math.sin(this.clock * 12 + i) * 0.35;
+						for (const side of [-1, 1]) {
+							this.part(r, cam, bodyX[i], bodyY[i], da + side * (math.pi / 2 + swing), seg * 0.55, 0, {
+								w: seg * 0.5,
+								h: 7,
+								color: dark,
+								cornerRadius: 3,
+								zIndex: Z.boss - 1,
+							});
+						}
+					}
 					r.drawCircle(cam, bodyX[i], bodyY[i], size, {
-						color: i === 0 ? color : i % 3 === 0 ? color : color.Lerp(BLACK, 0.2),
+						color: i === 0 || i % 2 === 0 ? color : color.Lerp(BLACK, 0.2),
 						stroke: dark,
-						strokeThickness: 1,
+						strokeThickness: 2,
 						zIndex: Z.boss + (i === 0 ? 2 : 0),
 					});
 				}
-				if (bodyX.size() > 1) {
+				if (n > 1) {
 					const ha = math.atan2(bodyY[0] - bodyY[1], bodyX[0] - bodyX[1]);
 					for (const side of [-1, 1]) {
-						this.part(r, cam, bodyX[0], bodyY[0], ha, 8, side * 8, {
-							w: 7,
-							h: 7,
+						this.part(r, cam, bodyX[0], bodyY[0], ha, head * 0.22, side * head * 0.2, {
+							w: head * 0.12,
+							h: head * 0.12,
 							circle: true,
 							color: COLORS.detect,
 							zIndex: Z.boss + 3,
+						});
+						// mandibles
+						this.part(r, cam, bodyX[0], bodyY[0], ha + side * 0.35, head * 0.55, 0, {
+							w: head * 0.3,
+							h: 8,
+							color: dark,
+							cornerRadius: 3,
+							zIndex: Z.boss + 1,
 						});
 					}
 				}
 				continue;
 			}
-			const size = b.type === 2 ? 130 : b.type === 3 ? 90 : 70;
+			// types 2-4: drawn at their hit radius so what you see is what you hit
+			const size = bossHitRadius(b) * 2;
 			if (!circleInView(b.x, b.y, size + 60, v)) continue;
 			const so = this.shadowOffset(b.x, b.y, 14);
 			r.drawCircle(cam, b.x + so.x, b.y + so.y, size * 1.05, {
@@ -1234,7 +1303,7 @@ export class GameLoop {
 					b.x,
 					b.y,
 					b.angle,
-					size / 36,
+					size / 2 / HUMANOID_HALF_WIDTH,
 					color,
 					flash,
 					1,
@@ -1284,38 +1353,161 @@ export class GameLoop {
 		}
 	}
 
+	/** arrow sprite (shaft, head, fletching) centred on (x, y) */
+	private drawArrow(r: Renderer, cam: Camera, x: number, y: number, a: number, alpha: number, z: number): void {
+		this.part(r, cam, x, y, a, 0, 0, { w: 26, h: 3, color: COLORS.arrow, alpha, zIndex: z });
+		this.part(r, cam, x, y, a, 14, 0, {
+			w: 6,
+			h: 6,
+			color: COLORS.ironDoor,
+			alpha,
+			cornerRadius: 1,
+			zIndex: z + 1,
+		});
+		this.part(r, cam, x, y, a, -12, 0, {
+			w: 7,
+			h: 7,
+			color: COLORS.uiRed,
+			alpha,
+			cornerRadius: 1,
+			zIndex: z + 1,
+		});
+	}
+
 	private drawBullets(r: Renderer, cam: Camera, v: ViewRect): void {
+		this.frameNo++;
+		const byId = this.zombieById;
+		byId.clear();
+		let anyStuck = false;
 		for (const b of this.bullets) {
-			if (!circleInView(b.x, b.y, 20, v)) continue;
-			let color = COLORS.arrow;
-			let w = 16;
-			let h = 4;
-			if (!b.fromPlayer) {
-				if (b.id < -100000) {
-					color = COLORS.bullet;
-					w = 14;
-					h = 3;
-				} else {
-					color = COLORS.acid;
-					w = 10;
-					h = 10;
-				}
-			} else if (b.kind === "fire") {
-				color = COLORS.campfire;
-				w = 12;
-				h = 12;
-			} else if (b.kind === "electric") {
-				color = COLORS.uiBlue;
-				w = 12;
-				h = 6;
+			if (b.stuckTo !== undefined) {
+				anyStuck = true;
+				break;
 			}
-			r.drawRect(cam, b.x, b.y, {
-				w,
-				h,
-				color,
-				rotation: b.angle,
-				cornerRadius: h / 2,
-				zIndex: Z.projectile,
+		}
+		if (anyStuck) {
+			for (const zb of this.zombies) byId.set(zb.id, zb);
+		}
+		const up = cam.screenDirToWorld(0, -1);
+		for (const b of this.bullets) {
+			if (!circleInView(b.x, b.y, 90, v)) continue;
+			if (b.fromPlayer && b.kind === "arrow") {
+				const zb = b.stuckTo !== undefined ? byId.get(b.stuckTo) : undefined;
+				if (zb !== undefined) {
+					// stuck in a zombie: keeps its offset in the body's frame, turning (and jumping) with it
+					let ref = this.stuckRef.get(b.id);
+					if (ref === undefined) {
+						ref = { a: zb.angleSlow, seen: this.frameNo };
+						this.stuckRef.set(b.id, ref);
+					}
+					ref.seen = this.frameNo;
+					const d = zb.angleSlow - ref.a;
+					const ox = b.stuckDX ?? 0;
+					const oy = b.stuckDY ?? 0;
+					const lift = math.max(0, zb.jumpHeight ?? 0);
+					const ax = zb.x + ox * math.cos(d) - oy * math.sin(d) + up.x * lift;
+					const ay = zb.y + ox * math.sin(d) + oy * math.cos(d) + up.y * lift;
+					const aa = b.angle + d;
+					// only the back half sticks out of the body
+					this.drawArrow(r, cam, ax - math.cos(aa) * 8, ay - math.sin(aa) * 8, aa, 1, Z.zombie + 4);
+				} else if (b.grounded === true) {
+					// lying on the ground, dimmed; the player walks over it to pick it up
+					this.drawArrow(r, cam, b.x, b.y, b.angle, 0.6, Z.item);
+				} else {
+					this.drawArrow(r, cam, b.x, b.y, b.angle, 1, Z.projectile);
+				}
+				continue;
+			}
+			if (!b.fromPlayer) {
+				if (b.targetX !== undefined && b.targetY !== undefined) {
+					// spitter acid: a lobbed blob — shadow on the ground, blob arcing above it, and a
+					// landing marker so the player can read where the puddle will appear
+					const t = clamp(b.travel / math.max(1, b.range), 0, 1);
+					const arc = math.sin(t * math.pi);
+					const h = arc * math.min(70, 20 + b.range * 0.2);
+					r.drawCircle(cam, b.targetX, b.targetY, SPIT_MARK_R * 2, {
+						color: COLORS.acid,
+						alpha: 0.08 + 0.12 * t,
+						stroke: COLORS.acid,
+						strokeThickness: 2,
+						strokeAlpha: 0.3 + 0.5 * t,
+						zIndex: Z.decal + 2,
+					});
+					r.drawCircle(cam, b.x, b.y, 12, { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow });
+					r.drawCircle(cam, b.x + up.x * h, b.y + up.y * h, 14 * (1 + 0.5 * arc), {
+						color: COLORS.acid,
+						stroke: COLORS.bloodZombie,
+						strokeThickness: 2,
+						zIndex: Z.projectile,
+					});
+				} else {
+					// boss needle (any enemy shot without a landing point): a thin bone spike
+					this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
+						w: 28,
+						h: 3,
+						color: COLORS.blade.Lerp(COLORS.parcel, 0.4),
+						zIndex: Z.projectile,
+					});
+					this.part(r, cam, b.x, b.y, b.angle, 15, 0, {
+						w: 6,
+						h: 4,
+						color: COLORS.boss,
+						cornerRadius: 2,
+						zIndex: Z.projectile + 1,
+					});
+				}
+				continue;
+			}
+			if (b.kind === "fire") {
+				r.drawCircle(cam, b.x, b.y, 12 + math.sin(this.clock * 30 + b.id) * 3, {
+					color: COLORS.campfire,
+					alpha: 0.85,
+					zIndex: Z.projectile,
+				});
+			} else if (b.kind === "electric") {
+				this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
+					w: 14,
+					h: 6,
+					color: COLORS.uiBlue,
+					cornerRadius: 3,
+					zIndex: Z.projectile,
+				});
+			} else {
+				this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
+					w: 16,
+					h: 4,
+					color: COLORS.bullet,
+					cornerRadius: 2,
+					zIndex: Z.projectile,
+				});
+			}
+		}
+		for (const [id, ref] of this.stuckRef) {
+			if (ref.seen !== this.frameNo) this.stuckRef.delete(id);
+		}
+	}
+
+	/** exploder blasts: expanding shock ring + hot core, fading once full size */
+	private drawExplosions(r: Renderer, cam: Camera, v: ViewRect): void {
+		const list = this.refs.explosions;
+		if (list === undefined) return;
+		for (const e of list) {
+			if (!circleInView(e.x, e.y, e.rMax, v)) continue;
+			const fade = explosionFade(e);
+			const grow = clamp(e.r / math.max(1, e.rMax), 0, 1);
+			const d = math.max(4, e.r * 2);
+			r.drawCircle(cam, e.x, e.y, d, {
+				color: COLORS.campfire,
+				alpha: 0.35 * fade,
+				stroke: COLORS.uiYellow,
+				strokeThickness: 5,
+				strokeAlpha: 0.9 * fade,
+				zIndex: Z.particle + 1,
+			});
+			r.drawCircle(cam, e.x, e.y, d * 0.45, {
+				color: COLORS.lamp.Lerp(WHITE, 0.5),
+				alpha: 0.7 * fade * (1 - grow * 0.6),
+				zIndex: Z.particle + 2,
 			});
 		}
 	}
@@ -1357,6 +1549,7 @@ export class GameLoop {
 		this.drawPlayer(renderer, cam);
 		this.drawBosses(renderer, cam, view);
 		this.drawBullets(renderer, cam, view);
+		this.drawExplosions(renderer, cam, view);
 		this.drawTracers(renderer, cam);
 		this.drawParticles(renderer, cam, view);
 		this.build.draw(renderer, cam);
@@ -1402,6 +1595,12 @@ export class GameLoop {
 		}
 		for (const b of this.bullets) {
 			if (b.kind === "fire") lights.push({ x: b.x, y: b.y, r: 110, k: 0.7, inner: 0.2 });
+		}
+		const blasts = this.refs.explosions;
+		if (blasts !== undefined) {
+			for (const e of blasts) {
+				lights.push({ x: e.x, y: e.y, r: e.rMax * 1.8, k: explosionFade(e), inner: 0.35 });
+			}
 		}
 		this.lightMap.update(cam, dark, lights);
 	}
