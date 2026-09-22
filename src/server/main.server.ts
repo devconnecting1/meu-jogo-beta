@@ -68,6 +68,10 @@ remotes.saveRequest.OnServerEvent.Connect((player, saveJson) => {
 		remotes.saveAck.FireClient(player, false);
 		return;
 	}
+	if (dataStore === undefined) {
+		remotes.saveAck.FireClient(player, false);
+		return;
+	}
 	const [ok] = pcall(() => {
 		dataStore.SetAsync(saveKey(player), saveJson);
 	});
