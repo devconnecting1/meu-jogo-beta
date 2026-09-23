@@ -12,6 +12,7 @@
 		"locale": "node tools/gen-locale.mjs",
 		"validate:world": "node tools/validate-world.mjs",
 		"check:registers": "node tools/check-registers.mjs",
+		"check:place": "node tools/check-place.mjs",
 		"test:net": "node tools/test-net.mjs",
 		"test:sim": "node tools/test-sim.mjs",
 		"test:server-sim": "node tools/test-server-sim.mjs",
