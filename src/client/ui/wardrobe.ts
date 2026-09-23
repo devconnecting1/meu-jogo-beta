@@ -139,9 +139,17 @@ function tileState(ctx: GameContext, c: CostumeDef, slot: number): Kit.TileState
 /**
  * A box for a Renderer drawing (a tile's cosmetic, the big preview). The kit lays out in Scale; the renderer draws
  * in offsets. So the drawing gets its own w x h design-unit space under a UIScale that keeps it exactly as big as
- * its holder on screen, whatever the screen.
+ * its holder on screen, whatever the screen. (The lobby's survivor previews use it too, client/ui/lobby.ts.)
  */
-function drawingBox(parent: Instance, name: string, x: number, y: number, w: number, h: number, zIndex: number): Frame {
+export function drawingBox(
+	parent: Instance,
+	name: string,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+	zIndex: number,
+): Frame {
 	const holder = makeFrame(parent, name, x, y, w, h, THEME.background, { transparency: 1, zIndex });
 	const inner = new Instance("Frame");
 	inner.Name = "Scaled";

@@ -90,7 +90,7 @@ export type {
 } from "./widgets";
 export { showLogo } from "./logo";
 export { showLobby } from "./lobby";
-export type { LobbyHandlers, LobbyStatus } from "./lobby";
+export type { LobbyHandle, LobbyHandlers, LobbyPage, LobbyStatus, RunState } from "./lobby";
 export { showShop, actionErrorText } from "./shop";
 export { showSettings } from "./settings";
 export { showCredits } from "./credits";
