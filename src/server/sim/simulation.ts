@@ -26,12 +26,13 @@ import { isFiniteNumber } from "shared/net/codec";
 import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
 import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
-import { PlayerState } from "shared/game/player";
+import { currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { gameHours } from "shared/sim/clock";
 import { InputCommand } from "shared/net/protocol";
 import { stepPlayer } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
+import * as Noise from "shared/sim/ai/noise";
 import { ServerBuild } from "./build";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
@@ -377,8 +378,12 @@ export class ServerSimulation {
 			hooks: {
 				// the reaction, the stun and the hunt the hit seeds belong to the horde's own brain (2A);
 				// combat only ever decides HOW MUCH hp came off
-				hitZombie: (z, damage, dir, knock, stun) => reactToHit(z, dir, knock, stun),
-				noise: (x, y, radius, shot) => emitSound(horde.refs, x, y, radius, shot),
+				hitZombie: (z, damage, dir, knock, stun) => {
+					reactToHit(z, dir, knock, stun);
+					// a blow landing on a body is a thud the next zombie over hears (shared/sim/ai/noise.ts, LOW)
+					emitSound(horde.refs, z.x, z.y, Noise.HIT, false);
+				},
+				noise: (x, y, radius, shot) => emitSound(horde.refs, x, y, this.gunNoise(x, y, radius), shot),
 				fx: event => this.onFx?.(event),
 				// a bow and a flamethrower do not fire a ray: they ask the world to fly something (§2.3)
 				projectile: request => projectiles.launch(horde.refs, request),
@@ -394,6 +399,21 @@ export class ServerSimulation {
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
 		return out;
+	}
+
+	/**
+	 * How far a shot fired from (x, y) is heard. The combat hook hands the horde the pistol's radius — the
+	 * original's single 800, a third with the silencer — and the ears grade it by the CLASS of the gun
+	 * (shared/sim/ai/noise.ts: a rifle or a shotgun carries 1.4×, a sniper 1.75×). The shooter is the survivor
+	 * standing exactly where the shot left from; nobody there (a turret, a future caller) keeps the pistol's.
+	 */
+	private gunNoise(x: number, y: number, radius: number): number {
+		for (const sp of this.roster) {
+			if (sp.state.x !== x || sp.state.y !== y) continue;
+			const w = currentWeapon(sp.state);
+			return radius * Noise.gunClassScale(w.kind, w.id);
+		}
+		return radius;
 	}
 
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
@@ -700,7 +720,13 @@ export class ServerSimulation {
 			if (reload > 0) build.rotate(sp.slot);
 			if (action > 0) build.cancel(sp.slot, sp.save);
 			if (attack > 0 && build.placing(sp.slot)) {
-				build.place(sp.slot, sp.state, this.bodies, this.horde?.zombies ?? EMPTY_ZOMBIES);
+				const placed = build.place(sp.slot, sp.state, this.bodies, this.horde?.zombies ?? EMPTY_ZOMBIES);
+				// hammering a construction into place is LOUD (shared/sim/ai/noise.ts): building costs attention
+				const horde = this.horde;
+				if (placed.kind === "placed" && horde !== undefined) {
+					const s = placed.solid;
+					emitSound(horde.refs, s.x + s.w / 2, s.y + s.h / 2, Noise.BUILD, true);
+				}
 			}
 			return;
 		}

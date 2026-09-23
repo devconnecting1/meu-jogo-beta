@@ -23,8 +23,46 @@ export const STRUCT_ATTACK_RANGE = 800;
 /** walkers stop hunting 2000 px from where they spawned unless a survivor is within 600 */
 export const LEASH_SPAWN = 2000;
 export const LEASH_PLAYER = 600;
-/** an investigating zombie shuffles instead of sprinting: the player can read the difference */
-export const SEARCH_SPEED = 0.7;
+/**
+ * How fast each state walks, as a fraction of the zombie's own speed (DESIGN_RULES IA-03/IA-04): the player
+ * reads the state from the gait as much as from the mark. A suspicious zombie walks with purpose, a searching
+ * one shuffles between looks, a chasing one goes flat out.
+ */
+export const SUSPICIOUS_SPEED = 0.8;
+export const SEARCH_SPEED = 0.6;
+// --- natural motion (DESIGN_RULES IA-04): never faster than the original, only varied below it ---------------
+/** each zombie's own gait, a constant fraction of its speed hashed from its id: the chase in [GAIT_MIN, 1] */
+export const GAIT_MIN = 0.9;
+/** ...and the wandering amble in [AMBLE_MIN, 1] of the original's 2/3 */
+export const AMBLE_MIN = 0.8;
+/** sideways sway of the walking heading (radians), in time with the steps: a shamble, not a rail */
+export const WOBBLE_CALM = 0.16;
+export const WOBBLE_CHASE = 0.08;
+/** no sway this close to the target: the last metres of a chase and the bite are never off-line */
+export const WOBBLE_NEAR = 200;
+/**
+ * How fast the walking heading can turn (rad/s): the body swings round instead of snapping. Capped by what the
+ * clients' snapshot interpolation can follow: a client that runs out of snapshots extrapolates in a straight
+ * line, and a body turning at ω drifts off that line by v·ω·t²/2 — at 90 u/s, 6 rad/s and 100 ms that is 2.7 u,
+ * inside the 4 u three screens may disagree by (tools/test-replication.mjs (a); 9 rad/s broke it).
+ */
+export const TURN_WANDER = 2.5;
+export const TURN_ALERT = 4.5;
+export const TURN_CHASE = 6;
+/** a walking body gets up to speed (and stops) at this rate (u/s²): a start, not a teleport of velocity (same cap) */
+export const PACE_ACCEL = 450;
+/** a zombie that moved this far without getting nearer is jostling in a stream, not stuck in a queue (flank.ts) */
+export const JAM_STILL = 40;
+/** wandering: each leg turns at most this much from the last (radians), and lasts this long */
+export const WANDER_TURN = 1.8;
+export const WANDER_LEG_MIN = 2;
+export const WANDER_LEG_MAX = 5;
+/** ...then it stands for a moment, and half the time it looks around while it stands */
+export const WANDER_PAUSE_MIN = 0.8;
+export const WANDER_PAUSE_MAX = 2.4;
+export const WANDER_LOOK = 0.5;
+/** a zombie that gave up a search stands this long before it wanders off */
+export const GIVE_UP_PAUSE = 1.2;
 /** spitter */
 export const SPIT_RANGE = 400;
 export const SPIT_KEEP = SPIT_RANGE - 40;
@@ -70,11 +108,12 @@ export const BLAST_RADIUS = 180;
 export const BLAST_GROW = 1.5 * 20 * 30;
 export const BLAST_DPS = 6 * 30;
 export const BLAST_ZOMBIE_DAMAGE = 60;
-/** noise */
-export const WALK_TEMPO = 20 / 30;
-export const WALK_RING_MAX = 200;
+/** noise: how fast a footstep ring spreads (obj_sound sound_speed 7); the levels are in noise.ts */
 export const WALK_RING_SPEED = 7 * SPEED_SCALE;
-/** line-of-sight rays allowed per frame across the whole horde (amortised perception) */
+/**
+ * Line-of-sight rays allowed per tick across the whole horde (amortised perception). Each zombie only looks at
+ * 10/5/2 Hz by ring (perception.ts `senseInterval`), so this is the ceiling of a bad tick, not the usual cost.
+ */
 export const LOS_BUDGET = 24;
 /** telegraphed bite: lean back, then bite. Step out of BITE_KEEP during it and the bite whiffs. */
 export const WINDUP_TIME = 0.26;
@@ -86,6 +125,11 @@ export const STAGGER_KNOCK = 6;
 export const STAGGER_TIME = 0.45;
 /** straight-line chase instead of the field: §3.3 widens it to 200 u, since the field may be 0.25 s old */
 export const DIRECT_CHASE = 200;
+/**
+ * A suspicious zombie whose remembered place is this close to where a survivor still is takes the chase field's
+ * way there (through the door, not into the wall); further, the survivor has moved on and it steers locally.
+ */
+export const FIELD_GOTO = 400;
 
 /**
  * Visibility radii at night. They match the renderer's light map (gameLoop PLAYER_LIGHT_R / LIGHT_R) so a

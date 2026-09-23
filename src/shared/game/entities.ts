@@ -44,10 +44,33 @@ export interface ZombieState {
 	lostFor?: number;
 	/** seconds left of the search around the last known position; undefined = not searching */
 	searchTimer?: number;
-	/** seconds until the next line-of-sight ray (LOD budget, docs/MULTIPLAYER.md §3.4) */
-	losCd?: number;
-	/** result of the last line-of-sight ray, reused until `losCd` runs out */
+	/**
+	 * Walking to the last known position: the closest it has got, and for how long it has not got closer (a place
+	 * it cannot reach is searched from where it got stuck, memory.ts GOTO_STALL).
+	 */
+	gotoBest?: number;
+	gotoT?: number;
+	/** the search's current hop, seconds spent on it, and seconds left of the look-around at its end */
+	searchHop?: number;
+	hopT?: number;
+	lookT?: number;
+	/**
+	 * What the players are shown (shared/sim/ai/memory.ts `Aware`): 0 idle, 1 suspicious, 2 searching,
+	 * 3 chasing. Decided by the server every tick and replicated as 2 bits (docs/MULTIPLAYER.md §4.2).
+	 */
+	aware?: number;
+	/** 0..1: how sure it is of the survivor it glimpsed; a sighting at 1 (perception.ts `noticeTime`) */
+	notice?: number;
+	/** seconds until the next look (cone, beam, line of sight): the staggered LOD of docs/MULTIPLAYER.md §3.4 */
+	senseCd?: number;
+	/** what the last look saw, reused until `senseCd` runs out: the survivor in view at all, and how clearly */
 	losClear?: boolean;
+	sightK?: number;
+	/** the last noise ring it reacted to (a ring is heard once, not every tick it overlaps the body) */
+	heardRing?: number;
+	/** the heading the body actually walks (eased towards the wanted one) and its eased speed (u/s) */
+	walkDir?: number;
+	pace?: number;
 	/**
 	 * Heading decided by the last navigation step, and the seconds left before it is recomputed. The LOD ring
 	 * (docs/MULTIPLAYER.md §3.4) sets that interval: the body keeps walking `navDir` every tick meanwhile.
@@ -57,6 +80,9 @@ export interface ZombieState {
 	/** best path cost (in flow-field cells) this zombie has reached, and how long it has not improved on it */
 	bestCells?: number;
 	jamT?: number;
+	/** where it stood when it last made progress (a queue stands still; a jostling stream does not) */
+	jamX?: number;
+	jamY?: number;
 	/** seconds left of "walk around the building instead of queueing", and which way round */
 	orbit?: number;
 	orbitSide?: number;
@@ -221,6 +247,15 @@ export function createZombie(typeId: ZombieType, x: number, y: number, day: numb
 		wanderTimer: rndRange(1, 2),
 		wanderDir: rnd() * math.pi * 2,
 		wave,
+		// the senses' fields exist from birth (a table that grows a field a tick later rehashes, in Luau as in V8);
+		// the first look lands at a per-id point of the first 0.1 s, so a batch born together never looks at once
+		aware: 0,
+		notice: 0,
+		senseCd: (((nextId - 1) * 0.6180339887) % 1) * 0.1,
+		losClear: false,
+		sightK: 1,
+		heardRing: 0,
+		pace: 0,
 		alpha: 1,
 		feetCycle: 0,
 		hitFlash: 0,

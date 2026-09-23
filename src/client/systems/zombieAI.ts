@@ -89,6 +89,8 @@ function updateFlow(refs: GameRefs, dt: number): void {
 	if (flowWorld !== refs.world) {
 		flowWorld = refs.world;
 		flow.valid = false;
+		// a rebuild the old world left half done must not be finished against the new one
+		flow.building = false;
 		flowTimer = 0;
 		flowSolidCount = -1;
 	}

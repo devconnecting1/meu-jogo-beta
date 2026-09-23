@@ -33,13 +33,16 @@ export interface Puddle {
 	lifeMax: number;
 }
 
-/** expanding noise ring: the zombies it reaches go and look where it came from */
+/** expanding noise ring: the zombies it reaches go and look where it came from (shared/sim/ai/noise.ts) */
 export interface SoundRing {
 	x: number;
 	y: number;
 	r: number;
 	rMax: number;
+	/** a bang (shot, blast, construction): the front races out and slows down, like the original's shot ring */
 	shot: boolean;
+	/** which ring this is: a zombie hears each ring once (`ZombieState.heardRing`), 0 on an older caller */
+	id?: number;
 }
 
 /** blast of a dead exploder: grows to rMax, hurting whoever the front passes over */
@@ -82,7 +85,10 @@ export interface AiClock {
 	isRaining: boolean;
 	/** +1 every time the clock passes 7:00: non-wave zombies lose the trail then */
 	morningCount: number;
-	/** daytime without rain: footsteps and shots are worth simulating */
+	/**
+	 * The original's "daytime without rain: noise is worth simulating" (sys_sound_view). The AI no longer asks:
+	 * with no blanket night alert, a zombie hears day and night, and the rain only masks (shared/sim/ai/noise.ts).
+	 */
 	soundMatters(): boolean;
 	/** night wave queues (walkers / specials) and which of the three is pouring right now */
 	waveQueues: Array<number>;
@@ -120,8 +126,12 @@ export interface BrainState {
 	killCount: number;
 	/** crowd map of the hunting zombies: the flanking probes price the busy lanes with it */
 	crowd: Flank.Congestion;
-	/** per survivor, in `players` order: how far each sense reaches for THAT survivor this frame */
+	/** per survivor, in `players` order: how far each sense reaches for THAT survivor this frame (pooled) */
 	senses: Array<Sense.SenseRanges>;
+	/** per survivor, in `players` order: the light they carry or stand in this frame (pooled) */
+	beacons: Array<Sense.Beacon>;
+	/** id of the last noise ring emitted in this world */
+	ringSeq: number;
 	tracks: Map<PlayerState, PlayerTrack>;
 }
 
@@ -132,6 +142,8 @@ export function newBrainState(): BrainState {
 		killCount: 0,
 		crowd: new Flank.Congestion(),
 		senses: new Array<Sense.SenseRanges>(),
+		beacons: new Array<Sense.Beacon>(),
+		ringSeq: 0,
 		tracks: new Map<PlayerState, PlayerTrack>(),
 	};
 }
@@ -250,11 +262,12 @@ export function trackOf(refs: AiRefs, p: PlayerState): PlayerTrack {
 	return t;
 }
 
-/** how far each sense reaches against survivor `index` this frame (its Stealth skill is its own) */
+/** senses against nobody: what an index outside the roster answers */
+const NO_SENSES: Sense.SenseRanges = { sight: 0, cone: 0, beam: 0, beamAngle: 0 };
+
+/** how far each sense reaches against survivor `index` this frame (its light and Stealth skill are its own) */
 export function sensesOf(refs: AiRefs, index: number): Sense.SenseRanges {
-	const s = refs.ai.senses[index];
-	if (s !== undefined) return s;
-	return { sight: 0, cone: 0, smell: 0 };
+	return refs.ai.senses[index] ?? NO_SENSES;
 }
 
 // ---------------------------------------------------------------- cosmetic effects (§4.1 Fx)
