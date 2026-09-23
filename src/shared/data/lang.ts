@@ -415,12 +415,9 @@ export const LANG_TABLE: Array<string> = [
 	"Records",
 	"How to play",
 	"Credits",
-	// the credits page (client/ui/credits.ts); its names -- studios, a site, handles -- stay as they are
-	"Top-down zombie survival for Roblox",
-	"Inspired by Dead Town",
-	"by Lemon Puppy Games",
-	"Special thanks (original Dead Town credits)",
-	"Built with roblox-ts",
+	// the credits page (client/ui/credits.ts); its names -- the developer's, the original's -- stay as they are
+	"Developed by",
+	"Inspired by the original",
 	"Thank you for playing!",
 	// Settings window (DESIGN_RULES UI-07): tabs, sections, form rows (label + the one line under it) and notes
 	"General",
@@ -492,7 +489,6 @@ export const LANG_TABLE: Array<string> = [
 	"Mode",
 	"Co-op, up to",
 	"survivors",
-	"Built with",
 	"Open credits",
 	"Your screen",
 	"General: how loud the sounds and the music are, and how big the panels of a run are.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to, on each device.#About: the game and its credits.#A change applies at once and is saved with your progress. Defaults puts a tab back as it came.",

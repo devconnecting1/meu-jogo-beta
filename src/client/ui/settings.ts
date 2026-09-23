@@ -3,6 +3,7 @@ import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
 import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
+import { DEVELOPER, INSPIRED_BY } from "shared/module";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
@@ -607,15 +608,15 @@ export function showSettings(
 		const valueW = LIST_W - 220;
 		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
 		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
-		// CON-01: the original is credited, by name and studio
-		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, "Dead Town (Lemon Puppy Games)");
+		// CON-01: the original is credited by its name, never its studio (the owner's decision, 2026-09-23)
+		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, INSPIRED_BY);
 		// MP-01 / MULTIPLAYER.md: co-op only, MAX_PLAYERS survivors per server
 		textRow(
 			SettingRow(list, "Mode", 3, tr("Mode")),
 			valueW,
 			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
 		);
-		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		textRow(SettingRow(list, "Developer", 4, tr("Developed by")), valueW, DEVELOPER);
 		const openCredits = onCredits;
 		if (openCredits === undefined) return page;
 		const credits = SettingRow(list, "Credits", 5, tr("Credits"));
