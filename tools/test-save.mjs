@@ -1136,6 +1136,33 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	delete olderServer.lifeNights;
 	SAVE.applyWallet(mirror, olderServer);
 	check(mirror.day === 8 && mirror.lifeNights === 2, "uma carteira sem eles (servidor antigo) nao os mexe");
+	// a wallet of an OLDER life, landing after the new one (a push and a ShopAction reply travel on different
+	// remotes): it may not hand the old life's day back
+	const newLife = SAVE.defaultSave();
+	newLife.runRev = 5;
+	newLife.day = 1;
+	newLife.lifeNights = 0;
+	const oldLife = SAVE.walletOf(alive);
+	oldLife.runRev = 4;
+	SAVE.applyWallet(newLife, oldLife);
+	check(
+		newLife.day === 1 && newLife.lifeNights === 0 && newLife.runRev === 5,
+		"uma carteira de uma vida ANTERIOR (runRev menor) nao devolve o dia nem as noites dela",
+		`day ${newLife.day}, nights ${newLife.lifeNights}, runRev ${newLife.runRev}`,
+	);
+	const sameLife = SAVE.walletOf(alive);
+	sameLife.runRev = 5;
+	SAVE.applyWallet(newLife, sameLife);
+	check(newLife.day === 8 && newLife.lifeNights === 2, "uma da mesma vida, sim");
+	const later = SAVE.walletOf(alive);
+	later.runRev = 6;
+	later.day = 1;
+	later.lifeNights = 0;
+	SAVE.applyWallet(newLife, later);
+	check(
+		newLife.day === 1 && newLife.lifeNights === 0 && newLife.runRev === 6,
+		"e uma de uma vida mais NOVA (New game no servidor) tambem",
+	);
 	killer.titles[TIT.TitleId.HordeBreaker] = 0;
 	SAVE.enforceSaveInvariants(killer);
 	checkEq(killer.equipTitle, -1, "um save que nao tem o titulo (documento editado a mao) nao o mostra");

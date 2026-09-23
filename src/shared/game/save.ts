@@ -840,17 +840,27 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 		save.packsOpened[i] = math.min(math.max(save.packsOpened[i] ?? 0, opened[i]), save.packsBought[i]);
 	}
 	save.costumes = readIntArray(w.costumes, COSTUMES.size(), () => 1, save.costumes);
+	// which life this wallet was written in, read BEFORE this copy moves on to it: the life's own numbers below
+	// come only from a wallet of this life or a newer one (-1 = a wallet that does not say)
+	const walletRun = isFiniteNumber(w.runRev) ? math.floor(w.runRev) : -1;
+	const thisLife = walletRun >= save.runRev;
 	save.runRev = math.max(save.runRev, readInt(w.runRev, save.runRev, 0, L.COUNTER_MAX));
 	// MON-05: the earned flags are the server's to state, like `costumes`; the kill count only grows
 	save.titles = readIntArray(w.titles, TITLES.size(), () => 1, save.titles);
 	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
 	// a title the server no longer lists is not shown by this copy either
 	save.equipTitle = validTitle(save, save.equipTitle);
-	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them
-	if (isFiniteNumber(w.lifeNights)) save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
-	// ...and so is the life's day, from the phase the server counts days: its midnight may have refused this
-	// survivor one (dead, absent, AFK), which a client that counted its own midnight would never know
-	if (MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) save.day = readInt(w.day, save.day, 1, L.DAY_MAX);
+	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them;
+	// and so is the life's day, from the phase the server counts days: its midnight may have refused this survivor
+	// one (dead, absent, AFK), which a client that counted its own midnight would never know. Both go back to 0 / 1
+	// with a new life, so unlike the counters above they are REPLACED -- and only by a wallet of this life or a newer
+	// one: a push from the old life landing after the New game's reply (another remote) would hand its day back
+	if (thisLife && isFiniteNumber(w.lifeNights)) {
+		save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
+	}
+	if (thisLife && MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) {
+		save.day = readInt(w.day, save.day, 1, L.DAY_MAX);
+	}
 	// XP and levels are the server's from PROGRESS_SERVER_PHASE on, and nothing else ever told this client: the
 	// HUD's XP bar sat at 0 and a level-up never arrived (owner's playtest, 2026-09-23). Below that phase the
 	// client levels itself and a wallet carrying the last REPORTED copy would roll its XP back, so it is ignored.
