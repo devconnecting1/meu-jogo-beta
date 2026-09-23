@@ -996,7 +996,7 @@ function doRebirth(): void {
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
 	const price = rebirthPrice(ctx.save.deathCount);
 	if (ctx.save.money < price) {
-		toast(ctx, `${tr("Not enough coins")} (need ${fmtInt(price)})`, "error");
+		toast(ctx, `${tr("Not enough coins")}: ${fmtInt(price - ctx.save.money)} ${tr("more needed")}`, "error");
 		return;
 	}
 	if (!net.sessionReady()) {

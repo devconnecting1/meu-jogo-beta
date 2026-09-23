@@ -415,6 +415,13 @@ export const LANG_TABLE: Array<string> = [
 	"Records",
 	"How to play",
 	"Credits",
+	// the credits page (client/ui/credits.ts); its names -- studios, a site, handles -- stay as they are
+	"Top-down zombie survival for Roblox",
+	"Inspired by Dead Town",
+	"by Lemon Puppy Games",
+	"Special thanks (original Dead Town credits)",
+	"Built with roblox-ts",
+	"Thank you for playing!",
 	// Settings window (DESIGN_RULES UI-07): tabs, sections, form rows (label + the one line under it) and notes
 	"General",
 	"Touch controls",
@@ -540,6 +547,8 @@ export const LANG_TABLE: Array<string> = [
 	"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept.",
 	"Purchased",
 	"Not enough coins",
+	// "Not enough coins: 50 more needed" (the Survivor screen's note, the Rebirth toast)
+	"more needed",
 	"Too many packs waiting",
 	"Already owned",
 	"Please wait a moment",
@@ -679,6 +688,8 @@ export const LANG_TABLE: Array<string> = [
 	"HP",
 	"FOOD",
 	"LV",
+	// the touch fire pad's tag (client/ui/hud.ts)
+	"FIRE",
 	"Switch weapon",
 	"Tap a weapon",
 	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor

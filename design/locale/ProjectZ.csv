@@ -387,6 +387,12 @@ Key,Context,Example,Source
 ,,,Records
 ,,,How to play
 ,,,Credits
+,,,Top-down zombie survival for Roblox
+,,,Inspired by Dead Town
+,,,by Lemon Puppy Games
+,,,Special thanks (original Dead Town credits)
+,,,Built with roblox-ts
+,,,Thank you for playing!
 ,,,General
 ,,,Touch controls
 ,,,Controls
@@ -502,6 +508,7 @@ Key,Context,Example,Source
 ,,,"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Purchased
 ,,,Not enough coins
+,,,more needed
 ,,,Too many packs waiting
 ,,,Already owned
 ,,,Please wait a moment
@@ -630,6 +637,7 @@ Key,Context,Example,Source
 ,,,HP
 ,,,FOOD
 ,,,LV
+,,,FIRE
 ,,,Switch weapon
 ,,,Tap a weapon
 ,,,Start

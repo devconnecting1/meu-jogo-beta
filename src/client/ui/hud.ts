@@ -377,7 +377,7 @@ export class Hud {
 		makeLabel(
 			this.fireBtn,
 			"FireTag",
-			"FIRE",
+			this.tr("FIRE"),
 			0,
 			0,
 			L.aim.baseR * 1.48,
