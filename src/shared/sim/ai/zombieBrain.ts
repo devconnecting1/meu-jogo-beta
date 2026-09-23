@@ -232,8 +232,16 @@ function updateNoise(refs: Ctx.AiRefs, dt: number): void {
 			const dy = z.y - s.y;
 			if (dx * dx + dy * dy >= r2) continue;
 			// a chasing zombie has better than a noise to go on, a wave zombie always knows, one walking round a
-			// building to another way in is committed to it (flank.ts orbit), and a ring is heard once
-			if (z.hp <= 0 || z.wave || (id !== 0 && z.heardRing === id) || Mind.chasing(z) || (z.orbit ?? 0) > 0) {
+			// building to another way in is committed to it (flank.ts orbit), and a ring is heard once. Ring ids only
+			// grow, so "once" is "not one older than the last it heard": inside two overlapping rings it answers the
+			// newer, instead of the two taking turns every tick and renewing the walk there for ever
+			if (
+				z.hp <= 0 ||
+				z.wave ||
+				(id !== 0 && id <= (z.heardRing ?? 0)) ||
+				Mind.chasing(z) ||
+				(z.orbit ?? 0) > 0
+			) {
 				continue;
 			}
 			// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks

@@ -926,6 +926,50 @@ function testMemory() {
 			`a place behind a long wall: it searches where it got stuck after ${((searchAt - suspAt) * DT).toFixed(1)} s`,
 		);
 	}
+	// two shots at once from two places behind that wall: the rings overlap round the zombie, and each is heard
+	// ONCE (the newer wins) -- they used to take turns every tick, renewing the walk so it never gave up on it
+	{
+		setSeed(SEED);
+		const world2 = W.createWorld(4000, 4000);
+		wall(world2, 1000, 1700, 2000, 32);
+		const refs2 = makeRefs(world2, 2000, 3500);
+		const zz = still(addZombie(refs2, 1, 2000, 1500, Math.PI / 2));
+		zombieAI.emitSound(refs2, 1880, 1900, 900, true);
+		zombieAI.emitSound(refs2, 2120, 1900, 900, true);
+		let changes = 0;
+		let lx;
+		let ly;
+		let suspAt = -1;
+		const searchAt = framesUntil(
+			refs2,
+			60 * 10,
+			() => awareOf(zz) === 2,
+			f => {
+				if (suspAt < 0 && awareOf(zz) === 1) suspAt = f;
+				if (zz.lastSeenX !== lx || zz.lastSeenY !== ly) {
+					changes += 1;
+					lx = zz.lastSeenX;
+					ly = zz.lastSeenY;
+				}
+			},
+		);
+		check(
+			changes <= 3 && searchAt > 0 && (searchAt - suspAt) * DT < memoryMod.GOTO_STALL + 4,
+			`two overlapping rings: the place it goes to changed ${changes} time(s), and it still gives up on the wall after ${((searchAt - suspAt) * DT).toFixed(1)} s`,
+		);
+	}
+	// a report leaves `lostFor` at the grace: a second one in the same tick is still taken; a chase ignores both
+	{
+		const m = { detect: false };
+		memoryMod.report(m, 10, 10);
+		memoryMod.report(m, 400, 400);
+		const hunting = { detect: true, lostFor: 0.1, lastSeenX: 1, lastSeenY: 1 };
+		memoryMod.report(hunting, 400, 400);
+		check(
+			m.lastSeenX === 400 && hunting.lastSeenX === 1,
+			"two reports in one tick: the second place is taken; a zombie in a chase keeps its own sighting",
+		);
+	}
 }
 
 // ---------------------------------------------------------------- 3. group alert

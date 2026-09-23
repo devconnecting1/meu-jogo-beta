@@ -132,12 +132,24 @@ export function chasing(m: ZombieMemory): boolean {
  * suspicious or searching one takes the newer place.
  */
 export function report(m: ZombieMemory, x: number, y: number): void {
-	if (m.detect && (m.lostFor ?? 0) <= LOST_GRACE) return;
+	// `<`, as in `chasing`: a report leaves lostFor AT the grace, and a second one in the same tick (a glimpse and a
+	// noise) must still be taken, not mistaken for a chase
+	if (m.detect && (m.lostFor ?? 0) < LOST_GRACE) return;
+	const lx = m.lastSeenX;
+	const ly = m.lastSeenY;
+	// the same place again while walking there (a noise repeated, a glimpse held) keeps the walk's progress, so a
+	// place it cannot reach is still given up on after GOTO_STALL instead of being renewed for ever
+	const same =
+		m.detect &&
+		m.searchTimer === undefined &&
+		lx !== undefined &&
+		ly !== undefined &&
+		(lx - x) * (lx - x) + (ly - y) * (ly - y) <= SEARCH_ARRIVE * SEARCH_ARRIVE;
 	m.detect = true;
 	m.lastSeenX = x;
 	m.lastSeenY = y;
 	m.lostFor = LOST_GRACE;
-	clearSearch(m);
+	if (!same) clearSearch(m);
 }
 
 /** forget everything and go back to wandering (7:00, leash, end of a search) */
