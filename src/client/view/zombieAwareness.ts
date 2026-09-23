@@ -14,16 +14,17 @@
  * ~0.3 s; with Reduce Motion only the rim, never a movement), and a zombie that gives up lets its "?" fade.
  *
  * It sits above the head and is never drawn over a survivor: a mark that would cover one slides sideways, away
- * from them. The layer lies above the night overlay (the mark must read at night) and under the nameplates; a
- * zombie's mark is only as visible as the zombie (its `alpha`: nothing is revealed in the dark that the body did
- * not already show), and one under a roof that is closed is not drawn at all (EDI-04).
+ * from them. The layer lies above the night overlay (the mark must read at night) and under the nameplates, so it
+ * reveals nothing the night hides: a mark is only as visible as the zombie (its `alpha`) AND, at night, only as
+ * bright as this screen's light on the ground under it (`MarkNight`, the light map's own lights through `lightAt`);
+ * one under a roof that is closed is not drawn at all (EDI-04).
  *
  * Pooled: one Renderer, no Instance per frame after the warm-up. No text (UI-04), no theme colour: these are
  * world art, like the zombies themselves (UI-01 is about the interface).
  */
 import { Camera, ViewRect } from "shared/engine/camera";
 import { COLORS, ICON_ART } from "shared/engine/colors";
-import { Renderer } from "shared/engine/renderer";
+import { lightAt, LightSource, Renderer } from "shared/engine/renderer";
 import { ZombieState, zombieRadius } from "shared/game/entities";
 import { querySolids, Solid, WorldData } from "shared/game/world";
 
@@ -48,6 +49,15 @@ export const SEARCH_TILT_SPEED = 3;
 export const SURVIVOR_CLEAR = 40;
 /** a roof at least this opaque hides the zombie under it, and so its mark */
 const ROOF_HIDES = 0.5;
+/**
+ * At night a mark is only as bright as the ground under its zombie on THIS screen (`lightAt` over the light map's own
+ * lights): from NIGHT_FROM darkness it starts to follow the light, from NIGHT_FULL it is the light, and below
+ * NIGHT_MIN it is not drawn. The body's `alpha` alone is not enough in multiplayer: there it only says the server
+ * sent the zombie, and an ally's flashlight 450 u away sends one that is dark here (IA-05, the review of 66f6373).
+ */
+export const NIGHT_FROM = 0.3;
+export const NIGHT_FULL = 0.6;
+export const NIGHT_MIN = 0.1;
 /** the solids around one point, reused: a frame of marks allocates nothing */
 const around: Array<Solid> = [];
 
@@ -205,6 +215,12 @@ export interface MarkAvoid {
 	y: number;
 }
 
+/** the night this screen draws: its darkness (the light map's 0..1) and the lights that light it */
+export interface MarkNight {
+	dark: number;
+	lights: ReadonlyArray<LightSource>;
+}
+
 export class AwarenessMarks {
 	readonly renderer: Renderer;
 	private readonly marks = new Map<number, MarkState>();
@@ -225,7 +241,8 @@ export class AwarenessMarks {
 
 	/**
 	 * One frame of marks. `avoid[0]` is the local survivor (the idle dots are measured from them); every entry is
-	 * a body a mark must never cover. `world` lets a roof hide what is under it (undefined: nothing is hidden).
+	 * a body a mark must never cover. `world` lets a roof hide what is under it (undefined: nothing is hidden), and
+	 * `night` dims a mark to the light on the ground under its zombie (undefined: daylight).
 	 */
 	draw(
 		cam: Camera,
@@ -234,7 +251,10 @@ export class AwarenessMarks {
 		avoid: ReadonlyArray<MarkAvoid>,
 		dt: number,
 		world?: WorldData,
+		night?: MarkNight,
 	): void {
+		const nightK =
+			night !== undefined ? math.clamp((night.dark - NIGHT_FROM) / (NIGHT_FULL - NIGHT_FROM), 0, 1) : 0;
 		const r = this.renderer;
 		this.frame += 1;
 		r.setView(cam.viewW, cam.viewH);
@@ -257,7 +277,7 @@ export class AwarenessMarks {
 				m.t += dt;
 			}
 			m.seen = this.frame;
-			const alpha = math.clamp(z.alpha, 0, 1);
+			let alpha = math.clamp(z.alpha, 0, 1);
 			if (alpha <= 0.02) continue;
 			const rad = zombieRadius(z);
 			if (
@@ -269,6 +289,12 @@ export class AwarenessMarks {
 				continue;
 			}
 			if (world !== undefined && underRoof(world, z.x, z.y)) continue;
+			if (night !== undefined && nightK > 0) {
+				// as lit as the ground it stands on, on this screen: nothing the night hides here is revealed
+				const lit = 1 - nightK * (1 - lightAt(night.lights, z.x, z.y));
+				if (lit < NIGHT_MIN) continue;
+				alpha *= lit;
+			}
 			// what to draw, how big and how opaque
 			let shown = m.aware;
 			let k = alpha;

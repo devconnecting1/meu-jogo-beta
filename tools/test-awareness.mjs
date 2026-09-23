@@ -34,7 +34,8 @@ const gui = installFakeGui();
 
 const { COLORS, Z } = require(join(SRC, "shared/engine/colors.ts"));
 const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
-const { Renderer, LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
+const R = require(join(SRC, "shared/engine/renderer.ts"));
+const { Renderer, LightMap } = R;
 const W = require(join(SRC, "shared/game/world.ts"));
 const { createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
 const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
@@ -119,6 +120,7 @@ function markRects(st) {
 			y1: cy + sy / 2,
 			color: rgb(f.BackgroundColor3),
 			z: f.ZIndex,
+			alpha: 1 - f.BackgroundTransparency,
 		});
 	}
 	return out;
@@ -276,6 +278,43 @@ section("4. WHO: the idle dot only near you; nothing the dark or a roof hides");
 		markRects(st).length === 0,
 		"a zombie the dark hides (alpha 0) has no mark: the mark reveals nothing the body did not",
 	);
+	// MP_PHASE 2: `alpha` is only "the server sent it" (an ally's flashlight lit it over there); on THIS screen the
+	// mark follows this screen's light on the ground under the zombie (MarkNight: the light map's own lights)
+	{
+		const deep = darkAlphaAt(23, false, false);
+		const sent = zombieAt(2300, 2000, 3); // 300 u east of you: past your own 250 u light
+		const markAlpha = () => Math.max(0, ...markRects(st).map(r => r.alpha));
+		const drawNight = (dark, lights) => {
+			st.marks.draw(st.cam, st.cam.viewRect(32), [sent], [me], DT, undefined, { dark, lights });
+			return markAlpha();
+		};
+		const mine = { x: 2000, y: 2000, r: 250, inner: 0.4 };
+		const unlit = drawNight(deep, [mine]);
+		check(unlit === 0, "night, sent by the server (alpha 1), no light over it here: no mark");
+		const beamEast = { x: 2000, y: 2000, r: 560, inner: 0.35, angle: 0, cone: Math.PI / 4 };
+		const beamSouth = { ...beamEast, angle: Math.PI / 2 };
+		const inBeam = drawNight(deep, [mine, beamEast]);
+		const offBeam = drawNight(deep, [mine, beamSouth]);
+		const beamLight = R.lightAt([beamEast], sent.x, sent.y);
+		check(
+			inBeam > 0.5 && Math.abs(inBeam - beamLight) < 0.02 && offBeam === 0,
+			`...your flashlight on it: the mark, as bright as the beam there (${inBeam.toFixed(2)} = ${beamLight.toFixed(2)}); aimed away: none`,
+		);
+		const edge = drawNight(deep, [{ x: 2000, y: 2000, r: 400, inner: 0.4 }]);
+		check(
+			edge > 0 && edge < inBeam,
+			`...at the fringe of a light it is as dim as the ground there (${edge.toFixed(2)}; lightAt ${R.lightAt([{ x: 2000, y: 2000, r: 400, inner: 0.4 }], 2300, 2000).toFixed(2)})`,
+		);
+		check(drawNight(0.2, [mine]) > 0.9, "...and at dusk, before the night hides anything, it is drawn in full");
+		check(
+			R.lightAt([mine], 2000, 2000) === 1 &&
+				R.lightAt([mine], 2250, 2000) === 0 &&
+				R.lightAt([beamEast], 2000, 2300) === 0 &&
+				R.lightAt([beamEast], 2150, 2000) === 1 &&
+				R.lightAt([beamEast], 2600, 2000) === 0,
+			"lightAt is the light map's rule: full in the core, 0 at the radius and outside a cone",
+		);
+	}
 	// under a closed roof
 	const world = W.createWorld(4000, 4000);
 	W.addSolid(world, {
@@ -336,10 +375,13 @@ section("5. MOTION: a change pops in; Reduce Motion never moves");
 		"with Reduce Motion the mark never changes size",
 	);
 	check(pop[0].rim && still[0].rim && !still[25].rim, "the white rim flashes on the change either way, then goes");
-	const tilt = size(false, 2, 60);
-	const tiltStill = size(true, 2, 60);
+	// a whole tilt period (2π / SEARCH_TILT_SPEED ≈ 2.1 s) after the pop: the phase is per zombie id, so a shorter
+	// window could land on a stretch where the "?" is as wide going one way as the other
+	const tilt = size(false, 2, 150);
+	const tiltStill = size(true, 2, 150);
 	const spread = xs => Math.max(...xs) - Math.min(...xs);
-	check(spread(tilt.slice(20).map(s => s.w)) > 0.5, "a searching '?' tilts while it looks round");
+	const tiltW = spread(tilt.slice(20).map(s => s.w));
+	check(tiltW > 0.5, `a searching '?' tilts while it looks round (its width swings ${tiltW.toFixed(1)} px)`);
 	check(spread(tiltStill.map(s => s.w)) < 0.01, "...and stands still with Reduce Motion");
 	// giving up: the "?" fades, then nothing (the zombie is far from the survivor, so no dot either)
 	const st = stage(300, 300);
@@ -485,16 +527,15 @@ function shot(world, cx, cy, vw, vh, hour, zombies, survivors, marks, zoom = 1, 
 	}
 	st.renderer.endFrame();
 	const darkness = darkAlphaAt(hour, false, false);
+	// the lights the map draws are the ones the marks are dimmed by (GameLoop.drawLight → drawAwareness)
+	const lights = survivors.map(p => ({ x: p.x, y: p.y, r: 250, inner: 0.4 }));
 	if (darkness > 0.004) {
 		const lm = new LightMap(st.dark, COLORS.overlayNight);
-		lm.update(
-			st.cam,
-			darkness,
-			survivors.map(p => ({ x: p.x, y: p.y, r: 250, inner: 0.4 })),
-		);
+		lm.update(st.cam, darkness, lights);
 	}
 	return {
 		st,
+		night: { dark: darkness > 0.004 ? darkness : 0, lights },
 		img: () =>
 			rasterise(
 				{ layer: st.renderer.layer, dark: st.dark, over: [st.marks.renderer.layer], vw: st.vw, vh: st.vh },
@@ -569,7 +610,8 @@ function statesPicture(dir) {
 			const s = shot(world, at.x + 20, at.y + 10, TW - 10, TH - 10, hour, [z], [me]);
 			s.st.marks.reduceMotion = true;
 			// a few frames so the searching "?" has its settled look; Reduce Motion keeps it upright for the picture
-			for (let f = 0; f < 3; f++) s.st.marks.draw(s.st.cam, s.st.cam.viewRect(32), [z], [me], DT);
+			for (let f = 0; f < 3; f++)
+				s.st.marks.draw(s.st.cam, s.st.cam.viewRect(32), [z], [me], DT, undefined, s.night);
 			blit(img, s.img(), LEFT + c * TW + 5, HEAD + r * TH + 5);
 		}
 	});

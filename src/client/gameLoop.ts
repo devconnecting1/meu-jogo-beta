@@ -66,7 +66,7 @@ import { FootCycle } from "./view/footsteps";
 import { circleInView, part } from "./view/drawKit";
 import { WorldView } from "./view/worldView";
 import { ageFlinches } from "./view/solidFlinch";
-import { AwarenessMarks, MarkAvoid } from "./view/zombieAwareness";
+import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import { reducedMotion } from "./ui/skin";
 
 const Players = game.GetService("Players");
@@ -385,6 +385,8 @@ export class GameLoop {
 	private awareness?: AwarenessMarks;
 	/** the bodies a mark must never cover, refilled in place: the local survivor first, then the allies */
 	private readonly markAvoid = new Array<MarkAvoid>();
+	/** the night the light map drew this frame: a mark is only as bright as the ground under its zombie (IA-05) */
+	private readonly markNight: MarkNight = { dark: 0, lights: this.lights };
 	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
 	private readonly selfBody = { x: 0, y: 0 };
 	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
@@ -955,7 +957,7 @@ export class GameLoop {
 		}
 		while (avoid.size() > n) avoid.pop();
 		marks.reduceMotion = reducedMotion();
-		marks.draw(cam, v, this.refs.zombies, avoid, this.lastDt, this.world);
+		marks.draw(cam, v, this.refs.zombies, avoid, this.lastDt, this.world, this.markNight);
 	}
 
 	private putAvoid(i: number, x: number, y: number): void {
@@ -1031,6 +1033,8 @@ export class GameLoop {
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
 		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
+		// the awareness marks follow this very darkness and these very lights (drawAwareness)
+		this.markNight.dark = dark > 0.004 ? dark : 0;
 		if (dark <= 0.004) {
 			this.lightMap.hide();
 			return;

@@ -687,6 +687,38 @@ function falloff(d: number, r0: number, r: number): number {
 }
 
 /**
+ * The light (0..1) at the WORLD point (x, y), by the rule the LightMap samples its lattice with: the brightest of
+ * `lights`, each full to its core and fading by `falloff` to 0 at its radius, a cone feathered to 0 at its edge.
+ * For what has to read exactly as lit as the ground under it (the zombies' awareness marks, IA-05: a mark never
+ * shows at night where the screen shows no light). Allocation-free.
+ */
+export function lightAt(lights: ReadonlyArray<LightSource>, x: number, y: number): number {
+	let best = 0;
+	for (const l of lights) {
+		const k = clamp01(l.k ?? 1);
+		const r = l.r;
+		if (k <= best || r < 1) continue;
+		const dx = x - l.x;
+		const dy = y - l.y;
+		const d2 = dx * dx + dy * dy;
+		if (d2 >= r * r) continue;
+		const d = math.sqrt(d2);
+		let v = k * falloff(d, math.min(r * (l.inner ?? 0.45), r - 1), r);
+		const cone = l.cone;
+		if (cone !== undefined && cone < math.pi && v > 0) {
+			const a = l.angle ?? 0;
+			const co = math.cos(cone);
+			const ci = math.cos(math.max(0, cone - CONE_FEATHER));
+			const cosOff = d > 1e-6 ? (dx * math.cos(a) + dy * math.sin(a)) / d : 1;
+			if (cosOff <= co) continue;
+			if (cosOff < ci) v *= 1 - falloff(cosOff, co, ci);
+		}
+		if (v > best) best = v;
+	}
+	return best;
+}
+
+/**
  * Screen-space light map for the night: full-width horizontal strips of the night colour, each with
  * a UIGradient whose transparency follows the light across the strip, so every light has a smooth
  * round edge instead of the blocks of a cell grid. Opacity = maxDark × (1 − light), where light is
