@@ -39,6 +39,8 @@ const { ownedWeapons } = require(join(SRC, "client/systems/combat.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { computeTouchLayout, MIN_TOUCH_PX } = require(join(SRC, "shared/engine/input.ts"));
 const { THEME, SURFACE, BAR, STAT, GAME } = require(join(SRC, "client/ui/theme.ts"));
+const { iconOf } = require(join(SRC, "shared/data/itemIcons.ts"));
+const { iconFrameCount } = require(join(SRC, "client/ui/itemIcon.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -131,8 +133,14 @@ const raised = host => band(host)?.Visible === true && sameColor(band(host).Back
 const ringed = host => band(host)?.Visible === true && sameColor(band(host).BackgroundColor3, SURFACE.line);
 const barLabel = name => deep(consoleFrame(), `${name}Bar`)?.FindFirstChild("Value");
 const barFill = name => deep(deep(consoleFrame(), `${name}Bar`), "Fill");
-const letter = k => deep(tile(k), "Letter")?.Text;
-const glyphShown = k => deep(tile(k), "Glyph")?.Visible === true;
+/** the pixel icon a tile shows (DESIGN_RULES UI-11: the Bag's and the item card's drawing), undefined when hidden */
+const iconKey = k => {
+	const view = deep(tile(k), "ItemIcon");
+	return view?.Visible === true && view.GetAttribute("Icon") !== "" ? view.GetAttribute("Icon") : undefined;
+};
+/** the Frames of that icon that show (a view keeps the rest of its pool hidden) */
+const iconFrames = k => (deep(tile(k), "ItemIcon")?.GetChildren() ?? []).filter(f => f.Visible).length;
+const weaponIcon = id => iconOf(1, id).key;
 const keyLegend = k => {
 	const key = tile(k)?.FindFirstChild("Key");
 	return key?.Visible === true ? key.FindFirstChild("Legend")?.Text : undefined;
@@ -142,19 +150,21 @@ const ammo = k => {
 	return chip?.Visible === true ? chip.FindFirstChild("Count") : undefined;
 };
 
-/** what the hotbar shows, tile by tile: a weapon's initial, or "_" for an empty socket */
+/** what the hotbar shows, tile by tile: a weapon's icon, or "_" for an empty socket */
 function hotbar() {
 	const out = [];
-	for (let k = 0; k < 5; k++) out.push(glyphShown(k) ? letter(k) : "_");
+	for (let k = 0; k < 5; k++) out.push(iconKey(k) ?? "_");
 	return out.join(" ");
 }
-/** what it SHOULD show: the first five of ownedWeapons, by the same initial */
+/** what it SHOULD show: the first five of ownedWeapons, by the icon the Bag draws for each */
 function expected(weaponId) {
 	const list = ownedWeapons(refs(weaponId));
 	const out = [];
-	for (let k = 0; k < 5; k++) out.push(list[k] === undefined ? "_" : WEAPONS[list[k]].name.sub(1, 1).upper());
+	for (let k = 0; k < 5; k++) out.push(list[k] === undefined ? "_" : weaponIcon(list[k]));
 	return out.join(" ");
 }
+const DAP = [weaponIcon(DAGGER), weaponIcon(AXE), weaponIcon(PISTOL), "_", "_"].join(" ");
+const DABP = [weaponIcon(DAGGER), weaponIcon(AXE), weaponIcon(BAT), weaponIcon(PISTOL), "_"].join(" ");
 
 // ---------------------------------------------------------------- 1) desktop: mount, then 600 frames
 
@@ -239,7 +249,7 @@ console.log("\n2) a hotbar e a lista das teclas 1-5 (ownedWeapons), na ordem\n")
 hud.update(state());
 check(
 	"3 armas: Dagger, Axe, Pistol e dois soquetes vazios",
-	hotbar() === expected(PISTOL) && hotbar() === "D A P _ _",
+	hotbar() === expected(PISTOL) && hotbar() === DAP,
 	`${hotbar()} / esperado ${expected(PISTOL)}`,
 );
 check(
@@ -260,8 +270,14 @@ check(
 	[0, 1, 2, 3, 4].map(keyLegend).join(","),
 );
 check(
-	"o glifo e o do Bag e do cartao de item (a inicial num poco contornado no tom de arma)",
-	letter(0) === "D" && letter(2) === "P",
+	"o icone e o do Bag e do cartao de item (UI-11: o mesmo desenho de pixel, nunca a inicial)",
+	iconKey(0) === weaponIcon(DAGGER) && iconKey(2) === weaponIcon(PISTOL) && deep(tile(0), "Letter") === undefined,
+	`${iconKey(0)} / ${iconKey(2)}`,
+);
+check(
+	"cada ladrilho mostra exatamente os Frames do seu icone",
+	[0, 1, 2].every(k => iconFrames(k) === iconFrameCount(iconKey(k))),
+	[0, 1, 2].map(k => `${iconKey(k)} ${iconFrames(k)}`).join(", "),
 );
 
 hud.update(state({ weaponId: AXE, weaponName: "Axe", magSize: 0, mag: 0 }));
@@ -278,7 +294,7 @@ const pickup = phase("pega o Baseball bat (a lista ganha um item no meio)", () =
 });
 check(
 	"a arma nova aparece no lugar dela, e as outras seguem as teclas",
-	hotbar() === expected(PISTOL) && hotbar() === "D A B P _",
+	hotbar() === expected(PISTOL) && hotbar() === DABP,
 	`${hotbar()} / esperado ${expected(PISTOL)}`,
 );
 check(
@@ -290,7 +306,7 @@ check("o azul segue a Pistol, agora na tecla 4", sameColor(face(tile(3)), THEME.
 
 save.invenWeapon[BAT] = 0;
 const loss = phase("perde o Baseball bat", () => hud.update(state()));
-check("perder uma arma reescreve os ladrilhos no lugar", zero(loss) && hotbar() === "D A P _ _", hotbar());
+check("perder uma arma reescreve os ladrilhos no lugar", zero(loss) && hotbar() === DAP, hotbar());
 
 // more weapons than keys: the hotbar shows what the keys reach, and no more
 save.invenWeapon[1] = 1;
@@ -308,7 +324,7 @@ check(
 );
 for (const id of [1, 3, BAT]) save.invenWeapon[id] = 0;
 hud.update(state());
-check("de volta a 3 armas", hotbar() === "D A P _ _", hotbar());
+check("de volta a 3 armas", hotbar() === DAP, hotbar());
 
 // ---------------------------------------------------------------- 3) a click is a key press
 
@@ -337,7 +353,7 @@ check(
 const list = ownedWeapons(refs(PISTOL));
 check(
 	"e o ladrilho k mostra a arma que o combate pega para k (ownedWeapons[k])",
-	[0, 1, 2].every(k => letter(k) === WEAPONS[list[k]].name.sub(1, 1).upper()),
+	[0, 1, 2].every(k => iconKey(k) === weaponIcon(list[k])),
 );
 deep(consoleFrame(), "Bag").Activated.Fire();
 deep(consoleFrame(), "Menu").Activated.Fire();
