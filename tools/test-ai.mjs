@@ -671,6 +671,25 @@ function testSight() {
 			"shining a flashlight on a zombie's back gives you away; pointing it elsewhere does not",
 		);
 	}
+	// (h2) a corpse holds no torch: a dead survivor lights no zombie, so none is drawn or sent (MP-07) by it
+	{
+		const alphaBeside = dead => {
+			setSeed(SEED);
+			const world = W.createWorld(3000, 3000);
+			const refs = makeRefs(world, 1500, 1500, { night: true });
+			holdLight(refs, 15);
+			refs.player.dead = dead;
+			const z = still(addZombie(refs, 1, 1500, 1400, Math.PI / 2));
+			run(refs, 60);
+			return z.alpha;
+		};
+		const alive = alphaBeside(false);
+		const corpse = alphaBeside(true);
+		check(
+			alive > 0.9 && corpse < 0.05,
+			`night, a zombie 100 u from a torch: lit while its bearer lives (alpha ${alive.toFixed(2)}), dark beside their body (${corpse.toFixed(2)})`,
+		);
+	}
 	// (i) touch: this close, whatever it faces
 	{
 		setSeed(SEED);

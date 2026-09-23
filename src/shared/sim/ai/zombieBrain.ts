@@ -452,6 +452,9 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 
 	lightCount = 0;
 	for (const p of refs.players) {
+		// a corpse holds no torch: a dead survivor lit the zombies round their body, and so put them on the wire
+		// to everyone in range (MP-07) while every screen drew that spot dark
+		if (!Light.carriesLight(p)) continue;
 		const save = refs.saveOf(p);
 		// the survivor's own light, by the ONE rule the client's light map draws too (shared/sim/survivorLight.ts,
 		// LUZ-04): Nocturnal, the torch and night vision widen the circle; the flashlight adds its cone

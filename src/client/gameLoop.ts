@@ -1042,7 +1042,7 @@ export class GameLoop {
 		const lights = this.lights;
 		lights.clear();
 		const p = this.player;
-		if (!p.dead) {
+		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
 			lights.push({ x: p.x, y: p.y, r: SurvivorLight.survivorLightRadius(save), inner: 0.4 });
