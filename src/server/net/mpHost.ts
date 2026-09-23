@@ -22,6 +22,7 @@ import {
 	TIME_SYNC_RATE,
 } from "shared/net/mpConfig";
 import { IntentKind, LifeState, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
+import { createPlayer } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import {
@@ -92,6 +93,16 @@ export interface MpHost {
 	world: WorldData;
 	/** the server entity of a connected player, or undefined when they are not in the world */
 	playerOf(player: Player): ServerPlayer | undefined;
+	/**
+	 * Put a dead survivor back in the world at a safe spawn point (§7.1), after the economy accepted a
+	 * rebirth or a new run.
+	 *
+	 * The save says the run continues; this is what makes the SIMULATED survivor agree. Without it the
+	 * coins were spent, `runOver` went false, and the body stayed dead -- the client set its own hp back
+	 * and the very next snapshot overwrote it, so the button looked like it did nothing.
+	 */
+	revive(player: Player): boolean;
+
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
 	stop(): void;
@@ -265,6 +276,29 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		bySlot.delete(slot);
 		sim.remove(slot);
 		replicator.left(slot);
+	}
+
+	/** §7.1 again, for a survivor who is already admitted: fresh state, safe point, and the roster told */
+	function revivePlayer(player: Player): boolean {
+		const link = links.get(player);
+		const slot = link?.slot;
+		if (link === undefined || slot === undefined) return false;
+		const sp = sim.get(slot);
+		if (sp === undefined) return false;
+		const allies = new Array<{ x: number; y: number }>();
+		for (const other of sim.players()) {
+			if (other.slot !== slot && !other.state.dead) allies.push({ x: other.state.x, y: other.state.y });
+		}
+		const spawn = findSpawnPoint(world, { allies, zombies: sim.horde?.zombies ?? [] });
+		// a fresh state from the same save is exactly what admit() builds, so a revived survivor and a
+		// joining one are the same thing -- no second definition of "alive" to drift
+		sp.state = createPlayer(sp.save, spawn.x, spawn.y);
+		replicator.life(slot, LifeState.Up);
+		print(
+			`[${GAME_NAME}] ${player.Name} is back in the world in slot ${slot} at ` +
+				`(${string.format("%.0f", spawn.x)}, ${string.format("%.0f", spawn.y)})`,
+		);
+		return true;
 	}
 
 	function release(player: Player): void {
@@ -447,6 +481,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		replicator,
 		remotes,
 		world,
+		revive(player) {
+			return revivePlayer(player);
+		},
 		playerOf(player) {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;

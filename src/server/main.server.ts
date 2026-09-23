@@ -787,6 +787,9 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		// a rebirth continues the same run: an assisted run stays assisted
 		if (s.assistedRunRev === save.runRev) s.assistedRunRev = save.runRev + 1;
 		save.runRev += 1;
+		// the SAVE says the run continues; this is what makes the simulated survivor agree (§7.1). Without
+		// it the coins were gone and the body stayed dead, so the button looked like it did nothing.
+		mpHost?.revive(player);
 	} else if (req.kind === "newRun") {
 		// give up the current run: day 1 with the starter kit (level, skills, coins, packs stay)
 		if (req.runRev !== save.runRev) return fail("outdated", s);
@@ -794,6 +797,7 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		resetRun(save);
 		save.runRev += 1;
 		s.assistedRunRev = undefined;
+		mpHost?.revive(player);
 	} else {
 		return fail("invalid", s);
 	}
