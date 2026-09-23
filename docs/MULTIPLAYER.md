@@ -378,7 +378,7 @@ O drop de zumbi usa a skill do **matador** (`skillLevels[9]`). O loot de prédio
 | `Snap`                    | Unreliable     | S→C     | `buffer` ≤ 900 B por parte (1–2 partes por snapshot, cada parte **autocontida**)                                                                                             | 20/s no anel próximo (a cada 3 ticks); zumbis do anel médio entram por completo a cada 2 pacotes, em rodízio → 10 Hz por entidade |
 | `Fx`                      | Unreliable     | S→C     | Lote por tick: `ShotResult`, `ProjSpawn/End`, sangue, impacto, explosão, tremida de sólido, som                                                                              | ≤ 60/s                                                                                                                            |
 | `World`                   | RemoteEvent    | S→C     | Deltas do mundo (seção 4.5), `WorldInit` em blocos, relógio, anúncios, morte de zumbi, entrada e saída de jogador, derrubado/reviveu/morreu                                  | Lote por tick, só quando há algo                                                                                                  |
-| `Self`                    | RemoteEvent    | S→C     | Espelho do save próprio: deltas de inventário, XP/nível/skills, conquistas, carteira. *Até ele existir, a mochila vai no `bag` da carteira empurrada pelo `SaveAck` (§4.8).* | Sob demanda                                                                                                                       |
+| `Self`                    | RemoteEvent    | S→C     | Espelho do save próprio: deltas de inventário, XP/nível/skills, conquistas, carteira. _Até ele existir, a mochila vai no `bag` da carteira empurrada pelo `SaveAck` (§4.8)._ | Sob demanda                                                                                                                       |
 | `SaveRequest` / `SaveAck` | —              | —       | **Removidos na F3**                                                                                                                                                          | —                                                                                                                                 |
 
 Regra geral: tudo que for contínuo ou efêmero e se autocorrige no próximo pacote vai em **Unreliable**. Tudo que muda estado persistente do mundo ou do jogador e não pode se perder vai em **RemoteEvent** (confiável e ordenado).
@@ -484,14 +484,14 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 
 ### 4.8 Verbos da mochila no fio (F3; bugs NET-1..6 da varredura de QA)
 
-A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.ts`). O cliente **pede** pelo `Intent` e **espelha** o que o servidor devolve na carteira. Nada da mochila sobe mais no relatório (§8.4).
+A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.ts`; **2 desde 2026-09-23**, igual a `MP_PHASE`: a mesma chave liga o mundo interativo no servidor). O cliente **pede** pelo `Intent` e **espelha** o que o servidor devolve na carteira. Nada da mochila sobe mais no relatório (§8.4).
 
 **C→S — `Intent` (RemoteEvent confiável e ordenado; `shared/net/intentWire.ts`, reexportado por `protocol.ts`):**
 
-| Forma | Bytes | Campos | Verbos |
-|---|---|---|---|
-| Presença | 2 | `0x60` (PacketKind.Intent na nibble alta), verbo | `EnterWorld` 1, `LeaveWorld` 2 |
-| Mochila | 8 | `0x60`, verbo, `atSeq u16`, `arg u16`, `nonce u16` | `Craft` 3 (receita), `UseItem` 4 (usável), `Equip` 5 (EQUIPS), `Unequip` 6 (slot 1–5), `LearnSkill` 7 (skill), `SwitchWeapon` 8 (arma) |
+| Forma    | Bytes | Campos                                             | Verbos                                                                                                                                 |
+| -------- | ----- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Presença | 2     | `0x60` (PacketKind.Intent na nibble alta), verbo   | `EnterWorld` 1, `LeaveWorld` 2                                                                                                         |
+| Mochila  | 8     | `0x60`, verbo, `atSeq u16`, `arg u16`, `nonce u16` | `Craft` 3 (receita), `UseItem` 4 (usável), `Equip` 5 (EQUIPS), `Unequip` 6 (slot 1–5), `LearnSkill` 7 (skill), `SwitchWeapon` 8 (arma) |
 
 - **`arg`** é conferido na decodificação contra a tabela do verbo (`intentArgRange`): fora dela o pacote é **malformado**, como um comprimento errado, um verbo de presença com 8 B ou um da mochila com 2 B.
 - **`atSeq`** é o `seq` do **primeiro comando simulado com a mudança** (§2.4): o servidor aplica o verbo logo antes de simular esse comando — movimento **e** máquina da arma —, então "troquei e atirei" nunca vira "atirei com a arma velha". Chegou atrasado (o comando já foi consumido): aplica no próximo tick. Chegou adiantado: espera o comando no máximo `INTENT_HOLD_TICKS` (30 ticks, 0,5 s).
@@ -501,18 +501,27 @@ A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.
 
 **S→C — o `bag` da carteira (`shared/game/save.ts` `BagMirror`), empurrado pelo `SaveAck` (`push: true`) até o `Self` existir:**
 
-| Campo | Conteúdo |
-|---|---|
-| `invenWeapon`, `invenEquip`, `invenUse`, `invenEtc` | contagens do inventário do servidor |
-| `ammo` | `ammoNormal, ammoShotgun, ammoMachinegun, ammoArrow, oil, electric` |
-| `equip` | `equipWeapon, equipCloth, equipHand, equipGun, equipOutfit, equipPet` |
-| `skillLevels`, `skillPoint` | as skills |
-| `place` | a construção no cursor do servidor (PLACEABLES, −1 = nenhuma) |
-| `ack` | o `nonce` do último verbo que o servidor **tratou** (aplicou ou recusou) |
-| `seq` | o último comando consumido quando o `bag` foi escrito (−1 = fora do mundo) |
+| Campo                                               | Conteúdo                                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------------------- |
+| `invenWeapon`, `invenEquip`, `invenUse`, `invenEtc` | contagens do inventário do servidor                                        |
+| `ammo`                                              | `ammoNormal, ammoShotgun, ammoMachinegun, ammoArrow, oil, electric`        |
+| `equip`                                             | `equipWeapon, equipCloth, equipHand, equipGun, equipOutfit, equipPet`      |
+| `skillLevels`, `skillPoint`                         | as skills                                                                  |
+| `place`                                             | a construção no cursor do servidor (PLACEABLES, −1 = nenhuma)              |
+| `ack`                                               | o `nonce` do último verbo que o servidor **tratou** (aplicou ou recusou)   |
+| `seq`                                               | o último comando consumido quando o `bag` foi escrito (−1 = fora do mundo) |
 
 - Vai **só quando muda** (assinatura de tudo menos `seq`: recarga, coleta, craft, troca, resposta a um pedido), no máximo a cada 0,25 s — ~150 números (~1,5 KB) por envio. Num tiroteio isso é uma recarga a cada poucos segundos: < 1 KB/s.
 - O cliente lê com `readBag` (tamanhos e limites do save; S→C, defensivo) e aplica com `applyBag`, preservando a identidade dos arrays.
+
+**No cliente (`client/net/backpackSync.ts`, regras puras em `bagPrediction.ts` e `worldMirror.ts`):**
+
+- **Predição:** cada verbo é aplicado na hora na cópia local **pela mesma regra do servidor** (`predictVerb`) e vai para uma lista com o `nonce`. Um verbo que não faria nada (comer de barriga cheia, equipar o que não tem) nem é enviado. **Os vitais não são previstos:** comer tira uma lata da mochila na hora, mas hp, fome e buffs chegam no bloco próprio do snapshot (§4.2), que é do servidor a cada 50 ms — prever a cura só faria a barra piscar entre os dois. Era esse o bug do dono ("usar item para subir a Food não faz nada"): o efeito ia só para a cópia local, o snapshot seguinte o desfazia e o relatório levava o item.
+- **Rebase:** cada `bag` que chega é aplicado por cima e as previsões que o servidor ainda não respondeu (`nonce` depois de `bag.ack`) são repetidas em ordem. Um verbo recusado some da lista com o `ack` e o `bag` desfaz a previsão; um que nunca volta cai depois de `PENDING_TTL_S` (3 s).
+- **Construção:** clicar, E e R continuam nas arestas do comando; o cursor local se libera na hora e um `bag` escrito antes do servidor consumir aquele comando (`bag.seq`) não o devolve. O servidor coloca na posição e na mira **dele** e a parede chega a todos como `SolidAdd`.
+- **Recarga:** a recarga prevista gasta a cópia local da reserva (NET-3); por 1 s um `bag` mais velho só pode baixar a reserva, nunca devolver os tiros.
+- **Arma na mão:** segue o `equipWeapon` do servidor (`weaponOf`: arma possuída ou a faca), sem devolver pente — o `bag` já traz a reserva.
+- **Mundo:** `SolidAdd/Remove`, `DoorSet`, `LightSet`, `SolidHp`, `ItemAdd/Remove` e `LootFlag` são aplicados na cidade gerada pela mesma semente, com os ids do servidor (§4.5). Cada `InitBegin` limpa o espelho antes do `WorldInit` que vem atrás dele. Os sistemas locais (`interaction.ts`, `build.ts`, `craftSystem.ts`, `combat.ts`) perguntam a `client/net/authority.ts`, uma folha sem imports: sem host de MP (um jogador, suítes em Node) a resposta é "não" e o jogo local roda como sempre.
 
 ---
 
@@ -717,6 +726,13 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 Posição, velocidade, dt/tempo, HP, dano, resultado de acerto, alvo atingido, quem matou quem, XP, nível, contagem de inventário, munição, pente, cooldowns e timers, dispersão/RNG, conteúdo de loot, preços, dia/hora, "estou dentro do prédio", "sou admin" e latência (o servidor mede). O `Player` do remetente vem **sempre** do primeiro argumento do `OnServerEvent`, nunca do payload.
 
 **Atomicidade:** Luau no servidor é single-thread. Toda operação de inventário e loot faz "checar + mutar" **sem yield no meio**, o que torna a duplicação por corrida impossível dentro do servidor. Entre servidores, a trava de sessão do DataStore que já existe impede duas cópias vivas.
+
+### 8.4 O relatório de progresso não escreve a mochila (NET-5; H1 da auditoria de rede)
+
+A partir de `WORLD_SERVER_PHASE`, `stripClientBackpack` (`server/sim/backpack.ts`) roda em `processReport` ao lado de `stripClientProgress` e **fixa na cópia do servidor** todos os campos de `SERVER_BACKPACK_FIELDS`: `invenWeapon`, `invenEquip`, `invenUse`, `invenEtc`, `ammoNormal`, `ammoShotgun`, `ammoMachinegun`, `ammoArrow`, `oil`, `electric`, `equipWeapon`, `equipCloth`, `equipHand`, `equipGun`, `equipOutfit`, `equipPet`, `skillLevels`, `skillPoint` e `packsOpened`. Um relatório não adiciona item, bala, combustível, skill nem pacote; um relatório diferente é só velho e é corrigido em silêncio (§9.2 nível 0). O que enche a mochila roda no servidor: coleta, busca, craft, construção devolvida e os pacotes, entregues por `deliverPacks` enquanto o sobrevivente está no mundo.
+
+- **Fora do mundo** (o guarda-roupa do lobby, MON-04) o único verbo aplicado é `Equip`/`Unequip` de um slot cosmético (traje ou pet) com algo que `ownsEquip` diz ser dele, direto no save da sessão; o resto é respondido e recusado.
+- **Conquistas** continuam vindo do relatório, limitadas ao máximo de cada linha: são contadas no cliente, não dão recompensa nem efeito no jogo, e fixá-las congelaria o recurso até existir um contador no servidor.
 
 ---
 

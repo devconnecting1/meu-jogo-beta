@@ -416,6 +416,10 @@ function bootServer({ privateServer = false } = {}) {
 		intent(p, kind) {
 			remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
 		},
+		/** one backpack verb on the Intent remote, as client/net/netClient.ts sends it (docs/MULTIPLAYER.md §4.8) */
+		verb(p, kind, arg, atSeq = 0, nonce = 0) {
+			remote("Intent").OnServerEvent.Fire(p, P.encodeIntentArgs(kind, atSeq, arg, nonce));
+		},
 		/** EnterWorld, then long enough for the admit pass (ADMIT_INTERVAL) whatever the cooldown said */
 		enter(p) {
 			server.intent(p, P.IntentKind.EnterWorld);
@@ -1244,10 +1248,14 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	check(twice.ok === false && twice.reason === "owned", "buying it again is refused as owned");
 	check(save.money === 100 - santa.price, "…and charges nothing");
 
-	// wearing: the bought outfit is accepted from a report, a pet nobody bought is taken off
+	// wearing (F3, §4.8): the wardrobe's Equip is a verb the server applies out of the world, cosmetics only; a report
+	// no longer moves the slots at all, so neither a bought outfit nor a pet nobody paid for comes from one
 	const ack = s.report(p, { equipOutfit: equipOf("Santa"), equipPet: equipOf("Eagle") });
-	check(ack?.ok === true, "the report that wears it is accepted");
-	check(save.equipOutfit === equipOf("Santa"), "the server wears the bought outfit");
+	check(ack?.ok === true, "a report that tries to wear them is still accepted (and corrected in silence)");
+	check(save.equipOutfit === -1 && save.equipPet === -1, "…and wears nothing: the slots are the server's");
+	s.verb(p, s.P.IntentKind.Equip, equipOf("Santa"), 0, 1);
+	s.verb(p, s.P.IntentKind.Equip, equipOf("Eagle"), 0, 2);
+	check(save.equipOutfit === equipOf("Santa"), "the wardrobe's Equip puts on the bought outfit");
 	check(save.equipPet === -1, "…but not the Eagle nobody paid for", `equipPet ${save.equipPet}`);
 
 	// and it reaches the DataStore with the coins it cost
