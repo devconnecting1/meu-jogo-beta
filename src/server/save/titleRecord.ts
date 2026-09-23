@@ -16,7 +16,7 @@
  *   - after every successful save write that changed what was earned, the session writes it again. It REPLACES the
  *     record when the load read it (the session then knows everything the record held), and MERGES into it when
  *     that read failed (a replace could then lower a record it has never seen). Only the holder of the session lock
- *     writes it.
+ *     writes it: right after a save write, and on leaving right BEFORE the save write that releases the lock.
  *
  * What the record must NEVER do is undo a reset or a deletion made on purpose. The `epoch` says which title history
  * a save and a record belong to (PlayerSaveData.titleEpoch): a new save starts a new one, and an admin reset starts

@@ -417,18 +417,23 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	if (s.released) return true;
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
 	if (!release && !s.dirty && !refreshDue) return true;
+	s.writing = true;
+	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, only by the holder of
+	// the session lock and inside the same writing window. On release it goes FIRST: the save write below drops the
+	// lock, and from then on another server may load this player and own both documents -- a record written after
+	// that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
+	if (release) syncTitleRecord(s);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
+		s.writing = false;
 		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
 		return false;
 	}
-	s.writing = true;
 	const wasDirty = s.dirty;
 	s.dirty = false;
 	const outcome = writeWithLock(s, json, release, delays);
-	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop -- by the session that
-	// just wrote the save (it held the lock), only when it changed, and inside the same writing window
-	if (outcome === "ok") syncTitleRecord(s);
+	// every other write: right after the save, which just proved this session still holds the lock
+	if (outcome === "ok" && !release) syncTitleRecord(s);
 	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();

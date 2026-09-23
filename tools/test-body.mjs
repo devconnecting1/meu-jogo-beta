@@ -45,6 +45,7 @@
  *                           LoadAck or a leave.
  *  14. RESET AND WIPE       the title record never undoes an admin reset (even when this session could not read it,
  *                           or its write failed) nor a save key deleted on purpose.
+ *  15. RECORD UNDER LOCK    leaving writes the title record BEFORE the save write that releases the session lock.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1555,6 +1556,52 @@ section("14) what was earned never comes back from the title record after an adm
 			JSON.stringify(rec),
 		);
 	}
+});
+
+// ================================================================ 15: the record is written under the lock
+
+section("15) leaving writes the title record while the session still holds the save's lock (MON-05)", () => {
+	const HB = 1;
+	const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const srv = bootServer();
+	const u = newUser();
+	const key = String(u);
+	const p = srv.join(u, "leaver");
+	const save = srv.save(p);
+	save.titles[HB] = 1;
+	save.zombieKills = 100;
+	// the save document's lock at each write of this player's record: once it is released, another server may load
+	// the player and own both documents, and a late record write from here would land on top of that session's
+	const titles = fakeStore(TITLE_STORE);
+	const original = titles.UpdateAsync;
+	const lockAtWrite = [];
+	titles.UpdateAsync = (k, transform) => {
+		if (k === key) lockAtWrite.push(fakeStore(SAVE_STORE).data.get(k)?.lock ?? null);
+		return original(k, transform);
+	};
+	const from = storeLog.length;
+	srv.quit(p);
+	titles.UpdateAsync = original;
+	const writes = storeLog.slice(from).filter(e => e.key === key && e.op === "update");
+	const order = JSON.stringify(writes.map(e => e.store));
+	const recordAt = writes.findIndex(e => e.store === TITLE_STORE);
+	const releaseAt = writes.findLastIndex(e => e.store === SAVE_STORE);
+	check(recordAt >= 0 && releaseAt >= 0, "leaving wrote the save and the title record", order);
+	check(recordAt < releaseAt, "…the record FIRST, then the save write that releases the lock", order);
+	check(
+		lockAtWrite.length > 0 && lockAtWrite.every(lock => lock !== null),
+		"…so the lock was held at every write of the record",
+		JSON.stringify(lockAtWrite),
+	);
+	const doc = fakeStore(SAVE_STORE).data.get(key);
+	check(doc !== undefined && doc.lock === undefined, "the save was released");
+	const stored = srv.stored(u);
+	const rec = titles.data.get(key);
+	check(
+		stored?.zombieKills === 100 && stored.titles[HB] === 1 && rec?.zombieKills === 100 && rec.titles[HB] === 1,
+		"…and both documents hold what was earned",
+		`save ${stored?.zombieKills}, record ${JSON.stringify(rec)}`,
+	);
 });
 
 // ================================================================
