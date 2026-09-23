@@ -422,6 +422,32 @@ ctx.phase = "playing";
 	close();
 	flush();
 	check("Menu da partida pelo controle: Start (que o abriu) chega ao jogo, que o fecha", startCloses === true);
+	// the key on the Menu's title strip is the one that opens it on THIS device, as the HUD's Menu plate says
+	// (SCHEMES): P on a keyboard, Start on a pad, none on a touch screen (its MENU is a button, not a key)
+	const keyOnMenu = () => {
+		const c = showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop });
+		flush();
+		const hint = findIn(layer.FindFirstChild("Menu"), "KeyHint");
+		const text = hint === undefined ? undefined : findIn(hint, "Text")?.Text;
+		c();
+		flush();
+		return text;
+	};
+	lastInput.type = Enum.UserInputType.Gamepad1;
+	const onPad = keyOnMenu();
+	lastInput.type = Enum.UserInputType.MouseMovement;
+	const onKeyboard = keyOnMenu();
+	UIS.TouchEnabled = true;
+	UIS.MouseEnabled = false;
+	const onTouch = keyOnMenu();
+	UIS.TouchEnabled = false;
+	UIS.MouseEnabled = true;
+	check(
+		"...e a tecla no titulo do Menu e a do dispositivo: P no teclado, Start no controle, nenhuma no toque",
+		onKeyboard === "P" && onPad === "Start" && onTouch === undefined,
+		`teclado ${onKeyboard}, controle ${onPad}, toque ${onTouch}`,
+	);
+	lastInput.type = Enum.UserInputType.Gamepad1;
 	knownBug(
 		"NAV-B",
 		"o B do controle nao fecha nenhuma tela (so tira a selecao); fechar e so pelo X / Back ou pelo botao que abriu",
