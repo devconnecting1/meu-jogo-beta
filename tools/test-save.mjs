@@ -958,7 +958,7 @@ section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	v5.zombieKills = 120;
 	v5.equipTitle = TIT.TitleId.HordeBreaker;
 	// what a v5 session keeps in the second document (server/save/titleRecord.ts), as the DataStore returns it
-	const record = JSON.parse(JSON.stringify(REC.nextTitleRecord(undefined, REC.titleRecordOf(v5), true)));
+	const record = JSON.parse(JSON.stringify(REC.nextTitleRecord(undefined, REC.titleRecordOf(v5), "replace")));
 	// what a v4 server does with the save: the three unknown keys dropped, and that is what it writes
 	const v4 = JSON.parse(JSON.stringify(v5));
 	delete v4.titles;
@@ -984,10 +984,10 @@ section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	checkEq(ahead.titles[TIT.TitleId.HordeBreaker], 1, "(Horde Breaker, do registro)");
 	checkEq(ahead.zombieKills, 200, "mas nunca abaixa: a contagem maior fica");
 	checkEq(ahead.titles[TIT.TitleId.WeekOne], 1, "e o titulo que o registro nao tinha tambem");
-	const merged = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), false);
+	const merged = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), "merge");
 	checkEq(merged.zombieKills, 120, "gravar sem ter lido o registro MESCLA: nada que ele tinha se perde");
 	checkEq(merged.titles[TIT.TitleId.HordeBreaker], 1, "nem um titulo");
-	const replaced = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), true);
+	const replaced = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), "replace");
 	checkEq(replaced.zombieKills, 0, "quem leu o registro o SUBSTITUI (um reset do admin o baixa)");
 	checkEq(REC.readTitleRecord("lixo"), undefined, "um registro que nao e tabela e ignorado");
 	checkEq(
@@ -1189,7 +1189,7 @@ section(
 		"reset (epoca maior): o registro antigo nao e mesclado",
 	);
 	check(reset.zombieKills === 0 && reset.titles.every(v => v === 0) && reset.titleEpoch === E2, "e nada muda");
-	const over = REC.nextTitleRecord(record, REC.titleRecordOf(reset), false);
+	const over = REC.nextTitleRecord(record, REC.titleRecordOf(reset), "merge");
 	check(
 		over.zombieKills === 0 && over.titles.every(v => v === 0) && over.epoch === E2,
 		"gravar MESCLANDO sobre um registro de epoca menor o substitui",
@@ -1197,8 +1197,31 @@ section(
 	);
 	// the session that could not read a later record (after a rollback) merges into it and joins its history
 	const lost = SAVE.sanitizeStoredSave(productionV4());
-	const joined = REC.nextTitleRecord(record, REC.titleRecordOf(lost), false);
+	const joined = REC.nextTitleRecord(record, REC.titleRecordOf(lost), "merge");
 	check(joined.zombieKills === 100 && joined.epoch === E1, "mesclar sobre um registro de epoca maior o mantem");
+	// a server that lost the lock without knowing it (it read the record at its load: "replace") never writes over a
+	// reset made where the lock went
+	const resetRecord = JSON.parse(JSON.stringify(REC.titleRecordOf(reset)));
+	const stale = REC.nextTitleRecord(resetRecord, REC.titleRecordOf(earned()), "replace");
+	check(
+		stale.epoch === E2 && stale.zombieKills === 0 && stale.titles.every(v => v === 0),
+		"substituir sobre um registro de historia POSTERIOR o deixa como esta",
+		JSON.stringify(stale),
+	);
+	// a new history (missing save, admin reset) over a record stamped later than this server's clock: one after it
+	const early = SAVE.defaultSave();
+	early.titleEpoch = E1 - 50;
+	const restarted = REC.nextTitleRecord(resetRecord, REC.titleRecordOf(early), "restart");
+	check(
+		restarted.epoch === E2 + 1 && restarted.zombieKills === 0,
+		"recomecar sobre um registro de epoca igual ou maior carimba a seguinte (o save a adota)",
+		JSON.stringify(restarted),
+	);
+	check(REC.mergeTitleRecord(early, restarted) && early.titleEpoch === E2 + 1, "…e o save adota essa epoca");
+	check(
+		REC.nextTitleRecord(record, REC.titleRecordOf(reset), "restart").epoch === E2,
+		"recomecar sobre um registro mais antigo: a epoca do proprio save",
+	);
 
 	// what starts a new history: taking away anything earned (the admin reset does)
 	const e = earned();

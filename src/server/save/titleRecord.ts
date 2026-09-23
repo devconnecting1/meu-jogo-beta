@@ -15,8 +15,11 @@
  *     (`mergeTitleRecord`) -- after a rollback, the save has nothing and the record has everything;
  *   - after every successful save write that changed what was earned, the session writes it again. It REPLACES the
  *     record when the load read it (the session then knows everything the record held), and MERGES into it when
- *     that read failed (a replace could then lower a record it has never seen). Only the holder of the session lock
- *     writes it: right after a save write, and on leaving right BEFORE the save write that releases the lock.
+ *     that read failed (a replace could then lower a record it has never seen). It is written by the session that
+ *     believes it holds the save's lock: right after a save write, and on leaving right BEFORE the save write that
+ *     releases the lock. "Believes": a server can lose the lock without knowing it (another server took it once
+ *     this one stopped refreshing it) and only learns so from that save write. So no write lands over a record of
+ *     a LATER history (`nextTitleRecord`): whatever that server did, it cannot undo a reset made where the lock went.
  *
  * What the record must NEVER do is undo a reset or a deletion made on purpose. The `epoch` says which title history
  * a save and a record belong to (PlayerSaveData.titleEpoch): a new save starts a new one, and an admin reset starts
@@ -162,12 +165,27 @@ export function mergeTitleRecord(save: PlayerSaveData, rec: TitleRecord): boolea
 }
 
 /**
- * The record to store: `mine` when replacing, or over a record of an older title history; otherwise (`old` never
- * read by this session) the larger of `old` and `mine`, in the later of the two histories.
+ * How a session writes the record:
+ *   "merge"    its load could not read it: the larger of the stored one and its own, in the later history;
+ *   "replace"  its load read it: its own -- but a record of a LATER history is left exactly as it is (a reset or a
+ *              new save made by a session this one knows nothing of: this one lost the lock without knowing it);
+ *   "restart"  its save starts a new history (a missing save, an admin reset): its own, in an epoch after whatever
+ *              is stored, even one a clock ahead of this server's stamped -- the save then adopts that epoch.
  */
-export function nextTitleRecord(old: unknown, mine: TitleRecord, replace: boolean): TitleRecord {
-	const prev = replace ? undefined : readTitleRecord(old);
-	if (prev === undefined || prev.epoch < mine.epoch) return mine;
+export type TitleRecordWrite = "merge" | "replace" | "restart";
+
+/** the record to store over `old`, the way `mode` says (see TitleRecordWrite) */
+export function nextTitleRecord(old: unknown, mine: TitleRecord, mode: TitleRecordWrite): TitleRecord {
+	const prev = readTitleRecord(old);
+	if (prev === undefined) return mine;
+	if (mode === "restart") {
+		if (prev.epoch < mine.epoch) return mine;
+		const titles = new Array<number>();
+		for (const v of mine.titles) titles.push(v);
+		return { titles, zombieKills: mine.zombieKills, epoch: math.min(prev.epoch + 1, SAVE_LIMITS.EPOCH_MAX) };
+	}
+	if (prev.epoch < mine.epoch) return mine;
+	if (mode === "replace") return prev.epoch > mine.epoch ? prev : mine;
 	const titles = new Array<number>();
 	for (let i = 0; i < TITLES.size(); i++) titles.push((mine.titles[i] ?? 0) > 0 || prev.titles[i] > 0 ? 1 : 0);
 	return { titles, zombieKills: math.max(mine.zombieKills, prev.zombieKills), epoch: prev.epoch };
@@ -218,12 +236,12 @@ export function loadTitleRecord(key: string): TitleRecordRead {
 }
 
 /**
- * Writes `save`'s earned half as the record of `key` (see the header for `replace`), and answers the record that
- * landed -- after a merge it may hold MORE than the save, which the caller then takes back. ONE attempt, no wait:
- * it runs inside the session's save (on leave and at shutdown too), and the next save simply tries again.
- * undefined = not written (logged).
+ * Writes `save`'s earned half as the record of `key` (`mode`: see TitleRecordWrite), and answers the record that
+ * landed -- after a merge it may hold MORE than the save, and a later history may have been kept or a new epoch
+ * stamped, all of which the caller then takes into the save. ONE attempt, no wait: it runs inside the session's save,
+ * and the next save simply tries again. undefined = not written (logged).
  */
-export function storeTitleRecord(key: string, save: PlayerSaveData, replace: boolean): TitleRecord | undefined {
+export function storeTitleRecord(key: string, save: PlayerSaveData, mode: TitleRecordWrite): TitleRecord | undefined {
 	const s = titleStore();
 	if (s === undefined) return undefined;
 	const mine = titleRecordOf(save);
@@ -231,7 +249,7 @@ export function storeTitleRecord(key: string, save: PlayerSaveData, replace: boo
 	let written = undefined as TitleRecord | undefined;
 	const [ok, err] = pcall(() => {
 		s.UpdateAsync<unknown, unknown>(key, old => {
-			written = nextTitleRecord(old, mine, replace);
+			written = nextTitleRecord(old, mine, mode);
 			return $tuple(written);
 		});
 	});

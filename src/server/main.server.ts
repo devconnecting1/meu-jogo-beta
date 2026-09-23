@@ -401,12 +401,15 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
  */
 function syncTitleRecord(s: Session, final: boolean): void {
 	if (!TitleRecord.titleRecordDue(s.save, s.titleMark, s.titleStep, s.titleReplace, final)) return;
-	// replace a record this session has read, or one of a history this save ended; merge into one it never saw
-	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleReplace || s.titleMark !== undefined);
+	// start a new history over whatever is there (a missing save, an admin reset); replace a record this session
+	// has read; merge into one it never saw
+	const mode = s.titleReplace ? "restart" : s.titleMark !== undefined ? "replace" : "merge";
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, mode);
 	if (written === undefined) return;
 	s.titleReplace = false;
-	// a merge may have found what the load could not read: the save takes it too (and is written again), so from
-	// here on the save holds everything the record does and replacing it can never lower it
+	// what landed goes back into the save (which is then written again): what a merge found and the load could not
+	// read, the epoch a restart stamped, or a LATER history this session was not told of (it lost the lock without
+	// knowing: its save write is about to be refused anyway). From here on replacing can never lower the record
 	if (TitleRecord.mergeTitleRecord(s.save, written)) s.dirty = true;
 	s.titleMark = TitleRecord.titleRecordMark(written);
 	s.titleStep = TitleRecord.titleRecordStep(written);
@@ -424,10 +427,12 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
 	if (!release && !s.dirty && !refreshDue) return true;
 	s.writing = true;
-	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, only by the holder of
-	// the session lock and inside the same writing window. On release it goes FIRST: the save write below drops the
-	// lock, and from then on another server may load this player and own both documents -- a record written after
-	// that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
+	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, by the session that
+	// believes it holds the lock and inside the same writing window. On release it goes FIRST: the save write below
+	// drops the lock, and from then on another server may load this player and own both documents -- a record
+	// written after that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
+	// A server that already lost the lock without knowing it still gets here; `nextTitleRecord` never lets its write
+	// land over a later history (a reset made where the lock went).
 	if (release) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {

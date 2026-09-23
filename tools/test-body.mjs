@@ -50,6 +50,8 @@
  *                           is asked again a minute later instead of never.
  *  17. ADMIN DAY EDIT      an admin who sets a life's day has assisted the run (no coins, no titles) and counted
  *                           no night toward Week One.
+ *  18. LOCK LOST UNAWARE    a server that lost the lock without knowing it (another took it, an admin reset the
+ *                           player there) leaves without writing its old titles over the reset's record.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1718,6 +1720,81 @@ section("17) an admin who moves a life's day has assisted that run: no coins, no
 	srv.quit(p);
 	srv.quit(admin);
 });
+
+// ================================================================ 18: a server that lost the lock without knowing it
+
+section(
+	"18) a server that lost the lock without knowing it never writes the title record over a reset (MON-05)",
+	() => {
+		const HB = 1;
+		const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const u = newUser();
+		const key = String(u);
+		// a Horde Breaker, saved and gone: the save and the record both hold it
+		{
+			const srv = bootServer();
+			const p = srv.join(u, "hopper");
+			const save = srv.save(p);
+			save.titles[HB] = 1;
+			save.zombieKills = 100;
+			srv.quit(p);
+		}
+		const earnedEpoch = fakeStore(TITLE_STORE).data.get(key)?.epoch;
+		// server A loads the player (and holds the lock)...
+		const a = bootServer();
+		const onA = a.join(u, "hopper");
+		check(a.save(onA)?.titles[HB] === 1, "server A loads the survivor, title and all");
+		// ...who turns up on server B while A still thinks it has them: B takes the lock once A's is past waiting for
+		// (LOCK_WAIT; here the lock is simply made old enough), and an admin resets the player there
+		fakeStore(SAVE_STORE).data.get(key).lock.t -= 1000;
+		const b = bootServer();
+		const onB = b.join(u, "hopper");
+		const admin = b.join(ADMIN_ID, "admin");
+		const reset = adminRequest(b, admin, { kind: "resetSave", userId: u });
+		check(reset?.ok === true, "on server B, an admin resets the save", JSON.stringify(reset?.error));
+		b.quit(onB);
+		b.quit(admin);
+		const afterReset = fakeStore(TITLE_STORE).data.get(key);
+		check(
+			afterReset !== undefined && afterReset.epoch > earnedEpoch && afterReset.zombieKills === 0,
+			"B's leave wrote the reset's record: a later history, nothing earned",
+			JSON.stringify(afterReset),
+		);
+		// the player finally leaves A, which never learned it lost the lock -- and which counted one more kill meanwhile,
+		// so it has something new to write
+		a.save(onA).zombieKills += 1;
+		a.quit(onA);
+		const rec = fakeStore(TITLE_STORE).data.get(key);
+		check(
+			rec?.epoch === afterReset.epoch && rec.zombieKills === 0 && rec.titles.every(v => v === 0),
+			"A's leave did not write its old titles over the reset's record",
+			JSON.stringify(rec),
+		);
+		const doc = fakeStore(SAVE_STORE).data.get(key);
+		const stored = typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+		check(
+			stored.zombieKills === 0 && stored.titles.every(v => v === 0),
+			"and A's save write was refused (lock lost)",
+		);
+		// a server rolled back to v4 in this window: the save loses its epoch, and the record must not hand anything back
+		b.storeDoc(u, d => {
+			delete d.titles;
+			delete d.zombieKills;
+			delete d.equipTitle;
+			delete d.titleEpoch;
+			d.version = 4;
+		});
+		const c = bootServer();
+		const onC = c.join(u, "hopper");
+		const back = c.save(onC);
+		check(
+			back.titles.every(v => v === 0) && back.zombieKills === 0,
+			"a v4 rollback right after brings back none of the reset titles",
+			`titles ${JSON.stringify(back.titles)}, kills ${back.zombieKills}`,
+		);
+		c.quit(onC);
+	},
+);
 
 // ================================================================
 
