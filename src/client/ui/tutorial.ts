@@ -32,7 +32,7 @@ const NOTE_H = 40;
 const TIPS_H = 68;
 const FOOTER_W = 170;
 
-interface Scheme {
+export interface Scheme {
 	title: string;
 	/** [chip, what it does] */
 	rows: Array<[string, string]>;
@@ -41,7 +41,7 @@ interface Scheme {
 }
 
 /** the real bindings, straight from client/bootstrap.ts — nothing here is promised that the game does not do */
-const SCHEMES: Array<Scheme> = [
+export const SCHEMES: Array<Scheme> = [
 	{
 		title: "Keyboard & mouse",
 		rows: [
@@ -51,8 +51,8 @@ const SCHEMES: Array<Scheme> = [
 			["E", "Interact, search, loot"],
 			["R", "Reload"],
 			["1 – 5", "Switch weapon"],
-			["B", "Backpack (pauses)"],
-			["P", "Pause menu"],
+			["B", "Backpack"],
+			["P", "Menu"],
 		],
 		note: "Right click also interacts.",
 	},
@@ -66,7 +66,7 @@ const SCHEMES: Array<Scheme> = [
 			["USE", "Interact (appears when you can)"],
 			["RELOAD", "Reload"],
 			["BAG", "Backpack"],
-			["II", "Pause"],
+			["II", "Menu"],
 		],
 		note: "Size, height, floating stick and left-handed: Settings › Touch controls.",
 	},
@@ -79,7 +79,7 @@ const SCHEMES: Array<Scheme> = [
 			["X", "Interact"],
 			["Y", "Reload"],
 			["LB", "Backpack"],
-			["Start", "Pause menu"],
+			["Start", "Menu"],
 			["D-pad", "Menus"],
 		],
 		note: "Menus are navigated with the stick; the selected button carries a focus ring.",

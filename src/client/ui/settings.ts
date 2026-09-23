@@ -1,85 +1,101 @@
 import { GameContext } from "shared/game/context";
+import { langGet } from "shared/data/lang";
 import { computeTouchLayout, defaultTouchPrefs, TouchButton, TouchLayout, TouchPrefs } from "shared/engine/input";
+import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { previewBgm, previewSfx } from "../audio";
 import { refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
+import { popup } from "./popup";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, space } from "./theme";
+import { SCHEMES } from "./tutorial";
 import {
-	BUTTON_SIZE,
 	Button,
-	Card,
-	CardHeader,
+	Segmented,
 	Slider,
 	SliderHandle,
-	Sidebar,
 	Tabs,
 	autoFocus,
+	gamepadActive,
 	makeFrame,
 	makeLabel,
 	makeScreen,
 	makeSurface,
-	setButtonVariant,
+	nl,
+	setVisible,
+	tabWidth,
 } from "./widgets";
+import {
+	SECTION_CONTENT_Y,
+	SECTION_TITLE_MID,
+	SETTING_ROW_H,
+	Section,
+	SettingNote,
+	SettingRow,
+	SettingRowHandle,
+	SettingsList,
+	ValueKey,
+	Window,
+	sectionHeight,
+	setValueKey,
+	settingsListHeight,
+} from "./window";
+
+/*
+ * Settings: the reference's modal window (DESIGN_RULES UI-07) -- header with the big centred title, "?" and the red
+ * X; a tab bar; one section per tab whose rows are "label cell | value cell", the value a slider, a segmented
+ * choice or a dark key.
+ *
+ * What is NOT here any more: the English / Korean switch. Roblox translates the game by the player's own account
+ * (src/shared/data/lang.ts only keeps overrides), so that switch changed nothing a player could see.
+ */
+
+const UserInputService = game.GetService("UserInputService");
 
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
 
-const MARGIN_X = 40;
-/** header row: Back button and title share this vertical centre */
-const HEADER_Y = 32;
-/** section navigation (left) and the selected section's card (right) */
-const MAIN_Y = 96;
-const MAIN_H = 512;
-const NAV_W = 200;
-const CREDITS_H = BUTTON_SIZE.default.h;
-const NAV_H = MAIN_H - CREDITS_H - space(4);
-const CARD_X = MARGIN_X + NAV_W + space(4);
-const CARD_W = 1120 - MARGIN_X - CARD_X;
-
-/** one setting per row: label | control | value */
+const WIN_W = 900;
+const WIN_H = 576;
 const PAD = space(6);
-const ROW_H = 40;
-const ROW_STRIDE = ROW_H + space(4);
-const LABEL_W = 160;
-const VALUE_W = 72;
-const SWITCH_W = 110;
-const LANG_W = 240;
+const TAB_H = 34;
+/** the section: from under the tab bar to the window's bottom padding */
+const SECTION_W = WIN_W - PAD * 2;
+/** the list inside a section, inset like the reference's */
+const LIST_X = space(4);
+const LIST_W = SECTION_W - LIST_X * 2;
+const LABEL_W = 220;
+/** the touch page: rows on the left, the preview of the player's own screen on the right */
+const TOUCH_LIST_W = 500;
+const TOUCH_LABEL_W = 170;
+/** a slider row: the slider, then its value as a key at the right of the cell */
+const VALUE_KEY_W = 72;
+const SEGMENT_W = 200;
+const SEGMENT_H = 30;
 
-/** the touch-control preview pane (right of the mobile rows): a scale model of the player's own screen */
-const PREVIEW_W = 300;
-
-interface RowGeom {
-	controlX: number;
-	controlW: number;
-	valueX: number;
-}
-
-/** the row geometry inside a card of `cardW`, leaving `reserved` design units free on the right */
-function rowGeom(cardW: number, reserved: number): RowGeom {
-	const controlX = PAD + LABEL_W + space(4);
-	const controlW = cardW - reserved - controlX - space(4) - VALUE_W - PAD;
-	return { controlX, controlW, valueX: controlX + controlW + space(4) };
-}
-
-interface Section {
-	title: string;
-	description: string;
-	/** fills the section's card from `y` (below the CardHeader) */
-	build: (card: Frame, y: number) => void;
-}
+type Tr = (key: string) => string;
 
 function pct(v: number): string {
 	return `${math.floor(v * 100 + 0.5)}%`;
 }
 
+/** what the "?" of the window explains: what each tab is for, one line each ("#" = new line, see nl) */
+const HELP_TEXT = [
+	"General: sound effects and music volume, and the size of the on-screen panels.",
+	"Touch controls: size, height and side of the phone controls, with a preview of your screen.",
+	"Controls: every key and button the game listens to.",
+	"About: the game and its credits.",
+	"Changes are saved with your progress, by themselves.",
+].join("#");
+
 export function showSettings(ctx: GameContext, onBack: () => void, onCredits: () => void): () => void {
+	const tr: Tr = (key: string): string => langGet(key, ctx.save.settings.langType);
 	const { root, body } = makeScreen(ctx.uiLayer, "Settings");
 	const s = ctx.save.settings;
-	/** sliders of the section on screen (disconnected when the section changes or the screen closes) */
+	/** every slider of the screen (disconnected when it closes) */
 	const handles: Array<SliderHandle> = [];
-	/** redraws the control preview after a mobile setting changed */
+	/** redraws the control preview after a touch setting changed */
 	let refreshPreview: (() => void) | undefined;
-	/** every control of the section on screen re-reads the save (used by "Reset controls") */
-	const refreshers: Array<() => void> = [];
+	/** every control of the touch page re-reads the save (used by "Reset controls") */
+	const touchRefreshers: Array<() => void> = [];
 
 	/*
 	 * Persistence: a settings change is a save like any other, but a slider fires on every pixel of the drag.
@@ -112,108 +128,118 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 		fn();
 	};
 
-	Button(body, "Back", "‹  Back", {
-		x: MARGIN_X,
-		y: HEADER_Y,
-		w: 124,
-		variant: "secondary",
-		onClick: (): void => onBack(),
+	const win = Window(body, "Window", {
+		x: (1120 - WIN_W) / 2,
+		y: (630 - WIN_H) / 2,
+		w: WIN_W,
+		h: WIN_H,
+		title: tr("Settings"),
+		onClose: (): void => onBack(),
+		onHelp: (): void => {
+			popup(ctx, tr("Settings"), nl(tr(HELP_TEXT)), [{ text: tr("Close"), variant: "secondary" }]);
+		},
 	});
-	makeLabel(body, "Title", "Settings", 184, HEADER_Y, 400, BUTTON_SIZE.default.h, TEXT.xl3, THEME.foreground, {
-		font: "title",
-		align: "left",
-	});
+	const panel = win.frame;
+	const tabsY = win.contentY + space(1);
+	const sectionY = tabsY + TAB_H + space(4);
+	const sectionH = WIN_H - sectionY - space(5);
 
-	const rowLabel = (card: Frame, text: string, y: number): void => {
-		makeLabel(card, `${text}Label`, text, PAD, y, LABEL_W, ROW_H, TEXT.sm, THEME.foreground, {
-			font: "label",
-			align: "left",
-		});
-	};
+	// ---- rows
 
+	/** a slider row: the slider across the value cell, the value as a key at its right */
 	const sliderRow = (
-		card: Frame,
-		g: RowGeom,
+		row: SettingRowHandle,
 		name: string,
-		label: string,
-		y: number,
+		valueW: number,
 		get: () => number,
 		set: (v: number) => void,
+		refreshers?: Array<() => void>,
 	): void => {
-		rowLabel(card, label, y);
-		const value = makeLabel(
-			card,
-			`${name}Value`,
-			pct(get()),
-			g.valueX,
-			y,
-			VALUE_W,
-			ROW_H,
-			TEXT.base,
-			THEME.foreground,
-			{
-				font: "numeric",
-				align: "right",
-			},
-		);
-		const handle = Slider(card, name, {
-			x: g.controlX,
-			y,
-			w: g.controlW,
-			h: ROW_H,
+		const cell = row.value;
+		const key = ValueKey(cell, `${name}Value`, pct(get()), {
+			x: valueW - space(4),
+			anchorX: 1,
+			minW: VALUE_KEY_W,
+			textSize: TEXT.base,
+		});
+		const handle = Slider(cell, name, {
+			x: space(4),
+			y: 0,
+			w: valueW - space(4) * 2 - VALUE_KEY_W - space(3),
+			h: SETTING_ROW_H,
 			get,
 			set: (v: number): void => {
 				set(v);
-				value.Text = pct(v);
+				setValueKey(key, pct(v));
 			},
+			zIndex: cell.ZIndex + 1,
 		});
 		handles.push(handle);
-		refreshers.push(() => {
+		refreshers?.push(() => {
 			handle.refresh();
-			value.Text = pct(get());
+			setValueKey(key, pct(get()));
 		});
 	};
 
-	/** an ON / OFF switch row (filled when on, outlined when off) */
+	/** an Off / On row: a segmented choice, centred in the value cell */
 	const switchRow = (
-		card: Frame,
-		g: RowGeom,
+		row: SettingRowHandle,
 		name: string,
-		label: string,
-		y: number,
+		valueW: number,
 		get: () => boolean,
 		set: (v: boolean) => void,
+		refreshers?: Array<() => void>,
 	): void => {
-		rowLabel(card, label, y);
-		// declared first: the closure below must capture the variable, not a later one
-		let btn: TextButton | undefined;
-		const paint = (): void => {
-			if (btn === undefined) return;
-			btn.Text = get() ? "ON" : "OFF";
-			setButtonVariant(btn, get() ? "default" : "outline");
-		};
-		btn = Button(card, name, get() ? "ON" : "OFF", {
-			x: g.controlX,
-			y,
-			w: SWITCH_W,
-			h: ROW_H,
-			variant: get() ? "default" : "outline",
-			onClick: (): void => {
-				set(!get());
-				paint();
-			},
+		const tabs = Segmented(row.value, name, {
+			x: (valueW - SEGMENT_W) / 2,
+			y: (SETTING_ROW_H - SEGMENT_H) / 2,
+			w: SEGMENT_W,
+			h: SEGMENT_H,
+			items: [tr("Off"), tr("On")],
+			value: get() ? 1 : 0,
+			zIndex: row.value.ZIndex + 1,
+			onChange: (i: number): void => set(i === 1),
 		});
-		refreshers.push(paint);
+		refreshers?.push(() => tabs.setActive(get() ? 1 : 0));
 	};
 
-	const buildAudio = (card: Frame, y: number): void => {
-		const g = rowGeom(CARD_W, 0);
+	/** a text value, centred in the value cell */
+	const textRow = (row: SettingRowHandle, valueW: number, text: string): void => {
+		makeLabel(row.value, "Text", text, space(3), 0, valueW - space(6), SETTING_ROW_H, TEXT.base, THEME.foreground, {
+			zIndex: row.value.ZIndex + 1,
+		});
+	};
+
+	// ---- pages (built on first visit, then only shown / hidden)
+
+	/** a page: the area under the tab bar, holding one full-height section or a few fitted ones */
+	const pageFrame = (index: number): Frame =>
+		makeFrame(panel, `Page${index}`, PAD, sectionY, SECTION_W, sectionH, THEME.background, { transparency: 1 });
+	/** one section filling the page (a long list scrolls inside it) */
+	const pageSection = (index: number, title: string): Frame => {
+		const sec = Section(panel, `Page${index}`, { x: PAD, y: sectionY, w: SECTION_W, h: sectionH, title });
+		return sec.frame;
+	};
+	const listY = SECTION_CONTENT_Y;
+	const listH = sectionH - sectionHeight(0);
+
+	const buildGeneral = (index: number): Frame => {
+		const page = pageFrame(index);
+		const valueW = LIST_W - LABEL_W;
+		// two short sections, each as tall as its rows: an empty plate under two sliders reads as an unfinished screen
+		const audioListH = settingsListHeight([SETTING_ROW_H, SETTING_ROW_H]);
+		const audio = Section(page, "Audio", {
+			x: 0,
+			y: 0,
+			w: SECTION_W,
+			h: sectionHeight(audioListH),
+			title: tr("Audio"),
+		});
+		const list = SettingsList(audio.frame, "List", LIST_X, listY, LIST_W, audioListH);
 		sliderRow(
-			card,
-			g,
+			SettingRow(list, "Sfx", 0, tr("SFX")),
 			"Sfx",
-			"SFX",
-			y,
+			valueW,
 			() => s.soundEffect,
 			v => {
 				s.soundEffect = v;
@@ -222,11 +248,9 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			},
 		);
 		sliderRow(
-			card,
-			g,
+			SettingRow(list, "Bgm", 1, tr("BGM")),
 			"Bgm",
-			"BGM",
-			y + ROW_STRIDE,
+			valueW,
 			() => s.bgm,
 			v => {
 				s.bgm = v;
@@ -234,92 +258,78 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				persist();
 			},
 		);
+
+		const noteH = 40;
+		const uiListH = settingsListHeight([SETTING_ROW_H, noteH]);
+		const ui = Section(page, "Interface", {
+			x: 0,
+			y: sectionHeight(audioListH) + space(4),
+			w: SECTION_W,
+			h: sectionHeight(uiListH),
+			title: tr("Interface"),
+		});
+		const uiList = SettingsList(ui.frame, "List", LIST_X, listY, LIST_W, uiListH);
 		sliderRow(
-			card,
-			g,
+			SettingRow(uiList, "UiSize", 0, tr("HUD size")),
 			"UiSize",
-			"HUD size",
-			y + ROW_STRIDE * 2,
+			valueW,
 			() => s.uiSize,
 			v => {
 				s.uiSize = v;
 				persist();
 			},
 		);
-		const langY = y + ROW_STRIDE * 3;
-		rowLabel(card, "Language", langY);
-		// langType 0 = English, 1 = Korean (any other value: neither is highlighted)
-		const current = s.langType === 0 ? 0 : s.langType === 1 ? 1 : -1;
-		Tabs(card, "Language", {
-			x: g.controlX,
-			y: langY,
-			w: LANG_W,
-			h: ROW_H,
-			items: ["English", "Korean"],
-			value: current,
-			onChange: (i: number): void => {
-				s.langType = i;
-				persist();
-			},
-		});
-		makeLabel(
-			card,
-			"AudioNote",
-			"HUD size scales the on-screen panels. The touch controls have their own size in Touch controls.",
-			PAD,
-			y + ROW_STRIDE * 4 + space(2),
-			CARD_W - PAD * 2,
-			36,
-			TEXT.xs,
-			THEME.mutedForeground,
-			{ align: "left", valign: "top" },
+		SettingNote(
+			uiList,
+			"Note",
+			1,
+			tr("HUD size scales the on-screen panels. The touch controls have their own size in Touch controls."),
+			noteH,
 		);
+		return page;
 	};
 
-	const buildMobile = (card: Frame, y: number): void => {
-		const g = rowGeom(CARD_W, PREVIEW_W + space(4));
-		sliderRow(
-			card,
-			g,
+	const buildTouch = (index: number): Frame => {
+		const page = pageSection(index, tr("Touch controls"));
+		const list = SettingsList(page, "List", LIST_X, listY, TOUCH_LIST_W, listH);
+		const opts = { labelW: TOUCH_LABEL_W };
+		const valueW = TOUCH_LIST_W - TOUCH_LABEL_W;
+		const slider = (name: string, order: number, label: string, get: () => number, set: (v: number) => void) =>
+			sliderRow(SettingRow(list, name, order, tr(label), opts), name, valueW, get, set, touchRefreshers);
+		slider(
 			"LeftSize",
+			0,
 			"Stick size",
-			y,
 			() => s.leftSize,
 			v => {
 				s.leftSize = v;
 				applyTouch();
 			},
 		);
-		sliderRow(
-			card,
-			g,
+		slider(
 			"LeftPos",
+			1,
 			"Stick height",
-			y + ROW_STRIDE,
 			() => s.leftPos,
 			v => {
 				s.leftPos = v;
 				applyTouch();
 			},
 		);
-		sliderRow(
-			card,
-			g,
+		slider(
 			"RightSize",
+			2,
 			"Aim pad size",
-			y + ROW_STRIDE * 2,
 			() => s.rightSize,
 			v => {
 				s.rightSize = v;
 				applyTouch();
 			},
 		);
-		sliderRow(
-			card,
-			g,
+		slider(
 			"RightPos",
+			3,
 			"Aim pad height",
-			y + ROW_STRIDE * 3,
 			() => s.rightPos,
 			v => {
 				s.rightPos = v;
@@ -327,47 +337,45 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			},
 		);
 		switchRow(
-			card,
-			g,
+			SettingRow(list, "Relative", 4, tr("Floating stick"), opts),
 			"Relative",
-			"Floating stick",
-			y + ROW_STRIDE * 4,
+			valueW,
 			() => s.leftRelative,
 			v => {
 				s.leftRelative = v;
 				applyTouch();
 			},
+			touchRefreshers,
 		);
 		switchRow(
-			card,
-			g,
+			SettingRow(list, "Mirror", 5, tr("Left-handed"), opts),
 			"Mirror",
-			"Left-handed",
-			y + ROW_STRIDE * 5,
+			valueW,
 			() => s.mirror,
 			v => {
 				s.mirror = v;
 				applyTouch();
 			},
+			touchRefreshers,
 		);
-		makeLabel(
-			card,
-			"MobileNote",
-			"Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.",
-			PAD,
-			y + ROW_STRIDE * 6 + space(1),
-			g.valueX + VALUE_W - PAD,
-			40,
-			TEXT.xs,
-			THEME.mutedForeground,
-			{ align: "left", valign: "top" },
+		SettingNote(
+			list,
+			"Note",
+			6,
+			tr(
+				"Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.",
+			),
+			48,
 		);
-		const resetY = y + ROW_STRIDE * 6 + space(1) + 44;
-		Button(card, "ResetTouch", "Reset controls", {
-			x: PAD,
-			y: resetY,
-			w: 190,
+		const reset = SettingRow(list, "Reset", 7, tr("Defaults"), opts);
+		Button(reset.value, "ResetTouch", tr("Reset controls"), {
+			x: (valueW - 180) / 2,
+			y: (SETTING_ROW_H - 30) / 2,
+			w: 180,
+			h: 30,
+			size: "sm",
 			variant: "secondary",
+			zIndex: reset.value.ZIndex + 1,
 			onClick: (): void => {
 				const d = defaultTouchPrefs();
 				s.leftSize = d.leftSize;
@@ -376,55 +384,129 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				s.rightSize = d.rightSize;
 				s.rightPos = d.rightPos;
 				s.mirror = d.mirror;
-				for (const fn of refreshers) fn();
+				for (const fn of touchRefreshers) fn();
 				applyTouch();
 			},
 		});
-		refreshPreview = buildPreview(ctx, card, y);
+		const previewX = LIST_X + TOUCH_LIST_W + space(4);
+		refreshPreview = buildPreview(ctx, tr, page, previewX, listY, SECTION_W - previewX - LIST_X, listH);
+		return page;
 	};
 
-	const sections: Array<Section> = [
-		{ title: "Audio & display", description: "Volume, HUD size and language", build: buildAudio },
-		{
-			title: "Touch controls",
-			description: "Size, height and side of the on-screen controls",
-			build: buildMobile,
-		},
+	const buildControls = (index: number): Frame => {
+		const page = pageSection(index, tr(SCHEMES[0].title));
+		const title = page.FindFirstChild("Title") as TextLabel | undefined;
+		// the player's own scheme first: a phone player should not have to read the keyboard's to find theirs
+		const lastInput = gamepadActive() ? 2 : UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? 1 : 0;
+		const lists: Array<Frame> = [];
+		const labelW = 320;
+		for (let i = 0; i < SCHEMES.size(); i++) {
+			const scheme = SCHEMES[i];
+			const list = SettingsList(page, `List${i}`, LIST_X, listY, LIST_W, listH);
+			for (let r = 0; r < scheme.rows.size(); r++) {
+				const [chip, what] = scheme.rows[r];
+				const row = SettingRow(list, `Row${r}`, r, tr(what), { labelW });
+				ValueKey(row.value, "Key", chip, { minW: 180 });
+			}
+			SettingNote(list, "Note", scheme.rows.size(), tr(scheme.note));
+			lists.push(list.frame.Parent as Frame);
+		}
+		const show = (i: number): void => {
+			for (let k = 0; k < lists.size(); k++) setVisible(lists[k], k === i);
+			if (title !== undefined) title.Text = tr(SCHEMES[i].title);
+		};
+		// the scheme switch sits on the section's title line, at its right
+		const schemeNames = SCHEMES.map(sc => tr(sc.title === "Keyboard & mouse" ? "Keyboard" : sc.title));
+		const widths = schemeNames.map(n => tabWidth(n, TEXT.base));
+		let total = 6 + 3 * (widths.size() - 1);
+		for (const wd of widths) total += wd;
+		Segmented(page, "Scheme", {
+			x: SECTION_W - space(5) - total,
+			y: SECTION_TITLE_MID - SEGMENT_H / 2,
+			w: total,
+			h: SEGMENT_H,
+			items: schemeNames,
+			widths,
+			value: lastInput,
+			zIndex: page.ZIndex + 1,
+			onChange: show,
+		});
+		show(lastInput);
+		return page;
+	};
+
+	const buildAbout = (index: number): Frame => {
+		const page = pageFrame(index);
+		const aboutListH = settingsListHeight([
+			SETTING_ROW_H,
+			SETTING_ROW_H,
+			SETTING_ROW_H,
+			SETTING_ROW_H,
+			SETTING_ROW_H,
+			SETTING_ROW_H,
+		]);
+		const about = Section(page, "About", {
+			x: 0,
+			y: 0,
+			w: SECTION_W,
+			h: sectionHeight(aboutListH),
+			title: tr("About"),
+		});
+		const list = SettingsList(about.frame, "List", LIST_X, listY, LIST_W, aboutListH);
+		const valueW = LIST_W - LABEL_W;
+		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
+		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
+		// CON-01: the original is credited, by name and studio
+		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, "Dead Town (Lemon Puppy Games)");
+		// MP-01 / MULTIPLAYER.md: co-op only, MAX_PLAYERS survivors per server
+		textRow(
+			SettingRow(list, "Mode", 3, tr("Mode")),
+			valueW,
+			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
+		);
+		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		const credits = SettingRow(list, "Credits", 5, tr("Credits"));
+		Button(credits.value, "OpenCredits", tr("Open credits"), {
+			x: (valueW - 180) / 2,
+			y: (SETTING_ROW_H - 30) / 2,
+			w: 180,
+			h: 30,
+			size: "sm",
+			variant: "secondary",
+			zIndex: credits.value.ZIndex + 1,
+			onClick: (): void => onCredits(),
+		});
+		return page;
+	};
+
+	const PAGES: Array<[string, (index: number) => Frame]> = [
+		["General", buildGeneral],
+		["Touch controls", buildTouch],
+		["Controls", buildControls],
+		["About", buildAbout],
 	];
-
-	let card: Frame | undefined;
-	const showSection = (index: number): void => {
-		for (const h of handles) h.disconnect();
-		handles.clear();
-		refreshers.clear();
-		refreshPreview = undefined;
-		card?.Destroy();
-		const section = sections[index];
-		const c = Card(body, "Section", { x: CARD_X, y: MAIN_Y, w: CARD_W, h: MAIN_H });
-		card = c;
-		section.build(c, CardHeader(c, section.title, section.description));
+	const pages = new Map<number, Frame>();
+	const showPage = (index: number): void => {
+		for (const [i, page] of pages) setVisible(page, i === index);
+		if (!pages.has(index)) pages.set(index, PAGES[index][1](index));
 	};
 
-	const nav = Sidebar(body, "Sections", {
-		x: MARGIN_X,
-		y: MAIN_Y,
-		w: NAV_W,
-		h: NAV_H,
-		items: sections.map(sec => sec.title),
+	const names = PAGES.map(([label]) => tr(label));
+	const widths = names.map(n => tabWidth(n));
+	let tabsW = 0;
+	for (const wd of widths) tabsW += wd + space(3);
+	const tabs = Tabs(panel, "Tabs", {
+		x: PAD,
+		y: tabsY,
+		w: math.min(tabsW, SECTION_W),
+		h: TAB_H,
+		items: names,
+		widths,
 		value: 0,
-		onChange: (i: number): void => showSection(i),
+		onChange: showPage,
 	});
-	showSection(0);
-
-	Button(body, "Credits", "Credits", {
-		x: MARGIN_X,
-		y: MAIN_Y + MAIN_H - CREDITS_H,
-		w: NAV_W,
-		variant: "secondary",
-		onClick: (): void => onCredits(),
-	});
-
-	autoFocus(nav.items[0]);
+	showPage(0);
+	autoFocus(tabs.triggers[0]);
 
 	return (): void => {
 		for (const h of handles) h.disconnect();
@@ -443,29 +525,38 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
  *
  * It is also the only way a player on a PC (or the author on a monitor) can set up the phone layout at all.
  */
-function buildPreview(ctx: GameContext, card: Frame, y: number): () => void {
-	const x = CARD_W - PREVIEW_W - PAD; // flush with the card's right padding
+function buildPreview(
+	ctx: GameContext,
+	tr: Tr,
+	parent: Frame,
+	x: number,
+	y: number,
+	boxW: number,
+	boxH: number,
+): () => void {
+	const captionH = 20;
 	const aspect = math.max(ctx.viewH, 1) / math.max(ctx.viewW, 1);
-	const h = math.min(PREVIEW_W * aspect, MAIN_H - y - PAD - 28);
+	const h = math.min(boxW * aspect, boxH - captionH - space(1));
 	const w = h / aspect;
-	const px = x + (PREVIEW_W - w) / 2;
-	const screen = makeSurface(card, "Preview", px, y, w, h, "well", { clips: true });
+	const px = x + (boxW - w) / 2;
+	const screen = makeSurface(parent, "Preview", px, y, w, h, "well", { clips: true, zIndex: parent.ZIndex + 1 });
+	// the drawing lives in its own layer, so a redraw clears it without touching the well's skin layers
+	const dots = makeFrame(screen, "Dots", 0, 0, w, h, THEME.background, { transparency: 1, zIndex: screen.ZIndex });
 	makeLabel(
-		card,
+		parent,
 		"PreviewCaption",
-		`Your screen · ${math.floor(ctx.viewW)} x ${math.floor(ctx.viewH)}`,
+		`${tr("Your screen")} · ${math.floor(ctx.viewW)} x ${math.floor(ctx.viewH)}`,
 		x,
 		y + h + space(1),
-		PREVIEW_W,
-		20,
+		boxW,
+		captionH,
 		TEXT.xs,
-		THEME.mutedForeground,
+		THEME.foreground,
+		{ zIndex: parent.ZIndex + 1 },
 	);
 
 	const draw = (): void => {
-		for (const child of screen.GetChildren()) {
-			if (child.IsA("GuiObject")) child.Destroy();
-		}
+		for (const child of dots.GetChildren()) child.Destroy();
 		const prefs: TouchPrefs = {
 			leftSize: ctx.save.settings.leftSize,
 			leftPos: ctx.save.settings.leftPos,
@@ -478,25 +569,25 @@ function buildPreview(ctx: GameContext, card: Frame, y: number): () => void {
 		const f = w / math.max(L.viewW, 1);
 		const dot = (name: string, cx: number, cy: number, r: number, color: Color3, zIndex: number): void => {
 			const d = math.max(r * 2 * f, 4);
-			const g = makeFrame(screen, name, cx * f - d / 2, cy * f - d / 2, d, d, color, {
+			const g = makeFrame(dots, name, cx * f - d / 2, cy * f - d / 2, d, d, color, {
 				radius: RADIUS.full,
-				zIndex,
+				zIndex: dots.ZIndex + zIndex,
 				transparency: 0.25,
 			});
 			g.BorderSizePixel = 0;
 		};
-		dot("Stick", L.move.homeX, L.move.homeY, L.move.baseR, THEME.foreground, 3);
-		dot("StickKnob", L.move.homeX, L.move.homeY, L.move.knobR, SURFACE.frame, 4);
-		dot("Aim", L.aim.homeX, L.aim.homeY, L.aim.baseR, THEME.destructive, 3);
-		const btn = (name: string, b: TouchButton, color: Color3): void => dot(name, b.x, b.y, b.r, color, 5);
+		dot("Stick", L.move.homeX, L.move.homeY, L.move.baseR, THEME.foreground, 1);
+		dot("StickKnob", L.move.homeX, L.move.homeY, L.move.knobR, SURFACE.frame, 2);
+		dot("Aim", L.aim.homeX, L.aim.homeY, L.aim.baseR, THEME.destructive, 1);
+		const btn = (name: string, b: TouchButton, color: Color3): void => dot(name, b.x, b.y, b.r, color, 3);
 		btn("Use", L.use, THEME.primary);
 		btn("Reload", L.reload, THEME.secondary);
 		btn("Bag", L.bag, THEME.secondary);
 		btn("Pause", L.pause, THEME.secondary);
 		// the weapon card of the HUD, so the player can see nothing is covered
-		makeFrame(screen, "Weapon", w / 2 - w * 0.11, h - h * 0.13, w * 0.22, h * 0.09, GAME.info, {
+		makeFrame(dots, "Weapon", w / 2 - w * 0.11, h - h * 0.13, w * 0.22, h * 0.09, GAME.info, {
 			radius: RADIUS.sm,
-			zIndex: 2,
+			zIndex: dots.ZIndex + 1,
 			transparency: 0.55,
 		});
 	};
