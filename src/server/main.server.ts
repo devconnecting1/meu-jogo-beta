@@ -164,11 +164,14 @@ interface Session {
 	 */
 	staleProgressReports: number;
 	/**
-	 * MON-05: the fingerprint of what the title record (server/save/titleRecord.ts) holds for this player, so a flush
-	 * rewrites it only when something was earned. undefined = the load could not read it: the next write MERGES into
-	 * the record instead of replacing it, because this session never saw what is there.
+	 * MON-05: the fingerprint of what the title record (server/save/titleRecord.ts) holds for this player (nothing
+	 * stored = an empty record of this save's history), so a flush rewrites it only when something was earned.
+	 * undefined = the load could not read it: the next write MERGES into the record instead of replacing it, because
+	 * this session never saw what is there.
 	 */
 	titleMark: string | undefined;
+	/** the same, with the kills in steps (`titleRecordStep`): what an autosave compares against */
+	titleStep: string | undefined;
 	/**
 	 * MON-05: the next record write REPLACES the record whatever this session read of it -- the save is a new title
 	 * history (a missing save, an admin reset) that nothing in the record may flow back into. Cleared by the first
@@ -392,10 +395,12 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 	}
 }
 
-/** the title record (server/save/titleRecord.ts) brought up to date with the save, when what was earned changed */
-function syncTitleRecord(s: Session): void {
-	const mark = TitleRecord.titleRecordMark(TitleRecord.titleRecordOf(s.save));
-	if (mark === s.titleMark) return;
+/**
+ * The title record (server/save/titleRecord.ts) brought up to date with the save when it is due (`titleRecordDue`:
+ * a title, a new history, a step of kills -- or, `final`, anything at all on leaving).
+ */
+function syncTitleRecord(s: Session, final: boolean): void {
+	if (!TitleRecord.titleRecordDue(s.save, s.titleMark, s.titleStep, s.titleReplace, final)) return;
 	// replace a record this session has read, or one of a history this save ended; merge into one it never saw
 	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleReplace || s.titleMark !== undefined);
 	if (written === undefined) return;
@@ -404,6 +409,7 @@ function syncTitleRecord(s: Session): void {
 	// here on the save holds everything the record does and replacing it can never lower it
 	if (TitleRecord.mergeTitleRecord(s.save, written)) s.dirty = true;
 	s.titleMark = TitleRecord.titleRecordMark(written);
+	s.titleStep = TitleRecord.titleRecordStep(written);
 }
 
 /**
@@ -422,7 +428,7 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	// the session lock and inside the same writing window. On release it goes FIRST: the save write below drops the
 	// lock, and from then on another server may load this player and own both documents -- a record written after
 	// that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
-	if (release) syncTitleRecord(s);
+	if (release) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
 		s.writing = false;
@@ -433,7 +439,7 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	s.dirty = false;
 	const outcome = writeWithLock(s, json, release, delays);
 	// every other write: right after the save, which just proved this session still holds the lock
-	if (outcome === "ok" && !release) syncTitleRecord(s);
+	if (outcome === "ok" && !release) syncTitleRecord(s, false);
 	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
@@ -531,26 +537,34 @@ function loadSession(s: Session): void {
 	// opens still has it (server/save/titleRecord.ts). Only for a save this session will write.
 	let restored = false;
 	let titleMark: string | undefined;
+	let titleStep: string | undefined;
 	let titleReplace = false;
 	if (status === "ok" || status === "new") {
 		const read = TitleRecord.loadTitleRecord(s.key);
-		if (read.ok) {
-			// "" = no record yet: known, and different from any real fingerprint, so the first write creates it
-			titleMark = read.record !== undefined ? TitleRecord.titleRecordMark(read.record) : "";
-		}
+		const record = read.ok ? read.record : undefined;
 		if (status === "new") {
 			// no save: a first visit, or a key deleted on purpose. Whatever the record holds is a history that ended
-			// -- never merged, replaced at the first write, and this save starts a later one
-			const recordEpoch = read.ok && read.record !== undefined ? read.record.epoch : 0;
+			// -- never merged, replaced at the first write (as is one that could not be read), and this save starts
+			// a later one
+			const recordEpoch = record !== undefined ? record.epoch : 0;
 			save.titleEpoch = math.min(math.max(os.time(), recordEpoch + 1), SAVE_LIMITS.EPOCH_MAX);
-			titleReplace = true;
-		} else if (read.ok && read.record !== undefined) {
-			restored = TitleRecord.mergeTitleRecord(save, read.record);
+			titleReplace = !read.ok || record !== undefined;
+		} else if (record !== undefined) {
+			restored = TitleRecord.mergeTitleRecord(save, record);
+			// a record of a history this save ended (an admin reset whose record write failed): replaced at once
+			titleReplace = record.epoch < save.titleEpoch;
+		}
+		if (read.ok) {
+			// nothing stored reads as nothing earned in this save's history: no write until something is
+			const known = record ?? TitleRecord.emptyTitleRecord(save.titleEpoch);
+			titleMark = TitleRecord.titleRecordMark(known);
+			titleStep = TitleRecord.titleRecordStep(known);
 		}
 	}
 	s.status = status;
 	s.save = save;
 	s.titleMark = titleMark;
+	s.titleStep = titleStep;
 	s.titleReplace = titleReplace;
 	s.dirty = status === "new" || (status === "ok" && migrated) || restored;
 	s.lockLost = false;
@@ -607,6 +621,7 @@ function newSession(player: Player): Session {
 		staleProgressReports: 0,
 		assistedRunRev: undefined,
 		titleMark: undefined,
+		titleStep: undefined,
 		titleReplace: false,
 	};
 }

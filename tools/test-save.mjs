@@ -1178,7 +1178,9 @@ section(
 	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
 	const load = main.slice(main.indexOf("function loadSession("), main.indexOf("function newSession("));
 	check(
-		/status === "new"/.test(load) && /save\.titleEpoch = /.test(load) && /titleReplace = true/.test(load),
+		/status === "new"/.test(load) &&
+			/save\.titleEpoch = /.test(load) &&
+			/titleReplace = !read\.ok \|\| record !== undefined/.test(load),
 		"main.server.ts loadSession: um save que falta comeca uma historia nova e substitui o registro",
 	);
 	const edit = main.slice(main.indexOf("function adminEdit("), main.indexOf("admin = startAdminServer("));
@@ -1186,6 +1188,61 @@ section(
 		/ops === undefined \|\| TitleRecord\.lowersEarned\(before, edited\)/.test(edit) &&
 			/s\.titleReplace = true/.test(edit),
 		"main.server.ts adminEdit: um reset comeca uma historia nova e substitui o registro",
+	);
+}
+
+section("24) o registro custa uma escrita so quando importa: titulo, historia nova, degrau de abates, saida");
+{
+	const E = 1_700_000_000;
+	const save = SAVE.defaultSave();
+	save.titleEpoch = E;
+	const empty = REC.emptyTitleRecord(E);
+	const mark = REC.titleRecordMark(empty);
+	const step = REC.titleRecordStep(empty);
+	const due = (final, known = [mark, step], replace = false) =>
+		REC.titleRecordDue(save, known[0], known[1], replace, final);
+	check(!due(false) && !due(true), "nada ganho: nenhuma escrita, nem no autosave nem na saida");
+	check(!due(true, [undefined, undefined]), "nem num registro que a carga nao leu (nada a acrescentar)");
+	check(due(true, [undefined, undefined], true), "mas uma historia nova substitui mesmo sem nada ganho");
+	const autosaves = [];
+	let known = [mark, step];
+	for (let k = 1; k <= 25; k++) {
+		save.zombieKills = k;
+		if (!due(false, known)) continue;
+		autosaves.push(k);
+		const written = REC.titleRecordOf(save);
+		known = [REC.titleRecordMark(written), REC.titleRecordStep(written)];
+	}
+	checkArrayEq(
+		autosaves,
+		[10, 20],
+		`o autosave so escreve a cada ${REC.TITLE_RECORD_KILL_STEP} abates (1..25 sem gravar)`,
+	);
+	save.zombieKills = 3;
+	check(!due(false) && due(true), "3 abates: nao no autosave, sim na saida (exato)");
+	save.zombieKills = 0;
+	save.titles[TIT.TitleId.Survivor] = 1;
+	check(due(false), "um titulo ganho escreve no primeiro autosave");
+	save.titles[TIT.TitleId.Survivor] = 0;
+	save.titleEpoch = E + 1;
+	check(due(false), "e uma historia nova (reset) tambem");
+	save.titleEpoch = E;
+	// after a write, the session fingerprints what it wrote: the same save is not written again
+	save.zombieKills = 10;
+	const wrote = REC.titleRecordOf(save);
+	const after = [REC.titleRecordMark(wrote), REC.titleRecordStep(wrote)];
+	check(!due(false, after) && !due(true, after), "o que acabou de ser escrito nao e escrito de novo");
+	save.zombieKills = 19;
+	check(!due(false, after) && due(true, after), "19 abates depois de gravar 10: so na saida");
+
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const flush = main.slice(
+		main.indexOf("function flush("),
+		main.indexOf("// ---------------------------------------------------------------- load"),
+	);
+	check(
+		/if \(release\) syncTitleRecord\(s, true\)/.test(flush) && /!release\) syncTitleRecord\(s, false\)/.test(flush),
+		"main.server.ts flush: exato na saida (antes do save que solta a trava), por degraus no autosave",
 	);
 }
 

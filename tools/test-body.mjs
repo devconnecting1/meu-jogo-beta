@@ -46,6 +46,8 @@
  *  14. RESET AND WIPE       the title record never undoes an admin reset (even when this session could not read it,
  *                           or its write failed) nor a save key deleted on purpose.
  *  15. RECORD UNDER LOCK    leaving writes the title record BEFORE the save write that releases the session lock.
+ *  16. RECORD BUDGET       no record write for a survivor who earned nothing; a title store that failed to open
+ *                           is asked again a minute later instead of never.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1602,6 +1604,49 @@ section("15) leaving writes the title record while the session still holds the s
 		"…and both documents hold what was earned",
 		`save ${stored?.zombieKills}, record ${JSON.stringify(rec)}`,
 	);
+});
+
+// ================================================================ 16: the record costs a write only when it matters
+
+section("16) the title record is written only when something was earned, and its store is asked again (MON-05)", () => {
+	const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const recordWrites = (from, key) =>
+		storeLog.slice(from).filter(e => e.store === TITLE_STORE && e.op === "update" && e.key === key).length;
+
+	// a survivor who earned nothing: one session, a save written on leaving, and no record at all
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const from = storeLog.length;
+		const p = srv.join(u, "nothing");
+		srv.save(p).money += 5;
+		srv.quit(p);
+		const writes = recordWrites(from, String(u));
+		check(writes === 0, "a survivor who earned nothing costs no record write", `${writes} write(s)`);
+		const none = fakeStore(TITLE_STORE).data.get(String(u));
+		check(none === undefined, "…and has no record", JSON.stringify(none));
+		srv.quit(srv.join(u, "nothing"));
+		check(recordWrites(from, String(u)) === 0, "…not on the next session either");
+	}
+
+	// the store could not be opened when the first player came in: it is asked again, not given up for good
+	{
+		const srv = bootServer();
+		openFailures.set(TITLE_STORE, 1);
+		const u = newUser();
+		const p = srv.join(u, "late store");
+		check(openFailures.get(TITLE_STORE) === 0, "the title store failed to open at the first load");
+		const save = srv.save(p);
+		save.titles[1] = 1;
+		save.zombieKills = 100;
+		srv.run(61, 1 / 10);
+		const from = storeLog.length;
+		srv.quit(p);
+		const late = recordWrites(from, String(u));
+		check(late === 1, "a minute later, leaving opens it and writes the record", `${late} write(s)`);
+		const rec = fakeStore(TITLE_STORE).data.get(String(u));
+		check(rec?.zombieKills === 100 && rec.titles[1] === 1, "…with what was earned", JSON.stringify(rec));
+	}
 });
 
 // ================================================================

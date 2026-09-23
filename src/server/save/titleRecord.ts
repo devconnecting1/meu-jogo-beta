@@ -32,6 +32,11 @@
  *
  * Best effort by design: a failed read only means this session cannot restore a rollback (it merges on its next
  * write instead of replacing), and a failed write is retried on the next flush. The save stays the source of truth.
+ *
+ * And cheap: every write is an UpdateAsync out of the same per-server budget the saves use, so the record is not
+ * rewritten at every autosave that carries a kill (`titleRecordDue`). An autosave writes it when a title was earned,
+ * when the history changed (a reset) or when the kill count crosses a multiple of TITLE_RECORD_KILL_STEP (Horde
+ * Breaker's 100 is one of them); leaving writes it exactly. A survivor who has earned nothing never gets one.
  */
 import { GAME_NAME } from "shared/module";
 import { TITLES } from "shared/data/titles";
@@ -78,11 +83,48 @@ export function titleRecordOf(save: PlayerSaveData): TitleRecord {
 	return { titles, zombieKills: math.max(0, save.zombieKills), epoch: save.titleEpoch };
 }
 
-/** a fingerprint of the earned half of a save or a record, so a flush only rewrites the record when it changed */
-export function titleRecordMark(rec: TitleRecord): string {
-	let mark = `${rec.epoch}:${rec.zombieKills}:`;
+/** an autosave rewrites the record when the kill count reaches the next multiple of this (`titleRecordStep`) */
+export const TITLE_RECORD_KILL_STEP = 10;
+
+/** nothing earned, in the history `epoch`: what "no record stored" means to a session that read the store */
+export function emptyTitleRecord(epoch: number): TitleRecord {
+	const titles = new Array<number>();
+	for (let i = 0; i < TITLES.size(); i++) titles.push(0);
+	return { titles, zombieKills: 0, epoch };
+}
+
+function flagsMark(rec: TitleRecord): string {
+	let mark = "";
 	for (const v of rec.titles) mark += v > 0 ? "1" : "0";
 	return mark;
+}
+
+/** a fingerprint of the earned half of a save or a record, so a flush only rewrites the record when it changed */
+export function titleRecordMark(rec: TitleRecord): string {
+	return `${rec.epoch}:${rec.zombieKills}:${flagsMark(rec)}`;
+}
+
+/** the same fingerprint with the kill count in steps of TITLE_RECORD_KILL_STEP: what an autosave compares */
+export function titleRecordStep(rec: TitleRecord): string {
+	return `${rec.epoch}:${math.floor(rec.zombieKills / TITLE_RECORD_KILL_STEP)}:${flagsMark(rec)}`;
+}
+
+/**
+ * Should this flush write the record? `knownMark` / `knownStep` fingerprint what the store holds as far as this
+ * session knows (undefined = its load could not read it); `replace` = the session must replace it (a new history);
+ * `final` = the session is leaving, and the record must end exactly where the save does.
+ */
+export function titleRecordDue(
+	save: PlayerSaveData,
+	knownMark: string | undefined,
+	knownStep: string | undefined,
+	replace: boolean,
+	final: boolean,
+): boolean {
+	const mine = titleRecordOf(save);
+	// a record this session never read, and nothing earned to add to it: nothing to write
+	if (knownMark === undefined && !replace && mine.zombieKills <= 0 && !mine.titles.includes(1)) return false;
+	return final ? titleRecordMark(mine) !== knownMark : titleRecordStep(mine) !== knownStep;
 }
 
 /** true when `after` holds less than `before` of what was earned (a flag gone, fewer kills): a new title history */
@@ -133,16 +175,27 @@ export function nextTitleRecord(old: unknown, mine: TitleRecord, replace: boolea
 
 // ---------------------------------------------------------------- the store
 
+/** after GetDataStore fails, how long before the store is asked for again (it is not asked at every flush) */
+const STORE_RETRY_S = 60;
 let store: DataStore | undefined;
-let storeTried = false;
+let storeFailedAt: number | undefined;
 
-/** opened on first use, so the pure half of this module loads anywhere (tools/test-save.mjs has no DataStoreService) */
+/**
+ * Opened on first use, so the pure half of this module loads anywhere (tools/test-save.mjs has no
+ * DataStoreService). A failure to open is not remembered for the server's whole life -- a store that was not ready
+ * a minute after boot would otherwise leave every session of this server without a record -- it is asked again
+ * after STORE_RETRY_S.
+ */
 function titleStore(): DataStore | undefined {
-	if (!storeTried) {
-		storeTried = true;
-		const [ok, value] = pcall((): unknown => game.GetService("DataStoreService").GetDataStore(TITLE_STORE));
-		if (ok) store = value as DataStore;
-		else warn(`[${GAME_NAME}] title record store unavailable: ${tostring(value)}`);
+	if (store !== undefined) return store;
+	if (storeFailedAt !== undefined && os.clock() - storeFailedAt < STORE_RETRY_S) return undefined;
+	const [ok, value] = pcall((): unknown => game.GetService("DataStoreService").GetDataStore(TITLE_STORE));
+	if (ok) {
+		store = value as DataStore;
+		storeFailedAt = undefined;
+	} else {
+		storeFailedAt = os.clock();
+		warn(`[${GAME_NAME}] title record store unavailable (asked again in ${STORE_RETRY_S} s): ${tostring(value)}`);
 	}
 	return store;
 }
