@@ -29,7 +29,7 @@ import {
 } from "shared/game/entities";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { circleInView, part, SIDES } from "./drawKit";
-import { drawHumanoid, zombieColor } from "./humanoidView";
+import { drawHumanoid, drawZombie } from "./humanoidView";
 import { COLORS, Z } from "shared/engine/colors";
 import { GameRefs, SPEED_SCALE } from "../systems/types";
 import { remoteBosses, remoteZombies, takeZombieDeaths, ZombieDeathEvent } from "../net/netClient";
@@ -334,33 +334,32 @@ export class ActorsView {
 				alpha: 0.3 * alpha * (1 - lift / 70),
 				zIndex: Z.actorShadow,
 			});
-			let color = zombieColor(zb.type);
-			let outline: Color3 | undefined;
 			const fuse = zb.fuse ?? -1;
-			if (zb.type === 3 && fuse > 0) {
-				// lit fuse: red blink that accelerates as it burns (frequency ∝ 1 / time left)
-				if (math.sin(math.pi * 2 * 3 * math.log(fuse + 0.1)) > 0) {
-					color = color.Lerp(COLORS.uiRed, 0.8);
-					outline = COLORS.uiYellow;
-				}
-			}
+			// lit fuse: red blink that accelerates as it burns (frequency ∝ 1 / time left)
+			const blink = zb.type === 3 && fuse > 0 && math.sin(math.pi * 2 * 3 * math.log(fuse + 0.1)) > 0;
 			const bx = zb.x + up.x * lift;
 			const by = zb.y + up.y * lift;
 			const standing = zb.hp > 0 || fuse > 0;
-			drawHumanoid(
+			const flash = clamp(zb.hitFlash ?? 0, 0, 1);
+			const windup = zb.type === 2 ? (zb.headX ?? 0) : 0;
+			const z = standing ? Z.zombie : Z.zombie - 5;
+			// the pixel art of the type (ART-09) once its sheet is uploaded; the flat humanoid otherwise (ART-01)
+			drawZombie(
 				r,
 				cam,
 				bx,
 				by,
 				zb.angleSlow,
 				sc * liftScale,
-				color,
-				clamp(zb.hitFlash ?? 0, 0, 1),
+				zb.type,
+				flash,
 				alpha,
 				zb.feetCycle ?? 0,
-				standing ? Z.zombie : Z.zombie - 5,
-				zb.type === 2 ? (zb.headX ?? 0) : 0,
-				outline,
+				z,
+				windup,
+				lift > 0,
+				zb.rush === true,
+				blink,
 			);
 			if (zb.detectShow > 0 && zb.hp > 0) {
 				// "!" made of two rects, always upright on screen

@@ -144,10 +144,10 @@ export const SHOULDER_L = 10;
 const STRIDE = 7;
 
 /**
- * A survivor standing or walking, without arms (the arms follow the weapon: tools/character-art.mjs bakes them
- * apart, client/view/charArt.ts places them). `step` -1..1 is the stride.
+ * A survivor standing or walking, without arms or head (the arms follow the weapon: tools/character-art.mjs bakes
+ * them apart and client/view/charArt.ts places them, between this body and the head). `step` -1..1 is the stride.
  */
-export function survivorParts(outfit, step) {
+export function survivorBodyParts(outfit, step) {
 	const p = new Parts();
 	const boots = [BOOTS, SANTA_BOOTS, COSTUME_BOOTS, COWBOY_BOOTS][outfit] ?? BOOTS;
 	for (const side of SIDES) p.box(step * STRIDE * side, side * 7, 11, 8, boots, 0, { round: 3, dome: 0.6 });
@@ -181,7 +181,12 @@ export function survivorParts(outfit, step) {
 		p.box(-12, 0, 7, 16, PACK, 5, { round: 2.5, lift: true });
 		p.box(-14, 0, 3, 12, PACK_FLAP, 6, { round: 1, flat: true });
 	}
-	// the head, or the hat on it
+	return p.list;
+}
+
+/** the head of a standing survivor, or the hat on it: its own layer, over the arms */
+export function survivorHeadParts(outfit) {
+	const p = new Parts();
 	if (outfit === 1) {
 		p.oval(1, 0, 15, 15, SANTA_FUR, 7, { lift: true });
 		p.oval(0, 0, 10, 10, SANTA_RED, 8, { dome: 0.7 });

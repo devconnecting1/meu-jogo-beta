@@ -279,7 +279,8 @@ export function sheetSpecs() {
 	for (const s of steps) zombies.push({ parts: M.zombieParts(4, s, 0, false, true) });
 
 	const survivors = [];
-	for (let o = 0; o < S.OUTFITS; o++) for (const s of steps) survivors.push({ parts: M.survivorParts(o, s) });
+	for (let o = 0; o < S.OUTFITS; o++) for (const s of steps) survivors.push({ parts: M.survivorBodyParts(o, s) });
+	for (let o = 0; o < S.OUTFITS; o++) survivors.push({ parts: M.survivorHeadParts(o) });
 	for (let o = 0; o < S.OUTFITS; o++) {
 		for (const d of [-1, 0, 1]) survivors.push({ parts: M.downedParts(o, d), ink: M.INK_DOWNED });
 	}

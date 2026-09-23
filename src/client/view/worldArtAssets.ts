@@ -233,7 +233,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
 	/** sheet: survivors: 4 outfits x 5 strides, then the downed crawl (ART-08) */
-	survivors: { id: "", w: 640, h: 640 },
+	survivors: { id: "", w: 640, h: 720 },
 	/** mask: survivors: white silhouettes of the walking cells (tint: hit flash, poison) */
 	survivorsFill: { id: "", w: 640, h: 400 },
 	/** mask: survivors: white outlines of the walking cells (tint: the red hit outline, LEG-02) */

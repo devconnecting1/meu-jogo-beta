@@ -2,7 +2,8 @@
  * Where each pose of each character sits in the characters' sprite sheets (design/world-art: survivors, arms,
  * weapons, zombies, dogs, birds, and the white Fill / Rim masks of survivors and zombies). tools/character-art.mjs
  * writes the sheets from this layout and client/view/charArt.ts reads them with it, so the two can never point at
- * different cells (docs/DESIGN_RULES.md ART-07).
+ * different cells (docs/DESIGN_RULES.md ART-07). Every sheet stays within 1024 x 1024 texels, the largest image
+ * Roblox keeps at full resolution.
  *
  * A sheet is a grid of square cells, one texel = 4 world units (WORLD_TEXEL, like the town). COLUMN = heading: every
  * pose is drawn at CHAR_DIRS screen headings, so a character sprite is never rotated on screen -- its texels stay on
@@ -73,21 +74,40 @@ export function zombieRow(kind: number, step: number, windup: number, air: boole
 export const OUTFITS = 4;
 /** texels per cell: a downed survivor lying full length, the cowboy's brim */
 export const SURVIVOR_CELL = 20;
-/** rows: five strides per outfit, then three crawl poses per outfit (downed, MP-03) */
-export const SURVIVOR_ROW_DOWNED = OUTFITS * STEPS;
+/**
+ * A standing survivor is two layers, because the arms go between them: the BODY (boots, torso, pack) under the
+ * arms, and the HEAD (hair, or the hat with its brim and Santa's pom-pom) over them -- from above, a hand held
+ * up by the shoulder passes under the brim, never over the face.
+ *
+ * rows: five strides per outfit (body), one head per outfit, then three crawl poses per outfit (downed, MP-03: one
+ * cell, no arms of their own to place, no weapon)
+ */
+export const SURVIVOR_ROW_HEAD = OUTFITS * STEPS;
+export const SURVIVOR_ROW_DOWNED = SURVIVOR_ROW_HEAD + OUTFITS;
 export const SURVIVOR_ROWS = SURVIVOR_ROW_DOWNED + OUTFITS * 3;
-/** the Fill and Rim masks have the walking rows only: the flat drawing never flashed a downed body either */
-export const SURVIVOR_MASK_ROWS = SURVIVOR_ROW_DOWNED;
+/**
+ * The Fill and Rim masks have the walking BODY rows only: a hit and the poison colour the torso, as the flat drawing
+ * always did, and the flat drawing never flashed a downed body either.
+ */
+export const SURVIVOR_MASK_ROWS = SURVIVOR_ROW_HEAD;
 
+function outfitIndex(outfit: number): number {
+	return outfit >= 0 && outfit < OUTFITS ? outfit : 0;
+}
+
+/** the body of a standing survivor at stride `step` (-1..1) */
 export function survivorRow(outfit: number, step: number): number {
-	const o = outfit >= 0 && outfit < OUTFITS ? outfit : 0;
-	return o * STEPS + stepRow(step);
+	return outfitIndex(outfit) * STEPS + stepRow(step);
+}
+
+/** the head (or hat) of a standing survivor */
+export function headRow(outfit: number): number {
+	return SURVIVOR_ROW_HEAD + outfitIndex(outfit);
 }
 
 /** `drag` -1..1: which arm is pulling */
 export function downedRow(outfit: number, drag: number): number {
-	const o = outfit >= 0 && outfit < OUTFITS ? outfit : 0;
-	return SURVIVOR_ROW_DOWNED + o * 3 + math.clamp(math.floor(drag + 1.5), 0, 2);
+	return SURVIVOR_ROW_DOWNED + outfitIndex(outfit) * 3 + math.clamp(math.floor(drag + 1.5), 0, 2);
 }
 
 /** where the arms leave the body (body frame, world units): the shoulder joints under the torso's edge */
@@ -114,8 +134,7 @@ export function armLengthIndex(len: number): number {
 }
 
 export function armRow(outfit: number, lengthIndex: number): number {
-	const o = outfit >= 0 && outfit < OUTFITS ? outfit : 0;
-	return o * ARM_LENGTHS.size() + lengthIndex;
+	return outfitIndex(outfit) * ARM_LENGTHS.size() + lengthIndex;
 }
 
 // ---------------------------------------------------------------- weapons
