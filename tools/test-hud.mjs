@@ -53,6 +53,18 @@ const Clock = require(join(SRC, "shared/sim/clock.ts"));
 const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
 const { NIGHTFALL_WARN_S, SKY_PLATE_W, SKY_PLATE_H } = require(join(SRC, "client/ui/hudSky.ts"));
 const { navReach } = require(join(SRC, "client/ui/hudNav.ts"));
+const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+const { ICON_ATLAS_CELLS } = require(join(SRC, "client/ui/itemIconAtlas.ts"));
+/** the uploads as they are, with the item icon atlas's id set to `id` ("" = none: the icons are Frames) */
+function setIconAtlas(id) {
+	const ids = {};
+	for (const [name, t] of Object.entries(WORLD_ART)) ids[name] = t.id;
+	ids.itemIcons = id;
+	WA.overrideWorldArt(ids);
+}
+// parts 1-5 measure the Frame icons whatever has been uploaded; part 6 the atlas (npm run test:icons)
+setIconAtlas("");
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -1085,6 +1097,66 @@ function isUnder(inst, root) {
 
 hud.unmount();
 check("desmontar remove tudo", hudRoot() === undefined);
+
+// ---------------------------------------------------------------- 6) the hotbar with the item icon atlas
+
+console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, nenhum Frame de icone reservado\n");
+{
+	const named = name => hudRoot().GetDescendants().filter(d => d.Name === name).length;
+	setIconAtlas("");
+	const flatMount = phase("monta a HUD (toque), icones em Frames", () => {
+		hud.mount();
+		hud.update(state());
+	});
+	const flatPx = named("Px");
+	const flatAll = hudRoot().GetDescendants().length;
+	hud.unmount();
+	setIconAtlas("rbxassetid://910000001");
+	const atlasMount = phase("monta a HUD (toque), icones do atlas", () => {
+		hud.mount();
+		hud.update(state());
+	});
+	const images = named("Atlas");
+	check(
+		"cada ladrilho da hotbar e UM ImageLabel, sem a reserva de Frames do icone mais caro",
+		named("Px") === 0 &&
+			images === 5 &&
+			[0, 1, 2, 3, 4].every(k => {
+				const kids = deep(tile(k), "ItemIcon")?.GetChildren() ?? [];
+				return kids.length === 1 && kids[0].ClassName === "ImageLabel";
+			}),
+		`${images} imagens; sem atlas eram ${flatPx} Frames`,
+	);
+	check(
+		"montar custa so isso a menos: os Frames de icone viram 5 imagens, o resto da HUD e o mesmo",
+		atlasMount.created === flatMount.created - flatPx + images &&
+			hudRoot().GetDescendants().length === flatAll - flatPx + images,
+		`${flatMount.created} -> ${atlasMount.created} Instances`,
+	);
+	const cellOk = k => {
+		const img = deep(tile(k), "ItemIcon")?.GetChildren()[0];
+		const c = ICON_ATLAS_CELLS[iconKey(k)];
+		return img?.Visible === true && c !== undefined && img.ImageRectOffset.X === c[0] && img.ImageRectOffset.Y === c[1];
+	};
+	const armed = [0, 1, 2, 3, 4].filter(k => iconKey(k) !== undefined);
+	check(
+		"e cada imagem mostra a celula do icone da arma (o mesmo desenho do Bag)",
+		iconKey(0) === weaponIcon(DAGGER) && armed.length >= 3 && armed.every(cellOk),
+		armed.map(k => iconKey(k)).join(", "),
+	);
+	const run = phase("600 quadros no toque, icones do atlas", () => {
+		for (let i = 0; i < 600; i++) {
+			setClock(5000 + i / 60);
+			hud.update(frameState(i));
+		}
+	});
+	check("600 quadros com o atlas nao criam nem destroem Instance", zero(run), cost(run));
+	hud.unmount();
+	setIconAtlas("");
+	console.log(
+		`  (a HUD no toque: ${flatAll + 1} Instances com os icones em Frames, ${flatAll - flatPx + images + 1} com o atlas)`,
+	);
+}
 
 // ---------------------------------------------------------------- report
 
