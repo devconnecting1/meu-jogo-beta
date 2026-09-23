@@ -25,7 +25,8 @@ const HttpService = game.GetService("HttpService");
 const REMOTE_TIMEOUT = 30;
 const SEND_INTERVAL = SAVE_MIN_INTERVAL + 0.5;
 
-export type SaveReason = "auto" | "manual" | "death" | "lobby" | "day" | "boss" | "packs" | "menu";
+/** "equip": an outfit or a pet changed — what the other survivors see (MON-04), so it should not wait a minute */
+export type SaveReason = "auto" | "manual" | "death" | "lobby" | "day" | "boss" | "packs" | "menu" | "equip";
 
 export interface LoadInfo {
 	status: LoadStatus;

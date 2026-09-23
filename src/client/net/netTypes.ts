@@ -20,6 +20,9 @@ export interface RemotePlayerView {
 	/** what the nameplate shows */
 	displayName: string;
 	level: number;
+	/** what they wear (OutfitLook) and what follows them (PetLook), MON-04; 0 = none */
+	outfit: number;
+	pet: number;
 	x: number;
 	y: number;
 	/** facing/aim in radians (world frame) */

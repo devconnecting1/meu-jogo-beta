@@ -4,7 +4,8 @@
  *   Snap   unreliable, every SNAP_NEAR_EVERY_TICKS ticks (20 Hz): the own block, the other survivors, the
  *          bosses and the horde — each entity filtered by the interest rings and the visibility rules of §4.3
  *   Fx     unreliable, one batch per tick when something happened: blood, debris, shakes, tracers, shots
- *   World  reliable, batched per tick: InitBegin, the roster, PlayerLife, ZombieDied, Clock, Announce (§4.5)
+ *   World  reliable, batched per tick: InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
+ *          outfit or a pet changes in session — MON-04), PlayerLife, ZombieDied, Clock, Announce (§4.5)
  *
  * This is the last link of F2: the server has simulated one horde, one clock and one set of waves since 2A/2B,
  * and until this file put them on the wire no client could see any of it. Everything here is therefore about
@@ -66,7 +67,7 @@ import {
 } from "./interest";
 import { DeathCause as HordeDeathCause, ZombieDeath } from "../sim/zombies";
 import { BossDeath } from "../sim/bosses";
-import { ServerPlayer, bufferDepth } from "../sim/players";
+import { ServerPlayer, bufferDepth, refreshProfile } from "../sim/players";
 import { ServerSimulation } from "../sim/simulation";
 import { solidAdd } from "../sim/build";
 import { PendingWorld } from "../sim/worldOut";
@@ -82,6 +83,12 @@ export const REMOTE_OVERHEAD_BYTES = 20;
 const INTEREST_SWEEP_AGE = 200;
 /** rounds between two sweeps: they walk the whole table, so they are rare and the table is small anyway */
 const INTEREST_SWEEP_EVERY = 100;
+/**
+ * Ticks between two looks at every survivor's profile (level, outfit, pet — MON-04). 6 ticks is 10 Hz at 60 Hz:
+ * a change of outfit reaches the others within 100 ms of the server accepting it, and the check costs a few
+ * comparisons per survivor ten times a second instead of sixty.
+ */
+export const PROFILE_EVERY_TICKS = 6;
 /** spitter head recoil is 0..10 on the wire's raw u8: 25 steps per unit keeps the wind-up smooth */
 export const SPIT_EXTRA_SCALE = 25;
 /**
@@ -420,6 +427,9 @@ export class Replicator {
 		// the hour, the day, the weather and the wave flags: a newcomer must not spend up to CLOCK_RESYNC_S
 		// seconds in the wrong half of the day (§4.6)
 		this.queueFor(sp.slot, this.sim.clock.clockEventNow(this.sim.tick));
+		// profiles first: an outfit changed since the last flush must be in the PlayerJoined the newcomer reads,
+		// not in a PlayerProfile that reaches it before it knows that survivor exists (broadcasts go out first)
+		this.collectProfiles();
 		// the roster the newcomer needs (itself included: that is how it learns its own slot), then the others
 		const joined = joinedEvent(sp);
 		for (const other of this.sim.players()) {
@@ -483,6 +493,7 @@ export class Replicator {
 	afterTick(tick: number): void {
 		this.collectWorldDeltas(tick);
 		this.collectFx();
+		if (tick % PROFILE_EVERY_TICKS === 0) this.collectProfiles();
 		if (tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
 		this.flushFx(tick);
 		if (tick % SNAP_NEAR_EVERY_TICKS === 0) this.sendSnapshots();
@@ -550,6 +561,20 @@ export class Replicator {
 			}
 		}
 		this.interactive.clear();
+	}
+
+	/**
+	 * (MON-04, §4.4) Whoever's level, outfit or pet moved since the roster last said so gets a `PlayerProfile`, to
+	 * everybody — the survivor included, so their own client hears what the server ACCEPTED (a cosmetic it does
+	 * not own is not what the others see, whatever its backpack says).
+	 *
+	 * `refreshProfile` reads the save, so this catches every path that can change those three (a report, an equip
+	 * intent, XP, an admin edit, a new run) without any of them having to remember to call it.
+	 */
+	private collectProfiles(): void {
+		for (const sp of this.sim.players()) {
+			if (refreshProfile(sp)) this.queue(profileEvent(sp));
+		}
 	}
 
 	/** one ZombieDied, to each client that could see that zombie in the last rounds (§4.3, §4.4) */
@@ -833,9 +858,13 @@ function joinedEvent(sp: ServerPlayer): WorldEvent {
 		userId: sp.userId,
 		name: sp.name,
 		level: sp.level,
-		costume: sp.costume,
-		deco: sp.deco,
+		outfit: sp.outfit,
+		pet: sp.pet,
 	};
+}
+
+function profileEvent(sp: ServerPlayer): WorldEvent {
+	return { t: WorldEv.PlayerProfile, slot: sp.slot, level: sp.level, outfit: sp.outfit, pet: sp.pet };
 }
 
 /**

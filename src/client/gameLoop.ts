@@ -8,7 +8,8 @@ import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { isChoppingTool, WEAPONS } from "shared/data/weapons";
-import { expMaxInit, PlayerSaveData } from "shared/game/save";
+import { expMaxInit, outfitLookOf, petLookOf, PlayerSaveData } from "shared/game/save";
+import { PetLook, petFlies } from "shared/data/cosmetics";
 import { createPlayer, currentWeapon, PlayerState } from "shared/game/player";
 import { PLAYER_RADIUS } from "shared/game/physics";
 import type { GameContext } from "shared/game/context";
@@ -59,6 +60,8 @@ import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
 import { PlayersView } from "./view/playersView";
 import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
+import { drawPet } from "./view/cosmeticsView";
+import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
 
 const Players = game.GetService("Players");
@@ -392,6 +395,9 @@ export class GameLoop {
 	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
 	private readonly look = createLook();
 	private readonly swing = createSwingTrail();
+	/** the local survivor's pet (MON-04): a view that follows where this client draws you, never an entity */
+	private readonly pet = createPetFollower();
+	private petLook: number = PetLook.None;
 	private readonly raw = createRawInput();
 	/** the other survivors of a server session: bodies, pooled nameplates and their light (§5.3) */
 	private readonly playersView = new PlayersView();
@@ -509,6 +515,8 @@ export class GameLoop {
 		netBindAdmin(this.admin);
 		netReset();
 		this.playersView.hide();
+		// a new body: the pet appears at its heel rather than running over from where the last one fell
+		this.pet.started = false;
 		const ctx = getCtx();
 		ctx.cam.x = this.player.x;
 		ctx.cam.y = this.player.y;
@@ -1512,7 +1520,24 @@ export class GameLoop {
 		look.shadowX = so.x;
 		look.shadowY = so.y;
 		look.z = Z.player;
+		// MON-04: what you wear and what follows you, by the same ownership rule the server replicates with
+		// (`outfitLookOf` / `petLookOf`), so your screen and everybody else's agree
+		const save = getCtx().save;
+		look.outfit = outfitLookOf(save);
+		this.drawOwnPet(r, cam, petLookOf(save), p.x, p.y, p.angle);
 		drawSurvivor(r, cam, look, this.swing);
+	}
+
+	/** the local pet, following the position the survivor is DRAWN at this frame */
+	private drawOwnPet(r: Renderer, cam: Camera, pet: number, x: number, y: number, angle: number): void {
+		if (pet !== this.petLook) {
+			// a new animal (or a new run) appears at the heel instead of morphing out of the old one
+			this.petLook = pet;
+			this.pet.started = false;
+		}
+		if (pet === PetLook.None) return;
+		stepPetFollower(this.pet, x, y, angle, this.lastDt, petFlies(pet));
+		drawPet(r, cam, this.pet, pet, this.clock, this.shadowFor);
 	}
 
 	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {

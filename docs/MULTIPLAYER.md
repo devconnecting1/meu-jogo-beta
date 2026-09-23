@@ -418,7 +418,7 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 - **Implícitos pelo snapshot:** o registro do zumbi traz tipo e variante (`meta`). O cliente cria a entidade na primeira vez que a vê e a remove (com fade de 150 ms) se ela não aparecer por **300 ms** no anel próximo ou **600 ms** no médio. Isso aguenta a rotatividade do interesse sem precisar de eventos confiáveis para cada entrada e saída.
 - **Morte explícita (confiável):** `ZombieDied{netId, x, y, cause}` dispara sangue, cadáver e drop no lugar certo e remove na hora. Um snapshot atrasado com esse `netId` e `tick` anterior à morte é ignorado.
 - **`netId`:** pool reciclável de u16 (1–65 535) com lista livre. Um id liberado só é reusado depois de 2 s, para não colidir com snapshots atrasados.
-- **Jogadores:** `slot` de 0 a 5, estável durante a sessão. `PlayerJoined{slot, userId, displayName, level, costume/deco}` e `PlayerLeft{slot}` são confiáveis.
+- **Jogadores:** `slot` de 0 a 5, estável durante a sessão. `PlayerJoined{slot, userId, displayName, level, outfit, pet}` e `PlayerLeft{slot}` são confiáveis. O que muda em sessão (nível, traje, pet — MON-04) vai por `PlayerProfile{slot, level, outfit, pet}`, também confiável, para todos; `outfit`/`pet` são o **visual** (`shared/data/cosmetics.ts`), já checado contra a posse que o servidor conhece.
 
 ### 4.5 Deltas do mundo (confiáveis, em lote por tick, filtrados por interesse quando fizer sentido)
 
@@ -491,7 +491,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - **Arma e mãos:** pelo `weapon u8`. A lâmina, pelo `swing` relativo.
 - **Direção:** `aim` interpolado.
 - **Clarão, traçante e som:** pelo `ShotResult`.
-- **Figurino e decoração:** vêm de `PlayerJoined` e mudam por delta confiável.
+- **Traje e pet (MON-04):** vêm de `PlayerJoined` e mudam por `PlayerProfile`. O traje é desenhado pelo mesmo `drawSurvivor`; o pet é só do cliente (`client/view/petFollow.ts`), segue a posição desenhada do dono e nunca é entidade.
 - **Nameplate:** o componente `Nameplate` (`src/client/ui/nameplate.ts`) passa a receber o `Player` no construtor (hoje lê `Players.LocalPlayer`), e há **um por jogador no mundo** (pool). Mostra nível e nome, mais uma barra fina de HP para aliados (melhoria sobre o original: legibilidade em co-op). O derrubado ganha anel de progresso do reviver e contagem do sangramento, **visíveis no escuro** (legibilidade vence realismo, LEG).
 - **Luz:** cada jogador em pé projeta sua luz de 250 u no `LightMap` de todos (hoje `drawLight` só usa a do próprio). A lanterna, se equipada, aparece como cone.
 
@@ -523,6 +523,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 | Inventário (armas, equipamentos, usáveis, etc), munição, óleo, eletricidade, equipados | ✅ | |
 | `day` = **dias sobrevividos nesta vida**, `runOver` | ✅ | |
 | **Novo (v3):** `runHp`, `runHunger` (0 = cheio) | ✅ | |
+| **Novo (v4, MON-04):** `equipOutfit`, `equipPet` (substituem `equipDeco`) | ✅ | |
 | Configurações, `tutorialDone`, `firstInstall` | ✅ (por intenção validada) | |
 | Pente atual | ❌: volta para a reserva ao sair (a mesma regra da troca de arma) | |
 | Posição, buffs, i-frames, derrubado | | ✅ (guardado 5 min após desconectar, para retomar no mesmo servidor) |
@@ -551,6 +552,13 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - **Mesmo DataStore** (`ProjectZ_Save_v2`, documento `{data, lock}`). O `sanitizeStoredSave` v2 descarta chaves desconhecidas, então um servidor antigo que ler um save v3 só perde `runHp`/`runHunger` (inofensivo). O rollback de código também é seguro.
 - **Corte no lançamento:** publicar com "desligar todos os servidores". Servidores v2 ainda aceitam relatórios do cliente (a brecha que queremos fechar) e **não podem conviver** com servidores MP.
 - **Testar** com uma cópia de save real v2 (e um v1 legado, pelo caminho `ProjectZ_Save_v1` que já existe).
+
+### 6.5 Migração do save v3 → v4 (dois slots cosméticos, MON-04)
+
+- O slot único `equipDeco` vira dois, usados ao mesmo tempo: `equipOutfit` (traje: Santa, Zombie, Cowboy) e `equipPet` (Pigeon, White pigeon, Eagle, Carolina, Malamute, Doberman). `version = 4`.
+- **Aditiva, no mesmo documento.** Um documento sem os campos novos tem o `equipDeco` roteado para o slot a que pertence (`cosmeticSlotOf`); um documento que já fala v4 ignora qualquer `equipDeco` que sobrar. A posse é checada depois, como para todo slot: vestido só o que o servidor sabe que o jogador tem.
+- **Rollback:** um servidor v3 descarta as duas chaves desconhecidas e não acha `equipDeco`; ao voltar para v4 o sobrevivente está sem traje e sem pet **vestidos**, mas `costumes` e o inventário não mudam — custa um clique no Bag, nunca uma compra.
+- Testado em `tools/test-save.mjs` (seções 12–16), incluindo o teste por reflexão de `copySaveInto`.
 
 ---
 

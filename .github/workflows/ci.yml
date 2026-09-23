@@ -46,6 +46,9 @@ jobs:
       - name: The Bag is built once (tab switches and actions create no Instances)
         run: npm run test:backpack
 
+      - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
+        run: npm run test:cosmetics
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

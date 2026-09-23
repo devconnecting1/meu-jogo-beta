@@ -6,6 +6,25 @@ export interface EquipDef {
 	speed: number;
 }
 
+/**
+ * The equipment slots a survivor has (`equipSlotOf` in shared/game/save.ts), and the numbers the backpack, the
+ * `Unequip` intent (shared/net/protocol.ts) and the server agree on.
+ *
+ * `kind` 1..3 of an EQUIPS row IS its slot. `kind` 4 is a cosmetic and splits in two (MON-04, decision of the
+ * owner 2026-09-23): an OUTFIT changes the body, a PET follows it, and both are worn at once. Which of the two a
+ * kind-4 row is lives in shared/data/cosmetics.ts.
+ */
+export const EquipSlot = {
+	Cloth: 1,
+	Hand: 2,
+	Gun: 3,
+	Outfit: 4,
+	Pet: 5,
+} as const;
+export type EquipSlot = (typeof EquipSlot)[keyof typeof EquipSlot];
+/** the highest slot number (the Unequip intent's argument is checked against it) */
+export const EQUIP_SLOT_MAX = 5;
+
 export const EQUIPS: Array<EquipDef> = [
 	{ id: 0, name: "Cotton clothes", kind: 1, def: 1, speed: 0 },
 	{ id: 1, name: "Leather jacket", kind: 1, def: 2, speed: -0.5 },

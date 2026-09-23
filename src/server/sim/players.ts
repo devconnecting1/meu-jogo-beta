@@ -64,7 +64,7 @@ import {
 import { InputCommand, InputPacket, decodeInput } from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
-import { PlayerSaveData } from "shared/game/save";
+import { PlayerSaveData, outfitLookOf, petLookOf } from "shared/game/save";
 import { WorldData, buildingAt, isOnRoad, randomOpenPoint, randomRingPoint, rectHitsSolid } from "shared/game/world";
 import { WORLD_MARGIN } from "shared/sim/playerMove";
 
@@ -137,9 +137,16 @@ export interface ServerPlayer {
 	slot: number;
 	userId: number;
 	name: string;
+	/**
+	 * The PROFILE — what the roster tells everybody about this survivor: the level on their plate, the outfit on
+	 * their body and the pet at their heel (§4.4, MON-04). These three are what the others were LAST TOLD, not
+	 * the save itself: `refreshProfile` compares them with the save and says when the roster has to be told again
+	 * (server/net/replication.ts sends `PlayerProfile`). The looks are OutfitLook / PetLook numbers, already
+	 * checked against what the server says this player owns.
+	 */
 	level: number;
-	costume: number;
-	deco: number;
+	outfit: number;
+	pet: number;
 	/** the authoritative survivor; the client never sends a position (§2.2, MP-00) */
 	state: PlayerState;
 	/** the live save the server owns (server/main.server.ts session) */
@@ -180,13 +187,15 @@ export interface ServerPlayer {
 	joinTick: number;
 }
 
+/**
+ * Who is joining. The profile (level, outfit, pet) is NOT here on purpose: it is read off the save the server
+ * owns, never handed in by a caller that could have taken it from the client (MON-04: the client never declares
+ * what it owns).
+ */
 export interface ServerPlayerInfo {
 	slot: number;
 	userId: number;
 	name: string;
-	level?: number;
-	costume?: number;
-	deco?: number;
 }
 
 /** spawn protection, in seconds (§7.1) */
@@ -210,9 +219,9 @@ export function createServerPlayer(
 		slot: info.slot,
 		userId: info.userId,
 		name: info.name,
-		level: info.level ?? save.level,
-		costume: info.costume ?? math.max(0, save.equipCloth),
-		deco: info.deco ?? math.max(0, save.equipDeco),
+		level: save.level,
+		outfit: outfitLookOf(save),
+		pet: petLookOf(save),
 		state: createPlayer(save, x, y),
 		save,
 		queue: new Array<InputCommand>(),
@@ -387,11 +396,39 @@ export function ingestInput(sp: ServerPlayer, payload: unknown, now: number): In
  * so the entity must follow it: `stepPlayer` reads the skill levels straight out of it every tick. The live
  * PlayerState is deliberately kept — F1 has no save mirror yet, and rebuilding it here would teleport the
  * survivor; the fields the save owns (level, hp cap) re-sync on the next spawn.
+ *
+ * The profile (level, outfit, pet) is deliberately NOT copied here: it is what the others were last told, and
+ * copying it would make `refreshProfile` see no change and the allies would never hear of it. The replicator's
+ * next pass notices the difference and tells everybody.
  */
 export function adoptSave(sp: ServerPlayer, save: PlayerSaveData): boolean {
 	if (sp.save === save) return false;
 	sp.save = save;
-	sp.level = save.level;
+	return true;
+}
+
+/**
+ * Brings the profile the roster advertises (level, outfit, pet) up to date with the save, and answers whether it
+ * moved — i.e. whether everybody has to be told (`PlayerProfile`, §4.4, MON-04).
+ *
+ * Every path that changes those three lands in the save: XP from a kill (server/sim/progress.ts), a client report
+ * after the backpack equipped an outfit (server/main.server.ts, MP_PHASE 2), the `Equip` intent (F3), an admin
+ * edit, a new run. Watching the SAVE instead of each of those call sites is what makes it impossible to add a sixth
+ * path and forget to tell the others. The looks go through `outfitLookOf` / `petLookOf`, which check ownership
+ * again, so the wire can never carry a cosmetic the server does not know this player owns.
+ *
+ * Cheap on purpose (three comparisons and two ownership lookups): the replicator calls it for every survivor
+ * every time it flushes the reliable channel.
+ */
+export function refreshProfile(sp: ServerPlayer): boolean {
+	const save = sp.save;
+	const level = save.level;
+	const outfit = outfitLookOf(save);
+	const pet = petLookOf(save);
+	if (level === sp.level && outfit === sp.outfit && pet === sp.pet) return false;
+	sp.level = level;
+	sp.outfit = outfit;
+	sp.pet = pet;
 	return true;
 }
 

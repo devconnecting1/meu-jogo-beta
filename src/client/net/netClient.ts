@@ -112,8 +112,9 @@ interface RosterEntry {
 	userId: number;
 	displayName: string;
 	level: number;
-	costume: number;
-	deco: number;
+	/** OutfitLook / PetLook (MON-04): from PlayerJoined, then kept current by PlayerProfile */
+	outfit: number;
+	pet: number;
 	/**
 	 * LifeState of the last `PlayerLife` delta (§4.5, §7.3). This — and NOT the snapshot's PlayerFlag.Dead /
 	 * Downed — is what says whether a survivor is up, down or gone: `Snap` is unreliable, and a death that is
@@ -335,12 +336,22 @@ function applyWorldEvent(e: WorldEvent): void {
 			userId: e.userId,
 			displayName: e.name,
 			level: e.level,
-			costume: e.costume,
-			deco: e.deco,
+			outfit: e.outfit,
+			pet: e.pet,
 			life: 0,
 		});
 		// this is how a client learns its own slot (§4.4: the newcomer's roster includes itself)
 		if (e.userId === Players.LocalPlayer.UserId) mySlot = e.slot;
+		return;
+	}
+	if (e.t === WorldEv.PlayerProfile) {
+		// MON-04: an ally changed outfit or pet (or levelled up) mid-session. A profile for a slot the roster
+		// does not know yet is dropped: its PlayerJoined, which is reliable and comes next, carries the same values.
+		const entry = roster.get(e.slot);
+		if (entry === undefined) return;
+		entry.level = e.level;
+		entry.outfit = e.outfit;
+		entry.pet = e.pet;
 		return;
 	}
 	if (e.t === WorldEv.PlayerLeft) {
@@ -815,6 +826,8 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		slot: entry.slot,
 		displayName: entry.displayName,
 		level: entry.level,
+		outfit: entry.outfit,
+		pet: entry.pet,
 		x: state.x,
 		y: state.y,
 		angle: state.aim,

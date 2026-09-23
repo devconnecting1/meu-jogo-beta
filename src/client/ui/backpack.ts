@@ -30,14 +30,14 @@
  */
 import { GameContext } from "shared/game/context";
 import { WEAPONS, WeaponDef } from "shared/data/weapons";
-import { EQUIPS } from "shared/data/equips";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS, SkillDef } from "shared/data/skills";
 import { AmmoPool, ItemKind, WeaponKind } from "shared/data/kinds";
 import { costumeForEquip } from "shared/data/shop";
-import { PlayerSaveData, equipSlotOf, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
+import { PlayerSaveData, equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
 import { toast } from "./popup";
 import { GAME, SURFACE, TEXT, THEME, TRANSPARENCY, hex, roleFont, space } from "./theme";
 import {
@@ -165,7 +165,8 @@ const MAX_CHIPS = 5;
 /** most ingredients a recipe has: the recipe page builds that many lines with itself */
 const MAX_INGREDIENTS = CRAFT_RECIPES.reduce((m, r) => math.max(m, r.ingredients.size()), 1);
 
-const SLOT_NAMES = ["-", "Cloth", "Hand", "Gun", "Deco"];
+/** by EquipSlot: 4 and 5 are the two cosmetic slots worn at once (MON-04) */
+const SLOT_NAMES = ["-", "Cloth", "Hand", "Gun", "Outfit", "Pet"];
 
 interface ItemEntry {
 	kind: number;
@@ -220,11 +221,7 @@ function signed(v: number): string {
 }
 
 function slotValue(save: PlayerSaveData, slot: number): number {
-	if (slot === 1) return save.equipCloth;
-	if (slot === 2) return save.equipHand;
-	if (slot === 3) return save.equipGun;
-	if (slot === 4) return save.equipDeco;
-	return -1;
+	return equippedIn(save, slot);
 }
 
 function stationName(r: CraftRecipe): string {
@@ -616,7 +613,7 @@ export class Backpack {
 	onCraft: ((recipeId: number) => void) | undefined;
 	onEquipWeapon: ((weaponId: number) => void) | undefined;
 	onEquipItem: ((equipId: number) => void) | undefined;
-	/** unequip an equipment slot: 1 cloth, 2 hand, 3 gun, 4 deco */
+	/** unequip an equipment slot (EquipSlot): 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet */
 	onUnequipItem: ((slot: number) => void) | undefined;
 	nearbyDesk = false;
 	nearbyPro = false;
@@ -1052,7 +1049,7 @@ export class Backpack {
 			craftShortcut = true;
 		} else if (cat === CAT_EQUIP) {
 			title = "No equipment yet";
-			body = "Find it in buildings, craft it in the Craft tab, or unlock decos with costumes in the shop.";
+			body = "Find it in buildings, craft it in the Craft tab, or unlock outfits and pets in the shop.";
 			craftShortcut = true;
 		} else if (cat === CAT_USABLES) {
 			title = "No usables yet";
@@ -1197,6 +1194,10 @@ export class Backpack {
 		if (slot === 1 || e.speed !== 0) stats.push(["Speed", signed(e.speed)]);
 
 		const help: Array<string> = [`Goes in the ${slotName} slot.`];
+		// MON-01 / MON-04: say what a cosmetic does, and what it does not -- the old catalogue promised pets that
+		// "collect items" and "attack zombies", and a pet here only ever keeps you company
+		if (slot === EquipSlot.Outfit) help.push("Everyone sees it on your survivor. It changes nothing else.");
+		else if (slot === EquipSlot.Pet) help.push("It follows you and everyone sees it. It never fights or collects.");
 		if (equipped) {
 			help.push("Currently equipped.");
 		} else if (current >= 0 && EQUIPS[current] !== undefined) {

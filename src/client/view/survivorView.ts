@@ -5,13 +5,24 @@
  * them, same feet, same shadow, same layers.
  *
  * The caller owns a `SurvivorLook` and refills it every frame — the hot path allocates nothing.
+ *
+ * MON-04: the outfit a survivor wears is part of the look (`outfit`, an OutfitLook), and it is drawn HERE, by the
+ * same function, for everyone — the colours of the torso, feet, hands and head come from its palette and the
+ * pieces on top (belt, rips, vest, hats) from client/view/cosmeticsView.ts. The plain palette is exactly the
+ * survivor as it was drawn before, so nobody without an outfit changes by a pixel.
+ *
+ * Layers, from `look.z` (= Z.player): feet z-1, weapon z, torso z+1, what the outfit puts on the torso z+2,
+ * hands z+3, head (or a hat's brim) z+4, a hat's crown z+5. Every piece has a layer of its own because Roblox does
+ * not promise an order between siblings of equal ZIndex.
  */
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { WeaponKind } from "shared/data/kinds";
+import { OutfitLook } from "shared/data/cosmetics";
 import { WeaponDef, WEAPONS } from "shared/data/weapons";
 import { angleDiff, clamp } from "shared/engine/vec2";
+import { drawOutfitHead, drawOutfitTorso, outfitPalette } from "./cosmeticsView";
 import { part, SIDES } from "./drawKit";
 
 const WHITE = COLORS.white;
@@ -67,10 +78,12 @@ export interface SurvivorLook {
 	/** offset of the drop shadow (drawKit.shadowOffset) */
 	shadowX: number;
 	shadowY: number;
-	/** the body sits at `z + 2`: allies pass Z.player like the local survivor and are drawn first */
+	/** the torso sits at `z + 1` (layers above): allies pass Z.player like the local survivor and are drawn first */
 	z: number;
 	/** seconds since the session started (chainsaw vibration) */
 	clock: number;
+	/** what they wear (OutfitLook, MON-04); 0 = the plain survivor */
+	outfit: number;
 }
 
 export function createLook(): SurvivorLook {
@@ -91,6 +104,7 @@ export function createLook(): SurvivorLook {
 		shadowY: 0,
 		z: Z.player,
 		clock: 0,
+		outfit: OutfitLook.None,
 	};
 }
 
@@ -128,18 +142,19 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 		zIndex: Z.actorShadow,
 	});
 	const flash = clamp(look.flash, 0, 1);
-	let body = look.poisoned ? COLORS.zombie5 : COLORS.player;
-	if (flash > 0) body = body.Lerp(COLORS.uiRed, 0.85 * flash);
-	const dark = COLORS.playerDark;
+	const pal = outfitPalette(look.outfit);
+	// poison wins over any outfit: it is a gameplay signal (LEG-02), the coat is only a cosmetic
+	let body = look.poisoned ? COLORS.zombie5 : pal.body;
+	if (flash > 0) body = body.Lerp(pal.flashTo, 0.85 * flash);
 	// feet
 	const step = math.sin(look.feetPhase) * 8 * look.feetAmp;
 	for (const side of SIDES) {
 		part(r, cam, look.x, look.y, a, step * side, side * 9, {
 			w: 12,
 			h: 9,
-			color: dark.Lerp(BLACK, 0.4),
+			color: pal.boots,
 			cornerRadius: 3,
-			zIndex: look.z,
+			zIndex: look.z - 1,
 		});
 	}
 	// weapon + hands
@@ -175,7 +190,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 					look.y + math.sin(ta) * 16,
 					look.x + math.cos(ta) * reach,
 					look.y + math.sin(ta) * reach,
-					{ h: 8, color: WHITE, alpha: al, zIndex: look.z + 1 },
+					{ h: 8, color: WHITE, alpha: al, zIndex: look.z },
 				);
 			}
 			r.drawSegment(
@@ -184,7 +199,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 				look.y + math.sin(sa) * 14,
 				look.x + math.cos(sa) * reach,
 				look.y + math.sin(sa) * reach,
-				{ h: 6, color: COLORS.blade, stroke: COLORS.weapon, strokeThickness: 1, zIndex: look.z + 1 },
+				{ h: 6, color: COLORS.blade, stroke: COLORS.weapon, strokeThickness: 1, zIndex: look.z },
 			);
 			hand(16 * math.cos(sa - a), 16 * math.sin(sa - a));
 			hand(10, -14);
@@ -199,7 +214,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 				color: COLORS.blade,
 				stroke: COLORS.weapon,
 				strokeThickness: 1,
-				zIndex: look.z + 1,
+				zIndex: look.z,
 			});
 			hand(12, 14);
 			hand(10, -14);
@@ -210,7 +225,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			h: 44,
 			color: COLORS.arrow.Lerp(BLACK, 0.3),
 			cornerRadius: 3,
-			zIndex: look.z + 1,
+			zIndex: look.z,
 		});
 		hand(24, 0);
 		hand(10, 8);
@@ -224,7 +239,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			w: len,
 			h: w.kind === WeaponKind.Pistol ? 6 : 7,
 			color: COLORS.weapon,
-			zIndex: look.z + 1,
+			zIndex: look.z,
 		});
 		if (w.kind === WeaponKind.Pistol) {
 			hand(18, 6);
@@ -234,31 +249,29 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			hand(12 + len * 0.6, 3);
 		}
 	}
-	// body (shoulders across the heading)
+	// body (shoulders across the heading); a hit always shows as the thick red outline, whatever the coat
 	part(r, cam, look.x, look.y, a, 0, 0, {
 		w: 24,
 		h: 38,
 		color: body,
 		cornerRadius: 10,
-		stroke: flash > 0 ? COLORS.uiRed : dark,
-		strokeThickness: flash > 0 ? 3 : 2,
-		zIndex: look.z + 2,
+		stroke: flash > 0 ? COLORS.uiRed : pal.edge,
+		strokeThickness: flash > 0 ? 3 : pal.edgeThick,
+		zIndex: look.z + 1,
 	});
+	// what the outfit puts on the torso (z + 2): belt, rips, vest
+	drawOutfitTorso(r, cam, look.x, look.y, a, look.z, look.outfit);
 	for (let i = 0; i < handCount; i++) {
 		part(r, cam, look.x, look.y, a, HAND_F[i], HAND_L[i], {
 			w: 10,
 			h: 10,
 			circle: true,
-			color: COLORS.playerSkin,
+			color: pal.hands,
 			zIndex: look.z + 3,
 		});
 	}
-	r.drawCircle(cam, look.x + math.cos(a) * 1, look.y + math.sin(a) * 1, 22, {
-		color: dark,
-		stroke: dark.Lerp(BLACK, 0.4),
-		strokeThickness: 1,
-		zIndex: look.z + 4,
-	});
+	// the head, or the hat on it (z + 4, z + 5)
+	drawOutfitHead(r, cam, look.x, look.y, a, look.z, look.outfit);
 }
 
 /**
@@ -266,11 +279,13 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
  * weapon. The silhouette is the standing one turned 90°, long along the heading instead of wide across
  * it — from above that difference alone says "someone is down" before you read their plate. The red tint
  * is the one red already means (LEG-02: player blood / damage), and the shadow tightens because the body
- * is already on the floor.
+ * is already on the floor. The outfit keeps its colours on the torso and the head (MON-04: you can still tell
+ * WHO is down), under the same red tint and outline.
  */
 function drawDowned(r: Renderer, cam: Camera, look: SurvivorLook): void {
 	const a = look.angle;
-	const body = COLORS.player.Lerp(COLORS.uiRed, 0.35);
+	const pal = outfitPalette(look.outfit);
+	const body = pal.body.Lerp(COLORS.uiRed, 0.35);
 	const dark = COLORS.playerDark.Lerp(BLACK, 0.2);
 	part(r, cam, look.x + look.shadowX * 0.4, look.y + look.shadowY * 0.4, a, 0, 0, {
 		w: 48,
@@ -309,7 +324,7 @@ function drawDowned(r: Renderer, cam: Camera, look: SurvivorLook): void {
 	});
 	// head down, cheek on the asphalt
 	r.drawCircle(cam, look.x + math.cos(a) * 17, look.y + math.sin(a) * 17, 18, {
-		color: COLORS.playerDark.Lerp(COLORS.uiRed, 0.2),
+		color: pal.head.Lerp(COLORS.uiRed, 0.2),
 		stroke: BLACK,
 		strokeThickness: 1,
 		strokeAlpha: 0.5,

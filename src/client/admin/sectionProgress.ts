@@ -355,7 +355,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 		makeLabel(
 			body,
 			"Hint",
-			"Costumes unlock their pet / deco permanently (normally bought with coins).",
+			"Costumes unlock their outfit or pet permanently (normally bought with coins). Locking one unequips it.",
 			0,
 			0,
 			CONTENT_W,
