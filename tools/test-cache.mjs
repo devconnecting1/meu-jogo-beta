@@ -627,6 +627,9 @@ const pack = newPack();
 const queue = new Warm.WarmQueue(Warm.WARM_BUDGET_S, modelNow);
 queue.add({ name: "Backpack", step: () => pack.warmStep(Warm.BAG_TILES_PER_STEP) });
 const addedVisible = [];
+const guiService = service("GuiService");
+const selectedBefore = guiService.SelectedObject;
+let focusMoved = false;
 const watchAdd = layer.ChildAdded.Connect(c => addedVisible.push([c.Name, c.Visible]));
 /** per frame: Instances created and steps run */
 const perFrame = [];
@@ -639,6 +642,7 @@ for (let f = 0; f < 2000 && queue.pending() > 0; f++) {
 	stepsPerFrame.push(queue.stats.steps - st0);
 	modelClock += 1 / 60;
 	if (pack.root?.Visible === true) everShown = true;
+	if (guiService.SelectedObject !== selectedBefore) focusMoved = true;
 }
 watchAdd.Disconnect();
 const s = queue.stats;
@@ -660,7 +664,7 @@ check(
 	!everShown && addedVisible.every(([name, vis]) => name !== "Backpack" || vis === false),
 	JSON.stringify(addedVisible),
 );
-check("o Bag continua fechado", !pack.isOpen());
+check("o Bag continua fechado, e a selecao do controle nunca saiu de onde estava", !pack.isOpen() && !focusMoved);
 const open1 = measure(() => pack.open());
 check(
 	"a 1a abertura NA PARTIDA depois do aquecimento nao cria nenhuma Instance",
