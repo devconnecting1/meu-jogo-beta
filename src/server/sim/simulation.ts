@@ -100,6 +100,18 @@ export interface SimulationOptions {
 	interactive?: boolean;
 }
 
+/** everything built around one town (`ServerSimulation.buildAround`), before it becomes the simulation's */
+interface TownSystems {
+	items?: ServerItems;
+	build?: ServerBuild;
+	craft?: ServerCraft;
+	interaction?: ServerInteraction;
+	horde?: ZombieWorld;
+	progress?: Progress;
+	projectiles?: ServerProjectiles;
+	combat?: ServerCombat;
+}
+
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
 export interface StepOutcome {
 	slot: number;
@@ -118,7 +130,11 @@ interface Presence {
 }
 
 export class ServerSimulation {
-	readonly world: WorldData;
+	/**
+	 * The town. Replaced — never edited in place — when a world ends (MP-22, `restartWorld`), together with every
+	 * subsystem below that was built around it; read it through the simulation, never keep your own reference.
+	 */
+	world: WorldData;
 	readonly simHz: number;
 	readonly tickDt: number;
 	/** full tick counter; the wire carries it modulo 65 536 (§4.2) */
@@ -143,9 +159,10 @@ export class ServerSimulation {
 	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
-	 * its own. F2-2D reads the zombies, their netIds and their deaths from here.
+	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
+	 * town (combat, progress, projectiles and the F3 world below) it is rebuilt when a world ends (MP-22).
 	 */
-	readonly horde?: ZombieWorld;
+	horde?: ZombieWorld;
 	/**
 	 * The world's clock: one day, one night and one set of wave queues for everybody (§4.6, §6.2). It ticks
 	 * inside the horde's step when the server owns the world, and stands still at MP_PHASE < 2, where every
@@ -157,20 +174,20 @@ export class ServerSimulation {
 	 * It is built with the horde because the two are the same decision: either the server owns the world or
 	 * it owns none of it.
 	 */
-	readonly combat?: ServerCombat;
+	combat?: ServerCombat;
 	/** XP, kills and boss credit straight into the live saves (§3.6, 2C) */
-	readonly progress?: Progress;
+	progress?: Progress;
 	/** arrows, flames, acid and needles in flight (§3.1 step 2) */
-	readonly projectiles?: ServerProjectiles;
+	projectiles?: ServerProjectiles;
 	/**
 	 * The interactive world (§11.3 F3), or undefined while every client still owns its own copy of it.
 	 * `worldOut` exists either way, because it costs nothing and it keeps server/net/replication.ts from
 	 * having to ask whether F3 is on.
 	 */
-	readonly items?: ServerItems;
-	readonly interaction?: ServerInteraction;
-	readonly build?: ServerBuild;
-	readonly craft?: ServerCraft;
+	items?: ServerItems;
+	interaction?: ServerInteraction;
+	build?: ServerBuild;
+	craft?: ServerCraft;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
 	/** the result of a survivor's action press, for the caller's sounds and toasts */
@@ -202,6 +219,9 @@ export class ServerSimulation {
 	private acc = 0;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
+	/** what the boot decided this server owns; a world that ends is rebuilt with the very same answers (MP-22) */
+	private readonly ownsHorde: boolean;
+	private readonly ownsInteractive: boolean;
 
 	constructor(options: SimulationOptions) {
 		this.world = options.world;
@@ -215,32 +235,100 @@ export class ServerSimulation {
 		// generates is a reward the server pays). Before the security review of Sep 2026 the whole roster was
 		// paid: the dead, and a bot parked in the street.
 		this.clock.onNewDay = () => this.creditMidnight();
+		this.ownsInteractive = options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE;
+		this.ownsHorde = options.zombies ?? MP_PHASE >= 2;
+		this.adoptSystems(this.buildAround(this.world));
+	}
+
+	/**
+	 * MP-22: the world ended — nobody was left alive and nobody paid a Rebirth — and `world`, a town generated from a
+	 * new seed, takes its place. Everything that belonged to the old town goes with it, through the SAME path the
+	 * boot took (`buildAround`): the horde and the bosses, the projectiles in flight, the combat's rewind history,
+	 * the kill credit, and — where the server owns them (F3) — the ground items, the loot timers, the doors, the
+	 * fires and the constructions. The clock opens day 1 at 07:00 with no night promised (`WorldClock.restart`),
+	 * and the §3.6 day count starts again.
+	 *
+	 * What stays: the survivors in their slots, their input queues and the tick counter — the session (and the
+	 * clock epoch every client is anchored to) does not end with the town. Their BODIES belong to the old streets,
+	 * though, and are not touched here: server/sim/life.ts `restartWorld` puts every one of them somewhere in the
+	 * new town. A construction still on somebody's cursor is refunded, as leaving the world would refund it.
+	 *
+	 * ALL OR NOTHING (review of f851ad2, M2): the new town's systems are built into a local first, and only once
+	 * every one of them exists does anything of the old town change. A failure while building throws with this
+	 * simulation exactly as it was — the one thing construction touches outside itself, the clock's `onWaveFill`
+	 * (a ZombieWorld subscribes on construction), is put back — so the caller can let the old world go on.
+	 */
+	restartWorld(world: WorldData): void {
+		const fill = this.clock.onWaveFill;
+		const [built, systems] = pcall(() => this.buildAround(world));
+		if (!built) {
+			this.clock.onWaveFill = fill;
+			throw systems;
+		}
+		// from here on nothing is built, only swapped
+		for (const sp of this.roster) this.build?.remove(sp.slot, sp.save);
+		// the old town stops feeding the outbox: nothing that happens to it is news any more
+		this.items?.detach();
+		this.build?.detach();
+		this.worldOut.clear();
+		this.intents.clear();
+		// §3.6 counts the new world's first day from its first tick, exactly as a midnight would start it (the last
+		// real input is about minutes, not days, and is kept)
+		for (const [, p] of this.presence) p.aliveTicks = 0;
+		this.dayTicks = 0;
+		this.world = world;
+		this.clock.restart();
+		this.adoptSystems(systems as TownSystems);
+	}
+
+	/** the systems of one town become this simulation's (the boot's, or a new world's once all of them exist) */
+	private adoptSystems(systems: TownSystems): void {
+		this.items = systems.items;
+		this.build = systems.build;
+		this.craft = systems.craft;
+		this.interaction = systems.interaction;
+		this.horde = systems.horde;
+		this.progress = systems.progress;
+		this.projectiles = systems.projectiles;
+		this.combat = systems.combat;
+	}
+
+	/**
+	 * Everything that is built around ONE town: the F3 interactive world when this server owns it, then the horde
+	 * with its combat, kill credit and projectiles when it owns the world (§11.3). The boot calls it once;
+	 * `restartWorld` calls it again for each new town, so a new world is exactly what a new server would build.
+	 * It builds into the returned table and assigns nothing on `this`: the closures read `this.horde` and the
+	 * roster when they RUN, which is after `adoptSystems`.
+	 */
+	private buildAround(world: WorldData): TownSystems {
+		const out: TownSystems = {};
 		// ---- F3: the interactive world (items, loot, doors, lights, builds, crafting) ----------------
-		if (options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE) {
+		if (this.ownsInteractive) {
 			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
 			// tell "the server made this" from "we both generated this from the seed"
-			serverWorld(this.world);
-			const items = new ServerItems({ world: this.world, out: this.worldOut });
-			this.items = items;
-			this.build = new ServerBuild({
-				world: this.world,
+			serverWorld(world);
+			const items = new ServerItems({ world, out: this.worldOut });
+			out.items = items;
+			const build = new ServerBuild({
+				world,
 				out: this.worldOut,
 				// the horde is built below; the closure defers the lookup so a wall dirties the flow field
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 			});
-			this.craft = new ServerCraft({ world: this.world, build: this.build });
-			this.interaction = new ServerInteraction({
-				world: this.world,
+			out.build = build;
+			out.craft = new ServerCraft({ world, build });
+			out.interaction = new ServerInteraction({
+				world,
 				items,
 				out: this.worldOut,
 				fx: event => this.onFx?.(event),
 			});
 		}
 
-		if (!(options.zombies ?? MP_PHASE >= 2)) return;
-		const horde = new ZombieWorld(options.world, this.clock);
-		this.horde = horde;
+		if (!this.ownsHorde) return out;
+		const horde = new ZombieWorld(world, this.clock);
+		out.horde = horde;
 		const progress = new Progress({
 			saveOf: slot => this.bySlot.get(slot)?.save,
 			paysRewards: slot => {
@@ -248,14 +336,14 @@ export class ServerSimulation {
 				return sp === undefined || this.pays(sp);
 			},
 		});
-		this.progress = progress;
+		out.progress = progress;
 		const projectiles = new ServerProjectiles({
 			playerOf: slot => this.bySlot.get(slot),
 			onFx: event => this.onFx?.(event),
 		});
-		this.projectiles = projectiles;
+		out.projectiles = projectiles;
 		const combat = new ServerCombat({
-			world: options.world,
+			world,
 			targets: { zombies: () => horde.zombies, bosses: () => horde.bossRoster.list },
 			progress,
 			simHz: this.simHz,
@@ -269,7 +357,7 @@ export class ServerSimulation {
 				projectile: request => projectiles.launch(horde.refs, request),
 			},
 		});
-		this.combat = combat;
+		out.combat = combat;
 		projectiles.combat = combat;
 		// §2.3/MP-00: from here on a survivor only ever loses hp through the server's combat. The brains still
 		// call `damageToPlayer`, which is inert at MP_PHASE ≥ 2 — this sink is what makes the bite land.
@@ -278,6 +366,7 @@ export class ServerSimulation {
 		// `onExp` fires LATER, from the brain that removes the body, for that very same zombie: paying it
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
+		return out;
 	}
 
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
