@@ -1,0 +1,569 @@
+{
+	"generator": "tools/gen-world-art.mjs",
+	"worldTexel": 4,
+	"note": "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels. The client draws every one with ResamplerMode.Pixelated.",
+	"textures": [
+		{
+			"name": "asphalt",
+			"file": "asphalt.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile)"
+		},
+		{
+			"name": "asphaltLot",
+			"file": "asphaltLot.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "parking-lot asphalt, a little more worn"
+		},
+		{
+			"name": "concrete",
+			"file": "concrete.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "sidewalk: 64-unit concrete slabs with joints"
+		},
+		{
+			"name": "plaza",
+			"file": "plaza.png",
+			"kind": "tile",
+			"w": 32,
+			"h": 32,
+			"description": "downtown paving: 32-unit pavers"
+		},
+		{
+			"name": "pavers",
+			"file": "pavers.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "footpaths to the doors: running-bond pavers"
+		},
+		{
+			"name": "apron",
+			"file": "apron.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "gas forecourt / ambulance bay: poured concrete panels"
+		},
+		{
+			"name": "grass",
+			"file": "grass.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "mowed lawn"
+		},
+		{
+			"name": "grassLong",
+			"file": "grassLong.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "a yard nobody mowed for a week or two"
+		},
+		{
+			"name": "dirt",
+			"file": "dirt.png",
+			"kind": "tile",
+			"w": 32,
+			"h": 32,
+			"description": "packed earth: park paths, the school yard"
+		},
+		{
+			"name": "soil",
+			"file": "soil.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "tree pits: bark mulch"
+		},
+		{
+			"name": "tactile",
+			"file": "tactile.png",
+			"kind": "tile",
+			"w": 4,
+			"h": 4,
+			"description": "tactile paving where a crosswalk lands"
+		},
+		{
+			"name": "paint",
+			"file": "paint.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "road paint, worn (tinted: white zebras, yellow line)"
+		},
+		{
+			"name": "kerbN",
+			"file": "kerbN.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 4,
+			"description": "kerb on a road's north edge (its shadow on the asphalt below)"
+		},
+		{
+			"name": "kerbS",
+			"file": "kerbS.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 4,
+			"description": "kerb on a road's south edge"
+		},
+		{
+			"name": "kerbW",
+			"file": "kerbW.png",
+			"kind": "tile",
+			"w": 4,
+			"h": 16,
+			"description": "kerb on a road's west edge"
+		},
+		{
+			"name": "kerbE",
+			"file": "kerbE.png",
+			"kind": "tile",
+			"w": 4,
+			"h": 16,
+			"description": "kerb on a road's east edge"
+		},
+		{
+			"name": "forest",
+			"file": "forest.png",
+			"kind": "tile",
+			"w": 64,
+			"h": 64,
+			"description": "the forest outside the town fence"
+		},
+		{
+			"name": "fenceH",
+			"file": "fenceH.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 2,
+			"description": "board fence along x"
+		},
+		{
+			"name": "fenceV",
+			"file": "fenceV.png",
+			"kind": "tile",
+			"w": 2,
+			"h": 16,
+			"description": "board fence along y"
+		},
+		{
+			"name": "floorWood",
+			"file": "floorWood.png",
+			"kind": "tile",
+			"w": 32,
+			"h": 32,
+			"description": "house floors: boards"
+		},
+		{
+			"name": "floorTile",
+			"file": "floorTile.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "hospital / pharmacy floor: checker tiles"
+		},
+		{
+			"name": "floorShop",
+			"file": "floorShop.png",
+			"kind": "tile",
+			"w": 32,
+			"h": 32,
+			"description": "shop floor: vinyl tiles"
+		},
+		{
+			"name": "wall",
+			"file": "wall.png",
+			"kind": "tileTint",
+			"w": 8,
+			"h": 8,
+			"description": "walls: plaster (tint: the wall colour)"
+		},
+		{
+			"name": "roofShingleH",
+			"file": "roofShingleH.png",
+			"kind": "tileTint",
+			"w": 32,
+			"h": 32,
+			"description": "pitched roof shingles, courses along x (tint: roof colour)"
+		},
+		{
+			"name": "roofShingleV",
+			"file": "roofShingleV.png",
+			"kind": "tileTint",
+			"w": 32,
+			"h": 32,
+			"description": "pitched roof shingles, courses along y"
+		},
+		{
+			"name": "roofGravel",
+			"file": "roofGravel.png",
+			"kind": "tileTint",
+			"w": 32,
+			"h": 32,
+			"description": "flat roof: tar and gravel (shops)"
+		},
+		{
+			"name": "roofMembrane",
+			"file": "roofMembrane.png",
+			"kind": "tileTint",
+			"w": 64,
+			"h": 64,
+			"description": "flat roof: welded membrane (school, hospital, gas)"
+		},
+		{
+			"name": "eaves",
+			"file": "eaves.png",
+			"kind": "slice",
+			"w": 12,
+			"h": 12,
+			"slice": [
+				4,
+				4,
+				8,
+				8
+			],
+			"description": "pitched roof rim: drip edge and fascia"
+		},
+		{
+			"name": "parapet",
+			"file": "parapet.png",
+			"kind": "slice",
+			"w": 12,
+			"h": 12,
+			"slice": [
+				4,
+				4,
+				8,
+				8
+			],
+			"description": "flat roof rim: parapet, coping, inner face"
+		},
+		{
+			"name": "shadowBox",
+			"file": "shadowBox.png",
+			"kind": "slice",
+			"w": 16,
+			"h": 16,
+			"slice": [
+				6,
+				6,
+				10,
+				10
+			],
+			"description": "soft rectangular drop shadow"
+		},
+		{
+			"name": "canopy0",
+			"file": "canopy0.png",
+			"kind": "mask",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 1: silhouette + leaves (tint: foliage)"
+		},
+		{
+			"name": "canopyShade0",
+			"file": "canopyShade0.png",
+			"kind": "overlay",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 1: light, shadow and outline"
+		},
+		{
+			"name": "canopy1",
+			"file": "canopy1.png",
+			"kind": "mask",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 2: silhouette + leaves (tint: foliage)"
+		},
+		{
+			"name": "canopyShade1",
+			"file": "canopyShade1.png",
+			"kind": "overlay",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 2: light, shadow and outline"
+		},
+		{
+			"name": "canopy2",
+			"file": "canopy2.png",
+			"kind": "mask",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 3: silhouette + leaves (tint: foliage)"
+		},
+		{
+			"name": "canopyShade2",
+			"file": "canopyShade2.png",
+			"kind": "overlay",
+			"w": 40,
+			"h": 40,
+			"description": "tree crown 3: light, shadow and outline"
+		},
+		{
+			"name": "car0",
+			"file": "car0.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "sedan: body (tint: paint)"
+		},
+		{
+			"name": "carTrim0",
+			"file": "carTrim0.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "sedan: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage0",
+			"file": "carDamage0.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "sedan: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck0",
+			"file": "carWreck0.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "sedan: burnt out"
+		},
+		{
+			"name": "car1",
+			"file": "car1.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "hatch: body (tint: paint)"
+		},
+		{
+			"name": "carTrim1",
+			"file": "carTrim1.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "hatch: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage1",
+			"file": "carDamage1.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "hatch: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck1",
+			"file": "carWreck1.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "hatch: burnt out"
+		},
+		{
+			"name": "car2",
+			"file": "car2.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "pickup: body (tint: paint)"
+		},
+		{
+			"name": "carTrim2",
+			"file": "carTrim2.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "pickup: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage2",
+			"file": "carDamage2.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "pickup: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck2",
+			"file": "carWreck2.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "pickup: burnt out"
+		},
+		{
+			"name": "car3",
+			"file": "car3.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "suv: body (tint: paint)"
+		},
+		{
+			"name": "carTrim3",
+			"file": "carTrim3.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "suv: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage3",
+			"file": "carDamage3.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "suv: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck3",
+			"file": "carWreck3.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "suv: burnt out"
+		},
+		{
+			"name": "bin",
+			"file": "bin.png",
+			"kind": "sprite",
+			"w": 9,
+			"h": 9,
+			"description": "wheelie bin"
+		},
+		{
+			"name": "litter0",
+			"file": "litter0.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "spilled litter (flat)"
+		},
+		{
+			"name": "litter1",
+			"file": "litter1.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "spilled litter (flat)"
+		},
+		{
+			"name": "litter2",
+			"file": "litter2.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "spilled litter (flat)"
+		},
+		{
+			"name": "blood0",
+			"file": "blood0.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 12,
+			"description": "dried blood"
+		},
+		{
+			"name": "blood1",
+			"file": "blood1.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 12,
+			"description": "dried blood"
+		},
+		{
+			"name": "oil0",
+			"file": "oil0.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 12,
+			"description": "oil stain"
+		},
+		{
+			"name": "oil1",
+			"file": "oil1.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 12,
+			"description": "oil stain"
+		},
+		{
+			"name": "crack0",
+			"file": "crack0.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 8,
+			"description": "asphalt crack"
+		},
+		{
+			"name": "crack1",
+			"file": "crack1.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 8,
+			"description": "asphalt crack"
+		},
+		{
+			"name": "manhole",
+			"file": "manhole.png",
+			"kind": "sprite",
+			"w": 8,
+			"h": 8,
+			"description": "manhole cover"
+		},
+		{
+			"name": "drain",
+			"file": "drain.png",
+			"kind": "sprite",
+			"w": 8,
+			"h": 4,
+			"description": "storm drain"
+		},
+		{
+			"name": "pump",
+			"file": "pump.png",
+			"kind": "sprite",
+			"w": 8,
+			"h": 6,
+			"description": "fuel dispenser"
+		},
+		{
+			"name": "acUnit",
+			"file": "acUnit.png",
+			"kind": "sprite",
+			"w": 13,
+			"h": 11,
+			"description": "rooftop air conditioner"
+		},
+		{
+			"name": "vent",
+			"file": "vent.png",
+			"kind": "sprite",
+			"w": 7,
+			"h": 7,
+			"description": "roof vent"
+		},
+		{
+			"name": "chimney",
+			"file": "chimney.png",
+			"kind": "sprite",
+			"w": 8,
+			"h": 8,
+			"description": "brick chimney on a house roof"
+		}
+	]
+}
