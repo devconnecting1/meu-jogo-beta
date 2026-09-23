@@ -349,8 +349,8 @@ const PAIRS = [
 	["THEME.foreground", "THEME.secondary", MIN_TEXT, "ladrilho ocupado do loadout: WEAPON / Dagger em ferro"],
 	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "nota da tela Survivor (a escolha da MP-21, os pacotes)"],
 	["THEME.foreground", "SURFACE.cell", MIN_TEXT, "valor da linha de estatistica (Day 3, 340 / 800 XP)"],
-	["THEME.mutedForeground", "THEME.background", MIN_TEXT, "slogan e aviso do lobby sobre a faixa opaca do cabecalho"],
-	["THEME.destructive", "THEME.background", MIN_TEXT, "aviso offline do lobby (vermelho) sobre a faixa opaca"],
+	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, 'aviso "carregando" do lobby na plaquinha do painel'],
+	["THEME.destructive", "SURFACE.panel", MIN_TEXT, "aviso offline do lobby (vermelho) na plaquinha do painel"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
@@ -608,7 +608,7 @@ check(
 /*
  * UI-10: the town flyover behind the lobby and the Survivor screen. Between the town and the menus sits the page
  * colour at TRANSPARENCY.backdrop, so the world shows through at `backdrop` at most. No label is drawn on it (the
- * menus keep every text on a plate, a section, a window or the opaque header band -- test:lobby checks that), but
+ * menus keep every text on a plate, a section or a window, or in `foreground` straight over the scrim -- test:lobby checks that), but
  * the ceiling is set so that one that lands there by mistake still reads: over the brightest thing the town can
  * put under the scrim -- white -- the composite must hold `foreground` at 4,5:1.
  */

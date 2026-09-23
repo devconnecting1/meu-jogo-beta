@@ -30,11 +30,7 @@ import {
 	makeScreen,
 	makeScrollList,
 	makeSurface,
-	onLayoutChange,
 	setVisible,
-	topInset,
-	uiScale,
-	viewportSize,
 } from "./widgets";
 import * as Kit from "./window";
 
@@ -249,9 +245,11 @@ const CELL_PAD = 8;
 const TOWN_GROOVE_H = CELL_H + CELL_PAD * 2;
 const TOWN_H = Kit.sectionHeight(TOWN_GROOVE_H);
 const TOWN_GROOVE_W = RIGHT_W - INSET * 2;
-/** the header band: opaque down to HEADER_SOLID, fading out by HEADER_FADE (design units from the body's top) */
-const HEADER_SOLID = 112;
-const HEADER_FADE = 150;
+/** the loading / offline note under the coins: a small panel plate of its own, so the red reads on a fixed colour */
+const NOTE_X = 760;
+const NOTE_Y = 86;
+const NOTE_W = 320;
+const NOTE_H = 24;
 
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 const EXTRA_BOLD = fontOf("sans", Enum.FontWeight.ExtraBold);
@@ -280,6 +278,7 @@ class MenuPage {
 	private readonly startTitle: TextLabel;
 	private readonly startSub: TextLabel;
 	private readonly status: TextLabel;
+	private readonly statusPlate: Frame;
 	private readonly items: Array<NavItem>;
 	private readonly name: TextLabel;
 	private readonly level: Frame;
@@ -301,15 +300,31 @@ class MenuPage {
 		const frame = makeFrame(body, "Menu", 0, 0, 1120, 630, THEME.background, { transparency: 1 });
 		this.frame = frame;
 
-		// ---- the header, on the opaque band (the lobby draws it under the body)
+		// ---- the header, straight over the town. There used to be an opaque band behind it, a black strip across the
+		// top of the flyover that read as a rendering fault (owner, 2026-09-23). The scrim alone holds `foreground` at
+		// 4,5:1 over a white world (test:contrast, UI-10), so the title and the tagline use it; the note, whose red
+		// would not, sits on a small panel plate of its own
 		Wordmark(frame, "Title", MARGIN, 20, 460, 60, TEXT.xl5);
-		makeLabel(frame, "Tagline", tr("Zombie survival"), MARGIN + 2, 80, 400, 22, TEXT.sm, THEME.mutedForeground, {
+		makeLabel(frame, "Tagline", tr("Zombie survival"), MARGIN + 2, 80, 400, 22, TEXT.sm, THEME.foreground, {
 			align: "left",
 		});
 		this.coins = makeCoinPill(frame, "Coins", 850, 28, 230, 52, () => ctx.save.money, handlers.onShop);
-		this.status = makeLabel(frame, "Status", "", 560, 84, 520, 22, TEXT.sm, THEME.mutedForeground, {
-			align: "right",
-		});
+		this.statusPlate = makeFrame(frame, "StatusPlate", NOTE_X, NOTE_Y, NOTE_W, NOTE_H, SURFACE.panel, {});
+		this.status = makeLabel(
+			this.statusPlate,
+			"Status",
+			"",
+			8,
+			0,
+			NOTE_W - 16,
+			NOTE_H,
+			TEXT.sm,
+			THEME.mutedForeground,
+			{
+				align: "right",
+			},
+		);
+		setVisible(this.statusPlate, false);
 
 		// ---- START: the one steel-blue plate, bigger than the rest
 		const start = Button(frame, "Start", "", {
@@ -525,6 +540,7 @@ class MenuPage {
 		} else {
 			this.write(this.status, "");
 		}
+		setVisible(this.statusPlate, this.status.Text !== "");
 		for (const item of this.items) {
 			if (item.sub !== undefined && item.subLabel !== undefined) this.write(item.subLabel, item.sub());
 		}
@@ -585,46 +601,9 @@ function phaseOf(t: number): string {
 
 // ---------------------------------------------------------------- the screen
 
-/** ZIndex of the lobby's layers under its root: the town, the header band, the pages */
+/** ZIndex of the lobby's layers under its root: the town, then the pages */
 const Z_TOWN = 1;
-const Z_BAND = 2;
 const Z_BODY = 3;
-
-/**
- * The opaque band the header stands on: the page colour from the top of the screen down to HEADER_SOLID of the
- * body, fading out by HEADER_FADE -- the title, the tagline and the status note read on the page colour itself,
- * whatever the town draws under them (UI-10).
- */
-function headerBand(root: Frame): Frame {
-	const band = new Instance("Frame");
-	band.Name = "HeaderBand";
-	band.BackgroundColor3 = THEME.background;
-	band.BorderSizePixel = 0;
-	band.ZIndex = Z_BAND;
-	band.Active = false;
-	const fade = new Instance("UIGradient");
-	fade.Rotation = 90;
-	fade.Parent = band;
-	onLayoutChange(band, () => {
-		const v = viewportSize();
-		const inset = topInset();
-		const scale = uiScale();
-		const avail = v.Y - inset;
-		const bodyTop = inset + math.max(0, (avail - 630 * scale) / 2);
-		const solid = bodyTop + HEADER_SOLID * scale;
-		const total = bodyTop + HEADER_FADE * scale;
-		band.Position = new UDim2(0, 0, 0, 0);
-		band.Size = new UDim2(1, 0, 0, math.ceil(total));
-		const k = math.clamp(solid / math.max(total, 1), 0, 1);
-		fade.Transparency = new NumberSequence([
-			new NumberSequenceKeypoint(0, 0),
-			new NumberSequenceKeypoint(k, 0),
-			new NumberSequenceKeypoint(1, 1),
-		]);
-	});
-	band.Parent = root;
-	return band;
-}
 
 export function showLobby(
 	ctx: GameContext,
@@ -638,7 +617,6 @@ export function showLobby(
 	let current: LobbyPage = "menu";
 	let closed = false;
 	let flyover: TownFlyover = attachFlyover(root, status.seed, Z_TOWN);
-	const band = headerBand(root);
 
 	let survivor: SurvivorScreen | undefined;
 	const survivorState = () => {
@@ -687,12 +665,10 @@ export function showLobby(
 				s.refresh(survivorState());
 				setVisible(menu.frame, false);
 				setVisible(s.frame, true);
-				setVisible(band, false);
 				s.focus();
 			} else {
 				if (survivor !== undefined) setVisible(survivor.frame, false);
 				setVisible(menu.frame, true);
-				setVisible(band, true);
 				autoFocus(menu.start);
 			}
 			if (current !== page) {
