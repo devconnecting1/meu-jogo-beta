@@ -47,12 +47,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 170,
-			"images": 76,
-			"flat": 94,
-			"strokes": 51,
-			"corners": 43,
-			"instances": 343
+			"sprites": 159,
+			"images": 78,
+			"flat": 81,
+			"strokes": 48,
+			"corners": 37,
+			"instances": 325
 		}
 	},
 	"house": {
@@ -103,12 +103,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 181,
-			"images": 83,
-			"flat": 98,
-			"strokes": 63,
-			"corners": 45,
-			"instances": 375
+			"sprites": 171,
+			"images": 85,
+			"flat": 86,
+			"strokes": 59,
+			"corners": 39,
+			"instances": 357
 		}
 	},
 	"house-large": {
@@ -159,12 +159,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 224,
-			"images": 99,
-			"flat": 125,
-			"strokes": 71,
-			"corners": 49,
-			"instances": 446
+			"sprites": 217,
+			"images": 101,
+			"flat": 116,
+			"strokes": 67,
+			"corners": 42,
+			"instances": 430
 		}
 	},
 	"pharmacy": {
@@ -215,12 +215,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 206,
-			"images": 126,
-			"flat": 80,
-			"strokes": 47,
-			"corners": 34,
-			"instances": 416
+			"sprites": 197,
+			"images": 128,
+			"flat": 69,
+			"strokes": 44,
+			"corners": 28,
+			"instances": 400
 		}
 	},
 	"market-small": {
@@ -271,12 +271,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 146,
-			"images": 73,
-			"flat": 73,
-			"strokes": 38,
-			"corners": 32,
-			"instances": 292
+			"sprites": 138,
+			"images": 75,
+			"flat": 63,
+			"strokes": 35,
+			"corners": 26,
+			"instances": 277
 		}
 	},
 	"market": {
@@ -327,12 +327,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 314,
-			"images": 180,
-			"flat": 134,
-			"strokes": 66,
-			"corners": 40,
-			"instances": 603
+			"sprites": 309,
+			"images": 182,
+			"flat": 127,
+			"strokes": 63,
+			"corners": 34,
+			"instances": 591
 		}
 	},
 	"gunshop": {
@@ -383,12 +383,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 201,
-			"images": 121,
-			"flat": 80,
-			"strokes": 44,
-			"corners": 34,
-			"instances": 403
+			"sprites": 191,
+			"images": 123,
+			"flat": 68,
+			"strokes": 41,
+			"corners": 28,
+			"instances": 386
 		}
 	},
 	"cloth": {
@@ -439,12 +439,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 193,
-			"images": 113,
-			"flat": 80,
-			"strokes": 47,
-			"corners": 36,
-			"instances": 392
+			"sprites": 184,
+			"images": 115,
+			"flat": 69,
+			"strokes": 44,
+			"corners": 30,
+			"instances": 376
 		}
 	},
 	"restaurant": {
@@ -495,12 +495,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 299,
-			"images": 146,
-			"flat": 153,
-			"strokes": 84,
-			"corners": 63,
-			"instances": 595
+			"sprites": 294,
+			"images": 148,
+			"flat": 146,
+			"strokes": 81,
+			"corners": 57,
+			"instances": 583
 		}
 	},
 	"gas": {
@@ -551,12 +551,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 171,
-			"images": 71,
-			"flat": 100,
-			"strokes": 50,
-			"corners": 40,
-			"instances": 335
+			"sprites": 166,
+			"images": 73,
+			"flat": 93,
+			"strokes": 47,
+			"corners": 34,
+			"instances": 323
 		}
 	},
 	"school": {
@@ -607,12 +607,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 306,
-			"images": 142,
-			"flat": 164,
-			"strokes": 101,
-			"corners": 82,
-			"instances": 634
+			"sprites": 298,
+			"images": 144,
+			"flat": 154,
+			"strokes": 95,
+			"corners": 74,
+			"instances": 614
 		}
 	},
 	"hospital": {
@@ -663,12 +663,12 @@
 			]
 		},
 		"counts": {
-			"sprites": 268,
-			"images": 132,
-			"flat": 136,
-			"strokes": 65,
-			"corners": 49,
-			"instances": 517
+			"sprites": 263,
+			"images": 134,
+			"flat": 129,
+			"strokes": 62,
+			"corners": 43,
+			"instances": 505
 		}
 	},
 	"ext-house": {
@@ -683,12 +683,12 @@
 		"scale": 0.9569377990430622,
 		"noActors": true,
 		"counts": {
-			"sprites": 84,
+			"sprites": 81,
 			"images": 58,
-			"flat": 26,
+			"flat": 23,
 			"strokes": 12,
 			"corners": 11,
-			"instances": 168
+			"instances": 165
 		}
 	},
 	"ext-market": {
@@ -723,12 +723,12 @@
 		"scale": 0.5,
 		"noActors": true,
 		"counts": {
-			"sprites": 221,
+			"sprites": 217,
 			"images": 156,
-			"flat": 65,
+			"flat": 61,
 			"strokes": 27,
 			"corners": 25,
-			"instances": 432
+			"instances": 428
 		}
 	},
 	"ext-shops": {
@@ -743,12 +743,12 @@
 		"scale": 0.5,
 		"noActors": true,
 		"counts": {
-			"sprites": 232,
+			"sprites": 224,
 			"images": 187,
-			"flat": 45,
+			"flat": 37,
 			"strokes": 17,
 			"corners": 10,
-			"instances": 449
+			"instances": 441
 		}
 	},
 	"overview": {
@@ -763,12 +763,12 @@
 		"scale": 0.25,
 		"noActors": true,
 		"counts": {
-			"sprites": 887,
+			"sprites": 875,
 			"images": 693,
-			"flat": 194,
+			"flat": 182,
 			"strokes": 86,
 			"corners": 65,
-			"instances": 1734
+			"instances": 1722
 		}
 	},
 	"ext-school": {
@@ -783,12 +783,12 @@
 		"scale": 0.5115089514066496,
 		"noActors": true,
 		"counts": {
-			"sprites": 260,
+			"sprites": 255,
 			"images": 217,
-			"flat": 43,
+			"flat": 38,
 			"strokes": 12,
 			"corners": 11,
-			"instances": 503
+			"instances": 498
 		}
 	},
 	"ext-hospital": {
