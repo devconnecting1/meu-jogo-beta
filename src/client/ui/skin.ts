@@ -83,10 +83,24 @@ const pixelStrokes = new Map<UIStroke, number>();
 const skinLayers = new Set<ImageLabel>();
 const insetListeners = new Set<() => void>();
 
+/**
+ * Smallest text the interface is allowed to draw, in screen pixels.
+ *
+ * Roblox's accessibility guidance puts the floor here, and we were under it by half: on a 844x390 phone
+ * uiScale lands at 0.53, so a 12-unit caption came out at 6 px and was allowed to shrink to 5. That is not
+ * small text, it is text nobody reads -- and the letterboxed design space means the SMALLER the phone, the
+ * worse it got, which is backwards.
+ *
+ * Raising the floor has a cost and it is deliberate: a label that no longer fits its box will now overflow
+ * instead of shrinking away, so a tight string has to be shortened, truncated or given room. Unreadable is
+ * worse than tight.
+ */
+const MIN_TEXT_PX = 9;
+
 function applyTextSize(c: UITextSizeConstraint, designSize: number): void {
-	const max = math.clamp(math.round(designSize * uiScale()), 6, 100);
+	const max = math.clamp(math.round(designSize * uiScale()), MIN_TEXT_PX, 100);
 	c.MaxTextSize = max;
-	c.MinTextSize = math.clamp(math.floor(max * 0.5), 5, max);
+	c.MinTextSize = math.clamp(math.floor(max * 0.5), MIN_TEXT_PX, max);
 }
 
 /** TextScaled with a design-size cap (kept in sync with the screen size) */
