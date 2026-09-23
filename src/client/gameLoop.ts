@@ -1,12 +1,32 @@
-import { getCtx, syncKeyboardMove } from "./bootstrap";
+import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
-import { Camera } from "shared/engine/camera";
-import { DESIGN } from "shared/engine/constants";
-import { Renderer } from "shared/engine/renderer";
+import { Camera, ViewRect } from "shared/engine/camera";
+import { DESIGN, TOWN } from "shared/engine/constants";
+import { LightMap, LightSource, Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
-import { expMaxInit, PlayerSaveData } from "shared/game/save";
-import { createPlayer, PlayerState, recalcMoveSpeed } from "shared/game/player";
-import { generateTown, rectHitsSolid, randomOpenPoint, updateGroundItems, WorldData, Solid } from "shared/game/world";
+import { ItemKind, WeaponKind } from "shared/data/kinds";
+import { EQUIPS } from "shared/data/equips";
+import { USABLES } from "shared/data/usables";
+import { isChoppingTool, WEAPONS } from "shared/data/weapons";
+import { expMaxInit, outfitLookOf, petLookOf, PlayerSaveData } from "shared/game/save";
+import { PetLook, petFlies } from "shared/data/cosmetics";
+import { createPlayer, currentWeapon, PlayerState } from "shared/game/player";
+import { PLAYER_RADIUS } from "shared/game/physics";
+import type { GameContext } from "shared/game/context";
+import {
+	buildingAt,
+	createWorld,
+	generateTown,
+	GroundRect,
+	isOnRoad,
+	querySolids,
+	randomOpenPoint,
+	rectHitsSolid,
+	Road,
+	updateGroundItems,
+	WorldData,
+	Solid,
+} from "shared/game/world";
 import { resetEntityIds, BossState, ZombieState } from "shared/game/entities";
 import { resetBullets, Bullet } from "shared/game/bullets";
 import { DayNight } from "./systems/daynight";
@@ -17,16 +37,337 @@ import { updateBosses } from "./systems/bossAI";
 import { Combat } from "./systems/combat";
 import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
-import { GameRefs, SPEED_SCALE, Tracer } from "./systems/types";
+import { GameRefs } from "./systems/types";
+import { stepPlayer } from "shared/sim/playerMove";
+import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
+import { Nameplate, profileOf } from "./ui/nameplate";
+import {
+	netActive,
+	netBindAdmin,
+	netReset,
+	netStats,
+	netUpdate,
+	remotePlayers,
+	takeNetFx,
+	ZombieDeathEvent,
+} from "./net/netClient";
+import { createRawInput, readRawInput } from "./net/localInput";
+import { RemotePlayerView } from "./net/netTypes";
+import { MP_PHASE } from "shared/net/mpConfig";
+import { FxEvent as WireFxEvent } from "shared/net/protocol";
+import { ActorDrawOpts, ActorsView } from "./view/actorsView";
+import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
+import { PlayersView } from "./view/playersView";
+import { ChatBubbles } from "./view/chatBubbles";
+import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
+import { drawPet } from "./view/cosmeticsView";
+import { createPetFollower, stepPetFollower } from "./view/petFollow";
+import { FootCycle } from "./view/footsteps";
+
+const Players = game.GetService("Players");
+
+/**
+ * From this phase the SERVER owns the horde, the bosses and every projectile (§11.1), so the client mirrors
+ * them instead of simulating them (client/view/actorsView.ts). `netActive()` on its own is not the test:
+ * at MP_PHASE 1 a client is in a server session AND still simulates a horde of its own, and the mirror would
+ * fight that simulation for the same array every frame.
+ */
+const SERVER_ACTORS = MP_PHASE >= 2;
+
+/** nameplate sits between the night light map (Dark, 80) and the HUD (90) so it stays readable at night */
+const NAMEPLATE_Z = 85;
+/** world units from the player's centre to the top of the plate: clears the body and its shadow */
+const NAMEPLATE_GAP = 14;
+
+/** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
+const ROOF_LERP = 0.15;
+/** tree canopy opacity while someone stands under it (original obj_tree1 fades near the player) */
+const CANOPY_SEE_THROUGH = 0.35;
+/** night light radii (world units): the player's own light and built light sources */
+const PLAYER_LIGHT_R = 250;
+const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/** walk-cycle phase per world unit travelled (survivors, local and remote) */
+const FEET_CYCLE_PER_UNIT = 0.09;
+/**
+ * Speed (world units per second) above which the local survivor's feet swing in a server session. The single-
+ * player path asks the simulation itself (`StepResult.walking`), but a predicted frame is not a simulation step:
+ * it can hold 0, 1 or several of them plus the visual offset and the render lead, so there the walk cycle follows
+ * the position the view actually shows — exactly as an interpolated ally's does.
+ */
+const NET_WALK_SPEED = 8;
+/** nothing to draw when the session is not server-simulated */
+const NO_REMOTES = new Array<RemotePlayerView>();
+const WHITE = COLORS.white;
+const BLACK = COLORS.shadow;
+/** street furniture / ground palette, derived from the base colours */
+const GROUND = {
+	plaza: COLORS.sidewalk.Lerp(WHITE, 0.1),
+	verge: COLORS.grass.Lerp(COLORS.grassLight, 0.4),
+	pit: COLORS.treeTrunk.Lerp(BLACK, 0.3),
+	walk: COLORS.sidewalk.Lerp(WHITE, 0.16),
+	drive: COLORS.sidewalk.Lerp(BLACK, 0.08),
+	apron: COLORS.sidewalk.Lerp(COLORS.road, 0.3),
+	parking: COLORS.road.Lerp(COLORS.sidewalk, 0.14),
+	stall: WHITE.Lerp(COLORS.road, 0.25),
+	playground: COLORS.dirtPath.Lerp(WHITE, 0.25),
+	ramp: COLORS.uiYellow.Lerp(COLORS.sidewalk, 0.35),
+	zebra: WHITE.Lerp(COLORS.road, 0.12),
+	lane: WHITE.Lerp(COLORS.road, 0.3),
+	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
+};
+
+/** road markings: dash period/length, crosswalk stripe width/period */
+const DASH_PERIOD = 160;
+const DASH_LEN = 64;
+const ZEBRA_W = 24;
+const ZEBRA_STEP = 48;
+
+/**
+ * Target roof opacity for a building (0 = invisible, 1 = opaque), eased by the caller.
+ * Pure inside/outside like the original (par_building:47-57): from the street you never see
+ * what waits inside, so every doorway is a gamble.
+ * @param playerInside true when the player's position is inside the building's footprint
+ */
+function roofTargetAlpha(playerInside: boolean): number {
+	return playerInside ? 0 : 1;
+}
+
+/** frame-rate independent version of `lerp(a, b, perFrame)` tuned at 60 fps */
+function ease(perFrame: number, dt: number): number {
+	return 1 - math.pow(1 - perFrame, dt * 60);
+}
+
+function overlaps(x: number, y: number, w: number, h: number, v: ViewRect): boolean {
+	return x < v.maxX && x + w > v.minX && y < v.maxY && y + h > v.minY;
+}
+
+function circleInView(x: number, y: number, r: number, v: ViewRect): boolean {
+	return x + r > v.minX && x - r < v.maxX && y + r > v.minY && y - r < v.maxY;
+}
+
+// ------------------------------------------------------------------ ground items
+
+/** one flat piece of a ground item, in the item's own frame (f along its heading, l to its right) */
+interface ItemPart {
+	f: number;
+	l: number;
+	w: number;
+	h: number;
+	color: Color3;
+	/** corner radius (world units); CIRCLE for a disc */
+	r: number;
+	/** extra turn relative to the item (radians) */
+	rot: number;
+	/** dark outline that separates the piece from any ground (off for insets such as labels) */
+	edge: boolean;
+}
+
+/** a ground item's silhouette: its pieces bottom → top and the footprint of its drop shadow */
+interface ItemLook {
+	parts: Array<ItemPart>;
+	shadowW: number;
+	shadowH: number;
+	shadowR: number;
+}
+
+const CIRCLE = -1;
+
+function piece(f: number, l: number, w: number, h: number, color: Color3, r = 2, edge = true, rot = 0): ItemPart {
+	return { f, l, w, h, color, r, rot, edge };
+}
+
+function look(shadowW: number, shadowH: number, shadowR: number, parts: Array<ItemPart>): ItemLook {
+	return { parts, shadowW, shadowH, shadowR };
+}
+
+/**
+ * Item palette. Built from the world palette and kept clear of the fixed gameplay colours (LEG-02):
+ * no zombie green, poison purple or electric yellow on loot. Red appears only as the medical cross
+ * (it restores the player's health, the thing red stands for). Each look has one light, saturated
+ * piece so it reads on dark asphalt and a dark outline so it reads on pale pavement.
+ */
+const LOOT = {
+	steel: COLORS.blade,
+	gunmetal: COLORS.wallIron.Lerp(COLORS.weapon, 0.25),
+	grip: COLORS.weapon,
+	handle: COLORS.treeTrunk,
+	lumber: COLORS.arrow.Lerp(COLORS.treeTrunk, 0.25),
+	tin: COLORS.blade.Lerp(COLORS.wallIron, 0.4),
+	foodLabel: COLORS.campfire.Lerp(COLORS.blood, 0.15),
+	medCase: WHITE.Lerp(COLORS.wallHouse, 0.25),
+	medCross: COLORS.uiRed,
+	ammoBox: COLORS.treeLeafDark.Lerp(COLORS.fence, 0.6),
+	brass: COLORS.uiAccent.Lerp(WHITE, 0.2),
+	fuel: COLORS.car.Lerp(COLORS.fence, 0.3),
+	cloth: COLORS.wallHouse,
+	leather: COLORS.doormat.Lerp(COLORS.treeTrunk, 0.3),
+	steelBar: COLORS.wallIron.Lerp(WHITE, 0.2),
+	gold: COLORS.uiAccent,
+	stone: COLORS.curb.Lerp(WHITE, 0.12),
+	burlap: COLORS.dirtPath.Lerp(COLORS.wallHouse, 0.2),
+	/** machine parts are blue like every machine (LEG-02) */
+	parts: COLORS.uiBlue.Lerp(COLORS.wallIron, 0.45),
+	plastic: COLORS.wallShop,
+	lens: COLORS.uiBlue.Lerp(WHITE, 0.3),
+	fletch: WHITE.Lerp(COLORS.sidewalk, 0.2),
+};
+const LOOT_EDGE = COLORS.shadow.Lerp(COLORS.road, 0.25);
+
+/** two stacked long pieces: lumber, metal bars */
+function stackLook(color: Color3, len: number, thick: number, r: number): ItemLook {
+	return look(len + 4, thick * 2 + 6, r, [
+		piece(-2, -thick * 0.55, len, thick, color, r),
+		piece(2, thick * 0.55, len - 2, thick, color.Lerp(WHITE, 0.12), r),
+	]);
+}
+
+/** armour lying flat: a vest with its neck opening towards the item's heading */
+function vestLook(color: Color3): ItemLook {
+	return look(26, 30, 8, [
+		piece(0, 0, 26, 30, color, 8),
+		piece(9, 0, 9, 12, color.Lerp(COLORS.shadow, 0.45), 4, false),
+	]);
+}
+
+const ITEM_LOOKS = {
+	/** knives, swords, machetes, crowbars: handle + long steel head */
+	blade: look(34, 8, 3, [piece(-11, 0, 13, 7, LOOT.handle, 2), piece(6, 0, 23, 6, LOOT.steel, 3)]),
+	/** axes and saws: wooden haft + steel head across it */
+	axe: look(34, 18, 3, [piece(-2, 0, 32, 6, LOOT.lumber, 3), piece(11, -4, 9, 18, LOOT.steel, 2)]),
+	/** wooden stick / baseball bat */
+	club: look(34, 9, 4, [piece(2, 0, 30, 8, LOOT.lumber, 4), piece(-13, 0, 9, 6, LOOT.handle, 2)]),
+	/** pistols: slide + grip (an L) */
+	pistol: look(26, 24, 3, [piece(-7, 8, 9, 15, LOOT.grip, 2, true, 0.3), piece(1, -3, 24, 8, LOOT.gunmetal, 2)]),
+	/** rifles, shotguns, machine guns: wooden stock, grip, long receiver and barrel */
+	longGun: look(36, 14, 3, [
+		piece(-13, 0, 12, 10, LOOT.handle, 3),
+		piece(-3, 5, 7, 9, LOOT.grip, 2),
+		piece(4, 0, 30, 7, LOOT.gunmetal, 2),
+	]),
+	/** bows and the crossbow: two limbs in a shallow V + the string */
+	bow: look(18, 34, 6, [
+		piece(-4, 0, 2, 30, LOOT.fletch, 1, false),
+		piece(1, -8, 5, 19, LOOT.handle, 2, true, -0.35),
+		piece(1, 8, 5, 19, LOOT.handle, 2, true, 0.35),
+	]),
+	/** cartridges: an olive ammo box, open, brass showing */
+	ammo: look(26, 20, 3, [piece(0, 0, 26, 20, LOOT.ammoBox, 3), piece(1, 0, 18, 12, LOOT.brass, 2, false)]),
+	/** a bundle of arrows */
+	arrows: look(34, 12, 2, [
+		piece(0, -3, 32, 3, LOOT.lumber, 1),
+		piece(1, 3, 32, 3, LOOT.lumber, 1),
+		piece(-12, 0, 8, 12, LOOT.fletch, 2, false),
+	]),
+	/** oil: a jerrycan with its cap */
+	fuel: look(24, 28, 4, [piece(0, 0, 24, 28, LOOT.fuel, 4), piece(8, -7, 8, 8, LOOT.steel, CIRCLE)]),
+	/** food: a can lying on its side (tin ends, paper label) */
+	food: look(28, 18, 5, [piece(0, 0, 28, 18, LOOT.tin, 5), piece(0, 0, 16, 18, LOOT.foodLabel, 0, false)]),
+	/** medicine: a white case with a red cross */
+	medicine: look(28, 24, 4, [
+		piece(0, 0, 28, 24, LOOT.medCase, 4),
+		piece(0, 0, 16, 5, LOOT.medCross, 1, false),
+		piece(0, 0, 5, 16, LOOT.medCross, 1, false),
+	]),
+	lumber: stackLook(LOOT.lumber, 32, 8, 1),
+	steel: stackLook(LOOT.steelBar, 26, 10, 2),
+	gold: stackLook(LOOT.gold, 26, 10, 2),
+	cloth: stackLook(LOOT.cloth, 28, 11, 5),
+	leather: stackLook(LOOT.leather, 28, 11, 5),
+	stone: look(26, 20, 9, [
+		piece(-2, -1, 22, 18, LOOT.stone, 8),
+		piece(8, 6, 12, 10, LOOT.stone.Lerp(WHITE, 0.15), 5),
+	]),
+	/** gunpowder: a tied sack */
+	powder: look(24, 26, 8, [piece(-2, 0, 22, 24, LOOT.burlap, 8), piece(11, 0, 5, 12, LOOT.handle, 2)]),
+	/** machine parts and electronics: a big steel-blue washer */
+	parts: look(24, 24, 12, [piece(0, 0, 24, 24, LOOT.parts, CIRCLE), piece(0, 0, 9, 9, LOOT.grip, CIRCLE, false)]),
+	/** placeable kits (desks, turrets, barricades...): a braced wooden crate */
+	crate: look(28, 28, 2, [
+		piece(0, 0, 28, 28, LOOT.lumber.Lerp(COLORS.treeTrunk, 0.25), 2),
+		piece(0, 0, 34, 5, LOOT.lumber.Lerp(COLORS.treeTrunk, 0.55), 1, false, math.pi / 4),
+	]),
+	/** gadgets and attachments (flashlight, watch, scope...): a device with a blue lens */
+	gadget: look(24, 18, 4, [piece(0, 0, 24, 18, LOOT.plastic, 4), piece(5, 0, 8, 8, LOOT.lens, CIRCLE)]),
+};
+
+/** armour (equip kind 1) by material; the rest of the equipment is gadgets */
+const VEST_LOOKS: Record<number, ItemLook> = {
+	0: vestLook(LOOT.cloth),
+	1: vestLook(LOOT.leather),
+	2: vestLook(LOOT.leather),
+	3: vestLook(LOOT.lumber),
+	4: vestLook(LOOT.steelBar),
+	5: vestLook(LOOT.plastic),
+	14: vestLook(LOOT.parts),
+};
+
+/** usables that heal or treat (first aid, pain killer, adrenaline, sedative, bandage) vs food */
+function isMedicine(id: number): boolean {
+	const u = USABLES[id];
+	if (u === undefined) return false;
+	return u.pain > 0 || u.speed > 0 || u.calm > 0 || (u.hunger <= 0 && u.hp > 0);
+}
+
+/** silhouette of a ground item by category: weapon, ammo/fuel, food, medicine, material, equipment */
+function itemLook(kind: number, id: number): ItemLook {
+	if (kind === ItemKind.Weapon) {
+		const w = WEAPONS[id];
+		if (w === undefined) return ITEM_LOOKS.blade;
+		if (w.kind === WeaponKind.Melee) {
+			if (isChoppingTool(w)) return ITEM_LOOKS.axe;
+			return id === 1 || id === 6 ? ITEM_LOOKS.club : ITEM_LOOKS.blade;
+		}
+		if (w.kind === WeaponKind.Bow) return ITEM_LOOKS.bow;
+		return w.kind === WeaponKind.Pistol ? ITEM_LOOKS.pistol : ITEM_LOOKS.longGun;
+	}
+	if (kind === ItemKind.Equip) {
+		const e = EQUIPS[id];
+		if (e !== undefined && e.kind === 1) return VEST_LOOKS[id] ?? VEST_LOOKS[0];
+		return ITEM_LOOKS.gadget;
+	}
+	if (kind === ItemKind.Use) return isMedicine(id) ? ITEM_LOOKS.medicine : ITEM_LOOKS.food;
+	// etc items (etcItems.ts): kits 0–22, materials 23–43, ammo 44–47, oil 48
+	if (id >= 44 && id <= 46) return ITEM_LOOKS.ammo;
+	if (id === 47) return ITEM_LOOKS.arrows;
+	if (id === 48) return ITEM_LOOKS.fuel;
+	if (id === 23) return ITEM_LOOKS.lumber;
+	if (id === 24) return ITEM_LOOKS.stone;
+	if (id === 25 || id === 26) return ITEM_LOOKS.steel;
+	if (id === 27 || id === 28) return ITEM_LOOKS.gold;
+	if (id === 33) return ITEM_LOOKS.powder;
+	if (id === 34) return ITEM_LOOKS.cloth;
+	if (id === 41) return ITEM_LOOKS.leather;
+	if (id <= 22) return ITEM_LOOKS.crate;
+	return ITEM_LOOKS.parts;
+}
+
+/** how far a dropped item lies turned from the world axes (radians), fixed per item */
+const ITEM_TILT = 0.55;
+/** the glint that marks loot: once every period (s), lasting `len` (s), per item out of phase */
+const GLINT_PERIOD = 2.6;
+const GLINT_LEN = 0.45;
+const GLINT_ARM = 14;
+
+/** outward unit normal of a building wall */
+function sideNormal(side: string | undefined): { x: number; y: number } {
+	if (side === "top") return { x: 0, y: -1 };
+	if (side === "left") return { x: -1, y: 0 };
+	if (side === "right") return { x: 1, y: 0 };
+	return { x: 0, y: 1 };
+}
 
 export class GameLoop {
-	private world: WorldData = generateTown(0);
+	/** empty placeholder; the town is generated once, in init() */
+	private world: WorldData = createWorld(DESIGN.WORLD_W, DESIGN.WORLD_H);
 	private player: PlayerState;
 	private save: PlayerSaveData;
 	private zombies: Array<ZombieState> = [];
 	private bosses: Array<BossState> = [];
 	private bullets: Array<Bullet> = [];
-	private tracers: Array<Tracer> = [];
+	/** every survivor in this world (F0: only the local one, players[0]) */
+	private players: Array<PlayerState> = [];
+	/** cosmetic effects the systems asked for; played (and cleared) by playFx */
+	private fx: Array<FxEvent> = [];
 	private particles = new ParticleSystem();
 	private daynight: DayNight;
 	private combat = new Combat();
@@ -34,26 +375,84 @@ export class GameLoop {
 	private interaction = new Interaction();
 	private build = new BuildSystem();
 	private refs: GameRefs;
-	private announceQueue: Array<string> = [];
+
+	/** buildings whose roof is (or may be) not fully opaque; eased even off-screen */
+	private fadingRoofs = new Set<Solid>();
+	private queryBuf: Array<Solid> = [];
+	/** player walk cycle (feet) */
+	private walkPhase = 0;
+	private walkAmp = 0;
+	/** shadow direction: sun by day, away from the player's light at night */
+	private sunX = 0.7;
+	private sunY = 0.7;
+	private nightLight = false;
+	private clock = 0;
+	private lightMap?: LightMap;
+	private nameplate?: Nameplate;
+	private lights: Array<LightSource> = [];
+	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
+	private seq = 0;
+	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
+	private readonly look = createLook();
+	private readonly swing = createSwingTrail();
+	/** the local survivor's pet (MON-04): a view that follows where this client draws you, never an entity */
+	private readonly pet = createPetFollower();
+	private petLook: number = PetLook.None;
+	private readonly raw = createRawInput();
+	/** the other survivors of a server session: bodies, pooled nameplates and their light (§5.3) */
+	private readonly playersView = new PlayersView();
+	/** what anyone within earshot just said, floating over their head; built on the first frame that can host it */
+	private chat?: ChatBubbles;
+	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
+	private readonly selfBody = { x: 0, y: 0 };
+	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
+	private lastDt = 1 / 60;
+	/** when the local survivor's foot lands (the walk cycle knows; client/view/footsteps.ts reports it) */
+	private readonly foot = new FootCycle();
+	/** the sun/light accessor handed to the views, bound once so a frame allocates no closure */
+	private readonly shadowFor = (x: number, y: number, len: number): { x: number; y: number } =>
+		this.shadowOffset(x, y, len);
+	/** the horde and the bosses: the mirror of the server's bodies (§4.2) and everything that draws them */
+	private readonly actors = new ActorsView();
+	/** blood, debris, shot lines, blasts and the projectiles the server flies (§4.1 Fx) */
+	private readonly fxView = new FxView();
+	/** what the actor views need from the loop each frame, refilled in place instead of rebuilt */
+	private readonly drawOpts: ActorDrawOpts = { shadow: this.shadowFor, clock: 0 };
+	/** this frame's §4.2 Fx events, drained from the network layer into one reused buffer */
+	private readonly netFx = new Array<WireFxEvent>();
+	/**
+	 * `shooterAt` answers where a survivor's shot starts, by SLOT: §4.2's `Shot` names the shooter that way
+	 * and the tracer has to leave THEIR hands. The local survivor is never looked up here — their own shot is
+	 * predicted (client/predict/weaponFx.ts), which is what makes firing feel instant at 150 ms of RTT.
+	 */
+	private readonly shooterAt = (slot: number): { x: number; y: number } | undefined => {
+		for (const ally of remotePlayers()) {
+			if (ally.slot === slot) return ally;
+		}
+		return undefined;
+	};
+	private readonly wireOpts: WireFxOpts = { localSlot: -1, shooterAt: this.shooterAt };
+	/** a reliable `ZombieDied` (§4.4): the mirror hands it over, the effect view decides what it still owes */
+	private readonly onZombieDeath = (d: ZombieDeathEvent): void => this.fxView.noteDeath(d);
 
 	constructor() {
 		const save = getCtx().save;
 		this.save = save;
 		this.player = createPlayer(save, 0, 0);
+		this.players.push(this.player);
 		this.daynight = new DayNight(save);
 		this.refs = {
 			world: this.world,
+			players: this.players,
 			player: this.player,
 			save: this.save,
 			input: undefined as never,
 			zombies: this.zombies,
 			bosses: this.bosses,
 			bullets: this.bullets,
-			particles: this.particles,
 			daynight: this.daynight,
-			tracers: this.tracers,
 			pendingPlace: -1,
-			announceQueue: this.announceQueue,
+			fx: this.fx,
 			onMessage: () => {},
 			onExp: () => {},
 		};
@@ -61,40 +460,45 @@ export class GameLoop {
 
 	init(save: PlayerSaveData): void {
 		this.save = save;
-		this.world = generateTown(0);
+		this.world = generateTown(DESIGN.TOWN_SEED);
+		this.fadingRoofs.clear();
 		resetEntityIds();
 		resetBullets();
 		this.zombies.clear();
 		this.bosses.clear();
 		this.bullets.clear();
-		this.tracers.clear();
+		// a new world has none of the old one's bodies, shot lines, blasts or server-flown projectiles
+		this.actors.reset();
+		this.fxView.clear(this.refs);
+		this.netFx.clear();
+		this.wireOpts.localSlot = -1;
 		this.particles.clear();
-		this.announceQueue.clear();
-		const center = randomOpenPoint(
-			this.world,
-			this.world.width / 2 - 800,
-			this.world.height / 2 - 800,
-			this.world.width / 2 + 800,
-			this.world.height / 2 + 800,
-		);
-		this.player = createPlayer(save, center.x, center.y);
+		const spawn = this.findSpawnPoint();
+		this.player = createPlayer(save, spawn.x, spawn.y);
+		this.players.clear();
+		this.players.push(this.player);
+		this.fx.clear();
+		// MP-20: a new map is a new LIFE, never a new world. The clock is the town's, so it is handed over
+		// instead of rebuilt -- otherwise "New game" put this client back at day 1, 07:00 while the server
+		// (and everybody else on it) was still in the middle of night three.
+		const previousClock = this.daynight;
 		this.daynight = new DayNight(save);
+		this.daynight.adoptWorld(previousClock);
 		this.daynight.onAnnounce = msg => {
-			this.announceQueue.push(msg);
+			this.fx.push({ kind: "message", text: msg });
 		};
 		const refs = this.refs;
 		refs.world = this.world;
+		refs.players = this.players;
 		refs.player = this.player;
 		refs.save = save;
 		refs.input = getCtx().input;
 		refs.zombies = this.zombies;
 		refs.bosses = this.bosses;
 		refs.bullets = this.bullets;
-		refs.particles = this.particles;
 		refs.daynight = this.daynight;
-		refs.tracers = this.tracers;
 		refs.pendingPlace = -1;
-		refs.announceQueue = this.announceQueue;
+		refs.fx = this.fx;
 		refs.onMessage = msg => {
 			print(msg);
 		};
@@ -106,169 +510,947 @@ export class GameLoop {
 				save.skillPoint++;
 			}
 		};
+		// a new world: the session forgets its prediction history and re-attaches to this survivor (§5.2), and
+		// the admin switches travel by reference so the free camera freezes the survivor on both paths
+		netBindAdmin(this.admin);
+		netReset();
+		this.playersView.hide();
+		// a new body: the pet appears at its heel rather than running over from where the last one fell
+		this.pet.started = false;
 		const ctx = getCtx();
 		ctx.cam.x = this.player.x;
 		ctx.cam.y = this.player.y;
 	}
 
-	private updatePlayer(dt: number): void {
-		const ctx = getCtx();
-		const p = this.player;
-		const save = this.save;
-		const input = ctx.input;
-		syncKeyboardMove();
-		p.angle = input.aimAngle;
-
-		let wdx = 0;
-		let wdy = 0;
-		if (input.moveMagnitude > 0) {
-			const a = input.moveX;
-			const b = input.moveY / ctx.cam.isoSquash;
-			wdx = (a + b) * 0.5;
-			wdy = (b - a) * 0.5;
-			const l = math.sqrt(wdx * wdx + wdy * wdy);
-			if (l > 0.0001) {
-				wdx /= l;
-				wdy /= l;
-			} else {
-				wdx = 0;
-				wdy = 0;
+	/** Start on a street near the centre of town: never inside a building, a car or a tree. */
+	private findSpawnPoint(): { x: number; y: number } {
+		const w = this.world;
+		const cx = w.width / 2;
+		const cy = w.height / 2;
+		for (let i = 0; i < 200; i++) {
+			const p = randomOpenPoint(w, cx - 1400, cy - 1400, cx + 1400, cy + 1400);
+			if (
+				isOnRoad(w, p.x, p.y) &&
+				buildingAt(w, p.x, p.y) === undefined &&
+				rectHitsSolid(w, p.x, p.y, 80, 80) === undefined
+			) {
+				return p;
 			}
 		}
-		const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;
-		const rx = math.cos(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-		const ry = math.sin(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-		if (p.reactionSpeed > 0) {
-			p.reactionSpeed = math.max(0, p.reactionSpeed - DESIGN.REACTION_FRICTION * dt);
-		}
-		const mvx = wdx * speed + rx;
-		const mvy = wdy * speed + ry;
-		const nx = p.x + mvx * dt;
-		const ny = p.y + mvy * dt;
-		if (!rectHitsSolid(this.world, nx, ny, 36, 40)) {
-			p.x = nx;
-			p.y = ny;
-		} else if (!rectHitsSolid(this.world, nx, p.y, 36, 40)) {
-			p.x = nx;
-		} else if (!rectHitsSolid(this.world, p.x, ny, 36, 40)) {
-			p.y = ny;
-		}
-		p.x = clamp(p.x, 40, this.world.width - 40);
-		p.y = clamp(p.y, 40, this.world.height - 40);
-
-		const hungerRate = 1 - save.skillLevels[8] / 3;
-		p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);
-		if (p.hungry <= 0) {
-			p.hp -= 0.02 * 30 * dt;
-		} else if (p.hp < p.hpMax) {
-			p.hp = math.min(p.hpMax, p.hp + 0.04 * 30 * (1 + save.skillLevels[1]) * dt);
-		}
-		if (p.buffs.poison > 0) {
-			p.buffs.poison -= dt;
-			p.hp -= 0.06 * 30 * (save.skillLevels[20] > 0 ? 0.5 : 1) * dt;
-		}
-		if (p.buffs.speed > 0) p.buffs.speed -= dt;
-		if (p.buffs.calm > 0) p.buffs.calm -= dt;
-		if (p.buffs.pain > 0) p.buffs.pain -= dt;
-		if (p.attacked) {
-			p.iframe -= dt;
-			if (p.iframe <= 0) {
-				p.attacked = false;
-				p.iframe = 0;
-			}
-		}
-		if (p.hp <= 0 && !p.dead) {
-			p.hp = 0;
-			p.dead = true;
-			getCtx().phase = "dead";
-		}
+		return randomOpenPoint(w, cx - 800, cy - 800, cx + 800, cy + 800);
 	}
 
+	/**
+	 * This frame's local input as a quantised command (docs/MULTIPLAYER.md §2.2). Quantising BEFORE stepping is
+	 * what makes the client and the server apply the very same numbers from F1 on.
+	 */
+	private sampleCommand(ctx: GameContext): InputCommand {
+		const input = ctx.input;
+		// the same reader the server session uses (client/net/localInput.ts), so the two paths cannot drift apart
+		const raw = readRawInput(ctx.cam, input, this.admin.frozen, this.raw);
+		const edges = packEdges(
+			input.attackPressed ? 1 : 0,
+			input.attackReleased ? 1 : 0,
+			input.actionPressed ? 1 : 0,
+			input.reloadPressed ? 1 : 0,
+		);
+		this.seq = (this.seq + 1) % SEQ_MOD;
+		return makeCommand(this.seq, raw.moveX, raw.moveY, raw.magnitude, raw.aim, raw.held, edges);
+	}
+
+	/** one step of the local survivor with the shared simulation (the server runs the same one in F1) */
+	private stepLocalPlayer(ctx: GameContext, dt: number): void {
+		const p = this.player;
+		const cmd = this.sampleCommand(ctx);
+		// admin switch: noclip travels on the survivor (it arrives in the snapshot's modFlags from F1 on)
+		p.noclip = this.admin.noclip;
+		const step = stepPlayer(this.world, p, this.save, cmd, dt);
+		this.walkPhase += step.moved * FEET_CYCLE_PER_UNIT;
+		this.walkAmp = lerp(this.walkAmp, step.walking ? 1 : 0, ease(0.25, dt));
+		if (step.died) ctx.phase = "dead";
+	}
+
+	/**
+	 * The server-simulated path (docs/MULTIPLAYER.md §2.2, §5.2). `netUpdate` owns the whole thing: it samples the
+	 * input into 60 Hz commands, sends them with their redundancy, reconciles the last ack and writes the DRAWN
+	 * position (prediction + visual offset + render lead) onto the survivor. The loop only reads the result, so
+	 * the walk cycle follows the position on screen, like every interpolated ally's does.
+	 */
+	private stepNetPlayer(ctx: GameContext, dt: number): void {
+		const p = this.player;
+		// admin switch; the server's own noclip arrives in the snapshot's modFlags and overrides this
+		p.noclip = this.admin.noclip;
+		const fromX = p.x;
+		const fromY = p.y;
+		netUpdate(this.refs, dt);
+		const dx = p.x - fromX;
+		const dy = p.y - fromY;
+		const moved = math.sqrt(dx * dx + dy * dy);
+		this.walkPhase += moved * FEET_CYCLE_PER_UNIT;
+		const speed = dt > 0 ? moved / dt : 0;
+		this.walkAmp = lerp(this.walkAmp, speed > NET_WALK_SPEED ? 1 : 0, ease(0.25, dt));
+		if (p.dead) ctx.phase = "dead";
+	}
+
+	/**
+	 * Every cosmetic effect of the frame, from both channels (client/view/fxView.ts).
+	 *
+	 * The wire is drained FIRST because `Blood`, `Debris` and `Tracer` come back as simulation events and are
+	 * pushed into `refs.fx` — so draining that second plays a received bite and a locally simulated one in
+	 * the same frame, through the same code, in the same order.
+	 */
+	private playFx(ctx: GameContext): void {
+		if (SERVER_ACTORS && netActive()) {
+			const wire = this.netFx;
+			wire.clear();
+			takeNetFx(wire);
+			if (wire.size() > 0) {
+				// the slot only has to be looked up until the roster names it; it does not change inside a run
+				if (this.wireOpts.localSlot < 0) this.wireOpts.localSlot = netStats().slot;
+				this.fxView.playWire(this.refs, wire, ctx.cam, this.particles, this.wireOpts);
+			}
+		}
+		this.fxView.playSim(this.refs, ctx.cam, this.particles);
+	}
+
+	/**
+	 * One frame of the world. DESIGN_RULES UI-06: this runs on EVERY frame of a mounted run -- with the Bag or
+	 * the menu open, and with the survivor dead behind the end-of-run screen. The town is the server's and is
+	 * shared, so a client that stopped here would only be drawing a still photograph of a street that is still
+	 * moving (a playtest lost 65 HP to zombies it could not see, behind a Bag that "paused"); solo follows the
+	 * same rule so there is only one.
+	 *
+	 * What a menu or a death stops is the SURVIVOR: `input.held` (set by main.client.ts before this call) makes
+	 * them stand still with empty hands -- no interact, no build, no aim, a standing command with no buttons --
+	 * while the horde, the allies, the clock, the snapshots and the damage carry on.
+	 */
 	update(dt: number): void {
 		const ctx = getCtx();
 		const refs = this.refs;
-		if (this.player.dead) return;
-		const handled = this.build.handleInput(refs, ctx.input);
-		if (!handled && ctx.input.actionPressed) {
-			this.interaction.tryInteract(refs);
+		const p = this.player;
+		const input = ctx.input;
+		this.clock += dt;
+		this.lastDt = dt;
+		const acting = !input.held && !p.dead;
+		if (acting) {
+			const handled = this.build.handleInput(refs, input);
+			if (!handled && input.actionPressed) {
+				this.interaction.tryInteract(refs);
+			}
 		}
 		this.build.update(refs);
-		this.updatePlayer(dt);
+		// F1: in a server session the survivor's position is the server's, predicted and reconciled by netUpdate;
+		// everything else in this loop (zombies, combat, the clock) is still simulated locally on every client.
+		// The session runs for a dead survivor too: the server keeps stepping them (server/sim/simulation.ts),
+		// and it is `netUpdate` that brings the revive (PlayerLife, MP-21), the allies and the horde. Offline, a
+		// dead body is simply not stepped -- stepPlayer would regenerate it.
+		if (netActive()) this.stepNetPlayer(ctx, dt);
+		else if (!p.dead) this.stepLocalPlayer(ctx, dt);
+		// F2: and from MP_PHASE 2 the horde and the bosses are the server's as well. `netUpdate` (above) has
+		// just interpolated them for this frame's render time, and the mirror writes them into the very
+		// arrays the rest of the client already reads — canopies, audio, stuck arrows, the admin overlay.
+		const mirrored = SERVER_ACTORS && netActive();
+		if (mirrored) this.actors.sync(refs, dt, this.onZombieDeath);
+		this.foot.advance(this.walkPhase, this.walkAmp, p.x, p.y, true);
+		this.fxView.decayTracers(dt);
+		// aim from the survivor's NEW position every frame, not only when the mouse moves -- unless they are held:
+		// the cursor is busy with the menu, and a survivor spinning round to follow it would be a lie too
+		if (acting) p.angle = refreshAim(p.x, p.y);
 		this.combat.update(refs, dt);
+		// the three below are no-ops from MP_PHASE 2 on (they say so themselves); below it they ARE the
+		// horde, and `mirrored` is false, so exactly one of the two owners writes those arrays in any phase
 		updateZombies(refs, dt);
 		updateBosses(refs, dt);
 		this.spawner.update(refs, dt);
+		// with the systems above silent, the blasts, the struck solids and the server's projectiles have
+		// nobody left to carry them but the view that put them there
+		if (mirrored) this.fxView.advance(refs, dt);
 		this.daynight.update(dt);
-		while (this.announceQueue.size() > 0) {
-			const msg = this.announceQueue.remove(0);
-			print(msg);
-		}
+		// shake before cam.update, particles before particles.update: same frame as before F0
+		this.playFx(ctx);
 		this.particles.update(dt);
 		updateGroundItems(this.world, dt);
 		this.interaction.update(refs, dt);
-		ctx.cam.follow(this.player.x, this.player.y, math.min(1, dt * 8));
+		ctx.cam.follow(p.x, p.y, math.min(1, dt * 8));
 		ctx.cam.update(dt);
+		this.updateWorldFx(ctx.cam, dt);
 		ctx.input.beginFrame();
 	}
 
-	private viewBounds(cam: Camera): { minX: number; minY: number; maxX: number; maxY: number } {
-		const c0 = cam.screenToWorld(0, 0);
-		const c1 = cam.screenToWorld(cam.viewW, 0);
-		const c2 = cam.screenToWorld(0, cam.viewH);
-		const c3 = cam.screenToWorld(cam.viewW, cam.viewH);
-		return {
-			minX: math.min(c0.x, c1.x, c2.x, c3.x) - 128,
-			minY: math.min(c0.y, c1.y, c2.y, c3.y) - 128,
-			maxX: math.max(c0.x, c1.x, c2.x, c3.x) + 128,
-			maxY: math.max(c0.y, c1.y, c2.y, c3.y) + 128,
-		};
+	// ------------------------------------------------------------------ roofs, canopies, shake
+
+	/**
+	 * Roofs and tree canopies around the view (grid query, no full scan).
+	 * hitShake is only READ here (drawing); its countdown belongs to the AI/combat systems.
+	 */
+	private updateWorldFx(cam: Camera, dt: number): void {
+		const v = cam.viewRect(400);
+		const list = this.queryBuf;
+		list.clear();
+		querySolids(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
+		for (const s of list) {
+			if (s.kind === "building") {
+				this.fadingRoofs.add(s);
+			} else if (s.kind === "tree") {
+				this.updateCanopy(s, dt);
+			}
+		}
+		const p = this.player;
+		for (const s of this.fadingRoofs) {
+			const inside = p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h;
+			const target = clamp(roofTargetAlpha(inside), 0, 1);
+			const a = lerp(s.roofAlpha ?? 1, target, ease(ROOF_LERP, dt));
+			if (target >= 1 && a > 0.995) {
+				s.roofAlpha = 1;
+				this.fadingRoofs.delete(s);
+			} else {
+				s.roofAlpha = a;
+			}
+		}
 	}
 
-	private drawGround(
-		renderer: Renderer,
+	private updateCanopy(s: Solid, dt: number): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		// any part of a body (≈18 px radius) under the canopy counts: nobody hides half-covered
+		const r = (s.canopyR ?? 80) + 18;
+		const r2 = r * r;
+		let under = false;
+		const p = this.player;
+		if ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2) {
+			under = true;
+		} else {
+			for (const z of this.zombies) {
+				if (z.hp > 0 && (z.x - cx) * (z.x - cx) + (z.y - cy) * (z.y - cy) < r2) {
+					under = true;
+					break;
+				}
+			}
+			if (!under) {
+				for (const b of this.bosses) {
+					if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
+						under = true;
+						break;
+					}
+				}
+			}
+		}
+		const target = under ? CANOPY_SEE_THROUGH : 1;
+		s.canopyAlpha = lerp(s.canopyAlpha ?? 1, target, ease(0.2, dt));
+	}
+
+	// ------------------------------------------------------------------ drawing helpers
+
+	private updateShadowDir(): void {
+		const t = this.daynight.dayTime;
+		if (t > 6 && t < 18) {
+			// original: lengthdir(len, day_time/24*360 - 180 - 45) (GameMaker y is flipped)
+			const rad = math.rad((t / 24) * 360 - 225);
+			this.sunX = math.cos(rad);
+			this.sunY = -math.sin(rad);
+			this.nightLight = false;
+		} else {
+			this.nightLight = true;
+		}
+	}
+
+	/** where a shadow of length `len` falls for something at (x, y) */
+	private shadowOffset(x: number, y: number, len: number): { x: number; y: number } {
+		if (this.nightLight) {
+			const dx = x - this.player.x;
+			const dy = y - this.player.y;
+			const d = math.sqrt(dx * dx + dy * dy);
+			if (d < 1) return { x: 0, y: len * 0.5 };
+			return { x: (dx / d) * len, y: (dy / d) * len };
+		}
+		return { x: this.sunX * len, y: this.sunY * len };
+	}
+
+	/** axis-aligned square rect clipped to the view (huge roads / lots never become huge Frames) */
+	private drawClipped(
+		r: Renderer,
 		cam: Camera,
-		view: { minX: number; minY: number; maxX: number; maxY: number },
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+		v: ViewRect,
+		opts: SpriteOpts,
 	): void {
+		const x0 = math.max(x, v.minX);
+		const y0 = math.max(y, v.minY);
+		const x1 = math.min(x + w, v.maxX);
+		const y1 = math.min(y + h, v.maxY);
+		if (x1 <= x0 || y1 <= y0) return;
+		opts.w = x1 - x0;
+		opts.h = y1 - y0;
+		r.drawRect(cam, (x0 + x1) / 2, (y0 + y1) / 2, opts);
+	}
+
+	/** rect in an object's local frame (fwd along `a`, lat to its right) */
+	private part(
+		r: Renderer,
+		cam: Camera,
+		cx: number,
+		cy: number,
+		a: number,
+		fwd: number,
+		lat: number,
+		opts: SpriteOpts,
+	): void {
+		const fx = math.cos(a);
+		const fy = math.sin(a);
+		opts.rotation = a;
+		r.drawRect(cam, cx + fx * fwd - fy * lat, cy + fy * fwd + fx * lat, opts);
+	}
+
+	// ------------------------------------------------------------------ ground
+
+	/**
+	 * Ground: lots (sidewalk band, yard: grass or downtown paving, verges, tree pits, footpaths,
+	 * driveways, forecourts, parking lots), then roads (asphalt, curbs, medians, lane marks, zebras).
+	 * Nothing here collides; everything is clipped to the view.
+	 */
+	private drawGround(r: Renderer, cam: Camera, v: ViewRect): void {
 		const w = this.world;
-		const tile = 512;
-		const x0 = math.floor(math.max(0, view.minX) / tile) * tile;
-		const y0 = math.floor(math.max(0, view.minY) / tile) * tile;
-		const x1 = math.min(w.width, view.maxX);
-		const y1 = math.min(w.height, view.maxY);
-		for (let x = x0; x < x1; x += tile) {
-			for (let y = y0; y < y1; y += tile) {
-				const alt = (math.floor(x / tile) + math.floor(y / tile)) % 2 === 0;
-				renderer.drawRect(cam, x + tile / 2, y + tile / 2, {
-					w: tile,
-					h: tile,
-					color: alt ? COLORS.grass : COLORS.grassDark,
+		for (const lot of w.lots) {
+			if (!overlaps(lot.x, lot.y, lot.w, lot.h, v)) continue;
+			const y = lot.yard;
+			if (y.x !== lot.x || y.y !== lot.y || y.w !== lot.w || y.h !== lot.h) {
+				this.drawClipped(r, cam, lot.x, lot.y, lot.w, lot.h, v, {
+					color: COLORS.sidewalk,
 					zIndex: Z.ground,
 				});
 			}
-		}
-		for (const r of w.roads) {
-			if (r.x > view.maxX || r.x + r.w < view.minX || r.y > view.maxY || r.y + r.h < view.minY) continue;
-			renderer.drawRect(cam, r.x + r.w / 2, r.y + r.h / 2, {
-				w: r.w,
-				h: r.h,
-				color: COLORS.road,
+			const paved = lot.zone === "commercial";
+			this.drawClipped(r, cam, y.x, y.y, y.w, y.h, v, {
+				color: paved ? GROUND.plaza : lot.kind === "park" ? COLORS.parkGrass : COLORS.grass,
 				zIndex: Z.ground + 1,
 			});
-			if (r.w < r.h) {
-				renderer.drawRect(cam, r.x + r.w / 2, r.y + r.h / 2, {
-					w: 4,
-					h: r.h,
-					color: COLORS.roadLine,
-					alpha: 0.5,
+			for (const p of lot.patches) {
+				if (!overlaps(p.x, p.y, p.w, p.h, v)) continue;
+				// lighter, low-contrast tufts: a dark rounded blob here reads as the shadow of nothing
+				r.drawRect(cam, p.x + p.w / 2, p.y + p.h / 2, {
+					w: p.w,
+					h: p.h,
+					color: COLORS.grassLight,
+					alpha: 0.3,
+					cornerRadius: math.min(p.w, p.h) / 2,
 					zIndex: Z.ground + 2,
+				});
+			}
+			for (const p of lot.paths) {
+				this.drawClipped(r, cam, p.x, p.y, p.w, p.h, v, {
+					color: COLORS.dirtPath,
+					alpha: 0.85,
+					zIndex: Z.ground + 2,
+				});
+			}
+			for (const gr of lot.ground) {
+				if (overlaps(gr.x, gr.y, gr.w, gr.h, v)) this.drawGroundRect(r, cam, gr, v);
+			}
+		}
+		for (const road of w.roads) {
+			if (overlaps(road.x, road.y, road.w, road.h, v)) this.drawRoad(r, cam, road, v);
+		}
+		for (const c of w.crossings) {
+			if (!overlaps(c.x, c.y, c.w, c.h, v)) continue;
+			// zebra: bars along the traffic, laid out across the road
+			const across = c.vertical ? c.w : c.h;
+			const n = math.floor((across - 16) / ZEBRA_STEP);
+			const first = (across - (n - 1) * ZEBRA_STEP) / 2;
+			for (let i = 0; i < n; i++) {
+				const t = first + i * ZEBRA_STEP;
+				r.drawRect(cam, c.vertical ? c.x + t : c.x + c.w / 2, c.vertical ? c.y + c.h / 2 : c.y + t, {
+					w: c.vertical ? ZEBRA_W : c.w,
+					h: c.vertical ? c.h : ZEBRA_W,
+					color: GROUND.zebra,
+					alpha: 0.9,
+					zIndex: Z.roadLine,
 				});
 			}
 		}
 	}
 
-	private solidBodyColor(s: Solid): Color3 {
+	private drawGroundRect(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): void {
+		const k = g.kind;
+		if (k === "stall") {
+			r.drawRect(cam, g.x + g.w / 2, g.y + g.h / 2, {
+				w: g.w,
+				h: g.h,
+				color: GROUND.stall,
+				zIndex: Z.ground + 3,
+			});
+			return;
+		}
+		if (k === "pit") {
+			r.drawRect(cam, g.x + g.w / 2, g.y + g.h / 2, {
+				w: g.w,
+				h: g.h,
+				color: GROUND.pit,
+				cornerRadius: 6,
+				stroke: COLORS.curb,
+				strokeThickness: 1,
+				zIndex: Z.ground + 2,
+			});
+			return;
+		}
+		let color = GROUND.ramp;
+		if (k === "verge") color = GROUND.verge;
+		else if (k === "walk") color = GROUND.walk;
+		else if (k === "drive") color = GROUND.drive;
+		else if (k === "apron") color = GROUND.apron;
+		else if (k === "parking") color = GROUND.parking;
+		else if (k === "playground") color = GROUND.playground;
+		this.drawClipped(r, cam, g.x, g.y, g.w, g.h, v, { color, zIndex: Z.ground + 2 });
+	}
+
+	/**
+	 * Stretches of a road between its intersections that touch the view (along its axis), unclipped;
+	 * ja / jb: that end is an intersection (not the road's end at the map border).
+	 */
+	private roadStretches(road: Road, v: ViewRect): Array<{ a: number; b: number; ja: boolean; jb: boolean }> {
+		const vertical = road.vertical;
+		const lo = vertical ? v.minY : v.minX;
+		const hi = vertical ? v.maxY : v.maxX;
+		let start = vertical ? road.y : road.x;
+		let startJ = false;
+		let stop = vertical ? road.y + road.h : road.x + road.w;
+		let stopJ = false;
+		const cuts: Array<{ a: number; b: number }> = [];
+		for (const j of this.world.junctions) {
+			if (vertical ? j.x !== road.x : j.y !== road.y) continue;
+			const a = vertical ? j.y : j.x;
+			const b = a + (vertical ? j.h : j.w);
+			if (b <= lo) {
+				if (b > start) {
+					start = b;
+					startJ = true;
+				}
+			} else if (a >= hi) {
+				if (a < stop) {
+					stop = a;
+					stopJ = true;
+				}
+			} else {
+				cuts.push({ a, b });
+			}
+		}
+		cuts.sort((p, q) => p.a < q.a);
+		const out: Array<{ a: number; b: number; ja: boolean; jb: boolean }> = [];
+		let at = start;
+		let atJ = startJ;
+		for (const c of cuts) {
+			if (c.a > at) out.push({ a: at, b: c.a, ja: atJ, jb: true });
+			if (c.b > at) {
+				at = c.b;
+				atJ = true;
+			}
+		}
+		if (stop > at) out.push({ a: at, b: stop, ja: atJ, jb: stopJ });
+		return out;
+	}
+
+	/** asphalt, curbs (never across a crossing road), planted median, dashed lane lines */
+	private drawRoad(r: Renderer, cam: Camera, road: Road, v: ViewRect): void {
+		const vertical = road.vertical;
+		this.drawClipped(r, cam, road.x, road.y, road.w, road.h, v, { color: COLORS.road, zIndex: Z.road });
+		const curb = 6;
+		const size = vertical ? road.w : road.h;
+		const base = vertical ? road.x : road.y;
+		const stretches = this.roadStretches(road, v);
+		for (const st of stretches) {
+			for (const off of [0, size - curb]) {
+				if (vertical) {
+					this.drawClipped(r, cam, base + off, st.a, curb, st.b - st.a, v, {
+						color: COLORS.curb,
+						zIndex: Z.roadLine,
+					});
+				} else {
+					this.drawClipped(r, cam, st.a, base + off, st.b - st.a, curb, v, {
+						color: COLORS.curb,
+						zIndex: Z.roadLine,
+					});
+				}
+			}
+		}
+		for (const m of road.medians) {
+			if (!overlaps(m.x, m.y, m.w, m.h, v)) continue;
+			this.drawClipped(r, cam, m.x, m.y, m.w, m.h, v, {
+				color: GROUND.verge,
+				stroke: COLORS.curb,
+				strokeThickness: 2,
+				zIndex: Z.roadLine,
+			});
+		}
+		// yellow centre line on two-lane streets, white lane lines on each avenue carriageway;
+		// the dashes stop before the crosswalks
+		const lines: Array<number> = [];
+		if (road.avenue) {
+			const carriage = (size - TOWN.MEDIAN_W) / 2;
+			lines.push(base + carriage / 2, base + size - carriage / 2);
+		} else {
+			lines.push(base + size / 2);
+		}
+		const color = road.avenue ? GROUND.lane : COLORS.roadLine;
+		const gap = TOWN.SIDEWALK + 24;
+		const lo = vertical ? v.minY : v.minX;
+		const hi = vertical ? v.maxY : v.maxX;
+		for (const st of stretches) {
+			const from = math.max(st.ja ? st.a + gap : st.a, lo - DASH_LEN);
+			const to = math.min(st.jb ? st.b - gap : st.b, hi + DASH_LEN);
+			for (let t = math.ceil(from / DASH_PERIOD) * DASH_PERIOD; t + DASH_LEN <= to; t += DASH_PERIOD) {
+				for (const mid of lines) {
+					r.drawRect(cam, vertical ? mid : t + DASH_LEN / 2, vertical ? t + DASH_LEN / 2 : mid, {
+						w: vertical ? 5 : DASH_LEN,
+						h: vertical ? DASH_LEN : 5,
+						color,
+						alpha: 0.7,
+						zIndex: Z.roadLine,
+					});
+				}
+			}
+		}
+	}
+
+	private drawDecals(r: Renderer, cam: Camera, v: ViewRect): void {
+		this.particles.forDecals(d => {
+			if (!circleInView(d.x, d.y, d.size, v)) return;
+			r.drawCircle(cam, d.x, d.y, d.size, {
+				color: d.color,
+				alpha: 0.7 * math.min(1, d.life / 5),
+				zIndex: Z.decal,
+			});
+		});
+		const puddles = this.refs.puddles;
+		if (puddles !== undefined) {
+			for (const pd of puddles) {
+				if (!circleInView(pd.x, pd.y, pd.r, v)) continue;
+				const k = clamp(pd.life / math.max(0.001, pd.lifeMax), 0, 1);
+				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, {
+					color: COLORS.acid,
+					alpha: 0.45 * k,
+					stroke: COLORS.bloodZombie,
+					strokeAlpha: 0.6 * k,
+					zIndex: Z.decal + 1,
+				});
+			}
+		}
+	}
+
+	/**
+	 * Ground items lie flat where they fell (no floating bob), turned a little, with a short shadow
+	 * cast like every other object's. Each category has its own silhouette (see ITEM_LOOKS); a brief
+	 * glint every few seconds marks them as loot. A fixed number of sprites per item (the glint is
+	 * drawn transparent between flashes) keeps the renderer's pool order stable.
+	 */
+	private drawItems(r: Renderer, cam: Camera, v: ViewRect): void {
+		for (const it of this.world.items) {
+			if (!circleInView(it.x, it.y, 26, v)) continue;
+			const lk = itemLook(it.kind, it.itemId);
+			const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
+			const so = this.shadowOffset(it.x, it.y, 4);
+			this.part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, {
+				w: lk.shadowW,
+				h: lk.shadowH,
+				color: BLACK,
+				alpha: 0.3,
+				cornerRadius: lk.shadowR,
+				zIndex: Z.actorShadow,
+			});
+			const ca = math.cos(a);
+			const sa = math.sin(a);
+			for (let i = 0; i < lk.parts.size(); i++) {
+				const pc = lk.parts[i];
+				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, {
+					w: pc.w,
+					h: pc.h,
+					// a piece may be turned inside the item (bow limbs, crate brace)
+					rotation: a + pc.rot,
+					color: pc.color,
+					circle: pc.r === CIRCLE,
+					cornerRadius: pc.r,
+					stroke: pc.edge ? LOOT_EDGE : undefined,
+					strokeThickness: 1,
+					strokeAlpha: 0.75,
+					zIndex: Z.item + i,
+				});
+			}
+			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
+			const t = (this.clock + it.id * 0.61) % GLINT_PERIOD;
+			const s = t < GLINT_LEN ? math.sin((t / GLINT_LEN) * math.pi) : 0;
+			const gx = it.x - 10;
+			const gy = it.y - 11;
+			const arm = 3 + GLINT_ARM * s;
+			r.drawRect(cam, gx, gy, { w: arm, h: 2, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
+			r.drawRect(cam, gx, gy, { w: 2, h: arm, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
+		}
+	}
+
+	// ------------------------------------------------------------------ solids
+
+	private drawSolids(r: Renderer, cam: Camera, v: ViewRect): void {
+		const list = this.queryBuf;
+		list.clear();
+		// pad: canopies reach ~90 px past the trunk, shadows ~20 px past their caster
+		querySolids(this.world, v.minX - 140, v.minY - 140, v.maxX + 140, v.maxY + 140, list);
+		for (const s of list) {
+			if (s.kind === "building") {
+				if (overlaps(s.x - 30, s.y - 30, s.w + 60, s.h + 60, v)) this.drawBuilding(r, cam, s, v);
+			} else if (s.tags === "border") {
+				this.drawBorder(r, cam, s, v);
+			} else if (s.kind === "tree") {
+				this.drawTree(r, cam, s, v);
+			} else if (overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) {
+				if (s.tags === "bwall") this.drawWall(r, cam, s);
+				else if (s.tags === "pump") this.drawPump(r, cam, s);
+				else if (s.kind === "car" && s.tags === "trash") this.drawTrash(r, cam, s);
+				else if (s.kind === "car") this.drawCar(r, cam, s);
+				else this.drawStructure(r, cam, s);
+			}
+		}
+	}
+
+	private shake(s: Solid): { x: number; y: number } {
+		const t = s.hitShake ?? 0;
+		if (t <= 0) return { x: 0, y: 0 };
+		const amp = 4 * math.min(1, t / 0.25);
+		return { x: math.sin(this.clock * 70) * amp, y: math.cos(this.clock * 55) * amp * 0.6 };
+	}
+
+	private drawBuilding(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const roofA = s.roofAlpha ?? 1;
+		const bt = s.buildingType ?? 1;
+		const isHouse = bt === 1 || bt === 2;
+		// building shadow (the roof's, like the original: 0.3 * roof_alpha)
+		const so = this.shadowOffset(cx, cy, 20);
+		if (overlaps(s.x + so.x, s.y + so.y, s.w, s.h, v)) {
+			r.drawRect(cam, cx + so.x, cy + so.y, {
+				w: s.w,
+				h: s.h,
+				color: BLACK,
+				alpha: 0.3 * math.max(roofA, 0.4),
+				zIndex: Z.shadow,
+			});
+		}
+		// floor (visible through the doorway / when the roof fades)
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: isHouse ? COLORS.floorWood : bt === 4 || bt === 6 ? COLORS.floorTile : COLORS.floorShop,
+			stroke: BLACK,
+			strokeAlpha: 0.25,
+			strokeThickness: 2,
+			zIndex: Z.floor,
+		});
+		// doormat just outside the door: shows the entrance even with the roof closed
+		const n = sideNormal(s.doorSide);
+		const dx = s.doorX ?? cx;
+		const dy = s.doorY ?? s.y + s.h;
+		const matOff = TOWN.WALL_T / 2 + 14;
+		r.drawRect(cam, dx + n.x * matOff, dy + n.y * matOff, {
+			w: n.x !== 0 ? 22 : TOWN.DOOR_W - 24,
+			h: n.x !== 0 ? TOWN.DOOR_W - 24 : 22,
+			color: COLORS.doormat,
+			cornerRadius: 3,
+			zIndex: Z.floorDetail,
+		});
+		if (roofA <= 0.01) return;
+		const roof = s.roofColor ?? COLORS.roofGray;
+		const roofDark = roof.Lerp(BLACK, 0.3);
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: roof,
+			alpha: roofA,
+			stroke: roofDark,
+			strokeThickness: 3,
+			strokeAlpha: roofA,
+			zIndex: Z.roof,
+		});
+		if (isHouse) {
+			// ridge along the long axis
+			const alongX = s.w >= s.h;
+			r.drawRect(cam, cx, cy, {
+				w: alongX ? s.w - 80 : 12,
+				h: alongX ? 12 : s.h - 80,
+				color: roofDark,
+				alpha: roofA * 0.8,
+				zIndex: Z.roof + 1,
+			});
+		} else {
+			// flat roof: a/c box
+			r.drawRect(cam, cx + s.w * 0.22, cy - s.h * 0.2, {
+				w: 90,
+				h: 70,
+				color: roof.Lerp(WHITE, 0.25),
+				alpha: roofA,
+				stroke: roofDark,
+				strokeAlpha: roofA,
+				zIndex: Z.roof + 1,
+			});
+		}
+		// darker eave over the doorway: the entrance reads from above
+		const ex = dx + n.x * (TOWN.WALL_T / 2 - 6);
+		const ey = dy + n.y * (TOWN.WALL_T / 2 - 6);
+		r.drawRect(cam, ex, ey, {
+			w: n.x !== 0 ? 12 : TOWN.DOOR_W,
+			h: n.x !== 0 ? TOWN.DOOR_W : 12,
+			color: roofDark.Lerp(BLACK, 0.3),
+			alpha: roofA,
+			zIndex: Z.roof + 1,
+		});
+		this.drawEmblem(r, cam, bt, cx, cy, roofA);
+	}
+
+	/** rooftop sign so shops can be found from afar */
+	private drawEmblem(r: Renderer, cam: Camera, bt: number, cx: number, cy: number, a: number): void {
+		const z = Z.roof + 2;
+		if (bt === 4 || bt === 6) {
+			const plate = bt === 4 ? 150 : 110;
+			const crossColor = bt === 4 ? COLORS.uiRed : COLORS.uiGreen;
+			r.drawRect(cam, cx, cy, { w: plate, h: plate, color: WHITE, alpha: a, cornerRadius: 12, zIndex: z });
+			r.drawRect(cam, cx, cy, { w: plate * 0.72, h: plate * 0.24, color: crossColor, alpha: a, zIndex: z + 1 });
+			r.drawRect(cam, cx, cy, { w: plate * 0.24, h: plate * 0.72, color: crossColor, alpha: a, zIndex: z + 1 });
+		} else if (bt === 9) {
+			r.drawCircle(cam, cx, cy, 110, {
+				color: COLORS.uiPanel,
+				alpha: a,
+				stroke: COLORS.uiRed,
+				strokeThickness: 4,
+				strokeAlpha: a,
+				zIndex: z,
+			});
+			r.drawRect(cam, cx, cy, { w: 120, h: 8, color: COLORS.uiRed, alpha: a, zIndex: z + 1 });
+			r.drawRect(cam, cx, cy, { w: 8, h: 120, color: COLORS.uiRed, alpha: a, zIndex: z + 1 });
+		} else if (bt === 5) {
+			r.drawCircle(cam, cx, cy, 90, { color: COLORS.uiRed, alpha: a, zIndex: z });
+			r.drawRect(cam, cx, cy, { w: 30, h: 44, color: WHITE, alpha: a, cornerRadius: 6, zIndex: z + 1 });
+		} else if (bt === 7 || bt === 8 || bt === 11 || bt === 10 || bt === 3) {
+			const accent = bt === 3 ? COLORS.uiYellow : bt === 11 ? WHITE : bt === 10 ? COLORS.uiBlue : COLORS.uiGreen;
+			r.drawRect(cam, cx, cy, {
+				w: 160,
+				h: 56,
+				color: COLORS.uiPanel,
+				alpha: a,
+				cornerRadius: 8,
+				stroke: accent,
+				strokeThickness: 3,
+				strokeAlpha: a,
+				zIndex: z,
+			});
+			r.drawRect(cam, cx, cy, { w: 110, h: 10, color: accent, alpha: a, zIndex: z + 1 });
+		}
+	}
+
+	private drawWall(r: Renderer, cam: Camera, s: Solid): void {
+		r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, {
+			w: s.w,
+			h: s.h,
+			color: COLORS.wallHouse,
+			stroke: COLORS.wallWood,
+			strokeThickness: 1,
+			strokeAlpha: 0.8,
+			zIndex: Z.structure,
+		});
+	}
+
+	private drawBorder(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		this.drawClipped(r, cam, s.x, s.y, s.w, s.h, v, { color: COLORS.borderForest, zIndex: Z.structure });
+		// fence along the inner edge
+		const f = 8;
+		let fx = s.x;
+		let fy = s.y;
+		let fw = s.w;
+		let fh = s.h;
+		if (s.w > s.h) {
+			fh = f;
+			fy = s.y === 0 ? s.y + s.h - f : s.y;
+		} else {
+			fw = f;
+			fx = s.x === 0 ? s.x + s.w - f : s.x;
+		}
+		this.drawClipped(r, cam, fx, fy, fw, fh, v, { color: COLORS.fence, zIndex: Z.structure + 1 });
+	}
+
+	private drawTree(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		const sh = this.shake(s);
+		const cx = s.x + s.w / 2 + sh.x;
+		const cy = s.y + s.h / 2 + sh.y;
+		const rad = s.canopyR ?? 80;
+		if (!circleInView(cx, cy, rad + 24, v)) return;
+		const a = s.canopyAlpha ?? 1;
+		const leaf = s.tint ?? COLORS.treeLeaf;
+		const so = this.shadowOffset(cx, cy, 18);
+		r.drawCircle(cam, cx + so.x, cy + so.y, rad * 1.8, { color: BLACK, alpha: 0.22, zIndex: Z.shadow });
+		r.drawCircle(cam, cx, cy, s.w, {
+			color: COLORS.treeTrunk,
+			stroke: COLORS.treeTrunk.Lerp(BLACK, 0.4),
+			strokeThickness: 2,
+			zIndex: Z.structure,
+		});
+		r.drawCircle(cam, cx, cy, rad * 2, {
+			color: leaf,
+			alpha: a,
+			stroke: COLORS.treeLeafDark,
+			strokeThickness: 2,
+			strokeAlpha: a * 0.7,
+			zIndex: Z.canopy,
+		});
+		r.drawCircle(cam, cx - rad * 0.22, cy - rad * 0.22, rad * 1.1, {
+			color: leaf.Lerp(COLORS.grassLight.Lerp(COLORS.treeLeafLight, 0.5), 0.6),
+			alpha: a * a,
+			zIndex: Z.canopy + 1,
+		});
+	}
+
+	private drawCar(r: Renderer, cam: Camera, s: Solid): void {
+		const sh = this.shake(s);
+		const cx = s.x + s.w / 2 + sh.x;
+		const cy = s.y + s.h / 2 + sh.y;
+		const vertical = s.h > s.w;
+		// generated cars carry their heading (right-hand parking, askew when abandoned); the body keeps
+		// the car's real size even when the collision box of an askew car is a bit larger
+		const heading = s.heading;
+		const L = heading !== undefined ? TOWN.CAR_L : vertical ? s.h : s.w;
+		const W = heading !== undefined ? TOWN.CAR_W : vertical ? s.w : s.h;
+		const a = heading ?? (vertical ? math.pi / 2 : 0);
+		const paint = s.tint ?? COLORS.car;
+		const so = this.shadowOffset(cx, cy, 10);
+		this.part(r, cam, cx + so.x, cy + so.y, a, 0, 0, {
+			w: L,
+			h: W,
+			color: BLACK,
+			alpha: 0.35,
+			cornerRadius: 18,
+			zIndex: Z.shadow,
+		});
+		this.part(r, cam, cx, cy, a, 0, 0, {
+			w: L,
+			h: W,
+			color: paint,
+			cornerRadius: 18,
+			stroke: paint.Lerp(BLACK, 0.45),
+			strokeThickness: 2,
+			zIndex: Z.structure,
+		});
+		this.part(r, cam, cx, cy, a, -L * 0.04, 0, {
+			w: L * 0.44,
+			h: W * 0.8,
+			color: paint.Lerp(BLACK, 0.25),
+			cornerRadius: 10,
+			zIndex: Z.structure + 1,
+		});
+		this.part(r, cam, cx, cy, a, L * 0.2, 0, {
+			w: L * 0.1,
+			h: W * 0.72,
+			color: COLORS.carGlass,
+			cornerRadius: 4,
+			zIndex: Z.structure + 2,
+		});
+		this.part(r, cam, cx, cy, a, -L * 0.28, 0, {
+			w: L * 0.07,
+			h: W * 0.66,
+			color: COLORS.carGlass,
+			cornerRadius: 4,
+			zIndex: Z.structure + 2,
+		});
+		for (const side of [-1, 1]) {
+			this.part(r, cam, cx, cy, a, L * 0.47, side * W * 0.3, {
+				w: 8,
+				h: 18,
+				color: COLORS.carLight,
+				cornerRadius: 3,
+				zIndex: Z.structure + 2,
+			});
+			this.part(r, cam, cx, cy, a, -L * 0.48, side * W * 0.3, {
+				w: 6,
+				h: 16,
+				color: COLORS.carTail,
+				cornerRadius: 2,
+				zIndex: Z.structure + 2,
+			});
+		}
+	}
+
+	/** gas-station pump island: a raised concrete curb carrying two dispensers */
+	private drawPump(r: Renderer, cam: Camera, s: Solid): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const horizontal = s.w >= s.h;
+		const so = this.shadowOffset(cx, cy, 8);
+		r.drawRect(cam, cx + so.x, cy + so.y, {
+			w: s.w,
+			h: s.h,
+			color: BLACK,
+			alpha: 0.3,
+			cornerRadius: 8,
+			zIndex: Z.shadow,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: GROUND.island,
+			cornerRadius: 8,
+			stroke: COLORS.curb,
+			strokeThickness: 2,
+			zIndex: Z.structure,
+		});
+		for (const k of [-1, 1]) {
+			const off = (horizontal ? s.w : s.h) * 0.25 * k;
+			r.drawRect(cam, cx + (horizontal ? off : 0), cy + (horizontal ? 0 : off), {
+				w: horizontal ? 30 : 24,
+				h: horizontal ? 24 : 30,
+				color: COLORS.wallShop,
+				cornerRadius: 4,
+				stroke: COLORS.wallShop.Lerp(BLACK, 0.5),
+				strokeThickness: 1,
+				zIndex: Z.structure + 1,
+			});
+		}
+	}
+
+	private drawTrash(r: Renderer, cam: Camera, s: Solid): void {
+		const sh = this.shake(s);
+		const cx = s.x + s.w / 2 + sh.x;
+		const cy = s.y + s.h / 2 + sh.y;
+		const so = this.shadowOffset(cx, cy, 7);
+		r.drawRect(cam, cx + so.x, cy + so.y, {
+			w: s.w,
+			h: s.h,
+			color: BLACK,
+			alpha: 0.3,
+			cornerRadius: 6,
+			zIndex: Z.shadow,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: COLORS.trashBin,
+			cornerRadius: 6,
+			stroke: COLORS.trashBin.Lerp(BLACK, 0.5),
+			strokeThickness: 2,
+			zIndex: Z.structure,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: s.w - 8,
+			h: s.h - 8,
+			color: COLORS.trashLid,
+			cornerRadius: 5,
+			zIndex: Z.structure + 1,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: 14,
+			h: 4,
+			color: COLORS.trashBin.Lerp(BLACK, 0.4),
+			zIndex: Z.structure + 2,
+		});
+	}
+
+	private structureColor(s: Solid): Color3 {
 		if (s.kind === "wall_h" || s.kind === "wall_v") return COLORS.wallWood;
-		if (s.kind === "car") return s.tags === "trash" ? COLORS.uiPanelLight : COLORS.car;
 		if (s.kind === "door") return COLORS.door;
 		if (s.kind === "iron_door") return COLORS.ironDoor;
 		if (s.kind === "barricade") return COLORS.barricade;
@@ -281,249 +1463,107 @@ export class GameLoop {
 		return COLORS.uiPanelLight;
 	}
 
-	private drawSolids(
-		renderer: Renderer,
-		cam: Camera,
-		view: { minX: number; minY: number; maxX: number; maxY: number },
-	): void {
-		const p = this.player;
-		for (const s of this.world.solids) {
-			const cx = s.x + s.w / 2;
-			const cy = s.y + s.h / 2;
-			if (cx < view.minX || cx > view.maxX || cy < view.minY || cy > view.maxY) continue;
-			if (s.kind === "tree") {
-				renderer.drawRect(cam, cx, cy + 8, {
-					w: 40,
-					h: 14,
-					color: COLORS.shadow,
-					alpha: 0.35,
-					zIndex: Z.shadow,
-				});
-				renderer.drawRect(cam, cx, cy, { w: 14, h: 22, color: COLORS.treeTrunk, zIndex: Z.structure });
-				renderer.drawRect(cam, cx, cy - 6, {
-					w: 48,
-					h: 48,
-					color: COLORS.treeLeaf,
-					cornerRadius: 24,
-					zIndex: Z.structure + 1,
-				});
-				continue;
-			}
-			renderer.drawRect(cam, cx + 6, cy + 10, {
-				w: s.w,
-				h: s.h,
-				color: COLORS.shadow,
-				alpha: 0.35,
-				zIndex: Z.shadow,
-			});
-			if (s.kind === "building") {
-				const dx = math.max(math.abs(cx - p.x) - s.w / 2, math.abs(cy - p.y) - s.h / 2);
-				const target = dx < 220 ? 0.12 : 1;
-				s.roofAlpha = lerp(s.roofAlpha ?? 1, target, 0.15);
-				renderer.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: COLORS.floorWood, zIndex: Z.structure });
-				renderer.drawRect(cam, cx, cy, {
-					w: s.w,
-					h: s.h,
-					color: s.roofColor ?? COLORS.roofGray,
-					alpha: s.roofAlpha ?? 1,
-					zIndex: Z.structure + 1,
-				});
-				continue;
-			}
-			const alpha = s.kind === "door" && s.open ? 0.4 : 1;
-			renderer.drawRect(cam, cx, cy, {
-				w: s.w,
-				h: s.h,
-				color: this.solidBodyColor(s),
-				alpha,
-				zIndex: Z.structure,
-			});
-			if (s.kind === "door" && s.open) {
-				renderer.drawRect(cam, cx, cy, {
-					w: s.w,
-					h: s.h,
-					color: COLORS.door,
-					alpha: 0.25,
-					zIndex: Z.structure + 1,
-				});
-			}
+	/** player-built structures (doors, barricades, turrets, traps, desks...) */
+	private drawStructure(r: Renderer, cam: Camera, s: Solid): void {
+		const sh = this.shake(s);
+		const cx = s.x + s.w / 2 + sh.x;
+		const cy = s.y + s.h / 2 + sh.y;
+		const isTrap = s.tags === "trap" || s.tags === "trap_electric";
+		const isDoor = s.kind === "door" || s.kind === "iron_door";
+		const color = this.structureColor(s);
+		if (!isTrap) {
+			const so = this.shadowOffset(cx, cy, 8);
+			r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.3, zIndex: Z.shadow });
 		}
-	}
-
-	private drawItems(
-		renderer: Renderer,
-		cam: Camera,
-		view: { minX: number; minY: number; maxX: number; maxY: number },
-	): void {
-		for (const it of this.world.items) {
-			if (it.x < view.minX || it.x > view.maxX || it.y < view.minY || it.y > view.maxY) continue;
-			renderer.drawRect(cam, it.x, it.y, { w: 16, h: 16, color: COLORS.item, cornerRadius: 4, zIndex: Z.item });
-		}
-	}
-
-	private zombieColor(t: number): Color3 {
-		if (t === 2) return COLORS.zombie2;
-		if (t === 3) return COLORS.zombie3;
-		if (t === 4) return COLORS.zombie4;
-		if (t === 5) return COLORS.zombie5;
-		return COLORS.zombie1;
-	}
-
-	private drawZombies(
-		renderer: Renderer,
-		cam: Camera,
-		view: { minX: number; minY: number; maxX: number; maxY: number },
-	): void {
-		for (const z of this.zombies) {
-			if (z.x < view.minX || z.x > view.maxX || z.y < view.minY || z.y > view.maxY) continue;
-			const lift = z.jumpHeight ?? 0;
-			renderer.drawRect(cam, z.x, z.y + 8, { w: 34, h: 14, color: COLORS.shadow, alpha: 0.3, zIndex: Z.shadow });
-			renderer.drawRect(cam, z.x, z.y - lift, {
-				w: 36,
-				h: 36,
-				color: this.zombieColor(z.type),
-				cornerRadius: 18,
-				zIndex: z.hp <= 0 ? Z.zombie - 1 : Z.zombie,
-			});
-		}
-	}
-
-	private drawPlayer(renderer: Renderer, cam: Camera): void {
-		const p = this.player;
-		renderer.drawRect(cam, p.x, p.y + 10, { w: 36, h: 14, color: COLORS.shadow, alpha: 0.3, zIndex: Z.shadow });
-		if (p.swingerActive) {
-			const reach = 46;
-			renderer.drawRect(
-				cam,
-				p.x + math.cos(p.swingerAngle) * reach * 0.6,
-				p.y + math.sin(p.swingerAngle) * reach * 0.6,
-				{
-					w: reach,
-					h: 6,
-					color: COLORS.item,
-					alpha: 0.8,
-					rotation: p.swingerAngle,
-					zIndex: Z.player,
-				},
-			);
-		}
-		renderer.drawRect(cam, p.x, p.y, {
-			w: 40,
-			h: 40,
-			color: p.buffs.poison > 0 ? COLORS.zombie5 : COLORS.player,
-			cornerRadius: 20,
-			zIndex: Z.player,
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color,
+			alpha: isDoor && s.open === true ? 0.35 : 1,
+			stroke: color.Lerp(BLACK, 0.45),
+			strokeThickness: 2,
+			cornerRadius: isTrap ? 8 : 0,
+			// traps lie flat on the floor: zombies walk over them
+			zIndex: isTrap ? Z.item : Z.structure,
 		});
-		renderer.drawRect(cam, p.x, p.y, {
-			w: 14,
-			h: 14,
-			color: COLORS.playerDark,
-			cornerRadius: 7,
-			zIndex: Z.player + 1,
-		});
-	}
-
-	private drawBosses(
-		renderer: Renderer,
-		cam: Camera,
-		view: { minX: number; minY: number; maxX: number; maxY: number },
-	): void {
-		for (const b of this.bosses) {
-			if (b.type === 1) {
-				const bodyX = b.bodyX;
-				const bodyY = b.bodyY;
-				if (bodyX === undefined || bodyY === undefined) continue;
-				for (let i = bodyX.size() - 1; i >= 0; i--) {
-					const size = i === 0 ? 28 : i % 3 === 0 ? 20 : 14;
-					renderer.drawRect(cam, bodyX[i], bodyY[i], {
-						w: size,
-						h: size,
-						color: COLORS.boss,
-						cornerRadius: size / 2,
-						zIndex: Z.boss,
-					});
-				}
-				continue;
-			}
-			if (b.x < view.minX || b.x > view.maxX || b.y < view.minY || b.y > view.maxY) continue;
-			const size = b.type === 2 ? 130 : b.type === 3 ? 90 : 70;
-			renderer.drawRect(cam, b.x, b.y + 12, {
-				w: size,
-				h: size * 0.4,
-				color: COLORS.shadow,
-				alpha: 0.35,
-				zIndex: Z.shadow,
+		if (s.powered === true && (s.tags === "lamp" || s.tags === "campfire" || s.tags === "brazier")) {
+			r.drawCircle(cam, cx, cy, math.min(s.w, s.h) * 0.5, {
+				color: COLORS.lamp,
+				alpha: 0.6 + math.sin(this.clock * 9) * 0.2,
+				zIndex: Z.structure + 1,
 			});
-			renderer.drawRect(cam, b.x, b.y, {
-				w: size,
-				h: size,
-				color: COLORS.boss,
-				cornerRadius: size / 2,
-				zIndex: Z.boss,
+		}
+		if (s.destructible && s.hp < s.hpMax && s.hpMax < 99999) {
+			const k = clamp(s.hp / s.hpMax, 0, 1);
+			const bw = math.max(40, s.w * 0.8);
+			const by = s.y - 10;
+			r.drawRect(cam, cx, by, { w: bw, h: 6, color: BLACK, alpha: 0.6, zIndex: Z.actorFx });
+			r.drawRect(cam, cx - (bw * (1 - k)) / 2, by, {
+				w: math.max(1, bw * k),
+				h: 4,
+				color: COLORS.uiRed.Lerp(COLORS.uiGreen, k),
+				zIndex: Z.actorFx + 1,
 			});
 		}
 	}
 
-	private drawBullets(renderer: Renderer, cam: Camera): void {
-		for (const b of this.bullets) {
-			let color = COLORS.arrow;
-			let w = 16;
-			let h = 4;
-			if (!b.fromPlayer) {
-				if (b.id < -100000) {
-					color = COLORS.bullet;
-					w = 14;
-					h = 3;
-				} else {
-					color = COLORS.zombie2;
-					w = 10;
-					h = 10;
-				}
-			} else if (b.kind === "fire") {
-				color = COLORS.campfire;
-				w = 12;
-				h = 12;
-			} else if (b.kind === "electric") {
-				color = COLORS.uiBlue;
-				w = 12;
-				h = 6;
-			}
-			renderer.drawRect(cam, b.x, b.y, {
-				w,
-				h,
-				color,
-				rotation: b.angle,
-				cornerRadius: h / 2,
-				zIndex: Z.projectile,
-			});
-		}
+	// ------------------------------------------------------------------ the survivor and the particles
+	//
+	// The rest of the actors left this file in F2: the horde, the bosses, the arrows and the projectiles are
+	// drawn by client/view/actorsView.ts and the effects by client/view/fxView.ts, from the same arrays. What
+	// stays is what the loop alone knows — the survivor it steers, and the particle pool it owns.
+
+	/**
+	 * The local survivor, through the very same `drawSurvivor` every ally goes through (docs/MULTIPLAYER.md §5.3).
+	 * There is exactly one body renderer in the client: an ally can never end up looking like a different species
+	 * than you, and a change to the silhouette lands on everyone at once.
+	 */
+	private drawPlayer(r: Renderer, cam: Camera): void {
+		const p = this.player;
+		const look = this.look;
+		look.x = p.x;
+		look.y = p.y;
+		look.angle = p.angle;
+		look.weapon = currentWeapon(p);
+		look.feetPhase = this.walkPhase;
+		look.feetAmp = this.walkAmp;
+		look.flash = clamp(p.hitFlash ?? 0, 0, 1);
+		look.poisoned = p.buffs.poison > 0;
+		look.downed = false;
+		look.swinging = p.swingerActive;
+		look.swingAngle = p.swingerAngle;
+		look.swingReach = p.swingReach ?? 46;
+		look.clock = this.clock;
+		const so = this.shadowOffset(p.x, p.y, 10);
+		look.shadowX = so.x;
+		look.shadowY = so.y;
+		look.z = Z.player;
+		// MON-04: what you wear and what follows you, by the same ownership rule the server replicates with
+		// (`outfitLookOf` / `petLookOf`), so your screen and everybody else's agree
+		const save = getCtx().save;
+		look.outfit = outfitLookOf(save);
+		this.drawOwnPet(r, cam, petLookOf(save), p.x, p.y, p.angle);
+		drawSurvivor(r, cam, look, this.swing);
 	}
 
-	private drawTracers(renderer: Renderer, cam: Camera): void {
-		for (const t of this.tracers) {
-			const dx = t.x2 - t.x1;
-			const dy = t.y2 - t.y1;
-			const len = math.sqrt(dx * dx + dy * dy);
-			if (len < 1) continue;
-			renderer.drawRect(cam, (t.x1 + t.x2) / 2, (t.y1 + t.y2) / 2, {
-				w: len,
-				h: 3,
-				color: t.color,
-				alpha: clamp(t.life * 5, 0, 1),
-				rotation: math.atan2(dy, dx),
-				zIndex: Z.projectile,
-			});
+	/** the local pet, following the position the survivor is DRAWN at this frame */
+	private drawOwnPet(r: Renderer, cam: Camera, pet: number, x: number, y: number, angle: number): void {
+		if (pet !== this.petLook) {
+			// a new animal (or a new run) appears at the heel instead of morphing out of the old one
+			this.petLook = pet;
+			this.pet.started = false;
 		}
+		if (pet === PetLook.None) return;
+		stepPetFollower(this.pet, x, y, angle, this.lastDt, petFlies(pet));
+		drawPet(r, cam, this.pet, pet, this.clock, this.shadowFor);
 	}
 
-	private drawParticles(renderer: Renderer, cam: Camera): void {
+	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {
 		this.particles.forActive(p => {
-			renderer.drawRect(cam, p.x, p.y, {
-				w: p.size,
-				h: p.size,
+			if (!circleInView(p.x, p.y, p.size, v)) return;
+			r.drawCircle(cam, p.x, p.y, p.size, {
 				color: p.color,
-				alpha: clamp(p.life / p.maxLife, 0, 1),
-				cornerRadius: p.size / 2,
+				alpha: clamp((p.life / p.maxLife) * 1.5, 0, 1),
 				zIndex: Z.particle,
 			});
 		});
@@ -531,24 +1571,154 @@ export class GameLoop {
 
 	render(): void {
 		const ctx = getCtx();
+		// effects asked for outside the simulation step (crafting from the backpack, admin tools) still play
+		this.playFx(ctx);
 		const renderer = ctx.renderer;
 		const cam = ctx.cam;
-		renderer.releaseAll();
-		const view = this.viewBounds(cam);
+		renderer.beginFrame();
+		const view = cam.viewRect(32);
+		this.updateShadowDir();
+		// the actor views read the loop's sun and its animation clock; the object is refilled, never rebuilt
+		const opts = this.drawOpts;
+		opts.clock = this.clock;
+		// the allies of this frame, already interpolated for the render time (§5.1); empty when solo
+		const allies = netActive() ? remotePlayers() : NO_REMOTES;
 		this.drawGround(renderer, cam, view);
+		this.drawDecals(renderer, cam, view);
 		this.drawItems(renderer, cam, view);
 		this.drawSolids(renderer, cam, view);
-		this.drawZombies(renderer, cam, view);
+		this.actors.drawZombies(renderer, cam, view, this.refs, opts);
+		// allies first, then you: at the same ZIndex the one who has to read cleanly is the one you steer
+		this.playersView.draw(renderer, cam, view, allies, this.lastDt, this.clock, this.shadowFor);
 		this.drawPlayer(renderer, cam);
-		this.drawBosses(renderer, cam, view);
-		this.drawBullets(renderer, cam);
-		this.drawTracers(renderer, cam);
-		this.drawParticles(renderer, cam);
+		this.actors.drawBosses(renderer, cam, view, this.refs, opts);
+		this.actors.drawBullets(renderer, cam, view, this.refs, opts);
+		this.fxView.drawExplosions(renderer, cam, view, this.refs);
+		this.fxView.drawTracers(renderer, cam);
+		this.drawParticles(renderer, cam, view);
 		this.build.draw(renderer, cam);
-		ctx.darkLayer.BackgroundTransparency = 1 - this.daynight.darkAlpha;
+		renderer.endFrame();
+		this.drawLight(cam, view, allies);
+		this.drawNameplate(cam);
+		this.drawAllyPlates(cam, view, allies);
+		this.drawChatBubbles(cam, view, allies);
+	}
+
+	/** chat bubbles ride the same layer as the plates, so a survivor's name and their words scale together */
+	private drawChatBubbles(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		let chat = this.chat;
+		if (chat === undefined) {
+			const root = getCtx().darkLayer.Parent;
+			if (root === undefined || !root.IsA("GuiObject")) return;
+			chat = new ChatBubbles(root, NAMEPLATE_Z);
+			this.chat = chat;
+		}
+		const p = this.player;
+		this.selfBody.x = p.x;
+		this.selfBody.y = p.y;
+		// dead: no body, so nothing to hang your own line on — the rule the nameplate already follows
+		chat.update(cam, v, allies, p.dead ? undefined : this.selfBody);
+	}
+
+	/** one pooled plate per ally, in the same layer and at the same ZIndex as the local survivor's (§5.3) */
+	private drawAllyPlates(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		if (allies.size() === 0 && this.playersView.count() === 0) return;
+		const root = getCtx().darkLayer.Parent;
+		if (root === undefined || !root.IsA("GuiObject")) return;
+		this.playersView.updatePlates(root, NAMEPLATE_Z, cam, v, allies, this.clock);
+	}
+
+	/** username + level pill under the player's body; world-anchored, so pause/backpack dim it with the world */
+	private drawNameplate(cam: Camera): void {
+		const ctx = getCtx();
+		if (this.nameplate === undefined) {
+			const root = ctx.darkLayer.Parent;
+			if (root === undefined || !root.IsA("GuiObject")) return;
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer));
+		}
+		const p = this.player;
+		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
+		this.nameplate.update(at.x, at.y, ctx.save.level, ctx.phase === "playing" && !p.dead);
+	}
+
+	/**
+	 * Night: a coarse light map instead of a flat overlay (Dead Town simply darkened everything).
+	 * The player always sees ~250 px around them; powered lamps / fires light their surroundings,
+	 * so building light sources becomes a real defensive choice. Muzzle flashes light up briefly.
+	 *
+	 * In co-op every standing ally lights the map for everyone (§5.3, MP-08): a group lights a street the way a
+	 * group should, and a light you can see but that does not light anything would be a lie.
+	 */
+	private drawLight(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		const ctx = getCtx();
+		ctx.darkLayer.BackgroundTransparency = 1;
+		if (this.lightMap === undefined) {
+			this.lightMap = new LightMap(ctx.darkLayer, COLORS.overlayNight);
+		}
+		const dark = this.daynight.darkAlpha;
+		if (dark <= 0.004) {
+			this.lightMap.hide();
+			return;
+		}
+		const lights = this.lights;
+		lights.clear();
+		const p = this.player;
+		if (!p.dead) {
+			lights.push({ x: p.x, y: p.y, r: PLAYER_LIGHT_R, inner: 0.4 });
+		}
+		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
+		const list = this.queryBuf;
+		list.clear();
+		querySolids(this.world, v.minX - 400, v.minY - 400, v.maxX + 400, v.maxY + 400, list);
+		for (const s of list) {
+			const r = LIGHT_R[s.tags];
+			if (r === undefined || s.powered !== true) continue;
+			const fire = s.tags === "campfire" || s.tags === "brazier";
+			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
+			lights.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: r * flicker, inner: 0.5 });
+		}
+		for (const t of this.fxView.shotLines()) {
+			const k = clamp(t.life * 5, 0, 1);
+			if (k > 0.05) lights.push({ x: t.x1, y: t.y1, r: 150, k: 0.85 * k, inner: 0.2 });
+		}
+		for (const b of this.bullets) {
+			if (b.kind === "fire") lights.push({ x: b.x, y: b.y, r: 110, k: 0.7, inner: 0.2 });
+		}
+		const blasts = this.refs.explosions;
+		if (blasts !== undefined) {
+			for (const e of blasts) {
+				lights.push({ x: e.x, y: e.y, r: e.rMax * 1.8, k: explosionFade(e), inner: 0.35 });
+			}
+		}
+		this.lightMap.update(cam, dark, lights);
+	}
+
+	/** Hide every world sprite and the night overlay (call when leaving the game screen). */
+	hideWorld(): void {
+		const ctx = getCtx();
+		ctx.renderer.releaseAll();
+		this.lightMap?.hide();
+		this.nameplate?.update(0, 0, ctx.save.level, false);
+		this.playersView.hide();
+		this.chat?.hide();
+		ctx.darkLayer.BackgroundTransparency = 1;
 	}
 
 	getRefs(): GameRefs {
 		return this.refs;
 	}
+
+	/** admin panel "clear blood": particles and decals are view state, so the view clears them */
+	clearEffects(): void {
+		this.particles.clear();
+		this.fx.clear();
+	}
+
+	// ------------------------------------------------------------------ admin panel (src/client/admin)
+
+	/**
+	 * admin switches: noclip = the survivor's step skips collision (copied into PlayerState.noclip, which the
+	 * server will own in F1), frozen = the sampled command carries no movement (free camera)
+	 */
+	readonly admin = { noclip: false, frozen: false };
 }

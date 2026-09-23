@@ -1,54 +1,195 @@
 import { DESIGN } from "shared/engine/constants";
-import { choose, rndInt } from "shared/engine/rng";
-import { GroundItem, Solid } from "shared/game/world";
+import { choose, chance, rndInt, rndRange } from "shared/engine/rng";
+import type { PlayerState } from "shared/game/player";
+import { GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
-import { addItem } from "./items";
-import { GameRefs } from "./types";
+import { gameHours } from "shared/sim/clock";
+import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import {
+	bodiesOverlapRect,
+	canRepair,
+	edgeDist,
+	InteractTarget,
+	interactTarget,
+	isFire,
+	repairMaterial,
+} from "shared/sim/interactQuery";
+import { itemName } from "./craftSystem";
+import { fxMessage, GameRefs } from "./types";
 
-const REPAIRABLE: Array<string> = [
-	"craftdesk",
-	"craftdesk_pro",
-	"turret",
-	"barricade",
-	"iron_barricade",
-	"door",
-	"iron_door",
+/*
+ * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, repair, loot a building.
+ * WHAT is in reach is a pure query (shared/sim/interactQuery.ts); this file applies the effect on the world and the
+ * backpack of the survivor that pressed E (docs/MULTIPLAYER.md §11.2 → server/sim/interaction.ts in F3).
+ */
+
+/** cooldown (seconds left) per map item (tree/car/trash) since its last hit */
+const hitCooldowns = new Map<Solid, number>();
+
+interface LootEntry {
+	kind: number;
+	index: number;
+	/** < 1 → probability (as a fraction) of dropping exactly 1; otherwise the quantity dropped */
+	amount: number;
+}
+
+const TREE_LOOT: Array<LootEntry> = [
+	{ kind: 4, index: 23, amount: 2 },
+	{ kind: 3, index: 17, amount: 0.1 },
+	{ kind: 3, index: 18, amount: 0.1 },
 ];
 
-function edgeDist(s: Solid, x: number, y: number): number {
-	const cx = s.x + s.w / 2;
-	const cy = s.y + s.h / 2;
-	return math.max(math.abs(cx - x) - s.w / 2, math.abs(cy - y) - s.h / 2);
+const CAR_LOOT: Array<LootEntry> = [
+	{ kind: 4, index: 25, amount: 1 },
+	{ kind: 4, index: 30, amount: 0.1 },
+	{ kind: 4, index: 36, amount: 0.05 },
+];
+
+const TRASH_LOOT: Array<LootEntry> = [
+	{ kind: 4, index: 23, amount: 1 },
+	{ kind: 4, index: 24, amount: 1 },
+	{ kind: 4, index: 25, amount: 0.1 },
+	{ kind: 4, index: 29, amount: 0.1 },
+	{ kind: 4, index: 30, amount: 0.1 },
+];
+
+function lootTableFor(s: Solid): Array<LootEntry> | undefined {
+	if (s.kind === "tree") return TREE_LOOT;
+	if (s.tags === "car") return CAR_LOOT;
+	if (s.tags === "trash") return TRASH_LOOT;
+	return undefined;
 }
 
-function findItem(refs: GameRefs): GroundItem | undefined {
-	const p = refs.player;
-	let best: GroundItem | undefined;
-	let bestD: number = DESIGN.ITEM_GET_DISTANCE;
-	for (const it of refs.world.items) {
-		const d = math.sqrt((it.x - p.x) * (it.x - p.x) + (it.y - p.y) * (it.y - p.y));
-		if (d < bestD) {
-			bestD = d;
-			best = it;
+/** spawn point: nearest point of the solid's rect to the survivor, pushed 24px further out towards them */
+function spawnFromSolid(refs: GameRefs, by: PlayerState, s: Solid, kind: number, index: number, count: number): void {
+	const qx = math.clamp(by.x, s.x, s.x + s.w);
+	const qy = math.clamp(by.y, s.y, s.y + s.h);
+	let dx = by.x - qx;
+	let dy = by.y - qy;
+	let dist = math.sqrt(dx * dx + dy * dy);
+	if (dist < 1e-3) {
+		// survivor exactly on the rect edge: fall back to pushing away from its centre
+		dx = qx - (s.x + s.w / 2);
+		dy = qy - (s.y + s.h / 2);
+		dist = math.sqrt(dx * dx + dy * dy);
+		if (dist < 1e-3) {
+			dx = 1;
+			dy = 0;
+			dist = 1;
 		}
 	}
-	return best;
+	const nx = dx / dist;
+	const ny = dy / dist;
+	const sx = qx + nx * 24;
+	const sy = qy + ny * 24;
+	const angle = math.atan2(ny, nx) + rndRange(-0.6, 0.6);
+	const speed = rndRange(60, 150);
+	spawnGroundItem(refs.world, kind, index, count, sx, sy, math.cos(angle) * speed, math.sin(angle) * speed);
 }
 
-function findSolid(refs: GameRefs): Solid | undefined {
+/**
+ * A melee/ranged hit lands on a map item (tree/car/trash). Own cooldown per solid
+ * (DESIGN.MAP_ITEM_HIT_TIME); while on cooldown this is a no-op. Otherwise shakes the sprite and,
+ * with DESIGN.MAP_ITEM_PERCENT% chance, drops loot from the object's table at `by`'s side.
+ */
+export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean, by: PlayerState = refs.player): boolean {
+	const cd = hitCooldowns.get(s);
+	if (cd !== undefined && cd > 0) return false;
+	hitCooldowns.set(s, DESIGN.MAP_ITEM_HIT_TIME);
+	s.hitShake = 0.25;
+
+	const lootTable = lootTableFor(s);
+	if (lootTable === undefined) return true;
+	if (!chance(DESIGN.MAP_ITEM_PERCENT)) return true;
+
+	if (choppingTool && s.kind === "tree") {
+		const count = 2 + (chance(50) ? 1 : 0);
+		spawnFromSolid(refs, by, s, 4, 23, count);
+		return true;
+	}
+
+	const entry = choose(lootTable);
+	if (entry.amount < 1) {
+		if (!chance(entry.amount * 100)) return true;
+		spawnFromSolid(refs, by, s, entry.kind, entry.index, 1);
+	} else {
+		spawnFromSolid(refs, by, s, entry.kind, entry.index, entry.amount);
+	}
+	return true;
+}
+
+/** absolute game clock in hours — building loot respawn timestamps */
+function worldHours(refs: GameRefs): number {
+	return gameHours(refs.daynight.day, refs.daynight.dayTime);
+}
+
+// --- fires (campfire / brazier) burn wood -------------------------------------------------------
+
+/**
+ * How often the lazy loot sweep runs. It is NOT per frame: a survivor cannot cross the 320 u trigger radius
+ * in half a second, and the sweep is a grid query per survivor. Same cadence as the authoritative version
+ * (`LOOT_SWEEP_S`, server/sim/items.ts).
+ */
+const LOOT_SWEEP_S = 0.5;
+
+/** obj_campfire: 1000 wood burning 0.1/frame → ~5.5 min of fire; relighting costs 5 wood */
+const FIRE_TIME = 1000 / 0.1 / 30;
+const FIRE_WOOD = 5;
+const WOOD_INDEX = 23;
+/** seconds of fire left per campfire/brazier (absent = freshly built, full) */
+const fireFuel = new Map<Solid, number>();
+let fireTick = 0;
+const fireBuf: Array<Solid> = [];
+
+function fuelOf(s: Solid): number {
+	return fireFuel.get(s) ?? FIRE_TIME;
+}
+
+/**
+ * E on a light: lamps just switch; a fire goes out / relights while it still has wood, and an
+ * empty fire takes 5 wood from the backpack. Returns a message when it cannot be lit.
+ */
+function toggleLight(refs: GameRefs, by: PlayerState, s: Solid): string | undefined {
+	if (!isFire(s)) {
+		s.powered = !(s.powered ?? false);
+		return undefined;
+	}
+	if (s.powered === true) {
+		s.powered = false;
+		return undefined;
+	}
+	if (fuelOf(s) <= 0) {
+		if (countItem(refs.save, 4, WOOD_INDEX) < FIRE_WOOD) {
+			return `Missing: ${itemName(4, WOOD_INDEX)} ${math.floor(countItem(refs.save, 4, WOOD_INDEX))}/${FIRE_WOOD}`;
+		}
+		removeItem(refs.save, 4, WOOD_INDEX, FIRE_WOOD);
+		fireFuel.set(s, FIRE_TIME);
+	}
+	s.powered = true;
+	return undefined;
+}
+
+/** burn the fires around the player; an empty one goes out (and stops lighting / smelting) */
+function burnFires(refs: GameRefs, dt: number): void {
+	fireTick += dt;
+	if (fireTick < 0.5) return;
+	const step = fireTick;
+	fireTick = 0;
 	const p = refs.player;
-	let best: Solid | undefined;
-	let bestD = 40;
-	for (const s of refs.world.solids) {
-		const isDoor = s.kind === "door" || s.kind === "iron_door";
-		const limit = isDoor ? 30 : 40;
-		const d = edgeDist(s, p.x, p.y);
-		if (d < limit && d < bestD) {
-			bestD = d;
-			best = s;
+	// reused: this box covers a hundred grid cells, so the result table is the expensive part
+	for (const s of querySolids(refs.world, p.x - 2500, p.y - 2500, p.x + 2500, p.y + 2500, fireBuf)) {
+		if (!isFire(s) || s.powered !== true) continue;
+		const left = fuelOf(s) - step;
+		fireFuel.set(s, left);
+		if (left <= 0) {
+			fireFuel.set(s, 0);
+			s.powered = false;
 		}
 	}
-	return best;
+	fireBuf.clear();
+	for (const [s] of fireFuel) {
+		if (s.removed === true) fireFuel.delete(s);
+	}
 }
 
 function takeItem(refs: GameRefs, it: GroundItem): void {
@@ -75,16 +216,8 @@ function rollLoot(s: Solid): void {
 	s.lootItems = loot;
 }
 
-function repairMaterial(s: Solid): { kind: number; index: number } {
-	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret") {
-		return { kind: 4, index: 26 };
-	}
-	return { kind: 4, index: 23 };
-}
-
 function tryRepair(refs: GameRefs, s: Solid): boolean {
-	if (s.hp >= s.hpMax) return false;
-	if (!REPAIRABLE.includes(s.tags)) return false;
+	if (!canRepair(s)) return false;
 	const mat = repairMaterial(s);
 	if (refs.save.invenEtc[mat.index] <= 0) return false;
 	refs.save.invenEtc[mat.index] = refs.save.invenEtc[mat.index] - 1;
@@ -93,49 +226,156 @@ function tryRepair(refs: GameRefs, s: Solid): boolean {
 	return true;
 }
 
+const BUILDING_NAMES: Record<string, string> = {
+	house: "house",
+	gas: "gas station",
+	pharmacy: "pharmacy",
+	market: "market",
+	gunshop: "gun shop",
+	cloth: "clothing store",
+	restaurant: "restaurant",
+	school: "school",
+	hospital: "hospital",
+};
+
+/** the hint text for a target the survivor could use, or undefined when it does nothing */
+function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
+	if (target.kind === "item") {
+		const it = target.item;
+		const n = itemName(it.kind, it.itemId);
+		return it.count > 1 ? `E: Pick up ${n} x${it.count}` : `E: Pick up ${n}`;
+	}
+	if (target.kind === "door") {
+		const s = target.solid;
+		if (s.open === true) {
+			return bodiesOverlapRect(s, refs.players, refs.zombies) ? undefined : "E: Close door";
+		}
+		return "E: Open door";
+	}
+	if (target.kind === "light") {
+		const s = target.solid;
+		if (s.powered === true) return s.tags === "lamp" ? "E: Turn off" : "E: Put out";
+		if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
+		return s.tags === "lamp" ? "E: Turn on" : "E: Light";
+	}
+	if (target.kind === "mapItem") {
+		const s = target.solid;
+		if (s.kind === "tree") return "E: Shake tree";
+		return s.tags === "car" ? "E: Search car" : "E: Search trash";
+	}
+	if (target.kind === "solid") {
+		const s = target.solid;
+		if (!canRepair(s)) return undefined;
+		const mat = repairMaterial(s);
+		const have = refs.save.invenEtc[mat.index] ?? 0;
+		return have > 0
+			? `E: Repair (${itemName(mat.kind, mat.index)})`
+			: `Repair: needs ${itemName(mat.kind, mat.index)}`;
+	}
+	const b = target.building;
+	return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
+}
+
+/**
+ * What the action button (E) would do right now, for the HUD — same priority as tryInteract.
+ * undefined = nothing to do (hide the button).
+ */
+export function interactHint(refs: GameRefs, by: PlayerState = refs.player): string | undefined {
+	if (refs.pendingPlace >= 0) return undefined;
+	const target = interactTarget(refs.world, by.x, by.y);
+	if (target === undefined) return undefined;
+	return hintFor(refs, target);
+}
+
 export class Interaction {
-	tryInteract(refs: GameRefs): void {
+	/** seconds until the next loot sweep, and the buffer it reuses */
+	private lootSweep = 0;
+	private readonly lootBuf: Array<Solid> = [];
+
+	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
 		if (refs.pendingPlace >= 0) return;
-		const item = findItem(refs);
-		if (item !== undefined) {
-			takeItem(refs, item);
+		const target = interactTarget(refs.world, by.x, by.y);
+		if (target === undefined) return;
+		if (target.kind === "item") {
+			takeItem(refs, target.item);
 			return;
 		}
-		const s = findSolid(refs);
-		if (s === undefined) return;
-		if (s.kind === "door" || s.kind === "iron_door") {
-			s.open = !(s.open ?? false);
+		if (target.kind === "door") {
+			const s = target.solid;
+			const willOpen = !(s.open ?? false);
+			if (!willOpen && bodiesOverlapRect(s, refs.players, refs.zombies)) return;
+			s.open = willOpen;
 			return;
 		}
-		if (s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier") {
-			s.powered = !(s.powered ?? false);
+		if (target.kind === "light") {
+			const why = toggleLight(refs, by, target.solid);
+			if (why !== undefined) fxMessage(refs, why, by);
 			return;
 		}
-		if (s.lootItems !== undefined && s.lootItems.size() > 0) {
-			for (const loot of s.lootItems) {
-				addItem(refs.save, loot.kind, loot.id, loot.count);
-			}
-			s.lootItems = [];
-			s.lootTimer = DESIGN.ITEM_RESPAWN_HOURS * 3600;
+		if (target.kind === "mapItem") {
+			hitMapItem(refs, target.solid, false, by);
 			return;
 		}
-		tryRepair(refs, s);
+		if (target.kind === "solid") {
+			tryRepair(refs, target.solid);
+			return;
+		}
+		const b = target.building;
+		const loot = b.lootItems;
+		if (loot === undefined) return;
+		for (const drop of loot) {
+			addItem(refs.save, drop.kind, drop.id, drop.count);
+		}
+		b.lootItems = [];
+		// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
+		b.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;
 	}
 
 	update(refs: GameRefs, dt: number): void {
-		const p = refs.player;
-		for (const s of refs.world.solids) {
-			if (s.buildingType === undefined) continue;
-			const near = edgeDist(s, p.x, p.y) < 320;
-			if (!near) continue;
-			if (s.lootTimer !== undefined && s.lootTimer > 0) {
-				s.lootTimer -= dt;
-				if (s.lootTimer < 0) s.lootTimer = 0;
+		burnFires(refs, dt);
+		for (const [solid, t] of hitCooldowns) {
+			if (solid.removed === true) {
+				hitCooldowns.delete(solid);
+				continue;
 			}
-			const loot = s.lootItems;
-			if (loot !== undefined && loot.size() === 0 && (s.lootTimer ?? 0) <= 0) {
+			const nt = t - dt;
+			if (nt <= 0) {
+				hitCooldowns.delete(solid);
+			} else {
+				hitCooldowns.set(solid, nt);
+			}
+		}
+		this.rollNearbyLoot(refs, dt);
+	}
+
+	/*
+	 * Loot is rolled lazily, when a survivor comes near a building that has none — but "near" was tested
+	 * EVERY FRAME, with a fresh 640 x 640 grid query (and a fresh result table) per survivor. In a dense
+	 * block that is a few hundred solid visits and one throwaway array sixty times a second, for a question
+	 * whose answer changes at walking pace: it is a slow, steady cost that grows as the player explores into
+	 * denser parts of town, which is exactly what it felt like.
+	 *
+	 * Twice a second is more often than a survivor can cross 320 units, and it is the same cadence the
+	 * authoritative version uses (LOOT_SWEEP_S in server/sim/items.ts). The scratch buffer is reused, so the
+	 * sweep stops allocating at all.
+	 */
+	private rollNearbyLoot(refs: GameRefs, dt: number): void {
+		this.lootSweep -= dt;
+		if (this.lootSweep > 0) return;
+		this.lootSweep = LOOT_SWEEP_S;
+		const radius = 320;
+		const now = worldHours(refs);
+		for (const p of refs.players) {
+			const found = querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius, this.lootBuf);
+			for (const s of found) {
+				if (s.kind !== "building") continue;
+				const loot = s.lootItems;
+				if (loot === undefined || loot.size() > 0) continue;
+				if (now < (s.lootTimer ?? 0)) continue;
+				if (edgeDist(s, p.x, p.y) >= radius) continue;
 				rollLoot(s);
 			}
+			this.lootBuf.clear();
 		}
 	}
 }

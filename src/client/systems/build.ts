@@ -2,61 +2,18 @@ import { COLORS, Z } from "shared/engine/colors";
 import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { InputState } from "shared/engine/input";
-import { SolidKind, addSolid } from "shared/game/world";
-import { addItem } from "./items";
+import { addSolid } from "shared/game/world";
+import { ghostRectSticky, PLACEABLES, placedSolid, placementValid, placeRecipe } from "shared/sim/placement";
+import { addItem } from "shared/sim/inventory";
 import { GameRefs } from "./types";
 
-export interface PlaceableDef {
-	tag: string;
-	kind: SolidKind;
-	w: number;
-	h: number;
-	hp: number;
-	destructible: boolean;
-	rotatable: boolean;
-	powered?: boolean;
-}
+/*
+ * Build mode of the local survivor: the ghost, its rotation, confirm / cancel and drawing. WHAT can be placed and
+ * WHERE is pure and shared (shared/sim/placement.ts, docs/MULTIPLAYER.md §11.2); this is the client's input and view.
+ */
 
-function p(
-	tag: string,
-	kind: SolidKind,
-	w: number,
-	h: number,
-	hp: number,
-	destructible = true,
-	rotatable = false,
-	powered?: boolean,
-): PlaceableDef {
-	return { tag, kind, w, h, hp, destructible, rotatable, powered };
-}
-
-export const PLACEABLES: Record<number, PlaceableDef> = {
-	0: p("craftdesk", "structure", 96, 72, 200),
-	1: p("craftdesk_pro", "structure", 112, 80, 400),
-	2: p("turret", "structure", 64, 64, 400),
-	3: p("turret_drone", "structure", 48, 48, 300),
-	4: p("lamp", "structure", 48, 48, 400, true, false, false),
-	5: p("lamp_drone", "structure", 40, 40, 300, true, false, false),
-	6: p("battery", "structure", 40, 40, 300),
-	7: p("generator", "structure", 72, 72, 500),
-	8: p("generator", "structure", 80, 80, 500),
-	9: p("generator", "structure", 72, 72, 500),
-	10: p("barricade", "barricade", 128, 32, 700, true, true),
-	11: p("door", "door", 96, 24, 500, true, true),
-	12: p("iron_barricade", "iron_barricade", 128, 32, 1700, true, true),
-	13: p("iron_door", "iron_door", 96, 24, 1500, true, true),
-	14: p("campfire", "structure", 64, 64, 400, true, false, true),
-	15: p("brazier", "structure", 64, 64, 400, true, false, true),
-	16: p("electric_turret", "structure", 64, 64, 400),
-	17: p("trap", "structure", 64, 64, 100),
-	18: p("gps", "structure", 48, 48, 100),
-	19: p("cooker", "structure", 56, 48, 300),
-	20: p("furnace", "structure", 56, 48, 300),
-	21: p("vehicle", "structure", 64, 40, 100),
-	22: p("vehicle", "structure", 72, 44, 120),
-	39: p("craftdesk", "structure", 96, 72, 240),
-	40: p("craftdesk_pro", "structure", 112, 80, 480),
-};
+export { PLACEABLES } from "shared/sim/placement";
+export type { PlaceableDef } from "shared/sim/placement";
 
 export interface Ghost {
 	x: number;
@@ -72,12 +29,10 @@ export class BuildSystem {
 	private ghostW = 0;
 	private ghostH = 0;
 	private ghostValid = false;
+	/** false until the first frame of build mode, so the ghost does not stick to a stale cell */
+	private hasGhost = false;
 	private rot = 0;
 	private active = false;
-
-	private defFor(id: number): PlaceableDef | undefined {
-		return PLACEABLES[id];
-	}
 
 	rotate(): void {
 		this.rot = (this.rot + 1) % 4;
@@ -97,10 +52,12 @@ export class BuildSystem {
 		}
 		if (input.actionPressed) {
 			this.cancel(refs);
+			input.attackBlocked = true;
 			return true;
 		}
 		if (input.attackPressed) {
 			this.confirm(refs);
+			input.attackBlocked = true;
 			return true;
 		}
 		return true;
@@ -111,70 +68,55 @@ export class BuildSystem {
 			this.active = false;
 			return;
 		}
-		const def = this.defFor(refs.pendingPlace);
+		const def = PLACEABLES[refs.pendingPlace];
 		if (def === undefined) {
 			refs.pendingPlace = -1;
 			this.active = false;
 			return;
 		}
 		const p = refs.player;
-		const aim = p.angle;
-		const cx = p.x + math.cos(aim) * 96;
-		const cy = p.y + math.sin(aim) * 96;
-		let w = def.w;
-		let h = def.h;
-		if (def.rotatable && (this.rot === 1 || this.rot === 3)) {
-			w = def.h;
-			h = def.w;
-		}
-		const gx = math.floor((cx - w / 2) / 128 + 0.5) * 128;
-		const gy = math.floor((cy - h / 2) / 128 + 0.5) * 128;
-		this.ghostX = gx;
-		this.ghostY = gy;
-		this.ghostW = w;
-		this.ghostH = h;
-		let valid = gx >= 0 && gy >= 0 && gx + w < refs.world.width && gy + h < refs.world.height;
-		if (valid) {
-			for (const s of refs.world.solids) {
-				if (s.kind === "door" && s.open) continue;
-				if (gx < s.x + s.w && gx + w > s.x && gy < s.y + s.h && gy + h > s.y) {
-					valid = false;
-					break;
-				}
-			}
-		}
-		this.ghostValid = valid;
+		// sticky, not raw: the drawn position now carries the server's per-frame correction, and a plain grid
+		// snap on top of that makes the ghost flicker between two cells forever
+		const g = ghostRectSticky(
+			def,
+			p.x,
+			p.y,
+			p.angle,
+			this.rot,
+			this.hasGhost ? this.ghostX : undefined,
+			this.hasGhost ? this.ghostY : undefined,
+		);
+		this.ghostX = g.x;
+		this.ghostY = g.y;
+		this.ghostW = g.w;
+		this.ghostH = g.h;
+		this.hasGhost = true;
+		this.ghostValid = placementValid(refs.world, g, refs.players, refs.zombies);
 	}
 
 	private confirm(refs: GameRefs): void {
 		if (!this.ghostValid) return;
-		const id = refs.pendingPlace;
-		const def = this.defFor(id);
+		const def = PLACEABLES[refs.pendingPlace];
 		if (def === undefined) return;
-		addSolid(refs.world, {
-			kind: def.kind,
-			x: this.ghostX,
-			y: this.ghostY,
-			w: this.ghostW,
-			h: this.ghostH,
-			hp: def.hp,
-			hpMax: def.hp,
-			destructible: def.destructible,
-			tags: def.tag,
-			rot: this.rot,
-			open: def.kind === "door" || def.kind === "iron_door" ? false : undefined,
-			powered: def.powered,
-		});
+		const r = { x: this.ghostX, y: this.ghostY, w: this.ghostW, h: this.ghostH };
+		addSolid(refs.world, placedSolid(def, r, this.rot));
 		refs.pendingPlace = -1;
+		refs.pendingRecipe = undefined;
 		this.active = false;
 	}
 
 	private cancel(refs: GameRefs): void {
 		const id = refs.pendingPlace;
 		if (id >= 0) {
-			addItem(refs.save, 4, id, 1);
+			const r = placeRecipe(id, refs.pendingRecipe);
+			if (r !== undefined) {
+				for (const ing of r.ingredients) {
+					addItem(refs.save, ing.kind, ing.index, ing.count);
+				}
+			}
 		}
 		refs.pendingPlace = -1;
+		refs.pendingRecipe = undefined;
 		this.active = false;
 	}
 

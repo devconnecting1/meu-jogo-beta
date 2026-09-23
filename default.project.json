@@ -39,16 +39,16 @@
 				"FilteringEnabled": true
 			}
 		},
-		"HttpService": {
-			"$className": "HttpService",
-			"$properties": {
-				"HttpEnabled": true
-			}
-		},
 		"SoundService": {
 			"$className": "SoundService",
 			"$properties": {
 				"RespectFilteringEnabled": true
+			}
+		},
+		"TextChatService": {
+			"$className": "TextChatService",
+			"$properties": {
+				"ChatVersion": "TextChatService"
 			}
 		}
 	}

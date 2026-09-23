@@ -1,0 +1,19 @@
+{
+	"uploadedAt": "2026-09-22",
+	"source": "tools/gen-ui-skin.mjs + Roblox Studio MCP upload_image (author account)",
+	"ids": {
+		"btnFace": "rbxassetid://77372919950676",
+		"btnShade": "rbxassetid://131025498878856",
+		"btnLight": "rbxassetid://82374218979377",
+		"btnLightHot": "rbxassetid://133460335652831",
+		"btnFacePress": "rbxassetid://76171457192839",
+		"btnShadePress": "rbxassetid://104553134487435",
+		"panelFill": "rbxassetid://136859074137464",
+		"panelFrame": "rbxassetid://128833256863429",
+		"panelEdge": "rbxassetid://93927581389568",
+		"strip": "rbxassetid://115177268038346",
+		"wellFill": "rbxassetid://136787192183874",
+		"wellBorder": "rbxassetid://95723661018660",
+		"focusRing": "rbxassetid://94776590973665"
+	}
+}

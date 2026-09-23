@@ -1,6 +1,9 @@
 import { COLORS } from "shared/engine/colors";
 import { rndRange } from "shared/engine/rng";
 
+/** whose blood: zombies bleed green, the player bleeds red (or pass any colour) */
+export type BloodSource = "zombie" | "player" | Color3;
+
 export interface Particle {
 	x: number;
 	y: number;
@@ -10,51 +13,103 @@ export interface Particle {
 	maxLife: number;
 	size: number;
 	color: Color3;
-	grav: number;
+	/** exponential ground friction (1/s): top-down, so nothing "falls" — sprays slide and stop */
+	drag: number;
+	/** leaves a blood decal where it lands */
+	decal: boolean;
 }
 
-const MAX_PARTICLES = 400;
+/** flat splat left on the ground; fades out over DECAL_LIFE seconds */
+export interface Decal {
+	x: number;
+	y: number;
+	size: number;
+	color: Color3;
+	life: number;
+	maxLife: number;
+}
+
+const MAX_PARTICLES = 320;
+const MAX_DECALS = 160;
+export const DECAL_LIFE = 10;
+
+function bloodColor(source: BloodSource): Color3 {
+	if (source === "zombie") return COLORS.bloodZombie;
+	if (source === "player") return COLORS.blood;
+	return source;
+}
 
 export class ParticleSystem {
 	private pool: Array<Particle> = [];
+	/** ring buffer: when full the oldest decal is overwritten */
+	private decals: Array<Decal> = [];
+	private decalNext = 0;
 
-	bloodBurst(x: number, y: number, count: number): void {
+	/**
+	 * Radial blood spray. `dir` (radians, optional) biases the spray away from the hit — pass the
+	 * bullet/swing angle. Big bursts (kills, count ≥ 8) also leave a pool under the victim.
+	 */
+	bloodBurst(x: number, y: number, count: number, source: BloodSource = "zombie", dir?: number): void {
+		const color = bloodColor(source);
 		for (let i = 0; i < count; i++) {
+			const a = dir !== undefined ? dir + rndRange(-0.75, 0.75) : rndRange(0, math.pi * 2);
+			const s = rndRange(70, 260);
+			const life = rndRange(0.2, 0.45);
 			this.spawn({
-				x: x + rndRange(-8, 8),
-				y: y + rndRange(-8, 8),
-				vx: rndRange(-90, 90),
-				vy: rndRange(-140, -40),
-				life: rndRange(0.35, 0.7),
-				maxLife: 0.7,
-				size: rndRange(3, 7),
-				color: COLORS.blood,
-				grav: 320,
+				x: x + rndRange(-6, 6),
+				y: y + rndRange(-6, 6),
+				vx: math.cos(a) * s,
+				vy: math.sin(a) * s,
+				life,
+				maxLife: life,
+				size: rndRange(4, 8),
+				color,
+				drag: 7,
+				decal: math.random() < 0.55,
 			});
+		}
+		if (count >= 8) {
+			this.addDecal(x, y, rndRange(26, 40), color);
 		}
 	}
 
+	/** Radial debris (wood chips, sparks, dust) with friction; leaves no decal. */
 	debrisBurst(x: number, y: number, count: number, color: Color3): void {
 		for (let i = 0; i < count; i++) {
 			const a = rndRange(0, math.pi * 2);
-			const s = rndRange(40, 160);
+			const s = rndRange(50, 220);
+			const life = rndRange(0.3, 0.7);
 			this.spawn({
 				x,
 				y,
 				vx: math.cos(a) * s,
-				vy: math.sin(a) * s - 60,
-				life: rndRange(0.4, 0.9),
-				maxLife: 0.9,
-				size: rndRange(3, 8),
+				vy: math.sin(a) * s,
+				life,
+				maxLife: life,
+				size: rndRange(3, 7),
 				color,
-				grav: 300,
+				drag: 5,
+				decal: false,
 			});
+		}
+	}
+
+	/** Add a ground splat directly (e.g. acid, oil). */
+	addDecal(x: number, y: number, size: number, color: Color3): void {
+		const d: Decal = { x, y, size, color, life: DECAL_LIFE, maxLife: DECAL_LIFE };
+		if (this.decals.size() < MAX_DECALS) {
+			this.decals.push(d);
+		} else {
+			this.decals[this.decalNext] = d;
+			this.decalNext = (this.decalNext + 1) % MAX_DECALS;
 		}
 	}
 
 	private spawn(p: Particle): void {
 		if (this.pool.size() >= MAX_PARTICLES) {
-			this.pool.remove(0);
+			// drop a random live particle instead of shifting the whole array
+			this.pool[math.random(0, MAX_PARTICLES - 1)] = p;
+			return;
 		}
 		this.pool.push(p);
 	}
@@ -64,12 +119,20 @@ export class ParticleSystem {
 			const p = this.pool[i];
 			p.life -= dt;
 			if (p.life <= 0) {
-				this.pool.remove(i);
+				if (p.decal) {
+					this.addDecal(p.x, p.y, p.size * rndRange(1.2, 2), p.color);
+				}
+				this.pool.unorderedRemove(i);
 				continue;
 			}
-			p.vy += p.grav * dt;
+			const f = math.exp(-p.drag * dt);
+			p.vx *= f;
+			p.vy *= f;
 			p.x += p.vx * dt;
 			p.y += p.vy * dt;
+		}
+		for (const d of this.decals) {
+			if (d.life > 0) d.life -= dt;
 		}
 	}
 
@@ -79,7 +142,16 @@ export class ParticleSystem {
 		}
 	}
 
+	/** live decals only */
+	forDecals(cb: (d: Decal) => void): void {
+		for (const d of this.decals) {
+			if (d.life > 0) cb(d);
+		}
+	}
+
 	clear(): void {
 		this.pool.clear();
+		this.decals.clear();
+		this.decalNext = 0;
 	}
 }

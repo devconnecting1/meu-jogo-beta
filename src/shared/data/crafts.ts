@@ -15,6 +15,11 @@ export interface CraftRecipe {
 	resultCount: number;
 	needsDesk: boolean;
 	needsPro: boolean;
+	/**
+	 * Smelting (item_fire in the original): needs a LIT brazier or an electric furnace nearby
+	 * instead of a desk. This is how Steel and Gold are made — they never drop as loot.
+	 */
+	needsFire?: boolean;
 }
 
 export const CRAFT_RECIPES: Array<CraftRecipe> = [
@@ -988,5 +993,50 @@ export const CRAFT_RECIPES: Array<CraftRecipe> = [
 		resultCount: 1,
 		needsDesk: false,
 		needsPro: true,
+	},
+	// --- smelting (brazier / electric furnace), from the etc table's "fired" column -------------
+	{
+		id: 76,
+		craftKind: 4,
+		ingredients: [{ kind: 4, index: 25, count: 1 }],
+		resultKind: 4,
+		resultIndex: 26,
+		resultCount: 1,
+		needsDesk: false,
+		needsPro: false,
+		needsFire: true,
+	},
+	{
+		id: 77,
+		craftKind: 4,
+		ingredients: [{ kind: 4, index: 27, count: 1 }],
+		resultKind: 4,
+		resultIndex: 28,
+		resultCount: 1,
+		needsDesk: false,
+		needsPro: false,
+		needsFire: true,
+	},
+	{
+		id: 78,
+		craftKind: 4,
+		ingredients: [{ kind: 4, index: 30, count: 1 }],
+		resultKind: 4,
+		resultIndex: 26,
+		resultCount: 1,
+		needsDesk: false,
+		needsPro: false,
+		needsFire: true,
+	},
+	{
+		id: 79,
+		craftKind: 4,
+		ingredients: [{ kind: 4, index: 35, count: 1 }],
+		resultKind: 4,
+		resultIndex: 28,
+		resultCount: 1,
+		needsDesk: false,
+		needsPro: false,
+		needsFire: true,
 	},
 ];

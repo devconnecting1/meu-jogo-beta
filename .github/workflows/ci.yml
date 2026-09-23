@@ -22,11 +22,84 @@ jobs:
       - name: Typecheck (roblox-ts)
         run: npm run build
 
+      - name: Luau register budget (a module chunk may hold 200 locals)
+        run: npm run check:registers
+
       - name: Lint
         run: npm run lint
 
       - name: Format check
         run: npm run format:check
+
+      - name: World design rules (docs/DESIGN_RULES.md [auto])
+        run: npm run validate:world
+
+      # UI-01: colours come from design/tweakcn-theme.json through `npm run theme`, never from a hand edit
+      - name: Theme pipeline (themeTokens.ts really is the generated file)
+        run: |
+          npm run theme
+          git diff --exit-code -- src/client/ui/themeTokens.ts
+
+      - name: Colour contrast (WCAG 4,5:1 for text, 3:1 for outlines and bars)
+        run: npm run test:contrast
+
+      - name: The Bag is built once (tab switches and actions create no Instances)
+        run: npm run test:backpack
+
+      # UI-06: no menu pauses the world -- the client's own input with the Bag open, against the real server
+      - name: No menu pauses the world (Bag open, the horde, the clock and the damage go on; the hit flash)
+        run: npm run test:menus
+
+      - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
+        run: npm run test:cosmetics
+
+      - name: Net protocol tests (round-trip, limits, fuzz)
+        run: npm run test:net
+
+      - name: Simulation determinism (client prediction must match the server)
+        run: npm run test:sim
+
+      - name: Server simulation (authority, input abuse, hostile payloads)
+        run: npm run test:server-sim
+
+      - name: Client prediction (divergence under latency, loss and reordering)
+        run: npm run test:predict
+
+      - name: Replication (three clients, one horde; interest, bandwidth and tick cost)
+        run: npm run test:replication
+
+      - name: Zombie AI (perception, alert, flanking, pace director, cost)
+        run: npm run test:ai
+
+      - name: Authoritative combat (hit validation, rewind, cadence, server-side progress)
+        run: npm run test:combat
+
+      - name: Match clock and night waves (one server clock, lossy client, the original headcount)
+        run: npm run test:clock
+
+      - name: World day vs life day, the daybreak wait and the runRev retry (MP-13, MP-20, MP-21)
+        run: npm run test:life
+
+      - name: The body is the server's (Leave/Enter, reconnect, Rebirth, New game, daybreak, the world wipe)
+        run: npm run test:body
+
+      - name: Night waves end to end (queue -> real spawner -> zombie, the sterile world, the daybreak revive)
+        run: npm run test:waves
+
+      - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
+        run: npm run test:world
+
+      - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
+        run: npm run test:save
+
+      - name: Footstep cadence (the walk cycle drives the sound)
+        run: npm run test:footsteps
+
+      - name: Remote smoothing (an ally is drawn continuously, not in snapshot steps)
+        run: npm run test:smoothness
+
+      - name: Proximity chat (earshot, presence and the bubble stack)
+        run: npm run test:chat
 
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6

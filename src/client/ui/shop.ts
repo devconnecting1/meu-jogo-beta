@@ -1,178 +1,342 @@
 import { GameContext } from "shared/game/context";
-import { COLORS } from "shared/engine/colors";
-import { SHOP_PACKS, COIN_PACKS, COSTUMES } from "shared/data/shop";
+import { ownsCostume, pendingPacks } from "shared/game/save";
+import { COSTUMES, ECONOMY, SHOP_PACKS } from "shared/data/shop";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
+import { cosmeticSlotOf } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
+import { ShopActionReason, ShopActionRequest } from "shared/net/net";
+import { invokeShopAction, onWalletChanged, sessionReady } from "../systems/saveClient";
 import { toast } from "./popup";
-import { makeFrame, makeLabel, makeButton, clearChildren, nl } from "./widgets";
+import { GAME, RADIUS, TEXT, THEME, space } from "./theme";
+import {
+	BUTTON_SIZE,
+	Badge,
+	Button,
+	Card,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+	CoinIcon,
+	Sidebar,
+	autoFocus,
+	badgeWidth,
+	cardHeaderHeight,
+	clearChildren,
+	fmtInt,
+	makeCoinPill,
+	makeFrame,
+	makeLabel,
+	makeScreen,
+	nl,
+	setButtonEnabled,
+} from "./widgets";
 
-const costumeOwned = new Map<number, boolean>();
+/** player-facing text for a refused shop/rebirth request */
+export function actionErrorText(reason: ShopActionReason | undefined, langType: number): string {
+	const tr = (k: string): string => langGet(k, langType);
+	if (reason === "funds") return tr("Not enough coins");
+	if (reason === "owned") return tr("Already owned");
+	if (reason === "limit") return tr("Too many packs waiting");
+	if (reason === "rate") return tr("Please wait a moment");
+	if (reason === "loading") return tr("Still loading your progress");
+	if (reason === "readonly") return tr("Progress not loaded");
+	// "outdated" = the request named a run the session has already moved past. client/main.client.ts retries
+	// it once with the corrected runRev, so reaching this text means the two really do disagree -- say that,
+	// instead of "Please try again", which told a player to repeat the click that had just failed.
+	if (reason === "outdated") return tr("Your progress changed, try again");
+	return tr("Connection problem, try again");
+}
 
-const TAB_NAMES = ["Equip", "Costumes", "Coins"];
+const TAB_KEYS = ["Packs", "Costumes", "Earn coins"];
+
+// ---------------------------------------------------------------- layout (1120 x 630 design units)
+
+const MARGIN_X = 40;
+/** header row: Back button, title and coin pill share this vertical centre */
+const HEADER_Y = 32;
+/** category navigation (left) and the selected category's content (right) */
+const MAIN_Y = 96;
+const MAIN_H = 512;
+const NAV_W = 200;
+const NOTE_H = 60;
+const CONTENT_X = MARGIN_X + NAV_W + space(4);
+const CONTENT_W = 1120 - MARGIN_X - CONTENT_X;
+
+/** 3 x 3 grid of cards, gap-4 */
+const COLS = 3;
+const ROWS = 3;
+const GAP = space(4);
+const CARD_W = (CONTENT_W - GAP * (COLS - 1)) / COLS;
+const CARD_H = (MAIN_H - GAP * (ROWS - 1)) / ROWS;
+const CARD_PAD = space(4);
+const TITLE_H = 24;
+const DESC_Y = CARD_PAD + TITLE_H + space(1);
+const ACTION_H = BUTTON_SIZE.sm.h;
+const ACTION_W = 100;
+const FOOTER_Y = CARD_H - CARD_PAD - ACTION_H;
+const BADGE_H = 22;
+const COIN_ICON = 18;
+
+/** "Earn coins" tab */
+const EARN_ROW_H = 48;
+const EARN_ROW_GAP = space(2);
+
+function cell(i: number): [number, number] {
+	return [(i % COLS) * (CARD_W + GAP), math.floor(i / COLS) * (CARD_H + GAP)];
+}
+
+/** card footer, left side: coin icon + price in numeric foreground */
+function priceTag(card: Frame, price: number): void {
+	CoinIcon(card, "CoinIcon", CARD_PAD, FOOTER_Y + (ACTION_H - COIN_ICON) / 2, COIN_ICON);
+	const x = CARD_PAD + COIN_ICON + space(2);
+	makeLabel(
+		card,
+		"Price",
+		fmtInt(price),
+		x,
+		FOOTER_Y,
+		CARD_W - x - ACTION_W - CARD_PAD,
+		ACTION_H,
+		TEXT.lg,
+		THEME.foreground,
+		{
+			font: "numeric",
+			align: "left",
+		},
+	);
+}
+
+/** solid-colour badge; `right` = its right edge, `centerY` = its vertical centre (card design units) */
+function badgeAt(card: Frame, name: string, text: string, right: number, centerY: number, color: Color3): number {
+	const w = badgeWidth(text, TEXT.xs, BADGE_H);
+	Badge(card, name, text, { x: right - w, y: centerY - BADGE_H / 2, w, h: BADGE_H, color });
+	return w;
+}
 
 export function showShop(ctx: GameContext, onBack: () => void): () => void {
-	const root = makeFrame(ctx.uiLayer, "Shop", 0, 0, 1120, 630, COLORS.bg);
-	makeFrame(root, "TopBar", 0, 0, 1120, 64, Color3.fromRGB(65, 65, 65));
-	const moneyLabel = makeLabel(root, "Money", `Coins: ${ctx.save.money}`, 860, 16, 240, 36, 22, COLORS.uiYellow);
-	const content = makeFrame(root, "Content", 0, 0, 1120, 630, COLORS.bg, { transparency: 1 });
-	let tab = 0;
+	const lang = ctx.save.settings.langType;
+	const tr = (k: string): string => langGet(k, lang);
+	const { root, body } = makeScreen(ctx.uiLayer, "Shop");
 
-	const refreshMoney = (): void => {
-		moneyLabel.Text = `Coins: ${ctx.save.money}`;
+	Button(body, "Back", `‹  ${tr("Back")}`, {
+		x: MARGIN_X,
+		y: HEADER_Y,
+		w: 124,
+		variant: "secondary",
+		onClick: (): void => onBack(),
+	});
+	makeLabel(body, "Title", tr("Shop"), 184, HEADER_Y, 400, BUTTON_SIZE.default.h, TEXT.xl3, THEME.foreground, {
+		font: "title",
+		align: "left",
+	});
+	const coins = makeCoinPill(body, "Coins", 850, 28, 230, 52, () => ctx.save.money);
+
+	let tab = 0;
+	let busy = false;
+	let render = (): void => {};
+
+	const nav = Sidebar(body, "Categories", {
+		x: MARGIN_X,
+		y: MAIN_Y,
+		w: NAV_W,
+		h: MAIN_H,
+		items: TAB_KEYS.map(k => tr(k)),
+		value: tab,
+		onChange: (i: number): void => {
+			tab = i;
+			render();
+		},
+	});
+	// hint at the bottom of the rail (Packs only)
+	const note = makeLabel(
+		nav.frame,
+		"Note",
+		"",
+		space(3),
+		MAIN_H - NOTE_H - space(3),
+		NAV_W - space(6),
+		NOTE_H,
+		TEXT.sm,
+		THEME.mutedForeground,
+		{ font: "caption", align: "left", valign: "bottom", zIndex: nav.frame.ZIndex + 1 },
+	);
+	const content = makeFrame(body, "Content", CONTENT_X, MAIN_Y, CONTENT_W, MAIN_H, THEME.background, {
+		transparency: 1,
+	});
+
+	const buy = (request: ShopActionRequest, name: string, btn: TextButton, okText: string): void => {
+		if (busy) return;
+		if (!sessionReady()) {
+			toast(ctx, tr("Still loading your progress"), "error");
+			return;
+		}
+		busy = true;
+		setButtonEnabled(btn, false);
+		const res = invokeShopAction(request);
+		busy = false;
+		if (btn.Parent !== undefined) setButtonEnabled(btn, true);
+		if (res.ok) {
+			toast(ctx, `${okText}: ${name}`, "success");
+		} else {
+			toast(ctx, actionErrorText(res.reason, lang), "error");
+		}
+		render();
 	};
 
-	const render = (): void => {
-		clearChildren(content);
-		for (let i = 0; i < 3; i++) {
-			const active = i === tab;
-			const btn = makeButton(
-				content,
-				`Tab${i}`,
-				TAB_NAMES[i],
-				60 + i * 180,
-				84,
-				170,
-				52,
-				active ? COLORS.uiAccent : COLORS.uiPanelLight,
-				(): void => {
-					tab = i;
-					render();
+	/** card footer, right side: Buy / Unlock (outline when the player can't afford it; the server still answers) */
+	const actionButton = (card: Frame, name: string, text: string, price: number, onClick: () => void): TextButton =>
+		Button(card, name, text, {
+			x: CARD_W - CARD_PAD - ACTION_W,
+			y: FOOTER_Y,
+			w: ACTION_W,
+			size: "sm",
+			variant: ctx.save.money >= price ? "default" : "outline",
+			onClick,
+		});
+
+	const renderPacks = (): void => {
+		for (let i = 0; i < SHOP_PACKS.size(); i++) {
+			const pack = SHOP_PACKS[i];
+			const [x, y] = cell(i);
+			const card = Card(content, `Pack${pack.id}`, { x, y, w: CARD_W, h: CARD_H, pad: CARD_PAD });
+			const name = tr(pack.name);
+			let titleW = CARD_W - CARD_PAD * 2;
+			const pending = pendingPacks(ctx.save, pack.id);
+			if (pending > 0) {
+				const text = `×${pending} ${tr("Owned").lower()}`;
+				const right = CARD_W - CARD_PAD;
+				titleW -= badgeAt(card, "Pending", text, right, CARD_PAD + TITLE_H / 2, GAME.info) + space(2);
+			}
+			CardTitle(card, name, { y: CARD_PAD, w: titleW, h: TITLE_H, size: TEXT.lg });
+			CardDescription(card, nl(tr(pack.contents)), { y: DESC_Y, h: FOOTER_Y - DESC_Y - space(0.5) });
+			priceTag(card, pack.price);
+			const btn = actionButton(card, "Buy", tr("Buy"), pack.price, () =>
+				buy({ kind: "buyPack", packId: pack.id }, name, btn, tr("Purchased")),
+			);
+		}
+	};
+
+	const renderCostumes = (): void => {
+		for (let i = 0; i < COSTUMES.size(); i++) {
+			const c = COSTUMES[i];
+			const [x, y] = cell(i);
+			const owned = ownsCostume(ctx.save, c.id);
+			const card = Card(content, `Costume${c.id}`, {
+				x,
+				y,
+				w: CARD_W,
+				h: CARD_H,
+				pad: CARD_PAD,
+				border: owned ? GAME.success : undefined,
+			});
+			const name = tr(c.name);
+			CardTitle(card, name, { y: CARD_PAD, h: TITLE_H, size: TEXT.lg });
+			// which of the two cosmetic slots it goes in (MON-04): an outfit is worn, a pet follows
+			const item = EQUIPS[c.equipId];
+			const itemName = item !== undefined ? tr(item.name) : name;
+			const slotName = cosmeticSlotOf(c.equipId) === EquipSlot.Pet ? tr("Pet") : tr("Outfit");
+			CardDescription(card, `${slotName}: ${itemName}`, { y: DESC_Y });
+			if (owned) {
+				badgeAt(card, "Owned", tr("Owned"), CARD_W - CARD_PAD, FOOTER_Y + ACTION_H / 2, GAME.success);
+			} else {
+				priceTag(card, c.price);
+				const btn = actionButton(card, "Unlock", tr("Unlock"), c.price, () =>
+					buy({ kind: "buyCostume", costumeId: c.id }, name, btn, tr("Unlocked")),
+				);
+			}
+		}
+	};
+
+	const renderEarn = (): void => {
+		const rows: Array<[string, number]> = [
+			[tr("Day survived"), ECONOMY.COINS_PER_DAY],
+			[tr("Record day (every 5 days)"), ECONOMY.MILESTONE_BONUS],
+			[tr("Boss defeated"), ECONOMY.COINS_PER_BOSS],
+			[tr("Welcome gift"), ECONOMY.STARTING_COINS],
+		];
+		const pad = space(6);
+		const headerH = cardHeaderHeight();
+		const listH = rows.size() * EARN_ROW_H + (rows.size() - 1) * EARN_ROW_GAP;
+		const cardH = headerH + listH + pad;
+		const card = Card(content, "Earn", { x: 0, y: 0, w: CONTENT_W, h: cardH, pad });
+		const top = CardHeader(card, tr("Coins are earned by playing"));
+		const rowW = CONTENT_W - pad * 2;
+		const dot = 10;
+		const valueW = 160;
+		for (let i = 0; i < rows.size(); i++) {
+			const [label, value] = rows[i];
+			const row = Card(card, `Row${i}`, {
+				x: pad,
+				y: top + i * (EARN_ROW_H + EARN_ROW_GAP),
+				w: rowW,
+				h: EARN_ROW_H,
+				variant: "muted",
+			});
+			makeFrame(row, "Dot", space(4), (EARN_ROW_H - dot) / 2, dot, dot, GAME.coin, { radius: RADIUS.full });
+			const labelX = space(4) + dot + space(3);
+			makeLabel(
+				row,
+				"Label",
+				label,
+				labelX,
+				0,
+				rowW - labelX - valueW - space(4),
+				EARN_ROW_H,
+				TEXT.base,
+				THEME.foreground,
+				{
+					align: "left",
 				},
 			);
-			if (active) btn.TextColor3 = Color3.fromRGB(30, 30, 30);
+			makeLabel(
+				row,
+				"Value",
+				`+${fmtInt(value)}`,
+				rowW - space(4) - valueW,
+				0,
+				valueW,
+				EARN_ROW_H,
+				TEXT.lg,
+				THEME.foreground,
+				{
+					font: "numeric",
+					align: "right",
+				},
+			);
 		}
-		if (tab === 0) {
-			for (let i = 0; i < SHOP_PACKS.size(); i++) {
-				const pack = SHOP_PACKS[i];
-				const col = i % 3;
-				const row = math.floor(i / 3);
-				const x = 40 + col * 360;
-				const y = 160 + row * 148;
-				const card = makeFrame(content, `Pack${pack.id}`, x, y, 340, 136, COLORS.uiPanel);
-				makeLabel(
-					card,
-					"Name",
-					langGet(pack.name, ctx.save.settings.langType),
-					10,
-					8,
-					320,
-					28,
-					18,
-					COLORS.uiAccent,
-				);
-				const body = makeLabel(
-					card,
-					"Contents",
-					nl(langGet(pack.contents, ctx.save.settings.langType)),
-					10,
-					40,
-					320,
-					56,
-					14,
-					COLORS.uiTextDim,
-				);
-				body.TextYAlignment = Enum.TextYAlignment.Top;
-				makeButton(card, "Buy", `${pack.price} coin`, 90, 100, 160, 30, COLORS.uiPanelLight, (): void => {
-					if (ctx.save.money < pack.price) {
-						toast(ctx, langGet("You don't have enough money", ctx.save.settings.langType));
-						return;
-					}
-					ctx.save.money -= pack.price;
-					ctx.save.shopHave[pack.id] = (ctx.save.shopHave[pack.id] ?? 0) + 1;
-					refreshMoney();
-					toast(ctx, `Purchased ${pack.name}`);
-				});
-			}
-		} else if (tab === 1) {
-			for (let i = 0; i < COSTUMES.size(); i++) {
-				const costume = COSTUMES[i];
-				const col = i % 3;
-				const row = math.floor(i / 3);
-				const x = 40 + col * 360;
-				const y = 160 + row * 148;
-				const card = makeFrame(content, `Costume${costume.id}`, x, y, 340, 136, COLORS.uiPanel);
-				makeLabel(
-					card,
-					"Name",
-					langGet(costume.name, ctx.save.settings.langType),
-					10,
-					8,
-					320,
-					28,
-					18,
-					COLORS.uiAccent,
-				);
-				const price = ctx.save.settings.langType === 0 ? costume.usd : costume.krw;
-				makeLabel(card, "Price", price, 10, 44, 320, 26, 15, COLORS.uiTextDim);
-				const owned = costumeOwned.get(costume.id) === true;
-				if (owned) {
-					makeLabel(card, "Owned", "Owned", 90, 100, 160, 30, 16, COLORS.uiGreen);
-				} else {
-					makeButton(card, "Unlock", "Unlock 10", 90, 100, 160, 30, COLORS.uiPanelLight, (): void => {
-						if (ctx.save.money < 10) {
-							toast(ctx, langGet("You don't have enough money", ctx.save.settings.langType));
-							return;
-						}
-						ctx.save.money -= 10;
-						costumeOwned.set(costume.id, true);
-						refreshMoney();
-						render();
-						toast(ctx, `Unlocked ${costume.name}`);
-					});
-				}
-			}
-		} else {
-			for (let i = 0; i < COIN_PACKS.size(); i++) {
-				const pack = COIN_PACKS[i];
-				const col = i % 3;
-				const row = math.floor(i / 3);
-				const x = 40 + col * 360;
-				const y = 160 + row * 148;
-				const card = makeFrame(content, `Coin${pack.id}`, x, y, 340, 136, COLORS.uiPanel);
-				makeLabel(
-					card,
-					"Name",
-					langGet(pack.name, ctx.save.settings.langType),
-					10,
-					8,
-					320,
-					28,
-					18,
-					COLORS.uiAccent,
-				);
-				if (pack.usd !== "") {
-					makeLabel(card, "Price", pack.usd, 10, 44, 320, 26, 15, COLORS.uiTextDim);
-				}
-				if (pack.id === 0) {
-					makeButton(card, "Ad", "Watch ad +5", 90, 100, 160, 30, Color3.fromRGB(80, 120, 80), (): void => {
-						ctx.save.money += 5;
-						refreshMoney();
-						toast(ctx, "Rewarded, 5 coins");
-					});
-				} else {
-					const stub = makeButton(
-						card,
-						"Iap",
-						pack.usd,
-						90,
-						100,
-						160,
-						30,
-						Color3.fromRGB(50, 50, 58),
-						(): void => {
-							toast(ctx, "IAP coming soon");
-						},
-					);
-					stub.TextColor3 = COLORS.uiTextDim;
-				}
-			}
-		}
+		makeLabel(
+			content,
+			"Stats",
+			`${tr("Best day")}: ${ctx.save.bestDay}   ·   ${tr("Bosses defeated")}: ${fmtInt(ctx.save.bossKills)}`,
+			0,
+			cardH + space(4),
+			CONTENT_W,
+			24,
+			TEXT.sm,
+			THEME.mutedForeground,
+			{ font: "caption", align: "left" },
+		);
+	};
+
+	render = (): void => {
+		if (content.Parent === undefined) return;
+		clearChildren(content);
+		coins.refresh();
+		note.Text = tab === 0 ? tr("Delivered when your next game starts") : "";
+		if (tab === 0) renderPacks();
+		else if (tab === 1) renderCostumes();
+		else renderEarn();
 	};
 
 	render();
-
-	makeButton(root, "Back", "Back", 970, 84, 120, 52, COLORS.uiPanelLight, (): void => onBack());
+	autoFocus(nav.items[tab]);
+	const unsubscribe = onWalletChanged(() => {
+		if (!busy) render();
+		else coins.refresh();
+	});
 
 	return (): void => {
+		unsubscribe();
 		root.Destroy();
 	};
 }

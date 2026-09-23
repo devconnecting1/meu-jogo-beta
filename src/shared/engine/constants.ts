@@ -89,6 +89,72 @@ export const DESIGN = {
 
 	// building footprints (sprite * 4)
 	BUILDING_W: [428, 684, 808, 1068, 1064] as Array<number>,
+
+	/**
+	 * Seed of the procedural town. Fixed (like Dead Town's hand-made map) so the city, its shops
+	 * and the boss plazas are the same every session; 0 = a new random town each run.
+	 */
+	TOWN_SEED: 7331,
+} as const;
+
+/**
+ * Town layout (world units; 1 m ≈ 55 u, see docs/DESIGN_RULES.md). Shared so AI/physics/validator
+ * can reason about doors, walls, sidewalks and lanes.
+ */
+export const TOWN = {
+	/** map border (dense forest/fence) thickness */
+	BORDER: 600,
+	/** two-lane street (~7 m): with cars parked at both curbs one lane (~2.9 m) stays free */
+	ROAD_W: 3 * 128,
+	/** avenue (~14 m, two lanes each way + planted median): one N–S and one E–W, crossing downtown */
+	AVENUE_W: 6 * 128,
+	MEDIAN_W: 96,
+	/** target lot size between roads (actual lots vary ±ROAD_JITTER per side) */
+	LOT_TARGET: 1536,
+	ROAD_JITTER: 64,
+	/**
+	 * Sidewalk band inside a lot along every road-facing edge (~2.3 m, Dead Town's 128 px tile):
+	 * the service strip at the curb (grass verge / tree pits: street trees, bins) + the clear path.
+	 */
+	SIDEWALK: 128,
+	VERGE: 48,
+	/** minimum gap between the sidewalk and a building's street face (civic buildings) */
+	SETBACK: 48,
+	/** houses keep a front yard; shops stand at the sidewalk */
+	SETBACK_HOUSE_MIN: 112,
+	SETBACK_HOUSE_MAX: 176,
+	SETBACK_SHOP_MAX: 16,
+	/** gas-station forecourt depth: pump islands between the street and the shop */
+	FORECOURT: 320,
+	/** margin between a building and the yard edge on its non-street sides */
+	SIDE_YARD: 48,
+	/** minimum alley between two buildings (player/zombie body is 36) */
+	BUILDING_GAP: 96,
+	/** building wall thickness and doorway width */
+	WALL_T: 20,
+	DOOR_W: 112,
+	/** tree trunk collision (original mask_50_50) and visual canopy radius range */
+	TREE_TRUNK: 44,
+	CANOPY_R_MIN: 75,
+	CANOPY_R_MAX: 86,
+	/** street-tree spacing: one pitch per street (8.7–10.9 m), trees on both sides line up */
+	TREE_PITCH_MIN: 480,
+	TREE_PITCH_MAX: 600,
+	/** nothing parked or planted closer than one car length to a street corner */
+	CORNER_CLEAR: 200,
+	/** car collision (original mask_200_100) */
+	CAR_L: 200,
+	CAR_W: 100,
+	/** parked car ↔ curb, and the parallel-parking stall length (car + gap) */
+	CURB_GAP: 12,
+	PARK_SLOT: 264,
+	/** contiguous width that always stays free across a carriageway (one lane) */
+	LANE_FREE: 150,
+	TRASH: 36,
+	/** radius kept free of buildings/trees/cars around each boss anchor */
+	BOSS_CLEAR: 560,
+	/** spatial grid cell for solids */
+	GRID_CELL: 512,
 } as const;
 
 /** seconds helpers: original frames at 30fps */

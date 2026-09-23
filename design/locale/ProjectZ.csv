@@ -1,0 +1,525 @@
+Key,Context,Example,Source
+,,,Craft
+,,,Item
+,,,Skill
+,,,Placeable
+,,,Weapon
+,,,Equipment
+,,,Etc
+,,,Ammo
+,,,Usable
+,,,Survival
+,,,Fighting
+,,,Material
+,,,Make
+,,,Equip
+,,,Drop
+,,,Use
+,,,Cook
+,,,Melt
+,,,Learn
+,,,Attack
+,,,Defense
+,,,Rate of fire
+,,,Recoil
+,,,Round
+,,,Health recovery
+,,,Hunger recovery
+,,,Speed
+,,,Reloading
+,,,Skill point
+,,,Centipede
+,,,Rafflesia
+,,,Giant
+,,,Hedgehog
+,,,Game over#Continue?
+,,,Would you watch a short video#to get a bonus parcel?
+,,,Price
+,,,Are you sure#you want to quit?
+,,,You don't have enough money
+,,,Would you rate our game?
+,,,Do you want to#watch the tutorial?
+,,,Level UP
+,,,Night is coming
+,,,Good morning
+,,,Wave 1
+,,,Wave 2
+,,,Wave 3
+,,,You killed it
+,,,Dagger
+,,,Wooden stick
+,,,Axe
+,,,Crowbar
+,,,Saw
+,,,Chainsaw
+,,,Baseball bat
+,,,Machete
+,,,Golf club
+,,,Auto pistol
+,,,Pistol
+,,,Katana
+,,,Revolver
+,,,Semi auto rifle
+,,,AK-40
+,,,M10
+,,,Pump action shotgun
+,,,Semi auto shotgun
+,,,Light machine gun
+,,,Heavy machine gun
+,,,Bolt action sniper
+,,,Semi auto sniper
+,,,Bow
+,,,Cross bow
+,,,Compound bow
+,,,Flamethrower
+,,,Stun gun
+,,,Stone axe
+,,,Cotton clothes
+,,,Leather jacket
+,,,Leather armor
+,,,Wooden armor
+,,,Steel armor
+,,,Plastic armor
+,,,Night vision
+,,,Laser sight
+,,,Compass
+,,,Sundial
+,,,Watch
+,,,Digital Watch
+,,,Gun silencer
+,,,Flashlight
+,,,Robot suit
+,,,Torchlight
+,,,Raw meat
+,,,Cooked meat
+,,,Potato
+,,,Baked potato
+,,,Bread
+,,,First aid kit
+,,,Pain killer
+,,,Adrenaline
+,,,Sedative
+,,,Canned food
+,,,Frozen pizza
+,,,Pizza
+,,,Bandage
+,,,Frozen meal
+,,,Cooked meal
+,,,Mushroom
+,,,Mushroom soup
+,,,Apple
+,,,Berry
+,,,Craft desk
+,,,Pro craft desk
+,,,Turret
+,,,Turret drone
+,,,Lamp
+,,,Lamp drone
+,,,Battery box
+,,,Solar generator
+,,,Nuclear reactor
+,,,Oil generator
+,,,Wooden barricade
+,,,Wooden door
+,,,Steel barricade
+,,,Steel door
+,,,Campfire
+,,,Brazier
+,,,Electric turret
+,,,Trap
+,,,signal generator
+,,,Cooker
+,,,Electric furnace
+,,,Bicycle
+,,,Motorcycle
+,,,Wood
+,,,Stone
+,,,Piece of steel 
+,,,Steel
+,,,Piece of gold
+,,,Gold
+,,,Blueprint
+,,,Machine parts
+,,,Battery
+,,,Bulb
+,,,Gunpowder
+,,,Cloth
+,,,Computer chip
+,,,Voltage circuit
+,,,Engine
+,,,Drone
+,,,Night Craft desk
+,,,Night pro craft desk
+,,,Leather
+,,,Solar panel
+,,,Radioactive material
+,,,Normal ammo
+,,,Shotgun ammo
+,,,Machinegun ammo
+,,,Arrow
+,,,Oil
+,,,Rotten meat
+,,,GPS machine
+,,,Pigeon
+,,,White pigeon
+,,,Eagle
+,,,Carolina
+,,,Malamute
+,,,Doberman
+,,,Santa
+,,,Zombie
+,,,Cowboy
+,,,Golden axe
+,,,Golden katana
+,,,Small keen knife
+,,,Stick made of wood
+,,,Heavy fire axe
+,,,Metal bar with a curve
+,,,Chain with a hard toothed edge
+,,,Mechanical saw with a rotating chain
+,,,Wooden club used to hit a baseball
+,,,Large heavy knife
+,,,Metal club used to hit a golf ball
+,,,Semi-automatic pistol
+,,,Small non-automatic handgun
+,,,Sharp light knife
+,,,Powerful handgun that has six shots
+,,,Semi-automatic rifle
+,,,Powerful assault rifle
+,,,Accurate assault rifle
+,,,Pump action shotgun. One by one
+,,,Semi-automatic shotgun
+,,,Bolt action sniper rifle
+,,,Semi-automatic sniper rifle
+,,,Classic bow
+,,,Powerful horizontal bow
+,,,"Modern bow that uses a pulley system,"
+,,,Project a stream of fire
+,,,Fire electric shock to the nearest zombie 
+,,,Heavy stone axe
+,,,Clothes made from cotton
+,,,Jacket made from leather
+,,,Armor made from leather
+,,,Armor made from wood
+,,,Armor made from Steel
+,,,Armor made from plastic
+,,,Device that enhance night time vision
+,,,Laser to enhance the targeting
+,,,Instrument that shows the direction
+,,,Instrument that shows the time by the shadow of sun
+,,,mechanical device for measuring time
+,,,Electrical device for measuring time
+,,,Device attached to the gun to reduce the noise
+,,,Battery-operated portable light
+,,,Wearable machine
+,,,Portable fire
+,,,Kind of meat
+,,,Delicious cooked meat
+,,,Root vegetable
+,,,Delicious baked potato
+,,,White bread Easy to eat
+,,,Collection of equipment for giving first aid
+,,,Drug used to get relief from pain
+,,,You will feel better after a shot
+,,,You will be able to aim better
+,,,I have no idea what's in it
+,,,You need to cook it before eating
+,,,Well-cooked pizza
+,,,Help you to stop bleeding
+,,,Ready made meal
+,,,Ready to eat
+,,,Is it toxic?
+,,,Warm soup makes you calm down
+,,,Small red apple
+,,,Kind of berry
+,,,Basic craft desk. In order to make items
+,,,Professional craft desk used to make advanced items
+,,,Automatic gun machine used to defend the point
+,,,Flying turret. It will follow and protect you
+,,,Elrectic lamp to provide light at night
+,,,Flying lamp. It will follow you and provide powerful light
+,,,Cells used to power electrical devices
+,,,Generating electricity by solar panels
+,,,Device used to control a nuclear reaction. Permanent generator
+,,,Generator used to make electricity by using oil
+,,,Wooden wall used to block the way
+,,,Wooden door only for you. Zombies can't go through
+,,,Steel wall used to block the way
+,,,Steel door only for you. Zombies can't go through
+,,,Fire that provides light and heat for cooking
+,,,Fire that provides light and heat for smelting
+,,,Turret that uses electric shock to defend the point
+,,,Trap makes zombies slow down
+,,,Machine that generate GPS signal for you to find home
+,,,Electric cooker that provides heat for cooking
+,,,Electric machine that provides heat for smelting
+,,,Handmade bicycle. Better than walking
+,,,"Powered by a motor, using oil"
+,,,Wood. Basic material
+,,,Stone. Basic material
+,,,Small piece that can be used to make steel
+,,,Strong metal
+,,,Small piece that can be used to make gold
+,,,Shiny yellow metal
+,,,Technical drawing
+,,,Parts of machine
+,,,Cell that can keep electricity
+,,,Glass bulb inserted into a lamp or a socket
+,,,Explosive powder of mixture
+,,,Fabric made from cotton
+,,,Electronic device for processing data
+,,,Circuit for making extremely high voltage
+,,,Machine that converts power into motion
+,,,Flying robot
+,,,Can make items at night
+,,,Can make advanced items at night
+,,,Material made from the skin of an animal
+,,,Panel used to absorb the sunlight and generate electricity
+,,,Material that has radioactive energy
+,,,Ammo for rifle and pistol
+,,,Ammo for shotgun
+,,,Ammo for machinegun
+,,,Arrow for bow
+,,,Liquid for use as a fuel
+,,,Stinky rotten meat
+,,,Device to find geographic position
+,,,Pigeon to collect items
+,,,White pigeon to collect items
+,,,Eagle to attack zombies
+,,,Dog to collect items and attack zombies
+,,,Santa costume
+,,,Zombie costume
+,,,Cowboy costume
+,,,Shining golden axe
+,,,Shining golden katana
+,,,Health
+,,,Recovery
+,,,Knockback
+,,,Melee damage
+,,,Quick reload
+,,,Shooting skill
+,,,Robin Hood
+,,,Trot
+,,,Patience
+,,,Pickpocket
+,,,Theif
+,,,Chef
+,,,Dwarf
+,,,Robotics
+,,,Engineering
+,,,Cat
+,,,Nocturnal
+,,,Repairman
+,,,Move shooting
+,,,Head shooter
+,,,Poison immunity
+,,,Health increases
+,,,Recovery increases
+,,,Knockback increases
+,,,Melee damage increases
+,,,Roload becomes faster
+,,,Accuracy improves
+,,,Bow accuracy improves
+,,,Speed increases
+,,,Hungry decreases
+,,,Zombies drop more items
+,,,Find more items
+,,,A chance to get more foods
+,,,A chance to get more metal
+,,,Turret reinforced
+,,,Generator reinforced
+,,,Footsteps sound decreases
+,,,Night vision increases
+,,,Repair speed increases
+,,,Accuracy improves with moving
+,,,Able to shot heads
+,,,Get less damage from poison
+,,,Starter pack
+,,,Food aid
+,,,Emergency kit
+,,,Basic craft kit
+,,,Pro craft kit
+,,,Electric craft kit
+,,,Ammo craft kit
+,,,Pigeon the bird
+,,,Carolina the dog
+,,,5 coins
+,,,100 coins
+,,,300 + 30 coins
+,,,600 + 100 coins
+,,,1000 + 300 coins
+,,,Watch ads
+,,,Wait for ads
+,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
+,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
+,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
+,,,Wood X 20#Cloth X 10#Stone X 20
+,,,Blueprint X 5#Steel X 20#Machine parts X 10
+,,,Battery X 5#Computer chip X 2#Bulb X 2
+,,,Steel X 10#Gunpowder X 10
+,,,Pigeon the bird X 1
+,,,Carolina the dog X 1
+,,,Please try again
+,,,You can't use that now
+,,,First steps
+,,,Thomas Edison
+,,,Melee weapons expert
+,,,Bow expert
+,,,Collector
+,,,Blacksmith
+,,,Sniper
+,,,Centipede slayer
+,,,Rafflesia slayer
+,,,Giant slayer
+,,,Hedgehog slayer
+,,,Zombie slayer
+,,,Special zombie slayer
+,,,Woods collector
+,,,Good day
+,,,Rider
+,,,Never die
+,,,Ninja
+,,,Play
+,,,Continue
+,,,New game
+,,,Shop
+,,,Settings
+,,,Achievements
+,,,Records
+,,,How to play
+,,,Credits
+,,,General
+,,,Touch controls
+,,,Controls
+,,,About
+,,,Audio
+,,,Interface
+,,,SFX
+,,,BGM
+,,,HUD size
+,,,HUD size scales the on-screen panels. The touch controls have their own size in Touch controls.
+,,,Stick size
+,,,Stick height
+,,,Aim pad size
+,,,Aim pad height
+,,,Floating stick
+,,,Left-handed
+,,,Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.
+,,,Off
+,,,On
+,,,Defaults
+,,,Reset controls
+,,,Keyboard
+,,,Keyboard & mouse
+,,,Touch
+,,,Gamepad
+,,,Menu
+,,,Backpack
+,,,Game
+,,,Genre
+,,,Top-down zombie survival
+,,,Inspired by
+,,,Mode
+,,,"Co-op, up to"
+,,,survivors
+,,,Built with
+,,,Open credits
+,,,Your screen
+,,,"General: sound effects and music volume, and the size of the on-screen panels.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to.#About: the game and its credits.#Changes are saved with your progress, by themselves."
+,,,Survivor
+,,,Current day
+,,,Best day
+,,,Level
+,,,Bosses defeated
+,,,Loadout
+,,,Clothes
+,,,Hand
+,,,Gun
+,,,Outfit
+,,,Pet
+,,,Zombie survival
+,,,Loading your progress...
+,,,Packs & costumes
+,,,Personal bests
+,,,Back
+,,,Close
+,,,Buy
+,,,Owned
+,,,Unlock
+,,,Packs
+,,,Costumes
+,,,Earn coins
+,,,Delivered when your next game starts
+,,,Progress not loaded
+,,,"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving."
+,,,Retry
+,,,Play without saving
+,,,Saving is unavailable in this environment
+,,,Progress saved
+,,,Saving...
+,,,Could not save
+,,,"Welcome, survivor! Here are 20 coins to start"
+,,,Menu
+,,,Back to game
+,,,Backpack
+,,,Save
+,,,Home
+,,,Game over
+,,,Rebirth
+,,,Survival days
+,,,Continue price
+,,,Your run is over
+,,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
+,,,Purchased
+,,,Unlocked
+,,,Not enough coins
+,,,Too many packs waiting
+,,,Already owned
+,,,Please wait a moment
+,,,"Connection problem, try again"
+,,,Still loading your progress
+,,,Coins are earned by playing
+,,,Day survived
+,,,Record day (every 5 days)
+,,,Boss defeated
+,,,Welcome gift
+,,,No ammo
+,,,Melee
+,,,Night
+,,,Morning
+,,,Afternoon
+,,,Evening
+,,,Day
+,,,Achievement unlocked
+,,,Delivered
+,,,Your progress was loaded; it applies when you return to the lobby
+,,,Zombies are coming
+,,,Survive the night
+,,,Already at full health
+,,,Back on your feet
+,,,Bosses
+,,,Continue this run
+,,,Daybreak in
+,,,Days survived
+,,,"Everything the game listens to, on every device"
+,,,Fire lights the night and cooks what you find. Build one when you can.
+,,,Getting started
+,,,Got it
+,,,Life day
+,,,Nice.
+,,,Night came first
+,,,Rebirth is for your own world; here you wake at daybreak
+,,,Reload
+,,,Skip
+,,,"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it."
+,,,"The town is not yours to restart.#You wake with the others, at first light."
+,,,You have
+,,,You survived
+,,,You survived a day
+,,,You're already full
+,,,"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1."
+,,,"Your progress changed, try again"
+,,,Zombies killed
+,,,days
+,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
+,,,The backpack and the menu never stop the world: open them somewhere safe

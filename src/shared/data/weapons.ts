@@ -469,3 +469,38 @@ export const WEAPONS: Array<WeaponDef> = [
 		ammoPool: AmmoPool.Normal,
 	},
 ];
+
+/**
+ * Melee reach (world units, from the player's centre to the zombie's edge). In the weapon table
+ * `range` of a melee weapon is the swing's angular speed (deg/frame) and `cone` the half-arc of the
+ * sweep, not a distance — the original's reach was the weapon sprite, so it lives here.
+ */
+export const MELEE_REACH: Record<number, number> = {
+	0: 52, // dagger
+	1: 74, // wooden stick
+	2: 76, // axe
+	3: 70, // crowbar
+	4: 66, // saw
+	5: 62, // chainsaw
+	6: 80, // baseball bat
+	7: 78, // machete
+	8: 84, // golf club
+	11: 85, // katana
+	27: 72, // stone axe
+	28: 78, // golden axe
+	29: 88, // golden katana
+};
+
+export function meleeReach(w: WeaponDef): number {
+	return MELEE_REACH[w.id] ?? 70;
+}
+
+/** melee weapons that chop trees for extra wood (axes and saws) */
+export function isChoppingTool(w: WeaponDef): boolean {
+	return w.id === 2 || w.id === 4 || w.id === 5 || w.id === 27 || w.id === 28;
+}
+
+/** weapons with a magazine that reload like guns (the crossbow too, unlike the draw-bows) */
+export function usesMagazine(w: WeaponDef): boolean {
+	return w.mag > 0 && (w.kind !== WeaponKind.Bow || w.id === 23);
+}

@@ -1,0 +1,327 @@
+/*
+ * The action button (E), resolved by the SERVER (docs/MULTIPLAYER.md §2.1, §2.4, §4.5, §8.1).
+ *
+ * The one design decision worth stating, because everything else follows from it: **the client never names
+ * a target.** It sends the press, as one of the four edges the input command already carries (§2.2), and the
+ * server runs the very same `interactTarget` query the HUD ran — at the position the SERVER simulated. So:
+ *
+ *   - there is no `interact(solidId)` payload to forge, and therefore no "open the door on the far side of
+ *     town", no "search a building I am not in", no "pick up an item 4000 units away" (§8.3);
+ *   - the press is ordered with the movement it happened during, for free, because it IS the movement packet
+ *     (§2.4 — no second channel to race);
+ *   - the HUD's hint and the server's action cannot disagree about priority, because they call one function
+ *     (shared/sim/interactQuery.ts), which is why that module was pulled out of the client in the first place.
+ *
+ * And the thing F3 exists to fix: there is ONE door. Opening it is a `DoorSet` delta to everybody (§4.5,
+ * global — everybody predicts their movement against it), so a door cannot be open for one survivor and shut
+ * for the next. Same for a light, a repaired barricade and a looted house.
+ *
+ * Pure module: no Instances, no services, no os.clock.
+ */
+import { countItem, removeItem } from "shared/sim/inventory";
+import {
+	bodiesOverlapRect,
+	canRepair,
+	DOOR_REACH,
+	edgeDist,
+	interactTarget,
+	isFire,
+	repairMaterial,
+	SOLID_REACH,
+} from "shared/sim/interactQuery";
+import { segmentClear } from "shared/game/physics";
+import { buildingAt, isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
+import { PlayerSaveData } from "shared/game/save";
+import { PlayerState } from "shared/game/player";
+import { ZombieState } from "shared/game/entities";
+import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
+import { ITEM_INTEREST } from "shared/net/mpConfig";
+import { ServerItems } from "./items";
+import { WorldOut } from "./worldOut";
+
+/** §8.1: the reach checks get the same latency allowance as `pickup` */
+export const REACH_LATENCY_SLACK = 10;
+/** obj_campfire: 1000 wood burning 0.1 per frame at 30 fps → ~5.5 min of fire (the original's number) */
+export const FIRE_TIME = 1000 / 0.1 / 30;
+/** relighting a burnt-out fire costs this much wood */
+export const FIRE_WOOD = 5;
+/** ETC index of wood */
+export const WOOD_INDEX = 23;
+/** the fire sweep runs at 2 Hz, like the original's `burnFires` */
+const FIRE_STEP_S = 0.5;
+/** how far around a survivor fires are burnt down (the original's box) */
+const FIRE_RANGE = 2500;
+/** a repair with wood restores this much of the maximum; the "handy" skill doubles it */
+const REPAIR_RATE = 0.25;
+const REPAIR_RATE_SKILLED = 0.5;
+/** skill index of "handy" (the one that doubles a repair) */
+const SKILL_HANDY = 17;
+
+/** what the press did, for the caller's Fx and for the tests */
+export type InteractOutcome =
+	| { kind: "none" }
+	| { kind: "item"; count: number }
+	| { kind: "door"; solid: Solid; open: boolean }
+	| { kind: "light"; solid: Solid; powered: boolean }
+	| { kind: "mapItem"; solid: Solid; dropped: boolean }
+	| { kind: "repair"; solid: Solid }
+	| { kind: "search"; building: Solid; taken: number }
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
+
+export interface ServerInteractionOptions {
+	world: WorldData;
+	items: ServerItems;
+	out: WorldOut;
+	/** cosmetic effects (a tree shaking); left undefined they are simply dropped, which is what tests want */
+	fx?: (event: FxEvent) => void;
+}
+
+/** the world as the resolver needs to see it for one press */
+export interface InteractContext {
+	slot: number;
+	state: PlayerState;
+	save: PlayerSaveData;
+	/** every survivor's body — closing a door on one is refused (§8.1) */
+	players: ReadonlyArray<PlayerState>;
+	zombies: ReadonlyArray<ZombieState>;
+	/** the world clock in game hours, `gameHours(day, dayTime)` */
+	hours: number;
+}
+
+export class ServerInteraction {
+	private readonly world: WorldData;
+	private readonly items: ServerItems;
+	private readonly out: WorldOut;
+	private readonly fx?: (event: FxEvent) => void;
+	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
+	private readonly fuel = new Map<Solid, number>();
+	private fireTick = 0;
+	private readonly scratch = new Array<Solid>();
+	/** the building whose loot flag each slot was last told about, or 0 for "nothing here" */
+	private readonly lootSeen = new Map<number, number>();
+
+	constructor(options: ServerInteractionOptions) {
+		this.world = options.world;
+		this.items = options.items;
+		this.out = options.out;
+		this.fx = options.fx;
+	}
+
+	/**
+	 * One press of E. Everything is decided from `ctx.state.x/y`, which is the server's position.
+	 *
+	 * A survivor who is dead, or who has a construction on the cursor, presses E for something else — the
+	 * caller (server/sim/build.ts) takes the edge first in that case, exactly as `BuildSystem.handleInput`
+	 * swallows the frame on the client.
+	 */
+	act(ctx: InteractContext): InteractOutcome {
+		const p = ctx.state;
+		if (p.dead) return { kind: "none" };
+		const target = interactTarget(this.world, p.x, p.y);
+		if (target === undefined) return { kind: "none" };
+
+		if (target.kind === "item") {
+			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
+			if (got.ok) return { kind: "item", count: got.count };
+			return { kind: "refused", why: got.why === "range" ? "range" : "taken" };
+		}
+
+		if (target.kind === "door") return this.door(ctx, target.solid);
+		if (target.kind === "light") return this.light(ctx, target.solid);
+		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
+		if (target.kind === "solid") return this.repair(ctx, target.solid);
+		return this.search(ctx, target.building);
+	}
+
+	// ---------------------------------------------------------------- one door, for everybody
+
+	private door(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, DOOR_REACH)) return { kind: "refused", why: "range" };
+		const willOpen = !(s.open ?? false);
+		// §8.1: closing a door on a body is refused — otherwise a door is a weapon, and a griefing tool
+		if (!willOpen && bodiesOverlapRect(s, ctx.players, ctx.zombies)) return { kind: "refused", why: "blocked" };
+		s.open = willOpen;
+		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
+		// client predicts its own movement against it. A door somebody was not told about is a wall.
+		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });
+		return { kind: "door", solid: s, open: willOpen };
+	}
+
+	// ---------------------------------------------------------------- lamps and fires
+
+	private light(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		if (!isFire(s)) {
+			const powered = !(s.powered ?? false);
+			s.powered = powered;
+			this.emitLight(s, powered);
+			return { kind: "light", solid: s, powered };
+		}
+		if (s.powered === true) {
+			s.powered = false;
+			this.emitLight(s, false);
+			return { kind: "light", solid: s, powered: false };
+		}
+		if (this.fuelOf(s) <= 0) {
+			if (countItem(ctx.save, 4, WOOD_INDEX) < FIRE_WOOD) return { kind: "refused", why: "material" };
+			removeItem(ctx.save, 4, WOOD_INDEX, FIRE_WOOD);
+			this.fuel.set(s, FIRE_TIME);
+		}
+		s.powered = true;
+		this.emitLight(s, true);
+		return { kind: "light", solid: s, powered: true };
+	}
+
+	/** seconds of fire left; a fire nobody has burnt yet is full, as in the original */
+	fuelOf(s: Solid): number {
+		return this.fuel.get(s) ?? FIRE_TIME;
+	}
+
+	// ---------------------------------------------------------------- trees, cars, bins
+
+	private mapItem(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		if (this.items.cooldownOf(s) > 0) return { kind: "refused", why: "cooldown" };
+		const dropped = this.items.hitMapItem(s, false, ctx.state.x, ctx.state.y);
+		// §4.5 routes the shake "via Fx": it is cosmetic and self-correcting, so it does not need to be reliable
+		if (this.fx !== undefined) {
+			this.fx({
+				t: FxType.SolidShake,
+				solidId: s.id,
+				angle: math.atan2(s.y + s.h / 2 - ctx.state.y, s.x + s.w / 2 - ctx.state.x),
+				strength: 1,
+			});
+		}
+		return { kind: "mapItem", solid: s, dropped };
+	}
+
+	// ---------------------------------------------------------------- repair
+
+	private repair(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		if (!canRepair(s)) return { kind: "none" };
+		const mat = repairMaterial(s);
+		// through `removeItem`, not by writing `invenEtc[i] -= 1`: the client's version bypassed the
+		// inventory API and so bypassed its "do you actually have this?" check
+		if (!removeItem(ctx.save, mat.kind, mat.index, 1)) return { kind: "refused", why: "material" };
+		const rate = (ctx.save.skillLevels[SKILL_HANDY] ?? 0) > 0 ? REPAIR_RATE_SKILLED : REPAIR_RATE;
+		s.hp = math.min(s.hpMax, s.hp + s.hpMax * rate);
+		this.out.queueNear(
+			{ t: WorldEv.SolidHp, entries: [{ id: s.id, hp: s.hpMax > 0 ? s.hp / s.hpMax : 1 }] },
+			s.x + s.w / 2,
+			s.y + s.h / 2,
+			ITEM_INTEREST,
+		);
+		return { kind: "repair", solid: s };
+	}
+
+	// ---------------------------------------------------------------- searching a building
+
+	private search(ctx: InteractContext, b: Solid): InteractOutcome {
+		const found = this.items.search(ctx.save, ctx.state.x, ctx.state.y, ctx.hours);
+		if (found.building === undefined) return { kind: "refused", why: "range" };
+		if (found.taken.size() === 0) return { kind: "refused", why: "empty" };
+		// the flag for everyone standing in that house is refreshed by the sweep in `step`, on the next
+		// tick: one place decides who is inside what, instead of two that can disagree
+		return { kind: "search", building: b, taken: found.taken.size() };
+	}
+
+	// ---------------------------------------------------------------- the world's own upkeep
+
+	/**
+	 * Burns the fires near the survivors and puts out the ones that ran dry, at 2 Hz like the original.
+	 * A fire going out is a `LightSet` delta: it changes what the night looks like, and at §4.3 it changes
+	 * which zombies are replicated at all.
+	 */
+	step(players: ReadonlyArray<PlayerState>, slots: ReadonlyArray<number>, dt: number): void {
+		this.items.step(dt);
+		this.publishLootFlags(players, slots);
+		this.fireTick += dt;
+		if (this.fireTick < FIRE_STEP_S) return;
+		const step = this.fireTick;
+		this.fireTick = 0;
+		for (const p of players) {
+			const found = querySolids(
+				this.world,
+				p.x - FIRE_RANGE,
+				p.y - FIRE_RANGE,
+				p.x + FIRE_RANGE,
+				p.y + FIRE_RANGE,
+				this.scratch,
+			);
+			for (const s of found) {
+				if (!isFire(s) || s.powered !== true) continue;
+				const left = this.fuelOf(s) - step;
+				if (left > 0) {
+					this.fuel.set(s, left);
+					continue;
+				}
+				this.fuel.set(s, 0);
+				s.powered = false;
+				this.emitLight(s, false);
+			}
+			this.scratch.clear();
+		}
+		this.forgetGone();
+	}
+
+	/**
+	 * §4.3/§4.5 `LootFlag`: "there is something to search here" reaches ONLY whoever is standing inside, and
+	 * only when the answer changes. The content never travels at all — the server hands the items straight
+	 * into the backpack of whoever searched — so the most a modified client can learn from this channel is
+	 * what its own player could already see by walking in.
+	 *
+	 * One sweep instead of a flag pushed from `search`, because two survivors can be in the same house: the
+	 * one who did not press E has to watch the hint go out too.
+	 */
+	private publishLootFlags(players: ReadonlyArray<PlayerState>, slots: ReadonlyArray<number>): void {
+		for (let i = 0; i < players.size(); i++) {
+			const slot = slots[i] ?? i;
+			const p = players[i];
+			const b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
+			const has = b !== undefined && this.items.hasLoot(b);
+			const id = b !== undefined && has ? b.id : 0;
+			if (this.lootSeen.get(slot) === id) continue;
+			const before = this.lootSeen.get(slot);
+			this.lootSeen.set(slot, id);
+			// leaving a building (or emptying it) turns the old flag off before the new one goes on
+			if (before !== undefined && before !== 0) {
+				this.out.queueFor(slot, { t: WorldEv.LootFlag, buildingId: before, hasLoot: false });
+			}
+			if (id !== 0) this.out.queueFor(slot, { t: WorldEv.LootFlag, buildingId: id, hasLoot: true });
+		}
+	}
+
+	/** the survivor left: forget which building they were told about (§4.4, a slot is per session) */
+	remove(slot: number): void {
+		this.lootSeen.delete(slot);
+	}
+
+	// ---------------------------------------------------------------- internals
+
+	/**
+	 * §8.1: within reach of the solid's EDGE, with a latency allowance, and with a clear line to it — so a
+	 * wall between the survivor and a door is still a wall.
+	 */
+	private inReach(p: PlayerState, s: Solid, limit: number): boolean {
+		if (edgeDist(s, p.x, p.y) > limit + REACH_LATENCY_SLACK) return false;
+		const cx = math.clamp(p.x, s.x, s.x + s.w);
+		const cy = math.clamp(p.y, s.y, s.y + s.h);
+		return segmentClear(this.world, p.x, p.y, cx, cy, other => other !== s && isBlocking(other));
+	}
+
+	private emitLight(s: Solid, powered: boolean): void {
+		// §4.5 filters LightSet by interest: a lamp you cannot see does not change your screen. The radius is
+		// the item one (1800 u), comfortably past the 1650 u at which an entity leaves interest at all.
+		this.out.queueNear({ t: WorldEv.LightSet, id: s.id, powered }, s.x + s.w / 2, s.y + s.h / 2, ITEM_INTEREST);
+	}
+
+	/** drops the fuel entries of fires that were destroyed (the map keys them by object identity) */
+	private forgetGone(): void {
+		const gone = new Array<Solid>();
+		for (const [s] of this.fuel) {
+			if (s.removed === true) gone.push(s);
+		}
+		for (const s of gone) this.fuel.delete(s);
+	}
+}

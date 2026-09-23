@@ -164,6 +164,9 @@ export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 		{ building: 5, kind: 3, index: 17, min: 1, max: 1 },
 		{ building: 5, kind: 3, index: 18, min: 1, max: 1 },
 		{ building: 5, kind: 4, index: 48, min: 20, max: 30 },
+		// not in the original DB: the gas station's garage gives scrap to smelt (steel is otherwise slow to get)
+		{ building: 5, kind: 4, index: 25, min: 2, max: 4 },
+		{ building: 5, kind: 4, index: 30, min: 0.3, max: 0.3 },
 	],
 	[
 		{ building: 6, kind: 3, index: 5, min: 0.1, max: 0.1 },
@@ -213,6 +216,9 @@ export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 		{ building: 9, kind: 4, index: 46, min: 20, max: 50 },
 		{ building: 9, kind: 1, index: 10, min: 0.1, max: 0.1 },
 		{ building: 9, kind: 1, index: 13, min: 0.1, max: 0.1 },
+		// gunsmith scrap (not in the original DB): steel pieces and the odd gold piece to smelt
+		{ building: 9, kind: 4, index: 25, min: 1, max: 3 },
+		{ building: 9, kind: 4, index: 27, min: 0.25, max: 0.25 },
 	],
 	[
 		{ building: 10, kind: 4, index: 34, min: 5, max: 10 },

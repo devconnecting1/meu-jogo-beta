@@ -1,0 +1,324 @@
+{
+	"generator": "tools/gen-ui-skin.mjs",
+	"style": "Pixel Quest relief: flat fills, thick frames, bitten pixel corners, raised faces with a base",
+	"unit": 4,
+	"note": "greyscale + alpha; the client tints each layer with ImageColor3 (an exact theme token) and draws it with ScaleType.Slice, SliceScale = skinPx / unit, ResamplerMode.Pixelated",
+	"parts": {
+		"button": [
+			"btnFace",
+			"btnShade",
+			"btnLight|btnLightHot"
+		],
+		"buttonPressed": [
+			"btnFacePress",
+			"btnShadePress"
+		],
+		"panel": [
+			"panelFill",
+			"panelFrame",
+			"panelEdge"
+		],
+		"titleStrip": [
+			"strip"
+		],
+		"well": [
+			"wellFill",
+			"wellBorder"
+		],
+		"tabActive": [
+			"btnFace",
+			"btnShade",
+			"btnLight"
+		],
+		"tabInactive": [
+			"wellFill",
+			"wellBorder"
+		],
+		"chip": [
+			"wellFill",
+			"wellBorder"
+		],
+		"badge": [
+			"wellFill",
+			"wellBorder"
+		],
+		"barTrack": [
+			"wellFill",
+			"wellBorder"
+		],
+		"sliderKnob": [
+			"btnFace",
+			"btnShade",
+			"btnLight"
+		],
+		"tooltip": [
+			"wellFill",
+			"wellBorder"
+		],
+		"focus": [
+			"focusRing"
+		]
+	},
+	"textures": [
+		{
+			"name": "btnFace",
+			"file": "btnFace.png",
+			"description": "raised face (tint: the variant colour)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "btnShade",
+			"file": "btnShade.png",
+			"description": "raised outline + bottom base/lip (tint: background)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "btnLight",
+			"file": "btnLight.png",
+			"description": "top highlight, idle (tint: foreground)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "btnLightHot",
+			"file": "btnLightHot.png",
+			"description": "top highlight + inner rim, hover/focus (tint: foreground)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "btnFacePress",
+			"file": "btnFacePress.png",
+			"description": "pressed face, dropped 2 px (tint: the variant colour)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "btnShadePress",
+			"file": "btnShadePress.png",
+			"description": "pressed outline, short lip, inner shadow (tint: background)",
+			"width": 32,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				12,
+				12,
+				20,
+				20
+			],
+			"sliceSkin": [
+				3,
+				3,
+				5,
+				5
+			]
+		},
+		{
+			"name": "panelFill",
+			"file": "panelFill.png",
+			"description": "panel interior (tint: panel background)",
+			"width": 48,
+			"height": 48,
+			"unit": 4,
+			"sliceCenter": [
+				20,
+				20,
+				28,
+				28
+			],
+			"sliceSkin": [
+				5,
+				5,
+				7,
+				7
+			]
+		},
+		{
+			"name": "panelFrame",
+			"file": "panelFrame.png",
+			"description": "3 px panel frame (tint: frame colour)",
+			"width": 48,
+			"height": 48,
+			"unit": 4,
+			"sliceCenter": [
+				20,
+				20,
+				28,
+				28
+			],
+			"sliceSkin": [
+				5,
+				5,
+				7,
+				7
+			]
+		},
+		{
+			"name": "panelEdge",
+			"file": "panelEdge.png",
+			"description": "1 px dark outer edge of a panel (tint: background)",
+			"width": 48,
+			"height": 48,
+			"unit": 4,
+			"sliceCenter": [
+				20,
+				20,
+				28,
+				28
+			],
+			"sliceSkin": [
+				5,
+				5,
+				7,
+				7
+			]
+		},
+		{
+			"name": "strip",
+			"file": "strip.png",
+			"description": "title strip with its dark rule (tint: frame colour)",
+			"width": 24,
+			"height": 24,
+			"unit": 4,
+			"sliceCenter": [
+				8,
+				8,
+				16,
+				16
+			],
+			"sliceSkin": [
+				2,
+				2,
+				4,
+				4
+			]
+		},
+		{
+			"name": "wellFill",
+			"file": "wellFill.png",
+			"description": "recessed fill: wells, rows, tracks, chips (tint: fill colour)",
+			"width": 24,
+			"height": 24,
+			"unit": 4,
+			"sliceCenter": [
+				8,
+				8,
+				16,
+				16
+			],
+			"sliceSkin": [
+				2,
+				2,
+				4,
+				4
+			]
+		},
+		{
+			"name": "wellBorder",
+			"file": "wellBorder.png",
+			"description": "1 px border of a well / chip (tint: border colour)",
+			"width": 24,
+			"height": 24,
+			"unit": 4,
+			"sliceCenter": [
+				8,
+				8,
+				16,
+				16
+			],
+			"sliceSkin": [
+				2,
+				2,
+				4,
+				4
+			]
+		},
+		{
+			"name": "focusRing",
+			"file": "focusRing.png",
+			"description": "2 px gamepad focus ring drawn outside a control (tint: ring)",
+			"width": 40,
+			"height": 40,
+			"unit": 4,
+			"sliceCenter": [
+				16,
+				16,
+				24,
+				24
+			],
+			"sliceSkin": [
+				4,
+				4,
+				6,
+				6
+			]
+		}
+	]
+}
