@@ -122,7 +122,8 @@ export class ChatBubbles {
 		// the channel appears a moment after joining, and waitForChildRobust yields: never on the render thread
 		task.spawn(() => {
 			const channels = waitForChildRobust(TextChatService, "TextChannels", CHANNEL_WAIT);
-			const general = channels !== undefined ? waitForChildRobust(channels, "RBXGeneral", CHANNEL_WAIT) : undefined;
+			const general =
+				channels !== undefined ? waitForChildRobust(channels, "RBXGeneral", CHANNEL_WAIT) : undefined;
 			if (this.closed) return;
 			if (general === undefined || !general.IsA("TextChannel")) {
 				warn(`[${GAME_NAME}] chat bubbles: RBXGeneral not found, nothing will float over anyone`);
