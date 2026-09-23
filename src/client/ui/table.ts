@@ -211,8 +211,9 @@ export function charsThatFit(w: number, size: number, numeric = false): number {
 }
 
 /**
- * [x, width] of each column inside a row `rowW` design units wide: the fixed widths first, the rest shared by flex,
- * each column inset by TABLE_GAP / 2 on both sides so neighbouring texts never touch.
+ * [x, width] of each column inside a row `rowW` design units wide: the fixed widths first, the rest shared by flex.
+ * The spans touch; a header cell stands TABLE_GAP / 2 in from both edges of its span (the groove between two cells)
+ * and a cell's text `cellPad` in, so neighbouring texts never touch.
  */
 export function columnLayout(columns: ReadonlyArray<TableColumn>, rowW: number): Array<[number, number]> {
 	let fixed = 0;

@@ -66,6 +66,7 @@ import {
 import * as Kit from "./window";
 
 const UserInputService = game.GetService("UserInputService");
+const GuiService = game.GetService("GuiService");
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 
 /** alive / down (MP-03, bleeding) / dead until dawn (the server stands them up at 06:00, MP-21) / dead offline */
@@ -523,8 +524,11 @@ export class Scoreboard {
 			this.refreshAt = -math.huge;
 			this.sortShown = undefined;
 			this.refresh();
-			// the pad steps the sort with the D-pad while the board is up (the D-pad does nothing else in a run)
-			this.dpad = UserInputService.InputBegan.Connect(input => {
+			// the pad steps the sort with the D-pad while the board is up (the D-pad does nothing else in a run) -- but
+			// not while a menu over it has the pad (the Bag opened with the board still up): there the D-pad is that
+			// menu's navigation, and the engine says so (processed, or a GUI selected)
+			this.dpad = UserInputService.InputBegan.Connect((input, processed) => {
+				if (processed || GuiService.SelectedObject !== undefined) return;
 				if (input.KeyCode === Enum.KeyCode.DPadLeft) this.sortBar.step(-1);
 				else if (input.KeyCode === Enum.KeyCode.DPadRight) this.sortBar.step(1);
 			});

@@ -1045,7 +1045,28 @@ check(
 		.concat(board.chip.GetDescendants())
 		.filter(d => d.IsA("GuiObject") && d.Selectable === true).length === 0,
 );
-board.sortBar.step(1);
+// the real D-pad: a menu that has the pad (processed, or a GUI selected) keeps it; otherwise it steps the sort
+const dpad = (key, processed) =>
+	uis.InputBegan.Fire({ KeyCode: key, UserInputType: Enum.UserInputType.Gamepad1 }, processed);
+// in a run no menu is open (the stages this file built in the UI layer would wake the pad's menu navigation)
+const hiddenStages = ctx.uiLayer.GetChildren().filter(c => c.Visible !== false);
+for (const c of hiddenStages) c.Visible = false;
+GuiService.SelectedObject = undefined;
+dpad(Enum.KeyCode.DPadRight, true);
+GuiService.SelectedObject = board.chip;
+dpad(Enum.KeyCode.DPadRight, false);
+GuiService.SelectedObject = undefined;
+check("D-pad de um menu por cima (processado / GUI selecionada) nao mexe na ordem", board.sortBar.index() === 0);
+dpad(Enum.KeyCode.DPadRight, false);
+const afterRight = board.sortBar.index();
+dpad(Enum.KeyCode.DPadLeft, false);
+check(
+	"D-pad direita / esquerda anda e volta na barra",
+	afterRight === 1 && board.sortBar.index() === 0 && board.table.sort().column === "lifeDay",
+	`direita -> ${afterRight}, esquerda -> ${board.sortBar.index()}`,
+);
+dpad(Enum.KeyCode.DPadRight, false);
+for (const c of hiddenStages) c.Visible = true;
 check(
 	"D-pad -> ordena por nivel",
 	board.table.sort().column === "level" &&
