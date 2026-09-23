@@ -9,11 +9,16 @@
  *   PZ_SRC=path/to/src node tools/test-predict.mjs
  *
  * It stands a REAL server-shaped simulation next to a REAL client: `shared/sim/playerMove.ts` on both sides, the
- * §2.2 input queue (depth target 2, max 4, filled slots, duplicate and stale rejection) on the server, and
+ * server's own §2.2 input queue -- `server/sim/players.ts` itself (ingestInput → token bucket, decodeInput, the
+ * window, the queue; takeCommand; bufferDepth; ackSeq), not a model of it -- and
  * `client/net/{clockSync,commands,prediction,snapshotBuffer}.ts` unmodified on the client. Everything between them
  * goes through the actual wire format — `encodeInput`/`decodeInput` and `encodeSnapshot`/`decodeSnapshotPart` — so
  * the f32 self block, the 0.5 u position quantisation and the u16 tick wrap are all exercised, over a link that
  * delays, jitters, drops, duplicates and reorders packets.
+ *
+ * It used to carry its own model of that queue, and the model drifted: it kept the F1 rule (a filled tick spends
+ * the seq and discards the real command, one tick of coasting) after players.ts moved to WAITING. A test of the
+ * prediction against a server that no longer exists proves nothing about the one that does.
  *
  * What it proves:
  *
@@ -238,10 +243,12 @@ Object.defineProperty(String.prototype, "size", {
 	writable: true,
 });
 
-// "shared/x" / "client/x" → SRC/x.ts, transpiled with the project's TypeScript
+// "shared/x" / "client/x" / "server/x" → SRC/x.ts, transpiled with the project's TypeScript
 const resolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (req, parent, ...rest) {
-	if (req.startsWith("shared/") || req.startsWith("client/")) return join(SRC, req + ".ts");
+	if (req.startsWith("shared/") || req.startsWith("client/") || req.startsWith("server/")) {
+		return join(SRC, req + ".ts");
+	}
 	if (req.startsWith(".") && parent?.filename?.endsWith(".ts")) {
 		const p = resolve(dirname(parent.filename), req);
 		if (existsSync(p + ".ts")) return p + ".ts";
@@ -265,6 +272,7 @@ const SIM = require(join(SRC, "shared/sim/types.ts"));
 const codec = require(join(SRC, "shared/net/codec.ts"));
 const P = require(join(SRC, "shared/net/protocol.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+const PL = require(join(SRC, "server/sim/players.ts"));
 const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
 const { CommandStream, MAX_PENDING } = require(join(SRC, "client/net/commands.ts"));
 const { Prediction, CORRECTION_DIST } = require(join(SRC, "client/net/prediction.ts"));
@@ -290,8 +298,8 @@ const BACKWARD_RATE = 0.005;
 /** how far an ally has to walk for "the interpolation moves forward" to mean anything */
 const MIN_TRAVEL = 400;
 /**
- * One tick of movement at full speed (about 210 u/s at 60 Hz). It is the width of a single filled slot, and so
- * the smallest divergence a server that starves its input queue can possibly leave behind.
+ * One tick of movement at full speed (about 210 u/s at 60 Hz): the smallest divergence a command the server never
+ * simulates (all its copies lost, or dropped at the queue's ceiling) can leave behind.
  */
 const ONE_TICK_U = 4;
 /** above this loss the knockback scenario only reports: the pile-up it causes is the link's, not the client's */
@@ -311,9 +319,9 @@ const TURN_EVERY_S = 1.7;
  *
  * The cap is not cosmetic. The server's input queue is INPUT_BUFFER_TARGET = 2 commands deep, i.e. 33 ms, so
  * one-way jitter above about 16 ms makes the gap between two arrivals longer than the queue can cover; the queue
- * empties, the tick FILLS the slot with a repeat, and the real command for that seq is discarded (2.2). Each
- * filled slot is up to one tick of movement (~3.5 u) of divergence the client then has to reconcile away — a
- * server-side buffering question, not a prediction one. The [jitter] scenario below covers it on purpose.
+ * empties and the tick WAITS (2.2): the survivor stands still for that tick in everyone else's world, the command
+ * is simulated one tick later, and the queue is one tick deeper until the dilation drains it -- a server-side
+ * buffering question, not a prediction one. The [jitter] scenario below covers it on purpose.
  */
 const JITTER_FRACTION = 0.15;
 /** 2 x 15 ms still fits inside the 33 ms the depth-2 input queue holds */
@@ -384,9 +392,32 @@ class Link {
 		}
 	}
 
-	push(now, payload) {
-		const at = now + this.oneWay + (this.random() - 0.5) * 2 * this.jitter;
+	push(now, payload, at = now + this.oneWay + (this.random() - 0.5) * 2 * this.jitter) {
 		this.queue.push({ at, payload, order: this.order++ });
+	}
+
+	/**
+	 * The packets of one client frame, which leave in the same instant: each is lost (or duplicated) on its own,
+	 * but they share one delay and so keep their order, as a burst does (tools/test-input-buffer.mjs says why).
+	 */
+	sendBurst(now, payloads) {
+		const at = now + this.oneWay + (this.random() - 0.5) * 2 * this.jitter;
+		for (const payload of payloads) {
+			this.sent += 1;
+			if (this.blackout !== undefined && now >= this.blackout.from && now < this.blackout.to) {
+				this.dropped += 1;
+				continue;
+			}
+			if (this.random() < this.loss) {
+				this.dropped += 1;
+				continue;
+			}
+			this.push(now, payload, at);
+			if (this.random() < this.dup) {
+				this.duplicated += 1;
+				this.push(now, payload, at);
+			}
+		}
 	}
 
 	/** everything that has arrived by `now`, in arrival order (jitter is what makes that differ from send order) */
@@ -438,86 +469,15 @@ function buildScene(seed) {
 
 // ---------------------------------------------------------------- the server (§2.2 input queue, §3.1 tick)
 
-function makeServerPlayer(slot, world, x, y) {
-	const save = defaultSave();
-	return {
-		slot,
-		save,
-		state: createPlayer(save, x, y),
-		world,
-		queue: [],
-		lastConsumed: 0,
-		started: false,
-		lastCmd: undefined,
-		filledRun: 0,
-		walking: false,
-		moveAng: 0,
-		counters: { filled: 0, overflow: 0, duplicate: 0, stale: 0 },
-	};
+/** the server's own survivor entity and input queue (server/sim/players.ts), exactly as mpHost creates it */
+function makeServerPlayer(slot, x, y) {
+	return PL.createServerPlayer({ slot, userId: 100 + slot, name: `p${slot}` }, defaultSave(), x, y, 0, SIM_HZ);
 }
 
-/** §2.2: ordered by seq, duplicates and already-consumed commands dropped, never deeper than INPUT_BUFFER_MAX */
-function acceptInput(sp, packet) {
-	// the packet carries the newest command first; insert oldest first so the queue stays ascending
-	for (let i = packet.cmds.length - 1; i >= 0; i--) {
-		const cmd = packet.cmds[i];
-		if (sp.started && !codec.seqNewer(cmd.seq, sp.lastConsumed)) {
-			sp.counters.stale += 1;
-			continue;
-		}
-		let at = sp.queue.length;
-		while (at > 0 && codec.seqNewer(sp.queue[at - 1].seq, cmd.seq)) at -= 1;
-		if (at > 0 && sp.queue[at - 1].seq === cmd.seq) {
-			sp.counters.duplicate += 1;
-			continue;
-		}
-		sp.queue.splice(at, 0, cmd);
-	}
-	while (sp.queue.length > CFG.INPUT_BUFFER_MAX) {
-		sp.queue.shift();
-		sp.counters.overflow += 1;
-	}
-}
-
-/**
- * Exactly one command per tick and per player; an empty queue is a FILLED slot, never a longer step.
- *
- * Consumption only starts once the queue has reached INPUT_BUFFER_TARGET (§2.2: "profundidade-alvo de 2"). That
- * is not a detail: start at depth 1 and the first hiccup of jitter empties the queue, every empty queue fills a
- * slot, and every filled slot is a divergence the client has to reconcile away.
- */
-function consume(sp) {
-	if (!sp.started) {
-		if (sp.queue.length < CFG.INPUT_BUFFER_TARGET) return undefined;
-		sp.started = true;
-		sp.lastConsumed = codec.wrapU16(sp.queue[0].seq - 1);
-	}
-	const want = codec.wrapU16(sp.lastConsumed + 1);
-	if (sp.queue.length > 0 && sp.queue[0].seq === want) {
-		const cmd = sp.queue.shift();
-		sp.lastConsumed = want;
-		sp.filledRun = 0;
-		sp.lastCmd = cmd;
-		return cmd;
-	}
-	// §2.2: repeat the last movement for one tick, then stand; the real command for this seq is discarded
-	sp.lastConsumed = want;
-	sp.counters.filled += 1;
-	sp.filledRun += 1;
-	const base = sp.lastCmd;
-	const cmd =
-		base !== undefined && sp.filledRun <= 1
-			? { seq: want, moveAng: base.moveAng, moveMag: base.moveMag, aim: base.aim, held: 0, edges: 0 }
-			: { seq: want, moveAng: 0, moveMag: 0, aim: base === undefined ? 0 : base.aim, held: 0, edges: 0 };
-	sp.lastCmd = cmd;
-	return cmd;
-}
-
-function serverStep(sp, cmd) {
-	if (cmd === undefined) return;
-	const res = stepPlayer(sp.world, sp.state, sp.save, cmd, TICK);
-	sp.walking = res.walking;
-	if (cmd.moveMag > 0) sp.moveAng = SIM.aimOf(cmd.aim);
+/** one tick of one survivor: the shared step both sides run, and the feet bookkeeping the snapshot reads */
+function serverStep(world, sp, cmd) {
+	const res = stepPlayer(world, sp.state, sp.save, cmd, TICK);
+	PL.noteStep(sp, cmd, res.walking);
 }
 
 function selfBlockOf(sp) {
@@ -525,8 +485,8 @@ function selfBlockOf(sp) {
 	return {
 		x: p.x,
 		y: p.y,
-		ackSeq: sp.lastConsumed,
-		bufDepth: sp.queue.length,
+		ackSeq: sp.ackSeq,
+		bufDepth: PL.bufferDepth(sp),
 		reactionSpeed: Math.max(0, p.reactionSpeed),
 		reactionDir: p.reactionDir,
 		hp: Math.max(0, p.hp),
@@ -577,6 +537,7 @@ function makeClient(scene) {
 		staleSelf: 0,
 		raw: { moveX: 0, moveY: 0, magnitude: 0, aim: 0, held: 0 },
 		sampled: [],
+		outbound: [],
 		malformed: 0,
 	};
 	client.clock.setEpoch(T0, SIM_HZ);
@@ -623,11 +584,15 @@ function clientFrame(cl, dt, now, down, up, serverNow) {
 	const render = cl.snapshots.renderNow();
 	const viewTick = Math.floor(render);
 	const viewFrac = Math.min(255, Math.max(0, Math.floor((render - viewTick) * 256)));
-	const packet = cl.commands.packet(viewTick, viewFrac);
-	if (packet !== undefined && cl.commands.trySend(now)) {
+	// one packet per command this frame built (commands.ts `flush`), leaving together
+	cl.outbound.length = 0;
+	cl.commands.flush(viewTick, viewFrac, now, cl.outbound);
+	const burst = [];
+	for (const packet of cl.outbound) {
 		const payload = P.encodeInput(packet);
-		if (payload !== undefined) up.send(now, payload);
+		if (payload !== undefined) burst.push(payload);
 	}
+	if (burst.length > 0) up.sendBurst(now, burst);
 
 	cl.prediction.present(dt, cl.commands.phase(), cl.commands.newest());
 }
@@ -641,11 +606,13 @@ function clientFrame(cl, dt, now, down, up, serverNow) {
 function run(opts) {
 	const scene = buildScene(opts.seed ?? DESIGN.TOWN_SEED);
 	const random = rng(opts.seed ?? SEED);
+	// its own stream for the downstream link, so how many Input packets go up can never reshuffle the snapshots
+	const randomDown = rng((opts.seed ?? SEED) ^ 0x2545f491);
 	const noise = rng((opts.seed ?? SEED) ^ 0x9e3779b9);
 	const steer = rng((opts.seed ?? SEED) ^ 0x51ed270b);
 
-	const me = makeServerPlayer(0, scene.world, scene.start.x, scene.start.y);
-	const ally = makeServerPlayer(1, scene.world, scene.lane.x, scene.lane.y);
+	const me = makeServerPlayer(0, scene.start.x, scene.start.y);
+	const ally = makeServerPlayer(1, scene.lane.x, scene.lane.y);
 	const client = makeClient(scene);
 
 	const up = new Link({
@@ -662,7 +629,7 @@ function run(opts) {
 		jitter: opts.downJitter ?? opts.jitter,
 		loss: opts.loss,
 		dup: opts.dup,
-		random,
+		random: randomDown,
 		blackout: opts.downBlackout,
 	});
 
@@ -679,6 +646,8 @@ function run(opts) {
 		beforeStall: undefined,
 		afterStall: undefined,
 		lateAfterStall: 0,
+		consumedAtStall: undefined,
+		consumedAfterStall: 0,
 		allyTravel: 0,
 		allySeen: 0,
 		knockbacks: 0,
@@ -717,15 +686,13 @@ function run(opts) {
 		// ---- server: catch up to the wall clock, one command per player per tick (§3.1)
 		const wantTick = Math.floor((now - T0) * SIM_HZ);
 		while (serverTick < wantTick) {
-			for (const payload of up.poll(now)) {
-				const packet = P.decodeInput(payload);
-				if (packet !== undefined) acceptInput(me, packet);
-			}
+			// the live server's C→S path, whole: token bucket, decodeInput, the window, the queue (mpHost.ts)
+			for (const payload of up.poll(now)) PL.ingestInput(me, payload, now);
 			// the ally is a bot: a perfect 60 Hz stream walking +x, so a step backwards on the client can only
 			// ever come from the interpolation itself
 			allySeq = (allySeq + 1) % 65536;
-			serverStep(ally, SIM.makeCommand(allySeq, 1, 0, 1, 0, 0, 0));
-			serverStep(me, consume(me));
+			serverStep(scene.world, ally, SIM.makeCommand(allySeq, 1, 0, 1, 0, 0, 0));
+			serverStep(scene.world, me, PL.takeCommand(me));
 			const biting = opts.knockbackEvery !== undefined && serverTick > 0 && serverTick < quietFrom;
 			if (biting && serverTick % opts.knockbackEvery === 0) {
 				// a bite the client cannot possibly have predicted: it only learns about it from the snapshot
@@ -759,9 +726,11 @@ function run(opts) {
 		client.raw.aim = heading + 0.3;
 		const serverNow = now + (noise() - 0.5) * 2 * CLOCK_NOISE_S;
 		clientFrame(client, frameDt, now, down, up, serverNow);
+		if (report.stalledAt > 0 && report.consumedAtStall === undefined) report.consumedAtStall = me.counters.consumed;
 		if (report.stalledAt > 0 && now >= report.stalledAt + 1 && report.afterStall === undefined) {
 			report.afterStall = { x: me.state.x, y: me.state.y };
-			report.lateAfterStall = me.counters.stale;
+			report.lateAfterStall = me.counters.late;
+			report.consumedAfterStall = me.counters.consumed - report.consumedAtStall;
 		}
 
 		// ---- measurements
@@ -816,8 +785,8 @@ for (const rtt of [0.05, 0.1, 0.2]) {
 	console.log(
 		`  ${r.frames} frames · ${r.serverTick} server ticks · ${r.up.sent} input packets ` +
 			`(${r.up.dropped} lost) · ${r.down.sent} snapshot parts (${r.down.dropped} lost, ` +
-			`${r.down.reordered} out of order) · filled slots ${r.me.counters.filled} · ` +
-			`stale/dup dropped ${r.me.counters.stale}/${r.me.counters.duplicate} · ` +
+			`${r.down.reordered} out of order) · filled ticks ${r.me.counters.filled} · ` +
+			`late/dup/overflow ${r.me.counters.late}/${r.me.counters.duplicate}/${r.me.counters.inputOverflow} · ` +
 			`interp delay ${(r.interpDelay * 1000).toFixed(0)} ms`,
 	);
 
@@ -881,9 +850,9 @@ console.log(
 
 // ---- (4) no snapshot reaches the client at all: no acks, so the unacked queue is on its own
 //
-// This is the direction that can actually run away. An UPSTREAM outage does not: the server fills the slots it
-// is missing, keeps acking them, and the client's queue drains as usual (2.2). Downstream nothing acks anything,
-// so the queue grows at 60/s until MAX_PENDING caps it - which is exactly the bound being tested.
+// This is the direction that can actually run away. Downstream nothing acks anything, so the queue grows at 60/s
+// until MAX_PENDING caps it - which is exactly the bound being tested. (An upstream outage also acks nothing, as a
+// waiting tick consumes no command, but the snapshots keep coming and drain the queue the moment the stream lands.)
 const OUTAGE_S = 4;
 console.log(`
 [blackout] 100 ms RTT, no snapshot reaches the client for ${OUTAGE_S} s (no acks at all)`);
@@ -891,7 +860,7 @@ console.log(`
 	const from = T0 + Math.max(2, SECONDS * 0.3);
 	const r = run({ rtt: 0.1, jitter: 0.01, loss: LOSS, seed: SEED + 23, downBlackout: { from, to: from + OUTAGE_S } });
 	console.log(
-		`  ${r.down.sent} snapshot parts, ${r.down.dropped} of them into the void, filled slots ` +
+		`  ${r.down.sent} snapshot parts, ${r.down.dropped} of them into the void, filled ticks ` +
 			`${r.me.counters.filled}, unacked peak during the outage ${r.pendingDuringOutage}`,
 	);
 	const grew = Math.min(MAX_PENDING, Math.floor(OUTAGE_S * SIM_HZ * 0.6));
@@ -907,52 +876,65 @@ console.log(`
 	else fail(`the queue stayed at ${r.endPending} commands after the outage (expected <= ${settled})`);
 }
 
-// ---- jitter past what the server's input queue can hold: the fills are the server's, the recovery is ours
+// ---- jitter past what the server's input queue can hold: the waits are the server's, the recovery is ours
 //
-// 35 ms of one-way jitter against a 33 ms queue: the queue empties, the tick fills the slot, and the command the
-// client predicted for that seq is discarded. That divergence is not the prediction's to avoid, so this scenario
-// does NOT assert the 1 u p99 - it asserts the client notices, corrects, and converges back without teleporting.
+// 35 ms of one-way jitter against a 33 ms queue: the queue empties and the tick waits. A wait costs no command
+// (it is simulated a tick later) and leaves the queue a tick deeper, so the waits thin out as the queue settles
+// deeper -- against the old model of a server whose every fill discarded the predicted command, the same link
+// starved 148 ticks, the real server a couple of dozen. What still diverges is a command whose three copies all
+// arrived after a newer one was simulated (35 ms of jitter reorders packets two frames apart). That is not the
+// prediction's to avoid, so this scenario does NOT assert the 1 u p99 - it asserts the client notices, corrects,
+// and converges back without teleporting.
 console.log(`
 [jitter] 100 ms RTT with +/-35 ms one-way jitter: past the depth-2 input queue`);
 {
 	const r = run({ rtt: 0.1, jitter: 0.035, loss: LOSS, seed: SEED + 41 });
 	const p = r.predictionStats;
 	console.log(
-		`  filled slots ${r.me.counters.filled}/${r.serverTick} ticks, ${p.replays} rewinds, ` +
+		`  filled ticks ${r.me.counters.filled}/${r.serverTick}, ${p.replays} rewinds, ` +
 			`divergence p50 ${p.p50.toFixed(3)} u / p99 ${p.p99.toFixed(3)} u`,
 	);
-	if (r.me.counters.filled < 20) fail(`only ${r.me.counters.filled} filled slots: the jitter never starved anything`);
-	else ok(`${r.me.counters.filled} filled slots starve the queue, as the depth-2 buffer predicts`);
+	// the scenario has to bite to prove anything: some ticks must have found the queue dry
+	if (r.me.counters.filled < 5) fail(`only ${r.me.counters.filled} filled ticks: the jitter never starved anything`);
+	else ok(`${r.me.counters.filled} ticks found the queue dry and waited, as the depth-2 buffer predicts`);
 	if (p.corrections === 0) ok(`and the client still never needed a correction above ${CORRECTION_DIST} u`);
-	else fail(`${p.corrections} correction(s) above ${CORRECTION_DIST} u from filled slots alone`);
+	else fail(`${p.corrections} correction(s) above ${CORRECTION_DIST} u from the jitter alone`);
 	if (p.last < P99_LIMIT) ok(`the client ends within ${p.last.toFixed(3)} u of the server`);
 	else fail(`the client ends ${p.last.toFixed(3)} u away from the server`);
 }
 
-// ---- a stall: the client is away for 600 ms and the server fills every tick it missed
+// ---- a stall: the client is away for 600 ms and the server waits through every tick it missed
 //
-// This is the liveness case of 2.2. The client drops the backlog it could never send, but the SEQUENCE has to
-// jump forward with it: while it was away the server filled those ticks and moved its own lastSeq on, so a
-// client that resumed at the old number would have every command from then on read as late - and would stand
-// still for good. The server model here has no re-anchor on purpose, so this only passes if the client is the
-// one keeping the numbering aligned.
+// This is the liveness case of 2.2. The client drops the backlog it could never send -- its TIME, not its numbers
+// (commands.ts `dropBacklog`) -- and the server WAITED through the stall without spending a number, so the next
+// command is simply the next one: no jump, nothing late, nothing outside the window, no re-anchor. (The rule
+// before this advanced the client's seq by the dropped count to chase a server that spent a number per filled
+// tick; the model of that server lived here, and it is gone -- this runs server/sim/players.ts.)
 const STALL_S = 0.6;
 console.log(`
 [stall] 100 ms RTT, the client is away for ${STALL_S * 1000} ms`);
 {
 	const r = run({ rtt: 0.1, jitter: 0.01, loss: LOSS, seed: SEED + 53, stallS: STALL_S });
 	const c = r.client.commands.stats();
+	const k = r.me.counters;
 	const moved =
 		r.afterStall === undefined || r.beforeStall === undefined
 			? 0
 			: Math.hypot(r.afterStall.x - r.beforeStall.x, r.afterStall.y - r.beforeStall.y);
 	console.log(
-		`  ${c.stalls} stall(s), ${c.stallDropped} commands dropped, ${r.me.counters.filled} filled slots, ` +
-			`${r.me.counters.stale} late commands refused, survivor moved ${moved.toFixed(0)} u in the second after`,
+		`  ${c.stalls} stall(s), ${c.stallDropped} command intervals dropped, ${k.filled} filled ticks, ` +
+			`${k.late} late copies refused, ${k.seqWindow} outside the window, ${k.resync} re-anchors, ` +
+			`${r.consumedAfterStall} commands simulated and ${moved.toFixed(0)} u walked in the second after`,
 	);
+	// liveness is the server SIMULATING the stream again, one command a tick; how far that walks depends on the
+	// walls the random waypoints steer into, so the distance is reported, not judged
+	const live = Math.floor(0.9 * SIM_HZ);
 	if (c.stalls < 1) fail(`the stall never reached the command stream (${c.stallDropped} dropped)`);
-	else if (moved > 100) ok(`the survivor kept moving (${moved.toFixed(0)} u in the second after the stall)`);
-	else fail(`the survivor moved ${moved.toFixed(0)} u after the stall: the stream never re-aligned`);
+	else if (r.consumedAfterStall >= live)
+		ok(`the stream carried on: ${r.consumedAfterStall} commands simulated in the second after the stall`);
+	else fail(`only ${r.consumedAfterStall} commands simulated in the second after the stall (>= ${live} expected)`);
+	if (k.seqWindow === 0 && k.resync === 0) ok(`without leaving the sequence window or re-anchoring it`);
+	else fail(`the stall pushed ${k.seqWindow} commands outside the window and re-anchored ${k.resync} times`);
 	const p = r.predictionStats;
 	if (p.last <= ONE_TICK_U) ok(`and the prediction is back within ${p.last.toFixed(3)} u of the server`);
 	else fail(`the prediction is ${p.last.toFixed(3)} u away from the server after the stall`);

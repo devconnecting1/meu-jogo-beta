@@ -50,6 +50,17 @@
  * per hitch. The lock is gone; cases 4-6 are now guards. What a hitch still costs is the hitch: the client
  * really sent nothing for that long.
  *
+ * WHAT IT FOUND NEXT: TAPS (cases 7-11, and a tap on every frame of every case). The server was right; the
+ * SENDER lost commands at low frame rates. One packet per frame holds 3 commands, and a 15 FPS frame builds 4:
+ * the oldest -- the one carrying the frame's taps -- never went on the wire, and the server jumped over its
+ * number. At 15 FPS: 0 of 270 taps reached the simulation, 3 commands in 4 were simulated (17.35 fills/s, 322
+ * predicted and never simulated). At 20 FPS the dilation's occasional 4th cost 21 of 360 taps, a lone 70 ms
+ * frame lost its taps, and a hitch threw away the commands of the frame that ended it (`skipBacklog` cleared
+ * the unacked queue before the send: case 4, 156 predicted and never simulated, 38 of 776 taps). Now one packet
+ * goes out per command (commands.ts `flush`), a hitch drops time and not numbers (`dropBacklog`), the frame's
+ * taps ride its newest command, and the queue's ceiling carries a dropped command's taps to the new head
+ * (players.ts `enqueue`). Every tap of every case lands, exactly once.
+ *
  * Pure Node (>= 18) plus the project TypeScript, same shims as tools/test-smoothness.mjs.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -290,18 +301,51 @@ function rand() {
 	return seed / 0x7fffffff;
 }
 
+/** all four 2-bit one-shot counters of a command (§2.2 `edges`): attack press, release, E, reload */
+const edgeTotal = e => (e & 3) + ((e >> 2) & 3) + ((e >> 4) & 3) + ((e >> 6) & 3);
+
+/** the frame's send step, as netClient.send does it: one packet per command the frame built (commands.ts `flush`) */
+const outbound = [];
+function sendFrame(client, viewTick, t, deliver) {
+	outbound.length = 0;
+	client.flush(viewTick, 0, t, outbound);
+	for (const pkt of outbound) deliver(pkt);
+}
+
 /**
  * One survivor walking, for `seconds`, with the real sender talking to the real queue.
  *
  * Client frames and server heartbeats run on their OWN clocks, the way they do on a real machine. A client
  * frame samples `dt` worth of commands (at most MAX_COMMANDS_PER_FRAME; the surplus is dropped, as
- * commands.ts does) and sends the newest with its two predecessors. A server heartbeat runs the fixed ticks it
- * owes -- at most MAX_CATCHUP_TICKS, the rest of the time DROPPED, exactly like ServerSimulation.advance -- and
- * each tick consumes one command or, with the queue dry, waits (a fill). `clientDt(i)` / `serverDt(i)` give the
- * length of frame / heartbeat i, so a hitch on either side is simply a long one. Every SNAP_NEAR_EVERY_TICKS the
- * server answers with the queue depth and the ack, which is what closes the dilation loop.
+ * commands.ts does) and sends one packet per command it built, each with its two predecessors (`flush`). A server
+ * heartbeat first takes every packet that landed, in the order it landed, then runs the fixed ticks it owes -- at
+ * most MAX_CATCHUP_TICKS, the rest of the time DROPPED, exactly like ServerSimulation.advance -- and each tick
+ * consumes one command or, with the queue dry, waits (a fill). `clientDt(i)` / `serverDt(i)` give the length of
+ * frame / heartbeat i, so a hitch on either side is simply a long one. Every SNAP_NEAR_EVERY_TICKS the server
+ * answers with the queue depth and the ack, which is what closes the dilation loop.
+ *
+ * The link: every packet is lost on its own with probability `loss`, and every FRAME's packets are delayed by
+ * half the RTT plus one jitter draw -- they leave in the same instant, in one burst, and a burst keeps its order.
+ * Drawing the jitter per packet would have the network reorder packets sent in the same microsecond by up to
+ * twice the jitter, which is not what a link does to a burst; `burstReorder` does exactly that anyway, as the
+ * pessimistic bound (Roblox promises no order for unreliable events at all).
+ *
+ * With `taps`, every client frame inside the tap window also makes ONE one-shot input (attack press, attack
+ * release, E, reload, in turn) through `addEdges`, exactly where netClient.predict makes it: before `sample`.
+ * Every command then carries a tap, so any command that never reaches the simulation shows up as taps lost; and
+ * the taps are followed through the whole path -- made, packed into a command, put on the wire, consumed by
+ * `takeCommand` -- so a loss can be pinned on the stage that caused it.
  */
-function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = () => SIM_DT, serverDt = () => SIM_DT }) {
+function run({
+	seconds = 20,
+	rtt = 0.06,
+	jitter = 0.008,
+	loss = 0,
+	clientDt = () => SIM_DT,
+	serverDt = () => SIM_DT,
+	taps = false,
+	burstReorder = false,
+}) {
 	const client = new CommandStream();
 	client.reset(0);
 	const sp = PL.createServerPlayer({ slot: 0, userId: 7, name: "tester" }, defaultSave(), 1000, 1000, 0, CFG.SIM_HZ);
@@ -315,6 +359,20 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 	const WARMUP_S = 1;
 	// the last half second is still in flight or queued when the run stops: unfinished, not lost
 	const TAIL_S = 0.5;
+	// taps stop a full second before the end, so every one of them has landed and been consumed by then: a tap
+	// still in flight when the run stops would read as lost when it is only unfinished
+	const TAP_QUIET_S = 1;
+	/** one-shot inputs made by the player (one per frame inside the window) */
+	let tapsMade = 0;
+	/** ...packed into a command by `build` (a counter holds 0..3 per command, §2.2) */
+	let tapsBuilt = 0;
+	/** ...carried by a command that went on the wire at least once */
+	let tapsSent = 0;
+	/** ...in a command `takeCommand` consumed: what the server's simulation actually saw */
+	let tapsConsumed = 0;
+	/** edges per built seq, and the seqs that left in at least one packet */
+	const edgesOf = new Map();
+	const sentSeqs = new Set();
 	let ticksSteady = 0;
 	let fillsSteady = 0;
 	let lateSteady = 0;
@@ -337,18 +395,26 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 	const predictedAt = new Map();
 	const arrived = new Set();
 	const simulated = new Set();
+	/** every seq that ever sat in the server's queue: one that left it without being simulated hit the ceiling */
+	const queued = new Set();
 	/**
 	 * Every `late` refusal, sorted by what it threw away: a COPY of a command already simulated (the redundancy
-	 * working) or a REAL command that will now never run. The rule is enqueue's own (not newer than lastSeq, inside
-	 * the window), applied just before the packet lands; `lateMismatch` proves it agrees with the server's counter.
+	 * working), a copy of a command the queue's ceiling already dropped (its fate was sealed when it overflowed --
+	 * that loss is `realLost`, bounded by the server-hitch check), or a REAL command that will now never run: the
+	 * one that never made it into the queue at all, which is what the old fill rule did to every late command. The
+	 * rule is enqueue's own (not newer than lastSeq, inside the window), applied just before the packet lands;
+	 * `lateMismatch` proves it agrees with the server's counter.
 	 */
 	let lateCopies = 0;
+	let lateOverflowed = 0;
 	let lateReal = 0;
 	const lateRealSeqs = new Set();
 	let lateMismatch = 0;
 
 	let clientAt = 0;
 	let clientFrame = 0;
+	/** send order, to break ties between packets that land at the same instant */
+	let sentCount = 0;
 	let serverAt = 0;
 	let serverBeat = 0;
 	let serverTick = 0;
@@ -369,15 +435,30 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 					down.unorderedRemove(i);
 				}
 			}
+			if (taps && t >= WARMUP_S && t < seconds - TAP_QUIET_S) {
+				const k = clientFrame % 4;
+				client.addEdges(k === 0, k === 1, k === 2, k === 3);
+				tapsMade += 1;
+			}
 			out.clear();
 			client.sample(dt, raw, out);
-			for (const cmd of out) predictedAt.set(cmd.seq, t);
-			if (out.size() > 0) {
-				const pkt = client.packet(serverTick, 0);
-				if (pkt !== undefined && client.trySend(t) && rand() >= loss) {
-					up.push({ at: t + rtt / 2 + (rand() * 2 - 1) * jitter, pkt });
-				}
+			for (const cmd of out) {
+				predictedAt.set(cmd.seq, t);
+				const e = edgeTotal(cmd.edges);
+				edgesOf.set(cmd.seq, e);
+				tapsBuilt += e;
 			}
+			// one jitter draw for the frame's burst (see the link above), unless the case asks for the worst
+			let delay = rtt / 2 + (rand() * 2 - 1) * jitter;
+			sendFrame(client, serverTick, t, pkt => {
+				for (const cmd of pkt.cmds) {
+					if (sentSeqs.has(cmd.seq)) continue;
+					sentSeqs.add(cmd.seq);
+					tapsSent += edgesOf.get(cmd.seq) ?? 0;
+				}
+				if (burstReorder) delay = rtt / 2 + (rand() * 2 - 1) * jitter;
+				if (rand() >= loss) up.push({ at: t + delay, pkt, order: sentCount++ });
+			});
 		} else {
 			// ---- server heartbeat: packets that landed meanwhile, then the ticks it owes
 			const dt = serverDt(serverBeat++);
@@ -385,31 +466,45 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 			const t = serverAt;
 			now = 1000 + t;
 			if (atWarmup === undefined && t >= WARMUP_S) atWarmup = { ...sp.counters };
+			// in the order they LANDED, as OnServerEvent hands them over, all before the heartbeat's ticks
+			const landed = [];
 			for (let i = up.size() - 1; i >= 0; i--) {
-				if (up[i].at <= t) {
-					const pkt = up[i].pkt;
-					const c = sp.counters;
-					const before = { late: c.late, resync: c.resync };
-					let copies = 0;
-					let real = 0;
-					for (const cmd of pkt.cmds) {
-						arrived.add(cmd.seq);
-						const d = seqDiff(cmd.seq, sp.lastSeq);
-						if (!sp.started || d > 0 || d < -CFG.INPUT_SEQ_WINDOW) continue;
-						if (simulated.has(cmd.seq)) copies += 1;
-						else {
-							real += 1;
-							if (t >= WARMUP_S) lateRealSeqs.add(cmd.seq);
-						}
+				if (up[i].at <= t) landed.push(up.unorderedRemove(i));
+			}
+			landed.sort((a, b) => a.at - b.at || a.order - b.order);
+			for (const { pkt } of landed) {
+				const c = sp.counters;
+				const before = { late: c.late, resync: c.resync };
+				let copies = 0;
+				let overflowed = 0;
+				let real = 0;
+				const entering = [];
+				for (const cmd of pkt.cmds) {
+					arrived.add(cmd.seq);
+					const d = seqDiff(cmd.seq, sp.lastSeq);
+					if (sp.started && d > CFG.INPUT_SEQ_WINDOW) continue;
+					if (!sp.started || d > 0) {
+						entering.push(cmd.seq);
+						continue;
 					}
-					PL.acceptInput(sp, pkt, now);
-					up.unorderedRemove(i);
-					// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies
-					if (c.resync === before.resync && c.late - before.late !== copies + real) lateMismatch += 1;
-					if (t >= WARMUP_S) {
-						lateCopies += copies;
-						lateReal += real;
+					if (d < -CFG.INPUT_SEQ_WINDOW) continue;
+					if (simulated.has(cmd.seq)) copies += 1;
+					else if (queued.has(cmd.seq)) overflowed += 1;
+					else {
+						real += 1;
+						if (t >= WARMUP_S) lateRealSeqs.add(cmd.seq);
 					}
+				}
+				PL.acceptInput(sp, pkt, now);
+				// everything newer than lastSeq entered the queue, if only for the instant before it overflowed
+				for (const seq of entering) queued.add(seq);
+				// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies
+				const late = c.late - before.late;
+				if (c.resync === before.resync && late !== copies + overflowed + real) lateMismatch += 1;
+				if (t >= WARMUP_S) {
+					lateCopies += copies;
+					lateOverflowed += overflowed;
+					lateReal += real;
 				}
 			}
 			acc += Math.min(dt, 1);
@@ -425,7 +520,10 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 				const filled = c.filled - before.filled;
 				// one command per tick, ALWAYS (§2.2): the whole speedhack argument rests on it
 				if (consumed + filled > 1) throw new Error("takeCommand used more than one command in one tick");
-				if (consumed > 0) simulated.add(cmd.seq);
+				if (consumed > 0) {
+					simulated.add(cmd.seq);
+					tapsConsumed += edgeTotal(cmd.edges);
+				}
 				if (t >= WARMUP_S) {
 					ticksSteady += 1;
 					fillsSteady += filled;
@@ -473,6 +571,7 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 		hitches,
 		lateSteady,
 		lateCopies,
+		lateOverflowed,
 		lateReal,
 		lateRealDistinct: lateRealSeqs.size(),
 		lateMismatch,
@@ -487,6 +586,10 @@ function run({ seconds = 20, rtt = 0.06, jitter = 0.008, loss = 0, clientDt = ()
 		stallDropped: client.stats().stallDropped,
 		seqWindow,
 		resync,
+		tapsMade,
+		tapsBuilt,
+		tapsSent,
+		tapsConsumed,
 	};
 }
 
@@ -498,19 +601,22 @@ console.log(
 
 /** one frame in twenty takes `ms`: a machine that is busy with something else now and then */
 const hitchEvery20 = ms => i => (i % 20 === 19 ? ms / 1000 : SIM_DT);
+/** one frame every two seconds takes `ms`, the rest run at 60 FPS: each long frame is on its own */
+const isolatedHitch = ms => i => (i % 120 === 119 ? ms / 1000 : SIM_DT);
 
 /**
- * How many ticks a client hitch of `ms` leaves the server with NOTHING to simulate, at most: the hitch itself
- * plus the frame after it, because the frame that ends a hitch makes more than MAX_COMMANDS_PER_FRAME commands,
- * drops its backlog (commands.ts `skipBacklog`) and so sends nothing -- the next packet leaves one frame later.
- * The queue the server was holding covers part of that; nothing can cover more.
+ * How many ticks a client hitch of `ms` leaves the server with NOTHING to simulate, at most: the hitch itself.
+ * The frame that ends it sends what it builds at once (commands.ts `dropBacklog` drops the backlog's TIME and
+ * `flush` sends every command), and the queue the server was holding covers part of it; nothing can cover more.
+ * It was one tick more while the frame that ended a hitch cleared its unacked queue and sent nothing.
  */
-const starvedTicks = ms => Math.ceil((ms / 1000) * CFG.SIM_HZ) + 1;
+const starvedTicks = ms => Math.ceil((ms / 1000) * CFG.SIM_HZ);
 
 const CASES = [
 	// the clean links are the regression guard: the queue must never run dry on them
-	{ name: "1) LAN: 20 ms, sem jitter, sem perda", rtt: 0.02, jitter: 0, loss: 0, clean: true },
-	{ name: "2) tipico: 60 ms, 8 ms de jitter", rtt: 0.06, jitter: 0.008, loss: 0, clean: true },
+	{ name: "1) LAN: 20 ms, sem jitter, sem perda", rtt: 0.02, jitter: 0, loss: 0, clean: true, tapGuard: true },
+	{ name: "2) tipico: 60 ms, 8 ms de jitter", rtt: 0.06, jitter: 0.008, loss: 0, clean: true, tapGuard: true },
+	// 2% loss may legitimately take all three copies of a command, taps and all: reported, not guarded
 	{ name: "3) ruim: 120 ms, 25 ms de jitter, 2% de perda", rtt: 0.12, jitter: 0.025, loss: 0.02, clean: true },
 	/*
 	 * The loaded machine. Studio playtests run the server and every client on ONE computer, and the playtest
@@ -525,13 +631,19 @@ const CASES = [
 		jitter: 0.008,
 		clientDt: hitchEvery20(150),
 		clientHitchMs: 150,
+		tapGuard: true,
 	},
+	/*
+	 * A hitching server drops the commands it has no ticks for at the queue's ceiling -- their movement, by design.
+	 * Their taps are carried to the new head (players.ts `enqueue`), so those are guarded here too.
+	 */
 	{
 		name: "5) servidor engasga: 1 heartbeat em 20 leva 100 ms",
 		rtt: 0.06,
 		jitter: 0.008,
 		serverDt: hitchEvery20(100),
 		serverHitch: true,
+		tapGuard: true,
 	},
 	{
 		name: "6) os dois: Studio com servidor e clientes no mesmo PC",
@@ -541,13 +653,64 @@ const CASES = [
 		serverDt: hitchEvery20(80),
 		clientHitchMs: 120,
 		serverHitch: true,
+		tapGuard: true,
+	},
+	/*
+	 * The client's FRAME RATE, with a tap on every frame. A phone or a weak PC runs at 15-30 FPS, and a frame of
+	 * 1/15 s is worth four commands. The criterion is absolute: no tap may be lost because of the rhythm of the
+	 * client's frames -- not at a steady low FPS, not on the one long frame of an otherwise smooth game. The link
+	 * is kept clean (no loss, no jitter) so that whatever is lost here is lost by the frame rate and nothing else;
+	 * every other case carries taps too, on its own link.
+	 *
+	 * Before commands.ts sent one packet per command (one per frame, 3 commands, taps on the frame's oldest):
+	 * 15 fps 0 of 270 taps, 20 fps 339 of 360, the 70 ms frame 1043 of 1052, the 150 ms frame 1008 of 1016.
+	 */
+	{ name: "7) 15 fps: cada quadro vale 4 comandos", rtt: 0.06, jitter: 0, clientDt: () => 1 / 15, tapGuard: true },
+	{
+		name: "8) 20 fps: 3 comandos por quadro, 4 quando a dilatacao acelera",
+		rtt: 0.06,
+		jitter: 0,
+		clientDt: () => 1 / 20,
+		tapGuard: true,
+	},
+	{
+		name: "9) um quadro isolado de 70 ms (1 a cada 2 s, o resto a 60 fps)",
+		rtt: 0.06,
+		jitter: 0,
+		clientDt: isolatedHitch(70),
+		clientHitchMs: 70,
+		tapGuard: true,
+	},
+	{
+		name: "10) um quadro isolado de 150 ms (1 a cada 2 s, o resto a 60 fps)",
+		rtt: 0.06,
+		jitter: 0,
+		clientDt: isolatedHitch(150),
+		clientHitchMs: 150,
+		tapGuard: true,
+	},
+	/*
+	 * The worst the network may do to it: the packets of one frame REORDERED among themselves (a jitter draw per
+	 * packet), at 15 FPS -- four packets a frame -- with a 150 ms frame every two seconds to leave the queue dry
+	 * right when a burst lands. A 3-command packet cannot carry a whole 4-command frame, so when {c4, c3, c2}
+	 * overtakes the three packets that carry c1 by a tick, the server jumps over c1: one tick of MOVEMENT, which
+	 * the reconciliation corrects. The frame's TAPS ride c4, which nothing sent in its own frame can overtake, so
+	 * they must all still land.
+	 */
+	{
+		name: "11) pior caso: pacotes do mesmo quadro reordenados (15 fps, 8 ms por pacote, 150 ms a cada 2 s)",
+		rtt: 0.06,
+		jitter: 0.008,
+		burstReorder: true,
+		clientDt: i => (i % 30 === 29 ? 0.15 : 1 / 15),
+		tapGuard: true,
 	},
 ];
 
 for (const c of CASES) {
 	console.log("");
 	console.log(c.name);
-	const r = run({ ...c, seconds: num("--seconds", 20) });
+	const r = run({ ...c, taps: true, seconds: num("--seconds", 20) });
 	console.log(
 		`        profundidade media ${r.avgDepth.toFixed(2)} (minima ${r.depthMin}), envio a ${r.hz.toFixed(2)} Hz`,
 	);
@@ -557,12 +720,17 @@ for (const c of CASES) {
 			`cliente, ${r.droppedTicks} ticks perdidos no servidor, ${r.seqWindow} fora da janela, ${r.resync} reancoragens`,
 	);
 	console.log(
-		`        ${r.lateSteady} atrasados = ${r.lateCopies} copias de comandos ja simulados + ${r.lateReal} comandos ` +
-			`reais jogados fora (${r.lateRealDistinct} distintos)`,
+		`        ${r.lateSteady} atrasados = ${r.lateCopies} copias de comandos ja simulados + ${r.lateOverflowed} ` +
+			`copias de comandos que o teto da fila ja descartou + ${r.lateReal} comandos reais jogados fora ` +
+			`(${r.lateRealDistinct} distintos)`,
 	);
 	console.log(
 		`        ${r.realLost} comandos reais chegaram e nunca foram simulados; ` +
 			`${r.predictedLost} previstos pelo dono e nunca simulados`,
+	);
+	console.log(
+		`        toques: ${r.tapsMade} feitos, ${r.tapsBuilt} empacotados, ${r.tapsSent} enviados, ` +
+			`${r.tapsConsumed} simulados pelo servidor`,
 	);
 
 	// the harness's own sorting of the refusals must agree with the server's counter, or the lines below lie
@@ -632,6 +800,18 @@ for (const c of CASES) {
 			check("o engasgo do servidor sozinho nunca seca a fila", r.fills === 0, r.fills + " preenchimentos");
 		}
 	}
+
+	if (c.tapGuard) {
+		/*
+		 * A tap is the one input prediction cannot paper over: a lost step is corrected, a lost shot, reload or E is
+		 * simply gone. Every tap made has to reach the server's simulation -- once: more would be a replayed action.
+		 */
+		check(
+			"todo toque feito chega a simulacao do servidor, uma vez so",
+			r.tapsMade > 0 && r.tapsConsumed === r.tapsMade,
+			`${r.tapsConsumed} de ${r.tapsMade} simulados; ${r.tapsBuilt} empacotados, ${r.tapsSent} enviados`,
+		);
+	}
 }
 
 console.log("");
@@ -639,4 +819,7 @@ if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
 	process.exit(1);
 }
-console.log("OK: a fila de input nao trava -- um engasgo custa os ticks que durou, e nenhum comando real e recusado");
+console.log(
+	"OK: a fila de input nao trava -- um engasgo custa os ticks que durou, nenhum comando real e recusado, " +
+		"e nenhum toque se perde pelo ritmo de quadros do cliente",
+);

@@ -13,13 +13,20 @@
  *     starves it. Instead of skipping or doubling commands (which would be a visible hitch), the sampling
  *     rate is dilated by at most ±2 % — 58.8 to 61.2 Hz — which is the Overwatch method the doc cites. Every
  *     command still counts as 1/60 s on both sides, so determinism is untouched.
- *  3. **The unacked queue, the redundancy window and the local token bucket.** One packet per command carries
- *     the new command plus the two before it (§2.2: two losses in a row recover without a retransmission),
- *     and the bucket mirrors the server's 120/s + burst 40 limit so a frame hitch never trips it.
+ *  3. **The unacked queue, the redundancy window and the local token bucket.** One packet per COMMAND — not
+ *     per frame — carries the new command plus the two before it (§2.2: two losses in a row recover without a
+ *     retransmission), so every command leaves at least once and in up to three packets whatever the frame
+ *     rate (see `flush`). The bucket mirrors the server's 120/s + burst 40 limit so a frame hitch never trips it.
+ *
+ * What a frame rate may never cost is a command, and above all a TAP: a lost step is corrected by the
+ * reconciliation, a lost shot, reload or E is simply gone. tools/test-input-buffer.mjs follows every tap from the
+ * frame that made it to the `takeCommand` that simulated it, at 15 and 20 FPS and across isolated 70 / 150 ms
+ * frames, and requires all of them to arrive exactly once.
  *
  * Pure: no Roblox service, no Instance. The caller feeds raw input and the current time; that is also what
- * lets tools/test-predict.mjs drive this against a simulated server.
+ * lets tools/test-predict.mjs drive this against the real server queue (server/sim/players.ts).
  */
+import { wrapU16 } from "shared/net/codec";
 import { InputCommand, InputPacket, makeCommand, packEdges } from "shared/net/protocol";
 import {
 	INPUT_BUFFER_MAX,
@@ -47,7 +54,9 @@ export interface RawInput {
 
 /**
  * Commands produced in a single frame are capped: after a stall (loading, alt-tab) the accumulated time is
- * dropped rather than fired as a burst the server would only throw away (its queue holds INPUT_BUFFER_MAX).
+ * dropped rather than fired as a burst the server would only throw away (its queue holds INPUT_BUFFER_MAX, so a
+ * burst of exactly that many is all newest-kept: the queue overflows its OLDER commands, never the frame's own).
+ * 4 is also exactly one frame at 15 FPS, the lowest rate that still keeps up with the server's clock.
  */
 export const MAX_COMMANDS_PER_FRAME = INPUT_BUFFER_MAX;
 /** the unacked queue never grows past this (≈ 3 s at 60 Hz): a dead link must not eat memory */
@@ -66,9 +75,9 @@ export interface CommandStats {
 	sampled: number;
 	/** packets the local token bucket refused (a frame hitch, or a sampling bug) */
 	rateDropped: number;
-	/** commands dropped because the accumulator was past MAX_COMMANDS_PER_FRAME */
+	/** command intervals of TIME dropped because the accumulator was past MAX_COMMANDS_PER_FRAME (no seq is used) */
 	stallDropped: number;
-	/** how many stalls those drops came from; each one skips `seq` forward to stay on the server's tick count */
+	/** how many stalls those drops came from */
 	stalls: number;
 	/** commands still waiting for an ack */
 	pending: number;
@@ -82,6 +91,8 @@ export class CommandStream {
 	private depth = INPUT_BUFFER_TARGET;
 	/** unacked commands, ascending seq (consecutive: the redundancy window needs that) */
 	private readonly pending = new Array<InputCommand>();
+	/** commands built since the last `flush`: the newest of `pending`, each still owed its own packet */
+	private unsent = 0;
 	// one-shot edges accumulated since the last command was built (the render frame may be shorter)
 	private eAttackPress = 0;
 	private eAttackRelease = 0;
@@ -95,14 +106,25 @@ export class CommandStream {
 	private stallDropped = 0;
 	private stalls = 0;
 
-	/** new session: forget the queue and start the sequence at `startSeq` */
-	reset(startSeq = 0): void {
-		this.seq = startSeq;
+	/**
+	 * New session: forget the queue, the edges and the dilation. The NUMBERING carries on where it was, unless
+	 * `startSeq` pins it (the tools do, to start from a known seq).
+	 *
+	 * Carrying on is what makes the server's forward-only re-anchor safe (server/sim/players.ts `enqueue`). A new
+	 * run arrives with LeaveWorld + EnterWorld, and the server builds a NEW ServerPlayer that bootstraps on the
+	 * first command it sees -- but an in-flight packet of the old run may be that first command. A numbering that
+	 * restarted at 0 would then sit far BEHIND the one the body was anchored on, and a window that is never
+	 * re-anchored backwards would refuse it for good. Carried on, every command of the new run is newer than every
+	 * command of the old one, whichever lands first.
+	 */
+	reset(startSeq?: number): void {
+		if (startSeq !== undefined) this.seq = wrapU16(startSeq);
 		this.acc = 0;
 		this.dilation = 1;
 		this.dilationWant = 1;
 		this.depth = INPUT_BUFFER_TARGET;
 		this.pending.clear();
+		this.unsent = 0;
 		this.eAttackPress = 0;
 		this.eAttackRelease = 0;
 		this.eActionPress = 0;
@@ -117,7 +139,16 @@ export class CommandStream {
 
 	/**
 	 * The one-shot input flags of ONE render frame. They are counted (0..3 per command, §2.2) and drained by
-	 * the next command, so a press is never lost at 240 FPS nor counted twice at 30 FPS.
+	 * the next command built, so a press is never lost at 240 FPS nor counted twice at 30 FPS.
+	 *
+	 * When a frame builds several commands (15-30 FPS, or the frame that ends a hitch) the taps ride its NEWEST
+	 * one. `flush` sends every command, so any of them would reach the wire; the newest is the one that best
+	 * survives the wire. The oldest command of a 4-command frame travels in three packets that all leave in that
+	 * same instant, and the frame's fourth packet ({c4, c3, c2}) does not carry it -- let that packet overtake the
+	 * other three by a tick while the server's queue is dry (exactly the state a hitch leaves it in) and the server
+	 * jumps over c1 for good. The newest command has one copy in this frame and two in the next frames' packets,
+	 * and nothing sent in this frame can overtake it. It is also the tick the screen shows at the end of the
+	 * frame, so the shot leaves from where the survivor is drawn.
 	 */
 	addEdges(attackPress: boolean, attackRelease: boolean, actionPress: boolean, reload: boolean): void {
 		if (attackPress) this.eAttackPress += 1;
@@ -157,50 +188,55 @@ export class CommandStream {
 		this.dilation += (this.dilationWant - this.dilation) * math.min(1, math.max(0, dt) / DILATION_TAU_S);
 		this.acc += math.max(0, dt);
 		const step = this.step();
+		const due = math.floor(this.acc / step);
+		if (due > MAX_COMMANDS_PER_FRAME) this.dropBacklog(due - MAX_COMMANDS_PER_FRAME, step);
 		let made = 0;
-		while (this.acc >= step) {
-			if (made >= MAX_COMMANDS_PER_FRAME) {
-				this.skipBacklog(step);
-				break;
-			}
+		while (this.acc >= step && made < MAX_COMMANDS_PER_FRAME) {
 			this.acc -= step;
-			out.push(this.build(raw));
 			made += 1;
+			// the frame's taps ride the last command it builds (see `addEdges`)
+			const newest = this.acc < step || made >= MAX_COMMANDS_PER_FRAME;
+			out.push(this.build(raw, newest));
 		}
 	}
 
 	/**
-	 * A stall (alt-tab, a long hitch, a breakpoint) left more simulated time in the accumulator than the server's
-	 * queue could ever hold, so the backlog is dropped instead of fired as a burst it would only throw away.
+	 * A stall (alt-tab, a long hitch, a breakpoint) left more time in the accumulator than the server's queue could
+	 * ever hold. The OLDEST `n` command intervals of it are dropped, BEFORE the frame builds its commands -- and they
+	 * are dropped as TIME, not as numbers: `seq` does not move, and the unacked queue is kept.
 	 *
-	 * Dropping N commands means ADVANCING `seq` BY N. The sequence is not a counter of packets sent — it is this
-	 * client's copy of the server's tick numbering (§2.2: one command is worth exactly one tick), and prediction
-	 * replays against it. The server WAITED through those ticks without spending their numbers (server/sim/
-	 * players.ts: a fill never advances `lastSeq`), so it takes the jump in one step as long as it stays inside
-	 * ±INPUT_SEQ_WINDOW; a stall long enough to leave the window is re-anchored there instead.
+	 * The server WAITS through the ticks it had nothing for, without spending a number (server/sim/players.ts: a
+	 * filled tick never advances `lastSeq`), so after a stall it is exactly where this numbering stopped. Carrying
+	 * on from there means:
+	 *  - the commands this frame builds, and whatever was unacked before the stall, are all still sent (the queue
+	 *    stays consecutive, which the redundancy window needs) and still replayed by the reconciliation -- they are
+	 *    exactly what the server is about to simulate, so the stall costs no correction;
+	 *  - no stall, however long, can push the numbering out of the ±INPUT_SEQ_WINDOW window, so it never needs the
+	 *    server's re-anchor and its RESYNC_IDLE_TICKS wait (which the server may not reach in time when it stalled
+	 *    too: Studio runs everything on one PC).
 	 *
-	 * The unacked queue goes with it: the redundancy window has to carry consecutive seqs. Whatever of it was
-	 * already sent still lands and is simulated; the next reconciliation finds no history for that ack and
-	 * rebuilds from the server's position, which is exactly right after a stall.
+	 * The rule before this ADVANCED `seq` by the dropped count ("the client's copy of the server's tick numbering",
+	 * from when a fill still spent a number) and cleared the unacked queue, AFTER building the frame's commands: the
+	 * frame's commands -- and its taps -- were predicted and then never sent. tools/test-input-buffer.mjs case 4
+	 * measured it: 156 commands predicted by their owner and never simulated, 38 of 776 taps lost.
 	 */
-	private skipBacklog(step: number): void {
-		const skipped = math.floor(this.acc / step);
-		this.acc = 0;
-		if (skipped <= 0) return;
-		this.stallDropped += skipped;
+	private dropBacklog(n: number, step: number): void {
+		this.acc -= n * step;
+		this.stallDropped += n;
 		this.stalls += 1;
-		this.seq = (this.seq + skipped) % 65536;
-		this.pending.clear();
 	}
 
-	/** builds one command from `raw` plus the edges seen since the previous one, and queues it */
-	private build(raw: RawInput): InputCommand {
-		const edges = packEdges(this.eAttackPress, this.eAttackRelease, this.eActionPress, this.eReload);
-		this.eAttackPress = 0;
-		this.eAttackRelease = 0;
-		this.eActionPress = 0;
-		this.eReload = 0;
-		this.seq = (this.seq + 1) % 65536;
+	/** builds one command from `raw` -- with the edges seen since the last drain when `withEdges` -- and queues it */
+	private build(raw: RawInput, withEdges: boolean): InputCommand {
+		let edges = 0;
+		if (withEdges) {
+			edges = packEdges(this.eAttackPress, this.eAttackRelease, this.eActionPress, this.eReload);
+			this.eAttackPress = 0;
+			this.eAttackRelease = 0;
+			this.eActionPress = 0;
+			this.eReload = 0;
+		}
+		this.seq = wrapU16(this.seq + 1);
 		const mag = math.clamp(raw.magnitude, 0, 1);
 		const len = math.sqrt(raw.moveX * raw.moveX + raw.moveY * raw.moveY);
 		// makeCommand takes the direction's length as the magnitude: feed it a vector of exactly `mag`
@@ -208,17 +244,42 @@ export class CommandStream {
 		const cmd = makeCommand(this.seq, raw.moveX * scale, raw.moveY * scale, raw.aim, raw.held, edges);
 		this.pending.push(cmd);
 		while (this.pending.size() > MAX_PENDING) this.pending.remove(0);
+		this.unsent = math.min(this.unsent + 1, this.pending.size());
 		this.sampled += 1;
 		return cmd;
 	}
 
-	/** the packet for the newest command: it plus the 2 before it, newest first (§2.2) */
-	packet(viewTick: number, viewFrac: number): InputPacket | undefined {
-		const n = this.pending.size();
-		if (n === 0) return undefined;
-		const cmds = new Array<InputCommand>();
-		for (let i = 0; i < INPUT_REDUNDANCY && i < n; i++) cmds.push(this.pending[n - 1 - i]);
-		return { viewTick, viewFrac, cmds };
+	/**
+	 * This frame's packets, appended to `out` oldest first: ONE PER COMMAND built since the last flush, each with
+	 * its command plus the (up to) INPUT_REDUNDANCY - 1 unacked ones before it, newest first (§2.2). A packet the
+	 * local token bucket refuses is skipped; its command still rides in the next two. A frame that built nothing
+	 * sends nothing: at 240 FPS the stream stays at 60 packets/s instead of re-sending the same packet every frame.
+	 *
+	 * Why per COMMAND and not per frame. A packet holds INPUT_REDUNDANCY = 3 commands, and a frame of 1/15 s builds
+	 * four. One packet per frame therefore never carried the oldest of them -- the one that carried the frame's taps
+	 * back then -- and the server jumped over its number: at 15 FPS it simulated 3 commands in 4 (17 fills a
+	 * second, 322 commands predicted and never simulated in 20 s) and 0 of 270 taps. At 20 FPS three commands
+	 * a frame left each one in a single packet, i.e. no redundancy at all, and the dilation's fourth lost 21 of
+	 * 360 taps; a lone 70 ms frame lost its taps the same way (tools/test-input-buffer.mjs, cases 7-10). Per
+	 * command, the wire is the one §2.2 describes at every frame rate -- 60 packets/s, three copies of everything --
+	 * which is still an eighth of Roblox's ~500 events/s budget per client.
+	 */
+	flush(viewTick: number, viewFrac: number, now: number, out: Array<InputPacket>): void {
+		const list = this.pending;
+		const n = list.size();
+		const first = math.max(0, n - this.unsent);
+		this.unsent = 0;
+		for (let i = first; i < n; i++) {
+			if (!this.trySend(now)) continue;
+			const newest = list[i];
+			const cmds = [newest];
+			for (let j = i - 1; j >= 0 && cmds.size() < INPUT_REDUNDANCY; j--) {
+				// §8.1 wants consecutive seqs; the queue always is, and this keeps a packet honest if it ever is not
+				if (list[j].seq !== wrapU16(newest.seq - (i - j))) break;
+				cmds.push(list[j]);
+			}
+			out.push({ viewTick, viewFrac, cmds });
+		}
 	}
 
 	/**

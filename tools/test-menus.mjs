@@ -302,14 +302,16 @@ class Client {
 		readRawInput(this.cam, input, false, this.raw);
 		const cmds = [];
 		this.commands.sample(dt, this.raw, cmds);
-		// netUpdate step 6 (send): the newest command and the two before it, through the local token bucket
-		let payload;
-		const packet = this.commands.packet(wrapU16(Math.max(0, viewTick)), 0);
-		if (packet !== undefined && this.commands.trySend(this.now)) payload = P.encodeInput(packet);
+		// netUpdate step 6 (send), as netClient.ts writes it since ff523ca: one packet per NEW command (the
+		// command and the two before it), each through the local token bucket -- so a frame that built no command
+		// sends nothing, and a long frame sends several
+		const packets = [];
+		this.commands.flush(wrapU16(Math.max(0, viewTick)), 0, this.now, packets);
+		const payloads = packets.map(p => P.encodeInput(p)).filter(p => p !== undefined);
 		// GameLoop.update's last line
 		input.beginFrame();
 		this.now += dt;
-		return { seen, cmds, payload, afterBlocked: input.attackBlocked };
+		return { seen, cmds, payloads, afterBlocked: input.attackBlocked };
 	}
 }
 
@@ -441,7 +443,7 @@ function runSession({ withClient, walkers = true, frames: total, bagOpen, handsA
 			// main.client.ts: `held = menuOpen || !alive`
 			const out = client.frame(TICK_DT, bag || p.dead, handsAt(f), sim.tick - VIEW_LAG_TICKS);
 			run.frames.push({ f, bag, ...out });
-			if (out.payload !== undefined) run.verdicts.push(PL.ingestInput(sp, out.payload, now));
+			for (const payload of out.payloads) run.verdicts.push(PL.ingestInput(sp, payload, now));
 		}
 		const x0 = p.x;
 		const y0 = p.y;
@@ -624,11 +626,15 @@ section("1) with the Bag open the client sends honest commands: standing, empty 
 	);
 	let gaps = 0;
 	for (let i = 1; i < cmds.length; i++) if (cmds[i].seq !== wrapU16(cmds[i - 1].seq + 1)) gaps += 1;
-	const silent = frames.filter(fr => fr.payload === undefined).length;
+	// since ff523ca the client sends one packet per NEW command, not one per frame: with the ±2% dilation a
+	// frame now and then builds no command and rightly sends nothing, and its neighbour builds two. What must
+	// hold is that no command is ever built and left unsent.
+	const unsent = frames.filter(fr => fr.cmds.length > 0 && fr.payloads.length === 0).length;
+	const sentPackets = frames.reduce((a, fr) => a + fr.payloads.length, 0);
 	check(
-		"one packet every frame, consecutive seqs: no frame of silence",
-		gaps === 0 && silent === 0,
-		`${silent} silent frame(s), ${gaps} seq gap(s)`,
+		"one packet per command, consecutive seqs: every command built goes out",
+		gaps === 0 && unsent === 0 && sentPackets === cmds.length,
+		`${sentPackets} packets for ${cmds.length} commands, ${unsent} frame(s) that built a command and sent nothing, ${gaps} seq gap(s)`,
 	);
 }
 {
@@ -746,7 +752,9 @@ section("2) the server with those commands: the zombies, the clock and the damag
 	const verdicts = bagRun.verdicts;
 	check(
 		"every packet the Bag's client sent was accepted (token bucket, decodeInput, §2.2 queue)",
-		verdicts.length === BAG_FRAMES && verdicts.every(v => v === PL.InputVerdict.Ok),
+		verdicts.length === bagRun.frames.reduce((a, fr) => a + fr.payloads.length, 0) &&
+			verdicts.length > 0 &&
+			verdicts.every(v => v === PL.InputVerdict.Ok),
 		`${verdicts.filter(v => v === PL.InputVerdict.Ok).length} of ${verdicts.length} Ok, ` +
 			`${atEnd.counters.malformed} malformed, ${atEnd.counters.rateDropped} rate-dropped`,
 	);

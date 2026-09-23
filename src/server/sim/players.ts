@@ -11,19 +11,24 @@
  *   - exactly ONE command is used per simulation tick, consumed or filled, never two (this is what makes a
  *     speedhack impossible: sending twice as many commands only fills the queue and raises `inputOverflow`, it
  *     never moves anyone faster);
- *   - a command whose seq is outside ±INPUT_SEQ_WINDOW of the last consumed one is refused (§8.1);
- *   - a command the server already CONSUMED (or jumped over, see below) is refused as `late`: with the §2.2
- *     redundancy every command arrives three times, so this is mostly the second and third copies;
+ *   - a command whose seq is outside ±INPUT_SEQ_WINDOW of `lastSeq` (the last one consumed, jumped over or dropped)
+ *     is refused (§8.1);
+ *   - a command the server already CONSUMED (or jumped over, or dropped at the ceiling, see below) is refused as
+ *     `late`: with the §2.2 redundancy every command arrives three times, so this is mostly the second and third
+ *     copies;
  *   - a command already sitting in the queue is refused as `duplicate` (that is the §2.2 redundancy working);
  *   - out-of-order commands are inserted at the right place while they have not been consumed;
- *   - a gap at the head of the queue is a command that will never come (its three copies were lost, or the
- *     client dropped it in a hitch): the head is consumed at once instead of waiting for it;
- *   - over INPUT_BUFFER_MAX the OLDEST are dropped and `inputOverflow` counts them;
+ *   - a gap at the head of the queue is a command that will never come (its three copies were lost): the head is
+ *     consumed at once instead of waiting for it. The client never leaves a gap on purpose -- a hitch drops time,
+ *     not numbers (client/net/commands.ts `dropBacklog`);
+ *   - over INPUT_BUFFER_MAX the OLDEST are dropped and `inputOverflow` counts them. Their MOVEMENT is gone -- that
+ *     is what caps a lag switch at INPUT_BUFFER_MAX ticks -- but their TAPS are carried to the new head (`enqueue`):
+ *     a server hitch or a burst must not delete a shot, a reload or an E;
  *   - the packet itself passes a token bucket of INPUT_RATE/s with a burst of INPUT_BURST (§8.2);
- *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a command OUTSIDE the window re-anchors it
- *     instead of being refused for ever: a client whose numbering restarted (netReset) or jumped more than the
- *     window (a stall longer than INPUT_SEQ_WINDOW ticks, see commands.ts `skipBacklog`) must not be frozen out
- *     of its own session. It is still one command per tick, so it buys nothing.
+ *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a command AHEAD of the window re-anchors it instead
+ *     of being refused for ever: an upstream outage longer than INPUT_SEQ_WINDOW ticks (the client kept numbering,
+ *     every packet was lost) must not freeze the survivor out of its own session. Only AHEAD, never behind: see
+ *     `enqueue`. It is still one command per tick, so it buys nothing.
  *
  * Empty queue: the tick WAITS. It is filled with the last command's aim and held buttons but `moveMag = 0` and
  * `edges = 0` — the survivor stands still and stays vulnerable (§9.1 "Lag switch: sem comandos o personagem fica
@@ -42,10 +47,13 @@
  * movement) was rejected with it: coasting a tick and then consuming the real command late would move the body
  * twice for one command.
  *
- * A stall no longer needs the re-anchor: the server waited, so a client that resumes its own numbering is exactly
- * where the server left it. And a command BEHIND `lastSeq` inside the window is now a copy of one already consumed
- * (or one the server jumped over), so it never re-anchors: that would simulate consumed commands a second time and
- * walk the ack backwards.
+ * A stall does not need the re-anchor: the server waited, and the client carries its numbering on through a stall
+ * (it drops the backlog's time, not its numbers), so it resumes exactly where the server left it. Nor does a new
+ * run: netReset comes with LeaveWorld + EnterWorld, i.e. a NEW ServerPlayer that bootstraps on its first command,
+ * and the client's numbering carries on across the reset too (commands.ts `reset`), so even an in-flight packet of
+ * the old run that bootstraps the new body is older than everything after it. So nothing honest ever lands BEHIND
+ * the window: a command back there is a stale copy, and re-anchoring on it would simulate consumed commands a
+ * second time and walk the ack backwards.
  */
 import { dequantAngle8, seqDiff, seqNewer, wrapU16 } from "shared/net/codec";
 import {
@@ -61,7 +69,7 @@ import {
 	INPUT_SEQ_WINDOW,
 	SIM_HZ,
 } from "shared/net/mpConfig";
-import { InputCommand, InputPacket, decodeInput } from "shared/net/protocol";
+import { EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
@@ -80,13 +88,13 @@ export interface InputCounters {
 	seqWindow: number;
 	/** commands already queued — the §2.2 redundancy doing its job, not an anomaly on its own */
 	duplicate: number;
-	/** commands already consumed (or jumped over): mostly the redundant copies of §2.2, harmless */
+	/** commands already consumed, jumped over or dropped at the ceiling: mostly the §2.2 redundant copies */
 	late: number;
 	/** commands dropped because the queue was over INPUT_BUFFER_MAX (§2.2, §9.1 speedhack signal) */
 	inputOverflow: number;
 	/** ticks that WAITED because the queue was empty (a client hitch, lost packets, a lag switch) */
 	filled: number;
-	/** times the window was re-anchored: numbering that restarted or jumped past it (§2.2, see `enqueue`) */
+	/** times the window was re-anchored AHEAD, after an upstream outage longer than it (§2.2, see `enqueue`) */
 	resync: number;
 	/** commands actually consumed by the simulation */
 	consumed: number;
@@ -148,11 +156,18 @@ export interface ServerPlayer {
 	queue: Array<InputCommand>;
 	/** false until the first accepted command: the client's first seq bootstraps `lastSeq` */
 	started: boolean;
-	/** last seq CONSUMED (a filled tick spends none); anything not newer than this is late (§2.2) */
+	/**
+	 * the newest seq the queue is DONE with: consumed, jumped over, or dropped at the ceiling (a filled tick spends
+	 * none). Anything not newer than this is late (§2.2)
+	 */
 	lastSeq: number;
 	/**
-	 * last REAL command consumed — what the snapshot acknowledges. Equal to `lastSeq` now that a fill spends no
-	 * number; kept apart so the contract is explicit: the ack names a command the server really simulated.
+	 * What the snapshot acknowledges: every command up to here is SETTLED -- the server simulated it or never
+	 * will -- so the client may drop it from the replay. Normally that is the last command really simulated. When
+	 * the window is (re-)anchored on a command `s`, the ack becomes `s - 1`, a command the server did NOT simulate:
+	 * it means "everything before `s` is settled", which is exactly right -- whatever the client still holds from
+	 * before `s` is never going to run, and replaying it would mispredict. It trails `lastSeq` after an overflow
+	 * until the next command is consumed, so it only ever names a command that was simulated or skipped for good.
 	 */
 	ackSeq: number;
 	/** last command applied (real or filled): the fill inherits its aim and held buttons */
@@ -192,9 +207,10 @@ export interface ServerPlayerInfo {
 /** spawn protection, in seconds (§7.1) */
 export const SPAWN_SHIELD_S = 3;
 /**
- * Filled ticks with an empty queue after which a command outside the sequence window re-anchors it (see
+ * Filled ticks with an empty queue after which a command AHEAD of the sequence window re-anchors it (see
  * `enqueue`). 15 ticks = 250 ms at 60 Hz: far longer than any packet loss burst the §2.2 redundancy already
- * covers, and short enough that a player coming back from a stall does not notice the recovery.
+ * covers, and short enough that a player coming back from an upstream outage does not notice the recovery (an
+ * outage long enough to leave the window, > 1 s, has already filled far more than this).
  */
 export const RESYNC_IDLE_TICKS = 15;
 
@@ -282,26 +298,41 @@ export function floodReason(sp: ServerPlayer): string | undefined {
 
 // ---------------------------------------------------------------- the input queue (§2.2)
 
+/** `onto` with the one-shot counters of `from` added to its own (each still capped at 3, §2.2) */
+function carryEdges(from: InputCommand, onto: InputCommand): InputCommand {
+	const a = from.edges;
+	const b = onto.edges;
+	const edges = packEdges(
+		edgeCount(a, EdgeShift.AttackPress) + edgeCount(b, EdgeShift.AttackPress),
+		edgeCount(a, EdgeShift.AttackRelease) + edgeCount(b, EdgeShift.AttackRelease),
+		edgeCount(a, EdgeShift.ActionPress) + edgeCount(b, EdgeShift.ActionPress),
+		edgeCount(a, EdgeShift.Reload) + edgeCount(b, EdgeShift.Reload),
+	);
+	// a new table: the decoded command may be shared with whoever handed the packet over
+	return { seq: onto.seq, moveAng: onto.moveAng, moveMag: onto.moveMag, aim: onto.aim, held: onto.held, edges };
+}
+
 function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 	const seq = cmd.seq;
 	if (sp.started) {
 		const gap = seqDiff(seq, sp.lastSeq);
-		const outside = gap > INPUT_SEQ_WINDOW || gap < -INPUT_SEQ_WINDOW;
-		// A client whose numbering RESTARTED (netReset: a new run, a rebirth) or JUMPED past the window (a stall
-		// longer than INPUT_SEQ_WINDOW ticks, which commands.ts skips over) would have every command refused by
-		// §8.1 forever, freezing the survivor. After RESYNC_IDLE_TICKS filled ticks with nothing queued, the
-		// stream is re-anchored on whatever numbering the client is using now. This gives a cheater nothing: the
-		// tick still consumes exactly one command, and the protocol has no position or dt.
-		// Only OUTSIDE the window: a filled tick spends no seq, so a command behind `lastSeq` inside it is a
-		// copy of one already consumed (the §2.2 redundancy, or a delayed packet after an outage) or one the
-		// head jumped over, and re-anchoring on it would simulate consumed commands again and walk the ack back.
-		if (outside && sp.queue.size() === 0 && sp.idleFills >= RESYNC_IDLE_TICKS) {
+		// An upstream outage longer than INPUT_SEQ_WINDOW ticks (the client kept numbering while every packet was
+		// lost) lands AHEAD of the window, and §8.1 would refuse every command from then on, freezing the survivor.
+		// After RESYNC_IDLE_TICKS filled ticks with nothing queued, the window is re-anchored on it. This gives a
+		// cheater nothing: the tick still consumes exactly one command, and the protocol has no position or dt.
+		// Only AHEAD. Nothing honest lands behind the window: a stall carries the numbering on (commands.ts
+		// `dropBacklog`), and a new run is a new ServerPlayer whose client carried its numbering on as well
+		// (commands.ts `reset`). A command behind it is a stale copy -- say [100, 99, 98] held up in the network
+		// while a forward re-anchor moved the window on -- and re-anchoring BACK on it simulated 98..100 a second
+		// time and walked the ack backwards (the reviewer's reproduction; tools/test-server-sim.mjs case d).
+		if (gap > INPUT_SEQ_WINDOW && sp.queue.size() === 0 && sp.idleFills >= RESYNC_IDLE_TICKS) {
 			sp.started = false;
 			sp.counters.resync += 1;
 		}
 	}
 	if (!sp.started) {
-		// the client's own numbering bootstraps the window: the first command is the next one to consume
+		// The client's own numbering anchors the window: this command is the next one to consume. The ack names
+		// the one before it -- never simulated, but settled: see `ackSeq`.
 		sp.started = true;
 		sp.lastSeq = wrapU16(seq - 1);
 		sp.ackSeq = sp.lastSeq;
@@ -313,8 +344,8 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 		return;
 	}
 	if (d <= 0) {
-		// already consumed (the second and third copies of the §2.2 redundancy), or jumped over by a newer one
-		// when it never came; a FILLED tick never makes a command late, because a fill spends no seq
+		// already consumed (the second and third copies of the §2.2 redundancy), jumped over by a newer one when
+		// it never came, or dropped at the ceiling; a FILLED tick never makes a command late, as it spends no seq
 		sp.counters.late += 1;
 		return;
 	}
@@ -333,8 +364,18 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 	}
 	sp.queue[i] = cmd;
 	while (sp.queue.size() > INPUT_BUFFER_MAX) {
-		sp.queue.shift();
+		const dropped = sp.queue.shift();
+		if (dropped === undefined) break;
 		sp.counters.inputOverflow += 1;
+		// the queue is done with it: a later copy (the redundancy carries each command three times) must read as
+		// late, not as a newcomer to queue -- and drop, and carry its taps -- a second time
+		sp.lastSeq = dropped.seq;
+		// Its MOVEMENT is gone: that is the ceiling, and what holds a lag switch to INPUT_BUFFER_MAX ticks of
+		// banked movement. Its TAPS ride on in the new head instead. A tap is not movement the ceiling has to cap
+		// (a shot still waits for the weapon's cadence, a reload or an E happens once however many presses carry
+		// it), and dropping it is the one loss the player cannot be compensated for: a server hitch, or a burst
+		// that lands on a full queue, must not eat a shot. tools/test-input-buffer.mjs case 5 lost 161 of 1080.
+		if (dropped.edges !== 0) sp.queue[0] = carryEdges(dropped, sp.queue[0]);
 	}
 }
 

@@ -30,7 +30,7 @@
  *   3. reconcile   drain the snapshots that arrived since the last frame: ack, queue depth, rewind + replay
  *   4. predict     sample 0..n commands out of this frame and step each one with the shared simulation
  *   5. interpolate move everyone else to the render time, `delay` behind the clock
- *   6. send        one Input packet (the new command + the 2 before it) carrying the view time of step 5
+ *   6. send        one Input packet per command of step 4 (it + the 2 before it), with the view time of step 5
  *   7. present     bleed the visual offset off and write the drawn position onto the survivor
  */
 import { GameRefs } from "../systems/types";
@@ -47,6 +47,7 @@ import {
 	AnnounceKind,
 	FxEvent,
 	InputCommand,
+	InputPacket,
 	IntentKind,
 	LifeState,
 	PlayerFlag,
@@ -210,6 +211,8 @@ const deaths = new Array<ZombieDeathEvent>();
 const pendingAnnounce = new Array<string>();
 let pendingClock: { worldDay: number; dayTime: number; tick: number; rain: boolean; waveFlags: number } | undefined;
 const sampled = new Array<InputCommand>();
+/** this frame's Input packets, one per command built (commands.ts `flush`) */
+const outbound = new Array<InputPacket>();
 const raw: RawInput = createRawInput();
 
 let remotes: Remotes | undefined;
@@ -806,18 +809,24 @@ function predict(refs: GameRefs, dt: number): void {
 	for (const cmd of sampled) prediction.step(cmd);
 }
 
-/** step 6: the newest command plus the two before it, with the view time of the interpolation (§2.2, §2.3) */
+/**
+ * step 6: one packet per command this frame built -- each with the two before it -- and the view time of the
+ * interpolation (§2.2, §2.3). Per command, not per frame: a 15 FPS frame builds four, and a single packet of
+ * three would never carry the oldest (see commands.ts `flush`).
+ */
 function send(now: number): void {
 	const net = remotes;
 	if (net === undefined) return;
 	const render = snapshots.renderNow();
 	const viewTick = math.floor(render);
 	const viewFrac = math.clamp(math.floor((render - viewTick) * 256), 0, 255);
-	const packet = commands.packet(viewTick, viewFrac);
-	if (packet === undefined) return;
-	if (!commands.trySend(now)) return;
-	const payload = encodeInput(packet);
-	if (payload !== undefined) net.input.FireServer(payload);
+	outbound.clear();
+	commands.flush(viewTick, viewFrac, now, outbound);
+	for (const packet of outbound) {
+		const payload = encodeInput(packet);
+		if (payload !== undefined) net.input.FireServer(payload);
+	}
+	outbound.clear();
 }
 
 /** step 5b: the interpolated slots plus what only the reliable roster knows (name, level) */
