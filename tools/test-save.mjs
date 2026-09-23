@@ -22,6 +22,14 @@
  *    coins and a costume already owned are refused with the save untouched, and a purchase takes exactly the
  *    catalogue price.
  *
+ *    v5 (MON-05) adds the titles: `titles` and `zombieKills` (server-owned, earned) and `equipTitle` (the one shown).
+ *    A v4 document becomes v5 with nothing earned and nothing else changed; a rollback to v4 code forgets only WHICH
+ *    title was shown, because what was earned comes back from the title record (server/save/titleRecord.ts); what
+ *    was earned survives a death, a New game and the end of a world; and nobody but the server grants a title or
+ *    moves the kill count -- neither a report nor the wardrobe's equip request (server/save/titles.ts). The record
+ *    never undoes a reset or a deletion made on purpose: `titleEpoch` says which title history a save is, and a
+ *    record of an older one is never merged back.
+ *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
  *    unreachable, and a day survived silently paid nothing. The fix moves the payment next to the event, so
@@ -221,7 +229,7 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
 	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
-	checkEq(SAVE.SAVE_VERSION, 4, "SAVE_VERSION e 4 (dois slots cosmeticos, MON-04)");
+	checkEq(SAVE.SAVE_VERSION, 5, "SAVE_VERSION e 5 (titulos, MON-05)");
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
 	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
 	checkEq(save.equipPet, -1, "e nenhum pet");
@@ -883,6 +891,446 @@ section('18) "Nao" ao tutorial desliga o tutorial inteiro, inclusive as licoes d
 	check(
 		/if \(ctx\.save\.firstInstall\)/.test(coachGate),
 		"o coach continua ligado a firstInstall (o que o 'Nao' desliga)",
+	);
+}
+
+// ---------------------------------------------------------------- v5: titles (MON-05)
+
+const TIT = require(join(SRC, "shared/data/titles.ts"));
+const TITLES_N = TIT.TITLES.length;
+const { equipTitle, grantTitle, creditZombieKill, creditLifeNight } = require(join(SRC, "server/save/titles.ts"));
+// the title record's pure half; its module reaches the store names (server/save/stores.ts), which ask RunService
+// whether this is Studio -- the one thing of Roblox it needs to load
+globalThis.game ??= { GetService: () => ({ IsStudio: () => false }) };
+const REC = require(join(SRC, "server/save/titleRecord.ts"));
+
+/** the production save as a v4 server last wrote it: Santa worn, no v5 field at all */
+function productionV4() {
+	const v4 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV3(SANTA))));
+	delete v4.titles;
+	delete v4.zombieKills;
+	delete v4.equipTitle;
+	delete v4.titleEpoch;
+	delete v4.lifeNights;
+	v4.version = 4;
+	return v4;
+}
+
+section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo muda");
+{
+	const doc = productionV4();
+	checkEq(SAVE.storedVersion(doc), 4, "o documento lido se declara v4");
+	const save = SAVE.sanitizeStoredSave(doc);
+	checkEq(save.version, 5, "e sai v5");
+	checkArrayEq(save.titles, new Array(TITLES_N).fill(0), "nenhum titulo: nenhum servidor contou nada antes do v5");
+	checkEq(save.zombieKills, 0, "e nenhum abate contado");
+	checkEq(save.lifeNights, 0, "nem noite creditada pelo servidor (Week One conta a partir do v5)");
+	checkEq(save.equipTitle, -1, "e nenhum titulo mostrado");
+	assertSameAsV2(productionV3(SANTA), save, "nenhum campo v2 mudou");
+	check(save.equipOutfit === SANTA && save.runHp === 60, "nem os do v3 e do v4 (corpo da run, traje vestido)");
+
+	// the v5 document round trip: what was earned and what is shown come back as they went
+	save.titles[TIT.TitleId.Survivor] = 1;
+	save.titles[TIT.TitleId.WeekOne] = 1;
+	save.zombieKills = 37;
+	save.equipTitle = TIT.TitleId.WeekOne;
+	const again = SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(save)));
+	checkArrayEq(again.titles, save.titles, "o v5 gravado (JSON) volta com os titulos");
+	checkEq(again.zombieKills, 37, "com a contagem de abates");
+	checkEq(again.equipTitle, TIT.TitleId.WeekOne, "e com o titulo mostrado");
+
+	// a document with junk in the new fields is read defensively
+	const junk = JSON.parse(JSON.stringify(save));
+	junk.titles = [5, "x", -1, 1, 1, 1];
+	junk.zombieKills = -40;
+	junk.equipTitle = TIT.TitleId.HordeBreaker;
+	const read = SAVE.sanitizeStoredSave(junk);
+	checkArrayEq(read.titles, [1, 0, 0].slice(0, TITLES_N), "titulos lixo viram 0/1 e o excesso cai");
+	checkEq(read.zombieKills, 0, "abates negativos viram 0");
+	checkEq(read.equipTitle, -1, "e um titulo mostrado que nao foi ganho e tirado");
+}
+
+section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca um titulo ou um abate");
+{
+	const v5 = SAVE.sanitizeStoredSave(productionV4());
+	v5.titles[TIT.TitleId.Survivor] = 1;
+	v5.titles[TIT.TitleId.HordeBreaker] = 1;
+	v5.zombieKills = 120;
+	v5.equipTitle = TIT.TitleId.HordeBreaker;
+	// what a v5 session keeps in the second document (server/save/titleRecord.ts), as the DataStore returns it
+	const record = JSON.parse(JSON.stringify(REC.nextTitleRecord(undefined, REC.titleRecordOf(v5), "replace")));
+	// what a v4 server does with the save: the three unknown keys dropped, and that is what it writes
+	const v4 = JSON.parse(JSON.stringify(v5));
+	delete v4.titles;
+	delete v4.zombieKills;
+	delete v4.equipTitle;
+	delete v4.titleEpoch;
+	delete v4.lifeNights;
+	v4.version = 4;
+	const back = SAVE.sanitizeStoredSave(v4);
+	checkEq(back.zombieKills, 0, "o save que o v4 escreveu nao tem mais nada ganho (o risco)");
+	check(REC.mergeTitleRecord(back, REC.readTitleRecord(record)), "a carga v5 traz de volta o registro de titulos");
+	checkArrayEq(back.titles, v5.titles, "todos os titulos ganhos voltaram");
+	checkEq(back.zombieKills, 120, "e a contagem de abates");
+	checkEq(back.equipTitle, -1, "so o titulo MOSTRADO foi esquecido (um clique no guarda-roupa)");
+	assertSameAsV2(productionV3(SANTA), back, "e todo o resto igual");
+	check(back.equipOutfit === SANTA, "inclusive o traje vestido");
+
+	// the record never takes anything away, and a merge-write keeps the larger of the two
+	const ahead = SAVE.sanitizeStoredSave(productionV4());
+	ahead.zombieKills = 200;
+	ahead.titles[TIT.TitleId.WeekOne] = 1;
+	check(REC.mergeTitleRecord(ahead, REC.readTitleRecord(record)), "mesclar traz os titulos que o save nao tinha");
+	checkEq(ahead.titles[TIT.TitleId.HordeBreaker], 1, "(Horde Breaker, do registro)");
+	checkEq(ahead.zombieKills, 200, "mas nunca abaixa: a contagem maior fica");
+	checkEq(ahead.titles[TIT.TitleId.WeekOne], 1, "e o titulo que o registro nao tinha tambem");
+	const merged = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), "merge");
+	checkEq(merged.zombieKills, 120, "gravar sem ter lido o registro MESCLA: nada que ele tinha se perde");
+	checkEq(merged.titles[TIT.TitleId.HordeBreaker], 1, "nem um titulo");
+	const replaced = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), "replace");
+	checkEq(replaced.zombieKills, 0, "quem leu o registro o SUBSTITUI (um reset do admin o baixa)");
+	checkEq(REC.readTitleRecord("lixo"), undefined, "um registro que nao e tabela e ignorado");
+	checkEq(
+		REC.readTitleRecord({ titles: [9], zombieKills: 1e12 }).zombieKills,
+		SAVE.SAVE_LIMITS.COUNTER_MAX,
+		"e com teto",
+	);
+}
+
+section("21) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-21, MP-22)");
+{
+	const LIFE = require(join(SRC, "server/sim/life.ts"));
+	const save = SAVE.defaultSave();
+	for (let i = 0; i < TITLES_N; i++) save.titles[i] = 1;
+	save.zombieKills = 150;
+	save.lifeNights = 8;
+	save.equipTitle = TIT.TitleId.WeekOne;
+	save.day = 9;
+	// death: the server writes the body into the save (server/sim/life.ts `writeRunBody`)
+	const body = PLAYER.createPlayer(save, 0, 0);
+	body.dead = true;
+	body.hp = 0;
+	LIFE.writeRunBody(save, body);
+	check(save.runOver, "a morte foi escrita no save");
+	check(save.titles.every(v => v === 1) && save.zombieKills === 150, "a morte nao toca nos titulos nem nos abates");
+	checkEq(save.equipTitle, TIT.TitleId.WeekOne, "nem no titulo mostrado");
+	// New game, and the end of a world: both are `resetRun` (the newRun action; life.ts `restartWorld`)
+	const lifeSrc = readFileSync(join(SRC, "server/sim/life.ts"), "utf8");
+	const restart = lifeSrc.slice(lifeSrc.indexOf("restartWorld("));
+	check(/resetRun\(save\)/.test(restart), "o fim do mundo (life.ts restartWorld) da a vida nova por resetRun");
+	SAVE.resetRun(save);
+	checkEq(save.day, 1, "New game: a vida volta ao dia 1");
+	checkEq(save.lifeNights, 0, "e a contagem de noites da vida (Week One) volta a 0");
+	check(
+		save.titles.every(v => v === 1),
+		"e os titulos ficam",
+	);
+	checkEq(save.zombieKills, 150, "e os abates");
+	checkEq(save.equipTitle, TIT.TitleId.WeekOne, "e o titulo mostrado continua mostrado");
+	const report = SAVE.sanitizeClientReport(JSON.parse(JSON.stringify(save)), save);
+	check(report.titles.every(v => v === 1) && report.zombieKills === 150, "e o relatorio seguinte os mantem");
+	const stored = SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(save)));
+	check(stored.titles.every(v => v === 1) && stored.equipTitle === TIT.TitleId.WeekOne, "e o DataStore tambem");
+}
+
+section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (server/save/titles.ts)");
+{
+	// a report declaring titles, kills and a title shown, on a survivor who earned nothing
+	const base = SAVE.defaultSave();
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.titles = new Array(TITLES_N).fill(1);
+	forged.zombieKills = 999999;
+	forged.lifeNights = 99;
+	forged.equipTitle = TIT.TitleId.HordeBreaker;
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	check(
+		upd.titles.every(v => v === 0),
+		"os titulos de um relatorio sao ignorados (sao do servidor)",
+	);
+	checkEq(upd.zombieKills, 0, "a contagem de abates tambem");
+	checkEq(upd.lifeNights, 0, "e a de noites da vida");
+	checkEq(upd.equipTitle, -1, "e o titulo mostrado nao ganho e corrigido para nenhum");
+	checkEq(SAVE.titleWireOf(upd), 0, "e nada vai para o fio");
+	// earned: the report may choose it, and nothing else
+	const earned = SAVE.defaultSave();
+	earned.titles[TIT.TitleId.Survivor] = 1;
+	const pick = JSON.parse(JSON.stringify(earned));
+	pick.equipTitle = TIT.TitleId.Survivor;
+	checkEq(
+		SAVE.sanitizeClientReport(pick, earned).equipTitle,
+		TIT.TitleId.Survivor,
+		"um titulo ganho pode ser escolhido",
+	);
+	pick.equipTitle = TIT.TitleId.WeekOne;
+	checkEq(SAVE.sanitizeClientReport(pick, earned).equipTitle, -1, "um nao ganho, no mesmo relatorio, nao");
+
+	// the server Equip path: the wardrobe's request, as handleAction hands it over
+	const save = SAVE.defaultSave();
+	const refused = equipTitle(save, TIT.TitleId.HordeBreaker);
+	check(
+		refused.ok === false && refused.reason === "invalid",
+		"equipar um titulo nao ganho pelo servidor -> recusado",
+	);
+	checkEq(save.equipTitle, -1, "e o save nao muda");
+	const junk = [TITLES_N, 99, -2, 1.5, NaN, Infinity, "1", undefined, null, {}, [1], true];
+	check(
+		junk.every(id => equipTitle(save, id).ok === false) && save.equipTitle === -1,
+		"id desconhecido (fora da tabela, fracao, NaN, texto, tabela) -> recusado, nada muda",
+	);
+	checkEq(grantTitle(save, TIT.TitleId.HordeBreaker), true, "o servidor concede (a primeira vez)");
+	checkEq(grantTitle(save, TIT.TitleId.HordeBreaker), false, "e so uma vez: o aviso nunca se repete");
+	check(equipTitle(save, TIT.TitleId.HordeBreaker).ok, "ganho, o pedido de equipar e aceito");
+	checkEq(SAVE.titleWireOf(save), TIT.titleToWire(TIT.TitleId.HordeBreaker), "e o fio leva o titulo");
+	check(equipTitle(save, -1).ok && save.equipTitle === -1, "-1 tira o titulo");
+	checkEq(SAVE.titleWireOf(save), 0, "e o fio leva nenhum");
+
+	// the kill count: only `creditZombieKill` moves it, and Horde Breaker comes at the 100th
+	const killer = SAVE.defaultSave();
+	let unlocked = [];
+	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 1; i++) {
+		const t = creditZombieKill(killer);
+		if (t >= 0) unlocked.push(t);
+	}
+	check(unlocked.length === 0 && !SAVE.ownsTitle(killer, TIT.TitleId.HordeBreaker), "99 abates: ainda nao");
+	checkEq(creditZombieKill(killer), TIT.TitleId.HordeBreaker, "o 100o abate desbloqueia Horde Breaker");
+	checkEq(creditZombieKill(killer), -1, "o 101o nao desbloqueia de novo");
+	checkEq(killer.zombieKills, 101, "e a contagem segue");
+
+	// Week One: the nights the server credited to the life, never the day the save says
+	const life = SAVE.defaultSave();
+	life.day = 30;
+	unlocked = [];
+	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) {
+		const t = creditLifeNight(life);
+		if (t >= 0) unlocked.push(t);
+	}
+	check(
+		unlocked.length === 0 && !SAVE.ownsTitle(life, TIT.TitleId.WeekOne),
+		"dia 30 no save e 6 noites creditadas: ainda nao",
+	);
+	checkEq(creditLifeNight(life), TIT.TitleId.WeekOne, "a 7a noite creditada desbloqueia Week One");
+	checkEq(creditLifeNight(life), -1, "a 8a nao desbloqueia de novo");
+
+	// the wallet carries both halves to the client, and no copy shows a title its save does not hold
+	killer.equipTitle = TIT.TitleId.HordeBreaker;
+	const wallet = SAVE.walletOf(killer);
+	checkEq(wallet.zombieKills, 101, "a carteira leva a contagem de abates");
+	checkEq(wallet.titles[TIT.TitleId.HordeBreaker], 1, "e os titulos ganhos");
+	const client = SAVE.defaultSave();
+	client.equipTitle = TIT.TitleId.WeekOne;
+	SAVE.applyWallet(client, wallet);
+	check(SAVE.ownsTitle(client, TIT.TitleId.HordeBreaker) && client.zombieKills === 101, "a copia do cliente espelha");
+	checkEq(client.equipTitle, -1, "e deixa de mostrar um titulo que o servidor nao lista");
+	// the life's day and its credited nights: the server's (the HUD's life day, the wardrobe's Week One progress)
+	const alive = SAVE.defaultSave();
+	alive.day = 8;
+	alive.lifeNights = 2;
+	const lifeWallet = SAVE.walletOf(alive);
+	check(lifeWallet.day === 8 && lifeWallet.lifeNights === 2, "a carteira leva o dia da vida e as noites creditadas");
+	const mirror = SAVE.defaultSave();
+	mirror.day = 9;
+	SAVE.applyWallet(mirror, lifeWallet);
+	check(mirror.day === 8 && mirror.lifeNights === 2, "e a copia do cliente fica com os do servidor");
+	const olderServer = { ...lifeWallet };
+	delete olderServer.day;
+	delete olderServer.lifeNights;
+	SAVE.applyWallet(mirror, olderServer);
+	check(mirror.day === 8 && mirror.lifeNights === 2, "uma carteira sem eles (servidor antigo) nao os mexe");
+	// a wallet of an OLDER life, landing after the new one (a push and a ShopAction reply travel on different
+	// remotes): it may not hand the old life's day back
+	const newLife = SAVE.defaultSave();
+	newLife.runRev = 5;
+	newLife.day = 1;
+	newLife.lifeNights = 0;
+	const oldLife = SAVE.walletOf(alive);
+	oldLife.runRev = 4;
+	SAVE.applyWallet(newLife, oldLife);
+	check(
+		newLife.day === 1 && newLife.lifeNights === 0 && newLife.runRev === 5,
+		"uma carteira de uma vida ANTERIOR (runRev menor) nao devolve o dia nem as noites dela",
+		`day ${newLife.day}, nights ${newLife.lifeNights}, runRev ${newLife.runRev}`,
+	);
+	const sameLife = SAVE.walletOf(alive);
+	sameLife.runRev = 5;
+	SAVE.applyWallet(newLife, sameLife);
+	check(newLife.day === 8 && newLife.lifeNights === 2, "uma da mesma vida, sim");
+	const later = SAVE.walletOf(alive);
+	later.runRev = 6;
+	later.day = 1;
+	later.lifeNights = 0;
+	SAVE.applyWallet(newLife, later);
+	check(
+		newLife.day === 1 && newLife.lifeNights === 0 && newLife.runRev === 6,
+		"e uma de uma vida mais NOVA (New game no servidor) tambem",
+	);
+	killer.titles[TIT.TitleId.HordeBreaker] = 0;
+	SAVE.enforceSaveInvariants(killer);
+	checkEq(killer.equipTitle, -1, "um save que nao tem o titulo (documento editado a mao) nao o mostra");
+
+	// the wiring: handleAction hands the raw id to equipTitle and nothing else
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const branch = main.slice(main.indexOf('req.kind === "equipTitle"'), main.indexOf('req.kind === "rebirth"'));
+	check(
+		/equipTitle\(save, req\.titleId\)/.test(branch) && !/titles\[/.test(branch),
+		"main.server.ts: o pedido equipTitle vai inteiro para equipTitle(save, req.titleId), sem escrever titulos",
+	);
+}
+
+section(
+	"23) a epoca do registro: um reset ou uma exclusao de proposito nunca voltam dele (server/save/titleRecord.ts)",
+);
+{
+	const E1 = 1_700_000_000;
+	const E2 = E1 + 3600;
+	const earned = () => {
+		const save = SAVE.sanitizeStoredSave(productionV4());
+		save.titleEpoch = E1;
+		save.titles[TIT.TitleId.HordeBreaker] = 1;
+		save.zombieKills = 100;
+		return save;
+	};
+	checkEq(SAVE.sanitizeStoredSave(productionV4()).titleEpoch, 0, "um save vindo do v4 tem epoca 0");
+	checkEq(
+		SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(earned()))).titleEpoch,
+		E1,
+		"o v5 gravado volta com a epoca",
+	);
+	const forged = JSON.parse(JSON.stringify(earned()));
+	forged.titleEpoch = E2 * 10;
+	checkEq(SAVE.sanitizeClientReport(forged, earned()).titleEpoch, E1, "o relatorio do cliente nao move a epoca");
+	const record = JSON.parse(JSON.stringify(REC.titleRecordOf(earned())));
+	checkEq(REC.readTitleRecord(record).epoch, E1, "o registro guarda a epoca do save que espelha");
+	checkEq(REC.readTitleRecord({ titles: [1], epoch: "x" }).epoch, 0, "uma epoca lixo vira 0");
+	checkEq(REC.readTitleRecord({ epoch: 1e15 }).epoch, SAVE.SAVE_LIMITS.EPOCH_MAX, "e com teto");
+
+	// the rollback still restores: v4 dropped the epoch with the titles, the record is of a later history
+	const back = SAVE.sanitizeStoredSave(productionV4());
+	check(REC.mergeTitleRecord(back, REC.readTitleRecord(record)), "rollback (save de epoca 0): o registro volta");
+	check(back.zombieKills === 100 && back.titleEpoch === E1, "com os abates, e o save volta a historia do registro");
+
+	// an admin reset: a later epoch; the old record never flows back into it
+	const reset = SAVE.defaultSave();
+	reset.titleEpoch = E2;
+	check(
+		!REC.mergeTitleRecord(reset, REC.readTitleRecord(record)),
+		"reset (epoca maior): o registro antigo nao e mesclado",
+	);
+	check(reset.zombieKills === 0 && reset.titles.every(v => v === 0) && reset.titleEpoch === E2, "e nada muda");
+	const over = REC.nextTitleRecord(record, REC.titleRecordOf(reset), "merge");
+	check(
+		over.zombieKills === 0 && over.titles.every(v => v === 0) && over.epoch === E2,
+		"gravar MESCLANDO sobre um registro de epoca menor o substitui",
+		JSON.stringify(over),
+	);
+	// the session that could not read a later record (after a rollback) merges into it and joins its history
+	const lost = SAVE.sanitizeStoredSave(productionV4());
+	const joined = REC.nextTitleRecord(record, REC.titleRecordOf(lost), "merge");
+	check(joined.zombieKills === 100 && joined.epoch === E1, "mesclar sobre um registro de epoca maior o mantem");
+	// a server that lost the lock without knowing it (it read the record at its load: "replace") never writes over a
+	// reset made where the lock went
+	const resetRecord = JSON.parse(JSON.stringify(REC.titleRecordOf(reset)));
+	const stale = REC.nextTitleRecord(resetRecord, REC.titleRecordOf(earned()), "replace");
+	check(
+		stale.epoch === E2 && stale.zombieKills === 0 && stale.titles.every(v => v === 0),
+		"substituir sobre um registro de historia POSTERIOR o deixa como esta",
+		JSON.stringify(stale),
+	);
+	// a new history (missing save, admin reset) over a record stamped later than this server's clock: one after it
+	const early = SAVE.defaultSave();
+	early.titleEpoch = E1 - 50;
+	const restarted = REC.nextTitleRecord(resetRecord, REC.titleRecordOf(early), "restart");
+	check(
+		restarted.epoch === E2 + 1 && restarted.zombieKills === 0,
+		"recomecar sobre um registro de epoca igual ou maior carimba a seguinte (o save a adota)",
+		JSON.stringify(restarted),
+	);
+	check(REC.mergeTitleRecord(early, restarted) && early.titleEpoch === E2 + 1, "…e o save adota essa epoca");
+	check(
+		REC.nextTitleRecord(record, REC.titleRecordOf(reset), "restart").epoch === E2,
+		"recomecar sobre um registro mais antigo: a epoca do proprio save",
+	);
+
+	// what starts a new history: taking away anything earned (the admin reset does)
+	const e = earned();
+	check(!REC.lowersEarned(e, earned()), "nada tirado: a mesma historia");
+	const fewer = earned();
+	fewer.zombieKills = 99;
+	check(REC.lowersEarned(e, fewer), "menos abates: outra historia");
+	const noFlag = earned();
+	noFlag.titles[TIT.TitleId.HordeBreaker] = 0;
+	check(REC.lowersEarned(e, noFlag), "um titulo a menos: outra historia");
+	check(REC.lowersEarned(e, SAVE.defaultSave()), "um save novo: outra historia");
+
+	// the wiring: a missing save and an admin reset each start a history; only the server writes the epoch
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const load = main.slice(main.indexOf("function loadSession("), main.indexOf("function newSession("));
+	check(
+		/status === "new"/.test(load) &&
+			/save\.titleEpoch = /.test(load) &&
+			/titleReplace = !read\.ok \|\| record !== undefined/.test(load),
+		"main.server.ts loadSession: um save que falta comeca uma historia nova e substitui o registro",
+	);
+	const edit = main.slice(main.indexOf("function adminEdit("), main.indexOf("admin = startAdminServer("));
+	check(
+		/ops === undefined \|\| TitleRecord\.lowersEarned\(before, edited\)/.test(edit) &&
+			/s\.titleReplace = true/.test(edit),
+		"main.server.ts adminEdit: um reset comeca uma historia nova e substitui o registro",
+	);
+}
+
+section("24) o registro custa uma escrita so quando importa: titulo, historia nova, degrau de abates, saida");
+{
+	const E = 1_700_000_000;
+	const save = SAVE.defaultSave();
+	save.titleEpoch = E;
+	const empty = REC.emptyTitleRecord(E);
+	const mark = REC.titleRecordMark(empty);
+	const step = REC.titleRecordStep(empty);
+	const due = (final, known = [mark, step], replace = false) =>
+		REC.titleRecordDue(save, known[0], known[1], replace, final);
+	check(!due(false) && !due(true), "nada ganho: nenhuma escrita, nem no autosave nem na saida");
+	check(!due(true, [undefined, undefined]), "nem num registro que a carga nao leu (nada a acrescentar)");
+	check(due(true, [undefined, undefined], true), "mas uma historia nova substitui mesmo sem nada ganho");
+	const autosaves = [];
+	let known = [mark, step];
+	for (let k = 1; k <= 25; k++) {
+		save.zombieKills = k;
+		if (!due(false, known)) continue;
+		autosaves.push(k);
+		const written = REC.titleRecordOf(save);
+		known = [REC.titleRecordMark(written), REC.titleRecordStep(written)];
+	}
+	checkArrayEq(
+		autosaves,
+		[10, 20],
+		`o autosave so escreve a cada ${REC.TITLE_RECORD_KILL_STEP} abates (1..25 sem gravar)`,
+	);
+	save.zombieKills = 3;
+	check(!due(false) && due(true), "3 abates: nao no autosave, sim na saida (exato)");
+	save.zombieKills = 0;
+	save.titles[TIT.TitleId.Survivor] = 1;
+	check(due(false), "um titulo ganho escreve no primeiro autosave");
+	save.titles[TIT.TitleId.Survivor] = 0;
+	save.titleEpoch = E + 1;
+	check(due(false), "e uma historia nova (reset) tambem");
+	save.titleEpoch = E;
+	// after a write, the session fingerprints what it wrote: the same save is not written again
+	save.zombieKills = 10;
+	const wrote = REC.titleRecordOf(save);
+	const after = [REC.titleRecordMark(wrote), REC.titleRecordStep(wrote)];
+	check(!due(false, after) && !due(true, after), "o que acabou de ser escrito nao e escrito de novo");
+	save.zombieKills = 19;
+	check(!due(false, after) && due(true, after), "19 abates depois de gravar 10: so na saida");
+
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const flush = main.slice(
+		main.indexOf("function flush("),
+		main.indexOf("// ---------------------------------------------------------------- load"),
+	);
+	check(
+		/if \(release && recordBeforeRelease\(\)\) syncTitleRecord\(s, true\)/.test(flush) &&
+			/!release\) syncTitleRecord\(s, false\)/.test(flush),
+		"main.server.ts flush: exato na saida (antes do save que solta a trava), por degraus no autosave",
 	);
 }
 

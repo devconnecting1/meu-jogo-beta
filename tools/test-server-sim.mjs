@@ -33,6 +33,13 @@
  *   f. malicious payloads (strings, numbers, tables, truncated and oversized buffers) never throw, never move
  *      anyone, and are counted as malformed (§8.1, §8.3);
  *   g. the cost of a full tick (simulation + replication) with 6 players, as the §3.2 budget wants it measured.
+ *   (h, i: the dead do not walk; midnight pays only who lived through the day -- MP-13.)
+ *   j. titles (MON-05) are earned on the server's own counters, each announced once: Survivor at the 06:00 after a
+ *      midnight that paid you, alive in the world all night; Week One when a life reaches day 8 on that same day
+ *      count; neither for the idle, the AFK, the dead-and-stood-up, the lobby hopper or who slept through the
+ *      night after the midnight paid them, nor for an admin's clock -- not even a skip to 05:59 that the clock then
+ *      runs past 06:00 by itself (j3).
+ *      Horde Breaker (j2) at the 100th killing blow the real weapon machine lands -- an assist never counts.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src/ on the fly, with the Luau
  * shims of tools/test-sim.mjs (math, Color3, Array methods) and tools/test-net.mjs (a STRICT `buffer`: an
@@ -1467,6 +1474,362 @@ section("(i) midnight pays who LIVED through the day: not the dead, the absent o
 			`holding the stick into a wall all day is AFK too: real commands, no step (${refused.get(WALLED) ?? "paid"}, moved ${drift.toFixed(2)} u)`,
 		);
 	}
+}
+
+// ---------------------------------------------------------------- (j) titles: earned on the server's own counters
+
+section(
+	"(j) titles are EARNED on the server's counters, once each: Survivor, Week One, not idle or AFK (MON-05, MP-13)",
+);
+
+{
+	const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+	const PROG = require(join(SRC, "server/sim/progress.ts"));
+	const TIT = require(join(SRC, "shared/data/titles.ts"));
+	const SAVE = require(join(SRC, "shared/game/save.ts"));
+	// 15:00 of world day 4: the midnight ahead (4 -> 5) and the 06:00 after it are one continuous stretch of play
+	const clock = new WorldClock({ day: 4, dayTime: 15, rollRain: () => false });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
+	/** every unlock the simulation announced: [userId, titleId] -- the host turns each into a toast (mpHost.ts) */
+	const unlocks = [];
+	sim.onTitleUnlocked = (sp, titleId) => unlocks.push([sp.userId, titleId]);
+	const count = (userId, titleId) => unlocks.filter(([u, t]) => u === userId && t === titleId).length;
+	const saves = new Map();
+	/** `nights`: the midnights the server already credited to this life (a life counted from day 1: day - 1) */
+	function arrive(slot, userId, day = 1, nights = day - 1) {
+		const save = saves.get(userId) ?? defaultSave();
+		if (!saves.has(userId)) {
+			save.day = day;
+			save.lifeNights = nights;
+		}
+		saves.set(userId, save);
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: `t${slot}` },
+			save,
+			1000 + slot * 60,
+			1400,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		return sp;
+	}
+	function press(sp, edges) {
+		const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 0, 0, 0, 0, edges);
+		PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * TICK_DT);
+	}
+	const RELOAD = 1 << P.EdgeShift.Reload;
+	const ACTIVE = 7001; // plays the whole stretch: a life reaching day 2, alive through the night -> Survivor
+	const WEEK = 7002; // a life at day 7 that plays through midnight -> day 8 -> Week One (and Survivor at 06:00)
+	const IDLE7 = 7003; // day 7, sends real commands that never move nor press: AFK -> nothing
+	const FILL7 = 7004; // day 7, one command and then silence (filled ticks): AFK -> nothing
+	const DIED = 7005; // paid at midnight, dies at 02:00, stands up at 03:00 (a Rebirth): did NOT survive the night
+	const HOPPER = 7006; // paid at midnight, in the lobby 01:00-02:00: was not there for the whole night
+	const QUIT = 7007; // plays until 23:30, then idles to 06:00: paid at midnight, but asleep through the night
+	const ONCE = 7008; // plays through midnight, one press just after it, then idles the last ~2 min to 06:00
+	// a life at day 7 whose days were NOT server-credited midnights (a client counted them before the server did,
+	// or an admin set the day): it plays through midnight -> day 8, one night lived -> no Week One
+	const LEGACY = 7009;
+	const players = new Map([
+		[ACTIVE, arrive(0, ACTIVE)],
+		[WEEK, arrive(1, WEEK, 7)],
+		[IDLE7, arrive(2, IDLE7, 7)],
+		[FILL7, arrive(3, FILL7, 7)],
+		[DIED, arrive(4, DIED)],
+		[HOPPER, arrive(5, HOPPER)],
+		[QUIT, arrive(6, QUIT)],
+		[ONCE, arrive(7, ONCE)],
+		[LEGACY, arrive(8, LEGACY, 7, 0)],
+	]);
+	let first = true;
+	let midnightTitles = -1;
+	let guard = 60 * 60 * 20;
+	const nightOver = () => clock.day === 5 && clock.dayTime >= 6;
+	while (!nightOver() && guard-- > 0) {
+		const hour = clock.dayTime;
+		const night = clock.day === 5;
+		for (const [id, sp] of players) {
+			sp.state.hungry = sp.state.hungryMax;
+			if (id === IDLE7) press(sp, 0);
+			else if (id === FILL7) {
+				if (first) press(sp, RELOAD);
+			} else if (id === QUIT) {
+				if (!night && hour < 23.5) press(sp, RELOAD);
+			} else if (id === ONCE) {
+				if (!night || hour < 0.25) press(sp, RELOAD);
+			} else press(sp, RELOAD);
+		}
+		first = false;
+		if (night && hour >= 1 && hour < 2 && players.has(HOPPER)) {
+			sim.remove(players.get(HOPPER).slot);
+			players.delete(HOPPER);
+		} else if (night && hour >= 2 && !players.has(HOPPER)) {
+			players.set(HOPPER, arrive(5, HOPPER));
+		}
+		const died = players.get(DIED);
+		if (night && hour >= 2 && hour < 3 && !died.state.dead) {
+			died.state.godMode = false;
+			died.state.hp = -1000;
+		} else if (night && hour >= 3 && died.state.dead) {
+			// what a Rebirth (or a daybreak) does: a fresh body in the same slot
+			died.state.dead = false;
+			died.state.hp = died.state.hpMax;
+		}
+		const dayBefore = clock.day;
+		sim.step();
+		clock.step(TICK_DT);
+		if (clock.day !== dayBefore) midnightTitles = unlocks.length;
+	}
+	check(
+		guard > 0 && nightOver(),
+		`the world lived through midnight and 06:00 of day 5 (${sim.tick} ticks from 15:00)`,
+	);
+	const day = id => saves.get(id).day;
+	const owns = (id, t) => SAVE.ownsTitle(saves.get(id), t);
+	checkEq(day(WEEK), TIT.WEEK_ONE_DAY, "the day-7 life that played through midnight reached day 8");
+	checkEq(saves.get(WEEK).lifeNights, TIT.WEEK_ONE_NIGHTS, "…its seventh night credited by the server");
+	check(
+		owns(WEEK, TIT.TitleId.WeekOne) && count(WEEK, TIT.TitleId.WeekOne) === 1,
+		"…and is a Week One, announced once",
+	);
+	check(
+		midnightTitles >= 1 &&
+			unlocks.slice(0, midnightTitles).some(([u, t]) => u === WEEK && t === TIT.TitleId.WeekOne),
+		"…at midnight, on the very credit that paid the day",
+	);
+	check(
+		!owns(IDLE7, TIT.TitleId.WeekOne) && day(IDLE7) === 7,
+		"a day-7 life idling with real commands that do nothing is AFK: no day 8, no Week One",
+	);
+	check(
+		!owns(FILL7, TIT.TitleId.WeekOne) && day(FILL7) === 7,
+		"…nor one that went silent (the server's filled ticks)",
+	);
+	check(
+		owns(ACTIVE, TIT.TitleId.Survivor) && count(ACTIVE, TIT.TitleId.Survivor) === 1,
+		"a life that reached day 2 and lived to 06:00 is a Survivor, once",
+	);
+	check(owns(WEEK, TIT.TitleId.Survivor), "(the Week One lived the night too)");
+	check(!owns(ACTIVE, TIT.TitleId.WeekOne), "a day-2 life is not a Week One");
+	check(
+		!owns(IDLE7, TIT.TitleId.Survivor) && !owns(FILL7, TIT.TitleId.Survivor),
+		"the AFK were not paid at midnight, so no Survivor either",
+	);
+	check(
+		day(DIED) === 2 && !owns(DIED, TIT.TitleId.Survivor),
+		"paid at midnight but dead at 02:00: stood up again, and still no Survivor",
+	);
+	check(
+		day(HOPPER) === 2 && !owns(HOPPER, TIT.TitleId.Survivor),
+		"paid at midnight but in the lobby for an hour of the night: no Survivor",
+	);
+	check(
+		day(QUIT) === 2 && !owns(QUIT, TIT.TitleId.Survivor),
+		"paid at midnight (its last input came 30 min before it), then idle to 06:00: no Survivor",
+	);
+	check(
+		day(ONCE) === 2 && !owns(ONCE, TIT.TitleId.Survivor),
+		`one press just after midnight, then nothing for more than ${PROG.NIGHT_AFK_WINDOW_S ?? 60} s before 06:00: no Survivor`,
+	);
+	check(
+		day(LEGACY) === TIT.WEEK_ONE_DAY && saves.get(LEGACY).lifeNights === 1 && !owns(LEGACY, TIT.TitleId.WeekOne),
+		"a day-7 life whose days the server never credited reaches day 8 with ONE night lived: no Week One",
+	);
+	check(owns(LEGACY, TIT.TitleId.Survivor), "(it did live this night: a Survivor)");
+	check(
+		unlocks.every(([u, t]) => u === ACTIVE || u === WEEK || (u === LEGACY && t === TIT.TitleId.Survivor)),
+		`nobody else earned anything (${JSON.stringify(unlocks)})`,
+	);
+
+	// an admin skipping the clock credits nobody (MP-13), and a second night lived pays no title twice
+	const before = unlocks.length;
+	clock.setClock(5.9, 6);
+	checkEq(unlocks.length, before, "moving the clock past 06:00 by hand makes nobody a Survivor");
+	clock.setClock(23.8, 6);
+	guard = 60 * 60 * 20;
+	while (!(clock.day === 7 && clock.dayTime >= 6) && guard-- > 0) {
+		for (const [id, sp] of players) {
+			sp.state.hungry = sp.state.hungryMax;
+			if (id === IDLE7) press(sp, 0);
+			else if (id !== FILL7) press(sp, RELOAD);
+		}
+		sim.step();
+		clock.step(TICK_DT);
+	}
+	checkEq(day(ACTIVE), 3, "a second night lived: the life is at day 3");
+	check(
+		count(ACTIVE, TIT.TitleId.Survivor) === 1 &&
+			count(WEEK, TIT.TitleId.Survivor) === 1 &&
+			count(WEEK, TIT.TitleId.WeekOne) === 1,
+		"and no title is announced a second time",
+	);
+	check(
+		[DIED, HOPPER, QUIT, ONCE].every(id => owns(id, TIT.TitleId.Survivor)),
+		"the four who did not live the first night whole (or awake) played this one through, and are Survivors now",
+	);
+	check(!owns(IDLE7, TIT.TitleId.Survivor) && !owns(FILL7, TIT.TitleId.Survivor), "the idle still are not");
+	checkEq(unlocks.length, before + 4, "four new titles in all");
+
+	// what a client report claims about any of it is ignored (it is the server's, and so is the day)
+	const idle = saves.get(IDLE7);
+	const forged = JSON.parse(JSON.stringify(idle));
+	forged.titles = forged.titles.map(() => 1);
+	forged.day = 30;
+	forged.zombieKills = 1000;
+	forged.equipTitle = TIT.TitleId.WeekOne;
+	const upd = SAVE.sanitizeClientReport(forged, idle);
+	PROG.stripClientProgress(idle, upd);
+	check(
+		upd.titles.every(v => v === 0) && upd.day === 7 && upd.zombieKills === 0 && upd.equipTitle === -1,
+		"a report claiming titles, days, kills and a title shown moves none of them",
+	);
+}
+
+section("(j3) an admin who moves the clock in the middle of a night makes no Survivor of that night (MON-05, MP-13)");
+
+{
+	const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+	const TIT = require(join(SRC, "shared/data/titles.ts"));
+	const SAVE = require(join(SRC, "shared/game/save.ts"));
+	const clock = new WorldClock({ day: 4, dayTime: 15, rollRain: () => false });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
+	const unlocks = [];
+	sim.onTitleUnlocked = (sp, titleId) => unlocks.push([sp.userId, titleId]);
+	const save = defaultSave();
+	const sp = PL.createServerPlayer({ slot: 0, userId: 7301, name: "skipped" }, save, 1000, 1400, sim.tick, sim.simHz);
+	sim.add(sp);
+	const RELOAD = 1 << P.EdgeShift.Reload;
+	/** one tick of a survivor who plays every tick */
+	function play() {
+		sp.state.hungry = sp.state.hungryMax;
+		const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 0, 0, 0, 0, RELOAD);
+		PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * TICK_DT);
+		sim.step();
+		clock.step(TICK_DT);
+	}
+	let guard = 60 * 60 * 20;
+	while (!(clock.day === 5 && clock.dayTime >= 1) && guard-- > 0) play();
+	check(
+		save.day === 2 && unlocks.length === 0,
+		"the midnight paid the survivor (day 2), and it is 01:00: no title yet",
+	);
+	// the admin drags the hands to just before dawn; the clock then runs past 06:00 on its own
+	clock.setClock(5.95);
+	guard = 60 * 20;
+	while (!(clock.day === 5 && clock.dayTime >= 6.2) && guard-- > 0) play();
+	check(guard > 0, `the clock ran past 06:00 by itself after the skip (${clock.dayTime.toFixed(2)})`);
+	check(
+		!SAVE.ownsTitle(save, TIT.TitleId.Survivor) && unlocks.length === 0,
+		"…and five hours of night the survivor never lived made no Survivor",
+		JSON.stringify(unlocks),
+	);
+	// the next night, lived hour by hour, does
+	guard = 60 * 60 * 20;
+	while (!(clock.day === 6 && clock.dayTime >= 6.2) && guard-- > 0) play();
+	check(
+		SAVE.ownsTitle(save, TIT.TitleId.Survivor) && unlocks.length === 1,
+		"the next night, lived through, makes the Survivor",
+		JSON.stringify(unlocks),
+	);
+}
+
+section("(j2) Horde Breaker: 100 zombies put down by the server's kill credit -- killing blows, never assists");
+
+{
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	const TIT = require(join(SRC, "shared/data/titles.ts"));
+	const SAVE = require(join(SRC, "shared/game/save.ts"));
+	const sim = new ServerSimulation({ world, zombies: true });
+	const unlocks = [];
+	sim.onTitleUnlocked = (sp, titleId) => unlocks.push([sp.slot, titleId]);
+	const RIFLE = 13; // Semi auto rifle: 110 damage, the server resolves every shot
+	function armed(slot, x, y) {
+		const save = defaultSave();
+		save.invenWeapon[RIFLE] = 1;
+		save.equipWeapon = RIFLE;
+		save.ammoNormal = 5000;
+		const sp = PL.createServerPlayer(
+			{ slot, userId: 8100 + slot, name: `k${slot}` },
+			save,
+			x,
+			y,
+			sim.tick,
+			sim.simHz,
+		);
+		sp.state.godMode = true;
+		sim.add(sp);
+		return sp;
+	}
+	const killer = armed(0, spawnA.x, spawnA.y);
+	const helper = armed(1, spawnA.x, spawnA.y + 30);
+	const horde = sim.horde;
+	let t = sim.tick + 1;
+	/** shoots `sp` at `z` through the real weapon machine until it lands (or `ticks` run out); the survivor stands */
+	function shootAt(sp, z, ticks = 90) {
+		const hp0 = z.hp;
+		for (let i = 0; i < ticks && z.hp === hp0; i++) {
+			sim.combat.afterWorld(t);
+			sp.viewTick = t;
+			sp.state.weapon.ammoCount = 20;
+			const aim = Math.atan2(z.y - sp.state.y, z.x - sp.state.x);
+			const cmd = P.makeCommand(t % 65536, 0, 0, aim, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+			stepPlayer(world, sp.state, sp.save, cmd, TICK_DT);
+			sim.combat.stepPlayer(sp, cmd, t + 1, TICK_DT);
+			t += 1;
+		}
+		return z.hp < hp0;
+	}
+	const at = d => ({ x: spawnA.x + Math.cos(run.angle) * d, y: spawnA.y + Math.sin(run.angle) * d });
+	function zombie(hp) {
+		const p = at(220);
+		const z = createZombie(1, p.x, p.y, 1);
+		z.hp = hp;
+		z.hpMax = hp;
+		horde.zombies.push(z);
+		return z;
+	}
+	// an assist first: the helper softens a zombie, the killer lands the blow
+	const shared = zombie(150);
+	check(shootAt(helper, shared), "the helper's shot lands (110 of 150)");
+	const helperExp = helper.save.exp;
+	check(shootAt(killer, shared) && shared.hp <= 0, "the killer's shot puts it down");
+	horde.zombies.length = 0;
+	checkEq(killer.save.zombieKills, 1, "the killing blow counts for the killer");
+	checkEq(helper.save.zombieKills, 0, "the assist does not: it is XP (MP-15), not a zombie put down");
+	check(helper.save.exp > helperExp, `…and the assist WAS paid its XP (${helper.save.exp - helperExp})`);
+	// 98 more: still not a Horde Breaker
+	let landed = 1;
+	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 2; i++) {
+		const z = zombie(1);
+		if (shootAt(killer, z) && z.hp <= 0) landed += 1;
+		horde.zombies.length = 0;
+	}
+	checkEq(landed, TIT.HORDE_BREAKER_KILLS - 1, "99 zombies put down through the real weapon machine");
+	check(!SAVE.ownsTitle(killer.save, TIT.TitleId.HordeBreaker) && unlocks.length === 0, "99: not yet");
+	const hundredth = zombie(1);
+	shootAt(killer, hundredth);
+	horde.zombies.length = 0;
+	checkEq(killer.save.zombieKills, TIT.HORDE_BREAKER_KILLS, "the 100th");
+	check(SAVE.ownsTitle(killer.save, TIT.TitleId.HordeBreaker), "…makes a Horde Breaker, in the live save");
+	checkEq(
+		JSON.stringify(unlocks),
+		JSON.stringify([[0, TIT.TitleId.HordeBreaker]]),
+		"announced once, for the killer only",
+	);
+	const extra = zombie(1);
+	shootAt(killer, extra);
+	horde.zombies.length = 0;
+	checkEq(killer.save.zombieKills, TIT.HORDE_BREAKER_KILLS + 1, "the count goes on");
+	checkEq(unlocks.length, 1, "and the title is not announced again");
+	// an assisted run (an admin's spawn tools, §9.3) counts nothing
+	sim.paysRewards = () => false;
+	const assisted = zombie(1);
+	shootAt(helper, assisted);
+	horde.zombies.length = 0;
+	check(
+		assisted.hp <= 0 && helper.save.zombieKills === 0,
+		"a kill in an assisted run is not counted towards a title",
+	);
 }
 
 // ---------------------------------------------------------------- verdict

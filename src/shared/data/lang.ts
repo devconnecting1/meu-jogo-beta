@@ -485,10 +485,9 @@ export const LANG_TABLE: Array<string> = [
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
-	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks)
-	"Menu",
+	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
+	// "Menu" and "Backpack" are already listed (the settings' Controls tab)
 	"Back to game",
-	"Backpack",
 	"Save",
 	"Home",
 	"Game over",
@@ -614,7 +613,27 @@ export const LANG_TABLE: Array<string> = [
 	"coins",
 	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
-	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it.",
+	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Titles are never sold: each one is earned by playing, and shows under your name for everyone.#Pick an item to try it on in the preview, then buy or wear it.",
+	// titles (shared/data/titles.ts, client/ui/wardrobe.ts, DESIGN_RULES MON-05): the three titles, how each is earned,
+	// what its progress counts ("Zombies put down: 37 / 100"), and the notice "Title unlocked: [Survivor]"
+	"Titles",
+	"Title",
+	"None",
+	"Unequip title",
+	"Locked",
+	// "Survivor" is already listed (the lobby's survivor card)
+	"Horde Breaker",
+	"Week One",
+	"Survive your first night.",
+	"Put down 100 zombies.",
+	"Stay alive for 7 days in one life.",
+	"Nights survived",
+	"Zombies put down",
+	"Nights survived in this life",
+	"Title unlocked",
+	"Earned by playing, never sold. Everyone sees it under your name.",
+	"No title under your name.",
+	"Titles are earned by playing, never sold. Everyone sees yours under your name.",
 	// the HUD console (client/ui/hudConsole.ts, DESIGN_RULES UI-09): the bar prefixes ("HP 88 / 100", "LV 3 · 30 / 120")
 	// and the weapon hotbar's row of the controls reference (tutorial.ts SCHEMES)
 	"HP",

@@ -22,6 +22,7 @@ import { SAVE_LIMITS, expMaxInit, PlayerSaveData, PROGRESS_SERVER_PHASE } from "
 import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
+import { creditZombieKill } from "../save/titles";
 
 // ---------------------------------------------------------------- constants (§3.6)
 
@@ -186,6 +187,39 @@ export function dayRefusal(
 }
 
 /**
+ * MON-05: how recently a Survivor must have been at the controls when the night ends. Midnight to 06:00 is only
+ * ~2 real minutes (shared/sim/clock.ts, night speed), so §9.1's AFK_WINDOW_S (3 min) at 06:00 would reach back to
+ * before that midnight: a player who stopped at 23:30 and slept through the rest would pass. One minute, and the
+ * input must also come AFTER the midnight (see `survivedNight`).
+ */
+export const NIGHT_AFK_WINDOW_S = 60;
+
+/**
+ * MON-05 "Survivor": did this survivor live through the night that ends at 06:00 (DAY_BREAK_HOUR)? Asked at that
+ * tick by server/sim/simulation.ts, with the same bookkeeping as `dayRefusal`, and stricter, because a night is short:
+ *   - `credited`: the midnight inside this night PAID them (`dayRefusal` said yes: alive, in the world for half the
+ *     day, not AFK) -- that credit is "a life reaching its day 2" the first time;
+ *   - alive now, and alive in the world for EVERY tick since that midnight (`aliveTicks === nightTicks`): a death
+ *     after midnight, a Rebirth or a daybreak stand-up, a trip to the lobby -- any of them and this night was not
+ *     survived;
+ *   - awake through it: a real input with movement or an edge AFTER that midnight (`tick - nightTicks` is its tick)
+ *     and in the last NIGHT_AFK_WINDOW_S.
+ */
+export function survivedNight(
+	credited: boolean,
+	dead: boolean,
+	aliveTicks: number,
+	nightTicks: number,
+	lastActiveTick: number | undefined,
+	tick: number,
+	simHz: number,
+): boolean {
+	if (!credited || dead || nightTicks <= 0 || aliveTicks < nightTicks) return false;
+	if (lastActiveTick === undefined || lastActiveTick <= tick - nightTicks) return false;
+	return tick - lastActiveTick <= NIGHT_AFK_WINDOW_S * simHz;
+}
+
+/**
  * Overwrites every server-owned progress field of a client report with the trusted copy, and answers whether
  * the report had tried to move any of them. With MP_PHASE ≥ 2 the server counted those numbers itself, so a
  * report carrying different ones is not "suspicious", it is simply **stale** — §9.2 level 0, corrected in
@@ -286,11 +320,17 @@ export interface ProgressOptions {
 	 * keeps playing but stops paying). Defaults to yes — the ledger itself has no idea what an admin is.
 	 */
 	paysRewards?: (slot: number) => boolean;
+	/**
+	 * MON-05: a killing blow just unlocked a title for this slot (Horde Breaker). The save ALREADY has it; this is
+	 * the simulation's cue to tell the survivor and have the session written.
+	 */
+	titleUnlocked?: (slot: number, titleId: number) => void;
 }
 
 export class Progress {
 	private readonly saveOf: (slot: number) => PlayerSaveData | undefined;
 	private readonly paysRewards: (slot: number) => boolean;
+	private readonly titleUnlocked?: (slot: number, titleId: number) => void;
 	private readonly zombies = new Map<number, Ledger>();
 	private readonly bosses = new Map<number, Ledger>();
 	private readonly stats = new Map<number, ProgressStats>();
@@ -298,6 +338,7 @@ export class Progress {
 	constructor(options: ProgressOptions) {
 		this.saveOf = options.saveOf;
 		this.paysRewards = options.paysRewards ?? (() => true);
+		this.titleUnlocked = options.titleUnlocked;
 	}
 
 	// ---- zombies -----------------------------------------------------------------------------
@@ -329,9 +370,11 @@ export class Progress {
 		if (killerSlot >= 0) {
 			out.push(this.pay(killerSlot, base, true));
 			this.bump(killerSlot).kills += 1;
+			this.creditKill(killerSlot);
 		}
 		if (l !== undefined) {
 			for (const c of l.by) {
+				// an assist is XP (MP-15), never a zombie put down: the lifetime kill count is the killer's alone
 				if (c.slot === killerSlot || now - c.at > ASSIST_WINDOW_S) continue;
 				out.push(this.pay(c.slot, base * ASSIST_SHARE, false));
 				this.bump(c.slot).assists += 1;
@@ -436,6 +479,17 @@ export class Progress {
 		const levels = save !== undefined ? awardExp(save, amount) : 0;
 		if (save !== undefined) this.bump(slot).exp += amount;
 		return { slot, exp: amount, levels, killer };
+	}
+
+	/**
+	 * MON-05: the killing blow goes on the survivor's lifetime count (and Horde Breaker at its goal). Not in an
+	 * assisted run (§9.3): an admin's spawn tools would make the count a button, and a title is a reward like coins.
+	 */
+	private creditKill(slot: number): void {
+		const save = this.saveOf(slot);
+		if (save === undefined || !this.paysRewards(slot)) return;
+		const unlocked = creditZombieKill(save);
+		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
 	}
 
 	private creditBoss(slot: number): void {

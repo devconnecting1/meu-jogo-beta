@@ -150,6 +150,12 @@ export const SURFACE = {
 	cellLabel: SIDEBAR_TOKENS.accent,
 	/** value cell of a settings row: one step lighter (#565656, over 1,3:1 on the label cell, like the reference) */
 	cell: TOKENS.cell,
+	/**
+	 * a row of a selectable list whose TEXT is the content -- the wardrobe's titles, drawn in their game colours
+	 * (MON-05): the window's graphite (#262626), the lightest face those colours still read on at 4,5:1. A LOCKED row
+	 * is `well`, a step darker.
+	 */
+	row: TOKENS.window,
 };
 
 /**

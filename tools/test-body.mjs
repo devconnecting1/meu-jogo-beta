@@ -36,6 +36,25 @@
  *  10. THE WARDROBE         MON-04's purchase through the real ShopAction: unknown ids, too few coins and a costume
  *                           already owned are refused; a request naming its own price pays the catalogue's; what
  *                           was bought can be worn, what was not is taken off; the DataStore gets both.
+ *  11. THE XP PUSH          the XP the server credits reaches the client in a pushed wallet (level and XP).
+ *  12. THE TITLES           MON-05 through the real server: a title nobody earned cannot be shown (ShopAction nor
+ *                           report), a report cannot grant one or count a kill, the server's own killing blow makes a
+ *                           Horde Breaker and tells that player alone, and the title record brings back what a server
+ *                           rolled back to v4 wrote the save without -- forgetting only which title was shown.
+ *  13. THE RECORD'S COST    one attempt to read the title record, one to write it: a failing store never stalls the
+ *                           LoadAck or a leave.
+ *  14. RESET AND WIPE       the title record never undoes an admin reset (even when this session could not read it,
+ *                           or its write failed) nor a save key deleted on purpose.
+ *  15. RECORD UNDER LOCK    leaving writes the title record BEFORE the save write that releases the session lock.
+ *  16. RECORD BUDGET       no record write for a survivor who earned nothing; a title store that failed to open
+ *                           is asked again a minute later instead of never.
+ *  17. ADMIN DAY EDIT      an admin who sets a life's day has assisted the run (no coins, no titles) and counted
+ *                           no night toward Week One.
+ *  18. LOCK LOST UNAWARE    a server that lost the lock without knowing it (another took it, an admin reset the
+ *                           player there) leaves without writing its old titles over the reset's record.
+ *  19. RECORD OUT OF THE WAY a low request budget, a slow or failing title store, or BindToClose: the leave writes
+ *                           its save alone (the record never stands in front of the lock's release), and the next
+ *                           session writes the record from the save.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -228,18 +247,36 @@ globalThis.Instance = Inst;
 /** Roblox's DataStores outlive a server: one map per store name for the whole run */
 const stores = new Map();
 const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+/** every DataStore call that went through, in order: { store, op, key } (the tests read the order of writes) */
+const storeLog = [];
+/** GetDataStore(name) throws this many more times per store name (a store the service cannot open yet) */
+const openFailures = new Map();
 function fakeStore(name) {
 	let s = stores.get(name);
 	if (s !== undefined) return s;
 	const data = new Map();
 	s = {
 		data,
+		/** fault injection: how many of the next calls of each kind throw, as a DataStore outage does */
+		fail: { get: 0, update: 0 },
 		UpdateAsync(key, transform) {
+			if (s.fail.update > 0) {
+				s.fail.update -= 1;
+				throw new Error(`injected UpdateAsync failure on ${name}`);
+			}
 			const next = transform(clone(data.get(key)));
 			if (next !== undefined) data.set(key, clone(next));
+			storeLog.push({ store: name, op: "update", key });
 			return [next];
 		},
-		GetAsync: key => [clone(data.get(key))],
+		GetAsync(key) {
+			if (s.fail.get > 0) {
+				s.fail.get -= 1;
+				throw new Error(`injected GetAsync failure on ${name}`);
+			}
+			storeLog.push({ store: name, op: "get", key });
+			return [clone(data.get(key))];
+		},
 		SetAsync: (key, v) => data.set(key, clone(v)),
 	};
 	stores.set(name, s);
@@ -270,7 +307,17 @@ function makeGame(privateServer) {
 		JSONEncode: v => JSON.stringify(v),
 		JSONDecode: s => JSON.parse(s),
 	};
-	const DataStoreService = { GetDataStore: name => fakeStore(name), GetRequestBudgetForRequestType: () => 100 };
+	const DataStoreService = {
+		GetDataStore: name => {
+			const left = openFailures.get(name) ?? 0;
+			if (left > 0) {
+				openFailures.set(name, left - 1);
+				throw new Error(`injected GetDataStore failure on ${name}`);
+			}
+			return fakeStore(name);
+		},
+		GetRequestBudgetForRequestType: () => 100,
+	};
 	const services = {
 		ReplicatedStorage,
 		Workspace,
@@ -1215,6 +1262,8 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	);
 });
 
+// ================================================================ 11: the XP wallet push (PR #8)
+
 section("11) the XP the server credits reaches the client: its wallet is pushed with level and XP in it", () => {
 	// the owner's playtest (2026-09-23): the HUD's XP bar sat at "LV 1 · 0 / 120" through a whole run. From
 	// MP_PHASE 2 the server credits every kill into the live save (server/sim/progress.ts), and nothing carried it
@@ -1275,7 +1324,592 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	const keep = { level: mine.level, exp: mine.exp };
 	applyWallet(mine, older);
 	check(mine.level === keep.level && mine.exp === keep.exp, "a wallet without level or XP leaves them alone");
+
+	// MON-05: what the wardrobe reads is pushed too, each on its own. A killing blow that pays no XP still counts a
+	// zombie put down (the Horde Breaker line), and nothing else in the wallet moved with it
+	const pushed = () => pushes(p).length;
+	let count = pushed();
+	const kills = save.zombieKills;
+	s.sim.progress.zombieKilled(900003, 0, sp.slot, 0);
+	s.run(0.5);
+	const kill = pushes(p).pop()?.args[0];
+	check(
+		save.zombieKills === kills + 1 && pushed() === count + 1 && kill?.wallet?.zombieKills === kills + 1,
+		"a killing blow worth 0 XP still pushes the wallet, with the kill count in it",
+		JSON.stringify({ kills: save.zombieKills, pushes: pushed() - count, wallet: kill?.wallet?.zombieKills }),
+	);
+	applyWallet(mine, kill.wallet);
+	check(mine.zombieKills === kills + 1, "…and the client's copy counts it (Zombies put down: n / 100)");
+	// a title granted by the server, and nothing else
+	count = pushed();
+	save.titles[0] = 1;
+	s.run(0.5);
+	const titled = pushes(p).pop()?.args[0];
+	check(pushed() === count + 1 && titled?.wallet?.titles?.[0] === 1, "a title granted pushes the wallet");
+	// a midnight credited while the run pays no coins (§9.3): the life's day and nights move, the money does not
+	count = pushed();
+	save.day += 1;
+	save.lifeNights += 1;
+	s.run(0.5);
+	const night = pushes(p).pop()?.args[0];
+	check(
+		pushed() === count + 1 && night?.wallet?.day === save.day && night?.wallet?.lifeNights === save.lifeNights,
+		"a day credited to the life pushes the wallet, with the day and the nights in it",
+		JSON.stringify({ pushes: pushed() - count, day: night?.wallet?.day, nights: night?.wallet?.lifeNights }),
+	);
+	mine.day = 1;
+	mine.lifeNights = 0;
+	applyWallet(mine, night.wallet);
+	check(
+		mine.day === save.day && mine.lifeNights === save.lifeNights,
+		"…and the client's copy takes both from the server (HUD life day, Week One progress)",
+		JSON.stringify({ day: mine.day, nights: mine.lifeNights }),
+	);
 	s.quit(p);
+});
+
+// ================================================================ 12: titles, end to end (MON-05)
+
+section(
+	"12) titles: only what the server granted is shown, and a rollback cannot erase what was earned (MON-05)",
+	() => {
+		const s = bootServer();
+		const TIT = require(join(SRC, "shared/data/titles.ts"));
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const HB = TIT.TitleId.HordeBreaker;
+		/** every World event this player's client received, in order (directed to it, or to everybody) */
+		const worldTo = (srv, p) => {
+			const out = [];
+			for (const e of srv.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World").sent) {
+				if (e.to !== undefined && e.to !== p) continue;
+				const batch = srv.P.decodeWorld(e.args[0]);
+				if (batch !== undefined) out.push(...batch.events);
+			}
+			return out;
+		};
+		const userId = newUser();
+		const p = s.join(userId, "titled");
+		const save = s.save(p);
+
+		// the wardrobe asks to show a title nobody granted: refused, through the real ShopAction
+		const refused = s.shop(p, { kind: "equipTitle", titleId: HB });
+		check(
+			refused.ok === false && refused.reason === "invalid",
+			"showing an unearned title is refused",
+			JSON.stringify(refused),
+		);
+		const junk = [9, -2, 0.5, "1", undefined].map(id => s.shop(p, { kind: "equipTitle", titleId: id }));
+		check(
+			junk.every(r => r.ok === false && r.reason === "invalid"),
+			"and so is any id that is not a title",
+		);
+		check(save.equipTitle === -1, "…and the save shows nothing");
+		// a report claiming every title, a pile of kills and a title shown: none of it sticks
+		const ack = s.report(p, { titles: [1, 1, 1], zombieKills: 5000, equipTitle: HB });
+		check(ack?.ok === true, "the report itself is accepted (the rest of it is honest)");
+		check(
+			save.titles.every(v => v === 0) && save.zombieKills === 0 && save.equipTitle === -1,
+			"…but grants no title, counts no kill and shows nothing",
+			`titles ${JSON.stringify(save.titles)}, kills ${save.zombieKills}, shown ${save.equipTitle}`,
+		);
+
+		// the server's own killing blow: 99 in the save, and the 100th through the host's combat
+		s.run(3);
+		save.zombieKills = TIT.HORDE_BREAKER_KILLS - 1;
+		s.immortal.add(p);
+		const sp = s.enter(p);
+		check(sp !== undefined, "the survivor is in the world");
+		const z = createZombie(1, sp.state.x + 40, sp.state.y, 1);
+		z.hp = 1;
+		z.hpMax = 1;
+		s.sim.horde.zombies.push(z);
+		s.sim.combat.hitZombieWith(sp, z, 10, 0, 0);
+		s.run(0.3);
+		const notes = worldTo(s, p).filter(
+			e => e.t === s.P.WorldEv.Announce && e.msg === s.P.AnnounceKind.TitleUnlocked,
+		);
+		check(
+			save.zombieKills === TIT.HORDE_BREAKER_KILLS && save.titles[HB] === 1,
+			"the 100th zombie makes a Horde Breaker",
+		);
+		check(
+			notes.length === 1 && TIT.titleFromWire(notes[0].arg) === HB,
+			"and the player is told, once, on the reliable channel",
+			JSON.stringify(notes),
+		);
+		// now it can be shown, and the profile carries it to every client
+		const shown = s.shop(p, { kind: "equipTitle", titleId: HB });
+		check(shown.ok === true && save.equipTitle === HB, "showing the earned title is accepted");
+		s.run(0.3);
+		const mine = worldTo(s, p).filter(e => e.t === s.P.WorldEv.PlayerProfile && e.slot === sp.slot);
+		check(
+			mine.length > 0 && mine[mine.length - 1].title === TIT.titleToWire(HB),
+			"a PlayerProfile puts it under the name",
+		);
+
+		// leaving writes the save, and the title record beside it
+		s.quit(p);
+		const stored = s.stored(userId);
+		check(
+			stored?.titles[HB] === 1 && stored?.zombieKills === TIT.HORDE_BREAKER_KILLS && stored?.equipTitle === HB,
+			"the save written on leaving has the title, the kills and the title shown",
+		);
+		const record = fakeStore(TITLE_STORE).data.get(String(userId));
+		check(
+			record?.titles[HB] === 1 && record?.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"and the title record has what was earned",
+			JSON.stringify(record),
+		);
+
+		// a server rolled back to v4 code rewrites the save without the three v5 keys
+		s.storeDoc(userId, d => {
+			delete d.titles;
+			delete d.zombieKills;
+			delete d.equipTitle;
+			d.version = 4;
+		});
+		// ...and the next v5 session, on another server, brings back all that was earned
+		const s2 = bootServer();
+		const p2 = s2.join(userId, "titled");
+		const back = s2.save(p2);
+		check(
+			back.titles[HB] === 1 && back.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"a v5 load after the rollback restores it all",
+		);
+		check(back.equipTitle === -1, "forgetting only WHICH title was shown");
+		s2.quit(p2);
+		const again = s2.stored(userId);
+		check(
+			again?.titles[HB] === 1 && again?.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"and the save is written whole again",
+		);
+	},
+);
+
+// ================================================================ 13: the title record, under faults (MON-05 review)
+
+section("13) the title record never stalls the save path: one attempt to read it, one to write it (MON-05)", () => {
+	const s = bootServer();
+	const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const record = fakeStore(TITLE_STORE);
+	// a record that cannot be read: the load goes on without it (it used to wait and retry for up to 7 s, in front
+	// of the LoadAck -- here a wait abandons the thread, exactly as a stall would feel to the player)
+	record.fail.get = 1;
+	const u = newUser();
+	const p = s.join(u, "unlucky");
+	check(record.fail.get === 0, "the record was read at load, and the read failed");
+	check(s.save(p) !== undefined, "…and the LoadAck went out anyway: one attempt, no waits in front of it");
+	// after that failure this server does not put the record in front of a leave's save for a while (§19)
+	s.save(p).zombieKills = 11;
+	record.fail.update = 1;
+	s.quit(p);
+	check(record.fail.update === 1 && s.stored(u)?.zombieKills === 11, "…and that leave wrote its save alone");
+	// a record that cannot be written, on a server whose store had answered: the leave goes on (the next save tries
+	// again)
+	const s2 = bootServer();
+	const p2 = s2.join(u, "unlucky");
+	s2.save(p2).zombieKills = 12;
+	s2.quit(p2);
+	check(record.fail.update === 0, "the record write on leaving was tried, and failed");
+	check(s2.stored(u)?.zombieKills === 12, "…and the save itself was written");
+	const again = s2.join(u, "unlucky");
+	check(s2.save(again)?.zombieKills === 12, "…and the leave finished: the same player loads again on this server");
+	s2.quit(again);
+});
+
+// ================================================================ 14: the record never undoes a reset or a wipe
+
+/** the admin of shared/admin/config.ts, and its panel's one remote */
+const ADMIN_ID = 8013052784;
+function adminRequest(srv, caller, req) {
+	const net = srv.env.services.ReplicatedStorage.FindFirstChild("PZAdminNet");
+	return net.FindFirstChild("AdminRequest").OnServerInvoke(caller, req);
+}
+
+section("14) what was earned never comes back from the title record after an admin reset or a wipe (MON-05)", () => {
+	const HB = 1;
+	/** a survivor who earned Horde Breaker, saved and gone: the save and the title record both hold it */
+	function earner(name) {
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, name);
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		srv.quit(p);
+		return u;
+	}
+	const earned = save => save !== undefined && (save.titles[HB] === 1 || save.zombieKills > 0);
+	const describe = save =>
+		save === undefined ? "no save" : `titles ${JSON.stringify(save.titles)}, kills ${save.zombieKills}`;
+	/** the next session anywhere, as the player would get it */
+	function nextLoad(u, name) {
+		const srv = bootServer();
+		const p = srv.join(u, name);
+		const save = srv.save(p);
+		const out = save === undefined ? undefined : { titles: [...save.titles], zombieKills: save.zombieKills };
+		srv.quit(p);
+		return out;
+	}
+
+	// R1: this session could not read the record; the admin resets the save; the player leaves
+	{
+		const u = earner("r1");
+		const srv = bootServer();
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		fakeStore(TITLE_STORE).fail.get = 1;
+		const p = srv.join(u, "r1");
+		check(earned(srv.save(p)), "R1: the survivor loads with the title earned");
+		const admin = srv.join(ADMIN_ID, "admin");
+		const reset = adminRequest(srv, admin, { kind: "resetSave", userId: u });
+		check(reset?.ok === true, "…an admin resets the save", JSON.stringify(reset?.error));
+		srv.quit(p);
+		srv.quit(admin);
+		const after = nextLoad(u, "r1");
+		check(
+			after !== undefined && !earned(after),
+			"…and the next load has no title and no kills, though this session never read the record",
+			describe(after),
+		);
+	}
+
+	// R2: the reset's session read the record, but its write of the record fails
+	{
+		const u = earner("r2");
+		const srv = bootServer();
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const p = srv.join(u, "r2");
+		const admin = srv.join(ADMIN_ID, "admin");
+		adminRequest(srv, admin, { kind: "resetSave", userId: u });
+		fakeStore(TITLE_STORE).fail.update = 1;
+		srv.quit(p);
+		srv.quit(admin);
+		const after = nextLoad(u, "r2");
+		check(
+			after !== undefined && !earned(after),
+			"R2: a reset whose record write failed is not undone by the old record at the next load",
+			describe(after),
+		);
+	}
+
+	// R3: the save key deleted on purpose (Open Cloud, a manual wipe, an erasure request); the record is left behind
+	{
+		const u = earner("r3");
+		const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		fakeStore(SAVE_STORE).data.delete(String(u));
+		const first = nextLoad(u, "r3");
+		check(
+			first !== undefined && !earned(first),
+			"R3: a deleted save comes back as a new player's, record ignored",
+			describe(first),
+		);
+		const later = nextLoad(u, "r3");
+		check(later !== undefined && !earned(later), "…and stays that way on the load after", describe(later));
+		const rec = fakeStore(TITLE_STORE).data.get(String(u));
+		check(
+			rec === undefined || (rec.titles.every(v => v === 0) && rec.zombieKills === 0),
+			"…because the record without a save was replaced at the first write",
+			JSON.stringify(rec),
+		);
+	}
+});
+
+// ================================================================ 15: the record is written under the lock
+
+section("15) leaving writes the title record while the session still holds the save's lock (MON-05)", () => {
+	const HB = 1;
+	const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const srv = bootServer();
+	const u = newUser();
+	const key = String(u);
+	const p = srv.join(u, "leaver");
+	const save = srv.save(p);
+	save.titles[HB] = 1;
+	save.zombieKills = 100;
+	// the save document's lock at each write of this player's record: once it is released, another server may load
+	// the player and own both documents, and a late record write from here would land on top of that session's
+	const titles = fakeStore(TITLE_STORE);
+	const original = titles.UpdateAsync;
+	const lockAtWrite = [];
+	titles.UpdateAsync = (k, transform) => {
+		if (k === key) lockAtWrite.push(fakeStore(SAVE_STORE).data.get(k)?.lock ?? null);
+		return original(k, transform);
+	};
+	const from = storeLog.length;
+	srv.quit(p);
+	titles.UpdateAsync = original;
+	const writes = storeLog.slice(from).filter(e => e.key === key && e.op === "update");
+	const order = JSON.stringify(writes.map(e => e.store));
+	const recordAt = writes.findIndex(e => e.store === TITLE_STORE);
+	const releaseAt = writes.findLastIndex(e => e.store === SAVE_STORE);
+	check(recordAt >= 0 && releaseAt >= 0, "leaving wrote the save and the title record", order);
+	check(recordAt < releaseAt, "…the record FIRST, then the save write that releases the lock", order);
+	check(
+		lockAtWrite.length > 0 && lockAtWrite.every(lock => lock !== null),
+		"…so the lock was held at every write of the record",
+		JSON.stringify(lockAtWrite),
+	);
+	const doc = fakeStore(SAVE_STORE).data.get(key);
+	check(doc !== undefined && doc.lock === undefined, "the save was released");
+	const stored = srv.stored(u);
+	const rec = titles.data.get(key);
+	check(
+		stored?.zombieKills === 100 && stored.titles[HB] === 1 && rec?.zombieKills === 100 && rec.titles[HB] === 1,
+		"…and both documents hold what was earned",
+		`save ${stored?.zombieKills}, record ${JSON.stringify(rec)}`,
+	);
+});
+
+// ================================================================ 16: the record costs a write only when it matters
+
+section("16) the title record is written only when something was earned, and its store is asked again (MON-05)", () => {
+	const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const recordWrites = (from, key) =>
+		storeLog.slice(from).filter(e => e.store === TITLE_STORE && e.op === "update" && e.key === key).length;
+
+	// a survivor who earned nothing: one session, a save written on leaving, and no record at all
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const from = storeLog.length;
+		const p = srv.join(u, "nothing");
+		srv.save(p).money += 5;
+		srv.quit(p);
+		const writes = recordWrites(from, String(u));
+		check(writes === 0, "a survivor who earned nothing costs no record write", `${writes} write(s)`);
+		const none = fakeStore(TITLE_STORE).data.get(String(u));
+		check(none === undefined, "…and has no record", JSON.stringify(none));
+		srv.quit(srv.join(u, "nothing"));
+		check(recordWrites(from, String(u)) === 0, "…not on the next session either");
+	}
+
+	// the store could not be opened when the first player came in: it is asked again, not given up for good
+	{
+		const srv = bootServer();
+		openFailures.set(TITLE_STORE, 1);
+		const u = newUser();
+		const p = srv.join(u, "late store");
+		check(openFailures.get(TITLE_STORE) === 0, "the title store failed to open at the first load");
+		const save = srv.save(p);
+		save.titles[1] = 1;
+		save.zombieKills = 100;
+		srv.run(61, 1 / 10);
+		const from = storeLog.length;
+		srv.quit(p);
+		const late = recordWrites(from, String(u));
+		check(late === 1, "a minute later, leaving opens it and writes the record", `${late} write(s)`);
+		const rec = fakeStore(TITLE_STORE).data.get(String(u));
+		check(rec?.zombieKills === 100 && rec.titles[1] === 1, "…with what was earned", JSON.stringify(rec));
+	}
+});
+
+// ================================================================ 17: an admin who moves the day assists the run
+
+section("17) an admin who moves a life's day has assisted that run: no coins, no title from it (§9.3, MON-05)", () => {
+	const srv = bootServer();
+	const u = newUser();
+	const p = srv.join(u, "helped");
+	const admin = srv.join(ADMIN_ID, "admin");
+	const pays = () => srv.sim.paysRewards({ userId: u });
+	check(pays(), "a run nobody helped pays");
+	const money = adminRequest(srv, admin, {
+		kind: "edit",
+		userId: u,
+		ops: [{ op: "stat", field: "money", value: 500 }],
+	});
+	check(
+		money?.ok === true && pays(),
+		"an admin setting the coins does not make it assisted",
+		JSON.stringify(money?.error),
+	);
+	const day = adminRequest(srv, admin, { kind: "edit", userId: u, ops: [{ op: "stat", field: "day", value: 8 }] });
+	check(day?.ok === true, "the admin sets the life's day to 8", JSON.stringify(day?.error));
+	check(!pays(), "…and from then the run is assisted: it pays no coins and earns no title");
+	check(srv.save(p).lifeNights === 0, "…nor did the day edit count a single night toward Week One");
+	srv.quit(p);
+	srv.quit(admin);
+});
+
+// ================================================================ 18: a server that lost the lock without knowing it
+
+section(
+	"18) a server that lost the lock without knowing it never writes the title record over a reset (MON-05)",
+	() => {
+		const HB = 1;
+		const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const u = newUser();
+		const key = String(u);
+		// a Horde Breaker, saved and gone: the save and the record both hold it
+		{
+			const srv = bootServer();
+			const p = srv.join(u, "hopper");
+			const save = srv.save(p);
+			save.titles[HB] = 1;
+			save.zombieKills = 100;
+			srv.quit(p);
+		}
+		const earnedEpoch = fakeStore(TITLE_STORE).data.get(key)?.epoch;
+		// server A loads the player (and holds the lock)...
+		const a = bootServer();
+		const onA = a.join(u, "hopper");
+		check(a.save(onA)?.titles[HB] === 1, "server A loads the survivor, title and all");
+		// ...who turns up on server B while A still thinks it has them: B takes the lock once A's is past waiting for
+		// (LOCK_WAIT; here the lock is simply made old enough), and an admin resets the player there
+		fakeStore(SAVE_STORE).data.get(key).lock.t -= 1000;
+		const b = bootServer();
+		const onB = b.join(u, "hopper");
+		const admin = b.join(ADMIN_ID, "admin");
+		const reset = adminRequest(b, admin, { kind: "resetSave", userId: u });
+		check(reset?.ok === true, "on server B, an admin resets the save", JSON.stringify(reset?.error));
+		b.quit(onB);
+		b.quit(admin);
+		const afterReset = fakeStore(TITLE_STORE).data.get(key);
+		check(
+			afterReset !== undefined && afterReset.epoch > earnedEpoch && afterReset.zombieKills === 0,
+			"B's leave wrote the reset's record: a later history, nothing earned",
+			JSON.stringify(afterReset),
+		);
+		// the player finally leaves A, which never learned it lost the lock -- and which counted one more kill meanwhile,
+		// so it has something new to write
+		a.save(onA).zombieKills += 1;
+		a.quit(onA);
+		const rec = fakeStore(TITLE_STORE).data.get(key);
+		check(
+			rec?.epoch === afterReset.epoch && rec.zombieKills === 0 && rec.titles.every(v => v === 0),
+			"A's leave did not write its old titles over the reset's record",
+			JSON.stringify(rec),
+		);
+		const doc = fakeStore(SAVE_STORE).data.get(key);
+		const stored = typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+		check(
+			stored.zombieKills === 0 && stored.titles.every(v => v === 0),
+			"and A's save write was refused (lock lost)",
+		);
+		// a server rolled back to v4 in this window: the save loses its epoch, and the record must not hand anything back
+		b.storeDoc(u, d => {
+			delete d.titles;
+			delete d.zombieKills;
+			delete d.equipTitle;
+			delete d.titleEpoch;
+			d.version = 4;
+		});
+		const c = bootServer();
+		const onC = c.join(u, "hopper");
+		const back = c.save(onC);
+		check(
+			back.titles.every(v => v === 0) && back.zombieKills === 0,
+			"a v4 rollback right after brings back none of the reset titles",
+			`titles ${JSON.stringify(back.titles)}, kills ${back.zombieKills}`,
+		);
+		c.quit(onC);
+	},
+);
+
+// ================================================================ 19: the record never stands in front of the save
+
+section("19) a slow, failing or starved title store never holds up the save that releases the lock (MON-05)", () => {
+	const HB = 1;
+	const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const titleStore = fakeStore(TITLE_STORE);
+	/** the writes of one leave, in order, for one key */
+	const writesOf = (from, key) =>
+		storeLog
+			.slice(from)
+			.filter(e => e.key === key && e.op === "update")
+			.map(e => (e.store === TITLE_STORE ? "record" : e.store === SAVE_STORE ? "save" : e.store));
+	/** a survivor who earns Horde Breaker in this session, and leaves: what the leave wrote */
+	function earnAndLeave(srv, u, before) {
+		const p = srv.join(u, `s${u}`);
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		before?.();
+		const from = storeLog.length;
+		srv.quit(p);
+		return writesOf(from, String(u));
+	}
+	const released = u => {
+		const doc = fakeStore(SAVE_STORE).data.get(String(u));
+		const data = typeof doc?.data === "string" ? JSON.parse(doc.data) : doc?.data;
+		return doc !== undefined && doc.lock === undefined && data?.zombieKills === 100;
+	};
+
+	// the request budget is nearly spent: a queued record write would wait in front of the save
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const w = earnAndLeave(srv, u, () => {
+			srv.env.services.DataStoreService.GetRequestBudgetForRequestType = () => 2;
+		});
+		check(
+			JSON.stringify(w) === '["save"]',
+			"a low UpdateAsync budget: the leave writes the save alone",
+			JSON.stringify(w),
+		);
+		check(released(u), "…which lands, with what was earned, and releases the lock");
+	}
+
+	// the title store answered slowly at this server (here: a read that took 5 s at the load)
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const read = titleStore.GetAsync;
+		titleStore.GetAsync = key => {
+			clockNow += 5;
+			return read(key);
+		};
+		let w;
+		try {
+			w = earnAndLeave(srv, u);
+		} finally {
+			titleStore.GetAsync = read;
+		}
+		check(JSON.stringify(w) === '["save"]', "a slow title store: the leave does not wait on it", JSON.stringify(w));
+		check(released(u), "…the save lands and releases the lock");
+		// the next session, on a server whose store answers, writes the record from the save
+		const next = bootServer();
+		const p = next.join(u, "again");
+		next.quit(p);
+		const rec = titleStore.data.get(String(u));
+		check(
+			rec?.zombieKills === 100 && rec.titles[HB] === 1,
+			"the next session writes the record from the save",
+			JSON.stringify(rec),
+		);
+	}
+
+	// a record write that failed: the next leaves on this server do not try again in front of their saves
+	{
+		const srv = bootServer();
+		const first = newUser();
+		titleStore.fail.update = 1;
+		const w1 = earnAndLeave(srv, first);
+		check(released(first), "a leave whose record write failed still writes its save", JSON.stringify(w1));
+		const second = newUser();
+		const w2 = earnAndLeave(srv, second);
+		check(
+			JSON.stringify(w2) === '["save"]',
+			"…and the next leave, a moment later, writes the save alone",
+			JSON.stringify(w2),
+		);
+		check(released(second), "…which lands and releases the lock");
+	}
+
+	// the server is closing: every save shares BindToClose's budget, and the record is not one of them
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "closing");
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		const from = storeLog.length;
+		srv.shutdown();
+		const w = writesOf(from, String(u));
+		check(JSON.stringify(w) === '["save"]', "BindToClose writes the save alone", JSON.stringify(w));
+		check(released(u), "…which lands and releases the lock");
+	}
 });
 
 // ================================================================

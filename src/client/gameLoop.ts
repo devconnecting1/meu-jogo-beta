@@ -8,7 +8,7 @@ import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { isChoppingTool, WEAPONS } from "shared/data/weapons";
-import { expMaxInit, outfitLookOf, petLookOf, PlayerSaveData } from "shared/game/save";
+import { expMaxInit, outfitLookOf, petLookOf, PlayerSaveData, titleWireOf } from "shared/game/save";
 import { PetLook, petFlies } from "shared/data/cosmetics";
 import { createPlayer, currentWeapon, PlayerState } from "shared/game/player";
 import { PLAYER_RADIUS } from "shared/game/physics";
@@ -956,7 +956,10 @@ export class GameLoop {
 		}
 		const p = this.player;
 		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
-		this.nameplate.update(at.x, at.y, ctx.save.level, ctx.phase === "playing" && !p.dead);
+		// MON-05: your title by the rule the server replicates it with (`titleWireOf`: shown only if earned, and
+		// `titles` is the server's word -- LoadAck, wallet, its own unlock notice), so every screen agrees
+		const shown = ctx.phase === "playing" && !p.dead;
+		this.nameplate.update(at.x, at.y, ctx.save.level, shown, titleWireOf(ctx.save));
 	}
 
 	/**
