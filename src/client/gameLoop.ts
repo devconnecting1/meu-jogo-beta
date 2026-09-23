@@ -472,7 +472,12 @@ export class GameLoop {
 		this.players.clear();
 		this.players.push(this.player);
 		this.fx.clear();
+		// MP-20: a new map is a new LIFE, never a new world. The clock is the town's, so it is handed over
+		// instead of rebuilt -- otherwise "New game" put this client back at day 1, 07:00 while the server
+		// (and everybody else on it) was still in the middle of night three.
+		const previousClock = this.daynight;
 		this.daynight = new DayNight(save);
+		this.daynight.adoptWorld(previousClock);
 		this.daynight.onAnnounce = msg => {
 			this.fx.push({ kind: "message", text: msg });
 		};

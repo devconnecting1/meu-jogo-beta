@@ -30,6 +30,13 @@ export const CLOCK_ANNOUNCEMENTS: ReadonlyArray<ClockAnnouncement> = [
 	{ hour: 7, text: "Good morning", morning: true },
 ];
 
+/**
+ * The hour the night ends (MP-21). It is 06:00 and not the 07:00 of "Good morning": 06:00 is where
+ * `isNightAt` turns false and the clock goes back to day speed, so 19:00 → 06:00 is the 11 h at 1.2× the
+ * rule prices the night at (~3.6 real minutes). A survivor who has to wait out the night waits for THIS.
+ */
+export const DAY_BREAK_HOUR = 6;
+
 /** night for the clock speed and the HUD: after 19:00 and before 06:00 */
 export function isNightAt(dayTime: number): boolean {
 	return dayTime > 19 || dayTime < 6;
@@ -98,6 +105,49 @@ export function advanceClock(dayTime: number, dt: number): number {
 	// the guard tripped (a dt of many game days): finish in one piece rather than return a stalled clock
 	if (left > 0) t += forwardSpeed(t) * left;
 	return carried + t;
+}
+
+/**
+ * REAL seconds until the clock next reads `hour` — the exact inverse of `advanceClock`, and for the same
+ * reason: it walks the same 06:00 / 19:00 speed edges, so `advanceClock(t, secondsUntilHour(t, h))` lands on
+ * `h` whatever the two hours are. Returns 0 when the clock is already there.
+ *
+ * It exists because a countdown made of game hours is a lie to the player: 4 game hours before dawn is 79 s
+ * at night speed and 119 s in daylight. MP-21 promises a wait that "is short"; the screen has to be able to
+ * say how short in the seconds the player is actually going to sit there (client/onboarding/gameOver.ts).
+ */
+export function secondsUntilHour(dayTime: number, hour: number): number {
+	const wrap = (v: number): number => v - math.floor(v / HOURS_PER_DAY) * HOURS_PER_DAY;
+	let t = wrap(dayTime);
+	const target = wrap(hour);
+	let seconds = 0;
+	for (let i = 0; i < MAX_EDGE_SPLITS; i++) {
+		const edge = nextSpeedEdge(t);
+		const speed = forwardSpeed(t);
+		// the target on the same unwrapped axis as `edge`: behind us means tomorrow's
+		const ahead = target >= t ? target : target + HOURS_PER_DAY;
+		if (ahead <= edge) return seconds + (ahead - t) / speed;
+		seconds += (edge - t) / speed;
+		t = edge >= HOURS_PER_DAY ? edge - HOURS_PER_DAY : edge;
+	}
+	return seconds;
+}
+
+/** real seconds of one whole night, 19:00 → 06:00 at night speed (~3.6 min) — MP-21's price for a death */
+export const NIGHT_REAL_SECONDS = secondsUntilHour(19, DAY_BREAK_HOUR);
+
+/**
+ * How long a survivor who died at `dayTime` stays down on a shared server before the world puts them back
+ * on their feet (MP-21, server/net/mpHost.ts; the client counts the same number down on screen).
+ *
+ * MP-21 writes the rule for the death it was written about — one at night — and prices it at the night
+ * itself: die at 19:00 and you miss all of it. That is the first term. The cap is the answer to the death
+ * the rule does not mention: dying at 08:00, the next daybreak is nearly a whole game day away, and ten real
+ * minutes of watching is not "a espera é curta" by anyone's reading. So the wait is the rest of the night,
+ * and never more than a whole one — the same cost, whenever it is collected.
+ */
+export function daybreakWaitSeconds(dayTime: number): number {
+	return math.min(secondsUntilHour(dayTime, DAY_BREAK_HOUR), NIGHT_REAL_SECONDS);
 }
 
 /** `dayTime` folded back into [0, 24), moving whole days onto `day` (a step may cross midnight) */

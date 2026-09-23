@@ -140,5 +140,5 @@ export function runSummary(ctx: GameContext, first: boolean): RunSummary {
 }
 
 export { Coach } from "./coach";
-export { showRunSummary } from "./gameOver";
-export type { RunSummary, RunSummaryHandlers } from "./gameOver";
+export { showDaybreakWait, showRunSummary } from "./gameOver";
+export type { DaybreakWait, RunSummary, RunSummaryHandlers } from "./gameOver";

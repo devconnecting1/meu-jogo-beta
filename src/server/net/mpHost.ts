@@ -18,9 +18,11 @@ import {
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
 	MAX_PLAYERS,
+	MP_PHASE,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
 } from "shared/net/mpConfig";
+import { daybreakWaitSeconds } from "shared/sim/clock";
 import { IntentKind, LifeState, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
 import { createPlayer } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
@@ -138,6 +140,14 @@ interface Link {
 	wantsWorld: boolean;
 	/** os.clock() of the last accepted enter/leave, to rate-limit a client flipping it (§8.2) */
 	worldAt: number;
+	/**
+	 * MP-21: real seconds this survivor still has to lie in the street before the world stands them back up,
+	 * or undefined when they are not waiting for one (alive, or in a world that is the owner's -- see
+	 * `sharedWorld`). It counts down in real seconds rather than naming an hour because the clock and the
+	 * heartbeat advance in the same real time, so the countdown lands on daybreak on its own, and the client
+	 * showing the number (client/onboarding/gameOver.ts) computes it from the very same shared rule.
+	 */
+	downFor?: number;
 	/** a kick is asked for once; the player takes a moment to actually leave */
 	kicked: boolean;
 	lastAnomalyLog: number;
@@ -184,7 +194,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	sim.onFx = event => replicator.queueFx(event);
 	// the snapshot's Dead flag is unreliable, so the transition itself goes out reliably (§4.5); F4 turns this
 	// into downed → revive → dead with the same event
-	sim.onDeath = sp => replicator.life(sp.slot, LifeState.Dead);
+	sim.onDeath = sp => {
+		replicator.life(sp.slot, LifeState.Dead);
+		armDaybreak(sp.slot);
+	};
 
 	// ------------------------------------------------------------ lifecycle
 
@@ -221,6 +234,37 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	function guardFlood(link: Link, sp: ServerPlayer): void {
 		const reason = floodReason(sp);
 		if (reason !== undefined) kick(link, reason);
+	}
+
+	/**
+	 * MP-20 / MP-21: is this town SHARED, or does it belong to whoever opened the server?
+	 *
+	 * Read off the server kind and nothing else, exactly as client/main.client.ts reads it -- a head count
+	 * would make the same death free or expensive depending on who happened to be logged in at that second,
+	 * and the two sides would have to agree about the answer across the wire to stay consistent. A private
+	 * or reserved server is the owner's world (MP-13 "servidor solo/privado"), where a death is bought back
+	 * with coins and the world is theirs to freeze. A public one is everybody's.
+	 */
+	function sharedWorld(): boolean {
+		return MP_PHASE >= 2 && game.PrivateServerId === "";
+	}
+
+	/**
+	 * MP-21: a survivor went down in a shared town, so the town itself will stand them back up at daybreak.
+	 *
+	 * This is the ONLY respawn the server has that nobody has to pay for, and it closes a hole much wider
+	 * than one player's inconvenience: `rebuildClusters` (shared/sim/ai/population.ts) skips dead survivors,
+	 * so a server where everyone is dead has no clusters, and with no clusters nothing spawns at all -- not
+	 * the night's waves, not the ambient walkers, for as long as the bodies lie there. Before this, the only
+	 * ways out of `dead` were a paid rebirth and a new run, so a player who could not afford the one and did
+	 * not want the other left the whole town sterile behind them.
+	 */
+	function armDaybreak(slot: number): void {
+		if (!sharedWorld()) return;
+		const player = bySlot.get(slot);
+		const link = player !== undefined ? links.get(player) : undefined;
+		if (link === undefined) return;
+		link.downFor = daybreakWaitSeconds(sim.clock.dayTime);
 	}
 
 	/** §7.1: enter the world at a safe spawn point (MP-04) once the save is available */
@@ -273,6 +317,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		const slot = link.slot;
 		if (slot === undefined) return;
 		link.slot = undefined;
+		link.downFor = undefined;
 		bySlot.delete(slot);
 		sim.remove(slot);
 		replicator.left(slot);
@@ -285,6 +330,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (link === undefined || slot === undefined) return false;
 		const sp = sim.get(slot);
 		if (sp === undefined) return false;
+		// whatever stood this survivor up -- daybreak, a rebirth, a new run -- cancels the wait the others
+		// are counting, so two revives can never land on the same body
+		link.downFor = undefined;
 		const allies = new Array<{ x: number; y: number }>();
 		for (const other of sim.players()) {
 			if (other.slot !== slot && !other.state.dead) allies.push({ x: other.state.x, y: other.state.y });
@@ -304,6 +352,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	function release(player: Player): void {
 		const link = links.get(player);
 		links.delete(player);
+		if (link !== undefined) link.downFor = undefined;
 		if (link === undefined || link.slot === undefined) return;
 		const slot = link.slot;
 		bySlot.delete(slot);
@@ -357,11 +406,26 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (kind === undefined) return;
 		const wants = kind === IntentKind.EnterWorld;
 		if (wants === link.wantsWorld) return;
+		/*
+		 * The wish is recorded FIRST and unconditionally, and only the acting on it is rate-limited.
+		 *
+		 * Restarting a run sends LeaveWorld and EnterWorld in the same frame (client/main.client.ts:
+		 * `stopGame` then `mountRun`), and dropping the second one because it arrived inside the cooldown
+		 * left `wantsWorld` false -- so the periodic `admit` pass refused to spawn the survivor too and the
+		 * player came out of "New game" with no body on the server at all, until they walked out to the
+		 * lobby and back. What the cooldown is actually for is the COST of entering (a safe-spawn query),
+		 * and that cost is already bounded: `admit` runs at most once per ADMIT_INTERVAL and only ever
+		 * spawns a survivor who has no slot, so a client flipping the intent fast gains nothing by it.
+		 */
+		link.wantsWorld = wants;
+		if (!wants) {
+			link.worldAt = now;
+			leaveWorld(link);
+			return;
+		}
 		if (now - link.worldAt < WORLD_INTENT_COOLDOWN_S && now >= link.worldAt) return;
 		link.worldAt = now;
-		link.wantsWorld = wants;
-		if (wants) admit(player);
-		else leaveWorld(link);
+		admit(player);
 	});
 
 	const timeConn = onTimeSync(remotes, (player, payload) => {
@@ -400,6 +464,27 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	});
 
 	// ------------------------------------------------------------ metrics and anomaly log (§9.3, §12.2)
+
+	/**
+	 * MP-21, once per Heartbeat: every survivor waiting out the night loses `dt` of it, and the ones whose
+	 * wait is over are put back in the world the same way a rebirth puts them back -- `revivePlayer`, so
+	 * "alive again" has exactly one definition on this server and cannot drift into two.
+	 */
+	function stepDaybreak(dt: number): void {
+		if (!(dt > 0)) return;
+		for (const [player, link] of links) {
+			const left = link.downFor;
+			if (left === undefined) continue;
+			if (left > dt) {
+				link.downFor = left - dt;
+				continue;
+			}
+			// revivePlayer clears downFor; clearing it here too means a revive that cannot happen (the
+			// survivor left the world in the meantime) still stops the countdown from retrying every frame
+			link.downFor = undefined;
+			revivePlayer(player);
+		}
+	}
 
 	function publishMetrics(player: Player, sp: ServerPlayer, link: Link, now: number): void {
 		// §2.3: the rewind ceiling is the ping the SERVER measured, never one the client declares. Once a
@@ -441,6 +526,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const started = os.clock();
 			const ran = sim.advance(dt);
 			if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
+			// MP-21: the night the dead are waiting out ran in the same real seconds the sim just did
+			stepDaybreak(dt);
 			if (now - metricAt >= METRIC_INTERVAL) {
 				metricAt = now;
 				if (options.metrics !== false) {

@@ -1,6 +1,6 @@
 import { DESIGN } from "shared/engine/constants";
 import { chance } from "shared/engine/rng";
-import { difficultyOfDay, PlayerSaveData } from "shared/game/save";
+import { difficultyOfDay, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
 import { getDayPopulation } from "shared/data/spawns";
 import { MP_PHASE } from "shared/net/mpConfig";
 import {
@@ -9,12 +9,14 @@ import {
 	clockSpeed,
 	crossed,
 	darkAlphaAt,
+	DAY_BREAK_HOUR,
 	gameHours,
 	HOURS_PER_DAY,
 	inWaveFillWindow,
 	isNightAt,
 	normalizeClock,
 	rainPossible,
+	secondsUntilHour,
 	soundMattersAt,
 	WAVE_FILL_FROM,
 	waveActive,
@@ -92,6 +94,9 @@ export class DayNight {
 
 	constructor(save: PlayerSaveData) {
 		this.save = save;
+		// `day` is the WORLD's day (§6.2, MP-13). Alone in your own world the two are the same number, which
+		// is why the survivor's own day seeds it; on a shared server the first Clock delta (or `adoptWorld`)
+		// replaces it at once, because nothing a single survivor does may decide what day the town is on.
 		this.day = save.day;
 		this.dayTime = 7;
 		this.difficulty = difficultyOfDay(this.day);
@@ -117,6 +122,43 @@ export class DayNight {
 	/** is the hour coming from the server? (false in the single-player build and until the first delta) */
 	serverDriven(): boolean {
 		return this.driven;
+	}
+
+	/** real seconds until the night ends (MP-21); 0 in broad daylight, because it already has */
+	secondsUntilDayBreak(): number {
+		return secondsUntilHour(this.dayTime, DAY_BREAK_HOUR);
+	}
+
+	/**
+	 * MP-20: take the WORLD's clock over from the DayNight of the run that just ended.
+	 *
+	 * "New game" starts a new life, not a new world. The clock belongs to the town, and the town does not
+	 * care that this survivor decided to start over -- so when the loop rebuilds itself around a fresh map
+	 * (client/gameLoop.ts `init`), the hour, the day, the weather and the waves come across untouched.
+	 *
+	 * Without this the new DayNight opened at `save.day` and 07:00, which is day 1 at sunrise after a
+	 * `resetRun`: on a shared server one survivor read "Day 1 Morning" while the other read "Day 2 Evening",
+	 * and the screen stayed bright through the night until the next Clock delta (up to CLOCK_RESYNC_S away,
+	 * §4.5) snapped it back. Returns false when there is nothing to take over -- the single-player build, or
+	 * the very first run of a session, where the first Clock delta is what starts the clock instead.
+	 */
+	adoptWorld(previous: DayNight): boolean {
+		if (MP_PHASE < 2 || !previous.driven) return false;
+		this.driven = true;
+		this.srvDay = previous.srvDay;
+		this.srvDayTime = previous.srvDayTime;
+		this.srvFlags = previous.srvFlags;
+		this.day = previous.day;
+		this.dayTime = previous.dayTime;
+		this.isRaining = previous.isRaining;
+		this.morningCount = previous.morningCount;
+		// the hours between the two runs were lived by the town, not by this survivor: they announce nothing
+		this.snapped = true;
+		this.isNight = isNightAt(this.dayTime);
+		this.applyServerWaves();
+		this.refreshPopulation();
+		this.updateDark();
+		return true;
 	}
 
 	/**
@@ -271,7 +313,12 @@ export class DayNight {
 		const norm = normalizeClock(this.day, advanced);
 		if (norm.day !== this.day) {
 			this.day = norm.day;
-			// no rain roll and no save.day here: the weather and the world's day are the server's (§3.6)
+			// no rain roll here: the weather is the server's (§3.6). `save.day` is NOT the world's day, it is
+			// this survivor's own (§6.2, MP-13), so it does not follow `this.day` -- it is bumped by one,
+			// mirroring what server/sim/progress.ts `creditDaySurvived` just did to the authoritative copy.
+			// The mirror is for the HUD: a report's `day` is pinned by `stripClientProgress`, so it can never
+			// inflate anything, and the next LoadAck replaces it with the server's number either way.
+			this.save.day = math.min(SAVE_LIMITS.DAY_MAX, this.save.day + 1);
 			this.refreshPopulation();
 		}
 		this.dayTime = norm.dayTime;

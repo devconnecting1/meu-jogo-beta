@@ -67,6 +67,9 @@ jobs:
       - name: Match clock and night waves (one server clock, lossy client, the original headcount)
         run: npm run test:clock
 
+      - name: World day vs life day, the daybreak wait and the runRev retry (MP-13, MP-20, MP-21)
+        run: npm run test:life
+
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 

@@ -24,8 +24,18 @@ import {
  * then the two ways forward, then the price. No red title, no "you failed", and New game is never dressed as
  * the dangerous option on a first death, because at that point there is nothing to throw away.
  *
- * Only the presentation lives here. Rebirth, New game and Home are the run lifecycle of main.client.ts and
- * arrive as handlers.
+ * TWO ENDINGS, because MP-21 gives a death two different meanings:
+ *
+ *   `showRunSummary`     your own world (solo/private server, or the single-player build). The world is the
+ *                        owner's, so the run can be bought back: Rebirth · N coins, or New game.
+ *   `showDaybreakWait`   a shared world. Nobody buys their way out of somebody else's night, so the ending
+ *                        is a wait: the screen keeps the town visible behind it and counts the REAL seconds
+ *                        down to 06:00, when the server puts the survivor back on the street. A wait with
+ *                        no number on it is indistinguishable from a frozen game, which is why the count is
+ *                        the biggest thing on the panel.
+ *
+ * Only the presentation lives here. Rebirth, New game, Home and the revive itself are the run lifecycle of
+ * main.client.ts (and, for the revive, server/net/mpHost.ts) and arrive as handlers.
  */
 
 export interface RunSummary {
@@ -50,6 +60,7 @@ export interface RunSummaryHandlers {
 
 const W = 520;
 const H = 470;
+const H_WAIT = 486;
 const PAD = space(6);
 const ROW_H = 34;
 
@@ -61,19 +72,17 @@ function closingLine(s: RunSummary): string {
 	return "The street took it back. Take it again.";
 }
 
+/** M:SS of a real-seconds countdown; never negative, because "-0:01 to dawn" reads as a broken clock */
+function countdown(seconds: number): string {
+	const total = math.max(0, math.ceil(seconds));
+	return string.format("%d:%02d", math.floor(total / 60), total % 60);
+}
+
 /**
- * The end-of-run screen. `showPause(ctx, 2, ...)` in ui/pauseMenu.ts does the same job today; swapping the
- * call in main.client.ts's `openDeath` for this one is the whole integration.
+ * The half of the panel both endings share: the title, the epitaph and the well of numbers. Returns the y
+ * the caller carries on from, so the two screens can never drift apart on what a run "was".
  */
-export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): () => void {
-	const lang = ctx.save.settings.langType;
-	const tr = (key: string): string => langGet(key, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
-		color: THEME.background,
-		transparency: TRANSPARENCY.overlay,
-		zIndex: 250,
-	});
-	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H) / 2, w: W, h: H });
+function summaryHead(panel: Frame, summary: RunSummary, tr: (key: string) => string): number {
 	const innerW = W - PAD * 2;
 	// the title is the run, not the failure: "You survived N days"
 	const title = summary.days === 1 ? tr("You survived a day") : `${tr("You survived")} ${summary.days} ${tr("days")}`;
@@ -102,7 +111,24 @@ export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: 
 			zIndex: 2,
 		});
 	}
-	y += wellH + space(4);
+	return y + wellH + space(4);
+}
+
+/**
+ * The end-of-run screen. `showPause(ctx, 2, ...)` in ui/pauseMenu.ts does the same job today; swapping the
+ * call in main.client.ts's `openDeath` for this one is the whole integration.
+ */
+export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): () => void {
+	const lang = ctx.save.settings.langType;
+	const tr = (key: string): string => langGet(key, lang);
+	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
+		color: THEME.background,
+		transparency: TRANSPARENCY.overlay,
+		zIndex: 250,
+	});
+	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H) / 2, w: W, h: H });
+	const innerW = W - PAD * 2;
+	let y = summaryHead(panel, summary, tr);
 
 	// what the run keeps, said plainly: this is the sentence that stops a first death feeling like a wipe
 	makeLabel(
@@ -172,5 +198,109 @@ export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: 
 
 	return (): void => {
 		root.Destroy();
+	};
+}
+
+/** the daybreak screen, while it is on screen */
+export interface DaybreakWait {
+	/** real seconds still to wait; the run loop refreshes it every frame off the world clock */
+	setRemaining(seconds: number): void;
+	close(): void;
+}
+
+/**
+ * MP-21: died on a shared server. The run is not over and there is nothing to buy — the night is, and the
+ * night ends at 06:00 (~3.6 real minutes end to end), so the survivor waits it out and the server puts them
+ * back on the street.
+ *
+ * Two deliberate differences from the screen above. The overlay is lighter, because the point is that the
+ * town keeps going without you and you are meant to watch it. And the biggest thing on the panel is a
+ * running count, not a button: a wait the player cannot measure is a wait they read as a crash.
+ *
+ * "New game" is still here, for a survivor who would rather start a new life than sit out the dark. What is
+ * NOT here is Rebirth: paying coins to walk back into somebody else's night would take that night away from
+ * the people living it.
+ */
+export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): DaybreakWait {
+	const lang = ctx.save.settings.langType;
+	const tr = (key: string): string => langGet(key, lang);
+	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
+		color: THEME.background,
+		// lighter than the run-over overlay on purpose: the world behind this one is the whole message
+		transparency: math.min(1, TRANSPARENCY.overlay + 0.18),
+		zIndex: 250,
+	});
+	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H_WAIT) / 2, w: W, h: H_WAIT });
+	const innerW = W - PAD * 2;
+	let y = summaryHead(panel, summary, tr);
+
+	makeLabel(
+		panel,
+		"Wait",
+		nl(tr("The town is not yours to restart.#You wake with the others, at first light.")),
+		PAD,
+		y,
+		innerW,
+		44,
+		TEXT.sm,
+		THEME.mutedForeground,
+		{ align: "left", valign: "top" },
+	);
+	y += 44 + space(2);
+
+	// the count itself: label on the left, the seconds in the numeric role on the right, in a well so it
+	// reads as a readout and not as a disabled button
+	const clockH = 64;
+	const clockWell = makeSurface(panel, "Dawn", PAD, y, innerW, clockH, "well");
+	makeLabel(clockWell, "DawnKey", tr("Daybreak in"), space(3), 0, innerW - 200, clockH, TEXT.base, GAME.sun, {
+		align: "left",
+		zIndex: 2,
+	});
+	const remaining = makeLabel(
+		clockWell,
+		"DawnValue",
+		countdown(0),
+		innerW - space(3) - 180,
+		0,
+		180,
+		clockH,
+		TEXT.xl3,
+		THEME.foreground,
+		{ font: "numeric", align: "right", zIndex: 2 },
+	);
+	y += clockH + space(4);
+
+	const halfW = (innerW - space(3)) / 2;
+	const newRun = Button(panel, "NewRun", tr("New game"), {
+		x: PAD,
+		y,
+		w: halfW,
+		h: 48,
+		// waiting is the default, so starting over is the one that throws this life away
+		variant: "secondary",
+		onClick: (): void => handlers.onNewRun?.(),
+	});
+	Button(panel, "Home", tr("Home"), {
+		x: PAD + halfW + space(3),
+		y,
+		w: halfW,
+		h: 48,
+		variant: "secondary",
+		onClick: (): void => handlers.onHome?.(),
+	});
+	autoFocus(newRun);
+
+	let shown = "";
+	return {
+		setRemaining(seconds: number): void {
+			const text = countdown(seconds);
+			// the panel is refreshed every frame and the text only moves once a second
+			if (text === shown || remaining.Parent === undefined) return;
+			shown = text;
+			remaining.Text = text;
+		},
+		close(): void {
+			root.Destroy();
+		},
 	};
 }

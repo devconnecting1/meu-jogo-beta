@@ -35,7 +35,18 @@ export interface HudState {
 	level: number;
 	exp: number;
 	expMax: number;
+	/**
+	 * The WORLD's day (MP-13, MP-20): what the town is living through, shared by everyone on the server.
+	 * It is the number in the spotlight because it is the one the night, the horde and the waves follow.
+	 */
 	day: number;
+	/**
+	 * This survivor's own day (MP-13): how long THIS life has lasted. It goes back to 1 on "New game" while
+	 * `day` above does not move at all, which is the whole point of MP-20 -- so the HUD shows it next to the
+	 * world's day whenever the two have parted company, and stays out of the way while they agree (alone in
+	 * your own world they always do, and printing the same number twice explains nothing).
+	 */
+	lifeDay: number;
 	/** 0..24 in-game hours */
 	dayTime: number;
 	isNight: boolean;
@@ -184,6 +195,8 @@ export class Hud {
 	private expBar: Bar | undefined;
 	private levelLabel: TextLabel | undefined;
 	private dayLabel: TextLabel | undefined;
+	/** MP-13's second number: this life's day, shown only when it has parted from the world's */
+	private lifeLabel: TextLabel | undefined;
 	private phaseLabel: TextLabel | undefined;
 	private clockLabel: TextLabel | undefined;
 	private dayIcon: Frame | undefined;
@@ -373,9 +386,11 @@ export class Hud {
 		});
 	}
 
-	/** top-centre: sun / moon, "Day N", phase (+ HH:MM with a watch) */
+	/** top-centre: sun / moon, the world's "Day N" (+ this life's day), phase (+ HH:MM with a watch) */
 	private buildDay(root: Frame, k: number): void {
-		const w = 230;
+		// 40 units wider than it used to be, to carry the second number of MP-13 without either of them
+		// having to shrink: the floor of ui/skin.ts is 9 px of text, so "tighter" was never an option
+		const w = 270;
 		const h = 52;
 		const dayBox = makeAnchored(root, "DayBox", 0.5, 0, w, h, 0, 10, true, k);
 		Card(dayBox, "Bg", { x: 0, y: 0, w, h, variant: "hud" });
@@ -388,11 +403,41 @@ export class Hud {
 		this.dayIcon = icon;
 		const textX = space(3) + iconSize + space(3);
 		const textW = w - textX - space(3);
-		this.dayLabel = makeLabel(dayBox, "Day", "Day 1", textX, 5, textW, 26, TEXT.xl, THEME.foreground, {
-			font: "heading",
-			align: "left",
-			zIndex: 2,
-		});
+		// the two numbers share the top line: the world's day reads first and large, this life's day sits at
+		// the far end in the muted role, next to the watch column below it so the card keeps one right edge
+		const lifeW = 96;
+		this.dayLabel = makeLabel(
+			dayBox,
+			"Day",
+			"Day 1",
+			textX,
+			5,
+			textW - lifeW - space(1),
+			26,
+			TEXT.xl,
+			THEME.foreground,
+			{
+				font: "heading",
+				align: "left",
+				zIndex: 2,
+			},
+		);
+		this.lifeLabel = makeLabel(
+			dayBox,
+			"Life",
+			"",
+			textX + textW - lifeW,
+			7,
+			lifeW,
+			22,
+			TEXT.xs,
+			THEME.mutedForeground,
+			{
+				font: "caption",
+				align: "right",
+				zIndex: 2,
+			},
+		);
 		this.phaseLabel = makeLabel(dayBox, "Phase", "", textX, 29, textW, 18, TEXT.xs, THEME.mutedForeground, {
 			font: "caption",
 			align: "left",
@@ -790,6 +835,7 @@ export class Hud {
 		this.expBar = undefined;
 		this.levelLabel = undefined;
 		this.dayLabel = undefined;
+		this.lifeLabel = undefined;
 		this.phaseLabel = undefined;
 		this.clockLabel = undefined;
 		this.dayIcon = undefined;
@@ -856,8 +902,12 @@ export class Hud {
 		this.setRatio(this.expBar, "exp", state.expMax > 0 ? state.exp / state.expMax : 0);
 		this.setText(this.levelLabel, "level", `LV ${state.level}`);
 
-		// day / phase / clock
+		// day / phase / clock. MP-13 + MP-20: the big number is the WORLD's day, the small one is this life's,
+		// and the small one only appears once "New game" (or joining a town that was already old) has pushed
+		// them apart -- while they agree, the second number would be noise with nothing to say.
 		this.setText(this.dayLabel, "day", `${this.tr("Day")} ${state.day}`);
+		const life = state.lifeDay !== state.day ? `${this.tr("Life day")} ${state.lifeDay}` : "";
+		this.setText(this.lifeLabel, "life", life);
 		this.setText(this.phaseLabel, "phase", this.phaseName(state.dayTime));
 		let clock = "";
 		if (state.showClock) {
