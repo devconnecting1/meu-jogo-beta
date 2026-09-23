@@ -28,6 +28,7 @@ import type { CraftHeat } from "shared/sim/craftRule";
 import { Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
+import { creditCraft } from "../save/achievements";
 import { ServerBuild } from "./build";
 
 /** the original's desk/fire reach: the shared rule's (shared/sim/craftRule.ts) */
@@ -132,7 +133,11 @@ export class ServerCraft {
 		// Chef now and then doubles a cooking, Dwarf a smelting: the shared rule, the client's prediction's too
 		const count = Rule.craftYield(r, save);
 		addItem(save, r.resultKind, r.resultIndex, count);
-		return { kind: "crafted", recipe: r.id, count, heat: Rule.craftHeat(r) };
+		const heat = Rule.craftHeat(r);
+		// CON-04 / ITM-01: what a cooking made is Chef's, what a smelting made Blacksmith's -- counted where the server
+		// crafts, from the recipe's own heat
+		creditCraft(save, heat, count);
+		return { kind: "crafted", recipe: r.id, count, heat };
 	}
 
 	// ---------------------------------------------------------------- use, equip, learn (§8.1)

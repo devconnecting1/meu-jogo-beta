@@ -42,6 +42,7 @@ import {
 	buildingAt,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
+import { creditTaken } from "../save/achievements";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -110,6 +111,8 @@ export class ServerItems {
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
+		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
+		creditTaken(save, item.kind, item.itemId, item.count);
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -130,6 +133,7 @@ export class ServerItems {
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
 		for (const drop of loot) {
 			addItem(save, drop.kind, drop.id, drop.count);
+			creditTaken(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
@@ -137,6 +141,7 @@ export class ServerItems {
 		const extra = thiefFind(save, b.buildingType ?? 0);
 		if (extra !== undefined) {
 			addItem(save, extra.kind, extra.id, extra.count);
+			creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is

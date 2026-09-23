@@ -1,12 +1,18 @@
 import { GAME_NAME } from "shared/module";
-import { equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, pendingPacks, resetRun, setEquipped } from "shared/game/save";
-import { BossState, ZombieState } from "shared/game/entities";
+import {
+	carrySettings,
+	equipSlotOf,
+	expMaxInit,
+	ownsEquip,
+	ownsWeapon,
+	pendingPacks,
+	resetRun,
+	setEquipped,
+} from "shared/game/save";
+import { BossState } from "shared/game/entities";
 import { currentWeapon, itemUseEffect, weaponReserve } from "shared/game/player";
-import { ACHIEVEMENTS } from "shared/data/achievements";
 import { CRAFT_RECIPES } from "shared/data/crafts";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
-import { ETC_ITEMS } from "shared/data/etcItems";
-import { WeaponKind } from "shared/data/kinds";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice, SHOP_PACKS } from "shared/data/shop";
 import { USABLES } from "shared/data/usables";
@@ -49,6 +55,7 @@ import * as Flyover from "./view/townFlyover";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
 import { startTitleNotices } from "./ui/titleNotice";
+import { startAchievementNotices } from "./ui/achievementNotice";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
 import { showTutorial } from "./ui/tutorial";
@@ -102,6 +109,8 @@ let actionBusy = false;
 let started = false;
 /** adopted LoadAck (undefined = still waiting for the server) */
 let loadInfo: net.LoadInfo | undefined;
+/** the settings the save on screen started with: what the player changed since is theirs to keep (`applyLoad`) */
+let settingsBase = { ...ctx.save.settings };
 /** LoadAck that arrived during a run: applied when the player is back in the menus */
 let pendingLoad: net.LoadInfo | undefined;
 /** status message to show once the lobby is on screen */
@@ -148,17 +157,14 @@ function serverRevives(): boolean {
 	return MP_PHASE >= 2;
 }
 
-// per-run trackers (achievements, rewards, HUD)
-const aliveZombies: Array<ZombieState> = [];
+// per-run trackers (rewards, HUD). The achievements are not counted here: the SERVER counts them on its own events
+// (server/save/achievements.ts, CON-04) and they arrive with the wallet (client/ui/achievementNotice.ts)
 const aliveBosses: Array<BossState> = [];
 let lastDay = 0;
 let lastLevel = 0;
-let lastWood = 0;
 let lastNoAmmo = -math.huge;
 let reloadSeen = 0;
 let reloadMax = 0;
-
-const WOOD_ID = ETC_ITEMS.findIndex(e => e.name === "Wood");
 
 function tr(key: string): string {
 	return langGet(key, ctx.save.settings.langType);
@@ -204,10 +210,17 @@ function applyLoad(info: net.LoadInfo): void {
 	for (const child of ctx.uiLayer.GetChildren()) {
 		if (child.Name === "PopupOverlay" || child.Name === "Achievements") child.Destroy();
 	}
+	// what the player changed in Settings on a save that was never the server's -- the lobby shown before the LoadAck,
+	// a session that does not persist -- is kept, field by field, over the save arriving (and reported with it)
+	const carried =
+		(loadInfo === undefined || !loadInfo.persist) &&
+		carrySettings(ctx.save.settings, settingsBase, info.save.settings);
 	ctx.save = info.save;
+	settingsBase = { ...info.save.settings };
 	loadInfo = info;
 	runActive = false; // a run in memory belonged to the previous (fallback) save
 	net.activate(info);
+	if (carried) net.requestSave("menu");
 	pendingNotice = info;
 }
 
@@ -253,74 +266,29 @@ net.onSaveAck((ack, manual) => {
 	}
 });
 
-// ---------------------------------------------------------------- achievements (what this layer can observe)
-
-function raiseAchievement(id: number, value: number): void {
-	const def = ACHIEVEMENTS[id];
-	if (def === undefined || def.hidden === true) return;
-	const cur = ctx.save.achievements[id] ?? 0;
-	if (cur >= def.max || value <= cur) return;
-	const reached = math.min(def.max, value);
-	ctx.save.achievements[id] = reached;
-	if (reached >= def.max) toast(ctx, `${tr("Achievement unlocked")}: ${tr(def.title)}`, "success");
-}
-
-function addAchievement(id: number, amount: number): void {
-	if (amount <= 0) return;
-	raiseAchievement(id, (ctx.save.achievements[id] ?? 0) + amount);
-}
+// ---------------------------------------------------------------- per-frame run trackers
 
 function trackBefore(): void {
-	const refs = loop.getRefs();
-	aliveZombies.clear();
-	for (const z of refs.zombies) if (z.hp > 0) aliveZombies.push(z);
 	aliveBosses.clear();
-	for (const b of refs.bosses) if (!b.dead) aliveBosses.push(b);
+	for (const b of loop.getRefs().bosses) if (!b.dead) aliveBosses.push(b);
 }
 
 function trackAfter(): void {
-	const refs = loop.getRefs();
 	const save = ctx.save;
-	let kills = 0;
-	let special = 0;
-	for (const z of aliveZombies) {
-		if (z.hp <= 0) {
-			kills++;
-			if (z.type !== 1) special++;
-		}
-	}
-	if (kills > 0) {
-		addAchievement(12, kills);
-		addAchievement(13, special);
-		const kind = currentWeapon(refs.player).kind;
-		if (kind === WeaponKind.Melee) addAchievement(2, kills);
-		else if (kind === WeaponKind.Bow) addAchievement(3, kills);
-		else if (kind === WeaponKind.Sniper) addAchievement(7, kills);
-	}
 	for (const b of aliveBosses) {
 		if (!b.dead) continue;
 		save.bossKills += 1; // lifetime counter: the server pays coins for it (rate limited)
-		addAchievement(7 + b.type, 1); // boss types 1..4 → centipede, rafflesia, giant, hedgehog slayer
 		net.requestSave("boss");
 	}
-	// MP-13 / MP-20: these are about THIS life, so they read the survivor's own day (`save.day`, moved by
-	// server/sim/progress.ts and mirrored by the client clock) and never the world's. Reading the town's day
-	// here would hand "Good day" and "Never die" to anybody who happened to join a server on day 30.
+	// MP-13 / MP-20: THIS life's day (`save.day`, moved by server/sim/progress.ts), never the world's
 	const day = save.day;
 	if (day > lastDay) {
 		lastDay = day;
-		if (day >= 2) raiseAchievement(15, 1);
-		if (save.deathCount === 0) raiseAchievement(17, day - 1);
 		net.requestSave("day");
 	}
 	if (save.level > lastLevel) {
 		if (lastLevel > 0) hud.showMessage("Level UP");
 		lastLevel = save.level;
-	}
-	if (WOOD_ID >= 0) {
-		const wood = save.invenEtc[WOOD_ID] ?? 0;
-		if (wood > lastWood) addAchievement(14, wood - lastWood);
-		lastWood = wood;
 	}
 }
 
@@ -835,7 +803,6 @@ function newWorld(): void {
 	stopGame();
 	deliverPacks();
 	buildRun();
-	raiseAchievement(0, 1);
 	mountRun();
 }
 
@@ -853,7 +820,6 @@ function buildRun(): void {
 	// the world's day would fire "a new day survived" on the first frame for anyone joining an old server.
 	lastDay = ctx.save.day;
 	lastLevel = ctx.save.level;
-	lastWood = WOOD_ID >= 0 ? (ctx.save.invenEtc[WOOD_ID] ?? 0) : 0;
 }
 
 /** MP-22: "The town fell on day N. A new town rises: day 1." */
@@ -928,8 +894,10 @@ function onTown(notice: TownNotice): void {
 }
 
 netOnTown(onTown);
-// MON-05: "Title unlocked: [Survivor]" the moment the server grants one
+// MON-05: "Title unlocked: [Survivor]" the moment the server grants one; CON-04: "Achievement unlocked" the moment
+// the server's counter reaches its goal
 startTitleNotices(ctx);
+startAchievementNotices(ctx);
 
 function resumeRun(): void {
 	clearScreen();

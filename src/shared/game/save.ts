@@ -42,14 +42,25 @@ import { MP_PHASE } from "shared/net/mpConfig";
  *     store `ProjectZ_Titles`), and the next v5 load takes the larger of the two. So a rollback forgets only WHICH
  *     title was shown -- one click in the wardrobe -- never a title or a kill. (And the current life's progress
  *     toward Week One, `lifeNights`, which is a count toward a title, not one.)
+ *
+ * v6 (CON-04, docs/MULTIPLAYER.md §6.7): the achievements become the SERVER's. Their counters move only on events the
+ * server decided (server/save/achievements.ts: its kill credit, its midnight, its crafting, its deaths), so a report no
+ * longer carries them -- `sanitizeClientReport` copies `achievements` from the trusted save, as it does `titles`. One
+ * new field, same document, additive: `lifeDeaths`, EVERY death of this life that the server decided (Never die reads
+ * it; `deathCount` only counts the paid Rebirths, which price the next one). A v5 document has none: 1 when its life
+ * already died as far as it can tell (`deathCount > 0` -- where the old rule stopped -- or `runOver`), else 0; a v5 death
+ * answered by waiting for daybreak left no record. A server rolled back to v5 drops it and takes achievements from
+ * reports again; nothing earned is lost.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
 export const SAVE_VERSION_COSMETIC_SLOTS = 4;
 /** the first version with `titles` / `zombieKills` / `equipTitle` (MON-05) */
 export const SAVE_VERSION_TITLES = 5;
+/** the first version whose `achievements` are server-owned and that carries `lifeDeaths` (CON-04) */
+export const SAVE_VERSION_SERVER_ACHIEVEMENTS = 6;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -81,6 +92,38 @@ export interface SettingsData {
 	langType: number;
 }
 
+/** every field of SettingsData (the order is irrelevant; `carrySettings` walks it) */
+const SETTINGS_KEYS: ReadonlyArray<keyof SettingsData> = [
+	"soundEffect",
+	"bgm",
+	"uiSize",
+	"leftSize",
+	"leftPos",
+	"leftRelative",
+	"rightSize",
+	"rightPos",
+	"mirror",
+	"langType",
+];
+
+/**
+ * The settings a player changed on a save that was never the server's -- the fallback save the lobby shows while the
+ * LoadAck is on its way, or a session that does not persist -- are carried into the save that replaces it
+ * (client/main.client.ts `applyLoad`): every field where `mine` differs from `base` (what that save started with) is
+ * written into `into`, and only those, so what the player did not touch comes from the save arriving. Returns whether
+ * anything was carried. The values are the client's own settings, never anything the server owns: the report that
+ * follows goes through `readSettings` like every other.
+ */
+export function carrySettings(mine: SettingsData, base: SettingsData, into: SettingsData): boolean {
+	let carried = false;
+	for (const k of SETTINGS_KEYS) {
+		if (mine[k] === base[k]) continue;
+		(into as unknown as Record<string, unknown>)[k] = mine[k];
+		carried = true;
+	}
+	return carried;
+}
+
 export function defaultSettings(): SettingsData {
 	return {
 		soundEffect: 0.5,
@@ -99,7 +142,8 @@ export function defaultSettings(): SettingsData {
 /**
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
- *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch
+ *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch,
+ *   achievements and lifeDeaths (v6)
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  */
@@ -116,6 +160,10 @@ export interface PlayerSaveData {
 	bossKills: number;
 	firstInstall: boolean;
 	tutorialDone: boolean;
+	/**
+	 * One counter per shared/data/achievements.ts row, capped at its `max`. v6: written only by the SERVER
+	 * (server/save/achievements.ts), on events it decided; a report never moves it (CON-04).
+	 */
 	achievements: Array<number>;
 	/** lifetime packs bought, per SHOP_PACKS id */
 	packsBought: Array<number>;
@@ -170,6 +218,12 @@ export interface PlayerSaveData {
 	/** v5 (MON-05): TITLES id shown under the name, -1 = none; must be earned (`enforceSaveInvariants`) */
 	equipTitle: number;
 	/**
+	 * v6 (CON-04): the deaths of THIS life the server decided -- every one, whatever answered it (a paid Rebirth, the
+	 * wait for daybreak, an ally). Never die counts only while it is 0. Back to 0 with the life (`resetRun`).
+	 * Server-owned (server/sim/life.ts through server/save/achievements.ts `countLifeDeath`).
+	 */
+	lifeDeaths: number;
+	/**
 	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
 	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
 	 * (server/save/titleRecord.ts) from an OLDER epoch belongs to a history that was reset or deleted on purpose and is
@@ -193,6 +247,8 @@ export interface Wallet {
 	zombieKills: number;
 	/** v5 (MON-05): the nights the server credited to this life -- a locked Week One's progress. Optional: older servers */
 	lifeNights?: number;
+	/** v6 (CON-04): the achievement counters, the server's. Optional: a wallet from an older server has none */
+	achievements?: Array<number>;
 	/**
 	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
 	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
@@ -297,6 +353,7 @@ export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
 	save.day = 1;
 	save.lifeNights = 0;
+	save.lifeDeaths = 0;
 	save.deathCount = 0;
 	save.runOver = false;
 	// a new run starts with a new body: never inherit the HP bar the last one died on (v3, §6.1)
@@ -352,6 +409,7 @@ function emptySave(): PlayerSaveData {
 		lifeNights: 0,
 		equipTitle: -1,
 		titleEpoch: 0,
+		lifeDeaths: 0,
 	};
 }
 
@@ -493,6 +551,7 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		titles: copyArray(save.titles),
 		zombieKills: save.zombieKills,
 		lifeNights: save.lifeNights,
+		achievements: copyArray(save.achievements),
 		day: save.day,
 		level: save.level,
 		exp: save.exp,
@@ -583,7 +642,9 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		bossKills: readInt(r.bossKills, fb.bossKills, 0, L.COUNTER_MAX),
 		firstInstall: readBool(r.firstInstall, fb.firstInstall),
 		tutorialDone: readBool(r.tutorialDone, fb.tutorialDone),
-		achievements: readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, fb.achievements),
+		// v6: the SERVER's (copied, never read from `r`): a report cannot write an achievement (CON-04);
+		// `sanitizeStoredSave` reads the stored counters
+		achievements: copyArray(fb.achievements),
 		packsBought: copyArray(fb.packsBought),
 		packsOpened: copyArray(fb.packsOpened),
 		costumes: copyArray(fb.costumes),
@@ -617,6 +678,7 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		lifeNights: fb.lifeNights,
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 		titleEpoch: fb.titleEpoch,
+		lifeDeaths: fb.lifeDeaths,
 	};
 }
 
@@ -669,6 +731,7 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.equipTitle = validTitle(s, s.equipTitle);
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
+	s.lifeDeaths = math.clamp(math.floor(s.lifeDeaths), 0, L.COUNTER_MAX);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -743,6 +806,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.lifeNights = src.lifeNights;
 	dst.equipTitle = src.equipTitle;
 	dst.titleEpoch = src.titleEpoch;
+	dst.lifeDeaths = src.lifeDeaths;
 	return dst;
 }
 
@@ -767,6 +831,12 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
 	s.lifeNights = readInt(r.lifeNights, 0, 0, L.DAY_MAX);
 	s.titleEpoch = readInt(r.titleEpoch, 0, 0, L.EPOCH_MAX);
+	// v6 (CON-04): the stored counters, each capped at its goal. `lifeDeaths` is absent in a v5 document: a life with a
+	// paid Rebirth (`deathCount`) or a body lying dead (`runOver`) has died at least once, and must not start Never die
+	// again (the old rule already stopped at `deathCount > 0`); otherwise 0 -- a v5 death answered by waiting for
+	// daybreak left no record at all
+	s.achievements = readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, undefined);
+	s.lifeDeaths = readInt(r.lifeDeaths, s.deathCount > 0 || s.runOver ? 1 : 0, 0, L.COUNTER_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);
@@ -850,6 +920,14 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
 	// a title the server no longer lists is not shown by this copy either
 	save.equipTitle = validTitle(save, save.equipTitle);
+	// v6 (CON-04): the achievement counters are the server's and only grow, like the kill count: a wallet that
+	// arrives out of order never takes one back (an admin reset reaches this copy as a whole new save, not a wallet)
+	if (w.achievements !== undefined) {
+		const got = readIntArray(w.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, save.achievements);
+		for (let i = 0; i < ACHIEVEMENTS.size(); i++) {
+			save.achievements[i] = math.max(save.achievements[i] ?? 0, got[i]);
+		}
+	}
 	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them;
 	// and so is the life's day, from the phase the server counts days: its midnight may have refused this survivor
 	// one (dead, absent, AFK), which a client that counted its own midnight would never know. Both go back to 0 / 1
