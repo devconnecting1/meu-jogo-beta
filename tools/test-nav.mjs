@@ -544,8 +544,8 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	const sub = findIn(nav(2), "Sub")?.Text;
 	const done = visible.filter(a => (save.achievements[a.id] ?? 0) >= a.max).length;
 	check(
-		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora)",
-		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 20,
+		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora: CON-03 / CON-04)",
+		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 9,
 		sub,
 	);
 	nav(2).Activated.Fire();
@@ -559,7 +559,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		return v !== `${cur.toLocaleString("en-US")} / ${a.max.toLocaleString("en-US")}` || check !== cur >= a.max;
 	});
 	check(
-		"a janela lista as 20 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
+		"a janela lista as 9 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
 		rows.every(r => r !== undefined) &&
 			wrong.length === 0 &&
 			!ACHIEVEMENTS.some(a => a.hidden && findIn(dialog, `Ach${a.id}`)),
@@ -606,8 +606,11 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		else raised.add(id);
 	}
 	const unreachable = visible.filter(a => !raised.has(a.id)).map(a => a.id);
-	/** visible achievements with no trigger anywhere today (see the report: wire them, or hide them per CON-03) */
-	const KNOWN_UNREACHABLE = [1, 4, 5, 6, 16, 18, 21];
+	/**
+	 * ACH-1 (decided): the visible rows with no trigger were switched off (shared/data/achievements.ts `hidden`), except
+	 * Chef and Blacksmith, which go to the server's cooking and crafting -- until that commit they are the list below
+	 */
+	const KNOWN_UNREACHABLE = [5, 6];
 	knownBug(
 		"ACH-1",
 		`${KNOWN_UNREACHABLE.length} das ${visible.length} conquistas visiveis nao tem gatilho nenhum: ${KNOWN_UNREACHABLE.map(i => ACHIEVEMENTS[i].title).join(", ")}`,
@@ -648,16 +651,31 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		"main.client.ts trackAfter, onboarding/index.ts scanKills x client/view/actorsView.ts fillZombie",
 		MP_PHASE >= 2 && mirrorKills === 0 && countsHp,
 	);
-	// CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe"; the Records window already
-	// lost its boss line for that reason (UI-10), but the achievements for bosses, the bow and the sniper are on view
-	const rules = readFileSync(join(ROOT, "docs/DESIGN_RULES.md"), "utf8");
-	const con03 = rules.split("\n").find(l => l.includes("**CON-03")) ?? "";
-	const offContent = [3, 7, 8, 9, 10, 11].filter(id => visible.some(a => a.id === id));
-	knownBug(
-		"ACH-3",
-		"as quatro de chefe (8-11), Bow expert e Sniper estao a vista, mas o Nucleo 1 nao tem chefe, arco nem sniper (CON-03)",
-		"shared/data/achievements.ts (hidden) x CON-03",
-		/sem chefe/.test(con03) && !/arco|sniper/i.test(con03) && offContent.length === 6,
+	// ACH-3 / CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe" -- no bow, no sniper, no
+	// electricity, no vehicle, no turret. An achievement about content the game does not have is switched off (hidden)
+	// until that content comes back, as the Records window lost its boss line for the same reason (UI-10)
+	const OFF_CONTENT = {
+		1: "eletricidade",
+		3: "arco",
+		7: "sniper",
+		8: "chefe",
+		9: "chefe",
+		10: "chefe",
+		11: "chefe",
+		16: "veiculo",
+		21: "torreta",
+	};
+	const onView = Object.keys(OFF_CONTENT)
+		.map(Number)
+		.filter(id => visible.some(a => a.id === id));
+	check(
+		"ACH-3: nenhuma conquista de conteudo fora do Nucleo 1 esta a vista (chefes 8-11, arco, sniper, eletricidade, veiculo, torreta: CON-03)",
+		onView.length === 0,
+		onView.map(id => `${ACHIEVEMENTS[id].title} (${OFF_CONTENT[id]})`).join(", ") || "todas escondidas",
+	);
+	check(
+		"...e escondida nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
+		ACHIEVEMENTS.length === 22 && ACHIEVEMENTS.every((a, i) => a.id === i),
 	);
 	// "Never die" counts the life's days while `deathCount` is 0, but only a PAID Rebirth moves it
 	// (server/main.server.ts): a death answered by the free wait for daybreak (MP-21) does not reset the streak

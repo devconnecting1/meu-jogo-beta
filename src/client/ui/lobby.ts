@@ -49,7 +49,7 @@ export type { RunState } from "./survivor";
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
  *   [👕 Wardrobe             2 / 9]   ┌ Town ──────────────────────────────┐
- *   [🏆 Achievements        3 / 20]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
+ *   [🏆 Achievements         3 / 9]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
  *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell │
  *   [? How to play               ]   └────────────────────────────────────┘
  *   [⚙ Settings                  ]
