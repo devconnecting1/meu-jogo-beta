@@ -1,7 +1,7 @@
 {
 	"generator": "tools/gen-world-art.mjs",
 	"worldTexel": 4,
-	"note": "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels. The client draws every one with ResamplerMode.Pixelated.",
+	"note": "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels; sheet = the characters' pose x heading cells (src/client/view/charSheets.ts). The client draws every one with ResamplerMode.Pixelated.",
 	"textures": [
 		{
 			"name": "asphalt",
@@ -564,6 +564,86 @@
 			"w": 8,
 			"h": 8,
 			"description": "brick chimney on a house roof"
+		},
+		{
+			"name": "survivors",
+			"file": "survivors.png",
+			"kind": "sheet",
+			"w": 640,
+			"h": 640,
+			"description": "survivors: 4 outfits x 5 strides, then the downed crawl (ART-08)"
+		},
+		{
+			"name": "survivorsFill",
+			"file": "survivorsFill.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 400,
+			"description": "survivors: white silhouettes of the walking cells (tint: hit flash, poison)"
+		},
+		{
+			"name": "survivorsRim",
+			"file": "survivorsRim.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 400,
+			"description": "survivors: white outlines of the walking cells (tint: the red hit outline, LEG-02)"
+		},
+		{
+			"name": "arms",
+			"file": "arms.png",
+			"kind": "sheet",
+			"w": 576,
+			"h": 648,
+			"description": "survivors' arms, shoulder to hand, per outfit x 9 lengths (placed on the weapon's grip)"
+		},
+		{
+			"name": "weapons",
+			"file": "weapons.png",
+			"kind": "sheet",
+			"w": 768,
+			"h": 840,
+			"description": "weapons in hand: each melee weapon swung and held, then the guns and bows"
+		},
+		{
+			"name": "zombies",
+			"file": "zombies.png",
+			"kind": "sheet",
+			"w": 768,
+			"h": 792,
+			"description": "zombies: walker, spitter, exploder, charger, jumper x 5 strides; spitter wind-ups, jumper in the air, charger charging (ART-09)"
+		},
+		{
+			"name": "zombiesFill",
+			"file": "zombiesFill.png",
+			"kind": "mask",
+			"w": 768,
+			"h": 792,
+			"description": "zombies: white silhouettes of the same cells (tint: hit flash, lit fuse)"
+		},
+		{
+			"name": "zombiesRim",
+			"file": "zombiesRim.png",
+			"kind": "mask",
+			"w": 768,
+			"h": 792,
+			"description": "zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow)"
+		},
+		{
+			"name": "dogs",
+			"file": "dogs.png",
+			"kind": "sheet",
+			"w": 576,
+			"h": 432,
+			"description": "pets: Carolina, Malamute, Doberman x 5 trot strides + 3 tail wags (ART-10)"
+		},
+		{
+			"name": "birds",
+			"file": "birds.png",
+			"kind": "sheet",
+			"w": 768,
+			"h": 360,
+			"description": "pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-10)"
 		}
 	]
 }

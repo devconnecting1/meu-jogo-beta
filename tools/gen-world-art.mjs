@@ -24,6 +24,8 @@
  *   mask     a greyscale silhouette tinted at runtime (a car's paint, VEI-04; a tree's foliage)
  *   overlay  RGBA shading / detail drawn over a mask (glass, lights, outline, highlights) -- untinted
  *   slice    9-slice (ScaleType.Slice): soft shadows and roof rims of any size
+ *   sheet    the characters' sprite sheets (tools/character-art.mjs): one cell per pose and heading, laid out by
+ *            src/client/view/charSheets.ts, full colour; their white Fill / Rim masks are `mask`s
  *
  * Light: the baked form shading (canopy highlights, car roofs, parapet rims) is lit from the top left, the
  * convention of top-down pixel art; what really moves with the sun (drop shadows, which roof slope is lit,
@@ -34,6 +36,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodePNG } from "./png-lite.mjs";
 import { drawText } from "./pixel-font.mjs";
+import { characterArt } from "./character-art.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "design", "world-art");
@@ -1327,6 +1330,8 @@ function build() {
 	add_("acUnit", "sprite", acUnit(), "rooftop air conditioner");
 	add_("vent", "sprite", vent(), "roof vent");
 	add_("chimney", "sprite", chimney(), "brick chimney on a house roof");
+	// the survivors, their arms and weapons, the horde and the pets (ART-07..ART-10)
+	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 }
 
 // ---------------------------------------------------------------- output
@@ -1335,7 +1340,7 @@ function manifestOf() {
 	return {
 		generator: "tools/gen-world-art.mjs",
 		worldTexel: WORLD_TEXEL,
-		note: "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels. The client draws every one with ResamplerMode.Pixelated.",
+		note: "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels; sheet = the characters' pose x heading cells (src/client/view/charSheets.ts). The client draws every one with ResamplerMode.Pixelated.",
 		textures: textures.map(t => ({
 			name: t.name,
 			file: `${t.name}.png`,
@@ -1401,7 +1406,8 @@ function contactSheet() {
 	const cellW = 300;
 	const pad = 10;
 	const cols = 5;
-	const cells = textures.map(t => {
+	// the characters' sheets are hundreds of texels wide: they have their own pages (docs/art/characters)
+	const cells = textures.filter(t => !t.character).map(t => {
 		const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
 		let z = zoom;
 		while (t.tex.w * reps * z > cellW - pad * 2 && z > 1) z--;
