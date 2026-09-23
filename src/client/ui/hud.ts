@@ -176,6 +176,22 @@ function pxCircle(
 	return f;
 }
 
+/** where a touch control was last placed (scale x, y) and which Frame that was: a rebuilt control is placed anew */
+interface PlacedAt {
+	f?: Frame;
+	x: number;
+	y: number;
+}
+
+/** puts a touch control at scale (x, y), writing Position only when it moved: a resting stick writes nothing */
+function placeAt(f: Frame, at: PlacedAt, x: number, y: number): void {
+	if (at.f === f && at.x === x && at.y === y) return;
+	at.f = f;
+	at.x = x;
+	at.y = y;
+	f.Position = new UDim2(x, 0, y, 0);
+}
+
 type TouchIcon = "use" | "reload" | "bag" | "menu";
 
 /**
@@ -277,6 +293,9 @@ export class Hud {
 	private touchOff: (() => void) | undefined;
 	private touch = false;
 	private aimPad: Frame | undefined;
+	/** where the stick's base and the aim pad were last placed (updateTouch writes only a move) */
+	private joyAt: PlacedAt = { x: 0, y: 0 };
+	private padAt: PlacedAt = { x: 0, y: 0 };
 	private aimKnob: Frame | undefined;
 	private aimArrow: Frame | undefined;
 	private aimCursor: Frame | undefined;
@@ -904,7 +923,7 @@ export class Hud {
 			// a floating stick follows the thumb; a fixed one never leaves its home
 			const baseX = active && L.floating ? input.joystickBaseX : L.move.homeX;
 			const baseY = active && L.floating ? input.joystickBaseY : L.move.homeY;
-			this.joyBase.Position = new UDim2(sx(baseX), 0, sy(baseY), 0);
+			placeAt(this.joyBase, this.joyAt, sx(baseX), sy(baseY));
 			if (active) {
 				const dx = input.joystickX - baseX;
 				const dy = input.joystickY - baseY;
@@ -933,7 +952,7 @@ export class Hud {
 			const aiming = input.aimStickActive;
 			const padX = aiming ? input.aimStickBaseX : L.aim.homeX;
 			const padY = aiming ? input.aimStickBaseY : L.aim.homeY;
-			this.aimPad.Position = new UDim2(sx(padX), 0, sy(padY), 0);
+			placeAt(this.aimPad, this.padAt, sx(padX), sy(padY));
 			if (this.aimKnob.Visible !== aiming) this.aimKnob.Visible = aiming;
 			if (this.aimArrow.Visible !== aiming) this.aimArrow.Visible = aiming;
 			if (aiming) {

@@ -94,6 +94,10 @@ jobs:
           git diff --exit-code -- src/client/view/worldArtAssets.ts design/world-art/manifest.json
           npm run test:world-art
 
+      # the world renderer's pool: one sub-pool per ZIndex, no ZIndex write in steady state, the lobby warm-up
+      - name: Renderer pool (same draw order, a birth or death costs O(1), no ZIndex writes, warm-up without churn)
+        run: npm run test:pool
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 
