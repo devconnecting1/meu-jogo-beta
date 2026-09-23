@@ -125,9 +125,9 @@ export interface DayCredit {
  * admin is, and `setClock` (the admin's own skip) never reaches here at all, which is §3.6's "Horas puladas
  * por admin: ninguém, 0".
  *
- * The §3.6 refinements — at least half the day in the world, and not AFK — need the presence machine of F4
- * (§7.2); until then everybody who is in the world at midnight is credited, which is what the single-player
- * game did for the one player it had.
+ * WHO is credited is `dayRefusal`'s question, asked by server/sim/simulation.ts before it calls this: until the
+ * security review of Sep 2026 everybody in the roster at midnight was paid — the dead, and a bot parked in the
+ * street — and `bestDay` climbed without anybody surviving anything.
  */
 export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit {
 	const before = save.day;
@@ -145,6 +145,44 @@ export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit 
 	out.coins += out.milestone;
 	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + out.coins);
 	return out;
+}
+
+/**
+ * §9.1 "Bot / macro de farm AFK": no REAL command that moved or pressed something for this long, and midnight does
+ * not pay (seconds). A filled tick (§2.2) is the server waiting for input, not the player playing, and a HELD button
+ * repeats itself in every command for free, so neither counts; a step or an edge (attack, action, reload) does.
+ */
+export const AFK_WINDOW_S = 180;
+/**
+ * §3.6 / MP-13: the share of the day a survivor must have spent ALIVE in the world to be paid for it — measured
+ * against the ticks the world actually ran since the previous midnight (or since the server started, for its
+ * first one). Walking in at 23:50, or lying dead from dusk, is not a day survived.
+ */
+export const PRESENCE_SHARE = 0.5;
+
+/** why midnight did not pay somebody who was in the world (§3.6) */
+export type DayRefusal = "dead" | "absent" | "afk";
+
+/**
+ * Does this survivor earn the day that just ended (§3.6 "Dia sobrevivido", §9.1, MP-13)? Undefined = yes; otherwise
+ * the reason not:
+ *   - "dead":   the body is lying in the street (it waits for daybreak or a Rebirth, server/sim/life.ts);
+ *   - "absent": alive in the world for fewer than PRESENCE_SHARE of `dayTicks`;
+ *   - "afk":    no real input with movement or an edge in the last AFK_WINDOW_S (`lastActiveTick` undefined =
+ *               never since the previous midnight's bookkeeping began).
+ */
+export function dayRefusal(
+	dead: boolean,
+	aliveTicks: number,
+	dayTicks: number,
+	lastActiveTick: number | undefined,
+	tick: number,
+	simHz: number,
+): DayRefusal | undefined {
+	if (dead) return "dead";
+	if (aliveTicks < dayTicks * PRESENCE_SHARE) return "absent";
+	if (lastActiveTick === undefined || tick - lastActiveTick > AFK_WINDOW_S * simHz) return "afk";
+	return undefined;
 }
 
 /**
@@ -199,6 +237,16 @@ interface Ledger {
 
 function newLedger(): Ledger {
 	return { total: 0, by: new Array<Contributor>() };
+}
+
+/** forgets one slot's share of a fight (its occupant left the world) */
+function dropContributor(l: Ledger, slot: number): void {
+	for (let i = l.by.size() - 1; i >= 0; i--) {
+		const c = l.by[i];
+		if (c.slot !== slot) continue;
+		l.total = math.max(0, l.total - c.damage);
+		l.by.remove(i);
+	}
 }
 
 function contributor(l: Ledger, slot: number): Contributor {
@@ -362,9 +410,16 @@ export class Progress {
 		return this.bump(slot);
 	}
 
-	/** the survivor left: their ledger entries decay on their own, only the counters need dropping */
+	/**
+	 * The survivor left the world, and the slot is free for whoever enters next (§4.4: `freeSlot` hands out the
+	 * lowest one). The ledgers are keyed by SLOT, so their share of every fight still going on has to go with
+	 * them: before this only the counters were dropped, and a newcomer who took the slot inherited the leaver's
+	 * boss participation — the XP, the boss kill and COINS_PER_BOSS — and any assist still inside its window.
+	 */
 	remove(slot: number): void {
 		this.stats.delete(slot);
+		for (const [, l] of this.zombies) dropContributor(l, slot);
+		for (const [, l] of this.bosses) dropContributor(l, slot);
 	}
 
 	clear(): void {

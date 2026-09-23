@@ -853,10 +853,12 @@ section("(e) the XP is the server's (§3.6, §11.3 F2)");
 		helper.save.exp - helperBefore < killer.save.exp - expBefore,
 		"the assist is worth less than the kill (ASSIST_SHARE)",
 	);
-	// §3.6: the world rolling past midnight is what moves a survivor's OWN day, now that a report cannot
+	// §3.6: the world rolling past midnight is what moves a survivor's OWN day, now that a report cannot. Midnight
+	// pays only a survivor at the controls (server/sim/progress.ts `dayRefusal`: a real command with movement or an
+	// edge in the last 3 min), so these ticks carry a reload press — harmless in the killer's hands
 	const dayBefore = killer.save.day;
 	server.sim.clock.setClock(23.999);
-	for (let i = 0; i < 20; i++) tickServer(server);
+	for (let i = 0; i < 20; i++) tickServer(server, { edges: 1 << P.EdgeShift.Reload });
 	checkEq(killer.save.day, dayBefore + 1, "the night that passed credited the survivor a day");
 	check(killer.save.bestDay >= killer.save.day, "and the record follows it");
 	// and a client report can no longer move any of it (§11.3 F2 acceptance line)
