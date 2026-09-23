@@ -258,7 +258,8 @@ export function midViewExtraTicks(simHz = SIM_HZ): number {
 }
 /**
  * Melee is not rewound; it gets a latency margin of reach instead (§2.3): what a walker (MELEE_MARGIN_UPS) covers
- * in the time an honest view is old -- the measured ping, the queue wait and the interpolation delay -- never less
+ * in the time an honest view is old -- the measured ping, the queue's TARGET wait (the measured one is the client's
+ * to choose: a queue kept at INPUT_BUFFER_MAX bought ~6 u) and the interpolation delay -- never less
  * than MELEE_RANGE_MARGIN (the old fixed 130 ms) nor more than MELEE_RANGE_MARGIN_MAX (server/sim/combat.ts
  * `meleeMargin`). At 140 ms of RTT a body is drawn ~225 ms old: 20 u of walk the fixed 12 u did not cover.
  */

@@ -880,6 +880,29 @@ function stream({
 		"a 140 ms client's blade meets the walker it saw at the edge of its reach, 20 u further out now",
 	);
 	check(!swingAt(0), "…and a client with no latency is not handed that reach: the body really is out of it");
+
+	/*
+	 * N6 (the review of dee095a): how deep a client keeps its queue is its own choice, so the wait its commands sit
+	 * in buys no reach. At 50 ms the margin is a walker in 50 + 33 (the queue's target wait) + 100 ms: 16.5 u. The
+	 * measured wait of a queue kept at INPUT_BUFFER_MAX made it 19.5 u; a body 18 u past the blade stays out of it.
+	 */
+	const swingWaiting = (wait, margin) => {
+		const fx = newFixture();
+		const sp = makePlayer(fx, 0, 1000, 1000, 0); // the Dagger
+		fx.combat.setPing(0, 0.05);
+		const z = tough(createZombie(1, 1000, 1000, 1), 1000);
+		z.x = 1000 + meleeReach(WEAPONS[0]) + zombieRadius(z) + margin;
+		fx.zombies.push(z);
+		for (let tick = 1; tick <= 40; tick++) {
+			fx.combat.afterWorld(tick);
+			sp.viewTick = wrapU16(tick);
+			sp.viewWait = wait;
+			tickPlayer(fx, sp, aimCommand(sp, tick, z.x, z.y, tick === 1 ? 1 : 0, tick <= 3), tick);
+		}
+		return z.hp < 1000;
+	};
+	check(swingWaiting(2, 16), "at 50 ms the blade reaches 16 u past its length");
+	check(!swingWaiting(CFG.INPUT_BUFFER_MAX, 18), "and a queue kept full does not stretch it to 18 u");
 }
 
 {

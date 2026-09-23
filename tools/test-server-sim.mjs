@@ -1875,6 +1875,66 @@ section("(j2) Horde Breaker: 100 zombies put down by the server's kill credit --
 	);
 }
 
+// ---------------------------------------------------------------- (k) the measured ping outlives the slot
+
+section("(k) the rewind ceiling's ping survives a leave/enter and a new town (§2.3; the review of dee095a, N4)");
+
+{
+	/*
+	 * The combat keeps the filtered ping per SLOT, and starts over when the slot does (leave/enter, Rebirth, New
+	 * game) and when the town does (MP-22); its first sample is taken as it is. So a client could throttle its link
+	 * for the second it re-entered and have its ceiling set there at once, instead of a tenth of the way. The server
+	 * keeps the filtered value by UserId (ServerSimulation.setPing): a returning survivor's first sample is filtered.
+	 */
+	const sim = new ServerSimulation({ world, zombies: true });
+	const body = slot =>
+		PL.createServerPlayer(
+			{ slot, userId: 8200, name: "p" },
+			defaultSave(),
+			spawnA.x,
+			spawnA.y,
+			sim.tick,
+			sim.simHz,
+		);
+	let sp = body(0);
+	sim.add(sp);
+	for (let i = 0; i < 5; i++) sim.setPing(sp, 0.05);
+	sim.remove(sp.slot);
+	sp = body(1);
+	sim.add(sp);
+	sim.setPing(sp, 0.3); // the second it came back in, on a throttled link
+	const back = sim.combat.pingOf(sp.slot);
+	check(
+		Math.abs(back - (0.05 + 0.25 * 0.1)) < 1e-9,
+		`back through a leave/enter, a 300 ms sample moves the ceiling a tenth of the way (${(back * 1000).toFixed(0)} ms)`,
+	);
+	// the Luau global `restartWorld` builds the new town under (only this section needs it)
+	globalThis.pcall ??= (fn, ...a) => {
+		try {
+			return [true, fn(...a)];
+		} catch (e) {
+			return [false, e];
+		}
+	};
+	sim.restartWorld(world);
+	sim.setPing(sp, 0.3);
+	const newTown = sim.combat.pingOf(sp.slot);
+	check(
+		newTown < 0.15,
+		`and in a new town it goes on from there, not from the sample (${(newTown * 1000).toFixed(0)} ms)`,
+	);
+	const stranger = body(2);
+	stranger.userId = 8201;
+	sim.add(stranger);
+	sim.setPing(stranger, 0.12);
+	checkNear(
+		sim.combat.pingOf(stranger.slot),
+		0.12,
+		1e-9,
+		"a survivor the server never measured starts at its sample",
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

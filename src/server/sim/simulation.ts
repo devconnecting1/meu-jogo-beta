@@ -235,6 +235,8 @@ export class ServerSimulation {
 	private readonly intents = new Map<number, Array<IntentMessage>>();
 	/** §3.6: who was alive and at the controls during the current world day, by UserId */
 	private readonly presence = new Map<number, Presence>();
+	/** the filtered ping of everyone who played on this server, by UserId (`setPing`): one number each */
+	private readonly pings = new Map<number, number>();
 	/** ticks the world ran since the previous midnight (or since boot): what "half the day" is half of */
 	private dayTicks = 0;
 	/** the Heartbeat's debt (server/sim/heartbeat.ts): the one rule test:input drives too */
@@ -602,6 +604,22 @@ export class ServerSimulation {
 		for (let i = 0; i < owed; i++) this.step();
 		this.stats.lastCatchup = owed;
 		return owed;
+	}
+
+	/**
+	 * The ping the host measured for this survivor, once a second (server/sim/combat.ts `setPing`: the rewind
+	 * ceiling, slow to rise and quick to fall). The combat's slot state starts over on every leave/enter and with
+	 * every new town (MP-22), and it takes a first sample as it is: a link throttled at the moment of re-entry set
+	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, for as long as
+	 * this server runs, and a returning survivor's first sample is filtered against it.
+	 */
+	setPing(sp: ServerPlayer, seconds: number): void {
+		const combat = this.combat;
+		if (combat === undefined) return;
+		const known = this.pings.get(sp.userId);
+		if (known !== undefined) combat.seedPing(sp.slot, known);
+		combat.setPing(sp.slot, seconds);
+		this.pings.set(sp.userId, combat.pingOf(sp.slot));
 	}
 
 	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */

@@ -504,7 +504,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// §2.3: the rewind ceiling is the ping the SERVER measured, never one the client declares. Once a
 		// second is plenty — it only ever caps the compensation, and leaving it at 0 compensates less.
 		const [pingOk, ping] = pcall(() => player.GetNetworkPing());
-		if (pingOk && typeIs(ping, "number")) sim.combat?.setPing(sp.slot, ping);
+		// through the simulation, which keeps the filtered value across a leave/enter and a new town (N4)
+		if (pingOk && typeIs(ping, "number")) sim.setPing(sp, ping);
 		const bytes = replicator.takeBytes(sp.slot);
 		if (options.metrics !== false) {
 			pcall(() => player.SetAttribute("pz_out_Bps", math.floor(bytes / METRIC_INTERVAL)));
@@ -541,12 +542,14 @@ export function startMpHost(options: MpHostOptions): MpHost {
 
 	const heartbeat = RunService.Heartbeat.Connect(dt => {
 		const now = os.clock();
+		// FIRST, outside the pcall: set after the admit loop, an admit that threw left it on the previous heartbeat, and
+		// the queues' grace counted a whole frame the debt never received (the review of dee095a, N7)
+		beatAt = now;
 		const [ok, err] = pcall(() => {
 			if (now - admitAt >= ADMIT_INTERVAL) {
 				admitAt = now;
 				for (const player of Players.GetPlayers()) admit(player);
 			}
-			beatAt = now;
 			const started = os.clock();
 			// the heartbeat after a world reset runs one tick and forgets the rest of its delta: that was the new
 			// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)

@@ -48,7 +48,8 @@
  *     …replication (step 4)…
  *
  * and, wherever the host already reads `Player:GetNetworkPing()` (it returns SECONDS), `combat.setPing(slot, s)`
- * once a second: that measurement is the rewind ceiling, and leaving it at 0 only ever compensates LESS.
+ * once a second -- the live host goes through ServerSimulation.setPing, which remembers it across a leave/enter
+ * and a new town: that measurement is the rewind ceiling, and leaving it at 0 only ever compensates LESS.
  * `combat.remove(slot)` on leave.
  */
 import * as Cfg from "shared/net/mpConfig";
@@ -340,6 +341,8 @@ export class ServerCombat {
 	 * quick to fall: the first sample is taken as it is, a lower one is followed at PING_FALL a sample, a higher one
 	 * at PING_RISE. A client that throttles its own link for a moment -- to widen the window for the shots right
 	 * after -- moves its ceiling a tenth of the way per second; an honest ping that settles lower is trusted at once.
+	 * The slot's state goes with the slot (`remove`) and with the town; a survivor coming back is seeded with the
+	 * value it had (`seedPing`, ServerSimulation.setPing), so only a server's very first sample of them is raw.
 	 */
 	setPing(slot: number, seconds: number): void {
 		const st = this.slotOf(slot);
@@ -350,6 +353,18 @@ export class ServerCombat {
 			return;
 		}
 		st.pingS += (sample - st.pingS) * (sample < st.pingS ? PING_FALL : PING_RISE);
+	}
+
+	/**
+	 * Starts this slot's filter from a ping it already had (ServerSimulation.setPing: the same survivor, back through
+	 * a leave/enter or a new town), so its next sample is filtered instead of taken as it is. A slot that has one
+	 * already keeps it.
+	 */
+	seedPing(slot: number, seconds: number): void {
+		const st = this.slotOf(slot);
+		if (st.pingSeen || !isFiniteNumber(seconds) || seconds < 0) return;
+		st.pingSeen = true;
+		st.pingS = math.min(seconds, 1);
 	}
 
 	pingOf(slot: number): number {
@@ -896,7 +911,7 @@ export class ServerCombat {
 			s.limit = w.cone;
 			s.angle = -w.cone;
 			s.speed = math.max(1, w.range);
-			s.reach = Wp.meleeReach(w) + this.meleeMargin(sp, st);
+			s.reach = Wp.meleeReach(w) + this.meleeMargin(st);
 			s.hits = 0;
 			s.delay = 0;
 			s.hitIds.clear();
@@ -922,13 +937,16 @@ export class ServerCombat {
 
 	/**
 	 * The melee's latency margin of reach (§2.3): what a walker covers in the time this survivor's honest view is old
-	 * -- the measured ping and queue wait (`lagOf`) plus the interpolation delay -- between MELEE_RANGE_MARGIN and
+	 * -- the measured ping, the queue's target wait and the interpolation delay -- between MELEE_RANGE_MARGIN and
 	 * MELEE_RANGE_MARGIN_MAX. The fixed 12 u was a walker in 130 ms; at 140 ms of RTT a body is drawn ~225 ms old
 	 * (a round trip plus the buffer, client/net/snapshotBuffer.ts), 20 u of walk (the review of 2026-09-23, #6).
-	 * Only server measurements go in, so it is no wider for a client that claims more.
+	 * Nothing the client sends goes in -- not even how long its commands wait -- so it is no wider for one that tries.
 	 */
-	private meleeMargin(sp: ServerPlayer, st: SlotState): number {
-		const age = this.lagOf(sp, st) + Cfg.INTERP_DEFAULT_S;
+	private meleeMargin(st: SlotState): number {
+		// The queue's TARGET wait, not the measured one (`viewWait`): the client decides how deep it keeps its queue,
+		// and one kept at INPUT_BUFFER_MAX bought ~6 u of reach (the review of dee095a, N6). The rewind may count the
+		// measured wait -- a shot is judged at a view, and the continuity holds it -- but reach is simply handed out.
+		const age = st.pingS + Cfg.INPUT_BUFFER_TARGET / this.simHz + Cfg.INTERP_DEFAULT_S;
 		return math.clamp(Cfg.MELEE_MARGIN_UPS * age, Cfg.MELEE_RANGE_MARGIN, Cfg.MELEE_RANGE_MARGIN_MAX);
 	}
 
@@ -998,7 +1016,7 @@ export class ServerCombat {
 		const fuelled = held && sp.save.oil > 0 && this.spendFuel(sp, st, w, CHAINSAW_OIL_PER_SEC * dt);
 		rt.chainCount = fuelled ? math.min(CHAINSAW_MAX, rt.chainCount + dt) : math.max(0, rt.chainCount - dt);
 		const cutting = fuelled && rt.chainCount >= CHAINSAW_WARMUP;
-		const reach = Wp.meleeReach(w) + this.meleeMargin(sp, st);
+		const reach = Wp.meleeReach(w) + this.meleeMargin(st);
 		p.swingerActive = cutting;
 		p.swingerAngle = aim;
 		p.swingReach = reach;
