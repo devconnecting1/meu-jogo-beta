@@ -139,7 +139,8 @@ const WARDROBE_H = 34;
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 
 /** the six slots of the loadout, in the order of the save (0 = the weapon, 1..5 = EquipSlot) */
-const SLOT_KEYS = ["Weapon", "Clothes", "Hand", "Gun", "Outfit", "Pet"];
+/** the loadout slots, in capitals as drawn: each its own lang.ts entry (translation is case-sensitive) */
+const SLOT_KEYS = ["WEAPON", "CLOTHES", "HAND", "GUN", "OUTFIT", "PET"];
 
 const HELP_TEXT = [
 	"Your survivor as everyone sees them, how long this life has lasted and what you carry.",
@@ -327,7 +328,7 @@ export class SurvivorScreen {
 			});
 			const reserve = maxFrameCount(iconKeys(i === 0 ? ItemKind.Weapon : ItemKind.Equip));
 			const icon = IconView(well, "ItemIcon", 2, 2, ICON_WELL - 4, z + 1, reserve);
-			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]).upper(), 50, 6, TILE_W - 58, 18, TEXT.xs, THEME.foreground, {
+			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]), 50, 6, TILE_W - 58, 18, TEXT.xs, THEME.foreground, {
 				font: "label",
 				align: "left",
 				zIndex: z,

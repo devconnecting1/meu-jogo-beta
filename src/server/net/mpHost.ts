@@ -59,6 +59,7 @@ import {
 	noteMalformed,
 	noteMessage,
 } from "../sim/players";
+import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
 import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
@@ -352,6 +353,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (sp === undefined) return; // server full: try again next pass
 		link.slot = sp.slot;
 		bySlot.set(sp.slot, player);
+		// CON-04 First steps: the server stood a body of this survivor in the town (once; the wallet push carries it)
+		creditFirstSteps(save);
 		print(
 			`[${GAME_NAME}] ${player.Name} joined the world in slot ${sp.slot} at ` +
 				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})` +

@@ -7,8 +7,9 @@
  *   Fx        S→C  UnreliableRemoteEvent  4 B header + tagged events, ≤ 900 B per packet (§4.2)
  *   World     S→C  RemoteEvent            5 B header + tagged deltas, ≤ 16 KB; WorldInit blocks too (§4.5)
  *   TimeSync  ↔    UnreliableRemoteEvent  ping 11 B / pong 23 B (optional probe, decision 9)
- *   Intent    C→S  RemoteEvent            small validated table (F1+, only the name is reserved here)
- *   Self      S→C  RemoteEvent            save mirror deltas (F3, only the name is reserved here)
+ *   Intent    C→S  RemoteEvent            presence 2 B / backpack verb 8 B (shared/net/intentWire.ts, decision 16)
+ *   Self      S→C  RemoteEvent            save mirror deltas (F3, only the name is reserved here; the backpack
+ *                                         rides the wallet push for now, shared/game/save.ts `BagMirror`)
  *
  * Every decoder takes `unknown` (whatever came out of the remote), never throws, and returns undefined for
  * anything malformed: not a buffer, wrong length, bad count, value out of range, unknown enum or flag bit,
@@ -69,6 +70,15 @@
  *     save the SERVER owns (never a client's report). Broadcast only when one of them moved, looked at once a second
  *     (server/net/replication.ts TALLY_EVERY_TICKS), plus one full round two ticks after a survivor joins, so the
  *     newcomer hears everybody's AFTER its PlayerJoined for each of them. Range-checked on decode like the roster.
+ * 16. (F3, the QA sweep's NET-1..6) The backpack verbs. `Intent` keeps its two lengths: the presence verbs are 2 B
+ *     (kind, verb); Craft, UseItem, Equip, Unequip, LearnSkill and the new SwitchWeapon are 8 B — kind, verb,
+ *     `atSeq u16` (the first command simulated with the change, §2.4), `arg u16` (range-checked per verb against
+ *     its table, `intentArgRange`) and `nonce u16`, which was F0's reserved 0: the client's number for the ask,
+ *     echoed back as `bag.ack` in the wallet so the client knows which predictions the server has answered. Reload,
+ *     pickup, interact and place stay on the Input edges. The server rate-limits the verbs at INTENT_RATE/BURST
+ *     (server/net/backpackIntents.ts) and validates each against its own save (server/sim/backpack.ts). S→C, the
+ *     server's backpack (inventory, ammunition, equipped, skills, the build on the cursor, the ack) rides the wallet
+ *     push as `bag` (shared/game/save.ts `BagMirror`) until the binary `Self` channel lands.
  */
 import {
 	NetReader,
@@ -1970,107 +1980,25 @@ export function decodeTimePong(payload: unknown): TimePong | undefined {
 
 // ---------------------------------------------------------------- Intent (C->S, reliable, ordered)
 
-/**
- * What a client may ASK for. Reliable and ordered, because it changes who exists in the world -- and it is
- * the smallest surface a client can push on, so it is a single validated byte and nothing else.
- *
- * EnterWorld / LeaveWorld exist because being connected is not the same as playing: a player reading the
- * shop or the credits should not have a body standing in the street for the horde to find (§7.1). The
- * server decides WHERE and WHETHER; the client only ever says that it wants in or out.
+/*
+ * What a client may ASK for — the presence verbs (EnterWorld / LeaveWorld: being connected is not the same as
+ * playing, §7.1) and, from F3, the backpack verbs (craft, use, equip, unequip, learn, switch weapon, §8.1). The
+ * codec lives in shared/net/intentWire.ts, reviewed on its own; it is re-exported here so every caller keeps
+ * importing the protocol from one place.
  */
-export const IntentKind = {
-	EnterWorld: 1,
-	LeaveWorld: 2,
-	/** F3, §8.1: arg = CRAFT_RECIPES id */
-	Craft: 3,
-	/** F3, §8.1: arg = USABLES id */
-	UseItem: 4,
-	/** F3, §8.1: arg = EQUIPS id */
-	Equip: 5,
-	/** F3, §8.1: arg = equipment slot 1..5 (`EquipSlot`: cloth, hand, gun, outfit, pet) */
-	Unequip: 6,
-	/** F3, §8.1: arg = SKILLS id */
-	LearnSkill: 7,
-} as const;
-export type IntentKind = (typeof IntentKind)[keyof typeof IntentKind];
-const INTENT_KIND_MAX = 7;
-
-/**
- * The presence verbs (EnterWorld / LeaveWorld) are a bare kind and nothing else — that is the whole payload,
- * and it stays that way. From F3 the backpack verbs carry one argument and the `seq` of the command the
- * player made them during (§2.4), so "I switched, then I crafted" applies in that order however the packets
- * arrive. Two lengths, one header: a decoder tells them apart by size, and anything else is malformed.
- *
- * Note what is NOT here. There is no `pickup(itemId)`, no `interact(solidId)`, no `place(x, y)`: those ride
- * the input command's own edges and the server picks the target itself, at the position it simulated
- * (server/sim/interaction.ts). A verb that names a target is a verb that can name the wrong one.
- */
-export const INTENT_BYTES = 2;
-/** kind, verb, atSeq u16, arg u16, reserved u16 */
-export const INTENT_ARGS_BYTES = 8;
-/** the first verb that carries arguments */
-const INTENT_ARGS_FROM = 3;
-
-/** a decoded intent: `arg` and `atSeq` are 0 for the two presence verbs */
-export interface IntentMessage {
-	kind: IntentKind;
-	/** the `seq` of the command this was made during (§2.4); 0 when the sender did not say */
-	atSeq: number;
-	/** the verb's single argument — a recipe, a usable, an equipment, a slot or a skill */
-	arg: number;
-}
-
-export function encodeIntent(kind: IntentKind): buffer | undefined {
-	const w = new NetWriter(INTENT_BYTES, INTENT_BYTES);
-	w.u8(PacketKind.Intent * 16);
-	w.u8(kind);
-	return w.finish();
-}
-
-/** one of the F3 verbs, with its argument and the command it belongs to (§2.4) */
-export function encodeIntentArgs(kind: IntentKind, atSeq: number, arg: number): buffer | undefined {
-	if (kind < INTENT_ARGS_FROM || kind > INTENT_KIND_MAX) return undefined;
-	const w = new NetWriter(INTENT_ARGS_BYTES, INTENT_ARGS_BYTES);
-	w.u8(PacketKind.Intent * 16);
-	w.u8(kind);
-	w.u16(wrapU16(atSeq));
-	w.u16(clampInt(arg, 0, 65535));
-	w.u16(0);
-	return w.finish();
-}
-
-/**
- * Undefined for anything that is not exactly one of the intents above (§8.1: never trust the client).
- * The presence verbs only ever arrive in the short form and the backpack verbs only in the long one, so a
- * Craft packed as 2 bytes — or an EnterWorld padded to 8 — is malformed, not "close enough".
- */
-export function decodeIntentMessage(payload: unknown): IntentMessage | undefined {
-	if (!typeIs(payload, "buffer")) return undefined;
-	const len = buffer.len(payload);
-	if (len !== INTENT_BYTES && len !== INTENT_ARGS_BYTES) return undefined;
-	const r = new NetReader(payload);
-	if (r.u8() !== PacketKind.Intent * 16) return undefined;
-	const kind = r.u8();
-	if (kind < 1 || kind > INTENT_KIND_MAX) return undefined;
-	if (len === INTENT_BYTES) {
-		if (kind >= INTENT_ARGS_FROM || !r.done()) return undefined;
-		return { kind: kind as IntentKind, atSeq: 0, arg: 0 };
-	}
-	if (kind < INTENT_ARGS_FROM) return undefined;
-	const atSeq = r.u16();
-	const arg = r.u16();
-	if (r.u16() !== 0) return undefined;
-	if (!r.done()) return undefined;
-	return { kind: kind as IntentKind, atSeq, arg };
-}
-
-/** the presence half of `decodeIntentMessage`, kept for server/net/mpHost.ts's EnterWorld/LeaveWorld handler */
-export function decodeIntent(payload: unknown): IntentKind | undefined {
-	const msg = decodeIntentMessage(payload);
-	if (msg === undefined) return undefined;
-	if (msg.kind !== IntentKind.EnterWorld && msg.kind !== IntentKind.LeaveWorld) return undefined;
-	return msg.kind;
-}
+export {
+	INTENT_ARGS_BYTES,
+	INTENT_BYTES,
+	INTENT_HEADER,
+	IntentKind,
+	decodeIntent,
+	decodeIntentMessage,
+	encodeIntent,
+	encodeIntentArgs,
+	intentArgRange,
+	isBackpackIntent,
+} from "./intentWire";
+export type { IntentMessage } from "./intentWire";
 
 /** round-trip time of a pong received at `clientNow` (same clock as the ping's clientTime) */
 export function pongRtt(p: TimePong, clientNow: number): number {

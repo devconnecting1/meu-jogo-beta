@@ -1,6 +1,7 @@
 {
 	"name": "project-z",
 	"private": true,
+	"version": "0.1.0",
 	"scripts": {
 		"build": "rbxtsc",
 		"watch": "rbxtsc -w",
@@ -10,6 +11,7 @@
 		"render:map": "node tools/render-map.mjs",
 		"cloud": "node tools/cloud.mjs",
 		"locale": "node tools/gen-locale.mjs",
+		"stamp": "node tools/gen-version.mjs",
 		"validate:world": "node tools/validate-world.mjs",
 		"check:registers": "node tools/check-registers.mjs",
 		"check:place": "node tools/check-place.mjs",

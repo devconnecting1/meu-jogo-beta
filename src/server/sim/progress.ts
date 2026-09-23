@@ -22,6 +22,7 @@ import { SAVE_LIMITS, expMaxInit, PlayerSaveData, PROGRESS_SERVER_PHASE } from "
 import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
+import { creditBossAchievement, creditKillAchievements } from "../save/achievements";
 import { creditZombieKill } from "../save/titles";
 
 // ---------------------------------------------------------------- constants (§3.6)
@@ -238,12 +239,14 @@ export function survivedNight(
  */
 export function stripClientProgress(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
 	if (MP_PHASE < PROGRESS_SERVER_PHASE) return false;
+	// only a report claiming MORE than the server holds counts as an attempt: one that is merely behind (the XP of the
+	// last second of a fight, a point spent a moment ago) is what an honest client sends all the time (review #10)
 	let changed = false;
-	if (upd.level !== prev.level) changed = true;
-	if (upd.exp !== prev.exp) changed = true;
-	if (upd.skillPoint !== prev.skillPoint) changed = true;
-	if (upd.bossKills !== prev.bossKills) changed = true;
-	if (upd.day !== prev.day) changed = true;
+	if (upd.level > prev.level) changed = true;
+	if (upd.level === prev.level && upd.exp > prev.exp) changed = true;
+	if (upd.skillPoint > prev.skillPoint) changed = true;
+	if (upd.bossKills > prev.bossKills) changed = true;
+	if (upd.day > prev.day) changed = true;
 	upd.level = prev.level;
 	upd.exp = prev.exp;
 	upd.skillPoint = prev.skillPoint;
@@ -361,8 +364,19 @@ export class Progress {
 	 * The zombie died: the killer takes the full `exp`, everyone else who hurt it inside ASSIST_WINDOW_S takes
 	 * ASSIST_SHARE of it (§3.6, MP-15 "acaba com o roubo de abate"). The ledger is dropped, so a body can never
 	 * pay twice — which also means 2A must call this exactly once per death, whatever killed it.
+	 *
+	 * `zombieType` (the zombie's kind, 1 = Walker) and `weaponKind` (the WeaponKind the server says the killer held)
+	 * are what the killing blow's achievements need (CON-04: Special zombie slayer, Melee weapons expert); -1 = not
+	 * known, and only the counters that do not care move.
 	 */
-	zombieKilled(zombieId: number, exp: number, killerSlot: number, now: number): Array<ExpAward> {
+	zombieKilled(
+		zombieId: number,
+		exp: number,
+		killerSlot: number,
+		now: number,
+		zombieType = -1,
+		weaponKind = -1,
+	): Array<ExpAward> {
 		const l = this.zombies.get(zombieId);
 		this.zombies.delete(zombieId);
 		const out = new Array<ExpAward>();
@@ -370,7 +384,7 @@ export class Progress {
 		if (killerSlot >= 0) {
 			out.push(this.pay(killerSlot, base, true));
 			this.bump(killerSlot).kills += 1;
-			this.creditKill(killerSlot);
+			this.creditKill(killerSlot, zombieType, weaponKind);
 		}
 		if (l !== undefined) {
 			for (const c of l.by) {
@@ -419,7 +433,7 @@ export class Progress {
 	 * themselves are server/main.server.ts's, paid from `bossKills`). A participant either did ≥ 3 % of `hpMax`
 	 * or stayed ≥ 20 s nearby while it lived.
 	 */
-	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number): Array<ExpAward> {
+	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number, bossType = -1): Array<ExpAward> {
 		const l = this.bosses.get(bossId);
 		this.bosses.delete(bossId);
 		const out = new Array<ExpAward>();
@@ -432,13 +446,13 @@ export class Progress {
 				const isKiller = c.slot === killerSlot;
 				killerPaid = killerPaid || isKiller;
 				out.push(this.pay(c.slot, base, isKiller));
-				this.creditBoss(c.slot);
+				this.creditBoss(c.slot, bossType);
 			}
 		}
 		// the killing blow always counts, even from someone who only just arrived: they finished it
 		if (killerSlot >= 0 && !killerPaid) {
 			out.push(this.pay(killerSlot, base, true));
-			this.creditBoss(killerSlot);
+			this.creditBoss(killerSlot, bossType);
 		}
 		return out;
 	}
@@ -482,20 +496,25 @@ export class Progress {
 	}
 
 	/**
-	 * MON-05: the killing blow goes on the survivor's lifetime count (and Horde Breaker at its goal). Not in an
-	 * assisted run (§9.3): an admin's spawn tools would make the count a button, and a title is a reward like coins.
+	 * MON-05: the killing blow goes on the survivor's lifetime count (and Horde Breaker at its goal) -- and, CON-04, on
+	 * the kill achievements, from the same credit. Not in an assisted run (§9.3): an admin's spawn tools would make the
+	 * count a button, and a title or an achievement is a reward like coins.
 	 */
-	private creditKill(slot: number): void {
+	private creditKill(slot: number, zombieType: number, weaponKind: number): void {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
+		creditKillAchievements(save, zombieType, weaponKind);
 		const unlocked = creditZombieKill(save);
 		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
 	}
 
-	private creditBoss(slot: number): void {
+	private creditBoss(slot: number, bossType: number): void {
 		const save = this.saveOf(slot);
 		const stats = this.bump(slot);
-		if (save !== undefined) stats.coins += creditBossKill(save, this.paysRewards(slot));
+		const pays = this.paysRewards(slot);
+		if (save !== undefined) stats.coins += creditBossKill(save, pays);
+		// CON-04: every participant has brought it down (MP-15), not in an assisted run (§9.3)
+		if (save !== undefined && pays) creditBossAchievement(save, bossType);
 		stats.bossKills += 1;
 	}
 

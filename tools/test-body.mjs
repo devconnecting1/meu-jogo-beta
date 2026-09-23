@@ -430,6 +430,10 @@ function bootServer({ privateServer = false } = {}) {
 		intent(p, kind) {
 			remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
 		},
+		/** one backpack verb on the Intent remote, as client/net/netClient.ts sends it (docs/MULTIPLAYER.md §4.8) */
+		verb(p, kind, arg, atSeq = 0, nonce = 0) {
+			remote("Intent").OnServerEvent.Fire(p, P.encodeIntentArgs(kind, atSeq, arg, nonce));
+		},
 		/** EnterWorld, then long enough for the admit pass (ADMIT_INTERVAL) whatever the cooldown said */
 		enter(p) {
 			server.intent(p, P.IntentKind.EnterWorld);
@@ -1258,10 +1262,14 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	check(twice.ok === false && twice.reason === "owned", "buying it again is refused as owned");
 	check(save.money === 100 - santa.price, "…and charges nothing");
 
-	// wearing: the bought outfit is accepted from a report, a pet nobody bought is taken off
+	// wearing (F3, §4.8): the wardrobe's Equip is a verb the server applies out of the world, cosmetics only; a report
+	// no longer moves the slots at all, so neither a bought outfit nor a pet nobody paid for comes from one
 	const ack = s.report(p, { equipOutfit: equipOf("Santa"), equipPet: equipOf("Eagle") });
-	check(ack?.ok === true, "the report that wears it is accepted");
-	check(save.equipOutfit === equipOf("Santa"), "the server wears the bought outfit");
+	check(ack?.ok === true, "a report that tries to wear them is still accepted (and corrected in silence)");
+	check(save.equipOutfit === -1 && save.equipPet === -1, "…and wears nothing: the slots are the server's");
+	s.verb(p, s.P.IntentKind.Equip, equipOf("Santa"), 0, 1);
+	s.verb(p, s.P.IntentKind.Equip, equipOf("Eagle"), 0, 2);
+	check(save.equipOutfit === equipOf("Santa"), "the wardrobe's Equip puts on the bought outfit");
 	check(save.equipPet === -1, "…but not the Eagle nobody paid for", `equipPet ${save.equipPet}`);
 
 	// and it reaches the DataStore with the coins it cost
@@ -1381,6 +1389,80 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	);
 	s.quit(p);
 });
+
+section(
+	"11b) the achievements are the server's: its entry, its kill credit, its deaths; a report moves none (CON-04)",
+	() => {
+		const s = bootServer();
+		const { applyWallet, defaultSave } = require(join(SRC, "shared/game/save.ts"));
+		const { AchievementId: AID, ACHIEVEMENTS } = require(join(SRC, "shared/data/achievements.ts"));
+		const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+		const pushes = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p && e.args[0]?.push === true);
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "rookie");
+		const save = s.save(p);
+		s.run(0.5);
+		check(save.achievements[AID.FirstSteps] === 0, "in the lobby: no First steps yet");
+		const sp = s.enter(p);
+		check(save.achievements[AID.FirstSteps] === 1, "the server stood the first body in the town: First steps");
+
+		// the kill credit, as combat calls it (a Charger, a blade in hand): pushed to the client with the counters
+		s.sim.progress.zombieKilled(910001, 10, sp.slot, 0, 2, 7);
+		s.run(0.5);
+		const pushed = pushes(p).pop()?.args[0];
+		const mine = defaultSave();
+		applyWallet(mine, pushed?.wallet);
+		check(
+			mine.achievements[AID.ZombieSlayer] === 1 &&
+				mine.achievements[AID.SpecialZombieSlayer] === 1 &&
+				mine.achievements[AID.MeleeExpert] === 1 &&
+				mine.achievements[AID.FirstSteps] === 1,
+			"the pushed wallet carries the counters the server moved, and the client's copy takes them",
+			JSON.stringify(pushed?.wallet?.achievements),
+		);
+
+		// a report claiming every achievement (and every title): accepted as a report, and not one counter moves
+		const before = JSON.stringify(save.achievements);
+		const titlesBefore = JSON.stringify(save.titles);
+		const ack = s.report(p, {
+			achievements: ACHIEVEMENTS.map(a => a.max),
+			lifeDeaths: 0,
+			titles: save.titles.map(() => 1),
+		});
+		check(
+			ack?.ok === true &&
+				JSON.stringify(save.achievements) === before &&
+				JSON.stringify(save.titles) === titlesBefore,
+			"a report with every achievement complete moves none, and grants no title (save v6, MON-05)",
+		);
+		check(
+			JSON.stringify(ack?.wallet?.achievements) === before &&
+				JSON.stringify(ack?.wallet?.titles) === titlesBefore,
+			"...and the wallet it answers with carries the server's counters, not the claim",
+		);
+
+		// ACH-4: a death answered by WAITING for daybreak is a death of this life (deathCount only counts paid Rebirths)
+		s.nightLeft(3);
+		s.kill(p);
+		check(
+			save.lifeDeaths === 1 && save.deathCount === 0,
+			"the server counts the death in lifeDeaths (deathCount 0)",
+		);
+		const up = s.runUntil(() => s.body(p)?.state.dead === false, 10);
+		check(up >= 0 && save.lifeDeaths === 1, "…stood up at daybreak for free, the death still counts for Never die");
+		s.immortal.add(p);
+		s.report(p, { lifeDeaths: 0 });
+		s.run(8); // past the report window: a report held back is processed by now
+		check(save.lifeDeaths === 1, "…and a report cannot wipe it");
+		s.immortal.delete(p);
+		s.kill(p);
+		const reset = s.shop(p, { kind: "newRun", runRev: save.runRev });
+		check(reset.ok === true && save.lifeDeaths === 0, "a New game is a new life: no death in it yet");
+		s.quit(p);
+	},
+);
 
 // ================================================================ 12: titles, end to end (MON-05)
 

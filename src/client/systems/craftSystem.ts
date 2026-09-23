@@ -6,7 +6,9 @@ import { WEAPONS } from "shared/data/weapons";
 import type { Solid, WorldData } from "shared/game/world";
 import type { PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
+import { IntentKind } from "shared/net/intentWire";
 import * as Rule from "shared/sim/craftRule";
+import { sendBagVerb, serverOwnsWorld } from "../net/authority";
 import { fxMessage, GameRefs } from "./types";
 
 export type CraftStation = Rule.CraftStation;
@@ -86,6 +88,8 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 		fxMessage(refs, why, refs.player);
 		return false;
 	}
+	// F3: the server crafts (server/sim/craft.ts); this client predicts the same rule on its copy and sends the verb
+	if (serverOwnsWorld()) return sendBagVerb(IntentKind.Craft, recipeId);
 	for (const ing of r.ingredients) {
 		removeItem(refs.save, ing.kind, ing.index, ing.count);
 	}

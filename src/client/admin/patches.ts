@@ -9,6 +9,7 @@ import type { GameLoop } from "../gameLoop";
 import { TEXT, THEME, TRANSPARENCY, space } from "../ui/theme";
 import { Card, makeAnchored, makeLabel, tween } from "../ui/widgets";
 import { toast } from "../ui/popup";
+import { rebaseAchievementNotices } from "../ui/achievementNotice";
 import * as saveNet from "../systems/saveClient";
 import { onAdminEvent, sendPatchAck } from "./net";
 
@@ -82,6 +83,8 @@ function applyPatch(deps: PatchDeps, ev: Record<string, unknown>, deferredPatch 
 	if (ev.reset !== undefined) {
 		copyInto(save, sanitizeStoredSave(ev.reset));
 		save.runRev = math.max(save.runRev, runRev);
+		// rewritten in place: the achievement toast takes it as its baseline (CON-04), or re-earning one is never told
+		rebaseAchievementNotices();
 		applied.add(rev);
 		sendPatchAck(rev);
 		deps.endRun();
@@ -95,6 +98,8 @@ function applyPatch(deps: PatchDeps, ev: Record<string, unknown>, deferredPatch 
 		return;
 	}
 	applyAdminOps(save, ops);
+	// an admin's edit is not an achievement earned: the toast takes the edited save as its baseline (CON-04)
+	rebaseAchievementNotices();
 	// reports captured before this point carry the old runRev and are refused by the server
 	save.runRev = math.max(save.runRev, runRev);
 	refreshRun(deps);
