@@ -60,6 +60,9 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	gui.IgnoreGuiInset = true;
 	gui.DisplayOrder = 150;
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+	// the panel is full of names and typed text, and is English on purpose (UI-03): none of it is captured for
+	// automatic translation (compliance F9)
+	gui.AutoLocalize = false;
 	gui.Parent = ctx.playerGui;
 
 	// debug overlays: inside the game root, above the night (Dark = 80) and below the HUD (90) / menus (100)

@@ -212,6 +212,8 @@ export class SurvivorScreen {
 			THEME.foreground,
 			{ font: BOLD, align: "left", zIndex: sz },
 		);
+		// the player's display name: never captured for automatic translation (compliance F9)
+		this.title.AutoLocalize = false;
 		const wardrobe = Button(stage.frame, "Wardrobe", "", {
 			x: STAGE_W - space(4) - WARDROBE_W,
 			y: Kit.SECTION_TITLE_MID - WARDROBE_H / 2,

@@ -89,6 +89,11 @@ export interface TableColumn {
 	descendingFirst?: boolean;
 	/** this column's cells have a second, smaller line (the title under a name) */
 	sub?: boolean;
+	/**
+	 * the main line is a player's name (or text a player typed): never captured by Roblox's automatic translation
+	 * (AutoLocalize off), so no name lands in the localization table (compliance F9). A `sub` line is game text.
+	 */
+	raw?: boolean;
 }
 
 /** what one cell shows; the table hands the SAME object to every `cell` call (nothing is allocated per row) */
@@ -493,6 +498,7 @@ export function Table<T extends defined>(parent: Instance, name: string, props: 
 			);
 			label.TextWrapped = false;
 			label.TextTruncate = Enum.TextTruncate.AtEnd;
+			if (col.raw === true) label.AutoLocalize = false;
 			const view: CellView = { label, text: "", subText: "" };
 			if (two) {
 				// a cell with no second line (a survivor without a title, "Alive") centres its one line in the row like

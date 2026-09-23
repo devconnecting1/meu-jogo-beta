@@ -187,7 +187,7 @@ const CHIP_W = 92;
 
 /** sized so every header and every value reads at the 9 px floor on a 844 x 390 phone (test:tables) */
 export const SCORE_COLUMNS: Array<TableColumn> = [
-	{ key: "name", header: "Survivor", flex: 1, sortable: true, sub: true },
+	{ key: "name", header: "Survivor", flex: 1, sortable: true, sub: true, raw: true },
 	{ key: "level", header: "Lv", width: 36, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "lifeDay", header: "Life day", width: 92, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "kills", header: "Put down", width: 92, numeric: true, sortable: true, descendingFirst: true },

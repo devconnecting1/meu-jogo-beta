@@ -1,3 +1,4 @@
+import { langGet } from "shared/data/lang";
 import { createPlayer } from "shared/game/player";
 import { difficultyOfDay, ownsWeapon, PlayerSaveData, sanitizeStoredSave } from "shared/game/save";
 import type { GameContext } from "shared/game/context";
@@ -76,14 +77,15 @@ function applyPatch(deps: PatchDeps, ev: Record<string, unknown>, deferredPatch 
 		sendPatchAck(rev);
 		return;
 	}
-	const by = typeIs(ev.by, "string") ? ev.by : "an administrator";
+	// every player reads these (not only admins): through lang.ts, and naming no one -- the admin's username is theirs
+	const tr = (key: string): string => langGet(key, deps.ctx.save.settings.langType);
 	if (ev.reset !== undefined) {
 		copyInto(save, sanitizeStoredSave(ev.reset));
 		save.runRev = math.max(save.runRev, runRev);
 		applied.add(rev);
 		sendPatchAck(rev);
 		deps.endRun();
-		toast(deps.ctx, `Your progress was reset by ${by}`, "error");
+		toast(deps.ctx, tr("Your progress was reset by an administrator"), "error");
 		return;
 	}
 	const ops = readAdminOps(ev.ops, ADMIN_LIMITS.OPS_PER_REQUEST);
@@ -98,7 +100,7 @@ function applyPatch(deps: PatchDeps, ev: Record<string, unknown>, deferredPatch 
 	refreshRun(deps);
 	applied.add(rev);
 	sendPatchAck(rev);
-	toast(deps.ctx, `Your progress was updated by ${by}`, "success");
+	toast(deps.ctx, tr("Your progress was updated by an administrator"), "success");
 }
 
 let bannerSerial = 0;
@@ -114,6 +116,8 @@ function showAnnouncement(ctx: GameContext, text: string, from: string): void {
 		s.IgnoreGuiInset = true;
 		s.DisplayOrder = 140;
 		s.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+		// an admin's filtered text and a display name: never captured for automatic translation (compliance F9)
+		s.AutoLocalize = false;
 		s.Parent = gui;
 		screen = s;
 	}
@@ -130,7 +134,7 @@ function showAnnouncement(ctx: GameContext, text: string, from: string): void {
 		border: THEME.ring,
 		zIndex: 10,
 	});
-	makeLabel(
+	const head = makeLabel(
 		card,
 		"From",
 		`ANNOUNCEMENT · ${from}`,
@@ -146,7 +150,7 @@ function showAnnouncement(ctx: GameContext, text: string, from: string): void {
 			zIndex: 11,
 		},
 	);
-	makeLabel(
+	const body = makeLabel(
 		card,
 		"Text",
 		text,
@@ -162,6 +166,9 @@ function showAnnouncement(ctx: GameContext, text: string, from: string): void {
 			zIndex: 11,
 		},
 	);
+	// a display name and an admin's (filtered) text: never captured for automatic translation (compliance F9)
+	head.AutoLocalize = false;
+	body.AutoLocalize = false;
 	task.delay(BANNER_TIME, () => {
 		if (serial !== bannerSerial || box.Parent === undefined) return;
 		tween(card, 0.3, { BackgroundTransparency: 1 });
