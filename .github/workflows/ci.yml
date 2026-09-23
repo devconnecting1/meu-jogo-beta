@@ -43,6 +43,9 @@ jobs:
       - name: Colour contrast (WCAG 4,5:1 for text, 3:1 for outlines and bars)
         run: npm run test:contrast
 
+      - name: The Bag is built once (tab switches and actions create no Instances)
+        run: npm run test:backpack
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

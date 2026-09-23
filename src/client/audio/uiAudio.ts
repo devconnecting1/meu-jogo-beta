@@ -6,7 +6,8 @@
  * UI, this module watches the ScreenGui:
  *  - a kit button added anywhere gets a click (Activated) and a hover (MouseEnter / SelectionGained);
  *    the full-screen `InputBlocker` and the slider hit areas have no Variant attribute, so they stay silent;
- *  - a screen or dialog added to `ctx.uiLayer` is a panel opening; the last one leaving is it closing;
+ *  - a screen or dialog added to `ctx.uiLayer` is a panel opening; the last one leaving is it closing. A screen
+ *    kept built between uses (the backpack) is shown and hidden instead, and counts the same way;
  *  - a toast is read from its own glyph ("!" error, "✓" success, "$" coins) and answered accordingly.
  *
  * Everything here is on the UI bus, short and quiet: hover is barely audible (0.11 base), and no UI sound
@@ -43,9 +44,9 @@ function hookButton(b: TextButton): void {
 	b.SelectionGained.Connect(hover);
 }
 
-/** a screen, dialog or overlay (the toast stack is not one) */
+/** a screen, dialog or overlay that is showing (the toast stack is not one; nor is a screen kept hidden for reuse) */
 function isPanel(child: Instance): boolean {
-	return child.IsA("Frame") && child.Name !== "ToastStack";
+	return child.IsA("Frame") && child.Name !== "ToastStack" && child.Visible;
 }
 
 function hasPanel(layer: Instance): boolean {
@@ -53,6 +54,13 @@ function hasPanel(layer: Instance): boolean {
 		if (isPanel(child)) return true;
 	}
 	return false;
+}
+
+/** a panel went away: a screen replacing another already played its "open", so only the last one is a "close" */
+function panelClosed(layer: Instance): void {
+	task.defer(() => {
+		if (!hasPanel(layer)) audio.play("uiClose");
+	});
 }
 
 /** toasts say what they are with their glyph: read it instead of guessing from the text */
@@ -86,15 +94,25 @@ export function startUiAudio(ctx: GameContext): void {
 	ctx.screen.DescendantAdded.Connect(hook);
 
 	const layer = ctx.uiLayer;
+	// a screen kept built between uses (the backpack) opens and closes by visibility, not by being added / removed
+	const watched = new Map<Instance, RBXScriptConnection>();
+	const watch = (child: Instance): void => {
+		if (!child.IsA("Frame") || child.Name === "ToastStack" || watched.has(child)) return;
+		const conn = child.GetPropertyChangedSignal("Visible").Connect(() => {
+			if (child.Visible) audio.play("uiOpen");
+			else panelClosed(layer);
+		});
+		watched.set(child, conn);
+	};
+	for (const child of layer.GetChildren()) watch(child);
 	layer.ChildAdded.Connect(child => {
+		watch(child);
 		if (isPanel(child)) audio.play("uiOpen");
 	});
 	layer.ChildRemoved.Connect(child => {
-		if (!isPanel(child)) return;
-		// a screen replacing another already played its "open": only the last one leaving is a "close"
-		task.defer(() => {
-			if (!hasPanel(layer)) audio.play("uiClose");
-		});
+		watched.get(child)?.Disconnect();
+		watched.delete(child);
+		if (isPanel(child)) panelClosed(layer);
 	});
 }
 

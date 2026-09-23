@@ -138,6 +138,18 @@ export function autoFocus(obj: GuiObject): void {
 	if (gamepadActive()) GuiService.SelectedObject = obj;
 }
 
+/**
+ * Shows / hides `obj` (a page kept built for reuse, a pooled row). Hiding also takes the gamepad / keyboard
+ * selection off it or off anything inside it: bootstrap.ts reads "something is selected" as "a menu has the pad",
+ * so a hidden control that kept the selection would keep the buttons from the game.
+ */
+export function setVisible(obj: GuiObject, visible: boolean): void {
+	if (obj.Visible !== visible) obj.Visible = visible;
+	if (visible) return;
+	const sel = GuiService.SelectedObject;
+	if (sel !== undefined && (sel === obj || sel.IsDescendantOf(obj))) GuiService.SelectedObject = undefined;
+}
+
 // ---------------------------------------------------------------- design-space helpers
 
 function designOf(parent: Instance): [number, number] {
@@ -563,6 +575,16 @@ function recolorLabels(b: TextButton, color: Color3 | undefined): void {
 	}
 }
 
+/**
+ * Sets the colour of a label that lives inside a kit button (a list row's name or status). While that row is
+ * highlighted or disabled the kit shows another colour and puts the saved one back afterwards (recolorLabels),
+ * so the new colour goes to the saved value then: written to TextColor3 it would be undone when the highlight ends.
+ */
+export function setLabelColor(label: TextLabel, color: Color3): void {
+	if (typeIs(label.GetAttribute("BaseTextColor"), "Color3")) label.SetAttribute("BaseTextColor", color);
+	else label.TextColor3 = color;
+}
+
 /** pixel focus ring around a button, with a 1 px gap (shadcn's ring-offset); created on first focus */
 function makeOffsetRing(b: TextButton): Frame {
 	const f = new Instance("Frame");
@@ -801,7 +823,19 @@ export function Card(parent: Instance, name: string, props: CardProps): Frame {
 	});
 	f.SetAttribute("Pad", props.pad ?? space(6));
 	f.SetAttribute("CardVariant", variant);
+	f.SetAttribute("CardTransparency", transparency);
 	return f;
+}
+
+/** repaints a Card's frame / border colour in place, keeping its variant and transparency (a line turning red) */
+export function setCardBorder(card: Frame, border: Color3): void {
+	const muted = card.GetAttribute("CardVariant") === "muted";
+	const t = card.GetAttribute("CardTransparency");
+	setSurface(card, muted ? "well" : "panel", {
+		fill: muted ? SURFACE.well : SURFACE.panel,
+		border,
+		transparency: typeIs(t, "number") ? t : 0,
+	});
 }
 
 function cardBox(card: Frame): [number, number, number] {
@@ -1001,6 +1035,14 @@ export function setBadge(badge: Frame, text: string, color?: Color3): void {
 	const label = badge.FindFirstChild("Text");
 	if (label !== undefined && label.IsA("TextLabel")) label.Text = text;
 	if (color !== undefined) setSurface(badge, "well", { fill: SURFACE.well, border: color });
+}
+
+/** repaints a Badge as another variant / accent in place (e.g. a station tag going `secondary` -> `destructive`) */
+export function setBadgeLook(badge: Frame, variant: BadgeVariant, color?: Color3): void {
+	const [kind, fill, border, fg] = badgeLook(variant, color);
+	setSurface(badge, kind, { fill, border });
+	const label = badge.FindFirstChild("Text");
+	if (label !== undefined && label.IsA("TextLabel")) label.TextColor3 = fg;
 }
 
 // ---------------------------------------------------------------- Keycap
@@ -1305,11 +1347,22 @@ export function Sidebar(parent: Instance, name: string, props: SidebarProps): Si
 			for (let i = 0; i < buttons.size(); i++) applyVariant(buttons[i], i === index ? "navActive" : "nav");
 		},
 		setBadge(index: number, text: string | undefined, color?: Color3): void {
-			badges.get(index)?.Destroy();
-			badges.delete(index);
-			if (text === undefined || text === "" || buttons[index] === undefined) return;
-			// on the rail (not inside the item, whose text padding would shift it), right-aligned in the item
+			const current = badges.get(index);
+			if (text === undefined || text === "" || buttons[index] === undefined) {
+				if (current !== undefined) current.Visible = false;
+				return;
+			}
 			const bw = badgeWidth(text, TEXT.xs, NAV_BADGE_H);
+			// the chip is kept and rewritten while its width and look hold (a count going 3 -> 2, shown / hidden);
+			// only a new width or look builds another one
+			const shape = `${bw}:${color === undefined ? "secondary" : "accent"}`;
+			if (current !== undefined && current.GetAttribute("Shape") === shape) {
+				setBadge(current, text, color);
+				current.Visible = true;
+				return;
+			}
+			current?.Destroy();
+			// on the rail (not inside the item, whose text padding would shift it), right-aligned in the item
 			const badge = Badge(rail, `Badge${index}`, text, {
 				x: w - pad - space(2) - bw,
 				y: itemY(index) + (itemH - NAV_BADGE_H) / 2,
@@ -1319,6 +1372,7 @@ export function Sidebar(parent: Instance, name: string, props: SidebarProps): Si
 				color,
 				zIndex: rail.ZIndex + 3,
 			});
+			badge.SetAttribute("Shape", shape);
 			badges.set(index, badge);
 		},
 	};
@@ -1867,6 +1921,72 @@ export function ListRowButton(
 	);
 	b.LayoutOrder = order;
 	return b;
+}
+
+/**
+ * The rows of a ScrollList, kept and reused: the world renderer's Frame pool (shared/engine/renderer.ts) for a
+ * list. A render asks for its rows in list order, each under the KEY of what it shows (an item id, a recipe id):
+ *  - a key the last render also showed gets the same row back, so a row whose data did not change has nothing
+ *    to rewrite, and a re-sorted list only moves rows (LayoutOrder);
+ *  - a new key takes a row a vanished key left behind, and a row is only created when there is none;
+ *  - finish() hides the rows no key asked for; they are kept for the next new key, never destroyed.
+ * Once a list has been as long as it gets, rendering it again creates no Instance at all.
+ *
+ *   pool.begin(); for (const item of items) fill(pool.acquire(keyOf(item)), item); pool.finish();
+ *
+ * Keys must be unique within one render.
+ */
+export class RowPool<T extends { frame: GuiObject }> {
+	readonly list: ScrollList;
+	private readonly make: (list: ScrollList, index: number) => T;
+	/** rows by the key they showed in the last render */
+	private shown = new Map<string, T>();
+	/** rows by the key they show in the render going on */
+	private next = new Map<string, T>();
+	/** rows no key uses: hidden, ready for a key the list has not shown yet */
+	private readonly spare: Array<T> = [];
+	private built = 0;
+	private order = 0;
+
+	constructor(list: ScrollList, make: (list: ScrollList, index: number) => T) {
+		this.list = list;
+		this.make = make;
+	}
+
+	/** starts a render */
+	begin(): void {
+		this.order = 0;
+		this.next.clear();
+	}
+
+	/** the row for `key`, placed next in the list: the one that showed it last time, a spare one, or a new one */
+	acquire(key: string): T {
+		let row = this.shown.get(key);
+		if (row !== undefined) this.shown.delete(key);
+		else row = this.spare.pop() ?? this.make(this.list, this.built++);
+		this.next.set(key, row);
+		if (row.frame.LayoutOrder !== this.order) row.frame.LayoutOrder = this.order;
+		this.order += 1;
+		setVisible(row.frame, true);
+		return row;
+	}
+
+	/** ends a render: the rows of keys that are gone are hidden and kept for a later key */
+	finish(): void {
+		for (const [, row] of this.shown) {
+			setVisible(row.frame, false);
+			this.spare.push(row);
+		}
+		const done = this.shown;
+		done.clear();
+		this.shown = this.next;
+		this.next = done;
+	}
+
+	/** rows shown by the last render */
+	count(): number {
+		return this.order;
+	}
 }
 
 // ---------------------------------------------------------------- composite widgets
