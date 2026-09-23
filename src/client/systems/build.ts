@@ -3,7 +3,7 @@ import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { InputState } from "shared/engine/input";
 import { addSolid } from "shared/game/world";
-import { ghostRect, PLACEABLES, placedSolid, placementValid, placeRecipe } from "shared/sim/placement";
+import { ghostRectSticky, PLACEABLES, placedSolid, placementValid, placeRecipe } from "shared/sim/placement";
 import { addItem } from "shared/sim/inventory";
 import { GameRefs } from "./types";
 
@@ -29,6 +29,8 @@ export class BuildSystem {
 	private ghostW = 0;
 	private ghostH = 0;
 	private ghostValid = false;
+	/** false until the first frame of build mode, so the ghost does not stick to a stale cell */
+	private hasGhost = false;
 	private rot = 0;
 	private active = false;
 
@@ -73,11 +75,22 @@ export class BuildSystem {
 			return;
 		}
 		const p = refs.player;
-		const g = ghostRect(def, p.x, p.y, p.angle, this.rot);
+		// sticky, not raw: the drawn position now carries the server's per-frame correction, and a plain grid
+		// snap on top of that makes the ghost flicker between two cells forever
+		const g = ghostRectSticky(
+			def,
+			p.x,
+			p.y,
+			p.angle,
+			this.rot,
+			this.hasGhost ? this.ghostX : undefined,
+			this.hasGhost ? this.ghostY : undefined,
+		);
 		this.ghostX = g.x;
 		this.ghostY = g.y;
 		this.ghostW = g.w;
 		this.ghostH = g.h;
+		this.hasGhost = true;
 		this.ghostValid = placementValid(refs.world, g, refs.players, refs.zombies);
 	}
 

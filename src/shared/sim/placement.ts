@@ -109,6 +109,51 @@ export function ghostRect(def: PlaceableDef, px: number, py: number, aim: number
 	return { x: gx, y: gy, w, h };
 }
 
+/**
+ * How far past the midpoint between two cells the ghost has to travel before it changes cell.
+ *
+ * A grid snap turns a continuous position into a step function, and a step function on a NOISY input
+ * oscillates at the boundary forever. That noise did not exist while the client simulated itself -- standing
+ * still meant standing exactly still -- but from MP_PHASE 2 the drawn position is prediction plus the
+ * server's correction, which wobbles by a fraction of a unit every frame. Enough to flip a cell, and the
+ * player sees the ghost vibrating in place.
+ */
+const GRID_HYSTERESIS = PLACE_GRID * 0.15;
+
+/** one axis: keep the cell we are in until the target is clearly past the midpoint */
+function stickyAxis(raw: number, prev: number | undefined): number {
+	const snapped = math.floor(raw / PLACE_GRID + 0.5) * PLACE_GRID;
+	if (prev === undefined) return snapped;
+	if (snapped === prev) return prev;
+	return math.abs(raw - prev) < PLACE_GRID / 2 + GRID_HYSTERESIS ? prev : snapped;
+}
+
+/**
+ * `ghostRect` with a memory: the same rectangle, but it will not change cell for sub-unit noise.
+ *
+ * `prevX`/`prevY` are the last rectangle this ghost occupied, or undefined the first time. The aim and the
+ * distance are unchanged -- only the decision of WHICH cell that lands in gains a deadband.
+ */
+export function ghostRectSticky(
+	def: PlaceableDef,
+	px: number,
+	py: number,
+	aim: number,
+	rot: number,
+	prevX?: number,
+	prevY?: number,
+): PlaceRect {
+	const cx = px + math.cos(aim) * PLACE_DISTANCE;
+	const cy = py + math.sin(aim) * PLACE_DISTANCE;
+	let w = def.w;
+	let h = def.h;
+	if (def.rotatable && (rot === 1 || rot === 3)) {
+		w = def.h;
+		h = def.w;
+	}
+	return { x: stickyAxis(cx - w / 2, prevX), y: stickyAxis(cy - h / 2, prevY), w, h };
+}
+
 /** inside the world, on no (non-passable) solid, and on no survivor's or live zombie's body */
 export function placementValid(
 	world: WorldData,
