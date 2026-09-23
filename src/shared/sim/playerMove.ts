@@ -12,7 +12,7 @@
 import { DESIGN } from "shared/engine/constants";
 import { clamp } from "shared/engine/vec2";
 import { moveActor, PLAYER_RADIUS } from "shared/game/physics";
-import { PlayerState, recalcMoveSpeed } from "shared/game/player";
+import { maxHpOf, PlayerState, recalcMoveSpeed } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { aimOf, InputCommand, moveDirX, moveDirY, SPEED_SCALE } from "./types";
@@ -83,6 +83,14 @@ export function stepPlayer(
 	p.x = clamp(res.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
 	p.y = clamp(res.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
 	const walking = moved > WALK_EPSILON && (wdx !== 0 || wdy !== 0);
+
+	// Health (skill 0) learnt mid-life raises the bar now, as in the original's every-step hp_max (QA K2); the hp
+	// already there stays, and regeneration fills the new room
+	const hpMax = maxHpOf(save);
+	if (p.hpMax !== hpMax) {
+		p.hpMax = hpMax;
+		if (p.hp > hpMax) p.hp = hpMax;
+	}
 
 	const hungerRate = 1 - save.skillLevels[8] / 3;
 	p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);

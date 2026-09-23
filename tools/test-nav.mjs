@@ -651,11 +651,13 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	const rules = readFileSync(join(ROOT, "docs/DESIGN_RULES.md"), "utf8");
 	const con03 = rules.split("\n").find(l => l.includes("**CON-03")) ?? "";
 	const offContent = [3, 7, 8, 9, 10, 11].filter(id => visible.some(a => a.id === id));
-	knownBug(
-		"ACH-3",
-		"as quatro de chefe (8-11), Bow expert e Sniper estao a vista, mas o Nucleo 1 nao tem chefe, arco nem sniper (CON-03)",
-		"shared/data/achievements.ts (hidden) x CON-03",
-		/sem chefe/.test(con03) && !/arco|sniper/i.test(con03) && offContent.length === 6,
+	// ACH-3 closed by the owner's decision (2026-09-23, CON-03): everything in the data works, so the bow and the sniper
+	// are real weapons and their achievements are in play; the boss ones follow the bosses (the achievements work
+	// decides whether they show). The check only guards that CON-03 no longer excludes that content while they show.
+	check(
+		"ACH-3: nenhuma conquista a vista fala de conteudo que a CON-03 exclui",
+		!(/sem chefe/.test(con03) && !/arco|sniper/i.test(con03) && offContent.length === 6),
+		`${offContent.length} a vista`,
 	);
 	// "Never die" counts the life's days while `deathCount` is 0, but only a PAID Rebirth moves it
 	// (server/main.server.ts): a death answered by the free wait for daybreak (MP-21) does not reset the streak
