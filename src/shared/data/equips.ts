@@ -25,6 +25,43 @@ export type EquipSlot = (typeof EquipSlot)[keyof typeof EquipSlot];
 /** the highest slot number (the Unequip intent's argument is checked against it) */
 export const EQUIP_SLOT_MAX = 5;
 
+/**
+ * What a worn gadget does to its wearer's light at night (DESIGN_RULES LUZ-04). `radius`: the survivor's own circle
+ * grows to it (the largest wins). `coneDeg`: instead, a cone of `radius` along the aim, `coneDeg` to either side of
+ * it. `sight`: it lights nothing -- it amplifies (night vision): the same circle for what the survivor makes out, and
+ * a brighter, green view of the night on their own screen.
+ *
+ * ONE table for both sides: the server's horde visibility (shared/sim/ai/zombieBrain.ts, through
+ * shared/sim/survivorLight.ts) and the client's light map (client/gameLoop.ts drawLight) read these very numbers,
+ * so a zombie is lit on the server exactly where the ground is lit on the screen.
+ */
+export interface EquipLight {
+	radius: number;
+	coneDeg?: number;
+	sight?: boolean;
+}
+
+export const EQUIP_LIGHTS: Record<number, EquipLight> = {
+	// Flashlight: the original's power 400 in a 45° cone (obj_player), ~560 u ahead
+	13: { radius: 560, coneDeg: 45 },
+	// Torchlight: a portable fire, all round
+	15: { radius: 400 },
+	// Night vision: the dark amplified around you, farther than a torch but no light of its own
+	6: { radius: 420, sight: true },
+};
+
+/**
+ * What a hand gadget shows on the HUD (E2, client/ui/hudNav.ts): the Compass a needle towards your camp (the nearest
+ * campfire, brazier or craft desk standing) with how far it is, north when there is none; the GPS machine a map of
+ * the streets around you with your camp and your allies on it. Both in the hand slot, so one at a time -- and never
+ * with the flashlight or a watch: what you hold is a choice.
+ */
+export type EquipNav = "compass" | "map";
+export const EQUIP_NAV: Record<number, EquipNav> = {
+	8: "compass",
+	16: "map",
+};
+
 export const EQUIPS: Array<EquipDef> = [
 	{ id: 0, name: "Cotton clothes", kind: 1, def: 1, speed: 0 },
 	{ id: 1, name: "Leather jacket", kind: 1, def: 2, speed: -0.5 },

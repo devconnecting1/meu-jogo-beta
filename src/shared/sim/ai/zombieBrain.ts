@@ -18,6 +18,7 @@ import * as Flank from "shared/sim/ai/flank";
 import * as Mind from "shared/sim/ai/memory";
 import * as Sense from "shared/sim/ai/perception";
 import * as T from "shared/sim/ai/zombieTuning";
+import * as Light from "shared/sim/survivorLight";
 import { SpatialHash } from "shared/sim/ai/spatialHash";
 
 /*
@@ -399,12 +400,11 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 	lightCount = 0;
 	for (const p of refs.players) {
 		const save = refs.saveOf(p);
-		// "Nocturnal" (skill 16) and the torch widen what that survivor can make out in the dark
-		let r = T.PLAYER_LIGHT_R;
-		if (save.skillLevels[16] > 0) r *= 1.5;
-		if (save.equipHand === 15) r = math.max(r, 400);
-		addLight(p.x, p.y, r, 1, 0);
-		if (save.equipHand === 13) addLight(p.x, p.y, T.FLASHLIGHT_R, 2, p.angle);
+		// the survivor's own light, by the ONE rule the client's light map draws too (shared/sim/survivorLight.ts,
+		// LUZ-04): Nocturnal, the torch and night vision widen the circle; the flashlight adds its cone
+		addLight(p.x, p.y, Light.survivorLightRadius(save), 1, 0);
+		const cone = Light.survivorCone(save);
+		if (cone !== undefined) addLight(p.x, p.y, cone.radius, 2, p.angle);
 	}
 	if (refs.clock.darkAlpha <= 0.05) return;
 	for (const l of structureLights) addLight(l.x, l.y, l.r, l.kind, l.angle);
@@ -423,7 +423,7 @@ function isLit(refs: Ctx.AiRefs, x: number, y: number): boolean {
 		const dx = x - l.x;
 		const dy = y - l.y;
 		if (dx * dx + dy * dy > l.r * l.r) continue;
-		if (l.kind === 2 && math.abs(angleDiff(l.angle, math.atan2(dy, dx))) > math.rad(45)) continue;
+		if (l.kind === 2 && math.abs(angleDiff(l.angle, math.atan2(dy, dx))) > Light.CONE_HALF_ANGLE) continue;
 		return true;
 	}
 	return false;

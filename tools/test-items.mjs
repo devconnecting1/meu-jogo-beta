@@ -731,20 +731,26 @@ section("A6. the HUD and the Bag draw every weapon with its own name and a pixel
 });
 
 /**
- * Everything the game can put in a backpack, as (kind, index): every building's loot, the trees, cars and bins (both
- * tables: the client's that MP_PHASE 2 runs and the server's of F3), every recipe's result and every pack's content.
+ * Everything the game can put in a backpack, as (kind, index): every building's loot, the trees, cars and bins (the
+ * one shared table, QA L1), a boss's trophy, a zombie's own drop (rotten meat, leather), every recipe's result, every
+ * pack's content and every costume.
  */
 function itemSources() {
+	const { MAP_ITEM_LOOT, BOSS_TROPHIES } = require(join(SRC, "shared/data/spawns.ts"));
 	const out = [];
 	for (const table of BUILDING_SPAWNS)
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "loot" });
 	for (const r of CRAFT_RECIPES) out.push({ kind: r.resultKind, index: r.resultIndex, from: `recipe ${r.id}` });
 	for (const p of SHOP_PACKS) for (const it of p.items) out.push({ kind: it.kind, index: it.index, from: p.name });
-	for (const rel of ["client/systems/interaction.ts", "server/sim/items.ts"]) {
-		for (const m of source(rel).matchAll(/\{ kind: (\d), index: (\d+), amount: [\d.]+ \}/g)) {
-			out.push({ kind: Number(m[1]), index: Number(m[2]), from: rel });
-		}
-	}
+	for (const [what, table] of Object.entries(MAP_ITEM_LOOT))
+		for (const e of table) out.push({ kind: e.kind, index: e.index, from: what });
+	for (const [boss, list] of Object.entries(BOSS_TROPHIES))
+		for (const t of list) out.push({ kind: t.kind, index: t.index, from: `boss ${boss}` });
+	// a zombie's own table (shared/sim/ai/zombieBrain.ts dropLoot): rotten meat or leather
+	const brain = source("shared/sim/ai/zombieBrain.ts");
+	for (const m of brain.matchAll(/spawnGroundItem\(w, (\d), (\d+), 1, z\.x, z\.y/g))
+		out.push({ kind: Number(m[1]), index: Number(m[2]), from: "zombie" });
+	for (const c of COSTUMES) out.push({ kind: ItemKind.Equip, index: c.equipId, from: `costume ${c.name}` });
 	return out;
 }
 
@@ -1090,45 +1096,285 @@ section(
 			check(!litAt(FLASHLIGHT, -400, 0), "and not 400 u behind (it is a cone)");
 			check(!litAt(-1, 0, 350), "bare hands: 350 u to the side is dark");
 			check(litAt(TORCH, 0, 350), "the torchlight lights 350 u all round");
-			// what the PLAYER sees is the client's light map (client/gameLoop.ts drawLight): its survivor light is a
-			// fixed PLAYER_LIGHT_R, whatever is in the hand
+			check(litAt(NIGHT_VISION, 0, 400), "night vision: the horde is made out 400 u all round (E2)");
+			check(!litAt(NIGHT_VISION, 0, 440), "and not past its 420 u");
+
+			// ---- E1 (fixed 2026-09-23): the SCREEN lights exactly what the server lights. The client's light map
+			// and the horde's visibility read ONE rule (shared/sim/survivorLight.ts) and ONE table (EQUIP_LIGHTS)
+			const Light = require(join(SRC, "shared/sim/survivorLight.ts"));
+			const { LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
+			const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+			const { COLORS } = require(join(SRC, "shared/engine/colors.ts"));
 			const draw = source("client/gameLoop.ts");
 			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
-			knownBug(
-				"E1",
-				body.length > 0 && !/equipHand/.test(body),
-				"the flashlight and the torchlight never light the SCREEN at night: the light map draws the survivor's plain 250 u whatever is in hand, while the server lights zombies in the cone (they glow in the dark)",
+			check(
+				/SurvivorLight\.survivorLightRadius\(save\)/.test(body) &&
+					/SurvivorLight\.survivorCone\(save\)/.test(body) &&
+					/angle: p\.angle/.test(body) &&
+					/cone: SurvivorLight\.CONE_HALF_ANGLE/.test(body) &&
+					!/PLAYER_LIGHT_R/.test(draw),
+				"the client's light map draws the survivor's light by the shared rule: the circle, and the flashlight's cone along the aim",
+			);
+			check(
+				/Light\.survivorLightRadius\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/Light\.survivorCone\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")),
+				"and the server's horde visibility by the same rule, cone angle included",
+			);
+			/** the lights the client pushes for a survivor at (px, py) aiming at `aim` (gameLoop drawLight's two pushes) */
+			const clientLights = (save, px, py, aim) => {
+				const out = [{ x: px, y: py, r: Light.survivorLightRadius(save), inner: 0.4 }];
+				const cone = Light.survivorCone(save);
+				if (cone !== undefined)
+					out.push({ x: px, y: py, r: cone.radius, inner: 0.35, angle: aim, cone: Light.CONE_HALF_ANGLE });
+				return out;
+			};
+			const hands = [
+				["bare hands", -1, -1, 0],
+				["the flashlight", FLASHLIGHT, -1, 0],
+				["the torchlight", TORCH, -1, 0],
+				["night vision", -1, NIGHT_VISION, 0],
+				["Nocturnal", -1, -1, 1],
+				["the flashlight and night vision", FLASHLIGHT, NIGHT_VISION, 0],
+			];
+			const wearing = (hand, gun, nocturnal) => {
+				const save = bareSave();
+				save.equipHand = hand;
+				save.equipGun = gun;
+				if (hand >= 0) save.invenEquip[hand] = 1;
+				if (gun >= 0) save.invenEquip[gun] = 1;
+				save.skillLevels[16] = nocturnal;
+				return save;
+			};
+			// the server's own isLit, for a survivor at (4000, 4000) aiming at `aim`, sampled at world points
+			const serverLit = (save, aim) => {
+				const world = W.createWorld(8000, 8000);
+				const sim = new ServerSimulation({
+					world,
+					clock: new WorldClock({ day: 1, dayTime: 0 }),
+					zombies: true,
+					interactive: false,
+				});
+				const sp = PL.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					save,
+					4000,
+					4000,
+					sim.tick,
+					sim.simHz,
+				);
+				sim.add(sp);
+				// the aim reaches the server the only way it can: in the survivor's input commands
+				let seq = 0;
+				const feed = () =>
+					PL.ingestInput(
+						sp,
+						P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, aim, 0, 0)] }),
+						0,
+					);
+				for (let i = 0; i < 3; i++) {
+					feed();
+					sim.step();
+				}
+				sp.state.x = 4000;
+				sp.state.y = 4000;
+				feed();
+				sim.step();
+				return (x, y) => Brain.spawnAlpha(sim.horde.refs, x, y) === 1;
+			};
+			const AIMS = [0, 0.7, 2.2, -1.9];
+			checkRows(
+				"the rule is the server's: lit exactly where the horde is lit (24 bearings × 30 distances, 4 aims)",
+				hands.map(([name, hand, gun, noc]) => ({ name, hand, gun, noc })),
+				h => {
+					const save = wearing(h.hand, h.gun, h.noc);
+					for (const aim of AIMS) {
+						const lit = serverLit(save, aim);
+						for (let b = 0; b < 24; b++) {
+							// off the exact edges by half a degree, so the rounding of a boundary point is not what is measured
+							const a = aim + ((b * 15 + 0.5) * Math.PI) / 180;
+							for (let d = 20; d <= 600; d += 20) {
+								const x = 4000 + Math.cos(a) * (d + 0.5);
+								const y = 4000 + Math.sin(a) * (d + 0.5);
+								const rule = Light.survivorLights(save, 4000, 4000, aim, x, y);
+								if (rule !== lit(x, y))
+									return `aim ${aim}, bearing ${b * 15}°, ${d} u: rule ${rule}, server ${lit(x, y)}`;
+							}
+						}
+					}
+					return true;
+				},
+			);
+			// and the screen: the REAL light map, fed what drawLight feeds it, sampled on its own lattice
+			checkRows(
+				"the screen's light map: nothing looks lit where the horde is dark, and all the horde's lit ground shows light (bar the fading rim)",
+				hands.map(([name, hand, gun, noc]) => ({ name, hand, gun, noc })),
+				h => {
+					const save = wearing(h.hand, h.gun, h.noc);
+					for (const aim of AIMS) {
+						const frame = ui.makeInstance("Frame", false);
+						const lm = new LightMap(frame, COLORS.overlayNight);
+						const cam = new Camera();
+						cam.setView(1400, 1400);
+						cam.zoom = 1;
+						cam.x = 4000;
+						cam.y = 4000;
+						lm.update(cam, 0.85, clientLights(save, 4000, 4000, aim));
+						const cols = lm.sx.length;
+						for (let r = 0; r < lm.sy.length; r++) {
+							for (let c = 0; c < cols; c++) {
+								const wx = 4000 + lm.sx[c] - 700;
+								const wy = 4000 + lm.sy[r] - 700;
+								const light = lm.samples[r * cols + c];
+								const inRule = Light.survivorLights(save, 4000, 4000, aim, wx, wy);
+								if (light > 0.001 && !inRule)
+									return `aim ${aim}: light ${light.toFixed(3)} at (${wx - 4000}, ${wy - 4000}), dark for the horde`;
+								if (inRule && light <= 0) {
+									// only the last stretch of the falloff (radius) or of the cone's edge (angle) may read 0
+									const d = Math.hypot(wx - 4000, wy - 4000);
+									const circle = Light.survivorLightRadius(save);
+									const cone = Light.survivorCone(save);
+									const off = Math.abs(
+										Math.atan2(
+											Math.sin(Math.atan2(wy - 4000, wx - 4000) - aim),
+											Math.cos(Math.atan2(wy - 4000, wx - 4000) - aim),
+										),
+									);
+									const rim =
+										d > circle - 4 &&
+										(cone === undefined ||
+											d > cone.radius - 4 ||
+											off > Light.CONE_HALF_ANGLE - 0.02);
+									if (!rim)
+										return `aim ${aim}: dark at (${wx - 4000}, ${wy - 4000}), lit for the horde`;
+								}
+							}
+						}
+					}
+					return true;
+				},
+			);
+			{
+				// the cone turns with the aim for 600 frames: the light map creates nothing (LUZ-04, ART-06's rule)
+				const frame = ui.makeInstance("Frame", false);
+				const lm = new LightMap(frame, COLORS.overlayNight);
+				const cam = new Camera();
+				cam.setView(1120, 630);
+				cam.x = 4000;
+				cam.y = 4000;
+				const save = wearing(FLASHLIGHT, -1, 0);
+				lm.update(cam, 0.85, clientLights(save, 4000, 4000, 0));
+				const turning = ui.measure(() => {
+					for (let f = 0; f < 600; f++) {
+						const aim = f * 0.05;
+						lm.setColor(f % 200 < 100 ? COLORS.overlayNight : COLORS.overlayNightVision);
+						lm.update(cam, 0.85, clientLights(save, 4000 + f * 0.3, 4000, aim));
+					}
+				});
+				checkEq(
+					turning.created,
+					0,
+					"600 frames of a turning flashlight (and night vision on and off): 0 Instances created",
+				);
+			}
+
+			// ---- E2 (fixed 2026-09-23): night vision brightens the wearer's night
+			check(
+				Light.wearsNightVision(wearing(-1, NIGHT_VISION, 0)) &&
+					!Light.wearsNightVision(wearing(FLASHLIGHT, -1, 0)),
+				"night vision is known by its data row (EQUIP_LIGHTS sight), in the gun slot",
+			);
+			check(
+				/SurvivorLight\.wearsNightVision\(save\)/.test(body) &&
+					/setColor\(nightVision \? COLORS\.overlayNightVision : COLORS\.overlayNight\)/.test(body) &&
+					/darkAlpha \* \(nightVision \? SurvivorLight\.NIGHT_VISION_DARK : 1\)/.test(body),
+				`and on the wearer's screen the night is ${(1 - Light.NIGHT_VISION_DARK) * 100} % lighter, in phosphor green (gameLoop drawLight)`,
 			);
 		}
 		{
-			// a gadget is worth its slot only if some code reads it: search every system for its id
-			const readers = id => {
-				const hits = [];
-				for (const rel of [
-					"client/gameLoop.ts",
-					"client/main.client.ts",
-					"client/systems/daynight.ts",
-					"client/systems/combat.ts",
-					"server/sim/combat.ts",
-					"shared/sim/ai/zombieBrain.ts",
-					"shared/game/player.ts",
-				]) {
-					const src = source(rel);
-					if (
-						new RegExp(`equip(Hand|Gun|Cloth)\\s*===\\s*${id}\\b`).test(src) ||
-						src.includes(`"${EQUIPS[id].name}"`)
-					)
-						hits.push(rel);
-				}
-				if (id === 7 || id === 12) hits.push("server/sim/combat.ts (LASER_SIGHT_ID / SILENCER_ID)");
-				return hits;
+			// ---- E2 (fixed 2026-09-23): the compass and the GPS show the way on the HUD (client/ui/hudNav.ts)
+			const Nav = require(join(SRC, "client/ui/hudNav.ts"));
+			const deep = (inst, name) => inst.GetDescendants().find(c => c.Name === name);
+			const root = ui.makeInstance("Frame", false);
+			const nav = new Nav.HudNav(root, k => k, 1);
+			const world = W.createWorld(8000, 8000);
+			const holding = hand => {
+				const s = bareSave();
+				s.equipHand = hand;
+				if (hand >= 0) s.invenEquip[hand] = 1;
+				return s;
 			};
-			const dead = [NIGHT_VISION, COMPASS, GPS].filter(id => readers(id).length === 0);
-			knownBug(
-				"E2",
-				dead.length > 0,
-				"gadgets that nothing reads: equipping them changes nothing anywhere (P3)",
-				dead.map(id => EQUIPS[id].name).join(", "),
+			let t = 0;
+			const tick = (save, x = 4000, y = 4000) => {
+				t += 1.1;
+				nav.update(world, x, y, save, t);
+			};
+			tick(holding(-1));
+			check(!nav.compass.Visible && !nav.map.Visible, "nothing that shows the way in hand: no plate");
+			tick(holding(COMPASS));
+			check(nav.compass.Visible && !nav.map.Visible, "the Compass in hand: the compass plate");
+			const needle = deep(nav.compass, "Needle");
+			const title = deep(nav.compass, "Target");
+			const dist = deep(nav.compass, "Distance");
+			check(
+				Math.abs(needle.Rotation) < 1e-6 && title.Text === "North" && dist.Text === "No camp yet",
+				"no camp in town: a plain compass, the needle on north",
+				`${needle.Rotation}° "${title.Text}" "${dist.Text}"`,
+			);
+			// a campfire 1100 u east and 1100 u south: the needle turns to 135° (clockwise from north), 28 m away
+			station(world, "campfire", 4000 + 1100 - 40 - 48, 4000 + 1100 + 30 - 32);
+			tick(holding(COMPASS));
+			check(
+				Math.abs(needle.Rotation - 135) < 1 && title.Text === "Camp" && dist.Text === "28 m",
+				"a campfire standing south-east: the needle points at it, and says how far (1 m = 55 u)",
+				`${needle.Rotation.toFixed(1)}° "${title.Text}" "${dist.Text}"`,
+			);
+			tick(holding(GPS));
+			check(nav.map.Visible && !nav.compass.Visible, "the GPS machine in hand: the map plate instead");
+			const campMark = deep(nav.map, "Camp");
+			const u = campMark.Position.X.Scale + campMark.Size.X.Scale / 2;
+			const v = campMark.Position.Y.Scale + campMark.Size.Y.Scale / 2;
+			check(
+				campMark.Visible &&
+					near(u, 0.5 + 1100 / (2 * Nav.MAP_RANGE), 0.01) &&
+					near(v, 0.5 + 1100 / (2 * Nav.MAP_RANGE), 0.01),
+				"the map marks the camp where it stands (north up, the survivor in the middle)",
+				`at ${u.toFixed(3)}, ${v.toFixed(3)}`,
+			);
+			// a block of the town on the map: a building record 400 u north-west of the survivor
+			W.addSolid(world, {
+				kind: "building",
+				x: 3500,
+				y: 3500,
+				w: 300,
+				h: 200,
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "house",
+				passable: true,
+			});
+			const draws = ui.measure(() => {
+				for (let f = 0; f < 600; f++) tick(holding(f % 300 < 150 ? GPS : COMPASS), 4000 + f, 4000 - f * 0.5);
+			});
+			tick(holding(GPS));
+			const blocks = deep(nav.map, "Map")
+				.GetChildren()
+				.filter(c => c.Name === "Block" && c.Visible);
+			check(
+				blocks.length >= 1,
+				"the buildings round the survivor are drawn on the map",
+				`${blocks.length} block(s)`,
+			);
+			checkEq(
+				draws.created,
+				0,
+				"600 frames of the compass and the GPS (walking, switching): 0 Instances created",
+			);
+			check(
+				/hud\.updateNav\(refs\.world, p\.x, p\.y, save\)/.test(source("client/main.client.ts")) &&
+					/this\.nav = new HudNav\(root, tr, k\)/.test(source("client/ui/hud.ts")),
+				"the HUD mounts the plate and feeds it every frame of a run (main.client pushHud)",
 			);
 		}
 	},
@@ -1360,43 +1606,158 @@ section('C3. the Bag says Eat for food and Use for medicine, and "None left" at 
 	});
 });
 
-section("C4. cooking: what the card and the How to play promise (Núcleo 1: raw meat → cooked, CON-03)", () => {
+section("C4. cooking: every raw food at a fire, as the card and How to play promise (fixed QA C1, 2026-09-23)", () => {
 	const raw = USABLES.filter(u => u.cook >= 0);
-	const card = Info.describeItem(bareSave(), ItemKind.Use, raw[0].id);
-	check(
-		card.stats.some(s => s.label === "Cooks into"),
-		`the ${raw[0].name} card says "Cooks into ${USABLES[raw[0].cook].name}"`,
-	);
-	const tip = source("client/ui/tutorial.ts").includes("cooks what you find");
-	// every way a cooked row could come out of a raw one: a recipe taking it, or any code reading `.cook`
-	const cooked = raw.filter(u =>
-		CRAFT_RECIPES.some(
+	check(raw.length === 5, "five raw foods have a `cook` column", raw.map(u => u.name).join(", "));
+	/** THE cooking recipe of a raw usable: one raw in, one cooked out, at a fire */
+	const recipeOf = u =>
+		CRAFT_RECIPES.filter(
 			r =>
+				r.needsCook === true &&
 				r.resultKind === ItemKind.Use &&
 				r.resultIndex === u.cook &&
-				r.ingredients.some(i => i.kind === ItemKind.Use && i.index === u.id),
-		),
+				r.ingredients.length === 1 &&
+				r.ingredients[0].kind === ItemKind.Use &&
+				r.ingredients[0].index === u.id &&
+				r.ingredients[0].count === 1 &&
+				r.resultCount === 1 &&
+				!r.needsDesk &&
+				!r.needsPro &&
+				r.needsFire !== true,
+		);
+	checkRows("each raw food has exactly one recipe: one raw → one cooked, at a fire", raw, u =>
+		recipeOf(u).length === 1 ? true : `${recipeOf(u).length} recipe(s)`,
 	);
-	const readers = [
-		"client/systems/interaction.ts",
-		"server/sim/interaction.ts",
-		"client/systems/craftSystem.ts",
-		"server/sim/craft.ts",
-		"client/main.client.ts",
-		"client/gameLoop.ts",
-	].filter(rel => /\.cook\b/.test(source(rel)));
-	knownBug(
-		"C1",
-		cooked.length === 0 && readers.length === 0,
-		`nothing cooks: ${raw.length} usables have a "Cooks into" row on their card${tip ? ' and How to play says fire "cooks what you find"' : ""}, but no recipe or code turns raw into cooked`,
-		raw.map(u => `${u.name} → ${USABLES[u.cook].name}`).join(", "),
+	checkRows(
+		"and nothing else is cooked: every cooking recipe is one of those (the data's `cook` column, nothing invented)",
+		CRAFT_RECIPES.filter(r => r.needsCook === true),
+		r => raw.some(u => recipeOf(u)[0] === r) || "not from a `cook` column",
 	);
+	const Rule = require(join(SRC, "shared/sim/craftRule.ts"));
+	/** cook `u` once, next to `kind`, on the client (craftSystem) and on the server (ServerCraft) */
+	const cookBoth = (u, kind, skills = {}) => {
+		const r = recipeOf(u)[0];
+		const out = {};
+		for (const side of ["client", "server"]) {
+			const save = stocked(r);
+			for (const [id, lv] of Object.entries(skills)) save.skillLevels[Number(id)] = lv;
+			if (side === "client") {
+				const refs = craftRefs(save, kind);
+				out.client = CCraft.craft(refs, r.id) ? INV.countItem(save, ItemKind.Use, u.cook) : -1;
+			} else {
+				const world = W.createWorld(4000, 4000);
+				if (kind !== undefined) station(world, kind, 1000, 1000);
+				const c = new SCRAFT.ServerCraft({ world, build: { placing: () => false, hold: () => {} } });
+				const res = c.craft(0, Ply.createPlayer(save, 1000, 1000), save, r.id);
+				out.server = res.kind === "crafted" ? INV.countItem(save, ItemKind.Use, u.cook) : -1;
+				out.outcome = res;
+			}
+		}
+		return out;
+	};
+	for (const [kind, what] of [
+		["campfire", "a lit campfire"],
+		["fire", "a lit brazier (it is a fire: it cooks as well as smelts)"],
+		["cooker", "a working cooker (the power stage's hook: `powered`)"],
+	]) {
+		checkRows(`cooks next to ${what}, on the client and on the server`, raw, u => {
+			const o = cookBoth(u, kind);
+			return (o.client === 1 && o.server === 1) || `client ${o.client}, server ${o.server}`;
+		});
+	}
+	for (const [kind, what] of [
+		[undefined, "with no fire near"],
+		["coldcampfire", "next to a campfire gone out"],
+		["cold", "next to a cold brazier"],
+		["coldcooker", "next to a cooker with no power"],
+		["desk", "at a craft desk"],
+		["furnace", "at the electric furnace (it smelts; it is not a stove)"],
+	]) {
+		checkRows(`refused ${what}, on both sides, and the raw food kept`, raw, u => {
+			const o = cookBoth(u, kind);
+			return (o.client === -1 && o.server === -1) || `client ${o.client}, server ${o.server}`;
+		});
+	}
+	{
+		// the server's outcome names the heat: the event the Chef and Blacksmith achievements count
+		const o = cookBoth(raw[0], "campfire");
+		check(
+			o.outcome.kind === "crafted" && o.outcome.heat === "cook" && o.outcome.count === 1,
+			'the server says what happened: { kind: "crafted", heat: "cook", count } (the Chef achievement\'s event)',
+			JSON.stringify(o.outcome),
+		);
+		const smelt = CRAFT_RECIPES.find(r => r.needsFire === true);
+		const world = W.createWorld(4000, 4000);
+		station(world, "fire", 1000, 1000);
+		const save = stocked(smelt);
+		const res = new SCRAFT.ServerCraft({ world, build: { placing: () => false, hold: () => {} } }).craft(
+			0,
+			Ply.createPlayer(save, 1000, 1000),
+			save,
+			smelt.id,
+		);
+		check(res.heat === "smelt", 'and a smelting says heat: "smelt" (the Blacksmith\'s)', JSON.stringify(res));
+		check(Rule.craftHeat(CRAFT_RECIPES[0]) === undefined, "a plain craft carries no heat");
+	}
+	{
+		// Chef (skill 11): cooking now and then yields double -- 15 % at level 1, 30 % at level 2 (item_cook), on
+		// the client's prediction and on the server, by the one shared rule (craftRule.craftYield)
+		for (const lv of [0, 1, 2]) {
+			const N = 2000;
+			let clientDoubles = 0;
+			let serverDoubles = 0;
+			setSeed(200 + lv);
+			for (let i = 0; i < N; i++) if (cookBoth(raw[0], "campfire", { 11: lv }).client === 2) clientDoubles++;
+			setSeed(300 + lv);
+			for (let i = 0; i < N; i++) if (cookBoth(raw[0], "campfire", { 11: lv }).server === 2) serverDoubles++;
+			const want = [0, 0.15, 0.3][lv];
+			check(
+				near(clientDoubles / N, want, 0.03) && near(serverDoubles / N, want, 0.03),
+				`Chef ${lv}: ${(want * 100).toFixed(0)} % of cookings come out double (client and server)`,
+				`client ${((clientDoubles / N) * 100).toFixed(1)} %, server ${((serverDoubles / N) * 100).toFixed(1)} %`,
+			);
+		}
+	}
+	{
+		// what the player reads agrees with it: the card, How to play and the Bag's Craft tab
+		checkRows('the card says "Cooks into <cooked>" and where to cook it', raw, u => {
+			const card = Info.describeItem(bareSave(), ItemKind.Use, u.id);
+			const row = card.stats.find(s => s.label === "Cooks into");
+			if (row === undefined || row.value !== USABLES[u.cook].name) return `row ${row?.value}`;
+			return card.notes.includes("Cook it at a lit fire, from the Craft tab.") || `notes "${card.notes}"`;
+		});
+		check(
+			source("client/ui/tutorial.ts").includes("cooks what you find") &&
+				inLang("Fire lights the night and cooks what you find. Build one when you can."),
+			'How to play and the coach say a fire "cooks what you find" -- now true',
+		);
+		checkRows('the Bag lists each cooking recipe; away from a fire: "Need fire", next to one: Craft', raw, u => {
+			const r = recipeOf(u)[0];
+			const save = stocked(r);
+			const bag = bagFor(save);
+			const [away] = bag.recipePanel(r);
+			if (away.action.text !== "Need fire" || away.action.enabled) return `away: "${away.action.text}"`;
+			if (away.station.text !== "Need a lit fire") return `station "${away.station.text}"`;
+			bag.nearbyCook = true;
+			const [near] = bag.recipePanel(r);
+			if (near.action.text !== "Craft" || !near.action.enabled) return `near: "${near.action.text}"`;
+			return near.station.text === "Lit fire nearby" || `station "${near.station.text}"`;
+		});
+		// the Bag's flags come from the same rule: main.client refreshDeskFlags asks stationNear(refs, "cook")
+		check(
+			/pack\.nearbyCook = stationNear\(refs, "cook"\) !== undefined/.test(source("client/main.client.ts")),
+			'the Bag learns "a fire is near" from the shared rule (main.client refreshDeskFlags)',
+		);
+	}
 });
 
 // ================================================================ D. crafting
 
 const INV_FIELD = { 1: "invenWeapon", 2: "invenEquip", 3: "invenUse", 4: "invenEtc" };
-/** a station of `kind` ("desk", "pro", "fire", "furnace", "cold", "campfire") next to (x, y) */
+/**
+ * A station of `kind` next to (x, y): "desk", "pro", "fire" (a lit brazier), "cold" (an unlit brazier), "furnace",
+ * "campfire" (lit), "coldcampfire" (out), "cooker" (working: powered) and "coldcooker" (no power).
+ */
 function station(world, kind, x, y) {
 	const tags = {
 		desk: "craftdesk",
@@ -1405,7 +1766,11 @@ function station(world, kind, x, y) {
 		cold: "brazier",
 		furnace: "furnace",
 		campfire: "campfire",
+		coldcampfire: "campfire",
+		cooker: "cooker",
+		coldcooker: "cooker",
 	}[kind];
+	const lit = { fire: true, campfire: true, cooker: true, cold: false, coldcampfire: false, coldcooker: false };
 	return W.addSolid(world, {
 		kind: "structure",
 		x: x + 40,
@@ -1416,11 +1781,23 @@ function station(world, kind, x, y) {
 		hpMax: 200,
 		destructible: true,
 		tags,
-		powered: kind === "fire" || kind === "campfire" ? true : kind === "cold" ? false : undefined,
+		powered: lit[kind],
 	});
 }
-/** the one station a recipe asks for, or undefined for a hand recipe */
-const stationOf = r => (r.needsPro ? "pro" : r.needsDesk ? "desk" : r.needsFire === true ? "fire" : undefined);
+/** the one station a recipe asks for (cooking: a lit campfire; smelting: a lit brazier), or undefined for a hand recipe */
+const stationOf = r =>
+	r.needsPro
+		? "pro"
+		: r.needsDesk
+			? "desk"
+			: r.needsCook === true
+				? "campfire"
+				: r.needsFire === true
+					? "fire"
+					: undefined;
+/** a station of the WRONG kind for a recipe that needs one: a plain desk for a pro desk, a fire gone out, a campfire to smelt */
+const wrongStationOf = r =>
+	r.needsPro ? "desk" : r.needsCook === true ? "coldcampfire" : r.needsFire === true ? "campfire" : undefined;
 /** a save holding exactly `times` × the recipe's ingredients and nothing else of them */
 function stocked(r, times = 1) {
 	const s = bareSave();
@@ -1463,9 +1840,11 @@ section("D1. every recipe is coherent: real ingredients, a real result, and a pl
 		p => CRAFT_RECIPES.some(r => r.craftKind === 1 && r.resultIndex === p.id) || "no recipe builds it",
 	);
 	checkRows(
-		"a recipe asks for one station at most (hand, desk, pro desk or fire)",
+		"a recipe asks for one station at most (hand, desk, pro desk, fire to cook or brazier to smelt)",
 		CRAFT_RECIPES,
-		r => [r.needsDesk, r.needsPro, r.needsFire === true].filter(Boolean).length <= 1 || "two stations",
+		r =>
+			[r.needsDesk, r.needsPro, r.needsFire === true, r.needsCook === true].filter(Boolean).length <= 1 ||
+			"two stations",
 	);
 });
 
@@ -1485,12 +1864,12 @@ section(
 			},
 		);
 		checkRows(
-			"with a station of the WRONG kind it is refused too (a desk is not a pro desk, an unlit brazier no fire)",
-			CRAFT_RECIPES.filter(r => r.needsPro || r.needsFire === true),
+			"with a station of the WRONG kind it is refused too (a desk is not a pro desk, a fire gone out cooks nothing, a campfire smelts nothing)",
+			CRAFT_RECIPES.filter(r => wrongStationOf(r) !== undefined),
 			r => {
 				const save = stocked(r);
-				const refs = craftRefs(save, r.needsPro ? "desk" : "cold");
-				return !CCraft.craft(refs, r.id) || `crafted next to a ${r.needsPro ? "plain desk" : "cold brazier"}`;
+				const refs = craftRefs(save, wrongStationOf(r));
+				return !CCraft.craft(refs, r.id) || `crafted next to a ${wrongStationOf(r)}`;
 			},
 		);
 		checkRows("without its ingredients it is refused and nothing is spent", CRAFT_RECIPES, r => {
@@ -1651,7 +2030,9 @@ section(
 			"a recipe id that does not exist is refused",
 		);
 		{
-			// "near a desk": the client (and so the Bag's Craft button) measures the box distance, the server the true one
+			// "near a desk" (fixed QA D2): ONE rule for the Bag and the server (shared/sim/craftRule.ts), the TRUE distance
+			// to the station's rectangle. It used to be a box on the client, so 150 u off a corner on both axes (212 u)
+			// the Bag offered a craft the server refused.
 			const world = W.createWorld(4000, 4000);
 			W.addSolid(world, {
 				kind: "structure",
@@ -1664,16 +2045,25 @@ section(
 				destructible: true,
 				tags: "craftdesk",
 			});
-			const x = 1000 + 96 + 150;
-			const y = 1000 + 64 + 150; // 150 u off the corner on both axes: 212 u away
-			const clientNear = CCraft.stationNear({ world, player: { x, y } }, "desk") !== undefined;
-			const serverNear = SCRAFT.stationNear(world, x, y, "desk") !== undefined;
-			knownBug(
-				"D2",
-				clientNear && !serverNear,
-				'client and server disagree on "near a desk" off a corner (box vs true distance): from F3 the Bag would offer a craft the server refuses',
-				`client ${clientNear}, server ${serverNear} at 212 u`,
+			const both = (x, y) => [
+				CCraft.stationNear({ world, player: { x, y } }, "desk") !== undefined,
+				SCRAFT.stationNear(world, x, y, "desk") !== undefined,
+			];
+			const corner = both(1000 + 96 + 150, 1000 + 64 + 150);
+			check(
+				!corner[0] && !corner[1],
+				'"near a desk" is the true distance on both sides: 150 u off a corner on both axes (212 u) is too far for the Bag AND the server',
+				`client ${corner[0]}, server ${corner[1]}`,
 			);
+			const edge = both(1000 + 96 + 175, 1032);
+			check(edge[0] && edge[1], "175 u straight off an edge is near on both sides", `${edge}`);
+			let disagree = 0;
+			for (let i = 0; i < 45; i++)
+				for (let j = 0; j < 45; j++) {
+					const [c, s] = both(1048 - 450 + i * 20 + 3, 1032 - 450 + j * 20 + 7);
+					if (c !== s) disagree++;
+				}
+			checkEq(disagree, 0, "2025 spots on a 20 u grid round a desk: the Bag and the server never disagree");
 		}
 	},
 );
@@ -1687,6 +2077,7 @@ section(
 			bag.nearbyDesk = true;
 			bag.nearbyPro = true;
 			bag.nearbyFire = true;
+			bag.nearbyCook = true;
 			const [m] = bag.recipePanel(r);
 			if (m.state !== `MAKES ×${r.resultCount}`) return `"${m.state}"`;
 			for (let k = 0; k < r.ingredients.length; k++) {
@@ -1703,7 +2094,14 @@ section(
 			r => {
 				const bag = bagFor(stocked(r));
 				const [m] = bag.recipePanel(r);
-				const want = r.needsFire === true ? "Need fire" : r.needsPro ? "Need pro desk" : "Need craft desk";
+				const want =
+					r.needsCook === true
+						? "Need fire"
+						: r.needsFire === true
+							? "Need brazier"
+							: r.needsPro
+								? "Need pro desk"
+								: "Need craft desk";
 				return (
 					(m.action.text === want && !m.action.enabled) || `"${m.action.text}" enabled ${m.action.enabled}`
 				);
@@ -1935,7 +2333,7 @@ section("D7. what each build does once it stands, and whether the content stage 
 		if (IQ.isLight(solid)) return "E lights it";
 		const w = W.createWorld(3000, 3000);
 		W.addSolid(w, solid);
-		for (const st of ["desk", "pro", "fire"])
+		for (const st of ["desk", "pro", "fire", "cook"])
 			if (SCRAFT.stationNear(w, 1000 + def.w / 2, 1000 + def.h / 2, st) !== undefined) return `a ${st} station`;
 		if (["barricade", "door", "iron_barricade", "iron_door"].includes(def.kind)) return "it blocks the way";
 		if (new RegExp(`"${def.tag}"`).test(horde)) return "the horde reacts to it";
@@ -1944,13 +2342,16 @@ section("D7. what each build does once it stands, and whether the content stage 
 	const builds = Object.keys(PLACEABLES).map(Number);
 	for (const id of builds) info(`${ETC_ITEMS[id].name}: ${does(id) ?? "nothing"}`);
 	const idle = builds.filter(id => does(id) === undefined);
+	// the powered and placed builds (turrets, drones, battery, generators, signal generator, cooker, vehicles) are the
+	// power stage's front: reported here until it lands. The cooker's hook is in place (craftRule isWorkingCooker)
 	knownBug(
 		"P1",
 		idle.length > 0,
 		"builds that cost a recipe and do nothing once placed (the turrets fire only in the pre-F2 client path; nothing reads generators, vehicles, the cooker or the signal generator; a lamp drone cannot be switched on)",
 		idle.map(id => ETC_ITEMS[id].name).join(", "),
 	);
-	// CON-03: "Receita e pacote de loja se ligam sozinhos ... e a trava vale no servidor" -- is anything outside Núcleo 1 off?
+	// CON-03, as the owner decided it on 2026-09-23 ("Faz todos os itens, equipamentos, consumíveis, receitas e skills
+	// funcionarem"): no content lock hides anything -- every recipe of the data is live on both sides
 	const hmg = CRAFT_RECIPES.find(
 		r => r.resultKind === ItemKind.Weapon && WEAPONS[r.resultIndex].name === "Heavy machine gun",
 	);
@@ -1966,10 +2367,9 @@ section("D7. what each build does once it stands, and whether the content stage 
 			save2,
 			hmg.id,
 		).kind === "crafted";
-	knownBug(
-		"CON-3",
+	check(
 		onClient && onServer,
-		"CON-03's content stage is not implemented: nothing outside Núcleo 1 is switched off (a Heavy machine gun crafts on the client and on the server; every pack and recipe is live)",
+		"CON-03 (owner, 2026-09-23): nothing in the data is hidden -- a Heavy machine gun crafts on the client and on the server, as every recipe does (D2, D3)",
 	);
 });
 
@@ -2192,6 +2592,69 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			`${drain(bareSave()).toFixed(2)} -> ${drain(withSkill(8, lv)).toFixed(2)}`
 		);
 	};
+	// 10 Thief: searching a building finds one more slot of its table, for the searcher alone (shared/sim/loot.ts),
+	// on the client's MP_PHASE 2 search and on the server's; the building's own (shared) loot is untouched
+	effect[10] = () => {
+		const { ServerItems } = require(join(SRC, "server/sim/items.ts"));
+		const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const house = world2 =>
+			W.addSolid(world2, {
+				kind: "building",
+				x: 1000,
+				y: 1000,
+				w: 400,
+				h: 400,
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "house",
+				buildingType: BuildingType.Market,
+				passable: true,
+				lootSlots: 3,
+				// one line of the table, as if rolled: what everyone would find
+				lootItems: [{ kind: 3, id: 9, count: 1 }],
+				lootTimer: 0,
+			});
+		/** every unit in the backpack's usable and material counters (the market's table gives nothing else) */
+		const units = save => save.invenUse.reduce((a, b) => a + b, 0) + save.invenEtc.reduce((a, b) => a + b, 0);
+		const N = 400;
+		const per = { server: [0, 0], client: [0, 0] };
+		for (const thief of [0, 1]) {
+			setSeed(500 + thief);
+			for (let i = 0; i < N; i++) {
+				const world2 = W.serverWorld(W.createWorld(3000, 3000));
+				house(world2);
+				const s = withSkill(10, thief);
+				const s0 = units(s);
+				new ServerItems({ world: world2, out: new WorldOut() }).search(s, 1200, 1200, 0);
+				per.server[thief] += units(s) - s0;
+				const world3 = W.createWorld(3000, 3000);
+				house(world3);
+				const c = withSkill(10, thief);
+				const c0 = units(c);
+				const player = Ply.createPlayer(c, 1200, 1200);
+				new CInter.Interaction().tryInteract({
+					world: world3,
+					players: [player],
+					player,
+					save: c,
+					zombies: [],
+					pendingPlace: -1,
+					fx: [],
+					daynight: { day: 1, dayTime: 12 },
+				});
+				per.client[thief] += units(c) - c0;
+			}
+		}
+		const gain = side => (per[side][1] - per[side][0]) / N;
+		return (
+			(per.server[0] === N && per.client[0] === N && gain("server") > 0.5 && gain("client") > 0.5) ||
+			`items per search: server ${per.server[0] / N} -> ${per.server[1] / N}, client ${per.client[0] / N} -> ${per.client[1] / N}`
+		);
+	};
+	// 11 Chef: measured in C4 (15 % / 30 % double cookings, client and server)
+	effect[11] = () => true;
 	// 12 Dwarf: measured in D2 (15 % / 30 % double smelts)
 	effect[12] = () => true;
 	// 16 Nocturnal: the survivor's own light, 1.5× wider for the horde's visibility (the screen: daynight darkAlpha)
@@ -2331,34 +2794,54 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			"server/sim/items.ts",
 			"shared/sim/playerMove.ts",
 			"shared/sim/ai/zombieBrain.ts",
+			"shared/sim/craftRule.ts",
+			"shared/sim/loot.ts",
+			"shared/sim/survivorLight.ts",
 			"shared/game/player.ts",
 			"client/systems/craftSystem.ts",
 			"client/systems/interaction.ts",
 			"client/systems/daynight.ts",
 		].map(rel => source(rel));
 		const reads = id => running.some(src => new RegExp(`skillLevels\\[${id}\\]|SKILL_[A-Z_]+ = ${id};`).test(src));
+		check(
+			reads(10) && reads(11),
+			"Thief and Chef are read by the code that runs (shared/sim/loot.ts SKILL_THIEF, shared/sim/craftRule.ts SKILL_CHEF; fixed 2026-09-23)",
+		);
 		const dead = SKILLS.filter(k => !reads(k.id));
+		// what is left is the power stage's (turrets and generators): owned by that front, hooks kept
 		knownBug(
 			"K1",
-			dead.length > 0,
-			"skills that cost a point and do nothing in the shipped game (read by no running code)",
+			dead.length > 0 && dead.every(k => k.id === 13 || k.id === 14),
+			"skills that cost a point and do nothing in the shipped game (read by no running code): the turrets' and the generators' (the power stage)",
 			dead.map(k => `${k.name} (${k.detail})`).join("; "),
 		);
 	}
 	{
-		// Health bought mid-life: the body keeps the max hp it was built with until the next body (death, new life)
+		// Health bought mid-life (fixed QA K2): stepPlayer recomputes the bar every step, like the original's hp_max
 		const craft = new SCRAFT.ServerCraft({ world, build: { placing: () => false } });
 		const s = bareSave();
 		s.level = 5;
 		s.skillPoint = 4;
 		const p = Ply.createPlayer(s, 1000, 1000);
+		p.hp = 80;
 		craft.learnSkill(s, 0);
-		for (let i = 0; i < CFG.SIM_HZ; i++) stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
-		knownBug(
-			"K2",
-			p.hpMax === 100,
-			"Health learnt mid-life gives no max hp until the next body (hpMax is set only by createPlayer)",
-			`hpMax ${p.hpMax} after learning Health 1`,
+		stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+		check(
+			p.hpMax === 110 && p.hp < 81,
+			"Health learnt mid-life raises max hp on the very next step (the hp is not topped up: regeneration fills it)",
+			`hpMax ${p.hpMax}, hp ${p.hp.toFixed(2)}`,
+		);
+		craft.learnSkill(s, 0);
+		stepPlayer(world, p, s, P.makeCommand(2, 0, 0, 0, 0, 0), TICK_DT);
+		checkEq(p.hpMax, 120, "and Health 2 makes it 120");
+		// a report that takes the level away (the admin's reset) lowers it, and the hp with it
+		s.skillLevels[0] = 0;
+		p.hp = 119;
+		stepPlayer(world, p, s, P.makeCommand(3, 0, 0, 0, 0, 0), TICK_DT);
+		check(
+			p.hpMax === 100 && p.hp <= 100,
+			"and a skill taken away lowers the bar and clips the hp",
+			`${p.hp}/${p.hpMax}`,
 		);
 	}
 });
@@ -2542,29 +3025,141 @@ section("F3. rolled loot comes from the table, in its ranges, and lands in the b
 	);
 });
 
-section("F4. trees, cars and bins drop the same things on the client and on the server", () => {
-	const tables = rel => {
-		const src = source(rel);
-		const out = {};
-		for (const m of src.matchAll(/const (TREE|CAR|TRASH)_LOOT[^=]*=\s*\[([\s\S]*?)\];/g)) {
-			out[m[1]] = [...m[2].matchAll(/kind: (\d), index: (\d+), amount: ([\d.]+)/g)]
-				.map(x => `${nameOf(Number(x[1]), Number(x[2]))} ${x[3]}`)
-				.sort();
+section(
+	"F4. trees, cars and bins drop the same things on the client and on the server (fixed QA L1, 2026-09-23)",
+	() => {
+		const { MAP_ITEM_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+		const LOOT = require(join(SRC, "shared/sim/loot.ts"));
+		// ONE table (shared/data/spawns.ts MAP_ITEM_LOOT) and ONE roll (shared/sim/loot.ts): neither side keeps a copy
+		for (const rel of ["client/systems/interaction.ts", "server/sim/items.ts"]) {
+			const src = source(rel);
+			check(
+				!/(TREE|CAR|TRASH)_LOOT/.test(src) && /rollMapItemDrop\(/.test(src) && /rollBuildingLoot\(/.test(src),
+				`${rel} keeps no loot table of its own: it rolls the shared ones`,
+			);
 		}
-		return out;
-	};
-	const client = tables("client/systems/interaction.ts");
-	const server = tables("server/sim/items.ts");
-	const differ = ["TREE", "CAR", "TRASH"].filter(k => JSON.stringify(client[k]) !== JSON.stringify(server[k]));
-	check(
-		Object.keys(client).length === 3 && Object.keys(server).length === 3,
-		"both sides have the three map-item tables",
+		check(
+			Object.keys(MAP_ITEM_LOOT).join() === "tree,car,trash",
+			"the three map items have one table each",
+			Object.keys(MAP_ITEM_LOOT).join(),
+		);
+		const all = [...MAP_ITEM_LOOT.tree, ...MAP_ITEM_LOOT.car, ...MAP_ITEM_LOOT.trash];
+		check(
+			!all.some(e => e.kind === ItemKind.Etc && (e.index === 26 || e.index === 28)),
+			"Steel and Gold never drop from a map item: they are only ever smelted (crafts.ts)",
+		);
+		check(
+			MAP_ITEM_LOOT.tree.every(e => (e.kind === ItemKind.Etc && e.index === 23) || e.kind === ItemKind.Use),
+			"a tree gives wood and fruit, nothing else (P1: a blueprint does not grow on a tree)",
+		);
+		// the same seed gives the same drops on both sides, hit after hit
+		const { ServerItems } = require(join(SRC, "server/sim/items.ts"));
+		const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const kinds = [
+			{ name: "tree", kind: "tree", tags: "tree" },
+			{ name: "car", kind: "structure", tags: "car" },
+			{ name: "bin", kind: "structure", tags: "trash" },
+		];
+		checkRows(
+			"300 hits on the same seed: the client's MP_PHASE 2 drops and the server's are the same, one by one",
+			kinds,
+			k => {
+				const drops = side => {
+					setSeed(77);
+					const world =
+						side === "server" ? W.serverWorld(W.createWorld(4000, 4000)) : W.createWorld(4000, 4000);
+					const out = [];
+					for (let i = 0; i < 300; i++) {
+						const s = W.addSolid(world, {
+							kind: k.kind,
+							x: 1000 + (i % 20) * 120,
+							y: 1000 + Math.floor(i / 20) * 120,
+							w: 60,
+							h: 60,
+							hp: 1,
+							hpMax: 1,
+							destructible: false,
+							tags: k.tags,
+						});
+						const before = world.items.length;
+						if (side === "server")
+							new ServerItems({ world, out: new WorldOut() }).hitMapItem(s, false, s.x - 30, s.y);
+						else
+							CInter.hitMapItem({ world, player: { x: s.x - 30, y: s.y } }, s, false, {
+								x: s.x - 30,
+								y: s.y,
+							});
+						const it = world.items[before];
+						out.push(it === undefined ? "-" : `${it.kind}:${it.itemId}x${it.count}`);
+					}
+					return out;
+				};
+				const c = drops("client");
+				const s = drops("server");
+				const first = c.findIndex((d, i) => d !== s[i]);
+				return first < 0 || `hit ${first}: client ${c[first]}, server ${s[first]}`;
+			},
+		);
+		check(typeof LOOT.rollMapItemDrop === "function", "shared/sim/loot.ts exports the roll both sides use");
+	},
+);
+
+// ================================================================ F5. every row: a way in, and a use
+
+section("F5. every row of the data can be had in play, and every material is used (row audit, 2026-09-23)", () => {
+	const sources = itemSources();
+	const has = (kind, id) =>
+		sources.some(s => s.kind === kind && s.index === id) || (kind === ItemKind.Weapon && id === 0);
+	const rows = [
+		...WEAPONS.map(w => ({ ...w, kind: ItemKind.Weapon, name: w.name })),
+		...EQUIPS.map(e => ({ id: e.id, kind: ItemKind.Equip, name: e.name })),
+		...USABLES.map(u => ({ id: u.id, kind: ItemKind.Use, name: u.name })),
+		...ETC_ITEMS.map(e => ({ id: e.id, kind: ItemKind.Etc, name: e.name })),
+	];
+	// the Flamethrower and the Plastic armor had none: they are the original's boss trophies (BOSS_TROPHIES)
+	checkRows(
+		"every weapon, equipment, usable and material has a source (loot, map, boss, zombie, recipe, pack, costume)",
+		rows,
+		r => has(r.kind, r.id) || "no source in play",
 	);
-	knownBug(
-		"L1",
-		differ.length > 0,
-		"the map-item loot the client rolls today (MP_PHASE 2) is not the table the server will roll at F3: switching phases silently changes what trees, cars and bins give (the server's car even drops Steel, which crafts.ts says never drops)",
-		differ.map(k => `${k}: client [${client[k].join(", ")}] vs server [${server[k].join(", ")}]`).join(" | "),
+	// the materials: not a build (PLACEABLES, the night desks included), not ammunition or fuel (44..48)
+	const MATERIALS = ETC_ITEMS.filter(e => e.id < 44 && PLACEABLES[e.id] === undefined);
+	checkRows(
+		"every material (wood .. radioactive) is an ingredient of some recipe",
+		MATERIALS,
+		m =>
+			CRAFT_RECIPES.some(r => r.ingredients.some(i => i.kind === ItemKind.Etc && i.index === m.id)) ||
+			"used by nothing",
+	);
+	checkRows(
+		"every usable does something (health, hunger or a timed effect)",
+		USABLES,
+		u => u.hp !== 0 || u.hunger !== 0 || u.speed > 0 || u.calm > 0 || u.pain > 0 || "no effect",
+	);
+	// every piece of equipment is read by what it claims to do: clothing by the damage and the walk (B4), the watches by
+	// the HUD clock, the gun gadgets by the server's combat, the lights by the light rule, the way-finders by the HUD's
+	// nav plate, a cosmetic by the view (MON-04)
+	const { EQUIP_LIGHTS, EQUIP_NAV, EquipSlot: Slot } = require(join(SRC, "shared/data/equips.ts"));
+	const combat = source("server/sim/combat.ts");
+	const readerOf = e => {
+		if (e.kind === Slot.Cloth) return e.def !== 0 || e.speed !== 0 ? "defence/speed" : undefined;
+		if (e.kind === 4)
+			return COSTUMES.some(c => c.equipId === e.id) ||
+				SHOP_PACKS.some(p => p.items.some(i => i.kind === ItemKind.Equip && i.index === e.id))
+				? "cosmetic"
+				: undefined;
+		if (EQUIP_LIGHTS[e.id] !== undefined) return "light";
+		if (EQUIP_NAV[e.id] !== undefined) return "nav";
+		if (source("client/main.client.ts").includes(`"${e.name}"`)) return "clock";
+		if ((e.id === 7 && /LASER_SIGHT_ID = 7/.test(combat)) || (e.id === 12 && /SILENCER_ID = 12/.test(combat)))
+			return "combat";
+		return undefined;
+	};
+	checkRows(
+		"every piece of equipment is read by something (P3: it does what it looks like)",
+		EQUIPS,
+		e => readerOf(e) !== undefined || "read by nothing",
 	);
 });
 

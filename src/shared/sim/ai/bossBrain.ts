@@ -3,7 +3,7 @@ import { angleDiff } from "shared/engine/vec2";
 import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState } from "shared/game/entities";
 import { spawnGroundItem } from "shared/game/world";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
-import { BUILDING_SPAWNS } from "shared/data/spawns";
+import { BOSS_TROPHIES, BUILDING_SPAWNS } from "shared/data/spawns";
 import { SPEED_SCALE } from "shared/sim/types";
 import * as Ctx from "shared/sim/ai/context";
 
@@ -49,6 +49,9 @@ function killBoss(refs: Ctx.AiRefs, b: BossState): void {
 		const r = rndRange(20, 80);
 		spawnGroundItem(refs.world, e.kind, e.index, count, b.x + math.cos(a) * r, b.y + math.sin(a) * r);
 	}
+	// and its trophy, as in the original (shared/data/spawns.ts BOSS_TROPHIES): the one source of the Flamethrower
+	// and the Plastic armor
+	for (const t of BOSS_TROPHIES[b.type] ?? []) spawnGroundItem(refs.world, t.kind, t.index, t.count, b.x, b.y);
 	fanCounters.delete(b.id);
 }
 

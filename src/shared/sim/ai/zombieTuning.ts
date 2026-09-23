@@ -7,6 +7,8 @@
  * from booting. Imported as `import * as T from "shared/sim/ai/zombieTuning"`, the whole table costs one.
  */
 import { SPEED_SCALE } from "shared/sim/types";
+import { EQUIP_LIGHTS } from "shared/data/equips";
+import { FLASHLIGHT_ID, SURVIVOR_LIGHT_R } from "shared/sim/survivorLight";
 
 /** stunned_time 30 frames */
 export const STUN_TIME = 1;
@@ -89,11 +91,12 @@ export const DIRECT_CHASE = 200;
 
 /**
  * Visibility radii at night. They match the renderer's light map (gameLoop PLAYER_LIGHT_R / LIGHT_R) so a
- * zombie is never invisible while standing on lit ground.
+ * zombie is never invisible while standing on lit ground. A survivor's own light (the circle, the torch, night
+ * vision, the flashlight's cone) is shared/sim/survivorLight.ts, the rule the light map reads too (LUZ-04).
  */
-export const PLAYER_LIGHT_R = 250;
+export const PLAYER_LIGHT_R = SURVIVOR_LIGHT_R;
 export const STRUCTURE_LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
-/** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px */
-export const FLASHLIGHT_R = 560;
+/** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px (shared/data/equips.ts EQUIP_LIGHTS) */
+export const FLASHLIGHT_R = EQUIP_LIGHTS[FLASHLIGHT_ID].radius;
 /** how far around a survivor the AI looks for lit structures and shaking solids */
 export const LIGHT_WINDOW = 1400;
