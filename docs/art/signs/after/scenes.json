@@ -1,0 +1,230 @@
+{
+	"sign-school": {
+		"title": "School from its street",
+		"rect": {
+			"x": 4572,
+			"y": 11480,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 74,
+			"images": 35,
+			"flat": 39,
+			"strokes": 18,
+			"corners": 32,
+			"instances": 162
+		}
+	},
+	"sign-hospital": {
+		"title": "Hospital from its street",
+		"rect": {
+			"x": 820,
+			"y": 7312,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 103,
+			"images": 61,
+			"flat": 42,
+			"strokes": 20,
+			"corners": 36,
+			"instances": 223
+		}
+	},
+	"sign-gas": {
+		"title": "Gas station from its street",
+		"rect": {
+			"x": 920,
+			"y": 8912,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 88,
+			"images": 38,
+			"flat": 50,
+			"strokes": 30,
+			"corners": 41,
+			"instances": 200
+		}
+	},
+	"sign-pharmacy": {
+		"title": "Pharmacy from its street",
+		"rect": {
+			"x": 4390,
+			"y": 7432,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 128,
+			"images": 82,
+			"flat": 46,
+			"strokes": 28,
+			"corners": 40,
+			"instances": 281
+		}
+	},
+	"sign-market": {
+		"title": "Market from its street",
+		"rect": {
+			"x": 8478,
+			"y": 7305,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 65,
+			"images": 42,
+			"flat": 23,
+			"strokes": 15,
+			"corners": 16,
+			"instances": 141
+		}
+	},
+	"sign-grocery": {
+		"title": "Small market from its street",
+		"rect": {
+			"x": 11142,
+			"y": 7400,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 110,
+			"images": 65,
+			"flat": 45,
+			"strokes": 24,
+			"corners": 38,
+			"instances": 240
+		}
+	},
+	"sign-guns": {
+		"title": "Gun shop from its street",
+		"rect": {
+			"x": 8358,
+			"y": 9680,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 98,
+			"images": 50,
+			"flat": 48,
+			"strokes": 27,
+			"corners": 39,
+			"instances": 217
+		}
+	},
+	"sign-clothes": {
+		"title": "Clothing store from its street",
+		"rect": {
+			"x": 6358,
+			"y": 7432,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 135,
+			"images": 86,
+			"flat": 49,
+			"strokes": 29,
+			"corners": 42,
+			"instances": 295
+		}
+	},
+	"sign-diner": {
+		"title": "Restaurant from its street",
+		"rect": {
+			"x": 12742,
+			"y": 7297,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 67,
+			"images": 45,
+			"flat": 22,
+			"strokes": 15,
+			"corners": 16,
+			"instances": 146
+		}
+	},
+	"signs-night": {
+		"title": "Pharmacy, 22:00",
+		"rect": {
+			"x": 4390,
+			"y": 7576,
+			"w": 1152,
+			"h": 720
+		},
+		"hour": 22,
+		"scale": 1,
+		"counts": {
+			"sprites": 140,
+			"images": 90,
+			"flat": 50,
+			"strokes": 31,
+			"corners": 43,
+			"instances": 548
+		}
+	},
+	"signs-overview": {
+		"title": "Overview 3000 x 2000, half scale",
+		"rect": {
+			"x": 4400,
+			"y": 7400,
+			"w": 3000,
+			"h": 2000
+		},
+		"hour": 10,
+		"scale": 0.5,
+		"counts": {
+			"sprites": 343,
+			"images": 297,
+			"flat": 46,
+			"strokes": 56,
+			"corners": 21,
+			"instances": 720
+		}
+	},
+	"downtown": {
+		"title": "Commercial crossing",
+		"rect": {
+			"x": 7764,
+			"y": 9854,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 143,
+			"images": 88,
+			"flat": 55,
+			"strokes": 27,
+			"corners": 45,
+			"instances": 306
+		}
+	}
+}
