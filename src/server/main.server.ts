@@ -1,5 +1,7 @@
 import { GAME_NAME } from "shared/module";
 import {
+	bagOf,
+	bagSignature,
 	copySaveInto,
 	defaultSave,
 	enforceSaveInvariants,
@@ -24,9 +26,8 @@ import {
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
-import { INTENT_BURST, INTENT_RATE, MP_PHASE } from "shared/net/mpConfig";
-import { decodeIntentMessage, IntentKind } from "shared/net/protocol";
-import { onIntent } from "./net/remotes";
+import { MP_PHASE } from "shared/net/mpConfig";
+import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
@@ -34,6 +35,7 @@ import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
+import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
@@ -232,43 +234,6 @@ function sessionOfUserId(userId: number): Session | undefined {
 function markDirty(userId: number): void {
 	const s = sessionOfUserId(userId);
 	if (s !== undefined && !s.closed) s.dirty = true;
-}
-
-/**
- * The F3 backpack verbs (craft, use, equip, unequip, learn) on the `Intent` channel (§4.1, §8.1).
- *
- * This is a SECOND listener on the same remote, beside the one server/net/mpHost.ts installs for EnterWorld
- * and LeaveWorld. Roblox fires every connection, and the two decoders are disjoint by packet length, so each
- * handler sees only its own verbs and drops the other's as malformed. It lives here rather than in mpHost
- * because the session layer is what owns "this player's save is now dirty"; when F3's front 3B folds the
- * `Self` channel in, the natural home for both halves is one dispatcher inside mpHost.
- *
- * §8.2's token bucket is enforced here too: mpHost rate-limits presence, not this.
- */
-function startIntentListener(host: MpHost): void {
-	const tokens = new Map<Player, number>();
-	const at = new Map<Player, number>();
-	onIntent(host.remotes, (player, payload) => {
-		const sp = host.playerOf(player);
-		if (sp === undefined) return;
-		const msg = decodeIntentMessage(payload);
-		// EnterWorld / LeaveWorld belong to mpHost's handler; anything malformed belongs to nobody
-		if (msg === undefined || msg.kind === IntentKind.EnterWorld || msg.kind === IntentKind.LeaveWorld) return;
-		const now = os.clock();
-		const last = at.get(player) ?? now;
-		const left = math.min(INTENT_BURST, (tokens.get(player) ?? INTENT_BURST) + (now - last) * INTENT_RATE);
-		at.set(player, now);
-		if (left < 1) {
-			tokens.set(player, left);
-			return;
-		}
-		tokens.set(player, left - 1);
-		host.simulation.queueIntent(sp.slot, msg);
-	});
-	Players.PlayerRemoving.Connect(player => {
-		tokens.delete(player);
-		at.delete(player);
-	});
 }
 
 function resetCredits(s: Session): void {
@@ -848,6 +813,9 @@ function processReport(s: Session, json: string): void {
 	// it is simply stale — pinned to the trusted copy in silence (§9.2 level 0). With those fields frozen
 	// the credit windows below have nothing left to clamp and the coins follow the server's own events.
 	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
+	// NET-5: ...and from WORLD_SERVER_PHASE the backpack too (server/sim/backpack.ts): a report can no longer add an
+	// item, a round, a skill or a pack. The server wrote those itself -- a pickup, a craft, a reload, a delivery
+	if (stripClientBackpack(prev, upd)) s.staleProgressReports += 1;
 	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
 	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
@@ -1088,6 +1056,29 @@ task.spawn(() => {
  */
 const WALLET_PUSH_S = 0.25;
 const pushedWallet = new Map<Player, string>();
+/** the bag each player was last sent (server/sim/backpack.ts owns the backpack from WORLD_SERVER_PHASE) */
+const pushedBag = new Map<Player, string>();
+
+interface BagNow {
+	sig: string;
+	seq: number;
+	place: number;
+	ack: number;
+}
+
+/**
+ * F3 (§4.8): the backpack as the server holds it, with the construction on its cursor, the nonce of the last verb it
+ * answered and the last command it consumed -- or undefined below WORLD_SERVER_PHASE, where the client still owns it.
+ * `sig` is what the push compares: it leaves `seq` out, which moves every tick.
+ */
+function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
+	if (!serverOwnsBackpack() || mpHost === undefined) return undefined;
+	const sp = mpHost.playerOf(player);
+	const sim = mpHost.simulation;
+	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
+	const ack = sim.backpack.ackOf(player.UserId);
+	return { sig: bagSignature(save, place, ack), seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+}
 
 /** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
 function walletSignature(save: PlayerSaveData): string {
@@ -1098,15 +1089,26 @@ function walletSignature(save: PlayerSaveData): string {
 
 function pushWallets(): void {
 	for (const [player] of pushedWallet) {
-		if (!sessions.has(player)) pushedWallet.delete(player);
+		if (!sessions.has(player)) {
+			pushedWallet.delete(player);
+			pushedBag.delete(player);
+		}
 	}
 	for (const [player, s] of sessions) {
 		if (s.closed || !s.loaded) continue;
 		const sig = walletSignature(s.save);
 		const last = pushedWallet.get(player);
 		pushedWallet.set(player, sig);
+		const bag = bagFor(player, s.save);
+		const lastBag = pushedBag.get(player);
+		if (bag !== undefined) pushedBag.set(player, bag.sig);
 		// the first look only takes note: the LoadAck already carried the whole save
-		if (last === undefined || last === sig) continue;
+		const walletMoved = last !== undefined && last !== sig;
+		const bagMoved = bag !== undefined && lastBag !== undefined && lastBag !== bag.sig;
+		if (!walletMoved && !bagMoved) continue;
+		const wallet = walletOf(s.save);
+		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
+		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq);
 		sendSaveAck(s, {
 			ok: true,
 			push: true,
@@ -1114,7 +1116,7 @@ function pushWallets(): void {
 			earnedDays: 0,
 			earnedBosses: 0,
 			clamped: false,
-			wallet: walletOf(s.save),
+			wallet,
 		});
 	}
 }
@@ -1295,7 +1297,22 @@ if (MP_PHASE >= 1) {
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = sp => markDirty(sp.userId);
 	sim.onInteract = sp => markDirty(sp.userId);
-	startIntentListener(mpHost);
+	// the backpack verbs (§4.8, §8.4): rate-limited and flood-counted here, validated and applied by the simulation
+	// (server/sim/backpack.ts); out of the world only a cosmetic slot, on the session's save (the lobby's wardrobe)
+	startBackpackIntents({
+		intent: mpHost.remotes.intent,
+		backpack: sim.backpack,
+		playerOf: player => mpHost?.playerOf(player),
+		queue: (slot, msg) => sim.queueIntent(slot, msg),
+		saveOf: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded && !s.closed ? s.save : undefined;
+		},
+		changed: player => {
+			const s = sessions.get(player);
+			if (s !== undefined && !s.closed) s.dirty = true;
+		},
+	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
 

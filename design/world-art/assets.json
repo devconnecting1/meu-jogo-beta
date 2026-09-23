@@ -69,7 +69,17 @@
 		"pump": "rbxassetid://125264841699354",
 		"acUnit": "rbxassetid://104235250371536",
 		"vent": "rbxassetid://112712506613304",
-		"chimney": "rbxassetid://113951165389471"
+		"chimney": "rbxassetid://113951165389471",
+		"signSchool": "rbxassetid://98558286094610",
+		"signHospital": "rbxassetid://72752078983539",
+		"signGas": "rbxassetid://102981392384732",
+		"signPharmacy": "rbxassetid://103233203209784",
+		"signMarket": "rbxassetid://96888495851566",
+		"signGrocery": "rbxassetid://122210622314467",
+		"signGuns": "rbxassetid://81619965285369",
+		"signClothes": "rbxassetid://99147626160535",
+		"signDiner": "rbxassetid://135810788333250",
+		"helipad": "rbxassetid://103885604953798"
 	},
 	"sha1": {
 		"asphalt": "1fdd11ece41556e020ccd9dce6df52694cf3fc1f",
@@ -139,6 +149,16 @@
 		"pump": "b69064e478ab192d28cecb6b0b86bcff2382c4c1",
 		"acUnit": "3f81c6e430276f4289ff05a5c9d9260729c81b5c",
 		"vent": "45925d5425181a1befac808e24020a550f8c82a4",
-		"chimney": "05152e5da65364d18d57e01c685df4db22530898"
+		"chimney": "05152e5da65364d18d57e01c685df4db22530898",
+		"signSchool": "d58687b17700430d1f31c2810919edac561b7ed3",
+		"signHospital": "b91af83ec947d8c806fbb2a4c6a45fdb3b03ff2c",
+		"signGas": "ca98225f896783292911b224e9b09ced36fb8a44",
+		"signPharmacy": "c1377b0fe3466743b348a7a10f3f658bc8cee9e1",
+		"signMarket": "e3f116bd618796958efb14992df32b87529fe4df",
+		"signGrocery": "0ade3843d3ad29ead9824034f833c6eab19832e2",
+		"signGuns": "6c355fea542937eb775558a03018a4ebeeaccbe3",
+		"signClothes": "20fcd923f4f1ef85f68acbb5258b7ba2505c359f",
+		"signDiner": "a1c70dc6086e97a49e5f4846c6d5de526b7e54b3",
+		"helipad": "641658fdc9d13b390b91888e99b3d1b70b65d64d"
 	}
 }

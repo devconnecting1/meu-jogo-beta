@@ -9,7 +9,9 @@
  * What is true now:
  *   - ONE set of items, with server-issued dynamic ids (§4.5), replicated as ItemAdd/ItemRemove within
  *     ITEM_INTEREST. The mutation hooks live on `WorldData` itself, so a zombie's death drop deep inside
- *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists.
+ *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists. Who was told about
+ *     which item is kept per slot: an item that comes into range later is sent then (`sweepInterest`), and a
+ *     removal reaches every client that was told, however far away it is now (`retract`).
  *   - PICKUP is a request, resolved at the server's position of the survivor, and it is atomic: the world's
  *     `removeGroundItem` is the arbiter, so of two survivors reaching for the same can in the same tick, one
  *     gets a can and the other gets nothing (§8.3 "checar + mutar sem yield no meio"). That is the §11.3 F3
@@ -55,6 +57,12 @@ export const LOOT_SWEEP_S = 0.5;
 export const MAP_ITEM_COOLDOWN = DESIGN.MAP_ITEM_HIT_TIME;
 /** ETC index of wood, the only thing a chopping tool gets out of a tree */
 const WOOD_INDEX = 23;
+/** how often each survivor's item interest is swept for items that came within ITEM_INTEREST (§4.5) */
+export const ITEM_SWEEP_S = 0.5;
+/** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
+export const ITEM_INTEREST_EXIT = ITEM_INTEREST + 300;
+const NO_VIEWERS: ReadonlyArray<{ x: number; y: number }> = [];
+const NO_SLOTS: ReadonlyArray<number> = [];
 
 /** what a `search` found: the building the survivor was inside (if any) and what came out of it */
 export interface SearchResult {
@@ -74,19 +82,28 @@ interface LootEntry {
 	amount: number;
 }
 
+/*
+ * The tables the game has always rolled (client/systems/interaction.ts, the single-player and MP_PHASE ≤ 2 path),
+ * line for line. Until F3 the server kept a different set that nothing ran — trees giving blueprints instead of
+ * fruit, cars giving gold, oil and the Steel that shared/data/crafts.ts says never drops (QA L1). The moment the
+ * server owns the world these ARE what a tree, a car and a bin give, so they must be the ones players know.
+ */
 const TREE_LOOT: Array<LootEntry> = [
 	{ kind: 4, index: 23, amount: 2 },
-	{ kind: 4, index: 29, amount: 0.15 },
+	{ kind: 3, index: 17, amount: 0.1 },
+	{ kind: 3, index: 18, amount: 0.1 },
 ];
 const CAR_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 26, amount: 1 },
-	{ kind: 4, index: 27, amount: 0.3 },
-	{ kind: 4, index: 48, amount: 0.4 },
+	{ kind: 4, index: 25, amount: 1 },
+	{ kind: 4, index: 30, amount: 0.1 },
+	{ kind: 4, index: 36, amount: 0.05 },
 ];
 const TRASH_LOOT: Array<LootEntry> = [
 	{ kind: 4, index: 23, amount: 1 },
-	{ kind: 4, index: 25, amount: 1 },
-	{ kind: 4, index: 30, amount: 0.3 },
+	{ kind: 4, index: 24, amount: 1 },
+	{ kind: 4, index: 25, amount: 0.1 },
+	{ kind: 4, index: 29, amount: 0.1 },
+	{ kind: 4, index: 30, amount: 0.1 },
 ];
 
 function lootTableFor(s: Solid): Array<LootEntry> {
@@ -107,20 +124,124 @@ export class ServerItems {
 	private readonly cooldowns = new Map<Solid, number>();
 	private sweep = 0;
 	private readonly scratch = new Array<Solid>();
+	/**
+	 * Who is watching (§4.5 "Interesse (1800 u)"): the simulation's own body and slot arrays, refreshed in place every
+	 * tick, so an item made anywhere in the tick is announced to whoever is near it NOW.
+	 */
+	private viewers: ReadonlyArray<{ x: number; y: number }> = NO_VIEWERS;
+	private viewerSlots: ReadonlyArray<number> = NO_SLOTS;
+	/**
+	 * Which items each slot's client has been TOLD about and not told to forget. A mirror is only as good as its
+	 * removals: before this an ItemRemove went to whoever was near the item when it went, so a survivor who saw a
+	 * drop and walked on kept a ghost of it for ever once somebody else took it — and a drop made while they were
+	 * across town never appeared when they got there.
+	 */
+	private readonly told = new Map<number, Set<number>>();
+	private interestSweep = 0;
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
 		// §4.5: every ground item that appears or disappears, whoever made it, becomes a delta here
-		this.world.onItemAdd = (w, item) => this.out.queueNear(itemAddOf(item), item.x, item.y, ITEM_INTEREST);
-		this.world.onItemRemove = (w, item) =>
-			this.out.queueNear({ t: WorldEv.ItemRemove, id: item.id }, item.x, item.y, ITEM_INTEREST);
+		this.world.onItemAdd = (w, item) => this.announce(item);
+		this.world.onItemRemove = (w, item) => this.retract(item);
+	}
+
+	/** the bodies (and their slots, in the same order) that see items; the simulation hands its own arrays over */
+	watch(players: ReadonlyArray<{ x: number; y: number }>, slots: ReadonlyArray<number>): void {
+		this.viewers = players;
+		this.viewerSlots = slots;
+	}
+
+	/**
+	 * A survivor entered the world at (x, y), and the welcome (server/net/replication.ts `welcomeWorld`) is handing
+	 * them every item `initFor` finds there: those are told, so the sweep does not send them a second time.
+	 */
+	welcomed(slot: number, x: number, y: number): void {
+		const set = new Set<number>();
+		const r2 = ITEM_INTEREST * ITEM_INTEREST;
+		for (const item of this.world.items) {
+			const dx = item.x - x;
+			const dy = item.y - y;
+			if (dx * dx + dy * dy <= r2) set.add(item.id);
+		}
+		this.told.set(slot, set);
+	}
+
+	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
+	forget(slot: number): void {
+		this.told.delete(slot);
+	}
+
+	/**
+	 * §4.5 at walking pace: an item that came within ITEM_INTEREST of a survivor since they were last told is sent
+	 * now, and one they were told about that is now past ITEM_INTEREST_EXIT is taken off their screen (they will be
+	 * told again when they come back). Twice a second, like the loot sweep: nobody crosses 300 u in half a second.
+	 */
+	sweepInterest(dt: number): void {
+		this.interestSweep -= dt;
+		if (this.interestSweep > 0) return;
+		this.interestSweep = ITEM_SWEEP_S;
+		const inR2 = ITEM_INTEREST * ITEM_INTEREST;
+		const outR2 = ITEM_INTEREST_EXIT * ITEM_INTEREST_EXIT;
+		for (let i = 0; i < this.viewers.size(); i++) {
+			const v = this.viewers[i];
+			const slot = this.viewerSlots[i] ?? i;
+			const set = this.toldOf(slot);
+			for (const item of this.world.items) {
+				const dx = item.x - v.x;
+				const dy = item.y - v.y;
+				const d2 = dx * dx + dy * dy;
+				if (d2 <= inR2 && !set.has(item.id)) {
+					set.add(item.id);
+					this.out.queueFor(slot, itemAddOf(item));
+				} else if (d2 > outR2 && set.has(item.id)) {
+					set.delete(item.id);
+					this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
+				}
+			}
+		}
+	}
+
+	private toldOf(slot: number): Set<number> {
+		let set = this.told.get(slot);
+		if (set === undefined) {
+			set = new Set<number>();
+			this.told.set(slot, set);
+		}
+		return set;
+	}
+
+	/** a new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) */
+	private announce(item: GroundItem): void {
+		const r2 = ITEM_INTEREST * ITEM_INTEREST;
+		let ev: WItemAdd | undefined;
+		for (let i = 0; i < this.viewers.size(); i++) {
+			const v = this.viewers[i];
+			const dx = item.x - v.x;
+			const dy = item.y - v.y;
+			if (dx * dx + dy * dy > r2) continue;
+			const slot = this.viewerSlots[i] ?? i;
+			ev = ev ?? itemAddOf(item);
+			this.toldOf(slot).add(item.id);
+			this.out.queueFor(slot, ev);
+		}
+	}
+
+	/** an item left the world: EVERY client that was told about it is told it is gone, near or not */
+	private retract(item: GroundItem): void {
+		for (const [slot, set] of this.told) {
+			if (!set.has(item.id)) continue;
+			set.delete(item.id);
+			this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
+		}
 	}
 
 	/** stops feeding the outbox (the world outlives the session in tests) */
 	detach(): void {
 		this.world.onItemAdd = undefined;
 		this.world.onItemRemove = undefined;
+		this.told.clear();
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)

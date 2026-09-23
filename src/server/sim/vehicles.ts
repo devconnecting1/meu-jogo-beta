@@ -23,8 +23,9 @@
  * broken vehicle has to be repaired, with steel), the fuel is the rider's own, a parked vehicle bars no door (it is
  * passable), and getting on and off is rate-limited (the solid churns the reliable channel for everybody).
  *
- * No weapons while riding: the simulation hands the combat a disarmed command (`disarmed`), and the attack button
- * is the bell or the horn -- a noise the horde hears, which is a lure as much as a warning.
+ * No weapons while riding: the simulation hands the combat a holstered command (server/sim/simulation.ts
+ * `holstered`, as with a construction on the cursor), and the attack button is the bell or the horn -- a noise the
+ * horde hears, which is a lure as much as a warning.
  *
  * Pure module: no Instances, no services, no os.clock.
  */
@@ -33,9 +34,8 @@ import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, applyPlayerDamage } from "shared/game/player";
 import { ZombieState, zombieRadius } from "shared/game/entities";
 import { Solid, WorldData, addSolid, removeSolid } from "shared/game/world";
-import { hasBits } from "shared/net/codec";
 import { SLOT_NONE } from "shared/net/mpConfig";
-import { EdgeShift, FxEvent, FxType, HeldBit, InputCommand, edgeCount, packEdges } from "shared/net/protocol";
+import { FxEvent, FxType } from "shared/net/protocol";
 import { debrisMaterialId } from "shared/net/fxWire";
 import { interactTarget } from "shared/sim/interactQuery";
 import { PLACEABLES, placedSolid } from "shared/sim/placement";
@@ -485,23 +485,4 @@ export class ServerVehicles {
 /** below BROKEN_RATIO: the crash that got it there ends the ride */
 function vehicleBrokenRec(rec: Ridden): boolean {
 	return rec.hp < rec.hpMax * BROKEN_RATIO;
-}
-
-/**
- * The command the combat sees while its survivor rides (VEI-05): no weapon in the hands, so no attack held, no
- * attack press or release, no reload. The E press stays (it is the vehicle's). The movement and the aim are
- * untouched: the combat's own bookkeeping (spread from moving, the aim) still follows the survivor.
- */
-export function disarmed(cmd: InputCommand): InputCommand {
-	let held = cmd.held;
-	if (hasBits(held, HeldBit.Attack)) held -= HeldBit.Attack;
-	if (hasBits(held, HeldBit.SniperAim)) held -= HeldBit.SniperAim;
-	return {
-		seq: cmd.seq,
-		moveAng: cmd.moveAng,
-		moveMag: cmd.moveMag,
-		aim: cmd.aim,
-		held,
-		edges: packEdges(0, 0, edgeCount(cmd.edges, EdgeShift.ActionPress), 0),
-	};
 }

@@ -103,7 +103,10 @@ export interface ZombieState {
 	rushDir?: number;
 	/** seconds spent in the current rush */
 	rushTime?: number;
+	/** closer than it wants to be: it backs away (keeping its eyes on the target) */
 	backstep?: boolean;
+	/** inside the distance it keeps: it stands its ground, facing the target, until it can charge */
+	holdGround?: boolean;
 	/** charges that found no clear lane in a row; after a few the charger repositions instead */
 	rushFail?: number;
 	// jumper

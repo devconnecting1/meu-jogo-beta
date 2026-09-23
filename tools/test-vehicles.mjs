@@ -331,6 +331,7 @@ const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts")
 const { createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
 const REP = require(join(SRC, "server/net/replication.ts"));
 const { interactTarget } = require(join(SRC, "shared/sim/interactQuery.ts"));
+const ETC_NAME = { 21: "bicycle", 22: "motorcycle" };
 
 const PRESS_E = P.packEdges(0, 0, 1, 0);
 const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
@@ -391,6 +392,59 @@ function drain(sim) {
 }
 
 const vehiclesIn = world => world.solids.filter(s => s.tags === "vehicle");
+
+section(
+	"B0. the vehicle is a server construction: crafted, held on the server's cursor, placed by the attack edge",
+	() => {
+		const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+		const { addItem } = require(join(SRC, "shared/sim/inventory.ts"));
+		const { world, sim } = serverWith();
+		const sp = addPlayer(sim, 0, 2000, 2000);
+		const d = driver(sim, sp);
+		// a craft desk beside them (the bicycle kit needs one)
+		W.addSolid(world, {
+			...placedSolid(PLACEABLES[0], { x: 1900, y: 1850, w: 96, h: 72 }, 0),
+			placeable: 0,
+			owner: 0,
+		});
+		for (const item of [21, 22]) {
+			const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === item);
+			for (const ing of recipe.ingredients) addItem(sp.save, ing.kind, ing.index, ing.count);
+			if (recipe.needsPro)
+				W.addSolid(world, {
+					...placedSolid(PLACEABLES[1], { x: 2100, y: 1850, w: 112, h: 80 }, 0),
+					placeable: 1,
+					owner: 0,
+				});
+			const out = sim.craft.craft(0, sp.state, sp.save, recipe.id);
+			checkEq(out.kind, "holding", `${ETC_NAME[item]}: the craft puts the kit on the SERVER's cursor`);
+
+			d.tick(0, 0, PRESS_ATTACK, 0, 0);
+			const placed = vehiclesIn(world).find(s => s.placeable === item);
+			check(
+				placed !== undefined && placed.owner === 0,
+				`${ETC_NAME[item]}: the attack edge places it, the server's, with its builder`,
+			);
+			check(placed !== undefined && V.isRideable(placed), "...and it can be ridden");
+			// round to it and get on, through the wire
+			sp.state.x = placed.x + placed.w / 2;
+			sp.state.y = placed.y - 30;
+			d.ticks(40);
+			d.tick(0, 0, PRESS_E);
+			check(
+				sim.vehicles.riding(0) && sp.state.ride?.kind === vehicleKindOfItem(item),
+				`E: riding the ${ETC_NAME[item]} that was built`,
+			);
+			d.ticks(40);
+			d.tick(0, 0, PRESS_E);
+			d.ticks(40);
+			// out of the way of the next ghost (a parked vehicle is not built over)
+			for (const s of vehiclesIn(world)) W.removeSolid(world, s);
+			sp.state.x = 2000;
+			sp.state.y = 2000;
+		}
+	},
+);
 
 section("B1. getting on and off: E at the server's position, the solid out of the world and back", () => {
 	const { world, sim, events } = serverWith();
@@ -751,12 +805,16 @@ section("B6. noise: the motorcycle's engine and horn are an event the horde hear
 
 section("B7. no weapon on a vehicle: the combat gets no attack, the button is the horn", () => {
 	const { world, sim, noises } = serverWith({ zombies: true, width: 8000, height: 8000 });
+	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+	const PISTOL = WEAPONS.find(w => w.name === "Pistol").id;
 	const save = fueled(40);
-	save.equipWeapon = 11; // a pistol
+	save.invenWeapon[PISTOL] = 1;
+	save.equipWeapon = PISTOL;
 	save.ammoNormal = 50;
 	const sp = addPlayer(sim, 0, 1000, 1000, save);
-	sp.state.weapon.pointer = 11;
-	sp.state.weapon.ammoCount = 7;
+	sp.state.godMode = true;
+	sp.state.weapon.pointer = PISTOL;
+	sp.state.weapon.ammoCount = WEAPONS[PISTOL].mag;
 	park(world, 21, 1000, 1040);
 	const d = driver(sim, sp);
 	d.tick(0, 0, PRESS_E);
@@ -770,15 +828,16 @@ section("B7. no weapon on a vehicle: the combat gets no attack, the button is th
 		noises.some(n => n.source === "horn" && n.radius === BIKE.hornRadius),
 		"the bell rang instead",
 	);
-	const cmd = P.makeCommand(1, 1, 0, 0, P.HeldBit.Attack, P.packEdges(2, 1, 1, 1));
-	const dis = SV.disarmed(cmd);
+	// the gate is the ride, nothing else: off the bicycle, the same trigger fires
+	d.ticks(30);
+	d.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(0), "off the bicycle");
+	d.ticks(30);
+	for (let i = 0; i < 60; i++) d.tick(0, 0, i % 20 === 0 ? PRESS_ATTACK : 0, P.HeldBit.Attack);
 	check(
-		dis.held === 0 &&
-			P.edgeCount(dis.edges, P.EdgeShift.AttackPress) === 0 &&
-			P.edgeCount(dis.edges, P.EdgeShift.Reload) === 0 &&
-			P.edgeCount(dis.edges, P.EdgeShift.ActionPress) === 1 &&
-			dis.moveMag === cmd.moveMag,
-		"disarmed(): no attack held or pressed, no reload; E and the stick are kept",
+		(sim.combat.statsOf(0).shots ?? 0) > shots,
+		"on foot the same presses shoot",
+		`${sim.combat.statsOf(0).shots} shots`,
 	);
 });
 
