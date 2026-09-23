@@ -83,7 +83,17 @@ export type WorldArtName =
 	| "pump"
 	| "acUnit"
 	| "vent"
-	| "chimney";
+	| "chimney"
+	| "signSchool"
+	| "signHospital"
+	| "signGas"
+	| "signPharmacy"
+	| "signMarket"
+	| "signGrocery"
+	| "signGuns"
+	| "signClothes"
+	| "signDiner"
+	| "helipad";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -222,6 +232,26 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
+	/** sprite: storefront sign (type 3): an open book on a chalkboard */
+	signSchool: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 4): the white H of the hospital road sign, on blue */
+	signHospital: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 5): a fuel pump, its display dark */
+	signGas: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 6): a green cross lightbox */
+	signPharmacy: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 7): a shopping cart */
+	signMarket: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 8): a basket of greens, bread and apples */
+	signGrocery: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 9): a pistol */
+	signGuns: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 10): a T-shirt */
+	signClothes: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 11): fork and knife */
+	signDiner: { id: "", w: 24, h: 16 },
+	/** sprite: hospital roof: the heliport's red H on a white cross */
+	helipad: { id: "", w: 64, h: 64 },
 };
 
 /** every texture of the world art, for the preload pass */
@@ -294,4 +324,14 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
+	"signSchool",
+	"signHospital",
+	"signGas",
+	"signPharmacy",
+	"signMarket",
+	"signGrocery",
+	"signGuns",
+	"signClothes",
+	"signDiner",
+	"helipad",
 ];
