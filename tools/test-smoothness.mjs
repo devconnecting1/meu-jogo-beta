@@ -164,6 +164,8 @@ const num = (name, fallback) => {
 
 /** a survivor's own walking speed: what an ally is actually seen doing */
 const WALK = DESIGN.MOVE_SPEED * SPEED_SCALE;
+/** the camera scale the game runs at (shared/engine/camera.ts): 1 world unit is 1 pixel */
+const ZOOM = 1;
 const FPS = 60;
 const FRAME_DT = 1 / FPS;
 const SIM_DT = 1 / CFG.SIM_HZ;
@@ -389,6 +391,91 @@ console.log("5) relogio real (ClockSync) num cliente engasgando");
 	check("o relogio nao deu salto", stats.stalls === 0, stats.stalls + " travadas");
 }
 
+// ---------------------------------------------------------------- 6: all the way to the pixel
+
+/*
+ * Cases 1-5 measure WORLD units, and that was the hole: the buffer can be perfectly continuous while what
+ * reaches the screen is not. The renderer rounds every sprite to a whole pixel
+ * (shared/engine/renderer.ts: math.floor(scr.x + 0.5)), and the camera is locked to the LOCAL survivor --
+ * so the local body never moves on screen at all, and every bit of rounding error lands on the ally.
+ *
+ * The case that matters in co-op is walking BESIDE someone: the relative motion on screen is near zero, so
+ * the rounded position sits on a boundary and can flip back and forth. A pixel that moves backwards while
+ * the survivor is walking forwards is what an eye reads as stutter.
+ */
+const ROUND = v => Math.floor(v + 0.5);
+const VIEW_W = 1120;
+
+function drawnPixels(drawn, camAt) {
+	const px = [];
+	// skip the warm-up: before the buffer holds two samples the position is legitimately still, and
+	// counting those frames would invent a stutter that is not there (the mistake that cost a false
+	// report of a 1890 u/s teleport earlier)
+	for (const d of drawn.slice(30)) px.push(ROUND((d.x - camAt(d.t)) * ZOOM + VIEW_W / 2));
+	return px;
+}
+
+/** frames where the drawn pixel went BACKWARDS, and the longest run of frames it did not move at all */
+function pixelFaults(px) {
+	let back = 0;
+	let stillRun = 0;
+	let worstStill = 0;
+	for (let i = 1; i < px.length; i++) {
+		const d = px[i] - px[i - 1];
+		if (d < 0) back += 1;
+		if (d === 0) {
+			stillRun += 1;
+			if (stillRun > worstStill) worstStill = stillRun;
+		} else stillRun = 0;
+	}
+	return { back, worstStill };
+}
+
+console.log("");
+console.log("6) ate o pixel: camera travada no jogador local + arredondamento do renderer");
+{
+	const { drawn } = run({ rtt: 0.06, jitter: 0.008, path: straight });
+
+	// (a) voce parado, o aliado passando: a unica leitura em que o pixel DEVE avancar todo quadro.
+	// E o caso que pegaria uma interpolacao que anda em degraus.
+	const parado = pixelFaults(drawnPixels(drawn, () => 1000));
+	check("parado: nenhum pixel para tras", parado.back === 0, parado.back + " quadros");
+	check("parado: nenhum congelamento longo", parado.worstStill <= 1, "maior parada " + parado.worstStill + " quadros");
+
+	/*
+	 * (b) voces dois andando JUNTOS, mesma velocidade e direcao.
+	 *
+	 * Aqui a expectativa certa e o contrario da (a): o que se desenha e a posicao RELATIVA, e ela e
+	 * constante -- o aliado tem que ficar PARADO na tela. Uma versao anterior deste teste exigia
+	 * "nenhum pixel para tras" tambem neste caso, o que e exigir movimento onde nao deve haver: ele
+	 * falhava com 23 quadros e o defeito era do teste, nao do jogo.
+	 *
+	 * O que realmente importa medir e a AMPLITUDE: a interpolacao do aliado corre em segmentos de reta
+	 * entre amostras de 20 Hz, entao a posicao relativa oscila uma fracao de unidade e o arredondamento
+	 * a transforma em pixel. Dentro de uma faixa de 1 px isso e o arredondamento fazendo o trabalho dele.
+	 * Se um dia passar disso, virou tremor visivel, e ai e regressao.
+	 */
+	const juntos = drawnPixels(drawn, t => 1000 + WALK * t);
+	let lo = juntos[0];
+	let hi = juntos[0];
+	for (const p of juntos) {
+		if (p < lo) lo = p;
+		if (p > hi) hi = p;
+	}
+	let maxStep = 0;
+	for (let i = 1; i < juntos.length; i++) {
+		const d = Math.abs(juntos[i] - juntos[i - 1]);
+		if (d > maxStep) maxStep = d;
+	}
+	/*
+	 * O guarda certo e o TAMANHO DO PASSO, nao a faixa. Medido: a faixa e de 4 px, mas ela e percorrida
+	 * 1 px de cada vez, com umas cinco inversoes por segundo -- e o atraso do buffer se adaptando ao
+	 * intervalo medido, e a 60 fps num boneco de 32 px isso nao se le como movimento. O que se leria e um
+	 * pulo: 2 px ou mais de uma vez, ou seja, o desenho corrigindo de supetao algo que deveria ter
+	 * acompanhado. E isso que este check proibe.
+	 */
+	check("junto: o aliado nunca pula", maxStep <= 1, "maior passo " + maxStep + " px (faixa total " + (hi - lo) + " px)");
+}
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);

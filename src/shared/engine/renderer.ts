@@ -157,7 +157,9 @@ export class Renderer {
 			cy += ox * s + oy * c;
 		}
 		const zoom = cam.zoom;
-		const scr = cam.worldToScreen(cx, cy);
+		// project(), not worldToScreen(): one table per sprite times 1500-3000 sprites is what makes the
+		// collector pause mid-frame (see Camera.screenX)
+		cam.project(cx, cy);
 		// normalise to [0, 180): a rect rotated by 180° is the same rect; 90° is a w/h swap
 		let deg = cam.spriteRotationDeg(worldRot) % 180;
 		if (deg < 0) deg += 180;
@@ -179,10 +181,10 @@ export class Renderer {
 		const alpha = clamp01(opts.alpha ?? 1);
 		const strokeAlpha = clamp01(opts.strokeAlpha ?? 1);
 		if (deg < 0.05) {
-			const l = math.floor(scr.x - pw * 0.5 + 0.5);
-			const t = math.floor(scr.y - ph * 0.5 + 0.5);
-			const r = math.floor(scr.x + pw * 0.5 + 0.5);
-			const b = math.floor(scr.y + ph * 0.5 + 0.5);
+			const l = math.floor(cam.screenX - pw * 0.5 + 0.5);
+			const t = math.floor(cam.screenY - ph * 0.5 + 0.5);
+			const r = math.floor(cam.screenX + pw * 0.5 + 0.5);
+			const b = math.floor(cam.screenY + ph * 0.5 + 0.5);
 			this.apply(
 				sp,
 				l,
@@ -202,8 +204,8 @@ export class Renderer {
 		} else {
 			this.apply(
 				sp,
-				math.floor(scr.x + 0.5),
-				math.floor(scr.y + 0.5),
+				math.floor(cam.screenX + 0.5),
+				math.floor(cam.screenY + 0.5),
 				math.max(1, math.floor(pw + 0.5)),
 				math.max(1, math.floor(ph + 0.5)),
 				true,
@@ -582,11 +584,13 @@ export class LightMap {
 		// lights → screen space once; skip the ones that cannot reach the viewport
 		let n = 0;
 		for (const l of lights) {
-			const s = cam.worldToScreen(l.x, l.y);
+			cam.project(l.x, l.y);
+			const sx = cam.screenX;
+			const sy = cam.screenY;
 			const r = l.r * cam.zoom;
-			if (r < 1 || s.x < -r || s.y < -r || s.x > cam.viewW + r || s.y > cam.viewH + r) continue;
-			this.lx[n] = s.x;
-			this.ly[n] = s.y;
+			if (r < 1 || sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
+			this.lx[n] = sx;
+			this.ly[n] = sy;
 			this.lr[n] = r;
 			// the fully lit core stays strictly inside the ring so the falloff never divides by 0
 			this.lin[n] = math.min(r * (l.inner ?? 0.45), r - 1);

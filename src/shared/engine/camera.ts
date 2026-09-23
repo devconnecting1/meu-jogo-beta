@@ -38,6 +38,27 @@ export class Camera {
 	isoSquash = 0.5;
 	shakeMag = 0;
 	shakeT = 0;
+
+	/**
+	 * Where the LAST `project()` landed, in viewport px. Read it immediately after the call and never keep it:
+	 * the next `project()` overwrites both numbers.
+	 *
+	 * Why this exists: `worldToScreen` returns a fresh {x, y}, which in Luau is a TABLE ALLOCATION. The
+	 * renderer calls it once per sprite, and the town draws 1500-3000 sprites a frame -- around a hundred
+	 * thousand short-lived tables a second, whose only purpose is to be read twice and thrown away. That is
+	 * not slow to compute; it is slow because the collector has to walk them, and it walks them in a pause
+	 * that lands in the middle of a frame. `project()` is the same arithmetic writing into these two fields.
+	 *
+	 * The cold callers (nameplate, ally plate, chat bubble, coach) keep using `worldToScreen`: one table each,
+	 * a handful per frame, and no aliasing to reason about. Only the two hot loops use `project()`.
+	 */
+	screenX = 0;
+	screenY = 0;
+
+	/** cos/sin of `angle`, recomputed only when `angle` actually changes (it changes a few times a minute) */
+	private trigFor = 0;
+	private cosA = 1;
+	private sinA = 0;
 	/**
 	 * Free camera (admin panel): while true, follow() is ignored and whoever detached the camera moves x / y / zoom
 	 * itself. Everything that projects through the camera (renderer, light map, nameplate, aim) keeps working,
@@ -82,6 +103,29 @@ export class Camera {
 				this.shakeY = 0;
 			}
 		}
+	}
+
+	/**
+	 * world -> screen, writing into `screenX` / `screenY` instead of allocating (see those fields).
+	 * Identical arithmetic to `worldToScreen`; if you change one, change the other.
+	 */
+	project(wx: number, wy: number): void {
+		const dx = wx - this.x;
+		const dy = wy - this.y;
+		if (this.projection === "iso") {
+			this.screenX = (dx - dy) * this.zoom + this.viewW * 0.5 + this.shakeX;
+			this.screenY = (dx + dy) * this.isoSquash * this.zoom + this.viewH * 0.5 + this.shakeY;
+			return;
+		}
+		if (this.angle !== this.trigFor) {
+			this.trigFor = this.angle;
+			this.cosA = math.cos(this.angle);
+			this.sinA = math.sin(this.angle);
+		}
+		const ca = this.cosA;
+		const sa = this.sinA;
+		this.screenX = (dx * ca - dy * sa) * this.zoom + this.viewW * 0.5 + this.shakeX;
+		this.screenY = (dx * sa + dy * ca) * this.zoom + this.viewH * 0.5 + this.shakeY;
 	}
 
 	/** world → screen (pixels relative to viewport top-left). Exact inverse of screenToWorld. */
