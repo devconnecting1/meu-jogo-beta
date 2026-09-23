@@ -102,8 +102,11 @@ const SIDES = [-1, 1];
 export const OUTFITS = 4;
 
 const SKIN = charRamp(226, 184, 146);
-/** the survivors' blue since the first build (COLORS.player), a shade deeper: a work jacket, not a sky */
-const JACKET = rampOf(mixc(PALETTE.player, [52, 96, 150], 0.35));
+/**
+ * The survivors' blue since the first build (COLORS.player), barely deeper: it is what tells a survivor from the
+ * lawn and the road at a glance (LEG-03, measured by tools/test-world-art.mjs §5), so it stays bright.
+ */
+const JACKET = rampOf(mixc(PALETTE.player, [52, 96, 150], 0.1));
 const JACKET_PATCH = charRamp(142, 128, 92);
 const PACK = charRamp(164, 140, 90);
 const PACK_FLAP = charRamp(122, 100, 62);
@@ -216,9 +219,9 @@ function head(p, outfit) {
 		p.oval(0.5, 0, 13, 12, COWBOY_BAND, 11, { dome: 0.4 });
 		p.oval(0.5, 0, 9.5, 9, COWBOY_CROWN, 12, { dome: 0.9 });
 	} else if (outfit === 2) {
+		// a green-painted face under a shock of dark hair: the costume's head, not a zombie's bare scalp
 		p.oval(1.5, 0, 16, 16, COSTUME_SKIN, 10, { lift: true, ring: true });
-		p.oval(-2, -3, 7, 7, COSTUME_HAIR, 11, { detail: true });
-		p.oval(-3, 4, 5, 5, COSTUME_HAIR, 11, { detail: true });
+		p.oval(-1.5, 0, 10, 14, COSTUME_HAIR, 11, { dome: 0.7 });
 	} else {
 		p.oval(1.5, 0, 17, 17, HAIR, 10, { lift: true });
 		// the brow at the front of the head: which way they look, even with nothing in their hands
@@ -519,7 +522,7 @@ const dog = (coat, head, muzzle, ears, paws, scale, slim) => ({
 const DOGS = {
 	4: dog([204, 148, 86], [208, 154, 92], [234, 198, 146], [150, 98, 54], [176, 122, 66], 1, 0.95),
 	// a wolf-grey darker than the pigeon's slate, so the two greys of the catalogue never read as one
-	5: dog([98, 102, 112], [104, 108, 118], [240, 240, 238], [84, 88, 98], [228, 228, 226], 1.14, 1.1),
+	5: dog([98, 102, 112], [104, 108, 118], [240, 240, 238], [84, 88, 98], [228, 228, 226], 1.2, 1.15),
 	6: dog([44, 38, 38], [48, 42, 42], [182, 110, 52], [30, 26, 26], [162, 96, 46], 1, 0.82),
 };
 const MALAMUTE_WHITE = charRamp(240, 240, 238);
@@ -585,7 +588,8 @@ export function birdParts(pet, open) {
 	const b = BIRDS[pet] ?? BIRDS[1];
 	const s = b.scale;
 	if (open > 0.02) {
-		const reach = 24 * open * s;
+		// a little shorter than the flat drawing's 24: the outline texel goes round the tip too
+		const reach = 22 * open * s;
 		const half = 4.5 * s;
 		for (const side of SIDES) {
 			p.box(-1 * s, side * (half + reach / 2), 10 * s, reach + 2, b.wing, 0, { round: 3 * s, dome: 0.6 });

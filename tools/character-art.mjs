@@ -141,7 +141,8 @@ const DROP = [
  * What a pixel artist fixes by hand after tracing a shape onto the grid, so every heading reads as drawn, not
  * sampled: a lone texel of one part inside another (a speck) takes its surroundings' part, a notch one texel deep
  * in the silhouette is filled, and a one-texel spur sticking out of it is shaved -- except the marks meant to be
- * that small (`detail`) and the limbs (`thin`), whose diagonal steps ARE their shape.
+ * that small (`detail`), the limbs (`thin`) and anything under two texels across, whose diagonal steps ARE their
+ * shape.
  */
 function cleanUp(owner, cell, list, at) {
 	const counts = new Map();
@@ -174,7 +175,9 @@ function cleanUp(owner, cell, list, at) {
 				continue;
 			}
 			const p = list[k];
-			if (p.detail || p.thin) continue;
+			// a limb, a mark, or anything under two texels across (a blade seen at 45 degrees is a staircase of
+			// single texels: each one is a "spur", and shaving them would erase the blade)
+			if (p.detail || p.thin || Math.min(p.w, p.h) < 2 * TEXEL) continue;
 			let filled = 0;
 			for (const [dx, dy] of RING) if (at(i + dx, j + dy) >= 0) filled++;
 			if (filled <= 1) {

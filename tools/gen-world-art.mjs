@@ -1407,12 +1407,14 @@ function contactSheet() {
 	const pad = 10;
 	const cols = 5;
 	// the characters' sheets are hundreds of texels wide: they have their own pages (docs/art/characters)
-	const cells = textures.filter(t => !t.character).map(t => {
-		const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
-		let z = zoom;
-		while (t.tex.w * reps * z > cellW - pad * 2 && z > 1) z--;
-		return { t, reps, z, h: t.tex.h * reps * z + 30 };
-	});
+	const cells = textures
+		.filter(t => !t.character)
+		.map(t => {
+			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
+			let z = zoom;
+			while (t.tex.w * reps * z > cellW - pad * 2 && z > 1) z--;
+			return { t, reps, z, h: t.tex.h * reps * z + 30 };
+		});
 	const rows = [];
 	for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
 	const H = rows.reduce((s, row) => s + Math.max(...row.map(c => c.h)) + pad, pad);
