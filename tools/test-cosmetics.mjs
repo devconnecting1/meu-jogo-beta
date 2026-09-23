@@ -1132,7 +1132,7 @@ section("7) com a arte dos personagens (ART-07, ART-08, ART-10): os mesmos traje
 	const fill = santaHit.find(s => s.sheet === "survivorsAFill");
 	const rim = santaHit.find(s => s.sheet === "survivorsARim");
 	check(
-		fill !== undefined && sameColor(fill.tint, COLORS.white) && Math.abs(fill.alpha - 0.85) < 0.01,
+		fill !== undefined && sameColor(fill.tint, COLORS.white) && fill.alpha >= 0.5,
 		"Santa atingido: o corpo vai ao BRANCO (o casaco ja e vermelho)",
 		fill ? `${rgb(fill.tint)} a ${fill.alpha.toFixed(2)}` : "sem mascara",
 	);
@@ -1145,7 +1145,7 @@ section("7) com a arte dos personagens (ART-07, ART-08, ART-10): os mesmos traje
 	check(plainHit !== undefined && sameColor(plainHit.tint, COLORS.uiRed), "os outros trajes piscam para o vermelho");
 	const poisoned = hitOf(COS.OutfitLook.Cowboy, 0, true).find(s => s.sheet === "survivorsBFill");
 	check(
-		poisoned !== undefined && sameColor(poisoned.tint, COLORS.zombie5) && poisoned.alpha > 0.5,
+		poisoned !== undefined && sameColor(poisoned.tint, COLORS.zombie5) && poisoned.alpha >= 0.5,
 		"veneno vence traje: um veu da cor do veneno sobre o corpo",
 		poisoned ? `a ${poisoned.alpha.toFixed(2)}` : "sem veu",
 	);

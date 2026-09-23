@@ -328,8 +328,13 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 const IDLE_HAND_F = 12;
 const IDLE_HAND_L = 14;
 const IDLE_TILT = 0.5;
-/** how much of the poison colour veils a poisoned survivor's body in the pixel art (the flat torso turns fully) */
-const POISON_VEIL = 0.65;
+/**
+ * How much of the poison colour veils a poisoned survivor's body in the pixel art, and how far a hit's flash covers
+ * it at its peak: the flat drawing turned only the torso, the art tints the whole silhouette, so less of it keeps
+ * the head, the hands and the outfit readable under the colour.
+ */
+const POISON_VEIL = 0.5;
+const FLASH_FILL = 0.6;
 
 /**
  * The pixel-art survivor (ART-08), from the weapon and the grip the pose above decided: the weapon (z), then the
@@ -357,7 +362,7 @@ function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: nu
 	if (look.poisoned) drawSurvivorCell(r, cam, outfit, 1, row, col, x, y, z + 2, POISON_VEIL, COLORS.zombie5);
 	if (flash > 0) {
 		// a hit: the body towards the flash colour (red; white on Santa's red coat) and the thick red outline
-		drawSurvivorCell(r, cam, outfit, 1, row, col, x, y, z + 3, 0.85 * flash, flashTo);
+		drawSurvivorCell(r, cam, outfit, 1, row, col, x, y, z + 3, FLASH_FILL * flash, flashTo);
 		drawSurvivorCell(r, cam, outfit, 2, row, col, x, y, z + 3, 1, COLORS.uiRed);
 	}
 }
