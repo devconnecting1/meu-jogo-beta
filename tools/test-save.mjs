@@ -38,7 +38,7 @@
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { installShims } from "./luau-shim.mjs";
 
@@ -1645,6 +1645,100 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 		),
 		"processReport fixa as conquistas antes de juntar o relatorio (stripClientAchievements)",
 	);
+}
+
+section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods collector: revisao de seguranca)");
+{
+	// the build-cancel refund (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the ingredients
+	// come back through addItem, never through creditTaken -- a credited refund would farm Woods collector (craft a
+	// wooden placeable, cancel, repeat), and a refunded cooking would farm Chef the same way
+	const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const world = createWorld(4000, 4000);
+	const build = new ServerBuild({ world, out: new WorldOut() });
+	const craft = new ServerCraft({ world, build });
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	const recipe = CRAFT_RECIPES.find(
+		r =>
+			r.craftKind === 1 &&
+			!r.needsDesk &&
+			!r.needsPro &&
+			r.needsCook !== true &&
+			r.needsFire !== true &&
+			r.ingredients.some(i => i.kind === ItemKind.Etc && i.index === wood),
+	);
+	const s = SAVE.defaultSave();
+	for (const ing of recipe.ingredients) {
+		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+	}
+	const woodBefore = s.invenEtc[wood];
+	const state = PLAYER.createPlayer(s, 1000, 1000);
+	let rounds = 0;
+	for (let i = 0; i < 5; i++) {
+		craft.step(1);
+		build.step(1);
+		const made = craft.craft(0, state, s, recipe.id);
+		const back = build.cancel(0, s);
+		if (made.kind === "holding" && back.kind === "cancelled" && back.refunded === true) rounds += 1;
+	}
+	craft.step(1);
+	const last = craft.craft(0, state, s, recipe.id);
+	build.remove(0, s); // leaving the world with it still on the cursor: the same refund
+	check(
+		rounds === 5 &&
+			last.kind === "holding" &&
+			s.invenEtc[wood] === woodBefore &&
+			s.achievements.every(v => v === 0),
+		`receita ${recipe.id} (madeira): seis vezes fazer e devolver (cancelar, sair do mundo) -- a madeira volta toda e nenhuma conquista anda`,
+		`${rounds} cancelamentos, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
+	);
+
+	// who may call the two "what came into the backpack" credits at all -- an allowlist, so a new road that fills the
+	// backpack (a refund, a pack, a dropped item picked back up) is added here on purpose, by someone who read why
+	const ALLOWED = { creditTaken: ["server/sim/items.ts"], creditCraft: ["server/sim/craft.ts"] };
+	const found = { creditTaken: [], creditCraft: [] };
+	const walk = d => {
+		for (const f of readdirSync(d)) {
+			const full = join(d, f);
+			if (statSync(full).isDirectory()) walk(full);
+			else if (full.endsWith(".ts") && !full.endsWith(join("save", "achievements.ts"))) {
+				const text = readFileSync(full, "utf8");
+				const rel = full
+					.slice(SRC.length + 1)
+					.split("\\")
+					.join("/");
+				for (const name of Object.keys(found))
+					if (new RegExp(`\\b${name}\\(`).test(text)) found[name].push(rel);
+			}
+		}
+	};
+	walk(join(SRC, "server"));
+	check(
+		JSON.stringify(found) === JSON.stringify(ALLOWED),
+		"so o ServerItems (pegar, revistar, o Thief) chama creditTaken e so o ServerCraft chama creditCraft -- build.ts nao",
+		JSON.stringify(found),
+	);
+
+	// PACK_DELIVERY_HOOK: the server's pack delivery (server/sim/backpack.ts `deliverPacks`, on the backpack branch) must
+	// not credit anything either -- a pack of wood is not wood collected. Until that module is on this branch the hook
+	// only says it is waiting; once it is, it runs for real (and the allowlist above keeps creditTaken out of it)
+	const backpackFile = join(SRC, "server/sim/backpack.ts");
+	const BP = existsSync(backpackFile) ? require(backpackFile) : undefined;
+	if (BP?.deliverPacks === undefined) {
+		console.log("  PENDENTE  PACK_DELIVERY_HOOK: server/sim/backpack.ts deliverPacks ainda nao esta nesta branch");
+	} else {
+		const packs = SAVE.defaultSave();
+		for (const pack of SHOP_PACKS) packs.packsBought[pack.id] = 1;
+		const opened = BP.deliverPacks(packs);
+		check(
+			opened > 0 && packs.achievements.every(v => v === 0),
+			"PACK_DELIVERY_HOOK: o servidor entregar todos os pacotes da loja nao move conquista nenhuma",
+			`${opened} pacote(s), Woods collector ${packs.achievements[AID.WoodsCollector]}`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------- verdict
