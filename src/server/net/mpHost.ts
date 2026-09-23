@@ -107,6 +107,13 @@ export interface MpAnomalyRow {
 	/** current input queue depth (§2.2) */
 	depth: number;
 	counters: InputCounters;
+	/**
+	 * MP-16 level 1 (§9.2 "sinalizar"): shots whose declared view the rewind had to move -- past the measured ping
+	 * ceiling, or away from where this survivor's view normally sits (server/sim/combat.ts `judge`) -- out of how
+	 * many it resolved. An honest client is not clamped (tools/test-combat.mjs c''); evidence, never an action.
+	 */
+	rewindClamped: number;
+	shots: number;
 }
 
 export interface MpHost {
@@ -195,6 +202,7 @@ interface Link {
 	/** counters already reported, to log deltas instead of totals */
 	reportedOverflow: number;
 	reportedMalformed: number;
+	reportedClamped: number;
 }
 
 export function startMpHost(options: MpHostOptions): MpHost {
@@ -282,6 +290,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				lastAnomalyLog: 0,
 				reportedOverflow: 0,
 				reportedMalformed: 0,
+				reportedClamped: 0,
 			};
 			links.set(player, link);
 			// a body kept from a disconnect a moment ago stops expiring (§7.2)
@@ -390,6 +399,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		return link.strangerCount > FLOOD_MESSAGES;
 	}
 
+	/** os.clock() when the last Heartbeat began: how late the next one is, for the input queue's grace */
+	let beatAt = os.clock();
+
 	const inputConn = onInput(remotes, (player, payload) => {
 		if (departed(player)) return;
 		const link = linkOf(player);
@@ -401,8 +413,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		const sp = sim.get(link.slot);
 		if (sp === undefined) return;
 		// the whole validation lives in the pure module (token bucket, decode, counters); a malformed payload
-		// is dropped in silence (§9.2 level 0) and only ever counted
-		const verdict = ingestInput(sp, payload, now);
+		// is dropped in silence (§9.2 level 0) and only ever counted. The grace is the SERVER's lateness: the
+		// commands for the ticks it owes are kept for the repayment instead of capped (server/sim/heartbeat.ts)
+		const verdict = ingestInput(sp, payload, now, sim.inputGrace(now - beatAt));
 		if (verdict !== InputVerdict.Ok || sp.counters.packets % 32 === 0) guardFlood(link, sp);
 	});
 
@@ -498,14 +511,23 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		const c = sp.counters;
 		const newOverflow = c.inputOverflow - link.reportedOverflow;
 		const newMalformed = c.malformed - link.reportedMalformed;
-		if ((newOverflow > 0 || newMalformed > 0) && now - link.lastAnomalyLog >= ANOMALY_LOG_INTERVAL) {
+		// MP-16 level 1: a declared view the rewind had to move (server/sim/combat.ts `judge`) is evidence, not guilt
+		const fight = sp.slot >= 0 ? sim.combat?.statsOf(sp.slot) : undefined;
+		const clamped = fight?.rewindClamped ?? 0;
+		const newClamped = clamped - link.reportedClamped;
+		if (
+			(newOverflow > 0 || newMalformed > 0 || newClamped > 0) &&
+			now - link.lastAnomalyLog >= ANOMALY_LOG_INTERVAL
+		) {
 			link.lastAnomalyLog = now;
 			link.reportedOverflow = c.inputOverflow;
 			link.reportedMalformed = c.malformed;
+			link.reportedClamped = clamped;
 			warn(
 				`[${GAME_NAME}] input anomaly ${player.Name} (${player.UserId}): ` +
 					`+${newOverflow} overflow, +${newMalformed} malformed, ` +
-					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}`,
+					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}, ` +
+					`+${newClamped} rewind clamped (${clamped} of ${fight?.shots ?? 0} shots)`,
 			);
 		}
 	}
@@ -523,7 +545,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				admitAt = now;
 				for (const player of Players.GetPlayers()) admit(player);
 			}
+			beatAt = now;
 			const started = os.clock();
+			// the heartbeat after a world reset runs one tick and forgets the rest of its delta: that was the new
+			// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
 			const ran = sim.advance(dt);
 			if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
 			// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
@@ -535,6 +560,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					Workspace.SetAttribute("pz_tick_p95_ms", sim.p95Ms());
 					Workspace.SetAttribute("pz_sim_players", sim.count());
 					Workspace.SetAttribute("pz_dropped_ticks", sim.stats.droppedTicks);
+					// the Heartbeat debt still being repaid right now (§3.1): next to the dropped ticks in [PZ-NET]
+					Workspace.SetAttribute("pz_backlog_ms", math.floor(sim.backlogS() * 1000 + 0.5));
 					// what a playtest reads off the server window to know the world is actually running
 					Workspace.SetAttribute("pz_zombies", sim.horde?.count() ?? 0);
 					Workspace.SetAttribute("pz_world_day", sim.clock.day);
@@ -607,12 +634,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
 			for (const sp of sim.players()) {
+				const fight = sim.combat?.statsOf(sp.slot);
 				rows.push({
 					slot: sp.slot,
 					userId: sp.userId,
 					name: sp.name,
 					depth: sp.queue.size(),
 					counters: sp.counters,
+					rewindClamped: fight?.rewindClamped ?? 0,
+					shots: fight?.shots ?? 0,
 				});
 			}
 			return rows;

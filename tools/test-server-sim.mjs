@@ -802,6 +802,34 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 		banked.y,
 		`a ${LAG}-tick lag switch banks exactly ${CFG.INPUT_BUFFER_MAX} ticks of movement (y)`,
 	);
+
+	/*
+	 * The ceiling's grace (players.ts, server/sim/heartbeat.ts): only the SERVER's lateness raises it, one command per
+	 * tick it still owes, so that repaying a hitch finds the commands that landed during it. A server that keeps time
+	 * grants none -- the lag switch above is capped exactly as before -- and no caller can open it past
+	 * INPUT_GRACE_MAX.
+	 */
+	check(server.sim.inputGrace(0) === 0, "a server that keeps time grants the queue no grace");
+	server.sim.advance(0.1); // a 100 ms hitch: two ticks now, the rest owed
+	const owed = server.sim.inputGrace(0);
+	check(
+		owed > 0 && owed <= CFG.INPUT_GRACE_MAX,
+		`a server that owes ticks keeps one command for each (${owed} of at most ${CFG.INPUT_GRACE_MAX})`,
+	);
+	for (let t = 0; t < 30; t++) tick(server);
+	const burst = [];
+	c.history.length = 0;
+	for (let t = 0; t < 60; t++) {
+		const cmd = commandAt(c.seq + WALK + LAG + 100 + t, run.angle);
+		c.history.unshift(cmd);
+		while (c.history.length > CFG.INPUT_REDUNDANCY) c.history.pop();
+		burst.push(packetOf(c.history));
+	}
+	for (const payload of burst) PL.ingestInput(c.sp, payload, server.now, 1e9);
+	check(
+		c.sp.queue.length <= CFG.INPUT_BUFFER_MAX + CFG.INPUT_GRACE_MAX,
+		`no grace a caller passes opens the queue past INPUT_BUFFER_MAX + INPUT_GRACE_MAX (${c.sp.queue.length})`,
+	);
 }
 
 /*
@@ -1286,6 +1314,21 @@ section("catch-up: at most 2 ticks per heartbeat, the surplus is dropped (§3.1)
 	checkEq(server.sim.advance(0), 0, "a zero delta runs nothing");
 	checkEq(server.sim.advance(Number.NaN), 0, "a NaN delta runs nothing");
 	checkEq(server.sim.advance(-1), 0, "a negative delta runs nothing");
+	/*
+	 * Review of 097f484, #4: a Heartbeat delta is clipped to MAX_FRAME_S (1 s) before it reaches the accumulator, and
+	 * the clipped part was never counted -- a 10 s Studio breakpoint read as ~45 dropped ticks, not ~600. The clients
+	 * follow that time (they re-anchor on the tick), so pz_dropped_ticks has to say how much of it there was.
+	 */
+	const before = server.sim.stats.droppedTicks;
+	const ticks = server.sim.tick;
+	server.sim.advance(10); // a 10 s breakpoint
+	const lost = server.sim.stats.droppedTicks - before;
+	const ran = server.sim.tick - ticks;
+	check(
+		Math.abs(lost + ran - Math.round(10 / TICK_DT)) <= 1 + Math.round(CFG.MAX_BACKLOG_S / TICK_DT),
+		`a 10 s breakpoint counts every tick it did not run, the clipped 9 s included (${lost} dropped + ${ran} run, ` +
+			`debt ${Math.round((server.sim.backlogS?.() ?? 0) / TICK_DT)})`,
+	);
 }
 
 // ---------------------------------------------------------------- (h) the dead do not walk

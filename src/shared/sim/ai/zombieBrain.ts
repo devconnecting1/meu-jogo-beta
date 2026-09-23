@@ -42,6 +42,8 @@ import { SpatialHash } from "shared/sim/ai/spatialHash";
 // --- per-call scratch (never meaningful across calls; the per-world state lives in refs.ai) ------
 const sepX: Array<number> = [];
 const sepY: Array<number> = [];
+/** the stride `alongContacts` hands back */
+const stride = { x: 0, y: 0 };
 const sepHash = new SpatialHash();
 const sepNear: Array<number> = [];
 const nearSolids: Array<Solid> = [];
@@ -597,9 +599,13 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 	sepX.clear();
 	sepY.clear();
 	sepHash.begin();
+	// the contact slots are kept between ticks and only ever grow: resetting a count is all a tick costs
+	while (contactN.size() < n) contactN.push(0);
+	while (contactK.size() < n * MAX_CONTACTS * 3) contactK.push(0);
 	for (let i = 0; i < n; i++) {
 		sepX.push(0);
 		sepY.push(0);
+		contactN[i] = 0;
 		const a = zs[i];
 		if (a.jumping === true) continue;
 		sepHash.insert(i, a.x, a.y);
@@ -614,11 +620,12 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 			if (j <= i) continue;
 			const o = zs[j];
 			const min = ra + zombieRadius(o);
+			const reach = min + T.CONTACT_MARGIN;
 			const dx = o.x - a.x;
 			const dy = o.y - a.y;
-			if (math.abs(dx) >= min || math.abs(dy) >= min) continue;
+			if (math.abs(dx) >= reach || math.abs(dy) >= reach) continue;
 			const d2 = dx * dx + dy * dy;
-			if (d2 >= min * min) continue;
+			if (d2 >= reach * reach) continue;
 			let d = math.sqrt(d2);
 			let nx: number;
 			let ny: number;
@@ -631,6 +638,11 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 				nx = dx / d;
 				ny = dy / d;
 			}
+			// both touch each other (LEG-05): each remembers which way the other one is, for `alongContacts`
+			const k = math.min(1, (reach - d) / T.CONTACT_MARGIN);
+			addContact(i, -nx, -ny, k);
+			addContact(j, nx, ny, k);
+			if (d >= min) continue;
 			// each gets half of the overlap (capped so a pile resolves over a few frames, no jitter)
 			const push = math.min(6, (min - d) * 0.5);
 			sepX[i] -= nx * push;
@@ -638,6 +650,89 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 			sepX[j] += nx * push;
 			sepY[j] += ny * push;
 		}
+	}
+}
+
+/**
+ * The bodies each zombie touches this tick (LEG-05), recorded by `computeSeparation` while it visits the pairs
+ * anyway: `contactN[i]` of them, each as (nx, ny, k) in `contactK` from `i * MAX_CONTACTS * 3` -- the unit normal
+ * pointing away from the other body and how firmly it touches (0 at T.CONTACT_MARGIN away, 1 touching). Flat and
+ * reused: a second neighbour query per zombie made the horde's step 70 % dearer in tools/test-ai.mjs [11].
+ */
+const contactN: Array<number> = [];
+const contactK: Array<number> = [];
+/** equal bodies round one body touch it six at a time; a seventh is a pile the separation is already resolving */
+const MAX_CONTACTS = 6;
+
+function addContact(i: number, nx: number, ny: number, k: number): void {
+	const c = contactN[i];
+	if (c >= MAX_CONTACTS || k <= 0) return;
+	const at = (i * MAX_CONTACTS + c) * 3;
+	contactK[at] = nx;
+	contactK[at + 1] = ny;
+	contactK[at + 2] = k;
+	contactN[i] = c + 1;
+}
+
+/** removes from `stride` the part of it that walks into the unit normal (nx, ny), weighted by `k` */
+function slideOff(nx: number, ny: number, k: number): void {
+	const into = stride.x * nx + stride.y * ny;
+	if (into >= 0) return;
+	stride.x -= into * nx * k;
+	stride.y -= into * ny * k;
+}
+
+/**
+ * LEG-05: a body does not walk into what it is already touching. Writes into `stride` the voluntary step
+ * (mx, my) without its components that point into the survivor it is pressed against or into the bodies around
+ * it, and keeps the rest -- so a zombie slides along a crowd, or stands, instead of shoving. The component into a
+ * body fades out over the last T.CONTACT_MARGIN units before touching (a switch at one distance chattered: in on
+ * one tick, out on the next), and a body wedged between the ones it touches simply stands.
+ *
+ * Why it exists (tools/test-zombie-motion.mjs, scenario b): a ring of walkers round a survivor kept walking
+ * INTO them every tick. The contact rule put each one back at arm's length and the separation shoved its
+ * neighbours aside, so the whole ring slid sideways and kicked (1.3-2.9 u in one tick), and their faces swung
+ * with it. The bite is untouched: contact is still "within 3 u of touching", and a walker settles inside that.
+ *
+ * The other bodies are the ones `computeSeparation` found touching at the start of the tick (`contactK`), the
+ * same positions the separation itself resolves; a body moves a unit or two in a tick, well inside the margin.
+ */
+function alongContacts(
+	z: ZombieState,
+	p: PlayerState,
+	idx: number,
+	r: number,
+	distP: number,
+	mx: number,
+	my: number,
+): void {
+	stride.x = mx;
+	stride.y = my;
+	// the survivor it is pressed against: read NOW, it is the one body the whole bite is about
+	const touch = r + Phys.PLAYER_RADIUS;
+	const pk = distP > 0.01 ? math.clamp((touch + T.CONTACT_MARGIN - distP) / T.CONTACT_MARGIN, 0, 1) : 0;
+	const pnx = pk > 0 ? (z.x - p.x) / distP : 0;
+	const pny = pk > 0 ? (z.y - p.y) / distP : 0;
+	const n = contactN[idx] ?? 0;
+	if (pk <= 0 && n === 0) return;
+	const base = idx * MAX_CONTACTS * 3;
+	// twice: sliding off one body can point the stride into another
+	for (let pass = 0; pass < 2; pass++) {
+		if (pk > 0) slideOff(pnx, pny, pk);
+		for (let c = 0; c < n; c++) {
+			const at = base + c * 3;
+			slideOff(contactK[at], contactK[at + 1], contactK[at + 2]);
+		}
+	}
+	// still walking into a body it TOUCHES after that: it is wedged, and a wedged body stands
+	let wedged = pk >= 1 && stride.x * pnx + stride.y * pny < -1e-3;
+	for (let c = 0; c < n && !wedged; c++) {
+		const at = base + c * 3;
+		wedged = contactK[at + 2] >= 1 && stride.x * contactK[at] + stride.y * contactK[at + 1] < -1e-3;
+	}
+	if (wedged) {
+		stride.x = 0;
+		stride.y = 0;
 	}
 }
 
@@ -889,6 +984,7 @@ function thinkCharger(
 		return z.rush === true;
 	}
 	z.backstep = false;
+	z.holdGround = false;
 	if (z.rushReady !== true) {
 		z.rushCd = (z.rushCd ?? 0) - dt;
 		if ((z.rushCd ?? 0) <= 0) z.rushReady = true;
@@ -914,7 +1010,13 @@ function thinkCharger(
 			startStrafe(refs, z, T.STRAFE_TIME);
 		}
 	}
-	if (distP < T.RUSH_MIN_DIST + 10) z.backstep = true;
+	// It keeps its distance (~110 px) with a band, not a line (LEG-05): with a single threshold it stepped out on
+	// one tick and back in on the next, for ever -- a 30 Hz shiver of 1.25 u that the 20 Hz snapshot turned into a
+	// 10 Hz wobble on every screen (tools/test-zombie-motion.mjs, 13 reversals a second). Now it backs off below the
+	// band, walks in above it, and stands its ground, facing the target, inside it.
+	const keep = T.RUSH_MIN_DIST + 10;
+	if (distP < keep - T.KEEP_BAND) z.backstep = true;
+	else if (distP < keep + T.KEEP_BAND) z.holdGround = true;
 	return false;
 }
 
@@ -1075,7 +1177,7 @@ function faceAndAnimate(
 	const speed = dt > 0 ? math.sqrt(movedX * movedX + movedY * movedY) / dt : 0;
 	const walking = speed > SPEED_SCALE;
 	if (walking) z.angle = math.atan2(movedY, movedX);
-	if (z.backstep === true) z.angle = math.atan2(p.y - z.y, p.x - z.x);
+	if (z.backstep === true || z.holdGround === true) z.angle = math.atan2(p.y - z.y, p.x - z.x);
 	if (z.detect && distP < 100) z.angle = math.atan2(p.y - z.y, p.x - z.x);
 	if (z.type === 2 && (z.headX ?? 0) > 0 && z.aimX !== undefined && z.aimY !== undefined) {
 		z.angle = math.atan2(z.aimY - z.y, z.aimX - z.x);
@@ -1259,6 +1361,8 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 		} else if (hunting && z.backstep === true) {
 			heading = steer(world, z, r, math.atan2(z.y - p.y, z.x - p.x));
 			speed = z.moveSpeed * SPEED_SCALE;
+		} else if (hunting && z.holdGround === true) {
+			// the charger at the distance it keeps: it waits for its lane (speed stays 0)
 		} else if (seeing || dying) {
 			// the exploder aims at the wall or the group it wants to die next to
 			if (z.type === 3 && z.aimX !== undefined && z.aimY !== undefined) {
@@ -1284,6 +1388,16 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	// ---- move: intent + knockback + crowd separation, through real collision ------------------
 	let mx = math.cos(heading) * speed * dt;
 	let my = math.sin(heading) * speed * dt;
+	if (speed > 0 && !rushing && (z.orbit ?? 0) <= 0 && distP < T.DIRECT_CHASE) {
+		// only the WALK stops at a body it touches (LEG-05), and only in the last metres of a chase, where the
+		// crowd round a survivor forms and is on screen. A charge is a battering ram, and a knockback and the
+		// separation are pushes, not steps. A queue at a barricade keeps shoving as it always did: that is what
+		// tells flank.ts it is a queue, and a zombie peeling off it (`orbit`) has to shoulder its way out
+		// (test:ai [4] counts exactly that)
+		alongContacts(z, p, idx, r, distP, mx, my);
+		mx = stride.x;
+		my = stride.y;
+	}
 	if (z.reactionSpeed > 0 && !rushing) {
 		mx += math.cos(z.reactionDir) * z.reactionSpeed * SPEED_SCALE * dt;
 		my += math.sin(z.reactionDir) * z.reactionSpeed * SPEED_SCALE * dt;

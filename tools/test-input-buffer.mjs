@@ -274,6 +274,22 @@ const PL = require(join(SRC, "server/sim/players.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
 const { seqDiff } = require(join(SRC, "shared/net/codec.ts"));
+/**
+ * The server's Heartbeat rule, the SHIPPED one (ServerSimulation.advance runs exactly this, and mpHost asks it for
+ * the queue's grace). This file used to carry its own copy -- "at most MAX_CATCHUP_TICKS, drop the rest" -- and kept
+ * it when the server started carrying a debt instead: repaying it ate two commands a heartbeat from a queue capped
+ * below what had landed, and nothing here saw it (the review of 2026-09-23 measured case 5 at 0 -> 3.91 waits a
+ * second on the server's real rule).
+ */
+const HEARTBEAT = join(SRC, "server/sim/heartbeat.ts");
+if (!existsSync(HEARTBEAT)) {
+	console.error(
+		"this src has no server/sim/heartbeat.ts (it predates the shipped-rule module): replay an older rule with " +
+			"--backlog-ticks N --no-grace instead (0 = 7fb3e89's drop rule, 15 = 097f484's debt)",
+	);
+	process.exit(2);
+}
+const { TickAccumulator } = require(HEARTBEAT);
 
 // ---------------------------------------------------------------- CLI
 
@@ -284,6 +300,13 @@ const num = (name, fallback) => {
 };
 
 const SIM_DT = 1 / CFG.SIM_HZ;
+/**
+ * The server's debt ceiling and the queue's grace, as shipped. `--backlog-ticks 15 --no-grace` replays commit
+ * 097f484 (the debt, and the queue still capped at INPUT_BUFFER_MAX: what the review measured); `--backlog-ticks 0
+ * --no-grace` replays 7fb3e89 (no debt: every hitch past two ticks dropped).
+ */
+const BACKLOG_S = args.includes("--backlog-ticks") ? num("--backlog-ticks", 0) * SIM_DT : CFG.MAX_BACKLOG_S;
+const GRACE = !args.includes("--no-grace");
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -345,6 +368,7 @@ function run({
 	serverDt = () => SIM_DT,
 	taps = false,
 	burstReorder = false,
+	grace = GRACE,
 }) {
 	const client = new CommandStream();
 	client.reset(0);
@@ -395,6 +419,14 @@ function run({
 	const predictedAt = new Map();
 	const arrived = new Set();
 	const simulated = new Set();
+	/**
+	 * Input-to-simulation latency of every command predicted inside the steady window: from the client frame that
+	 * built it to the heartbeat whose tick simulated it -- half the RTT, the jitter, and every tick it waited in the
+	 * queue. A queue kept deep for nothing shows up here and nowhere else (the review of dee095a, B1).
+	 */
+	let latencySum = 0;
+	let latencyMax = 0;
+	let latencyN = 0;
 	/** every seq that ever sat in the server's queue: one that left it without being simulated hit the ceiling */
 	const queued = new Set();
 	/**
@@ -418,12 +450,14 @@ function run({
 	let serverAt = 0;
 	let serverBeat = 0;
 	let serverTick = 0;
-	let acc = 0;
+	const beat = new TickAccumulator(SIM_DT, BACKLOG_S);
+	/** heartbeats that ran more ticks than one: the server paying back time, two commands at a time */
+	let catchupBeats = 0;
 
 	while (clientAt < seconds || serverAt < seconds) {
 		if (clientAt <= serverAt) {
 			// ---- client frame: read what came down, then sample and send
-			const dt = clientDt(clientFrame++);
+			const dt = clientDt(clientFrame++, clientAt);
 			clientAt += dt;
 			const t = clientAt;
 			now = 1000 + t;
@@ -461,7 +495,7 @@ function run({
 			});
 		} else {
 			// ---- server heartbeat: packets that landed meanwhile, then the ticks it owes
-			const dt = serverDt(serverBeat++);
+			const dt = serverDt(serverBeat++, serverAt);
 			serverAt += dt;
 			const t = serverAt;
 			now = 1000 + t;
@@ -495,7 +529,8 @@ function run({
 						if (t >= WARMUP_S) lateRealSeqs.add(cmd.seq);
 					}
 				}
-				PL.acceptInput(sp, pkt, now);
+				// server/net/mpHost.ts: the grace is how many ticks the server owes `dt` after its last heartbeat
+				PL.acceptInput(sp, pkt, now, grace ? beat.grace(dt) : 0);
 				// everything newer than lastSeq entered the queue, if only for the instant before it overflowed
 				for (const seq of entering) queued.add(seq);
 				// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies
@@ -507,11 +542,13 @@ function run({
 					lateReal += real;
 				}
 			}
-			acc += Math.min(dt, 1);
-			let ran = 0;
-			while (acc >= SIM_DT - 1e-9 && ran < CFG.MAX_CATCHUP_TICKS) {
-				acc -= SIM_DT;
-				ran += 1;
+			const droppedBefore = beat.droppedTicks;
+			const owed = beat.take(dt);
+			if (t >= WARMUP_S) {
+				droppedTicks += beat.droppedTicks - droppedBefore;
+				if (owed > 1) catchupBeats += 1;
+			}
+			for (let ran = 0; ran < owed; ran++) {
 				const c = sp.counters;
 				const before = { filled: c.filled, consumed: c.consumed };
 				const depth = PL.bufferDepth(sp);
@@ -523,6 +560,13 @@ function run({
 				if (consumed > 0) {
 					simulated.add(cmd.seq);
 					tapsConsumed += edgeTotal(cmd.edges);
+					const at = predictedAt.get(cmd.seq);
+					if (at !== undefined && at >= WARMUP_S && at < seconds - TAIL_S) {
+						const lat = t - at;
+						latencySum += lat;
+						latencyN += 1;
+						if (lat > latencyMax) latencyMax = lat;
+					}
 				}
 				if (t >= WARMUP_S) {
 					ticksSteady += 1;
@@ -539,11 +583,6 @@ function run({
 					down.push({ at: t + rtt / 2, depth: PL.bufferDepth(sp), ack: sp.ackSeq });
 				}
 				serverTick += 1;
-			}
-			if (acc >= SIM_DT) {
-				const dropped = Math.floor(acc / SIM_DT);
-				if (t >= WARMUP_S) droppedTicks += dropped;
-				acc -= dropped * SIM_DT;
 			}
 		}
 	}
@@ -579,6 +618,7 @@ function run({
 		predictedLost,
 		overflowSteady,
 		droppedTicks,
+		catchupBeats,
 		avgDepth: depthSum / n,
 		depthMin,
 		worstRun,
@@ -590,13 +630,18 @@ function run({
 		tapsBuilt,
 		tapsSent,
 		tapsConsumed,
+		latencyMean: latencySum / Math.max(1, latencyN),
+		latencyMax,
+		simulatedSteady: latencyN,
 	};
 }
 
 console.log(
 	`fila do servidor: alvo ${CFG.INPUT_BUFFER_TARGET}, teto ${CFG.INPUT_BUFFER_MAX}, ` +
 		`redundancia ${CFG.INPUT_REDUNDANCY}x, dilatacao +-${(CFG.INPUT_DILATION * 100).toFixed(0)}%, ` +
-		`recuperacao do servidor ate ${CFG.MAX_CATCHUP_TICKS} ticks por heartbeat`,
+		`recuperacao do servidor ate ${CFG.MAX_CATCHUP_TICKS} ticks por heartbeat, divida ate ` +
+		`${Math.round(BACKLOG_S / SIM_DT)} ticks, ` +
+		(GRACE ? "teto da fila acrescido dos ticks que o servidor deve" : "teto da fila fixo (--no-grace)"),
 );
 
 /** one frame in twenty takes `ms`: a machine that is busy with something else now and then */
@@ -612,6 +657,9 @@ const isolatedHitch = ms => i => (i % 120 === 119 ? ms / 1000 : SIM_DT);
  */
 const starvedTicks = ms => Math.ceil((ms / 1000) * CFG.SIM_HZ);
 
+/** `fastS` seconds at 60 FPS, then `slowS` seconds at `slowFps`, over and over: by the clock of the side it paces */
+const phased = (fastS, slowS, slowFps) => (_i, at) => (at % (fastS + slowS) < fastS ? SIM_DT : 1 / slowFps);
+
 const CASES = [
 	// the clean links are the regression guard: the queue must never run dry on them
 	{ name: "1) LAN: 20 ms, sem jitter, sem perda", rtt: 0.02, jitter: 0, loss: 0, clean: true, tapGuard: true },
@@ -620,10 +668,12 @@ const CASES = [
 	{ name: "3) ruim: 120 ms, 25 ms de jitter, 2% de perda", rtt: 0.12, jitter: 0.025, loss: 0.02, clean: true },
 	/*
 	 * The loaded machine. Studio playtests run the server and every client on ONE computer, and the playtest
-	 * that reported the hitch was exactly that. These three separate WHICH side's hitch empties the queue: the
-	 * server's cannot by construction (it runs at most MAX_CATCHUP_TICKS and drops the rest of the time, so a
-	 * late heartbeat consumes less, never more), the client's can (a long frame makes at most
-	 * MAX_COMMANDS_PER_FRAME commands and drops the others).
+	 * that reported the hitch was exactly that. These three separate WHICH side's hitch empties the queue. The
+	 * client's can (a long frame makes at most MAX_COMMANDS_PER_FRAME commands and drops the others). The server's
+	 * must not: it repays its debt at MAX_CATCHUP_TICKS a heartbeat, and the commands those ticks consume are the
+	 * ones that landed during its hitch -- which the queue keeps for it (players.ts `grace`). Capped at
+	 * INPUT_BUFFER_MAX instead, they were thrown away and every repaid tick waited (commit 097f484, the review of
+	 * 2026-09-23: case 5 at 3.91 waits a second, case 6 at 11.94).
 	 */
 	{
 		name: "4) cliente engasga: 1 quadro em 20 leva 150 ms",
@@ -634,8 +684,9 @@ const CASES = [
 		tapGuard: true,
 	},
 	/*
-	 * A hitching server drops the commands it has no ticks for at the queue's ceiling -- their movement, by design.
-	 * Their taps are carried to the new head (players.ts `enqueue`), so those are guarded here too.
+	 * A hitching server within its debt loses nothing: no tick, no command, no wait. Past its debt it drops time,
+	 * and the commands for that time with it at the ceiling -- their movement, by design; their taps are carried to
+	 * the new head (players.ts `enqueue`), so those are guarded here too.
 	 */
 	{
 		name: "5) servidor engasga: 1 heartbeat em 20 leva 100 ms",
@@ -705,19 +756,74 @@ const CASES = [
 		clientDt: i => (i % 30 === 29 ? 0.15 : 1 / 15),
 		tapGuard: true,
 	},
+	/*
+	 * The server that CANNOT keep up (the review of dee095a, B1). Below 30 Hz a heartbeat is longer than the
+	 * MAX_CATCHUP_TICKS it may run, so the debt only grows, sits at MAX_BACKLOG_S and drops the rest, heartbeat after
+	 * heartbeat: the ticks it "owes" are never run. Granting the queue one command per tick owed kept every queue
+	 * about as deep as the debt for as long as the slowdown lasted -- 352 ms from input to simulation at 25 Hz where
+	 * the fixed ceiling gives 80 ms, 313 ms against 69 ms with Studio at 28 fps -- and every honest shot clamped,
+	 * since the rewind counts at most 4 ticks of queue. Grace is for a debt that is being REPAID; these two must look
+	 * like the fixed ceiling (`slowServer`: against the same run with `grace` off).
+	 */
+	{
+		name: "12) servidor lento: heartbeat a 25 Hz sustentado",
+		rtt: 0.06,
+		jitter: 0.008,
+		serverDt: () => 1 / 25,
+		slowServer: true,
+		tapGuard: true,
+	},
+	{
+		name: "13) Studio a 28 fps: servidor e cliente no mesmo quadro",
+		rtt: 0.02,
+		jitter: 0.004,
+		clientDt: () => 1 / 28,
+		serverDt: () => 1 / 28,
+		slowServer: true,
+		tapGuard: true,
+	},
+	/*
+	 * Both regimes in turn: 3 s at 60 FPS, 3 s at 28, server and client on the same frames. The slow stretches build a
+	 * debt the fast ones repay -- which is what grace is for -- and must not keep the queues deep while they build it.
+	 */
+	{
+		name: "14) misto: 3 s a 60 fps, 3 s a 28 fps (servidor e cliente no mesmo quadro)",
+		rtt: 0.02,
+		jitter: 0.004,
+		clientDt: phased(3, 3, 28),
+		serverDt: phased(3, 3, 28),
+		slowServer: true,
+		mixed: true,
+		tapGuard: true,
+	},
 ];
 
 for (const c of CASES) {
 	console.log("");
 	console.log(c.name);
-	const r = run({ ...c, taps: true, seconds: num("--seconds", 20) });
+	const seconds = num("--seconds", 20);
+	const seedBefore = seed;
+	const r = run({ ...c, taps: true, seconds });
+	/*
+	 * A case whose SERVER hitches is also run without that hitch -- the same client, the same link, the same draws
+	 * (only client frames draw from the generator) -- so that what the server's hitch itself costs can be told
+	 * apart from what the client's own hitches cost.
+	 */
+	let twin;
+	if (c.serverHitch) {
+		const seedAfter = seed;
+		seed = seedBefore;
+		twin = run({ ...c, serverDt: undefined, taps: true, seconds });
+		seed = seedAfter;
+	}
 	console.log(
 		`        profundidade media ${r.avgDepth.toFixed(2)} (minima ${r.depthMin}), envio a ${r.hz.toFixed(2)} Hz`,
 	);
 	console.log(
 		`        ${r.fillsPerSecond.toFixed(2)} preench./s (pior sequencia ${r.worstRun}, ${r.fillEpisodes} episodios ` +
 			`em ${r.hitches} engasgos do cliente), ${r.overflowSteady} transbordos, ${r.stallDropped} descartados no ` +
-			`cliente, ${r.droppedTicks} ticks perdidos no servidor, ${r.seqWindow} fora da janela, ${r.resync} reancoragens`,
+			`cliente, ${r.droppedTicks} ticks perdidos no servidor (${r.catchupBeats} heartbeats pagando atraso), ` +
+			`${r.seqWindow} fora da janela, ${r.resync} reancoragens`,
 	);
 	console.log(
 		`        ${r.lateSteady} atrasados = ${r.lateCopies} copias de comandos ja simulados + ${r.lateOverflowed} ` +
@@ -731,6 +837,10 @@ for (const c of CASES) {
 	console.log(
 		`        toques: ${r.tapsMade} feitos, ${r.tapsBuilt} empacotados, ${r.tapsSent} enviados, ` +
 			`${r.tapsConsumed} simulados pelo servidor`,
+	);
+	console.log(
+		`        do input a simulacao: media ${(r.latencyMean * 1000).toFixed(0)} ms, ` +
+			`pior ${(r.latencyMax * 1000).toFixed(0)} ms (${r.simulatedSteady} comandos)`,
 	);
 
 	// the harness's own sorting of the refusals must agree with the server's counter, or the lines below lie
@@ -787,17 +897,64 @@ for (const c of CASES) {
 
 	if (c.serverHitch) {
 		/*
-		 * A hitching server loses time it will never simulate (MAX_CATCHUP_TICKS, the rest is dropped), so the
-		 * commands for that time overflow the queue and are dropped: the harmless direction, and bounded. It must
-		 * never throw away more commands than the ticks it lost, and on its own it must never empty the queue.
+		 * What the SERVER's hitch costs, against the same run without it (`twin`). Within its debt it simulates
+		 * every tick, each with the command meant for it: it may not wait more often than the client's own hitches
+		 * already make it wait, and it may not throw away a command for any tick it did not drop itself. This used to
+		 * read "commands lost <= ticks dropped", on this file's own copy of the old drop rule -- which could not see a
+		 * rule that drops nothing and starves the queue instead (097f484: 0 ticks dropped, 90 commands lost, 3.91
+		 * waits a second).
 		 */
+		console.log(
+			`        sem o engasgo do servidor: ${twin.fillsPerSecond.toFixed(2)} preench./s, ` +
+				`${twin.realLost} comandos reais nunca simulados`,
+		);
 		check(
-			"o servidor nao descarta mais comandos que os ticks que ele mesmo perdeu",
-			r.realLost <= r.droppedTicks,
-			`${r.realLost} comandos, ${r.droppedTicks} ticks perdidos`,
+			"o engasgo do servidor nao faz a fila esperar mais que os engasgos do proprio cliente",
+			r.fills <= twin.fills,
+			`${r.fillsPerSecond.toFixed(2)}/s contra ${twin.fillsPerSecond.toFixed(2)}/s sem ele`,
+		);
+		check(
+			"o servidor so descarta comandos dos ticks que ele mesmo perdeu",
+			r.realLost <= twin.realLost + r.droppedTicks,
+			`${r.realLost} comandos, ${twin.realLost} sem o engasgo + ${r.droppedTicks} ticks perdidos`,
 		);
 		if (c.clientHitchMs === undefined) {
 			check("o engasgo do servidor sozinho nunca seca a fila", r.fills === 0, r.fills + " preenchimentos");
+		}
+	}
+
+	if (c.slowServer) {
+		/*
+		 * The same run with the queue's ceiling fixed at INPUT_BUFFER_MAX (no grace), same client, same link, same
+		 * draws. Grace may buy a slow server's repayment its commands; it may not buy a queue that is deep for good.
+		 */
+		const seedAfter = seed;
+		seed = seedBefore;
+		const fixed = run({ ...c, taps: true, seconds, grace: false });
+		seed = seedAfter;
+		console.log(
+			`        com o teto fixo: media ${(fixed.latencyMean * 1000).toFixed(0)} ms, pior ` +
+				`${(fixed.latencyMax * 1000).toFixed(0)} ms, profundidade ${fixed.avgDepth.toFixed(2)}, ` +
+				`${fixed.fillsPerSecond.toFixed(2)} preench./s, ${fixed.realLost} comandos reais nunca simulados ` +
+				`(com a folga: ${r.fillsPerSecond.toFixed(2)} preench./s, ${r.realLost})`,
+		);
+		check(
+			`a fila de um servidor lento nao passa de INPUT_BUFFER_MAX + 1 em media`,
+			r.avgDepth <= CFG.INPUT_BUFFER_MAX + 1,
+			`${r.avgDepth.toFixed(2)} contra ${fixed.avgDepth.toFixed(2)} com o teto fixo`,
+		);
+		check(
+			"a folga nao atrasa o input mais que 1 tick alem do teto fixo",
+			r.latencyMean <= fixed.latencyMean + SIM_DT,
+			`${(r.latencyMean * 1000).toFixed(0)} ms contra ${(fixed.latencyMean * 1000).toFixed(0)} ms`,
+		);
+		if (c.mixed) {
+			// where the debt IS repaid, grace is what keeps the repayment fed: never worse than the fixed ceiling
+			check(
+				"onde a divida e paga, a folga nao espera nem perde mais que o teto fixo",
+				r.fills <= fixed.fills && r.realLost <= fixed.realLost,
+				`${r.fills} preenchimentos e ${r.realLost} perdidos contra ${fixed.fills} e ${fixed.realLost}`,
+			);
 		}
 	}
 
