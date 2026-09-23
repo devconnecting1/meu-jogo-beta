@@ -1419,6 +1419,16 @@ function senseTarget(
 	dt: number,
 	was: number,
 ): boolean {
+	if (z.sensedFor !== pi) {
+		// the field handed it another survivor: what it saw of the last one (in view, how sure) says nothing about
+		// this one, so it starts from nothing and looks now. A chase goes on through the grace meanwhile, and one
+		// clear look at the new survivor keeps it going (a chase is kept by any clear look). A newborn's first
+		// target keeps its staggered first look (createZombie)
+		if ((z.sensedFor ?? -1) >= 0) z.senseCd = 0;
+		z.sensedFor = pi;
+		z.losClear = false;
+		z.notice = 0;
+	}
 	if (!p.dead && distP < Sense.TOUCH_RANGE) {
 		z.notice = 1;
 		z.losClear = true;

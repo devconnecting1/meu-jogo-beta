@@ -685,6 +685,26 @@ function testSight() {
 		};
 		const alive = alphaBeside(false);
 		const corpse = alphaBeside(true);
+		// (h4) a new target starts from nothing: what it saw of one survivor is not a sighting of the next
+		{
+			setSeed(SEED);
+			const world = W.createWorld(3000, 3000);
+			const refs = makeRefs(world, 1500, 1500);
+			const behind = createPlayer(refs.save, 1500, 900); // 300 u behind its back, in range, out of its eyes
+			refs.players.push(behind);
+			const z = still(addZombie(refs, 1, 1500, 1200, Math.PI / 2));
+			const chased = framesUntil(refs, 120, () => awareOf(z) === 3);
+			// the one it sees goes down: the field hands it the other one, whom it has never seen
+			refs.player.dead = true;
+			let leaked = false;
+			run(refs, 10, () => {
+				if (z.lastSeenY !== undefined && z.lastSeenY < 1000) leaked = true;
+			});
+			check(
+				chased > 0 && !leaked && z.lastSeenY > 1400,
+				"its target changes: the last look (at the other survivor) is not a sighting of the new one behind it",
+			);
+		}
 		// (h3) the tick's rays are shared out: 200 zombies round one survivor want more rays than a tick has, and
 		// none of them waits for ever behind the same others (the order the budget is spent in turns every tick)
 		{
@@ -926,8 +946,9 @@ function testMemory() {
 			`a place behind a long wall: it searches where it got stuck after ${((searchAt - suspAt) * DT).toFixed(1)} s`,
 		);
 	}
-	// two shots at once from two places behind that wall: the rings overlap round the zombie, and each is heard
-	// ONCE (the newer wins) -- they used to take turns every tick, renewing the walk so it never gave up on it
+	// two shots at once from two places behind that wall: the rings overlap round the zombie while they spread, and
+	// each is heard ONCE (the newer wins). They used to take turns every tick for as long as both were alive, each
+	// renewing the walk (a report per ring per tick), so the "cannot reach it" timer could not start
 	{
 		setSeed(SEED);
 		const world2 = W.createWorld(4000, 4000);
@@ -936,26 +957,30 @@ function testMemory() {
 		const zz = still(addZombie(refs2, 1, 2000, 1500, Math.PI / 2));
 		zombieAI.emitSound(refs2, 1880, 1900, 900, true);
 		zombieAI.emitSound(refs2, 2120, 1900, 900, true);
-		let changes = 0;
-		let lx;
-		let ly;
+		// the brain calls the memory module's own export: count the reports it makes about this zombie
+		const report = memoryMod.report;
+		let reports = 0;
+		memoryMod.report = (m, x, y) => {
+			if (m === zz) reports += 1;
+			report(m, x, y);
+		};
 		let suspAt = -1;
-		const searchAt = framesUntil(
-			refs2,
-			60 * 10,
-			() => awareOf(zz) === 2,
-			f => {
-				if (suspAt < 0 && awareOf(zz) === 1) suspAt = f;
-				if (zz.lastSeenX !== lx || zz.lastSeenY !== ly) {
-					changes += 1;
-					lx = zz.lastSeenX;
-					ly = zz.lastSeenY;
-				}
-			},
-		);
+		let searchAt;
+		try {
+			searchAt = framesUntil(
+				refs2,
+				60 * 10,
+				() => awareOf(zz) === 2,
+				f => {
+					if (suspAt < 0 && awareOf(zz) === 1) suspAt = f;
+				},
+			);
+		} finally {
+			memoryMod.report = report;
+		}
 		check(
-			changes <= 3 && searchAt > 0 && (searchAt - suspAt) * DT < memoryMod.GOTO_STALL + 4,
-			`two overlapping rings: the place it goes to changed ${changes} time(s), and it still gives up on the wall after ${((searchAt - suspAt) * DT).toFixed(1)} s`,
+			reports <= 2 && searchAt > 0 && (searchAt - suspAt) * DT < memoryMod.GOTO_STALL + 4,
+			`two overlapping rings: ${reports} report(s) in all, and it still gives up on the wall after ${((searchAt - suspAt) * DT).toFixed(1)} s`,
 		);
 	}
 	// a report leaves `lostFor` at the grace: a second one in the same tick is still taken; a chase ignores both

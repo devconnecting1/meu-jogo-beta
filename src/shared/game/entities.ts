@@ -66,6 +66,8 @@ export interface ZombieState {
 	/** what the last look saw, reused until `senseCd` runs out: the survivor in view at all, and how clearly */
 	losClear?: boolean;
 	sightK?: number;
+	/** which survivor (index in the AI's `players`) those looks were at: a new target starts from nothing */
+	sensedFor?: number;
 	/** the last noise ring it reacted to (a ring is heard once, not every tick it overlaps the body) */
 	heardRing?: number;
 	/** the heading the body actually walks (eased towards the wanted one) and its eased speed (u/s) */
@@ -257,6 +259,7 @@ export function createZombie(typeId: ZombieType, x: number, y: number, day: numb
 		senseCd: (((nextId - 1) * 0.6180339887) % 1) * 0.1,
 		losClear: false,
 		sightK: 1,
+		sensedFor: -1,
 		heardRing: 0,
 		pace: 0,
 		alpha: 1,
