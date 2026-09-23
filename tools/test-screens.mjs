@@ -50,6 +50,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
+import { layoutGame, rectOf as layoutRect } from "./ui-layout.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, flush, service, measure, setViewport } = ui;
@@ -278,6 +279,38 @@ check(
 		);
 	}
 }
+// a phone with a notch: the menus' ScreenGui is the device safe area (client/bootstrap.ts), so a window is centred in
+// what the player can see and never goes under the cut-out -- laid out as the engine does (tools/ui-layout.mjs)
+{
+	const bad = [];
+	for (const [w, h, bar, buttons, cut] of [
+		[844, 390, 36, 104, { left: 47, right: 47, bottom: 21 }],
+		[800, 360, 36, 104, { left: 32 }],
+	]) {
+		setScreen(w, h, bar, buttons);
+		setViewport(w, h, bar, buttons, cut);
+		const safe = { x: cut.left ?? 0, y: 0, w: w - (cut.left ?? 0) - (cut.right ?? 0), h: h - (cut.bottom ?? 0) };
+		for (const win of WINDOWS.filter(x => x.name === "Settings" || x.name === "Menu (na partida)")) {
+			const close = win.open();
+			flush();
+			layoutGame(ui, ctx);
+			const r = layoutRect(win.frame());
+			const cx = r.x + r.w / 2;
+			const inside = r.x >= safe.x - 0.5 && r.x + r.w <= safe.x + safe.w + 0.5 && r.y + r.h <= safe.h + 0.5;
+			if (!inside || Math.abs(cx - (safe.x + safe.w / 2)) > 2) {
+				bad.push(`${win.name} ${w}x${h}: ${fmt(r)}, centro x ${px(cx)} de ${safe.x + safe.w / 2}`);
+			}
+			close();
+			flush();
+		}
+	}
+	setScreen(1120, 630);
+	check(
+		"celular com entalhe: a Settings e o menu da partida centrados na area segura, nunca sob o recorte",
+		bad.length === 0,
+		bad.join("; "),
+	);
+}
 
 // ================================================================ 2. pages that reach the edges
 
@@ -362,7 +395,7 @@ function menuScreen(phase, open) {
 	current?.();
 	current = undefined;
 	ctx.phase = phase;
-	Fly.pinFlyover(layer, SEED);
+	Fly.pinFlyover(ctx.backdropLayer, SEED);
 	current = open();
 	flush();
 }
@@ -375,9 +408,13 @@ current = openLobby();
 flush();
 fly = Fly.activeFlyover();
 check(
-	"o lobby prende o voo no fundo da camada da UI, atras de toda tela",
-	fly !== undefined && fly.layer.Parent === layer && fly.layer.ZIndex < layer.FindFirstChild("Lobby").ZIndex,
-	`${fly?.layer.Parent?.Name}, ZIndex ${fly?.layer.ZIndex}`,
+	"o lobby prende o voo no fundo: na ScreenGui do mundo, desenhada sob a dos menus (atras de toda tela)",
+	fly !== undefined &&
+		fly.layer.Parent === ctx.backdropLayer &&
+		fly.layer.IsDescendantOf(ctx.screen) &&
+		!fly.layer.IsDescendantOf(ctx.uiGui) &&
+		ctx.screen.DisplayOrder < ctx.uiGui.DisplayOrder,
+	`${fly?.layer.Parent?.Name}, DisplayOrder ${ctx.screen.DisplayOrder} < ${ctx.uiGui.DisplayOrder}`,
 );
 // warm-up: two loops over every landmark (each shot shows another street), as test:lobby does
 {
@@ -391,6 +428,27 @@ check(
 		if (Math.hypot(now[0] - last[0], now[1] - last[1]) > 200) cuts++;
 		last = now;
 	}
+}
+// between two menu screens nothing is on the menus' ScreenGui: it stops drawing (client/bootstrap.ts syncUiGui), and
+// the town behind them -- in the world's ScreenGui -- glides on regardless
+{
+	const drawnWithLobby = ctx.uiGui.Enabled;
+	current?.();
+	current = undefined;
+	flush();
+	const offBetween = ctx.uiGui.Enabled === false;
+	const at = fly.cameraAt();
+	for (let i = 0; i < 30; i++) frame();
+	const to = fly.cameraAt();
+	const glides = Fly.activeFlyover() === fly && (to[0] !== at[0] || to[1] !== at[1]) && fly.spriteCount() > 0;
+	current = openLobby();
+	flush();
+	check(
+		"sem tela nenhuma a ScreenGui dos menus desliga, e a cidade atras continua deslizando e desenhando",
+		drawnWithLobby && offBetween && glides && ctx.uiGui.Enabled,
+		`com o lobby ${drawnWithLobby}, entre telas ${offBetween}, de volta ${ctx.uiGui.Enabled}, ` +
+			`camera ${at.map(v => v.toFixed(0))} -> ${to.map(v => v.toFixed(0))}, ${fly.spriteCount()} sprites`,
+	);
 }
 const conns = () => RunService.RenderStepped.conns.length;
 
@@ -466,7 +524,10 @@ function looseText(root) {
 		}
 		// the switch itself moved nothing: the camera is where it was, the same flyover, the same glide
 		const same =
-			Fly.activeFlyover() === fly && fly.layer.Parent === layer && fly.conn === flyConn && flyConn.Connected;
+			Fly.activeFlyover() === fly &&
+			fly.layer.Parent === ctx.backdropLayer &&
+			fly.conn === flyConn &&
+			flyConn.Connected;
 		const after = fly.cameraAt();
 		if (after[0] !== at[0] || after[1] !== at[1]) jumps++;
 		if (!same) still++;
@@ -563,7 +624,7 @@ flush();
 	check(
 		"a partida monta: o voo solta TODOS os Frames e para de desenhar",
 		Fly.activeFlyover() === undefined &&
-			layer.FindFirstChild("TownBackdrop") === undefined &&
+			ctx.backdropLayer.FindFirstChild("TownBackdrop") === undefined &&
 			conns() === connsBefore - 1 &&
 			fly.layer.GetDescendants().length === 0,
 		`${conns() - connsBefore} conexoes`,
@@ -988,8 +1049,8 @@ function textFits(label) {
 		return main.slice(at, end);
 	};
 	check(
-		"main.client.ts: menuScreen() prende o voo da cidade do mundo (netTownSeed) atras da tela",
-		/Flyover\.pinFlyover\(ctx\.uiLayer, netTownSeed\(\)\)/.test(fn("menuScreen")),
+		"main.client.ts: menuScreen() prende o voo da cidade do mundo (netTownSeed) atras da tela, na camada de fundo",
+		/Flyover\.pinFlyover\(ctx\.backdropLayer, netTownSeed\(\)\)/.test(fn("menuScreen")),
 	);
 	const opens = ["openShop", "openWardrobe", "openSettings", "openCredits", "openTutorial"];
 	const missing = opens.filter(n => !/menuScreen\("/.test(fn(n)));

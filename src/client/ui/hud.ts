@@ -2,6 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
+import { safeOrigin, screenSize } from "./device";
 import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
 import { HudNav } from "./hudNav";
 import type { PlayerSaveData } from "shared/game/save";
@@ -299,6 +300,9 @@ export class Hud {
 	private aimKnob: Frame | undefined;
 	private aimArrow: Frame | undefined;
 	private aimCursor: Frame | undefined;
+	/** where the survivor is drawn, in the touch layer's pixels (buildTouch) */
+	private aimCentreX = 0;
+	private aimCentreY = 0;
 	private joyDead: Frame | undefined;
 	private useLabel: TextLabel | undefined;
 	private reloadBtn: TextButton | undefined;
@@ -588,12 +592,17 @@ export class Hud {
 		this.aimArrow = pxRect(pad, "AimArrow", L.aim.baseR, L.aim.baseR, L.aim.baseR * 0.5, 4, THEME.foreground, 14);
 		this.aimArrow.Visible = false;
 
-		// the same heading, out in the world next to the survivor (the camera centre)
+		// the same heading, out in the world next to the survivor: the camera centre, the middle of the WHOLE screen the
+		// world covers, in this layer's safe-area pixels (client/ui/device.ts)
+		const o = safeOrigin();
+		const v = screenSize();
+		this.aimCentreX = v.X / 2 - o.X;
+		this.aimCentreY = v.Y / 2 - o.Y;
 		const cursor = pxRect(
 			layer,
 			"AimCursor",
-			L.viewW / 2,
-			L.viewH / 2,
+			this.aimCentreX,
+			this.aimCentreY,
 			math.max(18 * L.scale, 14),
 			math.max(4 * L.scale, 3),
 			THEME.foreground,
@@ -978,9 +987,9 @@ export class Hud {
 				const rad = math.rad(deg);
 				const reach = math.max(64 * L.scale, 52);
 				this.aimCursor.Position = new UDim2(
-					sx(L.viewW / 2 + math.cos(rad) * reach),
+					sx(this.aimCentreX + math.cos(rad) * reach),
 					0,
-					sy(L.viewH / 2 + math.sin(rad) * reach),
+					sy(this.aimCentreY + math.sin(rad) * reach),
 					0,
 				);
 				this.aimCursor.Rotation = deg;

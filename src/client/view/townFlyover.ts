@@ -24,9 +24,11 @@
  * still frame: no drift, no walkers moving, no fades.
  *
  * Lifecycle (client/ui/lobby.ts, client/main.client.ts): it is the backdrop of ALL the menus, not of one screen. The
- * lobby, and every menu screen opened from it (Settings, Wardrobe, Shop, Credits, How to play), PIN it at the back of
- * the UI layer (`pinFlyover`), under screens that are see-through; switching between them never touches it, so the
- * glide goes on without a restart, a cut or a new warm-up. The run RELEASES it the moment it starts
+ * lobby, and every menu screen opened from it (Settings, Wardrobe, Shop, Credits, How to play), PIN it in the backdrop
+ * layer (`pinFlyover`, `ctx.backdropLayer`), under screens that are see-through; switching between them never touches
+ * it, so the glide goes on without a restart, a cut or a new warm-up. That layer is in the world's ScreenGui, not the
+ * menus' (client/bootstrap.ts): the town changes every frame, and in the menus' ScreenGui it would invalidate every
+ * screen's cached drawing with it. The run RELEASES it the moment it starts
  * (`releaseFlyover`): every Frame is destroyed and the next menu builds a new pool. Only the town's data is cached
  * between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds it behind the logo.
  */
@@ -36,7 +38,8 @@ import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { ZOMBIE_BASE_RADIUS } from "shared/game/entities";
 import { generateTown, rectHitsSolid, Solid, WorldData } from "shared/game/world";
 import { darkAlphaAt } from "shared/sim/clock";
-import { onLayoutChange, reducedMotion, setWorldTransparency, viewportSize } from "../ui/skin";
+import { screenSize } from "../ui/device";
+import { onLayoutChange, reducedMotion, setWorldTransparency } from "../ui/skin";
 import { THEME, TRANSPARENCY } from "../ui/theme";
 import { createSun, shadowOffset, updateSun } from "./drawKit";
 import { drawZombie } from "./humanoidView";
@@ -208,8 +211,8 @@ export class TownFlyover {
 		layer.BorderSizePixel = 0;
 		layer.ClipsDescendants = true;
 		layer.Active = false;
-		// it lives in the UI layer, under every menu screen, but it is not a screen: the interface audio must not hear
-		// it open or close (client/audio/uiAudio.ts), nor count it as a menu still open
+		// it lives under every menu screen, but it is not a screen: the interface audio must not hear it open or close
+		// (client/audio/uiAudio.ts), nor count it as a menu still open, wherever it is pinned
 		layer.SetAttribute("Backdrop", true);
 		this.layer = layer;
 		this.renderer = new Renderer(layer, "Town");
@@ -244,7 +247,8 @@ export class TownFlyover {
 
 	/** the view follows the screen: the whole screen, zoomed so a big one does not draw more town */
 	private fit(): void {
-		const v = viewportSize();
+		// it hangs in the world's ScreenGui (ScreenInsets.None): the whole screen, under a notch too
+		const v = screenSize();
 		this.renderer.setView(v.X, v.Y);
 		this.cam.setView(v.X, v.Y);
 		this.cam.zoom = math.max(1, v.Y / MAX_VIEW_H);
@@ -478,12 +482,13 @@ export function attachFlyover(host: GuiObject, seed: number, zIndex: number): To
 	return f;
 }
 
-/** ZIndex of the menus' backdrop in the UI layer: under every screen (a screen's root is 1 or more) */
+/** ZIndex of the menus' backdrop in its layer: at the back of it */
 export const MENU_BACKDROP_Z = 0;
 
 /**
- * The town behind the menus (UI-10): the flyover at the back of the UI `layer`, where every menu screen -- the lobby,
- * and whatever it opens -- stands on it. The one already there keeps gliding (same town: nothing is touched); a new
+ * The town behind the menus (UI-10): the flyover in the backdrop `layer` (ctx.backdropLayer, the world's ScreenGui, drawn
+ * under the menus' one), where every menu screen -- the lobby, and whatever it opens -- stands on it. The one already
+ * there keeps gliding (same town: nothing is touched); a new
  * town (MP-22) replaces it. Idempotent: every menu screen pins it, so none depends on which came first.
  */
 export function pinFlyover(layer: GuiObject, seed: number): TownFlyover {

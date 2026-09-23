@@ -31,11 +31,18 @@
  *     is in that row, left of Menu (desktop: the third plate of the console's row, after Bag and Menu), a thumb
  *     target, and covers nothing either -- the sky included; and at the largest HUD size the banner is 1,2x, still
  *     at the top, and still narrows off the corner.
+ *  5b. the three ScreenGuis (client/bootstrap.ts): the world's covers the whole screen (ScreenInsets.None), the HUD's and
+ *     the menus' the device safe area, drawn world < HUD < menus; the menus' one is off in a run with nothing open and
+ *     a toast or the hit flash turn it on; and on a phone with a notch (both sides, or one) the move stick and the aim
+ *     pad are hit exactly where they are drawn -- a finger's Position is measured from the core UI safe area, as the
+ *     engine reports it --, the buttons stay in the safe area under the bar, and the aim cursor turns around the
+ *     survivor at the middle of the WHOLE screen.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
+import { layoutGame, rectOf } from "./ui-layout.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
@@ -1093,6 +1100,159 @@ setViewport(1120, 630, TOP_BAR);
 function isUnder(inst, root) {
 	if (root === undefined) return false;
 	return inst === root || inst.IsDescendantOf(root);
+}
+
+// ---------------------------------------------------------------- 5b) three ScreenGuis, and a phone with a notch
+
+console.log("\n5b) tres ScreenGuis (mundo / HUD / menus) e o toque num celular com entalhe\n");
+{
+	const pg = service("Players").LocalPlayer.FindFirstChild("PlayerGui");
+	const [world, hudG, uiG] = ["GameGui", "HudGui", "UiGui"].map(n => pg.FindFirstChild(n));
+	check(
+		"tres ScreenGuis, desenhadas nesta ordem (DisplayOrder): o mundo, a HUD, os menus",
+		world === ctx.screen &&
+			hudG === ctx.hudGui &&
+			uiG === ctx.uiGui &&
+			world.DisplayOrder < hudG.DisplayOrder &&
+			hudG.DisplayOrder < uiG.DisplayOrder,
+		[world, hudG, uiG].map(g => `${g?.Name} ${g?.DisplayOrder}`).join(" < "),
+	);
+	check(
+		"o mundo cobre a tela inteira (ScreenInsets None, sem recorte); a HUD e os menus ficam na area segura do aparelho",
+		world.ScreenInsets === Enum.ScreenInsets.None &&
+			world.ClipToDeviceSafeArea === false &&
+			world.SafeAreaCompatibility === Enum.SafeAreaCompatibility.None &&
+			hudG.ScreenInsets === Enum.ScreenInsets.DeviceSafeInsets &&
+			uiG.ScreenInsets === Enum.ScreenInsets.DeviceSafeInsets &&
+			[world, hudG, uiG].every(g => g.ZIndexBehavior === Enum.ZIndexBehavior.Sibling && g.ResetOnSpawn === false),
+		[world, hudG, uiG].map(g => `${g.Name} ${g.ScreenInsets?.Name}`).join(", "),
+	);
+	const root = ctx.root;
+	check(
+		"cada camada na sua: mundo < noite < fundo dos menus na do mundo; a HUD na da HUD; os menus na dos menus",
+		root.Parent === world &&
+			ctx.worldLayer.Parent === root &&
+			ctx.darkLayer.Parent === root &&
+			ctx.backdropLayer.Parent === root &&
+			ctx.worldLayer.ZIndex < ctx.darkLayer.ZIndex &&
+			ctx.darkLayer.ZIndex < ctx.backdropLayer.ZIndex &&
+			ctx.hudLayer.Parent === hudG &&
+			ctx.uiLayer.Parent === uiG,
+		`mundo ${ctx.worldLayer.ZIndex}, noite ${ctx.darkLayer.ZIndex}, fundo ${ctx.backdropLayer.ZIndex}`,
+	);
+	// the menus' ScreenGui: off in a run with nothing open; a toast or the hit flash turn it on, and off again
+	const { showToast } = require(join(SRC, "client/ui/widgets.ts"));
+	const { DangerFlash } = require(join(SRC, "client/ui/dangerFlash.ts"));
+	const offInRun = hud.isMounted() && uiG.Enabled === false;
+	showToast(ctx.uiLayer, "Saving...");
+	flush();
+	const onToast = uiG.Enabled;
+	for (const t of ctx.uiLayer.FindFirstChild("ToastStack").GetChildren()) if (t.Name === "Toast") t.Destroy();
+	flush();
+	const offAfterToast = uiG.Enabled === false;
+	const flash = new DangerFlash(ctx);
+	flash.frame(1 / 60, true, 100);
+	flash.frame(1 / 60, true, 80);
+	const onFlash = uiG.Enabled;
+	flash.reset();
+	const offAfterFlash = uiG.Enabled === false;
+	check(
+		"a ScreenGui dos menus nao desenha na partida sem menu; um toast ou o flash de dano a ligam, e ela desliga quando somem",
+		offInRun && onToast && offAfterToast && onFlash && offAfterFlash,
+		`partida ${offInRun}, toast ${onToast} -> ${offAfterToast}, flash ${onFlash} -> ${offAfterFlash}`,
+	);
+
+	// a phone with a notch: the world under it, the HUD beside it, and a finger lands where the control is drawn
+	const gs = service("GuiService");
+	const PHONES = [
+		// an iPhone held sideways: the notch's side and its twin are both inset, and the home indicator at the bottom
+		["844x390, entalhe dos dois lados + indicador", 844, 390, 36, { left: 47, right: 47, bottom: 21 }],
+		// an Android punch-hole on one side only: the safe area is off-centre
+		["800x360, furo de camera a esquerda", 800, 360, 36, { left: 32 }],
+	];
+	for (const [label, w, h, bar, cut] of PHONES) {
+		setViewport(w, h, bar, 120, cut);
+		input.aimMode = "touch";
+		hud.update(state());
+		layoutGame(ui, ctx);
+		const L = boot.getTouchLayout();
+		const safe = { x: cut.left ?? 0, y: cut.top ?? 0, w: w - (cut.left ?? 0) - (cut.right ?? 0) };
+		safe.h = h - safe.y - (cut.bottom ?? 0);
+		// where the core UI safe area starts on the screen: a touch's Position is measured from there (the engine's own
+		// "accounting for GUI insets"), which is the whole point of the shim's GetInsetArea / GetGuiInset
+		const none = gs.GetInsetArea(Enum.ScreenInsets.None);
+		const core = { x: -none.Min.X, y: -none.Min.Y };
+		const centre = f => {
+			const r = rectOf(f);
+			return [r.x + r.w / 2, r.y + r.h / 2];
+		};
+		const near = (a, b) => Math.abs(a - b) <= 0.5;
+		check(
+			`${label}: a geometria de toque e a da area segura (${safe.w} x ${safe.h}), e o mundo cobre a tela inteira`,
+			L.viewW === safe.w &&
+				L.viewH === safe.h &&
+				rectOf(ctx.worldLayer).w === w &&
+				rectOf(ctx.hudLayer).x === safe.x,
+			`toque ${L.viewW} x ${L.viewH}, mundo ${rectOf(ctx.worldLayer).w}, HUD a partir de x ${rectOf(ctx.hudLayer).x}`,
+		);
+		const bad = [];
+		for (const [name, frame, at] of [
+			["o analogico", deep(hudRoot(), "JoyBase"), [L.move.homeX, L.move.homeY]],
+			["o pad de mira", deep(hudRoot(), "AimPad"), [L.aim.homeX, L.aim.homeY]],
+		]) {
+			const [cx, cy] = centre(frame);
+			if (!near(cx, safe.x + at[0]) || !near(cy, safe.y + at[1])) bad.push(`${name} desenhado em ${cx},${cy}`);
+			// the finger on the drawn centre, as the engine reports it, through bootstrap's real handler
+			const finger = {
+				UserInputType: Enum.UserInputType.Touch,
+				KeyCode: Enum.KeyCode.Unknown,
+				Position: new Vector3(cx - core.x, cy - core.y, 0),
+			};
+			uis.InputBegan.Fire(finger, false);
+			flush();
+			const hit =
+				name === "o analogico"
+					? input.joystickActive && near(input.joystickBaseX, at[0]) && near(input.joystickBaseY, at[1])
+					: input.aimStickActive && near(input.aimStickBaseX, at[0]) && near(input.aimStickBaseY, at[1]);
+			if (!hit) bad.push(`${name}: o toque no desenho nao pega o controle ali`);
+			uis.InputEnded.Fire(finger, false);
+			flush();
+		}
+		check(
+			`${label}: o analogico e o pad de mira: onde estao desenhados e onde o dedo os pega e o mesmo ponto`,
+			bad.length === 0,
+			bad.join("; "),
+		);
+		const out = [];
+		for (const name of ["BagBtn", "MenuBtn", "ReloadBtn", "ChipSlot", "SkyPlate"]) {
+			const r = rectOf(deep(hudRoot(), name));
+			const inside =
+				r.x >= safe.x - 0.5 &&
+				r.x + r.w <= safe.x + safe.w + 0.5 &&
+				r.y >= safe.y + bar - 0.5 &&
+				r.y + r.h <= safe.y + safe.h + 0.5;
+			if (!inside)
+				out.push(`${name} [${Math.round(r.x)}, ${Math.round(r.y)}, ${Math.round(r.w)} x ${Math.round(r.h)}]`);
+		}
+		check(
+			`${label}: Bag, Menu, Reload, o chip e o relogio ficam na area segura, abaixo da barra`,
+			out.length === 0,
+			out.join("; "),
+		);
+		// the aim cursor rides around the survivor, who is the middle of the WHOLE screen (the camera), not of the safe area
+		const cursor = deep(hudRoot(), "AimCursor");
+		const [kx, ky] = centre(cursor);
+		const reach = Math.max(64 * L.scale, 52);
+		const rad = (cursor.Rotation * Math.PI) / 180;
+		const [ox, oy] = [kx - Math.cos(rad) * reach, ky - Math.sin(rad) * reach];
+		check(
+			`${label}: a mira de toque gira em volta do sobrevivente (o centro da tela inteira)`,
+			cursor.Visible && near(ox, w / 2) && near(oy, h / 2),
+			`${ox.toFixed(1)}, ${oy.toFixed(1)} / ${w / 2}, ${h / 2}`,
+		);
+	}
+	setViewport(1120, 630, TOP_BAR);
+	hud.update(state());
 }
 
 hud.unmount();

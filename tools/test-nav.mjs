@@ -272,6 +272,8 @@ function cycle(sc) {
 	const ret = sc.open(done);
 	if (typeof ret === "function") cleanup = ret;
 	flush();
+	// the menus' ScreenGui draws while a screen is on it, and only then (a closed Bag kept for reuse costs nothing)
+	const drawnOpen = ctx.uiGui.Enabled;
 	const root = layer.FindFirstChild(sc.root);
 	const opened = root !== undefined && root.Visible !== false;
 	const sel = GuiService.SelectedObject;
@@ -286,10 +288,20 @@ function cycle(sc) {
 	const selectionFree = selAfter === undefined || !(root !== undefined && selAfter.IsDescendantOf(root));
 	cleanup?.();
 	flush();
-	return { opened, focusIn, selectable, gone, handled: sc.selfClosing === true || closedBy === 1, selectionFree };
+	return {
+		opened,
+		focusIn,
+		selectable,
+		gone,
+		handled: sc.selfClosing === true || closedBy === 1,
+		selectionFree,
+		drawnOpen,
+		drawnAfter: ctx.uiGui.Enabled,
+	};
 }
 
-Fly.pinFlyover(layer, SEED);
+// the town behind the menus, where main.client.ts pins it: the world's ScreenGui, never the menus' (client/bootstrap.ts)
+Fly.pinFlyover(ctx.backdropLayer, SEED);
 flush();
 for (const sc of SCREENS) {
 	if (sc.needsLobby) openLobby();
@@ -299,6 +311,12 @@ for (const sc of SCREENS) {
 		`${sc.name}: abre; o controle cai num botao dela; "${sc.control}" e selecionavel e fecha pela via do main.client`,
 		first.opened && first.focusIn && first.selectable && first.gone && first.handled && first.selectionFree,
 		JSON.stringify(first),
+	);
+	// with the lobby under it the menus' ScreenGui stays on after the screen closes; with nothing under it, off
+	check(
+		`${sc.name}: a ScreenGui dos menus desenha com ela aberta e ${sc.needsLobby ? "segue (o lobby esta embaixo)" : "desliga ao fechar"}`,
+		first.drawnOpen === true && first.drawnAfter === (sc.needsLobby === true),
+		`aberta ${first.drawnOpen}, depois ${first.drawnAfter}`,
 	);
 	// five more, measured: nothing made that is not destroyed, no connection left (the Bag is kept built on purpose,
 	// so its first open is outside the measure)

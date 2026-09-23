@@ -4,6 +4,7 @@ import { MIN_TOUCH_PX } from "shared/engine/input";
 import type { GameRefs } from "../systems/types";
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, space } from "../ui/theme";
 import { toast } from "../ui/popup";
+import { coverWholeScreen } from "../ui/skin";
 import { Bar, Button, Card, Progress, makeAnchored, makeFrame, makeLabel, setDesign, uiScale } from "../ui/widgets";
 import {
 	FIRE_DEADLINE_HOUR,
@@ -364,7 +365,8 @@ export class Coach {
 		this.pointer?.Destroy();
 		const pointer = new Instance("Frame");
 		pointer.Name = "CoachPointer";
-		pointer.Size = UDim2.fromScale(1, 1);
+		// the HUD starts at the device safe area; the camera's pixels are the whole screen's
+		coverWholeScreen(pointer);
 		pointer.BackgroundTransparency = 1;
 		pointer.BackgroundColor3 = THEME.background;
 		pointer.BorderSizePixel = 0;

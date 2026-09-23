@@ -395,7 +395,7 @@ function lobbyStatus(): LobbyStatus {
 function menuScreen(phase: GamePhase): void {
 	clearScreen();
 	setPhase(phase);
-	Flyover.pinFlyover(ctx.uiLayer, netTownSeed());
+	Flyover.pinFlyover(ctx.backdropLayer, netTownSeed());
 }
 
 /** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
@@ -1186,7 +1186,7 @@ function begin(): void {
 }
 
 // audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
-// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the ScreenGui.
+// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the HUD and menu layers.
 audio.start();
 audio.bindSettings(() => ctx.save.settings);
 startUiAudio(ctx);

@@ -615,10 +615,36 @@ function install(options) {
 		s = makeInstance(name, false);
 		services.set(name, s);
 		if (name === "GuiService") {
+			/*
+			 * The screen's insets as the engine reports them. `Cutouts` is the device's (a notch, a camera hole, the home
+			 * indicator: { left, top, right, bottom } px, all 0 on a monitor); the top bar is TopbarInset's height, inside
+			 * the device safe area. GetInsetArea answers every ScreenInsets area as a Rect relative to the core UI safe area
+			 * (the docs' own example: None -59, -58, 792, 334; DeviceSafeInsets 0, -58, 733, 313; CoreUISafeInsets 0, 0,
+			 * 733, 313), and GetGuiInset the core UI safe area's distance from the screen's edges.
+			 */
+			const coreRect = () => {
+				const v = service("Workspace").CurrentCamera.ViewportSize;
+				const c = s.Cutouts;
+				const bar = Math.max(0, s.TopbarInset.Max.Y);
+				return { v, c, bar, w: v.X - c.left - c.right, h: v.Y - c.top - bar - c.bottom };
+			};
 			Object.assign(s, {
 				SelectedObject: undefined,
 				GuiNavigationEnabled: false,
-				GetGuiInset: () => [new Vector2(0, s.TopbarInset.Max.Y), new Vector2(0, 0)],
+				Cutouts: { left: 0, top: 0, right: 0, bottom: 0 },
+				GetGuiInset: () => {
+					const { c, bar } = coreRect();
+					return [new Vector2(c.left, c.top + bar), new Vector2(c.right, c.bottom)];
+				},
+				GetInsetArea: kind => {
+					const { v, c, bar, w, h } = coreRect();
+					const k = kind?.Name;
+					if (k === "None") return new Rect(-c.left, -(c.top + bar), v.X - c.left, v.Y - c.top - bar);
+					if (k === "DeviceSafeInsets") return new Rect(0, -bar, w, h);
+					if (k === "CoreUISafeInsets") return new Rect(0, 0, w, h);
+					if (k === "TopbarSafeInsets") return new Rect(s.TopbarInset.Min.X, -bar, s.TopbarInset.Max.X, 0);
+					throw new Error(`GetInsetArea: unknown ScreenInsets ${k}`);
+				},
 				TopbarInset: new Rect(0, 0, 0, 0),
 				PreferredTransparency: 1,
 				ReducedMotionEnabled: false,
@@ -674,10 +700,16 @@ function install(options) {
 	 * The bar is `topBar` px tall, and its buttons take the first `buttons` px from the left: GuiService.TopbarInset is
 	 * the stretch they leave FREE (Rect(buttons, 0, w, topBar)). Left out, the buttons take the whole width -- the
 	 * cautious reading the kit falls back to when it cannot see where they are.
+	 *
+	 * `cutouts` ({ left, top, right, bottom } px, default none) is the device's notch / camera hole / home indicator: the
+	 * device safe area is the screen less them, and TopbarInset is in ITS coordinates (the bar sits inside it).
 	 */
-	function setViewport(w, h, topBar = 0, buttons = w) {
+	function setViewport(w, h, topBar = 0, buttons = w, cutouts = {}) {
 		const gui = service("GuiService");
-		gui.TopbarInset = new Rect(Math.min(buttons, w), 0, w, topBar);
+		const c = { left: 0, top: 0, right: 0, bottom: 0, ...cutouts };
+		gui.Cutouts = c;
+		const safeW = w - c.left - c.right;
+		gui.TopbarInset = new Rect(Math.min(buttons, safeW), 0, safeW, topBar);
 		const cam = service("Workspace").CurrentCamera;
 		cam.ViewportSize = new Vector2(w, h);
 		flush();

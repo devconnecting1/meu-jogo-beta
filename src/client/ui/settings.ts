@@ -701,7 +701,9 @@ function buildPreview(
 	boxH: number,
 ): () => void {
 	const captionH = 20;
-	const aspect = math.max(ctx.viewH, 1) / math.max(ctx.viewW, 1);
+	// the controls' own screen: the device safe area the HUD draws in (the whole screen when there is no cut-out)
+	const own = getTouchLayout();
+	const aspect = math.max(own.viewH, 1) / math.max(own.viewW, 1);
 	const h = math.min(boxW * aspect, boxH - captionH - space(1));
 	const w = h / aspect;
 	const px = x + (boxW - w) / 2;

@@ -44,7 +44,8 @@
 import { langGet } from "shared/data/lang";
 import { titleFromWire } from "shared/data/titles";
 import { OVER_WORLD, TEXT, THEME, fontOf, space } from "./theme";
-import { fixedTextPx, onLayoutChange, reducedMotion, textShadow, uiScale, viewportSize } from "./skin";
+import { screenSize } from "./device";
+import { fixedTextPx, onLayoutChange, reducedMotion, textShadow, uiScale } from "./skin";
 import { titleColor, titleText } from "./titleStyle";
 
 const TweenService = game.GetService("TweenService");
@@ -255,7 +256,8 @@ export class Nameplate {
 			this.lastX = rx;
 			this.lastY = ry;
 			this.plate.Position = UDim2.fromOffset(rx, ry);
-			const v = viewportSize();
+			// the plates hang in the world's ScreenGui: the whole screen
+			const v = screenSize();
 			const dx = rx - v.X / 2;
 			const dy = ry - v.Y / 2;
 			this.rank = dx * dx + dy * dy;
