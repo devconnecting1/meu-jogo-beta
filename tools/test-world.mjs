@@ -1225,6 +1225,27 @@ section("r) revisao de 5967a18: o E tem ritmo, porta e luz tem recarga, parede p
 		true,
 		"e um do lado livre, na mesma distancia, entra",
 	);
+	// re-review of f8ccaf0: a drop slides with no wall collision and can come to rest INSIDE a wall or a door (~28 % of a
+	// zombie's drops at a base wall). Its own wall is no wall between it and the survivor: it is picked up, and E is free
+	// for the door beside it again
+	W.addSolid(w2, {
+		kind: "structure",
+		x: 1960,
+		y: 2040,
+		w: 80,
+		h: 20,
+		hp: 100,
+		hpMax: 100,
+		destructible: false,
+		tags: "wall",
+	});
+	const inWall = W.spawnGroundItem(w2, 4, 23, 3, 2000, 2045);
+	const gotInWall = sim2.items.pickup(p2.save, p2.state.x, p2.state.y, inWall);
+	check(
+		gotInWall.ok,
+		"um item que parou DENTRO de uma parede, a 45 u, entra na mochila (a propria parede nao o esconde)",
+		JSON.stringify(gotInWall),
+	);
 
 	// B: a lamp switched, a barricade repaired and a wall chewed by the horde reach EVERYBODY, far or near
 	const w3 = emptyWorld();

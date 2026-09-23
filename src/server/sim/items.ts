@@ -224,8 +224,13 @@ export class ServerItems {
 		const dx = item.x - x;
 		const dy = item.y - y;
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
-		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall
-		if (!segmentClear(this.world, x, y, item.x, item.y, isBlocking)) return { ok: false, why: "blocked" };
+		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall. Not the
+		// solid the item rests INSIDE: a drop slides with no wall collision, and ~28 % of a zombie's drops at a base wall
+		// end up inside it -- blocked by its own wall it could never be picked up, and as E's first target it hid the
+		// door beside it for good (re-review of f8ccaf0)
+		const blocks = (o: Solid): boolean =>
+			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
+		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
 		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)

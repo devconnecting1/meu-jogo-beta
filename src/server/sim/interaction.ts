@@ -129,9 +129,11 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
-		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 		const target = interactTarget(this.world, p.x, p.y);
 		if (target === undefined) return { kind: "none" };
+		// only a press that reaches something spends the cooldown: an empty press used to eat it, so a door flipped every
+		// 0.4 s and a press right after an input hitch was dropped (re-review of f8ccaf0)
+		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 
 		if (target.kind === "item") {
 			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);

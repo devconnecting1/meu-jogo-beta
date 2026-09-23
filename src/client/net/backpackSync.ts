@@ -47,6 +47,11 @@ export function owned(): boolean {
 	return MP_PHASE >= WORLD_SERVER_PHASE && netHosted();
 }
 
+/** are as many verbs in flight as the server queues? A click now is held back, not refused for what it would do */
+export function busy(): boolean {
+	return owned() && inFlight() >= INTENT_QUEUE_MAX;
+}
+
 function cursorFor(save: PlayerSaveData): BagCursor {
 	const refs = netRefs();
 	return refs !== undefined && refs.save === save ? refs : lobbyCursor;

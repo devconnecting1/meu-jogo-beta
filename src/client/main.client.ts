@@ -1099,6 +1099,8 @@ function playPressed(): void {
 pack.onUse = id => {
 	if ((ctx.save.invenUse[id] ?? 0) <= 0) return;
 	if (Bag.useItem(loop.getRefs().player, ctx.save, id)) return;
+	// eight verbs still in flight: the click waits for their answers, and "already full" would be a lie
+	if (Bag.busy()) return;
 	// a use is only refused for a held, known item when it would do nothing (hp/hunger already
 	// maxed, no buff, no poison cure) — pick the wording that matches what the item targets.
 	const u = USABLES[id];
