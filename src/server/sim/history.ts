@@ -3,8 +3,10 @@
  * looking at (docs/MULTIPLAYER.md §2.3 "Compensação de latência", §3.1 step 3).
  *
  * Why a ring indexed by the tick itself: `tick % ticks` IS the slot, so a rewind costs two array reads and a
- * lerp with no per-tick allocation and no search. HISTORY_TICKS (24 = 400 ms at 60 Hz) covers REWIND_MAX_S
- * (300 ms) with enough margin left to interpolate the far end of the window.
+ * lerp with no per-tick allocation and no search. HISTORY_TICKS (24 = 400 ms at 60 Hz) covers the deepest rewind,
+ * a body the shooter draws in the mid ring -- REWIND_MAX_S + MID_REWIND_EXTRA_S = 350 ms, 21 ticks -- with the tick
+ * after it (to interpolate the far end) and the tick being simulated (not recorded yet) to spare; tools/test-combat.mjs
+ * c' checks it against the constants, so raising either ceiling cannot outgrow the ring unnoticed.
  *
  * Why the simulation's entity id and not the netId: the wire never names the target of a shot (§4.2: a
  * ShotResult carries end POINTS, not ids) and the netId pool recycles after 2 s (§4.4). `ZombieState.id` never

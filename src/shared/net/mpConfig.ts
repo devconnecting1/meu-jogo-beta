@@ -230,9 +230,15 @@ export const FLOOD_MALFORMED_WINDOW_S = 10;
 
 // ---------------------------------------------------------------- lag compensation (§2.3)
 
-/** zombie/boss position history ring: 24 ticks = 400 ms at 60 Hz */
+/**
+ * zombie/boss position history ring: 24 ticks = 400 ms at 60 Hz, which must hold the deepest rewind --
+ * REWIND_MAX_S + MID_REWIND_EXTRA_S -- plus two ticks (tools/test-combat.mjs c' checks it)
+ */
 export const HISTORY_TICKS = 24;
-/** maximum hitscan rewind */
+/**
+ * Maximum hitscan rewind of a body the shooter draws in the NEAR ring. One drawn in the mid ring is rewound up to
+ * MID_REWIND_EXTRA_S further (350 ms in all): it is drawn that much further back (§2.3; the review of dee095a, N3).
+ */
 export const REWIND_MAX_S = 0.3;
 /**
  * A target the shooter draws in the MID ring is drawn that much further back (client/net/snapshotBuffer.ts, the

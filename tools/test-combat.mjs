@@ -1012,6 +1012,29 @@ section("c'. the position ring answers for the whole window and forgets what lef
 	checkEq(h.sampleAt(1, 7), undefined, "one tick older than the window is gone, not wrong");
 }
 
+{
+	/*
+	 * N3 (the review of dee095a): the deepest rewind is not REWIND_MAX_S but a body drawn in the MID ring,
+	 * REWIND_MAX_S + MID_REWIND_EXTRA_S. The ring has to hold it, the tick after it (the far end is interpolated) and
+	 * the tick being simulated, which a shot is judged in before `afterWorld` records it.
+	 */
+	const deepest = (CFG.REWIND_MAX_S + CFG.MID_REWIND_EXTRA_S) * CFG.SIM_HZ;
+	check(
+		CFG.HISTORY_TICKS >= Math.ceil(deepest - 1e-9) + 2,
+		`HISTORY_TICKS (${CFG.HISTORY_TICKS}) holds the mid ring's ceiling, ${(deepest / CFG.SIM_HZ) * 1000} ms = ` +
+			`${deepest.toFixed(1)} ticks, plus the tick after it and the one in progress`,
+	);
+	// and in the ring itself: at tick T (recorded up to T - 1) the deepest judged instant still reads back
+	const h = new PositionHistory();
+	const T = 500;
+	for (let tick = 1; tick < T; tick++) {
+		h.beginTick(tick);
+		h.record(3, tick, 0);
+	}
+	const far = h.sampleAt(3, T - deepest - 0.5);
+	check(far !== undefined && Math.abs(far.x - (T - deepest - 0.5)) < 1e-9, "the far end of it is in the ring");
+}
+
 // ================================================================ d. XP, kills and levels (§3.6, §11.3 F2)
 
 section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)");
