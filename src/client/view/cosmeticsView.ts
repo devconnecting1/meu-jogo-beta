@@ -39,6 +39,7 @@ import { COLORS, Z } from "shared/engine/colors";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { OutfitLook, PetLook, petFlies } from "shared/data/cosmetics";
 import { PetFollower } from "./petFollow";
+import { drawBirdArt, drawDogArt } from "./charArt";
 
 const BLACK = COLORS.shadow;
 const WHITE = COLORS.white;
@@ -340,6 +341,8 @@ interface BirdLook {
 	scale: number;
 	/** the eagle's wings stay open: it soars, and landed it mantles */
 	soars: boolean;
+	/** its PetLook (the row of the birds sheet) */
+	look: number;
 }
 
 const CAROLINA: DogLook = {
@@ -387,6 +390,7 @@ const PIGEON: BirdLook = {
 	beak: Color3.fromRGB(56, 56, 60),
 	scale: 1,
 	soars: false,
+	look: PetLook.Pigeon,
 };
 const WHITE_PIGEON: BirdLook = {
 	body: Color3.fromRGB(240, 240, 238),
@@ -398,6 +402,7 @@ const WHITE_PIGEON: BirdLook = {
 	beak: Color3.fromRGB(232, 150, 140),
 	scale: 1,
 	soars: false,
+	look: PetLook.WhitePigeon,
 };
 const EAGLE: BirdLook = {
 	body: Color3.fromRGB(104, 66, 36),
@@ -409,6 +414,7 @@ const EAGLE: BirdLook = {
 	beak: Color3.fromRGB(238, 198, 66),
 	scale: 1.35,
 	soars: true,
+	look: PetLook.Eagle,
 };
 
 /** where a pet's drop shadow falls; the loop owns the sun (client/view/drawKit.ts shadowOffset) */
@@ -468,6 +474,8 @@ function drawDog(
 		0,
 		spec(34 * s, 16 * w, BLACK, Z.actorShadow, 7 * s, undefined, undefined, 0.28),
 	);
+	// the pixel art (ART-11) once its sheet is uploaded: one baked cell, trotting or wagging
+	if (drawDogArt(r, cam, look, x, y, a, f.moving, f.phase, math.sin(clock * 11), PET_Z + 1)) return;
 	// a trot: diagonal pairs of paws swing together, by distance walked (f.phase), not by time
 	const swing = math.sin(f.phase) * 4 * s * f.moving;
 	for (const side of SIDES) {
@@ -538,6 +546,7 @@ function drawBird(r: Renderer, cam: Camera, f: PetFollower, b: BirdLook, shadow:
 	let open: number;
 	if (b.soars) open = f.lift > 0 ? 0.85 + 0.15 * beat : 0.6;
 	else open = f.lift > 0.05 ? (0.35 + 0.65 * beat) * f.lift : 0;
+	if (drawBirdArt(r, cam, b.look, x, y, a, open, PET_Z + 1)) return;
 	const span = 24 * s;
 	const bodyHalf = 5 * s;
 	if (open > 0.02) {
