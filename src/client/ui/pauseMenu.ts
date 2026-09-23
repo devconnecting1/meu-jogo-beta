@@ -12,6 +12,7 @@ import {
 	CoinIcon,
 	autoFocus,
 	cardStripHeight,
+	centredRect,
 	fmtInt,
 	makeLabel,
 	makeScreen,
@@ -56,13 +57,14 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		color: THEME.background,
 		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
+		content: kind === 2 ? centredRect(GAME_OVER_W, GAME_OVER_H) : centredRect(PAUSE_W, PAUSE_H),
 	});
 	const pad = space(6);
 
 	if (kind === 2) {
 		const w = GAME_OVER_W;
 		const innerW = w - pad * 2;
-		const panel = Card(body, "Panel", { x: (1120 - w) / 2, y: (630 - GAME_OVER_H) / 2, w, h: GAME_OVER_H });
+		const panel = Card(body, "Panel", centredRect(GAME_OVER_W, GAME_OVER_H));
 		// title strip of the reference art, in the destructive tone (the run is over)
 		const top = CardHeader(panel, tr("Game over"), undefined, { color: THEME.destructive });
 		const save = ctx.save;
@@ -149,7 +151,7 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 	} else {
 		const w = PAUSE_W;
 		const innerW = w - pad * 2;
-		const panel = Card(body, "Panel", { x: (1120 - w) / 2, y: (630 - PAUSE_H) / 2, w, h: PAUSE_H });
+		const panel = Card(body, "Panel", centredRect(PAUSE_W, PAUSE_H));
 		const stripH = cardStripHeight();
 		const top = CardHeader(panel, tr("Menu"), undefined, { action: KEY_BADGE + space(2) });
 		// the "P" key cap rides on the title strip

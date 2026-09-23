@@ -44,9 +44,14 @@ function hookButton(b: TextButton): void {
 	b.SelectionGained.Connect(hover);
 }
 
-/** a screen, dialog or overlay that is showing (the toast stack is not one; nor is a screen kept hidden for reuse) */
+/**
+ * a screen, dialog or overlay that is showing (the toast stack is not one; nor is a screen kept hidden for reuse; nor
+ * the town flyover pinned under the menus, a backdrop that stays while screens come and go -- townFlyover.ts)
+ */
 function isPanel(child: Instance): boolean {
-	return child.IsA("Frame") && child.Name !== "ToastStack" && child.Visible;
+	return (
+		child.IsA("Frame") && child.Name !== "ToastStack" && child.Visible && child.GetAttribute("Backdrop") !== true
+	);
 }
 
 function hasPanel(layer: Instance): boolean {
@@ -97,7 +102,8 @@ export function startUiAudio(ctx: GameContext): void {
 	// a screen kept built between uses (the backpack) opens and closes by visibility, not by being added / removed
 	const watched = new Map<Instance, RBXScriptConnection>();
 	const watch = (child: Instance): void => {
-		if (!child.IsA("Frame") || child.Name === "ToastStack" || watched.has(child)) return;
+		if (!child.IsA("Frame") || child.Name === "ToastStack" || child.GetAttribute("Backdrop") === true) return;
+		if (watched.has(child)) return;
 		const conn = child.GetPropertyChangedSignal("Visible").Connect(() => {
 			if (child.Visible) audio.play("uiOpen");
 			else panelClosed(layer);

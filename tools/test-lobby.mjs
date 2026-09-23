@@ -1365,14 +1365,16 @@ const attrConns = () => [...Workspace[INTERNAL].attrSignals.values()].reduce((n,
 lobby.close();
 flush();
 check("fechar tira a tela", lobbyRoot() === undefined);
+// the flyover is the backdrop of ALL the menus (UI-10): the screen the lobby hands over to (Settings, the Wardrobe, the
+// Shop...) stands on it, so closing the lobby leaves it pinned and gliding -- its one frame connection is the only one
 check(
-	"...e desliga tudo o que ela ouvia: quadros, carteira, atributos do mundo",
-	RunService.RenderStepped.conns.length === renderBefore && walletListeners === 0 && attrConns() === 0,
+	"...e desliga tudo o que ela ouvia: quadros, carteira, atributos do mundo (so o voo continua, atras da proxima tela)",
+	RunService.RenderStepped.conns.length === renderBefore + 1 && walletListeners === 0 && attrConns() === 0,
 	`quadro ${RunService.RenderStepped.conns.length - renderBefore}, carteira ${walletListeners}, atributos ${attrConns()}`,
 );
 check(
-	"o voo sobre a cidade fica guardado fora da tela (a Loja e volta nao o reconstroem)",
-	Fly.activeFlyover() !== undefined && Fly.activeFlyover().layer.Parent === undefined,
+	"o voo sobre a cidade continua preso no fundo da camada da UI (a proxima tela de menu o mostra; so a partida o solta)",
+	Fly.activeFlyover() !== undefined && Fly.activeFlyover().layer.Parent === ctx.uiLayer,
 );
 const aliveKept = alive();
 const perCycle = [];

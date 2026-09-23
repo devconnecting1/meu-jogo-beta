@@ -1,39 +1,53 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
-import { computeTouchLayout, defaultTouchPrefs, TouchButton, TouchLayout, TouchPrefs } from "shared/engine/input";
+import { defaultSettings } from "shared/game/save";
+import { computeTouchLayout, TouchButton, TouchLayout, TouchPrefs } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { previewBgm, previewSfx } from "../audio";
 import { refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
+import { COMPACT_LAYOUT, placeTouchConsole } from "./hudConsole";
 import { popup } from "./popup";
-import { GAME, RADIUS, SURFACE, TEXT, THEME, space } from "./theme";
+import { RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import { SCHEMES, currentScheme } from "./tutorial";
 import {
 	Button,
-	Segmented,
+	ScrollList,
 	Slider,
 	SliderHandle,
 	Tabs,
 	autoFocus,
+	cardHeaderHeight,
+	centredRect,
 	makeFrame,
 	makeLabel,
 	makeScreen,
 	makeSurface,
 	nl,
+	onLayoutChange,
+	reducedMotion,
 	setVisible,
 	tabWidth,
 } from "./widgets";
 import {
+	RadioGroup,
 	SECTION_CONTENT_Y,
-	SECTION_TITLE_MID,
+	SETTING_CONTROL_X,
+	SETTING_DESC_ROW_H,
 	SETTING_ROW_H,
+	SWITCH_H,
 	Section,
-	SettingNote,
+	Groove,
+	SettingAction,
 	SettingRow,
 	SettingRowHandle,
+	SettingRowOpts,
 	SettingsList,
+	Switch,
+	SwitchHandle,
 	ValueKey,
 	Window,
+	radioGroupHeight,
 	sectionHeight,
 	setValueKey,
 	settingsListHeight,
@@ -41,8 +55,17 @@ import {
 
 /*
  * Settings: the reference's modal window (DESIGN_RULES UI-07) -- header with the big centred title, "?" and the red
- * X; a tab bar; one section per tab whose rows are "label cell | value cell", the value a slider, a segmented
- * choice or a dark key.
+ * X; a tab bar; the tabs' sections of rows "label cell | value cell".
+ *
+ * Every row that CHANGES something is a form row (window.ts, the structure of a web form's horizontal item drawn in
+ * our plates): its label, a muted one-line description of what it really does, and the control in the value cell --
+ * a slider, a Switch for a boolean (floating stick, left-handed), a key for a read-only value. A tab with settings of
+ * its own ends in a "Defaults" action row, which asks before putting that tab's fields back to defaultSettings().
+ * Controls picks the device whose keys it lists with a stacked radio group (the schemes differ in a way one word does
+ * not say); About keeps the plain rows (facts, not settings).
+ *
+ * Deliberately NOT here (UI-07's form exceptions): a Save / Cancel footer and a "dirty" state -- a change applies at
+ * once and is saved with the progress, as in a game; and text inputs, dropdowns, date pickers, multi-selects.
  *
  * What is NOT here any more: the English / Korean switch. Roblox translates the game by the player's own account
  * (src/shared/data/lang.ts only keeps overrides), so that switch changed nothing a player could see.
@@ -51,22 +74,53 @@ import {
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
 
 const WIN_W = 900;
-const WIN_H = 576;
 const PAD = space(6);
 const TAB_H = 34;
-/** the section: from under the tab bar to the window's bottom padding */
+/** a tab's page: the width under the tab bar, and the gap between two of its sections */
 const SECTION_W = WIN_W - PAD * 2;
+const SECTION_GAP = space(4);
 /** the list inside a section, inset like the reference's */
 const LIST_X = space(4);
 const LIST_W = SECTION_W - LIST_X * 2;
-const LABEL_W = 220;
-/** the touch page: rows on the left, the preview of the player's own screen on the right */
-const TOUCH_LIST_W = 500;
-const TOUCH_LABEL_W = 170;
+/** every row that changes something is a form row (window.ts SettingRow with a description) */
+const ROW_H = SETTING_DESC_ROW_H;
+/** General: the label column is wide enough for its descriptions in one line, down to a phone */
+const GENERAL_LABEL_W = 400;
+/** Touch: the rows on the left, the preview of the player's own screen on the right */
+const TOUCH_LIST_W = 580;
+const TOUCH_LABEL_W = 330;
+/** Controls: the device (radio group) on the left, its keys on the right */
+const DEVICE_W = 320;
+const KEYS_LABEL_W = 280;
+/** the key rows: a key (28) with a hair of room, so the longest scheme (Touch, nine rows) fits without scrolling */
+const KEY_ROW_H = 34;
+/** the device's note under the radio group: three lines of TEXT.sm, down to a phone */
+const DEVICE_NOTE_H = 72;
 /** a slider row: the slider, then its value as a key at the right of the cell */
 const VALUE_KEY_W = 72;
-const SEGMENT_W = 200;
-const SEGMENT_H = 30;
+
+/** `n` form rows */
+function formRows(n: number): Array<number> {
+	const out: Array<number> = [];
+	for (let i = 0; i < n; i++) out.push(ROW_H);
+	return out;
+}
+
+/** General: Audio (SFX, BGM) and Interface (HUD size, Reduce motion, Defaults) */
+const AUDIO_LIST_H = settingsListHeight(formRows(2));
+const INTERFACE_LIST_H = settingsListHeight(formRows(3));
+const GENERAL_H = sectionHeight(AUDIO_LIST_H) + SECTION_GAP + sectionHeight(INTERFACE_LIST_H);
+/** Touch controls: six settings and Defaults, in one section beside the preview */
+const TOUCH_H = sectionHeight(settingsListHeight(formRows(7)));
+/**
+ * The window is ONE fixed size for every tab (UI-07: it does not jump when a tab changes), that of the TALLEST page
+ * -- General and Touch controls are within a few units of each other, so neither leaves a band of empty window
+ * under its sections; Controls fills it with its key list, and About is a short list of facts.
+ */
+const PAGE_H = math.max(GENERAL_H, TOUCH_H);
+/** where the pages start: under the header and the tab bar */
+const SECTION_Y = cardHeaderHeight(TEXT.xl3) + space(1) + TAB_H + space(4);
+const WIN_H = SECTION_Y + PAGE_H + space(5);
 
 type Tr = (key: string) => string;
 
@@ -76,28 +130,48 @@ function pct(v: number): string {
 
 /** what the "?" of the window explains: what each tab is for, one line each ("#" = new line, see nl) */
 const HELP_TEXT = [
-	"General: sound effects and music volume, and the size of the on-screen panels.",
+	"General: how loud the sounds and the music are, and how big the panels of a run are.",
 	"Touch controls: size, height and side of the phone controls, with a preview of your screen.",
-	"Controls: every key and button the game listens to.",
+	"Controls: every key and button the game listens to, on each device.",
 	"About: the game and its credits.",
-	"Changes are saved with your progress, by themselves.",
+	"A change applies at once and is saved with your progress. Defaults puts a tab back as it came.",
 ].join("#");
 
-export function showSettings(ctx: GameContext, onBack: () => void, onCredits: () => void): () => void {
+/** the one line under each device of Controls (SCHEMES order): what sets it apart, from its own rows */
+const SCHEME_BLURBS = ["WASD moves, mouse aims.", "Thumbs move and aim.", "Sticks move and aim."];
+
+/**
+ * `onCredits` undefined: no credits row (Settings opened over a running match, where the credits page -- text straight
+ * on the page -- would not read over a bright street). `overWorld`: opened over a running match from its menu
+ * (DESIGN_RULES UI-06): the world's see-through scrim, so the street keeps moving behind it; from the lobby the screen
+ * is see-through and the town flyover behind the menus is what shows (UI-10).
+ */
+export function showSettings(
+	ctx: GameContext,
+	onBack: () => void,
+	onCredits?: () => void,
+	overWorld = false,
+): () => void {
 	const tr: Tr = (key: string): string => langGet(key, ctx.save.settings.langType);
-	const { root, body } = makeScreen(ctx.uiLayer, "Settings");
+	const { root, body } = makeScreen(ctx.uiLayer, "Settings", {
+		transparency: overWorld ? TRANSPARENCY.overWorld : 1,
+		zIndex: 250,
+		content: centredRect(WIN_W, WIN_H),
+	});
 	const s = ctx.save.settings;
-	/** every slider of the screen (disconnected when it closes) */
+	/** every slider and switch of the screen (their input listeners go when it closes) */
 	const handles: Array<SliderHandle> = [];
+	const switches: Array<SwitchHandle> = [];
 	/** redraws the control preview after a touch setting changed */
 	let refreshPreview: (() => void) | undefined;
-	/** every control of the touch page re-reads the save (used by "Reset controls") */
+	/** each tab's controls re-read the save (a "Defaults" reset) */
+	const generalRefreshers: Array<() => void> = [];
 	const touchRefreshers: Array<() => void> = [];
 
 	/*
 	 * Persistence: a settings change is a save like any other, but a slider fires on every pixel of the drag.
-	 * The write is therefore coalesced into one request a second at most; leaving the screen goes through the
-	 * lobby, which saves again, so nothing can be lost by closing the game right after a change.
+	 * The write is therefore coalesced into one request a second at most; leaving the screen saves again, so
+	 * nothing can be lost by closing the game right after a change.
 	 */
 	let saveQueued = false;
 	const persist = (): void => {
@@ -126,10 +200,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 	};
 
 	const win = Window(body, "Window", {
-		x: (1120 - WIN_W) / 2,
-		y: (630 - WIN_H) / 2,
-		w: WIN_W,
-		h: WIN_H,
+		...centredRect(WIN_W, WIN_H),
 		title: tr("Settings"),
 		onClose: (): void => onBack(),
 		onHelp: (): void => {
@@ -138,19 +209,17 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 	});
 	const panel = win.frame;
 	const tabsY = win.contentY + space(1);
-	const sectionY = tabsY + TAB_H + space(4);
-	const sectionH = WIN_H - sectionY - space(5);
 
 	// ---- rows
 
-	/** a slider row: the slider across the value cell, the value as a key at its right */
+	/** a slider form row: the slider from the control column across the cell, the value as a key at its right */
 	const sliderRow = (
 		row: SettingRowHandle,
 		name: string,
 		valueW: number,
 		get: () => number,
 		set: (v: number) => void,
-		refreshers?: Array<() => void>,
+		refreshers: Array<() => void>,
 	): void => {
 		const cell = row.value;
 		const key = ValueKey(cell, `${name}Value`, pct(get()), {
@@ -160,10 +229,10 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			textSize: TEXT.base,
 		});
 		const handle = Slider(cell, name, {
-			x: space(4),
+			x: SETTING_CONTROL_X,
 			y: 0,
-			w: valueW - space(4) * 2 - VALUE_KEY_W - space(3),
-			h: SETTING_ROW_H,
+			w: valueW - SETTING_CONTROL_X - space(4) - VALUE_KEY_W - space(3),
+			h: ROW_H,
 			get,
 			set: (v: number): void => {
 				set(v);
@@ -172,35 +241,63 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			zIndex: cell.ZIndex + 1,
 		});
 		handles.push(handle);
-		refreshers?.push(() => {
+		refreshers.push(() => {
 			handle.refresh();
 			setValueKey(key, pct(get()));
 		});
 	};
 
-	/** an Off / On row: a segmented choice, centred in the value cell */
+	/** a boolean form row: the kit's Switch in the control column */
 	const switchRow = (
 		row: SettingRowHandle,
 		name: string,
-		valueW: number,
 		get: () => boolean,
 		set: (v: boolean) => void,
-		refreshers?: Array<() => void>,
+		refreshers: Array<() => void>,
 	): void => {
-		const tabs = Segmented(row.value, name, {
-			x: (valueW - SEGMENT_W) / 2,
-			y: (SETTING_ROW_H - SEGMENT_H) / 2,
-			w: SEGMENT_W,
-			h: SEGMENT_H,
-			items: [tr("Off"), tr("On")],
-			value: get() ? 1 : 0,
+		const sw = Switch(row.value, name, {
+			x: SETTING_CONTROL_X,
+			y: (ROW_H - SWITCH_H) / 2,
+			value: get(),
+			onText: tr("On"),
+			offText: tr("Off"),
 			zIndex: row.value.ZIndex + 1,
-			onChange: (i: number): void => set(i === 1),
+			onChange: set,
 		});
-		refreshers?.push(() => tabs.setActive(get() ? 1 : 0));
+		switches.push(sw);
+		refreshers.push(() => sw.set(get()));
 	};
 
-	/** a text value, centred in the value cell */
+	/**
+	 * A tab's "Defaults" action row: its button asks first (the kit's popup), then `reset` puts that tab's fields back
+	 * to defaultSettings() -- the one source of the defaults, the save's own.
+	 */
+	const defaultsRow = (
+		list: ScrollList,
+		order: number,
+		labelW: number,
+		description: string,
+		confirm: string,
+		reset: () => void,
+	): void => {
+		SettingAction(
+			list,
+			"Defaults",
+			order,
+			tr("Defaults"),
+			tr(description),
+			tr("Reset"),
+			(): void => {
+				popup(ctx, tr("Reset to defaults?"), tr(confirm), [
+					{ text: tr("Cancel"), variant: "secondary" },
+					{ text: tr("Reset"), onClick: reset },
+				]);
+			},
+			{ labelW },
+		);
+	};
+
+	/** a text value, centred in the value cell (About) */
 	const textRow = (row: SettingRowHandle, valueW: number, text: string): void => {
 		makeLabel(row.value, "Text", text, space(3), 0, valueW - space(6), SETTING_ROW_H, TEXT.base, THEME.foreground, {
 			zIndex: row.value.ZIndex + 1,
@@ -211,30 +308,29 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 
 	/** a page: the area under the tab bar, holding one full-height section or a few fitted ones */
 	const pageFrame = (index: number): Frame =>
-		makeFrame(panel, `Page${index}`, PAD, sectionY, SECTION_W, sectionH, THEME.background, { transparency: 1 });
-	/** one section filling the page (a long list scrolls inside it) */
-	const pageSection = (index: number, title: string): Frame => {
-		const sec = Section(panel, `Page${index}`, { x: PAD, y: sectionY, w: SECTION_W, h: sectionH, title });
-		return sec.frame;
-	};
+		makeFrame(panel, `Page${index}`, PAD, SECTION_Y, SECTION_W, PAGE_H, THEME.background, { transparency: 1 });
 	const listY = SECTION_CONTENT_Y;
-	const listH = sectionH - sectionHeight(0);
+	/** the list of a section as tall as the page */
+	const fullListH = PAGE_H - sectionHeight(0);
 
 	const buildGeneral = (index: number): Frame => {
 		const page = pageFrame(index);
-		const valueW = LIST_W - LABEL_W;
-		// two short sections, each as tall as its rows: an empty plate under two sliders reads as an unfinished screen
-		const audioListH = settingsListHeight([SETTING_ROW_H, SETTING_ROW_H]);
+		const valueW = LIST_W - GENERAL_LABEL_W;
+		const form = (description: string): SettingRowOpts => ({
+			labelW: GENERAL_LABEL_W,
+			description: tr(description),
+		});
 		const audio = Section(page, "Audio", {
 			x: 0,
 			y: 0,
 			w: SECTION_W,
-			h: sectionHeight(audioListH),
+			h: sectionHeight(AUDIO_LIST_H),
 			title: tr("Audio"),
 		});
-		const list = SettingsList(audio.frame, "List", LIST_X, listY, LIST_W, audioListH);
+		const list = SettingsList(audio.frame, "List", LIST_X, listY, LIST_W, AUDIO_LIST_H);
+		// the SFX bus also carries the interface's clicks (audio.ts: the UI rides the SFX slider)
 		sliderRow(
-			SettingRow(list, "Sfx", 0, tr("SFX")),
+			SettingRow(list, "Sfx", 0, tr("SFX"), form("Gunshots, hits, footsteps, menu clicks.")),
 			"Sfx",
 			valueW,
 			() => s.soundEffect,
@@ -243,9 +339,12 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				previewSound(previewSfx);
 				persist();
 			},
+			generalRefreshers,
 		);
+		// the BGM bus: the night music, the day's ambience, the wave and dawn stingers and the heartbeat (music.ts);
+		// there is no menu music
 		sliderRow(
-			SettingRow(list, "Bgm", 1, tr("BGM")),
+			SettingRow(list, "Bgm", 1, tr("BGM"), form("Night music, ambience and the heartbeat.")),
 			"Bgm",
 			valueW,
 			() => s.bgm,
@@ -254,20 +353,20 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				previewSound(previewBgm);
 				persist();
 			},
+			generalRefreshers,
 		);
 
-		const noteH = 40;
-		const uiListH = settingsListHeight([SETTING_ROW_H, noteH]);
 		const ui = Section(page, "Interface", {
 			x: 0,
-			y: sectionHeight(audioListH) + space(4),
+			y: sectionHeight(AUDIO_LIST_H) + SECTION_GAP,
 			w: SECTION_W,
-			h: sectionHeight(uiListH),
+			h: sectionHeight(INTERFACE_LIST_H),
 			title: tr("Interface"),
 		});
-		const uiList = SettingsList(ui.frame, "List", LIST_X, listY, LIST_W, uiListH);
+		const uiList = SettingsList(ui.frame, "List", LIST_X, listY, LIST_W, INTERFACE_LIST_H);
+		// hud.ts (console, day plate, the E hint, the messages) and the first run's coach read it when a run mounts
 		sliderRow(
-			SettingRow(uiList, "UiSize", 0, tr("HUD size")),
+			SettingRow(uiList, "UiSize", 0, tr("HUD size"), form("Console, day plate, hints and messages.")),
 			"UiSize",
 			valueW,
 			() => s.uiSize,
@@ -275,68 +374,112 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				s.uiSize = v;
 				persist();
 			},
+			generalRefreshers,
 		);
-		SettingNote(
+		// Reduce Motion is the player's Roblox setting, and the game honours it (skin.ts): the town behind the menus
+		// stands still and the fades cut. Shown as a key -- information, never a control -- that follows it live
+		const motion = SettingRow(
 			uiList,
-			"Note",
+			"Motion",
 			1,
-			tr("HUD size scales the on-screen panels. The touch controls have their own size in Touch controls."),
-			noteH,
+			tr("Reduce motion"),
+			form("Set in the Roblox menu. Stills the town."),
+		);
+		const motionKey = ValueKey(motion.value, "Value", "", { x: SETTING_CONTROL_X, anchorX: 0, minW: VALUE_KEY_W });
+		onLayoutChange(motionKey, () => setValueKey(motionKey, tr(reducedMotion() ? "On" : "Off")));
+		defaultsRow(
+			uiList,
+			2,
+			GENERAL_LABEL_W,
+			"SFX, BGM and HUD size back to 50%.",
+			"SFX, BGM and HUD size go back to 50%.",
+			(): void => {
+				const d = defaultSettings();
+				s.soundEffect = d.soundEffect;
+				s.bgm = d.bgm;
+				s.uiSize = d.uiSize;
+				for (const fn of generalRefreshers) fn();
+				persist();
+			},
 		);
 		return page;
 	};
 
 	const buildTouch = (index: number): Frame => {
-		const page = pageSection(index, tr("Touch controls"));
-		const list = SettingsList(page, "List", LIST_X, listY, TOUCH_LIST_W, listH);
-		const opts = { labelW: TOUCH_LABEL_W };
+		const page = Section(panel, `Page${index}`, {
+			x: PAD,
+			y: SECTION_Y,
+			w: SECTION_W,
+			h: PAGE_H,
+			title: tr("Touch controls"),
+		}).frame;
+		const list = SettingsList(page, "List", LIST_X, listY, TOUCH_LIST_W, fullListH);
 		const valueW = TOUCH_LIST_W - TOUCH_LABEL_W;
-		const slider = (name: string, order: number, label: string, get: () => number, set: (v: number) => void) =>
-			sliderRow(SettingRow(list, name, order, tr(label), opts), name, valueW, get, set, touchRefreshers);
+		const form = (description: string): SettingRowOpts => ({ labelW: TOUCH_LABEL_W, description: tr(description) });
+		const slider = (
+			name: string,
+			order: number,
+			label: string,
+			description: string,
+			get: () => number,
+			set: (v: number) => void,
+		): void =>
+			sliderRow(
+				SettingRow(list, name, order, tr(label), form(description)),
+				name,
+				valueW,
+				get,
+				(v: number): void => {
+					set(v);
+					applyTouch();
+				},
+				touchRefreshers,
+			);
+		// shared/engine/input.ts computeTouchLayout: sizes 75%..125%, heights along the side's lift range
 		slider(
 			"LeftSize",
 			0,
 			"Stick size",
+			"How big the move stick is.",
 			() => s.leftSize,
 			v => {
 				s.leftSize = v;
-				applyTouch();
 			},
 		);
 		slider(
 			"LeftPos",
 			1,
 			"Stick height",
+			"How high the move stick sits.",
 			() => s.leftPos,
 			v => {
 				s.leftPos = v;
-				applyTouch();
 			},
 		);
+		// the aim pad's size also sizes USE and RELOAD beside it and BAG and MENU in the corner
 		slider(
 			"RightSize",
 			2,
 			"Aim pad size",
+			"Aim pad and the four buttons.",
 			() => s.rightSize,
 			v => {
 				s.rightSize = v;
-				applyTouch();
 			},
 		);
 		slider(
 			"RightPos",
 			3,
 			"Aim pad height",
+			"How high the aim pad sits.",
 			() => s.rightPos,
 			v => {
 				s.rightPos = v;
-				applyTouch();
 			},
 		);
 		switchRow(
-			SettingRow(list, "Relative", 4, tr("Floating stick"), opts),
+			SettingRow(list, "Relative", 4, tr("Floating stick"), form("The stick opens under your thumb.")),
 			"Relative",
-			valueW,
 			() => s.leftRelative,
 			v => {
 				s.leftRelative = v;
@@ -345,9 +488,8 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			touchRefreshers,
 		);
 		switchRow(
-			SettingRow(list, "Mirror", 5, tr("Left-handed"), opts),
+			SettingRow(list, "Mirror", 5, tr("Left-handed"), form("Swaps the stick and the aim pad.")),
 			"Mirror",
-			valueW,
 			() => s.mirror,
 			v => {
 				s.mirror = v;
@@ -355,26 +497,14 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			},
 			touchRefreshers,
 		);
-		SettingNote(
+		defaultsRow(
 			list,
-			"Note",
 			6,
-			tr(
-				"Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.",
-			),
-			48,
-		);
-		const reset = SettingRow(list, "Reset", 7, tr("Defaults"), opts);
-		Button(reset.value, "ResetTouch", tr("Reset controls"), {
-			x: (valueW - 180) / 2,
-			y: (SETTING_ROW_H - 30) / 2,
-			w: 180,
-			h: 30,
-			size: "sm",
-			variant: "secondary",
-			zIndex: reset.value.ZIndex + 1,
-			onClick: (): void => {
-				const d = defaultTouchPrefs();
+			TOUCH_LABEL_W,
+			"All six back to how they came.",
+			"Sizes and heights back to 50%, a floating stick, the aim pad on the right.",
+			(): void => {
+				const d = defaultSettings();
 				s.leftSize = d.leftSize;
 				s.leftPos = d.leftPos;
 				s.leftRelative = d.leftRelative;
@@ -384,48 +514,73 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 				for (const fn of touchRefreshers) fn();
 				applyTouch();
 			},
-		});
+		);
 		const previewX = LIST_X + TOUCH_LIST_W + space(4);
-		refreshPreview = buildPreview(ctx, tr, page, previewX, listY, SECTION_W - previewX - LIST_X, listH);
+		refreshPreview = buildPreview(ctx, tr, page, previewX, listY, SECTION_W - previewX - LIST_X, fullListH);
 		return page;
 	};
 
 	const buildControls = (index: number): Frame => {
-		const page = pageSection(index, tr(SCHEMES[0].title));
-		const title = page.FindFirstChild("Title") as TextLabel | undefined;
-		// the player's own scheme first: a phone player should not have to read the keyboard's to find theirs
+		const page = pageFrame(index);
+		// the player's own device first: a phone player should not have to read the keyboard's keys to find theirs
 		const lastInput = currentScheme();
+		const keysX = DEVICE_W + SECTION_GAP;
+		const keysW = SECTION_W - keysX;
+		const keysListW = keysW - LIST_X * 2;
+		const keys = Section(page, "Keys", {
+			x: keysX,
+			y: 0,
+			w: keysW,
+			h: PAGE_H,
+			title: tr(SCHEMES[lastInput].title),
+		});
 		const lists: Array<Frame> = [];
-		const labelW = 320;
 		for (let i = 0; i < SCHEMES.size(); i++) {
 			const scheme = SCHEMES[i];
-			const list = SettingsList(page, `List${i}`, LIST_X, listY, LIST_W, listH);
+			const list = SettingsList(keys.frame, `List${i}`, LIST_X, listY, keysListW, fullListH);
 			for (let r = 0; r < scheme.rows.size(); r++) {
 				const [chip, what] = scheme.rows[r];
-				const row = SettingRow(list, `Row${r}`, r, tr(what), { labelW });
+				const row = SettingRow(list, `Row${r}`, r, tr(what), { labelW: KEYS_LABEL_W, rowH: KEY_ROW_H });
 				ValueKey(row.value, "Key", chip, { minW: 180 });
 			}
-			SettingNote(list, "Note", scheme.rows.size(), tr(scheme.note));
 			lists.push(list.frame.Parent as Frame);
 		}
+		// which device's keys: three options that differ in more than a word, so a stacked radio group, each with the
+		// line that says how that device plays -- and under it, that device's note ("Right click also interacts.")
+		const deviceW = DEVICE_W - LIST_X * 2;
+		const radioH = radioGroupHeight(SCHEMES.size());
+		const device = Section(page, "Device", {
+			x: 0,
+			y: 0,
+			w: DEVICE_W,
+			h: sectionHeight(radioH + space(2) + DEVICE_NOTE_H),
+			title: tr("Device"),
+		});
+		const bed = Groove(device.frame, "NoteBed", LIST_X, listY + radioH + space(2), deviceW, DEVICE_NOTE_H);
+		const note = makeLabel(
+			bed,
+			"Note",
+			"",
+			space(3),
+			space(2),
+			deviceW - space(6),
+			DEVICE_NOTE_H - space(4),
+			TEXT.sm,
+			THEME.mutedForeground,
+			{ align: "left", valign: "top", zIndex: bed.ZIndex + 1 },
+		);
 		const show = (i: number): void => {
 			for (let k = 0; k < lists.size(); k++) setVisible(lists[k], k === i);
-			if (title !== undefined) title.Text = tr(SCHEMES[i].title);
+			if (keys.title !== undefined) keys.title.Text = tr(SCHEMES[i].title);
+			note.Text = tr(SCHEMES[i].note);
 		};
-		// the scheme switch sits on the section's title line, at its right
-		const schemeNames = SCHEMES.map(sc => tr(sc.title === "Keyboard & mouse" ? "Keyboard" : sc.title));
-		const widths = schemeNames.map(n => tabWidth(n, TEXT.base));
-		let total = 6 + 3 * (widths.size() - 1);
-		for (const wd of widths) total += wd;
-		Segmented(page, "Scheme", {
-			x: SECTION_W - space(5) - total,
-			y: SECTION_TITLE_MID - SEGMENT_H / 2,
-			w: total,
-			h: SEGMENT_H,
-			items: schemeNames,
-			widths,
+		RadioGroup(device.frame, "Schemes", {
+			x: LIST_X,
+			y: listY,
+			w: deviceW,
+			options: SCHEMES.map((sc, i) => ({ label: tr(sc.title), description: tr(SCHEME_BLURBS[i] ?? "") })),
 			value: lastInput,
-			zIndex: page.ZIndex + 1,
+			zIndex: device.frame.ZIndex + 1,
 			onChange: show,
 		});
 		show(lastInput);
@@ -434,14 +589,10 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 
 	const buildAbout = (index: number): Frame => {
 		const page = pageFrame(index);
-		const aboutListH = settingsListHeight([
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-		]);
+		// five rows about the game, and the way to the credits where there is one
+		const rows = [SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H];
+		if (onCredits !== undefined) rows.push(SETTING_ROW_H);
+		const aboutListH = settingsListHeight(rows);
 		const about = Section(page, "About", {
 			x: 0,
 			y: 0,
@@ -450,7 +601,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			title: tr("About"),
 		});
 		const list = SettingsList(about.frame, "List", LIST_X, listY, LIST_W, aboutListH);
-		const valueW = LIST_W - LABEL_W;
+		const valueW = LIST_W - 220;
 		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
 		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
 		// CON-01: the original is credited, by name and studio
@@ -462,6 +613,8 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
 		);
 		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		const openCredits = onCredits;
+		if (openCredits === undefined) return page;
 		const credits = SettingRow(list, "Credits", 5, tr("Credits"));
 		Button(credits.value, "OpenCredits", tr("Open credits"), {
 			x: (valueW - 180) / 2,
@@ -471,7 +624,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			size: "sm",
 			variant: "secondary",
 			zIndex: credits.value.ZIndex + 1,
-			onClick: (): void => onCredits(),
+			onClick: (): void => openCredits(),
 		});
 		return page;
 	};
@@ -508,6 +661,8 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 	return (): void => {
 		for (const h of handles) h.disconnect();
 		handles.clear();
+		for (const sw of switches) sw.disconnect();
+		switches.clear();
 		requestSave("menu");
 		root.Destroy();
 	};
@@ -515,12 +670,21 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 
 // ---------------------------------------------------------------- touch-control preview
 
+/** one control of the preview: its dot, and where it is (screen px of the real layout) */
+interface PreviewDot {
+	frame: Frame;
+	pick: (L: TouchLayout) => TouchButton;
+}
+
 /**
  * A scale model of the player's own screen with the controls where they will actually be. It is built from
  * `computeTouchLayout` at the REAL viewport size and then shrunk, so it is the same geometry the thumbs will
- * meet — including the device's shape and the safe area — and not a drawing that has to be kept in sync.
+ * meet — including the device's shape and the safe area — and not a drawing that has to be kept in sync. The HUD's
+ * compact console is drawn where hudConsole.ts puts it between the thumbs, at the HUD size of the General tab.
  *
  * It is also the only way a player on a PC (or the author on a monitor) can set up the phone layout at all.
+ *
+ * Built once: a slider dragged or a switch flipped only moves and resizes its frames (no Instance is created).
  */
 function buildPreview(
 	ctx: GameContext,
@@ -537,8 +701,6 @@ function buildPreview(
 	const w = h / aspect;
 	const px = x + (boxW - w) / 2;
 	const screen = makeSurface(parent, "Preview", px, y, w, h, "well", { clips: true, zIndex: parent.ZIndex + 1 });
-	// the drawing lives in its own layer, so a redraw clears it without touching the well's skin layers
-	const dots = makeFrame(screen, "Dots", 0, 0, w, h, THEME.background, { transparency: 1, zIndex: screen.ZIndex });
 	makeLabel(
 		parent,
 		"PreviewCaption",
@@ -552,41 +714,58 @@ function buildPreview(
 		{ zIndex: parent.ZIndex + 1 },
 	);
 
+	const dot = (name: string, color: Color3, zIndex: number): Frame =>
+		makeFrame(screen, name, 0, 0, 1, 1, color, {
+			radius: RADIUS.full,
+			zIndex: screen.ZIndex + zIndex,
+			transparency: 0.25,
+		});
+	// the stick's knob sits on its base: both are drawn at the stick's home, one radius each
+	const dots: Array<PreviewDot> = [
+		{
+			frame: dot("Stick", THEME.foreground, 1),
+			pick: L => ({ x: L.move.homeX, y: L.move.homeY, r: L.move.baseR }),
+		},
+		{
+			frame: dot("StickKnob", SURFACE.frame, 2),
+			pick: L => ({ x: L.move.homeX, y: L.move.homeY, r: L.move.knobR }),
+		},
+		{ frame: dot("Aim", THEME.destructive, 1), pick: L => ({ x: L.aim.homeX, y: L.aim.homeY, r: L.aim.baseR }) },
+		{ frame: dot("Use", THEME.primary, 3), pick: L => L.use },
+		{ frame: dot("Reload", THEME.secondary, 3), pick: L => L.reload },
+		{ frame: dot("Bag", THEME.secondary, 3), pick: L => L.bag },
+		{ frame: dot("Menu", THEME.secondary, 3), pick: L => L.pause },
+	];
+	// the HUD's compact console on touch, so the player can see nothing is covered
+	const deck = makeFrame(screen, "Console", 0, 0, 1, 1, SURFACE.section, {
+		radius: RADIUS.sm,
+		zIndex: screen.ZIndex + 1,
+		transparency: 0.25,
+	});
+
 	const draw = (): void => {
-		for (const child of dots.GetChildren()) child.Destroy();
+		const st = ctx.save.settings;
 		const prefs: TouchPrefs = {
-			leftSize: ctx.save.settings.leftSize,
-			leftPos: ctx.save.settings.leftPos,
-			leftRelative: ctx.save.settings.leftRelative,
-			rightSize: ctx.save.settings.rightSize,
-			rightPos: ctx.save.settings.rightPos,
-			mirror: ctx.save.settings.mirror,
+			leftSize: st.leftSize,
+			leftPos: st.leftPos,
+			leftRelative: st.leftRelative,
+			rightSize: st.rightSize,
+			rightPos: st.rightPos,
+			mirror: st.mirror,
 		};
 		const L: TouchLayout = computeTouchLayout(prefs, ctx.viewW, ctx.viewH, 0);
 		const f = w / math.max(L.viewW, 1);
-		const dot = (name: string, cx: number, cy: number, r: number, color: Color3, zIndex: number): void => {
-			const d = math.max(r * 2 * f, 4);
-			const g = makeFrame(dots, name, cx * f - d / 2, cy * f - d / 2, d, d, color, {
-				radius: RADIUS.full,
-				zIndex: dots.ZIndex + zIndex,
-				transparency: 0.25,
-			});
-			g.BorderSizePixel = 0;
-		};
-		dot("Stick", L.move.homeX, L.move.homeY, L.move.baseR, THEME.foreground, 1);
-		dot("StickKnob", L.move.homeX, L.move.homeY, L.move.knobR, SURFACE.frame, 2);
-		dot("Aim", L.aim.homeX, L.aim.homeY, L.aim.baseR, THEME.destructive, 1);
-		const btn = (name: string, b: TouchButton, color: Color3): void => dot(name, b.x, b.y, b.r, color, 3);
-		btn("Use", L.use, THEME.primary);
-		btn("Reload", L.reload, THEME.secondary);
-		btn("Bag", L.bag, THEME.secondary);
-		btn("Menu", L.pause, THEME.secondary);
-		// the weapon card of the HUD, so the player can see nothing is covered
-		makeFrame(dots, "Weapon", w / 2 - w * 0.11, h - h * 0.13, w * 0.22, h * 0.09, GAME.info, {
-			radius: RADIUS.sm,
-			zIndex: dots.ZIndex + 1,
-			transparency: 0.55,
-		});
+		for (const d of dots) {
+			const b = d.pick(L);
+			const size = math.max(b.r * 2 * f, 4);
+			d.frame.Position = UDim2.fromScale((b.x * f - size / 2) / w, (b.y * f - size / 2) / h);
+			d.frame.Size = UDim2.fromScale(size / w, size / h);
+		}
+		// hud.ts: the HUD size setting is 80% .. 120% of the HUD
+		const k = 0.8 + 0.4 * math.clamp(st.uiSize, 0, 1);
+		const c = placeTouchConsole(L, COMPACT_LAYOUT, k);
+		deck.Position = UDim2.fromScale((c.x * f) / w, (c.y * f) / h);
+		deck.Size = UDim2.fromScale((c.w * f) / w, (c.h * f) / h);
 	};
 	draw();
 	return draw;

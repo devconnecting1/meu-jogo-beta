@@ -120,7 +120,9 @@ function badgeAt(card: Frame, name: string, text: string, right: number, centerY
 export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () => void): () => void {
 	const lang = ctx.save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "Shop");
+	// a menu page: see-through, over the town flyover behind the menus (UI-10); its layout reaches the screen's
+	// edges (Back, the coins), so it keeps clear of the Roblox buttons as a whole (makeScreen's default content)
+	const { root, body } = makeScreen(ctx.uiLayer, "Shop", { transparency: 1 });
 
 	Button(body, "Back", `‹  ${tr("Back")}`, {
 		x: MARGIN_X,

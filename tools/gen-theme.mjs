@@ -57,6 +57,12 @@ const COLOR_TOKENS = [
 	["tab-active", "chart-2"],
 	/** the value cell of a settings row, one step lighter than the label cell (sidebar-accent) */
 	["cell", "sidebar-accent"],
+	/**
+	 * the description line under a settings row's label, IN the label cell (sidebar-accent): muted-foreground lightened
+	 * by the least step that reads at 4,5:1 there (muted-foreground itself is 3,55:1 on it). A theme without it falls
+	 * back to muted-foreground: the line stays, dimmer than it should be
+	 */
+	["cell-muted-foreground", "muted-foreground"],
 	/** the body of a modal window: one step lighter than the panels (sidebar), so the window stands off the page */
 	["window", "sidebar"],
 	// the item card's three voices (docs/DESIGN_RULES UI-08): numbers, bonuses, status effects. A theme without them
