@@ -41,8 +41,11 @@ import { InputCommand, MOVE_ANGLE_STEPS, SPEED_SCALE } from "./types";
 const TAU = math.pi * 2;
 const QUARTER = math.pi / 2;
 
-/** the stick further than this from the heading brakes instead of opening the throttle */
-export const BRAKE_ANGLE = math.rad(100);
+/**
+ * The stick further than this from the heading brakes instead of opening the throttle: 100°. Plain arithmetic, not
+ * `math.rad`: playerMove.ts loads this module, and the lighter Node shims (tools/test-input-buffer.mjs) have no `rad`.
+ */
+export const BRAKE_ANGLE = (100 * math.pi) / 180;
 /** a step that got less than this fraction of its length forward was head-on */
 export const CRASH_ALONG = 0.5;
 /** below this fraction of its hp a vehicle is broken: it cannot be ridden, E repairs it (VEI-05) */
