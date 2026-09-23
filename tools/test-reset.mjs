@@ -449,6 +449,18 @@ function bootServer() {
 		intent(p, kind) {
 			remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
 		},
+		/** one raw Input payload from `p`, as the client's UnreliableRemoteEvent delivers it */
+		input(p, payload) {
+			remote("Input").OnServerEvent.Fire(p, payload);
+		},
+		/** a TimePing from `p`; returns the TimePongs the server has sent `p` so far, decoded */
+		timeSync(p, payload) {
+			if (payload !== undefined) remote("TimeSync").OnServerEvent.Fire(p, payload);
+			return remote("TimeSync")
+				.sent.filter(e => e.to === p)
+				.map(e => P.decodeTimePong(e.args[0]))
+				.filter(x => x !== undefined);
+		},
 		enter(p) {
 			server.intent(p, P.IntentKind.EnterWorld);
 			server.run(0.6);
@@ -1978,6 +1990,96 @@ section("16) once the new town stands, the reset is finished whatever fails afte
 		s.run(WIPE_DECISION_S + 1);
 		check(wipes.length === 2, `${what} throws: rule 6 is armed again — the next fall ends the new world too`);
 	}
+});
+
+section("17) the reset's own time is not the new world's to repay, and the clients' clocks follow it", () => {
+	/*
+	 * Review of 097f484 (#5) and the MP-22 reviewer: generating the new town takes 100-250 ms, all of it inside ONE
+	 * heartbeat, so the NEXT heartbeat's delta carries it. Under the Heartbeat debt (§3.1) the new world opened by
+	 * repaying it -- two ticks a heartbeat for a dozen heartbeats, off input queues the clients fill with one command
+	 * each: every survivor stood still tick after tick in the first second of the new town. ServerSimulation now runs
+	 * one tick for that heartbeat and forgets the rest (`restartWorld`, `advance`), which puts the tick behind
+	 * tick0Time + tick / 60: the clients' clocks re-anchor on it from the TimePongs (client/net/clockSync.ts).
+	 */
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
+	const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const a = s.join(newUser(), "tempo");
+	veteran(s.save(a));
+	s.enter(a);
+	const init = s
+		.worldLog()
+		.flatMap(bt => bt.events)
+		.find(e => e.t === s.P.WorldEv.InitBegin);
+	// the client: one command per frame, each Input carrying the two before it (§2.2), and a TimePing a second
+	let seq = 500;
+	const recent = [];
+	const send = () => {
+		seq += 1;
+		recent.unshift({ seq, moveAng: 0, moveMag: 0, aim: 0, held: 0, edges: 0 });
+		if (recent.length > 3) recent.pop();
+		s.input(a, s.P.encodeInput({ viewTick: s.sim.tick % 65536, viewFrac: 0, cmds: recent }));
+	};
+	let pingSeq = 0;
+	const clock = new ClockSync();
+	clock.setEpoch(init?.tick0Time ?? 0, CFG.SIM_HZ);
+	let seenPongs = 0;
+	const frame = (dt = 1 / 60) => {
+		send();
+		if (Math.floor(s.Workspace.GetServerTimeNow() + dt) > Math.floor(s.Workspace.GetServerTimeNow())) {
+			pingSeq += 1;
+			s.timeSync(a, s.P.encodeTimePing({ seq: pingSeq, clientTime: s.Workspace.GetServerTimeNow() }));
+		}
+		s.beat(dt);
+		const pongs = s.timeSync(a);
+		for (; seenPongs < pongs.length; seenPongs++) {
+			clock.noteServerTick?.(pongs[seenPongs].serverTime, pongs[seenPongs].serverTick);
+		}
+		clock.update(dt, s.Workspace.GetServerTimeNow());
+	};
+	for (let i = 0; i < 120; i++) frame();
+	s.kill(a);
+	for (let i = 0; i < (WIPE_DECISION_S + 2) * 60 && wipes.length === 0; i++) frame();
+	check(wipes.length === 1, "the last survivor fell and nobody paid: the world ends");
+	const sp = s.body(a);
+	const filledBefore = sp?.counters.filled ?? 0;
+	// the 200 ms the new town took: the client's frames of that time land, then the heartbeat whose delta carries it
+	for (let i = 0; i < 12; i++) send();
+	const tickBefore = s.sim.tick;
+	s.beat(0.2 + 1 / 60);
+	// (an older src has no `backlogS`: its debt shows in the ticks the next heartbeats run)
+	const debt = s.sim.backlogS?.() ?? 0;
+	check(
+		s.sim.tick - tickBefore === 1 && debt < 1 / 60,
+		"the heartbeat that carries the reset runs one tick and keeps no debt of it",
+		`${s.sim.tick - tickBefore} tick(s), debt ${(debt * 1000).toFixed(0)} ms`,
+	);
+	let doubled = 0;
+	for (let i = 0; i < 60; i++) {
+		const t0 = s.sim.tick;
+		frame();
+		if (s.sim.tick - t0 > 1) doubled += 1;
+	}
+	check(doubled === 0, "…and no heartbeat of the new world's first second runs two ticks", `${doubled} did`);
+	const waits = (sp?.counters.filled ?? 0) - filledBefore;
+	check(waits === 0, "the survivor's input queue never runs dry in the new world's first second", `${waits} waits`);
+	// the forgiven 200 ms are behind tick0Time + tick / 60 now: a client's clock follows them within a few pongs
+	for (let i = 0; i < 5 * 60; i++) frame();
+	const behind = s.sim.tick + 1 - clock.tickNow();
+	check(
+		Math.abs(behind) <= 2,
+		"the clients' clock re-anchors on the tick the server actually runs (TimePong), within 2 ticks",
+		`clock ${clock.tickNow().toFixed(1)}, server ${s.sim.tick}, epoch moved ${((clock.stats().epochShift ?? 0) * 1000).toFixed(0)} ms`,
+	);
+	// (not the reset's, but the same live host: the admin rows carry the rewind's MP-16 evidence, review #3)
+	const row = s.host.anomalies().find(r => r.userId === a.UserId);
+	check(
+		row !== undefined && typeof row.rewindClamped === "number" && typeof row.shots === "number",
+		"the admin view's row for a survivor carries the rewind clamps and the shots they are out of (MP-16)",
+		row === undefined ? "no row" : `${row.rewindClamped} of ${row.shots}`,
+	);
 });
 
 // ================================================================

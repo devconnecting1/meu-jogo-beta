@@ -82,6 +82,7 @@ const { showLobby } = require(join(SRC, "client/ui/lobby.ts"));
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
 const { Hud } = require(join(SRC, "client/ui/hud.ts"));
 const { showRunSummary, showDaybreakWait } = require(join(SRC, "client/onboarding/gameOver.ts"));
+const REC = require(join(SRC, "client/ui/records.ts"));
 const { ACHIEVEMENTS } = require(join(SRC, "shared/data/achievements.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
@@ -219,8 +220,8 @@ const SCREENS = [
 	{
 		name: "Records (lobby)",
 		phase: "lobby",
-		root: "PopupOverlay",
-		control: "PopupBtn0",
+		root: "Records",
+		control: "Close",
 		open: () => {
 			findIn(layer.FindFirstChild("Lobby"), "Nav3").Activated.Fire();
 			flush();
@@ -568,21 +569,26 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	flush();
 	nav(3).Activated.Fire();
 	flush();
-	const records = layer.FindFirstChild("PopupOverlay");
-	const text = records
-		?.GetDescendants()
-		.filter(d => d.ClassName === "TextLabel")
-		.map(d => d.Text)
-		.join("\n");
+	const records = layer.FindFirstChild("Records");
+	// the window's own rows (client/ui/table.ts: a row is "Row<n>", its cells "Clabel" / "Cvalue"), against what
+	// recordRows(save) says the save holds -- All time (Best day, Level, Zombies put down, Titles earned) and
+	// This life (Life day, Nights survived in this life, Rebirths)
+	const recRows = REC.recordRows(save);
+	const shownRows = new Map(
+		records
+			.GetDescendants()
+			.filter(d => /^Row\d+$/.test(d.Name))
+			.map(r => [findIn(r, "Clabel")?.Text, findIn(r, "Cvalue")?.Text]),
+	);
+	const wrongRecs = recRows.filter(r => shownRows.get(r.label) !== r.value);
 	check(
 		"Records: o recorde, o dia desta vida, o nivel e os Rebirths sao os do save",
-		/Best day:\s+12/.test(text) &&
-			/Life day:\s+3/.test(text) &&
-			/Level:\s+7/.test(text) &&
-			/Rebirth:\s+2/.test(text),
-		JSON.stringify(text),
+		// Map#size is a method under the Luau shims (see the LANG_COUNT comment above)
+		wrongRecs.length === 0 && shownRows.size() === recRows.length,
+		wrongRecs.map(r => `${r.label}: mostra "${shownRows.get(r.label)}", esperado "${r.value}"`).join("; ") ||
+			[...shownRows].map(([l, v]) => `${l}=${v}`).join(", "),
 	);
-	findIn(records, "PopupBtn0").Activated.Fire();
+	findIn(records, "Close").Activated.Fire();
 	flush();
 	const lobbySub = findIn(nav(3), "Sub")?.Text;
 	check("...e a chapa Records diz o mesmo recorde", lobbySub === "Best day 12", lobbySub);
