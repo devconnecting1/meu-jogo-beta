@@ -956,6 +956,51 @@ task.spawn(() => {
 	}
 });
 
+/*
+ * The simulation writes XP, levels and midnight's coins straight into the live save (server/sim/progress.ts),
+ * and before this nothing carried them back: the client only heard its wallet in the ack of its next report,
+ * and that wallet had no XP in it at all -- the HUD's XP bar sat at 0 for a whole run (owner's playtest,
+ * 2026-09-23). The wallet is pushed as soon as it changes, at most WALLET_PUSH_S apart. This stands in for the
+ * reliable `Self` channel of docs/MULTIPLAYER.md §4.1 until that lands.
+ */
+const WALLET_PUSH_S = 0.25;
+const pushedWallet = new Map<Player, string>();
+
+function walletSignature(save: PlayerSaveData): string {
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}`;
+}
+
+function pushWallets(): void {
+	for (const [player] of pushedWallet) {
+		if (!sessions.has(player)) pushedWallet.delete(player);
+	}
+	for (const [player, s] of sessions) {
+		if (s.closed || !s.loaded) continue;
+		const sig = walletSignature(s.save);
+		const last = pushedWallet.get(player);
+		pushedWallet.set(player, sig);
+		// the first look only takes note: the LoadAck already carried the whole save
+		if (last === undefined || last === sig) continue;
+		sendSaveAck(s, {
+			ok: true,
+			push: true,
+			earned: 0,
+			earnedDays: 0,
+			earnedBosses: 0,
+			clamped: false,
+			wallet: walletOf(s.save),
+		});
+	}
+}
+
+let walletPushAcc = 0;
+RunService.Heartbeat.Connect(dt => {
+	walletPushAcc += dt;
+	if (walletPushAcc < WALLET_PUSH_S || shuttingDown) return;
+	walletPushAcc = 0;
+	pushWallets();
+});
+
 // ---------------------------------------------------------------- admin panel host
 
 /**
