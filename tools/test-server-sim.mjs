@@ -852,7 +852,10 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 		[0, 0, 1, 0],
 	];
 	const cmds = kinds.map((k, i) => P.makeCommand(500 + i, 1, 0, 0, 0, P.packEdges(k[0], k[1], k[2], k[3])));
-	for (const cmd of cmds) PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
+	// the queue owns what it takes and writes the carried taps into it (players.ts `acceptInput`): hand it fresh
+	// tables, as decodeInput does, and keep `cmds` as the record of what was sent
+	const handed = cmds.map(cmd => ({ ...cmd }));
+	for (const cmd of handed) PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
 	checkEq(sp.queue.length, CFG.INPUT_BUFFER_MAX, "the queue holds its ceiling");
 	checkEq(sp.counters.inputOverflow, cmds.length - CFG.INPUT_BUFFER_MAX, "the oldest overflowed");
 	checkEq(
@@ -860,9 +863,14 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 		tapsOf(cmds).join(","),
 		"every tap of the dropped commands is still in the queue (press, release, E, reload)",
 	);
+	// NIT 4 (the second review of the zombie-motion branch): carried in place, not into a new table per command
+	check(
+		sp.queue.every((q, i) => q === handed[cmds.length - CFG.INPUT_BUFFER_MAX + i]),
+		"the queue carries the taps in the commands it holds, without a new table for each",
+	);
 	// the redundancy brings the dropped ones again: they are late now, and their taps are not carried twice
 	const lateBefore = sp.counters.late;
-	PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmds[2], cmds[1], cmds[0]] }, 0);
+	PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [{ ...cmds[2] }, { ...cmds[1] }, { ...cmds[0] }] }, 0);
 	checkEq(sp.counters.late - lateBefore, 3, "a later copy of a dropped command is late");
 	checkEq(tapsOf(sp.queue).join(","), tapsOf(cmds).join(","), "and carries nothing a second time");
 	// the movement is still capped: INPUT_BUFFER_MAX commands, then the queue is dry
