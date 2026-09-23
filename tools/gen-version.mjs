@@ -42,8 +42,8 @@ const out = `/*
 
 /** the game's version (package.json) */
 export const GAME_VERSION = "${version}";
-/** the commit this build was made from, or "dev" for a local build */
-export const GAME_BUILD = "${build}";
+/** the commit this build was made from, or "dev" for a local build (typed \`string\`: the CI's stamp is another literal) */
+export const GAME_BUILD: string = "${build}";
 `;
 writeFileSync(OUT, out, "utf8");
 console.log(`${build === "dev" ? version : `${version} (${build})`} -> ${OUT}`);
