@@ -169,6 +169,12 @@ interface Session {
 	 * the record instead of replacing it, because this session never saw what is there.
 	 */
 	titleMark: string | undefined;
+	/**
+	 * MON-05: the next record write REPLACES the record whatever this session read of it -- the save is a new title
+	 * history (a missing save, an admin reset) that nothing in the record may flow back into. Cleared by the first
+	 * write that lands.
+	 */
+	titleReplace: boolean;
 }
 
 interface StoredLock {
@@ -390,9 +396,10 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 function syncTitleRecord(s: Session): void {
 	const mark = TitleRecord.titleRecordMark(TitleRecord.titleRecordOf(s.save));
 	if (mark === s.titleMark) return;
-	// replace only a record this session has read; merge into one it never saw (the load's read failed)
-	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleMark !== undefined);
+	// replace a record this session has read, or one of a history this save ended; merge into one it never saw
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleReplace || s.titleMark !== undefined);
 	if (written === undefined) return;
+	s.titleReplace = false;
 	// a merge may have found what the load could not read: the save takes it too (and is written again), so from
 	// here on the save holds everything the record does and replacing it can never lower it
 	if (TitleRecord.mergeTitleRecord(s.save, written)) s.dirty = true;
@@ -519,17 +526,27 @@ function loadSession(s: Session): void {
 	// opens still has it (server/save/titleRecord.ts). Only for a save this session will write.
 	let restored = false;
 	let titleMark: string | undefined;
+	let titleReplace = false;
 	if (status === "ok" || status === "new") {
 		const read = TitleRecord.loadTitleRecord(s.key);
 		if (read.ok) {
 			// "" = no record yet: known, and different from any real fingerprint, so the first write creates it
 			titleMark = read.record !== undefined ? TitleRecord.titleRecordMark(read.record) : "";
-			if (read.record !== undefined) restored = TitleRecord.mergeTitleRecord(save, read.record);
+		}
+		if (status === "new") {
+			// no save: a first visit, or a key deleted on purpose. Whatever the record holds is a history that ended
+			// -- never merged, replaced at the first write, and this save starts a later one
+			const recordEpoch = read.ok && read.record !== undefined ? read.record.epoch : 0;
+			save.titleEpoch = math.min(math.max(os.time(), recordEpoch + 1), SAVE_LIMITS.EPOCH_MAX);
+			titleReplace = true;
+		} else if (read.ok && read.record !== undefined) {
+			restored = TitleRecord.mergeTitleRecord(save, read.record);
 		}
 	}
 	s.status = status;
 	s.save = save;
 	s.titleMark = titleMark;
+	s.titleReplace = titleReplace;
 	s.dirty = status === "new" || (status === "ok" && migrated) || restored;
 	s.lockLost = false;
 	s.token = HttpService.GenerateGUID(false);
@@ -585,6 +602,7 @@ function newSession(player: Player): Session {
 		staleProgressReports: 0,
 		assistedRunRev: undefined,
 		titleMark: undefined,
+		titleReplace: false,
 	};
 }
 
@@ -1071,6 +1089,12 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 		applyAdminOps(edited, ops);
 	}
 	enforceSaveInvariants(edited);
+	// MON-05: a reset (or an edit that takes away something earned) starts a new title history, and the title record
+	// is replaced by it at the next write that lands -- it can never hand the old one back (server/save/titleRecord.ts)
+	if (ops === undefined || TitleRecord.lowersEarned(before, edited)) {
+		edited.titleEpoch = math.min(math.max(before.titleEpoch + 1, os.time()), SAVE_LIMITS.EPOCH_MAX);
+		s.titleReplace = true;
+	}
 	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
 	// an edit keeps the run (still assisted if it was); a reset starts a new one
 	s.assistedRunRev = ops !== undefined && s.assistedRunRev === before.runRev ? edited.runRev : undefined;

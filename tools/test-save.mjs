@@ -26,7 +26,9 @@
  *    A v4 document becomes v5 with nothing earned and nothing else changed; a rollback to v4 code forgets only WHICH
  *    title was shown, because what was earned comes back from the title record (server/save/titleRecord.ts); what
  *    was earned survives a death, a New game and the end of a world; and nobody but the server grants a title or
- *    moves the kill count -- neither a report nor the wardrobe's equip request (server/save/titles.ts).
+ *    moves the kill count -- neither a report nor the wardrobe's equip request (server/save/titles.ts). The record
+ *    never undoes a reset or a deletion made on purpose: `titleEpoch` says which title history a save is, and a
+ *    record of an older one is never merged back.
  *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
@@ -908,6 +910,7 @@ function productionV4() {
 	delete v4.titles;
 	delete v4.zombieKills;
 	delete v4.equipTitle;
+	delete v4.titleEpoch;
 	v4.version = 4;
 	return v4;
 }
@@ -959,6 +962,7 @@ section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	delete v4.titles;
 	delete v4.zombieKills;
 	delete v4.equipTitle;
+	delete v4.titleEpoch;
 	v4.version = 4;
 	const back = SAVE.sanitizeStoredSave(v4);
 	checkEq(back.zombieKills, 0, "o save que o v4 escreveu nao tem mais nada ganho (o risco)");
@@ -1105,6 +1109,83 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	check(
 		/equipTitle\(save, req\.titleId\)/.test(branch) && !/titles\[/.test(branch),
 		"main.server.ts: o pedido equipTitle vai inteiro para equipTitle(save, req.titleId), sem escrever titulos",
+	);
+}
+
+section(
+	"23) a epoca do registro: um reset ou uma exclusao de proposito nunca voltam dele (server/save/titleRecord.ts)",
+);
+{
+	const E1 = 1_700_000_000;
+	const E2 = E1 + 3600;
+	const earned = () => {
+		const save = SAVE.sanitizeStoredSave(productionV4());
+		save.titleEpoch = E1;
+		save.titles[TIT.TitleId.HordeBreaker] = 1;
+		save.zombieKills = 100;
+		return save;
+	};
+	checkEq(SAVE.sanitizeStoredSave(productionV4()).titleEpoch, 0, "um save vindo do v4 tem epoca 0");
+	checkEq(
+		SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(earned()))).titleEpoch,
+		E1,
+		"o v5 gravado volta com a epoca",
+	);
+	const forged = JSON.parse(JSON.stringify(earned()));
+	forged.titleEpoch = E2 * 10;
+	checkEq(SAVE.sanitizeClientReport(forged, earned()).titleEpoch, E1, "o relatorio do cliente nao move a epoca");
+	const record = JSON.parse(JSON.stringify(REC.titleRecordOf(earned())));
+	checkEq(REC.readTitleRecord(record).epoch, E1, "o registro guarda a epoca do save que espelha");
+	checkEq(REC.readTitleRecord({ titles: [1], epoch: "x" }).epoch, 0, "uma epoca lixo vira 0");
+	checkEq(REC.readTitleRecord({ epoch: 1e15 }).epoch, SAVE.SAVE_LIMITS.EPOCH_MAX, "e com teto");
+
+	// the rollback still restores: v4 dropped the epoch with the titles, the record is of a later history
+	const back = SAVE.sanitizeStoredSave(productionV4());
+	check(REC.mergeTitleRecord(back, REC.readTitleRecord(record)), "rollback (save de epoca 0): o registro volta");
+	check(back.zombieKills === 100 && back.titleEpoch === E1, "com os abates, e o save volta a historia do registro");
+
+	// an admin reset: a later epoch; the old record never flows back into it
+	const reset = SAVE.defaultSave();
+	reset.titleEpoch = E2;
+	check(
+		!REC.mergeTitleRecord(reset, REC.readTitleRecord(record)),
+		"reset (epoca maior): o registro antigo nao e mesclado",
+	);
+	check(reset.zombieKills === 0 && reset.titles.every(v => v === 0) && reset.titleEpoch === E2, "e nada muda");
+	const over = REC.nextTitleRecord(record, REC.titleRecordOf(reset), false);
+	check(
+		over.zombieKills === 0 && over.titles.every(v => v === 0) && over.epoch === E2,
+		"gravar MESCLANDO sobre um registro de epoca menor o substitui",
+		JSON.stringify(over),
+	);
+	// the session that could not read a later record (after a rollback) merges into it and joins its history
+	const lost = SAVE.sanitizeStoredSave(productionV4());
+	const joined = REC.nextTitleRecord(record, REC.titleRecordOf(lost), false);
+	check(joined.zombieKills === 100 && joined.epoch === E1, "mesclar sobre um registro de epoca maior o mantem");
+
+	// what starts a new history: taking away anything earned (the admin reset does)
+	const e = earned();
+	check(!REC.lowersEarned(e, earned()), "nada tirado: a mesma historia");
+	const fewer = earned();
+	fewer.zombieKills = 99;
+	check(REC.lowersEarned(e, fewer), "menos abates: outra historia");
+	const noFlag = earned();
+	noFlag.titles[TIT.TitleId.HordeBreaker] = 0;
+	check(REC.lowersEarned(e, noFlag), "um titulo a menos: outra historia");
+	check(REC.lowersEarned(e, SAVE.defaultSave()), "um save novo: outra historia");
+
+	// the wiring: a missing save and an admin reset each start a history; only the server writes the epoch
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const load = main.slice(main.indexOf("function loadSession("), main.indexOf("function newSession("));
+	check(
+		/status === "new"/.test(load) && /save\.titleEpoch = /.test(load) && /titleReplace = true/.test(load),
+		"main.server.ts loadSession: um save que falta comeca uma historia nova e substitui o registro",
+	);
+	const edit = main.slice(main.indexOf("function adminEdit("), main.indexOf("admin = startAdminServer("));
+	check(
+		/ops === undefined \|\| TitleRecord\.lowersEarned\(before, edited\)/.test(edit) &&
+			/s\.titleReplace = true/.test(edit),
+		"main.server.ts adminEdit: um reset comeca uma historia nova e substitui o registro",
 	);
 }
 

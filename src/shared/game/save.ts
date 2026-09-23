@@ -61,6 +61,8 @@ export const SAVE_LIMITS = {
 	RUN_HP_MAX: 100000,
 	/** v3 run body: hunger accumulated; DESIGN.PLAYER_HUNGRY is the bar, this is a generous ceiling */
 	RUN_HUNGER_MAX: 100000,
+	/** v5 `titleEpoch`: an os.time() (seconds since 1970) with room for centuries */
+	EPOCH_MAX: 99999999999,
 } as const;
 
 export interface SettingsData {
@@ -95,7 +97,7 @@ export function defaultSettings(): SettingsData {
 /**
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
- *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills
+ *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, titleEpoch
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  */
@@ -159,6 +161,13 @@ export interface PlayerSaveData {
 	zombieKills: number;
 	/** v5 (MON-05): TITLES id shown under the name, -1 = none; must be earned (`enforceSaveInvariants`) */
 	equipTitle: number;
+	/**
+	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
+	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
+	 * (server/save/titleRecord.ts) from an OLDER epoch belongs to a history that was reset or deleted on purpose and is
+	 * never merged back. Server-owned: written only by server/main.server.ts.
+	 */
+	titleEpoch: number;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -325,6 +334,7 @@ function emptySave(): PlayerSaveData {
 		titles: zeros(TITLES.size()),
 		zombieKills: 0,
 		equipTitle: -1,
+		titleEpoch: 0,
 	};
 }
 
@@ -586,6 +596,7 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		titles: copyArray(fb.titles),
 		zombieKills: fb.zombieKills,
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
+		titleEpoch: fb.titleEpoch,
 	};
 }
 
@@ -709,6 +720,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	copyInto(dst.titles, src.titles);
 	dst.zombieKills = src.zombieKills;
 	dst.equipTitle = src.equipTitle;
+	dst.titleEpoch = src.titleEpoch;
 	return dst;
 }
 
@@ -731,6 +743,7 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	// bring back what a rolled-back server dropped, on the session load)
 	s.titles = readIntArray(r.titles, TITLES.size(), () => 1, undefined);
 	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
+	s.titleEpoch = readInt(r.titleEpoch, 0, 0, L.EPOCH_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);

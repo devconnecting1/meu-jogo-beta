@@ -41,6 +41,10 @@
  *                           report), a report cannot grant one or count a kill, the server's own killing blow makes a
  *                           Horde Breaker and tells that player alone, and the title record brings back what a server
  *                           rolled back to v4 wrote the save without -- forgetting only which title was shown.
+ *  13. THE RECORD'S COST    one attempt to read the title record, one to write it: a failing store never stalls the
+ *                           LoadAck or a leave.
+ *  14. RESET AND WIPE       the title record never undoes an admin reset (even when this session could not read it,
+ *                           or its write failed) nor a save key deleted on purpose.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1454,6 +1458,103 @@ section("13) the title record never stalls the save path: one attempt to read it
 	const again = s.join(u, "unlucky");
 	check(s.save(again)?.zombieKills === 12, "…and the leave finished: the same player loads again on this server");
 	s.quit(again);
+});
+
+// ================================================================ 14: the record never undoes a reset or a wipe
+
+/** the admin of shared/admin/config.ts, and its panel's one remote */
+const ADMIN_ID = 8013052784;
+function adminRequest(srv, caller, req) {
+	const net = srv.env.services.ReplicatedStorage.FindFirstChild("PZAdminNet");
+	return net.FindFirstChild("AdminRequest").OnServerInvoke(caller, req);
+}
+
+section("14) what was earned never comes back from the title record after an admin reset or a wipe (MON-05)", () => {
+	const HB = 1;
+	/** a survivor who earned Horde Breaker, saved and gone: the save and the title record both hold it */
+	function earner(name) {
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, name);
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		srv.quit(p);
+		return u;
+	}
+	const earned = save => save !== undefined && (save.titles[HB] === 1 || save.zombieKills > 0);
+	const describe = save =>
+		save === undefined ? "no save" : `titles ${JSON.stringify(save.titles)}, kills ${save.zombieKills}`;
+	/** the next session anywhere, as the player would get it */
+	function nextLoad(u, name) {
+		const srv = bootServer();
+		const p = srv.join(u, name);
+		const save = srv.save(p);
+		const out = save === undefined ? undefined : { titles: [...save.titles], zombieKills: save.zombieKills };
+		srv.quit(p);
+		return out;
+	}
+
+	// R1: this session could not read the record; the admin resets the save; the player leaves
+	{
+		const u = earner("r1");
+		const srv = bootServer();
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		fakeStore(TITLE_STORE).fail.get = 1;
+		const p = srv.join(u, "r1");
+		check(earned(srv.save(p)), "R1: the survivor loads with the title earned");
+		const admin = srv.join(ADMIN_ID, "admin");
+		const reset = adminRequest(srv, admin, { kind: "resetSave", userId: u });
+		check(reset?.ok === true, "…an admin resets the save", JSON.stringify(reset?.error));
+		srv.quit(p);
+		srv.quit(admin);
+		const after = nextLoad(u, "r1");
+		check(
+			after !== undefined && !earned(after),
+			"…and the next load has no title and no kills, though this session never read the record",
+			describe(after),
+		);
+	}
+
+	// R2: the reset's session read the record, but its write of the record fails
+	{
+		const u = earner("r2");
+		const srv = bootServer();
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const p = srv.join(u, "r2");
+		const admin = srv.join(ADMIN_ID, "admin");
+		adminRequest(srv, admin, { kind: "resetSave", userId: u });
+		fakeStore(TITLE_STORE).fail.update = 1;
+		srv.quit(p);
+		srv.quit(admin);
+		const after = nextLoad(u, "r2");
+		check(
+			after !== undefined && !earned(after),
+			"R2: a reset whose record write failed is not undone by the old record at the next load",
+			describe(after),
+		);
+	}
+
+	// R3: the save key deleted on purpose (Open Cloud, a manual wipe, an erasure request); the record is left behind
+	{
+		const u = earner("r3");
+		const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		fakeStore(SAVE_STORE).data.delete(String(u));
+		const first = nextLoad(u, "r3");
+		check(
+			first !== undefined && !earned(first),
+			"R3: a deleted save comes back as a new player's, record ignored",
+			describe(first),
+		);
+		const later = nextLoad(u, "r3");
+		check(later !== undefined && !earned(later), "…and stays that way on the load after", describe(later));
+		const rec = fakeStore(TITLE_STORE).data.get(String(u));
+		check(
+			rec === undefined || (rec.titles.every(v => v === 0) && rec.zombieKills === 0),
+			"…because the record without a save was replaced at the first write",
+			JSON.stringify(rec),
+		);
+	}
 });
 
 // ================================================================
