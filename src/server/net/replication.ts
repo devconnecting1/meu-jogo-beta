@@ -5,7 +5,8 @@
  *          bosses and the horde — each entity filtered by the interest rings and the visibility rules of §4.3
  *   Fx     unreliable, one batch per tick when something happened: blood, debris, shakes, tracers, shots
  *   World  reliable, batched per tick: InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
- *          outfit or a pet changes in session — MON-04), PlayerLife, ZombieDied, Clock, Announce (§4.5)
+ *          outfit or a pet changes in session — MON-04), PlayerLife, ZombieDied, Clock, Announce (§4.5), and
+ *          WorldReset when every survivor died and a new town replaced the old one (MP-22)
  *
  * This is the last link of F2: the server has simulated one horde, one clock and one set of waves since 2A/2B,
  * and until this file put them on the wire no client could see any of it. Everything here is therefore about
@@ -16,6 +17,7 @@
  * `ReplicationTransport`, which server/net/remotes.ts implements with the real remotes and tools/test-server-sim.mjs
  * and tools/test-replication.mjs implement with an array (so the tests decode exactly the bytes a client receives).
  */
+import { DESIGN } from "shared/engine/constants";
 import { quantPos, dequantPos } from "shared/net/codec";
 import {
 	INTEREST_EXIT,
@@ -127,6 +129,19 @@ export interface ReplicatorOptions {
 	tick0Time: number;
 	/** §4.5 map hash, so the client can check it generated the same town */
 	mapHash: number;
+	/** (MP-22) the seed the town was generated from; DESIGN.TOWN_SEED, the town every server opens with, if omitted */
+	seed?: number;
+}
+
+/** (MP-22) what the replicator tells the clients when a world ends: server/sim/worldReset.ts */
+export interface TownChange {
+	/** the new town */
+	seed: number;
+	mapHash: number;
+	/** the world day the old town fell on */
+	endedDay: number;
+	/** UserIds whose life the server reset to day 1 */
+	lives: ReadonlyArray<number>;
 }
 
 // ---------------------------------------------------------------- map hash (§4.5)
@@ -377,12 +392,18 @@ export class Replicator {
 	private readonly interactive = new Array<PendingWorld>();
 	private readonly initSolids = new Array<Solid>();
 	private readonly initItems = new Array<WItemAdd>();
+	/** the town every InitBegin names: it changes when a world ends (MP-22, `restartWorld`) */
+	private mapHash: number;
+	private seed: number;
 
 	constructor(
 		private readonly sim: ServerSimulation,
 		private readonly transport: ReplicationTransport,
 		private readonly options: ReplicatorOptions,
-	) {}
+	) {
+		this.mapHash = options.mapHash;
+		this.seed = options.seed ?? DESIGN.TOWN_SEED;
+	}
 
 	// ------------------------------------------------------------ reliable deltas (§4.5)
 
@@ -417,14 +438,7 @@ export class Replicator {
 	 * F3 adds the world deltas (constructions, doors, items) to the very same batch.
 	 */
 	welcome(sp: ServerPlayer): void {
-		this.queueFor(sp.slot, {
-			t: WorldEv.InitBegin,
-			mapHash: this.options.mapHash,
-			tick0Time: this.options.tick0Time,
-			simHz: this.sim.simHz,
-			chunk: 0,
-			chunks: 1,
-		});
+		this.queueFor(sp.slot, this.initBegin());
 		// the hour, the day, the weather and the wave flags: a newcomer must not spend up to CLOCK_RESYNC_S
 		// seconds in the wrong half of the day (§4.6)
 		this.queueFor(sp.slot, this.sim.clock.clockEventNow(this.sim.tick));
@@ -441,8 +455,14 @@ export class Replicator {
 			 * over from another session — server/sim/life.ts). It goes DIRECTED and right after its PlayerJoined:
 			 * the broadcast list is flushed before the directed one, so a broadcast would reach a client before it
 			 * knew the slot and be dropped.
+			 *
+			 * The newcomer's OWN state is always said, alive too: a client entering with a death still pending (a
+			 * New game waits for daybreak, MP-21) draws its survivor dead from the first frame, and has to be told
+			 * when the server let it in standing instead — daybreak came while it was in the lobby, or the world
+			 * ended and gave it a new life (MP-22). Before this, "alive" was the silence, and silence cannot correct.
 			 */
 			if (other.state.dead) this.queueFor(sp.slot, lifeEvent(other.slot, LifeState.Dead));
+			else if (other.slot === sp.slot) this.queueFor(sp.slot, lifeEvent(sp.slot, LifeState.Up));
 			if (other.slot !== sp.slot) {
 				this.queueFor(other.slot, joined);
 				if (sp.state.dead) this.queueFor(other.slot, lifeEvent(sp.slot, LifeState.Dead));
@@ -481,6 +501,42 @@ export class Replicator {
 		this.initItems.clear();
 		for (const add of items.initFor(sp.state.x, sp.state.y, this.initItems)) this.queueFor(sp.slot, add);
 		this.initItems.clear();
+	}
+
+	/** the join message (§4.5 WorldInit): the clock anchor, and the town — its seed and the hash to check it by */
+	private initBegin(): WorldEvent {
+		return {
+			t: WorldEv.InitBegin,
+			mapHash: this.mapHash,
+			seed: this.seed,
+			tick0Time: this.options.tick0Time,
+			simHz: this.sim.simHz,
+			chunk: 0,
+			chunks: 1,
+		};
+	}
+
+	/**
+	 * MP-22: the world ended and a new town replaced it (server/sim/worldReset.ts). Call it AFTER the simulation has
+	 * its new town and BEFORE any body is placed in it, so the clients read the news first and the new lives after.
+	 *
+	 *   - `WorldReset` to EVERY connected client (the broadcast is FireAllClients): the lobby builds its next Play in
+	 *     the new town, and a client named in `lives` mirrors the new life the server gave it;
+	 *   - the join message again, to each survivor in the world: the same InitBegin a newcomer gets, with the new
+	 *     seed and hash, so each client checks it built the town the server did (§4.5). Directed events flush
+	 *     after the broadcast ones, so it always lands after the WorldReset it confirms;
+	 *   - the horde's interest is forgotten: the new horde hands its netIds out from 1 again, and a pair kept from
+	 *     the old one would lend its ring (and its death notice) to a stranger.
+	 */
+	restartWorld(change: TownChange): void {
+		this.mapHash = change.mapHash;
+		this.seed = change.seed;
+		this.hordeRings.clear();
+		this.fxQueue.clear();
+		const lives = new Array<number>();
+		for (const userId of change.lives) lives.push(userId);
+		this.queue({ t: WorldEv.WorldReset, seed: change.seed, endedDay: change.endedDay, lives });
+		for (const sp of this.sim.players()) this.queueFor(sp.slot, this.initBegin());
 	}
 
 	left(slot: number): void {

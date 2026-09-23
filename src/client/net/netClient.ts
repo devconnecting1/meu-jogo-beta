@@ -20,6 +20,8 @@
  *   remoteBosses()         the same for bosses (the centipede's body is rebuilt by the view from its head)
  *   takeNetFx(out)         the cosmetic effects of the ticks since the last frame (§4.1 Fx)
  *   takeZombieDeaths(out)  the reliable deaths of §4.4: blood, a corpse and a drop, where the body fell
+ *   netTownSeed()          (MP-22) the seed of the server's town, for GameLoop.init; `netOnTown(fn)` hears the
+ *                          InitBegin that confirms it and the WorldReset that replaces it when a world ends
  *
  * While MP_PHASE = 0 netActive() is false, no remote is ever looked up, and the game loop keeps stepping the local
  * player itself — the single-player build behaves exactly as before.
@@ -42,7 +44,8 @@ import { RemoteBoss, RemoteState, RemoteZombie, SnapshotBuffer } from "./snapsho
 import { createRawInput, readRawInput } from "./localInput";
 import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
-import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE } from "shared/net/mpConfig";
+import { DESIGN } from "shared/engine/constants";
+import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE, TOWN_SEED_MAX, WORLD_SEED_ATTRIBUTE } from "shared/net/mpConfig";
 import {
 	AnnounceKind,
 	FxEvent,
@@ -143,6 +146,19 @@ export interface ZombieDeathEvent {
 	cause: number;
 }
 
+/**
+ * MP-22: what the server says about its town — at every entry (InitBegin) and the moment a world ends (WorldReset).
+ * client/main.client.ts listens (`netOnTown`) and rebuilds the loop's town when it is not the server's.
+ */
+export interface TownNotice {
+	/** the seed the server's town was generated from */
+	seed: number;
+	/** WorldReset only: the world day the old town fell on (undefined for InitBegin) */
+	endedDay?: number;
+	/** WorldReset only: the server gave THIS survivor a new life in the new town (MP-20: life day 1, starter kit) */
+	newLife: boolean;
+}
+
 export interface NetStats {
 	/** the handshake finished and the session is live */
 	active: boolean;
@@ -222,6 +238,22 @@ let mySlot = -1;
 let hasEpoch = false;
 let mapHash = 0;
 let mapMismatch = false;
+/** the hash of the server's town, from the last InitBegin (undefined until one, or after a WorldReset) */
+let serverMapHash: number | undefined;
+/** the seed of the server's town, from the last InitBegin or WorldReset this client read (MP-22) */
+let townSeed: number | undefined;
+/**
+ * MP-22: the server tick (u16) of the batch that carried the last WorldReset, until the next reconcile turns it into
+ * `townGuard`. Snap is unreliable and unordered against World: a snapshot of the old town can still arrive after
+ * the rebuild, and its self block, its zombies (the new horde reuses their netIds from 1) and its allies belong to
+ * streets that are gone. For TOWN_GUARD_S after the reset, a part older than the reset is dropped.
+ */
+let townResetTick: number | undefined;
+let townGuard = -math.huge;
+let townGuardUntil = 0;
+const TOWN_GUARD_S = 2;
+/** who wants to hear about the town (client/main.client.ts); called INSIDE the World event, in order */
+const townListeners = new Array<(notice: TownNotice) => void>();
 let queueDropped = 0;
 let fxDropped = 0;
 let malformed = 0;
@@ -328,15 +360,30 @@ function onWorld(payload: unknown): void {
 		malformed += 1;
 		return;
 	}
-	for (const e of batch.events) applyWorldEvent(e);
+	for (const e of batch.events) applyWorldEvent(e, batch.tick);
 }
 
-function applyWorldEvent(e: WorldEvent): void {
+function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 	if (e.t === WorldEv.InitBegin) {
+		townSeed = e.seed;
+		// FIRST: a listener may rebuild the loop's town around this seed (and `netReset` with it), and everything
+		// below — and the rest of this batch — has to land on the rebuilt one
+		noticeTown({ seed: e.seed, newLife: false });
 		clock.setEpoch(e.tick0Time, e.simHz);
 		snapshots.setRate(e.simHz);
 		hasEpoch = true;
-		checkMapHash(e.mapHash);
+		serverMapHash = e.mapHash;
+		checkMapHash();
+		return;
+	}
+	if (e.t === WorldEv.WorldReset) {
+		// MP-22: the world ended and a new town replaced it. Its hash comes with the next InitBegin; until then the
+		// old one must not be compared with a town built from the new seed
+		townSeed = e.seed;
+		serverMapHash = undefined;
+		noticeTown({ seed: e.seed, endedDay: e.endedDay, newLife: e.lives.includes(Players.LocalPlayer.UserId) });
+		// AFTER the listeners: their rebuild runs `netReset`, which drops any guard of an earlier town
+		townResetTick = batchTick;
 		return;
 	}
 	if (e.t === WorldEv.PlayerJoined) {
@@ -410,11 +457,20 @@ function announceText(msg: number, arg: number): string {
 }
 
 /** compares InitBegin's hash with the town this client generated, once both are known (§4.5) */
-function checkMapHash(serverHash: number): void {
-	if (mapHash === 0 || mapMismatch) return;
+function checkMapHash(): void {
+	const serverHash = serverMapHash;
+	if (serverHash === undefined || mapHash === 0 || mapMismatch) return;
 	if (serverHash === mapHash) return;
 	mapMismatch = true;
 	warn(`[${GAME_NAME}] map hash mismatch: server ${serverHash}, client ${mapHash} — the worlds are not the same`);
+}
+
+/** tells every town listener, each on its own: one that fails must not cost the rest of the World batch */
+function noticeTown(notice: TownNotice): void {
+	for (const fn of townListeners) {
+		const [ok, err] = pcall(() => fn(notice));
+		if (!ok) warn(`[${GAME_NAME}] town notice failed: ${tostring(err)}`);
+	}
 }
 
 function onSnap(payload: unknown): void {
@@ -488,6 +544,15 @@ export function netActive(): boolean {
 		);
 	}
 	return live;
+}
+
+/**
+ * The server runs the MP host (its remotes exist), so the server owns this survivor's life: it keeps a body dead
+ * until daybreak, a Rebirth or the end of the world (MP-21, MP-22), and it is the one that says so. Unlike
+ * `netActive()` this does not wait for the handshake of a run, which is what a decision made from the lobby needs.
+ */
+export function netHosted(): boolean {
+	return MP_PHASE >= 1 && connect();
 }
 
 /** one frame of the session; only called while netActive() (see the frame order at the top of the file) */
@@ -596,6 +661,27 @@ export function netBindAdmin(flags: { noclip: boolean; frozen: boolean }): void 
 	adminFlags = flags;
 }
 
+/**
+ * MP-22: the seed of the town the server runs — the one GameLoop.init builds. The last InitBegin or WorldReset this
+ * client read; before either, the server's replicated attribute (a client that connected after a world ended and
+ * has not entered it yet); failing that, or offline, the town every server opens with.
+ */
+export function netTownSeed(): number {
+	if (MP_PHASE < 1) return DESIGN.TOWN_SEED;
+	if (townSeed !== undefined) return townSeed;
+	const attr = Workspace.GetAttribute(WORLD_SEED_ATTRIBUTE);
+	if (typeIs(attr, "number") && attr % 1 === 0 && attr >= 1 && attr <= TOWN_SEED_MAX) return attr;
+	return DESIGN.TOWN_SEED;
+}
+
+/**
+ * MP-22: `fn` hears what the server says about its town (see TownNotice). It runs INSIDE the World event, before the
+ * rest of that batch, so the day-1 Clock and the PlayerLife that follow a WorldReset land on a town rebuilt here.
+ */
+export function netOnTown(fn: (notice: TownNotice) => void): void {
+	townListeners.push(fn);
+}
+
 /** a new world (a new run, a rebirth): forget the session state but keep the connection and the roster */
 export function netReset(): void {
 	if (MP_PHASE < 1) return;
@@ -615,6 +701,9 @@ export function netReset(): void {
 	boundPlayer = undefined;
 	boundSave = undefined;
 	mapHash = 0;
+	// a guard armed in the lobby would unwrap against a tick minutes later (see `townResetTick`)
+	townResetTick = undefined;
+	townGuardUntil = 0;
 }
 
 /** debug overlay / admin panel: the §12.2 numbers, cheap enough to read every frame */
@@ -713,6 +802,7 @@ export function netDisconnect(): void {
 	connections = new Array<RBXScriptConnection>();
 	remotes = undefined;
 	hasEpoch = false;
+	serverMapHash = undefined;
 	mySlot = -1;
 	startedAt = 0;
 	warnedSlow = false;
@@ -733,6 +823,8 @@ function bind(refs: GameRefs): boolean {
 	boundSave = refs.save;
 	mapHash = mapHashOf(refs.world);
 	mapMismatch = false;
+	// the server's hash may already be here (a town rebuilt after its InitBegin, MP-22): compare it now
+	checkMapHash();
 	prediction.attach(refs.world, refs.player, refs.save);
 	commands.reset();
 	snapshots.reset();
@@ -775,8 +867,17 @@ function applyLife(refs: GameRefs): void {
 function reconcile(now: number): void {
 	if (queue.size() === 0) return;
 	const refTick = clock.tickNow();
+	if (townResetTick !== undefined) {
+		// unwrapped here, next to a fresh tick estimate, and only compared for a moment: a u16 far from `refTick`
+		// would unwrap into the wrong lap
+		townGuard = unwrapTick(townResetTick, math.floor(refTick));
+		townGuardUntil = now + TOWN_GUARD_S;
+		townResetTick = undefined;
+	}
 	for (const part of queue) {
 		const tick = unwrapTick(part.tick, math.floor(refTick));
+		// MP-22: a part of the town that ended, overtaken by the WorldReset (see `townResetTick`)
+		if (now < townGuardUntil && tick < townGuard) continue;
 		snapshots.receive(part, refTick, now);
 		const block = part.self;
 		if (block === undefined) continue;

@@ -25,9 +25,10 @@
  *   2. THE STERILE WORLD        the same run, the survivor dead from 09:00 and nobody to stand them up: no
  *                               cluster, nothing born, the queues untouched all night. Since the owner's rule of
  *                               23 Sep 2026 every server stands its dead up at daybreak (MP-21) and a world with
- *                               nobody alive is LOST (server/sim/life.ts `onWorldWiped`), so this case pins what
- *                               the world does between the fall and daybreak — and the population's stall counter
- *                               has to say so while it lasts.
+ *                               nobody alive ENDS 30 s after the fall and a new town begins (MP-22,
+ *                               server/sim/worldReset.ts); this harness has no LifeKeeper, so this case pins what
+ *                               a world with only the dead in it does while it lasts — and the population's stall
+ *                               counter has to say so.
  *   3. DAYBREAK UNLOCKS IT      dead at 19:30, stood back up at 06:00 the way the server does it
  *                               (`daybreakWaitSeconds`, then the stand-up: a fresh body at a safe
  *                               spawn point and LifeState.Up on the wire): the spawn comes back and the NEXT
@@ -932,9 +933,10 @@ section(
 	);
 	timeline(two, absOf(1, 18), absOf(2, 8));
 	info(
-		"RULE (MP-21, the owner's rule of 23 Sep 2026): every server stands its dead up at daybreak (case 3), and a " +
-			"world with nobody alive is lost (server/sim/life.ts `onWorldWiped`, tools/test-body.mjs). This case is " +
-			"what that world does until then: nothing.",
+		"RULE (MP-21 and MP-22, the owner's rules of 23 Sep 2026): every server stands its dead up at daybreak (case " +
+			"3), and a world with nobody alive ENDS 30 s after its last survivor falls and a new town begins on day 1 " +
+			"(server/sim/worldReset.ts, tools/test-reset.mjs). This harness has no LifeKeeper, so it shows what a " +
+			"world with only the dead in it does for as long as it lasts: nothing.",
 	);
 }
 
@@ -996,7 +998,8 @@ section("3) daybreak unlocks it: dead at 19:30, stood up at 06:00 the way the se
 		sp3 !== undefined && !sp3.state.dead && sp3.state.hp === sp3.state.hpMax,
 		sp3 !== undefined ? `hp ${sp3.state.hp}/${sp3.state.hpMax}` : "gone",
 	);
-	const lifeSeq = three.life.filter(e => e.slot === a3.slot).map(e => e.state);
+	// from the death on: the welcome also tells a newcomer its own state (an Up on the way in, since MP-22)
+	const lifeSeq = three.life.filter(e => e.slot === a3.slot && e.tick >= death.tick).map(e => e.state);
 	const collapsed = lifeSeq.filter((s, i) => i === 0 || s !== lifeSeq[i - 1]);
 	check(
 		"the clients were told on the reliable World channel: Dead, then Up",

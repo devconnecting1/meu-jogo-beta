@@ -905,7 +905,7 @@ section("6) nobody alive and nobody paying: the world is lost, once (the owner's
 		);
 		s.run(5);
 		check(wipes.length === 1, "…and not again while they lie there");
-		info("until the reset to day 1 exists, the daybreak wait still stands them up (see 5a/5b)");
+		info("the world then ends and a new town begins on day 1 (MP-22): tools/test-reset.mjs");
 	}
 	{
 		const s = bootServer();

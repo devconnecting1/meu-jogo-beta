@@ -1139,7 +1139,7 @@ test("Fx: malformed packets are refused", () => {
 
 // ---------------------------------------------------------------- 6. World (S→C, reliable)
 
-function randWorldEvent(kind = rint(1, 16)) {
+function randWorldEvent(kind = rint(1, 17)) {
 	const dynId = () => CFG.DYNAMIC_ID_BASE + rint(0, 100000);
 	switch (kind) {
 		case P.WorldEv.SolidAdd:
@@ -1216,10 +1216,17 @@ function randWorldEvent(kind = rint(1, 16)) {
 			return { t: kind, slot: rint(0, 5) };
 		case P.WorldEv.PlayerLife:
 			return { t: kind, slot: rint(0, 5), state: rint(0, 3) };
+		case P.WorldEv.WorldReset: {
+			// MP-22: the new town's seed, the day the old one fell on, and the lives the server reset
+			const lives = [];
+			for (let i = rint(0, 6); i > 0; i--) lives.push(rbool() ? rint(1, 9000000000) : -rint(1, 8));
+			return { t: kind, seed: rint(1, CFG.TOWN_SEED_MAX), endedDay: rint(1, 400), lives };
+		}
 		default:
 			return {
 				t: P.WorldEv.InitBegin,
 				mapHash: rint(0, 4294967295),
+				seed: rint(1, CFG.TOWN_SEED_MAX),
 				tick0Time: rfloat(0, 1e9),
 				simHz: pick([30, 60]),
 				chunk: 0,
@@ -1310,8 +1317,14 @@ function compareWorldEvent(a, b) {
 			eq("slot", b.slot, a.slot);
 			eq("life state", b.state, a.state);
 			break;
+		case P.WorldEv.WorldReset:
+			eq("reset seed", b.seed, a.seed);
+			eq("reset endedDay", b.endedDay, a.endedDay);
+			eq("reset lives", JSON.stringify(b.lives), JSON.stringify(a.lives));
+			break;
 		case P.WorldEv.InitBegin:
 			eq("mapHash", b.mapHash, a.mapHash);
+			eq("town seed", b.seed, a.seed);
 			near("tick0Time", b.tick0Time, a.tick0Time, 1e-9);
 			eq("simHz", b.simHz, a.simHz);
 			eq("chunk", b.chunk, a.chunk);
@@ -1348,6 +1361,10 @@ test("World: round trip of every delta", () => {
 	sizes.push(["World ZombieDied", `${one(P.WorldEv.ZombieDied)} B`, "netId, x, y, cause (§4.4)"]);
 	sizes.push(["World Clock", `${one(P.WorldEv.Clock)} B`, "worldDay, dayTime, tick, rain, waveFlags (§4.5)"]);
 	sizes.push(["World PlayerProfile", `${one(P.WorldEv.PlayerProfile)} B`, "slot, level, outfit, pet (MON-04)"]);
+	const reset2 = { t: P.WorldEv.WorldReset, seed: 12345, endedDay: 9, lives: [1, 2] };
+	const resetBytes = buffer.len(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
+	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 2 * 8);
+	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, lives (MP-22)"]);
 });
 
 test("World: the roster carries outfit and pet, and refuses looks that do not exist (MON-04)", () => {

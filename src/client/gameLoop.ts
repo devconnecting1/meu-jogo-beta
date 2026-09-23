@@ -46,6 +46,7 @@ import {
 	netBindAdmin,
 	netReset,
 	netStats,
+	netTownSeed,
 	netUpdate,
 	remotePlayers,
 	takeNetFx,
@@ -359,6 +360,11 @@ function sideNormal(side: string | undefined): { x: number; y: number } {
 export class GameLoop {
 	/** empty placeholder; the town is generated once, in init() */
 	private world: WorldData = createWorld(DESIGN.WORLD_W, DESIGN.WORLD_H);
+	/**
+	 * The seed the town in `world` was generated from (MP-22): the server's (client/net/netClient.ts `netTownSeed`),
+	 * which is DESIGN.TOWN_SEED until a world ends. client/main.client.ts compares it with every InitBegin.
+	 */
+	townSeed: number = DESIGN.TOWN_SEED;
 	private player: PlayerState;
 	private save: PlayerSaveData;
 	private zombies: Array<ZombieState> = [];
@@ -460,7 +466,10 @@ export class GameLoop {
 
 	init(save: PlayerSaveData): void {
 		this.save = save;
-		this.world = generateTown(DESIGN.TOWN_SEED);
+		// the server's town, not always the same one: when every survivor dies the world ends and the next is built
+		// from a new seed (MP-22). Offline this is DESIGN.TOWN_SEED, as it always was
+		this.townSeed = netTownSeed();
+		this.world = generateTown(this.townSeed);
 		this.fadingRoofs.clear();
 		resetEntityIds();
 		resetBullets();
@@ -480,7 +489,8 @@ export class GameLoop {
 		this.fx.clear();
 		// MP-20: a new map is a new LIFE, never a new world. The clock is the town's, so it is handed over
 		// instead of rebuilt -- otherwise "New game" put this client back at day 1, 07:00 while the server
-		// (and everybody else on it) was still in the middle of night three.
+		// (and everybody else on it) was still in the middle of night three. When the WORLD itself ends (MP-22) the
+		// handover still happens, and the day-1 Clock delta the server sends right behind its WorldReset jumps it
 		const previousClock = this.daynight;
 		this.daynight = new DayNight(save);
 		this.daynight.adoptWorld(previousClock);

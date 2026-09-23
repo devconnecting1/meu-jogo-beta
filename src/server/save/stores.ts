@@ -46,3 +46,5 @@ export const SAVE_STORE = storeName("ProjectZ_Save_v2");
 export const LEGACY_STORE = storeName("ProjectZ_Save_v1");
 /** admin audit log (server/admin/adminServer.ts) */
 export const ADMIN_LOG_STORE = storeName("ProjectZ_AdminLog");
+/** the worlds that ended, how many days each lasted (MP-22, server/save/worldLog.ts) */
+export const WORLD_LOG_STORE = storeName("ProjectZ_Worlds");

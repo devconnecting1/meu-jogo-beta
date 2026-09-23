@@ -459,9 +459,7 @@ Key,Context,Example,Source
 ,,,Saving...
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
-,,,Menu
 ,,,Back to game
-,,,Backpack
 ,,,Save
 ,,,Home
 ,,,Game over
@@ -470,6 +468,7 @@ Key,Context,Example,Source
 ,,,Continue price
 ,,,Your run is over
 ,,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
+,,,"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Purchased
 ,,,Unlocked
 ,,,Not enough coins
@@ -497,6 +496,8 @@ Key,Context,Example,Source
 ,,,Survive the night
 ,,,Already at full health
 ,,,Back on your feet
+,,,The town fell on day
+,,,A new town rises: day 1
 ,,,Bosses
 ,,,Continue this run
 ,,,Daybreak in
@@ -512,7 +513,8 @@ Key,Context,Example,Source
 ,,,Reload
 ,,,Skip
 ,,,"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it."
-,,,"The town is not yours to restart.#You wake with the others, at first light."
+,,,"You wake at first light.#If nobody is left standing, a new town begins at day 1."
+,,,"Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1."
 ,,,You have
 ,,,You survived
 ,,,You survived a day
