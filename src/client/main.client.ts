@@ -7,10 +7,9 @@ import {
 	ownsWeapon,
 	pendingPacks,
 	resetRun,
-	setEquipped,
 } from "shared/game/save";
 import { BossState } from "shared/game/entities";
-import { currentWeapon, itemUseEffect, weaponReserve } from "shared/game/player";
+import { currentWeapon, weaponReserve } from "shared/game/player";
 import { CRAFT_RECIPES } from "shared/data/crafts";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
@@ -45,10 +44,11 @@ import {
 	showRunSummary,
 } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
-import { switchWeapon } from "./systems/combat";
+import { chooseWeapon } from "./systems/combat";
 import { interactHint } from "./systems/interaction";
 import { addItem } from "./systems/items";
 import * as net from "./systems/saveClient";
+import * as Bag from "./net/backpackSync";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
@@ -479,21 +479,27 @@ function goLobby(page: LobbyPage = "menu"): void {
 
 // ---------------------------------------------------------------- run lifecycle
 
+/**
+ * The packs bought in the shop and not opened yet go into the backpack. From WORLD_SERVER_PHASE the SERVER opens them
+ * into its own save as soon as the survivor is in the world (server/sim/backpack.ts `deliverPacks`) and the items
+ * come back in the bag: this client only says so, and stops asking again.
+ */
 function deliverPacks(): void {
 	const save = ctx.save;
+	const serverDelivers = Bag.owned();
 	const names: Array<string> = [];
 	for (const p of SHOP_PACKS) {
 		const n = pendingPacks(save, p.id);
 		if (n <= 0) continue;
 		for (const item of p.items) {
-			if (item.index >= 0) addItem(save, item.kind, item.index, item.count * n);
+			if (item.index >= 0 && !serverDelivers) addItem(save, item.kind, item.index, item.count * n);
 		}
 		save.packsOpened[p.id] = save.packsBought[p.id];
 		names.push(n > 1 ? `${tr(p.name)} ×${n}` : tr(p.name));
 	}
 	if (names.size() > 0) {
 		toast(ctx, `${tr("Delivered")}: ${names.join(", ")}`, "success");
-		net.requestSave("packs");
+		if (!serverDelivers) net.requestSave("packs");
 	}
 }
 
@@ -1088,10 +1094,12 @@ function playPressed(): void {
 
 // ---------------------------------------------------------------- backpack actions
 
+// From WORLD_SERVER_PHASE each verb below is the server's (client/net/backpackSync.ts): predicted here at once by the
+// server's own rule, sent as an intent, and reconciled with the bag the server sends back (QA sweep NET-1..4).
 pack.onUse = id => {
 	if ((ctx.save.invenUse[id] ?? 0) <= 0) return;
-	if (itemUseEffect(loop.getRefs().player, ctx.save, id)) return;
-	// itemUseEffect only refuses a held, known item when it would do nothing (hp/hunger already
+	if (Bag.useItem(loop.getRefs().player, ctx.save, id)) return;
+	// a use is only refused for a held, known item when it would do nothing (hp/hunger already
 	// maxed, no buff, no poison cure) — pick the wording that matches what the item targets.
 	const u = USABLES[id];
 	if (u !== undefined && u.hunger > 0) toast(ctx, tr("You're already full"), "error");
@@ -1106,7 +1114,7 @@ pack.onCraft = id => {
 	gameAudio.crafted();
 	// the recipe ate the weapon in hand (a pistol into an auto pistol): the blade comes back to the hands, and the
 	// magazine back to its pool -- the same rule as an admin patch that takes the weapon away (admin/patches.ts)
-	if (!ownsWeapon(ctx.save, refs.player.weapon.pointer)) switchWeapon(refs, 0);
+	if (!ownsWeapon(ctx.save, refs.player.weapon.pointer)) chooseWeapon(refs, 0);
 };
 
 pack.craftCheck = id => {
@@ -1116,7 +1124,7 @@ pack.craftCheck = id => {
 
 pack.onEquipWeapon = id => {
 	if (!ownsWeapon(ctx.save, id)) return;
-	switchWeapon(loop.getRefs(), id);
+	chooseWeapon(loop.getRefs(), id);
 };
 
 // 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet (EquipSlot). An outfit or a pet is what OTHER people see (MON-04), so
@@ -1130,15 +1138,16 @@ function cosmeticChanged(slot: number): void {
 function equipItem(id: number): void {
 	if (!ownsEquip(ctx.save, id)) return;
 	const slot = equipSlotOf(id);
-	if (setEquipped(ctx.save, slot, id)) cosmeticChanged(slot);
+	if (Bag.equip(ctx.save, id, slot)) cosmeticChanged(slot);
 }
 
 function unequipSlot(slot: number): void {
-	if (setEquipped(ctx.save, slot, -1)) cosmeticChanged(slot);
+	if (Bag.unequip(ctx.save, slot)) cosmeticChanged(slot);
 }
 
 pack.onEquipItem = equipItem;
 pack.onUnequipItem = unequipSlot;
+pack.onLearned = Bag.learned;
 
 // ---------------------------------------------------------------- boot
 
@@ -1174,6 +1183,8 @@ admin = startAdmin({
 	},
 });
 net.startNet();
+// F3: the systems learn who owns the world, and the wallet's bag has somewhere to go (client/net/backpackSync.ts)
+Bag.start();
 // F1: assina os remotes do host agora, nao no primeiro quadro da partida -- o servidor admite o jogador
 // assim que ele entra e ja comeca a mandar snapshot (client/net/netClient.ts: netPrewarm)
 netPrewarm();

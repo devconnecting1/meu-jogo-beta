@@ -146,6 +146,10 @@ export function defaultSettings(): SettingsData {
  *   achievements and lifeDeaths (v6)
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
+ * - from PROGRESS_SERVER_PHASE the progress (level, exp, skillPoint, bossKills, day) is the server's, and from
+ *   WORLD_SERVER_PHASE (shared/net/mpConfig.ts) the backpack too: inventory, ammunition, equipped slots, skill levels
+ *   and packsOpened. A report no longer moves them (server/sim/progress.ts `stripClientProgress`,
+ *   server/sim/backpack.ts `stripClientBackpack`); the wallet's `bag` brings the server's copy back (`BagMirror`).
  */
 export interface PlayerSaveData {
 	version: number;
@@ -260,6 +264,147 @@ export interface Wallet {
 	 */
 	level?: number;
 	exp?: number;
+	/**
+	 * From WORLD_SERVER_PHASE (F3) the backpack is the SERVER's, and this is how it reaches the client: pushed by
+	 * server/main.server.ts whenever it changed or an intent was answered. Absent below that phase, and in a wallet
+	 * that carries nothing new about it.
+	 */
+	bag?: BagMirror;
+}
+
+/**
+ * The backpack as the SERVER holds it (docs/MULTIPLAYER.md §6.3 "espelho somente leitura"): everything a client
+ * used to write into its own copy and report — the inventory, the ammunition, what is equipped and the skills —
+ * plus the two numbers the client reconciles its predictions with (client/net/backpackSync.ts):
+ *   - `ack`: the nonce of the last backpack intent the server HANDLED, applied or refused (shared/net/intentWire.ts);
+ *     a prediction for a newer one is replayed on top of this bag, an older one is dropped;
+ *   - `seq`: the last command the server had consumed from this survivor when it wrote the bag (-1 = not in the
+ *     world); a build placed or cancelled by an edge of a newer command is still the client's prediction.
+ * `place` is the construction on the server's cursor (PLACEABLES id, -1 = none): a craft puts it there, the attack
+ * edge places it, the action edge cancels it (server/sim/build.ts).
+ *
+ * Sizes: ~150 numbers, sent only when one of them changed (or `ack` moved) — a reload, a pickup, a craft, a switch.
+ */
+export interface BagMirror {
+	invenWeapon: Array<number>;
+	invenEquip: Array<number>;
+	invenUse: Array<number>;
+	invenEtc: Array<number>;
+	/** ammoNormal, ammoShotgun, ammoMachinegun, ammoArrow, oil, electric */
+	ammo: Array<number>;
+	/** equipWeapon, equipCloth, equipHand, equipGun, equipOutfit, equipPet */
+	equip: Array<number>;
+	skillLevels: Array<number>;
+	skillPoint: number;
+	/** PLACEABLES id on the server's cursor, -1 = none */
+	place: number;
+	/** nonce of the last backpack intent the server handled, 0 = none yet (u16) */
+	ack: number;
+	/** the last command seq (u16) the server consumed from this survivor when it wrote this, -1 = not in the world */
+	seq: number;
+}
+
+/** the largest PLACEABLES id a bag may name (shared/sim/placement.ts keys by ETC index) */
+const BAG_PLACE_MAX = 255;
+/** nonces and command seqs are u16 on the wire */
+const BAG_U16_MAX = 65535;
+
+function ammoOf(save: PlayerSaveData): Array<number> {
+	return [save.ammoNormal, save.ammoShotgun, save.ammoMachinegun, save.ammoArrow, save.oil, save.electric];
+}
+
+function equipsOf(save: PlayerSaveData): Array<number> {
+	return [save.equipWeapon, save.equipCloth, save.equipHand, save.equipGun, save.equipOutfit, save.equipPet];
+}
+
+/** SERVER: the bag of a live save, for the wallet push */
+export function bagOf(save: PlayerSaveData, place: number, ack: number, seq: number): BagMirror {
+	return {
+		invenWeapon: copyArray(save.invenWeapon),
+		invenEquip: copyArray(save.invenEquip),
+		invenUse: copyArray(save.invenUse),
+		invenEtc: copyArray(save.invenEtc),
+		ammo: ammoOf(save),
+		equip: equipsOf(save),
+		skillLevels: copyArray(save.skillLevels),
+		skillPoint: save.skillPoint,
+		place,
+		ack,
+		seq,
+	};
+}
+
+/**
+ * SERVER: everything in the bag that can change, as one string — the push compares it with the last one it sent
+ * (`seq` is left out on purpose: it moves every tick and is only ever read together with the rest).
+ */
+export function bagSignature(save: PlayerSaveData, place: number, ack: number): string {
+	return [
+		save.invenWeapon.join(","),
+		save.invenEquip.join(","),
+		save.invenUse.join(","),
+		save.invenEtc.join(","),
+		ammoOf(save).join(","),
+		equipsOf(save).join(","),
+		save.skillLevels.join(","),
+		save.skillPoint,
+		place,
+		ack,
+	].join("|");
+}
+
+/**
+ * CLIENT: a bag from the wire, or undefined when it is not one. S→C, so this is defensive rather than a security
+ * gate — a malformed table must not break the client's backpack — and every number is clamped to what the save
+ * itself allows (`readIntArray`, the same limits `sanitizeStoredSave` uses).
+ */
+export function readBag(raw: unknown): BagMirror | undefined {
+	if (!typeIs(raw, "table")) return undefined;
+	const r = raw as Record<string, unknown>;
+	for (const key of ["invenWeapon", "invenEquip", "invenUse", "invenEtc", "ammo", "equip", "skillLevels"]) {
+		if (!typeIs(r[key], "table")) return undefined;
+	}
+	const L = SAVE_LIMITS;
+	const eqMax = EQUIPS.size() - 1;
+	const rawEquip = r.equip as Array<unknown>;
+	// -1 (nothing equipped) is a value here, so each slot keeps its real floor: the weapon, then five EQUIPS slots
+	const equip: Array<number> = [];
+	for (let i = 0; i < 6; i++) equip.push(readInt(rawEquip[i], -1, -1, i === 0 ? WEAPONS.size() - 1 : eqMax));
+	return {
+		invenWeapon: readIntArray(r.invenWeapon, WEAPONS.size(), itemMax, undefined),
+		invenEquip: readIntArray(r.invenEquip, EQUIPS.size(), itemMax, undefined),
+		invenUse: readIntArray(r.invenUse, USABLES.size(), itemMax, undefined),
+		invenEtc: readIntArray(r.invenEtc, ETC_ITEMS.size(), itemMax, undefined),
+		ammo: readIntArray(r.ammo, 6, () => L.AMMO_MAX, undefined),
+		equip,
+		skillLevels: readIntArray(r.skillLevels, SKILLS.size(), i => SKILLS[i].maxLevel, undefined),
+		skillPoint: readInt(r.skillPoint, 0, 0, L.LEVEL_MAX),
+		place: readInt(r.place, -1, -1, BAG_PLACE_MAX),
+		ack: readInt(r.ack, 0, 0, BAG_U16_MAX),
+		seq: readInt(r.seq, -1, -1, BAG_U16_MAX),
+	};
+}
+
+/** CLIENT: the server's bag, written over the local copy in place (array identity kept, as `copySaveInto` does) */
+export function applyBag(save: PlayerSaveData, bag: BagMirror): void {
+	copyInto(save.invenWeapon, bag.invenWeapon);
+	copyInto(save.invenEquip, bag.invenEquip);
+	copyInto(save.invenUse, bag.invenUse);
+	copyInto(save.invenEtc, bag.invenEtc);
+	save.ammoNormal = bag.ammo[0] ?? 0;
+	save.ammoShotgun = bag.ammo[1] ?? 0;
+	save.ammoMachinegun = bag.ammo[2] ?? 0;
+	save.ammoArrow = bag.ammo[3] ?? 0;
+	save.oil = bag.ammo[4] ?? 0;
+	save.electric = bag.ammo[5] ?? 0;
+	save.equipWeapon = bag.equip[0] ?? -1;
+	save.equipCloth = bag.equip[1] ?? -1;
+	save.equipHand = bag.equip[2] ?? -1;
+	save.equipGun = bag.equip[3] ?? -1;
+	save.equipOutfit = bag.equip[4] ?? -1;
+	save.equipPet = bag.equip[5] ?? -1;
+	copyInto(save.skillLevels, bag.skillLevels);
+	save.skillPoint = bag.skillPoint;
 }
 
 /**

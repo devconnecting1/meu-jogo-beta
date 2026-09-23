@@ -54,7 +54,13 @@ export type BackpackOutcome =
 	| { kind: "equipped"; equip: number; slot: number }
 	| { kind: "unequipped"; slot: number }
 	| { kind: "learned"; skill: number; level: number }
-	| { kind: "refused"; why: "unknown" | "rate" | "station" | "ingredients" | "busy" | "owned" | "points" | "noop" };
+	| { kind: "switched"; weapon: number }
+	| { kind: "delivered"; packs: number }
+	| {
+			kind: "refused";
+			why:
+				"unknown" | "rate" | "station" | "ingredients" | "busy" | "owned" | "points" | "noop" | "dead" | "full";
+	  };
 
 /**
  * The station a survivor at (x, y) is standing near, or undefined: the shared rule (shared/sim/craftRule.ts), the
@@ -83,13 +89,17 @@ interface Limits {
 
 export interface ServerCraftOptions {
 	world: WorldData;
-	/** where a craftKind-1 recipe's result goes: onto the cursor, not into the backpack */
-	build: ServerBuild;
+	/**
+	 * Where a craftKind-1 recipe's result goes: onto the cursor, not into the backpack. Undefined while the server
+	 * does not own the interactive world (there is no world to place it in): the backpack verbs still work then
+	 * (server/sim/backpack.ts), and a build recipe is refused before anything is spent.
+	 */
+	build?: ServerBuild;
 }
 
 export class ServerCraft {
 	private readonly world: WorldData;
-	private readonly build: ServerBuild;
+	private readonly build?: ServerBuild;
 	private readonly limits = new Map<number, Limits>();
 
 	constructor(options: ServerCraftOptions) {
@@ -109,6 +119,17 @@ export class ServerCraft {
 		this.limits.delete(slot);
 	}
 
+	/**
+	 * Is this survivor's craft / use limit (§8.1: 4 crafts a second, a usable every 0.25 s) still running? The
+	 * backpack asks BEFORE handing an intent over, and holds it until the limit has passed instead of refusing it:
+	 * a double click on Eat is two cans, a quarter of a second apart, not one can and a prediction to undo.
+	 */
+	cooling(slot: number, what: "craft" | "use"): boolean {
+		const l = this.limits.get(slot);
+		if (l === undefined) return false;
+		return (what === "craft" ? l.craft : l.use) > 0;
+	}
+
 	// ---------------------------------------------------------------- craft (§8.1)
 
 	craft(slot: number, state: PlayerState, save: PlayerSaveData, recipeId: number): BackpackOutcome {
@@ -125,7 +146,7 @@ export class ServerCraft {
 		// (the combat then finds the default blade in `weaponOf`, and banks the old magazine itself)
 		unequipGone(save);
 		l.craft = 1 / CRAFT_RATE;
-		if (r.craftKind === 1) {
+		if (r.craftKind === 1 && this.build !== undefined) {
 			// a placeable goes on the cursor; server/sim/build.ts places it and refunds a cancel
 			this.build.hold(slot, r.resultIndex, r.id);
 			return { kind: "holding", placeable: r.resultIndex };
@@ -145,7 +166,9 @@ export class ServerCraft {
 	useItem(slot: number, state: PlayerState, save: PlayerSaveData, usableId: number): BackpackOutcome {
 		const l = this.limitsOf(slot);
 		if (l.use > 0) return { kind: "refused", why: "rate" };
-		if (state.dead) return { kind: "refused", why: "busy" };
+		// a body at 0 hp IS dead, even before the next `stepPlayer` flags it (the rule of life.ts `writeRunBody`): a
+		// bite lands in the horde's half of a tick, and a bandage queued for the next one must not revive the corpse
+		if (state.dead || state.hp <= 0) return { kind: "refused", why: "dead" };
 		// `itemUseEffect` is the ownership check AND the "would this do anything?" check, and it is the same
 		// function the single-player game used, applied to the SERVER's body
 		if (!itemUseEffect(state, save, usableId)) return { kind: "refused", why: "noop" };
@@ -195,8 +218,11 @@ export class ServerCraft {
 		save: PlayerSaveData,
 		r: CraftRecipe,
 	): "busy" | "station" | "ingredients" | undefined {
+		// a construction needs a world to be placed in: without the server's (below WORLD_SERVER_PHASE) it is refused
+		// here, before anything is spent
+		if (r.craftKind === 1 && this.build === undefined) return "station";
 		// one construction at a time, exactly like the client's `craftBlocker`
-		if (this.build.placing(slot)) return "busy";
+		if (this.build?.placing(slot) === true) return "busy";
 		if (!this.stationOk(state, r)) return "station";
 		for (const ing of r.ingredients) {
 			if (countItem(save, ing.kind, ing.index) < ing.count) return "ingredients";
