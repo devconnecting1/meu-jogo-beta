@@ -1,11 +1,11 @@
 import { GameContext } from "shared/game/context";
-import { equippedIn, expMaxInit, totalPendingPacks } from "shared/game/save";
+import { declineTutorial, equippedIn, expMaxInit, totalPendingPacks } from "shared/game/save";
 import { TIPS } from "shared/data/tips";
 import { ACHIEVEMENTS } from "shared/data/achievements";
 import { WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
-import { onWalletChanged } from "../systems/saveClient";
+import { onWalletChanged, requestSave } from "../systems/saveClient";
 import { popup } from "./popup";
 import { GAME, TEXT, THEME, fontOf, hex, roleFont, space } from "./theme";
 import {
@@ -349,7 +349,9 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 						text: "No",
 						variant: "secondary",
 						onClick: (): void => {
-							ctx.save.tutorialDone = true;
+							// "No" means no lessons in the match either (the coach runs off `firstInstall`)
+							declineTutorial(ctx.save);
+							requestSave("auto");
 							handlers.onPlay();
 						},
 					},

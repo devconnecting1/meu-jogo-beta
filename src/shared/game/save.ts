@@ -230,6 +230,17 @@ export function defaultSave(): PlayerSaveData {
  * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked)
  * and settings. The server applies it on the "newRun" action; the client applies the same to its copy.
  */
+/**
+ * The player answered "No" to "Do you want to watch the tutorial?". Two flags carry the tutorial and the answer
+ * has to clear both: `tutorialDone` (the lobby's question and the How to play card) and `firstInstall` (the
+ * in-run coach, client/onboarding). Clearing only the first was the bug the owner hit on 2026-09-23 -- "No" still
+ * started the coach's lessons in the first match.
+ */
+export function declineTutorial(save: PlayerSaveData): void {
+	save.tutorialDone = true;
+	save.firstInstall = false;
+}
+
 export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
 	save.day = 1;
