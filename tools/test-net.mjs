@@ -1776,6 +1776,131 @@ test("Intent: hostile payloads are refused (§8.1)", () => {
 	eq("exactly the 2 presence and 6 backpack verbs decode", accepted, 8);
 });
 
+test("Intent gate: the §8.2 bucket, the malformed window, and presence left to mpHost", () => {
+	const G = require(join(SRC, "server/net/intentGate.ts"));
+	const good = () => randIntent();
+	// a burst of INTENT_BURST at one instant is accepted; the next one is dropped, still decoded (its nonce is acked)
+	let g = G.newIntentGate(0);
+	for (let i = 0; i < CFG.INTENT_BURST; i++)
+		eq(`burst ${i}`, G.ingestBackpackIntent(g, good(), 0).verdict, G.IntentVerdict.Ok);
+	const over = G.ingestBackpackIntent(g, good(), 0);
+	eq("past the burst: Rate", over.verdict, G.IntentVerdict.Rate);
+	ok(over.msg !== undefined, "a rate-dropped verb is still decoded, so its nonce can be answered");
+	eq("counted", g.rateDropped, 1);
+	// it refills at INTENT_RATE per second
+	eq(
+		"a second later, one more",
+		G.ingestBackpackIntent(g, good(), 1 / CFG.INTENT_RATE + 1e-9).verdict,
+		G.IntentVerdict.Ok,
+	);
+	// a client at exactly the rate is never dropped; one at twice the rate loses about half after the burst
+	g = G.newIntentGate(0);
+	let dropped = 0;
+	for (let i = 1; i <= 2000; i++)
+		if (G.ingestBackpackIntent(g, good(), i / CFG.INTENT_RATE).verdict !== G.IntentVerdict.Ok) dropped += 1;
+	eq("a steady INTENT_RATE per second is never dropped", dropped, 0);
+	g = G.newIntentGate(0);
+	dropped = 0;
+	for (let i = 1; i <= 2000; i++)
+		if (G.ingestBackpackIntent(g, good(), i / (2 * CFG.INTENT_RATE)).verdict === G.IntentVerdict.Rate) dropped += 1;
+	near("twice the rate: half is dropped", dropped, 1000 - CFG.INTENT_BURST, 3);
+	// the presence verbs are mpHost's: never counted, never a token
+	g = G.newIntentGate(0);
+	for (let i = 0; i < 500; i++)
+		eq(
+			"presence",
+			G.ingestBackpackIntent(g, P.encodeIntent(pick(PRESENCE_VERBS)), 0).verdict,
+			G.IntentVerdict.Presence,
+		);
+	eq("presence took no token", g.tokens, CFG.INTENT_BURST);
+	// malformed payloads take a token and are counted in a window; past FLOOD_MALFORMED the gate says so
+	g = G.newIntentGate(0);
+	for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++) {
+		const t = i * 0.05;
+		eq(`junk ${i}`, G.ingestBackpackIntent(g, randBuf(rint(0, 12)), t).verdict === G.IntentVerdict.Ok, false);
+	}
+	ok(G.malformedFlood(g), "more than FLOOD_MALFORMED junk payloads inside the window is a flood");
+	g = G.newIntentGate(0);
+	for (let i = 0; i < CFG.FLOOD_MALFORMED; i++)
+		G.ingestBackpackIntent(g, "junk", i * (CFG.FLOOD_MALFORMED_WINDOW_S / 10));
+	ok(!G.malformedFlood(g), "the same count spread over several windows is not");
+	// a clock that goes backwards neither throws nor mints tokens
+	g = G.newIntentGate(100);
+	for (let i = 0; i < CFG.INTENT_BURST; i++) G.ingestBackpackIntent(g, good(), 100);
+	eq("backwards clock: no refill", G.ingestBackpackIntent(g, good(), 50).verdict, G.IntentVerdict.Rate);
+	// fuzz: hostile payloads of every shape, at hostile times; never a throw, the bucket stays in [0, burst]
+	g = G.newIntentGate(0);
+	let t = 0;
+	for (let i = 0; i < FUZZ_N; i++) {
+		t += rnd() < 0.1 ? -rfloat(0, 5) : rfloat(0, 0.2);
+		const kind = rint(0, 5);
+		const payload =
+			kind === 0
+				? randBuf(rint(0, 20))
+				: kind === 1
+					? good()
+					: kind === 2
+						? pick([undefined, 7, "x", {}, [], NaN])
+						: kind === 3
+							? P.encodeIntent(pick(PRESENCE_VERBS))
+							: bufOf([
+									96,
+									rint(0, 255),
+									rint(0, 255),
+									rint(0, 255),
+									rint(0, 255),
+									rint(0, 255),
+									rint(0, 255),
+									rint(0, 255),
+								]);
+		let res;
+		try {
+			res = G.ingestBackpackIntent(g, payload, t);
+		} catch (e) {
+			fail(`the gate threw: ${(e && e.message) || e}`);
+			return;
+		}
+		if (res.verdict === G.IntentVerdict.Ok && (res.msg === undefined || !P.isBackpackIntent(res.msg.kind)))
+			fail(`Ok without a backpack verb: ${JSON.stringify(res)}`);
+		if (!(g.tokens >= 0 && g.tokens <= CFG.INTENT_BURST)) fail(`bucket out of range: ${g.tokens}`);
+		checks += 1;
+	}
+});
+
+test("Intent gate: out of the world only a cosmetic slot moves, and only to something owned (MON-04)", () => {
+	const G = require(join(SRC, "server/net/intentGate.ts"));
+	const { EQUIPS, EquipSlot } = require(join(SRC, "shared/data/equips.ts"));
+	const { COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
+	const msg = (kind, arg) => P.decodeIntentMessage(P.encodeIntentArgs(kind, 0, arg, 1));
+	const outfit = COSTUMES.find(c => COS.cosmeticSlotOf(c.equipId) === EquipSlot.Outfit);
+	const save = SAVE.defaultSave();
+	eq("an outfit not owned is refused", G.applyOutOfWorld(save, msg(P.IntentKind.Equip, outfit.equipId)), false);
+	eq("and nothing is worn", save.equipOutfit, -1);
+	save.costumes[outfit.id] = 1;
+	eq("owned: worn", G.applyOutOfWorld(save, msg(P.IntentKind.Equip, outfit.equipId)), true);
+	eq("in the outfit slot", save.equipOutfit, outfit.equipId);
+	eq("cleared", G.applyOutOfWorld(save, msg(P.IntentKind.Unequip, EquipSlot.Outfit)), true);
+	eq("nothing worn again", save.equipOutfit, -1);
+	// armour, a hand item, a gun gadget: never out of the world, owned or not
+	const armour = EQUIPS.find(e => e.kind === EquipSlot.Cloth);
+	save.invenEquip[armour.id] = 1;
+	eq("armour out of the world is refused", G.applyOutOfWorld(save, msg(P.IntentKind.Equip, armour.id)), false);
+	eq("the cloth slot is untouched", save.equipCloth, -1);
+	eq(
+		"unequip of a non-cosmetic slot is refused",
+		G.applyOutOfWorld(save, msg(P.IntentKind.Unequip, EquipSlot.Cloth)),
+		false,
+	);
+	for (const kind of [P.IntentKind.UseItem, P.IntentKind.LearnSkill, P.IntentKind.Craft, P.IntentKind.SwitchWeapon]) {
+		eq(`verb ${kind} out of the world is refused`, G.applyOutOfWorld(save, msg(kind, 1)), false);
+	}
+	eq(
+		"no use, no learn, no switch happened",
+		`${save.invenUse.join(",")}|${save.skillLevels.join(",")}|${save.equipWeapon}`,
+		`${SAVE.defaultSave().invenUse.join(",")}|${SAVE.defaultSave().skillLevels.join(",")}|${SAVE.defaultSave().equipWeapon}`,
+	);
+});
+
 // ---------------------------------------------------------------- 7c. the backpack mirror (S→C wallet `bag`, F3)
 
 test("Wallet bag: the server's backpack round trips into the client's copy, and junk is clamped", () => {
