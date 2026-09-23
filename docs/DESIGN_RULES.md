@@ -142,6 +142,9 @@ O jogo é multiplayer nativo: mundo compartilhado por servidor (até 6 jogadores
 - **MP-14 [revisão]** ✅ **Solo é o jogo de hoje**: com um jogador só, S(1) = 1, pausa real e sem espera de derrubado (P2: o multiplayer não pode piorar o solo).
 - **MP-15 [revisão]** ✅ XP compartilhado com sentido: **60% de assistência** para quem ajudou a matar; XP de chefe para **todos os participantes**.
 - **MP-16 [revisão]** ✅ Anti-trapaça proporcional: corrigir em silêncio → sinalizar com evidências no painel de admin → kick automático só para abuso inequívoco (flood de remotes). ❌ Ban automático (ban só por decisão humana).
+- **MP-17 [revisão]** ✅ **Chat é do lugar, não da sala.** A mensagem só chega a quem está a até `INTEREST_MID` (1500 u, ~27 m) de quem falou, e a decisão é do **servidor** (`TextChannel.ShouldDeliverCallback`). A regra é "se você o vê, você o ouve": o alcance é amarrado ao raio em que o outro sobrevivente é replicado — acima dele não há corpo onde pendurar o balão. ❌ Filtrar alcance no cliente (um cliente modificado leria tudo, e quem falou é também onde ele está). ❌ Aumentar o alcance sem mover o raio de interesse junto.
+- **MP-18 [revisão]** ✅ **Sem corpo, sem voz.** Quem não está no mundo (lobby, loja, créditos) não fala nem ouve o chat de proximidade, porque não tem posição. Pelo mesmo motivo, **só existe corpo na cidade entre `EnterWorld` e `LeaveWorld`**: ninguém fica de pé na rua por estar apenas conectado. ❌ Admitir jogador no mundo por efeito colateral de entrar no servidor.
+- **MP-19 [revisão]** ✅ Balão de fala: no máximo **3 por sobrevivente** (o quarto expulsa o mais antigo), **7 s** de vida com 0,4 s de fade, texto **filtrado** pelo Roblox, cortado em 90 caracteres. ❌ Desenhar texto cru de jogador. ❌ Balão que sobrevive ao dono sair do mundo.
 
 ## Como adicionar ou mudar uma regra
 
