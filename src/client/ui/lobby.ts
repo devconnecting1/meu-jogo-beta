@@ -7,12 +7,12 @@ import { langGet } from "shared/data/lang";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { onWalletChanged } from "../systems/saveClient";
 import { SurvivorPreview } from "../view/cosmeticPreview";
-import { attachFlyover, detachFlyover, TownFlyover } from "../view/townFlyover";
+import { pinFlyover, TownFlyover } from "../view/townFlyover";
 import { Wordmark } from "./logo";
 import { paintPlate } from "./plate";
 import { PixelIcon, PixelIconKind } from "./pixelIcon";
 import { popup } from "./popup";
-import { RunState, SurvivorScreen } from "./survivor";
+import { RunState, SURVIVOR_WINDOW, SurvivorScreen } from "./survivor";
 import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
 import {
@@ -601,22 +601,20 @@ function phaseOf(t: number): string {
 
 // ---------------------------------------------------------------- the screen
 
-/** ZIndex of the lobby's layers under its root: the town, then the pages */
-const Z_TOWN = 1;
-const Z_BODY = 3;
-
 export function showLobby(
 	ctx: GameContext,
 	handlers: LobbyHandlers,
 	initial: LobbyStatus,
 	open: LobbyPage = "menu",
 ): LobbyHandle {
-	const { root, body } = makeScreen(ctx.uiLayer, "Lobby");
-	body.ZIndex = Z_BODY;
+	// see-through: the town behind the menus is pinned at the back of the UI layer, and it stays there when the lobby
+	// hands over to Settings, the Wardrobe, the Shop... (townFlyover.ts pinFlyover); only the run releases it
+	const screen = makeScreen(ctx.uiLayer, "Lobby", { transparency: 1 });
+	const { root, body } = screen;
 	let status = initial;
 	let current: LobbyPage = "menu";
 	let closed = false;
-	let flyover: TownFlyover = attachFlyover(root, status.seed, Z_TOWN);
+	let flyover: TownFlyover = pinFlyover(ctx.uiLayer, status.seed);
 
 	let survivor: SurvivorScreen | undefined;
 	const survivorState = () => {
@@ -652,7 +650,7 @@ export function showLobby(
 	handle = {
 		refresh(update: LobbyStatus): void {
 			if (closed) return;
-			if (update.seed !== status.seed) flyover = attachFlyover(root, update.seed, Z_TOWN);
+			if (update.seed !== status.seed) flyover = pinFlyover(ctx.uiLayer, update.seed);
 			status = update;
 			flyover.setDayTime(hourNow());
 			menu.refresh(status);
@@ -660,6 +658,9 @@ export function showLobby(
 		},
 		show(page: LobbyPage): void {
 			if (closed) return;
+			// the menu is a page that reaches the screen's edges; the Survivor screen is a window, centred on the
+			// full screen (UI-07): the one body moves to centre what is showing
+			screen.setContent(page === "survivor" ? SURVIVOR_WINDOW : undefined);
 			if (page === "survivor") {
 				const s = survivor ?? buildSurvivor();
 				s.refresh(survivorState());
@@ -684,8 +685,8 @@ export function showLobby(
 			closed = true;
 			for (const c of conns) c.Disconnect();
 			unsubscribe();
-			// the flyover's pool outlives this screen (the Shop and back reuses it): off the root before it goes
-			detachFlyover();
+			// the flyover is not this screen's: it stays pinned behind the next menu screen, gliding on, until the run
+			// releases it (main.client.ts mountRun)
 			menu.destroy();
 			survivor?.destroy();
 			root.Destroy();

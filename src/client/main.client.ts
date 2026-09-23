@@ -13,6 +13,7 @@ import { USABLES } from "shared/data/usables";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { ShopActionRequest, ShopActionResult } from "shared/net/net";
 import { daybreakWaitSeconds } from "shared/sim/clock";
+import type { GamePhase } from "shared/game/context";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
@@ -386,40 +387,60 @@ function lobbyStatus(): LobbyStatus {
 	};
 }
 
+/**
+ * A menu screen in place of the one on screen (DESIGN_RULES UI-10): see-through, over the town flyover that stays
+ * pinned behind every menu -- the very glide the lobby showed, never restarted -- until a run mounts and releases it.
+ */
+function menuScreen(phase: GamePhase): void {
+	clearScreen();
+	setPhase(phase);
+	Flyover.pinFlyover(ctx.uiLayer, netTownSeed());
+}
+
 /** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
 function openShop(back: () => void = goLobby): void {
-	clearScreen();
-	setPhase("shop");
+	menuScreen("shop");
 	// the shop's "Wardrobe" is a door: its X comes back to this shop, whose Back still goes where it went before
 	cleanup = showShop(ctx, back, () => openWardrobe(() => openShop(back)));
 }
 
 /** MON-04: outfits and pets, tried on, bought (by the server) and worn -- from the lobby or from the shop */
 function openWardrobe(back: () => void): void {
-	clearScreen();
-	setPhase("shop");
+	menuScreen("shop");
 	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot });
 }
 
 function openSettings(): void {
-	clearScreen();
-	setPhase("settings");
-	cleanup = showSettings(ctx, goLobby, () => {
-		clearScreen();
-		setPhase("credits");
-		cleanup = showCredits(ctx, goLobby);
-	});
+	menuScreen("settings");
+	cleanup = showSettings(ctx, goLobby, openCredits);
 }
 
 function openCredits(): void {
-	clearScreen();
-	setPhase("credits");
+	menuScreen("credits");
 	cleanup = showCredits(ctx, goLobby);
 }
 
+/**
+ * Settings from the in-run menu (DESIGN_RULES UI-06): OVER the running match, like the menu it came from -- the street
+ * keeps moving behind its see-through scrim, the survivor stands held, the red flash warns of a hit -- and its X goes
+ * back to that menu. It used to leave the world and draw an opaque page (and its X dropped the player in the lobby).
+ * No credits row there: that page is text straight on the screen, which a bright street would wash out.
+ */
+function settingsOverRun(): void {
+	closePause();
+	pauseCleanup = showSettings(
+		ctx,
+		() => {
+			closePause();
+			openPause();
+		},
+		undefined,
+		true,
+	);
+}
+
 function openTutorial(thenPlay: boolean): void {
-	clearScreen();
-	setPhase("tutorial");
+	menuScreen("tutorial");
 	cleanup = showTutorial(ctx, () => {
 		net.requestSave("menu");
 		// back to the lobby first, so a "still loading" prompt has a screen behind it: the Survivor screen, when the
@@ -607,11 +628,7 @@ function openPause(): void {
 					openPause();
 				});
 			},
-			onSettings: () => {
-				stopGame();
-				net.requestSave("lobby");
-				openSettings();
-			},
+			onSettings: settingsOverRun,
 		},
 		{ note: offlineNote() },
 	);

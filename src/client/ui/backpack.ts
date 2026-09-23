@@ -297,17 +297,16 @@ export class Backpack {
 		this.tip = undefined;
 		this.hoverTile = undefined;
 		this.headerSig = "";
+		const at: W.DesignRect = { x: (W.DESIGN_W - WIN_W) / 2, y: math.floor((W.DESIGN_H - WIN_H) / 2), w: WIN_W, h: WIN_H };
 		const screen = W.makeScreen(this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
 			transparency: TRANSPARENCY.overWorld,
 			zIndex: 200,
+			content: at,
 		});
 		this.root = screen.root;
 		const win = Kit.Window(screen.body, "Window", {
-			x: (W.DESIGN_W - WIN_W) / 2,
-			y: math.floor((W.DESIGN_H - WIN_H) / 2),
-			w: WIN_W,
-			h: WIN_H,
+			...at,
 			title: this.tr("Backpack"),
 			onClose: (): void => this.close(),
 			onHelp: (): void => {

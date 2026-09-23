@@ -431,6 +431,7 @@ function install(options) {
 		if (gui !== undefined && gui.SelectedObject === inst) gui.SelectedObject = undefined;
 		for (const s of my.events.values()) s.clear();
 		for (const s of my.propSignals.values()) s.clear();
+		for (const s of my.attrSignals.values()) s.clear();
 		if (my.counted) stats.log.push({ kind: "gone", inst });
 	}
 
@@ -441,6 +442,7 @@ function install(options) {
 			children: [],
 			parent: undefined,
 			attrs: new Map(),
+			attrSignals: new Map(),
 			propSignals: new Map(),
 			events: new Map(),
 			destroyed: false,
@@ -472,8 +474,19 @@ function install(options) {
 			},
 			GetAttribute: n => my.attrs.get(n),
 			SetAttribute: (n, v) => {
+				const old = my.attrs.get(n);
 				if (v === undefined) my.attrs.delete(n);
 				else my.attrs.set(n, v);
+				if (old !== v) my.attrSignals.get(n)?.Fire();
+			},
+			// the lobby listens to the town's live numbers the server publishes on the Workspace (lobby.ts)
+			GetAttributeChangedSignal: n => {
+				let s = my.attrSignals.get(n);
+				if (s === undefined) {
+					s = new Signal();
+					my.attrSignals.set(n, s);
+				}
+				return s;
 			},
 			GetPropertyChangedSignal: p => {
 				let s = my.propSignals.get(p);
@@ -624,10 +637,14 @@ function install(options) {
 	/**
 	 * Resizes the screen: the camera's ViewportSize and the Roblox top bar, with the signals the client listens to
 	 * (bootstrap.ts recomputes the touch layout, skin.ts rescales the kit on the deferred refresh).
+	 *
+	 * The bar is `topBar` px tall, and its buttons take the first `buttons` px from the left: GuiService.TopbarInset is
+	 * the stretch they leave FREE (Rect(buttons, 0, w, topBar)). Left out, the buttons take the whole width -- the
+	 * cautious reading the kit falls back to when it cannot see where they are.
 	 */
-	function setViewport(w, h, topBar = 0) {
+	function setViewport(w, h, topBar = 0, buttons = w) {
 		const gui = service("GuiService");
-		gui.TopbarInset = new Rect(0, 0, w, topBar);
+		gui.TopbarInset = new Rect(Math.min(buttons, w), 0, w, topBar);
 		const cam = service("Workspace").CurrentCamera;
 		cam.ViewportSize = new Vector2(w, h);
 		flush();
