@@ -147,6 +147,9 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 		title: tr("How to play"),
 		description: tr("Everything the game listens to, on every device"),
 		zIndex: 260,
+		// a menu screen of its own, opened from the lobby: it stands on the town flyover, under the flyover's scrim
+		// and no second one (UI-10)
+		scrim: 1,
 	});
 	const panel = dialog.card;
 	const top = dialog.contentY;

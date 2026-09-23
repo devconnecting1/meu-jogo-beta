@@ -8,6 +8,7 @@ import {
 	Card,
 	CoinIcon,
 	autoFocus,
+	centredRect,
 	fmtInt,
 	makeLabel,
 	makeScreen,
@@ -132,8 +133,9 @@ export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: 
 		// over the run: the town keeps going behind this screen too (UI-06), so it is dimmed, not hidden
 		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
+		content: centredRect(W, H),
 	});
-	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H) / 2, w: W, h: H });
+	const panel = Card(body, "Panel", centredRect(W, H));
 	const innerW = W - PAD * 2;
 	let y = summaryHead(panel, summary, tr);
 
@@ -245,10 +247,11 @@ export function showDaybreakWait(
 		// run (UI-06), and since UI-06 the town behind it really moves -- the loop no longer stops for a death
 		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
+		content: centredRect(W, handlers.onRebirth !== undefined ? H_WAIT_REBIRTH : H_WAIT),
 	});
 	const withRebirth = handlers.onRebirth !== undefined;
 	const h = withRebirth ? H_WAIT_REBIRTH : H_WAIT;
-	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - h) / 2, w: W, h });
+	const panel = Card(body, "Panel", centredRect(W, h));
 	const innerW = W - PAD * 2;
 	let y = summaryHead(panel, summary, tr);
 

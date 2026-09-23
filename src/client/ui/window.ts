@@ -9,9 +9,13 @@
  *   Section       the lighter notched plate inside a window that holds one group ("Keybinds"), bold title at left
  *   Groove        the dark notched bed inside a section that rows and tiles sit in
  *   SettingsList  a scrolling Groove of rows; the gaps between the rows are the grooves
- *   SettingRow    one row: bold label centred in a darker cell at the left, the value in a lighter cell at right
+ *   SettingRow    one row: bold label centred in a darker cell at the left, the value in a lighter cell at right;
+ *                 with `description`, the FORM ROW: label and a muted one-line description under it, left-aligned
+ *   SettingAction a form row whose control is one button ("Reset to defaults", "Open credits")
  *   ValueKey      the value as a key: a dark-iron plate with a light legend that grows to fit it
  *   SettingNote   a muted caption line in the list
+ *   Switch        an on / off control: the slider's dark groove, steel-blue inside when on, an iron pixel knob
+ *   RadioGroup    stacked options on a Groove, each a label and a description, a pixel socket lit blue when chosen
  *   GridTile      a square tile of a grid (the wardrobe): flat, equipped, locked (padlock + price), selected (blue)
  *   ListRow       a row of a selectable list whose text is the content (the wardrobe's titles): graphite, locked
  *                 darker with a padlock, selected inside the blue ring
@@ -23,6 +27,7 @@ import { SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { PlateState, drawPadlock, paintPlate, paintSegment, reliefPx } from "./plate";
 import {
 	Button,
+	ButtonVariant,
 	CARD_STRIP_INSET,
 	Card,
 	CardHeader,
@@ -43,6 +48,7 @@ import {
 } from "./widgets";
 
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
+const UserInputService = game.GetService("UserInputService");
 
 // ---------------------------------------------------------------- Window
 
@@ -284,8 +290,15 @@ export function SettingsList(parent: Instance, name: string, x: number, y: numbe
 export interface SettingRowOpts {
 	/** label cell width (design units of the list, default 220) */
 	labelW?: number;
-	/** row height (default 38, the reference's) */
+	/** row height (default SETTING_ROW_H, the reference's; SETTING_DESC_ROW_H for a form row) */
 	rowH?: number;
+	/**
+	 * Makes it a FORM ROW (DESIGN_RULES UI-07): the label, and under it this muted one-line description of what the
+	 * setting really does, both left-aligned in the label cell; the control goes in the value cell as in any row.
+	 * The line is `SURFACE.cellCaption` (4,5:1 on the label cell, where plain muted text is not), TEXT.sm, and never
+	 * wraps: one line, and a translation too long for it is cut with an ellipsis instead of spilling out of the row.
+	 */
+	description?: string;
 }
 
 export interface SettingRowHandle {
@@ -293,13 +306,76 @@ export interface SettingRowHandle {
 	label: TextLabel;
 	/** the value cell: its own design space (list width - labelW) x rowH, for the control / key / text */
 	value: Frame;
+	/** the description line of a form row (undefined on a plain row) */
+	description?: TextLabel;
 }
 
 export const SETTING_ROW_H = 38;
+/** a form row: the label (20), the description under it (16) and the cell's breathing room */
+export const SETTING_DESC_ROW_H = 46;
+/** where a control starts in the value cell of a form row (the slider's track starts there too): one column of them */
+export const SETTING_CONTROL_X = space(4);
+
+/** the label column of a form row: label box, description box and the gap between them (design units) */
+const DESC_LABEL_H = 20;
+const DESC_TEXT_H = 16;
+const DESC_GAP = 2;
+/** the label and description start this far into the label cell, and stop this far from its right edge */
+const DESC_PAD_L = space(4);
+const DESC_PAD_R = space(3);
+
+/**
+ * The label of a row in `labelW` x `h` of `row`: Bold and centred (the reference's row), or -- with a description --
+ * the form row's column, label over description, left-aligned and vertically centred as a block.
+ */
+function rowLabels(
+	row: Frame,
+	label: string,
+	labelW: number,
+	h: number,
+	description: string | undefined,
+): [TextLabel, TextLabel | undefined] {
+	const zIndex = row.ZIndex + 1;
+	if (description === undefined) {
+		const text = makeLabel(row, "Label", label, space(2), 0, labelW - space(4), h, TEXT.lg, THEME.foreground, {
+			font: BOLD,
+			zIndex,
+		});
+		return [text, undefined];
+	}
+	const w = labelW - DESC_PAD_L - DESC_PAD_R;
+	const top = (h - DESC_LABEL_H - DESC_GAP - DESC_TEXT_H) / 2;
+	const text = makeLabel(row, "Label", label, DESC_PAD_L, top, w, DESC_LABEL_H, TEXT.lg, THEME.foreground, {
+		font: BOLD,
+		align: "left",
+		zIndex,
+	});
+	const line = makeLabel(
+		row,
+		"Description",
+		description,
+		DESC_PAD_L,
+		top + DESC_LABEL_H + DESC_GAP,
+		w,
+		DESC_TEXT_H,
+		TEXT.sm,
+		SURFACE.cellCaption,
+		{ align: "left", zIndex },
+	);
+	for (const l of [text, line]) {
+		l.TextWrapped = false;
+		l.TextTruncate = Enum.TextTruncate.AtEnd;
+	}
+	return [text, line];
+}
 
 /**
  * One settings row, ONE notched shape in two tones (plate.ts paintSegment): the label Bold and centred in the
  * darker cell at the left (`SURFACE.cellLabel`), the value in the lighter cell at the right (`SURFACE.cell`).
+ *
+ * With `opts.description` it is the FORM ROW -- the structure of a web form's horizontal item (label and description
+ * on one side, the control on the other), drawn as our plate: the same two cells, the label over its description in
+ * the left one. Put the control at SETTING_CONTROL_X of `value`, vertically centred.
  */
 export function SettingRow(
 	list: ScrollList,
@@ -308,7 +384,8 @@ export function SettingRow(
 	label: string,
 	opts?: SettingRowOpts,
 ): SettingRowHandle {
-	const rowH = opts?.rowH ?? SETTING_ROW_H;
+	const described = opts?.description;
+	const rowH = opts?.rowH ?? (described !== undefined ? SETTING_DESC_ROW_H : SETTING_ROW_H);
 	const labelW = opts?.labelW ?? 220;
 	const w = list.designW;
 	const row = new Instance("Frame");
@@ -322,37 +399,80 @@ export function SettingRow(
 	const split = labelW / w;
 	paintSegment(row, "Label", SURFACE.cellLabel, 0, split, 3);
 	paintSegment(row, "Value", SURFACE.cell, split, 1, 3);
-	const text = makeLabel(row, "Label", label, space(2), 0, labelW - space(4), rowH, TEXT.lg, THEME.foreground, {
-		font: BOLD,
-		zIndex: row.ZIndex + 1,
-	});
+	const [text, line] = rowLabels(row, label, labelW, rowH, described);
 	const value = makeFrame(row, "Value", labelW, 0, w - labelW, rowH, THEME.background, {
 		transparency: 1,
 		zIndex: row.ZIndex + 1,
 	});
 	row.Parent = list.frame;
-	return { frame: row, label: text, value };
+	return { frame: row, label: text, value, description: line };
+}
+
+export interface SettingActionOpts extends SettingRowOpts {
+	/** the button's look (default "secondary": an action row is never the window's main action) */
+	variant?: ButtonVariant;
+	/** button width (default 140) */
+	buttonW?: number;
+}
+
+export interface SettingActionHandle {
+	row: SettingRowHandle;
+	button: TextButton;
+}
+
+/**
+ * A form row whose control is ONE button, at SETTING_CONTROL_X of the value cell: "Reset to defaults" (the Settings
+ * tabs), "Open credits". The label says what, the description says what exactly happens -- the button only says the
+ * verb. Its click is the caller's (a reset confirms with the kit's popup first).
+ */
+export function SettingAction(
+	list: ScrollList,
+	name: string,
+	order: number,
+	label: string,
+	description: string,
+	action: string,
+	onClick: () => void,
+	opts?: SettingActionOpts,
+): SettingActionHandle {
+	const row = SettingRow(list, name, order, label, { ...opts, description });
+	const [, h] = designOf(row.value);
+	const bh = 30;
+	const button = Button(row.value, "Action", action, {
+		x: SETTING_CONTROL_X,
+		y: (h - bh) / 2,
+		w: opts?.buttonW ?? 140,
+		h: bh,
+		size: "sm",
+		variant: opts?.variant ?? "secondary",
+		zIndex: row.value.ZIndex + 1,
+		onClick,
+	});
+	return { row, button };
 }
 
 export interface SettingCellProps {
 	x: number;
 	y: number;
 	w: number;
-	/** default SETTING_ROW_H */
+	/** default SETTING_ROW_H (SETTING_DESC_ROW_H with a description) */
 	h?: number;
 	/** label cell width (design units of the row) */
 	labelW: number;
 	label: string;
+	/** a form row's description line (see SettingRowOpts.description) */
+	description?: string;
 	zIndex?: number;
 }
 
 /**
  * The settings row's shape (label cell | value cell, ONE notched shape in two tones) placed at x, y in any frame
  * instead of stacked in a SettingsList: for a few fixed rows laid out side by side on a Groove (the Survivor
- * screen's stats, two to a line). Same tones, same Bold centred label, same value design space.
+ * screen's stats, two to a line). Same tones, same Bold centred label, same value design space -- and the same
+ * form-row variant with `description`.
  */
 export function SettingCell(parent: Instance, name: string, props: SettingCellProps): SettingRowHandle {
-	const h = props.h ?? SETTING_ROW_H;
+	const h = props.h ?? (props.description !== undefined ? SETTING_DESC_ROW_H : SETTING_ROW_H);
 	const { w, labelW } = props;
 	const row = makeFrame(parent, name, props.x, props.y, w, h, THEME.background, {
 		transparency: 1,
@@ -361,15 +481,12 @@ export function SettingCell(parent: Instance, name: string, props: SettingCellPr
 	const split = labelW / w;
 	paintSegment(row, "Label", SURFACE.cellLabel, 0, split, 3);
 	paintSegment(row, "Value", SURFACE.cell, split, 1, 3);
-	const text = makeLabel(row, "Label", props.label, space(2), 0, labelW - space(4), h, TEXT.lg, THEME.foreground, {
-		font: BOLD,
-		zIndex: row.ZIndex + 1,
-	});
+	const [text, line] = rowLabels(row, props.label, labelW, h, props.description);
 	const value = makeFrame(row, "Value", labelW, 0, w - labelW, h, THEME.background, {
 		transparency: 1,
 		zIndex: row.ZIndex + 1,
 	});
-	return { frame: row, label: text, value };
+	return { frame: row, label: text, value, description: line };
 }
 
 /** a muted caption line in a SettingsList (muted-foreground on the groove, never on a cell) */
@@ -439,6 +556,340 @@ export function ValueKey(cell: Frame, name: string, text: string, opts?: ValueKe
 export function setValueKey(key: Frame, text: string): void {
 	const legend = key.FindFirstChild("Legend");
 	if (legend !== undefined && legend.IsA("TextLabel") && legend.Text !== text) legend.Text = text;
+}
+
+// ---------------------------------------------------------------- Switch
+
+export interface SwitchProps {
+	/** top-left, in the parent's design units */
+	x: number;
+	y: number;
+	/** default SWITCH_W x SWITCH_H */
+	w?: number;
+	h?: number;
+	value: boolean;
+	/** the player flipped it: a click, a tap, the pad's A / Enter, or left (off) / right (on) while it has the focus */
+	onChange?: (value: boolean) => void;
+	/** the legends in the track's free end, already translated ("On" / "Off"); omitted = none */
+	onText?: string;
+	offText?: string;
+	zIndex?: number;
+}
+
+export interface SwitchHandle {
+	button: TextButton;
+	get(): boolean;
+	/** shows `value` without calling onChange (a reset, a value changed elsewhere) */
+	set(value: boolean): void;
+	/** disabled: a dark slot in the kit's `line`, not selectable, the knob flat */
+	setEnabled(enabled: boolean): void;
+	/** drops the pad / keyboard listener: call it when the screen closes (like SliderHandle) */
+	disconnect(): void;
+}
+
+export const SWITCH_W = 68;
+export const SWITCH_H = 30;
+/** the knob's width, and how far inside the groove the knob and the blue run (design units) */
+const KNOB_W = 26;
+const TRACK_INSET = 3;
+
+/**
+ * An ON / OFF control in the plate vocabulary (DESIGN_RULES UI-07), for a boolean -- not a web toggle: the SLIDER's
+ * dark notched groove (`SURFACE.well`), filled steel-blue inside when on (`tabActive`: what is chosen is blue), and
+ * an iron pixel knob (the slider's raised `secondary` handle) that sits at the left when off and at the right when
+ * on. The free end of the groove carries the legend ("Off" muted on the dark, "On" light on the blue), so the state
+ * never rests on colour alone.
+ *
+ * Input, by the kit's rules: it is a Selectable button (mouse, touch, and the pad's A / Enter flip it); with the pad
+ * or the keyboard on it, left and right set it off and on, as they move a Slider; the focus lights the groove's edge
+ * in the ring colour, hovering lights the knob. Built once: flipping, hovering or focusing it only repaints and moves
+ * what is there -- it creates no Instance, and it snaps rather than tweens (a pixel knob, and nothing to reduce under
+ * Reduce Motion).
+ */
+export function Switch(parent: Instance, name: string, props: SwitchProps): SwitchHandle {
+	const [dw, dh] = designOf(parent);
+	const w = props.w ?? SWITCH_W;
+	const h = props.h ?? SWITCH_H;
+	const b = new Instance("TextButton");
+	b.Name = name;
+	b.Position = UDim2.fromScale(props.x / dw, props.y / dh);
+	b.Size = UDim2.fromScale(w / dw, h / dh);
+	setDesign(b, w, h);
+	b.AutoButtonColor = false;
+	b.BorderSizePixel = 0;
+	b.BackgroundTransparency = 1;
+	b.BackgroundColor3 = THEME.background;
+	b.Text = "";
+	b.TextColor3 = THEME.foreground;
+	if (props.zIndex !== undefined) b.ZIndex = props.zIndex;
+	// left / right set the value instead of moving the selection, as on a Slider
+	b.SelectionBehaviorLeft = Enum.SelectionBehavior.Stop;
+	b.SelectionBehaviorRight = Enum.SelectionBehavior.Stop;
+	const z = b.ZIndex;
+
+	// the inside of the groove, TRACK_INSET relief units in (whole pixels), clipped: the blue and the knob live here
+	const innerW = w - TRACK_INSET * 2;
+	const innerH = h - TRACK_INSET * 2;
+	const inner = makeFrame(b, "Inner", TRACK_INSET, TRACK_INSET, innerW, innerH, THEME.background, {
+		transparency: 1,
+		clips: true,
+		zIndex: z + 1,
+	});
+	onLayoutChange(inner, () => {
+		const u = reliefPx(TRACK_INSET);
+		inner.Position = new UDim2(0, u, 0, u);
+		inner.Size = new UDim2(1, -2 * u, 1, -2 * u);
+	});
+	const fill = makeFrame(inner, "Fill", 0, 0, innerW, innerH, THEME.tabActive, { zIndex: z + 2 });
+	const knobShare = KNOB_W / innerW;
+	const legend = makeLabel(inner, "Legend", "", 0, 0, innerW - KNOB_W, innerH, TEXT.xs, THEME.mutedForeground, {
+		font: BOLD,
+		zIndex: z + 3,
+	});
+	legend.TextWrapped = false;
+	const knob = makeFrame(inner, "Knob", 0, 0, KNOB_W, innerH, THEME.background, { transparency: 1, zIndex: z + 4 });
+
+	let value = props.value;
+	let enabled = true;
+	const refresh = (): void => {
+		const gs = b.GuiState;
+		const focus = enabled && isFocused(b);
+		const pressed = enabled && gs === Enum.GuiState.Press;
+		const hot = enabled && (focus || gs === Enum.GuiState.Hover || pressed);
+		// the groove; with the pad / keyboard on it, its notched edge becomes the kit's focus ring (a list row's way)
+		paintPlate(b, SURFACE.well, focus ? "outline" : "flat", 2, THEME.ring);
+		const on = value && enabled;
+		fill.Visible = on;
+		knob.Position = UDim2.fromScale(value ? 1 - knobShare : 0, 0);
+		if (enabled) paintPlate(knob, THEME.secondary, pressed ? "press" : hot ? "hot" : "idle");
+		else paintPlate(knob, SURFACE.well, "outline", 2, SURFACE.line);
+		// the legend fills the end the knob left free: "On" light on the blue, "Off" muted on the dark
+		const text = (value ? props.onText : props.offText) ?? "";
+		if (legend.Text !== text) legend.Text = text;
+		legend.Position = UDim2.fromScale(value ? 0 : knobShare, 0);
+		legend.TextColor3 = on ? THEME.tabActiveForeground : THEME.mutedForeground;
+	};
+	const setValue = (want: boolean, fromPlayer: boolean): void => {
+		if (want === value) return;
+		value = want;
+		refresh();
+		if (fromPlayer) props.onChange?.(value);
+	};
+	registerFocus(b, refresh);
+	b.GetPropertyChangedSignal("GuiState").Connect(refresh);
+	b.Activated.Connect(() => {
+		if (enabled) setValue(!value, true);
+	});
+	const keys = UserInputService.InputBegan.Connect((input: InputObject): void => {
+		if (!enabled || !isFocused(b)) return;
+		const k = input.KeyCode;
+		if (k === Enum.KeyCode.DPadLeft || k === Enum.KeyCode.Left) setValue(false, true);
+		else if (k === Enum.KeyCode.DPadRight || k === Enum.KeyCode.Right) setValue(true, true);
+	});
+	b.Destroying.Connect(() => keys.Disconnect());
+	b.Selectable = true;
+	refresh();
+	b.Parent = parent;
+	return {
+		button: b,
+		get(): boolean {
+			return value;
+		},
+		set(want: boolean): void {
+			setValue(want, false);
+		},
+		setEnabled(want: boolean): void {
+			if (want === enabled) return;
+			enabled = want;
+			b.Interactable = want;
+			b.Selectable = want;
+			refresh();
+		},
+		disconnect(): void {
+			keys.Disconnect();
+		},
+	};
+}
+
+// ---------------------------------------------------------------- RadioGroup
+
+export interface RadioOption {
+	label: string;
+	/** one muted line under the label: what picking this option means */
+	description?: string;
+}
+
+export interface RadioGroupProps {
+	x: number;
+	y: number;
+	w: number;
+	options: Array<RadioOption>;
+	value: number;
+	/** the player picked `index` (a click, a tap, the pad's A / Enter on it) */
+	onChange?: (index: number) => void;
+	/** height of one option (default SETTING_DESC_ROW_H, a form row's) */
+	optionH?: number;
+	zIndex?: number;
+}
+
+export interface RadioGroupHandle {
+	/** the groove that holds the options */
+	frame: Frame;
+	/** one Selectable button per option, top to bottom */
+	options: Array<TextButton>;
+	get(): number;
+	/** shows `index` as chosen without calling onChange */
+	set(index: number): void;
+}
+
+/** the pixel socket at the left of an option, and the blue dot inside it when chosen (design units) */
+const SOCKET = 18;
+const DOT = 10;
+const SOCKET_X = space(3);
+/** where an option's texts start: past the socket */
+const OPTION_TEXT_X = SOCKET_X + SOCKET + space(3);
+
+/** height a RadioGroup of `count` options needs (its groove, with the list's padding and grooves) */
+export function radioGroupHeight(count: number, optionH = SETTING_DESC_ROW_H): number {
+	const items: Array<number> = [];
+	for (let i = 0; i < count; i++) items.push(optionH);
+	return settingsListHeight(items);
+}
+
+/**
+ * A STACKED RADIO GROUP (DESIGN_RULES UI-07): one choice among options that differ in a way a word does not say
+ * (a Segmented is for the short, self-explanatory ones). A Groove holding one plate per option, the form row's label
+ * cell (`SURFACE.cellLabel`), with a dark pixel socket at the left -- lit by a steel-blue pixel dot on the chosen one
+ * (what is chosen is blue) -- and the label over its one-line description, as in a form row.
+ *
+ * Input, by the kit's rules: each option is a Selectable button (mouse, touch, and the pad's A / Enter pick it); the
+ * pad moves between them with up / down; the edge of the option under the pointer turns iron, the one with the pad /
+ * keyboard focus the ring colour, and the chosen one blue. Built once: picking, hovering or focusing only repaints.
+ */
+export function RadioGroup(parent: Instance, name: string, props: RadioGroupProps): RadioGroupHandle {
+	const optionH = props.optionH ?? SETTING_DESC_ROW_H;
+	const count = props.options.size();
+	const groupH = radioGroupHeight(count, optionH);
+	const groove = Groove(parent, name, props.x, props.y, props.w, groupH);
+	if (props.zIndex !== undefined) groove.ZIndex = props.zIndex;
+	const optionW = props.w - LIST_PAD * 2;
+	const buttons: Array<TextButton> = [];
+	const dots: Array<Frame> = [];
+	let value = props.value;
+	const repaint = (i: number): void => {
+		const b = buttons[i];
+		const gs = b.GuiState;
+		const hover = gs === Enum.GuiState.Hover || gs === Enum.GuiState.Press;
+		// the edge: the focus ring over everything (the dot already says which one is chosen), then chosen, then hover
+		let edge = SURFACE.cellLabel;
+		if (isFocused(b)) edge = THEME.ring;
+		else if (i === value) edge = THEME.tabActive;
+		else if (hover) edge = THEME.secondary;
+		paintPlate(b, SURFACE.cellLabel, "outline", 3, edge);
+		dots[i].Visible = i === value;
+	};
+	const pick = (index: number, fromPlayer: boolean): void => {
+		if (index === value || index < 0 || index >= count) return;
+		const before = value;
+		value = index;
+		repaint(before);
+		repaint(index);
+		if (fromPlayer) props.onChange?.(index);
+	};
+	for (let i = 0; i < count; i++) {
+		const option = props.options[i];
+		const index = i;
+		const y = LIST_PAD + i * (optionH + GROOVE);
+		const b = new Instance("TextButton");
+		b.Name = `Option${i}`;
+		b.Position = UDim2.fromScale(LIST_PAD / props.w, y / groupH);
+		b.Size = UDim2.fromScale(optionW / props.w, optionH / groupH);
+		setDesign(b, optionW, optionH);
+		b.AutoButtonColor = false;
+		b.BorderSizePixel = 0;
+		b.BackgroundTransparency = 1;
+		b.BackgroundColor3 = THEME.background;
+		b.Text = "";
+		b.TextColor3 = THEME.foreground;
+		b.ZIndex = groove.ZIndex + 1;
+		const z = b.ZIndex;
+		const described = option.description !== undefined;
+		// texts: the form row's column (label over description), or the label alone, centred on the option
+		const textW = optionW - OPTION_TEXT_X - space(3);
+		const top = described ? (optionH - DESC_LABEL_H - DESC_GAP - DESC_TEXT_H) / 2 : (optionH - DESC_LABEL_H) / 2;
+		const label = makeLabel(
+			b,
+			"Label",
+			option.label,
+			OPTION_TEXT_X,
+			top,
+			textW,
+			DESC_LABEL_H,
+			TEXT.lg,
+			THEME.foreground,
+			{
+				font: BOLD,
+				align: "left",
+				zIndex: z + 1,
+			},
+		);
+		label.TextWrapped = false;
+		label.TextTruncate = Enum.TextTruncate.AtEnd;
+		if (option.description !== undefined) {
+			const line = makeLabel(
+				b,
+				"Description",
+				option.description,
+				OPTION_TEXT_X,
+				top + DESC_LABEL_H + DESC_GAP,
+				textW,
+				DESC_TEXT_H,
+				TEXT.sm,
+				SURFACE.cellCaption,
+				{ align: "left", zIndex: z + 1 },
+			);
+			line.TextWrapped = false;
+			line.TextTruncate = Enum.TextTruncate.AtEnd;
+		}
+		// the socket, centred on the label's line: a dark notched square, and the blue dot of the chosen option
+		const socket = makeFrame(
+			b,
+			"Socket",
+			SOCKET_X,
+			top + (DESC_LABEL_H - SOCKET) / 2,
+			SOCKET,
+			SOCKET,
+			THEME.background,
+			{
+				transparency: 1,
+				zIndex: z + 1,
+			},
+		);
+		paintPlate(socket, SURFACE.well, "flat", 2);
+		const dot = makeFrame(socket, "Dot", (SOCKET - DOT) / 2, (SOCKET - DOT) / 2, DOT, DOT, THEME.background, {
+			transparency: 1,
+			zIndex: z + 2,
+		});
+		paintPlate(dot, THEME.tabActive, "flat", 1);
+		buttons.push(b);
+		dots.push(dot);
+		registerFocus(b, () => repaint(index));
+		b.GetPropertyChangedSignal("GuiState").Connect(() => repaint(index));
+		b.Activated.Connect(() => pick(index, true));
+		b.Selectable = true;
+		b.Parent = groove;
+	}
+	for (let i = 0; i < count; i++) repaint(i);
+	return {
+		frame: groove,
+		options: buttons,
+		get(): number {
+			return value;
+		},
+		set(index: number): void {
+			pick(index, false);
+		},
+	};
 }
 
 // ---------------------------------------------------------------- GridTile

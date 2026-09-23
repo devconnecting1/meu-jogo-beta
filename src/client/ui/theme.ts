@@ -151,6 +151,11 @@ export const SURFACE = {
 	/** value cell of a settings row: one step lighter (#565656, over 1,3:1 on the label cell, like the reference) */
 	cell: TOKENS.cell,
 	/**
+	 * the one-line description under a row's label, IN the label cell (the form row of window.ts, UI-07): #B1B1B1, the
+	 * least step lighter than `muted-foreground` that reads at 4,5:1 on the label cell (muted itself is 3,55:1 there)
+	 */
+	cellCaption: TOKENS.cellMutedForeground,
+	/**
 	 * a row of a selectable list whose TEXT is the content -- the wardrobe's titles, drawn in their game colours
 	 * (MON-05): the window's graphite (#262626), the lightest face those colours still read on at 4,5:1. A LOCKED row
 	 * is `well`, a step darker.

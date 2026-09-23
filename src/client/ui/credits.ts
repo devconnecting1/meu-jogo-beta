@@ -24,7 +24,8 @@ const CREDIT_LINES = [
 ];
 
 export function showCredits(ctx: GameContext, onBack: () => void): () => void {
-	const { root, body } = makeScreen(ctx.uiLayer, "Credits");
+	// a menu page over the town flyover (UI-10): every line is `foreground`, which the flyover's scrim holds at 4,5:1
+	const { root, body } = makeScreen(ctx.uiLayer, "Credits", { transparency: 1 });
 
 	const back = Button(body, "Back", "‹  Back", {
 		x: 40,

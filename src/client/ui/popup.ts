@@ -1,5 +1,5 @@
 import { GameContext } from "shared/game/context";
-import { TEXT, THEME, space } from "./theme";
+import { TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	BUTTON_SIZE,
 	Button,
@@ -53,7 +53,16 @@ export function popup(ctx: GameContext, title: string, body: string, buttons: Ar
 	const footerH = BUTTON_SIZE.default.h;
 	// title strip + body + footer, with the card's padding
 	const h = cardHeaderHeight() + bodyH + space(6) + footerH + space(6);
-	const dialog = Dialog(ctx.uiLayer, "PopupOverlay", { w: DIALOG_W, h, title, zIndex: 300 });
+	// over a running match (a "?" opened from the Bag or from Settings) the street keeps moving behind it, so it only
+	// dims it like every screen over a run (UI-06); in the menus it dims the screen it opens over
+	const overRun = ctx.phase === "playing" || ctx.phase === "dead";
+	const dialog = Dialog(ctx.uiLayer, "PopupOverlay", {
+		w: DIALOG_W,
+		h,
+		title,
+		zIndex: 300,
+		scrim: overRun ? TRANSPARENCY.overWorld : TRANSPARENCY.overlay,
+	});
 	const card = dialog.card;
 	const pad = space(6);
 	const innerW = DIALOG_W - pad * 2;
