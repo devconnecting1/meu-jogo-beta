@@ -8,7 +8,7 @@
  */
 
 /** migration phase switch (§11.1): 0 = current game (one world per client); 1..5 = server subsystems on */
-export const MP_PHASE = 0 as number;
+export const MP_PHASE = 1 as number;
 
 // ---------------------------------------------------------------- frequencies (§0.1, §3.1, §3.4)
 

@@ -75,6 +75,8 @@ const TIME_SYNC_PERIOD = 1 / math.max(1, TIME_SYNC_RATE / 2);
  */
 const MAX_QUEUED_PARTS = 96;
 /** how long the handshake may take before it is worth a line in the log (seconds) */
+const RunService = game.GetService("RunService");
+
 const HANDSHAKE_WARN_S = 10;
 
 /** a survivor the reliable roster knows about (§4.4 PlayerJoined) */
@@ -408,6 +410,30 @@ export function netStats(): NetStats {
 		pending: c.pending,
 		sampleHz: c.sampleHz,
 	};
+}
+
+/**
+ * BOOT: subscribes to the remotes as soon as they exist, without waiting for a run.
+ *
+ * `netActive()` connects lazily, but it is only ever called from the game loop, which does not run while
+ * the player is in the lobby. The server, meanwhile, admits the player on join and starts sending
+ * snapshots at once -- with nothing listening, every one of them is dropped ("Remote event invocation
+ * discarded event for Net.Snap"), and the handshake does not even begin until a run is mounted, so the
+ * first seconds of a run are simulated locally before the server takes over.
+ *
+ * Connecting at boot fixes both: the clock epoch and the slot arrive while the player is still choosing
+ * PLAY, and the run starts already server-driven. The remotes only appear once the server has built them,
+ * so this keeps trying, cheaply, until it lands, and then stops.
+ */
+export function netPrewarm(): void {
+	if (MP_PHASE < 1) return;
+	if (connect()) return;
+	let waiter: RBXScriptConnection | undefined;
+	waiter = RunService.Heartbeat.Connect(() => {
+		if (!connect()) return;
+		waiter?.Disconnect();
+		waiter = undefined;
+	});
 }
 
 /** SESSION TEARDOWN (leaving the place): drops the handlers so nothing fires into a dead frame loop */

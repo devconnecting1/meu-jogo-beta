@@ -14,6 +14,7 @@ import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
+import { netPrewarm } from "./net/netClient";
 import { attachRun, detachRun, runSummary, showRunSummary } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { switchWeapon } from "./systems/combat";
@@ -749,6 +750,9 @@ admin = startAdmin({
 	},
 });
 net.startNet();
+// F1: assina os remotes do host agora, nao no primeiro quadro da partida -- o servidor admite o jogador
+// assim que ele entra e ja comeca a mandar snapshot (client/net/netClient.ts: netPrewarm)
+netPrewarm();
 task.delay(LOAD_FALLBACK_SEC, begin);
 
 print(`[${GAME_NAME}] client ready`);
