@@ -168,8 +168,45 @@ const { InputState } = require(join(SRC, "shared/engine/input.ts"));
 const CCombat = require(join(SRC, "client/systems/combat.ts"));
 const CCraft = require(join(SRC, "client/systems/craftSystem.ts"));
 const Info = require(join(SRC, "client/ui/itemInfo.ts"));
+const VEH = require(join(SRC, "shared/sim/vehicle.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
+
+/**
+ * VEI-05: a vehicle kit `id` parked by the SERVER's world, a survivor with `oil` pressing E beside it and then holding
+ * the stick east for `seconds` (two by default), every command through the real wire. What happened: mounted, and how
+ * far they went (the world's edge stops a long ride; the throttle stays open against it).
+ */
+function rideOnServer(id, oil = 20, seconds = 2) {
+	const world = W.serverWorld(W.createWorld(8000, 4000));
+	const sim = new ServerSimulation({
+		world,
+		clock: new WorldClock({ day: 1, dayTime: 12 }),
+		zombies: false,
+		interactive: true,
+	});
+	const save = SAVE.defaultSave();
+	save.oil = oil;
+	const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "rider" }, save, 1000, 2000, sim.tick, sim.simHz);
+	sim.add(sp);
+	sp.state.x = 1000;
+	sp.state.y = 2000;
+	const vdef = VEH.vehicleDef(VEH.vehicleKindOfItem(id));
+	const r = VEH.parkedRect(vdef, 1000, 2040, 0);
+	W.addSolid(world, { ...placedSolidOf(PLACEABLES[id], r, 0), placeable: id, owner: 0 });
+	let seq = 1;
+	const tick = (mx, edges) => {
+		const cmd = P.makeCommand(seq++, mx, 0, 0, 0, edges);
+		PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
+		sim.step();
+	};
+	tick(0, P.packEdges(0, 0, 1, 0));
+	const mounted = sim.vehicles.riding(0);
+	const x0 = sp.state.x;
+	for (let i = 0; i < seconds * CFG.SIM_HZ; i++) tick(1, 0);
+	return { mounted, ran: sp.state.x - x0, oilLeft: save.oil, def: vdef, stillRiding: sim.vehicles.riding(0) };
+}
+const placedSolidOf = (def, r, rot) => require(join(SRC, "shared/sim/placement.ts")).placedSolid(def, r, rot);
 const nameOf = (kind, id) => (kind === 1 ? WEAPONS : kind === 2 ? EQUIPS : kind === 3 ? USABLES : ETC_ITEMS)[id]?.name;
 /** the string is registered in lang.ts (UI-03: every string the player reads may be translated) */
 const LANG_KEYS = new Set(LANG_TABLE);
@@ -1933,6 +1970,8 @@ section("D7. what each build does once it stands, and whether the content stage 
 		const def = PLACEABLES[id];
 		const solid = placedSolid(def, { x: 1000, y: 1000, w: def.w, h: def.h }, 0);
 		if (IQ.isLight(solid)) return "E lights it";
+		// VEI-05, measured and not grepped: E at it on the SERVER's world puts the survivor on it (D8 rides it)
+		if (VEH.vehicleKindOfSolid(solid) !== 0 && rideOnServer(id).mounted) return "E rides it";
 		const w = W.createWorld(3000, 3000);
 		W.addSolid(w, solid);
 		for (const st of ["desk", "pro", "fire"])
@@ -1947,7 +1986,7 @@ section("D7. what each build does once it stands, and whether the content stage 
 	knownBug(
 		"P1",
 		idle.length > 0,
-		"builds that cost a recipe and do nothing once placed (the turrets fire only in the pre-F2 client path; nothing reads generators, vehicles, the cooker or the signal generator; a lamp drone cannot be switched on)",
+		"builds that cost a recipe and do nothing once placed (the turrets fire only in the pre-F2 client path; nothing reads generators, the cooker or the signal generator; a lamp drone cannot be switched on)",
 		idle.map(id => ETC_ITEMS[id].name).join(", "),
 	);
 	// CON-03: "Receita e pacote de loja se ligam sozinhos ... e a trava vale no servidor" -- is anything outside Núcleo 1 off?
@@ -1972,6 +2011,53 @@ section("D7. what each build does once it stands, and whether the content stage 
 		"CON-03's content stage is not implemented: nothing outside Núcleo 1 is switched off (a Heavy machine gun crafts on the client and on the server; every pack and recipe is live)",
 	);
 });
+
+section(
+	"D8. the bicycle and the motorcycle are ridden (VEI-05; was BUG [P1]: crafted and placed, then nothing)",
+	() => {
+		const vehicles = Object.keys(PLACEABLES)
+			.map(Number)
+			.filter(id => VEH.vehicleKindOfItem(id) !== 0);
+		checkEq(
+			vehicles.map(id => ETC_ITEMS[id].name).join(", "),
+			"Bicycle, Motorcycle",
+			"the placeables that are vehicles",
+		);
+		const walk = DESIGN.MOVE_SPEED * SPEED_SCALE * 2;
+		checkRows(
+			"server: E at the parked kit rides it, and two seconds on it outrun two seconds of walking",
+			vehicles.map(id => ETC_ITEMS[id]),
+			row => {
+				const out = rideOnServer(row.id);
+				if (!out.mounted) return "E did not mount it";
+				return out.ran > walk || `${out.ran.toFixed(0)} u vs ${walk} on foot`;
+			},
+		);
+		checkRows(
+			"the recipe that makes it puts a kit the server can place (craftKind 1, a PLACEABLES row, rotatable, passable)",
+			vehicles.map(id => ETC_ITEMS[id]),
+			row => {
+				const r = CRAFT_RECIPES.find(x => x.craftKind === 1 && x.resultIndex === row.id);
+				const def = PLACEABLES[row.id];
+				const vdef = VEH.vehicleDef(VEH.vehicleKindOfItem(row.id));
+				if (r === undefined) return "no recipe";
+				if (!def.rotatable || def.passable !== true) return "not rotatable / passable";
+				return (def.w === vdef.length && def.h === vdef.width) || `footprint ${def.w}×${def.h}`;
+			},
+		);
+		// full throttle burns oilIdle + oilFull = 1/60 + 1/10 a second: a whole unit leaves the backpack every ~8.6 s
+		const moto = rideOnServer(22, 20, 15);
+		check(
+			moto.oilLeft < 20 && moto.oilLeft >= 18,
+			"the motorcycle burns the rider's oil, a unit every ~9 s at full throttle",
+			`${20 - moto.oilLeft} in 15 s`,
+		);
+		checkEq(rideOnServer(22, 0).mounted, false, "...and with none it will not start: E refuses it");
+		const bike = rideOnServer(21, 0);
+		check(bike.mounted && bike.oilLeft === 0 && bike.ran > walk, "the bicycle needs no oil");
+		checkEq(inLang("Bicycle") && inLang("Motorcycle"), true, "both names are in lang.ts");
+	},
+);
 
 // ================================================================ E. skills
 

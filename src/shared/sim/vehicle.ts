@@ -239,6 +239,6 @@ export function parkedRect(
 	return { x: cx - w / 2, y: cy - h / 2, w, h };
 }
 
-export { VEHICLES, vehicleDef, VehicleKind };
+export { VEHICLES, vehicleDef, VehicleKind, vehicleKindOfItem };
 // the wire's grid (packRide, rideKeyValid, the steps...) lives in ./rideKey so the protocol can load it bare
 export * from "./rideKey";

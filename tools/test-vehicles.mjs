@@ -1198,6 +1198,27 @@ section(
 			calls.some(c => c.color === COLORS.bikeFrame),
 			"the bicycle in its frame colour",
 		);
+		// ART-01: with an id each vehicle is ONE pixel-art image on its footprint; without, the flat parts again
+		const WA = require(join(SRC, "client/view/worldArt.ts"));
+		WA.overrideWorldArt({ bicycle: "rbxassetid://101", motorcycle: "rbxassetid://102" });
+		for (const def of VEHICLES) {
+			calls.length = 0;
+			VV.drawVehicle(rec, undefined, def.kind, 0, 0, 0, 0, 0, Z.player - 2);
+			const images = calls.filter(c => c.image !== undefined);
+			check(
+				images.length === 1 &&
+					calls.length === 2 &&
+					images[0].w === def.length &&
+					images[0].h === def.width &&
+					images[0].image === (def.kind === VehicleKind.Motorcycle ? "rbxassetid://102" : "rbxassetid://101"),
+				`${def.name} with its art uploaded: its shadow and one ${def.length} × ${def.width} image`,
+			);
+		}
+		WA.overrideWorldArt({});
+		calls.length = 0;
+		VV.drawVehicle(rec, undefined, VehicleKind.Motorcycle, 0, 0, 0, 0, 0, Z.player - 2);
+		check(calls.every(c => c.image === undefined) && calls.length > 2, "no id: the flat parts");
+		WA.overrideWorldArt(undefined);
 		// the rider: the survivor drawing with `riding` -- no weapon, both hands on the bars, no body shadow
 		const look = SVW.createLook();
 		look.x = 0;
