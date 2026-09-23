@@ -26,6 +26,7 @@
 		"test:body": "node tools/test-body.mjs",
 		"test:waves": "node tools/test-waves.mjs",
 		"test:reset": "node tools/test-reset.mjs",
+		"test:analytics": "node tools/test-analytics.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
 		"test:smoothness": "node tools/test-smoothness.mjs",
 		"test:zombie-motion": "node tools/test-zombie-motion.mjs",

@@ -40,6 +40,7 @@ import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
+import * as Analytics from "./analytics/events";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -195,6 +196,8 @@ interface StoredDoc {
 }
 
 const remotes = createRemotes();
+// before any session loads: the Economy / Funnel / Custom dashboards (docs/ANALYTICS.md); off when there is no service
+Analytics.start();
 const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(DATA_STORE_NAME));
 const dataStore = storeOk ? (storeValue as DataStore) : undefined;
 if (dataStore === undefined) {
@@ -650,6 +653,7 @@ function readSession(s: Session): void {
 	// grant twice -- stays with the session that keeps the save, instead of going down with a load thrown away
 	const adopted = status === "ok" && guarded(`${s.key}: meeting the kept body`, () => mpHost?.adopt(s.player, save));
 	if (adopted === true) s.dirty = true;
+	Analytics.sessionLoaded(s.player, status, save);
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {
@@ -1095,6 +1099,7 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	} else {
 		return fail("invalid", s);
 	}
+	Analytics.shopAction(player, req, price);
 	s.dirty = true;
 	return { ok: true, price, wallet: walletOf(save) };
 }
@@ -1301,6 +1306,7 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	const dayMoved = ops !== undefined && edited.day !== before.day;
 	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
 	s.assistedRunRev = assisted ? edited.runRev : undefined;
+	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
 	s.dirty = true;
@@ -1430,7 +1436,10 @@ if (MP_PHASE >= 1) {
 	};
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
-	sim.onBackpack = sp => markDirty(sp.userId);
+	sim.onBackpack = (sp, outcome) => {
+		markDirty(sp.userId);
+		Analytics.backpack(sp.save, outcome);
+	};
 	sim.onInteract = sp => markDirty(sp.userId);
 	// the backpack verbs (§4.8, §8.4): rate-limited and flood-counted here, validated and applied by the simulation
 	// (server/sim/backpack.ts); out of the world only a cosmetic slot, on the session's save (the lobby's wardrobe)

@@ -62,6 +62,7 @@ import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
 import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
+import * as Analytics from "../analytics/events";
 
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
@@ -265,6 +266,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	sim.onTitleUnlocked = (sp, titleId) => {
 		replicator.titleUnlocked(sp.slot, titleId);
 		options.saveChanged?.(sp.userId);
+		Analytics.titleEarned(sp.save, titleId);
 		print(`[${GAME_NAME}] ${sp.name} earned the title ${TITLES[titleId]?.name ?? titleId}`);
 	};
 	lives.onStandUp = (sp, why) => {
@@ -352,6 +354,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		bySlot.set(sp.slot, player);
 		// CON-04 First steps: the server stood a body of this survivor in the town (once; the wallet push carries it)
 		creditFirstSteps(save);
+		Analytics.enteredWorld(player);
 		print(
 			`[${GAME_NAME}] ${player.Name} joined the world in slot ${sp.slot} at ` +
 				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})` +
@@ -749,6 +752,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms) on day 1, ` +
 				`and ${outcome.lives.size()} survivor(s) start a new life`,
 		);
+		Analytics.worldEnded(report, outcome);
 		options.onWorldWiped?.(report, outcome);
 	};
 
