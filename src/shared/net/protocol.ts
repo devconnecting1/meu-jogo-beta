@@ -69,6 +69,16 @@
  *     save the SERVER owns (never a client's report). Broadcast only when one of them moved, looked at once a second
  *     (server/net/replication.ts TALLY_EVERY_TICKS), plus one full round two ticks after a survivor joins, so the
  *     newcomer hears everybody's AFTER its PlayerJoined for each of them. Range-checked on decode like the roster.
+ * 16. (ELE-01..08, the electric grid) `PowerSet{id u32, state u8, pilot u8}`, 7 B with the tag: an electric build's
+ *     state as server/sim/power.ts publishes it — bit 0 working (a consumer fed and switched on, a generator
+ *     running, a box holding charge), bits 1-2 the level of its store (box charge, drone battery, oil tank: 0..3),
+ *     bit 3 a drone in the air — and the slot that drone escorts. GLOBAL, sent only on a change (a store crossing a
+ *     third with 3 % of hysteresis, a switch, a launch), at most POWER_PUBLISH_MAX per settle of the grid (4 Hz),
+ *     and once per machine in a newcomer's WorldInit, after the SolidAdds. The decoder refuses a non-dynamic id,
+ *     a reserved bit, an invalid slot, a drone in the air with nobody to escort and a pilot for anything else. What
+ *     it cannot carry it does not need: the turrets' shots are the existing `Tracer` Fx (interest-filtered, from the
+ *     muzzle), and a flying drone's position is `droneOffset(id, clock)` beside its survivor, computed alike on
+ *     both sides (shared/data/power.ts).
  */
 import {
 	NetReader,
@@ -106,6 +116,7 @@ import {
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
+import { POWER_STATE_MASK, powerFlying } from "shared/data/power";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
 import { SAVE_LIMITS } from "shared/game/save";
 
@@ -1290,6 +1301,8 @@ export const WorldEv = {
 	WorldReset: 17,
 	/** (MP-23) the scoreboard's two numbers of a survivor: the day of this life and the zombies put down */
 	PlayerTally: 18,
+	/** (ELE-01..08) an electric build's state: working, the level of its store, a drone in the air and its survivor */
+	PowerSet: 19,
 } as const;
 
 /** SolidAdd.state / DoorSet.state */
@@ -1405,6 +1418,21 @@ export interface WLightSet {
 	t: typeof WorldEv.LightSet;
 	id: number;
 	powered: boolean;
+}
+
+/**
+ * (ELE-01..08) One electric build's state, as server/sim/power.ts publishes it. GLOBAL like `SolidAdd`: a drone in the
+ * air flies with its survivor far from the pad, so a client near the survivor but not the pad must hear it too, and
+ * the grid only publishes on a change (a box crossing a third, a lamp switched, a drone launched).
+ */
+export interface WPowerSet {
+	t: typeof WorldEv.PowerSet;
+	/** the construction's dynamic id (≥ 1 000 000) */
+	id: number;
+	/** shared/data/power.ts `PowerBit`: bit 0 working, bits 1-2 the store's level 0..3, bit 3 a drone in the air */
+	state: number;
+	/** the slot a drone in the air escorts; SLOT_NONE for everything else (and required iff the Flying bit is set) */
+	pilot: number;
 }
 
 export interface WItemAdd {
@@ -1573,7 +1601,8 @@ export type WorldEvent =
 	| WInitBegin
 	| WPlayerProfile
 	| WWorldReset
-	| WPlayerTally;
+	| WPlayerTally
+	| WPowerSet;
 
 export interface WorldBatch {
 	tick: number;
@@ -1613,6 +1642,14 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u32(e.id);
 			w.bool(e.powered);
 			break;
+		case WorldEv.PowerSet: {
+			const state = clampInt(e.state, 0, 255) % (POWER_STATE_MASK + 1);
+			w.u32(e.id);
+			w.u8(state);
+			// a pilot only with the Flying bit, and never without one: the decoder refuses either mismatch
+			w.u8(powerFlying(state) ? slotOrNone(e.pilot) : SLOT_NONE);
+			break;
+		}
 		case WorldEv.ItemAdd:
 			w.u32(e.id);
 			w.u8(clampInt(e.kind, 1, ITEM_KIND_MAX));
@@ -1737,6 +1774,14 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const powered = r.bool();
 		if (id < 1) return undefined;
 		return { t: WorldEv.LightSet, id, powered };
+	} else if (t === WorldEv.PowerSet) {
+		const id = r.u32();
+		const state = r.u8();
+		const pilot = r.u8();
+		// only constructions have power; the reserved bits are 0; a flying drone names its survivor, nothing else does
+		if (id < DYNAMIC_ID_BASE || state > POWER_STATE_MASK || !validSlotOrNone(pilot)) return undefined;
+		if (powerFlying(state) !== (pilot !== SLOT_NONE)) return undefined;
+		return { t: WorldEv.PowerSet, id, state, pilot };
 	} else if (t === WorldEv.ItemAdd) {
 		const id = r.u32();
 		const kind = r.u8();

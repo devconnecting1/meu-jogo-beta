@@ -115,8 +115,8 @@ export const DRONE_MAX_ESCORTS = 3;
 /** obj_turret_move circles the player at 100 px; obj_lightaction_move at 300 (we keep the light closer: 180) */
 export const TURRET_DRONE_ORBIT = 100;
 export const LAMP_DRONE_ORBIT = 180;
-/** 1° a frame at 30 fps */
-export const DRONE_ORBIT_SPEED = math.rad(30);
+/** 1° a frame at 30 fps, in radians a second (written out: the protocol loads this module in every test shim) */
+export const DRONE_ORBIT_SPEED = (30 * math.pi) / 180;
 /** the turret drone shoots what is within this of ITSELF */
 export const TURRET_DRONE_RANGE = 250;
 /** the lamp drone's light (shared/sim/ai/zombieTuning.ts STRUCTURE_LIGHT_R had it at 320 already) */

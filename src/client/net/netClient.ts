@@ -37,6 +37,7 @@
  *   7. present     bleed the visual offset off and write the drawn position onto the survivor
  */
 import { GameRefs } from "../systems/types";
+import { applyPowerSet, resetPowerMirror } from "../systems/powerMirror";
 import { RemotePlayerView } from "./netTypes";
 import { ClockSync } from "./clockSync";
 import { CommandStream, RawInput } from "./commands";
@@ -478,6 +479,11 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		pendingAnnounce.push(announceText(e.msg, e.arg));
 		return;
 	}
+	if (e.t === WorldEv.PowerSet) {
+		// ELE-01..08: an electric build's state; the grid is the server's, the client only draws it
+		applyPowerSet(boundWorld, e);
+		return;
+	}
 	// the remaining deltas (constructions, doors, items) land in F3, when the client stops owning them
 }
 
@@ -800,6 +806,7 @@ export function netReset(): void {
 	boundWorld = undefined;
 	boundPlayer = undefined;
 	boundSave = undefined;
+	resetPowerMirror();
 	mapHash = 0;
 	// a guard armed in the lobby would unwrap against a tick minutes later (see `townResetTick`)
 	townResetTick = undefined;

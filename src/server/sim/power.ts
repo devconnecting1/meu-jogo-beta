@@ -61,6 +61,7 @@ import { ownsWeapon, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { querySolids, Solid, WorldData } from "shared/game/world";
 import { SIM_HZ, SLOT_NONE } from "shared/net/mpConfig";
+import { WorldEv, WPowerSet } from "shared/net/protocol";
 
 /** ETC index of oil (a save field of its own: shared/sim/inventory.ts) */
 const OIL_ITEM = 48;
@@ -604,4 +605,14 @@ export class ServerPower {
 		}
 		return out;
 	}
+}
+
+/** the `PowerSet` delta of a machine, as last published (§4.5, the WorldInit of a newcomer) */
+export function powerSetOf(st: MachineState): WPowerSet {
+	return { t: WorldEv.PowerSet, id: st.solid.id, state: st.pubState, pilot: st.pubPilot };
+}
+
+/** the `PowerSet` delta of a change `publish` reports (server/sim/simulation.ts queues it, global) */
+export function powerSet(s: Solid, state: number, pilot: number): WPowerSet {
+	return { t: WorldEv.PowerSet, id: s.id, state, pilot };
 }

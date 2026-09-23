@@ -76,6 +76,7 @@ import { BossDeath } from "../sim/bosses";
 import { ServerPlayer, bufferDepth, refreshProfile, refreshTally } from "../sim/players";
 import { ServerSimulation } from "../sim/simulation";
 import { solidAdd } from "../sim/build";
+import { MachineState, powerSetOf } from "../sim/power";
 import { PendingWorld } from "../sim/worldOut";
 
 /** rough per-event framing the engine adds on top of the payload; only used for the §12.2 bandwidth attribute */
@@ -403,6 +404,7 @@ export class Replicator {
 	private readonly interactive = new Array<PendingWorld>();
 	private readonly initSolids = new Array<Solid>();
 	private readonly initItems = new Array<WItemAdd>();
+	private readonly initMachines = new Array<MachineState>();
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
@@ -511,6 +513,13 @@ export class Replicator {
 			this.initSolids.clear();
 			for (const solid of build.initAll(this.initSolids)) this.queueFor(sp.slot, solidAdd(solid));
 			this.initSolids.clear();
+		}
+		// the grid's state of each machine, AFTER its SolidAdd (ELE-01..08: a box's charge, a drone in the air)
+		const power = this.sim.power;
+		if (power !== undefined) {
+			this.initMachines.clear();
+			for (const st of power.initAll(this.initMachines)) this.queueFor(sp.slot, powerSetOf(st));
+			this.initMachines.clear();
 		}
 		// a door of the generated map that somebody opened: the mirror generated it closed
 		for (const solid of this.sim.world.solids) {

@@ -42,7 +42,7 @@ import { TitleId } from "shared/data/titles";
 import { creditLifeNight, grantTitle } from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
-import { ServerPower } from "./power";
+import { powerSet, ServerPower } from "./power";
 import { ServerTurrets } from "./turrets";
 import { WorldClock } from "./waves";
 import { WorldOut } from "./worldOut";
@@ -353,6 +353,8 @@ export class ServerSimulation {
 					const sp = this.bySlot.get(slot);
 					return sp !== undefined && !sp.state.dead ? sp.state : undefined;
 				},
+				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
+				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
 			});
 			out.power = power;
 			const build = new ServerBuild({

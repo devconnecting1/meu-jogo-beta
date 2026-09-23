@@ -208,6 +208,7 @@ const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
 const TIT = require(join(SRC, "shared/data/titles.ts"));
+const POW = require(join(SRC, "shared/data/power.ts"));
 const SAVE = require(join(SRC, "shared/game/save.ts"));
 
 // ---------------------------------------------------------------- tiny harness
@@ -1141,7 +1142,7 @@ test("Fx: malformed packets are refused", () => {
 
 // ---------------------------------------------------------------- 6. World (S→C, reliable)
 
-function randWorldEvent(kind = rint(1, 18)) {
+function randWorldEvent(kind = rint(1, 19)) {
 	const dynId = () => CFG.DYNAMIC_ID_BASE + rint(0, 100000);
 	switch (kind) {
 		case P.WorldEv.SolidAdd:
@@ -1167,6 +1168,11 @@ function randWorldEvent(kind = rint(1, 18)) {
 		}
 		case P.WorldEv.LightSet:
 			return { t: kind, id: rint(1, 2000000), powered: rbool() };
+		case P.WorldEv.PowerSet: {
+			// ELE-01..08: working, a level 0..3, a drone in the air -- which alone names the survivor it escorts
+			const state = rint(0, POW.POWER_STATE_MASK);
+			return { t: kind, id: dynId(), state, pilot: POW.powerFlying(state) ? rint(0, 5) : CFG.SLOT_NONE };
+		}
 		case P.WorldEv.ItemAdd:
 			return {
 				t: kind,
@@ -1280,6 +1286,11 @@ function compareWorldEvent(a, b) {
 		case P.WorldEv.LightSet:
 			eq("light id", b.id, a.id);
 			eq("powered", b.powered, a.powered);
+			break;
+		case P.WorldEv.PowerSet:
+			eq("power id", b.id, a.id);
+			eq("power state", b.state, a.state);
+			eq("power pilot", b.pilot, a.pilot);
 			break;
 		case P.WorldEv.ItemAdd:
 			eq("item id", b.id, a.id);
@@ -1554,6 +1565,62 @@ test("World: PlayerTally carries the scoreboard's two numbers, and refuses what 
 	tooMany[12] = 255;
 	eq("tally with more kills than a save can hold", P.decodeWorld(bufOf(tooMany)), undefined);
 	eq("a truncated tally", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
+});
+
+test("World: PowerSet carries a machine's state, and refuses what the grid never publishes (ELE-01..08)", () => {
+	const docked = {
+		t: P.WorldEv.PowerSet,
+		id: CFG.DYNAMIC_ID_BASE + 7,
+		state: POW.packPowerState(true, 2, false),
+		pilot: CFG.SLOT_NONE,
+	};
+	const flying = {
+		t: P.WorldEv.PowerSet,
+		id: CFG.DYNAMIC_ID_BASE + 8,
+		state: POW.packPowerState(true, 3, true),
+		pilot: 4,
+	};
+	const pkt = P.encodeWorld({ tick: 3, events: [docked, flying] }).packets[0];
+	// header 5 B + 2 × (tag 1 B + id u32 + state u8 + pilot u8)
+	eq("PowerSet size", buffer.len(pkt), 5 + 2 * 7);
+	sizes.push(["World PowerSet", "7 B", "id, state (working, level, flying), pilot (ELE-01..08)"]);
+	const d = P.decodeWorld(pkt);
+	ok(d !== undefined, "the PowerSet pair did not decode");
+	if (d === undefined) return;
+	eq("docked state", d.events[0].state, docked.state);
+	eq("docked pilot", d.events[0].pilot, CFG.SLOT_NONE);
+	eq("flying pilot", d.events[1].pilot, 4);
+	ok(POW.powerFlying(d.events[1].state) && POW.powerLevel(d.events[1].state) === 3, "flying, level 3");
+	// the encoder never writes a byte the decoder refuses: a pilot without the Flying bit is dropped, reserved bits masked
+	const fixed = P.decodeWorld(
+		P.encodeWorld({ tick: 1, events: [{ ...docked, pilot: 2, state: 0xf0 | docked.state }] }).packets[0],
+	);
+	eq("reserved bits masked on encode", fixed?.events[0].state, docked.state);
+	eq("a pilot without the Flying bit is written as none", fixed?.events[0].pilot, CFG.SLOT_NONE);
+	const noPilot = P.decodeWorld(P.encodeWorld({ tick: 1, events: [{ ...flying, pilot: 9 }] }).packets[0]);
+	eq("a flying drone with a bogus pilot does not decode (its pilot is written as none)", noPilot, undefined);
+	// the decoder refuses what no server writes (a hostile or corrupt packet)
+	const raw = bytesOf(P.encodeWorld({ tick: 1, events: [flying] }).packets[0]);
+	// header 5 B, tag 1 B (byte 5), id u32 (6..9), state (10), pilot (11)
+	const staticId = raw.slice();
+	staticId[6] = 5;
+	staticId[7] = 0;
+	staticId[8] = 0;
+	staticId[9] = 0;
+	eq("a PowerSet for a map solid (id 5, not dynamic)", P.decodeWorld(bufOf(staticId)), undefined);
+	const reserved = raw.slice();
+	reserved[10] = raw[10] | 16;
+	eq("a PowerSet with a reserved bit", P.decodeWorld(bufOf(reserved)), undefined);
+	const grounded = raw.slice();
+	grounded[10] = raw[10] & ~POW.PowerBit.Flying;
+	eq("a pilot for something that is not in the air", P.decodeWorld(bufOf(grounded)), undefined);
+	const lost = raw.slice();
+	lost[11] = CFG.SLOT_NONE;
+	eq("a drone in the air escorting nobody", P.decodeWorld(bufOf(lost)), undefined);
+	const badSlot = raw.slice();
+	badSlot[11] = 6;
+	eq("a drone escorting slot 6", P.decodeWorld(bufOf(badSlot)), undefined);
+	eq("a truncated PowerSet", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
 });
 
 test("World: WorldInit in blocks of ≤ 16 KB", () => {

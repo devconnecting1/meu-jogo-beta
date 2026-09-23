@@ -474,6 +474,8 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		/** PlayerTally deltas received (MP-23), and those for a slot this client did not know yet (dropped) */
 		tallies: [],
 		tallyDrops: 0,
+		/** (ELE-01..08) SolidAdd and PowerSet deltas received, in order */
+		machines: [],
 	});
 	return sp;
 }
@@ -604,6 +606,11 @@ function tickServer(server, opts = {}) {
 			if (e.t === P.WorldEv.Announce) {
 				if (slot === undefined) for (const [, c] of server.clients) c.announces.push(e);
 				else server.clients.get(slot)?.announces.push(e);
+				continue;
+			}
+			if (e.t === P.WorldEv.SolidAdd || e.t === P.WorldEv.PowerSet) {
+				if (slot === undefined) for (const [, c] of server.clients) c.machines.push(e);
+				else server.clients.get(slot)?.machines.push(e);
 				continue;
 			}
 			if (e.t !== P.WorldEv.ZombieDied) continue;
@@ -1204,6 +1211,64 @@ section(
 	checkEq(cc.tallyDrops, 0, "and it never dropped a tally for a slot it did not know");
 	checkEq(ca.roster.get(2)?.kills, 0, "the others hear the newcomer's numbers too");
 	check(a.kills === 138 && b.lifeDay === 1, "the server's last-told fields agree");
+}
+
+section(
+	"(j) the grid reaches every client: after the SolidAdds in a WorldInit, then only on a change, globally (ELE-01..08)",
+);
+{
+	resetEntityIds();
+	const W = require(join(SRC, "shared/game/world.ts"));
+	const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+	const POW = require(join(SRC, "shared/data/power.ts"));
+	const pworld = W.serverWorld(W.createWorld(6000, 6000));
+	const sim = new ServerSimulation({ world: pworld, zombies: true, interactive: true });
+	const transport = recordingTransport();
+	const replicator = new Replicator(sim, transport, { tick0Time: 0, mapHash: mapHashOf(pworld) });
+	sim.onTick = tick => replicator.afterTick(tick);
+	sim.onFx = event => replicator.queueFx(event);
+	const server = { sim, transport, replicator, clients: new Map(), now: 0 };
+	const place = (id, x, y) => {
+		const d = PLACEABLES[id];
+		return W.addSolid(pworld, { ...placedSolid(d, { x, y, w: d.w, h: d.h }, 0), placeable: id, owner: 0 });
+	};
+	addSurvivor(server, 0, 1000, 1000);
+	addSurvivor(server, 1, 5000, 5000);
+	const box = place(6, 1150, 980);
+	const lamp = place(4, 1020, 976);
+	for (let i = 0; i < 20; i++) tickServer(server);
+	const far = server.clients.get(1);
+	const boxSet = far.machines.find(e => e.t === P.WorldEv.PowerSet && e.id === box.id);
+	check(boxSet !== undefined, "a survivor 5600 u away hears the new battery box's state (PowerSet is global)");
+	check(
+		boxSet !== undefined && POW.powerWorking(boxSet.state) && POW.powerLevel(boxSet.state) === 3,
+		"a charged box: working, level 3",
+		JSON.stringify(boxSet),
+	);
+	const quiet = far.machines.length;
+	for (let i = 0; i < 120; i++) tickServer(server);
+	checkEq(far.machines.length - quiet, 0, "2 s of nothing changing: no PowerSet at all");
+	// a late joiner: every construction, and then every machine's state, in that order
+	addSurvivor(server, 2, 3000, 3000);
+	tickServer(server);
+	const late = server.clients.get(2).machines;
+	const order = late.map(e => `${e.t === P.WorldEv.SolidAdd ? "add" : "power"}:${e.id === box.id ? "box" : "lamp"}`);
+	check(
+		order.join(",") === "add:box,add:lamp,power:box,power:lamp",
+		"the newcomer's WorldInit: the SolidAdds, then each machine's PowerSet",
+		order.join(","),
+	);
+	// the survivor at the base switches the lamp on: everyone hears it, the far ones included
+	const before = far.machines.length;
+	tickServer(server, { edges: P.packEdges(0, 0, 1, 0) });
+	tickServer(server);
+	const lampSet = far.machines.slice(before).find(e => e.t === P.WorldEv.PowerSet && e.id === lamp.id);
+	check(
+		lampSet !== undefined && POW.powerWorking(lampSet.state),
+		"E switched the lamp on: a PowerSet, working, to everybody",
+		JSON.stringify(lampSet),
+	);
+	check(lamp.powered === true, "and on the server it lights (fed by the box 130 u away)");
 }
 
 // ---------------------------------------------------------------- verdict

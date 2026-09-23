@@ -353,7 +353,7 @@ Se passar do alvo (p95 > 6 ms), na ordem: `SIM_HZ` cai para **30** (seção 3.1,
 |---|---|---|
 | Zumbi morto | Quem deu o golpe final | 100% do `exp` |
 | | Cada outro jogador que o feriu nos últimos 10 s | 60% (assistência: acaba com o "roubo de abate") |
-| Torreta ou armadilha mata | O construtor (se estiver no servidor) | 100% |
+| Torreta ou armadilha mata | O construtor (se estiver no servidor); o drone-torreta paga quem ele escolta | 100% do XP — mas **não** conta como zumbi que ELE pôs no chão (`zombieKills`, Horde Breaker, placar: MON-05, MP-23) |
 | Chefe morto | Cada participante (causou ≥ 3% do HP **ou** ficou ≥ 20 s a ≤ 1200 u com o chefe vivo) | 100% do XP, +1 em `bossKills` e moedas de chefe |
 | Dia sobrevivido (virada 0h do mundo) | Cada jogador no mundo (em pé ou derrubado; **morto não**) que passou **≥ 50% daquele dia VIVO** no mundo (ticks somados por UserId desde a meia-noite anterior: ir ao lobby não zera) e **não estava AFK** (sem input real com movimento ou aresta nos últimos 3 min; tick preenchido e botão segurado não contam) — `server/sim/progress.ts` `dayRefusal` | +1 em `day` (dia da vida), `COINS_PER_DAY` e bônus de marco por `bestDay` |
 | Horas puladas por admin | Ninguém | 0 (flag `skipped`) |
@@ -435,7 +435,8 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 | `SolidRemove` | `id` | Global |
 | `DoorSet` | `id, open` | Global (afeta a predição de movimento de todos) |
 | `SolidHp` | Lote de `id, hp%` a **4 Hz** | Interesse |
-| `LightSet` | `id, powered` (lampião, fogueira) | Interesse |
+| `LightSet` | `id, powered` (fogueira, braseiro) | Interesse |
+| `PowerSet` | *(ELE-01..08)* `id u32, state u8, pilot u8` (7 B com a tag): o estado de uma construção elétrica — bit 0 **funcionando** (consumidor alimentado e ligado, gerador girando, caixa com carga), bits 1-2 o **nível** do que ela guarda (carga da caixa, bateria do drone, tanque de óleo: 0..3, com 3 % de histerese), bit 3 **drone no ar** — e o slot que esse drone escolta. O decodificador recusa id que não é dinâmico, bit reservado, slot inválido, drone no ar sem escoltado e escoltado sem drone no ar | Global (um drone voa com o sobrevivente, longe da base); só quando muda, no máximo 64 por acerto da rede elétrica (4 Hz), e um por máquina no `WorldInit`, **depois** dos `SolidAdd` |
 | `MapItemHit` | `solidId` (tremida de árvore, carro ou lixeira) | Interesse (via `Fx`, efêmero) |
 | `ItemAdd` / `ItemRemove` | `id u32, kind, itemId, count, x, y, vx, vy` / `id` | Interesse (1800 u) |
 | `LootFlag` | `buildingId, hasLoot` | Só para quem está dentro |
