@@ -947,18 +947,24 @@ function gapLR(a: LR, b: LR): number {
 const NOOK = 64;
 
 /**
- * Do `a` and `b` leave a passage between them that one body fits in and two do not, longer than a nook? That is
+ * Do `a` and `b` leave a passage between them that one body fits in and two do not, longer than `nook`? That is
  * the gap a survivor gets cornered in and a queue of zombies single-files through (EDI-11). Corner to corner
  * and sealed gaps (under SEALED: nobody walks in) are fine.
+ *
+ * Against a WALL a short one (a piece's end, NOOK deep) is only a step in and out. Between two PIECES it is never
+ * fine (`nook` 0): such a slot can be the only way into the space behind them -- behind an armchair and a TV, say
+ * -- and the horde's flow field (32 u cells, obstacles grown 4 u) cannot see through a slot under two bodies wide,
+ * so a survivor who squeezed in there would be out of the horde's reach (the hiding pocket of seeds 2 and
+ * 1712783770, review of ea5cf71).
  */
-function narrowBetween(a: LR, b: LR): boolean {
+function narrowBetween(a: LR, b: LR, nook: number): boolean {
 	const du = math.max(0, b.u0 - a.u1, a.u0 - b.u1);
 	const dv = math.max(0, b.v0 - a.v1, a.v0 - b.v1);
 	if (du > 0 && dv > 0) return false;
 	const g = math.max(du, dv);
 	if (g < SEALED || g >= PATH) return false;
 	const len = du > 0 ? math.min(a.v1, b.v1) - math.max(a.v0, b.v0) : math.min(a.u1, b.u1) - math.max(a.u0, b.u0);
-	return len > NOOK;
+	return len > nook;
 }
 
 /**
@@ -1113,6 +1119,8 @@ class Planner {
 	readonly pieces: Array<LPiece> = [];
 	readonly decor: Array<LDecor> = [];
 	readonly clear: Array<LR> = [];
+	/** the same zones exactly as wide as their openings (no side margin): a last resort's (`fits` with `tight`) */
+	readonly clearTight: Array<LR> = [];
 	readonly loot: Array<{ u: number; v: number; room: number }> = [];
 	recess = 0;
 	/** the main door's centre along the street face, in this plan's local frame */
@@ -1566,7 +1574,10 @@ class Planner {
 		for (const e of edges) {
 			const n = this.late.size();
 			if (!this.tryWindow(e, 0.5, this.late)) continue;
-			for (const z of this.zonesOf(this.late[n], WINDOW_CLEAR_DEPTH, WINDOW_CLEAR_SIDE)) this.clear.push(z);
+			for (const z of this.zonesOf(this.late[n], WINDOW_CLEAR_DEPTH, WINDOW_CLEAR_SIDE)) {
+				this.clear.push(z);
+				this.clearTight.push(z);
+			}
 			return;
 		}
 	}
@@ -1895,8 +1906,9 @@ class Planner {
 	clearZones(): void {
 		for (const o of this.openings) {
 			const win = o.kind === "window";
-			const zones = this.zonesOf(o, win ? WINDOW_CLEAR_DEPTH : CLEAR_DEPTH, win ? WINDOW_CLEAR_SIDE : CLEAR_SIDE);
-			for (const z of zones) this.clear.push(z);
+			const depth = win ? WINDOW_CLEAR_DEPTH : CLEAR_DEPTH;
+			for (const z of this.zonesOf(o, depth, win ? WINDOW_CLEAR_SIDE : CLEAR_SIDE)) this.clear.push(z);
+			for (const z of this.zonesOf(o, depth, 0)) this.clearTight.push(z);
 		}
 	}
 
@@ -1904,18 +1916,21 @@ class Planner {
 	 * Can a piece go here? Inside the room, clear of every opening's zone, and against every other obstacle
 	 * (wall, post, piece) either sealed off (closer than any body, SEALED) or at least PATH away: no gap a single
 	 * body could squeeze into and be cornered in, no aisle too narrow for two (EDI-11). An island keeps PATH from
-	 * everything.
+	 * everything. `tight`: the zones in front of the openings are exactly as wide as the openings (the side margins
+	 * may be used), for the one piece a small room of many doorways must still get (a kitchen's fridge).
 	 */
-	fits(p: LR, room: LR, island: boolean): boolean {
+	fits(p: LR, room: LR, island: boolean, tight = false): boolean {
 		if (p.u0 < room.u0 - 0.5 || p.u1 > room.u1 + 0.5 || p.v0 < room.v0 - 0.5 || p.v1 > room.v1 + 0.5) return false;
-		for (const c of this.clear) if (overlapLR(p, c)) return false;
-		for (const w of this.walls) {
-			if (overlapLR(p, w.r)) return false;
-			if (island ? gapLR(p, w.r) < PATH : narrowBetween(p, w.r)) return false;
+		for (const c of tight ? this.clearTight : this.clear) if (overlapLR(p, c)) return false;
+		for (const w of this.wallsNear(room)) {
+			if (overlapLR(p, w)) return false;
+			if (island ? gapLR(p, w) < PATH : narrowBetween(p, w, NOOK)) return false;
 		}
 		for (const q of this.pieces) {
+			// a piece PATH away or more on either axis can neither overlap nor pinch (cheap reject)
+			if (q.u0 - p.u1 >= PATH || p.u0 - q.u1 >= PATH || q.v0 - p.v1 >= PATH || p.v0 - q.v1 >= PATH) continue;
 			if (overlapLR(p, q)) return false;
-			if (island ? gapLR(p, q) < PATH : narrowBetween(p, q)) return false;
+			if (island ? gapLR(p, q) < PATH : narrowBetween(p, q, 0)) return false;
 		}
 		if (island) {
 			// and PATH from the room's own edges (a room of several cells has no wall between them)
@@ -1927,8 +1942,34 @@ class Planner {
 		return true;
 	}
 
+	/** the walls within PATH of a room's floor rect (`fits` looks at no other), per rect, while furnishing */
+	private readonly nearWalls = new Map<LR, Array<LR>>();
+
+	wallsNear(room: LR): Array<LR> {
+		let list = this.nearWalls.get(room);
+		if (list === undefined) {
+			list = [];
+			for (const w of this.walls) {
+				const r = w.r;
+				if (r.u0 - room.u1 >= PATH || room.u0 - r.u1 >= PATH) continue;
+				if (r.v0 - room.v1 >= PATH || room.v0 - r.v1 >= PATH) continue;
+				list.push(r);
+			}
+			this.nearWalls.set(room, list);
+		}
+		return list;
+	}
+
 	/** a piece of `len` × `depth` with its back against a wall of the room; answers whether it went in */
-	againstWall(ctx: RoomCtx, kind: FurnitureKind, len: number, depth: number, prefer?: LSide, only = false): boolean {
+	againstWall(
+		ctx: RoomCtx,
+		kind: FurnitureKind,
+		len: number,
+		depth: number,
+		prefer?: LSide,
+		only = false,
+		tight = false,
+	): boolean {
 		const order: Array<LSide> = [];
 		if (prefer !== undefined) order.push(prefer);
 		const start = this.rng.int(0, 3);
@@ -1956,7 +1997,7 @@ class Planner {
 					else if (s === "K") p = lr(t, t + len, r.v1 - depth, r.v1);
 					else if (s === "L") p = lr(r.u0, r.u0 + depth, t, t + len);
 					else p = lr(r.u1 - depth, r.u1, t, t + len);
-					if (!this.fits(p, r, false)) continue;
+					if (!this.fits(p, r, false, tight)) continue;
 					this.place(ctx, p, kind, flip(s));
 					return true;
 				}
@@ -2084,52 +2125,71 @@ class Planner {
 	private gy0 = 0;
 	private gcols = 0;
 	private grows = 0;
+	/** the generation `P_SEEN` marks the cells of this planner's last flood with */
+	private seenGen = 0;
 
 	/**
-	 * EDI-11 (no safe spot) and CID-05 (no sealed pocket), checked exactly as tools/validate-world.mjs checks them:
-	 * on the town's own 8-unit grid, a survivor (radius 18) can stand on a cell when its centre is 18 clear of every
-	 * wall and piece, and walks from cell to cell (4 neighbours). From the main door, every cell inside the footprint
-	 * a survivor can stand on must be reached -- the horde's walkers are smaller, so they reach it too. The local
-	 * rules of `fits` keep the paths two bodies wide, but they cannot see a pocket two pieces close off between them
-	 * and a wall (corner to corner, or a nook behind a piece): the piece nearest such a pocket, the latest placed
-	 * first, comes out again, until there is none.
+	 * EDI-11 (no safe spot) and CID-05 (no sealed pocket), checked the way tools/validate-world.mjs checks them.
+	 *
+	 * 1. The survivor: on the town's own 8-unit grid, a survivor (radius 18) can stand on a cell when its centre is
+	 *    18 clear of every wall and piece, and walks from cell to cell (4 neighbours). From the main door, every
+	 *    cell inside the footprint a survivor can stand on must be reached.
+	 * 2. The horde (`hordePocket`): every such cell must also be reachable the way the horde really walks -- its
+	 *    flow field of 32 u cells with every obstacle grown 4 u (server/sim/flowField.ts), from outside, and then a
+	 *    straight chase down a clear line (zombieBrain's DIRECT_CHASE). A slot a survivor squeezes through can be
+	 *    too narrow for the field; what lies behind it would be a safe spot (review of ea5cf71).
+	 *
+	 * The local rules of `fits` keep the paths two bodies wide, but they cannot see every pocket two pieces close off
+	 * with a wall: the piece nearest such a pocket, the latest placed first, comes out again, until there is none.
 	 *
 	 * Cost: the town plans ~150 buildings at every world start on the server and on every client, so the grids are
-	 * module scratch (grown, never freed, filled by index) and the flood is a plain array queue: no allocation per
-	 * building beyond the rects of its walls.
+	 * module scratch (grown, never freed, filled by index; a flood marks with a generation number instead of
+	 * clearing), the walls are stamped once, a blocked border ring spares the flood its bounds checks, and the inside
+	 * mask is filled part by part.
 	 */
 	removePockets(): void {
 		const r = this.inp.rect;
 		const C = POCKET_CELL;
 		const R = BODY;
-		const gx0 = math.floor(r.x / C) * C;
-		const gy0 = math.floor(r.y / C) * C;
-		const cols = math.ceil((r.x + r.w - gx0) / C);
-		const rows = math.ceil((r.y + r.h - gy0) / C);
+		// one cell of border all round the footprint's box: blocked, so the flood needs no bounds check
+		const gx0 = math.floor(r.x / C) * C - C;
+		const gy0 = math.floor(r.y / C) * C - C;
+		const cols = math.ceil((r.x + r.w - gx0) / C) + 1;
+		const rows = math.ceil((r.y + r.h - gy0) / C) + 1;
 		this.gx0 = gx0;
 		this.gy0 = gy0;
 		this.gcols = cols;
 		this.grows = rows;
 		const n = cols * rows;
 		const inside = P_INSIDE;
+		const base = P_WALLS;
 		const blocked = P_BLOCKED;
 		const seen = P_SEEN;
 		const queue = P_QUEUE;
-		const parts: Array<Rect> = [];
-		for (const p of this.merged((i, j) => this.at(i, j) >= 0)) parts.push(this.f.rect(p));
-		for (let j = 0; j < rows; j++) {
-			const py = gy0 + j * C + C / 2;
-			for (let i = 0; i < cols; i++) {
-				const px = gx0 + i * C + C / 2;
-				let v = 0;
-				for (const p of parts) {
-					if (px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h) v = 1;
-				}
-				inside[j * cols + i] = v;
-			}
+		// the inside mask, part by part: a cell is inside when its centre lies in a part (edges included)
+		for (let k = 0; k < n; k++) inside[k] = 0;
+		for (const lp of this.merged((i, j) => this.at(i, j) >= 0)) {
+			const p = this.f.rect(lp);
+			const i0 = math.max(0, math.ceil((p.x - gx0 - C / 2) / C));
+			const i1 = math.min(cols - 1, math.floor((p.x + p.w - gx0 - C / 2) / C));
+			const j0 = math.max(0, math.ceil((p.y - gy0 - C / 2) / C));
+			const j1 = math.min(rows - 1, math.floor((p.y + p.h - gy0 - C / 2) / C));
+			for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) inside[j * cols + i] = 1;
 		}
+		// the walls, stamped once, and the border ring: every iteration starts from this
 		const walls: Array<Rect> = [];
 		for (const w of this.walls) walls.push(this.f.rect(w.r));
+		for (let k = 0; k < n; k++) blocked[k] = 0;
+		for (const w of walls) this.stampBody(w, R);
+		for (let i = 0; i < cols; i++) {
+			blocked[i] = 1;
+			blocked[(rows - 1) * cols + i] = 1;
+		}
+		for (let j = 0; j < rows; j++) {
+			blocked[j * cols] = 1;
+			blocked[j * cols + cols - 1] = 1;
+		}
+		for (let k = 0; k < n; k++) base[k] = blocked[k];
 		let seedX = 0;
 		let seedY = 0;
 		for (const o of this.openings) {
@@ -2138,17 +2198,19 @@ class Planner {
 			seedX = q.x + q.w / 2;
 			seedY = q.y + q.h / 2;
 		}
+		const pieces: Array<Rect> = [];
 		for (let iter = 0; iter < POCKET_TRIES; iter++) {
-			for (let k = 0; k < n; k++) {
-				blocked[k] = 0;
-				seen[k] = 0;
-			}
-			for (const w of walls) this.stampBody(w, R);
-			for (const p of this.pieces) this.stampBody(this.f.rect(p), R);
+			for (let k = 0; k < n; k++) blocked[k] = base[k];
+			pieces.clear();
+			for (const p of this.pieces) pieces.push(this.f.rect(p));
+			for (const p of pieces) this.stampBody(p, R);
+			P_GEN++;
+			const gen = P_GEN;
+			this.seenGen = gen;
 			let tail = 0;
 			const s0 = this.cellAt(seedX, seedY);
 			if (s0 >= 0 && blocked[s0] === 0) {
-				seen[s0] = 1;
+				seen[s0] = gen;
 				queue[tail] = s0;
 				tail++;
 			}
@@ -2156,47 +2218,157 @@ class Planner {
 			while (head < tail) {
 				const k = queue[head];
 				head++;
-				const i = k % cols;
-				// the four neighbours, inline: this loop runs over every cell of every building of the town
-				if (i > 0 && seen[k - 1] === 0 && blocked[k - 1] === 0) {
-					seen[k - 1] = 1;
+				// the four neighbours, inline and unchecked (the border ring is blocked): every cell of every building
+				if (seen[k - 1] !== gen && blocked[k - 1] === 0) {
+					seen[k - 1] = gen;
 					queue[tail] = k - 1;
 					tail++;
 				}
-				if (i < cols - 1 && seen[k + 1] === 0 && blocked[k + 1] === 0) {
-					seen[k + 1] = 1;
+				if (seen[k + 1] !== gen && blocked[k + 1] === 0) {
+					seen[k + 1] = gen;
 					queue[tail] = k + 1;
 					tail++;
 				}
-				if (k >= cols && seen[k - cols] === 0 && blocked[k - cols] === 0) {
-					seen[k - cols] = 1;
+				if (seen[k - cols] !== gen && blocked[k - cols] === 0) {
+					seen[k - cols] = gen;
 					queue[tail] = k - cols;
 					tail++;
 				}
-				if (k + cols < n && seen[k + cols] === 0 && blocked[k + cols] === 0) {
-					seen[k + cols] = 1;
+				if (seen[k + cols] !== gen && blocked[k + cols] === 0) {
+					seen[k + cols] = gen;
 					queue[tail] = k + cols;
 					tail++;
 				}
 			}
 			let pocket = -1;
 			for (let k = 0; k < n && pocket < 0; k++) {
-				if (inside[k] === 1 && blocked[k] === 0 && seen[k] === 0) pocket = k;
+				if (inside[k] === 1 && blocked[k] === 0 && seen[k] !== gen) pocket = k;
 			}
+			if (pocket < 0) pocket = this.hordePocket(walls, pieces);
 			if (pocket < 0) return;
 			const px = gx0 + (pocket % cols) * C + C / 2;
 			const py = gy0 + math.floor(pocket / cols) * C + C / 2;
+			// the piece closing it off: the latest placed near it, else the nearest one at all
 			let culprit = -1;
-			for (let k = this.pieces.size() - 1; k >= 0 && culprit < 0; k--) {
-				const b = this.f.rect(this.pieces[k]);
+			let nearest = -1;
+			let nearestD = math.huge;
+			for (let k = pieces.size() - 1; k >= 0; k--) {
+				const b = pieces[k];
 				const dx = math.max(b.x - px, 0, px - b.x - b.w);
 				const dy = math.max(b.y - py, 0, py - b.y - b.h);
-				if (dx * dx + dy * dy < (R + C * 2) * (R + C * 2)) culprit = k;
+				const d2 = dx * dx + dy * dy;
+				if (culprit < 0 && d2 < (R + C * 2) * (R + C * 2)) culprit = k;
+				if (d2 < nearestD) {
+					nearestD = d2;
+					nearest = k;
+				}
 			}
+			if (culprit < 0) culprit = nearest;
 			// a pocket that only walls make: nothing to take out (tools/validate-world.mjs names it)
 			if (culprit < 0) return;
 			this.pieces.remove(culprit);
 		}
+	}
+
+	/**
+	 * The horde's side of EDI-11, on the last survivor flood: the first cell a survivor stands on inside (8 u grid,
+	 * reached from the door) that no zombie gets to, or -1. The flow field is rebuilt here as the server builds it --
+	 * world-aligned 32 u cells, every wall and piece grown by FIELD_INFLATE, 8 neighbours, no corner cut past a
+	 * blocked cell -- and flooded from every free cell outside the footprint (a window is a gap: the field crosses
+	 * it). A spot is reached when its own field cell is, or when a reached cell lies within DIRECT_REACH with a clear
+	 * straight line to it (the chase's last stretch goes straight, not by the field).
+	 */
+	private hordePocket(walls: Array<Rect>, pieces: Array<Rect>): number {
+		const r = this.inp.rect;
+		const FC = FIELD_CELL;
+		const M = FC * 2;
+		const fx0 = math.floor((r.x - M) / FC) * FC;
+		const fy0 = math.floor((r.y - M) / FC) * FC;
+		const fcols = math.ceil((r.x + r.w + M - fx0) / FC);
+		const frows = math.ceil((r.y + r.h + M - fy0) / FC);
+		const fn = fcols * frows;
+		const hard = F_HARD;
+		const seen = F_SEEN;
+		const queue = F_QUEUE;
+		for (let k = 0; k < fn; k++) hard[k] = 0;
+		for (let q = 0; q < walls.size() + pieces.size(); q++) {
+			const s = q < walls.size() ? walls[q] : pieces[q - walls.size()];
+			const i0 = math.max(0, math.floor((s.x - FIELD_INFLATE - fx0) / FC));
+			const j0 = math.max(0, math.floor((s.y - FIELD_INFLATE - fy0) / FC));
+			const i1 = math.min(fcols - 1, math.floor((s.x + s.w + FIELD_INFLATE - fx0) / FC));
+			const j1 = math.min(frows - 1, math.floor((s.y + s.h + FIELD_INFLATE - fy0) / FC));
+			for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) hard[j * fcols + i] = 1;
+		}
+		P_GEN++;
+		const gen = P_GEN;
+		let tail = 0;
+		for (let j = 0; j < frows; j++) {
+			const cy = fy0 + j * FC + FC / 2;
+			for (let i = 0; i < fcols; i++) {
+				const k = j * fcols + i;
+				if (hard[k] === 1 || this.insideWorld(fx0 + i * FC + FC / 2, cy)) continue;
+				seen[k] = gen;
+				queue[tail] = k;
+				tail++;
+			}
+		}
+		let head = 0;
+		while (head < tail) {
+			const k = queue[head];
+			head++;
+			const ci = k % fcols;
+			const cj = (k - ci) / fcols;
+			for (let dj = -1; dj <= 1; dj++) {
+				const nj = cj + dj;
+				if (nj < 0 || nj >= frows) continue;
+				for (let di = -1; di <= 1; di++) {
+					const ni = ci + di;
+					if ((di === 0 && dj === 0) || ni < 0 || ni >= fcols) continue;
+					const nk = nj * fcols + ni;
+					if (seen[nk] === gen || hard[nk] === 1) continue;
+					if (di !== 0 && dj !== 0 && (hard[cj * fcols + ni] === 1 || hard[nj * fcols + ci] === 1)) continue;
+					seen[nk] = gen;
+					queue[tail] = nk;
+					tail++;
+				}
+			}
+		}
+		// every spot of the survivor's flood (inside, standable, reached from the door): the horde must reach it too
+		const C = POCKET_CELL;
+		const cols = this.gcols;
+		const n = cols * this.grows;
+		const RING = math.ceil(DIRECT_REACH / FC);
+		for (let k = 0; k < n; k++) {
+			if (P_INSIDE[k] !== 1 || P_SEEN[k] !== this.seenGen) continue;
+			const px = this.gx0 + (k % cols) * C + C / 2;
+			const py = this.gy0 + math.floor(k / cols) * C + C / 2;
+			const gi = math.floor((px - fx0) / FC);
+			const gj = math.floor((py - fy0) / FC);
+			if (seen[gj * fcols + gi] === gen) continue;
+			let ok = false;
+			for (let ring = 1; ring <= RING && !ok; ring++) {
+				for (let dj = -ring; dj <= ring && !ok; dj++) {
+					for (let di = -ring; di <= ring && !ok; di++) {
+						if (math.max(math.abs(di), math.abs(dj)) !== ring) continue;
+						const ni = gi + di;
+						const nj = gj + dj;
+						if (ni < 0 || nj < 0 || ni >= fcols || nj >= frows || seen[nj * fcols + ni] !== gen) continue;
+						const cx = fx0 + ni * FC + FC / 2;
+						const cy = fy0 + nj * FC + FC / 2;
+						if ((cx - px) * (cx - px) + (cy - py) * (cy - py) > DIRECT_REACH * DIRECT_REACH) continue;
+						if (segmentFree(cx, cy, px, py, walls) && segmentFree(cx, cy, px, py, pieces)) ok = true;
+					}
+				}
+			}
+			if (!ok) return k;
+		}
+		return -1;
+	}
+
+	/** is the world point (x, y) inside the footprint (the inside mask of the last `removePockets`)? */
+	private insideWorld(x: number, y: number): boolean {
+		const k = this.cellAt(x, y);
+		return k >= 0 && P_INSIDE[k] === 1;
 	}
 
 	private cellAt(x: number, y: number): number {
@@ -2229,7 +2401,7 @@ class Planner {
 	/** did the last `removePockets` (of this planner, the latest one) reach the world point (x, y) from the door? */
 	reached(x: number, y: number): boolean {
 		const k = this.cellAt(x, y);
-		return k >= 0 && P_SEEN[k] === 1;
+		return k >= 0 && P_SEEN[k] === this.seenGen;
 	}
 
 	/** is this local rect floor inside the building, touching no wall and no piece? (where flat clutter may lie) */
@@ -2271,14 +2443,64 @@ const ISLAND_OFFSETS: Array<[number, number]> = [
 const LOOT_FRONT = 44;
 /** `removePockets`' grids, shared by every planner (one building is planned at a time): grown, never shrunk */
 const P_INSIDE: Array<number> = [];
+const P_WALLS: Array<number> = [];
 const P_BLOCKED: Array<number> = [];
 const P_SEEN: Array<number> = [];
 const P_QUEUE: Array<number> = [];
+/** the horde's field for `hordePocket`: blocked cells, flood marks, queue */
+const F_HARD: Array<number> = [];
+const F_SEEN: Array<number> = [];
+const F_QUEUE: Array<number> = [];
+/** the flood generation: a cell is seen when it holds the current one (nothing is ever cleared) */
+let P_GEN = 0;
+/** the horde's flow field (server/sim/flowField.ts CELL, INFLATE) */
+const FIELD_CELL = 32;
+const FIELD_INFLATE = 4;
+/** how far the chase's last straight stretch is trusted: zombieBrain DIRECT_CHASE is 200 u (validator: 160 too) */
+const DIRECT_REACH = 160;
 /** the pocket check's grid (the town's validator grid) and body: a survivor, shared/game/physics.ts PLAYER_RADIUS */
 const POCKET_CELL = 8;
 const BODY = 18;
 /** at most this many pieces come out of one building for its pockets */
 const POCKET_TRIES = 24;
+
+/** does the segment (x0, y0)-(x1, y1) cross none of the rects? (slab test; touching an edge is crossing) */
+function segmentFree(x0: number, y0: number, x1: number, y1: number, rects: Array<Rect>): boolean {
+	const dx = x1 - x0;
+	const dy = y1 - y0;
+	const lx = math.min(x0, x1);
+	const hx = math.max(x0, x1);
+	const ly = math.min(y0, y1);
+	const hy = math.max(y0, y1);
+	for (const q of rects) {
+		if (q.x > hx || q.x + q.w < lx || q.y > hy || q.y + q.h < ly) continue;
+		let t0 = 0;
+		let t1 = 1;
+		let miss = false;
+		for (let axis = 0; axis < 2 && !miss; axis++) {
+			const d = axis === 0 ? dx : dy;
+			const o = axis === 0 ? x0 : y0;
+			const lo = axis === 0 ? q.x : q.y;
+			const hi = axis === 0 ? q.x + q.w : q.y + q.h;
+			if (math.abs(d) < 1e-9) {
+				if (o < lo || o > hi) miss = true;
+				continue;
+			}
+			let ta = (lo - o) / d;
+			let tb = (hi - o) / d;
+			if (ta > tb) {
+				const t = ta;
+				ta = tb;
+				tb = t;
+			}
+			t0 = math.max(t0, ta);
+			t1 = math.min(t1, tb);
+			if (t0 > t1) miss = true;
+		}
+		if (!miss) return false;
+	}
+	return true;
+}
 
 function flip(s: LSide): LSide {
 	if (s === "F") return "K";
@@ -2364,6 +2586,9 @@ const DEFINING: Array<FurnitureKind> = [
 	"sofa",
 	"counter",
 	"stove",
+	"fridge",
+	"table",
+	"desk",
 	"toilet",
 	"tub",
 	"hospbed",
@@ -2390,8 +2615,22 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 			pl.againstWall(ctx, "counter", 200, 40) ||
 			pl.againstWall(ctx, "counter", 136, 40) ||
 			pl.againstWall(ctx, "counter", 96, 40);
+		// a small kitchen whose walls are mostly doorways (a back door and two ways through) still gets what makes it a
+		// kitchen, before its window takes a wall: the fridge, then a short counter, then a counter island
+		let fridge = false;
+		if (!counter) {
+			fridge =
+				pl.againstWall(ctx, "fridge", 48, 44) ||
+				pl.againstWall(ctx, "fridge", 40, 40) ||
+				pl.againstWall(ctx, "counter", 64, 36) ||
+				pl.island(ctx, "counter", 96, 48, true) ||
+				pl.island(ctx, "counter", 96, 48, false) ||
+				// a pass-through kitchen (back door, a way through, an open-plan side): the fridge beside a doorway,
+				// clear of the opening itself (EDI-12 keeps the doorway's own width free, not its margins)
+				pl.againstWall(ctx, "fridge", 40, 40, undefined, false, true);
+		}
 		pl.roomWindow(ctx);
-		pl.againstWall(ctx, "fridge", 48, 44);
+		if (!fridge) pl.againstWall(ctx, "fridge", 48, 44);
 		if (counter) pl.againstWall(ctx, "stove", 56, 40);
 		if (rng.chance(0.6)) pl.island(ctx, "table", 88, 64, true);
 	} else if (k === "dining") {

@@ -148,8 +148,25 @@ const args = process.argv.slice(2);
 const SHOW_ALL = args.includes("--all");
 const marksIdx = args.indexOf("--marks");
 const MARKS_FILE = marksIdx >= 0 ? args[marksIdx + 1] : undefined;
-const seeds = args.filter((a, i) => /^-?\d+$/.test(a) && (marksIdx < 0 || i !== marksIdx + 1)).map(Number);
+const sweepIdx = args.indexOf("--sweep");
+const baseIdx = args.indexOf("--sweep-base");
+const valueAt = new Set([marksIdx, sweepIdx, baseIdx].filter(i => i >= 0).map(i => i + 1));
+const seeds = args.filter((a, i) => /^-?\d+$/.test(a) && !valueAt.has(i)).map(Number);
 if (seeds.length === 0) seeds.push(DESIGN.TOWN_SEED, 1, 42, 99991, 123456);
+/**
+ * --sweep N: N more towns from seeds drawn the way server/sim/worldReset.ts draws them (any of 1 … 2^31 - 2), by a
+ * MINSTD stream from --sweep-base (default 20260923): a world reset can land on any seed, so CI walks a spread of
+ * them -- the same ones every run (a failure is reproducible: the seed is printed), another base for another spread.
+ */
+const SWEEP = sweepIdx >= 0 ? Number(args[sweepIdx + 1]) : 0;
+if (SWEEP > 0) {
+	let st = baseIdx >= 0 ? Number(args[baseIdx + 1]) % 2147483647 : 20260923;
+	if (st <= 0) st = 1;
+	for (let i = 0; i < SWEEP; i++) {
+		st = (st * 48271) % 2147483647;
+		seeds.push(st % 2147483646 || 1);
+	}
+}
 const PER_RULE = 12;
 
 // ---------------------------------------------------------------- constants (docs/DESIGN_RULES.md)
@@ -322,8 +339,13 @@ function reachability(w, start) {
 
 /** the doors a type is meant to have (front + back / service / exits), EDI-09 */
 const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2 };
-/** share of a type's buildings that must reach DOOR_TARGET (a secondary door is dropped where the ground is taken) */
+/**
+ * share of a type's buildings that must reach DOOR_TARGET (a secondary door is dropped where the ground outside is
+ * taken), over all the towns of a run: per town it is noise (3-9 pharmacies or gun shops a town)
+ */
 const DOOR_SHARE = 0.6;
+/** type → buildings and those with all their doors, summed over every seed of the run */
+const DOOR_RUN = {};
 /** rooms that never get a window (EDI-10): a bathroom, a hall, the back rooms, the gun shop's secure room */
 const NO_WINDOW = new Set(["bath", "hall", "stock", "cold", "secure", "corridor", "treatment", "galley"]);
 /** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
@@ -779,16 +801,12 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 			if (!has) fail("EDI-08", `${b.tags} #${b.id}: the ${q.kind} has none of ${want.join("/")}`, cx(q), cy(q));
 		}
 	}
+	// the share of each type that has all its doors is judged over the whole run (below the seeds' loop): a town
+	// holds only 3-9 buildings of most types, and one yard taken by a tree moves a single town's share by 15-30 %
 	for (const [t, tt] of Object.entries(byType)) {
-		const share = tt.target / tt.n;
-		if (share < DOOR_SHARE) {
-			fail(
-				"EDI-09",
-				`${TYPE_TAG[t]}: only ${(share * 100).toFixed(0)}% have their ${DOOR_TARGET[t]} doors (< ${DOOR_SHARE * 100}%)`,
-				0,
-				0,
-			);
-		}
+		const run = (DOOR_RUN[t] ??= { n: 0, target: 0 });
+		run.n += tt.n;
+		run.target += tt.target;
 	}
 	if (buildings.length > 0 && compound / buildings.length < 0.5) {
 		fail("EDI-14", `only ${compound}/${buildings.length} footprints are not a plain box (< 50%)`, 0, 0);
@@ -1508,7 +1526,13 @@ function validate(seed) {
 			const bin = edgeUV(e, cx(s), cy(s));
 			for (const d of doors) {
 				if (d.b.doorSide !== e.side) continue;
-				const door = edgeUV(e, d.b.doorX, d.b.doorY);
+				// the entrance where it meets the street face (the box's edge): a door set back into a porch or an
+				// entrance court (EDI-14) is still the entrance of that stretch of sidewalk
+				const b = d.b;
+				const T2 = TOWN.WALL_T / 2;
+				const fx = b.doorSide === "left" ? b.x + T2 : b.doorSide === "right" ? b.x + b.w - T2 : b.doorX;
+				const fy = b.doorSide === "top" ? b.y + T2 : b.doorSide === "bottom" ? b.y + b.h - T2 : b.doorY;
+				const door = edgeUV(e, fx, fy);
 				if (
 					door.u >= e.a &&
 					door.u <= e.b &&
@@ -1643,6 +1667,19 @@ for (const seed of seeds) {
 		if (!SHOW_ALL && list.length > PER_RULE) console.log(`    … ${list.length - PER_RULE} more (--all)`);
 	}
 }
+// EDI-09 over the run: each type's share of buildings with all its doors
+const shares = [];
+for (const [t, run] of Object.entries(DOOR_RUN)) {
+	const share = run.target / run.n;
+	shares.push(`${TYPE_TAG[t]} ${(share * 100).toFixed(0)}% of ${run.n}`);
+	if (share < DOOR_SHARE) {
+		const msg = `${TYPE_TAG[t]}: only ${(share * 100).toFixed(0)}% of ${run.n} have their ${DOOR_TARGET[t]} doors (< ${DOOR_SHARE * 100}%)`;
+		all.push({ rule: "EDI-09", msg, x: 0, y: 0 });
+		total++;
+		console.log(`  EDI-09 (run) ${msg}`);
+	}
+}
+console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all their doors): ${shares.join(", ")}`);
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));
 console.log(
 	`${total === 0 ? "PASS" : "FAIL"}: ${seeds.length} seed(s), ${total} failure(s), ${fmt(performance.now() - t0)} ms`,
