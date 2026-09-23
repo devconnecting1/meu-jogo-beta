@@ -4,11 +4,17 @@
  * One question per (viewer, target) pair — near ring, mid ring or out of interest — answered for survivors
  * (F1) and, from F2-2D on, for every zombie and boss on the server:
  *
- *   near  ≤ INTEREST_NEAR  (800 u)   → in every snapshot (SNAP_NEAR_HZ = 20 Hz)
+ *   near  ≤ INTEREST_NEAR  (800 u)   → in every snapshot (SNAP_NEAR_HZ = 20 Hz); one already near stays near up to
+ *                                      INTEREST_NEAR_EXIT (880 u)
  *   mid   ≤ INTEREST_MID   (1500 u)  → in every MID_DIVISOR-th snapshot (SNAP_MID_HZ = 10 Hz per entity)
  *   out   > INTEREST_EXIT  (1650 u)  → not sent; the hysteresis band keeps an entity that is hovering on the
  *                                      border from flickering in and out (and the client's despawn timeout of
  *                                      §4.4 covers the gap either way)
+ *
+ * The ring a zombie travels in also decides how far back its viewer draws it (client/net/snapshotBuffer.ts `extra`:
+ * a near interval more in the mid ring, eased over a second when it changes), and so where a shot at it is judged
+ * (server/sim/combat.ts). `ActorInterest` mirrors that easing per pair from the `mid` flags it actually SENT
+ * (`noteSent`, `viewExtra`); both hysteresis bands keep a body on a border from flipping it.
  *
  * On top of the rings, §4.3 has two visibility rules that exist so the wire cannot be read as a wallhack:
  * a zombie inside a building the viewer is not in is never sent (the roof already hides it, EDI-04), and in
@@ -22,7 +28,10 @@ import {
 	INTEREST_EXIT,
 	INTEREST_MID,
 	INTEREST_NEAR,
+	INTEREST_NEAR_EXIT,
+	INTERP_DEFAULT_S,
 	MAX_PLAYERS,
+	RENDER_DELAY_RATE,
 	SNAP_MID_EVERY_TICKS,
 	SNAP_NEAR_EVERY_TICKS,
 } from "shared/net/mpConfig";
@@ -35,15 +44,17 @@ export const Ring = {
 export type Ring = (typeof Ring)[keyof typeof Ring];
 
 const NEAR2 = INTEREST_NEAR * INTEREST_NEAR;
+const NEAR_EXIT2 = INTEREST_NEAR_EXIT * INTEREST_NEAR_EXIT;
 const MID2 = INTEREST_MID * INTEREST_MID;
 const EXIT2 = INTEREST_EXIT * INTEREST_EXIT;
 
 /** snapshots between two sends of the same mid-ring entity: 6/3 = 2 at 60 Hz, i.e. 20 Hz → 10 Hz (§4.1) */
 export const MID_DIVISOR = math.max(1, math.floor(SNAP_MID_EVERY_TICKS / SNAP_NEAR_EVERY_TICKS + 0.5));
 
-/** ring of a squared distance, given the ring it was in before (hysteresis on the way out only) */
+/** ring of a squared distance, given the ring it was in before (hysteresis on the way OUT of each ring) */
 export function ringOf(dist2: number, previous: Ring): Ring {
 	if (dist2 <= NEAR2) return Ring.Near;
+	if (previous === Ring.Near && dist2 <= NEAR_EXIT2) return Ring.Near;
 	if (dist2 <= MID2) return Ring.Mid;
 	if (previous !== Ring.Out && dist2 <= EXIT2) return Ring.Mid;
 	return Ring.Out;
@@ -181,12 +192,44 @@ interface ActorRing {
 	ring: Ring;
 	/** snapshot round this pair was last classified in, so dead entities cannot leak the table */
 	seen: number;
+	/** a snapshot has carried this body to this viewer (`noteSent`): until then the fields below mean nothing */
+	sent: boolean;
+	/** the `mid` flag last SENT for it: what the viewer's track holds (client/net/snapshotBuffer.ts `track.mid`) */
+	wireMid: boolean;
+	/**
+	 * The viewer's extra delay for it, in ticks, as its client eases it (`easeExtra`): `extraFrom` when the snapshot
+	 * of tick `extraAt` -- the first to carry the current flag -- arrived, moving towards `extraTo` at
+	 * RENDER_DELAY_RATE (see `viewExtra`).
+	 */
+	extraFrom: number;
+	extraTo: number;
+	extraAt: number;
+}
+
+/**
+ * Ticks between a snapshot's tick and the render time of the client frame it first shows up in: the client draws
+ * `lateness + buffer` behind its clock and the snapshot lands `lateness` behind it, so what is left is the buffer
+ * (client/net/snapshotBuffer.ts `noteArrival`). The server does not know each client's; the default is what the
+ * rewind ceiling assumes too (server/sim/history.ts), and a buffer 2 ticks off moves the eased extra by 0.1 tick.
+ */
+const ARRIVAL_BUFFER_S = INTERP_DEFAULT_S;
+
+/** the client's eased extra (`easeExtra`) `elapsed` ticks after it started from `from` towards `to` */
+function easedExtra(from: number, to: number, elapsed: number): number {
+	if (!(elapsed > 0)) return from;
+	const step = RENDER_DELAY_RATE * elapsed;
+	return from + math.clamp(to - from, -step, step);
 }
 
 /**
  * The same hysteresis as `InterestTable`, for entities that are identified by a netId instead of a slot and
  * come and go by the hundred. A pair stops being updated the moment its zombie dies, so the table is swept:
  * `forgetTarget` is the exact path (the replicator already drains the deaths) and `sweep` the safety net.
+ *
+ * It also mirrors, per pair, how far back the viewer draws the body (`noteSent`, `viewExtra`). The server used to
+ * switch that at once with the ring while the client eases it over a second from the flag it received: for about a
+ * second after every crossing of 800 u -- and every chasing zombie crosses once, inside both rifle ranges -- a shot
+ * was judged up to 3 ticks away from the body on the shooter's screen, 4.5-10 u (the review of dee095a, S3).
  */
 export class ActorInterest {
 	private readonly rings = new Map<number, ActorRing>();
@@ -212,9 +255,52 @@ export class ActorInterest {
 			previous.ring = ring;
 			previous.seen = round;
 		} else {
-			this.rings.set(key, { ring, seen: round });
+			this.rings.set(key, {
+				ring,
+				seen: round,
+				sent: false,
+				wireMid: false,
+				extraFrom: 0,
+				extraTo: 0,
+				extraAt: 0,
+			});
 		}
 		return ring;
+	}
+
+	/**
+	 * A snapshot of `tick` carried this body to this viewer with this `mid` flag, and `extra` is the mid ring's
+	 * extra delay in ticks (midViewExtraTicks). What the client does with the flag: a new track takes its extra at
+	 * once; a changed flag starts easing it from wherever it was when that snapshot landed.
+	 */
+	noteSent(viewer: number, netId: number, mid: boolean, tick: number, extra: number): void {
+		const pair = this.rings.get(ActorInterest.key(viewer, netId));
+		if (pair === undefined) return;
+		const to = mid ? extra : 0;
+		if (!pair.sent) {
+			pair.sent = true;
+			pair.wireMid = mid;
+			pair.extraFrom = to;
+			pair.extraTo = to;
+			pair.extraAt = tick;
+			return;
+		}
+		if (pair.wireMid === mid) return;
+		pair.extraFrom = easedExtra(pair.extraFrom, pair.extraTo, tick - pair.extraAt);
+		pair.extraTo = to;
+		pair.extraAt = tick;
+		pair.wireMid = mid;
+	}
+
+	/**
+	 * How many ticks further back than `viewTick` -- the render time of the frame that declared it -- this viewer
+	 * drew the body: the easing of `noteSent`, `ARRIVAL_BUFFER_S` after the snapshot that started it. 0 for a body it
+	 * was never sent (or that left its interest: the client may still be fading it out, never at a shot's range).
+	 */
+	viewExtra(viewer: number, netId: number, viewTick: number, simHz: number): number {
+		const pair = this.rings.get(ActorInterest.key(viewer, netId));
+		if (pair === undefined || !pair.sent) return 0;
+		return easedExtra(pair.extraFrom, pair.extraTo, viewTick + ARRIVAL_BUFFER_S * simHz - pair.extraAt);
 	}
 
 	/** that entity is gone (§4.4 death or despawn): every viewer forgets it */

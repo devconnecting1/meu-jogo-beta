@@ -553,6 +553,56 @@ console.log("7) o medidor de tranco que o jogo imprime no [PZ-NET]");
 	check("comecar a andar: nenhum tranco", start.jolts === 0, start.jolts + " trancos");
 }
 
+// ---------------------------------------------------------------- 8: the delay's lock after a reset
+
+/*
+ * Review of 2026-09-23, #5: after `reset()` (a new run, a rebirth, a world reset) the delay locked on the FIRST
+ * snapshot's lateness, and from then on only eased at ±5 % of real time. A first snapshot that sat in the link --
+ * a straggler 150 ms later than the rest -- set a delay 150 ms too long, for three seconds. It now locks on the
+ * median of the first few (snapshotBuffer.ts LOCK_SAMPLES).
+ */
+console.log("");
+console.log("8) depois de um reset, o atraso trava na mediana das primeiras chegadas, nao na primeira");
+{
+	const buf = new SnapshotBuffer();
+	buf.setRate(CFG.SIM_HZ);
+	buf.reset();
+	const partAt = tick => ({
+		tick: tick % 65536,
+		part: 0,
+		parts: 1,
+		players: [
+			{ slot: 1, x: 1000 + tick, y: 1000, aim: 0, flags: 0, weapon: 0, swing: 0, hp: 1, revive: 0, feetCycle: 0 },
+		],
+		zombies: [],
+		bosses: [],
+		extras: [],
+	});
+	// the first snapshot after the reset sat 200 ms in the link; every one after it takes the honest 50 ms
+	const lateS = [0.2, 0.05, 0.05, 0.05, 0.05];
+	let clockTick = 600;
+	let t = 0;
+	for (const late of lateS) {
+		buf.receive(partAt(Math.round(clockTick - late * CFG.SIM_HZ)), clockTick, 1000 + t);
+		for (let f = 0; f < 3; f++) {
+			buf.advance(FRAME_DT, clockTick, 1000 + t);
+			clockTick += 1;
+			t += FRAME_DT;
+		}
+	}
+	const s = buf.stats();
+	check(
+		"a latencia travada e a das chegadas honestas, nao a da primeira",
+		Math.abs(s.lateness - 0.05) <= 0.02,
+		`${(s.lateness * 1000).toFixed(0)} ms (a primeira: 200 ms, as outras: 50 ms)`,
+	);
+	check(
+		"o atraso nao carrega os 150 ms a mais da primeira chegada",
+		buf.delay() <= 0.05 + CFG.INTERP_MIN_S + 0.03,
+		`${(buf.delay() * 1000).toFixed(0)} ms`,
+	);
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
