@@ -59,6 +59,7 @@ import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
+import { packRide, rideHeading } from "shared/sim/rideKey";
 import {
 	ActorInterest,
 	InterestTable,
@@ -212,6 +213,8 @@ export function selfBlockOf(sim: ServerSimulation, sp: ServerPlayer): SelfSnap {
 		bleed: 0,
 		modFlags,
 		weapon: math.max(0, w.pointer),
+		// VEI-05: the vehicle under them, on the grid the simulation keeps it on (the prediction replays from it)
+		ride: packRide(p.ride),
 	};
 }
 
@@ -243,7 +246,9 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
 		swing: p.swingerActive ? angleDelta(p.swingerAngle, p.angle) : 0,
 		hp: p.hpMax > 0 ? math.clamp(p.hp / p.hpMax, 0, 1) : 0,
 		revive: 0,
-		moveAng: sp.moveAng,
+		// VEI-05: on a saddle the feet point nowhere; the angle is the vehicle's heading, and the kind tells which
+		moveAng: p.ride !== undefined ? rideHeading(p.ride) : sp.moveAng,
+		ride: p.ride?.kind ?? 0,
 	};
 }
 

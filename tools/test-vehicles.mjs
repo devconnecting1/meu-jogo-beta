@@ -14,6 +14,12 @@
  *   A. HANDLING: top speeds (bicycle faster than walking, motorcycle much faster), acceleration, the turn radius
  *      at speed, braking round, coasting, no oil no engine; a head-on crash stops the vehicle, a glancing hit
  *      slides; the state stays on the wire's grid, so two runs of the same commands agree to the bit.
+ *   B. THE SERVER: getting on and off by E at the server's position (SolidRemove / SolidAdd); only a survivor the
+ *      server mounted goes faster than a walk, and never faster than the vehicle; E floods are rate-limited; fuel
+ *      from the rider's backpack; crashes wear the vehicle (never below 1 hp) and hurt the rider through armour;
+ *      broken, it is repaired with steel; zombies ahead throw you off or stop you, riders get bitten; the engine
+ *      and the horn are the noise event the horde hears; no weapon on a vehicle; leaving and dying leave the
+ *      vehicle in town; the self block and the player block carry the ride through the real wire.
  *
  * Pure Node (>= 18) + the project's TypeScript, on the shared shims (tools/luau-shim.mjs).
  */
@@ -61,7 +67,7 @@ const Ply = require(join(SRC, "shared/game/player.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const T = require(join(SRC, "shared/sim/types.ts"));
 const V = require(join(SRC, "shared/sim/vehicle.ts"));
-const { VEHICLES, VehicleKind, vehicleDef } = require(join(SRC, "shared/data/buildings.ts"));
+const { VEHICLES, VehicleKind, vehicleDef, vehicleKindOfItem } = require(join(SRC, "shared/data/buildings.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 
 const DT = 1 / 60;
@@ -313,6 +319,527 @@ section("A5. the state stays on the wire's grid, and two runs agree to the bit",
 function info(msg) {
 	if (VERBOSE) console.log(`        ${msg}`);
 }
+
+// ================================================================ B. the server's vehicles, through the wire
+
+const P = require(join(SRC, "shared/net/protocol.ts"));
+const PL = require(join(SRC, "server/sim/players.ts"));
+const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
+const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+const SV = require(join(SRC, "server/sim/vehicles.ts"));
+const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+const { createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
+const REP = require(join(SRC, "server/net/replication.ts"));
+const { interactTarget } = require(join(SRC, "shared/sim/interactQuery.ts"));
+
+const PRESS_E = P.packEdges(0, 0, 1, 0);
+const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
+
+/**
+ * A server with the interactive world on (what the server-builds merge switches on for the game), at noon, and a
+ * log of every ride event and vehicle noise. `zombies: true` brings the real horde (its ambient spawner included).
+ */
+function serverWith({ zombies = false, width = 8000, height = 8000, hour = 12 } = {}) {
+	resetEntityIds();
+	const world = W.serverWorld(W.createWorld(width, height));
+	const clock = new WorldClock({ day: 1, dayTime: hour });
+	const sim = new ServerSimulation({ world, clock, zombies, interactive: true });
+	const events = [];
+	const noises = [];
+	sim.onRide = (sp, e) => events.push({ slot: sp.slot, ...e });
+	sim.onVehicleNoise = n => noises.push(n);
+	return { world, sim, events, noises };
+}
+
+function addPlayer(sim, slot, x, y, save = fueled()) {
+	const sp = PL.createServerPlayer({ slot, userId: 900 + slot, name: `p${slot}` }, save, x, y, sim.tick, sim.simHz);
+	sim.add(sp);
+	sp.state.x = x;
+	sp.state.y = y;
+	return sp;
+}
+
+/** a vehicle the SERVER put in the world (what ServerBuild.place makes), centred at (cx, cy) on quarter turn `rot` */
+function park(world, item, cx, cy, rot = 0, owner = 0) {
+	const def = PLACEABLES[item];
+	const vdef = vehicleDef(vehicleKindOfItem(item));
+	const r = V.parkedRect(vdef, cx, cy, rot);
+	return W.addSolid(world, { ...placedSolid(def, r, rot), placeable: item, owner });
+}
+
+/** a client that only sends packets: one command per tick, through encodeInput → ingestInput, then the tick */
+function driver(sim, sp) {
+	let seq = 100;
+	return {
+		tick(mx = 0, my = 0, edges = 0, held = 0, aim = 0) {
+			const cmd = P.makeCommand(seq, mx, my, aim, held, edges);
+			seq += 1;
+			const payload = P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] });
+			PL.ingestInput(sp, payload, sim.tick / 60);
+			sim.step();
+		},
+		ticks(n, mx = 0, my = 0, edges = 0, held = 0) {
+			for (let i = 0; i < n; i++) this.tick(mx, my, i === 0 ? edges : 0, held);
+		},
+	};
+}
+
+function drain(sim) {
+	const out = [];
+	sim.worldOut.take(out);
+	return out.map(p => p.ev);
+}
+
+const vehiclesIn = world => world.solids.filter(s => s.tags === "vehicle");
+
+section("B1. getting on and off: E at the server's position, the solid out of the world and back", () => {
+	const { world, sim, events } = serverWith();
+	const bike = park(world, 21, 1000, 1000, 1);
+	const sp = addPlayer(sim, 0, 1000 + 12 + 30, 1000);
+	const d = driver(sim, sp);
+	drain(sim);
+	checkEq(
+		interactTarget(world, sp.state.x, sp.state.y)?.kind,
+		"vehicle",
+		"E would act on the bicycle (the HUD's query)",
+	);
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0) && sp.state.ride?.kind === VehicleKind.Bicycle, "E: the survivor rides the bicycle");
+	check(bike.removed === true && !world.solids.includes(bike), "the parked solid left the world");
+	const out = drain(sim);
+	check(
+		out.some(e => e.t === P.WorldEv.SolidRemove && e.id === bike.id),
+		"...and everybody is told (SolidRemove, global)",
+	);
+	checkEq(sp.state.x, 1000, "the survivor sits on the seat (x)");
+	checkEq(V.rideHeading(sp.state.ride), Math.PI / 2, "...facing the way it was parked (quarter turn 1 = +y)");
+	check(
+		events.some(e => e.kind === "mounted" && e.vehicle === VehicleKind.Bicycle),
+		"the mounted event (achievements)",
+	);
+	// E at once: the cooldown holds it (each on/off is a global delta)
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0), `E again within ${SV.MOUNT_COOLDOWN_S} s does nothing`);
+	d.ticks(40, 0, 1);
+	d.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(0) && sp.state.ride === undefined, "E again later: off");
+	const parked = vehiclesIn(world);
+	checkEq(parked.length, 1, "the bicycle is back in the world, once");
+	const back = parked[0];
+	check(back !== undefined && back.placeable === 21 && back.owner === 0, "the same kind, and still its builder's");
+	check(back !== undefined && back.id !== bike.id && back.passable === true, "a new id, passable");
+	const out2 = drain(sim);
+	const add = out2.find(e => e.t === P.WorldEv.SolidAdd);
+	check(
+		add !== undefined && add.placeable === 21 && add.rot === 1,
+		"SolidAdd with the placeable and the quarter turn",
+		JSON.stringify(add),
+	);
+	const gap = Math.hypot(sp.state.x - (back.x + back.w / 2), sp.state.y - (back.y + back.h / 2));
+	check(gap > 20 && gap < 50, "the survivor stepped off beside it", f1(gap));
+	check(
+		events.some(e => e.kind === "dismounted" && e.why === "action"),
+		"the dismounted event",
+	);
+});
+
+section("B2. the speed is the server's: only a survivor the server mounted rides", () => {
+	const { world, sim } = serverWith({ width: 16000 });
+	// a walker holding the stick: 210 u/s, whatever the client believes
+	const walker = addPlayer(sim, 0, 1000, 2000);
+	const dw = driver(sim, walker);
+	dw.ticks(120, 1, 0);
+	const walked = (walker.state.x - 1000) / 2;
+	check(Math.abs(walked - 210) < 1, "on foot the server moves 210 u/s", f1(walked));
+	// E far from any vehicle: nothing, and still 210 u/s
+	park(world, 22, 6000, 2000);
+	dw.tick(0, 0, PRESS_E);
+	check(
+		!sim.vehicles.riding(0) && walker.state.ride === undefined,
+		"E with the motorcycle 3000 u away mounts nothing",
+	);
+	// E next to a vehicle the CLIENT placed (no placeable: MP_PHASE 2's local build): nothing
+	const local = W.addSolid(world, placedSolid(PLACEABLES[22], V.parkedRect(MOTO, walker.state.x + 40, 2000, 0), 0));
+	dw.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(0), "E at a vehicle the server never placed (no placeable) mounts nothing");
+	W.removeSolid(world, local);
+	// a ridden vehicle's top speed, and back to a walk the tick it is left
+	const rider = addPlayer(sim, 1, 6000, 2040);
+	const dr = driver(sim, rider);
+	dr.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(1), "E at the motorcycle, 40 u away: on it");
+	let fastest = 0;
+	for (let i = 0; i < 180; i++) {
+		const x0 = rider.state.x;
+		const y0 = rider.state.y;
+		dr.tick(1, 0);
+		fastest = Math.max(fastest, Math.hypot(rider.state.x - x0, rider.state.y - y0) * 60);
+	}
+	check(fastest <= MOTO.topSpeed + 0.01, `never faster than its top speed (${MOTO.topSpeed})`, f1(fastest));
+	check(fastest >= MOTO.topSpeed - 0.01, "and it gets there", f1(fastest));
+	dr.ticks(60, 0, 0);
+	dr.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(1), "off again");
+	const x0 = rider.state.x;
+	dr.ticks(60, 1, 0);
+	check(Math.abs(rider.state.x - x0 - 210) < 2, "the next second on foot is a walk: 210 u", f1(rider.state.x - x0));
+	// a flood of E presses: every command with three presses, for three seconds -- one on/off per cooldown at most
+	const flood = addPlayer(sim, 2, 9000, 2040);
+	park(world, 21, 9000, 2000);
+	const df = driver(sim, flood);
+	let toggles = 0;
+	let was = false;
+	for (let i = 0; i < 180; i++) {
+		df.tick(0, 0, P.packEdges(0, 0, 3, 0));
+		const now = sim.vehicles.riding(2);
+		if (now !== was) toggles += 1;
+		was = now;
+	}
+	check(
+		toggles <= 3 / SV.MOUNT_COOLDOWN_S + 1,
+		`180 ticks of triple E: at most one toggle per ${SV.MOUNT_COOLDOWN_S} s`,
+		`${toggles}`,
+	);
+});
+
+section("B3. fuel: the motorcycle burns the rider's oil; none, no engine; the bicycle burns nothing", () => {
+	const { world, sim, events } = serverWith({ width: 30000 });
+	const save = fueled(3);
+	const sp = addPlayer(sim, 0, 1000, 2000, save);
+	park(world, 22, 1000, 2040);
+	const d = driver(sim, sp);
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0), "on the motorcycle with 3 oil");
+	d.ticks(60 * 10, 1, 0);
+	const perSecond = MOTO.oilIdle + MOTO.oilFull;
+	checkEq(save.oil, 3 - Math.floor(10 * perSecond - 0.05), `10 s at full throttle burns ${f1(10 * perSecond)} oil`);
+	let dryAt;
+	for (let i = 0; i < 60 * 25 && save.oil > 0; i++) d.tick(1, 0);
+	checkEq(save.oil, 0, "...and the tank runs dry");
+	dryAt = { x: sp.state.x, v: V.rideSpeed(sp.state.ride) };
+	d.ticks(60 * 6, 1, 0);
+	const coast = sp.state.x - dryAt.x;
+	const coastMax = (dryAt.v * dryAt.v) / (2 * MOTO.coast);
+	checkEq(
+		sp.state.ride?.speed,
+		0,
+		"with no oil the throttle does nothing: holding it, the motorcycle coasts to a stop",
+	);
+	check(
+		dryAt.v === MOTO.topSpeed && Math.abs(coast - coastMax) < 10,
+		`...from ${dryAt.v} u/s, in its coasting distance v²/2·coast = ${f1(coastMax)} u`,
+		f1(coast),
+	);
+	d.tick(0, 0, PRESS_E);
+	d.ticks(40);
+	d.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(0), "E at a motorcycle with an empty backpack: refused");
+	check(
+		events.some(e => e.kind === "refused" && e.why === "noOil"),
+		"...and said why (noOil)",
+	);
+	// idling burns too, slowly: 1 a minute
+	const idle = fueled(5);
+	const sp2 = addPlayer(sim, 1, 20000, 2000, idle);
+	park(world, 22, 20000, 2040);
+	const d2 = driver(sim, sp2);
+	d2.tick(0, 0, PRESS_E);
+	d2.ticks(60 * 61);
+	checkEq(idle.oil, 4, "a minute idling on it burns one oil");
+	const pedals = fueled(0);
+	const sp3 = addPlayer(sim, 2, 25000, 2000, pedals);
+	park(world, 21, 25000, 2040);
+	const d3 = driver(sim, sp3);
+	d3.tick(0, 0, PRESS_E);
+	d3.ticks(60 * 5, 1, 0);
+	check(sim.vehicles.riding(2) && sp3.state.x > 25000 + BIKE.topSpeed * 3.5, "the bicycle needs no oil at all");
+});
+
+section("B4. crashes wear the vehicle and hurt the rider; broken, it is repaired with steel; never destroyed", () => {
+	const { world, sim, events } = serverWith();
+	W.addSolid(world, {
+		kind: "wall_v",
+		x: 5000,
+		y: 0,
+		w: 32,
+		h: 8000,
+		hp: 1,
+		hpMax: 1,
+		destructible: false,
+		tags: "bwall",
+	});
+	const save = fueled(40);
+	save.equipCloth = 3; // wooden armour, defence 4: a fall ignores it
+	const sp = addPlayer(sim, 0, 1000, 2000, save);
+	park(world, 22, 1000, 2040);
+	const d = driver(sim, sp);
+	d.tick(0, 0, PRESS_E);
+	const hp0 = sp.state.hp;
+	for (let i = 0; i < 600 && !events.some(e => e.kind === "crash"); i++) d.tick(1, 0);
+	const crash = events.find(e => e.kind === "crash");
+	check(
+		crash !== undefined && crash.into === "solid" && crash.speed === MOTO.topSpeed,
+		"into the wall at 510 u/s: a crash",
+		JSON.stringify(crash),
+	);
+	checkEq(crash?.vehicleHp, MOTO.hpMax - MOTO.crashDamage, `the motorcycle lost ${MOTO.crashDamage} hp`);
+	checkEq(
+		Math.round(hp0 - sp.state.hp),
+		MOTO.crashHurt,
+		`the rider lost ${MOTO.crashHurt} (armour does not help: a fall)`,
+	);
+	check(sim.vehicles.riding(0), "a crash into a wall does not throw you off");
+	// crash again and again until it breaks
+	for (let n = 0; n < 12 && sim.vehicles.riding(0); n++) {
+		d.ticks(40, -1, 0); // back off
+		d.ticks(200, 1, 0); // and into the wall again
+		sp.state.hp = sp.state.hpMax;
+	}
+	const crashes = events.filter(e => e.kind === "crash").length;
+	check(!sim.vehicles.riding(0), `after ${crashes} crashes it broke and the rider got off`);
+	const broken = vehiclesIn(world)[0];
+	check(
+		broken !== undefined && broken.hp >= 1 && broken.hp < broken.hpMax * V.BROKEN_RATIO,
+		"it lies there broken, never below 1 hp (MP-11)",
+		f1(broken?.hp),
+	);
+	check(
+		events.some(e => e.kind === "dismounted" && e.why === "broken"),
+		"the dismounted event says why (broken)",
+	);
+	d.ticks(40);
+	// round to its far side from the wall: E acts on the NEAREST usable solid, and the wall is one
+	sp.state.x = broken.x - 10;
+	sp.state.y = broken.y + broken.h / 2;
+	save.invenEtc[26] = 0;
+	d.tick(0, 0, PRESS_E);
+	check(!sim.vehicles.riding(0), "E at a broken vehicle does not ride it");
+	save.invenEtc[26] = 2;
+	const before = broken.hp;
+	d.tick(0, 0, PRESS_E);
+	check(
+		broken.hp > before && save.invenEtc[26] === 1,
+		"E with steel repairs it (+25%)",
+		`${f1(before)} → ${f1(broken.hp)}`,
+	);
+	d.ticks(40);
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0), "repaired past 25%: E rides it again");
+});
+
+section(
+	"B5. zombies: run into one at speed and you are thrown; slow, it stops you; behind, nothing; riders get bitten",
+	() => {
+		const { world, sim, events } = serverWith({ zombies: true, width: 12000, height: 6000, hour: 12 });
+		const horde = sim.horde;
+		const sp = addPlayer(sim, 0, 1000, 3000, fueled(40));
+		sp.state.godMode = false;
+		park(world, 22, 1000, 3040);
+		const d = driver(sim, sp);
+		d.tick(0, 0, PRESS_E);
+		d.ticks(90, 1, 0);
+		const z = createZombie(1, sp.state.x + 400, 3000, 1, false);
+		horde.zombies.push(z);
+		const hpBefore = sp.state.hp;
+		for (let i = 0; i < 120 && sim.vehicles.riding(0); i++) d.tick(1, 0);
+		const thrown = events.find(e => e.kind === "dismounted" && e.why === "thrown");
+		check(thrown !== undefined, "a walker ahead at top speed: thrown off");
+		check(z.hp < 100, "...the walker took the ram", `${f1(z.hp)} hp left`);
+		check(sp.state.hp < hpBefore, "...the rider took the fall", `${f1(hpBefore - sp.state.hp)}`);
+		const crash = events.find(e => e.kind === "crash" && e.into === "zombie");
+		check(
+			crash !== undefined && crash.vehicleHp < MOTO.hpMax,
+			"...the motorcycle took the crash, and lies there",
+			f1(crash?.vehicleHp),
+		);
+		checkEq(vehiclesIn(world).length, 1, "the motorcycle is parked where it happened");
+		// slow into a zombie: a bump, no throw, no damage
+		horde.zombies.length = 0;
+		const b = addPlayer(sim, 1, 6000, 1000, fueled(40));
+		park(world, 21, 6000, 1040);
+		const db = driver(sim, b);
+		db.tick(0, 0, PRESS_E);
+		db.ticks(20, 1, 0);
+		const slow = createZombie(1, b.state.x + BIKE.radius + 20, 1000, 1, false);
+		slow.detect = false;
+		horde.zombies.push(slow);
+		for (let i = 0; i < 30; i++) db.tick(1, 0);
+		check(sim.vehicles.riding(1), `a bicycle below ${BIKE.crashSpeed} u/s into a walker: still riding`);
+		checkEq(slow.hp, 100, "...and the walker is not hurt");
+		check(
+			b.state.ride.speed * V.SPEED_STEP < BIKE.crashSpeed,
+			"...the walker stopped it",
+			V.rideSpeed(b.state.ride),
+		);
+		// a zombie behind never stops a vehicle
+		horde.zombies.length = 0;
+		const c = addPlayer(sim, 2, 9000, 5000, fueled(40));
+		park(world, 21, 9000, 5040);
+		const dc = driver(sim, c);
+		dc.tick(0, 0, PRESS_E);
+		dc.ticks(40, 1, 0);
+		const tail = createZombie(1, c.state.x - BIKE.radius - 10, 5000, 1, false);
+		horde.zombies.push(tail);
+		const v0 = c.state.ride.speed;
+		dc.tick(1, 0);
+		check(c.state.ride.speed >= v0, "a walker right behind: no bump");
+		// bitten while riding: a rider is a survivor like any other
+		horde.zombies.length = 0;
+		dc.ticks(120, 0, 0);
+		const biter = createZombie(1, c.state.x + 30, c.state.y, 1, false);
+		biter.detect = true;
+		horde.zombies.push(biter);
+		const hp1 = c.state.hp;
+		dc.ticks(180, 0, 0);
+		check(
+			c.state.hp < hp1 && sim.vehicles.riding(2),
+			"a walker next to a stopped rider bites (and the rider stays on)",
+			`${f1(hp1 - c.state.hp)} hp`,
+		);
+	},
+);
+
+section("B6. noise: the motorcycle's engine and horn are an event the horde hears; the bicycle's bell is small", () => {
+	const hear = item => {
+		const { world, sim, noises } = serverWith({ zombies: true, width: 6000, height: 6000, hour: 12 });
+		// a wall between them: the zombie cannot see the rider, only hear
+		W.addSolid(world, {
+			kind: "wall_v",
+			x: 3150,
+			y: 2000,
+			w: 32,
+			h: 2000,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "bwall",
+		});
+		const sp = addPlayer(sim, 0, 3000, 3000, fueled(40));
+		park(world, item, 3000, 3040);
+		const z = createZombie(1, 3350, 3000, 1, false);
+		z.detect = false;
+		z.angle = 0; // facing away
+		sim.horde.zombies.push(z);
+		const d = driver(sim, sp);
+		d.tick(0, 0, PRESS_E);
+		d.ticks(60 * 3);
+		return { z, noises, sim };
+	};
+	const moto = hear(22);
+	const engine = moto.noises.filter(n => n.source === "engine");
+	check(engine.length >= 5, "the idling motorcycle rings every half second", `${engine.length} rings in 3 s`);
+	checkEq(engine[0]?.radius, MOTO.noiseIdle, `...a ring of ${MOTO.noiseIdle} u at idle`);
+	check(moto.z.detect === true, "a walker 350 u away behind a wall hears it and comes to look");
+	const bike = hear(21);
+	check(bike.noises.filter(n => n.source === "engine").length === 0, "the bicycle has no engine");
+	check(bike.z.detect !== true, "...and the same walker never notices the stopped bicycle");
+	// full throttle: the ring grows with speed
+	const { world, sim, noises } = serverWith({ width: 20000 });
+	const sp = addPlayer(sim, 0, 1000, 2000, fueled(40));
+	park(world, 22, 1000, 2040);
+	const d = driver(sim, sp);
+	d.tick(0, 0, PRESS_E);
+	d.ticks(120, 1, 0);
+	const last = noises.filter(n => n.source === "engine").at(-1);
+	checkEq(last?.radius, MOTO.noiseFull, `at top speed the ring is ${MOTO.noiseFull} u`);
+	d.tick(1, 0, PRESS_ATTACK);
+	const horn = noises.find(n => n.source === "horn");
+	checkEq(horn?.radius, MOTO.hornRadius, "the attack button is the horn");
+	d.tick(1, 0, PRESS_ATTACK);
+	checkEq(noises.filter(n => n.source === "horn").length, 1, `...at most once a ${SV.HORN_COOLDOWN_S} s`);
+});
+
+section("B7. no weapon on a vehicle: the combat gets no attack, the button is the horn", () => {
+	const { world, sim, noises } = serverWith({ zombies: true, width: 8000, height: 8000 });
+	const save = fueled(40);
+	save.equipWeapon = 11; // a pistol
+	save.ammoNormal = 50;
+	const sp = addPlayer(sim, 0, 1000, 1000, save);
+	sp.state.weapon.pointer = 11;
+	sp.state.weapon.ammoCount = 7;
+	park(world, 21, 1000, 1040);
+	const d = driver(sim, sp);
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0), "on the bicycle with a loaded pistol");
+	const mag = sp.state.weapon.ammoCount;
+	const shots = sim.combat.statsOf(0).shots ?? 0;
+	for (let i = 0; i < 60; i++) d.tick(0, 0, i % 20 === 0 ? PRESS_ATTACK : 0, P.HeldBit.Attack);
+	checkEq(sp.state.weapon.ammoCount, mag, "a second of the trigger: not one round fired");
+	checkEq(sim.combat.statsOf(0).shots ?? 0, shots, "...and the combat counted no shot");
+	check(
+		noises.some(n => n.source === "horn" && n.radius === BIKE.hornRadius),
+		"the bell rang instead",
+	);
+	const cmd = P.makeCommand(1, 1, 0, 0, P.HeldBit.Attack, P.packEdges(2, 1, 1, 1));
+	const dis = SV.disarmed(cmd);
+	check(
+		dis.held === 0 &&
+			P.edgeCount(dis.edges, P.EdgeShift.AttackPress) === 0 &&
+			P.edgeCount(dis.edges, P.EdgeShift.Reload) === 0 &&
+			P.edgeCount(dis.edges, P.EdgeShift.ActionPress) === 1 &&
+			dis.moveMag === cmd.moveMag,
+		"disarmed(): no attack held or pressed, no reload; E and the stick are kept",
+	);
+});
+
+section("B8. leaving, dying and a new world never take a vehicle out of the town", () => {
+	const { world, sim, events } = serverWith();
+	const sp = addPlayer(sim, 0, 1000, 1000);
+	park(world, 21, 1000, 1040, 0, 3);
+	const d = driver(sim, sp);
+	d.tick(0, 0, PRESS_E);
+	d.ticks(30, 1, 0);
+	sim.remove(0);
+	check(!sim.vehicles.riding(0) && sp.state.ride === undefined, "leaving the world: off");
+	const left = vehiclesIn(world);
+	check(
+		left.length === 1 && Math.abs(left[0].x + left[0].w / 2 - sp.state.x) < 1,
+		"...the bicycle stays where they were",
+	);
+	checkEq(left[0]?.owner, 3, "...still its builder's");
+	const sp2 = addPlayer(sim, 1, left[0].x + left[0].w / 2, left[0].y - 30);
+	const d2 = driver(sim, sp2);
+	d2.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(1), "somebody else gets on it (anyone may ride, one at a time)");
+	sp2.state.hp = -5;
+	d2.tick(1, 0);
+	d2.tick(1, 0);
+	check(!sim.vehicles.riding(1), "dead: off");
+	check(
+		events.some(e => e.kind === "dismounted" && e.why === "dead"),
+		"...the event says so",
+	);
+	checkEq(vehiclesIn(world).length, 1, "...and the bicycle is back in the world");
+});
+
+section("B9. replication: the rider's own ride in the self block, the vehicle under every other survivor", () => {
+	const { world, sim } = serverWith();
+	const a = addPlayer(sim, 0, 1000, 1000);
+	const b = addPlayer(sim, 1, 1200, 1000);
+	park(world, 22, 1000, 1040);
+	const d = driver(sim, a);
+	d.tick(0, 0, PRESS_E);
+	for (let i = 0; i < 90; i++) d.tick(Math.cos(i / 30), Math.sin(i / 30));
+	const self = REP.selfBlockOf(sim, a);
+	checkEq(self.ride, V.packRide(a.state.ride), "self block: the exact ride key");
+	const other = REP.playerBlockOf(a);
+	checkEq(other.ride, VehicleKind.Motorcycle, "player block: the vehicle kind");
+	check(Math.abs(other.moveAng - V.rideHeading(a.state.ride)) < 1e-9, "...and its heading in moveAng");
+	const snap = { tick: sim.tick, self: REP.selfBlockOf(sim, b), players: [other], zombies: [], bosses: [] };
+	const part = P.decodeSnapshotPart(P.encodeSnapshot(snap).parts[0]);
+	checkEq(
+		part.players[0].ride,
+		VehicleKind.Motorcycle,
+		"through the wire: the other client learns it rides a motorcycle",
+	);
+	const err = Math.abs(
+		((part.players[0].moveAng - V.rideHeading(a.state.ride) + Math.PI * 3) % (Math.PI * 2)) - Math.PI,
+	);
+	check(err < (Math.PI * 2) / 256, "...facing where it faces (u8 angle)", err.toFixed(4));
+	checkEq(part.self.ride, 0, "...and b's own block says b is on foot");
+	const mine = P.decodeSnapshotPart(P.encodeSnapshot({ ...snap, self }).parts[0]);
+	checkEq(mine.self.ride, self.ride, "a's own block through the wire: bit-exact");
+});
 
 // ================================================================ the end
 
