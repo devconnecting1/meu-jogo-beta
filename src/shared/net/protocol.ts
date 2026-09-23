@@ -30,7 +30,8 @@
  *  5. "hp%" of other players and of constructions is a u8 fraction of the maximum (1/255); boss hp is a u16
  *     fraction (its hpMax grows with S(k); the client only draws a bar).
  *  6. Zombie meta: type in bits 0-2 (1..5), big in bit 3, mid ring in bit 4 (client despawn timeout
- *     300/600 ms, §4.4), bits 5-7 reserved = 0. Other players' `swing` is relative, in u8-angle steps.
+ *     300/600 ms, §4.4), the awareness state in bits 5-6 (decision 16), bit 7 reserved = 0. Other players'
+ *     `swing` is relative, in u8-angle steps.
  *  7. Fx and World events carry a 1-byte type tag (not counted in the doc's per-event sizes). MapItemHit (tree,
  *     car, bin shake) is the Fx event SolidShake, since §4.5 routes it "via Fx". A batch bigger than one packet
  *     is split into several packets (never truncated); an event that cannot fit alone is dropped and counted.
@@ -69,6 +70,13 @@
  *     save the SERVER owns (never a client's report). Broadcast only when one of them moved, looked at once a second
  *     (server/net/replication.ts TALLY_EVERY_TICKS), plus one full round two ticks after a survivor joins, so the
  *     newcomer hears everybody's AFTER its PlayerJoined for each of them. Range-checked on decode like the roster.
+ * 16. (IA-03 / IA-05, the zombies' awareness) Each zombie record carries what the SERVER decided the zombie is doing,
+ *     `aware` (shared/sim/ai/memory.ts `Aware`: 0 idle, 1 suspicious, 2 searching, 3 chasing), in bits 5-6 of `meta`,
+ *     which F0 reserved — zero bytes more per zombie, so §4.7's budget does not move. Every value of two bits is a
+ *     state, so it cannot be out of range; bit 7 stays reserved and a record that sets it is still rejected. It is
+ *     server → client only and purely drawn (the marks over the heads, client/view/zombieAwareness.ts): no client
+ *     ever sends a state, and nothing on the client acts on it. The Detect flag keeps its meaning (the moment a chase
+ *     starts, the groan the audio plays).
  */
 import {
 	NetReader,
@@ -395,7 +403,10 @@ const ZOMBIE_FLAGS_MASK = 127;
 const ZOMBIE_HAS_EXTRA = 128;
 const ZOMBIE_META_BIG = 8;
 const ZOMBIE_META_MID = 16;
-const ZOMBIE_META_MASK = 31;
+/** the awareness state, 2 bits from bit 5 (decision 16) */
+const ZOMBIE_META_AWARE = 32;
+export const ZOMBIE_AWARE_MAX = 3;
+const ZOMBIE_META_MASK = 127;
 
 /** the local player's authoritative state (part 0 only); x/y are f32 for exact reconciliation */
 export interface SelfSnap {
@@ -467,6 +478,8 @@ export interface ZombieSnap {
 	big: boolean;
 	/** in the mid interest ring (sent at 10 Hz; client despawn after 600 ms instead of 300 ms) */
 	mid: boolean;
+	/** what the server decided it is doing, 0..ZOMBIE_AWARE_MAX (idle, suspicious, searching, chasing; decision 16) */
+	aware: number;
 	/** jump height / spitter head recoil, 0..255 (raw) */
 	extra?: number;
 }
@@ -640,7 +653,12 @@ function writeZombie(w: NetWriter, z: ZombieSnap): void {
 	w.pos(z.y);
 	w.angle8(z.angle);
 	w.u8((clampInt(z.flags, 0, 255) & ZOMBIE_FLAGS_MASK) + (extra !== undefined ? ZOMBIE_HAS_EXTRA : 0));
-	w.u8(clampInt(z.type, 1, ZOMBIE_TYPE_MAX) + (z.big ? ZOMBIE_META_BIG : 0) + (z.mid ? ZOMBIE_META_MID : 0));
+	w.u8(
+		clampInt(z.type, 1, ZOMBIE_TYPE_MAX) +
+			(z.big ? ZOMBIE_META_BIG : 0) +
+			(z.mid ? ZOMBIE_META_MID : 0) +
+			clampInt(z.aware ?? 0, 0, ZOMBIE_AWARE_MAX) * ZOMBIE_META_AWARE,
+	);
 	if (extra !== undefined) w.u8(extra);
 }
 
@@ -663,6 +681,7 @@ function readZombie(r: NetReader): ZombieSnap | undefined {
 		type: zType,
 		big: (meta & ZOMBIE_META_BIG) !== 0,
 		mid: (meta & ZOMBIE_META_MID) !== 0,
+		aware: math.floor(meta / ZOMBIE_META_AWARE) % (ZOMBIE_AWARE_MAX + 1),
 		extra,
 	};
 }
