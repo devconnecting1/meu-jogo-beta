@@ -24,6 +24,12 @@
  *  2. an action creates at most what the new data needs (one row for an item the list never had);
  *  3. what is on screen always matches the save -- a cached page must never show old data.
  *
+ * Then (part 9) the WARDROBE (client/ui/wardrobe.ts, DESIGN_RULES MON-04 / UI-07) on the same kit and fake tree:
+ * only the tabs that exist, the tile states (dark = yours, iron = worn, padlock + price = locked, blue = selected),
+ * the details panel and its one action, the try-on preview, the purchase request carrying the costume id and NO
+ * price (answered by the server's own rule, server/save/costumes.ts), and selecting, buying, wearing and switching
+ * tabs without creating or destroying an Instance.
+ *
  * Pure Node (>= 18) plus the project's TypeScript, on the shared shims of tools/luau-shim.mjs. The fake tree
  * only models what the kit touches (parenting, Destroy, attributes, property / event signals, Visible); it has
  * no layout engine, so it counts WORK, it does not time it.
@@ -905,6 +911,258 @@ r = phase("volta final pelas 6 abas", () => {
 });
 check("depois de tudo, trocar de aba segue sem criar nem destruir", zero(r), cost(r));
 const alive = bag() === undefined ? 0 : bag().GetDescendants().length + 1;
+
+// ---------------------------------------------------------------- 9. the wardrobe (MON-04), on the same kit
+
+console.log("\n9) o guarda-roupa (MON-04): abas, ladrilhos, a previa e a acao unica\n");
+pack.close();
+{
+	const saveClient = require(join(SRC, "client/systems/saveClient.ts"));
+	const { showWardrobe } = require(join(SRC, "client/ui/wardrobe.ts"));
+	const { buyCostume } = require(join(SRC, "server/save/costumes.ts"));
+	const { COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
+	const { THEME, SURFACE } = require(join(SRC, "client/ui/theme.ts"));
+	const { Z } = require(join(SRC, "shared/engine/colors.ts"));
+	const { PET_Z } = require(join(SRC, "client/view/cosmeticsView.ts"));
+	const { SurvivorPreview } = require(join(SRC, "client/view/cosmeticPreview.ts"));
+	const COS = require(join(SRC, "shared/data/cosmetics.ts"));
+	const { ownsEquip } = require(join(SRC, "shared/game/save.ts"));
+
+	const costume = name => COSTUMES.find(c => c.name === name);
+	const [SANTA, ZOMBIE, COWBOY, CAROLINA] = ["Santa", "Zombie", "Cowboy", "Carolina"].map(costume);
+	// a survivor with 40 coins, the Cowboy bought and worn, and the Carolina of a pack (in the inventory only)
+	for (const c of COSTUMES) {
+		save.costumes[c.id] = 0;
+		save.invenEquip[c.equipId] = 0;
+	}
+	save.money = 40;
+	save.costumes[COWBOY.id] = 1;
+	save.equipOutfit = COWBOY.equipId;
+	save.invenEquip[CAROLINA.equipId] = 1;
+	save.equipPet = -1;
+
+	// the server, as the wardrobe reaches it: the one remote call, recorded, answered by the server's own rule
+	const asked = [];
+	saveClient.sessionReady = () => true;
+	saveClient.invokeShopAction = request => {
+		asked.push(JSON.parse(JSON.stringify(request)));
+		const r = buyCostume(save, request.costumeId);
+		return r.ok ? { ok: true, price: r.price } : { ok: false, reason: r.reason };
+	};
+	// main.client's equip path (the same as the Bag's): owned, into its slot
+	let closedBy = "";
+	const close = showWardrobe(ctx, {
+		onBack: () => {
+			closedBy = "X";
+		},
+		onEquip: id => {
+			if (ownsEquip(save, id)) setEquipped(save, equipSlotOf(id), id);
+		},
+		onUnequip: slot => {
+			setEquipped(save, slot, -1);
+		},
+	});
+	flush();
+	const screen = () => ctx.uiLayer.FindFirstChild("Wardrobe");
+	/** first descendant with that name (hidden or not) */
+	const deep = (root, name) => root?.GetDescendants().find(d => d.Name === name);
+	const page = i => deep(screen(), `Page${i}`);
+	const tile = (i, j) => deep(page(i), `Tile${j}`);
+	const face = t => t.FindFirstChild("PlateFace")?.BackgroundColor3;
+	const locked = t => t.FindFirstChild("Lock")?.Visible === true;
+	const details = () => deep(screen(), "Details");
+	const action = () => deep(details(), "Action");
+	const legend = root => deep(root, "Legend")?.Text;
+	const status = () => legend(deep(details(), "Status"));
+	const statusLabel = () => deep(deep(details(), "Status"), "Label")?.Text;
+	const noteText = () => deep(deep(details(), "Note"), "Text")?.Text ?? "";
+	const title = () => details()?.FindFirstChild("Title")?.Text;
+	const renderFrame = () => {
+		service("RunService").RenderStepped.Fire(1 / 60);
+		flush();
+	};
+	/** the preview's sprites (only the visible ones: the renderer hides what it pooled) */
+	const previewSprites = () =>
+		deep(deep(details(), "PreviewBed"), "Sprites")
+			.GetChildren()
+			.filter(f => f.Visible);
+	const torso = sprites =>
+		sprites
+			.filter(f => f.ZIndex === Z.player + 1)
+			.sort((a, b) => b.Size.X.Offset * b.Size.Y.Offset - a.Size.X.Offset * a.Size.Y.Offset)[0]?.BackgroundColor3;
+	/** the torso colour the world's own drawing gives an outfit look (a detached preview, the same code) */
+	const torsoOf = look => {
+		const ref = new SurvivorPreview(makeInstance("Frame", false), { w: 300, h: 200 });
+		ref.setOutfit(look);
+		ref.draw(0);
+		const c = torso(
+			ref.frame
+				.FindFirstChild("Sprites")
+				.GetChildren()
+				.filter(f => f.Visible),
+		);
+		ref.destroy();
+		return c;
+	};
+	const sameColor = (a, b) =>
+		a !== undefined && b !== undefined && Math.abs(a.R - b.R) + Math.abs(a.G - b.G) + Math.abs(a.B - b.B) < 1e-6;
+	const petShown = () => previewSprites().some(f => f.ZIndex >= PET_Z && f.ZIndex <= PET_Z + 3);
+
+	check("o guarda-roupa abriu", screen() !== undefined);
+	const tabs = deep(screen(), "Tabs")
+		.GetChildren()
+		.filter(c => c.ClassName === "TextButton")
+		.map(b => b.Text);
+	check(
+		"so as abas do que existe: Outfits e Pets",
+		JSON.stringify(tabs) === '["Outfits","Pets"]',
+		JSON.stringify(tabs),
+	);
+	const tilesOf = i =>
+		page(i)
+			.GetDescendants()
+			.filter(d => /^Tile\d+$/.test(d.Name)).length;
+	check("3 trajes e 6 pets", tilesOf(0) === 3 && tilesOf(1) === 6, `${tilesOf(0)} / ${tilesOf(1)}`);
+	check("abre em Outfits", page(0).Visible && !page(1).Visible);
+	check(
+		"sem campo de busca",
+		screen()
+			.GetDescendants()
+			.every(d => d.ClassName !== "TextBox"),
+	);
+
+	// the tiles: the Cowboy is worn (and selected, since it is what you wear); Santa and Zombie are locked
+	const santaTile = tile(0, 0);
+	const cowboyTile = tile(0, 2);
+	check("o traje vestido abre selecionado (azul em relevo)", sameColor(face(cowboyTile), THEME.tabActive));
+	check(
+		"Santa bloqueado: cadeado e preco em moedas",
+		locked(santaTile) && deep(santaTile, "Price").Visible && deep(santaTile, "Amount").Text === String(SANTA.price),
+		deep(santaTile, "Amount")?.Text,
+	);
+	check("liso escuro para o que esta bloqueado e nao selecionado", sameColor(face(santaTile), SURFACE.section));
+	check("contagem na secao: 1 / 3", legend(deep(page(0), "Count")) === "1 / 3", legend(deep(page(0), "Count")));
+	check(
+		"painel: nome, slot, estado e a acao",
+		title() === "Cowboy" &&
+			legend(deep(details(), "Slot")) === "OUTFIT" &&
+			status() === "Equipped" &&
+			action().Text === "Unequip",
+		`${title()} / ${legend(deep(details(), "Slot"))} / ${status()} / ${action().Text}`,
+	);
+	renderFrame();
+	check("a previa veste o Cowboy", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.Cowboy)));
+	check("e sem pet (nenhum vestido)", !petShown());
+
+	// select Santa: a repaint, not a rebuild
+	let r = phase("guarda-roupa: seleciona o Santa", () => click(santaTile, "Santa"));
+	check("selecionar um ladrilho nao cria nem destroi Instance", zero(r), cost(r));
+	check(
+		"Santa selecionado: azul, e ainda com o cadeado",
+		sameColor(face(santaTile), THEME.tabActive) && locked(santaTile),
+	);
+	check("o Cowboy volta a ferro (em uso)", sameColor(face(cowboyTile), THEME.secondary));
+	check(
+		"painel: preco em moedas e Buy for 30 coins",
+		statusLabel() === "Price" &&
+			status() === `${SANTA.price} coins` &&
+			action().Text === `Buy for ${SANTA.price} coins`,
+		`${statusLabel()}: ${status()} / ${action().Text}`,
+	);
+	check("com moedas para pagar, a acao e a principal (verde)", action().GetAttribute("Variant") === "default");
+	renderFrame();
+	check("a previa experimenta o Santa", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.Santa)));
+
+	// buy it: the request is the id and nothing else, the answer is the server's
+	r = phase("guarda-roupa: compra o Santa", () => click(action(), "Buy"));
+	check(
+		"o pedido e so { kind, costumeId }: nenhum preco sai do cliente",
+		asked.length === 1 && JSON.stringify(asked[0]) === JSON.stringify({ kind: "buyCostume", costumeId: SANTA.id }),
+		JSON.stringify(asked),
+	);
+	check("comprar atualiza no lugar", zero(r), cost(r));
+	check(
+		"as moedas e a posse vem do servidor",
+		save.money === 40 - SANTA.price && save.costumes[SANTA.id] === 1,
+		`${save.money}`,
+	);
+	check("o ladrilho perde o cadeado", !locked(santaTile));
+	check(
+		"o painel diz Owned e oferece Equip",
+		status() === "Owned" && action().Text === "Equip",
+		`${status()} / ${action().Text}`,
+	);
+	check("contagem: 2 / 3", legend(deep(page(0), "Count")) === "2 / 3");
+
+	r = phase("guarda-roupa: veste o Santa", () => click(action(), "Equip"));
+	check("vestir atualiza no lugar", zero(r), cost(r));
+	check("o Santa esta vestido (o mesmo caminho do Bag)", save.equipOutfit === SANTA.equipId);
+	check("o Cowboy volta a ser so seu (liso escuro)", sameColor(face(cowboyTile), SURFACE.section));
+	check(
+		"o painel oferece Unequip, em ferro",
+		action().Text === "Unequip" && action().GetAttribute("Variant") === "secondary",
+	);
+	click(action(), "Unequip");
+	check("tirar deixa o slot vazio", save.equipOutfit === -1 && action().Text === "Equip");
+
+	// too few coins: the button stays pressable, the server says no, nothing moves
+	click(tile(0, 1), "Zombie");
+	check("sem moedas: a acao fica discreta (outline)", action().GetAttribute("Variant") === "outline");
+	check(
+		"e a nota diz quantas moedas voce tem",
+		noteText().startsWith("Not enough coins") && noteText().includes(`${save.money}`),
+		noteText(),
+	);
+	click(action(), "Buy Zombie");
+	check(
+		"o servidor recusa por falta de moedas",
+		asked.length === 2 && save.costumes[ZOMBIE.id] === 0 && save.money === 40 - SANTA.price,
+	);
+
+	// the Pets page
+	r = phase("guarda-roupa: aba Pets", () => click(deep(screen(), "Tabs").FindFirstChild("Tab1"), "Pets"));
+	check("trocar de aba nao cria nem destroi Instance", zero(r), cost(r));
+	check("Pets aparece, Outfits some", page(1).Visible && !page(0).Visible);
+	check(
+		"sem pet vestido, abre no primeiro (Pigeon)",
+		title() === "Pigeon" && legend(deep(details(), "Slot")) === "PET",
+		title(),
+	);
+	click(tile(1, 3), "Carolina");
+	check(
+		"a Carolina de um pacote e sua, mas diz de onde veio",
+		status() === "From a pack" && action().Text === "Equip",
+		status(),
+	);
+	check("e que dura ate o proximo New game", noteText().startsWith("Came in a pack"), noteText());
+	click(action(), "Equip Carolina");
+	check("a Carolina vai para o slot do pet", save.equipPet === CAROLINA.equipId && status() === "Equipped");
+	renderFrame();
+	check("a previa mostra o pet", petShown());
+	check("com o traje que voce veste (nenhum)", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.None)));
+
+	r = phase("guarda-roupa: 4 trocas de aba", () => {
+		for (const i of [0, 1, 0, 1]) click(deep(screen(), "Tabs").FindFirstChild(`Tab${i}`), `tab ${i}`);
+	});
+	check("ir e voltar entre as abas segue sem criar nem destruir", zero(r), cost(r));
+
+	// the red X, and closing
+	click(deep(screen(), "Close"), "X");
+	check("o X vermelho volta para quem abriu", closedBy === "X");
+	const drawing = service("RunService").RenderStepped.conns.length;
+	close();
+	check("fechar remove a tela", screen() === undefined);
+	check(
+		"e a previa para de desenhar (a conexao de quadro e desligada)",
+		service("RunService").RenderStepped.conns.length === drawing - 1,
+		`${drawing} -> ${service("RunService").RenderStepped.conns.length}`,
+	);
+	check(
+		"as cores de torso comparadas acima sao mesmo diferentes entre si",
+		!sameColor(torsoOf(COS.OutfitLook.Cowboy), torsoOf(COS.OutfitLook.Santa)) &&
+			!sameColor(torsoOf(COS.OutfitLook.None), torsoOf(COS.OutfitLook.Cowboy)),
+	);
+}
 
 // ---------------------------------------------------------------- report
 

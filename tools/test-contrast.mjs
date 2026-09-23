@@ -270,6 +270,19 @@ const PAIRS = [
 	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "sulco entre as linhas (lista) contra o poco"],
 	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "sulco entre duas linhas contra a celula de rotulo"],
 	["SURFACE.cell", "SURFACE.cellLabel", MIN_TONE, "celula de valor x celula de rotulo (dois tons da mesma linha)"],
+
+	// --- the wardrobe's tiles (UI-07 "Ladrilho", client/ui/wardrobe.ts): on the dark groove, one state per face ---
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "ladrilho seu / bloqueado (liso escuro) sobre o leito"],
+	["THEME.secondary", "SURFACE.groove", MIN_UI, "ladrilho em uso (ferro) sobre o leito escuro"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "ladrilho selecionado (azul em relevo) sobre o leito escuro"],
+	["THEME.secondary", "SURFACE.section", MIN_TONE, "ladrilho em uso x ladrilho seu: o que voce veste se destaca"],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, "cadeado de pixel e preco sobre o ladrilho bloqueado"],
+	[
+		"THEME.tabActiveForeground",
+		"THEME.tabActive",
+		MIN_TEXT,
+		"cadeado e preco sobre o ladrilho bloqueado selecionado",
+	],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */

@@ -16,6 +16,10 @@
  * survivor. The scale is the one asked for (3.5× by default) unless the box is too small for the scene, in which
  * case it shrinks until everything fits: a preview must never clip the hat it is selling.
  *
+ * A wardrobe TILE draws one cosmetic on its own (`subject`): "outfit" is the survivor alone, framed on the survivor;
+ * "pet" is the pet alone, framed on the pet. Same drawing code, a smaller scene, so a tile shows exactly what the
+ * big preview and the world show.
+ *
  * Coordinates are in the parent's own units (the UI's design units under its UIScale), exactly like any other
  * widget; nothing here reads the screen size.
  */
@@ -41,22 +45,48 @@ const PET_Y = 12;
  * pet and checks each sprite lands inside this box.
  */
 export const PREVIEW_SCENE = { minX: -36, maxX: 84, minY: -26, maxY: 48 } as const;
+/** an outfit's tile: the survivor alone, centred on it (widest hat, dagger held out, shadow) */
+export const OUTFIT_SCENE = { minX: -34, maxX: 30, minY: -24, maxY: 44 } as const;
+/** a pet's tile: the pet alone, standing at the origin (the eagle's open wings, a dog's length and tail) */
+export const PET_SCENE = { minX: -30, maxX: 30, minY: -28, maxY: 32 } as const;
 
-/** scale and camera centre that fit PREVIEW_SCENE in a w × h box, at `preferred` or less */
+/** what a preview frames: the survivor with a pet at its side (the wardrobe's big preview), or one of the two */
+export type PreviewSubject = "both" | "outfit" | "pet";
+
+export interface PreviewScene {
+	readonly minX: number;
+	readonly maxX: number;
+	readonly minY: number;
+	readonly maxY: number;
+}
+
+/** the scene a subject frames */
+export function sceneOf(subject: PreviewSubject): PreviewScene {
+	if (subject === "outfit") return OUTFIT_SCENE;
+	if (subject === "pet") return PET_SCENE;
+	return PREVIEW_SCENE;
+}
+
+/** scale and camera centre that fit a scene (PREVIEW_SCENE by default) in a w × h box, at `preferred` or less */
 export interface PreviewFit {
 	scale: number;
 	camX: number;
 	camY: number;
 }
 
-export function previewFit(w: number, h: number, preferred = PREVIEW_SCALE): PreviewFit {
-	const sw = PREVIEW_SCENE.maxX - PREVIEW_SCENE.minX;
-	const sh = PREVIEW_SCENE.maxY - PREVIEW_SCENE.minY;
+export function previewFit(
+	w: number,
+	h: number,
+	preferred = PREVIEW_SCALE,
+	scene: PreviewScene = PREVIEW_SCENE,
+): PreviewFit {
+	const sw = scene.maxX - scene.minX;
+	const sh = scene.maxY - scene.minY;
 	const fit = math.min(w / sw, h / sh);
 	return {
 		scale: math.max(0.1, math.min(preferred, fit)),
-		camX: (PREVIEW_SCENE.minX + PREVIEW_SCENE.maxX) / 2,
-		camY: (PREVIEW_SCENE.minY + PREVIEW_SCENE.maxY) / 2,
+		camX: (scene.minX + scene.maxX) / 2,
+		camY: (scene.minY + scene.maxY) / 2,
 	};
 }
 
@@ -68,6 +98,8 @@ export interface SurvivorPreviewOpts {
 	y?: number;
 	/** preferred magnification of the in-world size (default PREVIEW_SCALE); shrinks if the box is too small */
 	scale?: number;
+	/** what is framed (default "both"): a tile shows only its outfit ("outfit") or only its pet ("pet") */
+	subject?: PreviewSubject;
 	zIndex?: number;
 	name?: string;
 }
@@ -77,6 +109,7 @@ export class SurvivorPreview {
 	readonly frame: Frame;
 	/** the magnification actually used */
 	readonly scale: number;
+	readonly subject: PreviewSubject;
 	private readonly renderer: Renderer;
 	private readonly cam = new Camera();
 	private readonly look = createLook();
@@ -103,7 +136,9 @@ export class SurvivorPreview {
 		this.frame = frame;
 		this.renderer = new Renderer(frame, "Sprites");
 		this.renderer.setView(opts.w, opts.h);
-		const fit = previewFit(opts.w, opts.h, opts.scale ?? PREVIEW_SCALE);
+		const subject = opts.subject ?? "both";
+		this.subject = subject;
+		const fit = previewFit(opts.w, opts.h, opts.scale ?? PREVIEW_SCALE, sceneOf(subject));
 		this.scale = fit.scale;
 		const cam = this.cam;
 		cam.setView(opts.w, opts.h);
@@ -122,9 +157,10 @@ export class SurvivorPreview {
 		look.shadowX = so.x;
 		look.shadowY = so.y;
 
+		// alone on its tile, the pet stands where the survivor would: at the centre of its own scene
 		const pet = this.pet;
-		pet.x = PET_X;
-		pet.y = PET_Y;
+		pet.x = subject === "pet" ? 0 : PET_X;
+		pet.y = subject === "pet" ? 0 : PET_Y;
 		pet.angle = PREVIEW_FACING;
 		pet.started = true;
 	}
@@ -158,8 +194,11 @@ export class SurvivorPreview {
 		const r = this.renderer;
 		r.beginFrame();
 		this.look.clock = clock;
-		if (this.petLook !== PetLook.None) drawPet(r, this.cam, this.pet, this.petLook, clock, this.sun);
-		drawSurvivor(r, this.cam, this.look, this.trail);
+		const subject = this.subject;
+		if (subject !== "outfit" && this.petLook !== PetLook.None) {
+			drawPet(r, this.cam, this.pet, this.petLook, clock, this.sun);
+		}
+		if (subject !== "pet") drawSurvivor(r, this.cam, this.look, this.trail);
 		r.endFrame();
 	}
 

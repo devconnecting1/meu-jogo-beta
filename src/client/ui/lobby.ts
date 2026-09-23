@@ -9,7 +9,9 @@ import { onWalletChanged } from "../systems/saveClient";
 import { popup } from "./popup";
 import { GAME, TEXT, THEME, fontOf, hex, roleFont, space } from "./theme";
 import {
+	BUTTON_SIZE,
 	Button,
+	CARD_STRIP_INSET,
 	Card,
 	CardHeader,
 	Dialog,
@@ -17,6 +19,7 @@ import {
 	Separator,
 	autoFocus,
 	buttonForeground,
+	cardStripHeight,
 	fmtInt,
 	makeCoinPill,
 	makeLabel,
@@ -31,6 +34,8 @@ import {
 export interface LobbyHandlers {
 	onPlay: () => void;
 	onShop: () => void;
+	/** the wardrobe (MON-04): outfits and pets, tried on, bought and worn */
+	onWardrobe: () => void;
 	onSettings: () => void;
 	onCredits?: () => void;
 	/** `thenPlay`: opened from the Play prompt, start the game when the tutorial ends */
@@ -224,7 +229,21 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 	const card = Card(body, "Survivor", { x: MARGIN, y: TOP, w: LEFT_W, h: 420 });
 	const pad = space(6);
 	const innerW = LEFT_W - pad * 2;
-	const contentY = CardHeader(card, tr("Survivor"));
+	// the wardrobe sits on the survivor's own header, beside the loadout that shows the outfit and the pet it changes
+	const wardrobeW = 120;
+	const wardrobeH = BUTTON_SIZE.sm.h;
+	const stripMargin = CARD_STRIP_INSET + space(1.5);
+	const contentY = CardHeader(card, tr("Survivor"), undefined, { action: stripMargin + wardrobeW + space(2) });
+	Button(card, "Wardrobe", tr("Wardrobe"), {
+		x: LEFT_W - stripMargin - wardrobeW,
+		y: CARD_STRIP_INSET + (cardStripHeight() - wardrobeH) / 2,
+		w: wardrobeW,
+		h: wardrobeH,
+		size: "sm",
+		variant: "secondary",
+		zIndex: card.ZIndex + 3,
+		onClick: (): void => handlers.onWardrobe(),
+	});
 	const tiles: Array<[string, string, Color3]> = [
 		[`${save.day}`, tr("Current day"), THEME.foreground],
 		[`${save.bestDay}`, tr("Best day"), THEME.foreground],

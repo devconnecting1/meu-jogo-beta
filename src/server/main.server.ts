@@ -10,7 +10,7 @@ import {
 	sanitizeStoredSave,
 	walletOf,
 } from "shared/game/save";
-import { COSTUMES, ECONOMY, rebirthPrice, SHOP_PACKS } from "shared/data/shop";
+import { ECONOMY, rebirthPrice, SHOP_PACKS } from "shared/data/shop";
 import {
 	createRemotes,
 	LoadResult,
@@ -30,6 +30,7 @@ import { onIntent } from "./net/remotes";
 import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
+import { buyCostume } from "./save/costumes";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
@@ -839,13 +840,11 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		save.money -= price;
 		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
 	} else if (req.kind === "buyCostume") {
-		if (!isIndex(req.costumeId, COSTUMES.size())) return fail("invalid", s);
-		const id = req.costumeId;
-		if ((save.costumes[id] ?? 0) > 0) return fail("owned", s);
-		price = COSTUMES[id].price;
-		if (save.money < price) return fail("funds", s);
-		save.money -= price;
-		save.costumes[id] = 1;
+		// the wardrobe (MON-04): id, price, ownership and coins are all decided in server/save/costumes.ts -- the
+		// request carries nothing but the id, and a `price` field in it is never read
+		const bought = buyCostume(save, req.costumeId);
+		if (!bought.ok) return fail(bought.reason, s);
+		price = bought.price;
 	} else if (req.kind === "rebirth" || req.kind === "newRun") {
 		/*
 		 * The two ways out of a death, decided HERE and not by the client (server/sim/life.ts rule 5, the owner's

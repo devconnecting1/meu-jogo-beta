@@ -445,9 +445,7 @@ Key,Context,Example,Source
 ,,,Close
 ,,,Buy
 ,,,Owned
-,,,Unlock
 ,,,Packs
-,,,Costumes
 ,,,Earn coins
 ,,,Delivered when your next game starts
 ,,,Progress not loaded
@@ -459,9 +457,7 @@ Key,Context,Example,Source
 ,,,Saving...
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
-,,,Menu
 ,,,Back to game
-,,,Backpack
 ,,,Save
 ,,,Home
 ,,,Game over
@@ -471,7 +467,6 @@ Key,Context,Example,Source
 ,,,Your run is over
 ,,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
 ,,,Purchased
-,,,Unlocked
 ,,,Not enough coins
 ,,,Too many packs waiting
 ,,,Already owned
@@ -523,3 +518,17 @@ Key,Context,Example,Source
 ,,,days
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,The backpack and the menu never stop the world: open them somewhere safe
+,,,Wardrobe
+,,,Outfits
+,,,Pets
+,,,Status
+,,,Equipped
+,,,Unequip
+,,,From a pack
+,,,Buy for
+,,,coins
+,,,Everyone sees it on your survivor. It changes nothing else.
+,,,It follows you and everyone sees it. It never fights or collects.
+,,,Came in a pack: it stays until a New game.
+,,,"What you buy is yours for good, and everyone sees it. Coins are earned by playing."
+,,,"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it."
