@@ -297,6 +297,22 @@ const PAIRS = [
 		"cadeado e preco sobre o ladrilho bloqueado selecionado",
 	],
 
+	// --- the Bag (UI-11, client/ui/bagGrid.ts / bagPanel.ts): tiles on the groove, the details panel's dark beds. The
+	// tile chips are the hotbar's (count / ammo on SURFACE.well, below); what is new is listed here
+	["GAME.success", "SURFACE.well", MIN_UI, "Bag: o check verde de EQUIPPED no chip escuro do ladrilho"],
+	["THEME.foreground", "SURFACE.section", MIN_UI, "Bag: glifo da estacao e cadeado sobre o ladrilho (ferro escuro)"],
+	["THEME.foreground", "THEME.secondary", MIN_UI, "Bag: glifo da estacao sobre o ladrilho equipado; glifo da aba"],
+	["THEME.foreground", "THEME.tabActive", MIN_UI, "Bag: glifo da estacao sobre o ladrilho selecionado / aba ativa"],
+	["STAT.value", "SURFACE.groove", MIN_TEXT, "Bag: painel, numeros em amarelo no leito dos stats"],
+	["STAT.bonus", "SURFACE.groove", MIN_TEXT, "Bag: painel, bonus em verde no leito dos stats"],
+	["STAT.effect", "SURFACE.groove", MIN_TEXT, "Bag: painel, efeito de status em laranja no leito dos stats"],
+	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "Bag: painel, penalidade e ingrediente faltando em vermelho"],
+	["GAME.success", "SURFACE.groove", MIN_TEXT, "Bag: receita, a estacao esta perto (verde)"],
+	["THEME.destructive", "SURFACE.groove", MIN_TEXT, "Bag: receita, falta a estacao (vermelho)"],
+	["GAME.xp", "SURFACE.groove", MIN_TEXT, "Bag: skills, os pontos para gastar"],
+	["GAME.xp", "SURFACE.well", MIN_UI, "Bag: pip aceso do nivel da skill no chip escuro"],
+	["SURFACE.line", "SURFACE.well", MIN_UI, "Bag: pip apagado do nivel da skill"],
+
 	// --- the HUD console (UI-09, client/ui/hudConsole.ts): the UI-07 window body at the bottom centre. The bar labels
 	// ("HP 88 / 100") are small Bold text centred on the bar, so the FILL owes them 4,5:1 (UI-05); where the bar is
 	// empty the same label sits on the dark groove

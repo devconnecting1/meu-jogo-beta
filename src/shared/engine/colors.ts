@@ -80,6 +80,85 @@ export const COLORS = {
 };
 
 /**
+ * The palette of the item icons (shared/data/itemIcons.ts, drawn by client/ui/itemIcon.ts): ART colours, like the
+ * world's above and the cosmetics' (client/view/cosmeticsView.ts), not UI roles -- a pistol is gunmetal and an apple
+ * is red whatever the theme says, so these never go through the tweakcn theme (DESIGN_RULES UI-01 is about the
+ * interface's own colours; UI-11 about the icons). Keyed by the one character an icon's rows use for the colour.
+ *
+ * Every icon has a 1-pixel `k` outline, so it reads on any tile face (dark iron, the iron of an equipped item, the
+ * blue of the selection) and at 32 px (MON-02's floor): a silhouette first, 2-4 colours and a highlight inside.
+ */
+export const ICON_ART: Record<string, Color3> = {
+	// the outline and the darkest neutrals
+	k: Color3.fromRGB(22, 20, 24),
+	X: Color3.fromRGB(44, 44, 50),
+	g: Color3.fromRGB(62, 64, 72),
+	G: Color3.fromRGB(98, 102, 112),
+	// steel: dark, mid, the shine of an edge
+	S: Color3.fromRGB(106, 114, 126),
+	s: Color3.fromRGB(158, 166, 178),
+	w: Color3.fromRGB(222, 228, 236),
+	// stone and concrete
+	N: Color3.fromRGB(84, 84, 90),
+	q: Color3.fromRGB(128, 128, 134),
+	Q: Color3.fromRGB(174, 174, 178),
+	// wood
+	B: Color3.fromRGB(94, 60, 34),
+	b: Color3.fromRGB(146, 98, 58),
+	y: Color3.fromRGB(194, 144, 90),
+	// leather
+	L: Color3.fromRGB(86, 54, 34),
+	l: Color3.fromRGB(134, 86, 52),
+	// red (meat, blood, a first-aid cross, a fuel can)
+	R: Color3.fromRGB(122, 22, 28),
+	r: Color3.fromRGB(200, 46, 50),
+	p: Color3.fromRGB(238, 120, 114),
+	// cooked brown (roast meat, bread crust, baked potato)
+	M: Color3.fromRGB(98, 54, 28),
+	m: Color3.fromRGB(162, 98, 50),
+	n: Color3.fromRGB(206, 140, 80),
+	// bone, fat, cream
+	f: Color3.fromRGB(240, 228, 204),
+	// green (a leaf, zombie rot, a circuit board is `C`)
+	E: Color3.fromRGB(38, 88, 40),
+	e: Color3.fromRGB(78, 152, 66),
+	v: Color3.fromRGB(140, 202, 100),
+	C: Color3.fromRGB(34, 108, 70),
+	// brass and gold
+	O: Color3.fromRGB(146, 104, 28),
+	o: Color3.fromRGB(214, 166, 60),
+	u: Color3.fromRGB(250, 216, 112),
+	// fire
+	F: Color3.fromRGB(212, 70, 28),
+	x: Color3.fromRGB(246, 142, 40),
+	z: Color3.fromRGB(254, 222, 96),
+	// blue: cloth, glass, a screen
+	A: Color3.fromRGB(40, 66, 118),
+	a: Color3.fromRGB(76, 124, 194),
+	c: Color3.fromRGB(158, 208, 240),
+	// canvas, cloth, paper
+	T: Color3.fromRGB(148, 122, 86),
+	t: Color3.fromRGB(206, 182, 136),
+	h: Color3.fromRGB(236, 220, 184),
+	// white and light grey (a bandage, a label, a bulb)
+	i: Color3.fromRGB(200, 202, 206),
+	W: Color3.fromRGB(248, 248, 244),
+	// purple (a sedative, a berry)
+	P: Color3.fromRGB(80, 42, 108),
+	j: Color3.fromRGB(142, 88, 178),
+	// the light of a torch or a bulb
+	Y: Color3.fromRGB(255, 244, 164),
+};
+
+/**
+ * The order the colours of an icon are painted in, first to last. The drawer covers each colour's pixels with as few
+ * Frames as it can, and a Frame may spill over pixels a LATER colour paints anyway -- so the outline, painted first,
+ * is a handful of big rectangles under the whole silhouette, and each colour after it is its own few rectangles.
+ * The order only changes how many Frames an icon costs, never what it looks like.
+ */
+export const ICON_ART_ORDER = "kXgNBLRMEPACOFGSqblmTerajxoytQsnhifpvcuzwWY";
+
+/**
  * Draw layers of the world (ZIndex inside the sprite layer; the HUD/dark overlay are separate
  * sibling layers above the whole world). Lowest → highest:
  * ground < road/sidewalk < static shadows < building floor < decals (blood, puddles) <
