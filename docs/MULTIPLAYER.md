@@ -307,7 +307,7 @@ Se passar do alvo (p95 > 6 ms), na ordem: `SIM_HZ` cai para **30** (seção 3.1,
 | 6 jogadores espalhados (pior) | ~46 mil–55 mil | ~0,75 s interpretado (**~1,3 Hz**), ~0,25 s nativo (**~4 Hz**) (degrada suave: só o caminho fica mais velho) |
 
 - **Zumbi fora de qualquer tile ativo:** usa `steer` direto até o jogador mais próximo em linha reta, como hoje fora da janela.
-- **Coleira** (`LEASH_SPAWN` 2000 / `LEASH_PLAYER` 600), detecção por ruído (anéis de **todos** os jogadores), mira do cuspidor, pulo e investida passam a usar `targetOf(z)`, com o jogador mais próximo como fallback.
+- **Coleira** (`LEASH_SPAWN` 2000 / `LEASH_PLAYER` 600), detecção por ruído (anéis de **todos** os jogadores, de dia e de noite — IA-02), mira do cuspidor, pulo e investida passam a usar `targetOf(z)`, com o jogador mais próximo como fallback. Um zumbi **desconfiado** cujo lugar lembrado está a até 400 u de um sobrevivente vai até lá pelo campo (IA-03).
 
 ### 3.4 Separação e LOD
 
@@ -322,6 +322,8 @@ Se passar do alvo (p95 > 6 ms), na ordem: `SIM_HZ` cai para **30** (seção 3.1,
   | Longe | > 1600 u | 5–10 Hz (a cada 6–12 ticks), sem ruído nem alpha (ninguém o vê) |
 
   Escalonado por `zombieId % N` para distribuir as recomputações ao longo dos ticks e evitar um pico de CPU concentrado num único tick (o mesmo espírito do orçamento por tempo do flow field).
+
+- **Sentidos com LOD** (IA-01..06 da bíblia, `shared/sim/ai/perception.ts`): cada zumbi **olha** (cone, facho de lanterna e o raio de linha de visão contra `blocksSight`) a **10 Hz** no anel próximo, **5 Hz** no médio e **2 Hz** longe, com a primeira olhada de cada um num ponto do intervalo derivado do id (um lote que nasce junto nunca olha no mesmo tick) e no máximo **24 raios por tick** (quem o orçamento não atende fica com a última resposta e olha no tick seguinte). Entre olhadas vale a última resposta, exceto para um sobrevivente que saiu do alcance (renascimento, teleporte). O toque (64 u) é checado todo tick, de graça. Os alcances de cada sobrevivente (luz, chuva, Stealth) são calculados uma vez por tick, em pool. Os anéis de ruído testam distância antes de estado e se fundem quando nascem a menos de 100 u de um anel jovem do mesmo tipo (rajada de metralhadora = um ruído). Custo medido: `test:server-sim` (k) (60 e 100 zumbis, dia e noite) e `test:ai` [11] (150 zumbis, 6 jogadores), contra a versão anterior com `PZ_SRC`.
 
 ### 3.5 População, spawn e ondas escalando com jogadores
 
