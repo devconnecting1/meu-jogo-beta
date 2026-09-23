@@ -1,5 +1,5 @@
 /*
- * The electric builds, drawn (docs/DESIGN_RULES.md ELE-01..ELE-08, ART-02): pixel art as DATA, the way
+ * The electric builds, drawn (docs/DESIGN_RULES.md ELE-09, ART-02): pixel art as DATA, the way
  * shared/data/buildingSigns.ts keeps the storefront signs and shared/data/itemIcons.ts the item icons.
  *
  * Each sprite is a grid at the town art's 4 world units per texel (ART-02), one character per texel in the colours of

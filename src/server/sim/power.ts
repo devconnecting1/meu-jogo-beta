@@ -1,5 +1,5 @@
 /*
- * The electric grid, decided by the SERVER (docs/DESIGN_RULES.md §10A ELE-01..ELE-08, docs/MULTIPLAYER.md §8.4).
+ * The electric grid, decided by the SERVER (docs/DESIGN_RULES.md §10A ELE-01..ELE-08, docs/MULTIPLAYER.md §3.6, §4.5).
  *
  * Every electric build is a `Solid` the server world already holds (server/sim/build.ts places it); this module
  * keeps, beside each one, the little state electricity needs — a box's charge, a drone's battery, a generator's
