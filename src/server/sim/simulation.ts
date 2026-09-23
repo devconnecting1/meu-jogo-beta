@@ -42,6 +42,7 @@ import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
 import { ServerItems } from "./items";
+import { KEEP_AFTER_LEAVE_S } from "./life";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
 import { TitleId } from "shared/data/titles";
 import { creditLifeNight, grantTitle } from "../save/titles";
@@ -137,6 +138,14 @@ interface Presence {
 	 * them a Survivor. Cleared at every daybreak, and by a new world.
 	 */
 	nightCredited?: boolean;
+}
+
+/** one survivor's filtered ping (server/sim/combat.ts `setPing`), kept across a leave/enter by `setPing` */
+interface PingMemory {
+	/** seconds */
+	pingS: number;
+	/** the tick of its last sample */
+	at: number;
 }
 
 export class ServerSimulation {
@@ -236,8 +245,8 @@ export class ServerSimulation {
 	private readonly intents = new Map<number, Array<IntentMessage>>();
 	/** §3.6: who was alive and at the controls during the current world day, by UserId */
 	private readonly presence = new Map<number, Presence>();
-	/** the filtered ping of everyone who played on this server, by UserId (`setPing`): one number each */
-	private readonly pings = new Map<number, number>();
+	/** the filtered ping of whoever played on this server lately, by UserId, and the tick it was last sampled (`setPing`) */
+	private readonly pings = new Map<number, PingMemory>();
 	/** ticks the world ran since the previous midnight (or since boot): what "half the day" is half of */
 	private dayTicks = 0;
 	/** the Heartbeat's debt (server/sim/heartbeat.ts): the one rule test:input drives too */
@@ -641,16 +650,38 @@ export class ServerSimulation {
 	 * The ping the host measured for this survivor, once a second (server/sim/combat.ts `setPing`: the rewind
 	 * ceiling, slow to rise and quick to fall). The combat's slot state starts over on every leave/enter and with
 	 * every new town (MP-22), and it takes a first sample as it is: a link throttled at the moment of re-entry set
-	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, for as long as
-	 * this server runs, and a returning survivor's first sample is filtered against it.
+	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, and a returning
+	 * survivor's first sample is filtered against it.
+	 *
+	 * For as long as their body is (life.ts KEEP_AFTER_LEAVE_S), not for as long as the server runs: someone gone
+	 * longer comes back as a newcomer, and the table holds the survivors measured lately instead of one entry for
+	 * everyone who ever played here (the second review of the zombie-motion branch, NIT 3). It is swept when a
+	 * survivor it has no recent sample of is measured -- the one moment it can grow.
 	 */
 	setPing(sp: ServerPlayer, seconds: number): void {
 		const combat = this.combat;
 		if (combat === undefined) return;
-		const known = this.pings.get(sp.userId);
-		if (known !== undefined) combat.seedPing(sp.slot, known);
+		const oldest = this.tick - KEEP_AFTER_LEAVE_S * this.simHz;
+		let known = this.pings.get(sp.userId);
+		const recent = known !== undefined && known.at >= oldest;
+		if (known !== undefined && recent) combat.seedPing(sp.slot, known.pingS);
 		combat.setPing(sp.slot, seconds);
-		this.pings.set(sp.userId, combat.pingOf(sp.slot));
+		if (known === undefined || !recent) {
+			this.forgetPingsBefore(oldest);
+			known = { pingS: 0, at: 0 };
+			this.pings.set(sp.userId, known);
+		}
+		known.pingS = combat.pingOf(sp.slot);
+		known.at = this.tick;
+	}
+
+	/** drops every ping last sampled before tick `oldest` */
+	private forgetPingsBefore(oldest: number): void {
+		const gone = new Array<number>();
+		for (const [userId, p] of this.pings) {
+			if (p.at < oldest) gone.push(userId);
+		}
+		for (const userId of gone) this.pings.delete(userId);
 	}
 
 	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */

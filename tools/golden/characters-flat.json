@@ -1,0 +1,6 @@
+{
+	"note": "draw-call digest of the flat survivors, zombies and pets of tools/character-cast.mjs (tools/test-world-art.mjs --golden-chars)",
+	"recordedFrom": "f3c5564 (main before the characters' art)",
+	"count": 1164,
+	"sha1": "897481eedd2133cfd48d1ed098698ca7216db85b"
+}

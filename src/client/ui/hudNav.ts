@@ -17,9 +17,13 @@
  * Which gadget shows what is data (shared/data/equips.ts EQUIP_NAV). Both live in the HAND slot: one at a time, and
  * never together with the flashlight or a watch -- what you hold is a choice.
  *
- * Top left, under the Roblox bar (UI-02), the corner the day plate (top centre), the survivors chip (right of it) and
- * the toasts (top right) leave free, and far from the thumbs on touch (UI-09). Built once per HUD mount with every
- * frame it can need (the map's pools included): updating it never creates an Instance (test:hud, test:items).
+ * Top left, under the Roblox bar (UI-02), the corner the rest of the HUD leaves free: the console (with the day clock
+ * and the survivors chip) at the bottom, the messages at the top centre and the toasts at the top right, and far from
+ * the thumbs on touch (UI-09). On touch the clock and the chip sit with Menu and Bag in the top-right corner; only a
+ * crowded layout (the largest controls, a squeezed or upright phone) sends them here, the one corner left, and then this
+ * plate -- the optional one, shown only with a gadget in hand -- moves down under them (`avoid`). Built once per HUD
+ * mount with every frame it can need (the map's pools included): updating it never creates an Instance (test:hud,
+ * test:items).
  */
 import { EQUIP_NAV, EquipNav } from "shared/data/equips";
 import type { PlayerSaveData } from "shared/game/save";
@@ -79,6 +83,18 @@ export function navGadgetOf(save: PlayerSaveData): EquipNav | undefined {
 	return save.equipHand >= 0 ? EQUIP_NAV[save.equipHand] : undefined;
 }
 
+/**
+ * The screen rect the plate can take on a `vw` x `vh` screen with the Roblox bar `inset` px tall, at the HUD size `k`,
+ * in px [left, top, right, bottom], before `avoid` moves it: the larger of its two faces, the GPS map, both anchored at
+ * the same corner (makeAnchored's recipe, as hud.ts messageReach).
+ */
+export function navReach(vw: number, vh: number, inset: number, k: number): [number, number, number, number] {
+	const s = math.min(vw / W.DESIGN_W, vh / W.DESIGN_H) * k;
+	const x = (MARGIN_X / W.DESIGN_W) * vw;
+	const y = inset + (MARGIN_Y / W.DESIGN_H) * vh;
+	return [x, y, x + MAP_W * s, y + MAP_H * s];
+}
+
 /** the needle's turn towards (dx, dy) in the Rotation convention (degrees clockwise from screen-up = world north) */
 export function bearingDeg(dx: number, dy: number): number {
 	return math.deg(math.atan2(dx, -dy));
@@ -112,11 +128,24 @@ export class HudNav {
 	private nextMap = 0;
 	private angle = math.huge;
 	private texts = new Map<TextLabel, string>();
+	/** both plates, full screen: moved down (never sideways) by `avoid`, so the plates keep makeAnchored's own place */
+	private readonly holder: Frame;
+	private readonly k: number;
 
 	constructor(root: Frame, tr: (key: string) => string, k: number) {
 		this.tr = tr;
+		this.k = k;
+		const holder = new Instance("Frame");
+		holder.Name = "Nav";
+		holder.BackgroundTransparency = 1;
+		holder.BackgroundColor3 = THEME.background;
+		holder.BorderSizePixel = 0;
+		holder.Size = UDim2.fromScale(1, 1);
+		holder.ZIndex = 2;
+		holder.Parent = root;
+		this.holder = holder;
 		// ---- the compass: a dial with the needle, what it points at and how far
-		const compass = W.makeAnchored(root, "NavCompass", 0, 0, COMPASS_W, COMPASS_H, MARGIN_X, MARGIN_Y, true, k);
+		const compass = W.makeAnchored(holder, "NavCompass", 0, 0, COMPASS_W, COMPASS_H, MARGIN_X, MARGIN_Y, true, k);
 		compass.ZIndex = 2;
 		compass.Visible = false;
 		this.compass = compass;
@@ -150,7 +179,7 @@ export class HudNav {
 		});
 
 		// ---- the GPS: the map well, its pools, north, and the distance to the camp under it
-		const map = W.makeAnchored(root, "NavMap", 0, 0, MAP_W, MAP_H, MARGIN_X, MARGIN_Y, true, k);
+		const map = W.makeAnchored(holder, "NavMap", 0, 0, MAP_W, MAP_H, MARGIN_X, MARGIN_Y, true, k);
 		map.ZIndex = 2;
 		map.Visible = false;
 		this.map = map;
@@ -205,6 +234,32 @@ export class HudNav {
 	 * One frame of the HUD: which plate shows (the hand's gadget), the needle, and -- 4 times a second -- the map.
 	 * `now` is the HUD's clock (seconds).
 	 */
+	/**
+	 * hud.ts, on touch, whenever the touch geometry changes (never per frame): what of the HUD's corner pieces (the sky's
+	 * plate, the survivors chip) a crowded layout put in this plate's column pushes it down under them, a margin clear,
+	 * and never off the screen.
+	 */
+	avoid(rects: ReadonlyArray<[number, number, number, number]>): void {
+		const v = W.viewportSize();
+		const [x0, y0, x1, y1] = navReach(v.X, v.Y, W.topInset(), this.k);
+		const h = y1 - y0;
+		const gap = MARGIN_Y * math.min(v.X / W.DESIGN_W, v.Y / W.DESIGN_H);
+		let top = y0;
+		for (let pass = 0; pass < 4; pass++) {
+			let moved = false;
+			for (const r of rects) {
+				if (r[0] < x1 && x0 < r[2] && r[1] < top + h && top < r[3] + gap) {
+					top = r[3] + gap;
+					moved = true;
+				}
+			}
+			if (!moved) break;
+		}
+		top = math.min(top, math.max(y0, v.Y - h));
+		const push = math.round(top - y0);
+		if (this.holder.Position.Y.Offset !== push) this.holder.Position = UDim2.fromOffset(0, push);
+	}
+
 	update(world: WorldData, x: number, y: number, save: PlayerSaveData, now: number): void {
 		const mode = navGadgetOf(save);
 		if (mode !== this.mode) {

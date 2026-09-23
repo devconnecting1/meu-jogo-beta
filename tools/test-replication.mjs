@@ -16,6 +16,9 @@
  *   a2. CROSSING 800 U (the review of dee095a, S3). Hunters closing in change ring on every screen; the server
  *      judges a shot at each where the client drew it all through the second the client takes to ease its extra
  *      delay, and a body hovering on the border does not flip its ring (INTEREST_NEAR_EXIT).
+ *   a3. COMING BACK (the second review of the zombie-motion branch, S3). A body not sent for longer than its ring's
+ *      client timeout (the dark, a building, the snapshot cap) is a new track when it is sent again, drawn at its
+ *      ring's delay at once, and judged there; a shorter gap keeps easing on both sides.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
  *      every light is not sent either, unless it is within DARK_SENSE_RANGE — which is what stops the wire
  *      being a wallhack, and is measured here rather than asserted in a comment.
@@ -910,6 +913,173 @@ section("(a2) a zombie crossing 800 u is judged where it is drawn, all through t
 	}
 	checkEq(flips, 1, `a body swinging ±40 u across ${CFG.INTEREST_NEAR} u changes ring once, not every swing`);
 	checkEq(rings.update(0, 7, (CFG.INTEREST_NEAR_EXIT + 1) ** 2, 201), Ring.Mid, "and past the exit band it is mid");
+}
+
+// ================================================================ (a3) a body that comes back after its track was retired
+
+section(
+	"(a3) a body hidden past its ring's timeout comes back as a NEW track, judged where it is drawn (second review, S3)",
+);
+{
+	/*
+	 * The client retires a zombie track that stops arriving -- 0.3 s near, 0.6 s mid, then a 0.15 s fade -- and a body
+	 * carried again after that is a new track, drawn at its ring's extra delay from the very first frame. The server's
+	 * easing is per (viewer, zombie) and lives as long as the body stays in INTEREST, and a body in interest is often
+	 * not sent: at night outside every light, inside a building, past SNAP_ZOMBIE_CAP in a horde. Eased on from the old
+	 * ring, a zombie lit at 1000 u that walked up in the dark and was lit again inside 800 u was judged up to 3 ticks
+	 * off the body on screen for most of a second.
+	 *
+	 * Here one zombie, at night, three survivors watching (0/50/100 ms, 0/1/2 % loss): lit and running across their
+	 * view at 200 u/s, then outside every light while it walks across 800 u, then lit again in the other ring and
+	 * running again. On every frame of every client after it is lit again, the tick the body is drawn at is compared
+	 * with the tick a shot at it is judged at, on the server's own path (as in a2). The third case is the other side
+	 * of the line: a gap SHORTER than the ring's timeout leaves the track alive and easing on the client, and the
+	 * server has to keep easing with it rather than start over.
+	 */
+	const SPEED = 200 / CFG.SIM_HZ;
+	const LIT_TICKS = 90;
+	const cases = [
+		{
+			label: "mid at 1000 u, 1 s in the dark, lit again near at 700 u",
+			from: 1000,
+			to: 700,
+			dark: 60,
+			retired: true,
+		},
+		{
+			label: "near at 700 u, 1 s in the dark, lit again mid at 1000 u",
+			from: 700,
+			to: 1000,
+			dark: 60,
+			retired: true,
+		},
+		{
+			label: "mid at 880 u, 0.4 s in the dark, lit again near at 740 u",
+			from: 880,
+			to: 740,
+			dark: 24,
+			retired: false,
+		},
+	];
+	for (const c of cases) {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		addSurvivor(server, 1, cx + 40, cy);
+		addSurvivor(server, 2, cx - 40, cy + 30);
+		server.sim.clock.setClock(23);
+		const horde = server.sim.horde;
+		const z = createZombie(1, cx + c.from, cy, 5, false);
+		z.alpha = 1;
+		horde.zombies.push(z);
+		let ang = 0;
+		let r = c.from;
+		let worst = 0;
+		let worstFirst = 0;
+		let frames = 0;
+		/** the clients that had no track for it at some point in the dark: a retired track */
+		const retiredBy = new Set();
+		let sentAgain = -1;
+		for (let i = 0; i < LIT_TICKS + c.dark + LIT_TICKS; i++) {
+			const dark = i >= LIT_TICKS && i < LIT_TICKS + c.dark;
+			// straight across 800 u in the dark, round the survivors at 200 u/s in the light
+			if (dark) r += (c.to - c.from) / c.dark;
+			else ang += SPEED / r;
+			z.x = cx + Math.cos(ang) * r;
+			z.y = cy + Math.sin(ang) * r;
+			// outside every light (§4.3 rule 2): at most one tick of the horde's own 3/s fade, never above LIT_ALPHA_MIN
+			z.alpha = dark ? 0 : 1;
+			tickServer(server);
+			const drawn = drawClients(server);
+			const netId = horde.netIdOf(z);
+			if (dark) {
+				for (const [slot, client] of server.clients) if (!client.buffer.zombies.has(netId)) retiredBy.add(slot);
+				continue;
+			}
+			if (i < LIT_TICKS) continue;
+			if (sentAgain < 0) sentAgain = i;
+			for (const [slot, bodies] of drawn) {
+				const b = bodies.get(netId);
+				if (b === undefined) continue;
+				const view = server.clients.get(slot).buffer.renderNow();
+				const truth = serverAt(server, netId, b.tick);
+				const judged = serverAt(server, netId, view - server.replicator.viewLagOf(slot, z, view));
+				if (truth === undefined || judged === undefined) continue;
+				frames += 1;
+				const err = Math.hypot(truth.x - judged.x, truth.y - judged.y);
+				worst = Math.max(worst, err);
+				// the first half second back in the light: where the old ring's easing was furthest off
+				if (i - sentAgain < 30) worstFirst = Math.max(worstFirst, err);
+			}
+		}
+		info(
+			`${c.label}: ${frames} body-frames after it is lit again, judged vs drawn worst ${worst.toFixed(2)} u ` +
+				`(first 0.5 s ${worstFirst.toFixed(2)} u); retired on ${retiredBy.size()} of 3 clients in the dark`,
+		);
+		check(
+			c.retired ? retiredBy.size() === 3 : retiredBy.size() === 0,
+			c.retired
+				? `${c.label}: every client retired the track in the dark (${retiredBy.size()} of 3)`
+				: `${c.label}: no client retired the track in the dark (${retiredBy.size()} of 3)`,
+		);
+		check(frames >= 3 * 60, `${c.label}: the three clients draw it again once it is lit (${frames} body-frames)`);
+		check(worst <= 1, `${c.label}: judged within 1 u of the instant it is drawn at (worst ${worst.toFixed(2)} u)`);
+	}
+}
+
+// ================================================================ (a4) what the server notes as sent is what went out
+
+section("(a4) the server takes a body as drawn only if a part that went out carried it (second review, NIT 2)");
+{
+	/*
+	 * Which bodies a viewer has a track for, and in which ring, is what `viewLagOf` judges its shots by. It was noted
+	 * as the snapshot was BUILT, before the encoder, which drops whatever does not fit its four parts: a body cut there
+	 * was marked sent -- with a ring -- to a client that never had a track for it. SNAP_ZOMBIE_CAP keeps the live horde
+	 * well inside four parts, so it is lifted here to let the encoder do the cutting: 600 zombies within 800 u of one
+	 * survivor at noon, and after a few snapshots every body the server marks sent must be one the client decoded,
+	 * and the other way round.
+	 */
+	const cap = CFG.SNAP_ZOMBIE_CAP;
+	CFG.SNAP_ZOMBIE_CAP = 1000;
+	try {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		server.sim.clock.setClock(12);
+		seedHorde(server, 600, cx, cy, 780);
+		for (let i = 0; i < 12; i++) tickServer(server);
+		const client = server.clients.get(0);
+		const horde = server.sim.horde;
+		let inInterest = 0;
+		let carried = 0;
+		let notedNotCarried = 0;
+		let carriedNotNoted = 0;
+		for (const z of horde.zombies) {
+			const netId = horde.netIdOf(z);
+			// slot 0's half of the (viewer, netId) table: its keys are the netIds themselves
+			const pair = server.replicator.hordeRings.rings.get(netId);
+			if (pair === undefined) continue;
+			inInterest += 1;
+			const got = client.counts.has(netId);
+			if (got) carried += 1;
+			if (pair.sent && !got) notedNotCarried += 1;
+			if (!pair.sent && got) carriedNotNoted += 1;
+		}
+		info(
+			`${inInterest} zombies in interest, ${carried} carried by the parts that went out, ` +
+				`${server.replicator.stats.droppedEntities} cut on the way`,
+		);
+		check(
+			carried > 0 && carried < inInterest,
+			`the encoder's ${CFG.SNAP_MAX_PARTS} parts carried some of the horde and not all of it (${carried} of ${inInterest})`,
+		);
+		checkEq(notedNotCarried, 0, "no body the parts left out is taken as drawn by the client");
+		checkEq(carriedNotNoted, 0, "and every body they carried is");
+	} finally {
+		CFG.SNAP_ZOMBIE_CAP = cap;
+	}
 }
 
 // ================================================================ (b) interest, walls and the dark

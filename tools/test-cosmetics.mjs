@@ -26,6 +26,12 @@
  *      the scale instead of clipping, and destroy() cleans up.
  *   6. THE WARDROBE'S TILES draw one cosmetic alone (`subject`): an outfit's tile the survivor only, a pet's tile
  *      the pet only, framed on it, and every one of them fits its tile without clipping.
+ *   7. WITH THE CHARACTERS' PIXEL ART (ART-08, ART-09, ART-11: the sheets handed in as local ids): each outfit is its
+ *      body cell (arms and head baked in) from its own sheet plus the weapon, upright and pixelated, and reads by
+ *      colour (the blue jacket, Santa's red, the Cowboy's straw hat, the costume's green skin that is not a
+ *      zombie's green); each pet is one cell with its own colour and size; a hit and the poison keep their
+ *      colours over any outfit (Santa flashes white, keeps the red outline); nothing is built or created per frame;
+ *      the wardrobe preview and every tile show the whole cosmetic, texels included, at 4 u x scale per texel.
  *
  * The wardrobe SCREEN (tabs, tile states, the one action, the try-on preview) runs in tools/test-backpack.mjs,
  * whose fake tree carries the whole UI kit; the purchase itself is the server's, in tools/test-save.mjs (§17)
@@ -34,8 +40,10 @@
  * Pure Node (>= 18) + the project's TypeScript, on tools/luau-shim.mjs plus the few Roblox datatypes the renderer
  * touches. The fake tree has no layout engine: it records what was asked of it.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installShims } from "./luau-shim.mjs";
+import { decodePNG } from "./png-lite.mjs";
 
 const { SRC, require } = installShims({ seed: 7 });
 
@@ -68,7 +76,12 @@ class UDim2 {
 globalThis.Vector2 = Vector2;
 globalThis.UDim = UDim;
 globalThis.UDim2 = UDim2;
-globalThis.Enum = { ApplyStrokeMode: { Border: "Border", Contextual: "Contextual" } };
+globalThis.Enum = {
+	ApplyStrokeMode: { Border: "Border", Contextual: "Contextual" },
+	// what an ImageLabel of the characters' pixel art is set up with (shared/engine/renderer.ts)
+	ScaleType: { Stretch: "Stretch", Tile: "Tile", Slice: "Slice" },
+	ResamplerMode: { Default: "Default", Pixelated: "Pixelated" },
+};
 
 /** every Instance created, and the property writes made while `counting` */
 const tree = { created: [], writes: 0, counting: false };
@@ -125,6 +138,7 @@ const PF = require(join(SRC, "client/view/petFollow.ts"));
 const CV = require(join(SRC, "client/view/cosmeticsView.ts"));
 const SV = require(join(SRC, "client/view/survivorView.ts"));
 const PV = require(join(SRC, "client/view/cosmeticPreview.ts"));
+const HV = require(join(SRC, "client/view/humanoidView.ts"));
 const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 
 // ---------------------------------------------------------------- tiny harness
@@ -913,6 +927,360 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 	);
 	full.destroy();
 	petTile.destroy();
+}
+
+// ================================================================ 7. the characters' pixel art
+
+section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos trajes e pets, das folhas de pixel art");
+{
+	const WA = require(join(SRC, "client/view/worldArt.ts"));
+	const CS = require(join(SRC, "client/view/charSheets.ts"));
+	const artDir = join(SRC, "..", "design", "world-art");
+	const manifest = JSON.parse(readFileSync(join(artDir, "manifest.json"), "utf8"));
+	const ids = {};
+	for (const t of manifest.textures) ids[t.name] = `local:${t.name}`;
+	WA.overrideWorldArt(ids);
+	const pngs = new Map();
+	const png = name => {
+		if (!pngs.has(name)) pngs.set(name, decodePNG(readFileSync(join(artDir, `${name}.png`))));
+		return pngs.get(name);
+	};
+	/** the visible image sprites of a renderer: which sheet, which cell, the tint and opacity, the screen box */
+	const imagesOf = r =>
+		spritesOf(r)
+			.map(s => {
+				const im = s.frame.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible === true);
+				if (im === undefined) return undefined;
+				return {
+					...s,
+					sheet: im.Image.slice("local:".length),
+					rx: im.ImageRectOffset?.X ?? 0,
+					ry: im.ImageRectOffset?.Y ?? 0,
+					rw: im.ImageRectSize?.X ?? 0,
+					rh: im.ImageRectSize?.Y ?? 0,
+					tint: im.ImageColor3,
+					alpha: 1 - im.ImageTransparency,
+					pixelated: im.ResampleMode === Enum.ResamplerMode.Pixelated,
+				};
+			})
+			.filter(s => s !== undefined);
+	/** the opaque texels of a cell: count, mean colour of its body (outline excluded), and its screen bounds */
+	const cellOf = s => {
+		const img = png(s.sheet);
+		let n = 0;
+		let body = 0;
+		const sum = [0, 0, 0];
+		const share = { blue: 0, red: 0, green: 0, tan: 0 };
+		let x0 = Infinity;
+		let y0 = Infinity;
+		let x1 = -Infinity;
+		let y1 = -Infinity;
+		for (let y = 0; y < s.rh; y++) {
+			for (let x = 0; x < s.rw; x++) {
+				const i = ((s.ry + y) * img.w + s.rx + x) * 4;
+				if (img.data[i + 3] === 0) continue;
+				n++;
+				x0 = Math.min(x0, x);
+				y0 = Math.min(y0, y);
+				x1 = Math.max(x1, x + 1);
+				y1 = Math.max(y1, y + 1);
+				const [r, g, b] = [img.data[i], img.data[i + 1], img.data[i + 2]];
+				if (r + g + b < 120) continue;
+				body++;
+				sum[0] += r;
+				sum[1] += g;
+				sum[2] += b;
+				if (b > r + 30 && b > g + 10) share.blue++;
+				else if (r > g + 60 && r > b + 50) share.red++;
+				else if (g > r + 10 && g > b + 10) share.green++;
+				else if (r > b + 40 && g > b + 20 && r >= g) share.tan++;
+			}
+		}
+		const k = s.w / s.rw;
+		const left = s.centred ? s.x - s.w / 2 : s.x;
+		const top = s.centred ? s.y - s.h / 2 : s.y;
+		for (const k of Object.keys(share)) share[k] /= Math.max(1, body);
+		return {
+			n,
+			share,
+			mean: sum.map(v => v / Math.max(1, body)),
+			minX: left + x0 * k,
+			maxX: left + x1 * k,
+			minY: top + y0 * k,
+			maxY: top + y1 * k,
+			w: (x1 - x0) * k,
+			span: Math.max(x1 - x0, y1 - y0) * k,
+		};
+	};
+
+	const drawOneAt = outfit => {
+		const st = newStage();
+		st.r.beginFrame();
+		SV.drawSurvivor(st.r, st.cam, survivorLook(outfit), SV.createSwingTrail());
+		st.r.endFrame();
+		return st.r;
+	};
+
+	// ---- each outfit: its body cell and its weapon, from its own sheet, upright, pixelated
+	const outfitSheet = ["survivorsA", "survivorsA", "survivorsB", "survivorsB"];
+	const shares = {};
+	for (const [name, outfit] of OUTFITS) {
+		const images = imagesOf(drawOneAt(outfit));
+		const body = images.find(s => s.sheet.startsWith("survivors"));
+		const weapon = images.find(s => s.sheet === "weapons");
+		const block = (outfit % CS.OUTFITS_PER_SHEET) * CS.SURVIVOR_ROWS_EACH;
+		const row = body !== undefined ? body.ry / CS.SURVIVOR_CELL : -1;
+		check(
+			images.length === 2 && body !== undefined && weapon !== undefined,
+			`${name}: o corpo inteiro (bracos e cabeca) numa celula, e a arma na mao`,
+			images.map(s => s.sheet).join(" + "),
+		);
+		check(
+			body !== undefined &&
+				body.sheet === outfitSheet[outfit] &&
+				row >= block &&
+				row < block + CS.SURVIVOR_ROWS_EACH,
+			`${name}: das linhas do proprio traje (${outfitSheet[outfit]})`,
+			`linha ${row}`,
+		);
+		check(
+			images.every(s => s.rot === 0 && s.pixelated && s.rw === s.rh),
+			`${name}: celulas em pe na tela (a direcao e a coluna), pixeladas`,
+		);
+		if (body !== undefined) shares[name] = cellOf(body).share;
+	}
+	const pct = v => `${Math.round((v ?? 0) * 100)}%`;
+	check((shares.plain?.blue ?? 0) >= 0.3, "sem traje: a jaqueta azul de sempre", `${pct(shares.plain?.blue)} azul`);
+	check((shares.Santa?.red ?? 0) >= 0.3, "Santa: o vermelho", `${pct(shares.Santa?.red)} vermelho`);
+	check(
+		(shares.Cowboy?.tan ?? 0) >= 0.4,
+		"Cowboy: o chapeu palha por cima de tudo",
+		`${pct(shares.Cowboy?.tan)} palha`,
+	);
+	// the costume's green is its skin, between the rags: far less of it than a walker's green (P3, LEG-03)
+	const walker = (() => {
+		const st = newStage();
+		st.r.beginFrame();
+		HV.drawZombie(st.r, st.cam, 0, 0, 0, 16 / 18, 1, 0, 1, 0, Z.zombie, 0, false, false, false);
+		st.r.endFrame();
+		const cell = imagesOf(st.r).find(s => s.sheet === "zombies");
+		return cell !== undefined ? cellOf(cell).share.green : 0;
+	})();
+	check(
+		(shares.Zombie?.green ?? 0) >= 0.1 && (shares.Zombie?.green ?? 1) < walker * 0.6,
+		"Zombie: pele verde entre os trapos, bem menos verde que um zumbi de verdade (P3)",
+		`${pct(shares.Zombie?.green)} verde, o walker ${pct(walker)}`,
+	);
+
+	// ---- each pet: one cell from its sheet, with its own colour and size
+	const petCells = {};
+	for (const [name, look] of PETS) {
+		for (const moving of [false, true]) {
+			const st = newStage();
+			st.r.beginFrame();
+			CV.drawPet(st.r, st.cam, petAt(look, COS.petFlies(look), moving), look, 0, noShadow);
+			st.r.endFrame();
+			const images = imagesOf(st.r);
+			const sheet = COS.petFlies(look) ? "birds" : "dogs";
+			check(
+				images.length === 1 && images[0].sheet === sheet,
+				`${name}${moving ? " andando" : ""}: uma celula de ${sheet}`,
+				images.map(s => s.sheet).join(" + "),
+			);
+			if (images.length === 1) petCells[`${name}${moving ? "+" : ""}`] = cellOf(images[0]);
+		}
+	}
+	const names = PETS.map(([n]) => n);
+	let minD = Infinity;
+	let pair = "";
+	for (let i = 0; i < names.length; i++) {
+		for (let j = i + 1; j < names.length; j++) {
+			const a = petCells[names[i]]?.mean ?? [0, 0, 0];
+			const b = petCells[names[j]]?.mean ?? [0, 0, 0];
+			const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+			if (d < minD) {
+				minD = d;
+				pair = `${names[i]} x ${names[j]}`;
+			}
+		}
+	}
+	check(
+		minD > 25,
+		"os seis pets tem cores medias diferentes entre si",
+		`menor distancia ${minD.toFixed(0)} (${pair})`,
+	);
+	check(
+		(petCells["Malamute"]?.n ?? 0) > (petCells["Carolina"]?.n ?? 0) * 1.15,
+		"o Malamute e maior que a Carolina",
+		`${petCells["Malamute"]?.n} contra ${petCells["Carolina"]?.n} texels`,
+	);
+	const widest = Object.entries(petCells).sort((a, b) => b[1].span - a[1].span)[0]?.[0];
+	check(widest === "Eagle+", "a aguia de asas abertas e o pet mais largo", `${widest}`);
+
+	// ---- a hit and the poison, over any outfit (LEG-02, MON-04's exceptions)
+	const hitOf = (outfit, flash, poisoned) => {
+		const look = survivorLook(outfit);
+		look.flash = flash;
+		look.poisoned = poisoned;
+		const st = newStage();
+		st.r.beginFrame();
+		SV.drawSurvivor(st.r, st.cam, look, SV.createSwingTrail());
+		st.r.endFrame();
+		return imagesOf(st.r);
+	};
+	const santaHit = hitOf(COS.OutfitLook.Santa, 1, false);
+	const fill = santaHit.find(s => s.sheet === "survivorsAFill");
+	const rim = santaHit.find(s => s.sheet === "survivorsARim");
+	check(
+		fill !== undefined && sameColor(fill.tint, COLORS.white) && fill.alpha >= 0.5,
+		"Santa atingido: o corpo vai ao BRANCO (o casaco ja e vermelho)",
+		fill ? `${rgb(fill.tint)} a ${fill.alpha.toFixed(2)}` : "sem mascara",
+	);
+	check(
+		rim !== undefined && sameColor(rim.tint, COLORS.uiRed),
+		"e mantem o contorno vermelho grosso de todo acerto",
+		rim ? `${rgb(rim.tint)}` : "sem contorno",
+	);
+	const plainHit = hitOf(COS.OutfitLook.None, 1, false).find(s => s.sheet === "survivorsAFill");
+	check(plainHit !== undefined && sameColor(plainHit.tint, COLORS.uiRed), "os outros trajes piscam para o vermelho");
+	const poisoned = hitOf(COS.OutfitLook.Cowboy, 0, true).find(s => s.sheet === "survivorsBFill");
+	check(
+		poisoned !== undefined && sameColor(poisoned.tint, COLORS.zombie5) && poisoned.alpha >= 0.5,
+		"veneno vence traje: um veu da cor do veneno sobre o corpo",
+		poisoned ? `a ${poisoned.alpha.toFixed(2)}` : "sem veu",
+	);
+	check(
+		hitOf(COS.OutfitLook.Santa, 0, false).length === 2,
+		"e sem acerto nem veneno, nenhuma mascara (o corpo e a arma)",
+	);
+
+	// ---- nothing built while drawing, nothing created after the first frame
+	{
+		const P3 = Color3.prototype;
+		const lerp = P3.Lerp;
+		const fromRGB = Color3.fromRGB;
+		let built = 0;
+		P3.Lerp = function (...a) {
+			built++;
+			return lerp.apply(this, a);
+		};
+		Color3.fromRGB = (...a) => {
+			built++;
+			return fromRGB(...a);
+		};
+		const st = newStage();
+		const frame = t => {
+			st.r.beginFrame();
+			for (const [, outfit] of OUTFITS) {
+				const look = survivorLook(outfit);
+				look.feetPhase = t;
+				look.feetAmp = 1;
+				look.angle = t * 0.3;
+				SV.drawSurvivor(st.r, st.cam, look, SV.createSwingTrail());
+			}
+			for (const [, look] of PETS) {
+				const f = petAt(look, COS.petFlies(look), true);
+				f.phase = t;
+				f.angle = t * 0.2;
+				CV.drawPet(st.r, st.cam, f, look, t, noShadow);
+			}
+			st.r.endFrame();
+		};
+		frame(0);
+		const before = tree.created.length;
+		for (let i = 1; i <= 120; i++) frame(i * 0.1);
+		check(built === 0, "desenhar trajes e pets da arte nao cria nenhuma cor", `${built} Color3`);
+		check(
+			tree.created.length === before,
+			"120 quadros andando e girando, depois do primeiro, nao criam Instance",
+			`${tree.created.length - before}`,
+		);
+		P3.Lerp = lerp;
+		Color3.fromRGB = fromRGB;
+	}
+
+	// ---- the wardrobe: the same art, magnified, whole in its box and in every tile
+	{
+		const panel = makeInstance("Frame");
+		const W = 420;
+		const H = 270;
+		const preview = new PV.SurvivorPreview(panel, { x: 10, y: 20, w: W, h: H });
+		let worst = 0;
+		let worstWhat = "";
+		let texel = 0;
+		for (const [oname, outfit] of OUTFITS) {
+			for (const [pname, pet] of [["sem pet", 0], ...PETS]) {
+				preview.setOutfit(outfit);
+				preview.setPet(pet);
+				preview.draw(0.7);
+				for (const s of imagesOf(preview.renderer)) {
+					const c = cellOf(s);
+					texel = s.w / s.rw;
+					const out = Math.max(-c.minX, -c.minY, c.maxX - W, c.maxY - H, 0);
+					if (out > worst) {
+						worst = out;
+						worstWhat = `${oname} + ${pname}`;
+					}
+				}
+			}
+		}
+		check(
+			worst <= 0.5,
+			"na previa, todo traje x todo pet cabe inteiro na caixa (os texels, nao so a celula)",
+			worst > 0
+				? `saiu ${worst.toFixed(1)} px em ${worstWhat}`
+				: `${OUTFITS.length * (PETS.length + 1)} combinacoes`,
+		);
+		check(
+			Math.abs(texel - 4 * preview.scale) < 0.6,
+			"um texel e 4 u x escala: a mesma arte do mundo, ampliada",
+			`${texel.toFixed(1)} px a ${preview.scale}x`,
+		);
+		preview.setOutfit(COS.OutfitLook.Cowboy);
+		preview.setPet(COS.PetLook.Malamute);
+		preview.draw(0);
+		const before = tree.created.length;
+		tree.writes = 0;
+		tree.counting = true;
+		preview.draw(0);
+		tree.counting = false;
+		check(
+			tree.writes === 0 && tree.created.length === before,
+			"redesenhar sem mudanca nao escreve propriedade nem cria Instance",
+			`${tree.writes} escritas`,
+		);
+		preview.destroy();
+		const S = 92;
+		let tileOut = 0;
+		let tileWhat = "";
+		const tiles = [
+			...OUTFITS.map(([n, look]) => [n, "outfit", look]),
+			...PETS.map(([n, look]) => [n, "pet", look]),
+		];
+		for (const [name, subject, look] of tiles) {
+			const tile = new PV.SurvivorPreview(panel, { w: S, h: S, subject });
+			if (subject === "outfit") tile.setOutfit(look);
+			else tile.setPet(look);
+			tile.draw(0.4);
+			const images = imagesOf(tile.renderer);
+			check(images.length >= 1, `${name}: o ladrilho desenha a pixel art`, `${images.length} celulas`);
+			for (const s of images) {
+				const c = cellOf(s);
+				const out = Math.max(-c.minX, -c.minY, c.maxX - S, c.maxY - S, 0);
+				if (out > tileOut) {
+					tileOut = out;
+					tileWhat = name;
+				}
+			}
+			tile.destroy();
+		}
+		check(
+			tileOut <= 0.5,
+			"todo ladrilho mostra o seu cosmetico inteiro",
+			tileOut > 0 ? `saiu ${tileOut.toFixed(1)} px (${tileWhat})` : `${S} x ${S}`,
+		);
+	}
+	WA.overrideWorldArt(undefined);
 }
 
 // ---------------------------------------------------------------- verdict
