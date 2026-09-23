@@ -15,8 +15,18 @@
  *                                 generated for the same seed (the same object: no second generateTown); the flyover
  *                                 lets go of it first and the next menu draws a freshly generated copy, never a street
  *                                 the match changed; a new seed (MP-22's new town) or a seed of 0 never reuses it; a
- *                                 town the flyover drew is field for field the one generateTown returns. Reports the
- *                                 generation time saved, measured here.
+ *                                 town the flyover drew is field for field the one generateTown returns, and a copy that
+ *                                 changed anyway (its fingerprint) is refused. Reports the generation time saved.
+ *   2. ONE PRELOAD PLAN           client/boot/preloadPlan.ts, over a fake ContentProvider that records every request:
+ *                                 nothing waits for it; the skin, then the icon atlas and the lobby's town (signs last),
+ *                                 then the character sheets and worldArt.ts's own pass, then the sounds bus by bus; only
+ *                                 ids the game uses; one [PZ-LOAD] line; worldArt.ts's fallbacks still work behind it
+ *                                 (every texture lost: flat town; one sheet lost: its group flat; the atlas: Frames).
+ *   3. IDLE-TIME WARM-UP          client/boot/warmup.ts. The Bag built out of sight a few tiles per frame after a run
+ *                                 mounts (Backpack.warmStep), never visible, never heard; then its first open and the
+ *                                 first visit of every tab create NO Instance (with Frames icons and with the atlas); a B
+ *                                 press in the middle still works; the frame cost under a cost model (each Instance
+ *                                 COST_S of os.clock); the lobby's Survivor page built in lobby idle, START then free.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -141,6 +151,7 @@ check(
 	sameTown(lobbyTown, World.generateTown(S)).join("; ") || "igual",
 );
 const aliveWithFly = alive();
+const flownPrint = Cache.townFingerprint(lobbyTown);
 
 // Enter the city: GameLoop.init -> takeTown(netTownSeed())
 g = gen0();
@@ -267,6 +278,35 @@ const r2 = Fly.townFor(0);
 const r3 = Cache.takeTown(0);
 check("semente 0 (cidade aleatoria) nunca vai para o cache", r1 !== r2 && r3 !== r2 && gen0() === g + 3);
 
+// ---- the fingerprint: a menus' copy that changed anyway (a bug somewhere) is never handed over
+{
+	const warned = [];
+	const realWarn = globalThis.warn;
+	globalThis.warn = (...a) => warned.push(a.join(" "));
+	const menus = Fly.townFor(S);
+	const printed = Cache.townFingerprint(menus);
+	menus.solids.find(s => s.kind === "tree").hp -= 1;
+	g = gen0();
+	const refused0 = Cache.townCacheStats().refused;
+	const taken = Cache.takeTown(S);
+	globalThis.warn = realWarn;
+	check(
+		"a copia do lobby que mudou depois de gerada (impressao digital diferente) nao vai para a partida: ela gera a sua",
+		Cache.townFingerprint(menus) !== printed &&
+			taken !== menus &&
+			gen0() === g + 1 &&
+			Cache.townCacheStats().refused === refused0 + 1 &&
+			sameTown(taken, World.generateTown(S)).length === 0 &&
+			warned.some(w => w.includes("changed since it was generated")),
+		warned.join(" | "),
+	);
+	check(
+		"...e a impressao digital de uma cidade que o voo desenhou 600 quadros e a de generateTown",
+		flownPrint === Cache.townFingerprint(World.generateTown(S)),
+		flownPrint,
+	);
+}
+
 // ---- source guards: where the towns come from
 /** a source file without its comments (a header may name generateTown; only a call counts) */
 const read = rel =>
@@ -336,10 +376,15 @@ const { SOUNDS } = require(join(SRC, "shared/data/sounds.ts"));
 const Plan = require(join(SRC, "client/boot/preloadPlan.ts"));
 const WorldArt = require(join(SRC, "client/view/worldArt.ts"));
 
+// the character sheets and the icon atlas have no id until the owner uploads them: fake ids for this section, so the
+// plan is seen with every step in it (put back afterwards; section 3 measures the Bag both ways)
+const pendingUpload = WORLD_ART_NAMES.filter(n => WORLD_ART[n].id === "");
+pendingUpload.forEach((n, i) => (WORLD_ART[n].id = `rbxassetid://900000${i}`));
 const skinIds = SKIN_TEXTURE_NAMES.map(n => SKIN_TEXTURES[n].id).filter(id => id !== "");
 const artIds = WORLD_ART_NAMES.map(n => WORLD_ART[n].id).filter(id => id !== "");
 const laterNames = WORLD_ART_NAMES.filter(n => Plan.laterArt(n));
 const laterIds = laterNames.map(n => WORLD_ART[n].id).filter(id => id !== "");
+const signIds = WORLD_ART_NAMES.filter(n => n.startsWith("sign") || n === "helipad").map(n => WORLD_ART[n].id);
 const busRank = { ui: 0, sfx: 1, bgm: 2 };
 /** the earliest bus a sound id is used on (the same file can be a click and an effect) */
 const rankOf = id =>
@@ -370,15 +415,23 @@ check(
 );
 const town = calls[1] ?? [];
 check(
-	"...depois as texturas da cidade que o voo do lobby desenha (chao, ruas, telhados, arvores, carros), sem letreiros",
-	town.length > 40 &&
+	"...depois o atlas dos icones (a hotbar da HUD, o Bag) e as texturas da cidade que o voo desenha e a partida pega",
+	town[0] === WORLD_ART.itemIcons.id &&
+		town.length > 60 &&
 		["asphalt", "grass", "roofShingleH", "canopy0", "car0"].every(n => town.includes(WORLD_ART[n].id)) &&
 		laterIds.every(id => !town.includes(id)),
 	`${town.length} texturas`,
 );
 check(
-	"2o os letreiros (ART-07), o heliponto e as folhas dos personagens",
-	laterIds.length >= 10 && JSON.stringify(calls[2]) === JSON.stringify(laterIds),
+	"...com os letreiros (ART-07) e o heliponto no fim dela: pequenos, nas fachadas",
+	JSON.stringify(town.slice(-signIds.length)) === JSON.stringify(signIds),
+	`${signIds.length} letreiros`,
+);
+check(
+	"2o as folhas dos personagens (charSheets.ts: sobreviventes, armas, zumbis, cachorros, passaros)",
+	laterNames.length === 12 &&
+		["survivorsA", "weapons", "zombies", "dogs", "birds"].every(n => laterNames.includes(n)) &&
+		JSON.stringify(calls[2]) === JSON.stringify(laterIds),
 	`${calls[2]?.length}: ${laterNames.join(", ")}`,
 );
 check(
@@ -420,7 +473,7 @@ check(
 const loadLine = logged.filter(l => l.startsWith("[PZ-LOAD] preload"));
 check(
 	"uma linha so no Output: [PZ-LOAD] preload com as tres etapas",
-	loadLine.length === 1 && /1\) skin \+ town \d+ .*2\) signs \+ characters \d+ .*3\) sounds \d+/.test(loadLine[0]),
+	loadLine.length === 1 && /1\) skin \+ icons \+ town \d+ .*2\) characters \d+ .*3\) sounds \d+/.test(loadLine[0]),
 	loadLine[0],
 );
 check(
@@ -438,15 +491,17 @@ check(
 
 /** the plan once more on fresh copies of worldArt.ts and the plan, with `fail` never arriving */
 function planWithFailures(fail) {
-	for (const rel of ["client/view/worldArt.ts", "client/boot/preloadPlan.ts"]) {
-		delete require.cache[require.resolve(join(SRC, rel))];
-	}
-	const art = require(join(SRC, "client/view/worldArt.ts"));
-	const plan = require(join(SRC, "client/boot/preloadPlan.ts"));
+	const keys = ["client/view/worldArt.ts", "client/boot/preloadPlan.ts"].map(rel => require.resolve(join(SRC, rel)));
+	const saved = keys.map(k => require.cache[k]);
+	for (const k of keys) delete require.cache[k];
+	const art = require(keys[0]);
+	const plan = require(keys[1]);
 	failing = new Set(fail);
 	calls.length = 0;
 	const report = plan.runPreloadPlan(() => 0);
 	failing = new Set();
+	// the rest of the suite (and every module that already holds them) keeps the first copies
+	keys.forEach((k, i) => (require.cache[k] = saved[i]));
 	return [art, report];
 }
 // the fallbacks are worldArt.ts's own, and they still run behind the plan
@@ -465,6 +520,17 @@ function planWithFailures(fail) {
 		art.artId("asphalt") === undefined && art.artId("signSchool") === undefined,
 	);
 }
+{
+	const [art] = planWithFailures([WORLD_ART.zombies.id, WORLD_ART.itemIcons.id]);
+	check(
+		"uma folha que nao chega (zumbis) cai sozinha para o desenho liso, e o atlas para os Frames; o resto da arte fica",
+		art.artId("zombies") === undefined &&
+			art.artId("itemIcons") === undefined &&
+			art.artId("dogs") === WORLD_ART.dogs.id &&
+			art.artId("asphalt") === WORLD_ART.asphalt.id,
+	);
+}
+for (const n of pendingUpload) WORLD_ART[n].id = "";
 {
 	const mainSrc = read("client/main.client.ts");
 	check(
@@ -618,6 +684,44 @@ check(
 check("aberto, o aquecimento nao mexe em nada", measure(() => pack.warmStep(5)).created === 0);
 pack.close();
 
+// ---- with the icon atlas uploaded (client/ui/itemIcon.ts: an icon is one ImageLabel): what the warm-up still saves
+let atlasLine = "";
+{
+	WorldArt.overrideWorldArt({ itemIcons: "rbxassetid://1" });
+	const coldA = newPack();
+	const openA = measure(() => coldA.open()).created;
+	const tabsA = [];
+	for (let i = 1; i < 6; i++) tabsA.push(measure(() => coldA.selectCat(i)).created);
+	coldA.close();
+	coldA.root?.Destroy();
+	flush();
+	const warmA = newPack();
+	const qA = new Warm.WarmQueue(Warm.WARM_BUDGET_S, modelNow);
+	qA.add({ name: "Backpack", step: () => warmA.warmStep(Warm.BAG_TILES_PER_STEP) });
+	const framesA = [];
+	for (let f = 0; f < 2000 && qA.pending() > 0; f++) {
+		framesA.push(measure(() => qA.frame()).created);
+		modelClock += 1 / 60;
+	}
+	const firstA = measure(() => {
+		warmA.open();
+		for (let i = 1; i < 6; i++) warmA.selectCat(i);
+	});
+	warmA.close();
+	warmA.root?.Destroy();
+	flush();
+	WorldArt.overrideWorldArt(undefined);
+	const beforeA = openA + tabsA.reduce((a, b) => a + b, 0);
+	atlasLine =
+		`com o atlas: antes ${beforeA} Instances no clique (abertura ${openA} + abas ${tabsA.join("/")}); ` +
+		`depois 0, em ${framesA.length} quadros (pior ${Math.max(...framesA)} Instances/quadro)`;
+	check(
+		"com o atlas dos icones no ar (um ImageLabel por icone) o aquecimento tambem deixa a 1a abertura sem Instance",
+		firstA.created === 0 && firstA.destroyed === 0 && beforeA < beforeTotal,
+		atlasLine,
+	);
+}
+
 // ---- a B press in the middle of the warm-up: the Bag builds what is missing, as before
 {
 	const mid = newPack();
@@ -766,8 +870,9 @@ pack.close();
 		/Boot\.warmRun\(pack, /.test(mainSrc) && /Boot\.warmLobby\(handle\)/.test(mainSrc),
 	);
 }
+console.log(`\n  Bag ${atlasLine}`);
 console.log(
-	`\n  Bag: antes ${beforeTotal} Instances no clique (abertura ${firstOpen.created} + abas ${tabCosts.join("/")}); ` +
+	`  Bag sem atlas: antes ${beforeTotal} Instances no clique (abertura ${firstOpen.created} + abas ${tabCosts.join("/")}); ` +
 		`depois 0, construidas em ${perFrame.length} quadros ociosos (pior ${maxFrame} Instances/quadro)`,
 );
 

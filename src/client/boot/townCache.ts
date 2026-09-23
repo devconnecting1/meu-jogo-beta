@@ -15,8 +15,11 @@
  *   - `takeTown` moves it to the match: the cache forgets it and a flyover still drawing it lets go (`onTownTaken`)
  *     BEFORE the match gets the reference. The next menu that needs a town generates a fresh one (`townFor`) -- so the
  *     generation moves from the click on "Enter the city" to the first menu after it, and never happens twice;
- *   - the seed is the key: a new seed (MP-22's new town, or an InitBegin that corrects a guess) never gets the cached
- *     town, and a seed of 0 (a random town) is never cached;
+ *   - the seed is the key -- generateTown's only input -- so a new seed (MP-22's new town, or an InitBegin that corrects a
+ *     guess) never gets the cached town, and a seed of 0 (a random town) is never cached. A fingerprint taken at
+ *     generation (the map hash of §4.5 -- every solid's id and rect -- plus each solid's hp and door state, the ground
+ *     items and the id counters) is checked again at the hand-over: a menus' copy that changed anyway is not handed
+ *     over, the match generates its own (and the Output says so);
  *   - the cache holds at most one town, and a match start empties it either way.
  * The server generates its own towns (server/net/mpHost.ts, server/sim/worldReset.ts): nothing here reaches it.
  */
@@ -24,6 +27,8 @@ import { generateTown, WorldData } from "shared/game/world";
 
 let cachedSeed = 0;
 let cached: WorldData | undefined;
+/** the cached town's fingerprint when it was generated */
+let cachedPrint = "";
 const takenHooks = new Array<(world: WorldData) => void>();
 
 /** what the cache did this session (the tests, and the [PZ-LOAD] lines in the Output) */
@@ -34,9 +39,29 @@ export interface TownCacheStats {
 	handedOver: number;
 	/** milliseconds the last generation took */
 	lastGenMs: number;
+	/** menus' copies refused at the hand-over because they no longer matched their fingerprint */
+	refused: number;
 }
 
-const stats: TownCacheStats = { generated: 0, handedOver: 0, lastGenMs: 0 };
+const stats: TownCacheStats = { generated: 0, handedOver: 0, lastGenMs: 0, refused: 0 };
+
+const U32 = 4294967296;
+
+/**
+ * What a player could tell apart in two towns of one seed: the solids (the map hash of §4.5, server/net/replication.ts:
+ * ids and rects), each one's hp and door state, the ground items and the id counters. O(solids), well under a
+ * millisecond; the spatial grid's query stamps (bookkeeping, world.ts querySolids) are left out on purpose.
+ */
+export function townFingerprint(world: WorldData): string {
+	let acc = world.solids.size() % U32;
+	let state = 0;
+	for (const s of world.solids) {
+		const coords = math.floor(s.x) + math.floor(s.y) * 7 + math.floor(s.w) * 13 + math.floor(s.h) * 17;
+		acc = (acc + ((s.id * coords) % U32)) % U32;
+		state = (state + ((s.id * (math.floor(s.hp) * 3 + (s.open === true ? 1 : 0) + 1)) % U32)) % U32;
+	}
+	return `${world.solids.size()}:${acc}:${state}:${world.items.size()}:${world.nextId}:${world.nextDynamicId}`;
+}
 
 function generate(seed: number): WorldData {
 	const t0 = os.clock();
@@ -55,6 +80,7 @@ export function townFor(seed: number): WorldData {
 	const world = generate(seed);
 	cached = seed !== 0 ? world : undefined;
 	cachedSeed = seed !== 0 ? seed : 0;
+	cachedPrint = seed !== 0 ? townFingerprint(world) : "";
 	return world;
 }
 
@@ -69,9 +95,15 @@ export function prewarmTown(seed: number): void {
  */
 export function takeTown(seed: number): WorldData {
 	const world = cached;
-	const hit = world !== undefined && seed !== 0 && cachedSeed === seed;
+	let hit = world !== undefined && seed !== 0 && cachedSeed === seed;
+	if (hit && world !== undefined && townFingerprint(world) !== cachedPrint) {
+		hit = false;
+		stats.refused += 1;
+		warn(`[PZ-LOAD] town ${seed}: the lobby's copy changed since it was generated; the match generates its own`);
+	}
 	cached = undefined;
 	cachedSeed = 0;
+	cachedPrint = "";
 	if (hit && world !== undefined) {
 		for (const fn of takenHooks) fn(world);
 		stats.handedOver += 1;
