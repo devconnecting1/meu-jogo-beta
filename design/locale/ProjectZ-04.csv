@@ -1,101 +1,101 @@
-Key,Source,Context,Example,en
-Trot,Trot,,,Trot
-Patience,Patience,,,Patience
-Pickpocket,Pickpocket,,,Pickpocket
-Theif,Theif,,,Theif
-Chef,Chef,,,Chef
-Dwarf,Dwarf,,,Dwarf
-Robotics,Robotics,,,Robotics
-Engineering,Engineering,,,Engineering
-Cat,Cat,,,Cat
-Nocturnal,Nocturnal,,,Nocturnal
-Repairman,Repairman,,,Repairman
-Move shooting,Move shooting,,,Move shooting
-Head shooter,Head shooter,,,Head shooter
-Poison immunity,Poison immunity,,,Poison immunity
-Health increases,Health increases,,,Health increases
-Recovery increases,Recovery increases,,,Recovery increases
-Knockback increases,Knockback increases,,,Knockback increases
-Melee damage increases,Melee damage increases,,,Melee damage increases
-Roload becomes faster,Roload becomes faster,,,Roload becomes faster
-Accuracy improves,Accuracy improves,,,Accuracy improves
-Bow accuracy improves,Bow accuracy improves,,,Bow accuracy improves
-Speed increases,Speed increases,,,Speed increases
-Hungry decreases,Hungry decreases,,,Hungry decreases
-Zombies drop more items,Zombies drop more items,,,Zombies drop more items
-Find more items,Find more items,,,Find more items
-A chance to get more foods,A chance to get more foods,,,A chance to get more foods
-A chance to get more metal,A chance to get more metal,,,A chance to get more metal
-Turret reinforced,Turret reinforced,,,Turret reinforced
-Generator reinforced,Generator reinforced,,,Generator reinforced
-Footsteps sound decreases,Footsteps sound decreases,,,Footsteps sound decreases
-Night vision increases,Night vision increases,,,Night vision increases
-Repair speed increases,Repair speed increases,,,Repair speed increases
-Accuracy improves with moving,Accuracy improves with moving,,,Accuracy improves with moving
-Able to shot heads,Able to shot heads,,,Able to shot heads
-Get less damage from poison,Get less damage from poison,,,Get less damage from poison
-Starter pack,Starter pack,,,Starter pack
-Food aid,Food aid,,,Food aid
-Emergency kit,Emergency kit,,,Emergency kit
-Basic craft kit,Basic craft kit,,,Basic craft kit
-Pro craft kit,Pro craft kit,,,Pro craft kit
-Electric craft kit,Electric craft kit,,,Electric craft kit
-Ammo craft kit,Ammo craft kit,,,Ammo craft kit
-Pigeon the bird,Pigeon the bird,,,Pigeon the bird
-Carolina the dog,Carolina the dog,,,Carolina the dog
-5 coins,5 coins,,,5 coins
-100 coins,100 coins,,,100 coins
-300 + 30 coins,300 + 30 coins,,,300 + 30 coins
-600 + 100 coins,600 + 100 coins,,,600 + 100 coins
-1000 + 300 coins,1000 + 300 coins,,,1000 + 300 coins
-Watch ads,Watch ads,,,Watch ads
-Wait for ads,Wait for ads,,,Wait for ads
-Cotton clothes X 1#Axe X 1#Flashlight X 1,Cotton clothes X 1#Axe X 1#Flashlight X 1,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
-Cooked meat X 3#Pizza X 3#Cooked meal X 3,Cooked meat X 3#Pizza X 3#Cooked meal X 3,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
-First aid kit X 2#Bandage X 3#Adrenaline X 2,First aid kit X 2#Bandage X 3#Adrenaline X 2,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
-Wood X 20#Cloth X 10#Stone X 20,Wood X 20#Cloth X 10#Stone X 20,,,Wood X 20#Cloth X 10#Stone X 20
-Blueprint X 5#Steel X 20#Machine parts X 10,Blueprint X 5#Steel X 20#Machine parts X 10,,,Blueprint X 5#Steel X 20#Machine parts X 10
-Battery X 5#Computer chip X 2#Bulb X 2,Battery X 5#Computer chip X 2#Bulb X 2,,,Battery X 5#Computer chip X 2#Bulb X 2
-Steel X 10#Gunpowder X 10,Steel X 10#Gunpowder X 10,,,Steel X 10#Gunpowder X 10
-Pigeon the bird X 1,Pigeon the bird X 1,,,Pigeon the bird X 1
-Carolina the dog X 1,Carolina the dog X 1,,,Carolina the dog X 1
-Please try again,Please try again,,,Please try again
-You can't use that now,You can't use that now,,,You can't use that now
-First steps,First steps,,,First steps
-Thomas Edison,Thomas Edison,,,Thomas Edison
-Melee weapons expert,Melee weapons expert,,,Melee weapons expert
-Bow expert,Bow expert,,,Bow expert
-Collector,Collector,,,Collector
-Blacksmith,Blacksmith,,,Blacksmith
-Sniper,Sniper,,,Sniper
-Centipede slayer,Centipede slayer,,,Centipede slayer
-Rafflesia slayer,Rafflesia slayer,,,Rafflesia slayer
-Giant slayer,Giant slayer,,,Giant slayer
-Hedgehog slayer,Hedgehog slayer,,,Hedgehog slayer
-Zombie slayer,Zombie slayer,,,Zombie slayer
-Special zombie slayer,Special zombie slayer,,,Special zombie slayer
-Woods collector,Woods collector,,,Woods collector
-Good day,Good day,,,Good day
-Rider,Rider,,,Rider
-Never die,Never die,,,Never die
-Ninja,Ninja,,,Ninja
-Play,Play,,,Play
-Continue,Continue,,,Continue
-New game,New game,,,New game
-Shop,Shop,,,Shop
-Settings,Settings,,,Settings
-Achievements,Achievements,,,Achievements
-Records,Records,,,Records
-How to play,How to play,,,How to play
-Credits,Credits,,,Credits
-Survivor,Survivor,,,Survivor
-Current day,Current day,,,Current day
-Best day,Best day,,,Best day
-Level,Level,,,Level
-Bosses defeated,Bosses defeated,,,Bosses defeated
-Loadout,Loadout,,,Loadout
-Clothes,Clothes,,,Clothes
-Hand,Hand,,,Hand
-Gun,Gun,,,Gun
-Deco,Deco,,,Deco
-Zombie survival,Zombie survival,,,Zombie survival
+Key,Context,Example,Source
+,,,Trot
+,,,Patience
+,,,Pickpocket
+,,,Theif
+,,,Chef
+,,,Dwarf
+,,,Robotics
+,,,Engineering
+,,,Cat
+,,,Nocturnal
+,,,Repairman
+,,,Move shooting
+,,,Head shooter
+,,,Poison immunity
+,,,Health increases
+,,,Recovery increases
+,,,Knockback increases
+,,,Melee damage increases
+,,,Roload becomes faster
+,,,Accuracy improves
+,,,Bow accuracy improves
+,,,Speed increases
+,,,Hungry decreases
+,,,Zombies drop more items
+,,,Find more items
+,,,A chance to get more foods
+,,,A chance to get more metal
+,,,Turret reinforced
+,,,Generator reinforced
+,,,Footsteps sound decreases
+,,,Night vision increases
+,,,Repair speed increases
+,,,Accuracy improves with moving
+,,,Able to shot heads
+,,,Get less damage from poison
+,,,Starter pack
+,,,Food aid
+,,,Emergency kit
+,,,Basic craft kit
+,,,Pro craft kit
+,,,Electric craft kit
+,,,Ammo craft kit
+,,,Pigeon the bird
+,,,Carolina the dog
+,,,5 coins
+,,,100 coins
+,,,300 + 30 coins
+,,,600 + 100 coins
+,,,1000 + 300 coins
+,,,Watch ads
+,,,Wait for ads
+,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
+,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
+,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
+,,,Wood X 20#Cloth X 10#Stone X 20
+,,,Blueprint X 5#Steel X 20#Machine parts X 10
+,,,Battery X 5#Computer chip X 2#Bulb X 2
+,,,Steel X 10#Gunpowder X 10
+,,,Pigeon the bird X 1
+,,,Carolina the dog X 1
+,,,Please try again
+,,,You can't use that now
+,,,First steps
+,,,Thomas Edison
+,,,Melee weapons expert
+,,,Bow expert
+,,,Collector
+,,,Blacksmith
+,,,Sniper
+,,,Centipede slayer
+,,,Rafflesia slayer
+,,,Giant slayer
+,,,Hedgehog slayer
+,,,Zombie slayer
+,,,Special zombie slayer
+,,,Woods collector
+,,,Good day
+,,,Rider
+,,,Never die
+,,,Ninja
+,,,Play
+,,,Continue
+,,,New game
+,,,Shop
+,,,Settings
+,,,Achievements
+,,,Records
+,,,How to play
+,,,Credits
+,,,Survivor
+,,,Current day
+,,,Best day
+,,,Level
+,,,Bosses defeated
+,,,Loadout
+,,,Clothes
+,,,Hand
+,,,Gun
+,,,Deco
+,,,Zombie survival

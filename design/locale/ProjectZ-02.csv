@@ -1,101 +1,101 @@
-Key,Source,Context,Example,en
-Canned food,Canned food,,,Canned food
-Frozen pizza,Frozen pizza,,,Frozen pizza
-Pizza,Pizza,,,Pizza
-Bandage,Bandage,,,Bandage
-Frozen meal,Frozen meal,,,Frozen meal
-Cooked meal,Cooked meal,,,Cooked meal
-Mushroom,Mushroom,,,Mushroom
-Mushroom soup,Mushroom soup,,,Mushroom soup
-Apple,Apple,,,Apple
-Berry,Berry,,,Berry
-Craft desk,Craft desk,,,Craft desk
-Pro craft desk,Pro craft desk,,,Pro craft desk
-Turret,Turret,,,Turret
-Turret drone,Turret drone,,,Turret drone
-Lamp,Lamp,,,Lamp
-Lamp drone,Lamp drone,,,Lamp drone
-Battery box,Battery box,,,Battery box
-Solar generator,Solar generator,,,Solar generator
-Nuclear reactor,Nuclear reactor,,,Nuclear reactor
-Oil generator,Oil generator,,,Oil generator
-Wooden barricade,Wooden barricade,,,Wooden barricade
-Wooden door,Wooden door,,,Wooden door
-Steel barricade,Steel barricade,,,Steel barricade
-Steel door,Steel door,,,Steel door
-Campfire,Campfire,,,Campfire
-Brazier,Brazier,,,Brazier
-Electric turret,Electric turret,,,Electric turret
-Trap,Trap,,,Trap
-signal generator,signal generator,,,signal generator
-Cooker,Cooker,,,Cooker
-Electric furnace,Electric furnace,,,Electric furnace
-Bicycle,Bicycle,,,Bicycle
-Motorcycle,Motorcycle,,,Motorcycle
-Wood,Wood,,,Wood
-Stone,Stone,,,Stone
-Piece of steel ,Piece of steel ,,,Piece of steel 
-Steel,Steel,,,Steel
-Piece of gold,Piece of gold,,,Piece of gold
-Gold,Gold,,,Gold
-Blueprint,Blueprint,,,Blueprint
-Machine parts,Machine parts,,,Machine parts
-Battery,Battery,,,Battery
-Bulb,Bulb,,,Bulb
-Gunpowder,Gunpowder,,,Gunpowder
-Cloth,Cloth,,,Cloth
-Computer chip,Computer chip,,,Computer chip
-Voltage circuit,Voltage circuit,,,Voltage circuit
-Engine,Engine,,,Engine
-Drone,Drone,,,Drone
-Night Craft desk,Night Craft desk,,,Night Craft desk
-Night pro craft desk,Night pro craft desk,,,Night pro craft desk
-Leather,Leather,,,Leather
-Solar panel,Solar panel,,,Solar panel
-Radioactive material,Radioactive material,,,Radioactive material
-Normal ammo,Normal ammo,,,Normal ammo
-Shotgun ammo,Shotgun ammo,,,Shotgun ammo
-Machinegun ammo,Machinegun ammo,,,Machinegun ammo
-Arrow,Arrow,,,Arrow
-Oil,Oil,,,Oil
-Rotten meat,Rotten meat,,,Rotten meat
-GPS machine,GPS machine,,,GPS machine
-Pigeon,Pigeon,,,Pigeon
-White pigeon,White pigeon,,,White pigeon
-Eagle,Eagle,,,Eagle
-Carolina,Carolina,,,Carolina
-Malamute,Malamute,,,Malamute
-Doberman,Doberman,,,Doberman
-Santa,Santa,,,Santa
-Zombie,Zombie,,,Zombie
-Cowboy,Cowboy,,,Cowboy
-Golden axe,Golden axe,,,Golden axe
-Golden katana,Golden katana,,,Golden katana
-Small keen knife,Small keen knife,,,Small keen knife
-Stick made of wood,Stick made of wood,,,Stick made of wood
-Heavy fire axe,Heavy fire axe,,,Heavy fire axe
-Metal bar with a curve,Metal bar with a curve,,,Metal bar with a curve
-Chain with a hard toothed edge,Chain with a hard toothed edge,,,Chain with a hard toothed edge
-Mechanical saw with a rotating chain,Mechanical saw with a rotating chain,,,Mechanical saw with a rotating chain
-Wooden club used to hit a baseball,Wooden club used to hit a baseball,,,Wooden club used to hit a baseball
-Large heavy knife,Large heavy knife,,,Large heavy knife
-Metal club used to hit a golf ball,Metal club used to hit a golf ball,,,Metal club used to hit a golf ball
-Semi-automatic pistol,Semi-automatic pistol,,,Semi-automatic pistol
-Small non-automatic handgun,Small non-automatic handgun,,,Small non-automatic handgun
-Sharp light knife,Sharp light knife,,,Sharp light knife
-Powerful handgun that has six shots,Powerful handgun that has six shots,,,Powerful handgun that has six shots
-Semi-automatic rifle,Semi-automatic rifle,,,Semi-automatic rifle
-Powerful assault rifle,Powerful assault rifle,,,Powerful assault rifle
-Accurate assault rifle,Accurate assault rifle,,,Accurate assault rifle
-Pump action shotgun. One by one,Pump action shotgun. One by one,,,Pump action shotgun. One by one
-Semi-automatic shotgun,Semi-automatic shotgun,,,Semi-automatic shotgun
-Bolt action sniper rifle,Bolt action sniper rifle,,,Bolt action sniper rifle
-Semi-automatic sniper rifle,Semi-automatic sniper rifle,,,Semi-automatic sniper rifle
-Classic bow,Classic bow,,,Classic bow
-Powerful horizontal bow,Powerful horizontal bow,,,Powerful horizontal bow
-"Modern bow that uses a pulley system,","Modern bow that uses a pulley system,",,,"Modern bow that uses a pulley system,"
-Project a stream of fire,Project a stream of fire,,,Project a stream of fire
-Fire electric shock to the nearest zombie ,Fire electric shock to the nearest zombie ,,,Fire electric shock to the nearest zombie 
-Heavy stone axe,Heavy stone axe,,,Heavy stone axe
-Clothes made from cotton,Clothes made from cotton,,,Clothes made from cotton
-Jacket made from leather,Jacket made from leather,,,Jacket made from leather
+Key,Context,Example,Source
+,,,Canned food
+,,,Frozen pizza
+,,,Pizza
+,,,Bandage
+,,,Frozen meal
+,,,Cooked meal
+,,,Mushroom
+,,,Mushroom soup
+,,,Apple
+,,,Berry
+,,,Craft desk
+,,,Pro craft desk
+,,,Turret
+,,,Turret drone
+,,,Lamp
+,,,Lamp drone
+,,,Battery box
+,,,Solar generator
+,,,Nuclear reactor
+,,,Oil generator
+,,,Wooden barricade
+,,,Wooden door
+,,,Steel barricade
+,,,Steel door
+,,,Campfire
+,,,Brazier
+,,,Electric turret
+,,,Trap
+,,,signal generator
+,,,Cooker
+,,,Electric furnace
+,,,Bicycle
+,,,Motorcycle
+,,,Wood
+,,,Stone
+,,,Piece of steel 
+,,,Steel
+,,,Piece of gold
+,,,Gold
+,,,Blueprint
+,,,Machine parts
+,,,Battery
+,,,Bulb
+,,,Gunpowder
+,,,Cloth
+,,,Computer chip
+,,,Voltage circuit
+,,,Engine
+,,,Drone
+,,,Night Craft desk
+,,,Night pro craft desk
+,,,Leather
+,,,Solar panel
+,,,Radioactive material
+,,,Normal ammo
+,,,Shotgun ammo
+,,,Machinegun ammo
+,,,Arrow
+,,,Oil
+,,,Rotten meat
+,,,GPS machine
+,,,Pigeon
+,,,White pigeon
+,,,Eagle
+,,,Carolina
+,,,Malamute
+,,,Doberman
+,,,Santa
+,,,Zombie
+,,,Cowboy
+,,,Golden axe
+,,,Golden katana
+,,,Small keen knife
+,,,Stick made of wood
+,,,Heavy fire axe
+,,,Metal bar with a curve
+,,,Chain with a hard toothed edge
+,,,Mechanical saw with a rotating chain
+,,,Wooden club used to hit a baseball
+,,,Large heavy knife
+,,,Metal club used to hit a golf ball
+,,,Semi-automatic pistol
+,,,Small non-automatic handgun
+,,,Sharp light knife
+,,,Powerful handgun that has six shots
+,,,Semi-automatic rifle
+,,,Powerful assault rifle
+,,,Accurate assault rifle
+,,,Pump action shotgun. One by one
+,,,Semi-automatic shotgun
+,,,Bolt action sniper rifle
+,,,Semi-automatic sniper rifle
+,,,Classic bow
+,,,Powerful horizontal bow
+,,,"Modern bow that uses a pulley system,"
+,,,Project a stream of fire
+,,,Fire electric shock to the nearest zombie 
+,,,Heavy stone axe
+,,,Clothes made from cotton
+,,,Jacket made from leather

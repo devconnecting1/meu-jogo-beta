@@ -1,24 +1,31 @@
 #!/usr/bin/env node
 /*
- * Exports the game's strings to the CSV that Roblox's Localization tab imports.
+ * Exports the game's strings to the CSV that Roblox's localization table imports.
  *
- *   npm run locale            writes design/locale/ProjectZ.csv
+ *   npm run locale                  writes design/locale/ProjectZ.csv
+ *   npm run locale -- --split 100   also writes it in chunks of 100 rows
  *
  * Why this exists: our text lives in src/shared/data/lang.ts, keyed by the English string itself. Roblox can
- * translate those same strings automatically into every language it supports, pick the right one from each
- * player's account, and let human translators correct the machine. To get there, the strings have to be in
- * ITS table, which is what this file writes.
+ * translate those same strings into the 44 languages it supports, pick the right one from each player's
+ * account, and let human translators correct the machine. To get there, the strings have to be in ITS table.
  *
- * ONLY the source language ships here, on purpose. The Korean that came with the original game was removed:
- * two translators for one label fight over it, and the platform has to win, because it is the one that knows
- * what language the player's account is in. Corrections live in lang.ts's OVERRIDES, per language and per
- * key, for the few strings the machine gets wrong.
+ * THE FORMAT IS THE DOCUMENTED ONE, AND THE ORDER MATTERS. The columns are, in this order:
  *
- * The CSV shape is Roblox's: Key, Source, Context, Example, then one column per locale.
+ *     Key, Context, Example, Source
  *
- * Context is left blank for a human to fill, and it is the part that decides whether this ends well: most of
- * our strings are one or two words with no sentence around them, and a machine translating "Round", "Use",
- * "Drop" or "Melt" in isolation cannot know we mean a magazine, an item action, discarding and smelting.
+ * An earlier version of this file wrote `Key, Source, Context, Example, en` and the importer refused every
+ * single row with "Could not apply changes", no reason given. Two things were wrong with it:
+ *
+ *   - the column ORDER was invented rather than read;
+ *   - it carried an `en` column. English is the SOURCE, not a translation of English into English, and the
+ *     docs are explicit that you fill Source and may leave the other columns blank.
+ *
+ * So only Source is written here. Key, Context and Example are left blank for a human, and Context is the one
+ * worth filling before turning automatic translation on: most of our strings are one or two words with no
+ * sentence around them, and a machine translating "Round", "Use", "Drop" or "Melt" in isolation cannot know
+ * we mean a magazine, an item action, discarding and smelting.
+ *
+ * Entries are case-sensitive on their side: "hello" and "Hello" are two different strings.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,8 +36,8 @@ const SRC = join(ROOT, "src/shared/data/lang.ts");
 const OUT_DIR = join(ROOT, "design/locale");
 const OUT = join(OUT_DIR, "ProjectZ.csv");
 
-/** the source language, and nothing else: everything below it is Roblox's job */
-const COLUMNS = ["en"];
+/** the documented column order; Source last is not a typo */
+const HEADER = ["Key", "Context", "Example", "Source"];
 
 const source = readFileSync(SRC, "utf8");
 
@@ -38,7 +45,7 @@ const source = readFileSync(SRC, "utf8");
  * Reads LANG_TABLE. A parser rather than an import because that file is roblox-ts, and importing it here
  * would drag the Luau shims in just to read a list of strings.
  */
-function entries() {
+function strings() {
 	const start = source.indexOf("LANG_TABLE: Array<string> = [");
 	if (start < 0) return [];
 	const block = source.slice(start);
@@ -47,10 +54,10 @@ function entries() {
 	const re = /^\t"((?:[^"\\]|\\.)*)",$/gm;
 	let m;
 	while ((m = re.exec(block)) !== null) {
-		const key = m[1].replace(/\\(.)/g, "$1");
-		if (seen.has(key)) continue;
-		seen.add(key);
-		out.push({ key, en: key });
+		const text = m[1].replace(/\\(.)/g, "$1");
+		if (seen.has(text)) continue;
+		seen.add(text);
+		out.push(text);
 	}
 	return out;
 }
@@ -61,31 +68,26 @@ function cell(value) {
 	return /[",\n\r]/.test(v) ? '"' + v.split('"').join('""') + '"' : v;
 }
 
-const rows = entries();
+const rows = strings();
 if (rows.length === 0) {
 	console.error("não achei nenhuma entrada em LANG_TABLE — o formato de lang.ts mudou?");
 	process.exit(1);
 }
 
-const header = ["Key", "Source", "Context", "Example", ...COLUMNS];
-const lines = [header.join(",")];
-for (const e of rows) {
-	lines.push([cell(e.key), cell(e.en), "", "", ...COLUMNS.map(c => cell(e[c]))].join(","));
-}
+const lines = [HEADER.join(",")];
+for (const text of rows) lines.push(["", "", "", cell(text)].join(","));
 
 if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(OUT, lines.join("\n") + "\n", "utf8");
-
-console.log(`${rows.length} textos (inglês) -> ${OUT}`);
+console.log(`${rows.length} textos -> ${OUT}`);
 
 /*
- * --split N also writes the table in chunks of N rows.
+ * --split N writes the same table in chunks.
  *
- * The Localization tab's importer answers `upstream request timeout` on the whole table sometimes. That is a
- * gateway error on their side, not a format problem: ours is 27 kB, has no parameter syntax in it, and every
- * column header is one the docs list. Uploading is a merge keyed by Source, so the same table split across
- * several files ends up identical to one upload -- and a chunk that times out can be retried on its own
- * instead of starting the whole thing over.
+ * Uploading is a merge keyed by Source, so five files of a hundred end up identical to one of 475 -- and a
+ * chunk that fails is retried on its own instead of starting the whole thing over. Useful because the
+ * importer has also answered `upstream request timeout` on the full table, which is a gateway error on their
+ * side rather than anything about the file.
  */
 const splitAt = process.argv.indexOf("--split");
 if (splitAt >= 0) {

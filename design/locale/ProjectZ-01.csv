@@ -1,101 +1,101 @@
-Key,Source,Context,Example,en
-Craft,Craft,,,Craft
-Item,Item,,,Item
-Skill,Skill,,,Skill
-Placeable,Placeable,,,Placeable
-Weapon,Weapon,,,Weapon
-Equipment,Equipment,,,Equipment
-Etc,Etc,,,Etc
-Ammo,Ammo,,,Ammo
-Usable,Usable,,,Usable
-Survival,Survival,,,Survival
-Fighting,Fighting,,,Fighting
-Material,Material,,,Material
-Make,Make,,,Make
-Equip,Equip,,,Equip
-Drop,Drop,,,Drop
-Use,Use,,,Use
-Cook,Cook,,,Cook
-Melt,Melt,,,Melt
-Learn,Learn,,,Learn
-Attack,Attack,,,Attack
-Defense,Defense,,,Defense
-Rate of fire,Rate of fire,,,Rate of fire
-Recoil,Recoil,,,Recoil
-Round,Round,,,Round
-Health recovery,Health recovery,,,Health recovery
-Hunger recovery,Hunger recovery,,,Hunger recovery
-Speed,Speed,,,Speed
-Reloading,Reloading,,,Reloading
-Skill point,Skill point,,,Skill point
-Centipede,Centipede,,,Centipede
-Rafflesia,Rafflesia,,,Rafflesia
-Giant,Giant,,,Giant
-Hedgehog,Hedgehog,,,Hedgehog
-Game over#Continue?,Game over#Continue?,,,Game over#Continue?
-Would you watch a short video#to get a bonus parcel?,Would you watch a short video#to get a bonus parcel?,,,Would you watch a short video#to get a bonus parcel?
-Price,Price,,,Price
-Are you sure#you want to quit?,Are you sure#you want to quit?,,,Are you sure#you want to quit?
-You don't have enough money,You don't have enough money,,,You don't have enough money
-Would you rate our game?,Would you rate our game?,,,Would you rate our game?
-Do you want to#watch the tutorial?,Do you want to#watch the tutorial?,,,Do you want to#watch the tutorial?
-Level UP,Level UP,,,Level UP
-Night is coming,Night is coming,,,Night is coming
-Good morning,Good morning,,,Good morning
-Wave 1,Wave 1,,,Wave 1
-Wave 2,Wave 2,,,Wave 2
-Wave 3,Wave 3,,,Wave 3
-You killed it,You killed it,,,You killed it
-Dagger,Dagger,,,Dagger
-Wooden stick,Wooden stick,,,Wooden stick
-Axe,Axe,,,Axe
-Crowbar,Crowbar,,,Crowbar
-Saw,Saw,,,Saw
-Chainsaw,Chainsaw,,,Chainsaw
-Baseball bat,Baseball bat,,,Baseball bat
-Machete,Machete,,,Machete
-Golf club,Golf club,,,Golf club
-Auto pistol,Auto pistol,,,Auto pistol
-Pistol,Pistol,,,Pistol
-Katana,Katana,,,Katana
-Revolver,Revolver,,,Revolver
-Semi auto rifle,Semi auto rifle,,,Semi auto rifle
-AK-40,AK-40,,,AK-40
-M10,M10,,,M10
-Pump action shotgun,Pump action shotgun,,,Pump action shotgun
-Semi auto shotgun,Semi auto shotgun,,,Semi auto shotgun
-Light machine gun,Light machine gun,,,Light machine gun
-Heavy machine gun,Heavy machine gun,,,Heavy machine gun
-Bolt action sniper,Bolt action sniper,,,Bolt action sniper
-Semi auto sniper,Semi auto sniper,,,Semi auto sniper
-Bow,Bow,,,Bow
-Cross bow,Cross bow,,,Cross bow
-Compound bow,Compound bow,,,Compound bow
-Flamethrower,Flamethrower,,,Flamethrower
-Stun gun,Stun gun,,,Stun gun
-Stone axe,Stone axe,,,Stone axe
-Cotton clothes,Cotton clothes,,,Cotton clothes
-Leather jacket,Leather jacket,,,Leather jacket
-Leather armor,Leather armor,,,Leather armor
-Wooden armor,Wooden armor,,,Wooden armor
-Steel armor,Steel armor,,,Steel armor
-Plastic armor,Plastic armor,,,Plastic armor
-Night vision,Night vision,,,Night vision
-Laser sight,Laser sight,,,Laser sight
-Compass,Compass,,,Compass
-Sundial,Sundial,,,Sundial
-Watch,Watch,,,Watch
-Digital Watch,Digital Watch,,,Digital Watch
-Gun silencer,Gun silencer,,,Gun silencer
-Flashlight,Flashlight,,,Flashlight
-Robot suit,Robot suit,,,Robot suit
-Torchlight,Torchlight,,,Torchlight
-Raw meat,Raw meat,,,Raw meat
-Cooked meat,Cooked meat,,,Cooked meat
-Potato,Potato,,,Potato
-Baked potato,Baked potato,,,Baked potato
-Bread,Bread,,,Bread
-First aid kit,First aid kit,,,First aid kit
-Pain killer,Pain killer,,,Pain killer
-Adrenaline,Adrenaline,,,Adrenaline
-Sedative,Sedative,,,Sedative
+Key,Context,Example,Source
+,,,Craft
+,,,Item
+,,,Skill
+,,,Placeable
+,,,Weapon
+,,,Equipment
+,,,Etc
+,,,Ammo
+,,,Usable
+,,,Survival
+,,,Fighting
+,,,Material
+,,,Make
+,,,Equip
+,,,Drop
+,,,Use
+,,,Cook
+,,,Melt
+,,,Learn
+,,,Attack
+,,,Defense
+,,,Rate of fire
+,,,Recoil
+,,,Round
+,,,Health recovery
+,,,Hunger recovery
+,,,Speed
+,,,Reloading
+,,,Skill point
+,,,Centipede
+,,,Rafflesia
+,,,Giant
+,,,Hedgehog
+,,,Game over#Continue?
+,,,Would you watch a short video#to get a bonus parcel?
+,,,Price
+,,,Are you sure#you want to quit?
+,,,You don't have enough money
+,,,Would you rate our game?
+,,,Do you want to#watch the tutorial?
+,,,Level UP
+,,,Night is coming
+,,,Good morning
+,,,Wave 1
+,,,Wave 2
+,,,Wave 3
+,,,You killed it
+,,,Dagger
+,,,Wooden stick
+,,,Axe
+,,,Crowbar
+,,,Saw
+,,,Chainsaw
+,,,Baseball bat
+,,,Machete
+,,,Golf club
+,,,Auto pistol
+,,,Pistol
+,,,Katana
+,,,Revolver
+,,,Semi auto rifle
+,,,AK-40
+,,,M10
+,,,Pump action shotgun
+,,,Semi auto shotgun
+,,,Light machine gun
+,,,Heavy machine gun
+,,,Bolt action sniper
+,,,Semi auto sniper
+,,,Bow
+,,,Cross bow
+,,,Compound bow
+,,,Flamethrower
+,,,Stun gun
+,,,Stone axe
+,,,Cotton clothes
+,,,Leather jacket
+,,,Leather armor
+,,,Wooden armor
+,,,Steel armor
+,,,Plastic armor
+,,,Night vision
+,,,Laser sight
+,,,Compass
+,,,Sundial
+,,,Watch
+,,,Digital Watch
+,,,Gun silencer
+,,,Flashlight
+,,,Robot suit
+,,,Torchlight
+,,,Raw meat
+,,,Cooked meat
+,,,Potato
+,,,Baked potato
+,,,Bread
+,,,First aid kit
+,,,Pain killer
+,,,Adrenaline
+,,,Sedative
