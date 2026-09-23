@@ -539,6 +539,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					Workspace.SetAttribute("pz_zombies", sim.horde?.count() ?? 0);
 					Workspace.SetAttribute("pz_world_day", sim.clock.day);
 					Workspace.SetAttribute("pz_day_time", sim.clock.dayTime);
+					// MP-21's stall counter (shared/sim/ai/population.ts PopulationStall), visible for a playtest
+					Workspace.SetAttribute("pz_stall_s", sim.horde?.population.stall().current ?? 0);
+					Workspace.SetAttribute("pz_stall_episodes", sim.horde?.population.stall().episodes ?? 0);
 				}
 				for (const [player, link] of links) {
 					if (link.slot === undefined) continue;
