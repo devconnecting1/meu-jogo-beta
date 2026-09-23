@@ -598,6 +598,17 @@ const { ITEM_ICONS, ICON_GLYPHS, iconOf, skillIconOf } = require(join(SRC, "shar
 const { ICON_ART_ORDER } = require(join(SRC, "shared/engine/colors.ts"));
 const Icon = require(join(SRC, "client/ui/itemIcon.ts"));
 const { STAT, GAME, THEME, SURFACE } = require(join(SRC, "client/ui/theme.ts"));
+const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+/** the uploads as they are, with the item icon atlas's id set to `id` ("" = none: the icons are Frames) */
+function setIconAtlas(id) {
+	const ids = {};
+	for (const [name, t] of Object.entries(WORLD_ART)) ids[name] = t.id;
+	ids.itemIcons = id;
+	WA.overrideWorldArt(ids);
+}
+// the walk measures the Frame drawing whatever has been uploaded; part 10 measures the atlas too (test:icons)
+setIconAtlas("");
 flush();
 
 // ---------------------------------------------------------------- measuring
@@ -2066,20 +2077,28 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 // ---------------------------------------------------------------- 10. what a full page costs
 
 console.log("\n10) o custo de uma pagina cheia (todas as 30 armas; as 80 receitas)\n");
-/** Instances, Frames and icon Frames ("Px") under `root` */
+/** Instances, Frames, icon Frames ("Px") and icon atlas images under `root` */
 function census(root) {
 	const d = root === undefined ? [] : root.GetDescendants();
 	return {
 		all: d.length + 1,
 		frames: d.filter(x => x.ClassName === "Frame").length + 1,
 		px: d.filter(x => x.Name === "Px").length,
+		images: d.filter(x => x.ClassName === "ImageLabel" && x.Name === "Atlas").length,
 		tiles: d.filter(x => /^Tile\d+$/.test(x.Name)).length,
 	};
 }
-const fmtCensus = c => `${c.all} Instances (${c.frames} Frames, dos quais ${c.px} de icone), ${c.tiles} ladrilhos`;
-let fullWeapons;
-let fullCraft;
-{
+const fmtCensus = c =>
+	`${c.all} Instances (${c.frames} Frames, dos quais ${c.px} de icone${c.images > 0 ? `; ${c.images} icones do atlas` : ""}), ${c.tiles} ladrilhos`;
+
+/**
+ * A new Bag with every weapon, opened on Weapons, then Craft scrolled to the end: what it costs. `atlas` "" draws the
+ * icons with Frames; an id, with one ImageLabel each (client/ui/itemIcon.ts, the atlas of tools/icon-atlas.mjs).
+ */
+function fullPages(atlas) {
+	const tag = atlas === "" ? "" : " (atlas)";
+	setIconAtlas(atlas);
+	const out = {};
 	const full = defaultSave();
 	for (const w of WEAPONS) full.invenWeapon[w.id] = 1;
 	full.ammoNormal = 60;
@@ -2087,24 +2106,26 @@ let fullCraft;
 	const p2 = new Backpack(c2);
 	wire(p2, full);
 	uiCtx = c2;
-	const opened = phase("Bag novo, 30 armas: abre em Weapons", () => p2.open());
-	fullWeapons = census(page(0));
+	const opened = phase(`Bag novo, 30 armas: abre em Weapons${tag}`, () => p2.open());
+	out.weapons = census(page(0));
+	out.opened = opened;
 	console.log(`  abrir: ${cost(opened)} (janela + painel + a grade de armas)`);
-	console.log(`  pagina de armas cheia: ${fmtCensus(fullWeapons)}`);
+	console.log(`  pagina de armas cheia: ${fmtCensus(out.weapons)}`);
 	check(
-		"a pagina cheia mostra as 30 armas, cada uma com o seu icone",
+		`a pagina cheia mostra as 30 armas, cada uma com o seu icone${tag}`,
 		tilesOf(0).length === WEAPONS.length &&
 			tilesOf(0).every(t => iconKey(t) === iconOf(1, Number(keyOf(t).split(":")[1])).key),
 		`${tilesOf(0).length} ladrilhos`,
 	);
-	const craftFirst = phase("e vai a Craft", () => tab(4));
-	fullCraft = census(page(4));
+	const craftFirst = phase(`e vai a Craft${tag}`, () => tab(4));
+	out.craft = census(page(4));
+	out.craftFirst = craftFirst;
 	console.log(
-		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(fullCraft)}`,
+		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(out.craft)}`,
 	);
 	const drawn = () => tilesOf(4).filter(t => iconKey(t) !== "").length;
 	check(
-		"as receitas fora da tela ainda nao pagam os Frames do icone",
+		`as receitas fora da tela ainda nao pagam o desenho do icone${tag}`,
 		drawn() < CRAFT_RECIPES.length && drawn() >= 25,
 		`${drawn()} de ${CRAFT_RECIPES.length} desenhadas`,
 	);
@@ -2112,27 +2133,70 @@ let fullCraft;
 	const list = deep(page(4), "List");
 	list.AbsoluteSize = new Vector2(408, 408);
 	const rows = Math.ceil(CRAFT_RECIPES.length / 5);
-	const scrolled = phase("rola Craft ate o fim", () => {
+	const scrolled = phase(`rola Craft ate o fim${tag}`, () => {
 		for (let y = 0; y <= rows * 80; y += 80) {
 			list.CanvasPosition = new Vector2(0, y);
 			flush();
 		}
 	});
-	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(census(page(4)))}`);
+	out.scrolled = scrolled;
+	out.craftAll = census(page(4));
+	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(out.craftAll)}`);
 	check(
-		"rolar desenha as linhas que chegam, ate a ultima",
+		`rolar desenha as linhas que chegam, ate a ultima${tag}`,
 		drawn() === CRAFT_RECIPES.length,
 		`${drawn()} de ${CRAFT_RECIPES.length}`,
 	);
-	const again = phase("rola de volta e de novo", () => {
+	const again = phase(`rola de volta e de novo${tag}`, () => {
 		for (const y of [0, rows * 40, rows * 80, 0]) {
 			list.CanvasPosition = new Vector2(0, y);
 			flush();
 		}
 	});
-	check("rolar de novo nao cria nem destroi Instance", zero(again), cost(again));
+	check(`rolar de novo nao cria nem destroi Instance${tag}`, zero(again), cost(again));
+	// the other tabs are built on their first visit (part 1 measures that); then they are only shown again
+	for (const t of [0, 1, 2, 3, 5]) tab(t);
+	const cycle = phase(`fecha, reabre e passa as 6 abas 3 vezes${tag}`, () => {
+		for (let i = 0; i < 3; i++) {
+			p2.close();
+			p2.open();
+			for (const t of [0, 1, 2, 3, 4, 5]) tab(t);
+		}
+	});
+	check(`depois disso, reabrir e trocar de aba nao cria nem destroi Instance${tag}`, zero(cycle), cost(cycle));
+	out.bag = census(bag());
 	p2.close();
 	uiCtx = ctx;
+	return out;
+}
+const flatPages = fullPages("");
+const fullWeapons = flatPages.weapons;
+const fullCraft = flatPages.craft;
+
+console.log("\n10b) as mesmas paginas com o atlas dos icones (um ImageLabel por icone; test:icons prova o desenho)\n");
+const atlasPages = fullPages("rbxassetid://910000001");
+setIconAtlas("");
+{
+	const w = atlasPages.weapons;
+	check(
+		"com o atlas nenhum icone e Frame: cada ladrilho tem UM ImageLabel",
+		w.px === 0 && atlasPages.craftAll.px === 0 && atlasPages.bag.px === 0 && w.images >= w.tiles,
+		`${w.images} imagens, ${w.px} Frames de icone`,
+	);
+	check(
+		"e o resto da pagina e o mesmo: as Instances de icone trocam os Frames pela imagem, uma por visao",
+		w.all - w.images === flatPages.weapons.all - flatPages.weapons.px &&
+			atlasPages.craftAll.all - atlasPages.craftAll.images === flatPages.craftAll.all - flatPages.craftAll.px,
+		`armas ${flatPages.weapons.all} -> ${w.all}; Craft rolado ${flatPages.craftAll.all} -> ${atlasPages.craftAll.all}`,
+	);
+	check(
+		"rolar Craft ate o fim desenha as linhas novas sem criar Instance (o ImageLabel ja existia)",
+		zero(atlasPages.scrolled),
+		`${cost(atlasPages.scrolled)}, contra ${cost(flatPages.scrolled)} sem atlas`,
+	);
+	console.log(
+		`  Bag inteiro (30 armas, Craft rolado): ${flatPages.bag.all} Instances sem atlas -> ${atlasPages.bag.all} com atlas (${flatPages.bag.px} Frames de icone -> ${atlasPages.bag.images} imagens)`,
+	);
 }
 
 // ---------------------------------------------------------------- 11. the layout, on a small layout pass
@@ -2331,6 +2395,8 @@ console.log(`\nprimeira visita das abas: ${sum(firstVisit, "bagNew")} criadas`);
 console.log(`Instances vivas no Bag no fim da caminhada: ${alive}`);
 console.log(`pagina cheia de armas (30): ${fmtCensus(fullWeapons)}`);
 console.log(`pagina de Craft (80 receitas), 1a vista: ${fmtCensus(fullCraft)}`);
+console.log(`com o atlas dos icones: armas ${fmtCensus(atlasPages.weapons)}; Craft ${fmtCensus(atlasPages.craft)}`);
+console.log(`Bag inteiro, Craft rolado: ${flatPages.bag.all} Instances sem atlas, ${atlasPages.bag.all} com`);
 console.log(
 	`icones: ${frameCounts.length}, media ${(frameCounts.reduce((s, [, c]) => s + c, 0) / frameCounts.length).toFixed(1)} Frames, maximo ${frameCounts[0][1]} (${frameCounts[0][0]})`,
 );
