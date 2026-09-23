@@ -132,8 +132,27 @@ export class WorldClock implements AiClock {
 
 	constructor(options: WorldClockOptions = {}) {
 		this.rollRain = options.rollRain ?? defaultRainRoll;
-		this.day = math.max(1, math.floor(options.day ?? 1));
-		this.dayTime = math.clamp(options.dayTime ?? 7, 0, HOURS_PER_DAY - 1e-6);
+		this.restart(options.day, options.dayTime);
+	}
+
+	/**
+	 * A clock as a new server opens it — day `day` (1) at `dayTime` (07:00), the day's rain rolled, no night
+	 * promised, nothing waiting to be announced — WITHOUT a new object: the horde, the simulation and the
+	 * replication all hold this one, and so do the `onNewDay` / `onWaveFill` subscriptions (MP-22: the world that
+	 * ended gives way to a new one on day 1; server/sim/worldReset.ts). The next Clock delta goes out at once, so
+	 * every client jumps to the new hour instead of easing towards it.
+	 */
+	restart(day = 1, dayTime = 7): void {
+		this.day = math.max(1, math.floor(day));
+		this.dayTime = math.clamp(dayTime, 0, HOURS_PER_DAY - 1e-6);
+		for (let i = 0; i < 3; i++) {
+			this.waveQueues[i] = 0;
+			this.specialWaveQueues[i] = 0;
+		}
+		this.morningCount = 0;
+		this.fillDone = false;
+		this.pending.clear();
+		this.forceSend = true;
 		this.isRaining = this.rollRain(this.day);
 		this.refresh();
 	}

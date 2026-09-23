@@ -223,9 +223,17 @@ export interface DaybreakWait {
  *
  * Rebirth (when a handler is given) buys the rest of the night off with coins — legal on every server kind
  * since the owner's rule of 23 Sep 2026 — so it sits under the count, outlined, never louder than the wait.
- * "New game" is still here for a survivor who would rather start a new life; that life waits for daybreak too.
+ * "New game" is still here for a survivor who would rather start a new life; that life waits for daybreak too,
+ * so once it is chosen (`newLife`) the button goes and the panel says whose wait it is now. Either way the panel
+ * says what really happens (MP-21, MP-22): you wake at first light — unless nobody is left standing, and then the
+ * town falls and a new one begins at day 1.
  */
-export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): DaybreakWait {
+export function showDaybreakWait(
+	ctx: GameContext,
+	summary: RunSummary,
+	handlers: RunSummaryHandlers,
+	newLife = false,
+): DaybreakWait {
 	const lang = ctx.save.settings.langType;
 	const tr = (key: string): string => langGet(key, lang);
 	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
@@ -244,7 +252,13 @@ export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers
 	makeLabel(
 		panel,
 		"Wait",
-		nl(tr("The town is not yours to restart.#You wake with the others, at first light.")),
+		nl(
+			tr(
+				newLife
+					? "Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1."
+					: "You wake at first light.#If nobody is left standing, a new town begins at day 1.",
+			),
+		),
 		PAD,
 		y,
 		innerW,
@@ -292,24 +306,29 @@ export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers
 	}
 
 	const halfW = (innerW - space(3)) / 2;
-	const newRun = Button(panel, "NewRun", tr("New game"), {
-		x: PAD,
+	// no handler: the new life is already chosen and waiting, and Home takes the whole row
+	const onNewRun = handlers.onNewRun;
+	const newRun =
+		onNewRun !== undefined
+			? Button(panel, "NewRun", tr("New game"), {
+					x: PAD,
+					y,
+					w: halfW,
+					h: 48,
+					// waiting is the default, so starting over is the one that throws this life away
+					variant: "secondary",
+					onClick: (): void => onNewRun(),
+				})
+			: undefined;
+	const home = Button(panel, "Home", tr("Home"), {
+		x: newRun !== undefined ? PAD + halfW + space(3) : PAD,
 		y,
-		w: halfW,
-		h: 48,
-		// waiting is the default, so starting over is the one that throws this life away
-		variant: "secondary",
-		onClick: (): void => handlers.onNewRun?.(),
-	});
-	Button(panel, "Home", tr("Home"), {
-		x: PAD + halfW + space(3),
-		y,
-		w: halfW,
+		w: newRun !== undefined ? halfW : innerW,
 		h: 48,
 		variant: "secondary",
 		onClick: (): void => handlers.onHome?.(),
 	});
-	autoFocus(newRun);
+	autoFocus(newRun ?? home);
 
 	let shown = "";
 	return {

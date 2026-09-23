@@ -34,6 +34,7 @@ import { buyCostume } from "./save/costumes";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
+import { startWorldLog } from "./save/worldLog";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -1063,6 +1064,8 @@ admin = startAdminServer({
  * is what `stepPlayer` reads the skill levels from.
  */
 if (MP_PHASE >= 1) {
+	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
+	const worldLog = startWorldLog();
 	mpHost = startMpHost({
 		saveOf: player => {
 			const s = sessions.get(player);
@@ -1071,11 +1074,13 @@ if (MP_PHASE >= 1) {
 			if (s === undefined || s.closed || !s.loaded) return undefined;
 			return s.save;
 		},
-		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1)
+		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
+		// world that ended gave its fallen a new life (MP-22): `resetRun` and a new `runRev` in the live save
 		saveChanged: userId => markDirty(userId),
-		// `onWorldWiped` (server/sim/life.ts rule 6: everybody in the world is dead and nobody paid inside the
-		// window) is where the world's reset to day 1 will hang, from HERE. Not yet: the host only logs it, and
-		// the daybreak wait still stands everybody up.
+		// MP-22: everybody in the world died and nobody paid inside the window (server/sim/life.ts rule 6), so the
+		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
+		// is the record of the world that ended — persisted off this thread, the reset never waits for it
+		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an

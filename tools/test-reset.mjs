@@ -1,0 +1,1334 @@
+#!/usr/bin/env node
+/*
+ * The world ends when nobody is left alive, and a new one begins on day 1 (docs/DESIGN_RULES.md MP-22, the owner's
+ * decision of 23 Sep 2026; server/sim/worldReset.ts, server/sim/life.ts rule 6).
+ *
+ *   npm run test:reset                  # everything (exit code 1 on any failure)
+ *   node tools/test-reset.mjs --verbose # with the server's own print/warn lines
+ *   PZ_SRC=path/to/src node tools/test-reset.mjs
+ *
+ * "Se todos os jogadores sobreviventes do mundo morrerem, o mundo finaliza naquele dia específico pra resetar pro dia
+ * 1. O objetivo do jogo é durar mais tempo vivo e explorar o mundo." Until this landed the detection existed and the
+ * reset did not: a server whose survivors all died waited for daybreak like any other death.
+ *
+ * Like tools/test-body.mjs, this boots the REAL server — server/main.server.ts, which starts server/net/mpHost.ts and
+ * the world log — on a fake Roblox (Players, RunService's Heartbeat, remotes, an in-memory DataStore), and talks to it
+ * only the way a client can. What it asserts is what the clients are sent and what the DataStore keeps.
+ *
+ *   1. EVERYBODY DIES          after the 30 s window the world ends exactly once: a new seed, a new town, day 1 at
+ *                              07:00, no zombie of the old horde; every client is told (WorldReset to all, then the
+ *                              join message again with the new seed and hash); the fallen are alive again with a new
+ *                              life (life day 1, starter kit) and keep level, skills, coins, packs and costumes; the
+ *                              world that ended is in the DataStore with how many days it lasted.
+ *   2. A REBIRTH IN THE WINDOW keeps the world: nothing is reset, and solo still works — alone, with coins, the
+ *                              window is the time to pay.
+ *   3. EVERYBODY DECLINED      New game + Home end the world at once; the one in the lobby comes back to the NEW town
+ *                              alive, and the one who never entered this world keeps their life untouched.
+ *   4. THE ONES WHO LEFT       a survivor who left the server before the end keeps their life but not their body:
+ *                              they come back into the new town, never onto a spot of the old one.
+ *   5. THE F3 WORLD            with the server owning the interactive world (ground items, constructions, doors,
+ *                              the night's wave queues), none of the old world survives into the new one.
+ *   6. THE WIRE AND THE RECORD WorldReset and InitBegin{seed} round-trip and refuse garbage; a new seed is never the
+ *                              old one; the stored list of ended worlds is bounded and sanitised.
+ *   7. THE CLIENT              source guards: the client builds the server's town (not always DESIGN.TOWN_SEED) and
+ *                              listens for the news.
+ *   8. NEW GAME IS A NEW LIFE  the owner's playtest ("spawns and dies at the same instant, every click"): the old
+ *                              client's flow is reproduced against the real server, the new one never draws a living
+ *                              survivor the server holds dead, a solo New game ends the world at once instead of
+ *                              blocking it, the welcome always tells a newcomer its own state, and the dawn wait
+ *                              does not give up on a live session (source guards pin main.client.ts to that flow).
+ *   9. ONCE PER WIPE           a Rebirth closes the window, a new fall opens a new one: one wipe per fall of the last
+ *                              survivor, never one per death.
+ *
+ * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
+ * same one tools/test-body.mjs uses).
+ */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { installShims } from "./luau-shim.mjs";
+
+const { SRC, require } = installShims({ seed: 1 });
+const VERBOSE = process.argv.includes("--verbose");
+
+// ---------------------------------------------------------------- reporting
+
+let failures = 0;
+let checks = 0;
+function check(ok, what, detail) {
+	checks += 1;
+	const tail = detail === undefined ? "" : `  (${detail})`;
+	if (ok) console.log(`  ok    ${what}${tail}`);
+	else {
+		failures += 1;
+		console.log(`  FAIL  ${what}${tail}`);
+	}
+	return ok;
+}
+const info = msg => console.log(`        ${msg}`);
+function section(title, fn) {
+	console.log(`\n${title}`);
+	try {
+		fn();
+	} catch (e) {
+		failures += 1;
+		console.log(`  FAIL  the section threw: ${e?.stack?.split("\n").slice(0, 3).join(" | ") ?? e}`);
+	}
+}
+const f1 = v => (typeof v === "number" ? v.toFixed(1) : String(v));
+
+// ---------------------------------------------------------------- the fake Roblox (as tools/test-body.mjs)
+
+/** a thread that yields (task.wait, Signal:Wait) is abandoned there: nothing under test needs it resumed */
+class Yield extends Error {}
+function runThread(fn, args) {
+	try {
+		return fn(...args);
+	} catch (e) {
+		if (e instanceof Yield) return undefined;
+		throw e;
+	}
+}
+
+let clockNow = 1000;
+const timers = [];
+const tickErrors = [];
+globalThis.print = (...a) => {
+	if (VERBOSE) console.log("        [print]", ...a);
+};
+globalThis.warn = (...a) => {
+	const line = a.join(" ");
+	if (line.includes("tick failed")) tickErrors.push(line);
+	if (VERBOSE) console.log("        [warn]", line);
+};
+globalThis.os = { clock: () => clockNow, time: () => Math.floor(1_700_000_000 + clockNow) };
+globalThis.task = {
+	spawn: (fn, ...args) => runThread(fn, args),
+	defer: (fn, ...args) => runThread(fn, args),
+	delay: (s, fn, ...args) => timers.push({ at: clockNow + s, fn: () => runThread(fn, args) }),
+	wait: () => {
+		throw new Yield();
+	},
+};
+globalThis.pcall = (fn, ...args) => {
+	try {
+		return [true, fn(...args)];
+	} catch (e) {
+		if (e instanceof Yield) throw e;
+		return [false, e instanceof Error ? e.message : e];
+	}
+};
+globalThis.tostring = v => String(v);
+globalThis.tonumber = v => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+globalThis.$tuple = (...a) => a[0];
+globalThis.utf8 = { len: s => [Array.from(String(s)).length], offset: (s, n) => n };
+globalThis.string = {
+	char: (...codes) => String.fromCharCode(...codes),
+	match: () => [undefined],
+	format: (fmt, ...args) => {
+		let i = 0;
+		return fmt.replace(/%([-0]*)(\d+)?(?:\.(\d+))?([dsfixq%])/g, (m, flags, width, prec, conv) => {
+			if (conv === "%") return "%";
+			const v = args[i++];
+			let s;
+			if (conv === "d" || conv === "i") s = String(Math.trunc(Number(v)));
+			else if (conv === "f") s = Number(v).toFixed(prec === undefined ? 6 : Number(prec));
+			else if (conv === "x") s = (Number(v) >>> 0).toString(16);
+			else s = String(v);
+			if (width !== undefined && s.length < Number(width))
+				s = s.padStart(Number(width), flags.includes("0") ? "0" : " ");
+			return s;
+		});
+	},
+};
+globalThis.Enum = new Proxy({}, { get: (_, a) => new Proxy({}, { get: (__, b) => `${String(a)}.${String(b)}` }) });
+
+class Signal {
+	constructor() {
+		this.handlers = [];
+	}
+	Connect(fn) {
+		const h = { fn, on: true };
+		this.handlers.push(h);
+		return {
+			Connected: true,
+			Disconnect: () => {
+				h.on = false;
+				this.handlers = this.handlers.filter(x => x !== h);
+			},
+		};
+	}
+	Fire(...args) {
+		for (const h of [...this.handlers]) if (h.on) runThread(h.fn, args);
+	}
+	Wait() {
+		throw new Yield();
+	}
+}
+
+class Inst {
+	constructor(className) {
+		this.ClassName = className;
+		this.Name = className;
+		this._children = [];
+		this._parent = undefined;
+		this._attrs = new Map();
+		this.ChildAdded = new Signal();
+		if (className.endsWith("RemoteEvent")) {
+			this.OnServerEvent = new Signal();
+			this.OnClientEvent = new Signal();
+			this.sent = [];
+		}
+	}
+	get Parent() {
+		return this._parent;
+	}
+	set Parent(p) {
+		if (this._parent !== undefined) this._parent._children = this._parent._children.filter(c => c !== this);
+		this._parent = p;
+		if (p !== undefined) {
+			p._children.push(this);
+			p.ChildAdded.Fire(this);
+		}
+	}
+	FindFirstChild(name) {
+		return this._children.find(c => c.Name === name);
+	}
+	WaitForChild(name) {
+		return this.FindFirstChild(name);
+	}
+	GetChildren() {
+		return [...this._children];
+	}
+	IsA(className) {
+		return this.ClassName === className || className === "Instance";
+	}
+	Destroy() {
+		this.Parent = undefined;
+	}
+	SetAttribute(k, v) {
+		this._attrs.set(k, v);
+	}
+	GetAttribute(k) {
+		return this._attrs.get(k);
+	}
+	FireClient(player, ...args) {
+		this.sent.push({ to: player, args });
+		if (this.sent.length > 20000) this.sent.splice(0, 10000);
+	}
+	FireAllClients(...args) {
+		this.sent.push({ to: undefined, args });
+		if (this.sent.length > 20000) this.sent.splice(0, 10000);
+	}
+}
+globalThis.Instance = Inst;
+
+/** Roblox's DataStores outlive a server: one map per store name for the whole run */
+const stores = new Map();
+const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+function fakeStore(name) {
+	let s = stores.get(name);
+	if (s !== undefined) return s;
+	const data = new Map();
+	s = {
+		data,
+		UpdateAsync(key, transform) {
+			const next = transform(clone(data.get(key)));
+			if (next !== undefined) data.set(key, clone(next));
+			return [next];
+		},
+		GetAsync: key => [clone(data.get(key))],
+		SetAsync: (key, v) => data.set(key, clone(v)),
+	};
+	stores.set(name, s);
+	return s;
+}
+
+let guid = 0;
+function makeGame() {
+	const ReplicatedStorage = new Inst("ReplicatedStorage");
+	const Workspace = new Inst("Workspace");
+	Workspace.GetServerTimeNow = () => clockNow;
+	const Players = {
+		list: [],
+		PlayerAdded: new Signal(),
+		PlayerRemoving: new Signal(),
+		MaxPlayers: 6,
+		CharacterAutoLoads: true,
+		GetPlayers() {
+			return [...this.list];
+		},
+		GetPlayerByUserId(id) {
+			return this.list.find(p => p.UserId === id);
+		},
+	};
+	const RunService = { Heartbeat: new Signal(), IsStudio: () => false, IsServer: () => true, IsClient: () => false };
+	const HttpService = {
+		GenerateGUID: () => `guid-${++guid}`,
+		JSONEncode: v => JSON.stringify(v),
+		JSONDecode: s => JSON.parse(s),
+	};
+	const DataStoreService = { GetDataStore: name => fakeStore(name), GetRequestBudgetForRequestType: () => 100 };
+	const services = {
+		ReplicatedStorage,
+		Workspace,
+		Players,
+		RunService,
+		HttpService,
+		DataStoreService,
+		TextChatService: new Inst("TextChatService"),
+		TextService: {},
+	};
+	const closers = [];
+	globalThis.game = {
+		GetService(name) {
+			const s = services[name];
+			if (s === undefined) throw new Error(`the fake Roblox has no ${name}`);
+			return s;
+		},
+		JobId: `job-${++guid}`,
+		PrivateServerId: "",
+		PrivateServerOwnerId: 0,
+		PlaceId: 1,
+		PlaceVersion: 1,
+		BindToClose: fn => closers.push(fn),
+	};
+	return { services, closers };
+}
+
+function makePlayer(userId, name) {
+	const p = new Inst("Player");
+	p.Name = name;
+	p.UserId = userId;
+	p.DisplayName = name;
+	p.Kick = () => {};
+	p.GetNetworkPing = () => 0.05;
+	return p;
+}
+
+// ---------------------------------------------------------------- a server "process"
+
+function bootServer() {
+	for (const k of Object.keys(require.cache)) if (k.startsWith(SRC)) delete require.cache[k];
+	const env = makeGame();
+	require(join(SRC, "server/main.server.ts"));
+	const host = require(join(SRC, "server/net/mpHost.ts")).activeMpHost();
+	if (host === undefined) throw new Error("main.server.ts did not start the MP host (MP_PHASE < 1?)");
+	const P = require(join(SRC, "shared/net/protocol.ts"));
+	const { SAVE_STORE, WORLD_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const { Players, RunService, ReplicatedStorage, Workspace } = env.services;
+	const net = ReplicatedStorage.FindFirstChild("Net");
+	const remote = name => {
+		const r = net.FindFirstChild(name);
+		if (r === undefined) throw new Error(`no remote ${name}`);
+		return r;
+	};
+	const server = {
+		env,
+		host,
+		P,
+		get sim() {
+			return host.simulation;
+		},
+		Workspace,
+		join(userId, name = `p${userId}`) {
+			const p = makePlayer(userId, name);
+			p._parent = Players;
+			Players.list.push(p);
+			Players.PlayerAdded.Fire(p);
+			remote("LoadRequest").OnServerEvent.Fire(p);
+			return p;
+		},
+		quit(p) {
+			Players.list = Players.list.filter(x => x !== p);
+			Players.PlayerRemoving.Fire(p);
+			p._parent = undefined;
+		},
+		save(p) {
+			const acks = remote("LoadAck").sent.filter(e => e.to === p);
+			return acks[acks.length - 1]?.args[0]?.save;
+		},
+		intent(p, kind) {
+			remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
+		},
+		enter(p) {
+			server.intent(p, P.IntentKind.EnterWorld);
+			server.run(0.6);
+			return server.body(p);
+		},
+		exit(p) {
+			server.intent(p, P.IntentKind.LeaveWorld);
+			server.beat();
+		},
+		shop(p, req) {
+			return remote("ShopAction").OnServerInvoke(p, req);
+		},
+		/** a client progress report (SaveRequest) of the live save with `fields` overridden; returns the SaveAck */
+		report(p, fields) {
+			const acks = remote("LoadAck").sent.filter(e => e.to === p);
+			const token = acks[acks.length - 1]?.args[0]?.token;
+			remote("SaveRequest").OnServerEvent.Fire(p, token, JSON.stringify({ ...server.save(p), ...fields }));
+			return remote("SaveAck")
+				.sent.filter(e => e.to === p)
+				.pop()?.args[0];
+		},
+		body(p) {
+			return host.playerOf(p);
+		},
+		/** how far the World channel has got: pass it to `lifeSince` to read only what came after */
+		mark() {
+			return remote("World").sent.length;
+		},
+		/**
+		 * The PlayerLife states `p`'s client reads about ITSELF from index `from` of the World channel, in order — its
+		 * slot learnt from the PlayerJoined naming its UserId, exactly as client/net/netClient.ts learns it.
+		 */
+		lifeSince(p, from = 0) {
+			const out = [];
+			let mySlot = server.body(p)?.slot ?? -1;
+			const sent = remote("World").sent;
+			for (let i = from; i < sent.length; i++) {
+				const e = sent[i];
+				if (e.to !== undefined && e.to !== p) continue;
+				const batch = P.decodeWorld(e.args[0]);
+				if (batch === undefined) continue;
+				for (const ev of batch.events) {
+					if (ev.t === P.WorldEv.PlayerJoined && ev.userId === p.UserId) {
+						mySlot = ev.slot;
+						out.push("joined");
+					}
+					if (ev.t === P.WorldEv.PlayerLife && ev.slot === mySlot) {
+						out.push(
+							ev.state === P.LifeState.Dead ? "dead" : ev.state === P.LifeState.Up ? "up" : `${ev.state}`,
+						);
+					}
+					if (ev.t === P.WorldEv.WorldReset) out.push("reset");
+				}
+			}
+			return out;
+		},
+		/** every World batch sent so far, decoded, with who it went to (undefined = FireAllClients) */
+		worldLog() {
+			const out = [];
+			for (const e of remote("World").sent) {
+				const batch = P.decodeWorld(e.args[0]);
+				if (batch !== undefined) out.push({ to: e.to, events: batch.events });
+			}
+			return out;
+		},
+		clearWorldLog() {
+			remote("World").sent.length = 0;
+		},
+		kill(p) {
+			const sp = server.body(p);
+			sp.state.godMode = false;
+			server.sim.combat.damageActor(sp.slot, sp.state, sp.save, sp.state.hpMax * 10, true);
+			server.beat();
+			server.beat();
+			return sp;
+		},
+		stored(userId) {
+			const doc = fakeStore(SAVE_STORE).data.get(String(userId));
+			if (doc === undefined) return undefined;
+			return typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+		},
+		/** the shared document of ended worlds (server/save/worldLog.ts) */
+		endedWorlds() {
+			return fakeStore(WORLD_LOG_STORE).data.get("ended");
+		},
+		immortal: new Set(),
+		beat(dt = 1 / 60) {
+			clockNow += dt;
+			for (let i = timers.length - 1; i >= 0; i--) {
+				if (timers[i].at <= clockNow) {
+					const t = timers.splice(i, 1)[0];
+					t.fn();
+				}
+			}
+			for (const p of server.immortal) {
+				const sp = host.playerOf(p);
+				if (sp !== undefined && !sp.state.dead) {
+					sp.state.godMode = true;
+					sp.state.hungry = Math.max(sp.state.hungry, 1);
+				}
+			}
+			RunService.Heartbeat.Fire(dt);
+			if (tickErrors.length > 0)
+				throw new Error(`the simulation tick failed: ${tickErrors.splice(0).join(" | ")}`);
+		},
+		run(seconds, dt = 1 / 60) {
+			const n = Math.round(seconds / dt);
+			for (let i = 0; i < n; i++) server.beat(dt);
+		},
+		shutdown() {
+			for (const fn of env.closers) runThread(fn, []);
+		},
+		/** every `onWorldWiped` the host passed on to main.server.ts, through the keeper's own hook (chained) */
+		wipes() {
+			const lives = host.lives;
+			if (lives.__wipes === undefined) {
+				lives.__wipes = [];
+				const prev = lives.onWorldWiped;
+				lives.onWorldWiped = r => {
+					lives.__wipes.push(r);
+					prev?.(r);
+					// the clock the moment the new world began (the harness keeps ticking after it)
+					r.clockAfter = { day: host.simulation.clock.day, dayTime: host.simulation.clock.dayTime };
+				};
+			}
+			return lives.__wipes;
+		},
+	};
+	return server;
+}
+
+const W = () => require(join(SRC, "shared/game/world.ts"));
+const R = () => require(join(SRC, "server/net/replication.ts"));
+const PHYS = () => require(join(SRC, "shared/game/physics.ts"));
+const SAVE = () => require(join(SRC, "shared/game/save.ts"));
+const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+
+let nextUser = 7000;
+const newUser = () => ++nextUser;
+
+/** the progression MP-22 says a player KEEPS across the end of a world */
+function progressionOf(save) {
+	return JSON.stringify({
+		level: save.level,
+		exp: save.exp,
+		skillPoint: save.skillPoint,
+		skillLevels: save.skillLevels,
+		money: save.money,
+		packsBought: save.packsBought,
+		packsOpened: save.packsOpened,
+		costumes: save.costumes,
+		bestDay: save.bestDay,
+		achievements: save.achievements,
+	});
+}
+
+/** a veteran of the world about to end: levels, skills, coins, a costume, a pack, a full backpack, life day 9 */
+function veteran(save) {
+	save.level = 14;
+	save.exp = 33;
+	save.skillPoint = 2;
+	save.skillLevels[0] = 3;
+	save.skillLevels[4] = 1;
+	save.money = 0; // no coins: the Rebirth is not an option, the window only waits
+	save.costumes[0] = 1;
+	save.packsBought[0] = 1;
+	save.packsOpened[0] = 1;
+	save.day = 9;
+	save.bestDay = 9;
+	save.invenWeapon[10] = 1; // the pistol
+	save.equipWeapon = 10;
+	save.ammoNormal = 40;
+	save.invenEtc[0] = 12;
+}
+
+// ================================================================ 1: everybody dies
+
+section("1) everybody dies: after the 30 s window the world ends ONCE and a new town begins on day 1", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idA = newUser();
+	const idB = newUser();
+	const a = s.join(idA, "alma");
+	const b = s.join(idB, "bento");
+	veteran(s.save(a));
+	veteran(s.save(b));
+	s.save(b).money = 3; // coins, but not enough for a Rebirth: nobody pays
+	s.enter(a);
+	s.enter(b);
+	s.immortal.add(a);
+	s.immortal.add(b);
+	// a few days into this world, with a horde walking it
+	s.sim.clock.setClock(10, 4);
+	s.run(20);
+	const oldWorld = s.sim.world;
+	const oldHorde = s.sim.horde;
+	const oldZombies = [...(oldHorde?.zombies ?? [])];
+	const oldSeed = s.host.seed;
+	const oldDay = s.sim.clock.day;
+	const keepA = progressionOf(s.save(a));
+	const keepB = progressionOf(s.save(b));
+	const revA = s.save(a).runRev;
+	check(
+		oldSeed === DESIGN.TOWN_SEED,
+		"a server opens on the town every client knows (DESIGN.TOWN_SEED)",
+		`${oldSeed}`,
+	);
+	check(
+		s.Workspace.GetAttribute("pz_world_seed") === oldSeed,
+		"…and says so in the replicated attribute a client reads before it enters",
+	);
+	info(`the old world: day ${oldDay}, ${oldZombies.length} zombies walking it`);
+
+	s.immortal.clear();
+	s.kill(a);
+	s.kill(b);
+	s.clearWorldLog();
+	check(s.host.lives.wipeWindowOpen(), "the last survivor falls: the 30 s decision window opens");
+	s.run(WIPE_DECISION_S - 1);
+	check(wipes.length === 0 && s.sim.world === oldWorld, `…and nothing ends before ${WIPE_DECISION_S} s`);
+	s.run(1.5);
+	check(wipes.length === 1 && wipes[0].reason === "timeout", "nobody paid: the world ends", JSON.stringify(wipes));
+
+	// ---- the new town
+	const newSeed = s.host.seed;
+	check(newSeed !== oldSeed && newSeed >= 1 && newSeed <= 2147483646, "…with a NEW seed", `${oldSeed} → ${newSeed}`);
+	check(s.sim.world !== oldWorld && s.host.world === s.sim.world, "…and a new town, the one the host serves");
+	const fresh = W().generateTown(newSeed);
+	check(
+		R().mapHashOf(s.sim.world) === R().mapHashOf(fresh),
+		"…generated from that seed exactly as a client will generate it (same map hash)",
+		`${R().mapHashOf(s.sim.world)}`,
+	);
+	check(
+		s.Workspace.GetAttribute("pz_world_seed") === newSeed,
+		"the replicated attribute names the new town for whoever presses Play next",
+	);
+	const reborn = wipes[0]?.clockAfter;
+	check(
+		reborn !== undefined && reborn.day === 1 && reborn.dayTime === 7,
+		"the clock is back to day 1, 07:00 the moment the new world begins",
+		reborn !== undefined ? `day ${reborn.day} ${reborn.dayTime} h` : "",
+	);
+	check(s.sim.horde !== oldHorde && s.sim.horde.world === s.sim.world, "a new horde, built around the new town");
+	const survivors = oldZombies.filter(z => s.sim.horde.zombies.includes(z)).length;
+	check(survivors === 0, "…and not one zombie of the old one walks into it", `${survivors} carried over`);
+	check(
+		s.sim.clock.waveQueues.every(q => q === 0) && s.sim.clock.specialWaveQueues.every(q => q === 0),
+		"…nor a wave promised to the old one's night",
+	);
+
+	// ---- the lives
+	for (const [p, keep, name] of [
+		[a, keepA, "alma"],
+		[b, keepB, "bento"],
+	]) {
+		const sp = s.body(p);
+		const save = s.save(p);
+		check(
+			sp !== undefined && !sp.state.dead && sp.state.hp === sp.state.hpMax,
+			`${name} stands in the new town, alive and at full health`,
+			sp !== undefined ? `dead ${sp.state.dead}, hp ${f1(sp.state.hp)}/${sp.state.hpMax}` : "no body",
+		);
+		check(
+			sp !== undefined && PHYS().circleBlocked(s.sim.world, sp.state.x, sp.state.y, 20) === undefined,
+			"…on free ground of the NEW town (MP-04)",
+			sp !== undefined ? `${f1(sp.state.x)}, ${f1(sp.state.y)}` : "",
+		);
+		check(sp !== undefined && s.sim.spawnShielded(sp), "…with the 3 s spawn shield");
+		check(save.day === 1 && save.runOver === false, "…on day 1 of a new life (MP-20)", `day ${save.day}`);
+		check(
+			save.invenWeapon[10] === 0 && save.ammoNormal === 0 && save.invenEtc[0] === 0,
+			"…with the starter kit, not the old life's backpack",
+			`pistol ${save.invenWeapon[10]}, ammo ${save.ammoNormal}, etc ${save.invenEtc[0]}`,
+		);
+		check(progressionOf(save) === keep, "…and keeps level, skills, coins, packs, costumes and records");
+	}
+	check(s.save(a).runRev === revA + 1, "the run moved on (runRev), so a report of the old life is refused");
+	s.run(2); // past SAVE_MIN_INTERVAL, so the report is judged now and not queued
+	const ack = s.report(a, { runRev: revA, day: 9, invenWeapon: s.save(a).invenWeapon.map(() => 1), ammoNormal: 40 });
+	check(
+		ack?.ok === false &&
+			ack?.reason === "outdated" &&
+			s.save(a).invenWeapon[10] === 0 &&
+			s.save(a).ammoNormal === 0,
+		"…and it is: a report of the old backpack is refused as outdated, and nothing of it comes back",
+		JSON.stringify({ ok: ack?.ok, reason: ack?.reason }),
+	);
+
+	// ---- the wire
+	const log = s.worldLog();
+	const events = log.flatMap(b => b.events.map(e => ({ to: b.to, e })));
+	const resets = events.filter(x => x.e.t === s.P.WorldEv.WorldReset);
+	check(
+		resets.length === 1 && resets[0].to === undefined,
+		"ONE WorldReset, to every connected client (FireAllClients: the lobby too)",
+		`${resets.length}`,
+	);
+	const wr = resets[0]?.e;
+	check(
+		wr !== undefined && wr.seed === newSeed && wr.endedDay === oldDay,
+		"…naming the new seed and the day the old town fell on",
+		wr !== undefined ? `seed ${wr.seed}, fell on day ${wr.endedDay}` : "",
+	);
+	check(
+		wr !== undefined && wr.lives.includes(idA) && wr.lives.includes(idB) && wr.lives.length === 2,
+		"…and the survivors whose life starts over",
+		wr !== undefined ? JSON.stringify(wr.lives) : "",
+	);
+	const at = x => events.indexOf(x);
+	const ups = events.filter(x => x.e.t === s.P.WorldEv.PlayerLife && x.e.state === s.P.LifeState.Up);
+	check(
+		ups.length >= 2 && ups.every(x => at(x) > at(resets[0])),
+		"the stand-ups come AFTER it, so a client rebuilds the town before it hears it is alive",
+	);
+	const clock = events.find(x => x.e.t === s.P.WorldEv.Clock && at(x) > at(resets[0]));
+	check(
+		clock !== undefined && clock.e.worldDay === 1,
+		"…and so does a day-1 Clock, which a rebuilt client jumps to",
+		clock !== undefined ? `day ${clock.e.worldDay}` : "none",
+	);
+	for (const p of [a, b]) {
+		const init = events.find(x => x.to === p && x.e.t === s.P.WorldEv.InitBegin && at(x) > at(resets[0]));
+		check(
+			init !== undefined && init.e.seed === newSeed && init.e.mapHash === R().mapHashOf(s.sim.world),
+			`${p.Name} gets the join message again: InitBegin with the new seed and map hash`,
+		);
+	}
+
+	// ---- the record
+	const record = s.endedWorlds();
+	const last = Array.isArray(record) ? record[record.length - 1] : undefined;
+	check(
+		Array.isArray(record) && record.length === 1,
+		"the world that ended is recorded in the DataStore",
+		JSON.stringify(record),
+	);
+	check(
+		last !== undefined &&
+			last.seed === oldSeed &&
+			last.days === oldDay &&
+			last.reason === "timeout" &&
+			last.fallen === 2 &&
+			last.endedAt >= last.startedAt,
+		"…with its seed, how many days it lasted, when, why and how many fell",
+	);
+
+	// ---- and only once
+	s.immortal.add(a);
+	s.immortal.add(b);
+	s.run(40);
+	check(
+		wipes.length === 1 && s.host.seed === newSeed,
+		"the event fired once: the new world goes on",
+		`${wipes.length}`,
+	);
+	s.quit(a);
+	const doc = s.stored(idA);
+	check(
+		doc?.day === 1 && doc?.level === 14 && doc?.runOver === false,
+		"what reaches the player's save: day 1 of a new life, the level kept",
+		`day ${doc?.day}, level ${doc?.level}`,
+	);
+});
+
+// ================================================================ 2: a Rebirth in the window
+
+section("2) a Rebirth inside the window keeps the world — and solo still makes sense", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "payer");
+		const b = s.join(newUser(), "waiter");
+		s.enter(a);
+		s.enter(b);
+		s.save(a).money = 100;
+		s.sim.clock.setClock(20, 3);
+		const world = s.sim.world;
+		s.kill(a);
+		s.kill(b);
+		s.run(10);
+		const res = s.shop(a, { kind: "rebirth", runRev: s.save(a).runRev });
+		check(res.ok === true, "two down, one pays a Rebirth ten seconds in");
+		s.run(WIPE_DECISION_S + 5);
+		check(
+			wipes.length === 0 && s.sim.world === world && s.host.seed === DESIGN.TOWN_SEED && s.sim.clock.day === 3,
+			"…so the world goes on: same town, same day, no reset",
+			`${wipes.length} wipe(s), day ${s.sim.clock.day}`,
+		);
+	}
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const solo = s.join(newUser(), "solo");
+		s.enter(solo);
+		const save = s.save(solo);
+		save.money = 100;
+		save.day = 6;
+		s.sim.clock.setClock(21, 6);
+		s.kill(solo);
+		s.run(WIPE_DECISION_S - 5);
+		check(wipes.length === 0, "alone and dead with coins: the window is still open after 25 s");
+		const res = s.shop(solo, { kind: "rebirth", runRev: save.runRev });
+		check(res.ok === true && s.body(solo)?.state.dead === false, "…the Rebirth goes through, and they stand");
+		s.run(WIPE_DECISION_S + 5);
+		check(
+			wipes.length === 0 && s.host.seed === DESIGN.TOWN_SEED && save.day === 6,
+			"…and the run and the world continue (the life day is kept)",
+			`${wipes.length} wipe(s), life day ${save.day}`,
+		);
+	}
+});
+
+// ================================================================ 3: everybody declined
+
+section(
+	"3) New game + Home: the world ends at once; the lobby comes back to the NEW town; bystanders keep their life",
+	() => {
+		const s = bootServer();
+		const wipes = s.wipes();
+		const quitter = s.join(newUser(), "quitter");
+		const leaver = s.join(newUser(), "leaver");
+		const idle = s.join(newUser(), "idle");
+		s.save(idle).day = 5;
+		const idleRev = s.save(idle).runRev;
+		s.enter(quitter);
+		s.enter(leaver);
+		s.save(leaver).day = 4;
+		s.sim.clock.setClock(20, 2);
+		s.kill(quitter);
+		s.kill(leaver);
+		s.run(2);
+		s.shop(quitter, { kind: "newRun", runRev: s.save(quitter).runRev });
+		s.beat();
+		s.exit(leaver);
+		s.beat();
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined",
+			"every dead survivor declined: the world ends at once, not in 30 s",
+		);
+		check(s.host.seed !== DESIGN.TOWN_SEED && s.sim.clock.day === 1, "…a new town on day 1");
+		check(s.body(quitter)?.state.dead === false, "the one who chose New game is up in the new town");
+		check(s.save(leaver).day === 1 && s.save(leaver).runOver === false, "the one who went Home has a new life too");
+		check(s.host.lives.isDead(leaver.UserId, s.save(leaver)) === false, "…and the server knows them alive");
+		const back = s.enter(leaver);
+		check(
+			back !== undefined && !back.state.dead && back.state.hp === back.state.hpMax,
+			"…so Play puts them in the new town standing, at full health",
+		);
+		check(
+			back !== undefined && PHYS().circleBlocked(s.sim.world, back.state.x, back.state.y, 20) === undefined,
+			"…on free ground of the new town",
+		);
+		check(
+			s.save(idle).day === 5 && s.save(idle).runRev === idleRev,
+			"someone who never entered the old world keeps their life untouched",
+			`day ${s.save(idle).day}`,
+		);
+		const inWorld = s.enter(idle);
+		check(inWorld !== undefined && !inWorld.state.dead, "…and walks into the new town when they press Play");
+	},
+);
+
+// ================================================================ 4: the ones who left
+
+section("4) a survivor who left the server keeps their life, never a spot in a town that is gone", () => {
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idGone = newUser();
+	let gone = s.join(idGone, "gone");
+	const spGone = s.enter(gone);
+	s.immortal.add(gone);
+	s.save(gone).day = 3;
+	spGone.state.hp = 61;
+	s.beat();
+	s.quit(gone);
+	check(s.host.lives.keptBody(idGone) !== undefined, "they left alive: the body is kept for 5 min (§7.2)");
+	const last = s.join(newUser(), "last");
+	s.enter(last);
+	s.kill(last);
+	s.run(31);
+	check(wipes.length === 1, "the one survivor still here falls: the world ends (the absent do not count)");
+	check(s.host.lives.keptBody(idGone) === undefined, "the kept body is forgotten with the town it stood in");
+	gone = s.join(idGone, "gone");
+	const back = s.enter(gone);
+	check(back !== undefined && !back.state.dead, "back on the server, they enter the new town alive");
+	check(
+		back !== undefined && Math.floor(back.state.hp) === 61,
+		"…with the life they left with (hp from the save, rule 2)",
+		`hp ${f1(back?.state.hp)}`,
+	);
+	check(s.save(gone).day === 3, "…and their own life day, since they did not fall with the world");
+	check(
+		back !== undefined && PHYS().circleBlocked(s.sim.world, back.state.x, back.state.y, 20) === undefined,
+		"…on free ground of the NEW town",
+	);
+});
+
+// ================================================================ 5: the F3 world
+
+section("5) with the server owning the interactive world, nothing of the old world survives into the new one", () => {
+	const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
+	const { LifeKeeper } = require(join(SRC, "server/sim/life.ts"));
+	const { endWorld } = require(join(SRC, "server/sim/worldReset.ts"));
+	const { Replicator, mapHashOf } = R();
+	const { isDoor } = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const world = W().generateTown(DESIGN.TOWN_SEED);
+	const sim = new ServerSimulation({ world, zombies: true, interactive: true });
+	const sent = [];
+	const replicator = new Replicator(
+		sim,
+		{ snap() {}, fx() {}, world: (slot, pkt) => sent.push({ slot, pkt }), worldAll: pkt => sent.push({ pkt }) },
+		{ tick0Time: 0, mapHash: mapHashOf(world) },
+	);
+	sim.onTick = t => replicator.afterTick(t);
+	const lives = new LifeKeeper(sim, { welcome: sp => replicator.welcome(sp), left() {}, life() {} });
+	const save = SAVE().defaultSave();
+	const sp = lives.enter({ userId: 42, name: "builder" }, save);
+	for (let i = 0; i < 60; i++) sim.step();
+	// the old world, lived in: an item on the ground, a construction, an open door, a night promised
+	const item = W().spawnGroundItem(world, 1, 0, 1, sp.state.x + 40, sp.state.y);
+	const tpl = world.solids.find(x => x.kind === "tree") ?? world.solids[0];
+	const built = W().addSolid(world, { ...tpl, id: undefined, x: tpl.x + 3, placeable: 1, owner: sp.slot });
+	const door = world.solids.find(x => isDoor(x));
+	if (door !== undefined) door.open = true;
+	sim.clock.setClock(18.2, 5);
+	sim.clock.fillNight();
+	const old = {
+		items: sim.items,
+		build: sim.build,
+		craft: sim.craft,
+		interaction: sim.interaction,
+		horde: sim.horde,
+	};
+	check(
+		world.items.includes(item) && world.solids.includes(built),
+		"the old world has a ground item and a construction",
+	);
+	check(
+		sim.clock.waveQueues.some(q => q > 0),
+		"…and tonight's waves are promised",
+	);
+
+	const out = endWorld(
+		{ sim, lives, replicator },
+		{ day: 5, reason: "timeout", dead: [42] },
+		{ seed: DESIGN.TOWN_SEED, startedAt: 100 },
+		{ now: 200, job: "job-test", saveOf: () => save, seed: 12345 },
+	);
+	check(
+		out.seed === 12345 && sim.world === out.world && sim.world !== world,
+		"the simulation stands in the new town",
+	);
+	check(sim.world.items.length === 0, "no ground item of the old world", `${sim.world.items.length}`);
+	check(
+		sim.world.solids.every(x => x.placeable === undefined),
+		"no construction (and so no campfire burning) of the old world",
+	);
+	check(
+		sim.world.solids.filter(x => isDoor(x)).every(x => x.open !== true),
+		"every door of the new town is shut",
+	);
+	check(
+		sim.items !== old.items && sim.items.world === sim.world && sim.build !== old.build,
+		"items, loot and constructions are new systems, built around the new town",
+	);
+	check(
+		sim.craft !== old.craft && sim.interaction !== old.interaction && sim.horde !== old.horde,
+		"…and so are crafting, interaction and the horde",
+	);
+	check(
+		world.onItemAdd === undefined && world.onSolidAdd === undefined,
+		"the old town no longer feeds the outbox (its hooks are detached)",
+	);
+	check(
+		sim.world.nextDynamicId >= 1000000,
+		"the new town is a SERVER world (its dynamic ids start at 1 000 000, §4.5)",
+		`${sim.world.nextDynamicId}`,
+	);
+	check(
+		sim.clock.day === 1 && sim.clock.waveQueues.every(q => q === 0) && !sim.clock.wave1Active,
+		"day 1, and the night that was promised to the old world is not owed to the new one",
+	);
+	check(
+		out.ended.seed === DESIGN.TOWN_SEED &&
+			out.ended.days === 5 &&
+			out.ended.startedAt === 100 &&
+			out.ended.endedAt === 200 &&
+			out.ended.job === "job-test",
+		"the record says which world ended, when, and after how many days",
+	);
+	const newBody = sim.get(sp.slot);
+	check(
+		newBody !== undefined && !newBody.state.dead && save.day === 1,
+		"the builder starts a new life in the new town",
+	);
+	for (let i = 0; i < 120; i++) sim.step();
+	check(true, "…and the new world ticks on (two seconds of it without an error)");
+});
+
+// ================================================================ 6: the wire and the record
+
+section("6) the wire and the record", () => {
+	const P = require(join(SRC, "shared/net/protocol.ts"));
+	const { pickTownSeed, appendEnded, readEndedWorld, readEndedList, WORLD_LOG_KEEP } = require(
+		join(SRC, "server/sim/worldReset.ts"),
+	);
+	const reset = { t: P.WorldEv.WorldReset, seed: 2147483646, endedDay: 17, lives: [123456789, -3, 9000000001] };
+	const init = {
+		t: P.WorldEv.InitBegin,
+		mapHash: 4000000000,
+		seed: 99,
+		tick0Time: 12.5,
+		simHz: 60,
+		chunk: 0,
+		chunks: 1,
+	};
+	const pkt = P.encodeWorld({ tick: 3, events: [reset, init] }).packets[0];
+	const got = P.decodeWorld(pkt);
+	check(
+		got !== undefined && JSON.stringify(got.events[0]) === JSON.stringify(reset),
+		"WorldReset round-trips: seed, the day it fell on, the new lives",
+		got !== undefined ? JSON.stringify(got.events[0]) : "did not decode",
+	);
+	check(
+		got !== undefined && got.events[1].seed === 99 && got.events[1].mapHash === 4000000000,
+		"InitBegin carries the seed next to the map hash",
+	);
+	const bytes = pkt.bytes !== undefined ? Array.from(pkt.bytes) : undefined;
+	if (bytes !== undefined) {
+		const bufOf = arr => {
+			const b = buffer.create(arr.length);
+			for (let i = 0; i < arr.length; i++) buffer.writeu8(b, i, arr[i]);
+			return b;
+		};
+		// header 5 B, tag 1 B, then the seed (u32 little-endian)
+		const zeroSeed = bytes.slice();
+		zeroSeed[6] = 0;
+		zeroSeed[7] = 0;
+		zeroSeed[8] = 0;
+		zeroSeed[9] = 0;
+		check(P.decodeWorld(bufOf(zeroSeed)) === undefined, "a WorldReset with seed 0 (no town) is refused");
+		const noDay = bytes.slice();
+		noDay[10] = 0;
+		noDay[11] = 0;
+		check(P.decodeWorld(bufOf(noDay)) === undefined, "…and one that fell on day 0");
+		const tooMany = bytes.slice();
+		tooMany[12] = 200;
+		check(P.decodeWorld(bufOf(tooMany)) === undefined, "…and one that names more lives than it carries");
+	}
+	let same = 0;
+	for (let i = 0; i < 2000; i++) if (pickTownSeed(7331) === 7331) same += 1;
+	check(same === 0, "a new seed is never the old one (2000 draws)");
+	check(pickTownSeed(5, () => 5) !== 5 && pickTownSeed(5, () => 5) >= 1, "…not even with a roll stuck on it");
+	check(pickTownSeed(2147483646, () => 0) === 1, "…and it wraps inside 1 … TOWN_SEED_MAX");
+	const list = [];
+	for (let i = 0; i < WORLD_LOG_KEEP + 7; i++) {
+		appendEnded(list, { seed: i + 1, days: 1, startedAt: 0, endedAt: 1, reason: "timeout", fallen: 1, job: "" });
+	}
+	check(list.length === WORLD_LOG_KEEP && list[0].seed === 8, "the stored list is bounded, oldest dropped first");
+	check(
+		readEndedWorld({ seed: 0, days: 1, startedAt: 0, endedAt: 0 }) === undefined,
+		"a record with no town is dropped",
+	);
+	check(
+		readEndedWorld("garbage") === undefined && readEndedList(42).length === 0,
+		"garbage in the document is dropped",
+	);
+	const clean = readEndedWorld({ seed: 7, days: 3, startedAt: 1, endedAt: 2, reason: "?", fallen: -1, job: 5 });
+	check(
+		clean !== undefined && clean.reason === "timeout" && clean.fallen === 0 && clean.job === "",
+		"…and a half-good one is cleaned, not trusted",
+	);
+});
+
+// ================================================================ 7: the client
+
+const ts = require("typescript");
+/** a client source file, parsed (the client cannot load under Node: it talks to Roblox services) */
+function parse(rel) {
+	const file = join(SRC, rel);
+	const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS);
+	const printer = ts.createPrinter({ removeComments: true });
+	return { sf, text: node => printer.printNode(ts.EmitHint.Unspecified, node, sf) };
+}
+/** the body statements of the top-level function `name` of a parsed file, or [] */
+function bodyOf(file, name) {
+	let found;
+	const visit = node => {
+		if (ts.isFunctionDeclaration(node) && node.name?.text === name) found = node;
+		else ts.forEachChild(node, visit);
+	};
+	visit(file.sf);
+	return found?.body?.statements ? [...found.body.statements] : [];
+}
+const isCall = (file, st, what) => ts.isExpressionStatement(st) && file.text(st.expression) === what;
+
+section("7) the client builds the server's town and listens for the news (source guards)", () => {
+	const loop = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+	check(!/generateTown\(\s*DESIGN\.TOWN_SEED\s*\)/.test(loop), "GameLoop no longer always builds DESIGN.TOWN_SEED");
+	check(
+		/generateTown\(\s*this\.townSeed\s*\)/.test(loop) && /netTownSeed\(\)/.test(loop),
+		"…it builds the server's seed",
+	);
+	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
+	check(/netOnTown\(\s*onTown\s*\)/.test(main), "main.client.ts listens for InitBegin / WorldReset");
+	check(/resetRun\(ctx\.save\)/.test(main.slice(main.indexOf("function onTown"))), "…and mirrors the new life");
+	const net = readFileSync(join(SRC, "client/net/netClient.ts"), "utf8");
+	check(/WorldEv\.WorldReset/.test(net), "netClient.ts handles WorldReset");
+});
+
+// ================================================================ 8: New game is a new life, not a new body
+
+section("8) New game never draws a living survivor the server holds dead (the owner's playtest, 23 Sep 2026)", () => {
+	/*
+	 * The report: solo, dead, no coins, back from the lobby, New game — "the survivor spawns and dies at the same
+	 * instant, every click", and the HUD stuck on day 2. The server was right: MP-21 makes New game a new LIFE whose
+	 * body still waits for daybreak. The client was not: after the server accepted `newRun` it ran `newWorld()`,
+	 * which builds a fresh STANDING survivor and walks it into the world (LeaveWorld + EnterWorld), and the
+	 * PlayerLife the welcome carries struck it down. (a) and (b) below replay both flows against the real server;
+	 * the source guards at the end pin which one main.client.ts runs.
+	 */
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+
+	// ---- the old client's flow, reproduced: a shared world, somebody still standing
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const b = s.join(newUser(), "old-client");
+		s.enter(b);
+		s.save(b).money = 0;
+		s.sim.clock.setClock(21);
+		s.kill(b);
+		const res = s.shop(b, { kind: "newRun", runRev: s.save(b).runRev });
+		check(res.ok === true, "(old flow) a dead survivor's New game is accepted");
+		// what the old client did next: newWorld() drew a fresh, standing survivor, then Leave + Enter
+		let drawnAlive = true;
+		const mark = s.mark();
+		s.exit(b);
+		s.intent(b, s.P.IntentKind.EnterWorld);
+		s.run(0.6);
+		const seen = s.lifeSince(b, mark);
+		if (seen.includes("dead")) drawnAlive = false;
+		check(
+			seen.includes("joined") && seen[seen.length - 1] === "dead" && !drawnAlive,
+			"(reproduction) the welcome of that re-entry says Dead: the standing survivor the old client drew is struck " +
+				"down at once — the spawn-and-die",
+			JSON.stringify(seen),
+		);
+	}
+
+	// ---- (b) the flow main.client.ts runs now, same world: stay on the wait, no Leave/Enter
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const b = s.join(newUser(), "waiter");
+		s.enter(b);
+		s.save(b).money = 0;
+		s.sim.clock.setClock(21);
+		s.kill(b);
+		const mark = s.mark();
+		const res = s.shop(b, { kind: "newRun", runRev: s.save(b).runRev });
+		check(res.ok === true && s.save(b).day === 1, "(b) somebody is standing: New game gives a new life (day 1)");
+		check(
+			s.body(b)?.state.dead === true,
+			"…whose body the server still holds dead (MP-21), so the client stays on the wait",
+		);
+		s.run(3);
+		check(
+			s.lifeSince(b, mark).length === 0,
+			"…and the server says nothing that could stand a drawn survivor up or strike one down",
+			JSON.stringify(s.lifeSince(b, mark)),
+		);
+		const upIn = (() => {
+			for (let t = 0; t < 400; t += 1) {
+				if (s.body(b)?.state.dead === false) return t;
+				s.run(1);
+			}
+			return -1;
+		})();
+		const seen = s.lifeSince(b, mark);
+		check(
+			upIn >= 0 && seen.length === 1 && seen[0] === "up",
+			"daybreak stands the new life up: ONE Up, nothing before it",
+			`${JSON.stringify(seen)} after ${upIn} s`,
+		);
+	}
+
+	// ---- (a) solo, or everybody dead: MP-22 does the rest
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const solo = s.join(newUser(), "solo");
+		s.enter(solo);
+		s.save(solo).money = 0;
+		s.save(solo).day = 2;
+		s.sim.clock.setClock(10, 2);
+		s.kill(solo);
+		s.run(WIPE_DECISION_S + 1);
+		check(
+			wipes.length === 1 && s.body(solo)?.state.dead === false && s.save(solo).day === 1,
+			"(a) solo, dead, no coins, nothing clicked: after the window a new town, alive, life day 1",
+		);
+		check(s.sim.clock.day === 1, "…and the town's day is 1 (the HUD said 2 for ever)", `day ${s.sim.clock.day}`);
+	}
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const solo = s.join(newUser(), "clicker");
+		s.enter(solo);
+		s.save(solo).money = 0;
+		s.sim.clock.setClock(10, 2);
+		s.kill(solo);
+		s.run(10);
+		const mark = s.mark();
+		const res = s.shop(solo, { kind: "newRun", runRev: s.save(solo).runRev });
+		check(res.ok === true, "(a) solo, New game clicked ten seconds into the window");
+		s.run(0.5);
+		const seen = s.lifeSince(solo, mark);
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined",
+			"…does not block the end of the world: the only survivor declined, so it ends at once",
+			JSON.stringify(wipes.map(x => x.reason)),
+		);
+		check(
+			s.body(solo)?.state.dead === false && s.save(solo).day === 1 && s.save(solo).runOver === false,
+			"…and they stand in the new town, life day 1",
+		);
+		check(
+			JSON.stringify(seen) === JSON.stringify(["reset", "up"]),
+			"…told in that order, and never a Dead after an Up (no spawn-and-die)",
+			JSON.stringify(seen),
+		);
+	}
+
+	// ---- a New game from the lobby enters the world to wait: the welcome always says the newcomer's own state
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const b = s.join(newUser(), "lobby");
+		s.enter(b);
+		s.save(b).money = 0;
+		s.sim.clock.setClock(21);
+		s.kill(b);
+		s.exit(b);
+		s.shop(b, { kind: "newRun", runRev: s.save(b).runRev });
+		let mark = s.mark();
+		s.enter(b);
+		check(
+			JSON.stringify(s.lifeSince(b, mark)) === JSON.stringify(["joined", "dead"]),
+			"entering to wait: the welcome says Dead, which the client already drew (never a standing survivor)",
+			JSON.stringify(s.lifeSince(b, mark)),
+		);
+		s.exit(b);
+		s.run(240, 0.25);
+		mark = s.mark();
+		const up = s.enter(b);
+		check(
+			up !== undefined &&
+				!up.state.dead &&
+				JSON.stringify(s.lifeSince(b, mark)) === JSON.stringify(["joined", "up"]),
+			"daybreak came while in the lobby: the welcome says Up, so a client that entered expecting to wait is stood up",
+			JSON.stringify(s.lifeSince(b, mark)),
+		);
+	}
+
+	// ---- the client runs the new flow (source guards: main.client.ts cannot load under Node)
+	const main = parse("client/main.client.ts");
+	const newRun = bodyOf(main, "doNewRun");
+	const firstNewWorld = newRun.findIndex(st => isCall(main, st, "newWorld()"));
+	const hostedAt = newRun.findIndex(
+		st =>
+			ts.isIfStatement(st) &&
+			/hosted/.test(main.text(st.expression)) &&
+			/runOver = true/.test(main.text(st.thenStatement)) &&
+			/return;/.test(main.text(st.thenStatement)) &&
+			!/newWorld\(\)/.test(main.text(st.thenStatement)),
+	);
+	check(
+		hostedAt >= 0 && (firstNewWorld < 0 || hostedAt < firstNewWorld),
+		"doNewRun: where the server owns the death, the accepted New game keeps the death (runOver) and returns BEFORE " +
+			"newWorld() could draw a living survivor",
+		`if(hosted) at ${hostedAt}, newWorld() at ${firstNewWorld}`,
+	);
+	const wait = bodyOf(main, "enterToWait");
+	const nw = wait.findIndex(st => isCall(main, st, "newWorld()"));
+	const deadAt = wait.findIndex(st => /\.dead = true/.test(main.text(st)));
+	check(
+		nw >= 0 &&
+			deadAt > nw &&
+			wait.slice(nw + 1, deadAt).every(st => !ts.isExpressionStatement(st) || !/\(/.test(main.text(st))),
+		"enterToWait: the survivor it walks in is dead from the statement after newWorld(), before any frame is drawn",
+	);
+	const dawn = bodyOf(main, "updateDawnWait");
+	const liveAt = dawn.findIndex(st => ts.isIfStatement(st) && main.text(st.expression) === "netActive()");
+	const fallAt = dawn.findIndex(st => /showRunSummary/.test(main.text(st)));
+	check(
+		liveAt >= 0 && fallAt > liveAt,
+		"(c) the wait only falls back to the end-of-run choice once the session is gone, never while the server can " +
+			"still send the revive (the client gave up 12 s before it in the playtest)",
+		`netActive() check at ${liveAt}, fallback at ${fallAt}`,
+	);
+	const lang = readFileSync(join(SRC, "shared/data/lang.ts"), "utf8");
+	check(
+		/"Rebirth wakes you now\. New game starts a new life at day 1,#which wakes at first light\./.test(lang) &&
+			/"You wake at first light\.#If nobody is left standing, a new town begins at day 1\."/.test(lang),
+		"the texts say what really happens: the new life wakes at first light, a new town if nobody is left (lang.ts)",
+	);
+	check(
+		!/The town is not yours to restart/.test(readFileSync(join(SRC, "client/onboarding/gameOver.ts"), "utf8")),
+		"…and the wait no longer says the town cannot be restarted (it can: MP-22)",
+	);
+});
+
+// ================================================================ 9: once per wipe
+
+section("9) onWorldWiped fires once per wipe, not once per death", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const a = s.join(newUser(), "reviver");
+	const b = s.join(newUser(), "other");
+	s.enter(a);
+	s.enter(b);
+	s.save(a).money = 500;
+	s.save(b).money = 0;
+	s.sim.clock.setClock(20, 3);
+	s.kill(a);
+	s.kill(b);
+	s.run(10);
+	check(
+		s.shop(a, { kind: "rebirth", runRev: s.save(a).runRev }).ok === true,
+		"both fall; one pays a Rebirth at 10 s",
+	);
+	s.run(5);
+	s.kill(a);
+	check(s.host.lives.wipeWindowOpen(), "…and falls again at 15 s: a NEW window opens");
+	s.run(WIPE_DECISION_S - 2);
+	check(wipes.length === 0, "…the old window's time does not count: nothing yet 28 s later");
+	s.run(3);
+	check(wipes.length === 1, "…then exactly one wipe for that fall, not one per death", `${wipes.length}`);
+	const seed1 = s.host.seed;
+	s.run(10);
+	check(wipes.length === 1, "…and nothing more while the new world goes on");
+	s.kill(a);
+	s.kill(b);
+	s.run(WIPE_DECISION_S + 1);
+	check(
+		wipes.length === 2 && s.host.seed !== seed1,
+		"everybody dies in the new world too: a second wipe, a third town — once per wipe",
+		`${wipes.length} wipes, seeds ${seed1} → ${s.host.seed}`,
+	);
+	// the document is shared by every server this run booted (a DataStore outlives a server): the last two are ours
+	const record = s.endedWorlds();
+	const ours = Array.isArray(record) ? record.slice(-2) : [];
+	check(
+		ours.length === 2 &&
+			ours[0].seed === DESIGN.TOWN_SEED &&
+			ours[0].days === 3 &&
+			ours[1].seed === seed1 &&
+			ours[1].days === 1,
+		"both ended worlds are on record (appended to what other servers wrote), the second after its single day",
+		JSON.stringify(ours.map(r => ({ seed: r.seed, days: r.days }))),
+	);
+});
+
+// ================================================================
+
+console.log("");
+if (failures > 0) {
+	console.log(`${failures} of ${checks} check(s) failed`);
+	process.exit(1);
+}
+console.log(`all ${checks} checks passed`);
