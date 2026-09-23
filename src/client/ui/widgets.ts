@@ -36,13 +36,18 @@ import {
 	fadeText,
 	focusSurface,
 	hairline,
+	motionTime,
 	onLayoutChange,
 	paintSurface,
 	panelSurface,
+	preferredTextScale,
 	raisedSurface,
+	reducedMotion,
 	scaleText,
 	setStrokeWidth,
 	setSurfaceTransparency,
+	setWorldStrokeTransparency,
+	setWorldTransparency,
 	skinEnabled,
 	skinPx,
 	stripSurface,
@@ -51,6 +56,7 @@ import {
 	uiScale,
 	viewportSize,
 	wellSurface,
+	worldTransparency,
 } from "./skin";
 
 const GuiService = game.GetService("GuiService");
@@ -63,16 +69,22 @@ export {
 	fadeSurface,
 	fadeText,
 	hairline,
+	motionTime,
 	onLayoutChange,
+	preferredTextScale,
+	reducedMotion,
 	scaleText,
 	setStrokeWidth,
 	setSurfaceTransparency,
+	setWorldStrokeTransparency,
+	setWorldTransparency,
 	skinEnabled,
 	skinPx,
 	textOutline,
 	topInset,
 	uiScale,
 	viewportSize,
+	worldTransparency,
 };
 
 // ---------------------------------------------------------------- focus (gamepad / keyboard selection)
@@ -172,11 +184,11 @@ function setStrokePosition(s: UIStroke, inner: boolean): void {
 	if (!ok) strokePositionOk = false;
 }
 
-/** 1 px border (UIStroke) in `border` colour by default */
+/** 1 px border (UIStroke) in `border` colour by default; `transparency` is a design value (see TRANSPARENCY) */
 export function addStroke(g: GuiObject, color = THEME.border, transparency = 0, width = BORDER.width): UIStroke {
 	const s = new Instance("UIStroke");
 	s.Color = color;
-	s.Transparency = transparency;
+	setWorldStrokeTransparency(s, transparency);
 	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 	s.LineJoinMode = Enum.LineJoinMode.Round;
 	setStrokePosition(s, true);
@@ -194,8 +206,14 @@ export function addAspect(g: GuiObject, ratio: number): UIAspectRatioConstraint 
 	return a;
 }
 
+/**
+ * Every animation of the kit (and of the screens, which import this) goes through here, which is what makes
+ * Reduce Motion a one-line honour: `motionTime` returns 0 when the player asked for it, and a 0-second tween
+ * lands on its final value at once instead of being skipped -- so nothing ends up half-animated.
+ */
 export function tween<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const t = TweenService.Create(obj, new TweenInfo(time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props);
+	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+	const t = TweenService.Create(obj, info, props);
 	t.Play();
 	return t;
 }
@@ -246,7 +264,7 @@ export function makeFrame(
 	place(f, parent, x, y, w, h);
 	f.BackgroundColor3 = color;
 	f.BorderSizePixel = 0;
-	if (opts?.transparency !== undefined) f.BackgroundTransparency = opts.transparency;
+	if (opts?.transparency !== undefined) setWorldTransparency(f, opts.transparency);
 	if (opts?.zIndex !== undefined) f.ZIndex = opts.zIndex;
 	if (opts?.clips !== undefined) f.ClipsDescendants = opts.clips;
 	if (opts?.radius !== undefined && opts.radius > 0) addCorner(f, opts.radius, w, h);
@@ -1279,7 +1297,7 @@ export function makeScreen(parent: Instance, name: string, opts?: ScreenOpts): S
 	root.Name = name;
 	root.Size = UDim2.fromScale(1, 1);
 	root.BackgroundColor3 = opts?.color ?? THEME.background;
-	root.BackgroundTransparency = opts?.transparency ?? 0;
+	setWorldTransparency(root, opts?.transparency ?? 0);
 	root.BorderSizePixel = 0;
 	root.Active = true;
 	if (opts?.zIndex !== undefined) root.ZIndex = opts.zIndex;
@@ -1424,9 +1442,9 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 			onClick: (): void => handle.close(),
 		});
 	}
-	// entrance: fade the scrim in, zoom the card from 95%
+	// entrance: fade the scrim in, zoom the card from 95% (both instant under Reduce Motion, via tween())
 	root.BackgroundTransparency = 1;
-	tween(root, 0.15, { BackgroundTransparency: TRANSPARENCY.overlay });
+	tween(root, 0.15, { BackgroundTransparency: worldTransparency(TRANSPARENCY.overlay) });
 	const zoom = new Instance("UIScale");
 	zoom.Scale = 0.95;
 	zoom.Parent = card;
@@ -1708,7 +1726,7 @@ export function makeScrollList(
 	f.Name = name;
 	place(f, parent, x, y, w, h);
 	f.BackgroundColor3 = THEME.card;
-	f.BackgroundTransparency = opts?.transparency ?? 1;
+	setWorldTransparency(f, opts?.transparency ?? 1);
 	f.BorderSizePixel = 0;
 	if (opts?.zIndex !== undefined) f.ZIndex = opts.zIndex;
 	f.ClipsDescendants = true;

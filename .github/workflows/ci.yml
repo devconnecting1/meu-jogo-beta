@@ -34,6 +34,15 @@ jobs:
       - name: World design rules (docs/DESIGN_RULES.md [auto])
         run: npm run validate:world
 
+      # UI-01: colours come from design/tweakcn-theme.json through `npm run theme`, never from a hand edit
+      - name: Theme pipeline (themeTokens.ts really is the generated file)
+        run: |
+          npm run theme
+          git diff --exit-code -- src/client/ui/themeTokens.ts
+
+      - name: Colour contrast (WCAG 4,5:1 for text, 3:1 for outlines and bars)
+        run: npm run test:contrast
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

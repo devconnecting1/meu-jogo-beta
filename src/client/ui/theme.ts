@@ -10,26 +10,40 @@
  *
  * Colour rule: every colour written to a GuiObject / UIStroke / ImageLabel is EXACTLY one of these tokens (no Lerp,
  * no tints, no literals). Relief (highlights and shadows) comes from GREYSCALE + ALPHA skin textures tinted with
- * ImageColor3 = a token (see skin.ts), never from mixed colours. Transparency is only used where the UI sits over
- * the game world (TRANSPARENCY, documented below) and for enter/exit fades.
+ * ImageColor3 = a token (see skin.ts). One honest exception, which the audit raised (docs/research/ui.md 5.3):
+ * ImageColor3 MULTIPLIES, and those texels are grey, not white, so what a skinned surface finally renders is the
+ * token darkened by the texture. The token is still the only colour anyone writes, but a measured contrast ratio
+ * between two tokens is an UPPER bound for a skinned surface, exact for the flat fallback.
+ * Transparency is only used where the UI sits over the game world (TRANSPARENCY, documented below) and for
+ * enter/exit fades.
  *
- * CHANGE (Pixel Quest relief skin): the author moved the game's "primary" role from the near-white `foreground`
- * to chart-1 (#2E8B57, green), with `foreground` (#FFFFE3) as its text colour. The one main action of a screen
- * (Play / Continue, Equip, Use, Craft, Buy, Confirm) is now the green relief button of the reference art;
- * `secondary` (#606055) keeps every other action and the active tab, `destructive` (#EF4444) the dangerous ones
- * and Close. The neutral sidebar tokens became the surface palette (SURFACE below): panels, frames, strips and
- * the recessed "wells" that hold lists and bars.
+ * PALETTE ("mixed"): near-black body, cold-iron relief. The world is already grey -- asphalt, concrete -- so a
+ * mid-grey panel over a mid-grey street disappears and only its outline holds the reading. The body therefore
+ * stays almost black (`background` #0E0F11) and separates by darkness, while the RELIEF is cold iron
+ * (`border` / `input` / `secondary` #7A8591): a pixel bevel is a stamped metal plate, and a stamped plate is
+ * cold, which the old warm olive (#606055 over #10100E) never was.
  *
- * Role map (author's spec):
+ * Label polarity, and why it is not a style choice: with a near-white label, iron at #7A8591 measures 3,62:1,
+ * the green plate 3,68:1 and the red one 3,63:1 -- all below the 4,5:1 this kit needs, because a plate face
+ * bright enough to read AS metal is too bright to carry white text. So a plate carries the near-black
+ * `background` instead: 5,1:1 on iron, 5,2:1 on green, 5,1:1 on red. Dark letters stamped into a lit plate is
+ * also exactly what the bevel already draws (light band on top, dark lip below). Recessed surfaces are the
+ * opposite and unchanged: near-white text on a dark well. Every ratio here is measured by
+ * `npm run test:contrast`, which reads this file's role map, so re-pointing a role moves the test with it.
+ *
+ * Role map:
  * - background / foreground: full-screen pages (lobby, shop, settings, credits) and default text
  * - card (+ border, radius): panels and windows (survivor card, backpack, shop cards, pause, game over, HUD)
  * - popover (+ border): dialogs, tutorial, toasts, tooltips, nameplate, round banners
- * - primary (chart-1 green): the ONE main action of a screen; secondary: other actions (menu tiles, Back) and the
- *   active tab; destructive: dangerous actions and the Close (X) buttons
- * - accent: states only (hover / pressed of outline, ghost and inactive tabs; the selected list row);
- *   text on accent is SemiBold / Bold and >= 14 (contrast ~3.4:1)
+ * - primary (the green): the ONE main action of a screen; secondary (iron): other actions (menu tiles, Back)
+ *   and the active tab; destructive (red): dangerous actions and the Close (X) buttons. All three carry
+ *   `*-foreground`, which is the near-black body colour (see "Label polarity" above)
+ * - accent: states only (hover / pressed of outline, ghost and inactive tabs; the selected list row).
+ *   NOTE: the kit actually fills those states with SURFACE.frame (widgets.ts, `sunk`); `accent` is kept as the
+ *   role's declared colour and is held to the same 4,5:1 against `accent-foreground` so adopting it is safe
  * - muted-foreground: secondary text (captions, counts, descriptions) and disabled controls
- * - destructive: dangerous actions, errors, HP, damage vignette
+ * - destructive: dangerous actions, errors, HP, damage vignette. It stays bright BECAUSE it is also drawn as
+ *   text (missing ingredients, error rows) and as the HP bar, which need it light against the dark body
  * - border: outlines and separators; input: slider / progress tracks; ring: 2 px focus outline (gamepad / keys)
  *
  * All sizes are design units of the 1120 x 630 layout (see widgets.ts), i.e. "CSS px" before the UI scale.
@@ -58,10 +72,10 @@ export const THEME = {
 	cardForeground: TOKENS.cardForeground,
 	popover: TOKENS.popover,
 	popoverForeground: TOKENS.popoverForeground,
-	/** primary = chart-1 (#2E8B57): the main action of a screen, drawn as a green relief button */
-	primary: TOKENS.chart1,
-	/** text on `primary`: foreground (#FFFFE3) with the dark contour of the skin (see skin.ts) */
-	primaryForeground: TOKENS.foreground,
+	/** the main action of a screen, drawn as a green relief plate (same green as chart-1 / GAME.success) */
+	primary: TOKENS.primary,
+	/** text stamped into that plate: the near-black body colour, 5,2:1 (see "Label polarity" above) */
+	primaryForeground: TOKENS.primaryForeground,
 	secondary: TOKENS.secondary,
 	secondaryForeground: TOKENS.secondaryForeground,
 	muted: TOKENS.muted,
@@ -83,19 +97,29 @@ export const SIDEBAR = SIDEBAR_TOKENS;
  * plates; what holds content (lists, rows, tracks, inactive tabs) is a `well` sunk into it, outlined in `line`.
  */
 export const SURFACE = {
-	/** panel interior (#1A1A1A) */
+	/** panel interior (#181A1D) */
 	panel: SIDEBAR_TOKENS.background,
-	/** thick panel frame and title strips (#303030); also the hover fill of recessed controls */
+	/** thick panel frame and title strips (#3F464D); also the hover fill of recessed controls */
 	frame: SIDEBAR_TOKENS.accent,
-	/** outline of a well, of an inactive tab and of a list row (#404040) */
+	/**
+	 * Outline of a well, of an inactive tab and of a list row (#646D78). This one is iron and not a dark grey
+	 * on purpose: at the old #404040 it measured 1,68:1 against the panel (docs/research/ui.md 6.4), i.e. the
+	 * structure of every window was almost invisible. It now reads 3,3:1 over the panel and 3,7:1 over a well.
+	 */
 	line: SIDEBAR_TOKENS.border,
-	/** the recessed fill itself: the darkest token (#10100E) */
+	/** the recessed fill itself: the darkest token (#0E0F11) */
 	well: TOKENS.background,
 };
 
 /**
  * Transparency presets (Roblox transparency = 1 - CSS alpha). Used ONLY where the UI sits over the game world,
  * plus enter / exit fades of transient elements (toasts, banners, feed lines); colours themselves are never mixed.
+ *
+ * These are DESIGN values. What finally reaches the screen is `worldTransparency(value)` (skin.ts), which
+ * multiplies them by GuiService.PreferredTransparency -- the player's "Background Transparency" setting, and
+ * the multiplication the accessibility doc asks for. A player who set it to 0 gets an opaque HUD. Everything
+ * drawn through paintSurface / makeFrame / makeScreen / addStroke already goes through it; a preset read
+ * straight into `BackgroundTransparency` (the touch controls and the nameplate do this) does not.
  */
 export const TRANSPARENCY = {
 	/** modal scrim (Dialog, pause, backpack): background at 80% over the world */

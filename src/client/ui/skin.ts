@@ -82,6 +82,102 @@ const strokeWidths = new Map<UIStroke, number>();
 const pixelStrokes = new Map<UIStroke, number>();
 const skinLayers = new Set<ImageLabel>();
 const insetListeners = new Set<() => void>();
+/** frames whose BackgroundTransparency is a DESIGN value scaled by the player's transparency preference */
+const worldFrames = new Map<GuiObject, number>();
+/** the same for UIStroke.Transparency */
+const worldStrokes = new Map<UIStroke, number>();
+
+// ---------------------------------------------------------------- system accessibility preferences
+
+/*
+ * Three settings in the Roblox menu the player expects us to honour (docs/research/ui.md 4.2, 6.1, 6.2):
+ * Background Transparency, Reduce Motion and Text Size. All three are read once, cached, and re-read through
+ * GetPropertyChangedSignal; a change re-runs the same refreshAll() that already rebuilds text sizes and
+ * stroke widths, and repaints every live surface (see the wiring at the end of this file).
+ *
+ * Every read is inside a pcall: an old client -- and the Node test harnesses -- may not have the property,
+ * and the defaults below are exactly "behave as before".
+ */
+
+/** GuiService.PreferredTransparency: 1 = draw our transparency as designed, 0 = the player wants it opaque */
+let preferredT = 1;
+/** GuiService.ReducedMotionEnabled */
+let reduceMotion = false;
+/** text size multiplier derived from GuiService.PreferredTextSize */
+let textPref = 1;
+
+/**
+ * Our multipliers for GuiService.PreferredTextSize. The engine publishes the enum but NOT what each step is
+ * worth, so these numbers are ours. They are deliberately modest and capped at 1.4: the kit is TextScaled
+ * inside a letterboxed design space, so above the cap a tight label overflows its box instead of reflowing
+ * (the same trade MIN_TEXT_PX below already makes).
+ */
+function textPrefScale(size: Enum.PreferredTextSize): number {
+	if (size === Enum.PreferredTextSize.Large) return 1.1;
+	if (size === Enum.PreferredTextSize.Larger) return 1.25;
+	if (size === Enum.PreferredTextSize.Largest) return 1.4;
+	return 1;
+}
+
+function readPreferences(): void {
+	pcall(() => {
+		preferredT = math.clamp(GuiService.PreferredTransparency, 0, 1);
+	});
+	pcall(() => {
+		reduceMotion = GuiService.ReducedMotionEnabled;
+	});
+	pcall(() => {
+		textPref = textPrefScale(GuiService.PreferredTextSize);
+	});
+}
+readPreferences();
+
+/**
+ * A design transparency, scaled by the player's preference -- the multiplication the accessibility doc asks
+ * for. 0 (opaque) and 1 (not drawn at all: a hidden stroke, the invisible fallback fill of a focus ring) are
+ * structural values, not "see the world through this", so they are left alone.
+ */
+export function worldTransparency(base: number): number {
+	if (base <= 0 || base >= 1) return base;
+	return base * preferredT;
+}
+
+/** true when the player asked for reduced motion */
+export function reducedMotion(): boolean {
+	return reduceMotion;
+}
+
+/** tween duration, honouring Reduce Motion (0 = the tween lands on its final value immediately) */
+export function motionTime(time: number): number {
+	return reduceMotion ? 0 : time;
+}
+
+/** multiplier the player's Text Size setting asks for (see textPrefScale) */
+export function preferredTextScale(): number {
+	return textPref;
+}
+
+/**
+ * Sets a frame's background transparency as a DESIGN value and keeps it in sync with the player's preference.
+ *
+ * Only a PARTIAL value is remembered. 0 and 1 are not affected by the preference anyway, and not remembering
+ * them matters: a screen that creates an element hidden (1) or opaque (0) and then animates its transparency
+ * by hand stays its own owner, instead of being snapped back by the next screen-size refresh.
+ */
+export function setWorldTransparency(obj: GuiObject, base: number): void {
+	obj.BackgroundTransparency = worldTransparency(base);
+	if (base <= 0 || base >= 1) return;
+	if (!worldFrames.has(obj)) obj.Destroying.Connect(() => worldFrames.delete(obj));
+	worldFrames.set(obj, base);
+}
+
+/** the same for a UIStroke */
+export function setWorldStrokeTransparency(s: UIStroke, base: number): void {
+	s.Transparency = worldTransparency(base);
+	if (base <= 0 || base >= 1) return;
+	if (!worldStrokes.has(s)) s.Destroying.Connect(() => worldStrokes.delete(s));
+	worldStrokes.set(s, base);
+}
 
 /**
  * Smallest text the interface is allowed to draw, in screen pixels.
@@ -97,8 +193,21 @@ const insetListeners = new Set<() => void>();
  */
 const MIN_TEXT_PX = 9;
 
+/*
+ * The player's Text Size setting is applied HERE, to the constraint, and not by the engine.
+ *
+ * The accessibility doc is explicit about why: "When TextScaled is enabled [...] the element's text will not
+ * be scaled by the PreferredTextSize value", and a UITextSizeConstraint "will not [...] expand above the set
+ * MaxTextSize, regardless of the player's text size setting". scaleText() does both, so the setting would do
+ * nothing at all in this kit. Scaling the cap ourselves gives it back for every label that FITS its box:
+ * MinTextSize follows from the cap, so it moves too.
+ *
+ * What it still cannot do (and this is the honest limit, not an oversight): a label that is already being
+ * shrunk by TextScaled to fit is pinned by its box, not by the cap, so a larger preference does not move it.
+ * Only AutomaticSize would, and that is the structural fix in docs/research/ui.md 2.3.
+ */
 function applyTextSize(c: UITextSizeConstraint, designSize: number): void {
-	const max = math.clamp(math.round(designSize * uiScale()), MIN_TEXT_PX, 100);
+	const max = math.clamp(math.round(designSize * uiScale() * textPref), MIN_TEXT_PX, 100);
 	c.MaxTextSize = max;
 	c.MinTextSize = math.clamp(math.floor(max * 0.5), MIN_TEXT_PX, max);
 }
@@ -152,6 +261,14 @@ function refreshAll(): void {
 	for (const label of skinLayers) {
 		if (label.Parent === undefined) skinLayers.delete(label);
 		else label.SliceScale = slice;
+	}
+	for (const [obj, base] of worldFrames) {
+		if (obj.Parent === undefined) worldFrames.delete(obj);
+		else obj.BackgroundTransparency = worldTransparency(base);
+	}
+	for (const [s, base] of worldStrokes) {
+		if (s.Parent === undefined) worldStrokes.delete(s);
+		else s.Transparency = worldTransparency(base);
 	}
 	for (const fn of insetListeners) fn();
 }
@@ -215,8 +332,10 @@ export function fadeText(label: TextLabel | TextButton, time: number, transparen
 	if (s !== undefined && s.IsA("UIStroke")) tweenTo(s, time, { Transparency: transparency });
 }
 
+/** every fade of the kit lands here; `motionTime` is what makes Reduce Motion cut them to an instant jump */
 function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const t = TweenService.Create(obj, new TweenInfo(time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props);
+	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+	const t = TweenService.Create(obj, info, props);
 	t.Play();
 	return t;
 }
@@ -291,7 +410,7 @@ function fallbackStroke(host: GuiObject, spec: SurfaceSpec, on: boolean): void {
 	}
 	s.Enabled = true;
 	s.Color = spec.stroke;
-	s.Transparency = combine(spec.strokeT ?? 0, surfaces.get(host)?.extraT ?? 0);
+	s.Transparency = combine(worldTransparency(spec.strokeT ?? 0), surfaces.get(host)?.extraT ?? 0);
 	setStrokeWidth(s, spec.strokeW ?? BORDER.width);
 }
 
@@ -316,7 +435,7 @@ function applySurface(host: GuiObject, live: LiveSurface): void {
 		for (const l of live.labels) l.Destroy();
 		live.labels.clear();
 		host.BackgroundColor3 = spec.bg;
-		host.BackgroundTransparency = combine(spec.bgT, extra);
+		host.BackgroundTransparency = combine(worldTransparency(spec.bgT), extra);
 		fallbackStroke(host, spec, true);
 		fallbackCorner(host, spec.radius ?? RADIUS.lg);
 		return;
@@ -355,7 +474,7 @@ function applySurface(host: GuiObject, live: LiveSurface): void {
 		label.Image = tex.id;
 		label.SliceCenter = new Rect(tex.slice[0], tex.slice[1], tex.slice[2], tex.slice[3]);
 		label.ImageColor3 = layer.tint;
-		label.ImageTransparency = combine(layer.transparency ?? 0, extra);
+		label.ImageTransparency = combine(worldTransparency(layer.transparency ?? 0), extra);
 	}
 }
 
@@ -404,15 +523,15 @@ export function fadeSurface(host: GuiObject, time: number, transparency: number)
 	live.extraT = math.clamp(transparency, 0, 1);
 	if (live.labels.size() > 0) {
 		for (let i = 0; i < live.labels.size(); i++) {
-			const base = live.spec.layers[i]?.transparency ?? 0;
+			const base = worldTransparency(live.spec.layers[i]?.transparency ?? 0);
 			tweenTo(live.labels[i], time, { ImageTransparency: combine(base, live.extraT) });
 		}
 		return;
 	}
-	tweenTo(host, time, { BackgroundTransparency: combine(live.spec.bgT, live.extraT) });
+	tweenTo(host, time, { BackgroundTransparency: combine(worldTransparency(live.spec.bgT), live.extraT) });
 	const s = host.FindFirstChild("SurfaceBorder");
 	if (s !== undefined && s.IsA("UIStroke")) {
-		tweenTo(s, time, { Transparency: combine(live.spec.strokeT ?? 0, live.extraT) });
+		tweenTo(s, time, { Transparency: combine(worldTransparency(live.spec.strokeT ?? 0), live.extraT) });
 	}
 }
 
@@ -558,3 +677,23 @@ export function focusSurface(color: Color3): SurfaceSpec {
 		radius: RADIUS.lg,
 	};
 }
+
+// ---------------------------------------------------------------- accessibility listeners
+
+/*
+ * Wired here, at the bottom, because a change has to repaint the live surfaces too and `surfaces` is declared
+ * above. The three settings can be changed while the game is open, so they are listened to and not just read.
+ */
+function onPreferenceChange(): void {
+	readPreferences();
+	for (const [host, live] of surfaces) {
+		if (host.Parent === undefined) surfaces.delete(host);
+		else applySurface(host, live);
+	}
+	// text sizes, stroke widths and the registered world transparencies
+	queueRefresh();
+}
+
+pcall(() => GuiService.GetPropertyChangedSignal("PreferredTransparency").Connect(onPreferenceChange));
+pcall(() => GuiService.GetPropertyChangedSignal("PreferredTextSize").Connect(onPreferenceChange));
+pcall(() => GuiService.GetPropertyChangedSignal("ReducedMotionEnabled").Connect(onPreferenceChange));
