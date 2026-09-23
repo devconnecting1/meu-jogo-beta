@@ -35,6 +35,7 @@ import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
+import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 
@@ -850,6 +851,8 @@ function processReport(s: Session, json: string): void {
 	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
 	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
 	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
+	// …and so are the achievements and what they could stand for (CON-04, MON-05): counted on its own events only
+	if (stripClientAchievements(prev, upd)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —

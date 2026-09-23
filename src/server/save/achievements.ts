@@ -27,8 +27,9 @@
  *       creditTaken             what the server put into the backpack (server/sim/items.ts: pickup, search, a
  *                               Thief's find): wood is Woods collector's
  *   - a client report cannot move them: `sanitizeClientReport` copies `achievements` and `lifeDeaths` from the trusted
- *     save (shared/game/save.ts, v6), and the counters reach the client in its wallet (`walletOf`), which the client
- *     only ever raises (`applyWallet`) -- the "Achievement unlocked" toast is that raise crossing the goal
+ *     save (shared/game/save.ts, v6), and `stripClientAchievements` pins them again (with `titles`) where the server
+ *     merges the report. The counters reach the client in its wallet (`walletOf`), which the client only ever raises
+ *     (`applyWallet`) -- the "Achievement unlocked" toast is that raise crossing the goal
  *     (client/ui/achievementNotice.ts);
  *   - a switched-off row (`hidden`, CON-04) is never credited;
  *   - an assisted run (§9.3) earns no kill and no night, as it earns no coins (the callers already gate those two).
@@ -102,6 +103,30 @@ export function creditBossAchievement(save: PlayerSaveData, bossType: number): v
 export function creditNightAchievements(save: PlayerSaveData): void {
 	raiseAchievement(save, AchievementId.GoodDay, 1);
 	if (save.lifeDeaths <= 0) raiseAchievement(save, AchievementId.NeverDie, save.lifeNights);
+}
+
+/**
+ * The report's pin (server/main.server.ts `processReport`, beside `stripClientProgress` and `stripClientLife`): a
+ * client report may mirror the achievements, never set or raise them. `sanitizeClientReport` already copies
+ * `achievements` and `lifeDeaths` from the trusted save (v6); they are pinned again here, where the report is merged,
+ * so the rule has a guard of its own that does not hang on how the sanitizer reads a report. `titles` goes with them:
+ * nothing an achievement could stand for may be granted by a report either (MON-05: only `grantTitle` writes a
+ * title). Answers whether the report had tried (a staleness signal for the admin panel, §9.3).
+ */
+export function stripClientAchievements(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
+	let changed = upd.lifeDeaths !== prev.lifeDeaths;
+	changed =
+		changed || upd.achievements.size() !== prev.achievements.size() || upd.titles.size() !== prev.titles.size();
+	for (let i = 0; i < prev.achievements.size(); i++) {
+		if (upd.achievements[i] !== prev.achievements[i]) changed = true;
+	}
+	for (let i = 0; i < prev.titles.size(); i++) {
+		if (upd.titles[i] !== prev.titles[i]) changed = true;
+	}
+	upd.achievements = [...prev.achievements];
+	upd.titles = [...prev.titles];
+	upd.lifeDeaths = prev.lifeDeaths;
+	return changed;
 }
 
 /** a death the server decided (server/sim/life.ts): one more for this life; `resetRun` puts it back to 0 */

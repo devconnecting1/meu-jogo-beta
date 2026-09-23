@@ -1383,6 +1383,31 @@ section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a mi
 	checkEq(upd.lifeDeaths, 2, "nem apaga as mortes desta vida");
 	check(upd.achievements !== base.achievements, "(a copia do relatorio e outra tabela: a viva nao e tocada)");
 
+	// the report path's own pin (server/main.server.ts processReport, beside stripClientProgress / stripClientLife):
+	// even a report that got past the sanitizer with forged counters -- a regression there -- is put back, titles too
+	const bypass = JSON.parse(JSON.stringify(base));
+	bypass.achievements = ACHIEVEMENTS.map(a => a.max);
+	bypass.titles = bypass.titles.map(() => 1);
+	bypass.lifeDeaths = 0;
+	check(
+		ACHV.stripClientAchievements(base, bypass),
+		"stripClientAchievements aponta o relatorio que tentou (sinal de relatorio velho, §9.3)",
+	);
+	check(
+		JSON.stringify(bypass.achievements) === JSON.stringify(base.achievements) &&
+			JSON.stringify(bypass.titles) === JSON.stringify(base.titles) &&
+			bypass.lifeDeaths === 2,
+		"...e devolve as conquistas, os titulos e as mortes desta vida do servidor",
+	);
+	check(
+		bypass.achievements !== base.achievements && bypass.titles !== base.titles,
+		"(copias: a tabela confiavel nao fica compartilhada com o relatorio)",
+	);
+	check(
+		!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(JSON.parse(JSON.stringify(base)), base)),
+		"um relatorio que so espelha o servidor nao e apontado",
+	);
+
 	// the wallet carries them, and the client's copy only ever raises them
 	const w = SAVE.walletOf(base);
 	checkArrayEq(w.achievements, base.achievements, "a carteira leva os contadores do servidor");
@@ -1567,6 +1592,12 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 	check(
 		/achievements = save\.achievements\.join/.test(src("server/main.server.ts")),
 		"a carteira empurrada muda quando uma conquista muda (walletSignature)",
+	);
+	check(
+		/stripClientLife\(prev, upd\)[^]*stripClientAchievements\(prev, upd\)[^]*applyProgressLimits\(s, prev, upd/.test(
+			src("server/main.server.ts"),
+		),
+		"processReport fixa as conquistas antes de juntar o relatorio (stripClientAchievements)",
 	);
 }
 

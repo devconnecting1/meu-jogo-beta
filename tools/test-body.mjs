@@ -1401,12 +1401,24 @@ section(
 			JSON.stringify(pushed?.wallet?.achievements),
 		);
 
-		// a report claiming every achievement: accepted as a report, and not one counter moves
+		// a report claiming every achievement (and every title): accepted as a report, and not one counter moves
 		const before = JSON.stringify(save.achievements);
-		const ack = s.report(p, { achievements: ACHIEVEMENTS.map(a => a.max), lifeDeaths: 0 });
+		const titlesBefore = JSON.stringify(save.titles);
+		const ack = s.report(p, {
+			achievements: ACHIEVEMENTS.map(a => a.max),
+			lifeDeaths: 0,
+			titles: save.titles.map(() => 1),
+		});
 		check(
-			ack?.ok === true && JSON.stringify(save.achievements) === before,
-			"a report with every achievement complete moves none (save v6)",
+			ack?.ok === true &&
+				JSON.stringify(save.achievements) === before &&
+				JSON.stringify(save.titles) === titlesBefore,
+			"a report with every achievement complete moves none, and grants no title (save v6, MON-05)",
+		);
+		check(
+			JSON.stringify(ack?.wallet?.achievements) === before &&
+				JSON.stringify(ack?.wallet?.titles) === titlesBefore,
+			"...and the wallet it answers with carries the server's counters, not the claim",
 		);
 
 		// ACH-4: a death answered by WAITING for daybreak is a death of this life (deathCount only counts paid Rebirths)
