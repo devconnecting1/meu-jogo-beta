@@ -852,7 +852,10 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 		[0, 0, 1, 0],
 	];
 	const cmds = kinds.map((k, i) => P.makeCommand(500 + i, 1, 0, 0, 0, P.packEdges(k[0], k[1], k[2], k[3])));
-	for (const cmd of cmds) PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
+	// the queue owns what it takes and writes the carried taps into it (players.ts `acceptInput`): hand it fresh
+	// tables, as decodeInput does, and keep `cmds` as the record of what was sent
+	const handed = cmds.map(cmd => ({ ...cmd }));
+	for (const cmd of handed) PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
 	checkEq(sp.queue.length, CFG.INPUT_BUFFER_MAX, "the queue holds its ceiling");
 	checkEq(sp.counters.inputOverflow, cmds.length - CFG.INPUT_BUFFER_MAX, "the oldest overflowed");
 	checkEq(
@@ -860,9 +863,14 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 		tapsOf(cmds).join(","),
 		"every tap of the dropped commands is still in the queue (press, release, E, reload)",
 	);
+	// NIT 4 (the second review of the zombie-motion branch): carried in place, not into a new table per command
+	check(
+		sp.queue.every((q, i) => q === handed[cmds.length - CFG.INPUT_BUFFER_MAX + i]),
+		"the queue carries the taps in the commands it holds, without a new table for each",
+	);
 	// the redundancy brings the dropped ones again: they are late now, and their taps are not carried twice
 	const lateBefore = sp.counters.late;
-	PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmds[2], cmds[1], cmds[0]] }, 0);
+	PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [{ ...cmds[2] }, { ...cmds[1] }, { ...cmds[0] }] }, 0);
 	checkEq(sp.counters.late - lateBefore, 3, "a later copy of a dropped command is late");
 	checkEq(tapsOf(sp.queue).join(","), tapsOf(cmds).join(","), "and carries nothing a second time");
 	// the movement is still capped: INPUT_BUFFER_MAX commands, then the queue is dry
@@ -1933,6 +1941,69 @@ section("(k) the rewind ceiling's ping survives a leave/enter and a new town (§
 		1e-9,
 		"a survivor the server never measured starts at its sample",
 	);
+}
+
+{
+	/*
+	 * NIT 3 (the second review of the zombie-motion branch): the ping is kept as long as the body is (life.ts
+	 * KEEP_AFTER_LEAVE_S), not for the life of the server. Someone gone longer comes back as a newcomer, and the table
+	 * holds the survivors measured lately rather than one entry for everyone who ever played here.
+	 */
+	const { KEEP_AFTER_LEAVE_S } = require(join(SRC, "server/sim/life.ts"));
+	const sim = new ServerSimulation({ world, zombies: true });
+	const hz = sim.simHz;
+	const enter = (slot, userId) => {
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: "p" },
+			defaultSave(),
+			spawnA.x,
+			spawnA.y,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		return sp;
+	};
+	let sp = enter(0, 8300);
+	for (let i = 0; i < 5; i++) sim.setPing(sp, 0.05);
+	sim.remove(sp.slot);
+	// the server runs on (nothing here reads the tick but the ping's age)
+	sim.tick += (KEEP_AFTER_LEAVE_S - 60) * hz;
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.3);
+	checkNear(
+		sim.combat.pingOf(sp.slot),
+		0.05 + 0.25 * 0.1,
+		1e-9,
+		`back ${KEEP_AFTER_LEAVE_S - 60} s after leaving, while the body is still kept, the first sample is filtered`,
+	);
+	sim.remove(sp.slot);
+	// twenty others come and go, a minute apart
+	for (let i = 0; i < 20; i++) {
+		sim.tick += 60 * hz;
+		const other = enter(1, 8400 + i);
+		sim.setPing(other, 0.1);
+		sim.remove(other.slot);
+	}
+	check(!sim.pings.has(8300), `a survivor gone longer than KEEP_AFTER_LEAVE_S is forgotten`);
+	check(
+		sim.pings.size() <= KEEP_AFTER_LEAVE_S / 60 + 1,
+		`the table holds the survivors measured in the last ${KEEP_AFTER_LEAVE_S} s, not all 21 (${sim.pings.size()})`,
+	);
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.3);
+	checkNear(
+		sim.combat.pingOf(sp.slot),
+		0.3,
+		1e-9,
+		"and when they come back they start at their sample, as a newcomer",
+	);
+	// with nobody else measured meanwhile, an entry too old to seed is not used either
+	sim.remove(sp.slot);
+	sim.tick += (KEEP_AFTER_LEAVE_S + 1) * hz;
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.2);
+	checkNear(sim.combat.pingOf(sp.slot), 0.2, 1e-9, "however quiet the server was while they were away");
 }
 
 // ---------------------------------------------------------------- verdict
