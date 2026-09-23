@@ -31,6 +31,7 @@ import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminSe
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
+import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
 
 /*
@@ -729,6 +730,8 @@ function processReport(s: Session, json: string): void {
 	// it is simply stale — pinned to the trusted copy in silence (§9.2 level 0). With those fields frozen
 	// the credit windows below have nothing left to clamp and the coins follow the server's own events.
 	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
+	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
+	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —
@@ -843,40 +846,43 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		if (save.money < price) return fail("funds", s);
 		save.money -= price;
 		save.costumes[id] = 1;
-	} else if (req.kind === "rebirth") {
-		// continue the current run after a game over; the price grows with every continue of the run.
-		// The request names the run it continues: a stale/duplicated request is refused (idempotent).
-		if (req.runRev !== save.runRev) return fail("outdated", s);
+	} else if (req.kind === "rebirth" || req.kind === "newRun") {
 		/*
-		 * MP-21: on a SHARED server a death waits for daybreak — the host revives at 06:00 and nobody buys
-		 * their way past the night. The official client refuses the button there, but a refusal that only
-		 * lives in the client is not a rule: a modified one would send this anyway, spend the coins and skip
-		 * the wait. The rule belongs here.
-		 *
-		 * A private server (`PrivateServerId !== ""`) is the player's own, and solo play runs in one, so the
-		 * paid continue keeps working exactly where it always did. `newRun` stays allowed everywhere — MP-20
-		 * makes it THE way out of a game over on a shared server, and it costs nothing to refuse.
+		 * The two ways out of a death, decided HERE and not by the client (server/sim/life.ts rule 5, the owner's
+		 * rule of 23 Sep 2026 — the same on every server kind):
+		 *   - rebirth: continue the run NOW, for rebirthPrice(deathCount) coins (the price grows with every
+		 *     continue). It used to be refused on public servers (63f8458); now it is legal everywhere, and only
+		 *     for a death the SERVER decided — a living body buying one was a heal and a teleport for coins;
+		 *   - newRun: give up the run — day 1 with the starter kit (level, skills, coins and packs stay, MP-20).
+		 *     A new LIFE, not a new body: it still waits for daybreak (or a Rebirth), and a living survivor may
+		 *     not use it at all — it was a free heal and teleport.
+		 * The request names the run it acts on: a stale or duplicated one is refused (idempotent by runRev).
+		 * `dead` is asked BEFORE anything is reset: resetRun clears the very `runOver` it may be read from.
 		 */
-		if (MP_PHASE >= 2 && game.PrivateServerId === "") return fail("invalid", s);
-		price = rebirthPrice(save.deathCount);
-		if (save.money < price) return fail("funds", s);
-		save.money -= price;
-		save.deathCount += 1;
-		save.runOver = false;
-		// a rebirth continues the same run: an assisted run stays assisted
-		if (s.assistedRunRev === save.runRev) s.assistedRunRev = save.runRev + 1;
-		save.runRev += 1;
-		// the SAVE says the run continues; this is what makes the simulated survivor agree (§7.1). Without
-		// it the coins were gone and the body stayed dead, so the button looked like it did nothing.
-		mpHost?.revive(player);
-	} else if (req.kind === "newRun") {
-		// give up the current run: day 1 with the starter kit (level, skills, coins, packs stay)
-		if (req.runRev !== save.runRev) return fail("outdated", s);
-		price = 0;
-		resetRun(save);
-		save.runRev += 1;
-		s.assistedRunRev = undefined;
-		mpHost?.revive(player);
+		const dead = mpHost !== undefined ? mpHost.isDead(player, save) : save.runOver;
+		// the daybreak already came while they waited in the lobby: the next entry stands them up for nothing, so a
+		// Rebirth asked now is not charged for it (nor counted as a continue)
+		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
+		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
+		if (refusal !== undefined) return fail(refusal, s);
+		if (req.kind === "rebirth") {
+			price = due ? 0 : rebirthPrice(save.deathCount);
+			save.money -= price;
+			if (!due) save.deathCount += 1;
+			save.runOver = false;
+			// a rebirth continues the same run: an assisted run stays assisted
+			if (s.assistedRunRev === save.runRev) s.assistedRunRev = save.runRev + 1;
+			save.runRev += 1;
+			// the SAVE says the run continues; this is what makes the simulated survivor agree (§7.1). Without
+			// it the coins were gone and the body stayed dead, so the button looked like it did nothing.
+			mpHost?.rebirth(player, save);
+		} else {
+			price = 0;
+			resetRun(save);
+			save.runRev += 1;
+			s.assistedRunRev = undefined;
+			mpHost?.newLife(player, save);
+		}
 	} else {
 		return fail("invalid", s);
 	}
@@ -901,6 +907,10 @@ Players.PlayerRemoving.Connect(player => {
 	releasing.add(userId);
 	waitUntil(() => s.loaded, 60);
 	if (s.pending !== undefined) processPending(s);
+	// §7.2 "Desconectar": the body goes into the save — runHp, runHunger, runOver, the magazine back into the
+	// reserve — BEFORE the final write. mpHost's own PlayerRemoving handler does the same, but the two handlers
+	// run in no guaranteed order, and this write is the last one the session gets.
+	if (s.loaded) mpHost?.release(player, s.save);
 	flush(s, true);
 	sessions.delete(player);
 	releasing.delete(userId);
@@ -908,6 +918,9 @@ Players.PlayerRemoving.Connect(player => {
 
 game.BindToClose(() => {
 	shuttingDown = true;
+	// §7.2 "Servidor desligando": stop the simulation and bank every body into its save before the writes below
+	// capture them (a second BindToClose would race this one, so the host is stopped here, first)
+	mpHost?.stop();
 	const all: Array<Session> = [];
 	for (const [, s] of sessions) all.push(s);
 	let remaining = all.size();
@@ -936,6 +949,8 @@ task.spawn(() => {
 			if (shuttingDown || s.closed) continue;
 			const budget = DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync);
 			if (budget < AUTOSAVE_MIN_BUDGET) break; // keep the budget for joins/leaves; retry next round
+			// the body's hp and hunger as they are now (§6.1), so a crash does not hand out a heal on the next join
+			if (mpHost?.settle(s.player, s.save) === true) s.dirty = true;
 			task.spawn(() => flush(s, false));
 			task.wait(0.2);
 		}
@@ -1057,6 +1072,11 @@ if (MP_PHASE >= 1) {
 			if (s === undefined || s.closed || !s.loaded) return undefined;
 			return s.save;
 		},
+		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1)
+		saveChanged: userId => markDirty(userId),
+		// `onWorldWiped` (server/sim/life.ts rule 6: everybody in the world is dead and nobody paid inside the
+		// window) is where the world's reset to day 1 will hang, from HERE. Not yet: the host only logs it, and
+		// the daybreak wait still stands everybody up.
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an
@@ -1079,10 +1099,7 @@ if (MP_PHASE >= 1) {
 	sim.onBackpack = sp => markDirty(sp.userId);
 	sim.onInteract = sp => markDirty(sp.userId);
 	startIntentListener(mpHost);
-	game.BindToClose(() => {
-		// stop simulating while the save flush above uses the remaining shutdown budget
-		if (mpHost !== undefined) mpHost.stop();
-	});
+	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
 
 // ---------------------------------------------------------------- proximity chat (§4.3, §9.1)

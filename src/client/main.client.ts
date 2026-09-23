@@ -93,20 +93,15 @@ let dawnBudget = 0;
 let dawnOverdue = 0;
 
 /**
- * MP-20 / MP-21: is the town this survivor is standing in SHARED, or is it theirs?
+ * MP-21 (as the owner rewrote it on 23 Sep 2026): does the SERVER stand this survivor back up at daybreak?
  *
- * The answer decides whether a death is waited out or bought back, and it is read off the SERVER KIND rather
- * than off how many people happen to be logged in. A head count is a moving target: someone who dies alone
- * at 23:00 would be offered a Rebirth, and a stranger joining a second later would turn that same death into
- * a three-minute wait — or, worse the other way round, let somebody pay coins to walk back into a night two
- * other people were living. `game.PrivateServerId` never changes for the life of a server, so this client
- * and server/net/mpHost.ts always reach the same answer with no race to lose. It is also the taxonomy MP-13
- * already uses: a "servidor público" against a "servidor solo/privado", where the world is the owner's.
- *
- * Below MP_PHASE 2 every client simulates its own town, so there is no shared night to take away.
+ * From MP_PHASE 2 it does, on EVERY server kind: a death is paid for with coins right away (Rebirth) or with the
+ * rest of the night (the wait), public or private alike — server/sim/life.ts decides it, and this client only
+ * offers both. It used to depend on `game.PrivateServerId` (Rebirth only in the owner's world, the wait only in a
+ * shared one); that split is gone. Below MP_PHASE 2 every client simulates its own death and nobody revives it.
  */
-function sharedWorld(): boolean {
-	return MP_PHASE >= 2 && game.PrivateServerId === "";
+function serverRevives(): boolean {
+	return MP_PHASE >= 2;
 }
 
 // per-run trackers (achievements, rewards, HUD)
@@ -547,16 +542,16 @@ function openDeath(): void {
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
 	// on it, and MP-21's short wait would read as a hang.
-	if (sharedWorld() && loop.getRefs().daynight.serverDriven()) {
+	if (serverRevives() && loop.getRefs().daynight.serverDriven()) {
 		/*
-		 * MP-21: on a shared server a death is a night lost, not a run ended. Nothing is for sale here —
-		 * the survivor watches the town carry on and the server puts them back on the street at 06:00
-		 * (server/net/mpHost.ts). "New game" is still offered for anyone who would rather start a new
-		 * life than sit out the dark; the per-frame half of this lives in `updateDawnWait`.
+		 * MP-21: a death is a night lost, not a run ended, on every server kind. The survivor watches the town
+		 * carry on and the server puts them back on the street at 06:00 (server/sim/life.ts) — or right now, for
+		 * coins (Rebirth). "New game" starts a new life, which still waits for daybreak; the per-frame half of
+		 * this lives in `updateDawnWait`.
 		 */
 		dawnBudget = daybreakWaitSeconds(loop.getRefs().daynight.dayTime);
 		dawnOverdue = 0;
-		dawnWait = showDaybreakWait(ctx, summary, { onNewRun: doNewRun, onHome: goLobby });
+		dawnWait = showDaybreakWait(ctx, summary, { onRebirth: doRebirth, onNewRun: doNewRun, onHome: goLobby });
 		return;
 	}
 	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
@@ -761,13 +756,7 @@ function invokeRunAction(kind: "rebirth" | "newRun"): ShopActionResult {
 
 function doRebirth(): void {
 	if (actionBusy || !ctx.save.runOver) return; // a stale dialog: there is no game over to continue
-	if (sharedWorld()) {
-		// MP-21: coins buy a run back in the OWNER's world. Paying to stand up in the middle of somebody
-		// else's night takes that night away from the people living it — so it is refused here, with a
-		// reason, rather than being charged and then undone (or refused in silence by the server).
-		toast(ctx, tr("Rebirth is for your own world; here you wake at daybreak"), "error");
-		return;
-	}
+	// MP-21 (owner's rule, 23 Sep 2026): a paid Rebirth is legal on every server kind; the server checks the death
 	// the Rebirth button stays clickable even when it's styled as "can't afford" (destructive) -
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
 	const price = rebirthPrice(ctx.save.deathCount);
@@ -812,24 +801,7 @@ function doNewRun(): void {
 }
 
 function showGameOverChoice(): void {
-	if (sharedWorld()) {
-		// MP-20 / MP-21: there is no price to quote here. The only way forward is a new life, and the town
-		// is on whatever day it is on — saying so is what stops "New game" reading as "new world".
-		popup(
-			ctx,
-			tr("Your run is over"),
-			nl(
-				tr(
-					"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it.",
-				),
-			),
-			[
-				{ text: tr("Close"), variant: "outline" },
-				{ text: tr("New game"), variant: "default", onClick: doNewRun },
-			],
-		);
-		return;
-	}
+	// the same two ways out on every server kind (MP-21 as the owner rewrote it): pay to continue, or a new life
 	const price = rebirthPrice(ctx.save.deathCount);
 	const short = price - ctx.save.money;
 	let body = nl(

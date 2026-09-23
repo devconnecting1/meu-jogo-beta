@@ -24,18 +24,19 @@ import {
  * then the two ways forward, then the price. No red title, no "you failed", and New game is never dressed as
  * the dangerous option on a first death, because at that point there is nothing to throw away.
  *
- * TWO ENDINGS, because MP-21 gives a death two different meanings:
+ * TWO ENDINGS:
  *
- *   `showRunSummary`     your own world (solo/private server, or the single-player build). The world is the
- *                        owner's, so the run can be bought back: Rebirth · N coins, or New game.
- *   `showDaybreakWait`   a shared world. Nobody buys their way out of somebody else's night, so the ending
- *                        is a wait: the screen keeps the town visible behind it and counts the REAL seconds
- *                        down to 06:00, when the server puts the survivor back on the street. A wait with
- *                        no number on it is indistinguishable from a frozen game, which is why the count is
+ *   `showRunSummary`     nobody will stand you up (the single-player build, or a session whose server never
+ *                        drove the clock): Rebirth · N coins, or New game.
+ *   `showDaybreakWait`   a server that revives at daybreak — every server kind from MP_PHASE 2 (MP-21 as the
+ *                        owner rewrote it on 23 Sep 2026). The ending is a wait: the screen keeps the town
+ *                        visible behind it and counts the REAL seconds down to 06:00, when the server puts the
+ *                        survivor back on the street; Rebirth buys the rest of the night off with coins. A wait
+ *                        with no number on it is indistinguishable from a frozen game, which is why the count is
  *                        the biggest thing on the panel.
  *
  * Only the presentation lives here. Rebirth, New game, Home and the revive itself are the run lifecycle of
- * main.client.ts (and, for the revive, server/net/mpHost.ts) and arrive as handlers.
+ * main.client.ts (and, for the revive, server/sim/life.ts) and arrive as handlers.
  */
 
 export interface RunSummary {
@@ -61,6 +62,8 @@ export interface RunSummaryHandlers {
 const W = 520;
 const H = 470;
 const H_WAIT = 486;
+/** the daybreak panel with its Rebirth row (a 56 px button and its gap) */
+const H_WAIT_REBIRTH = H_WAIT + 56 + space(3);
 const PAD = space(6);
 const ROW_H = 34;
 
@@ -210,17 +213,17 @@ export interface DaybreakWait {
 }
 
 /**
- * MP-21: died on a shared server. The run is not over and there is nothing to buy — the night is, and the
- * night ends at 06:00 (~3.6 real minutes end to end), so the survivor waits it out and the server puts them
- * back on the street.
+ * MP-21: died where the server stands its dead back up. The run is not over: the night is, and the night ends
+ * at 06:00 (~3.6 real minutes end to end), so the survivor waits it out and the server puts them back on the
+ * street.
  *
  * Two deliberate differences from the screen above. The overlay is lighter, because the point is that the
  * town keeps going without you and you are meant to watch it. And the biggest thing on the panel is a
  * running count, not a button: a wait the player cannot measure is a wait they read as a crash.
  *
- * "New game" is still here, for a survivor who would rather start a new life than sit out the dark. What is
- * NOT here is Rebirth: paying coins to walk back into somebody else's night would take that night away from
- * the people living it.
+ * Rebirth (when a handler is given) buys the rest of the night off with coins — legal on every server kind
+ * since the owner's rule of 23 Sep 2026 — so it sits under the count, outlined, never louder than the wait.
+ * "New game" is still here for a survivor who would rather start a new life; that life waits for daybreak too.
  */
 export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): DaybreakWait {
 	const lang = ctx.save.settings.langType;
@@ -232,7 +235,9 @@ export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers
 		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
 	});
-	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H_WAIT) / 2, w: W, h: H_WAIT });
+	const withRebirth = handlers.onRebirth !== undefined;
+	const h = withRebirth ? H_WAIT_REBIRTH : H_WAIT;
+	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - h) / 2, w: W, h });
 	const innerW = W - PAD * 2;
 	let y = summaryHead(panel, summary, tr);
 
@@ -271,6 +276,20 @@ export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers
 		{ font: "numeric", align: "right", zIndex: 2 },
 	);
 	y += clockH + space(4);
+
+	if (withRebirth) {
+		const price = rebirthPrice(ctx.save.deathCount);
+		Button(panel, "Rebirth", `${tr("Rebirth")}  ·  ${fmtInt(price)}`, {
+			x: PAD,
+			y,
+			w: innerW,
+			size: "lg",
+			// the wait is free and it is the default: paying to skip it is offered, never pushed
+			variant: "outline",
+			onClick: (): void => handlers.onRebirth?.(),
+		});
+		y += 56 + space(3);
+	}
 
 	const halfW = (innerW - space(3)) / 2;
 	const newRun = Button(panel, "NewRun", tr("New game"), {

@@ -37,7 +37,7 @@ import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
 import { ServerItems } from "./items";
-import { DayCredit, Progress, creditDaySurvived } from "./progress";
+import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal } from "./progress";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
 import { WorldClock } from "./waves";
@@ -106,6 +106,17 @@ export interface StepOutcome {
 	died: boolean;
 }
 
+/**
+ * §3.6 bookkeeping for one survivor's current world day, keyed by UserId so a trip to the lobby does not reset it
+ * (the ServerPlayer is rebuilt on every entry; the person is not).
+ */
+interface Presence {
+	/** ticks spent ALIVE in the world since the previous midnight */
+	aliveTicks: number;
+	/** the last tick a REAL command moved or pressed something (§9.1), or undefined */
+	activeTick?: number;
+}
+
 export class ServerSimulation {
 	readonly world: WorldData;
 	readonly simHz: number;
@@ -122,6 +133,8 @@ export class ServerSimulation {
 	 * uses to mark it dirty and push the new wallet, not a chance to change the number.
 	 */
 	onDayCredit?: (sp: ServerPlayer, credit: DayCredit) => void;
+	/** Midnight did NOT pay this survivor, and why (§3.6: dead, absent for most of the day, or AFK) */
+	onDayRefused?: (sp: ServerPlayer, reason: DayRefusal) => void;
 	/**
 	 * May this survivor's run earn coins? (§9.3 assisted run: an admin used world tools in it.) The
 	 * simulation has no idea who an admin is; server/main.server.ts owns that and wires this in. Left
@@ -182,6 +195,10 @@ export class ServerSimulation {
 	private readonly bodySlots = new Array<number>();
 	/** backpack intents waiting for their slot's next step (§2.4) */
 	private readonly intents = new Map<number, Array<IntentMessage>>();
+	/** §3.6: who was alive and at the controls during the current world day, by UserId */
+	private readonly presence = new Map<number, Presence>();
+	/** ticks the world ran since the previous midnight (or since boot): what "half the day" is half of */
+	private dayTicks = 0;
 	private acc = 0;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
@@ -192,15 +209,12 @@ export class ServerSimulation {
 		this.simHz = hz > 0 ? hz : SIM_HZ;
 		this.tickDt = 1 / this.simHz;
 		this.clock = options.clock ?? new WorldClock();
-		// §3.6: the world rolled into a new day, and everybody who is in it lived through that night —
-		// +1 day of life, the day's coins and any record milestone, paid HERE because this is where the
-		// day is generated (§6.3: a reward the server generates is a reward the server pays)
-		this.clock.onNewDay = () => {
-			for (const sp of this.roster) {
-				const credit = creditDaySurvived(sp.save, this.pays(sp));
-				if (this.onDayCredit !== undefined) this.onDayCredit(sp, credit);
-			}
-		};
+		// §3.6: the world rolled into a new day. Whoever LIVED through it — alive now, alive in the world for at
+		// least half of it, and at the controls in the last minutes — gets +1 day of life, the day's coins and any
+		// record milestone, paid HERE because this is where the day is generated (§6.3: a reward the server
+		// generates is a reward the server pays). Before the security review of Sep 2026 the whole roster was
+		// paid: the dead, and a bot parked in the street.
+		this.clock.onNewDay = () => this.creditMidnight();
 		// ---- F3: the interactive world (items, loot, doors, lights, builds, crafting) ----------------
 		if (options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE) {
 			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
@@ -269,6 +283,41 @@ export class ServerSimulation {
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
 	private pays(sp: ServerPlayer): boolean {
 		return this.paysRewards === undefined || this.paysRewards(sp);
+	}
+
+	/** §3.6 at the world's midnight: pay who earned the day (`dayRefusal`), then start counting the next one */
+	private creditMidnight(): void {
+		const span = this.dayTicks;
+		for (const sp of this.roster) {
+			const p = this.presence.get(sp.userId);
+			const refused = dayRefusal(sp.state.dead, p?.aliveTicks ?? 0, span, p?.activeTick, this.tick, this.simHz);
+			if (refused !== undefined) {
+				if (this.onDayRefused !== undefined) this.onDayRefused(sp, refused);
+				continue;
+			}
+			const credit = creditDaySurvived(sp.save, this.pays(sp));
+			if (this.onDayCredit !== undefined) this.onDayCredit(sp, credit);
+		}
+		// a new day for everybody: the survivors in the world start it at 0, anybody else is forgotten (they start
+		// at 0 too whenever they come back); the last real input is kept, it is about minutes, not days
+		const inWorld = new Set<number>();
+		for (const sp of this.roster) inWorld.add(sp.userId);
+		for (const [userId, p] of this.presence) {
+			if (inWorld.has(userId)) p.aliveTicks = 0;
+			else this.presence.delete(userId);
+		}
+		this.dayTicks = 0;
+	}
+
+	/** one tick of §3.6 bookkeeping; `acted` = a REAL command with movement or an edge was consumed this tick */
+	private notePresence(sp: ServerPlayer, acted: boolean): void {
+		let p = this.presence.get(sp.userId);
+		if (p === undefined) {
+			p = { aliveTicks: 0 };
+			this.presence.set(sp.userId, p);
+		}
+		if (!sp.state.dead) p.aliveTicks += 1;
+		if (acted) p.activeTick = this.tick;
 	}
 
 	/** the slot of the survivor this `PlayerState` belongs to, or -1 (the damage sink refuses those) */
@@ -383,17 +432,26 @@ export class ServerSimulation {
 	 * One fixed step, in the §3.1 order: (1) input and movement for every survivor, (2) the world — clock,
 	 * population, flow field, zombies, bosses — and then the replication through `onTick`.
 	 *
-	 * A survivor keeps being stepped after `dead`: §7.3 (downed, crawling at 20%, revive, spectate) is F4's —
-	 * it gates the command here, in one place.
+	 * A dead survivor's commands are still consumed (the queue drains and the ack moves, so a revive does not
+	 * replay a backlog), but `stepPlayer` does nothing with them: a dead body is inert (shared/sim/playerMove.ts).
+	 * §7.3's downed crawl at 20 % is F4's, and will gate the command there, in the same one place.
 	 */
 	step(): void {
 		this.tick += 1;
 		this.stats.ticks += 1;
+		this.dayTicks += 1;
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
 			noteStep(sp, cmd, res.walking);
+			// a filled tick consumes nothing (players.ts), so only a command the client really sent can count — and
+			// only a step that actually walked, or an edge: a stick held against a wall repeats itself for free
+			this.notePresence(
+				sp,
+				sp.counters.consumed > consumed && ((cmd.moveMag > 0 && res.walking) || cmd.edges !== 0),
+			);
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later
 			this.combat?.stepPlayer(sp, cmd, this.tick, this.tickDt);

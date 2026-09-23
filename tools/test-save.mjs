@@ -40,7 +40,8 @@ const { SHOP_PACKS, COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
 const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
-const { createServerPlayer } = require(join(SRC, "server/sim/players.ts"));
+const { createServerPlayer, ingestInput } = require(join(SRC, "server/sim/players.ts"));
+const P = require(join(SRC, "shared/net/protocol.ts"));
 const { createWorld } = require(join(SRC, "shared/game/world.ts"));
 
 // ---------------------------------------------------------------- tiny harness
@@ -419,11 +420,29 @@ section("9) um chefe tambem paga as moedas dele");
 
 // ---------------------------------------------------------------- the whole wiring
 
+/**
+ * One tick of the world with every survivor AT THE CONTROLS. Since the security review of Sep 2026 midnight pays
+ * only who is alive, was in the world for half the day and is not AFK (server/sim/progress.ts `dayRefusal`), so
+ * the survivors here send a real command with an edge every tick, through the real C→S path, and are kept fed (a
+ * whole game day on an empty stomach starves them, and the dead are not paid). The simulation is built without a
+ * horde, so it does not drive the clock: the clock is stepped right after it, and what is under test is the
+ * midnight hook, not the horde.
+ */
+function playTick(sim, clock, dt) {
+	for (const sp of sim.players()) {
+		sp.state.hungry = sp.state.hungryMax;
+		const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 0, 0, 0, 0, 1);
+		ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * dt);
+	}
+	sim.step();
+	clock.step(dt);
+}
+
 section("10) a meia-noite do mundo paga cada sobrevivente uma unica vez");
 {
 	const world = createWorld(4000, 4000);
 	const clock = new WorldClock({ day: 3, dayTime: 23.9 });
-	const sim = new ServerSimulation({ world, clock });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
 	const saves = [];
 	const credits = [];
 	sim.onDayCredit = (sp, credit) => credits.push({ slot: sp.slot, coins: credit.coins, day: credit.day });
@@ -435,10 +454,8 @@ section("10) a meia-noite do mundo paga cada sobrevivente uma unica vez");
 		saves.push(save);
 		sim.add(createServerPlayer({ slot, userId: 100 + slot, name: `p${slot}` }, save, 100, 100, 0, 60));
 	}
-	// the clock is stepped directly: with no horde the simulation does not drive it, and what is under test
-	// is the midnight hook, not the horde
 	const dt = 1 / 60;
-	for (let i = 0; i < 60 * 60; i++) clock.step(dt);
+	for (let i = 0; i < 60 * 60; i++) playTick(sim, clock, dt);
 	checkEq(clock.day, 4, "o mundo virou o dia");
 	checkEq(credits.length, 3, "e cada sobrevivente foi creditado exatamente uma vez");
 	for (let slot = 0; slot < 3; slot++) {
@@ -451,7 +468,7 @@ section("10) a meia-noite do mundo paga cada sobrevivente uma unica vez");
 	// test that guesses that number is a test that measures TIME_SPEED instead of the payment.
 	let guard = 60 * 60 * 30;
 	while (clock.day < 5 && guard > 0) {
-		clock.step(dt);
+		playTick(sim, clock, dt);
 		guard -= 1;
 	}
 	check(guard > 0, "o mundo virou outro dia dentro do orcamento de ticks");
@@ -470,12 +487,12 @@ section("11) uma run assistida por admin nao recebe as moedas da meia-noite");
 {
 	const world = createWorld(4000, 4000);
 	const clock = new WorldClock({ day: 1, dayTime: 23.9 });
-	const sim = new ServerSimulation({ world, clock });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
 	const save = SAVE.defaultSave();
 	save.money = 0;
 	sim.paysRewards = () => false;
 	sim.add(createServerPlayer({ slot: 0, userId: 1, name: "admin-assisted" }, save, 100, 100, 0, 60));
-	for (let i = 0; i < 60 * 60; i++) clock.step(1 / 60);
+	for (let i = 0; i < 60 * 60; i++) playTick(sim, clock, 1 / 60);
 	checkEq(save.day, 2, "o dia passou");
 	checkEq(save.money, 0, "e nao pagou nada");
 }

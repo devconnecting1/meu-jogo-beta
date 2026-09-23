@@ -573,7 +573,7 @@ function seedHorde(server, n, cx, cy, radius) {
 	const horde = server.sim.horde;
 	for (let i = 0; i < n; i++) {
 		const a = (i / n) * Math.PI * 2;
-		const r = radius * (0.35 + 0.65 * ((i * 37) % 100) / 100);
+		const r = radius * (0.35 + (0.65 * ((i * 37) % 100)) / 100);
 		const z = createZombie(1, cx + Math.cos(a) * r, cy + Math.sin(a) * r, 5, false);
 		z.alpha = 1;
 		horde.zombies.push(z);
@@ -684,10 +684,7 @@ section("(b) interest rings and the anti-wallhack rules of §4.3");
 		!seen.has(horde.netIdOf(dark)),
 		"one outside every light, past DARK_SENSE_RANGE, is NOT sent (§4.3: no wallhack in the dark)",
 	);
-	check(
-		seen.has(horde.netIdOf(near)),
-		`one in the dark but within ${CFG.DARK_SENSE_RANGE} u IS sent (you hear it)`,
-	);
+	check(seen.has(horde.netIdOf(near)), `one in the dark but within ${CFG.DARK_SENSE_RANGE} u IS sent (you hear it)`);
 }
 
 // ================================================================ (c) a death is reliable
@@ -853,10 +850,12 @@ section("(e) the XP is the server's (§3.6, §11.3 F2)");
 		helper.save.exp - helperBefore < killer.save.exp - expBefore,
 		"the assist is worth less than the kill (ASSIST_SHARE)",
 	);
-	// §3.6: the world rolling past midnight is what moves a survivor's OWN day, now that a report cannot
+	// §3.6: the world rolling past midnight is what moves a survivor's OWN day, now that a report cannot. Midnight
+	// pays only a survivor at the controls (server/sim/progress.ts `dayRefusal`: a real command with movement or an
+	// edge in the last 3 min), so these ticks carry a reload press — harmless in the killer's hands
 	const dayBefore = killer.save.day;
 	server.sim.clock.setClock(23.999);
-	for (let i = 0; i < 20; i++) tickServer(server);
+	for (let i = 0; i < 20; i++) tickServer(server, { edges: 1 << P.EdgeShift.Reload });
 	checkEq(killer.save.day, dayBefore + 1, "the night that passed credited the survivor a day");
 	check(killer.save.bestDay >= killer.save.day, "and the record follows it");
 	// and a client report can no longer move any of it (§11.3 F2 acceptance line)
@@ -866,7 +865,11 @@ section("(e) the XP is the server's (§3.6, §11.3 F2)");
 	forged.level = prev.level + 20;
 	forged.day = prev.day + 5;
 	const moved = PROG.stripClientProgress(prev, forged);
-	checkEq(CFG.MP_PHASE >= PROG.PROGRESS_SERVER_PHASE, true, "MP_PHASE is at the phase where the server owns progress");
+	checkEq(
+		CFG.MP_PHASE >= PROG.PROGRESS_SERVER_PHASE,
+		true,
+		"MP_PHASE is at the phase where the server owns progress",
+	);
 	checkEq(moved, true, "a report that tries to move progress is noticed");
 	checkEq(forged.exp, prev.exp, "and its xp is pinned to the trusted copy");
 	checkEq(forged.level, prev.level, "its level too");
@@ -893,10 +896,15 @@ section("(f) the cost of a tick with 150 zombies and 6 survivors (§3.2 budget: 
 	}
 	const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
 	const p95 = percentile(samples, 0.95);
-	info(`${ticks} ticks, ${server.sim.horde.count()} zombies, ${server.sim.count()} survivors, Node ${process.version}`);
+	info(
+		`${ticks} ticks, ${server.sim.horde.count()} zombies, ${server.sim.count()} survivors, Node ${process.version}`,
+	);
 	info(`tick cost (simulation + replication): avg ${avg.toFixed(3)} ms · p95 ${p95.toFixed(3)} ms`);
 	info("Luau on a Roblox server is slower than Node: this is a regression guard, not the §3.2 verdict");
-	check(p95 < 1000 / CFG.SIM_HZ, `p95 stays under the tick period (${p95.toFixed(3)} ms < ${(1000 / CFG.SIM_HZ).toFixed(1)} ms)`);
+	check(
+		p95 < 1000 / CFG.SIM_HZ,
+		`p95 stays under the tick period (${p95.toFixed(3)} ms < ${(1000 / CFG.SIM_HZ).toFixed(1)} ms)`,
+	);
 	checkEq(server.sim.stats.droppedTicks, 0, "no tick was dropped");
 }
 

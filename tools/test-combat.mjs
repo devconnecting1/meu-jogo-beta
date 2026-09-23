@@ -773,6 +773,35 @@ section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)
 }
 
 {
+	// a slot is reused by whoever enters next (§4.4: `freeSlot` hands out the lowest free one), and the ledgers are
+	// keyed by slot. A leaves after doing 6 % of the boss; B walks in and takes slot 0; C kills the boss. Before the
+	// fix `remove` only dropped the counters, so B was paid A's fight: the XP, the boss kill and COINS_PER_BOSS.
+	const saves = new Map([
+		[0, defaultSave()],
+		[1, defaultSave()],
+	]);
+	const prog = new PROG.Progress({ saveOf: slot => saves.get(slot) });
+	prog.noteBossDamage(7, 0, 600, 0); // A, slot 0: 6 % of the boss
+	prog.noteZombieDamage(8, 0, 50, 0); // …and softened a walker up
+	prog.remove(0); // A leaves the world
+	const newcomer = defaultSave();
+	newcomer.money = 0;
+	saves.set(0, newcomer); // B takes slot 0
+	const bossAwards = prog.bossKilled(7, 1000, 10000, 1); // C, slot 1, lands the killing blow
+	check(
+		!bossAwards.some(a => a.slot === 0),
+		"a newcomer in a reused slot is not paid the boss its last owner fought",
+	);
+	check(
+		newcomer.exp === 0 && newcomer.bossKills === 0 && newcomer.money === 0,
+		"…no XP, no boss kill, no boss coins",
+		`exp ${newcomer.exp}, bossKills ${newcomer.bossKills}, money ${newcomer.money}`,
+	);
+	const walkerAwards = prog.zombieKilled(8, 100, 1, 1);
+	check(!walkerAwards.some(a => a.slot === 0), "…nor the assist its last owner earned on a walker");
+}
+
+{
 	// end to end: a kill resolved by the weapon machine pays XP with no client in the loop
 	const fx = newFixture();
 	const sp = makePlayer(fx, 0, 1000, 1000, 13); // Semi auto rifle: 110 dmg

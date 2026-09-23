@@ -1280,6 +1280,194 @@ section("catch-up: at most 2 ticks per heartbeat, the surplus is dropped (§3.1)
 	checkEq(server.sim.advance(-1), 0, "a negative delta runs nothing");
 }
 
+// ---------------------------------------------------------------- (h) the dead do not walk
+
+section("(h) a dead survivor does not walk: its commands are consumed and nothing moves (shared/sim/playerMove.ts)");
+
+{
+	// the pure step first: a dead body is inert, whatever the command says
+	const save = defaultSave();
+	const body = createPlayer(save, spawnA.x, spawnA.y);
+	body.dead = true;
+	body.hp = 0;
+	body.angle = 0.5;
+	const res = stepPlayer(world, body, save, commandAt(1, run.angle, run.angle + 1), TICK_DT);
+	check(
+		res.moved === 0 && !res.walking && !res.died && body.x === spawnA.x && body.y === spawnA.y,
+		"stepPlayer on a dead body moves nothing and does not die twice",
+	);
+	check(body.angle === 0.5 && body.hp === 0, "…nor turns it, nor regenerates it");
+
+	// and through the whole C→S path: alive the commands walk, dead the very same ones do not
+	const server = newServer({ replicate: false });
+	const c = enter(server, spawnA.x, spawnA.y);
+	for (let t = 0; t < 30; t++) {
+		send(server, c, commandAt(c.seq++, run.angle));
+		tick(server);
+	}
+	const alive = Math.hypot(c.sp.state.x - spawnA.x, c.sp.state.y - spawnA.y);
+	check(alive > 20, `alive, the commands walk (${alive.toFixed(1)} u in 30 ticks)`);
+	c.sp.state.godMode = false;
+	c.sp.state.hp = -1000;
+	send(server, c, commandAt(c.seq++, run.angle));
+	tick(server);
+	check(c.sp.state.dead && server.lives.includes(c.sp.slot), "the survivor dies on the server");
+	const x0 = c.sp.state.x;
+	const y0 = c.sp.state.y;
+	const angle0 = c.sp.state.angle;
+	const consumed0 = c.sp.counters.consumed;
+	for (let t = 0; t < 120; t++) {
+		send(server, c, commandAt(c.seq++, run.angle + t * 0.1, t * 0.2));
+		tick(server);
+	}
+	const moved = Math.hypot(c.sp.state.x - x0, c.sp.state.y - y0);
+	checkEq(moved, 0, "dead, 2 s of walking commands move the body by");
+	check(c.sp.state.angle === angle0, "…and do not even turn it (no aim for the team's scout)");
+	check(
+		c.sp.counters.consumed - consumed0 >= 110,
+		`…while they are consumed and acknowledged (${c.sp.counters.consumed - consumed0})`,
+	);
+	check(c.sp.state.hp <= 0, `…and the corpse does not regenerate (hp ${c.sp.state.hp.toFixed(2)})`);
+}
+
+// ---------------------------------------------------------------- (i) midnight pays who lived through the day
+
+section("(i) midnight pays who LIVED through the day: not the dead, the absent or the AFK (§3.6, §9.1, MP-13)");
+
+{
+	const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+	const PROG = require(join(SRC, "server/sim/progress.ts"));
+	const afkS = PROG.AFK_WINDOW_S ?? 180;
+	const share = PROG.PRESENCE_SHARE ?? 0.5;
+	// 15:00: midnight is ~218 real seconds away (4 h of day at 0.8× TIME_SPEED, 5 h of night at 1.2×), longer than
+	// the AFK window, so "last input before the window" is a case this day can actually contain
+	const clock = new WorldClock({ day: 4, dayTime: 15, rollRain: () => false });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
+	const paid = new Map();
+	const refused = new Map();
+	sim.onDayCredit = (sp, credit) => paid.set(sp.userId, credit);
+	sim.onDayRefused = (sp, why) => refused.set(sp.userId, why);
+	const saves = new Map();
+	const RELOAD = 1 << P.EdgeShift.Reload;
+	function arrive(slot, userId) {
+		const save = saves.get(userId) ?? defaultSave();
+		save.money = 0;
+		saves.set(userId, save);
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: `m${slot}` },
+			save,
+			1000 + slot * 60,
+			1000,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		return sp;
+	}
+	/** a real command through the real C→S path; `edges` 0 and no movement = input that does nothing */
+	function press(sp, edges) {
+		const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 0, 0, 0, 0, edges);
+		PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * TICK_DT);
+	}
+	const ACTIVE = 9001;
+	const AFK_FILL = 9002;
+	const AFK_IDLE = 9003;
+	const DEAD = 9004;
+	const HOPPER = 9005;
+	const LATE = 9006;
+	const WALLED = 9007;
+	const players = new Map([
+		[ACTIVE, arrive(0, ACTIVE)],
+		[AFK_FILL, arrive(1, AFK_FILL)],
+		[AFK_IDLE, arrive(2, AFK_IDLE)],
+		[DEAD, arrive(3, DEAD)],
+		[HOPPER, arrive(4, HOPPER)],
+	]);
+	// a bot holding the stick into a wall: every command is real and has movement, and it never moves an inch
+	const PH = require(join(SRC, "shared/game/physics.ts"));
+	let wallSpot;
+	for (const s of world.solids) {
+		if (s.w < 40 || s.h < 160) continue;
+		const x = s.x - PH.PLAYER_RADIUS - 0.5;
+		const y = s.y + s.h / 2;
+		const wall = PH.circleBlocked(world, s.x + 2, y, 1) !== undefined;
+		if (wall && PH.circleBlocked(world, x, y, PH.PLAYER_RADIUS) === undefined) {
+			wallSpot = { x, y };
+			break;
+		}
+	}
+	if (wallSpot !== undefined) {
+		const walled = arrive(6, WALLED);
+		walled.state.x = wallSpot.x;
+		walled.state.y = wallSpot.y;
+		players.set(WALLED, walled);
+	}
+	let first = true;
+	let guard = 60 * 60 * 10;
+	while (clock.day === 4 && guard-- > 0) {
+		const hour = clock.dayTime;
+		for (const [id, sp] of players) {
+			sp.state.hungry = sp.state.hungryMax;
+			if (id === ACTIVE || id === DEAD || id === HOPPER || id === LATE) press(sp, RELOAD);
+			else if (id === AFK_IDLE) press(sp, 0);
+			else if (id === WALLED) {
+				const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 1, 0, 0, 0, 0);
+				PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * TICK_DT);
+			} else if (id === AFK_FILL && first) press(sp, RELOAD);
+		}
+		first = false;
+		// 19:00 → 23:00 the hopper is in the lobby; it was in the world for ~55 % of the day before, and comes back
+		if (players.has(HOPPER) && hour >= 19 && hour < 23) {
+			sim.remove(players.get(HOPPER).slot);
+			players.delete(HOPPER);
+		} else if (!players.has(HOPPER) && hour >= 23) {
+			players.set(HOPPER, arrive(4, HOPPER));
+		}
+		if (!players.has(LATE) && hour >= 22) players.set(LATE, arrive(5, LATE));
+		const dead = players.get(DEAD);
+		if (hour >= 23 && !dead.state.dead) {
+			dead.state.godMode = false;
+			dead.state.hp = -1000;
+		}
+		sim.step();
+		clock.step(TICK_DT);
+	}
+	check(guard > 0 && clock.day === 5, `the world rolled into day 5 (${sim.tick} ticks from 15:00)`);
+	const day = id => saves.get(id).day;
+	check(paid.has(ACTIVE) && day(ACTIVE) === 2, "a survivor who played the day is paid it (+1 life day, the coins)");
+	check(saves.get(ACTIVE).money > 0, `…and the coins are in the wallet (${saves.get(ACTIVE).money})`);
+	check(
+		!paid.has(DEAD) && day(DEAD) === 1 && saves.get(DEAD).money === 0,
+		`a survivor lying dead at midnight is not (${refused.get(DEAD) ?? "paid"})`,
+	);
+	check(
+		!paid.has(AFK_FILL) && day(AFK_FILL) === 1,
+		`one whose last real input is older than ${afkS} s is AFK: the filled ticks are the server waiting, not playing (${refused.get(AFK_FILL) ?? "paid"})`,
+	);
+	check(
+		!paid.has(AFK_IDLE) && day(AFK_IDLE) === 1,
+		`one who sends real commands that never move nor press anything is AFK too (${refused.get(AFK_IDLE) ?? "paid"})`,
+	);
+	check(
+		!paid.has(LATE) && day(LATE) === 1,
+		`one who walked in at 22:00, alive for less than ${Math.round(share * 100)} % of the day, is absent (${refused.get(LATE) ?? "paid"})`,
+	);
+	check(
+		paid.has(HOPPER) && day(HOPPER) === 2,
+		`a trip to the lobby does not reset the day: the hopper was in the world ~64 % of it and is paid (${refused.get(HOPPER) ?? "paid"})`,
+	);
+	if (wallSpot === undefined) {
+		fail("no wall to push against was found in the town: the stick-into-a-wall case did not run");
+	} else {
+		const walled = players.get(WALLED);
+		const drift = Math.hypot(walled.state.x - wallSpot.x, walled.state.y - wallSpot.y);
+		check(
+			!paid.has(WALLED) && day(WALLED) === 1 && drift < 2,
+			`holding the stick into a wall all day is AFK too: real commands, no step (${refused.get(WALLED) ?? "paid"}, moved ${drift.toFixed(2)} u)`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

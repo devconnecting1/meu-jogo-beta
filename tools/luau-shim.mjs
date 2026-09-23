@@ -266,6 +266,10 @@ function install() {
 	defineMethod(Array.prototype, "clear", function () {
 		this.length = 0;
 	});
+	// roblox-ts `Array.insert(index, value)` (shared/sim/ai/alert.ts keeps its nearest-first list with it)
+	defineMethod(Array.prototype, "insert", function (i, v) {
+		this.splice(i, 0, v);
+	});
 	defineMethod(String.prototype, "size", function () {
 		return Buffer.byteLength(this.valueOf(), "utf8");
 	});
