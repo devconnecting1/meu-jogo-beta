@@ -713,6 +713,44 @@ function withTouchHud(fn) {
 }
 const hudButton = name => ctx.hudLayer.GetDescendants().find(d => d.Name === name && d.ClassName === "TextButton");
 
+/** a keyboard/gamepad HUD, mounted for the match scoreboard's rows (MP-23): not touch, so the desktop bindings apply */
+function withScoreboardHud(fn) {
+	ctx.phase = "playing";
+	const h = new Hud(ctx);
+	h.mount();
+	flush();
+	try {
+		return fn(h);
+	} finally {
+		h.unmount();
+		ctx.phase = "lobby";
+		flush();
+	}
+}
+/** enough of a HudState for Hud.update() to run (the scoreboard reads none of it) */
+const SCORE_HUD_STATE = {
+	hp: 100,
+	hpMax: 100,
+	hunger: 100,
+	hungerMax: 100,
+	level: 1,
+	exp: 0,
+	expMax: 100,
+	day: 1,
+	lifeDay: 1,
+	dayTime: 12,
+	isNight: false,
+	showClock: false,
+	weaponId: 0,
+	weaponName: "Dagger",
+	mag: 0,
+	magSize: 0,
+	reloading: false,
+	reloadRatio: 0,
+	ammoPool: 0,
+	hitFlash: 0,
+};
+
 const PROBES = {
 	// ---- keyboard & mouse
 	"W A S D": () => {
@@ -780,6 +818,17 @@ const PROBES = {
 		tap(key("P"));
 		return input.pausePressed;
 	},
+	"Q (hold)": () =>
+		withScoreboardHud(h => {
+			fresh();
+			const board = h.scoreboard();
+			press(key("Q"));
+			h.update(SCORE_HUD_STATE);
+			const openWhileHeld = board.isOpen();
+			release(key("Q"));
+			h.update(SCORE_HUD_STATE);
+			return openWhileHeld && !board.isOpen();
+		}),
 	// ---- touch
 	"Left thumb": () =>
 		withTouchHud(() => {
@@ -904,6 +953,21 @@ const PROBES = {
 		tap(pad("ButtonStart"));
 		return input.pausePressed;
 	},
+	Back: () =>
+		withScoreboardHud(h => {
+			fresh();
+			const board = h.scoreboard();
+			// main.client.ts's heartbeat turns the one-shot press into a toggle (Q's chip is the HUD's own, held)
+			tap(pad("ButtonSelect"));
+			if (input.scoreboardPressed) h.toggleScoreboard();
+			h.update(SCORE_HUD_STATE);
+			const openedOnPress = board.isOpen();
+			fresh();
+			tap(pad("ButtonSelect"));
+			if (input.scoreboardPressed) h.toggleScoreboard();
+			h.update(SCORE_HUD_STATE);
+			return openedOnPress && !board.isOpen();
+		}),
 	"D-pad": () => GuiService.GuiNavigationEnabled === true,
 };
 /** a scheme's note that promises a binding too */
