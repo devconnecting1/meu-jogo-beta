@@ -522,7 +522,7 @@ const dog = (coat, head, muzzle, ears, paws, scale, slim) => ({
 const DOGS = {
 	4: dog([204, 148, 86], [208, 154, 92], [234, 198, 146], [150, 98, 54], [176, 122, 66], 1, 0.95),
 	// a wolf-grey darker than the pigeon's slate, so the two greys of the catalogue never read as one
-	5: dog([98, 102, 112], [104, 108, 118], [240, 240, 238], [84, 88, 98], [228, 228, 226], 1.2, 1.15),
+	5: dog([88, 92, 102], [96, 100, 110], [240, 240, 238], [76, 80, 90], [156, 158, 162], 1.24, 1.15),
 	6: dog([44, 38, 38], [48, 42, 42], [182, 110, 52], [30, 26, 26], [162, 96, 46], 1, 0.82),
 };
 const MALAMUTE_WHITE = charRamp(240, 240, 238);
@@ -534,9 +534,10 @@ export function dogParts(pet, swing, wag) {
 	const s = d.scale;
 	const w = d.slim;
 	const sw = swing * 4;
+	// the legs splay a little out of the body's outline: from above, four paws are what says "dog", not "loaf"
 	for (const side of SIDES) {
-		p.box((10 + sw * side) * s, side * 6 * w * s, 6 * s, 4.5 * s, d.paws, 0, { round: 2 });
-		p.box((-10 - sw * side) * s, side * 6 * w * s, 6 * s, 4.5 * s, d.paws, 0, { round: 2 });
+		p.box((10 + sw * side) * s, side * 8 * w * s, 6.5 * s, 5 * s, d.paws, 0, { round: 2 });
+		p.box((-10 - sw * side) * s, side * 8 * w * s, 6.5 * s, 5 * s, d.paws, 0, { round: 2 });
 	}
 	if (pet === 6) p.box(-15 * s, 0, 5 * s, 3.5 * s, d.coat, 0, { round: 1, tilt: wag * 0.3 });
 	else if (pet === 4) p.limb(-12 * s, 0, -20 * s, (1 + wag * 4) * s, 4.5 * s, d.coat, 0);
@@ -544,7 +545,7 @@ export function dogParts(pet, swing, wag) {
 	for (const side of SIDES) p.box(13 * s, side * 5.5 * s, 7 * s, 4.5 * s, d.ears, 2, { tilt: side * -0.7, round: 1 });
 	p.box(20 * s, 0, 7 * s, 5.5 * s, d.muzzle, 2, { round: 2 });
 	p.box(23.5 * s, 0, 2 * s, 3 * s, charRamp(28, 22, 22), 3, { detail: true, flat: true });
-	p.oval(14 * s, 0, 11.5 * s, 11.5 * s, d.head, 3, { lift: true });
+	p.oval(14 * s, 0, 12 * s, 12 * s, d.head, 3, { lift: true, ring: true });
 	if (pet === 5) {
 		// the white mask down the face, and the bushy tail curled up over the back
 		p.oval(17.5 * s, 0, 5.5 * s, 6 * s, MALAMUTE_WHITE, 4, { detail: true });
