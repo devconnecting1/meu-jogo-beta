@@ -31,7 +31,9 @@
  *                      nothing in it is selectable (the pad stays the survivor's, UI-09).
  *  6. LAYOUT           at 1120 x 630, 1360 x 435, the owner's 1365 x 567 (58 px bar) and a 844 x 390 phone under a
  *                      36 px bar: header cells over their columns, no text below 9 px or cut, the panels on screen
- *                      and clear of the survivor, the day plate and the thumbs, and every touch target at least 44 px.
+ *                      and clear of the survivor, the day clock (the console's sky; on touch its plate) and the
+ *                      thumbs, the chip where Bag and Menu are (the console's row; the touch corner's row), and every
+ *                      touch target at least 44 px.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -920,9 +922,15 @@ const mount = phase("HUD com o placar: monta", () => {
 	hud.update(hudState);
 });
 const board = hud.scoreboard();
+// the chip goes where Bag and Menu go (the day plate it stood beside moved into the console, UI-09): on desktop the
+// third plate of the console's button row
 check(
-	"montar a HUD monta o placar escondido e o chip ao lado da placa do dia",
-	board !== undefined && !board.frame.Visible && board.chip.Parent.Name === "DayPlate",
+	"montar a HUD monta o placar escondido e o chip na fileira do console, depois de Bag e Menu",
+	board !== undefined &&
+		!board.frame.Visible &&
+		board.chip.Parent.Name === "ChipSlot" &&
+		board.chip.Parent.Parent === deep(board.frame.Parent, "Bag")?.Parent &&
+		deep(board.frame.Parent, "DayPlate") === undefined,
 	cost(mount),
 );
 check("o chip conta quem esta na cidade", deep(board.chip, "Count").Text === "5");
@@ -1046,7 +1054,10 @@ check("...e de novo fecha", !board.isOpen());
 deep(board.chip, "Hit").Activated.Fire();
 check("tocar / clicar no chip abre", board.isOpen() && sameColor(faceOf(board.chip), THEME.tabActive));
 deep(board.panel, "Close").Activated.Fire();
-check("o X fecha", !board.isOpen());
+check(
+	"o X fecha, e o chip volta ao ferro de Bag e Menu (a chapa secundaria do kit)",
+	!board.isOpen() && sameColor(faceOf(board.chip), THEME.secondary),
+);
 
 // sorting: the sort bar (pad / touch) and the headers (mouse), kept in agreement
 uis.GetLastInputType = () => Enum.UserInputType.Gamepad1;
@@ -1266,11 +1277,20 @@ for (const [w, h, bar, label, buttons] of SCREENS) {
 			panel.x + panel.w < w / 2 - 8,
 			`${Math.round(panel.x + panel.w)} < ${w / 2 - 8}`,
 		);
-		const day = rectOf(deep(hud.scoreboard().chip.Parent.Parent, "DayPlate"));
-		check(`${tag}: nem a placa do dia`, !overlapR(panel, day), `${fmtR(panel)} / ${fmtR(day)}`);
+		// the day clock: the console's sky on desktop (the console check below), its own plate on touch
+		const hudRoot = b.frame.Parent;
+		const sky = rectOf(deep(hudRoot, touch ? "SkyPlate" : "Sky"));
+		check(`${tag}: nem o relogio do dia (o ceu)`, !overlapR(panel, sky), `${fmtR(panel)} / ${fmtR(sky)}`);
 		// the console owns the bottom of the screen (UI-09): the board never lies over the bars or the hotbar
-		const hudConsole = rectOf(deep(hud.scoreboard().chip.Parent.Parent, "Console"));
+		const hudConsole = rectOf(deep(hudRoot, "Console"));
 		check(`${tag}: nem o console da HUD`, !overlapR(panel, hudConsole), `${fmtR(panel)} / ${fmtR(hudConsole)}`);
+		// the chip: in the console's row on desktop (inside it), in the touch corner's row on touch -- never under the panel
+		const chipRect = rectOf(b.chip);
+		check(
+			`${tag}: o chip fica ${touch ? "no canto de toque, fora do console" : "dentro do console"} e o placar aberto nao o cobre`,
+			(touch ? !overlapR(chipRect, hudConsole) : insideR(chipRect, hudConsole)) && !overlapR(panel, chipRect),
+			`${fmtR(chipRect)} / ${fmtR(hudConsole)}`,
+		);
 		check(`${tag}: cabecalhos sobre as suas colunas`, headerAligned(b.table, SB.SCORE_COLUMNS));
 		const tp = textProblems(b.frame);
 		check(`${tag}: nenhum texto abaixo de ${MIN_PX} px ou cortado`, tp.length === 0, tp.slice(0, 3).join(" | "));

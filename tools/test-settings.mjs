@@ -19,8 +19,10 @@
  *   2. AUDIO           SFX and BGM: the slider moves the real SoundGroup volumes (sfx, ui, bgm) on the next frame, by
  *                      the documented curve; the previews play on the right bus while dragging (and the first move up
  *                      from 0 is heard); 0 mutes and skips playing; the night music stops at 0 and comes back.
- *   3. HUD SIZE        the console, the day plate, the E hint, the banner and the message feed of a mounted HUD are
- *                      80%..120% by the slider; the Touch tab's preview console follows it too.
+ *   3. HUD SIZE        the console (with the day clock and the scoreboard's chip in it), the E hint, the banner and
+ *                      the message feed of a mounted HUD are 80%..120% by the slider -- the banner right under the
+ *                      bar at every size, the feed under it; the Touch tab's preview console follows it too, and so
+ *                      does the first-run coach when the size changes in the middle of a run.
  *   4. TOUCH           each slider and switch moves the geometry the bootstrap hit-tests (getTouchLayout), the HUD's
  *                      touch layer is redrawn on it, the preview is that very layout (under a real top bar too), a
  *                      fixed stick is only grabbed at its home, and left-handed swaps which half moves.
@@ -30,9 +32,10 @@
  *   6. DEFAULTS        each tab's Defaults puts EXACTLY that tab's fields back to defaultSettings(), after the
  *                      question; Cancel changes nothing.
  *   7. ABOUT           the facts are the code's: the game's name, the original credited (CON-01), MAX_PLAYERS, the
- *                      toolchain, the way to the credits (and none over a run).
+ *                      toolchain, the version (package.json, one source), the way to the credits (and none over a run).
  *   8. PERSISTENCE     a change asks for one save a second at most and one on leaving; the settings survive the
- *                      server's report sanitiser and a reload, and garbage or out-of-range values are clamped.
+ *                      server's report sanitiser and a reload, and garbage or out-of-range values are clamped; a change
+ *                      made before the server's save arrived survives it (carried field by field).
  *   9. REDUCE MOTION   the read-only row follows the Roblox setting live and writes nothing.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
@@ -375,7 +378,8 @@ const hudPart = name =>
 		.find(d => d.Name === name);
 /** the design-space width (Scale of the screen) a HUD cluster takes */
 const hudW = name => hudPart(name)?.Size.X.Scale;
-const HUD_PARTS = ["Console", "DayPlate", "HintBox", "BannerBox", "Feed"];
+// the day clock and the scoreboard's chip are parts of the console now (UI-09, MP-23): they scale with it
+const HUD_PARTS = ["Console", "HintBox", "BannerBox", "Feed"];
 /** the top and bottom (design units, from the top of the screen) of a cluster anchored at the top */
 const hudSpan = name => {
 	const f = hudPart(name);
@@ -387,7 +391,12 @@ function mountedSizes(uiSize) {
 	flush();
 	const out = { spans: {} };
 	for (const n of HUD_PARTS) out[n] = hudW(n);
-	for (const n of ["DayPlate", "BannerBox", "Feed"]) out.spans[n] = hudSpan(n);
+	for (const n of ["BannerBox", "Feed"]) out.spans[n] = hudSpan(n);
+	out.inConsole = ["Sky", "ChipSlot"].every(n =>
+		hudPart("Console")
+			?.GetDescendants()
+			.some(d => d.Name === n),
+	);
 	hud.unmount();
 	flush();
 	return out;
@@ -399,31 +408,71 @@ function mountedSizes(uiSize) {
 	const ratio = n => big[n] / small[n];
 	const wrong = HUD_PARTS.filter(n => small[n] === undefined || !near(ratio(n), 1.2 / 0.8, 1e-6));
 	check(
-		"HUD size 0% -> 100% do slider: console, placa do dia, dica E, faixa de aviso e mensagens crescem de 80% para 120%",
-		wrong.length === 0,
+		"HUD size 0% -> 100% do slider: console (com o relogio e o chip do placar), dica E, faixa de aviso e mensagens crescem de 80% para 120%",
+		wrong.length === 0 && small.inConsole && big.inConsole,
 		HUD_PARTS.map(n => `${n} x${small[n] === undefined ? "?" : ratio(n).toFixed(3)}`).join(", "),
 	);
 	const mid = mountedSizes(0.5);
 	check(
 		"...e o padrao (50%) e o tamanho de desenho (x1,0)",
-		near(mid.Console * DESIGN_W, 638, 1e-6),
+		near(mid.Console * DESIGN_W, 778, 1e-6),
 		`console ${px(mid.Console * DESIGN_W)} unidades`,
 	);
-	// top down: the day plate, the banner under it, the feed under the banner -- at every size, none on another
+	// top down: the banner right under the bar (the top centre is the messages' since the day plate moved into the
+	// console), the feed under the banner -- at every size, the banner at the same top, none on another
 	const stacked = [small, mid, big].every(
-		m => m.spans.DayPlate[1] <= m.spans.BannerBox[0] + 1e-6 && m.spans.BannerBox[1] <= m.spans.Feed[0] + 1e-6,
+		m =>
+			near(m.spans.BannerBox[0], small.spans.BannerBox[0], 1e-6) &&
+			m.spans.BannerBox[1] <= m.spans.Feed[0] + 1e-6,
 	);
 	check(
-		"...e em todo tamanho a placa do dia, a faixa de aviso e as mensagens ficam uma sob a outra, sem se cobrir",
-		stacked,
+		"...e em todo tamanho a faixa de aviso fica logo abaixo da barra e as mensagens sob ela, sem se cobrir",
+		stacked && near(small.spans.BannerBox[0], 20, 1e-6),
 		[small, mid, big]
-			.map(m =>
-				["DayPlate", "BannerBox", "Feed"].map(n => m.spans[n].map(v => v.toFixed(0)).join("-")).join(" | "),
-			)
+			.map(m => ["BannerBox", "Feed"].map(n => m.spans[n].map(v => v.toFixed(0)).join("-")).join(" | "))
 			.join(" ;; "),
 	);
 	ctx.phase = "lobby";
 	s.uiSize = 0.5;
+}
+{
+	// the first-run coach is part of the HUD: a HUD size changed during the run (Settings over the run) resizes it on
+	// its next frame, saying the same thing -- it used to keep the size of the run's start (onboarding/coach.ts)
+	const { Coach } = require(join(SRC, "client/onboarding/coach.ts"));
+	const { createWorld } = require(join(SRC, "shared/game/world.ts"));
+	ctx.phase = "playing";
+	s.uiSize = 0;
+	const refs = {
+		world: createWorld(4000, 4000),
+		player: { x: 1000, y: 1000, dead: false },
+		zombies: [],
+		bosses: [],
+		save: ctx.save,
+		daynight: { dayTime: 9 },
+		input: { held: false },
+	};
+	const coach = new Coach(ctx);
+	coach.start(refs, () => {});
+	flush();
+	const box = () => ctx.hudLayer.FindFirstChild("Coach");
+	const title = () => findIn(box(), "Title", "TextLabel")?.Text;
+	const small = box().Size.X.Scale;
+	const said = title();
+	coach.update(refs, 1 / 60);
+	const sameSize = box().Size.X.Scale === small;
+	s.uiSize = 1;
+	coach.update(refs, 1 / 60);
+	flush();
+	const big = box().Size.X.Scale;
+	check(
+		"o coach da primeira partida segue o HUD size mudado no meio da partida (80% -> 120%), dizendo o mesmo",
+		sameSize && near(big / small, 1.2 / 0.8, 1e-6) && title() === said && said !== "",
+		`x${(big / small).toFixed(3)}, "${said}" -> "${title()}"`,
+	);
+	coach.stop();
+	s.uiSize = 0.5;
+	ctx.phase = "lobby";
+	flush();
 }
 {
 	// the Touch tab's preview draws the compact console at the HUD size of the General tab: visited first, it must not
@@ -970,13 +1019,37 @@ const PROBES = {
 		}),
 	"D-pad": () => GuiService.GuiNavigationEnabled === true,
 };
+/**
+ * NAV-B: `inputObj` (the pad's B, the keyboard's Backspace) backs out of the screen on top through the bootstrap's
+ * real handler -- a Settings window opened in the lobby, closed by it as by its X (client/ui/backStack.ts)
+ */
+function backsOut(inputObj) {
+	let backs = 0;
+	const phase = ctx.phase;
+	ctx.phase = "lobby";
+	const close = showSettings(
+		ctx,
+		() => backs++,
+		() => {},
+	);
+	flush();
+	tap(inputObj);
+	flush();
+	close();
+	flush();
+	ctx.phase = phase;
+	return backs === 1;
+}
 /** a scheme's note that promises a binding too */
 const NOTE_PROBES = {
-	"Right click also interacts.": () => {
+	"Right click also interacts; Backspace goes back in menus.": () => {
 		fresh();
 		tap(mouse("MouseButton2"));
-		return input.actionPressed;
+		const rightClick = input.actionPressed;
+		return rightClick && backsOut(key("Backspace"));
 	},
+	"Menus: the stick moves the focus ring, B goes back.": () =>
+		GuiService.GuiNavigationEnabled === true && backsOut(pad("ButtonB")),
 };
 {
 	const missing = [];
@@ -1100,11 +1173,14 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 	const creditsSrc = readFileSync(join(SRC, "client/ui/credits.ts"), "utf8");
 	const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 	check("Game: o nome do jogo (GAME_NAME de shared/module.ts)", value("Game") === GAME_NAME, value("Game"));
+	const moduleSrc = readFileSync(join(SRC, "shared/module.ts"), "utf8");
 	check(
-		"Inspired by: o original e o estudio, como a CON-01 e a tela de creditos dizem",
-		value("Inspired") === "Dead Town (Lemon Puppy Games)" &&
-			creditsSrc.includes('"Inspired by Dead Town"') &&
-			creditsSrc.includes('"by Lemon Puppy Games"'),
+		"Inspired by: so o nome do original, sem estudio (CON-01), o mesmo da tela de creditos",
+		value("Inspired") === "Dead Town" &&
+			moduleSrc.includes('INSPIRED_BY = "Dead Town"') &&
+			creditsSrc.includes('"Inspired by the original"') &&
+			creditsSrc.includes("INSPIRED_BY") &&
+			!/Lemon Puppy/.test(creditsSrc),
 		value("Inspired"),
 	);
 	check(
@@ -1113,10 +1189,25 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 		value("Mode"),
 	);
 	check(
-		"Built with: roblox-ts, o compilador do projeto (package.json), como os creditos dizem",
-		value("Built") === "roblox-ts" &&
-			pkg.devDependencies["roblox-ts"] !== undefined &&
-			creditsSrc.includes("roblox-ts"),
+		"Developed by: Luvitlua (shared/module.ts), como os creditos dizem; nenhuma ferramenta ou empresa",
+		value("Developer") === "Luvitlua" &&
+			moduleSrc.includes('DEVELOPER = "Luvitlua"') &&
+			creditsSrc.includes('"Developed by"') &&
+			creditsSrc.includes("DEVELOPER") &&
+			!/roblox-ts|Yoyo|Lemon Puppy/.test(creditsSrc),
+		value("Developer"),
+	);
+	// the version, from ONE source: package.json -> shared/version.ts (`npm run stamp`), "dev" builds show it bare and a
+	// CI build names its commit; the committed file must be what the generator writes from package.json today
+	const V = require(join(SRC, "shared/version.ts"));
+	const versionFile = readFileSync(join(SRC, "shared/version.ts"), "utf8");
+	check(
+		"Version: a versao do package.json (a fonte unica, por shared/version.ts), com o commit num build da CI",
+		value("Version") === (V.GAME_BUILD === "dev" ? pkg.version : `${pkg.version} (${V.GAME_BUILD})`) &&
+			V.GAME_VERSION === pkg.version &&
+			versionFile.includes(`GAME_VERSION = "${pkg.version}"`) &&
+			/^\d+\.\d+\.\d+$/.test(pkg.version),
+		value("Version"),
 	);
 	const open = findIn(about, "OpenCredits");
 	open?.Activated.Fire();
@@ -1221,6 +1312,40 @@ console.log("\n8) persistencia: salvo com o progresso, de volta num reload, sane
 	check(
 		"settings nao-tabela (lixo inteiro) vira defaultSettings()",
 		JSON.stringify(sanitizeStoredSave({ settings: "x" }).settings) === JSON.stringify(d),
+	);
+}
+{
+	// changed BEFORE the server's save arrived (the lobby is shown on a fallback save while the LoadAck is on its way):
+	// the LoadAck used to put every field back to the stored one. Now what the player touched is carried over, field
+	// by field, and what they did not comes from the save (shared/game/save.ts carrySettings, main.client.ts applyLoad)
+	const base = defaultSettings();
+	const mine = { ...base, bgm: 0, mirror: true };
+	const stored = { ...defaultSettings(), soundEffect: 0.9, uiSize: 1, bgm: 0.7 };
+	const into = { ...stored };
+	const carried = saveMod.carrySettings(mine, base, into);
+	check(
+		"um ajuste feito antes de o save do servidor chegar sobrevive a ele: o que o jogador mexeu fica, o resto vem do save",
+		carried &&
+			into.bgm === 0 &&
+			into.mirror === true &&
+			into.soundEffect === 0.9 &&
+			into.uiSize === 1 &&
+			into.leftSize === stored.leftSize,
+		JSON.stringify(into),
+	);
+	check("...e sem nada mexido nada e carregado", !saveMod.carrySettings({ ...base }, base, { ...stored }));
+	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
+	const at = main.indexOf("function applyLoad(");
+	const body = main.slice(at, main.indexOf("\n}\n", at));
+	const carryAt = body.indexOf("carrySettings(ctx.save.settings, settingsBase, info.save.settings)");
+	const swapAt = body.indexOf("ctx.save = info.save;");
+	check(
+		"...e applyLoad (main.client.ts) carrega ANTES de trocar o save, so de um save que nao era do servidor, e o relata",
+		carryAt >= 0 &&
+			swapAt > carryAt &&
+			/\(loadInfo === undefined \|\| !loadInfo\.persist\) &&/.test(body) &&
+			/if \(carried\) net\.requestSave\("menu"\)/.test(body) &&
+			/settingsBase = \{ \.\.\.info\.save\.settings \}/.test(body),
 	);
 }
 {

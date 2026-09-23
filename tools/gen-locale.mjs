@@ -25,7 +25,15 @@
  * sentence around them, and a machine translating "Round", "Use", "Drop" or "Melt" in isolation cannot know
  * we mean a magazine, an item action, discarding and smelting.
  *
- * Entries are case-sensitive on their side: "hello" and "Hello" are two different strings.
+ * Entries are case-sensitive on their side: "hello" and "Hello" are two different strings -- so a label drawn in
+ * capitals is its own entry in lang.ts ("START"), never an entry upper-cased in code.
+ *
+ * THE SOURCE IS THE TEXT AS IT IS ON SCREEN. Roblox matches what a label displays against the Source column, whole
+ * and exact (the Source is "the in-game source text", the same string Automatic Text Capture would collect). Our
+ * multi-line entries keep "#" as the line break in lang.ts, and the screens turn it into a real one (widgets.ts `nl`)
+ * before showing it -- so a Source still holding "#" never matched anything, and 24 texts could not be translated.
+ * Here "#" becomes a real line break, inside a quoted cell as RFC 4180 has it (a quoted field may hold line breaks),
+ * which is also how the Localization tools download a table with such an entry.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -54,7 +62,8 @@ function strings() {
 	const re = /^\t"((?:[^"\\]|\\.)*)",$/gm;
 	let m;
 	while ((m = re.exec(block)) !== null) {
-		const text = m[1].replace(/\\(.)/g, "$1");
+		// "#" is lang.ts's line break (widgets.ts `nl`): the Source is what the screen shows, with the real one
+		const text = m[1].replace(/\\(.)/g, "$1").split("#").join("\n");
 		if (seen.has(text)) continue;
 		seen.add(text);
 		out.push(text);

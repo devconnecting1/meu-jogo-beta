@@ -56,6 +56,7 @@ import {
 	STUN_GUN_ID,
 } from "shared/data/power";
 import { countItem, removeItem } from "shared/sim/inventory";
+import { creditLitLamp } from "../save/achievements";
 import { isNightAt } from "shared/sim/clock";
 import { ownsWeapon, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
@@ -134,6 +135,8 @@ export interface ServerPowerOptions {
 	/** a machine's published state changed (the wire: `PowerSet`, global; state = shared/data/power.ts bits) */
 	publish?: (s: Solid, state: number, pilot: number) => void;
 	simHz?: number;
+	/** may this slot's run earn achievements? (§9.3: not an assisted run; unset = yes) */
+	paysRewards?: (slot: number) => boolean;
 }
 
 export class ServerPower {
@@ -142,6 +145,7 @@ export class ServerPower {
 	private readonly saveOf?: (slot: number) => PlayerSaveData | undefined;
 	private readonly bodyOf?: (slot: number) => PlayerState | undefined;
 	private readonly publish?: (s: Solid, state: number, pilot: number) => void;
+	private readonly paysRewards?: (slot: number) => boolean;
 	private readonly simHz: number;
 	/** every tracked machine, in the order it appeared (the settle order) */
 	private readonly list = new Array<MachineState>();
@@ -166,6 +170,7 @@ export class ServerPower {
 		this.saveOf = options.saveOf;
 		this.bodyOf = options.bodyOf;
 		this.publish = options.publish;
+		this.paysRewards = options.paysRewards;
 		this.simHz = options.simHz !== undefined && options.simHz > 0 ? options.simHz : SIM_HZ;
 		this.stepTicks = math.max(1, math.floor(POWER_STEP_S * this.simHz + 0.5));
 		// a world may already hold machines (a test, an adopted town): they are the grid from the first settle
@@ -496,6 +501,8 @@ export class ServerPower {
 		// the switch answers at once: the lamp does not wait a quarter of a second to come on
 		this.consume(st, 0);
 		this.publishOne(st);
+		// CON-04 Thomas Edison: a lamp this survivor switched on lit on the grid (not in an assisted run, §9.3)
+		if (st.on && st.working && def.tag === "lamp" && (this.paysRewards?.(slot) ?? true)) creditLitLamp(save);
 		return { kind: "switched", solid: s, on: st.on, working: st.working };
 	}
 

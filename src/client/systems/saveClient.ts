@@ -82,9 +82,29 @@ function notifyWallet(): void {
 	for (const fn of walletListeners) task.spawn(fn);
 }
 
+/**
+ * F3 (§4.8): the server's backpack rides the wallet as `bag`. client/net/backpackSync.ts lays it over the local copy
+ * and replays the predictions the server has not answered yet — synchronously, right after the wallet, so no frame
+ * ever sees the bag without them.
+ */
+let bagHook: ((save: PlayerSaveData, bag: unknown) => void) | undefined;
+
+export function setBagHook(fn: (save: PlayerSaveData, bag: unknown) => void): void {
+	bagHook = fn;
+}
+
+/** the save the reports are made of (ctx.save), or undefined before the game handed it over */
+export function currentSave(): PlayerSaveData | undefined {
+	return getSave?.();
+}
+
 function applyServerWallet(wallet: unknown): void {
 	if (getSave === undefined || wallet === undefined) return;
-	if (applyWallet(getSave(), wallet)) notifyWallet();
+	const save = getSave();
+	const changed = applyWallet(save, wallet);
+	const bag = typeIs(wallet, "table") ? (wallet as Record<string, unknown>).bag : undefined;
+	if (bag !== undefined && bagHook !== undefined) bagHook(save, bag);
+	if (changed) notifyWallet();
 }
 
 const LOAD_STATUSES = new Set<string>(["ok", "new", "unavailable", "error"]);

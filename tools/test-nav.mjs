@@ -16,21 +16,29 @@
  *                       wires, and five more open / close cycles leave no Instance and no connection behind.
  *   2. THE PAD          with a menu holding the pad's focus, the buttons that would act in the world (A, X, Y, RT)
  *                       stay the menu's; the two toggles still reach the game: Start (the menu) and LB (the Bag -- the
- *                       button that opens it closes it, UI-11). B: see KNOWN below.
+ *                       button that opens it closes it, UI-11).
+ *   2b. B / BACKSPACE   back out of the screen on top (client/ui/backStack.ts, NAV-B): every screen of section 1, by
+ *                       both keys, through the same handler as its own control; a help popup closes alone and gives
+ *                       the pad back to its "?"; a question is dismissed, never answered; never the lobby's own menu,
+ *                       the end-of-run choice, the daybreak wait or the HUD's scoreboard; nothing eaten in a run.
  *   3. MENU PRESSES     a toggle pressed in the lobby (P, B, Start, a weapon key) is not left pending for the first
  *                       frame of the next run: main.client.ts drops them when a run mounts.
  *   4. UI-06            Settings opened over a run keeps the survivor held like the menu it came from (source guard).
  *   5. ACHIEVEMENTS     the lobby's count and each row's progress are the save's (hidden ones out); every visible
- *      AND RECORDS      achievement has a trigger in the client -- the ones that cannot be earned today are the KNOWN
- *                       list, which must be kept exact; Records shows the save's real values.
+ *      AND RECORDS      achievement has a trigger on the SERVER (server/save/achievements.ts, reached from a server
+ *                       file) and the client writes none (CON-04): a report cannot move one, the end-of-run kills are
+ *                       the server's kill credit, Never die stops at ANY death; nothing of content outside Núcleo 1
+ *                       is on view (CON-03); Records shows the save's real values.
  *   6. STRINGS          every literal key the code asks lang.ts for is in LANG_TABLE; every text any of these screens
- *                       shows is a LANG_TABLE entry, made of entries and numbers, or a proper noun; and the CSV that
- *                       `npm run locale` writes is the committed one.
+ *                       shows is a LANG_TABLE entry, made of entries and numbers, or a proper noun; no label is an
+ *                       entry upper-cased in code (LOC-UPPER: translation is case-sensitive, capitals are their own
+ *                       entries); and the CSV that `npm run locale` writes is the committed one, with every multi-line
+ *                       entry as the screen shows it, real line breaks and no "#" (LOC-NL).
  *
  * KNOWN: bugs found by this suite that are not fixed here (they need a product decision or live in another agent's
  * files). Each is printed as "CONHECIDO" with where it lives; the suite fails if one of them silently changes, so the
- * list stays true: fixing one means removing it from KNOWN. LOC-UPPER (labels the code upper-cases) is a list that
- * moves with every screen, so it is only printed.
+ * list stays true: fixing one means removing it from KNOWN. (Empty since the settings / menus fixes: NAV-B, ACH-1..4,
+ * LOC-UPPER and LOC-NL are real checks now.)
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -83,7 +91,7 @@ const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
 const { Hud } = require(join(SRC, "client/ui/hud.ts"));
 const { showRunSummary, showDaybreakWait } = require(join(SRC, "client/onboarding/gameOver.ts"));
 const REC = require(join(SRC, "client/ui/records.ts"));
-const { ACHIEVEMENTS } = require(join(SRC, "shared/data/achievements.ts"));
+const { ACHIEVEMENTS, AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
@@ -218,6 +226,7 @@ const SCREENS = [
 		needsLobby: true,
 	},
 	{
+		// a UI-07 window since the tables merge (client/ui/records.ts), no longer a popup
 		name: "Records (lobby)",
 		phase: "lobby",
 		root: "Records",
@@ -418,8 +427,6 @@ ctx.phase = "playing";
 	tap(pad("ButtonStart"));
 	const startCloses = input.pausePressed;
 	input.beginFrame();
-	tap(pad("ButtonB"));
-	const bCloses = layer.FindFirstChild("Menu") === undefined || input.pausePressed;
 	close();
 	flush();
 	check("Menu da partida pelo controle: Start (que o abriu) chega ao jogo, que o fecha", startCloses === true);
@@ -448,17 +455,216 @@ ctx.phase = "playing";
 		onKeyboard === "P" && onPad === "Start" && onTouch === undefined,
 		`teclado ${onKeyboard}, controle ${onPad}, toque ${onTouch}`,
 	);
-	lastInput.type = Enum.UserInputType.Gamepad1;
-	knownBug(
-		"NAV-B",
-		"o B do controle nao fecha nenhuma tela (so tira a selecao); fechar e so pelo X / Back ou pelo botao que abriu",
-		"widgets.ts / window.ts (sem tratamento de ButtonB)",
-		!bCloses,
-	);
 	GuiService.SelectedObject = undefined;
 	lastInput.type = Enum.UserInputType.MouseMovement;
 	input.beginFrame();
 	flush();
+}
+
+// ================================================================ 2b. B / Backspace: back out of the screen on top
+
+console.log(
+	"\n2b) NAV-B: o B do controle e o Backspace fecham a tela de cima -- nunca o menu do lobby, nunca uma escolha, nada na partida\n",
+);
+
+{
+	const B = () => pad("ButtonB");
+	const BACKSPACE = () => kbd("Backspace");
+	/** a screen opened as main.client.ts opens it, then backed out of with `key` instead of its own control */
+	const backCycle = (sc, key, gpe) => {
+		ctx.phase = sc.phase;
+		let closedBy = 0;
+		let cleanup;
+		const done = () => {
+			closedBy++;
+			cleanup?.();
+			cleanup = undefined;
+		};
+		const ret = sc.open(done);
+		if (typeof ret === "function") cleanup = ret;
+		flush();
+		const opened = layer.FindFirstChild(sc.root) !== undefined;
+		tap(key, gpe);
+		const after = layer.FindFirstChild(sc.root);
+		const gone = sc.isOpen !== undefined ? !sc.isOpen() && after?.Visible === false : after === undefined;
+		cleanup?.();
+		flush();
+		return { opened, gone, handled: sc.selfClosing === true || closedBy === 1 };
+	};
+	const bad = [];
+	const keys = [
+		// with a control selected the engine's GUI navigation takes the press too (gameProcessedEvent)
+		["B", B(), true, Enum.UserInputType.Gamepad1],
+		["B sem selecao", B(), false, Enum.UserInputType.Gamepad1],
+		["Backspace", BACKSPACE(), false, Enum.UserInputType.Keyboard],
+	];
+	for (const sc of SCREENS) {
+		for (const [label, key, gpe, device] of keys) {
+			if (sc.needsLobby) openLobby();
+			lastInput.type = device;
+			const r = backCycle(sc, key, gpe);
+			if (!(r.opened && r.gone && r.handled)) bad.push(`${sc.name} / ${label}: ${JSON.stringify(r)}`);
+			if (sc.needsLobby) {
+				if (layer.FindFirstChild("Lobby") === undefined)
+					bad.push(`${sc.name} / ${label}: o lobby fechou junto`);
+				closeLobby();
+			}
+			GuiService.SelectedObject = undefined;
+			lastInput.type = Enum.UserInputType.MouseMovement;
+			input.beginFrame();
+			flush();
+		}
+	}
+	check(
+		"B (com e sem selecao) e Backspace fecham cada tela pela mesma via do X / Back / Got it / Back to game dela",
+		bad.length === 0,
+		bad.join("; ") || `${SCREENS.length} telas x 3 teclas`,
+	);
+
+	// a help popup over a window: B closes the popup only, the pad lands back on the "?", and the next B closes the window
+	{
+		ctx.phase = "lobby";
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		let backs = 0;
+		const close = showSettings(ctx, () => backs++, noop);
+		flush();
+		const root = layer.FindFirstChild("Settings");
+		const help = root?.GetDescendants().find(d => d.Name === "Help" && d.IsA("GuiButton"));
+		GuiService.SelectedObject = help;
+		help?.Activated.Fire();
+		flush();
+		const up = layer.FindFirstChild("PopupOverlay") !== undefined;
+		tap(B(), true);
+		const popupGone = layer.FindFirstChild("PopupOverlay") === undefined;
+		const windowStays = layer.FindFirstChild("Settings") !== undefined && backs === 0;
+		const onHelp = GuiService.SelectedObject === help;
+		tap(B(), true);
+		const windowClosed = backs === 1;
+		close();
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			'um popup de ajuda sobre a Settings: o B fecha so o popup, o controle volta ao "?", e o B seguinte fecha a janela',
+			up && popupGone && windowStays && onHelp && windowClosed,
+			JSON.stringify({ up, popupGone, windowStays, onHelp, windowClosed }),
+		);
+	}
+
+	// a question is dismissed, never answered: B on "watch the tutorial?" neither declines it nor enters the city
+	{
+		ctx.phase = "lobby";
+		const save = ctx.save;
+		const tutorialDone = save.tutorialDone;
+		const firstInstall = save.firstInstall;
+		save.tutorialDone = false;
+		save.firstInstall = true;
+		let played = 0;
+		const h = showLobby(ctx, { ...lobbyHandlers, onPlay: () => played++ }, lobbyStatus, "survivor");
+		flush();
+		findIn(layer.FindFirstChild("Lobby"), "Enter")?.Activated.Fire();
+		flush();
+		const asked = layer.FindFirstChild("PopupOverlay") !== undefined;
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		tap(B(), true);
+		const dismissed = layer.FindFirstChild("PopupOverlay") === undefined;
+		const unanswered = save.tutorialDone === false && save.firstInstall === true && played === 0;
+		const survivorStays = h.page() === "survivor";
+		h.close();
+		save.tutorialDone = tutorialDone;
+		save.firstInstall = firstInstall;
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			'"watch the tutorial?" + B: a pergunta sai sem resposta (nem "No", nem a cidade), e a tela Survivor fica',
+			asked && dismissed && unanswered && survivorStays,
+			JSON.stringify({ asked, dismissed, unanswered, survivorStays }),
+		);
+	}
+
+	// what B must never close: the lobby's own menu, the end-of-run choice, the daybreak wait, the HUD's scoreboard
+	{
+		ctx.phase = "lobby";
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		openLobby();
+		GuiService.SelectedObject = findIn(layer.FindFirstChild("Lobby"), "Start");
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const lobbyStays = layer.FindFirstChild("Lobby") !== undefined && lobby.page() === "menu";
+		closeLobby();
+
+		ctx.phase = "dead";
+		const summary = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false };
+		let chose = 0;
+		const handlers = { onRebirth: () => chose++, onNewRun: () => chose++, onHome: () => chose++ };
+		const closeOver = showRunSummary(ctx, summary, handlers);
+		flush();
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const overStays = layer.FindFirstChild("RunOver") !== undefined && chose === 0;
+		closeOver();
+		const wait = showDaybreakWait(ctx, summary, handlers);
+		flush();
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const waitStays = layer.FindFirstChild("RunOver") !== undefined && chose === 0;
+		wait.close();
+		flush();
+
+		ctx.phase = "playing";
+		const h = new Hud(ctx);
+		h.mount();
+		flush();
+		h.toggleScoreboard();
+		flush();
+		const boardUp = h.scoreboard()?.isOpen() === true;
+		tap(B(), false);
+		const boardStays = h.scoreboard()?.isOpen() === true;
+		h.unmount();
+		ctx.phase = "lobby";
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			"...o B e o Backspace nao fecham o menu do lobby, nem a escolha do fim de partida, nem a espera do amanhecer, nem o placar da HUD",
+			lobbyStays && overStays && waitStays && boardUp && boardStays,
+			JSON.stringify({ lobbyStays, overStays, waitStays, boardUp, boardStays }),
+		);
+	}
+
+	// in a run with no screen up nothing is eaten: the keyboard's B is still the Backpack, the pad's B does nothing
+	{
+		ctx.phase = "playing";
+		input.beginFrame();
+		tap(kbd("B"));
+		const bag = input.backpackPressed === true;
+		input.beginFrame();
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		tap(B(), false);
+		const quiet =
+			!input.backpackPressed &&
+			!input.pausePressed &&
+			!input.attackPressed &&
+			!input.actionPressed &&
+			!input.reloadPressed;
+		// Backspace typed into a text box (gameProcessedEvent) is the text box's
+		let backs = 0;
+		ctx.phase = "lobby";
+		const close = showSettings(ctx, () => backs++, noop);
+		flush();
+		tap(BACKSPACE(), true);
+		const typing = backs === 0 && layer.FindFirstChild("Settings") !== undefined;
+		close();
+		input.beginFrame();
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			"...na partida sem tela o B do teclado continua sendo o Bag e o B do controle nao faz nada; Backspace digitado numa caixa de texto e da caixa",
+			bag && quiet && typing,
+			JSON.stringify({ bag, quiet, typing }),
+		);
+	}
 }
 
 // ================================================================ 3. presses made in the menus
@@ -544,8 +750,8 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	const sub = findIn(nav(2), "Sub")?.Text;
 	const done = visible.filter(a => (save.achievements[a.id] ?? 0) >= a.max).length;
 	check(
-		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora)",
-		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 20,
+		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora: CON-03 / CON-04)",
+		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 17,
 		sub,
 	);
 	nav(2).Activated.Fire();
@@ -559,7 +765,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		return v !== `${cur.toLocaleString("en-US")} / ${a.max.toLocaleString("en-US")}` || check !== cur >= a.max;
 	});
 	check(
-		"a janela lista as 20 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
+		"a janela lista as 15 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
 		rows.every(r => r !== undefined) &&
 			wrong.length === 0 &&
 			!ACHIEVEMENTS.some(a => a.hidden && findIn(dialog, `Ach${a.id}`)),
@@ -595,33 +801,95 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	closeLobby();
 	save.achievements.fill(0);
 
-	// what can raise each achievement: main.client.ts's raiseAchievement / addAchievement calls (the only writers)
-	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
-	const raised = new Set();
-	for (const m of main.matchAll(/(?:raise|add)Achievement\((\d+)\s*(?:\+\s*b\.type)?/g)) {
-		const id = +m[1];
-		if (/\+\s*b\.type/.test(m[0])) for (let t = 1; t <= 4; t++) raised.add(id + t);
-		else raised.add(id);
+	// ---- who raises each achievement: ONLY the server (server/save/achievements.ts, CON-04 / ACH-2)
+	const achSrc = readFileSync(join(SRC, "server/save/achievements.ts"), "utf8");
+	/** each exported credit function of the module: the ids it names and the other credit functions it calls */
+	const fns = new Map();
+	for (const m of achSrc.matchAll(/export function (\w+)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)) {
+		const ids = [...m[2].matchAll(/AchievementId\.(\w+)/g)].map(x => AchievementId[x[1]]);
+		fns.set(m[1], { ids, calls: [] });
 	}
-	const unreachable = visible.filter(a => !raised.has(a.id)).map(a => a.id);
-	/** visible achievements with no trigger anywhere today (see the report: wire them, or hide them per CON-03) */
-	const KNOWN_UNREACHABLE = [1, 4, 5, 6, 16, 18, 21];
-	knownBug(
-		"ACH-1",
-		`${KNOWN_UNREACHABLE.length} das ${visible.length} conquistas visiveis nao tem gatilho nenhum: ${KNOWN_UNREACHABLE.map(i => ACHIEVEMENTS[i].title).join(", ")}`,
-		"main.client.ts raiseAchievement / addAchievement",
-		JSON.stringify(unreachable) === JSON.stringify(KNOWN_UNREACHABLE),
+	for (const [name, f] of fns) {
+		const body = achSrc.slice(achSrc.indexOf(`export function ${name}(`));
+		const end = body.indexOf("\n}");
+		for (const other of fns.keys())
+			if (other !== name && new RegExp(`\\b${other}\\(`).test(body.slice(0, end))) f.calls.push(other);
+	}
+	// the server files that call a credit function (the module itself does not count: something must reach it)
+	const serverFiles = [];
+	const walkServer = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkServer(p);
+			else if (p.endsWith(".ts") && !p.endsWith(join("save", "achievements.ts"))) serverFiles.push(p);
+		}
+	};
+	walkServer(join(SRC, "server"));
+	const callers = new Map();
+	for (const p of serverFiles) {
+		const text = readFileSync(p, "utf8");
+		for (const name of fns.keys()) {
+			if (new RegExp(`\\b${name}\\(`).test(text))
+				callers.set(name, [...(callers.get(name) ?? []), p.slice(SRC.length + 1)]);
+		}
+	}
+	const reached = new Set();
+	const visit = name => {
+		if (reached.has(name)) return;
+		reached.add(name);
+		for (const c of fns.get(name)?.calls ?? []) visit(c);
+	};
+	for (const name of callers.keys()) visit(name);
+	const raised = new Set();
+	for (const name of reached) for (const id of fns.get(name).ids) raised.add(id);
+	const unreachable = visible.filter(a => !raised.has(a.id)).map(a => a.title);
+	check(
+		"ACH-1: toda conquista a vista tem um gatilho no SERVIDOR (uma funcao de server/save/achievements.ts que um arquivo do servidor chama)",
+		unreachable.length === 0 && [...reached].length > 0,
+		unreachable.join(", ") ||
+			[...reached].map(n => `${n} <- ${(callers.get(n) ?? ["(interna)"]).join(", ")}`).join("; "),
 	);
-
-	// the kill-based ones count bodies whose hp fell to 0 between two frames; from MP_PHASE 2 the horde is the
-	// server's and the client's bodies are the mirror's (client/view/actorsView.ts), whose hp is never 0 unless the
-	// fuse is lit: a zombie killed on the server simply leaves the list with hp 1
-	const { MP_PHASE } = require(join(SRC, "shared/net/mpConfig.ts"));
-	const countsHp = /if \(z\.hp <= 0\) \{\s*kills\+\+;/.test(main);
-	// the REAL mirror: one zombie arrives, the server kills it (it stops arriving), and trackBefore / trackAfter's test
-	// (alive = hp > 0 before the frame, a kill = hp <= 0 after it) runs on the bodies the mirror handed over
-	let mirrorKills = -1;
+	// ...and the client raises none: no call, no write into `achievements` anywhere under client/
+	const clientWrites = [];
+	const walkClient = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkClient(p);
+			else if (p.endsWith(".ts")) {
+				const text = readFileSync(p, "utf8");
+				if (/achievements\[[^\]]+\]\s*=(?!=)|(?:raise|add)Achievement\(/.test(text))
+					clientWrites.push(p.slice(SRC.length + 1));
+			}
+		}
+	};
+	walkClient(join(SRC, "client"));
+	check(
+		"ACH-2: nenhum arquivo do cliente escreve uma conquista (o cliente so recebe a carteira do servidor)",
+		clientWrites.length === 0,
+		clientWrites.join(", "),
+	);
+	// ...and a report cannot: the server keeps its own counters whatever the client sends
 	{
+		const SAVE = require(join(SRC, "shared/game/save.ts"));
+		const base = SAVE.defaultSave();
+		const forged = JSON.parse(JSON.stringify(base));
+		forged.achievements = ACHIEVEMENTS.map(a => a.max);
+		const upd = SAVE.sanitizeClientReport(forged, base);
+		check(
+			"ACH-2: um relatorio com todas as conquistas completas nao move nenhuma (sanitizeClientReport, save v6)",
+			upd.achievements.every(v => v === 0),
+		);
+	}
+
+	// ACH-2: the kill counts come from the SERVER's kill credit. The client's copy of a zombie is the mirror's
+	// (client/view/actorsView.ts), whose hp is never 0 unless the fuse is lit: the old per-frame count saw no kill
+	// at all, except a lit exploder, which it took for one. The real mirror, a walker the server kills and an exploder
+	// lighting its fuse, and the end-of-run count over them
+	{
+		const { MP_PHASE } = require(join(SRC, "shared/net/mpConfig.ts"));
+		const { PROGRESS_SERVER_PHASE } = require(join(SRC, "shared/game/save.ts"));
+		const onboarding = require(join(SRC, "client/onboarding/index.ts"));
+		const PROG = require(join(SRC, "server/sim/progress.ts"));
 		const netClient = require(join(SRC, "client/net/netClient.ts"));
 		const saved = [netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths];
 		let remote = [];
@@ -630,46 +898,130 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		netClient.takeZombieDeaths = () => {};
 		const { ActorsView } = require(join(SRC, "client/view/actorsView.ts"));
 		const view = new ActorsView();
-		const refs = { zombies: [], bosses: [] };
+		const refs = { zombies: [], bosses: [], player: { dead: false, x: 0, y: 0 }, input: { held: false } };
+		const firstInstall = save.firstInstall;
+		save.firstInstall = false; // no coach: only the counters
+		save.zombieKills = 40;
+		onboarding.attachRun(ctx, refs);
 		const walker = { netId: 7, x: 0, y: 0, angle: 0, flags: 0, type: 1, big: false, extra: 0 };
-		remote = [{ ...walker, feetCycle: 0, speed: 0, alpha: 1, stale: false }];
+		const bomber = { netId: 8, x: 50, y: 0, angle: 0, flags: 0, type: 3, big: false, extra: 0 };
+		const mirror = z => ({ ...z, feetCycle: 0, speed: 0, alpha: 1, stale: false });
+		remote = [mirror(walker), mirror(bomber)];
 		view.sync(refs, 1 / 60, () => {});
-		const before = refs.zombies.filter(z => z.hp > 0);
-		remote = [];
-		view.sync(refs, 1 / 60, () => {});
-		mirrorKills = before.length === 1 ? before.filter(z => z.hp <= 0).length : -1;
+		// the server kills the walker (it stops arriving) and credits it; the exploder only lights its fuse
+		const saves = new Map([[0, save]]);
+		const prog = new PROG.Progress({ saveOf: slot => saves.get(slot) });
+		prog.zombieKilled(7, 10, 0, 0, 1, 7);
+		remote = [mirror({ ...bomber, extra: 1 })];
+		for (let i = 0; i < 12; i++) {
+			view.sync(refs, 1 / 60, () => {});
+			RunService.Heartbeat.Fire(0.1);
+			flush();
+		}
+		const summary = onboarding.runSummary(ctx, false);
+		onboarding.detachRun();
 		[netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths] = saved;
+		save.firstInstall = firstInstall;
+		check(
+			"ACH-2: o fim de partida conta o abate que o SERVIDOR creditou (1), nao o pavio aceso de um bombardeiro (MP_PHASE 2)",
+			MP_PHASE >= PROGRESS_SERVER_PHASE && summary.kills === 1 && save.zombieKills === 41,
+			`kills ${summary.kills}, zombieKills ${save.zombieKills}`,
+		);
+		check(
+			"...e o mesmo credito moveu as conquistas de abate (Zombie slayer, Melee weapons expert) no save do servidor",
+			save.achievements[AchievementId.ZombieSlayer] === 1 && save.achievements[AchievementId.MeleeExpert] === 1,
+		);
+		save.achievements.fill(0);
+		save.zombieKills = 0;
 	}
-	knownBug(
-		"ACH-2",
-		"de MP_PHASE 2 em diante as conquistas de abate (2, 3, 7, 12, 13) e o 'zumbis' do fim de partida nao contam: o espelho da horda nunca tem hp 0 (so o pavio aceso conta, e conta como abate)",
-		"main.client.ts trackAfter, onboarding/index.ts scanKills x client/view/actorsView.ts fillZombie",
-		MP_PHASE >= 2 && mirrorKills === 0 && countsHp,
-	);
-	// CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe"; the Records window already
-	// lost its boss line for that reason (UI-10), but the achievements for bosses, the bow and the sniper are on view
-	const rules = readFileSync(join(ROOT, "docs/DESIGN_RULES.md"), "utf8");
-	const con03 = rules.split("\n").find(l => l.includes("**CON-03")) ?? "";
-	const offContent = [3, 7, 8, 9, 10, 11].filter(id => visible.some(a => a.id === id));
-	// ACH-3 closed by the owner's decision (2026-09-23, CON-03): everything in the data works, so the bow and the sniper
-	// are real weapons and their achievements are in play; the boss ones follow the bosses (the achievements work
-	// decides whether they show). The check only guards that CON-03 no longer excludes that content while they show.
+
+	// ACH-3 / CON-03 (as rewritten by the owner, 2026-09-23: everything in the data works): an achievement is on view
+	// exactly when the game can give it today. The bow and the sniper are weapons that work; the bosses SPAWN (the town's
+	// anchors, shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies; the energy works (ELE-01..09:
+	// Thomas Edison and Turret are on, with their server triggers). Off: what is still `BUG` in test:items (vehicles:
+	// Rider), what has no trigger (Collector, Ninja) and the original's store and ads (Thanks, Ads addict)
+	const OFF = [4, 16, 18, 19, 20];
+	const offNow = ACHIEVEMENTS.filter(a => a.hidden === true).map(a => a.id);
+	const population = readFileSync(join(SRC, "shared/sim/ai/population.ts"), "utf8");
+	const world = readFileSync(join(SRC, "shared/game/world.ts"), "utf8");
+	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+	const { WeaponKind } = require(join(SRC, "shared/data/kinds.ts"));
 	check(
-		"ACH-3: nenhuma conquista a vista fala de conteudo que a CON-03 exclui",
-		!(/sem chefe/.test(con03) && !/arco|sniper/i.test(con03) && offContent.length === 6),
-		`${offContent.length} a vista`,
+		"ACH-3: a vista exatamente o que o jogo de hoje da: desligadas so veiculo, sem gatilho e loja/anuncios do original",
+		JSON.stringify(offNow) === JSON.stringify(OFF) &&
+			visible.length === ACHIEVEMENTS.length - OFF.length &&
+			WEAPONS.some(w => w.kind === WeaponKind.Bow) &&
+			WEAPONS.some(w => w.kind === WeaponKind.Sniper) &&
+			/this\.spawnBoss\(refs\)/.test(population) &&
+			/bossAnchors: \[/.test(world),
+		`desligadas ${JSON.stringify(offNow)}, ${visible.length} a vista`,
 	);
-	// "Never die" counts the life's days while `deathCount` is 0, but only a PAID Rebirth moves it
-	// (server/main.server.ts): a death answered by the free wait for daybreak (MP-21) does not reset the streak
-	const server = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
-	knownBug(
-		"ACH-4",
-		"'Never die' (17) segue contando depois de uma morte esperada ate o amanhecer (MP-21): so o Rebirth pago move deathCount",
-		"main.client.ts trackAfter x server/main.server.ts (rebirth)",
-		/if \(save\.deathCount === 0\) raiseAchievement\(17/.test(main) &&
-			(server.match(/deathCount \+= 1/g) ?? []).length === 1 &&
-			/if \(!due\) save\.deathCount \+= 1/.test(server),
+	check(
+		"...e desligada nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
+		ACHIEVEMENTS.length === 22 && ACHIEVEMENTS.every((a, i) => a.id === i),
 	);
+	// the toast (client/ui/achievementNotice.ts): a counter crossing its goal in this copy is announced once; a save
+	// rewritten from outside is the new baseline. An admin reset rewrites ctx.save IN PLACE (client/admin/patches.ts):
+	// before the rebase hook, the old "already complete" set outlived it and re-earning First steps was never told
+	{
+		const { noticeTracker } = require(join(SRC, "client/ui/achievementNotice.ts"));
+		const { defaultSave: freshSave } = require(join(SRC, "shared/game/save.ts"));
+		const live = freshSave();
+		const tracker = noticeTracker(() => live);
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const first = tracker.newlyCompleted();
+		const again = tracker.newlyCompleted();
+		// the admin reset: the same object, emptied, then the wallet brings First steps back
+		const wipe = () => live.achievements.fill(0);
+		wipe();
+		tracker.rebase();
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const reEarned = tracker.newlyCompleted();
+		// the same without the rebase: the bug the review found
+		const stale = noticeTracker(() => live);
+		wipe();
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const missed = stale.newlyCompleted();
+		// an admin EDIT that completes one is not an achievement earned: rebased, never toasted
+		live.achievements[AchievementId.GoodDay] = 1;
+		tracker.rebase();
+		const edited = tracker.newlyCompleted();
+		const patches = readFileSync(join(SRC, "client/admin/patches.ts"), "utf8");
+		check(
+			"toast: uma vez ao completar; depois do reset do admin (no lugar) e re-ganha, avisa de novo; a edicao do admin nao avisa",
+			JSON.stringify(first) === JSON.stringify([AchievementId.FirstSteps]) &&
+				again.length === 0 &&
+				JSON.stringify(reEarned) === JSON.stringify([AchievementId.FirstSteps]) &&
+				missed.length === 0 &&
+				edited.length === 0 &&
+				/copyInto\(save, sanitizeStoredSave\(ev\.reset\)\);[^]*?rebaseAchievementNotices\(\);[^]*?deps\.endRun\(\)/.test(
+					patches,
+				) &&
+				/applyAdminOps\(save, ops\);[^]*?rebaseAchievementNotices\(\);/.test(patches),
+			`primeiro ${JSON.stringify(first)}, depois do reset ${JSON.stringify(reEarned)} (sem o rebase: ${JSON.stringify(missed)}), edicao ${JSON.stringify(edited)}`,
+		);
+	}
+
+	// ACH-4: Never die counts the nights of a life that has not died -- EVERY death, not only a paid Rebirth
+	{
+		const SAVE = require(join(SRC, "shared/game/save.ts"));
+		const TITLES_SRV = require(join(SRC, "server/save/titles.ts"));
+		const ACH_SRV = require(join(SRC, "server/save/achievements.ts"));
+		const life = SAVE.defaultSave();
+		TITLES_SRV.creditLifeNight(life);
+		ACH_SRV.countLifeDeath(life); // a death answered by the wait for daybreak: deathCount stays 0
+		TITLES_SRV.creditLifeNight(life);
+		const lifeSrc = readFileSync(join(SRC, "server/sim/life.ts"), "utf8");
+		const died = lifeSrc.slice(lifeSrc.indexOf("\tdied(sp: ServerPlayer)"), lifeSrc.indexOf("\trebirth(userId"));
+		check(
+			"ACH-4: Never die para na primeira morte da vida, paga ou esperada (lifeDeaths, que LifeKeeper.died conta em TODA morte)",
+			life.deathCount === 0 &&
+				life.lifeDeaths === 1 &&
+				life.achievements[AchievementId.NeverDie] === 1 &&
+				/countLifeDeath\(sp\.save\)/.test(died),
+			`deathCount ${life.deathCount}, lifeDeaths ${life.lifeDeaths}, Never die ${life.achievements[AchievementId.NeverDie]}`,
+		);
+	}
 }
 
 // ================================================================ 6. strings
@@ -739,24 +1091,19 @@ const LANG_COUNT = [...LANG].length;
 const PROPER = new Set([
 	GAME_NAME,
 	"PROJECT Z",
-	"Dead Town (Lemon Puppy Games)",
-	"roblox-ts",
+	// the credits (credits.ts, Settings › About): who made it and what inspired it (shared/module.ts)
+	"Luvitlua",
+	"Dead Town",
 	"Tester",
 	"X",
 	"?",
-	// the original's credits (credits.ts): studios, a site and people's handles
-	"Yoyo games",
-	"Crazy GM",
-	"Play GM",
-	"opengameart.org",
-	"dlf0325",
-	"sodium031",
-	"zizonpink",
 ]);
 /** key legends are keys (the kit's Keycap / ValueKey / badge): the keyboard's letters and the pad's button names */
 const KEYS = new Set(SCHEMES.flatMap(s => s.rows.map(r => r[0])));
 /** units that read the same in every language the platform offers: "0.3 s", "280 XP", "1120 x 630" */
 const UNITS = /\b(?:\d+(?:\.\d+)?\s*(?:s|XP|HP)|\d+\s*x\s*\d+|×\s*\d+)\b/g;
+/** the game's version as About shows it: "0.1.0", and in a CI build "0.1.0 (0b1edad)" -- the stamped commit is a number */
+const VERSION = /\b\d+\.\d+\.\d+(?:\s*\([0-9a-f]{7}\))?/g;
 const LETTERS = /[A-Za-z]/;
 /** the entries, and each line of a multi-line entry ("#" is a new line on screen: widgets.nl) */
 const LINES = new Set([...LANG].flatMap(e => [e, ...e.split("#")]));
@@ -781,7 +1128,7 @@ const PIECES = [
 function lineKind(line) {
 	const t = line.replace(/<[^>]+>/g, "").trim();
 	if (!LETTERS.test(t) || LINES.has(t) || PROPER.has(t) || KEYS.has(t) || /^[A-Z]$/.test(t)) return "ok";
-	let rest = t.replace(UNITS, " ");
+	let rest = t.replace(VERSION, " ").replace(UNITS, " ");
 	let upper = false;
 	for (const p of PIECES) {
 		if (!rest.includes(p.e)) continue;
@@ -938,18 +1285,37 @@ function textsIn(root, where) {
 		found.literal.length === 0,
 		found.literal.join("; "),
 	);
-	// informational (the list moves with every screen, so it is not pinned): see the report
-	if (found.upper.length > 0) {
-		known.push({ id: "LOC-UPPER" });
-		console.log(
-			`  CONHECIDO LOC-UPPER: ${found.upper.length} rotulos em maiusculas (.upper() de uma entrada) que a traducao do Roblox, sensivel a caixa, nao casa: ${found.upper.join("; ")}`,
-		);
-	}
+	// LOC-UPPER: a label drawn in capitals is its own entry ("START"), never an entry upper-cased in code -- the
+	// platform's translation is case-sensitive, and "Start" in the table does not match "START" on screen
+	check(
+		"LOC-UPPER: nenhum rotulo em maiusculas e .upper() de uma entrada (cada um e a sua propria entrada na LANG_TABLE)",
+		found.upper.length === 0,
+		found.upper.join("; ") || "nenhum",
+	);
+	const uppers = [];
+	const walkUpper = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkUpper(p);
+			else if (
+				p.endsWith(".ts") &&
+				!p.includes(join("client", "admin")) &&
+				/\.upper\(\)/.test(readFileSync(p, "utf8"))
+			)
+				uppers.push(p.slice(SRC.length + 1));
+		}
+	};
+	walkUpper(SRC);
+	check(
+		"...e nenhum arquivo do jogo (fora do admin, UI-03) chama .upper() num texto",
+		uppers.length === 0,
+		uppers.join(", ") || "nenhum",
+	);
 	const notInTable = [...asked].filter(k => !LANG.has(k));
 	check(
 		"toda chave que as telas pediram a lang.ts em tempo de execucao esta na LANG_TABLE (nenhuma cai fora do CSV)",
 		notInTable.length === 0,
-		notInTable.map(k => `"${k.slice(0, 50)}"`).join("; ") || `${asked.size} chaves`,
+		notInTable.map(k => `"${k.slice(0, 50)}"`).join("; ") || `${[...asked].length} chaves`,
 	);
 }
 {
@@ -963,16 +1329,53 @@ function textsIn(root, where) {
 		execFileSync(process.execPath, [join(tmp, "tools/gen-locale.mjs")], { stdio: "pipe" });
 		const fresh = readFileSync(join(tmp, "design/locale/ProjectZ.csv"), "utf8");
 		const committed = readFileSync(join(ROOT, "design/locale/ProjectZ.csv"), "utf8");
-		const rows = fresh.trimEnd().split("\n").length - 1;
+		// RFC 4180 records: a quoted field may hold commas, doubled quotes and line breaks (LOC-NL)
+		const records = [];
+		{
+			let rec = [];
+			let field = "";
+			let quoted = false;
+			for (let i = 0; i < fresh.length; i++) {
+				const c = fresh[i];
+				if (quoted) {
+					if (c === '"' && fresh[i + 1] === '"') {
+						field += '"';
+						i++;
+					} else if (c === '"') quoted = false;
+					else field += c;
+				} else if (c === '"') quoted = true;
+				else if (c === ",") {
+					rec.push(field);
+					field = "";
+				} else if (c === "\n") {
+					rec.push(field);
+					records.push(rec);
+					rec = [];
+					field = "";
+				} else field += c;
+			}
+		}
+		const [header, ...body] = records;
+		const rows = body.length;
 		check(
 			"o CSV commitado (design/locale/ProjectZ.csv) e o que `npm run locale` gera hoje",
 			fresh === committed,
 			fresh === committed ? `${rows} textos` : "rode `npm run locale` e commite o CSV",
 		);
 		check(
-			"...e o gerador le TODA entrada da LANG_TABLE (nenhuma escapa do parser dele)",
-			rows === LANG_COUNT,
+			"...e o gerador le TODA entrada da LANG_TABLE (nenhuma escapa do parser dele), nas colunas Key, Context, Example, Source",
+			rows === LANG_COUNT && header.join() === "Key,Context,Example,Source" && body.every(r => r.length === 4),
 			`${rows} no CSV, ${LANG_COUNT} na tabela`,
+		);
+		// LOC-NL: the Source is the text as the screen shows it -- a multi-line entry with real line breaks (widgets.ts
+		// `nl` turns lang.ts's "#" into them before drawing), never the "#" the platform would never see on screen
+		const sources = new Set(body.map(r => r[3]));
+		const multi = [...LANG].filter(e => e.includes("#"));
+		const unmatched = multi.filter(e => !sources.has(e.split("#").join("\n")));
+		check(
+			`LOC-NL: as ${multi.length} entradas de varias linhas vao ao CSV como a tela as mostra (quebra de linha real, sem "#")`,
+			multi.length > 0 && unmatched.length === 0 && !body.some(r => r[3].includes("#")),
+			unmatched.map(e => `"${e.slice(0, 40)}"`).join("; ") || `${multi.length} entradas`,
 		);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });

@@ -28,6 +28,7 @@ import type { CraftHeat } from "shared/sim/craftRule";
 import { Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
+import { creditCraft } from "../save/achievements";
 import { ServerBuild } from "./build";
 
 /** the original's desk/fire reach: the shared rule's (shared/sim/craftRule.ts) */
@@ -153,7 +154,11 @@ export class ServerCraft {
 		// Chef now and then doubles a cooking, Dwarf a smelting: the shared rule, the client's prediction's too
 		const count = Rule.craftYield(r, save);
 		addItem(save, r.resultKind, r.resultIndex, count);
-		return { kind: "crafted", recipe: r.id, count, heat: Rule.craftHeat(r) };
+		const heat = Rule.craftHeat(r);
+		// CON-04 / ITM-01: what a cooking made is Chef's, what a smelting made Blacksmith's -- counted where the server
+		// crafts, from the recipe's own heat
+		creditCraft(save, heat, count);
+		return { kind: "crafted", recipe: r.id, count, heat };
 	}
 
 	// ---------------------------------------------------------------- use, equip, learn (§8.1)
@@ -161,7 +166,9 @@ export class ServerCraft {
 	useItem(slot: number, state: PlayerState, save: PlayerSaveData, usableId: number): BackpackOutcome {
 		const l = this.limitsOf(slot);
 		if (l.use > 0) return { kind: "refused", why: "rate" };
-		if (state.dead) return { kind: "refused", why: "busy" };
+		// a body at 0 hp IS dead, even before the next `stepPlayer` flags it (the rule of life.ts `writeRunBody`): a
+		// bite lands in the horde's half of a tick, and a bandage queued for the next one must not revive the corpse
+		if (state.dead || state.hp <= 0) return { kind: "refused", why: "dead" };
 		// `itemUseEffect` is the ownership check AND the "would this do anything?" check, and it is the same
 		// function the single-player game used, applied to the SERVER's body
 		if (!itemUseEffect(state, save, usableId)) return { kind: "refused", why: "noop" };

@@ -38,8 +38,9 @@ import { addSolid, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
-import { MAX_BUILDS_PER_PLAYER, MAX_BUILDS_PER_SERVER, SLOT_NONE } from "shared/net/mpConfig";
-import { SolidState, WorldEv, WSolidAdd } from "shared/net/protocol";
+import { MAX_BUILDS_PER_PLAYER, MAX_BUILDS_PER_SERVER, SLOT_NONE, SOLID_HP_HZ } from "shared/net/mpConfig";
+import { quantFrac8 } from "shared/net/codec";
+import { SOLID_HP_MAX_ENTRIES, SolidHpEntry, SolidState, WorldEv, WSolidAdd } from "shared/net/protocol";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: at most 2 placements per second per survivor */
@@ -57,6 +58,13 @@ export type PlaceOutcome =
 
 /** one survivor's pending construction — the client's `refs.pendingPlace` / `pendingRecipe`, server side */
 interface Pending {
+	/**
+	 * Build edges this cursor has answered (a placement tried, placed or refused; a cancel; a drop). The wallet's bag
+	 * signs it (server/main.server.ts `bagFor`): a REFUSED placement changes nothing else the client can see, and
+	 * without it no bag was pushed -- the client, which freed its cursor on the click, waited 3 s for an answer
+	 * while the server still held the wall and holstered the gun (correctness review of 5967a18, A).
+	 */
+	turns: number;
 	/** PLACEABLES id, or -1 for "nothing on the cursor" */
 	placeable: number;
 	/** the CRAFT_RECIPES id that produced it, so a cancel refunds exactly what was spent */
@@ -94,6 +102,14 @@ export class ServerBuild {
 	/** live constructions per owner slot, and in total (§8.1 caps) */
 	private readonly owned = new Map<number, number>();
 	private total = 0;
+	/**
+	 * Every construction standing, with the hp (as the wire's frac8) everybody was last told. A zombie chewing on a
+	 * wall (shared/sim/ai/zombieBrain.ts `damageStructure`) had no way to tell anyone: the walls looked whole until
+	 * they vanished, and "E: Repair" never showed (correctness review of 5967a18, D). `step` sends what moved, at
+	 * SOLID_HP_HZ, to everybody -- a wall is global like its SolidAdd, and a few per second at most.
+	 */
+	private readonly standing = new Map<Solid, number>();
+	private hpClock = 0;
 
 	constructor(options: ServerBuildOptions) {
 		this.world = options.world;
@@ -122,6 +138,11 @@ export class ServerBuild {
 	/** the PLACEABLES id on the cursor, or -1 */
 	pendingOf(slot: number): number {
 		return this.pending.get(slot)?.placeable ?? -1;
+	}
+
+	/** how many build edges this slot's cursor has answered (see `Pending.turns`) */
+	turnsOf(slot: number): number {
+		return this.pending.get(slot)?.turns ?? 0;
 	}
 
 	/** a craft produced a placeable: it goes on the cursor instead of into the backpack (craftKind 1) */
@@ -168,17 +189,18 @@ export class ServerBuild {
 	): PlaceOutcome {
 		const p = this.pending.get(slot);
 		if (p === undefined || p.placeable < 0) return { kind: "none" };
-		if (p.cooldown > 0) return { kind: "refused", why: "rate" };
+		p.turns += 1;
+		if (p.cooldown > 0) return this.refuse(p, "rate");
 		const def = PLACEABLES[p.placeable] as PlaceableDef | undefined;
 		if (def === undefined) {
 			// an unknown id can never become a solid: drop it rather than leave it stuck on the cursor
 			this.clear(p);
 			return { kind: "refused", why: "unknown" };
 		}
-		if ((this.owned.get(slot) ?? 0) >= MAX_BUILDS_PER_PLAYER) return { kind: "refused", why: "capPlayer" };
-		if (this.total >= MAX_BUILDS_PER_SERVER) return { kind: "refused", why: "capServer" };
+		if ((this.owned.get(slot) ?? 0) >= MAX_BUILDS_PER_PLAYER) return this.refuse(p, "capPlayer");
+		if (this.total >= MAX_BUILDS_PER_SERVER) return this.refuse(p, "capServer");
 		const r = ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY);
-		if (!placementValid(this.world, r, players, zombies)) return { kind: "refused", why: "invalid" };
+		if (!placementValid(this.world, r, players, zombies)) return this.refuse(p, "invalid");
 		const rot = p.rot;
 		const placeable = p.placeable;
 		this.clear(p);
@@ -192,11 +214,25 @@ export class ServerBuild {
 	cancel(slot: number, save: PlayerSaveData): PlaceOutcome {
 		const p = this.pending.get(slot);
 		if (p === undefined || p.placeable < 0) return { kind: "none" };
+		p.turns += 1;
 		const recipe = placeRecipe(p.placeable, p.recipe);
 		this.clear(p);
 		if (recipe === undefined) return { kind: "cancelled", refunded: false };
 		for (const ing of recipe.ingredients) addItem(save, ing.kind, ing.index, ing.count);
 		return { kind: "cancelled", refunded: true };
+	}
+
+	/**
+	 * The construction leaves the cursor with NOTHING back, because the life that paid for it is over: a New game
+	 * (server/sim/life.ts `newLife`) or the new life a world's end gives (`grantNewLife`). Their `resetRun` already
+	 * wiped that life's backpack; a refund after it would land the old run's materials in the new one (security
+	 * review of 5967a18, R1). A death does not come here: it refunds into the dying run (`LifeKeeper.died`).
+	 */
+	drop(slot: number): void {
+		const p = this.pending.get(slot);
+		if (p === undefined || p.placeable < 0) return;
+		p.turns += 1;
+		this.clear(p);
 	}
 
 	/**
@@ -221,11 +257,27 @@ export class ServerBuild {
 		this.owned.delete(slot);
 	}
 
-	/** decays the per-survivor placement cooldowns */
+	/** decays the per-survivor placement cooldowns, and tells everybody the hp that moved (SOLID_HP_HZ) */
 	step(dt: number): void {
 		for (const [, p] of this.pending) {
 			if (p.cooldown > 0) p.cooldown = math.max(0, p.cooldown - dt);
 		}
+		this.hpClock += dt;
+		if (this.hpClock < 1 / SOLID_HP_HZ) return;
+		this.hpClock = 0;
+		let entries = new Array<SolidHpEntry>();
+		for (const [s, told] of this.standing) {
+			const hp = hpFraction(s);
+			const now = quantFrac8(hp);
+			if (now === told) continue;
+			this.standing.set(s, now);
+			entries.push({ id: s.id, hp });
+			if (entries.size() >= SOLID_HP_MAX_ENTRIES) {
+				this.out.queue({ t: WorldEv.SolidHp, entries });
+				entries = new Array<SolidHpEntry>();
+			}
+		}
+		if (entries.size() > 0) this.out.queue({ t: WorldEv.SolidHp, entries });
 	}
 
 	// ---------------------------------------------------------------- caps and deltas
@@ -246,9 +298,11 @@ export class ServerBuild {
 	 */
 	recount(): void {
 		this.owned.clear();
+		this.standing.clear();
 		this.total = 0;
 		for (const s of this.world.solids) {
 			if (s.placeable === undefined) continue;
+			this.standing.set(s, quantFrac8(hpFraction(s)));
 			this.total += 1;
 			const owner = s.owner ?? SLOT_NONE;
 			this.owned.set(owner, (this.owned.get(owner) ?? 0) + 1);
@@ -266,6 +320,7 @@ export class ServerBuild {
 	private noteAdded(s: Solid): void {
 		this.onSolid?.(s, true);
 		if (s.placeable === undefined) return;
+		this.standing.set(s, quantFrac8(hpFraction(s)));
 		this.total += 1;
 		const owner = s.owner ?? SLOT_NONE;
 		this.owned.set(owner, (this.owned.get(owner) ?? 0) + 1);
@@ -277,6 +332,7 @@ export class ServerBuild {
 		this.onSolid?.(s, false);
 		if (this.onSolidChanged !== undefined) this.onSolidChanged(s.x, s.y, s.w, s.h);
 		if (s.placeable === undefined) return;
+		this.standing.delete(s);
 		this.total = math.max(0, this.total - 1);
 		const owner = s.owner ?? SLOT_NONE;
 		this.owned.set(owner, math.max(0, (this.owned.get(owner) ?? 0) - 1));
@@ -286,10 +342,22 @@ export class ServerBuild {
 	private stateOf(slot: number): Pending {
 		let p = this.pending.get(slot);
 		if (p === undefined) {
-			p = { placeable: -1, recipe: undefined, rot: 0, prevX: undefined, prevY: undefined, cooldown: 0 };
+			p = { turns: 0, placeable: -1, recipe: undefined, rot: 0, prevX: undefined, prevY: undefined, cooldown: 0 };
 			this.pending.set(slot, p);
 		}
 		return p;
+	}
+
+	/**
+	 * A placement the server will not make. The construction stays on the cursor, UNTURNED: the client, told by the
+	 * bag that answers this edge, draws it again from rotation 0 (client/systems/build.ts starts every build mode
+	 * there), so the next click places what the player sees.
+	 */
+	private refuse(p: Pending, why: "rate" | "invalid" | "capPlayer" | "capServer"): PlaceOutcome {
+		p.rot = 0;
+		p.prevX = undefined;
+		p.prevY = undefined;
+		return { kind: "refused", why };
 	}
 
 	private clear(p: Pending): void {
@@ -299,6 +367,11 @@ export class ServerBuild {
 		p.prevX = undefined;
 		p.prevY = undefined;
 	}
+}
+
+/** a construction's hp as the fraction the wire carries */
+function hpFraction(s: Solid): number {
+	return s.hpMax > 0 ? math.clamp(s.hp / s.hpMax, 0, 1) : 1;
 }
 
 /** the `SolidAdd` delta of a construction (§4.5) */

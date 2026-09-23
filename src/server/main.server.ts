@@ -37,6 +37,7 @@ import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
+import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 
@@ -818,6 +819,8 @@ function processReport(s: Session, json: string): void {
 	if (stripClientBackpack(prev, upd)) s.staleProgressReports += 1;
 	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
 	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
+	// …and so are the achievements and what they could stand for (CON-04, MON-05): counted on its own events only
+	if (stripClientAchievements(prev, upd, decoded)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —
@@ -1077,14 +1080,21 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 	const sim = mpHost.simulation;
 	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
 	const ack = sim.backpack.ackOf(player.UserId);
-	return { sig: bagSignature(save, place, ack), seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+	// every build edge the cursor answered moves the signature, so a REFUSED placement is answered by a bag too
+	const turns = sp !== undefined ? (sim.build?.turnsOf(sp.slot) ?? 0) : 0;
+	const sig = `${bagSignature(save, place, ack)}|${turns}`;
+	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
 }
 
-/** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
+/**
+ * Everything in the wallet the simulation can move on its own: a change in any of them is pushed. The achievement
+ * counters (CON-04) ride here too: this push is how they -- and the "Achievement unlocked" toast -- reach the client.
+ */
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}`;
+	const achievements = save.achievements.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}`;
 }
 
 function pushWallets(): void {

@@ -200,8 +200,16 @@ function simFixture(opts = {}) {
 			sim.horde.zombies.push(z);
 			return z;
 		},
-		/** one E press from `sp`, through the real wire */
-		pressE(sp) {
+		/**
+		 * One E press from `sp`, through the real wire. Unless `now`, it waits out the §8.1 cooldowns first (one press
+		 * per survivor per PRESS_COOLDOWN_S, one change per machine per TOGGLE_COOLDOWN_S), as a finger would.
+		 */
+		pressE(sp, now = false) {
+			const ix = sim.interaction;
+			const cooling = () => ix.pressCd.size() > 0 || ix.toggleCd.size() > 0;
+			for (let i = 0; !now && i < CFG.SIM_HZ && cooling(); i++) {
+				sim.step();
+			}
 			const cmd = P.makeCommand(sim.tick + 1, 0, 0, 0, 0, P.packEdges(0, 0, 1, 0));
 			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), 0);
 			let out;
@@ -386,7 +394,61 @@ section("B1. E on a lamp, a beacon, a cooker: a switch; on without power it stay
 	check(lamp.powered === true, "a battery box placed 130 u away: it lights");
 	f.pressE(sp);
 	check(lamp.powered !== true, "E again: off, at once");
+	// §8.1: a machine changes at most once per TOGGLE_COOLDOWN_S, whoever presses (a switch is a reliable PowerSet
+	// to every client), and each survivor's E has its PRESS_COOLDOWN_S -- the door's and the lamp's rule
+	const sp2 = f.player(1, 2000, 2010);
+	const first = f.pressE(sp);
+	const rushed = f.pressE(sp2, true);
+	const later = f.pressE(sp2);
+	check(
+		first?.machine?.kind === "switched" &&
+			rushed?.kind === "refused" &&
+			rushed.why === "cooldown" &&
+			later?.machine?.kind === "switched",
+		"a second press on the same machine in the next tick is refused (cooldown), and heard once it has passed",
+		`${first?.machine?.kind}, ${JSON.stringify(rushed)}, ${later?.machine?.kind}`,
+	);
 	void box;
+});
+
+section("B1b. the achievements the grid earns: Thomas Edison (a lamp lit on the grid) and Turret (CON-04)", () => {
+	const { AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
+	const f = simFixture();
+	const save = saveWith();
+	const sp = f.player(0, 2000, 2000, save);
+	const lamp = f.place(ID.lamp, 2020, 1976);
+	f.pressE(sp);
+	check(
+		(save.achievements[AchievementId.ThomasEdison] ?? 0) === 0,
+		"a lamp switched on with no power stays dark: no Thomas Edison",
+	);
+	f.pressE(sp);
+	f.place(ID.battery, 2150, 1980);
+	f.run(0.5);
+	f.pressE(sp);
+	check(
+		lamp.powered === true && save.achievements[AchievementId.ThomasEdison] === 1,
+		"switched on and lit by a battery box: Thomas Edison",
+		`lamp ${lamp.powered}, ${save.achievements[AchievementId.ThomasEdison]}`,
+	);
+	// the Turret: a zombie a turret this survivor built brings down -- and no kill counter moves (MON-05)
+	const turret = f.place(ID.turret, 2600, 2000, 0);
+	f.place(ID.battery, 2750, 2000);
+	f.run(0.5);
+	const kills0 = save.zombieKills;
+	const slayer0 = save.achievements[AchievementId.ZombieSlayer] ?? 0;
+	const z = f.zombie(2630, 2230, 60);
+	z.test = true;
+	for (let i = 0; i < 200 && z.hp > 0; i++) f.sim.step();
+	check(
+		z.hp <= 0 &&
+			save.achievements[AchievementId.Turret] === 1 &&
+			save.zombieKills === kills0 &&
+			(save.achievements[AchievementId.ZombieSlayer] ?? 0) === slayer0,
+		"its turret brings a zombie down: Turret, and neither the kill count nor Zombie slayer moves",
+		`hp ${z.hp}, turret ${save.achievements[AchievementId.Turret]}, kills ${save.zombieKills}`,
+	);
+	void turret;
 });
 
 section("B2. the oil generator refuels with E: 5 oil for 100 of tank; no oil, refused", () => {

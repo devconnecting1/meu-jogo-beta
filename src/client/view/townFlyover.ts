@@ -39,7 +39,7 @@ import { darkAlphaAt } from "shared/sim/clock";
 import { onLayoutChange, reducedMotion, setWorldTransparency, viewportSize } from "../ui/skin";
 import { THEME, TRANSPARENCY } from "../ui/theme";
 import { createSun, shadowOffset, updateSun } from "./drawKit";
-import { drawHumanoid, zombieColor } from "./humanoidView";
+import { drawZombie } from "./humanoidView";
 import { WorldView } from "./worldView";
 
 const RunService = game.GetService("RunService");
@@ -419,7 +419,6 @@ export class TownFlyover {
 		this.town.drawGround(r, cam, v, this.world);
 		this.town.drawSolids(r, cam, v, this.world);
 		const sc = WALKER_RADIUS / 18;
-		const body = zombieColor(1);
 		const so = this.shadowOpts;
 		for (const wk of this.walkers) {
 			if (!wk.on) continue;
@@ -429,7 +428,24 @@ export class TownFlyover {
 			so.zIndex = Z.actorShadow;
 			so.color = COLORS.shadow;
 			r.drawCircle(cam, wk.x + off.x, wk.y + off.y, WALKER_RADIUS * 2.1, so);
-			drawHumanoid(r, cam, wk.x, wk.y, wk.angle, sc, body, 0, 1, wk.paused ? 0 : wk.phase, Z.zombie);
+			// the same walker the horde draws: its pixel art once uploaded (ART-10), the flat humanoid otherwise
+			drawZombie(
+				r,
+				cam,
+				wk.x,
+				wk.y,
+				wk.angle,
+				sc,
+				1,
+				0,
+				1,
+				wk.paused ? 0 : wk.phase,
+				Z.zombie,
+				0,
+				false,
+				false,
+				false,
+			);
 		}
 		r.endFrame();
 		const dark = math.min(darkAlphaAt(hour, false, false), NIGHT_CAP);

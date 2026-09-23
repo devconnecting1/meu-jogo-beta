@@ -1155,18 +1155,22 @@ export class ServerCombat {
 	 * position: the honest answer, and never a free hit.
 	 *
 	 * A zombie the shooter draws in the MID ring is drawn a near interval further back than the declared view (the
-	 * buffer's render time; client/net/snapshotBuffer.ts `extra`), and is judged there, with MID_REWIND_EXTRA_S more
-	 * ceiling for it alone. Judged at the declared view it stood 3 ticks ahead of the body on the shooter's screen:
-	 * 4.5 u at the median, 10 u at worst (the review of 2026-09-23, #2).
+	 * buffer's render time; client/net/snapshotBuffer.ts `extra`), and is judged there, with as much more ceiling for
+	 * it alone -- up to MID_REWIND_EXTRA_S. Judged at the declared view it stood 3 ticks ahead of the body on the
+	 * shooter's screen: 4.5 u at the median, 10 u at worst (the review of 2026-09-23, #2).
+	 *
+	 * As much more, not the whole of it: a body that changed ring is drawn part of that interval further back while its
+	 * viewer eases it, and a ceiling of cap + MID_REWIND_EXTRA_S for any extra above 0 let a view a hair further back
+	 * reach 3 ticks past what the ping explains (the second review of the zombie-motion branch, NIT 1).
 	 */
 	private prepareTargets(sp: ServerPlayer, st: SlotState, tick: number): void {
-		const cap = rewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, this.simHz);
+		const hz = this.simHz;
+		const cap = rewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, hz);
 		const declared = this.declaredView(sp, tick);
 		const at = this.judge(st, tick, declared, cap, 0);
 		// MP-16 level 1 evidence (server/net/mpHost.ts `anomalies`): a view the ceiling or the continuity had to move
 		if (math.abs(declared - at) > 1e-6) st.stats.rewindClamped += 1;
 		const rewind = at < tick - 1e-6;
-		const midCap = cap + Cfg.MID_REWIND_EXTRA_S;
 		this.candZ.clear();
 		this.candX.clear();
 		this.candY.clear();
@@ -1179,7 +1183,11 @@ export class ServerCombat {
 			let y = z.y;
 			// asked at the JUDGED view, not the declared one: within the ceiling and the continuity either way
 			const extra = this.targets.viewExtraTicks?.(sp.slot, z, at) ?? 0;
-			const zAt = extra > 0 ? this.judge(st, tick, declared - extra, midCap, extra) : at;
+			// the history holds REWIND_MAX_S + MID_REWIND_EXTRA_S: no answer of the hook can reach past it
+			const zAt =
+				extra > 0
+					? this.judge(st, tick, declared - extra, cap + math.min(extra / hz, Cfg.MID_REWIND_EXTRA_S), extra)
+					: at;
 			if (zAt < tick - 1e-6 && this.history.sampleInto(z.id, zAt, this.point)) {
 				x = this.point.x;
 				y = this.point.y;
@@ -1296,6 +1304,7 @@ export class ServerCombat {
 		knock: number,
 		stun: number,
 		away?: number,
+		weaponKind?: number,
 	): void {
 		if (damage <= 0 || z.hp <= 0) return;
 		const dir = away ?? math.atan2(z.y - sp.state.y, z.x - sp.state.x);
@@ -1308,7 +1317,10 @@ export class ServerCombat {
 		else this.defaultReaction(z, dir, knock, stun);
 		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
 		if (z.hp <= 0) {
-			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS);
+			// the credit says what did it too (CON-04): the zombie's kind, and the kind of the weapon -- the one that
+			// launched the projectile, or the one the server says is in hand
+			const kind = weaponKind ?? Wp.WEAPONS[st.weaponId]?.kind ?? -1;
+			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS, z.type, kind);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, sp.slot);
 		}
@@ -1325,7 +1337,7 @@ export class ServerCombat {
 		this.hooks.hitBoss?.(b, damage, x, y);
 		this.emitBlood(x, y, math.atan2(y - sp.state.y, x - sp.state.x), 3, Net.BloodKind.Green);
 		if (b.hp <= 0) {
-			this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot);
+			this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot, b.type);
 			this.history.forget(b.id);
 			this.hooks.bossKilled?.(b, sp.slot);
 		}
@@ -1335,7 +1347,8 @@ export class ServerCombat {
 	 * A projectile in flight reached this zombie (server/sim/projectiles.ts). The flight belongs to the world
 	 * half of the tick (§3.1 step 2); the DAMAGE belongs here, and going through the same private path as a
 	 * bullet is what stops an arrow ever paying different XP, or leaving a different assist trail, from a
-	 * rifle round that did the same harm.
+	 * rifle round that did the same harm. `weaponKind` is the kind of the weapon that launched it (the survivor may
+	 * hold another by the time it lands): what a kill by it is credited as (CON-04).
 	 */
 	hitZombieWith(
 		sp: ServerPlayer,
@@ -1344,8 +1357,9 @@ export class ServerCombat {
 		knock: number,
 		stun: number,
 		away?: number,
+		weaponKind?: number,
 	): void {
-		this.damageZombie(sp, this.slotOf(sp.slot), z, damage, knock, stun, away);
+		this.damageZombie(sp, this.slotOf(sp.slot), z, damage, knock, stun, away, weaponKind);
 	}
 
 	/** the same for a boss (`x`, `y` are where the projectile touched it, for the blood) */
@@ -1382,7 +1396,7 @@ export class ServerCombat {
 		else this.defaultReaction(z, dir, knock, stun);
 		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
 		if (z.hp <= 0) {
-			this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, false);
+			this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, z.type, -1, true);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, creditSlot);
 		}

@@ -13,6 +13,8 @@ import { Renderer } from "shared/engine/renderer";
 import { COLORS } from "shared/engine/colors";
 import { defaultSave, PlayerSaveData } from "shared/game/save";
 import { GameContext, GamePhase } from "shared/game/context";
+import { closeTopScreen } from "./ui/backStack";
+import { warmFightPool } from "./view/poolWarmup";
 
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
@@ -72,12 +74,12 @@ root.BackgroundColor3 = COLORS.bg;
 root.BorderSizePixel = 0;
 root.Parent = screen;
 
+// no clip of its own: its one child, the renderer's layer, fills it and clips the world sprites to the same rect
 const worldLayer = new Instance("Frame");
 worldLayer.Name = "World";
 worldLayer.Size = UDim2.fromScale(1, 1);
 worldLayer.BackgroundTransparency = 1;
 worldLayer.BorderSizePixel = 0;
-worldLayer.ClipsDescendants = true;
 worldLayer.Parent = root;
 
 const darkLayer = new Instance("Frame");
@@ -218,6 +220,8 @@ pcall(() => {
 });
 task.delay(1, resize);
 task.delay(3, resize);
+// a night fight's sprites are built behind the lobby, a few per frame, never during a run (client/view/poolWarmup.ts)
+task.delay(1, () => warmFightPool(ctx));
 
 // --- input wiring ---
 function pressAttack(): void {
@@ -425,6 +429,14 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 		addAttackSource();
 		return;
 	}
+	// back out of the screen on top (client/ui/backStack.ts): the pad's B -- read even when the engine's GUI navigation
+	// took it too (with a control selected it drops the selection, which is all B did before) -- and Backspace, unless a
+	// text box is typing it. With no screen up nothing is eaten: neither means anything in a run (keyboard B = Backpack)
+	const k = inputObj.KeyCode;
+	const back =
+		(k === Enum.KeyCode.ButtonB && inputObj.UserInputType.Name.sub(1, 7) === "Gamepad") ||
+		(k === Enum.KeyCode.Backspace && inputObj.UserInputType === Enum.UserInputType.Keyboard && !gpe);
+	if (back && closeTopScreen()) return;
 	if (gpe) return;
 	if (inputObj.UserInputType === Enum.UserInputType.MouseButton2) {
 		input.actionPressed = true;
