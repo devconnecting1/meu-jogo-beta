@@ -104,10 +104,10 @@ export const DARK: ThemeColors = {
 	statBonus: Color3.fromRGB(82, 205, 134),
 	/** stat-effect: oklch(0.7400 0.1500 50.0000) #f58b4b */
 	statEffect: Color3.fromRGB(245, 139, 75),
-	/** bar-hp: oklch(0.5852 0.2078 25.3313) #dc2f34 */
-	barHp: Color3.fromRGB(220, 47, 52),
-	/** bar-food: oklch(0.5742 0.1550 50.2665) #bd5600 */
-	barFood: Color3.fromRGB(189, 86, 0),
+	/** bar-hp: oklch(0.5800 0.2078 25.3313) #da2d33 */
+	barHp: Color3.fromRGB(218, 45, 51),
+	/** bar-food: oklch(0.5700 0.1550 50.2665) #bc5500 */
+	barFood: Color3.fromRGB(188, 85, 0),
 	/** bar-xp: oklch(0.5564 0.0993 245.7394) #3c78aa */
 	barXp: Color3.fromRGB(60, 120, 170),
 };
