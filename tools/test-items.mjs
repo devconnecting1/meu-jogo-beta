@@ -765,6 +765,367 @@ section("A7. every weapon can be fed in play: its ammo, oil or charge comes from
 	);
 });
 
+// ================================================================ B. equipment
+
+/** the EQUIPS row of every slot, and the save field it lives in */
+const SLOT_FIELD = ["", "equipCloth", "equipHand", "equipGun", "equipOutfit", "equipPet"];
+const COSMETIC = e => e.kind === 4;
+const costumeOf = id => COSTUMES.find(c => c.equipId === id);
+/** a save that owns `id` the way the game hands it out: in the backpack, or (a costume) bought in the shop */
+function owning(id, via = "backpack") {
+	const s = bareSave();
+	if (via === "costume") s.costumes[costumeOf(id).id] = 1;
+	else s.invenEquip[id] = 1;
+	return s;
+}
+
+section("B1. every equipment row fits exactly one slot, and wears there", () => {
+	checkRows("ids are the row's index", EQUIPS, e => EQUIPS[e.id] === e || `row ${EQUIPS.indexOf(e)}`);
+	checkRows("every row has a slot (cloth, hand, gun, outfit or pet), never 0", EQUIPS, e => {
+		const slot = SAVE.equipSlotOf(e.id);
+		if (slot < 1 || slot > EQUIP_SLOT_MAX) return `slot ${slot}`;
+		if (!COSMETIC(e)) return slot === e.kind || `kind ${e.kind} in slot ${slot}`;
+		return slot === EquipSlot.Outfit || slot === EquipSlot.Pet || `cosmetic in slot ${slot}`;
+	});
+	checkRows(
+		"every cosmetic is sold as a costume (MON-04: the wardrobe is where it comes from)",
+		EQUIPS.filter(COSMETIC),
+		e => costumeOf(e.id) !== undefined || "no COSTUMES row",
+	);
+	checkRows("the card names the slot the row really goes in", EQUIPS, e => {
+		const card = Info.describeItem(bareSave(), ItemKind.Equip, e.id);
+		const slot = card.stats.find(s => s.label === "Slot");
+		return slot?.value === Info.SLOT_NAMES[SAVE.equipSlotOf(e.id)] || `card "${slot?.value}"`;
+	});
+});
+
+section("B2. equip and unequip, per slot, on the server (server/sim/craft.ts: the F3 intents)", () => {
+	const craft = new SCRAFT.ServerCraft({ world: W.createWorld(2000, 2000), build: { placing: () => false } });
+	checkRows("not owned: refused, and the slot is untouched", EQUIPS, e => {
+		const s = bareSave();
+		const out = craft.equip(s, e.id);
+		return (
+			(out.kind === "refused" && out.why === "owned" && s[SLOT_FIELD[SAVE.equipSlotOf(e.id)]] === -1) ||
+			JSON.stringify(out)
+		);
+	});
+	checkRows("owned: into its own slot, and off again", EQUIPS, e => {
+		const slot = SAVE.equipSlotOf(e.id);
+		for (const via of COSMETIC(e) ? ["backpack", "costume"] : ["backpack"]) {
+			const s = owning(e.id, via);
+			const on = craft.equip(s, e.id);
+			if (on.kind !== "equipped" || on.slot !== slot || SAVE.equippedIn(s, slot) !== e.id)
+				return `${via}: ${JSON.stringify(on)}`;
+			for (let other = 1; other <= EQUIP_SLOT_MAX; other++) {
+				if (other !== slot && SAVE.equippedIn(s, other) !== -1) return `${via}: slot ${other} moved too`;
+			}
+			const off = craft.unequip(s, slot);
+			if (off.kind !== "unequipped" || SAVE.equippedIn(s, slot) !== -1)
+				return `${via}: unequip ${JSON.stringify(off)}`;
+		}
+		return true;
+	});
+	check(
+		[0, EQUIP_SLOT_MAX + 1, -1, 1.5].every(slot => craft.unequip(bareSave(), slot).kind === "refused"),
+		"an unequip of a slot that does not exist is refused",
+	);
+	{
+		// a second item of the same slot replaces the first (one armour at a time)
+		const s = bareSave();
+		s.invenEquip[1] = 1;
+		s.invenEquip[4] = 1;
+		craft.equip(s, 1);
+		craft.equip(s, 4);
+		checkEq(s.equipCloth, 4, "a second armour replaces the first in the cloth slot");
+	}
+});
+
+section(
+	"B3. the save's guard: a report can wear only what it owns, in that thing's slot (enforceSaveInvariants)",
+	() => {
+		checkRows("in every slot, each row is kept only when it is that slot's AND owned", EQUIPS, e => {
+			const own = SAVE.equipSlotOf(e.id);
+			for (let slot = 1; slot <= EQUIP_SLOT_MAX; slot++) {
+				for (const owned of [false, true]) {
+					const s = owned ? owning(e.id) : bareSave();
+					s[SLOT_FIELD[slot]] = e.id;
+					SAVE.enforceSaveInvariants(s);
+					const kept = s[SLOT_FIELD[slot]] === e.id;
+					if (kept !== (owned && slot === own)) return `slot ${slot}, owned ${owned}: kept ${kept}`;
+				}
+			}
+			return true;
+		});
+		checkRows("through the server's reading of a client report (sanitizeClientReport) too", EQUIPS, e => {
+			const base = bareSave();
+			const field = SLOT_FIELD[SAVE.equipSlotOf(e.id)];
+			const forged = SAVE.sanitizeClientReport({ ...base, [field]: e.id }, base);
+			if (forged[field] !== -1) return "worn without owning it";
+			const mine = owning(e.id);
+			const honest = SAVE.sanitizeClientReport({ ...mine, [field]: e.id }, mine);
+			return honest[field] === e.id || "owned, and still taken off";
+		});
+		checkRows(
+			"a report cannot conjure a cosmetic into the backpack (it is the shop's)",
+			EQUIPS.filter(COSMETIC),
+			e => {
+				const base = bareSave();
+				const inv = [...base.invenEquip];
+				inv[e.id] = 5;
+				const upd = SAVE.sanitizeClientReport(
+					{ ...base, invenEquip: inv, [SLOT_FIELD[SAVE.equipSlotOf(e.id)]]: e.id },
+					base,
+				);
+				return (
+					(upd.invenEquip[e.id] === 0 && upd[SLOT_FIELD[SAVE.equipSlotOf(e.id)]] === -1) ||
+					`kept ${upd.invenEquip[e.id]}`
+				);
+			},
+		);
+	},
+);
+
+section("B4. defence and speed: on with the item, off without it (server damage path and stepPlayer)", () => {
+	const world = W.createWorld(8000, 8000);
+	const combat = new ServerCombat({ world, targets: { zombies: () => [], bosses: () => [] }, random: () => 0.5 });
+	/** a 10-point bite through the server's only way to hurt a survivor (§2.3), on a fresh body */
+	const bite = save => {
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, save, 1000, 1000, 0);
+		combat.damageActor(0, sp.state, save, 10);
+		return sp.state.hpMax - sp.state.hp;
+	};
+	/** world units walked in one second through the server's stepPlayer */
+	const walk = save => {
+		const p = Ply.createPlayer(save, 1000, 1000);
+		const cmd = P.makeCommand(1, 1, 0, 0, 0, 0);
+		for (let i = 0; i < CFG.SIM_HZ; i++) stepPlayer(world, p, save, cmd, TICK_DT);
+		return p.x - 1000;
+	};
+	const baseBite = bite(bareSave());
+	const baseWalk = walk(bareSave());
+	checkEq(baseBite, 10, "with nothing worn a 10-point bite takes 10");
+	check(
+		near(baseWalk, DESIGN.MOVE_SPEED * SPEED_SCALE, 0.5),
+		"and the survivor walks MOVE_SPEED",
+		`${baseWalk.toFixed(1)} u/s`,
+	);
+	checkRows(
+		"each piece of clothing takes its defence off a bite, and adds its speed to a walk",
+		EQUIPS.filter(e => e.kind === EquipSlot.Cloth),
+		e => {
+			const s = owning(e.id);
+			s.equipCloth = e.id;
+			const took = bite(s);
+			const walked = walk(s);
+			if (took !== Math.max(0, 10 - e.def)) return `a bite took ${took}, def ${e.def}`;
+			if (!near(walked, (DESIGN.MOVE_SPEED + e.speed) * SPEED_SCALE, 0.5))
+				return `walked ${walked.toFixed(1)} u/s, speed ${e.speed}`;
+			s.equipCloth = -1;
+			return (
+				(bite(s) === 10 && near(walk(s), baseWalk, 0.01)) || "taking it off did not restore the plain survivor"
+			);
+		},
+	);
+	checkRows(
+		"hand, gun and cosmetic items change neither (only clothing is armour)",
+		EQUIPS.filter(e => e.kind !== EquipSlot.Cloth),
+		e => {
+			const s = owning(e.id);
+			s[SLOT_FIELD[SAVE.equipSlotOf(e.id)]] = e.id;
+			return (bite(s) === 10 && near(walk(s), baseWalk, 0.01)) || `bite ${bite(s)}, walk ${walk(s).toFixed(1)}`;
+		},
+	);
+	{
+		// MON-01 by construction: even a cosmetic row that SAID it had defence and speed changes nothing
+		const touched = EQUIPS.filter(COSMETIC).map(e => [e, e.def, e.speed]);
+		for (const [e] of touched) {
+			e.def = 5;
+			e.speed = 3;
+		}
+		try {
+			checkRows(
+				"MON-01: a cosmetic whose row claimed def 5 / speed 3 still changes nothing when worn",
+				EQUIPS.filter(COSMETIC),
+				e => {
+					const s = owning(e.id, "costume");
+					s[SLOT_FIELD[SAVE.equipSlotOf(e.id)]] = e.id;
+					return (
+						(bite(s) === 10 && near(walk(s), baseWalk, 0.01)) ||
+						`bite ${bite(s)}, walk ${walk(s).toFixed(1)}`
+					);
+				},
+			);
+		} finally {
+			for (const [e, def, speed] of touched) {
+				e.def = def;
+				e.speed = speed;
+			}
+		}
+	}
+	checkRows("the card shows the defence and speed the survivor gets", EQUIPS, e => {
+		const card = Info.describeItem(bareSave(), ItemKind.Equip, e.id);
+		const m = new Map(card.stats.map(s => [s.label, s.value]));
+		const def = e.def !== 0 ? `+${e.def}` : undefined;
+		const spd = e.speed === 0 ? undefined : e.speed > 0 ? `+${e.speed}` : `${e.speed}`;
+		if (m.get("Defense") !== def) return `Defense "${m.get("Defense")}"`;
+		return m.get("Speed") === spd || `Speed "${m.get("Speed")}"`;
+	});
+});
+
+section(
+	"B5. what the gadgets do: laser sight, silencer, watches, flashlight, torch, night vision, compass, GPS",
+	() => {
+		const FLASHLIGHT = 13;
+		const TORCH = 15;
+		const NIGHT_VISION = 6;
+		const COMPASS = 8;
+		const GPS = 16;
+		{
+			// the laser sight narrows the server's spread roll; the silencer divides the shot's noise ring by 3
+			const spread = equipGun => {
+				const rolls = [];
+				let r = 0;
+				const values = [0.9, 0.1, 0.7, 0.3, 0.95, 0.05, 0.6, 0.4, 0.99, 0.01, 0.8];
+				const world = W.createWorld(4000, 4000);
+				const noise = [];
+				const combat = new ServerCombat({
+					world,
+					targets: { zombies: () => [], bosses: () => [] },
+					random: () => values[r++ % values.length],
+					hooks: {
+						noise: (x, y, radius) => noise.push(radius),
+						fx: e => {
+							if (e.t === P.FxType.Shot) rolls.push(Math.abs(e.hits[0].y - 1000));
+						},
+					},
+				});
+				const save = bareSave();
+				save.invenWeapon[10] = 1;
+				save.equipWeapon = 10;
+				save.ammoNormal = 100;
+				if (equipGun >= 0) {
+					save.invenEquip[equipGun] = 1;
+					save.equipGun = equipGun;
+				}
+				const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, save, 1000, 1000, 0);
+				for (let t = 1; t <= 600; t++) {
+					const cmd = P.makeCommand(t, 0, 0, 0, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+					stepPlayer(world, sp.state, save, cmd, TICK_DT);
+					sp.state.weapon.angleRange = 0; // no recoil build-up: the roll alone is measured
+					combat.stepPlayer(sp, cmd, t, TICK_DT);
+				}
+				return {
+					spread: rolls.reduce((a, b) => a + b, 0) / Math.max(1, rolls.length),
+					noise: noise[0],
+					n: rolls.length,
+				};
+			};
+			const plain = spread(-1);
+			const laser = spread(7);
+			const quiet = spread(12);
+			check(
+				laser.spread < plain.spread,
+				"the laser sight tightens the server's spread",
+				`${plain.spread.toFixed(1)} -> ${laser.spread.toFixed(1)} u`,
+			);
+			check(
+				near(quiet.noise, plain.noise / 3, 1e-6),
+				"the gun silencer makes a shot heard a third as far",
+				`${plain.noise} -> ${quiet.noise}`,
+			);
+		}
+		{
+			// the watches put the clock on the HUD (client/main.client.ts showClock): by hand name, so the names must hold
+			const hud = source("client/main.client.ts");
+			for (const id of [9, 10, 11])
+				check(
+					hud.includes(`"${EQUIPS[id].name}"`),
+					`the HUD shows the clock with the ${EQUIPS[id].name} in hand`,
+				);
+		}
+		{
+			// at night the SERVER lights a survivor's surroundings for the horde's visibility (zombieBrain isLit):
+			// the flashlight a 45° cone out to 560 u ahead, the torch 400 u all round, bare hands 250 u
+			const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+			const litAt = (hand, dx, dy) => {
+				const world = W.createWorld(8000, 8000);
+				const sim = new ServerSimulation({
+					world,
+					clock: new WorldClock({ day: 1, dayTime: 0 }),
+					zombies: true,
+					interactive: false,
+				});
+				const save = bareSave();
+				if (hand >= 0) {
+					save.invenEquip[hand] = 1;
+					save.equipHand = hand;
+				}
+				const sp = PL.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					save,
+					4000,
+					4000,
+					sim.tick,
+					sim.simHz,
+				);
+				sim.add(sp);
+				sp.state.angle = 0;
+				for (let i = 0; i < 3; i++) sim.step();
+				sp.state.x = 4000;
+				sp.state.y = 4000;
+				sp.state.angle = 0;
+				sim.step();
+				return Brain.spawnAlpha(sim.horde.refs, sp.state.x + dx, sp.state.y + dy) === 1;
+			};
+			check(!litAt(-1, 400, 0), "bare hands: 400 u ahead is dark at midnight");
+			check(litAt(FLASHLIGHT, 400, 0), "the flashlight lights 400 u ahead for the horde's visibility");
+			check(!litAt(FLASHLIGHT, -400, 0), "and not 400 u behind (it is a cone)");
+			check(!litAt(-1, 0, 350), "bare hands: 350 u to the side is dark");
+			check(litAt(TORCH, 0, 350), "the torchlight lights 350 u all round");
+			// what the PLAYER sees is the client's light map (client/gameLoop.ts drawLight): its survivor light is a
+			// fixed PLAYER_LIGHT_R, whatever is in the hand
+			const draw = source("client/gameLoop.ts");
+			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
+			knownBug(
+				"E1",
+				body.length > 0 && !/equipHand/.test(body),
+				"the flashlight and the torchlight never light the SCREEN at night: the light map draws the survivor's plain 250 u whatever is in hand, while the server lights zombies in the cone (they glow in the dark)",
+			);
+		}
+		{
+			// a gadget is worth its slot only if some code reads it: search every system for its id
+			const readers = id => {
+				const hits = [];
+				for (const rel of [
+					"client/gameLoop.ts",
+					"client/main.client.ts",
+					"client/systems/daynight.ts",
+					"client/systems/combat.ts",
+					"server/sim/combat.ts",
+					"shared/sim/ai/zombieBrain.ts",
+					"shared/game/player.ts",
+				]) {
+					const src = source(rel);
+					if (
+						new RegExp(`equip(Hand|Gun|Cloth)\\s*===\\s*${id}\\b`).test(src) ||
+						src.includes(`"${EQUIPS[id].name}"`)
+					)
+						hits.push(rel);
+				}
+				if (id === 7 || id === 12) hits.push("server/sim/combat.ts (LASER_SIGHT_ID / SILENCER_ID)");
+				return hits;
+			};
+			const dead = [NIGHT_VISION, COMPASS, GPS].filter(id => readers(id).length === 0);
+			knownBug(
+				"E2",
+				dead.length > 0,
+				"gadgets that nothing reads: equipping them changes nothing anywhere (P3)",
+				dead.map(id => EQUIPS[id].name).join(", "),
+			);
+		}
+	},
+);
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
