@@ -349,7 +349,7 @@ Se passar do alvo (p95 > 6 ms), na ordem: `SIM_HZ` cai para **30** (seção 3.1,
 | | Cada outro jogador que o feriu nos últimos 10 s | 60% (assistência: acaba com o "roubo de abate") |
 | Torreta ou armadilha mata | O construtor (se estiver no servidor) | 100% |
 | Chefe morto | Cada participante (causou ≥ 3% do HP **ou** ficou ≥ 20 s a ≤ 1200 u com o chefe vivo) | 100% do XP, +1 em `bossKills` e moedas de chefe |
-| Dia sobrevivido (virada 0h do mundo) | Cada jogador no mundo (em pé ou derrubado) que passou **≥ 50% daquele dia** no mundo e **não estava AFK** (sem input de movimento ou ataque nos últimos 3 min) | +1 em `day` (dia da vida), `COINS_PER_DAY` e bônus de marco por `bestDay` |
+| Dia sobrevivido (virada 0h do mundo) | Cada jogador no mundo (em pé ou derrubado; **morto não**) que passou **≥ 50% daquele dia VIVO** no mundo (ticks somados por UserId desde a meia-noite anterior: ir ao lobby não zera) e **não estava AFK** (sem input real com movimento ou aresta nos últimos 3 min; tick preenchido e botão segurado não contam) — `server/sim/progress.ts` `dayRefusal` | +1 em `day` (dia da vida), `COINS_PER_DAY` e bônus de marco por `bestDay` |
 | Horas puladas por admin | Ninguém | 0 (flag `skipped`) |
 
 O drop de zumbi usa a skill do **matador** (`skillLevels[9]`). O loot de prédio usa a do **revistador**.
@@ -566,14 +566,14 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
    - **(b)** Senão: o `findSpawnPoint` atual (rua perto do centro).
    - Restrições: fora de prédio, círculo livre de 40 u (`rectHitsSolid` 80×80), **≥ 900 u de qualquer zumbi vivo**, ≥ 600 u de chefe, fora de poça ou explosão, alcançável (tile ativo ou rua).
    - Relaxa para 600 u de zumbi depois de 200 tentativas.
-5. Cria a entidade com `hp = runHp` (ou cheio), fome = `runHunger` e **pente vazio** (recarga automática). **Proteção de spawn de 3 s**: sem dano, não é fonte do flow field e aparece translúcido; acaba antes se o jogador atacar.
+5. Cria a entidade com `hp = runHp` (ou cheio), fome = `runHunger`, **morta** se `runOver` (espera o amanhecer deste mundo, ou um Rebirth) e o **pente pago da reserva** — nunca de graça. Quem já tem corpo guardado neste servidor (§7.2) volta com ele, não com um novo (`server/sim/life.ts`). **Proteção de spawn de 3 s** (só para corpo novo, nunca para quem volta com o corpo guardado): sem dano, não é fonte do flow field e aparece translúcido; acaba antes se o jogador atacar.
 6. `WorldInit` (confiável, em blocos) → o cliente aplica os deltas no espelho → primeiro snapshot → mostra o mundo.
 
 ### 7.2 Sair e voltar ("continuar")
 
-- **Ir ao lobby** (menu): intenção `LeaveWorld`. Se levou dano nos últimos 5 s, há **canal de 5 s** (o corpo fica, vulnerável, com barra de "saindo…"); senão sai na hora. O estado (posição, HP, fome, buffs) fica guardado na sessão. **Continuar** volta à mesma posição se ela ainda for segura (≥ 600 u de zumbi), senão cai no spawn seguro mais próximo.
-- **Desconectar:** o pente volta à reserva; `runHp`/`runHunger` vão para o save (flush com trava, como hoje). O estado de mundo fica 5 min em memória, e se ele voltar ao **mesmo** servidor retoma a posição. **Sair derrubado = morte** (`runOver = true` persistido), para acabar com o "combat log".
-- **Servidor desligando** (`BindToClose`): para a simulação, captura HP e fome, trata derrubados como **vivos** (culpa do servidor, não do jogador) e salva todos em paralelo no orçamento de 25 s que já existe.
+- **Ir ao lobby** (menu): intenção `LeaveWorld`. Se levou dano nos últimos 5 s, há **canal de 5 s** (o corpo fica, vulnerável, com barra de "saindo…"); senão sai na hora. O estado (posição, HP, fome, buffs, pente, **morto ou vivo**) fica guardado no servidor por UserId (`server/sim/life.ts`). **Continuar** volta com **o mesmo corpo, na mesma posição** — morto continua morto, ferido continua ferido. *Implementado:* a posição volta **sempre** igual (só muda se o lugar virou sólido: aí o anel seguro em volta), sem proteção de spawn; "se ainda for segura (≥ 600 u de zumbi), senão o spawn seguro" só volta a valer com o canal de 5 s acima (F4) — sem o canal, é teleporte de fuga da horda.
+- **Desconectar:** o pente volta à reserva; `runHp`/`runHunger`/`runOver` vão para o save (flush com trava, como hoje; o servidor escreve `runOver = true` já na morte, e um relatório do cliente não mexe mais nele). O estado de mundo fica 5 min em memória, e se ele voltar ao **mesmo** servidor retoma o corpo — a menos que o save tenha mudado noutro servidor nesse meio-tempo (aí vale o save: na mesma run uma morte de qualquer lado continua morte; numa run nova — `runRev` mudou por Rebirth, New game ou edição de admin — decide só o save). Um golpe fatal ainda não processado (hp ≤ 0 antes do próximo tick) conta como morte ao sair, desconectar, no autosave e no desligamento. **Sair derrubado = morte** (`runOver = true` persistido), para acabar com o "combat log".
+- **Servidor desligando** (`BindToClose`): para a simulação, captura HP e fome (e devolve o pente à reserva), trata derrubados como **vivos** (culpa do servidor, não do jogador) e salva todos em paralelo no orçamento de 25 s que já existe. Mortos continuam mortos.
 
 ### 7.3 Derrubado → reviver → morto → Rebirth/New game
 
@@ -582,9 +582,10 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 | **Em pé → Derrubado** | HP ≤ 0. Se **não há nenhum aliado em pé no servidor**, pula direto para Morto (sem espera inútil: o solo continua como hoje). |
 | **Derrubado** | Sangramento de **30 s**. Rasteja a 20% da velocidade. Não ataca, não interage, não usa item. Continua alvo com prioridade menor (semente +200 no flow field). **Cada mordida tira 3 s** do sangramento (1 s de recarga por zumbi). A câmera pode seguir aliados. |
 | **Reviver** | Um aliado em pé a **≤ 70 u** (centro a centro) segura **E por 4 s**. O progresso é do servidor e é contado em ticks com o bit `actionHeld`. Interrompe se o reanimador soltar E, sair do raio ou for derrubado; **tomar dano não interrompe** (defender quem revive é o jogo). Revive com **30% do HP** e 1,5 s de i-frames. E tem prioridade sobre outras interações quando há um derrubado no raio. |
-| **Morto** | O sangramento acabou (ou não havia aliado): `runOver = true` salvo. O corpo some com fade. Tela com **Rebirth** (pago, `rebirthPrice(deathCount)` no `ShopAction` existente, idempotente por `runRev`), **New game** (`resetRun`), **Espectar** e **Lobby**. |
-| **Rebirth** | Mantém inventário e dia da vida. Renasce no **spawn seguro perto de aliados**, com HP e fome cheios e proteção de 3 s. |
-| **New game** | Dia da vida volta a 1 com o kit inicial (o nível, as skills, as moedas e os pacotes ficam, como hoje). Renasce no mesmo mundo. |
+| **Morto** | O sangramento acabou (ou não havia aliado): `runOver = true` salvo **na hora**. O corpo fica onde caiu e não se mexe (os comandos são consumidos e ignorados). Tela de **espera do amanhecer** — o servidor levanta o sobrevivente às 06:00, em **qualquer** servidor (MP-21, regra do dono de 23 set 2026) — com **Rebirth** (pago, `rebirthPrice(deathCount)` no `ShopAction` existente, idempotente por `runRev`), **New game** (`resetRun`), **Espectar** e **Lobby**. |
+| **Rebirth** | Só para morte decidida pelo **servidor** (vivo é recusado), em servidor público ou privado; se o amanhecer já passou enquanto o morto estava no lobby, não é cobrado (a próxima entrada já o levantaria de graça). Mantém inventário e dia da vida. Renasce no **spawn seguro perto de aliados**, com HP e fome cheios e proteção de 3 s. |
+| **New game** | Só para morto. Dia da vida volta a 1 com o kit inicial (o nível, as skills, as moedas e os pacotes ficam, como hoje). É uma vida nova, **não um corpo novo**: renasce no mesmo mundo **ao amanhecer** (ou antes, pagando Rebirth) — nunca revive grátis. |
+| **Mundo perdido** | Ninguém vivo no mundo: abre uma janela de **30 s**; se ninguém pagar Rebirth nela (ou todos os mortos já recusaram: New game, Lobby, sair), dispara `onWorldWiped` uma vez (`server/sim/life.ts`, repassado por `MpHostOptions.onWorldWiped`). É o ponto único onde o reset do mundo para o dia 1 vai entrar; **ainda não reseta nada** — até lá vale a espera do amanhecer. |
 
 ### 7.4 Play solo (servidor reservado)
 

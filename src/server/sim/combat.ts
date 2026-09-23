@@ -266,7 +266,7 @@ function newStats(): CombatStats {
 }
 
 /** flamethrower / stun gun: their magazine refills for free, every shot burns 0.1 fuel */
-function isFuelWeapon(w: Wp.WeaponDef): boolean {
+export function isFuelWeapon(w: Wp.WeaponDef): boolean {
 	return w.id === 25 || w.id === 26;
 }
 

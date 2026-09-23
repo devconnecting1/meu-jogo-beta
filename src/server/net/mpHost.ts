@@ -6,11 +6,17 @@
  * server/net/replication.ts). server/main.server.ts only calls startMpHost() when MP_PHASE >= 1, so with
  * MP_PHASE = 0 not even the remote instances exist and the current single-player game is untouched.
  *
+ * Who is alive is NOT decided here: every body — in the world, in the lobby, or kept 5 min after a disconnect —
+ * belongs to server/sim/life.ts (`LifeKeeper`), which this file only feeds with Players mapped to UserIds. That
+ * split is what closed the Leave/Enter revive (security review, Sep 2026): entering the world used to build a
+ * fresh, full, living body every time.
+ *
  * Order per Heartbeat (§3.1):
  *   1. admit players whose save finished loading (§7.1: safe spawn point, MP-04)
  *   2. sim.advance(dt) → one fixed tick per 1/SIM_HZ, at most MAX_CATCHUP_TICKS per heartbeat
  *   3. per tick, the replicator flushes the reliable World batch and (every 3 ticks) the snapshots
- *   4. once a second, publish the §12.2 metrics
+ *   4. the bodies' own clock (`lives.step`): daybreak, the 5 min memory, the wipe window
+ *   5. once a second, publish the §12.2 metrics
  */
 import { GAME_NAME } from "shared/module";
 import { DESIGN } from "shared/engine/constants";
@@ -18,13 +24,10 @@ import {
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
 	MAX_PLAYERS,
-	MP_PHASE,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
 } from "shared/net/mpConfig";
-import { daybreakWaitSeconds } from "shared/sim/clock";
-import { IntentKind, LifeState, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
-import { createPlayer } from "shared/game/player";
+import { IntentKind, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import {
@@ -46,13 +49,12 @@ import {
 	InputVerdict,
 	ServerPlayer,
 	adoptSave,
-	createServerPlayer,
-	findSpawnPoint,
 	floodReason,
 	ingestInput,
 	noteMalformed,
 	noteMessage,
 } from "../sim/players";
+import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
 
 const Players = game.GetService("Players");
@@ -76,6 +78,16 @@ export interface MpHostOptions {
 	world?: WorldData;
 	/** false disables the periodic metric attributes (used by tests) */
 	metrics?: boolean;
+	/**
+	 * The server wrote into this survivor's save on its own (a death, a stand-up, the body banked on the way out):
+	 * the session must persist it. server/main.server.ts marks the session dirty.
+	 */
+	saveChanged?: (userId: number) => void;
+	/**
+	 * The world is lost: everybody in it died and nobody paid a Rebirth inside the decision window (server/sim/
+	 * life.ts rule 6). The ONE place the world's reset to day 1 will plug in; nothing is reset yet.
+	 */
+	onWorldWiped?: (report: WipeReport) => void;
 }
 
 /** one line of the §9.3 / F6 admin view: who the player is and what their counters say */
@@ -93,20 +105,33 @@ export interface MpHost {
 	replicator: Replicator;
 	remotes: MpRemotes;
 	world: WorldData;
+	/** every survivor's body, in the world and out of it: death, daybreak, Rebirth, New game (server/sim/life.ts) */
+	lives: LifeKeeper;
 	/** the server entity of a connected player, or undefined when they are not in the world */
 	playerOf(player: Player): ServerPlayer | undefined;
+	/** dead as far as the SERVER knows (in the world, in the lobby, or — never seen here — as the save says) */
+	isDead(player: Player, save: PlayerSaveData): boolean;
 	/**
-	 * Put a dead survivor back in the world at a safe spawn point (§7.1), after the economy accepted a
-	 * rebirth or a new run.
+	 * A paid Rebirth the economy accepted: up now if the body is in the world, on the next entry otherwise.
 	 *
-	 * The save says the run continues; this is what makes the SIMULATED survivor agree. Without it the
-	 * coins were spent, `runOver` went false, and the body stayed dead -- the client set its own hp back
-	 * and the very next snapshot overwrote it, so the button looked like it did nothing.
+	 * The save says the run continues; this is what makes the SIMULATED survivor agree. Without it the coins were
+	 * spent, `runOver` went false, and the body stayed dead.
 	 */
-	revive(player: Player): boolean;
+	rebirth(player: Player, save: PlayerSaveData): void;
+	/** a New game the economy accepted (after `resetRun`): a new life whose body still waits for daybreak */
+	newLife(player: Player, save: PlayerSaveData): void;
+	/**
+	 * The player is leaving the server: out of the world, and the body banked into `save` (§7.2) — runHp,
+	 * runHunger, runOver, the magazine back into the reserve. Idempotent. server/main.server.ts calls it BEFORE its
+	 * final flush, because the two PlayerRemoving handlers run in no guaranteed order.
+	 */
+	release(player: Player, save?: PlayerSaveData): void;
+	/** the live body into `save`, without moving it (the autosave); true when the save changed */
+	settle(player: Player, save: PlayerSaveData): boolean;
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
+	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
 	stop(): void;
 }
 
@@ -140,14 +165,6 @@ interface Link {
 	wantsWorld: boolean;
 	/** os.clock() of the last accepted enter/leave, to rate-limit a client flipping it (§8.2) */
 	worldAt: number;
-	/**
-	 * MP-21: real seconds this survivor still has to lie in the street before the world stands them back up,
-	 * or undefined when they are not waiting for one (alive, or in a world that is the owner's -- see
-	 * `sharedWorld`). It counts down in real seconds rather than naming an hour because the clock and the
-	 * heartbeat advance in the same real time, so the countdown lands on daybreak on its own, and the client
-	 * showing the number (client/onboarding/gameOver.ts) computes it from the very same shared rule.
-	 */
-	downFor?: number;
 	/** a kick is asked for once; the player takes a moment to actually leave */
 	kicked: boolean;
 	lastAnomalyLog: number;
@@ -192,11 +209,37 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	sim.onTick = tick => replicator.afterTick(tick);
 	// every cosmetic the simulation asks for goes out on the Fx channel, filtered by interest (§4.1, §4.3)
 	sim.onFx = event => replicator.queueFx(event);
-	// the snapshot's Dead flag is unreliable, so the transition itself goes out reliably (§4.5); F4 turns this
-	// into downed → revive → dead with the same event
-	sim.onDeath = sp => {
-		replicator.life(sp.slot, LifeState.Dead);
-		armDaybreak(sp.slot);
+
+	const lives = new LifeKeeper(sim, {
+		welcome(sp) {
+			replicator.welcome(sp);
+		},
+		left(slot) {
+			replicator.left(slot);
+		},
+		life(slot, state) {
+			replicator.life(slot, state);
+		},
+	});
+	// the death goes out reliably (§4.5), `runOver` goes into the save the same tick, and the daybreak countdown
+	// starts — on every server kind (server/sim/life.ts rules 4 and 5)
+	sim.onDeath = sp => lives.died(sp);
+	lives.onSaveChanged = userId => options.saveChanged?.(userId);
+	lives.onStandUp = (sp, why) => {
+		print(
+			`[${GAME_NAME}] ${sp.name} is back on their feet (${why}) in slot ${sp.slot} at ` +
+				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})`,
+		);
+	};
+	lives.onWorldWiped = report => {
+		// rule 6: the single point where "nobody alive, nobody paying" is known. The reset of the world to day 1 is
+		// the owner's next task and will hang off `options.onWorldWiped`; until then the daybreak wait still stands
+		// everybody up, which keeps the town from staying sterile.
+		warn(
+			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
+				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
+		);
+		options.onWorldWiped?.(report);
 	};
 
 	// ------------------------------------------------------------ lifecycle
@@ -218,8 +261,27 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				reportedMalformed: 0,
 			};
 			links.set(player, link);
+			// a body kept from a disconnect a moment ago stops expiring (§7.2)
+			lives.connect(player.UserId);
 		}
 		return link;
+	}
+
+	/**
+	 * A message from a Player instance that has already left the server (a remote still in flight when PlayerRemoving
+	 * ran). Acting on it would recreate the link — and `lives.connect` would stop the kept body from ever expiring,
+	 * or a rejoined player's NEW session would be steered by the old instance's leftovers.
+	 */
+	function departed(player: Player): boolean {
+		return !links.has(player) && player.Parent === undefined;
+	}
+
+	/** another, newer Player instance of the same user is connected (a rejoin overtook this one's removal) */
+	function supersededBy(player: Player): boolean {
+		for (const [other] of links) {
+			if (other !== player && other.UserId === player.UserId) return true;
+		}
+		return false;
 	}
 
 	function kick(link: Link, reason: string): void {
@@ -236,38 +298,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (reason !== undefined) kick(link, reason);
 	}
 
-	/**
-	 * MP-20 / MP-21: is this town SHARED, or does it belong to whoever opened the server?
-	 *
-	 * Read off the server kind and nothing else, exactly as client/main.client.ts reads it -- a head count
-	 * would make the same death free or expensive depending on who happened to be logged in at that second,
-	 * and the two sides would have to agree about the answer across the wire to stay consistent. A private
-	 * or reserved server is the owner's world (MP-13 "servidor solo/privado"), where a death is bought back
-	 * with coins and the world is theirs to freeze. A public one is everybody's.
-	 */
-	function sharedWorld(): boolean {
-		return MP_PHASE >= 2 && game.PrivateServerId === "";
-	}
-
-	/**
-	 * MP-21: a survivor went down in a shared town, so the town itself will stand them back up at daybreak.
-	 *
-	 * This is the ONLY respawn the server has that nobody has to pay for, and it closes a hole much wider
-	 * than one player's inconvenience: `rebuildClusters` (shared/sim/ai/population.ts) skips dead survivors,
-	 * so a server where everyone is dead has no clusters, and with no clusters nothing spawns at all -- not
-	 * the night's waves, not the ambient walkers, for as long as the bodies lie there. Before this, the only
-	 * ways out of `dead` were a paid rebirth and a new run, so a player who could not afford the one and did
-	 * not want the other left the whole town sterile behind them.
-	 */
-	function armDaybreak(slot: number): void {
-		if (!sharedWorld()) return;
-		const player = bySlot.get(slot);
-		const link = player !== undefined ? links.get(player) : undefined;
-		if (link === undefined) return;
-		link.downFor = daybreakWaitSeconds(sim.clock.dayTime);
-	}
-
-	/** §7.1: enter the world at a safe spawn point (MP-04) once the save is available */
+	/** §7.1: enter the world once the save is available — with the body the server kept, or one from the save */
 	function admit(player: Player): void {
 		const link = linkOf(player);
 		// nobody enters the world by merely being connected: the client asks (IntentKind.EnterWorld)
@@ -282,83 +313,46 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			return;
 		}
 		if (save === undefined) return;
-		const slot = sim.freeSlot();
-		if (slot === undefined) return; // server full: try again next pass
-		const allies = new Array<{ x: number; y: number }>();
-		for (const other of sim.players()) {
-			if (!other.state.dead) allies.push({ x: other.state.x, y: other.state.y });
-		}
-		// MP-04: nobody enters the world inside the horde. The list is the LIVE one from F2 on — with an
-		// empty list (MP_PHASE < 2, where each client has its own horde) the rule has nothing to test.
-		const spawn = findSpawnPoint(world, { allies, zombies: sim.horde?.zombies ?? [] });
-		const sp = createServerPlayer(
-			{ slot, userId: player.UserId, name: player.DisplayName },
-			save,
-			spawn.x,
-			spawn.y,
-			sim.tick,
-			sim.simHz,
-		);
-		sim.add(sp);
-		link.slot = slot;
-		bySlot.set(slot, player);
-		replicator.welcome(sp);
+		const sp = lives.enter({ userId: player.UserId, name: player.DisplayName }, save);
+		if (sp === undefined) return; // server full: try again next pass
+		link.slot = sp.slot;
+		bySlot.set(sp.slot, player);
 		print(
-			`[${GAME_NAME}] ${player.Name} joined the world in slot ${slot} at ` +
-				`(${string.format("%.0f", spawn.x)}, ${string.format("%.0f", spawn.y)})${spawn.relaxed ? " (relaxed spawn)" : ""}`,
+			`[${GAME_NAME}] ${player.Name} joined the world in slot ${sp.slot} at ` +
+				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})` +
+				`${sp.state.dead ? " (dead: waiting for daybreak or a Rebirth)" : ""}`,
 		);
 	}
 
 	/**
-	 * Leaves the WORLD without leaving the server: the body goes away, the slot is freed and the other
-	 * survivors are told, but the player stays connected with their save and can come back through PLAY.
+	 * Leaves the WORLD without leaving the server: the body goes away (and is KEPT, exactly as it was), the slot
+	 * is freed and the other survivors are told, but the player stays connected with their save and can come back
+	 * through PLAY.
 	 */
 	function leaveWorld(link: Link): void {
 		const slot = link.slot;
 		if (slot === undefined) return;
 		link.slot = undefined;
-		link.downFor = undefined;
 		bySlot.delete(slot);
-		sim.remove(slot);
-		replicator.left(slot);
+		lives.leave(link.player.UserId);
 	}
 
-	/** §7.1 again, for a survivor who is already admitted: fresh state, safe point, and the roster told */
-	function revivePlayer(player: Player): boolean {
-		const link = links.get(player);
-		const slot = link?.slot;
-		if (link === undefined || slot === undefined) return false;
-		const sp = sim.get(slot);
-		if (sp === undefined) return false;
-		// whatever stood this survivor up -- daybreak, a rebirth, a new run -- cancels the wait the others
-		// are counting, so two revives can never land on the same body
-		link.downFor = undefined;
-		const allies = new Array<{ x: number; y: number }>();
-		for (const other of sim.players()) {
-			if (other.slot !== slot && !other.state.dead) allies.push({ x: other.state.x, y: other.state.y });
-		}
-		const spawn = findSpawnPoint(world, { allies, zombies: sim.horde?.zombies ?? [] });
-		// a fresh state from the same save is exactly what admit() builds, so a revived survivor and a
-		// joining one are the same thing -- no second definition of "alive" to drift
-		sp.state = createPlayer(sp.save, spawn.x, spawn.y);
-		replicator.life(slot, LifeState.Up);
-		print(
-			`[${GAME_NAME}] ${player.Name} is back in the world in slot ${slot} at ` +
-				`(${string.format("%.0f", spawn.x)}, ${string.format("%.0f", spawn.y)})`,
-		);
-		return true;
-	}
-
-	function release(player: Player): void {
+	function release(player: Player, save?: PlayerSaveData): void {
 		const link = links.get(player);
 		links.delete(player);
-		if (link !== undefined) link.downFor = undefined;
-		if (link === undefined || link.slot === undefined) return;
-		const slot = link.slot;
-		bySlot.delete(slot);
-		sim.remove(slot);
-		replicator.left(slot);
-		if (options.metrics !== false) pcall(() => player.SetAttribute("pz_out_Bps", 0));
+		const bank =
+			save ?? options.saveOf(player) ?? (link?.slot !== undefined ? sim.get(link.slot)?.save : undefined);
+		if (link !== undefined) {
+			const wasIn = link.slot !== undefined;
+			leaveWorld(link);
+			if (wasIn && options.metrics !== false) pcall(() => player.SetAttribute("pz_out_Bps", 0));
+		}
+		// idempotent: main.server.ts calls this with the session's save before its flush, and the PlayerRemoving
+		// handler below calls it again (or first) — whichever runs second finds nothing left to do. Keyed by UserId,
+		// so a removal that arrives after the same user already rejoined (main.server.ts may wait up to 60 s for a
+		// load) must leave the new session's body alone.
+		if (supersededBy(player)) return;
+		lives.disconnect(player.UserId, bank);
 	}
 
 	// ------------------------------------------------------------ C→S (§8.1, §8.2)
@@ -374,6 +368,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	}
 
 	const inputConn = onInput(remotes, (player, payload) => {
+		if (departed(player)) return;
 		const link = linkOf(player);
 		const now = os.clock();
 		if (link.slot === undefined) {
@@ -393,9 +388,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	 *
 	 * Rate-limited like any message from someone without a slot, because flipping it fast would make the
 	 * server spawn and despawn a body -- and each spawn costs a safe-point query. A repeat of what the
-	 * player already is costs nothing and is simply ignored.
+	 * player already is costs nothing and is simply ignored. Flipping it buys nothing else either: the body that
+	 * comes back is the body that left (server/sim/life.ts rule 1), dead or alive, where it stood.
 	 */
 	const intentConn = onIntent(remotes, (player, payload) => {
+		if (departed(player)) return;
 		const link = linkOf(player);
 		const now = os.clock();
 		if (link.slot === undefined && strangerFlood(link, now)) {
@@ -429,6 +426,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	});
 
 	const timeConn = onTimeSync(remotes, (player, payload) => {
+		if (departed(player)) return;
 		const link = linkOf(player);
 		const now = os.clock();
 		if (link.slot === undefined && strangerFlood(link, now)) {
@@ -464,27 +462,6 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	});
 
 	// ------------------------------------------------------------ metrics and anomaly log (§9.3, §12.2)
-
-	/**
-	 * MP-21, once per Heartbeat: every survivor waiting out the night loses `dt` of it, and the ones whose
-	 * wait is over are put back in the world the same way a rebirth puts them back -- `revivePlayer`, so
-	 * "alive again" has exactly one definition on this server and cannot drift into two.
-	 */
-	function stepDaybreak(dt: number): void {
-		if (!(dt > 0)) return;
-		for (const [player, link] of links) {
-			const left = link.downFor;
-			if (left === undefined) continue;
-			if (left > dt) {
-				link.downFor = left - dt;
-				continue;
-			}
-			// revivePlayer clears downFor; clearing it here too means a revive that cannot happen (the
-			// survivor left the world in the meantime) still stops the countdown from retrying every frame
-			link.downFor = undefined;
-			revivePlayer(player);
-		}
-	}
 
 	function publishMetrics(player: Player, sp: ServerPlayer, link: Link, now: number): void {
 		// §2.3: the rewind ceiling is the ping the SERVER measured, never one the client declares. Once a
@@ -526,8 +503,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const started = os.clock();
 			const ran = sim.advance(dt);
 			if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
-			// MP-21: the night the dead are waiting out ran in the same real seconds the sim just did
-			stepDaybreak(dt);
+			// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
+			lives.step(dt);
 			if (now - metricAt >= METRIC_INTERVAL) {
 				metricAt = now;
 				if (options.metrics !== false) {
@@ -568,12 +545,25 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		replicator,
 		remotes,
 		world,
-		revive(player) {
-			return revivePlayer(player);
-		},
+		lives,
 		playerOf(player) {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;
+		},
+		isDead(player, save) {
+			return lives.isDead(player.UserId, save);
+		},
+		rebirth(player, save) {
+			lives.rebirth(player.UserId, save);
+		},
+		newLife(player, save) {
+			lives.newLife(player.UserId, save);
+		},
+		release(player, save) {
+			release(player, save);
+		},
+		settle(player, save) {
+			return lives.settle(player.UserId, save);
 		},
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
@@ -597,9 +587,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			timeConn.Disconnect();
 			addedConn.Disconnect();
 			removingConn.Disconnect();
-			const inWorld = new Array<Player>();
-			for (const [, player] of bySlot) inWorld.push(player);
-			for (const player of inWorld) release(player);
+			// §7.2 "Servidor desligando": the simulation has stopped, so every body — in the world or kept in the
+			// lobby — is banked into its save before server/main.server.ts writes them all
+			const everyone = new Array<Player>();
+			for (const [player] of links) everyone.push(player);
+			for (const player of everyone) release(player);
 			links.clear();
 			bySlot.clear();
 			destroyMpRemotes(remotes);

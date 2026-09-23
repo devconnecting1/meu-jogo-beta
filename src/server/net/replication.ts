@@ -31,6 +31,7 @@ import {
 	BossSnap,
 	DeathCause,
 	FxEvent,
+	LifeState,
 	ModFlag,
 	PlayerFlag,
 	PlayerSnap,
@@ -424,7 +425,18 @@ export class Replicator {
 		const joined = joinedEvent(sp);
 		for (const other of this.sim.players()) {
 			this.queueFor(sp.slot, joinedEvent(other));
-			if (other.slot !== sp.slot) this.queueFor(other.slot, joined);
+			/*
+			 * …and who in it is already down. PlayerLife is reliable, but it went out when the death happened, to
+			 * whoever was there then; a body can also come back into the world dead (a kept corpse, a death carried
+			 * over from another session — server/sim/life.ts). It goes DIRECTED and right after its PlayerJoined:
+			 * the broadcast list is flushed before the directed one, so a broadcast would reach a client before it
+			 * knew the slot and be dropped.
+			 */
+			if (other.state.dead) this.queueFor(sp.slot, lifeEvent(other.slot, LifeState.Dead));
+			if (other.slot !== sp.slot) {
+				this.queueFor(other.slot, joined);
+				if (sp.state.dead) this.queueFor(other.slot, lifeEvent(sp.slot, LifeState.Dead));
+			}
 		}
 		this.welcomeWorld(sp);
 	}
@@ -836,6 +848,10 @@ function joinedEvent(sp: ServerPlayer): WorldEvent {
 		costume: sp.costume,
 		deco: sp.deco,
 	};
+}
+
+function lifeEvent(slot: number, state: number): WorldEvent {
+	return { t: WorldEv.PlayerLife, slot, state };
 }
 
 /**

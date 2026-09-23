@@ -23,11 +23,13 @@
  *                               at 1/60 s): at 18:00 the queues are the day's table, every zombie they promised
  *                               is born with `wave === true` before 06:00, and the queues are empty at daybreak.
  *   2. THE STERILE WORLD        the same run, the survivor dead from 09:00 and nobody to stand them up: no
- *                               cluster, nothing born, the queues untouched all night. That is MP-21 in the
- *                               owner's own world (a private server waits for its owner's rebirth), pinned here
- *                               as a RULE, and the population's stall counter has to say so while it lasts.
- *   3. DAYBREAK UNLOCKS IT      dead at 19:30 on a SHARED server, stood back up at 06:00 the way mpHost does it
- *                               (`daybreakWaitSeconds`, then `revivePlayer`: a fresh `createPlayer` at a safe
+ *                               cluster, nothing born, the queues untouched all night. Since the owner's rule of
+ *                               23 Sep 2026 every server stands its dead up at daybreak (MP-21) and a world with
+ *                               nobody alive is LOST (server/sim/life.ts `onWorldWiped`), so this case pins what
+ *                               the world does between the fall and daybreak — and the population's stall counter
+ *                               has to say so while it lasts.
+ *   3. DAYBREAK UNLOCKS IT      dead at 19:30, stood back up at 06:00 the way the server does it
+ *                               (`daybreakWaitSeconds`, then the stand-up: a fresh body at a safe
  *                               spawn point and LifeState.Up on the wire): the spawn comes back and the NEXT
  *                               night is delivered whole.
  *   4. WHAT THE WIRE CARRIES    reported, not checked. §4.3 sends a zombie in the dark only when it stands in
@@ -417,10 +419,12 @@ function median(values) {
 
 /**
  * What mpHost builds, one fixed tick at a time: `new ServerSimulation({ world })` (mpHost.ts:164), the real
- * Replicator wired to `onTick`/`onFx`, and the MP-21 bookkeeping — `onDeath` sends LifeState.Dead and, on a
- * SHARED server, arms `downFor = daybreakWaitSeconds(clock.dayTime)`; the heartbeat runs the simulation THEN
- * counts the wait down, and `revivePlayer` stands the survivor up. `shared` is what `sharedWorld()` answers
- * there: a public server stands its dead up at daybreak, a private one leaves them to their owner's rebirth.
+ * Replicator wired to `onTick`/`onFx`, and the MP-21 bookkeeping of server/sim/life.ts (`LifeKeeper`) —
+ * `onDeath` sends LifeState.Dead and arms `downFor = daybreakWaitSeconds(clock.dayTime)`; the heartbeat runs
+ * the simulation THEN counts the wait down, and the stand-up puts the survivor back on the street. `shared`
+ * (the option's old name) now only says whether this harness stands its dead up at daybreak: the live server
+ * does on every server kind since the owner's rule of 23 Sep 2026, and case 2 turns it off on purpose, to
+ * look at the night in between. The death rules themselves are tools/test-body.mjs's, on the real host.
  *
  * Everything else is observation: every zombie is recorded the tick it is born, every queue decrement the
  * tick it happens, and the fill is watched by wrapping `onWaveFill` AROUND the population's split, which
@@ -493,7 +497,7 @@ function newHost(label, options = {}) {
 	sim.onFx = event => replicator.queueFx(event);
 	sim.onDeath = sp => {
 		replicator.life(sp.slot, P.LifeState.Dead);
-		// mpHost's armDaybreak: only a shared world stands its dead up
+		// LifeKeeper.died arms the daybreak wait (on every server kind); case 2 switches it off to watch the night
 		const wait = host.shared ? CLOCK.daybreakWaitSeconds(sim.clock.dayTime) : undefined;
 		host.deaths.push({ slot: sp.slot, abs: clockAbs(sim.clock), tick: sim.tick, wait });
 		if (wait !== undefined) host.downFor.set(sp.slot, wait);
@@ -533,7 +537,10 @@ function enter(host, name) {
 	return sp;
 }
 
-/** mpHost's `revivePlayer`, line for line minus the Player: safe point, a fresh state, LifeState.Up */
+/**
+ * LifeKeeper's stand-up (server/sim/life.ts `standUp`) minus the magazine bookkeeping, which a starter dagger does
+ * not have: safe point, a fresh full state, LifeState.Up
+ */
 function revive(host, slot) {
 	const sim = host.sim;
 	const sp = sim.get(slot);
@@ -548,7 +555,7 @@ function revive(host, slot) {
 	return true;
 }
 
-/** mpHost's `stepDaybreak`: every wait loses `dt`, and the ones that ran out are stood up */
+/** LifeKeeper.step's daybreak half: every wait loses `dt`, and the ones that ran out are stood up */
 function stepDaybreak(host, dt) {
 	for (const [slot, left] of [...host.downFor]) {
 		if (left > dt) {
@@ -828,7 +835,7 @@ runUntil(one, 2, 21);
 // ================================================================ 2: the sterile world
 
 section(
-	"2) the sterile world: the only survivor dead from 09:00 and nobody to stand them up (MP-21, the owner's world)",
+	"2) the sterile world: the only survivor dead from 09:00 and nobody to stand them up (the night before daybreak)",
 );
 
 {
@@ -868,7 +875,7 @@ section(
 		death !== undefined ? stamp(death.abs) : "no death",
 	);
 	check(
-		"the owner's world: nobody armed a daybreak revive, nobody was stood up",
+		"with the harness's revive off: nobody armed a daybreak revive, nobody was stood up",
 		// (the shims make Map.size a method, the way roblox-ts spells it)
 		death !== undefined && death.wait === undefined && two.revives.length === 0 && two.downFor.size() === 0,
 	);
@@ -925,14 +932,15 @@ section(
 	);
 	timeline(two, absOf(1, 18), absOf(2, 8));
 	info(
-		"RULE (MP-21): in a private server the owner's death freezes their own world until their rebirth. " +
-			"A shared server does not wait for anyone: case 3.",
+		"RULE (MP-21, the owner's rule of 23 Sep 2026): every server stands its dead up at daybreak (case 3), and a " +
+			"world with nobody alive is lost (server/sim/life.ts `onWorldWiped`, tools/test-body.mjs). This case is " +
+			"what that world does until then: nothing.",
 	);
 }
 
 // ================================================================ 3: daybreak unlocks it
 
-section("3) daybreak unlocks it: dead at 19:30 on a SHARED server, stood up at 06:00 the way mpHost does it");
+section("3) daybreak unlocks it: dead at 19:30, stood up at 06:00 the way the server does it");
 
 {
 	const three = newHost("shared", { seed: 1, shared: true });
@@ -959,7 +967,7 @@ section("3) daybreak unlocks it: dead at 19:30 on a SHARED server, stood up at 0
 	const bornWhileDown = three.births.filter(b => b.tick > death.tick);
 	const stallDown = stallOf(three);
 	check(
-		"on a shared server the death armed the MP-21 wait: daybreakWaitSeconds at the hour of death",
+		"the death armed the MP-21 wait: daybreakWaitSeconds at the hour of death",
 		death !== undefined &&
 			death.wait !== undefined &&
 			Math.abs(death.wait - CLOCK.daybreakWaitSeconds(death.abs - absOf(1, 0))) < 1e-9,
