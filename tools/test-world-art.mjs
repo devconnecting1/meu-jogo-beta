@@ -934,10 +934,14 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 	// --- placement, on every building of five towns: at the main entrance, facing its street, on the roof
 	const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
 	const bad = [];
+	const blind = [];
 	let signs = 0;
 	let maxShare = 0;
+	let maxStreet = 0;
+	const inR = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 	for (const seed of seeds) {
 		const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+		const others = w.solids.filter(s => s.kind === "building");
 		for (const b of w.solids) {
 			if (b.kind !== "building") continue;
 			const t = b.buildingType ?? 1;
@@ -976,6 +980,17 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 			const gap = a0 >= d1 ? a0 - d1 : d0 - a1;
 			if (gap < BS.SIGN_GAP - 0.5) bad.push(`${seed}: ${b.tags} #${b.id}: ${gap.toFixed(1)} u from the doorway`);
 			else if (gap > BS.SIGN_GAP + 0.5) bad.push(`${seed}: ${b.tags} #${b.id}: ${gap.toFixed(1)} u off its door`);
+			// facing its street: straight out from the board, over nothing but the lot, a road
+			const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[side];
+			let street;
+			for (let k = 8; k <= 1200 && street === undefined; k += 8) {
+				const x = (n[0] < 0 ? q.x : n[0] > 0 ? q.x + q.w : q.x + q.w / 2) + n[0] * k;
+				const y = (n[1] < 0 ? q.y : n[1] > 0 ? q.y + q.h : q.y + q.h / 2) + n[1] * k;
+				if (others.some(o => o !== b && inR(o, x, y))) break;
+				if (w.roads.some(r => inR(r, x, y))) street = k;
+			}
+			if (street === undefined) blind.push(`${seed}: ${b.tags} #${b.id}`);
+			else maxStreet = Math.max(maxStreet, street);
 			// sized to the building: no giant sticker
 			maxShare = Math.max(maxShare, (a1 - a0) / (alongX ? b.w : b.h));
 			if (BS.hasHelipad(t)) {
@@ -991,6 +1006,11 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		bad.length === 0,
 		"every sign stands on its roof, on the entrance wall, beside the doorway (5 towns)",
 		bad.slice(0, 3).join("; ") || `${signs} signs`,
+	);
+	check(
+		blind.length === 0 && maxStreet <= 600,
+		"it faces its street: straight out from the board, past no other building, a road within 600 u",
+		blind.slice(0, 3).join("; ") || `${maxStreet} u at most`,
 	);
 	check(
 		maxShare <= 0.2,
