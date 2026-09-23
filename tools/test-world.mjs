@@ -1017,6 +1017,30 @@ section("q) a cidade gerada em fatias e a mesma: o servidor cede entre dois pred
 	checkEq(mapHashOf(sliced), mapHashOf(whole), "o mesmo mapHash (o que o cliente confere ao entrar)");
 }
 
+section("r) o objetivo 'Search a house' aponta para onde a busca responde (EDI-03, review of ea5cf71)");
+{
+	// the onboarding's arrow (client/onboarding/objectives.ts) must lead to a loot spot -- the search only answers
+	// within arm's reach of one (interactQuery.ts nearLootSpot) -- not to the middle of the house or its door
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const { OBJECTIVES, newMemory } = require(join(SRC, "client/onboarding/objectives.ts"));
+	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+	const house = world.solids.find(s => s.kind === "building" && s.tags === "house" && (s.lootSpots ?? []).length > 0);
+	house.lootItems = [{ kind: 0, id: 1, count: 1 }];
+	const loot = OBJECTIVES.find(o => o.id === "loot");
+	const refs = { world, player: { x: house.doorX, y: house.doorY } };
+	const t = loot.target(refs, newMemory());
+	check(
+		t !== undefined && house.lootSpots.some(q => q.x === t.x && q.y === t.y),
+		"da porta, a seta aponta para um ponto de busca da casa",
+		t ? `${t.x.toFixed(0)},${t.y.toFixed(0)}` : "nada",
+	);
+	check(
+		t !== undefined && IQ.buildingToSearch(world, t.x, t.y) === house,
+		"e ali a busca responde (dentro da casa, ao alcance do movel)",
+	);
+	check(!/door-side/.test(loot.hint), "o texto nao manda mais usar o prompt da porta", loot.hint);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

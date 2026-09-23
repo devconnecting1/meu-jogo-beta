@@ -135,6 +135,34 @@ function nearestSolid(refs: GameRefs, range: number, pick: (s: Solid) => boolean
 	return { x: best.x + best.w / 2, y: best.y + best.h / 2, kind: "place" };
 }
 
+/**
+ * Where to search: the loot spot nearest the survivor (EDI-03: in front of the fridge, the shelves, the gun rack --
+ * the search only answers within arm's reach of one, shared/sim/interactQuery.ts `nearLootSpot`), in a building that
+ * still holds loot. A building without spots is searched anywhere inside: its middle.
+ */
+function nearestLootSpot(refs: GameRefs, range: number): ObjectiveTarget | undefined {
+	const p = refs.player;
+	let bx = 0;
+	let by = 0;
+	let bestD = math.huge;
+	const consider = (x: number, y: number) => {
+		const d = (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y);
+		if (d < bestD) {
+			bestD = d;
+			bx = x;
+			by = y;
+		}
+	};
+	for (const s of querySolids(refs.world, p.x - range, p.y - range, p.x + range, p.y + range)) {
+		if (s.kind !== "building" || s.removed === true || (s.lootItems?.size() ?? 0) === 0) continue;
+		const spots = s.lootSpots;
+		if (spots === undefined || spots.size() === 0) consider(s.x + s.w / 2, s.y + s.h / 2);
+		else for (const q of spots) consider(q.x, q.y);
+	}
+	if (bestD === math.huge) return undefined;
+	return { x: bx, y: by, kind: "place" };
+}
+
 function nearestGroundItem(refs: GameRefs): ObjectiveTarget | undefined {
 	const p = refs.player;
 	let bx = 0;
@@ -261,7 +289,7 @@ export const OBJECTIVES: Array<Objective> = [
 	{
 		id: "loot",
 		title: "Search a house",
-		hint: "Step inside and use the door-side prompt to empty its shelves.",
+		hint: "Go in to the fridge, shelf or cabinet the arrow shows and press use there.",
 		begin(refs, mem): void {
 			mem.loot.clear();
 			mem.lootScan = 0;
@@ -271,7 +299,7 @@ export const OBJECTIVES: Array<Objective> = [
 			return mem.looted;
 		},
 		target(refs): ObjectiveTarget | undefined {
-			return nearestSolid(refs, 2600, s => s.kind === "building" && (s.lootItems?.size() ?? 0) > 0);
+			return nearestLootSpot(refs, 2600);
 		},
 	},
 	{
