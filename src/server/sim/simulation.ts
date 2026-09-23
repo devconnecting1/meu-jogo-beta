@@ -11,8 +11,11 @@
  *   4. replication, through `onTick`.
  *
  *   - fixed step of TICK_DT (1/SIM_HZ = 1/60 s), accumulated on the caller's Heartbeat delta;
- *   - at most MAX_CATCHUP_TICKS (2) ticks per call: beyond that the surplus time is DROPPED and counted
- *     (`droppedTicks`), so a slow heartbeat never spirals into a catch-up storm;
+ *   - at most MAX_CATCHUP_TICKS (2) ticks per call. What a late heartbeat could not run is carried as debt and
+ *     paid by the next heartbeats, up to MAX_BACKLOG_S; only debt beyond that is DROPPED and counted
+ *     (`droppedTicks`), so a slow heartbeat never spirals into a catch-up storm. The rule is
+ *     server/sim/heartbeat.ts, which says what carrying it buys every client's drawing and what it takes for the
+ *     input queues to afford it (`inputGrace`);
  *   - exactly one input command per player per tick, through the same `stepPlayer` the client predicts with
  *     (shared/sim/playerMove.ts), so there is no second implementation to drift.
  *
@@ -23,7 +26,7 @@
  * millisecond reading per tick for the §12.2 metrics.
  */
 import { isFiniteNumber } from "shared/net/codec";
-import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
+import { MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
 import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { PlayerState } from "shared/game/player";
@@ -33,6 +36,7 @@ import { InputCommand } from "shared/net/protocol";
 import { stepPlayer } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
 import { ServerBuild } from "./build";
+import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
@@ -63,8 +67,6 @@ const INTENT_QUEUE_MAX = 8;
 /** what an absent horde falls back to, so the queries never allocate a list per tick */
 const EMPTY_ZOMBIES: ReadonlyArray<ZombieState> = [];
 
-/** a single Heartbeat delta is clamped to this before it reaches the accumulator (Studio breakpoints, hitches) */
-const MAX_FRAME_S = 1;
 /** §12.2: ring of tick times used for the average and the p95 */
 const METRIC_SAMPLES = 300;
 
@@ -149,6 +151,12 @@ export class ServerSimulation {
 	readonly stats: SimulationStats = { ticks: 0, droppedTicks: 0, lateFrames: 0, lastCatchup: 0 };
 	/** called after every tick (replication, metrics); errors are the caller's to contain */
 	onTick?: (tick: number) => void;
+	/**
+	 * How many ticks further back than its declared view the survivor in `slot` draws zombie `z` (the mid ring's
+	 * extra delay, §4.3/§5.1), for the rewind of a shot (server/sim/combat.ts `viewExtraTicks`). The replication
+	 * layer knows who sees what in which ring, and sets it (server/net/replication.ts); unset, every body is near.
+	 */
+	zombieViewLag?: (slot: number, z: ZombieState) => number;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -228,7 +236,10 @@ export class ServerSimulation {
 	private readonly presence = new Map<number, Presence>();
 	/** ticks the world ran since the previous midnight (or since boot): what "half the day" is half of */
 	private dayTicks = 0;
-	private acc = 0;
+	/** the Heartbeat's debt (server/sim/heartbeat.ts): the one rule test:input drives too */
+	private readonly beat: TickAccumulator;
+	/** `restartWorld` committed a new town: the next `advance` runs one tick and forgets the rest of its delta */
+	private resetBeat = false;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
 	/** what the boot decided this server owns; a world that ends is rebuilt with the very same answers (MP-22) */
@@ -240,6 +251,7 @@ export class ServerSimulation {
 		const hz = options.simHz ?? SIM_HZ;
 		this.simHz = hz > 0 ? hz : SIM_HZ;
 		this.tickDt = 1 / this.simHz;
+		this.beat = new TickAccumulator(this.tickDt);
 		this.clock = options.clock ?? new WorldClock();
 		// §3.6: the world rolled into a new day. Whoever LIVED through it — alive now, alive in the world for at
 		// least half of it, and at the controls in the last minutes — gets +1 day of life, the day's coins and any
@@ -301,6 +313,10 @@ export class ServerSimulation {
 		this.world = world;
 		this.clock.restart();
 		this.adoptSystems(systems as TownSystems);
+		// the reset is committed: the old world's Heartbeat debt is not the new one's to repay, and neither is the
+		// time this reset is taking (generating the town, 100-250 ms), which the NEXT heartbeat's delta will carry
+		this.forgiveBacklog();
+		this.resetBeat = true;
 	}
 
 	/** the systems of one town become this simulation's (the boot's, or a new world's once all of them exist) */
@@ -371,7 +387,12 @@ export class ServerSimulation {
 		out.projectiles = projectiles;
 		const combat = new ServerCombat({
 			world,
-			targets: { zombies: () => horde.zombies, bosses: () => horde.bossRoster.list },
+			targets: {
+				zombies: () => horde.zombies,
+				bosses: () => horde.bossRoster.list,
+				// read when a shot RUNS, so the replication layer can set it after this town was built
+				viewExtraTicks: (slot, z) => this.zombieViewLag?.(slot, z) ?? 0,
+			},
 			progress,
 			simHz: this.simHz,
 			hooks: {
@@ -561,26 +582,51 @@ export class ServerSimulation {
 
 	/**
 	 * Accumulates `dt` (the Heartbeat delta) and runs whole ticks. Returns how many ran: normally 1, at most
-	 * MAX_CATCHUP_TICKS. Surplus time beyond that is dropped and counted — the world slows down instead of
-	 * entering a catch-up spiral (§3.1).
+	 * MAX_CATCHUP_TICKS. What is left over is debt for the next heartbeats, up to MAX_BACKLOG_S; beyond that it
+	 * is dropped and counted — the world slows down instead of entering a catch-up spiral (§3.1). The rule itself
+	 * is server/sim/heartbeat.ts, so that tools/test-input-buffer.mjs drives exactly this one.
 	 */
 	advance(dt: number): number {
 		if (!isFiniteNumber(dt) || dt <= 0) return 0;
-		this.acc += math.min(dt, MAX_FRAME_S);
-		let ran = 0;
-		while (this.acc >= this.tickDt && ran < MAX_CATCHUP_TICKS) {
-			this.acc -= this.tickDt;
-			this.step();
-			ran += 1;
+		if (this.resetBeat) {
+			// the first heartbeat after `restartWorld`: its delta is mostly the reset itself. One tick, and the rest is
+			// forgotten -- repaid, it would open the new world with a burst of double ticks off queues holding one command
+			this.resetBeat = false;
+			this.beat.forgive();
+			dt = math.min(dt, this.tickDt);
 		}
-		if (this.acc >= this.tickDt) {
-			const dropped = math.floor(this.acc / this.tickDt);
-			this.stats.droppedTicks += dropped;
-			this.stats.lateFrames += 1;
-			this.acc -= dropped * this.tickDt;
-		}
-		this.stats.lastCatchup = ran;
-		return ran;
+		const owed = this.beat.take(dt);
+		this.stats.droppedTicks = this.beat.droppedTicks;
+		this.stats.lateFrames = this.beat.lateFrames;
+		for (let i = 0; i < owed; i++) this.step();
+		this.stats.lastCatchup = owed;
+		return owed;
+	}
+
+	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */
+	backlogS(): number {
+		return this.beat.owed();
+	}
+
+	/**
+	 * How many commands past INPUT_BUFFER_MAX a survivor's queue may keep, `sinceBeatS` seconds after the last
+	 * Heartbeat (server/sim/heartbeat.ts `grace`): the ticks of a debt this server is REPAYING, which will each consume
+	 * one -- none for a debt it is not (a heartbeat under 30 Hz owes ticks it never runs). server/net/mpHost.ts passes
+	 * it to `ingestInput`.
+	 */
+	inputGrace(sinceBeatS: number): number {
+		// right after a world reset the lateness is the reset's own, which `advance` forgives: nothing to keep for
+		return this.resetBeat ? 0 : this.beat.grace(sinceBeatS);
+	}
+
+	/**
+	 * Forgets the Heartbeat debt. `restartWorld` calls it last (a hitch of the old world must not be repaid by the new
+	 * one), and the time the reset itself took, which shows up in the NEXT heartbeat's delta, is clipped by `advance`.
+	 * The ticks forgiven either way put `tick` behind `tick0Time + tick / SIM_HZ`; the clients re-anchor on it from
+	 * the TimePongs (client/net/clockSync.ts), and their buffers re-lock after the WorldReset (`netReset`).
+	 */
+	forgiveBacklog(): void {
+		this.beat.forgive();
 	}
 
 	/**

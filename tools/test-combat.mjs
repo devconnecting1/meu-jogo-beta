@@ -21,6 +21,10 @@
  *   c. lag compensation is fair AND bounded: the registration rate of shots that hit on the shooter's screen is
  *      measured at 0 / 50 / 150 ms of RTT (§11.3 F2 wants ≥ 95 % at 150 ms), the same shots are shown to MISS
  *      without the rewind, and a client that declares an ancient view is clamped to its measured ping (§2.3);
+ *   c''. the review of 2026-09-23 (#2, #3, #6), with a client streaming one Input a tick through the real queue:
+ *      an honest 150 ms client with ±15 ms of jitter is never clamped, one that jumps its view 6 ticks back for
+ *      each shot is clamped every time, a body drawn in the mid ring is judged where it was drawn, the measured
+ *      ping is slow to rise and quick to fall, and the melee margin covers what a walker does in a 140 ms view;
  *   d. XP, kills and levels only move when the SERVER decides: the assist share of §3.6, the boss participation
  *      rule, and `stripClientProgress` pinning every reported progress field to the trusted copy once
  *      MP_PHASE ≥ 2 — which is the §11.3 F2 acceptance line "o XP só vem do servidor";
@@ -324,7 +328,7 @@ const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
 const P = require(join(SRC, "shared/net/protocol.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
-const { ServerCombat } = require(join(SRC, "server/sim/combat.ts"));
+const { ServerCombat, PING_RISE, PING_FALL } = require(join(SRC, "server/sim/combat.ts"));
 const { biteRewindCapS, judgedTick, PositionHistory, rewindCapS } = require(join(SRC, "server/sim/history.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
 
@@ -573,8 +577,11 @@ function targetY(tickValue) {
 }
 
 /**
- * One measurement: a client at `rttMs` firing at what it SEES (the world INTERP_DEFAULT_S behind the server,
- * which is what §5.1 draws), with its command arriving half an RTT later.
+ * One measurement: a client at `rttMs` firing at what it SEES, with its command arriving half an RTT later. What
+ * it sees is its newest snapshot -- which left the server half an RTT ago -- held INTERP_DEFAULT_S further back
+ * (§5.1: the delay is the measured lateness plus the buffer, client/net/snapshotBuffer.ts). An earlier version
+ * of this test drew the world INTERP_DEFAULT_S behind the server's clock with no downstream trip in it, which
+ * is the extrapolating client tools/test-zombie-motion.mjs measured and replaced.
  *
  *   mode "fair"      — the client declares the view it really drew and the server measured its ping: §2.3
  *   mode "none"      — no compensation at all (the client declares the present): what F1 would have done
@@ -613,7 +620,7 @@ function measure(rttMs, mode) {
 		}
 		// the client pulls the trigger at its own rate, aiming at the body it is drawing right now
 		if (tick % 8 === 0) {
-			const view = tick - interpTicks;
+			const view = tick - owdTicks - interpTicks;
 			const cmd = aimCommand(sp, seq++, TARGET_X, targetY(view), 1);
 			const declared = mode === "none" ? tick + owdTicks : mode === "lagswitch" ? view - CFG.SIM_HZ : view;
 			// a packet can never be consumed in the tick that produced it, however fast the link is
@@ -633,6 +640,13 @@ function measure(rttMs, mode) {
 		check(
 			row.r.rate >= 0.95,
 			`≥ 95 % of the shots that hit on screen register at ${row.rtt} ms RTT (${(row.r.rate * 100).toFixed(1)} %)`,
+		);
+		// the ceiling exists for the dishonest view: the view an honest client really drew is never cut short.
+		// With the half-ping ceiling a 150 ms client lost 40 ms of compensation on every shot (10 u on this
+		// target, 30 u on a charging charger) -- inside a zombie's body here, which is why the rate alone missed it
+		check(
+			row.r.stats.rewindClamped === 0,
+			`an honest ${row.rtt} ms client's view is never clamped (${row.r.stats.rewindClamped} of ${row.r.fired})`,
 		);
 	}
 
@@ -669,12 +683,196 @@ function measure(rttMs, mode) {
 {
 	// the ceiling itself (§2.3 "Teto por jogador"), independent of any geometry
 	checkEq(rewindCapS(0, 0, 60, 0.3), 2 / 60, "with no ping and no interpolation the rewind is 2 ticks");
-	check(Math.abs(rewindCapS(0.15, 0.1, 60) - (0.075 + 0.1 + 2 / 60)) < 1e-9, "ping/2 + interpolation + 2 ticks");
+	check(Math.abs(rewindCapS(0.15, 0.1, 60) - (0.15 + 0.1 + 2 / 60)) < 1e-9, "ping + interpolation + 2 ticks");
 	checkEq(rewindCapS(2, 0.25, 60), CFG.REWIND_MAX_S, "and it never exceeds REWIND_MAX_S, whatever the ping");
 	check(biteRewindCapS(2, 0.25, 60) === CFG.FAIR_BITE_REWIND_MAX_S, "a bite gets the shorter FAIR_BITE ceiling");
 	checkEq(judgedTick(100, 400, 0.3, 60), 100, "a view from the FUTURE collapses to the present");
 	checkEq(judgedTick(100, Number.NaN, 0.3, 60), 100, "and so does a NaN");
 	checkEq(judgedTick(100, 0, 0.1, 60), 94, "an ancient view is clamped to the ceiling, not refused");
+}
+
+// ================================================================ c''. the review of 2026-09-23 (#2, #3)
+
+section("c''. the rewind judges each body where it was DRAWN, and a view cannot jump for one shot (review #2, #3)");
+
+/**
+ * A stream client, closer to the real one than `measure`: one Input a tick through the real queue
+ * (players.ts `acceptInput` / `takeCommand`), each carrying the view of the frame that built it, delivered
+ * `rttMs/2 ± jitterMs` later, and a shot every 8 ticks at the body it draws. The server hears a ping once a second
+ * (± `pingNoiseMs`).
+ *
+ *   mid    the shooter draws the target in its MID ring: a near interval further back (client/net/snapshotBuffer.ts
+ *          `extra`), which the server learns from the replication layer (`viewExtraTicks`, here fixed)
+ *   jump   on a shot, the client declares a view `jump` ticks OLDER than the one it drew -- inside the ping ceiling --
+ *          and aims where the target was then: the "rewind to wherever it hits" cheat
+ */
+function stream({
+	rttMs,
+	jitterMs = 0,
+	pingNoiseMs = 0,
+	mid = false,
+	serverKnowsRing = true,
+	jump = 0,
+	shots = 150,
+	seed = 11,
+	speed = TARGET_SPEED,
+}) {
+	// the same zig-zag as `targetY`, at `speed`
+	const targetY = tickValue => {
+		const t = tickValue * TICK_DT;
+		const period = (4 * TARGET_AMP) / speed;
+		const ph = t / period - Math.floor(t / period);
+		const v = ph < 0.25 ? ph * 4 : ph < 0.75 ? 2 - ph * 4 : ph * 4 - 4;
+		return SHOOTER_Y + TARGET_AMP * v;
+	};
+	let s = seed;
+	const rand = () => {
+		s = (s * 1103515245 + 12345) & 0x7fffffff;
+		return s / 0x7fffffff;
+	};
+	const owdTicks = (rttMs / 2000) * CFG.SIM_HZ;
+	const interpTicks = CFG.INTERP_DEFAULT_S * CFG.SIM_HZ;
+	// (an older src has no midViewExtraTicks: it drew the mid ring the same near interval further back)
+	const extra = mid ? (CFG.midViewExtraTicks?.(CFG.SIM_HZ) ?? 3) : 0;
+	const fx = newFixture();
+	if (mid && serverKnowsRing) fx.combat.targets.viewExtraTicks = () => extra;
+	const sp = makePlayer(fx, 0, SHOOTER_X, SHOOTER_Y, 15); // M10: 800 u, 3/30 s
+	const z = tough(createZombie(1, TARGET_X, targetY(0), 1));
+	fx.zombies.push(z);
+	const inbox = [];
+	let fired = 0;
+	let registered = 0;
+	let seq = 1;
+	for (let tick = 1; fired < shots && tick < shots * 40; tick++) {
+		z.y = targetY(tick);
+		fx.combat.afterWorld(tick);
+		if (tick % CFG.SIM_HZ === 1) {
+			fx.combat.setPing(0, (rttMs + (rand() * 2 - 1) * pingNoiseMs) / 1000);
+		}
+		// what landed since the last tick, in the order it landed
+		inbox.sort((a, b) => a.at - b.at);
+		while (inbox.length > 0 && inbox[0].at <= tick) {
+			const pkt = inbox.shift();
+			PL.acceptInput(sp, pkt.packet, tick * TICK_DT);
+		}
+		const before = fx.shots.length;
+		tickPlayer(fx, sp, PL.takeCommand(sp), tick);
+		if (fx.shots.length > before) {
+			fired++;
+			if (fx.shots[fx.shots.length - 1].hits.some(h => h.hit === P.HitKind.Zombie)) registered++;
+		}
+		// the client's frame: it draws `view` (the target `extra` further back), and says so
+		const view = tick - owdTicks - interpTicks;
+		const shoot = tick % 8 === 0;
+		const declared = shoot ? view - jump : view;
+		const cmd = shoot
+			? aimCommand(sp, seq++, TARGET_X, targetY(view - jump - extra), 1)
+			: P.makeCommand(seq++, 0, 0, 0, 0, 0);
+		const packet = {
+			viewTick: wrapU16(declared),
+			viewFrac: Math.max(0, Math.min(255, Math.round((declared - Math.floor(declared)) * 256))),
+			cmds: [cmd],
+		};
+		const delay = owdTicks + ((rand() * 2 - 1) * jitterMs * CFG.SIM_HZ) / 1000;
+		inbox.push({ at: tick + Math.max(1, delay), packet });
+	}
+	return { fired, registered, rate: fired > 0 ? registered / fired : 0, stats: fx.combat.statsOf(0) };
+}
+
+{
+	const pct = r => `${(r.rate * 100).toFixed(1)} %`;
+	// #3: an honest client on a bad link -- 150 ms, ±15 ms of jitter, a noisy ping -- is never clamped
+	const honest = stream({ rttMs: 150, jitterMs: 15, pingNoiseMs: 20 });
+	info(
+		`honest, 150 ms ±15 ms: ${honest.registered}/${honest.fired} (${pct(honest)}), clamped ${honest.stats.rewindClamped}`,
+	);
+	check(
+		honest.stats.rewindClamped === 0,
+		`an honest jittery client's view is never clamped (${honest.stats.rewindClamped} of ${honest.fired})`,
+	);
+	check(honest.rate >= 0.95, `and ≥ 95 % of what it hits on screen registers (${pct(honest)})`);
+
+	// #3: the same client declaring a view 6 ticks older on every shot -- inside the 150 ms ceiling (17 ticks) --
+	// and aiming where the target was then. The ceiling alone let it through: 097f484 judged every one of them there
+	const jumpy = stream({ rttMs: 150, jitterMs: 15, pingNoiseMs: 20, jump: 6 });
+	info(
+		`the same client jumping its view 6 ticks back on each shot: ${pct(jumpy)}, clamped ${jumpy.stats.rewindClamped}`,
+	);
+	check(
+		jumpy.stats.rewindClamped >= jumpy.fired * 0.9,
+		`a view that jumps inside the ceiling for a shot is clamped to the running one (${jumpy.stats.rewindClamped} of ${jumpy.fired})`,
+	);
+	check(
+		jumpy.rate <= honest.rate,
+		`and aiming at the past buys nothing (${pct(jumpy)} against the honest ${pct(honest)})`,
+	);
+
+	// #2: the shooter draws the target in its mid ring, 3 ticks further back than its declared view. A fast body
+	// (450 u/s: 22 u in those 3 ticks, more than a walker's radius) so that judging it at the wrong instant misses
+	const FAST = 450;
+	const mid = stream({ rttMs: 150, jitterMs: 15, pingNoiseMs: 20, mid: true, speed: FAST });
+	info(
+		`honest, target in the mid ring: ${mid.registered}/${mid.fired} (${pct(mid)}), clamped ${mid.stats.rewindClamped}`,
+	);
+	check(mid.rate >= 0.95, `a body drawn in the mid ring is judged where it was drawn: ≥ 95 % register (${pct(mid)})`);
+	check(mid.stats.rewindClamped === 0, `and its shooter is not clamped for it (${mid.stats.rewindClamped})`);
+	// the case has teeth: with the server blind to the ring (what 097f484 did), the same aim is judged 3 ticks late
+	const blind = stream({ rttMs: 150, jitterMs: 15, pingNoiseMs: 20, mid: true, serverKnowsRing: false, speed: FAST });
+	info(`the same shots with the server judging the mid ring at the declared view: ${pct(blind)}`);
+	check(blind.rate < 0.5, `judged at the declared view instead, most of them miss (${pct(blind)})`);
+}
+
+{
+	/*
+	 * #6: melee is judged in the PRESENT with a margin of reach. A walker backing off at 90 u/s is drawn ~225 ms old
+	 * by a 140 ms client (a round trip plus the buffer): the blade that meets it on screen at the edge of its reach
+	 * swings at a body 20 u further out on the server. The fixed 12 u margin (a walker in 130 ms) missed it; the
+	 * margin now follows the measured age of the view, 12-24 u.
+	 */
+	const { meleeReach } = require(join(SRC, "shared/data/weapons.ts"));
+	const { zombieRadius } = require(join(SRC, "shared/game/entities.ts"));
+	const swingAt = pingS => {
+		const fx = newFixture();
+		const sp = makePlayer(fx, 0, 1000, 1000, 0); // the Dagger
+		fx.combat.setPing(0, pingS);
+		const z = tough(createZombie(1, 1000, 1000, 1), 1000);
+		// on screen: at the edge of the blade's reach; on the server, 225 ms of walking further away
+		z.x = 1000 + meleeReach(WEAPONS[0]) + zombieRadius(z) - 2 + 0.225 * 90;
+		fx.zombies.push(z);
+		for (let tick = 1; tick <= 40; tick++) {
+			fx.combat.afterWorld(tick);
+			sp.viewTick = wrapU16(tick);
+			tickPlayer(fx, sp, aimCommand(sp, tick, z.x, z.y, tick === 1 ? 1 : 0, tick <= 3), tick);
+		}
+		return z.hp < 1000;
+	};
+	check(
+		swingAt(0.14),
+		"a 140 ms client's blade meets the walker it saw at the edge of its reach, 20 u further out now",
+	);
+	check(!swingAt(0), "…and a client with no latency is not handed that reach: the body really is out of it");
+}
+
+{
+	// #3: the measured ping is slow to rise and quick to fall
+	const fx = newFixture();
+	fx.combat.setPing(0, 0.05);
+	fx.combat.setPing(0, 0.3); // one second of a throttled link
+	const spiked = fx.combat.pingOf(0);
+	check(
+		Math.abs(spiked - (0.05 + 0.25 * PING_RISE)) < 1e-9,
+		`one high sample moves the ceiling ${PING_RISE * 100} % of the way (${(spiked * 1000).toFixed(0)} ms, not 300)`,
+	);
+	for (let i = 0; i < 40; i++) fx.combat.setPing(0, 0.3);
+	check(
+		fx.combat.pingOf(0) > 0.29,
+		`a ping that stays high is followed within ~40 s (${(fx.combat.pingOf(0) * 1000).toFixed(0)} ms)`,
+	);
+	fx.combat.setPing(0, 0.05);
+	check(
+		fx.combat.pingOf(0) < 0.3 - 0.25 * PING_FALL + 0.01,
+		`one lower sample takes ${PING_FALL * 100} % of the way down at once (${(fx.combat.pingOf(0) * 1000).toFixed(0)} ms)`,
+	);
 }
 
 // ================================================================ c'. the history ring itself

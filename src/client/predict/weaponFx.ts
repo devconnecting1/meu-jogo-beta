@@ -177,6 +177,12 @@ export class WeaponFx {
 	 * Where the predicted line stops. Reads the local mirror of solids, zombies and bosses purely to pick a
 	 * pixel: a wrong guess costs one badly drawn line for 0.2 s, and the confirmation puts the impact in the
 	 * right place. This is why nothing here writes.
+	 *
+	 * The zombies are the DRAWN ones (client/view/actorsView.ts mirrors the interpolated horde into refs.zombies),
+	 * each at the instant it is drawn: the buffer's render time, or a near interval before it for a body of the mid
+	 * ring. That is the instant the server now judges each one at too (server/sim/combat.ts `prepareTargets`
+	 * rewinds a mid-ring target by the same extra delay), so the line stops where the server's ray will. Judged at
+	 * the render time instead, a mid-ring body stood 4.5-10 u ahead of this line (the review of 2026-09-23, #2).
 	 */
 	private traceLocal(refs: GameRefs, x0: number, y0: number, ang: number, range: number): { x: number; y: number } {
 		const dx = math.cos(ang);
