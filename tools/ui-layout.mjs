@@ -179,7 +179,7 @@ export function textPx(label, rect) {
  *   { kind: "rect", x, y, w, h, color: [r,g,b], alpha, radius, clip }
  *   { kind: "stroke", ..., thickness }
  *   { kind: "image", x, y, w, h, image, slice: [l, t, r, b], sliceScale, tint, alpha, clip }
- *   { kind: "text", x, y, w, h, text, color, alpha, px, bold, mono, alignX, alignY, clip }
+ *   { kind: "text", x, y, w, h, text, color, alpha, px, bold, mono, alignX, alignY, wrapped, clip }
  */
 export function paintList(root) {
 	const out = [];
@@ -241,6 +241,7 @@ export function paintList(root) {
 						.includes("mono"),
 					alignX: n.TextXAlignment?.Name ?? "Center",
 					alignY: n.TextYAlignment?.Name ?? "Center",
+					wrapped: n.TextWrapped === true,
 					clip,
 				});
 			}

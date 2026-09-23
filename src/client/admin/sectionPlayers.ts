@@ -252,7 +252,7 @@ function statusColor(status: PlayerStatus): Color3 {
 export const PLAYER_COLUMNS: Array<TableColumn> = [
 	{ key: "name", header: "Name", flex: 1, sortable: true },
 	{ key: "level", header: "Lv", width: 36, numeric: true, sortable: true, descendingFirst: true },
-	{ key: "day", header: "Day", width: 44, numeric: true, sortable: true, descendingFirst: true },
+	{ key: "day", header: "Day", width: 48, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "hp", header: "HP", width: 64, numeric: true, sortable: true },
 	{ key: "ping", header: "Ping", width: 52, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "status", header: "Status", width: 66, sortable: true },
