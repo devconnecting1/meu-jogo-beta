@@ -24,6 +24,8 @@ import { WeaponDef, WEAPONS } from "shared/data/weapons";
 import { angleDiff, clamp } from "shared/engine/vec2";
 import { drawOutfitHead, drawOutfitTorso, outfitPalette } from "./cosmeticsView";
 import { part, SIDES } from "./drawKit";
+import { columnOf, drawSurvivorCell, drawWeaponCell, survivorArtLive } from "./charArt";
+import { Grip, HANDLE, downedRow, gripOf, gunLength, survivorRow, swingRow, weaponRow } from "./charSheets";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
@@ -137,13 +139,34 @@ function hand(f: number, l: number): void {
 }
 
 /**
+ * The pixel art's pose this frame (module scratch): the weapons-sheet row and where the weapon's centre is in the
+ * body frame, its heading off the aim, and the body's grip -- or, mid-swing, the sweep angle the body cell is
+ * picked by (the hands are baked into it, charSheets.GRIP_HANDS / SWINGS).
+ */
+const WEAPON = { row: 0, f: 0, l: 0, rel: 0, grip: 0, swinging: false };
+
+function holdWeapon(row: number, f: number, l: number, rel: number, grip: number, swinging: boolean): void {
+	WEAPON.row = row;
+	WEAPON.f = f;
+	WEAPON.l = l;
+	WEAPON.rel = rel;
+	WEAPON.grip = grip;
+	WEAPON.swinging = swinging;
+}
+
+/**
  * A survivor standing or crawling, weapon in hand, with their drop shadow.
  * `trail` is this survivor's melee-sweep memory and is updated in place.
+ *
+ * Two looks, one pose: the pixel art of client/view/charArt.ts once its sheets are uploaded (ART-09), the flat
+ * drawing otherwise (ART-01: without ids nothing changes, call for call). Both read the same hands, the same weapon
+ * placement and the same sweep below, so the two can never disagree on where a blade is.
  */
 export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail: SwingTrail): void {
+	const art = survivorArtLive();
 	if (look.downed) {
 		trail.drawn = false;
-		drawDowned(r, cam, look);
+		drawDowned(r, cam, look, art);
 		return;
 	}
 	const a = look.angle;
@@ -156,19 +179,18 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	}
 	const flash = clamp(look.flash, 0, 1);
 	const pal = outfitPalette(look.outfit);
-	// poison wins over any outfit: it is a gameplay signal (LEG-02), the coat is only a cosmetic
-	let body = look.poisoned ? COLORS.zombie5 : pal.body;
-	if (flash > 0) body = body.Lerp(pal.flashTo, 0.85 * flash);
-	// feet
-	const step = math.sin(look.feetPhase) * 8 * look.feetAmp;
-	for (const side of SIDES) {
-		part(r, cam, look.x, look.y, a, step * side, side * 9, {
-			w: 12,
-			h: 9,
-			color: pal.boots,
-			cornerRadius: 3,
-			zIndex: look.z - 1,
-		});
+	if (!art) {
+		// feet
+		const step = math.sin(look.feetPhase) * 8 * look.feetAmp;
+		for (const side of SIDES) {
+			part(r, cam, look.x, look.y, a, step * side, side * 9, {
+				w: 12,
+				h: 9,
+				color: pal.boots,
+				cornerRadius: 3,
+				zIndex: look.z - 1,
+			});
+		}
 	}
 	// weapon + hands
 	const w = look.weapon;
@@ -210,54 +232,75 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 					{ h: 8, color: WHITE, alpha: al, zIndex: look.z },
 				);
 			}
-			r.drawSegment(
-				cam,
-				look.x + math.cos(sa) * 14,
-				look.y + math.sin(sa) * 14,
-				look.x + math.cos(sa) * reach,
-				look.y + math.sin(sa) * reach,
-				{ h: 6, color: COLORS.blade, stroke: COLORS.weapon, strokeThickness: 1, zIndex: look.z },
-			);
+			if (art) {
+				// the blade from 14 u out to its reach, turned `rel` off the aim (the chainsaw's bar shakes a texel)
+				const mid = (14 + reach) / 2;
+				const shake = w.id === CHAINSAW_ID && math.sin(look.clock * 90) > 0 ? 4 : 0;
+				const f = mid * math.cos(rel);
+				const l = mid * math.sin(rel) + shake;
+				holdWeapon(weaponRow(w.id, w.kind, false), f, l, rel, Grip.Idle, true);
+			} else {
+				r.drawSegment(
+					cam,
+					look.x + math.cos(sa) * 14,
+					look.y + math.sin(sa) * 14,
+					look.x + math.cos(sa) * reach,
+					look.y + math.sin(sa) * reach,
+					{ h: 6, color: COLORS.blade, stroke: COLORS.weapon, strokeThickness: 1, zIndex: look.z },
+				);
+			}
 			hand(16 * math.cos(sa - a), 16 * math.sin(sa - a));
 			hand(10, -14);
 		} else {
 			// idle: blade held low in the right hand, pointing forward-out
-			const ha = a + 0.5;
-			const hx = look.x + math.cos(a) * 12 - math.sin(a) * 14;
-			const hy = look.y + math.sin(a) * 12 + math.cos(a) * 14;
 			const len = math.max(18, reach * 0.55);
-			r.drawSegment(cam, hx, hy, hx + math.cos(ha) * len, hy + math.sin(ha) * len, {
-				h: 5,
-				color: COLORS.blade,
-				stroke: COLORS.weapon,
-				strokeThickness: 1,
-				zIndex: look.z,
-			});
-			hand(12, 14);
+			if (art) {
+				// the hand on the middle of the handle, the blade out from it
+				const out = len * 0.5 - HANDLE;
+				const f = IDLE_HAND_F + math.cos(IDLE_TILT) * out;
+				const l = IDLE_HAND_L + math.sin(IDLE_TILT) * out;
+				holdWeapon(weaponRow(w.id, w.kind, true), f, l, IDLE_TILT, Grip.Idle, false);
+			} else {
+				const ha = a + IDLE_TILT;
+				const hx = look.x + math.cos(a) * IDLE_HAND_F - math.sin(a) * IDLE_HAND_L;
+				const hy = look.y + math.sin(a) * IDLE_HAND_F + math.cos(a) * IDLE_HAND_L;
+				r.drawSegment(cam, hx, hy, hx + math.cos(ha) * len, hy + math.sin(ha) * len, {
+					h: 5,
+					color: COLORS.blade,
+					stroke: COLORS.weapon,
+					strokeThickness: 1,
+					zIndex: look.z,
+				});
+			}
+			hand(IDLE_HAND_F, IDLE_HAND_L);
 			hand(10, -14);
 		}
 	} else if (w.kind === WeaponKind.Bow) {
-		part(r, cam, look.x, look.y, a, 26, 0, {
-			w: 6,
-			h: 44,
-			color: COLORS.arrow.Lerp(BLACK, 0.3),
-			cornerRadius: 3,
-			zIndex: look.z,
-		});
+		if (art) {
+			holdWeapon(weaponRow(w.id, w.kind, false), 26, 0, 0, Grip.Bow, false);
+		} else {
+			part(r, cam, look.x, look.y, a, 26, 0, {
+				w: 6,
+				h: 44,
+				color: COLORS.arrow.Lerp(BLACK, 0.3),
+				cornerRadius: 3,
+				zIndex: look.z,
+			});
+		}
 		hand(24, 0);
 		hand(10, 8);
 	} else {
-		let len = 42;
-		if (w.kind === WeaponKind.Pistol) len = 22;
-		else if (w.kind === WeaponKind.Shotgun) len = 40;
-		else if (w.kind === WeaponKind.MG) len = 50;
-		else if (w.kind === WeaponKind.Sniper) len = 56;
-		part(r, cam, look.x, look.y, a, 12 + len / 2, 3, {
-			w: len,
-			h: w.kind === WeaponKind.Pistol ? 6 : 7,
-			color: COLORS.weapon,
-			zIndex: look.z,
-		});
+		const len = gunLength(w.kind);
+		if (art) {
+			holdWeapon(weaponRow(w.id, w.kind, false), 12 + len / 2, 3, 0, gripOf(w.kind), false);
+		} else {
+			part(r, cam, look.x, look.y, a, 12 + len / 2, 3, {
+				w: len,
+				h: w.kind === WeaponKind.Pistol ? 6 : 7,
+				color: COLORS.weapon,
+				zIndex: look.z,
+			});
+		}
 		if (w.kind === WeaponKind.Pistol) {
 			hand(18, 6);
 			hand(18, -2);
@@ -266,6 +309,13 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			hand(12 + len * 0.6, 3);
 		}
 	}
+	if (art) {
+		drawStandingArt(r, cam, look, flash, pal.flashTo);
+		return;
+	}
+	// poison wins over any outfit: it is a gameplay signal (LEG-02), the coat is only a cosmetic
+	let body = look.poisoned ? COLORS.zombie5 : pal.body;
+	if (flash > 0) body = body.Lerp(pal.flashTo, 0.85 * flash);
 	// body (shoulders across the heading); a hit always shows as the thick red outline, whatever the coat
 	part(r, cam, look.x, look.y, a, 0, 0, {
 		w: 24,
@@ -291,6 +341,49 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	drawOutfitHead(r, cam, look.x, look.y, a, look.z, look.outfit);
 }
 
+/** the idle melee hold: the hand beside the hip, the blade turned out this far from the aim */
+const IDLE_HAND_F = 12;
+const IDLE_HAND_L = 14;
+const IDLE_TILT = 0.5;
+/**
+ * How much of the poison colour veils a poisoned survivor's body in the pixel art, and how far a hit's flash covers
+ * it at its peak: the flat drawing turned only the torso, the art tints the whole silhouette, so less of it keeps
+ * the head, the hands and the outfit readable under the colour.
+ */
+const POISON_VEIL = 0.5;
+const FLASH_FILL = 0.6;
+
+/**
+ * The pixel-art survivor (ART-09), from the weapon and the grip the pose above decided: the weapon (z), then the
+ * whole body -- boots, torso, what the outfit carries, both arms with the hands on that grip, the head or hat -- as
+ * one cell (z + 1), the poison veil (z + 2), and a hit's flash and red outline (z + 3). The weapon is snapped to the
+ * body's texel grid (charArt.snapped).
+ */
+function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: number, flashTo: Color3): void {
+	const a = look.angle;
+	const x = look.x;
+	const y = look.y;
+	const z = look.z;
+	const c = math.cos(a);
+	const s = math.sin(a);
+	const col = columnOf(cam, a);
+	const wf = WEAPON.f;
+	const wl = WEAPON.l;
+	drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
+	const outfit = look.outfit;
+	const row = WEAPON.swinging
+		? swingRow(outfit, WEAPON.rel)
+		: survivorRow(outfit, WEAPON.grip, math.sin(look.feetPhase) * look.feetAmp);
+	drawSurvivorCell(r, cam, outfit, 0, row, col, x, y, z + 1, 1, WHITE);
+	// poison wins over any outfit (LEG-02): a veil of the poison colour over the whole body
+	if (look.poisoned) drawSurvivorCell(r, cam, outfit, 1, row, col, x, y, z + 2, POISON_VEIL, COLORS.zombie5);
+	if (flash > 0) {
+		// a hit: the body towards the flash colour (red; white on Santa's red coat) and the thick red outline
+		drawSurvivorCell(r, cam, outfit, 1, row, col, x, y, z + 3, FLASH_FILL * flash, flashTo);
+		drawSurvivorCell(r, cam, outfit, 2, row, col, x, y, z + 3, 1, COLORS.uiRed);
+	}
+}
+
 /**
  * Downed (MP-03): flat on the ground, dragging themselves forward at 20% speed, both hands busy, so no
  * weapon. The silhouette is the standing one turned 90°, long along the heading instead of wide across
@@ -299,11 +392,8 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
  * is already on the floor. The outfit keeps its colours on the torso and the head (MON-04: you can still tell
  * WHO is down), under the same red tint and outline.
  */
-function drawDowned(r: Renderer, cam: Camera, look: SurvivorLook): void {
+function drawDowned(r: Renderer, cam: Camera, look: SurvivorLook, art: boolean): void {
 	const a = look.angle;
-	const pal = outfitPalette(look.outfit);
-	const body = pal.body.Lerp(COLORS.uiRed, 0.35);
-	const dark = COLORS.playerDark.Lerp(BLACK, 0.2);
 	part(r, cam, look.x + look.shadowX * 0.4, look.y + look.shadowY * 0.4, a, 0, 0, {
 		w: 48,
 		h: 28,
@@ -312,6 +402,16 @@ function drawDowned(r: Renderer, cam: Camera, look: SurvivorLook): void {
 		cornerRadius: 14,
 		zIndex: Z.actorShadow,
 	});
+	if (art) {
+		// one baked cell: flat on the belly, arms pulling, the survivor's-blood outline (ART-09, LEG-02)
+		const drag = math.sin(look.feetPhase) * math.max(look.feetAmp, 0.25);
+		const row = downedRow(look.outfit, drag);
+		drawSurvivorCell(r, cam, look.outfit, 0, row, columnOf(cam, a), look.x, look.y, look.z + 2, 1, WHITE);
+		return;
+	}
+	const pal = outfitPalette(look.outfit);
+	const body = pal.body.Lerp(COLORS.uiRed, 0.35);
+	const dark = COLORS.playerDark.Lerp(BLACK, 0.2);
 	// legs trailing behind and arms pulling ahead, out of phase: a crawl, not a walk
 	const drag = math.sin(look.feetPhase) * 5 * math.max(look.feetAmp, 0.25);
 	for (const side of SIDES) {

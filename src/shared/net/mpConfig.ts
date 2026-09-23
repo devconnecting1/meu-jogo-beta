@@ -27,8 +27,12 @@ export const MP_PHASE = 2 as number;
  * It is ONE switch on purpose: a report may only stop carrying the inventory when every road that fills it
  * (pickups, loot, crafting, a refunded build) runs on the server. Raise it above MP_PHASE to roll back to the
  * report-driven backpack.
+ *
+ * 2 since the QA sweep's NET-1..6 (docs/MULTIPLAYER.md §4.8): at 3, a weapon switch, a meal, the armour and the
+ * skills reached the server only in a save report, the report could write any backpack at all, and a construction
+ * existed only on the screen of whoever built it. tools/test-items.mjs G4 pins it.
  */
-export const WORLD_SERVER_PHASE = 3 as number;
+export const WORLD_SERVER_PHASE = 2 as number;
 
 // ---------------------------------------------------------------- frequencies (§0.1, §3.1, §3.4)
 
@@ -265,7 +269,8 @@ export const REWIND_MAX_S = 0.3;
 /**
  * A target the shooter draws in the MID ring is drawn that much further back (client/net/snapshotBuffer.ts, the
  * track's `extra`: one near interval, 3 ticks at 60 Hz), so the server rewinds it that much further too -- and
- * lets its ceiling reach this much further for it alone (§2.3; the review of 2026-09-23, #2).
+ * lets its ceiling reach as much further for it alone, this at most (§2.3; the review of 2026-09-23, #2): a body
+ * still easing into the mid ring gets the part of it that it is drawn back (server/sim/combat.ts `prepareTargets`).
  */
 export const MID_REWIND_EXTRA_S = 0.05;
 /**

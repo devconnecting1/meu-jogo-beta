@@ -42,8 +42,11 @@ import {
 	spawnGroundItem,
 	WorldData,
 	buildingAt,
+	isBlocking,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
+import { creditTaken } from "../save/achievements";
+import { segmentClear } from "shared/game/physics";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -70,7 +73,8 @@ export interface SearchResult {
 
 /** why a pickup did not happen; `ok` carries what went into the backpack */
 export type PickupResult =
-	{ ok: true; kind: number; itemId: number; count: number } | { ok: false; why: "none" | "range" | "taken" };
+	| { ok: true; kind: number; itemId: number; count: number }
+	| { ok: false; why: "none" | "range" | "blocked" | "taken" };
 
 export interface ServerItemsOptions {
 	world: WorldData;
@@ -220,8 +224,17 @@ export class ServerItems {
 		const dx = item.x - x;
 		const dy = item.y - y;
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
+		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall. Not the
+		// solid the item rests INSIDE: a drop slides with no wall collision, and ~28 % of a zombie's drops at a base wall
+		// end up inside it -- blocked by its own wall it could never be picked up, and as E's first target it hid the
+		// door beside it for good (re-review of f8ccaf0)
+		const blocks = (o: Solid): boolean =>
+			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
+		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
+		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
+		creditTaken(save, item.kind, item.itemId, item.count);
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -242,6 +255,7 @@ export class ServerItems {
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
 		for (const drop of loot) {
 			addItem(save, drop.kind, drop.id, drop.count);
+			creditTaken(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
@@ -249,6 +263,7 @@ export class ServerItems {
 		const extra = thiefFind(save, b.buildingType ?? 0);
 		if (extra !== undefined) {
 			addItem(save, extra.kind, extra.id, extra.count);
+			creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is

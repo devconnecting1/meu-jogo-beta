@@ -1,5 +1,5 @@
 /*
- * Everything drawn OVER an ally instead of in the world: the `Nameplate` pill (name + level), a thin HP
+ * Everything drawn OVER an ally instead of in the world: the `Nameplate` (level, name, handle, title), a thin HP
  * bar while they are hurt and, while they are down, the revive ring and the bleed-out countdown.
  *
  * Why it is not drawn with the world Renderer: the night light map (`darkLayer`, ZIndex 80) covers every
@@ -130,12 +130,13 @@ export class AllyPlate {
 		count.Parent = track;
 		track.Parent = host;
 
-		// the pill is the same component the local survivor uses, so allies read exactly like you do. The roster
+		// the plate is the same component the local survivor uses, so allies read like you do -- in full: their plate
+		// keeps the "@handle" yours leaves out, and it wins where it overlaps yours (client/ui/nameplate.ts). The roster
 		// (PlayerJoined) is the source of the name; the Player object only adds the "@handle", and an ally who
 		// already left Players (or a snapshot replayed offline) still gets a plate.
 		const player = Players.GetPlayerByUserId(rp.userId);
 		const who = player !== undefined ? profileOf(player) : { displayName: rp.displayName, name: rp.displayName };
-		this.nameplate = new Nameplate(host, 2, who);
+		this.nameplate = new Nameplate(host, 2, who, { world: true });
 
 		onLayoutChange(host, () => {
 			const s = uiScale();

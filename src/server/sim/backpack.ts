@@ -40,7 +40,7 @@ import {
 } from "shared/net/mpConfig";
 import { InputCommand, IntentKind, IntentMessage } from "shared/net/protocol";
 import { addItem } from "shared/sim/inventory";
-import { ownsWeapon, pendingPacks, PlayerSaveData } from "shared/game/save";
+import { ownsEquip, ownsWeapon, pendingPacks, PlayerSaveData } from "shared/game/save";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { ServerPlayer } from "./players";
 
@@ -81,24 +81,28 @@ export const SERVER_BACKPACK_FIELDS: ReadonlyArray<string> = [
 	"packsOpened",
 ];
 
-function sameArray(a: Array<number>, b: Array<number>): boolean {
-	if (a.size() !== b.size()) return false;
-	for (let i = 0; i < a.size(); i++) {
-		if (a[i] !== b[i]) return false;
-	}
-	return true;
-}
-
 function copyArray(src: Array<number>): Array<number> {
 	const out = new Array<number>();
 	for (const v of src) out.push(v);
 	return out;
 }
 
+/** is any count in `mine` above the trusted one? */
+function raises(mine: Array<number>, trusted: Array<number>): boolean {
+	for (let i = 0; i < mine.size(); i++) {
+		if ((mine[i] ?? 0) > (trusted[i] ?? 0)) return true;
+	}
+	return false;
+}
+
 /**
  * NET-5: overwrites every backpack field of a sanitized client report with the trusted copy, and answers whether the
- * report had tried to move any of them. With the backpack the server's, a report carrying a different one is stale,
- * not suspicious — corrected in silence (§9.2 level 0); the answer is only a number for the admin panel (§9.3).
+ * report CLAIMED more than the server holds -- a count or a round above the server's, a skill or a point it does not
+ * have, or something worn that it does not own. With the backpack the server's, a report carrying a different one
+ * is stale, not suspicious — corrected in silence (§9.2 level 0), and one that is merely behind (the rounds of the
+ * last reload, a can eaten a moment ago) is what an honest client sends all the time, so it is not counted either
+ * (review of 5967a18, #10). The answer is only a number for the admin panel (§9.3). `packsOpened` never counts:
+ * the report's is already clamped to what was bought, and the client opens its packs ahead of the server.
  *
  * WIRING (server/main.server.ts `processReport`), next to its sibling:
  *
@@ -116,34 +120,31 @@ export function stripClientBackpack(prev: PlayerSaveData, upd: PlayerSaveData): 
 
 /** the pin itself, whatever the phase (tools/ call it directly); true when `upd` had tried to move a field */
 export function pinBackpack(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
-	let changed = false;
-	const arrays: Array<[Array<number>, Array<number>]> = [
-		[upd.invenWeapon, prev.invenWeapon],
-		[upd.invenEquip, prev.invenEquip],
-		[upd.invenUse, prev.invenUse],
-		[upd.invenEtc, prev.invenEtc],
-		[upd.skillLevels, prev.skillLevels],
-		[upd.packsOpened, prev.packsOpened],
-	];
-	for (const [mine, trusted] of arrays) {
-		if (!sameArray(mine, trusted)) changed = true;
-	}
-	if (
-		upd.ammoNormal !== prev.ammoNormal ||
-		upd.ammoShotgun !== prev.ammoShotgun ||
-		upd.ammoMachinegun !== prev.ammoMachinegun ||
-		upd.ammoArrow !== prev.ammoArrow ||
-		upd.oil !== prev.oil ||
-		upd.electric !== prev.electric ||
-		upd.equipWeapon !== prev.equipWeapon ||
-		upd.equipCloth !== prev.equipCloth ||
-		upd.equipHand !== prev.equipHand ||
-		upd.equipGun !== prev.equipGun ||
-		upd.equipOutfit !== prev.equipOutfit ||
-		upd.equipPet !== prev.equipPet ||
-		upd.skillPoint !== prev.skillPoint
-	) {
+	let changed =
+		raises(upd.invenWeapon, prev.invenWeapon) ||
+		raises(upd.invenEquip, prev.invenEquip) ||
+		raises(upd.invenUse, prev.invenUse) ||
+		raises(upd.invenEtc, prev.invenEtc) ||
+		raises(upd.skillLevels, prev.skillLevels) ||
+		upd.ammoNormal > prev.ammoNormal ||
+		upd.ammoShotgun > prev.ammoShotgun ||
+		upd.ammoMachinegun > prev.ammoMachinegun ||
+		upd.ammoArrow > prev.ammoArrow ||
+		upd.oil > prev.oil ||
+		upd.electric > prev.electric ||
+		upd.skillPoint > prev.skillPoint;
+	// wearing: only something the SERVER's copy does not own is a claim (a slot a moment behind is not)
+	if (upd.equipWeapon !== prev.equipWeapon && upd.equipWeapon > 0 && !ownsWeapon(prev, upd.equipWeapon)) {
 		changed = true;
+	}
+	for (const [mine, trusted] of [
+		[upd.equipCloth, prev.equipCloth],
+		[upd.equipHand, prev.equipHand],
+		[upd.equipGun, prev.equipGun],
+		[upd.equipOutfit, prev.equipOutfit],
+		[upd.equipPet, prev.equipPet],
+	]) {
+		if (mine !== trusted && mine >= 0 && !ownsEquip(prev, mine)) changed = true;
 	}
 	upd.invenWeapon = copyArray(prev.invenWeapon);
 	upd.invenEquip = copyArray(prev.invenEquip);
@@ -189,6 +190,8 @@ export function deliverPacks(save: PlayerSaveData): number {
 /** one verb waiting for its command (§2.4) */
 interface Queued {
 	msg: IntentMessage;
+	/** whose it is: a verb dropped with its queue is still answered (its nonce), like any other */
+	userId: number;
 	/** the tick it arrived on: past INTENT_HOLD_TICKS it no longer waits for `atSeq` */
 	at: number;
 }
@@ -235,7 +238,7 @@ export class ServerBackpack {
 			this.onOutcome?.(sp, msg, { kind: "refused", why: "full" });
 			return false;
 		}
-		list.push({ msg, at: tick });
+		list.push({ msg, userId: sp.userId, at: tick });
 		return true;
 	}
 
@@ -247,13 +250,17 @@ export class ServerBackpack {
 	 * revived.
 	 */
 	beforeCommand(sp: ServerPlayer, cmd: InputCommand, tick: number): void {
-		if (this.options.deliversPacks && (tick + sp.slot) % PACK_CHECK_TICKS === 0) {
+		// a body at 0 hp is dead even before `stepPlayer` flags it (life.ts `writeRunBody`)
+		const dead = sp.state.dead || sp.state.hp <= 0;
+		// not into a dead run: a pack bought on the death screen would be wiped by the New game that follows, with its
+		// coins gone and `packsOpened` saying it was delivered (security review of 5967a18, R6). It waits for a body
+		if (this.options.deliversPacks && !dead && (tick + sp.slot) % PACK_CHECK_TICKS === 0) {
 			const opened = deliverPacks(sp.save);
 			if (opened > 0) this.onPacks?.(sp, opened);
 		}
 		const list = this.queues.get(sp.slot);
 		if (list === undefined || list.size() === 0) return;
-		if (sp.state.dead) {
+		if (dead) {
 			for (const q of list) {
 				this.handled(sp.userId, q.msg.nonce);
 				this.onOutcome?.(sp, q.msg, { kind: "refused", why: "dead" });
@@ -276,13 +283,22 @@ export class ServerBackpack {
 		return this.acks.get(userId) ?? 0;
 	}
 
-	/** a verb answered OUTSIDE the simulation (server/net/backpackIntents.ts: the lobby's wardrobe, a rate drop) */
+	/**
+	 * A verb answered, here or OUTSIDE the simulation (server/net/backpackIntents.ts: the lobby's wardrobe, a rate
+	 * drop). The ack only moves FORWARD (u16, wrapping): a verb refused on arrival must not have its answer taken back
+	 * by an older one answered later in order -- the client would replay a refused prediction for PENDING_TTL_S
+	 * (correctness review of 5967a18, C; the client also never has more than INTENT_QUEUE_MAX in flight).
+	 */
 	handled(userId: number, nonce: number): void {
-		if (nonce !== 0) this.acks.set(userId, nonce);
+		if (nonce === 0) return;
+		const prev = this.acks.get(userId);
+		if (prev === undefined || seqDiff(nonce, prev) > 0) this.acks.set(userId, nonce);
 	}
 
-	/** the survivor left the world: their queue goes (unanswered verbs are answered by the next push's state) */
+	/** the survivor left the world: their queue goes, every verb in it answered (review G) */
 	remove(slot: number): void {
+		const list = this.queues.get(slot);
+		if (list !== undefined) for (const q of list) this.handled(q.userId, q.msg.nonce);
 		this.queues.delete(slot);
 		this.switchedAt.delete(slot);
 	}
@@ -294,6 +310,7 @@ export class ServerBackpack {
 
 	/** a new town (MP-22): nothing queued in the old one is still meaningful */
 	clear(): void {
+		for (const [, list] of this.queues) for (const q of list) this.handled(q.userId, q.msg.nonce);
 		this.queues.clear();
 		this.switchedAt.clear();
 	}

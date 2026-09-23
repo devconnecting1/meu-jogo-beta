@@ -32,6 +32,7 @@ import {
 	setSurface,
 	setVisible,
 } from "./widgets";
+import { registerBack } from "./backStack";
 import { SETTING_CONTROL_X, SettingRow, SettingRowHandle } from "./window";
 
 // ---------------------------------------------------------------- validation (pure)
@@ -326,7 +327,7 @@ export function confirmAction(layer: Instance, props: ConfirmProps): DialogHandl
 		valign: "top",
 	});
 	const fy = h - pad - 40;
-	Button(dlg.card, "Cancel", "Cancel", {
+	const cancel = Button(dlg.card, "Cancel", "Cancel", {
 		x: w - pad - 300 - space(2),
 		y: fy,
 		w: 140,
@@ -334,6 +335,8 @@ export function confirmAction(layer: Instance, props: ConfirmProps): DialogHandl
 		variant: "secondary",
 		onClick: () => dlg.close(),
 	});
+	// B / Backspace is Cancel, as every other way of closing it (backStack.ts)
+	registerBack(cancel, () => dlg.close());
 	Button(dlg.card, "Confirm", props.action, {
 		x: w - pad - 160,
 		y: fy,

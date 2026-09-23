@@ -62,7 +62,7 @@ const { showWardrobe } = require(join(SRC, "client/ui/wardrobe.ts"));
 const { showLobby } = require(join(SRC, "client/ui/lobby.ts"));
 const { showShop } = require(join(SRC, "client/ui/shop.ts"));
 const { showCredits } = require(join(SRC, "client/ui/credits.ts"));
-const { showTutorial } = require(join(SRC, "client/ui/tutorial.ts"));
+const { showTutorial, SCHEMES } = require(join(SRC, "client/ui/tutorial.ts"));
 const { showPause } = require(join(SRC, "client/ui/pauseMenu.ts"));
 const { popup } = require(join(SRC, "client/ui/popup.ts"));
 const { showRecords } = require(join(SRC, "client/ui/records.ts"));
@@ -185,8 +185,8 @@ const WINDOWS = [
 		frame: () => layer.FindFirstChild("Menu")?.FindFirstChild("Body")?.FindFirstChild("Panel"),
 	},
 	// the lobby's Records window (UI-12). Not here: the match scoreboard (MP-23) -- a HUD panel, not a screen: it
-	// stands at the LEFT, under the day plate, so it never covers the survivor in the middle of the screen, and its
-	// place is checked by test:tables (on screen, under the bar, clear of the day plate, the survivor and the thumbs)
+	// stands at the LEFT, so it never covers the survivor in the middle of the screen, and its place is checked by
+	// test:tables (on screen, under the bar, clear of the day clock, the console, the survivor and the thumbs)
 	{
 		name: "Records",
 		open: () => showRecords(ctx),
@@ -604,7 +604,7 @@ setScreen(1365, 567, 58, 160);
 	check(
 		"...sem a linha dos creditos (uma pagina de texto solto nao le sobre uma rua clara)",
 		about !== undefined &&
-			root.GetDescendants().some(d => d.Name === "Built") &&
+			root.GetDescendants().some(d => d.Name === "Developer") &&
 			!root.GetDescendants().some(d => d.Name === "OpenCredits"),
 	);
 	const win = rectOf(root.FindFirstChild("Body").FindFirstChild("Window"));
@@ -929,7 +929,7 @@ function textFits(label) {
 		"...escolher Gamepad mostra as teclas dele, o titulo e a nota dele, e acende o ponto azul -- sem Instance",
 		listShown().join() === "2" &&
 			keysTitle === "Gamepad" &&
-			findIn(settingsRoot(), "Note", "TextLabel").Text.startsWith("Menus are navigated") &&
+			findIn(settingsRoot(), "Note", "TextLabel").Text === SCHEMES[2].note &&
 			options[2].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
 			!options[0].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
 			r.created === 0,

@@ -76,16 +76,18 @@ export function startBackpackIntents(options: BackpackIntentOptions): () => void
 			gates.set(player, gate);
 		}
 		const res = ingestBackpackIntent(gate, payload, now);
-		if (res.verdict === IntentVerdict.Presence) return;
 		const sp = options.playerOf(player);
 		if (sp !== undefined) {
+			// EVERY message of a survivor in the world counts toward §8.2, the presence verbs included: mpHost.ts only
+			// counts those for a player who is not in the world yet (security review of 5967a18, R5)
 			noteMessage(sp, now);
 			if (res.verdict === IntentVerdict.Malformed) noteMalformed(sp, now);
 			const reason = floodReason(sp);
 			if (reason !== undefined) kick(player, reason);
-		} else if (malformedFlood(gate)) {
+		} else if (res.verdict !== IntentVerdict.Presence && malformedFlood(gate)) {
 			kick(player, `${gate.badCount} malformed intents in ${FLOOD_MALFORMED_WINDOW_S}s`);
 		}
+		if (res.verdict === IntentVerdict.Presence) return;
 		const msg = res.msg;
 		if (msg === undefined) return;
 		if (res.verdict === IntentVerdict.Rate) {

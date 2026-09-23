@@ -335,6 +335,7 @@ const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerCombat, PING_RISE, PING_FALL } = require(join(SRC, "server/sim/combat.ts"));
 const { biteRewindCapS, judgedTick, PositionHistory, rewindCapS } = require(join(SRC, "server/sim/history.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
+const { AchievementId: ACH } = require(join(SRC, "shared/data/achievements.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
 
@@ -1072,6 +1073,53 @@ function stream({
 	);
 }
 
+{
+	/*
+	 * NIT 1 (the second review of the zombie-motion branch): a body the shooter draws `extra` ticks further back gets
+	 * that much more rewind ceiling -- extra / SIM_HZ, up to MID_REWIND_EXTRA_S -- not all of MID_REWIND_EXTRA_S for
+	 * any extra above 0. A body easing its extra after a change of ring is drawn a fraction of a tick further back,
+	 * and with the whole 50 ms a lag switch's second-old view reached 3 ticks past what its ping explains through it.
+	 * A walker going down the screen at 5 u a tick: where it is rewound to tells the tick it was judged at.
+	 */
+	const T = 40;
+	const judgedWith = extra => {
+		const fx = newFixture();
+		const sp = makePlayer(fx, 0, SHOOTER_X, SHOOTER_Y, 15);
+		fx.combat.setPing(0, 0);
+		const z = tough(createZombie(1, TARGET_X, SHOOTER_Y, 1));
+		fx.zombies.push(z);
+		for (let tick = 1; tick <= T; tick++) {
+			z.y = SHOOTER_Y + 5 * tick;
+			fx.combat.afterWorld(tick);
+		}
+		fx.combat.targets.viewExtraTicks = () => extra;
+		// a lag switch: the view it declares is a second old, far past its ceiling
+		sp.viewTick = wrapU16(T - CFG.SIM_HZ);
+		sp.viewFrac = 0;
+		const st = fx.combat.slotOf(0);
+		const capTicks = rewindCapS(fx.combat.lagOf(sp, st), CFG.INTERP_DEFAULT_S, CFG.SIM_HZ) * CFG.SIM_HZ;
+		fx.combat.prepareTargets(sp, st, T);
+		// ticks past the ceiling the body was judged at
+		return T - (fx.combat.candY[0] - SHOOTER_Y) / 5 - capTicks;
+	};
+	const midTicks = CFG.MID_REWIND_EXTRA_S * CFG.SIM_HZ;
+	const eased = judgedWith(0.3);
+	check(
+		Math.abs(eased - 0.3) < 1e-6,
+		`a body drawn 0.3 tick further back is judged 0.3 tick past the ceiling, not ${midTicks} (${eased.toFixed(2)})`,
+	);
+	const whole = judgedWith(midTicks);
+	check(
+		Math.abs(whole - midTicks) < 1e-6,
+		`one drawn the whole mid-ring interval back still gets all of MID_REWIND_EXTRA_S (${whole.toFixed(2)} ticks)`,
+	);
+	const beyond = judgedWith(10 * midTicks);
+	check(
+		Math.abs(beyond - midTicks) < 1e-6,
+		`and no answer of the ring's hook reaches past MID_REWIND_EXTRA_S, which the history is sized for (${beyond.toFixed(2)})`,
+	);
+}
+
 // ================================================================ c'. the history ring itself
 
 section("c'. the position ring answers for the whole window and forgets what left it (§2.3)");
@@ -1180,7 +1228,7 @@ section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)
 	prog.noteBossNear(5, 1, PROG.BOSS_NEAR_S + 1);
 	prog.noteBossDamage(5, 2, 50, 0); // 0.5 % and gone after five seconds
 	prog.noteBossNear(5, 2, 5);
-	const awards = prog.bossKilled(5, 1000, 10000, 0);
+	const awards = prog.bossKilled(5, 1000, 10000, 0, 3); // a Giant (boss type 3)
 	checkEq(awards.length, 2, "both participants are paid, the tourist is not");
 	check(
 		awards.every(a => a.exp === 1000),
@@ -1188,6 +1236,12 @@ section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)
 	);
 	checkEq(saves.get(1).bossKills, 1, "and the boss kill lands in the live save");
 	checkEq(saves.get(2).bossKills, 0, "the tourist's save is untouched");
+	// CON-04: the boss's kind names its slayer achievement, and every participant brought it down (MP-15)
+	const giant = slot => saves.get(slot).achievements[ACH.GiantSlayer];
+	check(
+		giant(0) === 1 && giant(1) === 1 && giant(2) === 0 && saves.get(0).achievements[ACH.CentipedeSlayer] === 0,
+		`Giant slayer for both participants (the killer and the one who stayed), not for the tourist (${giant(0)} / ${giant(1)} / ${giant(2)})`,
+	);
 }
 
 {
@@ -1235,6 +1289,97 @@ section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)
 	checkEq(sp.save.exp, 40, "the XP was written straight into the live save");
 	checkEq(fx.progress.statsOf(0).kills, 1, "and the kill was counted on the server");
 	checkEq(fx.history.has(z.id), false, "a dead body's history track is released");
+	// CON-04 (ACH-2): the kill achievements come from this same credit, with what the server knows about the kill
+	checkEq(sp.save.achievements[ACH.ZombieSlayer], 1, "the rifle kill moved Zombie slayer, on the server");
+	checkEq(sp.save.achievements[ACH.MeleeExpert], 0, "...not Melee weapons expert (a rifle was in hand)");
+	checkEq(sp.save.achievements[ACH.SpecialZombieSlayer], 0, "...nor Special zombie slayer (a Walker)");
+}
+
+{
+	// CON-04 (ACH-2): a blade on a Charger, swung by the server's weapon machine -- the credit carries the zombie's kind
+	// and the kind of the weapon the SERVER says was in hand; the ally who only helped moves no achievement
+	const fx = newFixture();
+	const sp = makePlayer(fx, 0, 1000, 1000, 0); // Dagger
+	const ally = makePlayer(fx, 1, 900, 1000, 13);
+	const z = createZombie(2, 1040, 1000, 1); // a Charger
+	z.hp = 1;
+	z.hpMax = 1;
+	fx.zombies.push(z);
+	fx.progress.noteZombieDamage(z.id, 1, 30, 0);
+	fx.combat.afterWorld(1);
+	for (let t = 2; t < 122 && z.hp > 0; t++) tickPlayer(fx, sp, aimCommand(sp, t, 2000, 1000, t === 2 ? 1 : 0), t);
+	check(z.hp <= 0, "the Charger went down to a server-resolved swing");
+	const a = sp.save.achievements;
+	check(
+		a[ACH.ZombieSlayer] === 1 && a[ACH.SpecialZombieSlayer] === 1 && a[ACH.MeleeExpert] === 1,
+		"the swing moved Zombie slayer, Special zombie slayer and Melee weapons expert, once each",
+		`${a[ACH.ZombieSlayer]} / ${a[ACH.SpecialZombieSlayer]} / ${a[ACH.MeleeExpert]}`,
+	);
+	check(
+		ally.save.achievements.every(v => v === 0) && ally.save.exp > 0,
+		"the assist was paid its XP and moved no achievement (an assist is not a zombie you put down)",
+	);
+	// an assisted run (§9.3) earns no achievement, as it earns no coins and no title
+	const saves = new Map([[0, defaultSave()]]);
+	const prog = new PROG.Progress({ saveOf: slot => saves.get(slot), paysRewards: () => false });
+	prog.zombieKilled(77, 10, 0, 0, 2, 7);
+	check(
+		saves.get(0).achievements.every(v => v === 0) && saves.get(0).zombieKills === 0,
+		"an assisted run's kill moves no achievement and no kill count",
+	);
+}
+
+{
+	// CON-04 (Bow expert): an arrow flies on its own (server/sim/projectiles.ts), so by the time it lands the survivor
+	// may hold another weapon -- it is still the bow's kill, credited by the kind of the weapon that LAUNCHED it
+	const { ServerProjectiles } = require(join(SRC, "server/sim/projectiles.ts"));
+	const fx = newFixture();
+	const sp = makePlayer(fx, 0, 1000, 1000, 13); // a rifle in hand when the arrow lands
+	const z = createZombie(1, 1200, 1000, 1);
+	z.hp = 1;
+	z.hpMax = 1;
+	fx.zombies.push(z);
+	const flights = new ServerProjectiles({ playerOf: slot => (slot === 0 ? sp : undefined), combat: fx.combat });
+	const refs = { world: fx.world, zombies: fx.zombies, bosses: fx.bosses, bullets: [] };
+	flights.launch(refs, {
+		kind: P.ProjKind.Arrow,
+		ownerSlot: 0,
+		x: 1000,
+		y: 1000,
+		angle: 0,
+		speed: 600,
+		damage: 50,
+		range: 600,
+		friction: 0,
+	});
+	for (let i = 0; i < 60 && z.hp > 0; i++) flights.step(refs, TICK_DT);
+	const a = sp.save.achievements;
+	check(
+		z.hp <= 0 && a[ACH.BowExpert] === 1 && a[ACH.ZombieSlayer] === 1 && a[ACH.Sniper] === 0,
+		`an arrow's kill is Bow expert's (and Zombie slayer's), whatever is in hand when it lands (hp ${z.hp}, bow ${a[ACH.BowExpert]}, slayer ${a[ACH.ZombieSlayer]})`,
+	);
+}
+
+{
+	// CON-04 (Sniper): a sniper round is hitscan -- the weapon the server says is in hand
+	const fx = newFixture();
+	const sniper = WEAPONS.find(w => w.kind === 5); // WeaponKind.Sniper
+	const sp = makePlayer(fx, 0, 1000, 1000, sniper.id);
+	const z = createZombie(1, 1300, 1000, 1);
+	z.hp = 1;
+	z.hpMax = 1;
+	fx.zombies.push(z);
+	fx.combat.afterWorld(1);
+	sp.viewTick = 1;
+	// the bolt action fires when the trigger is RELEASED (the scope builds while it is held)
+	tickPlayer(fx, sp, aimCommand(sp, 2, z.x, z.y, 1), 2);
+	const aim = Math.atan2(z.y - sp.state.y, z.x - sp.state.x);
+	tickPlayer(fx, sp, P.makeCommand(3, 0, 0, aim, 0, P.packEdges(0, 1, 0, 0)), 3);
+	const a = sp.save.achievements;
+	check(
+		z.hp <= 0 && a[ACH.Sniper] === 1 && a[ACH.BowExpert] === 0 && a[ACH.MeleeExpert] === 0,
+		`a ${sniper.name} kill is Sniper's (hp ${z.hp}, sniper ${a[ACH.Sniper]}, slayer ${a[ACH.ZombieSlayer]}, melee ${a[ACH.MeleeExpert]})`,
+	);
 }
 
 // ================================================================ e. MP_PHASE 2: the client stops deciding

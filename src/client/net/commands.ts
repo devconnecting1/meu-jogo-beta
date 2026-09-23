@@ -321,6 +321,14 @@ export class CommandStream {
 		return n > 0 ? this.pending[n - 1] : undefined;
 	}
 
+	/**
+	 * The seq the next command built will carry. An edge pressed now, and a backpack verb made now (§2.4 `atSeq`,
+	 * client/net/backpackSync.ts), belong to it: this frame's commands are already built.
+	 */
+	nextSeq(): number {
+		return wrapU16(this.seq + 1);
+	}
+
 	stats(): CommandStats {
 		return {
 			sampleHz: this.sampleHz(),

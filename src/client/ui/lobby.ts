@@ -49,7 +49,7 @@ export type { RunState } from "./survivor";
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
  *   [👕 Wardrobe             2 / 9]   ┌ Town ──────────────────────────────┐
- *   [🏆 Achievements        3 / 20]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
+ *   [🏆 Achievements        3 / 15]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
  *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell │
  *   [? How to play               ]   └────────────────────────────────────┘
  *   [⚙ Settings                  ]
@@ -322,7 +322,7 @@ class MenuPage {
 		this.start = start;
 		const fg = buttonForeground("default");
 		PixelIcon(start, "Icon", "start", 44, START_H / 2, 36, fg, start.ZIndex + 1);
-		this.startTitle = makeLabel(start, "Title", tr("Start").upper(), 84, 16, NAV_W - 104, 40, TEXT.xl3, fg, {
+		this.startTitle = makeLabel(start, "Title", tr("START"), 84, 16, NAV_W - 104, 40, TEXT.xl3, fg, {
 			font: EXTRA_BOLD,
 			align: "left",
 			zIndex: start.ZIndex + 1,
@@ -535,7 +535,7 @@ class MenuPage {
 		const Players = game.GetService("Players");
 		const me = Players.LocalPlayer as Player | undefined;
 		this.write(this.name, me !== undefined ? me.DisplayName : tr("Survivor"));
-		Kit.setValueKey(this.level, `${tr("Level")} ${save.level}`.upper());
+		Kit.setValueKey(this.level, `${tr("LEVEL")} ${save.level}`);
 		this.preview.setOutfit(outfitLookOf(save));
 		this.preview.setPet(petLookOf(save));
 		this.refreshTown(status);

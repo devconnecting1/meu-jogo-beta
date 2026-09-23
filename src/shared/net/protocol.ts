@@ -544,6 +544,11 @@ export interface SnapshotPart extends Snapshot {
 export interface SnapshotEncodeResult {
 	/** 1..SNAP_MAX_PARTS buffers, each ≤ SNAP_MAX_BYTES */
 	parts: Array<buffer>;
+	/**
+	 * Zombies each part carries, parallel to `parts`. The parts take `snap.zombies` in order, so part i holds the
+	 * `partZombies[i]` after those of the parts before it, and whatever is past the last part was dropped.
+	 */
+	partZombies: Array<number>;
 	/** entities that did not fit (players/bosses above the caps, zombies beyond the last part) */
 	dropped: number;
 }
@@ -744,6 +749,7 @@ const snapWriter = new NetWriter(SNAP_MAX_BYTES, SNAP_MAX_BYTES);
 export function encodeSnapshot(snap: Snapshot): SnapshotEncodeResult {
 	const w = snapWriter;
 	const parts = new Array<buffer>();
+	const partZombies = new Array<number>();
 	const players = snap.players;
 	const bosses = snap.bosses;
 	const zombies = snap.zombies;
@@ -770,7 +776,9 @@ export function encodeSnapshot(snap: Snapshot): SnapshotEncodeResult {
 		for (let i = 0; i < np; i++) writePlayer(w, players[i]);
 		for (let i = 0; i < nb; i++) writeBoss(w, bosses[i]);
 		// the fixed content is ≤ 124 B; only a tiny SNAP_MAX_BYTES could overflow it (nothing is sent then)
-		if (w.failed()) return { parts: new Array<buffer>(), dropped: players.size() + bosses.size() + nz };
+		if (w.failed()) {
+			return { parts: new Array<buffer>(), partZombies, dropped: players.size() + bosses.size() + nz };
+		}
 		let count = 0;
 		while (zi < nz && count < 255) {
 			const mark = w.length();
@@ -785,12 +793,17 @@ export function encodeSnapshot(snap: Snapshot): SnapshotEncodeResult {
 		if (!first && count === 0) break;
 		w.patchU8(4, count);
 		const out = w.finish();
-		if (out === undefined) break;
+		if (out === undefined) {
+			// nothing of this part goes out: its zombies are dropped with the rest
+			zi -= count;
+			break;
+		}
 		parts.push(out);
+		partZombies.push(count);
 	}
 	const n = parts.size();
 	for (let i = 0; i < n; i++) buffer.writeu8(parts[i], 0, PacketKind.Snap * 16 + i * 4 + (n - 1));
-	return { parts, dropped: players.size() - nPlayers + (bosses.size() - nBosses) + (nz - zi) };
+	return { parts, partZombies, dropped: players.size() - nPlayers + (bosses.size() - nBosses) + (nz - zi) };
 }
 
 /** client side: one Snap part; undefined when malformed */

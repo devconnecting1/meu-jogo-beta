@@ -963,13 +963,17 @@ export class GameLoop {
 		this.playersView.updatePlates(root, NAMEPLATE_Z, cam, v, allies, this.clock);
 	}
 
-	/** username + level pill under the player's body; world-anchored, so pause/backpack dim it with the world */
+	/** level, name and title under the player's body (no background); world-anchored, so a menu dims it with the world */
 	private drawNameplate(cam: Camera): void {
 		const ctx = getCtx();
 		if (this.nameplate === undefined) {
 			const root = ctx.darkLayer.Parent;
 			if (root === undefined || !root.IsA("GuiObject")) return;
-			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer));
+			// yours: no @handle, and it gives way to an ally's plate it overlaps (client/ui/nameplate.ts)
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer), {
+				self: true,
+				world: true,
+			});
 		}
 		const p = this.player;
 		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);
@@ -989,7 +993,8 @@ export class GameLoop {
 	 */
 	private drawLight(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
 		const ctx = getCtx();
-		ctx.darkLayer.BackgroundTransparency = 1;
+		// the layer itself stays clear (the light map paints the night): a write only if something changed it
+		if (ctx.darkLayer.BackgroundTransparency !== 1) ctx.darkLayer.BackgroundTransparency = 1;
 		if (this.lightMap === undefined) {
 			this.lightMap = new LightMap(ctx.darkLayer, COLORS.overlayNight);
 		}

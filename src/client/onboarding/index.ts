@@ -1,6 +1,8 @@
 import { GameContext } from "shared/game/context";
 import { AIM_ASSIST, AimTarget } from "shared/engine/input";
 import { ZOMBIE_RADIUS } from "shared/game/physics";
+import { PROGRESS_SERVER_PHASE } from "shared/game/save";
+import { MP_PHASE } from "shared/net/mpConfig";
 import { setAimTargets } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
 import type { GameRefs } from "../systems/types";
@@ -14,7 +16,11 @@ import { RunSummary } from "./gameOver";
  * torn down, this module
  *   - feeds the aim assist the bodies it may nudge towards (shared/engine/input.ts documents why it is fair),
  *   - runs the first-match coach (client/onboarding/coach.ts), and
- *   - counts the run's kills, so the end-of-run screen can show what the player actually did.
+ *   - counts the run's kills, so the end-of-run screen can show what the player actually did: from
+ *     PROGRESS_SERVER_PHASE the SERVER's kill credit (`zombieKills`, the killing blows it gave this survivor, MON-05),
+ *     read as how far it moved since the run was attached. The horde is the server's there and the client only draws
+ *     a mirror whose bodies never reach 0 hp (client/view/actorsView.ts): watching them die counted nothing but an
+ *     exploder with its fuse lit (ACH-2). Below that phase the client simulates the horde and watches its bodies.
  *
  * Nothing here touches the simulation: it reads GameRefs and draws. If `attachRun` is never called the game
  * behaves exactly as it did before — no assist, no coach, no counters.
@@ -28,8 +34,12 @@ let refsLive: GameRefs | undefined;
 /** the lesson the coach was on when the run UI was last torn down */
 let resumeIndex = 0;
 
-/** zombies put down since the run was attached */
+/** zombies put down since the run was attached (below PROGRESS_SERVER_PHASE: counted here) */
 let kills = 0;
+/** save.zombieKills when the run was attached (from PROGRESS_SERVER_PHASE: the server's count) */
+let killsAtStart = 0;
+/** the server credits the kills: nothing to watch here */
+const SERVER_KILLS = MP_PHASE >= PROGRESS_SERVER_PHASE;
 /** save.bossKills when the run was attached */
 let bossesAtStart = 0;
 /** zombie id → its hp when we last saw it: a body that leaves the list at 0 hp was killed */
@@ -84,6 +94,7 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	detachRun();
 	refsLive = refs;
 	kills = 0;
+	killsAtStart = ctx.save.zombieKills;
 	bossesAtStart = ctx.save.bossKills;
 	seen.clear();
 	killScan = 0;
@@ -111,7 +122,7 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	connection = RunService.Heartbeat.Connect(dt => {
 		const live = refsLive;
 		if (live === undefined) return;
-		scanKills(live, dt);
+		if (!SERVER_KILLS) scanKills(live, dt);
 		coach?.update(live, dt);
 	});
 }
@@ -133,7 +144,7 @@ export function runSummary(ctx: GameContext, first: boolean): RunSummary {
 		days: ctx.save.day,
 		bestDay: ctx.save.bestDay,
 		level: ctx.save.level,
-		kills,
+		kills: SERVER_KILLS ? math.max(ctx.save.zombieKills - killsAtStart, 0) : kills,
 		bosses: math.max(ctx.save.bossKills - bossesAtStart, 0),
 		first,
 	};

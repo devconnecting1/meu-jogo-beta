@@ -170,20 +170,28 @@ export function currentWeapon(p: PlayerState): WeaponDef {
 }
 
 /**
+ * Would `itemUseEffect` do anything right now? The same test, without touching the body or the backpack: the
+ * server's `useItem` and the client's prediction of it (client/net/bagPrediction.ts) ask the one question.
+ */
+export function itemUseWouldWork(p: PlayerState, save: PlayerSaveData, usableId: number): boolean {
+	const u = USABLES[usableId];
+	if (u === undefined) return false;
+	if ((save.invenUse[usableId] ?? 0) <= 0) return false;
+	const hasBuff = u.speed > 0 || u.calm > 0 || u.pain > 0;
+	const healsHp = u.hp < 0 || (u.hp > 0 && p.hp < p.hpMax);
+	const feedsHunger = u.hunger !== 0 && p.hungry < p.hungryMax;
+	return hasBuff || healsHp || feedsHunger;
+}
+
+/**
  * Consume one usable from the backpack. Returns false (and does nothing) when the survivor has
  * none left, the id is unknown, or the item would have no effect at all: a pure hp/hunger item
  * (no buff, no poison cure) with both hp and hunger already at their max does nothing, so it is
  * not worth burning. `hp` heals, `hunger` feeds (the old code had them swapped).
  */
 export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: number): boolean {
+	if (!itemUseWouldWork(p, save, usableId)) return false;
 	const u = USABLES[usableId];
-	if (u === undefined) return false;
-	if ((save.invenUse[usableId] ?? 0) <= 0) return false;
-
-	const hasBuff = u.speed > 0 || u.calm > 0 || u.pain > 0;
-	const healsHp = u.hp < 0 || (u.hp > 0 && p.hp < p.hpMax);
-	const feedsHunger = u.hunger !== 0 && p.hungry < p.hungryMax;
-	if (!hasBuff && !healsHp && !feedsHunger) return false;
 
 	p.hp = math.clamp(p.hp + u.hp, -1000, p.hpMax);
 	p.hungry = math.clamp(p.hungry + u.hunger, 0, p.hungryMax);

@@ -29,10 +29,12 @@
  *                  effect each one promises is measured where the game applies it.
  *   F. LOOT        every building type's table (EDI-03) and every roll lands in the backpack.
  *   G. SHOP        the REAL server (server/main.server.ts on the fake Roblox of test-body): every pack charges its
- *                  price and delivers what it declares (MON-03); a pack pet stays until a New game; a report
- *                  cannot conjure a pet; every costume is sold at the catalogue's price. And the seams of
- *                  MP_PHASE 2, where the server already owns the body and the combat but the backpack is still
- *                  the client's and reaches the server only in a save report (NET-1..6).
+ *                  price and the server delivers what it declares (MON-03); a pack pet stays until a New game; a
+ *                  report cannot conjure a pet; every costume is sold at the catalogue's price and worn through the
+ *                  wardrobe's Equip verb. And the seams of MP_PHASE 2, closed by F3 (docs/MULTIPLAYER.md §4.8): the
+ *                  backpack and the constructions are the server's, a verb lands in the tick of the command it was
+ *                  made during, and a report can no longer write any of it (NET-1..6); the client's prediction and
+ *                  the server's bag laid over it (G5).
  *
  * KNOWN BUGS. Some findings are too big to fix here (another front's files, or a design question): each is a
  * `knownBug(id, reproduces, ...)` line. While the bug reproduces it prints `BUG` and does not fail the suite; the day
@@ -1493,12 +1495,12 @@ section(
 				JSON.stringify(out)
 			);
 		});
-		checkRows("a dead survivor eats nothing", USABLES, u => {
+		checkRows("a dead survivor eats nothing (refused as `dead`)", USABLES, u => {
 			const { save, p } = holder(u);
 			p.dead = true;
 			craft.remove(0);
 			const out = craft.useItem(0, p, save, u.id);
-			return (out.kind === "refused" && out.why === "busy" && save.invenUse[u.id] === 2) || JSON.stringify(out);
+			return (out.kind === "refused" && out.why === "dead" && save.invenUse[u.id] === 2) || JSON.stringify(out);
 		});
 		checkRows(
 			"food with nothing to fill and no buff is not wasted when full (itemUseEffect's no-op rule)",
@@ -2283,8 +2285,11 @@ section("D6. crafting with the item in your hands: what the recipe ate comes off
 		// ...and the hands: main.client's pack.onCraft puts the blade back and the magazine in its pool
 		const onCraft = source("client/main.client.ts");
 		const body = onCraft.slice(onCraft.indexOf("pack.onCraft = "), onCraft.indexOf("pack.craftCheck = "));
+		// (chooseWeapon: from F3 the switch is also the server's SwitchWeapon verb; offline it is switchWeapon itself)
 		check(
-			/!ownsWeapon\(ctx\.save, refs\.player\.weapon\.pointer\)\) switchWeapon\(refs, 0\)/.test(body),
+			/!ownsWeapon\(ctx\.save, refs\.player\.weapon\.pointer\)\) (switchWeapon|chooseWeapon)\(refs, 0\)/.test(
+				body,
+			),
 			"main.client's pack.onCraft swaps an eaten weapon for the blade",
 		);
 		checkRows(
@@ -3585,6 +3590,15 @@ function fakeRoblox() {
 			intent(p, kind) {
 				remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
 			},
+			/** one backpack verb on the Intent remote, as client/net/netClient.ts sends it (§4.8) */
+			verb(p, kind, arg, atSeq = 0, nonce = 0) {
+				remote("Intent").OnServerEvent.Fire(p, P.encodeIntentArgs(kind, atSeq, arg, nonce));
+			},
+			/** the last bag the server pushed to `p` in its wallet (§4.8), or undefined */
+			lastBag(p) {
+				const pushes = remote("SaveAck").sent.filter(e => e.to === p && e.args[0]?.wallet?.bag !== undefined);
+				return pushes[pushes.length - 1]?.args[0].wallet.bag;
+			},
 			/** EnterWorld, then long enough for the admit pass (ADMIT_INTERVAL) whatever the cooldown said */
 			enter(p) {
 				server.intent(p, P.IntentKind.EnterWorld);
@@ -3809,11 +3823,16 @@ section("G1. every pack: its declared contents, its price charged by the server,
 			if (capped.ok || capped.reason !== "limit" || save.money !== 10000) return `pending cap: ${capped.reason}`;
 			save.packsBought[p.id] = 1;
 			s.run(0.6);
-			// the client delivers it at the next run's start and reports: the server takes exactly the pack's items
+			// F3 (§4.8): the SERVER opens it into its own save once the survivor is in the world, and the report of a
+			// client that opened it on its own copy as well (the pre-F3 client) adds nothing on top: exactly once
 			const client = clone(save);
 			deliverPacksLikeTheClient(client, INV2.addItem);
 			const before = p.items.map(it => INV2.countItem(save, it.kind, it.index));
+			s.immortal.add(pl);
+			s.enter(pl);
+			s.run(0.6);
 			const ack = s.report(pl, reportOf(client));
+			s.immortal.delete(pl);
 			if (ack?.ok !== true) return `report ${JSON.stringify(ack)}`;
 			for (let i = 0; i < p.items.length; i++) {
 				const it = p.items[i];
@@ -3847,7 +3866,6 @@ section("G1. every pack: its declared contents, its price charged by the server,
 
 section("G2. a pack pet stays through death and Rebirth, and goes with a New game; a bought one stays (MON-04)", () => {
 	const s = Roblox.bootServer();
-	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
 	const SAVE2 = require(join(SRC, "shared/game/save.ts"));
 	const pack = SHOP_PACKS.find(p => p.items.some(it => it.kind === ItemKind.Equip && COSMETIC(EQUIPS[it.index])));
 	const pet = pack.items.find(it => it.kind === ItemKind.Equip).index;
@@ -3856,16 +3874,16 @@ section("G2. a pack pet stays through death and Rebirth, and goes with a New gam
 	const save = s.save(pl);
 	save.money = 1000;
 	check(s.shop(pl, { kind: "buyPack", packId: pack.id }).ok, `the ${pack.name} is bought`);
-	const client = clone(save);
-	deliverPacksLikeTheClient(client, INV2.addItem);
-	client.equipPet = pet;
-	s.report(pl, reportOf(client));
+	// F3 (§4.8): the server opens the pack when the survivor enters the world, and the Bag's Equip is a verb
+	s.enter(pl);
+	s.run(0.6);
+	s.verb(pl, s.P.IntentKind.Equip, pet, 0, 1);
+	s.beat();
 	check(
 		save.invenEquip[pet] === 1 && save.equipPet === pet,
 		`delivered and worn: the server says ${EQUIPS[pet].name} is theirs and on`,
 	);
 	check(SAVE2.petLookOf(save) !== 0, "and it is what goes on the wire (petLookOf)");
-	s.enter(pl);
 	s.immortal.delete(pl);
 	s.kill(pl);
 	s.run(0.6);
@@ -3915,226 +3933,851 @@ section("G3. every costume: sold at the catalogue's price, once, and wearable (M
 	});
 	const outfit = COSTUMES.find(c => COS.cosmeticSlotOf(c.equipId) === EquipSlot.Outfit);
 	const pet = COSTUMES.find(c => COS.cosmeticSlotOf(c.equipId) === EquipSlot.Pet);
+	// the wardrobe (MON-04) is out of the world: its Equip is the one verb the server applies there, cosmetics only
+	s.verb(pl, s.P.IntentKind.Equip, outfit.equipId, 0, 1);
+	s.verb(pl, s.P.IntentKind.Equip, pet.equipId, 0, 2);
+	check(
+		save.equipOutfit === outfit.equipId && save.equipPet === pet.equipId,
+		`the wardrobe's Equip puts on the bought ${outfit.name} and ${pet.name} (out of the world, on the session's save)`,
+	);
 	const client = clone(save);
-	client.equipOutfit = outfit.equipId;
-	client.equipPet = pet.equipId;
+	client.equipOutfit = -1;
+	client.equipPet = -1;
 	s.report(pl, reportOf(client));
 	check(
 		save.equipOutfit === outfit.equipId && save.equipPet === pet.equipId,
-		`wearing the bought ${outfit.name} and ${pet.name} is accepted from the report`,
+		"and a report no longer moves them: the slots are the server's (§4.8), Unequip is the verb that does",
 	);
 });
 
-section("G4. the MP_PHASE 2 seams: what the server owns now, and what still only reaches it in a report", () => {
-	const s = Roblox.bootServer();
-	const P2 = s.P;
-	const SIM2 = require(join(SRC, "server/sim/simulation.ts"));
-	const Ply2 = require(join(SRC, "shared/game/player.ts"));
-	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
-	const CFG2 = require(join(SRC, "shared/net/mpConfig.ts"));
-	let seq = 0;
-	/** one Input command from `pl`: nothing else of a key press or a Bag click can travel (§2.2) */
-	const press = (pl, held, edges) => {
-		seq += 1;
-		const cmds = [];
-		for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, held, edges));
-		s.env.services.ReplicatedStorage.FindFirstChild("Net")
-			.FindFirstChild("Input")
-			.OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
-	};
-	const clientSrc = [
-		"client/main.client.ts",
-		"client/net/netClient.ts",
-		"client/ui/backpack.ts",
-		"client/systems/combat.ts",
-	]
-		.map(source)
-		.join("\n");
-	const intentArgsSent = /encodeIntentArgs\(/.test(clientSrc);
-	const autosave = Number(/const AUTOSAVE_SEC = (\d+)/.exec(source("client/main.client.ts"))?.[1]);
-	info(
-		`MP_PHASE ${CFG2.MP_PHASE}; WORLD_SERVER_PHASE ${SIM2.WORLD_SERVER_PHASE}; client autosave every ${autosave} s`,
-	);
-	check(
-		CFG2.MP_PHASE === 2 && SIM2.WORLD_SERVER_PHASE === 3,
-		"the shipped phase: the server owns the body and the combat, not yet the backpack",
-	);
-
-	{
-		// NET-1: keys 1-5 / the Bag's Equip change the CLIENT's save; the server's weapon machine reads its own
-		const pl = s.join(newUser(), "switcher");
-		s.immortal.add(pl);
-		const save = s.save(pl);
-		save.invenWeapon[10] = 1;
-		save.ammoNormal = 30;
-		save.equipWeapon = 0;
-		const sp = s.enter(pl);
-		const client = clone(save);
-		client.equipWeapon = 10; // what switchWeapon writes on the client when key 2 is pressed
-		for (let i = 0; i < 120; i++) {
-			press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
-			s.beat();
-		}
-		const held = sp.state.weapon.pointer;
-		const shots = s.sim.combat.statsOf(sp.slot).shots;
-		knownBug(
-			"NET-1",
-			held === 0 && shots === 0 && !intentArgsSent,
-			`a weapon switch (keys 1–5, the hotbar, the Bag) never reaches the server: 2 s after pressing 2 for the pistol the server still swings the ${WEAPONS[held]?.name}, until the next save report (autosave ${autosave} s)`,
-			`server holds ${WEAPONS[held]?.name}, ${shots} shot(s) fired`,
+section(
+	"G4. the MP_PHASE 2 seams, closed by F3: the backpack and the constructions are the server's (NET-1..6)",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const SIM2 = require(join(SRC, "server/sim/simulation.ts"));
+		const BPK = require(join(SRC, "server/sim/backpack.ts"));
+		const Ply2 = require(join(SRC, "shared/game/player.ts"));
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const CFG2 = require(join(SRC, "shared/net/mpConfig.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const PHYS2 = require(join(SRC, "shared/game/physics.ts"));
+		const PLC2 = require(join(SRC, "shared/sim/placement.ts"));
+		const RULE2 = require(join(SRC, "shared/sim/craftRule.ts"));
+		const { EQUIP_LIGHTS } = require(join(SRC, "shared/data/equips.ts"));
+		const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+		let seq = 0;
+		let nonce = 0;
+		/** one Input command from `pl`: nothing else of a key press can travel (§2.2) */
+		const press = (pl, held, edges) => {
+			seq += 1;
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, held, edges));
+			s.env.services.ReplicatedStorage.FindFirstChild("Net")
+				.FindFirstChild("Input")
+				.OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+		};
+		/** a Bag click: a verb made during the NEXT command (its atSeq) with a fresh nonce, as client/net/backpackSync.ts */
+		const verb = (pl, kind, arg) => {
+			nonce += 1;
+			s.verb(pl, kind, arg, seq + 1, nonce);
+			return nonce;
+		};
+		/** beats until the server consumed `pl`'s command `want`; `each` looks at the survivor before every beat */
+		const untilConsumed = (sp, want, each) => {
+			for (let i = 0; i < 90 && sp.ackSeq < want; i++) {
+				each?.();
+				s.beat();
+			}
+			return sp.ackSeq >= want;
+		};
+		const clientSrc = ["client/net/netClient.ts", "client/systems/combat.ts"].map(source).join("\n");
+		info(`MP_PHASE ${CFG2.MP_PHASE}; WORLD_SERVER_PHASE ${CFG2.WORLD_SERVER_PHASE}`);
+		check(
+			CFG2.MP_PHASE === 2 && CFG2.WORLD_SERVER_PHASE === 2 && SIM2.WORLD_SERVER_PHASE === 2,
+			"the shipped phase: the server owns the body, the combat, the interactive world AND the backpack (F3)",
 		);
-		s.report(pl, reportOf(client));
-		s.beat();
-		check(sp.state.weapon.pointer === 10, "the report is the only road: after it the server holds the pistol");
-		s.quit(pl);
-	}
-	{
-		// NET-2: the Bag's Use / Eat runs itemUseEffect on the client's copy of the body; the server owns hp and hunger
-		const pl = s.join(newUser(), "eater");
+
+		{
+			// NET-1: keys 1-5, the hotbar and the Bag's Equip are a SwitchWeapon verb for the command they were pressed
+			// during, and the server's weapon machine switches in the very tick that consumes that command
+			check(
+				/encodeIntentArgs\(/.test(clientSrc) &&
+					/sendBagVerb\(IntentKind\.SwitchWeapon/.test(clientSrc) &&
+					/chooseWeapon\(refs, id\)/.test(clientSrc),
+				"[NET-1] the client sends the switch: the keys, the hotbar and the Bag go through chooseWeapon -> SwitchWeapon",
+			);
+			const pl = s.join(newUser(), "switcher");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			save.invenWeapon[10] = 1;
+			save.ammoNormal = 30;
+			save.equipWeapon = 0;
+			const sp = s.enter(pl);
+			press(pl, 0, 0);
+			untilConsumed(sp, seq);
+			const n = verb(pl, IK.SwitchWeapon, 10);
+			press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
+			const before = [];
+			const consumed = untilConsumed(sp, seq, () => before.push(sp.state.weapon.pointer));
+			check(
+				consumed && sp.state.weapon.pointer === 10 && before.every(w => w === 0),
+				"[NET-1] the switch lands in the tick that consumes its command: not one before, not at a report",
+				`consumed ${consumed}; held ${[...new Set(before)].join(",")} before, ${WEAPONS[sp.state.weapon.pointer]?.name} after`,
+			);
+			for (let i = 0; i < 120; i++) {
+				press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
+				s.beat();
+			}
+			const shots = s.sim.combat.statsOf(sp.slot).shots;
+			check(
+				shots > 0 && save.ammoNormal < 30,
+				"...and the server's combat fires the pistol, from the server's reserve",
+				`${shots} shot(s), reserve 30 -> ${save.ammoNormal}`,
+			);
+			s.run(0.3);
+			const bag = s.lastBag(pl);
+			check(
+				bag?.ack === n && bag?.equip?.[0] === 10 && bag?.ammo?.[0] === save.ammoNormal,
+				"the wallet's bag answers the verb (its nonce), with the pistol in hand and the reserve the server spent",
+				JSON.stringify(bag && { ack: bag.ack, weapon: bag.equip[0], ammo: bag.ammo[0] }),
+			);
+			s.quit(pl);
+		}
+		{
+			// NET-2: the Bag's Use / Eat is a UseItem verb: the SERVER's body heals and eats, the server's backpack pays
+			const pl = s.join(newUser(), "eater");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
+			const CAN = USABLES.find(u => u.name === "Canned food").id;
+			save.invenUse[BANDAGE] = 3;
+			save.invenUse[CAN] = 3;
+			const sp = s.enter(pl);
+			s.immortal.delete(pl);
+			sp.state.godMode = false;
+			sp.state.hp = 40;
+			sp.state.hungry = 30;
+			const client = clone(save);
+			verb(pl, IK.UseItem, BANDAGE);
+			verb(pl, IK.UseItem, CAN);
+			press(pl, 0, 0);
+			s.run(0.6);
+			check(
+				sp.state.hp > 55 && sp.state.hungry > 45 && save.invenUse[BANDAGE] === 2 && save.invenUse[CAN] === 2,
+				"[NET-2] eating on the server: the bandage heals and the can feeds the server's body, one of each is gone",
+				`${sp.state.hp.toFixed(0)} hp / ${sp.state.hungry.toFixed(0)} food; bandages ${save.invenUse[BANDAGE]}, cans ${save.invenUse[CAN]}`,
+			);
+			s.report(pl, reportOf(client));
+			check(
+				save.invenUse[BANDAGE] === 2 && save.invenUse[CAN] === 2,
+				"a report still holding the bandage and the can does not give them back",
+			);
+			s.quit(pl);
+		}
+		{
+			// NET-3: the client's predicted reloads spend its own copy of the reserve, the server spends its own, and a report
+			// cannot write an unspent number back over the server's
+			const pl = s.join(newUser(), "shooter");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			save.invenWeapon[10] = 1;
+			save.equipWeapon = 10;
+			save.ammoNormal = 40;
+			const sp = s.enter(pl);
+			// the client's own copy, through the client's real predicted weapon machine: fire and reload for 10 s
+			const client = clone(save);
+			const clientStart = client.ammoNormal;
+			const cRefs = {
+				world: W.createWorld(4000, 4000),
+				players: [],
+				player: Ply.createPlayer(client, 1000, 1000),
+				save: client,
+				input: new InputState(),
+				zombies: [],
+				bosses: [],
+				bullets: [],
+				pendingPlace: -1,
+				fx: [],
+				onMessage: () => {},
+				onExp: () => {},
+			};
+			cRefs.players.push(cRefs.player);
+			const cCombat = new CCombat.Combat();
+			for (let i = 0; i < 600; i++) {
+				cRefs.input.attackHeld = true;
+				cRefs.input.attackPressed = true;
+				cCombat.update(cRefs, 1 / 60);
+			}
+			check(
+				client.ammoNormal < clientStart,
+				"[NET-3] the client's predicted reloads spend its copy of the reserve: the HUD's number drops",
+				`client ${clientStart} -> ${client.ammoNormal}`,
+			);
+			for (let i = 0; i < 600; i++) {
+				press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
+				s.beat();
+			}
+			const fired = s.sim.combat.statsOf(sp.slot).shots;
+			const serverLeft = save.ammoNormal;
+			const unspent = clone(client);
+			unspent.ammoNormal = clientStart;
+			s.report(pl, reportOf(unspent));
+			check(
+				fired > 10 && serverLeft < clientStart && save.ammoNormal === serverLeft,
+				"[NET-3] the server spends its own reserve, and a report of the unspent number changes nothing",
+				`server fired ${fired}, its reserve ${clientStart} -> ${serverLeft} -> ${save.ammoNormal} after the report`,
+			);
+			s.quit(pl);
+		}
+		{
+			// NET-4: armour, gadgets (a light) and skills are verbs too: the server's damage, walk and light rule see them
+			// from the tick of the click
+			const pl = s.join(newUser(), "armoured");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
+			const LIGHT = Object.keys(EQUIP_LIGHTS)
+				.map(Number)
+				.find(id => SAVE2.equipSlotOf(id) !== SAVE2.equipSlotOf(STEEL));
+			save.invenEquip[STEEL] = 1;
+			save.invenEquip[LIGHT] = 1;
+			save.level = 4;
+			save.skillPoint = 3;
+			const sp = s.enter(pl);
+			const defBefore = Ply2.playerEquipDefence(save);
+			verb(pl, IK.Equip, STEEL);
+			verb(pl, IK.Equip, LIGHT);
+			verb(pl, IK.LearnSkill, 7);
+			press(pl, 0, 0);
+			const consumed = untilConsumed(sp, seq);
+			check(
+				consumed &&
+					defBefore === 0 &&
+					Ply2.playerEquipDefence(save) === EQUIPS[STEEL].def &&
+					SAVE2.equippedIn(save, SAVE2.equipSlotOf(LIGHT)) === LIGHT &&
+					save.skillLevels[7] === 1 &&
+					save.skillPoint === 2,
+				`[NET-4] the Steel armor protects, the ${EQUIPS[LIGHT].name} is on and Trot counts from the tick of the click`,
+				`defence ${defBefore} -> ${Ply2.playerEquipDefence(save)}, light ${SAVE2.equippedIn(save, SAVE2.equipSlotOf(LIGHT))}, Trot ${save.skillLevels[7]}, points ${save.skillPoint}`,
+			);
+			s.quit(pl);
+		}
+		{
+			// NET-5 (the network audit's H1): a report can no longer write ANY of the backpack
+			const pl = s.join(newUser(), "forger");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			const sp = s.enter(pl);
+			const HMG = WEAPONS.find(w => w.name === "Heavy machine gun").id;
+			const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
+			const trusted = clone(save);
+			const client = clone(save);
+			client.invenWeapon[HMG] = 1;
+			client.equipWeapon = HMG;
+			client.ammoMachinegun = 99999;
+			client.ammoNormal = 99999;
+			client.oil = 99999;
+			client.invenEtc[29] = 999;
+			client.invenUse[0] = 999;
+			client.invenEquip[STEEL] = 1;
+			client.equipCloth = STEEL;
+			client.skillLevels[3] = 3;
+			client.packsOpened[0] = 5;
+			s.report(pl, { ...reportOf(client), skillPoint: 40 });
+			s.beat();
+			const moved = BPK.SERVER_BACKPACK_FIELDS.filter(
+				k => JSON.stringify(save[k]) !== JSON.stringify(trusted[k]),
+			);
+			check(
+				moved.length === 0 && sp.state.weapon.pointer !== HMG,
+				"[NET-5] a forged report writes nothing of the backpack: no weapon, round, fuel, material, usable, armour, skill or pack",
+				moved.map(k => `${k}: ${JSON.stringify(trusted[k])} -> ${JSON.stringify(save[k])}`).join(" | "),
+			);
+			s.quit(pl);
+		}
+		{
+			// NET-6: a construction is the server's: crafted by a verb, placed by the click (the command's attack edge) where
+			// the SERVER says the survivor aims, solid for the server's horde, and on every screen through the World channel
+			check(
+				s.sim.build !== undefined && /serverOwnsWorld\(\)/.test(source("client/systems/build.ts")),
+				"[NET-6] the server runs the constructions, and the client's build mode defers to it",
+			);
+			const recipe = CRAFT_RECIPES.find(
+				r =>
+					r.craftKind === 1 &&
+					RULE2.recipeStation(r) === undefined &&
+					PLC2.PLACEABLES[r.resultIndex] !== undefined,
+			);
+			const pl = s.join(newUser(), "builder");
+			const other = s.join(newUser(), "neighbour");
+			s.immortal.add(pl);
+			s.immortal.add(other);
+			const save = s.save(pl);
+			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
+			const sp = s.enter(pl);
+			s.enter(other);
+			// an open patch of street, so the only thing the test measures is the server's rule, not a car in the way
+			const world = s.sim.world;
+			const def = PLC2.PLACEABLES[recipe.resultIndex];
+			const bodies = s.sim.players().map(q => q.state);
+			const clear = (x, y) =>
+				x > 400 &&
+				y > 400 &&
+				x < world.width - 400 &&
+				y < world.height - 400 &&
+				W2.querySolids(world, x - 260, y - 260, x + 260, y + 260, []).every(q => q.passable === true) &&
+				(s.sim.horde?.zombies ?? []).every(z => Math.hypot(z.x - x, z.y - y) > 500) &&
+				PLC2.placementValid(world, PLC2.ghostRect(def, x, y, 0, 0), [...bodies, { x, y }], []);
+			let spot;
+			for (let r = 1; r < 60 && spot === undefined; r++) {
+				for (let a = 0; a < 8 && spot === undefined; a++) {
+					const x = Math.round(sp.state.x + Math.cos((a * Math.PI) / 4) * r * 160);
+					const y = Math.round(sp.state.y + Math.sin((a * Math.PI) / 4) * r * 160);
+					if (clear(x, y)) spot = [x, y];
+				}
+			}
+			sp.state.x = spot[0];
+			sp.state.y = spot[1];
+			s.clearWorldLog();
+			verb(pl, IK.Craft, recipe.id);
+			press(pl, 0, 0);
+			untilConsumed(sp, seq);
+			check(
+				s.sim.build.pendingOf(sp.slot) === recipe.resultIndex &&
+					recipe.ingredients.every(ing => INV2.countItem(save, ing.kind, ing.index) === 0),
+				"the Craft verb puts the construction on the SERVER's cursor and takes the ingredients from its backpack",
+				`cursor ${s.sim.build.pendingOf(sp.slot)}`,
+			);
+			press(pl, 0, P2.packEdges(1, 0, 0, 0));
+			untilConsumed(sp, seq);
+			const built = world.solids.find(q => q.placeable === recipe.resultIndex && q.owner === sp.slot);
+			check(
+				built !== undefined && built.id >= CFG2.DYNAMIC_ID_BASE && s.sim.build.pendingOf(sp.slot) === -1,
+				"[NET-6] the click places it in the SERVER's world, with a server id, and frees the cursor",
+				built === undefined
+					? `nothing placed: survivor (${sp.state.x.toFixed(0)}, ${sp.state.y.toFixed(0)}) aim ${sp.state.angle.toFixed(2)}, ` +
+							`spot ${spot}, cursor ${s.sim.build.pendingOf(sp.slot)}, ghost valid ${PLC2.placementValid(
+								world,
+								PLC2.ghostRect(def, sp.state.x, sp.state.y, sp.state.angle, 0),
+								s.sim.players().map(q => q.state),
+								s.sim.horde?.zombies ?? [],
+							)}, acked ${sp.ackSeq}/${seq}`
+					: `id ${built.id} at (${built.x}, ${built.y})`,
+			);
+			if (built === undefined) return;
+			const r = 14;
+			const from = built.x - r - 40;
+			const moved = PHYS2.moveActor(world, from, built.y + built.h / 2, r, 200, 0);
+			check(
+				PHYS2.blocksMovement(built) && moved.x + r <= built.x + 0.5,
+				"[NET-6] the server's zombies collide with it: a body walked into it stops at its face",
+				`x ${from} -> ${moved.x.toFixed(1)}, the wall at ${built.x}`,
+			);
+			const addsTo = who => {
+				const out = [];
+				for (const e of s.remote("World").sent) {
+					if (e.to !== undefined && e.to !== who) continue;
+					const batch = P2.decodeWorld(e.args[0]);
+					for (const ev of batch?.events ?? [])
+						if (ev.t === P2.WorldEv.SolidAdd && ev.id === built.id) out.push(ev);
+				}
+				return out;
+			};
+			const seenByOther = addsTo(other);
+			check(
+				seenByOther.length === 1 && addsTo(pl).length === 1,
+				"[NET-6] ...and every survivor in the world is told, the builder and the neighbour alike (one SolidAdd each)",
+				`neighbour ${seenByOther.length}, builder ${addsTo(pl).length}`,
+			);
+			// the neighbour's client lays it over its own town: the same wall, the same id, the same rect
+			const theirs = W2.createWorld(world.width, world.height);
+			if (seenByOther[0] !== undefined) Mirror.applyMirrorEvent(theirs, seenByOther[0]);
+			const mirrored = theirs.solids.find(q => q.id === built.id);
+			check(
+				mirrored !== undefined &&
+					mirrored.x === built.x &&
+					mirrored.y === built.y &&
+					mirrored.w === built.w &&
+					mirrored.h === built.h &&
+					PHYS2.blocksMovement(mirrored),
+				"the neighbour's mirror (client/net/worldMirror.ts) builds the same solid wall, same id, same rect",
+				mirrored === undefined ? "missing" : `(${mirrored.x}, ${mirrored.y}, ${mirrored.w}x${mirrored.h})`,
+			);
+			// and whoever enters later finds it in the WorldInit
+			s.clearWorldLog();
+			const late = s.join(newUser(), "latecomer");
+			s.immortal.add(late);
+			s.enter(late);
+			check(addsTo(late).length >= 1, "a survivor who enters later gets it in the WorldInit");
+			for (const q of [pl, other, late]) s.quit(q);
+		}
+	},
+);
+
+section(
+	"G5. the client's half of §4.8: its prediction, and the server's bag laid over it (client/net/bagPrediction.ts)",
+	() => {
+		const s = Roblox.bootServer();
+		const IK = s.P.IntentKind;
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const Ply2 = require(join(SRC, "shared/game/player.ts"));
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const RULE2 = require(join(SRC, "shared/sim/craftRule.ts"));
+		const CAN = USABLES.find(u => u.name === "Canned food").id;
+		const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
+		const pl = s.join(newUser(), "predictor");
 		s.immortal.add(pl);
 		const save = s.save(pl);
-		const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
-		const CAN = USABLES.find(u => u.name === "Canned food").id;
+		save.invenUse[CAN] = 5;
 		const sp = s.enter(pl);
-		s.immortal.delete(pl);
-		sp.state.godMode = false;
-		sp.state.hp = 40;
-		sp.state.hungry = 30;
+		sp.state.hungry = 10;
+		s.run(0.3);
 		const client = clone(save);
 		const body = Ply2.createPlayer(client, 0, 0);
-		body.hp = 40;
-		body.hungry = 30;
-		const ateB = Ply2.itemUseEffect(body, client, BANDAGE);
-		const ateC = Ply2.itemUseEffect(body, client, CAN);
-		s.report(pl, reportOf(client));
+		body.hungry = 10;
+		const cursor = { pendingPlace: -1 };
+		const entries = [];
+
+		// 1. a verb the server takes: predicted at once, kept over an older bag, retired by the bag that answers it
+		check(
+			BP.predictVerb(client, cursor, IK.UseItem, CAN, body) && client.invenUse[CAN] === 4,
+			"a Use is predicted at once, by the server's rule: one can fewer on the client's copy",
+		);
+		entries.push({ kind: IK.UseItem, arg: CAN, nonce: 1, seq: 0, at: 0 });
+		const older = SAVE2.readBag(SAVE2.bagOf(save, -1, 0, 0));
+		s.verb(pl, IK.UseItem, CAN, 0, 1);
+		BP.rebase(client, cursor, older, entries, 0.1);
+		check(
+			client.invenUse[CAN] === 4 && entries.length === 1,
+			"a bag the server wrote before it had the verb keeps the prediction on top",
+		);
 		s.run(0.5);
-		knownBug(
-			"NET-2",
-			ateB &&
-				ateC &&
-				save.invenUse[BANDAGE] === client.invenUse[BANDAGE] &&
-				sp.state.hp < 55 &&
-				sp.state.hungry < 50,
-			"eating and using items does nothing: the effect lands on the client's copy of the body (overwritten by the next snapshot), the server's hp and hunger never move, and the report then takes the item away",
-			`client ${body.hp.toFixed(0)} hp / ${body.hungry.toFixed(0)} food; server ${sp.state.hp.toFixed(0)} hp / ${sp.state.hungry.toFixed(0)} food; bandages left on the server ${save.invenUse[BANDAGE]}`,
+		const answer = SAVE2.readBag(s.lastBag(pl));
+		check(answer?.ack === 1 && answer.invenUse[CAN] === 4, "the server ate it too, and its bag answers nonce 1");
+		BP.rebase(client, cursor, answer, entries, 0.2);
+		check(
+			client.invenUse[CAN] === 4 && entries.length === 0,
+			"that bag retires the prediction: the server's count stands and nothing is eaten twice",
 		);
+
+		// 2. a verb the server refuses: predicted, then undone by the bag that answers it
+		client.invenEquip[STEEL] = 1; // a client that believes it owns the armour; the server knows it does not
+		check(
+			BP.predictVerb(client, cursor, IK.Equip, STEEL) && client.equipCloth === STEEL,
+			"an Equip is predicted at once",
+		);
+		entries.push({ kind: IK.Equip, arg: STEEL, nonce: 2, seq: 0, at: 0.3 });
+		s.verb(pl, IK.Equip, STEEL, 0, 2);
+		s.run(0.5);
+		const refused = SAVE2.readBag(s.lastBag(pl));
+		BP.rebase(client, cursor, refused, entries, 0.8);
+		check(
+			refused?.ack === 2 && client.equipCloth === -1 && client.invenEquip[STEEL] === 0 && entries.length === 0,
+			"the server refused it (not owned): the bag that answers it takes the armour off again",
+		);
+
+		// 3. an answer that never comes: dropped after PENDING_TTL_S, and the server's bag stands
+		check(
+			BP.predictVerb(client, cursor, IK.UseItem, CAN, body) && client.invenUse[CAN] === 3,
+			"another can, predicted",
+		);
+		entries.push({ kind: IK.UseItem, arg: CAN, nonce: 3, seq: 0, at: 1 });
+		BP.rebase(client, cursor, refused, entries, 1 + BP.PENDING_TTL_S / 2);
+		check(client.invenUse[CAN] === 3 && entries.length === 1, "still waiting for the server: the prediction holds");
+		BP.rebase(client, cursor, refused, entries, 1 + BP.PENDING_TTL_S + 0.1);
+		check(
+			client.invenUse[CAN] === 4 && entries.length === 0,
+			`never answered: after PENDING_TTL_S (${BP.PENDING_TTL_S} s) the server's count comes back`,
+		);
+
+		// 4. a construction: the Craft puts it on the cursor at once, and the click (a build edge on command 40) frees it
+		const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && RULE2.recipeStation(r) === undefined);
+		for (const ing of recipe.ingredients) INV2.addItem(client, ing.kind, ing.index, ing.count);
+		check(
+			BP.predictVerb(client, cursor, IK.Craft, recipe.id) && cursor.pendingPlace === recipe.resultIndex,
+			"a construction's Craft puts it on the cursor at once",
+		);
+		check(
+			!BP.predictVerb(client, cursor, IK.Craft, recipe.id),
+			"and a second one is not predicted while the first is on the cursor (the server says `busy`)",
+		);
+		const held = { ...refused, ack: 4, place: recipe.resultIndex, seq: 38 };
+		entries.push({ kind: IK.Craft, arg: recipe.id, nonce: 4, seq: 0, at: 2 });
+		cursor.pendingPlace = -1; // client/systems/build.ts: the click leaves the cursor at once...
+		entries.push({ kind: BP.EDGE_ENTRY, arg: 0, nonce: 0, seq: 40, at: 2.1 }); // ...and notes the edge
+		BP.rebase(client, cursor, held, entries, 2.2);
+		check(
+			cursor.pendingPlace === -1 && entries.length === 1,
+			"a bag written before the server consumed command 40 does not put the construction back on the cursor",
+		);
+		BP.rebase(client, cursor, { ...held, seq: 40 }, entries, 2.3);
+		check(
+			cursor.pendingPlace === recipe.resultIndex && entries.length === 0,
+			"one written after it says what the server did: here it refused the spot, so it is back on the cursor",
+		);
+		BP.rebase(client, cursor, { ...held, seq: 44, place: -1 }, entries, 2.4);
+		check(cursor.pendingPlace === -1, "and once the server placed it, it is gone from the cursor for good");
 		s.quit(pl);
-	}
-	{
-		// NET-3: the server spends the reserve on its reloads; the client's predicted reload never does, and its report
-		// carries the unspent number back
-		const pl = s.join(newUser(), "shooter");
-		s.immortal.add(pl);
+	},
+);
+
+section(
+	"G6. the owner's report (2026-09-23): the Food bar fills, a bandage heals, a buff runs -- server, self block, HUD",
+	() => {
+		// "using an item to raise the Food bar does nothing": at MP_PHASE 2 the self block owns hp, hunger and the buffs
+		// (client/net/prediction.ts `applyVitals`), so an effect applied only on the client was undone by the next
+		// snapshot while the report still took the item away. From F3 the Bag's Use is the server's verb: the client
+		// predicts the COUNT only, and the vitals come back in the self block. Here the whole path: the real server, its
+		// real snapshots decoded off the wire, and the client's real prediction adopting them.
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const Ply2 = require(join(SRC, "shared/game/player.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const byName = n => USABLES.find(u => u.name === n).id;
+		const CAN = byName("Canned food");
+		const BANDAGE = byName("Bandage");
+		const APPLE = byName("Apple");
+		const RUSH = USABLES.find(u => u.speed > 0 && u.hp === 0 && u.hunger === 0).id;
+		const pl = s.join(newUser(), "hungry");
+		s.immortal.add(pl); // no bites: every hp and food point below is the item's
 		const save = s.save(pl);
-		save.invenWeapon[10] = 1;
-		save.equipWeapon = 10;
-		save.ammoNormal = 40;
+		for (const id of [CAN, BANDAGE, APPLE, RUSH]) save.invenUse[id] = 3;
 		const sp = s.enter(pl);
-		// the client's own copy, through the client's real predicted weapon machine: fire and reload for 10 s
+		sp.state.hp = 40;
+		sp.state.hungry = 30;
+		// the client: its copy of the backpack, its survivor, and the prediction that adopts every self block
 		const client = clone(save);
-		const clientStart = client.ammoNormal;
-		const cRefs = {
-			world: W.createWorld(4000, 4000),
-			players: [],
-			player: Ply.createPlayer(client, 1000, 1000),
-			save: client,
-			input: new InputState(),
-			zombies: [],
-			bosses: [],
-			bullets: [],
-			pendingPlace: -1,
-			fx: [],
-			onMessage: () => {},
-			onExp: () => {},
+		const body = Ply2.createPlayer(client, sp.state.x, sp.state.y);
+		const pred = new Prediction();
+		pred.attach(W2.createWorld(s.sim.world.width, s.sim.world.height), body, client);
+		const cursor = { pendingPlace: -1 };
+		const entries = [];
+		const snapRemote = s.remote("Snap");
+		let nonce = 0;
+		let now = 0;
+		/** every self block the server sent this client since the last call, adopted in order (netClient's `reconcile`) */
+		const drain = () => {
+			const selves = [];
+			for (const e of snapRemote.sent) {
+				if (e.to !== pl) continue;
+				const part = P2.decodeSnapshotPart(e.args[0]);
+				if (part?.self !== undefined) selves.push(part.self);
+			}
+			snapRemote.sent.length = 0;
+			for (const self of selves) {
+				now += 0.05;
+				pred.reconcile(self, [], now);
+			}
+			return selves;
 		};
-		cRefs.players.push(cRefs.player);
-		const cCombat = new CCombat.Combat();
-		for (let i = 0; i < 600; i++) {
-			cRefs.input.attackHeld = true;
-			cRefs.input.attackPressed = true;
-			cCombat.update(cRefs, 1 / 60);
-		}
-		for (let i = 0; i < 600; i++) {
-			press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
-			s.beat();
-		}
-		const fired = s.sim.combat.statsOf(sp.slot).shots;
-		const serverLeft = save.ammoNormal;
-		s.report(pl, reportOf(client));
-		knownBug(
-			"NET-3",
-			fired > 10 &&
-				client.ammoNormal === clientStart &&
-				serverLeft < clientStart &&
-				save.ammoNormal === clientStart,
-			"ammunition refills itself: the client's predicted reloads never spend its copy of the reserve (the HUD's reserve never drops), and each report writes that unspent number over the server's",
-			`server fired ${fired}, its reserve ${serverLeft} -> ${save.ammoNormal} after the report; client reserve ${client.ammoNormal}`,
+		/** the Bag's Use as client/net/backpackSync.ts makes it: predicted on the client's copy, then sent with a nonce */
+		const use = id => {
+			if (!BP.predictVerb(client, cursor, IK.UseItem, id, body)) return false;
+			nonce += 1;
+			entries.push({ kind: IK.UseItem, arg: id, nonce, seq: 0, at: now });
+			s.verb(pl, IK.UseItem, id, 0, nonce);
+			return true;
+		};
+		/** the server's time passes: its snapshots reach the client's survivor, then its last bag the client's backpack */
+		const play = seconds => {
+			const trail = [];
+			for (let t = 0; t < seconds; t += 0.05) {
+				s.run(0.05);
+				for (const self of drain()) {
+					trail.push({ hp: body.hp, hungry: body.hungry, speed: body.buffs.speed, flags: self.flags });
+				}
+			}
+			const bag = SAVE2.readBag(s.lastBag(pl));
+			if (bag !== undefined) BP.rebase(client, cursor, bag, entries, now);
+			return trail;
+		};
+		play(0.4);
+		check(
+			Math.abs(body.hungry - 30) <= 1 && Math.abs(body.hp - 40) <= 1,
+			"the client's bars are the server's body (the self block): 40 hp, 30 food",
+			`${body.hp.toFixed(1)} hp / ${body.hungry.toFixed(1)} food`,
 		);
-		s.quit(pl);
-	}
-	{
-		// NET-4: armour and skills too -- chosen in the Bag, they reach the server's damage and movement at the report
-		const pl = s.join(newUser(), "armoured");
-		s.immortal.add(pl);
-		const save = s.save(pl);
-		const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
-		save.invenEquip[STEEL] = 1;
-		save.level = 4;
-		save.skillPoint = 3;
-		s.enter(pl);
-		const client = clone(save);
-		client.equipCloth = STEEL; // the Bag's Equip
-		client.skillLevels[7] = 1; // the Bag's Learn: Trot
-		client.skillPoint = 2;
-		s.run(1);
-		const defBefore = Ply2.playerEquipDefence(save);
-		const trotBefore = save.skillLevels[7];
-		s.report(pl, reportOf(client));
-		knownBug(
-			"NET-4",
-			defBefore === 0 &&
-				trotBefore === 0 &&
-				Ply2.playerEquipDefence(save) === EQUIPS[STEEL].def &&
-				save.skillLevels[7] === 1,
-			`armour, gadgets and skills chosen in the Bag reach the server's damage and speed only with the next report (autosave ${autosave} s): until then the Steel armor protects nothing and Trot adds nothing`,
-			`defence ${defBefore} -> ${Ply2.playerEquipDefence(save)}, Trot ${trotBefore} -> ${save.skillLevels[7]} at the report`,
+
+		// 1. food
+		const food0 = body.hungry;
+		check(
+			use(CAN) && client.invenUse[CAN] === 2 && body.hungry === food0,
+			"Eat: one can fewer on the client at once, and the bar is NOT moved locally (the snapshot owns it)",
 		);
-		s.quit(pl);
-	}
-	{
-		// NET-5: the report is also a way to write any backpack at all (F3 takes the inventory away from it)
-		const pl = s.join(newUser(), "forger");
-		s.immortal.add(pl);
-		const save = s.save(pl);
-		const sp = s.enter(pl);
-		const HMG = WEAPONS.find(w => w.name === "Heavy machine gun").id;
-		const client = clone(save);
-		client.invenWeapon[HMG] = 1;
-		client.equipWeapon = HMG;
-		client.ammoMachinegun = 99999;
-		client.invenEtc[29] = 999;
-		s.report(pl, reportOf(client));
+		let trail = play(1);
+		const fedAt = trail.findIndex(t => t.hungry >= food0 + 20);
+		check(
+			sp.state.hungry >= food0 + 20 && fedAt >= 0 && Math.abs(body.hungry - sp.state.hungry) <= 1.5,
+			"[food] the SERVER's body ate the can, and the self block brought its hunger to the client's bar",
+			`server ${sp.state.hungry.toFixed(1)}, client ${body.hungry.toFixed(1)} (from ${food0.toFixed(1)})`,
+		);
+		check(
+			fedAt >= 0 && trail.slice(fedAt).every(t => t.hungry >= food0 + 19) && trail.length >= 10,
+			"[food] and the bar stays up through every later snapshot: nothing reverts it",
+			trail.map(t => t.hungry.toFixed(0)).join(" "),
+		);
+		check(
+			save.invenUse[CAN] === 2 && client.invenUse[CAN] === 2 && entries.length === 0,
+			"one can gone on each side, exactly once, and the server's bag retired the prediction",
+			`server ${save.invenUse[CAN]}, client ${client.invenUse[CAN]}, pending ${entries.length}`,
+		);
+
+		// 2. hp
+		const hp0 = body.hp;
+		check(use(BANDAGE) && body.hp === hp0, "a Bandage: predicted as one fewer, the hp left to the snapshot");
+		trail = play(1);
+		const healedAt = trail.findIndex(t => t.hp >= hp0 + 19);
+		check(
+			healedAt >= 0 &&
+				trail.slice(healedAt).every(t => t.hp >= hp0 + 19) &&
+				Math.abs(body.hp - sp.state.hp) <= 0.5,
+			"[hp] the server's body healed 20, the self block carries it, and no later snapshot takes it back",
+			trail.map(t => t.hp.toFixed(0)).join(" "),
+		);
+
+		// 3. a buff: the flag travels, the client keeps its own timer running while it is set
+		check(use(RUSH), `${USABLES[RUSH].name}: predicted`);
+		trail = play(1);
+		const onAt = trail.findIndex(t => (t.flags & P2.SelfFlag.Speed) !== 0);
+		check(
+			sp.state.buffs.speed > 0 &&
+				onAt >= 0 &&
+				trail.slice(onAt).every(t => (t.flags & P2.SelfFlag.Speed) !== 0 && t.speed > 0) &&
+				body.buffs.speed > 0,
+			`[buff] ${USABLES[RUSH].name} runs on the server; its flag is on the wire and the client's timer runs with it`,
+			`server ${sp.state.buffs.speed.toFixed(1)} s, client ${body.buffs.speed.toFixed(2)}, flagged from snapshot ${onAt}`,
+		);
+
+		// 4. a full bar: refused on the client itself -- nothing predicted, sent or eaten on either side
+		sp.state.hp = sp.state.hpMax;
+		sp.state.hungry = sp.state.hungryMax;
+		play(0.3);
+		const cans = client.invenUse[CAN];
+		const serverCans = save.invenUse[CAN];
+		const sentBefore = nonce;
+		check(
+			!use(CAN) && nonce === sentBefore && client.invenUse[CAN] === cans,
+			"[full] at full hp and food the Bag refuses the can on the client: nothing predicted, nothing sent",
+			`client ${body.hp.toFixed(0)} hp / ${body.hungry.toFixed(0)} food`,
+		);
+		// ...and a verb that reaches a full server anyway (a client a snapshot behind) is refused there, and eats nothing
+		const apples = save.invenUse[APPLE];
+		sp.state.hungry = sp.state.hungryMax;
+		nonce += 1;
+		s.verb(pl, IK.UseItem, APPLE, 0, nonce);
 		s.beat();
-		knownBug(
-			"NET-5",
-			save.invenWeapon[HMG] === 1 && save.ammoMachinegun === 99999 && sp.state.weapon.pointer === HMG,
-			"a save report can write any weapon, ammunition or material into the backpack, and the server's combat then fires it (only cosmetics, coins and progress are guarded)",
-			`after one forged report: ${WEAPONS[HMG].name} in hand, ${save.ammoMachinegun} MG rounds, ${save.invenEtc[29]} blueprints`,
+		play(0.4);
+		check(
+			save.invenUse[APPLE] === apples && save.invenUse[CAN] === serverCans && s.lastBag(pl)?.ack === nonce,
+			"[full] the server refuses it too: no apple eaten, and its bag answers the verb all the same",
+			`apples ${apples} -> ${save.invenUse[APPLE]}, ack ${s.lastBag(pl)?.ack}/${nonce}`,
+		);
+
+		// 5. a verb the server refuses rolls the client's prediction back
+		save.invenUse[RUSH] = 0; // the server's copy has none left; the client, a bag behind, believes it has
+		const believed = client.invenUse[RUSH];
+		sp.state.buffs.speed = 0;
+		check(
+			believed > 0 && use(RUSH) && client.invenUse[RUSH] === believed - 1,
+			"a Use the client believes in: predicted",
+		);
+		trail = play(0.5);
+		check(
+			client.invenUse[RUSH] === 0 && entries.length === 0 && sp.state.buffs.speed === 0,
+			"[refused] the server had none: its bag rolls the client back to its count, and no buff started anywhere",
+			`client ${client.invenUse[RUSH]}, server buff ${sp.state.buffs.speed}`,
 		);
 		s.quit(pl);
-	}
-	{
-		// NET-6: what the survivor builds at MP_PHASE 2 lives only in the builder's client
-		const build = source("client/systems/build.ts");
-		const local = /addSolid\(refs\.world/.test(build) && !/FireServer|sendIntent|net\./.test(build);
-		knownBug(
-			"NET-6",
-			s.sim.build === undefined && local,
-			"a barricade, door, campfire or desk built at MP_PHASE 2 exists only in the builder's client: the server's zombies walk through it and the other players never see it",
-			`server build system: ${s.sim.build === undefined ? "off" : "on"}`,
+	},
+);
+
+section(
+	"G7. the reviews of 5967a18, on the real server: a held build through death and New game, the refused spot, floods",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const PLC2 = require(join(SRC, "shared/sim/placement.ts"));
+		const RULE2 = require(join(SRC, "shared/sim/craftRule.ts"));
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const recipe = CRAFT_RECIPES.find(
+			r =>
+				r.craftKind === 1 &&
+				RULE2.recipeStation(r) === undefined &&
+				PLC2.PLACEABLES[r.resultIndex] !== undefined,
 		);
-	}
-});
+		let seq = 0;
+		let nonce = 0;
+		const press = (pl, edges) => {
+			seq += 1;
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, 0, edges));
+			s.remote("Input").OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+		};
+		const untilConsumed = (sp, want) => {
+			for (let i = 0; i < 90 && sp.ackSeq < want; i++) s.beat();
+			return sp.ackSeq >= want;
+		};
+		// a survivor who stays up, so a death does not end the world (MP-22)
+		const friend = s.join(newUser(), "friend");
+		s.immortal.add(friend);
+		s.enter(friend);
+
+		{
+			// R1 (security review): a construction held through a death and a New game
+			const pl = s.join(newUser(), "carrier");
+			const save = s.save(pl);
+			const cnt = () => recipe.ingredients.map(i => INV2.countItem(save, i.kind, i.index)).join(",");
+			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
+			s.immortal.add(pl);
+			const sp = s.enter(pl);
+			const paid = cnt();
+			s.verb(pl, IK.Craft, recipe.id, 0, ++nonce);
+			s.run(0.2);
+			const held = s.sim.build.pendingOf(sp.slot) === recipe.resultIndex;
+			const spent = cnt();
+			s.immortal.delete(pl);
+			s.kill(pl);
+			check(
+				held && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === paid,
+				"[R1] a death with a construction on the cursor refunds it into the DYING run (the body keeps its backpack through a Rebirth)",
+				`held ${held}; ingredients ${paid} -> ${spent} -> ${cnt()}`,
+			);
+			s.run(0.6);
+			const fresh = s.shop(pl, { kind: "newRun", runRev: save.runRev });
+			const newLife = cnt();
+			s.exit(pl); // Home: sim.remove -> build.remove(slot, save), which used to refund into the NEW life
+			s.run(1);
+			s.quit(pl);
+			const stored = s.stored(pl.UserId);
+			const persisted = recipe.ingredients.map(i => INV2.countItem(stored, i.kind, i.index)).join(",");
+			check(
+				fresh.ok === true && cnt() === newLife && persisted === newLife,
+				"[R1] ...and New game + Home refund nothing into the new life (nor into the DataStore)",
+				`new life ${newLife}, after Home ${cnt()}, stored ${persisted}`,
+			);
+		}
+		{
+			// A (correctness review): a refused spot is ANSWERED by a bag at once, with the construction still held
+			const pl = s.join(newUser(), "mason");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
+			const sp = s.enter(pl);
+			press(pl, 0);
+			untilConsumed(sp, seq);
+			s.verb(pl, IK.Craft, recipe.id, seq + 1, ++nonce);
+			press(pl, 0);
+			untilConsumed(sp, seq);
+			// a rock where the ghost is (the client's drawn zombie had moved; the server's had not)
+			const ghost = s.sim.build.ghost(sp.slot, sp.state);
+			W2.addSolid(s.sim.world, {
+				...ghost,
+				kind: "structure",
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "rock",
+			});
+			s.run(0.5);
+			const bagsBefore = s.remote("SaveAck").sent.filter(e => e.to === pl && e.args[0]?.wallet?.bag).length;
+			press(pl, P2.packEdges(1, 0, 0, 0));
+			const edge = seq;
+			untilConsumed(sp, edge);
+			s.run(0.5);
+			const bags = s.remote("SaveAck").sent.filter(e => e.to === pl && e.args[0]?.wallet?.bag);
+			const answer = bags[bags.length - 1]?.args[0].wallet.bag;
+			check(
+				bags.length > bagsBefore &&
+					answer.place === recipe.resultIndex &&
+					answer.seq >= edge &&
+					s.sim.build.pendingOf(sp.slot) === recipe.resultIndex,
+				"[A] the refused click is answered within 0.5 s: a bag past that command, the construction still on the cursor",
+				`${bags.length - bagsBefore} new bag(s); place ${answer?.place}, seq ${answer?.seq} >= ${edge}`,
+			);
+			s.quit(pl);
+		}
+		{
+			// R6 (security review): a pack bought on the death screen waits for a body, and survives the New game
+			const { SHOP_PACKS: PACKS } = require(join(SRC, "shared/data/shop.ts"));
+			const pack = PACKS[0];
+			const pl = s.join(newUser(), "buyer");
+			const save = s.save(pl);
+			save.money = 100000;
+			s.enter(pl);
+			s.kill(pl);
+			s.run(0.6);
+			const bought = s.shop(pl, { kind: "buyPack", packId: pack.id });
+			s.run(1);
+			const whileDead = save.packsOpened[pack.id];
+			s.run(0.6);
+			s.shop(pl, { kind: "newRun", runRev: save.runRev });
+			check(
+				bought.ok === true && whileDead === 0 && save.packsBought[pack.id] - save.packsOpened[pack.id] === 1,
+				"[R6] bought while dead: not delivered into the run the New game wipes -- still owed to the new life",
+				`opened while dead ${whileDead}, pending after New game ${save.packsBought[pack.id] - save.packsOpened[pack.id]}`,
+			);
+			s.quit(pl);
+		}
+		{
+			// R5 (security review): the presence verbs of a survivor in the world count toward the flood kick too
+			const pl = s.join(newUser(), "presenceSpam");
+			s.immortal.add(pl);
+			s.enter(pl);
+			for (let i = 0; i < 5000; i++) s.intent(pl, IK.EnterWorld);
+			s.beat();
+			check(pl.kicked === true, "[R5] 5000 EnterWorld from a survivor in the world: kicked (§8.2)");
+		}
+		{
+			// the client's half (client/net/bagPrediction.ts, backpackSync.ts, main.client.ts), by the rule and by the source
+			const save = SAVE.defaultSave();
+			save.invenWeapon[10] = 1;
+			const body = Ply.createPlayer(save, 0, 0);
+			check(
+				!BP.predictVerb(save, { pendingPlace: 10 }, IK.SwitchWeapon, 10, body) &&
+					BP.predictVerb(save, { pendingPlace: -1 }, IK.SwitchWeapon, 10, body),
+				"[E] a switch is not predicted with a construction on the cursor (the server says `busy`)",
+			);
+			body.dead = true;
+			check(
+				!BP.predictVerb(save, { pendingPlace: -1 }, IK.SwitchWeapon, 0, body),
+				"[E] nor for a dead body (the server says `dead`)",
+			);
+			const sync = source("client/net/backpackSync.ts");
+			check(
+				/inFlight\(\) >= INTENT_QUEUE_MAX\) return false/.test(sync),
+				"[C] the client never has more verbs in flight than the server queues (INTENT_QUEUE_MAX)",
+			);
+			check(
+				/save !== bagSave \|\| save\.runRev !== bagRunRev/.test(sync),
+				"[F] a replaced save, or a run that ended, drops the last bag and its predictions",
+			);
+			const main = source("client/main.client.ts");
+			const onUse = main.slice(main.indexOf("pack.onUse = "), main.indexOf("pack.onCraft = "));
+			check(
+				/Bag\.useItem\(/.test(onUse) &&
+					!/itemUseEffect/.test(main) &&
+					/if \(owned\(\)\) return predictAndSend\(IntentKind\.UseItem/.test(sync),
+				"[L] the Bag's Use goes through backpackSync (a server verb when owned), never the local itemUseEffect",
+			);
+			check(
+				/SERVER_WORLD/.test(source("client/admin/world.ts")),
+				"[K] the admin's item and structure spawns refuse while the server owns the world",
+			);
+		}
+		s.quit(friend);
+	},
+);
 
 // ---------------------------------------------------------------- verdict
 

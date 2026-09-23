@@ -431,7 +431,7 @@ export class Replicator {
 	 * zombie `z`: a body sent in the mid ring is drawn one near interval later than the buffer's render time
 	 * (client/net/snapshotBuffer.ts, `extra`), a near one at it, and a body that changed ring somewhere in between,
 	 * because the client eases that over a second. The answer mirrors that easing from the `mid` flags the snapshots
-	 * actually carried to this viewer (`hordeRings`, `zombiesFor`); switched at once with the ring, it was up to
+	 * actually carried to this viewer (`hordeRings`, `noteCarried`); switched at once with the ring, it was up to
 	 * 3 ticks off for a second after every crossing of 800 u (the review of dee095a, S3).
 	 */
 	viewLagOf(slot: number, z: ZombieState, viewTick: number): number {
@@ -849,18 +849,46 @@ export class Replicator {
 			const snap = this.snapshotFor(viewer, index, points);
 			const res = encodeSnapshot(snap);
 			this.stats.droppedEntities += res.dropped;
-			for (const part of res.parts) {
+			/** index in `snap.zombies` of the first zombie the part at hand carries */
+			let first = 0;
+			for (let i = 0; i < res.parts.size(); i++) {
+				const part = res.parts[i];
+				const carried = res.partZombies[i];
 				const len = buffer.len(part);
 				// the engine silently drops anything above the limit: never let it get that far unnoticed
 				if (len > UNRELIABLE_PAYLOAD_LIMIT || len > SNAP_MAX_BYTES) {
 					this.stats.droppedEntities += 1;
+					first += carried;
 					continue;
 				}
 				this.transport.snap(viewer.slot, part);
 				this.stats.snapParts += 1;
 				this.stats.snapBytes += len;
 				this.addBytes(viewer.slot, len + REMOTE_OVERHEAD_BYTES);
+				this.noteCarried(viewer.slot, snap.zombies, first, carried, snap.tick);
+				first += carried;
 			}
+		}
+	}
+
+	/**
+	 * What this viewer's tracks will hold, and so how far back it will draw each body (`viewLagOf`): the `mid` flags of
+	 * the zombies a part that went out actually carried. Noted before the encoder, the ones it cut past its last part
+	 * were marked sent, with a ring, to a client that never had a track for them (the second review of the
+	 * zombie-motion branch, NIT 2).
+	 */
+	private noteCarried(
+		slot: number,
+		zombies: ReadonlyArray<ZombieSnap>,
+		from: number,
+		count: number,
+		tick: number,
+	): void {
+		const hz = this.sim.simHz;
+		const midExtra = midViewExtraTicks(hz);
+		for (let k = from; k < from + count; k++) {
+			const z = zombies[k];
+			if (z !== undefined) this.hordeRings.noteSent(slot, z.netId, z.mid, tick, midExtra, hz);
 		}
 	}
 
@@ -961,8 +989,6 @@ export class Replicator {
 		// the least worth drawing, and the client's despawn timeout (§4.4) retires it without a flicker
 		this.stats.droppedEntities += picks.size() - n;
 		const blocks = this.zombiePool;
-		const tick = this.sim.tick;
-		const midExtra = midViewExtraTicks(this.sim.simHz);
 		for (let i = 0; i < n; i++) {
 			const pick = picks[i];
 			let block = blocks[i];
@@ -973,9 +999,8 @@ export class Replicator {
 				fillZombieBlock(block, pick.entry.z, pick.entry.netId, pick.mid);
 			}
 			out.push(block);
-			// what this viewer's track will hold, and so how far back it will draw the body (`viewLagOf`)
-			this.hordeRings.noteSent(viewer.slot, pick.entry.netId, pick.mid, tick, midExtra);
 		}
+		// what each viewer's track holds is noted once the encoder has said what went out (`noteCarried`)
 		return out;
 	}
 

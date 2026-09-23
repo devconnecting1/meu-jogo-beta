@@ -21,10 +21,30 @@ import { WORLD_ART, WORLD_ART_NAMES, WorldArtName } from "./worldArtAssets";
 let override: Partial<Record<WorldArtName, string>> | undefined;
 /** false once the uploads proved unreachable: every surface is drawn flat from then on */
 let fetched = true;
+/**
+ * Character sheets (client/view/charArt.ts) that still failed to load after the retry. A town surface that is slow
+ * to arrive is a blank patch for a moment; a zombie drawn from a sheet that never arrives would be an INVISIBLE
+ * zombie (LEG-03, P3), so a character sheet that is still missing is given up on its own and its group -- the
+ * survivors, the horde, the dogs or the birds -- goes back to the flat drawing for the session. So is the item icon
+ * atlas: an icon that never arrives would be an empty tile, so client/ui/itemIcon.ts goes back to its Frames.
+ */
+const lost = new Set<WorldArtName>();
+/** told whenever what `artId` answers may have changed (client/ui/itemIcon.ts repaints its live icons) */
+const listeners: Array<() => void> = [];
+
+/** calls `fn` after every change of what `artId` answers: an override, or a texture given up after the preload */
+export function onWorldArtChange(fn: () => void): void {
+	listeners.push(fn);
+}
+
+function changed(): void {
+	for (const fn of listeners) fn();
+}
 
 /** the content id to draw `name` with, or undefined when that surface must be drawn flat */
 export function artId(name: WorldArtName): string | undefined {
 	if (!fetched) return undefined;
+	if (lost.has(name)) return undefined;
 	const id = override !== undefined ? override[name] : WORLD_ART[name].id;
 	return id === undefined || id === "" ? undefined : id;
 }
@@ -46,6 +66,21 @@ export function artSlice(name: WorldArtName): readonly [number, number, number, 
 export function overrideWorldArt(ids: Partial<Record<WorldArtName, string>> | undefined): void {
 	override = ids;
 	fetched = true;
+	lost.clear();
+	changed();
+}
+
+/** the characters' sheets and masks (tools/character-art.mjs): gameplay needs them whole or not at all */
+function isCharacterSheet(name: WorldArtName): boolean {
+	return (
+		name === "weapons" ||
+		name === "zombies" ||
+		name === "zombiesFill" ||
+		name === "zombiesRim" ||
+		name === "dogs" ||
+		name === "birds" ||
+		name.sub(1, 9) === "survivors"
+	);
 }
 
 /** true when at least one texture has an id (the preload has something to fetch) */
@@ -101,8 +136,20 @@ export function preloadWorldArt(): void {
 		if (missing.size() >= ids.size()) {
 			warn(`[world] art textures unavailable (${missing.size()}/${ids.size()}): drawing the town flat`);
 			fetched = false;
+			changed();
 			return;
 		}
+		for (const name of WORLD_ART_NAMES) {
+			if (isCharacterSheet(name) && missing.includes(WORLD_ART[name].id)) {
+				lost.add(name);
+				warn(`[world] character sheet ${name} did not load: its characters are drawn flat`);
+			}
+		}
+		if (missing.includes(WORLD_ART.itemIcons.id)) {
+			lost.add("itemIcons");
+			warn("[world] the item icon atlas did not load: the icons are drawn with Frames");
+		}
+		if (lost.size() > 0) changed();
 		warn(`[world] ${missing.size()}/${ids.size()} art textures are slow; keeping the art`);
 	});
 }

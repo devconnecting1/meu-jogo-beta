@@ -13,6 +13,8 @@ import { addPuddle, emitSound, reactToHit } from "./zombieAI";
 import { hitMapItem } from "./interaction";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
 import { isHitscan, predictedSpread, WeaponFx } from "../predict/weaponFx";
+import { IntentKind } from "shared/net/intentWire";
+import { noteReserveSpent, sendBagVerb, serverOwnsWorld } from "../net/authority";
 
 /*
  * Weapons of the local survivor: magazine, cadence, spread, hitscan, melee sweep, projectiles and turrets.
@@ -223,12 +225,13 @@ function bossContact(b: BossState, x: number, y: number, r: number): { x: number
 let switchSerial = 0;
 
 /**
- * Equip another weapon mid-run. Called by main.client (backpack) and by the 1–5 hotkeys.
- * Rounds left in the old magazine go back to their pool, and reload / bow draw / recoil /
- * chainsaw warm-up / swing all reset — the new weapon starts EMPTY and reloads (switching no
- * longer hands out a free full magazine). Re-equipping the current weapon does nothing.
+ * Equip another weapon mid-run, on this client's survivor. Called by `chooseWeapon` and by whatever takes a weapon
+ * away (a craft that ate it, an admin patch). Rounds left in the old magazine go back to their pool, and reload /
+ * bow draw / recoil / chainsaw warm-up / swing all reset — the new weapon starts EMPTY and reloads (switching no
+ * longer hands out a free full magazine). Re-equipping the current weapon does nothing. `refund` false: the server
+ * already put those rounds back in the bag this switch comes from (`followServerWeapon`).
  */
-export function switchWeapon(refs: GameRefs, weaponId: number): void {
+export function switchWeapon(refs: GameRefs, weaponId: number, refund = true): void {
 	const w = WEAPONS[weaponId];
 	if (w === undefined) return;
 	const p = refs.player;
@@ -239,7 +242,7 @@ export function switchWeapon(refs: GameRefs, weaponId: number): void {
 	}
 	const old = currentWeapon(p);
 	// (admin infinite ammo: that magazine was free, it does not go back to the pool)
-	if (usesMagazine(old) && !isFuelWeapon(old) && rt.ammoCount > 0 && p.infiniteAmmo !== true) {
+	if (refund && usesMagazine(old) && !isFuelWeapon(old) && rt.ammoCount > 0 && p.infiniteAmmo !== true) {
 		poolAdd(refs, old, rt.ammoCount);
 	}
 	rt.ammoCount = 0;
@@ -256,6 +259,29 @@ export function switchWeapon(refs: GameRefs, weaponId: number): void {
 	p.swingerActive = false;
 	refs.save.equipWeapon = weaponId;
 	switchSerial++;
+}
+
+/**
+ * The survivor CHOOSES a weapon: the 1–5 keys, the hotbar, the Bag. From WORLD_SERVER_PHASE the choice is also a
+ * `SwitchWeapon` verb (client/net/authority.ts): the server's weapon machine switches in the tick it lands in
+ * (server/sim/backpack.ts), instead of at the next save report (QA sweep NET-1). Offline it is only the local switch.
+ */
+export function chooseWeapon(refs: GameRefs, weaponId: number): void {
+	if (weaponId === refs.player.weapon.pointer && weaponId === refs.save.equipWeapon) return;
+	if (serverOwnsWorld() && !sendBagVerb(IntentKind.SwitchWeapon, weaponId)) return;
+	switchWeapon(refs, weaponId);
+}
+
+/**
+ * From WORLD_SERVER_PHASE the weapon in hand is the one the SERVER's save names (server/sim/combat.ts `weaponOf`: an
+ * owned weapon, or the blade): a switch the server refused, or a craft that ate the weapon, comes back in the bag as
+ * `equipWeapon`, and the hand follows it here. The bag already holds the rounds the server put back.
+ */
+function followServerWeapon(refs: GameRefs): void {
+	const save = refs.save;
+	const want = save.equipWeapon;
+	const id = want > 0 && want < WEAPONS.size() && (save.invenWeapon[want] ?? 0) > 0 ? want : 0;
+	if (id !== refs.player.weapon.pointer) switchWeapon(refs, id, false);
 }
 
 /**
@@ -957,9 +983,11 @@ export class Combat {
 	// ---- predicted (MP_PHASE ≥ 2) ---------------------------------------------------------------
 
 	/**
-	 * Reload prediction for the HUD. Deliberately does NOT spend the reserve: the ammo pool lives in the
-	 * save, the server owns it (§2.1), and the `Self` mirror of F3 will push it back. Showing the magazine
-	 * fill a few frames early is worth it; inventing rounds in the pool is not.
+	 * Reload prediction for the HUD, by the server's rule (server/sim/combat.ts `updateReload`): the magazine fills
+	 * from this client's copy of the reserve and the copy is SPENT, like the server spends its own. It used to be
+	 * left alone, so the HUD's reserve never dropped and every report wrote the unspent number back over the
+	 * server's (QA sweep NET-3). From F3 the server's reserve comes back in the bag; `noteReserveSpent` stops a bag
+	 * written before the server's reload from handing these rounds back for a moment.
 	 */
 	private predictReload(refs: GameRefs, w: WeaponDef, dt: number): void {
 		const rt = refs.player.weapon;
@@ -993,7 +1021,17 @@ export class Combat {
 		rt.reloadCount -= dt;
 		if (rt.reloadCount > 0) return;
 		const want2 = w.kind === WeaponKind.Shotgun ? 1 : w.mag - rt.ammoCount;
-		rt.ammoCount = math.min(w.mag, rt.ammoCount + math.max(0, math.min(want2, reserve)));
+		if (isFuelWeapon(w)) {
+			// the flamethrower and the stun gun burn their fuel per shot: the server refills them whole
+			rt.ammoCount = w.mag;
+		} else {
+			const take = math.max(0, math.min(want2, reserve));
+			rt.ammoCount = math.min(w.mag, rt.ammoCount + take);
+			if (take > 0 && refs.player.infiniteAmmo !== true) {
+				poolAdd(refs, w, -take);
+				noteReserveSpent();
+			}
+		}
 		rt.reloading = false;
 		rt.reloadCount = 0;
 		rt.autoReloadIdle = 0;
@@ -1045,9 +1083,10 @@ export class Combat {
 		const p = refs.player;
 		const input = refs.input;
 		const aim = p.angle;
+		if (serverOwnsWorld()) followServerWeapon(refs);
 		if (input.weaponSlotPressed >= 0 && refs.pendingPlace < 0) {
 			const id = ownedWeapons(refs)[input.weaponSlotPressed];
-			if (id !== undefined) switchWeapon(refs, id);
+			if (id !== undefined) chooseWeapon(refs, id);
 		}
 		if (this.seenSwitch !== switchSerial) {
 			this.seenSwitch = switchSerial;
@@ -1102,6 +1141,9 @@ export class Combat {
 				if (this.drawTime >= drawNeeded && this.fireCd <= 0 && refs.save.ammoArrow > 0) {
 					this.fireCd = w.cooldown;
 					this.fx.predictKick(refs, 1, 0.05);
+					// the arrow leaves the quiver here too, as it does on the server
+					refs.save.ammoArrow -= 1;
+					noteReserveSpent();
 				}
 				this.drawTime = 0;
 				rt.bowCount = 0;
@@ -1141,7 +1183,7 @@ export class Combat {
 		if (input.weaponSlotPressed >= 0 && refs.pendingPlace < 0) {
 			const list = ownedWeapons(refs);
 			const id = list[input.weaponSlotPressed];
-			if (id !== undefined) switchWeapon(refs, id);
+			if (id !== undefined) chooseWeapon(refs, id);
 		}
 
 		if (this.seenSwitch !== switchSerial) {
