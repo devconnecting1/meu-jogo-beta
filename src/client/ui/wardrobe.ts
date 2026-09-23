@@ -320,7 +320,9 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	);
 	const me = game.GetService("Players").LocalPlayer;
 	const who = me !== undefined ? profileOf(me) : { displayName: tr("Survivor"), name: tr("Survivor") };
-	const titlePlate = new Nameplate(plateHost, plateHost.ZIndex + 1, who);
+	// `self`: exactly the plate the street shows under you (no "@handle": nameplate.ts); not `world`, so it never
+	// takes part in the street's overlap rule
+	const titlePlate = new Nameplate(plateHost, plateHost.ZIndex + 1, who, { self: true });
 	/** the title byte the preview plate shows (`titleToWire`) */
 	let previewTitle = 0;
 	const placePlate = (): void => {

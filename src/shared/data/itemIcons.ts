@@ -1968,7 +1968,7 @@ const SKILL_ICONS = [
 	"skill_boot", // Trot
 	"skill_hourglass", // Patience
 	"skill_pouch", // Pickpocket
-	"skill_magnify", // Theif
+	"skill_magnify", // Thief
 	"skill_chef", // Chef
 	"skill_pick", // Dwarf
 	"cat_turret", // Robotics

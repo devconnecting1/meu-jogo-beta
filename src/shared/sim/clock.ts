@@ -37,6 +37,12 @@ export const CLOCK_ANNOUNCEMENTS: ReadonlyArray<ClockAnnouncement> = [
  */
 export const DAY_BREAK_HOUR = 6;
 
+/**
+ * The hour the night falls, and the horde with it (wave 1, CLOCK_ANNOUNCEMENTS): where `isNightAt` turns true. The
+ * HUD's sky counts down to it by day ("Night in 2:10", client/ui/hudSky.ts).
+ */
+export const NIGHTFALL_HOUR = 19;
+
 /** night for the clock speed and the HUD: after 19:00 and before 06:00 */
 export function isNightAt(dayTime: number): boolean {
 	return dayTime > 19 || dayTime < 6;
@@ -134,7 +140,10 @@ export function secondsUntilHour(dayTime: number, hour: number): number {
 }
 
 /** real seconds of one whole night, 19:00 → 06:00 at night speed (~3.6 min) — MP-21's price for a death */
-export const NIGHT_REAL_SECONDS = secondsUntilHour(19, DAY_BREAK_HOUR);
+export const NIGHT_REAL_SECONDS = secondsUntilHour(NIGHTFALL_HOUR, DAY_BREAK_HOUR);
+
+/** real seconds of one whole day, 06:00 → 19:00 at day speed (~6.4 min): the HUD's sky crosses it once */
+export const DAY_REAL_SECONDS = secondsUntilHour(DAY_BREAK_HOUR, NIGHTFALL_HOUR);
 
 /**
  * How long a survivor who died at `dayTime` stays down on a shared server before the world puts them back

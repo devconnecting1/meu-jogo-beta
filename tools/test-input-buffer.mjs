@@ -556,8 +556,15 @@ function run({
 						if (t >= WARMUP_S) lateRealSeqs.add(cmd.seq);
 					}
 				}
-				// server/net/mpHost.ts: the grace is how many ticks the server owes `dt` after its last heartbeat
-				PL.acceptInput(sp, pkt, now, graceOf(rule, beat, dt));
+				// server/net/mpHost.ts: the grace is how many ticks the server owes `dt` after its last heartbeat. The
+				// commands arrive as the wire hands them over, fresh tables (decodeInput): the queue writes carried taps
+				// into what it holds (players.ts `carryEdges`), and these are the sender's own
+				const landedPkt = {
+					viewTick: pkt.viewTick,
+					viewFrac: pkt.viewFrac,
+					cmds: pkt.cmds.map(cmd => ({ ...cmd })),
+				};
+				PL.acceptInput(sp, landedPkt, now, graceOf(rule, beat, dt));
 				// everything newer than lastSeq entered the queue, if only for the instant before it overflowed
 				for (const seq of entering) queued.add(seq);
 				// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies

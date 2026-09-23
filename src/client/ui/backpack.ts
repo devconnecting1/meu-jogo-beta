@@ -140,17 +140,38 @@ const nameOf = Info.nameOf;
 
 function stationName(r: CraftRecipe): string {
 	const desk = r.needsPro ? "Pro craft desk" : r.needsDesk ? "Craft desk" : "";
-	if (r.needsFire === true) return desk === "" ? "Lit fire" : `${desk} + fire`;
+	if (r.needsCook === true) return desk === "" ? "Lit fire" : `${desk} + fire`;
+	if (r.needsFire === true) return desk === "" ? "Lit brazier" : `${desk} + brazier`;
 	return desk === "" ? "Hand craft" : desk;
 }
 
-/** the glyph of a recipe's station (ICON_GLYPHS) */
+/** the glyph of a recipe's station (ICON_GLYPHS): cooking and smelting both show the flame */
 function stationGlyph(r: CraftRecipe): string {
 	if (r.needsPro) return "pro";
 	if (r.needsDesk) return "desk";
-	if (r.needsFire === true) return "fire";
+	if (r.needsFire === true || r.needsCook === true) return "fire";
 	return "hand";
 }
+
+/**
+ * What a heated recipe's station line says (shared/sim/craftRule.ts): cooking wants any lit fire (a campfire, a
+ * brazier) or a working cooker; smelting wants a lit brazier or the electric furnace -- a campfire is not hot
+ * enough for metal. [needed, nearby, hint, button]
+ */
+const HEAT_TEXT = {
+	cook: [
+		"Need a lit fire",
+		"Lit fire nearby",
+		"Light a campfire or brazier and stand next to it, then open the backpack again.",
+		"Need fire",
+	],
+	smelt: [
+		"Need a lit brazier",
+		"Lit brazier nearby",
+		"Light a brazier and stand next to it (a campfire is not hot enough for metal), then open the backpack again.",
+		"Need brazier",
+	],
+} as const;
 
 function recipeMaking(kind: number, index: number): CraftRecipe | undefined {
 	for (const r of CRAFT_RECIPES) {
@@ -203,8 +224,10 @@ export class Backpack {
 	onUnequipItem: ((slot: number) => void) | undefined;
 	nearbyDesk = false;
 	nearbyPro = false;
-	/** a lit campfire/brazier is close (smelting recipes) */
+	/** a lit brazier or the electric furnace is close (smelting recipes) */
 	nearbyFire = false;
+	/** a lit campfire or brazier, or a working cooker, is close (cooking recipes) */
+	nearbyCook = false;
 	/** authoritative craft check from the game (craftSystem.craftBlocker): reason it can't be crafted, or undefined */
 	craftCheck: ((recipeId: number) => string | undefined) | undefined;
 
@@ -928,6 +951,7 @@ export class Backpack {
 	// ------------------------------------------------------------ craft
 
 	private recipeAvailable(r: CraftRecipe): boolean {
+		if (r.needsCook === true && !this.nearbyCook) return false;
 		if (r.needsFire === true && !this.nearbyFire) return false;
 		if (r.needsPro) return this.nearbyPro;
 		if (r.needsDesk) return this.nearbyDesk;
@@ -960,7 +984,8 @@ export class Backpack {
 		const near: Array<string> = [];
 		if (this.nearbyPro) near.push(this.tr("pro craft desk"));
 		else if (this.nearbyDesk) near.push(this.tr("craft desk"));
-		if (this.nearbyFire) near.push(this.tr("lit fire"));
+		if (this.nearbyCook) near.push(this.tr("lit fire"));
+		if (this.nearbyFire) near.push(this.tr("smelter"));
 		if (near.size() === 0) return this.tr("Nothing near you: hand recipes only.");
 		return `${this.tr("Near you")}: ${near.join(", ")}`;
 	}
@@ -987,15 +1012,18 @@ export class Backpack {
 		let station = "No desk needed";
 		if (r.needsPro) station = this.nearbyPro ? "Pro craft desk nearby" : "Need a pro craft desk";
 		else if (r.needsDesk) station = this.nearbyDesk ? "Craft desk nearby" : "Need a craft desk";
-		if (r.needsFire === true && !this.nearbyFire) station = "Need a lit fire";
-		else if (r.needsFire === true && station === "No desk needed") station = "Lit fire nearby";
+		// cooking (a lit fire) and smelting (a lit brazier) are each their own station (shared/sim/craftRule.ts)
+		const heat = r.needsCook === true ? HEAT_TEXT.cook : r.needsFire === true ? HEAT_TEXT.smelt : undefined;
+		const heatNear = r.needsCook === true ? this.nearbyCook : this.nearbyFire;
+		if (heat !== undefined && !heatNear) station = heat[0];
+		else if (heat !== undefined && station === "No desk needed") station = heat[1];
 		// the game's own check also covers things the Bag can't see (e.g. a build in progress)
 		const blocker = avail && enough ? this.craftCheck?.(r.id) : undefined;
 		let hint = "You can craft this here.";
 		if (blocker !== undefined) {
 			hint = blocker;
-		} else if (!avail && r.needsFire === true && !this.nearbyFire) {
-			hint = "Light a campfire or brazier and stand next to it, then open the backpack again.";
+		} else if (!avail && heat !== undefined && !heatNear) {
+			hint = heat[2];
 		} else if (!avail) {
 			hint = "Stand next to the right desk, then open the backpack again.";
 		} else if (!enough) {
@@ -1010,12 +1038,7 @@ export class Backpack {
 		};
 		let label = "Craft";
 		if (!avail) {
-			label =
-				r.needsFire === true && !this.nearbyFire
-					? "Need fire"
-					: r.needsPro
-						? "Need pro desk"
-						: "Need craft desk";
+			label = heat !== undefined && !heatNear ? heat[3] : r.needsPro ? "Need pro desk" : "Need craft desk";
 		} else if (!enough) {
 			label = "Missing items";
 		} else if (blocker !== undefined) {
