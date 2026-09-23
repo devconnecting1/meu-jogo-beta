@@ -874,12 +874,15 @@ function updateSenses(refs: Ctx.AiRefs): void {
 		const save = refs.saveOf(p);
 		let b = beacons[i];
 		if (b === undefined) {
-			b = { range: 0, flashlight: false, beamAngle: 0 };
+			b = { range: 0, beam: 0, beamAngle: 0 };
 			beacons[i] = b;
 		}
-		b.flashlight = save.equipHand === 13;
+		// the light they give off, by the ONE rule the light map and `isLit` read (shared/sim/survivorLight.ts,
+		// LUZ-04): the glow or a torch all round, and a flashlight's cone along the aim
+		const cone = Light.survivorCone(save);
+		b.beam = cone !== undefined ? cone.radius : 0;
 		b.beamAngle = p.angle;
-		b.range = b.flashlight ? Sense.FLASHLIGHT_SIGHT : save.equipHand === 15 ? Sense.TORCH_SIGHT : Sense.GLOW_SIGHT;
+		b.range = Sense.beaconSight(math.max(Light.survivorGlowRadius(save), b.beam));
 		if (b.range < Sense.LAMP_SIGHT) {
 			for (const l of structureLights) {
 				const dx = p.x - l.x;

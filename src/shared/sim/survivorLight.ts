@@ -60,6 +60,20 @@ export function survivorCone(save: PlayerSaveData): EquipLight | undefined {
 	return undefined;
 }
 
+/**
+ * The light the survivor GIVES OFF all round: their own circle (250 u) or a worn fire (the torch), whichever is
+ * bigger. Not Nocturnal and not night vision: those are eyes, not light. They widen what the survivor sees
+ * (`survivorLightRadius`), not how far off the horde makes them out (shared/sim/ai/perception.ts, IA-01).
+ */
+export function survivorGlowRadius(save: PlayerSaveData): number {
+	let r = SURVIVOR_LIGHT_R;
+	const hand = lightOf(save.equipHand);
+	if (hand !== undefined && hand.coneDeg === undefined && hand.sight !== true) r = math.max(r, hand.radius);
+	const gun = lightOf(save.equipGun);
+	if (gun !== undefined && gun.coneDeg === undefined && gun.sight !== true) r = math.max(r, gun.radius);
+	return r;
+}
+
 /** is the survivor wearing night vision (a `sight` gadget)? Their own screen sees the night brighter and green */
 export function wearsNightVision(save: PlayerSaveData): boolean {
 	return lightOf(save.equipGun)?.sight === true || lightOf(save.equipHand)?.sight === true;

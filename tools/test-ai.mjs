@@ -359,8 +359,14 @@ const alertMod = optional("shared/sim/ai/alert.ts");
 const directorMod = optional("shared/sim/ai/director.ts");
 const noiseMod = optional("shared/sim/ai/noise.ts");
 const tuning = optional("shared/sim/ai/zombieTuning.ts");
+const lightMod = optional("shared/sim/survivorLight.ts");
 /** the senses, states and ears of DESIGN_RULES IA-01..04; an older src (PZ_SRC) runs the measurements only */
-const MODERN = perception !== undefined && memoryMod !== undefined && alertMod !== undefined && noiseMod !== undefined;
+const MODERN =
+	perception !== undefined &&
+	memoryMod !== undefined &&
+	alertMod !== undefined &&
+	noiseMod !== undefined &&
+	lightMod !== undefined;
 
 // ---------------------------------------------------------------- CLI / reporting
 
@@ -495,9 +501,32 @@ function testSight() {
 	console.log("\n[1] eyes: range, cone, walls, darkness and the survivor's own light (perception.ts)");
 	const S = perception;
 	const day = S.senseRanges({ darkness: 0, night: false, raining: false });
-	const glow = { range: S.GLOW_SIGHT, flashlight: false, beamAngle: 0 };
-	const torch = { range: S.TORCH_SIGHT, flashlight: false, beamAngle: 0 };
-	const lamp = { range: S.FLASHLIGHT_SIGHT, flashlight: true, beamAngle: 0 };
+	// the beacons as the brain fills them, from the ONE light rule (shared/sim/survivorLight.ts, LUZ-04)
+	const L = lightMod;
+	const saveWith = (hand, gun = 0, nocturnal = 0) => ({
+		skillLevels: { 16: nocturnal },
+		equipHand: hand,
+		equipGun: gun,
+	});
+	const beaconOf = save => {
+		const cone = L.survivorCone(save);
+		const beam = cone !== undefined ? cone.radius : 0;
+		return { range: S.beaconSight(Math.max(L.survivorGlowRadius(save), beam)), beam, beamAngle: 0 };
+	};
+	const glow = beaconOf(saveWith(-1));
+	const torch = beaconOf(saveWith(15));
+	const lamp = beaconOf(saveWith(13));
+	check(
+		glow.range === S.GLOW_SIGHT &&
+			lamp.beam === L.survivorCone(saveWith(13)).radius &&
+			S.BEAM_HALF === L.CONE_HALF_ANGLE,
+		`the eyes read the light map's own rule: glow ${glow.range} u, torch ${torch.range}, flashlight ${lamp.range}, ` +
+			`its beam ${lamp.beam} u at ±${math.deg(S.BEAM_HALF).toFixed(0)}° (LUZ-04)`,
+	);
+	check(
+		beaconOf(saveWith(-1, 6)).range === glow.range && beaconOf(saveWith(-1, 0, 1)).range === glow.range,
+		"night vision and Nocturnal are eyes, not light: they give nobody away",
+	);
 	const night = { darkness: 0.85, night: true, raining: false };
 	const nEye = S.senseRanges(night);
 	const nGlow = S.senseRanges(night, glow);

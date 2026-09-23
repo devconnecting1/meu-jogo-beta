@@ -1,5 +1,6 @@
 import { angleDiff } from "shared/engine/vec2";
 import { isBlocking, Solid } from "shared/game/world";
+import * as Light from "shared/sim/survivorLight";
 
 /*
  * Zombie senses (docs/DESIGN_RULES.md IA-01, docs/MULTIPLAYER.md §3.4, P2 "melhor que o original").
@@ -39,12 +40,15 @@ export interface SenseConditions {
 	raining: boolean;
 }
 
-/** how visible ONE survivor is right now: the light they carry, or stand in */
+/**
+ * How visible ONE survivor is right now: the light they carry, or stand in. The lights themselves are the ONE rule
+ * the light map and the horde's visibility read (shared/sim/survivorLight.ts, LUZ-04); the brain fills this from it.
+ */
 export interface Beacon {
 	/** the range their own light makes them visible from in the dark (0 = none), before rain and Stealth */
 	range: number;
-	/** they hold a lit flashlight: the beam itself is seen by whoever it touches */
-	flashlight: boolean;
+	/** the reach of the cone they carry (the flashlight, survivorLight `survivorCone`); 0 = no beam */
+	beam: number;
 	/** the direction the beam points (the survivor's aim) */
 	beamAngle: number;
 }
@@ -80,15 +84,21 @@ export const STEALTH_SIGHT = 0.7;
  * wider: two bodies touch at 34 u, and a survivor at arm's length behind a zombie's shoulder is not hidden.
  */
 export const TOUCH_RANGE = 64;
-/** a survivor's own glow (LUZ-02: ~250 u around them) is seen from this far in the dark */
-export const GLOW_SIGHT = 380;
-/** a torch is a naked flame: seen from as far as daylight */
-export const TORCH_SIGHT = 520;
-/** a flashlight is a beacon: the brightest thing in the street, seen from further than daylight */
-export const FLASHLIGHT_SIGHT = 640;
-/** the beam itself (equip 13, original power 400 in a 45° cone → ~560 u), and its half-angle */
-export const BEAM_RANGE = 560;
-export const BEAM_HALF = math.rad(45);
+/**
+ * A light is made out from this far past the edge of the ground it lights: the survivor's own glow (LUZ-02, 250 u)
+ * from 380 u, a torch (400 u) from 530, a flashlight (its 560 u beam) from 690 -- further than daylight: the light
+ * that lets you see is the light that gives you away. Night vision and Nocturnal are eyes, not light: they add
+ * nothing (survivorLight `survivorGlowRadius`).
+ */
+export const BEACON_BEYOND = 130;
+/** how far off a survivor whose light reaches `lightR` is made out in the dark */
+export function beaconSight(lightR: number): number {
+	return lightR + BEACON_BEYOND;
+}
+/** the bare survivor's own glow, seen in the dark from here */
+export const GLOW_SIGHT = beaconSight(Light.SURVIVOR_LIGHT_R);
+/** half the flashlight's beam: the same cone the light map draws and `isLit` lights (LUZ-04) */
+export const BEAM_HALF = Light.CONE_HALF_ANGLE;
 /** the survivor's own light only starts to matter at dusk, and counts in full from this darkness on */
 export const BEACON_FROM = 0.2;
 export const BEACON_FULL = 0.5;
@@ -110,11 +120,11 @@ export function senseRanges(c: SenseConditions, beacon?: Beacon, stealthy = fals
 	}
 	if (c.raining) sight *= RAIN_SIGHT;
 	sight = math.max(SIGHT_MIN, sight) * (stealthy ? STEALTH_SIGHT : 1);
-	const lit = beacon !== undefined && beacon.flashlight && dark > BEACON_FROM;
+	const lit = beacon !== undefined && beacon.beam > 0 && dark > BEACON_FROM;
 	const r = out ?? { sight: 0, cone: 0, beam: 0, beamAngle: 0 };
 	r.sight = sight;
 	r.cone = SIGHT_CONE;
-	r.beam = lit ? BEAM_RANGE * (c.raining ? RAIN_SIGHT : 1) : 0;
+	r.beam = lit ? beacon.beam * (c.raining ? RAIN_SIGHT : 1) : 0;
 	r.beamAngle = beacon?.beamAngle ?? 0;
 	return r;
 }
