@@ -126,6 +126,9 @@ export class ServerInteraction {
 			return { kind: "refused", why: got.why === "range" ? "range" : "taken" };
 		}
 
+		// a vehicle that could be ridden was already taken by server/sim/vehicles.ts; what reaches here is a broken
+		// one (VEI-05), and `repair` only ever fixes that
+		if (target.kind === "vehicle") return this.repair(ctx, target.solid);
 		if (target.kind === "door") return this.door(ctx, target.solid);
 		if (target.kind === "light") return this.light(ctx, target.solid);
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);

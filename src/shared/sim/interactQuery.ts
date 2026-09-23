@@ -9,6 +9,7 @@ import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import { buildingAt, GroundItem, querySolids, Solid, WorldData } from "shared/game/world";
 import { rectCircleOverlap } from "./placement";
+import { vehicleBroken } from "./vehicle";
 
 /** solids are looked up in a box of this half-size around the survivor */
 export const INTERACT_RADIUS = 80;
@@ -25,6 +26,8 @@ export const REPAIRABLE: ReadonlyArray<string> = [
 	"iron_barricade",
 	"door",
 	"iron_door",
+	// only once it is broken (VEI-05): before that E rides it (`interactTarget`)
+	"vehicle",
 ];
 
 /** distance from (x, y) to the solid's rect (negative inside) */
@@ -53,16 +56,22 @@ export function isMapItem(s: Solid): boolean {
 	return s.kind === "tree" || s.tags === "car" || s.tags === "trash";
 }
 
-/** wood repairs everything but iron doors, iron barricades and turrets (steel) */
+/** a parked bicycle or motorcycle (VEI-05): passable, but E still finds it */
+export function isVehicle(s: Solid): boolean {
+	return s.tags === "vehicle";
+}
+
+/** wood repairs everything but iron doors, iron barricades, turrets and vehicles (steel) */
 export function repairMaterial(s: Solid): { kind: number; index: number } {
-	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret") {
+	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret" || isVehicle(s)) {
 		return { kind: 4, index: 26 };
 	}
 	return { kind: 4, index: 23 };
 }
 
-/** damaged and repairable (the material still has to be in the backpack) */
+/** damaged and repairable (the material still has to be in the backpack); a vehicle only once it is broken */
 export function canRepair(s: Solid): boolean {
+	if (isVehicle(s)) return vehicleBroken(s);
 	return s.hp < s.hpMax && REPAIRABLE.includes(s.tags);
 }
 
@@ -93,7 +102,7 @@ export function nearestGroundItem(world: WorldData, x: number, y: number): Groun
 	return best;
 }
 
-/** nearest usable solid (doors, lights, trees/cars/bins, repairables); never a building record */
+/** nearest usable solid (doors, lights, trees/cars/bins, vehicles, repairables); never a building record */
 export function nearestUsableSolid(world: WorldData, x: number, y: number): Solid | undefined {
 	let best: Solid | undefined;
 	let bestD = SOLID_REACH;
@@ -104,7 +113,7 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		x + INTERACT_RADIUS,
 		y + INTERACT_RADIUS,
 	)) {
-		if (s.kind === "building" || s.passable === true) continue;
+		if (s.kind === "building" || (s.passable === true && !isVehicle(s))) continue;
 		const limit = isDoor(s) ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);
 		if (d < limit && d < bestD) {
@@ -150,6 +159,7 @@ export type InteractTarget =
 	| { kind: "door"; solid: Solid }
 	| { kind: "light"; solid: Solid }
 	| { kind: "mapItem"; solid: Solid }
+	| { kind: "vehicle"; solid: Solid }
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
@@ -158,6 +168,8 @@ export function interactTarget(world: WorldData, x: number, y: number): Interact
 	if (item !== undefined) return { kind: "item", item };
 	const s = nearestUsableSolid(world, x, y);
 	if (s !== undefined) {
+		// ridden (server/sim/vehicles.ts), or repaired once broken (the "solid" path, VEI-05)
+		if (isVehicle(s)) return { kind: "vehicle", solid: s };
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };

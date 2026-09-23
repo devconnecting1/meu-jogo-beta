@@ -6,6 +6,7 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { PlayerSaveData } from "shared/game/save";
 import { MP_PHASE } from "shared/net/mpConfig";
+import type { RideState } from "shared/sim/vehicle";
 
 export interface BuffState {
 	speed: number;
@@ -58,6 +59,12 @@ export interface PlayerState {
 	/** seconds of spitter-acid slow left (set by zombieAI while standing in a puddle) */
 	puddleSlow?: number;
 	vehicleId: number;
+	/**
+	 * The bicycle or motorcycle this survivor rides (DESIGN_RULES VEI-05), undefined on foot. Only the SERVER sets it
+	 * (server/sim/vehicles.ts, on an E it resolved itself); the client adopts it from the self block and predicts
+	 * with it. `stepPlayer` then moves the survivor with the vehicle's handling instead of the walk.
+	 */
+	ride?: RideState;
 	noMoveKill: number;
 	dead: boolean;
 	/** admin panel "god mode" (and free camera): damageToPlayer does nothing */

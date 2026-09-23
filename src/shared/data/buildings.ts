@@ -37,18 +37,122 @@ export const STRUCTURE_HP: Record<string, number> = {
 	SignalGenerator: 100,
 };
 
+/** what a survivor rides (PlayerState.ride.kind); 0 = on foot */
+export const VehicleKind = {
+	None: 0,
+	Bicycle: 1,
+	Motorcycle: 2,
+} as const;
+export type VehicleKind = (typeof VehicleKind)[keyof typeof VehicleKind];
+
+/**
+ * The two rideable builds (docs/DESIGN_RULES.md VEI-05). Everything is in world units and seconds.
+ *
+ * The original's numbers (obj_bicycle / obj_motocycle, px/frame at 30 fps): speed 12 / 17 (360 / 510 u/s, kept as
+ * the top speeds), reverse 4 / 5, turn 1.5 / 1.2 °/frame of a ROTATING camera, accel 0.7 / 1, friction 0.1 / 0.05,
+ * oil 0.01 per frame whenever mounted (18 oil a minute, even standing), hp 100 that nothing ever took. Ours steer
+ * toward the stick on a fixed camera, so the handling below is new: see VEI-05 for every number and why.
+ *
+ * The per-tick deltas are exact multiples of the wire's speed step at 60 Hz (shared/sim/vehicle.ts SPEED_STEP = 2 u/s:
+ * accel 360 → 3 steps a tick), so the quantised speed the server replicates is exactly the one it simulated.
+ */
 export interface VehicleDef {
+	kind: VehicleKind;
+	/** ETC item index of the kit, which is also its PLACEABLES id */
+	item: number;
 	name: string;
-	speed: number;
-	back: number;
-	angle: number;
+	/** top speed, u/s (walking is 210, 297 with every Trot level and a speed buff) */
+	topSpeed: number;
+	/** u/s² with the throttle open, braking (stick > 100° off the heading) and coasting (no stick) */
 	accel: number;
-	fric: number;
-	oil: number;
+	brake: number;
+	coast: number;
+	/** yaw rate when (nearly) stopped, rad/s: the rider walks the front wheel round */
+	standTurn: number;
+	/** lateral grip, u/s²: at speed v the yaw rate is at most grip / v (turn radius v² / grip) */
+	grip: number;
+	/** collision radius while ridden (the survivor alone is 18) */
+	radius: number;
+	/** drawn and parked footprint (PLACEABLES), heading along `length` */
+	length: number;
+	width: number;
 	hpMax: number;
+	/** a head-on hit on a solid, or any hit on a zombie ahead, at this speed or more is a crash */
+	crashSpeed: number;
+	/** vehicle hp and rider hp (armour does not help: it is a fall) a crash at top speed costs, scaled by speed */
+	crashDamage: number;
+	crashHurt: number;
+	/** damage to the zombie that was run into at crash speed or more (the ram's knock and stun are fixed) */
+	ramDamage: number;
+	/** oil units a second with the engine running: standing, and extra at top speed (0 = pedals) */
+	oilIdle: number;
+	oilFull: number;
+	/** engine noise ring every VEHICLE_NOISE_PERIOD s, from idle to top speed (0 = no engine) */
+	noiseIdle: number;
+	noiseFull: number;
+	/** the bell (bicycle) or the horn (motorcycle), on the attack button */
+	hornRadius: number;
 }
 
 export const VEHICLES: Array<VehicleDef> = [
-	{ name: "Bicycle", speed: 12, back: 4, angle: 1.5, accel: 0.7, fric: 0.1, oil: 0, hpMax: 100 },
-	{ name: "Motorcycle", speed: 17, back: 5, angle: 1.2, accel: 1, fric: 0.05, oil: 0.01, hpMax: 100 },
+	{
+		kind: VehicleKind.Bicycle,
+		item: 21,
+		name: "Bicycle",
+		topSpeed: 360,
+		accel: 360,
+		brake: 960,
+		coast: 240,
+		standTurn: 4.5,
+		grip: 1320,
+		radius: 20,
+		length: 72,
+		width: 24,
+		hpMax: 100,
+		crashSpeed: 240,
+		crashDamage: 12,
+		crashHurt: 6,
+		ramDamage: 20,
+		oilIdle: 0,
+		oilFull: 0,
+		noiseIdle: 0,
+		noiseFull: 0,
+		hornRadius: 250,
+	},
+	{
+		kind: VehicleKind.Motorcycle,
+		item: 22,
+		name: "Motorcycle",
+		topSpeed: 510,
+		accel: 480,
+		brake: 1080,
+		coast: 120,
+		standTurn: 3,
+		grip: 1200,
+		radius: 22,
+		length: 88,
+		width: 32,
+		hpMax: 120,
+		crashSpeed: 300,
+		crashDamage: 20,
+		crashHurt: 12,
+		ramDamage: 45,
+		oilIdle: 1 / 60,
+		oilFull: 1 / 10,
+		noiseIdle: 400,
+		noiseFull: 900,
+		hornRadius: 900,
+	},
 ];
+
+/** the definition of a vehicle kind, or undefined for 0 and anything unknown */
+export function vehicleDef(kind: number): VehicleDef | undefined {
+	for (const v of VEHICLES) if (v.kind === kind) return v;
+	return undefined;
+}
+
+/** the kind a PLACEABLES / ETC id rides as (21 bicycle, 22 motorcycle), or VehicleKind.None */
+export function vehicleKindOfItem(item: number): VehicleKind {
+	for (const v of VEHICLES) if (v.item === item) return v.kind;
+	return VehicleKind.None;
+}

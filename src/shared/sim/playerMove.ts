@@ -1,6 +1,7 @@
 /*
  * stepPlayer: one step of a survivor's own simulation — movement (moveActor, speed from skills, equipment, buffs,
- * hunger, hits and acid, plus knockback), hunger, regeneration, poison, buff timers and i-frames.
+ * hunger, hits and acid, plus knockback; a mounted survivor moves with the vehicle's handling instead,
+ * shared/sim/vehicle.ts), hunger, regeneration, poison, buff timers and i-frames.
  *
  * Deterministic: the result depends only on (world, player, save, command, dt). No Instances, no services, no random
  * numbers, no getCtx — so the client predicts with it and the server simulates the same command with the very same
@@ -16,6 +17,7 @@ import { PlayerState, recalcMoveSpeed } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { aimOf, InputCommand, moveDirX, moveDirY, SPEED_SCALE } from "./types";
+import { stepRide } from "./vehicle";
 
 /** the survivor never leaves [MARGIN, size − MARGIN] of the world */
 export const WORLD_MARGIN = 40;
@@ -29,6 +31,11 @@ export interface StepResult {
 	walking: boolean;
 	/** hp reached 0 in this step (the caller shows the game over) */
 	died: boolean;
+	/**
+	 * Mounted only (VEI-05): the speed, u/s, of a head-on crash into a solid this step. The step already stopped the
+	 * vehicle (and the client predicted that); what the crash COSTS is the server's (server/sim/vehicles.ts).
+	 */
+	crash?: number;
 }
 
 /** what a step of a body that is already dead returns: it goes nowhere, and it does not die a second time */
@@ -55,34 +62,48 @@ export function stepPlayer(
 	if (p.dead) return LIFELESS;
 	p.angle = aimOf(cmd.aim);
 
-	// wanted direction in world space, normalised exactly like the stick vector was before F0
-	let wdx = 0;
-	let wdy = 0;
-	if (cmd.moveMag > 0) {
-		const dx = moveDirX(cmd.moveAng);
-		const dy = moveDirY(cmd.moveAng);
-		const l = math.sqrt(dx * dx + dy * dy);
-		if (l > 0.0001) {
-			wdx = dx / l;
-			wdy = dy / l;
+	let moved: number;
+	let walking: boolean;
+	let crash = 0;
+	if (p.ride !== undefined) {
+		// mounted (VEI-05): the vehicle's handling replaces the walk; everything after the movement is the same
+		const x0 = p.x;
+		const y0 = p.y;
+		crash = stepRide(world, p, save, cmd, dt);
+		p.x = clamp(p.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
+		p.y = clamp(p.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
+		moved = math.sqrt((p.x - x0) * (p.x - x0) + (p.y - y0) * (p.y - y0));
+		walking = false;
+	} else {
+		// wanted direction in world space, normalised exactly like the stick vector was before F0
+		let wdx = 0;
+		let wdy = 0;
+		if (cmd.moveMag > 0) {
+			const dx = moveDirX(cmd.moveAng);
+			const dy = moveDirY(cmd.moveAng);
+			const l = math.sqrt(dx * dx + dy * dy);
+			if (l > 0.0001) {
+				wdx = dx / l;
+				wdy = dy / l;
+			}
 		}
+		const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;
+		const rx = math.cos(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
+		const ry = math.sin(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
+		if (p.reactionSpeed > 0) {
+			p.reactionSpeed = math.max(0, p.reactionSpeed - DESIGN.REACTION_FRICTION * dt);
+		}
+		const mvx = wdx * speed + rx;
+		const mvy = wdy * speed + ry;
+		const res =
+			p.noclip === true
+				? { x: p.x + mvx * dt, y: p.y + mvy * dt }
+				: moveActor(world, p.x, p.y, PLAYER_RADIUS, mvx * dt, mvy * dt);
+		moved = math.sqrt((res.x - p.x) * (res.x - p.x) + (res.y - p.y) * (res.y - p.y));
+		p.x = clamp(res.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
+		p.y = clamp(res.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
+		walking = moved > WALK_EPSILON && (wdx !== 0 || wdy !== 0);
 	}
-	const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;
-	const rx = math.cos(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-	const ry = math.sin(p.reactionDir) * p.reactionSpeed * SPEED_SCALE;
-	if (p.reactionSpeed > 0) {
-		p.reactionSpeed = math.max(0, p.reactionSpeed - DESIGN.REACTION_FRICTION * dt);
-	}
-	const mvx = wdx * speed + rx;
-	const mvy = wdy * speed + ry;
-	const res =
-		p.noclip === true
-			? { x: p.x + mvx * dt, y: p.y + mvy * dt }
-			: moveActor(world, p.x, p.y, PLAYER_RADIUS, mvx * dt, mvy * dt);
-	const moved = math.sqrt((res.x - p.x) * (res.x - p.x) + (res.y - p.y) * (res.y - p.y));
-	p.x = clamp(res.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
-	p.y = clamp(res.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
-	const walking = moved > WALK_EPSILON && (wdx !== 0 || wdy !== 0);
 
 	const hungerRate = 1 - save.skillLevels[8] / 3;
 	p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);
@@ -111,5 +132,5 @@ export function stepPlayer(
 		p.dead = true;
 		died = true;
 	}
-	return { moved, walking, died };
+	return crash > 0 ? { moved, walking, died, crash } : { moved, walking, died };
 }

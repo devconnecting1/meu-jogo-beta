@@ -14,6 +14,7 @@ import {
 	isFire,
 	repairMaterial,
 } from "shared/sim/interactQuery";
+import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
 import { flinch } from "../view/solidFlinch";
 import { itemName } from "./craftSystem";
 import { fxMessage, GameRefs } from "./types";
@@ -137,6 +138,8 @@ const LOOT_SWEEP_S = 0.5;
 const FIRE_TIME = 1000 / 0.1 / 30;
 const FIRE_WOOD = 5;
 const WOOD_INDEX = 23;
+/** ETC index of oil: the motorcycle's fuel (VEI-05) */
+const OIL_INDEX = 48;
 /** seconds of fire left per campfire/brazier (absent = freshly built, full) */
 const fireFuel = new Map<Solid, number>();
 let fireTick = 0;
@@ -239,6 +242,34 @@ const BUILDING_NAMES: Record<string, string> = {
 	hospital: "hospital",
 };
 
+/** "E: Repair (Steel)", or what is missing for it */
+function repairHint(refs: GameRefs, s: Solid): string {
+	const mat = repairMaterial(s);
+	const have = refs.save.invenEtc[mat.index] ?? 0;
+	return have > 0 ? `E: Repair (${itemName(mat.kind, mat.index)})` : `Repair: needs ${itemName(mat.kind, mat.index)}`;
+}
+
+/**
+ * A parked bicycle or motorcycle (VEI-05). The SERVER decides the ride (server/sim/vehicles.ts runs this same
+ * target query at its own position), so the hint only promises what it will grant: a vehicle it put in the world,
+ * not broken, and for the motorcycle, oil in the backpack.
+ */
+function vehicleHint(refs: GameRefs, s: Solid): string | undefined {
+	if (!isRideable(s)) return undefined;
+	if (vehicleBroken(s)) return repairHint(refs, s);
+	const def = vehicleDef(vehicleKindOfSolid(s));
+	if (def !== undefined && !engineRuns(def, refs.save)) return `${def.name}: needs ${itemName(4, OIL_INDEX)}`;
+	return "E: Ride";
+}
+
+/** mounted: E gets off; on the motorcycle the backpack's oil is the fuel gauge (the original's vehicle panel) */
+function rideHint(refs: GameRefs, by: PlayerState): string {
+	const def = by.ride !== undefined ? vehicleDef(by.ride.kind) : undefined;
+	if (def === undefined || def.oilFull <= 0) return "E: Get off";
+	const oil = math.floor(refs.save.oil);
+	return oil > 0 ? `E: Get off · ${itemName(4, OIL_INDEX)} ${oil}` : `E: Get off · No ${itemName(4, OIL_INDEX)}`;
+}
+
 /** the hint text for a target the survivor could use, or undefined when it does nothing */
 function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	if (target.kind === "item") {
@@ -264,14 +295,11 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		if (s.kind === "tree") return "E: Shake tree";
 		return s.tags === "car" ? "E: Search car" : "E: Search trash";
 	}
+	if (target.kind === "vehicle") return vehicleHint(refs, target.solid);
 	if (target.kind === "solid") {
 		const s = target.solid;
 		if (!canRepair(s)) return undefined;
-		const mat = repairMaterial(s);
-		const have = refs.save.invenEtc[mat.index] ?? 0;
-		return have > 0
-			? `E: Repair (${itemName(mat.kind, mat.index)})`
-			: `Repair: needs ${itemName(mat.kind, mat.index)}`;
+		return repairHint(refs, s);
 	}
 	const b = target.building;
 	return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
@@ -282,6 +310,8 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
  * undefined = nothing to do (hide the button).
  */
 export function interactHint(refs: GameRefs, by: PlayerState = refs.player): string | undefined {
+	// on a vehicle E means one thing, whatever is in reach (server/sim/vehicles.ts takes the press first)
+	if (by.ride !== undefined) return rideHint(refs, by);
 	if (refs.pendingPlace >= 0) return undefined;
 	const target = interactTarget(refs.world, by.x, by.y);
 	if (target === undefined) return undefined;
@@ -294,9 +324,11 @@ export class Interaction {
 	private readonly lootBuf: Array<Solid> = [];
 
 	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
-		if (refs.pendingPlace >= 0) return;
+		// mounted, E gets off -- and that, like getting on, is the server's (server/sim/vehicles.ts)
+		if (refs.pendingPlace >= 0 || by.ride !== undefined) return;
 		const target = interactTarget(refs.world, by.x, by.y);
 		if (target === undefined) return;
+		if (target.kind === "vehicle") return;
 		if (target.kind === "item") {
 			takeItem(refs, target.item);
 			return;
