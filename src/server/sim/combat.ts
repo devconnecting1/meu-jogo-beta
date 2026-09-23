@@ -528,7 +528,10 @@ export class ServerCombat {
 		if (!this.fairBite) return true;
 		const st = this.slotOf(sp.slot);
 		const cap = biteRewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, this.simHz);
-		// the same continuity as a shot: a view that jumps to where the zombie was still far would dodge the bite
+		// The same continuity as a shot, on the same running offset -- it is the same screen: a view that jumps to where
+		// the zombie was still far would dodge the bite. That offset usually lies past this shorter ceiling (a round
+		// trip plus the buffer is ~9 ticks already at 30 ms), and then the ceiling wins (`judge`): the bite is judged
+		// FAIR_BITE_REWIND_MAX_S back, never further (the review of dee095a, S1)
 		const at = this.judge(st, tick, this.declaredView(sp, tick), cap, 0);
 		if (!this.history.sampleInto(z.id, at, this.point)) return true; // no past: the present already decided
 		const reach = contact + FAIR_BITE_MARGIN;
@@ -1110,6 +1113,11 @@ export class ServerCombat {
 	 * (`judgedTick`), and within VIEW_CONTINUITY_TICKS of where this survivor's view normally sits, shifted by
 	 * `extra` for a body the survivor draws further back (the mid ring). Either bound may cut: the ceiling stops a
 	 * view older than the ping explains, the continuity a view that jumps for one shot inside it.
+	 *
+	 * When the two do not meet -- the running offset sits further back than this ceiling reaches: a bite's shorter
+	 * one (`biteAllowed`), or a ping that has just fallen faster than the offset follows -- the CEILING wins: the
+	 * newest end of the continuity lay past it, and answering that end rewound past the ceiling (the review of
+	 * dee095a, S1: an offset of 16 ticks judged 13 back under a ceiling of 6, 9 or 12).
 	 */
 	private judge(st: SlotState, tick: number, declared: number, capS: number, extra: number): number {
 		const hz = this.simHz;
@@ -1118,7 +1126,8 @@ export class ServerCombat {
 		const oldest = tick - capS * hz;
 		const lo = math.max(oldest, tick - (st.viewOffset + extra + Cfg.VIEW_CONTINUITY_TICKS));
 		const hi = math.min(tick, tick - math.max(0, st.viewOffset + extra - Cfg.VIEW_CONTINUITY_TICKS));
-		return lo <= hi ? math.clamp(at, lo, hi) : hi;
+		// lo > hi only when the whole continuity window is older than `oldest` (then lo IS `oldest`)
+		return lo <= hi ? math.clamp(at, lo, hi) : lo;
 	}
 
 	/**

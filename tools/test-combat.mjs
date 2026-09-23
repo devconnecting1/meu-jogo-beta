@@ -25,6 +25,8 @@
  *      an honest 150 ms client with ±15 ms of jitter is never clamped, one that jumps its view 6 ticks back for
  *      each shot is clamped every time, a body drawn in the mid ring is judged where it was drawn, the measured
  *      ping is slow to rise and quick to fall, and the melee margin covers what a walker does in a 140 ms view;
+ *      and from the review of dee095a: a running view offset past the ceiling (a bite's, a ping that just fell) is
+ *      judged AT the ceiling, never past it (S1);
  *   d. XP, kills and levels only move when the SERVER decides: the assist share of §3.6, the boss participation
  *      rule, and `stripClientProgress` pinning every reported progress field to the trusted copy once
  *      MP_PHASE ≥ 2 — which is the §11.3 F2 acceptance line "o XP só vem do servidor";
@@ -872,6 +874,54 @@ function stream({
 	check(
 		fx.combat.pingOf(0) < 0.3 - 0.25 * PING_FALL + 0.01,
 		`one lower sample takes ${PING_FALL * 100} % of the way down at once (${(fx.combat.pingOf(0) * 1000).toFixed(0)} ms)`,
+	);
+}
+
+{
+	/*
+	 * S1 (the review of dee095a): a running view offset further back than the ceiling reaches -- a bite's shorter one,
+	 * or a ping that has just fallen -- is judged AT the ceiling. `judge` answered the newest end of the continuity
+	 * window instead, past the ceiling: an offset of 16 ticks judged 13 back under a ceiling of 6, 9 or 12.
+	 */
+	const fx = newFixture();
+	const st = fx.combat.slotOf(0);
+	st.viewSeen = true;
+	st.viewOffset = 16;
+	const now = 1000;
+	const back = [6, 9, 12].map(cap => now - fx.combat.judge(st, now, now - 16, cap / CFG.SIM_HZ, 0));
+	check(
+		back.every((b, i) => Math.abs(b - [6, 9, 12][i]) < 1e-9),
+		`a running offset of 16 ticks is judged at ceilings of 6, 9 and 12, not past them (${back.map(b => b.toFixed(1)).join(", ")} back)`,
+	);
+	// …and inside the ceiling the continuity still holds the view to the running offset
+	const held = now - fx.combat.judge(st, now, now - 10, 0.3, 0);
+	check(Math.abs(held - 13) < 1e-9, `a view 6 ticks fresher than an offset of 16 is held at 13 (${held.toFixed(1)})`);
+
+	/*
+	 * The same through `biteAllowed`, which judges with the shot's running offset under the 150 ms bite ceiling: an
+	 * honest 150 ms client (a round trip, the buffer and the queue: ~16 ticks) and a walker closing in at 5 u a tick,
+	 * inside contact + FAIR_BITE_MARGIN 9 ticks ago (the ceiling), outside it 13 ticks ago. Judged 13 back, the bite the
+	 * victim saw coming was refused.
+	 */
+	const T = 40;
+	const fb = newFixture();
+	const victim = makePlayer(fb, 0, 1000, 1000, 10);
+	const walker = tough(createZombie(1, 1000, 1000, 1));
+	fb.zombies.push(walker);
+	for (let tick = 1; tick <= T; tick++) {
+		walker.x = 1000 + 15 + 5 * (T - tick);
+		fb.combat.afterWorld(tick);
+	}
+	const vst = fb.combat.slotOf(0);
+	vst.viewSeen = true;
+	vst.viewOffset = 16;
+	victim.viewTick = T - 16;
+	victim.viewFrac = 0;
+	fb.combat.setPing(0, 0.15);
+	checkEq(
+		fb.combat.biteAllowed(victim, walker, 40, T),
+		true,
+		"a bite is judged at the 150 ms bite ceiling, where the walker already was in reach — not 13 ticks back",
 	);
 }
 
