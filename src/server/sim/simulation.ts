@@ -152,11 +152,12 @@ export class ServerSimulation {
 	/** called after every tick (replication, metrics); errors are the caller's to contain */
 	onTick?: (tick: number) => void;
 	/**
-	 * How many ticks further back than its declared view the survivor in `slot` draws zombie `z` (the mid ring's
-	 * extra delay, §4.3/§5.1), for the rewind of a shot (server/sim/combat.ts `viewExtraTicks`). The replication
-	 * layer knows who sees what in which ring, and sets it (server/net/replication.ts); unset, every body is near.
+	 * How many ticks further back than `viewTick` (the render time of the frame that declared it) the survivor in
+	 * `slot` drew zombie `z` (the mid ring's extra delay, eased when it changes ring, §4.3/§5.1), for the rewind of a
+	 * shot (server/sim/combat.ts `viewExtraTicks`). The replication layer knows who was sent what in which ring, and
+	 * sets it (server/net/replication.ts); unset, every body is near.
 	 */
-	zombieViewLag?: (slot: number, z: ZombieState) => number;
+	zombieViewLag?: (slot: number, z: ZombieState, viewTick: number) => number;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -391,7 +392,7 @@ export class ServerSimulation {
 				zombies: () => horde.zombies,
 				bosses: () => horde.bossRoster.list,
 				// read when a shot RUNS, so the replication layer can set it after this town was built
-				viewExtraTicks: (slot, z) => this.zombieViewLag?.(slot, z) ?? 0,
+				viewExtraTicks: (slot, z, viewTick) => this.zombieViewLag?.(slot, z, viewTick) ?? 0,
 			},
 			progress,
 			simHz: this.simHz,

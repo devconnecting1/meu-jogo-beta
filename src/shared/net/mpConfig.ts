@@ -157,6 +157,13 @@ export const INPUT_SEQ_WINDOW = 64;
 
 /** near ring (snapshots at SNAP_NEAR_HZ) */
 export const INTEREST_NEAR = 800;
+/**
+ * A body already in the near ring leaves it only past this (hysteresis, like INTEREST_EXIT over INTEREST_MID). Each
+ * change of ring changes how far back the client draws it (client/net/snapshotBuffer.ts `extra`, eased over a second)
+ * and the server has to follow that to judge a shot at it (server/net/interest.ts); a body hovering on 800 u must not
+ * flip it every snapshot (the review of dee095a, S3).
+ */
+export const INTEREST_NEAR_EXIT = 880;
 /** mid ring (per entity at SNAP_MID_HZ) */
 export const INTEREST_MID = 1500;
 /** leave-interest radius (hysteresis over INTEREST_MID) */
@@ -263,6 +270,12 @@ export const FAIR_BITE_REWIND_MAX_S = 0.15;
 export const INTERP_DEFAULT_S = 0.1;
 export const INTERP_MIN_S = 0.08;
 export const INTERP_MAX_S = 0.25;
+/**
+ * The client's render delay never moves faster than this fraction of real time (§5.1): the buffer's own, and a
+ * mid-ring body's extra near interval when it changes ring (client/net/snapshotBuffer.ts). The server mirrors the
+ * second to judge a shot where the body was drawn (server/net/interest.ts `viewExtra`), so both read it here.
+ */
+export const RENDER_DELAY_RATE = 0.05;
 /** extrapolation when the interpolation buffer runs dry */
 export const EXTRAPOLATE_MAX_S = 0.1;
 /** reconciliation: re-simulate above this error; visual offset decays with this τ; snaps above this */

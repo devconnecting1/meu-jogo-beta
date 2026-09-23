@@ -408,18 +408,21 @@ export class Replicator {
 		this.mapHash = options.mapHash;
 		this.seed = options.seed ?? DESIGN.TOWN_SEED;
 		// the shot's rewind needs what only this layer knows: which ring a zombie is in for which viewer (§2.3)
-		sim.zombieViewLag = (slot, z) => this.viewLagOf(slot, z);
+		sim.zombieViewLag = (slot, z, viewTick) => this.viewLagOf(slot, z, viewTick);
 	}
 
 	/**
-	 * How many ticks further back than its declared view `slot` draws zombie `z`: a body sent in the mid ring is
-	 * drawn one near interval later than the buffer's render time (client/net/snapshotBuffer.ts, `extra`), a near
-	 * one at it. The snapshot's `mid` flag and this answer come from the same table (`hordeRings`).
+	 * How many ticks further back than `viewTick` -- the render time of the frame that declared it -- `slot` drew
+	 * zombie `z`: a body sent in the mid ring is drawn one near interval later than the buffer's render time
+	 * (client/net/snapshotBuffer.ts, `extra`), a near one at it, and a body that changed ring somewhere in between,
+	 * because the client eases that over a second. The answer mirrors that easing from the `mid` flags the snapshots
+	 * actually carried to this viewer (`hordeRings`, `zombiesFor`); switched at once with the ring, it was up to
+	 * 3 ticks off for a second after every crossing of 800 u (the review of dee095a, S3).
 	 */
-	viewLagOf(slot: number, z: ZombieState): number {
+	viewLagOf(slot: number, z: ZombieState, viewTick: number): number {
 		const netId = this.sim.horde?.netIdOf(z) ?? 0;
 		if (!(netId > 0)) return 0;
-		return this.hordeRings.ring(slot, netId) === Ring.Mid ? midViewExtraTicks(this.sim.simHz) : 0;
+		return this.hordeRings.viewExtra(slot, netId, viewTick, this.sim.simHz);
 	}
 
 	// ------------------------------------------------------------ reliable deltas (§4.5)
@@ -914,6 +917,8 @@ export class Replicator {
 		// the least worth drawing, and the client's despawn timeout (§4.4) retires it without a flicker
 		this.stats.droppedEntities += picks.size() - n;
 		const blocks = this.zombiePool;
+		const tick = this.sim.tick;
+		const midExtra = midViewExtraTicks(this.sim.simHz);
 		for (let i = 0; i < n; i++) {
 			const pick = picks[i];
 			let block = blocks[i];
@@ -924,6 +929,8 @@ export class Replicator {
 				fillZombieBlock(block, pick.entry.z, pick.entry.netId, pick.mid);
 			}
 			out.push(block);
+			// what this viewer's track will hold, and so how far back it will draw the body (`viewLagOf`)
+			this.hordeRings.noteSent(viewer.slot, pick.entry.netId, pick.mid, tick, midExtra);
 		}
 		return out;
 	}

@@ -136,11 +136,12 @@ export interface CombatTargets {
 	zombies: () => ReadonlyArray<Ent.ZombieState>;
 	bosses: () => ReadonlyArray<Ent.BossState>;
 	/**
-	 * How many ticks further back than its declared view the survivor in `slot` DRAWS this zombie: the mid ring's
-	 * extra delay (client/net/snapshotBuffer.ts), 0 in the near ring. The replication layer knows the rings
-	 * (server/net/replication.ts sets it through ServerSimulation.zombieViewLag); absent, every body counts as near.
+	 * How many ticks further back than `viewTick` -- the render time of the frame the shot was fired from -- the
+	 * survivor in `slot` DREW this zombie: the mid ring's extra delay (client/net/snapshotBuffer.ts), 0 in the near
+	 * ring, and in between for a second after it changed ring (the client eases it). The replication layer knows the
+	 * rings (server/net/replication.ts sets it through ServerSimulation.zombieViewLag); absent, every body is near.
 	 */
-	viewExtraTicks?: (slot: number, z: Ent.ZombieState) => number;
+	viewExtraTicks?: (slot: number, z: Ent.ZombieState, viewTick: number) => number;
 }
 
 /** a projectile the server must fly (§2.3): combat validates and asks, 2A/2D own the flight and the Fx */
@@ -1158,7 +1159,8 @@ export class ServerCombat {
 			if (z.hp <= 0) continue;
 			let x = z.x;
 			let y = z.y;
-			const extra = this.targets.viewExtraTicks?.(sp.slot, z) ?? 0;
+			// asked at the JUDGED view, not the declared one: within the ceiling and the continuity either way
+			const extra = this.targets.viewExtraTicks?.(sp.slot, z, at) ?? 0;
 			const zAt = extra > 0 ? this.judge(st, tick, declared - extra, midCap, extra) : at;
 			if (zAt < tick - 1e-6 && this.history.sampleInto(z.id, zAt, this.point)) {
 				x = this.point.x;

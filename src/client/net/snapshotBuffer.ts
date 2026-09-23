@@ -56,6 +56,7 @@ import {
 	INTERP_DEFAULT_S,
 	INTERP_MAX_S,
 	INTERP_MIN_S,
+	RENDER_DELAY_RATE,
 	SIM_HZ,
 	SNAP_NEAR_HZ,
 	midViewExtraTicks,
@@ -70,8 +71,11 @@ import { WorldData } from "shared/game/world";
 const SAMPLES_PER_SLOT = 32;
 /** a packet older than this many ticks behind the newest one is thrown away instead of inserted */
 const MAX_REORDER_TICKS = 60;
-/** the adaptive delay never moves faster than this fraction of real time (§5.1) */
-const DELAY_MAX_RATE = 0.05;
+/**
+ * the adaptive delay never moves faster than this fraction of real time (§5.1); a track's `extra` neither, and the
+ * server mirrors that one (server/net/interest.ts `viewExtra`)
+ */
+const DELAY_MAX_RATE = RENDER_DELAY_RATE;
 /** weight of one arrival sample in the interval / jitter averages, and in the lateness mean / deviation */
 const ARRIVAL_ALPHA = 0.1;
 /** ticks of margin on top of the measured lateness edge: a sample that lands exactly on time is already late */

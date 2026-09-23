@@ -13,6 +13,9 @@
  *   a. THREE CLIENTS SEE THE SAME ZOMBIES. Three survivors standing together receive the same `netId`s and
  *      draw them within ±4 u of one another after interpolation, and within ±4 u of the server's own
  *      positions. That is the one thing F2 exists for: before it, every client made up its own horde.
+ *   a2. CROSSING 800 U (the review of dee095a, S3). Hunters closing in change ring on every screen; the server
+ *      judges a shot at each where the client drew it all through the second the client takes to ease its extra
+ *      delay, and a body hovering on the border does not flip its ring (INTEREST_NEAR_EXIT).
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
  *      every light is not sent either, unless it is within DARK_SENSE_RANGE — which is what stops the wire
  *      being a wallhack, and is measured here rather than asserted in a comment.
@@ -733,7 +736,7 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u o
 			// review #2: where the server JUDGES a shot this viewer fires at it -- the declared view (the buffer's
 			// render time) minus the ring's extra delay (server/net/replication.ts `viewLagOf`) -- is where it is drawn
 			const view = server.clients.get(slot).buffer.renderNow();
-			const lag = onServer !== undefined ? (server.replicator.viewLagOf?.(slot, onServer) ?? 0) : 0;
+			const lag = onServer !== undefined ? (server.replicator.viewLagOf?.(slot, onServer, view) ?? 0) : 0;
 			const judged = serverAt(server, netId, view - lag);
 			if (judged !== undefined) worstJudged = Math.max(worstJudged, Math.hypot(z.x - judged.x, z.y - judged.y));
 		}
@@ -776,6 +779,115 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u o
 		if (zb !== undefined && zb.type !== za.type) sameType = false;
 	}
 	check(sameType, "and it is the same archetype on every screen");
+}
+
+// ================================================================ (a2) crossing the near ring's border
+
+section("(a2) a zombie crossing 800 u is judged where it is drawn, all through the crossing (review of dee095a, S3)");
+{
+	/*
+	 * A body that changes ring changes how far back its viewer draws it: the client eases its `extra` over a second
+	 * from the `mid` flag it received (client/net/snapshotBuffer.ts), and the server switched it at once with the
+	 * ring. For about a second after each crossing a shot was judged up to 3 ticks away from the body on screen -- the
+	 * error review #2 fixed for the steady mid ring -- and every chasing zombie crosses 800 u once, inside the 800 u
+	 * and 1200 u rifle ranges. Here 24 hunters close in on three survivors from 950-1150 u, and on every frame of
+	 * every client each body is compared with where the server would judge a shot at it: the declared view (the
+	 * buffer's render time) minus `viewLagOf` at that view. The ring switched at once is measured next to it.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	addSurvivor(server, 1, cx + 40, cy);
+	addSurvivor(server, 2, cx - 40, cy + 30);
+	const horde = server.sim.horde;
+	for (let i = 0; i < 24; i++) {
+		const ang = (i / 24) * Math.PI * 2 + 0.1;
+		const r = 950 + 8 * i;
+		const z = createZombie(1, cx + Math.cos(ang) * r, cy + Math.sin(ang) * r, 5, false);
+		z.alpha = 1;
+		z.detect = true;
+		horde.zombies.push(z);
+	}
+	const midExtra = CFG.midViewExtraTicks(CFG.SIM_HZ);
+	let worstNew = 0;
+	let worstOld = 0;
+	let worstNewEasing = 0;
+	let worstOldEasing = 0;
+	let easingFrames = 0;
+	let frames = 0;
+	const crossed = new Set();
+	/** the ring each (viewer, netId) was last SENT in, to count the crossings the clients actually saw */
+	const lastMid = new Map();
+	for (let i = 0; i < 60 * 8; i++) {
+		tickServer(server);
+		const drawn = drawClients(server);
+		if (i < 60) continue;
+		const byNetId = new Map();
+		for (const z of horde.zombies) byNetId.set(horde.netIdOf(z), z);
+		for (const [slot, bodies] of drawn) {
+			const client = server.clients.get(slot);
+			const view = client.buffer.renderNow();
+			for (const [netId, z] of bodies) {
+				const onServer = byNetId.get(netId);
+				if (onServer === undefined) continue;
+				const truth = serverAt(server, netId, z.tick);
+				if (truth === undefined) continue;
+				const key = slot * 65536 + netId;
+				const track = client.buffer.zombies.get(netId);
+				if (track !== undefined) {
+					if (lastMid.has(key) && lastMid.get(key) !== track.mid) crossed.add(key);
+					lastMid.set(key, track.mid);
+				}
+				// where the server judges a shot this viewer fires at it now, and where it did with the ring switched at once
+				const judged = serverAt(server, netId, view - server.replicator.viewLagOf(slot, onServer, view));
+				const ring = server.replicator.hordeRings.ring(slot, netId);
+				const old = serverAt(server, netId, view - (ring === 1 ? midExtra : 0));
+				if (judged === undefined || old === undefined) continue;
+				// against the server's own body at the tick this screen drew it: the drawing's own error (a lost
+				// snapshot, extrapolation) is (a)'s business, this is only the instant the shot is judged at
+				frames += 1;
+				const errNew = Math.hypot(truth.x - judged.x, truth.y - judged.y);
+				const errOld = Math.hypot(truth.x - old.x, truth.y - old.y);
+				worstNew = Math.max(worstNew, errNew);
+				worstOld = Math.max(worstOld, errOld);
+				const extra = view - z.tick;
+				if (extra > 0.05 && extra < midExtra - 0.05) {
+					easingFrames += 1;
+					worstNewEasing = Math.max(worstNewEasing, errNew);
+					worstOldEasing = Math.max(worstOldEasing, errOld);
+				}
+			}
+		}
+	}
+	info(
+		`${crossed.size()} crossings seen by the three clients, ${easingFrames} of ${frames} body-frames drawn while ` +
+			`easing; judged vs drawn: worst ${worstNew.toFixed(2)} u (while easing ${worstNewEasing.toFixed(2)} u), ` +
+			`with the ring switched at once ${worstOld.toFixed(2)} u (${worstOldEasing.toFixed(2)} u)`,
+	);
+	check(
+		crossed.size() >= 24,
+		`the hunters crossed the near ring's border on the clients' screens (${crossed.size()})`,
+	);
+	check(
+		worstNew <= 1,
+		`every body is judged within 1 u of the instant it is drawn at, through the crossing (worst ` +
+			`${worstNew.toFixed(2)} u; ${worstOld.toFixed(2)} u with the ring switched at once)`,
+	);
+
+	// and a body hovering on the border does not flip it: the near ring is left only past INTEREST_NEAR_EXIT
+	const { ActorInterest, Ring } = require(join(SRC, "server/net/interest.ts"));
+	const rings = new ActorInterest();
+	let flips = 0;
+	let was = Ring.Out;
+	for (let round = 0; round < 200; round++) {
+		const d = CFG.INTEREST_NEAR + 40 * Math.cos(round / 3);
+		const ring = rings.update(0, 7, d * d, round);
+		if (was !== Ring.Out && ring !== was) flips += 1;
+		was = ring;
+	}
+	checkEq(flips, 1, `a body swinging ±40 u across ${CFG.INTEREST_NEAR} u changes ring once, not every swing`);
+	checkEq(rings.update(0, 7, (CFG.INTEREST_NEAR_EXIT + 1) ** 2, 201), Ring.Mid, "and past the exit band it is mid");
 }
 
 // ================================================================ (b) interest, walls and the dark
