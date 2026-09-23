@@ -459,9 +459,7 @@ Key,Context,Example,Source
 ,,,Saving...
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
-,,,Menu
 ,,,Back to game
-,,,Backpack
 ,,,Save
 ,,,Home
 ,,,Game over
@@ -523,3 +521,48 @@ Key,Context,Example,Source
 ,,,days
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,The backpack and the menu never stop the world: open them somewhere safe
+,,,Rifle
+,,,Machine gun
+,,,Shotgun
+,,,Sniper rifle
+,,,Special
+,,,Food
+,,,Medicine
+,,,Clothing
+,,,Tool
+,,,Gear
+,,,Buildable
+,,,Fuel
+,,,Damage
+,,,Cooldown
+,,,Draw time
+,,,Range
+,,,Reach
+,,,Magazine
+,,,Charge
+,,,Speed boost
+,,,Steady aim
+,,,Pain relief
+,,,Cooks into
+,,,Slot
+,,,Used in recipes
+,,,Used to craft
+,,,Not used in any recipe.
+,,,Hold to keep swinging.
+,,,Runs on oil while you hold it.
+,,,"Hold to draw, let go to shoot."
+,,,Fires when you let go.
+,,,Hold to keep firing.
+,,,One shot per press.
+,,,Chops trees for extra wood.
+,,,Walk faster while it lasts.
+,,,Your aim settles faster while it lasts.
+,,,Hits don't slow you down while it lasts.
+,,,Everyone sees it on your survivor. It changes nothing else.
+,,,It follows you and everyone sees it. It never fights or collects.
+,,,Attack / shoot
+,,,"Drag to aim, let go to attack"
+,,,Click
+,,,Tap
+,,,Unequip
+,,,Open Craft
