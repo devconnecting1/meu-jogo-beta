@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * The in-run HUD (docs/DESIGN_RULES.md UI-09): the console at the bottom centre, with the day clock (the sky) at its
- * left end -- on touch, in its own plate in the row of Menu and Bag.
+ * left end -- on touch, in its own plate in the top corner, under Menu and Bag.
  *
  *   npm run test:hud
  *   PZ_SRC=<another checkout>/src node tools/test-hud.mjs    (measures that version)
@@ -26,7 +26,8 @@
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
- *     plate sits in the row of Menu and Bag and covers nothing (phones included, and a crowded one).
+ *     plate sits under the row of Menu and Bag and covers nothing -- the thumbs, Menu, Bag, the console, nor the
+ *     banner and feed over the top centre (phones included, and a crowded one).
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -37,7 +38,7 @@ const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
 
 const boot = require(join(SRC, "client/bootstrap.ts"));
-const { Hud } = require(join(SRC, "client/ui/hud.ts"));
+const { Hud, messageReach } = require(join(SRC, "client/ui/hud.ts"));
 const { COMPACT_LAYOUT, DESKTOP_LAYOUT } = require(join(SRC, "client/ui/hudConsole.ts"));
 const { ownedWeapons } = require(join(SRC, "client/systems/combat.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
@@ -683,7 +684,7 @@ function consoleRect() {
 }
 
 /** checks the console against the geometry bootstrap hit-tests with, recomputed here from the same inputs */
-function checkTouch(label, w, h, prefs, atBottom = true) {
+function checkTouch(label, w, h, prefs, atBottom = true, skyHome = atBottom) {
 	const L = computeTouchLayout(prefs, w, h, TOP_BAR);
 	const live = boot.getTouchLayout();
 	const same =
@@ -721,15 +722,18 @@ function checkTouch(label, w, h, prefs, atBottom = true) {
 		hint.Position.Y.Offset <= c[1],
 		`${hint.Position.Y.Offset} <= ${Math.round(c[1])}`,
 	);
-	checkSky(label, L, c, w, h, atBottom);
+	checkSky(label, L, c, w, h, skyHome);
 	return c;
 }
 
 /**
- * The touch sky (hudSky.ts skyPlate, hudConsole.ts placeTouchSky): in the row of Menu and Bag, as tall as they are,
- * never over the console, a thumb control, Menu / Bag or a Roblox button; when the console floats up there (a crowded
- * phone), wherever the row -- or the console's side -- is still free.
+ * The touch sky (hudSky.ts skyPlate, hudConsole.ts placeTouchSky): under the row of Menu and Bag, flush with its outer
+ * end, as tall as they are; never over the console, a thumb control, Menu / Bag, a Roblox button, nor the reach of the
+ * messages over the top centre (the banner at its widest, popping, and the feed: hud.ts messageReach); when the console
+ * floats up there (a crowded phone), wherever the corner -- or the console's side -- is still free.
  */
+/** hud.ts BANNER_MIN_W: the narrowest banner card (its own minimum) */
+const BANNER_MIN_W_UNITS = 280;
 function checkSky(label, L, c, w, h, atHome) {
 	const f = deep(hudRoot(), "SkyPlate");
 	const r = [
@@ -738,6 +742,9 @@ function checkSky(label, L, c, w, h, atHome) {
 		f.Position.X.Offset + f.Size.X.Offset,
 		f.Position.Y.Offset + f.Size.Y.Offset,
 	];
+	// the messages as the HUD draws them now: on touch narrowed so they stop short of the sky (hud.ts fitMessages)
+	const [bannerW, feedW] = hud.messageWidths();
+	const [banner, feed] = messageReach(w, h, L.inset, bannerW, feedW);
 	const others = [
 		["o console", c],
 		["o analogico", circle(L.move.homeX, L.move.homeY, L.floating ? L.move.baseR : L.move.grabR)],
@@ -746,10 +753,12 @@ function checkSky(label, L, c, w, h, atHome) {
 		["USE", circle(L.use.x, L.use.y, Math.max(L.use.r, MIN_TOUCH_PX / 2))],
 		["Menu", circle(L.pause.x, L.pause.y, L.pause.r)],
 		["Bag", circle(L.bag.x, L.bag.y, L.bag.r)],
+		["a faixa (onda, manha) no maior tamanho que a HUD desenha, no pulo", banner],
+		["as mensagens embaixo dela", feed],
 	];
 	const hit = others.filter(([, o]) => overlaps(r, o)).map(([n]) => n);
 	check(
-		`${label}: o relogio (toque) nao cobre nada: console, polegares, Menu, Bag`,
+		`${label}: o relogio (toque) nao cobre nada: console, polegares, Menu, Bag, faixa, mensagens`,
 		hit.length === 0,
 		hit.length > 0 ? `sobre ${hit.join(", ")} ${fmt(r)}` : fmt(r),
 	);
@@ -758,14 +767,20 @@ function checkSky(label, L, c, w, h, atHome) {
 		r[0] >= 0 && r[2] <= w && r[1] >= L.inset && r[3] <= h,
 		fmt(r),
 	);
-	const row = Math.abs(r[1] - (L.pause.y - L.pause.r)) <= 1 && Math.abs(r[3] - r[1] - L.pause.r * 2) <= 1;
+	const rowR = Math.max(L.pause.x + L.pause.r, L.bag.x + L.bag.r);
+	const rowB = Math.max(L.pause.y + L.pause.r, L.bag.y + L.bag.r);
 	if (atHome) {
 		check(
-			`${label}: na fileira do Menu e do Bag, da altura deles, a esquerda do Menu`,
-			row && r[2] <= L.pause.x - L.pause.r,
-			`${fmt(r)} / Menu em ${Math.round(L.pause.x)}, ${Math.round(L.pause.y)} r ${Math.round(L.pause.r)}`,
+			`${label}: logo abaixo da fileira do Menu e do Bag, rente a ponta dela`,
+			Math.abs(r[2] - rowR) <= 1 && r[1] >= rowB && r[1] - rowB <= L.pause.r,
+			`${fmt(r)} / fileira ate x ${Math.round(rowR)}, y ${Math.round(rowB)}`,
 		);
 	}
+	check(
+		`${label}: a faixa e as mensagens ficam no centro, e continuam largas (faixa >= ${BANNER_MIN_W_UNITS} unidades)`,
+		bannerW >= BANNER_MIN_W_UNITS && feedW >= 200,
+		`faixa ate ${Math.round(bannerW)} de 720 unidades, linha ate ${Math.round(feedW)} de 560`,
+	);
 	const px = (r[3] - r[1]) / SKY_PLATE_H;
 	check(
 		`${label}: o texto do relogio nao fica abaixo do piso de 9 px`,
@@ -800,6 +815,32 @@ const touchRect = checkTouch("1120x630 (phone)", 1120, 630, DEFAULT_PREFS);
 console.log(
 	`  console no phone: ${fmt(touchRect)} = ${Math.round(touchRect[2] - touchRect[0])} x ${Math.round(touchRect[3] - touchRect[1])} px`,
 );
+// messageReach is makeAnchored's recipe written out: it must be where the real banner and feed frames land
+{
+	const pxOf = (fr, vw, vh) => {
+		const ar = fr.FindFirstChildOfClass("UIAspectRatioConstraint").AspectRatio;
+		const pw = Math.min(fr.Size.X.Scale * vw, fr.Size.Y.Scale * vh * ar);
+		const ph = pw / ar;
+		const x = fr.Position.X.Scale * vw + fr.Position.X.Offset - fr.AnchorPoint.X * pw;
+		const y = fr.Position.Y.Scale * vh + fr.Position.Y.Offset - fr.AnchorPoint.Y * ph;
+		return [x, y, x + pw, y + ph];
+	};
+	const [reachBanner, reachFeed] = messageReach(1120, 630, TOP_BAR);
+	const banner = pxOf(deep(hudRoot(), "BannerBox"), 1120, 630);
+	const feed = pxOf(deep(hudRoot(), "Feed"), 1120, 630);
+	const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 1);
+	const popped = [
+		(banner[0] + banner[2]) / 2 - ((banner[2] - banner[0]) * 1.2) / 2,
+		banner[1],
+		(banner[0] + banner[2]) / 2 + ((banner[2] - banner[0]) * 1.2) / 2,
+		banner[1] + (banner[3] - banner[1]) * 1.2,
+	];
+	check(
+		"o alcance das mensagens (hud.ts messageReach) e onde a faixa (no pulo de 1,2x) e as mensagens ficam de verdade",
+		near(reachBanner, popped) && near(reachFeed, feed),
+		`faixa ${fmt(reachBanner)} / ${fmt(popped)}; mensagens ${fmt(reachFeed)} / ${fmt(feed)}`,
+	);
+}
 
 input.beginFrame();
 tile(2).Activated.Fire();
@@ -839,7 +880,8 @@ for (const [w, h] of [
 		const prefs = { ...DEFAULT_PREFS, ...over };
 		Object.assign(settings, prefs);
 		const re = phase(`toque ${w}x${h} ${name}: reposiciona`, () => boot.refreshTouchLayout());
-		checkTouch(`${w}x${h} ${name}`, w, h, prefs);
+		// with the controls at their largest the corner under Menu and Bag may be RELOAD's: the sky takes the next free place
+		checkTouch(`${w}x${h} ${name}`, w, h, prefs, true, !name.includes("maximo"));
 		check(
 			`${w}x${h} ${name}: reposicionar o console nao cria nada nele`,
 			re.log.every(e => !e.inst[INTERNAL] || !isUnder(e.inst, consoleFrame())),
@@ -892,7 +934,10 @@ for (const [w, h, bar] of [
 ]) {
 	setViewport(w, h, bar);
 	boot.refreshTouchLayout();
-	checkSky(`${w}x${h} (celular)`, computeTouchLayout(DEFAULT_PREFS, w, h, bar), consoleRect(), w, h, true);
+	// on the 667 x 375 phone the thumbs meet, the console floats up above them (placeTouchConsole's last step) and takes
+	// the band under Menu and Bag: the sky goes to the other end of their row
+	const L = computeTouchLayout(DEFAULT_PREFS, w, h, bar);
+	checkSky(`${w}x${h} (celular)`, L, consoleRect(), w, h, w !== 667);
 }
 setViewport(1120, 630, TOP_BAR);
 

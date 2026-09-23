@@ -2,7 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
-import { CONSOLE_MARGIN, HudConsole, HudState, placeTouchSky } from "./hudConsole";
+import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchSky } from "./hudConsole";
 import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
@@ -24,16 +24,18 @@ import {
 	setButtonEnabled,
 	setDesign,
 	setSurfaceTransparency,
+	topInset,
 	tween,
 	uiScale,
+	viewportSize,
 } from "./widgets";
 
 /*
  * The in-run HUD (docs/DESIGN_RULES.md UI-09). The day clock, the vitals, the weapons and the Bag / Menu buttons live
  * in ONE framed console at the bottom centre (client/ui/hudConsole.ts, the clock in hudSky.ts), in the vocabulary of
  * the owner's Settings window (UI-07). On touch the thumbs own the bottom, so the clock rides where the Bag and the
- * Menu go there: the top-right row (placeConsole). This file keeps what floats over the world: the damage vignette,
- * the interaction prompt, the banners and the message feed, and the touch layer.
+ * Menu go there: the top corner, under their row (placeConsole). This file keeps what floats over the world: the
+ * damage vignette, the interaction prompt, the banners and the message feed, and the touch layer.
  */
 export type { HudState } from "./hudConsole";
 
@@ -63,12 +65,41 @@ const CENTER = UDim2.fromScale(0.5, 0.5);
 const BANNER_W = 720;
 const BANNER_H = 110;
 const BANNER_MIN_W = 280;
+/** between the banner card's sides and its texts */
+const BANNER_PAD = space(6);
 /**
  * the banner's distance under the top bar, and the feed's under the banner: the top centre is theirs now (the day plate
  * that sat there moved into the console, UI-09)
  */
 const BANNER_TOP = 20;
 const FEED_GAP = 6;
+/** the banner's pop when it appears (showBanner): it starts this much larger */
+const BANNER_POP = 1.2;
+/** on touch, between a message over the top centre and the sky's plate in the corner (design units) */
+const MESSAGE_GAP = 8;
+
+/**
+ * How far the messages over the top centre can reach on a `vw` x `vh` screen with the Roblox bar `inset` px tall, in
+ * px: the banner (`bannerW` design units at most) at the top of its pop, and the feed's column (lines at most `feedW`)
+ * under it. makeAnchored's recipe: the box keeps its aspect inside w / DESIGN_W of the width and h / DESIGN_H of the
+ * height, centred, `marginY / DESIGN_H` of the height under the bar. On touch the HUD narrows both so they never reach
+ * the sky's plate in the top corner (Hud.messageWidths).
+ */
+export function messageReach(
+	vw: number,
+	vh: number,
+	inset: number,
+	bannerW = BANNER_W,
+	feedW = FEED_W,
+): [PxRect, PxRect] {
+	const s = math.min(vw / DESIGN_W, vh / DESIGN_H);
+	const box = (w: number, h: number, marginY: number, pop: number): PxRect => {
+		const pw = w * s * pop;
+		const y = inset + (marginY / DESIGN_H) * vh;
+		return [(vw - pw) / 2, y, (vw + pw) / 2, y + h * s * pop];
+	};
+	return [box(bannerW, BANNER_H, BANNER_TOP, BANNER_POP), box(feedW, FEED_H, BANNER_TOP + BANNER_H + FEED_GAP, 1)];
+}
 
 /** between the interaction prompt and the top of the console (design units of the console) */
 const HINT_GAP = 8;
@@ -182,11 +213,17 @@ export class Hud {
 	/** bottom centre: vitals, the weapon hotbar, Bag / Menu, the weapon in hand (hudConsole.ts) */
 	private console: HudConsole | undefined;
 	/**
-	 * touch only: the day clock's own plate in the top-right row (on desktop it is a section of the console, which
+	 * touch only: the day clock's own plate in the top corner, under Menu and Bag (on desktop it is a section of the console, which
 	 * updates it)
 	 */
 	private sky: HudSky | undefined;
 	private skyFrame: Frame | undefined;
+	/**
+	 * the widest banner card and feed line (design units): the full width, or on touch as much of it as keeps them off
+	 * the sky's plate in the top corner (placeConsole)
+	 */
+	private bannerMaxW = BANNER_W;
+	private feedMaxW = FEED_W;
 	/** the "UI size" setting at mount (80%..120%) */
 	private uiK = 1;
 	private vignette: Array<Frame> = [];
@@ -298,6 +335,9 @@ export class Hud {
 		if (!this.touch) {
 			const bottom = CONSOLE_MARGIN + deck.layout.h * this.uiK + HINT_GAP;
 			if (hint !== undefined) hint.Position = new UDim2(0.5, 0, 1 - bottom / DESIGN_H, 0);
+			// the sky is in the console: the top centre is the messages' whole
+			this.bannerMaxW = BANNER_W;
+			this.feedMaxW = FEED_W;
 			return;
 		}
 		const L = getTouchLayout();
@@ -305,14 +345,43 @@ export class Hud {
 		if (hint !== undefined) {
 			hint.Position = UDim2.fromOffset(math.round(p.x + p.w / 2), math.round(p.y - HINT_GAP * p.scale));
 		}
-		// the clock: in the row of Menu and Bag, as tall as they are (hudConsole.ts placeTouchSky)
+		// the clock: under the row of Menu and Bag, as tall as they are (hudConsole.ts placeTouchSky)
 		const sky = this.skyFrame;
 		if (sky !== undefined) {
-			const s = placeTouchSky(L, [p.x, p.y, p.x + p.w, p.y + p.h], SKY_PLATE_W, SKY_PLATE_H);
+			// the banner and the feed keep at least their narrowest over the top centre: the sky never takes that
+			const v = viewportSize();
+			const least = messageReach(v.X, v.Y, topInset(), BANNER_MIN_W, FEED_LINE_MIN_W);
+			const s = placeTouchSky(L, [p.x, p.y, p.x + p.w, p.y + p.h], SKY_PLATE_W, SKY_PLATE_H, least);
 			sky.Position = UDim2.fromOffset(math.round(s.x), math.round(s.y));
 			sky.Size = UDim2.fromOffset(math.ceil(s.w), math.ceil(s.h));
 			this.sky?.setTextScale(math.clamp(s.scale / math.max(uiScale(), 0.05), 0.5, 4));
+			this.fitMessages([s.x, s.y, s.x + s.w, s.y + s.h]);
 		}
+	}
+
+	/**
+	 * The top corner is the controls' (Menu, Bag and the sky under them), the top centre the messages': a banner or a
+	 * feed line whose band of the screen the sky shares is narrowed, centred, to stop MESSAGE_GAP short of it (the
+	 * banner at the top of its pop). The narrowest a message goes is its own minimum; on the screens the tests know
+	 * the sky leaves at least that (tools/test-hud.mjs).
+	 */
+	private fitMessages(sky: PxRect): void {
+		const v = viewportSize();
+		const [banner, feed] = messageReach(v.X, v.Y, topInset());
+		const px = math.min(v.X / DESIGN_W, v.Y / DESIGN_H);
+		const cx = v.X / 2;
+		// px from the centre line to the sky's near side, less the gap
+		const room = (sky[0] >= cx ? sky[0] - cx : cx - sky[2]) - MESSAGE_GAP * px;
+		const shares = (r: PxRect): boolean => sky[1] < r[3] && r[1] < sky[3];
+		const widest = (full: number, pop: number, least: number): number =>
+			math.clamp((room * 2) / (px * pop), least, full);
+		this.bannerMaxW = shares(banner) ? widest(BANNER_W, BANNER_POP, BANNER_MIN_W) : BANNER_W;
+		this.feedMaxW = shares(feed) ? widest(FEED_W, 1, FEED_LINE_MIN_W) : FEED_W;
+	}
+
+	/** the widest banner card and feed line the HUD draws now, in design units (the tests' view of fitMessages) */
+	messageWidths(): [number, number] {
+		return [this.bannerMaxW, this.feedMaxW];
 	}
 
 	/**
@@ -560,7 +629,7 @@ export class Hud {
 		});
 		setSurfaceTransparency(card, 1);
 		this.bannerCard = card;
-		const pad = space(6);
+		const pad = BANNER_PAD;
 		const banner = makeLabel(
 			bannerBox,
 			"Banner",
@@ -826,14 +895,20 @@ export class Hud {
 		sub.Text = subText;
 		// fit the card to the message (estimated width; TextScaled shrinks anything longer)
 		const textW = math.max(badgeWidth(text, TEXT.xl5, 0), subText === "" ? 0 : badgeWidth(subText, TEXT.lg, 0));
-		const w = math.clamp(textW + space(12), BANNER_MIN_W, BANNER_W);
+		const w = math.clamp(textW + space(12), BANNER_MIN_W, this.bannerMaxW);
 		const h = subText === "" ? 70 + space(3) : BANNER_H;
 		card.Position = UDim2.fromScale((BANNER_W - w) / 2 / BANNER_W, 0);
 		card.Size = UDim2.fromScale(w / BANNER_W, h / BANNER_H);
+		// the texts keep inside the card (on touch it may be narrowed: fitMessages); TextScaled shrinks what is longer
+		const inner = w - BANNER_PAD * 2;
+		for (const label of [banner, sub]) {
+			label.Position = new UDim2((BANNER_W - inner) / 2 / BANNER_W, 0, label.Position.Y.Scale, 0);
+			label.Size = new UDim2(inner / BANNER_W, 0, label.Size.Y.Scale, 0);
+		}
 		setSurfaceTransparency(card, 1);
 		banner.TextTransparency = 1;
 		sub.TextTransparency = 1;
-		scale.Scale = 1.2;
+		scale.Scale = BANNER_POP;
 		fadeSurface(card, 0.2, 0);
 		fadeText(banner, 0.25, 0);
 		fadeText(sub, 0.35, 0);
@@ -863,7 +938,7 @@ export class Hud {
 		}
 		entries.sort((a, b) => a.LayoutOrder < b.LayoutOrder);
 		while (entries.size() >= FEED_MAX) entries.remove(0)?.Destroy();
-		const w = math.clamp(badgeWidth(text, TEXT.base, FEED_LINE_H) + space(6), FEED_LINE_MIN_W, FEED_W);
+		const w = math.clamp(badgeWidth(text, TEXT.base, FEED_LINE_H) + space(6), FEED_LINE_MIN_W, this.feedMaxW);
 		const line = Card(feed, "Line", {
 			x: 0,
 			y: 0,

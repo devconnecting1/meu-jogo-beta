@@ -19,7 +19,8 @@
  *
  *   touch (compact): the vitals and the weapons sections only, 512 x 88 design units, scaled so a tile is a thumb
  *   wide and placed in the free band between the move stick and the fire controls (placeTouchConsole). The sky goes
- *   where the touch controls put the Bag and the Menu: the top-right row (hud.ts), not into the thumbs' band.
+ *   where the touch controls put the Bag and the Menu: the top corner, under their row (placeTouchSky), not into the
+ *   thumbs' band.
  *
  * What each part is in the game:
  *  - the sky, at the left end: the world's clock read the way a survivor needs it -- the WORLD's day (MP-20), how long
@@ -122,7 +123,7 @@ interface Layout {
 	tile: number;
 	/**
 	 * the sky section, the weapon column and the Bag / Menu plates (desktop only: on touch the touch layer owns those
-	 * buttons, and the sky rides in their row)
+	 * buttons, and the sky rides under their row)
 	 */
 	full: boolean;
 }
@@ -293,6 +294,8 @@ export interface ConsolePlacement {
 
 /** touch units (px on a 414-pt phone, input.ts): a tile's side, the console's clearance and bottom margin */
 const TOUCH_TILE = 36;
+/** the touch sky plate: px per design unit = the touch unit x this (0,85 px on a 844 x 390 phone: as tall as Menu) */
+const SKY_TOUCH_SCALE = 0.9;
 const TOUCH_GAP = 8;
 const TOUCH_EDGE = 10;
 
@@ -350,21 +353,32 @@ function overlapsAny(r: PxRect, list: Array<PxRect>): boolean {
 }
 
 /**
- * Where the touch sky plate goes (hudSky.ts skyPlate): in the touch controls' top row, the row of Menu and Bag -- the
- * one strip of a touch screen no thumb control reaches (input.ts keeps RELOAD and USE a whole button under it) -- and
- * as tall as those buttons, so the three read as one row. Its first free place, from the geometry bootstrap.ts
- * hit-tests with and the console's own rect `deck`:
- *  1. just left of the Menu button (its normal home);
- *  2. at the left end of the row, when the console floats up there (a crowded phone: placeTouchConsole's last step);
- *  3. under the console, and 4. over it, when the whole row is taken.
- * "Free" = on screen, below the Roblox bar, clear by TOUCH_GAP of the thumbs, of Menu / Bag and of the console.
+ * Where the touch sky plate goes (hudSky.ts skyPlate): with the touch controls' Menu and Bag -- the top corner, the one
+ * part of a touch screen no thumb control reaches (input.ts keeps RELOAD and USE a whole button under it). Its first
+ * free place, from the geometry bootstrap.ts hit-tests with and the console's own rect `deck`:
+ *  1. right under the row of Menu and Bag, flush with its outer end (its home: the corner reads as one block -- the
+ *     buttons, and the clock under them -- and it leaves the most of the top centre to the banners: hud.ts narrows a
+ *     banner or a feed line that would reach it, `messageWidths`, never under their own minimum, `keepOut`);
+ *  2. in the row, just left of Menu;
+ *  3. at the other end of the row, when the console floats up there (a crowded phone: placeTouchConsole's last step);
+ *  4. under the console, and 5. over it, when all of that is taken.
+ * "Free" = on screen, below the Roblox bar, clear by TOUCH_GAP of the thumbs, of Menu / Bag, of the console and of
+ * `keepOut` (hud.ts: the messages over the top centre at their narrowest).
  */
-export function placeTouchSky(L: TouchLayout, deck: PxRect, plateW: number, plateH: number): ConsolePlacement {
+export function placeTouchSky(
+	L: TouchLayout,
+	deck: PxRect,
+	plateW: number,
+	plateH: number,
+	keepOut: ReadonlyArray<PxRect> = [],
+): ConsolePlacement {
 	const unit = math.max(L.scale, 0.5);
 	const gap = TOUCH_GAP * unit;
 	const edge = TOUCH_EDGE * unit;
-	const h = L.pause.r * 2;
-	const scale = h / plateH;
+	// sized by the device's touch unit, not by the buttons: the sky is read, never pressed, so it does not grow with
+	// the player's control size (a Menu button at its largest would have made it 362 px wide on a 1120 x 630 tablet)
+	const scale = unit * SKY_TOUCH_SCALE;
+	const h = plateH * scale;
 	const w = plateW * scale;
 	const top = L.pause.y - L.pause.r;
 	const grow = (r: PxRect): PxRect => [r[0] - gap, r[1] - gap, r[2] + gap, r[3] + gap];
@@ -372,8 +386,23 @@ export function placeTouchSky(L: TouchLayout, deck: PxRect, plateW: number, plat
 	for (const r of thumbRects(L)) obstacles.push(grow(r));
 	for (const b of [L.pause, L.bag]) obstacles.push(grow([b.x - b.r, b.y - b.r, b.x + b.r, b.y + b.r]));
 	obstacles.push(grow(deck));
+	for (const r of keepOut) obstacles.push(grow(r));
+	// the row of Menu and Bag, and which of its ends is at the screen's edge (the right one, unless it moved)
+	const rowL = math.min(L.pause.x - L.pause.r, L.bag.x - L.bag.r);
+	const rowR = math.max(L.pause.x + L.pause.r, L.bag.x + L.bag.r);
+	const rowB = math.max(L.pause.y + L.pause.r, L.bag.y + L.bag.r);
+	const outerRight = L.viewW - rowR <= rowL;
+	const homeX = outerRight ? rowR - w : rowL;
+	// a message that reaches past the row's bottom (a banner on a tall screen) pushes the home down past it
+	let homeY = rowB + gap;
+	for (const m of keepOut) {
+		if (homeX < m[2] + gap && m[0] - gap < homeX + w && m[1] - gap < homeY + h && homeY < m[3] + gap) {
+			homeY = m[3] + gap;
+		}
+	}
 	const cx = (deck[0] + deck[2]) / 2 - w / 2;
 	const spots: Array<[number, number]> = [
+		[homeX, homeY],
 		[L.pause.x - L.pause.r - gap - w, top],
 		[edge, top],
 		[cx, deck[3] + gap],
@@ -384,7 +413,8 @@ export function placeTouchSky(L: TouchLayout, deck: PxRect, plateW: number, plat
 		const onScreen = x >= edge - 0.001 && x + w <= L.viewW - edge + 0.001 && y >= L.inset && y + h <= L.viewH;
 		if (onScreen && !overlapsAny(r, obstacles)) return { x, y, w, h, scale };
 	}
-	return { x: spots[0][0], y: top, w, h, scale };
+	// nothing free (no screen the tests know gets here): its home, under the row
+	return { x: spots[0][0], y: spots[0][1], w, h, scale };
 }
 
 // ---------------------------------------------------------------- bars
@@ -495,7 +525,7 @@ export class HudConsole {
 	private readSize = -1;
 	private readPool = -1;
 	private readReloading = false;
-	/** the sky at the left end (desktop; on touch hud.ts places its own in the top-right row) */
+	/** the sky at the left end (desktop; on touch hud.ts places its own plate under Menu and Bag) */
 	private sky: HudSky | undefined;
 
 	constructor(root: Frame, tr: (key: string) => string, compact: boolean, k: number, cb: ConsoleCallbacks) {

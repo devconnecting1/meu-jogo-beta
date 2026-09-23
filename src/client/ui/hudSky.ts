@@ -4,8 +4,8 @@
  * two questions a survivor actually has about the time: HOW LONG UNTIL THE HORDE, and how long the night still lasts.
  *
  *   the sky window (a dark groove)           desktop: a section at the LEFT end of the console (hudConsole.ts)
- *   .-------------------------------.        touch:   a plate in the top-right row, left of Menu and Bag -- the
- *   |          .  .  O  .           |                 thumbs own the bottom (hudConsole.ts placeTouchSky)
+ *   .-------------------------------.        touch:   a plate in the top corner, under Menu and Bag -- the thumbs
+ *   |          .  .  O  .           |                 own the bottom (hudConsole.ts placeTouchSky)
  *   |      .    the sun, or the moon .  |
  *   |   .     travels the arc      ! |    <- red pips: where the horde comes (nightfall by day; the three waves at night)
  *   |_______________________________|    <- the horizon
@@ -445,7 +445,7 @@ export function skySection(
 
 /**
  * The touch sky: its own small plate (the window body, a section, the sky groove), placed in screen pixels by hud.ts
- * in the top-right row of the touch controls. Returns the plate's frame (its design space is SKY_PLATE_W x SKY_PLATE_H)
+ * in the top corner of the touch controls, under Menu and Bag. Returns the plate's frame (its design space is SKY_PLATE_W x SKY_PLATE_H)
  * and the sky in it.
  */
 export function skyPlate(root: Frame, tr: (key: string) => string): [Frame, HudSky] {
