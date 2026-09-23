@@ -246,17 +246,24 @@ export class WorldClock implements AiClock {
 	}
 
 	/**
-	 * Fill tonight's queues now (admin "force wave", and the 18:00 window itself). `force` refills a queue that
-	 * still has zombies in it; without it an already promised night is left alone, so pressing the button twice
-	 * does not double the horde.
+	 * Fill tonight's queues now (admin "force wave", and the 18:00 window itself).
+	 *
+	 * Every night gets the table of ITS OWN day, full stop: the queues are always overwritten with
+	 * `getDayPopulation(this.day)`, whatever they still held. A night nobody finished (MP-21: a private server
+	 * waits for its own owner, so a solo survivor's horde can sit queued past dawn) used to leave its leftovers
+	 * standing in for the NEXT night's numbers, because the old guard only refilled a queue that was already
+	 * empty -- measured as low as 5/3/6 = 14 instead of the promised 5/5/10 = 20. A leftover is discarded
+	 * instead: it neither adds to the new promise nor substitutes for it, so a player is never quietly short a
+	 * night because a previous one went undelivered. Called with no other args every dusk, this is also exactly
+	 * what an admin's "force wave" wants -- a hard reset, not a merge with whatever the horde still owed.
 	 */
-	fillNight(force = false): void {
+	fillNight(): void {
 		const pop = getDayPopulation(this.day);
 		const walkers = [pop.wave1, pop.wave2, pop.wave3];
 		const specials = [pop.specialWave1, pop.specialWave2, pop.specialWave3];
 		for (let i = 0; i < 3; i++) {
-			if (force || this.waveQueues[i] <= 0) this.waveQueues[i] = walkers[i];
-			if (force || this.specialWaveQueues[i] <= 0) this.specialWaveQueues[i] = specials[i];
+			this.waveQueues[i] = walkers[i];
+			this.specialWaveQueues[i] = specials[i];
 		}
 		this.fillDone = true;
 		if (this.onWaveFill !== undefined) this.onWaveFill({ day: this.day, walkers, specials });

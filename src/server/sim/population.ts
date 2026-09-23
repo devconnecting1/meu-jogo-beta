@@ -1,5 +1,5 @@
 import { PaceDirector } from "shared/sim/ai/director";
-import { Population } from "shared/sim/ai/population";
+import { Population, PopulationStall } from "shared/sim/ai/population";
 import * as Ctx from "shared/sim/ai/context";
 import { WaveFill } from "./waves";
 
@@ -31,6 +31,11 @@ export class ServerPopulation {
 	/** S(k) of every cluster of survivors right now, biggest group first is NOT guaranteed */
 	scales(): Array<number> {
 		return this.population.scales();
+	}
+
+	/** MP-21's own counter (shared/sim/ai/population.ts `PopulationStall`): survivors present, none standing */
+	stall(): PopulationStall {
+		return this.population.stall;
 	}
 
 	/**

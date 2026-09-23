@@ -411,25 +411,46 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 }
 
 /**
+ * obj_zombie image_alpha's own rule, and `server/net/interest.ts` `visibleInDark`'s: lit while ambient light
+ * ≥ 0.4 (day, dusk) or standing inside someone's light — the same DARK_LIT_AMBIENT / light loop the interest
+ * table has to agree with to the letter (§4.3), factored out so a zombie being BORN (`spawnAlpha` below) and
+ * a zombie already alive (`updateAlpha`) never answer differently for the same spot.
+ */
+function isLit(refs: Ctx.AiRefs, x: number, y: number): boolean {
+	if (1 - refs.clock.darkAlpha >= 0.4) return true;
+	for (let i = 0; i < lightCount; i++) {
+		const l = lights[i];
+		const dx = x - l.x;
+		const dy = y - l.y;
+		if (dx * dx + dy * dy > l.r * l.r) continue;
+		if (l.kind === 2 && math.abs(angleDiff(l.angle, math.atan2(dy, dx))) > math.rad(45)) continue;
+		return true;
+	}
+	return false;
+}
+
+/**
  * obj_zombie image_alpha: fully visible while ambient light ≥ 0.4 (day, dusk) or when inside a
  * light; otherwise it fades out in the dark (3/s), like the original.
  */
 function updateAlpha(refs: Ctx.AiRefs, z: ZombieState, dt: number): void {
-	let lit = 1 - refs.clock.darkAlpha >= 0.4;
-	if (!lit) {
-		for (let i = 0; i < lightCount; i++) {
-			const l = lights[i];
-			const dx = z.x - l.x;
-			const dy = z.y - l.y;
-			if (dx * dx + dy * dy > l.r * l.r) continue;
-			if (l.kind === 2 && math.abs(angleDiff(l.angle, math.atan2(dy, dx))) > math.rad(45)) continue;
-			lit = true;
-			break;
-		}
-	}
-	const target = lit ? 1 : 0;
+	const target = isLit(refs, z.x, z.y) ? 1 : 0;
 	if (z.alpha < target) z.alpha = math.min(target, z.alpha + 3 * dt);
 	else if (z.alpha > target) z.alpha = math.max(target, z.alpha - 3 * dt);
+}
+
+/**
+ * The alpha a zombie should be BORN with (anti-ESP, docs/MULTIPLAYER.md §4.3 + §9.1, F2-2D). Without this every
+ * zombie spawns at alpha 1 and `updateAlpha` fades it down over ~(1 − LIT_ALPHA_MIN) / 3 s ≈ 0.32 s
+ * (server/net/interest.ts `LIT_ALPHA_MIN`, `visibleInDark`); during that window `alpha > LIT_ALPHA_MIN` is
+ * true and the interest rules hand its exact spawn point to anyone within replication range, whether or not
+ * anyone could actually see it — a wave zombie born 720-1080 u away, off screen, was leaking its birthplace to
+ * a wallhack for a third of a second before ever being noticed by a light. A zombie born already lit (day, or
+ * standing in a torch's radius) is untouched: this is exactly the alpha it would have eased towards on its
+ * first tick anyway, so daytime spawns and spawns inside a light still appear at once, as before.
+ */
+export function spawnAlpha(refs: Ctx.AiRefs, x: number, y: number): number {
+	return isLit(refs, x, y) ? 1 : 0;
 }
 
 // --- navigation ------------------------------------------------------------------------------

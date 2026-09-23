@@ -1050,15 +1050,18 @@ section("3) daybreak unlocks it: dead at 19:30 on a SHARED server, stood up at 0
 		sum(clock.waveQueues) === 0 && sum(clock.specialWaveQueues) === 0,
 		`${slash(clock.waveQueues)} at ${stamp(clockAbs(clock))}`,
 	);
+	// the decision (server/sim/waves.ts fillNight): every night gets the table of ITS OWN day, always -- the
+	// stalled night's leftovers (`owedBefore`, still queued when this dusk's fill overwrote them) are discarded,
+	// never added to the new promise and never left standing in for it.
 	const table2 = tableOf(2);
-	if (fill2 !== undefined && slash(fill2.walkers) !== slash(table2.walkers)) {
-		info(
-			`NOTE: that night promised ${slash(fill2.walkers)} = ${sum(fill2.walkers)}, not day 2's table ` +
-				`${slash(table2.walkers)} = ${sum(table2.walkers)}. The stalled night left ${slash(owedBefore)} in the ` +
-				`queues, and WorldClock.fillNight() (server/sim/waves.ts) only refills a queue that is EMPTY, so the ` +
-				`leftovers of the lost night stand in for the new night's numbers instead of adding to them.`,
-		);
-	}
+	check(
+		"the new night promised day 2's table, not the stalled night's leftovers",
+		fill2 !== undefined && slash(fill2.walkers) === slash(table2.walkers) && slash(fill2.specials) === slash(table2.specials),
+		fill2 !== undefined
+			? `promised ${slash(fill2.walkers)} = ${sum(fill2.walkers)}, day 2's table ${slash(table2.walkers)} = ` +
+					`${sum(table2.walkers)}, the stalled night had left ${slash(owedBefore)} in the queues`
+			: "no fill",
+	);
 	timeline(three, absOf(1, 19), absOf(2, 7));
 }
 

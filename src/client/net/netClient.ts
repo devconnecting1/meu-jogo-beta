@@ -228,6 +228,14 @@ let localLifeDirty = false;
 let staleSelfBlocks = 0;
 let timeSeq = 0;
 let timeAt = 0;
+/**
+ * os.clock() the client last asked to enter the world (`netEnterWorld`), or 0 while it has not. This is
+ * deliberately NOT when `connect()` first found the remotes: `netPrewarm()` calls that at boot, while the
+ * player may still be sitting on the logo/lobby/tutorial screens for longer than HANDSHAKE_WARN_S, and the
+ * game loop (the only caller of `netActive()`) does not run until a run is mounted anyway. Arming the timer at
+ * boot meant the very first `netActive()` check of a run could already be past the budget purely from lobby
+ * time, warning about a handshake that had not even been asked for yet.
+ */
 let startedAt = 0;
 /** os.clock() of the last [PZ-NET] line */
 let loggedAt = 0;
@@ -300,7 +308,6 @@ function findRemotes(): Remotes | undefined {
 /** looks the remotes up (they only exist when the server runs the MP host) and wires the handlers up once */
 function connect(): boolean {
 	if (remotes !== undefined) return true;
-	if (startedAt === 0) startedAt = os.clock();
 	const found = findRemotes();
 	if (found === undefined) return false;
 	remotes = found;
@@ -669,12 +676,21 @@ function sendIntent(kind: IntentKind): void {
 
 /** a run is starting: ask for a body (client/main.client.ts, mountRun) */
 export function netEnterWorld(): void {
+	// the handshake budget starts NOW, not at boot (see `startedAt`'s own comment): restarting a run (LeaveWorld
+	// + EnterWorld in the same frame, client/main.client.ts) re-arms it too, so a second run that genuinely
+	// stalls still gets its own warning instead of staying silenced by the first one's.
+	startedAt = os.clock();
+	warnedSlow = false;
 	sendIntent(IntentKind.EnterWorld);
 }
 
 /** the run is over or the player went back to the menus: give the body and the slot back */
 export function netLeaveWorld(): void {
 	sendIntent(IntentKind.LeaveWorld);
+	// no run is being asked for any more: disarm the timer so idle time back in the menus is never mistaken
+	// for a stalled handshake if `netActive()` happens to be polled again before the next EnterWorld
+	startedAt = 0;
+	warnedSlow = false;
 }
 
 /** SESSION TEARDOWN (leaving the place): drops the handlers so nothing fires into a dead frame loop */
@@ -684,6 +700,8 @@ export function netDisconnect(): void {
 	remotes = undefined;
 	hasEpoch = false;
 	mySlot = -1;
+	startedAt = 0;
+	warnedSlow = false;
 	roster.clear();
 	clock.reset();
 	netReset();

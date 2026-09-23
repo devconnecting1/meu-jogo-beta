@@ -7,7 +7,7 @@ import { BUILDING_SPAWNS, getDayPopulation } from "shared/data/spawns";
 import { MAX_BOSSES, MAX_ZOMBIES } from "shared/net/mpConfig";
 import * as Ctx from "shared/sim/ai/context";
 import * as Dir from "shared/sim/ai/director";
-import { seedHunt, takeKills } from "shared/sim/ai/zombieBrain";
+import { seedHunt, spawnAlpha, takeKills } from "shared/sim/ai/zombieBrain";
 
 /*
  * Population: ambient walkers, specials, night waves, ground items and the bosses (docs/MULTIPLAYER.md §3.5).
@@ -323,6 +323,9 @@ export class Population {
 		const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true);
 		if (pos === undefined) return false;
 		const z = createZombie(zType, pos.x, pos.y, refs.clock.day, wave);
+		// anti-ESP (§4.3, §9.1): born at the alpha the light at (pos.x, pos.y) already gives it, not always
+		// alpha 1 -- see zombieBrain.ts `spawnAlpha` for why a hardcoded 1 leaked every dark spawn's position.
+		z.alpha = spawnAlpha(refs, pos.x, pos.y);
 		if (wave) {
 			// a wave zombie is the original's tide: it comes and it does not stop coming
 			z.detect = true;
