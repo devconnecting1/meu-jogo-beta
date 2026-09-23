@@ -1832,6 +1832,90 @@ section("(j2) Horde Breaker: 100 zombies put down by the server's kill credit --
 	);
 }
 
+// ---------------------------------------------------------------- (k) the horde's senses and states
+
+section("(k) the horde's AI with 60 and 100 zombies, day and night (DESIGN_RULES IA-01..04, MULTIPLAYER §3.2, §3.4)");
+
+{
+	// Three survivors pacing a street and a horde of ambient walkers around them: the senses (staggered looks,
+	// the LOS budget), the noise rings, the states and the gaits all run, and the AI phase of the tick is timed
+	// on its own (`horde.cost.zombies`). The same section runs against an older checkout for the before/after:
+	//   PZ_SRC=/path/to/older/src node tools/test-server-sim.mjs
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	const hordeRun = (n, hour) => {
+		nextRandom = mulberry32(SEED + n);
+		const sim = new ServerSimulation({ world, zombies: true });
+		const horde = sim.horde;
+		horde.clock.setClock(hour, 3);
+		const bots = [];
+		for (let i = 0; i < 3; i++) {
+			const at = PL.findSpawnPoint(world, { allies: [{ x: spawnA.x + i * 120, y: spawnA.y }] });
+			const sp = PL.createServerPlayer(
+				{ slot: i, userId: 9100 + i, name: `pacer${i}` },
+				defaultSave(),
+				at.x,
+				at.y,
+				sim.tick,
+				sim.simHz,
+			);
+			sp.state.godMode = true;
+			sim.add(sp);
+			bots.push({ sp, x: at.x, y: at.y });
+		}
+		for (let i = 0; i < n; i++) {
+			const b = bots[i % bots.length];
+			const a = (i / n) * Math.PI * 2 + (i % 7) * 0.13;
+			const r = 250 + ((i * 37) % 900);
+			const z = createZombie(1, b.x + Math.cos(a) * r, b.y + Math.sin(a) * r, 3, false);
+			z.detect = false;
+			horde.zombies.push(z);
+		}
+		horde.nowMs = () => performance.now();
+		const TICKS = 1800;
+		const ai = new Float64Array(TICKS);
+		const whole = new Float64Array(TICKS);
+		for (let t = -120; t < TICKS; t++) {
+			// the survivors pace a slow circle (a walk, so they are heard and seen now and then)
+			for (const b of bots) {
+				b.sp.state.x = b.x + Math.cos((t + 120) / 200) * 160;
+				b.sp.state.y = b.y + Math.sin((t + 120) / 200) * 160;
+			}
+			const t0 = performance.now();
+			sim.step();
+			if (t < 0) continue;
+			whole[t] = performance.now() - t0;
+			ai[t] = horde.cost.zombies;
+		}
+		const stats = arr => {
+			const s = Float64Array.from(arr).sort();
+			let sum = 0;
+			for (const v of arr) sum += v;
+			return { avg: sum / arr.length, med: s[Math.floor(arr.length / 2)], p95: s[Math.floor(arr.length * 0.95)] };
+		};
+		const states = [0, 0, 0, 0];
+		for (const z of horde.zombies) states[z.aware ?? (z.detect ? 3 : 0)] += 1;
+		return { n: horde.zombies.length, ai: stats(ai), tick: stats(whole), states };
+	};
+	for (const n of [60, 100]) {
+		for (const [label, hour] of [
+			["day", 12],
+			["night", 23],
+		]) {
+			const r = hordeRun(n, hour);
+			info(
+				`${String(n).padStart(3)} zombies, ${label.padEnd(5)}: AI avg ${r.ai.avg.toFixed(3)} ms · median ${r.ai.med.toFixed(3)} · ` +
+					`p95 ${r.ai.p95.toFixed(3)} | whole tick avg ${r.tick.avg.toFixed(3)} ms · p95 ${r.tick.p95.toFixed(3)} | ` +
+					`idle/suspicious/searching/chasing ${r.states.join("/")} (${r.n} alive)`,
+			);
+			check(
+				r.ai.p95 < CFG.TICK_BUDGET_P95_MS,
+				`${n} zombies by ${label}: the AI's p95 stays inside the §3.2 budget`,
+			);
+		}
+	}
+	info("Node timings: a regression guard and a before/after comparison (PZ_SRC), not the Luau verdict");
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

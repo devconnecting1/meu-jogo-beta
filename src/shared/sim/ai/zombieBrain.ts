@@ -223,18 +223,17 @@ function updateNoise(refs: Ctx.AiRefs, dt: number): void {
 		const r2 = r * r;
 		const id = s.id ?? 0;
 		for (const z of refs.zombies) {
+			const dx = z.x - s.x;
+			const dy = z.y - s.y;
+			if (dx * dx + dy * dy >= r2) continue;
 			// a chasing zombie has better than a noise to go on, a wave zombie always knows, one walking round a
 			// building to another way in is committed to it (flank.ts orbit), and a ring is heard once
 			if (z.hp <= 0 || z.wave || (id !== 0 && z.heardRing === id) || Mind.chasing(z) || (z.orbit ?? 0) > 0) {
 				continue;
 			}
-			const dx = z.x - s.x;
-			const dy = z.y - s.y;
-			if (dx * dx + dy * dy < r2) {
-				// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks
-				z.heardRing = id;
-				Mind.report(z, s.x, s.y);
-			}
+			// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks
+			z.heardRing = id;
+			Mind.report(z, s.x, s.y);
 		}
 		if (s.r > s.rMax) sounds.remove(i);
 	}
@@ -378,6 +377,21 @@ export function damageStructure(refs: Ctx.AiRefs, s: Solid, dmg: number): void {
 		removeSolid(refs.world, s);
 		// the way in just opened: the navigation owner has to re-rasterise that patch (§3.3 dirty tiles)
 		if (refs.onSolidChanged !== undefined) refs.onSolidChanged(s.x, s.y, s.w, s.h);
+	}
+}
+
+/** keeps `refs.ai.anyTrap` true to the world: recounted only when a solid (or an item) came or went */
+function scanTraps(refs: Ctx.AiRefs): void {
+	const w = refs.world;
+	const key = w.solids.size() * 7919 + w.nextId * 31 + w.nextDynamicId;
+	if (key === refs.ai.trapKey) return;
+	refs.ai.trapKey = key;
+	refs.ai.anyTrap = false;
+	for (const s of w.solids) {
+		if (s.tags === "trap" || s.tags === "trap_electric") {
+			refs.ai.anyTrap = true;
+			return;
+		}
 	}
 }
 
@@ -1398,7 +1412,7 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 		}
 	}
 
-	const r = zombieRadius(z);
+	const r = sepR[idx] ?? zombieRadius(z);
 	let distP = Ctx.actorDist(z.x, z.y, p.x, p.y);
 	if (z.stunned > 0) z.stunned = math.max(0, z.stunned - dt);
 	z.reactionSpeed = math.min(T.REACTION_MAX, z.reactionSpeed);
@@ -1617,7 +1631,7 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	}
 
 	// ---- floor trap: 40%/frame chance of a short stun (frame-rate independent) ------------------
-	if (z.stunned <= 0 && findTrap(world, z.x, z.y) !== undefined) {
+	if (refs.ai.anyTrap && z.stunned <= 0 && findTrap(world, z.x, z.y) !== undefined) {
 		if (rnd() < 1 - math.pow(0.6, dt * 30)) z.stunned = T.STUN_TIME / 4;
 	}
 
@@ -1653,6 +1667,7 @@ export function updateZombies(refs: Ctx.AiRefs, dt: number): void {
 		}
 	}
 	collectLights(refs, dt);
+	scanTraps(refs);
 	// sight is shortened by the light and the weather and lengthened by the TARGET's own light, and its Stealth
 	// skill is its own, so it is computed once per survivor, not once per world (§4.3 does the same per player)
 	updateSenses(refs);

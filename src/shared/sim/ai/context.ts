@@ -132,6 +132,12 @@ export interface BrainState {
 	beacons: Array<Sense.Beacon>;
 	/** id of the last noise ring emitted in this world */
 	ringSeq: number;
+	/**
+	 * Is there a floor trap anywhere in this world, and the solids' signature it was counted at? Nearly every world
+	 * has none, and then no zombie has to look under its feet every tick (a spatial query per body per tick).
+	 */
+	anyTrap: boolean;
+	trapKey: number;
 	tracks: Map<PlayerState, PlayerTrack>;
 }
 
@@ -144,6 +150,8 @@ export function newBrainState(): BrainState {
 		senses: new Array<Sense.SenseRanges>(),
 		beacons: new Array<Sense.Beacon>(),
 		ringSeq: 0,
+		anyTrap: false,
+		trapKey: -1,
 		tracks: new Map<PlayerState, PlayerTrack>(),
 	};
 }
