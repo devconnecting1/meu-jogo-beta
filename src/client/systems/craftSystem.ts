@@ -3,53 +3,29 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { WEAPONS } from "shared/data/weapons";
-import { chance } from "shared/engine/rng";
-import { querySolids, Solid } from "shared/game/world";
+import type { Solid, WorldData } from "shared/game/world";
 import type { PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
 import { IntentKind } from "shared/net/intentWire";
+import * as Rule from "shared/sim/craftRule";
 import { sendBagVerb, serverOwnsWorld } from "../net/authority";
 import { fxMessage, GameRefs } from "./types";
 
-/**
- * How close a desk / fire must be: the true distance to the nearest point of its rect, the server's rule
- * (server/sim/craft.ts `stationNear`, STATION_RANGE). It used to be the box distance here, which off a corner
- * offered a craft the server then refused (QA sweep D2).
- */
-const DESK_RANGE = 180;
+export type CraftStation = Rule.CraftStation;
 
-export type CraftStation = "desk" | "pro" | "fire";
-
+/** one scratch buffer: the client has one survivor asking */
 const stationBuf: Array<Solid> = [];
 
-function matchesStation(s: Solid, station: CraftStation): boolean {
-	if (s.removed === true) return false;
-	if (station === "desk") return s.tags === "craftdesk" || s.tags === "craftdesk_pro";
-	if (station === "pro") return s.tags === "craftdesk_pro";
-	// smelting: a lit brazier (E toggles it) or the electric furnace
-	return (s.tags === "brazier" && s.powered === true) || s.tags === "furnace";
-}
-
-/** nearest construction of that kind within DESK_RANGE of the survivor (distance to the nearest point of it) */
-export function stationNear(refs: GameRefs, station: CraftStation, by: PlayerState = refs.player): Solid | undefined {
-	const p = by;
-	const pad = DESK_RANGE + 160;
-	stationBuf.clear();
-	querySolids(refs.world, p.x - pad, p.y - pad, p.x + pad, p.y + pad, stationBuf);
-	let best: Solid | undefined;
-	let bestD2 = DESK_RANGE * DESK_RANGE;
-	for (const s of stationBuf) {
-		if (!matchesStation(s, station)) continue;
-		const dx = p.x - math.clamp(p.x, s.x, s.x + s.w);
-		const dy = p.y - math.clamp(p.y, s.y, s.y + s.h);
-		const d2 = dx * dx + dy * dy;
-		if (d2 <= bestD2) {
-			bestD2 = d2;
-			best = s;
-		}
-	}
-	stationBuf.clear();
-	return best;
+/**
+ * Nearest station of that kind within reach of the survivor: the SHARED rule (shared/sim/craftRule.ts), the one the
+ * server refuses with, so the Bag never offers a craft the server would refuse (QA D2).
+ */
+export function stationNear(
+	refs: { world: WorldData; player: PlayerState },
+	station: CraftStation,
+	by: PlayerState = refs.player,
+): Solid | undefined {
+	return Rule.stationNear(refs.world, by.x, by.y, station, stationBuf);
 }
 
 /** display name of an inventory item (kind 1 weapon, 2 equip, 3 usable, 4 etc) */
@@ -69,20 +45,22 @@ function recipeById(recipeId: number): CraftRecipe | undefined {
 	return undefined;
 }
 
+/** what the survivor is told when the station a recipe needs is not in reach */
+const STATION_MISSING: Record<CraftStation, string> = {
+	pro: "Needs a pro craft desk nearby",
+	desk: "Needs a craft desk nearby",
+	cook: "Needs a lit fire nearby",
+	fire: "Needs a lit brazier nearby",
+};
+
 /**
  * Why this recipe cannot be crafted right now (undefined = it can). Used for the message shown
  * when a craft fails, and by the UI to explain a greyed-out recipe.
  */
 export function craftBlocker(refs: GameRefs, r: CraftRecipe): string | undefined {
 	if (refs.pendingPlace >= 0) return "Finish the current build first";
-	if (r.needsPro) {
-		if (stationNear(refs, "pro") === undefined) return "Needs a pro craft desk nearby";
-	} else if (r.needsDesk) {
-		if (stationNear(refs, "desk") === undefined) return "Needs a craft desk nearby";
-	}
-	if (r.needsFire === true && stationNear(refs, "fire") === undefined) {
-		return "Needs a lit fire nearby";
-	}
+	const station = Rule.recipeStation(r);
+	if (station !== undefined && stationNear(refs, station) === undefined) return STATION_MISSING[station];
 	const missing: Array<string> = [];
 	for (const ing of r.ingredients) {
 		const have = countItem(refs.save, ing.kind, ing.index);
@@ -99,7 +77,8 @@ export function canCraft(refs: GameRefs, r: CraftRecipe): boolean {
 /**
  * Craft a recipe. On failure tells the player why (refs.onMessage) instead of failing silently.
  * Placeables go to build mode (pendingPlace + pendingRecipe so cancelling refunds them).
- * Smelting honours "Dwarf" (skill 12): 15% / 30% chance of double metal, like item_fire.
+ * Cooking honours "Chef" (skill 11) and smelting "Dwarf" (skill 12): 15% / 30% chance of double, like item_cook /
+ * item_fire (shared/sim/craftRule.ts craftYield, the server's rule too).
  */
 export function craft(refs: GameRefs, recipeId: number): boolean {
 	const r = recipeById(recipeId);
@@ -121,12 +100,7 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 		refs.pendingPlace = r.resultIndex;
 		refs.pendingRecipe = r.id;
 	} else {
-		let count = r.resultCount;
-		if (r.needsFire === true) {
-			const dwarf = refs.save.skillLevels[12] ?? 0;
-			if (dwarf > 0 && chance(dwarf >= 2 ? 30 : 15)) count *= 2;
-		}
-		addItem(refs.save, r.resultKind, r.resultIndex, count);
+		addItem(refs.save, r.resultKind, r.resultIndex, Rule.craftYield(r, refs.save));
 	}
 	return true;
 }

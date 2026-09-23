@@ -71,13 +71,22 @@ export interface PlayerState {
 	infiniteAmmo?: boolean;
 }
 
+/**
+ * The survivor's maximum health: 100, +10 a level of the Health skill (skill 0). The original recomputed it every
+ * step (obj_player `hp_max = 100 + rpg_skill_get_level(0)*10`), and so does `stepPlayer` (shared/sim/playerMove.ts):
+ * Health learnt mid-life raises the bar at once, not at the next body (QA K2).
+ */
+export function maxHpOf(save: PlayerSaveData): number {
+	return 100 + (save.skillLevels[0] ?? 0) * 10;
+}
+
 export function createPlayer(save: PlayerSaveData, x: number, y: number): PlayerState {
 	const w = save.equipWeapon >= 0 ? WEAPONS[save.equipWeapon] : WEAPONS[0];
 	return {
 		x,
 		y,
-		hp: 100 + save.skillLevels[0] * 10,
-		hpMax: 100 + save.skillLevels[0] * 10,
+		hp: maxHpOf(save),
+		hpMax: maxHpOf(save),
 		hungry: DESIGN.PLAYER_HUNGRY,
 		hungryMax: DESIGN.PLAYER_HUNGRY,
 		moveSpeed: DESIGN.MOVE_SPEED,
