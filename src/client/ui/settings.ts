@@ -7,7 +7,7 @@ import { refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
 import { popup } from "./popup";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, space } from "./theme";
-import { SCHEMES } from "./tutorial";
+import { SCHEMES, currentScheme } from "./tutorial";
 import {
 	Button,
 	Segmented,
@@ -15,7 +15,6 @@ import {
 	SliderHandle,
 	Tabs,
 	autoFocus,
-	gamepadActive,
 	makeFrame,
 	makeLabel,
 	makeScreen,
@@ -48,8 +47,6 @@ import {
  * What is NOT here any more: the English / Korean switch. Roblox translates the game by the player's own account
  * (src/shared/data/lang.ts only keeps overrides), so that switch changed nothing a player could see.
  */
-
-const UserInputService = game.GetService("UserInputService");
 
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
 
@@ -397,7 +394,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 		const page = pageSection(index, tr(SCHEMES[0].title));
 		const title = page.FindFirstChild("Title") as TextLabel | undefined;
 		// the player's own scheme first: a phone player should not have to read the keyboard's to find theirs
-		const lastInput = gamepadActive() ? 2 : UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? 1 : 0;
+		const lastInput = currentScheme();
 		const lists: Array<Frame> = [];
 		const labelW = 320;
 		for (let i = 0; i < SCHEMES.size(); i++) {

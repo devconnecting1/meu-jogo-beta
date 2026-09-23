@@ -49,7 +49,7 @@ const UI = join(ROOT, "src", "client", "ui");
 const TOKENS_FILE = join(UI, "themeTokens.ts");
 const THEME_FILE = join(UI, "theme.ts");
 /** the kit: the only code allowed to create strokes for the screens, and the keycaps */
-const KIT_FILES = ["skin.ts", "widgets.ts", "plate.ts", "window.ts", "tutorial.ts"];
+const KIT_FILES = ["skin.ts", "widgets.ts", "plate.ts", "window.ts", "tutorial.ts", "itemCard.ts"];
 
 /** WCAG 2.x: normal (small) text */
 const MIN_TEXT = 4.5;
@@ -125,6 +125,7 @@ const GROUPS = {
 	THEME: roleBlock("THEME"),
 	SURFACE: roleBlock("SURFACE"),
 	GAME: roleBlock("GAME"),
+	STAT: roleBlock("STAT"),
 	// `export const SIDEBAR = SIDEBAR_TOKENS;` -- the rail palette is the token group itself
 	SIDEBAR: SIDEBAR_TOKENS,
 };
@@ -270,6 +271,17 @@ const PAIRS = [
 	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "sulco entre as linhas (lista) contra o poco"],
 	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "sulco entre duas linhas contra a celula de rotulo"],
 	["SURFACE.cell", "SURFACE.cellLabel", MIN_TONE, "celula de valor x celula de rotulo (dois tons da mesma linha)"],
+
+	// --- the item card (UI-08, client/ui/itemCard.ts): a popover Card, so its body is SURFACE.panel; every voice is
+	// small text there (a stat value is TEXT.base, the notes TEXT.sm), so 4,5:1 -- the skin only darkens the panel
+	["STAT.value", "SURFACE.panel", MIN_TEXT, "cartao de item: numeros em amarelo (dano, recarga, alcance)"],
+	["STAT.bonus", "SURFACE.panel", MIN_TEXT, "cartao de item: bonus em verde (vida, fome, defesa)"],
+	["STAT.effect", "SURFACE.panel", MIN_TEXT, "cartao de item: efeito de status em laranja (velocidade, dor)"],
+	["STAT.penalty", "SURFACE.panel", MIN_TEXT, "cartao de item: penalidade em vermelho (carne podre, armadura)"],
+	["THEME.foreground", "SURFACE.panel", MIN_TEXT, "cartao de item: nome e valores em texto"],
+	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, "cartao de item: tipo, rotulos, notas, dica de controle"],
+	["GAME.success", "SURFACE.panel", MIN_TEXT, 'cartao de item: etiqueta "EQUIPPED" do cabecalho'],
+	["SURFACE.line", "SURFACE.panel", MIN_UI, "cartao de item: o fio entre as secoes"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */

@@ -231,6 +231,26 @@ export const GAME = {
 	blood: TOKENS.destructive,
 };
 
+/**
+ * The item card's voices (client/ui/itemCard.ts, DESIGN_RULES UI-08, the owner's reference windows): what the card
+ * measures in yellow, what an item gives in green, a status effect in orange, and what it costs you in the red of
+ * damage. All four are TEXT on the card's panel (SURFACE.panel), held to 4,5:1 there by `npm run test:contrast`:
+ * the yellow 12,2:1, the green 8,7:1, the orange 7,2:1, the red 4,6:1. The green and the orange are chart-1's and
+ * chart-3's hues made lighter -- those two measure 4,7:1 / 4,8:1 on the panel, too close to the floor for small
+ * numbers -- and the yellow is new: the palette had none (LEG-02's yellow is electricity IN THE WORLD, not a UI
+ * colour).
+ */
+export const STAT = {
+	/** numbers: damage, cooldown, range, magazine, recipes... */
+	value: TOKENS.statValue,
+	/** what the item adds: health, hunger, defense, speed */
+	bonus: TOKENS.statBonus,
+	/** a status effect and how long it lasts: speed boost, steady aim, pain relief */
+	effect: TOKENS.statEffect,
+	/** what the item takes away: rotten meat's health, heavy armour's speed */
+	penalty: TOKENS.destructive,
+};
+
 // ---------------------------------------------------------------- spacing & radius
 
 /** Tailwind spacing step (--spacing) */
