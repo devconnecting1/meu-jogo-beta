@@ -41,8 +41,10 @@ import { unwrapTick } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE } from "shared/net/mpConfig";
 import {
 	InputCommand,
+	IntentKind,
 	LifeState,
 	REMOTE_INPUT,
+	REMOTE_INTENT,
 	REMOTE_SNAP,
 	REMOTE_TIME_SYNC,
 	REMOTE_WORLD,
@@ -53,6 +55,7 @@ import {
 	decodeTimePong,
 	decodeWorld,
 	encodeInput,
+	encodeIntent,
 	encodeTimePing,
 	pongRtt,
 } from "shared/net/protocol";
@@ -108,6 +111,7 @@ interface RosterEntry {
 
 interface Remotes {
 	input: UnreliableRemoteEvent;
+	intent: RemoteEvent;
 	snap: UnreliableRemoteEvent;
 	world: RemoteEvent;
 	timeSync: UnreliableRemoteEvent;
@@ -216,12 +220,15 @@ function findRemotes(): Remotes | undefined {
 	const folder = ReplicatedStorage.FindFirstChild(NET_FOLDER);
 	if (folder === undefined || !folder.IsA("Folder")) return undefined;
 	const input = folder.FindFirstChild(REMOTE_INPUT);
+	const intent = folder.FindFirstChild(REMOTE_INTENT);
 	const snap = folder.FindFirstChild(REMOTE_SNAP);
 	const world = folder.FindFirstChild(REMOTE_WORLD);
 	const timeSync = folder.FindFirstChild(REMOTE_TIME_SYNC);
 	if (
 		input === undefined ||
 		!input.IsA("UnreliableRemoteEvent") ||
+		intent === undefined ||
+		!intent.IsA("RemoteEvent") ||
 		snap === undefined ||
 		!snap.IsA("UnreliableRemoteEvent") ||
 		world === undefined ||
@@ -231,7 +238,7 @@ function findRemotes(): Remotes | undefined {
 	) {
 		return undefined;
 	}
-	return { input, snap, world, timeSync };
+	return { input, intent, snap, world, timeSync };
 }
 
 /** looks the remotes up (they only exist when the server runs the MP host) and wires the handlers up once */
@@ -474,6 +481,30 @@ export function netPrewarm(): void {
 		waiter?.Disconnect();
 		waiter = undefined;
 	});
+}
+
+/**
+ * Asks the server for a body in the world, or to take it away.
+ *
+ * Being connected is not playing. Until this is sent the player exists only as a name in the roster: no
+ * body in the street, no slot held, nothing for the horde to find while they read the shop. The server
+ * decides where (a safe spawn point) and whether (the server may be full); the client only states intent.
+ */
+function sendIntent(kind: IntentKind): void {
+	if (MP_PHASE < 1) return;
+	if (!connect()) return;
+	const payload = encodeIntent(kind);
+	if (payload !== undefined) remotes?.intent.FireServer(payload);
+}
+
+/** a run is starting: ask for a body (client/main.client.ts, mountRun) */
+export function netEnterWorld(): void {
+	sendIntent(IntentKind.EnterWorld);
+}
+
+/** the run is over or the player went back to the menus: give the body and the slot back */
+export function netLeaveWorld(): void {
+	sendIntent(IntentKind.LeaveWorld);
 }
 
 /** SESSION TEARDOWN (leaving the place): drops the handlers so nothing fires into a dead frame loop */

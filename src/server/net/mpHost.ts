@@ -21,7 +21,7 @@ import {
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
 } from "shared/net/mpConfig";
-import { LifeState, decodeTimePing, encodeTimePong } from "shared/net/protocol";
+import { IntentKind, LifeState, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import {
@@ -29,6 +29,7 @@ import {
 	createMpRemotes,
 	destroyMpRemotes,
 	onInput,
+	onIntent,
 	onTimeSync,
 	sendSnap,
 	sendTimePong,
@@ -103,6 +104,9 @@ export function activeMpHost(): MpHost | undefined {
 }
 
 /** per connected Player, whether or not they are in the world yet */
+/** shortest gap between two accepted enter/leave intents from the same client (§8.2) */
+const WORLD_INTENT_COOLDOWN_S = 1;
+
 interface Link {
 	player: Player;
 	slot?: number;
@@ -112,6 +116,16 @@ interface Link {
 	/** messages from a player who is not in the world (flood protection before they even spawn) */
 	strangerStart: number;
 	strangerCount: number;
+	/**
+	 * The client asked to be IN the world (IntentKind.EnterWorld) and has not asked to leave.
+	 *
+	 * Being connected is not the same as playing: someone in the lobby, the shop or the credits must not
+	 * have a body standing in the street. The server still decides where and whether; this only records
+	 * that the client wants in, so a player who asked while every slot was taken gets in on a later pass.
+	 */
+	wantsWorld: boolean;
+	/** os.clock() of the last accepted enter/leave, to rate-limit a client flipping it (§8.2) */
+	worldAt: number;
 	/** a kick is asked for once; the player takes a moment to actually leave */
 	kicked: boolean;
 	lastAnomalyLog: number;
@@ -165,6 +179,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				timeAt: os.clock(),
 				strangerStart: 0,
 				strangerCount: 0,
+				wantsWorld: false,
+				worldAt: 0,
 				kicked: false,
 				lastAnomalyLog: 0,
 				reportedOverflow: 0,
@@ -192,6 +208,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	/** §7.1: enter the world at a safe spawn point (MP-04) once the save is available */
 	function admit(player: Player): void {
 		const link = linkOf(player);
+		// nobody enters the world by merely being connected: the client asks (IntentKind.EnterWorld)
+		if (!link.wantsWorld) return;
 		const save = options.saveOf(player);
 		if (link.slot !== undefined) {
 			// already in the world: the session may have swapped the save table (admin edit, reload)
@@ -227,6 +245,19 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			`[${GAME_NAME}] ${player.Name} joined the world in slot ${slot} at ` +
 				`(${string.format("%.0f", spawn.x)}, ${string.format("%.0f", spawn.y)})${spawn.relaxed ? " (relaxed spawn)" : ""}`,
 		);
+	}
+
+	/**
+	 * Leaves the WORLD without leaving the server: the body goes away, the slot is freed and the other
+	 * survivors are told, but the player stays connected with their save and can come back through PLAY.
+	 */
+	function leaveWorld(link: Link): void {
+		const slot = link.slot;
+		if (slot === undefined) return;
+		link.slot = undefined;
+		bySlot.delete(slot);
+		sim.remove(slot);
+		replicator.left(slot);
 	}
 
 	function release(player: Player): void {
@@ -265,6 +296,31 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// is dropped in silence (§9.2 level 0) and only ever counted
 		const verdict = ingestInput(sp, payload, now);
 		if (verdict !== InputVerdict.Ok || sp.counters.packets % 32 === 0) guardFlood(link, sp);
+	});
+
+	/**
+	 * The only thing a client may ask about its own presence (§7.1): let me in, or take me out.
+	 *
+	 * Rate-limited like any message from someone without a slot, because flipping it fast would make the
+	 * server spawn and despawn a body -- and each spawn costs a safe-point query. A repeat of what the
+	 * player already is costs nothing and is simply ignored.
+	 */
+	const intentConn = onIntent(remotes, (player, payload) => {
+		const link = linkOf(player);
+		const now = os.clock();
+		if (link.slot === undefined && strangerFlood(link, now)) {
+			kick(link, "intent flood before joining the world");
+			return;
+		}
+		const kind = decodeIntent(payload);
+		if (kind === undefined) return;
+		const wants = kind === IntentKind.EnterWorld;
+		if (wants === link.wantsWorld) return;
+		if (now - link.worldAt < WORLD_INTENT_COOLDOWN_S && now >= link.worldAt) return;
+		link.worldAt = now;
+		link.wantsWorld = wants;
+		if (wants) admit(player);
+		else leaveWorld(link);
 	});
 
 	const timeConn = onTimeSync(remotes, (player, payload) => {
@@ -398,6 +454,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			stopped = true;
 			heartbeat.Disconnect();
 			inputConn.Disconnect();
+			intentConn.Disconnect();
 			timeConn.Disconnect();
 			addedConn.Disconnect();
 			removingConn.Disconnect();

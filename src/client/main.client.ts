@@ -14,7 +14,7 @@ import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
-import { netPrewarm } from "./net/netClient";
+import { netEnterWorld, netLeaveWorld, netPrewarm } from "./net/netClient";
 import { attachRun, detachRun, runSummary, showRunSummary } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { switchWeapon } from "./systems/combat";
@@ -269,6 +269,8 @@ function stopGame(): void {
 		// ...and nothing from the run keeps playing behind them either
 		gameAudio.stopRun();
 	}
+	// leaving the run: give the body and the slot back instead of standing in the street from the menus
+	netLeaveWorld();
 	hud.unmount();
 	detachRun();
 	pack.close();
@@ -504,6 +506,8 @@ function mountRun(): void {
 	hud.mount();
 	deathShown = false;
 	saveTimer = 0;
+	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
+	netEnterWorld();
 	gameAudio.startRun(loop.getRefs());
 	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
 	attachRun(ctx, loop.getRefs());

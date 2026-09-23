@@ -120,6 +120,7 @@ export const PacketKind = {
 	World: 3,
 	TimePing: 4,
 	TimePong: 5,
+	Intent: 6,
 } as const;
 export type PacketKind = (typeof PacketKind)[keyof typeof PacketKind];
 
@@ -1719,6 +1720,42 @@ export function decodeTimePong(payload: unknown): TimePong | undefined {
 	const serverTick = r.u32();
 	if (!r.done()) return undefined;
 	return { seq, clientTime, serverTime, serverTick };
+}
+
+// ---------------------------------------------------------------- Intent (C->S, reliable, ordered)
+
+/**
+ * What a client may ASK for. Reliable and ordered, because it changes who exists in the world -- and it is
+ * the smallest surface a client can push on, so it is a single validated byte and nothing else.
+ *
+ * EnterWorld / LeaveWorld exist because being connected is not the same as playing: a player reading the
+ * shop or the credits should not have a body standing in the street for the horde to find (§7.1). The
+ * server decides WHERE and WHETHER; the client only ever says that it wants in or out.
+ */
+export const IntentKind = {
+	EnterWorld: 1,
+	LeaveWorld: 2,
+} as const;
+export type IntentKind = (typeof IntentKind)[keyof typeof IntentKind];
+
+export const INTENT_BYTES = 2;
+
+export function encodeIntent(kind: IntentKind): buffer | undefined {
+	const w = new NetWriter(INTENT_BYTES, INTENT_BYTES);
+	w.u8(PacketKind.Intent * 16);
+	w.u8(kind);
+	return w.finish();
+}
+
+/** undefined for anything that is not exactly one of the intents above (§8.1: never trust the client) */
+export function decodeIntent(payload: unknown): IntentKind | undefined {
+	if (!typeIs(payload, "buffer") || buffer.len(payload) !== INTENT_BYTES) return undefined;
+	const r = new NetReader(payload);
+	if (r.u8() !== PacketKind.Intent * 16) return undefined;
+	const kind = r.u8();
+	if (!r.done()) return undefined;
+	if (kind !== IntentKind.EnterWorld && kind !== IntentKind.LeaveWorld) return undefined;
+	return kind as IntentKind;
 }
 
 /** round-trip time of a pong received at `clientNow` (same clock as the ping's clientTime) */
