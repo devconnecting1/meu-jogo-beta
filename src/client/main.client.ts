@@ -17,7 +17,16 @@ import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
-import { netActive, netEnterWorld, netHosted, netLeaveWorld, netOnTown, netPrewarm, TownNotice } from "./net/netClient";
+import {
+	netActive,
+	netEnterWorld,
+	netHosted,
+	netLeaveWorld,
+	netOnTown,
+	netPrewarm,
+	netTownSeed,
+	TownNotice,
+} from "./net/netClient";
 import {
 	attachRun,
 	DaybreakWait,
@@ -33,7 +42,8 @@ import { interactHint } from "./systems/interaction";
 import { addItem } from "./systems/items";
 import * as net from "./systems/saveClient";
 import { showLogo } from "./ui/logo";
-import { LobbyStatus, showLobby } from "./ui/lobby";
+import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
+import * as Flyover from "./view/townFlyover";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
 import { showSettings } from "./ui/settings";
@@ -106,10 +116,22 @@ let dawnOverdue = 0;
  * The death screen is the wait for THAT life: no second New game on it, and its own words.
  */
 let newLifeWaiting = false;
+/**
+ * MP-21's free way out, chosen from the lobby's Survivor screen: this same life waits for daybreak in the city
+ * (enterToWait, keeping it). The dawn wait needs no proof of a server clock then -- the player chose it on a server
+ * that revives -- exactly as for a new life that waits.
+ */
+let dawnChosen = false;
 /** the life that ended, as it was when New game replaced it: the wait for the new life still shows ITS numbers */
 let endedLife: RunSummary | undefined;
 /** MP-22: worlds that ended while this client was connected; a run action that raced one is superseded by it */
 let worldResets = 0;
+/**
+ * The lobby (DESIGN_RULES UI-10): the one on screen, the page the player was on (a lobby rebuilt under them keeps
+ * it) and, MP-22, the day the last town fell on while this client was connected (its town plate shows it). One
+ * table: main.client.luau is close to Luau's 200-locals budget (npm run check:registers).
+ */
+const lobbyNav: { handle?: LobbyHandle; page: LobbyPage; fellOn?: number } = { page: "menu" };
 
 /**
  * MP-21 (as the owner rewrote it on 23 Sep 2026): does the SERVER stand this survivor back up at daybreak?
@@ -205,7 +227,8 @@ net.onLoad(info => {
 		return;
 	}
 	applyLoad(info);
-	if (ctx.phase !== "boot") goLobby();
+	// a lobby rebuilt for the loaded save stays on the page the player was on
+	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
 net.onSaveAck((ack, manual) => {
@@ -347,9 +370,17 @@ function stopGame(keepBody = false): void {
 }
 
 function lobbyStatus(): LobbyStatus {
+	const hosted = serverRevives() && netHosted();
+	// what START leads to (DESIGN_RULES UI-10): the very tests startRun makes, read without acting on them
+	let run: RunState = runActive && !loop.getRefs().player.dead ? "suspended" : "fresh";
+	if (ctx.save.runOver) run = newLifeWaiting && hosted ? "newLife" : "over";
 	return {
 		loading: loadInfo === undefined && !net.netUnavailable(),
-		suspended: runActive && !loop.getRefs().player.dead,
+		run,
+		hosted,
+		clockDriven: loop.getRefs().daynight.serverDriven(),
+		seed: netTownSeed(),
+		fellOn: lobbyNav.fellOn,
 		offlineNote: offlineNote(),
 	};
 }
@@ -390,13 +421,15 @@ function openTutorial(thenPlay: boolean): void {
 	setPhase("tutorial");
 	cleanup = showTutorial(ctx, () => {
 		net.requestSave("menu");
-		// back to the lobby first, so a "still loading" prompt or the game-over choice has a screen behind it
-		goLobby();
+		// back to the lobby first, so a "still loading" prompt has a screen behind it: the Survivor screen, when the
+		// tutorial was the first-run prompt's answer on the way into the city
+		goLobby(thenPlay ? "survivor" : "menu");
 		if (thenPlay) playPressed();
 	});
 }
 
-function goLobby(): void {
+/** the lobby (DESIGN_RULES UI-10) on `page`: the title screen, or the Survivor screen the city is entered from */
+function goLobby(page: LobbyPage = "menu"): void {
 	clearScreen();
 	stopGame();
 	const late = pendingLoad;
@@ -406,18 +439,37 @@ function goLobby(): void {
 	}
 	setPhase("lobby");
 	net.requestSave("lobby");
-	cleanup = showLobby(
+	const handle = showLobby(
 		ctx,
 		{
 			onPlay: playPressed,
-			onShop: openShop,
-			onWardrobe: () => openWardrobe(goLobby),
+			onRebirth: doRebirth,
+			// MP-21's free way out: this same life, dead in the city until 06:00, when the server stands it up
+			onWaitDawn: () => {
+				if (actionBusy || !ctx.save.runOver) return;
+				dawnChosen = true;
+				enterToWait();
+			},
+			onNewRun: doNewRun,
+			onShop: () => openShop(),
+			// the wardrobe's X comes back to the page it was opened from
+			onWardrobe: (from: LobbyPage) => openWardrobe(() => goLobby(from)),
 			onSettings: openSettings,
 			onCredits: openCredits,
 			onTutorial: (thenPlay?: boolean) => openTutorial(thenPlay === true),
+			onPage: (p: LobbyPage) => {
+				lobbyNav.page = p;
+			},
 		},
 		lobbyStatus(),
+		page,
 	);
+	lobbyNav.handle = handle;
+	lobbyNav.page = page;
+	cleanup = (): void => {
+		if (lobbyNav.handle === handle) lobbyNav.handle = undefined;
+		handle.close();
+	};
 	const notice = pendingNotice;
 	if (notice !== undefined) {
 		pendingNotice = undefined;
@@ -579,7 +631,7 @@ function openDeath(): void {
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
 	// on it, and MP-21's short wait would read as a hang. A new life the server just granted (New game) needs
 	// no such proof: the server that accepted it is the one that holds the body.
-	if (serverRevives() && (loop.getRefs().daynight.serverDriven() || newLifeWaiting)) {
+	if (serverRevives() && (loop.getRefs().daynight.serverDriven() || newLifeWaiting || dawnChosen)) {
 		/*
 		 * MP-21: a death is a night lost, not a run ended, on every server kind. The survivor watches the town
 		 * carry on and the server puts them back on the street at 06:00 (server/sim/life.ts) — or right now, for
@@ -638,6 +690,7 @@ function updateDawnWait(dt: number): void {
 		closeDawnWait();
 		deathShown = false;
 		newLifeWaiting = false;
+		dawnChosen = false;
 		endedLife = undefined;
 		// the wait WAS the price: the run continues, so the save has to stop saying it is over
 		ctx.save.runOver = false;
@@ -674,6 +727,8 @@ function updateDawnWait(dt: number): void {
  * (MP-22's rebuild around a new town), so no body is asked for.
  */
 function mountRun(enterWorld = true): void {
+	// the menus' town flyover (UI-10) goes with them: every Frame of it, not only hidden (the run draws its own town)
+	Flyover.releaseFlyover();
 	setPhase("playing");
 	hud.onPause = () => {
 		if (pauseCleanup === undefined && ctx.phase === "playing") openPause();
@@ -787,11 +842,15 @@ function townFellText(day: number): string {
  */
 function onTown(notice: TownNotice): void {
 	const fellOn = notice.endedDay;
-	if (fellOn !== undefined) worldResets += 1;
+	if (fellOn !== undefined) {
+		worldResets += 1;
+		lobbyNav.fellOn = fellOn;
+	}
 	if (fellOn !== undefined && notice.newLife) {
 		// THIS survivor's new life ends whatever it was waiting for; a reset that named somebody else ends nothing of
 		// ours — a new life the server still owes us arrives with our own save (review of f851ad2, L4)
 		newLifeWaiting = false;
+		dawnChosen = false;
 		endedLife = undefined;
 		resetRun(ctx.save);
 		// the runRev the SERVER wrote, never ours + 1: a wallet that already carried it (a report answered in the
@@ -808,6 +867,8 @@ function onTown(notice: TownNotice): void {
 		if (fellOn === undefined) return;
 		runActive = false;
 		if (ctx.phase !== "boot") toast(ctx, townFellText(fellOn));
+		// the lobby on screen shows the new town (its flyover, its day) and the new life, not a death that is over
+		lobbyNav.handle?.refresh(lobbyStatus());
 		return;
 	}
 	// the everyday case: the InitBegin of an entry confirms the town this client already built
@@ -843,6 +904,7 @@ function resumeRun(): void {
 function revive(): void {
 	ctx.save.runOver = false;
 	newLifeWaiting = false;
+	dawnChosen = false;
 	endedLife = undefined;
 	if (!runActive) {
 		newWorld();
@@ -983,6 +1045,7 @@ function doNewRun(): void {
 		// the server's save says the same (server/sim/life.ts `newLife`): the death stands until daybreak
 		ctx.save.runOver = true;
 		newLifeWaiting = true;
+		dawnChosen = false;
 		if (heartbeat !== undefined) openDeath();
 		else enterToWait();
 		return;
@@ -991,38 +1054,17 @@ function doNewRun(): void {
 	newWorld();
 }
 
-function showGameOverChoice(): void {
-	// the same two ways out on every server kind (MP-21 as the owner rewrote it): pay to continue, or a new life —
-	// which, where the server owns the death, still waits for first light (the text says so, it used to promise day 1
-	// on the spot)
-	const price = rebirthPrice(ctx.save.deathCount);
-	const short = price - ctx.save.money;
-	let body = nl(
-		tr(
-			serverRevives() && netHosted()
-				? "Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
-				: "Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
-		),
-	);
-	// the Rebirth button below stays enabled either way (destructive-styled when unaffordable); spell
-	// out the missing amount here so it isn't a silent no-op if the player taps it anyway
-	if (short > 0) body += `\n${tr("Not enough coins")} (need ${fmtInt(short)} more)`;
-	popup(ctx, tr("Your run is over"), body, [
-		{ text: tr("Close"), variant: "outline" },
-		// starting over throws the current run away → destructive; paying to continue is the main action
-		{ text: tr("New game"), variant: "destructive", onClick: doNewRun },
-		{ text: `${tr("Rebirth")} · ${fmtInt(price)}`, variant: "default", onClick: doRebirth },
-	]);
-}
-
 function startRun(): void {
 	if (ctx.save.runOver) {
-		// a new life already chosen, waiting for daybreak (MP-21): Play goes back to that wait, not to a choice
-		// that was already made
+		// a new life already chosen, waiting for daybreak (MP-21): the city goes back to that wait, not to a choice
+		// that was already made. Otherwise the choice itself -- Rebirth or New game -- lives on the Survivor screen
+		// (DESIGN_RULES UI-10), in place, never as a popup over the lobby
 		if (newLifeWaiting && serverRevives() && netHosted()) enterToWait();
-		else showGameOverChoice();
+		else goLobby("survivor");
 		return;
 	}
+	// a living body enters: a free wait chosen earlier was answered (the server stood it up while in the lobby)
+	dawnChosen = false;
 	if (runActive && !loop.getRefs().player.dead) resumeRun();
 	else newWorld();
 }
@@ -1092,9 +1134,12 @@ pack.onUnequipItem = unequipSlot;
 function begin(): void {
 	if (started) return;
 	started = true;
-	showLogo(() => {
+	showLogo(ctx.uiLayer, () => {
 		goLobby();
 	});
+	// the town behind the lobby (UI-10) is generated while the logo holds still (its fades end at 1.25 s, the lobby
+	// opens at 1.5 s), not when the lobby opens
+	task.delay(1.3, () => Flyover.prewarmTown(netTownSeed()));
 }
 
 // audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the

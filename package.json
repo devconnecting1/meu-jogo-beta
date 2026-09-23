@@ -32,6 +32,7 @@
 		"test:backpack": "node tools/test-backpack.mjs",
 		"test:hud": "node tools/test-hud.mjs",
 		"test:menus": "node tools/test-menus.mjs",
+		"test:lobby": "node tools/test-lobby.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
