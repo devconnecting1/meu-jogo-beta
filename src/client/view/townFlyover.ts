@@ -23,11 +23,12 @@
  * big screen draw more than ~1920 x 1080 units of town. Reduce Motion (GuiService.ReducedMotionEnabled) gets a
  * still frame: no drift, no walkers moving, no fades.
  *
- * Lifecycle (client/ui/lobby.ts, client/main.client.ts): the lobby attaches it behind its pages and detaches it
- * when it closes -- the pool is kept, so going to the Shop and back costs nothing -- and the run RELEASES it the
- * moment it starts (`releaseFlyover`): every Frame is destroyed and the next lobby builds a new pool. Only the
- * town's data is cached between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds
- * it behind the logo.
+ * Lifecycle (client/ui/lobby.ts, client/main.client.ts): it is the backdrop of ALL the menus, not of one screen. The
+ * lobby, and every menu screen opened from it (Settings, Wardrobe, Shop, Credits, How to play), PIN it at the back of
+ * the UI layer (`pinFlyover`), under screens that are see-through; switching between them never touches it, so the
+ * glide goes on without a restart, a cut or a new warm-up. The run RELEASES it the moment it starts
+ * (`releaseFlyover`): every Frame is destroyed and the next menu builds a new pool. Only the town's data is cached
+ * between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds it behind the logo.
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
@@ -258,6 +259,8 @@ export class TownFlyover {
 	/** puts the backdrop under `host` (at the back, ZIndex `zIndex`) and starts the drift */
 	attach(host: GuiObject, zIndex: number): void {
 		if (this.destroyed) return;
+		// pinned again by the next menu screen: it is already there and gliding -- nothing to touch
+		if (this.layer.Parent === host && this.layer.ZIndex === zIndex && this.conn !== undefined) return;
 		this.layer.ZIndex = zIndex;
 		this.layer.Parent = host;
 		this.stillDrawn = false;
@@ -456,7 +459,19 @@ export function attachFlyover(host: GuiObject, seed: number, zIndex: number): To
 	return f;
 }
 
-/** the lobby closed: stop drawing and take the backdrop off the screen (the pool is kept) */
+/** ZIndex of the menus' backdrop in the UI layer: under every screen (a screen's root is 1 or more) */
+export const MENU_BACKDROP_Z = 0;
+
+/**
+ * The town behind the menus (UI-10): the flyover at the back of the UI `layer`, where every menu screen -- the lobby,
+ * and whatever it opens -- stands on it. The one already there keeps gliding (same town: nothing is touched); a new
+ * town (MP-22) replaces it. Idempotent: every menu screen pins it, so none depends on which came first.
+ */
+export function pinFlyover(layer: GuiObject, seed: number): TownFlyover {
+	return attachFlyover(layer, seed, MENU_BACKDROP_Z);
+}
+
+/** stop drawing and take the backdrop off the screen (the pool is kept for the next attach) */
 export function detachFlyover(): void {
 	current?.detach();
 }

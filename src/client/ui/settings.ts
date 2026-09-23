@@ -6,7 +6,7 @@ import { previewBgm, previewSfx } from "../audio";
 import { refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
 import { popup } from "./popup";
-import { GAME, RADIUS, SURFACE, TEXT, THEME, space } from "./theme";
+import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import { SCHEMES, currentScheme } from "./tutorial";
 import {
 	Button,
@@ -15,6 +15,8 @@ import {
 	SliderHandle,
 	Tabs,
 	autoFocus,
+	cardHeaderHeight,
+	centredRect,
 	makeFrame,
 	makeLabel,
 	makeScreen,
@@ -51,9 +53,31 @@ import {
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
 
 const WIN_W = 900;
-const WIN_H = 576;
 const PAD = space(6);
 const TAB_H = 34;
+/** the Touch controls note (two lines) */
+const TOUCH_NOTE_H = 48;
+/**
+ * The window is ONE fixed size for every tab (UI-07: the reference's window does not jump when a tab changes), and
+ * that size is the TALLEST tab's -- Touch controls: six rows, the note and the reset -- to the unit, so it never
+ * scrolls and no tab has room it does not need. The shorter tabs (General, About) keep their sections fitted to their
+ * rows under the tab bar (UI-07: no empty plate under two rows); the window body below them is the window, not a hole.
+ * Controls is a list that scrolls in the same section.
+ */
+const TOUCH_ROWS = [
+	SETTING_ROW_H,
+	SETTING_ROW_H,
+	SETTING_ROW_H,
+	SETTING_ROW_H,
+	SETTING_ROW_H,
+	SETTING_ROW_H,
+	TOUCH_NOTE_H,
+	SETTING_ROW_H,
+];
+/** where the pages start: under the header and the tab bar */
+const SECTION_Y = cardHeaderHeight(TEXT.xl3) + space(1) + TAB_H + space(4);
+const SECTION_H = sectionHeight(settingsListHeight(TOUCH_ROWS));
+const WIN_H = SECTION_Y + SECTION_H + space(5);
 /** the section: from under the tab bar to the window's bottom padding */
 const SECTION_W = WIN_W - PAD * 2;
 /** the list inside a section, inset like the reference's */
@@ -83,9 +107,24 @@ const HELP_TEXT = [
 	"Changes are saved with your progress, by themselves.",
 ].join("#");
 
-export function showSettings(ctx: GameContext, onBack: () => void, onCredits: () => void): () => void {
+/**
+ * `onCredits` undefined: no credits row (Settings opened over a running match, where the credits page -- text straight
+ * on the page -- would not read over a bright street). `overWorld`: opened over a running match from its menu
+ * (DESIGN_RULES UI-06): the world's see-through scrim, so the street keeps moving behind it; from the lobby the screen
+ * is see-through and the town flyover behind the menus is what shows (UI-10).
+ */
+export function showSettings(
+	ctx: GameContext,
+	onBack: () => void,
+	onCredits?: () => void,
+	overWorld = false,
+): () => void {
 	const tr: Tr = (key: string): string => langGet(key, ctx.save.settings.langType);
-	const { root, body } = makeScreen(ctx.uiLayer, "Settings");
+	const { root, body } = makeScreen(ctx.uiLayer, "Settings", {
+		transparency: overWorld ? TRANSPARENCY.overWorld : 1,
+		zIndex: 250,
+		content: centredRect(WIN_W, WIN_H),
+	});
 	const s = ctx.save.settings;
 	/** every slider of the screen (disconnected when it closes) */
 	const handles: Array<SliderHandle> = [];
@@ -126,10 +165,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 	};
 
 	const win = Window(body, "Window", {
-		x: (1120 - WIN_W) / 2,
-		y: (630 - WIN_H) / 2,
-		w: WIN_W,
-		h: WIN_H,
+		...centredRect(WIN_W, WIN_H),
 		title: tr("Settings"),
 		onClose: (): void => onBack(),
 		onHelp: (): void => {
@@ -138,8 +174,8 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 	});
 	const panel = win.frame;
 	const tabsY = win.contentY + space(1);
-	const sectionY = tabsY + TAB_H + space(4);
-	const sectionH = WIN_H - sectionY - space(5);
+	const sectionY = SECTION_Y;
+	const sectionH = SECTION_H;
 
 	// ---- rows
 
@@ -362,7 +398,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			tr(
 				"Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.",
 			),
-			48,
+			TOUCH_NOTE_H,
 		);
 		const reset = SettingRow(list, "Reset", 7, tr("Defaults"), opts);
 		Button(reset.value, "ResetTouch", tr("Reset controls"), {
@@ -434,14 +470,10 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 
 	const buildAbout = (index: number): Frame => {
 		const page = pageFrame(index);
-		const aboutListH = settingsListHeight([
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-			SETTING_ROW_H,
-		]);
+		// five rows about the game, and the way to the credits where there is one
+		const rows = [SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H];
+		if (onCredits !== undefined) rows.push(SETTING_ROW_H);
+		const aboutListH = settingsListHeight(rows);
 		const about = Section(page, "About", {
 			x: 0,
 			y: 0,
@@ -462,6 +494,8 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
 		);
 		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		const openCredits = onCredits;
+		if (openCredits === undefined) return page;
 		const credits = SettingRow(list, "Credits", 5, tr("Credits"));
 		Button(credits.value, "OpenCredits", tr("Open credits"), {
 			x: (valueW - 180) / 2,
@@ -471,7 +505,7 @@ export function showSettings(ctx: GameContext, onBack: () => void, onCredits: ()
 			size: "sm",
 			variant: "secondary",
 			zIndex: credits.value.ZIndex + 1,
-			onClick: (): void => onCredits(),
+			onClick: (): void => openCredits(),
 		});
 		return page;
 	};

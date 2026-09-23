@@ -20,9 +20,11 @@ import { drawingBox } from "./wardrobe";
 import {
 	Bar,
 	Button,
+	DesignRect,
 	Progress,
 	autoFocus,
 	buttonForeground,
+	centredRect,
 	fmtInt,
 	makeFrame,
 	makeLabel,
@@ -98,6 +100,8 @@ export interface SurvivorHandlers {
 
 const WIN_W = 960;
 const WIN_H = 600;
+/** where the window sits in the lobby's 1120 x 630 space: centred (the lobby centres the screen on it, UI-07) */
+export const SURVIVOR_WINDOW: DesignRect = centredRect(WIN_W, WIN_H);
 const PAD = space(6);
 const INSET = space(4);
 const GAP = space(3);
@@ -181,10 +185,7 @@ export class SurvivorScreen {
 		this.tr = tr;
 		this.frame = makeFrame(parent, "Survivor", 0, 0, 1120, 630, THEME.background, { transparency: 1 });
 		const win = Kit.Window(this.frame, "Window", {
-			x: (1120 - WIN_W) / 2,
-			y: (630 - WIN_H) / 2,
-			w: WIN_W,
-			h: WIN_H,
+			...SURVIVOR_WINDOW,
 			title: tr("Survivor"),
 			onClose: (): void => handlers.onBack(),
 			onHelp: (): void => {

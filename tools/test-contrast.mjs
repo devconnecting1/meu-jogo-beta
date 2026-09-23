@@ -648,8 +648,13 @@ const backdrop = T.get("backdrop");
 	);
 }
 
-/** the screens that open OVER a run, and must dim the street rather than hide it */
-const OVER_RUN = ["client/ui/backpack.ts", "client/ui/pauseMenu.ts", "client/onboarding/gameOver.ts"];
+/** the screens that open OVER a run, and must dim the street rather than hide it (Settings: from the in-run menu) */
+const OVER_RUN = [
+	"client/ui/backpack.ts",
+	"client/ui/pauseMenu.ts",
+	"client/onboarding/gameOver.ts",
+	"client/ui/settings.ts",
+];
 const overRunZ = [];
 for (const rel of OVER_RUN) {
 	const src = codeAt(join(SRC, rel));
