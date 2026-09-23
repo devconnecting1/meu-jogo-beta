@@ -38,8 +38,8 @@ import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
 import { ServerItems } from "./items";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
-import { TitleId, WEEK_ONE_DAY } from "shared/data/titles";
-import { grantTitle } from "../save/titles";
+import { TitleId } from "shared/data/titles";
+import { creditLifeNight, grantTitle } from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
 import { WorldClock } from "./waves";
@@ -379,11 +379,13 @@ export class ServerSimulation {
 			const credit = creditDaySurvived(sp.save, paid);
 			if (this.onDayCredit !== undefined) this.onDayCredit(sp, credit);
 			// MON-05, on the very day count that paid it (so its presence and AFK rules come with it): this midnight
-			// may make a Survivor at 06:00, and a life that has just reached day 8 has lived a Week One. An assisted
-			// run (§9.3) keeps its day and earns no title, as it earns no coins
+			// may make a Survivor at 06:00, and it is one more night of this life -- the seventh makes a Week One. An
+			// assisted run (§9.3) keeps its day and earns no title and no night, as it earns no coins
 			if (!paid) continue;
 			if (p !== undefined) p.nightCredited = true;
-			if (sp.save.day >= WEEK_ONE_DAY) this.unlockTitle(sp, TitleId.WeekOne);
+			if (!credit.advanced) continue;
+			const unlocked = creditLifeNight(sp.save);
+			if (unlocked >= 0 && this.onTitleUnlocked !== undefined) this.onTitleUnlocked(sp, unlocked);
 		}
 		// a new day for everybody: the survivors in the world start it at 0, anybody else is forgotten (they start
 		// at 0 too whenever they come back); the last real input is kept, it is about minutes, not days

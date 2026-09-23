@@ -1116,8 +1116,11 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 		s.titleReplace = true;
 	}
 	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
-	// an edit keeps the run (still assisted if it was); a reset starts a new one
-	s.assistedRunRev = ops !== undefined && s.assistedRunRev === before.runRev ? edited.runRev : undefined;
+	// an edit keeps the run (still assisted if it was); a reset starts a new one. An edit that moves the life's DAY
+	// is an admin living days for the player (§9.3, MP-13): from here the run is assisted, like a world tool's
+	const dayMoved = ops !== undefined && edited.day !== before.day;
+	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
+	s.assistedRunRev = assisted ? edited.runRev : undefined;
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
 	s.dirty = true;

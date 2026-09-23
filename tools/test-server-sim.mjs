@@ -1494,9 +1494,13 @@ section(
 	sim.onTitleUnlocked = (sp, titleId) => unlocks.push([sp.userId, titleId]);
 	const count = (userId, titleId) => unlocks.filter(([u, t]) => u === userId && t === titleId).length;
 	const saves = new Map();
-	function arrive(slot, userId, day = 1) {
+	/** `nights`: the midnights the server already credited to this life (a life counted from day 1: day - 1) */
+	function arrive(slot, userId, day = 1, nights = day - 1) {
 		const save = saves.get(userId) ?? defaultSave();
-		if (!saves.has(userId)) save.day = day;
+		if (!saves.has(userId)) {
+			save.day = day;
+			save.lifeNights = nights;
+		}
 		saves.set(userId, save);
 		const sp = PL.createServerPlayer(
 			{ slot, userId, name: `t${slot}` },
@@ -1522,6 +1526,9 @@ section(
 	const HOPPER = 7006; // paid at midnight, in the lobby 01:00-02:00: was not there for the whole night
 	const QUIT = 7007; // plays until 23:30, then idles to 06:00: paid at midnight, but asleep through the night
 	const ONCE = 7008; // plays through midnight, one press just after it, then idles the last ~2 min to 06:00
+	// a life at day 7 whose days were NOT server-credited midnights (a client counted them before the server did,
+	// or an admin set the day): it plays through midnight -> day 8, one night lived -> no Week One
+	const LEGACY = 7009;
 	const players = new Map([
 		[ACTIVE, arrive(0, ACTIVE)],
 		[WEEK, arrive(1, WEEK, 7)],
@@ -1531,6 +1538,7 @@ section(
 		[HOPPER, arrive(5, HOPPER)],
 		[QUIT, arrive(6, QUIT)],
 		[ONCE, arrive(7, ONCE)],
+		[LEGACY, arrive(8, LEGACY, 7, 0)],
 	]);
 	let first = true;
 	let midnightTitles = -1;
@@ -1578,6 +1586,7 @@ section(
 	const day = id => saves.get(id).day;
 	const owns = (id, t) => SAVE.ownsTitle(saves.get(id), t);
 	checkEq(day(WEEK), TIT.WEEK_ONE_DAY, "the day-7 life that played through midnight reached day 8");
+	checkEq(saves.get(WEEK).lifeNights, TIT.WEEK_ONE_NIGHTS, "…its seventh night credited by the server");
 	check(
 		owns(WEEK, TIT.TitleId.WeekOne) && count(WEEK, TIT.TitleId.WeekOne) === 1,
 		"…and is a Week One, announced once",
@@ -1622,7 +1631,12 @@ section(
 		`one press just after midnight, then nothing for more than ${PROG.NIGHT_AFK_WINDOW_S ?? 60} s before 06:00: no Survivor`,
 	);
 	check(
-		unlocks.every(([u]) => u === ACTIVE || u === WEEK),
+		day(LEGACY) === TIT.WEEK_ONE_DAY && saves.get(LEGACY).lifeNights === 1 && !owns(LEGACY, TIT.TitleId.WeekOne),
+		"a day-7 life whose days the server never credited reaches day 8 with ONE night lived: no Week One",
+	);
+	check(owns(LEGACY, TIT.TitleId.Survivor), "(it did live this night: a Survivor)");
+	check(
+		unlocks.every(([u, t]) => u === ACTIVE || u === WEEK || (u === LEGACY && t === TIT.TitleId.Survivor)),
 		`nobody else earned anything (${JSON.stringify(unlocks)})`,
 	);
 

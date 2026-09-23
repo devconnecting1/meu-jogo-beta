@@ -898,7 +898,7 @@ section('18) "Nao" ao tutorial desliga o tutorial inteiro, inclusive as licoes d
 
 const TIT = require(join(SRC, "shared/data/titles.ts"));
 const TITLES_N = TIT.TITLES.length;
-const { equipTitle, grantTitle, creditZombieKill } = require(join(SRC, "server/save/titles.ts"));
+const { equipTitle, grantTitle, creditZombieKill, creditLifeNight } = require(join(SRC, "server/save/titles.ts"));
 // the title record's pure half; its module reaches the store names (server/save/stores.ts), which ask RunService
 // whether this is Studio -- the one thing of Roblox it needs to load
 globalThis.game ??= { GetService: () => ({ IsStudio: () => false }) };
@@ -911,6 +911,7 @@ function productionV4() {
 	delete v4.zombieKills;
 	delete v4.equipTitle;
 	delete v4.titleEpoch;
+	delete v4.lifeNights;
 	v4.version = 4;
 	return v4;
 }
@@ -923,6 +924,7 @@ section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 	checkEq(save.version, 5, "e sai v5");
 	checkArrayEq(save.titles, new Array(TITLES_N).fill(0), "nenhum titulo: nenhum servidor contou nada antes do v5");
 	checkEq(save.zombieKills, 0, "e nenhum abate contado");
+	checkEq(save.lifeNights, 0, "nem noite creditada pelo servidor (Week One conta a partir do v5)");
 	checkEq(save.equipTitle, -1, "e nenhum titulo mostrado");
 	assertSameAsV2(productionV3(SANTA), save, "nenhum campo v2 mudou");
 	check(save.equipOutfit === SANTA && save.runHp === 60, "nem os do v3 e do v4 (corpo da run, traje vestido)");
@@ -963,6 +965,7 @@ section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	delete v4.zombieKills;
 	delete v4.equipTitle;
 	delete v4.titleEpoch;
+	delete v4.lifeNights;
 	v4.version = 4;
 	const back = SAVE.sanitizeStoredSave(v4);
 	checkEq(back.zombieKills, 0, "o save que o v4 escreveu nao tem mais nada ganho (o risco)");
@@ -1000,6 +1003,7 @@ section("21) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-
 	const save = SAVE.defaultSave();
 	for (let i = 0; i < TITLES_N; i++) save.titles[i] = 1;
 	save.zombieKills = 150;
+	save.lifeNights = 8;
 	save.equipTitle = TIT.TitleId.WeekOne;
 	save.day = 9;
 	// death: the server writes the body into the save (server/sim/life.ts `writeRunBody`)
@@ -1016,6 +1020,7 @@ section("21) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-
 	check(/resetRun\(save\)/.test(restart), "o fim do mundo (life.ts restartWorld) da a vida nova por resetRun");
 	SAVE.resetRun(save);
 	checkEq(save.day, 1, "New game: a vida volta ao dia 1");
+	checkEq(save.lifeNights, 0, "e a contagem de noites da vida (Week One) volta a 0");
 	check(
 		save.titles.every(v => v === 1),
 		"e os titulos ficam",
@@ -1035,6 +1040,7 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	const forged = JSON.parse(JSON.stringify(base));
 	forged.titles = new Array(TITLES_N).fill(1);
 	forged.zombieKills = 999999;
+	forged.lifeNights = 99;
 	forged.equipTitle = TIT.TitleId.HordeBreaker;
 	const upd = SAVE.sanitizeClientReport(forged, base);
 	check(
@@ -1042,6 +1048,7 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 		"os titulos de um relatorio sao ignorados (sao do servidor)",
 	);
 	checkEq(upd.zombieKills, 0, "a contagem de abates tambem");
+	checkEq(upd.lifeNights, 0, "e a de noites da vida");
 	checkEq(upd.equipTitle, -1, "e o titulo mostrado nao ganho e corrigido para nenhum");
 	checkEq(SAVE.titleWireOf(upd), 0, "e nada vai para o fio");
 	// earned: the report may choose it, and nothing else
@@ -1088,6 +1095,21 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	checkEq(creditZombieKill(killer), TIT.TitleId.HordeBreaker, "o 100o abate desbloqueia Horde Breaker");
 	checkEq(creditZombieKill(killer), -1, "o 101o nao desbloqueia de novo");
 	checkEq(killer.zombieKills, 101, "e a contagem segue");
+
+	// Week One: the nights the server credited to the life, never the day the save says
+	const life = SAVE.defaultSave();
+	life.day = 30;
+	unlocked = [];
+	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) {
+		const t = creditLifeNight(life);
+		if (t >= 0) unlocked.push(t);
+	}
+	check(
+		unlocked.length === 0 && !SAVE.ownsTitle(life, TIT.TitleId.WeekOne),
+		"dia 30 no save e 6 noites creditadas: ainda nao",
+	);
+	checkEq(creditLifeNight(life), TIT.TitleId.WeekOne, "a 7a noite creditada desbloqueia Week One");
+	checkEq(creditLifeNight(life), -1, "a 8a nao desbloqueia de novo");
 
 	// an admin taking a title back takes it off the plate; the wallet carries both halves to the client
 	killer.equipTitle = TIT.TitleId.HordeBreaker;

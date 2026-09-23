@@ -48,6 +48,8 @@
  *  15. RECORD UNDER LOCK    leaving writes the title record BEFORE the save write that releases the session lock.
  *  16. RECORD BUDGET       no record write for a survivor who earned nothing; a title store that failed to open
  *                           is asked again a minute later instead of never.
+ *  17. ADMIN DAY EDIT      an admin who sets a life's day has assisted the run (no coins, no titles) and counted
+ *                           no night toward Week One.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1647,6 +1649,33 @@ section("16) the title record is written only when something was earned, and its
 		const rec = fakeStore(TITLE_STORE).data.get(String(u));
 		check(rec?.zombieKills === 100 && rec.titles[1] === 1, "…with what was earned", JSON.stringify(rec));
 	}
+});
+
+// ================================================================ 17: an admin who moves the day assists the run
+
+section("17) an admin who moves a life's day has assisted that run: no coins, no title from it (§9.3, MON-05)", () => {
+	const srv = bootServer();
+	const u = newUser();
+	const p = srv.join(u, "helped");
+	const admin = srv.join(ADMIN_ID, "admin");
+	const pays = () => srv.sim.paysRewards({ userId: u });
+	check(pays(), "a run nobody helped pays");
+	const money = adminRequest(srv, admin, {
+		kind: "edit",
+		userId: u,
+		ops: [{ op: "stat", field: "money", value: 500 }],
+	});
+	check(
+		money?.ok === true && pays(),
+		"an admin setting the coins does not make it assisted",
+		JSON.stringify(money?.error),
+	);
+	const day = adminRequest(srv, admin, { kind: "edit", userId: u, ops: [{ op: "stat", field: "day", value: 8 }] });
+	check(day?.ok === true, "the admin sets the life's day to 8", JSON.stringify(day?.error));
+	check(!pays(), "…and from then the run is assisted: it pays no coins and earns no title");
+	check(srv.save(p).lifeNights === 0, "…nor did the day edit count a single night toward Week One");
+	srv.quit(p);
+	srv.quit(admin);
 });
 
 // ================================================================

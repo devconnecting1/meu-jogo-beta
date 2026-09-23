@@ -30,16 +30,18 @@ import { MP_PHASE } from "shared/net/mpConfig";
  *     back with no cosmetic EQUIPPED. What they OWN (`costumes`, the inventory) is untouched in both directions:
  *     a rollback costs one click in the backpack, never a purchase.
  *
- * v5 (MON-05): titles, EARNED on the server's own counters and never sold. Three new fields, same document,
- * additive: `titles` (one flag per shared/data/titles.ts id, server-owned like `costumes`), `zombieKills` (the
- * lifetime killing blows the server credited, server-owned like `bossKills`) and `equipTitle` (the one shown under
- * the name, -1 = none, checked against `titles` like an outfit against `costumes`).
- *   - a v4 document has none of them: no title unlocked, no kill counted, nothing shown -- exactly the truth, since
- *     no server counted any of it before v5;
- *   - a server rolled back to v4 code drops all three when it writes. What was EARNED survives that anyway: every
+ * v5 (MON-05): titles, EARNED on the server's own counters and never sold. New fields, same document, additive:
+ * `titles` (one flag per shared/data/titles.ts id, server-owned like `costumes`), `zombieKills` (the lifetime
+ * killing blows the server credited, server-owned like `bossKills`), `lifeNights` (the midnights the server credited
+ * to this life, Week One's count), `equipTitle` (the one shown under the name, -1 = none, checked against `titles`
+ * like an outfit against `costumes`) and `titleEpoch` (which title history the save is, server/save/titleRecord.ts).
+ *   - a v4 document has none of them: no title unlocked, no kill or night counted, nothing shown -- exactly the
+ *     truth, since no server counted any of it before v5;
+ *   - a server rolled back to v4 code drops them all when it writes. What was EARNED survives that anyway: every
  *     session also writes `titles` and `zombieKills` to a second document v4 never opens (server/save/titleRecord.ts,
  *     store `ProjectZ_Titles`), and the next v5 load takes the larger of the two. So a rollback forgets only WHICH
- *     title was shown -- one click in the wardrobe -- never a title or a kill.
+ *     title was shown -- one click in the wardrobe -- never a title or a kill. (And the current life's progress
+ *     toward Week One, `lifeNights`, which is a count toward a title, not one.)
  */
 export const SAVE_VERSION = 5;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
@@ -97,7 +99,7 @@ export function defaultSettings(): SettingsData {
 /**
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
- *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, titleEpoch
+ *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  */
@@ -159,6 +161,12 @@ export interface PlayerSaveData {
 	 * (server/sim/progress.ts), never an assist and never a number a report carried. It only grows.
 	 */
 	zombieKills: number;
+	/**
+	 * v5 (MON-05): the midnights the SERVER credited to this life while its run paid (server/sim/simulation.ts
+	 * `creditMidnight`): never a day a client reported before the server counted days, an admin set, or an assisted
+	 * run lived. Week One counts these. Back to 0 with the life (`resetRun`). Server-owned.
+	 */
+	lifeNights: number;
 	/** v5 (MON-05): TITLES id shown under the name, -1 = none; must be earned (`enforceSaveInvariants`) */
 	equipTitle: number;
 	/**
@@ -281,6 +289,7 @@ export function declineTutorial(save: PlayerSaveData): void {
 export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
 	save.day = 1;
+	save.lifeNights = 0;
 	save.deathCount = 0;
 	save.runOver = false;
 	// a new run starts with a new body: never inherit the HP bar the last one died on (v3, §6.1)
@@ -333,6 +342,7 @@ function emptySave(): PlayerSaveData {
 		equipPet: -1,
 		titles: zeros(TITLES.size()),
 		zombieKills: 0,
+		lifeNights: 0,
 		equipTitle: -1,
 		titleEpoch: 0,
 	};
@@ -595,6 +605,7 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		// and `enforceSaveInvariants` checks it against those earned flags. Absent in v4: nothing shown
 		titles: copyArray(fb.titles),
 		zombieKills: fb.zombieKills,
+		lifeNights: fb.lifeNights,
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 		titleEpoch: fb.titleEpoch,
 	};
@@ -648,6 +659,7 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	// naming one it never earned is corrected to none, and an admin taking a title back takes it off the plate
 	s.equipTitle = validTitle(s, s.equipTitle);
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
+	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -719,6 +731,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipPet = src.equipPet;
 	copyInto(dst.titles, src.titles);
 	dst.zombieKills = src.zombieKills;
+	dst.lifeNights = src.lifeNights;
 	dst.equipTitle = src.equipTitle;
 	dst.titleEpoch = src.titleEpoch;
 	return dst;
@@ -743,6 +756,7 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	// bring back what a rolled-back server dropped, on the session load)
 	s.titles = readIntArray(r.titles, TITLES.size(), () => 1, undefined);
 	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
+	s.lifeNights = readInt(r.lifeNights, 0, 0, L.DAY_MAX);
 	s.titleEpoch = readInt(r.titleEpoch, 0, 0, L.EPOCH_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {

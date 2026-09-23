@@ -9,8 +9,9 @@
  *                  in the world every tick since that midnight (server/sim/simulation.ts `creditDawn`)
  *   Horde Breaker  HORDE_BREAKER_KILLS zombies put down: the killing blows the server's kill credit gave you
  *                  (server/sim/progress.ts `zombieKilled`). An assist is XP (MP-15), not a kill: it does not count
- *   Week One       one life reaching day WEEK_ONE_DAY -- seven midnights credited to it by the same MP-13 count,
- *                  presence and AFK rule included, so idling in the street never gets there
+ *   Week One       one life living WEEK_ONE_NIGHTS midnights the SERVER credited to it (`lifeNights`) by the same
+ *                  MP-13 count, presence and AFK rule included, so idling in the street never gets there -- and a
+ *                  day a client reported before the server counted days, or an admin set, is not one of them
  *
  * Nothing here needs a boss or anything outside Núcleo 1 (CON-03). A new title is a new row at the END of the table:
  * the save keeps one flag per id (`titles[id]`) and the wire carries `id + 1`, so reordering would hand everybody's
@@ -28,8 +29,10 @@ export type TitleId = (typeof TitleId)[keyof typeof TitleId];
 
 /** Horde Breaker: zombies put down (killing blows the server credited, lifetime) */
 export const HORDE_BREAKER_KILLS = 100;
-/** Week One: the day one life has to reach -- day 8 is seven midnights survived */
-export const WEEK_ONE_DAY = 8;
+/** Week One: the midnights one life has to live, as the server credits them (`lifeNights`) */
+export const WEEK_ONE_NIGHTS = 7;
+/** ...which takes a life that started at day 1 to day 8 */
+export const WEEK_ONE_DAY = WEEK_ONE_NIGHTS + 1;
 
 /**
  * Which game colour a title is drawn in (client/ui/titleStyle.ts): `bonus` the item card's green, `effect` its
@@ -73,7 +76,7 @@ export const TITLES: Array<TitleDef> = [
 		name: "Week One",
 		howTo: "Stay alive for 7 days in one life.",
 		progressLabel: "Days survived in this life",
-		goal: WEEK_ONE_DAY - 1,
+		goal: WEEK_ONE_NIGHTS,
 		tone: "value",
 	},
 ];
