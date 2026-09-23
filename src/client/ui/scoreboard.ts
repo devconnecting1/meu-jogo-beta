@@ -312,14 +312,36 @@ export class Scoreboard {
 		const z = win.frame.ZIndex + 1;
 		const barY = win.contentY;
 		// the caption row: how to sort on this device -- a click on a header (mouse), or the sort bar (pad, thumb)
-		this.hint = makeLabel(win.frame, "Hint", tr("Click a column to sort"), PAD + 2, barY, 220, BAR_H, TEXT.xs, THEME.mutedForeground, {
-			align: "left",
-			zIndex: z,
-		});
-		this.sortCaption = makeLabel(win.frame, "SortBy", tr("Sort by"), PAD + 2, barY, PANEL_W - PAD * 3 - SORT_W, BAR_H, TEXT.sm, THEME.mutedForeground, {
-			align: "left",
-			zIndex: z,
-		});
+		this.hint = makeLabel(
+			win.frame,
+			"Hint",
+			tr("Click a column to sort"),
+			PAD + 2,
+			barY,
+			220,
+			BAR_H,
+			TEXT.xs,
+			THEME.mutedForeground,
+			{
+				align: "left",
+				zIndex: z,
+			},
+		);
+		this.sortCaption = makeLabel(
+			win.frame,
+			"SortBy",
+			tr("Sort by"),
+			PAD + 2,
+			barY,
+			PANEL_W - PAD * 3 - SORT_W,
+			BAR_H,
+			TEXT.sm,
+			THEME.mutedForeground,
+			{
+				align: "left",
+				zIndex: z,
+			},
+		);
 		const tableY = barY + BAR_H + 6;
 		this.table = Table<ScoreEntry>(win.frame, "Table", {
 			x: PAD,

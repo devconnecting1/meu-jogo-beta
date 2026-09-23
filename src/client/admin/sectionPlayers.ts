@@ -20,6 +20,7 @@ import {
 	makeScrollList,
 	setButtonEnabled,
 } from "../ui/widgets";
+import * as Kit from "../ui/window";
 import { Switch, TextInput, attachTooltip } from "./controls";
 import {
 	CONTENT_H,
@@ -169,7 +170,7 @@ export function openBanDialog(p: PanelCtx, target: string, label: string): void 
 		y,
 		w: innerW,
 		label: "Do not ban alt accounts",
-		description: "By default Roblox also tries to ban the user's alternate accounts",
+		description: "Otherwise Roblox also bans their alt accounts",
 		value: excludeAlts,
 		onChange: v => {
 			excludeAlts = v;
@@ -253,8 +254,8 @@ export const PLAYER_COLUMNS: Array<TableColumn> = [
 	{ key: "level", header: "Lv", width: 36, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "day", header: "Day", width: 44, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "hp", header: "HP", width: 64, numeric: true, sortable: true },
-	{ key: "ping", header: "Ping", width: 50, numeric: true, sortable: true, descendingFirst: true },
-	{ key: "status", header: "Status", width: 62, sortable: true },
+	{ key: "ping", header: "Ping", width: 52, numeric: true, sortable: true, descendingFirst: true },
+	{ key: "status", header: "Status", width: 66, sortable: true },
 ];
 
 /** the rows the name filter lets through (case-insensitive, on the name, the display name or the UserId) */
@@ -305,6 +306,9 @@ function playerSortValue(row: PlayerRow, column: string): number | string {
 
 /** remembered across visits to the section (like the backpack's tab) */
 const playersMemory: { filter: string; sort: TableSort } = { filter: "", sort: { column: "name", descending: false } };
+
+/** the Follow live row (a kit switch row): its label cell and the switch's value cell */
+const FOLLOW_W = 240;
 
 export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 	const tabsH = 36;
@@ -377,6 +381,8 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 			headerH: 24,
 			textSize: TEXT.sm,
 			rowFace: SURFACE.well,
+			// a tight table (six columns in the panel's 442): the headers still read at 9 px on a 435 px-tall screen
+			cellPad: 5,
 			selectable: true,
 			keyOf: r => tostring(r.userId),
 			cell: playerCell,
@@ -397,19 +403,33 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 		const detailY = tableY + tableH + 6;
 		const pad = space(1);
 		const lineW = CONTENT_W - pad * 2;
-		const nameLine = makeLabel(body, "SelName", "", pad, detailY, CONTENT_W - 240, 20, TEXT.sm, THEME.foreground, {
-			font: "label",
-			align: "left",
-		});
+		// the name beside the Follow switch row (the kit's, SETTING_ROW_H tall), the muted lines under both
+		const nameW = CONTENT_W - FOLLOW_W - space(2) - pad;
+		const nameLine = makeLabel(
+			body,
+			"SelName",
+			"",
+			pad,
+			detailY + (Kit.SETTING_ROW_H - 20) / 2,
+			nameW,
+			20,
+			TEXT.sm,
+			THEME.foreground,
+			{
+				font: "label",
+				align: "left",
+			},
+		);
 		const muted = (name: string, y: number): TextLabel =>
 			makeLabel(body, name, "", pad, y, lineW, 16, TEXT.xs, THEME.mutedForeground, { align: "left" });
-		const idsLine = muted("SelIds", detailY + 24);
-		const saveLine = muted("SelSave", detailY + 42);
-		const reportLine = muted("SelReport", detailY + 60);
+		const linesY = detailY + Kit.SETTING_ROW_H + 4;
+		const idsLine = muted("SelIds", linesY);
+		const saveLine = muted("SelSave", linesY + 18);
+		const reportLine = muted("SelReport", linesY + 36);
 		const follow = Switch(body, "Follow", {
-			x: CONTENT_W - 230,
-			y: detailY - 2,
-			w: 230,
+			x: CONTENT_W - FOLLOW_W,
+			y: detailY,
+			w: FOLLOW_W,
 			label: "Follow live",
 			value: false,
 			onChange: on => {
@@ -485,7 +505,7 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 				return;
 			}
 			const tags = `${row.isAdmin ? " · ADMIN" : ""}${row.userId === p.selfUserId ? " · you" : ""}`;
-			nameLine.Text = fitText(`${rowLabel(row)}${tags}`, 30);
+			nameLine.Text = fitText(`${rowLabel(row)}${tags}`, 23);
 			idsLine.Text = `UserId ${row.userId} · account ${fmtInt(row.accountAge)} days · in server ${durationText(row.sessionAge)}`;
 			saveLine.Text =
 				`Day ${row.day} (best ${row.bestDay}) · Lv ${row.level} · ${row.skillPoint} skill pts · ` +

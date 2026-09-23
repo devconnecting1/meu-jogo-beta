@@ -16,7 +16,8 @@ import {
 } from "shared/admin/ops";
 import type { PlayerRow } from "shared/admin/protocol";
 import { TEXT, THEME, space } from "../ui/theme";
-import { FormRow, NumberField, NumberFieldHandle, confirmAction } from "../ui/numberField";
+import { NumberField, NumberFieldHandle, NumberRow, confirmAction } from "../ui/numberField";
+import * as Kit from "../ui/window";
 import {
 	Button,
 	Tabs,
@@ -37,9 +38,10 @@ import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region, rowLabel } from 
  * game at once; the next progress report can not undo it (see shared/admin/protocol.ts).
  *
  * Forms in the kit's pattern (client/ui/numberField.ts, DESIGN_RULES UI-12): each number is a NumberField with the
- * SERVER's own range (shared/admin/ops.ts statRange / itemMax); a number out of range, or not a number, says so under
- * its field and nothing is sent -- the server would clamp it anyway (readOp), and it stays the authority. Every
- * destructive edit (clear a group, refund the skills, reset the save) asks first (`confirmAction`).
+ * SERVER's own range (shared/admin/ops.ts statRange / itemMax); a number out of range, or not a number, says so on
+ * its row (the Stats form is the kit's form rows, Settings' own) and nothing is sent -- the server would clamp it
+ * anyway (readOp), and it stays the authority. Every destructive edit (clear a group, refund the skills, reset the
+ * save) asks first (`confirmAction`); every on / off is the kit's Switch.
  */
 
 const STAT_ROWS: Array<{ field: StatField; label: string }> = [
@@ -132,33 +134,23 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 
 	const buildStats = (s: PlayerSaveData): void => {
 		const fields = new Map<StatField, NumberFieldHandle>();
-		const rowH = 50;
+		// the Settings form's own rows (window.ts SettingsList + SettingRow with a description): label and "now · range"
+		// in the label cell, the field in the value cell; a wrong number says so on its row's description line
+		const listH = Kit.settingsListHeight(STAT_ROWS.map(() => Kit.SETTING_DESC_ROW_H));
+		const list = Kit.SettingsList(body, "Stats", 0, 0, CONTENT_W, listH);
 		STAT_ROWS.forEach((r, i) => {
 			const [lo, hi] = statRange(r.field);
-			const row = FormRow(body, `${r.field}Row`, {
-				x: 0,
-				y: i * rowH,
-				w: CONTENT_W,
-				h: rowH,
-				label: r.label,
-				description: `now ${fmtInt(statValue(s, r.field))} · ${fmtInt(lo)}–${fmtInt(hi)}`,
-				controlW: 160,
-			});
-			fields.set(
-				r.field,
-				NumberField(row.control, `${r.field}Input`, {
-					x: 0,
-					y: 0,
-					w: 160,
-					h: 30,
-					value: statValue(s, r.field),
-					min: lo,
-					max: hi,
-					zIndex: row.control.ZIndex + 1,
-				}),
+			const row = NumberRow(
+				list,
+				`${r.field}Row`,
+				i,
+				r.label,
+				`now ${fmtInt(statValue(s, r.field))} · ${fmtInt(lo)}–${fmtInt(hi)}`,
+				{ value: statValue(s, r.field), min: lo, max: hi },
 			);
+			fields.set(r.field, row.field);
 		});
-		const rulesY = STAT_ROWS.size() * rowH + 2;
+		const rulesY = listH + space(1);
 		makeLabel(
 			body,
 			"Rules",
@@ -172,7 +164,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 			{ align: "left", valign: "top" },
 		);
 		const bw = (CONTENT_W - space(2)) / 2;
-		const buttonsY = rulesY + 36;
+		const buttonsY = rulesY + 34;
 		Button(body, "Apply", "Apply changes", {
 			x: 0,
 			y: buttonsY,
@@ -180,7 +172,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 			h: 40,
 			variant: "default",
 			onClick: () => {
-				// every field is checked (and says what is wrong under itself) before anything is sent
+				// every field is checked (and a wrong one says what is wrong on its row) before anything is sent
 				const ops: Array<AdminOp> = [];
 				let wrong = 0;
 				for (const r of STAT_ROWS) {
@@ -218,7 +210,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 			"Note",
 			"Applied to the server's copy and to the player's running game at once.",
 			0,
-			buttonsY + 46,
+			buttonsY + 44,
 			CONTENT_W,
 			20,
 			TEXT.xs,
@@ -298,10 +290,10 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 				max: itemMax(g),
 				errorLine: false,
 				zIndex: 3,
-				onChange: () => {
-					if (input.error() !== undefined) return;
-					haveLabel.Text = haveText;
-					setLabelColor(haveLabel, THEME.mutedForeground);
+				// red on the row's dark well (4,9:1), where the count was
+				onError: message => {
+					haveLabel.Text = message ?? haveText;
+					setLabelColor(haveLabel, message !== undefined ? THEME.destructive : THEME.mutedForeground);
 				},
 			});
 			Button(r, "Set", "Set", {
@@ -313,12 +305,9 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 				variant: "secondary",
 				zIndex: 3,
 				onClick: () => {
+					// a wrong number shows on the row (onError above) and nothing is sent
 					const v = input.validate();
-					if (v === undefined) {
-						haveLabel.Text = input.error() ?? "";
-						setLabelColor(haveLabel, THEME.destructive);
-						return;
-					}
+					if (v === undefined) return;
 					edit([{ op: "item", group: g, index, count: v }], `${name}: ${v}`);
 				},
 			});

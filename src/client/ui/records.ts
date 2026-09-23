@@ -34,7 +34,7 @@ import { TITLES } from "shared/data/titles";
 import { langGet } from "shared/data/lang";
 import { TEXT, THEME, TRANSPARENCY } from "./theme";
 import { Table, TableCell, TABLE_GAP, TABLE_PAD } from "./table";
-import { DESIGN_H, DESIGN_W, autoFocus, cardHeaderHeight, fmtInt, makeScreen } from "./widgets";
+import { autoFocus, cardHeaderHeight, centredRect, fmtInt, makeScreen } from "./widgets";
 import * as Kit from "./window";
 
 export type RecordGroup = "allTime" | "thisLife";
@@ -82,11 +82,20 @@ export function showRecords(ctx: GameContext): () => void {
 		["allTime", "All time"],
 		["thisLife", "This life"],
 	];
-	// the lobby is not over a running world: the menus' own scrim (UI-06 asks for the lighter one only over a run)
+	// the height follows the rows: a section never stands empty under its list (UI-07)
+	let contentH = 0;
+	for (const [g] of groups) contentH += Kit.sectionHeight(tableHeight(rows.filter(r => r.group === g).size()));
+	contentH += SECTION_GAP * (groups.size() - 1);
+	// where a UI-07 window's content starts (its header band, the big title): the kit's own number
+	const winH = cardHeaderHeight(TEXT.xl3) + contentH + PAD;
+	const rect = centredRect(WIN_W, winH);
+	// over the lobby's menu, which stays open behind it: the menus' own scrim dims that page (as the popup it replaced
+	// did); centred on the FULL screen like every UI-07 window (makeScreen's content rect, test:screens)
 	const { root, body } = makeScreen(ctx.uiLayer, "Records", {
 		color: THEME.background,
 		transparency: TRANSPARENCY.overlay,
 		zIndex: 300,
+		content: rect,
 	});
 	let closed = false;
 	const close = (): void => {
@@ -94,15 +103,9 @@ export function showRecords(ctx: GameContext): () => void {
 		closed = true;
 		root.Destroy();
 	};
-	// the height follows the rows: a section never stands empty under its list (UI-07)
-	let contentH = 0;
-	for (const [g] of groups) contentH += Kit.sectionHeight(tableHeight(rows.filter(r => r.group === g).size()));
-	contentH += SECTION_GAP * (groups.size() - 1);
-	// where a UI-07 window's content starts (its header band, the big title): the kit's own number
-	const winH = cardHeaderHeight(TEXT.xl3) + contentH + PAD;
 	const win = Kit.Window(body, "Window", {
-		x: (DESIGN_W - WIN_W) / 2,
-		y: (DESIGN_H - winH) / 2,
+		x: rect.x,
+		y: rect.y,
 		w: WIN_W,
 		h: winH,
 		title: tr("Records"),

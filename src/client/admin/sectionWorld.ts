@@ -2,6 +2,7 @@ import { TEXT, THEME, space } from "../ui/theme";
 import { Button, Slider, SliderHandle, Tabs, clearChildren, makeLabel } from "../ui/widgets";
 import { Switch, SwitchHandle } from "./controls";
 import { confirmAction } from "../ui/numberField";
+import * as Kit from "../ui/window";
 import { logLocal } from "./net";
 import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTypes";
 import { ActionResult, BUILDING_KINDS, OverlayKind } from "./world";
@@ -100,7 +101,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 			y: 148,
 			w: CONTENT_W,
 			label: "Rain",
-			description: "Darker, and every zombie hunts (re-rolled at the next day)",
+			description: "Darker; every zombie hunts till next day",
 			value: p.world.ready() && p.world.clock().raining,
 			onChange: v => {
 				if (!needRun(p)) {
@@ -212,7 +213,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 		toggle(
 			102,
 			"Infinite ammo",
-			"Magazines never empty; spent ammo / fuel is given back",
+			"Mags never empty; ammo and fuel come back",
 			() => w.infiniteAmmo(),
 			v => w.setInfiniteAmmo(v),
 			"infiniteAmmo",
@@ -228,7 +229,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 		toggle(
 			206,
 			"Ctrl+click teleport",
-			"Ctrl + left click on the map teleports the survivor there",
+			"Ctrl + left click teleports the survivor",
 			() => worldPrefs.ctrlTeleport,
 			v => {
 				worldPrefs.ctrlTeleport = v;
@@ -335,7 +336,7 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 		y: 0,
 		w: CONTENT_W,
 		label: "Free camera",
-		description: "WASD / arrows move · Shift = faster · wheel zooms · the survivor is frozen and invulnerable",
+		description: "WASD / arrows · Shift faster · wheel zooms",
 		value: w.freeCam(),
 		onChange: v => {
 			if (v && !needRun(p)) {
@@ -346,13 +347,25 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 			logLocal("freeCam", v ? "on" : "off");
 		},
 	});
-	const zoomLabel = makeLabel(content, "ZoomLabel", "", 0, 60, CONTENT_W, 20, TEXT.sm, THEME.foreground, {
+	makeLabel(
+		content,
+		"FreeCamNote",
+		"While it is on, the survivor is frozen and cannot be hurt.",
+		0,
+		Kit.SETTING_DESC_ROW_H + 4,
+		CONTENT_W,
+		16,
+		TEXT.xs,
+		THEME.mutedForeground,
+		{ align: "left" },
+	);
+	const zoomLabel = makeLabel(content, "ZoomLabel", "", 0, 72, CONTENT_W, 20, TEXT.sm, THEME.foreground, {
 		font: "label",
 		align: "left",
 	});
 	zoomSlider = Slider(content, "Zoom", {
 		x: 0,
-		y: 84,
+		y: 96,
 		w: CONTENT_W,
 		h: 26,
 		step: 0.1 / 1.5,
@@ -367,7 +380,7 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 	});
 	Button(content, "Back", "Back to the survivor", {
 		x: 0,
-		y: 124,
+		y: 136,
 		w: 220,
 		h: 36,
 		size: "sm",
@@ -382,7 +395,7 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 		"Note",
 		"The camera only changes your own view. Watching another player's game is not possible yet: every client simulates its own world (see Players → Follow live).",
 		0,
-		176,
+		188,
 		CONTENT_W,
 		60,
 		TEXT.xs,
@@ -404,35 +417,49 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 
 // ---------------------------------------------------------------- debug
 
-const DEBUG_SWITCHES: Array<{ kind: OverlayKind; label: string; description: string }> = [
+const DEBUG_SWITCHES: Array<{ kind: OverlayKind; label: string; description: string; legend: string }> = [
 	{
 		kind: "solids",
 		label: "Solid hitboxes",
-		description: "Yellow = blocks bodies · grey = passable (roofs, open doors)",
+		description: "What stops a body",
+		legend: "Yellow = blocks bodies · grey = passable (roofs, open doors)",
 	},
 	{
 		kind: "actors",
 		label: "Actor hitboxes",
-		description: "Green = survivor · yellow / red = zombie wandering / chasing · boss · item pickup",
+		description: "Survivor, zombies, bosses and pickups",
+		legend: "Green = survivor · yellow / red = zombie wandering / chasing · boss · item pickup",
 	},
 	{
 		kind: "flow",
 		label: "Pathfinding flow field",
-		description: "Blue arrows lead to the survivor · red = unreachable · green ring = target",
+		description: "The field the zombies follow",
+		legend: "Blue arrows lead to the survivor · red = unreachable · green ring = target",
 	},
 	{
 		kind: "lights",
 		label: "Light sources",
-		description: "Survivor light and lamps / fires (grey ring = switched off)",
+		description: "Your light, lamps and fires",
+		legend: "Grey ring = switched off",
 	},
-	{ kind: "stats", label: "Stats card", description: "FPS, zombies, solids in view, sprites, GameGui instances" },
+	{
+		kind: "stats",
+		label: "Stats card",
+		description: "The frame's numbers in a card",
+		legend: "FPS, zombies, solids in view, sprites, GameGui instances",
+	},
 ];
+
+/** one debug entry: the switch row (the kit's form row) and its legend under it, up to two lines */
+const DEBUG_LEGEND_H = 28;
+const DEBUG_STRIDE = Kit.SETTING_DESC_ROW_H + 2 + DEBUG_LEGEND_H + 4;
 
 export function buildDebug(p: PanelCtx, content: Frame): SectionHandle {
 	DEBUG_SWITCHES.forEach((d, i) => {
+		const y = i * DEBUG_STRIDE;
 		Switch(content, `Debug${i}`, {
 			x: 0,
-			y: i * 56,
+			y,
 			w: CONTENT_W,
 			label: d.label,
 			description: d.description,
@@ -443,13 +470,25 @@ export function buildDebug(p: PanelCtx, content: Frame): SectionHandle {
 				logLocal("debug", `${d.label} ${v ? "on" : "off"}`);
 			},
 		});
+		makeLabel(
+			content,
+			`Debug${i}Legend`,
+			d.legend,
+			0,
+			y + Kit.SETTING_DESC_ROW_H + 2,
+			CONTENT_W,
+			DEBUG_LEGEND_H,
+			TEXT.xs,
+			THEME.mutedForeground,
+			{ align: "left", valign: "top" },
+		);
 	});
 	makeLabel(
 		content,
 		"Note",
 		"Overlays are drawn above the night so they stay readable. They only exist on your screen.",
 		0,
-		DEBUG_SWITCHES.size() * 56 + 8,
+		DEBUG_SWITCHES.size() * DEBUG_STRIDE,
 		CONTENT_W,
 		34,
 		TEXT.xs,

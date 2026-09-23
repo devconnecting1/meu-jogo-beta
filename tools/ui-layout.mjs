@@ -160,7 +160,9 @@ export function textPx(label, rect) {
 	const c = label.FindFirstChildOfClass?.("UITextSizeConstraint");
 	if (!label.TextScaled) return label.TextSize ?? 14;
 	const bold = /Bold|SemiBold|ExtraBold/.test(label.FontFace?.Weight?.Name ?? "");
-	const mono = String(label.FontFace?.Family ?? "").toLowerCase().includes("mono");
+	const mono = String(label.FontFace?.Family ?? "")
+		.toLowerCase()
+		.includes("mono");
 	const lines = text.split("\n");
 	const longest = Math.max(...lines.map(l => Array.from(l).length), 1);
 	const perChar = mono ? 0.62 : bold ? 0.57 : 0.52;
@@ -187,7 +189,8 @@ export function paintList(root) {
 		const r = rectOf(n);
 		const t = n.BackgroundTransparency ?? 1;
 		const corner = n.FindFirstChildOfClass("UICorner");
-		const radius = corner === undefined ? 0 : corner.CornerRadius.Scale * Math.min(r.w, r.h) + corner.CornerRadius.Offset;
+		const radius =
+			corner === undefined ? 0 : corner.CornerRadius.Scale * Math.min(r.w, r.h) + corner.CornerRadius.Offset;
 		if (t < 1 && n.BackgroundColor3 !== undefined) {
 			out.push({ kind: "rect", ...r, color: rgb(n.BackgroundColor3), alpha: 1 - t, radius, clip });
 		}
@@ -233,7 +236,9 @@ export function paintList(root) {
 					alpha,
 					px: textPx(n, box),
 					bold: /Bold|SemiBold|ExtraBold|Heavy/.test(weight),
-					mono: String(n.FontFace?.Family ?? "").toLowerCase().includes("mono"),
+					mono: String(n.FontFace?.Family ?? "")
+						.toLowerCase()
+						.includes("mono"),
 					alignX: n.TextXAlignment?.Name ?? "Center",
 					alignY: n.TextYAlignment?.Name ?? "Center",
 					clip,
@@ -243,7 +248,15 @@ export function paintList(root) {
 		let inner = clip;
 		if (n.ClipsDescendants || n.ClassName === "ScrollingFrame") {
 			const c = [r.x, r.y, r.x + r.w, r.y + r.h];
-			inner = clip === undefined ? c : [Math.max(c[0], clip[0]), Math.max(c[1], clip[1]), Math.min(c[2], clip[2]), Math.min(c[3], clip[3])];
+			inner =
+				clip === undefined
+					? c
+					: [
+							Math.max(c[0], clip[0]),
+							Math.max(c[1], clip[1]),
+							Math.min(c[2], clip[2]),
+							Math.min(c[3], clip[3]),
+						];
 		}
 		const kids = n
 			.GetChildren()

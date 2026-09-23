@@ -1,38 +1,38 @@
 /*
- * The kit's FORM pieces (docs/DESIGN_RULES.md UI-12): a number field that says what is wrong right under itself, the
- * form row that holds it, and the confirmation a destructive action asks for. Supabase's form pattern
+ * The kit's FORM pieces (docs/DESIGN_RULES.md UI-12): a number field that says what is wrong where it is, the form
+ * row that holds it, and the confirmation a destructive action asks for. Supabase's form pattern
  * (design-system/docs/ui-patterns/forms) in the window vocabulary of UI-07:
  *
- *   - a FORM ROW: the label (Bold) and a one-line description (muted) at the left, the control at the right;
- *   - errors INLINE, on the field that has them: the well's edge turns red and one line under it says what is wrong
- *     and what would be right ("At most 200"). Nothing is sent while a field is wrong -- `validate()` answers
- *     undefined and the caller does not send. A toast is only for something that happened (an edit applied) or that
- *     blocks nothing;
+ *   - a FORM ROW: the kit's own (window.ts SettingRow with a description, the one Settings uses): the label (Bold)
+ *     over a one-line description in the label cell, the control at SETTING_CONTROL_X of the value cell;
+ *   - errors INLINE, on the field that has them: the well's edge turns red and the row says what is wrong and what
+ *     would be right ("At most 200") -- in a form row, on its description line (light, where the description was
+ *     grey: red text does not read on the grey cells, 2,6:1), elsewhere on a line of its own under the field (red on
+ *     the dark panel). Nothing is sent while a field is wrong -- `validate()` answers undefined and the caller does
+ *     not send. A toast is only for something that happened (an edit applied) or that blocks nothing;
  *   - a DESTRUCTIVE action (reset, kick, clear, kill all) asks first, in the kit's dialog, naming what it will do,
  *     with the red plate on the button that does it.
  *
  * The field is the admin panel's Input (client/admin/controls.ts, a dark well with the text in it) with a range and a
  * voice: the SERVER stays the authority (shared/admin/ops.ts clamps and refuses whatever arrives), and this only keeps
  * a wrong number from being sent at all.
- *
- * TODO(kit): the Settings agent is adding a description variant of `SettingRow` and a `Switch` to window.ts /
- * widgets.ts. Once that lands, `FormRow` should become that SettingRow variant (label + description cell | control
- * cell) and the admin's own Switch (client/admin/controls.ts) the kit's; the names and the geometry here were chosen
- * so the swap is a rename.
  */
 import { SURFACE, TEXT, THEME, roleFont, space } from "./theme";
 import {
 	Button,
 	Dialog,
 	DialogHandle,
+	ScrollList,
+	designOf,
 	fmtInt,
-	makeFrame,
 	makeLabel,
 	makeSurface,
 	scaleText,
+	setLabelColor,
 	setSurface,
 	setVisible,
 } from "./widgets";
+import { SETTING_CONTROL_X, SettingRow, SettingRowHandle } from "./window";
 
 // ---------------------------------------------------------------- validation (pure)
 
@@ -81,6 +81,8 @@ export interface NumberFieldProps {
 	onSubmit?: (value: number) => void;
 	/** the text changed (valid or not) */
 	onChange?: () => void;
+	/** the error shown changed (`undefined`: none now): for a caller that says it somewhere else (a form row) */
+	onError?: (message: string | undefined) => void;
 	zIndex?: number;
 }
 
@@ -176,7 +178,9 @@ export function NumberField(parent: Instance, name: string, props: NumberFieldPr
 		setSurface(frame, "well", { fill: SURFACE.well, border });
 	};
 	const show = (message: string | undefined): void => {
+		const changed = message !== shown;
 		shown = message;
+		if (changed) props.onError?.(message);
 		if (errorLabel !== undefined) {
 			if (errorLabel.Text !== (message ?? "")) errorLabel.Text = message ?? "";
 			setVisible(errorLabel, message !== undefined);
@@ -233,74 +237,66 @@ export function NumberField(parent: Instance, name: string, props: NumberFieldPr
 	};
 }
 
-// ---------------------------------------------------------------- FormRow
+// ---------------------------------------------------------------- NumberRow
 
-export interface FormRowProps {
-	x: number;
-	y: number;
-	w: number;
-	/** the row's height (default 52: a label line, a description line and the field's error line) */
-	h?: number;
-	label: string;
-	/** one muted line under the label */
-	description?: string;
-	/** the control column's width at the right (design units) */
-	controlW: number;
-	zIndex?: number;
+export interface NumberRowProps {
+	value?: number;
+	min: number;
+	max: number;
+	/** the label cell's width (default 260: a label and a description such as "now 1,234 · 0–99,999") */
+	labelW?: number;
+	/** the field's width in the value cell (default 150) */
+	fieldW?: number;
+	onSubmit?: (value: number) => void;
+	onChange?: () => void;
 }
 
-export interface FormRowHandle {
-	frame: Frame;
-	label: TextLabel;
-	description?: TextLabel;
-	/** the control's design space: controlW x h, at the right of the row */
-	control: Frame;
+export interface NumberRowHandle {
+	row: SettingRowHandle;
+	field: NumberFieldHandle;
 }
+
+/** the field's height in a form row: the kit's controls (Switch, the action button) are 30 tall there */
+const ROW_FIELD_H = 30;
 
 /**
- * One row of a form: label (Bold, light) and a one-line description (muted) at the left, the control at the right.
- * On the panel's body (`SURFACE.panel` / `SURFACE.window`), where the muted voice is measured (test:contrast).
- * TODO(kit): becomes the description variant of window.ts SettingRow once the Settings work lands.
+ * A FORM ROW whose control is a NumberField: the kit's description row (window.ts SettingRow, the one Settings
+ * uses) -- label and description in the label cell, the field at SETTING_CONTROL_X of the value cell, vertically
+ * centred, as SettingAction places its button. A wrong number turns the field's edge red and puts what is wrong
+ * on the row's description line, in the light voice (THEME.foreground on the label cell); the description comes
+ * back the moment the number is right.
  */
-export function FormRow(parent: Instance, name: string, props: FormRowProps): FormRowHandle {
-	const h = props.h ?? 52;
-	const z = props.zIndex ?? 2;
-	const row = makeFrame(parent, name, props.x, props.y, props.w, h, THEME.background, {
-		transparency: 1,
-		zIndex: z,
+export function NumberRow(
+	list: ScrollList,
+	name: string,
+	order: number,
+	label: string,
+	description: string,
+	props: NumberRowProps,
+): NumberRowHandle {
+	const row = SettingRow(list, name, order, label, { labelW: props.labelW ?? 260, description });
+	const [, h] = designOf(row.value);
+	const line = row.description;
+	const field = NumberField(row.value, "Field", {
+		x: SETTING_CONTROL_X,
+		y: (h - ROW_FIELD_H) / 2,
+		w: props.fieldW ?? 150,
+		h: ROW_FIELD_H,
+		value: props.value,
+		min: props.min,
+		max: props.max,
+		errorLine: false,
+		zIndex: row.value.ZIndex + 1,
+		onSubmit: props.onSubmit,
+		onChange: props.onChange,
+		onError: (message: string | undefined): void => {
+			if (line === undefined) return;
+			const text = message ?? description;
+			if (line.Text !== text) line.Text = text;
+			setLabelColor(line, message !== undefined ? THEME.foreground : SURFACE.cellCaption);
+		},
 	});
-	const textW = props.w - props.controlW - space(3);
-	const hasDesc = props.description !== undefined && props.description !== "";
-	const label = makeLabel(row, "Label", props.label, 0, 0, textW, hasDesc ? 20 : 32, TEXT.sm, THEME.foreground, {
-		font: "label",
-		align: "left",
-		zIndex: z + 1,
-	});
-	let description: TextLabel | undefined;
-	if (hasDesc) {
-		description = makeLabel(
-			row,
-			"Description",
-			props.description!,
-			0,
-			20,
-			textW,
-			16,
-			TEXT.xs,
-			THEME.mutedForeground,
-			{
-				align: "left",
-				zIndex: z + 1,
-			},
-		);
-		description.TextWrapped = false;
-		description.TextTruncate = Enum.TextTruncate.AtEnd;
-	}
-	const control = makeFrame(row, "Control", props.w - props.controlW, 0, props.controlW, h, THEME.background, {
-		transparency: 1,
-		zIndex: z + 1,
-	});
-	return { frame: row, label, description, control };
+	return { row, field };
 }
 
 // ---------------------------------------------------------------- confirmation
