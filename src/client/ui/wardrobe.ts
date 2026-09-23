@@ -584,7 +584,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 				zIndex: z,
 			},
 		);
-		const worn = Keycap(row.content, "Worn", tr("Equipped").upper(), {
+		const worn = Keycap(row.content, "Worn", tr("EQUIPPED"), {
 			x: TITLE_ROW_W - space(3),
 			cy: 19,
 			anchorX: 1,
@@ -618,7 +618,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		const owned = id < 0 || ownsTitle(save, id);
 		const worn = id === shown;
 		if (details.title !== undefined) details.title.Text = id < 0 ? tr("None") : tr(TITLES[id].name);
-		Kit.setValueKey(slotKey, tr("Title").upper());
+		Kit.setValueKey(slotKey, tr("TITLE"));
 		statusRow.label.Text = tr("Status");
 		Kit.setValueKey(statusKey, tr(!owned ? "Locked" : worn ? "Equipped" : "Owned"));
 		if (id < 0) {
@@ -687,7 +687,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		const locked = state === "locked";
 		const affordable = save.money >= c.price;
 		if (details.title !== undefined) details.title.Text = tr(c.name);
-		Kit.setValueKey(slotKey, tr(page.slot === EquipSlot.Pet ? "Pet" : "Outfit").upper());
+		Kit.setValueKey(slotKey, tr(page.slot === EquipSlot.Pet ? "PET" : "OUTFIT"));
 		// owned through a pack, not bought: it lives in the run's inventory, which a New game starts over
 		const fromPack = !locked && !ownsCostume(save, c.id);
 		statusRow.label.Text = tr(locked ? "Price" : "Status");

@@ -30,13 +30,15 @@
  *                       the server's kill credit, Never die stops at ANY death; nothing of content outside Núcleo 1
  *                       is on view (CON-03); Records shows the save's real values.
  *   6. STRINGS          every literal key the code asks lang.ts for is in LANG_TABLE; every text any of these screens
- *                       shows is a LANG_TABLE entry, made of entries and numbers, or a proper noun; and the CSV that
- *                       `npm run locale` writes is the committed one.
+ *                       shows is a LANG_TABLE entry, made of entries and numbers, or a proper noun; no label is an
+ *                       entry upper-cased in code (LOC-UPPER: translation is case-sensitive, capitals are their own
+ *                       entries); and the CSV that `npm run locale` writes is the committed one, with every multi-line
+ *                       entry as the screen shows it, real line breaks and no "#" (LOC-NL).
  *
  * KNOWN: bugs found by this suite that are not fixed here (they need a product decision or live in another agent's
  * files). Each is printed as "CONHECIDO" with where it lives; the suite fails if one of them silently changes, so the
- * list stays true: fixing one means removing it from KNOWN. LOC-UPPER (labels the code upper-cases) is a list that
- * moves with every screen, so it is only printed.
+ * list stays true: fixing one means removing it from KNOWN. (Empty since the settings / menus fixes: NAV-B, ACH-1..4,
+ * LOC-UPPER and LOC-NL are real checks now.)
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -1248,18 +1250,37 @@ function textsIn(root, where) {
 		found.literal.length === 0,
 		found.literal.join("; "),
 	);
-	// informational (the list moves with every screen, so it is not pinned): see the report
-	if (found.upper.length > 0) {
-		known.push({ id: "LOC-UPPER" });
-		console.log(
-			`  CONHECIDO LOC-UPPER: ${found.upper.length} rotulos em maiusculas (.upper() de uma entrada) que a traducao do Roblox, sensivel a caixa, nao casa: ${found.upper.join("; ")}`,
-		);
-	}
+	// LOC-UPPER: a label drawn in capitals is its own entry ("START"), never an entry upper-cased in code -- the
+	// platform's translation is case-sensitive, and "Start" in the table does not match "START" on screen
+	check(
+		"LOC-UPPER: nenhum rotulo em maiusculas e .upper() de uma entrada (cada um e a sua propria entrada na LANG_TABLE)",
+		found.upper.length === 0,
+		found.upper.join("; ") || "nenhum",
+	);
+	const uppers = [];
+	const walkUpper = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkUpper(p);
+			else if (
+				p.endsWith(".ts") &&
+				!p.includes(join("client", "admin")) &&
+				/\.upper\(\)/.test(readFileSync(p, "utf8"))
+			)
+				uppers.push(p.slice(SRC.length + 1));
+		}
+	};
+	walkUpper(SRC);
+	check(
+		"...e nenhum arquivo do jogo (fora do admin, UI-03) chama .upper() num texto",
+		uppers.length === 0,
+		uppers.join(", ") || "nenhum",
+	);
 	const notInTable = [...asked].filter(k => !LANG.has(k));
 	check(
 		"toda chave que as telas pediram a lang.ts em tempo de execucao esta na LANG_TABLE (nenhuma cai fora do CSV)",
 		notInTable.length === 0,
-		notInTable.map(k => `"${k.slice(0, 50)}"`).join("; ") || `${asked.size} chaves`,
+		notInTable.map(k => `"${k.slice(0, 50)}"`).join("; ") || `${[...asked].length} chaves`,
 	);
 }
 {
@@ -1273,16 +1294,53 @@ function textsIn(root, where) {
 		execFileSync(process.execPath, [join(tmp, "tools/gen-locale.mjs")], { stdio: "pipe" });
 		const fresh = readFileSync(join(tmp, "design/locale/ProjectZ.csv"), "utf8");
 		const committed = readFileSync(join(ROOT, "design/locale/ProjectZ.csv"), "utf8");
-		const rows = fresh.trimEnd().split("\n").length - 1;
+		// RFC 4180 records: a quoted field may hold commas, doubled quotes and line breaks (LOC-NL)
+		const records = [];
+		{
+			let rec = [];
+			let field = "";
+			let quoted = false;
+			for (let i = 0; i < fresh.length; i++) {
+				const c = fresh[i];
+				if (quoted) {
+					if (c === '"' && fresh[i + 1] === '"') {
+						field += '"';
+						i++;
+					} else if (c === '"') quoted = false;
+					else field += c;
+				} else if (c === '"') quoted = true;
+				else if (c === ",") {
+					rec.push(field);
+					field = "";
+				} else if (c === "\n") {
+					rec.push(field);
+					records.push(rec);
+					rec = [];
+					field = "";
+				} else field += c;
+			}
+		}
+		const [header, ...body] = records;
+		const rows = body.length;
 		check(
 			"o CSV commitado (design/locale/ProjectZ.csv) e o que `npm run locale` gera hoje",
 			fresh === committed,
 			fresh === committed ? `${rows} textos` : "rode `npm run locale` e commite o CSV",
 		);
 		check(
-			"...e o gerador le TODA entrada da LANG_TABLE (nenhuma escapa do parser dele)",
-			rows === LANG_COUNT,
+			"...e o gerador le TODA entrada da LANG_TABLE (nenhuma escapa do parser dele), nas colunas Key, Context, Example, Source",
+			rows === LANG_COUNT && header.join() === "Key,Context,Example,Source" && body.every(r => r.length === 4),
 			`${rows} no CSV, ${LANG_COUNT} na tabela`,
+		);
+		// LOC-NL: the Source is the text as the screen shows it -- a multi-line entry with real line breaks (widgets.ts
+		// `nl` turns lang.ts's "#" into them before drawing), never the "#" the platform would never see on screen
+		const sources = new Set(body.map(r => r[3]));
+		const multi = [...LANG].filter(e => e.includes("#"));
+		const unmatched = multi.filter(e => !sources.has(e.split("#").join("\n")));
+		check(
+			`LOC-NL: as ${multi.length} entradas de varias linhas vao ao CSV como a tela as mostra (quebra de linha real, sem "#")`,
+			multi.length > 0 && unmatched.length === 0 && !body.some(r => r[3].includes("#")),
+			unmatched.map(e => `"${e.slice(0, 40)}"`).join("; ") || `${multi.length} entradas`,
 		);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });

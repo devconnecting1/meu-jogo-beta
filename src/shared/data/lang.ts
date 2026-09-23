@@ -723,6 +723,20 @@ export const LANG_TABLE: Array<string> = [
 	"DEFAULT",
 	"COSTUME",
 	"MAKES",
+	// labels drawn in capitals are their OWN entries, never an entry upper-cased in code: the platform's translation
+	// matches the text on screen, case and all ("Start" does not match "START"). The lobby's START and level key, the
+	// Survivor screen's loadout slots, the wardrobe's slot and title keys, the touch captions over USE and RELOAD
+	"START",
+	"LEVEL",
+	"WEAPON",
+	"CLOTHES",
+	"HAND",
+	"GUN",
+	"OUTFIT",
+	"PET",
+	"TITLE",
+	"USE",
+	"RELOAD",
 	"Not owned",
 	"Currently equipped.",
 	"Nothing is worn in this slot now.",
