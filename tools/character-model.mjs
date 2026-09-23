@@ -432,10 +432,11 @@ export function zombieParts(kind, step, windup = 0, air = false, rush = false) {
 		}
 		p.box(-1, 0, 15, 26, z.cloth, 2, { round: 7, dome: 0.85, tilt: lurch, main: true });
 		p.box(-5, -6, 5, 6, z.torn, 3, { round: 1, flat: true, detail: true });
-		p.oval(12 - 3 * k, 0, 10 + 6 * k, 13 + 7 * k, ACID, 4, { glow: true });
-		p.oval(4 - 6 * k, 0, 20, 20, z.head, 5, { lift: true, ring: true });
-		p.oval(0 - 6 * k, -4, 6, 7, ZOMBIE_HAIR, 6, { detail: true });
-		p.oval(18 - 2 * k, 3, 4, 4, ACID, 6, { glow: true, detail: true });
+		// the sac bulges out ahead of the head: the green glow is what says "spitter" across the street
+		p.oval(13 - 2 * k, 0, 12 + 6 * k, 14 + 7 * k, ACID, 6, { glow: true, lift: true });
+		p.oval(1 - 6 * k, 0, 18, 18, z.head, 5, { lift: true, ring: true });
+		p.oval(-3 - 6 * k, -3, 6, 7, ZOMBIE_HAIR, 6, { detail: true });
+		p.oval(20 - 2 * k, 3, 4, 4, ACID, 7, { glow: true, detail: true });
 		return p.list;
 	}
 	if (kind === 3) {
@@ -492,18 +493,19 @@ export function zombieParts(kind, step, windup = 0, air = false, rush = false) {
 		return p.list;
 	}
 	// ---- walker: arms straight ahead (the zombie's silhouette, P3), a torn shirt, bloody hands and mouth
+	// the arms leave the shoulders' outer edge and reach past the head, which hangs forward between them
 	for (const side of SIDES) {
 		const sway = step * side;
 		p.box(step * 7 * side, side * 7, 9, 7, ZOMBIE_SHOES, 0, { round: 3, dome: 0.5 });
-		p.limb(3, side * 10, 27 - sway * 3, side * (9 + lurch * 6), 6.5, z.skin, 3, { dome: 0.7 });
-		p.box(29 - sway * 3, side * 9, 4, 6.5, BLOOD, 4, { flat: true, detail: true });
+		p.limb(1, side * 11.5, 27 - sway * 3, side * (10.5 + lurch * 6), 6.5, z.skin, 3, { dome: 0.7 });
+		p.box(29 - sway * 3, side * 10.5, 4, 6.5, BLOOD, 4, { flat: true, detail: true });
 	}
-	p.box(0, 0, 16, 28, z.cloth, 2, { round: 7, dome: 0.85, tilt: lurch, main: true });
-	p.box(-2, 8, 7, 6, z.skin, 3, { round: 2, flat: true, detail: true });
-	p.oval(3, -7, 6, 6, BLOOD, 3, { flat: true, detail: true });
-	p.oval(4, 0, 18, 18, z.head, 5, { lift: true, ring: true });
-	p.oval(0, -3, 7, 8, ZOMBIE_HAIR, 6, { detail: true });
-	p.box(11.5, 0, 3, 6, BLOOD, 6, { flat: true, detail: true });
+	p.box(-1, 0, 15, 29, z.cloth, 2, { round: 7, dome: 0.85, tilt: lurch, main: true });
+	p.box(-3, 8, 7, 6, z.skin, 3, { round: 2, flat: true, detail: true });
+	p.oval(2, -7, 6, 6, BLOOD, 3, { flat: true, detail: true });
+	p.oval(5, 0, 16, 15, z.head, 5, { lift: true, ring: true });
+	p.oval(1.5, -2.5, 6, 7, ZOMBIE_HAIR, 6, { detail: true });
+	p.box(12, 0, 3, 6, BLOOD, 6, { flat: true, detail: true });
 	return p.list;
 }
 
