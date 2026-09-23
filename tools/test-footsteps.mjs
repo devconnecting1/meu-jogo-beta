@@ -138,10 +138,7 @@ console.log("\n1) num passo que um corpo real daria, toda pisada desenhada e rep
 		Math.abs(steps.length / 10 - drawnSlow) < 0.15,
 		(steps.length / 10).toFixed(2) + "/s vs " + drawnSlow.toFixed(2) + "/s desenhadas",
 	);
-	check(
-		"todas marcadas como local",
-		steps.every(s => s.isLocal),
-	);
+	check("todas marcadas como local", steps.every(s => s.isLocal));
 	check("a posicao acompanha o andar", steps[steps.length - 1].x > steps[0].x);
 }
 
@@ -154,21 +151,9 @@ console.log("\n2) na velocidade cheia a cadencia vira a de um corpo real");
 	const state = { phase: 0, x: 0 };
 	walk(foot, 10, WALK_SPEED, state);
 	const perSec = steps.length / 10;
-	check(
-		"o desenho pisaria rapido demais",
-		DRAWN_PER_SEC > 1 / MIN_STEP_GAP,
-		DRAWN_PER_SEC.toFixed(2) + "/s desenhadas",
-	);
-	check(
-		"o som nao passa do limite",
-		perSec <= 1 / MIN_STEP_GAP + 0.05,
-		perSec.toFixed(2) + "/s <= " + (1 / MIN_STEP_GAP).toFixed(2),
-	);
-	check(
-		"e nem vira silencio",
-		perSec > DRAWN_PER_SEC / 2 - 0.5,
-		perSec.toFixed(2) + "/s de " + DRAWN_PER_SEC.toFixed(2),
-	);
+	check("o desenho pisaria rapido demais", DRAWN_PER_SEC > 1 / MIN_STEP_GAP, DRAWN_PER_SEC.toFixed(2) + "/s desenhadas");
+	check("o som nao passa do limite", perSec <= 1 / MIN_STEP_GAP + 0.05, perSec.toFixed(2) + "/s <= " + (1 / MIN_STEP_GAP).toFixed(2));
+	check("e nem vira silencio", perSec > DRAWN_PER_SEC / 2 - 0.5, perSec.toFixed(2) + "/s de " + DRAWN_PER_SEC.toFixed(2));
 	// every reported step still lands on a drawn foot plant: the gap is a multiple of the drawn interval
 	const drawnInterval = 1 / DRAWN_PER_SEC;
 	let onBeat = 0;
@@ -250,11 +235,7 @@ console.log("\n5) varios sobreviventes sao independentes");
 	const local = steps.filter(s => s.isLocal).length;
 	const allies = steps.length - local;
 	check("o local e os aliados pisam", local > 0 && allies > 0, "local " + local + ", aliados " + allies);
-	check(
-		"cada um no proprio pe",
-		Math.abs(allies - local * (SURVIVORS - 1)) <= SURVIVORS,
-		allies + " vs ~" + local * (SURVIVORS - 1),
-	);
+	check("cada um no proprio pe", Math.abs(allies - local * (SURVIVORS - 1)) <= SURVIVORS, allies + " vs ~" + local * (SURVIVORS - 1));
 	const xs = new Set(steps.filter(s => !s.isLocal).map(s => s.x));
 	check("cada pisada vem do seu dono", xs.size === SURVIVORS - 1, xs.size + " posicoes distintas");
 }
