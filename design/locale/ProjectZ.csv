@@ -1,416 +1,476 @@
-Key,Source,Context,Example,en,ko,zh-hans,ja
-Craft,Craft,,,Craft,제작,,
-Item,Item,,,Item,아이템,,
-Skill,Skill,,,Skill,스킬,,
-Placeable,Placeable,,,Placeable,설치,,
-Weapon,Weapon,,,Weapon,무기,,
-Equipment,Equipment,,,Equipment,장비,,
-Etc,Etc,,,Etc,기타,,
-Ammo,Ammo,,,Ammo,탄약,,
-Usable,Usable,,,Usable,소비,,
-Survival,Survival,,,Survival,생존,,
-Fighting,Fighting,,,Fighting,전투,,
-Material,Material,,,Material,재료,,
-Make,Make,,,Make,제작,,
-Equip,Equip,,,Equip,장착,,
-Drop,Drop,,,Drop,버림,,
-Use,Use,,,Use,사용,,
-Cook,Cook,,,Cook,요리,,
-Melt,Melt,,,Melt,녹임,,
-Learn,Learn,,,Learn,배움,,
-Attack,Attack,,,Attack,공격력,,
-Defense,Defense,,,Defense,방어력,,
-Rate of fire,Rate of fire,,,Rate of fire,연사속도,,
-Recoil,Recoil,,,Recoil,반동,,
-Round,Round,,,Round,탄창,,
-Health recovery,Health recovery,,,Health recovery,체력 회복,,
-Hunger recovery,Hunger recovery,,,Hunger recovery,허기 회복,,
-Speed,Speed,,,Speed,이동 속도,,
-Reloading,Reloading,,,Reloading,재장전,,
-Skill point,Skill point,,,Skill point,스킬 포인트,,
-Centipede,Centipede,,,Centipede,센티피드,,
-Rafflesia,Rafflesia,,,Rafflesia,라플레시아,,
-Giant,Giant,,,Giant,자이언트,,
-Hedgehog,Hedgehog,,,Hedgehog,고슴도치,,
-Game over#Continue?,Game over#Continue?,,,Game over#Continue?,부활하시겠습니까?,,
-Price,Price,,,Price,가격,,
-Are you sure#you want to quit?,Are you sure#you want to quit?,,,Are you sure#you want to quit?,종료하시겠습니까?,,
-You don't have enough money,You don't have enough money,,,You don't have enough money,돈이 부족합니다,,
-Would you rate our game?,Would you rate our game?,,,Would you rate our game?,별점을 남겨주시겠습니까?,,
-Do you want to#watch the tutorial?,Do you want to#watch the tutorial?,,,Do you want to#watch the tutorial?,튜토리얼을#보시겠습니까?,,
-Level UP,Level UP,,,Level UP,레벨 업,,
-Night is coming,Night is coming,,,Night is coming,밤이 찾아왔습니다,,
-Good morning,Good morning,,,Good morning,아침이 찾아왔습니다,,
-Wave 1,Wave 1,,,Wave 1,Wave 1,,
-Wave 2,Wave 2,,,Wave 2,Wave 2,,
-Wave 3,Wave 3,,,Wave 3,Wave 3,,
-You killed it,You killed it,,,You killed it,죽였습니다,,
-Dagger,Dagger,,,Dagger,단검,,
-Wooden stick,Wooden stick,,,Wooden stick,나무 막대기,,
-Axe,Axe,,,Axe,도끼,,
-Crowbar,Crowbar,,,Crowbar,크로우바,,
-Saw,Saw,,,Saw,톱,,
-Chainsaw,Chainsaw,,,Chainsaw,전기톱,,
-Baseball bat,Baseball bat,,,Baseball bat,야구 방망이,,
-Machete,Machete,,,Machete,마체테,,
-Golf club,Golf club,,,Golf club,골프 클럽,,
-Auto pistol,Auto pistol,,,Auto pistol,자동 권총,,
-Pistol,Pistol,,,Pistol,권총,,
-Katana,Katana,,,Katana,일본도,,
-Revolver,Revolver,,,Revolver,리볼버,,
-Semi auto rifle,Semi auto rifle,,,Semi auto rifle,반자동 소총,,
-AK-40,AK-40,,,AK-40,AK-40,,
-M10,M10,,,M10,M10,,
-Pump action shotgun,Pump action shotgun,,,Pump action shotgun,펌프 액션 샷건,,
-Semi auto shotgun,Semi auto shotgun,,,Semi auto shotgun,반자동 샷건,,
-Light machine gun,Light machine gun,,,Light machine gun,라이트 머신건,,
-Heavy machine gun,Heavy machine gun,,,Heavy machine gun,헤비 머신건,,
-Bolt action sniper,Bolt action sniper,,,Bolt action sniper,볼트 액션 스나,,
-Semi auto sniper,Semi auto sniper,,,Semi auto sniper,반자동 스나,,
-Bow,Bow,,,Bow,활,,
-Cross bow,Cross bow,,,Cross bow,석궁,,
-Compound bow,Compound bow,,,Compound bow,복합활,,
-Flamethrower,Flamethrower,,,Flamethrower,화염방사기,,
-Stun gun,Stun gun,,,Stun gun,스턴 건,,
-Stone axe,Stone axe,,,Stone axe,돌 도끼,,
-Cotton clothes,Cotton clothes,,,Cotton clothes,천 옷,,
-Leather jacket,Leather jacket,,,Leather jacket,가죽 자켓,,
-Leather armor,Leather armor,,,Leather armor,가죽 갑옷,,
-Wooden armor,Wooden armor,,,Wooden armor,나무 갑옷,,
-Steel armor,Steel armor,,,Steel armor,철 갑옷,,
-Plastic armor,Plastic armor,,,Plastic armor,플라스틱 갑옷,,
-Night vision,Night vision,,,Night vision,야간 투시경,,
-Laser sight,Laser sight,,,Laser sight,레이저 사이트,,
-Compass,Compass,,,Compass,나침반,,
-Sundial,Sundial,,,Sundial,해시계,,
-Watch,Watch,,,Watch,시계,,
-Digital Watch,Digital Watch,,,Digital Watch,전자시계,,
-Gun silencer,Gun silencer,,,Gun silencer,소음기,,
-Flashlight,Flashlight,,,Flashlight,손전등,,
-Robot suit,Robot suit,,,Robot suit,로봇 슈트,,
-Torchlight,Torchlight,,,Torchlight,횃불,,
-Raw meat,Raw meat,,,Raw meat,생고기,,
-Cooked meat,Cooked meat,,,Cooked meat,요리된 고기,,
-Potato,Potato,,,Potato,감자,,
-Baked potato,Baked potato,,,Baked potato,구운 감자,,
-Bread,Bread,,,Bread,빵,,
-First aid kit,First aid kit,,,First aid kit,응급처치 키트,,
-Pain killer,Pain killer,,,Pain killer,진통제,,
-Adrenaline,Adrenaline,,,Adrenaline,아드레날린,,
-Sedative,Sedative,,,Sedative,진정제,,
-Canned food,Canned food,,,Canned food,통조림,,
-Frozen pizza,Frozen pizza,,,Frozen pizza,냉동피자,,
-Pizza,Pizza,,,Pizza,피자,,
-Bandage,Bandage,,,Bandage,붕대,,
-Frozen meal,Frozen meal,,,Frozen meal,냉동식품,,
-Cooked meal,Cooked meal,,,Cooked meal,조리된 식품,,
-Mushroom,Mushroom,,,Mushroom,버섯,,
-Mushroom soup,Mushroom soup,,,Mushroom soup,버섯 스프,,
-Apple,Apple,,,Apple,사과,,
-Berry,Berry,,,Berry,산딸기,,
-Craft desk,Craft desk,,,Craft desk,작업대,,
-Pro craft desk,Pro craft desk,,,Pro craft desk,고급 작업대,,
-Turret,Turret,,,Turret,터렛,,
-Turret drone,Turret drone,,,Turret drone,터렛 드론,,
-Lamp,Lamp,,,Lamp,조명,,
-Lamp drone,Lamp drone,,,Lamp drone,조명 드론,,
-Battery box,Battery box,,,Battery box,배터리,,
-Solar generator,Solar generator,,,Solar generator,태양광 발전기,,
-Nuclear reactor,Nuclear reactor,,,Nuclear reactor,원자력 발전기,,
-Oil generator,Oil generator,,,Oil generator,기름 발전기,,
-Wooden barricade,Wooden barricade,,,Wooden barricade,나무 바리케이드,,
-Wooden door,Wooden door,,,Wooden door,나무 문,,
-Steel barricade,Steel barricade,,,Steel barricade,철 바리케이드,,
-Steel door,Steel door,,,Steel door,철 문,,
-Campfire,Campfire,,,Campfire,캠프파이어,,
-Brazier,Brazier,,,Brazier,화로,,
-Electric turret,Electric turret,,,Electric turret,전기 터렛,,
-Trap,Trap,,,Trap,덫,,
-signal generator,signal generator,,,signal generator,신호 발생기,,
-Cooker,Cooker,,,Cooker,전기렌지,,
-Electric furnace,Electric furnace,,,Electric furnace,전기화로,,
-Bicycle,Bicycle,,,Bicycle,자전거,,
-Motorcycle,Motorcycle,,,Motorcycle,오토바이,,
-Wood,Wood,,,Wood,나무,,
-Stone,Stone,,,Stone,돌,,
-Piece of steel ,Piece of steel ,,,Piece of steel ,철 조각,,
-Steel,Steel,,,Steel,철,,
-Piece of gold,Piece of gold,,,Piece of gold,금 조각,,
-Gold,Gold,,,Gold,금,,
-Blueprint,Blueprint,,,Blueprint,설계도,,
-Machine parts,Machine parts,,,Machine parts,기계부품,,
-Battery,Battery,,,Battery,건전지,,
-Bulb,Bulb,,,Bulb,전구,,
-Gunpowder,Gunpowder,,,Gunpowder,화약,,
-Cloth,Cloth,,,Cloth,천,,
-Computer chip,Computer chip,,,Computer chip,컴퓨터 칩,,
-Voltage circuit,Voltage circuit,,,Voltage circuit,전압 회로,,
-Engine,Engine,,,Engine,엔진,,
-Drone,Drone,,,Drone,드론,,
-Night Craft desk,Night Craft desk,,,Night Craft desk,야간 작업대,,
-Night pro craft desk,Night pro craft desk,,,Night pro craft desk,야간 고급 작업대,,
-Leather,Leather,,,Leather,가죽,,
-Solar panel,Solar panel,,,Solar panel,태양광 패널,,
-Radioactive material,Radioactive material,,,Radioactive material,방사능 물질,,
-Normal ammo,Normal ammo,,,Normal ammo,일반 탄약,,
-Shotgun ammo,Shotgun ammo,,,Shotgun ammo,샷건 탄약,,
-Machinegun ammo,Machinegun ammo,,,Machinegun ammo,머신건 탄약,,
-Arrow,Arrow,,,Arrow,화살,,
-Oil,Oil,,,Oil,기름,,
-Rotten meat,Rotten meat,,,Rotten meat,썩은 고기,,
-GPS machine,GPS machine,,,GPS machine,GPS 장치,,
-Pigeon,Pigeon,,,Pigeon,비둘기,,
-White pigeon,White pigeon,,,White pigeon,흰비둘기,,
-Eagle,Eagle,,,Eagle,독수리,,
-Carolina,Carolina,,,Carolina,캐롤라이나,,
-Malamute,Malamute,,,Malamute,말라뮤트,,
-Doberman,Doberman,,,Doberman,도베르만,,
-Santa,Santa,,,Santa,산타,,
-Zombie,Zombie,,,Zombie,좀비,,
-Cowboy,Cowboy,,,Cowboy,카우보이,,
-Golden axe,Golden axe,,,Golden axe,금 도끼,,
-Golden katana,Golden katana,,,Golden katana,금 일본도,,
-Small keen knife,Small keen knife,,,Small keen knife,작고 예리한 칼,,
-Stick made of wood,Stick made of wood,,,Stick made of wood,나무로 만들어진 막대기,,
-Heavy fire axe,Heavy fire axe,,,Heavy fire axe,무거운 소방 도끼,,
-Metal bar with a curve,Metal bar with a curve,,,Metal bar with a curve,끝이 휘어진 금속 막대기,,
-Chain with a hard toothed edge,Chain with a hard toothed edge,,,Chain with a hard toothed edge,목재용 톱,,
-Wooden club used to hit a baseball,Wooden club used to hit a baseball,,,Wooden club used to hit a baseball,야구공을 치기 위해 나무 막대,,
-Large heavy knife,Large heavy knife,,,Large heavy knife,크고 무거운 칼,,
-Metal club used to hit a golf ball,Metal club used to hit a golf ball,,,Metal club used to hit a golf ball,골프공을 치기 위한 금속 막대,,
-Semi-automatic pistol,Semi-automatic pistol,,,Semi-automatic pistol,반자동 권총,,
-Small non-automatic handgun,Small non-automatic handgun,,,Small non-automatic handgun,작은 수동 권총,,
-Sharp light knife,Sharp light knife,,,Sharp light knife,날카롭고 가벼운 칼,,
-Powerful handgun that has six shots,Powerful handgun that has six shots,,,Powerful handgun that has six shots,6발의 강력한 권총,,
-Semi-automatic rifle,Semi-automatic rifle,,,Semi-automatic rifle,반자동 라이플,,
-Powerful assault rifle,Powerful assault rifle,,,Powerful assault rifle,강력한 라이플,,
-Accurate assault rifle,Accurate assault rifle,,,Accurate assault rifle,정확한 라이플,,
-Pump action shotgun. One by one,Pump action shotgun. One by one,,,Pump action shotgun. One by one,펌프액션 샷건,,
-Semi-automatic shotgun,Semi-automatic shotgun,,,Semi-automatic shotgun,반자동 샷건,,
-Light machine gun,Light machine gun,,,Light machine gun,라이트 머신 건,,
-Heavy machine gun,Heavy machine gun,,,Heavy machine gun,헤비 머신 건,,
-Bolt action sniper rifle,Bolt action sniper rifle,,,Bolt action sniper rifle,볼트 액션 스나이퍼 라이플,,
-Semi-automatic sniper rifle,Semi-automatic sniper rifle,,,Semi-automatic sniper rifle,반자동 스나이퍼 라이플,,
-Classic bow,Classic bow,,,Classic bow,전통적인 활,,
-Powerful horizontal bow,Powerful horizontal bow,,,Powerful horizontal bow,강한 수평 활,,
-"Modern bow that uses a pulley system,","Modern bow that uses a pulley system,",,,"Modern bow that uses a pulley system,",도르래를 사용하는 발전된 활,,
-Project a stream of fire,Project a stream of fire,,,Project a stream of fire,불을 발사하는 무기,,
-Heavy stone axe,Heavy stone axe,,,Heavy stone axe,무거운 돌도끼,,
-Clothes made from cotton,Clothes made from cotton,,,Clothes made from cotton,천으로 만들어진 옷,,
-Jacket made from leather,Jacket made from leather,,,Jacket made from leather,가죽으로 만들어진 재킷,,
-Armor made from leather,Armor made from leather,,,Armor made from leather,가죽으로 만들어진 갑옷,,
-Armor made from wood,Armor made from wood,,,Armor made from wood,나무로 만들어진 갑옷,,
-Armor made from Steel,Armor made from Steel,,,Armor made from Steel,철로 만들어진 갑옷,,
-Armor made from plastic,Armor made from plastic,,,Armor made from plastic,플라스틱으로 만들어진 갑옷,,
-Laser to enhance the targeting,Laser to enhance the targeting,,,Laser to enhance the targeting,조준을 강화시켜주는 레이저 장치,,
-Instrument that shows the direction,Instrument that shows the direction,,,Instrument that shows the direction,방향을 보여주는 장치,,
-mechanical device for measuring time,mechanical device for measuring time,,,mechanical device for measuring time,시간을 알게 해주는 기계 장치,,
-Electrical device for measuring time,Electrical device for measuring time,,,Electrical device for measuring time,시간을 알게 해주는 전기 장치,,
-Battery-operated portable light,Battery-operated portable light,,,Battery-operated portable light,배터리로 작동되는 이동식 전등,,
-Wearable machine,Wearable machine,,,Wearable machine,입을 수 있는 기계,,
-Portable fire,Portable fire,,,Portable fire,이동 가능한 불,,
-Kind of meat,Kind of meat,,,Kind of meat,고기의 일종,,
-Delicious cooked meat,Delicious cooked meat,,,Delicious cooked meat,맛있게 요리된 고기,,
-Root vegetable,Root vegetable,,,Root vegetable,뿌리 식물,,
-Delicious baked potato,Delicious baked potato,,,Delicious baked potato,맛있게 요리된 감자,,
-White bread Easy to eat,White bread Easy to eat,,,White bread Easy to eat,먹기 좋은 흰 빵,,
-Drug used to get relief from pain,Drug used to get relief from pain,,,Drug used to get relief from pain,고통을 줄여주는 약물,,
-You will feel better after a shot,You will feel better after a shot,,,You will feel better after a shot,한 대 맞으면 괜찮아질거에요,,
-You will be able to aim better,You will be able to aim better,,,You will be able to aim better,더 조준을 잘하게 도와주는 약물,,
-I have no idea what's in it,I have no idea what's in it,,,I have no idea what's in it,안에 무엇이 들어있는지 모르겠다,,
-You need to cook it before eating,You need to cook it before eating,,,You need to cook it before eating,먹기전에 요리해야 된다,,
-Well-cooked pizza,Well-cooked pizza,,,Well-cooked pizza,잘 요리된 피자,,
-Help you to stop bleeding,Help you to stop bleeding,,,Help you to stop bleeding,피 흘리는 것을 멈춰준다,,
-Ready made meal,Ready made meal,,,Ready made meal,즉석 식품,,
-Ready to eat,Ready to eat,,,Ready to eat,먹을 준비 되었습니다,,
-Is it toxic?,Is it toxic?,,,Is it toxic?,독이 있을까?,,
-Small red apple,Small red apple,,,Small red apple,작은 빨간 사과,,
-Kind of berry,Kind of berry,,,Kind of berry,딸기의 일종,,
-Elrectic lamp to provide light at night,Elrectic lamp to provide light at night,,,Elrectic lamp to provide light at night,밤에 불을 밝혀주는 전등,,
-Wooden wall used to block the way,Wooden wall used to block the way,,,Wooden wall used to block the way,길을 막기 위한 나무 벽,,
-Steel wall used to block the way,Steel wall used to block the way,,,Steel wall used to block the way,길을 막기 위한 철 벽,,
-Trap makes zombies slow down,Trap makes zombies slow down,,,Trap makes zombies slow down,좀비를 느리게 만들어주는 덫,,
-"Powered by a motor, using oil","Powered by a motor, using oil",,,"Powered by a motor, using oil",기름을 사용해 모터로 작동한다,,
-Wood. Basic material,Wood. Basic material,,,Wood. Basic material,나무. 기본 재료,,
-Stone. Basic material,Stone. Basic material,,,Stone. Basic material,돌. 기본 재료,,
-Strong metal,Strong metal,,,Strong metal,강력한 금속,,
-Shiny yellow metal,Shiny yellow metal,,,Shiny yellow metal,반짝거리는 노란 금속,,
-Technical drawing,Technical drawing,,,Technical drawing,기술 그림,,
-Parts of machine,Parts of machine,,,Parts of machine,기계의 일부분,,
-Cell that can keep electricity,Cell that can keep electricity,,,Cell that can keep electricity,전기를 저장하는 건전지,,
-Glass bulb inserted into a lamp or a socket,Glass bulb inserted into a lamp or a socket,,,Glass bulb inserted into a lamp or a socket,전등에 사용되는 전구,,
-Explosive powder of mixture,Explosive powder of mixture,,,Explosive powder of mixture,폭발하는 혼합 가루,,
-Fabric made from cotton,Fabric made from cotton,,,Fabric made from cotton,면으로 만들어진 천,,
-Electronic device for processing data,Electronic device for processing data,,,Electronic device for processing data,정보를 처리하는 전기 장치,,
-Flying robot,Flying robot,,,Flying robot,날아다니는 로봇,,
-Can make items at night,Can make items at night,,,Can make items at night,밤에도 아이템을 만들 수 있다,,
-Can make advanced items at night,Can make advanced items at night,,,Can make advanced items at night,밤에도 고급 아이템을 만들 수 있다,,
-Material made from the skin of an animal,Material made from the skin of an animal,,,Material made from the skin of an animal,동물의 피부에서 얻은 가죽,,
-Material that has radioactive energy,Material that has radioactive energy,,,Material that has radioactive energy,방사능 에너지를 가진 물질,,
-Ammo for rifle and pistol,Ammo for rifle and pistol,,,Ammo for rifle and pistol,라이플이나 권총을 위한 탄약,,
-Ammo for shotgun,Ammo for shotgun,,,Ammo for shotgun,샷건을 위한 탄약,,
-Ammo for machinegun,Ammo for machinegun,,,Ammo for machinegun,머신건을 위한 탄약,,
-Arrow for bow,Arrow for bow,,,Arrow for bow,활을 위한 화살,,
-Liquid for use as a fuel,Liquid for use as a fuel,,,Liquid for use as a fuel,연료로 사용되는 액체,,
-Stinky rotten meat,Stinky rotten meat,,,Stinky rotten meat,냄새나는 썩은 고기,,
-Device to find geographic position,Device to find geographic position,,,Device to find geographic position,위치를 찾아주는 기계장치,,
-Pigeon to collect items,Pigeon to collect items,,,Pigeon to collect items,아이템을 수집해주는 비둘기,,
-White pigeon to collect items,White pigeon to collect items,,,White pigeon to collect items,아이템을 수집해주는 흰 비둘기,,
-Eagle to attack zombies,Eagle to attack zombies,,,Eagle to attack zombies,좀비를 공격하는 독수리,,
-Santa costume,Santa costume,,,Santa costume,산타 복장,,
-Zombie costume,Zombie costume,,,Zombie costume,좀비 복장,,
-Cowboy costume,Cowboy costume,,,Cowboy costume,카우보이 복장,,
-Shining golden axe,Shining golden axe,,,Shining golden axe,반짝거리는 금 도끼,,
-Shining golden katana,Shining golden katana,,,Shining golden katana,반짝거리는 금 일본도,,
-Health,Health,,,Health,체력 증가,,
-Recovery,Recovery,,,Recovery,회복력 증가,,
-Knockback,Knockback,,,Knockback,근접 넉백,,
-Melee damage,Melee damage,,,Melee damage,근접 데미지,,
-Quick reload,Quick reload,,,Quick reload,빠른 재장전,,
-Shooting skill,Shooting skill,,,Shooting skill,사격술,,
-Robin Hood,Robin Hood,,,Robin Hood,로빈훗,,
-Trot,Trot,,,Trot,빠른 걸음,,
-Patience,Patience,,,Patience,인내심,,
-Pickpocket,Pickpocket,,,Pickpocket,소매치기,,
-Theif,Theif,,,Theif,도둑,,
-Chef,Chef,,,Chef,요리사,,
-Dwarf,Dwarf,,,Dwarf,드워프,,
-Robotics,Robotics,,,Robotics,로봇공학,,
-Engineering,Engineering,,,Engineering,전기공학,,
-Cat,Cat,,,Cat,고양이,,
-Nocturnal,Nocturnal,,,Nocturnal,야행성,,
-Repairman,Repairman,,,Repairman,수리공,,
-Move shooting,Move shooting,,,Move shooting,이동사격,,
-Head shooter,Head shooter,,,Head shooter,헤드슈터,,
-Poison immunity,Poison immunity,,,Poison immunity,독 면역력,,
-Health increases,Health increases,,,Health increases,체력이 증가합니다,,
-Recovery increases,Recovery increases,,,Recovery increases,회복력이 증가합니다,,
-Knockback increases,Knockback increases,,,Knockback increases,근접 넉백이 증가합니다,,
-Melee damage increases,Melee damage increases,,,Melee damage increases,근접 데미지가 증가합니다,,
-Roload becomes faster,Roload becomes faster,,,Roload becomes faster,재장전이 빨라집니다,,
-Accuracy improves,Accuracy improves,,,Accuracy improves,정확도가 향상됩니다,,
-Bow accuracy improves,Bow accuracy improves,,,Bow accuracy improves,활 정확도가 향상됩니다,,
-Speed increases,Speed increases,,,Speed increases,이동속도가 증가합니다,,
-Hungry decreases,Hungry decreases,,,Hungry decreases,포만감 감소 속도가 줄어듭니다,,
-Zombies drop more items,Zombies drop more items,,,Zombies drop more items,좀비가 아이템 드랍할 확률이 높아집니다,,
-Find more items,Find more items,,,Find more items,맵 아이템 확률이 높아집니다,,
-A chance to get more foods,A chance to get more foods,,,A chance to get more foods,일정 확률로 요리가 두배,,
-A chance to get more metal,A chance to get more metal,,,A chance to get more metal,일정 확률로 제련이 두배,,
-Turret reinforced,Turret reinforced,,,Turret reinforced,터렛이 강해집니다,,
-Generator reinforced,Generator reinforced,,,Generator reinforced,발전효율과 배터리가 강화됩니다,,
-Footsteps sound decreases,Footsteps sound decreases,,,Footsteps sound decreases,발소리가 감소합니다,,
-Night vision increases,Night vision increases,,,Night vision increases,야간 시야가 증가합니다,,
-Repair speed increases,Repair speed increases,,,Repair speed increases,설치물 수리속도가 증가합니다,,
-Accuracy improves with moving,Accuracy improves with moving,,,Accuracy improves with moving,이동하면서 쏴도 에임이 그대로입니다,,
-Able to shot heads,Able to shot heads,,,Able to shot heads,헤드샷을 쏠 수 있게됩니다,,
-Get less damage from poison,Get less damage from poison,,,Get less damage from poison,독으로 부터 데미지를 덜 입는다,,
-Starter pack,Starter pack,,,Starter pack,스타터 팩,,
-Food aid,Food aid,,,Food aid,음식 지원,,
-Emergency kit,Emergency kit,,,Emergency kit,응급 세트,,
-Basic craft kit,Basic craft kit,,,Basic craft kit,기본 제작 세트,,
-Pro craft kit,Pro craft kit,,,Pro craft kit,고급 제작 세트,,
-Electric craft kit,Electric craft kit,,,Electric craft kit,전기 제작 세트,,
-Ammo craft kit,Ammo craft kit,,,Ammo craft kit,탄약 제작 세트,,
-Pigeon the bird,Pigeon the bird,,,Pigeon the bird,1회용 비둘기,,
-Carolina the dog,Carolina the dog,,,Carolina the dog,1회용 캐롤라이나,,
-5 coins,5 coins,,,5 coins,5 코인,,
-100 coins,100 coins,,,100 coins,100 코인,,
-300 + 30 coins,300 + 30 coins,,,300 + 30 coins,300 + 30 코인,,
-600 + 100 coins,600 + 100 coins,,,600 + 100 coins,600 + 100 코인,,
-1000 + 300 coins,1000 + 300 coins,,,1000 + 300 coins,1000 + 300 코인,,
-Watch ads,Watch ads,,,Watch ads,광고 보기,,
-Wait for ads,Wait for ads,,,Wait for ads,기다려주세요,,
-Wood X 20#Cloth X 10#Stone X 20,Wood X 20#Cloth X 10#Stone X 20,,,Wood X 20#Cloth X 10#Stone X 20,나무 X 20#천 X 10#돌 X 20,,
-Steel X 10#Gunpowder X 10,Steel X 10#Gunpowder X 10,,,Steel X 10#Gunpowder X 10,철 X 10#화약 X 10,,
-Pigeon the bird X 1,Pigeon the bird X 1,,,Pigeon the bird X 1,1회용 비둘기 X 1,,
-Carolina the dog X 1,Carolina the dog X 1,,,Carolina the dog X 1,1회용 캐롤라이나 X 1,,
-Please try again,Please try again,,,Please try again,다시 시도해 주세요,,
-You can't use that now,You can't use that now,,,You can't use that now,지금은 사용할 수 없습니다,,
-First steps,First steps,,,First steps,첫 걸음,,
-Thomas Edison,Thomas Edison,,,Thomas Edison,토머스 에디슨,,
-Melee weapons expert,Melee weapons expert,,,Melee weapons expert,근접 무기 전문가,,
-Bow expert,Bow expert,,,Bow expert,활 전문가,,
-Collector,Collector,,,Collector,수집가,,
-Blacksmith,Blacksmith,,,Blacksmith,대장장이,,
-Sniper,Sniper,,,Sniper,저격수,,
-Centipede slayer,Centipede slayer,,,Centipede slayer,센티피드 사냥꾼,,
-Rafflesia slayer,Rafflesia slayer,,,Rafflesia slayer,라플레시아 사냥꾼,,
-Giant slayer,Giant slayer,,,Giant slayer,자이언트 사냥꾼,,
-Hedgehog slayer,Hedgehog slayer,,,Hedgehog slayer,고슴도치 사냥꾼,,
-Zombie slayer,Zombie slayer,,,Zombie slayer,좀비 사냥꾼,,
-Special zombie slayer,Special zombie slayer,,,Special zombie slayer,특수 좀비 사냥꾼,,
-Woods collector,Woods collector,,,Woods collector,나무꾼,,
-Good day,Good day,,,Good day,좋은 하루,,
-Rider,Rider,,,Rider,라이더,,
-Never die,Never die,,,Never die,불사신,,
-Ninja,Ninja,,,Ninja,닌자,,
-Play,Play,,,Play,플레이,,
-Continue,Continue,,,Continue,이어하기,,
-New game,New game,,,New game,새 게임,,
-Shop,Shop,,,Shop,상점,,
-Settings,Settings,,,Settings,설정,,
-Achievements,Achievements,,,Achievements,업적,,
-Records,Records,,,Records,기록,,
-How to play,How to play,,,How to play,게임 방법,,
-Credits,Credits,,,Credits,크레딧,,
-Survivor,Survivor,,,Survivor,생존자,,
-Current day,Current day,,,Current day,현재 일차,,
-Best day,Best day,,,Best day,최고 일차,,
-Level,Level,,,Level,레벨,,
-Bosses defeated,Bosses defeated,,,Bosses defeated,처치한 보스,,
-Loadout,Loadout,,,Loadout,장비,,
-Clothes,Clothes,,,Clothes,옷,,
-Hand,Hand,,,Hand,손,,
-Gun,Gun,,,Gun,총기 부품,,
-Deco,Deco,,,Deco,장식,,
-Zombie survival,Zombie survival,,,Zombie survival,좀비 서바이벌,,
-Loading your progress...,Loading your progress...,,,Loading your progress...,진행 상황을 불러오는 중...,,
-Packs & costumes,Packs & costumes,,,Packs & costumes,패키지 & 코스튬,,
-Personal bests,Personal bests,,,Personal bests,개인 기록,,
-Back,Back,,,Back,뒤로,,
-Close,Close,,,Close,닫기,,
-Buy,Buy,,,Buy,구매,,
-Owned,Owned,,,Owned,보유,,
-Unlock,Unlock,,,Unlock,잠금 해제,,
-Packs,Packs,,,Packs,패키지,,
-Costumes,Costumes,,,Costumes,코스튬,,
-Earn coins,Earn coins,,,Earn coins,코인 얻기,,
-Progress not loaded,Progress not loaded,,,Progress not loaded,진행 상황을 불러오지 못함,,
-Retry,Retry,,,Retry,다시 시도,,
-Play without saving,Play without saving,,,Play without saving,저장 없이 플레이,,
-Progress saved,Progress saved,,,Progress saved,저장되었습니다,,
-Saving...,Saving...,,,Saving...,저장 중...,,
-Could not save,Could not save,,,Could not save,저장하지 못했습니다,,
-Resume,Resume,,,Resume,계속하기,,
-Save,Save,,,Save,저장,,
-Home,Home,,,Home,홈,,
-Paused,Paused,,,Paused,일시정지,,
-Game over,Game over,,,Game over,게임 오버,,
-Rebirth,Rebirth,,,Rebirth,부활,,
-Survival days,Survival days,,,Survival days,생존 일수,,
-Continue price,Continue price,,,Continue price,부활 가격,,
-Your run is over,Your run is over,,,Your run is over,이번 게임이 끝났습니다,,
-Purchased,Purchased,,,Purchased,구매 완료,,
-Unlocked,Unlocked,,,Unlocked,잠금 해제됨,,
-Not enough coins,Not enough coins,,,Not enough coins,코인이 부족합니다,,
-Too many packs waiting,Too many packs waiting,,,Too many packs waiting,대기 중인 패키지가 너무 많습니다,,
-Already owned,Already owned,,,Already owned,이미 보유 중,,
-Please wait a moment,Please wait a moment,,,Please wait a moment,잠시 후 다시 시도하세요,,
-"Connection problem, try again","Connection problem, try again",,,"Connection problem, try again","연결 문제, 다시 시도하세요",,
-Still loading your progress,Still loading your progress,,,Still loading your progress,아직 진행 상황을 불러오는 중입니다,,
-Coins are earned by playing,Coins are earned by playing,,,Coins are earned by playing,코인은 플레이로 얻습니다,,
-Day survived,Day survived,,,Day survived,생존한 날,,
-Record day (every 5 days),Record day (every 5 days),,,Record day (every 5 days),기록 갱신 (5일마다),,
-Boss defeated,Boss defeated,,,Boss defeated,보스 처치,,
-Welcome gift,Welcome gift,,,Welcome gift,환영 선물,,
-No ammo,No ammo,,,No ammo,탄약 없음,,
-Melee,Melee,,,Melee,근접,,
-Night,Night,,,Night,밤,,
-Morning,Morning,,,Morning,아침,,
-Afternoon,Afternoon,,,Afternoon,오후,,
-Evening,Evening,,,Evening,저녁,,
-Day,Day,,,Day,낮,,
-Achievement unlocked,Achievement unlocked,,,Achievement unlocked,업적 달성,,
-Delivered,Delivered,,,Delivered,지급됨,,
-Zombies are coming,Zombies are coming,,,Zombies are coming,좀비가 몰려옵니다,,
-Survive the night,Survive the night,,,Survive the night,밤을 버티세요,,
+Key,Source,Context,Example,en
+Craft,Craft,,,Craft
+Item,Item,,,Item
+Skill,Skill,,,Skill
+Placeable,Placeable,,,Placeable
+Weapon,Weapon,,,Weapon
+Equipment,Equipment,,,Equipment
+Etc,Etc,,,Etc
+Ammo,Ammo,,,Ammo
+Usable,Usable,,,Usable
+Survival,Survival,,,Survival
+Fighting,Fighting,,,Fighting
+Material,Material,,,Material
+Make,Make,,,Make
+Equip,Equip,,,Equip
+Drop,Drop,,,Drop
+Use,Use,,,Use
+Cook,Cook,,,Cook
+Melt,Melt,,,Melt
+Learn,Learn,,,Learn
+Attack,Attack,,,Attack
+Defense,Defense,,,Defense
+Rate of fire,Rate of fire,,,Rate of fire
+Recoil,Recoil,,,Recoil
+Round,Round,,,Round
+Health recovery,Health recovery,,,Health recovery
+Hunger recovery,Hunger recovery,,,Hunger recovery
+Speed,Speed,,,Speed
+Reloading,Reloading,,,Reloading
+Skill point,Skill point,,,Skill point
+Centipede,Centipede,,,Centipede
+Rafflesia,Rafflesia,,,Rafflesia
+Giant,Giant,,,Giant
+Hedgehog,Hedgehog,,,Hedgehog
+Game over#Continue?,Game over#Continue?,,,Game over#Continue?
+Would you watch a short video#to get a bonus parcel?,Would you watch a short video#to get a bonus parcel?,,,Would you watch a short video#to get a bonus parcel?
+Price,Price,,,Price
+Are you sure#you want to quit?,Are you sure#you want to quit?,,,Are you sure#you want to quit?
+You don't have enough money,You don't have enough money,,,You don't have enough money
+Would you rate our game?,Would you rate our game?,,,Would you rate our game?
+Do you want to#watch the tutorial?,Do you want to#watch the tutorial?,,,Do you want to#watch the tutorial?
+Level UP,Level UP,,,Level UP
+Night is coming,Night is coming,,,Night is coming
+Good morning,Good morning,,,Good morning
+Wave 1,Wave 1,,,Wave 1
+Wave 2,Wave 2,,,Wave 2
+Wave 3,Wave 3,,,Wave 3
+You killed it,You killed it,,,You killed it
+Dagger,Dagger,,,Dagger
+Wooden stick,Wooden stick,,,Wooden stick
+Axe,Axe,,,Axe
+Crowbar,Crowbar,,,Crowbar
+Saw,Saw,,,Saw
+Chainsaw,Chainsaw,,,Chainsaw
+Baseball bat,Baseball bat,,,Baseball bat
+Machete,Machete,,,Machete
+Golf club,Golf club,,,Golf club
+Auto pistol,Auto pistol,,,Auto pistol
+Pistol,Pistol,,,Pistol
+Katana,Katana,,,Katana
+Revolver,Revolver,,,Revolver
+Semi auto rifle,Semi auto rifle,,,Semi auto rifle
+AK-40,AK-40,,,AK-40
+M10,M10,,,M10
+Pump action shotgun,Pump action shotgun,,,Pump action shotgun
+Semi auto shotgun,Semi auto shotgun,,,Semi auto shotgun
+Light machine gun,Light machine gun,,,Light machine gun
+Heavy machine gun,Heavy machine gun,,,Heavy machine gun
+Bolt action sniper,Bolt action sniper,,,Bolt action sniper
+Semi auto sniper,Semi auto sniper,,,Semi auto sniper
+Bow,Bow,,,Bow
+Cross bow,Cross bow,,,Cross bow
+Compound bow,Compound bow,,,Compound bow
+Flamethrower,Flamethrower,,,Flamethrower
+Stun gun,Stun gun,,,Stun gun
+Stone axe,Stone axe,,,Stone axe
+Cotton clothes,Cotton clothes,,,Cotton clothes
+Leather jacket,Leather jacket,,,Leather jacket
+Leather armor,Leather armor,,,Leather armor
+Wooden armor,Wooden armor,,,Wooden armor
+Steel armor,Steel armor,,,Steel armor
+Plastic armor,Plastic armor,,,Plastic armor
+Night vision,Night vision,,,Night vision
+Laser sight,Laser sight,,,Laser sight
+Compass,Compass,,,Compass
+Sundial,Sundial,,,Sundial
+Watch,Watch,,,Watch
+Digital Watch,Digital Watch,,,Digital Watch
+Gun silencer,Gun silencer,,,Gun silencer
+Flashlight,Flashlight,,,Flashlight
+Robot suit,Robot suit,,,Robot suit
+Torchlight,Torchlight,,,Torchlight
+Raw meat,Raw meat,,,Raw meat
+Cooked meat,Cooked meat,,,Cooked meat
+Potato,Potato,,,Potato
+Baked potato,Baked potato,,,Baked potato
+Bread,Bread,,,Bread
+First aid kit,First aid kit,,,First aid kit
+Pain killer,Pain killer,,,Pain killer
+Adrenaline,Adrenaline,,,Adrenaline
+Sedative,Sedative,,,Sedative
+Canned food,Canned food,,,Canned food
+Frozen pizza,Frozen pizza,,,Frozen pizza
+Pizza,Pizza,,,Pizza
+Bandage,Bandage,,,Bandage
+Frozen meal,Frozen meal,,,Frozen meal
+Cooked meal,Cooked meal,,,Cooked meal
+Mushroom,Mushroom,,,Mushroom
+Mushroom soup,Mushroom soup,,,Mushroom soup
+Apple,Apple,,,Apple
+Berry,Berry,,,Berry
+Craft desk,Craft desk,,,Craft desk
+Pro craft desk,Pro craft desk,,,Pro craft desk
+Turret,Turret,,,Turret
+Turret drone,Turret drone,,,Turret drone
+Lamp,Lamp,,,Lamp
+Lamp drone,Lamp drone,,,Lamp drone
+Battery box,Battery box,,,Battery box
+Solar generator,Solar generator,,,Solar generator
+Nuclear reactor,Nuclear reactor,,,Nuclear reactor
+Oil generator,Oil generator,,,Oil generator
+Wooden barricade,Wooden barricade,,,Wooden barricade
+Wooden door,Wooden door,,,Wooden door
+Steel barricade,Steel barricade,,,Steel barricade
+Steel door,Steel door,,,Steel door
+Campfire,Campfire,,,Campfire
+Brazier,Brazier,,,Brazier
+Electric turret,Electric turret,,,Electric turret
+Trap,Trap,,,Trap
+signal generator,signal generator,,,signal generator
+Cooker,Cooker,,,Cooker
+Electric furnace,Electric furnace,,,Electric furnace
+Bicycle,Bicycle,,,Bicycle
+Motorcycle,Motorcycle,,,Motorcycle
+Wood,Wood,,,Wood
+Stone,Stone,,,Stone
+Piece of steel ,Piece of steel ,,,Piece of steel 
+Steel,Steel,,,Steel
+Piece of gold,Piece of gold,,,Piece of gold
+Gold,Gold,,,Gold
+Blueprint,Blueprint,,,Blueprint
+Machine parts,Machine parts,,,Machine parts
+Battery,Battery,,,Battery
+Bulb,Bulb,,,Bulb
+Gunpowder,Gunpowder,,,Gunpowder
+Cloth,Cloth,,,Cloth
+Computer chip,Computer chip,,,Computer chip
+Voltage circuit,Voltage circuit,,,Voltage circuit
+Engine,Engine,,,Engine
+Drone,Drone,,,Drone
+Night Craft desk,Night Craft desk,,,Night Craft desk
+Night pro craft desk,Night pro craft desk,,,Night pro craft desk
+Leather,Leather,,,Leather
+Solar panel,Solar panel,,,Solar panel
+Radioactive material,Radioactive material,,,Radioactive material
+Normal ammo,Normal ammo,,,Normal ammo
+Shotgun ammo,Shotgun ammo,,,Shotgun ammo
+Machinegun ammo,Machinegun ammo,,,Machinegun ammo
+Arrow,Arrow,,,Arrow
+Oil,Oil,,,Oil
+Rotten meat,Rotten meat,,,Rotten meat
+GPS machine,GPS machine,,,GPS machine
+Pigeon,Pigeon,,,Pigeon
+White pigeon,White pigeon,,,White pigeon
+Eagle,Eagle,,,Eagle
+Carolina,Carolina,,,Carolina
+Malamute,Malamute,,,Malamute
+Doberman,Doberman,,,Doberman
+Santa,Santa,,,Santa
+Zombie,Zombie,,,Zombie
+Cowboy,Cowboy,,,Cowboy
+Golden axe,Golden axe,,,Golden axe
+Golden katana,Golden katana,,,Golden katana
+Small keen knife,Small keen knife,,,Small keen knife
+Stick made of wood,Stick made of wood,,,Stick made of wood
+Heavy fire axe,Heavy fire axe,,,Heavy fire axe
+Metal bar with a curve,Metal bar with a curve,,,Metal bar with a curve
+Chain with a hard toothed edge,Chain with a hard toothed edge,,,Chain with a hard toothed edge
+Mechanical saw with a rotating chain,Mechanical saw with a rotating chain,,,Mechanical saw with a rotating chain
+Wooden club used to hit a baseball,Wooden club used to hit a baseball,,,Wooden club used to hit a baseball
+Large heavy knife,Large heavy knife,,,Large heavy knife
+Metal club used to hit a golf ball,Metal club used to hit a golf ball,,,Metal club used to hit a golf ball
+Semi-automatic pistol,Semi-automatic pistol,,,Semi-automatic pistol
+Small non-automatic handgun,Small non-automatic handgun,,,Small non-automatic handgun
+Sharp light knife,Sharp light knife,,,Sharp light knife
+Powerful handgun that has six shots,Powerful handgun that has six shots,,,Powerful handgun that has six shots
+Semi-automatic rifle,Semi-automatic rifle,,,Semi-automatic rifle
+Powerful assault rifle,Powerful assault rifle,,,Powerful assault rifle
+Accurate assault rifle,Accurate assault rifle,,,Accurate assault rifle
+Pump action shotgun. One by one,Pump action shotgun. One by one,,,Pump action shotgun. One by one
+Semi-automatic shotgun,Semi-automatic shotgun,,,Semi-automatic shotgun
+Bolt action sniper rifle,Bolt action sniper rifle,,,Bolt action sniper rifle
+Semi-automatic sniper rifle,Semi-automatic sniper rifle,,,Semi-automatic sniper rifle
+Classic bow,Classic bow,,,Classic bow
+Powerful horizontal bow,Powerful horizontal bow,,,Powerful horizontal bow
+"Modern bow that uses a pulley system,","Modern bow that uses a pulley system,",,,"Modern bow that uses a pulley system,"
+Project a stream of fire,Project a stream of fire,,,Project a stream of fire
+Fire electric shock to the nearest zombie ,Fire electric shock to the nearest zombie ,,,Fire electric shock to the nearest zombie 
+Heavy stone axe,Heavy stone axe,,,Heavy stone axe
+Clothes made from cotton,Clothes made from cotton,,,Clothes made from cotton
+Jacket made from leather,Jacket made from leather,,,Jacket made from leather
+Armor made from leather,Armor made from leather,,,Armor made from leather
+Armor made from wood,Armor made from wood,,,Armor made from wood
+Armor made from Steel,Armor made from Steel,,,Armor made from Steel
+Armor made from plastic,Armor made from plastic,,,Armor made from plastic
+Device that enhance night time vision,Device that enhance night time vision,,,Device that enhance night time vision
+Laser to enhance the targeting,Laser to enhance the targeting,,,Laser to enhance the targeting
+Instrument that shows the direction,Instrument that shows the direction,,,Instrument that shows the direction
+Instrument that shows the time by the shadow of sun,Instrument that shows the time by the shadow of sun,,,Instrument that shows the time by the shadow of sun
+mechanical device for measuring time,mechanical device for measuring time,,,mechanical device for measuring time
+Electrical device for measuring time,Electrical device for measuring time,,,Electrical device for measuring time
+Device attached to the gun to reduce the noise,Device attached to the gun to reduce the noise,,,Device attached to the gun to reduce the noise
+Battery-operated portable light,Battery-operated portable light,,,Battery-operated portable light
+Wearable machine,Wearable machine,,,Wearable machine
+Portable fire,Portable fire,,,Portable fire
+Kind of meat,Kind of meat,,,Kind of meat
+Delicious cooked meat,Delicious cooked meat,,,Delicious cooked meat
+Root vegetable,Root vegetable,,,Root vegetable
+Delicious baked potato,Delicious baked potato,,,Delicious baked potato
+White bread Easy to eat,White bread Easy to eat,,,White bread Easy to eat
+Collection of equipment for giving first aid,Collection of equipment for giving first aid,,,Collection of equipment for giving first aid
+Drug used to get relief from pain,Drug used to get relief from pain,,,Drug used to get relief from pain
+You will feel better after a shot,You will feel better after a shot,,,You will feel better after a shot
+You will be able to aim better,You will be able to aim better,,,You will be able to aim better
+I have no idea what's in it,I have no idea what's in it,,,I have no idea what's in it
+You need to cook it before eating,You need to cook it before eating,,,You need to cook it before eating
+Well-cooked pizza,Well-cooked pizza,,,Well-cooked pizza
+Help you to stop bleeding,Help you to stop bleeding,,,Help you to stop bleeding
+Ready made meal,Ready made meal,,,Ready made meal
+Ready to eat,Ready to eat,,,Ready to eat
+Is it toxic?,Is it toxic?,,,Is it toxic?
+Warm soup makes you calm down,Warm soup makes you calm down,,,Warm soup makes you calm down
+Small red apple,Small red apple,,,Small red apple
+Kind of berry,Kind of berry,,,Kind of berry
+Basic craft desk. In order to make items,Basic craft desk. In order to make items,,,Basic craft desk. In order to make items
+Professional craft desk used to make advanced items,Professional craft desk used to make advanced items,,,Professional craft desk used to make advanced items
+Automatic gun machine used to defend the point,Automatic gun machine used to defend the point,,,Automatic gun machine used to defend the point
+Flying turret. It will follow and protect you,Flying turret. It will follow and protect you,,,Flying turret. It will follow and protect you
+Elrectic lamp to provide light at night,Elrectic lamp to provide light at night,,,Elrectic lamp to provide light at night
+Flying lamp. It will follow you and provide powerful light,Flying lamp. It will follow you and provide powerful light,,,Flying lamp. It will follow you and provide powerful light
+Cells used to power electrical devices,Cells used to power electrical devices,,,Cells used to power electrical devices
+Generating electricity by solar panels,Generating electricity by solar panels,,,Generating electricity by solar panels
+Device used to control a nuclear reaction. Permanent generator,Device used to control a nuclear reaction. Permanent generator,,,Device used to control a nuclear reaction. Permanent generator
+Generator used to make electricity by using oil,Generator used to make electricity by using oil,,,Generator used to make electricity by using oil
+Wooden wall used to block the way,Wooden wall used to block the way,,,Wooden wall used to block the way
+Wooden door only for you. Zombies can't go through,Wooden door only for you. Zombies can't go through,,,Wooden door only for you. Zombies can't go through
+Steel wall used to block the way,Steel wall used to block the way,,,Steel wall used to block the way
+Steel door only for you. Zombies can't go through,Steel door only for you. Zombies can't go through,,,Steel door only for you. Zombies can't go through
+Fire that provides light and heat for cooking,Fire that provides light and heat for cooking,,,Fire that provides light and heat for cooking
+Fire that provides light and heat for smelting,Fire that provides light and heat for smelting,,,Fire that provides light and heat for smelting
+Turret that uses electric shock to defend the point,Turret that uses electric shock to defend the point,,,Turret that uses electric shock to defend the point
+Trap makes zombies slow down,Trap makes zombies slow down,,,Trap makes zombies slow down
+Machine that generate GPS signal for you to find home,Machine that generate GPS signal for you to find home,,,Machine that generate GPS signal for you to find home
+Electric cooker that provides heat for cooking,Electric cooker that provides heat for cooking,,,Electric cooker that provides heat for cooking
+Electric machine that provides heat for smelting,Electric machine that provides heat for smelting,,,Electric machine that provides heat for smelting
+Handmade bicycle. Better than walking,Handmade bicycle. Better than walking,,,Handmade bicycle. Better than walking
+"Powered by a motor, using oil","Powered by a motor, using oil",,,"Powered by a motor, using oil"
+Wood. Basic material,Wood. Basic material,,,Wood. Basic material
+Stone. Basic material,Stone. Basic material,,,Stone. Basic material
+Small piece that can be used to make steel,Small piece that can be used to make steel,,,Small piece that can be used to make steel
+Strong metal,Strong metal,,,Strong metal
+Small piece that can be used to make gold,Small piece that can be used to make gold,,,Small piece that can be used to make gold
+Shiny yellow metal,Shiny yellow metal,,,Shiny yellow metal
+Technical drawing,Technical drawing,,,Technical drawing
+Parts of machine,Parts of machine,,,Parts of machine
+Cell that can keep electricity,Cell that can keep electricity,,,Cell that can keep electricity
+Glass bulb inserted into a lamp or a socket,Glass bulb inserted into a lamp or a socket,,,Glass bulb inserted into a lamp or a socket
+Explosive powder of mixture,Explosive powder of mixture,,,Explosive powder of mixture
+Fabric made from cotton,Fabric made from cotton,,,Fabric made from cotton
+Electronic device for processing data,Electronic device for processing data,,,Electronic device for processing data
+Circuit for making extremely high voltage,Circuit for making extremely high voltage,,,Circuit for making extremely high voltage
+Machine that converts power into motion,Machine that converts power into motion,,,Machine that converts power into motion
+Flying robot,Flying robot,,,Flying robot
+Can make items at night,Can make items at night,,,Can make items at night
+Can make advanced items at night,Can make advanced items at night,,,Can make advanced items at night
+Material made from the skin of an animal,Material made from the skin of an animal,,,Material made from the skin of an animal
+Panel used to absorb the sunlight and generate electricity,Panel used to absorb the sunlight and generate electricity,,,Panel used to absorb the sunlight and generate electricity
+Material that has radioactive energy,Material that has radioactive energy,,,Material that has radioactive energy
+Ammo for rifle and pistol,Ammo for rifle and pistol,,,Ammo for rifle and pistol
+Ammo for shotgun,Ammo for shotgun,,,Ammo for shotgun
+Ammo for machinegun,Ammo for machinegun,,,Ammo for machinegun
+Arrow for bow,Arrow for bow,,,Arrow for bow
+Liquid for use as a fuel,Liquid for use as a fuel,,,Liquid for use as a fuel
+Stinky rotten meat,Stinky rotten meat,,,Stinky rotten meat
+Device to find geographic position,Device to find geographic position,,,Device to find geographic position
+Pigeon to collect items,Pigeon to collect items,,,Pigeon to collect items
+White pigeon to collect items,White pigeon to collect items,,,White pigeon to collect items
+Eagle to attack zombies,Eagle to attack zombies,,,Eagle to attack zombies
+Dog to collect items and attack zombies,Dog to collect items and attack zombies,,,Dog to collect items and attack zombies
+Santa costume,Santa costume,,,Santa costume
+Zombie costume,Zombie costume,,,Zombie costume
+Cowboy costume,Cowboy costume,,,Cowboy costume
+Shining golden axe,Shining golden axe,,,Shining golden axe
+Shining golden katana,Shining golden katana,,,Shining golden katana
+Health,Health,,,Health
+Recovery,Recovery,,,Recovery
+Knockback,Knockback,,,Knockback
+Melee damage,Melee damage,,,Melee damage
+Quick reload,Quick reload,,,Quick reload
+Shooting skill,Shooting skill,,,Shooting skill
+Robin Hood,Robin Hood,,,Robin Hood
+Trot,Trot,,,Trot
+Patience,Patience,,,Patience
+Pickpocket,Pickpocket,,,Pickpocket
+Theif,Theif,,,Theif
+Chef,Chef,,,Chef
+Dwarf,Dwarf,,,Dwarf
+Robotics,Robotics,,,Robotics
+Engineering,Engineering,,,Engineering
+Cat,Cat,,,Cat
+Nocturnal,Nocturnal,,,Nocturnal
+Repairman,Repairman,,,Repairman
+Move shooting,Move shooting,,,Move shooting
+Head shooter,Head shooter,,,Head shooter
+Poison immunity,Poison immunity,,,Poison immunity
+Health increases,Health increases,,,Health increases
+Recovery increases,Recovery increases,,,Recovery increases
+Knockback increases,Knockback increases,,,Knockback increases
+Melee damage increases,Melee damage increases,,,Melee damage increases
+Roload becomes faster,Roload becomes faster,,,Roload becomes faster
+Accuracy improves,Accuracy improves,,,Accuracy improves
+Bow accuracy improves,Bow accuracy improves,,,Bow accuracy improves
+Speed increases,Speed increases,,,Speed increases
+Hungry decreases,Hungry decreases,,,Hungry decreases
+Zombies drop more items,Zombies drop more items,,,Zombies drop more items
+Find more items,Find more items,,,Find more items
+A chance to get more foods,A chance to get more foods,,,A chance to get more foods
+A chance to get more metal,A chance to get more metal,,,A chance to get more metal
+Turret reinforced,Turret reinforced,,,Turret reinforced
+Generator reinforced,Generator reinforced,,,Generator reinforced
+Footsteps sound decreases,Footsteps sound decreases,,,Footsteps sound decreases
+Night vision increases,Night vision increases,,,Night vision increases
+Repair speed increases,Repair speed increases,,,Repair speed increases
+Accuracy improves with moving,Accuracy improves with moving,,,Accuracy improves with moving
+Able to shot heads,Able to shot heads,,,Able to shot heads
+Get less damage from poison,Get less damage from poison,,,Get less damage from poison
+Starter pack,Starter pack,,,Starter pack
+Food aid,Food aid,,,Food aid
+Emergency kit,Emergency kit,,,Emergency kit
+Basic craft kit,Basic craft kit,,,Basic craft kit
+Pro craft kit,Pro craft kit,,,Pro craft kit
+Electric craft kit,Electric craft kit,,,Electric craft kit
+Ammo craft kit,Ammo craft kit,,,Ammo craft kit
+Pigeon the bird,Pigeon the bird,,,Pigeon the bird
+Carolina the dog,Carolina the dog,,,Carolina the dog
+5 coins,5 coins,,,5 coins
+100 coins,100 coins,,,100 coins
+300 + 30 coins,300 + 30 coins,,,300 + 30 coins
+600 + 100 coins,600 + 100 coins,,,600 + 100 coins
+1000 + 300 coins,1000 + 300 coins,,,1000 + 300 coins
+Watch ads,Watch ads,,,Watch ads
+Wait for ads,Wait for ads,,,Wait for ads
+Cotton clothes X 1#Axe X 1#Flashlight X 1,Cotton clothes X 1#Axe X 1#Flashlight X 1,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
+Cooked meat X 3#Pizza X 3#Cooked meal X 3,Cooked meat X 3#Pizza X 3#Cooked meal X 3,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
+First aid kit X 2#Bandage X 3#Adrenaline X 2,First aid kit X 2#Bandage X 3#Adrenaline X 2,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
+Wood X 20#Cloth X 10#Stone X 20,Wood X 20#Cloth X 10#Stone X 20,,,Wood X 20#Cloth X 10#Stone X 20
+Blueprint X 5#Steel X 20#Machine parts X 10,Blueprint X 5#Steel X 20#Machine parts X 10,,,Blueprint X 5#Steel X 20#Machine parts X 10
+Battery X 5#Computer chip X 2#Bulb X 2,Battery X 5#Computer chip X 2#Bulb X 2,,,Battery X 5#Computer chip X 2#Bulb X 2
+Steel X 10#Gunpowder X 10,Steel X 10#Gunpowder X 10,,,Steel X 10#Gunpowder X 10
+Pigeon the bird X 1,Pigeon the bird X 1,,,Pigeon the bird X 1
+Carolina the dog X 1,Carolina the dog X 1,,,Carolina the dog X 1
+Please try again,Please try again,,,Please try again
+You can't use that now,You can't use that now,,,You can't use that now
+First steps,First steps,,,First steps
+Thomas Edison,Thomas Edison,,,Thomas Edison
+Melee weapons expert,Melee weapons expert,,,Melee weapons expert
+Bow expert,Bow expert,,,Bow expert
+Collector,Collector,,,Collector
+Blacksmith,Blacksmith,,,Blacksmith
+Sniper,Sniper,,,Sniper
+Centipede slayer,Centipede slayer,,,Centipede slayer
+Rafflesia slayer,Rafflesia slayer,,,Rafflesia slayer
+Giant slayer,Giant slayer,,,Giant slayer
+Hedgehog slayer,Hedgehog slayer,,,Hedgehog slayer
+Zombie slayer,Zombie slayer,,,Zombie slayer
+Special zombie slayer,Special zombie slayer,,,Special zombie slayer
+Woods collector,Woods collector,,,Woods collector
+Good day,Good day,,,Good day
+Rider,Rider,,,Rider
+Never die,Never die,,,Never die
+Ninja,Ninja,,,Ninja
+Play,Play,,,Play
+Continue,Continue,,,Continue
+New game,New game,,,New game
+Shop,Shop,,,Shop
+Settings,Settings,,,Settings
+Achievements,Achievements,,,Achievements
+Records,Records,,,Records
+How to play,How to play,,,How to play
+Credits,Credits,,,Credits
+Survivor,Survivor,,,Survivor
+Current day,Current day,,,Current day
+Best day,Best day,,,Best day
+Level,Level,,,Level
+Bosses defeated,Bosses defeated,,,Bosses defeated
+Loadout,Loadout,,,Loadout
+Clothes,Clothes,,,Clothes
+Hand,Hand,,,Hand
+Gun,Gun,,,Gun
+Deco,Deco,,,Deco
+Zombie survival,Zombie survival,,,Zombie survival
+Loading your progress...,Loading your progress...,,,Loading your progress...
+Packs & costumes,Packs & costumes,,,Packs & costumes
+Personal bests,Personal bests,,,Personal bests
+Back,Back,,,Back
+Close,Close,,,Close
+Buy,Buy,,,Buy
+Owned,Owned,,,Owned
+Unlock,Unlock,,,Unlock
+Packs,Packs,,,Packs
+Costumes,Costumes,,,Costumes
+Earn coins,Earn coins,,,Earn coins
+Delivered when your next game starts,Delivered when your next game starts,,,Delivered when your next game starts
+Progress not loaded,Progress not loaded,,,Progress not loaded
+"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving.","Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving.",,,"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving."
+Retry,Retry,,,Retry
+Play without saving,Play without saving,,,Play without saving
+Saving is unavailable in this environment,Saving is unavailable in this environment,,,Saving is unavailable in this environment
+Progress saved,Progress saved,,,Progress saved
+Saving...,Saving...,,,Saving...
+Could not save,Could not save,,,Could not save
+"Welcome, survivor! Here are 20 coins to start","Welcome, survivor! Here are 20 coins to start",,,"Welcome, survivor! Here are 20 coins to start"
+Resume,Resume,,,Resume
+Save,Save,,,Save
+Home,Home,,,Home
+Paused,Paused,,,Paused
+Game over,Game over,,,Game over
+Rebirth,Rebirth,,,Rebirth
+Survival days,Survival days,,,Survival days
+Continue price,Continue price,,,Continue price
+Your run is over,Your run is over,,,Your run is over
+"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.","Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
+Purchased,Purchased,,,Purchased
+Unlocked,Unlocked,,,Unlocked
+Not enough coins,Not enough coins,,,Not enough coins
+Too many packs waiting,Too many packs waiting,,,Too many packs waiting
+Already owned,Already owned,,,Already owned
+Please wait a moment,Please wait a moment,,,Please wait a moment
+"Connection problem, try again","Connection problem, try again",,,"Connection problem, try again"
+Still loading your progress,Still loading your progress,,,Still loading your progress
+Coins are earned by playing,Coins are earned by playing,,,Coins are earned by playing
+Day survived,Day survived,,,Day survived
+Record day (every 5 days),Record day (every 5 days),,,Record day (every 5 days)
+Boss defeated,Boss defeated,,,Boss defeated
+Welcome gift,Welcome gift,,,Welcome gift
+No ammo,No ammo,,,No ammo
+Melee,Melee,,,Melee
+Night,Night,,,Night
+Morning,Morning,,,Morning
+Afternoon,Afternoon,,,Afternoon
+Evening,Evening,,,Evening
+Day,Day,,,Day
+Achievement unlocked,Achievement unlocked,,,Achievement unlocked
+Delivered,Delivered,,,Delivered
+Your progress was loaded; it applies when you return to the lobby,Your progress was loaded; it applies when you return to the lobby,,,Your progress was loaded; it applies when you return to the lobby
+Zombies are coming,Zombies are coming,,,Zombies are coming
+Survive the night,Survive the night,,,Survive the night
+Already at full health,Already at full health,,,Already at full health
+Bosses,Bosses,,,Bosses
+Continue this run,Continue this run,,,Continue this run
+Days survived,Days survived,,,Days survived
+"Everything the game listens to, on every device","Everything the game listens to, on every device",,,"Everything the game listens to, on every device"
+Fire lights the night and cooks what you find. Build one when you can.,Fire lights the night and cooks what you find. Build one when you can.,,,Fire lights the night and cooks what you find. Build one when you can.
+Getting started,Getting started,,,Getting started
+Got it,Got it,,,Got it
+Nice.,Nice.,,,Nice.
+Night came first,Night came first,,,Night came first
+Reload,Reload,,,Reload
+Skip,Skip,,,Skip
+You have,You have,,,You have
+You survived,You survived,,,You survived
+You survived a day,You survived a day,,,You survived a day
+You're already full,You're already full,,,You're already full
+"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1.","Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1.",,,"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1."
+Zombies killed,Zombies killed,,,Zombies killed
+days,days,,,days

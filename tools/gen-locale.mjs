@@ -4,23 +4,21 @@
  *
  *   npm run locale            writes design/locale/ProjectZ.csv
  *
- * Why this exists: our text lives in src/shared/data/lang.ts, keyed by the English string itself, with a
- * Korean column inherited from the original game. Roblox's own localization system can translate the same
- * strings AUTOMATICALLY into the languages it supports, pick the right one from each player's account, and
- * let human translators correct the machine's guesses. To get there, the strings have to be in ITS table.
+ * Why this exists: our text lives in src/shared/data/lang.ts, keyed by the English string itself. Roblox can
+ * translate those same strings automatically into every language it supports, pick the right one from each
+ * player's account, and let human translators correct the machine. To get there, the strings have to be in
+ * ITS table, which is what this file writes.
  *
- * The CSV shape is Roblox's: Key, Source, Context, Example, then one column per locale. We fill:
- *   Key      our stable key (so a future rename of the English text does not orphan a translation)
- *   Source   the English text, which is also the key today
- *   Context  left for a human, and it MATTERS here -- see below
- *   Example  left for a human
- *   en / ko  what we already have
+ * ONLY the source language ships here, on purpose. The Korean that came with the original game was removed:
+ * two translators for one label fight over it, and the platform has to win, because it is the one that knows
+ * what language the player's account is in. Corrections live in lang.ts's OVERRIDES, per language and per
+ * key, for the few strings the machine gets wrong.
  *
- * The thing to understand before enabling automatic translation: most of our strings are one or two words
- * with no sentence around them, and a machine translating "Round", "Use", "Drop" or "Melt" in isolation has
- * no way to know we mean a magazine, an item action, discarding and smelting. That is what the Context
- * column is for, and it is the difference between a translated game and an embarrassing one. Fill it for
- * every ambiguous entry before turning the switch on.
+ * The CSV shape is Roblox's: Key, Source, Context, Example, then one column per locale.
+ *
+ * Context is left blank for a human to fill, and it is the part that decides whether this ends well: most of
+ * our strings are one or two words with no sentence around them, and a machine translating "Round", "Use",
+ * "Drop" or "Melt" in isolation cannot know we mean a magazine, an item action, discarding and smelting.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -31,22 +29,28 @@ const SRC = join(ROOT, "src/shared/data/lang.ts");
 const OUT_DIR = join(ROOT, "design/locale");
 const OUT = join(OUT_DIR, "ProjectZ.csv");
 
-/** locales Roblox supports that we have something for; the rest are filled by automatic translation */
-const COLUMNS = ["en", "ko", "zh-hans", "ja"];
+/** the source language, and nothing else: everything below it is Roblox's job */
+const COLUMNS = ["en"];
 
 const source = readFileSync(SRC, "utf8");
 
 /**
- * Reads the LANG_TABLE entries. A parser rather than an import because this file is roblox-ts and importing
- * it here would drag the Luau shims in for four fields.
+ * Reads LANG_TABLE. A parser rather than an import because that file is roblox-ts, and importing it here
+ * would drag the Luau shims in just to read a list of strings.
  */
 function entries() {
+	const start = source.indexOf("LANG_TABLE: Array<string> = [");
+	if (start < 0) return [];
+	const block = source.slice(start);
 	const out = [];
-	const re = /\{\s*key:\s*"((?:[^"\\]|\\.)*)"\s*,\s*korean:\s*"((?:[^"\\]|\\.)*)"\s*,\s*chinese:\s*"((?:[^"\\]|\\.)*)"\s*,\s*japanese:\s*"((?:[^"\\]|\\.)*)"\s*\}/g;
+	const seen = new Set();
+	const re = /^\t"((?:[^"\\]|\\.)*)",$/gm;
 	let m;
-	while ((m = re.exec(source)) !== null) {
-		const [, key, korean, chinese, japanese] = m;
-		out.push({ key, en: key, ko: korean, "zh-hans": chinese, ja: japanese });
+	while ((m = re.exec(block)) !== null) {
+		const key = m[1].replace(/\\(.)/g, "$1");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push({ key, en: key });
 	}
 	return out;
 }
@@ -72,14 +76,7 @@ for (const e of rows) {
 if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(OUT, lines.join("\n") + "\n", "utf8");
 
-const filled = {};
-for (const c of COLUMNS) filled[c] = rows.filter(e => (e[c] ?? "") !== "").length;
-
-console.log(`${rows.length} textos -> ${OUT}`);
-for (const c of COLUMNS) {
-	const n = filled[c];
-	console.log(`  ${c.padEnd(8)} ${String(n).padStart(4)} preenchidos, ${rows.length - n} para a tradução automática`);
-}
+console.log(`${rows.length} textos (inglês) -> ${OUT}`);
 console.log(
 	"\nantes de ligar a tradução automática: preencha a coluna Context das entradas de uma ou duas palavras.\n" +
 		'"Round" (carregador), "Use", "Drop", "Melt" e "Learn" não têm como ser traduzidos sem ela.',
