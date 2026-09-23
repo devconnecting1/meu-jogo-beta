@@ -1049,8 +1049,11 @@ task.spawn(() => {
 const WALLET_PUSH_S = 0.25;
 const pushedWallet = new Map<Player, string>();
 
+/** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
 function walletSignature(save: PlayerSaveData): string {
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}`;
+	let titles = "";
+	for (const v of save.titles) titles += v > 0 ? "1" : "0";
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}`;
 }
 
 function pushWallets(): void {

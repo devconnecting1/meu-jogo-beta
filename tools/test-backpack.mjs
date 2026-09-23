@@ -1321,12 +1321,14 @@ console.log("\n10) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const TIT = require(join(SRC, "shared/data/titles.ts"));
 	const { Nameplate, TITLE_TEXT } = require(join(SRC, "client/ui/nameplate.ts"));
 
-	// a survivor who earned Survivor and shows it; 37 zombies put down; this life is at day 3
+	// a survivor who earned Survivor and shows it; 37 zombies put down; this life is at day 8, but only 2 of its
+	// midnights were credited by the server (the others were counted before it counted days, or set by an admin)
 	for (let i = 0; i < save.titles.length; i++) save.titles[i] = 0;
 	save.titles[TIT.TitleId.Survivor] = 1;
 	save.equipTitle = TIT.TitleId.Survivor;
 	save.zombieKills = 37;
-	save.day = 3;
+	save.day = 8;
+	save.lifeNights = 2;
 	const asked = [];
 	saveClient.sessionReady = () => true;
 	saveClient.requestSave = () => true;
@@ -1472,7 +1474,7 @@ console.log("\n10) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	check("um botao desabilitado nao pede nada ao servidor", asked.length === 0);
 	click(row(3), "Week One");
 	check(
-		"Week One conta os dias desta vida: 2 / 7",
+		"Week One conta as noites que o SERVIDOR creditou a esta vida (nao o dia do save): 2 / 7",
 		noteText() === "Stay alive for 7 days in one life. Days survived in this life: 2 / 7",
 		noteText(),
 	);

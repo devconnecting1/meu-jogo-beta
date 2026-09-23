@@ -1319,6 +1319,47 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	const keep = { level: mine.level, exp: mine.exp };
 	applyWallet(mine, older);
 	check(mine.level === keep.level && mine.exp === keep.exp, "a wallet without level or XP leaves them alone");
+
+	// MON-05: what the wardrobe reads is pushed too, each on its own. A killing blow that pays no XP still counts a
+	// zombie put down (the Horde Breaker line), and nothing else in the wallet moved with it
+	const pushed = () => pushes(p).length;
+	let count = pushed();
+	const kills = save.zombieKills;
+	s.sim.progress.zombieKilled(900003, 0, sp.slot, 0);
+	s.run(0.5);
+	const kill = pushes(p).pop()?.args[0];
+	check(
+		save.zombieKills === kills + 1 && pushed() === count + 1 && kill?.wallet?.zombieKills === kills + 1,
+		"a killing blow worth 0 XP still pushes the wallet, with the kill count in it",
+		JSON.stringify({ kills: save.zombieKills, pushes: pushed() - count, wallet: kill?.wallet?.zombieKills }),
+	);
+	applyWallet(mine, kill.wallet);
+	check(mine.zombieKills === kills + 1, "…and the client's copy counts it (Zombies put down: n / 100)");
+	// a title granted by the server, and nothing else
+	count = pushed();
+	save.titles[0] = 1;
+	s.run(0.5);
+	const titled = pushes(p).pop()?.args[0];
+	check(pushed() === count + 1 && titled?.wallet?.titles?.[0] === 1, "a title granted pushes the wallet");
+	// a midnight credited while the run pays no coins (§9.3): the life's day and nights move, the money does not
+	count = pushed();
+	save.day += 1;
+	save.lifeNights += 1;
+	s.run(0.5);
+	const night = pushes(p).pop()?.args[0];
+	check(
+		pushed() === count + 1 && night?.wallet?.day === save.day && night?.wallet?.lifeNights === save.lifeNights,
+		"a day credited to the life pushes the wallet, with the day and the nights in it",
+		JSON.stringify({ pushes: pushed() - count, day: night?.wallet?.day, nights: night?.wallet?.lifeNights }),
+	);
+	mine.day = 1;
+	mine.lifeNights = 0;
+	applyWallet(mine, night.wallet);
+	check(
+		mine.day === save.day && mine.lifeNights === save.lifeNights,
+		"…and the client's copy takes both from the server (HUD life day, Week One progress)",
+		JSON.stringify({ day: mine.day, nights: mine.lifeNights }),
+	);
 	s.quit(p);
 });
 

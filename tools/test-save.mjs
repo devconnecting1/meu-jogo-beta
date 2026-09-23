@@ -1121,6 +1121,21 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	SAVE.applyWallet(client, wallet);
 	check(SAVE.ownsTitle(client, TIT.TitleId.HordeBreaker) && client.zombieKills === 101, "a copia do cliente espelha");
 	checkEq(client.equipTitle, -1, "e deixa de mostrar um titulo que o servidor nao lista");
+	// the life's day and its credited nights: the server's (the HUD's life day, the wardrobe's Week One progress)
+	const alive = SAVE.defaultSave();
+	alive.day = 8;
+	alive.lifeNights = 2;
+	const lifeWallet = SAVE.walletOf(alive);
+	check(lifeWallet.day === 8 && lifeWallet.lifeNights === 2, "a carteira leva o dia da vida e as noites creditadas");
+	const mirror = SAVE.defaultSave();
+	mirror.day = 9;
+	SAVE.applyWallet(mirror, lifeWallet);
+	check(mirror.day === 8 && mirror.lifeNights === 2, "e a copia do cliente fica com os do servidor");
+	const olderServer = { ...lifeWallet };
+	delete olderServer.day;
+	delete olderServer.lifeNights;
+	SAVE.applyWallet(mirror, olderServer);
+	check(mirror.day === 8 && mirror.lifeNights === 2, "uma carteira sem eles (servidor antigo) nao os mexe");
 	killer.titles[TIT.TitleId.HordeBreaker] = 0;
 	SAVE.enforceSaveInvariants(killer);
 	checkEq(killer.equipTitle, -1, "tirar o titulo (admin) o tira do nome");

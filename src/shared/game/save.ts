@@ -191,6 +191,13 @@ export interface Wallet {
 	/** v5 (MON-05): what the server says was earned, and the kill count a locked Horde Breaker shows */
 	titles: Array<number>;
 	zombieKills: number;
+	/** v5 (MON-05): the nights the server credited to this life -- a locked Week One's progress. Optional: older servers */
+	lifeNights?: number;
+	/**
+	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
+	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
+	 */
+	day?: number;
 	/**
 	 * Level and XP, from PROGRESS_SERVER_PHASE on (§11.3 F2) the SERVER's (server/sim/progress.ts `awardExp`): this
 	 * wallet is how they reach the client. Optional so a wallet from an older server still parses.
@@ -485,6 +492,8 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		runRev: save.runRev,
 		titles: copyArray(save.titles),
 		zombieKills: save.zombieKills,
+		lifeNights: save.lifeNights,
+		day: save.day,
 		level: save.level,
 		exp: save.exp,
 	};
@@ -837,6 +846,11 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
 	// a title the server no longer lists is not shown by this copy either
 	save.equipTitle = validTitle(save, save.equipTitle);
+	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them
+	if (isFiniteNumber(w.lifeNights)) save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
+	// ...and so is the life's day, from the phase the server counts days: its midnight may have refused this
+	// survivor one (dead, absent, AFK), which a client that counted its own midnight would never know
+	if (MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) save.day = readInt(w.day, save.day, 1, L.DAY_MAX);
 	// XP and levels are the server's from PROGRESS_SERVER_PHASE on, and nothing else ever told this client: the
 	// HUD's XP bar sat at 0 and a level-up never arrived (owner's playtest, 2026-09-23). Below that phase the
 	// client levels itself and a wallet carrying the last REPORTED copy would roll its XP back, so it is ignored.

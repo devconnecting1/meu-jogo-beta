@@ -165,14 +165,15 @@ function shownTitle(ctx: GameContext): number {
 
 /**
  * How far a locked title is, on the counters the SERVER keeps (the wallet and the LoadAck mirror them): the kills its
- * credit gave you, the days this life has survived. Never above the title's goal.
+ * credit gave you, the midnights it credited to this life (`lifeNights` -- not `day`, which may hold days counted
+ * before the server counted them, or set by an admin). Never above the title's goal.
  */
 function titleProgress(ctx: GameContext, titleId: number): number {
 	const save = ctx.save;
 	const def = TITLES[titleId];
 	if (def === undefined) return 0;
 	if (titleId === TitleId.HordeBreaker) return math.clamp(save.zombieKills, 0, def.goal);
-	if (titleId === TitleId.WeekOne) return math.clamp(save.day - 1, 0, def.goal);
+	if (titleId === TitleId.WeekOne) return math.clamp(save.lifeNights, 0, def.goal);
 	return ownsTitle(save, titleId) ? def.goal : 0;
 }
 
