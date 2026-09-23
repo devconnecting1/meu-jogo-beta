@@ -1,0 +1,38 @@
+{
+	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden)",
+	"recordedFrom": "e097eb3 (the flat town, the commit before the art)",
+	"scenes": {
+		"street": {
+			"count": 1223,
+			"sha1": "bdabe48fa776283e846ed667a9c81381dce01cef"
+		},
+		"downtown": {
+			"count": 1206,
+			"sha1": "d5af9423b5e6f94c80bb188b5785f887a6a5c9fc"
+		},
+		"park": {
+			"count": 956,
+			"sha1": "345e4532d863d70f29f82f4839fb06e5c5f8ac08"
+		},
+		"school": {
+			"count": 524,
+			"sha1": "e52451cbce8ba41c52700b3afb8289a8ed468f44"
+		},
+		"gas": {
+			"count": 705,
+			"sha1": "2e058f845e0eab2bed38e21b292c1736b8a02ada"
+		},
+		"street-night": {
+			"count": 1223,
+			"sha1": "e6f7e5dca0a38b4127a62b920cd4b643bdee071e"
+		},
+		"overview": {
+			"count": 4420,
+			"sha1": "a268ead5eb1951bf3e977e4d9d6c77582762c411"
+		},
+		"border": {
+			"count": 408,
+			"sha1": "d07406c8729918ca17c7c4cac3df0aa27f129017"
+		}
+	}
+}
