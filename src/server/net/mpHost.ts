@@ -22,6 +22,7 @@
  */
 import { GAME_NAME } from "shared/module";
 import { DESIGN } from "shared/engine/constants";
+import { TITLES } from "shared/data/titles";
 import {
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
@@ -238,6 +239,13 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	// starts — on every server kind (server/sim/life.ts rules 4 and 5)
 	sim.onDeath = sp => lives.died(sp);
 	lives.onSaveChanged = userId => options.saveChanged?.(userId);
+	// MON-05: a title was earned (the save has it already): the survivor hears it on the reliable channel, and the
+	// session writes it -- a title must not wait for the next report to reach the DataStore
+	sim.onTitleUnlocked = (sp, titleId) => {
+		replicator.titleUnlocked(sp.slot, titleId);
+		options.saveChanged?.(sp.userId);
+		print(`[${GAME_NAME}] ${sp.name} earned the title ${TITLES[titleId]?.name ?? titleId}`);
+	};
 	lives.onStandUp = (sp, why) => {
 		print(
 			`[${GAME_NAME}] ${sp.name} is back on their feet (${why}) in slot ${sp.slot} at ` +

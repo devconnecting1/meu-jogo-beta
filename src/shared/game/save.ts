@@ -7,6 +7,7 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
+import { TITLES, titleToWire } from "shared/data/titles";
 
 /**
  * v1: raw client JSON (shopHave = pending packs). v2: server-validated, packsBought/packsOpened/costumes.
@@ -27,12 +28,25 @@ import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip 
  *   - a server rolled back to v3 code drops the two unknown keys and reads no `equipDeco`, so the survivor comes
  *     back with no cosmetic EQUIPPED. What they OWN (`costumes`, the inventory) is untouched in both directions:
  *     a rollback costs one click in the backpack, never a purchase.
+ *
+ * v5 (MON-05): titles, EARNED on the server's own counters and never sold. Three new fields, same document,
+ * additive: `titles` (one flag per shared/data/titles.ts id, server-owned like `costumes`), `zombieKills` (the
+ * lifetime killing blows the server credited, server-owned like `bossKills`) and `equipTitle` (the one shown under
+ * the name, -1 = none, checked against `titles` like an outfit against `costumes`).
+ *   - a v4 document has none of them: no title unlocked, no kill counted, nothing shown -- exactly the truth, since
+ *     no server counted any of it before v5;
+ *   - a server rolled back to v4 code drops all three when it writes. What was EARNED survives that anyway: every
+ *     session also writes `titles` and `zombieKills` to a second document v4 never opens (server/save/titleRecord.ts,
+ *     store `ProjectZ_Titles`), and the next v5 load takes the larger of the two. So a rollback forgets only WHICH
+ *     title was shown -- one click in the wardrobe -- never a title or a kill.
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
 export const SAVE_VERSION_COSMETIC_SLOTS = 4;
+/** the first version with `titles` / `zombieKills` / `equipTitle` (MON-05) */
+export const SAVE_VERSION_TITLES = 5;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -80,7 +94,7 @@ export function defaultSettings(): SettingsData {
 /**
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
- *   money, deathCount, bestDay, packsBought, costumes, runRev, version
+ *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  */
@@ -135,6 +149,15 @@ export interface PlayerSaveData {
 	equipOutfit: number;
 	/** v4 (MON-04): EQUIPS id of the pet that follows the survivor (EquipSlot.Pet), -1 = none */
 	equipPet: number;
+	/** v5 (MON-05): 1 = earned, per TITLES id. Written only by the server (server/save/titles.ts `grantTitle`) */
+	titles: Array<number>;
+	/**
+	 * v5 (MON-05): lifetime zombies put down -- the killing blows the SERVER's kill credit gave this survivor
+	 * (server/sim/progress.ts), never an assist and never a number a report carried. It only grows.
+	 */
+	zombieKills: number;
+	/** v5 (MON-05): TITLES id shown under the name, -1 = none; must be earned (`enforceSaveInvariants`) */
+	equipTitle: number;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -147,6 +170,9 @@ export interface Wallet {
 	packsOpened: Array<number>;
 	costumes: Array<number>;
 	runRev: number;
+	/** v5 (MON-05): what the server says was earned, and the kill count a locked Horde Breaker shows */
+	titles: Array<number>;
+	zombieKills: number;
 }
 
 function zeros(n: number): Array<number> {
@@ -214,8 +240,10 @@ export function defaultSave(): PlayerSaveData {
 
 /**
  * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
- * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked)
- * and settings. The server applies it on the "newRun" action; the client applies the same to its copy.
+ * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked),
+ * titles, the kill count and the title shown (MON-05: what was earned is the survivor's, not the run's), and
+ * settings. The server applies it on the "newRun" action and when a world ends (MP-22, server/sim/life.ts
+ * `restartWorld`); the client applies the same to its copy.
  */
 export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
@@ -228,6 +256,7 @@ export function resetRun(save: PlayerSaveData): void {
 	// a costume is forever; a pigeon that came in a pack lived in the inventory the starter kit just replaced
 	save.equipOutfit = validEquip(save, save.equipOutfit, EquipSlot.Outfit);
 	save.equipPet = validEquip(save, save.equipPet, EquipSlot.Pet);
+	save.equipTitle = validTitle(save, save.equipTitle);
 }
 
 function emptySave(): PlayerSaveData {
@@ -269,6 +298,9 @@ function emptySave(): PlayerSaveData {
 		equipGun: -1,
 		equipOutfit: -1,
 		equipPet: -1,
+		titles: zeros(TITLES.size()),
+		zombieKills: 0,
+		equipTitle: -1,
 	};
 }
 
@@ -367,6 +399,26 @@ export function petLookOf(save: PlayerSaveData): number {
 	return petLookOfEquip(id);
 }
 
+/** has the SERVER granted this title (MON-05)? `titles` is written only by server/save/titles.ts `grantTitle` */
+export function ownsTitle(save: PlayerSaveData, titleId: number): boolean {
+	if (titleId < 0 || titleId >= TITLES.size() || titleId % 1 !== 0) return false;
+	return (save.titles[titleId] ?? 0) > 0;
+}
+
+/** `titleId` when it can be shown (a real title this survivor earned), otherwise -1 */
+function validTitle(save: PlayerSaveData, titleId: number): number {
+	return ownsTitle(save, titleId) ? titleId : -1;
+}
+
+/**
+ * What the title line DRAWS, as the wire byte (shared/data/titles.ts `titleToWire`: 0 = none): the equipped title if
+ * it is earned, otherwise none. Like `outfitLookOf`, it asks ownership again, so nothing a report or a stray write
+ * put in `equipTitle` ever reaches the wire or a nameplate.
+ */
+export function titleWireOf(save: PlayerSaveData): number {
+	return titleToWire(validTitle(save, save.equipTitle));
+}
+
 export function pendingPacks(save: PlayerSaveData, packId: number): number {
 	return math.max(0, (save.packsBought[packId] ?? 0) - (save.packsOpened[packId] ?? 0));
 }
@@ -387,6 +439,8 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		packsOpened: copyArray(save.packsOpened),
 		costumes: copyArray(save.costumes),
 		runRev: save.runRev,
+		titles: copyArray(save.titles),
+		zombieKills: save.zombieKills,
 	};
 }
 
@@ -501,6 +555,11 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		// v4: absent in a v3 document, whose `equipDeco` is routed to the right one of the two (the migration)
 		equipOutfit: readInt(r.equipOutfit, legacyCosmetic(r, EquipSlot.Outfit, fb.equipOutfit), -1, eqMax),
 		equipPet: readInt(r.equipPet, legacyCosmetic(r, EquipSlot.Pet, fb.equipPet), -1, eqMax),
+		// v5: what was earned is the SERVER's (copied, never read from `r`); only the choice of what to show is read,
+		// and `enforceSaveInvariants` checks it against those earned flags. Absent in v4: nothing shown
+		titles: copyArray(fb.titles),
+		zombieKills: fb.zombieKills,
+		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 	};
 }
 
@@ -548,6 +607,10 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	// `costumes` and the pack-capped inventory). A report naming one it does not own is corrected to none.
 	s.equipOutfit = validEquip(s, s.equipOutfit, EquipSlot.Outfit);
 	s.equipPet = validEquip(s, s.equipPet, EquipSlot.Pet);
+	// MON-05: the same rule for the title line -- only one the server granted (`titles`) is shown, so a report
+	// naming one it never earned is corrected to none, and an admin taking a title back takes it off the plate
+	s.equipTitle = validTitle(s, s.equipTitle);
+	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -617,6 +680,9 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipGun = src.equipGun;
 	dst.equipOutfit = src.equipOutfit;
 	dst.equipPet = src.equipPet;
+	copyInto(dst.titles, src.titles);
+	dst.zombieKills = src.zombieKills;
+	dst.equipTitle = src.equipTitle;
 	return dst;
 }
 
@@ -635,6 +701,10 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	s.deathCount = readInt(r.deathCount, 0, 0, L.COUNTER_MAX);
 	s.bestDay = readInt(r.bestDay, s.day, 1, L.DAY_MAX);
 	s.costumes = readIntArray(r.costumes, COSTUMES.size(), () => 1, undefined);
+	// v5 (MON-05): absent in a v4 document -- nothing earned, nothing counted (server/save/titleRecord.ts may still
+	// bring back what a rolled-back server dropped, on the session load)
+	s.titles = readIntArray(r.titles, TITLES.size(), () => 1, undefined);
+	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);
@@ -709,5 +779,10 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	}
 	save.costumes = readIntArray(w.costumes, COSTUMES.size(), () => 1, save.costumes);
 	save.runRev = math.max(save.runRev, readInt(w.runRev, save.runRev, 0, L.COUNTER_MAX));
+	// MON-05: the earned flags are the server's to state, like `costumes`; the kill count only grows
+	save.titles = readIntArray(w.titles, TITLES.size(), () => 1, save.titles);
+	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
+	// a title the server no longer lists is not shown by this copy either
+	save.equipTitle = validTitle(save, save.equipTitle);
 	return true;
 }

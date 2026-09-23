@@ -23,6 +23,11 @@ export interface RemotePlayerView {
 	/** what they wear (OutfitLook) and what follows them (PetLook), MON-04; 0 = none */
 	outfit: number;
 	pet: number;
+	/**
+	 * the title under their name (MON-05) as the wire byte (`titleToWire`: 0 = none) -- only ever one the server says
+	 * they earned
+	 */
+	title: number;
 	x: number;
 	y: number;
 	/** facing/aim in radians (world frame) */

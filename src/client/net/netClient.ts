@@ -45,6 +45,7 @@ import { createRawInput, readRawInput } from "./localInput";
 import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
 import { DESIGN } from "shared/engine/constants";
+import { titleFromWire } from "shared/data/titles";
 import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE, TOWN_SEED_MAX, WORLD_SEED_ATTRIBUTE } from "shared/net/mpConfig";
 import {
 	AnnounceKind,
@@ -119,6 +120,8 @@ interface RosterEntry {
 	/** OutfitLook / PetLook (MON-04): from PlayerJoined, then kept current by PlayerProfile */
 	outfit: number;
 	pet: number;
+	/** the title byte under the name (MON-05, `titleToWire`: 0 = none), kept current the same way */
+	title: number;
 	/**
 	 * LifeState of the last `PlayerLife` delta (§4.5, §7.3). This — and NOT the snapshot's PlayerFlag.Dead /
 	 * Downed — is what says whether a survivor is up, down or gone: `Snap` is unreliable, and a death that is
@@ -254,6 +257,7 @@ let townGuardUntil = 0;
 const TOWN_GUARD_S = 2;
 /** who wants to hear about the town (client/main.client.ts); called INSIDE the World event, in order */
 const townListeners = new Array<(notice: TownNotice) => void>();
+const titleListeners = new Array<(titleId: number) => void>();
 let queueDropped = 0;
 let fxDropped = 0;
 let malformed = 0;
@@ -395,6 +399,7 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 			level: e.level,
 			outfit: e.outfit,
 			pet: e.pet,
+			title: e.title,
 			life: 0,
 		});
 		// this is how a client learns its own slot (§4.4: the newcomer's roster includes itself)
@@ -409,6 +414,7 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		entry.level = e.level;
 		entry.outfit = e.outfit;
 		entry.pet = e.pet;
+		entry.title = e.title;
 		return;
 	}
 	if (e.t === WorldEv.PlayerLeft) {
@@ -441,6 +447,11 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		return;
 	}
 	if (e.t === WorldEv.Announce) {
+		// MON-05: a title this survivor just earned is their news, not the round banner's (the decoder checked the id)
+		if (e.msg === AnnounceKind.TitleUnlocked) {
+			noticeTitle(titleFromWire(e.arg));
+			return;
+		}
 		pendingAnnounce.push(announceText(e.msg, e.arg));
 		return;
 	}
@@ -470,6 +481,15 @@ function noticeTown(notice: TownNotice): void {
 	for (const fn of townListeners) {
 		const [ok, err] = pcall(() => fn(notice));
 		if (!ok) warn(`[${GAME_NAME}] town notice failed: ${tostring(err)}`);
+	}
+}
+
+/** MON-05: the same for a title the server says this survivor earned (a TITLES id) */
+function noticeTitle(titleId: number): void {
+	if (titleId < 0) return;
+	for (const fn of titleListeners) {
+		const [ok, err] = pcall(() => fn(titleId));
+		if (!ok) warn(`[${GAME_NAME}] title notice failed: ${tostring(err)}`);
 	}
 }
 
@@ -680,6 +700,15 @@ export function netTownSeed(): number {
  */
 export function netOnTown(fn: (notice: TownNotice) => void): void {
 	townListeners.push(fn);
+}
+
+/**
+ * MON-05: `fn` hears each title the SERVER granted this survivor (a TITLES id), once, the moment it did -- the
+ * `Announce{TitleUnlocked}` sent to this client alone. client/ui/titleNotice.ts mirrors it into the save's display
+ * copy and shows the toast.
+ */
+export function netOnTitle(fn: (titleId: number) => void): void {
+	titleListeners.push(fn);
 }
 
 /** a new world (a new run, a rebirth): forget the session state but keep the connection and the roster */
@@ -964,6 +993,7 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		level: entry.level,
 		outfit: entry.outfit,
 		pet: entry.pet,
+		title: entry.title,
 		x: state.x,
 		y: state.y,
 		angle: state.aim,

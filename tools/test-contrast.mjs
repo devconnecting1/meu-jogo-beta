@@ -295,6 +295,34 @@ const PAIRS = [
 		MIN_TEXT,
 		"cadeado e preco sobre o ladrilho bloqueado selecionado",
 	],
+
+	// --- titles (MON-05): the title is TEXT in its game colour, under the name on the nameplate (the popover) and on
+	// the wardrobe's rows (graphite `row`; a locked row is `well`). GAME.success, the green the owner named for
+	// Survivor, reads on the plate (4,95:1) but not on the row (4,07:1): client/ui/titleStyle.ts uses the nearest game
+	// token that passes both, STAT.bonus (the same green, lighter). The pair that failed is kept below as a record.
+	["STAT.bonus", "THEME.popover", MIN_TEXT, "titulo [Survivor] sob o nome, na placa"],
+	["STAT.effect", "THEME.popover", MIN_TEXT, "titulo [Horde Breaker] sob o nome, na placa"],
+	["STAT.value", "THEME.popover", MIN_TEXT, "titulo [Week One] sob o nome, na placa"],
+	["STAT.bonus", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Survivor]"],
+	["STAT.effect", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Horde Breaker]"],
+	["STAT.value", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Week One]"],
+	["STAT.bonus", "SURFACE.well", MIN_TEXT, "linha bloqueada (mais escura): [Survivor]"],
+	["STAT.effect", "SURFACE.well", MIN_TEXT, "linha bloqueada: [Horde Breaker]"],
+	["STAT.value", "SURFACE.well", MIN_TEXT, "linha bloqueada: [Week One]"],
+	["THEME.foreground", "SURFACE.row", MIN_TEXT, "linha [None]"],
+	["THEME.mutedForeground", "SURFACE.row", MIN_TEXT, "como ganhar, na linha (Survive your first night.)"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "como ganhar e o cadeado, na linha bloqueada"],
+	["SURFACE.line", "SURFACE.groove", MIN_UI, "o contorno de ferro da linha sobre o leito escuro"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "o anel azul da linha selecionada sobre o leito"],
+	["SURFACE.row", "SURFACE.well", MIN_TONE, "linha ganha x linha bloqueada: a bloqueada e mais escura"],
+];
+
+/**
+ * Pairs a token was measured at and FAILED, kept on record: each must stay under its minimum for the choice it
+ * justifies to still hold (if the palette ever moves them over, the choice should be revisited).
+ */
+const RECORDED_FAILS = [
+	["GAME.success", "SURFACE.row", MIN_TEXT, "MON-05: o verde pedido para [Survivor] na linha -> STAT.bonus"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
@@ -319,6 +347,43 @@ for (const [frontPath, backPath, min, why] of PAIRS) {
 		label,
 		r + 1e-9 >= min,
 		`${r.toFixed(2).padStart(5)}:1  (min ${min})  ${hex(front)} sobre ${hex(back)}  ${why}`,
+	);
+}
+
+// MON-05: every title's tone (shared/data/titles.ts) resolves, in client/ui/titleStyle.ts, to a token whose pairs on
+// the nameplate and on both row faces are measured above -- a new title, or a tone moved, cannot skip this table
+{
+	const titlesSrc = readFileSync(join(SRC, "shared", "data", "titles.ts"), "utf8");
+	const styleSrc = readFileSync(join(UI, "titleStyle.ts"), "utf8");
+	const tones = [...titlesSrc.matchAll(/^\t\ttone: "(\w+)",$/gm)].map(m => m[1]);
+	const resolve = tone => {
+		const m = styleSrc.match(new RegExp(`tone === "${tone}"\\) return (STAT\\.\\w+);`));
+		if (m !== null) return m[1];
+		// the fall-through at the end of toneColor
+		const last = styleSrc.match(/\n\treturn (STAT\.\w+);\n}/);
+		return last !== null ? last[1] : undefined;
+	};
+	const measured = (front, back) => PAIRS.some(([f, b, min]) => f === front && b === back && min >= MIN_TEXT);
+	for (const tone of tones) {
+		const token = resolve(tone);
+		check(
+			`titulo de tom "${tone}" -> ${token}`.padEnd(width),
+			token !== undefined &&
+				measured(token, "THEME.popover") &&
+				measured(token, "SURFACE.row") &&
+				measured(token, "SURFACE.well"),
+			"medido na placa e nas duas faces da linha",
+		);
+	}
+	check("os titulos de hoje sao 3", tones.length === 3, `${tones.length} tons em titles.ts`);
+}
+
+for (const [frontPath, backPath, min, why] of RECORDED_FAILS) {
+	const r = contrast(role(frontPath), role(backPath));
+	check(
+		`${frontPath} / ${backPath} (registrado)`.padEnd(width),
+		r < min,
+		`${r.toFixed(2).padStart(5)}:1  (abaixo de ${min}, como registrado)  ${why}`,
 	);
 }
 

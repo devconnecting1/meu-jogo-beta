@@ -48,3 +48,8 @@ export const LEGACY_STORE = storeName("ProjectZ_Save_v1");
 export const ADMIN_LOG_STORE = storeName("ProjectZ_AdminLog");
 /** the worlds that ended, how many days each lasted (MP-22, server/save/worldLog.ts) */
 export const WORLD_LOG_STORE = storeName("ProjectZ_Worlds");
+/**
+ * MON-05: the titles and the kill count each player EARNED, kept outside the save so a server rolled back to v4
+ * code (which rewrites the save without them) cannot erase them (server/save/titleRecord.ts). Keyed by UserId.
+ */
+export const TITLE_STORE = storeName("ProjectZ_Titles");

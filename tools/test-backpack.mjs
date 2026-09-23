@@ -741,6 +741,13 @@ function phase(label, fn) {
 			if (e.kind === "new") r.toastNew++;
 		} else if (e.kind === "new") r.bagNew++;
 		else r.bagGone++;
+		// PZ_DEBUG=1: name what a step created or destroyed, with the path it hangs from
+		if (process.env.PZ_DEBUG && !toast) {
+			const path = [];
+			for (let i = e.inst; i !== undefined && path.length < 8; i = i.Parent)
+				path.unshift(`${i.Name}:${i.ClassName}`);
+			console.log(`        [${label}] ${e.kind} ${path.join(" / ")}`);
+		}
 	}
 	table.push(r);
 	return r;
@@ -1131,8 +1138,8 @@ pack.close();
 		.filter(c => c.ClassName === "TextButton")
 		.map(b => b.Text);
 	check(
-		"so as abas do que existe: Outfits e Pets",
-		JSON.stringify(tabs) === '["Outfits","Pets"]',
+		"so as abas do que existe: Outfits, Pets e os titulos (MON-05)",
+		JSON.stringify(tabs) === '["Outfits","Pets","Titles"]',
 		JSON.stringify(tabs),
 	);
 	const tilesOf = i =>
@@ -1300,6 +1307,274 @@ pack.close();
 		!sameColor(torsoOf(COS.OutfitLook.Cowboy), torsoOf(COS.OutfitLook.Santa)) &&
 			!sameColor(torsoOf(COS.OutfitLook.None), torsoOf(COS.OutfitLook.Cowboy)),
 	);
+}
+
+// ---------------------------------------------------------------- 10. the titles (MON-05), on the same kit
+
+console.log("\n10) os titulos (MON-05): linhas, cadeado, o selecionado, a previa da placa e a acao unica\n");
+{
+	const saveClient = require(join(SRC, "client/systems/saveClient.ts"));
+	const { showWardrobe } = require(join(SRC, "client/ui/wardrobe.ts"));
+	const { buyCostume } = require(join(SRC, "server/save/costumes.ts"));
+	const { equipTitle } = require(join(SRC, "server/save/titles.ts"));
+	const { THEME, SURFACE, STAT } = require(join(SRC, "client/ui/theme.ts"));
+	const TIT = require(join(SRC, "shared/data/titles.ts"));
+	const { Nameplate, TITLE_TEXT } = require(join(SRC, "client/ui/nameplate.ts"));
+
+	// a survivor who earned Survivor and shows it; 37 zombies put down; this life is at day 3
+	for (let i = 0; i < save.titles.length; i++) save.titles[i] = 0;
+	save.titles[TIT.TitleId.Survivor] = 1;
+	save.equipTitle = TIT.TitleId.Survivor;
+	save.zombieKills = 37;
+	save.day = 3;
+	const asked = [];
+	saveClient.sessionReady = () => true;
+	saveClient.requestSave = () => true;
+	saveClient.invokeShopAction = request => {
+		asked.push(JSON.parse(JSON.stringify(request)));
+		// the server's own rules, on the same save the client mirrors
+		const r =
+			request.kind === "equipTitle" ? equipTitle(save, request.titleId) : buyCostume(save, request.costumeId);
+		return r.ok ? { ok: true, price: 0 } : { ok: false, reason: r.reason };
+	};
+	const close = showWardrobe(ctx, { onBack: () => {}, onEquip: () => {}, onUnequip: () => {} });
+	flush();
+	const screen = () => ctx.uiLayer.FindFirstChild("Wardrobe");
+	const deep = (root, name) => root?.GetDescendants().find(d => d.Name === name);
+	const titlesPage = () => deep(screen(), "Page2");
+	const row = j => deep(titlesPage(), `Row${j}`);
+	const rowText = (j, name) => deep(row(j), name)?.Text;
+	const rowColor = (j, name) => deep(row(j), name)?.TextColor3;
+	const face = r => r.FindFirstChild("PlateFace")?.BackgroundColor3;
+	const locked = r => r.FindFirstChild("Lock")?.Visible === true;
+	const worn = j => deep(row(j), "Worn")?.Visible === true;
+	/** the blue ring of the selected row: the plate's "outline" state in the tab-active blue */
+	const ringed = r => {
+		const band = r.FindFirstChild("PlateBand");
+		return (
+			band?.Visible === true &&
+			band.BackgroundTransparency === 0 &&
+			sameColor(band.BackgroundColor3, THEME.tabActive)
+		);
+	};
+	const sameColor = (a, b) =>
+		a !== undefined && b !== undefined && Math.abs(a.R - b.R) + Math.abs(a.G - b.G) + Math.abs(a.B - b.B) < 1e-6;
+	const details = () => deep(screen(), "Details");
+	const action = () => deep(details(), "Action");
+	const legend = root => deep(root, "Legend")?.Text;
+	const status = () => legend(deep(details(), "Status"));
+	const noteText = () => deep(deep(details(), "Note"), "Text")?.Text ?? "";
+	const title = () => details()?.FindFirstChild("Title")?.Text;
+	const disabled = b => b.GetAttribute("Disabled") === true;
+	const previewTitle = () => deep(deep(details(), "TitlePreview"), "TitleLabel");
+
+	// the Pets page once, unmeasured: its pack buttons pick up their skin on their first "outline" (part 9's page, not
+	// this one) -- from here on every step is measured, the Titles tab's first opening included
+	click(deep(screen(), "Tabs").FindFirstChild("Tab1"), "Pets");
+	click(deep(screen(), "Tabs").FindFirstChild("Tab0"), "Outfits");
+	let r = phase("titulos: abre a aba", () => click(deep(screen(), "Tabs").FindFirstChild("Tab2"), "Titles"));
+	check("abrir a aba de titulos nao cria nem destroi Instance (tudo montado ao abrir)", zero(r), cost(r));
+	check("a aba de titulos aparece, as outras somem", titlesPage().Visible && !deep(screen(), "Page0").Visible);
+	const rows = titlesPage()
+		.GetDescendants()
+		.filter(d => /^Row\d+$/.test(d.Name));
+	check(
+		"linhas, nao ladrilhos: [None] + 3 titulos",
+		rows.length === 4 && rows.every(x => x.ClassName === "TextButton"),
+	);
+	check(
+		"sem campo de busca",
+		screen()
+			.GetDescendants()
+			.every(d => d.ClassName !== "TextBox"),
+	);
+	check(
+		"a primeira linha e [None] / Unequip title",
+		rowText(0, "Name") === "[None]" && rowText(0, "HowTo") === "Unequip title",
+		`${rowText(0, "Name")} / ${rowText(0, "HowTo")}`,
+	);
+	check(
+		"cada titulo entre colchetes, com a linha de como ganhar",
+		rowText(1, "Name") === "[Survivor]" &&
+			rowText(2, "Name") === "[Horde Breaker]" &&
+			rowText(3, "Name") === "[Week One]" &&
+			rowText(1, "HowTo") === "Survive your first night." &&
+			rowText(2, "HowTo") === "Put down 100 zombies." &&
+			rowText(3, "HowTo") === "Stay alive for 7 days in one life.",
+	);
+	check(
+		"na cor de cada um: verde, laranja, amarelo (tokens STAT)",
+		sameColor(rowColor(1, "Name"), STAT.bonus) &&
+			sameColor(rowColor(2, "Name"), STAT.effect) &&
+			sameColor(rowColor(3, "Name"), STAT.value),
+	);
+	check(
+		"bloqueadas: mais escuras e com cadeado; a ganha, grafite e sem cadeado",
+		locked(row(2)) &&
+			locked(row(3)) &&
+			sameColor(face(row(2)), SURFACE.well) &&
+			!locked(row(1)) &&
+			sameColor(face(row(1)), SURFACE.row) &&
+			!locked(row(0)),
+	);
+	check(
+		"o titulo mostrado abre selecionado (o anel azul) e com a tecla EQUIPPED",
+		ringed(row(1)) && worn(1) && !worn(0),
+	);
+	check("so ele: nenhuma outra linha no anel", !ringed(row(0)) && !ringed(row(2)) && !ringed(row(3)));
+	check(
+		"contagem na secao: 1 / 3",
+		legend(deep(titlesPage(), "Count")) === "1 / 3",
+		legend(deep(titlesPage(), "Count")),
+	);
+	check(
+		"painel: nome, TITLE, Equipped e Unequip",
+		title() === "Survivor" &&
+			legend(deep(details(), "Slot")) === "TITLE" &&
+			status() === "Equipped" &&
+			action().Text === "Unequip" &&
+			!disabled(action()),
+		`${title()} / ${legend(deep(details(), "Slot"))} / ${status()} / ${action().Text}`,
+	);
+	check(
+		"a previa e a placa do mundo, com o titulo SOB o nome, na cor dele",
+		previewTitle()?.Visible === true &&
+			previewTitle().Text === "[Survivor]" &&
+			sameColor(previewTitle().TextColor3, STAT.bonus) &&
+			previewTitle().Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
+			previewTitle().LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
+	);
+	check(
+		"a previa do guarda-roupa de trajes fica escondida",
+		deep(deep(details(), "PreviewBed"), "Preview").Visible === true &&
+			deep(deep(details(), "PreviewBed"), "Scaled").Visible === false,
+	);
+
+	// a locked title: "Locked" disabled, the requirement and the server's count
+	r = phase("titulos: seleciona Horde Breaker (bloqueado)", () => click(row(2), "Horde Breaker"));
+	check("selecionar uma linha nao cria nem destroi Instance", zero(r), cost(r));
+	check("o anel vai para ela", ringed(row(2)) && !ringed(row(1)) && locked(row(2)));
+	check(
+		"bloqueado: Locked, desabilitado",
+		status() === "Locked" && action().Text === "Locked" && disabled(action()),
+		`${status()} / ${action().Text}`,
+	);
+	check(
+		"com o requisito e o progresso que o servidor contou",
+		noteText() === "Put down 100 zombies. Zombies put down: 37 / 100",
+		noteText(),
+	);
+	check(
+		"a previa experimenta o titulo, em laranja",
+		previewTitle().Text === "[Horde Breaker]" && sameColor(previewTitle().TextColor3, STAT.effect),
+	);
+	click(action(), "Locked");
+	check("um botao desabilitado nao pede nada ao servidor", asked.length === 0);
+	click(row(3), "Week One");
+	check(
+		"Week One conta os dias desta vida: 2 / 7",
+		noteText() === "Stay alive for 7 days in one life. Days survived in this life: 2 / 7",
+		noteText(),
+	);
+
+	// [None] takes the title off, through the server
+	click(row(0), "None");
+	check("[None] com um titulo mostrado: Unequip", action().Text === "Unequip" && !disabled(action()));
+	r = phase("titulos: tira o titulo", () => click(action(), "Unequip"));
+	check("tirar atualiza no lugar", zero(r), cost(r));
+	check(
+		"o pedido e so { kind, titleId: -1 }",
+		asked.length === 1 && JSON.stringify(asked[0]) === JSON.stringify({ kind: "equipTitle", titleId: -1 }),
+		JSON.stringify(asked),
+	);
+	check("o servidor tirou, e a copia do cliente tambem", save.equipTitle === -1 && !worn(1));
+	check("sem titulo mostrado, [None] nao tem o que tirar", status() === "Equipped" && disabled(action()));
+	check("e a placa da previa fica so com o nome", previewTitle().Visible === false);
+
+	// Equip the earned one
+	click(row(1), "Survivor");
+	check(
+		"um titulo ganho e nao mostrado: Equip",
+		status() === "Owned" && action().Text === "Equip" && !disabled(action()),
+	);
+	r = phase("titulos: mostra o Survivor", () => click(action(), "Equip"));
+	check("mostrar atualiza no lugar", zero(r), cost(r));
+	check(
+		"o pedido e so o id, e o servidor aceita um titulo que concedeu",
+		JSON.stringify(asked[1]) === JSON.stringify({ kind: "equipTitle", titleId: TIT.TitleId.Survivor }) &&
+			save.equipTitle === TIT.TitleId.Survivor &&
+			worn(1),
+		JSON.stringify(asked),
+	);
+
+	// the server grants one while the window is open (the wallet): the row unlocks in place
+	save.titles[TIT.TitleId.HordeBreaker] = 1;
+	r = phase("titulos: um titulo novo chega", () => click(row(2), "Horde Breaker"));
+	check("desbloquear redesenha no lugar", zero(r), cost(r));
+	check("a linha perde o cadeado e clareia", !locked(row(2)) && sameColor(face(row(2)), SURFACE.row));
+	check("contagem: 2 / 3", legend(deep(titlesPage(), "Count")) === "2 / 3");
+	check("e oferece Equip", action().Text === "Equip" && !disabled(action()));
+
+	r = phase("titulos: 4 trocas de aba", () => {
+		for (const i of [0, 2, 1, 2]) click(deep(screen(), "Tabs").FindFirstChild(`Tab${i}`), `tab ${i}`);
+	});
+	check("ir e voltar entre as tres abas segue sem criar nem destruir", zero(r), cost(r));
+	click(deep(screen(), "Tabs").FindFirstChild("Tab0"), "Outfits");
+	check(
+		"de volta aos trajes, a acao unica volta a funcionar (nao herda o Locked)",
+		!disabled(action()) && action().Text !== "Locked",
+		action().Text,
+	);
+	close();
+	check("fechar remove a tela", screen() === undefined);
+
+	// the nameplate itself, measured (MON-02 / the owner's "it must not hide the survivor")
+	const host = makeInstance("Frame", false);
+	host.Parent = ctx.uiLayer;
+	const plate = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" });
+	flush();
+	plate.update(100, 100, 12, true, 0);
+	const pill = host.FindFirstChild("Nameplate");
+	const nameRow = pill.FindFirstChild("NameRow");
+	const titleLabel = pill.FindFirstChild("TitleLabel");
+	const pad = pill.FindFirstChildOfClass("UIPadding");
+	const badge = nameRow.FindFirstChild("LevelBadge");
+	const badgePad = badge.FindFirstChildOfClass("UIPadding");
+	const oneLine =
+		pad.PaddingTop.Offset +
+		pad.PaddingBottom.Offset +
+		Math.max(
+			badge.TextSize + badgePad.PaddingTop.Offset + badgePad.PaddingBottom.Offset,
+			nameRow.FindFirstChild("NameLabel").TextSize,
+		);
+	check("sem titulo, a segunda linha nao existe (escondida, sem ocupar espaco)", titleLabel.Visible === false);
+	plate.update(100, 100, 12, true, TIT.titleToWire(TIT.TitleId.WeekOne));
+	const twoLines = oneLine + titleLabel.TextSize + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0);
+	check(
+		"com titulo: a segunda linha, sob o nome, na cor dele, sem contorno (UI-04)",
+		titleLabel.Visible &&
+			titleLabel.Text === "[Week One]" &&
+			sameColor(titleLabel.TextColor3, STAT.value) &&
+			titleLabel.LayoutOrder > nameRow.LayoutOrder &&
+			titleLabel.FindFirstChildOfClass("UIStroke") === undefined &&
+			(titleLabel.TextStrokeTransparency ?? 1) >= 1,
+	);
+	check(
+		`legivel: ${titleLabel.TextSize} px (piso de 9 px do kit)`,
+		titleLabel.TextSize >= 9 && titleLabel.TextSize >= TITLE_TEXT,
+	);
+	// the pill hangs from its TOP at PLAYER_RADIUS + 14 u under the survivor's centre (gameLoop / allyPlate): a second
+	// line grows it downward, away from the body, so it can never cover the survivor; what it costs is height below
+	const PLAYER_R = 18;
+	const GAP = 14;
+	check(
+		`a placa cresce ${twoLines - oneLine} px (${oneLine} -> ${twoLines} px a 1080p), para BAIXO: o topo segue ${GAP} px abaixo do corpo`,
+		pill.AnchorPoint.Y === 0 && twoLines - oneLine <= oneLine * 0.75 && PLAYER_R + GAP > PLAYER_R,
+	);
+	plate.update(100, 100, 12, true, 99);
+	check("um byte que nao e titulo nao desenha nada", titleLabel.Visible === false);
+	plate.destroy();
+	host.Destroy();
 }
 
 // ---------------------------------------------------------------- report

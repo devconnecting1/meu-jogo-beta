@@ -31,6 +31,8 @@ import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminSe
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
+import { equipTitle } from "./save/titles";
+import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
@@ -161,6 +163,12 @@ interface Session {
 	 * panel (§9.3), so a client that is genuinely out of date can be told apart from one that never listens.
 	 */
 	staleProgressReports: number;
+	/**
+	 * MON-05: the fingerprint of what the title record (server/save/titleRecord.ts) holds for this player, so a flush
+	 * rewrites it only when something was earned. undefined = the load could not read it: the next write MERGES into
+	 * the record instead of replacing it, because this session never saw what is there.
+	 */
+	titleMark: string | undefined;
 }
 
 interface StoredLock {
@@ -378,6 +386,19 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 	}
 }
 
+/** the title record (server/save/titleRecord.ts) brought up to date with the save, when what was earned changed */
+function syncTitleRecord(s: Session, delays: Array<number>): void {
+	const mark = TitleRecord.titleRecordMark(TitleRecord.titleRecordOf(s.save));
+	if (mark === s.titleMark) return;
+	// replace only a record this session has read; merge into one it never saw (the load's read failed)
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleMark !== undefined, delays);
+	if (written === undefined) return;
+	// a merge may have found what the load could not read: the save takes it too (and is written again), so from
+	// here on the save holds everything the record does and replacing it can never lower it
+	if (TitleRecord.mergeTitleRecord(s.save, written)) s.dirty = true;
+	s.titleMark = TitleRecord.titleRecordMark(written);
+}
+
 /**
  * Writes the session to the DataStore when needed. Calls are serialized per session.
  * `release` also drops the session lock (player left / server closing).
@@ -398,6 +419,9 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	const wasDirty = s.dirty;
 	s.dirty = false;
 	const outcome = writeWithLock(s, json, release, delays);
+	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop -- by the session that
+	// just wrote the save (it held the lock), only when it changed, and inside the same writing window
+	if (outcome === "ok") syncTitleRecord(s, delays);
 	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
@@ -491,9 +515,22 @@ function loadSession(s: Session): void {
 		status = "error";
 		save = defaultSave();
 	}
+	// MON-05: a server rolled back to v4 code rewrites the save without what was earned; the title record it never
+	// opens still has it (server/save/titleRecord.ts). Only for a save this session will write.
+	let restored = false;
+	let titleMark: string | undefined;
+	if (status === "ok" || status === "new") {
+		const read = TitleRecord.loadTitleRecord(s.key, RETRY_DELAYS);
+		if (read.ok) {
+			// "" = no record yet: known, and different from any real fingerprint, so the first write creates it
+			titleMark = read.record !== undefined ? TitleRecord.titleRecordMark(read.record) : "";
+			if (read.record !== undefined) restored = TitleRecord.mergeTitleRecord(save, read.record);
+		}
+	}
 	s.status = status;
 	s.save = save;
-	s.dirty = status === "new" || (status === "ok" && migrated);
+	s.titleMark = titleMark;
+	s.dirty = status === "new" || (status === "ok" && migrated) || restored;
 	s.lockLost = false;
 	s.token = HttpService.GenerateGUID(false);
 	s.pending = undefined;
@@ -547,6 +584,7 @@ function newSession(player: Player): Session {
 		patchResends: 0,
 		staleProgressReports: 0,
 		assistedRunRev: undefined,
+		titleMark: undefined,
 	};
 }
 
@@ -846,6 +884,12 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const bought = buyCostume(save, req.costumeId);
 		if (!bought.ok) return fail(bought.reason, s);
 		price = bought.price;
+	} else if (req.kind === "equipTitle") {
+		// the wardrobe's Titles tab (MON-05): only a title the SERVER granted can be shown (server/save/titles.ts);
+		// the replicator's profile pass then puts it under the name for everybody
+		const shown = equipTitle(save, req.titleId);
+		if (!shown.ok) return fail(shown.reason, s);
+		price = 0;
 	} else if (req.kind === "rebirth" || req.kind === "newRun") {
 		/*
 		 * The two ways out of a death, decided HERE and not by the client (server/sim/life.ts rule 5, the owner's

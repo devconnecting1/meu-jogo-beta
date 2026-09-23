@@ -36,6 +36,10 @@
  *  10. THE WARDROBE         MON-04's purchase through the real ShopAction: unknown ids, too few coins and a costume
  *                           already owned are refused; a request naming its own price pays the catalogue's; what
  *                           was bought can be worn, what was not is taken off; the DataStore gets both.
+ *  11. THE TITLES           MON-05 through the real server: a title nobody earned cannot be shown (ShopAction nor
+ *                           report), a report cannot grant one or count a kill, the server's own killing blow makes a
+ *                           Horde Breaker and tells that player alone, and the title record brings back what a server
+ *                           rolled back to v4 wrote the save without -- forgetting only which title was shown.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1214,6 +1218,125 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 		stored === undefined ? "no document" : `money ${stored.money}, costume ${stored.costumes[santa.id]}`,
 	);
 });
+
+// ================================================================ 11: titles, end to end (MON-05)
+
+section(
+	"11) titles: only what the server granted is shown, and a rollback cannot erase what was earned (MON-05)",
+	() => {
+		const s = bootServer();
+		const TIT = require(join(SRC, "shared/data/titles.ts"));
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const HB = TIT.TitleId.HordeBreaker;
+		/** every World event this player's client received, in order (directed to it, or to everybody) */
+		const worldTo = (srv, p) => {
+			const out = [];
+			for (const e of srv.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World").sent) {
+				if (e.to !== undefined && e.to !== p) continue;
+				const batch = srv.P.decodeWorld(e.args[0]);
+				if (batch !== undefined) out.push(...batch.events);
+			}
+			return out;
+		};
+		const userId = newUser();
+		const p = s.join(userId, "titled");
+		const save = s.save(p);
+
+		// the wardrobe asks to show a title nobody granted: refused, through the real ShopAction
+		const refused = s.shop(p, { kind: "equipTitle", titleId: HB });
+		check(
+			refused.ok === false && refused.reason === "invalid",
+			"showing an unearned title is refused",
+			JSON.stringify(refused),
+		);
+		const junk = [9, -2, 0.5, "1", undefined].map(id => s.shop(p, { kind: "equipTitle", titleId: id }));
+		check(
+			junk.every(r => r.ok === false && r.reason === "invalid"),
+			"and so is any id that is not a title",
+		);
+		check(save.equipTitle === -1, "…and the save shows nothing");
+		// a report claiming every title, a pile of kills and a title shown: none of it sticks
+		const ack = s.report(p, { titles: [1, 1, 1], zombieKills: 5000, equipTitle: HB });
+		check(ack?.ok === true, "the report itself is accepted (the rest of it is honest)");
+		check(
+			save.titles.every(v => v === 0) && save.zombieKills === 0 && save.equipTitle === -1,
+			"…but grants no title, counts no kill and shows nothing",
+			`titles ${JSON.stringify(save.titles)}, kills ${save.zombieKills}, shown ${save.equipTitle}`,
+		);
+
+		// the server's own killing blow: 99 in the save, and the 100th through the host's combat
+		s.run(3);
+		save.zombieKills = TIT.HORDE_BREAKER_KILLS - 1;
+		s.immortal.add(p);
+		const sp = s.enter(p);
+		check(sp !== undefined, "the survivor is in the world");
+		const z = createZombie(1, sp.state.x + 40, sp.state.y, 1);
+		z.hp = 1;
+		z.hpMax = 1;
+		s.sim.horde.zombies.push(z);
+		s.sim.combat.hitZombieWith(sp, z, 10, 0, 0);
+		s.run(0.3);
+		const notes = worldTo(s, p).filter(
+			e => e.t === s.P.WorldEv.Announce && e.msg === s.P.AnnounceKind.TitleUnlocked,
+		);
+		check(
+			save.zombieKills === TIT.HORDE_BREAKER_KILLS && save.titles[HB] === 1,
+			"the 100th zombie makes a Horde Breaker",
+		);
+		check(
+			notes.length === 1 && TIT.titleFromWire(notes[0].arg) === HB,
+			"and the player is told, once, on the reliable channel",
+			JSON.stringify(notes),
+		);
+		// now it can be shown, and the profile carries it to every client
+		const shown = s.shop(p, { kind: "equipTitle", titleId: HB });
+		check(shown.ok === true && save.equipTitle === HB, "showing the earned title is accepted");
+		s.run(0.3);
+		const mine = worldTo(s, p).filter(e => e.t === s.P.WorldEv.PlayerProfile && e.slot === sp.slot);
+		check(
+			mine.length > 0 && mine[mine.length - 1].title === TIT.titleToWire(HB),
+			"a PlayerProfile puts it under the name",
+		);
+
+		// leaving writes the save, and the title record beside it
+		s.quit(p);
+		const stored = s.stored(userId);
+		check(
+			stored?.titles[HB] === 1 && stored?.zombieKills === TIT.HORDE_BREAKER_KILLS && stored?.equipTitle === HB,
+			"the save written on leaving has the title, the kills and the title shown",
+		);
+		const record = fakeStore(TITLE_STORE).data.get(String(userId));
+		check(
+			record?.titles[HB] === 1 && record?.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"and the title record has what was earned",
+			JSON.stringify(record),
+		);
+
+		// a server rolled back to v4 code rewrites the save without the three v5 keys
+		s.storeDoc(userId, d => {
+			delete d.titles;
+			delete d.zombieKills;
+			delete d.equipTitle;
+			d.version = 4;
+		});
+		// ...and the next v5 session, on another server, brings back all that was earned
+		const s2 = bootServer();
+		const p2 = s2.join(userId, "titled");
+		const back = s2.save(p2);
+		check(
+			back.titles[HB] === 1 && back.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"a v5 load after the rollback restores it all",
+		);
+		check(back.equipTitle === -1, "forgetting only WHICH title was shown");
+		s2.quit(p2);
+		const again = s2.stored(userId);
+		check(
+			again?.titles[HB] === 1 && again?.zombieKills === TIT.HORDE_BREAKER_KILLS,
+			"and the save is written whole again",
+		);
+	},
+);
 
 // ================================================================
 

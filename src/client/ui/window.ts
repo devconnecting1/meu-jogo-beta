@@ -13,6 +13,8 @@
  *   ValueKey      the value as a key: a dark-iron plate with a light legend that grows to fit it
  *   SettingNote   a muted caption line in the list
  *   GridTile      a square tile of a grid (the wardrobe): flat, equipped, locked (padlock + price), selected (blue)
+ *   ListRow       a row of a selectable list whose text is the content (the wardrobe's titles): graphite, locked
+ *                 darker with a padlock, selected inside the blue ring
  *
  * Separate from widgets.ts on purpose: that module is close to Luau's 200-locals-per-chunk budget
  * (npm run check:registers), and these pieces are compositions of it, not primitives.
@@ -512,6 +514,109 @@ export function GridTile(parent: Instance, name: string, props: GridTileProps): 
 			state = nextState;
 			selected = nextSelected;
 			cost = nextPrice;
+			refresh();
+		},
+	};
+}
+
+// ---------------------------------------------------------------- ListRow
+
+export interface ListRowProps {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	state?: TileState;
+	selected?: boolean;
+	onClick?: () => void;
+	zIndex?: number;
+}
+
+export interface ListRowHandle {
+	button: TextButton;
+	/** where the caller writes the row: w x h design units, above the plate (leave LIST_ROW_TEXT_X for the padlock) */
+	content: Frame;
+	update(state: TileState, selected: boolean): void;
+}
+
+/** where a ListRow's text starts: the padlock's column is left of it, on every row, so the texts line up */
+export const LIST_ROW_TEXT_X = 30;
+
+/**
+ * A row of a selectable list whose TEXT is the content (the wardrobe's titles, MON-05), on the dark groove like a
+ * tile. Unlike a tile its face never turns blue: the text is drawn in game colours, and those fall under 4,5:1 on
+ * the blue plate (test:contrast) -- so the face stays dark and the row is drawn by its RING (the plate's "outline"
+ * state: the notched edge in one colour, `SURFACE.line` being the kit's outline of a list row):
+ *  - owned / equipped: graphite (`SURFACE.row`) in the iron line; the caller marks "equipped" in its content;
+ *  - locked: DARKER (`SURFACE.well`), with the pixel padlock in the column left of the text;
+ *  - under the pointer the line turns iron (`secondary`), with the pad / keyboard focus it is the kit's focus ring
+ *    (`ring`); selected (on top of any of those): the ring turns BLUE -- what is chosen is blue, as in all the kit.
+ */
+export function ListRow(parent: Instance, name: string, props: ListRowProps): ListRowHandle {
+	const [dw, dh] = designOf(parent);
+	const b = new Instance("TextButton");
+	b.Name = name;
+	b.Position = UDim2.fromScale(props.x / dw, props.y / dh);
+	b.Size = UDim2.fromScale(props.w / dw, props.h / dh);
+	setDesign(b, props.w, props.h);
+	b.AutoButtonColor = false;
+	b.BorderSizePixel = 0;
+	b.BackgroundTransparency = 1;
+	b.BackgroundColor3 = THEME.background;
+	b.Text = "";
+	b.TextColor3 = THEME.foreground;
+	if (props.zIndex !== undefined) b.ZIndex = props.zIndex;
+	const z = b.ZIndex;
+	const content = makeFrame(b, "Content", 0, 0, props.w, props.h, THEME.background, {
+		transparency: 1,
+		zIndex: z + 1,
+	});
+	// the padlock: 7 x 9 pixels in the text's left column, centred on the row
+	const lockW = 11;
+	const lockH = (lockW * 9) / 7;
+	const lock = makeFrame(
+		b,
+		"Lock",
+		(LIST_ROW_TEXT_X - lockW) / 2,
+		(props.h - lockH) / 2,
+		lockW,
+		lockH,
+		THEME.background,
+		{
+			transparency: 1,
+			zIndex: z + 2,
+		},
+	);
+	drawPadlock(lock, THEME.mutedForeground, SURFACE.well, z + 2);
+
+	let state: TileState = props.state ?? "owned";
+	let selected = props.selected === true;
+	const refresh = (): void => {
+		const gs = b.GuiState;
+		const hover = gs === Enum.GuiState.Hover || gs === Enum.GuiState.Press;
+		const locked = state === "locked";
+		const face = locked ? SURFACE.well : SURFACE.row;
+		// chosen: blue; the pad / keyboard focus: the kit's focus ring; under the pointer: the lighter iron
+		let ring = SURFACE.line;
+		if (selected) ring = THEME.tabActive;
+		else if (isFocused(b)) ring = THEME.ring;
+		else if (hover) ring = THEME.secondary;
+		paintPlate(b, face, "outline", 3, ring);
+		lock.Visible = locked;
+	};
+	registerFocus(b, refresh);
+	b.GetPropertyChangedSignal("GuiState").Connect(refresh);
+	const onClick = props.onClick;
+	if (onClick !== undefined) b.Activated.Connect(() => onClick());
+	b.Selectable = true;
+	refresh();
+	b.Parent = parent;
+	return {
+		button: b,
+		content,
+		update(nextState: TileState, nextSelected: boolean): void {
+			state = nextState;
+			selected = nextSelected;
 			refresh();
 		},
 	};

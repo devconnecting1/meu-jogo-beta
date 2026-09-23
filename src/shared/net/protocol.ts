@@ -57,6 +57,10 @@
  *     checked with), so a client entering the world knows which town to build; `WorldReset{seed, endedDay, lives}`
  *     is broadcast to EVERY connected client — the lobby included — the moment a world ends: the new seed, the
  *     world day the old one fell on, and the UserIds whose life the server reset to day 1 (u8 count + f64 each).
+ * 14. (MON-05) Titles. `PlayerJoined` and `PlayerProfile` end with one more byte, `title`: the title shown under the
+ *     name (shared/data/titles.ts `titleToWire`: 0 = none, else the title id + 1), range-checked on decode like the
+ *     looks, and only ever one the server knows that survivor EARNED (`titleWireOf`). A title earned is announced to
+ *     its owner alone as `Announce{msg = TitleUnlocked, arg = title byte}`, whose arg is checked (1..TITLE_WIRE_MAX).
  */
 import {
 	NetReader,
@@ -94,6 +98,7 @@ import {
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
+import { TITLE_WIRE_MAX } from "shared/data/titles";
 
 // ================================================================ remotes (§4.1)
 
@@ -1270,7 +1275,7 @@ export const WorldEv = {
 	PlayerLeft: 13,
 	PlayerLife: 14,
 	InitBegin: 15,
-	/** (MON-04) the roster's in-session delta: level, outfit, pet */
+	/** (MON-04, MON-05) the roster's in-session delta: level, outfit, pet, title */
 	PlayerProfile: 16,
 	/** (MP-22) the world ended: a new town from a new seed, back to day 1 */
 	WorldReset: 17,
@@ -1333,8 +1338,10 @@ export const AnnounceKind = {
 	BossSpawn: 4,
 	/** arg = boss type */
 	BossKilled: 5,
+	/** (MON-05) arg = the title byte (`titleToWire`, 1..TITLE_WIRE_MAX); sent only to the survivor who earned it */
+	TitleUnlocked: 6,
 } as const;
-const ANNOUNCE_KIND_MAX = 5;
+const ANNOUNCE_KIND_MAX = 6;
 
 export interface WSolidAdd {
 	t: typeof WorldEv.SolidAdd;
@@ -1449,11 +1456,14 @@ export interface WPlayerJoined {
 	outfit: number;
 	/** PetLook (0 = none), MON-04 */
 	pet: number;
+	/** the title under the name, as `titleToWire` (0 = none), MON-05 */
+	title: number;
 }
 
 /**
- * (MON-04) What changed about a survivor already in the roster: the level on their plate, the outfit on their body,
- * the pet at their heel. Always all three (6 B with the tag): a delta this rare is not worth a bitmask.
+ * (MON-04, MON-05) What changed about a survivor already in the roster: the level on their plate, the outfit on their
+ * body, the pet at their heel, the title under their name. Always all four (7 B with the tag): a delta this rare is
+ * not worth a bitmask.
  */
 export interface WPlayerProfile {
 	t: typeof WorldEv.PlayerProfile;
@@ -1461,6 +1471,8 @@ export interface WPlayerProfile {
 	level: number;
 	outfit: number;
 	pet: number;
+	/** `titleToWire` (0 = none) */
+	title: number;
 }
 
 export interface WPlayerLeft {
@@ -1603,12 +1615,14 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u16(clampInt(e.level, 0, 65535));
 			w.u8(clampInt(e.outfit, 0, OUTFIT_LOOK_MAX));
 			w.u8(clampInt(e.pet, 0, PET_LOOK_MAX));
+			w.u8(clampInt(e.title, 0, TITLE_WIRE_MAX));
 			break;
 		case WorldEv.PlayerProfile:
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
 			w.u16(clampInt(e.level, 0, 65535));
 			w.u8(clampInt(e.outfit, 0, OUTFIT_LOOK_MAX));
 			w.u8(clampInt(e.pet, 0, PET_LOOK_MAX));
+			w.u8(clampInt(e.title, 0, TITLE_WIRE_MAX));
 			break;
 		case WorldEv.PlayerLeft:
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
@@ -1707,6 +1721,8 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const msg = r.u8();
 		const arg = r.u16();
 		if (msg < 1 || msg > ANNOUNCE_KIND_MAX) return undefined;
+		// MON-05: a title that does not exist is not something to announce
+		if (msg === AnnounceKind.TitleUnlocked && (arg < 1 || arg > TITLE_WIRE_MAX)) return undefined;
 		return { t: WorldEv.Announce, msg, arg };
 	} else if (t === WorldEv.ZombieDied) {
 		const netId = r.u16();
@@ -1722,16 +1738,19 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const level = r.u16();
 		const outfit = r.u8();
 		const pet = r.u8();
+		const title = r.u8();
 		if (!validSlot(slot) || userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
-		if (outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX) return undefined;
-		return { t: WorldEv.PlayerJoined, slot, userId, name, level, outfit, pet };
+		if (outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX || title > TITLE_WIRE_MAX) return undefined;
+		return { t: WorldEv.PlayerJoined, slot, userId, name, level, outfit, pet, title };
 	} else if (t === WorldEv.PlayerProfile) {
 		const slot = r.u8();
 		const level = r.u16();
 		const outfit = r.u8();
 		const pet = r.u8();
-		if (!validSlot(slot) || outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX) return undefined;
-		return { t: WorldEv.PlayerProfile, slot, level, outfit, pet };
+		const title = r.u8();
+		if (!validSlot(slot)) return undefined;
+		if (outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX || title > TITLE_WIRE_MAX) return undefined;
+		return { t: WorldEv.PlayerProfile, slot, level, outfit, pet, title };
 	} else if (t === WorldEv.PlayerLeft) {
 		const slot = r.u8();
 		if (!validSlot(slot)) return undefined;

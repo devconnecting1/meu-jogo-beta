@@ -424,7 +424,7 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 - **Implícitos pelo snapshot:** o registro do zumbi traz tipo e variante (`meta`). O cliente cria a entidade na primeira vez que a vê e a remove (com fade de 150 ms) se ela não aparecer por **300 ms** no anel próximo ou **600 ms** no médio. Isso aguenta a rotatividade do interesse sem precisar de eventos confiáveis para cada entrada e saída.
 - **Morte explícita (confiável):** `ZombieDied{netId, x, y, cause}` dispara sangue, cadáver e drop no lugar certo e remove na hora. Um snapshot atrasado com esse `netId` e `tick` anterior à morte é ignorado.
 - **`netId`:** pool reciclável de u16 (1–65 535) com lista livre. Um id liberado só é reusado depois de 2 s, para não colidir com snapshots atrasados.
-- **Jogadores:** `slot` de 0 a 5, estável durante a sessão. `PlayerJoined{slot, userId, displayName, level, outfit, pet}` e `PlayerLeft{slot}` são confiáveis. O que muda em sessão (nível, traje, pet — MON-04) vai por `PlayerProfile{slot, level, outfit, pet}`, também confiável, para todos; `outfit`/`pet` são o **visual** (`shared/data/cosmetics.ts`), já checado contra a posse que o servidor conhece.
+- **Jogadores:** `slot` de 0 a 5, estável durante a sessão. `PlayerJoined{slot, userId, displayName, level, outfit, pet, title}` e `PlayerLeft{slot}` são confiáveis. O que muda em sessão (nível, traje, pet — MON-04; o título sob o nome — MON-05) vai por `PlayerProfile{slot, level, outfit, pet, title}`, também confiável, para todos; `outfit`/`pet` são o **visual** (`shared/data/cosmetics.ts`) e `title` é o byte do título (`shared/data/titles.ts`: 0 = nenhum, senão id + 1), todos já checados contra o que o servidor sabe que o jogador possui ou **ganhou**.
 
 ### 4.5 Deltas do mundo (confiáveis, em lote por tick, filtrados por interesse quando fizer sentido)
 
@@ -439,7 +439,7 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 | `ItemAdd` / `ItemRemove` | `id u32, kind, itemId, count, x, y, vx, vy` / `id` | Interesse (1800 u) |
 | `LootFlag` | `buildingId, hasLoot` | Só para quem está dentro |
 | `Clock` | `worldDay, dayTime, tick, rain, waveFlags` | Global (a cada 10 s e na mudança) |
-| `Announce` | "Wave 1", "Good morning", chefe apareceu… | Global ou interesse |
+| `Announce` | "Wave 1", "Good morning", chefe apareceu… e *(MON-05)* `TitleUnlocked{título}` | Global ou interesse; o título conquistado, **só para quem o ganhou** |
 | `WorldInit` | Hash do mapa e **semente** (`InitBegin{mapHash, seed, …}`, MP-22), `tick0` (`GetServerTimeNow` no tick 0), todas as construções e portas alteradas, itens no interesse, relógio, e o **estado de vida do próprio recém-chegado** (Up ou Dead: quem entra esperando o amanhecer é desenhado morto desde o primeiro quadro e precisa ouvir quando entrou vivo) | Na entrada, em blocos de `buffer` ≤ 16 KB |
 | `WorldReset` | *(MP-22)* `seed` da cidade nova, `endedDay` (o dia em que o mundo caiu), `lives` (UserIds que ganharam vida nova) | **Todos os conectados** (`FireAllClients`, lobby incluso), uma vez por fim de mundo; quem está no mundo recebe em seguida o `InitBegin` de novo |
 
@@ -567,6 +567,13 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - **Aditiva, no mesmo documento.** Um documento sem os campos novos tem o `equipDeco` roteado para o slot a que pertence (`cosmeticSlotOf`); um documento que já fala v4 ignora qualquer `equipDeco` que sobrar. A posse é checada depois, como para todo slot: vestido só o que o servidor sabe que o jogador tem.
 - **Rollback:** um servidor v3 descarta as duas chaves desconhecidas e não acha `equipDeco`; ao voltar para v4 o sobrevivente está sem traje e sem pet **vestidos**, mas `costumes` e o inventário não mudam — custa um clique no Bag, nunca uma compra.
 - Testado em `tools/test-save.mjs` (seções 12–16), incluindo o teste por reflexão de `copySaveInto`.
+
+### 6.6 Migração do save v4 → v5 (títulos, MON-05)
+
+- Entram `titles` (uma marca por título de `shared/data/titles.ts`, **do servidor**, como `costumes`), `zombieKills` (os golpes finais que o crédito de abate do servidor deu ao jogador, **do servidor**, só cresce) e `equipTitle` (o título mostrado, -1 = nenhum, checado contra `titles` como um traje contra `costumes`). `version = 5`.
+- **Aditiva, no mesmo documento.** Um documento v4 não tem nenhum dos três: nada ganho, nada contado, nada mostrado — a verdade, porque nenhum servidor contou isso antes do v5. Nada é concedido retroativamente.
+- **Rollback:** um servidor v4 reescreve o save **sem** as três chaves. Para que isso não apague o que foi ganho, cada sessão v5 grava também `{titles, zombieKills}` num segundo documento que o v4 nunca abre (`server/save/titleRecord.ts`, store `ProjectZ_Titles`, chave = UserId), logo depois de gravar o save; a carga v5 seguinte fica com o **maior** dos dois. Ao voltar para v5 o jogador só perdeu **qual** título estava mostrado (um clique no guarda-roupa). O registro é substituído por quem o leu na carga (uma edição do admin pode baixá-lo) e mesclado por quem não conseguiu lê-lo.
+- Testado em `tools/test-save.mjs` (seções 18–21) e, pelo servidor real, em `tools/test-body.mjs` (seção 11).
 
 ---
 

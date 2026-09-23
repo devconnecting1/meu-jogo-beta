@@ -45,6 +45,7 @@ import { showLogo } from "./ui/logo";
 import { LobbyStatus, showLobby } from "./ui/lobby";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
+import { startTitleNotices } from "./ui/titleNotice";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
 import { showTutorial } from "./ui/tutorial";
@@ -835,6 +836,8 @@ function onTown(notice: TownNotice): void {
 }
 
 netOnTown(onTown);
+// MON-05: "Title unlocked: [Survivor]" the moment the server grants one
+startTitleNotices(ctx);
 
 function resumeRun(): void {
 	clearScreen();

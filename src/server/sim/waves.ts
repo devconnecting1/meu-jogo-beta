@@ -31,6 +31,7 @@ import { AnnounceKind, WAnnounce, WClock, WorldEv } from "shared/net/protocol";
 import { AiClock } from "shared/sim/ai/context";
 import {
 	CLOCK_ANNOUNCEMENTS,
+	DAY_BREAK_HOUR,
 	HOURS_PER_DAY,
 	WAVE_FILL_FROM,
 	advanceClock,
@@ -116,6 +117,12 @@ export class WorldClock implements AiClock {
 	onWaveFill?: (fill: WaveFill) => void;
 	/** the clock rolled past midnight into `day`: §3.6 pays everyone who lived through it */
 	onNewDay?: (day: number) => void;
+	/**
+	 * The night of `day` just ended: the clock passed 06:00 (DAY_BREAK_HOUR, where `isNightAt` turns false) in a
+	 * STEP -- an admin moving the clock (`setClock`) never fires it, exactly as it never fires `onNewDay`. MON-05's
+	 * Survivor is decided here (server/sim/simulation.ts `creditDawn`).
+	 */
+	onDaybreak?: (day: number) => void;
 
 	private readonly rollRain: (day: number) => boolean;
 	/** the 18:00–18:30 fill happens once per night */
@@ -181,6 +188,7 @@ export class WorldClock implements AiClock {
 			this.day += 1;
 			this.startDay();
 		}
+		if (this.onDaybreak !== undefined && crossed(prev, this.dayTime, DAY_BREAK_HOUR)) this.onDaybreak(this.day);
 		this.detectAnnounce(prev, this.dayTime);
 		this.updateWaves();
 		this.updateDark();

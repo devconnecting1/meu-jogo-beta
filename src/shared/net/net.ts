@@ -67,6 +67,8 @@ export interface SaveAckPayload {
 export type ShopActionRequest =
 	| { kind: "buyPack"; packId: number }
 	| { kind: "buyCostume"; costumeId: number }
+	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
+	| { kind: "equipTitle"; titleId: number }
 	| { kind: "rebirth"; runRev: number }
 	| { kind: "newRun"; runRev: number };
 
