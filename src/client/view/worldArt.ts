@@ -21,10 +21,18 @@ import { WORLD_ART, WORLD_ART_NAMES, WorldArtName } from "./worldArtAssets";
 let override: Partial<Record<WorldArtName, string>> | undefined;
 /** false once the uploads proved unreachable: every surface is drawn flat from then on */
 let fetched = true;
+/**
+ * Character sheets (client/view/charArt.ts) that still failed to load after the retry. A town surface that is slow
+ * to arrive is a blank patch for a moment; a zombie drawn from a sheet that never arrives would be an INVISIBLE
+ * zombie (LEG-03, P3), so a character sheet that is still missing is given up on its own and its group -- the
+ * survivors, the horde, the dogs or the birds -- goes back to the flat drawing for the session.
+ */
+const lost = new Set<WorldArtName>();
 
 /** the content id to draw `name` with, or undefined when that surface must be drawn flat */
 export function artId(name: WorldArtName): string | undefined {
 	if (!fetched) return undefined;
+	if (lost.has(name)) return undefined;
 	const id = override !== undefined ? override[name] : WORLD_ART[name].id;
 	return id === undefined || id === "" ? undefined : id;
 }
@@ -46,6 +54,20 @@ export function artSlice(name: WorldArtName): readonly [number, number, number, 
 export function overrideWorldArt(ids: Partial<Record<WorldArtName, string>> | undefined): void {
 	override = ids;
 	fetched = true;
+	lost.clear();
+}
+
+/** the characters' sheets and masks (tools/character-art.mjs): gameplay needs them whole or not at all */
+function isCharacterSheet(name: WorldArtName): boolean {
+	return (
+		name === "weapons" ||
+		name === "zombies" ||
+		name === "zombiesFill" ||
+		name === "zombiesRim" ||
+		name === "dogs" ||
+		name === "birds" ||
+		name.sub(1, 9) === "survivors"
+	);
 }
 
 /** true when at least one texture has an id (the preload has something to fetch) */
@@ -102,6 +124,12 @@ export function preloadWorldArt(): void {
 			warn(`[world] art textures unavailable (${missing.size()}/${ids.size()}): drawing the town flat`);
 			fetched = false;
 			return;
+		}
+		for (const name of WORLD_ART_NAMES) {
+			if (isCharacterSheet(name) && missing.includes(WORLD_ART[name].id)) {
+				lost.add(name);
+				warn(`[world] character sheet ${name} did not load: its characters are drawn flat`);
+			}
 		}
 		warn(`[world] ${missing.size()}/${ids.size()} art textures are slow; keeping the art`);
 	});

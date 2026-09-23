@@ -243,7 +243,8 @@ export const REWIND_MAX_S = 0.3;
 /**
  * A target the shooter draws in the MID ring is drawn that much further back (client/net/snapshotBuffer.ts, the
  * track's `extra`: one near interval, 3 ticks at 60 Hz), so the server rewinds it that much further too -- and
- * lets its ceiling reach this much further for it alone (§2.3; the review of 2026-09-23, #2).
+ * lets its ceiling reach as much further for it alone, this at most (§2.3; the review of 2026-09-23, #2): a body
+ * still easing into the mid ring gets the part of it that it is drawn back (server/sim/combat.ts `prepareTargets`).
  */
 export const MID_REWIND_EXTRA_S = 0.05;
 /**

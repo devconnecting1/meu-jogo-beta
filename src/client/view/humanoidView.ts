@@ -5,11 +5,15 @@
  * It lived in actorsView.ts, next to the mirror of the server's horde. It is on its own so the menus' town flyover
  * (client/view/townFlyover.ts, DESIGN_RULES UI-10) can draw its few idle walkers with the very same body, without
  * pulling in the network layer the mirror needs.
+ *
+ * `drawZombie` is what the horde and the flyover call: the pixel art of the type (client/view/charArt.ts, ART-10)
+ * once its sheet is uploaded, and this flat humanoid, call for call as before, until then (ART-01).
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS } from "shared/engine/colors";
 import { Renderer } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
+import { drawZombieArt } from "./charArt";
 import { part, SIDES } from "./drawKit";
 
 const WHITE = COLORS.white;
@@ -100,4 +104,36 @@ export function drawHumanoid(
 		strokeAlpha: alpha * k,
 		zIndex: z + 3,
 	});
+}
+
+/**
+ * One zombie of type `kind` (1..5): its pixel art when the zombies sheet is live, otherwise the flat humanoid in the
+ * type's colour. `sc` is the flat scale (radius / 18, times a jumper's lift), `flash` 0..1 the hit flash, `windup`
+ * the spitter's 0..10, `air` a jumper in flight, `rush` a charger charging, `blink` the lit fuse's red beat.
+ */
+export function drawZombie(
+	r: Renderer,
+	cam: Camera,
+	x: number,
+	y: number,
+	a: number,
+	sc: number,
+	kind: number,
+	flash: number,
+	alpha: number,
+	phase: number,
+	z: number,
+	windup: number,
+	air: boolean,
+	rush: boolean,
+	blink: boolean,
+): void {
+	if (drawZombieArt(r, cam, x, y, a, sc, kind, flash, alpha, phase, z, windup, air, rush, blink)) return;
+	let color = zombieColor(kind);
+	let outline: Color3 | undefined;
+	if (blink) {
+		color = color.Lerp(COLORS.uiRed, 0.8);
+		outline = COLORS.uiYellow;
+	}
+	drawHumanoid(r, cam, x, y, a, sc, color, flash, alpha, phase, z, windup, outline);
 }
