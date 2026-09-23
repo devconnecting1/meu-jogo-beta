@@ -295,6 +295,30 @@ const PAIRS = [
 		MIN_TEXT,
 		"cadeado e preco sobre o ladrilho bloqueado selecionado",
 	],
+
+	// --- the lobby and the Survivor screen (UI-10, client/ui/lobby.ts + survivor.ts): the menu's plates and sections
+	// stand straight on the page (the town flyover under its scrim), the Survivor screen is a UI-07 window
+	["THEME.primary", "THEME.background", MIN_UI, "chapa azul do START sobre a pagina"],
+	["THEME.secondary", "THEME.background", MIN_UI, "chapa de ferro do menu (Shop, Wardrobe...) sobre a pagina"],
+	["SURFACE.section", "THEME.background", MIN_RELIEF, "poco do palco e da cidade (lobby) sobre a pagina"],
+	[
+		"THEME.primaryForeground",
+		"THEME.primary",
+		MIN_TEXT,
+		'START: o icone de pixel e o subtitulo ("Continue this run")',
+	],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, 'chapa do menu: icone de pixel e subtitulo ("3 / 20")'],
+	[
+		"THEME.foreground",
+		"SURFACE.section",
+		MIN_TEXT,
+		"celula da cidade (Day 7, 2 / 6, in town) e ladrilho vazio do loadout",
+	],
+	["THEME.foreground", "THEME.secondary", MIN_TEXT, "ladrilho ocupado do loadout: WEAPON / Dagger em ferro"],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "nota da tela Survivor (a escolha da MP-21, os pacotes)"],
+	["THEME.foreground", "SURFACE.cell", MIN_TEXT, "valor da linha de estatistica (Day 3, 340 / 800 XP)"],
+	["THEME.mutedForeground", "THEME.background", MIN_TEXT, "slogan e aviso do lobby sobre a faixa opaca do cabecalho"],
+	["THEME.destructive", "THEME.background", MIN_TEXT, "aviso offline do lobby (vermelho) sobre a faixa opaca"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
@@ -548,6 +572,33 @@ check(
 	overWorld !== undefined && overlay !== undefined && overWorld > overlay,
 	`overWorld ${overWorld} > overlay ${overlay}`,
 );
+
+/*
+ * UI-10: the town flyover behind the lobby and the Survivor screen. Between the town and the menus sits the page
+ * colour at TRANSPARENCY.backdrop, so the world shows through at `backdrop` at most. No label is drawn on it (the
+ * menus keep every text on a plate, a section, a window or the opaque header band -- test:lobby checks that), but
+ * the ceiling is set so that one that lands there by mistake still reads: over the brightest thing the town can
+ * put under the scrim -- white -- the composite must hold `foreground` at 4,5:1.
+ */
+const backdrop = T.get("backdrop");
+{
+	const bg = role("THEME.background");
+	const a = backdrop ?? 1;
+	const composite = bg.map(c => Math.round(c * (1 - a) + 255 * a));
+	const r = contrast(role("THEME.foreground"), composite);
+	check(
+		"UI-10: o scrim da cidade atras dos menus (TRANSPARENCY.backdrop) segura o foreground a 4,5:1 sobre um mundo branco",
+		backdrop !== undefined && backdrop > 0 && r >= MIN_TEXT,
+		`backdrop = ${backdrop} -> mundo a ${Math.round(a * 100)}%, pior caso ${hex(composite)}, ${r.toFixed(2)}:1`,
+	);
+	const flySrc = codeAt(join(SRC, "client/view/townFlyover.ts"));
+	check(
+		"...e o voo usa esse scrim, na cor da pagina, e so tokens do tema e do mundo (nenhuma cor literal)",
+		/TRANSPARENCY\.backdrop/.test(flySrc) &&
+			/THEME\.background/.test(flySrc) &&
+			!/Color3\.(fromRGB|new|fromHex)|new Color3/.test(flySrc),
+	);
+}
 
 /** the screens that open OVER a run, and must dim the street rather than hide it */
 const OVER_RUN = ["client/ui/backpack.ts", "client/ui/pauseMenu.ts", "client/onboarding/gameOver.ts"];

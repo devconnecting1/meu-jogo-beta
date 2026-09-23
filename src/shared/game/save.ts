@@ -213,6 +213,16 @@ export function defaultSave(): PlayerSaveData {
 }
 
 /**
+ * "No" to "Do you want to watch the tutorial?": the question is answered AND the first-run coach stays off. The coach
+ * (client/onboarding/index.ts) runs off `firstInstall`, so setting only `tutorialDone` still started its lessons in
+ * the city (the owner's report). The same contract as the fix going to main; on merge keep ONE copy.
+ */
+export function declineTutorial(save: PlayerSaveData): void {
+	save.tutorialDone = true;
+	save.firstInstall = false;
+}
+
+/**
  * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
  * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked)
  * and settings. The server applies it on the "newRun" action; the client applies the same to its copy.

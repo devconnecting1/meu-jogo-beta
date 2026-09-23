@@ -407,7 +407,6 @@ export const LANG_TABLE: Array<string> = [
 	"Rider",
 	"Never die",
 	"Ninja",
-	"Play",
 	"Continue",
 	"New game",
 	"Shop",
@@ -456,7 +455,6 @@ export const LANG_TABLE: Array<string> = [
 	"Your screen",
 	"General: sound effects and music volume, and the size of the on-screen panels.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to.#About: the game and its credits.#Changes are saved with your progress, by themselves.",
 	"Survivor",
-	"Current day",
 	"Best day",
 	"Level",
 	"Bosses defeated",
@@ -556,9 +554,8 @@ export const LANG_TABLE: Array<string> = [
 	"Your progress changed, try again",
 	"Zombies killed",
 	"days",
-	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it) and a lobby tip
+	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it)
 	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
-	"The backpack and the menu never stop the world: open them somewhere safe",
 	// the item card (client/ui/itemCard.ts + itemInfo.ts, DESIGN_RULES UI-08): types, stat labels, notes and the
 	// usage hint (its keys are the legends of tutorial.ts SCHEMES; "Attack / shoot" is one of its rows)
 	"Rifle",
@@ -618,6 +615,23 @@ export const LANG_TABLE: Array<string> = [
 	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
 	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it.",
+	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor
+	// screen, which enters the city; "Day" frames the town's day ("Enter the city  ·  Day 7")
+	"Start",
+	"Enter the city",
+	"Stats",
+	"This life",
+	"Record",
+	"Empty",
+	"Town",
+	"in town",
+	"Solo",
+	"your own town",
+	"last town fell",
+	"Your new life wakes at first light",
+	"Delivered when you enter the city",
+	"The town keeps its own day. This life and your record count yours.",
+	"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
 ];
 
 /**
