@@ -78,6 +78,7 @@ export function popup(ctx: GameContext, title: string, body: string, buttons: Ar
 	let bx = DIALOG_W - pad - (btnW * count + gap * math.max(count - 1, 0));
 	const footerY = h - pad - footerH;
 	let primary: TextButton | undefined;
+	let last: TextButton | undefined;
 	for (let i = 0; i < count; i++) {
 		const spec = buttons[i];
 		const variant = variantOf(spec, i === count - 1);
@@ -92,9 +93,13 @@ export function popup(ctx: GameContext, title: string, body: string, buttons: Ar
 			},
 		});
 		if (variant === "default") primary = b;
+		last = b;
 		bx += btnW + gap;
 	}
-	if (primary !== undefined) autoFocus(primary);
+	// a pad player lands on the dialog: its primary action, or -- a help or a Records popup, whose one button is a
+	// secondary "Close" -- its last button. Left on the "?" behind the scrim, the next A opened a second popup
+	const focus = primary ?? last;
+	if (focus !== undefined) autoFocus(focus);
 	return dialog.root;
 }
 

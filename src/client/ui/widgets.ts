@@ -1714,7 +1714,9 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 		},
 	};
 	if (closeW > 0) {
-		Button(card, "Close", "X", {
+		// a pad player lands on the X (the caller may move the focus to something of its own after this): left on the
+		// button that opened the dialog, behind its scrim, the pad could only reopen it
+		const close = Button(card, "Close", "X", {
 			x: props.w - CARD_STRIP_INSET - space(1) - closeW,
 			y: CARD_STRIP_INSET + space(1),
 			w: closeW,
@@ -1724,6 +1726,7 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 			zIndex: card.ZIndex + 3,
 			onClick: (): void => handle.close(),
 		});
+		autoFocus(close);
 	}
 	// entrance: fade the scrim in, zoom the card from 95% (both instant under Reduce Motion, via tween())
 	root.BackgroundTransparency = 1;
