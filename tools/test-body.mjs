@@ -233,18 +233,36 @@ globalThis.Instance = Inst;
 /** Roblox's DataStores outlive a server: one map per store name for the whole run */
 const stores = new Map();
 const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+/** every DataStore call that went through, in order: { store, op, key } (the tests read the order of writes) */
+const storeLog = [];
+/** GetDataStore(name) throws this many more times per store name (a store the service cannot open yet) */
+const openFailures = new Map();
 function fakeStore(name) {
 	let s = stores.get(name);
 	if (s !== undefined) return s;
 	const data = new Map();
 	s = {
 		data,
+		/** fault injection: how many of the next calls of each kind throw, as a DataStore outage does */
+		fail: { get: 0, update: 0 },
 		UpdateAsync(key, transform) {
+			if (s.fail.update > 0) {
+				s.fail.update -= 1;
+				throw new Error(`injected UpdateAsync failure on ${name}`);
+			}
 			const next = transform(clone(data.get(key)));
 			if (next !== undefined) data.set(key, clone(next));
+			storeLog.push({ store: name, op: "update", key });
 			return [next];
 		},
-		GetAsync: key => [clone(data.get(key))],
+		GetAsync(key) {
+			if (s.fail.get > 0) {
+				s.fail.get -= 1;
+				throw new Error(`injected GetAsync failure on ${name}`);
+			}
+			storeLog.push({ store: name, op: "get", key });
+			return [clone(data.get(key))];
+		},
 		SetAsync: (key, v) => data.set(key, clone(v)),
 	};
 	stores.set(name, s);
@@ -275,7 +293,17 @@ function makeGame(privateServer) {
 		JSONEncode: v => JSON.stringify(v),
 		JSONDecode: s => JSON.parse(s),
 	};
-	const DataStoreService = { GetDataStore: name => fakeStore(name), GetRequestBudgetForRequestType: () => 100 };
+	const DataStoreService = {
+		GetDataStore: name => {
+			const left = openFailures.get(name) ?? 0;
+			if (left > 0) {
+				openFailures.set(name, left - 1);
+				throw new Error(`injected GetDataStore failure on ${name}`);
+			}
+			return fakeStore(name);
+		},
+		GetRequestBudgetForRequestType: () => 100,
+	};
 	const services = {
 		ReplicatedStorage,
 		Workspace,
@@ -1403,6 +1431,30 @@ section(
 		);
 	},
 );
+
+// ================================================================ 13: the title record, under faults (MON-05 review)
+
+section("13) the title record never stalls the save path: one attempt to read it, one to write it (MON-05)", () => {
+	const s = bootServer();
+	const { TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const record = fakeStore(TITLE_STORE);
+	// a record that cannot be read: the load goes on without it (it used to wait and retry for up to 7 s, in front
+	// of the LoadAck -- here a wait abandons the thread, exactly as a stall would feel to the player)
+	record.fail.get = 1;
+	const u = newUser();
+	const p = s.join(u, "unlucky");
+	check(record.fail.get === 0, "the record was read at load, and the read failed");
+	check(s.save(p) !== undefined, "…and the LoadAck went out anyway: one attempt, no waits in front of it");
+	// a record that cannot be written: the leave goes on (the next save tries again)
+	s.save(p).zombieKills = 12;
+	record.fail.update = 1;
+	s.quit(p);
+	check(record.fail.update === 0, "the record write on leaving was tried, and failed");
+	check(s.stored(u)?.zombieKills === 12, "…and the save itself was written");
+	const again = s.join(u, "unlucky");
+	check(s.save(again)?.zombieKills === 12, "…and the leave finished: the same player loads again on this server");
+	s.quit(again);
+});
 
 // ================================================================
 

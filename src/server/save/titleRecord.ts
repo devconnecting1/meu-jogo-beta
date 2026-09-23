@@ -116,49 +116,39 @@ function titleStore(): DataStore | undefined {
 /** what a load found: the record (undefined = none stored yet), or `ok: false` when it could not be read */
 export type TitleRecordRead = { ok: true; record: TitleRecord | undefined } | { ok: false };
 
-/** reads the record of `key`, retrying after each of `delays` (seconds) */
-export function loadTitleRecord(key: string, delays: ReadonlyArray<number>): TitleRecordRead {
+/**
+ * Reads the record of `key`: ONE attempt, no wait. It sits in front of the LoadAck, and a failure costs little -- the
+ * session then only MERGES into the record instead of replacing it (see the header) -- so a retry loop there would
+ * make every DataStore hiccup a stall at the door for nothing.
+ */
+export function loadTitleRecord(key: string): TitleRecordRead {
 	const s = titleStore();
 	if (s === undefined) return { ok: false };
-	for (let attempt = 0; ; attempt++) {
-		const [ok, value] = pcall((): unknown => s.GetAsync<unknown>(key)[0]);
-		if (ok) return { ok: true, record: readTitleRecord(value) };
-		if (attempt >= delays.size()) {
-			warn(`[${GAME_NAME}] ${key}: title record not read (${tostring(value)}); this session merges it instead`);
-			return { ok: false };
-		}
-		task.wait(delays[attempt]);
-	}
+	const [ok, value] = pcall((): unknown => s.GetAsync<unknown>(key)[0]);
+	if (ok) return { ok: true, record: readTitleRecord(value) };
+	warn(`[${GAME_NAME}] ${key}: title record not read (${tostring(value)}); this session merges it instead`);
+	return { ok: false };
 }
 
 /**
  * Writes `save`'s earned half as the record of `key` (see the header for `replace`), and answers the record that
- * landed -- after a merge it may hold MORE than the save, which the caller then takes back. undefined = not written:
- * only logged, and the caller tries again on its next flush.
+ * landed -- after a merge it may hold MORE than the save, which the caller then takes back. ONE attempt, no wait:
+ * it runs inside the session's save (on leave and at shutdown too), and the next save simply tries again.
+ * undefined = not written (logged).
  */
-export function storeTitleRecord(
-	key: string,
-	save: PlayerSaveData,
-	replace: boolean,
-	delays: ReadonlyArray<number>,
-): TitleRecord | undefined {
+export function storeTitleRecord(key: string, save: PlayerSaveData, replace: boolean): TitleRecord | undefined {
 	const s = titleStore();
 	if (s === undefined) return undefined;
 	const mine = titleRecordOf(save);
-	for (let attempt = 0; ; attempt++) {
-		// set inside the transform (the closure hides the assignment from the narrowing, hence the cast)
-		let written = undefined as TitleRecord | undefined;
-		const [ok, err] = pcall(() => {
-			s.UpdateAsync<unknown, unknown>(key, old => {
-				written = nextTitleRecord(old, mine, replace);
-				return $tuple(written);
-			});
+	// set inside the transform (the closure hides the assignment from the narrowing, hence the cast)
+	let written = undefined as TitleRecord | undefined;
+	const [ok, err] = pcall(() => {
+		s.UpdateAsync<unknown, unknown>(key, old => {
+			written = nextTitleRecord(old, mine, replace);
+			return $tuple(written);
 		});
-		if (ok && written !== undefined) return written;
-		if (attempt >= delays.size()) {
-			warn(`[${GAME_NAME}] ${key}: title record not saved (${tostring(err)}); retried on the next save`);
-			return undefined;
-		}
-		task.wait(delays[attempt]);
-	}
+	});
+	if (ok && written !== undefined) return written;
+	warn(`[${GAME_NAME}] ${key}: title record not saved (${tostring(err)}); retried on the next save`);
+	return undefined;
 }

@@ -387,11 +387,11 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 }
 
 /** the title record (server/save/titleRecord.ts) brought up to date with the save, when what was earned changed */
-function syncTitleRecord(s: Session, delays: Array<number>): void {
+function syncTitleRecord(s: Session): void {
 	const mark = TitleRecord.titleRecordMark(TitleRecord.titleRecordOf(s.save));
 	if (mark === s.titleMark) return;
 	// replace only a record this session has read; merge into one it never saw (the load's read failed)
-	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleMark !== undefined, delays);
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, s.titleMark !== undefined);
 	if (written === undefined) return;
 	// a merge may have found what the load could not read: the save takes it too (and is written again), so from
 	// here on the save holds everything the record does and replacing it can never lower it
@@ -421,7 +421,7 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	const outcome = writeWithLock(s, json, release, delays);
 	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop -- by the session that
 	// just wrote the save (it held the lock), only when it changed, and inside the same writing window
-	if (outcome === "ok") syncTitleRecord(s, delays);
+	if (outcome === "ok") syncTitleRecord(s);
 	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
@@ -520,7 +520,7 @@ function loadSession(s: Session): void {
 	let restored = false;
 	let titleMark: string | undefined;
 	if (status === "ok" || status === "new") {
-		const read = TitleRecord.loadTitleRecord(s.key, RETRY_DELAYS);
+		const read = TitleRecord.loadTitleRecord(s.key);
 		if (read.ok) {
 			// "" = no record yet: known, and different from any real fingerprint, so the first write creates it
 			titleMark = read.record !== undefined ? TitleRecord.titleRecordMark(read.record) : "";
