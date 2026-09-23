@@ -944,12 +944,16 @@ const slotName = i =>
 		?.GetChildren()
 		.find(c => c.Name === "Name")?.Text;
 const weaponName = WEAPONS[save.equipWeapon >= 0 ? save.equipWeapon : 0].name;
+const slotIcon = i => deep(slot(i), "ItemIcon")?.GetAttribute("Icon");
 check(
-	"loadout: seis ladrilhos com o glifo do Bag; o vazio diz Empty",
-	[0, 1, 2, 3, 4, 5].every(i => slot(i) !== undefined && deep(slot(i), "Glyph") !== undefined) &&
+	"loadout: seis ladrilhos com o icone do Bag (UI-11); o vazio diz Empty e nao desenha nada",
+	[0, 1, 2, 3, 4, 5].every(i => slot(i) !== undefined && deep(slot(i), "ItemIcon") !== undefined) &&
 		slotName(0) === weaponName &&
-		[1, 2, 3, 4, 5].some(i => slotName(i) === "Empty"),
-	[0, 1, 2, 3, 4, 5].map(slotName).join(" | "),
+		typeof slotIcon(0) === "string" &&
+		slotIcon(0) !== "" &&
+		[1, 2, 3, 4, 5].some(i => slotName(i) === "Empty") &&
+		[1, 2, 3, 4, 5].every(i => (slotName(i) === "Empty") === (slotIcon(i) === "")),
+	[0, 1, 2, 3, 4, 5].map(i => `${slotName(i)}:${slotIcon(i)}`).join(" | "),
 );
 const face = t => t?.FindFirstChild("PlateFace")?.BackgroundColor3;
 const emptySlot = [1, 2, 3, 4, 5].find(i => slotName(i) === "Empty");
