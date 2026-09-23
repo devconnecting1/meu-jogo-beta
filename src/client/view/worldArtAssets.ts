@@ -87,141 +87,141 @@ export type WorldArtName =
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
-	asphalt: { id: "", w: 64, h: 64 },
+	asphalt: { id: "rbxassetid://136696200865006", w: 64, h: 64 },
 	/** tile: parking-lot asphalt, a little more worn */
-	asphaltLot: { id: "", w: 64, h: 64 },
+	asphaltLot: { id: "rbxassetid://101623737123119", w: 64, h: 64 },
 	/** tile: sidewalk: 64-unit concrete slabs with joints */
-	concrete: { id: "", w: 64, h: 64 },
+	concrete: { id: "rbxassetid://125417248338973", w: 64, h: 64 },
 	/** tile: downtown paving: 32-unit pavers */
-	plaza: { id: "", w: 32, h: 32 },
+	plaza: { id: "rbxassetid://71646231282470", w: 32, h: 32 },
 	/** tile: footpaths to the doors: running-bond pavers */
-	pavers: { id: "", w: 16, h: 16 },
+	pavers: { id: "rbxassetid://122346741168951", w: 16, h: 16 },
 	/** tile: gas forecourt / ambulance bay: poured concrete panels */
-	apron: { id: "", w: 64, h: 64 },
+	apron: { id: "rbxassetid://96060481248281", w: 64, h: 64 },
 	/** tile: mowed lawn */
-	grass: { id: "", w: 64, h: 64 },
+	grass: { id: "rbxassetid://128959353163283", w: 64, h: 64 },
 	/** tile: a yard nobody mowed for a week or two */
-	grassLong: { id: "", w: 64, h: 64 },
+	grassLong: { id: "rbxassetid://109833880147310", w: 64, h: 64 },
 	/** tile: packed earth: park paths, the school yard */
-	dirt: { id: "", w: 32, h: 32 },
+	dirt: { id: "rbxassetid://88069669305202", w: 32, h: 32 },
 	/** tile: tree pits: bark mulch */
-	soil: { id: "", w: 16, h: 16 },
+	soil: { id: "rbxassetid://138928866784074", w: 16, h: 16 },
 	/** tile: tactile paving where a crosswalk lands */
-	tactile: { id: "", w: 4, h: 4 },
+	tactile: { id: "rbxassetid://106111012873721", w: 4, h: 4 },
 	/** tile: road paint, worn (tinted: white zebras, yellow line) */
-	paint: { id: "", w: 16, h: 16 },
+	paint: { id: "rbxassetid://88659727099879", w: 16, h: 16 },
 	/** tile: kerb on a road's north edge (its shadow on the asphalt below) */
-	kerbN: { id: "", w: 16, h: 4 },
+	kerbN: { id: "rbxassetid://88114414655458", w: 16, h: 4 },
 	/** tile: kerb on a road's south edge */
-	kerbS: { id: "", w: 16, h: 4 },
+	kerbS: { id: "rbxassetid://104343748202093", w: 16, h: 4 },
 	/** tile: kerb on a road's west edge */
-	kerbW: { id: "", w: 4, h: 16 },
+	kerbW: { id: "rbxassetid://91701233722319", w: 4, h: 16 },
 	/** tile: kerb on a road's east edge */
-	kerbE: { id: "", w: 4, h: 16 },
+	kerbE: { id: "rbxassetid://71264148250002", w: 4, h: 16 },
 	/** tile: the forest outside the town fence */
-	forest: { id: "", w: 64, h: 64 },
+	forest: { id: "rbxassetid://85144802348141", w: 64, h: 64 },
 	/** tile: board fence along x */
-	fenceH: { id: "", w: 16, h: 2 },
+	fenceH: { id: "rbxassetid://119203758037793", w: 16, h: 2 },
 	/** tile: board fence along y */
-	fenceV: { id: "", w: 2, h: 16 },
+	fenceV: { id: "rbxassetid://101826053299894", w: 2, h: 16 },
 	/** tile: house floors: boards */
-	floorWood: { id: "", w: 32, h: 32 },
+	floorWood: { id: "rbxassetid://101668958493756", w: 32, h: 32 },
 	/** tile: hospital / pharmacy floor: checker tiles */
-	floorTile: { id: "", w: 16, h: 16 },
+	floorTile: { id: "rbxassetid://138138688365178", w: 16, h: 16 },
 	/** tile: shop floor: vinyl tiles */
-	floorShop: { id: "", w: 32, h: 32 },
+	floorShop: { id: "rbxassetid://129815435078768", w: 32, h: 32 },
 	/** tileTint: walls: plaster (tint: the wall colour) */
-	wall: { id: "", w: 8, h: 8 },
+	wall: { id: "rbxassetid://122355100041127", w: 8, h: 8 },
 	/** tileTint: pitched roof shingles, courses along x (tint: roof colour) */
-	roofShingleH: { id: "", w: 32, h: 32 },
+	roofShingleH: { id: "rbxassetid://135793779204378", w: 32, h: 32 },
 	/** tileTint: pitched roof shingles, courses along y */
-	roofShingleV: { id: "", w: 32, h: 32 },
+	roofShingleV: { id: "rbxassetid://90130399432236", w: 32, h: 32 },
 	/** tileTint: flat roof: tar and gravel (shops) */
-	roofGravel: { id: "", w: 32, h: 32 },
+	roofGravel: { id: "rbxassetid://100979575455672", w: 32, h: 32 },
 	/** tileTint: flat roof: welded membrane (school, hospital, gas) */
-	roofMembrane: { id: "", w: 64, h: 64 },
+	roofMembrane: { id: "rbxassetid://79521293665666", w: 64, h: 64 },
 	/** slice: pitched roof rim: drip edge and fascia */
-	eaves: { id: "", w: 12, h: 12, slice: [4, 4, 8, 8] },
+	eaves: { id: "rbxassetid://86266945168441", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: flat roof rim: parapet, coping, inner face */
-	parapet: { id: "", w: 12, h: 12, slice: [4, 4, 8, 8] },
+	parapet: { id: "rbxassetid://77285850845081", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: soft rectangular drop shadow */
-	shadowBox: { id: "", w: 16, h: 16, slice: [6, 6, 10, 10] },
+	shadowBox: { id: "rbxassetid://100011874413072", w: 16, h: 16, slice: [6, 6, 10, 10] },
 	/** mask: tree crown 1: silhouette + leaves (tint: foliage) */
-	canopy0: { id: "", w: 40, h: 40 },
+	canopy0: { id: "rbxassetid://73465981877902", w: 40, h: 40 },
 	/** overlay: tree crown 1: light, shadow and outline */
-	canopyShade0: { id: "", w: 40, h: 40 },
+	canopyShade0: { id: "rbxassetid://79729616067760", w: 40, h: 40 },
 	/** mask: tree crown 2: silhouette + leaves (tint: foliage) */
-	canopy1: { id: "", w: 40, h: 40 },
+	canopy1: { id: "rbxassetid://89590010697770", w: 40, h: 40 },
 	/** overlay: tree crown 2: light, shadow and outline */
-	canopyShade1: { id: "", w: 40, h: 40 },
+	canopyShade1: { id: "rbxassetid://78267299787002", w: 40, h: 40 },
 	/** mask: tree crown 3: silhouette + leaves (tint: foliage) */
-	canopy2: { id: "", w: 40, h: 40 },
+	canopy2: { id: "rbxassetid://100206983226107", w: 40, h: 40 },
 	/** overlay: tree crown 3: light, shadow and outline */
-	canopyShade2: { id: "", w: 40, h: 40 },
+	canopyShade2: { id: "rbxassetid://87939293634230", w: 40, h: 40 },
 	/** mask: sedan: body (tint: paint) */
-	car0: { id: "", w: 50, h: 25 },
+	car0: { id: "rbxassetid://90907187103557", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
-	carTrim0: { id: "", w: 50, h: 25 },
+	carTrim0: { id: "rbxassetid://101227547206373", w: 50, h: 25 },
 	/** overlay: sedan: smashed windshield, scratches */
-	carDamage0: { id: "", w: 50, h: 25 },
+	carDamage0: { id: "rbxassetid://91358709281295", w: 50, h: 25 },
 	/** overlay: sedan: burnt out */
-	carWreck0: { id: "", w: 50, h: 25 },
+	carWreck0: { id: "rbxassetid://116358795706916", w: 50, h: 25 },
 	/** mask: hatch: body (tint: paint) */
-	car1: { id: "", w: 50, h: 25 },
+	car1: { id: "rbxassetid://93097391290703", w: 50, h: 25 },
 	/** overlay: hatch: glass, lights, wheels, outline */
-	carTrim1: { id: "", w: 50, h: 25 },
+	carTrim1: { id: "rbxassetid://91017473943960", w: 50, h: 25 },
 	/** overlay: hatch: smashed windshield, scratches */
-	carDamage1: { id: "", w: 50, h: 25 },
+	carDamage1: { id: "rbxassetid://77340649568922", w: 50, h: 25 },
 	/** overlay: hatch: burnt out */
-	carWreck1: { id: "", w: 50, h: 25 },
+	carWreck1: { id: "rbxassetid://137645395462651", w: 50, h: 25 },
 	/** mask: pickup: body (tint: paint) */
-	car2: { id: "", w: 50, h: 25 },
+	car2: { id: "rbxassetid://119189575734127", w: 50, h: 25 },
 	/** overlay: pickup: glass, lights, wheels, outline */
-	carTrim2: { id: "", w: 50, h: 25 },
+	carTrim2: { id: "rbxassetid://121720458024309", w: 50, h: 25 },
 	/** overlay: pickup: smashed windshield, scratches */
-	carDamage2: { id: "", w: 50, h: 25 },
+	carDamage2: { id: "rbxassetid://75808892601718", w: 50, h: 25 },
 	/** overlay: pickup: burnt out */
-	carWreck2: { id: "", w: 50, h: 25 },
+	carWreck2: { id: "rbxassetid://135701189659216", w: 50, h: 25 },
 	/** mask: suv: body (tint: paint) */
-	car3: { id: "", w: 50, h: 25 },
+	car3: { id: "rbxassetid://75904740720087", w: 50, h: 25 },
 	/** overlay: suv: glass, lights, wheels, outline */
-	carTrim3: { id: "", w: 50, h: 25 },
+	carTrim3: { id: "rbxassetid://124630657972919", w: 50, h: 25 },
 	/** overlay: suv: smashed windshield, scratches */
-	carDamage3: { id: "", w: 50, h: 25 },
+	carDamage3: { id: "rbxassetid://82829722323934", w: 50, h: 25 },
 	/** overlay: suv: burnt out */
-	carWreck3: { id: "", w: 50, h: 25 },
+	carWreck3: { id: "rbxassetid://110973168366486", w: 50, h: 25 },
 	/** sprite: wheelie bin */
-	bin: { id: "", w: 9, h: 9 },
+	bin: { id: "rbxassetid://77342012293829", w: 9, h: 9 },
 	/** sprite: spilled litter (flat) */
-	litter0: { id: "", w: 12, h: 12 },
+	litter0: { id: "rbxassetid://77488859025992", w: 12, h: 12 },
 	/** sprite: spilled litter (flat) */
-	litter1: { id: "", w: 12, h: 12 },
+	litter1: { id: "rbxassetid://130241590136140", w: 12, h: 12 },
 	/** sprite: spilled litter (flat) */
-	litter2: { id: "", w: 12, h: 12 },
+	litter2: { id: "rbxassetid://80452263452415", w: 12, h: 12 },
 	/** sprite: dried blood */
-	blood0: { id: "", w: 16, h: 12 },
+	blood0: { id: "rbxassetid://114594767797040", w: 16, h: 12 },
 	/** sprite: dried blood */
-	blood1: { id: "", w: 16, h: 12 },
+	blood1: { id: "rbxassetid://93633145448572", w: 16, h: 12 },
 	/** sprite: oil stain */
-	oil0: { id: "", w: 16, h: 12 },
+	oil0: { id: "rbxassetid://102216726173704", w: 16, h: 12 },
 	/** sprite: oil stain */
-	oil1: { id: "", w: 16, h: 12 },
+	oil1: { id: "rbxassetid://90928154923991", w: 16, h: 12 },
 	/** sprite: asphalt crack */
-	crack0: { id: "", w: 24, h: 8 },
+	crack0: { id: "rbxassetid://99972894255656", w: 24, h: 8 },
 	/** sprite: asphalt crack */
-	crack1: { id: "", w: 24, h: 8 },
+	crack1: { id: "rbxassetid://108565198333064", w: 24, h: 8 },
 	/** sprite: manhole cover */
-	manhole: { id: "", w: 8, h: 8 },
+	manhole: { id: "rbxassetid://89997805152847", w: 8, h: 8 },
 	/** sprite: storm drain */
-	drain: { id: "", w: 8, h: 4 },
+	drain: { id: "rbxassetid://140705036278395", w: 8, h: 4 },
 	/** sprite: fuel dispenser */
-	pump: { id: "", w: 8, h: 6 },
+	pump: { id: "rbxassetid://125264841699354", w: 8, h: 6 },
 	/** sprite: rooftop air conditioner */
-	acUnit: { id: "", w: 13, h: 11 },
+	acUnit: { id: "rbxassetid://104235250371536", w: 13, h: 11 },
 	/** sprite: roof vent */
-	vent: { id: "", w: 7, h: 7 },
+	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
-	chimney: { id: "", w: 8, h: 8 },
+	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
 };
 
 /** every texture of the world art, for the preload pass */
