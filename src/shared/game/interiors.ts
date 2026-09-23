@@ -725,9 +725,13 @@ const SCHOOL: Array<Template> = [
 		],
 		rooms: SCHOOL_ROOMS,
 		main: [1, 1],
+		// the corridor's two ends first; where the yard outside one is taken, a back classroom's fire exit
 		doors: [
 			[0, 1, "L", 0.5],
 			[2, 1, "R", 0.5],
+			[0, 2, "K", 0.5],
+			[2, 2, "K", 0.5],
+			[1, 2, "K", 0.5],
 		],
 		extra: 2,
 		links: [
@@ -752,6 +756,8 @@ const SCHOOL: Array<Template> = [
 			[0, 1, "L", 0.5],
 			[2, 1, "R", 0.5],
 			[1, 1, "K", 0.5],
+			[0, 2, "K", 0.5],
+			[2, 2, "K", 0.5],
 		],
 		extra: 3,
 		links: [
