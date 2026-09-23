@@ -6,6 +6,7 @@
 		"watch": "rbxtsc -w",
 		"serve": "rojo serve",
 		"theme": "node tools/gen-theme.mjs",
+		"cloud": "node tools/cloud.mjs",
 		"validate:world": "node tools/validate-world.mjs",
 		"check:registers": "node tools/check-registers.mjs",
 		"test:net": "node tools/test-net.mjs",
