@@ -26,7 +26,8 @@
  *      each shot is clamped every time, a body drawn in the mid ring is judged where it was drawn, the measured
  *      ping is slow to rise and quick to fall, and the melee margin covers what a walker does in a 140 ms view;
  *      and from the review of dee095a: a running view offset past the ceiling (a bite's, a ping that just fell) is
- *      judged AT the ceiling, never past it (S1);
+ *      judged AT the ceiling, never past it (S1), and a jump that fits under the ceiling -- a 50 ms link measured at
+ *      150 ms -- is clamped by the continuity alone, every time (S2);
  *   d. XP, kills and levels only move when the SERVER decides: the assist share of §3.6, the boss participation
  *      rule, and `stripClientProgress` pinning every reported progress field to the trusted copy once
  *      MP_PHASE ≥ 2 — which is the §11.3 F2 acceptance line "o XP só vem do servidor";
@@ -701,7 +702,7 @@ section("c''. the rewind judges each body where it was DRAWN, and a view cannot 
  * A stream client, closer to the real one than `measure`: one Input a tick through the real queue
  * (players.ts `acceptInput` / `takeCommand`), each carrying the view of the frame that built it, delivered
  * `rttMs/2 ± jitterMs` later, and a shot every 8 ticks at the body it draws. The server hears a ping once a second
- * (± `pingNoiseMs`).
+ * (± `pingNoiseMs`): the real RTT, or `serverPingMs` when the ping it measures is not the link's.
  *
  *   mid    the shooter draws the target in its MID ring: a near interval further back (client/net/snapshotBuffer.ts
  *          `extra`), which the server learns from the replication layer (`viewExtraTicks`, here fixed)
@@ -712,6 +713,7 @@ function stream({
 	rttMs,
 	jitterMs = 0,
 	pingNoiseMs = 0,
+	serverPingMs = rttMs,
 	mid = false,
 	serverKnowsRing = true,
 	jump = 0,
@@ -749,7 +751,7 @@ function stream({
 		z.y = targetY(tick);
 		fx.combat.afterWorld(tick);
 		if (tick % CFG.SIM_HZ === 1) {
-			fx.combat.setPing(0, (rttMs + (rand() * 2 - 1) * pingNoiseMs) / 1000);
+			fx.combat.setPing(0, (serverPingMs + (rand() * 2 - 1) * pingNoiseMs) / 1000);
 		}
 		// what landed since the last tick, in the order it landed
 		inbox.sort((a, b) => a.at - b.at);
@@ -807,6 +809,31 @@ function stream({
 	check(
 		jumpy.rate <= honest.rate,
 		`and aiming at the past buys nothing (${pct(jumpy)} against the honest ${pct(honest)})`,
+	);
+
+	/*
+	 * S2 (the review of dee095a): the case above does not need the continuity -- at 150 ms a 6-tick jump is already
+	 * past the ping ceiling, and `judge` reverted to the ceiling alone still passed. This one does: a 50 ms link whose
+	 * ping the server measures at 150 ms (a throttled second the filter is still coming down from, or a ping sample
+	 * that is simply high) leaves ~10 ticks of ceiling above the honest view, and a 6-tick jump fits inside it.
+	 */
+	const roomy = stream({ rttMs: 50, serverPingMs: 150, jitterMs: 15, pingNoiseMs: 20 });
+	const inside = stream({ rttMs: 50, serverPingMs: 150, jitterMs: 15, pingNoiseMs: 20, jump: 6 });
+	info(
+		`50 ms link, 150 ms measured: honest ${pct(roomy)} clamped ${roomy.stats.rewindClamped}; jumping 6 ticks ` +
+			`${pct(inside)} clamped ${inside.stats.rewindClamped}`,
+	);
+	check(
+		roomy.stats.rewindClamped === 0,
+		`with room under the ceiling an honest view is still never clamped (${roomy.stats.rewindClamped} of ${roomy.fired})`,
+	);
+	check(
+		inside.stats.rewindClamped === inside.fired,
+		`a jump the ceiling allows is clamped by the continuity alone, every time (${inside.stats.rewindClamped} of ${inside.fired})`,
+	);
+	check(
+		inside.rate <= roomy.rate,
+		`and aiming at the past buys nothing (${pct(inside)} against the honest ${pct(roomy)})`,
 	);
 
 	// #2: the shooter draws the target in its mid ring, 3 ticks further back than its declared view. A fast body
