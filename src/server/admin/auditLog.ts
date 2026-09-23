@@ -196,12 +196,56 @@ export function auditIdentity(e: AuditRecord): string {
 	return `${e.t}|${e.adminId}|${e.action}|${e.targetId}|${e.target}|${e.details}|${e.ok ? 1 : 0}`;
 }
 
-/** a key's document with `batch` appended, the oldest cut past AUDIT_PER_KEY */
+/**
+ * A world tool the admin used in their own run (a spawn, the clock, a teleport...), the "assist" mark or a refused
+ * non-admin call: many, cheap, and about nobody else. Everything else (kick, ban, unban, a save edit or reset, an
+ * announcement) is an action on players, and is what the log is for.
+ */
+function isToolEntry(e: AuditRecord): boolean {
+	return e.action.sub(1, 6) === "local:" || e.action === "assist" || e.action === "DENIED";
+}
+
+/**
+ * Cuts `list` (oldest first) down to `max`: the oldest TOOL entry goes first, and an action on a player only once no
+ * tool entry is left -- an afternoon of spawning zombies never pushes a ban out of the log.
+ */
+export function trimAudit(list: Array<AuditRecord>, max: number): void {
+	while (list.size() > max) {
+		let victim = 0;
+		for (let i = 0; i < list.size(); i++) {
+			if (isToolEntry(list[i])) {
+				victim = i;
+				break;
+			}
+		}
+		list.remove(victim);
+	}
+}
+
+/** a key's document with `batch` appended, cut to AUDIT_PER_KEY (trimAudit: tool entries go first) */
 export function appendAudit(doc: unknown, batch: ReadonlyArray<AuditRecord>): Array<AuditRecord> {
 	const list = readAuditList(doc);
 	for (const e of batch) list.push(e);
-	while (list.size() > AUDIT_PER_KEY) list.remove(0);
+	trimAudit(list, AUDIT_PER_KEY);
 	return list;
+}
+
+/** what the game appends to a ban's private note (server/admin/adminServer.ts): " | by admin <UserId>" */
+export const BAN_NOTE_SUFFIX = " | by admin ";
+
+/**
+ * A ban's private note split into what an admin typed and the suffix the game wrote. Only the typed part goes
+ * through the text filter when it is shown back (the filter hashes digit runs, so the admin's UserId would come
+ * back as "#########"); a note without the suffix (a ban made elsewhere) is all typed.
+ */
+export function splitBanNote(note: string): [string, string] {
+	const n = BAN_NOTE_SUFFIX.size();
+	for (let i = note.size() - n + 1; i >= 1; i--) {
+		if (note.sub(i, i + n - 1) !== BAN_NOTE_SUFFIX) continue;
+		const id = note.sub(i + n);
+		return isDigits(id) ? [note.sub(1, i - 1), note.sub(i)] : [note, ""];
+	}
+	return [note, ""];
 }
 
 /**

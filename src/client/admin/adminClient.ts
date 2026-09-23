@@ -61,8 +61,14 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	gui.DisplayOrder = 150;
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	// the panel is full of names and typed text, and is English on purpose (UI-03): none of it is captured for
-	// automatic translation (compliance F9)
+	// automatic translation (compliance F9) -- the ScreenGui AND every label in it, as the announcement banner does,
+	// rather than rely on the property reaching descendants
 	gui.AutoLocalize = false;
+	conns.push(
+		gui.DescendantAdded.Connect(d => {
+			if (d.IsA("GuiBase2d")) d.AutoLocalize = false;
+		}),
+	);
 	gui.Parent = ctx.playerGui;
 
 	// debug overlays: inside the game root, above the night (Dark = 80) and below the HUD (90) / menus (100)

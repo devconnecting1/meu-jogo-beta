@@ -14,7 +14,7 @@
  * filtered string is what reaches the client (client/view/chatBubbles.ts draws that and only that).
  */
 import { GAME_NAME } from "shared/module";
-import { ChatBody, isWhisperChannel, shouldDeliver, WHISPER_COMMAND } from "shared/chat/chatRules";
+import { ChatBody, isWhisperAttempt, isWhisperChannel, shouldDeliver, WHISPER_COMMAND } from "shared/chat/chatRules";
 import { waitForChildRobust } from "shared/chat/channelWait";
 
 export interface ProximityChatOptions {
@@ -70,6 +70,8 @@ export function startProximityChat(options: ProximityChatOptions): void {
 			return;
 		}
 		general.ShouldDeliverCallback = (message, listener) => {
+			// "/w Bob ..." with whispers off: meant privately, so said to nobody rather than to the whole street
+			if (isWhisperAttempt(message.Text)) return false;
 			const from = message.TextSource;
 			// a TextSource whose Player has already left the server has no body either, and the rule says no
 			const speaker = from !== undefined ? Players.GetPlayerByUserId(from.UserId) : undefined;

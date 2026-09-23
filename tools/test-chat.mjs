@@ -51,6 +51,13 @@ Object.defineProperty(String.prototype, "size", {
 	configurable: true,
 	writable: true,
 });
+Object.defineProperty(String.prototype, "lower", {
+	value: function () {
+		return this.toLowerCase();
+	},
+	configurable: true,
+	writable: true,
+});
 // String.prototype.sub is a legacy JS method (it wraps the string in <sub>): replaced by Luau's string.sub
 Object.defineProperty(String.prototype, "sub", {
 	value: function (i = 1, j = -1) {
@@ -87,6 +94,7 @@ const {
 	WHISPER_COMMAND,
 	chatInputEnabled,
 	dropCount,
+	isWhisperAttempt,
 	isWhisperChannel,
 	lineFade,
 	shouldDeliver,
@@ -272,6 +280,28 @@ console.log("\n8) sem sussurro: nenhuma fala passa por cima do alcance (MP-17)")
 	check(
 		"o cliente tambem (a barra nunca abre uma aba de sussurro que o servidor nao entrega)",
 		/whisper\.Enabled = false/.test(client),
+	);
+	// with the command off, "/w Bob ..." would be said out loud to the whole street: it goes to nobody, and the sender
+	// is told why
+	const tries = ["/w Bob meet me", "/W bob hi", "/whisper Ana hi", "/w", "/WHISPER x"];
+	const says = ["/wave hi", "/whisperer", "w Bob", "hello /w Bob", "/e dance", ""];
+	check(
+		"'/w nome ...' e '/whisper ...' sao reconhecidos (sem distinguir maiusculas)",
+		tries.every(isWhisperAttempt),
+		tries.filter(t => !isWhisperAttempt(t)).join(" | ") || `${tries.length} casos`,
+	);
+	check(
+		"...e so eles: '/wave', '/whisperer', um 'w' solto e o resto sao fala normal",
+		says.every(t => !isWhisperAttempt(t)),
+		says.filter(isWhisperAttempt).join(" | ") || `${says.length} casos`,
+	);
+	check(
+		"o servidor nao entrega um '/w ...' a ninguem (nem aos de perto)",
+		/if \(isWhisperAttempt\(message\.Text\)\) return false;/.test(server),
+	);
+	check(
+		"e quem mandou le que o sussurro esta desligado",
+		/SendingMessage\.Connect/.test(client) && /isWhisperAttempt\(message\.Text\)/.test(client),
 	);
 }
 

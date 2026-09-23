@@ -26,8 +26,11 @@ import {
 	auditKey,
 	auditNeedsScrub,
 	AuditRecord,
+	BAN_NOTE_SUFFIX,
 	LEGACY_AUDIT_KEY,
 	readAuditList,
+	splitBanNote,
+	trimAudit,
 } from "./auditLog";
 
 /*
@@ -219,7 +222,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				`${ok ? "OK" : "REFUSED"}${e.details !== "" ? ` — ${e.details}` : ""}`,
 		);
 		audit.push(e);
-		while (audit.size() > AUDIT_MEMORY) audit.remove(0);
+		trimAudit(audit, AUDIT_MEMORY);
 		if (auditStore !== undefined && persist) unsaved.push(e);
 	}
 
@@ -316,7 +319,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			merged.sort((a, b) => a.t < b.t);
 			audit.clear();
 			for (const e of merged) audit.push(e);
-			while (audit.size() > AUDIT_MEMORY) audit.remove(0);
+			trimAudit(audit, AUDIT_MEMORY);
 		});
 		reading = false;
 		auditReadAt = os.clock();
@@ -496,20 +499,14 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		return target;
 	}
 
-	function sendPatch(
-		target: Player,
-		outcome: AdminEditOutcome,
-		ops: Array<AdminOp>,
-		by: Player,
-		reset: boolean,
-	): void {
+	/** the edit reaches the edited player's client; it does not name the admin (the toast says "an administrator") */
+	function sendPatch(target: Player, outcome: AdminEditOutcome, ops: Array<AdminOp>, reset: boolean): void {
 		const ev: AdminEvent = {
 			kind: "patch",
 			rev: outcome.rev,
 			runRev: outcome.runRev,
 			ops: reset ? [] : ops,
 			reset: reset ? outcome.save : undefined,
-			by: by.Name,
 		};
 		remotes.event.FireClient(target, ev);
 		host.setPatchResend(target, outcome.rev, () => {
@@ -600,7 +597,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			);
 			// accountability: the private reason (only visible in the ban history) names the admin by UserId
 			// the "| by admin" suffix is never cut: the note is trimmed to leave room for it
-			const suffix = ` | by admin ${caller.UserId}`;
+			const suffix = `${BAN_NOTE_SUFFIX}${caller.UserId}`;
 			const note = safeText(
 				privateReason !== "" ? privateReason : "(no private reason)",
 				ADMIN_LIMITS.PRIVATE_REASON - suffix.size(),
@@ -673,6 +670,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				seen.set(text, shown);
 				return shown;
 			};
+			// the note's " | by admin <UserId>" was written by the game: only the typed part goes through the filter
+			const privateForViewer = (note: string): string => {
+				const [typed, suffix] = splitBanNote(note);
+				return `${forViewer(typed)}${suffix}`;
+			};
 			for (let page = 0; page < 5 && entries.size() < ADMIN_LIMITS.BAN_HISTORY_ENTRIES; page++) {
 				const [pok, list] = pcall(() => bp.GetCurrentPage());
 				if (!pok || !typeIs(list, "table")) break;
@@ -684,7 +686,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 						startTime: typeIs(r.StartTime, "string") ? r.StartTime : tostring(r.StartTime ?? "?"),
 						duration: typeIs(r.Duration, "number") ? r.Duration : 0,
 						displayReason: forViewer(typeIs(r.DisplayReason, "string") ? r.DisplayReason : ""),
-						privateReason: forViewer(typeIs(r.PrivateReason, "string") ? r.PrivateReason : ""),
+						privateReason: privateForViewer(typeIs(r.PrivateReason, "string") ? r.PrivateReason : ""),
 						placeId: typeIs(r.PlaceId, "number") ? r.PlaceId : 0,
 					});
 					if (entries.size() >= ADMIN_LIMITS.BAN_HISTORY_ENTRIES) break;
@@ -708,7 +710,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				return fail(outcome.error ?? "edit failed");
 			}
 			record(caller, "edit", target.UserId, "", describeOps(ops), true);
-			sendPatch(target, outcome, ops, caller, false);
+			sendPatch(target, outcome, ops, false);
 			return {
 				ok: true,
 				message: outcome.persist ? undefined : "applied in memory only (this session is not saved)",
@@ -725,7 +727,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				return fail(outcome.error ?? "reset failed");
 			}
 			record(caller, "resetSave", target.UserId, "", "save reset to a new player's", true);
-			sendPatch(target, outcome, [], caller, true);
+			sendPatch(target, outcome, [], true);
 			return { ok: true, data: outcome.save };
 		}
 

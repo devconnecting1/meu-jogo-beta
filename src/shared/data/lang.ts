@@ -270,6 +270,8 @@ export const LANG_TABLE: Array<string> = [
 	"Your progress was reset by an administrator",
 	// the lobby has no body, so nobody hears it (MP-18): the chat bar is off there, and this says why, once
 	"Chat reaches the survivors near you in town. Enter the city to talk.",
+	// "/w name ..." with whispers off (MP-17): said to nobody, and the sender is told why (client/chatInput.ts)
+	"Whispers are off. Only survivors near you in town hear the chat.",
 	"Arrival",
 	"Lights On",
 	"Close Quarters",

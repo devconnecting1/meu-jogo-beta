@@ -1984,11 +1984,12 @@ section("20) the admin audit log: UserIds and filtered text only, one key per se
 	};
 	try {
 		const { Players, TextService, ReplicatedStorage } = s.env.services;
-		// the Roblox text filter: masks one word; `down` makes it unavailable, as an outage does
+		// the Roblox text filter: masks one word and, like the real one, long digit runs (a phone number -- or a UserId);
+		// `down` makes it unavailable, as an outage does
 		const filter = { down: false };
 		TextService.FilterStringAsync = text => {
 			if (filter.down) throw new Error("filter unavailable");
-			const masked = text.replace(/badword/g, "#######");
+			const masked = text.replace(/badword/g, "#######").replace(/\d{5,}/g, m => "#".repeat(m.length));
 			return { GetNonChatStringForBroadcastAsync: () => masked, GetNonChatStringForUserAsync: () => masked };
 		};
 		const bans = [];
@@ -2077,6 +2078,11 @@ section("20) the admin audit log: UserIds and filtered text only, one key per se
 		check(
 			entry !== undefined && !entry.privateReason.includes("badword") && !entry.displayReason.includes("badword"),
 			"the ban history is shown back to the admin through the filter (F12)",
+			entry?.privateReason,
+		);
+		check(
+			entry?.privateReason === `private raw note ####### | by admin ${admin.UserId}`,
+			"...only what the admin typed: the game's ' | by admin <UserId>' stays readable (the filter would hash it)",
 			entry?.privateReason,
 		);
 

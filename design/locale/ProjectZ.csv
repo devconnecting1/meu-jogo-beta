@@ -237,6 +237,7 @@ Key,Context,Example,Source
 ,,,Your progress was updated by an administrator
 ,,,Your progress was reset by an administrator
 ,,,Chat reaches the survivors near you in town. Enter the city to talk.
+,,,Whispers are off. Only survivors near you in town hear the chat.
 ,,,Arrival
 ,,,Lights On
 ,,,Close Quarters

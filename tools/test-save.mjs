@@ -1446,6 +1446,53 @@ section("25) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 	const many = [];
 	for (let i = 0; i < LOG.AUDIT_PER_KEY + 25; i++)
 		many.push({ t: i, adminId: 7, action: "edit", targetId: 1, target: "", details: "", ok: true });
+	// an afternoon of world tools never pushes a ban out: tool entries (local:*, assist) are evicted first
+	const mixed = [];
+	for (let i = 0; i < 40; i++)
+		mixed.push({
+			t: i,
+			adminId: 7,
+			action: i % 2 === 0 ? "ban" : "kick",
+			targetId: 100 + i,
+			target: "",
+			details: "",
+			ok: true,
+		});
+	for (let i = 0; i < LOG.AUDIT_PER_KEY; i++)
+		mixed.push({
+			t: 100 + i,
+			adminId: 7,
+			action: "local:spawn",
+			targetId: 0,
+			target: "own world",
+			details: "",
+			ok: true,
+		});
+	const trimmed = LOG.appendAudit(undefined, mixed);
+	const moderations = trimmed.filter(e => e.action === "ban" || e.action === "kick").length;
+	check(
+		trimmed.length === LOG.AUDIT_PER_KEY && moderations === 40 && trimmed.at(-1).t === 100 + LOG.AUDIT_PER_KEY - 1,
+		"cheia de ferramentas, a chave corta as ferramentas mais velhas e guarda todo kick e ban",
+		`${moderations} de 40 moderacoes`,
+	);
+	checkArrayEq(
+		[
+			...LOG.splitBanNote("cheating again | by admin 8013052784"),
+			...LOG.splitBanNote("typed | by admin notanid"),
+			...LOG.splitBanNote("made in the Creator Hub"),
+		],
+		["cheating again", " | by admin 8013052784", "typed | by admin notanid", "", "made in the Creator Hub", ""],
+		"a nota privada separa o que o admin digitou do sufixo que o jogo escreveu",
+	);
+	const adminSrc = readFileSync(join(SRC, "server/admin/adminServer.ts"), "utf8");
+	const patchEv = adminSrc.slice(
+		adminSrc.indexOf("function sendPatch("),
+		adminSrc.indexOf("remotes.event.FireClient(target, ev)"),
+	);
+	check(
+		!/\bby\b/.test(patchEv) && !/\.Name\b/.test(patchEv),
+		"a edicao que chega ao jogador nao leva o nome do admin",
+	);
 	const capped = LOG.appendAudit(undefined, many);
 	check(
 		capped.length === LOG.AUDIT_PER_KEY && capped[0].t === 25,
@@ -1453,15 +1500,15 @@ section("25) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 		`${capped.length}`,
 	);
 
-	// `npm run cloud -- erase` scrubs the same keys with the same filter (tools/cloud.mjs is plain JS: checked here)
-	const CLOUD = await import("./cloud.mjs");
+	// `npm run cloud -- erase` scrubs the same keys with the same filter (tools/rtbf.mjs is plain JS: checked here)
+	const RTBF = await import("./rtbf.mjs");
 	const agree = [456, 7, 123, 789, 999].every(uid => {
 		const [a, na] = LOG.eraseAuditUser(legacy, uid);
-		const [b, nb] = CLOUD.eraseAuditEntries(legacy, uid);
+		const [b, nb] = RTBF.eraseAuditEntries(legacy, uid);
 		return na === nb && JSON.stringify(a) === JSON.stringify(b);
 	});
 	check(agree, "cloud.mjs erase e o servidor apagam as mesmas entradas e guardam o mesmo resto");
-	const plan = CLOUD.erasePlan(4242);
+	const plan = RTBF.erasePlan(4242);
 	const stores = plan.map(s => s.store);
 	check(
 		["ProjectZ_Save_v2", "ProjectZ_Save_v1", "ProjectZ_Titles"].every(
@@ -1476,33 +1523,72 @@ section("25) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 	const storesTs = readFileSync(join(SRC, "server/save/stores.ts"), "utf8");
 	const perPlayer = [...storesTs.matchAll(/storeName\("([^"]+)"\)/g)].map(m => m[1]);
 	check(
-		perPlayer.every(s => s === "ProjectZ_Worlds" || CLOUD.PLAYER_STORES.includes(s) || s === CLOUD.ADMIN_LOG_STORE),
+		perPlayer.every(s => s === "ProjectZ_Worlds" || RTBF.PLAYER_STORES.includes(s) || s === RTBF.ADMIN_LOG_STORE),
 		"todo store de stores.ts esta no erase (o ProjectZ_Worlds nao guarda dado de jogador)",
 		perPlayer.join(", "),
 	);
-	const { spawnSync } = await import("node:child_process");
-	const cloud = join(SRC, "..", "tools", "cloud.mjs");
-	const env = { ...process.env, ROBLOX_API_KEY: "", ROBLOX_UNIVERSE_ID: "" };
-	const dry = spawnSync(process.execPath, [cloud, "erase", "4242", "--dry-run"], { encoding: "utf8", env });
-	check(
-		dry.status === 0 &&
-			/nenhuma chave foi lida/.test(dry.stdout) &&
-			(dry.stdout.match(/apagar a chave 4242/g) ?? []).length === 6,
-		"`erase <userId> --dry-run` mostra o plano sem ler chave nenhuma",
-		dry.status === 0 ? `${dry.stdout.split("\n").length} linhas` : dry.stderr.trim(),
-	);
-	const bad = spawnSync(process.execPath, [cloud, "erase", "someName", "--dry-run"], { encoding: "utf8", env });
-	check(bad.status === 1, "um nome no lugar do UserId e recusado");
 
-	// the real command against a fake Open Cloud (tools/fake-open-cloud.mjs): what it deletes, what it keeps
+	// a destructive command never guesses: one numeric UserId, only the known flags, and --yes for the real run
+	const parse = RTBF.parseEraseArgs;
+	const ok1 = parse(["4242"]);
+	check(
+		ok1.userId === 4242 &&
+			!ok1.dryRun &&
+			!ok1.yes &&
+			parse(["4242", "--dry-run"]).dryRun &&
+			parse(["--yes", "4242"]).yes,
+		"erase 4242 [--dry-run | --yes] e lido",
+	);
+	const refused = [
+		["4242", "--dryrun"],
+		["12", "34"],
+		[],
+		["someName"],
+		["0"],
+		["-5"],
+		["4242", "--yes", "--dry-run"],
+		["4242", "--yes", "--yes"],
+		["4242", "--force"],
+		["1234567890123456"],
+	];
+	const accepted = refused.filter(a => parse(a).error === undefined);
+	check(
+		accepted.length === 0,
+		"recusa: opcao com erro de digitacao, dois UserIds, nenhum, um nome, 0, negativo, --dry-run com --yes, repetida, desconhecida, 16 digitos",
+		accepted.map(a => a.join(" ")).join(" | ") || `${refused.length} casos`,
+	);
+	checkArrayEq(
+		[
+			RTBF.listedKey({ id: "global/log_x" }),
+			RTBF.listedKey({ path: "universes/1/data-stores/S/scopes/global/entries/log_y", id: "log_y" }),
+			RTBF.listedKey({ id: "log_z" }),
+		],
+		["log_x", "log_y", "log_z"],
+		"a chave de uma linha da listagem, com ou sem o escopo na frente",
+	);
+
+	// the command itself, spawned: EVERY run points PZ_CLOUD_ENV at a throwaway (or missing) file and preloads the fake
+	// Open Cloud -- the repo's .env on the owner's PC holds a real key, and nothing here may ever reach it or Roblox
 	{
-		const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+		const { spawnSync } = await import("node:child_process");
+		const { createHash } = await import("node:crypto");
+		const { mkdtempSync, rmSync, symlinkSync, writeFileSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
+		const TOOLS = join(SRC, "..", "tools");
+		const cloud = join(TOOLS, "cloud.mjs");
+		const FAKE = join(TOOLS, "fake-open-cloud.mjs");
 		const tmp = mkdtempSync(join(tmpdir(), "pz-erase-"));
+		const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ROBLOX_")));
 		try {
-			const secret = "sk-test-NEVER-PRINT-ME";
+			const general = "sk-test-GENERAL-never-print";
+			const eraseKey = "sk-test-ERASE-never-print";
+			const hash = k => createHash("sha256").update(k).digest("hex").slice(0, 12);
 			const envFile = join(tmp, "fake.env");
-			writeFileSync(envFile, `ROBLOX_API_KEY=${secret}\nROBLOX_UNIVERSE_ID=99\n`);
+			writeFileSync(
+				envFile,
+				`ROBLOX_API_KEY=${general}\nROBLOX_ERASE_API_KEY=${eraseKey}\nROBLOX_UNIVERSE_ID=99\nROBLOX_PLACE_ID=1\n`,
+			);
+			const missingEnv = join(tmp, "missing.env");
 			const statePath = join(tmp, "state.json");
 			const someoneElse = {
 				t: 9,
@@ -1522,57 +1608,97 @@ section("25) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 				details: "#####",
 				ok: true,
 			};
-			writeFileSync(
-				statePath,
-				JSON.stringify({
-					ProjectZ_Save_v2: { 4242: { data: "{}", lock: null }, 555: { data: "{}", lock: null } },
-					ProjectZ_Titles: { 4242: { titles: [1, 0, 0], zombieKills: 3, epoch: 1 } },
-					ProjectZ_Titles_studio: { 4242: { titles: [0, 0, 0], zombieKills: 0, epoch: 1 } },
-					ProjectZ_AdminLog: {
-						recent: [
-							{
-								t: 1,
-								adminId: 7,
-								admin: "Owner",
-								action: "ban",
-								target: "Him (4242)",
-								details: "x",
-								ok: true,
-							},
-						],
-						log_20231114_jobA: [aboutHim, someoneElse],
-						log_20231114_jobB: [someoneElse],
-					},
-				}),
-			);
-			const run = spawnSync(
-				process.execPath,
-				["--import", join(SRC, "..", "tools", "fake-open-cloud.mjs"), cloud, "erase", "4242"],
-				{
+			const seed = (withHim = true) =>
+				writeFileSync(
+					statePath,
+					JSON.stringify({
+						ProjectZ_Save_v2: withHim
+							? { 4242: { data: "{}", lock: null }, 555: { data: "{}", lock: null } }
+							: { 555: { data: "{}", lock: null } },
+						ProjectZ_Titles: withHim ? { 4242: { titles: [1, 0, 0], zombieKills: 3, epoch: 1 } } : {},
+						ProjectZ_Titles_studio: withHim
+							? { 4242: { titles: [0, 0, 0], zombieKills: 0, epoch: 1 } }
+							: {},
+						ProjectZ_AdminLog: {
+							recent: [
+								{
+									t: 1,
+									adminId: 7,
+									admin: "Owner",
+									action: "ban",
+									target: "Him (4242)",
+									details: "x",
+									ok: true,
+								},
+							],
+							log_20231114_jobA: [aboutHim, someoneElse],
+							log_20231114_jobB: [someoneElse, aboutHim],
+						},
+					}),
+				);
+			const run = (args, { envPath = missingEnv, fake = true, extra = {} } = {}) => {
+				const r = spawnSync(process.execPath, [...(fake ? ["--import", FAKE] : []), cloud, ...args], {
 					encoding: "utf8",
-					env: {
-						...env,
-						PZ_CLOUD_ENV: envFile,
-						PZ_FAKE_CLOUD_STATE: statePath,
-						PZ_FAKE_CLOUD_CONFLICTS: "1",
-					},
-				},
-			);
-			const out = `${run.stdout}\n${run.stderr}`;
-			const { state, requests } = JSON.parse(readFileSync(statePath, "utf8"));
+					env: { ...baseEnv, PZ_CLOUD_ENV: envPath, PZ_FAKE_CLOUD_STATE: statePath, ...extra },
+				});
+				const after = fake ? JSON.parse(readFileSync(statePath, "utf8")) : { state: undefined, requests: [] };
+				return { status: r.status, out: `${r.stdout}\n${r.stderr}`, ...after };
+			};
+
+			seed();
+			const dry = run(["erase", "4242", "--dry-run"]);
 			check(
-				run.status === 0,
-				"`erase 4242` contra um Open Cloud falso termina bem",
-				run.status === 0 ? undefined : out,
+				dry.status === 0 &&
+					/nenhuma chave foi lida/.test(dry.out) &&
+					(dry.out.match(/apagar a chave 4242/g) ?? []).length === 6 &&
+					/FORA do jogo/.test(dry.out) &&
+					dry.requests.length === 0,
+				"`erase <userId> --dry-run`: o plano (com o aviso de tirar o jogador do jogo antes), sem ler chave nem chamar nada",
+				dry.status === 0 ? `${dry.requests.length} chamadas` : dry.out.trim(),
+			);
+			// a refused command does nothing -- even with a real-looking .env right there to use
+			const refusals = [
+				["erase", "4242", "--dryrun"],
+				["erase", "12", "34"],
+				["erase", "someName"],
+				["erase", "4242"],
+			].map(args => {
+				seed();
+				const r = run(args, { envPath: envFile });
+				return { args, ok: r.status === 1 && r.requests.length === 0 && "4242" in r.state.ProjectZ_Save_v2, r };
+			});
+			check(
+				refusals.every(x => x.ok) &&
+					/--yes/.test(refusals[3].r.out) &&
+					/Nada foi feito/i.test(refusals[3].r.out),
+				"`--dryrun` (erro de digitacao), `12 34`, um nome e a falta de --yes: sai com erro e nada e feito",
+				refusals
+					.filter(x => !x.ok)
+					.map(x => x.args.join(" "))
+					.join(" | ") || "4 casos",
+			);
+			// the guard: under test, without the fake preloaded, the command stops before any request
+			const bare = run(["erase", "4242", "--yes"], { envPath: envFile, fake: false });
+			check(
+				bare.status === 1 && /sem o Open Cloud falso/.test(bare.out),
+				"sob teste e sem o Open Cloud falso, o comando para antes de qualquer chamada (nunca o apis.roblox.com)",
+			);
+
+			seed();
+			const real = run(["erase", "4242", "--yes"], { envPath: envFile, extra: { PZ_FAKE_CLOUD_CONFLICTS: "1" } });
+			check(
+				real.status === 0,
+				"`erase 4242 --yes` contra o Open Cloud falso termina bem",
+				real.status === 0 ? undefined : real.out,
 			);
 			check(
-				!("4242" in state.ProjectZ_Save_v2) &&
-					"555" in state.ProjectZ_Save_v2 &&
-					!("4242" in state.ProjectZ_Titles) &&
-					!("4242" in state.ProjectZ_Titles_studio),
+				!("4242" in real.state.ProjectZ_Save_v2) &&
+					"555" in real.state.ProjectZ_Save_v2 &&
+					!("4242" in real.state.ProjectZ_Titles) &&
+					!("4242" in real.state.ProjectZ_Titles_studio),
 				"apaga a chave dele no save e nos titulos (e _studio), e so a dele",
 			);
-			const log = state.ProjectZ_AdminLog;
+			const log = real.state.ProjectZ_AdminLog;
 			check(
 				log.recent.length === 0 &&
 					JSON.stringify(log.log_20231114_jobA) === JSON.stringify([someoneElse]) &&
@@ -1580,14 +1706,68 @@ section("25) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 				"tira do log de admin so as entradas sobre ele (a chave antiga e as do dia), mesmo com uma corrida de escrita",
 				JSON.stringify(log),
 			);
+			const patches = real.requests.filter(r => r.method === "PATCH").length;
 			check(
-				requests.filter(r => r.method === "PATCH").length === 3,
-				"regrava so as chaves que mudaram (e tenta de novo a que outro servidor escreveu no meio)",
-				`${requests.filter(r => r.method === "PATCH").length} PATCH`,
+				patches === 4,
+				"regrava as chaves que mudaram, e de novo a que outro servidor escreveu no meio",
+				`${patches} PATCH`,
+			);
+			const entryCalls = real.requests.filter(r => !r.path.endsWith("/entries"));
+			check(
+				entryCalls.length > 0 && entryCalls.every(r => r.path.includes("/scopes/global/entries/")),
+				"toda leitura, gravacao e exclusao usa o caminho com escopo (o falso recusa o sem escopo)",
 			);
 			check(
-				!out.includes(secret) && requests.every(r => r.keyed),
-				"a chave vai no cabecalho e nunca aparece na saida",
+				real.requests.every(r => r.keyed && r.keyHash === hash(eraseKey)) &&
+					!real.out.includes(general) &&
+					!real.out.includes(eraseKey),
+				"usa a chave propria do erase (ROBLOX_ERASE_API_KEY), no cabecalho, e nenhuma chave aparece na saida",
+			);
+
+			seed(false);
+			const none = run(["erase", "4242", "--yes"], { envPath: envFile });
+			check(
+				none.status === 1 &&
+					/nenhuma das seis chaves/.test(none.out) &&
+					none.state.ProjectZ_AdminLog.recent.length === 0,
+				"nenhuma das seis chaves existia: sai com erro (confira o UserId), e o log de admin e limpo mesmo assim",
+			);
+
+			seed();
+			const broken = run(["erase", "4242", "--yes"], {
+				envPath: envFile,
+				extra: { PZ_FAKE_CLOUD_FAIL: "ProjectZ_AdminLog/log_20231114_jobA" },
+			});
+			check(
+				broken.status === 1 &&
+					/FALHOU/.test(broken.out) &&
+					JSON.stringify(broken.state.ProjectZ_AdminLog.log_20231114_jobB) ===
+						JSON.stringify([someoneElse]) &&
+					broken.state.ProjectZ_AdminLog.recent.length === 0,
+				"uma chave do log que falha nao para as outras: cada uma e limpa, a falha e dita e o comando sai com erro",
+			);
+
+			seed();
+			const saved = run(["save", "4242"], { envPath: envFile });
+			check(
+				saved.status === 0 &&
+					/save de 4242/.test(saved.out) &&
+					saved.requests.every(r => r.path.includes("/scopes/global/entries/")),
+				"`save <userId>` tambem le pelo caminho com escopo",
+				saved.status === 0 ? undefined : saved.out.trim(),
+			);
+
+			// through a symlink (or a Windows junction) the command still runs: no "am I the main module?" check left
+			const link = join(tmp, "cloud-link.mjs");
+			symlinkSync(cloud, link);
+			const viaLink = spawnSync(process.execPath, ["--import", FAKE, link], {
+				encoding: "utf8",
+				env: { ...baseEnv, PZ_CLOUD_ENV: missingEnv },
+			});
+			check(
+				viaLink.status === 0 && /uso: npm run cloud/.test(viaLink.stdout),
+				"chamado por um link simbolico, o cloud.mjs responde (antes ficava mudo)",
+				viaLink.stdout.trim().slice(0, 60),
 			);
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });

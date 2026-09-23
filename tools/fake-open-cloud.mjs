@@ -5,14 +5,23 @@
  *   PZ_FAKE_CLOUD_STATE=<file.json>   the stores to start from: { "<store>": { "<key>": <value> } }; rewritten
  *                                     with the final state (and every request made) when the process exits
  *   PZ_FAKE_CLOUD_CONFLICTS=<n>       the first n PATCHes answer 409, as if a server wrote the key meanwhile
+ *   PZ_FAKE_CLOUD_FAIL=<store/key>    every GET of that entry answers 500 (a key that keeps failing)
  *
- * Every request must carry the x-api-key header; the key's text is never written anywhere by this file.
+ * Stricter than the real API on purpose: an entry is only reached by the SCOPED path
+ * (`/data-stores/<ds>/scopes/global/entries/<key>`), the one tools/cloud.mjs uses everywhere; the unscoped form answers
+ * 400, so a call that drifts to it fails here instead of at the owner's first real run. Every request must carry the
+ * x-api-key header; the key's text is never written anywhere by this file.
  */
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
+/** tools/cloud.mjs refuses to call anything under test unless this is set (never the real apis.roblox.com) */
+globalThis.__PZ_FAKE_OPEN_CLOUD = true;
+
 const statePath = process.env.PZ_FAKE_CLOUD_STATE;
-const state = JSON.parse(readFileSync(statePath, "utf8"));
+const state = statePath !== undefined ? JSON.parse(readFileSync(statePath, "utf8")) : {};
 let conflicts = Number(process.env.PZ_FAKE_CLOUD_CONFLICTS ?? 0);
+const failing = process.env.PZ_FAKE_CLOUD_FAIL;
 const requests = [];
 let etagSerial = 0;
 const etags = new Map();
@@ -28,22 +37,32 @@ const json = (status, body) =>
 globalThis.fetch = async (url, init = {}) => {
 	const u = new URL(url);
 	const method = init.method ?? "GET";
-	const keyed = typeof init.headers?.["x-api-key"] === "string" && init.headers["x-api-key"] !== "";
-	requests.push({ method, path: decodeURIComponent(u.pathname), keyed });
+	const key0 = init.headers?.["x-api-key"];
+	const keyed = typeof key0 === "string" && key0 !== "";
+	// which key was used, as a short hash (a test compares it with the hash of the key it planted)
+	const keyHash = keyed ? createHash("sha256").update(key0).digest("hex").slice(0, 12) : "";
+	requests.push({ method, path: decodeURIComponent(u.pathname), host: u.host, keyed, keyHash });
 	if (!keyed) return json(401, { message: "no key" });
-	const m = /^\/cloud\/v2\/universes\/[^/]+\/data-stores\/([^/]+)(?:\/scopes\/global)?\/entries(?:\/([^/]+))?$/.exec(
+	const m = /^\/cloud\/v2\/universes\/([^/]+)\/data-stores\/([^/]+)(\/scopes\/global)?\/entries(?:\/([^/]+))?$/.exec(
 		u.pathname,
 	);
 	if (!m) return json(404, { message: "not a data store route" });
-	const store = decodeURIComponent(m[1]);
-	const key = m[2] !== undefined ? decodeURIComponent(m[2]) : undefined;
+	const [, universe, rawStore, scoped, rawKey] = m;
+	const store = decodeURIComponent(rawStore);
+	const key = rawKey !== undefined ? decodeURIComponent(rawKey) : undefined;
+	if (key !== undefined && scoped === undefined)
+		return json(400, { message: "unscoped entry path refused by the fake" });
 	const docs = state[store] ?? {};
 	if (key === undefined) {
-		// list, with filter=id.startsWith("...")
-		const prefix = /id\.startsWith\("([^"]*)"\)/.exec(u.searchParams.get("filter") ?? "")?.[1] ?? "";
-		const ids = Object.keys(docs).filter(k => k.startsWith(prefix));
-		return json(200, { dataStoreEntries: ids.map(id => ({ id, path: `x/entries/${id}` })) });
+		const ids = Object.keys(docs);
+		return json(200, {
+			dataStoreEntries: ids.map(id => ({
+				id,
+				path: `universes/${universe}/data-stores/${store}/scopes/global/entries/${id}`,
+			})),
+		});
 	}
+	if (failing === `${store}/${key}` && method === "GET") return json(500, { message: "injected failure" });
 	if (!(key in docs)) return json(404, { message: "entry not found" });
 	if (method === "GET") return json(200, { id: key, value: docs[key], etag: etagOf(store, key), users: [] });
 	if (method === "DELETE") {
@@ -65,4 +84,6 @@ globalThis.fetch = async (url, init = {}) => {
 	return json(405, { message: "method" });
 };
 
-process.on("exit", () => writeFileSync(statePath, JSON.stringify({ state, requests })));
+process.on("exit", () => {
+	if (statePath !== undefined) writeFileSync(statePath, JSON.stringify({ state, requests }));
+});

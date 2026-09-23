@@ -102,7 +102,7 @@ O jogo não chama serviço externo nenhum. A nossa chave de Open Cloud vive no `
 
 Um gatilho **Right to Erasure Request** (com segredo) avisa na hora de um pedido de exclusão, em vez de
 esperar a mensagem diária da caixa de entrada. Não é bloqueante: os modelos de RTBF (abaixo) apagam sozinhos
-o que cabe neles, e o resto sai com `npm run cloud -- erase <userId>`.
+o que cabe neles, e o resto sai com `npm run cloud -- erase <userId> --yes`.
 
 ### Data Stores manager — **RTBF: faça antes de publicar**
 
@@ -127,12 +127,29 @@ de exclusão**: com eles, o Roblox apaga sozinho as chaves de quem pediu.
       cada pedido da mensagem diária.
 - [ ] `ProjectZ_AdminLog` **não tem modelo**: é um log com vários jogadores por chave (uma por servidor por dia,
       `log_AAAAMMDD_<job>`). Ele guarda só UserIds e texto filtrado (`server/admin/auditLog.ts`); para cada pedido,
-      `npm run cloud -- erase <userId>` tira as entradas sobre aquele jogador.
+      `npm run cloud -- erase <userId> --yes` tira as entradas sobre aquele jogador. **Limite:** o `erase` acha as
+      entradas pelo UserId (o admin que agiu ou o jogador alvo). Um motivo de kick/ban ou um anúncio **filtrado**
+      que cite alguém pelo nome, em palavras, continua lá: se um pedido citar isso, procure o nome no painel de
+      admin (Server › Audit log) e apague a entrada à mão pelo Data Stores Manager.
 - [ ] `ProjectZ_Worlds` não tem dado de jogador (semente, dias, JobId, uma contagem): fica de fora.
-- [ ] **Para cada pedido da mensagem diária:** `npm run cloud -- erase <userId> --dry-run` (mostra o plano, não
-      lê a chave), depois `npm run cloud -- erase <userId>` no PC, com o `.env`. A chave precisa de ler, listar,
-      atualizar e apagar **entradas** de data store. Apagar marca a chave como apagada; o Roblox remove as versões
-      antigas em até 30 dias (o mesmo prazo dos modelos).
+- [ ] **Uma chave de Open Cloud só para isto:** crie uma chave com **apenas** as permissões de data store —
+      ler, listar, atualizar e apagar **entradas** — para o universo do jogo, restrita ao seu IP, e ponha no `.env`
+      como `ROBLOX_ERASE_API_KEY`. É separada da `ROBLOX_API_KEY` do `publish` / `upload-art`: a chave que apaga
+      saves não publica o jogo, e a que publica não apaga saves. (Sem ela, o `erase` usa a `ROBLOX_API_KEY` e avisa.)
+- [ ] **Uma vez, antes do primeiro pedido real:** com uma conta de teste sua (uma alt que jogou no Studio e no
+      jogo publicado), rode `npm run cloud -- erase <UserId da alt> --yes` e confira no Data Stores Manager que as
+      chaves sumiram — inclusive as `_studio` — e que o log de admin foi regravado. O teste em Node roda contra um
+      Open Cloud falso; a forma exata das respostas reais (o `etag` numa gravação concorrente) só se confirma assim.
+- [ ] **Para cada pedido da mensagem diária:**
+      1. O jogador tem de estar **fora do jogo**. Se estiver online, **kick** pelo painel de admin (ou ban, se ele
+         não deve voltar) e **espere 1 minuto**: ao sair, o servidor dele ainda grava o registro de títulos, o save e
+         o log de admin (a cada 30 s) — rodar antes disso recria as chaves que o comando apaga.
+      2. `npm run cloud -- erase <userId> --dry-run` mostra o plano (não lê chave nenhuma).
+      3. `npm run cloud -- erase <userId> --yes` apaga, no PC, com o `.env`. Sem `--yes` ele só mostra o plano; um
+         argumento a mais ou digitado errado (`--dryrun`, dois UserIds, um nome) recusa o comando inteiro. Se
+         nenhuma das seis chaves existia, ele sai com erro: confira o UserId e o `ROBLOX_UNIVERSE_ID`.
+      Apagar marca a chave como apagada; o Roblox remove as versões antigas em até 30 dias (o mesmo prazo dos
+      modelos).
 
 Cada gravação do save e do registro de títulos leva o UserId do dono (`UpdateAsync` devolve `[userId]`), então
 o próprio Data Stores Manager mostra de quem é cada chave. O sufixo `_studio` (feito) separa os playtests do
@@ -261,8 +278,9 @@ carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**
 1. **Nome e descrição** em Settings (a API ignora esses dois), **com as regras e o recurso** e o link do grupo.
 2. **Maturity & Compliance Questionnaire**: responder como na checklist acima (Moderate, sangue irrealista
    frequente, medo leve).
-3. **RTBF**: criar os seis modelos do Data Stores Manager; para cada pedido da mensagem diária, `npm run cloud
-   -- erase <userId>`.
+3. **RTBF**: criar os seis modelos do Data Stores Manager e a chave `ROBLOX_ERASE_API_KEY` (só data store); testar
+   o `erase` uma vez com uma alt; para cada pedido da mensagem diária, jogador fora do jogo e `npm run cloud --
+   erase <userId> --yes`.
 4. **Server management**: decidir como será o "jogar sozinho".
 5. **Alerts**: ligar antes de publicar.
 6. **Access settings**: manter privado até a F2 fechar.

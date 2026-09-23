@@ -1,5 +1,5 @@
 import { langGet } from "shared/data/lang";
-import { chatInputEnabled, WHISPER_COMMAND } from "shared/chat/chatRules";
+import { chatInputEnabled, isWhisperAttempt, WHISPER_COMMAND } from "shared/chat/chatRules";
 
 /*
  * The chat bar follows the body (MP-18, compliance F11).
@@ -62,8 +62,28 @@ function tryHint(text: string, triesLeft: number): void {
 	if (triesLeft > 1) task.delay(HINT_RETRY_S, () => tryHint(text, triesLeft - 1));
 }
 
+/** the player's language, as the last phase change passed it (for the system lines) */
+let lang = 0;
+
+/** a line in the chat window for this player only (DisplaySystemMessage never leaves the client) */
+function systemLine(text: string): void {
+	const channels = TextChatService.FindFirstChild("TextChannels");
+	const channel = channels?.FindFirstChild("RBXSystem") ?? channels?.FindFirstChild("RBXGeneral");
+	if (channel !== undefined && channel.IsA("TextChannel")) channel.DisplaySystemMessage(text);
+}
+
+// "/w Bob ..." is delivered to nobody (the server drops it, shared/chat/chatRules.ts isWhisperAttempt): say why, at
+// once, instead of letting the sender believe Bob read it
+pcall(() => {
+	TextChatService.SendingMessage.Connect(message => {
+		if (!isWhisperAttempt(message.Text)) return;
+		pcall(systemLine, langGet("Whispers are off. Only survivors near you in town hear the chat.", lang));
+	});
+});
+
 /** called on every phase change (client/bootstrap.ts setPhase): `inWorld` = the survivor has a body in the town */
 export function syncChatInput(inWorld: boolean, langType: number): void {
+	lang = langType;
 	const on = chatInputEnabled(inWorld);
 	if (on === lastOn) return;
 	lastOn = on;

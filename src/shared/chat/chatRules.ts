@@ -81,6 +81,26 @@ export function isWhisperChannel(name: string): boolean {
 	return name.sub(1, WHISPER_PREFIX.size()) === WHISPER_PREFIX;
 }
 
+/** the aliases of the switched-off command, lower case */
+const WHISPER_ALIASES = ["/w", "/whisper"];
+
+/**
+ * A line typed as a whisper ("/w Bob meet me", "/whisper ..."). With the command off it is no longer intercepted, so
+ * it would be SAID OUT LOUD to everyone in earshot -- a surprise for someone who meant it privately. It is delivered
+ * to nobody instead (server/chat/proximityChat.ts), and the sender is told whispers are off (client/chatInput.ts).
+ */
+export function isWhisperAttempt(text: string): boolean {
+	const t = text.lower();
+	for (const alias of WHISPER_ALIASES) {
+		const n = alias.size();
+		if (t.sub(1, n) !== alias) continue;
+		// (not `next`: roblox-ts keeps that name for Luau's own)
+		const following = t.sub(n + 1, n + 1);
+		if (following === "" || following === " ") return true;
+	}
+	return false;
+}
+
 // ---------------------------------------------------------------- bubbles (client/view/chatBubbles.ts)
 
 /**
