@@ -79,6 +79,16 @@ const RunService = game.GetService("RunService");
 
 const HANDSHAKE_WARN_S = 10;
 
+/**
+ * Seconds between the [PZ-NET] lines while a session is live, or 0 to keep quiet.
+ *
+ * Nothing reads netStats() yet -- it is meant for the F6 admin panel -- so a multi-client playtest would
+ * have no way to see the numbers F1 is accepted on (§11.3): divergence p99 < 1 u, corrections over 16 u
+ * under one a minute, and the survivors actually seeing each other. Printing them puts those numbers in
+ * the Studio output, which is the one place a test driver can read from outside the game.
+ */
+const NET_LOG_S = 5 as number;
+
 /** a survivor the reliable roster knows about (§4.4 PlayerJoined) */
 interface RosterEntry {
 	slot: number;
@@ -164,6 +174,8 @@ let staleSelfBlocks = 0;
 let timeSeq = 0;
 let timeAt = 0;
 let startedAt = 0;
+/** os.clock() of the last [PZ-NET] line */
+let loggedAt = 0;
 let warnedSlow = false;
 
 /** the world / survivor / save currently attached, so a respawn or a world rebuild is noticed */
@@ -357,6 +369,34 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	send(now);
 	sendTimePing(now);
 	prediction.present(dt, commands.phase(), commands.newest());
+	logStats(now);
+}
+
+/** periodic line with what F1 is judged on, so a playtest can be read from the output */
+function logStats(now: number): void {
+	if (NET_LOG_S <= 0) return;
+	if (now - loggedAt < NET_LOG_S) return;
+	loggedAt = now;
+	const st = netStats();
+	print(
+		string.format(
+			"[PZ-NET] slot %d | roster %d | outros %d | rtt %.0f ms | erro p99 %.2f u (agora %.2f) | correcoes %.1f/min | fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d%s",
+			st.slot,
+			st.roster,
+			views.size(),
+			st.rtt * 1000,
+			st.errorP99,
+			st.errorLast,
+			st.correctionsPerMinute,
+			st.queued,
+			st.queueDropped,
+			st.malformed,
+			st.staleSelf,
+			st.sampleHz,
+			st.pending,
+			st.mapMismatch ? " | MAPA DIFERENTE" : "",
+		),
+	);
 }
 
 /** the other survivors, interpolated for this frame's render time (rebuilt by netUpdate; do not keep the array) */
