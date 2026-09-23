@@ -123,6 +123,12 @@ export class WorldClock implements AiClock {
 	 * Survivor is decided here (server/sim/simulation.ts `creditDawn`).
 	 */
 	onDaybreak?: (day: number) => void;
+	/**
+	 * An admin moved the hands (`setClock`). The night being lived is no longer the one the clock shows: MON-05's
+	 * Survivor forgets the midnight that started it (server/sim/simulation.ts), so a skip to 05:59 followed by a real
+	 * 06:00 makes nobody a Survivor of hours they never lived.
+	 */
+	onClockSet?: () => void;
 
 	private readonly rollRain: (day: number) => boolean;
 	/** the 18:00–18:30 fill happens once per night */
@@ -258,12 +264,14 @@ export class WorldClock implements AiClock {
 	 * It moves the clock and NOTHING else, the way client/admin/world.ts always did it: an admin skipping
 	 * into the dark calls `fillNight()` first, so the night it lands in has a horde. Doing it here instead
 	 * would re-promise a wave the survivors had already beaten whenever the clock was nudged after dusk.
+	 * (It does tell `onClockSet`, so the night being lived stops counting toward a Survivor.)
 	 */
 	setClock(dayTime: number, day?: number): void {
 		if (day !== undefined) this.day = math.max(1, math.floor(day));
 		this.dayTime = math.clamp(dayTime, 0, HOURS_PER_DAY - 1e-6);
 		this.forceSend = true;
 		this.refresh();
+		if (this.onClockSet !== undefined) this.onClockSet();
 	}
 
 	setRain(on: boolean): void {

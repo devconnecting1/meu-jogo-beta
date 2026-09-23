@@ -37,7 +37,8 @@
  *   j. titles (MON-05) are earned on the server's own counters, each announced once: Survivor at the 06:00 after a
  *      midnight that paid you, alive in the world all night; Week One when a life reaches day 8 on that same day
  *      count; neither for the idle, the AFK, the dead-and-stood-up, the lobby hopper or who slept through the
- *      night after the midnight paid them, nor for an admin's clock.
+ *      night after the midnight paid them, nor for an admin's clock -- not even a skip to 05:59 that the clock then
+ *      runs past 06:00 by itself (j3).
  *      Horde Breaker (j2) at the 100th killing blow the real weapon machine lands -- an assist never counts.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src/ on the fly, with the Luau
@@ -1681,6 +1682,54 @@ section(
 	check(
 		upd.titles.every(v => v === 0) && upd.day === 7 && upd.zombieKills === 0 && upd.equipTitle === -1,
 		"a report claiming titles, days, kills and a title shown moves none of them",
+	);
+}
+
+section("(j3) an admin who moves the clock in the middle of a night makes no Survivor of that night (MON-05, MP-13)");
+
+{
+	const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+	const TIT = require(join(SRC, "shared/data/titles.ts"));
+	const SAVE = require(join(SRC, "shared/game/save.ts"));
+	const clock = new WorldClock({ day: 4, dayTime: 15, rollRain: () => false });
+	const sim = new ServerSimulation({ world, clock, zombies: false });
+	const unlocks = [];
+	sim.onTitleUnlocked = (sp, titleId) => unlocks.push([sp.userId, titleId]);
+	const save = defaultSave();
+	const sp = PL.createServerPlayer({ slot: 0, userId: 7301, name: "skipped" }, save, 1000, 1400, sim.tick, sim.simHz);
+	sim.add(sp);
+	const RELOAD = 1 << P.EdgeShift.Reload;
+	/** one tick of a survivor who plays every tick */
+	function play() {
+		sp.state.hungry = sp.state.hungryMax;
+		const cmd = P.makeCommand((sp.lastSeq + 1) % 65536, 0, 0, 0, 0, RELOAD);
+		PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick * TICK_DT);
+		sim.step();
+		clock.step(TICK_DT);
+	}
+	let guard = 60 * 60 * 20;
+	while (!(clock.day === 5 && clock.dayTime >= 1) && guard-- > 0) play();
+	check(
+		save.day === 2 && unlocks.length === 0,
+		"the midnight paid the survivor (day 2), and it is 01:00: no title yet",
+	);
+	// the admin drags the hands to just before dawn; the clock then runs past 06:00 on its own
+	clock.setClock(5.95);
+	guard = 60 * 20;
+	while (!(clock.day === 5 && clock.dayTime >= 6.2) && guard-- > 0) play();
+	check(guard > 0, `the clock ran past 06:00 by itself after the skip (${clock.dayTime.toFixed(2)})`);
+	check(
+		!SAVE.ownsTitle(save, TIT.TitleId.Survivor) && unlocks.length === 0,
+		"…and five hours of night the survivor never lived made no Survivor",
+		JSON.stringify(unlocks),
+	);
+	// the next night, lived hour by hour, does
+	guard = 60 * 60 * 20;
+	while (!(clock.day === 6 && clock.dayTime >= 6.2) && guard-- > 0) play();
+	check(
+		SAVE.ownsTitle(save, TIT.TitleId.Survivor) && unlocks.length === 1,
+		"the next night, lived through, makes the Survivor",
+		JSON.stringify(unlocks),
 	);
 }
 

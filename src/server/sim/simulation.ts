@@ -238,6 +238,10 @@ export class ServerSimulation {
 		// MON-05: at 06:00 the night is over, and who lived through ALL of it since the midnight that paid them is a
 		// Survivor. Like the midnight, it happens only as the clock runs: an admin moving the hands credits nobody
 		this.clock.onDaybreak = () => this.creditDawn();
+		// ...and a night the admin skipped through is nobody's (the hands moved: that midnight's credit is forgotten)
+		this.clock.onClockSet = () => {
+			for (const [, p] of this.presence) p.nightCredited = false;
+		};
 		this.ownsInteractive = options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE;
 		this.ownsHorde = options.zombies ?? MP_PHASE >= 2;
 		this.buildAround(this.world);
