@@ -1164,6 +1164,65 @@ function pump() {
 	return t;
 }
 
+// ================================================================ RIDEABLE VEHICLES (VEI-05)
+//
+// Seen from above with the nose to the right (+x), on exactly the footprint the game parks them on (VEHICLES length
+// × width at 4 u a texel), and with their bars where the rider's hands go (client/view/survivorView.ts RIDE_GRIP_F,
+// 17 u ahead of the centre). Full colour sprites from the palette's vehicle entries; the drop shadow is the game's
+// (it moves with the sun, LUZ-01), so none is baked in.
+
+/** a bicycle, 18 × 7 texels (72 × 28 u): thin tyres, the frame, the pedals across it, the saddle, the bars */
+function bicycle() {
+	const t = new Tex(18, 7);
+	const tyre = C.tyre;
+	const frame = C.bikeFrame;
+	const metal = C.vehicleMetal;
+	const hub = mix(tyre, WHITE, 0.35);
+	t.rect(0, 3, 6, 1, tyre);
+	t.set(3, 3, hub);
+	t.rect(12, 3, 6, 1, tyre);
+	t.set(15, 3, hub);
+	t.rect(5, 3, 8, 1, frame);
+	t.set(7, 3, mix(frame, WHITE, 0.35));
+	t.set(11, 3, mix(frame, WHITE, 0.2));
+	t.rect(8, 1, 1, 5, metal);
+	t.set(8, 1, tyre);
+	t.set(8, 5, tyre);
+	t.rect(5, 2, 3, 3, C.vehicleSeat);
+	t.set(5, 2, mix(C.vehicleSeat, WHITE, 0.2));
+	t.rect(13, 0, 1, 7, metal);
+	t.set(13, 0, tyre);
+	t.set(13, 6, tyre);
+	return t;
+}
+
+/** a motorcycle, 22 × 8 texels (88 × 32 u): fat tyres, the engine under the tank, the exhaust on its right, the lamp */
+function motorcycle() {
+	const t = new Tex(22, 8);
+	const tyre = C.tyre;
+	const paint = C.motoPaint;
+	const metal = C.vehicleMetal;
+	const seat = C.vehicleSeat;
+	t.rect(0, 3, 7, 2, tyre);
+	t.rect(1, 3, 5, 1, mix(tyre, WHITE, 0.12));
+	t.rect(16, 3, 6, 2, tyre);
+	t.rect(17, 3, 4, 1, mix(tyre, WHITE, 0.12));
+	t.rect(8, 1, 4, 6, mix(metal, BLACK, 0.25));
+	t.rect(9, 1, 2, 6, metal);
+	t.rect(2, 6, 9, 1, metal);
+	t.set(2, 6, mix(metal, BLACK, 0.4));
+	t.rect(6, 2, 10, 4, paint);
+	t.rect(11, 2, 4, 1, mix(paint, WHITE, 0.3));
+	t.rect(6, 5, 10, 1, mix(paint, BLACK, 0.3));
+	t.rect(4, 2, 6, 4, seat);
+	t.rect(5, 2, 4, 1, mix(seat, WHITE, 0.15));
+	t.rect(15, 0, 1, 8, C.weapon);
+	t.set(15, 0, mix(metal, WHITE, 0.3));
+	t.set(15, 7, mix(metal, WHITE, 0.3));
+	t.rect(21, 3, 1, 2, C.carLight);
+	return t;
+}
+
 /** drops a 1-texel shadow down and right of everything opaque in `t` (small props carry their own shadow) */
 function withShadow(t) {
 	const out = new Tex(t.w + 1, t.h + 1);
@@ -1422,6 +1481,14 @@ function build() {
 		"sprite",
 		helipad(signs.HELIPAD, signs.SIGN_ART),
 		"hospital roof: the heliport's red H on a white cross",
+	);
+	// the rideable builds (VEI-05), parked or under a rider (client/view/vehicleView.ts)
+	add_("bicycle", "sprite", bicycle(), "a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars");
+	add_(
+		"motorcycle",
+		"sprite",
+		motorcycle(),
+		"a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp",
 	);
 }
 

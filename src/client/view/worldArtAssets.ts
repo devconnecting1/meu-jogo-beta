@@ -93,7 +93,9 @@ export type WorldArtName =
 	| "signGuns"
 	| "signClothes"
 	| "signDiner"
-	| "helipad";
+	| "helipad"
+	| "bicycle"
+	| "motorcycle";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -252,6 +254,10 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
+	bicycle: { id: "", w: 18, h: 7 },
+	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
+	motorcycle: { id: "", w: 22, h: 8 },
 };
 
 /** every texture of the world art, for the preload pass */
@@ -334,4 +340,6 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signClothes",
 	"signDiner",
 	"helipad",
+	"bicycle",
+	"motorcycle",
 ];

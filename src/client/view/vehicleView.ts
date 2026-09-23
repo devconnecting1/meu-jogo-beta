@@ -11,6 +11,10 @@
  * (client/gameLoop.ts for you, client/view/playersView.ts for the others): a vehicle looks the same whoever sits on
  * it. Fixed sprite counts per kind and nothing allocated but the option tables every view builds: no Instance after
  * the renderer's pool warmed up.
+ *
+ * ART-01/ART-02: with an asset id the vehicle is ONE pixel-art ImageLabel (tools/gen-world-art.mjs `bicycle`,
+ * `motorcycle`: 4 u a texel, the same footprint, the bars in the same place); without one -- until the owner runs
+ * `npm run cloud -- upload-art`, or when the fetch fails -- it is the flat parts below, from the same palette.
  */
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera } from "shared/engine/camera";
@@ -20,6 +24,7 @@ import { vehicleDef, VehicleKind } from "shared/data/buildings";
 import { Solid } from "shared/game/world";
 import { parkedHeading, vehicleBroken, vehicleKindOfSolid } from "shared/sim/vehicle";
 import { part } from "./drawKit";
+import { artId } from "./worldArt";
 
 const BLACK = COLORS.shadow;
 const BARS = COLORS.weapon;
@@ -51,6 +56,12 @@ export function drawVehicle(
 		cornerRadius: def.width * 0.3,
 		zIndex: shadowZ,
 	});
+	// ART-01: the pixel art when it has an id (tools/gen-world-art.mjs `bicycle` / `motorcycle`), else the flat parts
+	const id = artId(kind === VehicleKind.Motorcycle ? "motorcycle" : "bicycle");
+	if (id !== undefined) {
+		part(r, cam, x, y, a, 0, 0, { w: def.length, h: def.width, image: id, zIndex: z + 1 });
+		return;
+	}
 	if (kind === VehicleKind.Motorcycle) drawMotorcycle(r, cam, x, y, a, z);
 	else drawBicycle(r, cam, x, y, a, z);
 }

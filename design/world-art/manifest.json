@@ -644,6 +644,22 @@
 			"w": 64,
 			"h": 64,
 			"description": "hospital roof: the heliport's red H on a white cross"
+		},
+		{
+			"name": "bicycle",
+			"file": "bicycle.png",
+			"kind": "sprite",
+			"w": 18,
+			"h": 7,
+			"description": "a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars"
+		},
+		{
+			"name": "motorcycle",
+			"file": "motorcycle.png",
+			"kind": "sprite",
+			"w": 22,
+			"h": 8,
+			"description": "a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp"
 		}
 	]
 }
