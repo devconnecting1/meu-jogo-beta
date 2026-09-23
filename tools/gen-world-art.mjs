@@ -1417,7 +1417,12 @@ function build() {
 		const sign = signs.BUILDING_SIGNS[type];
 		add_(sign.texture, "sprite", signBoard(sign, signs.SIGN_ART), `storefront sign (type ${type}): ${sign.shows}`);
 	}
-	add_("helipad", "sprite", helipad(signs.HELIPAD, signs.SIGN_ART), "hospital roof: the heliport's red H on a white cross");
+	add_(
+		"helipad",
+		"sprite",
+		helipad(signs.HELIPAD, signs.SIGN_ART),
+		"hospital roof: the heliport's red H on a white cross",
+	);
 }
 
 // ---------------------------------------------------------------- output

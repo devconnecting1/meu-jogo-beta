@@ -533,7 +533,12 @@ function signScenes(world) {
 		const oy = (b.doorY ?? b.y + b.h) + n.y * 160;
 		const cx = (ox + b.x + b.w / 2) / 2;
 		const cy = (oy + b.y + b.h / 2) / 2;
-		out.push({ name: `sign-${name}`, title: `${title} from its street`, rect: sceneAround(cx, cy, 1152, 720), hour: 10 });
+		out.push({
+			name: `sign-${name}`,
+			title: `${title} from its street`,
+			rect: sceneAround(cx, cy, 1152, 720),
+			hour: 10,
+		});
 		if (type === 6) night = { b, n };
 	}
 	if (night !== undefined) {
@@ -778,7 +783,9 @@ if (args.preset !== undefined) {
 				? signs
 				: [...all, ...signs.filter(s => s.name.startsWith("sign"))].filter(s => s.name === args.preset);
 	if (wanted.length === 0) {
-		console.error(`no preset "${args.preset}" (have: ${[...all, ...signs].map(s => s.name).join(", ")}, all, signs)`);
+		console.error(
+			`no preset "${args.preset}" (have: ${[...all, ...signs].map(s => s.name).join(", ")}, all, signs)`,
+		);
 		process.exit(1);
 	}
 	const outDir = resolve(args.out ?? join(ROOT, "docs", "art", "render"));

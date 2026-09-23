@@ -803,8 +803,10 @@ function frameOf(sign) {
 		const { w, h } = frameOf(s);
 		if (!((w === 24 && h === 16) || (w === 32 && h === 20))) bad.push(`type ${t}: a ${w} x ${h} board`);
 		if (s.rows.some(r => r.length !== w)) bad.push(`type ${t}: rows of different lengths`);
-		for (let x = 0; x < w; x++) if (s.rows[0][x] !== "k" || s.rows[h - 1][x] !== "k") bad.push(`type ${t}: outline`);
-		for (let y = 0; y < h; y++) if (s.rows[y][0] !== "k" || s.rows[y][w - 1] !== "k") bad.push(`type ${t}: outline`);
+		for (let x = 0; x < w; x++)
+			if (s.rows[0][x] !== "k" || s.rows[h - 1][x] !== "k") bad.push(`type ${t}: outline`);
+		for (let y = 0; y < h; y++)
+			if (s.rows[y][0] !== "k" || s.rows[y][w - 1] !== "k") bad.push(`type ${t}: outline`);
 		const used = {};
 		for (const ch of s.rows.join("")) used[ch] = true;
 		for (const ch of Object.keys(used)) {
@@ -1191,7 +1193,8 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		if (day.board < 30) bad.push(`${name}: board on its roof ΔE ${day.board.toFixed(0)} by day`);
 		if (day.ground < 15) bad.push(`${name}: board on the ground in front ΔE ${day.ground.toFixed(0)} by day`);
 		if (day.picture < 30) bad.push(`${name}: pictogram on its board ΔE ${day.picture.toFixed(0)} by day`);
-		if (lit.board < 15 || lit.picture < 15 || lit.ground < 10) bad.push(`${name}: in the survivor's light at night`);
+		if (lit.board < 15 || lit.picture < 15 || lit.ground < 10)
+			bad.push(`${name}: in the survivor's light at night`);
 		// in the dark the board is as dark as its roof (the same share of night over both): it does not glow
 		const faceDark = darkShare(day.face, off.face);
 		const roofDark = darkShare(day.roof, off.roof);
@@ -1199,7 +1202,9 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 			bad.push(`${name}: night over the board ${faceDark.toFixed(2)}, over its roof ${roofDark.toFixed(2)}`);
 		darkShares.push(faceDark);
 	}
-	console.log("       ΔE (CIELAB)       board/roof  board/ground  pictogram/board   (day | 22:00 in the survivor's light)");
+	console.log(
+		"       ΔE (CIELAB)       board/roof  board/ground  pictogram/board   (day | 22:00 in the survivor's light)",
+	);
 	for (const { t, day, lit } of rows) {
 		const name = SD.BUILDING_SIGNS[t].texture.slice(4).toLowerCase().padEnd(9);
 		const f = (a, b) => `${a.toFixed(0).padStart(3)} |${b.toFixed(0).padStart(3)}`;
@@ -1207,7 +1212,11 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 			`       ${name}         ${f(day.board, lit.board)}      ${f(day.ground, lit.ground)}      ${f(day.picture, lit.picture)}`,
 		);
 	}
-	check(bad.length === 0, "every sign reads on its roof, by day and in the survivor's light at night", bad.join("; "));
+	check(
+		bad.length === 0,
+		"every sign reads on its roof, by day and in the survivor's light at night",
+		bad.join("; "),
+	);
 	check(
 		darkShares.length === SIGN_TYPES.length && bad.every(s => !s.includes("night over")),
 		"out of the light a sign is as dark as its roof: no sign glows (LUZ-02)",
