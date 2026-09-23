@@ -3,7 +3,7 @@
 // regenerate: `npm run theme` (or `npm run theme -- <tweakcn registry url>`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 	background: Color3;
 	foreground: Color3;
@@ -32,6 +32,9 @@ export interface ThemeColors {
 	tabActive: Color3;
 	cell: Color3;
 	window: Color3;
+	statValue: Color3;
+	statBonus: Color3;
+	statEffect: Color3;
 }
 
 export const THEME_NAME = "Meu tema global";
@@ -92,6 +95,12 @@ export const DARK: ThemeColors = {
 	cell: Color3.fromRGB(79, 86, 94),
 	/** window: oklch(0.2600 0.0070 250.0000) #222427 */
 	window: Color3.fromRGB(34, 36, 39),
+	/** stat-value: oklch(0.8800 0.1500 95.0000) #f6d653 */
+	statValue: Color3.fromRGB(246, 214, 83),
+	/** stat-bonus: oklch(0.7600 0.1500 155.0000) #52cd86 */
+	statBonus: Color3.fromRGB(82, 205, 134),
+	/** stat-effect: oklch(0.7400 0.1500 50.0000) #f58b4b */
+	statEffect: Color3.fromRGB(245, 139, 75),
 };
 
 /** :root (light) tokens */
@@ -150,6 +159,12 @@ export const LIGHT: ThemeColors = {
 	cell: Color3.fromRGB(233, 233, 233),
 	/** window: var(--sidebar) #ffffff */
 	window: Color3.fromRGB(255, 255, 255),
+	/** stat-value: var(--foreground) #1a1a1a */
+	statValue: Color3.fromRGB(26, 26, 26),
+	/** stat-bonus: var(--chart-1) #399560 */
+	statBonus: Color3.fromRGB(57, 149, 96),
+	/** stat-effect: var(--chart-3) #d2691e */
+	statEffect: Color3.fromRGB(210, 105, 30),
 };
 
 /** sidebar (navigation) tokens: --sidebar-* without the prefix */

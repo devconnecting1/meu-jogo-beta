@@ -17,7 +17,9 @@
  * The walk: open the Bag; every tab 5 times; into an item detail and back, twice; use an item (a count drops);
  * use the last one (a row goes away); craft (counts drop, a new item appears in another tab); learn a skill;
  * a change that arrives from OUTSIDE while the Bag is open (server reply, admin patch); close and reopen; a
- * change made while the Bag was closed; every tab once more.
+ * change made while the Bag was closed; every tab once more; then the item card (DESIGN_RULES UI-08): the pointer
+ * over a whole list and the pad's selection down it (one card, rewritten in place: zero Instances), its colours and
+ * device hints, no tooltip on touch, and the item page showing the same card.
  *
  * What it asserts:
  *  1. once a screen was mounted, going back to it creates and destroys ZERO Instances;
@@ -904,6 +906,121 @@ r = phase("volta final pelas 6 abas", () => {
 	for (const i of [0, 1, 2, 3, 4, 5]) tab(i);
 });
 check("depois de tudo, trocar de aba segue sem criar nem destruir", zero(r), cost(r));
+
+console.log("\n9) cartao do item (UI-08): segue o ponteiro e a selecao do controle, e e o mesmo da pagina do item\n");
+const { STAT, GAME } = require(join(SRC, "client/ui/theme.ts"));
+const uis = service("UserInputService");
+const gui = service("GuiService");
+const tip = () => find(content(), "Tooltip");
+/** the row's GuiState, as the engine sets it when the pointer enters / leaves it */
+const pointer = (row, on) => {
+	row.GuiState = on ? Enum.GuiState.Hover : Enum.GuiState.Idle;
+	flush();
+};
+/** the value label of the stat line labelled `label` inside `root` */
+const statValue = (root, label) =>
+	root === undefined
+		? undefined
+		: visible(root)
+				.find(d => d.Name === "Label" && d.Text === label)
+				?.Parent?.FindFirstChild("Value");
+const legends = root =>
+	root === undefined
+		? []
+		: visible(root)
+				.filter(d => d.Name === "Legend")
+				.map(d => d.Text);
+const sameColor = (a, b) => a !== undefined && b !== undefined && a.R === b.R && a.G === b.G && a.B === b.B;
+
+tab(0);
+const listed = rows();
+phase("ponteiro na 1a arma (1a vez: monta o cartao)", () => pointer(listed[0], true));
+check(
+	"o cartao aparece com a arma da linha",
+	text(tip(), "Name") === text(listed[0], "Name"),
+	`${text(tip(), "Name")} / ${text(listed[0], "Name")}`,
+);
+const firstWeapon = WEAPONS.find(w => w.name === text(listed[0], "Name"));
+check(
+	"o dano vem da tabela, em amarelo (STAT.value)",
+	statValue(tip(), "Damage")?.Text === String(firstWeapon.dmg) &&
+		sameColor(statValue(tip(), "Damage")?.TextColor3, STAT.value),
+	statValue(tip(), "Damage")?.Text,
+);
+check(
+	"a dica fala o teclado e o mouse (tutorial.ts SCHEMES)",
+	legends(tip()).includes("Left click"),
+	legends(tip()).join(", "),
+);
+check(
+	"o cartao nao oferece botao nenhum (sem trocar / presentear)",
+	visible(tip()).every(d => !d.IsA("GuiButton")),
+);
+r = phase(`ponteiro percorre as ${listed.length} armas`, () => {
+	for (let i = 1; i < listed.length; i++) {
+		pointer(listed[i - 1], false);
+		pointer(listed[i], true);
+	}
+});
+check("percorrer a lista com o cartao nao cria nem destroi Instance", zero(r), cost(r));
+check(
+	"o cartao mostra a ultima arma apontada",
+	text(tip(), "Name") === text(listed[listed.length - 1], "Name"),
+	text(tip(), "Name"),
+);
+const equippedRow = rowNamed(weaponNames[2]);
+pointer(listed[listed.length - 1], false);
+pointer(equippedRow, true);
+check(
+	'a linha coberta pelo cartao tem o "EQUIPPED" repetido no cabecalho dele',
+	text(tip(), "Tag") === "EQUIPPED" && sameColor(find(tip(), "Tag")?.TextColor3, GAME.success),
+	text(tip(), "Tag"),
+);
+pointer(equippedRow, false);
+check("sem ponteiro nem selecao, o cartao some", tip() === undefined);
+
+uis.GetLastInputType = () => Enum.UserInputType.Gamepad1;
+r = phase("selecao do controle anda pela lista", () => {
+	for (const row of listed) {
+		gui.SelectedObject = row;
+		flush();
+	}
+});
+check("a selecao do controle mostra o cartao sem criar Instance", tip() !== undefined && zero(r), cost(r));
+check("com o controle, a dica fala o controle", legends(tip()).includes("RT / RB / A"), legends(tip()).join(", "));
+gui.SelectedObject = undefined;
+flush();
+check("tirar a selecao esconde o cartao", tip() === undefined);
+
+uis.GetLastInputType = () => Enum.UserInputType.Touch;
+uis.TouchEnabled = true;
+uis.MouseEnabled = false;
+pointer(listed[0], true);
+check("no toque nao ha tooltip (o toque abre a pagina do item, que tem o cartao)", tip() === undefined);
+pointer(listed[0], false);
+uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+uis.TouchEnabled = false;
+uis.MouseEnabled = true;
+
+tab(2);
+const food = rows()[0];
+pointer(food, true);
+const foodDef = USABLES.find(u => u.name === text(food, "Name"));
+check(
+	`${foodDef.name}: o que enche a fome vem em verde (STAT.bonus)`,
+	foodDef.hunger > 0 && sameColor(statValue(tip(), "Hunger recovery")?.TextColor3, STAT.bonus),
+	statValue(tip(), "Hunger recovery")?.Text,
+);
+r = phase("clica na linha apontada: a pagina do item", () => click(food, foodDef.name));
+check("abrir a pagina esconde o tooltip", tip() === undefined);
+check("a pagina mostra o cartao do mesmo item", text(content(), "Name") === foodDef.name, text(content(), "Name"));
+check(
+	"e a dica da pagina comeca pela acao dela (Click: Use)",
+	legends(find(content(), "Card"))[0] === "Click",
+	legends(find(content(), "Card")).join(", "),
+);
+back();
+pointer(food, false);
 const alive = bag() === undefined ? 0 : bag().GetDescendants().length + 1;
 
 // ---------------------------------------------------------------- report

@@ -27,19 +27,29 @@
  * close at its right), a Sidebar of categories on the left and the current list / detail on the right. Lists,
  * rows, glyphs, chips and pips are recessed "wells"; the one main action of a page is the raised `primary`
  * plate. Every colour is a theme token (THEME / SURFACE / GAME); hover, pressed and disabled come from the kit.
+ *
+ * The item card (itemCard.ts / itemInfo.ts, DESIGN_RULES UI-08) says what an item is: it is the left half of the
+ * item page (the right half is the survivor's side of it -- owned, equipped, the action), and over an item list
+ * it follows the row under the pointer or the pad's selection as a tooltip. One tooltip card for the whole Bag,
+ * built on first use and rewritten in place, so moving over a list creates nothing. No tooltip on touch: a tap
+ * opens the item page, where the card is.
  */
 import { GameContext } from "shared/game/context";
 import { WEAPONS, WeaponDef } from "shared/data/weapons";
-import { EQUIPS, EquipSlot } from "shared/data/equips";
+import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS, SkillDef } from "shared/data/skills";
-import { AmmoPool, ItemKind, WeaponKind } from "shared/data/kinds";
+import { ItemKind } from "shared/data/kinds";
 import { costumeForEquip } from "shared/data/shop";
 import { PlayerSaveData, equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
+// the glyph is the item's icon, drawn by the kit so that the rows here and the item card draw the same one
+import { Glyph, ItemCard, ItemCardHandle, ItemCardModel, kindTone, makeGlyph, setGlyph } from "./itemCard";
+import * as Info from "./itemInfo";
 import { toast } from "./popup";
 import { GAME, SURFACE, TEXT, THEME, TRANSPARENCY, hex, roleFont, space } from "./theme";
+import { SCHEME_TOUCH, currentScheme } from "./tutorial";
 import {
 	BUTTON_SIZE,
 	Badge,
@@ -59,7 +69,6 @@ import {
 	cardHeaderHeight,
 	fmtInt,
 	fmtNum,
-	fmtSeconds,
 	makeFrame,
 	makeLabel,
 	makeListRow,
@@ -78,6 +87,7 @@ import {
 	worldTransparency,
 } from "./widgets";
 
+const GuiService = game.GetService("GuiService");
 const RunService = game.GetService("RunService");
 const UserInputService = game.GetService("UserInputService");
 
@@ -95,9 +105,6 @@ const LEVEL_LIST = 2;
 const LEVEL_DETAIL = 3;
 const LEVEL_RECIPE = 4;
 const LEVEL_SKILLS = 5;
-
-/** ETC_ITEMS below this index are buildables (placed from the build menu), not materials */
-const MAT_START = 23;
 
 // layout (design units; the panel is a 1000 x 570 design space)
 const PANEL_W = 1000;
@@ -161,13 +168,16 @@ const ACTION_H = BUTTON_SIZE.lg.h;
 const ING_W = 440;
 const ING_H = 40;
 const ING_COUNT_W = 110;
-/** most stat chips an item detail shows (a gun: damage, fire rate, mag, reload, range; a usable: 5 too) */
-const MAX_CHIPS = 5;
 /** most ingredients a recipe has: the recipe page builds that many lines with itself */
 const MAX_INGREDIENTS = CRAFT_RECIPES.reduce((m, r) => math.max(m, r.ingredients.size()), 1);
-
-/** by EquipSlot: 4 and 5 are the two cosmetic slots worn at once (MON-04) */
-const SLOT_NAMES = ["-", "Cloth", "Hand", "Gun", "Outfit", "Pet"];
+/** item page: the item card at the left, the survivor's side of it (owned, equipped, the action) at the right */
+const ITEM_CARD_W = 380;
+const SIDE_X = ITEM_CARD_W + space(6);
+const SIDE_W = CONTENT_W - SIDE_X;
+/** the tooltip card over an item list: at the list's right edge, level with the row it describes */
+const TIP_W = 340;
+/** above the pages of the content area (ZIndexBehavior.Sibling: a sibling draws over all of a lower one) */
+const TIP_Z = 10;
 
 interface ItemEntry {
 	kind: number;
@@ -180,46 +190,9 @@ interface ItemEntry {
 	equipped: boolean;
 }
 
-// ---------------------------------------------------------------- data helpers
+// ---------------------------------------------------------------- data helpers (the shared ones: itemInfo.ts)
 
-function nameOf(kind: number, index: number): string {
-	if (kind === ItemKind.Weapon) return index >= 0 && index < WEAPONS.size() ? WEAPONS[index].name : "?";
-	if (kind === ItemKind.Equip) return index >= 0 && index < EQUIPS.size() ? EQUIPS[index].name : "?";
-	if (kind === ItemKind.Use) return index >= 0 && index < USABLES.size() ? USABLES[index].name : "?";
-	return index >= 0 && index < ETC_ITEMS.size() ? ETC_ITEMS[index].name : "?";
-}
-
-function weaponKindName(kind: number): string {
-	if (kind === WeaponKind.Rifle) return "Rifle";
-	if (kind === WeaponKind.Pistol) return "Pistol";
-	if (kind === WeaponKind.MG) return "Machine gun";
-	if (kind === WeaponKind.Shotgun) return "Shotgun";
-	if (kind === WeaponKind.Sniper) return "Sniper rifle";
-	if (kind === WeaponKind.Bow) return "Bow";
-	if (kind === WeaponKind.Melee) return "Melee";
-	if (kind === WeaponKind.Special) return "Special";
-	return "Weapon";
-}
-
-function isMelee(w: WeaponDef): boolean {
-	return w.kind === WeaponKind.Melee || w.mag <= 0;
-}
-
-function ammoInfo(save: PlayerSaveData, pool: number): [string, number] {
-	if (pool === AmmoPool.Shotgun) return ["shotgun shells", save.ammoShotgun];
-	if (pool === AmmoPool.MG) return ["machine gun ammo", save.ammoMachinegun];
-	if (pool === AmmoPool.Arrow) return ["arrows", save.ammoArrow];
-	if (pool === AmmoPool.Oil) return ["oil", save.oil];
-	return ["normal ammo", save.ammoNormal];
-}
-
-function damageText(w: WeaponDef): string {
-	return w.pellets > 1 ? `${fmtInt(w.dmg)} x${w.pellets}` : fmtInt(w.dmg);
-}
-
-function signed(v: number): string {
-	return v > 0 ? `+${fmtNum(v)}` : fmtNum(v);
-}
+const nameOf = Info.nameOf;
 
 function slotValue(save: PlayerSaveData, slot: number): number {
 	return equippedIn(save, slot);
@@ -244,14 +217,6 @@ function recipeMaking(kind: number, index: number): CraftRecipe | undefined {
 		if (r.resultKind === kind && r.resultIndex === index) return r;
 	}
 	return undefined;
-}
-
-/** tone of an item kind: weapons destructive, equipment info, usables success, materials material */
-function kindTone(kind: number): Color3 {
-	if (kind === ItemKind.Weapon) return THEME.destructive;
-	if (kind === ItemKind.Equip) return GAME.info;
-	if (kind === ItemKind.Use) return GAME.success;
-	return GAME.material;
 }
 
 function escapeRich(s: string): string {
@@ -283,39 +248,7 @@ function rowSubtitle(row: GuiObject, x: number, text: string, w: number, rich = 
 	});
 }
 
-/** the item's initial in a square well (drawn by setGlyph) */
-interface Glyph {
-	frame: Frame;
-	letter: TextLabel;
-}
-
-function makeGlyph(parent: Instance, x: number, y: number): Glyph {
-	const frame = makeSurface(parent, "Glyph", x, y, GLYPH, GLYPH, "well", {
-		fill: SURFACE.well,
-		border: SURFACE.line,
-		zIndex: 2,
-	});
-	const letter = makeLabel(frame, "Letter", "", 0, 0, GLYPH, GLYPH, TEXT.lg, THEME.foreground, {
-		weight: Enum.FontWeight.Bold,
-		zIndex: 3,
-	});
-	return { frame, letter };
-}
-
-/**
- * Square well with the item's initial, outlined in the item kind's tone (muted: the plain well outline). Like
- * the kit's accent Badge, the tone rides the BORDER and the letter stays `foreground` (18.5:1 on the well fill),
- * one light letter for every kind. That is a choice of look, not a contrast workaround: the GAME tones would read
- * as text there too (success 4.68:1 and material 4.63:1 even on the lighter panel, `npm run test:contrast`).
- * The letter has no contour (UI-04): the well behind it is what carries it.
- */
-function setGlyph(g: Glyph, name: string, tone: Color3, muted: boolean): void {
-	setSurface(g.frame, "well", { fill: SURFACE.well, border: muted ? SURFACE.line : tone });
-	g.letter.Text = name.sub(1, 1).upper();
-	g.letter.TextColor3 = muted ? THEME.mutedForeground : THEME.foreground;
-}
-
-/** stat tile: small caption over a monospaced value */
+/** stat tile of the recipe page: small caption over a monospaced value */
 interface Chip {
 	frame: Frame;
 	caption: TextLabel;
@@ -396,6 +329,8 @@ interface Page {
  */
 interface ItemRow {
 	frame: TextButton;
+	/** the tab (CAT_*) whose list the row is in */
+	cat: number;
 	glyph: Glyph;
 	name: TextLabel;
 	info: TextLabel;
@@ -472,10 +407,17 @@ interface DetailModel {
 	act: DetailAction;
 }
 
-interface ItemDetailModel extends DetailModel {
+/**
+ * What the item page shows for one item: the item card (what the item is) and the survivor's side of it (how many,
+ * whether it is worn, what equipping it replaces, the action).
+ */
+interface ItemDetailModel {
+	card: ItemCardModel;
+	equipped: boolean;
 	owned: string;
 	ownedColor: Color3;
 	help: string;
+	act: DetailAction;
 }
 
 interface IngredientModel {
@@ -550,7 +492,7 @@ function applyDetail(v: DetailView, m: DetailModel): void {
 	v.caption.Text = m.caption;
 	v.name.Text = m.name;
 	v.equipped.Visible = m.equipped;
-	// a model with more stats than the page ever showed grows it (the page is built with MAX_CHIPS)
+	// a model with more stats than the page ever showed grows it (the recipe page is built with 3)
 	while (v.chips.size() < m.stats.size()) {
 		const i = v.chips.size();
 		v.chips.push(makeChip(v.parent, `Stat${i}`, i * (CHIP_W + CHIP_GAP), 88));
@@ -647,6 +589,16 @@ export class Backpack {
 	private selItem = 0;
 	private selKind = 0;
 	private selRecipe = 0;
+	/** the item card over an item list, built the first time a row is pointed at or selected (refreshTip) */
+	private tip: ItemCardHandle | undefined;
+	/** where the tooltip was put last (screen px from the content's top; -1 = never) */
+	private tipY = -1;
+	/** the item row under the pointer, and the item row the pad / keyboard has selected */
+	private hoverRow: ItemRow | undefined;
+	private focusRow: ItemRow | undefined;
+	/** every item row by its button: a selection that is one of them shows that row's card */
+	private itemRows = new Map<GuiObject, ItemRow>();
+	private selectionConn: RBXScriptConnection | undefined;
 
 	constructor(ctx: GameContext) {
 		this.ctx = ctx;
@@ -702,6 +654,9 @@ export class Backpack {
 		this.syncConn = undefined;
 		// hidden, not destroyed: the next open() shows this window and its pages again, as they are
 		if (this.root !== undefined) setVisible(this.root, false);
+		this.hoverRow = undefined;
+		this.focusRow = undefined;
+		this.refreshTip();
 	}
 
 	/** builds the window: title strip, category rail, an empty content area (the pages come as they are shown) */
@@ -709,6 +664,19 @@ export class Backpack {
 		this.pages.clear();
 		this.page = undefined;
 		this.headerSig = "";
+		this.itemRows.clear();
+		this.tip = undefined;
+		this.tipY = -1;
+		this.hoverRow = undefined;
+		this.focusRow = undefined;
+		// the pad's selection moving onto an item row shows that row's card (one connection for the Bag's life)
+		if (this.selectionConn === undefined) {
+			this.selectionConn = GuiService.GetPropertyChangedSignal("SelectedObject").Connect((): void => {
+				const selected = GuiService.SelectedObject;
+				this.focusRow = selected !== undefined ? this.itemRows.get(selected) : undefined;
+				this.refreshTip();
+			});
+		}
 		const screen = makeScreen(this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
 			transparency: TRANSPARENCY.overWorld,
@@ -851,6 +819,55 @@ export class Backpack {
 			this.showPage(page);
 		}
 		page.sync();
+		this.refreshTip();
+	}
+
+	// ------------------------------------------------------------ the tooltip card over an item list
+
+	/** a row whose card may show now: on the list of the tab on screen, shown, with an item */
+	private tipCandidate(row: ItemRow | undefined): row is ItemRow {
+		return row !== undefined && row.cat === this.cat && row.frame.Visible && row.entry !== undefined;
+	}
+
+	/**
+	 * Shows, moves or hides the tooltip card: the item of the row under the pointer (else of the pad's selection),
+	 * level with that row at the list's right edge. Only over an item list, and never on touch, where there is no
+	 * pointer to follow (a tap opens the item page, which has the card). Cheap when nothing changed: the card
+	 * rewrites itself only for another item, and it is moved only when the row moved.
+	 */
+	private refreshTip(): void {
+		const content = this.content;
+		let row: ItemRow | undefined;
+		if (this.opened && this.level === LEVEL_LIST && currentScheme() !== SCHEME_TOUCH) {
+			if (this.tipCandidate(this.hoverRow)) row = this.hoverRow;
+			else if (this.tipCandidate(this.focusRow)) row = this.focusRow;
+		}
+		const e = row?.entry;
+		const detail = e !== undefined ? this.itemDetail(e.kind, e.id) : undefined;
+		if (content === undefined || row === undefined || e === undefined || detail === undefined) {
+			if (this.tip !== undefined) setVisible(this.tip.frame, false);
+			return;
+		}
+		let tip = this.tip;
+		if (tip === undefined) {
+			tip = ItemCard(content, "Tooltip", { x: CONTENT_W - TIP_W, y: 0, w: TIP_W, zIndex: TIP_Z });
+			this.tip = tip;
+			this.tipY = -1;
+		}
+		// the card covers the row's count and EQUIPPED badge: its tag says them again
+		const card = detail.card;
+		card.tag = e.equipped ? "EQUIPPED" : e.count;
+		card.tagColor = e.equipped ? GAME.success : THEME.mutedForeground;
+		tip.set(card);
+		// screen px from the content's top (the list scrolls under a card that stays put), kept inside the content
+		const k = content.AbsoluteSize.Y / CONTENT_H;
+		const top = row.frame.AbsolutePosition.Y - content.AbsolutePosition.Y;
+		const y = math.round(math.clamp(top, 0, math.max(0, content.AbsoluteSize.Y - tip.height * k)));
+		if (y !== this.tipY) {
+			this.tipY = y;
+			tip.frame.Position = new UDim2((CONTENT_W - TIP_W) / CONTENT_W, 0, 0, y);
+		}
+		setVisible(tip.frame, true);
 	}
 
 	private pageKey(): string {
@@ -902,8 +919,8 @@ export class Backpack {
 			for (const w of WEAPONS) {
 				if (!ownsWeapon(save, w.id)) continue;
 				const count = save.invenWeapon[w.id] ?? 0;
-				let info = `${weaponKindName(w.kind)} · Damage ${damageText(w)}`;
-				if (!isMelee(w)) info += ` · Mag ${fmtInt(w.mag)}`;
+				let info = `${Info.weaponKindName(w.kind)} · Damage ${Info.damageText(w)}`;
+				if (!Info.isMelee(w)) info += ` · Mag ${fmtInt(w.mag)}`;
 				const isDefault = w.id === 0 && count === 0;
 				out.push({
 					kind: ItemKind.Weapon,
@@ -920,9 +937,9 @@ export class Backpack {
 				if (!ownsEquip(save, e.id)) continue;
 				const count = save.invenEquip[e.id] ?? 0;
 				const slot = equipSlotOf(e.id);
-				let info = `${SLOT_NAMES[slot] ?? "-"} slot`;
+				let info = `${Info.SLOT_NAMES[slot] ?? "-"} slot`;
 				if (e.def !== 0) info += ` · Defense ${fmtNum(e.def)}`;
-				if (e.speed !== 0) info += ` · Speed ${signed(e.speed)}`;
+				if (e.speed !== 0) info += ` · Speed ${Info.signed(e.speed)}`;
 				out.push({
 					kind: ItemKind.Equip,
 					id: e.id,
@@ -937,7 +954,7 @@ export class Backpack {
 			for (const u of USABLES) {
 				const count = save.invenUse[u.id] ?? 0;
 				if (count <= 0) continue;
-				let info = `HP ${signed(u.hp)} · Hunger ${signed(u.hunger)}`;
+				let info = `HP ${Info.signed(u.hp)} · Hunger ${Info.signed(u.hunger)}`;
 				if (u.speed !== 0) info += ` · Speed ${fmtNum(u.speed)} min`;
 				if (u.calm !== 0) info += ` · Calm ${fmtNum(u.calm)} min`;
 				if (u.pain !== 0) info += ` · Pain ${fmtNum(u.pain)} min`;
@@ -952,11 +969,11 @@ export class Backpack {
 				});
 			}
 		} else {
-			for (let i = MAT_START; i < ETC_ITEMS.size(); i++) {
+			for (let i = Info.MAT_START; i < ETC_ITEMS.size(); i++) {
 				const m = ETC_ITEMS[i];
 				const count = save.invenEtc[m.id] ?? 0;
 				if (count <= 0) continue;
-				const uses = this.recipesUsing(m.id).size();
+				const uses = Info.recipesUsing(m.id).size();
 				out.push({
 					kind: ItemKind.Etc,
 					id: m.id,
@@ -973,7 +990,9 @@ export class Backpack {
 
 	private mountItems(frame: Frame, cat: number): Page {
 		const list = this.makeList(frame, 0, CONTENT_H);
-		const rows = new RowPool<ItemRow>(list, (l, i) => this.makeItemRow(l, i));
+		const rows = new RowPool<ItemRow>(list, (l, i) => this.makeItemRow(l, i, cat));
+		// the tooltip stays level with its row while the list scrolls under it
+		list.frame.GetPropertyChangedSignal("CanvasPosition").Connect((): void => this.refreshTip());
 		let empty: Frame | undefined;
 		// signature of the rows on screen: the page's dirty flag (undefined = never drawn)
 		let shown: string | undefined;
@@ -999,13 +1018,13 @@ export class Backpack {
 		};
 	}
 
-	private makeItemRow(list: ScrollList, index: number): ItemRow {
+	private makeItemRow(list: ScrollList, index: number, cat: number): ItemRow {
 		let row: ItemRow | undefined;
 		const frame = ListRowButton(list, `Row${index}`, index, ROW_H, (): void => {
 			const e = row?.entry;
 			if (e !== undefined) this.openDetail(e.kind, e.id);
 		});
-		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2);
+		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2, GLYPH);
 		const textW = ITEM_BADGE_X - space(3) - ROW_TEXT_X;
 		const name = rowTitle(frame, ROW_TEXT_X, "", textW, THEME.foreground);
 		const info = rowSubtitle(frame, ROW_TEXT_X, "", textW);
@@ -1014,8 +1033,17 @@ export class Backpack {
 			align: "right",
 			zIndex: 2,
 		});
-		row = { frame, glyph, name, info, count, key: "" };
-		return row;
+		const made: ItemRow = { frame, cat, glyph, name, info, count, key: "" };
+		row = made;
+		this.itemRows.set(frame, made);
+		// the pointer on the row (hover, or held down on it) shows its card; leaving it hands back to the selection
+		frame.GetPropertyChangedSignal("GuiState").Connect((): void => {
+			const state = frame.GuiState;
+			if (state === Enum.GuiState.Hover || state === Enum.GuiState.Press) this.hoverRow = made;
+			else if (this.hoverRow === made) this.hoverRow = undefined;
+			this.refreshTip();
+		});
+		return made;
 	}
 
 	private fillItemRow(row: ItemRow, e: ItemEntry, key: string): void {
@@ -1084,43 +1112,80 @@ export class Backpack {
 
 	// ------------------------------------------------------------ item detail
 
+	/**
+	 * The item page: the item card at the left -- what the item is, the same card the lists show as a tooltip --
+	 * and at the right the survivor's side of it (how many, EQUIPPED, what equipping it changes) over the action.
+	 */
 	private mountDetail(frame: Frame): Page {
-		const view = makeDetailView(frame, MAX_CHIPS);
-		Separator(frame, "Divider", { x: 0, y: 170, length: CONTENT_W });
-		const owned = makeLabel(frame, "Owned", "", 0, 184, 600, 26, TEXT.lg, THEME.foreground, {
+		const card = ItemCard(frame, "Card", { x: 0, y: 0, w: ITEM_CARD_W });
+		const lineH = 32;
+		const badgeH = 26;
+		const badgeW = badgeWidth("EQUIPPED", TEXT.sm, badgeH);
+		const ownedW = SIDE_W - badgeW - space(3);
+		const owned = makeLabel(frame, "Owned", "", SIDE_X, 0, ownedW, lineH, TEXT.xl, THEME.foreground, {
 			font: "heading",
 			align: "left",
 		});
-		const help = makeLabel(frame, "Help", "", 0, 218, CONTENT_W, 100, TEXT.base, THEME.mutedForeground, {
+		const equipped = Badge(frame, "Equipped", "EQUIPPED", {
+			x: CONTENT_W - badgeW,
+			y: (lineH - badgeH) / 2,
+			w: badgeW,
+			h: badgeH,
+			textSize: TEXT.sm,
+			color: GAME.success,
+		});
+		equipped.Visible = false;
+		const ruleY = lineH + space(3);
+		Separator(frame, "Divider", { x: SIDE_X, y: ruleY, length: SIDE_W });
+		const helpY = ruleY + space(4);
+		const help = makeLabel(frame, "Help", "", SIDE_X, helpY, SIDE_W, 160, TEXT.base, THEME.mutedForeground, {
 			align: "left",
 			valign: "top",
+		});
+		let run: () => void = noop;
+		const action = Button(frame, "Action", "", {
+			x: SIDE_X + (SIDE_W - ACTION_W) / 2,
+			y: CONTENT_H - ACTION_H - space(3),
+			w: ACTION_W,
+			size: "lg",
+			variant: "default",
+			onClick: (): void => run(),
 		});
 		let shown: string | undefined;
 		return {
 			frame,
 			sync: (): void => {
-				const m = this.itemDetail();
+				const m = this.itemDetail(this.selKind, this.selItem);
 				if (m === undefined) {
 					this.level = LEVEL_LIST;
 					this.rebuild();
 					return;
 				}
-				view.run = m.act.run;
-				const sig = `${detailSig(m)}|${m.owned}|${hex(m.ownedColor)}|${m.help}`;
+				const a = m.act;
+				run = a.run;
+				// the card has its own dirty check: it rewrites itself only for another item (or another device)
+				card.set(m.card);
+				const sig = `${m.equipped}|${m.owned}|${hex(m.ownedColor)}|${m.help}|${a.text}|${a.variant}|${a.enabled}`;
 				if (sig === shown) return;
 				shown = sig;
-				applyDetail(view, m);
 				owned.Text = m.owned;
 				owned.TextColor3 = m.ownedColor;
+				equipped.Visible = m.equipped;
 				help.Text = m.help;
+				action.Text = a.text;
+				setButtonVariant(action, a.variant);
+				setButtonEnabled(action, a.enabled);
 			},
 		};
 	}
 
-	/** what the item detail shows for the selected item (undefined: no such item) */
-	private itemDetail(): ItemDetailModel | undefined {
-		const kind = this.selKind;
-		const id = this.selItem;
+	/** the item card of item `kind` / `id`; its usage hint leads with the page's action when it can be taken */
+	private cardOf(kind: number, id: number, act: DetailAction): ItemCardModel | undefined {
+		return Info.describeItem(this.ctx.save, kind, id, { action: act.enabled ? act.text : undefined });
+	}
+
+	/** what the item page (and the tooltip card) shows for item `kind` / `id` (undefined: no such item) */
+	private itemDetail(kind: number, id: number): ItemDetailModel | undefined {
 		if (kind === ItemKind.Weapon && WEAPONS[id] !== undefined) return this.weaponDetail(WEAPONS[id]);
 		if (kind === ItemKind.Equip && EQUIPS[id] !== undefined) return this.equipDetail(id);
 		if (kind === ItemKind.Use && USABLES[id] !== undefined) return this.usableDetail(id);
@@ -1128,38 +1193,22 @@ export class Backpack {
 		return undefined;
 	}
 
-	private weaponDetail(w: WeaponDef): ItemDetailModel {
+	// The builders below give the survivor's side of an item; what the item IS (damage, ammo, effects, how to use
+	// it on this device) is the card's, from itemInfo.ts.
+
+	private weaponDetail(w: WeaponDef): ItemDetailModel | undefined {
 		const save = this.ctx.save;
 		const id = w.id;
 		const owned = ownsWeapon(save, id);
 		const count = save.invenWeapon[id] ?? 0;
 		const equipped = save.equipWeapon === id;
 
-		const stats: Array<[string, string]> = [
-			["Damage", damageText(w)],
-			["Fire rate", fmtSeconds(w.cooldown)],
-		];
-		if (!isMelee(w)) {
-			stats.push(["Mag", fmtInt(w.mag)]);
-			stats.push(["Reload", fmtSeconds(w.reload)]);
-		}
-		stats.push(["Range", fmtNum(w.range)]);
-
-		const help: Array<string> = [];
-		if (isMelee(w)) {
-			help.push("Melee weapon: no ammo needed.");
-		} else {
-			const [ammoName, ammoCount] = ammoInfo(save, w.ammoPool);
-			help.push(`Uses ${ammoName}. You carry ${fmtInt(ammoCount)}.`);
-		}
-		if (w.pellets > 1) help.push(`Fires ${w.pellets} pellets per shot.`);
+		let help = "";
 		if (equipped) {
-			help.push("This is the weapon in your hands.");
+			help = "This is the weapon in your hands.";
 		} else if (!owned) {
 			const r = recipeMaking(ItemKind.Weapon, id);
-			help.push(
-				r !== undefined ? `You don't have it yet. Craft it: ${stationName(r)}.` : "You don't have it yet.",
-			);
+			help = r !== undefined ? `You don't have it yet. Craft it: ${stationName(r)}.` : "You don't have it yet.";
 		}
 		let ownedText = owned ? `Owned x ${fmtInt(count)}` : "Not owned";
 		if (id === 0 && count === 0) ownedText = "Default weapon";
@@ -1168,23 +1217,21 @@ export class Backpack {
 		if (!owned) act = detailAction("Not owned", "secondary", false, noop);
 		else if (equipped) act = detailAction("Equipped", "secondary", false, noop);
 		else act = detailAction("Equip", "default", true, (): void => this.equipWeapon(id));
+		const card = this.cardOf(ItemKind.Weapon, id, act);
+		if (card === undefined) return undefined;
 		return {
-			caption: `WEAPON · ${weaponKindName(w.kind).upper()}`,
-			name: w.name,
+			card,
 			equipped,
-			stats,
 			owned: ownedText,
 			ownedColor: owned ? THEME.foreground : THEME.mutedForeground,
-			help: help.join(" "),
+			help,
 			act,
 		};
 	}
 
-	private equipDetail(id: number): ItemDetailModel {
+	private equipDetail(id: number): ItemDetailModel | undefined {
 		const save = this.ctx.save;
-		const e = EQUIPS[id];
 		const slot = equipSlotOf(id);
-		const slotName = SLOT_NAMES[slot] ?? "-";
 		const owned = ownsEquip(save, id);
 		const count = save.invenEquip[id] ?? 0;
 		const costume = costumeForEquip(id);
@@ -1192,15 +1239,8 @@ export class Backpack {
 		const current = slotValue(save, slot);
 		const equipped = current === id;
 
-		const stats: Array<[string, string]> = [["Slot", slotName]];
-		if (slot === 1 || e.def !== 0) stats.push(["Defense", fmtNum(e.def)]);
-		if (slot === 1 || e.speed !== 0) stats.push(["Speed", signed(e.speed)]);
-
-		const help: Array<string> = [`Goes in the ${slotName} slot.`];
-		// MON-01 / MON-04: say what a cosmetic does, and what it does not -- the old catalogue promised pets that
-		// "collect items" and "attack zombies", and a pet here only ever keeps you company
-		if (slot === EquipSlot.Outfit) help.push("Everyone sees it on your survivor. It changes nothing else.");
-		else if (slot === EquipSlot.Pet) help.push("It follows you and everyone sees it. It never fights or collects.");
+		// the slot and what a cosmetic does and does not do (MON-01 / MON-04) are on the card
+		const help: Array<string> = [];
 		if (equipped) {
 			help.push("Currently equipped.");
 		} else if (current >= 0 && EQUIPS[current] !== undefined) {
@@ -1227,11 +1267,11 @@ export class Backpack {
 		} else {
 			act = detailAction("Equip", "default", true, (): void => this.equipItem(id, slot));
 		}
+		const card = this.cardOf(ItemKind.Equip, id, act);
+		if (card === undefined) return undefined;
 		return {
-			caption: `EQUIPMENT · ${slotName.upper()} SLOT`,
-			name: e.name,
+			card,
 			equipped,
-			stats,
 			owned: ownedText,
 			ownedColor: owned ? THEME.foreground : THEME.mutedForeground,
 			help: help.join(" "),
@@ -1239,73 +1279,33 @@ export class Backpack {
 		};
 	}
 
-	private usableDetail(id: number): ItemDetailModel {
-		const save = this.ctx.save;
-		const u = USABLES[id];
-		const count = save.invenUse[id] ?? 0;
-
-		const stats: Array<[string, string]> = [
-			["HP", signed(u.hp)],
-			["Hunger", signed(u.hunger)],
-		];
-		if (u.speed !== 0) stats.push(["Speed", `${fmtNum(u.speed)} min`]);
-		if (u.calm !== 0) stats.push(["Calm", `${fmtNum(u.calm)} min`]);
-		if (u.pain !== 0) stats.push(["Pain", `${fmtNum(u.pain)} min`]);
-
-		const help: Array<string> = ["Consumed when used."];
-		if (u.cook >= 0 && USABLES[u.cook] !== undefined) help.push(`Can be cooked into ${USABLES[u.cook].name}.`);
+	private usableDetail(id: number): ItemDetailModel | undefined {
+		const count = this.ctx.save.invenUse[id] ?? 0;
+		const act = detailAction(count > 0 ? "Use" : "None left", "default", count > 0, (): void => this.useItem(id));
+		const card = this.cardOf(ItemKind.Use, id, act);
+		if (card === undefined) return undefined;
 		return {
-			caption: "USABLE",
-			name: u.name,
+			card,
 			equipped: false,
-			stats,
 			owned: `Owned x ${fmtInt(count)}`,
 			ownedColor: count > 0 ? THEME.foreground : THEME.mutedForeground,
-			help: help.join(" "),
-			act: detailAction(count > 0 ? "Use" : "None left", "default", count > 0, (): void => this.useItem(id)),
+			help: "Consumed when used.",
+			act,
 		};
 	}
 
-	private recipesUsing(etcId: number): Array<CraftRecipe> {
-		const out: Array<CraftRecipe> = [];
-		for (const r of CRAFT_RECIPES) {
-			for (const ing of r.ingredients) {
-				if (ing.kind === ItemKind.Etc && ing.index === etcId) {
-					out.push(r);
-					break;
-				}
-			}
-		}
-		return out;
-	}
-
-	private materialDetail(id: number): ItemDetailModel {
-		const save = this.ctx.save;
-		const count = save.invenEtc[id] ?? 0;
-		const uses = this.recipesUsing(id);
-
-		let help = "Not used in any recipe.";
-		if (uses.size() > 0) {
-			const names: Array<string> = [];
-			const shown = math.min(uses.size(), 5);
-			for (let i = 0; i < shown; i++) {
-				names.push(nameOf(uses[i].resultKind, uses[i].resultIndex));
-			}
-			help = `Used to craft ${names.join(", ")}`;
-			help += uses.size() > shown ? ` and ${uses.size() - shown} more.` : ".";
-		}
+	private materialDetail(id: number): ItemDetailModel | undefined {
+		const count = this.ctx.save.invenEtc[id] ?? 0;
+		const act = detailAction("Open Craft", "secondary", true, (): void => this.selectCat(CAT_CRAFT));
+		const card = this.cardOf(ItemKind.Etc, id, act);
+		if (card === undefined) return undefined;
 		return {
-			caption: "MATERIAL",
-			name: ETC_ITEMS[id].name,
+			card,
 			equipped: false,
-			stats: [
-				["Owned", fmtInt(count)],
-				["Recipes", fmtInt(uses.size())],
-			],
 			owned: `Owned x ${fmtInt(count)}`,
 			ownedColor: count > 0 ? THEME.foreground : THEME.mutedForeground,
-			help,
-			act: detailAction("Open Craft", "secondary", true, (): void => this.selectCat(CAT_CRAFT)),
+			help: "Materials are used in the Craft tab.",
+			act,
 		};
 	}
 
@@ -1431,7 +1431,7 @@ export class Backpack {
 		const frame = ListRowButton(list, `Recipe${index}`, index, ROW_H, (): void => {
 			if (row !== undefined) this.openRecipe(row.recipeId);
 		});
-		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2);
+		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2, GLYPH);
 		const statusX = CONTENT_W - ROW_PAD - STATUS_W;
 		const stationX = statusX - space(3) - STATION_W;
 		const textW = stationX - space(3) - ROW_TEXT_X;
