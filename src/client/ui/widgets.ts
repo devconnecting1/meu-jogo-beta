@@ -59,7 +59,6 @@ import {
 	skinEnabled,
 	skinPx,
 	stripSurface,
-	textOutline,
 	topInset,
 	uiScale,
 	viewportSize,
@@ -92,7 +91,6 @@ export {
 	setWorldTransparency,
 	skinEnabled,
 	skinPx,
-	textOutline,
 	topInset,
 	uiScale,
 	viewportSize,
@@ -1675,7 +1673,8 @@ interface ToastStyle {
  * behind `destructive-foreground` text only reaches ~3.7:1, below the 4.5:1 floor.
  */
 function toastStyle(kind: ToastKind): ToastStyle {
-	const base = { frame: SURFACE.frame, fg: THEME.popoverForeground, glyphColor: THEME.background, textSize: TEXT.sm };
+	// glyphColor is text on the icon chip: THEME.foreground (UI-05), never the near-black body colour
+	const base = { frame: SURFACE.frame, fg: THEME.popoverForeground, glyphColor: THEME.foreground, textSize: TEXT.sm };
 	if (kind === "success") return { ...base, icon: GAME.success, glyph: "✓" };
 	if (kind === "coin") return { ...base, icon: GAME.coin, glyph: "$" };
 	if (kind === "error") {
@@ -1877,7 +1876,7 @@ export interface CoinPill {
 	refresh(): void;
 }
 
-/** coin icon: a chart-3 chip with a "$" in the background colour */
+/** coin icon: a chart-3 chip with a "$" in THEME.foreground (the chip carries the contrast, UI-05) */
 export function CoinIcon(parent: Instance, name: string, x: number, y: number, size: number, zIndex?: number): Frame {
 	const z = zIndex ?? 2;
 	const icon = makeSurface(parent, name, x, y, size, size, "well", {
@@ -1885,7 +1884,8 @@ export function CoinIcon(parent: Instance, name: string, x: number, y: number, s
 		border: GAME.coin,
 		zIndex: z,
 	});
-	makeLabel(icon, "Glyph", "$", 0, 0, size, size, size * 0.62, THEME.background, {
+	// the glyph is text (UI-04/UI-05): always THEME.foreground, never the near-black body colour
+	makeLabel(icon, "Glyph", "$", 0, 0, size, size, size * 0.62, THEME.foreground, {
 		weight: Enum.FontWeight.ExtraBold,
 		zIndex: z + 1,
 	});

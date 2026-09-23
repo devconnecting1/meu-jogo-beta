@@ -122,7 +122,6 @@ export class AllyPlate {
 		count.BorderSizePixel = 0;
 		count.TextColor3 = THEME.foreground;
 		count.TextStrokeColor3 = THEME.background;
-		count.TextStrokeTransparency = 0.4;
 		count.FontFace = fontOf("mono", Enum.FontWeight.Bold);
 		count.AutoLocalize = false;
 		count.Text = "";

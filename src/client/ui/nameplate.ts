@@ -14,7 +14,7 @@
  * for it at all (a spectated ally out of the roster, a replay, the offline harness).
  */
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "./theme";
-import { addStroke, onLayoutChange, uiScale } from "./widgets";
+import { addStroke, boxStroke, onLayoutChange, uiScale } from "./widgets";
 
 const TweenService = game.GetService("TweenService");
 
@@ -119,13 +119,16 @@ export class Nameplate {
 		badgeCorner.Parent = badge;
 		const badgePad = new Instance("UIPadding");
 		badgePad.Parent = badge;
-		// level-up burst: an outer ring (ring token) that expands and fades
-		const ring = new Instance("UIStroke");
-		ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+		// level-up burst: an outer ring (ring token) that expands and fades -- boxStroke puts the UIStroke on a
+		// StrokeHost frame under badge (UI-04: never a UIStroke directly on a TextLabel), so it borders the pill
+		// instead of contouring "Lv N"'s glyphs. The host frame needs its own UICorner to match the pill's rounding.
+		const ring = boxStroke(badge, "LevelRing");
 		ring.Color = THEME.ring;
 		ring.Transparency = 1;
 		ring.Thickness = 0;
-		ring.Parent = badge;
+		const ringHost = badge.FindFirstChild("StrokeHost") as Frame;
+		const ringHostCorner = new Instance("UICorner");
+		ringHostCorner.Parent = ringHost;
 		badge.Parent = plate;
 
 		const nameLabel = textLabel(
@@ -157,6 +160,7 @@ export class Nameplate {
 			const px = (v: number): number => math.max(1, math.round(v * s));
 			corner.CornerRadius = new UDim(0, px(RADIUS.lg));
 			badgeCorner.CornerRadius = new UDim(0, px(RADIUS.md));
+			ringHostCorner.CornerRadius = new UDim(0, px(RADIUS.md));
 			pad.PaddingLeft = new UDim(0, px(space(1)));
 			pad.PaddingRight = new UDim(0, px(space(2)));
 			pad.PaddingTop = new UDim(0, px(space(1)));
@@ -200,17 +204,17 @@ export class Nameplate {
 		}
 	}
 
-	/** level-up: the badge flashes (xp -> foreground -> xp, token swaps), throws a ring and the pill pops */
+	/** level-up: the badge flashes (xp -> primary -> xp, token swap), throws a ring and the pill pops. The text
+	 * stays THEME.foreground throughout -- it is already the light foreground (UI-05), and flashing the PILL
+	 * (never the label) is what keeps it readable: foreground-on-primary is checked in test-contrast.mjs. */
 	private pulse(): void {
 		for (const t of this.pulses) t.Cancel();
 		const gen = ++this.pulseGen;
 		const badge = this.badge;
-		badge.BackgroundColor3 = THEME.foreground;
-		badge.TextColor3 = THEME.primaryForeground;
+		badge.BackgroundColor3 = THEME.primary;
 		task.delay(FLASH_TIME, () => {
 			if (gen !== this.pulseGen || badge.Parent === undefined) return;
 			badge.BackgroundColor3 = GAME.xp;
-			badge.TextColor3 = THEME.foreground;
 		});
 		this.plateScale.Scale = 1;
 		this.badgeRing.Transparency = 0;

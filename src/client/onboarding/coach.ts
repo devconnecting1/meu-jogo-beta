@@ -397,7 +397,6 @@ export class Coach {
 		this.distLabel = makeLabel(pointer, "Dist", "", 0, 0, 90, 20, 14, THEME.primary, {
 			font: "numeric",
 			zIndex: 31,
-			outline: true,
 		});
 		this.distLabel.AnchorPoint = new Vector2(0.5, 0.5);
 		this.distLabel.Visible = false;

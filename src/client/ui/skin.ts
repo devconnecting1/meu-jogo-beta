@@ -351,14 +351,6 @@ export function clearTextOutline(label: TextLabel | TextButton | TextBox): void 
 	label.TextStrokeTransparency = 1;
 }
 
-/**
- * The old name, kept only because call sites outside the kit still use it (admin/controls.ts). It no longer
- * draws anything: it CLEARS the contour, so an old call can never bring one back.
- */
-export function textOutline(label: TextLabel | TextButton): void {
-	clearTextOutline(label);
-}
-
 /** fades a text object */
 export function fadeText(label: TextLabel | TextButton, time: number, transparency: number): void {
 	tweenTo(label, time, { TextTransparency: transparency });
