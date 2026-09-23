@@ -65,6 +65,8 @@ export const SCHEMES: Array<Scheme> = [
 			["1 – 5", "Switch weapon"],
 			["B", "Backpack"],
 			["P", "Menu"],
+			// the match scoreboard (MP-23): held, not toggled; Tab is the Roblox player list's (UI-02)
+			["Q (hold)", "Survivors in town"],
 		],
 		note: "Right click also interacts.",
 	},
@@ -81,6 +83,8 @@ export const SCHEMES: Array<Scheme> = [
 			["Tap a weapon", "Switch weapon"],
 			["BAG", "Backpack"],
 			["MENU", "Menu"],
+			// (the match scoreboard, MP-23, is the chip beside the day plate: on screen, with its icon and count, like
+			// BAG and MENU are -- not a tenth row here, which Settings › Controls has no room for)
 		],
 		note: "Size, height, floating stick and left-handed: Settings › Touch controls.",
 	},
@@ -94,6 +98,8 @@ export const SCHEMES: Array<Scheme> = [
 			["Y", "Reload"],
 			["LB", "Backpack"],
 			["Start", "Menu"],
+			// Back / Select opens and closes the scoreboard; the D-pad sorts it while it is open (MP-23)
+			["Back", "Survivors in town"],
 			["D-pad", "Menus"],
 		],
 		note: "Menus are navigated with the stick; the selected button carries a focus ring.",

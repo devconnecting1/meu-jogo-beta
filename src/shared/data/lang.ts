@@ -740,6 +740,25 @@ export const LANG_TABLE: Array<string> = [
 	"No skill points",
 	"No skill points to spend. Level up to earn more.",
 	"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.#Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.#Level up to earn skill points, and spend them in Skills.#The backpack and the menu never stop the world: open them somewhere safe.",
+	// the Records window (client/ui/records.ts, DESIGN_RULES UI-12): its two sections and the rows the table did not
+	// already have ("Best day", "Level", "Zombies put down", "Life day", "Nights survived in this life" are above)
+	"All time",
+	"Titles earned",
+	"Rebirths",
+	// the match scoreboard (client/ui/scoreboard.ts, DESIGN_RULES MP-23): the window, its columns and sort bar, the
+	// statuses, the empty table and the controls reference row (tutorial.ts SCHEMES)
+	"Survivors",
+	"Sort by",
+	"Lv",
+	"Put down",
+	"Name",
+	"Alive",
+	"Down",
+	"Dead",
+	"until dawn",
+	"Click a column to sort",
+	"Waiting for the town's list...",
+	"Survivors in town",
 ];
 
 /**

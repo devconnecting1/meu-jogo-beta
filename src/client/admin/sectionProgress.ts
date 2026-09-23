@@ -16,9 +16,10 @@ import {
 } from "shared/admin/ops";
 import type { PlayerRow } from "shared/admin/protocol";
 import { TEXT, THEME, space } from "../ui/theme";
+import { NumberField, NumberFieldHandle, NumberRow, confirmAction } from "../ui/numberField";
+import * as Kit from "../ui/window";
 import {
 	Button,
-	Dialog,
 	Tabs,
 	clearChildren,
 	fmtInt,
@@ -26,14 +27,21 @@ import {
 	makeListRow,
 	makeScrollList,
 	setButtonEnabled,
+	setLabelColor,
 } from "../ui/widgets";
-import { Switch, TextInput, TextInputHandle } from "./controls";
+import { Switch } from "./controls";
 import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region, rowLabel } from "./panelTypes";
 
 /*
  * Progress & items (server): edits the server's copy of a player's save (any player of this server, the admin by
  * default). The server applies the ops, enforces the save invariants, bumps runRev and patches the player's running
  * game at once; the next progress report can not undo it (see shared/admin/protocol.ts).
+ *
+ * Forms in the kit's pattern (client/ui/numberField.ts, DESIGN_RULES UI-12): each number is a NumberField with the
+ * SERVER's own range (shared/admin/ops.ts statRange / itemMax); a number out of range, or not a number, says so on
+ * its row (the Stats form is the kit's form rows, Settings' own) and nothing is sent -- the server would clamp it
+ * anyway (readOp), and it stays the authority. Every destructive edit (clear a group, refund the skills, reset the
+ * save) asks first (`confirmAction`); every on / off is the kit's Switch.
  */
 
 const STAT_ROWS: Array<{ field: StatField; label: string }> = [
@@ -125,67 +133,57 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 	};
 
 	const buildStats = (s: PlayerSaveData): void => {
-		const inputs = new Map<StatField, TextInputHandle>();
+		const fields = new Map<StatField, NumberFieldHandle>();
+		// the Settings form's own rows (window.ts SettingsList + SettingRow with a description): label and "now · range"
+		// in the label cell, the field in the value cell; a wrong number says so on its row's description line
+		const listH = Kit.settingsListHeight(STAT_ROWS.map(() => Kit.SETTING_DESC_ROW_H));
+		const list = Kit.SettingsList(body, "Stats", 0, 0, CONTENT_W, listH);
 		STAT_ROWS.forEach((r, i) => {
-			const y = i * 44;
-			makeLabel(body, `${r.field}Label`, r.label, 0, y, 120, 36, TEXT.sm, THEME.foreground, {
-				font: "label",
-				align: "left",
-			});
 			const [lo, hi] = statRange(r.field);
-			inputs.set(
-				r.field,
-				TextInput(body, `${r.field}Input`, {
-					x: 124,
-					y,
-					w: 150,
-					text: tostring(statValue(s, r.field)),
-					numeric: true,
-					maxLength: 10,
-				}),
-			);
-			makeLabel(
-				body,
-				`${r.field}Range`,
+			const row = NumberRow(
+				list,
+				`${r.field}Row`,
+				i,
+				r.label,
 				`now ${fmtInt(statValue(s, r.field))} · ${fmtInt(lo)}–${fmtInt(hi)}`,
-				284,
-				y,
-				CONTENT_W - 284,
-				36,
-				TEXT.xs,
-				THEME.mutedForeground,
-				{
-					align: "left",
-				},
+				{ value: statValue(s, r.field), min: lo, max: hi },
 			);
+			fields.set(r.field, row.field);
 		});
+		const rulesY = listH + space(1);
 		makeLabel(
 			body,
 			"Rules",
 			"Setting the level also grants (or takes back) 1 skill point per level crossed. The save rules clamp the rest: spent skills ≤ levels, XP < next level.",
 			0,
-			224,
+			rulesY,
 			CONTENT_W,
-			40,
+			30,
 			TEXT.xs,
 			THEME.mutedForeground,
 			{ align: "left", valign: "top" },
 		);
 		const bw = (CONTENT_W - space(2)) / 2;
+		const buttonsY = rulesY + 34;
 		Button(body, "Apply", "Apply changes", {
 			x: 0,
-			y: 272,
+			y: buttonsY,
 			w: bw,
 			h: 40,
 			variant: "default",
 			onClick: () => {
+				// every field is checked (and a wrong one says what is wrong on its row) before anything is sent
 				const ops: Array<AdminOp> = [];
+				let wrong = 0;
 				for (const r of STAT_ROWS) {
-					const v = inputs.get(r.field)?.getInt();
-					if (v === undefined || v === statValue(s, r.field)) continue;
-					const [lo, hi] = statRange(r.field);
-					ops.push({ op: "stat", field: r.field, value: math.clamp(v, lo, hi) });
+					const v = fields.get(r.field)?.validate();
+					if (v === undefined) {
+						wrong += 1;
+						continue;
+					}
+					if (v !== statValue(s, r.field)) ops.push({ op: "stat", field: r.field, value: v });
 				}
+				if (wrong > 0) return;
 				if (ops.size() === 0) {
 					p.notify("Nothing changed", "info");
 					return;
@@ -193,26 +191,26 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 				edit(ops, "Progress updated");
 			},
 		});
-		Button(body, "Refund", "Refund skill points", {
+		Button(body, "Refund", "Refund skill points…", {
 			x: bw + space(2),
-			y: 272,
+			y: buttonsY,
 			w: bw,
 			h: 40,
 			variant: "secondary",
 			onClick: () =>
-				confirm(
-					`Refund ${targetLabel()}'s skills?`,
-					"Every learnt skill goes back to level 0 and its points return as free skill points.",
-					"Refund",
-					() => edit([{ op: "resetSkills" }], "Skill points refunded"),
-				),
+				confirmAction(p.layer, {
+					title: `Refund ${targetLabel()}'s skills?`,
+					body: "Every learnt skill goes back to level 0 and its points return as free skill points.",
+					action: "Refund",
+					onConfirm: () => edit([{ op: "resetSkills" }], "Skill points refunded"),
+				}),
 		});
 		makeLabel(
 			body,
 			"Note",
 			"Applied to the server's copy and to the player's running game at once.",
 			0,
-			322,
+			buttonsY + 44,
 			CONTENT_W,
 			20,
 			TEXT.xs,
@@ -266,7 +264,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 				name,
 				space(3),
 				0,
-				200,
+				180,
 				rowH,
 				TEXT.sm,
 				have > 0 ? THEME.foreground : THEME.mutedForeground,
@@ -276,19 +274,27 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 					zIndex: 3,
 				},
 			);
-			makeLabel(r, "Have", `×${fmtInt(have)}`, 214, 0, 64, rowH, TEXT.xs, THEME.mutedForeground, {
+			// the count now, or -- after a wrong Set -- what is wrong with the number typed (inline, UI-12)
+			const haveText = `×${fmtInt(have)}`;
+			const haveLabel = makeLabel(r, "Have", haveText, 196, 0, 76, rowH, TEXT.xs, THEME.mutedForeground, {
 				align: "left",
 				zIndex: 3,
 			});
-			const input = TextInput(r, "Count", {
+			const input = NumberField(r, "Count", {
 				x: rowW - 64 - 8 - 84,
 				y: 5,
 				w: 84,
 				h: 30,
-				text: tostring(have),
-				numeric: true,
-				maxLength: 5,
+				value: have,
+				min: 0,
+				max: itemMax(g),
+				errorLine: false,
 				zIndex: 3,
+				// red on the row's dark well (4,9:1), where the count was
+				onError: message => {
+					haveLabel.Text = message ?? haveText;
+					setLabelColor(haveLabel, message !== undefined ? THEME.destructive : THEME.mutedForeground);
+				},
 			});
 			Button(r, "Set", "Set", {
 				x: rowW - 64 - 4,
@@ -299,9 +305,10 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 				variant: "secondary",
 				zIndex: 3,
 				onClick: () => {
-					const v = input.getInt();
+					// a wrong number shows on the row (onError above) and nothing is sent
+					const v = input.validate();
 					if (v === undefined) return;
-					edit([{ op: "item", group: g, index, count: math.clamp(v, 0, itemMax(g)) }], `${name}: ${v}`);
+					edit([{ op: "item", group: g, index, count: v }], `${name}: ${v}`);
 				},
 			});
 		}
@@ -341,12 +348,12 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 					p.notify("Already empty", "info");
 					return;
 				}
-				confirm(
-					`Clear ${GROUPS[group].label.lower()}?`,
-					`Sets every ${GROUPS[group].label.lower()} count of ${targetLabel()} to 0.`,
-					"Clear",
-					() => edit(ops, `${GROUPS[group].label}: cleared`),
-				);
+				confirmAction(p.layer, {
+					title: `Clear ${GROUPS[group].label.lower()}?`,
+					body: `Sets every ${GROUPS[group].label.lower()} count of ${targetLabel()} to 0.`,
+					action: "Clear",
+					onConfirm: () => edit(ops, `${GROUPS[group].label}: cleared`),
+				});
 			},
 		});
 	};
@@ -404,11 +411,11 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 			h: 40,
 			variant: "destructive",
 			onClick: () =>
-				confirm(
-					`Reset ${targetLabel()}'s save?`,
-					"Everything but the settings is erased. This cannot be undone.",
-					"Reset save",
-					() =>
+				confirmAction(p.layer, {
+					title: `Reset ${targetLabel()}'s save?`,
+					body: "Everything but the settings is erased. This cannot be undone.",
+					action: "Reset save",
+					onConfirm: () =>
 						task.spawn(() => {
 							const target = p.target;
 							const mySeq = ++seq;
@@ -419,39 +426,7 @@ export function buildProgress(p: PanelCtx, content: Frame): SectionHandle {
 							if (typeIs(res.data, "table")) save = sanitizeStoredSave(res.data);
 							buildBody();
 						}),
-				),
-		});
-	};
-
-	/** destructive confirmation dialog */
-	const confirm = (title: string, text: string, action: string, onYes: () => void): void => {
-		const w = 480;
-		const h = 230;
-		const dlg = Dialog(p.layer, "ConfirmDialog", { w, h, title, zIndex: 200 });
-		const pad = space(6);
-		makeLabel(dlg.card, "Body", text, pad, dlg.contentY, w - pad * 2, 60, TEXT.sm, THEME.mutedForeground, {
-			align: "left",
-			valign: "top",
-		});
-		const fy = h - pad - 40;
-		Button(dlg.card, "Cancel", "Cancel", {
-			x: w - pad - 300 - space(2),
-			y: fy,
-			w: 140,
-			h: 40,
-			variant: "secondary",
-			onClick: () => dlg.close(),
-		});
-		Button(dlg.card, "Yes", action, {
-			x: w - pad - 160,
-			y: fy,
-			w: 160,
-			h: 40,
-			variant: "destructive",
-			onClick: () => {
-				dlg.close();
-				onYes();
-			},
+				}),
 		});
 	};
 

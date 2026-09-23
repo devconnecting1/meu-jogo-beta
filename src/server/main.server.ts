@@ -27,7 +27,7 @@ import { AdminOp, applyAdminOps } from "shared/admin/ops";
 import { INTENT_BURST, INTENT_RATE, MP_PHASE } from "shared/net/mpConfig";
 import { decodeIntentMessage, IntentKind } from "shared/net/protocol";
 import { onIntent } from "./net/remotes";
-import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
+import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
@@ -1179,6 +1179,18 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	return { ok: true, runRev: s.save.runRev, rev: adminPatchSerial, persist: persists(s), save: s.save };
 }
 
+/** §9.3: the body in the town, as the simulation has it, for the admin's players table (read-only) */
+function liveViewOf(player: Player): AdminLiveView | undefined {
+	const sp = mpHost?.playerOf(player);
+	if (mpHost === undefined || sp === undefined) return undefined;
+	return {
+		dead: sp.state.dead,
+		hp: sp.state.hp,
+		hpMax: sp.state.hpMax,
+		idleS: mpHost.simulation.idleSeconds(sp),
+	};
+}
+
 admin = startAdminServer({
 	jobId: JOB_ID,
 	session(player) {
@@ -1194,6 +1206,7 @@ admin = startAdminServer({
 			lastReport: s.lastReport,
 			joinedAt: s.joinedAt,
 			patchPending: s.patchRev !== undefined,
+			live: liveViewOf(player),
 		};
 	},
 	edit(player, ops) {

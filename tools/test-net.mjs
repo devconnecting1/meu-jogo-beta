@@ -208,6 +208,7 @@ const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
 const TIT = require(join(SRC, "shared/data/titles.ts"));
+const SAVE = require(join(SRC, "shared/game/save.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -1140,7 +1141,7 @@ test("Fx: malformed packets are refused", () => {
 
 // ---------------------------------------------------------------- 6. World (S→C, reliable)
 
-function randWorldEvent(kind = rint(1, 17)) {
+function randWorldEvent(kind = rint(1, 18)) {
 	const dynId = () => CFG.DYNAMIC_ID_BASE + rint(0, 100000);
 	switch (kind) {
 		case P.WorldEv.SolidAdd:
@@ -1221,6 +1222,9 @@ function randWorldEvent(kind = rint(1, 17)) {
 			};
 		case P.WorldEv.PlayerLeft:
 			return { t: kind, slot: rint(0, 5) };
+		case P.WorldEv.PlayerTally:
+			// MP-23: the scoreboard's numbers -- this life's day (u16) and the zombies put down (u32, the save's ceiling)
+			return { t: kind, slot: rint(0, 5), lifeDay: rint(1, P.TALLY_DAY_MAX), kills: rint(0, P.TALLY_KILLS_MAX) };
 		case P.WorldEv.PlayerLife:
 			return { t: kind, slot: rint(0, 5), state: rint(0, 3) };
 		case P.WorldEv.WorldReset: {
@@ -1324,6 +1328,11 @@ function compareWorldEvent(a, b) {
 			break;
 		case P.WorldEv.PlayerLeft:
 			eq("slot", b.slot, a.slot);
+			break;
+		case P.WorldEv.PlayerTally:
+			eq("tally slot", b.slot, a.slot);
+			eq("tally life day", b.lifeDay, a.lifeDay);
+			eq("tally kills", b.kills, a.kills);
 			break;
 		case P.WorldEv.PlayerLife:
 			eq("slot", b.slot, a.slot);
@@ -1504,6 +1513,47 @@ test("World: the roster carries the title under the name, and nothing but a real
 		P.encodeWorld({ tick: 1, events: [{ t: P.WorldEv.Announce, msg: 5, arg: 900 }] }).packets[0],
 	);
 	eq("other Announce kinds are untouched", boss?.events[0].arg, 900);
+});
+
+test("World: PlayerTally carries the scoreboard's two numbers, and refuses what cannot be (MP-23)", () => {
+	const tally = { t: P.WorldEv.PlayerTally, slot: 3, lifeDay: 12, kills: 137 };
+	const pkt = P.encodeWorld({ tick: 9, events: [tally] }).packets[0];
+	// header 5 B + tag 1 B + slot 1 B + lifeDay u16 + kills u32
+	eq("PlayerTally size", buffer.len(pkt), 5 + 8);
+	sizes.push(["World PlayerTally", `${buffer.len(pkt) - 5} B`, "slot, life day, zombies put down (MP-23)"]);
+	const d = P.decodeWorld(pkt);
+	ok(d !== undefined, "the tally did not decode");
+	if (d === undefined) return;
+	eq("tally type", d.events[0].t, P.WorldEv.PlayerTally);
+	eq("tally life day", d.events[0].lifeDay, 12);
+	eq("tally kills", d.events[0].kills, 137);
+	eq("the kill ceiling is the save's", P.TALLY_KILLS_MAX, SAVE.SAVE_LIMITS.COUNTER_MAX);
+	// an encoder handed out-of-range numbers writes the nearest valid ones, never a byte the decoder refuses
+	const clamped = P.decodeWorld(
+		P.encodeWorld({ tick: 1, events: [{ ...tally, lifeDay: 99999, kills: 1e12 }] }).packets[0],
+	);
+	eq("a life day past the u16 is clamped on encode", clamped?.events[0].lifeDay, P.TALLY_DAY_MAX);
+	eq("a kill count past the ceiling is clamped on encode", clamped?.events[0].kills, P.TALLY_KILLS_MAX);
+	const zero = P.decodeWorld(P.encodeWorld({ tick: 1, events: [{ ...tally, lifeDay: 0, kills: -5 }] }).packets[0]);
+	eq("day 0 is written as day 1", zero?.events[0].lifeDay, 1);
+	eq("negative kills are written as 0", zero?.events[0].kills, 0);
+	// the decoder refuses what no server writes (a hostile or corrupt packet)
+	const raw = bytesOf(pkt);
+	const badSlot = raw.slice();
+	badSlot[6] = 6;
+	eq("tally for slot 6", P.decodeWorld(bufOf(badSlot)), undefined);
+	const dayZero = raw.slice();
+	dayZero[7] = 0;
+	dayZero[8] = 0;
+	eq("tally for life day 0", P.decodeWorld(bufOf(dayZero)), undefined);
+	const tooMany = raw.slice();
+	// kills u32 little-endian at bytes 9..12: 0xFFFFFFFF is past the save's ceiling
+	tooMany[9] = 255;
+	tooMany[10] = 255;
+	tooMany[11] = 255;
+	tooMany[12] = 255;
+	eq("tally with more kills than a save can hold", P.decodeWorld(bufOf(tooMany)), undefined);
+	eq("a truncated tally", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
 });
 
 test("World: WorldInit in blocks of ≤ 16 KB", () => {
