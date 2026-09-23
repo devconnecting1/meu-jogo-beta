@@ -273,6 +273,14 @@ function install() {
 	defineMethod(String.prototype, "size", function () {
 		return Buffer.byteLength(this.valueOf(), "utf8");
 	});
+	// String.prototype.sub is a legacy JS method (it wraps the string in <sub>): replaced by Luau's string.sub
+	// (client/view/buildingSigns.ts reads its grids with it, like client/ui/itemIcon.ts)
+	defineMethod(String.prototype, "sub", function (i = 1, j = -1) {
+		const n = this.length;
+		const s = i < 0 ? Math.max(n + i + 1, 1) : Math.max(i, 1);
+		const e = j < 0 ? n + j + 1 : Math.min(j, n);
+		return s > e ? "" : this.slice(s - 1, e);
+	});
 	const jsSort = Array.prototype.sort;
 	defineMethod(Array.prototype, "sort", function (cmp) {
 		if (!cmp) return jsSort.call(this);

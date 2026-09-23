@@ -1,5 +1,5 @@
 /*
- * The town on screen: ground, roads, crosswalks, buildings (floor, roof, rooftop emblem), walls, the map border,
+ * The town on screen: ground, roads, crosswalks, buildings (floor, roof, signage), walls, the map border,
  * trees, cars, pump islands, bins and the structures players build -- everything that stands still in the world.
  *
  * This is the drawing half of what `gameLoop.ts` drew until now, moved here verbatim (docs/MULTIPLAYER.md §11.3:
@@ -9,7 +9,7 @@
  *
  * Two owners draw through it, each with its own Renderer and Camera: the run (`GameLoop.render`) and the menus'
  * town flyover (client/view/townFlyover.ts, DESIGN_RULES UI-10), so the town behind the lobby is the very town the
- * survivor walks into -- the same roofs, emblems and cars, never a picture of it.
+ * survivor walks into -- the same roofs, signs and cars, never a picture of it.
  *
  * It holds no world state of its own: the WorldData is passed in on every call.
  *
@@ -28,7 +28,8 @@ import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import type { FloorKind } from "shared/game/interiors";
-import { GroundRect, hash01, Lot, querySolids, Rect, Road, Solid, WorldData } from "shared/game/world";
+import { DoorSide, GroundRect, hash01, Lot, querySolids, Rect, Road, Solid, WorldData } from "shared/game/world";
+import { drawBuildingSign } from "./buildingSigns";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
@@ -501,7 +502,7 @@ export class WorldView {
 				if (!this.drawBuildingArt(r, cam, s, v) && overlaps(s.x - 30, s.y - 30, s.w + 60, s.h + 60, v)) {
 					this.drawBuilding(r, cam, s, v);
 				}
-				this.drawSign(r, cam, s, v);
+				this.drawSignage(r, cam, v, s);
 			} else if (s.parentId !== undefined) {
 				// a building's walls, windows and furniture: nothing to draw under a roof that is on
 				if (s.kind === "window") continue;
@@ -686,55 +687,31 @@ export class WorldView {
 	}
 
 	/**
-	 * The rooftop sign, for both drawings (the one call of `drawEmblem`): centred on the main wing -- the part the
-	 * main entrance opens into (`Solid.mainWing`) -- or on the record's box for a building without parts.
+	 * How the building says what it is (client/view/buildingSigns.ts, DESIGN_RULES EDI-03, ART-07): the storefront
+	 * sign beside the main entrance and, on a hospital, the helipad. The ONE hook of the signage, shared by the flat
+	 * and the art drawing and by the menus' flyover: it hands the sign the building's type, its main entrance (where,
+	 * and in which wall) and the roof rect the sign stands on. A building of several wings and entrances
+	 * (shared/game/interiors.ts) hands its MAIN entrance (`doorX`/`doorY`/`doorSide`: the one facing the street) and
+	 * its main wing (`Solid.mainWing`: the part behind the stretch of facade that holds that door, so the sign stays
+	 * on that facade -- in a porch or a school's entrance court too -- and the helipad on that wing's roof). Called
+	 * once per building per frame, from `drawSolids`, for the flat and the art drawing alike. Nothing else here knows
+	 * a sign exists.
 	 */
-	private drawSign(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
-		const roofA = s.roofAlpha ?? 1;
-		if (roofA <= 0.01) return;
-		const wing = s.mainWing ?? s;
-		if (!overlaps(wing.x - 90, wing.y - 90, wing.w + 180, wing.h + 180, v)) return;
-		this.drawEmblem(r, cam, s.buildingType ?? 1, wing.x + wing.w / 2, wing.y + wing.h / 2, roofA);
-	}
-
-	/** rooftop sign so shops can be found from afar */
-	private drawEmblem(r: Renderer, cam: Camera, bt: number, cx: number, cy: number, a: number): void {
-		const z = Z.roof + 2;
-		if (bt === 4 || bt === 6) {
-			const plate = bt === 4 ? 150 : 110;
-			const crossColor = bt === 4 ? COLORS.uiRed : COLORS.uiGreen;
-			r.drawRect(cam, cx, cy, { w: plate, h: plate, color: WHITE, alpha: a, cornerRadius: 12, zIndex: z });
-			r.drawRect(cam, cx, cy, { w: plate * 0.72, h: plate * 0.24, color: crossColor, alpha: a, zIndex: z + 1 });
-			r.drawRect(cam, cx, cy, { w: plate * 0.24, h: plate * 0.72, color: crossColor, alpha: a, zIndex: z + 1 });
-		} else if (bt === 9) {
-			r.drawCircle(cam, cx, cy, 110, {
-				color: COLORS.uiPanel,
-				alpha: a,
-				stroke: COLORS.uiRed,
-				strokeThickness: 4,
-				strokeAlpha: a,
-				zIndex: z,
-			});
-			r.drawRect(cam, cx, cy, { w: 120, h: 8, color: COLORS.uiRed, alpha: a, zIndex: z + 1 });
-			r.drawRect(cam, cx, cy, { w: 8, h: 120, color: COLORS.uiRed, alpha: a, zIndex: z + 1 });
-		} else if (bt === 5) {
-			r.drawCircle(cam, cx, cy, 90, { color: COLORS.uiRed, alpha: a, zIndex: z });
-			r.drawRect(cam, cx, cy, { w: 30, h: 44, color: WHITE, alpha: a, cornerRadius: 6, zIndex: z + 1 });
-		} else if (bt === 7 || bt === 8 || bt === 11 || bt === 10 || bt === 3) {
-			const accent = bt === 3 ? COLORS.uiYellow : bt === 11 ? WHITE : bt === 10 ? COLORS.uiBlue : COLORS.uiGreen;
-			r.drawRect(cam, cx, cy, {
-				w: 160,
-				h: 56,
-				color: COLORS.uiPanel,
-				alpha: a,
-				cornerRadius: 8,
-				stroke: accent,
-				strokeThickness: 3,
-				strokeAlpha: a,
-				zIndex: z,
-			});
-			r.drawRect(cam, cx, cy, { w: 110, h: 10, color: accent, alpha: a, zIndex: z + 1 });
-		}
+	private drawSignage(r: Renderer, cam: Camera, v: ViewRect, s: Solid): void {
+		const a = s.roofAlpha ?? 1;
+		if (a <= 0.01) return;
+		drawBuildingSign(
+			r,
+			cam,
+			v,
+			s.buildingType ?? 1,
+			s.doorX ?? s.x + s.w / 2,
+			s.doorY ?? s.y + s.h,
+			s.doorSide ?? "bottom",
+			s.mainWing ?? s,
+			a,
+			this.shadow,
+		);
 	}
 
 	private drawWall(r: Renderer, cam: Camera, s: Solid): void {
@@ -1418,14 +1395,20 @@ export class WorldView {
 			}
 		}
 		if (isHouse) {
-			// a brick chimney on most houses, on the main wing's ridge, a quarter along it
+			// a brick chimney on most houses, a quarter along the ridge of the roof part over the main wing
 			const hc = hash01(s.x, s.y, 61);
 			const chimney = artId("chimney");
 			if (hc < 0.7) {
-				const alongX = wing.w >= wing.h;
+				let gable: Rect = wing;
+				for (const p of parts) {
+					if (wx >= p.x && wx <= p.x + p.w && wy >= p.y && wy <= p.y + p.h) gable = p;
+				}
+				const gx = gable.x + gable.w / 2;
+				const gy = gable.y + gable.h / 2;
+				const alongX = gable.w >= gable.h;
 				const k = hc < 0.35 ? -0.28 : 0.28;
-				const chx = alongX ? wx + wing.w * k : wx + 22;
-				const chy = alongX ? wy - 22 : wy + wing.h * k;
+				const chx = alongX ? gx + gable.w * k : gx + 22;
+				const chy = alongX ? gy - 22 : gy + gable.h * k;
 				if (chimney !== undefined) {
 					const o = artOpts(chimney, 32, 32, Z.roof + 3);
 					o.alpha = roofA;
@@ -1444,7 +1427,7 @@ export class WorldView {
 				}
 			}
 		} else {
-			this.drawRoofUnits(r, cam, wing, wx, wy, roofA);
+			this.drawRoofUnits(r, cam, wing, s.doorSide, wx, wy, roofA);
 		}
 		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
 		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3]);
@@ -1452,21 +1435,39 @@ export class WorldView {
 		return true;
 	}
 
-	/** an air conditioner and a vent on a flat roof, in two corners the rooftop sign leaves free (one sprite each) */
-	private drawRoofUnits(r: Renderer, cam: Camera, s: Rect, cx: number, cy: number, a: number): void {
+	/**
+	 * An air conditioner and a vent on a flat roof (the main wing `s` of a building whose main entrance is in wall
+	 * `side`), one at each end of its back half: the front, over the entrance, is where the storefront sign stands
+	 * (client/view/buildingSigns.ts), and a hospital's middle is its helipad. One sprite each.
+	 */
+	private drawRoofUnits(
+		r: Renderer,
+		cam: Camera,
+		s: Rect,
+		side: DoorSide | undefined,
+		cx: number,
+		cy: number,
+		a: number,
+	): void {
 		const ac = artId("acUnit");
 		const vent = artId("vent");
 		const h = hash01(s.x, s.y, 71);
-		// two opposite corners, picked by the building
+		// which end of the back the air conditioner takes, picked by the building
 		const flip = h < 0.5 ? 1 : -1;
+		// the entrance wall's outward normal (nx, ny): the units go the other way
+		const nx = side === "left" ? -1 : side === "right" ? 1 : 0;
+		const ny = nx !== 0 ? 0 : side === "top" ? -1 : 1;
+		const alongX = ny !== 0;
 		for (const k of SIDES) {
 			const big = k < 0;
 			const id = big ? ac : vent;
 			if (id === undefined) continue;
 			if (!big && h > 0.85) continue;
 			const size = artSize(big ? "acUnit" : "vent");
-			const ux = cx + k * flip * s.w * (0.26 + 0.06 * hash01(s.x, s.y + k, 72));
-			const uy = cy + k * s.h * (0.24 + 0.06 * hash01(s.x + k, s.y, 73));
+			const along = k * flip * (alongX ? s.w : s.h) * (0.26 + 0.06 * hash01(s.x, s.y + k, 72));
+			const back = (alongX ? s.h : s.w) * (0.24 + 0.06 * hash01(s.x + k, s.y, 73));
+			const ux = alongX ? cx + along : cx - nx * back;
+			const uy = alongX ? cy - ny * back : cy + along;
 			const o = artOpts(id, size.w * WORLD_TEXEL, size.h * WORLD_TEXEL, Z.roof + 1);
 			o.alpha = a;
 			r.drawRect(cam, ux, uy, o);

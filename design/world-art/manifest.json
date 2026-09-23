@@ -566,6 +566,86 @@
 			"description": "brick chimney on a house roof"
 		},
 		{
+			"name": "signSchool",
+			"file": "signSchool.png",
+			"kind": "sprite",
+			"w": 32,
+			"h": 20,
+			"description": "storefront sign (type 3): an open book on a chalkboard"
+		},
+		{
+			"name": "signHospital",
+			"file": "signHospital.png",
+			"kind": "sprite",
+			"w": 32,
+			"h": 20,
+			"description": "storefront sign (type 4): the white H of the hospital road sign, on blue"
+		},
+		{
+			"name": "signGas",
+			"file": "signGas.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 5): a fuel pump, its hose and nozzle hanging on its side"
+		},
+		{
+			"name": "signPharmacy",
+			"file": "signPharmacy.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 6): a green cross lightbox"
+		},
+		{
+			"name": "signMarket",
+			"file": "signMarket.png",
+			"kind": "sprite",
+			"w": 32,
+			"h": 20,
+			"description": "storefront sign (type 7): a shopping cart"
+		},
+		{
+			"name": "signGrocery",
+			"file": "signGrocery.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 8): a paper grocery bag with a baguette and an apple"
+		},
+		{
+			"name": "signGuns",
+			"file": "signGuns.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 9): a pistol"
+		},
+		{
+			"name": "signClothes",
+			"file": "signClothes.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 10): a T-shirt"
+		},
+		{
+			"name": "signDiner",
+			"file": "signDiner.png",
+			"kind": "sprite",
+			"w": 32,
+			"h": 20,
+			"description": "storefront sign (type 11): a plate between a fork and a knife"
+		},
+		{
+			"name": "helipad",
+			"file": "helipad.png",
+			"kind": "sprite",
+			"w": 64,
+			"h": 64,
+			"description": "hospital roof: the heliport's red H on a white cross"
+		},
+		{
 			"name": "floorCarpet",
 			"file": "floorCarpet.png",
 			"kind": "tile",

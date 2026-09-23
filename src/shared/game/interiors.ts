@@ -716,7 +716,7 @@ const SCHOOL_ROOMS: Record<string, RoomKind> = {
 /** the school (1064 × 812): classrooms on a corridor with an exit at each end; a courtyard notch */
 const SCHOOL: Array<Template> = [
 	{
-		cols: [31, 38, 31],
+		cols: [29, 42, 29],
 		rows: [38, 21, 41],
 		map: [
 			["C", ".", "c"],
@@ -776,7 +776,7 @@ const HOSPITAL_ROOMS: Record<string, RoomKind> = {
 /** the hospital (1064 × 812): reception block on the street, a corridor, wards and the treatment room (ER doors) */
 const HOSPITAL: Array<Template> = [
 	{
-		cols: [32, 36, 32],
+		cols: [29, 42, 29],
 		rows: [27, 21, 52],
 		map: [
 			[".", "E", "."],
@@ -800,7 +800,7 @@ const HOSPITAL: Array<Template> = [
 	},
 	{
 		cols: [36, 28, 36],
-		rows: [34, 21, 45],
+		rows: [42, 22, 36],
 		map: [
 			["E", "E", "M"],
 			["H", "H", "H"],
@@ -1193,6 +1193,28 @@ class Planner {
 			this.mainHi = hi;
 		}
 		return cost;
+	}
+
+	/**
+	 * The main wing (local): the stretch of facade that holds the main door -- the cells of the main row, either
+	 * side of the main cell, that are inside and have the street (or the porch, or the entrance court) in front,
+	 * whatever room they are -- from that facade back through every following row in which all of those columns
+	 * are still inside. Inside the footprint by construction, and its street edge IS the main door's facade.
+	 */
+	mainWingLocal(): LR {
+		const [mi, mj] = this.tpl.main;
+		const front = (i: number) => this.at(i, mj) >= 0 && this.at(i, mj - 1) < 0;
+		let lo = mi;
+		let hi = mi;
+		while (lo > 0 && front(lo - 1)) lo--;
+		while (hi < this.nc - 1 && front(hi + 1)) hi++;
+		let j1 = mj;
+		const full = (j: number) => {
+			for (let i = lo; i <= hi; i++) if (this.at(i, j) < 0) return false;
+			return true;
+		};
+		while (j1 + 1 < this.nr && full(j1 + 1)) j1++;
+		return lr(this.us[lo], this.us[hi + 1], this.vs[mj], this.vs[j1 + 1]);
 	}
 
 	/** the edge of cell (i, j) on local side s */
@@ -2604,19 +2626,9 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	}
 	for (const d of pl.decor) out.decor.push({ ...f.rect(d), kind: d.kind, rot: d.rot });
 	for (const s of pl.loot) out.loot.push({ x: f.x(s.u, s.v), y: f.y(s.u, s.v) });
-	// the main wing: the part the main door is in (its gap lies inside the part: exterior walls are inside cells)
-	let wingArea = -1;
-	for (const p of out.parts) {
-		const has = out.doorX >= p.x && out.doorX <= p.x + p.w && out.doorY >= p.y && out.doorY <= p.y + p.h;
-		if (has) {
-			out.mainWing = p;
-			break;
-		}
-		if (p.w * p.h > wingArea) {
-			wingArea = p.w * p.h;
-			out.mainWing = p;
-		}
-	}
+	// the main wing: behind the stretch of facade that holds the main door, as deep as the footprint goes on
+	// behind all of it (where the storefront sign stands and the roof units sit, client/view/buildingSigns.ts)
+	out.mainWing = f.rect(pl.mainWingLocal());
 	// no loot furniture reachable (should not happen): the middle of the biggest room
 	if (out.loot.size() === 0 && out.rooms.size() > 0) {
 		let best = out.rooms[0];

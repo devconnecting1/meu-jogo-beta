@@ -84,6 +84,16 @@ export type WorldArtName =
 	| "acUnit"
 	| "vent"
 	| "chimney"
+	| "signSchool"
+	| "signHospital"
+	| "signGas"
+	| "signPharmacy"
+	| "signMarket"
+	| "signGrocery"
+	| "signGuns"
+	| "signClothes"
+	| "signDiner"
+	| "helipad"
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath";
@@ -225,6 +235,26 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
+	/** sprite: storefront sign (type 3): an open book on a chalkboard */
+	signSchool: { id: "", w: 32, h: 20 },
+	/** sprite: storefront sign (type 4): the white H of the hospital road sign, on blue */
+	signHospital: { id: "", w: 32, h: 20 },
+	/** sprite: storefront sign (type 5): a fuel pump, its hose and nozzle hanging on its side */
+	signGas: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 6): a green cross lightbox */
+	signPharmacy: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 7): a shopping cart */
+	signMarket: { id: "", w: 32, h: 20 },
+	/** sprite: storefront sign (type 8): a paper grocery bag with a baguette and an apple */
+	signGrocery: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 9): a pistol */
+	signGuns: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 10): a T-shirt */
+	signClothes: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
+	signDiner: { id: "", w: 32, h: 20 },
+	/** sprite: hospital roof: the heliport's red H on a white cross */
+	helipad: { id: "", w: 64, h: 64 },
 	/** tile: bedroom / office carpet: a low loop pile */
 	floorCarpet: { id: "", w: 16, h: 16 },
 	/** tile: kitchen floor: checker tiles */
@@ -303,6 +333,16 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
+	"signSchool",
+	"signHospital",
+	"signGas",
+	"signPharmacy",
+	"signMarket",
+	"signGrocery",
+	"signGuns",
+	"signClothes",
+	"signDiner",
+	"helipad",
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",

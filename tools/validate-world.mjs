@@ -698,6 +698,34 @@ const CATEGORY = {
 };
 const REQUIRED = { 4: "medical", 6: "medical", 9: "ammo", 7: "food", 8: "food", 11: "food", 5: "oil", 10: "cloth" };
 
+/**
+ * How each type says what it is from outside (EDI-03): the storefront signs of shared/data/buildingSigns.ts
+ * (ART-07), one per type, each its own texture and its own picture -- or, on an older checkout (PZ_SRC), the
+ * types worldView.drawEmblem draws a rooftop emblem for. { types, own } where `own` lists what is not distinct.
+ */
+function signTypes() {
+	const data = join(SRC, "shared/data/buildingSigns.ts");
+	if (!existsSync(data)) {
+		const old = emblemTypes();
+		return old === undefined ? undefined : { types: old, own: [], what: "rooftop emblem in worldView.drawEmblem" };
+	}
+	const { BUILDING_SIGNS } = require(data);
+	const types = new Set();
+	const own = [];
+	const byTexture = new Map();
+	const byPicture = new Map();
+	for (const [key, sign] of Object.entries(BUILDING_SIGNS)) {
+		const t = Number(key);
+		types.add(t);
+		const picture = sign.rows.join("/");
+		if (byTexture.has(sign.texture)) own.push(`types ${byTexture.get(sign.texture)} and ${t} share a sign texture`);
+		if (byPicture.has(picture)) own.push(`types ${byPicture.get(picture)} and ${t} share a sign picture`);
+		byTexture.set(sign.texture, t);
+		byPicture.set(picture, t);
+	}
+	return { types, own, what: "storefront sign in shared/data/buildingSigns.ts" };
+}
+
 function emblemTypes() {
 	// the town's drawing moved out of the game loop into client/view/worldView.ts (the run and the menus' flyover
 	// share it, DESIGN_RULES UI-10); an older checkout still has it in gameLoop.ts
@@ -1056,8 +1084,11 @@ function validate(seed) {
 		}
 	}
 
-	// --- EDI-03: type ↔ tag ↔ loot table ↔ roof colour ↔ rooftop emblem
-	const emblems = emblemTypes();
+	// --- EDI-03: type ↔ tag ↔ loot table ↔ roof colour ↔ storefront sign (ART-07)
+	const signs = signTypes();
+	if (signs === undefined) fail("EDI-03", "no storefront signs (shared/data/buildingSigns.ts) and no emblems", 0, 0);
+	for (const msg of signs?.own ?? []) fail("EDI-03", msg, 0, 0);
+	const signed = new Set();
 	const roofByType = new Map();
 	for (const b of buildings) {
 		const t = b.buildingType;
@@ -1077,8 +1108,13 @@ function validate(seed) {
 			}
 			roofByType.set(t, key);
 		}
-		if (emblems && t >= 3 && !emblems.has(t)) {
-			fail("EDI-03", `${b.tags} (type ${t}) has no rooftop emblem in worldView.drawEmblem`, cx(b), cy(b));
+		// every type that is not a house says what it is from the street, and a house has no sign (once per type)
+		if (signs && !signed.has(t)) {
+			if (t >= 3 && !signs.types.has(t))
+				fail("EDI-03", `${b.tags} (type ${t}) has no ${signs.what}`, cx(b), cy(b));
+			if (t < 3 && signs.types.has(t))
+				fail("EDI-03", `a ${b.tags} (type ${t}) has a ${signs.what}`, cx(b), cy(b));
+			signed.add(t);
 		}
 	}
 	const seenRoof = new Map();
