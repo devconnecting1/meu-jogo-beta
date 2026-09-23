@@ -63,6 +63,7 @@ import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView"
 import { drawPet } from "./view/cosmeticsView";
 import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
+import { ageFlinches } from "./view/solidFlinch";
 
 const Players = game.GetService("Players");
 
@@ -665,6 +666,9 @@ export class GameLoop {
 		// with the systems above silent, the blasts, the struck solids and the server's projectiles have
 		// nobody left to carry them but the view that put them there
 		if (mirrored) this.fxView.advance(refs, dt);
+		// a struck tree or car flinches on this client (E, or the server's SolidShake), and from MP_PHASE 2 no
+		// system here ages it any more: without this clock the shake never ended (solidFlinch.ts)
+		if (SERVER_ACTORS) ageFlinches(dt);
 		this.daynight.update(dt);
 		// shake before cam.update, particles before particles.update: same frame as before F0
 		this.playFx(ctx);
@@ -681,7 +685,8 @@ export class GameLoop {
 
 	/**
 	 * Roofs and tree canopies around the view (grid query, no full scan).
-	 * hitShake is only READ here (drawing); its countdown belongs to the AI/combat systems.
+	 * hitShake is only READ here (drawing); its countdown belongs to the AI below MP_PHASE 2 and to
+	 * view/solidFlinch.ts from MP_PHASE 2 on.
 	 */
 	private updateWorldFx(cam: Camera, dt: number): void {
 		const v = cam.viewRect(400);
