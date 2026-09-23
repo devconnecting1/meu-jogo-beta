@@ -1184,8 +1184,10 @@ const isCall = (file, st, what) => ts.isExpressionStatement(st) && file.text(st.
 section("7) the client builds the server's town and listens for the news (source guards)", () => {
 	const loop = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
 	check(!/generateTown\(\s*DESIGN\.TOWN_SEED\s*\)/.test(loop), "GameLoop no longer always builds DESIGN.TOWN_SEED");
+	// the town of that seed is taken from the lobby's flyover when it already generated it (client/boot/townCache.ts,
+	// npm run test:cache: same seed = that copy, a new seed or a world reset = a new town)
 	check(
-		/generateTown\(\s*this\.townSeed\s*\)/.test(loop) && /netTownSeed\(\)/.test(loop),
+		/(generateTown|takeTown)\(\s*this\.townSeed\s*\)/.test(loop) && /netTownSeed\(\)/.test(loop),
 		"…it builds the server's seed",
 	);
 	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");

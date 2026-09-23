@@ -28,13 +28,16 @@
  * the UI layer (`pinFlyover`), under screens that are see-through; switching between them never touches it, so the
  * glide goes on without a restart, a cut or a new warm-up. The run RELEASES it the moment it starts
  * (`releaseFlyover`): every Frame is destroyed and the next menu builds a new pool. Only the town's data is cached
- * between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds it behind the logo.
+ * between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds it behind the logo. The
+ * match TAKES that copy instead of generating the same town again (client/boot/townCache.ts): it moves to the match,
+ * this flyover lets go of it first, and the next menu draws a freshly generated one -- never a street the match changed.
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { ZOMBIE_BASE_RADIUS } from "shared/game/entities";
-import { generateTown, rectHitsSolid, Solid, WorldData } from "shared/game/world";
+import { rectHitsSolid, Solid, WorldData } from "shared/game/world";
+import * as TownCache from "../boot/townCache";
 import { darkAlphaAt } from "shared/sim/clock";
 import { onLayoutChange, reducedMotion, setWorldTransparency, viewportSize } from "../ui/skin";
 import { THEME, TRANSPARENCY } from "../ui/theme";
@@ -82,23 +85,19 @@ const Z_NIGHT = 2;
 const Z_SCRIM = 3;
 const Z_FADE = 4;
 
-// ---------------------------------------------------------------- the town's data, cached by seed
+// ---------------------------------------------------------------- the town's data (client/boot/townCache.ts)
 
-let cachedSeed = -1;
-let cachedTown: WorldData | undefined;
-
-/** the town of `seed`, generated once and kept (the menus come back to it after every run) */
+/**
+ * The town of `seed` for the menus, generated once and kept until the match takes it (client/boot/townCache.ts: the
+ * match gets this very copy instead of generating it again, and the next menu builds a fresh one).
+ */
 export function townFor(seed: number): WorldData {
-	if (cachedTown === undefined || cachedSeed !== seed) {
-		cachedTown = generateTown(seed);
-		cachedSeed = seed;
-	}
-	return cachedTown;
+	return TownCache.townFor(seed);
 }
 
 /** builds the town now (behind the logo) so the first lobby does not stall on it */
 export function prewarmTown(seed: number): void {
-	townFor(seed);
+	TownCache.prewarmTown(seed);
 }
 
 // ---------------------------------------------------------------- shots
@@ -296,6 +295,11 @@ export class TownFlyover {
 		return this.renderer.drawCount();
 	}
 
+	/** is this the flyover drawing `world`? (a town the match takes is let go of first: client/boot/townCache.ts) */
+	shows(world: WorldData): boolean {
+		return this.world === world;
+	}
+
 	// ------------------------------------------------------------ the shot
 
 	private nextShot(): void {
@@ -484,6 +488,12 @@ export function releaseFlyover(): void {
 	current?.destroy();
 	current = undefined;
 }
+
+// the match takes the menus' town (client/boot/townCache.ts takeTown): a flyover still drawing it lets go before the
+// match gets it, so no menu ever draws a street the match has changed (the next menu draws a freshly generated copy)
+TownCache.onTownTaken(world => {
+	if (current !== undefined && current.shows(world)) releaseFlyover();
+});
 
 /** the flyover alive right now, if any (tests) */
 export function activeFlyover(): TownFlyover | undefined {
