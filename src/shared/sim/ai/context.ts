@@ -138,6 +138,12 @@ export interface BrainState {
 	 */
 	anyTrap: boolean;
 	trapKey: number;
+	/**
+	 * Where this tick's pass over the horde starts: right after the last zombie the previous tick's rays reached, so
+	 * the per-tick budgets (rays, shouts) are shared out round the whole horde instead of served to one end of it.
+	 * -1: nobody was cut off, start with the newest.
+	 */
+	scanFrom: number;
 	tracks: Map<PlayerState, PlayerTrack>;
 }
 
@@ -152,6 +158,7 @@ export function newBrainState(): BrainState {
 		ringSeq: 0,
 		anyTrap: false,
 		trapKey: -1,
+		scanFrom: -1,
 		tracks: new Map<PlayerState, PlayerTrack>(),
 	};
 }

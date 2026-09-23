@@ -58,6 +58,8 @@ const sepNear: Array<number> = [];
 const nearSolids: Array<Solid> = [];
 const seekSolids: Array<Solid> = [];
 const alertOut: Array<number> = [];
+/** which zombies of this tick's pass died (removed once the pass is over) */
+const goneAt: Array<boolean> = [];
 /** line-of-sight rays left this frame, and shouts left this frame */
 let losBudget = T.LOS_BUDGET;
 let shoutsLeft = Alert.ALERT_SHOUTS_PER_TICK;
@@ -519,6 +521,7 @@ function syncWorld(refs: Ctx.AiRefs): void {
 		// value plays differently from the same world started again. That is a difference the determinism
 		// autotest of §12.2 exists to catch, and the only place it can be fixed is here.
 		refs.ai.frameNo = 0;
+		refs.ai.scanFrom = -1;
 		refs.ai.tracks.clear();
 		refs.ai.seenMorning = refs.clock.morningCount;
 		structureLights.clear();
@@ -1429,6 +1432,10 @@ function senseTarget(
 			} else {
 				z.notice = math.max(0, (z.notice ?? 0) - Sense.NOTICE_DECAY * interval);
 			}
+		} else if (z.losClear === true && (z.senseCd ?? 0) < -T.LOS_STALE) {
+			// the tick's rays ran out before its turn, tick after tick: an "in view" this old is not trusted (the
+			// survivor may have gone behind a wall since), and it counts as out of view until it gets its look
+			z.losClear = false;
 		}
 	} else if (z.losClear === true && (p.dead || distP > Ctx.sensesOf(refs, pi).sight)) {
 		// between looks the last answer stands, but never for a survivor who is now out of range (a respawn, a
@@ -1796,13 +1803,27 @@ export function updateZombies(refs: Ctx.AiRefs, dt: number): void {
 	updateExplosions(refs, dt);
 	updateCrowd(refs);
 	computeSeparation(refs);
-	for (let i = refs.zombies.size() - 1; i >= 0; i--) {
-		const z = refs.zombies[i];
-		if (updateOne(refs, z, i, dt)) {
-			// everything removed HERE died (the population recycles the living ones, and says so itself)
-			if (refs.onZombieGone !== undefined) refs.onZombieGone(z, true);
-			refs.zombies.remove(i);
-		}
+	const zs = refs.zombies;
+	const n = zs.size();
+	// Newest first, but starting where the last tick's rays ran out: the tick's budgets (rays, shouts) are spent in
+	// this order, and one fixed order served the newest zombies every tick while the oldest waited behind them for
+	// a ray they never got, keeping a stale "in view" (the review of 66f6373). Uncontended, it is newest first.
+	const from = refs.ai.scanFrom >= 0 && refs.ai.scanFrom < n ? refs.ai.scanFrom : n - 1;
+	let cut = -1;
+	for (let i = 0; i < n; i++) goneAt[i] = false;
+	for (let k = 0; k < n; k++) {
+		const i = (from - k + n) % n;
+		if (cut < 0 && losBudget <= 0) cut = i;
+		goneAt[i] = updateOne(refs, zs[i], i, dt);
+	}
+	refs.ai.scanFrom = cut;
+	// the dead leave after the pass, so every index above stayed the one the separation was computed for
+	for (let i = n - 1; i >= 0; i--) {
+		if (!goneAt[i]) continue;
+		const z = zs[i];
+		// everything removed HERE died (the population recycles the living ones, and says so itself)
+		if (refs.onZombieGone !== undefined) refs.onZombieGone(z, true);
+		zs.remove(i);
 	}
 }
 

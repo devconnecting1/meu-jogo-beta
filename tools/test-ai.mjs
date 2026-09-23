@@ -685,6 +685,34 @@ function testSight() {
 		};
 		const alive = alphaBeside(false);
 		const corpse = alphaBeside(true);
+		// (h3) the tick's rays are shared out: 200 zombies round one survivor want more rays than a tick has, and
+		// none of them waits for ever behind the same others (the order the budget is spent in turns every tick)
+		{
+			setSeed(SEED);
+			const world = W.createWorld(4000, 4000);
+			const refs = makeRefs(world, 2000, 2000);
+			const N = 200;
+			const crowd = [];
+			for (let i = 0; i < N; i++) {
+				const a = (i / N) * Math.PI * 2;
+				const r = 300 + (i % 5) * 30;
+				crowd.push(still(addZombie(refs, 1, 2000 + Math.cos(a) * r, 2000 + Math.sin(a) * r, a + Math.PI)));
+			}
+			const looked = new Set();
+			let worstWait = 0;
+			run(refs, 45, () => {
+				for (const z of crowd) {
+					if (z.losClear === true) looked.add(z.id);
+					worstWait = Math.max(worstWait, -(z.senseCd ?? 0));
+				}
+			});
+			for (const z of crowd) if (z.losClear === true) looked.add(z.id);
+			check(
+				looked.size() === N && worstWait <= tuning.LOS_STALE,
+				`200 zombies in view, ${tuning.LOS_BUDGET} rays a tick: every one got its look within 0.75 s (${looked.size()}/${N}), ` +
+					`the longest wait past its turn ${(worstWait * 1000).toFixed(0)} ms (≤ ${tuning.LOS_STALE * 1000})`,
+			);
+		}
 		check(
 			alive > 0.9 && corpse < 0.05,
 			`night, a zombie 100 u from a torch: lit while its bearer lives (alpha ${alive.toFixed(2)}), dark beside their body (${corpse.toFixed(2)})`,

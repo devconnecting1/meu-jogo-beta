@@ -123,6 +123,8 @@ export const WALK_RING_SPEED = 7 * SPEED_SCALE;
  * 10/5/2 Hz by ring (perception.ts `senseInterval`), so this is the ceiling of a bad tick, not the usual cost.
  */
 export const LOS_BUDGET = 24;
+/** a zombie the budget kept waiting this long past its look drops its last "in view" (it is stale) */
+export const LOS_STALE = 0.25;
 /** telegraphed bite: lean back, then bite. Step out of BITE_KEEP during it and the bite whiffs. */
 export const WINDUP_TIME = 0.26;
 export const WINDUP_BACK = 1.2;
