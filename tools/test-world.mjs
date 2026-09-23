@@ -186,7 +186,17 @@ section("a) dois clientes disputam o mesmo item: um leva, o outro nao (§8.3, ac
 	check(gotA === 0 || gotB === 0, "e a outra mochila nao recebeu nada", `A +${gotA}, B +${gotB}`);
 	checkEq(world.items.size(), 0, "o item saiu do mundo");
 	const pending = drain(sim);
-	checkEq(countDeltas(pending, P.WorldEv.ItemRemove), 1, "e sumiu do mundo UMA vez (um ItemRemove)");
+	// one removal, told to each client that had been told about the item (a ghost otherwise stays on a screen)
+	const removes = pending.filter(d => d.ev.t === P.WorldEv.ItemRemove);
+	checkEq([...new Set(removes.map(d => d.ev.id))].length, 1, "e sumiu do mundo UMA vez (um so id removido)");
+	checkEq(
+		removes
+			.map(d => d.slot)
+			.sort()
+			.join(","),
+		"0,1",
+		"avisado uma vez a cada cliente que o via",
+	);
 
 	// the loser presses again, at an item that is gone
 	const again = countItem(gotA > 0 ? b.save : a.save, 4, 23);
@@ -837,25 +847,284 @@ section("k) quem entra depois recebe o mundo que ja existia (WorldInit, §4.5)")
 	);
 }
 
-section("l) itens fora do interesse nao viajam (§4.3, §4.5)");
+section("l) itens fora do interesse nao viajam, e o que cada cliente viu e seguido ate sumir (§4.3, §4.5)");
 {
 	const world = emptyWorld();
 	const sim = newSim(world);
 	const near = addPlayer(sim, 0, 1000, 1000);
 	const far = addPlayer(sim, 1, 1000 + CFG.ITEM_INTEREST + 500, 1000);
+	// one tick, so the simulation knows where its survivors stand
+	run(sim, 1);
 	drain(sim);
-	W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
+	const item = W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
 	const pending = drain(sim);
 	const adds = pending.filter(d => d.ev.t === P.WorldEv.ItemAdd);
 	checkEq(adds.length, 1, "um ItemAdd foi enfileirado");
-	checkEq(adds[0].range, CFG.ITEM_INTEREST, `filtrado por ${CFG.ITEM_INTEREST} u de interesse`);
+	checkEq(adds[0].slot, near.slot, "so para quem esta perto dele");
 	check(near.slot === 0 && far.slot === 1, "com um jogador perto e um longe");
-	// the filter itself is applied by the replicator; check the geometry it will use
-	const dx = far.state.x - adds[0].x;
+	check(Math.abs(far.state.x - item.x) > CFG.ITEM_INTEREST, "e o jogador distante esta fora do raio");
+
+	// the far survivor walks up to it: the sweep tells them, once
+	far.state.x = 1200;
+	run(sim, 40);
+	const late = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === item.id);
+	checkEq(late.length, 1, "quem chega perto depois recebe o ItemAdd (a varredura de interesse)");
+	checkEq(late[0]?.slot, far.slot, "so ele");
+	run(sim, 40);
+	checkEq(countDeltas(drain(sim), P.WorldEv.ItemAdd), 0, "e so uma vez");
+
+	// the first survivor walks far away; somebody takes the item: they are still told it is gone
+	near.state.x = 1000 + CFG.ITEM_INTEREST + 200; // past ITEM_INTEREST, inside the exit hysteresis
+	run(sim, 40);
+	drain(sim);
+	W.removeGroundItem(world, item);
+	const gone = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === item.id);
+	checkEq(gone.length, 2, "o ItemRemove vai para os DOIS que o viram, perto ou longe (sem item fantasma)");
+
+	// an item left behind past the exit radius leaves that screen, and comes back with the survivor
+	const kept = W.spawnGroundItem(world, 4, 23, 1, 1200, 1000);
+	drain(sim);
+	far.state.x = 1200 + 2600;
+	run(sim, 40);
+	const left = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === kept.id);
+	checkEq(left.length, 1, "longe demais, o item sai da tela de quem se afastou");
+	far.state.x = 1300;
+	run(sim, 40);
+	const back = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === kept.id);
+	checkEq(back.length, 1, "e volta quando ele volta");
+}
+
+// ================================================================ p. the backpack verbs (QA NET-1..4)
+
+section("p) os verbos da mochila: validados pelo servidor, aplicados ANTES do comando deles, confirmados pelo nonce");
+{
+	const WEAPONS = require(join(SRC, "shared/data/weapons.ts")).WEAPONS;
+	const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
+	const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+	const Ply = require(join(SRC, "shared/game/player.ts"));
+	const PISTOL = WEAPONS.find(w => w.name === "Pistol").id;
+	const AXE = WEAPONS.find(w => w.name === "Axe").id;
+	const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
+	const CAN = USABLES.find(u => u.name === "Canned food").id;
+	const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
+	const world = emptyWorld();
+	const sim = new ServerSimulation({
+		world,
+		clock: new WorldClock({ day: 1, dayTime: 12 }),
+		zombies: true,
+		interactive: true,
+	});
+	const save = SAVE.defaultSave();
+	save.invenWeapon[PISTOL] = 1;
+	save.invenWeapon[AXE] = 1;
+	save.ammoNormal = 40;
+	save.equipWeapon = 0;
+	const p = addPlayer(sim, 0, 3000, 3000, save);
+	p.state.godMode = true;
+	const seen = [];
+	sim.onBackpack = (sp, o) => seen.push(o);
+	const verb = (kind, atSeq, arg, nonce) => P.decodeIntentMessage(P.encodeIntentArgs(kind, atSeq, arg, nonce));
+	let seq = 0;
+	/** one real command through the wire, then the tick that consumes it */
+	const tick = (edges = 0, held = 0) => {
+		seq += 1;
+		const cmd = P.makeCommand(seq, 0, 0, 0, held, edges);
+		PL.ingestInput(p, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick);
+		sim.step();
+	};
+	for (let i = 0; i < 5; i++) tick();
+	checkEq(p.state.weapon.pointer, 0, "comeca com a adaga");
+
+	// NET-1: the switch is made during command 6, which also presses attack. It arrives BEFORE its command (the
+	// reliable channel won the race): the empty tick in between must not apply it early...
+	check(sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, seq + 1, PISTOL, 1)), "o SwitchWeapon entra na fila");
+	sim.step();
+	checkEq(p.state.weapon.pointer, 0, "um tick sem o comando dele: a troca espera o comando (atSeq)");
+	checkEq(sim.backpack.ackOf(p.userId), 0, "e ainda nao foi confirmada");
+	// ...and the command's own weapon machine is the PISTOL's: the dagger never swings on that press
+	tick(P.packEdges(1, 0, 0, 0), P.HeldBit.Attack);
+	checkEq(p.state.weapon.pointer, PISTOL, "no MESMO tick do comando dela a maquina da arma ja e a pistola");
+	checkEq(p.save.equipWeapon, PISTOL, "e o save do servidor diz pistola");
+	checkEq(p.state.swingerActive, false, "a adaga nao golpeou com o toque desse comando");
+	checkEq(p.state.weapon.reloading, true, "a pistola (pente vazio na troca) ja comecou a recarregar");
+	checkEq(sim.backpack.ackOf(p.userId), 1, "confirmada pelo nonce 1");
+	checkEq(seen.at(-1)?.kind, "switched", "e o resultado foi 'switched'");
+
+	// NET-3: the reload that follows spends the SERVER's reserve
+	for (let i = 0; i < 180; i++) tick();
+	checkEq(p.state.weapon.ammoCount, WEAPONS[PISTOL].mag, "o pente encheu");
+	checkEq(p.save.ammoNormal, 40 - WEAPONS[PISTOL].mag, "tirando da reserva do SERVIDOR");
+
+	// a second switch 1 tick later waits out the 0.1 s cooldown instead of being refused
+	seen.length = 0;
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, seq + 1, AXE, 2));
+	tick();
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, seq + 1, PISTOL, 3));
+	tick();
+	checkEq(p.state.weapon.pointer, AXE, "a segunda troca espera o intervalo de 0,1 s");
+	for (let i = 0; i < 8; i++) tick();
+	checkEq(p.state.weapon.pointer, PISTOL, "e entra depois dele, sem ser recusada");
+	checkEq(seen.filter(o => o.kind === "refused").length, 0, "nenhuma recusa");
+	checkEq(sim.backpack.ackOf(p.userId), 3, "ack 3");
+	// a weapon they do not own: refused, and still acknowledged (the client's prediction is undone)
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, 0, WEAPONS.length - 1, 4));
+	// (it waits out the cooldown of the switch before it, like any switch)
+	for (let i = 0; i < 8; i++) tick();
+	checkEq(p.state.weapon.pointer, PISTOL, "uma arma que ele nao tem: recusada");
+	checkEq(seen.at(-1)?.why, "owned", "por 'owned'");
+	checkEq(sim.backpack.ackOf(p.userId), 4, "e mesmo assim confirmada");
+
+	// NET-2: eating heals and feeds the SERVER's body, and a double click is two, a cooldown apart
+	p.state.godMode = false;
+	p.state.hp = 40;
+	p.state.hungry = 30;
+	const bandages = p.save.invenUse[BANDAGE];
+	const cans = p.save.invenUse[CAN];
+	sim.queueIntent(0, verb(P.IntentKind.UseItem, 0, BANDAGE, 5));
+	sim.queueIntent(0, verb(P.IntentKind.UseItem, 0, CAN, 6));
+	tick();
 	check(
-		Math.abs(dx) > CFG.ITEM_INTEREST,
-		"e o jogador distante esta fora desse raio",
-		`${Math.abs(dx).toFixed(0)} u`,
+		p.state.hp >= 40 + USABLES[BANDAGE].hp - 1,
+		"a atadura curou o corpo do SERVIDOR",
+		`hp ${p.state.hp.toFixed(1)}`,
+	);
+	checkEq(p.save.invenUse[BANDAGE], bandages - 1, "e saiu uma atadura do save do servidor");
+	checkEq(p.save.invenUse[CAN], cans, "a lata espera o intervalo de 0,25 s (nao e recusada)");
+	for (let i = 0; i < 16; i++) tick();
+	check(p.state.hungry >= 30 + USABLES[CAN].hunger - 2, "a lata alimentou", `fome ${p.state.hungry.toFixed(1)}`);
+	checkEq(p.save.invenUse[CAN], cans - 1, "e saiu do save");
+	checkEq(sim.backpack.ackOf(p.userId), 6, "as duas confirmadas");
+	p.state.godMode = true;
+
+	// NET-4: armour and a skill reach the server's damage and speed on the next command, not at the next report
+	p.save.invenEquip[STEEL] = 1;
+	p.save.level = 4;
+	p.save.skillPoint = 3;
+	const speed0 = Ply.recalcMoveSpeed(p.state, p.save);
+	sim.queueIntent(0, verb(P.IntentKind.Equip, 0, STEEL, 7));
+	sim.queueIntent(0, verb(P.IntentKind.LearnSkill, 0, 7, 8));
+	tick();
+	checkEq(Ply.playerEquipDefence(p.save), EQUIPS[STEEL].def, "a armadura de aco ja protege no servidor");
+	checkEq(p.save.skillLevels[7], 1, "Trot aprendido no servidor");
+	checkEq(p.save.skillPoint, 2, "gastando um ponto");
+	check(
+		Math.abs(Ply.recalcMoveSpeed(p.state, p.save) - (speed0 + EQUIPS[STEEL].speed + 0.3)) < 1e-9,
+		"e a velocidade do servidor ja soma a armadura e o Trot",
+	);
+	sim.queueIntent(0, verb(P.IntentKind.Unequip, 0, 1, 9));
+	tick();
+	checkEq(p.save.equipCloth, -1, "Unequip do slot 1 (roupa) tira a armadura");
+	checkEq(sim.craft.equip(p.save, STEEL).kind, "equipped", "(e ela volta pela mesma regra)");
+
+	// an intent that arrives LATE (its command already ran) lands on the next tick
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, seq - 3, AXE, 10));
+	for (let i = 0; i < 8; i++) tick();
+	checkEq(p.state.weapon.pointer, AXE, "um atSeq atrasado entra no tick seguinte");
+	// one for a command that never comes waits at most INTENT_HOLD_TICKS
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, seq + 20, PISTOL, 11));
+	for (let i = 0; i < CFG.INTENT_HOLD_TICKS - 2; i++) sim.step();
+	checkEq(p.state.weapon.pointer, AXE, "um atSeq no futuro espera o comando dele...");
+	for (let i = 0; i < 4; i++) sim.step();
+	checkEq(p.state.weapon.pointer, PISTOL, `...no maximo ${CFG.INTENT_HOLD_TICKS} ticks`);
+
+	// the queue is bounded, and a full queue answers at once
+	for (let i = 0; i < CFG.INTENT_QUEUE_MAX; i++)
+		sim.queueIntent(0, verb(P.IntentKind.LearnSkill, seq + 30, 0, 20 + i));
+	check(!sim.queueIntent(0, verb(P.IntentKind.LearnSkill, seq + 30, 0, 99)), "a fila tem teto");
+	checkEq(sim.backpack.ackOf(p.userId), 99, "e o pedido que nao coube e confirmado na hora (recusado)");
+	checkEq(seen.at(-1)?.why, "full", "por 'full'");
+
+	// a dead survivor's verbs are dropped (and answered), never held for the revive
+	p.state.dead = true;
+	sim.step();
+	checkEq(sim.backpack.ackOf(p.userId), 20 + CFG.INTENT_QUEUE_MAX - 1, "morto: a fila e descartada e confirmada");
+	check(
+		seen.slice(-CFG.INTENT_QUEUE_MAX).every(o => o.why === "dead"),
+		"tudo recusado por 'dead'",
+	);
+	checkEq(p.save.skillLevels[0], 0, "nada foi aplicado");
+	p.state.dead = false;
+
+	// a pack bought in the shop is delivered into the SERVER's save while the survivor is in the world
+	const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+	const pack = SHOP_PACKS[0];
+	const before = pack.items.map(it => countItem(p.save, it.kind, it.index));
+	p.save.packsBought[pack.id] = 1;
+	for (let i = 0; i < 40; i++) sim.step();
+	checkEq(p.save.packsOpened[pack.id], 1, "o pacote foi aberto pelo servidor");
+	check(
+		pack.items.every((it, i) => countItem(p.save, it.kind, it.index) === before[i] + it.count),
+		"e o que ele traz esta no save do servidor, uma vez",
+	);
+	for (let i = 0; i < 40; i++) sim.step();
+	checkEq(p.save.packsOpened[pack.id], 1, "e nao e aberto de novo");
+
+	// crafting a build through the verb puts it on the cursor, and the weapon is holstered meanwhile
+	const recipe = CRAFT_RECIPES.find(
+		r =>
+			r.craftKind === 1 &&
+			PLACEABLES[r.resultIndex] !== undefined &&
+			!r.needsDesk &&
+			!r.needsPro &&
+			r.needsFire !== true,
+	);
+	for (const ing of recipe.ingredients) addItem(p.save, ing.kind, ing.index, ing.count);
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, 0, AXE, 40));
+	for (let i = 0; i < 8; i++) tick();
+	sim.queueIntent(0, verb(P.IntentKind.Craft, 0, recipe.id, 41));
+	tick();
+	checkEq(sim.build.pendingOf(0), recipe.resultIndex, "o Craft de uma construcao a poe no cursor do servidor");
+	sim.queueIntent(0, verb(P.IntentKind.SwitchWeapon, 0, PISTOL, 42));
+	tick();
+	checkEq(seen.at(-1)?.why, "busy", "com uma construcao no cursor, trocar de arma e recusado");
+	// the ambient horde is out there: keep it off the ghost, so the placement is about the build, not the dice
+	for (const z of sim.horde.zombies) {
+		z.x = 200;
+		z.y = 200;
+	}
+	const solids = world.solids.length;
+	tick(P.packEdges(1, 0, 0, 0), P.HeldBit.Attack);
+	checkEq(world.solids.length, solids + 1, "o toque de ataque coloca a construcao");
+	checkEq(p.state.swingerActive, false, "e o machado NAO golpeou com ele (arma no coldre durante a construcao)");
+}
+
+section("q) NET-5: um relatorio forjado nao escreve a mochila (pinBackpack)");
+{
+	const BP = require(join(SRC, "server/sim/backpack.ts"));
+	const WEAPONS = require(join(SRC, "shared/data/weapons.ts")).WEAPONS;
+	const HMG = WEAPONS.find(w => w.name === "Heavy machine gun").id;
+	const trusted = SAVE.defaultSave();
+	trusted.ammoNormal = 12;
+	trusted.level = 3;
+	trusted.skillPoint = 2;
+	const forged = SAVE.sanitizeClientReport(
+		{
+			...JSON.parse(JSON.stringify(trusted)),
+			invenWeapon: trusted.invenWeapon.map((v, i) => (i === HMG ? 1 : v)),
+			equipWeapon: HMG,
+			ammoMachinegun: 99999,
+			ammoNormal: 500,
+			invenEtc: trusted.invenEtc.map((v, i) => (i === 29 ? 999 : v)),
+			invenUse: trusted.invenUse.map(v => v + 50),
+			skillLevels: trusted.skillLevels.map((v, i) => (i === 7 ? 1 : v)),
+			packsOpened: trusted.packsOpened.map(() => 1),
+		},
+		trusted,
+	);
+	check(
+		forged.invenWeapon[HMG] === 1 && forged.ammoMachinegun > 0,
+		"o relatorio forjado passa pelo sanitize (sao numeros validos)",
+	);
+	checkEq(BP.pinBackpack(trusted, forged), true, "pinBackpack percebe que ele tentou mexer na mochila");
+	for (const f of BP.SERVER_BACKPACK_FIELDS) {
+		checkEq(JSON.stringify(forged[f]), JSON.stringify(trusted[f]), `${f} fica o do servidor`);
+	}
+	const honest = SAVE.sanitizeClientReport(JSON.parse(JSON.stringify(trusted)), trusted);
+	checkEq(BP.pinBackpack(trusted, honest), false, "um relatorio honesto nao conta como tentativa");
+	checkEq(
+		BP.serverOwnsBackpack(),
+		CFG.MP_PHASE >= CFG.WORLD_SERVER_PHASE,
+		"stripClientBackpack vale a partir de WORLD_SERVER_PHASE (a mesma chave do mundo interativo)",
 	);
 }
 

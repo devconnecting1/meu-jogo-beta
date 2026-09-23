@@ -80,7 +80,7 @@ import { GAME_NAME } from "shared/module";
 import { PlayerState } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
-import { HitchMeter } from "./hitchMeter";
+import { HitchMeter, ZOMBIE_MOVING_UPS } from "./hitchMeter";
 
 const Players = game.GetService("Players");
 const ReplicatedStorage = game.GetService("ReplicatedStorage");
@@ -201,6 +201,8 @@ export interface NetStats {
 	/** measured snapshot arrival interval and its mean deviation, seconds (client/net/snapshotBuffer.ts) */
 	snapInterval: number;
 	snapJitter: number;
+	/** how far behind this client's clock a fresh snapshot lands, seconds: latency plus any server drift (§5.1) */
+	snapLateness: number;
 	/** frames whose render time had to be HELD: the tell-tale of a remote survivor moving in steps */
 	snapStalls: number;
 	/** snapshot parts accepted and dropped by the buffer (stale, duplicate, outside the reorder window) */
@@ -235,6 +237,16 @@ const views = new Array<RemotePlayerView>();
  * clean, so the only place left to look is this client on this machine.
  */
 const allyHitches = new HitchMeter();
+/**
+ * The same meter on the horde, for the bodies on screen (the owner's "zombies walk laggy, with micro-stutters",
+ * 2026-09-23). A zombie walks at 90 u/s, under the survivor threshold, so it is judged from ZOMBIE_MOVING_UPS;
+ * a body that leaves the view is forgotten, so coming back is not read as one enormous step.
+ */
+const zombieHitches = new HitchMeter(ZOMBIE_MOVING_UPS);
+/** zombie-seconds on screen since the last [PZ-NET] line: what the zombie jolts are counted against */
+let zombieVisibleS = 0;
+/** world units of margin around the view: a body half inside the screen is on it */
+const ZOMBIE_VIEW_PAD = 32;
 /** effects and deaths that arrived since the last frame; the view drains both (see `netUpdate`) */
 const fxQueue = new Array<FxEvent>();
 const deaths = new Array<ZombieDeathEvent>();
@@ -564,6 +576,8 @@ function onTimeSync(payload: unknown): void {
 		return;
 	}
 	clock.noteRtt(pongRtt(pong, Workspace.GetServerTimeNow()));
+	// the server's clock and tick, stamped together: the epoch follows the time the server dropped (clockSync.ts)
+	clock.noteServerTick(pong.serverTime, pong.serverTick);
 }
 
 function sendTimePing(now: number): void {
@@ -610,6 +624,8 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	const now = os.clock();
 	applyLife(refs);
 	const tick = clock.update(dt, Workspace.GetServerTimeNow());
+	// before this frame's snapshots are measured against the corrected clock: the render time ignores the correction
+	snapshots.clockCorrected(clock.lastCorrection());
 	applyClock(refs, tick);
 	reconcile(now);
 	predict(refs, dt);
@@ -619,8 +635,40 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	for (const v of views) allyHitches.observe(v.slot, v.x, v.y, dt);
 	send(now);
 	sendTimePing(now);
+	// metering only: after the frame's packets are on their way, never in front of them
+	observeZombies(dt);
 	prediction.present(dt, commands.phase(), commands.newest());
 	logStats(now);
+}
+
+/**
+ * After step 6: every zombie on screen through the hitch meter, exactly as the allies go through theirs. It only
+ * measures, so it runs once the frame's Input and TimePing are sent (the review of 2026-09-23, #9).
+ */
+function observeZombies(dt: number): void {
+	zombieHitches.beginFrame(dt);
+	const view = getCtx().cam.viewRect(ZOMBIE_VIEW_PAD);
+	for (const z of snapshots.zombieStates()) {
+		const shown = z.alpha >= 0.5 && z.x >= view.minX && z.x <= view.maxX && z.y >= view.minY && z.y <= view.maxY;
+		if (!shown) {
+			zombieHitches.forget(z.netId);
+			continue;
+		}
+		zombieHitches.observe(z.netId, z.x, z.y, dt);
+		zombieVisibleS += dt;
+	}
+}
+
+/** the server's dropped-tick counter (server/net/mpHost.ts publishes it on Workspace), or -1 before it has */
+function serverDroppedTicks(): number {
+	const v = Workspace.GetAttribute("pz_dropped_ticks");
+	return typeIs(v, "number") ? v : -1;
+}
+
+/** the server's Heartbeat debt being repaid right now, in ms (mpHost.ts `pz_backlog_ms`), or -1 before it has one */
+function serverBacklogMs(): number {
+	const v = Workspace.GetAttribute("pz_backlog_ms");
+	return typeIs(v, "number") ? v : -1;
 }
 
 /** periodic line with what F1 is judged on, so a playtest can be read from the output */
@@ -635,11 +683,15 @@ function logStats(now: number): void {
 	loggedAt = now;
 	const st = netStats();
 	const h = allyHitches.take();
+	const zh = zombieHitches.take();
+	const visibleS = zombieVisibleS;
+	zombieVisibleS = 0;
 	print(
 		string.format(
 			"[PZ-NET] slot %d | roster %d | outros %d | zumbis %d | chefes %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
-				"SUAVIDADE: atraso %.0f ms, intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d | " +
-				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f | aliado: %d trancos em %.0f s andando (%d em quadro longo, pior %.0f%%)%s",
+				"SUAVIDADE: atraso %.0f ms (latencia medida %.0f ms), intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d, ticks perdidos no servidor %d (divida agora %d ms, relogio reancorado +%.0f ms) | " +
+				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f | aliado: %d trancos em %.0f s andando (%d em quadro longo, pior %.0f%%) | " +
+				"zumbis: %d trancos em %.0f s visiveis (%.0f s andando, %d em quadro longo, pior %.0f%%)%s",
 			st.slot,
 			st.roster,
 			views.size(),
@@ -649,11 +701,15 @@ function logStats(now: number): void {
 			st.errorP99,
 			st.correctionsPerMinute,
 			st.interpDelay * 1000,
+			st.snapLateness * 1000,
 			st.snapInterval * 1000,
 			st.snapJitter * 1000,
 			st.snapStalls,
 			st.snapAccepted,
 			st.snapDropped,
+			serverDroppedTicks(),
+			serverBacklogMs(),
+			clock.stats().epochShift * 1000,
 			st.queued,
 			st.queueDropped,
 			st.malformed,
@@ -665,6 +721,11 @@ function logStats(now: number): void {
 			h.walkingS,
 			h.inLongFrames,
 			h.worst * 100,
+			zh.jolts,
+			visibleS,
+			zh.walkingS,
+			zh.inLongFrames,
+			zh.worst * 100,
 			st.mapMismatch ? " | MAPA DIFERENTE" : "",
 		),
 	);
@@ -834,6 +895,7 @@ export function netStats(): NetStats {
 		correctionsPerMinute: p.correctionsPerMinute,
 		snapInterval: sb.interval,
 		snapJitter: sb.jitter,
+		snapLateness: sb.lateness,
 		snapStalls: sb.stalls,
 		snapAccepted: sb.accepted,
 		snapDropped: sb.dropped,

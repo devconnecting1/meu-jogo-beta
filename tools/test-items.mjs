@@ -2757,10 +2757,11 @@ section("F4. trees, cars and bins drop the same things on the client and on the 
 		Object.keys(client).length === 3 && Object.keys(server).length === 3,
 		"both sides have the three map-item tables",
 	);
-	knownBug(
-		"L1",
-		differ.length > 0,
-		"the map-item loot the client rolls today (MP_PHASE 2) is not the table the server will roll at F3: switching phases silently changes what trees, cars and bins give (the server's car even drops Steel, which crafts.ts says never drops)",
+	// L1 (fixed with NET-6, when the server took the world over): the server rolls the tables the game has always
+	// rolled, so switching phases changes nothing a tree, a car or a bin gives
+	check(
+		differ.length === 0,
+		"[L1] the server's tree, car and bin tables are the ones the game has always rolled (the client's)",
 		differ.map(k => `${k}: client [${client[k].join(", ")}] vs server [${server[k].join(", ")}]`).join(" | "),
 	);
 });
