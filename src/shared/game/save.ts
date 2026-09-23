@@ -7,6 +7,7 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
+import { TITLES, titleToWire } from "shared/data/titles";
 import { MP_PHASE } from "shared/net/mpConfig";
 
 /**
@@ -28,12 +29,27 @@ import { MP_PHASE } from "shared/net/mpConfig";
  *   - a server rolled back to v3 code drops the two unknown keys and reads no `equipDeco`, so the survivor comes
  *     back with no cosmetic EQUIPPED. What they OWN (`costumes`, the inventory) is untouched in both directions:
  *     a rollback costs one click in the backpack, never a purchase.
+ *
+ * v5 (MON-05): titles, EARNED on the server's own counters and never sold. New fields, same document, additive:
+ * `titles` (one flag per shared/data/titles.ts id, server-owned like `costumes`), `zombieKills` (the lifetime
+ * killing blows the server credited, server-owned like `bossKills`), `lifeNights` (the midnights the server credited
+ * to this life, Week One's count), `equipTitle` (the one shown under the name, -1 = none, checked against `titles`
+ * like an outfit against `costumes`) and `titleEpoch` (which title history the save is, server/save/titleRecord.ts).
+ *   - a v4 document has none of them: no title unlocked, no kill or night counted, nothing shown -- exactly the
+ *     truth, since no server counted any of it before v5;
+ *   - a server rolled back to v4 code drops them all when it writes. What was EARNED survives that anyway: every
+ *     session also writes `titles` and `zombieKills` to a second document v4 never opens (server/save/titleRecord.ts,
+ *     store `ProjectZ_Titles`), and the next v5 load takes the larger of the two. So a rollback forgets only WHICH
+ *     title was shown -- one click in the wardrobe -- never a title or a kill. (And the current life's progress
+ *     toward Week One, `lifeNights`, which is a count toward a title, not one.)
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
 export const SAVE_VERSION_COSMETIC_SLOTS = 4;
+/** the first version with `titles` / `zombieKills` / `equipTitle` (MON-05) */
+export const SAVE_VERSION_TITLES = 5;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -47,6 +63,8 @@ export const SAVE_LIMITS = {
 	RUN_HP_MAX: 100000,
 	/** v3 run body: hunger accumulated; DESIGN.PLAYER_HUNGRY is the bar, this is a generous ceiling */
 	RUN_HUNGER_MAX: 100000,
+	/** v5 `titleEpoch`: an os.time() (seconds since 1970) with room for centuries */
+	EPOCH_MAX: 99999999999,
 } as const;
 
 export interface SettingsData {
@@ -81,7 +99,7 @@ export function defaultSettings(): SettingsData {
 /**
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
- *   money, deathCount, bestDay, packsBought, costumes, runRev, version
+ *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  */
@@ -136,6 +154,28 @@ export interface PlayerSaveData {
 	equipOutfit: number;
 	/** v4 (MON-04): EQUIPS id of the pet that follows the survivor (EquipSlot.Pet), -1 = none */
 	equipPet: number;
+	/** v5 (MON-05): 1 = earned, per TITLES id. Written only by the server (server/save/titles.ts `grantTitle`) */
+	titles: Array<number>;
+	/**
+	 * v5 (MON-05): lifetime zombies put down -- the killing blows the SERVER's kill credit gave this survivor
+	 * (server/sim/progress.ts), never an assist and never a number a report carried. It only grows.
+	 */
+	zombieKills: number;
+	/**
+	 * v5 (MON-05): the midnights the SERVER credited to this life while its run paid (server/sim/simulation.ts
+	 * `creditMidnight`): never a day a client reported before the server counted days, an admin set, or an assisted
+	 * run lived. Week One counts these. Back to 0 with the life (`resetRun`). Server-owned.
+	 */
+	lifeNights: number;
+	/** v5 (MON-05): TITLES id shown under the name, -1 = none; must be earned (`enforceSaveInvariants`) */
+	equipTitle: number;
+	/**
+	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
+	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
+	 * (server/save/titleRecord.ts) from an OLDER epoch belongs to a history that was reset or deleted on purpose and is
+	 * never merged back. Server-owned: written only by server/main.server.ts.
+	 */
+	titleEpoch: number;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -148,6 +188,16 @@ export interface Wallet {
 	packsOpened: Array<number>;
 	costumes: Array<number>;
 	runRev: number;
+	/** v5 (MON-05): what the server says was earned, and the kill count a locked Horde Breaker shows */
+	titles: Array<number>;
+	zombieKills: number;
+	/** v5 (MON-05): the nights the server credited to this life -- a locked Week One's progress. Optional: older servers */
+	lifeNights?: number;
+	/**
+	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
+	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
+	 */
+	day?: number;
 	/**
 	 * Level and XP, from PROGRESS_SERVER_PHASE on (§11.3 F2) the SERVER's (server/sim/progress.ts `awardExp`): this
 	 * wallet is how they reach the client. Optional so a wallet from an older server still parses.
@@ -226,11 +276,6 @@ export function defaultSave(): PlayerSaveData {
 }
 
 /**
- * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
- * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked)
- * and settings. The server applies it on the "newRun" action; the client applies the same to its copy.
- */
-/**
  * The player answered "No" to "Do you want to watch the tutorial?". Two flags carry the tutorial and the answer
  * has to clear both: `tutorialDone` (the lobby's question and the How to play card) and `firstInstall` (the
  * in-run coach, client/onboarding). Clearing only the first was the bug the owner hit on 2026-09-23 -- "No" still
@@ -241,9 +286,17 @@ export function declineTutorial(save: PlayerSaveData): void {
 	save.firstInstall = false;
 }
 
+/**
+ * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
+ * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked),
+ * titles, the kill count and the title shown (MON-05: what was earned is the survivor's, not the run's), and
+ * settings. The server applies it on the "newRun" action and when a world ends (MP-22, server/sim/life.ts
+ * `restartWorld`); the client applies the same to its copy.
+ */
 export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
 	save.day = 1;
+	save.lifeNights = 0;
 	save.deathCount = 0;
 	save.runOver = false;
 	// a new run starts with a new body: never inherit the HP bar the last one died on (v3, §6.1)
@@ -252,6 +305,7 @@ export function resetRun(save: PlayerSaveData): void {
 	// a costume is forever; a pigeon that came in a pack lived in the inventory the starter kit just replaced
 	save.equipOutfit = validEquip(save, save.equipOutfit, EquipSlot.Outfit);
 	save.equipPet = validEquip(save, save.equipPet, EquipSlot.Pet);
+	save.equipTitle = validTitle(save, save.equipTitle);
 }
 
 function emptySave(): PlayerSaveData {
@@ -293,6 +347,11 @@ function emptySave(): PlayerSaveData {
 		equipGun: -1,
 		equipOutfit: -1,
 		equipPet: -1,
+		titles: zeros(TITLES.size()),
+		zombieKills: 0,
+		lifeNights: 0,
+		equipTitle: -1,
+		titleEpoch: 0,
 	};
 }
 
@@ -391,6 +450,26 @@ export function petLookOf(save: PlayerSaveData): number {
 	return petLookOfEquip(id);
 }
 
+/** has the SERVER granted this title (MON-05)? `titles` is written only by server/save/titles.ts `grantTitle` */
+export function ownsTitle(save: PlayerSaveData, titleId: number): boolean {
+	if (titleId < 0 || titleId >= TITLES.size() || titleId % 1 !== 0) return false;
+	return (save.titles[titleId] ?? 0) > 0;
+}
+
+/** `titleId` when it can be shown (a real title this survivor earned), otherwise -1 */
+function validTitle(save: PlayerSaveData, titleId: number): number {
+	return ownsTitle(save, titleId) ? titleId : -1;
+}
+
+/**
+ * What the title line DRAWS, as the wire byte (shared/data/titles.ts `titleToWire`: 0 = none): the equipped title if
+ * it is earned, otherwise none. Like `outfitLookOf`, it asks ownership again, so nothing a report or a stray write
+ * put in `equipTitle` ever reaches the wire or a nameplate.
+ */
+export function titleWireOf(save: PlayerSaveData): number {
+	return titleToWire(validTitle(save, save.equipTitle));
+}
+
 export function pendingPacks(save: PlayerSaveData, packId: number): number {
 	return math.max(0, (save.packsBought[packId] ?? 0) - (save.packsOpened[packId] ?? 0));
 }
@@ -411,6 +490,10 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		packsOpened: copyArray(save.packsOpened),
 		costumes: copyArray(save.costumes),
 		runRev: save.runRev,
+		titles: copyArray(save.titles),
+		zombieKills: save.zombieKills,
+		lifeNights: save.lifeNights,
+		day: save.day,
 		level: save.level,
 		exp: save.exp,
 	};
@@ -527,6 +610,13 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		// v4: absent in a v3 document, whose `equipDeco` is routed to the right one of the two (the migration)
 		equipOutfit: readInt(r.equipOutfit, legacyCosmetic(r, EquipSlot.Outfit, fb.equipOutfit), -1, eqMax),
 		equipPet: readInt(r.equipPet, legacyCosmetic(r, EquipSlot.Pet, fb.equipPet), -1, eqMax),
+		// v5: what was earned is the SERVER's (copied, never read from `r`); only the choice of what to show is read,
+		// and `enforceSaveInvariants` checks it against those earned flags. Absent in v4: nothing shown
+		titles: copyArray(fb.titles),
+		zombieKills: fb.zombieKills,
+		lifeNights: fb.lifeNights,
+		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
+		titleEpoch: fb.titleEpoch,
 	};
 }
 
@@ -574,6 +664,11 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	// `costumes` and the pack-capped inventory). A report naming one it does not own is corrected to none.
 	s.equipOutfit = validEquip(s, s.equipOutfit, EquipSlot.Outfit);
 	s.equipPet = validEquip(s, s.equipPet, EquipSlot.Pet);
+	// MON-05: the same rule for the title line -- only one the server granted (`titles`) is shown, so a report
+	// (or a hand-edited document) naming one the save does not hold is corrected to none
+	s.equipTitle = validTitle(s, s.equipTitle);
+	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
+	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -643,6 +738,11 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipGun = src.equipGun;
 	dst.equipOutfit = src.equipOutfit;
 	dst.equipPet = src.equipPet;
+	copyInto(dst.titles, src.titles);
+	dst.zombieKills = src.zombieKills;
+	dst.lifeNights = src.lifeNights;
+	dst.equipTitle = src.equipTitle;
+	dst.titleEpoch = src.titleEpoch;
 	return dst;
 }
 
@@ -661,6 +761,12 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	s.deathCount = readInt(r.deathCount, 0, 0, L.COUNTER_MAX);
 	s.bestDay = readInt(r.bestDay, s.day, 1, L.DAY_MAX);
 	s.costumes = readIntArray(r.costumes, COSTUMES.size(), () => 1, undefined);
+	// v5 (MON-05): absent in a v4 document -- nothing earned, nothing counted (server/save/titleRecord.ts may still
+	// bring back what a rolled-back server dropped, on the session load)
+	s.titles = readIntArray(r.titles, TITLES.size(), () => 1, undefined);
+	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
+	s.lifeNights = readInt(r.lifeNights, 0, 0, L.DAY_MAX);
+	s.titleEpoch = readInt(r.titleEpoch, 0, 0, L.EPOCH_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);
@@ -734,7 +840,27 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 		save.packsOpened[i] = math.min(math.max(save.packsOpened[i] ?? 0, opened[i]), save.packsBought[i]);
 	}
 	save.costumes = readIntArray(w.costumes, COSTUMES.size(), () => 1, save.costumes);
+	// which life this wallet was written in, read BEFORE this copy moves on to it: the life's own numbers below
+	// come only from a wallet of this life or a newer one (-1 = a wallet that does not say)
+	const walletRun = isFiniteNumber(w.runRev) ? math.floor(w.runRev) : -1;
+	const thisLife = walletRun >= save.runRev;
 	save.runRev = math.max(save.runRev, readInt(w.runRev, save.runRev, 0, L.COUNTER_MAX));
+	// MON-05: the earned flags are the server's to state, like `costumes`; the kill count only grows
+	save.titles = readIntArray(w.titles, TITLES.size(), () => 1, save.titles);
+	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
+	// a title the server no longer lists is not shown by this copy either
+	save.equipTitle = validTitle(save, save.equipTitle);
+	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them;
+	// and so is the life's day, from the phase the server counts days: its midnight may have refused this survivor
+	// one (dead, absent, AFK), which a client that counted its own midnight would never know. Both go back to 0 / 1
+	// with a new life, so unlike the counters above they are REPLACED -- and only by a wallet of this life or a newer
+	// one: a push from the old life landing after the New game's reply (another remote) would hand its day back
+	if (thisLife && isFiniteNumber(w.lifeNights)) {
+		save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
+	}
+	if (thisLife && MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) {
+		save.day = readInt(w.day, save.day, 1, L.DAY_MAX);
+	}
 	// XP and levels are the server's from PROGRESS_SERVER_PHASE on, and nothing else ever told this client: the
 	// HUD's XP bar sat at 0 and a level-up never arrived (owner's playtest, 2026-09-23). Below that phase the
 	// client levels itself and a wallet carrying the last REPORTED copy would roll its XP back, so it is ignored.

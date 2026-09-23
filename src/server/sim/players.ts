@@ -72,7 +72,7 @@ import {
 import { EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
-import { PlayerSaveData, outfitLookOf, petLookOf } from "shared/game/save";
+import { PlayerSaveData, outfitLookOf, petLookOf, titleWireOf } from "shared/game/save";
 import { WorldData, buildingAt, isOnRoad, randomOpenPoint, randomRingPoint, rectHitsSolid } from "shared/game/world";
 import { WORLD_MARGIN } from "shared/sim/playerMove";
 
@@ -155,6 +155,8 @@ export interface ServerPlayer {
 	level: number;
 	outfit: number;
 	pet: number;
+	/** MON-05: the title under their name, as the wire byte (0 = none), already checked against what they EARNED */
+	title: number;
 	/** the authoritative survivor; the client never sends a position (§2.2, MP-00) */
 	state: PlayerState;
 	/** the live save the server owns (server/main.server.ts session) */
@@ -203,7 +205,7 @@ export interface ServerPlayer {
 }
 
 /**
- * Who is joining. The profile (level, outfit, pet) is NOT here on purpose: it is read off the save the server
+ * Who is joining. The profile (level, outfit, pet, title) is NOT here on purpose: it is read off the save the server
  * owns, never handed in by a caller that could have taken it from the client (MON-04: the client never declares
  * what it owns).
  */
@@ -238,6 +240,7 @@ export function createServerPlayer(
 		level: save.level,
 		outfit: outfitLookOf(save),
 		pet: petLookOf(save),
+		title: titleWireOf(save),
 		state: createPlayer(save, x, y),
 		save,
 		queue: new Array<InputCommand>(),
@@ -438,7 +441,7 @@ export function ingestInput(sp: ServerPlayer, payload: unknown, now: number): In
  * PlayerState is deliberately kept — F1 has no save mirror yet, and rebuilding it here would teleport the
  * survivor; the fields the save owns (level, hp cap) re-sync on the next spawn.
  *
- * The profile (level, outfit, pet) is deliberately NOT copied here: it is what the others were last told, and
+ * The profile (level, outfit, pet, title) is deliberately NOT copied here: it is what the others were last told, and
  * copying it would make `refreshProfile` see no change and the allies would never hear of it. The replicator's
  * next pass notices the difference and tells everybody.
  */
@@ -449,16 +452,17 @@ export function adoptSave(sp: ServerPlayer, save: PlayerSaveData): boolean {
 }
 
 /**
- * Brings the profile the roster advertises (level, outfit, pet) up to date with the save, and answers whether it
- * moved — i.e. whether everybody has to be told (`PlayerProfile`, §4.4, MON-04).
+ * Brings the profile the roster advertises (level, outfit, pet, title) up to date with the save, and answers whether
+ * it moved — i.e. whether everybody has to be told (`PlayerProfile`, §4.4, MON-04, MON-05).
  *
- * Every path that changes those three lands in the save: XP from a kill (server/sim/progress.ts), a client report
- * after the backpack equipped an outfit (server/main.server.ts, MP_PHASE 2), the `Equip` intent (F3), an admin
- * edit, a new run. Watching the SAVE instead of each of those call sites is what makes it impossible to add a sixth
- * path and forget to tell the others. The looks go through `outfitLookOf` / `petLookOf`, which check ownership
- * again, so the wire can never carry a cosmetic the server does not know this player owns.
+ * Every path that changes those lands in the save: XP from a kill (server/sim/progress.ts), a client report after
+ * the backpack equipped an outfit (server/main.server.ts, MP_PHASE 2), the `Equip` intent (F3), the wardrobe's
+ * `equipTitle` (server/save/titles.ts), an admin edit, a new run. Watching the SAVE instead of each of those call
+ * sites is what makes it impossible to add another path and forget to tell the others. The looks go through
+ * `outfitLookOf` / `petLookOf` / `titleWireOf`, which check ownership again, so the wire can never carry a cosmetic
+ * the server does not know this player owns, nor a title it does not know they earned.
  *
- * Cheap on purpose (three comparisons and two ownership lookups): the replicator calls it for every survivor
+ * Cheap on purpose (four comparisons and three ownership lookups): the replicator calls it for every survivor
  * every time it flushes the reliable channel.
  */
 export function refreshProfile(sp: ServerPlayer): boolean {
@@ -466,10 +470,12 @@ export function refreshProfile(sp: ServerPlayer): boolean {
 	const level = save.level;
 	const outfit = outfitLookOf(save);
 	const pet = petLookOf(save);
-	if (level === sp.level && outfit === sp.outfit && pet === sp.pet) return false;
+	const title = titleWireOf(save);
+	if (level === sp.level && outfit === sp.outfit && pet === sp.pet && title === sp.title) return false;
 	sp.level = level;
 	sp.outfit = outfit;
 	sp.pet = pet;
+	sp.title = title;
 	return true;
 }
 

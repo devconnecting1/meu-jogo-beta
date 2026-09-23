@@ -185,7 +185,7 @@ export class AllyPlate {
 		const at = cam.worldToScreen(rp.x, rp.y + SURVIVOR_R + PLATE_GAP);
 		const x = math.round(at.x);
 		const y = math.round(at.y);
-		this.nameplate.update(x, y, rp.level, true);
+		this.nameplate.update(x, y, rp.level, true, rp.title);
 
 		const life = rp.hpMax > 0 ? clamp(rp.hp / rp.hpMax, 0, 1) : 0;
 		const downed = rp.downed;

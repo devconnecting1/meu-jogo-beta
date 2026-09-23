@@ -31,6 +31,7 @@ import { AnnounceKind, WAnnounce, WClock, WorldEv } from "shared/net/protocol";
 import { AiClock } from "shared/sim/ai/context";
 import {
 	CLOCK_ANNOUNCEMENTS,
+	DAY_BREAK_HOUR,
 	HOURS_PER_DAY,
 	WAVE_FILL_FROM,
 	advanceClock,
@@ -116,6 +117,24 @@ export class WorldClock implements AiClock {
 	onWaveFill?: (fill: WaveFill) => void;
 	/** the clock rolled past midnight into `day`: §3.6 pays everyone who lived through it */
 	onNewDay?: (day: number) => void;
+	/**
+	 * The night of `day` just ended: the clock passed 06:00 (DAY_BREAK_HOUR, where `isNightAt` turns false) in a
+	 * STEP -- an admin moving the clock (`setClock`) never fires it, exactly as it never fires `onNewDay`. MON-05's
+	 * Survivor is decided here (server/sim/simulation.ts `creditDawn`).
+	 */
+	onDaybreak?: (day: number) => void;
+	/**
+	 * An admin moved the hands (`setClock`). The night being lived is no longer the one the clock shows: MON-05's
+	 * Survivor forgets the midnight that started it (server/sim/simulation.ts), so a skip to 05:59 followed by a real
+	 * 06:00 makes nobody a Survivor of hours they never lived.
+	 *
+	 * That is ALL it protects. Nothing on the server calls `setClock` today (the admin panel's clock only moves the
+	 * admin's own client, client/admin/world.ts); a server-side clock tool, when it comes, must also mark every run
+	 * in the world assisted (§9.3, server/main.server.ts `markAssisted`): a skip BACKWARD across midnight lets the
+	 * clock cross it again, and that midnight would pay its coins and count a night toward Week One (`lifeNights`)
+	 * a second time.
+	 */
+	onClockSet?: () => void;
 
 	private readonly rollRain: (day: number) => boolean;
 	/** the 18:00–18:30 fill happens once per night */
@@ -181,6 +200,7 @@ export class WorldClock implements AiClock {
 			this.day += 1;
 			this.startDay();
 		}
+		if (this.onDaybreak !== undefined && crossed(prev, this.dayTime, DAY_BREAK_HOUR)) this.onDaybreak(this.day);
 		this.detectAnnounce(prev, this.dayTime);
 		this.updateWaves();
 		this.updateDark();
@@ -250,12 +270,15 @@ export class WorldClock implements AiClock {
 	 * It moves the clock and NOTHING else, the way client/admin/world.ts always did it: an admin skipping
 	 * into the dark calls `fillNight()` first, so the night it lands in has a horde. Doing it here instead
 	 * would re-promise a wave the survivors had already beaten whenever the clock was nudged after dusk.
+	 * (It does tell `onClockSet`, so the night being lived stops counting toward a Survivor. A server-side caller
+	 * must also mark the runs in the world assisted: see `onClockSet`.)
 	 */
 	setClock(dayTime: number, day?: number): void {
 		if (day !== undefined) this.day = math.max(1, math.floor(day));
 		this.dayTime = math.clamp(dayTime, 0, HOURS_PER_DAY - 1e-6);
 		this.forceSend = true;
 		this.refresh();
+		if (this.onClockSet !== undefined) this.onClockSet();
 	}
 
 	setRain(on: boolean): void {

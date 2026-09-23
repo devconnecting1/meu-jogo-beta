@@ -306,20 +306,47 @@ section("1) restarting a run is a new LIFE, not a new world (MP-13, MP-20)");
 		`world day ${after.day}, life day ${save.day}`,
 	);
 
-	// the survivor's own day is credited once per world midnight, mirroring server/sim/progress.ts
+	// the survivor's own day is the SERVER's: its midnight credits it (server/sim/progress.ts) -- or refuses it: dead,
+	// absent, AFK -- and the pushed wallet brings it here (shared/game/save.ts `applyWallet`). The client's clock
+	// crossing midnight does not move it as well: when the wallet landed first, that midnight counted twice
 	const lifeStart = save.day;
 	const worldStart = after.day;
+	const authoritative = defaultSave();
+	authoritative.day = save.day;
+	// the client's clock trails the server's by a few ticks (latency, and the bleed that eases it): the wallet the
+	// server pushes at its midnight lands BEFORE this client's own clock gets there
+	const LAG = 20;
+	const late = [];
+	let midnights = 0;
 	let spent = 0;
 	while (spent < 1400) {
+		const worldDay = server.day;
 		server.step(TICK_DT);
-		after.applyClock(deltaOf(server));
+		if (server.day !== worldDay) {
+			midnights += 1;
+			// the first midnight pays this survivor; the others find them AFK and do not
+			if (midnights === 1) authoritative.day += 1;
+			applyWallet(save, walletOf(authoritative));
+		}
+		late.push(deltaOf(server));
+		if (late.length > LAG) after.applyClock(late.shift());
 		after.update(TICK_DT);
 		spent += TICK_DT;
 	}
+	// ...and then catches up
+	while (late.length > 0) {
+		after.applyClock(late.shift());
+		after.update(TICK_DT);
+	}
 	check(
-		"both days then advance together, from their own starting points",
-		after.day - worldStart === save.day - lifeStart && save.day - lifeStart >= 2,
-		`world ${worldStart}→${after.day}, life ${lifeStart}→${save.day}`,
+		"the world's day advances with every midnight",
+		midnights >= 2 && after.day - worldStart === midnights,
+		`world ${worldStart}→${after.day} over ${midnights} midnights`,
+	);
+	check(
+		"…and the life's day only with the ones the server credited, never twice",
+		save.day - lifeStart === 1,
+		`life ${lifeStart}→${save.day} (1 credited of ${midnights})`,
 	);
 	check("…and they are still different numbers", after.day !== save.day, `${after.day} vs ${save.day}`);
 

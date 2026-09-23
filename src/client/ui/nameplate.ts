@@ -1,9 +1,18 @@
 /*
- * Player nameplate: one compact popover pill under the character, "[Lv 12]  DisplayName  @Name".
+ * Player nameplate: one compact popover pill under the character, "[Lv 12]  DisplayName  @Name", and -- when the
+ * survivor shows one (MON-05) -- their title on a second line UNDER the name, "[Survivor]", in its game colour.
  *
  * Roles: popover surface (background at TRANSPARENCY.nameplate over the world) + border; level = Badge in the XP
- * colour (chart-2); name in foreground (BuilderSans SemiBold); "@Name" in muted-foreground. Every colour is an
- * exact theme token.
+ * colour (chart-2); name in foreground (BuilderSans SemiBold); "@Name" in muted-foreground; the title in its tone
+ * (client/ui/titleStyle.ts, 4,5:1 on the popover in test:contrast), SemiBold, never with a contour (UI-04). Every
+ * colour is an exact theme token.
+ *
+ * The title line and the survivor: the pill is anchored at its TOP, under the body (the owner places it at
+ * radius + 14 u below the centre), so a second line grows it DOWNWARD, away from the survivor -- it can never cover
+ * the body. What it costs is height under the body: one line is 24 px at the design scale and two are 36 px (the
+ * title is TEXT.xs with no gap) -- 41 -> 62 px on a 1080p screen, measured by tools/test-backpack.mjs part 10 from the
+ * real layout values.
+ * Hidden (no title shown) it takes no room at all: UIListLayout skips an invisible child.
  *
  * The owner (gameLoop) positions it every frame with update(); nothing is created there, and Text / Position /
  * Visible are only written when they change. Sizes follow the UI scale (text, padding, corner, border).
@@ -14,7 +23,9 @@
  * for it at all (a spectated ally out of the roster, a replay, the offline harness).
  */
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "./theme";
-import { addStroke, boxStroke, onLayoutChange, uiScale } from "./widgets";
+import { addStroke, boxStroke, fixedTextPx, onLayoutChange, uiScale } from "./widgets";
+import { titleFromWire } from "shared/data/titles";
+import { titleColor, titleText } from "./titleStyle";
 
 const TweenService = game.GetService("TweenService");
 
@@ -22,6 +33,8 @@ const TweenService = game.GetService("TweenService");
 const LEVEL_TEXT = TEXT.xs;
 const NAME_TEXT = TEXT.sm - 1;
 const HANDLE_TEXT = TEXT.xs - 1;
+/** MON-05: the title under the name, the size of the level badge's text; never below the kit's 9 px floor */
+export const TITLE_TEXT = TEXT.xs;
 /** "@Name" only when it adds information and stays short */
 const MAX_BOTH_CHARS = 26;
 
@@ -68,9 +81,13 @@ export class Nameplate {
 	private badge: TextLabel;
 	private badgeRing: UIStroke;
 	private plateScale: UIScale;
+	/** MON-05: the second line, hidden while no title is shown */
+	private titleLabel: TextLabel;
 	private lastX = math.huge;
 	private lastY = math.huge;
 	private lastLevel = -1;
+	/** the title byte last drawn (`titleToWire`: 0 = none) */
+	private lastTitle = 0;
 	private shown = false;
 	private pulses: Array<Tween> = [];
 	private pulseGen = 0;
@@ -101,14 +118,31 @@ export class Nameplate {
 		addStroke(plate, THEME.border);
 		const pad = new Instance("UIPadding");
 		pad.Parent = plate;
+		// two lines: the name row, and under it the title (MON-05), centred on each other
+		const lines = new Instance("UIListLayout");
+		lines.FillDirection = Enum.FillDirection.Vertical;
+		lines.HorizontalAlignment = Enum.HorizontalAlignment.Center;
+		lines.SortOrder = Enum.SortOrder.LayoutOrder;
+		lines.Padding = new UDim(0, 0);
+		lines.Parent = plate;
+		// the pop scales around the anchor (top-centre), so the name never jitters inside the pill
+		const scale = new Instance("UIScale");
+		scale.Parent = plate;
+		const row = new Instance("Frame");
+		row.Name = "NameRow";
+		row.LayoutOrder = 1;
+		row.AutomaticSize = Enum.AutomaticSize.XY;
+		row.Size = UDim2.fromOffset(0, 0);
+		row.BackgroundColor3 = THEME.background;
+		row.BackgroundTransparency = 1;
+		row.BorderSizePixel = 0;
+		row.ZIndex = zIndex;
+		row.Parent = plate;
 		const layout = new Instance("UIListLayout");
 		layout.FillDirection = Enum.FillDirection.Horizontal;
 		layout.VerticalAlignment = Enum.VerticalAlignment.Center;
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
-		layout.Parent = plate;
-		// the pop scales around the anchor (top-centre), so the name never jitters inside the pill
-		const scale = new Instance("UIScale");
-		scale.Parent = plate;
+		layout.Parent = row;
 
 		// level: Badge look (rounded-md, solid XP colour, text-xs)
 		const badge = textLabel("LevelBadge", 1, THEME.foreground, fontOf("sans", Enum.FontWeight.Bold), zIndex);
@@ -129,7 +163,7 @@ export class Nameplate {
 		const ringHost = badge.FindFirstChild("StrokeHost") as Frame;
 		const ringHostCorner = new Instance("UICorner");
 		ringHostCorner.Parent = ringHost;
-		badge.Parent = plate;
+		badge.Parent = row;
 
 		const nameLabel = textLabel(
 			"NameLabel",
@@ -139,7 +173,7 @@ export class Nameplate {
 			zIndex,
 		);
 		nameLabel.Text = displayName;
-		nameLabel.Parent = plate;
+		nameLabel.Parent = row;
 
 		let handle: TextLabel | undefined;
 		if (showHandle) {
@@ -151,8 +185,20 @@ export class Nameplate {
 				zIndex,
 			);
 			handle.Text = `@${userName}`;
-			handle.Parent = plate;
+			handle.Parent = row;
 		}
+
+		// MON-05: the title, under the name; built once and only re-texted / shown / hidden afterwards
+		const titleLabel = textLabel(
+			"TitleLabel",
+			2,
+			THEME.popoverForeground,
+			fontOf("sans", Enum.FontWeight.SemiBold),
+			zIndex,
+		);
+		titleLabel.Text = "";
+		titleLabel.Visible = false;
+		titleLabel.Parent = plate;
 
 		// AutomaticSize needs real TextSize/offsets (TextScaled does not auto-size): recompute on screen changes
 		onLayoutChange(plate, () => {
@@ -173,6 +219,8 @@ export class Nameplate {
 			badge.TextSize = px(LEVEL_TEXT);
 			nameLabel.TextSize = px(NAME_TEXT);
 			if (handle !== undefined) handle.TextSize = px(HANDLE_TEXT);
+			// the one line of the plate that must stay legible on a phone (MON-02): the kit's text floor applies
+			titleLabel.TextSize = fixedTextPx(TITLE_TEXT);
 		});
 
 		plate.Parent = parent;
@@ -180,10 +228,15 @@ export class Nameplate {
 		this.badge = badge;
 		this.badgeRing = ring;
 		this.plateScale = scale;
+		this.titleLabel = titleLabel;
 	}
 
-	/** (x, y) = screen px (relative to the parent) of the plate's top-centre */
-	update(x: number, y: number, level: number, visible: boolean): void {
+	/**
+	 * (x, y) = screen px (relative to the parent) of the plate's top-centre. `title` is the title byte to show under the
+	 * name (`titleToWire`, 0 = none): the SERVER's word for an ally (their roster entry), `titleWireOf(save)` for
+	 * yourself -- never a title nobody checked.
+	 */
+	update(x: number, y: number, level: number, visible: boolean, title = 0): void {
 		if (visible !== this.shown) {
 			this.shown = visible;
 			this.plate.Visible = visible;
@@ -201,6 +254,17 @@ export class Nameplate {
 			this.lastLevel = level;
 			this.badge.Text = `Lv ${level}`;
 			if (levelUp) this.pulse();
+		}
+		const shownTitle = title > 0 ? title : 0;
+		if (shownTitle !== this.lastTitle) {
+			this.lastTitle = shownTitle;
+			const id = titleFromWire(shownTitle);
+			const label = this.titleLabel;
+			label.Visible = id >= 0;
+			if (id >= 0) {
+				label.Text = titleText(id, 0);
+				label.TextColor3 = titleColor(id);
+			}
 		}
 	}
 

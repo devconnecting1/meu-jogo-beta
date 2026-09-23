@@ -321,6 +321,7 @@ const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { generateTown } = require(join(SRC, "shared/game/world.ts"));
 const { defaultSave, sanitizeClientReport, copySaveInto } = require(join(SRC, "shared/game/save.ts"));
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
+const TIT = require(join(SRC, "shared/data/titles.ts"));
 const { COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
 const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
@@ -466,6 +467,8 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		roster: new Map(),
 		/** PlayerProfile deltas received */
 		profiles: [],
+		/** Announce events received (MON-05: a title unlock is one, addressed to its owner alone) */
+		announces: [],
 	});
 	return sp;
 }
@@ -473,7 +476,14 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 /** what client/net/netClient.ts `applyWorldEvent` does with the roster events, for one client */
 function applyRoster(client, e) {
 	if (e.t === P.WorldEv.PlayerJoined) {
-		client.roster.set(e.slot, { userId: e.userId, name: e.name, level: e.level, outfit: e.outfit, pet: e.pet });
+		client.roster.set(e.slot, {
+			userId: e.userId,
+			name: e.name,
+			level: e.level,
+			outfit: e.outfit,
+			pet: e.pet,
+			title: e.title,
+		});
 	} else if (e.t === P.WorldEv.PlayerProfile) {
 		client.profiles.push(e);
 		const entry = client.roster.get(e.slot);
@@ -481,6 +491,7 @@ function applyRoster(client, e) {
 		entry.level = e.level;
 		entry.outfit = e.outfit;
 		entry.pet = e.pet;
+		entry.title = e.title;
 	} else if (e.t === P.WorldEv.PlayerLeft) {
 		client.roster.delete(e.slot);
 	}
@@ -569,6 +580,11 @@ function tickServer(server, opts = {}) {
 			if (e.t === P.WorldEv.PlayerJoined || e.t === P.WorldEv.PlayerProfile || e.t === P.WorldEv.PlayerLeft) {
 				if (slot === undefined) for (const [, c] of server.clients) applyRoster(c, e);
 				else if (server.clients.has(slot)) applyRoster(server.clients.get(slot), e);
+				continue;
+			}
+			if (e.t === P.WorldEv.Announce) {
+				if (slot === undefined) for (const [, c] of server.clients) c.announces.push(e);
+				else server.clients.get(slot)?.announces.push(e);
 				continue;
 			}
 			if (e.t !== P.WorldEv.ZombieDied) continue;
@@ -1012,6 +1028,75 @@ section("(g) the roster carries outfit and pet, and a change mid-session reaches
 	checkEq(cc.roster.get(0)?.pet, COS.PetLook.Eagle, "and every other survivor's pet");
 	checkEq(cc.roster.get(2)?.outfit, COS.OutfitLook.None, "and its own plain look");
 	check(c.outfit === COS.OutfitLook.None && a.pet === COS.PetLook.Eagle, "the server's profile fields agree");
+}
+
+// ================================================================ (h) the title under the name (MON-05, §4.4)
+
+section("(h) the title under the name reaches the others only when the server says it was EARNED (MON-05, §4.4)");
+{
+	const { equipTitle } = require(join(SRC, "server/save/titles.ts"));
+	const wire = id => TIT.titleToWire(id);
+	const HB = TIT.TitleId.HordeBreaker;
+	const server = newWorldServer();
+	// the host's wiring (server/net/mpHost.ts): an unlock is told to its owner on the reliable channel
+	server.sim.onTitleUnlocked = (sp, titleId) => server.replicator.titleUnlocked(sp.slot, titleId);
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	// slot 0 walks in showing a title it earned (Survivor); slot 1 has earned nothing
+	const survivor = defaultSave();
+	survivor.titles[TIT.TitleId.Survivor] = 1;
+	survivor.equipTitle = TIT.TitleId.Survivor;
+	const a = addSurvivor(server, 0, cx, cy, survivor);
+	const b = addSurvivor(server, 1, cx + 40, cy);
+	for (let i = 0; i < 3; i++) tickServer(server);
+	const ca = server.clients.get(0);
+	const cb = server.clients.get(1);
+	checkEq(cb.roster.get(0)?.title, wire(TIT.TitleId.Survivor), "the ally's PlayerJoined carries the title it shows");
+	checkEq(ca.roster.get(0)?.title, wire(TIT.TitleId.Survivor), "and its own client is told the same");
+	checkEq(ca.roster.get(1)?.title, 0, "a survivor with nothing earned shows nothing");
+
+	// a report that claims every title and shows one: corrected on the server, never on the wire
+	const forged = JSON.parse(JSON.stringify(b.save));
+	forged.titles = forged.titles.map(() => 1);
+	forged.zombieKills = 5000;
+	forged.equipTitle = TIT.TitleId.WeekOne;
+	copySaveInto(b.save, sanitizeClientReport(forged, b.save));
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.title, 0, "a title a report claims is never shown to anyone");
+	checkEq(b.save.zombieKills, 0, "and the kills it claims are not counted");
+	// even a live table somebody wrote into directly is checked again before it is replicated
+	b.save.equipTitle = TIT.TitleId.WeekOne;
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.title, 0, "an unearned title in the live save never goes on the wire");
+	b.save.equipTitle = -1;
+
+	// the server's own kill credit makes slot 1 a Horde Breaker: the killing blow that reaches the goal
+	b.save.zombieKills = TIT.HORDE_BREAKER_KILLS - 1;
+	const announcesA = ca.announces.length;
+	server.sim.progress.zombieKilled(999001, 10, 1, server.now);
+	for (let i = 0; i < 12; i++) tickServer(server);
+	const unlocks = list => list.filter(e => e.msg === P.AnnounceKind.TitleUnlocked);
+	checkEq(unlocks(cb.announces).length, 1, "the survivor who earned it hears it once, on the reliable channel");
+	checkEq(unlocks(cb.announces)[0]?.arg, wire(HB), "naming the title (Horde Breaker)");
+	checkEq(ca.announces.length - announcesA, 0, "and nobody else is told");
+	checkEq(ca.roster.get(1)?.title, 0, "earning is not showing: the others see it only once it is chosen");
+	const profilesBefore = ca.profiles.length;
+
+	// the wardrobe's Equip, as the server applies it (server/save/titles.ts through ShopAction)
+	check(equipTitle(b.save, HB).ok, "the server accepts showing a title it granted");
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.title, wire(HB), "the others see it under the name, in the same session");
+	checkEq(cb.roster.get(1)?.title, wire(HB), "and its owner hears what the server accepted");
+	checkEq(ca.profiles.length - profilesBefore, 1, "one change, one PlayerProfile");
+	// a newcomer reads the current title in its PlayerJoined
+	addSurvivor(server, 2, cx - 40, cy);
+	for (let i = 0; i < 3; i++) tickServer(server);
+	checkEq(server.clients.get(2).roster.get(1)?.title, wire(HB), "a newcomer's roster has the title shown NOW");
+	// and taken off
+	check(equipTitle(b.save, -1).ok, "and to take it off");
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.title, 0, "which everybody sees too");
+	check(a.title === wire(TIT.TitleId.Survivor) && b.title === 0, "the server's profile fields agree");
 }
 
 // ---------------------------------------------------------------- verdict
