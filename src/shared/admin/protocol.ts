@@ -124,7 +124,23 @@ export interface PlayerRow {
 	sessionAge: number;
 	/** an admin edit is waiting for the client's confirmation */
 	patchPending: boolean;
+	/**
+	 * Live, from the server's simulation (§9.3; MP_PHASE >= 1): the survivor has a body in the town (false = lobby,
+	 * shop, loading). The rest of this block is meaningful only while it is true.
+	 */
+	inWorld: boolean;
+	/** the body in the town is dead (waiting for daybreak or a Rebirth, MP-21) */
+	dead: boolean;
+	hp: number;
+	hpMax: number;
+	/** seconds since the last real input with movement or an edge (MP-13's AFK test), -1 = not in the world */
+	idleS: number;
+	/** round trip to this player's client in ms (Player:GetNetworkPing), -1 = unknown */
+	pingMs: number;
 }
+
+/** MP-13's AFK window (server/sim/progress.ts AFK_WINDOW_S): the admin table calls an idle survivor AFK past it */
+export const ADMIN_AFK_S = 180;
 
 export interface BanHistoryEntry {
 	/** true = ban, false = unban */

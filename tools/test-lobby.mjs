@@ -1072,7 +1072,7 @@ check(
 	"...com o texto das tres saidas, quanto falta para as 06:00 (a noite no relogio do mundo) e quanto falta de moedas",
 	note().startsWith("Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.") &&
 		note().includes(`Daybreak in ${dawnLeft(21.6)}`) &&
-		note().includes(`Not enough coins (need ${price - 5} more)`),
+		note().includes(`Not enough coins: ${price - 5} more needed`),
 	note().replace(/\n/g, " / "),
 );
 check("trocar para o fim de partida nao cria Instance", zero(r), cost(r));

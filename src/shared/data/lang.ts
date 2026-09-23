@@ -155,14 +155,14 @@ export const LANG_TABLE: Array<string> = [
 	"Brazier",
 	"Electric turret",
 	"Trap",
-	"signal generator",
+	"Signal generator",
 	"Cooker",
 	"Electric furnace",
 	"Bicycle",
 	"Motorcycle",
 	"Wood",
 	"Stone",
-	"Piece of steel ",
+	"Piece of steel",
 	"Steel",
 	"Piece of gold",
 	"Gold",
@@ -415,6 +415,13 @@ export const LANG_TABLE: Array<string> = [
 	"Records",
 	"How to play",
 	"Credits",
+	// the credits page (client/ui/credits.ts); its names -- studios, a site, handles -- stay as they are
+	"Top-down zombie survival for Roblox",
+	"Inspired by Dead Town",
+	"by Lemon Puppy Games",
+	"Special thanks (original Dead Town credits)",
+	"Built with roblox-ts",
+	"Thank you for playing!",
 	// Settings window (DESIGN_RULES UI-07): tabs, sections, form rows (label + the one line under it) and notes
 	"General",
 	"Touch controls",
@@ -463,6 +470,21 @@ export const LANG_TABLE: Array<string> = [
 	"Gamepad",
 	"Menu",
 	"Backpack",
+	// the rows and notes of tutorial.ts SCHEMES (Settings › Controls and How to play: tr() of each); the key legends
+	// beside them are keys, not text
+	"Move",
+	"Aim",
+	"Interact, search, loot",
+	"Right click also interacts.",
+	"Move (the stick opens under it)",
+	"Drag to aim",
+	"Fire the aimed shot",
+	"Automatics keep firing",
+	"Interact (appears when you can)",
+	"Size, height, floating stick and left-handed: Settings › Touch controls.",
+	"Interact",
+	"Menus",
+	"Menus are navigated with the stick; the selected button carries a focus ring.",
 	"Game",
 	"Genre",
 	"Top-down zombie survival",
@@ -511,6 +533,11 @@ export const LANG_TABLE: Array<string> = [
 	"Save",
 	"Home",
 	"Game over",
+	// the end-of-run screen's epitaph (client/onboarding/gameOver.ts closingLine), one of four
+	"A new record. The town remembers.",
+	"Five days is more than most.",
+	"Everyone's first night ends this way. The second one goes better.",
+	"The street took it back. Take it again.",
 	"Rebirth",
 	"Survival days",
 	"Continue price",
@@ -520,6 +547,8 @@ export const LANG_TABLE: Array<string> = [
 	"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept.",
 	"Purchased",
 	"Not enough coins",
+	// "Not enough coins: 50 more needed" (the Survivor screen's note, the Rebirth toast)
+	"more needed",
 	"Too many packs waiting",
 	"Already owned",
 	"Please wait a moment",
@@ -659,6 +688,8 @@ export const LANG_TABLE: Array<string> = [
 	"HP",
 	"FOOD",
 	"LV",
+	// the touch fire pad's tag (client/ui/hud.ts)
+	"FIRE",
 	"Switch weapon",
 	"Tap a weapon",
 	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor
@@ -740,6 +771,25 @@ export const LANG_TABLE: Array<string> = [
 	"No skill points",
 	"No skill points to spend. Level up to earn more.",
 	"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.#Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.#Level up to earn skill points, and spend them in Skills.#The backpack and the menu never stop the world: open them somewhere safe.",
+	// the Records window (client/ui/records.ts, DESIGN_RULES UI-12): its two sections and the rows the table did not
+	// already have ("Best day", "Level", "Zombies put down", "Life day", "Nights survived in this life" are above)
+	"All time",
+	"Titles earned",
+	"Rebirths",
+	// the match scoreboard (client/ui/scoreboard.ts, DESIGN_RULES MP-23): the window, its columns and sort bar, the
+	// statuses, the empty table and the controls reference row (tutorial.ts SCHEMES)
+	"Survivors",
+	"Sort by",
+	"Lv",
+	"Put down",
+	"Name",
+	"Alive",
+	"Down",
+	"Dead",
+	"until dawn",
+	"Click a column to sort",
+	"Waiting for the town's list...",
+	"Survivors in town",
 ];
 
 /**

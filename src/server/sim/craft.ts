@@ -23,7 +23,7 @@
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS } from "shared/data/skills";
 import { chance } from "shared/engine/rng";
-import { countItem, addItem, removeItem } from "shared/sim/inventory";
+import { countItem, addItem, removeItem, unequipGone } from "shared/sim/inventory";
 import { querySolids, Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
@@ -138,6 +138,9 @@ export class ServerCraft {
 		// nothing is consumed until `blocker` has said yes to ALL of it. Taking ingredient by ingredient and
 		// giving up halfway is how the client's version ate a backpack for a craft that never happened.
 		for (const ing of r.ingredients) removeItem(save, ing.kind, ing.index, ing.count);
+		// what the recipe ate may have been in the survivor's hands or on their back: it comes off in the same step
+		// (the combat then finds the default blade in `weaponOf`, and banks the old magazine itself)
+		unequipGone(save);
 		l.craft = 1 / CRAFT_RATE;
 		if (r.craftKind === 1) {
 			// a placeable goes on the cursor; server/sim/build.ts places it and refunds a cancel
