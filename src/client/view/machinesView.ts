@@ -1,5 +1,5 @@
 /*
- * The electric builds, drawn (docs/DESIGN_RULES.md ELE-01..ELE-08; the pixels are data in shared/data/machineArt.ts).
+ * The electric builds, drawn (docs/DESIGN_RULES.md ELE-09; the pixels are data in shared/data/machineArt.ts).
  *
  *   worldView.drawSolids → draw(r, cam, s)       one machine where it stands: its sprite and what its state shows
  *   gameLoop.render      → drawAir(...)          the drones in the air, the cables, the way home to a beacon
@@ -16,7 +16,7 @@
  *   - a cable runs from each machine to the nearest battery box within POWER_LINK_RANGE — the server's rule, on the
  *     client's copy of the same solids — yellow (LEG-02: electricity) while the box holds charge, grey when it is dry.
  *
- * States (ELE-03): a green status lamp on whatever works, dark red on what does not; a lamp's lens and a cooker's plates
+ * States (ELE-09): a green status lamp on whatever works, dark red on what does not; a lamp's lens and a cooker's plates
  * glow, the reactor's core breathes, the oil generator smokes and shivers, the beacon's dish turns and its lamp blinks,
  * a pad's ring glows while it charges its drone, a battery box shows its charge in three yellow bars.
  *
@@ -70,15 +70,20 @@ const DRONE_EASE_SPEED = 900;
 /** the beacon arrow: this far from the survivor, this long */
 const ARROW_RADIUS = 96;
 const ARROW_LEN = 22;
-/** layers: a machine at the structures', its states just over it, a drone in the air over every body */
+/** a sprite's runs stack this many layers at most over its base (`decomposeGrid` keeps to it; test:power §I) */
+const MAX_LAYER = 4;
+/**
+ * Layers: a machine's body at the structures' (Z_BASE .. Z_BASE + MAX_LAYER), its states, glows and turning parts
+ * over that (Z_STATE .. Z_TOP, the status lamps on top), all under the zombies (Z.zombie = Z.structure + 10): a walker
+ * beside a turret is never under its head. A drone in the air flies over every body.
+ */
 const Z_BASE = Z.structure;
-const Z_STATE = Z.structure + 6;
+const Z_STATE = Z.structure + MAX_LAYER + 1;
+const Z_TOP = Z_STATE + MAX_LAYER;
 const Z_AIR = Z.projectile - 1;
 const Z_CABLE = Z.decal;
 /** the beacon arrow's two strokes, each this far back from the tip's heading */
 const CHEVRON = (145 * math.pi) / 180;
-/** a sprite's runs stack this many layers at most over its base (test:world-art checks the grids) */
-const MAX_LAYER = 4;
 
 /** one rectangle of a sprite, in texels, and its layer above the sprite's base */
 interface Run {
@@ -102,9 +107,13 @@ interface Seen {
 /**
  * The runs of a grid (client/view/buildingSigns.ts's decomposition, row-major): colour by colour in `order`, each colour's
  * texels covered by rectangles that may spill over texels of colours painted after it (never an earlier colour's), and
- * each run on the lowest layer above every earlier run it overlaps.
+ * each run on the lowest layer above every earlier colour's run it overlaps.
+ *
+ * At most `maxLayer` layers: a run that would land on the top layer does not spill (it covers only its own colour's
+ * texels), so nothing painted later has to go over it. Nested rings — a coil in a coil — would otherwise climb a layer
+ * per ring, into the states drawn over the body.
  */
-export function decomposeGrid(rows: ReadonlyArray<string>, order: string): Array<Run> {
+export function decomposeGrid(rows: ReadonlyArray<string>, order: string, maxLayer = MAX_LAYER): Array<Run> {
 	const m = rows.size();
 	const n = (rows[0] ?? "").size();
 	const rankOf = new Map<string, number>();
@@ -117,51 +126,60 @@ export function decomposeGrid(rows: ReadonlyArray<string>, order: string): Array
 	}
 	const runs: Array<Run> = [];
 	const layers: Array<number> = [];
+	/** the lowest layer a run of colour `L` over [x0, x1] × [y0, y1] may sit on */
+	const layerFor = (L: number, x0: number, y0: number, x1: number, y1: number): number => {
+		let z = 0;
+		for (let j = 0; j < runs.size(); j++) {
+			if (layers[j] >= L) continue;
+			const b = runs[j];
+			if (x0 < b.x + b.w && b.x <= x1 && y0 < b.y + b.h && b.y <= y1) z = math.max(z, b.z + 1);
+		}
+		return z;
+	};
 	for (let L = 0; L < colours; L++) {
 		const color = INK[order.sub(L + 1, L + 1)];
 		if (color === undefined) continue;
 		const covered: Array<boolean> = [];
 		for (let i = 0; i < n * m; i++) covered.push(false);
 		const needed = (i: number): boolean => rank[i] === L && !covered[i];
-		const allowed = (i: number): boolean => rank[i] >= L;
 		for (let y = 0; y < m; y++) {
 			for (let x = 0; x < n; x++) {
 				if (!needed(y * n + x)) continue;
 				// the widest span the rule allows on this row, grown down while every texel under it is allowed and
-				// at least one still needs this colour
+				// at least one still needs this colour; on the top layer, only this colour is allowed
 				let x0 = x;
-				while (x0 > 0 && allowed(y * n + x0 - 1)) x0 -= 1;
 				let x1 = x;
-				while (x1 < n - 1 && allowed(y * n + x1 + 1)) x1 += 1;
 				let y1 = y;
-				while (y1 + 1 < m) {
-					let ok = true;
-					let more = false;
-					for (let i = x0; i <= x1; i++) {
-						const k = (y1 + 1) * n + i;
-						if (!allowed(k)) ok = false;
-						else if (needed(k)) more = true;
+				let z = 0;
+				for (let pass = 0; pass < 2; pass++) {
+					const own = pass === 1;
+					const allowed = (i: number): boolean => (own ? rank[i] === L : rank[i] >= L);
+					x0 = x;
+					while (x0 > 0 && allowed(y * n + x0 - 1)) x0 -= 1;
+					x1 = x;
+					while (x1 < n - 1 && allowed(y * n + x1 + 1)) x1 += 1;
+					y1 = y;
+					while (y1 + 1 < m) {
+						let ok = true;
+						let more = false;
+						for (let i = x0; i <= x1; i++) {
+							const k = (y1 + 1) * n + i;
+							if (!allowed(k)) ok = false;
+							else if (needed(k)) more = true;
+						}
+						if (!ok || !more) break;
+						y1 += 1;
 					}
-					if (!ok || !more) break;
-					y1 += 1;
+					z = layerFor(L, x0, y, x1, y1);
+					if (z < maxLayer) break;
 				}
 				for (let yy = y; yy <= y1; yy++) {
 					for (let i = x0; i <= x1; i++) if (rank[yy * n + i] === L) covered[yy * n + i] = true;
 				}
-				runs.push({ x: x0, y, w: x1 - x0 + 1, h: y1 - y + 1, color, z: 0 });
+				runs.push({ x: x0, y, w: x1 - x0 + 1, h: y1 - y + 1, color, z });
 				layers.push(L);
 			}
 		}
-	}
-	for (let i = 0; i < runs.size(); i++) {
-		const a = runs[i];
-		let z = 0;
-		for (let j = 0; j < i; j++) {
-			const b = runs[j];
-			if (layers[j] >= layers[i]) continue;
-			if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) z = math.max(z, b.z + 1);
-		}
-		a.z = z;
 	}
 	return runs;
 }
@@ -425,8 +443,9 @@ export class MachinesView {
 		}
 		if (tag === "lamp") {
 			if (working) {
+				// the halo first, the lens over it (one layer: the same light)
+				this.circle(r, cam, cx, cy, tex * 9, LIT, Z_STATE, 0.25);
 				this.circle(r, cam, cx, cy, tex * 4.6, LIT, Z_STATE, 0.95);
-				this.circle(r, cam, cx, cy, tex * 9, LIT, Z_STATE - 1, 0.25);
 			}
 			return;
 		}
@@ -444,7 +463,7 @@ export class MachinesView {
 			this.sprite(r, cam, "dish", cx, cy, turn, Z_STATE, 1);
 			// the beacon lamp blinks once a second while it transmits
 			const on = working && t % 1 < 0.35;
-			this.rect(r, cam, cx, cy, tex * 1.5, tex * 1.5, on ? INK.r : LED_OFF, Z_STATE + 2, 1);
+			this.rect(r, cam, cx, cy, tex * 1.5, tex * 1.5, on ? INK.r : LED_OFF, Z_TOP, 1);
 			return;
 		}
 		if (tag === "turret_drone" || tag === "lamp_drone") {
@@ -452,8 +471,8 @@ export class MachinesView {
 			const seen = this.seenOf(s);
 			if (!flying && seen.airX === undefined) {
 				// home: on its pad, the ring glowing while the pad charges it
-				if (working) this.circle(r, cam, cx, cy, s.w * 0.8, INK.y, Z_STATE - 1, 0.3 + math.sin(t * 4) * 0.1);
-				this.sprite(r, cam, tag === "lamp_drone" ? "droneLamp" : "droneTurret", cx, cy, 0, Z_STATE, 1);
+				if (working) this.circle(r, cam, cx, cy, s.w * 0.8, INK.y, Z_STATE, 0.3 + math.sin(t * 4) * 0.1);
+				this.sprite(r, cam, tag === "lamp_drone" ? "droneLamp" : "droneTurret", cx, cy, 0, Z_STATE + 1, 1);
 			}
 			this.led(r, cam, x0 + s.w - tex * 1.5, y0 + tex * 1.5, flying || working);
 		}
@@ -672,7 +691,7 @@ export class MachinesView {
 	}
 
 	private led(r: Renderer, cam: Camera, x: number, y: number, on: boolean): void {
-		this.rect(r, cam, x, y, MACHINE_TEXEL, MACHINE_TEXEL, on ? LED_ON : LED_OFF, Z_STATE + 3, 1);
+		this.rect(r, cam, x, y, MACHINE_TEXEL, MACHINE_TEXEL, on ? LED_ON : LED_OFF, Z_TOP, 1);
 	}
 
 	private muzzle(r: Renderer, cam: Camera, cx: number, cy: number, aim: number, k: number): void {

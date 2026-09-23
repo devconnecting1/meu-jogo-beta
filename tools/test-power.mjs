@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Electricity and automated defence, on the SERVER (docs/DESIGN_RULES.md §10A ELE-01..ELE-08).
+ * Electricity and automated defence, on the SERVER (docs/DESIGN_RULES.md §10A ELE-01..ELE-09).
  *
  *   npm run test:power
  *   node tools/test-power.mjs --verbose
@@ -23,13 +23,19 @@
  *                     for its shots, stops at walls, never targets or hurts a survivor; the electric turret holds
  *                     what it shocks and jumps twice; the turret drone fires from its orbit; Robotics ×1.5 damage;
  *   E. the cost       ten turrets and a full horde: the searches per tick are bounded and staggered;
- *   F. stations       a working cooker is cooking heat (the cooking rule's other half), a cold one is not.
+ *   F. stations       a working cooker is cooking heat (the cooking rule's other half), a cold one is not;
+ *   G. the wire       only what changed is published, with the level of each store;
+ *   H. end to end     crafted with the backpack verb, placed by the server's build, and it shoots;
+ *   I. the drawing    (client/view/machinesView.ts) every grid is well formed and its flat runs repaint it; working
+ *                     and dead look different; a turret turns to its shot; a lamp drone lights where the server's
+ *                     orbit puts it; cables and the beacon's arrow; 600 frames without an Instance, flat and with art.
  *
- * Pure Node (>= 18) + the project's TypeScript, on tools/luau-shim.mjs.
+ * Pure Node (>= 18) + the project's TypeScript, on tools/luau-shim.mjs (and tools/fake-gui.mjs for section I).
  */
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { installShims, setSeed } from "./luau-shim.mjs";
+import { installFakeGui } from "./fake-gui.mjs";
 
 const VERBOSE = process.argv.includes("--verbose");
 const { SRC, require } = installShims({ seed: 1 });
@@ -48,7 +54,6 @@ const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
 const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
 const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
 const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
-const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const { isLight } = require(join(SRC, "shared/sim/interactQuery.ts"));
 const CR = require(join(SRC, "shared/sim/craftRule.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
@@ -996,6 +1001,316 @@ section(
 		check(save.exp > exp0, "and its builder was paid the XP", `+${save.exp - exp0}`);
 	},
 );
+
+// ================================================================ I. the drawing
+
+section("I. the drawing: a sprite per machine, its states on it, drones that fly and light, no churn (ELE-09)", () => {
+	// the client's view, on the fake GUI tree (installed here: nothing above draws)
+	const gui = installFakeGui();
+	const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+	const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
+	const { Z } = require(join(SRC, "shared/engine/colors.ts"));
+	const MV = require(join(SRC, "client/view/machinesView.ts"));
+	const PM = require(join(SRC, "client/systems/powerMirror.ts"));
+	const WA = require(join(SRC, "client/view/worldArt.ts"));
+	const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+	const ART = require(join(SRC, "shared/data/machineArt.ts"));
+	const rgb = c =>
+		c === undefined ? "-" : `${Math.round(c.R * 255)},${Math.round(c.G * 255)},${Math.round(c.B * 255)}`;
+
+	// ---- the grids: well formed, in the pipeline, and the flat drawing IS the grid
+	const MAX_LAYER = 4;
+	const counts = [];
+	for (const [key, sp] of Object.entries(ART.MACHINE_SPRITES)) {
+		const cols = sp.rows[0].length;
+		const inks = new Set([...ART.MACHINE_ART_ORDER, "."]);
+		const shaped = sp.rows.every(row => row.length === cols && [...row].every(ch => inks.has(ch)));
+		const tex = WORLD_ART[sp.texture];
+		const runs = MV.decomposeGrid(sp.rows, ART.MACHINE_ART_ORDER);
+		// paint the runs the way the renderer stacks them (ZIndex, then order), texel by texel
+		const paint = sp.rows.map(row => [...row].map(() => undefined));
+		runs.map((q, i) => ({ q, i }))
+			.sort((a, b) => a.q.z - b.q.z || a.i - b.i)
+			.forEach(({ q }) => {
+				for (let y = q.y; y < q.y + q.h; y++) for (let x = q.x; x < q.x + q.w; x++) paint[y][x] = q.color;
+			});
+		let wrong = 0;
+		sp.rows.forEach((row, y) =>
+			[...row].forEach((ch, x) => {
+				const want = ch === "." ? undefined : ART.MACHINE_ART[ch];
+				if (rgb(paint[y][x]) !== rgb(want)) wrong += 1;
+			}),
+		);
+		counts.push(`${key} ${runs.length}`);
+		check(
+			shaped &&
+				tex !== undefined &&
+				tex.w === cols &&
+				tex.h === sp.rows.length &&
+				wrong === 0 &&
+				MV.machineRunLayers(key) <= MAX_LAYER,
+			`${key}: a ${cols}×${sp.rows.length} grid, its texture in the pipeline, the flat runs repaint it texel for texel, ≤ ${MAX_LAYER} layers`,
+			`texture ${sp.texture} ${tex === undefined ? "missing" : `${tex.w}×${tex.h}`}, ${wrong} texels wrong, ${MV.machineRunLayers(key)} layers`,
+		);
+	}
+	if (VERBOSE) console.log(`        runs drawn flat: ${counts.join(", ")}`);
+
+	// ---- a client world with every machine and a box, the way the WorldInit leaves it
+	PM.resetPowerMirror();
+	const world = W.serverWorld(W.createWorld(6000, 6000));
+	const put = (id, x, y) => {
+		const d = PLACEABLES[id];
+		return W.addSolid(world, { ...placedSolid(d, { x, y, w: d.w, h: d.h }, 0), placeable: id, owner: 0 });
+	};
+	const box = put(ID.battery, 2000, 2000);
+	const m = {};
+	const spots = [
+		["turret", ID.turret],
+		["shock", ID.shock],
+		["solar", ID.solar],
+		["reactor", ID.reactor],
+		["oil", ID.oil],
+		["lamp", ID.lamp],
+		["beacon", ID.beacon],
+		["cooker", ID.cooker],
+		["turretDrone", ID.turretDrone],
+		["lampDrone", ID.lampDrone],
+	];
+	spots.forEach(([name, id], i) => {
+		const a = (i / spots.length) * 2 * Math.PI;
+		m[name] = put(id, 2000 + Math.cos(a) * 220, 2000 + Math.sin(a) * 220);
+	});
+	const barricade = put(0, 1500, 1500);
+	const root = gui.make("Frame");
+	const r = new Renderer(root, "Sprites");
+	const cam = new Camera();
+	cam.setView(1600, 1200);
+	r.setView(1600, 1200);
+	cam.x = 2050;
+	cam.y = 2050;
+	const view = new MV.MachinesView(() => ({ x: 0, y: 0 }));
+	const set = (s, state, pilot = SLOT_NONE) =>
+		PM.applyPowerSet(world, { t: P.WorldEv.PowerSet, id: s.id, state, pilot });
+	const on = (level = 3) => POW.packPowerState(true, level, false, true);
+	const off = () => POW.packPowerState(false, 0, false, false);
+
+	// capture what a call draws: the renderer's own entry point, recorded
+	const calls = [];
+	let capturing = false;
+	const drawRect = Renderer.prototype.drawRect;
+	Renderer.prototype.drawRect = function (c, wx, wy, o) {
+		if (capturing) {
+			calls.push({
+				x: wx,
+				y: wy,
+				w: o.w,
+				h: o.h,
+				z: o.zIndex,
+				color: rgb(o.color),
+				alpha: o.alpha,
+				rotation: o.rotation ?? 0,
+				image: o.image,
+				circle: o.circle === true,
+			});
+		}
+		return drawRect.call(this, c, wx, wy, o);
+	};
+	const capture = fn => {
+		calls.length = 0;
+		capturing = true;
+		r.beginFrame();
+		fn();
+		r.endFrame();
+		capturing = false;
+		return calls.map(c => ({ ...c }));
+	};
+	const key = cs => JSON.stringify(cs.map(c => [c.z, c.color, Math.round(c.alpha * 100), c.circle]));
+	const body = { x: 2600, y: 2300 };
+	let t = 0;
+	const frame = (tracers = [], me = undefined, dt = 1 / 60) => {
+		t += dt;
+		view.learn(world, tracers, t, t, dt);
+		return capture(() => {
+			for (const s of world.solids) view.draw(r, cam, s);
+			view.drawAir(r, cam, cam.viewRect(32), dt, slot => (slot === 0 ? body : undefined), me);
+		});
+	};
+
+	// ---- every machine has its own drawing; anything else keeps the old one
+	view.learn(world, [], 0.2, 0.2, 0);
+	const tags = Object.keys(POW.MACHINES);
+	const drawn = tags.filter(tag => {
+		const s = world.solids.find(o => o.tags === tag);
+		return s !== undefined && capture(() => view.draw(r, cam, s)).length > 0;
+	});
+	let claimed = true;
+	capture(() => {
+		claimed = view.draw(r, cam, barricade);
+	});
+	check(
+		drawn.length === tags.length && !claimed,
+		"every electric build is drawn by the machines view, and a barricade is left to the old drawing",
+		`${drawn.length}/${tags.length}`,
+	);
+	// its body on the structures' layers, its states over them, all under the zombies (a walker beside a turret is
+	// never under its head); everything at once: every state lit, the turret aimed, a drone docked
+	for (const s of world.solids) if (POW.machineOf(s) !== undefined) set(s, on());
+	const layersOf = cs => cs.map(c => c.z);
+	const standing = world.solids.filter(s => POW.machineOf(s) !== undefined);
+	const zs = layersOf(capture(() => standing.forEach(s => view.draw(r, cam, s)))).filter(z => z !== Z.shadow);
+	check(
+		zs.length > 0 && Math.min(...zs) >= Z.structure && Math.max(...zs) < Z.zombie,
+		"a machine draws between the structures' layer and the zombies' (its shadow apart)",
+		`z ${Math.min(...zs)}..${Math.max(...zs)}, zombies at ${Z.zombie}`,
+	);
+
+	// ---- powered and unpowered look different, on every machine (ELE-09)
+	const look = (s, state) => {
+		set(s, state);
+		view.learn(world, [], 0.2, 0.2, 0);
+		return key(capture(() => view.draw(r, cam, s)));
+	};
+	const same = [];
+	for (const s of [box, ...Object.values(m)]) {
+		const dark = look(s, off());
+		const lit = look(s, on());
+		if (dark === lit) same.push(s.tags);
+	}
+	check(
+		same.length === 0,
+		"working and dead look different on every machine (the status lamp, the lens, the plates, the bars, the core)",
+		same.join(", "),
+	);
+
+	// ---- the turret's head turns to its last shot, and the muzzle flashes while the tracer burns
+	set(m.turret, on());
+	const tc = { x: m.turret.x + m.turret.w / 2, y: m.turret.y + m.turret.h / 2 };
+	const aim = 2.2;
+	const tracer = {
+		x1: tc.x + Math.cos(aim) * POW.TURRET_MUZZLE,
+		y1: tc.y + Math.sin(aim) * POW.TURRET_MUZZLE,
+		x2: tc.x + Math.cos(aim) * 280,
+		y2: tc.y + Math.sin(aim) * 280,
+		life: 0.08,
+	};
+	view.learn(world, [tracer], t, t, 1 / 60);
+	const shooting = capture(() => view.draw(r, cam, m.turret));
+	const turned = shooting.filter(c => Math.abs(c.rotation - aim) < 1e-9);
+	const flashes = cs => cs.filter(c => c.w === 14 && c.h === 10).length;
+	view.learn(world, [], t, t, 0.2);
+	const after = capture(() => view.draw(r, cam, m.turret));
+	const stillTurned = after.filter(c => Math.abs(c.rotation - aim) < 1e-9).length;
+	check(
+		turned.length > 1 && flashes(shooting) === 1 && flashes(after) === 0 && stillTurned === turned.length - 1,
+		"a turret's head turns to where its shot went (the server's tracer names it), the muzzle flashes, then stops",
+		`${turned.length} parts turned, flash ${flashes(shooting)} then ${flashes(after)}, head still aimed ${stillTurned}`,
+	);
+
+	// ---- a lamp drone flies beside its survivor on the server's orbit, lights the night there, and comes home
+	set(m.lampDrone, POW.packPowerState(true, 3, true), 0);
+	for (let i = 0; i < 120; i++) frame();
+	const orbit = POW.droneOffset(m.lampDrone.id, true, t, { x: 0, y: 0 });
+	const lights = [];
+	view.collectLights(lights);
+	const light = lights[0];
+	check(
+		lights.length === 1 &&
+			light.r === POW.LAMP_DRONE_LIGHT &&
+			near(light.x, body.x + orbit.x, 1e-6) &&
+			near(light.y, body.y + orbit.y, 1e-6),
+		"the lamp drone in the air lights 320 u exactly where the server's orbit puts it (droneOffset, one function)",
+		light === undefined
+			? "no light"
+			: `(${light.x.toFixed(1)}, ${light.y.toFixed(1)}) vs (${(body.x + orbit.x).toFixed(1)}, ${(body.y + orbit.y).toFixed(1)})`,
+	);
+	const inAir = frame().filter(c => c.z >= Z.projectile - 1 && c.z <= Z.projectile + 8).length;
+	set(m.lampDrone, POW.packPowerState(false, 2, false), SLOT_NONE);
+	for (let i = 0; i < 120; i++) frame();
+	const home = [];
+	view.collectLights(home);
+	check(
+		inAir > 0 && home.length === 0,
+		"called back, it flies home to its pad and its light goes out",
+		`${inAir} parts in the air`,
+	);
+
+	// ---- the cables: yellow while the box holds charge, grey when it is dry
+	const cables = cs => cs.filter(c => c.z === Z.decal && c.h === 3);
+	set(box, on());
+	const fed = cables(frame());
+	set(box, off());
+	const dry = cables(frame());
+	check(
+		fed.length === Object.keys(m).length &&
+			fed.every(c => c.color === rgb(ART.MACHINE_ART.y)) &&
+			dry.length === fed.length &&
+			dry.every(c => c.color !== rgb(ART.MACHINE_ART.y)),
+		"a cable from each machine to its box: yellow while it holds charge (LEG-02), grey when it is dry",
+		`${fed.length} cables`,
+	);
+
+	// ---- the beacon's arrow: only a working beacon, only once you are away from it
+	const arrow = cs => cs.filter(c => c.z === Z.uiWorld && c.color === rgb(ART.MACHINE_ART.c));
+	const bc = { x: m.beacon.x + m.beacon.w / 2, y: m.beacon.y + m.beacon.h / 2 };
+	set(m.beacon, on());
+	const far = arrow(frame([], { x: bc.x + 1500, y: bc.y }));
+	const close = arrow(frame([], { x: bc.x + 200, y: bc.y }));
+	set(m.beacon, POW.packPowerState(false, 0, false, true));
+	const unfed = arrow(frame([], { x: bc.x + 1500, y: bc.y }));
+	check(
+		far.length === 2 && far.every(c => c.x < bc.x + 1500) && close.length === 0 && unfed.length === 0,
+		"the signal generator: an arrow home when you are far, none beside it, none when it has no power",
+		`far ${far.length}, close ${close.length}, unfed ${unfed.length}`,
+	);
+
+	// ---- no churn: everything moving (shots, a drone out and back, the beacon blinking), flat and with art
+	const churn = art => {
+		WA.overrideWorldArt(art);
+		for (const s of [box, ...Object.values(m)]) set(s, on());
+		const cycle = i => {
+			const k = i % 240;
+			if (k === 0) set(m.turretDrone, POW.packPowerState(true, 3, true), 0);
+			if (k === 120) set(m.turretDrone, POW.packPowerState(true, 2, false), SLOT_NONE);
+			body.x = 2600 + Math.sin(i / 30) * 200;
+			frame(i % 10 === 0 ? [{ ...tracer, life: 0.08 }] : [], {
+				x: bc.x + 1500,
+				y: bc.y + Math.cos(i / 40) * 300,
+			});
+		};
+		for (let i = 0; i < 480; i++) cycle(i);
+		const before = gui.stats.created;
+		for (let i = 0; i < 600; i++) cycle(i);
+		return gui.stats.created - before;
+	};
+	const flatChurn = churn({});
+	const ids = {};
+	for (const sp of Object.values(ART.MACHINE_SPRITES)) {
+		ids[sp.texture] = `rbxassetid://${Object.keys(ids).length + 700000}`;
+	}
+	const artChurn = churn(ids);
+	check(
+		flatChurn === 0 && artChurn === 0,
+		"600 frames of it create no Instance after warm-up, flat and with art",
+		`flat ${flatChurn}, art ${artChurn}`,
+	);
+
+	// ---- with art, a machine is a picture: one ImageLabel for its body, the states over it
+	const machines = [box, ...Object.values(m)];
+	const withArt = machines.map(s => {
+		const cs = capture(() => view.draw(r, cam, s));
+		return { tag: s.tags, images: cs.filter(c => c.image !== undefined).length, all: cs.length };
+	});
+	WA.overrideWorldArt({});
+	const flat = machines.map(s => capture(() => view.draw(r, cam, s)).length);
+	check(
+		withArt.every((a, i) => a.images >= 1 && a.all <= 8 && a.all < flat[i]),
+		"with its texture uploaded each machine is one picture (≤ 8 sprites with its states), fewer than flat",
+		withArt.map((a, i) => `${a.tag} ${a.all}/${flat[i]}`).join(", "),
+	);
+	Renderer.prototype.drawRect = drawRect;
+	WA.overrideWorldArt(undefined);
+	PM.resetPowerMirror();
+});
 
 // ---------------------------------------------------------------- verdict
 
