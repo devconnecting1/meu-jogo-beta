@@ -43,7 +43,7 @@ const UI = join(ROOT, "src", "client", "ui");
 const TOKENS_FILE = join(UI, "themeTokens.ts");
 const THEME_FILE = join(UI, "theme.ts");
 /** the kit: the only code allowed to create strokes for the screens, and the keycaps */
-const KIT_FILES = ["skin.ts", "widgets.ts", "tutorial.ts"];
+const KIT_FILES = ["skin.ts", "widgets.ts", "plate.ts", "window.ts", "tutorial.ts"];
 
 /** WCAG 2.x: normal (small) text */
 const MIN_TEXT = 4.5;
@@ -53,6 +53,11 @@ const MIN_LARGE = 3;
 const MIN_UI = 3;
 /** ours: the panel moulding is decoration, not the outline that identifies the panel -- but it must be seen */
 const MIN_RELIEF = 1.5;
+/**
+ * ours: two tones of ONE shape (the label cell and the value cell of a settings row, UI-07). The reference's own
+ * pair measures 1,22:1; below this the row reads as one flat bar and the "label | value" split is gone.
+ */
+const MIN_TONE = 1.2;
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -210,6 +215,35 @@ const PAIRS = [
 	["GAME.food", "SURFACE.well", MIN_UI, "barra de fome"],
 	["GAME.xp", "SURFACE.well", MIN_UI, "barra de XP"],
 	["SURFACE.frame", "SURFACE.panel", MIN_RELIEF, "moldura grossa do painel (relevo, nao e o contorno)"],
+
+	// --- the window vocabulary (UI-07): the reference's pieces, with light labels and no contour ---
+	["THEME.foreground", "SURFACE.header", MIN_TEXT, "titulo da janela sobre a faixa do cabecalho"],
+	["THEME.mutedForeground", "SURFACE.header", MIN_TEXT, "o \"?\" do cabecalho, em repouso"],
+	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, "aba ativa azul / segmento escolhido / item selecionado"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "aba inativa (chapa lisa de ferro) e seu rotulo"],
+	["THEME.foreground", "SURFACE.key", MIN_TEXT, "tecla de valor escura da linha de ajuste (W, LeftShift, 50%)"],
+	["THEME.destructiveForeground", "THEME.destructive", MIN_LARGE, "X vermelho de fechar a janela (glifo grande Bold)"],
+	["THEME.foreground", "SURFACE.cellLabel", MIN_TEXT, "celula de rotulo da linha de ajuste (Bold, centrado)"],
+	["THEME.foreground", "SURFACE.cell", MIN_TEXT, "celula de valor (valor em texto: About)"],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, "titulo do poco da secao (Volume, Keybinds)"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "nota muda dentro da lista (nunca sobre uma celula)"],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, "texto sobre o corpo grafite da janela"],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "legenda sobre o corpo da janela (limita o quanto ele clareia)"],
+	["SURFACE.window", "THEME.background", MIN_TONE, "corpo da janela destacado da pagina escura atras dela"],
+	["SURFACE.window", "SURFACE.header", MIN_TONE, "faixa do cabecalho um tom abaixo do corpo da janela"],
+	["THEME.tabActive", "SURFACE.window", MIN_UI, "aba ativa sobre o corpo da janela"],
+	["THEME.secondary", "SURFACE.window", MIN_UI, "aba inativa sobre o corpo da janela"],
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "poco da secao sobre o corpo da janela"],
+	["THEME.tabActive", "SURFACE.panel", MIN_UI, "item selecionado do trilho (Bag, loja) sobre o painel"],
+	["THEME.secondary", "SURFACE.panel", MIN_UI, "chapa de ferro sobre um painel"],
+	["THEME.secondary", "SURFACE.well", MIN_UI, "segmento inativo dentro da canaleta do seletor"],
+	["SURFACE.well", "SURFACE.cell", MIN_RELIEF, "canaleta do seletor / sulco do slider sobre a celula de valor"],
+	["THEME.tabActive", "SURFACE.well", MIN_UI, "faixa escolhida do slider dentro do sulco"],
+	["THEME.border", "SURFACE.groove", MIN_UI, "barra de rolagem clara sobre a lista"],
+	["SURFACE.section", "SURFACE.panel", MIN_RELIEF, "poco de secao sobre um painel comum"],
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "sulco entre as linhas (lista) contra o poco"],
+	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "sulco entre duas linhas contra a celula de rotulo"],
+	["SURFACE.cell", "SURFACE.cellLabel", MIN_TONE, "celula de valor x celula de rotulo (dois tons da mesma linha)"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
@@ -218,6 +252,7 @@ const PLATE_LABELS = [
 	"THEME.secondaryForeground",
 	"THEME.destructiveForeground",
 	"THEME.accentForeground",
+	"THEME.tabActiveForeground",
 ];
 
 // ---------------------------------------------------------------- run: contrast

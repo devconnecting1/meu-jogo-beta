@@ -2,11 +2,13 @@
  * Project Z UI kit: the shadcn/ui vocabulary (Button, Card, Badge, Progress, Tabs, Separator, Dialog, Slider,
  * Toast) rebuilt on Roblox GuiObjects and dressed in the author's "Pixel Quest relief" skin (skin.ts).
  *
- * Look (from the reference art):
- * - windows are PANELS: flat interior, thick frame, bitten pixel corners, a TITLE STRIP at the top
- * - what holds content (lists, rows, tracks, inactive tabs, chips) is a WELL sunk into the panel
- * - what you press is RAISED: flat face, light band on top, dark base (lip) under it; pressing drops the
- *   face 2 skin pixels and eats the lip
+ * Look (from the reference art, DESIGN_RULES UI-07):
+ * - windows are PANELS: flat interior, thick frame, bitten pixel corners, a darker HEADER band with the big
+ *   title centred on it (and, in window.ts, the "?" at the left and the red "X" at the right)
+ * - what holds content (lists, tracks, chips) is a WELL sunk into the panel; a window's section is a lighter
+ *   notched plate (window.ts)
+ * - what you press is a PLATE (plate.ts): notched pixel corners, light band and ears on top, dark lip under;
+ *   pressing pushes it in. Inactive tabs are flat iron plates; the active tab / selected item is BLUE
  * - text never carries a contour (DESIGN_RULES UI-04): labels on plates are the light `foreground`, and the
  *   PLATE is what makes them readable (UI-05) -- a plate that fails the contrast test gets darker, the text
  *   never gets an outline
@@ -17,7 +19,8 @@
  *
  * Rules:
  * - colours, fonts, radius and spacing come from theme.ts (never literals in the screens); the relief itself
- *   is a greyscale texture tinted with ImageColor3 = an exact token (skin.ts)
+ *   is a greyscale texture tinted with ImageColor3 = an exact token (skin.ts: panels, wells) or a token washed
+ *   over a token with Frames (plate.ts: buttons, tabs, keys, tiles)
  * - text is TextScaled + UITextSizeConstraint (max = design size x current UI scale), so it never overflows its
  *   box on phones and is not tiny on 1080p/1440p; skin pixels and borders scale the same way. Exception: a
  *   Keycap keeps its text size and grows its box instead (fixedText), because a key legend squeezed to fit
@@ -29,11 +32,11 @@
  * - no skin textures (or a failed fetch) = the previous flat look, drawn from the same tokens (skin.ts)
  */
 import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
+import { PlateState, clearPlate, paintPlate, plateUnit, reliefPx } from "./plate";
 import {
 	DESIGN_H,
 	DESIGN_W,
 	PRESS_DROP,
-	RaisedState,
 	SurfaceSpec,
 	boxStroke,
 	clearSurface,
@@ -49,7 +52,6 @@ import {
 	paintSurface,
 	panelSurface,
 	preferredTextScale,
-	raisedSurface,
 	reducedMotion,
 	scaleText,
 	setStrokeWidth,
@@ -118,7 +120,7 @@ GuiService.GetPropertyChangedSignal("SelectedObject").Connect(() => {
 });
 
 /** makes `obj` selectable with the kit's focus ring; `refresh` redraws it when it gains/loses focus */
-function registerFocus(obj: GuiObject, refresh: () => void): void {
+export function registerFocus(obj: GuiObject, refresh: () => void): void {
 	obj.SelectionImageObject = NO_SELECTION_IMAGE;
 	focusHandlers.set(obj, refresh);
 	obj.Destroying.Connect(() => focusHandlers.delete(obj));
@@ -152,7 +154,8 @@ export function setVisible(obj: GuiObject, visible: boolean): void {
 
 // ---------------------------------------------------------------- design-space helpers
 
-function designOf(parent: Instance): [number, number] {
+/** the design space (w, h) children of `parent` are placed in: its DesignW / DesignH, or the root 1120 x 630 */
+export function designOf(parent: Instance): [number, number] {
 	if (parent.IsA("GuiObject")) {
 		const dw = parent.GetAttribute("DesignW");
 		const dh = parent.GetAttribute("DesignH");
@@ -313,8 +316,23 @@ function surfaceSpec(kind: SurfaceKind, opts?: SurfaceOpts): SurfaceSpec {
 	const t = opts?.transparency ?? 0;
 	if (kind === "panel") return panelSurface(opts?.fill ?? SURFACE.panel, opts?.border ?? SURFACE.frame, t);
 	if (kind === "strip") return stripSurface(opts?.fill ?? SURFACE.frame, t);
-	if (kind === "raised") return raisedSurface(opts?.fill ?? THEME.secondary);
 	return wellSurface(opts?.fill ?? SURFACE.well, opts?.border ?? SURFACE.line, t);
+}
+
+/**
+ * Paints `host` as `kind`. A RAISED surface is a plate (plate.ts: the reference's notched plate with light band,
+ * ears and lip, drawn with Frames); the others are skin surfaces. Switching between the two hides the other one.
+ */
+function applyKind(host: GuiObject, kind: SurfaceKind, opts?: SurfaceOpts): void {
+	if (kind === "raised") {
+		clearSurface(host);
+		host.BackgroundColor3 = THEME.background;
+		host.BackgroundTransparency = 1;
+		paintPlate(host, opts?.fill ?? THEME.secondary, "idle");
+		return;
+	}
+	clearPlate(host);
+	paintSurface(host, surfaceSpec(kind, opts));
 }
 
 /** a skinned plate (panel / well / strip / raised) placed in the parent's design space */
@@ -334,14 +352,14 @@ export function makeSurface(
 	f.BorderSizePixel = 0;
 	if (opts?.zIndex !== undefined) f.ZIndex = opts.zIndex;
 	if (opts?.clips !== undefined) f.ClipsDescendants = opts.clips;
-	paintSurface(f, surfaceSpec(kind, opts));
+	applyKind(f, kind, opts);
 	f.Parent = parent;
 	return f;
 }
 
 /** repaints an existing surface (e.g. a card whose accent border changed) */
 export function setSurface(host: GuiObject, kind: SurfaceKind, opts?: SurfaceOpts): void {
-	paintSurface(host, surfaceSpec(kind, opts));
+	applyKind(host, kind, opts);
 }
 
 export type TextAlign = "left" | "center" | "right";
@@ -440,14 +458,17 @@ export const BUTTON_SIZE: Record<ButtonSize, { h: number; text: number; padX: nu
 };
 
 /**
- * Look of a variant, all exact theme tokens (no mixing; the relief comes from the skin textures):
- * - raised variants (default / secondary / destructive / active tab / selected rail item) are plates with a
- *   light band and a dark base; hovering brightens the band, pressing drops the face;
- * - recessed variants (outline / tab / row / rail item / ghost) are wells that fill with `frame` on hover;
- * - disabled is always a plain well with muted text.
+ * Look of a variant, all exact theme tokens (the relief is `foreground` / `background` washed over the face, see
+ * plate.ts):
+ * - raised variants (default / secondary / destructive / active tab / selected rail item) are the reference's
+ *   notched plates: light band and ears on top, dark lip under; hovering brightens the light, pressing pushes the
+ *   plate in. The active tab and the selected rail item are BLUE (`tabActive`, DESIGN_RULES UI-07);
+ * - flat variants (an inactive tab) are the same notched plate in iron with no bands, and rise on hover;
+ * - recessed variants (outline / row / rail item / ghost) are wells that fill with `frame` on hover;
+ * - disabled is always a dark slot outlined in `line`, with muted text (a plate draws it with its own frames).
  */
 interface VariantSpec {
-	kind: "raised" | "well" | "ghost";
+	kind: "raised" | "flat" | "well" | "ghost";
 	/** raised face / well fill */
 	face: Color3;
 	/** well border */
@@ -527,8 +548,9 @@ function variantSpec(v: AnyVariant): VariantSpec {
 	if (v === "destructive") return raised(t.destructive, t.destructiveForeground);
 	if (v === "outline") return sunk(SURFACE.well, t.border, t.foreground);
 	if (v === "ghost") return sunk(SURFACE.well, t.border, t.foreground, { kind: "ghost" });
-	if (v === "tab") return sunk(SURFACE.well, SURFACE.line, t.mutedForeground, { ringInner: true });
-	if (v === "tabActive") return raised(t.secondary, t.secondaryForeground, { ringInner: true });
+	// the reference's tab bar: inactive tabs are flat iron plates with the light label, the active one is blue
+	if (v === "tab") return raised(t.secondary, t.secondaryForeground, { kind: "flat", ringInner: true });
+	if (v === "tabActive") return raised(t.tabActive, t.tabActiveForeground, { ringInner: true });
 	if (v === "row") {
 		return sunk(SURFACE.well, SURFACE.line, t.cardForeground, { ringInner: true, recolorChildren: true });
 	}
@@ -541,7 +563,8 @@ function variantSpec(v: AnyVariant): VariantSpec {
 		});
 	}
 	if (v === "navActive") {
-		return raised(t.secondary, t.secondaryForeground, { ring: SIDEBAR.ring, ringInner: true });
+		// the selected item of a rail is an active tab standing up: the same blue plate
+		return raised(t.tabActive, t.tabActiveForeground, { ring: SIDEBAR.ring, ringInner: true });
 	}
 	return raised(t.primary, t.primaryForeground);
 }
@@ -638,13 +661,24 @@ function refreshButton(b: TextButton): void {
 		// disabled, every variant: a plain well with `muted-foreground` text. mutedForeground (#818c96) on the
 		// well fill (#0e0f11) is 5.6:1 (>= 4.5:1 AA); no transparency is applied to the text itself.
 		fg = THEME.mutedForeground;
-		paintSurface(b, wellSurface(SURFACE.well, SURFACE.line));
+		if (s.kind === "raised" || s.kind === "flat") {
+			// the same dark slot outlined in `line`, drawn by the plate's own frames: disabling creates nothing
+			clearSurface(b);
+			paintPlate(b, SURFACE.well, "outline", 1, SURFACE.line);
+		} else {
+			clearPlate(b);
+			paintSurface(b, wellSurface(SURFACE.well, SURFACE.line));
+		}
 		pressShift(b, false);
-	} else if (s.kind === "raised") {
-		const raisedState: RaisedState = pressed ? "press" : hot ? "hot" : "idle";
-		paintSurface(b, raisedSurface(s.face, raisedState));
+	} else if (s.kind === "raised" || s.kind === "flat") {
+		// a plate (plate.ts); a flat one (inactive tab) only rises while hovered, focused or pressed
+		const rest: PlateState = s.kind === "flat" ? "flat" : "idle";
+		const plateState: PlateState = pressed ? "press" : hot ? "hot" : rest;
+		clearSurface(b);
+		paintPlate(b, s.face, plateState);
 		pressShift(b, pressed);
 	} else {
+		clearPlate(b);
 		const fill = pressed ? s.pressFace : hot ? s.hotFace : s.face;
 		const border = focus && s.ringInner ? s.ring : hot ? s.hotBorder : s.border;
 		if (s.kind === "ghost" && !hot && !(focus && s.ringInner)) clearSurface(b);
@@ -801,6 +835,8 @@ export interface CardProps {
 	pad?: number;
 	/** frame / border colour override, a token (e.g. GAME.success for an owned item) */
 	border?: Color3;
+	/** interior colour override, a token (a modal window's body is SURFACE.window) */
+	fill?: Color3;
 	zIndex?: number;
 	clips?: boolean;
 }
@@ -815,7 +851,7 @@ export function Card(parent: Instance, name: string, props: CardProps): Frame {
 	const transparency = props.transparency ?? (variant === "hud" ? TRANSPARENCY.hud : 0);
 	const kind: SurfaceKind = variant === "muted" ? "well" : "panel";
 	const f = makeSurface(parent, name, props.x, props.y, props.w, props.h, kind, {
-		fill: variant === "muted" ? SURFACE.well : SURFACE.panel,
+		fill: props.fill ?? (variant === "muted" ? SURFACE.well : SURFACE.panel),
 		border: props.border ?? (variant === "muted" ? SURFACE.line : SURFACE.frame),
 		transparency,
 		zIndex: props.zIndex,
@@ -904,7 +940,7 @@ export interface CardHeaderOpts {
 	lines?: number;
 	/** title colour (default `foreground`; e.g. `destructive` for "Game over") */
 	color?: Color3;
-	/** strip colour (default SURFACE.frame; e.g. `destructive` for a dangerous window) */
+	/** header band colour (default SURFACE.header; e.g. `destructive` for a dangerous window) */
 	stripColor?: Color3;
 }
 
@@ -927,33 +963,51 @@ export function cardHeaderHeight(titleSize = TEXT.xl2, descriptionLines = 0): nu
 	return y;
 }
 
+/** inner edge of a Card's frame, in screen px: the skin's dark edge + iron frame (4 skin px), or the flat border */
+function cardFramePx(): number {
+	return skinEnabled() ? 4 * skinPx() : hairline(BORDER.width);
+}
+
 /**
- * CardHeader: the reference's TITLE STRIP across the top of the panel (big bold title, centred),
- * with an optional muted description under it. Returns the y where the content starts.
+ * CardHeader: the reference's window HEADER (DESIGN_RULES UI-07) -- a band flush with the frame, one shade darker
+ * than the window body (`SURFACE.header`), with the big bold title centred on it -- and an optional muted
+ * description under it. Returns the y where the content starts.
+ *
+ * The band ends exactly where the old inset title strip ended (CARD_STRIP_INSET + cardStripHeight), so every
+ * screen that placed a close "X", a key cap or a badge "on the strip" still lands on the header, and
+ * cardHeaderHeight() is still where the content starts.
  */
 export function CardHeader(card: Frame, title: string, description?: string, opts?: CardHeaderOpts): number {
-	const [w, , pad] = cardBox(card);
+	const [w, h, pad] = cardBox(card);
 	const titleSize = opts?.titleSize ?? TEXT.xl2;
-	const stripW = w - STRIP_INSET * 2;
 	const stripH = stripHeight(titleSize);
-	const strip = makeSurface(card, "TitleStrip", STRIP_INSET, STRIP_INSET, stripW, stripH, "strip", {
-		fill: opts?.stripColor,
-		zIndex: card.ZIndex + 1,
+	const bottom = STRIP_INSET + stripH;
+	const band = new Instance("Frame");
+	band.Name = "TitleStrip";
+	band.BackgroundColor3 = opts?.stripColor ?? SURFACE.header;
+	band.BorderSizePixel = 0;
+	band.ZIndex = card.ZIndex + 1;
+	onLayoutChange(band, () => {
+		const f = cardFramePx();
+		band.Position = new UDim2(0, f, 0, f);
+		band.Size = new UDim2(1, -2 * f, bottom / h, -f);
 	});
+	band.Parent = card;
 	const action = opts?.action ?? 0;
 	makeLabel(
-		strip,
+		card,
 		"Title",
 		title,
 		action,
-		0,
-		stripW - action * 2,
+		STRIP_INSET,
+		w - action * 2,
 		stripH,
 		titleSize,
 		opts?.color ?? THEME.foreground,
 		{
-			font: "title",
-			zIndex: strip.ZIndex + 1,
+			// heavier than the "title" role: the reference's window titles are its boldest text
+			font: fontOf("sans", Enum.FontWeight.ExtraBold),
+			zIndex: band.ZIndex + 1,
 		},
 	);
 	let y = STRIP_INSET + stripH + space(3);
@@ -1048,15 +1102,19 @@ export function setBadgeLook(badge: Frame, variant: BadgeVariant, color?: Color3
 // ---------------------------------------------------------------- Keycap
 
 export interface KeycapProps {
-	/** left edge and vertical CENTRE, in the parent's design units */
+	/** left edge (or the point `anchorX` names) and vertical CENTRE, in the parent's design units */
 	x: number;
 	cy: number;
+	/** which point of the key `x` is: 0 = left edge (default), 0.5 = centre, 1 = right edge */
+	anchorX?: number;
 	/** key height in design units; the legend decides the width */
 	h: number;
 	/** narrowest key in design units (default: square, so "E" still reads as a key) */
 	minW?: number;
 	/** legend design size (default TEXT.xs), drawn at a fixed size: never squeezed */
 	textSize?: number;
+	/** legend font (default the "label" role) */
+	font?: FontSpec;
 	zIndex?: number;
 }
 
@@ -1081,9 +1139,12 @@ export function Keycap(parent: Instance, name: string, text: string, props: Keyc
 	key.Name = name;
 	key.BorderSizePixel = 0;
 	key.ZIndex = zIndex;
-	key.AnchorPoint = new Vector2(0, 0.5);
+	key.AnchorPoint = new Vector2(props.anchorX ?? 0, 0.5);
 	key.Position = UDim2.fromScale(props.x / dw, props.cy / dh);
-	paintSurface(key, raisedSurface(SURFACE.key));
+	key.BackgroundColor3 = THEME.background;
+	key.BackgroundTransparency = 1;
+	const unit = plateUnit(props.h);
+	paintPlate(key, SURFACE.key, "idle", unit);
 
 	const legend = new Instance("TextLabel");
 	legend.Name = "Legend";
@@ -1092,7 +1153,7 @@ export function Keycap(parent: Instance, name: string, text: string, props: Keyc
 	legend.BorderSizePixel = 0;
 	legend.Text = text;
 	legend.TextColor3 = THEME.foreground;
-	legend.FontFace = roleFont("label");
+	legend.FontFace = resolveFont(props.font, "label");
 	legend.TextWrapped = false;
 	legend.AutomaticSize = Enum.AutomaticSize.X;
 	legend.AnchorPoint = new Vector2(0.5, 0.5);
@@ -1107,7 +1168,7 @@ export function Keycap(parent: Instance, name: string, text: string, props: Keyc
 		const pad = space(2) * scale;
 		const w = math.max((props.minW ?? props.h) * scale, legend.AbsoluteSize.X + pad * 2);
 		// a key is never shorter than its legend plus the bevel (light band + lip), whatever the design height
-		const h = math.max(props.h * scale, legend.TextSize + 4 * skinPx());
+		const h = math.max(props.h * scale, legend.TextSize + 2 * reliefPx(unit) + 2);
 		key.Size = UDim2.fromOffset(math.round(w), math.round(h));
 	};
 	legend.GetPropertyChangedSignal("AbsoluteSize").Connect(fit);
@@ -1250,6 +1311,13 @@ export interface TabsProps {
 	onChange?: (index: number) => void;
 	textSize?: number;
 	zIndex?: number;
+	/**
+	 * Tab widths in design units, left-aligned from `x` (the reference's tab bar: each tab as wide as its name).
+	 * Default: the items share `w` evenly.
+	 */
+	widths?: Array<number>;
+	/** gap between tabs (default space(3); a Segmented uses its own) */
+	gap?: number;
 }
 
 export interface TabsHandle {
@@ -1261,13 +1329,19 @@ export interface TabsHandle {
 	setActive(index: number): void;
 }
 
-/** shadcn Tabs: a recessed tray; the active trigger is a raised plate, the inactive ones stay sunk */
-export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHandle {
-	const { w, h, items } = props;
-	const list = makeSurface(parent, name, props.x, props.y, w, h, "well", { zIndex: props.zIndex });
-	const gap = 3;
+/** width of a tab / segment that fits `text` at `textSize` Bold, with the plate's padding (design units) */
+export function tabWidth(text: string, textSize = TEXT.lg): number {
+	const [n] = utf8.len(text);
+	const chars = typeIs(n, "number") ? n : text.size();
+	return math.ceil(chars * textSize * 0.62 + space(6) * 2);
+}
+
+/** the tab triggers of a Tabs / Segmented, laid out in `list` (its own design space) */
+function tabTriggers(list: Frame, props: TabsProps, inset: number, gap: number): TabsHandle {
+	const { items } = props;
+	const [w, h] = designOf(list);
 	const n = math.max(items.size(), 1);
-	const triggerW = (w - gap * 2 - gap * (n - 1)) / n;
+	const evenW = (w - inset * 2 - gap * (n - 1)) / n;
 	const triggers: Array<TextButton> = [];
 	const handle: TabsHandle = {
 		frame: list,
@@ -1276,18 +1350,22 @@ export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHand
 			for (let i = 0; i < triggers.size(); i++) applyVariant(triggers[i], i === index ? "tabActive" : "tab");
 		},
 	};
+	let x = inset;
 	for (let i = 0; i < items.size(); i++) {
 		const index = i;
+		const tw = props.widths?.[i] ?? evenW;
 		const t = buildButton(
 			list,
 			`Tab${i}`,
 			items[i],
 			{
-				x: gap + i * (triggerW + gap),
-				y: gap,
-				w: triggerW,
-				h: h - gap * 2,
-				textSize: props.textSize ?? TEXT.sm,
+				x,
+				y: inset,
+				w: tw,
+				h: h - inset * 2,
+				textSize: props.textSize ?? TEXT.lg,
+				// the reference's tab labels: light and Bold (no contour, UI-04: the plate carries the contrast)
+				font: fontOf("sans", Enum.FontWeight.Bold),
 				zIndex: list.ZIndex + 1,
 				onClick: (): void => {
 					handle.setActive(index);
@@ -1297,9 +1375,35 @@ export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHand
 			"tab",
 		);
 		triggers.push(t);
+		x += tw + gap;
 	}
 	handle.setActive(props.value ?? 0);
 	return handle;
+}
+
+/**
+ * The reference's TAB BAR (DESIGN_RULES UI-07): notched plates standing on the window body, spaced, no tray.
+ * Inactive tabs are flat iron plates, the active one a raised BLUE plate (`tabActive`), labels light and Bold.
+ */
+export function Tabs(parent: Instance, name: string, props: TabsProps): TabsHandle {
+	const bar = makeFrame(parent, name, props.x, props.y, props.w, props.h, THEME.background, {
+		transparency: 1,
+		zIndex: props.zIndex,
+	});
+	return tabTriggers(bar, props, 0, props.gap ?? space(3));
+}
+
+/**
+ * A SEGMENTED selector (On / Off, Keyboard / Gamepad / Touch): the tab bar's plates packed in a dark notched
+ * groove, so it reads as one control with one choice lit in blue.
+ */
+export function Segmented(parent: Instance, name: string, props: TabsProps): TabsHandle {
+	const tray = makeFrame(parent, name, props.x, props.y, props.w, props.h, THEME.background, {
+		transparency: 1,
+		zIndex: props.zIndex,
+	});
+	paintPlate(tray, SURFACE.well, "flat", 2);
+	return tabTriggers(tray, { ...props, textSize: props.textSize ?? TEXT.base }, 3, props.gap ?? 3);
 }
 
 // ---------------------------------------------------------------- Sidebar (navigation rail)
@@ -1600,12 +1704,15 @@ export interface SliderHandle {
 	disconnect(): void;
 }
 
-const TRACK_H = 10;
-const THUMB = 20;
+const TRACK_H = 12;
+/** the knob: a raised iron plate standing up, taller than the groove (the reference's pixel handle) */
+const THUMB_W = 16;
+const THUMB_H = 26;
 
 /**
- * shadcn Slider: a recessed track, a flat `primary` range and a raised knob. Mouse/touch drag; with a
- * gamepad or the keyboard, select it and use left/right.
+ * Slider in the plate vocabulary (DESIGN_RULES UI-07): a dark notched groove, the chosen amount filled in blue
+ * (`tabActive`, "what is selected"), and a raised iron handle. Mouse/touch drag; with a gamepad or the keyboard,
+ * select it and use left/right.
  */
 export function Slider(parent: Instance, name: string, props: SliderProps): SliderHandle {
 	const { w, h } = props;
@@ -1624,31 +1731,48 @@ export function Slider(parent: Instance, name: string, props: SliderProps): Slid
 	hit.SelectionBehaviorLeft = Enum.SelectionBehavior.Stop;
 	hit.SelectionBehaviorRight = Enum.SelectionBehavior.Stop;
 	const z = hit.ZIndex;
-	const inset = THUMB / 2;
-	const track = makeSurface(hit, "Track", inset, (h - TRACK_H) / 2, w - inset * 2, TRACK_H, "well", {
+	const inset = THUMB_W / 2;
+	const trackW = w - inset * 2;
+	const track = makeFrame(hit, "Track", inset, (h - TRACK_H) / 2, trackW, TRACK_H, THEME.background, {
+		transparency: 1,
 		zIndex: z + 1,
 	});
-	const inner = wellInner(track, "Inner", z + 2);
+	paintPlate(track, SURFACE.well, "flat", 2);
+	// the range lives inside the groove, one relief unit in, and is clipped by it
+	const inner = new Instance("Frame");
+	inner.Name = "Inner";
+	inner.BackgroundTransparency = 1;
+	inner.BackgroundColor3 = THEME.background;
+	inner.BorderSizePixel = 0;
+	inner.ClipsDescendants = true;
+	inner.ZIndex = z + 2;
+	onLayoutChange(inner, () => {
+		const u = reliefPx(2);
+		inner.Position = new UDim2(0, u, 0, u);
+		inner.Size = new UDim2(1, -2 * u, 1, -2 * u);
+	});
+	inner.Parent = track;
 	const range = new Instance("Frame");
 	range.Name = "Range";
-	range.BackgroundColor3 = THEME.primary;
+	range.BackgroundColor3 = THEME.tabActive;
 	range.BorderSizePixel = 0;
 	range.Size = UDim2.fromScale(1, 1);
 	range.ZIndex = z + 3;
 	range.Parent = inner;
-	const thumb = makeSurface(track, "Thumb", 0, (TRACK_H - THUMB) / 2, THUMB, THUMB, "raised", {
-		fill: THEME.foreground,
+	const thumb = makeFrame(track, "Thumb", 0, (TRACK_H - THUMB_H) / 2, THUMB_W, THUMB_H, THEME.background, {
+		transparency: 1,
 		zIndex: z + 4,
 	});
 	thumb.AnchorPoint = new Vector2(0.5, 0.5);
-	addAspect(thumb, 1);
+	addAspect(thumb, THUMB_W / THUMB_H);
 
 	const refresh = (): void => {
 		const v = math.clamp(props.get(), 0, 1);
 		range.Size = UDim2.fromScale(v, 1);
 		thumb.Position = UDim2.fromScale(v, 0.5);
+		// focused (gamepad / keyboard): the handle lights up like a hovered plate, in the ring colour
 		const ring = isFocused(hit);
-		paintSurface(thumb, raisedSurface(ring ? THEME.ring : THEME.foreground, ring ? "hot" : "idle"));
+		paintPlate(thumb, ring ? THEME.ring : THEME.secondary, ring ? "hot" : "idle", 3);
 	};
 	const setValue = (v: number): void => {
 		props.set(math.clamp(math.round(v / step) * step, 0, 1));
@@ -1861,8 +1985,13 @@ export function makeScrollList(
 	f.ScrollingDirection = Enum.ScrollingDirection.Y;
 	f.CanvasSize = UDim2.fromOffset(0, 0);
 	f.AutomaticCanvasSize = Enum.AutomaticSize.Y;
-	f.ScrollBarThickness = 6;
-	f.ScrollBarImageColor3 = SURFACE.line;
+	// the reference's scroll bar: thin and LIGHT (`border`, 4,6:1 over the panel), the engine's rounded bar tinted;
+	// 4 design units wide, a whole number of pixels at every scale
+	f.ScrollBarImageColor3 = THEME.border;
+	f.ScrollBarImageTransparency = 0;
+	onLayoutChange(f, () => {
+		f.ScrollBarThickness = reliefPx(4);
+	});
 	f.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar;
 	f.SelectionImageObject = NO_SELECTION_IMAGE;
 	const layout = new Instance("UIListLayout");
@@ -1877,7 +2006,7 @@ export function makeScrollList(
 }
 
 /** keeps a row `rowH` design units tall, proportional to the list's width */
-function sizeRow(list: ScrollList, row: GuiObject, rowH: number): void {
+export function sizeRow(list: ScrollList, row: GuiObject, rowH: number): void {
 	const resize = (): void => {
 		const px = list.frame.AbsoluteSize.X;
 		const h = px > 1 ? (px * rowH) / list.designW : rowH;
