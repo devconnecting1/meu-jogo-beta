@@ -2,9 +2,11 @@
  * Multiplayer configuration (docs/MULTIPLAYER.md). Every number below comes from the doc; the comment
  * names the section. Change the doc and this file together.
  *
- * F0: nothing in the running game reads these yet. MP_PHASE = 0 keeps the current mode (each client
- * simulates its own world; the server only owns save, coins and shop). Phases F1..F5 turn server
- * subsystems on as the value grows (§11.1).
+ * MP_PHASE decides how much of the game the server owns (§11.1), and it grows one phase at a time:
+ *   0  each client simulates its own world; the server only owns save, coins and shop.
+ *   1  the server owns PLAYER MOVEMENT (tick, input queue, snapshots, interest); zombies are still
+ *      simulated locally by each client, so two clients see different hordes -- expected until F2.
+ * tools/test-net.mjs pins the value, so it cannot move by accident: change both together.
  */
 
 /** migration phase switch (§11.1): 0 = current game (one world per client); 1..5 = server subsystems on */

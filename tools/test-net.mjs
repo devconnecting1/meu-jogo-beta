@@ -446,7 +446,10 @@ test("codec: strings are cut on a UTF-8 boundary", () => {
 // ---------------------------------------------------------------- 2. mpConfig / protocol constants
 
 test("mpConfig: values match the doc and the game data", () => {
-	eq("MP_PHASE", CFG.MP_PHASE, 0);
+	// Pinned on purpose: the phase decides how much of the game the server owns, so it must never move by
+	// accident. Bump this together with docs/MULTIPLAYER.md S11.3 when a phase actually lands. F1 (server
+	// owns player movement; zombies still local per client) is on for internal testing.
+	eq("MP_PHASE", CFG.MP_PHASE, 1);
 	eq("SIM_HZ", CFG.SIM_HZ, 60);
 	near("TICK_DT", CFG.TICK_DT, 1 / 60, 1e-12);
 	eq("MAX_PLAYERS", CFG.MAX_PLAYERS, 6);
