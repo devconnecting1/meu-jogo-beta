@@ -1095,7 +1095,7 @@ Players.PlayerRemoving.Connect(player => {
 	if (s.loaded) guarded(`${s.key}: banking the body`, () => mpHost?.release(player, s.save));
 	guarded(`${s.key}: final save`, () => flush(s, true));
 	// only now, the final write made (and the lock with it) or given up: the `releasing` mark is what keeps this
-	// user's next session here from taking the lock under that write. Left behind, it held every later join 35 s
+	// user's next session here from taking the lock under that write. Left behind, it held every later join 20-35 s
 	sessions.delete(player);
 	releasing.delete(userId);
 });
