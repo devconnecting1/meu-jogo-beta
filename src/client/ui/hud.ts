@@ -148,18 +148,23 @@ function pxCircle(
 	return f;
 }
 
-type TouchIcon = "use" | "reload" | "bag" | "pause";
+type TouchIcon = "use" | "reload" | "bag" | "menu";
 
 /**
  * Icons drawn from plain Frames (no image assets): every colour is an exact theme token, so UI-01 holds and
- * they stay crisp at any scale. `s` is the icon's box in pixels.
+ * they stay crisp at any scale. `s` is the icon's box in the host's own units (pixels on the touch layer).
  */
 function drawIcon(host: Frame, kind: TouchIcon, s: number, color: Color3, zIndex: number): void {
 	const c = s / 2;
 	const bar = s * 0.13;
-	if (kind === "pause") {
-		pxRect(host, "Bar1", c - s * 0.16, c, bar, s * 0.62, color, zIndex, 0, RADIUS.sm);
-		pxRect(host, "Bar2", c + s * 0.16, c, bar, s * 0.62, color, zIndex, 0, RADIUS.sm);
+	if (kind === "menu") {
+		// three bars, the menu everybody knows -- NOT the two upright bars of "pause": no menu pauses the
+		// world (DESIGN_RULES UI-06), so the button that opens one must not promise it
+		const w = s * 0.56;
+		const h = s * 0.1;
+		pxRect(host, "Bar1", c, c - s * 0.18, w, h, color, zIndex, 0, RADIUS.sm);
+		pxRect(host, "Bar2", c, c, w, h, color, zIndex, 0, RADIUS.sm);
+		pxRect(host, "Bar3", c, c + s * 0.18, w, h, color, zIndex, 0, RADIUS.sm);
 		return;
 	}
 	if (kind === "bag") {
@@ -239,7 +244,7 @@ export class Hud {
 	private reloadBtn: TextButton | undefined;
 	/** design-space controls that the pixel layer replaces on a touch device */
 	private bagBox: Frame | undefined;
-	private pauseBtn: TextButton | undefined;
+	private menuBtn: TextButton | undefined;
 	private hintGamepad: boolean | undefined;
 
 	constructor(ctx: GameContext) {
@@ -317,29 +322,33 @@ export class Hud {
 		});
 	}
 
-	/** top-left: pause button + vitals card (HP, food, level / XP) */
+	/** top-left: menu button + vitals card (HP, food, level / XP) */
 	private buildStatus(root: Frame, k: number): void {
 		const w = 350;
 		const h = 92;
 		const status = makeAnchored(root, "Status", 0, 0, w, h, 14, 10, true, k);
-		const pauseSize = 56;
-		const pauseBtn = Button(status, "Pause", "II", {
+		const menuSize = 56;
+		const menuBtn = Button(status, "Menu", "", {
 			x: 0,
 			y: 0,
-			w: pauseSize,
-			h: pauseSize,
+			w: menuSize,
+			h: menuSize,
 			variant: "secondary",
 			size: "icon",
-			font: "display",
-			textSize: TEXT.xl2,
 			zIndex: 5,
 			onClick: (): void => this.onPause?.(),
 		});
-		// on touch the pixel layer owns pause (a design-unit button shrinks below a thumb on a phone)
-		pauseBtn.Visible = !this.touch;
-		this.pauseBtn = pauseBtn;
+		// the same frame-drawn menu glyph as the touch button (UI-06: no "II", nothing here pauses)
+		const glyph = makeFrame(menuBtn, "MenuIcon", 0, 0, menuSize, menuSize, THEME.background, {
+			transparency: 1,
+			zIndex: menuBtn.ZIndex + 6,
+		});
+		drawIcon(glyph, "menu", menuSize, THEME.secondaryForeground, 1);
+		// on touch the pixel layer owns the menu button (a design-unit button shrinks below a thumb on a phone)
+		menuBtn.Visible = !this.touch;
+		this.menuBtn = menuBtn;
 
-		const vitalsX = pauseSize + space(2);
+		const vitalsX = menuSize + space(2);
 		const vitalsW = w - vitalsX;
 		const vitals = Card(status, "Vitals", { x: vitalsX, y: 0, w: vitalsW, h, variant: "hud" });
 		const pad = space(3);
@@ -512,7 +521,7 @@ export class Hud {
 	 * the thumb wherever it lands, with its dead zone drawn as a faint inner ring so the player can SEE why a
 	 * tiny wobble does not walk. Right: the aim / fire pad — drag to aim (a chevron shows the heading both on
 	 * the pad and out in the world), let go to shoot, keep holding to keep firing with an automatic. Around it,
-	 * USE and RELOAD; in the top corner, BAG and PAUSE. Every one of them is at least MIN_TOUCH_PX wide.
+	 * USE and RELOAD; in the top corner, BAG and MENU. Every one of them is at least MIN_TOUCH_PX wide.
 	 */
 	private buildTouch(root: Frame): void {
 		this.touchLayer?.Destroy();
@@ -638,7 +647,7 @@ export class Hud {
 		});
 		this.touchCaption(layer, "ReloadCap", L.reload, this.tr("Reload"));
 		this.touchButton(layer, "BagBtn", L.bag, "bag", "secondary", () => this.onBackpack?.());
-		this.touchButton(layer, "PauseBtn", L.pause, "pause", "secondary", () => this.onPause?.());
+		this.touchButton(layer, "MenuBtn", L.pause, "menu", "secondary", () => this.onPause?.());
 	}
 
 	/** one round touch button of the pixel layer: kit relief, a frame-drawn icon and a >= 44 px hit box */
@@ -671,7 +680,7 @@ export class Hud {
 	}
 
 	/**
-	 * The word over a touch button (USE and RELOAD are new to the player; BAG and PAUSE are not). Above and
+	 * The word over a touch button (USE and RELOAD are new to the player; BAG and MENU are not). Above and
 	 * not below: below would put the text on the aim pad's rim, which is exactly where the thumb is.
 	 */
 	private touchCaption(layer: Frame, name: string, at: TouchButton, text: string): TextLabel {
@@ -864,7 +873,7 @@ export class Hud {
 		this.useLabel = undefined;
 		this.reloadBtn = undefined;
 		this.bagBox = undefined;
-		this.pauseBtn = undefined;
+		this.menuBtn = undefined;
 		this.hintBox = undefined;
 		this.hintKey = undefined;
 		this.hintLabel = undefined;

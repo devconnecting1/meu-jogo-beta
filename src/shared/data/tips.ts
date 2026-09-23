@@ -1,4 +1,6 @@
 export const TIPS: Array<string> = [
+	// DESIGN_RULES UI-06: the world is shared and never stops for a menu, in solo too
+	"The backpack and the menu never stop the world: open them somewhere safe",
 	"You'd better make the fire before the night comes",
 	"Make your shelter to stay in during the night",
 	"Zombies will be getting stronger as the day goes on",

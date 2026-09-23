@@ -36,7 +36,7 @@ const SKIP_H = 56;
 
 /** seconds a lesson waits before it steps aside (no zombie around, nothing to pick up...) */
 const OBJECTIVE_TIMEOUT = 45;
-/** seconds the whole thing may take, frozen menus not counted: a hard stop so it can never nag */
+/** seconds the whole thing may take, time in menus not counted: a hard stop so it can never nag */
 const TOTAL_BUDGET = 420;
 /** how long the finished card is shown before the next lesson */
 const CELEBRATE = 1.1;
@@ -82,7 +82,7 @@ export class Coach {
 		return this.phase !== "done";
 	}
 
-	/** which lesson is on screen: kept across a suspend (pause → shop → back) so it never starts over */
+	/** which lesson is on screen: kept across a suspend (menu → shop → back) so it never starts over */
 	progressIndex(): number {
 		return this.index;
 	}
@@ -133,11 +133,14 @@ export class Coach {
 
 	update(refs: GameRefs, dt: number): void {
 		if (this.phase === "done" || this.root === undefined) return;
-		// the world clock is the honest "is the game actually running" signal: a menu freezes it
+		// Time spent out of play is not the coach's time: a lesson must not run out while the player reads the
+		// Bag. No menu freezes the world any more (DESIGN_RULES UI-06), so the clock no longer says so on its
+		// own; the held survivor does (InputState.setHeld: a screen over the run, or dead). A clock that stood
+		// still (an admin holding the hour) still counts as a pause of the lessons, as before.
 		const clock = refs.daynight.dayTime;
 		const frozen = this.lastClock >= 0 && math.abs(clock - this.lastClock) < 1e-9;
 		this.lastClock = clock;
-		if (frozen) return;
+		if (frozen || refs.input.held) return;
 		this.budget -= dt;
 		if (this.budget <= 0) {
 			this.finish();

@@ -34,13 +34,16 @@ import { showPause } from "./ui/pauseMenu";
 import { popup, toast } from "./ui/popup";
 import { fmtInt, nl } from "./ui/widgets";
 import { Backpack } from "./ui/backpack";
+import { DangerFlash } from "./ui/dangerFlash";
 import { Hud } from "./ui/hud";
 import { AdminHooks, startAdmin } from "./admin/adminClient";
 
 /*
  * Screen flow + run lifecycle.
- * - a run lives in `loop` until the player starts a new one: Home/Shop/Settings from the pause menu only
- *   SUSPEND it and Play continues it (HP, hunger, time and the map are kept)
+ * - a run lives in `loop` until the player starts a new one: Home/Shop/Settings from the in-run menu only
+ *   SUSPEND it (the survivor leaves the world, MP-18) and Play continues it (HP, hunger and the map are kept)
+ * - no screen opened OVER a run pauses anything (DESIGN_RULES UI-06): the Bag, the menu and the end-of-run
+ *   screens hold the survivor still while the world keeps going -- see the frame loop in `mountRun`
  * - after a game over the run can only continue with a paid Rebirth (server) or restart at day 1 (New game)
  * - progress is reported to the server every 60 s, on a new day, on a boss kill, on death and when
  *   leaving the run; nothing is reported before the server's LoadAck was adopted
@@ -62,6 +65,8 @@ const ctx = getCtx();
 const loop = new GameLoop();
 const hud = new Hud(ctx);
 const pack = new Backpack(ctx);
+/** UI-06: the red flash above the menus when the survivor is hit with one open */
+const danger = new DangerFlash(ctx);
 
 let cleanup: (() => void) | undefined;
 let pauseCleanup: (() => void) | undefined;
@@ -320,6 +325,7 @@ function stopGame(): void {
 	pack.close();
 	closePause();
 	closeDawnWait();
+	danger.reset();
 	deathShown = false;
 }
 
@@ -331,7 +337,7 @@ function lobbyStatus(): LobbyStatus {
 	};
 }
 
-/** `back` is where the shop's Back button goes: the lobby by default, or the paused run when opened from pause. */
+/** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
 function openShop(back: () => void = goLobby): void {
 	clearScreen();
 	setPhase("shop");
@@ -511,7 +517,7 @@ function openPause(): void {
 			onShop: () => {
 				stopGame();
 				net.requestSave("lobby");
-				// opened from pause: Back should return to the paused run, not drop to the lobby
+				// opened from the menu: Back should return to the suspended run, not drop to the lobby
 				openShop(() => {
 					resumeRun();
 					openPause();
@@ -627,30 +633,36 @@ function mountRun(): void {
 			if (pauseCleanup === undefined) openPause();
 			else closePause();
 		}
-		// The world is frozen while the pause menu, the backpack or the game over screen is open — but NOT
-		// while waiting for daybreak (MP-21). That wait is somebody else's night still running: freezing it
-		// would show the player a still photograph of a town that is in fact being overrun without them, and
-		// the countdown they are watching is driven by that very clock.
-		const simulate =
-			(ctx.phase === "playing" || dawnWait !== undefined) && pauseCleanup === undefined && !pack.isOpen();
+		// DESIGN_RULES UI-06: NO screen pauses the world -- not the Bag, not the menu, not the end-of-run
+		// screens, and not in solo either, so the rule is one. The town is the server's and shared: a client
+		// that stopped stepping here only drew a still photograph of a street that kept moving (a playtest
+		// lost 65 HP behind a Bag that "paused"). What a screen stops is the SURVIVOR: held, they stand still
+		// with empty hands (InputState.setHeld), while the horde, the allies, the clock and the damage go on --
+		// and the flash below says so the moment a hit lands.
 		const refs = loop.getRefs();
-		if (simulate) {
+		const alive = !refs.player.dead;
+		const menuOpen = pauseCleanup !== undefined || pack.isOpen() || dawnWait !== undefined;
+		input.setHeld(menuOpen || !alive);
+		if (alive) {
 			warnNoAmmo();
-			admin?.beforeUpdate(dt);
 			trackBefore();
-			gameAudio.beforeUpdate(refs);
-			loop.update(dt);
-			trackAfter();
-			gameAudio.afterUpdate(refs, dt);
-			admin?.afterUpdate(dt);
+		}
+		admin?.beforeUpdate(dt);
+		gameAudio.beforeUpdate(refs);
+		loop.update(dt);
+		if (alive) trackAfter();
+		gameAudio.afterUpdate(refs, dt);
+		admin?.afterUpdate(dt);
+		// the run's autosave -- but not from behind the owner's own end-of-run screen, which has already saved
+		// the death and waits for Rebirth or New game (the MP-21 wait for daybreak IS a run still going)
+		if (ctx.phase === "playing" || dawnWait !== undefined) {
 			saveTimer += dt;
 			if (saveTimer >= AUTOSAVE_SEC) {
 				saveTimer = 0;
 				net.requestSave("auto");
 			}
-		} else {
-			input.beginFrame();
 		}
+		danger.frame(dt, menuOpen && !refs.player.dead, refs.player.hp);
 		// the listener follows the camera, and whatever is still queued in refs.fx is played before
 		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
 		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);

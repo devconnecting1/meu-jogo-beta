@@ -38,16 +38,23 @@ const GAME_OVER_W = 460;
 const GAME_OVER_H = 440;
 const PAUSE_W = 360;
 const PAUSE_H = 470;
-/** the "P" key cap on the pause strip */
+/** the "P" key cap on the menu's title strip */
 const KEY_BADGE = 30;
 
-/** kind 0 = pause menu, kind 2 = game over; both are cards over a scrim */
+/**
+ * kind 0 = the in-run menu (P / Start / the menu button), kind 2 = game over; both are cards over a scrim.
+ *
+ * DESIGN_RULES UI-06: the name stayed (`showPause`, the file) but nothing here pauses anything. The world is
+ * the server's and shared, and solo follows the same rule: the town keeps going behind this card, so the card
+ * never says "Paused", and its scrim only dims the street (TRANSPARENCY.overWorld) so what is coming stays in
+ * sight round the panel. The survivor stands still while it is open (client/main.client.ts, InputState.setHeld).
+ */
 export function showPause(ctx: GameContext, kind: number, handlers: PauseHandlers, info?: PauseInfo): () => void {
 	const lang = ctx.save.settings.langType;
 	const tr = (key: string): string => langGet(key, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "Pause", {
+	const { root, body } = makeScreen(ctx.uiLayer, "Menu", {
 		color: THEME.background,
-		transparency: TRANSPARENCY.overlay,
+		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
 	});
 	const pad = space(6);
@@ -144,7 +151,7 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		const innerW = w - pad * 2;
 		const panel = Card(body, "Panel", { x: (1120 - w) / 2, y: (630 - PAUSE_H) / 2, w, h: PAUSE_H });
 		const stripH = cardStripHeight();
-		const top = CardHeader(panel, tr("Paused"), undefined, { action: KEY_BADGE + space(2) });
+		const top = CardHeader(panel, tr("Menu"), undefined, { action: KEY_BADGE + space(2) });
 		// the "P" key cap rides on the title strip
 		Badge(panel, "KeyHint", "P", {
 			x: w - CARD_STRIP_INSET - space(2) - KEY_BADGE,
@@ -155,7 +162,8 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 			zIndex: 4,
 		});
 		const items: Array<{ key: string; fn: (() => void) | undefined; variant: ButtonVariant }> = [
-			{ key: "Resume", fn: handlers.onResume, variant: "default" },
+			// "Back to game", not "Resume": nothing was suspended, the survivor only stood still (UI-06)
+			{ key: "Back to game", fn: handlers.onResume, variant: "default" },
 			{ key: "Save", fn: handlers.onSave, variant: "secondary" },
 			{ key: "Shop", fn: handlers.onShop, variant: "secondary" },
 			{ key: "Settings", fn: handlers.onSettings, variant: "secondary" },

@@ -41,7 +41,7 @@
  *
  * Role map:
  * - background / foreground: full-screen pages (lobby, shop, settings, credits) and default text
- * - card (+ border, radius): panels and windows (survivor card, backpack, shop cards, pause, game over, HUD)
+ * - card (+ border, radius): panels and windows (survivor card, backpack, shop cards, menu, game over, HUD)
  * - popover (+ border): dialogs, tutorial, toasts, tooltips, nameplate, round banners
  * - primary (the green): the ONE main action of a screen; secondary (iron): other actions (menu tiles, Back)
  *   and the active tab; destructive (red): dangerous actions and the Close (X) buttons. All three carry
@@ -135,8 +135,28 @@ export const SURFACE = {
  * straight into `BackgroundTransparency` (the touch controls and the nameplate do this) does not.
  */
 export const TRANSPARENCY = {
-	/** modal scrim (Dialog, pause, backpack): background at 80% over the world */
+	/**
+	 * modal scrim of a screen that is NOT over a running world (Dialog, popups, the lobby's "How to play"):
+	 * background at 80%
+	 */
 	overlay: 0.2,
+	/**
+	 * DESIGN_RULES UI-06: the scrim of a screen opened OVER A RUN (Bag, menu, both end-of-run screens). No
+	 * menu pauses the world, so this scrim only dims it -- background at 45% -- and the street, the horde
+	 * closing in and an ally going down stay readable round the panel. The panels themselves stay OPAQUE: their
+	 * text is held to 4,5:1 against the panel token (tools/test-contrast.mjs), and a panel the street shows
+	 * through has no fixed colour to be measured against -- muted text over a sunlit sidewalk drops below 4,5:1
+	 * before the panel is even 10% see-through. Where the panel hides the street, the red flash of
+	 * client/ui/dangerFlash.ts is the warning.
+	 */
+	overWorld: 0.55,
+	/**
+	 * UI-06: peak of the red flash drawn above every menu when the survivor is hit with one open (the screen
+	 * edge at its strongest, fading to nothing towards the centre, like the HUD's damage vignette). An effect,
+	 * not a background: it is not scaled by the player's Background Transparency, which asks for solid panels
+	 * and not for a solid red screen.
+	 */
+	alarm: 0.3,
 	/** HUD cards / popovers drawn over the world: background at 85% */
 	hud: 0.15,
 	/** the player's nameplate: background at 75%, lighter than the HUD so it never hides the character */

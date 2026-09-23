@@ -42,6 +42,15 @@ export class InputState {
 	/** 0-based weapon hotkey (keys 1–5) pressed this frame, -1 = none; combat switches weapon */
 	weaponSlotPressed = -1;
 
+	/**
+	 * DESIGN_RULES UI-06: the SURVIVOR is out of play this frame -- a screen is open over the run (Bag, menu,
+	 * end of run) or they are dead. It is never the world that stops: the loop keeps simulating, drawing and
+	 * sending commands, and every reader of this state (client/net/localInput.ts `readRawInput`, the game
+	 * loop's interact / build / aim) treats a held survivor as one standing still with empty hands. Written
+	 * once per frame, by `setHeld`, before the world is stepped.
+	 */
+	held = false;
+
 	// raw keys
 	keyW = false;
 	keyA = false;
@@ -82,6 +91,27 @@ export class InputState {
 		this.backpackPressed = false;
 		this.pausePressed = false;
 		this.weaponSlotPressed = -1;
+	}
+
+	/**
+	 * Starts a frame with the survivor held or not (UI-06, see `held`). Held, this frame's presses are dropped:
+	 * a click, an E, an R or a weapon key made while a menu has the focus belong to the menu. An attack button
+	 * still down stays BLOCKED until it is released, so closing the Bag with the button held never fires a shot.
+	 * The raw key state (W/A/S/D, the stick, the held buttons) is left alone -- `readRawInput` ignores it while
+	 * held, and a key still down when the menu closes walks again at once.
+	 *
+	 * The toggles that open and close the menus (`backpackPressed`, `pausePressed`) are NOT dropped: they are
+	 * read before this runs, and they are the one thing a held survivor still asks for.
+	 */
+	setHeld(on: boolean): void {
+		this.held = on;
+		if (!on) return;
+		this.attackPressed = false;
+		this.attackReleased = false;
+		this.actionPressed = false;
+		this.reloadPressed = false;
+		this.weaponSlotPressed = -1;
+		if (this.attackHeld) this.attackBlocked = true;
 	}
 
 	endFrame(): void {

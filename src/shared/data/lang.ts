@@ -448,10 +448,13 @@ export const LANG_TABLE: Array<string> = [
 	"Saving...",
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
-	"Resume",
+	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
+	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks)
+	"Menu",
+	"Back to game",
+	"Backpack",
 	"Save",
 	"Home",
-	"Paused",
 	"Game over",
 	"Rebirth",
 	"Survival days",
@@ -509,6 +512,9 @@ export const LANG_TABLE: Array<string> = [
 	"Your progress changed, try again",
 	"Zombies killed",
 	"days",
+	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it) and a lobby tip
+	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
+	"The backpack and the menu never stop the world: open them somewhere safe",
 ];
 
 /**
