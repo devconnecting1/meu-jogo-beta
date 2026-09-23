@@ -38,6 +38,10 @@
  *     pad are hit exactly where they are drawn -- a finger's Position is measured from the core UI safe area, as the
  *     engine reports it --, the buttons stay in the safe area under the bar, and the aim cursor turns around the
  *     survivor at the middle of the WHOLE screen.
+ *  5c. the player's device is UserInputService.PreferredInput, one answer (client/ui/device.ts): a hybrid device with its
+ *     mouse in use gets the desktop HUD AND the mouse aim; switching to the touch screen rebuilds the HUD with the
+ *     thumbs' controls and turns the aim to touch; a pad names X in the hint and opens Controls on Gamepad; back to the
+ *     keyboard the hint says E without a rebuild; a phone is the touch HUD as before.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -1296,6 +1300,80 @@ console.log("\n5b) tres ScreenGuis (mundo / HUD / menus) e o toque num celular c
 	}
 	setViewport(1120, 630, TOP_BAR);
 	hud.update(state());
+}
+
+// ---------------------------------------------------------------- 5c) the player's device: UserInputService.PreferredInput
+
+console.log("\n5c) o dispositivo do jogador: UserInputService.PreferredInput, uma resposta so\n");
+{
+	const { currentScheme, SCHEME_KEYBOARD, SCHEME_TOUCH, SCHEME_GAMEPAD } = require(
+		join(SRC, "client/ui/tutorial.ts"),
+	);
+	const { gamepadActive } = require(join(SRC, "client/ui/widgets.ts"));
+	const hintKey = () => deep(deep(hudRoot(), "HintBox"), "Key")?.FindFirstChild("Text")?.Text;
+	const touchDrawn = () => deep(hudRoot(), "BagBtn") !== undefined && deep(consoleFrame(), "Bag") === undefined;
+	const deskDrawn = () => deep(hudRoot(), "BagBtn") === undefined && deep(consoleFrame(), "Bag") !== undefined;
+	// a touch laptop / a tablet with a keyboard: a touch screen AND a mouse, the mouse in use. The old HUD read only
+	// TouchEnabled and drew the thumbs' controls while the bootstrap aimed with the mouse: two answers in one frame
+	hud.unmount();
+	uis.TouchEnabled = true;
+	uis.MouseEnabled = true;
+	uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+	uis.PreferredInput = Enum.PreferredInput.KeyboardAndMouse;
+	input.aimMode = "mouse";
+	hud.mount();
+	hud.update(state());
+	check(
+		"aparelho hibrido com o mouse em uso: a HUD de desktop, a mira do mouse e as teclas do teclado (uma resposta so)",
+		deskDrawn() && input.aimMode === "mouse" && currentScheme() === SCHEME_KEYBOARD && !gamepadActive(),
+		`HUD ${deskDrawn() ? "desktop" : "toque"}, mira ${input.aimMode}, esquema ${currentScheme()}`,
+	);
+	// the player puts the mouse down and plays on the glass: the HUD rebuilds for touch, the aim follows the thumbs
+	const toTouch = measure(() => {
+		uis.PreferredInput = Enum.PreferredInput.Touch;
+		flush();
+		hud.update(state());
+	});
+	check(
+		"o jogador passa a usar a tela de toque: a HUD se refaz com os controles de toque, a mira vira de toque, Controls abre em Touch",
+		touchDrawn() && input.aimMode === "touch" && currentScheme() === SCHEME_TOUCH,
+		`${toTouch.created} criadas, ${toTouch.destroyed} destruidas`,
+	);
+	// ...then picks a pad up: no touch controls, and every hint names the pad's buttons
+	uis.PreferredInput = Enum.PreferredInput.Gamepad;
+	flush();
+	hud.update(state());
+	hud.setInteractHint("E: Open door");
+	const padKey = hintKey();
+	check(
+		"e pega um controle: a HUD de desktop de novo, a dica diz X, o foco do kit e o do controle, Controls abre em Gamepad",
+		deskDrawn() && padKey === "X" && gamepadActive() && currentScheme() === SCHEME_GAMEPAD,
+		`dica ${padKey}, esquema ${currentScheme()}`,
+	);
+	// ...and back to the keyboard: the hint says E again, without a rebuild (the hints follow every frame)
+	const toKeys = measure(() => {
+		uis.PreferredInput = Enum.PreferredInput.KeyboardAndMouse;
+		flush();
+		hud.setInteractHint("E: Open door");
+	});
+	check(
+		"de volta ao teclado: a dica diz E, sem refazer a HUD (so o toque troca os controles)",
+		hintKey() === "E" && toKeys.created === 0 && toKeys.destroyed === 0 && currentScheme() === SCHEME_KEYBOARD,
+		`dica ${hintKey()}, ${toKeys.created} criadas`,
+	);
+	// a phone is a phone: PreferredInput Touch from the start is the touch HUD, as TouchEnabled without a mouse was
+	hud.unmount();
+	uis.MouseEnabled = false;
+	uis.GetLastInputType = () => Enum.UserInputType.Touch;
+	uis.PreferredInput = undefined;
+	hud.mount();
+	hud.update(state());
+	check(
+		"um celular (sem mouse, o toque em uso): a HUD de toque, como antes",
+		touchDrawn() && currentScheme() === SCHEME_TOUCH,
+	);
+	hud.setInteractHint(undefined);
+	void SCHEME_KEYBOARD;
 }
 
 hud.unmount();

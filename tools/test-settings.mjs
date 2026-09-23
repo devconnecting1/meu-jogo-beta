@@ -25,7 +25,8 @@
  *   4. TOUCH           each slider and switch moves the geometry the bootstrap hit-tests (getTouchLayout), the HUD's
  *                      touch layer is redrawn on it, the preview is that very layout (under a real top bar too), a
  *                      fixed stick is only grabbed at its home, and left-handed swaps which half moves.
- *   5. CONTROLS        the device radio lists SCHEMES; every row of every scheme is a binding the real bootstrap
+ *   5. CONTROLS        the device radio lists SCHEMES and opens on the device in use (UserInputService.PreferredInput);
+ *                      every row of every scheme is a binding the real bootstrap
  *                      honours (probed through its InputBegan / InputChanged / InputEnded handlers and the HUD's
  *                      touch buttons). A tip that promises a key that does nothing fails here.
  *   6. DEFAULTS        each tab's Defaults puts EXACTLY that tab's fields back to defaultSettings(), after the
@@ -680,6 +681,36 @@ openTab(2);
 }
 closeSettings();
 flush();
+// the device it opens on is the one the player is using (UserInputService.PreferredInput, client/ui/device.ts)
+{
+	const opensOn = [];
+	for (const p of ["KeyboardAndMouse", "Touch", "Gamepad"]) {
+		UIS.PreferredInput = Enum.PreferredInput[p];
+		flush();
+		const close = showSettings(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		openTab(2);
+		const lists = [0, 1, 2].map(i => findIn(findIn(settingsRoot(), "Keys"), `List${i}`));
+		const shownAt = lists.findIndex(l => {
+			for (let n = l; n !== undefined && n.IsA("GuiObject"); n = n.Parent) if (!n.Visible) return false;
+			return true;
+		});
+		opensOn.push(shownAt);
+		close();
+		flush();
+	}
+	UIS.PreferredInput = undefined;
+	flush();
+	check(
+		"Controls abre no dispositivo em uso (PreferredInput): teclado, toque, controle",
+		JSON.stringify(opensOn) === JSON.stringify([0, 1, 2]),
+		opensOn.join(", "),
+	);
+}
 
 /** every chip of every scheme -> a probe of the REAL bootstrap (or the HUD) that returns true when it does what it says */
 const input = ctx.input;

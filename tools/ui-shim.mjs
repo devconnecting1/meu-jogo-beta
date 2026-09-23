@@ -660,6 +660,26 @@ function install(options) {
 				GetMouseLocation: () => new Vector2(viewW / 2, viewH / 2),
 				IsKeyDown: () => false,
 			});
+			/*
+			 * PreferredInput, the engine's answer to "what is the player using" (client/ui/device.ts reads only this). Unless a
+			 * suite sets it, it follows what the suites already set to play a device -- a pad as the last input, a touch
+			 * screen with no mouse -- so every suite written before it keeps playing the same device. Setting it (a hybrid
+			 * device switching) fires its change signal like the engine; setting undefined goes back to following.
+			 */
+			let preferred;
+			Object.defineProperty(s, "PreferredInput", {
+				configurable: true,
+				enumerable: true,
+				get() {
+					if (preferred !== undefined) return preferred;
+					if (this.GetLastInputType().Name.startsWith("Gamepad")) return Enum.PreferredInput.Gamepad;
+					if (this.TouchEnabled && !this.MouseEnabled) return Enum.PreferredInput.Touch;
+					return Enum.PreferredInput.KeyboardAndMouse;
+				},
+				set(v) {
+					preferred = v;
+				},
+			});
 		} else if (name === "TweenService") {
 			s.Create = (obj, _info, props) => ({
 				Play: () => {

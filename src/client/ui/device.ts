@@ -22,6 +22,7 @@
  */
 
 const GuiService = game.GetService("GuiService");
+const UserInputService = game.GetService("UserInputService");
 const Workspace = game.GetService("Workspace");
 
 /** the whole screen before the camera reports one: the 1120 x 630 design space */
@@ -121,4 +122,53 @@ export function topInset(): number {
 		if (rect.Height > 0) inset = math.max(inset, rect.Max.Y);
 	}
 	return math.max(0, inset);
+}
+
+// ---------------------------------------------------------------- the player's input device
+
+/**
+ * What the interface is laid out for right now: the touch controls or not, and which keys a hint names (the pad's or
+ * the keyboard's). ONE answer for the whole client -- the HUD's touch layer, its key hints, the menus' focus, the
+ * Controls tab's first device and the aim mode a session starts in all read it -- where there used to be three
+ * heuristics that could disagree on a hybrid device (a touch laptop, a tablet with a keyboard).
+ *
+ * It is UserInputService.PreferredInput, the engine's own answer ("the player's primary input, based on the devices
+ * connected and the one most recently used"): Touch is a touch screen with nothing else in use, Gamepad (or a
+ * MicroGamepad) a pad that is connected or was just used, KeyboardAndMouse the rest. On a client without it: the
+ * last input from a pad, else a touch screen with no mouse, else the keyboard -- what the game read before.
+ */
+export type InputDevice = "keyboard" | "touch" | "gamepad";
+
+const [readable, firstRead] = pcall(() => UserInputService.PreferredInput);
+const hasPreferred = readable && firstRead !== undefined;
+
+export function inputDevice(): InputDevice {
+	if (hasPreferred) {
+		const p = UserInputService.PreferredInput;
+		if (p === Enum.PreferredInput.Touch) return "touch";
+		if (p === Enum.PreferredInput.Gamepad || p === Enum.PreferredInput.MicroGamepad) return "gamepad";
+		return "keyboard";
+	}
+	if (UserInputService.GetLastInputType().Name.sub(1, 7) === "Gamepad") return "gamepad";
+	return UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? "touch" : "keyboard";
+}
+
+/**
+ * Calls `fn` with the new device whenever it changes (PreferredInput's own signal; on a client without it, the last
+ * input type's). Returns the connection to end it (undefined where neither signal exists).
+ */
+export function onInputDeviceChanged(fn: (device: InputDevice) => void): RBXScriptConnection | undefined {
+	let last = inputDevice();
+	const changed = (): void => {
+		const now = inputDevice();
+		if (now === last) return;
+		last = now;
+		fn(now);
+	};
+	const [ok, conn] = pcall(() =>
+		hasPreferred
+			? UserInputService.GetPropertyChangedSignal("PreferredInput").Connect(changed)
+			: UserInputService.LastInputTypeChanged.Connect(changed),
+	);
+	return ok ? (conn as RBXScriptConnection) : undefined;
 }

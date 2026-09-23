@@ -35,6 +35,7 @@
  */
 import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
 import { PlateState, clearPlate, paintPlate, plateUnit, reliefPx } from "./plate";
+import { inputDevice } from "./device";
 import {
 	DESIGN_H,
 	DESIGN_W,
@@ -134,9 +135,9 @@ export function isFocused(obj: GuiObject): boolean {
 	return focused === obj;
 }
 
-/** the player's last input came from a gamepad */
+/** the player is on a gamepad (connected and in use: UserInputService.PreferredInput, client/ui/device.ts) */
 export function gamepadActive(): boolean {
-	return UserInputService.GetLastInputType().Name.sub(1, 7) === "Gamepad";
+	return inputDevice() === "gamepad";
 }
 
 /** selects `obj` when playing with a gamepad (so a new screen/dialog is usable without a mouse) */

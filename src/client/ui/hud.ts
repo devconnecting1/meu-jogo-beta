@@ -2,7 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
-import { safeOrigin, screenSize } from "./device";
+import { inputDevice, onInputDeviceChanged, safeOrigin, screenSize } from "./device";
 import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
 import { HudNav } from "./hudNav";
 import type { PlayerSaveData } from "shared/game/save";
@@ -57,8 +57,6 @@ function classify(msg: string): MessageKind {
 	if (msg === "No ammo") return "warn";
 	return "normal";
 }
-
-const UserInputService = game.GetService("UserInputService");
 
 const FEED_MAX = 4;
 const FEED_TIME = 3.5;
@@ -293,6 +291,8 @@ export class Hud {
 	// ---- touch layer (pixel space; see the helpers above)
 	private touchLayer: Frame | undefined;
 	private touchOff: (() => void) | undefined;
+	/** the player's input device changing under the HUD (client/ui/device.ts): the touch controls come or go */
+	private deviceOff: RBXScriptConnection | undefined;
 	private touch = false;
 	private aimPad: Frame | undefined;
 	/** where the stick's base and the aim pad were last placed (updateTouch writes only a move) */
@@ -329,7 +329,9 @@ export class Hud {
 		this.mounted = true;
 		this.last.clear();
 		const ctx = this.ctx;
-		const mobile = UserInputService.TouchEnabled;
+		// the touch controls are for a touch screen in use (UserInputService.PreferredInput, client/ui/device.ts): not for
+		// a touch laptop driven with its mouse, which the bootstrap aims with the mouse too
+		const mobile = inputDevice() === "touch";
 		this.touch = mobile;
 		// "UI size" setting (0..1, default 0.5): 80% .. 120% of the HUD controls
 		const k = 0.8 + 0.4 * math.clamp(ctx.save.settings.uiSize, 0, 1);
@@ -395,6 +397,16 @@ export class Hud {
 			if (!this.mounted || this.root === undefined) return;
 			this.buildTouch(this.root);
 			this.placeConsole();
+		});
+		// a hybrid device picked up or put down its touch screen mid-run: the HUD is rebuilt for the new one (the key
+		// hints follow the pad or the keyboard by themselves, every frame)
+		this.deviceOff = onInputDeviceChanged(device => {
+			if (!this.mounted || (device === "touch") === this.touch) return;
+			task.defer(() => {
+				if (!this.mounted) return;
+				this.unmount();
+				this.mount();
+			});
 		});
 	}
 
@@ -820,6 +832,8 @@ export class Hud {
 		this.mounted = false;
 		this.touchOff?.();
 		this.touchOff = undefined;
+		this.deviceOff?.Disconnect();
+		this.deviceOff = undefined;
 		this.root?.Destroy();
 		this.root = undefined;
 		this.console = undefined;

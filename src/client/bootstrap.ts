@@ -13,7 +13,7 @@ import { Renderer } from "shared/engine/renderer";
 import { COLORS } from "shared/engine/colors";
 import { defaultSave, PlayerSaveData } from "shared/game/save";
 import { GameContext, GamePhase } from "shared/game/context";
-import { refreshSafeArea, safeSize, topInset, touchOffset } from "./ui/device";
+import { inputDevice, onInputDeviceChanged, refreshSafeArea, safeSize, topInset, touchOffset } from "./ui/device";
 import { warmFightPool } from "./view/poolWarmup";
 
 const Players = game.GetService("Players");
@@ -178,8 +178,12 @@ syncUiGui();
 
 const cam = new Camera();
 const input = new InputState();
-// phones/tablets start in touch aim (the "mouse" location there is just the last finger)
-if (UserInputService.TouchEnabled && !UserInputService.MouseEnabled) input.aimMode = "touch";
+// a touch screen in use starts in touch aim (the "mouse" location there is just the last finger) -- the same answer the
+// HUD draws its touch controls from (client/ui/device.ts: UserInputService.PreferredInput), and again when it changes
+if (inputDevice() === "touch") input.aimMode = "touch";
+onInputDeviceChanged(device => {
+	if (device === "touch") input.aimMode = "touch";
+});
 const renderer = new Renderer(worldLayer, "Sprites");
 const save: PlayerSaveData = defaultSave();
 

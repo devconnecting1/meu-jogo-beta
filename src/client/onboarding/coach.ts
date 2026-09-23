@@ -4,6 +4,7 @@ import { MIN_TOUCH_PX } from "shared/engine/input";
 import type { GameRefs } from "../systems/types";
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, space } from "../ui/theme";
 import { toast } from "../ui/popup";
+import { inputDevice } from "../ui/device";
 import { coverWholeScreen, reducedMotion } from "../ui/skin";
 import { Bar, Button, Card, Progress, makeAnchored, makeFrame, makeLabel, setDesign, uiScale } from "../ui/widgets";
 import {
@@ -16,8 +17,6 @@ import {
 	objectiveView,
 	trackWorld,
 } from "./objectives";
-
-const UserInputService = game.GetService("UserInputService");
 
 /*
  * The coach: one objective on screen at a time, a pointer in the world, and nothing that ever blocks the game.
@@ -305,7 +304,7 @@ export class Coach {
 		const ctx = this.ctx;
 		this.root?.Destroy();
 		// the Skip button has to stay thumb-sized on a phone, where a design unit is about half a pixel
-		const touch = UserInputService.TouchEnabled;
+		const touch = inputDevice() === "touch";
 		const k = 0.8 + 0.4 * math.clamp(ctx.save.settings.uiSize, 0, 1);
 		const scale = touch ? math.clamp(MIN_TOUCH_PX / (SKIP_H * math.max(uiScale(), 0.05)), k, 1.6) : k;
 		const box = makeAnchored(ctx.hudLayer, "Coach", 0, 0.5, CARD_W, CARD_H, 14, 0, false, scale);
