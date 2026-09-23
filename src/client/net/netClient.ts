@@ -143,6 +143,16 @@ export interface NetStats {
 	errorP99: number;
 	/** corrections above 16 u in the last minute (§11.3 F1 target: < 1/min) */
 	correctionsPerMinute: number;
+	/** measured snapshot arrival interval and its mean deviation, seconds (client/net/snapshotBuffer.ts) */
+	snapInterval: number;
+	snapJitter: number;
+	/** frames whose render time had to be HELD: the tell-tale of a remote survivor moving in steps */
+	snapStalls: number;
+	/** snapshot parts accepted and dropped by the buffer (stale, duplicate, outside the reorder window) */
+	snapAccepted: number;
+	snapDropped: number;
+	/** remote survivors the buffer is interpolating */
+	tracked: number;
 	/** commands still waiting for an ack */
 	pending: number;
 	/** current sampling rate, 58.8 … 61.2 Hz */
@@ -180,6 +190,8 @@ let timeAt = 0;
 let startedAt = 0;
 /** os.clock() of the last [PZ-NET] line */
 let loggedAt = 0;
+/** frames drawn since the last line, so the log says whether the CLIENT is the thing stuttering */
+let framesSinceLog = 0;
 let warnedSlow = false;
 
 /** the world / survivor / save currently attached, so a respawn or a world rebuild is noticed */
@@ -381,26 +393,39 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 
 /** periodic line with what F1 is judged on, so a playtest can be read from the output */
 function logStats(now: number): void {
+	framesSinceLog += 1;
 	if (NET_LOG_S <= 0) return;
 	if (now - loggedAt < NET_LOG_S) return;
+	const frames = framesSinceLog;
+	const span = now - loggedAt;
+	const fps = loggedAt > 0 && span > 0 ? frames / span : 0;
+	framesSinceLog = 0;
 	loggedAt = now;
 	const st = netStats();
 	print(
 		string.format(
-			"[PZ-NET] slot %d | roster %d | outros %d | rtt %.0f ms | erro p99 %.2f u (agora %.2f) | correcoes %.1f/min | fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d%s",
+			"[PZ-NET] slot %d | roster %d | outros %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
+				"SUAVIDADE: atraso %.0f ms, intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d | " +
+				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f%s",
 			st.slot,
 			st.roster,
 			views.size(),
 			st.rtt * 1000,
 			st.errorP99,
-			st.errorLast,
 			st.correctionsPerMinute,
+			st.interpDelay * 1000,
+			st.snapInterval * 1000,
+			st.snapJitter * 1000,
+			st.snapStalls,
+			st.snapAccepted,
+			st.snapDropped,
 			st.queued,
 			st.queueDropped,
 			st.malformed,
 			st.staleSelf,
 			st.sampleHz,
 			st.pending,
+			fps,
 			st.mapMismatch ? " | MAPA DIFERENTE" : "",
 		),
 	);
@@ -440,6 +465,7 @@ export function netReset(): void {
 export function netStats(): NetStats {
 	const p = prediction.stats(os.clock());
 	const c = commands.stats();
+	const sb = snapshots.stats();
 	return {
 		active: netActive(),
 		slot: mySlot,
@@ -454,6 +480,12 @@ export function netStats(): NetStats {
 		errorLast: p.last,
 		errorP99: p.p99,
 		correctionsPerMinute: p.correctionsPerMinute,
+		snapInterval: sb.interval,
+		snapJitter: sb.jitter,
+		snapStalls: sb.stalls,
+		snapAccepted: sb.accepted,
+		snapDropped: sb.dropped,
+		tracked: sb.tracked,
 		pending: c.pending,
 		sampleHz: c.sampleHz,
 	};
