@@ -21,6 +21,7 @@
 		"test:life": "node tools/test-life.mjs",
 		"test:body": "node tools/test-body.mjs",
 		"test:waves": "node tools/test-waves.mjs",
+		"test:reset": "node tools/test-reset.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
 		"test:smoothness": "node tools/test-smoothness.mjs",
 		"test:input": "node tools/test-input-buffer.mjs",

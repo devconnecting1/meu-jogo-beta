@@ -30,9 +30,10 @@
  *                   Rebirth. It is never a free revive.
  *   6. THE WORLD WIPE. When nobody is left alive, a WIPE_DECISION_S window opens. If it closes with nobody standing
  *      — or sooner, once every dead survivor has shown they will not pay (New game, Home, leaving the server) —
- *      `onWorldWiped` fires, once. That hook is the ONE place the world's reset to day 1 plugs in (the owner's next
- *      task); until it exists the daybreak wait still stands everybody up, which is also what keeps a server whose
- *      survivors all died from staying sterile for ever (`rebuildClusters` skips the dead).
+ *      `onWorldWiped` fires, once, and the world ENDS (MP-22, the owner's rule of 23 Sep 2026): server/net/mpHost.ts
+ *      has server/sim/worldReset.ts build a new town from a new seed on day 1, and `restartWorld` below hands every
+ *      survivor who fell with the old one a new life in it. A server whose survivors all died therefore never
+ *      stays sterile (`rebuildClusters` skips the dead): it becomes a new world.
  *
  * Pure module: no Instances, no services, no os.clock. server/net/mpHost.ts feeds `step(dt)` from its Heartbeat and
  * maps Players to UserIds; tools/test-body.mjs drives the real host through its remotes.
@@ -41,12 +42,12 @@ import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
-import { PlayerSaveData, SAVE_LIMITS, ownsWeapon } from "shared/game/save";
+import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
 import { daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
-import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, createServerPlayer, findSpawnPoint } from "./players";
+import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import type { ServerSimulation } from "./simulation";
 
 /** §7.2: "O estado de mundo fica 5 min em memória" after a disconnect (seconds) */
@@ -231,8 +232,8 @@ export interface WipeReport {
 	dead: Array<number>;
 }
 
-/** why a body stood back up */
-export type StandReason = "daybreak" | "rebirth";
+/** why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22) */
+export type StandReason = "daybreak" | "rebirth" | "newWorld";
 
 interface LifeRecord {
 	userId: number;
@@ -269,7 +270,7 @@ interface BankedBody {
 }
 
 export class LifeKeeper {
-	/** rule 6: the world is lost. The ONE place the reset to day 1 plugs in; nothing is reset yet */
+	/** rule 6: the world is lost. The ONE place the reset to day 1 plugs in (server/net/mpHost.ts, MP-22) */
 	onWorldWiped?: (report: WipeReport) => void;
 	/** the server just wrote into this survivor's save (death, stand-up, the body banked): persist it */
 	onSaveChanged?: (userId: number) => void;
@@ -545,6 +546,87 @@ export class LifeKeeper {
 		this.stepWipe(dt);
 	}
 
+	// ------------------------------------------------------------ the world ends (rule 6, MP-22)
+
+	/**
+	 * Which of `dead` (a WipeReport's) will `restartWorld` give a new life: the ones this keeper still holds, on this
+	 * server. Asked BEFORE the restart, so the clients can be told who they are before the first body stands up.
+	 */
+	fallenOf(dead: ReadonlyArray<number>): Array<number> {
+		const out = new Array<number>();
+		for (const userId of dead) {
+			const rec = this.records.get(userId);
+			if (rec !== undefined && rec.goneFor === undefined && !out.includes(userId)) out.push(userId);
+		}
+		return out;
+	}
+
+	/**
+	 * MP-22: the world ended, and the simulation already stands in a new town (server/sim/worldReset.ts). No body
+	 * outlives the streets it stood in:
+	 *
+	 *   - `fallen` (from `fallenOf`), the survivors whose deaths ended it, start a NEW LIFE — the reset New game
+	 *     gives (`resetRun`: day 1, the starter kit; level, skills, coins, packs and costumes stay, MP-20) — and are
+	 *     alive again: in the world, a fresh, full body at a safe point of the new town with the 3 s shield (MP-04),
+	 *     the first one anywhere and the rest around them; in the lobby, the next entry builds one. `runRev` moves
+	 *     on, so a report the client captured in the old life is refused as outdated instead of bringing its
+	 *     backpack back;
+	 *   - anybody else still connected keeps their LIFE but not their body: the spot it stood on belongs to a town
+	 *     that no longer exists, so a kept body is banked into the save and the next entry rebuilds it (rule 2);
+	 *     one in the world (never the case at a wipe, where nobody is standing) is moved to a safe point as it is;
+	 *   - a record kept for somebody who left the server is forgotten: the save they left with decides alone.
+	 *
+	 * `saveOf` is the session's live save of a connected player, which is the table to reset.
+	 */
+	restartWorld(fallen: ReadonlyArray<number>, saveOf: (userId: number) => PlayerSaveData | undefined): void {
+		const owns = serverOwnsLife();
+		const reborn = new Set<number>();
+		for (const userId of fallen) reborn.add(userId);
+		const place = new Array<LifeRecord>();
+		for (const [userId, rec] of this.records) {
+			if (rec.goneFor !== undefined) {
+				this.records.delete(userId);
+				continue;
+			}
+			// through `recordFor`, like every other entry point: a save that moved on elsewhere is reconciled first
+			const save = saveOf(userId) ?? rec.save;
+			this.recordFor(userId, save);
+			const sp = this.inWorld(rec);
+			// the table the session holds NOW is the one to reset (mpHost's admit pass would adopt it anyway)
+			if (sp !== undefined && save !== undefined) adoptSave(sp, save);
+			if (reborn.has(userId) && save !== undefined) {
+				if (owns) {
+					// the old life's rounds died with it: nothing in the fallen body goes back into the new reserve
+					if (sp !== undefined) sp.state.weapon.ammoCount = 0;
+					resetRun(save);
+					save.runRev = math.min(save.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
+				}
+				rec.dead = false;
+				rec.downFor = undefined;
+				rec.declined = false;
+				rec.fullNext = true;
+				this.onSaveChanged?.(userId);
+			} else if (sp === undefined && rec.body !== undefined && save !== undefined && owns) {
+				if (!rec.unloaded) unloadMagazine(rec.body, save);
+				if (writeRunBody(save, rec.body)) this.onSaveChanged?.(userId);
+			}
+			rec.body = undefined;
+			rec.unloaded = false;
+			rec.banked = undefined;
+			if (sp !== undefined) place.push(rec);
+			// nobody in the lobby has had a body in the NEW world yet (rule 6 counts only those who have)
+			else rec.entered = false;
+		}
+		for (const rec of place) {
+			const sp = this.inWorld(rec);
+			if (sp === undefined) continue;
+			if (reborn.has(rec.userId)) this.standUp(rec, sp, "newWorld");
+			else this.moveKept(rec, sp);
+		}
+		this.wipeIn = undefined;
+		this.wiped = false;
+	}
+
 	// ------------------------------------------------------------ internals
 
 	private recordFor(userId: number, save: PlayerSaveData | undefined): LifeRecord {
@@ -636,6 +718,22 @@ export class LifeKeeper {
 		});
 		state.x = spot.x;
 		state.y = spot.y;
+	}
+
+	/**
+	 * MP-22, for a body in the world that is NOT starting a new life (a living one; a wipe never has any, since
+	 * nobody is standing when it fires): the same body — hp, hunger, magazine — carried to a safe point of the new
+	 * town, with the shield a newcomer gets there. Nothing about its life changes, so the roster hears nothing.
+	 */
+	private moveKept(rec: LifeRecord, sp: ServerPlayer): void {
+		const sim = this.sim;
+		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
+		sp.state.x = spawn.x;
+		sp.state.y = spawn.y;
+		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
+		if (serverOwnsLife() && rec.save !== undefined && writeRunBody(rec.save, sp.state)) {
+			this.onSaveChanged?.(rec.userId);
+		}
 	}
 
 	/** daybreak or a Rebirth: a fresh, full body at a safe point with the 3 s shield (§7.3), and the roster told */

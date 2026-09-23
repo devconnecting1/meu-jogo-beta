@@ -1,0 +1,188 @@
+/*
+ * The end of a world, and the next one (docs/DESIGN_RULES.md MP-22, the owner's decision of 23 Sep 2026: "se todos
+ * os jogadores sobreviventes do mundo morrerem, o mundo finaliza naquele dia específico pra resetar pro dia 1. O
+ * objetivo do jogo é durar mais tempo vivo e explorar o mundo."). SERVER ONLY.
+ *
+ * WHEN is not decided here: server/sim/life.ts rule 6 fires `onWorldWiped` once, after the last living survivor fell
+ * and nobody paid a Rebirth in WIPE_DECISION_S (or everybody declined sooner). server/net/mpHost.ts answers that
+ * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts).
+ *
+ * WHAT happens, in this order — the order is the contract:
+ *
+ *   1. the RECORD of the world that ended: its seed, the day it fell on (how many days it lasted), when it began and
+ *      ended, why, and how many survivors fell with it;
+ *   2. a NEW SEED, never the old one: exploring is half the goal, and the same streets again would be a respawn;
+ *   3. the NEW TOWN, `generateTown(seed)` — the generator the boot runs — handed to the simulation, which rebuilds
+ *      everything that stood on the old one through its own boot path (`ServerSimulation.restartWorld`): horde,
+ *      bosses, projectiles, combat, kill credit, the F3 world (items, loot, doors, fires, constructions) and the
+ *      clock, back to day 1 at 07:00;
+ *   4. the CLIENTS told (`Replicator.restartWorld`): WorldReset to everybody connected, the lobby included, then the
+ *      join message again for those in the world. Before any body stands up, so a client reads "new town" first
+ *      and "you are alive" second;
+ *   5. the LIVES (`LifeKeeper.restartWorld`): every survivor who fell with the old world starts a new life in the
+ *      new one — life day 1, the starter kit; level, skills, coins, packs and costumes kept — standing at a safe
+ *      point if they are in the world, on their next entry if they are in the lobby.
+ *
+ * Pure module: no Instances, no services, no os.clock / os.time (the caller passes the time), so tools/test-reset.mjs
+ * runs it under Node through the real host.
+ */
+import { rndInt } from "shared/engine/rng";
+import { PlayerSaveData } from "shared/game/save";
+import { WorldData, generateTown } from "shared/game/world";
+import { TOWN_SEED_MAX } from "shared/net/mpConfig";
+import { mapHashOf, Replicator } from "../net/replication";
+import { LifeKeeper, WipeReport } from "./life";
+import { ServerSimulation } from "./simulation";
+
+/** ended worlds kept in the shared DataStore document (server/save/worldLog.ts) — a bounded list, newest last */
+export const WORLD_LOG_KEEP = 50;
+/** ended worlds one server remembers in memory (the log line, the admin panel) */
+export const WORLD_LOG_MEMORY = 20;
+/** a JobId longer than this is not one (Roblox's are a GUID, Studio's "studio-" + a GUID): the record leaves it out */
+const JOB_MAX = 64;
+
+/** one world that ended (MP-22): what is persisted, and nothing more */
+export interface EndedWorld {
+	/** the seed its town was generated from */
+	seed: number;
+	/** the world day it fell on — how many days it lasted, the first one counted (≥ 1) */
+	days: number;
+	/** os.time() when it began (the server's boot, or the previous world's end) and when it ended */
+	startedAt: number;
+	endedAt: number;
+	/** WipeReport.reason: "timeout" (nobody paid in the window) or "declined" (every dead survivor chose not to) */
+	reason: string;
+	/** survivors who fell with it (the ones the window waited on) */
+	fallen: number;
+	/** the server it ran on (game.JobId) */
+	job: string;
+}
+
+/** the town a server is running right now */
+export interface TownState {
+	seed: number;
+	/** os.time() when this world began */
+	startedAt: number;
+}
+
+/** what the end of a world touches, all of it pure (server/net/mpHost.ts hands its own) */
+export interface WorldParts {
+	sim: ServerSimulation;
+	lives: LifeKeeper;
+	/** omitted by a harness that has no clients to tell */
+	replicator?: Replicator;
+}
+
+export interface EndWorldOptions {
+	/** os.time() now */
+	now: number;
+	/** game.JobId, for the record */
+	job: string;
+	/** the live save of a connected survivor by UserId (the session's, server/main.server.ts) */
+	saveOf: (userId: number) => PlayerSaveData | undefined;
+	/** the next town's seed; drawn at random (never the ended one) when omitted */
+	seed?: number;
+}
+
+/** what `endWorld` did, for the host (its log line and attributes) and the record keeper */
+export interface WorldEnd {
+	/** the world that ended, as it is persisted */
+	ended: EndedWorld;
+	/** the new town */
+	world: WorldData;
+	seed: number;
+	mapHash: number;
+	/** os.time() the new world began */
+	startedAt: number;
+	/** the UserIds that were given a new life in it */
+	lives: Array<number>;
+}
+
+function wholeIn(v: unknown, min: number, max: number): v is number {
+	return typeIs(v, "number") && v === v && v % 1 === 0 && v >= min && v <= max;
+}
+
+/**
+ * A seed for the next town: 1 … TOWN_SEED_MAX (every value `TownRng` turns into a town of its own), never
+ * `previous`. `roll` is injectable for a test; the default is the engine's `math.random`, like `generateTown(0)`.
+ */
+export function pickTownSeed(previous: number, roll: () => number = () => rndInt(1, TOWN_SEED_MAX)): number {
+	for (let i = 0; i < 8; i++) {
+		const seed = math.floor(roll());
+		if (seed >= 1 && seed <= TOWN_SEED_MAX && seed !== previous) return seed;
+	}
+	// eight draws that all failed are a broken roll, not bad luck: the next seed along is new by construction
+	return (math.max(0, math.floor(previous)) % TOWN_SEED_MAX) + 1;
+}
+
+/**
+ * The world `current` ends, as `report` (life.ts rule 6) says, and a new one begins — the five steps at the top of
+ * this file, in that order. Returns what happened; nothing here waits for anything.
+ */
+export function endWorld(
+	parts: WorldParts,
+	report: WipeReport,
+	current: TownState,
+	options: EndWorldOptions,
+): WorldEnd {
+	const ended: EndedWorld = {
+		seed: current.seed,
+		days: math.max(1, math.floor(report.day)),
+		startedAt: current.startedAt,
+		endedAt: options.now,
+		reason: report.reason,
+		fallen: report.dead.size(),
+		job: options.job.size() <= JOB_MAX ? options.job : "",
+	};
+	const requested = options.seed;
+	const seed =
+		wholeIn(requested, 1, TOWN_SEED_MAX) && requested !== current.seed ? requested : pickTownSeed(current.seed);
+	const world = generateTown(seed);
+	const mapHash = mapHashOf(world);
+	// asked BEFORE any life changes: the clients hear who starts over before the first body stands up
+	const lives = parts.lives.fallenOf(report.dead);
+	parts.sim.restartWorld(world);
+	parts.replicator?.restartWorld({ seed, mapHash, endedDay: ended.days, lives });
+	parts.lives.restartWorld(lives, options.saveOf);
+	return { ended, world, seed, mapHash, startedAt: options.now, lives };
+}
+
+// ---------------------------------------------------------------- the record (server/save/worldLog.ts)
+
+/** `list` with `entry` appended and the oldest dropped beyond `keep` (in place; returns it) */
+export function appendEnded(list: Array<EndedWorld>, entry: EndedWorld, keep = WORLD_LOG_KEEP): Array<EndedWorld> {
+	list.push(entry);
+	while (list.size() > math.max(1, keep)) list.remove(0);
+	return list;
+}
+
+/**
+ * A stored record, checked the way `sanitizeStoredSave` checks a save: the document is shared by every server and
+ * outlives this code, so anything that is not a well-formed record is dropped instead of trusted.
+ */
+export function readEndedWorld(v: unknown): EndedWorld | undefined {
+	if (!typeIs(v, "table")) return undefined;
+	const r = v as Record<string, unknown>;
+	if (!wholeIn(r.seed, 1, TOWN_SEED_MAX) || !wholeIn(r.days, 1, 1e7)) return undefined;
+	if (!wholeIn(r.startedAt, 0, 1e12) || !wholeIn(r.endedAt, 0, 1e12)) return undefined;
+	return {
+		seed: r.seed,
+		days: r.days,
+		startedAt: r.startedAt,
+		endedAt: r.endedAt,
+		reason: r.reason === "declined" ? "declined" : "timeout",
+		fallen: wholeIn(r.fallen, 0, 1000) ? r.fallen : 0,
+		job: typeIs(r.job, "string") && r.job.size() <= JOB_MAX ? r.job : "",
+	};
+}
+
+/** the stored document (an array of records) → the records that survive `readEndedWorld`, oldest first */
+export function readEndedList(v: unknown): Array<EndedWorld> {
+	const out = new Array<EndedWorld>();
+	if (!typeIs(v, "table")) return out;
+	for (const item of v as Array<unknown>) {
+		const e = readEndedWorld(item);
+		if (e !== undefined) out.push(e);
+	}
+	return out;
+}
