@@ -635,7 +635,21 @@ export interface LightSource {
 	k?: number;
 	/** fraction of the radius that is fully lit (default 0.45) */
 	inner?: number;
+	/**
+	 * A cone instead of a circle (the flashlight, LUZ-04): lit only within `cone` radians of the direction `angle`
+	 * (world radians). The edge fades inside the cone and reaches 0 exactly at `cone`, as the radius reaches 0
+	 * exactly at `r`: nothing past the server's cone looks lit (shared/sim/survivorLight.ts).
+	 */
+	angle?: number;
+	cone?: number;
 }
+
+/** how far inside a cone's edge its light starts to fade (radians, ~10°) */
+const CONE_FEATHER = math.rad(10);
+/** a cone that turned so little that its rim moved less than this (screen px) keeps its samples */
+const CONE_RIM_EPS = 1.5;
+/** the cone cosine of a plain circle (below any real cosine) */
+const NO_CONE = -2;
 
 /** transparency is quantised so a strip is only rewritten when its light visibly changes */
 const LIGHT_STEPS = 64;
@@ -715,6 +729,12 @@ export class LightMap {
 	private lr: Array<number> = [];
 	private lin: Array<number> = [];
 	private lk: Array<number> = [];
+	/** a cone's screen direction (unit vector) and the cosines of its edge and of where the edge starts to fade */
+	private lcx: Array<number> = [];
+	private lcy: Array<number> = [];
+	/** cos of the half-angle; NO_CONE for a circle */
+	private lco: Array<number> = [];
+	private lci: Array<number> = [];
 	private nLights = 0;
 	/** each light as it was last sampled (pn < 0: resample everything), and the darkness all strips were last built with */
 	private px: Array<number> = [];
@@ -722,6 +742,9 @@ export class LightMap {
 	private pr: Array<number> = [];
 	private pin: Array<number> = [];
 	private pk: Array<number> = [];
+	private pcx: Array<number> = [];
+	private pcy: Array<number> = [];
+	private pco: Array<number> = [];
 	private pn = -1;
 	private pDark = -1;
 	/** keys of the strip being built: x and transparency */
@@ -796,6 +819,16 @@ export class LightMap {
 	}
 
 	/**
+	 * The colour of the night (night vision paints it green, E2). Rewrites the strips' colour only when it changes:
+	 * no Instance, and nothing at all on the frames it stays the same.
+	 */
+	setColor(color: Color3): void {
+		if (color === this.color) return;
+		this.color = color;
+		for (const f of this.strips) f.BackgroundColor3 = color;
+	}
+
+	/**
 	 * @param maxDark darkness where nothing is lit (0 = day → the map hides itself)
 	 * @param lights world-space light sources (player, lamps, fires, muzzle flashes...)
 	 */
@@ -823,6 +856,20 @@ export class LightMap {
 			// the fully lit core stays strictly inside the ring so the falloff never divides by 0
 			this.lin[n] = math.min(r * (l.inner ?? 0.45), r - 1);
 			this.lk[n] = clamp01(l.k ?? 1);
+			const cone = l.cone;
+			if (cone !== undefined && cone < math.pi) {
+				// the screen turns with the top-down camera's own angle (a sniper scope); iso keeps the world's
+				const dir = (l.angle ?? 0) + (cam.projection === "iso" ? 0 : cam.angle);
+				this.lcx[n] = math.cos(dir);
+				this.lcy[n] = math.sin(dir);
+				this.lco[n] = math.cos(cone);
+				this.lci[n] = math.cos(math.max(0, cone - CONE_FEATHER));
+			} else {
+				this.lcx[n] = 0;
+				this.lcy[n] = 0;
+				this.lco[n] = NO_CONE;
+				this.lci[n] = NO_CONE;
+			}
 			n++;
 		}
 		this.nLights = n;
@@ -860,6 +907,8 @@ export class LightMap {
 		const pn = this.pn;
 		const all = pn < 0;
 		for (let i = 0; i < math.max(n, pn); i++) {
+			// a cone also counts as changed once it turned enough to move its rim by CONE_RIM_EPS px
+			const turn = i < n ? CONE_RIM_EPS / math.max(1, this.lr[i]) : 0;
 			const kept =
 				!all &&
 				i < n &&
@@ -868,7 +917,10 @@ export class LightMap {
 				math.abs(this.ly[i] - this.py[i]) < MOVE_EPS &&
 				math.abs(this.lr[i] - this.pr[i]) < MOVE_EPS &&
 				math.abs(this.lin[i] - this.pin[i]) < MOVE_EPS &&
-				math.abs(this.lk[i] - this.pk[i]) < 0.5 / LIGHT_STEPS;
+				math.abs(this.lk[i] - this.pk[i]) < 0.5 / LIGHT_STEPS &&
+				this.lco[i] === this.pco[i] &&
+				math.abs(this.lcx[i] - this.pcx[i]) < turn &&
+				math.abs(this.lcy[i] - this.pcy[i]) < turn;
 			if (kept) continue;
 			if (i < n) {
 				this.markRows(this.ly[i], this.lr[i]);
@@ -877,6 +929,9 @@ export class LightMap {
 				this.pr[i] = this.lr[i];
 				this.pin[i] = this.lin[i];
 				this.pk[i] = this.lk[i];
+				this.pcx[i] = this.lcx[i];
+				this.pcy[i] = this.lcy[i];
+				this.pco[i] = this.lco[i];
 			}
 			if (i < pn) this.markRows(this.py[i], this.pr[i]);
 		}
@@ -908,13 +963,23 @@ export class LightMap {
 			const chord = math.sqrt(rad * rad - dy * dy);
 			const first = math.max(0, math.ceil((this.lx[i] - chord) / GRID));
 			const last = math.min(cols - 1, math.floor((this.lx[i] + chord) / GRID) + 1);
+			const co = this.lco[i];
+			const cone = co !== NO_CONE;
 			for (let c = first; c <= last; c++) {
 				const idx = base + c;
 				if (this.samples[idx] >= k) continue;
 				const dx = this.sx[c] - this.lx[i];
 				const d2 = dx * dx + dy * dy;
 				// inside the lit core no distance is needed
-				const l = d2 <= r0 * r0 ? k : k * falloff(math.sqrt(d2), r0, rad);
+				let l = d2 <= r0 * r0 ? k : k * falloff(math.sqrt(d2), r0, rad);
+				if (cone && l > 0) {
+					// the cosine of the angle off the cone's axis: 0 light at the edge (co), full from `ci` inwards
+					const d = math.sqrt(d2);
+					const cosOff = d > 1e-6 ? (dx * this.lcx[i] + dy * this.lcy[i]) / d : 1;
+					if (cosOff <= co) continue;
+					const ci = this.lci[i];
+					if (cosOff < ci) l *= 1 - falloff(cosOff, co, ci);
+				}
 				if (l > this.samples[idx]) this.samples[idx] = l;
 			}
 		}

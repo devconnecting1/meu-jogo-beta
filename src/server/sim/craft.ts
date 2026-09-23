@@ -22,27 +22,32 @@
  */
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS } from "shared/data/skills";
-import { chance } from "shared/engine/rng";
 import { countItem, addItem, removeItem, unequipGone } from "shared/sim/inventory";
-import { querySolids, Solid, WorldData } from "shared/game/world";
+import * as Rule from "shared/sim/craftRule";
+import type { CraftHeat } from "shared/sim/craftRule";
+import { Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
 import { ServerBuild } from "./build";
 
-/** the original's desk/fire reach (client/systems/craftSystem.ts) */
-export const STATION_RANGE = 180;
+/** the original's desk/fire reach: the shared rule's (shared/sim/craftRule.ts) */
+export const STATION_RANGE = Rule.STATION_RANGE;
 /** §8.1: up to 4 crafts per second */
 export const CRAFT_RATE = 4;
 /** §8.1: a usable item every 0.25 s */
 export const USE_COOLDOWN = 0.25;
-/** skill index of "dwarf": a smelt sometimes yields double */
-const SKILL_DWARF = 12;
 
-export type CraftStation = "desk" | "pro" | "fire";
+export type CraftStation = Rule.CraftStation;
 
-/** why an ask was refused, or what it produced */
+/**
+ * Why an ask was refused, or what it produced.
+ *
+ * A `crafted` outcome carries `heat`: "cook" for a cooking recipe (item_cook), "smelt" for a smelting one
+ * (item_fire), undefined otherwise. It is the server-side event the Chef and Blacksmith achievements count
+ * (`count` is what came out, Chef's or Dwarf's double included).
+ */
 export type BackpackOutcome =
-	| { kind: "crafted"; recipe: number; count: number }
+	| { kind: "crafted"; recipe: number; count: number; heat: CraftHeat }
 	| { kind: "holding"; placeable: number }
 	| { kind: "used"; item: number }
 	| { kind: "equipped"; equip: number; slot: number }
@@ -50,36 +55,13 @@ export type BackpackOutcome =
 	| { kind: "learned"; skill: number; level: number }
 	| { kind: "refused"; why: "unknown" | "rate" | "station" | "ingredients" | "busy" | "owned" | "points" | "noop" };
 
-function matchesStation(s: Solid, station: CraftStation): boolean {
-	if (s.removed === true) return false;
-	if (station === "desk") return s.tags === "craftdesk" || s.tags === "craftdesk_pro";
-	if (station === "pro") return s.tags === "craftdesk_pro";
-	return (s.tags === "brazier" && s.powered === true) || s.tags === "furnace";
-}
-
 /**
- * The station a survivor at (x, y) is standing near, or undefined. A pure version of the client's
- * `stationNear`, with its own scratch buffer per call rather than a module-level one — the client could get
- * away with a shared buffer because it had one player.
+ * The station a survivor at (x, y) is standing near, or undefined: the shared rule (shared/sim/craftRule.ts), the
+ * true distance to the station's rectangle -- the same answer the client's Bag gets (QA D2). A fresh scratch array
+ * per call: the server asks for several survivors.
  */
 export function stationNear(world: WorldData, x: number, y: number, station: CraftStation): Solid | undefined {
-	const found = querySolids(
-		world,
-		x - STATION_RANGE,
-		y - STATION_RANGE,
-		x + STATION_RANGE,
-		y + STATION_RANGE,
-		new Array<Solid>(),
-	);
-	for (const s of found) {
-		if (!matchesStation(s, station)) continue;
-		const cx = math.clamp(x, s.x, s.x + s.w);
-		const cy = math.clamp(y, s.y, s.y + s.h);
-		const dx = x - cx;
-		const dy = y - cy;
-		if (dx * dx + dy * dy <= STATION_RANGE * STATION_RANGE) return s;
-	}
-	return undefined;
+	return Rule.stationNear(world, x, y, station);
 }
 
 /** the recipe of an id (the array is dense, but never trust an index from the wire) */
@@ -147,13 +129,10 @@ export class ServerCraft {
 			this.build.hold(slot, r.resultIndex, r.id);
 			return { kind: "holding", placeable: r.resultIndex };
 		}
-		let count = r.resultCount;
-		if (r.needsFire === true) {
-			const dwarf = save.skillLevels[SKILL_DWARF] ?? 0;
-			if (dwarf > 0 && chance(dwarf >= 2 ? 30 : 15)) count *= 2;
-		}
+		// Chef now and then doubles a cooking, Dwarf a smelting: the shared rule, the client's prediction's too
+		const count = Rule.craftYield(r, save);
 		addItem(save, r.resultKind, r.resultIndex, count);
-		return { kind: "crafted", recipe: r.id, count };
+		return { kind: "crafted", recipe: r.id, count, heat: Rule.craftHeat(r) };
 	}
 
 	// ---------------------------------------------------------------- use, equip, learn (§8.1)
@@ -224,10 +203,7 @@ export class ServerCraft {
 
 	/** §8.1: the station is checked at the SERVER's position, never at one the client claimed */
 	private stationOk(state: PlayerState, r: CraftRecipe): boolean {
-		if (r.needsPro) return stationNear(this.world, state.x, state.y, "pro") !== undefined;
-		if (r.needsDesk) return stationNear(this.world, state.x, state.y, "desk") !== undefined;
-		if (r.needsFire === true) return stationNear(this.world, state.x, state.y, "fire") !== undefined;
-		return true;
+		return Rule.stationOk(this.world, state.x, state.y, r);
 	}
 
 	private limitsOf(slot: number): Limits {

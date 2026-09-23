@@ -37,6 +37,7 @@ import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
 import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
+import * as SurvivorLight from "shared/sim/survivorLight";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
 import {
@@ -85,9 +86,13 @@ const NAMEPLATE_GAP = 14;
 const ROOF_LERP = 0.15;
 /** tree canopy opacity while someone stands under it (original obj_tree1 fades near the player) */
 const CANOPY_SEE_THROUGH = 0.35;
-/** night light radii (world units): the player's own light and built light sources */
-const PLAYER_LIGHT_R = 250;
+/**
+ * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
+ * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
+ */
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/** the flashlight's beam is fully bright to this fraction of its reach, then fades to 0 at its end */
+const FLASHLIGHT_INNER = 0.35;
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -980,7 +985,11 @@ export class GameLoop {
 		if (this.lightMap === undefined) {
 			this.lightMap = new LightMap(ctx.darkLayer, COLORS.overlayNight);
 		}
-		const dark = this.daynight.darkAlpha;
+		// night vision (E2): the wearer's own screen sees the night lifted and green; the lit circle is the rule's
+		const save = ctx.save;
+		const nightVision = SurvivorLight.wearsNightVision(save);
+		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
+		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
 		if (dark <= 0.004) {
 			this.lightMap.hide();
 			return;
@@ -989,7 +998,20 @@ export class GameLoop {
 		lights.clear();
 		const p = this.player;
 		if (!p.dead) {
-			lights.push({ x: p.x, y: p.y, r: PLAYER_LIGHT_R, inner: 0.4 });
+			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
+			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
+			lights.push({ x: p.x, y: p.y, r: SurvivorLight.survivorLightRadius(save), inner: 0.4 });
+			const cone = SurvivorLight.survivorCone(save);
+			if (cone !== undefined) {
+				lights.push({
+					x: p.x,
+					y: p.y,
+					r: cone.radius,
+					inner: FLASHLIGHT_INNER,
+					angle: p.angle,
+					cone: SurvivorLight.CONE_HALF_ANGLE,
+				});
+			}
 		}
 		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
 		const list = this.queryBuf;

@@ -3,6 +3,9 @@ import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
 import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
+import { HudNav } from "./hudNav";
+import type { PlayerSaveData } from "shared/game/save";
+import type { WorldData } from "shared/game/world";
 import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
 import { SCORE_CHIP_TOUCH_W, ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
@@ -244,6 +247,8 @@ export class Hud {
 	 */
 	private bannerMaxW = BANNER_W;
 	private feedMaxW = FEED_W;
+	/** top left: the compass's needle or the GPS map, when one is in hand (E2, client/ui/hudNav.ts) */
+	private nav: HudNav | undefined;
 	/** the "UI size" setting at mount (80%..120%) */
 	private uiK = 1;
 	private vignette: Array<Frame> = [];
@@ -316,6 +321,7 @@ export class Hud {
 		this.buildVignette(root);
 		const tr = (key: string): string => this.tr(key);
 		if (mobile) [this.skyFrame, this.sky] = skyPlate(root, tr);
+		this.nav = new HudNav(root, tr, k);
 		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
 		// and Menu buttons), sized and placed between the thumbs by placeConsole()
 		this.console = new HudConsole(root, tr, mobile, k, {
@@ -415,8 +421,10 @@ export class Hud {
 				corner.push([c.x, c.y, c.x + c.w, c.y + c.h]);
 			}
 			this.fitMessages(corner);
-			// the open scoreboard, pinned to the left edge, stays under the sky and the chip if they moved there
+			// the open scoreboard, pinned to the left edge, stays under the sky and the chip if they moved there; so does
+			// the compass / GPS plate at the top left (hudNav.ts), which only a crowded layout sends them to
 			this.board?.avoid(corner);
+			this.nav?.avoid(corner);
 		}
 	}
 
@@ -788,6 +796,7 @@ export class Hud {
 		this.console = undefined;
 		this.sky = undefined;
 		this.skyFrame = undefined;
+		this.nav = undefined;
 		this.board?.destroy();
 		this.board = undefined;
 		this.chipSlot = undefined;
@@ -831,6 +840,20 @@ export class Hud {
 	/** the match scoreboard of this mount (MP-23), for tests and the admin overlay */
 	scoreboard(): Scoreboard | undefined {
 		return this.board;
+	}
+
+	/** the navigation plate of this mount (E2), for tests */
+	navPlate(): HudNav | undefined {
+		return this.nav;
+	}
+
+	/**
+	 * The compass / GPS in the hand (E2): which plate shows, where the needle points, the map. Every frame of a run;
+	 * writes only what changed and creates nothing (client/ui/hudNav.ts).
+	 */
+	updateNav(world: WorldData, x: number, y: number, save: PlayerSaveData): void {
+		if (!this.mounted) return;
+		this.nav?.update(world, x, y, save, os.clock());
 	}
 
 	update(state: HudState): void {

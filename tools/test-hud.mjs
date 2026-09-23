@@ -52,6 +52,7 @@ const { iconFrameCount } = require(join(SRC, "client/ui/itemIcon.ts"));
 const Clock = require(join(SRC, "shared/sim/clock.ts"));
 const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
 const { NIGHTFALL_WARN_S, SKY_PLATE_W, SKY_PLATE_H } = require(join(SRC, "client/ui/hudSky.ts"));
+const { navReach } = require(join(SRC, "client/ui/hudNav.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -881,6 +882,17 @@ function checkChip(label, L, others, sky, atHome) {
 	const s = board.frame.Size;
 	const panel = [p.X.Offset, p.Y.Offset, p.X.Offset + s.X.Offset, p.Y.Offset + s.Y.Offset];
 	board.toggle();
+	// the compass / GPS plate at the top left (hudNav.ts; at its largest, the map) moves down under the sky and the chip
+	// when a crowded layout sends them to its corner: the three never overlap
+	const navHolder = deep(hudRoot(), "Nav");
+	const nr = navReach(L.viewW, L.viewH, L.inset, 0.8 + 0.4 * settings.uiSize);
+	const push = navHolder?.Position.Y.Offset ?? 0;
+	const nav = [nr[0], nr[1] + push, nr[2], nr[3] + push];
+	check(
+		`${label}: a bussola / o GPS (em cima a esquerda) nao fica sob o relogio nem sob o chip`,
+		navHolder !== undefined && !overlaps(nav, sky) && !overlaps(nav, r),
+		`${fmt(nav)}${push !== 0 ? `, descida ${push} px` : ""}`,
+	);
 	check(
 		`${label}: o placar aberto nao cobre o relogio nem o chip, e cabe na tela`,
 		!overlaps(panel, sky) && !overlaps(panel, r) && panel[1] >= L.inset && panel[3] <= L.viewH + 0.5,

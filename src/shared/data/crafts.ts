@@ -1,4 +1,5 @@
 import type { ItemKind } from "./kinds";
+import { USABLES } from "./usables";
 
 export interface CraftIngredient {
 	kind: ItemKind;
@@ -20,9 +21,42 @@ export interface CraftRecipe {
 	 * instead of a desk. This is how Steel and Gold are made — they never drop as loot.
 	 */
 	needsFire?: boolean;
+	/**
+	 * Cooking (item_cook in the original): needs a LIT campfire or brazier, or a working cooker, nearby
+	 * (shared/sim/craftRule.ts "cook"). These rows are not written by hand: see `cookingRecipes`.
+	 */
+	needsCook?: boolean;
 }
 
-export const CRAFT_RECIPES: Array<CraftRecipe> = [
+/** craftKind of a recipe that makes a usable or a material (bandage, parts, smelting, cooking) */
+const CRAFT_KIND_ITEM = 4;
+
+/**
+ * One recipe per usable that has a `cook` column: one raw → one cooked, at a fire (QA C1, 2026-09-23: the card said
+ * "Cooks into" and How to play said a fire "cooks what you find", and nothing did). Built from the data, so the
+ * card's "Cooks into" row, the Craft tab and the server can never disagree about what cooks into what. They are
+ * appended after the hand-written rows: a recipe id travels in the Craft intent, so an existing id never moves.
+ */
+function cookingRecipes(firstId: number): Array<CraftRecipe> {
+	const out = new Array<CraftRecipe>();
+	for (const u of USABLES) {
+		if (u.cook < 0) continue;
+		out.push({
+			id: firstId + out.size(),
+			craftKind: CRAFT_KIND_ITEM,
+			ingredients: [{ kind: 3, index: u.id, count: 1 }],
+			resultKind: 3,
+			resultIndex: u.cook,
+			resultCount: 1,
+			needsDesk: false,
+			needsPro: false,
+			needsCook: true,
+		});
+	}
+	return out;
+}
+
+const WRITTEN_RECIPES: Array<CraftRecipe> = [
 	{
 		id: 0,
 		craftKind: 2,
@@ -1040,3 +1074,5 @@ export const CRAFT_RECIPES: Array<CraftRecipe> = [
 		needsFire: true,
 	},
 ];
+
+export const CRAFT_RECIPES: Array<CraftRecipe> = [...WRITTEN_RECIPES, ...cookingRecipes(WRITTEN_RECIPES.size())];
