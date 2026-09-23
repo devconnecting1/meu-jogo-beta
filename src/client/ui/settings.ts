@@ -372,6 +372,8 @@ export function showSettings(
 			() => s.uiSize,
 			v => {
 				s.uiSize = v;
+				// the Touch tab's preview draws the compact console at this size: a page built earlier follows it
+				refreshPreview?.();
 				persist();
 			},
 			generalRefreshers,
@@ -399,6 +401,7 @@ export function showSettings(
 				s.bgm = d.bgm;
 				s.uiSize = d.uiSize;
 				for (const fn of generalRefreshers) fn();
+				refreshPreview?.();
 				persist();
 			},
 		);

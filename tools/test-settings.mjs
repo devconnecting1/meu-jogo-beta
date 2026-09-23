@@ -442,8 +442,19 @@ function mountedSizes(uiSize) {
 		near(deckW(), want, 1e-6) && deckW() > before,
 		`${before.toFixed(4)} -> ${deckW().toFixed(4)}, esperado ${want.toFixed(4)}`,
 	);
+	// ...and General's Defaults puts it back with the HUD size
 	openTab(0);
-	setSlider("UiSize", 0.5);
+	findIn(findIn(settingsRoot(), "Interface"), "Action").Activated.Fire();
+	flush();
+	findIn(layer.FindFirstChild("PopupOverlay"), "PopupBtn1").Activated.Fire();
+	flush();
+	openTab(1);
+	check(
+		"...e o Defaults de General o devolve ao tamanho padrao junto com o HUD size",
+		s.uiSize === 0.5 && near(deckW(), before, 1e-6),
+		`${deckW().toFixed(4)}, padrao ${before.toFixed(4)}`,
+	);
+	openTab(0);
 }
 closeSettings();
 flush();
