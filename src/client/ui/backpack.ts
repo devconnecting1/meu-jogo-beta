@@ -266,7 +266,6 @@ function makeGlyph(parent: Instance, x: number, y: number, name: string, tone: C
 	makeLabel(f, "Letter", name.sub(1, 1).upper(), 0, 0, GLYPH, GLYPH, TEXT.lg, letter, {
 		weight: Enum.FontWeight.Bold,
 		zIndex: 3,
-		outline: true,
 	});
 	return f;
 }

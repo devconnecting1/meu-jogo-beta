@@ -343,9 +343,9 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		},
 	});
 	const playFg = buttonForeground("default");
-	// the one green action of the screen: big contoured title over the relief face
+	// the one green action of the screen: big title over the relief face -- the plate carries the contrast (UI-05)
 	makeLabel(play, "PlayTitle", playTitle.upper(), 0, 30, RIGHT_W, 64, TEXT.xl5, playFg, { font: "display" });
-	makeLabel(play, "PlaySub", playSub, 0, 100, RIGHT_W, 28, TEXT.lg, playFg, { font: "label", outline: true });
+	makeLabel(play, "PlaySub", playSub, 0, 100, RIGHT_W, 28, TEXT.lg, playFg, { font: "label" });
 
 	let achDone = 0;
 	let achTotal = 0;
@@ -373,12 +373,10 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 		const b = Button(body, `Menu${i}`, "", { x, y, w: menuW, h: menuH, variant: "secondary", onClick: fn });
 		makeLabel(b, "Title", title, space(3), sub === "" ? 44 : 34, menuW - space(6), 30, TEXT.lg, tileFg, {
 			font: "label",
-			outline: true,
 		});
 		if (sub !== "") {
 			makeLabel(b, "Sub", sub, space(3), 66, menuW - space(6), 22, TEXT.sm, tileFg, {
 				font: "body",
-				outline: true,
 			});
 		}
 	}

@@ -33,11 +33,12 @@
  *
  * Pure Node (>= 18), no dependencies.
  */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SRC = join(ROOT, "src");
 const UI = join(ROOT, "src", "client", "ui");
 const TOKENS_FILE = join(UI, "themeTokens.ts");
 const THEME_FILE = join(UI, "theme.ts");
@@ -186,6 +187,8 @@ const PAIRS = [
 	["THEME.foreground", "GAME.food", MIN_LARGE, "valor sobre a barra de fome (numeric Bold)"],
 	["THEME.foreground", "GAME.xp", MIN_LARGE, "valor sobre a barra de XP (numeric Bold)"],
 	["THEME.foreground", "THEME.primary", MIN_LARGE, "valor sobre uma barra de progresso padrao"],
+	["THEME.foreground", "GAME.coin", MIN_LARGE, "glifo \"$\" do icone de moeda (CoinIcon) e do chip do toast de moeda"],
+	["THEME.foreground", "GAME.info", MIN_LARGE, "glifo do chip de toast (kind padrao \"info\"; success/coin/error tambem sobem deste piso)"],
 
 	// --- game colours used as text / numbers / glyphs ---
 	["GAME.success", "SURFACE.panel", MIN_TEXT, "cura, equipado, ingrediente presente"],
@@ -295,9 +298,63 @@ for (const [file, src] of kit) {
 	check(`${file}: nao cria contorno de texto por textOutline()`, !/\btextOutline\(/.test(src));
 }
 
+// ---------------------------------------------------------------- run: text never carries a contour, in ALL of src/
+
+console.log("\n4) nenhum contorno de texto em TODO src/, nao so no kit (UI-04 vale para o jogo inteiro)\n");
+
+/** every .ts file under `dir`, recursively -- server and shared can build GuiObjects too (admin panel, HUD data) */
+function listTsFiles(dir) {
+	const out = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) out.push(...listTsFiles(full));
+		else if (entry.name.endsWith(".ts")) out.push(full);
+	}
+	return out;
+}
+
+/** source with comments removed, by absolute path (the KIT_FILES `code()` above is scoped to src/client/ui) */
+function codeAt(path) {
+	return readFileSync(path, "utf8")
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/\/\/.*$/gm, "");
+}
+
+let sweepFiles = 0;
+let sweepFailures = 0;
+for (const file of listTsFiles(SRC)) {
+	sweepFiles++;
+	const rel = relative(ROOT, file).split("\\").join("/");
+	const src = codeAt(file);
+	const badStrokes = [...src.matchAll(/TextStrokeTransparency\s*=(?!=)\s*([\d.]+)/g)].map(m => +m[1]).filter(t => t < 1);
+	if (badStrokes.length > 0) {
+		sweepFailures++;
+		check(`${rel}: nenhum TextStroke visivel`, false, `valores: ${badStrokes.join(", ")}`);
+	}
+	if (/ApplyStrokeMode\s*=(?!=)\s*Enum\.ApplyStrokeMode\.Contextual/.test(src)) {
+		sweepFailures++;
+		check(`${rel}: nenhum UIStroke em modo Contextual (o modo que contorna glifos)`, false);
+	}
+	if (/\btextOutline\(/.test(src)) {
+		sweepFailures++;
+		check(`${rel}: nao chama textOutline() (removida do kit -- UI-04 nao tem contorno para restaurar)`, false);
+	}
+	if (/\boutline\s*:\s*true\b/.test(src)) {
+		sweepFailures++;
+		check(`${rel}: nao usa a opcao "outline" (o kit a ignora desde UI-04; nunca desenhou nada)`, false);
+	}
+}
+check(
+	`TODO src/ (${sweepFiles} arquivos .ts): nenhum contorno de texto fora do kit`,
+	sweepFailures === 0,
+	sweepFailures > 0 ? `${sweepFailures} violacao(oes) acima` : undefined,
+);
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam: ajuste design/tweakcn-theme.json (e rode \`npm run theme\`) ou o kit`);
 	process.exit(1);
 }
-console.log(`OK: ${PAIRS.length} pares, ${PLATE_LABELS.length} rotulos de chapa claros, nenhum contorno em texto no kit`);
+console.log(
+	`OK: ${PAIRS.length} pares, ${PLATE_LABELS.length} rotulos de chapa claros, nenhum contorno em texto no kit nem em ${sweepFiles} arquivos de src/`,
+);

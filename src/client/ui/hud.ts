@@ -690,7 +690,6 @@ export class Hud {
 			{
 				font: "label",
 				zIndex: 21,
-				outline: true,
 			},
 		);
 	}

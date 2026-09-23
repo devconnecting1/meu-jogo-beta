@@ -1,5 +1,5 @@
 import { SURFACE, TEXT, THEME, fontOf, roleFont, space } from "../ui/theme";
-import { makeFrame, makeLabel, makeSurface, scaleText, setSurface, textOutline, uiScale } from "../ui/widgets";
+import { makeFrame, makeLabel, makeSurface, scaleText, setSurface, uiScale } from "../ui/widgets";
 
 /*
  * Form controls the UI kit does not have yet (Input, Switch, Tooltip), built the same way as the kit: design units
@@ -239,7 +239,6 @@ export function attachTooltip(target: GuiObject, text: string, width = 220): voi
 	label.TextWrapped = true;
 	label.TextXAlignment = Enum.TextXAlignment.Left;
 	label.ZIndex = tip.ZIndex + 1;
-	textOutline(label);
 	const padX = math.round(space(2) * k);
 	const padY = math.round(space(1.5) * k);
 	const pad = new Instance("UIPadding");
