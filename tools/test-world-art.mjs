@@ -63,7 +63,8 @@ const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { generateTown, buildingAt, pointInSolid, hash01 } = require(join(SRC, "shared/game/world.ts"));
-const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+const WV = require(join(SRC, "client/view/worldView.ts"));
+const { WorldView } = WV;
 const ART_MODULE = join(SRC, "client/view/worldArt.ts");
 const WA = existsSync(ART_MODULE) ? require(ART_MODULE) : undefined;
 
@@ -698,6 +699,11 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		["dirt", mixc(c255(COLORS.dirtPath), W255, 0.25)],
 		["floorWood", c255(COLORS.floorWood)],
 		["floorShop", c255(COLORS.floorShop)],
+		// the interiors' rooms (shared/game/interiors.ts): tiles, carpet, kitchen checker, bathroom tiles
+		["floorTile", c255(COLORS.floorTile)],
+		["floorCarpet", c255(COLORS.floorCarpet)],
+		["floorKitchen", c255(COLORS.floorKitchen)],
+		["floorBath", c255(COLORS.floorBath)],
 	];
 	for (const [name, flat] of pairs) {
 		const m = mean(decoded[name]);
@@ -705,6 +711,15 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		const b = lab(...flat);
 		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 		check(dE <= 6, `${name.padEnd(10)} keeps the flat colour it replaces`, `mean ΔE ${dE.toFixed(1)}`);
+	}
+	// a back room's floor is the concrete texture tinted (ImageColor3 multiplies) to the flat floorConcrete
+	const tint = WV.CONCRETE_FLOOR_TINT;
+	if (tint !== undefined) {
+		const m = mean(decoded.concrete).map((v, i) => v * [tint.R, tint.G, tint.B][i]);
+		const a = lab(...m);
+		const b = lab(...c255(COLORS.floorConcrete));
+		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+		check(dE <= 6, "concrete tinted for a back room keeps floorConcrete", `mean ΔE ${dE.toFixed(1)}`);
 	}
 }
 
@@ -1273,6 +1288,93 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		"the textured roofs keep their type colours apart (market and grocery share theirs)",
 		`closest ΔE ${minRoof.toFixed(1)} (types ${roofPair})`,
 	);
+	setArt({});
+}
+
+// ================================================================ 9. the interiors (EDI-04, EDI-08..EDI-14)
+
+section("9) interiors: nothing under a closed roof is drawn, walking in and out creates no Instance, the cost inside");
+{
+	const IV_MODULE = join(SRC, "client/view/interiorView.ts");
+	const IV = existsSync(IV_MODULE) ? require(IV_MODULE) : undefined;
+	// every call into the interior drawing, counted (an older checkout has none: its numbers are the "before")
+	const drawn = { furniture: 0, decor: 0, openings: 0, walls: 0 };
+	if (IV !== undefined) {
+		const proto = IV.InteriorView.prototype;
+		for (const [key, name] of [
+			["furniture", "drawFurniture"],
+			["decor", "drawDecor"],
+			["openings", "drawOpenings"],
+			["walls", "drawWall"],
+		]) {
+			const real = proto[name];
+			proto[name] = function (...a) {
+				drawn[key]++;
+				return real.apply(this, a);
+			};
+		}
+	}
+	const reset = () => {
+		for (const k of Object.keys(drawn)) drawn[k] = 0;
+	};
+	// the town's largest building, and a camera on it
+	let big;
+	for (const s of world.solids) {
+		if (s.kind !== "building") continue;
+		if (big === undefined || s.w * s.h > big.w * big.h || (s.w * s.h === big.w * big.h && s.id < big.id)) big = s;
+	}
+	const at = { x: big.x + big.w / 2, y: big.y + big.h / 2 };
+	for (const [label, ids] of [
+		["flat", {}],
+		["art", ALL.ids],
+	]) {
+		setArt(ids);
+		// roofs on: the dense downtown and the big building from outside draw nothing of any interior
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		reset();
+		drawTown(st, view, 8400, 10250);
+		drawTown(st, view, at.x, at.y);
+		const closed = drawn.furniture + drawn.decor + drawn.openings + drawn.walls;
+		check(
+			closed === 0,
+			`${label}: with every roof on, no furniture, decoration, frame or wall is drawn`,
+			`${closed}`,
+		);
+		const outside = countSprites(st.r.layer).sprites;
+		// in and out of the building three times (the roof fades both ways), then twice more: no Instance
+		const cycle = () => {
+			for (const a of [1, 0.6, 0.2, 0, 0, 0, 0.2, 0.6, 1]) {
+				big.roofAlpha = a;
+				for (let f = 0; f < 4; f++) drawTown(st, view, at.x + f * 5, at.y);
+			}
+		};
+		for (let k = 0; k < 3; k++) cycle();
+		const created = gui.stats.created;
+		cycle();
+		cycle();
+		check(
+			gui.stats.created === created,
+			`${label}: walking in and out of it creates no Instance`,
+			`${gui.stats.created - created} created`,
+		);
+		// inside, the roof off: the sprites of the screen and the property writes of a walk across the building
+		big.roofAlpha = 0;
+		drawTown(st, view, at.x, at.y);
+		const inside = countSprites(st.r.layer);
+		const w0 = gui.stats.writes;
+		const steps = 120;
+		for (let f = 0; f < steps; f++) {
+			const t = f / steps;
+			drawTown(st, view, at.x - big.w * 0.3 + t * big.w * 0.6, at.y + Math.sin(t * 6) * big.h * 0.2);
+		}
+		const writes = (gui.stats.writes - w0) / steps;
+		big.roofAlpha = undefined;
+		console.log(
+			`       ${label.padEnd(4)} ${big.tags} #${big.id} (${big.w} x ${big.h}), 1920 x 1080: ${outside} sprites from outside, ` +
+				`${inside.sprites} inside (${inside.flat} flat, ${inside.images} images); ${writes.toFixed(0)} property writes a frame walking across it`,
+		);
+	}
 	setArt({});
 }
 

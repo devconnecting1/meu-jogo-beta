@@ -116,7 +116,8 @@ const FLOOR_ART: Record<FloorKind, WorldArtName> = {
 	bath: "floorBath",
 	concrete: "concrete",
 };
-const CONCRETE_FLOOR_TINT = Color3.fromRGB(214, 214, 212);
+/** a back room's concrete floor: the sidewalk's concrete texture, darkened to COLORS.floorConcrete (test:world-art §6) */
+export const CONCRETE_FLOOR_TINT = Color3.fromRGB(214, 214, 212);
 
 /**
  * The one SpriteOpts every art draw fills (the hot path allocates no table per sprite). `artOpts` resets every
