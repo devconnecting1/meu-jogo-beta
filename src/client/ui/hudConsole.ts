@@ -26,7 +26,7 @@
  *  - the five tiles are the first five weapons of `weaponKeyOrder` (shared/game/weaponSlots.ts), the very list
  *    keys 1-5 pick from (client/systems/combat.ts), in the same order. The weapon in hand is the raised BLUE tile
  *    ("what is chosen is blue", UI-07), another owned weapon is flat dark iron, a key with no weapon is an empty
- *    socket on the groove. Each tile shows the item's glyph (the Bag's and the item card's icon), the key that
+ *    socket on the groove. Each tile shows the item's pixel icon (UI-11: the Bag's and the item card's), the key that
  *    picks it on this device (keyboard 1-5; the pad has no such key and touch taps the tile itself, so neither
  *    shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
  *    reserve alone on the others (a gun you are not holding keeps its rounds in the pool: combat.ts switchWeapon
@@ -49,7 +49,8 @@ import { MIN_TOUCH_PX, TouchLayout } from "shared/engine/input";
 import { weaponReserve } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WEAPON_KEY_COUNT, weaponKeyOrder } from "shared/game/weaponSlots";
-import { Glyph, kindTone, makeGlyph, setGlyph } from "./itemCard";
+import { iconKeys } from "shared/data/itemIcons";
+import { IconView, drawItemIcon, maxFrameCount } from "./itemIcon";
 import { weaponKindName } from "./itemInfo";
 import { PlateState, paintPlate, reliefPx } from "./plate";
 import { BAR, GAME, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
@@ -188,6 +189,11 @@ const FILL_UNIT = 2;
 const TILE_UNIT = 4;
 /** the ring of an empty socket */
 const SOCKET_UNIT = 2;
+/** a tile's icon: its side and its top as shares of the tile (a gun's ammo chip takes the bottom) */
+const ICON_SHARE = 0.6;
+const ICON_TOP = 0.04;
+/** the Frames of the costliest weapon icon: every tile holds that many from the start */
+const WEAPON_ICON_FRAMES = maxFrameCount(iconKeys(ItemKind.Weapon));
 
 /** HP below this blinks its fill out; food below this blinks red (the old HUD's thresholds) */
 const LOW_HP = 0.25;
@@ -394,7 +400,7 @@ function sizeFill(bar: ConsoleBar): void {
 
 interface HotbarTile {
 	button: TextButton;
-	glyph: Glyph;
+	icon: IconView;
 	key: Frame;
 	keyLabel: TextLabel;
 	ammo: Frame;
@@ -655,7 +661,7 @@ export class HudConsole {
 		return bar;
 	}
 
-	/** one hotbar tile (GridTile-style): the plate, the item glyph, the key badge, the ammo chip, the reload fill */
+	/** one hotbar tile (GridTile-style): the plate, the item icon, the key badge, the ammo chip, the reload fill */
 	private makeTile(
 		bed: Frame,
 		k: number,
@@ -706,11 +712,12 @@ export class HudConsole {
 		reload.ZIndex = -4;
 		reload.Parent = reloadBox;
 
-		// the item's glyph, as in the Bag and the item card (its initial in a well, outlined in the weapon tone)
-		const g = math.round(size * 0.5);
-		const glyph = makeGlyph(b, (size - g) / 2, size * 0.1, g, z + 1);
-		glyph.frame.Visible = false;
-		this.texts.push([glyph.letter, g / 2]);
+		// the item's pixel icon, the same drawing as the Bag's tile and the item card (UI-11), right of the key badge.
+		// It holds as many Frames as the costliest weapon icon from the start: a weapon picked up or lost rewrites the
+		// tile's Frames and never creates one (update() runs every frame and creates nothing, UI-09)
+		const g = math.round(size * ICON_SHARE);
+		const icon = IconView(b, "ItemIcon", size - g - 3, size * ICON_TOP, g, z + 1, WEAPON_ICON_FRAMES);
+		icon.frame.Visible = false;
 
 		// the key that picks it: the kit's key look (a raised dark-iron plate, light legend), on the corner
 		const keyS = math.round(size * 0.34);
@@ -737,7 +744,7 @@ export class HudConsole {
 
 		const t: HotbarTile = {
 			button: b,
-			glyph,
+			icon,
 			key,
 			keyLabel,
 			ammo,
@@ -906,13 +913,16 @@ export class HudConsole {
 			t.id = w !== undefined ? id : -1;
 			t.gun = w !== undefined && w.mag > 0;
 			if (w !== undefined) {
-				setGlyph(t.glyph, this.tr(w.name), kindTone(ItemKind.Weapon), false);
+				drawItemIcon(t.icon, ItemKind.Weapon, id);
 				const size = this.layout.tile;
-				const g = math.round(size * 0.5);
-				// a melee weapon has no ammo chip: its glyph sits in the middle of the tile
-				t.glyph.frame.Position = UDim2.fromScale((size - g) / 2 / size, t.gun ? 0.1 : (size - g) / 2 / size);
+				const g = math.round(size * ICON_SHARE);
+				// a melee weapon has no ammo chip: its icon sits in the middle of the tile's height
+				t.icon.frame.Position = UDim2.fromScale(
+					(size - g - 3) / size,
+					t.gun ? ICON_TOP : (size - g) / 2 / size,
+				);
 			}
-			t.glyph.frame.Visible = w !== undefined;
+			t.icon.frame.Visible = w !== undefined;
 			t.mag = -2;
 		}
 		if (repaint || schemeChanged) {

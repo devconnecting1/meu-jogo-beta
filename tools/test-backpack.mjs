@@ -1,40 +1,40 @@
 #!/usr/bin/env node
 /*
- * Does the Bag create Instances when all it should do is switch a tab or update a number?
+ * Does the Bag create Instances when all it should do is switch a tab or update a number? And does it show what the
+ * save says, with a picture for every item?
  *
  *   node tools/test-backpack.mjs
  *   PZ_SRC=<another checkout>/src node tools/test-backpack.mjs    (measures that version, e.g. the code before)
  *
  * The owner, in a playtest: "when I open the Bag and go through the tabs, Craft and so on, it takes a few ms to
  * load, and it should be instant". Creating GuiObjects is one of the most expensive things a Roblox client does
- * (Instance.new, every property, the reparent, a layout pass), and the Bag used to destroy its whole page and
- * build it again on every tab switch and after every action -- Craft alone is 80 rows.
+ * (Instance.new, every property, the reparent, a layout pass). And later: "make items, equipment etc. show a VISUAL of
+ * the item instead of a table, so it's easy to see what each item is" -- the Bag of DESIGN_RULES UI-11: a grid of
+ * tiles with pixel icons (client/ui/bagGrid.ts, itemIcon.ts) and a details panel (bagPanel.ts).
  *
- * There is no Studio in CI, so this runs the REAL backpack.ts / widgets.ts / skin.ts / theme.ts / save.ts under
- * Node, over a small fake Instance tree, and counts what a profiler would blame: Instances created and destroyed
- * (plus the property writes on Instances that already existed, to show an update only touches what changed).
+ * There is no Studio in CI, so this runs the REAL backpack.ts / bagGrid.ts / bagPanel.ts / itemIcon.ts / widgets.ts /
+ * skin.ts / theme.ts / save.ts under Node, over a small fake Instance tree, and counts what a profiler would blame:
+ * Instances created and destroyed (plus the property writes on Instances that already existed, to show an update
+ * only touches what changed).
  *
- * The walk: open the Bag; every tab 5 times; into an item detail and back, twice; use an item (a count drops);
- * use the last one (a row goes away); craft (counts drop, a new item appears in another tab); learn a skill;
- * a change that arrives from OUTSIDE while the Bag is open (server reply, admin patch); close and reopen; a
- * change made while the Bag was closed; every tab once more; then the item card (DESIGN_RULES UI-08): the pointer
- * over a whole list and the pad's selection down it (one card, rewritten in place: zero Instances), its colours and
- * device hints, no tooltip on touch, and the item page showing the same card.
- *
- * What it asserts:
- *  1. once a screen was mounted, going back to it creates and destroys ZERO Instances;
- *  2. an action creates at most what the new data needs (one row for an item the list never had);
- *  3. what is on screen always matches the save -- a cached page must never show old data.
- *
- * Then (part 9) the WARDROBE (client/ui/wardrobe.ts, DESIGN_RULES MON-04 / UI-07) on the same kit and fake tree:
- * only the tabs that exist, the tile states (dark = yours, iron = worn, padlock + price = locked, blue = selected),
- * the details panel and its one action, the try-on preview, the purchase request carrying the costume id and NO
- * price (answered by the server's own rule, server/save/costumes.ts), and selecting, buying, wearing and switching
- * tabs without creating or destroying an Instance.
+ * 0. the icons (shared/data/itemIcons.ts): every item id of every kind has one, and it is a drawing (never the old
+ *    letter, never the generic box); every item of Núcleo 1 (CON-03) has its OWN drawing, not only its category's;
+ *    every icon repaints its grid exactly from its Frames and costs at most ~80 of them.
+ * 1-8. the walk: open the Bag; every tab 5 times; select tiles; equip; use an item (a count drops) and the last one
+ *    (a tile goes); craft (counts drop, a new item appears in another tab); learn a skill; a change from OUTSIDE while
+ *    open (server reply, admin patch); close and reopen; a change while closed; every tab once more; the mouse's
+ *    card and the pad's cursor. It asserts:
+ *     a. once a screen was built, going back to it creates and destroys ZERO Instances;
+ *     b. an action creates at most what the new data needs (one tile for an item the grid never had);
+ *     c. what is on screen always matches the save -- the tiles, their icons and counts, the panel.
+ * 9. the WARDROBE (client/ui/wardrobe.ts, MON-04 / UI-07) on the same kit and fake tree.
+ * 10. what a full page costs (all 30 weapons; the 80 recipes), reported.
+ * 11. the layout at 1120 x 630 and at 1360 x 435 (a phone), through a small layout pass over the fake tree: no
+ *    two blocks of the window overlap, and a tile is at least MIN_TOUCH_PX (44 px) on the phone.
  *
  * Pure Node (>= 18) plus the project's TypeScript, on the shared shims of tools/luau-shim.mjs. The fake tree
  * only models what the kit touches (parenting, Destroy, attributes, property / event signals, Visible); it has
- * no layout engine, so it counts WORK, it does not time it.
+ * no layout engine (part 11 brings a small one), so it counts WORK, it does not time it.
  */
 import { join } from "node:path";
 import { installShims } from "./luau-shim.mjs";
@@ -55,6 +55,7 @@ globalThis.pcall = (fn, ...a) => {
 	}
 };
 globalThis.utf8 = { len: s => [Array.from(s).length] };
+globalThis.tonumber = v => (Number.isFinite(Number(v)) ? Number(v) : undefined);
 
 /** Lua pattern -> RegExp (the subset the UI uses: classes, sets, anchors, quantifiers) */
 function luaPattern(p, flags) {
@@ -586,28 +587,208 @@ globalThis.game = { GetService: service };
 // ---------------------------------------------------------------- the modules under test (the shared .ts loader)
 
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
-const { defaultSave, equipSlotOf, setEquipped } = require(join(SRC, "shared/game/save.ts"));
+const { defaultSave, equipSlotOf, setEquipped, ownsWeapon, ownsEquip } = require(join(SRC, "shared/game/save.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const { SKILLS } = require(join(SRC, "shared/data/skills.ts"));
+const { ITEM_ICONS, ICON_GLYPHS, iconOf, skillIconOf } = require(join(SRC, "shared/data/itemIcons.ts"));
+const { ICON_ART_ORDER } = require(join(SRC, "shared/engine/colors.ts"));
+const Icon = require(join(SRC, "client/ui/itemIcon.ts"));
+const { STAT, GAME, THEME, SURFACE } = require(join(SRC, "client/ui/theme.ts"));
 flush();
+
+// ---------------------------------------------------------------- measuring
+
+let failures = 0;
+function check(name, ok, detail) {
+	const tail = detail === undefined || detail === "" ? "" : `  (${detail})`;
+	if (ok) console.log(`  ok    ${name}${tail}`);
+	else {
+		console.error(`  FALHA ${name}${tail}`);
+		failures++;
+	}
+}
+
+const table = [];
+/** runs one step of the walk and returns what it cost */
+function phase(label, fn) {
+	const from = stats.log.length;
+	stats.phaseSeq = stats.seq;
+	stats.writes = 0;
+	const tweensBefore = tweens;
+	fn();
+	flush();
+	const r = {
+		label,
+		bagNew: 0,
+		bagGone: 0,
+		toastNew: 0,
+		writes: stats.writes,
+		tweens: tweens - tweensBefore,
+		made: [],
+	};
+	for (const e of stats.log.slice(from)) {
+		const my = e.inst[INTERNAL];
+		const toast = e.kind === "gone" ? e.toast : my.destroyed ? my.toastAtDestroy : underToast(e.inst);
+		if (toast) {
+			if (e.kind === "new") r.toastNew++;
+		} else if (e.kind === "new") {
+			r.bagNew++;
+			r.made.push(e.inst);
+		} else r.bagGone++;
+	}
+	table.push(r);
+	return r;
+}
+const zero = r => r.bagNew === 0 && r.bagGone === 0;
+const cost = r => `${r.bagNew} criadas, ${r.bagGone} destruidas`;
+const sameColor = (a, b) => a !== undefined && b !== undefined && a.R === b.R && a.G === b.G && a.B === b.B;
+
+// ---------------------------------------------------------------- 0. the icons
+
+console.log(`Bag: fonte ${SRC}\n`);
+console.log("0) os icones (UI-11): um desenho para cada item, o proprio para o Nucleo 1, poucos Frames cada\n");
+
+const KIND = { Weapon: 1, Equip: 2, Use: 3, Etc: 4 };
+const TABLES = [
+	[KIND.Weapon, WEAPONS, "WEAPONS"],
+	[KIND.Equip, EQUIPS, "EQUIPS"],
+	[KIND.Use, USABLES, "USABLES"],
+	[KIND.Etc, ETC_ITEMS, "ETC_ITEMS"],
+];
+{
+	const unresolved = [];
+	const generic = [];
+	for (const [kind, rows, label] of TABLES) {
+		let own = 0;
+		const cats = new Set();
+		for (const item of rows) {
+			const ref = iconOf(kind, item.id);
+			if (ITEM_ICONS[ref.key] === undefined) unresolved.push(`${label}[${item.id}] ${item.name} -> ${ref.key}`);
+			else if (ref.key === "cat_item") generic.push(`${label}[${item.id}] ${item.name}`);
+			if (ref.own) own++;
+			else cats.add(ref.key);
+		}
+		console.log(`  ${label}: ${rows.length} itens -> ${own} icones proprios + ${[...cats].length} categorias`);
+	}
+	check(
+		"todo item de toda tabela resolve para um DESENHO (nenhuma letra: o glifo antigo nao existe mais)",
+		unresolved.length === 0,
+		unresolved.join("; "),
+	);
+	check(
+		"nenhum item real cai no icone de ultimo recurso (a caixa cat_item)",
+		generic.length === 0,
+		generic.join("; "),
+	);
+	const skills = SKILLS.map(s => skillIconOf(s.id));
+	check(
+		`as ${SKILLS.length} skills tem cada uma um glifo desenhado`,
+		skills.every(k => ITEM_ICONS[k] !== undefined && k !== "cat_item"),
+		skills.join(", "),
+	);
+}
+
+/** Núcleo 1 (DESIGN_RULES CON-03), by kind and id, with the name the data must still have there */
+const NUCLEO_1 = [
+	[KIND.Weapon, 0, "Dagger"],
+	[KIND.Weapon, 2, "Axe"],
+	[KIND.Weapon, 6, "Baseball bat"],
+	[KIND.Weapon, 10, "Pistol"],
+	[KIND.Use, 0, "Raw meat"],
+	[KIND.Use, 1, "Cooked meat"],
+	[KIND.Use, 17, "Apple"],
+	[KIND.Use, 9, "Canned food"],
+	[KIND.Use, 12, "Bandage"],
+	[KIND.Etc, 23, "Wood"],
+	[KIND.Etc, 24, "Stone"],
+	[KIND.Etc, 26, "Steel"],
+	[KIND.Etc, 34, "Cloth"],
+	[KIND.Etc, 44, "Normal ammo"],
+	[KIND.Etc, 14, "Campfire"],
+	[KIND.Etc, 10, "Wooden barricade"],
+	[KIND.Etc, 11, "Wooden door"],
+	[KIND.Etc, 0, "Craft desk"],
+	[KIND.Equip, 0, "Cotton clothes"],
+	[KIND.Equip, 13, "Flashlight"],
+];
+{
+	const tableOf = kind => TABLES.find(t => t[0] === kind)[1];
+	const drift = NUCLEO_1.filter(([kind, id, name]) => tableOf(kind)[id]?.name !== name);
+	check("a lista do Nucleo 1 bate com os dados (ids e nomes)", drift.length === 0, drift.map(d => d[2]).join(", "));
+	const refs = NUCLEO_1.map(([kind, id, name]) => [name, iconOf(kind, id)]);
+	const notOwn = refs.filter(([, ref]) => !ref.own || ref.key.startsWith("cat_"));
+	check(
+		`os ${NUCLEO_1.length} itens do Nucleo 1 tem cada um o PROPRIO icone, nao so o da categoria`,
+		notOwn.length === 0,
+		notOwn.map(([n, ref]) => `${n} -> ${ref.key}`).join(", "),
+	);
+	const keys = refs.map(([, ref]) => ref.key);
+	check("e nenhum dos 20 divide o desenho com outro", [...new Set(keys)].length === keys.length, keys.join(", "));
+}
+
+const ORDER = ICON_ART_ORDER;
+/** paints the runs of `key` in order and compares with its grid: the Frames must BE the icon, pixel for pixel */
+function repaints(key, rows, mono) {
+	const n = rows.length;
+	const canvas = new Array(n * n).fill(".");
+	for (const [x, y, w, h, ch] of Icon.iconRuns(key)) {
+		for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) canvas[yy * n + xx] = ch;
+	}
+	for (let y = 0; y < n; y++) {
+		for (let x = 0; x < n; x++) {
+			const want = rows[y][x] === "." ? "." : mono ? "#" : rows[y][x];
+			if (canvas[y * n + x] !== want) return false;
+		}
+	}
+	return (
+		rows.every(r => r.length === n) &&
+		rows.every(r => [...r].every(c => c === "." || (mono ? c === "#" : ORDER.includes(c))))
+	);
+}
+const ICON_KEYS = Object.keys(ITEM_ICONS);
+const GLYPH_KEYS = Object.keys(ICON_GLYPHS);
+const frameCounts = ICON_KEYS.map(k => [k, Icon.iconFrameCount(k)]).sort((a, b) => b[1] - a[1]);
+const MAX_ICON_FRAMES = 80;
+{
+	const bad = [
+		...ICON_KEYS.filter(k => !repaints(k, ITEM_ICONS[k], false)),
+		...GLYPH_KEYS.filter(k => !repaints(k, ICON_GLYPHS[k], true)),
+	];
+	check(
+		`os ${ICON_KEYS.length} icones e ${GLYPH_KEYS.length} glifos se repintam EXATAMENTE a partir dos seus Frames (16 x 16 / 8 x 8, cores do ICON_ART)`,
+		bad.length === 0,
+		bad.join(", "),
+	);
+	const over = frameCounts.filter(([, c]) => c > MAX_ICON_FRAMES);
+	const total = frameCounts.reduce((s, [, c]) => s + c, 0);
+	check(
+		`nenhum icone passa de ${MAX_ICON_FRAMES} Frames depois de juntar as corridas (256 sem juntar)`,
+		over.length === 0,
+		`media ${(total / frameCounts.length).toFixed(1)}, maximo ${frameCounts[0][1]} (${frameCounts[0][0]})${over.length > 0 ? `; acima: ${over.map(o => o.join("=")).join(", ")}` : ""}`,
+	);
+	console.log(`  Frames por icone: ${frameCounts.map(([k, c]) => `${k} ${c}`).join(", ")}`);
+	console.log(`  Frames por glifo: ${GLYPH_KEYS.map(k => `${k} ${Icon.iconFrameCount(k)}`).join(", ")}`);
+}
 
 // ---------------------------------------------------------------- the save and the game's callbacks
 
 const MAT_START = 23;
-const KIND = { Weapon: 1, Equip: 2, Use: 3, Etc: 4 };
 const save = defaultSave();
 // a survivor a few days in: some weapons, some equipment, food and medicine, a pile of materials, 2 points
 for (let id = 1; id <= 8 && id < WEAPONS.length; id++) save.invenWeapon[id] = id % 3 === 0 ? 2 : 1;
+// and the pistol of Núcleo 1: a gun, with a magazine, a reserve and a reload
+save.invenWeapon[10] = 1;
+save.ammoNormal = 41;
 for (let id = 0; id < 6 && id < EQUIPS.length; id++) save.invenEquip[id] = 1;
 for (let id = 0; id < 8 && id < USABLES.length; id++) save.invenUse[id] = 3;
 for (let id = MAT_START; id < MAT_START + 14 && id < ETC_ITEMS.length; id++) save.invenEtc[id] = 6;
 save.skillPoint = 2;
 
-// the recipe the walk crafts: hand-made, only materials, result not owned yet (so a new row must appear)
+// the recipe the walk crafts: hand-made, only materials, result not owned yet (so a new tile must appear)
 const countOf = (kind, index) =>
 	kind === KIND.Weapon
 		? (save.invenWeapon[index] ?? 0)
@@ -636,133 +817,204 @@ const RECIPE = CRAFT_RECIPES.find(
 if (RECIPE === undefined) throw new Error("no hand recipe with a new result to craft");
 for (const ing of RECIPE.ingredients) save.invenEtc[ing.index] = ing.count;
 
-const ctx = { phase: "playing", save, uiLayer: undefined };
-{
+function newCtx(forSave) {
+	const c = { phase: "playing", save: forSave, uiLayer: undefined };
 	const gui = makeInstance("ScreenGui", false);
 	const layer = makeInstance("Frame", false);
 	layer.Name = "Ui";
 	layer.Parent = gui;
-	ctx.uiLayer = layer;
-	ctx.screen = gui;
+	c.uiLayer = layer;
+	c.screen = gui;
+	return c;
 }
+const ctx = newCtx(save);
 
+/** what main.client does (without the world): the backpack only asks, the game changes the save */
+function wire(pack, s) {
+	pack.nearbyDesk = true;
+	pack.nearbyPro = true;
+	pack.nearbyFire = true;
+	pack.craftCheck = () => undefined;
+	pack.onEquipWeapon = id => {
+		s.equipWeapon = id;
+	};
+	pack.onEquipItem = id => {
+		setEquipped(s, equipSlotOf(id), id);
+	};
+	pack.onUnequipItem = slot => {
+		setEquipped(s, slot, -1);
+	};
+	pack.onUse = id => {
+		if ((s.invenUse[id] ?? 0) > 0) s.invenUse[id] -= 1;
+	};
+	pack.onCraft = id => {
+		const r = CRAFT_RECIPES.find(x => x.id === id);
+		const inv = kind =>
+			kind === KIND.Weapon
+				? s.invenWeapon
+				: kind === KIND.Equip
+					? s.invenEquip
+					: kind === KIND.Use
+						? s.invenUse
+						: s.invenEtc;
+		for (const ing of r.ingredients) inv(ing.kind)[ing.index] -= ing.count;
+		inv(r.resultKind)[r.resultIndex] = (inv(r.resultKind)[r.resultIndex] ?? 0) + r.resultCount;
+	};
+}
 const pack = new Backpack(ctx);
-pack.nearbyDesk = true;
-pack.nearbyPro = true;
-pack.nearbyFire = true;
-pack.craftCheck = () => undefined;
-// what main.client does (without the world): the backpack only asks, the game changes the save
-pack.onEquipWeapon = id => {
-	save.equipWeapon = id;
-};
-pack.onEquipItem = id => {
-	setEquipped(save, equipSlotOf(id), id);
-};
-pack.onUnequipItem = slot => {
-	setEquipped(save, slot, -1);
-};
-pack.onUse = id => {
-	if ((save.invenUse[id] ?? 0) > 0) save.invenUse[id] -= 1;
-};
-pack.onCraft = id => {
-	const r = CRAFT_RECIPES.find(x => x.id === id);
-	for (const ing of r.ingredients) inventoryOf(ing.kind)[ing.index] -= ing.count;
-	inventoryOf(r.resultKind)[r.resultIndex] = (inventoryOf(r.resultKind)[r.resultIndex] ?? 0) + r.resultCount;
-};
+wire(pack, save);
 
 // ---------------------------------------------------------------- driving the UI like a player
 
-const bag = () => ctx.uiLayer.FindFirstChild("Backpack");
-function visible(inst, out = []) {
-	for (const c of inst.GetChildren()) {
-		if (c.IsA("GuiObject") && !c.Visible) continue;
-		out.push(c);
-		visible(c, out);
-	}
-	return out;
-}
-function find(root, name, cls) {
-	if (root === undefined) return undefined;
-	return visible(root).find(d => d.Name === name && (cls === undefined || d.ClassName === cls));
-}
-const content = () => find(bag(), "Content");
+let uiCtx = ctx;
+const bag = () => uiCtx.uiLayer.FindFirstChild("Backpack");
+/** first descendant with that name (hidden or not) */
+const deep = (root, name) => root?.GetDescendants().find(d => d.Name === name);
+const win = () => bag()?.FindFirstChild("Body")?.FindFirstChild("Window");
 function click(button, what) {
 	if (button === undefined) throw new Error(`button not found: ${what}`);
 	button.Activated.Fire();
 	flush();
 }
-const TABS = ["Weapons", "Equipment", "Usables", "Materials", "Craft", "Skills"];
-function tab(i) {
-	click(find(bag(), "Categories")?.FindFirstChild(`Item${i}`), `tab ${TABS[i]}`);
+const TABS = ["Weapons", "Gear", "Usables", "Materials", "Craft", "Skills"];
+const tabBtn = i => win()?.FindFirstChild("Tabs")?.FindFirstChild(`Tab${i}`);
+const tab = i => click(tabBtn(i), `tab ${TABS[i]}`);
+const page = i => win()?.FindFirstChild(`Page${i}`);
+/** the tiles of tab `i` on screen, in grid order; `all` includes the empty cells */
+function cellsOf(i, all = false) {
+	const p = page(i);
+	if (p === undefined) return [];
+	return p
+		.GetDescendants()
+		.filter(d => d.ClassName === "TextButton" && /^Tile\d+$/.test(d.Name) && d.Visible && d.Parent.Visible)
+		.filter(d => all || d.GetAttribute("Key") !== "")
+		.sort((a, b) => a.Parent.LayoutOrder - b.Parent.LayoutOrder || a.Position.X.Scale - b.Position.X.Scale);
 }
-function rows() {
-	const list = find(content(), "List", "ScrollingFrame");
-	if (list === undefined) return [];
-	return list
-		.GetChildren()
-		.filter(c => c.IsA("GuiObject") && c.Visible)
-		.sort((a, b) => a.LayoutOrder - b.LayoutOrder);
-}
-const text = (root, name) => find(root, name)?.Text;
-const rowNamed = name => rows().find(r => text(r, "Name") === name);
-const back = () => click(find(bag(), "Nav", "TextButton"), "back");
-const act = () => click(find(content(), "Action", "TextButton"), "detail action");
+const tilesOf = i => cellsOf(i, false);
+const keyOf = t => t.GetAttribute("Key");
+const iconKey = t => t?.FindFirstChild("ItemIcon")?.GetAttribute("Icon");
+/** the text of a tile's chip ("Count", "Ammo"), or undefined when it does not show */
+const chip = (t, name) => {
+	const c = t?.FindFirstChild(name);
+	return c?.Visible ? c.FindFirstChild("Text")?.Text : undefined;
+};
+const chipColor = (t, name) => t?.FindFirstChild(name)?.FindFirstChild("Text")?.TextColor3;
+const tileFor = (i, key) => tilesOf(i).find(t => keyOf(t) === key);
+const face = host => host?.FindFirstChild("PlateFace")?.BackgroundColor3;
+const tagShown = t => t?.FindFirstChild("Tag")?.Visible === true;
+const details = () => win()?.FindFirstChild("Details");
+const panelTitle = () => details()?.FindFirstChild("Title")?.Text;
+const panelState = () => {
+	const k = details()?.FindFirstChild("State");
+	return k?.Visible ? k.FindFirstChild("Legend")?.Text : "";
+};
+const panelIcon = () => deep(details()?.FindFirstChild("IconBed"), "ItemIcon")?.GetAttribute("Icon");
+const action = () => details()?.FindFirstChild("Action");
+const act = () => click(action(), "the panel's button");
+/** the value label of the stat line `label` in the panel (or in `root`) */
+const statValue = (label, root = details()) =>
+	root
+		?.GetDescendants()
+		.find(d => d.Name === "Label" && d.Text === label && d.Parent.Visible)
+		?.Parent?.FindFirstChild("Value");
+const legends = root =>
+	root === undefined
+		? []
+		: root
+				.GetDescendants()
+				.filter(d => d.Name === "Legend" && d.Parent.Parent.Visible && d.Parent.Visible)
+				.map(d => d.Text);
 const heartbeat = dt => {
 	service("RunService").Heartbeat.Fire(dt);
 	flush();
 };
 
-// ---------------------------------------------------------------- measuring
-
-let failures = 0;
-function check(name, ok, detail) {
-	const tail = detail === undefined ? "" : `  (${detail})`;
-	if (ok) console.log(`  ok    ${name}${tail}`);
-	else {
-		console.error(`  FALHA ${name}${tail}`);
-		failures++;
+/** what tab `cat` must list, in order, from the save alone (the Bag's rules, written again here) */
+function expectedTiles(cat, s = save) {
+	const out = [];
+	if (cat === 0) {
+		for (const w of WEAPONS)
+			if (ownsWeapon(s, w.id))
+				out.push([
+					`1:${w.id}`,
+					iconOf(1, w.id).key,
+					(s.invenWeapon[w.id] ?? 0) > 1 ? `×${s.invenWeapon[w.id]}` : undefined,
+				]);
+	} else if (cat === 1) {
+		for (const e of EQUIPS)
+			if (ownsEquip(s, e.id))
+				out.push([
+					`2:${e.id}`,
+					iconOf(2, e.id).key,
+					(s.invenEquip[e.id] ?? 0) > 1 ? `×${s.invenEquip[e.id]}` : undefined,
+				]);
+	} else if (cat === 2) {
+		for (const u of USABLES)
+			if ((s.invenUse[u.id] ?? 0) > 0) out.push([`3:${u.id}`, iconOf(3, u.id).key, `×${s.invenUse[u.id]}`]);
+	} else if (cat === 3) {
+		for (let i = MAT_START; i < ETC_ITEMS.length; i++)
+			if ((s.invenEtc[i] ?? 0) > 0) out.push([`4:${i}`, iconOf(4, i).key, `×${s.invenEtc[i]}`]);
+	} else if (cat === 5) {
+		for (const sk of SKILLS) out.push([`s:${sk.id}`, skillIconOf(sk.id), undefined]);
 	}
+	return out;
+}
+/** does tab `cat` show what the save says: the same items, in order, with their icons and counts? */
+function showsSave(cat) {
+	const want = expectedTiles(cat);
+	const got = tilesOf(cat).map(t => [keyOf(t), iconKey(t), chip(t, "Count")]);
+	const ok = JSON.stringify(want) === JSON.stringify(got);
+	return [ok, ok ? `${got.length} ladrilhos` : `esperado ${JSON.stringify(want)} / na tela ${JSON.stringify(got)}`];
 }
 
-const table = [];
-/** runs one step of the walk and returns what it cost */
-function phase(label, fn) {
-	const from = stats.log.length;
-	stats.phaseSeq = stats.seq;
-	stats.writes = 0;
-	const tweensBefore = tweens;
-	fn();
-	flush();
-	const r = { label, bagNew: 0, bagGone: 0, toastNew: 0, writes: stats.writes, tweens: tweens - tweensBefore };
-	for (const e of stats.log.slice(from)) {
-		const my = e.inst[INTERNAL];
-		const toast = e.kind === "gone" ? e.toast : my.destroyed ? my.toastAtDestroy : underToast(e.inst);
-		if (toast) {
-			if (e.kind === "new") r.toastNew++;
-		} else if (e.kind === "new") r.bagNew++;
-		else r.bagGone++;
-	}
-	table.push(r);
-	return r;
-}
-const zero = r => r.bagNew === 0 && r.bagGone === 0;
-const cost = r => `${r.bagNew} criadas, ${r.bagGone} destruidas`;
+// ---------------------------------------------------------------- 1. open, and every tab
 
-// ---------------------------------------------------------------- the walk
-
-console.log(`Bag: fonte ${SRC}\n`);
-console.log("1) abrir e percorrer as abas\n");
+console.log("\n1) abrir e percorrer as abas\n");
 
 phase("abrir o Bag (1a vez)", () => pack.open());
-check("o Bag abriu na aba Weapons", rows().length > 0 && text(rows()[0], "Name") !== undefined);
+check(
+	"o Bag abre numa janela so, com as 6 abas",
+	win() !== undefined && [0, 1, 2, 3, 4, 5].every(i => tabBtn(i)?.Text === TABS[i]),
+);
+check(
+	'o cabecalho perdeu o "<" e a tecla B; o "?" e o X vermelho ficam',
+	deep(win(), "Nav") === undefined &&
+		deep(win(), "KeyHint") === undefined &&
+		win().FindFirstChild("Help") !== undefined &&
+		win().FindFirstChild("Close") !== undefined,
+);
+check("abre em Weapons, com as armas da mochila (icones e contagens)", ...showsSave(0));
+check(
+	"a primeira arma vem selecionada (azul) e o painel a mostra",
+	sameColor(face(tilesOf(0)[0]), THEME.tabActive) &&
+		panelTitle() === WEAPONS[0].name &&
+		panelIcon() === iconOf(1, 0).key,
+	`${panelTitle()} / ${panelIcon()}`,
+);
+check(
+	"os pontos de skill sao um badge na aba Skills (o SP 0 saiu do cabecalho)",
+	deep(tabBtn(5), "Points")?.Visible === true &&
+		deep(deep(tabBtn(5), "Points"), "Text")?.Text === "2" &&
+		deep(win(), "SkillPoints") === undefined,
+);
 
 const firstVisit = [1, 2, 3, 4, 5, 0].map(i => phase(`1a visita: ${TABS[i]}`, () => tab(i)));
-const usableRow = (() => {
-	tab(2);
-	return rows()[0];
-})();
-const ROW_COST = usableRow.GetDescendants().length + 1;
-console.log(`  (uma linha de item custa ${ROW_COST} Instances)`);
+for (const cat of [1, 2, 3, 5]) {
+	tab(cat);
+	check(`${TABS[cat]} mostra o que o save diz`, ...showsSave(cat));
+}
+tab(4);
+check(
+	"Craft mostra as receitas, cada uma com o icone do que ela faz",
+	tilesOf(4).length === CRAFT_RECIPES.length &&
+		tilesOf(4)
+			.slice(0, 6)
+			.every(t => {
+				const r = CRAFT_RECIPES.find(x => `r:${x.id}` === keyOf(t));
+				return r !== undefined && iconKey(t) === iconOf(r.resultKind, r.resultIndex).key;
+			}),
+	`${tilesOf(4).length} receitas`,
+);
 tab(0);
 
 for (let round = 2; round <= 5; round++) {
@@ -772,100 +1024,230 @@ for (let round = 2; round <= 5; round++) {
 	check(`volta ${round} pelas 6 abas nao cria nem destroi Instance`, zero(r), cost(r));
 }
 
-console.log("\n2) detalhe de item\n");
-tab(0);
-const weaponNames = rows().map(r => text(r, "Name"));
-phase("entra no detalhe (1a vez)", () => click(rows()[0], "weapon row"));
-check("o detalhe mostra a arma clicada", text(content(), "Name") === weaponNames[0], text(content(), "Name"));
-let r = phase("volta para a lista", back);
-check("voltar do detalhe nao cria nem destroi Instance", zero(r), cost(r));
-r = phase("entra em outro detalhe", () => click(rows()[1], "weapon row 2"));
-check("outro detalhe reusa a pagina", zero(r), cost(r));
-check("e mostra a outra arma", text(content(), "Name") === weaponNames[1], text(content(), "Name"));
-r = phase("volta de novo", back);
-check("voltar de novo nao cria nem destroi Instance", zero(r), cost(r));
-r = phase("equipa uma arma (detalhe)", () => {
-	click(rowNamed(weaponNames[2]), "weapon row 3");
-	act();
-});
-check("equipar atualiza no lugar", zero(r), cost(r));
-check("a pagina diz Equipped", find(content(), "Action", "TextButton")?.Text === "Equipped");
-back();
-check("a lista marca a arma equipada", find(rowNamed(weaponNames[2]), "Equipped") !== undefined);
+// ---------------------------------------------------------------- 2. selecting, and the panel
 
-console.log("\n3) usar item (uma contagem muda) e usar o ultimo (uma linha sai)\n");
-tab(2);
-const useA = USABLES[0].name;
-const useB = USABLES[1].name;
-click(rowNamed(useA), useA);
-r = phase(`Use ${useA} (3 -> 2)`, act);
-check("usar nao cria nem destroi Instance", zero(r), cost(r));
-check("o detalhe mostra a contagem nova", text(content(), "Owned") === "Owned x 2", text(content(), "Owned"));
-r = phase("volta para Usables", back);
-check("voltar nao cria nem destroi Instance", zero(r), cost(r));
-check("a linha mostra x 2", text(rowNamed(useA), "Count") === "x 2", text(rowNamed(useA), "Count"));
-save.invenUse[USABLES[1].id] = 1;
-const before = rows().length;
-click(rowNamed(useB), useB);
-r = phase(`Use o ultimo ${useB} (1 -> 0) e volta`, () => {
-	act();
-	back();
-});
-check("usar o ultimo nao cria nem destroi Instance", zero(r), cost(r));
+console.log("\n2) selecionar um ladrilho: o painel da direita\n");
+tab(0);
+const weaponTiles = tilesOf(0);
+const weaponOf = t => WEAPONS[Number(keyOf(t).split(":")[1])];
+let r = phase("seleciona a 2a arma", () => click(weaponTiles[1], "weapon 2"));
+check("selecionar outro ladrilho nao cria nem destroi Instance", zero(r), cost(r));
 check(
-	"a linha do item acabado sumiu",
-	rowNamed(useB) === undefined && rows().length === before - 1,
-	`${before} -> ${rows().length} linhas`,
+	"o painel mostra a arma clicada: nome, icone grande e o dano na voz amarela",
+	panelTitle() === weaponOf(weaponTiles[1]).name &&
+		panelIcon() === iconOf(1, weaponOf(weaponTiles[1]).id).key &&
+		statValue("Damage")?.Text === String(weaponOf(weaponTiles[1]).dmg) &&
+		sameColor(statValue("Damage")?.TextColor3, STAT.value),
+	`${panelTitle()} / ${statValue("Damage")?.Text}`,
 );
+check(
+	"o selecionado e o azul em relevo; o anterior volta ao ferro",
+	sameColor(face(weaponTiles[1]), THEME.tabActive) &&
+		sameColor(
+			face(weaponTiles[0]),
+			save.equipWeapon === weaponOf(weaponTiles[0]).id ? THEME.secondary : SURFACE.section,
+		),
+);
+const gunTile = weaponTiles.find(t => weaponOf(t).mag > 0 && weaponOf(t).kind !== 7);
+r = phase("seleciona uma arma de fogo", () => click(gunTile, "gun"));
+check("uma arma de fogo (6 stats, dica de recarga) tambem nao cria Instance", zero(r), cost(r));
+check(
+	"a arma de fogo mostra a reserva de municao em amarelo no ladrilho",
+	chip(gunTile, "Ammo") !== undefined && sameColor(chipColor(gunTile, "Ammo"), STAT.value),
+	chip(gunTile, "Ammo"),
+);
+check(
+	"e o painel fala o teclado: clique ataca, R recarrega",
+	legends(details()).includes("Left click") && legends(details()).includes("R"),
+	legends(details()).join(", "),
+);
+r = phase("volta a 1a arma", () => click(weaponTiles[0], "weapon 1"));
+check("voltar a um item ja visto nao cria nem destroi Instance", zero(r), cost(r));
+
+const toEquip = weaponTiles[2];
+/** did `r` create only the equipped check of `tile` (the first time that tile shows one)? */
+const onlyTag = (r, tile) =>
+	r.made.every(i => i.IsDescendantOf(tile) && (i.Name === "Tag" || i.IsDescendantOf(tile.FindFirstChild("Tag"))));
+r = phase("equipa uma arma (botao do painel)", () => {
+	click(toEquip, "weapon 3");
+	act();
+});
+check(
+	"equipar atualiza no lugar: cria no maximo o check verde do ladrilho (a 1a vez que ele o mostra)",
+	r.bagGone === 0 && onlyTag(r, toEquip),
+	cost(r),
+);
+check("o save tem a arma na mao", save.equipWeapon === weaponOf(toEquip).id);
+r = phase("equipa a 1a arma e volta a 3a", () => {
+	click(weaponTiles[0], "weapon 1");
+	act();
+	click(toEquip, "weapon 3");
+	act();
+});
+check(
+	"equipar de novo uma arma que ja teve o check nao cria nem destroi Instance",
+	r.bagGone === 0 && onlyTag(r, weaponTiles[0]),
+	cost(r),
+);
+r = phase("e de novo, ida e volta", () => {
+	click(weaponTiles[0], "weapon 1");
+	act();
+	click(toEquip, "weapon 3");
+	act();
+});
+check("ida e volta entre duas armas ja equipadas antes: zero", zero(r), cost(r));
+check("o save tem a arma na mao de novo", save.equipWeapon === weaponOf(toEquip).id);
+check(
+	'o painel diz EQUIPPED e o botao fica "Equipped", desligado',
+	panelState() === "EQUIPPED" && action()?.Text === "Equipped" && action()?.GetAttribute("Disabled") === true,
+	`${panelState()} / ${action()?.Text}`,
+);
+click(weaponTiles[0], "weapon 1");
+check(
+	"o ladrilho da arma equipada: face de ferro e o check verde",
+	tagShown(toEquip) && sameColor(face(toEquip), THEME.secondary) && !tagShown(weaponTiles[0]),
+);
+check(
+	"a acao principal e a chapa azul (Equip)",
+	action()?.Text === "Equip" && action()?.GetAttribute("Variant") === "default",
+);
+
+// ---------------------------------------------------------------- 3. using an item
+
+console.log("\n3) usar item (uma contagem muda) e usar o ultimo (um ladrilho sai)\n");
+tab(2);
+const useA = USABLES[0];
+const useB = USABLES[1];
+click(tileFor(2, `3:${useA.id}`), useA.name);
+check(`comida se come: o botao diz Eat (${useA.name})`, action()?.Text === "Eat", action()?.Text);
+r = phase(`Eat ${useA.name} (3 -> 2)`, act);
+check("usar nao cria nem destroi Instance", zero(r), cost(r));
+check(
+	"o painel e o ladrilho mostram a contagem nova",
+	panelState() === "×2" && chip(tileFor(2, `3:${useA.id}`), "Count") === "×2",
+	`${panelState()} / ${chip(tileFor(2, `3:${useA.id}`), "Count")}`,
+);
+const medicine = USABLES.find(u => u.pain > 0 || u.speed > 0 || u.calm > 0);
+click(tileFor(2, `3:${medicine.id}`), medicine.name);
+check(`remedio se usa: o botao diz Use (${medicine.name})`, action()?.Text === "Use", action()?.Text);
+save.invenUse[useB.id] = 1;
+heartbeat(0.3);
+const before = tilesOf(2).length;
+click(tileFor(2, `3:${useB.id}`), useB.name);
+r = phase(`usa o ultimo ${useB.name} (1 -> 0)`, act);
+check("usar o ultimo nao cria nem destroi Instance (o ladrilho vira celula vazia)", zero(r), cost(r));
+check(
+	"o ladrilho do item acabado saiu",
+	tileFor(2, `3:${useB.id}`) === undefined && tilesOf(2).length === before - 1,
+	`${before} -> ${tilesOf(2).length}`,
+);
+check(
+	"e a selecao passou para um item que existe",
+	panelTitle() === USABLES[Number(keyOf(tilesOf(2)[0]).split(":")[1])].name,
+	panelTitle(),
+);
+check("Usables segue batendo com o save", ...showsSave(2));
+
+// ---------------------------------------------------------------- 4. craft
 
 console.log("\n4) craft\n");
-const resultName = (() => {
-	const pool = RECIPE.resultKind === KIND.Weapon ? WEAPONS : USABLES;
-	return pool[RECIPE.resultIndex].name;
-})();
-const recipeRowName = RECIPE.resultCount > 1 ? `${resultName} x${RECIPE.resultCount}` : resultName;
+const resultName = (RECIPE.resultKind === KIND.Weapon ? WEAPONS : USABLES)[RECIPE.resultIndex].name;
+const resultIcon = iconOf(RECIPE.resultKind, RECIPE.resultIndex).key;
 tab(4);
-phase(`abre a receita ${recipeRowName} (1a vez)`, () => click(rowNamed(recipeRowName), recipeRowName));
+const recipeTile = () => tileFor(4, `r:${RECIPE.id}`);
+check(
+	`a receita de ${resultName}: o icone do resultado, a estacao (maos) e quantas da para fazer`,
+	iconKey(recipeTile()) === resultIcon &&
+		deep(recipeTile(), "Station")?.GetAttribute("Icon") === "hand" &&
+		chip(recipeTile(), "Count") === "×1",
+	`${iconKey(recipeTile())} / ${deep(recipeTile(), "Station")?.GetAttribute("Icon")} / ${chip(recipeTile(), "Count")}`,
+);
+phase(`seleciona a receita ${resultName}`, () => click(recipeTile(), resultName));
+check(
+	"o painel mostra o resultado e os ingredientes com tem / precisa",
+	panelTitle() === resultName &&
+		deep(details(), "Ing0")?.Visible === true &&
+		deep(deep(details(), "Ing0"), "Count")?.Text ===
+			`${RECIPE.ingredients[0].count} / ${RECIPE.ingredients[0].count}`,
+	`${panelTitle()} / ${deep(deep(details(), "Ing0"), "Count")?.Text}`,
+);
+check(
+	"o aviso da estacao virou uma linha compacta no painel",
+	deep(details(), "Nearby")?.Text?.startsWith("Near you") && deep(win(), "Notice") === undefined,
+	deep(details(), "Nearby")?.Text,
+);
+const undrawn = new Set(cellsOf(4).filter(t => iconKey(t) === ""));
 r = phase("Craft", act);
-check("craftar atualiza a receita no lugar", zero(r), cost(r));
+// a craft re-sorts the recipes (what can be made first): a recipe that comes on screen for the first time gets its icon
+// then -- its Frames are the only thing a craft may create (the grid draws an icon when its row is shown)
+const iconTile = i => i.Parent?.Parent;
+check(
+	"craftar atualiza no lugar: cria so os icones das receitas que entram na tela pela 1a vez",
+	r.bagGone === 0 && r.made.every(i => i.Name === "Px" && undrawn.has(iconTile(i)) && iconKey(iconTile(i)) !== ""),
+	`${cost(r)}; ${[...new Set(r.made.map(iconTile))].length} icones novos`,
+);
 const ing0 = RECIPE.ingredients[0];
 check(
-	"a receita mostra os ingredientes gastos",
-	text(find(content(), "Ing0"), "Count") === `0 / ${ing0.count}`,
-	text(find(content(), "Ing0"), "Count"),
+	"os ingredientes gastos aparecem em vermelho (0 / n)",
+	deep(deep(details(), "Ing0"), "Count")?.Text === `0 / ${ing0.count}` &&
+		sameColor(deep(deep(details(), "Ing0"), "Count")?.TextColor3, STAT.penalty),
+	deep(deep(details(), "Ing0"), "Count")?.Text,
 );
-r = phase("volta para Craft (lista reordena)", back);
-check("voltar para Craft nao cria nem destroi Instance", zero(r), cost(r));
 check(
-	"a receita craftada agora falta material",
-	text(rowNamed(recipeRowName), "Status") === "Missing",
-	text(rowNamed(recipeRowName), "Status"),
+	'e o ladrilho da receita diz "×0" em vermelho',
+	chip(recipeTile(), "Count") === "×0" && sameColor(chipColor(recipeTile(), "Count"), STAT.penalty),
+	chip(recipeTile(), "Count"),
+);
+check(
+	"o botao passa a dizer o motivo, desligado",
+	action()?.Text === "Missing items" && action()?.GetAttribute("Disabled") === true,
+	action()?.Text,
 );
 const resultTab = RECIPE.resultKind === KIND.Weapon ? 0 : 2;
 r = phase(`aba ${TABS[resultTab]} com o item novo`, () => tab(resultTab));
+const newTile = tileFor(resultTab, `${RECIPE.resultKind}:${RECIPE.resultIndex}`);
+const TILE_BUDGET = Icon.iconFrameCount(resultIcon) + 3;
 check(
-	"o item novo cria no maximo uma linha",
-	r.bagNew <= ROW_COST && r.bagGone === 0,
-	`${cost(r)}; uma linha = ${ROW_COST}`,
+	"o item novo cria no maximo um ladrilho (os Frames do icone dele e um chip)",
+	r.bagNew <= TILE_BUDGET && r.bagGone === 0,
+	`${cost(r)}; teto ${TILE_BUDGET}`,
 );
-check("e a linha dele esta la", rowNamed(resultName) !== undefined);
+check("e o ladrilho dele esta la, com o icone certo", newTile !== undefined && iconKey(newTile) === resultIcon);
+check(`${TABS[resultTab]} segue batendo com o save`, ...showsSave(resultTab));
+
+// ---------------------------------------------------------------- 5. skills
 
 console.log("\n5) skills\n");
 tab(5);
 const skill = SKILLS.find(s => s.maxLevel > 1);
-const skillRow = () => rows().find(x => text(x, "Name") === skill.name);
-r = phase(`aprende ${skill.name}`, () => click(find(skillRow(), "Plus", "TextButton"), "plus"));
+const skillTile = () => tileFor(5, `s:${skill.id}`);
+click(skillTile(), skill.name);
+check(
+	"o painel da skill: o glifo, o nivel e os pontos para gastar",
+	panelTitle() === skill.name &&
+		panelIcon() === skillIconOf(skill.id) &&
+		panelState() === `LV 0 / ${skill.maxLevel}` &&
+		deep(details(), "Extra")?.Text.startsWith("2 skill points"),
+	`${panelState()} / ${deep(details(), "Extra")?.Text}`,
+);
+r = phase(`aprende ${skill.name}`, act);
 check("aprender skill atualiza no lugar", zero(r), cost(r));
+const pips = () =>
+	[0, 1, 2]
+		.map(p => deep(skillTile(), `Pip${p}`))
+		.filter(p => p?.Visible)
+		.map(p => (sameColor(p.BackgroundColor3, GAME.xp) ? "#" : "."))
+		.join("");
+check(`o ladrilho acende um pip de ${skill.maxLevel}`, pips() === "#" + ".".repeat(skill.maxLevel - 1), pips());
 check(
-	"a linha mostra o nivel novo",
-	text(skillRow(), "Level") === `Lv 1 / ${skill.maxLevel}`,
-	text(skillRow(), "Level"),
+	"o painel diz o nivel novo e o ponto que sobrou",
+	panelState() === `LV 1 / ${skill.maxLevel}` && deep(details(), "Extra")?.Text.startsWith("1 skill point "),
+	`${panelState()} / ${deep(details(), "Extra")?.Text}`,
 );
-check(
-	"o aviso mostra os pontos que sobraram",
-	(text(content(), "Text") ?? "").startsWith("1 skill point "),
-	text(content(), "Text"),
-);
+check("o badge da aba Skills desce para 1", deep(deep(tabBtn(5), "Points"), "Text")?.Text === "1");
+check("Skills segue batendo com o save", ...showsSave(5));
+
+// ---------------------------------------------------------------- 6. a change from outside
 
 console.log("\n6) dado que muda por fora com o Bag aberto (resposta do servidor, admin)\n");
 tab(3);
@@ -876,10 +1258,12 @@ r = phase("mudanca de fora + 0,5 s de quadros", () => {
 });
 check("a atualizacao por fora nao cria nem destroi Instance", zero(r), cost(r));
 check(
-	"a linha mostra a contagem nova",
-	text(rowNamed(mat.name), "Count") === "x 11",
-	text(rowNamed(mat.name), "Count"),
+	"o ladrilho mostra a contagem nova",
+	chip(tileFor(3, `4:${mat.id}`), "Count") === "×11",
+	chip(tileFor(3, `4:${mat.id}`), "Count"),
 );
+
+// ---------------------------------------------------------------- 7. close and reopen
 
 console.log("\n7) fechar e reabrir\n");
 r = phase("fecha e reabre 3 vezes", () => {
@@ -889,9 +1273,9 @@ r = phase("fecha e reabre 3 vezes", () => {
 	}
 });
 check("reabrir nao cria nem destroi Instance", zero(r), cost(r));
-check("reabre na ultima aba", find(bag(), "Categories") !== undefined && rowNamed(mat.name) !== undefined);
-// a pad user had a row selected: a hidden Bag must not keep it (bootstrap reads a selection as "a menu has the pad")
-service("GuiService").SelectedObject = rows()[0];
+check("reabre na ultima aba", page(3)?.Visible === true && !page(0)?.Visible);
+// a pad user had a tile selected: a hidden Bag must not keep it (bootstrap reads a selection as "a menu has the pad")
+service("GuiService").SelectedObject = tilesOf(3)[0];
 pack.close();
 check("fechar tira a selecao do gamepad de dentro do Bag", service("GuiService").SelectedObject === undefined);
 const fresh = USABLES[9];
@@ -903,130 +1287,105 @@ r = phase("mudanca com o Bag fechado, reabre e vai a Usables", () => {
 });
 check(
 	"o item ganho aparece, o gasto sai",
-	rowNamed(fresh.name) !== undefined && rowNamed(USABLES[0].name) === undefined,
+	tileFor(2, `3:${fresh.id}`) !== undefined && tileFor(2, `3:${USABLES[0].id}`) === undefined,
 );
-check("e custa no maximo uma linha", r.bagNew <= ROW_COST && r.bagGone === 0, `${cost(r)}; uma linha = ${ROW_COST}`);
+check(
+	"e custa no maximo um ladrilho",
+	r.bagNew <= Icon.iconFrameCount(iconOf(3, fresh.id).key) + 3 && r.bagGone === 0,
+	cost(r),
+);
+
+// ---------------------------------------------------------------- 8. every tab once more
 
 console.log("\n8) todas as abas mais uma vez\n");
 r = phase("volta final pelas 6 abas", () => {
 	for (const i of [0, 1, 2, 3, 4, 5]) tab(i);
 });
 check("depois de tudo, trocar de aba segue sem criar nem destruir", zero(r), cost(r));
+for (const cat of [0, 1, 2, 3, 5]) {
+	tab(cat);
+	check(`${TABS[cat]} bate com o save`, ...showsSave(cat));
+}
 
-console.log("\n9) cartao do item (UI-08): segue o ponteiro e a selecao do controle, e e o mesmo da pagina do item\n");
-const { STAT, GAME } = require(join(SRC, "client/ui/theme.ts"));
+// ---------------------------------------------------------------- 8b. the mouse's card and the pad's cursor
+
+console.log("\n8b) o cartao do item (UI-08) sob o mouse, e o cursor do controle\n");
 const uis = service("UserInputService");
 const gui = service("GuiService");
-const tip = () => find(content(), "Tooltip");
-/** the row's GuiState, as the engine sets it when the pointer enters / leaves it */
-const pointer = (row, on) => {
-	row.GuiState = on ? Enum.GuiState.Hover : Enum.GuiState.Idle;
+const tip = () => {
+	const t = win()?.FindFirstChild("Tooltip");
+	return t?.Visible ? t : undefined;
+};
+/** the tile's GuiState, as the engine sets it when the pointer enters / leaves it */
+const pointer = (tile, on) => {
+	tile.GuiState = on ? Enum.GuiState.Hover : Enum.GuiState.Idle;
 	flush();
 };
-/** the value label of the stat line labelled `label` inside `root` */
-const statValue = (root, label) =>
-	root === undefined
-		? undefined
-		: visible(root)
-				.find(d => d.Name === "Label" && d.Text === label)
-				?.Parent?.FindFirstChild("Value");
-const legends = root =>
-	root === undefined
-		? []
-		: visible(root)
-				.filter(d => d.Name === "Legend")
-				.map(d => d.Text);
-const sameColor = (a, b) => a !== undefined && b !== undefined && a.R === b.R && a.G === b.G && a.B === b.B;
-
 tab(0);
-const listed = rows();
-phase("ponteiro na 1a arma (1a vez: monta o cartao)", () => pointer(listed[0], true));
+const listed = tilesOf(0);
+const selectedTile = listed.find(t => sameColor(face(t), THEME.tabActive));
+const other = listed.find(t => t !== selectedTile);
+phase("mouse sobre outra arma (1a vez: monta o cartao)", () => pointer(other, true));
 check(
-	"o cartao aparece com a arma da linha",
-	text(tip(), "Name") === text(listed[0], "Name"),
-	`${text(tip(), "Name")} / ${text(listed[0], "Name")}`,
-);
-const firstWeapon = WEAPONS.find(w => w.name === text(listed[0], "Name"));
-check(
-	"o dano vem da tabela, em amarelo (STAT.value)",
-	statValue(tip(), "Damage")?.Text === String(firstWeapon.dmg) &&
-		sameColor(statValue(tip(), "Damage")?.TextColor3, STAT.value),
-	statValue(tip(), "Damage")?.Text,
+	"o cartao aparece com a arma do ladrilho",
+	tip()?.FindFirstChild("Header")?.FindFirstChild("Name")?.Text === weaponOf(other).name,
+	tip()?.FindFirstChild("Header")?.FindFirstChild("Name")?.Text,
 );
 check(
-	"a dica fala o teclado e o mouse (tutorial.ts SCHEMES)",
-	legends(tip()).includes("Left click"),
-	legends(tip()).join(", "),
+	"com o icone dela no cabecalho (o mesmo do ladrilho)",
+	deep(tip(), "ItemIcon")?.GetAttribute("Icon") === iconKey(other),
 );
 check(
-	"o cartao nao oferece botao nenhum (sem trocar / presentear)",
-	visible(tip()).every(d => !d.IsA("GuiButton")),
+	"o dano vem da tabela, em amarelo",
+	statValue("Damage", tip())?.Text === String(weaponOf(other).dmg) &&
+		sameColor(statValue("Damage", tip())?.TextColor3, STAT.value),
 );
-r = phase(`ponteiro percorre as ${listed.length} armas`, () => {
-	for (let i = 1; i < listed.length; i++) {
-		pointer(listed[i - 1], false);
-		pointer(listed[i], true);
+check(
+	"o cartao nao oferece botao nenhum",
+	tip()
+		?.GetDescendants()
+		.every(d => !d.IsA("GuiButton")),
+);
+pointer(other, false);
+r = phase(`mouse percorre as ${listed.length} armas`, () => {
+	for (const t of listed) {
+		pointer(t, true);
+		pointer(t, false);
 	}
+	for (const t of listed) pointer(t, true);
 });
-check("percorrer a lista com o cartao nao cria nem destroi Instance", zero(r), cost(r));
-check(
-	"o cartao mostra a ultima arma apontada",
-	text(tip(), "Name") === text(listed[listed.length - 1], "Name"),
-	text(tip(), "Name"),
-);
-const equippedRow = rowNamed(weaponNames[2]);
-pointer(listed[listed.length - 1], false);
-pointer(equippedRow, true);
-check(
-	'a linha coberta pelo cartao tem o "EQUIPPED" repetido no cabecalho dele',
-	text(tip(), "Tag") === "EQUIPPED" && sameColor(find(tip(), "Tag")?.TextColor3, GAME.success),
-	text(tip(), "Tag"),
-);
-pointer(equippedRow, false);
-check("sem ponteiro nem selecao, o cartao some", tip() === undefined);
+check("percorrer a grade com o mouse nao cria nem destroi Instance", zero(r), cost(r));
+for (const t of listed) pointer(t, false);
+pointer(selectedTile, true);
+check("sobre o item selecionado, nada de cartao (o cartao dele e o painel)", tip() === undefined);
+pointer(selectedTile, false);
+check("sem mouse em cima, o cartao some", tip() === undefined);
 
 uis.GetLastInputType = () => Enum.UserInputType.Gamepad1;
-r = phase("selecao do controle anda pela lista", () => {
-	for (const row of listed) {
-		gui.SelectedObject = row;
+r = phase("o cursor do controle anda pela grade", () => {
+	for (const t of listed) {
+		gui.SelectedObject = t;
+		t.SelectionGained.Fire();
 		flush();
 	}
 });
-check("a selecao do controle mostra o cartao sem criar Instance", tip() !== undefined && zero(r), cost(r));
-check("com o controle, a dica fala o controle", legends(tip()).includes("RT / RB / A"), legends(tip()).join(", "));
+check(
+	"o cursor do controle seleciona o que toca, sem criar Instance",
+	zero(r) && panelTitle() === weaponOf(listed[listed.length - 1]).name,
+	`${cost(r)}; ${panelTitle()}`,
+);
+check("com o controle nao ha cartao (o painel segue o cursor)", tip() === undefined);
 gui.SelectedObject = undefined;
 flush();
-check("tirar a selecao esconde o cartao", tip() === undefined);
-
 uis.GetLastInputType = () => Enum.UserInputType.Touch;
 uis.TouchEnabled = true;
 uis.MouseEnabled = false;
-pointer(listed[0], true);
-check("no toque nao ha tooltip (o toque abre a pagina do item, que tem o cartao)", tip() === undefined);
-pointer(listed[0], false);
+pointer(other, true);
+check("no toque nao ha cartao", tip() === undefined);
+pointer(other, false);
 uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
 uis.TouchEnabled = false;
 uis.MouseEnabled = true;
-
-tab(2);
-const food = rows()[0];
-pointer(food, true);
-const foodDef = USABLES.find(u => u.name === text(food, "Name"));
-check(
-	`${foodDef.name}: o que enche a fome vem em verde (STAT.bonus)`,
-	foodDef.hunger > 0 && sameColor(statValue(tip(), "Hunger recovery")?.TextColor3, STAT.bonus),
-	statValue(tip(), "Hunger recovery")?.Text,
-);
-r = phase("clica na linha apontada: a pagina do item", () => click(food, foodDef.name));
-check("abrir a pagina esconde o tooltip", tip() === undefined);
-check("a pagina mostra o cartao do mesmo item", text(content(), "Name") === foodDef.name, text(content(), "Name"));
-check(
-	"e a dica da pagina comeca pela acao dela (Click: Use)",
-	legends(find(content(), "Card"))[0] === "Click",
-	legends(find(content(), "Card")).join(", "),
-);
-back();
-pointer(food, false);
 const alive = bag() === undefined ? 0 : bag().GetDescendants().length + 1;
 
 // ---------------------------------------------------------------- 9. the wardrobe (MON-04), on the same kit
@@ -1302,6 +1661,261 @@ pack.close();
 	);
 }
 
+// ---------------------------------------------------------------- 10. what a full page costs
+
+console.log("\n10) o custo de uma pagina cheia (todas as 30 armas; as 80 receitas)\n");
+/** Instances, Frames and icon Frames ("Px") under `root` */
+function census(root) {
+	const d = root === undefined ? [] : root.GetDescendants();
+	return {
+		all: d.length + 1,
+		frames: d.filter(x => x.ClassName === "Frame").length + 1,
+		px: d.filter(x => x.Name === "Px").length,
+		tiles: d.filter(x => /^Tile\d+$/.test(x.Name)).length,
+	};
+}
+const fmtCensus = c => `${c.all} Instances (${c.frames} Frames, dos quais ${c.px} de icone), ${c.tiles} ladrilhos`;
+let fullWeapons;
+let fullCraft;
+{
+	const full = defaultSave();
+	for (const w of WEAPONS) full.invenWeapon[w.id] = 1;
+	full.ammoNormal = 60;
+	const c2 = newCtx(full);
+	const p2 = new Backpack(c2);
+	wire(p2, full);
+	uiCtx = c2;
+	const opened = phase("Bag novo, 30 armas: abre em Weapons", () => p2.open());
+	fullWeapons = census(page(0));
+	console.log(`  abrir: ${cost(opened)} (janela + painel + a grade de armas)`);
+	console.log(`  pagina de armas cheia: ${fmtCensus(fullWeapons)}`);
+	check(
+		"a pagina cheia mostra as 30 armas, cada uma com o seu icone",
+		tilesOf(0).length === WEAPONS.length &&
+			tilesOf(0).every(t => iconKey(t) === iconOf(1, Number(keyOf(t).split(":")[1])).key),
+		`${tilesOf(0).length} ladrilhos`,
+	);
+	const craftFirst = phase("e vai a Craft", () => tab(4));
+	fullCraft = census(page(4));
+	console.log(
+		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(fullCraft)}`,
+	);
+	const drawn = () => tilesOf(4).filter(t => iconKey(t) !== "").length;
+	check(
+		"as receitas fora da tela ainda nao pagam os Frames do icone",
+		drawn() < CRAFT_RECIPES.length && drawn() >= 25,
+		`${drawn()} de ${CRAFT_RECIPES.length} desenhadas`,
+	);
+	// scroll to the end, a row at a time (the fake tree has no layout: the list gets its size on screen here)
+	const list = deep(page(4), "List");
+	list.AbsoluteSize = new Vector2(408, 408);
+	const rows = Math.ceil(CRAFT_RECIPES.length / 5);
+	const scrolled = phase("rola Craft ate o fim", () => {
+		for (let y = 0; y <= rows * 80; y += 80) {
+			list.CanvasPosition = new Vector2(0, y);
+			flush();
+		}
+	});
+	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(census(page(4)))}`);
+	check(
+		"rolar desenha as linhas que chegam, ate a ultima",
+		drawn() === CRAFT_RECIPES.length,
+		`${drawn()} de ${CRAFT_RECIPES.length}`,
+	);
+	const again = phase("rola de volta e de novo", () => {
+		for (const y of [0, rows * 40, rows * 80, 0]) {
+			list.CanvasPosition = new Vector2(0, y);
+			flush();
+		}
+	});
+	check("rolar de novo nao cria nem destroi Instance", zero(again), cost(again));
+	p2.close();
+	uiCtx = ctx;
+}
+
+// ---------------------------------------------------------------- 11. the layout, on a small layout pass
+
+console.log(
+	"\n11) o layout a 1120 x 630 e a 1360 x 435 (celular): nada se sobrepoe, e o ladrilho tem 44 px no toque\n",
+);
+const udim = (u, total) => (u?.Scale ?? 0) * total + (u?.Offset ?? 0);
+/** Scale + Offset, AnchorPoint, UIPadding, UIAspectRatioConstraint and vertical UIListLayouts: what the Bag uses */
+function layoutNode(inst, x, y, w, h) {
+	const pos = inst.AbsolutePosition;
+	const size = inst.AbsoluteSize;
+	if (pos.X !== x || pos.Y !== y) inst.AbsolutePosition = new Vector2(x, y);
+	if (size.X !== w || size.Y !== h) inst.AbsoluteSize = new Vector2(w, h);
+	const pad = inst.FindFirstChildOfClass("UIPadding");
+	let ix = x;
+	let iy = y;
+	let iw = w;
+	let ih = h;
+	if (pad !== undefined) {
+		const l = udim(pad.PaddingLeft, w);
+		const t = udim(pad.PaddingTop, h);
+		ix += l;
+		iy += t;
+		iw -= l + udim(pad.PaddingRight, w);
+		ih -= t + udim(pad.PaddingBottom, h);
+	}
+	const list = inst.FindFirstChildOfClass("UIListLayout");
+	let kids = inst.GetChildren().filter(c => c.IsA("GuiObject"));
+	if (list !== undefined) kids = kids.filter(c => c.Visible).sort((a, b) => a.LayoutOrder - b.LayoutOrder);
+	let cursor = iy - (inst.ClassName === "ScrollingFrame" ? inst.CanvasPosition.Y : 0);
+	for (const c of kids) {
+		let cw = udim(c.Size.X, iw);
+		let ch = udim(c.Size.Y, ih);
+		// a key's legend grows with its text (AutomaticSize X, fixed TextSize): the key fits itself to it (Keycap)
+		if (c.AutomaticSize?.Name === "X" && typeof c.Text === "string")
+			cw = Math.max(cw, c.Text.length * (c.TextSize ?? 14) * 0.55);
+		const ar = c.FindFirstChildOfClass("UIAspectRatioConstraint");
+		if (ar !== undefined && ch > 0) {
+			if (cw / ch > ar.AspectRatio) cw = ch * ar.AspectRatio;
+			else ch = cw / ar.AspectRatio;
+		}
+		let cx;
+		let cy;
+		if (list !== undefined) {
+			cx = ix;
+			cy = cursor;
+			cursor += ch + udim(list.Padding, ih);
+		} else {
+			cx = ix + udim(c.Position.X, iw) - c.AnchorPoint.X * cw;
+			cy = iy + udim(c.Position.Y, ih) - c.AnchorPoint.Y * ch;
+		}
+		layoutNode(c, cx, cy, cw, ch);
+	}
+}
+function layoutAt(vw, vh) {
+	service("Workspace").CurrentCamera.ViewportSize = new Vector2(vw, vh);
+	flush();
+	for (let pass = 0; pass < 4; pass++) {
+		layoutNode(bag(), 0, 0, vw, vh);
+		flush();
+	}
+}
+const rectOf = g => ({
+	n: g.Name,
+	x: g.AbsolutePosition.X,
+	y: g.AbsolutePosition.Y,
+	w: g.AbsoluteSize.X,
+	h: g.AbsoluteSize.Y,
+});
+const overlapping = (a, b) =>
+	Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0.5 &&
+	Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0.5;
+const within = (a, o) =>
+	a.x >= o.x - 0.5 && a.y >= o.y - 0.5 && a.x + a.w <= o.x + o.w + 0.5 && a.y + a.h <= o.y + o.h + 0.5;
+function pairwise(items) {
+	const bad = [];
+	for (let i = 0; i < items.length; i++) {
+		for (let j = i + 1; j < items.length; j++)
+			if (overlapping(items[i], items[j])) bad.push(`${items[i].n} x ${items[j].n}`);
+	}
+	return bad;
+}
+const px = n => n.toFixed(1);
+pack.open();
+for (const [vw, vh, touch] of [
+	[1120, 630, false],
+	[1360, 435, true],
+]) {
+	uis.TouchEnabled = touch;
+	uis.MouseEnabled = !touch;
+	uis.GetLastInputType = () => (touch ? Enum.UserInputType.Touch : Enum.UserInputType.MouseMovement);
+	for (const cat of [0, 4, 5]) {
+		tab(cat);
+		layoutAt(vw, vh);
+		const W0 = win();
+		const winRect = rectOf(W0);
+		const blocks = [
+			W0.FindFirstChild("Help"),
+			W0.FindFirstChild("Close"),
+			W0.FindFirstChild("Title"),
+			...[0, 1, 2, 3, 4, 5].map(i => tabBtn(i)),
+			page(cat),
+			details(),
+		].map(rectOf);
+		const where = `${vw}x${vh} ${TABS[cat]}`;
+		check(
+			`${where}: cabecalho, abas, grade e painel sem sobreposicao`,
+			pairwise(blocks).length === 0,
+			pairwise(blocks).join(", "),
+		);
+		check(
+			`${where}: tudo dentro da janela`,
+			blocks.every(b => within(b, winRect)),
+			blocks
+				.filter(b => !within(b, winRect))
+				.map(b => b.n)
+				.join(", "),
+		);
+		const D = details();
+		const inPanel = ["Title", "State", "IconBed", "Stats", "Lower", "Action"]
+			.map(n => D.FindFirstChild(n))
+			.filter(g => g !== undefined && g.Visible)
+			.map(rectOf);
+		check(
+			`${where}: o painel (titulo, tecla, icone, stats, notas, botao) sem sobreposicao`,
+			pairwise(inPanel).length === 0,
+			pairwise(inPanel).join(", "),
+		);
+		check(
+			`${where}: e dentro do painel`,
+			inPanel.every(b => within(b, rectOf(D))),
+			inPanel
+				.filter(b => !within(b, rectOf(D)))
+				.map(b => b.n)
+				.join(", "),
+		);
+		const cells = cellsOf(cat, true).map(rectOf);
+		const groove = rectOf(deep(page(cat), "Groove"));
+		check(
+			`${where}: os ladrilhos nao se sobrepoem`,
+			pairwise(cells).length === 0,
+			pairwise(cells).slice(0, 4).join(", "),
+		);
+		check(
+			`${where}: e ficam dentro do sulco, na largura`,
+			cells.every(c => c.x >= groove.x - 0.5 && c.x + c.w <= groove.x + groove.w + 0.5),
+		);
+		const glyphsIn = [0, 1, 2, 3, 4, 5].every(i =>
+			within(rectOf(tabBtn(i).FindFirstChild("Glyph")), rectOf(tabBtn(i))),
+		);
+		check(`${where}: o glifo de cada aba fica dentro da aba`, glyphsIn);
+		if (cat === 0) {
+			const tile = cells[0];
+			const min = touch ? 44 : 0;
+			check(
+				`${where}: um ladrilho tem ${px(tile.w)} x ${px(tile.h)} px${touch ? " (MIN_TOUCH_PX = 44 no toque)" : ""}`,
+				tile.w >= min && tile.h >= min && Math.abs(tile.w - tile.h) <= 1.5,
+			);
+			const icon = rectOf(tilesOf(0)[0].FindFirstChild("ItemIcon"));
+			const runs = tilesOf(0)[0]
+				.FindFirstChild("ItemIcon")
+				.GetChildren()
+				.filter(f => f.Visible);
+			const snapped = runs.every(
+				f =>
+					f.Position.X.Scale === 0 &&
+					Number.isInteger(f.Position.X.Offset) &&
+					Number.isInteger(f.Size.X.Offset),
+			);
+			check(
+				`${where}: o icone (${px(icon.w)} px) cai em pixels inteiros da tela`,
+				runs.length > 0 && snapped,
+				`${runs.length} Frames`,
+			);
+		}
+	}
+}
+uis.TouchEnabled = false;
+uis.MouseEnabled = true;
+uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+service("Workspace").CurrentCamera.ViewportSize = new Vector2(1920, 1080);
+flush();
+pack.close();
+
 // ---------------------------------------------------------------- report
 
 console.log("\nPasso                                              criadas  destruidas  escritas  (toast)");
@@ -1312,7 +1926,12 @@ for (const x of table) {
 }
 const sum = (list, k) => list.reduce((s, x) => s + x[k], 0);
 console.log(`\nprimeira visita das abas: ${sum(firstVisit, "bagNew")} criadas`);
-console.log(`Instances vivas no Bag no fim: ${alive}`);
+console.log(`Instances vivas no Bag no fim da caminhada: ${alive}`);
+console.log(`pagina cheia de armas (30): ${fmtCensus(fullWeapons)}`);
+console.log(`pagina de Craft (80 receitas), 1a vista: ${fmtCensus(fullCraft)}`);
+console.log(
+	`icones: ${frameCounts.length}, media ${(frameCounts.reduce((s, [, c]) => s + c, 0) / frameCounts.length).toFixed(1)} Frames, maximo ${frameCounts[0][1]} (${frameCounts[0][0]})`,
+);
 console.log(`(escritas = propriedades escritas em Instances que ja existiam; toast = popup de aviso, fora do Bag)`);
 
 console.log("");
@@ -1320,4 +1939,6 @@ if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
 	process.exit(1);
 }
-console.log("OK: depois de montada, cada tela do Bag troca e atualiza sem criar nem destruir Instance");
+console.log(
+	"OK: cada item tem o seu desenho, e depois de montada cada tela do Bag troca e atualiza sem criar nem destruir Instance",
+);

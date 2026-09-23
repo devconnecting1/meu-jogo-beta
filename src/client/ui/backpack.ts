@@ -1,38 +1,45 @@
 /*
- * Backpack (in-run inventory): Weapons / Equipment / Usables / Materials / Craft / Skills.
+ * The Backpack (in-run inventory), docs/DESIGN_RULES.md UI-11: one UI-07 window -- the owner's Wardrobe, grown into an
+ * inventory -- with the item icons of UI-11 instead of rows of text.
  *
- * The item tabs only list what the player owns. Every game rule (equip, unequip, use, craft) is
- * delegated to main.client through the callbacks; the backpack only reads the save to draw its state
- * and brings it up to date after each action. The one write it does itself is spending skill points.
+ *   ┌ ? ─────────────────────────────── Backpack ─────────────────────────────── X ┐
+ *   │ [# Weapons] [# Gear] [# Usables] [# Materials] [# Craft] [# Skills (2)]         │  tabs: plate + glyph + label
+ *   │ ┌ grid ─────────────────────────┐ ┌ Pistol ──────────────────────── [ ×1 ] ┐ │
+ *   │ │ [▣][▣][▣][▣][▣]               │ │ [ icon ]  Weapon · Pistol               │ │  left: 5 x 5 tiles on the
+ *   │ │ [▣][▣][ ][ ][ ]               │ │           Damage 25 ...                 │ │  groove (scrolls when more)
+ *   │ │ ...                           │ │ notes · usage hint                      │ │  right: the details panel
+ *   │ └───────────────────────────────┘ │ [              Equip               ]    │ │  and its one action
+ *   └──────────────────────────────────────────────────────────────────────────────┘
  *
- * Levels: 2 = list of the current tab, 3 = item detail, 4 = recipe detail, 5 = skills.
+ * - Tabs: Weapons, Gear (the equipment), Usables, Materials, Craft, Skills. All six fit at 1120 wide with the
+ *   reference's tab size (the bar is about 895 of the window's 952 units), so none is merged and the bar does not scroll.
+ *   Unspent skill points are a badge on the Skills tab and a line of the Skills panel (the old "SP 0" pill).
+ * - Left: a grid of tiles (client/ui/bagGrid.ts) -- the item's icon, how many, EQUIPPED as the iron face and a check,
+ *   the selection in blue; a recipe tile has its station and how many times it can be made now (red "×0" when an
+ *   ingredient is short, a padlock over a grey icon when the station is not near); a skill tile its level pips.
+ * - Right: the details panel (client/ui/bagPanel.ts): the item card grown into a panel -- the big icon, the name,
+ *   the type, the stats, the notes, the usage hint on this device -- and the one action: the steel-blue plate for
+ *   the main one (Equip, Use, Eat, Unequip, Craft, Learn), an iron plate for Open Craft. There is no Drop or Split
+ *   in the game, so there is none here.
+ * - Mouse: a click selects; the pointer over another item shows its card as a tooltip beside the tile (the
+ *   selected one's card is the panel). Pad: the selection moving onto a tile selects it (the panel follows the
+ *   cursor); the panel's button is to the right. Touch: a tap selects; no tooltip.
+ * - Nothing pauses (UI-06): the see-through scrim, and the damage flash above it (dangerFlash.ts).
  *
- * Built once, then only shown and updated in place. The owner: "opening the Bag and going through the tabs
- * should be instant". Creating GuiObjects is among the most expensive things the client does, and this screen
- * used to destroy its page and build it again on every tab switch and after every action (Craft alone is 80
- * rows, ~1700 Instances). Now:
- *  - the window is built on the first open(); close() hides it, the next open() shows it again;
- *  - each page (a tab's list, the item detail, the recipe detail) is built the first time it is shown, then
- *    only shown / hidden: switching tabs creates nothing, and a list keeps its scroll position;
- *  - a page renders in two steps: what it should show, computed from the save as plain data (no Instance),
- *    then the write of that onto the page's existing objects. The signature of the first step is the page's
- *    dirty flag: the page is rewritten only when it changed, in place, and its list reuses its rows (RowPool);
- *  - the dirty flag is DERIVED from the save, never set by hand: every action, every navigation and, while the
- *    Bag is open, a check every SYNC_S seconds recompute it for the page on screen, and a hidden page is checked
- *    when it is shown. So no path that changes the save -- the actions here, a server reply, an admin patch, a
- *    new save from the server -- can leave a page showing old data.
- * `npm run test:backpack` (tools/test-backpack.mjs) counts the Instances all of this creates and destroys.
+ * Every game rule (equip, unequip, use, craft) is delegated to main.client through the callbacks; the Bag only reads
+ * the save to draw its state and brings it up to date after each action. The one write it does itself is spending
+ * skill points.
  *
- * Look: a panel window with the kit's TITLE STRIP across the top (skill points at its left, key cap / back /
- * close at its right), a Sidebar of categories on the left and the current list / detail on the right. Lists,
- * rows, glyphs, chips and pips are recessed "wells"; the one main action of a page is the raised `primary`
- * plate. Every colour is a theme token (THEME / SURFACE / GAME); hover, pressed and disabled come from the kit.
- *
- * The item card (itemCard.ts / itemInfo.ts, DESIGN_RULES UI-08) says what an item is: it is the left half of the
- * item page (the right half is the survivor's side of it -- owned, equipped, the action), and over an item list
- * it follows the row under the pointer or the pad's selection as a tooltip. One tooltip card for the whole Bag,
- * built on first use and rewritten in place, so moving over a list creates nothing. No tooltip on touch: a tap
- * opens the item page, where the card is.
+ * Built once, then only shown and updated in place (the owner: "opening the Bag and going through the tabs should
+ * be instant"; npm run test:backpack counts it):
+ *  - the window is built on the first open(); close() hides it;
+ *  - a tab's grid is built the first time the tab is shown, then only shown / hidden: its tiles are a pool keyed by
+ *    what they show, so switching tabs, selecting, moving the pointer or the pad, using and crafting create at most
+ *    what new data needs (a tile for an item the grid never had, an icon's extra Frames), and nothing on a revisit;
+ *  - what a grid and the panel show is computed from the save as plain data first; it is written only when it
+ *    changed. The dirty check is DERIVED from the save, never set by hand: every action, every navigation and, while
+ *    the Bag is open, a check every SYNC_S seconds recompute it, so no path that changes the save -- a server reply,
+ *    an admin patch, a new save -- can leave the Bag showing old data.
  */
 import { GameContext } from "shared/game/context";
 import { WEAPONS, WeaponDef } from "shared/data/weapons";
@@ -43,160 +50,93 @@ import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS, SkillDef } from "shared/data/skills";
 import { ItemKind } from "shared/data/kinds";
 import { costumeForEquip } from "shared/data/shop";
-import { PlayerSaveData, equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
-// the glyph is the item's icon, drawn by the kit so that the rows here and the item card draw the same one
-import { Glyph, ItemCard, ItemCardHandle, ItemCardModel, kindTone, makeGlyph, setGlyph } from "./itemCard";
+import { iconOf, skillIconOf } from "shared/data/itemIcons";
+import { langGet } from "shared/data/lang";
+import { weaponReserve } from "shared/game/player";
+import { equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
+import { BagGrid, BagTile, GRID_H, GRID_W, TileModel } from "./bagGrid";
+import { BagPanel, PanelModel } from "./bagPanel";
+import { ItemCard, ItemCardHandle, ItemCardModel } from "./itemCard";
+import { IconView, drawIcon } from "./itemIcon";
 import * as Info from "./itemInfo";
-import { toast } from "./popup";
-import { GAME, SURFACE, TEXT, THEME, TRANSPARENCY, hex, roleFont, space } from "./theme";
+import { popup, toast } from "./popup";
+import { GAME, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import { SCHEME_TOUCH, currentScheme } from "./tutorial";
-import {
-	BUTTON_SIZE,
-	Badge,
-	Button,
-	ButtonVariant,
-	Card,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-	ListRowButton,
-	RowPool,
-	ScrollList,
-	Separator,
-	Sidebar,
-	SidebarHandle,
-	badgeWidth,
-	cardHeaderHeight,
-	fmtInt,
-	fmtNum,
-	makeFrame,
-	makeLabel,
-	makeListRow,
-	makeScreen,
-	makeScrollList,
-	makeSurface,
-	setBadge,
-	setBadgeLook,
-	setButtonEnabled,
-	setButtonVariant,
-	setCardBorder,
-	setLabelColor,
-	setSurface,
-	setVisible,
-	tween,
-	worldTransparency,
-} from "./widgets";
+import * as W from "./widgets";
+import * as Kit from "./window";
 
-const GuiService = game.GetService("GuiService");
 const RunService = game.GetService("RunService");
-const UserInputService = game.GetService("UserInputService");
 
-/** while the Bag is open, how often (s) the page on screen re-checks its data for changes made elsewhere */
+/** while the Bag is open, how often (s) it re-checks the save for changes made elsewhere */
 const SYNC_S = 0.25;
 
-const CAT_NAMES = ["Weapons", "Equipment", "Usables", "Materials", "Craft", "Skills"];
+// ---------------------------------------------------------------- tabs
+
 const CAT_WEAPONS = 0;
 const CAT_EQUIP = 1;
 const CAT_USABLES = 2;
+const CAT_MATERIALS = 3;
 const CAT_CRAFT = 4;
 const CAT_SKILLS = 5;
+/** label (lang.ts) and glyph (itemIcons.ts ICON_GLYPHS) of each tab */
+const TAB_DEFS: Array<[string, string]> = [
+	["Weapons", "weapons"],
+	["Gear", "gear"],
+	["Usables", "usables"],
+	["Materials", "materials"],
+	["Craft", "craft"],
+	["Skills", "skills"],
+];
 
-const LEVEL_LIST = 2;
-const LEVEL_DETAIL = 3;
-const LEVEL_RECIPE = 4;
-const LEVEL_SKILLS = 5;
+// ---------------------------------------------------------------- layout (window design units)
 
-// layout (design units; the panel is a 1000 x 570 design space)
-const PANEL_W = 1000;
-const PANEL_H = 570;
-const PAD = space(5);
-const ICON_W = BUTTON_SIZE.icon.h;
-/**
- * Header = the kit's title strip (CardHeader): inset space(2) from the panel edge and
- * ceil(TEXT.xl2 * 1.3) + space(3) tall. The strip draws the centred title; the skill points badge and the
- * key cap / back / close buttons are laid over it (HEADER_Z), inside the width HEADER_ACTION reserves.
- */
-const STRIP_INSET = space(2);
-const HEADER_Y = STRIP_INSET;
-const HEADER_H = math.ceil(TEXT.xl2 * 1.3) + space(3);
-/** icon buttons hang space(1) below the strip's top edge, like the kit's Dialog close button */
-const HEADER_BTN_Y = HEADER_Y + space(1);
-/** the badge and the buttons sit above the strip and its title */
-const HEADER_Z = 4;
-const SP_W = 72;
-const BADGE_H = 24;
-/** the keyboard prompt of the reference art: a key cap next to the buttons it drives */
-const KEY_HINT = "B";
-const KEY_W = badgeWidth(KEY_HINT, TEXT.sm, BADGE_H);
-/** width the strip's title gives up on each side so it never runs into the badge or the buttons */
-const HEADER_ACTION = space(1) + ICON_W + space(2) + ICON_W + space(2) + KEY_W + space(2);
-const BODY_Y = cardHeaderHeight(TEXT.xl2);
-const BODY_H = PANEL_H - PAD - BODY_Y;
-// category sidebar on the left, content on the right
-const NAV_W = 180;
-const NAV_ITEM_H = 44;
-const CONTENT_X = PAD + NAV_W + space(5);
-const CONTENT_W = PANEL_W - PAD - CONTENT_X;
-const CONTENT_H = BODY_H;
-// list rows: glyph + two text lines (name, info) + right-hand columns
-const ROW_H = 56;
-const ROW_PAD = space(4);
-const GLYPH = 36;
-const ROW_TEXT_X = ROW_PAD + GLYPH + space(3);
-const COUNT_W = 96;
-/** item rows: the count column at the right, the EQUIPPED badge left of it */
-const ITEM_COUNT_X = CONTENT_W - ROW_PAD - COUNT_W;
-const ITEM_BADGE_W = badgeWidth("EQUIPPED", TEXT.sm, BADGE_H);
-const ITEM_BADGE_X = ITEM_COUNT_X - space(3) - ITEM_BADGE_W;
-const STATION_W = 92;
-const STATUS_W = 72;
-const PLUS_W = 72;
-const LEVEL_W = 76;
-const PIP_W = 20;
-const PIP_H = 8;
-const PIP_GAP = 6;
-const MAX_PIPS = SKILLS.reduce((m, sk) => math.max(m, sk.maxLevel), 1);
-/** the status line above the craft / skills lists (a well, not the panel's title strip) */
-const NOTICE_H = 36;
-const LIST_GAP = space(2);
-// detail pages
-const CHIP_W = 142;
-const CHIP_H = 64;
-const CHIP_GAP = space(3);
-const ACTION_W = 220;
-const ACTION_H = BUTTON_SIZE.lg.h;
-const ING_W = 440;
-const ING_H = 40;
-const ING_COUNT_W = 110;
-/** most ingredients a recipe has: the recipe page builds that many lines with itself */
-const MAX_INGREDIENTS = CRAFT_RECIPES.reduce((m, r) => math.max(m, r.ingredients.size()), 1);
-/** item page: the item card at the left, the survivor's side of it (owned, equipped, the action) at the right */
-const ITEM_CARD_W = 380;
-const SIDE_X = ITEM_CARD_W + space(6);
-const SIDE_W = CONTENT_W - SIDE_X;
-/** the tooltip card over an item list: at the list's right edge, level with the row it describes */
-const TIP_W = 340;
-/** above the pages of the content area (ZIndexBehavior.Sibling: a sibling draws over all of a lower one) */
-const TIP_Z = 10;
+const WIN_W = 1000;
+const WIN_H = 585;
+const PAD = space(6);
+const TAB_H = 38;
+const TAB_GAP = space(3);
+/** a tab's glyph, at its left; the label is centred in what is left */
+const TAB_ICON = 16;
+const TAB_ICON_X = 14;
+const TAB_LABEL_X = TAB_ICON_X + TAB_ICON + 2;
+/** the Skills tab's badge (unspent points), inside the tab at its right */
+const BADGE_W = 24;
+const BADGE_H = 20;
+/** between the grid and the panel */
+const COL_GAP = space(4);
+/** the tooltip card over the grid */
+const TIP_W = 300;
+const TIP_Z = 30;
 
-interface ItemEntry {
-	kind: number;
-	id: number;
-	name: string;
-	info: string;
-	count: string;
-	/** `count` is a quantity ("x 3"), not a word ("Default", "Costume") */
-	numeric: boolean;
-	equipped: boolean;
-}
+/** the help of the "?" ("#" = a new line) */
+const HELP_TEXT = [
+	"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.",
+	"Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.",
+	"Level up to earn skill points, and spend them in Skills.",
+	"The backpack and the menu never stop the world: open them somewhere safe.",
+].join("#");
 
-// ---------------------------------------------------------------- data helpers (the shared ones: itemInfo.ts)
+/** what an item tab says when it is empty (the old list's copy), and whether it offers Open Craft */
+const EMPTY: Array<[string, string, string, boolean]> = [
+	["No weapons yet", "Find them in buildings or craft them in the Craft tab.", "cat_blade", true],
+	[
+		"No equipment yet",
+		"Find it in buildings, craft it in the Craft tab, or unlock outfits and pets in the shop.",
+		"cat_jacket",
+		true,
+	],
+	["No usables yet", "Search buildings and fallen zombies for food and medicine.", "cat_meal", false],
+	[
+		"No materials yet",
+		"Gather wood, stone and scrap while you explore. Materials are used in the Craft tab.",
+		"wood",
+		false,
+	],
+];
+
+// ---------------------------------------------------------------- data helpers
 
 const nameOf = Info.nameOf;
-
-function slotValue(save: PlayerSaveData, slot: number): number {
-	return equippedIn(save, slot);
-}
 
 function stationName(r: CraftRecipe): string {
 	const desk = r.needsPro ? "Pro craft desk" : r.needsDesk ? "Craft desk" : "";
@@ -204,12 +144,12 @@ function stationName(r: CraftRecipe): string {
 	return desk === "" ? "Hand craft" : desk;
 }
 
-/** short station tag for lists */
-function stationTag(r: CraftRecipe): string {
-	if (r.needsPro) return "Pro desk";
-	if (r.needsDesk) return "Desk";
-	if (r.needsFire === true) return "Fire";
-	return "Hand";
+/** the glyph of a recipe's station (ICON_GLYPHS) */
+function stationGlyph(r: CraftRecipe): string {
+	if (r.needsPro) return "pro";
+	if (r.needsDesk) return "desk";
+	if (r.needsFire === true) return "fire";
+	return "hand";
 }
 
 function recipeMaking(kind: number, index: number): CraftRecipe | undefined {
@@ -219,334 +159,37 @@ function recipeMaking(kind: number, index: number): CraftRecipe | undefined {
 	return undefined;
 }
 
-function escapeRich(s: string): string {
-	return s.gsub("&", "&amp;")[0].gsub("<", "&lt;")[0].gsub(">", "&gt;")[0];
+/** "×3" */
+function times(n: number): string {
+	return `×${W.fmtInt(n)}`;
 }
 
-function colorTag(c: Color3, text: string): string {
-	return `<font color="${hex(c)}">${escapeRich(text)}</font>`;
+/** the tab a key's item lives in (an item key is "kind:id") */
+function keyParts(key: string): [string, number] {
+	const parts = key.split(":");
+	return [parts[0] ?? "", tonumber(parts[1]) ?? -1];
 }
 
-// ---------------------------------------------------------------- small local widgets
-
-/** first text line of a row: the name (SemiBold, stays legible on the accent hover) */
-function rowTitle(row: GuiObject, x: number, text: string, w: number, color: Color3): TextLabel {
-	return makeLabel(row, "Name", text, x, space(2), w, 22, TEXT.base, color, {
-		font: "heading",
-		align: "left",
-		zIndex: 2,
-	});
-}
-
-/** second text line of a row: stats / ingredients / description */
-function rowSubtitle(row: GuiObject, x: number, text: string, w: number, rich = false): TextLabel {
-	return makeLabel(row, "Info", text, x, 31, w, 18, TEXT.sm, THEME.mutedForeground, {
-		weight: Enum.FontWeight.Medium,
-		align: "left",
-		rich,
-		zIndex: 2,
-	});
-}
-
-/** stat tile of the recipe page: small caption over a monospaced value */
-interface Chip {
-	frame: Frame;
-	caption: TextLabel;
-	value: TextLabel;
-}
-
-function makeChip(parent: Instance, name: string, x: number, y: number): Chip {
-	const frame = Card(parent, name, { x, y, w: CHIP_W, h: CHIP_H, variant: "muted" });
-	const inner = CHIP_W - space(7);
-	const caption = makeLabel(frame, "Caption", "", space(3.5), space(2.5), inner, 16, TEXT.xs, THEME.mutedForeground, {
-		weight: Enum.FontWeight.Medium,
-		align: "left",
-	});
-	const value = makeLabel(frame, "Value", "", space(3.5), 30, inner, 24, TEXT.xl, THEME.foreground, {
-		font: "numeric",
-		align: "left",
-	});
-	return { frame, caption, value };
-}
-
-/** thin status line above the craft / skills lists: a well with a coloured pixel chip + one line of text */
-interface Notice {
-	dot: Frame;
-	text: TextLabel;
-}
-
-function makeNotice(parent: Frame): Notice {
-	const notice = Card(parent, "Notice", { x: 0, y: 0, w: CONTENT_W, h: NOTICE_H, variant: "muted" });
-	const d = space(2);
-	const dot = makeSurface(notice, "Dot", space(3.5), (NOTICE_H - d) / 2, d, d, "well", {
-		fill: THEME.mutedForeground,
-		border: THEME.mutedForeground,
-		zIndex: 2,
-	});
-	const textX = space(3.5) + d + space(2.5);
-	// muted-foreground (#818c96) on the well fill (#0e0f11) is 5.6:1
-	const text = makeLabel(
-		notice,
-		"Text",
-		"",
-		textX,
-		0,
-		CONTENT_W - textX - space(3),
-		NOTICE_H,
-		TEXT.sm,
-		THEME.mutedForeground,
-		{ align: "left", zIndex: 2 },
-	);
-	return { dot, text };
-}
-
-function setNotice(n: Notice, text: string, dot: Color3): void {
-	setSurface(n.dot, "well", { fill: dot, border: dot });
-	n.text.Text = text;
-}
-
-// ---------------------------------------------------------------- pages (built once, then updated in place)
-
-/**
- * A page of the content area (one tab's list, the item detail, the recipe detail): built the first time it is
- * shown, then only shown / hidden and rewritten in place.
- */
-interface Page {
-	frame: Frame;
-	/**
-	 * Brings the page up to date with the save: computes what it should show (plain data, no Instance) and,
-	 * only when that differs from what it shows now, writes it onto the page's existing objects.
-	 */
-	sync: () => void;
-	/** the page's scroll list; its position is kept while the page is hidden */
-	list?: ScrollList;
-	scroll?: Vector2;
-}
-
-/**
- * A pooled row of an item list; `entry` is the item it shows now (its click opens that one). The equipped
- * marks (bar + badge) are made the first time the row shows an equipped item.
- */
-interface ItemRow {
-	frame: TextButton;
-	/** the tab (CAT_*) whose list the row is in */
-	cat: number;
-	glyph: Glyph;
-	name: TextLabel;
-	info: TextLabel;
-	count: TextLabel;
-	mark?: Frame;
-	equipped?: Frame;
-	/** entryKey() of what the row shows ("" = blank) */
-	key: string;
-	entry?: ItemEntry;
-}
-
-/** which item a row of an item list is (the row pool's key) */
-function itemId(e: ItemEntry): string {
-	return `${e.kind}:${e.id}`;
-}
-
-/** everything an item row shows (two entries with the same key draw the same row) */
-function entryKey(e: ItemEntry): string {
-	return `${e.kind}:${e.id}:${e.name}:${e.info}:${e.count}:${e.numeric}:${e.equipped}`;
-}
-
-/** a pooled row of the craft list; `recipeId` is the recipe it shows now */
-interface RecipeRow {
-	frame: TextButton;
-	glyph: Glyph;
-	name: TextLabel;
-	info: TextLabel;
-	station: Frame;
-	status: TextLabel;
-	/** the ingredient line with its colours, and the plain one the accent hover shows */
-	rich: string;
-	plain: string;
-	key: string;
-	recipeId: number;
-}
-
-/** one row per skill (the skill list never changes); the MAX badge and the + button are made when first needed */
-interface SkillRow {
-	frame: Frame;
-	name: TextLabel;
-	pips: Array<Frame>;
-	level: TextLabel;
-	plus?: TextButton;
-	max?: Frame;
-	key: string;
-}
-
-/** what the one action button of a detail page says and does */
+/** what the item panel's button says and does */
 interface DetailAction {
 	text: string;
-	variant: ButtonVariant;
+	variant: W.ButtonVariant;
 	enabled: boolean;
 	run: () => void;
 }
 
-/**
- * The page's action button (centred at the bottom). Hierarchy: the real action of the page (Equip / Use /
- * Craft) is "default", the raised `primary` (green) plate of the reference art; neutral actions (Unequip,
- * Open Craft) are "secondary"; anything impossible is disabled, which the kit draws as a well with muted
- * text (~5.6:1) and whose label says why.
- */
-function detailAction(text: string, variant: ButtonVariant, enabled: boolean, run: () => void): DetailAction {
+const noop = (): void => {};
+
+function detailAction(text: string, variant: W.ButtonVariant, enabled: boolean, run: () => void): DetailAction {
 	return { text, variant, enabled, run };
 }
 
-const noop = (): void => {};
-
-/** what a detail page (item or recipe) shows, computed from the save */
-interface DetailModel {
-	caption: string;
-	name: string;
-	equipped: boolean;
-	stats: Array<[string, string]>;
-	act: DetailAction;
-}
-
-/**
- * What the item page shows for one item: the item card (what the item is) and the survivor's side of it (how many,
- * whether it is worn, what equipping it replaces, the action).
- */
-interface ItemDetailModel {
+/** the survivor's side of an item: the card (what it is), the key (how many / equipped), a line, the action */
+interface ItemDetail {
 	card: ItemCardModel;
-	equipped: boolean;
-	owned: string;
-	ownedColor: Color3;
+	state: string;
 	help: string;
 	act: DetailAction;
-}
-
-interface IngredientModel {
-	name: string;
-	count: string;
-	tone: Color3;
-}
-
-interface RecipeModel extends DetailModel {
-	ingredients: Array<IngredientModel>;
-	station: string;
-	stationColor: Color3;
-	stationBorder: Color3;
-	hint: string;
-}
-
-/** signature of what a detail page draws (the button's handler is not drawn: it is refreshed on every sync) */
-function detailSig(m: DetailModel): string {
-	let s = `${m.caption}|${m.name}|${m.equipped}|${m.act.text}|${m.act.variant}|${m.act.enabled}`;
-	for (const [caption, value] of m.stats) s += `|${caption}=${value}`;
-	return s;
-}
-
-/** header, stat chips and action button: the part the item and recipe pages share */
-interface DetailView {
-	parent: Frame;
-	caption: TextLabel;
-	name: TextLabel;
-	equipped: Frame;
-	chips: Array<Chip>;
-	action: TextButton;
-	/** what the action button does now */
-	run: () => void;
-}
-
-function makeDetailView(parent: Frame, chips: number): DetailView {
-	const caption = makeLabel(parent, "Caption", "", 0, 0, CONTENT_W - 120, 20, TEXT.sm, THEME.mutedForeground, {
-		font: "label",
-		align: "left",
-	});
-	const name = makeLabel(parent, "Name", "", 0, 24, CONTENT_W - 120, 44, TEXT.xl3, THEME.foreground, {
-		font: "title",
-		align: "left",
-	});
-	const h = 26;
-	const w = badgeWidth("EQUIPPED", TEXT.sm, h);
-	const equipped = Badge(parent, "Equipped", "EQUIPPED", {
-		x: CONTENT_W - w,
-		y: 24 + (44 - h) / 2,
-		w,
-		h,
-		textSize: TEXT.sm,
-		color: GAME.success,
-	});
-	equipped.Visible = false;
-	const list: Array<Chip> = [];
-	for (let i = 0; i < chips; i++) list.push(makeChip(parent, `Stat${i}`, i * (CHIP_W + CHIP_GAP), 88));
-	let view: DetailView | undefined;
-	const action = Button(parent, "Action", "", {
-		x: (CONTENT_W - ACTION_W) / 2,
-		y: CONTENT_H - ACTION_H - space(3),
-		w: ACTION_W,
-		size: "lg",
-		variant: "default",
-		onClick: (): void => view?.run(),
-	});
-	view = { parent, caption, name, equipped, chips: list, action, run: noop };
-	return view;
-}
-
-function applyDetail(v: DetailView, m: DetailModel): void {
-	v.caption.Text = m.caption;
-	v.name.Text = m.name;
-	v.equipped.Visible = m.equipped;
-	// a model with more stats than the page ever showed grows it (the recipe page is built with 3)
-	while (v.chips.size() < m.stats.size()) {
-		const i = v.chips.size();
-		v.chips.push(makeChip(v.parent, `Stat${i}`, i * (CHIP_W + CHIP_GAP), 88));
-	}
-	for (let i = 0; i < v.chips.size(); i++) {
-		const chip = v.chips[i];
-		const stat = m.stats[i];
-		chip.frame.Visible = stat !== undefined;
-		if (stat === undefined) continue;
-		chip.caption.Text = stat[0].upper();
-		chip.value.Text = stat[1];
-	}
-	v.action.Text = m.act.text;
-	setButtonVariant(v.action, m.act.variant);
-	setButtonEnabled(v.action, m.act.enabled);
-}
-
-/** one line of the recipe page's ingredient list */
-interface IngredientLine {
-	frame: Frame;
-	name: TextLabel;
-	count: TextLabel;
-}
-
-function makeIngredientLine(parent: Frame, i: number): IngredientLine {
-	const frame = Card(parent, `Ing${i}`, {
-		x: 0,
-		y: 196 + i * (ING_H + space(2)),
-		w: ING_W,
-		h: ING_H,
-		variant: "muted",
-		border: SURFACE.line,
-	});
-	const nameW = ING_W - space(8) - ING_COUNT_W;
-	const name = makeLabel(frame, "Name", "", space(4), 0, nameW, ING_H, TEXT.base, THEME.foreground, {
-		align: "left",
-	});
-	const count = makeLabel(
-		frame,
-		"Count",
-		"",
-		ING_W - space(4) - ING_COUNT_W,
-		0,
-		ING_COUNT_W,
-		ING_H,
-		TEXT.base,
-		THEME.foreground,
-		{
-			font: "numeric",
-			align: "right",
-		},
-	);
-	frame.Visible = false;
-	return { frame, name, count };
 }
 
 // ---------------------------------------------------------------- backpack
@@ -567,41 +210,35 @@ export class Backpack {
 
 	private ctx: GameContext;
 	private root: Frame | undefined;
-	private panel: Frame | undefined;
-	/** where the panel rests (the entrance slides it up to here) */
-	private panelAt = new UDim2();
-	private content: Frame | undefined;
-	private spBadge: Frame | undefined;
-	private keyHint: Frame | undefined;
-	private backBtn: TextButton | undefined;
-	private nav: SidebarHandle | undefined;
+	private win: Frame | undefined;
+	/** where the window rests (the entrance slides it up to here) */
+	private winAt = new UDim2();
+	/** where the grids and the panel start (window design units) */
+	private bodyY = 0;
+	private tabs: W.TabsHandle | undefined;
+	private skillBadge: Frame | undefined;
+	/** one grid per tab, built the first time the tab is shown */
+	private grids: Array<BagGrid | undefined> = [];
+	private panel: BagPanel | undefined;
+	/** the selected item of each tab (a TileModel key; "" = none) */
+	private selected: Array<string> = ["", "", "", "", "", ""];
+	/** what the panel's button does now */
+	private run: () => void = noop;
 	private opened = false;
-	/** the pages built so far, by pageKey(): built when first shown, kept while the window lives */
-	private pages = new Map<string, Page>();
-	/** the page on screen */
-	private page: Page | undefined;
-	/** what the header shows ("" = not drawn yet); it is rewritten only when this changes */
+	private cat = CAT_WEAPONS;
 	private headerSig = "";
 	private syncConn: RBXScriptConnection | undefined;
 	private syncClock = 0;
-	private level = LEVEL_LIST;
-	private cat = CAT_WEAPONS;
-	private selItem = 0;
-	private selKind = 0;
-	private selRecipe = 0;
-	/** the item card over an item list, built the first time a row is pointed at or selected (refreshTip) */
+	/** the item card over the grid: the tile under the mouse, if it is not the selected one */
 	private tip: ItemCardHandle | undefined;
-	/** where the tooltip was put last (screen px from the content's top; -1 = never) */
-	private tipY = -1;
-	/** the item row under the pointer, and the item row the pad / keyboard has selected */
-	private hoverRow: ItemRow | undefined;
-	private focusRow: ItemRow | undefined;
-	/** every item row by its button: a selection that is one of them shows that row's card */
-	private itemRows = new Map<GuiObject, ItemRow>();
-	private selectionConn: RBXScriptConnection | undefined;
+	private hoverTile: BagTile | undefined;
 
 	constructor(ctx: GameContext) {
 		this.ctx = ctx;
+	}
+
+	private tr(key: string): string {
+		return langGet(key, this.ctx.save.settings.langType);
 	}
 
 	isOpen(): boolean {
@@ -610,34 +247,29 @@ export class Backpack {
 
 	open(): void {
 		if (this.opened) return;
-		// reopen on the last tab (Weapons the first time), always at its list and scrolled to the top
-		this.level = this.cat === CAT_SKILLS ? LEVEL_SKILLS : LEVEL_LIST;
 		// the window is built once, and again only if something destroyed it
 		let root = this.root;
 		if (root === undefined || root.Parent === undefined) root = this.mount();
-		for (const [, page] of this.pages) {
-			page.scroll = undefined;
-			if (page.list !== undefined) page.list.frame.CanvasPosition = new Vector2();
-		}
-		// the key cap is for keyboards (one can be plugged in between two opens)
-		if (this.keyHint !== undefined) this.keyHint.Visible = UserInputService.KeyboardEnabled;
+		// reopen on the last tab, every grid scrolled to the top
+		for (const g of this.grids) if (g !== undefined) g.list.frame.CanvasPosition = new Vector2();
 		this.opened = true;
 
-		// entrance: fade the scrim in, slide the panel up a little. The scrim only DIMS the street (UI-06: the
-		// Bag pauses nothing, so what is coming has to stay visible round the panel), and it goes through
+		// entrance: fade the scrim in, slide the window up a little. The scrim only DIMS the street (UI-06: the Bag
+		// pauses nothing, so what is coming has to stay visible round the window), and it goes through
 		// worldTransparency like every surface over the world, so the player's Background Transparency holds
 		root.BackgroundTransparency = 1;
-		tween(root, 0.15, { BackgroundTransparency: worldTransparency(TRANSPARENCY.overWorld) });
-		const panel = this.panel;
-		if (panel !== undefined) {
-			panel.Position = this.panelAt.add(UDim2.fromScale(0, 0.025));
-			tween(panel, 0.18, { Position: this.panelAt });
+		W.tween(root, 0.15, { BackgroundTransparency: W.worldTransparency(TRANSPARENCY.overWorld) });
+		const win = this.win;
+		if (win !== undefined) {
+			win.Position = this.winAt.add(UDim2.fromScale(0, 0.025));
+			W.tween(win, 0.18, { Position: this.winAt });
 		}
-		setVisible(root, true);
+		W.setVisible(root, true);
 		this.rebuild();
+		this.focusSelection();
 
-		// While open, the page on screen checks its data a few times a second: a server reply, an admin patch or
-		// a new save from the server changes the save without going through this class, and must still show.
+		// While open, the Bag checks the save a few times a second: a server reply, an admin patch or a new save
+		// from the server changes it without going through this class, and must still show.
 		this.syncClock = 0;
 		this.syncConn = RunService.Heartbeat.Connect((dt: number): void => {
 			this.syncClock += dt;
@@ -652,540 +284,402 @@ export class Backpack {
 		this.opened = false;
 		this.syncConn?.Disconnect();
 		this.syncConn = undefined;
-		// hidden, not destroyed: the next open() shows this window and its pages again, as they are
-		if (this.root !== undefined) setVisible(this.root, false);
-		this.hoverRow = undefined;
-		this.focusRow = undefined;
+		// hidden, not destroyed: the next open() shows this window again, as it is
+		if (this.root !== undefined) W.setVisible(this.root, false);
+		this.hoverTile = undefined;
 		this.refreshTip();
 	}
 
-	/** builds the window: title strip, category rail, an empty content area (the pages come as they are shown) */
+	/** builds the window: header, tabs and the panel (the grids come as their tabs are shown) */
 	private mount(): Frame {
-		this.pages.clear();
-		this.page = undefined;
-		this.headerSig = "";
-		this.itemRows.clear();
+		this.grids = [];
+		this.panel = undefined;
 		this.tip = undefined;
-		this.tipY = -1;
-		this.hoverRow = undefined;
-		this.focusRow = undefined;
-		// the pad's selection moving onto an item row shows that row's card (one connection for the Bag's life)
-		if (this.selectionConn === undefined) {
-			this.selectionConn = GuiService.GetPropertyChangedSignal("SelectedObject").Connect((): void => {
-				const selected = GuiService.SelectedObject;
-				this.focusRow = selected !== undefined ? this.itemRows.get(selected) : undefined;
-				this.refreshTip();
-			});
-		}
-		const screen = makeScreen(this.ctx.uiLayer, "Backpack", {
+		this.hoverTile = undefined;
+		this.headerSig = "";
+		const screen = W.makeScreen(this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
 			transparency: TRANSPARENCY.overWorld,
 			zIndex: 200,
 		});
 		this.root = screen.root;
-		const panel = Card(screen.body, "Panel", { x: 60, y: 30, w: PANEL_W, h: PANEL_H });
-		this.panel = panel;
-		this.panelAt = panel.Position;
-
-		// header: the title strip, with the skill points at its left and the key cap / back / close at its right
-		const contentY = CardHeader(panel, "Backpack", undefined, { action: HEADER_ACTION });
-		this.spBadge = Badge(panel, "SkillPoints", "", {
-			x: STRIP_INSET + space(2),
-			y: HEADER_Y + (HEADER_H - BADGE_H) / 2,
-			w: SP_W,
-			h: BADGE_H,
-			textSize: TEXT.sm,
-			color: GAME.xp,
-			zIndex: HEADER_Z,
+		const win = Kit.Window(screen.body, "Window", {
+			x: (W.DESIGN_W - WIN_W) / 2,
+			y: math.floor((W.DESIGN_H - WIN_H) / 2),
+			w: WIN_W,
+			h: WIN_H,
+			title: this.tr("Backpack"),
+			onClose: (): void => this.close(),
+			onHelp: (): void => {
+				popup(this.ctx, this.tr("Backpack"), W.nl(this.tr(HELP_TEXT)), [
+					{ text: this.tr("Close"), variant: "secondary" },
+				]);
+			},
 		});
-		const closeX = PANEL_W - STRIP_INSET - space(1) - ICON_W;
-		const navX = closeX - space(2) - ICON_W;
-		// a raised key cap (Badge "default"), not a caption: muted text would not clear 4.5:1 on the strip
-		this.keyHint = Badge(panel, "KeyHint", KEY_HINT, {
-			x: navX - space(2) - KEY_W,
-			y: HEADER_Y + (HEADER_H - BADGE_H) / 2,
-			w: KEY_W,
-			h: BADGE_H,
-			textSize: TEXT.sm,
-			zIndex: HEADER_Z,
-		});
-		this.backBtn = Button(panel, "Nav", "<", {
-			x: navX,
-			y: HEADER_BTN_Y,
-			w: ICON_W,
-			size: "icon",
-			variant: "secondary",
-			zIndex: HEADER_Z,
-			onClick: (): void => this.goBack(),
-		});
-		Button(panel, "Close", "X", {
-			x: closeX,
-			y: HEADER_BTN_Y,
-			w: ICON_W,
-			size: "icon",
-			variant: "destructive",
-			zIndex: HEADER_Z,
-			onClick: (): void => this.close(),
-		});
-
-		// categories: sidebar on the left (contentY is BODY_Y: the strip's height comes from the kit)
-		const nav = Sidebar(panel, "Categories", {
-			x: PAD,
-			y: contentY,
-			w: NAV_W,
-			h: BODY_H,
-			items: CAT_NAMES,
-			value: this.cat,
-			itemH: NAV_ITEM_H,
-			textSize: TEXT.base,
-			onChange: (index: number): void => this.selectCat(index),
-		});
-		this.nav = nav;
-		this.content = makeFrame(panel, "Content", CONTENT_X, contentY, CONTENT_W, CONTENT_H, THEME.card, {
-			transparency: 1,
-		});
+		this.win = win.frame;
+		this.winAt = win.frame.Position;
+		const tabsY = win.contentY + space(1);
+		this.mountTabs(win.frame, tabsY);
+		const bodyY = tabsY + TAB_H + space(3);
+		this.bodyY = bodyY;
+		const panelX = PAD + GRID_W + COL_GAP;
+		this.panel = new BagPanel(win.frame, "Details", panelX, bodyY, WIN_W - PAD - panelX, GRID_H, (k: string) =>
+			this.tr(k),
+		);
+		this.panel.onAction = (): void => this.run();
 		return screen.root;
+	}
+
+	/** the reference's tab bar: one plate per tab, each with its glyph; the Skills tab carries the points badge */
+	private mountTabs(parent: Frame, y: number): void {
+		const names = TAB_DEFS.map(([label]) => this.tr(label));
+		const widths = names.map((n, i) => W.tabWidth(n) + TAB_LABEL_X - space(4) + (i === CAT_SKILLS ? BADGE_W : 0));
+		let total = 0;
+		for (const w of widths) total += w;
+		total += TAB_GAP * (widths.size() - 1);
+		const tabs = W.Tabs(parent, "Tabs", {
+			x: PAD,
+			y,
+			w: total,
+			h: TAB_H,
+			items: names,
+			widths,
+			value: this.cat,
+			gap: TAB_GAP,
+			onChange: (i: number): void => this.selectCat(i),
+		});
+		this.tabs = tabs;
+		for (let i = 0; i < tabs.triggers.size(); i++) {
+			const t = tabs.triggers[i];
+			const w = widths[i];
+			const glyph = IconView(t, "Glyph", TAB_ICON_X, (TAB_H - TAB_ICON) / 2, TAB_ICON, t.ZIndex + 1);
+			drawIcon(glyph, TAB_DEFS[i][1], { ink: THEME.foreground });
+			// the label is centred in the room right of the glyph (and left of the badge)
+			const label = t.FindFirstChild("Label");
+			if (label !== undefined) {
+				const pad = new Instance("UIPadding");
+				pad.PaddingLeft = new UDim(TAB_LABEL_X / w, 0);
+				pad.PaddingRight = new UDim((i === CAT_SKILLS ? BADGE_W + 8 : 8) / w, 0);
+				pad.Parent = label;
+			}
+			if (i === CAT_SKILLS) {
+				this.skillBadge = W.Badge(t, "Points", "", {
+					x: w - BADGE_W - 8,
+					y: (TAB_H - BADGE_H) / 2,
+					w: BADGE_W,
+					h: BADGE_H,
+					color: GAME.xp,
+					textSize: TEXT.xs,
+					zIndex: t.ZIndex + 2,
+				});
+				this.skillBadge.Visible = false;
+			}
+		}
 	}
 
 	// ------------------------------------------------------------ navigation
 
 	private selectCat(index: number): void {
+		if (index === this.cat) return;
 		this.cat = index;
-		this.level = index === CAT_SKILLS ? LEVEL_SKILLS : LEVEL_LIST;
+		this.hoverTile = undefined;
+		this.rebuild();
+		this.focusSelection();
+	}
+
+	/** a tile of the tab on screen was clicked / tapped / reached with the pad */
+	private select(key: string): void {
+		if (this.selected[this.cat] === key) return;
+		this.selected[this.cat] = key;
 		this.rebuild();
 	}
 
-	private goBack(): void {
-		if (this.level === LEVEL_DETAIL || this.level === LEVEL_RECIPE) {
-			this.level = LEVEL_LIST;
-			this.rebuild();
-			return;
-		}
-		this.close();
-	}
-
-	private openDetail(kind: number, id: number): void {
-		this.selKind = kind;
-		this.selItem = id;
-		this.level = LEVEL_DETAIL;
-		this.rebuild();
-	}
-
-	private openRecipe(recipeId: number): void {
-		this.selRecipe = recipeId;
-		this.level = LEVEL_RECIPE;
-		this.rebuild();
+	/** with a pad, the selection lands on the selected tile (or the first), so the Bag is usable without a mouse */
+	private focusSelection(): void {
+		const grid = this.grids[this.cat];
+		const t = grid?.tileOf(this.selected[this.cat]) ?? grid?.itemTiles()[0];
+		if (t !== undefined) W.autoFocus(t.button);
+		else if (this.panel !== undefined) W.autoFocus(this.panel.button());
 	}
 
 	private refreshHeader(): void {
 		const sp = this.ctx.save.skillPoint;
-		const inDetail = this.level === LEVEL_DETAIL || this.level === LEVEL_RECIPE;
-		const sig = `${sp}|${this.cat}|${inDetail}`;
+		const sig = `${sp}|${this.cat}`;
 		if (sig === this.headerSig) return;
 		this.headerSig = sig;
-		if (this.spBadge !== undefined) {
-			// xp badge while there are points to spend, secondary otherwise
-			setBadge(this.spBadge, `SP ${sp}`, sp > 0 ? GAME.xp : THEME.secondary);
+		this.tabs?.setActive(this.cat);
+		const badge = this.skillBadge;
+		if (badge !== undefined) {
+			badge.Visible = sp > 0;
+			if (sp > 0) W.setBadge(badge, sp > 9 ? "9+" : `${sp}`);
 		}
-		// unspent skill points on the Skills item of the rail
-		this.nav?.setBadge(
-			CAT_SKILLS,
-			sp > 0 && this.cat !== CAT_SKILLS ? (sp > 9 ? "9+" : `${sp}`) : undefined,
-			GAME.xp,
-		);
-		this.nav?.setActive(this.cat);
-		if (this.backBtn !== undefined) setButtonEnabled(this.backBtn, inDetail);
 	}
 
 	/**
-	 * Brings the screen up to date: the header, then the page of the current level / tab (built the first time it
-	 * is needed; the previous page is only hidden), which rewrites itself only if its data changed. Every action,
-	 * every navigation and the open Bag's periodic check call this, and it is cheap when nothing changed. (The
-	 * name is from when it destroyed the page and built it again.)
+	 * Brings the screen up to date: the header, the grid of the tab on screen (built the first time; the others are
+	 * only hidden) and the panel of its selection. Every write is skipped when nothing changed, so this is cheap to
+	 * call from every action, every navigation and the open Bag's periodic check.
 	 */
 	private rebuild(): void {
-		const content = this.content;
-		if (content === undefined || !this.opened) return;
+		const win = this.win;
+		const panel = this.panel;
+		if (win === undefined || panel === undefined || !this.opened) return;
 		this.refreshHeader();
-		const key = this.pageKey();
-		let page = this.pages.get(key);
-		if (page === undefined) {
-			page = this.mountPage(key, content);
-			this.pages.set(key, page);
+		let grid = this.grids[this.cat];
+		if (grid === undefined) {
+			grid = new BagGrid(win, `Page${this.cat}`, PAD, this.bodyY, {
+				onSelect: (key: string): void => this.select(key),
+				onHover: (tile: BagTile, on: boolean): void => {
+					if (on) this.hoverTile = tile;
+					else if (this.hoverTile === tile) this.hoverTile = undefined;
+					this.refreshTip();
+				},
+			});
+			this.grids[this.cat] = grid;
 		}
-		if (page !== this.page) {
-			if (this.page !== undefined) this.hidePage(this.page);
-			this.page = page;
-			this.showPage(page);
+		for (let i = 0; i < this.grids.size(); i++) {
+			const g = this.grids[i];
+			if (g !== undefined) W.setVisible(g.frame, i === this.cat);
 		}
-		page.sync();
+		const models = this.models(this.cat);
+		grid.render(models);
+		let sel = this.selected[this.cat];
+		if (!models.some(m => m.key === sel)) {
+			sel = models[0]?.key ?? "";
+			this.selected[this.cat] = sel;
+		}
+		grid.setSelected(sel);
+		const [model, run] = this.panelOf(this.cat, sel);
+		this.run = run;
+		panel.set(model);
 		this.refreshTip();
 	}
 
-	// ------------------------------------------------------------ the tooltip card over an item list
-
-	/** a row whose card may show now: on the list of the tab on screen, shown, with an item */
-	private tipCandidate(row: ItemRow | undefined): row is ItemRow {
-		return row !== undefined && row.cat === this.cat && row.frame.Visible && row.entry !== undefined;
-	}
+	// ------------------------------------------------------------ the tooltip card (mouse only)
 
 	/**
-	 * Shows, moves or hides the tooltip card: the item of the row under the pointer (else of the pad's selection),
-	 * level with that row at the list's right edge. Only over an item list, and never on touch, where there is no
-	 * pointer to follow (a tap opens the item page, which has the card). Cheap when nothing changed: the card
-	 * rewrites itself only for another item, and it is moved only when the row moved.
+	 * The card of the item under the mouse, beside its tile: only on an item tab, never for the selected item (its
+	 * card is the panel), never on touch (no pointer) and never for the pad (its cursor selects). One card, built on
+	 * first use and rewritten in place.
 	 */
 	private refreshTip(): void {
-		const content = this.content;
-		let row: ItemRow | undefined;
-		if (this.opened && this.level === LEVEL_LIST && currentScheme() !== SCHEME_TOUCH) {
-			if (this.tipCandidate(this.hoverRow)) row = this.hoverRow;
-			else if (this.tipCandidate(this.focusRow)) row = this.focusRow;
+		const win = this.win;
+		const t = this.hoverTile;
+		const m = t?.model;
+		let card: ItemCardModel | undefined;
+		if (this.opened && win !== undefined && t !== undefined && m !== undefined && this.cat <= CAT_MATERIALS) {
+			const [kind, id] = keyParts(m.key);
+			const onScreen = t.button.Visible && this.grids[this.cat]?.tileOf(m.key) === t;
+			if (onScreen && m.key !== this.selected[this.cat] && currentScheme() !== SCHEME_TOUCH) {
+				card = Info.describeItem(this.ctx.save, tonumber(kind) ?? 0, id, {
+					tag: m.tag ? this.tr("EQUIPPED") : m.count,
+					tagColor: m.tag ? GAME.success : THEME.mutedForeground,
+				});
+			}
 		}
-		const e = row?.entry;
-		const detail = e !== undefined ? this.itemDetail(e.kind, e.id) : undefined;
-		if (content === undefined || row === undefined || e === undefined || detail === undefined) {
-			if (this.tip !== undefined) setVisible(this.tip.frame, false);
+		if (card === undefined || win === undefined || t === undefined) {
+			if (this.tip !== undefined) W.setVisible(this.tip.frame, false);
 			return;
 		}
 		let tip = this.tip;
 		if (tip === undefined) {
-			tip = ItemCard(content, "Tooltip", { x: CONTENT_W - TIP_W, y: 0, w: TIP_W, zIndex: TIP_Z });
+			tip = ItemCard(win, "Tooltip", { x: 0, y: 0, w: TIP_W, zIndex: TIP_Z });
 			this.tip = tip;
-			this.tipY = -1;
 		}
-		// the card covers the row's count and EQUIPPED badge: its tag says them again
-		const card = detail.card;
-		card.tag = e.equipped ? "EQUIPPED" : e.count;
-		card.tagColor = e.equipped ? GAME.success : THEME.mutedForeground;
 		tip.set(card);
-		// screen px from the content's top (the list scrolls under a card that stays put), kept inside the content
-		const k = content.AbsoluteSize.Y / CONTENT_H;
-		const top = row.frame.AbsolutePosition.Y - content.AbsolutePosition.Y;
-		const y = math.round(math.clamp(top, 0, math.max(0, content.AbsoluteSize.Y - tip.height * k)));
-		if (y !== this.tipY) {
-			this.tipY = y;
-			tip.frame.Position = new UDim2((CONTENT_W - TIP_W) / CONTENT_W, 0, 0, y);
+		// beside the tile (right, or left when there is no room), kept inside the window
+		const k = win.AbsoluteSize.X / WIN_W;
+		const b = t.button;
+		let x = PAD + GRID_W + COL_GAP;
+		let y = tip.frame.Position.Y.Scale * WIN_H;
+		if (k > 0) {
+			const left = (b.AbsolutePosition.X - win.AbsolutePosition.X) / k;
+			const right = left + b.AbsoluteSize.X / k;
+			x = right + space(2) + TIP_W <= WIN_W - space(2) ? right + space(2) : left - space(2) - TIP_W;
+			y = (b.AbsolutePosition.Y - win.AbsolutePosition.Y) / k;
 		}
-		setVisible(tip.frame, true);
+		y = math.clamp(y, space(2), math.max(space(2), WIN_H - tip.height - space(2)));
+		tip.frame.Position = UDim2.fromScale(x / WIN_W, y / WIN_H);
+		W.setVisible(tip.frame, true);
 	}
 
-	private pageKey(): string {
-		if (this.level === LEVEL_DETAIL) return "Detail";
-		if (this.level === LEVEL_RECIPE) return "Recipe";
-		return `Tab${this.cat}`;
+	// ------------------------------------------------------------ what the grids show
+
+	private models(cat: number): Array<TileModel> {
+		if (cat === CAT_CRAFT) return this.recipeModels();
+		if (cat === CAT_SKILLS) return this.skillModels();
+		return this.itemModels(cat);
 	}
 
-	private mountPage(key: string, content: Frame): Page {
-		// every page fills the content area; one is visible at a time
-		const frame = makeFrame(content, key, 0, 0, CONTENT_W, CONTENT_H, THEME.card, { transparency: 1 });
-		if (key === "Detail") return this.mountDetail(frame);
-		if (key === "Recipe") return this.mountRecipe(frame);
-		if (this.cat === CAT_SKILLS) return this.mountSkills(frame);
-		if (this.cat === CAT_CRAFT) return this.mountCraft(frame);
-		return this.mountItems(frame, this.cat);
-	}
-
-	private showPage(page: Page): void {
-		setVisible(page.frame, true);
-		// the list kept its place while hidden; restored in case the engine clamped it meanwhile
-		if (page.list !== undefined && page.scroll !== undefined) page.list.frame.CanvasPosition = page.scroll;
-	}
-
-	private hidePage(page: Page): void {
-		if (page.list !== undefined) page.scroll = page.list.frame.CanvasPosition;
-		setVisible(page.frame, false);
-	}
-
-	/** scroll list of a page */
-	private makeList(parent: Frame, y: number, h: number): ScrollList {
-		const list = makeScrollList(parent, "List", 0, y, CONTENT_W, h);
-		// keep the row outlines clear of the ScrollingFrame clipping
-		const pad = list.frame.FindFirstChildOfClass("UIPadding");
-		if (pad !== undefined) {
-			pad.PaddingLeft = new UDim(0, 2);
-			pad.PaddingTop = new UDim(0, 2);
-			pad.PaddingBottom = new UDim(0, 2);
-		}
-		return list;
-	}
-
-	// ------------------------------------------------------------ item tabs
-
-	private itemEntries(cat: number): Array<ItemEntry> {
+	private itemModels(cat: number): Array<TileModel> {
 		const save = this.ctx.save;
-		const out: Array<ItemEntry> = [];
+		const out: Array<TileModel> = [];
+		const tile = (kind: number, id: number, count: string, equipped: boolean, ammo = ""): TileModel => ({
+			key: `${kind}:${id}`,
+			name: this.tr(nameOf(kind, id)),
+			icon: iconOf(kind, id).key,
+			dim: false,
+			equipped,
+			tag: equipped,
+			count,
+			short: false,
+			ammo,
+			corner: "",
+			locked: false,
+			pips: 0,
+			pipsOn: 0,
+		});
 		if (cat === CAT_WEAPONS) {
 			for (const w of WEAPONS) {
 				if (!ownsWeapon(save, w.id)) continue;
-				const count = save.invenWeapon[w.id] ?? 0;
-				let info = `${Info.weaponKindName(w.kind)} · Damage ${Info.damageText(w)}`;
-				if (!Info.isMelee(w)) info += ` · Mag ${fmtInt(w.mag)}`;
-				const isDefault = w.id === 0 && count === 0;
-				out.push({
-					kind: ItemKind.Weapon,
-					id: w.id,
-					name: w.name,
-					info,
-					count: isDefault ? "Default" : `x ${fmtInt(count)}`,
-					numeric: !isDefault,
-					equipped: save.equipWeapon === w.id,
-				});
+				const n = save.invenWeapon[w.id] ?? 0;
+				const ammo = Info.showsReserve(w) ? W.fmtInt(weaponReserve(save, w)) : "";
+				out.push(tile(ItemKind.Weapon, w.id, n > 1 ? times(n) : "", save.equipWeapon === w.id, ammo));
 			}
 		} else if (cat === CAT_EQUIP) {
 			for (const e of EQUIPS) {
 				if (!ownsEquip(save, e.id)) continue;
-				const count = save.invenEquip[e.id] ?? 0;
-				const slot = equipSlotOf(e.id);
-				let info = `${Info.SLOT_NAMES[slot] ?? "-"} slot`;
-				if (e.def !== 0) info += ` · Defense ${fmtNum(e.def)}`;
-				if (e.speed !== 0) info += ` · Speed ${Info.signed(e.speed)}`;
-				out.push({
-					kind: ItemKind.Equip,
-					id: e.id,
-					name: e.name,
-					info,
-					count: count > 0 ? `x ${fmtInt(count)}` : "Costume",
-					numeric: count > 0,
-					equipped: slotValue(save, slot) === e.id,
-				});
+				const n = save.invenEquip[e.id] ?? 0;
+				out.push(
+					tile(ItemKind.Equip, e.id, n > 1 ? times(n) : "", equippedIn(save, equipSlotOf(e.id)) === e.id),
+				);
 			}
 		} else if (cat === CAT_USABLES) {
 			for (const u of USABLES) {
-				const count = save.invenUse[u.id] ?? 0;
-				if (count <= 0) continue;
-				let info = `HP ${Info.signed(u.hp)} · Hunger ${Info.signed(u.hunger)}`;
-				if (u.speed !== 0) info += ` · Speed ${fmtNum(u.speed)} min`;
-				if (u.calm !== 0) info += ` · Calm ${fmtNum(u.calm)} min`;
-				if (u.pain !== 0) info += ` · Pain ${fmtNum(u.pain)} min`;
-				out.push({
-					kind: ItemKind.Use,
-					id: u.id,
-					name: u.name,
-					info,
-					count: `x ${fmtInt(count)}`,
-					numeric: true,
-					equipped: false,
-				});
+				const n = save.invenUse[u.id] ?? 0;
+				if (n > 0) out.push(tile(ItemKind.Use, u.id, times(n), false));
 			}
 		} else {
 			for (let i = Info.MAT_START; i < ETC_ITEMS.size(); i++) {
-				const m = ETC_ITEMS[i];
-				const count = save.invenEtc[m.id] ?? 0;
-				if (count <= 0) continue;
-				const uses = Info.recipesUsing(m.id).size();
+				const n = save.invenEtc[ETC_ITEMS[i].id] ?? 0;
+				if (n > 0) out.push(tile(ItemKind.Etc, ETC_ITEMS[i].id, times(n), false));
+			}
+		}
+		return out;
+	}
+
+	/** the recipes: what can be made now first, then what this station allows, then what needs another station */
+	private recipeModels(): Array<TileModel> {
+		const ready: Array<CraftRecipe> = [];
+		const missing: Array<CraftRecipe> = [];
+		const locked: Array<CraftRecipe> = [];
+		for (const r of CRAFT_RECIPES) {
+			if (!this.recipeAvailable(r)) locked.push(r);
+			else if (this.hasIngredients(r)) ready.push(r);
+			else missing.push(r);
+		}
+		const out: Array<TileModel> = [];
+		for (const group of [ready, missing, locked]) {
+			for (const r of group) {
+				const avail = this.recipeAvailable(r);
+				const n = this.craftable(r);
 				out.push({
-					kind: ItemKind.Etc,
-					id: m.id,
-					name: m.name,
-					info: uses > 0 ? `Material · used in ${uses} recipe${uses === 1 ? "" : "s"}` : "Material",
-					count: `x ${fmtInt(count)}`,
-					numeric: true,
+					key: `r:${r.id}`,
+					name: this.tr(nameOf(r.resultKind, r.resultIndex)),
+					icon: iconOf(r.resultKind, r.resultIndex).key,
+					dim: !avail,
 					equipped: false,
+					tag: false,
+					count: avail ? times(n) : "",
+					short: n === 0,
+					ammo: "",
+					corner: stationGlyph(r),
+					locked: !avail,
+					pips: 0,
+					pipsOn: 0,
 				});
 			}
 		}
 		return out;
 	}
 
-	private mountItems(frame: Frame, cat: number): Page {
-		const list = this.makeList(frame, 0, CONTENT_H);
-		const rows = new RowPool<ItemRow>(list, (l, i) => this.makeItemRow(l, i, cat));
-		// the tooltip stays level with its row while the list scrolls under it
-		list.frame.GetPropertyChangedSignal("CanvasPosition").Connect((): void => this.refreshTip());
-		let empty: Frame | undefined;
-		// signature of the rows on screen: the page's dirty flag (undefined = never drawn)
-		let shown: string | undefined;
+	private skillModels(): Array<TileModel> {
+		const save = this.ctx.save;
+		return SKILLS.map(sk => {
+			const lvl = save.skillLevels[sk.id] ?? 0;
+			return {
+				key: `s:${sk.id}`,
+				name: this.tr(sk.name),
+				icon: skillIconOf(sk.id),
+				dim: lvl === 0,
+				equipped: false,
+				tag: false,
+				count: "",
+				short: false,
+				ammo: "",
+				corner: "",
+				locked: false,
+				pips: sk.maxLevel,
+				pipsOn: lvl,
+			};
+		});
+	}
+
+	// ------------------------------------------------------------ what the panel shows
+
+	/** the panel of tab `cat` with `key` selected, and what its button does */
+	private panelOf(cat: number, key: string): [PanelModel, () => void] {
+		const [head, id] = keyParts(key);
+		if (key !== "" && cat === CAT_CRAFT) {
+			const r = CRAFT_RECIPES.find(x => x.id === id);
+			if (r !== undefined) return this.recipePanel(r);
+		} else if (key !== "" && cat === CAT_SKILLS) {
+			const sk = SKILLS[id];
+			if (sk !== undefined) return this.skillPanel(sk);
+		} else if (key !== "") {
+			const d = this.itemDetail(tonumber(head) ?? 0, id);
+			if (d !== undefined) return this.itemPanel(d);
+		}
+		return this.emptyPanel(cat);
+	}
+
+	private blankPanel(title: string): PanelModel {
 		return {
-			frame,
-			list,
-			sync: (): void => {
-				const entries = this.itemEntries(cat);
-				const keys = entries.map(entryKey);
-				const sig = keys.join(";");
-				if (sig === shown) return;
-				shown = sig;
-				const none = entries.size() === 0;
-				if (none && empty === undefined) empty = this.buildEmpty(frame, cat);
-				if (empty !== undefined) setVisible(empty, none);
-				setVisible(list.frame, !none);
-				rows.begin();
-				for (let i = 0; i < entries.size(); i++) {
-					this.fillItemRow(rows.acquire(itemId(entries[i])), entries[i], keys[i]);
-				}
-				rows.finish();
-			},
+			title,
+			state: "",
+			icon: "",
+			dim: false,
+			type: "",
+			stats: [],
+			body: "",
+			notes: "",
+			extra: "",
+			extraXp: false,
+			hints: [],
+			ingredients: [],
+			station: undefined,
+			action: undefined,
 		};
 	}
 
-	private makeItemRow(list: ScrollList, index: number, cat: number): ItemRow {
-		let row: ItemRow | undefined;
-		const frame = ListRowButton(list, `Row${index}`, index, ROW_H, (): void => {
-			const e = row?.entry;
-			if (e !== undefined) this.openDetail(e.kind, e.id);
-		});
-		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2, GLYPH);
-		const textW = ITEM_BADGE_X - space(3) - ROW_TEXT_X;
-		const name = rowTitle(frame, ROW_TEXT_X, "", textW, THEME.foreground);
-		const info = rowSubtitle(frame, ROW_TEXT_X, "", textW);
-		const count = makeLabel(frame, "Count", "", ITEM_COUNT_X, 0, COUNT_W, ROW_H, TEXT.base, THEME.mutedForeground, {
-			font: "numeric",
-			align: "right",
-			zIndex: 2,
-		});
-		const made: ItemRow = { frame, cat, glyph, name, info, count, key: "" };
-		row = made;
-		this.itemRows.set(frame, made);
-		// the pointer on the row (hover, or held down on it) shows its card; leaving it hands back to the selection
-		frame.GetPropertyChangedSignal("GuiState").Connect((): void => {
-			const state = frame.GuiState;
-			if (state === Enum.GuiState.Hover || state === Enum.GuiState.Press) this.hoverRow = made;
-			else if (this.hoverRow === made) this.hoverRow = undefined;
-			this.refreshTip();
-		});
-		return made;
+	private itemPanel(d: ItemDetail): [PanelModel, () => void] {
+		const m = this.blankPanel(d.card.name);
+		m.state = d.state;
+		m.icon = iconOf(d.card.kind, d.card.id).key;
+		m.type = d.card.type;
+		m.stats = d.card.stats;
+		m.notes = d.card.notes;
+		m.extra = d.help;
+		m.hints = d.card.hints;
+		m.action = { text: d.act.text, variant: d.act.variant, enabled: d.act.enabled };
+		return [m, d.act.run];
 	}
 
-	private fillItemRow(row: ItemRow, e: ItemEntry, key: string): void {
-		row.entry = e;
-		if (key === row.key) return;
-		row.key = key;
-		if (e.equipped && row.mark === undefined) {
-			row.mark = makeFrame(row.frame, "Mark", 0, space(2), 3, ROW_H - space(4), GAME.success, { zIndex: 2 });
-			row.equipped = Badge(row.frame, "Equipped", "EQUIPPED", {
-				x: ITEM_BADGE_X,
-				y: (ROW_H - BADGE_H) / 2,
-				w: ITEM_BADGE_W,
-				h: BADGE_H,
-				textSize: TEXT.sm,
-				color: GAME.success,
-			});
+	private emptyPanel(cat: number): [PanelModel, () => void] {
+		const def = EMPTY[cat] ?? EMPTY[CAT_MATERIALS];
+		const m = this.blankPanel(this.tr(def[0]));
+		m.icon = def[2];
+		m.dim = true;
+		m.body = this.tr(def[1]);
+		if (def[3]) {
+			m.action = { text: this.tr("Open Craft"), variant: "secondary", enabled: true };
+			return [m, (): void => this.selectCat(CAT_CRAFT)];
 		}
-		if (row.mark !== undefined) row.mark.Visible = e.equipped;
-		if (row.equipped !== undefined) row.equipped.Visible = e.equipped;
-		setGlyph(row.glyph, e.name, kindTone(e.kind), false);
-		row.name.Text = e.name;
-		row.info.Text = e.info;
-		row.count.Text = e.count;
-		row.count.FontFace = roleFont(e.numeric ? "numeric" : "label");
+		return [m, noop];
 	}
 
-	private buildEmpty(parent: Frame, cat: number): Frame {
-		let title = "No materials yet";
-		let body = "Gather wood, stone and scrap while you explore. Materials are used in the Craft tab.";
-		let craftShortcut = false;
-		if (cat === CAT_WEAPONS) {
-			title = "No weapons yet";
-			body = "Find them in buildings or craft them in the Craft tab.";
-			craftShortcut = true;
-		} else if (cat === CAT_EQUIP) {
-			title = "No equipment yet";
-			body = "Find it in buildings, craft it in the Craft tab, or unlock outfits and pets in the shop.";
-			craftShortcut = true;
-		} else if (cat === CAT_USABLES) {
-			title = "No usables yet";
-			body = "Search buildings and fallen zombies for food and medicine.";
-		}
-		const w = 520;
-		const titleY = space(7);
-		const titleH = 30;
-		const bodyY = titleY + titleH + space(3);
-		const bodyH = 44;
-		const buttonH = BUTTON_SIZE.default.h;
-		const h = bodyY + bodyH + space(7) + (craftShortcut ? buttonH + space(7) : 0);
-		const card = Card(parent, "Empty", { x: (CONTENT_W - w) / 2, y: space(16), w, h });
-		CardTitle(card, title, { y: titleY, h: titleH, size: TEXT.xl2, align: "center" });
-		CardDescription(card, body, { y: bodyY, h: bodyH, size: TEXT.base, align: "center" });
-		if (craftShortcut) {
-			const buttonW = 180;
-			// navigation, not the "one main action" of a page: a raised `secondary` plate, not the green one
-			Button(card, "ToCraft", "Open Craft", {
-				x: (w - buttonW) / 2,
-				y: h - space(7) - buttonH,
-				w: buttonW,
-				variant: "secondary",
-				onClick: (): void => this.selectCat(CAT_CRAFT),
-			});
-		}
-		return card;
-	}
-
-	// ------------------------------------------------------------ item detail
-
-	/**
-	 * The item page: the item card at the left -- what the item is, the same card the lists show as a tooltip --
-	 * and at the right the survivor's side of it (how many, EQUIPPED, what equipping it changes) over the action.
-	 */
-	private mountDetail(frame: Frame): Page {
-		const card = ItemCard(frame, "Card", { x: 0, y: 0, w: ITEM_CARD_W });
-		const lineH = 32;
-		const badgeH = 26;
-		const badgeW = badgeWidth("EQUIPPED", TEXT.sm, badgeH);
-		const ownedW = SIDE_W - badgeW - space(3);
-		const owned = makeLabel(frame, "Owned", "", SIDE_X, 0, ownedW, lineH, TEXT.xl, THEME.foreground, {
-			font: "heading",
-			align: "left",
-		});
-		const equipped = Badge(frame, "Equipped", "EQUIPPED", {
-			x: CONTENT_W - badgeW,
-			y: (lineH - badgeH) / 2,
-			w: badgeW,
-			h: badgeH,
-			textSize: TEXT.sm,
-			color: GAME.success,
-		});
-		equipped.Visible = false;
-		const ruleY = lineH + space(3);
-		Separator(frame, "Divider", { x: SIDE_X, y: ruleY, length: SIDE_W });
-		const helpY = ruleY + space(4);
-		const help = makeLabel(frame, "Help", "", SIDE_X, helpY, SIDE_W, 160, TEXT.base, THEME.mutedForeground, {
-			align: "left",
-			valign: "top",
-		});
-		let run: () => void = noop;
-		const action = Button(frame, "Action", "", {
-			x: SIDE_X + (SIDE_W - ACTION_W) / 2,
-			y: CONTENT_H - ACTION_H - space(3),
-			w: ACTION_W,
-			size: "lg",
-			variant: "default",
-			onClick: (): void => run(),
-		});
-		let shown: string | undefined;
-		return {
-			frame,
-			sync: (): void => {
-				const m = this.itemDetail(this.selKind, this.selItem);
-				if (m === undefined) {
-					this.level = LEVEL_LIST;
-					this.rebuild();
-					return;
-				}
-				const a = m.act;
-				run = a.run;
-				// the card has its own dirty check: it rewrites itself only for another item (or another device)
-				card.set(m.card);
-				const sig = `${m.equipped}|${m.owned}|${hex(m.ownedColor)}|${m.help}|${a.text}|${a.variant}|${a.enabled}`;
-				if (sig === shown) return;
-				shown = sig;
-				owned.Text = m.owned;
-				owned.TextColor3 = m.ownedColor;
-				equipped.Visible = m.equipped;
-				help.Text = m.help;
-				action.Text = a.text;
-				setButtonVariant(action, a.variant);
-				setButtonEnabled(action, a.enabled);
-			},
-		};
-	}
-
-	/** the item card of item `kind` / `id`; its usage hint leads with the page's action when it can be taken */
-	private cardOf(kind: number, id: number, act: DetailAction): ItemCardModel | undefined {
-		return Info.describeItem(this.ctx.save, kind, id, { action: act.enabled ? act.text : undefined });
-	}
-
-	/** what the item page (and the tooltip card) shows for item `kind` / `id` (undefined: no such item) */
-	private itemDetail(kind: number, id: number): ItemDetailModel | undefined {
+	/** the item card of `kind` / `id` and the survivor's side of it (undefined: no such item) */
+	private itemDetail(kind: number, id: number): ItemDetail | undefined {
 		if (kind === ItemKind.Weapon && WEAPONS[id] !== undefined) return this.weaponDetail(WEAPONS[id]);
 		if (kind === ItemKind.Equip && EQUIPS[id] !== undefined) return this.equipDetail(id);
 		if (kind === ItemKind.Use && USABLES[id] !== undefined) return this.usableDetail(id);
@@ -1193,58 +687,50 @@ export class Backpack {
 		return undefined;
 	}
 
-	// The builders below give the survivor's side of an item; what the item IS (damage, ammo, effects, how to use
-	// it on this device) is the card's, from itemInfo.ts.
+	private cardOf(kind: number, id: number): ItemCardModel | undefined {
+		return Info.describeItem(this.ctx.save, kind, id);
+	}
 
-	private weaponDetail(w: WeaponDef): ItemDetailModel | undefined {
+	private weaponDetail(w: WeaponDef): ItemDetail | undefined {
 		const save = this.ctx.save;
 		const id = w.id;
 		const owned = ownsWeapon(save, id);
 		const count = save.invenWeapon[id] ?? 0;
 		const equipped = save.equipWeapon === id;
-
 		let help = "";
 		if (equipped) {
-			help = "This is the weapon in your hands.";
+			help = this.tr("This is the weapon in your hands.");
 		} else if (!owned) {
 			const r = recipeMaking(ItemKind.Weapon, id);
 			help = r !== undefined ? `You don't have it yet. Craft it: ${stationName(r)}.` : "You don't have it yet.";
 		}
-		let ownedText = owned ? `Owned x ${fmtInt(count)}` : "Not owned";
-		if (id === 0 && count === 0) ownedText = "Default weapon";
-
+		let state = equipped ? this.tr("EQUIPPED") : times(count);
+		if (!equipped && id === 0 && count === 0) state = this.tr("DEFAULT");
 		let act: DetailAction;
-		if (!owned) act = detailAction("Not owned", "secondary", false, noop);
-		else if (equipped) act = detailAction("Equipped", "secondary", false, noop);
-		else act = detailAction("Equip", "default", true, (): void => this.equipWeapon(id));
-		const card = this.cardOf(ItemKind.Weapon, id, act);
-		if (card === undefined) return undefined;
-		return {
-			card,
-			equipped,
-			owned: ownedText,
-			ownedColor: owned ? THEME.foreground : THEME.mutedForeground,
-			help,
-			act,
-		};
+		if (!owned) act = detailAction(this.tr("Not owned"), "secondary", false, noop);
+		else if (equipped) act = detailAction(this.tr("Equipped"), "secondary", false, noop);
+		else act = detailAction(this.tr("Equip"), "default", true, (): void => this.equipWeapon(id));
+		const card = this.cardOf(ItemKind.Weapon, id);
+		return card !== undefined ? { card, state, help, act } : undefined;
 	}
 
-	private equipDetail(id: number): ItemDetailModel | undefined {
+	private equipDetail(id: number): ItemDetail | undefined {
 		const save = this.ctx.save;
 		const slot = equipSlotOf(id);
 		const owned = ownsEquip(save, id);
 		const count = save.invenEquip[id] ?? 0;
 		const costume = costumeForEquip(id);
 		const viaCostume = costume !== undefined && ownsCostume(save, costume.id);
-		const current = slotValue(save, slot);
+		const current = equippedIn(save, slot);
 		const equipped = current === id;
-
 		// the slot and what a cosmetic does and does not do (MON-01 / MON-04) are on the card
 		const help: Array<string> = [];
 		if (equipped) {
-			help.push("Currently equipped.");
+			help.push(this.tr("Currently equipped."));
 		} else if (current >= 0 && EQUIPS[current] !== undefined) {
 			help.push(`Equipping it replaces ${EQUIPS[current].name}.`);
+		} else {
+			help.push(this.tr("Nothing is worn in this slot now."));
 		}
 		if (costume !== undefined) {
 			help.push(
@@ -1253,60 +739,42 @@ export class Backpack {
 					: `Unlock it with the ${costume.name} costume in the shop.`,
 			);
 		}
-		let ownedText = "Not owned";
-		if (count > 0) ownedText = `Owned x ${fmtInt(count)}`;
-		else if (viaCostume) ownedText = "Unlocked by costume";
-
+		let state = this.tr("Not owned");
+		if (equipped) state = this.tr("EQUIPPED");
+		else if (count > 0) state = times(count);
+		else if (viaCostume) state = this.tr("COSTUME");
 		let act: DetailAction;
 		if (!owned) {
-			act = detailAction("Not owned", "secondary", false, noop);
+			act = detailAction(this.tr("Not owned"), "secondary", false, noop);
 		} else if (equipped) {
-			act = detailAction("Unequip", "secondary", this.onUnequipItem !== undefined, (): void =>
+			// the one action of an item you wear: the main (blue) plate
+			act = detailAction(this.tr("Unequip"), "default", this.onUnequipItem !== undefined, (): void =>
 				this.unequipItem(id, slot),
 			);
 		} else {
-			act = detailAction("Equip", "default", true, (): void => this.equipItem(id, slot));
+			act = detailAction(this.tr("Equip"), "default", true, (): void => this.equipItem(id, slot));
 		}
-		const card = this.cardOf(ItemKind.Equip, id, act);
-		if (card === undefined) return undefined;
-		return {
-			card,
-			equipped,
-			owned: ownedText,
-			ownedColor: owned ? THEME.foreground : THEME.mutedForeground,
-			help: help.join(" "),
-			act,
-		};
+		const card = this.cardOf(ItemKind.Equip, id);
+		return card !== undefined ? { card, state, help: help.join(" "), act } : undefined;
 	}
 
-	private usableDetail(id: number): ItemDetailModel | undefined {
+	private usableDetail(id: number): ItemDetail | undefined {
 		const count = this.ctx.save.invenUse[id] ?? 0;
-		const act = detailAction(count > 0 ? "Use" : "None left", "default", count > 0, (): void => this.useItem(id));
-		const card = this.cardOf(ItemKind.Use, id, act);
+		const card = this.cardOf(ItemKind.Use, id);
 		if (card === undefined) return undefined;
-		return {
-			card,
-			equipped: false,
-			owned: `Owned x ${fmtInt(count)}`,
-			ownedColor: count > 0 ? THEME.foreground : THEME.mutedForeground,
-			help: "Consumed when used.",
-			act,
-		};
+		// food is eaten, medicine is used: the same call either way (main.client onUse)
+		const verb = card.type === this.tr("Food") ? "Eat" : "Use";
+		const act = detailAction(this.tr(count > 0 ? verb : "None left"), "default", count > 0, (): void =>
+			this.useItem(id),
+		);
+		return { card, state: times(count), help: this.tr("Consumed when used."), act };
 	}
 
-	private materialDetail(id: number): ItemDetailModel | undefined {
+	private materialDetail(id: number): ItemDetail | undefined {
 		const count = this.ctx.save.invenEtc[id] ?? 0;
-		const act = detailAction("Open Craft", "secondary", true, (): void => this.selectCat(CAT_CRAFT));
-		const card = this.cardOf(ItemKind.Etc, id, act);
-		if (card === undefined) return undefined;
-		return {
-			card,
-			equipped: false,
-			owned: `Owned x ${fmtInt(count)}`,
-			ownedColor: count > 0 ? THEME.foreground : THEME.mutedForeground,
-			help: "Materials are used in the Craft tab.",
-			act,
-		};
+		const act = detailAction(this.tr("Open Craft"), "secondary", true, (): void => this.selectCat(CAT_CRAFT));
+		const card = this.cardOf(ItemKind.Etc, id);
+		return card !== undefined ? { card, state: times(count), help: "", act } : undefined;
 	}
 
 	// ------------------------------------------------------------ actions (rules live in main.client)
@@ -1319,16 +787,16 @@ export class Backpack {
 	}
 
 	private equipItem(id: number, slot: number): void {
-		if (!ownsEquip(this.ctx.save, id) || slotValue(this.ctx.save, slot) === id) return;
+		if (!ownsEquip(this.ctx.save, id) || equippedIn(this.ctx.save, slot) === id) return;
 		this.onEquipItem?.(id);
-		if (slotValue(this.ctx.save, slot) === id) toast(this.ctx, `Equipped ${nameOf(ItemKind.Equip, id)}`);
+		if (equippedIn(this.ctx.save, slot) === id) toast(this.ctx, `Equipped ${nameOf(ItemKind.Equip, id)}`);
 		this.rebuild();
 	}
 
 	private unequipItem(id: number, slot: number): void {
-		if (slotValue(this.ctx.save, slot) !== id) return;
+		if (equippedIn(this.ctx.save, slot) !== id) return;
 		this.onUnequipItem?.(slot);
-		if (slotValue(this.ctx.save, slot) !== id) toast(this.ctx, `Unequipped ${nameOf(ItemKind.Equip, id)}`);
+		if (equippedIn(this.ctx.save, slot) !== id) toast(this.ctx, `Unequipped ${nameOf(ItemKind.Equip, id)}`);
 		this.rebuild();
 	}
 
@@ -1356,256 +824,71 @@ export class Backpack {
 	}
 
 	private hasIngredients(r: CraftRecipe): boolean {
+		return this.craftable(r) > 0;
+	}
+
+	/** how many times `r` can be made with what the survivor carries */
+	private craftable(r: CraftRecipe): number {
+		let n = math.huge;
 		for (const ing of r.ingredients) {
-			if (this.ingredientCount(ing.kind, ing.index) < ing.count) return false;
+			n = math.min(n, math.floor(this.ingredientCount(ing.kind, ing.index) / ing.count));
 		}
-		return true;
+		return n === math.huge ? 0 : n;
 	}
 
-	private resultName(r: CraftRecipe): string {
-		const n = nameOf(r.resultKind, r.resultIndex);
-		return r.resultCount > 1 ? `${n} x${r.resultCount}` : n;
+	/** the stations near the survivor, in one compact line */
+	private nearbyText(): string {
+		const near: Array<string> = [];
+		if (this.nearbyPro) near.push(this.tr("pro craft desk"));
+		else if (this.nearbyDesk) near.push(this.tr("craft desk"));
+		if (this.nearbyFire) near.push(this.tr("lit fire"));
+		if (near.size() === 0) return this.tr("Nothing near you: hand recipes only.");
+		return `${this.tr("Near you")}: ${near.join(", ")}`;
 	}
 
-	/** the status line of the craft list: what the station nearby allows */
-	private craftNotice(): [string, Color3] {
-		const fire = this.nearbyFire ? " A lit fire is nearby: smelting works." : " Smelting needs a lit fire.";
-		if (this.nearbyPro) return [`Pro craft desk nearby: every desk recipe works here.${fire}`, GAME.success];
-		if (this.nearbyDesk) return [`Craft desk nearby. Pro recipes need a pro desk.${fire}`, GAME.warning];
-		return [
-			`No craft desk nearby: hand recipes only.${fire}`,
-			this.nearbyFire ? GAME.warning : THEME.mutedForeground,
-		];
-	}
-
-	/** everything a recipe row draws follows from: the recipe, whether the station allows it, the counts it reads */
-	private recipeKey(r: CraftRecipe): string {
-		let key = `${r.id}:${this.recipeAvailable(r)}`;
-		for (const ing of r.ingredients) key += `:${this.ingredientCount(ing.kind, ing.index)}`;
-		return key;
-	}
-
-	private mountCraft(frame: Frame): Page {
-		const notice = makeNotice(frame);
-		const list = this.makeList(frame, NOTICE_H + LIST_GAP, CONTENT_H - NOTICE_H - LIST_GAP);
-		const rows = new RowPool<RecipeRow>(list, (l, i) => this.makeRecipeRow(l, i));
-		let shown: string | undefined;
-		return {
-			frame,
-			list,
-			sync: (): void => {
-				const [text, dot] = this.craftNotice();
-				// craftable now first, then what this station allows, then recipes that need another desk
-				const ready: Array<CraftRecipe> = [];
-				const missing: Array<CraftRecipe> = [];
-				const locked: Array<CraftRecipe> = [];
-				for (const r of CRAFT_RECIPES) {
-					if (!this.recipeAvailable(r)) locked.push(r);
-					else if (this.hasIngredients(r)) ready.push(r);
-					else missing.push(r);
-				}
-				const order: Array<CraftRecipe> = [];
-				const keys: Array<string> = [];
-				for (const group of [ready, missing, locked]) {
-					for (const r of group) {
-						order.push(r);
-						keys.push(this.recipeKey(r));
-					}
-				}
-				const sig = `${text}|${hex(dot)}|${keys.join(";")}`;
-				if (sig === shown) return;
-				shown = sig;
-				setNotice(notice, text, dot);
-				// rows follow their recipe: a re-sort moves them, and only a recipe whose key changed is rewritten
-				rows.begin();
-				for (let i = 0; i < order.size(); i++) {
-					this.fillRecipeRow(rows.acquire(`${order[i].id}`), order[i], keys[i]);
-				}
-				rows.finish();
-			},
-		};
-	}
-
-	private makeRecipeRow(list: ScrollList, index: number): RecipeRow {
-		let row: RecipeRow | undefined;
-		const frame = ListRowButton(list, `Recipe${index}`, index, ROW_H, (): void => {
-			if (row !== undefined) this.openRecipe(row.recipeId);
-		});
-		const glyph = makeGlyph(frame, ROW_PAD, (ROW_H - GLYPH) / 2, GLYPH);
-		const statusX = CONTENT_W - ROW_PAD - STATUS_W;
-		const stationX = statusX - space(3) - STATION_W;
-		const textW = stationX - space(3) - ROW_TEXT_X;
-		const name = rowTitle(frame, ROW_TEXT_X, "", textW, THEME.foreground);
-		const info = rowSubtitle(frame, ROW_TEXT_X, "", textW, true);
-		const station = Badge(frame, "Station", "", {
-			x: stationX,
-			y: (ROW_H - BADGE_H) / 2,
-			w: STATION_W,
-			h: BADGE_H,
-			textSize: TEXT.sm,
-			variant: "secondary",
-		});
-		const status = makeLabel(frame, "Status", "", statusX, 0, STATUS_W, ROW_H, TEXT.sm, THEME.destructive, {
-			font: "heading",
-			align: "right",
-			zIndex: 2,
-		});
-		const r: RecipeRow = { frame, glyph, name, info, station, status, rich: "", plain: "", key: "", recipeId: -1 };
-		row = r;
-		// the kit turns the row's labels accent-foreground on the accent hover / selection; <font> tags would keep
-		// their tones (unreadable on accent), so the line goes plain meanwhile
-		info.GetPropertyChangedSignal("TextColor3").Connect((): void => {
-			info.Text = info.TextColor3 === THEME.accentForeground ? r.plain : r.rich;
-		});
-		return r;
-	}
-
-	private fillRecipeRow(row: RecipeRow, r: CraftRecipe, key: string): void {
-		row.recipeId = r.id;
-		if (key === row.key) return;
-		row.key = key;
+	private recipePanel(r: CraftRecipe): [PanelModel, () => void] {
 		const avail = this.recipeAvailable(r);
 		const enough = this.hasIngredients(r);
-		const name = this.resultName(r);
-		setGlyph(row.glyph, name, kindTone(r.resultKind), !avail);
-		row.name.Text = name;
-		setLabelColor(row.name, avail ? THEME.foreground : THEME.mutedForeground);
-
-		// ingredients: have / need in success or destructive
-		const coloured: Array<string> = [];
-		const plain: Array<string> = [];
+		const card = this.cardOf(r.resultKind, r.resultIndex);
+		const m = this.blankPanel(this.tr(nameOf(r.resultKind, r.resultIndex)));
+		m.state = `${this.tr("MAKES")} ${times(r.resultCount)}`;
+		m.icon = iconOf(r.resultKind, r.resultIndex).key;
+		m.dim = !avail;
+		m.type = card !== undefined ? card.type : "";
+		m.stats = card !== undefined ? card.stats : [];
 		for (const ing of r.ingredients) {
 			const have = this.ingredientCount(ing.kind, ing.index);
-			const text = `${nameOf(ing.kind, ing.index)} ${fmtInt(have)}/${fmtInt(ing.count)}`;
-			coloured.push(colorTag(have >= ing.count ? GAME.success : THEME.destructive, text));
-			plain.push(escapeRich(text));
-		}
-		row.rich = coloured.join(colorTag(THEME.mutedForeground, "  ·  "));
-		row.plain = plain.join("  ·  ");
-		row.info.Text = row.info.TextColor3 === THEME.accentForeground ? row.plain : row.rich;
-
-		setBadge(row.station, stationTag(r).upper());
-		setBadgeLook(row.station, avail ? "secondary" : "destructive");
-		let status = "Missing";
-		let statusColor = THEME.destructive;
-		if (!avail) {
-			status = "Locked";
-			statusColor = THEME.mutedForeground;
-		} else if (enough) {
-			status = "Ready";
-			statusColor = GAME.success;
-		}
-		row.status.Text = status;
-		setLabelColor(row.status, statusColor);
-	}
-
-	private mountRecipe(frame: Frame): Page {
-		const view = makeDetailView(frame, 3);
-		makeLabel(frame, "IngTitle", "INGREDIENTS", 0, 170, 400, 20, TEXT.xs, THEME.mutedForeground, {
-			weight: Enum.FontWeight.Medium,
-			align: "left",
-		});
-		const lines: Array<IngredientLine> = [];
-		for (let i = 0; i < MAX_INGREDIENTS; i++) lines.push(makeIngredientLine(frame, i));
-
-		// station card
-		const cardX = ING_W + space(5);
-		const cardW = CONTENT_W - cardX;
-		const inner = cardW - space(8);
-		const card = Card(frame, "Station", {
-			x: cardX,
-			y: 196,
-			w: cardW,
-			h: 136,
-			variant: "muted",
-			border: SURFACE.line,
-		});
-		makeLabel(card, "Caption", "STATION", space(4), space(3.5), inner, 16, TEXT.xs, THEME.mutedForeground, {
-			weight: Enum.FontWeight.Medium,
-			align: "left",
-		});
-		const value = makeLabel(card, "Value", "", space(4), 36, inner, 26, TEXT.lg, GAME.success, {
-			font: "heading",
-			align: "left",
-		});
-		const hint = makeLabel(card, "Hint", "", space(4), 70, inner, 52, TEXT.sm, THEME.mutedForeground, {
-			align: "left",
-			valign: "top",
-		});
-
-		let shown: string | undefined;
-		return {
-			frame,
-			sync: (): void => {
-				const m = this.recipeDetail();
-				if (m === undefined) {
-					this.level = LEVEL_LIST;
-					this.rebuild();
-					return;
-				}
-				view.run = m.act.run;
-				let sig = `${detailSig(m)}|${m.station}|${hex(m.stationColor)}|${hex(m.stationBorder)}|${m.hint}`;
-				for (const ing of m.ingredients) sig += `;${ing.name}=${ing.count}:${hex(ing.tone)}`;
-				if (sig === shown) return;
-				shown = sig;
-				applyDetail(view, m);
-				// a recipe with more ingredients than any before grows the list (built with MAX_INGREDIENTS)
-				while (lines.size() < m.ingredients.size()) lines.push(makeIngredientLine(frame, lines.size()));
-				for (let i = 0; i < lines.size(); i++) {
-					const line = lines[i];
-					const ing = m.ingredients[i];
-					line.frame.Visible = ing !== undefined;
-					if (ing === undefined) continue;
-					setCardBorder(line.frame, ing.tone);
-					line.name.Text = ing.name;
-					line.count.Text = ing.count;
-					line.count.TextColor3 = ing.tone;
-				}
-				setCardBorder(card, m.stationBorder);
-				value.Text = m.station;
-				value.TextColor3 = m.stationColor;
-				hint.Text = m.hint;
-			},
-		};
-	}
-
-	/** what the recipe page shows for the selected recipe (undefined: no such recipe) */
-	private recipeDetail(): RecipeModel | undefined {
-		let recipe: CraftRecipe | undefined;
-		for (const r of CRAFT_RECIPES) {
-			if (r.id === this.selRecipe) recipe = r;
-		}
-		if (recipe === undefined) return undefined;
-		const r = recipe;
-		const avail = this.recipeAvailable(r);
-		const enough = this.hasIngredients(r);
-
-		const ingredients: Array<IngredientModel> = [];
-		for (const ing of r.ingredients) {
-			const have = this.ingredientCount(ing.kind, ing.index);
-			ingredients.push({
-				name: nameOf(ing.kind, ing.index),
-				count: `${fmtInt(have)} / ${fmtInt(ing.count)}`,
-				tone: have >= ing.count ? GAME.success : THEME.destructive,
+			m.ingredients.push({
+				name: this.tr(nameOf(ing.kind, ing.index)),
+				icon: iconOf(ing.kind, ing.index).key,
+				count: `${W.fmtInt(have)} / ${W.fmtInt(ing.count)}`,
+				short: have < ing.count,
 			});
 		}
-
-		let stationText = "No desk needed";
-		if (r.needsPro) stationText = this.nearbyPro ? "Pro craft desk nearby" : "Need a pro craft desk";
-		else if (r.needsDesk) stationText = this.nearbyDesk ? "Craft desk nearby" : "Need a craft desk";
-		if (r.needsFire === true && !this.nearbyFire) stationText = "Need a lit fire";
-		else if (r.needsFire === true && stationText === "No desk needed") stationText = "Lit fire nearby";
-		// the game's own check also covers things the list can't see (e.g. a build in progress)
+		let station = "No desk needed";
+		if (r.needsPro) station = this.nearbyPro ? "Pro craft desk nearby" : "Need a pro craft desk";
+		else if (r.needsDesk) station = this.nearbyDesk ? "Craft desk nearby" : "Need a craft desk";
+		if (r.needsFire === true && !this.nearbyFire) station = "Need a lit fire";
+		else if (r.needsFire === true && station === "No desk needed") station = "Lit fire nearby";
+		// the game's own check also covers things the Bag can't see (e.g. a build in progress)
 		const blocker = avail && enough ? this.craftCheck?.(r.id) : undefined;
-		const hint =
-			blocker !== undefined
-				? blocker
-				: avail
-					? "You can craft this here."
-					: r.needsFire === true && !this.nearbyFire
-						? "Light a campfire or brazier and stand next to it, then open the backpack again."
-						: "Stand next to the right desk, then open the backpack again.";
-
+		let hint = "You can craft this here.";
+		if (blocker !== undefined) {
+			hint = blocker;
+		} else if (!avail && r.needsFire === true && !this.nearbyFire) {
+			hint = "Light a campfire or brazier and stand next to it, then open the backpack again.";
+		} else if (!avail) {
+			hint = "Stand next to the right desk, then open the backpack again.";
+		} else if (!enough) {
+			hint = "Gather what is missing (in red), then craft.";
+		}
+		m.station = {
+			glyph: stationGlyph(r),
+			text: this.tr(station),
+			ok: avail,
+			hint: this.tr(hint),
+			nearby: this.nearbyText(),
+		};
 		let label = "Craft";
 		if (!avail) {
 			label =
@@ -1619,152 +902,50 @@ export class Backpack {
 		} else if (blocker !== undefined) {
 			label = "Can't craft";
 		}
-		return {
-			caption: `RECIPE · ${stationName(r).upper()}`,
-			name: nameOf(r.resultKind, r.resultIndex),
-			equipped: false,
-			stats: [
-				["Makes", `x ${fmtInt(r.resultCount)}`],
-				["Station", stationTag(r)],
-				["You have", fmtInt(this.ingredientCount(r.resultKind, r.resultIndex))],
-			],
-			ingredients,
-			station: stationText,
-			stationColor: avail ? GAME.success : THEME.destructive,
-			// the plain well outline while the station is fine, `destructive` when it is what blocks the craft
-			stationBorder: avail ? SURFACE.line : THEME.destructive,
-			hint,
-			act: detailAction(label, "default", avail && enough && blocker === undefined, (): void => {
+		m.action = { text: this.tr(label), variant: "default", enabled: avail && enough && blocker === undefined };
+		return [
+			m,
+			(): void => {
 				if (!this.recipeAvailable(r) || !this.hasIngredients(r)) return;
 				if (this.craftCheck?.(r.id) !== undefined) return;
 				this.onCraft?.(r.id);
 				this.rebuild();
-			}),
-		};
+			},
+		];
 	}
 
 	// ------------------------------------------------------------ skills
 
-	private mountSkills(frame: Frame): Page {
-		const notice = makeNotice(frame);
-		const list = this.makeList(frame, NOTICE_H + LIST_GAP, CONTENT_H - NOTICE_H - LIST_GAP);
-		// the skill list never changes: one row per skill, built with the page
-		const rows: Array<SkillRow> = [];
-		for (let i = 0; i < SKILLS.size(); i++) rows.push(this.makeSkillRow(list, i, SKILLS[i]));
-		let shown: string | undefined;
-		return {
-			frame,
-			list,
-			sync: (): void => {
-				const save = this.ctx.save;
-				const sp = save.skillPoint;
-				let sig = `${sp}`;
-				for (const sk of SKILLS) sig += `;${save.skillLevels[sk.id] ?? 0}`;
-				if (sig === shown) return;
-				shown = sig;
-				if (sp > 0) {
-					const text = `${sp} skill point${sp === 1 ? "" : "s"} to spend. Press + to learn a level.`;
-					setNotice(notice, text, GAME.xp);
-				} else {
-					setNotice(notice, "No skill points to spend. Level up to earn more.", THEME.mutedForeground);
-				}
-				for (let i = 0; i < rows.size(); i++) this.fillSkillRow(rows[i], SKILLS[i]);
-			},
-		};
-	}
-
-	private makeSkillRow(list: ScrollList, index: number, sk: SkillDef): SkillRow {
-		const frame = makeListRow(list, `Skill${index}`, index, ROW_H);
-		const plusX = CONTENT_W - ROW_PAD - PLUS_W;
-		const levelX = plusX - space(3) - LEVEL_W;
-		const pipsX = levelX - space(3) - (MAX_PIPS * PIP_W + (MAX_PIPS - 1) * PIP_GAP);
-		const textW = pipsX - space(3) - ROW_PAD;
-		const name = rowTitle(frame, ROW_PAD, sk.name, textW, THEME.mutedForeground);
-		rowSubtitle(frame, ROW_PAD, sk.detail, textW);
-		// one recessed slot per level: learned ones are filled with the xp accent, the rest stay empty wells
-		const pips: Array<Frame> = [];
-		for (let p = 0; p < sk.maxLevel; p++) {
-			pips.push(
-				makeSurface(
-					frame,
-					`Pip${p}`,
-					pipsX + p * (PIP_W + PIP_GAP),
-					(ROW_H - PIP_H) / 2,
-					PIP_W,
-					PIP_H,
-					"well",
-					{
-						fill: SURFACE.well,
-						border: SURFACE.line,
-						zIndex: 2,
-					},
-				),
-			);
-		}
-		const level = makeLabel(frame, "Level", "", levelX, 0, LEVEL_W, ROW_H, TEXT.sm, THEME.mutedForeground, {
-			font: "numeric",
-			align: "right",
-			zIndex: 2,
-		});
-		return { frame, name, pips, level, key: "" };
-	}
-
-	private fillSkillRow(row: SkillRow, sk: SkillDef): void {
+	private skillPanel(sk: SkillDef): [PanelModel, () => void] {
 		const save = this.ctx.save;
 		const lvl = save.skillLevels[sk.id] ?? 0;
+		const sp = save.skillPoint;
 		const maxed = lvl >= sk.maxLevel;
-		const canBuy = save.skillPoint > 0 && !maxed;
-		const key = `${lvl}:${canBuy}`;
-		if (key === row.key) return;
-		row.key = key;
-		setLabelColor(row.name, lvl > 0 ? THEME.foreground : THEME.mutedForeground);
-		for (let p = 0; p < row.pips.size(); p++) {
-			const learned = p < lvl;
-			setSurface(row.pips[p], "well", {
-				fill: learned ? GAME.xp : SURFACE.well,
-				border: learned ? GAME.xp : SURFACE.line,
-			});
-		}
-		row.level.Text = `Lv ${lvl} / ${sk.maxLevel}`;
-		// `foreground` when maxed: the MAX badge right next to it already carries the success accent on its border,
-		// one accent per row is enough. A choice of emphasis, not of contrast (GAME.success reads as text here too:
-		// 4.68:1 even on the lighter panel, `npm run test:contrast`).
-		row.level.TextColor3 = maxed ? THEME.foreground : THEME.mutedForeground;
-		const plusX = CONTENT_W - ROW_PAD - PLUS_W;
-		if (maxed) {
-			if (row.plus !== undefined) setVisible(row.plus, false);
-			if (row.max === undefined) {
-				const w = badgeWidth("MAX", TEXT.sm, BADGE_H);
-				row.max = Badge(row.frame, "Max", "MAX", {
-					x: plusX + PLUS_W - w,
-					y: (ROW_H - BADGE_H) / 2,
-					w,
-					h: BADGE_H,
-					textSize: TEXT.sm,
-					color: GAME.success,
-				});
-			}
-			row.max.Visible = true;
-			return;
-		}
-		if (row.max !== undefined) row.max.Visible = false;
-		if (row.plus === undefined) {
-			// a raised plate on the row's well: what you press stands out; without points the kit sinks it and mutes it
-			row.plus = Button(row.frame, "Plus", "+", {
-				x: plusX,
-				y: (ROW_H - BUTTON_SIZE.sm.h) / 2,
-				w: PLUS_W,
-				size: "sm",
-				variant: "secondary",
-				disabled: !canBuy,
-				textSize: TEXT.lg,
-				zIndex: 3,
-				onClick: (): void => this.learnSkill(sk),
-			});
-		} else {
-			setVisible(row.plus, true);
-			setButtonEnabled(row.plus, canBuy);
-		}
+		const m = this.blankPanel(this.tr(sk.name));
+		m.state = `LV ${lvl} / ${sk.maxLevel}`;
+		m.icon = skillIconOf(sk.id);
+		m.dim = lvl === 0;
+		const kind = sk.kind === 1 ? "Survival skill" : sk.kind === 2 ? "Fighting skill" : "Utility skill";
+		m.type = this.tr(kind);
+		m.stats = [
+			{ label: this.tr("Level"), value: `${lvl} / ${sk.maxLevel}`, tone: "value" },
+			{
+				label: this.tr("Next level"),
+				value: maxed ? this.tr("Max") : `${lvl + 1}`,
+				tone: maxed ? "text" : "value",
+			},
+		];
+		m.notes = this.tr(sk.detail);
+		m.extra =
+			sp > 0
+				? `${sp} ${this.tr(sp === 1 ? "skill point to spend." : "skill points to spend.")}`
+				: this.tr("No skill points to spend. Level up to earn more.");
+		m.extraXp = sp > 0;
+		let label = "Learn";
+		if (maxed) label = "Max level";
+		else if (sp <= 0) label = "No skill points";
+		m.action = { text: this.tr(label), variant: "default", enabled: sp > 0 && !maxed };
+		return [m, (): void => this.learnSkill(sk)];
 	}
 
 	private learnSkill(sk: SkillDef): void {

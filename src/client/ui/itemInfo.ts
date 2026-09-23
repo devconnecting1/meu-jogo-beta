@@ -85,6 +85,12 @@ export function isMelee(w: WeaponDef): boolean {
 	return w.kind === WeaponKind.Melee || w.mag <= 0;
 }
 
+/** a weapon with something that feeds it (ammo, oil, charge): every gun, and the chainsaw's oil -- the card's stat and
+ * the yellow number on the Bag's tile */
+export function showsReserve(w: WeaponDef): boolean {
+	return !isMelee(w) || w.id === CHAINSAW;
+}
+
 export function damageText(w: WeaponDef): string {
 	return w.pellets > 1 ? `${fmtInt(w.dmg)} x${w.pellets}` : fmtInt(w.dmg);
 }
@@ -188,7 +194,7 @@ function weaponParts(save: PlayerSaveData, w: WeaponDef, tr: Tr, scheme: number)
 		stats.push(stat(tr("Reload"), fmtSeconds(w.reload), "value"));
 	}
 	// what it fires or burns, by that thing's own name, and how much the survivor carries
-	if (!melee || w.id === CHAINSAW) stats.push(stat(tr(reserveName(w)), fmtInt(weaponReserve(save, w)), "value"));
+	if (showsReserve(w)) stats.push(stat(tr(reserveName(w)), fmtInt(weaponReserve(save, w)), "value"));
 	const notes = [tr(triggerNote(w))];
 	if (isChoppingTool(w)) notes.push(tr("Chops trees for extra wood."));
 	// fighting with it, on this device: the attack (on touch, the aim is the same gesture) and the reload
@@ -298,6 +304,7 @@ export function describeItem(
 	for (const h of parts.hints) hints.push(h);
 	return {
 		kind,
+		id,
 		name: tr(nameOf(kind, id)),
 		type: parts.type,
 		tag: opts?.tag ?? "",

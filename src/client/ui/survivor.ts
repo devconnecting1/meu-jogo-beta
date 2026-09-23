@@ -3,6 +3,7 @@ import { declineTutorial, equippedIn, expMaxInit, outfitLookOf, petLookOf, total
 import { WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
 import { ItemKind } from "shared/data/kinds";
+import { iconKeys } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
 import { DAY_BREAK_HOUR, isNightAt, secondsUntilHour } from "shared/sim/clock";
@@ -10,7 +11,7 @@ import { PetLook } from "shared/data/cosmetics";
 import { requestSave } from "../systems/saveClient";
 import { countdown } from "../onboarding/gameOver";
 import { SurvivorPreview } from "../view/cosmeticPreview";
-import { Glyph, kindTone, makeGlyph, setGlyph } from "./itemCard";
+import { IconView, clearIcon, drawItemIcon, maxFrameCount } from "./itemIcon";
 import { paintPlate } from "./plate";
 import { PixelIcon } from "./pixelIcon";
 import { popup } from "./popup";
@@ -25,6 +26,7 @@ import {
 	fmtInt,
 	makeFrame,
 	makeLabel,
+	makeSurface,
 	nl,
 	setButtonVariant,
 	setVisible,
@@ -109,6 +111,8 @@ const ROW_H = Kit.SETTING_ROW_H;
 const STATS_GROOVE_H = CELL_PAD * 2 + ROW_H * 2 + 4;
 const STATS_H = Kit.sectionHeight(STATS_GROOVE_H);
 const TILE_H = 52;
+/** the icon's well in a slot tile: a 32 unit icon, 2x its 16 px grid at 1120 x 630 */
+const ICON_WELL = 36;
 const TILE_GAP = 8;
 const TILE_W = (GROOVE_W - CELL_PAD * 2 - TILE_GAP * 2) / 3;
 const LOADOUT_GROOVE_H = CELL_PAD * 2 + TILE_H * 2 + TILE_GAP;
@@ -142,7 +146,8 @@ const HELP_TEXT = [
 
 interface SlotTile {
 	frame: Frame;
-	glyph: Glyph;
+	/** the item's pixel icon (UI-11: the Bag's drawing), in a dark well; empty = the well alone */
+	icon: IconView;
 	name: TextLabel;
 }
 
@@ -292,7 +297,7 @@ export class SurvivorScreen {
 			},
 		);
 
-		// ---- the loadout: the six slots, with the Bag's glyphs; an empty slot is a dark tile that says so
+		// ---- the loadout: the six slots, with the Bag's icons (UI-11); an empty slot is a dark tile that says so
 		const loadoutY = top + STATS_H + GAP;
 		const loadout = Kit.Section(panel, "Loadout", {
 			x: RIGHT_X,
@@ -310,7 +315,15 @@ export class SurvivorScreen {
 				zIndex: lGroove.ZIndex + 1,
 			});
 			const z = tile.ZIndex + 1;
-			const glyph = makeGlyph(tile, 10, (TILE_H - 32) / 2, 32, z);
+			// the well, and in it as many Frames as the costliest icon of the slot's kind from the start: changing
+			// what is equipped rewrites them and creates nothing (the Bag's rule)
+			const well = makeSurface(tile, "IconWell", 8, (TILE_H - ICON_WELL) / 2, ICON_WELL, ICON_WELL, "well", {
+				fill: SURFACE.well,
+				border: SURFACE.line,
+				zIndex: z,
+			});
+			const reserve = maxFrameCount(iconKeys(i === 0 ? ItemKind.Weapon : ItemKind.Equip));
+			const icon = IconView(well, "ItemIcon", 2, 2, ICON_WELL - 4, z + 1, reserve);
 			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]).upper(), 50, 6, TILE_W - 58, 18, TEXT.xs, THEME.foreground, {
 				font: "label",
 				align: "left",
@@ -321,7 +334,7 @@ export class SurvivorScreen {
 				align: "left",
 				zIndex: z,
 			});
-			this.slots.push({ frame: tile, glyph, name });
+			this.slots.push({ frame: tile, icon, name });
 		}
 
 		// ---- the note, across the window, and the action row: Home at the left, the main action at the right
@@ -449,24 +462,26 @@ export class SurvivorScreen {
 		if (label.Text !== text) label.Text = text;
 	}
 
-	/** a slot tile: iron with the item's glyph and name when something is in it, a dark tile saying Empty when not */
+	/** a slot tile: iron with the item's icon and name when something is in it, a dark tile saying Empty when not */
 	private paintSlot(i: number): void {
 		const save = this.ctx.save;
 		const tile = this.slots[i];
 		let name: string | undefined;
 		let kind: number = ItemKind.Equip;
+		let id: number;
 		if (i === 0) {
 			// no weapon chosen yet means the starter one in hand (the old lobby said so too)
-			const def = WEAPONS[save.equipWeapon >= 0 ? save.equipWeapon : 0];
-			name = def?.name;
+			id = save.equipWeapon >= 0 ? save.equipWeapon : 0;
+			name = WEAPONS[id]?.name;
 			kind = ItemKind.Weapon;
 		} else {
-			const id = equippedIn(save, i);
+			id = equippedIn(save, i);
 			name = id >= 0 ? EQUIPS[id]?.name : undefined;
 		}
 		const shown = name !== undefined ? this.tr(name) : this.tr("Empty");
 		paintPlate(tile.frame, name !== undefined ? THEME.secondary : SURFACE.section, "flat", 4);
-		setGlyph(tile.glyph, name !== undefined ? shown : "", kindTone(kind), name === undefined);
+		if (name !== undefined) drawItemIcon(tile.icon, kind, id);
+		else clearIcon(tile.icon);
 		this.write(tile.name, shown);
 	}
 
