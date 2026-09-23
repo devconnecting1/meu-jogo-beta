@@ -154,6 +154,58 @@ export function ghostRectSticky(
 	return { x: stickyAxis(cx - w / 2, prevX), y: stickyAxis(cy - h / 2, prevY), w, h };
 }
 
+/** how close the ghost's centre must come to a doorway or a window to drop into it */
+export const OPENING_SNAP = 88;
+
+/** a barricade or a door: the pieces that fortify an opening (EDI-13) */
+export function fortifies(def: PlaceableDef): boolean {
+	return def.kind === "barricade" || def.kind === "iron_barricade" || def.kind === "door" || def.kind === "iron_door";
+}
+
+/**
+ * Fortifying a building (docs/DESIGN_RULES.md EDI-13): a barricade or a door whose ghost comes near a doorway or
+ * a window of a building fills that opening exactly -- its gap, wall thick -- instead of landing on the 128-unit
+ * grid, where it could never fit between two walls. The placed piece keeps its own hit points, so the horde
+ * breaks in at the usual rate (it paths to it as a SOFT cell and hits it: shared/sim/ai/zombieBrain.ts).
+ * Everything else, and a ghost with no opening near, keeps the grid rect. Pure: the client's ghost and the
+ * server's placement run this same function on the same world.
+ */
+export function snapToOpening(world: WorldData, def: PlaceableDef, r: PlaceRect): PlaceRect {
+	if (!fortifies(def)) return r;
+	const cx = r.x + r.w / 2;
+	const cy = r.y + r.h / 2;
+	let best: PlaceRect | undefined;
+	let bestD = OPENING_SNAP;
+	for (const s of querySolids(world, cx - OPENING_SNAP, cy - OPENING_SNAP, cx + OPENING_SNAP, cy + OPENING_SNAP)) {
+		const openings = s.openings;
+		if (s.kind !== "building" || openings === undefined) continue;
+		for (const o of openings) {
+			const d = math.max(math.abs(o.x + o.w / 2 - cx), math.abs(o.y + o.h / 2 - cy));
+			if (d < bestD) {
+				bestD = d;
+				best = { x: o.x, y: o.y, w: o.w, h: o.h };
+			}
+		}
+	}
+	return best ?? r;
+}
+
+/**
+ * The opening whose gap starts exactly at (x, y), if any. A construction snapped into an opening travels in its
+ * `SolidAdd` as a placeable, a position and a rotation -- not a size -- so a mirror of the world rebuilds its
+ * rect with this (docs/MULTIPLAYER.md §4.5; the client does not materialise SolidAdd yet, MP_PHASE < 3).
+ */
+export function openingAt(world: WorldData, x: number, y: number): PlaceRect | undefined {
+	for (const s of querySolids(world, x - 1, y - 1, x + 1, y + 1)) {
+		const openings = s.openings;
+		if (s.kind !== "building" || openings === undefined) continue;
+		for (const o of openings) {
+			if (math.abs(o.x - x) < 0.5 && math.abs(o.y - y) < 0.5) return { x: o.x, y: o.y, w: o.w, h: o.h };
+		}
+	}
+	return undefined;
+}
+
 /** inside the world, on no (non-passable) solid, and on no survivor's or live zombie's body */
 export function placementValid(
 	world: WorldData,

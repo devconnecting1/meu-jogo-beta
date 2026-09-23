@@ -30,25 +30,63 @@ export function blocksMovement(s: Solid): boolean {
 
 /**
  * Stops bullets, arrows and line of sight. Like the original (collision with par_solid only),
- * shots fly over the player's own constructions so you can shoot from behind a barricade.
+ * shots fly over the player's own constructions so you can shoot from behind a barricade -- and over the
+ * LOW furniture of a building (a table, a bed, a counter, EDI-12); a tall shelf or a wardrobe stops them.
  */
 export function blocksShots(s: Solid): boolean {
-	return isBlocking(s) && !isPlayerBuilt(s);
+	return isBlocking(s) && !isPlayerBuilt(s) && s.low !== true;
+}
+
+// ---------------------------------------------------------------------------
+// windows (docs/DESIGN_RULES.md EDI-10)
+
+/**
+ * A body whose centre is in a window's vault zone moves at this share of its speed: climbing through the frame.
+ * The zone is the window's gap and VAULT_REACH on each side of the wall, so a walker (90 u/s) spends ~1.3 s in
+ * it and a survivor (210 u/s) ~0.6 s. It is the same for everybody: the survivor can escape through a window
+ * and the horde can come in through one, and neither is instant.
+ */
+export const VAULT_SLOW = 0.4;
+export const VAULT_REACH = 14;
+
+/** is (x, y) in the vault zone of window `s` (a passable solid tagged "window")? */
+export function inVaultZone(s: Solid, x: number, y: number): boolean {
+	if (s.w >= s.h) {
+		return x >= s.x && x <= s.x + s.w && y >= s.y - VAULT_REACH && y <= s.y + s.h + VAULT_REACH;
+	}
+	return y >= s.y && y <= s.y + s.h && x >= s.x - VAULT_REACH && x <= s.x + s.w + VAULT_REACH;
+}
+
+const vaultScratch: Array<Solid> = [];
+
+/** the speed factor of a body at (x, y): VAULT_SLOW in a window, 1 elsewhere */
+export function vaultFactor(world: WorldData, x: number, y: number): number {
+	vaultScratch.clear();
+	querySolids(world, x - VAULT_REACH, y - VAULT_REACH, x + VAULT_REACH, y + VAULT_REACH, vaultScratch);
+	for (const s of vaultScratch) {
+		if (s.kind === "window" && inVaultZone(s, x, y)) return VAULT_SLOW;
+	}
+	return 1;
 }
 
 // ---------------------------------------------------------------------------
 // circle vs AABB
 
 const scratch: Array<Solid> = [];
+/** set by resolveCircle: the position it was asked about lies in a window's vault zone */
+let lastInVault = false;
 
 /** push a circle out of every blocking rect it overlaps (a few Gauss-Seidel passes) */
 function resolveCircle(world: WorldData, x: number, y: number, r: number): MoveResult {
 	let hit: Solid | undefined;
+	lastInVault = false;
 	for (let iter = 0; iter < 4; iter++) {
 		scratch.clear();
 		querySolids(world, x - r, y - r, x + r, y + r, scratch);
 		let moved = false;
 		for (const s of scratch) {
+			// the window under the body is found by the query this step already paid for
+			if (iter === 0 && s.kind === "window" && inVaultZone(s, x, y)) lastInVault = true;
 			if (!isBlocking(s)) continue;
 			const qx = math.clamp(x, s.x, s.x + s.w);
 			const qy = math.clamp(y, s.y, s.y + s.h);
@@ -86,6 +124,10 @@ function resolveCircle(world: WorldData, x: number, y: number, r: number): MoveR
  * Real circle×AABB collision: penetration is resolved along the contact normal, so the actor
  * slides along walls and rounds corners; long moves are split into sub-steps (≤ radius/2) so
  * nothing tunnels through a thin wall. Used for the player (gameLoop), zombies and knockback.
+ *
+ * A body in a window's vault zone moves at VAULT_SLOW (EDI-10): each sub-step is scaled by where the last one
+ * landed, the first by where the body starts. Server, prediction and zombies all come through here, so the
+ * climb is the same for everyone and the prediction never disagrees with the server about it.
  */
 export function moveActor(world: WorldData, x: number, y: number, radius: number, dx: number, dy: number): MoveResult {
 	let len = math.sqrt(dx * dx + dy * dy);
@@ -100,11 +142,13 @@ export function moveActor(world: WorldData, x: number, y: number, radius: number
 	const sx = dx / steps;
 	const sy = dy / steps;
 	let hit: Solid | undefined;
+	let k = len > 1e-6 ? vaultFactor(world, x, y) : 1;
 	for (let i = 0; i < steps; i++) {
-		const r = resolveCircle(world, x + sx, y + sy, radius);
+		const r = resolveCircle(world, x + sx * k, y + sy * k, radius);
 		x = r.x;
 		y = r.y;
 		if (hit === undefined && r.hit !== undefined) hit = r.hit;
+		k = lastInVault ? VAULT_SLOW : 1;
 	}
 	if (len < 1e-6) {
 		// still resolve a standing actor (e.g. a door closed on it)
@@ -260,14 +304,51 @@ export function rayCircle(
 // navigation: flow field around the player
 
 const FREE = 0;
-const SOFT = 1;
-const HARD = 2;
+/** a window's sill: passable at WINDOW_COST (EDI-10) */
+const VAULT = 1;
+const SOFT = 2;
+const HARD = 3;
 const INF = 1e9;
 const COST_ORTHO = 10;
 const COST_DIAG = 14;
 /** extra cost to go through a player construction (zombies would rather walk around it) */
 const COST_SOFT = 60;
+/**
+ * Extra cost of climbing through a window, in the field's units (10 per cell): five cells, ~160 u of walking.
+ * A little more than the climb really takes a walker (the vault zone at VAULT_SLOW costs it ~70 u of walking),
+ * so the horde takes a door when one is close and a window when the door is far or jammed (EDI-10). Kept
+ * below COST_SOFT: the Dial rings are sized by the costliest edge.
+ */
+export const WINDOW_COST = 50;
 const BUCKETS = COST_DIAG + COST_SOFT + 1;
+
+/**
+ * Stamps a window's sill into a flow-field grid: the ONE row (or column) of cells its wall's mid-line crosses,
+ * across the gap. Never more than one cell deep, so crossing a window costs exactly WINDOW_COST once. `stamp`
+ * raises a cell to `v` (a wall beside the gap stays HARD).
+ */
+export function stampWindow(
+	s: Solid,
+	ox: number,
+	oy: number,
+	cell: number,
+	size: number,
+	stamp: (gx: number, gy: number) => void,
+): void {
+	if (s.w >= s.h) {
+		const gy = math.floor((s.y + s.h / 2 - oy) / cell);
+		if (gy < 0 || gy >= size) return;
+		const gx0 = math.max(0, math.floor((s.x - ox) / cell));
+		const gx1 = math.min(size - 1, math.floor((s.x + s.w - ox) / cell));
+		for (let gx = gx0; gx <= gx1; gx++) stamp(gx, gy);
+	} else {
+		const gx = math.floor((s.x + s.w / 2 - ox) / cell);
+		if (gx < 0 || gx >= size) return;
+		const gy0 = math.max(0, math.floor((s.y - oy) / cell));
+		const gy1 = math.min(size - 1, math.floor((s.y + s.h - oy) / cell));
+		for (let gy = gy0; gy <= gy1; gy++) stamp(gx, gy);
+	}
+}
 const NX: Array<number> = [1, -1, 0, 0, 1, 1, -1, -1];
 const NY: Array<number> = [0, 0, 1, -1, 1, -1, 1, -1];
 
@@ -353,6 +434,12 @@ export class FlowField {
 		querySolids(world, ox, oy, ox + span, oy + span, buf);
 		const inflate = 4;
 		for (const s of buf) {
+			if (s.kind === "window") {
+				stampWindow(s, ox, oy, cell, size, (gx, gy) => {
+					if (grid[gy * size + gx] < VAULT) grid[gy * size + gx] = VAULT;
+				});
+				continue;
+			}
 			if (!isBlocking(s)) continue;
 			const v = isPlayerBuilt(s) && s.destructible ? SOFT : HARD;
 			const gx0 = math.max(0, math.floor((s.x - inflate - ox) / cell));
@@ -451,6 +538,7 @@ export class FlowField {
 					cost = COST_DIAG;
 				}
 				if (g === SOFT) cost += COST_SOFT;
+				else if (g === VAULT) cost += WINDOW_COST;
 				const nd = d + cost;
 				if (nd < dist[ni]) {
 					dist[ni] = nd;
