@@ -217,10 +217,11 @@ const SCREENS = [
 		needsLobby: true,
 	},
 	{
+		// a UI-07 window since the tables merge (client/ui/records.ts), no longer a popup
 		name: "Records (lobby)",
 		phase: "lobby",
-		root: "PopupOverlay",
-		control: "PopupBtn0",
+		root: "Records",
+		control: "Close",
 		open: () => {
 			findIn(layer.FindFirstChild("Lobby"), "Nav3").Activated.Fire();
 			flush();
@@ -568,21 +569,28 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	flush();
 	nav(3).Activated.Fire();
 	flush();
-	const records = layer.FindFirstChild("PopupOverlay");
-	const text = records
-		?.GetDescendants()
-		.filter(d => d.ClassName === "TextLabel")
-		.map(d => d.Text)
-		.join("\n");
+	// the Records window (client/ui/records.ts): one table row per record, the label and the value in two cells
+	const records = layer.FindFirstChild("Records");
+	const rowText = label => {
+		const cell = records?.GetDescendants().find(d => d.ClassName === "TextLabel" && d.Text === label);
+		const row = cell?.Parent;
+		return row?.GetDescendants().find(d => d.ClassName === "TextLabel" && d !== cell && d.Text !== "")?.Text;
+	};
+	const shownRecords = {
+		best: rowText("Best day"),
+		life: rowText("Life day"),
+		level: rowText("Level"),
+		rebirths: rowText("Rebirths"),
+	};
 	check(
 		"Records: o recorde, o dia desta vida, o nivel e os Rebirths sao os do save",
-		/Best day:\s+12/.test(text) &&
-			/Life day:\s+3/.test(text) &&
-			/Level:\s+7/.test(text) &&
-			/Rebirth:\s+2/.test(text),
-		JSON.stringify(text),
+		shownRecords.best === "12" &&
+			shownRecords.life === "3" &&
+			shownRecords.level === "7" &&
+			shownRecords.rebirths === "2",
+		JSON.stringify(shownRecords),
 	);
-	findIn(records, "PopupBtn0").Activated.Fire();
+	findIn(records, "Close").Activated.Fire();
 	flush();
 	const lobbySub = findIn(nav(3), "Sub")?.Text;
 	check("...e a chapa Records diz o mesmo recorde", lobbySub === "Best day 12", lobbySub);

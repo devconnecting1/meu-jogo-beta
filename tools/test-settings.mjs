@@ -780,6 +780,14 @@ const PROBES = {
 		tap(key("P"));
 		return input.pausePressed;
 	},
+	// MP-23: the match scoreboard shows while Q is HELD (Tab is the Roblox player list's, UI-02)
+	"Q (hold)": () => {
+		fresh();
+		press(key("Q"));
+		const held = input.keyScoreboard === true;
+		release(key("Q"));
+		return held && input.keyScoreboard === false;
+	},
 	// ---- touch
 	"Left thumb": () =>
 		withTouchHud(() => {
@@ -903,6 +911,12 @@ const PROBES = {
 		fresh();
 		tap(pad("ButtonStart"));
 		return input.pausePressed;
+	},
+	// MP-23: Back / Select opens and closes the match scoreboard
+	Back: () => {
+		fresh();
+		tap(pad("ButtonSelect"));
+		return input.scoreboardPressed === true;
 	},
 	"D-pad": () => GuiService.GuiNavigationEnabled === true,
 };
