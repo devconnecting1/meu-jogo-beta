@@ -232,6 +232,8 @@ export class ServerSimulation {
 	/** what the boot decided this server owns; a world that ends is rebuilt with the very same answers (MP-22) */
 	private readonly ownsHorde: boolean;
 	private readonly ownsInteractive: boolean;
+	/** the survivor whose weapon machine is running this instant (the `chop` hook spills toward them) */
+	private swinger?: ServerPlayer;
 
 	constructor(options: SimulationOptions) {
 		this.world = options.world;
@@ -338,6 +340,8 @@ export class ServerSimulation {
 			// tell "the server made this" from "we both generated this from the seed"
 			serverWorld(world);
 			const items = new ServerItems({ world, out: this.worldOut });
+			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
+			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
 			const build = new ServerBuild({
 				world,
@@ -392,6 +396,15 @@ export class ServerSimulation {
 				fx: event => this.onFx?.(event),
 				// a bow and a flamethrower do not fire a ray: they ask the world to fly something (§2.3)
 				projectile: request => projectiles.launch(horde.refs, request),
+				// F3: a blade that crosses a tree, a car or a bin may knock something out of it, toward whoever swung
+				// (server/sim/items.ts). Only where the server owns the items; the swinger is the survivor whose
+				// weapon machine is running
+				chop: (s, chopping) => {
+					const items = this.items;
+					const by = this.swinger;
+					if (items === undefined || by === undefined) return false;
+					return items.hitMapItem(s, chopping, by.state.x, by.state.y);
+				},
 			},
 		});
 		out.combat = combat;
@@ -517,6 +530,8 @@ export class ServerSimulation {
 	add(sp: ServerPlayer): boolean {
 		if (this.bySlot.has(sp.slot)) return false;
 		this.bySlot.set(sp.slot, sp);
+		// the welcome that follows (server/sim/life.ts) hands this client every item around the spawn point
+		this.items?.welcomed(sp.slot, sp.state.x, sp.state.y);
 		this.order.push(sp.slot);
 		let i = this.order.size() - 1;
 		while (i > 0 && this.order[i - 1] > sp.slot) {
@@ -539,6 +554,7 @@ export class ServerSimulation {
 		this.build?.remove(slot, sp.save);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
+		this.items?.forget(slot);
 		this.backpack.remove(slot);
 		this.bySlot.delete(slot);
 		for (let i = 0; i < this.order.size(); i++) {
@@ -558,6 +574,8 @@ export class ServerSimulation {
 			const sp = this.bySlot.get(slot);
 			if (sp !== undefined) this.roster.push(sp);
 		}
+		// ...and the bodies with it, so something made between two ticks (an admin's drop) already knows who is near
+		this.refreshBodies();
 	}
 
 	get(slot: number): ServerPlayer | undefined {
@@ -635,8 +653,10 @@ export class ServerSimulation {
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
 			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção")
+			this.swinger = sp;
 			const armed = this.build?.placing(sp.slot) === true ? holstered(cmd) : cmd;
 			this.combat?.stepPlayer(sp, armed, this.tick, this.tickDt);
+			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
 			this.stepWorldActions(sp, cmd);
@@ -733,6 +753,7 @@ export class ServerSimulation {
 		this.build?.step(this.tickDt);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		items.sweepInterest(this.tickDt);
 		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}
 

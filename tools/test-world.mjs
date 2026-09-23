@@ -186,7 +186,17 @@ section("a) dois clientes disputam o mesmo item: um leva, o outro nao (§8.3, ac
 	check(gotA === 0 || gotB === 0, "e a outra mochila nao recebeu nada", `A +${gotA}, B +${gotB}`);
 	checkEq(world.items.size(), 0, "o item saiu do mundo");
 	const pending = drain(sim);
-	checkEq(countDeltas(pending, P.WorldEv.ItemRemove), 1, "e sumiu do mundo UMA vez (um ItemRemove)");
+	// one removal, told to each client that had been told about the item (a ghost otherwise stays on a screen)
+	const removes = pending.filter(d => d.ev.t === P.WorldEv.ItemRemove);
+	checkEq([...new Set(removes.map(d => d.ev.id))].length, 1, "e sumiu do mundo UMA vez (um so id removido)");
+	checkEq(
+		removes
+			.map(d => d.slot)
+			.sort()
+			.join(","),
+		"0,1",
+		"avisado uma vez a cada cliente que o via",
+	);
 
 	// the loser presses again, at an item that is gone
 	const again = countItem(gotA > 0 ? b.save : a.save, 4, 23);
@@ -837,26 +847,51 @@ section("k) quem entra depois recebe o mundo que ja existia (WorldInit, §4.5)")
 	);
 }
 
-section("l) itens fora do interesse nao viajam (§4.3, §4.5)");
+section("l) itens fora do interesse nao viajam, e o que cada cliente viu e seguido ate sumir (§4.3, §4.5)");
 {
 	const world = emptyWorld();
 	const sim = newSim(world);
 	const near = addPlayer(sim, 0, 1000, 1000);
 	const far = addPlayer(sim, 1, 1000 + CFG.ITEM_INTEREST + 500, 1000);
+	// one tick, so the simulation knows where its survivors stand
+	run(sim, 1);
 	drain(sim);
-	W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
+	const item = W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
 	const pending = drain(sim);
 	const adds = pending.filter(d => d.ev.t === P.WorldEv.ItemAdd);
 	checkEq(adds.length, 1, "um ItemAdd foi enfileirado");
-	checkEq(adds[0].range, CFG.ITEM_INTEREST, `filtrado por ${CFG.ITEM_INTEREST} u de interesse`);
+	checkEq(adds[0].slot, near.slot, "so para quem esta perto dele");
 	check(near.slot === 0 && far.slot === 1, "com um jogador perto e um longe");
-	// the filter itself is applied by the replicator; check the geometry it will use
-	const dx = far.state.x - adds[0].x;
-	check(
-		Math.abs(dx) > CFG.ITEM_INTEREST,
-		"e o jogador distante esta fora desse raio",
-		`${Math.abs(dx).toFixed(0)} u`,
-	);
+	check(Math.abs(far.state.x - item.x) > CFG.ITEM_INTEREST, "e o jogador distante esta fora do raio");
+
+	// the far survivor walks up to it: the sweep tells them, once
+	far.state.x = 1200;
+	run(sim, 40);
+	const late = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === item.id);
+	checkEq(late.length, 1, "quem chega perto depois recebe o ItemAdd (a varredura de interesse)");
+	checkEq(late[0]?.slot, far.slot, "so ele");
+	run(sim, 40);
+	checkEq(countDeltas(drain(sim), P.WorldEv.ItemAdd), 0, "e so uma vez");
+
+	// the first survivor walks far away; somebody takes the item: they are still told it is gone
+	near.state.x = 1000 + CFG.ITEM_INTEREST + 200; // past ITEM_INTEREST, inside the exit hysteresis
+	run(sim, 40);
+	drain(sim);
+	W.removeGroundItem(world, item);
+	const gone = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === item.id);
+	checkEq(gone.length, 2, "o ItemRemove vai para os DOIS que o viram, perto ou longe (sem item fantasma)");
+
+	// an item left behind past the exit radius leaves that screen, and comes back with the survivor
+	const kept = W.spawnGroundItem(world, 4, 23, 1, 1200, 1000);
+	drain(sim);
+	far.state.x = 1200 + 2600;
+	run(sim, 40);
+	const left = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === kept.id);
+	checkEq(left.length, 1, "longe demais, o item sai da tela de quem se afastou");
+	far.state.x = 1300;
+	run(sim, 40);
+	const back = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === kept.id);
+	checkEq(back.length, 1, "e volta quando ele volta");
 }
 
 // ================================================================ p. the backpack verbs (QA NET-1..4)
