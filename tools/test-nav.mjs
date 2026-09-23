@@ -1049,19 +1049,12 @@ const LANG_COUNT = [...LANG].length;
 const PROPER = new Set([
 	GAME_NAME,
 	"PROJECT Z",
-	"Dead Town (Lemon Puppy Games)",
-	"roblox-ts",
+	// the credits (credits.ts, Settings › About): who made it and what inspired it (shared/module.ts)
+	"Luvitlua",
+	"Dead Town",
 	"Tester",
 	"X",
 	"?",
-	// the original's credits (credits.ts): studios, a site and people's handles
-	"Yoyo games",
-	"Crazy GM",
-	"Play GM",
-	"opengameart.org",
-	"dlf0325",
-	"sodium031",
-	"zizonpink",
 ]);
 /** key legends are keys (the kit's Keycap / ValueKey / badge): the keyboard's letters and the pad's button names */
 const KEYS = new Set(SCHEMES.flatMap(s => s.rows.map(r => r[0])));

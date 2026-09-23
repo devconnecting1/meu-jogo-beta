@@ -19,9 +19,10 @@
  *   2. AUDIO           SFX and BGM: the slider moves the real SoundGroup volumes (sfx, ui, bgm) on the next frame, by
  *                      the documented curve; the previews play on the right bus while dragging (and the first move up
  *                      from 0 is heard); 0 mutes and skips playing; the night music stops at 0 and comes back.
- *   3. HUD SIZE        the console, the day plate, the E hint, the banner and the message feed of a mounted HUD are
- *                      80%..120% by the slider; the Touch tab's preview console follows it too, and so does the
- *                      first-run coach when the size changes in the middle of a run.
+ *   3. HUD SIZE        the console (with the day clock and the scoreboard's chip in it), the E hint, the banner and
+ *                      the message feed of a mounted HUD are 80%..120% by the slider -- the banner right under the
+ *                      bar at every size, the feed under it; the Touch tab's preview console follows it too, and so
+ *                      does the first-run coach when the size changes in the middle of a run.
  *   4. TOUCH           each slider and switch moves the geometry the bootstrap hit-tests (getTouchLayout), the HUD's
  *                      touch layer is redrawn on it, the preview is that very layout (under a real top bar too), a
  *                      fixed stick is only grabbed at its home, and left-handed swaps which half moves.
@@ -377,7 +378,8 @@ const hudPart = name =>
 		.find(d => d.Name === name);
 /** the design-space width (Scale of the screen) a HUD cluster takes */
 const hudW = name => hudPart(name)?.Size.X.Scale;
-const HUD_PARTS = ["Console", "DayPlate", "HintBox", "BannerBox", "Feed"];
+// the day clock and the scoreboard's chip are parts of the console now (UI-09, MP-23): they scale with it
+const HUD_PARTS = ["Console", "HintBox", "BannerBox", "Feed"];
 /** the top and bottom (design units, from the top of the screen) of a cluster anchored at the top */
 const hudSpan = name => {
 	const f = hudPart(name);
@@ -389,7 +391,12 @@ function mountedSizes(uiSize) {
 	flush();
 	const out = { spans: {} };
 	for (const n of HUD_PARTS) out[n] = hudW(n);
-	for (const n of ["DayPlate", "BannerBox", "Feed"]) out.spans[n] = hudSpan(n);
+	for (const n of ["BannerBox", "Feed"]) out.spans[n] = hudSpan(n);
+	out.inConsole = ["Sky", "ChipSlot"].every(n =>
+		hudPart("Console")
+			?.GetDescendants()
+			.some(d => d.Name === n),
+	);
 	hud.unmount();
 	flush();
 	return out;
@@ -401,27 +408,28 @@ function mountedSizes(uiSize) {
 	const ratio = n => big[n] / small[n];
 	const wrong = HUD_PARTS.filter(n => small[n] === undefined || !near(ratio(n), 1.2 / 0.8, 1e-6));
 	check(
-		"HUD size 0% -> 100% do slider: console, placa do dia, dica E, faixa de aviso e mensagens crescem de 80% para 120%",
-		wrong.length === 0,
+		"HUD size 0% -> 100% do slider: console (com o relogio e o chip do placar), dica E, faixa de aviso e mensagens crescem de 80% para 120%",
+		wrong.length === 0 && small.inConsole && big.inConsole,
 		HUD_PARTS.map(n => `${n} x${small[n] === undefined ? "?" : ratio(n).toFixed(3)}`).join(", "),
 	);
 	const mid = mountedSizes(0.5);
 	check(
 		"...e o padrao (50%) e o tamanho de desenho (x1,0)",
-		near(mid.Console * DESIGN_W, 638, 1e-6),
+		near(mid.Console * DESIGN_W, 778, 1e-6),
 		`console ${px(mid.Console * DESIGN_W)} unidades`,
 	);
-	// top down: the day plate, the banner under it, the feed under the banner -- at every size, none on another
+	// top down: the banner right under the bar (the top centre is the messages' since the day plate moved into the
+	// console), the feed under the banner -- at every size, the banner at the same top, none on another
 	const stacked = [small, mid, big].every(
-		m => m.spans.DayPlate[1] <= m.spans.BannerBox[0] + 1e-6 && m.spans.BannerBox[1] <= m.spans.Feed[0] + 1e-6,
+		m =>
+			near(m.spans.BannerBox[0], small.spans.BannerBox[0], 1e-6) &&
+			m.spans.BannerBox[1] <= m.spans.Feed[0] + 1e-6,
 	);
 	check(
-		"...e em todo tamanho a placa do dia, a faixa de aviso e as mensagens ficam uma sob a outra, sem se cobrir",
-		stacked,
+		"...e em todo tamanho a faixa de aviso fica logo abaixo da barra e as mensagens sob ela, sem se cobrir",
+		stacked && near(small.spans.BannerBox[0], 20, 1e-6),
 		[small, mid, big]
-			.map(m =>
-				["DayPlate", "BannerBox", "Feed"].map(n => m.spans[n].map(v => v.toFixed(0)).join("-")).join(" | "),
-			)
+			.map(m => ["BannerBox", "Feed"].map(n => m.spans[n].map(v => v.toFixed(0)).join("-")).join(" | "))
 			.join(" ;; "),
 	);
 	ctx.phase = "lobby";
@@ -1165,11 +1173,14 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 	const creditsSrc = readFileSync(join(SRC, "client/ui/credits.ts"), "utf8");
 	const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 	check("Game: o nome do jogo (GAME_NAME de shared/module.ts)", value("Game") === GAME_NAME, value("Game"));
+	const moduleSrc = readFileSync(join(SRC, "shared/module.ts"), "utf8");
 	check(
-		"Inspired by: o original e o estudio, como a CON-01 e a tela de creditos dizem",
-		value("Inspired") === "Dead Town (Lemon Puppy Games)" &&
-			creditsSrc.includes('"Inspired by Dead Town"') &&
-			creditsSrc.includes('"by Lemon Puppy Games"'),
+		"Inspired by: so o nome do original, sem estudio (CON-01), o mesmo da tela de creditos",
+		value("Inspired") === "Dead Town" &&
+			moduleSrc.includes('INSPIRED_BY = "Dead Town"') &&
+			creditsSrc.includes('"Inspired by the original"') &&
+			creditsSrc.includes("INSPIRED_BY") &&
+			!/Lemon Puppy/.test(creditsSrc),
 		value("Inspired"),
 	);
 	check(
@@ -1178,10 +1189,13 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 		value("Mode"),
 	);
 	check(
-		"Built with: roblox-ts, o compilador do projeto (package.json), como os creditos dizem",
-		value("Built") === "roblox-ts" &&
-			pkg.devDependencies["roblox-ts"] !== undefined &&
-			creditsSrc.includes("roblox-ts"),
+		"Developed by: Luvitlua (shared/module.ts), como os creditos dizem; nenhuma ferramenta ou empresa",
+		value("Developer") === "Luvitlua" &&
+			moduleSrc.includes('DEVELOPER = "Luvitlua"') &&
+			creditsSrc.includes('"Developed by"') &&
+			creditsSrc.includes("DEVELOPER") &&
+			!/roblox-ts|Yoyo|Lemon Puppy/.test(creditsSrc),
+		value("Developer"),
 	);
 	// the version, from ONE source: package.json -> shared/version.ts (`npm run stamp`), "dev" builds show it bare and a
 	// CI build names its commit; the committed file must be what the generator writes from package.json today

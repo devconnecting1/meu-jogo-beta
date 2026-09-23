@@ -1073,6 +1073,53 @@ function stream({
 	);
 }
 
+{
+	/*
+	 * NIT 1 (the second review of the zombie-motion branch): a body the shooter draws `extra` ticks further back gets
+	 * that much more rewind ceiling -- extra / SIM_HZ, up to MID_REWIND_EXTRA_S -- not all of MID_REWIND_EXTRA_S for
+	 * any extra above 0. A body easing its extra after a change of ring is drawn a fraction of a tick further back,
+	 * and with the whole 50 ms a lag switch's second-old view reached 3 ticks past what its ping explains through it.
+	 * A walker going down the screen at 5 u a tick: where it is rewound to tells the tick it was judged at.
+	 */
+	const T = 40;
+	const judgedWith = extra => {
+		const fx = newFixture();
+		const sp = makePlayer(fx, 0, SHOOTER_X, SHOOTER_Y, 15);
+		fx.combat.setPing(0, 0);
+		const z = tough(createZombie(1, TARGET_X, SHOOTER_Y, 1));
+		fx.zombies.push(z);
+		for (let tick = 1; tick <= T; tick++) {
+			z.y = SHOOTER_Y + 5 * tick;
+			fx.combat.afterWorld(tick);
+		}
+		fx.combat.targets.viewExtraTicks = () => extra;
+		// a lag switch: the view it declares is a second old, far past its ceiling
+		sp.viewTick = wrapU16(T - CFG.SIM_HZ);
+		sp.viewFrac = 0;
+		const st = fx.combat.slotOf(0);
+		const capTicks = rewindCapS(fx.combat.lagOf(sp, st), CFG.INTERP_DEFAULT_S, CFG.SIM_HZ) * CFG.SIM_HZ;
+		fx.combat.prepareTargets(sp, st, T);
+		// ticks past the ceiling the body was judged at
+		return T - (fx.combat.candY[0] - SHOOTER_Y) / 5 - capTicks;
+	};
+	const midTicks = CFG.MID_REWIND_EXTRA_S * CFG.SIM_HZ;
+	const eased = judgedWith(0.3);
+	check(
+		Math.abs(eased - 0.3) < 1e-6,
+		`a body drawn 0.3 tick further back is judged 0.3 tick past the ceiling, not ${midTicks} (${eased.toFixed(2)})`,
+	);
+	const whole = judgedWith(midTicks);
+	check(
+		Math.abs(whole - midTicks) < 1e-6,
+		`one drawn the whole mid-ring interval back still gets all of MID_REWIND_EXTRA_S (${whole.toFixed(2)} ticks)`,
+	);
+	const beyond = judgedWith(10 * midTicks);
+	check(
+		Math.abs(beyond - midTicks) < 1e-6,
+		`and no answer of the ring's hook reaches past MID_REWIND_EXTRA_S, which the history is sized for (${beyond.toFixed(2)})`,
+	);
+}
+
 // ================================================================ c'. the history ring itself
 
 section("c'. the position ring answers for the whole window and forgets what left it (§2.3)");

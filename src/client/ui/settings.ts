@@ -3,6 +3,7 @@ import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
 import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
+import { DEVELOPER, INSPIRED_BY } from "shared/module";
 import { GAME_BUILD, GAME_VERSION } from "shared/version";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
@@ -365,9 +366,10 @@ export function showSettings(
 			title: tr("Interface"),
 		});
 		const uiList = SettingsList(ui.frame, "List", LIST_X, listY, LIST_W, INTERFACE_LIST_H);
-		// hud.ts (console, day plate, the E hint, the messages) and the first run's coach read it when a run mounts
+		// hud.ts (the console -- the day clock and the scoreboard's chip are in it --, the E hint, the messages) and
+		// the first run's coach read it when a run mounts
 		sliderRow(
-			SettingRow(uiList, "UiSize", 0, tr("HUD size"), form("Console, day plate, hints and messages.")),
+			SettingRow(uiList, "UiSize", 0, tr("HUD size"), form("Console, hints and messages.")),
 			"UiSize",
 			valueW,
 			() => s.uiSize,
@@ -608,15 +610,15 @@ export function showSettings(
 		const valueW = LIST_W - 220;
 		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
 		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
-		// CON-01: the original is credited, by name and studio
-		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, "Dead Town (Lemon Puppy Games)");
+		// CON-01: the original is credited by its name, never its studio (the owner's decision, 2026-09-23)
+		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, INSPIRED_BY);
 		// MP-01 / MULTIPLAYER.md: co-op only, MAX_PLAYERS survivors per server
 		textRow(
 			SettingRow(list, "Mode", 3, tr("Mode")),
 			valueW,
 			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
 		);
-		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		textRow(SettingRow(list, "Developer", 4, tr("Developed by")), valueW, DEVELOPER);
 		// which build this is, from one source (package.json -> shared/version.ts, `npm run stamp`; the CI stamps the
 		// commit into the place it publishes), so a report says which build it was
 		const build = GAME_BUILD === "dev" ? GAME_VERSION : `${GAME_VERSION} (${GAME_BUILD})`;

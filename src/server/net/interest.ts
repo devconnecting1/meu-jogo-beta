@@ -25,6 +25,9 @@
  */
 import {
 	DARK_SENSE_RANGE,
+	DESPAWN_FADE_S,
+	DESPAWN_MID_S,
+	DESPAWN_NEAR_S,
 	INTEREST_EXIT,
 	INTEREST_MID,
 	INTEREST_NEAR,
@@ -196,6 +199,8 @@ interface ActorRing {
 	sent: boolean;
 	/** the `mid` flag last SENT for it: what the viewer's track holds (client/net/snapshotBuffer.ts `track.mid`) */
 	wireMid: boolean;
+	/** tick of the last snapshot that carried it: a track nothing reaches for long enough is retired (`noteSent`) */
+	sentAt: number;
 	/**
 	 * The viewer's extra delay for it, in ticks, as its client eases it (`easeExtra`): `extraFrom` when the snapshot
 	 * of tick `extraAt` -- the first to carry the current flag -- arrived, moving towards `extraTo` at
@@ -219,6 +224,15 @@ function easedExtra(from: number, to: number, elapsed: number): number {
 	if (!(elapsed > 0)) return from;
 	const step = RENDER_DELAY_RATE * elapsed;
 	return from + math.clamp(to - from, -step, step);
+}
+
+/**
+ * Ticks without a snapshot after which the viewer no longer has a track for a body last sent with this `mid` flag:
+ * its ring's timeout, then the fade (client/net/snapshotBuffer.ts `advanceActors`, §4.4). A fade that starts below
+ * full alpha ends sooner; the longest one is the one that decides whether a track can still be there.
+ */
+export function retiredAfterTicks(mid: boolean, simHz: number): number {
+	return ((mid ? DESPAWN_MID_S : DESPAWN_NEAR_S) + DESPAWN_FADE_S) * simHz;
 }
 
 /**
@@ -260,6 +274,7 @@ export class ActorInterest {
 				seen: round,
 				sent: false,
 				wireMid: false,
+				sentAt: 0,
 				extraFrom: 0,
 				extraTo: 0,
 				extraAt: 0,
@@ -272,19 +287,29 @@ export class ActorInterest {
 	 * A snapshot of `tick` carried this body to this viewer with this `mid` flag, and `extra` is the mid ring's
 	 * extra delay in ticks (midViewExtraTicks). What the client does with the flag: a new track takes its extra at
 	 * once; a changed flag starts easing it from wherever it was when that snapshot landed.
+	 *
+	 * A NEW track is not only a body seen for the first time. The client retires a track that stops arriving
+	 * (`retiredAfterTicks`: 0.45 s near, 0.75 s mid), while the pair stays here for as long as the body stays in
+	 * interest -- in the dark outside every light, inside a building, past SNAP_ZOMBIE_CAP in a horde. A body carried
+	 * again after that is a new track on the client, drawn at its extra from the first frame; eased from the old ring
+	 * here instead, a zombie lit in the mid ring that walked up in the dark and was lit again in the near one was
+	 * judged up to 3 ticks off the body on screen for most of a second (the second review of the zombie-motion branch,
+	 * S3; tools/test-replication.mjs a3: 14.7 u, and 9.8 u the other way round, where it is now 0.00 u).
 	 */
-	noteSent(viewer: number, netId: number, mid: boolean, tick: number, extra: number): void {
+	noteSent(viewer: number, netId: number, mid: boolean, tick: number, extra: number, simHz: number): void {
 		const pair = this.rings.get(ActorInterest.key(viewer, netId));
 		if (pair === undefined) return;
 		const to = mid ? extra : 0;
-		if (!pair.sent) {
+		if (!pair.sent || tick - pair.sentAt > retiredAfterTicks(pair.wireMid, simHz)) {
 			pair.sent = true;
 			pair.wireMid = mid;
+			pair.sentAt = tick;
 			pair.extraFrom = to;
 			pair.extraTo = to;
 			pair.extraAt = tick;
 			return;
 		}
+		pair.sentAt = tick;
 		if (pair.wireMid === mid) return;
 		pair.extraFrom = easedExtra(pair.extraFrom, pair.extraTo, tick - pair.extraAt);
 		pair.extraTo = to;

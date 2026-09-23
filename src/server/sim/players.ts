@@ -392,15 +392,8 @@ function carryEdges(edges: number, queue: Array<InputCommand>): void {
 		release -= tr;
 		action -= ta;
 		reload -= tl;
-		// a new table: the decoded command may be shared with whoever handed the packet over
-		queue[i] = {
-			seq: q.seq,
-			moveAng: q.moveAng,
-			moveMag: q.moveMag,
-			aim: q.aim,
-			held: q.held,
-			edges: packEdges(p + tp, r + tr, a + ta, l + tl),
-		};
+		// in place: a queued command is the queue's own table (`acceptInput`), no new one per change
+		q.edges = packEdges(p + tp, r + tr, a + ta, l + tl);
 	}
 }
 
@@ -476,6 +469,10 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): boolean {
 /**
  * Applies one decoded Input packet (§2.2: 1..3 commands, newest first). Call it only after the token bucket
  * accepted the packet. Never throws: every field of `packet` already went through decodeInput.
+ *
+ * The commands the queue takes become ITS tables: the ceiling hands a dropped command's taps on to the queued ones by
+ * writing their `edges` (`carryEdges`). `ingestInput` passes the fresh tables `decodeInput` just made; a caller that
+ * keeps its own commands (a test driving the queue directly) hands over copies.
  *
  * `grace` is the SERVER's (ServerSimulation.inputGrace): how many ticks of a debt it is repaying it owes right now
  * beyond the next one, each of which will consume a command. Clamped here as well, so no caller can open the

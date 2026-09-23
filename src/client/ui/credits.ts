@@ -1,31 +1,25 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
+import { DEVELOPER, INSPIRED_BY } from "shared/module";
 import { registerBack } from "./backStack";
 import { TEXT, THEME } from "./theme";
 import { Button, autoFocus, makeFrame, makeLabel, makeScreen } from "./widgets";
 
 /**
  * The credits, a line each. `true`: words a translator translates, so they go through lang.ts (UI-03) and are in its
- * table; `false`: a name -- the game's, a studio's, a site's, a person's handle -- which reads the same in every
- * language. An empty line is a gap.
+ * table; `false`: a name -- the game's, its developer's, the original's -- which reads the same in every language.
+ * An empty line is a gap.
+ *
+ * Who made it and what inspired it, nothing else (the owner's decision, 2026-09-23): no studio, company or tool.
  */
 const CREDIT_LINES: Array<[string, boolean]> = [
 	["PROJECT Z", false],
-	["Top-down zombie survival for Roblox", true],
 	["", false],
-	["Inspired by Dead Town", true],
-	["by Lemon Puppy Games", true],
+	["Developed by", true],
+	[DEVELOPER, false],
 	["", false],
-	["Special thanks (original Dead Town credits)", true],
-	["Yoyo games", false],
-	["Crazy GM", false],
-	["Play GM", false],
-	["opengameart.org", false],
-	["dlf0325", false],
-	["sodium031", false],
-	["zizonpink", false],
-	["", false],
-	["Built with roblox-ts", true],
+	["Inspired by the original", true],
+	[INSPIRED_BY, false],
 	["", false],
 	["Thank you for playing!", true],
 ];
