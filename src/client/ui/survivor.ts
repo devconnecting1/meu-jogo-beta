@@ -5,8 +5,10 @@ import { EQUIPS } from "shared/data/equips";
 import { ItemKind } from "shared/data/kinds";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
+import { DAY_BREAK_HOUR, isNightAt, secondsUntilHour } from "shared/sim/clock";
 import { PetLook } from "shared/data/cosmetics";
 import { requestSave } from "../systems/saveClient";
+import { countdown } from "../onboarding/gameOver";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { Glyph, kindTone, makeGlyph, setGlyph } from "./itemCard";
 import { paintPlate } from "./plate";
@@ -49,9 +51,11 @@ import * as Kit from "./window";
  *
  * The action row is the only thing that changes with the run (main.client.ts keeps every semantic): Enter the city
  * (a fresh life, or a new life still waiting for first light) or Continue (a run suspended in memory), both
- * `onPlay`; and when the run is over, the MP-21 choice itself, in place -- Rebirth · price (the steel-blue main
- * action) and New game (red, it throws this life away), with the MP-21 / MP-22 wording -- instead of the popup that
- * used to open over the lobby. Home and the X go back to the menu.
+ * `onPlay`; and when the run is over, the MP-21 choice itself, in place, instead of the popup that used to open over
+ * the lobby. MP-21 gives a dead survivor three ways out, and the row offers every one the server honours: Rebirth ·
+ * price (the steel-blue main action: now, for coins), Wait for daybreak (iron: free, the SAME life wakes at 06:00 --
+ * only where the server revives at daybreak and runs the clock) and New game (red: it throws this life away, and
+ * the new one still waits for first light), with the MP-21 / MP-22 wording. Home and the X go back to the menu.
  *
  * Built once per lobby and then only rewritten (the Bag's rule): every row, tile and button exists from the start
  * and a state change writes text and visibility, never an Instance.
@@ -65,6 +69,13 @@ export interface SurvivorState {
 	hosted: boolean;
 	/** the town's day on this server (MP-20), when the server publishes it; the life's day otherwise */
 	worldDay?: number;
+	/**
+	 * MP-21's free way out is on offer: the run is over and the server stands this survivor up at daybreak (it owns
+	 * the death and runs the clock). Offline, or with no server revive, only Rebirth and New game are.
+	 */
+	canWait?: boolean;
+	/** the world's hour, when the server publishes it: the note counts down to 06:00 at night */
+	hour?: number;
 }
 
 export interface SurvivorHandlers {
@@ -73,6 +84,8 @@ export interface SurvivorHandlers {
 	/** Enter the city / Continue: main.client's playPressed, the startRun semantics */
 	onPlay: () => void;
 	onRebirth: () => void;
+	/** MP-21: wait for daybreak, the same life (main.client's enterToWait, keeping it) */
+	onWaitDawn: () => void;
 	onNewRun: () => void;
 	onWardrobe: () => void;
 	/** `thenPlay`: the first-run prompt's "Yes": the tutorial, then the city */
@@ -106,7 +119,10 @@ const ACTION_Y = WIN_H - BOTTOM - ACTION_H;
 const HOME_W = 168;
 const MAIN_X = RIGHT_X;
 const MAIN_W = RIGHT_W;
+/** the MP-21 row: New game | Rebirth, or New game | Wait for daybreak | Rebirth when waiting is on offer */
 const NEW_GAME_W = 196;
+const NEW_GAME_W3 = 150;
+const WAIT_W = 188;
 const LABEL_W = 116;
 /** the Wardrobe shortcut on the stage's title line, at its right (like the wardrobe's own keys) */
 const WARDROBE_W = 150;
@@ -120,7 +136,7 @@ const SLOT_KEYS = ["Weapon", "Clothes", "Hand", "Gun", "Outfit", "Pet"];
 const HELP_TEXT = [
 	"Your survivor as everyone sees them, how long this life has lasted and what you carry.",
 	"Enter the city to play. The town keeps its own day, shared by everyone on this server.",
-	"When a run is over: Rebirth wakes you now for coins, New game starts a new life at day 1.",
+	"When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.",
 	"Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
 ].join("#");
 
@@ -146,7 +162,10 @@ export class SurvivorScreen {
 	private readonly note: TextLabel;
 	private readonly enter: TextButton;
 	private readonly newGame: TextButton;
+	private readonly wait: TextButton;
 	private readonly rebirth: TextButton;
+	/** the MP-21 row as it is laid out now: 2 (New game | Rebirth) or 3 buttons (with Wait); 0 = not yet */
+	private rowCount = 0;
 	private state: SurvivorState = { run: "fresh", hosted: false };
 
 	constructor(parent: Instance, ctx: GameContext, handlers: SurvivorHandlers) {
@@ -350,6 +369,17 @@ export class SurvivorScreen {
 			font: BOLD,
 			onClick: (): void => handlers.onNewRun(),
 		});
+		this.wait = Button(panel, "Wait", tr("Wait for daybreak"), {
+			x: MAIN_X + NEW_GAME_W3 + GAP,
+			y: ACTION_Y,
+			w: WAIT_W,
+			h: ACTION_H,
+			// free, and the same life: an ordinary iron action beside the paid one
+			variant: "secondary",
+			textSize: TEXT.lg,
+			font: BOLD,
+			onClick: (): void => handlers.onWaitDawn(),
+		});
 		this.rebirth = Button(panel, "Rebirth", "", {
 			x: MAIN_X + NEW_GAME_W + GAP,
 			y: ACTION_Y,
@@ -440,31 +470,62 @@ export class SurvivorScreen {
 		this.write(tile.name, shown);
 	}
 
+	/** lays the MP-21 row out for 2 or 3 buttons (only when that changes: positions are written, nothing is made) */
+	private layoutRow(count: number): void {
+		if (count === this.rowCount) return;
+		this.rowCount = count;
+		const place = (b: TextButton, x: number, w: number): void => {
+			b.Position = UDim2.fromScale(x / WIN_W, ACTION_Y / WIN_H);
+			b.Size = UDim2.fromScale(w / WIN_W, ACTION_H / WIN_H);
+			b.SetAttribute("DesignW", w);
+		};
+		const newW = count === 3 ? NEW_GAME_W3 : NEW_GAME_W;
+		place(this.newGame, MAIN_X, newW);
+		let x = MAIN_X + newW + GAP;
+		if (count === 3) {
+			place(this.wait, x, WAIT_W);
+			x += WAIT_W + GAP;
+		}
+		place(this.rebirth, x, MAIN_X + MAIN_W - x);
+	}
+
 	/** the action row and its note: Enter / Continue, or the MP-21 choice when the run is over */
 	private paintAction(state: SurvivorState): void {
 		const save = this.ctx.save;
 		const tr = this.tr;
 		const over = state.run === "over";
+		const canWait = over && state.canWait === true;
 		setVisible(this.enter, !over);
 		setVisible(this.newGame, over);
+		setVisible(this.wait, canWait);
 		setVisible(this.rebirth, over);
 		const lines: Array<string> = [];
 		if (over) {
+			this.layoutRow(canWait ? 3 : 2);
 			const price = rebirthPrice(save.deathCount);
 			this.rebirth.Text = `${tr("Rebirth")}  ·  ${fmtInt(price)}`;
 			setButtonVariant(this.rebirth, "default");
-			lines.push(
-				nl(
-					tr(
-						state.hosted
-							? "Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
-							: "Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
-					),
-				),
-			);
+			let words =
+				"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.";
+			if (canWait) {
+				words =
+					"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.#New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept.";
+			} else if (state.hosted) {
+				words =
+					"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept.";
+			}
+			lines.push(nl(tr(words)));
+			const last: Array<string> = [];
+			// at night the world's clock says exactly when 06:00 comes; by day the server's own cap (one night from
+			// the death, which the lobby does not know) may wake the survivor sooner, so no number is promised
+			const hour = state.hour;
+			if (canWait && hour !== undefined && isNightAt(hour)) {
+				last.push(`${tr("Daybreak in")} ${countdown(secondsUntilHour(hour, DAY_BREAK_HOUR))}`);
+			}
 			const short = price - save.money;
 			// the Rebirth stays pressable either way: the server answers with the reason, and this says it first
-			if (short > 0) lines.push(`${tr("Not enough coins")} (need ${fmtInt(short)} more)`);
+			if (short > 0) last.push(`${tr("Not enough coins")} (need ${fmtInt(short)} more)`);
+			if (last.size() > 0) lines.push(last.join("  ·  "));
 		} else {
 			const day = state.worldDay ?? save.day;
 			if (state.run === "newLife") {
@@ -491,7 +552,10 @@ export class SurvivorScreen {
 		this.write(this.note, text);
 	}
 
-	/** the gamepad's first stop: the action that works (Rebirth only when it can be paid) */
+	/**
+	 * The gamepad's first stop: the action that works -- Rebirth when it can be paid; otherwise the free wait (the
+	 * same life) where it is on offer, and New game where it is not.
+	 */
 	focus(): void {
 		const s = this.state;
 		if (s.run !== "over") {
@@ -499,7 +563,8 @@ export class SurvivorScreen {
 			return;
 		}
 		const affordable = this.ctx.save.money >= rebirthPrice(this.ctx.save.deathCount);
-		autoFocus(affordable ? this.rebirth : this.newGame);
+		if (affordable) autoFocus(this.rebirth);
+		else autoFocus(s.canWait === true ? this.wait : this.newGame);
 	}
 
 	/** the survivor's idle breath (a dog's tail); a frame where nothing moved writes nothing */

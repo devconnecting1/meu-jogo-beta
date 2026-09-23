@@ -74,6 +74,8 @@ export interface LobbyHandlers {
 	onPlay: () => void;
 	/** MP-21, the run is over: pay to continue now (main.client's doRebirth) */
 	onRebirth: () => void;
+	/** MP-21, the run is over: wait for daybreak, the same life (main.client's enterToWait, keeping it) */
+	onWaitDawn: () => void;
 	/** MP-21, the run is over: a new life (main.client's doNewRun) */
 	onNewRun: () => void;
 	onShop: () => void;
@@ -94,6 +96,13 @@ export interface LobbyStatus {
 	run: RunState;
 	/** the server owns this survivor's death and runs the town (MP-21, MP-20): the wording, the town's numbers */
 	hosted: boolean;
+	/**
+	 * The run's clock has been the server's (DayNight.serverDriven): with `hosted`, the server stands a dead survivor
+	 * up at daybreak, so MP-21's free wait is on offer -- the condition main.client's dawn wait uses. The lobby also
+	 * takes the world's hour published on the Workspace as that proof (a survivor who joined dead has not run a
+	 * clock yet, but the server that publishes it is the one that revives).
+	 */
+	clockDriven?: boolean;
 	/** the town the player enters (MP-22: the server's seed); the flyover draws it */
 	seed: number;
 	/** MP-22: the day the last town fell on, when this client saw it fall */
@@ -632,11 +641,17 @@ export function showLobby(
 	const band = headerBand(root);
 
 	let survivor: SurvivorScreen | undefined;
-	const survivorState = () => ({
-		run: status.run,
-		hosted: status.hosted,
-		worldDay: status.hosted ? numberAttr(WORLD_DAY_ATTR) : undefined,
-	});
+	const survivorState = () => {
+		const hour = status.hosted ? numberAttr(DAY_TIME_ATTR) : undefined;
+		return {
+			run: status.run,
+			hosted: status.hosted,
+			worldDay: status.hosted ? numberAttr(WORLD_DAY_ATTR) : undefined,
+			// MP-21's free way out, only where the server revives at daybreak (it owns the death and runs the clock)
+			canWait: status.run === "over" && status.hosted && (status.clockDriven === true || hour !== undefined),
+			hour,
+		};
+	};
 	let handle: LobbyHandle;
 	const menu = new MenuPage(body, ctx, handlers, () => handle.show("survivor"));
 
@@ -645,6 +660,7 @@ export function showLobby(
 			onBack: (): void => handle.show("menu"),
 			onPlay: handlers.onPlay,
 			onRebirth: handlers.onRebirth,
+			onWaitDawn: handlers.onWaitDawn,
 			onNewRun: handlers.onNewRun,
 			onWardrobe: (): void => handlers.onWardrobe("survivor"),
 			onTutorial: handlers.onTutorial,

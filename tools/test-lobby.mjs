@@ -640,7 +640,8 @@ const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { THEME, SURFACE, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
-const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
+const { darkAlphaAt, secondsUntilHour } = require(join(SRC, "shared/sim/clock.ts"));
+const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
 const { MAX_PLAYERS } = require(join(SRC, "shared/net/mpConfig.ts"));
 flush();
 
@@ -662,6 +663,7 @@ const ctx = { phase: "lobby", save, uiLayer: undefined };
 const calls = {
 	play: 0,
 	rebirth: 0,
+	wait: 0,
 	newRun: 0,
 	shop: 0,
 	settings: 0,
@@ -673,6 +675,7 @@ const calls = {
 const handlers = {
 	onPlay: () => calls.play++,
 	onRebirth: () => calls.rebirth++,
+	onWaitDawn: () => calls.wait++,
 	onNewRun: () => calls.newRun++,
 	onShop: () => calls.shop++,
 	onWardrobe: from => calls.wardrobe.push(from),
@@ -1018,46 +1021,100 @@ check(
 	`${townCell(0).FindFirstChild("Value").Text} ${townCell(0).FindFirstChild("Caption").Text} / ${townCell(1).FindFirstChild("Value").Text} ${townCell(1).FindFirstChild("Caption").Text}`,
 );
 
-// MP-21: the run is over -- the choice lives in the window
+// MP-21: the run is over -- the choice lives in the window, with every way out the server honours
 save.runOver = true;
 save.deathCount = 1;
 save.money = 5;
 const price = rebirthPrice(1);
-r = measure(() => lobby.refresh(status({ hosted: true, run: "over" })));
+const waitBtn = () => actionBtn("Wait");
+/** the MP-21 row on screen, left to right */
+const rowOf = () =>
+	["NewGame", "Wait", "Rebirth", "Enter"]
+		.filter(n => shown(actionBtn(n)))
+		.sort((a, b) => actionBtn(a).Position.X.Scale - actionBtn(b).Position.X.Scale);
+const dawnLeft = hour => countdown(secondsUntilHour(hour, 6));
+
+// (a) a server that revives at daybreak (it owns the death, its clock ran here), at night: 21:36
+r = measure(() => lobby.refresh(status({ hosted: true, run: "over", clockDriven: true })));
 check(
-	`fim de partida: "Rebirth  ·  ${price}" (azul-aco) e New game (vermelho), no lugar do Enter`,
-	shown(actionBtn("Rebirth")) &&
+	`fim de partida num servidor que levanta ao amanhecer: New game | Wait for daybreak | Rebirth  ·  ${price}, no lugar do Enter`,
+	JSON.stringify(rowOf()) === '["NewGame","Wait","Rebirth"]' &&
 		actionBtn("Rebirth").Text === `Rebirth  ·  ${price}` &&
 		variantOf(actionBtn("Rebirth")) === "default" &&
-		shown(actionBtn("NewGame")) &&
+		waitBtn().Text === "Wait for daybreak" &&
+		variantOf(waitBtn()) === "secondary" &&
 		actionBtn("NewGame").Text === "New game" &&
-		variantOf(actionBtn("NewGame")) === "destructive" &&
-		!shown(actionBtn("Enter")),
-	`${actionBtn("Rebirth").Text} / ${actionBtn("NewGame").Text}`,
+		variantOf(actionBtn("NewGame")) === "destructive",
+	`${rowOf().join(" | ")}: ${rowOf()
+		.map(n => `${actionBtn(n).Text} (${variantOf(actionBtn(n))})`)
+		.join(", ")}`,
 );
 check("...dentro da janela: nenhum popup por cima", !popupOpen());
 check(
-	"...com o texto da MP-21/MP-22 (a vida nova acorda com a primeira luz) e quanto falta",
-	note().startsWith("Rebirth wakes you now. New game starts a new life at day 1,") &&
+	"...com o texto das tres saidas, quanto falta para as 06:00 (a noite no relogio do mundo) e quanto falta de moedas",
+	note().startsWith("Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.") &&
+		note().includes(`Daybreak in ${dawnLeft(21.6)}`) &&
 		note().includes(`Not enough coins (need ${price - 5} more)`),
 	note().replace(/\n/g, " / "),
 );
 check("trocar para o fim de partida nao cria Instance", zero(r), cost(r));
+r = measure(() => Workspace.SetAttribute(DAY_TIME_ATTR, 22.1));
+check(
+	"a contagem anda com o relogio do servidor, sem criar Instance",
+	note().includes(`Daybreak in ${dawnLeft(22.1)}`) && zero(r),
+	`${cost(r)}; ${note().split("\n").at(-1)}`,
+);
 check(
 	'o START do menu diz "Your run is over"',
 	menuPage().FindFirstChild("Start").FindFirstChild("Sub").Text === "Your run is over",
 );
 click(actionBtn("Rebirth"), "Rebirth");
+click(waitBtn(), "Wait for daybreak");
 click(actionBtn("NewGame"), "New game");
 check(
-	"Rebirth e New game chamam os caminhos de sempre (doRebirth / doNewRun)",
-	calls.rebirth === 1 && calls.newRun === 1,
+	"Rebirth, Wait for daybreak e New game chamam os caminhos de sempre (doRebirth / enterToWait mantendo a vida / doNewRun)",
+	calls.rebirth === 1 && calls.wait === 1 && calls.newRun === 1,
+	`${calls.rebirth} / ${calls.wait} / ${calls.newRun}`,
 );
-lobby.refresh(status({ hosted: false, run: "over" }));
+// (b) by day the server's own cap (one night from the death) may wake the survivor sooner: no number is promised
+Workspace.SetAttribute(DAY_TIME_ATTR, 12);
+flush();
 check(
-	"offline, o texto de antes (sem espera pela luz)",
-	note().startsWith("Rebirth to continue this run, or start a new game from day 1."),
+	"de dia a espera continua oferecida, mas sem prometer um numero",
+	shown(waitBtn()) && !note().includes("Daybreak in"),
+	note().replace(/\n/g, " / "),
 );
+// (c) a survivor who joined dead: the run's clock never ran here, but the server publishes the world's hour
+r = measure(() => lobby.refresh(status({ hosted: true, run: "over", clockDriven: false })));
+check("quem entrou morto: a hora que o servidor publica basta para oferecer a espera", shown(waitBtn()) && zero(r));
+// (d) no clock of the server anywhere: the MP-21 choice without the wait (the old two)
+Workspace.SetAttribute(DAY_TIME_ATTR, undefined);
+r = measure(() => lobby.refresh(status({ hosted: true, run: "over", clockDriven: false })));
+check(
+	"sem relogio do servidor: so New game | Rebirth, com o texto da MP-21/MP-22 de antes",
+	JSON.stringify(rowOf()) === '["NewGame","Rebirth"]' &&
+		note().startsWith("Rebirth wakes you now. New game starts a new life at day 1,") &&
+		!note().includes("Daybreak in"),
+	`${rowOf().join(" | ")} / ${note().split("\n")[0]}`,
+);
+check("...e a fileira volta a duas chapas sem criar Instance", zero(r), cost(r));
+r = measure(() => lobby.refresh(status({ hosted: true, run: "over", clockDriven: true })));
+check(
+	"o relogio da partida foi do servidor (hora nao publicada): a espera volta, sem contagem",
+	JSON.stringify(rowOf()) === '["NewGame","Wait","Rebirth"]' && !note().includes("Daybreak in") && zero(r),
+	`${rowOf().join(" | ")}, ${cost(r)}`,
+);
+// (e) offline: nobody revives at daybreak
+Workspace.SetAttribute(DAY_TIME_ATTR, 23);
+lobby.refresh(status({ hosted: false, run: "over", clockDriven: true }));
+check(
+	"offline: so Rebirth e New game, com o texto de antes (sem espera pela luz)",
+	JSON.stringify(rowOf()) === '["NewGame","Rebirth"]' &&
+		note().startsWith("Rebirth to continue this run, or start a new game from day 1."),
+	`${rowOf().join(" | ")} / ${note().split("\n")[0]}`,
+);
+Workspace.SetAttribute(DAY_TIME_ATTR, 21.6);
+flush();
 lobby.refresh(status({ hosted: true, run: "newLife" }));
 check(
 	'vida nova esperando a primeira luz: "Enter the city", e o texto dela',
@@ -1114,8 +1171,14 @@ check(
 	"fim de partida sem moedas: o foco vai para o que funciona (New game)",
 	GuiService.SelectedObject === actionBtn("NewGame"),
 );
+lobby.refresh(status({ run: "over", hosted: true, clockDriven: true }));
+lobby.show("survivor");
+check(
+	"...e, onde a espera e oferecida, para a espera (gratis, a mesma vida)",
+	GuiService.SelectedObject === actionBtn("Wait"),
+);
 save.money = 1000;
-lobby.refresh(status({ run: "over" }));
+lobby.refresh(status({ run: "over", hosted: true, clockDriven: true }));
 lobby.show("survivor");
 check("...com moedas, para o Rebirth", GuiService.SelectedObject === actionBtn("Rebirth"));
 lobby.show("menu");
@@ -1242,11 +1305,18 @@ const SCREENS = [
 	[1360, 435, 0, "1360 x 435 (largo e baixo)"],
 	[844, 390, 36, "celular 844 x 390, barra do Roblox de 36 px"],
 ];
-lobby.refresh(status({ hosted: true, fellOn: 12, run: "suspended", loading: true }));
+const LAYOUT_STATES = [
+	["menu", status({ hosted: true, fellOn: 12, run: "suspended", loading: true })],
+	["survivor", status({ hosted: true, fellOn: 12, run: "suspended", loading: true })],
+	["survivor, fim de partida com a espera", status({ hosted: true, run: "over", clockDriven: true })],
+];
 for (const [w, h, inset, label] of SCREENS) {
 	setScreen(w, h, inset);
-	for (const page of ["menu", "survivor"]) {
-		lobby.show(page);
+	for (const [page, st] of LAYOUT_STATES) {
+		save.runOver = st.run === "over";
+		save.money = st.run === "over" ? 5 : 40;
+		lobby.refresh(st);
+		lobby.show(page === "menu" ? "menu" : "survivor");
 		const root = page === "menu" ? menuPage() : survivorPage();
 		const lay = layoutProblems(root);
 		check(`${label}, ${page}: nada se sobrepoe nem sai do seu lugar`, lay.length === 0, lay.slice(0, 6).join("; "));
@@ -1268,6 +1338,8 @@ for (const [w, h, inset, label] of SCREENS) {
 	}
 }
 setScreen(1120, 630);
+save.runOver = false;
+save.money = 40;
 lobby.show("menu");
 lobby.refresh(status());
 
@@ -1551,6 +1623,18 @@ check(
 check(
 	"...e a partida solta o voo sobre a cidade ao montar",
 	/function mountRun\([^)]*\): void \{\n(?:\t\/\/[^\n]*\n)*\tFlyover\.releaseFlyover\(\);/.test(main),
+);
+check(
+	"...o Wait for daybreak do lobby entra morto na cidade pelo enterToWait de hoje, mantendo a vida (sem resetRun)",
+	/onWaitDawn: \(\) => \{\s*if \(actionBusy \|\| !ctx\.save\.runOver\) return;\s*dawnChosen = true;\s*enterToWait\(\);\s*\}/.test(
+		main,
+	),
+);
+check(
+	"...e a espera do amanhecer aceita essa escolha (openDeath), como aceita a vida nova",
+	/serverRevives\(\) && \(loop\.getRefs\(\)\.daynight\.serverDriven\(\) \|\| newLifeWaiting \|\| dawnChosen\)/.test(
+		main,
+	),
 );
 const lobbySrc = read("client/ui/lobby.ts");
 check(

@@ -638,7 +638,10 @@ export const LANG_TABLE: Array<string> = [
 	"Your new life wakes at first light",
 	"Delivered when you enter the city",
 	"The town keeps its own day. This life and your record count yours.",
-	"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
+	"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
+	// MP-21's three ways out on the Survivor screen: Rebirth now, the free wait (the same life), New game
+	"Wait for daybreak",
+	"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.#New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept.",
 ];
 
 /**

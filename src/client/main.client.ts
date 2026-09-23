@@ -125,6 +125,12 @@ let dawnOverdue = 0;
  * The death screen is the wait for THAT life: no second New game on it, and its own words.
  */
 let newLifeWaiting = false;
+/**
+ * MP-21's free way out, chosen from the lobby's Survivor screen: this same life waits for daybreak in the city
+ * (enterToWait, keeping it). The dawn wait needs no proof of a server clock then -- the player chose it on a server
+ * that revives -- exactly as for a new life that waits.
+ */
+let dawnChosen = false;
 /** the life that ended, as it was when New game replaced it: the wait for the new life still shows ITS numbers */
 let endedLife: RunSummary | undefined;
 /** MP-22: worlds that ended while this client was connected; a run action that raced one is superseded by it */
@@ -381,6 +387,7 @@ function lobbyStatus(): LobbyStatus {
 		loading: loadInfo === undefined && !net.netUnavailable(),
 		run,
 		hosted,
+		clockDriven: loop.getRefs().daynight.serverDriven(),
 		seed: netTownSeed(),
 		fellOn: lobbyNav.fellOn,
 		offlineNote: offlineNote(),
@@ -446,6 +453,12 @@ function goLobby(page: LobbyPage = "menu"): void {
 		{
 			onPlay: playPressed,
 			onRebirth: doRebirth,
+			// MP-21's free way out: this same life, dead in the city until 06:00, when the server stands it up
+			onWaitDawn: () => {
+				if (actionBusy || !ctx.save.runOver) return;
+				dawnChosen = true;
+				enterToWait();
+			},
 			onNewRun: doNewRun,
 			onShop: () => openShop(),
 			// the wardrobe's X comes back to the page it was opened from
@@ -627,7 +640,7 @@ function openDeath(): void {
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
 	// on it, and MP-21's short wait would read as a hang. A new life the server just granted (New game) needs
 	// no such proof: the server that accepted it is the one that holds the body.
-	if (serverRevives() && (loop.getRefs().daynight.serverDriven() || newLifeWaiting)) {
+	if (serverRevives() && (loop.getRefs().daynight.serverDriven() || newLifeWaiting || dawnChosen)) {
 		/*
 		 * MP-21: a death is a night lost, not a run ended, on every server kind. The survivor watches the town
 		 * carry on and the server puts them back on the street at 06:00 (server/sim/life.ts) — or right now, for
@@ -686,6 +699,7 @@ function updateDawnWait(dt: number): void {
 		closeDawnWait();
 		deathShown = false;
 		newLifeWaiting = false;
+		dawnChosen = false;
 		endedLife = undefined;
 		// the wait WAS the price: the run continues, so the save has to stop saying it is over
 		ctx.save.runOver = false;
@@ -842,6 +856,7 @@ function onTown(notice: TownNotice): void {
 		lobbyNav.fellOn = fellOn;
 		// whatever this client was waiting for belonged to the world that ended
 		newLifeWaiting = false;
+		dawnChosen = false;
 		endedLife = undefined;
 	}
 	if (fellOn !== undefined && notice.newLife) {
@@ -893,6 +908,7 @@ function resumeRun(): void {
 function revive(): void {
 	ctx.save.runOver = false;
 	newLifeWaiting = false;
+	dawnChosen = false;
 	endedLife = undefined;
 	if (!runActive) {
 		newWorld();
@@ -1005,6 +1021,7 @@ function doNewRun(): void {
 		// the server's save says the same (server/sim/life.ts `newLife`): the death stands until daybreak
 		ctx.save.runOver = true;
 		newLifeWaiting = true;
+		dawnChosen = false;
 		if (heartbeat !== undefined) openDeath();
 		else enterToWait();
 		return;
@@ -1022,6 +1039,8 @@ function startRun(): void {
 		else goLobby("survivor");
 		return;
 	}
+	// a living body enters: a free wait chosen earlier was answered (the server stood it up while in the lobby)
+	dawnChosen = false;
 	if (runActive && !loop.getRefs().player.dead) resumeRun();
 	else newWorld();
 }
