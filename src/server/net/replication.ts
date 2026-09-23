@@ -930,7 +930,7 @@ export class Replicator {
 			}
 			out.push(block);
 			// what this viewer's track will hold, and so how far back it will draw the body (`viewLagOf`)
-			this.hordeRings.noteSent(viewer.slot, pick.entry.netId, pick.mid, tick, midExtra);
+			this.hordeRings.noteSent(viewer.slot, pick.entry.netId, pick.mid, tick, midExtra, this.sim.simHz);
 		}
 		return out;
 	}
