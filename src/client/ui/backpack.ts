@@ -201,6 +201,8 @@ export class Backpack {
 	onEquipItem: ((equipId: number) => void) | undefined;
 	/** unequip an equipment slot (EquipSlot): 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet */
 	onUnequipItem: ((slot: number) => void) | undefined;
+	/** a skill level was just learned on `ctx.save` (from F3 the server learns it too: client/net/backpackSync.ts) */
+	onLearned: ((skillId: number) => void) | undefined;
 	nearbyDesk = false;
 	nearbyPro = false;
 	/** a lit campfire/brazier is close (smelting recipes) */
@@ -958,6 +960,7 @@ export class Backpack {
 		if (save.skillPoint > 0 && current < sk.maxLevel) {
 			save.skillLevels[sk.id] = current + 1;
 			save.skillPoint -= 1;
+			this.onLearned?.(sk.id);
 			toast(this.ctx, `Learned ${sk.name}`);
 			this.rebuild();
 		}

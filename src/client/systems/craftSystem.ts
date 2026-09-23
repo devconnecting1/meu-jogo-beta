@@ -7,9 +7,15 @@ import { chance } from "shared/engine/rng";
 import { querySolids, Solid } from "shared/game/world";
 import type { PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
+import { IntentKind } from "shared/net/intentWire";
+import { sendBagVerb, serverOwnsWorld } from "../net/authority";
 import { fxMessage, GameRefs } from "./types";
 
-/** how close (edge distance) a desk / fire must be */
+/**
+ * How close a desk / fire must be: the true distance to the nearest point of its rect, the server's rule
+ * (server/sim/craft.ts `stationNear`, STATION_RANGE). It used to be the box distance here, which off a corner
+ * offered a craft the server then refused (QA sweep D2).
+ */
 const DESK_RANGE = 180;
 
 export type CraftStation = "desk" | "pro" | "fire";
@@ -24,24 +30,25 @@ function matchesStation(s: Solid, station: CraftStation): boolean {
 	return (s.tags === "brazier" && s.powered === true) || s.tags === "furnace";
 }
 
-/** nearest construction of that kind within DESK_RANGE of the survivor (edge distance) */
+/** nearest construction of that kind within DESK_RANGE of the survivor (distance to the nearest point of it) */
 export function stationNear(refs: GameRefs, station: CraftStation, by: PlayerState = refs.player): Solid | undefined {
 	const p = by;
 	const pad = DESK_RANGE + 160;
 	stationBuf.clear();
 	querySolids(refs.world, p.x - pad, p.y - pad, p.x + pad, p.y + pad, stationBuf);
 	let best: Solid | undefined;
-	let bestD = DESK_RANGE;
+	let bestD2 = DESK_RANGE * DESK_RANGE;
 	for (const s of stationBuf) {
 		if (!matchesStation(s, station)) continue;
-		const cx = s.x + s.w / 2;
-		const cy = s.y + s.h / 2;
-		const d = math.max(math.abs(cx - p.x) - s.w / 2, math.abs(cy - p.y) - s.h / 2);
-		if (d < bestD) {
-			bestD = d;
+		const dx = p.x - math.clamp(p.x, s.x, s.x + s.w);
+		const dy = p.y - math.clamp(p.y, s.y, s.y + s.h);
+		const d2 = dx * dx + dy * dy;
+		if (d2 <= bestD2) {
+			bestD2 = d2;
 			best = s;
 		}
 	}
+	stationBuf.clear();
 	return best;
 }
 
@@ -102,6 +109,8 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 		fxMessage(refs, why, refs.player);
 		return false;
 	}
+	// F3: the server crafts (server/sim/craft.ts); this client predicts the same rule on its copy and sends the verb
+	if (serverOwnsWorld()) return sendBagVerb(IntentKind.Craft, recipeId);
 	for (const ing of r.ingredients) {
 		removeItem(refs.save, ing.kind, ing.index, ing.count);
 	}
