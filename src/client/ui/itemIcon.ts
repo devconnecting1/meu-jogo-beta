@@ -27,10 +27,20 @@
  *
  * Colours: an item icon is ART (ICON_ART, like the world's sprites); `dim` draws it in greys of the same lightness
  * (a recipe the station nearby cannot make, a skill not learned yet). A glyph is a UI mark and takes a THEME colour.
+ *
+ * The atlas: those same pixels are also one image, design/world-art/itemIcons.png (tools/icon-atlas.mjs, generated
+ * and uploaded with the town's art; the cells in ./itemIconAtlas.ts). Once it has an asset id, a view is ONE
+ * ImageLabel showing its icon's cell (ImageRectOffset / ImageRectSize, Pixelated), untinted for an icon, its dimmed
+ * cell when dimmed, and tinted with the ink for a glyph (the glyph is white): the same picture on the same square,
+ * for 1 Instance instead of 10-50 -- and a view built then never creates its reserve of Frames. With no id, or once
+ * the atlas fails to load (client/view/worldArt.ts gives it up and every live view repaints), the Frames above draw
+ * it exactly as before (npm run test:icons).
  */
 import { ICON_ART, ICON_ART_ORDER } from "shared/engine/colors";
 import { ICON_GLYPHS, ITEM_ICONS, SKILL_KIND, iconKeys, iconOf } from "shared/data/itemIcons";
 import { ItemKind } from "shared/data/kinds";
+import { artId, onWorldArtChange } from "../view/worldArt";
+import { ICON_ATLAS_CELLS } from "./itemIconAtlas";
 import { THEME } from "./theme";
 import { makeFrame } from "./widgets";
 
@@ -200,11 +210,57 @@ function dimOf(ch: string): Color3 {
 	return c;
 }
 
+// ---------------------------------------------------------------- the atlas
+
+/** the atlas image in worldArtAssets.ts */
+const ATLAS = "itemIcons";
+const WHITE = new Color3(1, 1, 1);
+/** no run is drawn (a view showing its icon from the atlas) */
+const NO_RUNS: Array<Run> = [];
+
+/** the rect Vector2s, made once per cell and shared by every view: a paint allocates nothing */
+const cellOffsets = new Map<string, Vector2>();
+const dimOffsets = new Map<string, Vector2>();
+const cellSizes = new Map<number, Vector2>();
+
+/** the corner of `key`'s cell (its dimmed copy when `dim`), or undefined when the atlas has no such cell */
+function cellOffset(key: string, dim: boolean): Vector2 | undefined {
+	const cache = dim ? dimOffsets : cellOffsets;
+	let v = cache.get(key);
+	if (v !== undefined) return v;
+	const c = ICON_ATLAS_CELLS[key];
+	if (c === undefined) return undefined;
+	v = dim ? new Vector2(c[3], c[4]) : new Vector2(c[0], c[1]);
+	cache.set(key, v);
+	return v;
+}
+
+function cellSize(n: number): Vector2 {
+	let v = cellSizes.get(n);
+	if (v === undefined) {
+		v = new Vector2(n, n);
+		cellSizes.set(n, v);
+	}
+	return v;
+}
+
 // ---------------------------------------------------------------- the view
 
 export interface IconView {
 	/** the transparent square the icon fills; its "Icon" attribute names what it draws ("" = nothing) */
 	frame: Frame;
+	/** the atlas image: ONE ImageLabel drawing the whole icon (undefined: the atlas has no id, runs draw it) */
+	image: ImageLabel | undefined;
+	/** what the image shows now (a redraw writes only what changed); geometry -1 = never placed */
+	imageId: string;
+	imageOffset: Vector2 | undefined;
+	imageSize: Vector2 | undefined;
+	imageTint: Color3;
+	imagePx: number;
+	imageOx: number;
+	imageOy: number;
+	/** the runs a view falling back to Frames builds up front (the constructor's `reserve`) */
+	reserve: number;
 	/** the pooled runs, and what each one shows now (a redraw writes only what changed) */
 	runs: Array<Frame>;
 	/** per run: the geometry it was placed with ("" = never), its colour and layer */
@@ -281,14 +337,87 @@ function measure(view: IconView): boolean {
 	return true;
 }
 
+/** the image on the square the runs fill (offsets once the size is known, else the whole view in Scale) */
+function placeImage(view: IconView, img: ImageLabel): void {
+	const S = view.px;
+	if (S === view.imagePx && view.ox === view.imageOx && view.oy === view.imageOy) return;
+	view.imagePx = S;
+	view.imageOx = view.ox;
+	view.imageOy = view.oy;
+	if (S > 0) {
+		img.Position = UDim2.fromOffset(view.ox, view.oy);
+		img.Size = UDim2.fromOffset(S, S);
+	} else {
+		img.Position = new UDim2();
+		img.Size = UDim2.fromScale(1, 1);
+	}
+}
+
 function relayout(view: IconView): void {
 	if (!measure(view)) return;
 	for (let i = 0; i < view.current.size(); i++) place(view, i, view.current[i]);
+	const img = view.image;
+	if (img !== undefined && img.Visible) placeImage(view, img);
 }
+
+/** live views drawing from the atlas: repainted with Frames if it is given up (worldArt.ts), forgotten when destroyed */
+const atlasViews = new Set<IconView>();
+
+function newImage(view: IconView, id: string): void {
+	const img = new Instance("ImageLabel");
+	img.Name = "Atlas";
+	img.BorderSizePixel = 0;
+	img.BackgroundTransparency = 1;
+	img.BackgroundColor3 = THEME.background;
+	img.Active = false;
+	img.Selectable = false;
+	img.Image = id;
+	img.ScaleType = Enum.ScaleType.Stretch;
+	img.ResampleMode = Enum.ResamplerMode.Pixelated;
+	img.ImageColor3 = WHITE;
+	img.ImageTransparency = 0;
+	img.Position = new UDim2();
+	img.Size = UDim2.fromScale(1, 1);
+	img.Visible = false;
+	img.Parent = view.frame;
+	view.image = img;
+	view.imageId = id;
+	view.imagePx = 0;
+	view.imageOx = 0;
+	view.imageOy = 0;
+	atlasViews.add(view);
+	view.frame.Destroying.Connect(() => atlasViews.delete(view));
+}
+
+/** the atlas is gone (or its id changed): each live view repaints -- with Frames, or from the new id */
+function atlasChanged(): void {
+	const id = artId(ATLAS);
+	for (const view of atlasViews) {
+		const img = view.image;
+		if (img === undefined) continue;
+		if (id !== undefined) {
+			if (view.imageId !== id) {
+				view.imageId = id;
+				img.Image = id;
+			}
+			continue;
+		}
+		atlasViews.delete(view);
+		view.image = undefined;
+		img.Destroy();
+		for (let i = view.runs.size(); i < view.reserve; i++) newRun(view);
+		const key = view.key;
+		if (key === "") continue;
+		view.key = "";
+		drawIcon(view, key, { dim: view.dim, ink: view.ink });
+	}
+}
+onWorldArtChange(atlasChanged);
 
 /**
  * A view `size` design units square at (x, y) in `parent`'s design space. `reserve` runs are built up front, hidden
- * (a view that must never create one later: the hotbar's tiles take the most any weapon icon needs).
+ * (a view that must never create one later: the hotbar's tiles take the most any weapon icon needs) -- unless the
+ * atlas is live: then the view is its one ImageLabel, and never needs a run.
  */
 export function IconView(
 	parent: Instance,
@@ -303,6 +432,15 @@ export function IconView(
 	frame.SetAttribute("Icon", "");
 	const view: IconView = {
 		frame,
+		image: undefined,
+		imageId: "",
+		imageOffset: undefined,
+		imageSize: undefined,
+		imageTint: WHITE,
+		imagePx: -1,
+		imageOx: -1,
+		imageOy: -1,
+		reserve,
 		runs: [],
 		placed: [],
 		colors: [],
@@ -316,7 +454,9 @@ export function IconView(
 		oy: 0,
 		current: [],
 	};
-	for (let i = 0; i < reserve; i++) newRun(view);
+	const id = artId(ATLAS);
+	if (id !== undefined) newImage(view, id);
+	else for (let i = 0; i < reserve; i++) newRun(view);
 	frame.GetPropertyChangedSignal("AbsoluteSize").Connect(() => relayout(view));
 	measure(view);
 	return view;
@@ -349,6 +489,32 @@ export function drawIcon(view: IconView, key: string, opts?: DrawOpts): void {
 		view.px = 0;
 		measure(view);
 	}
+	const img = view.image;
+	// a glyph's colour is its ink, dimmed or not: its one cell
+	const offset = img !== undefined ? cellOffset(key, dim && !d.mono) : undefined;
+	if (img !== undefined && offset !== undefined) {
+		placeImage(view, img);
+		if (view.imageOffset !== offset) {
+			view.imageOffset = offset;
+			img.ImageRectOffset = offset;
+		}
+		const size = cellSize(d.n);
+		if (view.imageSize !== size) {
+			view.imageSize = size;
+			img.ImageRectSize = size;
+		}
+		const tint = ink ?? WHITE;
+		if (view.imageTint !== tint) {
+			view.imageTint = tint;
+			img.ImageColor3 = tint;
+		}
+		if (!img.Visible) img.Visible = true;
+		view.current = NO_RUNS;
+		for (const f of view.runs) if (f.Visible) f.Visible = false;
+		return;
+	}
+	// no atlas, or a key newer than it (npm run art:world): the runs
+	if (img !== undefined && img.Visible) img.Visible = false;
 	view.current = d.runs;
 	for (let i = 0; i < d.runs.size(); i++) {
 		const r = d.runs[i];
@@ -376,11 +542,13 @@ export function drawItemIcon(view: IconView, kind: number, id: number, dim = fal
 	drawIcon(view, iconOf(kind, id).key, { dim });
 }
 
-/** hides every run (the Frames are kept for the next icon) */
+/** hides every run and the image (the Instances are kept for the next icon) */
 export function clearIcon(view: IconView): void {
 	if (view.key === "") return;
 	view.key = "";
 	view.current = [];
 	view.frame.SetAttribute("Icon", "");
 	for (const f of view.runs) if (f.Visible) f.Visible = false;
+	const img = view.image;
+	if (img !== undefined && img.Visible) img.Visible = false;
 }
