@@ -1,10 +1,10 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
-import { computeTouchLayout, TouchButton, TouchLayout, TouchPrefs } from "shared/engine/input";
+import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { previewBgm, previewSfx } from "../audio";
-import { refreshTouchLayout } from "../bootstrap";
+import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
 import { COMPACT_LAYOUT, placeTouchConsole } from "./hudConsole";
 import { popup } from "./popup";
@@ -680,9 +680,9 @@ interface PreviewDot {
 }
 
 /**
- * A scale model of the player's own screen with the controls where they will actually be. It is built from
- * `computeTouchLayout` at the REAL viewport size and then shrunk, so it is the same geometry the thumbs will
- * meet — including the device's shape and the safe area — and not a drawing that has to be kept in sync. The HUD's
+ * A scale model of the player's own screen with the controls where they will actually be. It draws the bootstrap's
+ * own touch layout (`getTouchLayout`, the REAL viewport and top bar) shrunk, so it is the same geometry the thumbs
+ * will meet — including the device's shape and the Roblox bar — and not a drawing that has to be kept in sync. The HUD's
  * compact console is drawn where hudConsole.ts puts it between the thumbs, at the HUD size of the General tab.
  *
  * It is also the only way a player on a PC (or the author on a monitor) can set up the phone layout at all.
@@ -748,15 +748,10 @@ function buildPreview(
 
 	const draw = (): void => {
 		const st = ctx.save.settings;
-		const prefs: TouchPrefs = {
-			leftSize: st.leftSize,
-			leftPos: st.leftPos,
-			leftRelative: st.leftRelative,
-			rightSize: st.rightSize,
-			rightPos: st.rightPos,
-			mirror: st.mirror,
-		};
-		const L: TouchLayout = computeTouchLayout(prefs, ctx.viewW, ctx.viewH, 0);
+		// THE layout the bootstrap hit-tests with and the HUD draws (applyTouch refreshed it from the save a moment
+		// ago), Roblox top bar included: a layout computed here without the bar put BAG and MENU under it on a phone,
+		// and on a short one the aim pad, USE and RELOAD a few pixels off too
+		const L: TouchLayout = getTouchLayout();
 		const f = w / math.max(L.viewW, 1);
 		for (const d of dots) {
 			const b = d.pick(L);
@@ -770,6 +765,8 @@ function buildPreview(
 		deck.Position = UDim2.fromScale((c.x * f) / w, (c.y * f) / h);
 		deck.Size = UDim2.fromScale((c.w * f) / w, (c.h * f) / h);
 	};
+	// the geometry can predate the save being edited (a save loaded after its last refresh): bring it up to date once
+	refreshTouchLayout();
 	draw();
 	return draw;
 }
