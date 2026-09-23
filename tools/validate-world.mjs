@@ -326,6 +326,8 @@ const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 
 const DOOR_SHARE = 0.6;
 /** rooms that never get a window (EDI-10): a bathroom, a hall, the back rooms, the gun shop's secure room */
 const NO_WINDOW = new Set(["bath", "hall", "stock", "cold", "secure", "corridor", "treatment", "galley"]);
+/** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
+const APPROACH = 80;
 /** walker speed (u/s): 3 px/frame at 30 fps, shared/data/zombies.ts */
 const WALKER_SPEED = 90;
 /**
@@ -486,7 +488,8 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 		tt.doors += doors.length;
 		tt.windows += windows.length;
 		if (doors.length >= (DOOR_TARGET[t] ?? 2)) tt.target++;
-		if (doors.filter(o => o.main).length !== 1) fail("EDI-09", `${b.tags} #${b.id}: ${doors.filter(o => o.main).length} main doors`, cx(b), cy(b));
+		if (doors.filter(o => o.main).length !== 1)
+			fail("EDI-09", `${b.tags} #${b.id}: ${doors.filter(o => o.main).length} main doors`, cx(b), cy(b));
 		// a second way out always: another door or a window (no single-exit building)
 		if (doors.length + windows.length < 2) fail("EDI-09", `${b.tags} #${b.id}: a single way in`, cx(b), cy(b));
 		const rooms = b.rooms ?? [];
@@ -522,13 +525,13 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 				if (hit) fail("EDI-12", `${b.tags} #${b.id}: ${hit.tags} blocks a ${o.kind}`, cx(hit), cy(hit));
 			}
 		}
-		// EDI-09: every door opens onto free ground (a body walks 120 u straight out) that the town reaches
+		// EDI-09: every door opens onto free ground (a body walks APPROACH u straight out) that the town reaches
 		for (const o of doors) {
 			const n = NORMAL[o.side];
 			const ox = o.x + o.w / 2;
 			const oy = o.y + o.h / 2;
 			let blocked;
-			for (let t2 = TOWN.WALL_T / 2 + BODY_R + 2; t2 <= TOWN.WALL_T / 2 + 120 - BODY_R; t2 += 6) {
+			for (let t2 = TOWN.WALL_T / 2 + BODY_R + 2; t2 <= TOWN.WALL_T / 2 + APPROACH - BODY_R; t2 += 6) {
 				const hit = physics.circleBlocked(w, ox + n[0] * t2, oy + n[1] * t2, BODY_R);
 				if (hit) {
 					blocked = hit;
@@ -536,8 +539,13 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 				}
 			}
 			if (blocked) {
-				fail("EDI-09", `${b.tags} #${b.id}: ${o.main ? "main" : "secondary"} door blocked outside by ${blocked.kind}/${blocked.tags}`, ox, oy);
-			} else if (!reach.at(ox + n[0] * 100, oy + n[1] * 100).reached) {
+				fail(
+					"EDI-09",
+					`${b.tags} #${b.id}: ${o.main ? "main" : "secondary"} door blocked outside by ${blocked.kind}/${blocked.tags}`,
+					ox,
+					oy,
+				);
+			} else if (!reach.at(ox + n[0] * (TOWN.WALL_T / 2 + 40), oy + n[1] * (TOWN.WALL_T / 2 + 40)).reached) {
 				fail("EDI-09", `${b.tags} #${b.id}: a door opens onto ground the town does not reach`, ox, oy);
 			}
 		}
@@ -549,7 +557,15 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 			const sx = o.x + o.w / 2 + n[0] * (TOWN.WALL_T / 2 + 20);
 			const sy = o.y + o.h / 2 + n[1] * (TOWN.WALL_T / 2 + 20);
 			const start = ras.idx(sx, sy);
-			const dist = pathField(ras, [start], k => ras.inside[k] === 1 || k === start || Math.hypot(((k % ras.cols) * ras.C + ras.x0) - sx, (Math.floor(k / ras.cols) * ras.C + ras.y0) - sy) < 40);
+			const dist = pathField(
+				ras,
+				[start],
+				k =>
+					ras.inside[k] === 1 ||
+					k === start ||
+					Math.hypot((k % ras.cols) * ras.C + ras.x0 - sx, Math.floor(k / ras.cols) * ras.C + ras.y0 - sy) <
+						40,
+			);
 			const seen = new Set();
 			for (const q of rooms) {
 				if (seen.has(q.room)) continue;
@@ -560,19 +576,27 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 					continue;
 				}
 				if (!cells.some(k => dist[k] < Infinity)) {
-					fail("EDI-08", `${b.tags} #${b.id}: the ${q.kind} cannot be reached from the ${o.main ? "main" : "secondary"} door`, cx(q), cy(q));
+					fail(
+						"EDI-08",
+						`${b.tags} #${b.id}: the ${q.kind} cannot be reached from the ${o.main ? "main" : "secondary"} door`,
+						cx(q),
+						cy(q),
+					);
 				}
 				seen.add(q.room);
 			}
 			if (o.main) {
 				for (const s of b.lootSpots ?? []) {
 					const k = ras.idx(s.x, s.y);
-					if (k < 0 || !(dist[k] < Infinity)) fail("EDI-03", `${b.tags} #${b.id}: loot spot not reachable`, s.x, s.y);
+					if (k < 0 || !(dist[k] < Infinity))
+						fail("EDI-03", `${b.tags} #${b.id}: loot spot not reachable`, s.x, s.y);
 				}
 			}
 		}
 		if ((b.lootSpots ?? []).length === 0) fail("EDI-03", `${b.tags} #${b.id}: no loot spot`, cx(b), cy(b));
-		// EDI-11: no safe spot -- from the nearest reachable outside point, a walker (16) gets everywhere, fast
+		// EDI-11: no safe spot -- from the nearest reachable outside point, a walker (16) gets to every spot a survivor
+		// (18) can stand on, fast. The two rasters share their grid (same box, same margin), so a cell index is the
+		// same spot in both.
 		const zr = buildingRaster(w, b, physics.ZOMBIE_RADIUS, 160);
 		const starts = [];
 		for (let k = 0; k < zr.cols * zr.rows; k++) {
@@ -586,7 +610,7 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 		for (const q of rooms) {
 			if (seenZ.has(q.room)) continue;
 			seenZ.add(q.room);
-			const cells = rooms.filter(p => p.room === q.room).flatMap(p => cellsIn(zr, p));
+			const cells = rooms.filter(p => p.room === q.room).flatMap(p => cellsIn(ras, p));
 			let far = 0;
 			for (const k of cells) {
 				if (!(zd[k] < Infinity)) {
@@ -598,16 +622,31 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 			const s = far / WALKER_SPEED;
 			if (s > worst.s) worst = { s, b, room: q.kind };
 			if (far === Infinity) {
-				fail("EDI-11", `${b.tags} #${b.id}: a spot of the ${q.kind} no walker can reach (a safe spot)`, cx(q), cy(q));
+				fail(
+					"EDI-11",
+					`${b.tags} #${b.id}: a spot of the ${q.kind} no walker can reach (a safe spot)`,
+					cx(q),
+					cy(q),
+				);
 			} else if (s > REACH_BOUND_S) {
-				fail("EDI-11", `${b.tags} #${b.id}: the ${q.kind} is ${s.toFixed(1)} s from outside for a walker (> ${REACH_BOUND_S})`, cx(q), cy(q));
+				fail(
+					"EDI-11",
+					`${b.tags} #${b.id}: the ${q.kind} is ${s.toFixed(1)} s from outside for a walker (> ${REACH_BOUND_S})`,
+					cx(q),
+					cy(q),
+				);
 			}
 		}
 	}
 	for (const [t, tt] of Object.entries(byType)) {
 		const share = tt.target / tt.n;
 		if (share < DOOR_SHARE) {
-			fail("EDI-09", `${TYPE_TAG[t]}: only ${(share * 100).toFixed(0)}% have their ${DOOR_TARGET[t]} doors (< ${DOOR_SHARE * 100}%)`, 0, 0);
+			fail(
+				"EDI-09",
+				`${TYPE_TAG[t]}: only ${(share * 100).toFixed(0)}% have their ${DOOR_TARGET[t]} doors (< ${DOOR_SHARE * 100}%)`,
+				0,
+				0,
+			);
 		}
 	}
 	if (buildings.length > 0 && compound / buildings.length < 0.5) {
@@ -617,7 +656,10 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 	stats.worstReach = worst.s;
 	stats.worstRoom = worst.b ? `${worst.b.tags} #${worst.b.id} ${worst.room}` : "-";
 	stats.doorsByType = Object.fromEntries(
-		Object.entries(byType).map(([t, tt]) => [TYPE_TAG[t], `${(tt.doors / tt.n).toFixed(1)}d/${(tt.windows / tt.n).toFixed(1)}w`]),
+		Object.entries(byType).map(([t, tt]) => [
+			TYPE_TAG[t],
+			`${(tt.doors / tt.n).toFixed(1)}d/${(tt.windows / tt.n).toFixed(1)}w`,
+		]),
 	);
 }
 

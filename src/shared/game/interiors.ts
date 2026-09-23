@@ -162,11 +162,18 @@ export interface PlanInput {
 	rect: Rect;
 	/** the side of the box facing the street: the main door is in it */
 	side: DoorSide;
+	/**
+	 * Where the town put the main door: its centre along the street face (world x for a top / bottom face, y for a
+	 * left / right one). The plan keeps it there exactly -- the town reserved the walk to it, and moving it would move
+	 * every tree, bin and car placed after it -- and fits the rooms around it.
+	 */
+	doorU: number;
 	/** building-local seed (integers only) */
 	seed: number;
 	/**
 	 * A secondary door would open onto `approach` (world, the ground right outside it): answer whether that ground
-	 * is free — the town checks and reserves it. The main door is never asked: the town already keeps its approach.
+	 * is free. The town asks once it is complete (trees, bins and cars placed), so the answer is final. The main
+	 * door is never asked: the town already keeps its approach.
 	 */
 	canOpen: (approach: Rect) => boolean;
 }
@@ -197,11 +204,15 @@ const CLEAR_SIDE = 16;
 const WINDOW_CLEAR_DEPTH = 44;
 const WINDOW_CLEAR_SIDE = 4;
 /** a secondary door needs this much free ground outside it */
-const APPROACH_DEPTH = 120;
+const APPROACH_DEPTH = 80;
 /** an opening keeps this far from the end of its wall (the corner, a partition) */
 const END_MARGIN = T + 16;
 /** an outside door keeps only this far from the end of its wall: enough for a stub beside the frame */
 const DOOR_MARGIN = T + 4;
+/** the main door's run of wall reaches at least this far on each side of its centre */
+const MAIN_HALF = DOOR / 2 + DOOR_MARGIN;
+/** re-cutting the columns around the main door never leaves a column narrower than this (a room, not a slot) */
+const MIN_COL = 144;
 
 // ---------------------------------------------------------------------------------------------- rng
 
@@ -248,8 +259,11 @@ interface Template {
 	map: Array<Array<string>>;
 	/** room letter → kind */
 	rooms: Record<string, RoomKind>;
-	/** main entrance: column, row, side, position along the edge (0..1) */
-	main: [number, number, LSide, number];
+	/**
+	 * Main entrance: the column and row of the cell whose FRONT face (the street side) holds it. Where along that
+	 * face is the town's choice (`PlanInput.doorU`): the columns are re-cut around it when they must (`fitMain`).
+	 */
+	main: [number, number];
 	/** secondary door candidates, kept when the ground outside is free: column, row, side, position */
 	doors: Array<[number, number, LSide, number]>;
 	/** at most this many secondary doors */
@@ -273,9 +287,13 @@ const HOUSE_S_DEEP: Array<Template> = [
 	{
 		cols: [44, 56],
 		rows: [26, 30, 44],
-		map: [[".", "L"], ["L", "L"], ["K", "B"]],
+		map: [
+			[".", "L"],
+			["L", "L"],
+			["K", "B"],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [0, 1, "F", 0.5],
+		main: [0, 1],
 		doors: [[0, 2, "K", 0.5]],
 		extra: 1,
 		links: [
@@ -286,9 +304,13 @@ const HOUSE_S_DEEP: Array<Template> = [
 	{
 		cols: [50, 50],
 		rows: [44, 26, 30],
-		map: [["L", "L"], ["K", "B"], ["K", "."]],
+		map: [
+			["L", "L"],
+			["K", "B"],
+			["K", "."],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [0, 0, "F", 0.55],
+		main: [0, 0],
 		doors: [
 			[0, 2, "R", 0.5],
 			[0, 2, "K", 0.5],
@@ -306,9 +328,12 @@ const HOUSE_S_WIDE: Array<Template> = [
 	{
 		cols: [36, 30, 34],
 		rows: [45, 55],
-		map: [[".", "L", "L"], ["K", "K", "B"]],
+		map: [
+			[".", "L", "L"],
+			["K", "K", "B"],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [1, 0, "F", 0.6],
+		main: [1, 0],
 		doors: [
 			[0, 1, "K", 0.5],
 			[1, 1, "K", 0.5],
@@ -322,9 +347,12 @@ const HOUSE_S_WIDE: Array<Template> = [
 	{
 		cols: [55, 45],
 		rows: [50, 50],
-		map: [["L", "B"], ["K", "."]],
+		map: [
+			["L", "B"],
+			["K", "."],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [0, 0, "F", 0.4],
+		main: [0, 0],
 		doors: [
 			[0, 1, "R", 0.5],
 			[0, 1, "K", 0.5],
@@ -341,9 +369,13 @@ const HOUSE_S_WIDE: Array<Template> = [
 const HOUSE_HALL: Template = {
 	cols: [28, 22, 20, 30],
 	rows: [28, 36, 36],
-	map: [[".", "L", "L", "B"], ["L", "L", "H", "B"], ["K", "K", "H", "b"]],
+	map: [
+		[".", "L", "L", "B"],
+		["L", "L", "H", "B"],
+		["K", "K", "H", "b"],
+	],
 	rooms: HOUSE_ROOMS,
-	main: [1, 0, "F", 0.5],
+	main: [1, 0],
 	doors: [
 		[2, 2, "K", 0.5],
 		[0, 2, "K", 0.5],
@@ -362,9 +394,12 @@ const HOUSE_HALL: Template = {
 const HOUSE_U: Template = {
 	cols: [36, 28, 36],
 	rows: [48, 52],
-	map: [["L", "L", "B"], ["K", ".", "W"]],
+	map: [
+		["L", "L", "B"],
+		["K", ".", "W"],
+	],
 	rooms: HOUSE_ROOMS,
-	main: [1, 0, "F", 0.5],
+	main: [1, 0],
 	doors: [
 		[0, 1, "R", 0.5],
 		[0, 1, "K", 0.5],
@@ -381,9 +416,13 @@ const HOUSE_U: Template = {
 const HOUSE_L: Template = {
 	cols: [34, 32, 34],
 	rows: [36, 30, 34],
-	map: [["L", "L", "B"], ["K", "D", "B"], [".", "D", "W"]],
+	map: [
+		["L", "L", "B"],
+		["K", "D", "B"],
+		[".", "D", "W"],
+	],
 	rooms: HOUSE_ROOMS,
-	main: [0, 0, "F", 0.5],
+	main: [0, 0],
 	doors: [
 		[1, 2, "K", 0.5],
 		[1, 2, "L", 0.5],
@@ -404,9 +443,13 @@ const HOUSE_M_DEEP: Array<Template> = [
 	{
 		cols: [48, 52],
 		rows: [26, 34, 40],
-		map: [[".", "L"], ["K", "L"], ["W", "B"]],
+		map: [
+			[".", "L"],
+			["K", "L"],
+			["W", "B"],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[0, 2, "K", 0.5],
 			[0, 1, "L", 0.5],
@@ -421,9 +464,13 @@ const HOUSE_M_DEEP: Array<Template> = [
 	{
 		cols: [52, 48],
 		rows: [40, 30, 30],
-		map: [["L", "L"], ["K", "B"], ["K", "."]],
+		map: [
+			["L", "L"],
+			["K", "B"],
+			["K", "."],
+		],
 		rooms: HOUSE_ROOMS,
-		main: [0, 0, "F", 0.55],
+		main: [0, 0],
 		doors: [
 			[0, 2, "R", 0.5],
 			[0, 2, "K", 0.5],
@@ -440,9 +487,13 @@ const HOUSE_M_DEEP: Array<Template> = [
 const HOUSE_XL: Template = {
 	cols: [34, 32, 34],
 	rows: [34, 30, 36],
-	map: [["L", "L", "B"], ["D", "D", "b"], ["K", ".", "W"]],
+	map: [
+		["L", "L", "B"],
+		["D", "D", "b"],
+		["K", ".", "W"],
+	],
 	rooms: HOUSE_ROOMS,
-	main: [1, 0, "F", 0.5],
+	main: [1, 0],
 	doors: [
 		[0, 2, "R", 0.5],
 		[1, 1, "K", 0.5],
@@ -466,9 +517,12 @@ function smallShop(back: string): Array<Template> {
 		{
 			cols: [62, 38],
 			rows: [68, 32],
-			map: [["S", "S"], [back, "."]],
+			map: [
+				["S", "S"],
+				[back, "."],
+			],
 			rooms: SHOP_ROOMS,
-			main: [0, 0, "F", 0.6],
+			main: [0, 0],
 			doors: [
 				[0, 1, "R", 0.5],
 				[0, 1, "K", 0.5],
@@ -479,9 +533,12 @@ function smallShop(back: string): Array<Template> {
 		{
 			cols: [24, 52, 24],
 			rows: [66, 34],
-			map: [["S", "S", "S"], [".", back, "."]],
+			map: [
+				["S", "S", "S"],
+				[".", back, "."],
+			],
 			rooms: SHOP_ROOMS,
-			main: [1, 0, "F", 0.5],
+			main: [1, 0],
 			doors: [[1, 1, "K", 0.5]],
 			extra: 1,
 			links: [[1, 0, 1, 1, 0]],
@@ -494,9 +551,12 @@ const SMALL_MARKET: Array<Template> = [
 	{
 		cols: [36, 34, 30],
 		rows: [66, 34],
-		map: [["S", "S", "S"], ["F", "R", "."]],
+		map: [
+			["S", "S", "S"],
+			["F", "R", "."],
+		],
 		rooms: SHOP_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[1, 1, "R", 0.5],
 			[1, 1, "K", 0.5],
@@ -516,9 +576,12 @@ const BIG_MARKET: Array<Template> = [
 	{
 		cols: [36, 34, 30],
 		rows: [64, 36],
-		map: [["S", "S", "S"], ["F", "R", "."]],
+		map: [
+			["S", "S", "S"],
+			["F", "R", "."],
+		],
 		rooms: SHOP_ROOMS,
-		main: [0, 0, "F", 0.5],
+		main: [0, 0],
 		doors: [
 			[2, 0, "F", 0.5],
 			[1, 1, "R", 0.5],
@@ -534,9 +597,12 @@ const BIG_MARKET: Array<Template> = [
 	{
 		cols: [26, 48, 26],
 		rows: [62, 38],
-		map: [["S", "S", "S"], [".", "F", "R"]],
+		map: [
+			["S", "S", "S"],
+			[".", "F", "R"],
+		],
 		rooms: SHOP_ROOMS,
-		main: [1, 0, "F", 0.3],
+		main: [1, 0],
 		doors: [
 			[1, 0, "F", 0.8],
 			[2, 1, "K", 0.5],
@@ -558,9 +624,12 @@ const RESTAURANT: Array<Template> = [
 	{
 		cols: [45, 30, 25],
 		rows: [58, 42],
-		map: [["D", "D", "D"], ["D", "K", "."]],
+		map: [
+			["D", "D", "D"],
+			["D", "K", "."],
+		],
 		rooms: DINER_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[1, 1, "R", 0.5],
 			[1, 1, "K", 0.5],
@@ -574,9 +643,12 @@ const RESTAURANT: Array<Template> = [
 	{
 		cols: [30, 40, 30],
 		rows: [60, 40],
-		map: [["D", "D", "D"], [".", "K", "R"]],
+		map: [
+			["D", "D", "D"],
+			[".", "K", "R"],
+		],
 		rooms: DINER_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[2, 1, "K", 0.5],
 			[1, 1, "L", 0.5],
@@ -595,9 +667,12 @@ const GAS: Array<Template> = [
 	{
 		cols: [40, 30, 30],
 		rows: [62, 38],
-		map: [["S", "S", "S"], ["R", "R", "."]],
+		map: [
+			["S", "S", "S"],
+			["R", "R", "."],
+		],
 		rooms: SHOP_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[1, 1, "R", 0.5],
 			[0, 1, "K", 0.5],
@@ -608,9 +683,12 @@ const GAS: Array<Template> = [
 	{
 		cols: [30, 40, 30],
 		rows: [62, 38],
-		map: [["S", "S", "S"], [".", "R", "O"]],
+		map: [
+			["S", "S", "S"],
+			[".", "R", "O"],
+		],
 		rooms: SHOP_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[1, 1, "K", 0.5],
 			[1, 1, "L", 0.5],
@@ -638,9 +716,13 @@ const SCHOOL: Array<Template> = [
 	{
 		cols: [31, 38, 31],
 		rows: [38, 21, 41],
-		map: [["C", ".", "c"], ["H", "H", "H"], ["e", "O", "f"]],
+		map: [
+			["C", ".", "c"],
+			["H", "H", "H"],
+			["e", "O", "f"],
+		],
 		rooms: SCHOOL_ROOMS,
-		main: [1, 1, "F", 0.5],
+		main: [1, 1],
 		doors: [
 			[0, 1, "L", 0.5],
 			[2, 1, "R", 0.5],
@@ -657,9 +739,13 @@ const SCHOOL: Array<Template> = [
 	{
 		cols: [34, 32, 34],
 		rows: [38, 21, 41],
-		map: [["C", "E", "c"], ["H", "H", "H"], ["e", ".", "f"]],
+		map: [
+			["C", "E", "c"],
+			["H", "H", "H"],
+			["e", ".", "f"],
+		],
 		rooms: SCHOOL_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[0, 1, "L", 0.5],
 			[2, 1, "R", 0.5],
@@ -690,9 +776,13 @@ const HOSPITAL: Array<Template> = [
 	{
 		cols: [32, 36, 32],
 		rows: [27, 21, 52],
-		map: [[".", "E", "."], ["H", "H", "H"], ["M", "T", "m"]],
+		map: [
+			[".", "E", "."],
+			["H", "H", "H"],
+			["M", "T", "m"],
+		],
 		rooms: HOSPITAL_ROOMS,
-		main: [1, 0, "F", 0.5],
+		main: [1, 0],
 		doors: [
 			[1, 2, "K", 0.5],
 			[0, 1, "L", 0.5],
@@ -709,9 +799,13 @@ const HOSPITAL: Array<Template> = [
 	{
 		cols: [36, 28, 36],
 		rows: [34, 21, 45],
-		map: [["E", "E", "M"], ["H", "H", "H"], ["O", ".", "T"]],
+		map: [
+			["E", "E", "M"],
+			["H", "H", "H"],
+			["O", ".", "T"],
+		],
 		rooms: HOSPITAL_ROOMS,
-		main: [0, 0, "F", 0.5],
+		main: [0, 0],
 		doors: [
 			[2, 2, "K", 0.5],
 			[1, 1, "K", 0.5],
@@ -748,6 +842,34 @@ function templatesFor(bt: number, along: number, depth: number): Array<Template>
 	if (bt === 11) return RESTAURANT;
 	if (bt === 9) return smallShop("X");
 	return smallShop("R");
+}
+
+/** a house's last resort: the living room across the whole front (the town's door fits anywhere), a back patio */
+const HOUSE_FALLBACK: Template = {
+	cols: [34, 32, 34],
+	rows: [48, 52],
+	map: [
+		["L", "L", "L"],
+		["K", ".", "B"],
+	],
+	rooms: HOUSE_ROOMS,
+	main: [1, 0],
+	doors: [
+		[0, 1, "K", 0.5],
+		[2, 1, "K", 0.5],
+	],
+	extra: 1,
+	links: [
+		[0, 0, 0, 1, 0],
+		[2, 0, 2, 1, 0],
+	],
+};
+
+/** anything else's last resort: one room (never seen on the validated seeds: every template fits a centred door) */
+function fallbackFor(bt: number): Template {
+	if (bt === 1 || bt === 2) return HOUSE_FALLBACK;
+	const kind: RoomKind = bt === 3 || bt === 4 ? "lobby" : bt === 11 ? "diner" : "sales";
+	return { cols: [1], rows: [1], map: [["A"]], rooms: { A: kind }, main: [0, 0], doors: [], extra: 0, links: [] };
 }
 
 // ---------------------------------------------------------------------------------------------- room kinds
@@ -976,6 +1098,11 @@ class Planner {
 	readonly clear: Array<LR> = [];
 	readonly loot: Array<{ u: number; v: number; room: number }> = [];
 	recess = 0;
+	/** the main door's centre along the street face, in this plan's local frame */
+	readonly mainU: number;
+	/** the columns whose front run holds the main door (set by fitMain) */
+	private mainLo = 0;
+	private mainHi = 0;
 
 	constructor(
 		readonly inp: PlanInput,
@@ -988,6 +1115,8 @@ class Planner {
 		this.nr = tpl.rows.size();
 		cuts(this.us, tpl.cols, this.f.A);
 		cuts(this.vs, tpl.rows, this.f.D);
+		const along = inp.side === "top" || inp.side === "bottom" ? inp.doorU - inp.rect.x : inp.doorU - inp.rect.y;
+		this.mainU = mirror ? this.f.A - along : along;
 		const letters: Array<string> = [];
 		for (let j = 0; j < this.nr; j++) {
 			const row = tpl.map[j];
@@ -1011,6 +1140,48 @@ class Planner {
 	at(i: number, j: number): number {
 		if (i < 0 || j < 0 || i >= this.nc || j >= this.nr) return -1;
 		return this.cell[j * this.nc + i];
+	}
+
+	/**
+	 * Fits the main door where the town put it (`mainU`): the front run of the main cell's room -- its cells of the
+	 * main row whose front face is outside -- must reach MAIN_HALF past the door on both sides. When it does not,
+	 * the column cut on that side moves (on the 8-unit grid), as long as the column it eats stays MIN_COL wide.
+	 * Answers how far the cuts move in total, or -1 when the door cannot fit this template this way round;
+	 * `apply` makes the move.
+	 */
+	fitMain(apply: boolean): number {
+		const [mi, mj] = this.tpl.main;
+		const id = this.at(mi, mj);
+		if (id < 0 || this.at(mi, mj - 1) >= 0) return -1;
+		const frontOut = (i: number) => this.at(i, mj) === id && this.at(i, mj - 1) < 0;
+		let lo = mi;
+		let hi = mi;
+		while (lo > 0 && frontOut(lo - 1)) lo--;
+		while (hi < this.nc - 1 && frontOut(hi + 1)) hi++;
+		const us = this.us;
+		const u = this.mainU;
+		let cost = 0;
+		let left = us[lo];
+		let right = us[hi + 1];
+		if (u - MAIN_HALF < left) {
+			if (lo === 0) return -1;
+			left = math.floor((u - MAIN_HALF) / 8) * 8;
+			if (left - us[lo - 1] < MIN_COL) return -1;
+			cost += us[lo] - left;
+		}
+		if (u + MAIN_HALF > right) {
+			if (hi + 1 === this.nc) return -1;
+			right = math.ceil((u + MAIN_HALF) / 8) * 8;
+			if (us[hi + 2] - right < MIN_COL) return -1;
+			cost += right - us[hi + 1];
+		}
+		if (apply) {
+			us[lo] = left;
+			us[hi + 1] = right;
+			this.mainLo = lo;
+			this.mainHi = hi;
+		}
+		return cost;
 	}
 
 	/** the edge of cell (i, j) on local side s */
@@ -1098,12 +1269,24 @@ class Planner {
 
 	cutDoors(): void {
 		const tpl = this.tpl;
-		const [mi, mj, ms, mk] = tpl.main;
-		const main = this.cutIn(this.runOf(mi, mj, ms), DOOR, mk, "door", true);
-		if (main !== undefined) {
-			this.openings.push(main);
-			this.recess = ms === "F" ? this.vs[mj] : 0;
-		}
+		// the main door, exactly where the town put it (fitMain made room for it)
+		const mj = tpl.main[1];
+		const front: Edge = {
+			alongU: true,
+			at: this.vs[mj],
+			a: this.us[this.mainLo],
+			b: this.us[this.mainHi + 1],
+			out: "F",
+		};
+		const u = this.mainU;
+		this.openings.push({
+			band: bandOf(front, u - DOOR / 2, u + DOOR / 2),
+			kind: "door",
+			out: "F",
+			alongU: true,
+			main: true,
+		});
+		this.recess = this.vs[mj];
 		let extra = 0;
 		for (const [i, j, s, k] of tpl.doors) {
 			if (extra >= tpl.extra) break;
@@ -1124,7 +1307,62 @@ class Planner {
 			const len = e.b - e.a - TI - 32;
 			const w = wide === 1 ? math.max(INNER_DOOR_W, math.floor(len * 0.8)) : INNER_DOOR_W;
 			const o = this.cutIn(e, w, 0.5, "inner", false);
-			if (o !== undefined) this.openings.push(o);
+			if (o === undefined) continue;
+			this.openings.push(o);
+			this.join(this.at(i1, j1), this.at(i2, j2));
+		}
+		this.connectRooms();
+	}
+
+	// ------------------------------------------------------------------------------------ rooms joined
+
+	/** union-find over the rooms: which ones an interior doorway already joins */
+	private readonly roomOf: Array<number> = [];
+
+	private root(a: number): number {
+		while (this.roomOf.size() <= a) this.roomOf.push(this.roomOf.size());
+		let r = a;
+		while (this.roomOf[r] !== r) r = this.roomOf[r];
+		return r;
+	}
+
+	private join(a: number, b: number): void {
+		if (a < 0 || b < 0) return;
+		const ra = this.root(a);
+		const rb = this.root(b);
+		if (ra !== rb) this.roomOf[math.max(ra, rb)] = math.min(ra, rb);
+	}
+
+	/**
+	 * EDI-08: every room is reached from the main door THROUGH THE INSIDE. A template's link can fail to cut when the
+	 * columns moved around the main door (a wall grew too short for a doorway); then the room gets a doorway on the
+	 * first interior wall it shares with a room that is already joined, cells in order, so no room is ever reached
+	 * only through its own outside door or a window.
+	 */
+	private connectRooms(): void {
+		const mainRoom = this.at(this.tpl.main[0], this.tpl.main[1]);
+		for (let pass = 0; pass < this.kinds.size(); pass++) {
+			let changed = false;
+			for (let j = 0; j < this.nr; j++) {
+				for (let i = 0; i < this.nc; i++) {
+					const id = this.at(i, j);
+					if (id < 0 || this.root(id) === this.root(mainRoom)) continue;
+					for (const s of LSIDES) {
+						const n = this.at(
+							i + (s === "L" ? -1 : s === "R" ? 1 : 0),
+							j + (s === "F" ? -1 : s === "K" ? 1 : 0),
+						);
+						if (n < 0 || n === id || this.root(n) !== this.root(mainRoom)) continue;
+						const o = this.cutIn(this.edgeOf(i, j, s), INNER_DOOR_W, 0.5, "inner", false);
+						if (o === undefined) continue;
+						this.openings.push(o);
+						this.join(id, n);
+						changed = true;
+						break;
+					}
+				}
+			}
+			if (!changed) break;
 		}
 	}
 
@@ -1162,7 +1400,11 @@ class Planner {
 							// a shop front: a row of windows wherever the front's doors leave wall, 140 apart
 							const run = this.runOf(i, j, s);
 							const whole = run.b - run.a > e.b - e.a ? run : e;
-							for (let c = whole.a + END_MARGIN + WINDOW_W / 2; c <= whole.b - END_MARGIN - WINDOW_W / 2; c += 140) {
+							for (
+								let c = whole.a + END_MARGIN + WINDOW_W / 2;
+								c <= whole.b - END_MARGIN - WINDOW_W / 2;
+								c += 140
+							) {
 								const o: LOpening = {
 									band: bandOf(whole, c - WINDOW_W / 2, c + WINDOW_W / 2),
 									kind: "window",
@@ -1405,7 +1647,11 @@ class Planner {
 					}
 				}
 				if (!grown) {
-					still.push({ a: run.a, b: run.b, r: lr(this.us[run.a], this.us[run.b + 1], this.vs[j], this.vs[j + 1]) });
+					still.push({
+						a: run.a,
+						b: run.b,
+						r: lr(this.us[run.a], this.us[run.b + 1], this.vs[j], this.vs[j + 1]),
+					});
 				}
 			}
 			for (const o of open) out.push(o.r);
@@ -1428,11 +1674,19 @@ class Planner {
 					const e = this.edgeOf(i, j, s);
 					if (e.out !== undefined) inset[s] = T;
 					else {
-						const other = this.at(i + (s === "L" ? -1 : s === "R" ? 1 : 0), j + (s === "F" ? -1 : s === "K" ? 1 : 0));
+						const other = this.at(
+							i + (s === "L" ? -1 : s === "R" ? 1 : 0),
+							j + (s === "F" ? -1 : s === "K" ? 1 : 0),
+						);
 						inset[s] = other === id ? 0 : TI / 2;
 					}
 				}
-				const inner = lr(this.us[i] + inset.L, this.us[i + 1] - inset.R, this.vs[j] + inset.F, this.vs[j + 1] - inset.K);
+				const inner = lr(
+					this.us[i] + inset.L,
+					this.us[i + 1] - inset.R,
+					this.vs[j] + inset.F,
+					this.vs[j + 1] - inset.K,
+				);
 				const walls: Array<{ side: LSide; seg: LR }> = [];
 				for (const s of LSIDES) {
 					if (inset[s] === 0) continue;
@@ -1475,11 +1729,7 @@ class Planner {
 	clearZones(): void {
 		for (const o of this.openings) {
 			const win = o.kind === "window";
-			const zones = this.zonesOf(
-				o,
-				win ? WINDOW_CLEAR_DEPTH : CLEAR_DEPTH,
-				win ? WINDOW_CLEAR_SIDE : CLEAR_SIDE,
-			);
+			const zones = this.zonesOf(o, win ? WINDOW_CLEAR_DEPTH : CLEAR_DEPTH, win ? WINDOW_CLEAR_SIDE : CLEAR_SIDE);
 			for (const z of zones) this.clear.push(z);
 		}
 	}
@@ -1512,14 +1762,7 @@ class Planner {
 	}
 
 	/** a piece of `len` × `depth` with its back against a wall of the room; answers whether it went in */
-	againstWall(
-		ctx: RoomCtx,
-		kind: FurnitureKind,
-		len: number,
-		depth: number,
-		prefer?: LSide,
-		only = false,
-	): boolean {
+	againstWall(ctx: RoomCtx, kind: FurnitureKind, len: number, depth: number, prefer?: LSide, only = false): boolean {
 		const order: Array<LSide> = [];
 		if (prefer !== undefined) order.push(prefer);
 		const start = this.rng.int(0, 3);
@@ -1638,7 +1881,8 @@ class Planner {
 		// the checkouts: at the front of a side wall (the till by the door), or free-standing on a big floor
 		if (!this.againstWall(ctx, "checkout", 96, 44, "L", true)) this.againstWall(ctx, "checkout", 96, 44, "R", true);
 		if (H > 500) {
-			for (const du of CHECKOUT_AT) this.island(ctx, "checkout", 96, 44, false, du * W, -H / 2 + CLEAR_DEPTH + 40);
+			for (const du of CHECKOUT_AT)
+				this.island(ctx, "checkout", 96, 44, false, du * W, -H / 2 + CLEAR_DEPTH + 40);
 		}
 		// gondolas: columns running from the front aisle to the back aisle, or rows when the floor is too shallow;
 		// a big floor keeps a band at the front for its free-standing checkouts
@@ -1663,6 +1907,146 @@ class Planner {
 		if (p.face === "K") return { u: cu, v: p.v1 + d };
 		if (p.face === "L") return { u: p.u0 - d, v: cv };
 		return { u: p.u1 + d, v: cv };
+	}
+
+	// ------------------------------------------------------------------------------------ no pockets
+
+	/** the reach grid of the last `removePockets` (world, the town's 8-unit grid) */
+	private gx0 = 0;
+	private gy0 = 0;
+	private gcols = 0;
+	private grows = 0;
+	private readonly gSeen: Array<number> = [];
+	private readonly gBlocked: Array<number> = [];
+	private readonly gInside: Array<number> = [];
+	private readonly gQueue: Array<number> = [];
+
+	/**
+	 * EDI-11 (no safe spot) and CID-05 (no sealed pocket), checked exactly as tools/validate-world.mjs checks them:
+	 * on the town's own 8-unit grid, a survivor (radius 18) can stand on a cell when its centre is 18 clear of every
+	 * wall and piece, and walks from cell to cell (4 neighbours). From the main door, every cell inside the footprint
+	 * a survivor can stand on must be reached -- the horde's walkers are smaller, so they reach it too. The local
+	 * rules of `fits` keep the paths two bodies wide, but they cannot see a pocket two pieces close off between them
+	 * and a wall (corner to corner, or a nook behind a piece): the piece nearest such a pocket, the latest placed
+	 * first, comes out again, until there is none.
+	 */
+	removePockets(): void {
+		const r = this.inp.rect;
+		const C = POCKET_CELL;
+		const R = BODY;
+		this.gx0 = math.floor(r.x / C) * C;
+		this.gy0 = math.floor(r.y / C) * C;
+		const cols = math.ceil((r.x + r.w - this.gx0) / C);
+		const rows = math.ceil((r.y + r.h - this.gy0) / C);
+		this.gcols = cols;
+		this.grows = rows;
+		const n = cols * rows;
+		const inside = this.gInside;
+		inside.clear();
+		const parts: Array<Rect> = [];
+		for (const p of this.merged((i, j) => this.at(i, j) >= 0)) parts.push(this.f.rect(p));
+		for (let j = 0; j < rows; j++) {
+			const py = this.gy0 + j * C + C / 2;
+			for (let i = 0; i < cols; i++) {
+				const px = this.gx0 + i * C + C / 2;
+				let v = 0;
+				for (const p of parts) {
+					if (px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h) v = 1;
+				}
+				inside.push(v);
+			}
+		}
+		const walls: Array<Rect> = [];
+		for (const w of this.walls) walls.push(this.f.rect(w.r));
+		let seedX = 0;
+		let seedY = 0;
+		for (const o of this.openings) {
+			if (!o.main) continue;
+			const q = this.f.rect(o.band);
+			seedX = q.x + q.w / 2;
+			seedY = q.y + q.h / 2;
+		}
+		for (let iter = 0; iter < POCKET_TRIES; iter++) {
+			const blocked = this.gBlocked;
+			blocked.clear();
+			for (let k = 0; k < n; k++) blocked.push(0);
+			for (const w of walls) this.stampBody(w, R);
+			for (const p of this.pieces) this.stampBody(this.f.rect(p), R);
+			const seen = this.gSeen;
+			seen.clear();
+			for (let k = 0; k < n; k++) seen.push(0);
+			const q = this.gQueue;
+			q.clear();
+			const s0 = this.cellAt(seedX, seedY);
+			if (s0 >= 0 && blocked[s0] === 0) {
+				seen[s0] = 1;
+				q.push(s0);
+			}
+			let head = 0;
+			while (head < q.size()) {
+				const k = q[head];
+				head++;
+				const i = k % cols;
+				if (i > 0) this.visit(k - 1);
+				if (i < cols - 1) this.visit(k + 1);
+				if (k >= cols) this.visit(k - cols);
+				if (k + cols < n) this.visit(k + cols);
+			}
+			let pocket = -1;
+			for (let k = 0; k < n && pocket < 0; k++) {
+				if (inside[k] === 1 && blocked[k] === 0 && seen[k] === 0) pocket = k;
+			}
+			if (pocket < 0) return;
+			const px = this.gx0 + (pocket % cols) * C + C / 2;
+			const py = this.gy0 + math.floor(pocket / cols) * C + C / 2;
+			let culprit = -1;
+			for (let k = this.pieces.size() - 1; k >= 0 && culprit < 0; k--) {
+				const b = this.f.rect(this.pieces[k]);
+				const dx = math.max(b.x - px, 0, px - b.x - b.w);
+				const dy = math.max(b.y - py, 0, py - b.y - b.h);
+				if (dx * dx + dy * dy < (R + C * 2) * (R + C * 2)) culprit = k;
+			}
+			// a pocket that only walls make: nothing to take out (tools/validate-world.mjs names it)
+			if (culprit < 0) return;
+			this.pieces.remove(culprit);
+		}
+	}
+
+	private cellAt(x: number, y: number): number {
+		const i = math.floor((x - this.gx0) / POCKET_CELL);
+		const j = math.floor((y - this.gy0) / POCKET_CELL);
+		if (i < 0 || j < 0 || i >= this.gcols || j >= this.grows) return -1;
+		return j * this.gcols + i;
+	}
+
+	private visit(k: number): void {
+		if (this.gSeen[k] === 1 || this.gBlocked[k] === 1) return;
+		this.gSeen[k] = 1;
+		this.gQueue.push(k);
+	}
+
+	/** marks the cells whose centre is closer than `R` to the world rect `w` */
+	private stampBody(w: Rect, R: number): void {
+		const C = POCKET_CELL;
+		const i0 = math.max(0, math.floor((w.x - R - this.gx0) / C));
+		const i1 = math.min(this.gcols - 1, math.floor((w.x + w.w + R - this.gx0) / C));
+		const j0 = math.max(0, math.floor((w.y - R - this.gy0) / C));
+		const j1 = math.min(this.grows - 1, math.floor((w.y + w.h + R - this.gy0) / C));
+		for (let j = j0; j <= j1; j++) {
+			const py = this.gy0 + j * C + C / 2;
+			const dy = math.max(w.y - py, 0, py - w.y - w.h);
+			for (let i = i0; i <= i1; i++) {
+				const px = this.gx0 + i * C + C / 2;
+				const dx = math.max(w.x - px, 0, px - w.x - w.w);
+				if (dx * dx + dy * dy < R * R) this.gBlocked[j * this.gcols + i] = 1;
+			}
+		}
+	}
+
+	/** did the last `removePockets` reach the world point (x, y) from the main door? */
+	reached(x: number, y: number): boolean {
+		const k = this.cellAt(x, y);
+		return k >= 0 && this.gSeen[k] === 1;
 	}
 
 	/** a point where a body of radius 18 stands clear of every wall and piece */
@@ -1693,6 +2077,11 @@ const ISLAND_OFFSETS: Array<[number, number]> = [
 ];
 /** a loot spot stands this far out from the front of its piece */
 const LOOT_FRONT = 44;
+/** the pocket check's grid (the town's validator grid) and body: a survivor, shared/game/physics.ts PLAYER_RADIUS */
+const POCKET_CELL = 8;
+const BODY = 18;
+/** at most this many pieces come out of one building for its pockets */
+const POCKET_TRIES = 24;
 
 function flip(s: LSide): LSide {
 	if (s === "F") return "K";
@@ -1929,7 +2318,14 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 	}
 	// a few days after the outbreak (APO-01): dried blood in some rooms
 	if (rng.chance(0.22)) {
-		pl.decorAt("blood", cu + (rng.next() - 0.5) * w * 0.5, cv + (rng.next() - 0.5) * h * 0.5, 64, 48, rng.next() * 6);
+		pl.decorAt(
+			"blood",
+			cu + (rng.next() - 0.5) * w * 0.5,
+			cv + (rng.next() - 0.5) * h * 0.5,
+			64,
+			48,
+			rng.next() * 6,
+		);
 	}
 }
 
@@ -1942,8 +2338,26 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	const A = alongX ? inp.rect.w : inp.rect.h;
 	const D = alongX ? inp.rect.h : inp.rect.w;
 	const list = templatesFor(inp.type, A, D);
-	const tpl = list[rng.int(0, list.size() - 1)];
-	const pl = new Planner(inp, tpl, rng, rng.chance(0.5));
+	// the seed picks a template and a way round; the first (from there on) that fits the town's door is kept,
+	// the way round that needs the columns moved least
+	const start = rng.int(0, list.size() - 1);
+	const flipFirst = rng.chance(0.5);
+	let pl: Planner | undefined;
+	for (let n = 0; n < list.size() && pl === undefined; n++) {
+		const tpl = list[(start + n) % list.size()];
+		const a = new Planner(inp, tpl, rng, flipFirst);
+		const b = new Planner(inp, tpl, rng, !flipFirst);
+		const ca = a.fitMain(false);
+		const cb = b.fitMain(false);
+		if (ca < 0 && cb < 0) continue;
+		pl = ca >= 0 && (cb < 0 || ca <= cb) ? a : b;
+		pl.fitMain(true);
+	}
+	if (pl === undefined) {
+		// never seen on the validated seeds; a plan must exist all the same: one room behind the whole front
+		pl = new Planner(inp, fallbackFor(inp.type), rng, false);
+		pl.fitMain(true);
+	}
 	pl.cutDoors();
 	pl.firstWindows();
 	pl.buildWalls();
@@ -1953,6 +2367,7 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 		furnish(pl, ctx, inp.type);
 	}
 	pl.cutWindows();
+	pl.removePockets();
 	for (let id = 0; id < pl.kinds.size(); id++) decorate(pl, pl.roomCtx(id));
 	// broken glass inside some windows (APO-01): the zombies came through here
 	for (const o of pl.openings) {
@@ -1971,7 +2386,7 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	for (const p of pl.pieces) {
 		if (!p.loot || taken.includes(p.room) || pl.loot.size() >= 3) continue;
 		const s = pl.lootSpot(p);
-		if (!pl.standable(s.u, s.v)) continue;
+		if (!pl.standable(s.u, s.v) || !pl.reached(pl.f.x(s.u, s.v), pl.f.y(s.u, s.v))) continue;
 		taken.push(p.room);
 		pl.loot.push({ u: s.u, v: s.v, room: p.room });
 	}

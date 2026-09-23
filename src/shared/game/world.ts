@@ -580,8 +580,6 @@ const SHOP_MIX: Array<number> = [
 const CORNER_SHOPS: Array<number> = [8, 6, 10, 9];
 
 const GAS_DEF: BuildingDef = { type: 5, w: 684, h: 556, slots: 2, name: "gas", weight: 1 };
-/** where along the forecourt a pump island may stand (from the street corner), in order of preference */
-const PUMP_SLOTS: Array<number> = [70, 300, 470, 560, 190];
 /** the largest buildings, with room left on the lot for a school yard / parking lot */
 const SCHOOL_DEF: BuildingDef = { type: 3, w: 1064, h: 812, slots: 4, name: "school", weight: 1 };
 const HOSPITAL_DEF: BuildingDef = { type: 4, w: 1064, h: 812, slots: 4, name: "hospital", weight: 1 };
@@ -874,27 +872,25 @@ function addPart(w: WorldData, kind: SolidKind, q: Rect, parentId: number, tags:
 }
 
 /**
- * A real building (shared/game/interiors.ts lays it out): a passable footprint record (loot, roof, the main door,
- * the footprint's parts, rooms, openings, decoration, loot spots) + its walls, windows and furniture as solids.
- * The main door faces edge `e`'s street (EDI-01); `front` = curb → the footprint's street face. `doorU` (the old
- * door position along the edge) is only a fallback: the plan puts the door where its template says.
+ * A real building: a passable footprint record (loot, roof, the main door) whose street face looks onto edge `e`,
+ * with its main door at `doorU` along it (EDI-01); `front` = curb → the footprint's street face. The walls, the
+ * rooms, the other entrances, the windows and the furniture come later, from shared/game/interiors.ts, once the
+ * whole town stands (`planInteriors`): until then the record's box keeps everything else out, exactly as the four
+ * walls of the old box did, so the town around the buildings is the one it always was.
  */
-function addBuilding(g: Gen, lot: Lot, b: BuildingDef, r: Rect, e: LotEdge, doorU0: number, front: number): Solid {
+function addBuilding(g: Gen, lot: Lot, b: BuildingDef, r: Rect, e: LotEdge, doorU: number, front: number): Solid {
 	const w = g.w;
+	const T = TOWN.WALL_T;
 	const D = TOWN.DOOR_W;
 	const side = e.side;
-	const plan = planBuilding({
-		type: b.type,
-		rect: r,
-		side,
-		seed: buildingSeed(r.x, r.y, b.type, g.townSeed),
-		// a secondary door opens only onto free ground, and that ground stays free (EDI-09)
-		canOpen: a => {
-			if (!g.placer.canPlace(a.x, a.y, a.w, a.h, 0)) return false;
-			g.placer.reserve(a);
-			return true;
-		},
-	});
+	const along = isAlongX(side) ? doorU - r.x : doorU - r.y;
+	// the door on the street face (the plan may set it back into a porch)
+	let doorX = r.x + along;
+	let doorY = r.y + along;
+	if (side === "top") doorY = r.y + T / 2;
+	else if (side === "bottom") doorY = r.y + r.h - T / 2;
+	else if (side === "left") doorX = r.x + T / 2;
+	else doorX = r.x + r.w - T / 2;
 	const roof = SHOP_ROOF[b.type] ?? deadTownHsv(r.x, r.y, b.type);
 	const rec = addSolid(w, {
 		kind: "building",
@@ -913,38 +909,15 @@ function addBuilding(g: Gen, lot: Lot, b: BuildingDef, r: Rect, e: LotEdge, door
 		lootItems: [],
 		lootTimer: 0,
 		passable: true,
-		doorX: plan.doorX,
-		doorY: plan.doorY,
+		doorX,
+		doorY,
 		doorSide: side,
-		parts: plan.parts,
-		mainWing: plan.mainWing,
-		rooms: plan.rooms,
-		openings: plan.openings,
-		decor: plan.decor,
-		lootSpots: plan.loot,
 	});
-	const id = rec.id;
-	for (const q of plan.walls) {
-		addPart(w, q.w >= q.h ? "wall_h" : "wall_v", q, id, "bwall", q.inner ? { inner: true } : undefined);
-	}
-	for (const o of plan.openings) {
-		if (o.kind === "window") addPart(w, "window", o, id, "window", { passable: true });
-	}
-	for (const p of plan.furniture) {
-		addPart(w, "furniture", p, id, p.kind, { low: p.low, face: p.face, variant: p.variant });
-	}
-	const doorU = plan.doorX !== 0 || plan.doorY !== 0 ? (isAlongX(side) ? plan.doorX : plan.doorY) : doorU0;
-	const deep = front + plan.recess;
 	// keep the approach free from the curb to 110 inside, and nobody parks in front of it
 	const half = D / 2 + 24;
-	g.placer.reserve(edgeRect(e, doorU - half, doorU + half, 0, deep + 110));
+	g.placer.reserve(edgeRect(e, doorU - half, doorU + half, 0, front + 110));
 	noParking(g, e, doorU - 110, doorU + 110);
-	// the notches of the footprint: a house's porch in front, a patio / loading bay / courtyard elsewhere
-	for (const y of plan.yards) {
-		const house = b.type === 1 || b.type === 2;
-		lot.ground.push({ ...y, kind: house && y.front ? "porch" : "patio" });
-	}
-	// footpath across the front yard (into the porch), and through the service strip
+	// footpath across the front yard, and through the service strip
 	if (front > TOWN.SIDEWALK + 24) {
 		const pw = b.type === 1 || b.type === 2 ? 36 : D / 2;
 		lot.ground.push({ ...edgeRect(e, doorU - pw, doorU + pw, TOWN.SIDEWALK, front), kind: "walk" });
@@ -1294,16 +1267,11 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 	if (!g.placer.canPlace(apron.x, apron.y, apron.w, apron.h, 0)) return false;
 	const doorU = atA ? u0 + along - 130 : u0 + 130;
 	addBuilding(g, lot, b, r, e1, doorU, front);
-	// two pump islands parallel to the street, clear of the door approach (the shop's plan puts its door, and
-	// addBuilding reserved the walk to it: the islands take the first two free slots)
+	// two pump islands parallel to the street, clear of the door approach
 	const vMid = TOWN.SIDEWALK + TOWN.FORECOURT / 2;
-	let pumps = 0;
-	for (const off of PUMP_SLOTS) {
-		if (pumps >= 2) break;
+	for (const off of [70, 300]) {
 		const a = atA ? span.a + off : span.b - off - 150;
 		const p = edgeRect(e1, a, a + 150, vMid - 20, vMid + 20);
-		if (!g.placer.canPlace(p.x, p.y, p.w, p.h, 48)) continue;
-		pumps++;
 		addSolid(g.w, {
 			kind: isAlongX(e1.side) ? "wall_h" : "wall_v",
 			x: p.x,
@@ -1662,6 +1630,79 @@ function parkCars(g: Gen): void {
 					const spans = laneSpans(w, road, t - 24, t + L + 24, c0, c1);
 					spans.push([span0, span1]);
 					if (freeWidth(spans, c0, c1) >= TOWN.LANE_FREE) addCar(w, x, y, cw, ch, heading);
+				}
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// interiors
+
+/**
+ * The inside of every building (shared/game/interiors.ts, docs/DESIGN_RULES.md EDI-08..EDI-15), planned once the
+ * whole town stands: walls with their doorways and windows, the rooms, the furniture, the loot spots, and the
+ * notches that make the footprint an L, a T or a U (a house's porch, a patio, a loading bay).
+ *
+ * Why at the very end: a building's box already kept everything else out while the town was laid (its record is a
+ * solid for every placement query), so planning now changes nothing around it -- the town is the one it always
+ * was -- and a secondary door (back door, service door, emergency exit) can be kept only where the ground outside it
+ * is REALLY free: no tree, bin, pump, parked car or other building in the way, now that all of them are placed.
+ * Nothing here draws from the town's `rng`: each building has its own seed (`buildingSeed`), integers only.
+ */
+function planInteriors(g: Gen): void {
+	const w = g.w;
+	const scratch: Array<Solid> = [];
+	for (const lot of w.lots) {
+		const list = g.placed.get(lot);
+		if (list === undefined) continue;
+		for (const p of list) {
+			const rec = p.solid;
+			const plan = planBuilding({
+				type: p.def.type,
+				rect: { x: rec.x, y: rec.y, w: rec.w, h: rec.h },
+				side: p.edge.side,
+				doorU: p.doorU,
+				seed: buildingSeed(rec.x, rec.y, p.def.type, g.townSeed),
+				canOpen: a => {
+					const B = TOWN.BORDER;
+					if (a.x < B || a.y < B || a.x + a.w > w.width - B || a.y + a.h > w.height - B) return false;
+					scratch.clear();
+					for (const s of querySolids(w, a.x, a.y, a.x + a.w, a.y + a.h, scratch)) {
+						if (s !== rec) return false;
+					}
+					for (const road of w.roads) {
+						if (rectOverlap(a.x, a.y, a.w, a.h, road.x, road.y, road.w, road.h)) return false;
+					}
+					return true;
+				},
+			});
+			rec.doorX = plan.doorX;
+			rec.doorY = plan.doorY;
+			rec.parts = plan.parts;
+			rec.mainWing = plan.mainWing;
+			rec.rooms = plan.rooms;
+			rec.openings = plan.openings;
+			rec.decor = plan.decor;
+			rec.lootSpots = plan.loot;
+			const id = rec.id;
+			for (const q of plan.walls) {
+				addPart(w, q.w >= q.h ? "wall_h" : "wall_v", q, id, "bwall", q.inner ? { inner: true } : undefined);
+			}
+			for (const o of plan.openings) {
+				if (o.kind === "window") addPart(w, "window", o, id, "window", { passable: true });
+			}
+			for (const f of plan.furniture) {
+				addPart(w, "furniture", f, id, f.kind, { low: f.low, face: f.face, variant: f.variant });
+			}
+			// the notches of the footprint: a house's porch in front, a patio / loading bay / courtyard elsewhere
+			const house = p.def.type === 1 || p.def.type === 2;
+			for (const y of plan.yards) {
+				lot.ground.push({ ...y, kind: house && y.front ? "porch" : "patio" });
+				// the grass tufts were laid before the notch existed: none on a porch or a patio
+				for (let i = lot.patches.size() - 1; i >= 0; i--) {
+					const q = lot.patches[i];
+					if (rectOverlap(q.x, q.y, q.w, q.h, y.x, y.y, y.w, y.h)) lot.patches.remove(i);
 				}
 			}
 		}
@@ -2104,6 +2145,9 @@ export function generateTown(seed = 0): WorldData {
 	border(0, w.height - t, w.width, t, "wall_h");
 	border(0, t, t, w.height - t * 2, "wall_v");
 	border(w.width - t, t, t, w.height - t * 2, "wall_v");
+
+	// --- the inside of every building, now that nothing else will be placed ---
+	planInteriors(g);
 
 	return w;
 }
