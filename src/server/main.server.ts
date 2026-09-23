@@ -37,6 +37,7 @@ import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
+import * as Analytics from "./analytics/events";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -192,6 +193,8 @@ interface StoredDoc {
 }
 
 const remotes = createRemotes();
+// before any session loads: the Economy / Funnel / Custom dashboards (docs/ANALYTICS.md); off when there is no service
+Analytics.start();
 const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(DATA_STORE_NAME));
 const dataStore = storeOk ? (storeValue as DataStore) : undefined;
 if (dataStore === undefined) {
@@ -609,6 +612,7 @@ function loadSession(s: Session): void {
 	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
 	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
 	if (status === "ok" && mpHost?.adopt(s.player, save) === true) s.dirty = true;
+	Analytics.sessionLoaded(s.player, status, save);
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {
@@ -1008,6 +1012,7 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	} else {
 		return fail("invalid", s);
 	}
+	Analytics.shopAction(player, req, price);
 	s.dirty = true;
 	return { ok: true, price, wallet: walletOf(save) };
 }
@@ -1164,6 +1169,7 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	const dayMoved = ops !== undefined && edited.day !== before.day;
 	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
 	s.assistedRunRev = assisted ? edited.runRev : undefined;
+	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
 	s.dirty = true;
@@ -1293,7 +1299,10 @@ if (MP_PHASE >= 1) {
 	};
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
-	sim.onBackpack = sp => markDirty(sp.userId);
+	sim.onBackpack = (sp, outcome) => {
+		markDirty(sp.userId);
+		Analytics.backpack(sp.save, outcome);
+	};
 	sim.onInteract = sp => markDirty(sp.userId);
 	startIntentListener(mpHost);
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
