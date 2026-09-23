@@ -441,11 +441,12 @@ export class InteriorView {
 	 * window, so from the street a survivor sees where the building can be entered -- and where the horde will
 	 * climb in -- without the roof lifting (EDI-10).
 	 */
-	drawRoofMarks(r: Renderer, cam: Camera, b: Solid, a: number, eave: Color3): void {
+	drawRoofMarks(r: Renderer, cam: Camera, b: Solid, a: number, eave: Color3, v: ViewRect): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
-			if (o.kind === "inner") continue;
+			// only the marks in view: a big building half on screen has dozens of openings off it
+			if (o.kind === "inner" || !overlaps(o.x - 16, o.y - 16, o.w + 32, o.h + 32, v)) continue;
 			const nx = normalX(o.side);
 			const ny = normalY(o.side);
 			const across = nx !== 0;

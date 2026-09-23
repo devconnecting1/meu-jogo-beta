@@ -20,6 +20,7 @@ import {
 	insideBuilding,
 	isOnRoad,
 	querySolids,
+	queryTown,
 	randomOpenPoint,
 	rectHitsSolid,
 	updateGroundItems,
@@ -672,7 +673,8 @@ export class GameLoop {
 		const v = cam.viewRect(400);
 		const list = this.queryBuf;
 		list.clear();
-		querySolids(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
+		// the building records and the trees: never a building's own walls or furniture (queryTown)
+		queryTown(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);

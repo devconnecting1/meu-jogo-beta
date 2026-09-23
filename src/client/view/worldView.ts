@@ -28,7 +28,18 @@ import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import type { FloorKind } from "shared/game/interiors";
-import { DoorSide, GroundRect, hash01, Lot, querySolids, Rect, Road, Solid, WorldData } from "shared/game/world";
+import {
+	DoorSide,
+	GroundRect,
+	hash01,
+	Lot,
+	queryParts,
+	queryTown,
+	Rect,
+	Road,
+	Solid,
+	WorldData,
+} from "shared/game/world";
 import { drawBuildingSign } from "./buildingSigns";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
@@ -497,8 +508,15 @@ export class WorldView {
 	drawSolids(r: Renderer, cam: Camera, v: ViewRect, world: WorldData): void {
 		const list = this.queryBuf;
 		list.clear();
-		// pad: canopies reach ~90 px past the trunk, shadows ~20 px past their caster
-		querySolids(world, v.minX - 140, v.minY - 140, v.maxX + 140, v.maxY + 140, list);
+		// pad: canopies reach ~90 px past the trunk, shadows ~20 px past their caster. The town first, without the
+		// buildings' own walls and furniture (queryTown); those only while a roof in view is lifted, below -- the
+		// same solids in the same order as one querySolids, minus the parts no open roof shows (review of ea5cf71)
+		const x0 = v.minX - 140;
+		const y0 = v.minY - 140;
+		const x1 = v.maxX + 140;
+		const y1 = v.maxY + 140;
+		queryTown(world, x0, y0, x1, y1, list);
+		let open = false;
 		if (world !== this.shadesFor) {
 			this.roofShades.clear();
 			this.seamsFlat.clear();
@@ -512,16 +530,7 @@ export class WorldView {
 					this.drawBuilding(r, cam, s, v);
 				}
 				this.drawSignage(r, cam, v, s);
-			} else if (s.parentId !== undefined) {
-				// a building's walls, windows and furniture: nothing to draw under a roof that is on
-				if (s.kind === "window") continue;
-				const home = this.interior.parentOf(world, s);
-				if (this.interior.roofOpaque(home)) continue;
-				if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) continue;
-				const bt = home?.buildingType ?? 1;
-				const house = bt === 1 || bt === 2;
-				if (s.kind === "furniture") this.interior.drawFurniture(r, cam, s);
-				else if (!this.drawWallArt(r, cam, s, house)) this.interior.drawWall(r, cam, s, house);
+				if (!this.interior.roofOpaque(s)) open = true;
 			} else if (s.tags === "border") {
 				if (!this.drawBorderArt(r, cam, s, v)) this.drawBorder(r, cam, s, v);
 			} else if (s.kind === "tree") {
@@ -539,6 +548,21 @@ export class WorldView {
 					this.drawStructure(r, cam, s);
 				}
 			}
+		}
+		// a building's walls, windows and furniture: nothing to draw under a roof that is on, so with every roof in
+		// view on (a survivor out in the street) the parts are not even looked up
+		if (!open) return;
+		list.clear();
+		queryParts(world, x0, y0, x1, y1, list);
+		for (const s of list) {
+			if (s.kind === "window") continue;
+			const home = this.interior.parentOf(world, s);
+			if (this.interior.roofOpaque(home)) continue;
+			if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) continue;
+			const bt = home?.buildingType ?? 1;
+			const house = bt === 1 || bt === 2;
+			if (s.kind === "furniture") this.interior.drawFurniture(r, cam, s);
+			else if (!this.drawWallArt(r, cam, s, house)) this.interior.drawWall(r, cam, s, house);
 		}
 	}
 
@@ -735,7 +759,7 @@ export class WorldView {
 		}
 		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
 		const eave = roofDark.Lerp(BLACK, 0.3);
-		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, eave);
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, eave, v);
 		else this.drawPlainEntrance(r, cam, s, roofA, eave);
 	}
 
@@ -1492,7 +1516,7 @@ export class WorldView {
 			this.drawRoofUnits(r, cam, wing, s.doorSide, wx, wy, roofA);
 		}
 		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
-		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3]);
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v);
 		else this.drawPlainEntrance(r, cam, s, roofA, shades[3]);
 		return true;
 	}

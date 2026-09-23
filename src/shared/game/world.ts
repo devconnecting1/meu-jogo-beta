@@ -443,6 +443,38 @@ export function querySolids(
 	return out;
 }
 
+/**
+ * `querySolids` without the buildings' own walls, windows and furniture (the coarse grid alone): the town as seen
+ * from above with every roof on -- the building records, trees, cars, constructions. Same order as the first part
+ * of a `querySolids` answer.
+ */
+export function queryTown(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	queryGrid(w.grid, w.grid.stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
+/** the buildings' own walls, windows and furniture alone (the fine grid): the rest of a `querySolids` answer */
+export function queryParts(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	queryGrid(w.fine, w.grid.stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
 function queryGrid(g: SolidGrid, stamp: number, x0: number, y0: number, x1: number, y1: number, out: Array<Solid>) {
 	if (g.count === 0) return;
 	const c0 = cellCol(g, x0);

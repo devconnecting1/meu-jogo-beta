@@ -1,21 +1,21 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the interiors branch (compound footprints and one roof over them, every door and window marked, porches and patios; ART-07 signs on the main wing); noSigns = the same without the signage hook",
+	"recordedFrom": "the interiors branch after the review of ea5cf71 (compound footprints under one roof, every door and window marked -- only those in view --, porches and patios; ART-07 signs on the main wing; the furnishing of 1d98ae5); noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
-			"count": 1264,
-			"sha1": "351ce594fe774e1311d63e4fc5f2e697130cf8ae",
+			"count": 1234,
+			"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368",
 			"noSigns": {
-				"count": 1264,
-				"sha1": "351ce594fe774e1311d63e4fc5f2e697130cf8ae"
+				"count": 1234,
+				"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368"
 			}
 		},
 		"downtown": {
-			"count": 1403,
-			"sha1": "1e825472d7f0257821532a8b3db1254a40e8a9b7",
+			"count": 1354,
+			"sha1": "5fa8464d463fd91f916d0a338161f30579454589",
 			"noSigns": {
-				"count": 1208,
-				"sha1": "c4d7c816b12f3ee90e03fd493ce4f671e7219b5d"
+				"count": 1159,
+				"sha1": "8d08c967790e721f8586c7ef0a4af898b0b124cb"
 			}
 		},
 		"park": {
@@ -27,43 +27,43 @@
 			}
 		},
 		"school": {
-			"count": 891,
-			"sha1": "fab88d8baed36f2b06485c0c4677c2fbd324ec8b",
+			"count": 841,
+			"sha1": "2b931cc814b5a43d5bc5b6e9c1d51a99222559d3",
 			"noSigns": {
-				"count": 618,
-				"sha1": "a66a89b900ec4946df186852e73f0ded979d7fc8"
+				"count": 568,
+				"sha1": "3bac9f586cdfdf61eb529c7371b44231a871bc5d"
 			}
 		},
 		"gas": {
-			"count": 1035,
-			"sha1": "b4ba56169e23471a6bc11dcd0ddb6f2fa05d8264",
+			"count": 1007,
+			"sha1": "4489b83db1385475d2cfafaca2e8d243453727ab",
 			"noSigns": {
-				"count": 775,
-				"sha1": "adb96cfc9b25d2e2fb68637909cf90883a1d3c4b"
+				"count": 747,
+				"sha1": "594598224d1710e620781e0bf17e346a511f175d"
 			}
 		},
 		"street-night": {
-			"count": 1264,
-			"sha1": "ba333ff4e292e608fadca22999b98db26901fd47",
+			"count": 1234,
+			"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe",
 			"noSigns": {
-				"count": 1264,
-				"sha1": "ba333ff4e292e608fadca22999b98db26901fd47"
+				"count": 1234,
+				"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe"
 			}
 		},
 		"overview": {
-			"count": 4923,
-			"sha1": "af7023d135d22087b1e9ceae636e92cef0ef5c3c",
+			"count": 4794,
+			"sha1": "d27915db440654fadeb6dc50e51648c24d774ee8",
 			"noSigns": {
-				"count": 4611,
-				"sha1": "d055fce8bd0c6922601bd30bb844f164993b632e"
+				"count": 4482,
+				"sha1": "487d4bb44a2e5a4f0416b17bcddd8b364708665c"
 			}
 		},
 		"border": {
-			"count": 512,
-			"sha1": "33418c37d7854159372665b99508c56b0fca3c8d",
+			"count": 488,
+			"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb",
 			"noSigns": {
-				"count": 512,
-				"sha1": "33418c37d7854159372665b99508c56b0fca3c8d"
+				"count": 488,
+				"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb"
 			}
 		}
 	}
