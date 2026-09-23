@@ -126,6 +126,7 @@ const GROUPS = {
 	SURFACE: roleBlock("SURFACE"),
 	GAME: roleBlock("GAME"),
 	STAT: roleBlock("STAT"),
+	BAR: roleBlock("BAR"),
 	// `export const SIDEBAR = SIDEBAR_TOKENS;` -- the rail palette is the token group itself
 	SIDEBAR: SIDEBAR_TOKENS,
 };
@@ -295,6 +296,38 @@ const PAIRS = [
 		MIN_TEXT,
 		"cadeado e preco sobre o ladrilho bloqueado selecionado",
 	],
+
+	// --- the HUD console (UI-09, client/ui/hudConsole.ts): the UI-07 window body at the bottom centre. The bar labels
+	// ("HP 88 / 100") are small Bold text centred on the bar, so the FILL owes them 4,5:1 (UI-05); where the bar is
+	// empty the same label sits on the dark groove
+	["THEME.foreground", "BAR.hp", MIN_TEXT, 'console: "HP 88 / 100" sobre o preenchimento vermelho da barra'],
+	["THEME.foreground", "BAR.food", MIN_TEXT, 'console: "FOOD 58 / 100" sobre o preenchimento laranja'],
+	["THEME.foreground", "BAR.xp", MIN_TEXT, 'console: "LV 3 · 30 / 120" sobre o preenchimento azul'],
+	["THEME.foreground", "SURFACE.groove", MIN_TEXT, "console: o rotulo da barra onde ela esta vazia (sobre o sulco)"],
+	["BAR.hp", "SURFACE.groove", MIN_UI, "console: preenchimento de HP contra o sulco escuro em que corre"],
+	["BAR.food", "SURFACE.groove", MIN_UI, "console: preenchimento de fome contra o sulco"],
+	["BAR.xp", "SURFACE.groove", MIN_UI, "console: preenchimento de XP contra o sulco"],
+	// the grooves sit in SECTION plates, never straight on the graphite body (the groove there would be 1,12:1 and
+	// the empty part of a bar would vanish): body -> section -> groove, as in the Settings window
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "console: secoes (vitais, armas, arma na mao) sobre o corpo"],
+	["SURFACE.groove", "SURFACE.section", MIN_RELIEF, "console: sulco das barras e leito da hotbar dentro da secao"],
+	["THEME.secondary", "SURFACE.window", MIN_UI, "console: chapas Bag / Menu sobre o corpo, embaixo da hotbar"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "hotbar: a arma na mao (azul em relevo) sobre o leito"],
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "hotbar: outra arma sua (ferro escuro liso) sobre o leito"],
+	["SURFACE.line", "SURFACE.groove", MIN_UI, "hotbar: o anel do soquete vazio (tecla sem arma) sobre o leito"],
+	["THEME.tabActive", "SURFACE.well", MIN_UI, "hotbar: a recarga subindo no ladrilho escurecido"],
+	["THEME.foreground", "SURFACE.key", MIN_TEXT, "hotbar: a tecla 1-5 no canto do ladrilho"],
+	["STAT.value", "SURFACE.well", MIN_TEXT, "hotbar: municao em amarelo no chip escuro do ladrilho"],
+	["STAT.penalty", "SURFACE.well", MIN_TEXT, "hotbar: municao acabada em vermelho no chip"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "console: icone e tecla (B / P, LB / Start) nas chapas"],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, "console: nome e tipo da arma na mao, sobre a secao (claros)"],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'placa do dia: "Day N" e a fase; a dica "E: ..."'],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "placa do dia: HH:MM e o dia da vida"],
+	["STAT.value", "SURFACE.groove", MIN_TEXT, "console: o pente no leitor da coluna da arma"],
+	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "console: o pente vazio no leitor"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "console: a reserva e o Reloading... no leitor"],
+	["GAME.sun", "SURFACE.window", MIN_UI, "placa do dia: o sol de pixel"],
+	["GAME.moon", "SURFACE.window", MIN_UI, "placa do dia: a lua de pixel"],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */

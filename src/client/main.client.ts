@@ -479,6 +479,8 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
+		// the hotbar's blue tile; the tiles themselves are the list keys 1-5 pick from (shared/game/weaponSlots.ts)
+		weaponId: rt.pointer,
 		weaponName: tr(w.name),
 		mag: rt.ammoCount,
 		magSize: w.mag,

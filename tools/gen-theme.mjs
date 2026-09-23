@@ -67,6 +67,14 @@ const COLOR_TOKENS = [
 	["stat-bonus", "chart-1"],
 	/** a status effect and how long it lasts (speed boost, pain relief): orange */
 	["stat-effect", "chart-3"],
+	// the HUD console's bar fills (docs/DESIGN_RULES UI-09): each is its game colour made one step darker, so the light
+	// label centred on the bar reads at 4,5:1 (UI-05). A theme without them falls back to the game colour itself
+	/** the HP bar's fill: destructive's hue and chroma, darker */
+	["bar-hp", "destructive"],
+	/** the food bar's fill: chart-3's hue and chroma, darker */
+	["bar-food", "chart-3"],
+	/** the XP / level bar's fill: chart-2's hue and chroma, darker */
+	["bar-xp", "chart-2"],
 ];
 
 /** navigation (sidebar) tokens, emitted as a separate group; keys drop the "sidebar-" prefix */
@@ -401,7 +409,7 @@ async function main() {
 // regenerate: \`npm run theme\` (or \`npm run theme -- <tweakcn registry url>\`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 ${iface}
 }

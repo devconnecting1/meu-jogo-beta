@@ -251,6 +251,24 @@ export const STAT = {
 	penalty: TOKENS.destructive,
 };
 
+/**
+ * The fills of the HUD console's three bars (client/ui/hudConsole.ts, DESIGN_RULES UI-09). Each bar carries its value
+ * as a light label centred on it ("HP 88 / 100"), small Bold text, so under UI-05 the FILL owes it 4,5:1 -- the
+ * game colours themselves only reach 3,5-3,7:1 (they were drawn under a 3:1 "large text" rule the old HUD never
+ * met). Each fill is its game colour with the same hue and chroma, darkened by the smallest OKLCH step that passes,
+ * never the text: HP #EF4444 -> #DC2F34 (4,50:1), food #D2691E -> #BD5600 (4,51:1), XP #4C88BB -> #3C78AA (4,54:1).
+ * GAME.hp / food / xp keep the lighter colours, because they are also drawn AS text on the dark body. Measured by
+ * `npm run test:contrast`, with each fill against the dark groove it runs in (3:1, non-text).
+ */
+export const BAR = {
+	/** HP: red, the colour of the survivor's blood (LEG-02) */
+	hp: TOKENS.barHp,
+	/** food: orange */
+	food: TOKENS.barFood,
+	/** XP and level: blue */
+	xp: TOKENS.barXp,
+};
+
 // ---------------------------------------------------------------- spacing & radius
 
 /** Tailwind spacing step (--spacing) */
