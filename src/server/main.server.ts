@@ -1307,6 +1307,8 @@ if (MP_PHASE >= 1) {
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = sp => markDirty(sp.userId);
 	sim.onInteract = sp => markDirty(sp.userId);
+	// VEI-05: a ride writes the save -- the motorcycle's oil, the Rider odometer -- and says so at least once a second
+	sim.onRide = sp => markDirty(sp.userId);
 	// the backpack verbs (§4.8, §8.4): rate-limited and flood-counted here, validated and applied by the simulation
 	// (server/sim/backpack.ts); out of the world only a cosmetic slot, on the session's save (the lobby's wardrobe)
 	startBackpackIntents({

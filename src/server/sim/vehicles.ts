@@ -53,6 +53,7 @@ import {
 	vehicleBroken,
 	vehicleKindOfSolid,
 } from "shared/sim/vehicle";
+import { RIDER_UNITS_PER_POINT, creditRide } from "../save/achievements";
 import type { ServerPlayer } from "./players";
 
 /** seconds between two mounts or dismounts of one survivor: each is a global delta (§4.5), so it is rate-limited */
@@ -141,6 +142,8 @@ interface Ridden {
 	/** distance ridden and not yet reported, and seconds to the next report */
 	odometer: number;
 	reportT: number;
+	/** distance reported but short of a whole Rider point (RIDER_UNITS_PER_POINT) */
+	riderCarry: number;
 }
 
 export class ServerVehicles {
@@ -308,6 +311,7 @@ export class ServerVehicles {
 			hornCd: 0,
 			odometer: 0,
 			reportT: ODOMETER_REPORT_S,
+			riderCarry: 0,
 		};
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
@@ -461,10 +465,17 @@ export class ServerVehicles {
 		this.noise?.({ x: sp.state.x, y: sp.state.y, radius, source, slot: sp.slot, vehicle: rec.def.kind });
 	}
 
+	/** the odometer: a `distance` event, and the Rider achievement a point per RIDER_UNITS_PER_POINT (the remainder kept) */
 	private reportDistance(sp: ServerPlayer, rec: Ridden): void {
 		if (rec.odometer <= 0) return;
 		const units = rec.odometer;
 		rec.odometer = 0;
+		rec.riderCarry += units;
+		const points = math.floor(rec.riderCarry / RIDER_UNITS_PER_POINT);
+		if (points > 0) {
+			rec.riderCarry -= points * RIDER_UNITS_PER_POINT;
+			creditRide(sp.save, points);
+		}
 		this.tell(sp, { kind: "distance", vehicle: rec.def.kind, units });
 	}
 

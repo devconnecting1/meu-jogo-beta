@@ -7,8 +7,7 @@
  * stored counter is kept untouched for the day its content works. A row is on view exactly when the game of today can
  * give it (CON-03: everything in the data works -- the bow and the sniper are weapons, the bosses spawn at the town's
  * anchors), and hidden when nothing could ever raise it:
- *   - its content does not work yet (the energy and the vehicles, still `BUG` in test:items: Thomas Edison, Turret,
- *     Rider);
+ *   - its content does not work yet (the energy, still `BUG` in test:items: Thomas Edison, Turret);
  *   - it has no trigger at all, and nothing in the original tells us what it counted (Collector, Ninja);
  *   - it belonged to the original's store and ads (Thanks, Ads addict).
  * Unhiding a row is part of adding its content, together with the server's trigger for it (server/save/
@@ -78,8 +77,8 @@ export const ACHIEVEMENTS: Array<AchievementDef> = [
 	},
 	{ id: 14, max: 100, key: "woods_collector", title: "Woods collector", androidId: "CgkIg6_npp8FEAIQEA" },
 	{ id: 15, max: 1, key: "good_day", title: "Good day", androidId: "CgkIg6_npp8FEAIQEQ" },
-	// the bicycle and the motorbike do not work yet (test:items BUG)
-	{ id: 16, max: 5000, key: "rider", title: "Rider", hidden: true, androidId: "CgkIg6_npp8FEAIQEg" },
+	// a point per 10 u the server moved a rider, bicycle or motorcycle (VEI-05, server/sim/vehicles.ts)
+	{ id: 16, max: 5000, key: "rider", title: "Rider", androidId: "CgkIg6_npp8FEAIQEg" },
 	{ id: 17, max: 50, key: "never_die", title: "Never die", androidId: "CgkIg6_npp8FEAIQEw" },
 	// no trigger, and nothing says what the original counted
 	{ id: 18, max: 1, key: "ninja", title: "Ninja", hidden: true, androidId: "CgkIg6_npp8FEAIQFA" },

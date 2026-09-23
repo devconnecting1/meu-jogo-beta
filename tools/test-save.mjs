@@ -1537,8 +1537,8 @@ section("26) quem move cada conquista: so os eventos do servidor (server/save/ac
 			s.achievements[AID.HedgehogSlayer] === 0,
 		"o chefe do tipo 3 e o Giant slayer; um tipo fora de 1..4 nao move nada",
 	);
-	check(!ACHV.raiseAchievement(s, AID.Rider, 1), "e nenhuma linha desligada e creditada");
-	checkEq(s.achievements[AID.Rider], 0, "(o contador salvo dela fica como estava)");
+	check(!ACHV.raiseAchievement(s, AID.Turret, 1), "e nenhuma linha desligada e creditada");
+	checkEq(s.achievements[AID.Turret], 0, "(o contador salvo dela fica como estava)");
 	s.achievements[AID.ZombieSlayer] = ACHIEVEMENTS[AID.ZombieSlayer].max - 1;
 	check(ACHV.addAchievement(s, AID.ZombieSlayer, 1), "o abate que chega a meta completa a conquista");
 	check(!ACHV.addAchievement(s, AID.ZombieSlayer, 1), "e o seguinte nao completa de novo");
@@ -1593,6 +1593,16 @@ section("26) quem move cada conquista: so os eventos do servidor (server/save/ac
 		"cozinhar vai para o Chef, fundir para o Blacksmith, o craft frio para nenhum; so madeira vai para o Woods collector",
 		`${s2.achievements[AID.Chef]} / ${s2.achievements[AID.Blacksmith]} / ${s2.achievements[AID.WoodsCollector]}`,
 	);
+	// Rider (VEI-05): whole points only, never down, never past the goal
+	ACHV.creditRide(s2, 7);
+	for (const bad of [-3, 0, 1.5, Number.NaN, Infinity]) ACHV.creditRide(s2, bad);
+	checkEq(
+		s2.achievements[AID.Rider],
+		7,
+		"Rider: pontos inteiros do odometro do servidor; negativo, fracao e NaN nao movem",
+	);
+	ACHV.creditRide(s2, 1e9);
+	checkEq(s2.achievements[AID.Rider], ACHIEVEMENTS[AID.Rider].max, "(e para na meta)");
 }
 
 section("27) os caminhos reais do servidor chamam o credito (craft, madeira, morte, entrada, abate)");
@@ -1722,8 +1732,13 @@ section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods
 
 	// who may call the two "what came into the backpack" credits at all -- an allowlist, so a new road that fills the
 	// backpack (a refund, a pack, a dropped item picked back up) is added here on purpose, by someone who read why
-	const ALLOWED = { creditTaken: ["server/sim/items.ts"], creditCraft: ["server/sim/craft.ts"] };
-	const found = { creditTaken: [], creditCraft: [] };
+	// (creditRide too: only the server's own odometer of a ride it granted, VEI-05)
+	const ALLOWED = {
+		creditTaken: ["server/sim/items.ts"],
+		creditCraft: ["server/sim/craft.ts"],
+		creditRide: ["server/sim/vehicles.ts"],
+	};
+	const found = { creditTaken: [], creditCraft: [], creditRide: [] };
 	const walk = d => {
 		for (const f of readdirSync(d)) {
 			const full = join(d, f);
@@ -1742,7 +1757,7 @@ section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods
 	walk(join(SRC, "server"));
 	check(
 		JSON.stringify(found) === JSON.stringify(ALLOWED),
-		"so o ServerItems (pegar, revistar, o Thief) chama creditTaken e so o ServerCraft chama creditCraft -- build.ts nao",
+		"so o ServerItems (pegar, revistar, o Thief) chama creditTaken, so o ServerCraft chama creditCraft e so o ServerVehicles chama creditRide -- build.ts nao",
 		JSON.stringify(found),
 	);
 

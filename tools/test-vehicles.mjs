@@ -674,15 +674,23 @@ section("B4. crashes wear the vehicle and hurt the rider; broken, it is repaired
 	check(!sim.vehicles.riding(0), "E at a broken vehicle does not ride it");
 	save.invenEtc[26] = 2;
 	const before = broken.hp;
+	// that refused repair was a press the interaction heard: its PRESS_COOLDOWN_S holds the next one
+	d.tick(0, 0, PRESS_E);
+	check(
+		broken.hp === before && save.invenEtc[26] === 2,
+		"E at once: inside the interaction's press cooldown, nothing",
+	);
+	d.ticks(15);
 	d.tick(0, 0, PRESS_E);
 	check(
 		broken.hp > before && save.invenEtc[26] === 1,
 		"E with steel repairs it (+25%)",
 		`${f1(before)} → ${f1(broken.hp)}`,
 	);
-	d.ticks(40);
+	// the very next tick: getting on is the vehicle's rule (MOUNT_COOLDOWN_S since the last on/off), never the
+	// interaction's press cooldown the repair just spent
 	d.tick(0, 0, PRESS_E);
-	check(sim.vehicles.riding(0), "repaired past 25%: E rides it again");
+	check(sim.vehicles.riding(0), "repaired past 25%: E rides it again, on the next tick");
 });
 
 section(
@@ -968,6 +976,55 @@ function predictedSession({ latency = 6, oil = 40, x = 2000, y = 3000 } = {}) {
 		},
 	};
 }
+
+section(
+	"B10. the Rider achievement: a point per 10 u the server moved a rider, on either vehicle, never on foot",
+	() => {
+		const { AchievementId, ACHIEVEMENTS, achievementOn } = require(join(SRC, "shared/data/achievements.ts"));
+		const { RIDER_UNITS_PER_POINT } = require(join(SRC, "server/save/achievements.ts"));
+		const RIDER = AchievementId.Rider;
+		check(achievementOn(RIDER), "Rider is on view (CON-04: its content works now)");
+		checkEq(RIDER_UNITS_PER_POINT, 10, "a point per 10 u: the original's 10 px (1 px = 1 u)");
+		const { world, sim, events } = serverWith({ width: 30000 });
+		const walker = addPlayer(sim, 1, 1000, 3000);
+		driver(sim, walker).ticks(120, 1, 0);
+		checkEq(walker.save.achievements[RIDER], 0, "two seconds of walking: nothing");
+		for (const item of [21, 22]) {
+			const sp = addPlayer(sim, 0, 1000, 2000, fueled(20));
+			sp.save.achievements[RIDER] = 0;
+			park(world, item, 1000, 2040);
+			const d = driver(sim, sp);
+			d.tick(0, 0, PRESS_E);
+			const from = events.length;
+			d.ticks(60 * 6, 1, 0);
+			d.ticks(60, 0, 0);
+			d.tick(0, 0, PRESS_E);
+			check(!sim.vehicles.riding(0), `${ETC_NAME[item]}: ridden 6 s and left`);
+			const ridden = events
+				.slice(from)
+				.filter(e => e.kind === "distance")
+				.reduce((a, e) => a + e.units, 0);
+			const got = sp.save.achievements[RIDER];
+			check(
+				ridden > 1000 && got === Math.floor(ridden / RIDER_UNITS_PER_POINT),
+				`${ETC_NAME[item]}: the odometer's ${f1(ridden)} u are ${Math.floor(ridden / 10)} points, the remainder carried`,
+				`${got}`,
+			);
+			sim.remove(0);
+			for (const s of vehiclesIn(world)) W.removeSolid(world, s);
+		}
+		// the goal is a ceiling
+		const sp = addPlayer(sim, 0, 1000, 2000, fueled(20));
+		const max = ACHIEVEMENTS[RIDER].max;
+		sp.save.achievements[RIDER] = max - 3;
+		park(world, 22, 1000, 2040);
+		const d = driver(sim, sp);
+		d.tick(0, 0, PRESS_E);
+		d.ticks(60 * 3, 1, 0);
+		d.tick(0, 0, PRESS_E);
+		checkEq(sp.save.achievements[RIDER], max, `...and it stops at its goal (${max})`);
+	},
+);
 
 section("C1. prediction: the client replays the ride from the server's own numbers, to the bit", () => {
 	const s = predictedSession();
