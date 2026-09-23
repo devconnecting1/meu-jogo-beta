@@ -47,8 +47,10 @@ import { MP_PHASE } from "shared/net/mpConfig";
  * server decided (server/save/achievements.ts: its kill credit, its midnight, its crafting, its deaths), so a report no
  * longer carries them -- `sanitizeClientReport` copies `achievements` from the trusted save, as it does `titles`. One
  * new field, same document, additive: `lifeDeaths`, EVERY death of this life that the server decided (Never die reads
- * it; `deathCount` only counts the paid Rebirths, which price the next one). A v5 document has none: 0, the old rule's
- * answer. A server rolled back to v5 drops it and takes achievements from reports again; nothing earned is lost.
+ * it; `deathCount` only counts the paid Rebirths, which price the next one). A v5 document has none: 1 when its life
+ * already died as far as it can tell (`deathCount > 0` -- where the old rule stopped -- or `runOver`), else 0; a v5 death
+ * answered by waiting for daybreak left no record. A server rolled back to v5 drops it and takes achievements from
+ * reports again; nothing earned is lost.
  */
 export const SAVE_VERSION = 6;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
@@ -829,9 +831,12 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	s.zombieKills = readInt(r.zombieKills, 0, 0, L.COUNTER_MAX);
 	s.lifeNights = readInt(r.lifeNights, 0, 0, L.DAY_MAX);
 	s.titleEpoch = readInt(r.titleEpoch, 0, 0, L.EPOCH_MAX);
-	// v6 (CON-04): the stored counters, each capped at its goal; `lifeDeaths` is absent in a v5 document (0)
+	// v6 (CON-04): the stored counters, each capped at its goal. `lifeDeaths` is absent in a v5 document: a life with a
+	// paid Rebirth (`deathCount`) or a body lying dead (`runOver`) has died at least once, and must not start Never die
+	// again (the old rule already stopped at `deathCount > 0`); otherwise 0 -- a v5 death answered by waiting for
+	// daybreak left no record at all
 	s.achievements = readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, undefined);
-	s.lifeDeaths = readInt(r.lifeDeaths, 0, 0, L.COUNTER_MAX);
+	s.lifeDeaths = readInt(r.lifeDeaths, s.deathCount > 0 || s.runOver ? 1 : 0, 0, L.COUNTER_MAX);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);

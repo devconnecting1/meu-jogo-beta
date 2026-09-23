@@ -1356,7 +1356,49 @@ section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a mi
 		v5.achievements,
 		"os contadores gravados voltam como estavam (nada ganho se perde)",
 	);
-	checkEq(save.lifeDeaths, 0, "lifeDeaths ausente no v5 vira 0");
+	checkEq(
+		save.lifeDeaths,
+		v5.deathCount > 0 || v5.runOver ? 1 : 0,
+		"lifeDeaths ausente no v5: 1 se a vida ja morreu pelo que o documento sabe, 0 senao",
+	);
+	// a v5 life that already died must not start Never die again: a paid Rebirth (`deathCount`, where the old rule
+	// stopped) or a body lying dead (`runOver`) is a death of this life. A death answered by waiting for daybreak left no
+	// record in v5 -- that life counts again, as it did under the old rule
+	const v5life = (deathCount, runOver) => {
+		const doc = JSON.parse(JSON.stringify(v5));
+		doc.deathCount = deathCount;
+		doc.runOver = runOver;
+		doc.lifeNights = 4;
+		doc.achievements[AID.NeverDie] = 3;
+		const migrated = SAVE.sanitizeStoredSave(doc);
+		TITLESRV.creditLifeNight(migrated);
+		return migrated;
+	};
+	for (const [what, deathCount, runOver] of [
+		["um Rebirth pago (deathCount 2)", 2, false],
+		["o corpo caido esperando (runOver)", 0, true],
+	]) {
+		const m = v5life(deathCount, runOver);
+		check(
+			m.lifeDeaths === 1 && m.achievements[AID.NeverDie] === 3,
+			`v5 com ${what}: lifeDeaths 1, e a meia-noite seguinte nao move o Never die`,
+			`lifeDeaths ${m.lifeDeaths}, Never die ${m.achievements[AID.NeverDie]}`,
+		);
+	}
+	const clean = v5life(0, false);
+	check(
+		clean.lifeDeaths === 0 && clean.achievements[AID.NeverDie] === 5,
+		"v5 sem morte registrada: lifeDeaths 0, e o Never die segue (5 noites nesta vida)",
+		`lifeDeaths ${clean.lifeDeaths}, Never die ${clean.achievements[AID.NeverDie]}`,
+	);
+	const v6junk = JSON.parse(JSON.stringify(save));
+	v6junk.lifeDeaths = 0;
+	v6junk.deathCount = 3;
+	checkEq(
+		SAVE.sanitizeStoredSave(v6junk).lifeDeaths,
+		0,
+		"(um documento v6 guarda o proprio lifeDeaths: o deathCount so decide quando o campo falta)",
+	);
 	const junk = JSON.parse(JSON.stringify(save));
 	junk.achievements = ACHIEVEMENTS.map(() => 1e9);
 	junk.achievements[0] = -5;
@@ -1366,7 +1408,11 @@ section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a mi
 		read.achievements.every((v, i) => v === (i === 0 ? 0 : ACHIEVEMENTS[i].max)),
 		"um contador gravado com lixo fica entre 0 e a meta de cada linha",
 	);
-	checkEq(read.lifeDeaths, 0, "e lifeDeaths lixo vira 0");
+	checkEq(
+		read.lifeDeaths,
+		save.deathCount > 0 || save.runOver ? 1 : 0,
+		"e lifeDeaths lixo cai na regra do campo ausente (nunca abaixo do que o documento sabe)",
+	);
 
 	// the report: every counter at its goal and a life with no death -- the server keeps its own
 	const base = SAVE.sanitizeStoredSave(productionV4());
