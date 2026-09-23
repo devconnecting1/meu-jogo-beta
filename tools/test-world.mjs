@@ -874,6 +874,27 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
 	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
 	/** a survivor inside, 64 u in from the opening, aiming at it; then place `placeable` */
+	/**
+	 * The CLIENT's ghost (client/systems/build.ts BuildSystem, the drawing the survivor aims with) for a survivor
+	 * standing where `fortify` puts one: builds become the server's (ServerBuild.hold / place) while the client keeps
+	 * drawing its own ghost, so both must land on the same rect
+	 */
+	const { BuildSystem } = require(join(SRC, "client/systems/build.ts"));
+	const clientGhost = (o, placeable) => {
+		const n = NORMAL[o.side];
+		const player = {
+			x: o.x + o.w / 2 - n[0] * 64,
+			y: o.y + o.h / 2 - n[1] * 64,
+			angle: Math.atan2(n[1], n[0]),
+		};
+		const refs = { world, player, players: [], zombies: [], pendingPlace: placeable, save: SAVE.defaultSave() };
+		const bs = new BuildSystem();
+		bs.handleInput(refs, {});
+		bs.update(refs);
+		return bs.getGhost();
+	};
+	const sameRect = (a, b) =>
+		a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 	const fortify = (o, slot, placeable) => {
 		const n = NORMAL[o.side];
 		const cx = o.x + o.w / 2 - n[0] * 64;
@@ -948,6 +969,12 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		d !== undefined ? `${d.x},${d.y} ${d.w}x${d.h} open ${d.open}` : "nada",
 	);
 	// the same opening twice: the second one lands on the first and is refused
+	const cg = clientGhost(win, 10);
+	check(
+		sameRect(cg, s),
+		"o fantasma do cliente cai no mesmo retangulo que o servidor colocou (a mesma snapToOpening dos dois lados)",
+		cg ? `${cg.x},${cg.y} ${cg.w}x${cg.h}` : "nada",
+	);
 	const c = fortify(win, 2, 12);
 	checkEq(c.out.kind, "refused", "uma segunda barricada na mesma janela e recusada (o vao ja esta tomado)");
 	// an interior opening is not fortified (review of ea5cf71): an open-plan side can be 300 u wide, and one barricade
@@ -984,6 +1011,12 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		q.state.angle = Math.atan2(n[1], n[0]);
 		sim.build.hold(4, 10, undefined);
 		const gi = sim.build.ghost(4, q.state);
+		const cgi = clientGhost(inner, 10);
+		check(
+			sameRect(cgi, gi),
+			"e o fantasma do cliente fica na mesma celula da grade que o do servidor",
+			cgi ? `${cgi.w}x${cgi.h}` : "nada",
+		);
 		check(
 			gi !== undefined && !(gi.x === inner.x && gi.y === inner.y && gi.w === inner.w && gi.h === inner.h),
 			"uma barricada mirada num vao interno fica na grade (so portas e janelas se preenchem)",
