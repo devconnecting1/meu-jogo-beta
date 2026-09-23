@@ -874,6 +874,11 @@ export function netReset(): void {
 	townGuardUntil = 0;
 }
 
+/** the server's clock this frame, in seconds (tick / SIM_HZ): a flying drone's orbit is a function of it (ELE-05) */
+export function netServerSeconds(): number {
+	return clock.tickNow() / clock.rate();
+}
+
 /** debug overlay / admin panel: the §12.2 numbers, cheap enough to read every frame */
 export function netStats(): NetStats {
 	const p = prediction.stats(os.clock());

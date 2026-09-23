@@ -16,6 +16,7 @@ import {
 } from "shared/sim/interactQuery";
 import { flinch } from "../view/solidFlinch";
 import { itemName } from "./craftSystem";
+import { machineHint } from "./machineHints";
 import { fxMessage, GameRefs } from "./types";
 
 /*
@@ -253,11 +254,17 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		}
 		return "E: Open door";
 	}
+	// an electric build, where the server owns the grid: its own job first (ELE-03), the ordinary hint if none
+	if (target.kind === "light" || target.kind === "solid") {
+		const m = machineHint(refs.save, target.solid);
+		if (m !== undefined) return m;
+	}
 	if (target.kind === "light") {
 		const s = target.solid;
-		if (s.powered === true) return s.tags === "lamp" ? "E: Turn off" : "E: Put out";
+		const lamp = s.tags === "lamp" || s.tags === "lamp_drone";
+		if (s.powered === true) return lamp ? "E: Turn off" : "E: Put out";
 		if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
-		return s.tags === "lamp" ? "E: Turn on" : "E: Light";
+		return lamp ? "E: Turn on" : "E: Light";
 	}
 	if (target.kind === "mapItem") {
 		const s = target.solid;

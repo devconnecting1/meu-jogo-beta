@@ -1262,6 +1262,32 @@ function signBoard(sign, palette) {
 	return t;
 }
 
+// ---------------------------------------------------------------- the electric builds (DESIGN_RULES ELE-01..08)
+
+/**
+ * The machines are DATA in src/shared/data/machineArt.ts (the game draws the same grids flat when a texture has no
+ * id): like the signs' module it imports nothing, so a bare transpile runs it here with a Color3 that returns [r, g, b].
+ */
+function loadMachines() {
+	const ts = createRequire(import.meta.url)("typescript");
+	const src = readFileSync(join(ROOT, "src", "shared", "data", "machineArt.ts"), "utf8");
+	const js = ts.transpileModule(src, {
+		compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+	}).outputText;
+	const exports = {};
+	runInNewContext(js, { exports, module: { exports }, Color3: { fromRGB: (r, g, b) => [r, g, b] } });
+	return exports;
+}
+
+/** a machine sprite, texel for texel from its grid ('.' stays transparent) */
+function machineSprite(sprite, palette) {
+	const t = new Tex(sprite.rows[0].length, sprite.rows.length);
+	sprite.rows.forEach((row, y) => {
+		for (let x = 0; x < row.length; x++) if (row[x] !== ".") t.set(x, y, palette[row[x]]);
+	});
+	return t;
+}
+
 /**
  * The hospital's helipad (ICAO's hospital heliport: a red H on a white cross of five squares, on the dark deck of
  * the landing area inside its white ring), painted on the roof: the paint is a little thin everywhere and worn
@@ -1423,6 +1449,12 @@ function build() {
 		helipad(signs.HELIPAD, signs.SIGN_ART),
 		"hospital roof: the heliport's red H on a white cross",
 	);
+	// the electric builds and their moving parts (src/shared/data/machineArt.ts, ELE-01..08)
+	const machines = loadMachines();
+	for (const key of Object.keys(machines.MACHINE_SPRITES)) {
+		const m = machines.MACHINE_SPRITES[key];
+		add_(m.texture, "sprite", machineSprite(m, machines.MACHINE_ART), m.shows);
+	}
 }
 
 // ---------------------------------------------------------------- output

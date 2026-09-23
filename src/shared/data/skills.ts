@@ -20,8 +20,10 @@ export const SKILLS: Array<SkillDef> = [
 	{ id: 10, name: "Theif", detail: "Find more items", kind: 3, maxLevel: 1 },
 	{ id: 11, name: "Chef", detail: "A chance to get more foods", kind: 3, maxLevel: 2 },
 	{ id: 12, name: "Dwarf", detail: "A chance to get more metal", kind: 3, maxLevel: 2 },
-	{ id: 13, name: "Robotics", detail: "Turret reinforced", kind: 3, maxLevel: 1 },
-	{ id: 14, name: "Engineering", detail: "Generator reinforced", kind: 3, maxLevel: 1 },
+	// what they do is the electric grid's (shared/data/power.ts, DESIGN_RULES ELE-08): turret and drone damage x1.5
+	// and drone battery x1.5; generator output x1.5 and battery box x1.2 -- on what their owner builds
+	{ id: 13, name: "Robotics", detail: "Turrets hit harder, drones fly longer", kind: 3, maxLevel: 1 },
+	{ id: 14, name: "Engineering", detail: "Generators make more power, boxes hold more", kind: 3, maxLevel: 1 },
 	{ id: 15, name: "Cat", detail: "Footsteps sound decreases", kind: 1, maxLevel: 1 },
 	{ id: 16, name: "Nocturnal", detail: "Night vision increases", kind: 1, maxLevel: 1 },
 	{ id: 17, name: "Repairman", detail: "Repair speed increases", kind: 3, maxLevel: 1 },

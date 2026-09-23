@@ -21,9 +21,9 @@ import type { Solid } from "shared/game/world";
 
 // ---------------------------------------------------------------- skills (shared/data/skills.ts)
 
-/** "Robotics — Turret reinforced": turret damage ×1.5 (obj_turret: `turret_damage/2*rpg_skill_get_level(13)`) */
+/** "Robotics": turret damage ×1.5 (obj_turret: `turret_damage/2*rpg_skill_get_level(13)`) */
 export const SKILL_ROBOTICS = 13;
-/** "Engineering — Generator reinforced": output ×1.5 and battery ×1.2 (obj_generator_*, obj_bettery) */
+/** "Engineering": generator output ×1.5 and battery ×1.2 (obj_generator_*, obj_bettery) */
 export const SKILL_ENGINEERING = 14;
 /** what a level of Robotics multiplies turret damage by, and the drones' battery */
 export const ROBOTICS_DAMAGE = 1.5;
