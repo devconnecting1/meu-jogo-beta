@@ -32,6 +32,15 @@ export interface RemotePlayerView {
 	weaponId: number;
 	/** walk-cycle phase for the feet, advanced from the interpolated speed */
 	feetCycle: number;
+	/**
+	 * A melee sweep is in progress, and the blade angle relative to the aim.
+	 *
+	 * Both ride the snapshot already (PlayerFlag.Swinging and the `swing` field of §4.2) -- they were simply
+	 * not carried this last step, so every ally swung invisibly: the attack animation played only on the
+	 * screen of whoever pressed the button.
+	 */
+	swinging: boolean;
+	swing: number;
 }
 
 /** true once the client is in a server-simulated session (MP_PHASE >= 1 and the handshake is done) */

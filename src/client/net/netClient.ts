@@ -49,6 +49,7 @@ import {
 	InputCommand,
 	IntentKind,
 	LifeState,
+	PlayerFlag,
 	REMOTE_FX,
 	REMOTE_INPUT,
 	REMOTE_INTENT,
@@ -810,5 +811,7 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		downed: entry.life === LifeState.Downed,
 		weaponId: state.weapon,
 		feetCycle: state.feetCycle,
+		swinging: (state.flags & PlayerFlag.Swinging) !== 0,
+		swing: state.swing,
 	};
 }

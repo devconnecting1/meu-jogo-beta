@@ -30,6 +30,7 @@ import {
 	drawSurvivor,
 	weaponById,
 } from "./survivorView";
+import { meleeReach } from "shared/data/weapons";
 
 /** a plate whose ally has been out of the snapshot this long is destroyed (§4.4's despawn, with slack) */
 const RETIRE_S = 3;
@@ -103,8 +104,11 @@ export class PlayersView {
 			look.flash = 0;
 			look.poisoned = false;
 			look.downed = rp.downed;
-			look.swinging = false;
-			look.swingAngle = rp.angle;
+			// the sweep is on the wire (PlayerFlag.Swinging + the blade angle): an ally who attacks has to be
+			// SEEN attacking, or co-op combat reads as everyone flailing at nothing
+			look.swinging = rp.swinging;
+			look.swingAngle = rp.angle + rp.swing;
+			look.swingReach = meleeReach(look.weapon);
 			look.clock = clock;
 			const so = shadow(rp.x, rp.y, 10);
 			look.shadowX = so.x;
