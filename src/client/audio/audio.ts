@@ -99,6 +99,8 @@ interface TrackSlot {
 	/** current 0..1 fade level */
 	gain: number;
 	target: number;
+	/** Sound.Volume as last written: a steady track writes nothing frame after frame */
+	vol: number;
 }
 
 /**
@@ -127,7 +129,7 @@ export class AudioTrack {
 			s.Volume = 0;
 			s.SoundGroup = group;
 			s.Parent = parent;
-			this.slots.push({ sound: s, gain: 0, target: 0 });
+			this.slots.push({ sound: s, gain: 0, target: 0, vol: 0 });
 		}
 	}
 
@@ -156,6 +158,7 @@ export class AudioTrack {
 		slot.sound.Looped = def.loop === true;
 		slot.sound.PlaybackSpeed = def.pitchMin;
 		slot.sound.Volume = 0;
+		slot.vol = 0;
 	}
 
 	/** intensity multiplier (0..1) applied on top of the clip's base volume */
@@ -180,10 +183,17 @@ export class AudioTrack {
 			const wanted = busGain > 0 ? slot.gain : 0;
 			if (wanted <= 0) {
 				if (slot.sound.IsPlaying) slot.sound.Stop();
-				slot.sound.Volume = 0;
+				if (slot.vol !== 0) {
+					slot.vol = 0;
+					slot.sound.Volume = 0;
+				}
 				continue;
 			}
-			slot.sound.Volume = def.volume * wanted * this.level;
+			const vol = def.volume * wanted * this.level;
+			if (slot.vol !== vol) {
+				slot.vol = vol;
+				slot.sound.Volume = vol;
+			}
 			if (!slot.sound.IsPlaying) slot.sound.Play();
 		}
 	}

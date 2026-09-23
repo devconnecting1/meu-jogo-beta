@@ -12,6 +12,8 @@
  * writes and all tools/render-map.mjs needs to rasterise what the engine would show. `stats` counts what the
  * engine would pay for: every Instance created and every property write that changed a value, compared by value
  * as Luau compares Roblox datatypes (a write that changes nothing is counted apart, in `rewrites`).
+ * `stats.onWrite(inst, prop, changed)`, when a suite sets it, sees every property write as it happens (Parent aside):
+ * tools/test-pool.mjs counts per property and per Instance with it.
  */
 
 class Vector2 {
@@ -158,7 +160,7 @@ function sameValue(a, b) {
 }
 
 export function installFakeGui() {
-	const stats = { created: 0, writes: 0, rewrites: 0, byClass: {} };
+	const stats = { created: 0, writes: 0, rewrites: 0, byClass: {}, onWrite: undefined };
 
 	function make(className) {
 		const props = defaultsOf(className);
@@ -196,9 +198,11 @@ export function installFakeGui() {
 					if (v !== undefined) v.__children.push(self);
 					return true;
 				}
-				if (!sameValue(t[k], v)) stats.writes++;
+				const changed = !sameValue(t[k], v);
+				if (changed) stats.writes++;
 				else stats.rewrites++;
 				t[k] = v;
+				if (stats.onWrite !== undefined) stats.onWrite(self, k, changed);
 				return true;
 			},
 		});
