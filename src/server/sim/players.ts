@@ -22,15 +22,17 @@
  *     consumed at once instead of waiting for it. The client never leaves a gap on purpose -- a hitch drops time,
  *     not numbers (client/net/commands.ts `dropBacklog`);
  *   - over INPUT_BUFFER_MAX the OLDEST are dropped and `inputOverflow` counts them. Their MOVEMENT is gone -- that
- *     is what caps a lag switch at INPUT_BUFFER_MAX ticks -- but their TAPS are carried to the new head (`enqueue`):
- *     a server hitch or a burst must not delete a shot, a reload or an E;
- *   - EXCEPT while the server itself owes ticks: the ceiling is raised by `grace`, one command per tick the
- *     Heartbeat still has to run (server/sim/heartbeat.ts `grace`, at most INPUT_GRACE_MAX). A server hitch is
- *     repaid at two ticks a heartbeat, and each repaid tick consumes a command; the ones that landed during the hitch
- *     are exactly those, and capping them at INPUT_BUFFER_MAX threw them away and left every repaid tick to WAIT
- *     (the review of 2026-09-23: 3.91 waits a second, tools/test-input-buffer.mjs case 5). Only the server's
- *     lateness raises it -- nothing a client sends does -- and it is still one command per tick, so a lag switch
- *     banks nothing it could spend faster than the world runs;
+ *     is what caps a lag switch at INPUT_BUFFER_MAX ticks -- but their TAPS are carried to the commands still queued
+ *     (`carryEdges`): a server hitch or a burst must not delete a shot, a reload or an E;
+ *   - EXCEPT while the server itself is repaying ticks it owes: the ceiling is raised by `grace`, one command per
+ *     tick the Heartbeat still has to run (server/sim/heartbeat.ts `grace`, at most INPUT_GRACE_MAX). A server hitch
+ *     is repaid at two ticks a heartbeat, and each repaid tick consumes a command; the ones that landed during the
+ *     hitch are exactly those, and capping them at INPUT_BUFFER_MAX threw them away and left every repaid tick to WAIT
+ *     (the review of 2026-09-23: 3.91 waits a second, tools/test-input-buffer.mjs case 5). Only a debt that is being
+ *     REPAID counts: a server that cannot keep up owes ticks it never runs, and granting them kept every queue as deep
+ *     as the debt for good (the review of dee095a, B1: 352 ms from input to simulation at a 25 Hz heartbeat). Only
+ *     the server's lateness raises it -- nothing a client sends does -- and it is still one command per tick, so a
+ *     lag switch banks nothing it could spend faster than the world runs;
  *   - the packet itself passes a token bucket of INPUT_RATE/s with a burst of INPUT_BURST (§8.2);
  *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a command AHEAD of the window re-anchors it instead
  *     of being refused for ever: an upstream outage longer than INPUT_SEQ_WINDOW ticks (the client kept numbering,
@@ -50,7 +52,7 @@
  * body stopping in the world everyone else watches. That rule "cost one tick of smoothness the client's
  * prediction hides" — true only for the owner. Waiting instead makes every fill buy one tick of queue depth, so a
  * hitch costs the ticks it lasted and not one more; the extra depth is drained by the -2% dilation, and it can
- * never pass INPUT_BUFFER_MAX (plus the ticks a late SERVER owes, see `grace` above), which is also the most a lag
+ * never pass INPUT_BUFFER_MAX (plus the ticks a late SERVER is repaying, see `grace` above), which is also the most a lag
  * switch can bank. Coasting (repeating the last
  * movement) was rejected with it: coasting a tick and then consuming the real command late would move the body
  * twice for one command.
@@ -78,7 +80,7 @@ import {
 	INPUT_SEQ_WINDOW,
 	SIM_HZ,
 } from "shared/net/mpConfig";
-import { EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
+import { EDGE_MAX, EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
 import { PlayerSaveData, outfitLookOf, petLookOf, titleWireOf } from "shared/game/save";
@@ -351,18 +353,44 @@ export function floodReason(sp: ServerPlayer): string | undefined {
 
 // ---------------------------------------------------------------- the input queue (§2.2)
 
-/** `onto` with the one-shot counters of `from` added to its own (each still capped at 3, §2.2) */
-function carryEdges(from: InputCommand, onto: InputCommand): InputCommand {
-	const a = from.edges;
-	const b = onto.edges;
-	const edges = packEdges(
-		edgeCount(a, EdgeShift.AttackPress) + edgeCount(b, EdgeShift.AttackPress),
-		edgeCount(a, EdgeShift.AttackRelease) + edgeCount(b, EdgeShift.AttackRelease),
-		edgeCount(a, EdgeShift.ActionPress) + edgeCount(b, EdgeShift.ActionPress),
-		edgeCount(a, EdgeShift.Reload) + edgeCount(b, EdgeShift.Reload),
-	);
-	// a new table: the decoded command may be shared with whoever handed the packet over
-	return { seq: onto.seq, moveAng: onto.moveAng, moveMag: onto.moveMag, aim: onto.aim, held: onto.held, edges };
+/**
+ * Hands the one-shot counters of a command the ceiling dropped to the commands still queued, oldest first. Each takes
+ * what its own counters still hold (EDGE_MAX a kind: two bits, §2.2) and the rest moves on to the next: piled onto
+ * the head alone they were capped at 3, and a hitch that drops a dozen commands at once -- a 250 ms one, or a
+ * crawling repayment's grace taken back (server/sim/heartbeat.ts) -- lost the presses past the third
+ * (tools/test-input-buffer.mjs case 16: 1075 of 1080 taps with the fixed ceiling).
+ */
+function carryEdges(edges: number, queue: Array<InputCommand>): void {
+	let press = edgeCount(edges, EdgeShift.AttackPress);
+	let release = edgeCount(edges, EdgeShift.AttackRelease);
+	let action = edgeCount(edges, EdgeShift.ActionPress);
+	let reload = edgeCount(edges, EdgeShift.Reload);
+	for (let i = 0; i < queue.size() && press + release + action + reload > 0; i++) {
+		const q = queue[i];
+		const e = q.edges;
+		const p = edgeCount(e, EdgeShift.AttackPress);
+		const r = edgeCount(e, EdgeShift.AttackRelease);
+		const a = edgeCount(e, EdgeShift.ActionPress);
+		const l = edgeCount(e, EdgeShift.Reload);
+		const tp = math.min(press, EDGE_MAX - p);
+		const tr = math.min(release, EDGE_MAX - r);
+		const ta = math.min(action, EDGE_MAX - a);
+		const tl = math.min(reload, EDGE_MAX - l);
+		if (tp + tr + ta + tl === 0) continue;
+		press -= tp;
+		release -= tr;
+		action -= ta;
+		reload -= tl;
+		// a new table: the decoded command may be shared with whoever handed the packet over
+		queue[i] = {
+			seq: q.seq,
+			moveAng: q.moveAng,
+			moveMag: q.moveMag,
+			aim: q.aim,
+			held: q.held,
+			edges: packEdges(p + tp, r + tr, a + ta, l + tl),
+		};
+	}
 }
 
 function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
@@ -428,7 +456,7 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
 		// (a shot still waits for the weapon's cadence, a reload or an E happens once however many presses carry
 		// it), and dropping it is the one loss the player cannot be compensated for: a server hitch, or a burst
 		// that lands on a full queue, must not eat a shot. tools/test-input-buffer.mjs case 5 lost 161 of 1080.
-		if (dropped.edges !== 0) sp.queue[0] = carryEdges(dropped, sp.queue[0]);
+		if (dropped.edges !== 0) carryEdges(dropped.edges, sp.queue);
 	}
 }
 
@@ -436,8 +464,9 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
  * Applies one decoded Input packet (§2.2: 1..3 commands, newest first). Call it only after the token bucket
  * accepted the packet. Never throws: every field of `packet` already went through decodeInput.
  *
- * `grace` is the SERVER's (ServerSimulation.inputGrace): how many ticks it owes right now beyond the next one,
- * each of which will consume a command. Clamped here as well, so no caller can open the ceiling further.
+ * `grace` is the SERVER's (ServerSimulation.inputGrace): how many ticks of a debt it is repaying it owes right now
+ * beyond the next one, each of which will consume a command. Clamped here as well, so no caller can open the
+ * ceiling further.
  */
 export function acceptInput(sp: ServerPlayer, packet: InputPacket, now: number, grace = 0): void {
 	sp.counters.packets += 1;

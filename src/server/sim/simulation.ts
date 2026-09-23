@@ -610,8 +610,9 @@ export class ServerSimulation {
 
 	/**
 	 * How many commands past INPUT_BUFFER_MAX a survivor's queue may keep, `sinceBeatS` seconds after the last
-	 * Heartbeat (server/sim/heartbeat.ts `grace`): the ticks this server still owes, which will each consume one.
-	 * server/net/mpHost.ts passes it to `ingestInput`.
+	 * Heartbeat (server/sim/heartbeat.ts `grace`): the ticks of a debt this server is REPAYING, which will each consume
+	 * one -- none for a debt it is not (a heartbeat under 30 Hz owes ticks it never runs). server/net/mpHost.ts passes
+	 * it to `ingestInput`.
 	 */
 	inputGrace(sinceBeatS: number): number {
 		// right after a world reset the lateness is the reset's own, which `advance` forgives: nothing to keep for

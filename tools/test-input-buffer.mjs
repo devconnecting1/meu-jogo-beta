@@ -61,6 +61,14 @@
  * taps ride its newest command, and the queue's ceiling carries a dropped command's taps to the new head
  * (players.ts `enqueue`). Every tap of every case lands, exactly once.
  *
+ * WHAT IT FOUND LAST: A SERVER THAT CANNOT KEEP UP (cases 12-16, the review of dee095a, B1). dee095a raised the
+ * queue's ceiling by one command for every tick the Heartbeat owed, so that the repayment of a hitch finds the commands
+ * that landed during it. Below 30 Hz a heartbeat owes more than it may run, the debt sits at its cap for good, and
+ * the queues sat as deep as the debt: 352 ms from input to simulation at a 25 Hz heartbeat against 80 ms with the
+ * fixed ceiling, 313 against 69 with Studio at 28 fps. Now only a debt that is being REPAID earns grace, at the pace
+ * it is repaid (server/sim/heartbeat.ts): 80 and 69 ms, the fixed ceiling's, and cases 5 and 6 keep their gains.
+ * `--debt-grace` replays dee095a's rule.
+ *
  * Pure Node (>= 18) plus the project TypeScript, same shims as tools/test-smoothness.mjs.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -303,10 +311,26 @@ const SIM_DT = 1 / CFG.SIM_HZ;
 /**
  * The server's debt ceiling and the queue's grace, as shipped. `--backlog-ticks 15 --no-grace` replays commit
  * 097f484 (the debt, and the queue still capped at INPUT_BUFFER_MAX: what the review measured); `--backlog-ticks 0
- * --no-grace` replays 7fb3e89 (no debt: every hitch past two ticks dropped).
+ * --no-grace` replays 7fb3e89 (no debt: every hitch past two ticks dropped); `--debt-grace` replays dee095a (grace
+ * for every tick owed, repaid or not: the rule the review of dee095a measured keeping the queues debt-deep, B1).
  */
 const BACKLOG_S = args.includes("--backlog-ticks") ? num("--backlog-ticks", 0) * SIM_DT : CFG.MAX_BACKLOG_S;
-const GRACE = !args.includes("--no-grace");
+const RULE = args.includes("--no-grace") ? "fixed" : args.includes("--debt-grace") ? "debt" : "shipped";
+
+/**
+ * The queue's grace `sinceBeat` seconds after the last heartbeat, by rule. "shipped" is the server's own
+ * (server/sim/heartbeat.ts `grace`: only a debt being repaid, at the pace it is repaid); "fixed" is none at all, the
+ * ceiling INPUT_BUFFER_MAX; "debt" is dee095a's -- one command for every tick owed, whether or not the server ever
+ * runs it -- kept here only so the slow-server cases can show what it did.
+ */
+function graceOf(rule, beat, sinceBeat) {
+	if (rule === "fixed") return 0;
+	if (rule === "debt") {
+		const due = Math.floor((beat.owed() + Math.min(sinceBeat, 1)) / SIM_DT + 1e-7) - 1;
+		return Math.max(0, Math.min(due, CFG.INPUT_GRACE_MAX));
+	}
+	return beat.grace(sinceBeat);
+}
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -368,7 +392,7 @@ function run({
 	serverDt = () => SIM_DT,
 	taps = false,
 	burstReorder = false,
-	grace = GRACE,
+	rule = RULE,
 }) {
 	const client = new CommandStream();
 	client.reset(0);
@@ -453,6 +477,8 @@ function run({
 	const beat = new TickAccumulator(SIM_DT, BACKLOG_S);
 	/** heartbeats that ran more ticks than one: the server paying back time, two commands at a time */
 	let catchupBeats = 0;
+	/** ticks the last heartbeat ran */
+	let lastRan = 1;
 
 	while (clientAt < seconds || serverAt < seconds) {
 		if (clientAt <= serverAt) {
@@ -494,8 +520,9 @@ function run({
 				if (rand() >= loss) up.push({ at: t + delay, pkt, order: sentCount++ });
 			});
 		} else {
-			// ---- server heartbeat: packets that landed meanwhile, then the ticks it owes
-			const dt = serverDt(serverBeat++, serverAt);
+			// ---- server heartbeat: packets that landed meanwhile, then the ticks it owes (a heartbeat's length may
+			// depend on how many the last one ran: a tick that costs half a heartbeat makes a catch-up one twice as long)
+			const dt = serverDt(serverBeat++, serverAt, lastRan);
 			serverAt += dt;
 			const t = serverAt;
 			now = 1000 + t;
@@ -530,7 +557,7 @@ function run({
 					}
 				}
 				// server/net/mpHost.ts: the grace is how many ticks the server owes `dt` after its last heartbeat
-				PL.acceptInput(sp, pkt, now, grace ? beat.grace(dt) : 0);
+				PL.acceptInput(sp, pkt, now, graceOf(rule, beat, dt));
 				// everything newer than lastSeq entered the queue, if only for the instant before it overflowed
 				for (const seq of entering) queued.add(seq);
 				// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies
@@ -544,6 +571,7 @@ function run({
 			}
 			const droppedBefore = beat.droppedTicks;
 			const owed = beat.take(dt);
+			lastRan = owed;
 			if (t >= WARMUP_S) {
 				droppedTicks += beat.droppedTicks - droppedBefore;
 				if (owed > 1) catchupBeats += 1;
@@ -641,7 +669,11 @@ console.log(
 		`redundancia ${CFG.INPUT_REDUNDANCY}x, dilatacao +-${(CFG.INPUT_DILATION * 100).toFixed(0)}%, ` +
 		`recuperacao do servidor ate ${CFG.MAX_CATCHUP_TICKS} ticks por heartbeat, divida ate ` +
 		`${Math.round(BACKLOG_S / SIM_DT)} ticks, ` +
-		(GRACE ? "teto da fila acrescido dos ticks que o servidor deve" : "teto da fila fixo (--no-grace)"),
+		(RULE === "shipped"
+			? "teto da fila acrescido dos ticks de uma divida que o servidor esta pagando"
+			: RULE === "debt"
+				? "teto da fila acrescido de todo tick devido, pago ou nao (--debt-grace, a regra de dee095a)"
+				: "teto da fila fixo (--no-grace)"),
 );
 
 /** one frame in twenty takes `ms`: a machine that is busy with something else now and then */
@@ -659,6 +691,49 @@ const starvedTicks = ms => Math.ceil((ms / 1000) * CFG.SIM_HZ);
 
 /** `fastS` seconds at 60 FPS, then `slowS` seconds at `slowFps`, over and over: by the clock of the side it paces */
 const phased = (fastS, slowS, slowFps) => (_i, at) => (at % (fastS + slowS) < fastS ? SIM_DT : 1 / slowFps);
+
+/**
+ * tools/test-zombie-motion.mjs's Studio profile, from the owner's [PZ-NET] log of 2026-09-23: mostly 60 fps,
+ * stretches of 22-40 ms frames for 0.5-2 s, single hitches of 50-160 ms. Drawn once, from a generator of its own (the
+ * link's draws stay the link's), and shared by the server's heartbeat and the client's frames: one process.
+ */
+function studioFrames(seconds, seedValue) {
+	let s = seedValue;
+	const random = () => {
+		s = (s * 1103515245 + 12345) & 0x7fffffff;
+		return s / 0x7fffffff;
+	};
+	const out = [];
+	let t = 0;
+	let slowLeft = 0;
+	while (t < seconds) {
+		let dt;
+		if (random() < 0.012) {
+			dt = 0.05 + random() * 0.11;
+		} else {
+			if (slowLeft <= 0 && random() < 0.006) slowLeft = 0.5 + random() * 1.5;
+			if (slowLeft > 0) {
+				dt = 0.022 + random() * 0.018;
+				slowLeft -= dt;
+			} else {
+				dt = SIM_DT * (0.95 + random() * 0.1);
+			}
+		}
+		out.push(dt);
+		t += dt;
+	}
+	return out;
+}
+const STUDIO = studioFrames(num("--seconds", 20) + 5, 20260923);
+const studioDt = i => STUDIO[i % STUDIO.length];
+
+/**
+ * A server whose tick costs about half a 60 Hz heartbeat: a heartbeat that runs one tick is on time, one that runs
+ * two takes `catchupTicks` ticks' worth -- so a debt is repaid by a sliver a heartbeat -- and one heartbeat in
+ * `everyBeats` is a hitch of `hitchMs` that leaves one.
+ */
+const crawling = (catchupTicks, everyBeats, hitchMs) => (i, _at, lastRan) =>
+	i % everyBeats === everyBeats - 1 ? hitchMs / 1000 : lastRan >= 2 ? catchupTicks * SIM_DT : SIM_DT;
 
 const CASES = [
 	// the clean links are the regression guard: the queue must never run dry on them
@@ -759,11 +834,12 @@ const CASES = [
 	/*
 	 * The server that CANNOT keep up (the review of dee095a, B1). Below 30 Hz a heartbeat is longer than the
 	 * MAX_CATCHUP_TICKS it may run, so the debt only grows, sits at MAX_BACKLOG_S and drops the rest, heartbeat after
-	 * heartbeat: the ticks it "owes" are never run. Granting the queue one command per tick owed kept every queue
-	 * about as deep as the debt for as long as the slowdown lasted -- 352 ms from input to simulation at 25 Hz where
-	 * the fixed ceiling gives 80 ms, 313 ms against 69 ms with Studio at 28 fps -- and every honest shot clamped,
-	 * since the rewind counts at most 4 ticks of queue. Grace is for a debt that is being REPAID; these two must look
-	 * like the fixed ceiling (`slowServer`: against the same run with `grace` off).
+	 * heartbeat: the ticks it "owes" are never run. dee095a granted the queue one command per tick owed and kept every
+	 * queue about as deep as the debt for as long as the slowdown lasted: 352 ms from input to simulation at 25 Hz
+	 * where the fixed ceiling gives 80 ms, 313 ms against 69 ms with Studio at 28 fps -- and every honest shot clamped,
+	 * since the rewind counts at most INPUT_BUFFER_MAX ticks of queue. Grace is for a debt that is being REPAID
+	 * (server/sim/heartbeat.ts): these must look like the fixed ceiling (`slowServer`: against the same run with no
+	 * grace, and dee095a's rule printed next to it).
 	 */
 	{
 		name: "12) servidor lento: heartbeat a 25 Hz sustentado",
@@ -783,8 +859,11 @@ const CASES = [
 		tapGuard: true,
 	},
 	/*
-	 * Both regimes in turn: 3 s at 60 FPS, 3 s at 28, server and client on the same frames. The slow stretches build a
-	 * debt the fast ones repay -- which is what grace is for -- and must not keep the queues deep while they build it.
+	 * Both regimes in turn: 3 s at 60 FPS, 3 s at 28, server and client on the same frames. The slow half builds a
+	 * debt of ~12 ticks that the fast half repays in a fifth of a second -- but WHILE it builds, nothing tells it from
+	 * case 13, whose debt is never repaid: the commands that repayment will want are the client's surplus over a
+	 * server running at 56 ticks a second, and keeping them for it is exactly the latency case 13 must not pay. So
+	 * the slow half gets the fixed ceiling, and this case is held to it; what dee095a's rule bought here is printed.
 	 */
 	{
 		name: "14) misto: 3 s a 60 fps, 3 s a 28 fps (servidor e cliente no mesmo quadro)",
@@ -793,7 +872,34 @@ const CASES = [
 		clientDt: phased(3, 3, 28),
 		serverDt: phased(3, 3, 28),
 		slowServer: true,
-		mixed: true,
+		tapGuard: true,
+	},
+	/*
+	 * The Studio playtest itself (tools/test-zombie-motion.mjs `studio`): hitches of 50-160 ms that the next frames
+	 * repay, and slow stretches of 22-40 ms frames -- under two ticks each, so the server does keep up, barely. Here
+	 * grace is for the hitches: fewer waits than the fixed ceiling, and still no queue kept deep.
+	 */
+	{
+		name: "15) quadros do Studio (perfil de test:zombie-motion): servidor e cliente no mesmo quadro",
+		rtt: 0.02,
+		jitter: 0.004,
+		clientDt: studioDt,
+		serverDt: studioDt,
+		slowServer: true,
+		repays: true,
+		tapGuard: true,
+	},
+	/*
+	 * The review's slow case: a tick that costs about half a heartbeat, so a heartbeat that catches up takes 1.9 ticks
+	 * and repays a tenth of a tick. A 250 ms hitch every ~4 s leaves 13 ticks that take seconds to clear; granting them
+	 * all kept the queues debt-deep for those seconds. Grace follows the pace of the repayment instead.
+	 */
+	{
+		name: "16) divida paga devagar: um tick custa meio heartbeat, 250 ms de engasgo a cada ~4 s",
+		rtt: 0.06,
+		jitter: 0.008,
+		serverDt: crawling(1.9, 150, 250),
+		slowServer: true,
 		tapGuard: true,
 	},
 ];
@@ -925,35 +1031,50 @@ for (const c of CASES) {
 
 	if (c.slowServer) {
 		/*
-		 * The same run with the queue's ceiling fixed at INPUT_BUFFER_MAX (no grace), same client, same link, same
-		 * draws. Grace may buy a slow server's repayment its commands; it may not buy a queue that is deep for good.
+		 * The same run with the queue's ceiling fixed at INPUT_BUFFER_MAX (no grace) and with dee095a's grace for
+		 * every tick owed: same client, same link, same draws. Grace may buy a repayment its commands; it may not buy
+		 * a queue that is deep for good, nor for the seconds a crawling repayment takes.
 		 */
 		const seedAfter = seed;
-		seed = seedBefore;
-		const fixed = run({ ...c, taps: true, seconds, grace: false });
+		const twinOf = rule => {
+			seed = seedBefore;
+			return run({ ...c, taps: true, seconds, rule });
+		};
+		const fixed = twinOf("fixed");
+		const debt = twinOf("debt");
 		seed = seedAfter;
-		console.log(
-			`        com o teto fixo: media ${(fixed.latencyMean * 1000).toFixed(0)} ms, pior ` +
-				`${(fixed.latencyMax * 1000).toFixed(0)} ms, profundidade ${fixed.avgDepth.toFixed(2)}, ` +
-				`${fixed.fillsPerSecond.toFixed(2)} preench./s, ${fixed.realLost} comandos reais nunca simulados ` +
-				`(com a folga: ${r.fillsPerSecond.toFixed(2)} preench./s, ${r.realLost})`,
-		);
+		const line = (label, x) =>
+			console.log(
+				`        ${label}: media ${(x.latencyMean * 1000).toFixed(0)} ms, pior ` +
+					`${(x.latencyMax * 1000).toFixed(0)} ms, profundidade ${x.avgDepth.toFixed(2)}, ` +
+					`${x.fillsPerSecond.toFixed(2)} preench./s, ${x.realLost} comandos reais nunca simulados`,
+			);
+		line("com a folga    ", r);
+		line("com o teto fixo", fixed);
+		line("regra de dee095a", debt);
 		check(
 			`a fila de um servidor lento nao passa de INPUT_BUFFER_MAX + 1 em media`,
 			r.avgDepth <= CFG.INPUT_BUFFER_MAX + 1,
-			`${r.avgDepth.toFixed(2)} contra ${fixed.avgDepth.toFixed(2)} com o teto fixo`,
+			`${r.avgDepth.toFixed(2)} contra ${fixed.avgDepth.toFixed(2)} com o teto fixo e ${debt.avgDepth.toFixed(2)} ` +
+				`com a regra de dee095a`,
 		);
 		check(
 			"a folga nao atrasa o input mais que 1 tick alem do teto fixo",
 			r.latencyMean <= fixed.latencyMean + SIM_DT,
-			`${(r.latencyMean * 1000).toFixed(0)} ms contra ${(fixed.latencyMean * 1000).toFixed(0)} ms`,
+			`${(r.latencyMean * 1000).toFixed(0)} ms contra ${(fixed.latencyMean * 1000).toFixed(0)} ms com o teto ` +
+				`fixo e ${(debt.latencyMean * 1000).toFixed(0)} ms com a regra de dee095a`,
 		);
-		if (c.mixed) {
-			// where the debt IS repaid, grace is what keeps the repayment fed: never worse than the fixed ceiling
+		check(
+			"nem espera nem perde mais que o teto fixo",
+			r.fills <= fixed.fills && r.realLost <= fixed.realLost,
+			`${r.fills} preenchimentos e ${r.realLost} perdidos contra ${fixed.fills} e ${fixed.realLost}`,
+		);
+		if (c.repays) {
+			// where the server repays its hitches, grace is what keeps the repayment fed: it must show
 			check(
-				"onde a divida e paga, a folga nao espera nem perde mais que o teto fixo",
-				r.fills <= fixed.fills && r.realLost <= fixed.realLost,
-				`${r.fills} preenchimentos e ${r.realLost} perdidos contra ${fixed.fills} e ${fixed.realLost}`,
+				"onde o servidor paga os engasgos, a folga espera menos que o teto fixo",
+				r.fills < fixed.fills,
+				`${r.fills} preenchimentos contra ${fixed.fills}`,
 			);
 		}
 	}

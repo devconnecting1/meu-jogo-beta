@@ -414,7 +414,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (sp === undefined) return;
 		// the whole validation lives in the pure module (token bucket, decode, counters); a malformed payload
 		// is dropped in silence (§9.2 level 0) and only ever counted. The grace is the SERVER's lateness: the
-		// commands for the ticks it owes are kept for the repayment instead of capped (server/sim/heartbeat.ts)
+		// commands for the ticks it owes, while it is repaying them, are kept for the repayment instead of capped
+		// (server/sim/heartbeat.ts)
 		const verdict = ingestInput(sp, payload, now, sim.inputGrace(now - beatAt));
 		if (verdict !== InputVerdict.Ok || sp.counters.packets % 32 === 0) guardFlood(link, sp);
 	});
