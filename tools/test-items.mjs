@@ -1458,12 +1458,12 @@ section(
 				JSON.stringify(out)
 			);
 		});
-		checkRows("a dead survivor eats nothing", USABLES, u => {
+		checkRows("a dead survivor eats nothing (refused as `dead`)", USABLES, u => {
 			const { save, p } = holder(u);
 			p.dead = true;
 			craft.remove(0);
 			const out = craft.useItem(0, p, save, u.id);
-			return (out.kind === "refused" && out.why === "busy" && save.invenUse[u.id] === 2) || JSON.stringify(out);
+			return (out.kind === "refused" && out.why === "dead" && save.invenUse[u.id] === 2) || JSON.stringify(out);
 		});
 		checkRows(
 			"food with nothing to fill and no buff is not wasted when full (itemUseEffect's no-op rule)",
@@ -4510,6 +4510,186 @@ section(
 			`client ${client.invenUse[RUSH]}, server buff ${sp.state.buffs.speed}`,
 		);
 		s.quit(pl);
+	},
+);
+
+section(
+	"G7. the reviews of 5967a18, on the real server: a held build through death and New game, the refused spot, floods",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const PLC2 = require(join(SRC, "shared/sim/placement.ts"));
+		const RULE2 = require(join(SRC, "shared/sim/craftRule.ts"));
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const recipe = CRAFT_RECIPES.find(
+			r =>
+				r.craftKind === 1 &&
+				RULE2.recipeStation(r) === undefined &&
+				PLC2.PLACEABLES[r.resultIndex] !== undefined,
+		);
+		let seq = 0;
+		let nonce = 0;
+		const press = (pl, edges) => {
+			seq += 1;
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, 0, edges));
+			s.remote("Input").OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+		};
+		const untilConsumed = (sp, want) => {
+			for (let i = 0; i < 90 && sp.ackSeq < want; i++) s.beat();
+			return sp.ackSeq >= want;
+		};
+		// a survivor who stays up, so a death does not end the world (MP-22)
+		const friend = s.join(newUser(), "friend");
+		s.immortal.add(friend);
+		s.enter(friend);
+
+		{
+			// R1 (security review): a construction held through a death and a New game
+			const pl = s.join(newUser(), "carrier");
+			const save = s.save(pl);
+			const cnt = () => recipe.ingredients.map(i => INV2.countItem(save, i.kind, i.index)).join(",");
+			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
+			s.immortal.add(pl);
+			const sp = s.enter(pl);
+			const paid = cnt();
+			s.verb(pl, IK.Craft, recipe.id, 0, ++nonce);
+			s.run(0.2);
+			const held = s.sim.build.pendingOf(sp.slot) === recipe.resultIndex;
+			const spent = cnt();
+			s.immortal.delete(pl);
+			s.kill(pl);
+			check(
+				held && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === paid,
+				"[R1] a death with a construction on the cursor refunds it into the DYING run (the body keeps its backpack through a Rebirth)",
+				`held ${held}; ingredients ${paid} -> ${spent} -> ${cnt()}`,
+			);
+			s.run(0.6);
+			const fresh = s.shop(pl, { kind: "newRun", runRev: save.runRev });
+			const newLife = cnt();
+			s.exit(pl); // Home: sim.remove -> build.remove(slot, save), which used to refund into the NEW life
+			s.run(1);
+			s.quit(pl);
+			const stored = s.stored(pl.UserId);
+			const persisted = recipe.ingredients.map(i => INV2.countItem(stored, i.kind, i.index)).join(",");
+			check(
+				fresh.ok === true && cnt() === newLife && persisted === newLife,
+				"[R1] ...and New game + Home refund nothing into the new life (nor into the DataStore)",
+				`new life ${newLife}, after Home ${cnt()}, stored ${persisted}`,
+			);
+		}
+		{
+			// A (correctness review): a refused spot is ANSWERED by a bag at once, with the construction still held
+			const pl = s.join(newUser(), "mason");
+			s.immortal.add(pl);
+			const save = s.save(pl);
+			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
+			const sp = s.enter(pl);
+			press(pl, 0);
+			untilConsumed(sp, seq);
+			s.verb(pl, IK.Craft, recipe.id, seq + 1, ++nonce);
+			press(pl, 0);
+			untilConsumed(sp, seq);
+			// a rock where the ghost is (the client's drawn zombie had moved; the server's had not)
+			const ghost = s.sim.build.ghost(sp.slot, sp.state);
+			W2.addSolid(s.sim.world, {
+				...ghost,
+				kind: "structure",
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "rock",
+			});
+			s.run(0.5);
+			const bagsBefore = s.remote("SaveAck").sent.filter(e => e.to === pl && e.args[0]?.wallet?.bag).length;
+			press(pl, P2.packEdges(1, 0, 0, 0));
+			const edge = seq;
+			untilConsumed(sp, edge);
+			s.run(0.5);
+			const bags = s.remote("SaveAck").sent.filter(e => e.to === pl && e.args[0]?.wallet?.bag);
+			const answer = bags[bags.length - 1]?.args[0].wallet.bag;
+			check(
+				bags.length > bagsBefore &&
+					answer.place === recipe.resultIndex &&
+					answer.seq >= edge &&
+					s.sim.build.pendingOf(sp.slot) === recipe.resultIndex,
+				"[A] the refused click is answered within 0.5 s: a bag past that command, the construction still on the cursor",
+				`${bags.length - bagsBefore} new bag(s); place ${answer?.place}, seq ${answer?.seq} >= ${edge}`,
+			);
+			s.quit(pl);
+		}
+		{
+			// R6 (security review): a pack bought on the death screen waits for a body, and survives the New game
+			const { SHOP_PACKS: PACKS } = require(join(SRC, "shared/data/shop.ts"));
+			const pack = PACKS[0];
+			const pl = s.join(newUser(), "buyer");
+			const save = s.save(pl);
+			save.money = 100000;
+			s.enter(pl);
+			s.kill(pl);
+			s.run(0.6);
+			const bought = s.shop(pl, { kind: "buyPack", packId: pack.id });
+			s.run(1);
+			const whileDead = save.packsOpened[pack.id];
+			s.run(0.6);
+			s.shop(pl, { kind: "newRun", runRev: save.runRev });
+			check(
+				bought.ok === true && whileDead === 0 && save.packsBought[pack.id] - save.packsOpened[pack.id] === 1,
+				"[R6] bought while dead: not delivered into the run the New game wipes -- still owed to the new life",
+				`opened while dead ${whileDead}, pending after New game ${save.packsBought[pack.id] - save.packsOpened[pack.id]}`,
+			);
+			s.quit(pl);
+		}
+		{
+			// R5 (security review): the presence verbs of a survivor in the world count toward the flood kick too
+			const pl = s.join(newUser(), "presenceSpam");
+			s.immortal.add(pl);
+			s.enter(pl);
+			for (let i = 0; i < 5000; i++) s.intent(pl, IK.EnterWorld);
+			s.beat();
+			check(pl.kicked === true, "[R5] 5000 EnterWorld from a survivor in the world: kicked (§8.2)");
+		}
+		{
+			// the client's half (client/net/bagPrediction.ts, backpackSync.ts, main.client.ts), by the rule and by the source
+			const save = SAVE.defaultSave();
+			save.invenWeapon[10] = 1;
+			const body = Ply.createPlayer(save, 0, 0);
+			check(
+				!BP.predictVerb(save, { pendingPlace: 10 }, IK.SwitchWeapon, 10, body) &&
+					BP.predictVerb(save, { pendingPlace: -1 }, IK.SwitchWeapon, 10, body),
+				"[E] a switch is not predicted with a construction on the cursor (the server says `busy`)",
+			);
+			body.dead = true;
+			check(
+				!BP.predictVerb(save, { pendingPlace: -1 }, IK.SwitchWeapon, 0, body),
+				"[E] nor for a dead body (the server says `dead`)",
+			);
+			const sync = source("client/net/backpackSync.ts");
+			check(
+				/inFlight\(\) >= INTENT_QUEUE_MAX\) return false/.test(sync),
+				"[C] the client never has more verbs in flight than the server queues (INTENT_QUEUE_MAX)",
+			);
+			check(
+				/save !== bagSave \|\| save\.runRev !== bagRunRev/.test(sync),
+				"[F] a replaced save, or a run that ended, drops the last bag and its predictions",
+			);
+			const main = source("client/main.client.ts");
+			const onUse = main.slice(main.indexOf("pack.onUse = "), main.indexOf("pack.onCraft = "));
+			check(
+				/Bag\.useItem\(/.test(onUse) &&
+					!/itemUseEffect/.test(main) &&
+					/if \(owned\(\)\) return predictAndSend\(IntentKind\.UseItem/.test(sync),
+				"[L] the Bag's Use goes through backpackSync (a server verb when owned), never the local itemUseEffect",
+			);
+			check(
+				/SERVER_WORLD/.test(source("client/admin/world.ts")),
+				"[K] the admin's item and structure spawns refuse while the server owns the world",
+			);
+		}
+		s.quit(friend);
 	},
 );
 

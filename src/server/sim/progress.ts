@@ -238,12 +238,14 @@ export function survivedNight(
  */
 export function stripClientProgress(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
 	if (MP_PHASE < PROGRESS_SERVER_PHASE) return false;
+	// only a report claiming MORE than the server holds counts as an attempt: one that is merely behind (the XP of the
+	// last second of a fight, a point spent a moment ago) is what an honest client sends all the time (review #10)
 	let changed = false;
-	if (upd.level !== prev.level) changed = true;
-	if (upd.exp !== prev.exp) changed = true;
-	if (upd.skillPoint !== prev.skillPoint) changed = true;
-	if (upd.bossKills !== prev.bossKills) changed = true;
-	if (upd.day !== prev.day) changed = true;
+	if (upd.level > prev.level) changed = true;
+	if (upd.level === prev.level && upd.exp > prev.exp) changed = true;
+	if (upd.skillPoint > prev.skillPoint) changed = true;
+	if (upd.bossKills > prev.bossKills) changed = true;
+	if (upd.day > prev.day) changed = true;
 	upd.level = prev.level;
 	upd.exp = prev.exp;
 	upd.skillPoint = prev.skillPoint;

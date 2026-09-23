@@ -161,7 +161,9 @@ export class ServerCraft {
 	useItem(slot: number, state: PlayerState, save: PlayerSaveData, usableId: number): BackpackOutcome {
 		const l = this.limitsOf(slot);
 		if (l.use > 0) return { kind: "refused", why: "rate" };
-		if (state.dead) return { kind: "refused", why: "busy" };
+		// a body at 0 hp IS dead, even before the next `stepPlayer` flags it (the rule of life.ts `writeRunBody`): a
+		// bite lands in the horde's half of a tick, and a bandage queued for the next one must not revive the corpse
+		if (state.dead || state.hp <= 0) return { kind: "refused", why: "dead" };
 		// `itemUseEffect` is the ownership check AND the "would this do anything?" check, and it is the same
 		// function the single-player game used, applied to the SERVER's body
 		if (!itemUseEffect(state, save, usableId)) return { kind: "refused", why: "noop" };

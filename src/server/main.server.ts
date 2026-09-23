@@ -1077,7 +1077,10 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 	const sim = mpHost.simulation;
 	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
 	const ack = sim.backpack.ackOf(player.UserId);
-	return { sig: bagSignature(save, place, ack), seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+	// every build edge the cursor answered moves the signature, so a REFUSED placement is answered by a bag too
+	const turns = sp !== undefined ? (sim.build?.turnsOf(sp.slot) ?? 0) : 0;
+	const sig = `${bagSignature(save, place, ack)}|${turns}`;
+	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
 }
 
 /** everything in the wallet the simulation can move on its own: a change in any of them is pushed */

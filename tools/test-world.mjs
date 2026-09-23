@@ -302,7 +302,8 @@ section("c) a porta e a mesma para todo mundo (§4.5, aceite F3)");
 	// b is 500 u away, out of reach, and reads the very same solid: there is one world
 	checkEq(W.querySolids(world, 1000, 1000, 1128, 1032).find(s => s.id === door.id).open, true, "b ve a mesma porta");
 
-	// §8.1: a door cannot be closed on a body
+	// §8.1: a door cannot be closed on a body (a press per PRESS_COOLDOWN_S, a door change per TOGGLE_COOLDOWN_S)
+	run(sim, 20);
 	b.state.x = 1064;
 	b.state.y = 1016;
 	send(a, 2, 0, PRESS_E);
@@ -312,6 +313,7 @@ section("c) a porta e a mesma para todo mundo (§4.5, aceite F3)");
 	checkEq(seen[0].outcome.why, "blocked", "'blocked'");
 
 	// move the body out of the way and it closes
+	run(sim, 20);
 	b.state.y = 1500;
 	send(a, 3, 0, PRESS_E);
 	run(sim, 1);
@@ -1035,9 +1037,17 @@ section("p) os verbos da mochila: validados pelo servidor, aplicados ANTES do co
 	checkEq(seen.at(-1)?.why, "full", "por 'full'");
 
 	// a dead survivor's verbs are dropped (and answered), never held for the revive
+	const deadBefore = seen.filter(o => o.kind === "refused" && o.why === "dead").length;
 	p.state.dead = true;
 	sim.step();
-	checkEq(sim.backpack.ackOf(p.userId), 20 + CFG.INTENT_QUEUE_MAX - 1, "morto: a fila e descartada e confirmada");
+	checkEq(
+		seen.filter(o => o.kind === "refused" && o.why === "dead").length - deadBefore,
+		CFG.INTENT_QUEUE_MAX,
+		"morto: a fila e descartada e cada pedido respondido",
+	);
+	// ...and the ack never goes BACK: 99 (refused on arrival) is newer than the queued 20..27 answered after it, and a
+	// client told 27 now would replay the refused 99 for PENDING_TTL_S (revisao de correcao de 5967a18, C)
+	checkEq(sim.backpack.ackOf(p.userId), 99, "o ack so anda para a frente (u16)");
 	check(
 		seen.slice(-CFG.INTENT_QUEUE_MAX).every(o => o.why === "dead"),
 		"tudo recusado por 'dead'",
@@ -1125,6 +1135,282 @@ section("q) NET-5: um relatorio forjado nao escreve a mochila (pinBackpack)");
 		BP.serverOwnsBackpack(),
 		CFG.MP_PHASE >= CFG.WORLD_SERVER_PHASE,
 		"stripClientBackpack vale a partir de WORLD_SERVER_PHASE (a mesma chave do mundo interativo)",
+	);
+}
+
+section("r) revisao de 5967a18: o E tem ritmo, porta e luz tem recarga, parede para o item, luz/reparo/hp para todos");
+{
+	const INTER = require(join(SRC, "server/sim/interaction.ts"));
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const door = W.addSolid(world, {
+		kind: "door",
+		x: 1000,
+		y: 1000,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: false,
+		placeable: 11,
+		owner: 0,
+	});
+	const a = addPlayer(sim, 0, 1064, 980);
+	const b = addPlayer(sim, 1, 1064, 1054);
+	drain(sim);
+	// R3: a modified client puts the action edge on EVERY command for a second
+	let flips = 0;
+	let last = door.open === true;
+	for (let seq = 1; seq <= 60; seq++) {
+		send(a, seq, 0, PRESS_E);
+		sim.step();
+		if ((door.open === true) !== last) {
+			flips += 1;
+			last = door.open === true;
+		}
+	}
+	const sets = countDeltas(drain(sim), P.WorldEv.DoorSet);
+	check(
+		flips >= 2 && flips <= 1 / INTER.PRESS_COOLDOWN_S && sets === flips,
+		`E em todo comando por 1 s: a porta troca ${flips} vezes (no maximo ${1 / INTER.PRESS_COOLDOWN_S}), um DoorSet por troca`,
+		`${sets} DoorSet`,
+	);
+	// two survivors hammering the same door: the door has its own recharge, whoever presses
+	run(sim, 30);
+	flips = 0;
+	last = door.open === true;
+	for (let seq = 61; seq <= 120; seq++) {
+		send(a, seq, 0, PRESS_E);
+		send(b, seq - 60, 0, PRESS_E);
+		sim.step();
+		if ((door.open === true) !== last) {
+			flips += 1;
+			last = door.open === true;
+		}
+	}
+	drain(sim);
+	check(
+		flips >= 2 && flips <= 1 / INTER.TOGGLE_COOLDOWN_S,
+		`dois sobreviventes na mesma porta: ${flips} trocas em 1 s (no maximo ${1 / INTER.TOGGLE_COOLDOWN_S})`,
+	);
+
+	// #8: an item on the other side of a wall is out of reach, however close
+	const w2 = emptyWorld();
+	const sim2 = newSim(w2);
+	const p2 = addPlayer(sim2, 0, 2000, 2000);
+	W.addSolid(w2, {
+		kind: "structure",
+		x: 2014,
+		y: 1900,
+		w: 8,
+		h: 200,
+		hp: 100,
+		hpMax: 100,
+		destructible: false,
+		tags: "wall",
+	});
+	const behind = W.spawnGroundItem(w2, 4, 23, 3, 2030, 2000);
+	const got = sim2.items.pickup(p2.save, p2.state.x, p2.state.y, behind);
+	check(
+		!got.ok && got.why === "blocked",
+		"um item a 30 u, atras de uma parede, nao entra na mochila",
+		JSON.stringify(got),
+	);
+	const open = W.spawnGroundItem(w2, 4, 23, 3, 1970, 2000);
+	checkEq(
+		sim2.items.pickup(p2.save, p2.state.x, p2.state.y, open).ok,
+		true,
+		"e um do lado livre, na mesma distancia, entra",
+	);
+
+	// B: a lamp switched, a barricade repaired and a wall chewed by the horde reach EVERYBODY, far or near
+	const w3 = emptyWorld();
+	const sim3 = newSim(w3);
+	const builder = addPlayer(sim3, 0, 3000, 3000);
+	addPlayer(sim3, 1, 7000, 7000); // far away: the one who used to miss it
+	builder.state.angle = 0;
+	sim3.build.hold(0, 4, undefined);
+	const lamp = sim3.build.place(0, builder.state, [builder.state], []).solid;
+	builder.state.x = lamp.x + lamp.w / 2;
+	builder.state.y = lamp.y + lamp.h + 16;
+	drain(sim3);
+	send(builder, 1, 0, PRESS_E);
+	run(sim3, 1);
+	const lights = drain(sim3).filter(d => d.ev.t === P.WorldEv.LightSet);
+	check(
+		lamp.powered !== undefined && lights.length === 1 && lights[0].slot === CFG.SLOT_NONE,
+		"o LightSet de um lampiao vai para TODO MUNDO (quem estava longe volta e ve a luz certa)",
+		JSON.stringify(lights.map(d => d.slot)),
+	);
+	run(sim3, 40);
+	builder.state.x = 3000;
+	builder.state.y = 3400;
+	sim3.build.hold(0, 10, undefined);
+	const wall = sim3.build.place(0, builder.state, [builder.state], []).solid;
+	wall.hp = wall.hpMax * 0.5;
+	addItem(builder.save, 4, 23, 5);
+	builder.state.x = wall.x + wall.w / 2;
+	builder.state.y = wall.y + wall.h + 16;
+	drain(sim3);
+	send(builder, 2, 0, PRESS_E);
+	run(sim3, 1);
+	const repairs = drain(sim3).filter(d => d.ev.t === P.WorldEv.SolidHp && d.slot === CFG.SLOT_NONE);
+	check(wall.hp > wall.hpMax * 0.5 && repairs.length >= 1, "o reparo manda o SolidHp para todo mundo");
+	// D: a zombie's bite (shared/sim/ai/zombieBrain.ts writes hp and nothing else) is told at SOLID_HP_HZ
+	run(sim3, 30);
+	drain(sim3);
+	wall.hp -= 100;
+	run(sim3, Math.ceil(CFG.SIM_HZ / CFG.SOLID_HP_HZ) + 1);
+	const bites = drain(sim3).filter(d => d.ev.t === P.WorldEv.SolidHp && d.slot === CFG.SLOT_NONE);
+	const told = bites.flatMap(d => d.ev.entries).find(e => e.id === wall.id);
+	check(
+		told !== undefined && Math.abs(told.hp - wall.hp / wall.hpMax) < 0.01,
+		`a mordida numa parede chega a todos em ate 1/${CFG.SOLID_HP_HZ} s (antes a parede parecia inteira ate sumir)`,
+		JSON.stringify(told),
+	);
+	run(sim3, 30);
+	checkEq(countDeltas(drain(sim3), P.WorldEv.SolidHp), 0, "e uma parede parada nao manda nada");
+
+	// A: a refused placement is ANSWERED: the edge counts, and the construction stays on the cursor unturned
+	const w4 = emptyWorld();
+	const sim4 = newSim(w4);
+	const mason = addPlayer(sim4, 0, 4000, 4000);
+	mason.state.angle = 0;
+	sim4.build.hold(0, 10, undefined);
+	sim4.build.rotate(0);
+	const turned = sim4.build.ghost(0, mason.state);
+	// something in the way of the ghost
+	W.addSolid(w4, { ...turned, kind: "structure", hp: 1, hpMax: 1, destructible: false, tags: "rock" });
+	const turns = sim4.build.turnsOf(0);
+	const refused = sim4.build.place(0, mason.state, [mason.state], []);
+	const after = sim4.build.ghost(0, mason.state);
+	check(
+		refused.kind === "refused" &&
+			sim4.build.pendingOf(0) === 10 &&
+			sim4.build.turnsOf(0) === turns + 1 &&
+			turned.w !== turned.h &&
+			after.w === PLACEABLES[10].w &&
+			after.h === PLACEABLES[10].h,
+		"um lugar recusado: continua no cursor, SEM giro (o cliente o redesenha do giro 0), e o bag e empurrado",
+		`${JSON.stringify(refused)} turns ${turns} -> ${sim4.build.turnsOf(0)}, ${turned.w}x${turned.h} -> ${after.w}x${after.h}`,
+	);
+
+	// #11: the backpack's cooldowns decay whether or not this server owns the interactive world
+	const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
+	const CAN = USABLES.find(u => u.name === "Canned food").id;
+	const simNo = new ServerSimulation({
+		world: emptyWorld(),
+		clock: new WorldClock({ day: 1, dayTime: 12 }),
+		zombies: false,
+		interactive: false,
+	});
+	const eater = addPlayer(simNo, 0, 3000, 3000);
+	eater.save.invenUse[CAN] = 3;
+	eater.state.hungry = 10;
+	checkEq(
+		simNo.craft.useItem(0, eater.state, eater.save, CAN).kind,
+		"used",
+		"sem o mundo interativo, comer funciona",
+	);
+	for (let i = 0; i < 30; i++) simNo.step();
+	checkEq(simNo.craft.cooling(0, "use"), false, "e a recarga de 0,25 s acaba (antes ficava presa para sempre)");
+
+	// R4: a body at 0 hp is dead, even before `stepPlayer` flags it: no bandage revives it
+	eater.state.hp = -3;
+	checkEq(simNo.craft.useItem(0, eater.state, eater.save, CAN).kind, "refused", "comer com 0 hp e recusado (morto)");
+}
+
+section(
+	"s) revisao de 5967a18: pacote so num corpo vivo, a fila respondida ao sair, e o relatorio 'velho' nao e tentativa",
+);
+{
+	const BP = require(join(SRC, "server/sim/backpack.ts"));
+	const PROG = require(join(SRC, "server/sim/progress.ts"));
+	const LIFE = require(join(SRC, "server/sim/life.ts"));
+	const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 3000, 3000);
+	const pack = SHOP_PACKS[0];
+	// R6: bought on the death screen, it waits for a body: a New game would wipe a dead run's backpack
+	p.save.packsBought[pack.id] = 1;
+	p.state.dead = true;
+	for (let i = 0; i < 90; i++) sim.step();
+	checkEq(p.save.packsOpened[pack.id], 0, "morto: o pacote comprado nao e entregue na partida que vai acabar");
+	p.state.dead = false;
+	p.state.hp = p.state.hpMax;
+	for (let i = 0; i < 90; i++) sim.step();
+	checkEq(p.save.packsOpened[pack.id], 1, "vivo: entregue");
+
+	// G: a survivor leaving with verbs still queued gets every one answered
+	const verb = (kind, atSeq, arg, nonce) => P.decodeIntentMessage(P.encodeIntentArgs(kind, atSeq, arg, nonce));
+	for (let i = 0; i < 3; i++) sim.queueIntent(0, verb(P.IntentKind.LearnSkill, 60000, 0, 41 + i));
+	sim.remove(0);
+	checkEq(sim.backpack.ackOf(p.userId), 43, "sair do mundo responde a fila inteira (o ack do ultimo)");
+
+	// #10: a report that is merely BEHIND is not an attempt; one that claims more is
+	const trusted = SAVE.defaultSave();
+	trusted.ammoNormal = 12;
+	trusted.invenUse[0] = 3;
+	trusted.level = 3;
+	trusted.exp = 40;
+	trusted.runOver = true;
+	trusted.runHp = 0;
+	const report = edit => {
+		const raw = JSON.parse(JSON.stringify(trusted));
+		edit(raw);
+		return SAVE.sanitizeClientReport(raw, trusted);
+	};
+	checkEq(
+		BP.pinBackpack(
+			trusted,
+			report(r => ((r.ammoNormal = 10), (r.invenUse[0] = 2))),
+		),
+		false,
+		"mochila atrasada (dois tiros e uma lata a menos): corrigida em silencio, nao conta",
+	);
+	checkEq(
+		BP.pinBackpack(
+			trusted,
+			report(r => (r.ammoNormal = 13)),
+		),
+		true,
+		"um tiro a MAIS que o servidor: conta",
+	);
+	checkEq(
+		PROG.stripClientProgress(
+			trusted,
+			report(r => (r.exp = 10)),
+		),
+		false,
+		"XP atrasado: nao conta",
+	);
+	checkEq(
+		PROG.stripClientProgress(
+			trusted,
+			report(r => (r.exp = 90)),
+		),
+		true,
+		"XP a mais: conta",
+	);
+	checkEq(
+		LIFE.stripClientLife(
+			trusted,
+			report(r => (r.runHp = 77)),
+		),
+		false,
+		"o hp do corpo que o cliente nunca recebe: nao conta",
+	);
+	checkEq(
+		LIFE.stripClientLife(
+			trusted,
+			report(r => (r.runOver = false)),
+		),
+		true,
+		"`runOver: false` sobre uma morte: conta",
 	);
 }
 

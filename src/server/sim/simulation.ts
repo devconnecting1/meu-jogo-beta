@@ -842,11 +842,13 @@ export class ServerSimulation {
 
 	/** the world's own upkeep: items in flight, loot that may respawn, fires burning down, cooldowns */
 	private stepInteractiveWorld(): void {
+		// the §8.1 cooldowns decay whether or not this server owns the interactive world: the backpack verbs run
+		// through `craft` either way, and a cooldown that never decays is a verb held forever (review #11)
+		this.craft?.step(this.tickDt);
+		this.build?.step(this.tickDt);
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
-		this.craft?.step(this.tickDt);
-		this.build?.step(this.tickDt);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
 		items.sweepInterest(this.tickDt);

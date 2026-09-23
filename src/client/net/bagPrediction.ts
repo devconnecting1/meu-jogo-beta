@@ -74,11 +74,15 @@ export function predictVerb(
 ): boolean {
 	if (kind === IntentKind.SwitchWeapon) {
 		if (!ownsWeapon(save, arg)) return false;
+		// the server refuses it (`busy`, `dead`): predicted, the hand would switch and then be switched back with an
+		// empty magazine (correctness review of 5967a18, E)
+		if (!replay && (cursor.pendingPlace >= 0 || (body !== undefined && (body.dead || body.hp <= 0)))) return false;
 		save.equipWeapon = arg;
 		return true;
 	}
 	if (kind === IntentKind.UseItem) {
 		if ((save.invenUse[arg] ?? 0) <= 0) return false;
+		if (!replay && body !== undefined && (body.dead || body.hp <= 0)) return false;
 		if (!replay && body !== undefined && !itemUseWouldWork(body, save, arg)) return false;
 		save.invenUse[arg] = (save.invenUse[arg] ?? 0) - 1;
 		return true;

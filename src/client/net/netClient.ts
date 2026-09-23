@@ -276,6 +276,12 @@ const pendingAnnounce = new Array<string>();
 const mirrorQueue = new Array<WorldEvent>();
 /** an InitBegin came: the mirror is wiped before the queue (its WorldInit) is laid down */
 let mirrorReset = false;
+/**
+ * Between an InitBegin and leaving the world: only then is there a town these deltas belong to. In the lobby the
+ * global ones kept arriving and were queued up to MAX_MIRROR_QUEUE only to be thrown away by the next InitBegin,
+ * whose WorldInit carries all of it anyway (correctness review of 5967a18, J).
+ */
+let mirrorArmed = false;
 let pendingClock: { worldDay: number; dayTime: number; tick: number; rain: boolean; waveFlags: number } | undefined;
 const sampled = new Array<InputCommand>();
 /** this frame's Input packets, one per command built (commands.ts `flush`) */
@@ -439,6 +445,7 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		if (MIRRORS_WORLD) {
 			mirrorQueue.clear();
 			mirrorReset = true;
+			mirrorArmed = true;
 		}
 		return;
 	}
@@ -530,7 +537,7 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		return;
 	}
 	// F3: constructions, doors, lights, items and loot flags, laid over the loop's town in `netUpdate`
-	if (MIRRORS_WORLD && isMirrorEvent(e)) {
+	if (MIRRORS_WORLD && mirrorArmed && isMirrorEvent(e)) {
 		if (mirrorQueue.size() >= MAX_MIRROR_QUEUE) mirrorQueue.remove(0);
 		mirrorQueue.push(e);
 	}
@@ -1034,6 +1041,8 @@ export function netEnterWorld(): void {
 /** the run is over or the player went back to the menus: give the body and the slot back */
 export function netLeaveWorld(): void {
 	sendIntent(IntentKind.LeaveWorld);
+	mirrorArmed = false;
+	mirrorQueue.clear();
 	// no run is being asked for any more: disarm the timer so idle time back in the menus is never mistaken
 	// for a stalled handshake if `netActive()` happens to be polled again before the next EnterWorld
 	startedAt = 0;
@@ -1046,6 +1055,7 @@ export function netDisconnect(): void {
 	connections = new Array<RBXScriptConnection>();
 	remotes = undefined;
 	hasEpoch = false;
+	mirrorArmed = false;
 	serverMapHash = undefined;
 	mySlot = -1;
 	startedAt = 0;

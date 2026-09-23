@@ -1334,6 +1334,28 @@ section("24) o registro custa uma escrita so quando importa: titulo, historia no
 	);
 }
 
+section("25) o maior relatorio honesto cabe com folga em MAX_SAVE_PAYLOAD (revisao de seguranca de 5967a18, #12)");
+{
+	const { MAX_SAVE_PAYLOAD } = require(join(SRC, "shared/net/net.ts"));
+	// the client reports its whole save (client/systems/saveClient.ts): every counter at a width no save can pass --
+	// 8 digits in every array, 11 digits and a fraction in every number, 17 significant digits in every setting
+	const worst = JSON.parse(JSON.stringify(SAVE.defaultSave()));
+	for (const k of Object.keys(worst)) {
+		const v = worst[k];
+		if (Array.isArray(v)) worst[k] = v.map(() => 10000000);
+		else if (typeof v === "number") worst[k] = -12345678901.5;
+	}
+	for (const k of Object.keys(worst.settings)) {
+		if (typeof worst.settings[k] === "number") worst.settings[k] = 0.12345678901234567;
+	}
+	const size = JSON.stringify(worst).length;
+	check(
+		size * 2 <= MAX_SAVE_PAYLOAD,
+		`o pior relatorio possivel tem ${size} B: mais de 2x de folga em ${MAX_SAVE_PAYLOAD} B`,
+	);
+	check(MAX_SAVE_PAYLOAD <= 8192, "e o teto nao passa de 8 KB (antes 100 KB de lixo eram lidos inteiros)");
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

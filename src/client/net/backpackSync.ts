@@ -15,7 +15,7 @@
  * Below WORLD_SERVER_PHASE, or with no MP host (single player, Studio without the host), every entry point falls back
  * to the local rule the game always had, and the systems never ask (client/net/authority.ts answers "no").
  */
-import { MP_PHASE, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
+import { INTENT_QUEUE_MAX, MP_PHASE, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 import { IntentKind } from "shared/net/protocol";
 import { BagMirror, PlayerSaveData, readBag, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
@@ -36,6 +36,9 @@ const entries = new Array<BagEntry>();
 const lobbyCursor: BagCursor = { pendingPlace: -1 };
 let nonce = 0;
 let lastBag: BagMirror | undefined;
+/** the save `lastBag` was laid over, and its run: a bag of another save, or of an ended run, is nobody's any more */
+let bagSave: PlayerSaveData | undefined;
+let bagRunRev = -1;
 let reserveHoldUntil = 0;
 let started = false;
 
@@ -47,6 +50,17 @@ export function owned(): boolean {
 function cursorFor(save: PlayerSaveData): BagCursor {
 	const refs = netRefs();
 	return refs !== undefined && refs.save === save ? refs : lobbyCursor;
+}
+
+/**
+ * Verbs sent and not answered yet. Never more than the server queues (INTENT_QUEUE_MAX): one past it was refused and
+ * answered on arrival, and its answer was then overtaken by the in-order ones -- twelve fast Eat clicks showed 8
+ * left, jumped back to 12 at 3.5 s, and the server had eaten 8 (correctness review of 5967a18, C).
+ */
+function inFlight(): number {
+	let n = 0;
+	for (const e of entries) if (e.kind !== EDGE_ENTRY) n += 1;
+	return n;
 }
 
 /** one verb on the wire, remembered until the server answers it (the caller predicted it by the same rule) */
@@ -62,6 +76,8 @@ function transmit(kind: IntentKind, arg: number): boolean {
 function predictAndSend(kind: IntentKind, arg: number, body?: PlayerState): boolean {
 	const save = currentSave() ?? netRefs()?.save;
 	if (save === undefined) return false;
+	// a click past the server's queue is not predicted either: the answers to the ones in flight come first
+	if (inFlight() >= INTENT_QUEUE_MAX) return false;
 	if (!predictVerb(save, cursorFor(save), kind, arg, body ?? netRefs()?.player)) return false;
 	transmit(kind, arg);
 	return true;
@@ -130,6 +146,8 @@ export function start(): void {
 		const bag = readBag(raw);
 		if (bag === undefined) return;
 		lastBag = bag;
+		bagSave = save;
+		bagRunRev = save.runRev;
 		adopt(save, os.clock());
 	});
 	// a prediction the server never answered, or a reserve hold that ran out, must not outlive its time-out when no
@@ -146,6 +164,14 @@ export function start(): void {
 		held = holding;
 		if (!due || lastBag === undefined || !owned()) return;
 		const save = currentSave();
-		if (save !== undefined) adopt(save, now);
+		if (save === undefined) return;
+		// the save was replaced (a fresh load) or its run ended (a New game, a world's end, MP-22): the last bag and
+		// the predictions made against it belong to the old one, and the server's next bag brings the new (review F)
+		if (save !== bagSave || save.runRev !== bagRunRev) {
+			lastBag = undefined;
+			entries.clear();
+			return;
+		}
+		adopt(save, now);
 	});
 }
