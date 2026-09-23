@@ -502,6 +502,10 @@ function loadSession(s: Session): void {
 	s.lastWrite = os.clock();
 	resetCredits(s);
 	s.lastLoadAttempt = os.clock();
+	// a stored save meets the body this server kept, BEFORE the LoadAck shows it to the client: a reconnect is
+	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
+	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
+	if (status === "ok" && mpHost?.adopt(s.player, save) === true) s.dirty = true;
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {

@@ -45,6 +45,7 @@ import {
 	WItemAdd,
 	WorldEv,
 	WorldEvent,
+	WorldResetLife,
 	ZombieFlag,
 	ZombieSnap,
 	encodeFx,
@@ -140,8 +141,8 @@ export interface TownChange {
 	mapHash: number;
 	/** the world day the old town fell on */
 	endedDay: number;
-	/** UserIds whose life the server reset to day 1 */
-	lives: ReadonlyArray<number>;
+	/** the survivors whose life the server reset to day 1, with the runRev that left in their saves */
+	lives: ReadonlyArray<WorldResetLife>;
 }
 
 // ---------------------------------------------------------------- map hash (§4.5)
@@ -392,7 +393,7 @@ export class Replicator {
 	private readonly interactive = new Array<PendingWorld>();
 	private readonly initSolids = new Array<Solid>();
 	private readonly initItems = new Array<WItemAdd>();
-	/** the town every InitBegin names: it changes when a world ends (MP-22, `restartWorld`) */
+	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
 
@@ -517,26 +518,42 @@ export class Replicator {
 	}
 
 	/**
-	 * MP-22: the world ended and a new town replaced it (server/sim/worldReset.ts). Call it AFTER the simulation has
-	 * its new town and BEFORE any body is placed in it, so the clients read the news first and the new lives after.
-	 *
-	 *   - `WorldReset` to EVERY connected client (the broadcast is FireAllClients): the lobby builds its next Play in
-	 *     the new town, and a client named in `lives` mirrors the new life the server gave it;
-	 *   - the join message again, to each survivor in the world: the same InitBegin a newcomer gets, with the new
-	 *     seed and hash, so each client checks it built the town the server did (§4.5). Directed events flush
-	 *     after the broadcast ones, so it always lands after the WorldReset it confirms;
-	 *   - the horde's interest is forgotten: the new horde hands its netIds out from 1 again, and a pair kept from
-	 *     the old one would lend its ring (and its death notice) to a stranger.
+	 * MP-22, first half: the town is about to end. Everything still queued belongs to it — a death, a stand-up, a
+	 * ZombieDied for one viewer — and goes out NOW, stamped with the current tick, so no event of the old town can
+	 * land after the WorldReset that ends it (review of f851ad2, L3). The horde's interest is forgotten: the new
+	 * horde hands its netIds out from 1 again, and a pair kept from the old one would lend its ring (and its death
+	 * notice) to a stranger.
 	 */
-	restartWorld(change: TownChange): void {
-		this.mapHash = change.mapHash;
-		this.seed = change.seed;
+	closeTown(): void {
+		this.flushWorld(this.sim.tick);
 		this.hordeRings.clear();
 		this.fxQueue.clear();
-		const lives = new Array<number>();
-		for (const userId of change.lives) lives.push(userId);
-		this.queue({ t: WorldEv.WorldReset, seed: change.seed, endedDay: change.endedDay, lives });
+	}
+
+	/**
+	 * MP-22, second half: the new town stands and its lives have been handed out (server/sim/worldReset.ts), so
+	 * the stand-ups are already queued. This puts the news AHEAD of them and sends it all at once, in the same
+	 * heartbeat as the reset — not at the next tick's flush, where a wallet answered in between could overtake it
+	 * (review of f851ad2, B2):
+	 *
+	 *   - `WorldReset` to EVERY connected client (the broadcast is FireAllClients): the lobby builds its next Play in
+	 *     the new town, and a client named in `lives` takes the new life, runRev included, as the server wrote it;
+	 *   - the PlayerLife stand-ups, right behind it;
+	 *   - the join message again, to each survivor in the world: the same InitBegin a newcomer gets, with the new
+	 *     seed and hash, so each client checks it built the town the server did (§4.5). Directed events flush after
+	 *     the broadcast ones, so it lands after the WorldReset it confirms.
+	 *
+	 * The batch carries the current tick — the one whose snapshots, sent before it, were the old town's: the client
+	 * drops snapshot parts up to AND including that tick (client/net/netClient.ts `townGuard`).
+	 */
+	openTown(change: TownChange): void {
+		this.mapHash = change.mapHash;
+		this.seed = change.seed;
+		const lives = new Array<WorldResetLife>();
+		for (const life of change.lives) lives.push({ userId: life.userId, runRev: life.runRev });
+		this.broadcast.unshift({ t: WorldEv.WorldReset, seed: change.seed, endedDay: change.endedDay, lives });
 		for (const sp of this.sim.players()) this.queueFor(sp.slot, this.initBegin());
+		this.flushWorld(this.sim.tick);
 	}
 
 	left(slot: number): void {

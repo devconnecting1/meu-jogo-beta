@@ -1217,9 +1217,12 @@ function randWorldEvent(kind = rint(1, 17)) {
 		case P.WorldEv.PlayerLife:
 			return { t: kind, slot: rint(0, 5), state: rint(0, 3) };
 		case P.WorldEv.WorldReset: {
-			// MP-22: the new town's seed, the day the old one fell on, and the lives the server reset
+			// MP-22: the new town's seed, the day the old one fell on, and the lives the server reset — each with the
+			// runRev its save is on now (the client takes it, never its own + 1)
 			const lives = [];
-			for (let i = rint(0, 6); i > 0; i--) lives.push(rbool() ? rint(1, 9000000000) : -rint(1, 8));
+			for (let i = rint(0, 6); i > 0; i--) {
+				lives.push({ userId: rbool() ? rint(1, 9000000000) : -rint(1, 8), runRev: rint(0, 10000000) });
+			}
 			return { t: kind, seed: rint(1, CFG.TOWN_SEED_MAX), endedDay: rint(1, 400), lives };
 		}
 		default:
@@ -1361,9 +1364,17 @@ test("World: round trip of every delta", () => {
 	sizes.push(["World ZombieDied", `${one(P.WorldEv.ZombieDied)} B`, "netId, x, y, cause (§4.4)"]);
 	sizes.push(["World Clock", `${one(P.WorldEv.Clock)} B`, "worldDay, dayTime, tick, rain, waveFlags (§4.5)"]);
 	sizes.push(["World PlayerProfile", `${one(P.WorldEv.PlayerProfile)} B`, "slot, level, outfit, pet (MON-04)"]);
-	const reset2 = { t: P.WorldEv.WorldReset, seed: 12345, endedDay: 9, lives: [1, 2] };
+	const reset2 = {
+		t: P.WorldEv.WorldReset,
+		seed: 12345,
+		endedDay: 9,
+		lives: [
+			{ userId: 1, runRev: 4 },
+			{ userId: 2, runRev: 9 },
+		],
+	};
 	const resetBytes = buffer.len(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
-	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 2 * 8);
+	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 2 * (8 + 4));
 	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, lives (MP-22)"]);
 });
 

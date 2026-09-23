@@ -157,6 +157,11 @@ export interface TownNotice {
 	endedDay?: number;
 	/** WorldReset only: the server gave THIS survivor a new life in the new town (MP-20: life day 1, starter kit) */
 	newLife: boolean;
+	/**
+	 * With `newLife`: the runRev the server's save is on now. The client takes it (never its own value + 1: a wallet
+	 * that already carried it would have made that one too many, and every report "outdated" — review B2).
+	 */
+	runRev?: number;
 }
 
 export interface NetStats {
@@ -246,7 +251,9 @@ let townSeed: number | undefined;
  * MP-22: the server tick (u16) of the batch that carried the last WorldReset, until the next reconcile turns it into
  * `townGuard`. Snap is unreliable and unordered against World: a snapshot of the old town can still arrive after
  * the rebuild, and its self block, its zombies (the new horde reuses their netIds from 1) and its allies belong to
- * streets that are gone. For TOWN_GUARD_S after the reset, a part older than the reset is dropped.
+ * streets that are gone. For TOWN_GUARD_S after the reset, a part stamped with the reset's tick OR EARLIER is
+ * dropped: the server sends the reset in the heartbeat right after that tick, whose snapshots (already sent) were
+ * still the old town's (server/net/replication.ts `openTown`).
  */
 let townResetTick: number | undefined;
 let townGuard = -math.huge;
@@ -381,7 +388,8 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		// old one must not be compared with a town built from the new seed
 		townSeed = e.seed;
 		serverMapHash = undefined;
-		noticeTown({ seed: e.seed, endedDay: e.endedDay, newLife: e.lives.includes(Players.LocalPlayer.UserId) });
+		const me = e.lives.find(life => life.userId === Players.LocalPlayer.UserId);
+		noticeTown({ seed: e.seed, endedDay: e.endedDay, newLife: me !== undefined, runRev: me?.runRev });
 		// AFTER the listeners: their rebuild runs `netReset`, which drops any guard of an earlier town
 		townResetTick = batchTick;
 		return;
@@ -877,7 +885,7 @@ function reconcile(now: number): void {
 	for (const part of queue) {
 		const tick = unwrapTick(part.tick, math.floor(refTick));
 		// MP-22: a part of the town that ended, overtaken by the WorldReset (see `townResetTick`)
-		if (now < townGuardUntil && tick < townGuard) continue;
+		if (now < townGuardUntil && tick <= townGuard) continue;
 		snapshots.receive(part, refTick, now);
 		const block = part.self;
 		if (block === undefined) continue;

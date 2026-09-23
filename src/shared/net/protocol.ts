@@ -56,7 +56,9 @@
  *     is born from a new seed. `InitBegin` carries the `seed` (u32, 1 … TOWN_SEED_MAX, next to the map hash it is
  *     checked with), so a client entering the world knows which town to build; `WorldReset{seed, endedDay, lives}`
  *     is broadcast to EVERY connected client — the lobby included — the moment a world ends: the new seed, the
- *     world day the old one fell on, and the UserIds whose life the server reset to day 1 (u8 count + f64 each).
+ *     world day the old one fell on, and each new life: the UserId the server reset to day 1 and the `runRev` that
+ *     reset left in its save (u8 count + f64 + u32 each). The client SETS its runRev from that number — adding one to
+ *     its own drifted whenever a wallet carrying the new runRev overtook the reset (review of f851ad2, B2).
  */
 import {
 	NetReader,
@@ -1301,6 +1303,8 @@ export const SOLID_HP_MAX_ENTRIES = 255;
 const MAX_SAFE_INT = 9007199254740991;
 /** UserIds one WorldReset can name (its count is a u8; a server holds far fewer players than this) */
 export const WORLD_RESET_MAX_LIVES = 255;
+/** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
+const RUN_REV_MAX = 4294967295;
 
 export const DeathCause = {
 	Shot: 0,
@@ -1490,10 +1494,17 @@ export interface WInitBegin {
 	chunks: number;
 }
 
+/** (MP-22) one survivor the end of a world gave a new life: who, and the run the server's save is on now */
+export interface WorldResetLife {
+	userId: number;
+	/** the save's runRev after the reset: the client takes it as it is (never its own value + 1) */
+	runRev: number;
+}
+
 /**
  * (MP-22) Nobody was left alive and nobody paid a Rebirth: the world ended on `endedDay` and a new town was born from
  * `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
- * and a client whose UserId is in `lives` mirrors the new life the server gave it (the same reset as New game).
+ * and a client named in `lives` mirrors the new life the server gave it (the same reset as New game).
  */
 export interface WWorldReset {
 	t: typeof WorldEv.WorldReset;
@@ -1501,8 +1512,8 @@ export interface WWorldReset {
 	seed: number;
 	/** the world day the old town fell on (≥ 1) */
 	endedDay: number;
-	/** UserIds whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
-	lives: Array<number>;
+	/** the survivors whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
+	lives: Array<WorldResetLife>;
 }
 
 export type WorldEvent =
@@ -1630,7 +1641,10 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u16(clampInt(e.endedDay, 1, 65535));
 			const n = math.min(e.lives.size(), WORLD_RESET_MAX_LIVES);
 			w.u8(n);
-			for (let i = 0; i < n; i++) w.f64(e.lives[i]);
+			for (let i = 0; i < n; i++) {
+				w.f64(e.lives[i].userId);
+				w.u32(clampInt(e.lives[i].runRev, 0, RUN_REV_MAX));
+			}
 			break;
 		}
 	}
@@ -1754,12 +1768,13 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const seed = r.u32();
 		const endedDay = r.u16();
 		const n = r.u8();
-		if (!validTownSeed(seed) || endedDay < 1 || n * 8 > r.remaining()) return undefined;
-		const lives = new Array<number>();
+		if (!validTownSeed(seed) || endedDay < 1 || n * 12 > r.remaining()) return undefined;
+		const lives = new Array<WorldResetLife>();
 		for (let i = 0; i < n; i++) {
 			const userId = r.f64();
+			const runRev = r.u32();
 			if (userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
-			lives.push(userId);
+			lives.push({ userId, runRev });
 		}
 		return { t: WorldEv.WorldReset, seed, endedDay, lives };
 	}

@@ -139,6 +139,12 @@ export interface MpHost {
 	release(player: Player, save?: PlayerSaveData): void;
 	/** the live body into `save`, without moving it (the autosave); true when the save changed */
 	settle(player: Player, save: PlayerSaveData): boolean;
+	/**
+	 * The player's save has just finished loading, and its LoadAck has not gone out yet (server/main.server.ts): the
+	 * body the server kept catches up with it — a reconnect reconciled, and a new life a world that ended while they
+	 * were away owed them (MP-22) — so the client's first look at its save is the truth. True when it changed.
+	 */
+	adopt(player: Player, save: PlayerSaveData): boolean;
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
@@ -578,6 +584,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		settle(player, save) {
 			return lives.settle(player.UserId, save);
 		},
+		adopt(player, save) {
+			return lives.adopt(player.UserId, save);
+		},
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
 			for (const sp of sim.players()) {
@@ -612,13 +621,21 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		},
 	};
 
-	/** the live save of a connected player by UserId (the session's), for the lives a new world resets */
+	/**
+	 * The live, LOADED save of a connected player by UserId (the session's), or undefined. A user can have two links
+	 * for a moment — the Player instance that is leaving and the one that just rejoined — and neither has a save
+	 * while one closes and the other loads: the first link is not the answer, the first link WITH a save is (B1).
+	 */
 	function saveOfUser(userId: number): PlayerSaveData | undefined {
 		for (const [player] of links) {
-			if (player.UserId === userId) return options.saveOf(player);
+			if (player.UserId !== userId) continue;
+			const save = options.saveOf(player);
+			if (save !== undefined) return save;
 		}
 		return undefined;
 	}
+	// rule 6 counts only survivors whose save is really here (server/sim/life.ts `liveSave`)
+	lives.liveSave = userId => saveOfUser(userId);
 
 	lives.onWorldWiped = report => {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
@@ -627,18 +644,32 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
 				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
 		);
-		const outcome = endWorld({ sim, lives, replicator }, report, town, {
-			now: os.time(),
-			job: game.JobId,
-			saveOf: saveOfUser,
-		});
+		const [ended, result] = pcall(() =>
+			endWorld({ sim, lives, replicator }, report, town, {
+				now: os.time(),
+				job: game.JobId,
+				saveOf: saveOfUser,
+				clock: () => os.clock(),
+			}),
+		);
+		if (!ended) {
+			// endWorld builds everything before it changes anything (review of f851ad2, M2): the old world is intact,
+			// and it goes on under the rule that held before MP-22 — the dead stand up at daybreak, a Rebirth still
+			// works, and the next fall of the last survivor tries again
+			warn(
+				`[${GAME_NAME}] the new town could not be made (${tostring(result)}): this world goes on until daybreak`,
+			);
+			return;
+		}
+		const outcome = result as WorldEnd;
 		town = { seed: outcome.seed, startedAt: outcome.startedAt };
 		host.world = outcome.world;
 		host.seed = outcome.seed;
 		pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, outcome.seed));
 		print(
 			`[${GAME_NAME}] the town of seed ${outcome.ended.seed} lasted ${outcome.ended.days} day(s); a new one rises from ` +
-				`seed ${outcome.seed} (map hash ${outcome.mapHash}) on day 1, and ${outcome.lives.size()} survivor(s) start a new life`,
+				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms) on day 1, ` +
+				`and ${outcome.lives.size()} survivor(s) start a new life`,
 		);
 		options.onWorldWiped?.(report, outcome);
 	};

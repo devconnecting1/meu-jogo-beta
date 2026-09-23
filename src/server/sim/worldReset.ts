@@ -15,13 +15,17 @@
  *   3. the NEW TOWN, `generateTown(seed)` — the generator the boot runs — handed to the simulation, which rebuilds
  *      everything that stood on the old one through its own boot path (`ServerSimulation.restartWorld`): horde,
  *      bosses, projectiles, combat, kill credit, the F3 world (items, loot, doors, fires, constructions) and the
- *      clock, back to day 1 at 07:00;
- *   4. the CLIENTS told (`Replicator.restartWorld`): WorldReset to everybody connected, the lobby included, then the
- *      join message again for those in the world. Before any body stands up, so a client reads "new town" first
- *      and "you are alive" second;
- *   5. the LIVES (`LifeKeeper.restartWorld`): every survivor who fell with the old world starts a new life in the
- *      new one — life day 1, the starter kit; level, skills, coins, packs and costumes kept — standing at a safe
- *      point if they are in the world, on their next entry if they are in the lobby.
+ *      clock, back to day 1 at 07:00. Everything that can FAIL is in this step, and it changes nothing until all
+ *      of it has succeeded (review of f851ad2, M2): a throw here leaves the old world exactly as it was, and the
+ *      host lets it go on under the daybreak rule;
+ *   4. the old town's last events go out (`Replicator.closeTown`), so none of them can arrive after the news;
+ *   5. the LIVES (`LifeKeeper.restartWorld`): every survivor who fell with the old world and whose loaded save is
+ *      here starts a new life in the new one — life day 1, the starter kit; level, skills, coins, packs and
+ *      costumes kept — standing at a safe point if they are in the world, on their next entry if they are in the
+ *      lobby; one who is away, or still loading, is owed it until their save is back;
+ *   6. the CLIENTS told (`Replicator.openTown`), in the same heartbeat: WorldReset to everybody connected, the lobby
+ *      included, carrying each new life's runRev as the server wrote it, AHEAD of the stand-ups of step 5; then the
+ *      join message again for those in the world.
  *
  * Pure module: no Instances, no services, no os.clock / os.time (the caller passes the time), so tools/test-reset.mjs
  * runs it under Node through the real host.
@@ -30,6 +34,7 @@ import { rndInt } from "shared/engine/rng";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import { TOWN_SEED_MAX } from "shared/net/mpConfig";
+import { WorldResetLife } from "shared/net/protocol";
 import { mapHashOf, Replicator } from "../net/replication";
 import { LifeKeeper, WipeReport } from "./life";
 import { ServerSimulation } from "./simulation";
@@ -82,6 +87,8 @@ export interface EndWorldOptions {
 	saveOf: (userId: number) => PlayerSaveData | undefined;
 	/** the next town's seed; drawn at random (never the ended one) when omitted */
 	seed?: number;
+	/** seconds, for measuring the generator (os.clock on the server); omitted = not measured */
+	clock?: () => number;
 }
 
 /** what `endWorld` did, for the host (its log line and attributes) and the record keeper */
@@ -94,8 +101,10 @@ export interface WorldEnd {
 	mapHash: number;
 	/** os.time() the new world began */
 	startedAt: number;
-	/** the UserIds that were given a new life in it */
-	lives: Array<number>;
+	/** the survivors given a new life in it, and the runRev each save is on now */
+	lives: Array<WorldResetLife>;
+	/** milliseconds `generateTown` took (0 when not measured): a server hitch the owner can read in Studio */
+	generateMs: number;
 }
 
 function wholeIn(v: unknown, min: number, max: number): v is number {
@@ -137,14 +146,21 @@ export function endWorld(
 	const requested = options.seed;
 	const seed =
 		wholeIn(requested, 1, TOWN_SEED_MAX) && requested !== current.seed ? requested : pickTownSeed(current.seed);
+	const clock = options.clock;
+	const t0 = clock !== undefined ? clock() : 0;
 	const world = generateTown(seed);
+	const generateMs = clock !== undefined ? math.floor((clock() - t0) * 1000 + 0.5) : 0;
 	const mapHash = mapHashOf(world);
-	// asked BEFORE any life changes: the clients hear who starts over before the first body stands up
-	const lives = parts.lives.fallenOf(report.dead);
+	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3)
 	parts.sim.restartWorld(world);
-	parts.replicator?.restartWorld({ seed, mapHash, endedDay: ended.days, lives });
-	parts.lives.restartWorld(lives, options.saveOf);
-	return { ended, world, seed, mapHash, startedAt: options.now, lives };
+	// from here on nothing is built, only handed out
+	parts.replicator?.closeTown();
+	const fallen = parts.lives.fallenOf(report.dead, options.saveOf);
+	parts.lives.restartWorld(fallen, options.saveOf);
+	const lives = new Array<WorldResetLife>();
+	for (const userId of fallen) lives.push({ userId, runRev: options.saveOf(userId)?.runRev ?? 0 });
+	parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, lives });
+	return { ended, world, seed, mapHash, startedAt: options.now, lives, generateMs };
 }
 
 // ---------------------------------------------------------------- the record (server/save/worldLog.ts)

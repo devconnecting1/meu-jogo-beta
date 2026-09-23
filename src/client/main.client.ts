@@ -1,14 +1,5 @@
 import { GAME_NAME } from "shared/module";
-import {
-	equipSlotOf,
-	expMaxInit,
-	ownsEquip,
-	ownsWeapon,
-	pendingPacks,
-	resetRun,
-	SAVE_LIMITS,
-	setEquipped,
-} from "shared/game/save";
+import { equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, pendingPacks, resetRun, setEquipped } from "shared/game/save";
 import { BossState, ZombieState } from "shared/game/entities";
 import { currentWeapon, itemUseEffect, weaponReserve } from "shared/game/player";
 import { ACHIEVEMENTS } from "shared/data/achievements";
@@ -794,15 +785,18 @@ function townFellText(day: number): string {
  */
 function onTown(notice: TownNotice): void {
 	const fellOn = notice.endedDay;
-	if (fellOn !== undefined) {
-		worldResets += 1;
-		// whatever this client was waiting for belonged to the world that ended
+	if (fellOn !== undefined) worldResets += 1;
+	if (fellOn !== undefined && notice.newLife) {
+		// THIS survivor's new life ends whatever it was waiting for; a reset that named somebody else ends nothing of
+		// ours — a new life the server still owes us arrives with our own save (review of f851ad2, L4)
 		newLifeWaiting = false;
 		endedLife = undefined;
-	}
-	if (fellOn !== undefined && notice.newLife) {
 		resetRun(ctx.save);
-		ctx.save.runRev = math.min(ctx.save.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
+		// the runRev the SERVER wrote, never ours + 1: a wallet that already carried it (a report answered in the
+		// same instant) would have made that one too many, and every report after it "outdated" for the rest of
+		// the session (review B2). Monotonic like applyWallet, so a wallet from after the reset is not undone
+		const rev = notice.runRev;
+		if (rev !== undefined) ctx.save.runRev = math.max(ctx.save.runRev, rev);
 		// a "Your run is over" still open in the lobby is about a death that is over
 		for (const child of ctx.uiLayer.GetChildren()) {
 			if (child.Name === "PopupOverlay") child.Destroy();
@@ -914,15 +908,43 @@ function doRebirth(): void {
 		return;
 	}
 	const target = ctx.save;
+	const resets = worldResets;
 	actionBusy = true;
 	const res = invokeRunAction("rebirth");
 	actionBusy = false;
 	if (ctx.save !== target) return; // the save was replaced while waiting
+	// MP-22: a world ended while we asked; its new life (already mirrored by `onTown`) is the answer (review L2)
+	if (worldResets !== resets) return;
 	if (!res.ok) {
-		toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
+		if (!aliveAfterAll(res)) toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
 		return;
 	}
 	revive();
+}
+
+/**
+ * A Rebirth or a New game refused as "invalid": for those two that means the server holds this survivor ALIVE
+ * (server/sim/life.ts `runActionRefusal`) — a daybreak, a new world, or a new life a world owed them got there first.
+ * The client believes it rather than strand the player on a death that is over (review of f851ad2, L1): the run is on
+ * again. Returns true when that is what happened, so the caller has no error to show.
+ */
+function aliveAfterAll(res: ShopActionResult): boolean {
+	if (res.ok || res.reason !== "invalid" || !serverRevives()) return false;
+	ctx.save.runOver = false;
+	newLifeWaiting = false;
+	endedLife = undefined;
+	closeDawnWait();
+	closePause();
+	for (const child of ctx.uiLayer.GetChildren()) {
+		if (child.Name === "PopupOverlay") child.Destroy();
+	}
+	if (heartbeat !== undefined) {
+		loop.getRefs().player.dead = false;
+		deathShown = false;
+		setPhase("playing");
+	}
+	toast(ctx, tr("Back on your feet"), "success");
+	return true;
 }
 
 /**
@@ -948,7 +970,7 @@ function doNewRun(): void {
 		// MP-22: a world ended while we asked, and the new life it gave (already mirrored by `onTown`) replaces this
 		if (worldResets !== resets) return;
 		if (!res.ok) {
-			toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
+			if (!aliveAfterAll(res)) toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
 			return;
 		}
 	}

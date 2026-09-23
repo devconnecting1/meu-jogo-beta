@@ -40,6 +40,20 @@
  *   9. ONCE PER WIPE           a Rebirth closes the window, a new fall opens a new one: one wipe per fall of the last
  *                              survivor, never one per death.
  *
+ * The review of f851ad2 (each of these fails on that commit):
+ *
+ *  10. STILL LOADING (B1)      a reconnect whose save is in flight when the world ends is not counted by rule 6 and
+ *                              gets no free revive from the CLOSED session's table; the new life it is owed is granted
+ *                              when its save loads, before the client sees it, and that is what the DataStore keeps.
+ *  11. LEFT IN THE WINDOW (M1) a dead survivor who leaves during the window comes back to the same new life (day 1,
+ *                              starter kit), standing in the new town — not to the old backpack and life day.
+ *  12. THE NEWS, AT ONCE (B2)  the WorldReset goes out in the reset's own heartbeat, after the old town's last events
+ *                              (L3) and ahead of the stand-ups, naming the runRev the server wrote; an old-life report
+ *                              is refused with a wallet on that same runRev.
+ *  13. ALL OR NOTHING (M2)     a generator or a system that throws half-way changes nothing: no failed tick, the old
+ *                              world whole (clock hook included), a warning in the log; the time to generate is logged.
+ *  14. THE CLIENT TAKES IT     source guards on main.client.ts / netClient.ts for B2, L1, L2, L4 and the snapshot guard.
+ *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
  */
@@ -92,11 +106,19 @@ function runThread(fn, args) {
 let clockNow = 1000;
 const timers = [];
 const tickErrors = [];
+/** every line the server printed, so a test can read the log the owner reads in Studio */
+const printed = [];
 globalThis.print = (...a) => {
+	printed.push(a.join(" "));
+	if (printed.length > 4000) printed.splice(0, 2000);
 	if (VERBOSE) console.log("        [print]", ...a);
 };
+/** every warning, for the same reason */
+const warned = [];
 globalThis.warn = (...a) => {
 	const line = a.join(" ");
+	warned.push(line);
+	if (warned.length > 4000) warned.splice(0, 2000);
 	if (line.includes("tick failed")) tickErrors.push(line);
 	if (VERBOSE) console.log("        [warn]", line);
 };
@@ -160,6 +182,10 @@ class Signal {
 	Fire(...args) {
 		for (const h of [...this.handlers]) if (h.on) runThread(h.fn, args);
 	}
+	/** Roblox guarantees no order between connections: this fires them the other way round */
+	FireReversed(...args) {
+		for (const h of [...this.handlers].reverse()) if (h.on) runThread(h.fn, args);
+	}
 	Wait() {
 		throw new Yield();
 	}
@@ -222,6 +248,9 @@ class Inst {
 }
 globalThis.Instance = Inst;
 
+/** key → what runs while the next UpdateAsync on it is "in flight" (see `holdLoad`) */
+const loadHolds = new Map();
+
 /** Roblox's DataStores outlive a server: one map per store name for the whole run */
 const stores = new Map();
 const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
@@ -232,6 +261,13 @@ function fakeStore(name) {
 	s = {
 		data,
 		UpdateAsync(key, transform) {
+			// a load held open (`holdLoad`): the world goes on — heartbeats and all — while this request is in flight,
+			// the way a real DataStore call yields; it completes, with what the store holds, when `during` returns
+			const hold = loadHolds.get(key);
+			if (hold !== undefined) {
+				loadHolds.delete(key);
+				hold();
+			}
 			const next = transform(clone(data.get(key)));
 			if (next !== undefined) data.set(key, clone(next));
 			return [next];
@@ -338,6 +374,28 @@ function bootServer() {
 			remote("LoadRequest").OnServerEvent.Fire(p);
 			return p;
 		},
+		/**
+		 * A join whose save load stays in flight while `during()` runs — the world ticking on, the way a DataStore
+		 * call yields in Roblox — and completes afterwards with what the store holds. mpHost's PlayerAdded handler
+		 * runs FIRST here (Roblox promises no order), so the host knows the player before their save is here.
+		 */
+		joinLoading(userId, name, during) {
+			loadHolds.set(String(userId), during);
+			const p = makePlayer(userId, name);
+			p._parent = Players;
+			Players.list.push(p);
+			Players.PlayerAdded.FireReversed(p);
+			remote("LoadRequest").OnServerEvent.Fire(p);
+			return p;
+		},
+		/** the World channel as sent so far (raw), for tests that care about WHEN something went out */
+		worldSent() {
+			return remote("World").sent;
+		},
+		snapSent() {
+			return remote("Snap").sent;
+		},
+		printed,
 		quit(p) {
 			Players.list = Players.list.filter(x => x !== p);
 			Players.PlayerRemoving.Fire(p);
@@ -470,9 +528,13 @@ function bootServer() {
 				const prev = lives.onWorldWiped;
 				lives.onWorldWiped = r => {
 					lives.__wipes.push(r);
+					r.sentBefore = remote("World").sent.length;
+					server.beforeReset?.(r);
 					prev?.(r);
-					// the clock the moment the new world began (the harness keeps ticking after it)
+					// the clock the moment the new world began (the harness keeps ticking after it), and what the
+					// World channel had sent by the time the hook returned — in the SAME heartbeat as the reset
 					r.clockAfter = { day: host.simulation.clock.day, dayTime: host.simulation.clock.dayTime };
+					r.sentAfter = remote("World").sent.length;
 				};
 			}
 			return lives.__wipes;
@@ -655,10 +717,16 @@ section("1) everybody dies: after the 30 s window the world ends ONCE and a new 
 		"…naming the new seed and the day the old town fell on",
 		wr !== undefined ? `seed ${wr.seed}, fell on day ${wr.endedDay}` : "",
 	);
+	const livesOf = id => wr?.lives.find(l => l.userId === id);
 	check(
-		wr !== undefined && wr.lives.includes(idA) && wr.lives.includes(idB) && wr.lives.length === 2,
+		wr !== undefined && livesOf(idA) !== undefined && livesOf(idB) !== undefined && wr.lives.length === 2,
 		"…and the survivors whose life starts over",
 		wr !== undefined ? JSON.stringify(wr.lives) : "",
+	);
+	check(
+		livesOf(idA)?.runRev === s.save(a).runRev && livesOf(idB)?.runRev === s.save(b).runRev,
+		"…each with the runRev the server wrote into their save (B2: the client takes it, never its own + 1)",
+		`${JSON.stringify(wr?.lives)} vs ${s.save(a).runRev}/${s.save(b).runRev}`,
 	);
 	const at = x => events.indexOf(x);
 	const ups = events.filter(x => x.e.t === s.P.WorldEv.PlayerLife && x.e.state === s.P.LifeState.Up);
@@ -959,7 +1027,16 @@ section("6) the wire and the record", () => {
 	const { pickTownSeed, appendEnded, readEndedWorld, readEndedList, WORLD_LOG_KEEP } = require(
 		join(SRC, "server/sim/worldReset.ts"),
 	);
-	const reset = { t: P.WorldEv.WorldReset, seed: 2147483646, endedDay: 17, lives: [123456789, -3, 9000000001] };
+	const reset = {
+		t: P.WorldEv.WorldReset,
+		seed: 2147483646,
+		endedDay: 17,
+		lives: [
+			{ userId: 123456789, runRev: 12 },
+			{ userId: -3, runRev: 0 },
+			{ userId: 9000000001, runRev: 10000000 },
+		],
+	};
 	const init = {
 		t: P.WorldEv.InitBegin,
 		mapHash: 4000000000,
@@ -1321,6 +1398,327 @@ section("9) onWorldWiped fires once per wipe, not once per death", () => {
 			ours[1].days === 1,
 		"both ended worlds are on record (appended to what other servers wrote), the second after its single day",
 		JSON.stringify(ours.map(r => ({ seed: r.seed, days: r.days }))),
+	);
+});
+
+// ================================================================ 10–14: the review of f851ad2
+
+const PISTOL = 10;
+/** real seconds until `pred` holds (stepping the server), or -1 */
+function waitFor(s, pred, limit, dt = 0.25) {
+	for (let t = 0; t <= limit; t += dt) {
+		if (pred()) return t;
+		s.run(dt, dt);
+	}
+	return pred() ? limit : -1;
+}
+
+section("10) a reconnect still loading when the world ends gets no free revive (review of f851ad2, B1)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idA = newUser();
+	let a = s.join(idA, "reconnecter");
+	veteran(s.save(a)); // life day 9, a pistol and 40 rounds, no coins
+	s.enter(a);
+	const b = s.join(newUser(), "last");
+	s.enter(b);
+	s.save(b).money = 0;
+	s.sim.clock.setClock(20, 3);
+	s.kill(a);
+	s.quit(a);
+	const stored = s.stored(idA);
+	check(
+		stored?.runOver === true && stored?.day === 9 && stored?.invenWeapon[PISTOL] === 1,
+		"the fallen survivor left the server dead: the DataStore holds runOver, life day 9 and the pistol",
+	);
+	s.kill(b);
+	let endedWhileLoading = false;
+	a = s.joinLoading(idA, "reconnecter", () => {
+		// back on the server, the save still in flight: the last survivor's window runs out meanwhile
+		s.run(WIPE_DECISION_S + 2);
+		endedWhileLoading = wipes.length === 1;
+	});
+	check(endedWhileLoading, "the world ended while that reconnect's save was still loading");
+	check(
+		wipes[0] !== undefined && !wipes[0].dead.includes(idA),
+		"…and rule 6 did not count a survivor whose save was not there (all it had was the CLOSED session's table)",
+		JSON.stringify(wipes[0]?.dead),
+	);
+	const save = s.save(a); // the live session save, as the LoadAck showed it
+	const sp = s.enter(a);
+	const alive = sp !== undefined && !sp.state.dead;
+	check(
+		!alive || (save.day === 1 && save.invenWeapon[PISTOL] === 0 && save.ammoNormal === 0),
+		"entering is never a free, full-health revive that keeps the old backpack and life day",
+		`alive ${alive}, day ${save.day}, pistol ${save.invenWeapon[PISTOL]}, ammo ${save.ammoNormal}`,
+	);
+	check(
+		alive && sp.state.hp === sp.state.hpMax && save.day === 1 && save.runOver === false,
+		"…it is the new life the world owed them, granted the moment their save loaded: alive, life day 1, the " +
+			"starter kit, and the save the client was shown says so",
+	);
+	s.quit(a);
+	const doc = s.stored(idA);
+	check(
+		doc?.day === 1 && doc?.invenWeapon[PISTOL] === 0 && doc?.runOver === false && doc?.level === 14,
+		"…and that is what reaches the DataStore (level kept)",
+		`day ${doc?.day}, pistol ${doc?.invenWeapon[PISTOL]}, runOver ${doc?.runOver}`,
+	);
+});
+
+section("11) leaving the server during the window does not dodge the new life (review of f851ad2, M1)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idA = newUser();
+	let a = s.join(idA, "leaver");
+	veteran(s.save(a));
+	s.enter(a);
+	const b = s.join(newUser(), "stayer");
+	veteran(s.save(b));
+	s.enter(b);
+	s.sim.clock.setClock(20, 3);
+	s.kill(a);
+	s.kill(b);
+	s.run(5);
+	s.quit(a); // gone before the window closes
+	s.run(WIPE_DECISION_S);
+	check(wipes.length === 1, "the one who stayed waited the window out: the world ended");
+	check(
+		s.save(b).day === 1 && s.save(b).invenWeapon[PISTOL] === 0,
+		"who stayed starts over: life day 1, the starter kit",
+	);
+	a = s.join(idA, "leaver"); // back within the 5 min
+	const save = s.save(a);
+	check(
+		save.day === 1 && save.invenWeapon[PISTOL] === 0 && save.ammoNormal === 0 && save.runOver === false,
+		"who left comes back to the SAME new life — not to the old backpack and life day 9 (MP-21: leaving buys " +
+			"nothing a death costs)",
+		`day ${save.day}, pistol ${save.invenWeapon[PISTOL]}, runOver ${save.runOver}`,
+	);
+	const sp = s.enter(a);
+	check(
+		sp !== undefined && !sp.state.dead && sp.state.hp === sp.state.hpMax,
+		"…and walks into the new town standing",
+	);
+});
+
+section("12) the news of a new world goes out at once, first, with the server's runRev (review B2, L3)", () => {
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idA = newUser();
+	const a = s.join(idA, "reporter");
+	s.enter(a);
+	s.save(a).money = 0;
+	s.sim.clock.setClock(20, 3);
+	const slotA = s.body(a).slot;
+	// an event of the old town still queued for one client when the world ends: it must not arrive after the news
+	s.beforeReset = () =>
+		s.host.replicator.queueFor(slotA, { t: s.P.WorldEv.ZombieDied, netId: 777, x: 100, y: 100, cause: 0 });
+	const revBefore = s.save(a).runRev;
+	s.kill(a);
+	s.run(31);
+	s.beforeReset = undefined;
+	const w = wipes[0];
+	check(w !== undefined, "the world ended");
+	const batches = s
+		.worldSent()
+		.slice(w?.sentBefore ?? 0, w?.sentAfter ?? 0)
+		.map(e => s.P.decodeWorld(e.args[0]));
+	const has = (batch, pick) => batch?.events.some(pick) === true;
+	const resetAt = batches.findIndex(bt => has(bt, e => e.t === s.P.WorldEv.WorldReset));
+	check(
+		resetAt >= 0,
+		"the WorldReset went out in the SAME heartbeat as the reset — not at the next tick's flush, where a wallet " +
+			"answered in between could overtake it",
+		`${batches.length} batch(es) sent in that heartbeat`,
+	);
+	const oldAt = batches.findIndex(bt => has(bt, e => e.t === s.P.WorldEv.ZombieDied && e.netId === 777));
+	check(
+		oldAt >= 0 && oldAt < resetAt,
+		"an old-town event still queued went out BEFORE it (L3)",
+		`${oldAt} < ${resetAt}`,
+	);
+	const resetBatch = batches[resetAt];
+	const order = resetBatch?.events.map(e => e.t) ?? [];
+	check(
+		order[0] === s.P.WorldEv.WorldReset && order.includes(s.P.WorldEv.PlayerLife),
+		"…the news first, the stand-ups right behind it in the same batch",
+		JSON.stringify(order),
+	);
+	const life = resetBatch?.events.find(e => e.t === s.P.WorldEv.WorldReset)?.lives.find(l => l.userId === idA);
+	check(
+		life !== undefined && life.runRev === s.save(a).runRev && life.runRev === revBefore + 1,
+		"…naming the runRev the server wrote into the new life's save",
+		`${life?.runRev} vs save ${s.save(a).runRev}`,
+	);
+	// a report the client captured in the old life, answered right after: the wallet carries the same number
+	s.run(2);
+	const ack = s.report(a, { runRev: revBefore });
+	check(
+		ack?.ok === false && ack?.reason === "outdated" && ack?.wallet?.runRev === life?.runRev,
+		"a report of the old life is refused, and its wallet names that same runRev",
+	);
+	// whichever of the two reaches the client first, taking the server's number (never adding one) lands on it
+	const serverRev = s.save(a).runRev;
+	for (const first of ["wallet", "reset"]) {
+		let rev = revBefore;
+		for (const step of first === "wallet" ? ["wallet", "reset"] : ["reset", "wallet"]) {
+			rev = Math.max(rev, step === "wallet" ? ack.wallet.runRev : life.runRev);
+		}
+		check(rev === serverRev, `wallet and reset applied ${first} first: the client is on the server's runRev`);
+	}
+	check(
+		revBefore + 1 + 1 !== serverRev,
+		"(the old rule, the wallet then +1, would sit one ahead and have every report refused as outdated)",
+	);
+});
+
+section("13) a failure while making the new world changes nothing, and the old one goes on (review M2)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	// (a) the generator itself fails
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "unlucky");
+		s.enter(a);
+		s.save(a).money = 0;
+		s.sim.clock.setClock(22, 2);
+		const before = { world: s.sim.world, horde: s.sim.horde, seed: s.host.seed };
+		const recorded = (s.endedWorlds() ?? []).length;
+		const world = W();
+		const real = world.generateTown;
+		world.generateTown = () => {
+			throw new Error("generator failed (test)");
+		};
+		s.kill(a);
+		let threw;
+		try {
+			s.run(WIPE_DECISION_S + 1);
+		} catch (e) {
+			threw = e;
+		}
+		world.generateTown = real;
+		check(
+			threw === undefined,
+			"a failing generator does not escape the heartbeat as a failed tick",
+			threw?.message,
+		);
+		check(
+			wipes.length === 1 &&
+				s.sim.world === before.world &&
+				s.sim.horde === before.horde &&
+				s.host.seed === before.seed &&
+				s.sim.clock.day === 2,
+			"the world ended on paper only: same town, same horde, same seed, same day",
+		);
+		check((s.endedWorlds() ?? []).length === recorded, "…and nothing is recorded as ended");
+		check(
+			warned.some(l => /the new town could not be made/.test(l) && /generator failed/.test(l)),
+			"…and the log says why",
+		);
+		const up = waitFor(s, () => s.body(a)?.state.dead === false, 400);
+		check(up >= 0, "the daybreak rule stands the survivor up in the old world", `after ${up} s`);
+	}
+	// (b) half-way: the horde is built and the combat is not
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "halfway");
+		s.enter(a);
+		s.save(a).money = 0;
+		s.sim.clock.setClock(22, 2);
+		const sim = s.sim;
+		const before = {
+			world: sim.world,
+			horde: sim.horde,
+			combat: sim.combat,
+			progress: sim.progress,
+			fill: sim.clock.onWaveFill,
+			seed: s.host.seed,
+		};
+		const C = require(join(SRC, "server/sim/combat.ts"));
+		const RealCombat = C.ServerCombat;
+		C.ServerCombat = class {
+			constructor() {
+				throw new Error("combat refused (test)");
+			}
+		};
+		s.kill(a);
+		let threw;
+		try {
+			s.run(WIPE_DECISION_S + 1);
+		} catch (e) {
+			threw = e;
+		}
+		C.ServerCombat = RealCombat;
+		check(threw === undefined && wipes.length === 1, "a failure half-way through building fails no tick");
+		check(
+			sim.world === before.world &&
+				sim.horde === before.horde &&
+				sim.combat === before.combat &&
+				sim.progress === before.progress &&
+				s.host.seed === before.seed &&
+				sim.clock.day === 2,
+			"the old world is whole: its town, horde, combat and kill credit, its day",
+		);
+		check(
+			sim.clock.onWaveFill === before.fill,
+			"…even the clock's wave subscription, which the half-built new horde had taken, is the old horde's again",
+		);
+		const up = waitFor(s, () => s.body(a)?.state.dead === false, 400);
+		check(up >= 0, "daybreak stands the survivor up", `after ${up} s`);
+		s.kill(a);
+		s.run(WIPE_DECISION_S + 1);
+		check(
+			wipes.length === 2 && s.host.seed !== before.seed && s.body(a)?.state.dead === false,
+			"the next fall tries again, and with the builder mended the new world comes",
+		);
+		check(
+			s.printed.some(l => /generated in \d+ ms/.test(l)),
+			"the server log says how long the generator took (the owner reads it in Studio)",
+			s.printed.find(l => /generated in/.test(l)),
+		);
+	}
+});
+
+section("14) the client takes the server's word (source guards: review B2, L1, L2, L4)", () => {
+	const main = parse("client/main.client.ts");
+	const onTown = bodyOf(main, "onTown")
+		.map(st => main.text(st))
+		.join("\n");
+	check(
+		/notice\.runRev/.test(onTown) && !/runRev \+ 1/.test(onTown),
+		"B2: onTown takes the runRev the WorldReset carries, and never adds one to its own",
+	);
+	const waitingCleared = bodyOf(main, "onTown").filter(st => /newLifeWaiting = false/.test(main.text(st)));
+	check(
+		waitingCleared.length > 0 &&
+			waitingCleared.every(st => ts.isIfStatement(st) && /notice\.newLife/.test(main.text(st.expression))),
+		"L4: only a WorldReset naming THIS client ends the wait for a new life it is owed",
+	);
+	const rebirth = bodyOf(main, "doRebirth");
+	const guardAt = rebirth.findIndex(
+		st => ts.isIfStatement(st) && /worldResets !== resets/.test(main.text(st.expression)),
+	);
+	const failAt = rebirth.findIndex(st => ts.isIfStatement(st) && main.text(st.expression) === "!res.ok");
+	check(guardAt >= 0 && guardAt < failAt, "L2: a Rebirth that raced the end of the world shows no error");
+	const alive = bodyOf(main, "aliveAfterAll")
+		.map(st => main.text(st))
+		.join("\n");
+	check(
+		/"invalid"/.test(alive) && /runOver = false/.test(alive) && /closeDawnWait\(\)/.test(alive),
+		"L1: an 'invalid' (alive) answer to a run action clears the death and leaves the wait",
+	);
+	const users = ["doRebirth", "doNewRun"].filter(n =>
+		bodyOf(main, n).some(st => /aliveAfterAll\(res\)/.test(main.text(st))),
+	);
+	check(users.length === 2, "…for Rebirth and New game both", users.join(", "));
+	const net = readFileSync(join(SRC, "client/net/netClient.ts"), "utf8");
+	check(
+		/tick <= townGuard/.test(net),
+		"the snapshot guard drops the reset's own tick too: its snapshots, sent before the reset, were the old town's",
 	);
 });
 
