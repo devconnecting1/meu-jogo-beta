@@ -1102,6 +1102,8 @@ const PROPER = new Set([
 const KEYS = new Set(SCHEMES.flatMap(s => s.rows.map(r => r[0])));
 /** units that read the same in every language the platform offers: "0.3 s", "280 XP", "1120 x 630" */
 const UNITS = /\b(?:\d+(?:\.\d+)?\s*(?:s|XP|HP)|\d+\s*x\s*\d+|×\s*\d+)\b/g;
+/** the game's version as About shows it: "0.1.0", and in a CI build "0.1.0 (0b1edad)" -- the stamped commit is a number */
+const VERSION = /\b\d+\.\d+\.\d+(?:\s*\([0-9a-f]{7}\))?/g;
 const LETTERS = /[A-Za-z]/;
 /** the entries, and each line of a multi-line entry ("#" is a new line on screen: widgets.nl) */
 const LINES = new Set([...LANG].flatMap(e => [e, ...e.split("#")]));
@@ -1126,7 +1128,7 @@ const PIECES = [
 function lineKind(line) {
 	const t = line.replace(/<[^>]+>/g, "").trim();
 	if (!LETTERS.test(t) || LINES.has(t) || PROPER.has(t) || KEYS.has(t) || /^[A-Z]$/.test(t)) return "ok";
-	let rest = t.replace(UNITS, " ");
+	let rest = t.replace(VERSION, " ").replace(UNITS, " ");
 	let upper = false;
 	for (const p of PIECES) {
 		if (!rest.includes(p.e)) continue;
