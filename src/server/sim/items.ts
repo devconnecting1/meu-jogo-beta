@@ -27,10 +27,10 @@
  *
  * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original.
  */
-import { BUILDING_SPAWNS } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
-import { chance, choose, rndInt, rndRange } from "shared/engine/rng";
+import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
+import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
 import { edgeDist, isMapItem } from "shared/sim/interactQuery";
 import { ITEM_INTEREST } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
@@ -55,8 +55,6 @@ export const LOOT_ROLL_RANGE = 320;
 export const LOOT_SWEEP_S = 0.5;
 /** a map item (tree, car, bin) cannot be harvested again for this long — PER SOLID, for everybody (§8.1) */
 export const MAP_ITEM_COOLDOWN = DESIGN.MAP_ITEM_HIT_TIME;
-/** ETC index of wood, the only thing a chopping tool gets out of a tree */
-const WOOD_INDEX = 23;
 /** how often each survivor's item interest is swept for items that came within ITEM_INTEREST (§4.5) */
 export const ITEM_SWEEP_S = 0.5;
 /** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
@@ -73,44 +71,6 @@ export interface SearchResult {
 /** why a pickup did not happen; `ok` carries what went into the backpack */
 export type PickupResult =
 	{ ok: true; kind: number; itemId: number; count: number } | { ok: false; why: "none" | "range" | "taken" };
-
-/** one line of the original's loot tables, by solid kind */
-interface LootEntry {
-	kind: number;
-	index: number;
-	/** < 1: the probability of getting exactly one. Otherwise the quantity. */
-	amount: number;
-}
-
-/*
- * The tables the game has always rolled (client/systems/interaction.ts, the single-player and MP_PHASE ≤ 2 path),
- * line for line. Until F3 the server kept a different set that nothing ran — trees giving blueprints instead of
- * fruit, cars giving gold, oil and the Steel that shared/data/crafts.ts says never drops (QA L1). The moment the
- * server owns the world these ARE what a tree, a car and a bin give, so they must be the ones players know.
- */
-const TREE_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 23, amount: 2 },
-	{ kind: 3, index: 17, amount: 0.1 },
-	{ kind: 3, index: 18, amount: 0.1 },
-];
-const CAR_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 25, amount: 1 },
-	{ kind: 4, index: 30, amount: 0.1 },
-	{ kind: 4, index: 36, amount: 0.05 },
-];
-const TRASH_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 23, amount: 1 },
-	{ kind: 4, index: 24, amount: 1 },
-	{ kind: 4, index: 25, amount: 0.1 },
-	{ kind: 4, index: 29, amount: 0.1 },
-	{ kind: 4, index: 30, amount: 0.1 },
-];
-
-function lootTableFor(s: Solid): Array<LootEntry> {
-	if (s.kind === "tree") return TREE_LOOT;
-	if (s.tags === "car") return CAR_LOOT;
-	return TRASH_LOOT;
-}
 
 export interface ServerItemsOptions {
 	world: WorldData;
@@ -284,6 +244,13 @@ export class ServerItems {
 			addItem(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
+		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
+		// building's own loot, the shared part, is exactly what anyone else would have found
+		const extra = thiefFind(save, b.buildingType ?? 0);
+		if (extra !== undefined) {
+			addItem(save, extra.kind, extra.id, extra.count);
+			taken.push(extra);
+		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is
 		// told the building is empty, which by then it is (§8.1 "o primeiro pedido processado leva tudo")
 		b.lootItems = [];
@@ -331,26 +298,11 @@ export class ServerItems {
 	 * THE single place a container's contents are decided (the original's roll, moved from
 	 * client/systems/interaction.ts and put on the shared rng so a test can replay it).
 	 *
-	 * One function on purpose: a per-stage content lock ("this item is not in the game yet") is one filter
-	 * on `rows` here, and it then holds for every building in town, because there is no second place that
-	 * chooses what a container holds.
+	 * One function on purpose, and the roll itself is the SHARED one (shared/sim/loot.ts), the very roll the
+	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds.
 	 */
 	rollLoot(s: Solid): void {
-		const bt = s.buildingType ?? 0;
-		const rows = bt < BUILDING_SPAWNS.size() ? BUILDING_SPAWNS[bt] : BUILDING_SPAWNS[0];
-		const slots = s.lootSlots ?? 2;
-		const loot = new Array<{ kind: number; id: number; count: number }>();
-		for (let i = 0; i < slots; i++) {
-			const e = choose(rows);
-			let count = 1;
-			if (e.max < 1) {
-				if (!chance(e.max * 100)) continue;
-			} else {
-				count = rndInt(e.min, e.max);
-			}
-			loot.push({ kind: e.kind, id: e.index, count });
-		}
-		s.lootItems = loot;
+		s.lootItems = rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 	}
 
 	// ---------------------------------------------------------------- map items (§8.1)
@@ -365,26 +317,18 @@ export class ServerItems {
 	 * The cooldown is on the SOLID, so one survivor harvesting a tree puts it on cooldown for the group —
 	 * exactly like the door: there is one tree.
 	 *
-	 * THE single place a map item's drop is decided, the counterpart of `rollLoot` for the things you hit
-	 * rather than search: one content filter on `lootTableFor`'s result covers every tree, car and bin.
+	 * THE single place a map item's drop is decided on the server, the counterpart of `rollLoot` for the things you
+	 * hit rather than search; the table and the roll are the shared ones (shared/sim/loot.ts, QA L1), so the client's
+	 * MP_PHASE 2 path and this one give the same things.
 	 */
 	hitMapItem(s: Solid, choppingTool: boolean, fromX: number, fromY: number): boolean {
 		if (!isMapItem(s) || s.removed === true) return false;
 		if (this.cooldownOf(s) > 0) return false;
 		this.cooldowns.set(s, MAP_ITEM_COOLDOWN);
 		s.hitShake = 0.25;
-		if (choppingTool && s.kind === "tree") {
-			this.spill(s, fromX, fromY, 4, WOOD_INDEX, 2 + (chance(50) ? 1 : 0));
-			return true;
-		}
-		if (!chance(DESIGN.MAP_ITEM_PERCENT)) return false;
-		const e = choose(lootTableFor(s));
-		if (e.amount < 1) {
-			if (!chance(e.amount * 100)) return false;
-			this.spill(s, fromX, fromY, e.kind, e.index, 1);
-			return true;
-		}
-		this.spill(s, fromX, fromY, e.kind, e.index, math.floor(e.amount));
+		const drop = rollMapItemDrop(s, choppingTool);
+		if (drop === undefined) return false;
+		this.spill(s, fromX, fromY, drop.kind, drop.index, drop.count);
 		return true;
 	}
 
