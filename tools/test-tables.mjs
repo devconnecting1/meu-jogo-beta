@@ -29,9 +29,9 @@
  *                      replicated values (roster + PlayerTally) are what it shows, sorted by life day, re-sorted by
  *                      the sort bar and the headers; opening, closing and 600 live frames create no Instance;
  *                      nothing in it is selectable (the pad stays the survivor's, UI-09).
- *  6. LAYOUT           at 1120 x 630, 1360 x 435 and a 844 x 390 phone under a 36 px bar: header cells over their
- *                      columns, no text below 9 px or cut, the panels on screen and clear of the survivor, the day
- *                      plate and the thumbs, and every touch target at least 44 px.
+ *  6. LAYOUT           at 1120 x 630, 1360 x 435, the owner's 1365 x 567 (58 px bar) and a 844 x 390 phone under a
+ *                      36 px bar: header cells over their columns, no text below 9 px or cut, the panels on screen
+ *                      and clear of the survivor, the day plate and the thumbs, and every touch target at least 44 px.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -1219,11 +1219,13 @@ function textProblems(root) {
 const SCREENS = [
 	[1120, 630, 0, "1120x630"],
 	[1360, 435, 0, "1360x435"],
+	// the owner's Studio playtest window (test:screens): a 58 px bar, the Roblox buttons over its left 160 px
+	[1365, 567, 58, "1365x567 (barra 58 px)", 160],
 	[844, 390, 36, "844x390 (celular, barra 36 px)"],
 ];
 const gui = boot.getCtx().root.Parent;
-for (const [w, h, bar, label] of SCREENS) {
-	setViewport(w, h, bar);
+for (const [w, h, bar, label, buttons] of SCREENS) {
+	setViewport(w, h, bar, buttons);
 	for (const touch of [false, true]) {
 		if (touch && w === 1120) continue;
 		hud.unmount();
@@ -1318,9 +1320,15 @@ for (const [w, h, bar, label] of SCREENS) {
 	layout(ui, gui, { w, h });
 	const recWin = rectOf(deep(recRoot, "Window"));
 	void recW;
+	// a UI-07 window is centred on the FULL screen and only keeps clear of the Roblox BUTTONS (UI-02), not the bar
+	const robloxButtons = { x: 0, y: 0, w: buttons ?? w, h: bar };
 	check(
-		`${label}: Records na tela`,
-		recWin.x >= 0 && recWin.y >= bar - 0.5 && recWin.x + recWin.w <= w + 0.5 && recWin.y + recWin.h <= h + 0.5,
+		`${label}: Records na tela, fora dos botoes do Roblox`,
+		recWin.x >= 0 &&
+			recWin.y >= 0 &&
+			recWin.x + recWin.w <= w + 0.5 &&
+			recWin.y + recWin.h <= h + 0.5 &&
+			(bar === 0 || !overlapR(recWin, robloxButtons)),
 		fmtR(recWin),
 	);
 	const recProblems = textProblems(recRoot);
@@ -1387,8 +1395,9 @@ hud.unmount();
 		["Camera", c => WORLD.buildCamera(P2, c)],
 		["Debug", c => WORLD.buildDebug(P2, c)],
 	];
-	for (const [w, h, bar, label] of SCREENS.slice(0, 2)) {
-		setViewport(w, h, bar);
+	// the admin's desktop screens (F2 is a keyboard tool): not the phone
+	for (const [w, h, bar, label, buttons] of SCREENS.slice(0, 3)) {
+		setViewport(w, h, bar, buttons);
 		const k = W.uiScale();
 		for (const [name, build] of SECTIONS) {
 			const holder = stage(`AdminAt${w}`);
