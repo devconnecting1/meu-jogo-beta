@@ -449,6 +449,10 @@ function readLegacy(key: string): LoadOutcome {
 function loadSession(s: Session): void {
 	if (s.loading) return;
 	s.loading = true;
+	// a second load in one session is always the retry of a failed one: until now the player had the blank,
+	// read-only table below, and "Play without saving" may have played a life on it
+	const retried = s.lastLoadAttempt !== -math.huge;
+	const blank = s.save;
 	waitUntil(() => !releasing.has(s.player.UserId), 20);
 	let status: LoadStatus;
 	let save: PlayerSaveData;
@@ -502,6 +506,10 @@ function loadSession(s: Session): void {
 	s.lastWrite = os.clock();
 	resetCredits(s);
 	s.lastLoadAttempt = os.clock();
+	// a real save replaced the blank one: whatever the body lived through on the blank table (a death, a kept
+	// body) happened to nobody's save, and must not carry into this one (server/sim/life.ts `forgetUnsaved`;
+	// review of de4ba1e, R3b). A retry that failed again keeps playing, unsaved, on the next blank table
+	if (retried && status !== "error") mpHost?.forgetUnsaved(s.player, blank);
 	// a stored save meets the body this server kept, BEFORE the LoadAck shows it to the client: a reconnect is
 	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
 	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
@@ -569,11 +577,17 @@ remotes.loadRequest.OnServerEvent.Connect(player => {
 	if (s.status === "error") {
 		// the player asked to retry a failed load: run it once the cooldown has passed
 		if (s.loading || s.retryQueued) return;
+		// never under a body in the world (review of de4ba1e, R3b/N4): it was built on the blank table, and the real
+		// save must not be swapped in beneath it — its death, or its being alive, would become the real save's. The
+		// client offers Retry only from the lobby; from the street the request is dropped, and can be sent again there
+		if (mpHost?.playerOf(s.player) !== undefined) return;
 		s.retryQueued = true;
 		const wait = math.max(0, LOAD_RETRY_COOLDOWN - (os.clock() - s.lastLoadAttempt));
 		task.delay(wait, () => {
 			s.retryQueued = false;
 			if (s.closed || s.status !== "error") return;
+			// (the queued retry holds admission, see `saveOf` below, so nobody walked in meanwhile)
+			if (mpHost?.playerOf(s.player) !== undefined) return;
 			s.loaded = false;
 			loadSession(s);
 		});
@@ -1119,8 +1133,9 @@ if (MP_PHASE >= 1) {
 		saveOf: player => {
 			const s = sessions.get(player);
 			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
-			// in single player. A session that is still loading, or already closing, is not admitted yet.
-			if (s === undefined || s.closed || !s.loaded) return undefined;
+			// in single player. A session that is still loading, or already closing, is not admitted yet — nor one
+			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b)
+			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
 			return s.save;
 		},
 		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a

@@ -145,6 +145,12 @@ export interface MpHost {
 	 * were away owed them (MP-22) — so the client's first look at its save is the truth. True when it changed.
 	 */
 	adopt(player: Player, save: PlayerSaveData): boolean;
+	/**
+	 * A retry just loaded the real save of a session that had been playing on the blank, read-only one (status
+	 * "error"): what the body lived through on that blank table is nobody's, and is forgotten (server/sim/life.ts
+	 * `forgetUnsaved`; review of de4ba1e, R3b). Call it BEFORE `adopt`. True when something was dropped.
+	 */
+	forgetUnsaved(player: Player, blank: PlayerSaveData): boolean;
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
@@ -587,6 +593,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		adopt(player, save) {
 			return lives.adopt(player.UserId, save);
 		},
+		forgetUnsaved(player, blank) {
+			return lives.forgetUnsaved(player.UserId, blank);
+		},
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
 			for (const sp of sim.players()) {
@@ -644,28 +653,46 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
 				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
 		);
-		const [ended, result] = pcall(() =>
+		const previous = sim.world;
+		const now = os.time();
+		const [returned, result] = pcall(() =>
 			endWorld({ sim, lives, replicator }, report, town, {
-				now: os.time(),
+				now,
 				job: game.JobId,
 				saveOf: saveOfUser,
 				clock: () => os.clock(),
+				// the reset is committed the moment the simulation stands in the new town (review of de4ba1e, N2): the
+				// host names THAT town at once — seed, map, the attribute a joining client builds from — whatever fails
+				// after it
+				onSwitched: newTown => {
+					town = { seed: newTown.seed, startedAt: now };
+					host.world = newTown.world;
+					host.seed = newTown.seed;
+					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));
+				},
 			}),
 		);
-		if (!ended) {
+		// what decides is the town the simulation runs, not whether endWorld returned (N2)
+		if (sim.world === previous) {
 			// endWorld builds everything before it changes anything (review of f851ad2, M2): the old world is intact,
 			// and it goes on under the rule that held before MP-22 — the dead stand up at daybreak, a Rebirth still
 			// works, and the next fall of the last survivor tries again
 			warn(
-				`[${GAME_NAME}] the new town could not be made (${tostring(result)}): this world goes on until daybreak`,
+				`[${GAME_NAME}] the new town could not be made (${returned ? "no new town" : tostring(result)}): ` +
+					`this world goes on until daybreak`,
 			);
 			return;
 		}
+		if (!returned) {
+			// every step after the switch is contained inside endWorld, so this is a bug there: the new town stands
+			// (and `onSwitched` named it), but nothing else about this reset can be vouched for
+			warn(`[${GAME_NAME}] the new town stands, but the end of the old one failed after it: ${tostring(result)}`);
+			return;
+		}
 		const outcome = result as WorldEnd;
-		town = { seed: outcome.seed, startedAt: outcome.startedAt };
-		host.world = outcome.world;
-		host.seed = outcome.seed;
-		pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, outcome.seed));
+		for (const failure of outcome.failures) {
+			warn(`[${GAME_NAME}] the new world went on past a failure (${failure})`);
+		}
 		print(
 			`[${GAME_NAME}] the town of seed ${outcome.ended.seed} lasted ${outcome.ended.days} day(s); a new one rises from ` +
 				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms) on day 1, ` +

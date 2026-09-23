@@ -17,7 +17,10 @@
  *      bosses, projectiles, combat, kill credit, the F3 world (items, loot, doors, fires, constructions) and the
  *      clock, back to day 1 at 07:00. Everything that can FAIL is in this step, and it changes nothing until all
  *      of it has succeeded (review of f851ad2, M2): a throw here leaves the old world exactly as it was, and the
- *      host lets it go on under the daybreak rule;
+ *      host lets it go on under the daybreak rule. Once it has succeeded the reset is COMMITTED (review of
+ *      de4ba1e, N2): the host names the new town at once (`onSwitched`), and each step below is contained on its
+ *      own — one that throws is logged and skipped, the others still run, the clients are always told, and if
+ *      the lives fail the fallen still get theirs (`LifeKeeper.settleFallen`);
  *   4. the old town's last events go out (`Replicator.closeTown`), so none of them can arrive after the news;
  *   5. the LIVES (`LifeKeeper.restartWorld`): every survivor who fell with the old world and whose loaded save is
  *      here starts a new life in the new one — life day 1, the starter kit; level, skills, coins, packs and
@@ -89,6 +92,12 @@ export interface EndWorldOptions {
 	seed?: number;
 	/** seconds, for measuring the generator (os.clock on the server); omitted = not measured */
 	clock?: () => number;
+	/**
+	 * Called the moment the simulation stands in the new town, BEFORE anything else happens: from then on the reset
+	 * is committed whatever fails after it, so the host names the town the simulation runs (its seed, the Workspace
+	 * attribute) there and then (review of de4ba1e, N2).
+	 */
+	onSwitched?: (town: { seed: number; mapHash: number; world: WorldData }) => void;
 }
 
 /** what `endWorld` did, for the host (its log line and attributes) and the record keeper */
@@ -105,6 +114,8 @@ export interface WorldEnd {
 	lives: Array<WorldResetLife>;
 	/** milliseconds `generateTown` took (0 when not measured): a server hitch the owner can read in Studio */
 	generateMs: number;
+	/** the steps after the switch that threw — each one contained, the others still ran (N2); empty when all went well */
+	failures: Array<string>;
 }
 
 function wholeIn(v: unknown, min: number, max: number): v is number {
@@ -151,16 +162,35 @@ export function endWorld(
 	const world = generateTown(seed);
 	const generateMs = clock !== undefined ? math.floor((clock() - t0) * 1000 + 0.5) : 0;
 	const mapHash = mapHashOf(world);
-	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3)
+	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
+	// here out leaves the old world exactly as it was
 	parts.sim.restartWorld(world);
-	// from here on nothing is built, only handed out
-	parts.replicator?.closeTown();
-	const fallen = parts.lives.fallenOf(report.dead, options.saveOf);
-	parts.lives.restartWorld(fallen, options.saveOf);
+	// COMMITTED: the simulation runs the new town. From here on nothing is built, only handed out, and no step may
+	// abandon the rest (review of de4ba1e, N2) — a reset stopped half-way left the host naming the old town, the
+	// clients never told, the fallen down and rule 6 disarmed. Each step is contained on its own; the host is told
+	// first, and the clients always
+	const failures = new Array<string>();
+	const contain = (step: string, fn: () => void): boolean => {
+		const [ok, err] = pcall(fn);
+		if (!ok) failures.push(`${step}: ${tostring(err)}`);
+		return ok;
+	};
+	contain("host", () => options.onSwitched?.({ seed, mapHash, world }));
+	contain("closeTown", () => parts.replicator?.closeTown());
+	let fallen = new Array<number>();
+	contain("fallenOf", () => {
+		fallen = parts.lives.fallenOf(report.dead, options.saveOf);
+	});
+	if (!contain("lives", () => parts.lives.restartWorld(fallen, options.saveOf))) {
+		// whatever it got done, nobody who fell stays down in a town nobody else can end the window of
+		contain("lives (fallback)", () => parts.lives.settleFallen(fallen, options.saveOf));
+	}
 	const lives = new Array<WorldResetLife>();
-	for (const userId of fallen) lives.push({ userId, runRev: options.saveOf(userId)?.runRev ?? 0 });
-	parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, lives });
-	return { ended, world, seed, mapHash, startedAt: options.now, lives, generateMs };
+	contain("lives list", () => {
+		for (const userId of fallen) lives.push({ userId, runRev: options.saveOf(userId)?.runRev ?? 0 });
+	});
+	contain("openTown", () => parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, lives }));
+	return { ended, world, seed, mapHash, startedAt: options.now, lives, generateMs, failures };
 }
 
 // ---------------------------------------------------------------- the record (server/save/worldLog.ts)

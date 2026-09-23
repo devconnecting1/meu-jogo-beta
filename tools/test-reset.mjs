@@ -54,6 +54,17 @@
  *                              world whole (clock hook included), a warning in the log; the time to generate is logged.
  *  14. THE CLIENT TAKES IT     source guards on main.client.ts / netClient.ts for B2, L1, L2, L4 and the snapshot guard.
  *
+ * The review of de4ba1e (each of these fails on it):
+ *
+ *  15. PLAYED WITHOUT SAVING   the save cannot be read at join, the survivor plays on the blank read-only one, and a
+ *      (N1, R3b, N4)           Retry loads the real save: a world that ended meanwhile owes that real save nothing
+ *                              (N1, also with R3b's fix switched off), nothing the blank body lived through — its
+ *                              death, or its being alive — carries into the real save (R3b), a pending retry holds
+ *                              the entry, and a Retry from inside the world is not run under the body (N4).
+ *  16. COMMITTED (N2)          closeTown or lives.restartWorld throwing after the switch: the clients still get the
+ *                              WorldReset, the host's seed and attribute are the simulation's town, nobody is left
+ *                              dead, the failure is logged, and rule 6 is armed again.
+ *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
  */
@@ -388,6 +399,36 @@ function bootServer() {
 			remote("LoadRequest").OnServerEvent.Fire(p);
 			return p;
 		},
+		/**
+		 * A join whose stored save cannot be read (not valid JSON): main.server.ts opens a READ-ONLY session on a
+		 * blank save, status "error" — the "Progress not loaded" popup, with "Play without saving" and "Retry". The
+		 * client's LoadRequest lands while the load is in flight, as it does in Roblox, so the LoadAck goes out.
+		 */
+		joinUnreadable(userId, name) {
+			const store = fakeStore(SAVE_STORE).data;
+			store.set(String(userId), { ...(store.get(String(userId)) ?? {}), data: "{not json" });
+			const p = makePlayer(userId, name);
+			loadHolds.set(String(userId), () => remote("LoadRequest").OnServerEvent.Fire(p));
+			p._parent = Players;
+			Players.list.push(p);
+			Players.PlayerAdded.Fire(p);
+			return p;
+		},
+		/** the DataStore holds `save` for this user from now on (the lock the session took is kept) */
+		putStored(userId, save) {
+			const store = fakeStore(SAVE_STORE).data;
+			store.set(String(userId), { ...(store.get(String(userId)) ?? {}), data: JSON.stringify(save) });
+		},
+		/** "Retry" on the "Progress not loaded" popup: a LoadRequest; `during` runs while that load is in flight */
+		retry(p, during) {
+			if (during !== undefined) loadHolds.set(String(p.UserId), during);
+			remote("LoadRequest").OnServerEvent.Fire(p);
+		},
+		/** the status of the last LoadAck `p` was sent ("ok", "new", "error", …) */
+		loadStatus(p) {
+			const acks = remote("LoadAck").sent.filter(e => e.to === p);
+			return acks[acks.length - 1]?.args[0]?.status;
+		},
 		/** the World channel as sent so far (raw), for tests that care about WHEN something went out */
 		worldSent() {
 			return remote("World").sent;
@@ -497,8 +538,10 @@ function bootServer() {
 		beat(dt = 1 / 60) {
 			clockNow += dt;
 			for (let i = timers.length - 1; i >= 0; i--) {
-				if (timers[i].at <= clockNow) {
-					const t = timers.splice(i, 1)[0];
+				// a timer may run the world on inside it (a load held open by `retry`), firing other timers meanwhile
+				const t = timers[i];
+				if (t !== undefined && t.at <= clockNow) {
+					timers.splice(timers.indexOf(t), 1);
 					t.fn();
 				}
 			}
@@ -1720,6 +1763,221 @@ section("14) the client takes the server's word (source guards: review B2, L1, L
 		/tick <= townGuard/.test(net),
 		"the snapshot guard drops the reset's own tick too: its snapshots, sent before the reset, were the old town's",
 	);
+});
+
+// ================================================================ 15–16: the review of de4ba1e
+
+const raise = message => {
+	throw new Error(message);
+};
+
+/** a real save as the DataStore holds it: the veteran of `veteran` (life day 9, a pistol, 40 rounds), alive */
+function realSave(fields = {}) {
+	const save = SAVE().defaultSave();
+	veteran(save);
+	save.runRev = 5;
+	save.runOver = false;
+	return Object.assign(save, fields);
+}
+
+section("15) a life played without saving never becomes the real save's (review of de4ba1e, N1, R3b, N4)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	// N1, the reviewer's scenario: the save cannot be read at join; "Play without saving", a death, the lobby; Retry,
+	// and while the real save loads everybody else dies and the world ends
+	for (const alone of [false, true]) {
+		const s = bootServer();
+		// `alone`: with the blank record NOT forgotten (R3b's fix switched off), the owed life's own guard must hold
+		// the line by itself — no departure banked, no new life (the reviewer's fix for N1)
+		if (alone) s.host.lives.forgetUnsaved = () => false;
+		const tag = alone ? " [the owed life's own guard alone]" : "";
+		const wipes = s.wipes();
+		const b = s.join(newUser(), "last");
+		s.enter(b);
+		s.save(b).money = 0;
+		s.sim.clock.setClock(20, 3);
+		const idA = newUser();
+		const a = s.joinUnreadable(idA, "unsaved");
+		check(
+			s.loadStatus(a) === "error",
+			`the save could not be read at join: a read-only session on a blank save${tag}`,
+		);
+		s.enter(a);
+		s.kill(a);
+		s.exit(a);
+		check(s.host.lives.keptBody(idA)?.dead === true, `…played without saving, died on it, went to the lobby${tag}`);
+		s.putStored(idA, realSave()); // the DataStore answers again
+		let endedWhileLoading = false;
+		s.retry(a, () => {
+			s.kill(b);
+			s.run(WIPE_DECISION_S + 2);
+			endedWhileLoading = wipes.length === 1;
+		});
+		s.run(12); // the retry's cooldown, then the load
+		check(endedWhileLoading, `the world ended while the retry was loading the real save${tag}`);
+		const save = s.save(a);
+		check(
+			s.loadStatus(a) === "ok" &&
+				save.day === 9 &&
+				save.invenWeapon[PISTOL] === 1 &&
+				save.ammoNormal === 40 &&
+				save.runRev === 5 &&
+				save.runOver === false,
+			"N1: the real save comes back exactly as stored (alive, life day 9, the pistol, 40 rounds, runRev 5) — " +
+				`not reset to a new life for a death that happened to the blank one${tag}`,
+			`status ${s.loadStatus(a)}, day ${save.day}, pistol ${save.invenWeapon[PISTOL]}, ammo ${save.ammoNormal}, ` +
+				`runRev ${save.runRev}, runOver ${save.runOver}`,
+		);
+		if (alone) continue; // (what the body is then is R3b's, below)
+		const sp = s.enter(a);
+		check(sp !== undefined && !sp.state.dead, "…and the survivor walks into the new town alive");
+		s.quit(a);
+		const doc = s.stored(idA);
+		check(
+			doc?.day === 9 && doc?.invenWeapon[PISTOL] === 1 && doc?.runOver === false && doc?.runRev === 5,
+			"…which is what the DataStore keeps",
+			`day ${doc?.day}, pistol ${doc?.invenWeapon[PISTOL]}, runOver ${doc?.runOver}, runRev ${doc?.runRev}`,
+		);
+	}
+	// R3b, no world ending: what the blank save lived through stays with the blank save
+	{
+		const s = bootServer();
+		const bystander = s.join(newUser(), "bystander");
+		s.enter(bystander);
+		s.immortal.add(bystander); // somebody stands: no world ends here
+		s.sim.clock.setClock(20, 3);
+
+		const idD = newUser();
+		const d = s.joinUnreadable(idD, "died-unsaved");
+		s.enter(d);
+		s.kill(d);
+		s.exit(d);
+		s.putStored(idD, realSave());
+		s.retry(d);
+		s.run(12);
+		const sd = s.enter(d);
+		check(
+			s.loadStatus(d) === "ok" && sd !== undefined && !sd.state.dead && s.save(d).runOver === false,
+			"R3b: a death on the blank save does not carry into the real one — the survivor walks in alive",
+			`status ${s.loadStatus(d)}, dead ${sd?.state.dead}, runOver ${s.save(d).runOver}`,
+		);
+		s.quit(d);
+		check(s.stored(idD)?.runOver === false, "…and the DataStore never hears of that death");
+
+		const idL = newUser();
+		const l = s.joinUnreadable(idL, "alive-unsaved");
+		s.enter(l);
+		s.exit(l); // a living blank body, kept in the lobby
+		s.putStored(idL, realSave({ runOver: true, runHp: 0 })); // …while the real survivor is dead
+		s.retry(l);
+		s.run(12);
+		const sl = s.enter(l);
+		check(
+			sl !== undefined && sl.state.dead && s.save(l).runOver === true,
+			"R3b: nor does a living blank body revive a real save that is dead (no free Rebirth)",
+			`dead ${sl?.state.dead}, runOver ${s.save(l).runOver}`,
+		);
+
+		// the retry is pending (its cooldown): the next body must come from the save it is about to load
+		const idP = newUser();
+		const pl = s.joinUnreadable(idP, "impatient");
+		s.putStored(idP, realSave({ runOver: true, runHp: 0 }));
+		s.retry(pl);
+		s.intent(pl, s.P.IntentKind.EnterWorld); // Play, straight away
+		s.run(1);
+		check(s.body(pl) === undefined, "a retry that is pending holds the entry: no body on the blank save meanwhile");
+		s.run(12);
+		const sp = s.body(pl);
+		check(
+			s.loadStatus(pl) === "ok" && sp !== undefined && sp.state.dead,
+			"…the body that walks in, once it is loaded, is the real save's (dead here), never the blank one's",
+			`status ${s.loadStatus(pl)}, body ${sp === undefined ? "none" : sp.state.dead ? "dead" : "alive"}`,
+		);
+
+		// N4: a retry asked from the street is not run under the body — a real save swapped in beneath it would make
+		// its life (or its death) the real one's, and a dead body reloading would keep ending new worlds
+		const idW = newUser();
+		const w = s.joinUnreadable(idW, "in-the-street");
+		const sw = s.enter(w); // alive, on the blank save
+		s.putStored(idW, realSave({ runOver: true, runHp: 0 }));
+		s.retry(w);
+		s.run(12);
+		check(
+			sw !== undefined && s.loadStatus(w) === "error" && s.body(w) === sw,
+			"N4: a Retry from inside the world is not run: the session stays read-only under that body",
+			`status ${s.loadStatus(w)}`,
+		);
+		s.quit(w);
+		check(
+			s.stored(idW)?.runOver === true,
+			"…so the blank body's life never reaches the real save, which is still dead",
+			`runOver ${s.stored(idW)?.runOver}`,
+		);
+	}
+});
+
+section("16) once the new town stands, the reset is finished whatever fails after it (review of de4ba1e, N2)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	for (const [what, breakIt] of [
+		["closeTown", s => (s.host.replicator.closeTown = () => raise("closeTown failed (test)"))],
+		["lives.restartWorld", s => (s.host.lives.restartWorld = () => raise("lives failed (test)"))],
+	]) {
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), `unlucky-${what}`);
+		veteran(s.save(a)); // life day 9, a pistol, no coins
+		s.enter(a);
+		s.sim.clock.setClock(22, 2);
+		const before = { world: s.sim.world, seed: s.host.seed, rev: s.save(a).runRev };
+		breakIt(s);
+		s.kill(a);
+		let threw;
+		try {
+			s.run(WIPE_DECISION_S + 1);
+		} catch (e) {
+			threw = e;
+		}
+		delete s.host.replicator.closeTown;
+		delete s.host.lives.restartWorld;
+		const w = wipes[0];
+		check(
+			threw === undefined && w !== undefined && s.sim.world !== before.world,
+			`${what} throws: the world still ends, and the simulation stands in the new town`,
+			threw?.message,
+		);
+		const reset = s
+			.worldLog()
+			.flatMap(bt => bt.events)
+			.find(e => e.t === s.P.WorldEv.WorldReset);
+		check(
+			reset !== undefined && reset.seed === s.host.seed && s.host.seed !== before.seed,
+			`${what} throws: the clients are told anyway — WorldReset with the new seed`,
+			`${reset?.seed} vs host ${s.host.seed}`,
+		);
+		check(
+			s.Workspace.GetAttribute("pz_world_seed") === s.host.seed &&
+				R().mapHashOf(s.sim.world) === R().mapHashOf(W().generateTown(s.host.seed)),
+			`${what} throws: the seed the host names (and the attribute a joining client builds from) is the town ` +
+				`the simulation runs`,
+		);
+		const life = reset?.lives.find(l => l.userId === a.UserId);
+		check(
+			s.body(a)?.state.dead === false &&
+				s.save(a).day === 1 &&
+				s.save(a).invenWeapon[PISTOL] === 0 &&
+				life !== undefined &&
+				life.runRev === s.save(a).runRev &&
+				life.runRev > before.rev,
+			`${what} throws: nobody is left dead — the new life, standing, and the news names its runRev`,
+			`dead ${s.body(a)?.state.dead}, day ${s.save(a).day}, runRev ${life?.runRev} / ${s.save(a).runRev}`,
+		);
+		check(
+			warned.some(l => l.includes("went on past a failure") && l.includes("failed (test)")),
+			`${what} throws: the log says what failed`,
+		);
+		s.kill(a);
+		s.run(WIPE_DECISION_S + 1);
+		check(wipes.length === 2, `${what} throws: rule 6 is armed again — the next fall ends the new world too`);
+	}
 });
 
 // ================================================================
