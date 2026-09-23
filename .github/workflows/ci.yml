@@ -46,14 +46,23 @@ jobs:
       - name: Client prediction (divergence under latency, loss and reordering)
         run: npm run test:predict
 
+      - name: Authoritative combat (hit validation, rewind, cadence, server-side progress)
+        run: npm run test:combat
+
       - name: Zombie AI (perception, alert, flanking, pace director, cost)
         run: npm run test:ai
 
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 
+      - name: Remote smoothing (an ally is drawn continuously, not in snapshot steps)
+        run: npm run test:smoothness
+
       - name: Proximity chat (earshot, presence and the bubble stack)
         run: npm run test:chat
+
+      - name: Match clock and night waves (one server clock, lossy client, the original's headcount)
+        run: npm run test:clock
 
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
