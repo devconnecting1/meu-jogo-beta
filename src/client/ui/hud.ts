@@ -527,7 +527,10 @@ export class Hud {
 
 	/** banner (waves, morning, night, boss) as a bordered card + the feed of short messages below it */
 	private buildMessages(root: Frame, k: number): void {
-		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, 20 + 64 * k, true);
+		// the HUD size setting scales the messages too, as its description promises ("Console, day plate, hints and
+		// messages"): the banner under the day plate, the feed under the banner, all at `k`
+		const bannerY = 20 + 64 * k;
+		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, bannerY, true, k);
 		// the card is resized to the message in showBanner; the texts stay centred over it
 		const card = Card(bannerBox, "Card", {
 			x: 0,
@@ -578,7 +581,7 @@ export class Hud {
 		scale.Parent = bannerBox;
 		this.bannerScale = scale;
 
-		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, 136 + 64 * k, true);
+		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, bannerY + (BANNER_H + 6) * k, true, k);
 		const layout = new Instance("UIListLayout");
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
 		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center;

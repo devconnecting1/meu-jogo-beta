@@ -85,7 +85,7 @@ const saveMod = require(join(SRC, "shared/game/save.ts"));
 const { defaultSettings, defaultSave, sanitizeClientReport, sanitizeStoredSave, resetRun } = saveMod;
 const { MAX_PLAYERS } = require(join(SRC, "shared/net/mpConfig.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
-const { DESIGN_W } = require(join(SRC, "client/ui/widgets.ts"));
+const { DESIGN_W, DESIGN_H } = require(join(SRC, "client/ui/widgets.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -376,12 +376,18 @@ const hudPart = name =>
 /** the design-space width (Scale of the screen) a HUD cluster takes */
 const hudW = name => hudPart(name)?.Size.X.Scale;
 const HUD_PARTS = ["Console", "DayPlate", "HintBox", "BannerBox", "Feed"];
+/** the top and bottom (design units, from the top of the screen) of a cluster anchored at the top */
+const hudSpan = name => {
+	const f = hudPart(name);
+	return [f.Position.Y.Scale * DESIGN_H, (f.Position.Y.Scale + f.Size.Y.Scale) * DESIGN_H];
+};
 function mountedSizes(uiSize) {
 	s.uiSize = uiSize;
 	hud.mount();
 	flush();
-	const out = {};
+	const out = { spans: {} };
 	for (const n of HUD_PARTS) out[n] = hudW(n);
+	for (const n of ["DayPlate", "BannerBox", "Feed"]) out.spans[n] = hudSpan(n);
 	hud.unmount();
 	flush();
 	return out;
@@ -402,6 +408,19 @@ function mountedSizes(uiSize) {
 		"...e o padrao (50%) e o tamanho de desenho (x1,0)",
 		near(mid.Console * DESIGN_W, 638, 1e-6),
 		`console ${px(mid.Console * DESIGN_W)} unidades`,
+	);
+	// top down: the day plate, the banner under it, the feed under the banner -- at every size, none on another
+	const stacked = [small, mid, big].every(
+		m => m.spans.DayPlate[1] <= m.spans.BannerBox[0] + 1e-6 && m.spans.BannerBox[1] <= m.spans.Feed[0] + 1e-6,
+	);
+	check(
+		"...e em todo tamanho a placa do dia, a faixa de aviso e as mensagens ficam uma sob a outra, sem se cobrir",
+		stacked,
+		[small, mid, big]
+			.map(m =>
+				["DayPlate", "BannerBox", "Feed"].map(n => m.spans[n].map(v => v.toFixed(0)).join("-")).join(" | "),
+			)
+			.join(" ;; "),
 	);
 	ctx.phase = "lobby";
 	s.uiSize = 0.5;
