@@ -2211,6 +2211,15 @@ class Planner {
 		return k >= 0 && this.gSeen[k] === 1;
 	}
 
+	/** is this local rect floor inside the building, touching no wall and no piece? (where flat clutter may lie) */
+	freeFloor(q: LR): boolean {
+		if (!this.inside(q.u0, q.v0) || !this.inside(q.u1, q.v1)) return false;
+		if (!this.inside(q.u0, q.v1) || !this.inside(q.u1, q.v0)) return false;
+		for (const w of this.walls) if (overlapLR(q, w.r)) return false;
+		for (const p of this.pieces) if (overlapLR(q, p)) return false;
+		return true;
+	}
+
 	/** a point where a body of radius 18 stands clear of every wall and piece */
 	standable(u: number, v: number): boolean {
 		if (!this.inside(u, v)) return false;
@@ -2494,8 +2503,13 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 		for (const p of pl.pieces) {
 			if (p.room !== ctx.id || p.kind !== "hospbed") continue;
 			const along = p.face === "F" || p.face === "K";
-			if (along) pl.decorAt("curtain", p.u1 + 14, (p.v0 + p.v1) / 2, 6, p.v1 - p.v0, 0);
-			else pl.decorAt("curtain", (p.u0 + p.u1) / 2, p.v1 + 14, p.u1 - p.u0, 6, 0);
+			const cu = along ? p.u1 + 14 : (p.u0 + p.u1) / 2;
+			const cv = along ? (p.v0 + p.v1) / 2 : p.v1 + 14;
+			const w = along ? 6 : p.u1 - p.u0;
+			const h = along ? p.v1 - p.v0 : 6;
+			if (pl.freeFloor(lr(cu - w / 2, cu + w / 2, cv - h / 2, cv + h / 2))) {
+				pl.decorAt("curtain", cu, cv, w, h, 0);
+			}
 		}
 	}
 	// chairs round every table and desk (flat, EDI-12: a chair is clutter, not a wall), a few knocked over
@@ -2511,6 +2525,8 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			const cv = (p.v0 + p.v1) / 2;
 			const u = s === "L" ? p.u0 - 16 : s === "R" ? p.u1 + 16 : cu;
 			const v = s === "F" ? p.v0 - 16 : s === "K" ? p.v1 + 16 : cv;
+			// only on free floor: never in a wall behind a desk pushed against it, nor under another piece
+			if (!pl.freeFloor(lr(u - 13, u + 13, v - 13, v + 13))) continue;
 			pl.decorAt(down ? "chairDown" : "chair", u, v, 26, 26, down ? rng.next() * 1.4 : 0);
 		}
 	}
