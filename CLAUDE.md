@@ -29,7 +29,7 @@ npm run render:map -- --preset all --out docs/art/after   # a cidade em PNG com 
 Testes em Node rodam o TypeScript real com shims de Luau (`npm run test:<nome>`); rode os da área que você tocou:
 
 - rede e servidor: `net`, `server-sim`, `replication`, `predict`, `input` (fila de input), `smoothness` (aliado desenhado)
-- simulação e mundo: `sim`, `ai`, `combat`, `clock`, `life` (dia do mundo × dia de vida), `world` (itens/portas/construção no servidor), `save`
+- simulação e mundo: `sim`, `ai`, `combat`, `clock`, `life` (dia do mundo × dia de vida), `world` (itens/portas/construção no servidor), `save`, `items` (cada linha de WEAPONS, EQUIPS, USABLES, receitas, SKILLS, loot, pacotes e trajes pelos caminhos reais do cliente e do servidor; os bugs conhecidos aparecem como `BUG [id]` e a suíte falha quando um deles deixa de reproduzir)
 - UI e conteúdo: `contrast` (contraste, texto sem contorno e nenhum texto prometendo pausa, em todo `src/`), `backpack` (o Bag não recria Instances), `hud` (o console da HUD: 600 quadros sem criar Instance, hotbar = teclas 1–5, clique = tecla, toque nunca coberto), `menus` (Bag aberto: o mundo segue), `lobby` (menu e tela Survivor da UI-10, a cidade atrás deles sem criar Instance), `cosmetics` (traje e pet desenhados), `flinch` (árvore/carro atingido para de tremer), `world-art` (arte da cidade: sem id é o desenho liso idêntico ao de antes, com id vira textura, sem churn, legibilidade LEG-03, a ferramenta de render), `footsteps`, `chat`
 - vida e noite: `body` (o corpo é do servidor: morte, Rebirth, amanhecer, reconexão), `waves` (a horda da noite de ponta a ponta), `reset` (MP-22: todos mortos → o mundo acaba, cidade nova no dia 1, registro do mundo; New game é vida nova, não corpo novo)
 

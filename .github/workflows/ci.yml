@@ -103,6 +103,9 @@ jobs:
       - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
         run: npm run test:save
 
+      - name: Every item row by row (weapons, equipment, usables, recipes, skills, loot, shop; known bugs listed)
+        run: npm run test:items
+
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 
