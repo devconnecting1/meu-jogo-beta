@@ -2073,15 +2073,11 @@ class Planner {
 
 	// ------------------------------------------------------------------------------------ no pockets
 
-	/** the reach grid of the last `removePockets` (world, the town's 8-unit grid) */
+	/** the reach grid of the last `removePockets` (world, the town's 8-unit grid; its cells are the module's) */
 	private gx0 = 0;
 	private gy0 = 0;
 	private gcols = 0;
 	private grows = 0;
-	private readonly gSeen: Array<number> = [];
-	private readonly gBlocked: Array<number> = [];
-	private readonly gInside: Array<number> = [];
-	private readonly gQueue: Array<number> = [];
 
 	/**
 	 * EDI-11 (no safe spot) and CID-05 (no sealed pocket), checked exactly as tools/validate-world.mjs checks them:
@@ -2091,31 +2087,39 @@ class Planner {
 	 * rules of `fits` keep the paths two bodies wide, but they cannot see a pocket two pieces close off between them
 	 * and a wall (corner to corner, or a nook behind a piece): the piece nearest such a pocket, the latest placed
 	 * first, comes out again, until there is none.
+	 *
+	 * Cost: the town plans ~150 buildings at every world start on the server and on every client, so the grids are
+	 * module scratch (grown, never freed, filled by index) and the flood is a plain array queue: no allocation per
+	 * building beyond the rects of its walls.
 	 */
 	removePockets(): void {
 		const r = this.inp.rect;
 		const C = POCKET_CELL;
 		const R = BODY;
-		this.gx0 = math.floor(r.x / C) * C;
-		this.gy0 = math.floor(r.y / C) * C;
-		const cols = math.ceil((r.x + r.w - this.gx0) / C);
-		const rows = math.ceil((r.y + r.h - this.gy0) / C);
+		const gx0 = math.floor(r.x / C) * C;
+		const gy0 = math.floor(r.y / C) * C;
+		const cols = math.ceil((r.x + r.w - gx0) / C);
+		const rows = math.ceil((r.y + r.h - gy0) / C);
+		this.gx0 = gx0;
+		this.gy0 = gy0;
 		this.gcols = cols;
 		this.grows = rows;
 		const n = cols * rows;
-		const inside = this.gInside;
-		inside.clear();
+		const inside = P_INSIDE;
+		const blocked = P_BLOCKED;
+		const seen = P_SEEN;
+		const queue = P_QUEUE;
 		const parts: Array<Rect> = [];
 		for (const p of this.merged((i, j) => this.at(i, j) >= 0)) parts.push(this.f.rect(p));
 		for (let j = 0; j < rows; j++) {
-			const py = this.gy0 + j * C + C / 2;
+			const py = gy0 + j * C + C / 2;
 			for (let i = 0; i < cols; i++) {
-				const px = this.gx0 + i * C + C / 2;
+				const px = gx0 + i * C + C / 2;
 				let v = 0;
 				for (const p of parts) {
 					if (px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h) v = 1;
 				}
-				inside.push(v);
+				inside[j * cols + i] = v;
 			}
 		}
 		const walls: Array<Rect> = [];
@@ -2129,38 +2133,53 @@ class Planner {
 			seedY = q.y + q.h / 2;
 		}
 		for (let iter = 0; iter < POCKET_TRIES; iter++) {
-			const blocked = this.gBlocked;
-			blocked.clear();
-			for (let k = 0; k < n; k++) blocked.push(0);
+			for (let k = 0; k < n; k++) {
+				blocked[k] = 0;
+				seen[k] = 0;
+			}
 			for (const w of walls) this.stampBody(w, R);
 			for (const p of this.pieces) this.stampBody(this.f.rect(p), R);
-			const seen = this.gSeen;
-			seen.clear();
-			for (let k = 0; k < n; k++) seen.push(0);
-			const q = this.gQueue;
-			q.clear();
+			let tail = 0;
 			const s0 = this.cellAt(seedX, seedY);
 			if (s0 >= 0 && blocked[s0] === 0) {
 				seen[s0] = 1;
-				q.push(s0);
+				queue[tail] = s0;
+				tail++;
 			}
 			let head = 0;
-			while (head < q.size()) {
-				const k = q[head];
+			while (head < tail) {
+				const k = queue[head];
 				head++;
 				const i = k % cols;
-				if (i > 0) this.visit(k - 1);
-				if (i < cols - 1) this.visit(k + 1);
-				if (k >= cols) this.visit(k - cols);
-				if (k + cols < n) this.visit(k + cols);
+				// the four neighbours, inline: this loop runs over every cell of every building of the town
+				if (i > 0 && seen[k - 1] === 0 && blocked[k - 1] === 0) {
+					seen[k - 1] = 1;
+					queue[tail] = k - 1;
+					tail++;
+				}
+				if (i < cols - 1 && seen[k + 1] === 0 && blocked[k + 1] === 0) {
+					seen[k + 1] = 1;
+					queue[tail] = k + 1;
+					tail++;
+				}
+				if (k >= cols && seen[k - cols] === 0 && blocked[k - cols] === 0) {
+					seen[k - cols] = 1;
+					queue[tail] = k - cols;
+					tail++;
+				}
+				if (k + cols < n && seen[k + cols] === 0 && blocked[k + cols] === 0) {
+					seen[k + cols] = 1;
+					queue[tail] = k + cols;
+					tail++;
+				}
 			}
 			let pocket = -1;
 			for (let k = 0; k < n && pocket < 0; k++) {
 				if (inside[k] === 1 && blocked[k] === 0 && seen[k] === 0) pocket = k;
 			}
 			if (pocket < 0) return;
-			const px = this.gx0 + (pocket % cols) * C + C / 2;
-			const py = this.gy0 + math.floor(pocket / cols) * C + C / 2;
+			const px = gx0 + (pocket % cols) * C + C / 2;
+			const py = gy0 + math.floor(pocket / cols) * C + C / 2;
 			let culprit = -1;
 			for (let k = this.pieces.size() - 1; k >= 0 && culprit < 0; k--) {
 				const b = this.f.rect(this.pieces[k]);
@@ -2181,17 +2200,13 @@ class Planner {
 		return j * this.gcols + i;
 	}
 
-	private visit(k: number): void {
-		if (this.gSeen[k] === 1 || this.gBlocked[k] === 1) return;
-		this.gSeen[k] = 1;
-		this.gQueue.push(k);
-	}
-
 	/** marks the cells whose centre is closer than `R` to the world rect `w` */
 	private stampBody(w: Rect, R: number): void {
 		const C = POCKET_CELL;
+		const cols = this.gcols;
+		const blocked = P_BLOCKED;
 		const i0 = math.max(0, math.floor((w.x - R - this.gx0) / C));
-		const i1 = math.min(this.gcols - 1, math.floor((w.x + w.w + R - this.gx0) / C));
+		const i1 = math.min(cols - 1, math.floor((w.x + w.w + R - this.gx0) / C));
 		const j0 = math.max(0, math.floor((w.y - R - this.gy0) / C));
 		const j1 = math.min(this.grows - 1, math.floor((w.y + w.h + R - this.gy0) / C));
 		for (let j = j0; j <= j1; j++) {
@@ -2200,15 +2215,15 @@ class Planner {
 			for (let i = i0; i <= i1; i++) {
 				const px = this.gx0 + i * C + C / 2;
 				const dx = math.max(w.x - px, 0, px - w.x - w.w);
-				if (dx * dx + dy * dy < R * R) this.gBlocked[j * this.gcols + i] = 1;
+				if (dx * dx + dy * dy < R * R) blocked[j * cols + i] = 1;
 			}
 		}
 	}
 
-	/** did the last `removePockets` reach the world point (x, y) from the main door? */
+	/** did the last `removePockets` (of this planner, the latest one) reach the world point (x, y) from the door? */
 	reached(x: number, y: number): boolean {
 		const k = this.cellAt(x, y);
-		return k >= 0 && this.gSeen[k] === 1;
+		return k >= 0 && P_SEEN[k] === 1;
 	}
 
 	/** is this local rect floor inside the building, touching no wall and no piece? (where flat clutter may lie) */
@@ -2248,6 +2263,11 @@ const ISLAND_OFFSETS: Array<[number, number]> = [
 ];
 /** a loot spot stands this far out from the front of its piece */
 const LOOT_FRONT = 44;
+/** `removePockets`' grids, shared by every planner (one building is planned at a time): grown, never shrunk */
+const P_INSIDE: Array<number> = [];
+const P_BLOCKED: Array<number> = [];
+const P_SEEN: Array<number> = [];
+const P_QUEUE: Array<number> = [];
 /** the pocket check's grid (the town's validator grid) and body: a survivor, shared/game/physics.ts PLAYER_RADIUS */
 const POCKET_CELL = 8;
 const BODY = 18;
