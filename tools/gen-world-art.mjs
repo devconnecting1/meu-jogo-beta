@@ -24,11 +24,19 @@
  *   mask     a greyscale silhouette tinted at runtime (a car's paint, VEI-04; a tree's foliage)
  *   overlay  RGBA shading / detail drawn over a mask (glass, lights, outline, highlights) -- untinted
  *   slice    9-slice (ScaleType.Slice): soft shadows and roof rims of any size
+ *   sheet    the characters' sprite sheets (tools/character-art.mjs): one cell per pose and heading, laid out by
+ *            src/client/view/charSheets.ts, full colour; their white Fill / Rim masks are `mask`s
+ *   atlas    not town art: the item icons of src/shared/data/itemIcons.ts (tools/icon-atlas.mjs), one cell per
+ *            icon (+ its dimmed copy) and glyph, listed in the manifest's `cells` / `dim` and in the generated
+ *            src/client/ui/itemIconAtlas.ts; client/ui/itemIcon.ts draws an icon as one ImageLabel of its cell.
+ *            Uploaded like the rest; its id is only written while it belongs to the PNG on disk (assets.json's
+ *            sha1), because a stale atlas would show the wrong icons: until the new one is up, the Frames draw them
  *
  * Light: the baked form shading (canopy highlights, car roofs, parapet rims) is lit from the top left, the
  * convention of top-down pixel art; what really moves with the sun (drop shadows, which roof slope is lit,
  * the kerb's shadow) is computed by client/view/worldView.ts every frame (LUZ-01).
  */
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -36,10 +44,13 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { encodePNG } from "./png-lite.mjs";
 import { drawText } from "./pixel-font.mjs";
+import { characterArt } from "./character-art.mjs";
+import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "design", "world-art");
 const TS_OUT = join(ROOT, "src", "client", "view", "worldArtAssets.ts");
+const ICON_TS_OUT = join(ROOT, "src", "client", "ui", "itemIconAtlas.ts");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -1440,6 +1451,18 @@ function build() {
 	add_("floorCarpet", "tile", carpet(16, C.floorCarpet, 47), "bedroom / office carpet: a low loop pile");
 	add_("floorKitchen", "tile", floorTiles(16, 8, C.floorKitchen, 45, true), "kitchen floor: checker tiles");
 	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
+	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
+	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
+	// the item icons (DESIGN_RULES UI-11): not the town, but uploaded with it
+	const atlas = buildIconAtlas(loadIconData(ROOT));
+	const icons = atlas.order.filter(k => atlas.cells[k].n === 16).length;
+	add_(
+		"itemIcons",
+		"atlas",
+		{ w: atlas.w, h: atlas.h, toCanvas: () => ({ w: atlas.w, h: atlas.h, data: atlas.data }) },
+		`item icons: ${icons} icons, their dimmed copies and ${atlas.order.length - icons} glyphs (client/ui/itemIcon.ts)`,
+		{ atlas },
+	);
 }
 
 // ---------------------------------------------------------------- output
@@ -1448,7 +1471,7 @@ function manifestOf() {
 	return {
 		generator: "tools/gen-world-art.mjs",
 		worldTexel: WORLD_TEXEL,
-		note: "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels. The client draws every one with ResamplerMode.Pixelated.",
+		note: "1 texel = worldTexel world units; tiles repeat every w x h texels; masks and tileTint textures are greyscale and tinted with ImageColor3; overlays are untinted RGBA; slice = 9-slice centre in texels; sheet = the characters' pose x heading cells (src/client/view/charSheets.ts). The client draws every one with ResamplerMode.Pixelated.",
 		textures: textures.map(t => ({
 			name: t.name,
 			file: `${t.name}.png`,
@@ -1457,14 +1480,51 @@ function manifestOf() {
 			h: t.tex.h,
 			...(t.slice !== undefined ? { slice: t.slice } : {}),
 			description: t.description,
+			...(t.atlas !== undefined ? atlasCells(t.atlas) : {}),
 		})),
 	};
+}
+
+/** an atlas's cells for the manifest: `cells` [x, y, w, h] per key, and `dim` for the icons' dimmed copies */
+function atlasCells(atlas) {
+	const cells = {};
+	const dim = {};
+	for (const key of atlas.order) {
+		const c = atlas.cells[key];
+		cells[key] = [c.x, c.y, c.n, c.n];
+		if (c.dimX !== c.x || c.dimY !== c.y) dim[key] = [c.dimX, c.dimY, c.n, c.n];
+	}
+	return { cells, dim };
+}
+
+/** manifest.json: JSON with tabs, each atlas cell on one line */
+function manifestJson(manifest) {
+	const oneLine = cells => Object.fromEntries(Object.entries(cells).map(([k, c]) => [k, `<<${c.join(", ")}>>`]));
+	const textures = manifest.textures.map(t =>
+		t.cells !== undefined ? { ...t, cells: oneLine(t.cells), dim: oneLine(t.dim) } : t,
+	);
+	return `${JSON.stringify({ ...manifest, textures }, undefined, "\t")}\n`.replace(/"<<([\d, ]+)>>"/g, "[$1]");
+}
+
+const sha1 = bytes => createHash("sha1").update(bytes).digest("hex");
+
+/** the id an atlas may use: the uploaded one only while assets.json's sha1 is that of the PNG on disk */
+function atlasId(t, id, hashes) {
+	if (id === "") return "";
+	const file = join(OUT_DIR, t.file);
+	if (existsSync(file) && hashes[t.name] === sha1(readFileSync(file))) return id;
+	console.log(`${t.name}: the uploaded atlas is not this PNG (run npm run cloud -- upload-art); its id is left out`);
+	return "";
 }
 
 /** src/client/view/worldArtAssets.ts from the manifest and design/world-art/assets.json */
 function writeAssetsModule(manifest) {
 	const assetsPath = join(OUT_DIR, "assets.json");
-	const ids = existsSync(assetsPath) ? (JSON.parse(readFileSync(assetsPath, "utf8")).ids ?? {}) : {};
+	const assets = existsSync(assetsPath) ? JSON.parse(readFileSync(assetsPath, "utf8")) : {};
+	const ids = { ...(assets.ids ?? {}) };
+	for (const t of manifest.textures) {
+		if (t.kind === "atlas") ids[t.name] = atlasId(t, ids[t.name] ?? "", assets.sha1 ?? {});
+	}
 	const L = [];
 	L.push("// generated by tools/gen-world-art.mjs — do not edit");
 	L.push(
@@ -1498,7 +1558,7 @@ function writeAssetsModule(manifest) {
 	}
 	L.push("};");
 	L.push("");
-	L.push("/** every texture of the world art, for the preload pass */");
+	L.push("/** every texture of the world art (the item icon atlas too), for the preload pass */");
 	L.push("export const WORLD_ART_NAMES: Array<WorldArtName> = [");
 	for (const t of manifest.textures) L.push(`\t"${t.name}",`);
 	L.push("];");
@@ -1508,18 +1568,56 @@ function writeAssetsModule(manifest) {
 	console.log(`wrote ${TS_OUT} (${live}/${manifest.textures.length} textures with an asset id)`);
 }
 
+/** src/client/ui/itemIconAtlas.ts: the atlas's cells for client/ui/itemIcon.ts (its id is in worldArtAssets.ts) */
+function writeIconAtlasModule() {
+	const t = textures.find(x => x.atlas !== undefined);
+	const { atlas } = t;
+	const L = [];
+	L.push("// generated by tools/gen-world-art.mjs — do not edit");
+	L.push(
+		`// the item icons' atlas (tools/icon-atlas.mjs): design/world-art/${t.name}.png, the same cells in manifest.json;`,
+	);
+	L.push(`// its asset id is WORLD_ART.${t.name} in client/view/worldArtAssets.ts (npm run cloud -- upload-art)`);
+	L.push("");
+	L.push("/** the atlas's size in texels */");
+	L.push(`export const ICON_ATLAS_W = ${atlas.w};`);
+	L.push(`export const ICON_ATLAS_H = ${atlas.h};`);
+	L.push("");
+	L.push("/**");
+	L.push(
+		" * Per icon or glyph key: [x, y, n, dimX, dimY] in texels -- the top-left corner of its cell, the cell's side",
+	);
+	L.push(
+		" * (16 for an icon, 8 for a glyph) and the corner of its dimmed copy (a glyph's is its own cell: the ink wins).",
+	);
+	L.push(" */");
+	L.push("export const ICON_ATLAS_CELLS: Record<string, readonly [number, number, number, number, number]> = {");
+	for (const key of atlas.order) {
+		const c = atlas.cells[key];
+		const name = /^[A-Za-z_]\w*$/.test(key) ? key : JSON.stringify(key);
+		L.push(`\t${name}: [${c.x}, ${c.y}, ${c.n}, ${c.dimX}, ${c.dimY}],`);
+	}
+	L.push("};");
+	L.push("");
+	writeFileSync(ICON_TS_OUT, L.join("\n"));
+	console.log(`wrote ${ICON_TS_OUT} (${atlas.order.length} cells, atlas ${atlas.w} x ${atlas.h})`);
+}
+
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
 function contactSheet() {
 	const zoom = 4;
 	const cellW = 300;
 	const pad = 10;
 	const cols = 5;
-	const cells = textures.map(t => {
-		const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
-		let z = zoom;
-		while (t.tex.w * reps * z > cellW - pad * 2 && z > 1) z--;
-		return { t, reps, z, h: t.tex.h * reps * z + 30 };
-	});
+	// the characters' sheets are hundreds of texels wide: they have their own pages (docs/art/characters)
+	const cells = textures
+		.filter(t => !t.character && t.atlas === undefined)
+		.map(t => {
+			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
+			let z = zoom;
+			while (t.tex.w * reps * z > cellW - pad * 2 && z > 1) z--;
+			return { t, reps, z, h: t.tex.h * reps * z + 30 };
+		});
 	const rows = [];
 	for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
 	const H = rows.reduce((s, row) => s + Math.max(...row.map(c => c.h)) + pad, pad);
@@ -1590,7 +1688,8 @@ if (!process.argv.includes("--assets")) {
 	// a texture that left the list leaves the folder too (the upload sends what is in the manifest)
 	const names = new Set(textures.map(t => `${t.name}.png`));
 	for (const f of readdirSync(OUT_DIR)) if (f.endsWith(".png") && !names.has(f)) unlinkSync(join(OUT_DIR, f));
-	writeFileSync(join(OUT_DIR, "manifest.json"), `${JSON.stringify(manifest, undefined, "\t")}\n`);
+	writeFileSync(join(OUT_DIR, "manifest.json"), manifestJson(manifest));
+	writeIconAtlasModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

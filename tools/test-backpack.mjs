@@ -598,6 +598,17 @@ const { ITEM_ICONS, ICON_GLYPHS, iconOf, skillIconOf } = require(join(SRC, "shar
 const { ICON_ART_ORDER } = require(join(SRC, "shared/engine/colors.ts"));
 const Icon = require(join(SRC, "client/ui/itemIcon.ts"));
 const { STAT, GAME, THEME, SURFACE } = require(join(SRC, "client/ui/theme.ts"));
+const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+/** the uploads as they are, with the item icon atlas's id set to `id` ("" = none: the icons are Frames) */
+function setIconAtlas(id) {
+	const ids = {};
+	for (const [name, t] of Object.entries(WORLD_ART)) ids[name] = t.id;
+	ids.itemIcons = id;
+	WA.overrideWorldArt(ids);
+}
+// the walk measures the Frame drawing whatever has been uploaded; part 10 measures the atlas too (test:icons)
+setIconAtlas("");
 flush();
 
 // ---------------------------------------------------------------- measuring
@@ -1678,7 +1689,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const { equipTitle } = require(join(SRC, "server/save/titles.ts"));
 	const { THEME, SURFACE, STAT } = require(join(SRC, "client/ui/theme.ts"));
 	const TIT = require(join(SRC, "shared/data/titles.ts"));
-	const { Nameplate, TITLE_TEXT } = require(join(SRC, "client/ui/nameplate.ts"));
+	const { Nameplate, TITLE_TEXT, YIELD_FADE } = require(join(SRC, "client/ui/nameplate.ts"));
 
 	// a survivor who earned Survivor and shows it; 37 zombies put down; this life is at day 8, but only 2 of its
 	// midnights were credited by the server (the others were counted before it counted days, or set by an admin)
@@ -1728,6 +1739,8 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const title = () => details()?.FindFirstChild("Title")?.Text;
 	const disabled = b => b.GetAttribute("Disabled") === true;
 	const previewTitle = () => deep(deep(details(), "TitlePreview"), "TitleLabel");
+	/** the title line shows: its label and the holder the plate's list hides as one (client/ui/nameplate.ts) */
+	const titleShown = () => previewTitle()?.Visible === true && previewTitle().Parent?.Visible === true;
 
 	// the Pets page once, unmeasured: its pack buttons pick up their skin on their first "outline" (part 9's page, not
 	// this one) -- from here on every step is measured, the Titles tab's first opening included
@@ -1799,11 +1812,11 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	check(
 		"a previa e a placa do mundo, com o titulo SOB o nome, na cor dele",
-		previewTitle()?.Visible === true &&
+		titleShown() &&
 			previewTitle().Text === "[Survivor]" &&
 			sameColor(previewTitle().TextColor3, STAT.bonus) &&
-			previewTitle().Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
-			previewTitle().LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
+			previewTitle().Parent.Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
+			previewTitle().Parent.LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
 	);
 	check(
 		"a previa do guarda-roupa de trajes fica escondida",
@@ -1850,7 +1863,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	check("o servidor tirou, e a copia do cliente tambem", save.equipTitle === -1 && !worn(1));
 	check("sem titulo mostrado, [None] nao tem o que tirar", status() === "Equipped" && disabled(action()));
-	check("e a placa da previa fica so com o nome", previewTitle().Visible === false);
+	check("e a placa da previa fica so com o nome", !titleShown());
 
 	// Equip the earned one
 	click(row(1), "Survivor");
@@ -1889,51 +1902,174 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	close();
 	check("fechar remove a tela", screen() === undefined);
 
-	// the nameplate itself, measured (MON-02 / the owner's "it must not hide the survivor")
+	// the nameplate itself, measured (MON-02 / the owner's "it must not hide the survivor", and his "no background
+	// behind it"): an ally's plate, with a handle that differs from the name, at 1080p
+	const { OVER_WORLD, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
+	const { skinPx, TEXT_SHADOW_PX } = require(join(SRC, "client/ui/skin.ts"));
 	const host = makeInstance("Frame", false);
 	host.Parent = ctx.uiLayer;
-	const plate = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" });
+	const plate = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" }, { world: true });
 	flush();
 	plate.update(100, 100, 12, true, 0);
 	const pill = host.FindFirstChild("Nameplate");
 	const nameRow = pill.FindFirstChild("NameRow");
-	const titleLabel = pill.FindFirstChild("TitleLabel");
-	const pad = pill.FindFirstChildOfClass("UIPadding");
-	const badge = nameRow.FindFirstChild("LevelBadge");
-	const badgePad = badge.FindFirstChildOfClass("UIPadding");
-	const oneLine =
-		pad.PaddingTop.Offset +
-		pad.PaddingBottom.Offset +
-		Math.max(
-			badge.TextSize + badgePad.PaddingTop.Offset + badgePad.PaddingBottom.Offset,
-			nameRow.FindFirstChild("NameLabel").TextSize,
+	const voiceOf = n => nameRow.FindFirstChild(`${n}Box`)?.FindFirstChild(n);
+	const levelLabel = voiceOf("LevelLabel");
+	const nameLabel = voiceOf("NameLabel");
+	const handleLabel = voiceOf("HandleLabel");
+	const titleBox = pill.FindFirstChild("TitleLabelBox");
+	const titleLabel = titleBox?.FindFirstChild("TitleLabel");
+	const labels = [levelLabel, nameLabel, handleLabel, titleLabel];
+	const sp = skinPx();
+	check(
+		"a linha do nome: LV 12 no azul do XP, o nome, o @handle (difere do nome) em cinza, nessa ordem",
+		levelLabel?.Text === "LV 12" &&
+			sameColor(levelLabel.TextColor3, OVER_WORLD.level) &&
+			nameLabel?.Text === "Zed" &&
+			sameColor(nameLabel.TextColor3, OVER_WORLD.name) &&
+			handleLabel?.Text === "@zed_survives" &&
+			sameColor(handleLabel.TextColor3, OVER_WORLD.handle) &&
+			levelLabel.Parent.LayoutOrder < nameLabel.Parent.LayoutOrder &&
+			nameLabel.Parent.LayoutOrder < handleLabel.Parent.LayoutOrder,
+		`${levelLabel?.Text} | ${nameLabel?.Text} | ${handleLabel?.Text}`,
+	);
+	check(
+		"o nome e a ancora: o maior e o mais pesado; o nivel e o @handle menores",
+		nameLabel.TextSize > levelLabel.TextSize &&
+			levelLabel.TextSize >= handleLabel.TextSize &&
+			nameLabel.FontFace.Weight.Name === "Bold",
+		`${levelLabel.TextSize} / ${nameLabel.TextSize} / ${handleLabel.TextSize} px`,
+	);
+	// NO background: not one surface in the whole plate -- no fill, no border, no corner, no badge plate
+	const surfaces = [pill, ...pill.GetDescendants()].filter(
+		d =>
+			((d.ClassName === "Frame" || d.ClassName === "TextLabel") && (d.BackgroundTransparency ?? 0) < 1) ||
+			d.ClassName === "UIStroke" ||
+			d.ClassName === "UICorner" ||
+			d.ClassName === "ImageLabel",
+	);
+	check(
+		"sem fundo: nenhuma superficie na placa (nem pilula, nem borda, nem chapa do nivel)",
+		surfaces.length === 0,
+		surfaces.map(d => `${d.ClassName} ${d.Name}`).join(", ") || "0",
+	);
+	// UI-04 (clarification): each line lands on the ground with ONE pixel shadow, down-right, never a contour
+	const shadowOk = l => {
+		const s = l?.Parent?.FindFirstChild(`${l.Name}Shadow`);
+		return (
+			s !== undefined &&
+			s.ClassName === "TextLabel" &&
+			s.Text === l.Text &&
+			s.TextSize === l.TextSize &&
+			sameColor(s.TextColor3, OVER_WORLD.shadow) &&
+			Math.abs(s.TextTransparency - TRANSPARENCY.textShadow) < 1e-6 &&
+			s.Position.X.Offset === l.Position.X.Offset + TEXT_SHADOW_PX * sp &&
+			s.Position.Y.Offset === l.Position.Y.Offset + TEXT_SHADOW_PX * sp &&
+			s.ZIndex < l.ZIndex &&
+			l.Parent.GetChildren().filter(c => c.ClassName === "TextLabel").length === 2
 		);
-	check("sem titulo, a segunda linha nao existe (escondida, sem ocupar espaco)", titleLabel.Visible === false);
+	};
+	check(
+		`cada linha tem UMA sombra de pixel, ${TEXT_SHADOW_PX * sp} px para baixo e para a direita, sob ela (UI-04: sombra, nao contorno)`,
+		labels.every(shadowOk),
+		labels.map(l => `${l?.Name}:${shadowOk(l)}`).join(" "),
+	);
+	check(
+		"e nenhum contorno de texto (UIStroke ou TextStroke) em nenhuma linha nem sombra",
+		[pill, ...pill.GetDescendants()].every(
+			d => d.FindFirstChildOfClass?.("UIStroke") === undefined && (d.TextStrokeTransparency ?? 1) >= 1,
+		),
+	);
+	// the heights, from the engine's own numbers (the fake tree has no layout): a line is its tallest text, plus the
+	// pixel its shadow reaches below it
+	const lineH = ls => Math.max(...ls.filter(l => l !== undefined).map(l => l.TextSize)) + TEXT_SHADOW_PX * sp;
+	const oneLine = lineH([levelLabel, nameLabel, handleLabel]);
+	check(
+		"sem titulo, a segunda linha nao existe (escondida, sem ocupar espaco)",
+		titleBox.Visible === false && !plate.isYielding(),
+	);
 	plate.update(100, 100, 12, true, TIT.titleToWire(TIT.TitleId.WeekOne));
-	const twoLines = oneLine + titleLabel.TextSize + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0);
+	const twoLines = oneLine + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0) + lineH([titleLabel]);
 	check(
 		"com titulo: a segunda linha, sob o nome, na cor dele, sem contorno (UI-04)",
-		titleLabel.Visible &&
+		titleBox.Visible &&
 			titleLabel.Text === "[Week One]" &&
 			sameColor(titleLabel.TextColor3, STAT.value) &&
-			titleLabel.LayoutOrder > nameRow.LayoutOrder &&
+			titleBox.LayoutOrder > nameRow.LayoutOrder &&
 			titleLabel.FindFirstChildOfClass("UIStroke") === undefined &&
-			(titleLabel.TextStrokeTransparency ?? 1) >= 1,
+			(titleLabel.TextStrokeTransparency ?? 1) >= 1 &&
+			titleBox.FindFirstChild("TitleLabelShadow")?.Text === "[Week One]",
 	);
 	check(
 		`legivel: ${titleLabel.TextSize} px (piso de 9 px do kit)`,
 		titleLabel.TextSize >= 9 && titleLabel.TextSize >= TITLE_TEXT,
 	);
-	// the pill hangs from its TOP at PLAYER_RADIUS + 14 u under the survivor's centre (gameLoop / allyPlate): a second
-	// line grows it downward, away from the body, so it can never cover the survivor; what it costs is height below
+	// the plate hangs from its TOP at PLAYER_RADIUS + 14 u under the survivor's centre (gameLoop / allyPlate): a
+	// second line grows it downward, away from the body, so it can never cover the survivor; what it costs is height
+	// below. The popover pill of before measured 41 -> 62 px here (its padding and the level badge's)
 	const PLAYER_R = 18;
 	const GAP = 14;
 	check(
-		`a placa cresce ${twoLines - oneLine} px (${oneLine} -> ${twoLines} px a 1080p), para BAIXO: o topo segue ${GAP} px abaixo do corpo`,
-		pill.AnchorPoint.Y === 0 && twoLines - oneLine <= oneLine * 0.75 && PLAYER_R + GAP > PLAYER_R,
+		`a placa cresce ${twoLines - oneLine} px (${oneLine} -> ${twoLines} px a 1080p; a pilula de antes: 41 -> 62), para BAIXO: o topo segue ${GAP} px abaixo do corpo`,
+		pill.AnchorPoint.Y === 0 && twoLines - oneLine <= oneLine && twoLines < 62 && PLAYER_R + GAP > PLAYER_R,
 	);
 	plate.update(100, 100, 12, true, 99);
-	check("um byte que nao e titulo nao desenha nada", titleLabel.Visible === false);
+	check("um byte que nao e titulo nao desenha nada", titleBox.Visible === false);
+
+	// yours shows less: no "@handle" (only you would read it), the level and the title stay
+	const mine = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" }, { self: true, world: true });
+	const minePill = host.GetChildren().filter(c => c.Name === "Nameplate")[1];
+	mine.update(400, 400, 12, true, TIT.titleToWire(TIT.TitleId.Survivor));
+	const mineRow = minePill.FindFirstChild("NameRow");
+	check(
+		"a sua placa: LV e nome, sem o @handle; o titulo embaixo",
+		mineRow.FindFirstChild("HandleLabelBox") === undefined &&
+			mineRow.FindFirstChild("LevelLabelBox")?.FindFirstChild("LevelLabel")?.Text === "LV 12" &&
+			minePill.FindFirstChild("TitleLabelBox")?.Visible === true,
+	);
+
+	// overlapping plates give way: the fake tree has no layout, so the sizes are given here as the engine would
+	const size = (p, w, h) => {
+		p.AbsoluteSize = new Vector2(w, h);
+	};
+	size(pill, 180, 26);
+	size(minePill, 120, 26);
+	const faded = p => p.GetDescendants().filter(d => d.ClassName === "TextLabel" && !d.Name.endsWith("Shadow"));
+	plate.update(100, 100, 12, true, 0);
+	mine.update(400, 400, 12, true, 0);
+	plate.update(100, 100, 12, true, 0);
+	check(
+		"longe um do outro: nenhuma placa esmaece",
+		!plate.isYielding() && !mine.isYielding() && faded(minePill).every(l => l.TextTransparency === 0),
+	);
+	const r0 = phase("as duas placas se sobrepoem (MP-02: sobreviventes nao colidem)", () => {
+		mine.update(120, 108, 12, true, 0);
+		plate.update(100, 100, 12, true, 0);
+	});
+	check(
+		"sobrepostas: a SUA cede a do aliado (a do aliado e a que diz algo), esmaecendo junto com a sombra",
+		mine.isYielding() &&
+			!plate.isYielding() &&
+			faded(minePill).every(l => l.TextTransparency > 0.5) &&
+			minePill
+				.GetDescendants()
+				.filter(d => d.Name.endsWith("Shadow"))
+				.every(
+					s => Math.abs(s.TextTransparency - (1 - (1 - TRANSPARENCY.textShadow) * (1 - YIELD_FADE))) < 1e-6,
+				),
+		`sem criar Instance: ${cost(r0)}`,
+	);
+	check("ceder nao cria nem destroi Instance", zero(r0), cost(r0));
+	mine.update(120 + 150, 108, 12, true, 0);
+	check("separadas de novo: a sua volta", !mine.isYielding() && faded(minePill).every(l => l.TextTransparency === 0));
+	const still = phase("60 quadros parados", () => {
+		for (let i = 0; i < 60; i++) {
+			mine.update(270, 108, 12, true, 0);
+			plate.update(100, 100, 12, true, 0);
+		}
+	});
+	check("placa parada nao escreve nada", still.writes === 0 && zero(still), cost(still));
+	mine.destroy();
 	plate.destroy();
 	host.Destroy();
 }
@@ -1941,20 +2077,28 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 // ---------------------------------------------------------------- 10. what a full page costs
 
 console.log("\n10) o custo de uma pagina cheia (todas as 30 armas; as 80 receitas)\n");
-/** Instances, Frames and icon Frames ("Px") under `root` */
+/** Instances, Frames, icon Frames ("Px") and icon atlas images under `root` */
 function census(root) {
 	const d = root === undefined ? [] : root.GetDescendants();
 	return {
 		all: d.length + 1,
 		frames: d.filter(x => x.ClassName === "Frame").length + 1,
 		px: d.filter(x => x.Name === "Px").length,
+		images: d.filter(x => x.ClassName === "ImageLabel" && x.Name === "Atlas").length,
 		tiles: d.filter(x => /^Tile\d+$/.test(x.Name)).length,
 	};
 }
-const fmtCensus = c => `${c.all} Instances (${c.frames} Frames, dos quais ${c.px} de icone), ${c.tiles} ladrilhos`;
-let fullWeapons;
-let fullCraft;
-{
+const fmtCensus = c =>
+	`${c.all} Instances (${c.frames} Frames, dos quais ${c.px} de icone${c.images > 0 ? `; ${c.images} icones do atlas` : ""}), ${c.tiles} ladrilhos`;
+
+/**
+ * A new Bag with every weapon, opened on Weapons, then Craft scrolled to the end: what it costs. `atlas` "" draws the
+ * icons with Frames; an id, with one ImageLabel each (client/ui/itemIcon.ts, the atlas of tools/icon-atlas.mjs).
+ */
+function fullPages(atlas) {
+	const tag = atlas === "" ? "" : " (atlas)";
+	setIconAtlas(atlas);
+	const out = {};
 	const full = defaultSave();
 	for (const w of WEAPONS) full.invenWeapon[w.id] = 1;
 	full.ammoNormal = 60;
@@ -1962,24 +2106,26 @@ let fullCraft;
 	const p2 = new Backpack(c2);
 	wire(p2, full);
 	uiCtx = c2;
-	const opened = phase("Bag novo, 30 armas: abre em Weapons", () => p2.open());
-	fullWeapons = census(page(0));
+	const opened = phase(`Bag novo, 30 armas: abre em Weapons${tag}`, () => p2.open());
+	out.weapons = census(page(0));
+	out.opened = opened;
 	console.log(`  abrir: ${cost(opened)} (janela + painel + a grade de armas)`);
-	console.log(`  pagina de armas cheia: ${fmtCensus(fullWeapons)}`);
+	console.log(`  pagina de armas cheia: ${fmtCensus(out.weapons)}`);
 	check(
-		"a pagina cheia mostra as 30 armas, cada uma com o seu icone",
+		`a pagina cheia mostra as 30 armas, cada uma com o seu icone${tag}`,
 		tilesOf(0).length === WEAPONS.length &&
 			tilesOf(0).every(t => iconKey(t) === iconOf(1, Number(keyOf(t).split(":")[1])).key),
 		`${tilesOf(0).length} ladrilhos`,
 	);
-	const craftFirst = phase("e vai a Craft", () => tab(4));
-	fullCraft = census(page(4));
+	const craftFirst = phase(`e vai a Craft${tag}`, () => tab(4));
+	out.craft = census(page(4));
+	out.craftFirst = craftFirst;
 	console.log(
-		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(fullCraft)}`,
+		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(out.craft)}`,
 	);
 	const drawn = () => tilesOf(4).filter(t => iconKey(t) !== "").length;
 	check(
-		"as receitas fora da tela ainda nao pagam os Frames do icone",
+		`as receitas fora da tela ainda nao pagam o desenho do icone${tag}`,
 		drawn() < CRAFT_RECIPES.length && drawn() >= 25,
 		`${drawn()} de ${CRAFT_RECIPES.length} desenhadas`,
 	);
@@ -1987,27 +2133,70 @@ let fullCraft;
 	const list = deep(page(4), "List");
 	list.AbsoluteSize = new Vector2(408, 408);
 	const rows = Math.ceil(CRAFT_RECIPES.length / 5);
-	const scrolled = phase("rola Craft ate o fim", () => {
+	const scrolled = phase(`rola Craft ate o fim${tag}`, () => {
 		for (let y = 0; y <= rows * 80; y += 80) {
 			list.CanvasPosition = new Vector2(0, y);
 			flush();
 		}
 	});
-	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(census(page(4)))}`);
+	out.scrolled = scrolled;
+	out.craftAll = census(page(4));
+	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(out.craftAll)}`);
 	check(
-		"rolar desenha as linhas que chegam, ate a ultima",
+		`rolar desenha as linhas que chegam, ate a ultima${tag}`,
 		drawn() === CRAFT_RECIPES.length,
 		`${drawn()} de ${CRAFT_RECIPES.length}`,
 	);
-	const again = phase("rola de volta e de novo", () => {
+	const again = phase(`rola de volta e de novo${tag}`, () => {
 		for (const y of [0, rows * 40, rows * 80, 0]) {
 			list.CanvasPosition = new Vector2(0, y);
 			flush();
 		}
 	});
-	check("rolar de novo nao cria nem destroi Instance", zero(again), cost(again));
+	check(`rolar de novo nao cria nem destroi Instance${tag}`, zero(again), cost(again));
+	// the other tabs are built on their first visit (part 1 measures that); then they are only shown again
+	for (const t of [0, 1, 2, 3, 5]) tab(t);
+	const cycle = phase(`fecha, reabre e passa as 6 abas 3 vezes${tag}`, () => {
+		for (let i = 0; i < 3; i++) {
+			p2.close();
+			p2.open();
+			for (const t of [0, 1, 2, 3, 4, 5]) tab(t);
+		}
+	});
+	check(`depois disso, reabrir e trocar de aba nao cria nem destroi Instance${tag}`, zero(cycle), cost(cycle));
+	out.bag = census(bag());
 	p2.close();
 	uiCtx = ctx;
+	return out;
+}
+const flatPages = fullPages("");
+const fullWeapons = flatPages.weapons;
+const fullCraft = flatPages.craft;
+
+console.log("\n10b) as mesmas paginas com o atlas dos icones (um ImageLabel por icone; test:icons prova o desenho)\n");
+const atlasPages = fullPages("rbxassetid://910000001");
+setIconAtlas("");
+{
+	const w = atlasPages.weapons;
+	check(
+		"com o atlas nenhum icone e Frame: cada ladrilho tem UM ImageLabel",
+		w.px === 0 && atlasPages.craftAll.px === 0 && atlasPages.bag.px === 0 && w.images >= w.tiles,
+		`${w.images} imagens, ${w.px} Frames de icone`,
+	);
+	check(
+		"e o resto da pagina e o mesmo: as Instances de icone trocam os Frames pela imagem, uma por visao",
+		w.all - w.images === flatPages.weapons.all - flatPages.weapons.px &&
+			atlasPages.craftAll.all - atlasPages.craftAll.images === flatPages.craftAll.all - flatPages.craftAll.px,
+		`armas ${flatPages.weapons.all} -> ${w.all}; Craft rolado ${flatPages.craftAll.all} -> ${atlasPages.craftAll.all}`,
+	);
+	check(
+		"rolar Craft ate o fim desenha as linhas novas sem criar Instance (o ImageLabel ja existia)",
+		zero(atlasPages.scrolled),
+		`${cost(atlasPages.scrolled)}, contra ${cost(flatPages.scrolled)} sem atlas`,
+	);
+	console.log(
+		`  Bag inteiro (30 armas, Craft rolado): ${flatPages.bag.all} Instances sem atlas -> ${atlasPages.bag.all} com atlas (${flatPages.bag.px} Frames de icone -> ${atlasPages.bag.images} imagens)`,
+	);
 }
 
 // ---------------------------------------------------------------- 11. the layout, on a small layout pass
@@ -2206,6 +2395,8 @@ console.log(`\nprimeira visita das abas: ${sum(firstVisit, "bagNew")} criadas`);
 console.log(`Instances vivas no Bag no fim da caminhada: ${alive}`);
 console.log(`pagina cheia de armas (30): ${fmtCensus(fullWeapons)}`);
 console.log(`pagina de Craft (80 receitas), 1a vista: ${fmtCensus(fullCraft)}`);
+console.log(`com o atlas dos icones: armas ${fmtCensus(atlasPages.weapons)}; Craft ${fmtCensus(atlasPages.craft)}`);
+console.log(`Bag inteiro, Craft rolado: ${flatPages.bag.all} Instances sem atlas, ${atlasPages.bag.all} com`);
 console.log(
 	`icones: ${frameCounts.length}, media ${(frameCounts.reduce((s, [, c]) => s + c, 0) / frameCounts.length).toFixed(1)} Frames, maximo ${frameCounts[0][1]} (${frameCounts[0][0]})`,
 );

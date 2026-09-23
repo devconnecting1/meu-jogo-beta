@@ -96,7 +96,20 @@ export type WorldArtName =
 	| "helipad"
 	| "floorCarpet"
 	| "floorKitchen"
-	| "floorBath";
+	| "floorBath"
+	| "survivorsA"
+	| "survivorsAFill"
+	| "survivorsARim"
+	| "survivorsB"
+	| "survivorsBFill"
+	| "survivorsBRim"
+	| "weapons"
+	| "zombies"
+	| "zombiesFill"
+	| "zombiesRim"
+	| "dogs"
+	| "birds"
+	| "itemIcons";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -261,9 +274,35 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "", w: 16, h: 16 },
+	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
+	survivorsA: { id: "", w: 640, h: 800 },
+	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
+	survivorsAFill: { id: "", w: 640, h: 800 },
+	/** mask: survivorsA: white outlines of the same cells (tint: the red hit outline, LEG-02) */
+	survivorsARim: { id: "", w: 640, h: 800 },
+	/** sheet: survivors, Zombie costume and Cowboy: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms (ART-09) */
+	survivorsB: { id: "", w: 640, h: 800 },
+	/** mask: survivorsB: white silhouettes of the same cells (tint: hit flash, poison) */
+	survivorsBFill: { id: "", w: 640, h: 800 },
+	/** mask: survivorsB: white outlines of the same cells (tint: the red hit outline, LEG-02) */
+	survivorsBRim: { id: "", w: 640, h: 800 },
+	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows (ART-09) */
+	weapons: { id: "", w: 768, h: 840 },
+	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 3 strides; spitter wind-ups, jumper in the air, charger charging (ART-10) */
+	zombies: { id: "", w: 768, h: 504 },
+	/** mask: zombies: white silhouettes of the same cells (tint: hit flash, lit fuse) */
+	zombiesFill: { id: "", w: 768, h: 504 },
+	/** mask: zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow) */
+	zombiesRim: { id: "", w: 768, h: 504 },
+	/** sheet: pets: Carolina, Malamute, Doberman x 3 trot strides + 3 tail wags (ART-11) */
+	dogs: { id: "", w: 576, h: 324 },
+	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
+	birds: { id: "", w: 768, h: 360 },
+	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
 };
 
-/** every texture of the world art, for the preload pass */
+/** every texture of the world art (the item icon atlas too), for the preload pass */
 export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"asphalt",
 	"asphaltLot",
@@ -346,4 +385,17 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
+	"survivorsA",
+	"survivorsAFill",
+	"survivorsARim",
+	"survivorsB",
+	"survivorsBFill",
+	"survivorsBRim",
+	"weapons",
+	"zombies",
+	"zombiesFill",
+	"zombiesRim",
+	"dogs",
+	"birds",
+	"itemIcons",
 ];

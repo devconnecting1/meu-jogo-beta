@@ -2,11 +2,12 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
-import { CONSOLE_MARGIN, HudConsole, HudDay, HudState } from "./hudConsole";
+import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
 import { HudNav } from "./hudNav";
 import type { PlayerSaveData } from "shared/game/save";
 import type { WorldData } from "shared/game/world";
-import { ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
+import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
+import { SCORE_CHIP_TOUCH_W, ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	Badge,
@@ -27,15 +28,19 @@ import {
 	setButtonEnabled,
 	setDesign,
 	setSurfaceTransparency,
+	topInset,
 	tween,
 	uiScale,
+	viewportSize,
 } from "./widgets";
 
 /*
- * The in-run HUD (docs/DESIGN_RULES.md UI-09). The vitals, the weapons and the Bag / Menu buttons live in ONE
- * framed console at the bottom centre and the day in a plate at the top centre -- both in client/ui/hudConsole.ts,
- * in the vocabulary of the owner's Settings window (UI-07). This file keeps what floats over the world: the damage
- * vignette, the interaction prompt, the banners and the message feed, and the touch layer.
+ * The in-run HUD (docs/DESIGN_RULES.md UI-09). The day clock, the vitals, the weapons and the Bag / Menu / Survivors
+ * buttons live in ONE framed console at the bottom centre (client/ui/hudConsole.ts, the clock in hudSky.ts, the
+ * survivors chip of the match scoreboard in scoreboard.ts, MP-23), in the vocabulary of the owner's Settings window
+ * (UI-07). On touch the thumbs own the bottom, so the clock and the chip ride where the Bag and the Menu go there: the
+ * top corner, the chip in their row and the clock under it (placeConsole). This file keeps what floats over the world:
+ * the damage vignette, the interaction prompt, the banners and the message feed, and the touch layer.
  */
 export type { HudState } from "./hudConsole";
 
@@ -65,6 +70,49 @@ const CENTER = UDim2.fromScale(0.5, 0.5);
 const BANNER_W = 720;
 const BANNER_H = 110;
 const BANNER_MIN_W = 280;
+/** between the banner card's sides and its texts */
+const BANNER_PAD = space(6);
+/**
+ * the banner's distance under the top bar: the top centre is the messages' now (the day plate that sat there moved into
+ * the console, UI-09), so the banner starts right under the bar at every HUD size
+ */
+const BANNER_TOP = 20;
+/** between the banner's box and the feed under it (design units, x the HUD size like the two boxes) */
+const FEED_GAP = 6;
+/** the banner's pop when it appears (showBanner): it starts this much larger */
+const BANNER_POP = 1.2;
+/** on touch, between a message over the top centre and what sits in the corner: the sky's plate, the chip */
+const MESSAGE_GAP = 8;
+
+/** the feed's distance under the top bar: under the banner's box, which grows with the HUD size `k` */
+function feedTop(k: number): number {
+	return BANNER_TOP + (BANNER_H + FEED_GAP) * k;
+}
+
+/**
+ * How far the messages over the top centre can reach on a `vw` x `vh` screen with the Roblox bar `inset` px tall, in
+ * px: the banner (`bannerW` design units at most) at the top of its pop, and the feed's column (lines at most `feedW`)
+ * under it, at the HUD size `k` (the "HUD size" setting scales both boxes, UI-09). makeAnchored's recipe: the box keeps
+ * its aspect inside w x k / DESIGN_W of the width and h x k / DESIGN_H of the height, centred, `marginY / DESIGN_H` of
+ * the height under the bar. On touch the HUD narrows both so they never reach the sky's plate or the scoreboard's chip
+ * in the top corner (Hud.messageWidths).
+ */
+export function messageReach(
+	vw: number,
+	vh: number,
+	inset: number,
+	bannerW = BANNER_W,
+	feedW = FEED_W,
+	k = 1,
+): [PxRect, PxRect] {
+	const s = math.min(vw / DESIGN_W, vh / DESIGN_H) * k;
+	const box = (w: number, h: number, marginY: number, pop: number): PxRect => {
+		const pw = w * s * pop;
+		const y = inset + (marginY / DESIGN_H) * vh;
+		return [(vw - pw) / 2, y, (vw + pw) / 2, y + h * s * pop];
+	};
+	return [box(bannerW, BANNER_H, BANNER_TOP, BANNER_POP), box(feedW, FEED_H, feedTop(k), 1)];
+}
 
 /** between the interaction prompt and the top of the console (design units of the console) */
 const HINT_GAP = 8;
@@ -128,6 +176,22 @@ function pxCircle(
 	return f;
 }
 
+/** where a touch control was last placed (scale x, y) and which Frame that was: a rebuilt control is placed anew */
+interface PlacedAt {
+	f?: Frame;
+	x: number;
+	y: number;
+}
+
+/** puts a touch control at scale (x, y), writing Position only when it moved: a resting stick writes nothing */
+function placeAt(f: Frame, at: PlacedAt, x: number, y: number): void {
+	if (at.f === f && at.x === x && at.y === y) return;
+	at.f = f;
+	at.x = x;
+	at.y = y;
+	f.Position = new UDim2(x, 0, y, 0);
+}
+
 type TouchIcon = "use" | "reload" | "bag" | "menu";
 
 /**
@@ -179,10 +243,26 @@ export class Hud {
 	private root: Frame | undefined;
 	/** bottom centre: vitals, the weapon hotbar, Bag / Menu, the weapon in hand (hudConsole.ts) */
 	private console: HudConsole | undefined;
-	/** top centre: the world's day, the phase, the watch's clock and this life's day (MP-13) */
-	private day: HudDay | undefined;
-	/** the match scoreboard and its chip beside the day plate (MP-23, client/ui/scoreboard.ts) */
+	/**
+	 * touch only: the day clock's own plate in the top corner, under Menu and Bag (on desktop it is a section of the console, which
+	 * updates it)
+	 */
+	private sky: HudSky | undefined;
+	private skyFrame: Frame | undefined;
+	/**
+	 * the match scoreboard (MP-23, client/ui/scoreboard.ts) and its chip, which goes where Bag and Menu go on the
+	 * device: on desktop the third plate of the console's button row (hudConsole.ts chipSlot), on touch the corner row
+	 * of Menu and Bag, left of Menu, over the sky (`chipSlot` below, placed by placeConsole)
+	 */
 	private board: Scoreboard | undefined;
+	/** touch only: the frame the scoreboard's chip fills, placed in screen pixels (hudConsole.ts placeTouchChip) */
+	private chipSlot: Frame | undefined;
+	/**
+	 * the widest banner card and feed line (design units): the full width, or on touch as much of it as keeps them off
+	 * the sky's plate and the scoreboard's chip in the top corner (placeConsole)
+	 */
+	private bannerMaxW = BANNER_W;
+	private feedMaxW = FEED_W;
 	/** top left: the compass's needle or the GPS map, when one is in hand (E2, client/ui/hudNav.ts) */
 	private nav: HudNav | undefined;
 	/** the "UI size" setting at mount (80%..120%) */
@@ -213,6 +293,9 @@ export class Hud {
 	private touchOff: (() => void) | undefined;
 	private touch = false;
 	private aimPad: Frame | undefined;
+	/** where the stick's base and the aim pad were last placed (updateTouch writes only a move) */
+	private joyAt: PlacedAt = { x: 0, y: 0 };
+	private padAt: PlacedAt = { x: 0, y: 0 };
 	private aimKnob: Frame | undefined;
 	private aimArrow: Frame | undefined;
 	private aimCursor: Frame | undefined;
@@ -256,15 +339,7 @@ export class Hud {
 
 		this.buildVignette(root);
 		const tr = (key: string): string => this.tr(key);
-		this.day = new HudDay(root, tr, k);
-		// who else is in the town (MP-23): hold Q, the pad's Back, or the chip beside the day plate. Never pauses
-		// (UI-06), never covers the thumbs, never takes the pad
-		this.board = new Scoreboard(root, this.day.frame, tr, {
-			touch: mobile,
-			keyLegend: () => (mobile ? "" : gamepadActive() ? "Back" : "Q"),
-			gamepad: gamepadActive,
-			source: this.scoreSource ?? scoreSourceOf(ctx),
-		});
+		if (mobile) [this.skyFrame, this.sky] = skyPlate(root, tr);
 		this.nav = new HudNav(root, tr, k);
 		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
 		// and Menu buttons), sized and placed between the thumbs by placeConsole()
@@ -276,6 +351,32 @@ export class Hud {
 			onBag: (): void => this.onBackpack?.(),
 			onMenu: (): void => this.onPause?.(),
 		});
+		// who else is in the town (MP-23): hold Q, the pad's Back, or the survivors chip. Never pauses (UI-06), never
+		// covers the thumbs, never takes the pad. The chip goes where Bag and Menu go on this device: on desktop the
+		// console's button row (a third plate after them), on touch the corner row of Menu and Bag (placeConsole)
+		let chipSlot = this.console.chipSlot;
+		if (mobile) {
+			chipSlot = new Instance("Frame");
+			chipSlot.Name = "ChipSlot";
+			chipSlot.BackgroundTransparency = 1;
+			chipSlot.BackgroundColor3 = THEME.background;
+			chipSlot.BorderSizePixel = 0;
+			// with the sky's plate: above the damage vignette, under the touch layer (ZIndex 8), which it never overlaps
+			chipSlot.ZIndex = 2;
+			chipSlot.Size = UDim2.fromOffset(SCORE_CHIP_TOUCH_W, SKY_PLATE_H);
+			setDesign(chipSlot, SCORE_CHIP_TOUCH_W, SKY_PLATE_H);
+			chipSlot.Parent = root;
+			this.chipSlot = chipSlot;
+		}
+		if (chipSlot !== undefined) {
+			this.board = new Scoreboard(root, chipSlot, tr, {
+				touch: mobile,
+				chipStyle: mobile ? "corner" : "console",
+				keyLegend: () => (mobile ? "" : gamepadActive() ? "Back" : "Q"),
+				gamepad: gamepadActive,
+				source: this.scoreSource ?? scoreSourceOf(ctx),
+			});
+		}
 		this.buildHint(root, k);
 		this.buildMessages(root, k);
 		// the save (and with it the player's control preferences) arrives long after bootstrap ran: recompute
@@ -305,12 +406,79 @@ export class Hud {
 		if (!this.touch) {
 			const bottom = CONSOLE_MARGIN + deck.layout.h * this.uiK + HINT_GAP;
 			if (hint !== undefined) hint.Position = new UDim2(0.5, 0, 1 - bottom / DESIGN_H, 0);
+			// the sky is in the console: the top centre is the messages' whole
+			this.bannerMaxW = BANNER_W;
+			this.feedMaxW = FEED_W;
 			return;
 		}
-		const p = deck.placeTouch(getTouchLayout(), this.uiK);
+		const L = getTouchLayout();
+		const p = deck.placeTouch(L, this.uiK);
 		if (hint !== undefined) {
 			hint.Position = UDim2.fromOffset(math.round(p.x + p.w / 2), math.round(p.y - HINT_GAP * p.scale));
 		}
+		// the clock: under the row of Menu and Bag, as tall as they are (hudConsole.ts placeTouchSky); the scoreboard's
+		// chip: in that row, left of Menu (placeTouchChip) -- the corner is one block, the buttons over the clock
+		const sky = this.skyFrame;
+		if (sky !== undefined) {
+			// the banner and the feed keep at least their narrowest over the top centre: the sky never takes that
+			const v = viewportSize();
+			const least = messageReach(v.X, v.Y, topInset(), BANNER_MIN_W, FEED_LINE_MIN_W, this.uiK);
+			const deckRect: PxRect = [p.x, p.y, p.x + p.w, p.y + p.h];
+			const s = placeTouchSky(L, deckRect, SKY_PLATE_W, SKY_PLATE_H, least);
+			sky.Position = UDim2.fromOffset(math.round(s.x), math.round(s.y));
+			sky.Size = UDim2.fromOffset(math.ceil(s.w), math.ceil(s.h));
+			const textScale = math.clamp(s.scale / math.max(uiScale(), 0.05), 0.5, 4);
+			this.sky?.setTextScale(textScale);
+			const skyRect: PxRect = [s.x, s.y, s.x + s.w, s.y + s.h];
+			const corner: Array<PxRect> = [skyRect];
+			const slot = this.chipSlot;
+			if (slot !== undefined) {
+				const c = placeTouchChip(L, deckRect, skyRect, SCORE_CHIP_TOUCH_W, SKY_PLATE_H, least);
+				slot.Position = UDim2.fromOffset(math.round(c.x), math.round(c.y));
+				slot.Size = UDim2.fromOffset(math.ceil(c.w), math.ceil(c.h));
+				this.board?.setChipTextScale(textScale);
+				corner.push([c.x, c.y, c.x + c.w, c.y + c.h]);
+			}
+			this.fitMessages(corner);
+			// the open scoreboard, pinned to the left edge, stays under the sky and the chip if they moved there; so does
+			// the compass / GPS plate at the top left (hudNav.ts), which only a crowded layout sends them to
+			this.board?.avoid(corner);
+			this.nav?.avoid(corner);
+		}
+	}
+
+	/**
+	 * The top corner is the controls' (Menu, Bag, the scoreboard's chip beside them and the sky under them), the top
+	 * centre the messages': a banner or a feed line whose band of the screen one of `corner` shares is narrowed,
+	 * centred, to stop MESSAGE_GAP short of the nearest (the banner at the top of its pop), at the HUD size. The
+	 * narrowest a message goes is its own minimum; on the screens the tests know the corner leaves at least that
+	 * (tools/test-hud.mjs).
+	 */
+	private fitMessages(corner: Array<PxRect>): void {
+		const v = viewportSize();
+		const k = this.uiK;
+		const [banner, feed] = messageReach(v.X, v.Y, topInset(), BANNER_W, FEED_W, k);
+		// px per design unit of the two boxes (the HUD size scales them)
+		const px = math.min(v.X / DESIGN_W, v.Y / DESIGN_H) * k;
+		const cx = v.X / 2;
+		/** px from the centre line to the nearest of `corner` that shares the band of `r`, less the gap (huge: none) */
+		const roomBy = (r: PxRect): number => {
+			let room = math.huge;
+			for (const q of corner) {
+				if (!(q[1] < r[3] && r[1] < q[3])) continue;
+				room = math.min(room, (q[0] >= cx ? q[0] - cx : cx - q[2]) - MESSAGE_GAP * px);
+			}
+			return room;
+		};
+		const widest = (room: number, full: number, pop: number, least: number): number =>
+			room === math.huge ? full : math.clamp((room * 2) / (px * pop), least, full);
+		this.bannerMaxW = widest(roomBy(banner), BANNER_W, BANNER_POP, BANNER_MIN_W);
+		this.feedMaxW = widest(roomBy(feed), FEED_W, 1, FEED_LINE_MIN_W);
+	}
+
+	/** the widest banner card and feed line the HUD draws now, in design units (the tests' view of fitMessages) */
+	messageWidths(): [number, number] {
+		return [this.bannerMaxW, this.feedMaxW];
 	}
 
 	/**
@@ -546,10 +714,10 @@ export class Hud {
 
 	/** banner (waves, morning, night, boss) as a bordered card + the feed of short messages below it */
 	private buildMessages(root: Frame, k: number): void {
-		// the HUD size setting scales the messages too, as its description promises ("Console, day plate, hints and
-		// messages"): the banner under the day plate, the feed under the banner, all at `k`
-		const bannerY = 20 + 64 * k;
-		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, bannerY, true, k);
+		// the HUD size setting scales the messages too, as its description promises ("Console, hints and messages"):
+		// the banner right under the bar (the top centre is the messages' since the day moved into the console), the
+		// feed under the banner, both at `k`; on touch fitMessages narrows them off the corner
+		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, BANNER_TOP, true, k);
 		// the card is resized to the message in showBanner; the texts stay centred over it
 		const card = Card(bannerBox, "Card", {
 			x: 0,
@@ -561,7 +729,7 @@ export class Hud {
 		});
 		setSurfaceTransparency(card, 1);
 		this.bannerCard = card;
-		const pad = space(6);
+		const pad = BANNER_PAD;
 		const banner = makeLabel(
 			bannerBox,
 			"Banner",
@@ -600,7 +768,7 @@ export class Hud {
 		scale.Parent = bannerBox;
 		this.bannerScale = scale;
 
-		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, bannerY + (BANNER_H + 6) * k, true, k);
+		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, feedTop(k), true, k);
 		const layout = new Instance("UIListLayout");
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
 		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center;
@@ -645,10 +813,12 @@ export class Hud {
 		this.root?.Destroy();
 		this.root = undefined;
 		this.console = undefined;
-		this.day = undefined;
+		this.sky = undefined;
+		this.skyFrame = undefined;
 		this.nav = undefined;
 		this.board?.destroy();
 		this.board = undefined;
+		this.chipSlot = undefined;
 		this.vignette = [];
 		this.vignetteT = 1;
 		this.feed = undefined;
@@ -709,9 +879,10 @@ export class Hud {
 		if (!this.mounted || this.root === undefined) return;
 		const now = os.clock();
 
-		// the console (bars, hotbar, weapon) and the day plate: both write only what changed, and create nothing
+		// the console (the sky, bars, hotbar, weapon) and, on touch, the sky's own plate: both write only what changed,
+		// and create nothing
 		this.console?.update(state, this.ctx.save, now);
-		this.day?.update(state);
+		this.sky?.update(state, now);
 		this.board?.update(this.ctx.input.keyScoreboard, now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
@@ -752,7 +923,7 @@ export class Hud {
 			// a floating stick follows the thumb; a fixed one never leaves its home
 			const baseX = active && L.floating ? input.joystickBaseX : L.move.homeX;
 			const baseY = active && L.floating ? input.joystickBaseY : L.move.homeY;
-			this.joyBase.Position = new UDim2(sx(baseX), 0, sy(baseY), 0);
+			placeAt(this.joyBase, this.joyAt, sx(baseX), sy(baseY));
 			if (active) {
 				const dx = input.joystickX - baseX;
 				const dy = input.joystickY - baseY;
@@ -781,7 +952,7 @@ export class Hud {
 			const aiming = input.aimStickActive;
 			const padX = aiming ? input.aimStickBaseX : L.aim.homeX;
 			const padY = aiming ? input.aimStickBaseY : L.aim.homeY;
-			this.aimPad.Position = new UDim2(sx(padX), 0, sy(padY), 0);
+			placeAt(this.aimPad, this.padAt, sx(padX), sy(padY));
 			if (this.aimKnob.Visible !== aiming) this.aimKnob.Visible = aiming;
 			if (this.aimArrow.Visible !== aiming) this.aimArrow.Visible = aiming;
 			if (aiming) {
@@ -853,14 +1024,20 @@ export class Hud {
 		sub.Text = subText;
 		// fit the card to the message (estimated width; TextScaled shrinks anything longer)
 		const textW = math.max(badgeWidth(text, TEXT.xl5, 0), subText === "" ? 0 : badgeWidth(subText, TEXT.lg, 0));
-		const w = math.clamp(textW + space(12), BANNER_MIN_W, BANNER_W);
+		const w = math.clamp(textW + space(12), BANNER_MIN_W, this.bannerMaxW);
 		const h = subText === "" ? 70 + space(3) : BANNER_H;
 		card.Position = UDim2.fromScale((BANNER_W - w) / 2 / BANNER_W, 0);
 		card.Size = UDim2.fromScale(w / BANNER_W, h / BANNER_H);
+		// the texts keep inside the card (on touch it may be narrowed: fitMessages); TextScaled shrinks what is longer
+		const inner = w - BANNER_PAD * 2;
+		for (const label of [banner, sub]) {
+			label.Position = new UDim2((BANNER_W - inner) / 2 / BANNER_W, 0, label.Position.Y.Scale, 0);
+			label.Size = new UDim2(inner / BANNER_W, 0, label.Size.Y.Scale, 0);
+		}
 		setSurfaceTransparency(card, 1);
 		banner.TextTransparency = 1;
 		sub.TextTransparency = 1;
-		scale.Scale = 1.2;
+		scale.Scale = BANNER_POP;
 		fadeSurface(card, 0.2, 0);
 		fadeText(banner, 0.25, 0);
 		fadeText(sub, 0.35, 0);
@@ -890,7 +1067,7 @@ export class Hud {
 		}
 		entries.sort((a, b) => a.LayoutOrder < b.LayoutOrder);
 		while (entries.size() >= FEED_MAX) entries.remove(0)?.Destroy();
-		const w = math.clamp(badgeWidth(text, TEXT.base, FEED_LINE_H) + space(6), FEED_LINE_MIN_W, FEED_W);
+		const w = math.clamp(badgeWidth(text, TEXT.base, FEED_LINE_H) + space(6), FEED_LINE_MIN_W, this.feedMaxW);
 		const line = Card(feed, "Line", {
 			x: 0,
 			y: 0,
