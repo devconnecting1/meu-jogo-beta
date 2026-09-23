@@ -78,6 +78,8 @@ export function skinPx(): number {
 // ---------------------------------------------------------------- refresh registries
 
 const textConstraints = new Map<UITextSizeConstraint, number>();
+/** text drawn at a fixed size (no TextScaled): object -> design size */
+const fixedTexts = new Map<TextLabel | TextButton, number>();
 const strokeWidths = new Map<UIStroke, number>();
 const pixelStrokes = new Map<UIStroke, number>();
 const skinLayers = new Set<ImageLabel>();
@@ -227,6 +229,26 @@ export function scaleText(obj: TextLabel | TextButton | TextBox, designSize: num
 	return c;
 }
 
+/** screen px of a design text size drawn WITHOUT TextScaled: the UI scale, never below MIN_TEXT_PX */
+export function fixedTextPx(designSize: number): number {
+	return math.clamp(math.round(designSize * uiScale()), MIN_TEXT_PX, 100);
+}
+
+/**
+ * The opposite of scaleText: the text keeps its size and its BOX has to grow (AutomaticSize) -- it never gets
+ * squeezed. That squeezing is what turned the How-to-play key legends into a blur: TextScaled fits the string
+ * into a fixed box by shrinking it, down to the floor. Kept in sync with the screen size like scaleText.
+ *
+ * Not multiplied by the player's Text Size setting: without TextScaled and without a UITextSizeConstraint the
+ * ENGINE applies that setting itself, and an AutomaticSize box grows with it (the accessibility doc).
+ */
+export function fixedText(obj: TextLabel | TextButton, designSize: number): void {
+	obj.TextScaled = false;
+	if (!fixedTexts.has(obj)) obj.Destroying.Connect(() => fixedTexts.delete(obj));
+	fixedTexts.set(obj, designSize);
+	obj.TextSize = fixedTextPx(designSize);
+}
+
 /** sets a kit stroke's width in design px (kept in sync with the screen size) */
 export function setStrokeWidth(s: UIStroke, width: number): void {
 	if (!strokeWidths.has(s)) s.Destroying.Connect(() => strokeWidths.delete(s));
@@ -235,7 +257,7 @@ export function setStrokeWidth(s: UIStroke, width: number): void {
 	s.Thickness = hairline(width);
 }
 
-/** sets a stroke's width in SKIN pixels (text outlines and pixel borders follow the skin grid) */
+/** sets a stroke's width in SKIN pixels (pixel borders follow the skin grid) */
 export function setPixelStroke(s: UIStroke, pixels: number): void {
 	if (!pixelStrokes.has(s)) s.Destroying.Connect(() => pixelStrokes.delete(s));
 	strokeWidths.delete(s);
@@ -247,6 +269,10 @@ function refreshAll(): void {
 	for (const [c, size] of textConstraints) {
 		if (c.Parent === undefined) textConstraints.delete(c);
 		else applyTextSize(c, size);
+	}
+	for (const [obj, size] of fixedTexts) {
+		if (obj.Parent === undefined) fixedTexts.delete(obj);
+		else obj.TextSize = fixedTextPx(size);
 	}
 	for (const [s, width] of strokeWidths) {
 		if (s.Parent === undefined) strokeWidths.delete(s);
@@ -304,32 +330,83 @@ export function onLayoutChange(owner: Instance, fn: () => void): void {
 	fn();
 }
 
-// ---------------------------------------------------------------- text outline
+// ---------------------------------------------------------------- text: never outlined
+
+/*
+ * DESIGN_RULES UI-04: no text in the game carries a contour -- no UIStroke on a TextLabel / TextButton /
+ * TextBox, and no TextStroke. It is the owner's call ("it makes it ugly"), and it undoes something the old kit
+ * did without anyone asking: every button label and every title used to get a 1 skin px dark outline here.
+ * Readability comes from the surface behind the text instead (UI-05, measured by `npm run test:contrast`).
+ */
 
 /**
- * Dark contour around titles, buttons and numbers (the reference style). UIStroke on a text object is a
- * text outline (ApplyStrokeMode.Contextual); its transparency is independent of TextTransparency, so fades
- * go through fadeText().
+ * Removes a contour from a text object: a glyph-outline UIStroke (the old "TextOutline", or any stroke in
+ * Contextual mode) and the legacy TextStroke.
  */
-export function textOutline(label: TextLabel | TextButton, color = THEME.background, pixels = 1): UIStroke {
-	let s = label.FindFirstChild("TextOutline") as UIStroke | undefined;
-	if (s === undefined) {
-		s = new Instance("UIStroke");
-		s.Name = "TextOutline";
-		s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual;
-		s.LineJoinMode = Enum.LineJoinMode.Miter;
-		s.Parent = label;
+export function clearTextOutline(label: TextLabel | TextButton | TextBox): void {
+	for (const child of label.GetChildren()) {
+		if (!child.IsA("UIStroke")) continue;
+		if (child.Name === "TextOutline" || child.ApplyStrokeMode === Enum.ApplyStrokeMode.Contextual) child.Destroy();
 	}
-	s.Color = color;
-	setPixelStroke(s, pixels);
+	label.TextStrokeTransparency = 1;
+}
+
+/**
+ * The old name, kept only because call sites outside the kit still use it (admin/controls.ts). It no longer
+ * draws anything: it CLEARS the contour, so an old call can never bring one back.
+ */
+export function textOutline(label: TextLabel | TextButton): void {
+	clearTextOutline(label);
+}
+
+/** fades a text object */
+export function fadeText(label: TextLabel | TextButton, time: number, transparency: number): void {
+	tweenTo(label, time, { TextTransparency: transparency });
+}
+
+// ---------------------------------------------------------------- box strokes (frames only)
+
+/**
+ * Where a box stroke may live. A UIStroke parented to a text object contours its GLYPHS by default, and UI-04
+ * forbids any UIStroke on text at all, so for a text host -- the kit's buttons are TextButtons -- the stroke
+ * goes on a transparent child frame that covers it exactly. Created on demand: with the skin on, buttons never
+ * need one.
+ */
+function strokeHost(g: GuiObject): GuiObject {
+	if (!(g.IsA("TextLabel") || g.IsA("TextButton") || g.IsA("TextBox"))) return g;
+	const found = g.FindFirstChild("StrokeHost");
+	if (found !== undefined && found.IsA("Frame")) return found;
+	const f = new Instance("Frame");
+	f.Name = "StrokeHost";
+	f.BackgroundTransparency = 1;
+	f.BackgroundColor3 = THEME.background;
+	f.BorderSizePixel = 0;
+	f.Size = UDim2.fromScale(1, 1);
+	f.Active = false;
+	f.Selectable = false;
+	f.ZIndex = g.ZIndex;
+	f.Parent = g;
+	return f;
+}
+
+/**
+ * The kit's ONE way to create a UIStroke: a border around a box (ApplyStrokeMode.Border), parented to a frame
+ * -- never a text contour. `npm run test:contrast` fails if skin.ts / widgets.ts create a UIStroke anywhere else.
+ */
+export function boxStroke(target: GuiObject, name = "Stroke"): UIStroke {
+	const s = new Instance("UIStroke");
+	s.Name = name;
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+	s.Parent = strokeHost(target);
 	return s;
 }
 
-/** fades a label together with its outline (UIStroke transparency does not follow TextTransparency) */
-export function fadeText(label: TextLabel | TextButton, time: number, transparency: number): void {
-	tweenTo(label, time, { TextTransparency: transparency });
-	const s = label.FindFirstChild("TextOutline");
-	if (s !== undefined && s.IsA("UIStroke")) tweenTo(s, time, { Transparency: transparency });
+/** a box stroke made by boxStroke(target, name), wherever it lives (on the target or on its StrokeHost) */
+function findBoxStroke(target: GuiObject, name: string): UIStroke | undefined {
+	const direct = target.FindFirstChild(name);
+	if (direct !== undefined && direct.IsA("UIStroke")) return direct;
+	const nested = target.FindFirstChild("StrokeHost")?.FindFirstChild(name);
+	return nested !== undefined && nested.IsA("UIStroke") ? nested : undefined;
 }
 
 /** every fade of the kit lands here; `motionTime` is what makes Reduce Motion cut them to an instant jump */
@@ -396,17 +473,14 @@ function combine(base: number, extra: number): number {
 }
 
 function fallbackStroke(host: GuiObject, spec: SurfaceSpec, on: boolean): void {
-	let s = host.FindFirstChild("SurfaceBorder") as UIStroke | undefined;
+	let s = findBoxStroke(host, "SurfaceBorder");
 	if (!on || spec.stroke === undefined) {
 		if (s !== undefined) s.Enabled = false;
 		return;
 	}
 	if (s === undefined) {
-		s = new Instance("UIStroke");
-		s.Name = "SurfaceBorder";
-		s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+		s = boxStroke(host, "SurfaceBorder");
 		s.LineJoinMode = Enum.LineJoinMode.Miter;
-		s.Parent = host;
 	}
 	s.Enabled = true;
 	s.Color = spec.stroke;
@@ -414,18 +488,25 @@ function fallbackStroke(host: GuiObject, spec: SurfaceSpec, on: boolean): void {
 	setStrokeWidth(s, spec.strokeW ?? BORDER.width);
 }
 
-function fallbackCorner(host: GuiObject, radius: number): void {
-	let c = host.FindFirstChildOfClass("UICorner");
+function setCorner(obj: GuiObject, radius: number): void {
+	let c = obj.FindFirstChildOfClass("UICorner");
 	if (radius <= 0) {
 		if (c !== undefined) c.CornerRadius = new UDim();
 		return;
 	}
 	if (c === undefined) {
 		c = new Instance("UICorner");
-		c.Parent = host;
+		c.Parent = obj;
 	}
 	// in screen px (Roblox clamps it to half the shorter side), so it works before the first layout pass
 	c.CornerRadius = new UDim(0, math.round(radius * uiScale()));
+}
+
+function fallbackCorner(host: GuiObject, radius: number): void {
+	setCorner(host, radius);
+	// a text host keeps its border on a child frame (see strokeHost): that frame needs the same corners
+	const strokeFrame = host.FindFirstChild("StrokeHost");
+	if (strokeFrame !== undefined && strokeFrame.IsA("Frame")) setCorner(strokeFrame, radius);
 }
 
 function applySurface(host: GuiObject, live: LiveSurface): void {
@@ -497,8 +578,8 @@ export function clearSurface(host: GuiObject): void {
 	if (live === undefined) return;
 	for (const l of live.labels) l.Destroy();
 	surfaces.delete(host);
-	const s = host.FindFirstChild("SurfaceBorder");
-	if (s !== undefined && s.IsA("UIStroke")) s.Enabled = false;
+	const s = findBoxStroke(host, "SurfaceBorder");
+	if (s !== undefined) s.Enabled = false;
 	host.BackgroundTransparency = 1;
 }
 
@@ -529,8 +610,8 @@ export function fadeSurface(host: GuiObject, time: number, transparency: number)
 		return;
 	}
 	tweenTo(host, time, { BackgroundTransparency: combine(worldTransparency(live.spec.bgT), live.extraT) });
-	const s = host.FindFirstChild("SurfaceBorder");
-	if (s !== undefined && s.IsA("UIStroke")) {
+	const s = findBoxStroke(host, "SurfaceBorder");
+	if (s !== undefined) {
 		tweenTo(s, time, { Transparency: combine(worldTransparency(live.spec.strokeT ?? 0), live.extraT) });
 	}
 }

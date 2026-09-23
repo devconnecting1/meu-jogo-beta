@@ -1,31 +1,35 @@
 #!/usr/bin/env node
 /*
- * Colour contrast of the theme: every pair the UI really draws, measured.
+ * Colour contrast of the theme, and the two rules that keep text readable without tricks.
  *
  *   npm run test:contrast
  *
- * Why this exists: docs/research/ui.md (6.4) found three pairs below the readable minimum -- the main action
- * button at 4,18:1, `accent` at 3,35:1 and the well outline over a panel at 1,68:1 -- and the fix is a change
- * of PALETTE. A palette has no compiler: the next theme regeneration can quietly undo it. So the ratios are
- * a test.
+ * Why this exists: docs/research/ui.md (6.4) found pairs below the readable minimum -- the main action button at
+ * 4,18:1, `accent` at 3,35:1, the well outline over a panel at 1,68:1 -- and the fix is a change of PALETTE.
+ * A palette has no compiler: the next theme regeneration can quietly undo it. So the ratios are a test.
  *
- * Criterion (ours, not Roblox's): the Roblox accessibility page asks for "sufficient color contrast" without
- * fixing a number, so we adopt WCAG 2.x -- 4,5:1 for text and 3:1 for the non-text parts that carry meaning
- * (outlines, tracks, bar fills, focus rings). Our text is small (the kit's `label` role is 14 design units,
- * which on a phone renders at the 9 px floor of skin.ts), so we do NOT claim the 3:1 "large text" exemption
- * anywhere.
+ * The owner's rules for text (docs/DESIGN_RULES.md UI-04 / UI-05), which this file enforces:
+ *  1. text NEVER carries a contour: no UIStroke on a TextLabel / TextButton / TextBox, no TextStroke;
+ *  2. a label on a plate (button, active tab, key) is the LIGHT `foreground`, never the near-black body;
+ *  3. so the PLATE carries the contrast: a button title (large, SemiBold/Bold) needs 3:1 against its plate,
+ *     small text on a plate ("Day 1" under PLAY, the menu-tile subtitles, key legends) needs 4,5:1.
+ * Rule 1 is checked on the kit's source (skin.ts / widgets.ts / tutorial.ts), since a Luau GuiObject tree does
+ * not exist here; rules 2 and 3 on the tokens.
+ *
+ * Criterion (ours, not Roblox's): the Roblox accessibility page asks for "sufficient color contrast" without a
+ * number, so we adopt WCAG 2.x -- 4,5:1 for text, 3:1 for large text and for the non-text parts that carry
+ * meaning (outlines, tracks, bar fills, focus rings).
  *
  * How the pairs are resolved: the values come from the GENERATED src/client/ui/themeTokens.ts, and the roles
  * (THEME / SURFACE / GAME / SIDEBAR) are read out of src/client/ui/theme.ts, including which mode is active
- * (`const TOKENS = DARK`). So re-pointing a role -- say `primary` back to chart-1 -- moves the test with it
- * instead of leaving it measuring something the UI no longer draws.
+ * (`const TOKENS = DARK`). So re-pointing a role moves the test with it instead of leaving it measuring
+ * something the UI no longer draws.
  *
  * Two honest limits, both from the audit:
- *  - 5.3: a skinned surface is a GREYSCALE texture multiplied by the token, so what a panel really renders is
- *    darker than its token. These ratios are therefore an UPPER bound for skinned surfaces; the flat fallback
- *    (no textures) is what they describe exactly.
+ *  - 5.3: a skinned surface is a GREYSCALE texture multiplied by the token, so what it renders is DARKER than
+ *    its token. For light text on a plate that makes the measured ratio the worst case; for anything else it is
+ *    an estimate, exact only for the flat fallback (no textures).
  *  - the HUD draws over the game world at TRANSPARENCY.hud, and the world is not a colour we can measure.
- *    Banner and HUD text carries a 1 px outline in `background` (GAME.textOutline) for that reason.
  *
  * Pure Node (>= 18), no dependencies.
  */
@@ -34,15 +38,26 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TOKENS_FILE = join(ROOT, "src", "client", "ui", "themeTokens.ts");
-const THEME_FILE = join(ROOT, "src", "client", "ui", "theme.ts");
+const UI = join(ROOT, "src", "client", "ui");
+const TOKENS_FILE = join(UI, "themeTokens.ts");
+const THEME_FILE = join(UI, "theme.ts");
+/** the kit: the only code allowed to create strokes for the screens, and the keycaps */
+const KIT_FILES = ["skin.ts", "widgets.ts", "tutorial.ts"];
 
-/** WCAG 2.x: normal text */
+/** WCAG 2.x: normal (small) text */
 const MIN_TEXT = 4.5;
+/** WCAG 2.x: large text -- a button title is large and SemiBold/Bold */
+const MIN_LARGE = 3;
 /** WCAG 2.x: non-text content that carries meaning (outlines, tracks, indicators, focus rings) */
 const MIN_UI = 3;
 /** ours: the panel moulding is decoration, not the outline that identifies the panel -- but it must be seen */
 const MIN_RELIEF = 1.5;
+
+let failures = 0;
+function check(label, ok, detail) {
+	if (!ok) failures++;
+	console.log(`${ok ? "ok   " : "FALHA"} ${label}${detail === undefined ? "" : `  ${detail}`}`);
+}
 
 // ---------------------------------------------------------------- parsing
 
@@ -132,6 +147,7 @@ function contrast(a, b) {
 }
 
 const hex = ([r, g, b]) => "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("");
+const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
 // ---------------------------------------------------------------- the pairs the UI draws
 
@@ -143,23 +159,33 @@ const hex = ([r, g, b]) => "#" + [r, g, b].map(x => x.toString(16).padStart(2, "
  * the worst case and the one measured.
  */
 const PAIRS = [
-	// --- text ---
+	// --- text on the dark body ---
 	["THEME.foreground", "THEME.background", MIN_TEXT, "texto das paginas cheias (lobby, loja, ajustes)"],
 	["THEME.cardForeground", "THEME.card", MIN_TEXT, "texto de card"],
 	["THEME.popoverForeground", "THEME.popover", MIN_TEXT, "texto de dialogo, toast, tutorial, nameplate"],
 	["THEME.foreground", "SURFACE.panel", MIN_TEXT, "texto sobre o interior de um painel"],
 	["THEME.foreground", "SURFACE.well", MIN_TEXT, "texto dentro de um well (listas, trilhos, barras)"],
-	["THEME.foreground", "SURFACE.frame", MIN_TEXT, "titulo na faixa do painel; badge `default`"],
+	["THEME.foreground", "SURFACE.frame", MIN_TEXT, "titulo na faixa do painel"],
 	["THEME.mutedForeground", "THEME.background", MIN_TEXT, "legendas e descricoes"],
 	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, "legendas dentro de um painel"],
 	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "botao desabilitado; aba inativa"],
 	["THEME.accentForeground", "SURFACE.frame", MIN_TEXT, "texto de hover/selecao dos controles recuados"],
-	["THEME.accentForeground", "THEME.accent", MIN_TEXT, "o par `accent` do mapa de papeis (theme.ts)"],
-	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "a acao principal da tela (Play, Equip, Buy)"],
-	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "demais acoes, aba ativa, item de trilho ativo"],
-	["THEME.destructiveForeground", "THEME.destructive", MIN_TEXT, "acoes perigosas e o botao Fechar (X)"],
 	["SIDEBAR.foreground", "SURFACE.well", MIN_TEXT, "item do trilho de navegacao"],
 	["SIDEBAR.foreground", "SURFACE.panel", MIN_TEXT, "item do trilho sobre o painel"],
+
+	// --- labels on plates: the plate carries the contrast (UI-05) ---
+	["THEME.primaryForeground", "THEME.primary", MIN_LARGE, "chapa verde: titulo (PLAY, Got it, Equip)"],
+	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "chapa verde: texto pequeno (o \"Day 1\" do PLAY)"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_LARGE, "chapa de ferro: titulo (Shop, Settings, aba ativa)"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "chapa de ferro: subtitulos (\"0 / 20\"), badge"],
+	["THEME.destructiveForeground", "THEME.destructive", MIN_LARGE, "chapa vermelha: titulo (Close X, Quit)"],
+	["THEME.accentForeground", "THEME.accent", MIN_TEXT, "o par `accent` do mapa de papeis (theme.ts)"],
+	["THEME.foreground", "SURFACE.key", MIN_TEXT, "legenda de tecla (How to play, prompt E)"],
+	// the value drawn OVER a bar's fill (Progress label: numeric Bold) lost its outline with UI-04 -> the fill
+	["THEME.foreground", "GAME.hp", MIN_LARGE, "valor sobre a barra de vida (numeric Bold)"],
+	["THEME.foreground", "GAME.food", MIN_LARGE, "valor sobre a barra de fome (numeric Bold)"],
+	["THEME.foreground", "GAME.xp", MIN_LARGE, "valor sobre a barra de XP (numeric Bold)"],
+	["THEME.foreground", "THEME.primary", MIN_LARGE, "valor sobre uma barra de progresso padrao"],
 
 	// --- game colours used as text / numbers / glyphs ---
 	["GAME.success", "SURFACE.panel", MIN_TEXT, "cura, equipado, ingrediente presente"],
@@ -183,28 +209,95 @@ const PAIRS = [
 	["SURFACE.frame", "SURFACE.panel", MIN_RELIEF, "moldura grossa do painel (relevo, nao e o contorno)"],
 ];
 
-// ---------------------------------------------------------------- run
+/** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
+const PLATE_LABELS = [
+	"THEME.primaryForeground",
+	"THEME.secondaryForeground",
+	"THEME.destructiveForeground",
+	"THEME.accentForeground",
+];
 
-let failures = 0;
+// ---------------------------------------------------------------- run: contrast
+
+console.log(`1) contraste dos tokens (${activeMode("TOKENS")} / ${activeMode("SIDEBAR_TOKENS")})\n`);
 const width = PAIRS.reduce((w, p) => Math.max(w, `${p[0]} / ${p[1]}`.length), 0);
-
-console.log(`contraste dos tokens (${activeMode("TOKENS")} / ${activeMode("SIDEBAR_TOKENS")})\n`);
 for (const [frontPath, backPath, min, why] of PAIRS) {
 	const front = role(frontPath);
 	const back = role(backPath);
 	const r = contrast(front, back);
-	const ok = r + 1e-9 >= min;
-	if (!ok) failures++;
 	const label = `${frontPath} / ${backPath}`.padEnd(width);
-	const shown = `${hex(front)} sobre ${hex(back)}`;
-	console.log(
-		`${ok ? "ok  " : "FALHA"} ${label}  ${r.toFixed(2).padStart(5)}:1  (min ${min})  ${shown}  ${why}`,
+	check(label, r + 1e-9 >= min, `${r.toFixed(2).padStart(5)}:1  (min ${min})  ${hex(front)} sobre ${hex(back)}  ${why}`);
+}
+
+// ---------------------------------------------------------------- run: plate labels are light
+
+console.log("\n2) rotulo sobre chapa e o foreground claro (UI-05)\n");
+const foreground = role("THEME.foreground");
+for (const path of PLATE_LABELS) {
+	const rgb = role(path);
+	check(`${path} == THEME.foreground`, same(rgb, foreground), `${hex(rgb)} (esperado ${hex(foreground)})`);
+}
+
+// ---------------------------------------------------------------- run: text never carries a contour
+
+console.log("\n3) o kit nao cria contorno em texto (UI-04)\n");
+
+/** source with comments removed, so a rule explained in a comment is not mistaken for code */
+function code(file) {
+	return readFileSync(join(UI, file), "utf8")
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/\/\/.*$/gm, "");
+}
+
+/** body of a top-level function (from its declaration to the first `}` in column 0) */
+function functionBody(src, name) {
+	const start = src.search(new RegExp(`\\nexport function ${name}\\b|\\nfunction ${name}\\b`));
+	if (start < 0) return undefined;
+	const end = src.indexOf("\n}", start + 1);
+	return src.slice(start, end < 0 ? undefined : end + 2);
+}
+
+const kit = new Map(KIT_FILES.map(f => [f, code(f)]));
+let strokeCreations = 0;
+for (const [file, src] of kit) {
+	strokeCreations += (src.match(/new Instance\("UIStroke"\)/g) ?? []).length;
+	check(
+		`${file}: nenhum UIStroke em modo Contextual (o modo que contorna glifos)`,
+		!/ApplyStrokeMode\s*=(?!=)\s*Enum\.ApplyStrokeMode\.Contextual/.test(src),
 	);
+	const strokes = [...src.matchAll(/TextStrokeTransparency\s*=(?!=)\s*([\d.]+)/g)].map(m => +m[1]);
+	check(
+		`${file}: nenhum TextStroke visivel`,
+		strokes.every(t => t >= 1),
+		strokes.length > 0 ? `valores: ${strokes.join(", ")}` : undefined,
+	);
+}
+const skin = kit.get("skin.ts");
+const boxStroke = functionBody(skin, "boxStroke");
+const strokeHost = functionBody(skin, "strokeHost");
+check(
+	'o kit cria UIStroke em UM lugar so (skin.ts boxStroke)',
+	strokeCreations === 1 && boxStroke !== undefined && boxStroke.includes('new Instance("UIStroke")'),
+	`${strokeCreations} criacao(oes) de UIStroke em ${KIT_FILES.join(", ")}`,
+);
+check(
+	"boxStroke desenha borda de caixa e passa por strokeHost",
+	boxStroke !== undefined &&
+		/ApplyStrokeMode\s*=\s*Enum\.ApplyStrokeMode\.Border/.test(boxStroke) &&
+		/\.Parent\s*=\s*strokeHost\(/.test(boxStroke),
+);
+check(
+	"strokeHost nunca devolve um objeto de texto",
+	strokeHost !== undefined && ["TextLabel", "TextButton", "TextBox"].every(c => strokeHost.includes(`IsA("${c}")`)),
+);
+for (const [file, src] of kit) {
+	if (file === "skin.ts") continue;
+	check(`${file}: nao cria contorno de texto por textOutline()`, !/\btextOutline\(/.test(src));
 }
 
 console.log("");
 if (failures > 0) {
-	console.error(`${failures} par(es) abaixo do minimo: ajuste design/tweakcn-theme.json e rode \`npm run theme\``);
+	console.error(`${failures} verificacao(oes) falharam: ajuste design/tweakcn-theme.json (e rode \`npm run theme\`) ou o kit`);
 	process.exit(1);
 }
-console.log(`OK: ${PAIRS.length} pares medidos, nenhum abaixo do minimo`);
+console.log(`OK: ${PAIRS.length} pares, ${PLATE_LABELS.length} rotulos de chapa claros, nenhum contorno em texto no kit`);

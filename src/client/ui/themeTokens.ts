@@ -47,14 +47,14 @@ export const DARK: ThemeColors = {
 	popover: Color3.fromRGB(14, 15, 17),
 	/** popover-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
 	popoverForeground: Color3.fromRGB(249, 251, 254),
-	/** primary: oklch(0.6000 0.1187 154.9491) #399560 */
-	primary: Color3.fromRGB(57, 149, 96),
-	/** primary-foreground: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	primaryForeground: Color3.fromRGB(14, 15, 17),
-	/** secondary: oklch(0.6117 0.0223 250.5100) #7a8591 */
-	secondary: Color3.fromRGB(122, 133, 145),
-	/** secondary-foreground: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	secondaryForeground: Color3.fromRGB(14, 15, 17),
+	/** primary: oklch(0.5438 0.1187 154.9491) #248350 */
+	primary: Color3.fromRGB(36, 131, 80),
+	/** primary-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
+	primaryForeground: Color3.fromRGB(249, 251, 254),
+	/** secondary: oklch(0.5583 0.0223 250.5100) #6a7581 */
+	secondary: Color3.fromRGB(106, 117, 129),
+	/** secondary-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
+	secondaryForeground: Color3.fromRGB(249, 251, 254),
 	/** muted: oklch(0.1682 0.0045 264.4500) #0e0f11 */
 	muted: Color3.fromRGB(14, 15, 17),
 	/** muted-foreground: oklch(0.6339 0.0200 250.0000) #818c96 */
@@ -65,8 +65,8 @@ export const DARK: ThemeColors = {
 	accentForeground: Color3.fromRGB(249, 251, 254),
 	/** destructive: oklch(0.6368 0.2078 25.3313) #ef4444 */
 	destructive: Color3.fromRGB(239, 68, 68),
-	/** destructive-foreground: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	destructiveForeground: Color3.fromRGB(14, 15, 17),
+	/** destructive-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
+	destructiveForeground: Color3.fromRGB(249, 251, 254),
 	/** border: oklch(0.6117 0.0223 250.5100) #7a8591 */
 	border: Color3.fromRGB(122, 133, 145),
 	/** input: oklch(0.6117 0.0223 250.5100) #7a8591 */

@@ -23,13 +23,21 @@
  * (`border` / `input` / `secondary` #7A8591): a pixel bevel is a stamped metal plate, and a stamped plate is
  * cold, which the old warm olive (#606055 over #10100E) never was.
  *
- * Label polarity, and why it is not a style choice: with a near-white label, iron at #7A8591 measures 3,62:1,
- * the green plate 3,68:1 and the red one 3,63:1 -- all below the 4,5:1 this kit needs, because a plate face
- * bright enough to read AS metal is too bright to carry white text. So a plate carries the near-black
- * `background` instead: 5,1:1 on iron, 5,2:1 on green, 5,1:1 on red. Dark letters stamped into a lit plate is
- * also exactly what the bevel already draws (light band on top, dark lip below). Recessed surfaces are the
- * opposite and unchanged: near-white text on a dark well. Every ratio here is measured by
- * `npm run test:contrast`, which reads this file's role map, so re-pointing a role moves the test with it.
+ * Labels on plates (DESIGN_RULES UI-04 / UI-05, the owner's rules):
+ * - text never carries a contour -- no UIStroke on text, no TextStroke. It reads as ugly, full stop;
+ * - a label on a plate is ALWAYS the light `foreground` (#F9FBFE), never the near-black body colour. Dark
+ *   letters on the iron plates were tried and read as disabled buttons;
+ * - so the PLATE carries the contrast. Button titles (large, SemiBold/Bold) need 3:1 against it; small text on
+ *   a plate (the "Day 1" under PLAY, the subtitles of the menu tiles, key legends) needs 4,5:1. Where the
+ *   owner's plate colour did not reach that, the plate was darkened by the smallest step that does, hue and
+ *   chroma unchanged:
+ *     secondary (iron)  #7A8591 -> #6A7581   3,62:1 -> 4,53:1   (border / input keep #7A8591: no text on them)
+ *     primary (green)   #399560 -> #248350   3,59:1 -> 4,57:1   (chart-1 / GAME.success keep #399560: it is
+ *                                                                  drawn AS text on the dark body and needs
+ *                                                                  the lighter green there)
+ *     destructive (red) #EF4444 unchanged    3,63:1             (carries titles only -- Close, Quit -- so 3:1)
+ * Every ratio here is measured by `npm run test:contrast`, which reads this file's role map, so re-pointing a
+ * role moves the test with it; the same test fails if a plate label stops being `foreground`.
  *
  * Role map:
  * - background / foreground: full-screen pages (lobby, shop, settings, credits) and default text
@@ -37,7 +45,7 @@
  * - popover (+ border): dialogs, tutorial, toasts, tooltips, nameplate, round banners
  * - primary (the green): the ONE main action of a screen; secondary (iron): other actions (menu tiles, Back)
  *   and the active tab; destructive (red): dangerous actions and the Close (X) buttons. All three carry
- *   `*-foreground`, which is the near-black body colour (see "Label polarity" above)
+ *   `*-foreground`, which is the light `foreground` (see "Labels on plates" above)
  * - accent: states only (hover / pressed of outline, ghost and inactive tabs; the selected list row).
  *   NOTE: the kit actually fills those states with SURFACE.frame (widgets.ts, `sunk`); `accent` is kept as the
  *   role's declared colour and is held to the same 4,5:1 against `accent-foreground` so adopting it is safe
@@ -72,9 +80,9 @@ export const THEME = {
 	cardForeground: TOKENS.cardForeground,
 	popover: TOKENS.popover,
 	popoverForeground: TOKENS.popoverForeground,
-	/** the main action of a screen, drawn as a green relief plate (same green as chart-1 / GAME.success) */
+	/** the main action of a screen, a green relief plate: one step darker than chart-1 so light text reads */
 	primary: TOKENS.primary,
-	/** text stamped into that plate: the near-black body colour, 5,2:1 (see "Label polarity" above) */
+	/** the text on that plate: the light foreground, 4,57:1 (see "Labels on plates" above) */
 	primaryForeground: TOKENS.primaryForeground,
 	secondary: TOKENS.secondary,
 	secondaryForeground: TOKENS.secondaryForeground,
@@ -101,6 +109,11 @@ export const SURFACE = {
 	panel: SIDEBAR_TOKENS.background,
 	/** thick panel frame and title strips (#3F464D); also the hover fill of recessed controls */
 	frame: SIDEBAR_TOKENS.accent,
+	/**
+	 * face of a KEY (Keycap, the E-prompt Badge): the dark iron (#3F464D, 9,2:1 under `foreground`). Darker
+	 * than every button plate on purpose -- a key legend is information, and must never look clickable.
+	 */
+	key: SIDEBAR_TOKENS.accent,
 	/**
 	 * Outline of a well, of an inactive tab and of a list row (#646D78). This one is iron and not a dark grey
 	 * on purpose: at the old #404040 it measured 1,68:1 against the panel (docs/research/ui.md 6.4), i.e. the
@@ -169,8 +182,6 @@ export const GAME = {
 	brand: TOKENS.destructive,
 	/** damage vignette: destructive */
 	blood: TOKENS.destructive,
-	/** outline that keeps banner text readable over the world */
-	textOutline: TOKENS.background,
 };
 
 // ---------------------------------------------------------------- spacing & radius

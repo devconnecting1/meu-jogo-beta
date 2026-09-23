@@ -1,7 +1,7 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { TEXT, THEME, space } from "./theme";
-import { BUTTON_SIZE, Badge, Button, Dialog, autoFocus, cardHeaderHeight, makeLabel, nl } from "./widgets";
+import { BUTTON_SIZE, Button, Dialog, Keycap, autoFocus, cardHeaderHeight, makeLabel, nl, uiScale } from "./widgets";
 
 /*
  * "How to play": the one reference card of the game.
@@ -21,8 +21,12 @@ const PAD = space(6);
 const COL_GAP = space(3);
 const COL_W = (PANEL_W - PAD * 2 - COL_GAP * 2) / 3;
 const ROW_H = 30;
-const CHIP_W = 78;
-const CHIP_H = 22;
+/** key height; the legend decides the width (Keycap), so no key width is fixed here */
+const KEY_H = 22;
+/** the narrowest key: square, so a single letter ("E", "R") still reads as a key */
+const KEY_MIN_W = KEY_H;
+/** gap between the widest key of a column and the descriptions of that column */
+const KEY_GAP = space(2);
 const COL_TITLE_H = 26;
 const NOTE_H = 40;
 const TIPS_H = 68;
@@ -126,30 +130,48 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 			align: "left",
 		});
 		const rowsY = top + COL_TITLE_H + space(2);
+		// dark-iron keys with light legends that are never squeezed: each key grows to fit its legend, and the
+		// descriptions of the column start after the WIDEST key, so the column still reads as a table
+		const keys: Array<Frame> = [];
+		const descriptions: Array<TextLabel> = [];
 		for (let r = 0; r < scheme.rows.size(); r++) {
 			const [chip, what] = scheme.rows[r];
 			const y = rowsY + r * ROW_H;
-			Badge(panel, `Col${i}Key${r}`, chip, {
-				x,
-				y: y + (ROW_H - CHIP_H) / 2,
-				w: CHIP_W,
-				h: CHIP_H,
-				variant: "secondary",
-				textSize: TEXT.xs,
-			});
-			makeLabel(
-				panel,
-				`Col${i}Row${r}`,
-				tr(what),
-				x + CHIP_W + space(2),
-				y,
-				COL_W - CHIP_W - space(2),
-				ROW_H,
-				TEXT.sm,
-				THEME.mutedForeground,
-				{ align: "left" },
+			keys.push(
+				Keycap(panel, `Col${i}Key${r}`, chip, {
+					x,
+					cy: y + ROW_H / 2,
+					h: KEY_H,
+					minW: KEY_MIN_W,
+					textSize: TEXT.xs,
+				}),
+			);
+			descriptions.push(
+				makeLabel(
+					panel,
+					`Col${i}Row${r}`,
+					tr(what),
+					x + KEY_MIN_W + KEY_GAP,
+					y,
+					COL_W - KEY_MIN_W - KEY_GAP,
+					ROW_H,
+					TEXT.sm,
+					THEME.mutedForeground,
+					{ align: "left" },
+				),
 			);
 		}
+		const alignColumn = (): void => {
+			let widest = 0;
+			for (const key of keys) widest = math.max(widest, key.AbsoluteSize.X);
+			const offset = widest + KEY_GAP * uiScale();
+			for (let r = 0; r < descriptions.size(); r++) {
+				descriptions[r].Position = new UDim2(x / PANEL_W, offset, (rowsY + r * ROW_H) / PANEL_H, 0);
+				descriptions[r].Size = new UDim2(COL_W / PANEL_W, -offset, ROW_H / PANEL_H, 0);
+			}
+		};
+		for (const key of keys) key.GetPropertyChangedSignal("AbsoluteSize").Connect(alignColumn);
+		alignColumn();
 		makeLabel(
 			panel,
 			`Col${i}Note`,

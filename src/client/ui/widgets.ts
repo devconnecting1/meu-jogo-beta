@@ -7,7 +7,9 @@
  * - what holds content (lists, rows, tracks, inactive tabs, chips) is a WELL sunk into the panel
  * - what you press is RAISED: flat face, light band on top, dark base (lip) under it; pressing drops the
  *   face 2 skin pixels and eats the lip
- * - titles, buttons and numbers carry a dark contour so they stay readable on any face
+ * - text never carries a contour (DESIGN_RULES UI-04): labels on plates are the light `foreground`, and the
+ *   PLATE is what makes them readable (UI-05) -- a plate that fails the contrast test gets darker, the text
+ *   never gets an outline
  *
  * Layout: every widget is placed in "design units" relative to its parent (the root screen is 1120 x 630);
  * positions/sizes are converted to Scale, so the layout follows the screen. Parents created here carry
@@ -17,7 +19,9 @@
  * - colours, fonts, radius and spacing come from theme.ts (never literals in the screens); the relief itself
  *   is a greyscale texture tinted with ImageColor3 = an exact token (skin.ts)
  * - text is TextScaled + UITextSizeConstraint (max = design size x current UI scale), so it never overflows its
- *   box on phones and is not tiny on 1080p/1440p; skin pixels and borders scale the same way
+ *   box on phones and is not tiny on 1080p/1440p; skin pixels and borders scale the same way. Exception: a
+ *   Keycap keeps its text size and grows its box instead (fixedText), because a key legend squeezed to fit
+ *   a fixed key is the blur this kit used to draw
  * - buttons have hover / press / disabled states and a pixel `ring` when selected with a gamepad or keyboard
  *   (GuiService.SelectedObject), replacing Roblox's default selection highlight
  * - full screens use makeScreen(): the content is letterboxed at 16:9 inside the safe area (below the Roblox
@@ -31,9 +35,13 @@ import {
 	PRESS_DROP,
 	RaisedState,
 	SurfaceSpec,
+	boxStroke,
 	clearSurface,
+	clearTextOutline,
 	fadeSurface,
 	fadeText,
+	fixedText,
+	fixedTextPx,
 	focusSurface,
 	hairline,
 	motionTime,
@@ -66,8 +74,12 @@ const UserInputService = game.GetService("UserInputService");
 export {
 	DESIGN_H,
 	DESIGN_W,
+	boxStroke,
+	clearTextOutline,
 	fadeSurface,
 	fadeText,
+	fixedText,
+	fixedTextPx,
 	hairline,
 	motionTime,
 	onLayoutChange,
@@ -186,14 +198,13 @@ function setStrokePosition(s: UIStroke, inner: boolean): void {
 
 /** 1 px border (UIStroke) in `border` colour by default; `transparency` is a design value (see TRANSPARENCY) */
 export function addStroke(g: GuiObject, color = THEME.border, transparency = 0, width = BORDER.width): UIStroke {
-	const s = new Instance("UIStroke");
+	// boxStroke: a border around the box, and never a UIStroke on a text object (UI-04)
+	const s = boxStroke(g);
 	s.Color = color;
 	setWorldStrokeTransparency(s, transparency);
-	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 	s.LineJoinMode = Enum.LineJoinMode.Round;
 	setStrokePosition(s, true);
 	setStrokeWidth(s, width);
-	s.Parent = g;
 	return s;
 }
 
@@ -335,7 +346,10 @@ export interface LabelOpts {
 	valign?: "top" | "center" | "bottom";
 	rich?: boolean;
 	zIndex?: number;
-	/** dark pixel contour (default: titles, headings and numbers, plus anything >= TEXT.xl) */
+	/**
+	 * IGNORED. Text never carries a contour (DESIGN_RULES UI-04); the option stays only so the call sites that
+	 * still pass it compile. Passing it changes nothing.
+	 */
 	outline?: boolean;
 }
 
@@ -352,11 +366,6 @@ function labelFont(opts: LabelOpts | undefined, fallback: TextRole): Font {
 		return fontOf(mono ? "mono" : "sans", opts?.weight ?? (mono ? Enum.FontWeight.Bold : Enum.FontWeight.Regular));
 	}
 	return roleFont(fallback);
-}
-
-/** roles that always carry the dark contour of the reference art */
-function outlinedRole(role: string | undefined): boolean {
-	return role === "display" || role === "title" || role === "heading" || role === "numeric";
 }
 
 export function makeLabel(
@@ -388,8 +397,6 @@ export function makeLabel(
 	else if (opts?.valign === "bottom") l.TextYAlignment = Enum.TextYAlignment.Bottom;
 	if (opts?.zIndex !== undefined) l.ZIndex = opts.zIndex;
 	scaleText(l, textSize * inheritedTextScale(parent));
-	const role = typeIs(opts?.font, "string") ? (opts?.font as string) : undefined;
-	if (opts?.outline ?? (outlinedRole(role) || textSize >= TEXT.xl)) textOutline(l);
 	l.Parent = parent;
 	return l;
 }
@@ -608,8 +615,8 @@ function refreshButton(b: TextButton): void {
 	const hot = !disabled && (focus || state === Enum.GuiState.Hover || pressed);
 	let fg = s.fg;
 	if (disabled) {
-		// disabled, every variant: a plain well with `muted-foreground` text. mutedForeground (#8c8c7d) on the
-		// well fill (#10100e) is ~5.6:1 (>= 4.5:1 AA); no transparency is applied to the text itself.
+		// disabled, every variant: a plain well with `muted-foreground` text. mutedForeground (#818c96) on the
+		// well fill (#0e0f11) is 5.6:1 (>= 4.5:1 AA); no transparency is applied to the text itself.
 		fg = THEME.mutedForeground;
 		paintSurface(b, wellSurface(SURFACE.well, SURFACE.line));
 		pressShift(b, false);
@@ -709,7 +716,6 @@ function buildButton(
 		pad.Parent = label;
 	}
 	scaleText(label, (props.textSize ?? size.text) * inheritedTextScale(parent));
-	textOutline(label);
 	label.Parent = b;
 	b.GetPropertyChangedSignal("Text").Connect(() => {
 		label.Text = b.Text;
@@ -822,7 +828,7 @@ export interface CardTextOpts {
 	zIndex?: number;
 }
 
-/** CardTitle: heading role (SemiBold + contour), card-foreground (popover-foreground in a popover) */
+/** CardTitle: heading role (SemiBold), card-foreground (popover-foreground in a popover) */
 export function CardTitle(card: Frame, text: string, opts?: CardTextOpts): TextLabel {
 	const [w, , pad] = cardBox(card);
 	const size = opts?.size ?? TEXT.xl;
@@ -890,7 +896,7 @@ export function cardHeaderHeight(titleSize = TEXT.xl2, descriptionLines = 0): nu
 }
 
 /**
- * CardHeader: the reference's TITLE STRIP across the top of the panel (big bold title, centred, contoured),
+ * CardHeader: the reference's TITLE STRIP across the top of the panel (big bold title, centred),
  * with an optional muted description under it. Returns the y where the content starts.
  */
 export function CardHeader(card: Frame, title: string, description?: string, opts?: CardHeaderOpts): number {
@@ -970,14 +976,14 @@ function badgeLook(variant: BadgeVariant, color: Color3 | undefined): [SurfaceKi
 	// GAME.success only reaches ~4.2:1 on foreground, GAME.xp ~4.0:1) — read it as an outlined chip instead:
 	// the well fill, the accent as the border, `foreground` text (~18.7:1 on that fill)
 	if (color !== undefined) return ["well", SURFACE.well, color, THEME.foreground];
-	// "default" is the key cap of the reference art (the E prompt): a small raised plate
-	if (variant === "default") return ["raised", SURFACE.frame, SURFACE.line, THEME.foreground];
+	// "default" is the key cap of the reference art (the E prompt): a small raised plate of dark iron
+	if (variant === "default") return ["raised", SURFACE.key, SURFACE.line, THEME.foreground];
 	if (variant === "secondary") return ["well", THEME.secondary, SURFACE.line, THEME.secondaryForeground];
 	if (variant === "destructive") return ["well", SURFACE.well, THEME.destructive, THEME.foreground];
 	return ["well", SURFACE.well, THEME.border, THEME.foreground];
 }
 
-/** shadcn Badge: a small chip (well or key cap), text-xs SemiBold with the dark contour */
+/** shadcn Badge: a small chip (well or key cap), text-xs Bold; no contour (UI-04), the fill carries the contrast */
 export function Badge(parent: Instance, name: string, text: string, props: BadgeProps): Frame {
 	const h = props.h ?? 22;
 	const size = props.textSize ?? TEXT.xs;
@@ -988,7 +994,6 @@ export function Badge(parent: Instance, name: string, text: string, props: Badge
 	makeLabel(f, "Text", text, space(1.5), 0, w - space(3), h, size, fg, {
 		font: fontOf("sans", Enum.FontWeight.Bold),
 		zIndex: zIndex + 1,
-		outline: true,
 	});
 	return f;
 }
@@ -998,6 +1003,77 @@ export function setBadge(badge: Frame, text: string, color?: Color3): void {
 	const label = badge.FindFirstChild("Text");
 	if (label !== undefined && label.IsA("TextLabel")) label.Text = text;
 	if (color !== undefined) setSurface(badge, "well", { fill: SURFACE.well, border: color });
+}
+
+// ---------------------------------------------------------------- Keycap
+
+export interface KeycapProps {
+	/** left edge and vertical CENTRE, in the parent's design units */
+	x: number;
+	cy: number;
+	/** key height in design units; the legend decides the width */
+	h: number;
+	/** narrowest key in design units (default: square, so "E" still reads as a key) */
+	minW?: number;
+	/** legend design size (default TEXT.xs), drawn at a fixed size: never squeezed */
+	textSize?: number;
+	zIndex?: number;
+}
+
+/**
+ * A key of the keyboard / pad shown as a LEGEND, not a button: a raised plate of dark iron (SURFACE.key) with
+ * the legend in `foreground`, SemiBold, and no contour (UI-04). The dark iron is on purpose -- darker than any
+ * button plate, so a key never looks like something to click.
+ *
+ * The KEY fits the TEXT, never the other way round (the old keys were fixed-width Badges, and TextScaled
+ * crushed "Keep holding" into a blur). The legend is fixedText -- its size follows the screen, floored at
+ * MIN_TEXT_PX -- with AutomaticSize on X, and the key takes the legend's width plus padding whenever that
+ * width changes (screen size, the player's Text Size setting). The automatic size sits on the legend and not
+ * on the plate deliberately: the plate's skin layers are Scale-sized children, the docs do not say how
+ * AutomaticSize treats those, and a key that could not shrink back after a resize would be a bug.
+ *
+ * Returns the key; its AbsoluteSize tells a row where its next element can start.
+ */
+export function Keycap(parent: Instance, name: string, text: string, props: KeycapProps): Frame {
+	const [dw, dh] = designOf(parent);
+	const zIndex = props.zIndex ?? 2;
+	const key = new Instance("Frame");
+	key.Name = name;
+	key.BorderSizePixel = 0;
+	key.ZIndex = zIndex;
+	key.AnchorPoint = new Vector2(0, 0.5);
+	key.Position = UDim2.fromScale(props.x / dw, props.cy / dh);
+	paintSurface(key, raisedSurface(SURFACE.key));
+
+	const legend = new Instance("TextLabel");
+	legend.Name = "Legend";
+	legend.BackgroundTransparency = 1;
+	legend.BackgroundColor3 = THEME.background;
+	legend.BorderSizePixel = 0;
+	legend.Text = text;
+	legend.TextColor3 = THEME.foreground;
+	legend.FontFace = roleFont("label");
+	legend.TextWrapped = false;
+	legend.AutomaticSize = Enum.AutomaticSize.X;
+	legend.AnchorPoint = new Vector2(0.5, 0.5);
+	legend.Position = UDim2.fromScale(0.5, 0.5);
+	legend.Size = new UDim2(0, 0, 1, 0);
+	legend.ZIndex = zIndex + 1;
+	fixedText(legend, (props.textSize ?? TEXT.xs) * inheritedTextScale(parent));
+	legend.Parent = key;
+
+	const fit = (): void => {
+		const scale = uiScale();
+		const pad = space(2) * scale;
+		const w = math.max((props.minW ?? props.h) * scale, legend.AbsoluteSize.X + pad * 2);
+		// a key is never shorter than its legend plus the bevel (light band + lip), whatever the design height
+		const h = math.max(props.h * scale, legend.TextSize + 4 * skinPx());
+		key.Size = UDim2.fromOffset(math.round(w), math.round(h));
+	};
+	legend.GetPropertyChangedSignal("AbsoluteSize").Connect(fit);
+	onLayoutChange(key, fit);
+	key.Parent = parent;
+	return key;
 }
 
 // ---------------------------------------------------------------- Separator
@@ -1099,7 +1175,7 @@ export function Progress(parent: Instance, name: string, props: ProgressProps): 
 			h,
 			props.textSize ?? h * 0.7,
 			THEME.foreground,
-			{ font: "numeric", zIndex: zIndex + 3, outline: true },
+			{ font: "numeric", zIndex: zIndex + 3 },
 		);
 	}
 	const bar: Bar = {
@@ -1661,7 +1737,6 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 	const glyph = makeLabel(icon, "Glyph", style.glyph, 0, 0, ICON, ICON, TEXT.sm, style.glyphColor, {
 		weight: Enum.FontWeight.Bold,
 		zIndex: 1004,
-		outline: false,
 	});
 	const textX = space(4) + ICON + space(3);
 	const label = makeLabel(
@@ -1674,7 +1749,7 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 		TOAST_H,
 		style.textSize,
 		style.fg,
-		{ font: "label", align: "left", zIndex: 1003, outline: true },
+		{ font: "label", align: "left", zIndex: 1003 },
 	);
 	// enter: slide in from the right + fade (transient: the only use of transparency on toasts)
 	const setFade = (t: number, time: number): void => {
@@ -1813,7 +1888,6 @@ export function CoinIcon(parent: Instance, name: string, x: number, y: number, s
 	makeLabel(icon, "Glyph", "$", 0, 0, size, size, size * 0.62, THEME.background, {
 		weight: Enum.FontWeight.ExtraBold,
 		zIndex: z + 1,
-		outline: false,
 	});
 	return icon;
 }
