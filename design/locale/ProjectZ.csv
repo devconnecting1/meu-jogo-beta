@@ -396,11 +396,8 @@ Key,Context,Example,Source
 ,,,Records
 ,,,How to play
 ,,,Credits
-,,,Top-down zombie survival for Roblox
-,,,Inspired by Dead Town
-,,,by Lemon Puppy Games
-,,,Special thanks (original Dead Town credits)
-,,,Built with roblox-ts
+,,,Developed by
+,,,Inspired by the original
 ,,,Thank you for playing!
 ,,,General
 ,,,Touch controls
@@ -413,7 +410,7 @@ Key,Context,Example,Source
 ,,,BGM
 ,,,"Night music, ambience and the heartbeat."
 ,,,HUD size
-,,,"Console, day plate, hints and messages."
+,,,"Console, hints and messages."
 ,,,Reduce motion
 ,,,Set in the Roblox menu. Stills the town.
 ,,,Stick size
@@ -467,7 +464,6 @@ Key,Context,Example,Source
 ,,,Mode
 ,,,"Co-op, up to"
 ,,,survivors
-,,,Built with
 ,,,Open credits
 ,,,Your screen
 ,,,"General: how loud the sounds and the music are, and how big the panels of a run are.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to, on each device.#About: the game and its credits.#A change applies at once and is saved with your progress. Defaults puts a tab back as it came."
@@ -652,6 +648,7 @@ Key,Context,Example,Source
 ,,,FOOD
 ,,,LV
 ,,,FIRE
+,,,Night in
 ,,,Switch weapon
 ,,,Tap a weapon
 ,,,Start
