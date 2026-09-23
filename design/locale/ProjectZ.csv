@@ -388,6 +388,44 @@ Key,Context,Example,Source
 ,,,Records
 ,,,How to play
 ,,,Credits
+,,,General
+,,,Touch controls
+,,,Controls
+,,,About
+,,,Audio
+,,,Interface
+,,,SFX
+,,,BGM
+,,,HUD size
+,,,HUD size scales the on-screen panels. The touch controls have their own size in Touch controls.
+,,,Stick size
+,,,Stick height
+,,,Aim pad size
+,,,Aim pad height
+,,,Floating stick
+,,,Left-handed
+,,,Floating stick: the stick opens wherever your thumb lands. Left-handed swaps the stick and the aim pad.
+,,,Off
+,,,On
+,,,Defaults
+,,,Reset controls
+,,,Keyboard
+,,,Keyboard & mouse
+,,,Touch
+,,,Gamepad
+,,,Menu
+,,,Backpack
+,,,Game
+,,,Genre
+,,,Top-down zombie survival
+,,,Inspired by
+,,,Mode
+,,,"Co-op, up to"
+,,,survivors
+,,,Built with
+,,,Open credits
+,,,Your screen
+,,,"General: sound effects and music volume, and the size of the on-screen panels.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to.#About: the game and its credits.#Changes are saved with your progress, by themselves."
 ,,,Survivor
 ,,,Current day
 ,,,Best day

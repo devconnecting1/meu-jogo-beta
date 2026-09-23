@@ -33,7 +33,7 @@ const NOTE_H = 40;
 const TIPS_H = 84;
 const FOOTER_W = 170;
 
-interface Scheme {
+export interface Scheme {
 	title: string;
 	/** [chip, what it does] */
 	rows: Array<[string, string]>;
@@ -42,7 +42,7 @@ interface Scheme {
 }
 
 /** the real bindings, straight from client/bootstrap.ts — nothing here is promised that the game does not do */
-const SCHEMES: Array<Scheme> = [
+export const SCHEMES: Array<Scheme> = [
 	{
 		title: "Keyboard & mouse",
 		rows: [

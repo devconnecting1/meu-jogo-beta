@@ -36,6 +36,8 @@
  *                                                                  drawn AS text on the dark body and needs
  *                                                                  the lighter green there)
  *     destructive (red) #EF4444 unchanged    3,63:1             (carries titles only -- Close, Quit -- so 3:1)
+ *     tab-active (blue) #4C88BB -> #3C78A9   3,65:1 -> 4,55:1   (a new role, from chart-2; chart-2 / GAME.xp keep
+ *                                                                  #4C88BB: drawn AS text on the dark body)
  * Every ratio here is measured by `npm run test:contrast`, which reads this file's role map, so re-pointing a
  * role moves the test with it; the same test fails if a plate label stops being `foreground`.
  *
@@ -95,6 +97,13 @@ export const THEME = {
 	border: TOKENS.border,
 	input: TOKENS.input,
 	ring: TOKENS.ring,
+	/**
+	 * The ACTIVE tab, the chosen segment, the selected rail item and grid tile (UI-07): a blue plate. chart-2's hue
+	 * and chroma, one step darker (#4C88BB -> #3C78A9, 3,65:1 -> 4,55:1) so small text on it also reads (UI-05).
+	 */
+	tabActive: TOKENS.tabActive,
+	/** the text on that plate: the light foreground (UI-05) */
+	tabActiveForeground: TOKENS.foreground,
 };
 
 /** navigation rails: item = foreground, hover = sidebar-accent, selected = the raised `secondary` relief */
@@ -122,6 +131,24 @@ export const SURFACE = {
 	line: SIDEBAR_TOKENS.border,
 	/** the recessed fill itself: the darkest token (#0E0F11) */
 	well: TOKENS.background,
+
+	// ---- the window vocabulary (DESIGN_RULES UI-07), from dark to light, the order of the reference art:
+	/** header band of a window (title, "?", X): the body colour, a shade darker than the window under it */
+	header: TOKENS.background,
+	/**
+	 * body of a modal window (#222427): graphite, one step LIGHTER than the panels, as in the reference -- it is
+	 * what makes the thick frame and the tabs stand off the page. Only as light as `muted-foreground` allows
+	 * (4,54:1 on it); the HUD and the other panels keep `panel`, whose game-colour texts need the darker fill.
+	 */
+	window: TOKENS.window,
+	/** the list inside a section: the gaps between its rows are the grooves (#181A1D) */
+	groove: SIDEBAR_TOKENS.background,
+	/** the SECTION plate of a window ("Keybinds"), lighter than the window body (#3F464D, 1,8:1 over the panel) */
+	section: SIDEBAR_TOKENS.accent,
+	/** label cell of a settings row: the darker, left side, with the label centred in it (#3F464D) */
+	cellLabel: SIDEBAR_TOKENS.accent,
+	/** value cell of a settings row: one step lighter (#4F565E, 1,29:1 over the label cell, like the reference) */
+	cell: TOKENS.cell,
 };
 
 /**
