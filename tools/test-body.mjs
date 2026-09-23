@@ -52,6 +52,9 @@
  *                           no night toward Week One.
  *  18. LOCK LOST UNAWARE    a server that lost the lock without knowing it (another took it, an admin reset the
  *                           player there) leaves without writing its old titles over the reset's record.
+ *  19. RECORD OUT OF THE WAY a low request budget, a slow or failing title store, or BindToClose: the leave writes
+ *                           its save alone (the record never stands in front of the lock's release), and the next
+ *                           session writes the record from the save.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1497,15 +1500,22 @@ section("13) the title record never stalls the save path: one attempt to read it
 	const p = s.join(u, "unlucky");
 	check(record.fail.get === 0, "the record was read at load, and the read failed");
 	check(s.save(p) !== undefined, "…and the LoadAck went out anyway: one attempt, no waits in front of it");
-	// a record that cannot be written: the leave goes on (the next save tries again)
-	s.save(p).zombieKills = 12;
+	// after that failure this server does not put the record in front of a leave's save for a while (§19)
+	s.save(p).zombieKills = 11;
 	record.fail.update = 1;
 	s.quit(p);
+	check(record.fail.update === 1 && s.stored(u)?.zombieKills === 11, "…and that leave wrote its save alone");
+	// a record that cannot be written, on a server whose store had answered: the leave goes on (the next save tries
+	// again)
+	const s2 = bootServer();
+	const p2 = s2.join(u, "unlucky");
+	s2.save(p2).zombieKills = 12;
+	s2.quit(p2);
 	check(record.fail.update === 0, "the record write on leaving was tried, and failed");
-	check(s.stored(u)?.zombieKills === 12, "…and the save itself was written");
-	const again = s.join(u, "unlucky");
-	check(s.save(again)?.zombieKills === 12, "…and the leave finished: the same player loads again on this server");
-	s.quit(again);
+	check(s2.stored(u)?.zombieKills === 12, "…and the save itself was written");
+	const again = s2.join(u, "unlucky");
+	check(s2.save(again)?.zombieKills === 12, "…and the leave finished: the same player loads again on this server");
+	s2.quit(again);
 });
 
 // ================================================================ 14: the record never undoes a reset or a wipe
@@ -1795,6 +1805,112 @@ section(
 		c.quit(onC);
 	},
 );
+
+// ================================================================ 19: the record never stands in front of the save
+
+section("19) a slow, failing or starved title store never holds up the save that releases the lock (MON-05)", () => {
+	const HB = 1;
+	const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const titleStore = fakeStore(TITLE_STORE);
+	/** the writes of one leave, in order, for one key */
+	const writesOf = (from, key) =>
+		storeLog
+			.slice(from)
+			.filter(e => e.key === key && e.op === "update")
+			.map(e => (e.store === TITLE_STORE ? "record" : e.store === SAVE_STORE ? "save" : e.store));
+	/** a survivor who earns Horde Breaker in this session, and leaves: what the leave wrote */
+	function earnAndLeave(srv, u, before) {
+		const p = srv.join(u, `s${u}`);
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		before?.();
+		const from = storeLog.length;
+		srv.quit(p);
+		return writesOf(from, String(u));
+	}
+	const released = u => {
+		const doc = fakeStore(SAVE_STORE).data.get(String(u));
+		const data = typeof doc?.data === "string" ? JSON.parse(doc.data) : doc?.data;
+		return doc !== undefined && doc.lock === undefined && data?.zombieKills === 100;
+	};
+
+	// the request budget is nearly spent: a queued record write would wait in front of the save
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const w = earnAndLeave(srv, u, () => {
+			srv.env.services.DataStoreService.GetRequestBudgetForRequestType = () => 2;
+		});
+		check(
+			JSON.stringify(w) === '["save"]',
+			"a low UpdateAsync budget: the leave writes the save alone",
+			JSON.stringify(w),
+		);
+		check(released(u), "…which lands, with what was earned, and releases the lock");
+	}
+
+	// the title store answered slowly at this server (here: a read that took 5 s at the load)
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const read = titleStore.GetAsync;
+		titleStore.GetAsync = key => {
+			clockNow += 5;
+			return read(key);
+		};
+		let w;
+		try {
+			w = earnAndLeave(srv, u);
+		} finally {
+			titleStore.GetAsync = read;
+		}
+		check(JSON.stringify(w) === '["save"]', "a slow title store: the leave does not wait on it", JSON.stringify(w));
+		check(released(u), "…the save lands and releases the lock");
+		// the next session, on a server whose store answers, writes the record from the save
+		const next = bootServer();
+		const p = next.join(u, "again");
+		next.quit(p);
+		const rec = titleStore.data.get(String(u));
+		check(
+			rec?.zombieKills === 100 && rec.titles[HB] === 1,
+			"the next session writes the record from the save",
+			JSON.stringify(rec),
+		);
+	}
+
+	// a record write that failed: the next leaves on this server do not try again in front of their saves
+	{
+		const srv = bootServer();
+		const first = newUser();
+		titleStore.fail.update = 1;
+		const w1 = earnAndLeave(srv, first);
+		check(released(first), "a leave whose record write failed still writes its save", JSON.stringify(w1));
+		const second = newUser();
+		const w2 = earnAndLeave(srv, second);
+		check(
+			JSON.stringify(w2) === '["save"]',
+			"…and the next leave, a moment later, writes the save alone",
+			JSON.stringify(w2),
+		);
+		check(released(second), "…which lands and releases the lock");
+	}
+
+	// the server is closing: every save shares BindToClose's budget, and the record is not one of them
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "closing");
+		const save = srv.save(p);
+		save.titles[HB] = 1;
+		save.zombieKills = 100;
+		const from = storeLog.length;
+		srv.shutdown();
+		const w = writesOf(from, String(u));
+		check(JSON.stringify(w) === '["save"]', "BindToClose writes the save alone", JSON.stringify(w));
+		check(released(u), "…which lands and releases the lock");
+	}
+});
 
 // ================================================================
 

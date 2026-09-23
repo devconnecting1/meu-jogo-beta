@@ -195,8 +195,29 @@ export function nextTitleRecord(old: unknown, mine: TitleRecord, mode: TitleReco
 
 /** after GetDataStore fails, how long before the store is asked for again (it is not asked at every flush) */
 const STORE_RETRY_S = 60;
+/** a read or a write of the record that took longer than this (seconds) marks the store slow */
+const SLOW_S = 2;
 let store: DataStore | undefined;
 let storeFailedAt: number | undefined;
+/** the last time a read or write of the record failed or was slow (os.clock), for `titleStoreHealthy` */
+let troubleAt: number | undefined;
+
+/** notes how a call that began at `started` went: a failure or a slow answer is trouble for STORE_RETRY_S */
+function noteCall(started: number, ok: boolean): void {
+	if (!ok || os.clock() - started > SLOW_S) troubleAt = os.clock();
+}
+
+/**
+ * Is the store answering well enough to be asked on the way OUT, in front of the save write that releases the
+ * session lock (server/main.server.ts `flush`)? False for STORE_RETRY_S after a read or a write of the record
+ * failed or took longer than SLOW_S, and while the store cannot be opened: every second spent there is a second
+ * the player's next server waits for the lock (and may give up waiting, leaving this save "lost").
+ */
+export function titleStoreHealthy(): boolean {
+	const now = os.clock();
+	if (troubleAt !== undefined && now - troubleAt < STORE_RETRY_S) return false;
+	return storeFailedAt === undefined || now - storeFailedAt >= STORE_RETRY_S;
+}
 
 /**
  * Opened on first use, so the pure half of this module loads anywhere (tools/test-save.mjs has no
@@ -229,7 +250,9 @@ export type TitleRecordRead = { ok: true; record: TitleRecord | undefined } | { 
 export function loadTitleRecord(key: string): TitleRecordRead {
 	const s = titleStore();
 	if (s === undefined) return { ok: false };
+	const started = os.clock();
 	const [ok, value] = pcall((): unknown => s.GetAsync<unknown>(key)[0]);
+	noteCall(started, ok);
 	if (ok) return { ok: true, record: readTitleRecord(value) };
 	warn(`[${GAME_NAME}] ${key}: title record not read (${tostring(value)}); this session merges it instead`);
 	return { ok: false };
@@ -247,12 +270,14 @@ export function storeTitleRecord(key: string, save: PlayerSaveData, mode: TitleR
 	const mine = titleRecordOf(save);
 	// set inside the transform (the closure hides the assignment from the narrowing, hence the cast)
 	let written = undefined as TitleRecord | undefined;
+	const started = os.clock();
 	const [ok, err] = pcall(() => {
 		s.UpdateAsync<unknown, unknown>(key, old => {
 			written = nextTitleRecord(old, mine, mode);
 			return $tuple(written);
 		});
 	});
+	noteCall(started, ok);
 	if (ok && written !== undefined) return written;
 	warn(`[${GAME_NAME}] ${key}: title record not saved (${tostring(err)}); retried on the next save`);
 	return undefined;

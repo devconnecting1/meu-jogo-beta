@@ -1301,7 +1301,8 @@ section("24) o registro custa uma escrita so quando importa: titulo, historia no
 		main.indexOf("// ---------------------------------------------------------------- load"),
 	);
 	check(
-		/if \(release\) syncTitleRecord\(s, true\)/.test(flush) && /!release\) syncTitleRecord\(s, false\)/.test(flush),
+		/if \(release && recordBeforeRelease\(\)\) syncTitleRecord\(s, true\)/.test(flush) &&
+			/!release\) syncTitleRecord\(s, false\)/.test(flush),
 		"main.server.ts flush: exato na saida (antes do save que solta a trava), por degraus no autosave",
 	);
 }

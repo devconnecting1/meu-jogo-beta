@@ -416,6 +416,23 @@ function syncTitleRecord(s: Session, final: boolean): void {
 }
 
 /**
+ * May a leave write the title record BEFORE its save (review S2)? That save releases the session lock, and every
+ * second in front of it is a second the player's next server waits for the lock (LOCK_WAIT) -- past that, it takes
+ * the lock and this save comes back "lost", with up to a minute of play. So the record stays out of the way:
+ *   - at shutdown: BindToClose shares SHUTDOWN_BUDGET among every save and its retries;
+ *   - on a low UpdateAsync budget (the autosave's own floor): a queued request waits in front of the save;
+ *   - while the title store is slow or failing (server/save/titleRecord.ts `titleStoreHealthy`).
+ * Nothing is lost by skipping it: the save has what was earned, and the player's next session writes the record
+ * from it (`titleRecordDue` sees the difference).
+ */
+function recordBeforeRelease(): boolean {
+	if (shuttingDown || !TitleRecord.titleStoreHealthy()) return false;
+	return (
+		DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync) >= AUTOSAVE_MIN_BUDGET
+	);
+}
+
+/**
  * Writes the session to the DataStore when needed. Calls are serialized per session.
  * `release` also drops the session lock (player left / server closing).
  */
@@ -433,7 +450,7 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	// written after that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
 	// A server that already lost the lock without knowing it still gets here; `nextTitleRecord` never lets its write
 	// land over a later history (a reset made where the lock went).
-	if (release) syncTitleRecord(s, true);
+	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
 		s.writing = false;
