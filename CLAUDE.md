@@ -26,7 +26,7 @@ Testes em Node rodam o TypeScript real com shims de Luau (`npm run test:<nome>`)
 
 - rede e servidor: `net`, `server-sim`, `replication`, `predict`, `input` (fila de input), `smoothness` (aliado desenhado)
 - simulação e mundo: `sim`, `ai`, `combat`, `clock`, `life` (dia do mundo × dia de vida), `world` (itens/portas/construção no servidor), `save`
-- UI e conteúdo: `contrast` (contraste, texto sem contorno e nenhum texto prometendo pausa, em todo `src/`), `backpack` (o Bag não recria Instances), `menus` (Bag aberto: o mundo segue), `cosmetics` (traje e pet desenhados), `flinch` (árvore/carro atingido para de tremer), `footsteps`, `chat`
+- UI e conteúdo: `contrast` (contraste, texto sem contorno e nenhum texto prometendo pausa, em todo `src/`), `backpack` (o Bag não recria Instances), `hud` (o console da HUD: 600 quadros sem criar Instance, hotbar = teclas 1–5, clique = tecla, toque nunca coberto), `menus` (Bag aberto: o mundo segue), `cosmetics` (traje e pet desenhados), `flinch` (árvore/carro atingido para de tremer), `footsteps`, `chat`
 - vida e noite: `body` (o corpo é do servidor: morte, Rebirth, amanhecer, reconexão), `waves` (a horda da noite de ponta a ponta), `reset` (MP-22: todos mortos → o mundo acaba, cidade nova no dia 1, registro do mundo; New game é vida nova, não corpo novo)
 
 O que Node não pega (limite de registradores, asset que não carrega, remote) só aparece no Studio: rode `check:registers` e, com o Studio conectado ao MCP, um playtest.
