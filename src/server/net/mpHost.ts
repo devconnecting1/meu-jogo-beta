@@ -539,13 +539,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	let admitAt = 0;
 	let metricAt = 0;
 	let lastError = "";
+	/** xpcall's handler for the tick: the error with the stack it was raised on, so the log says where (F6) */
+	const tickTrace = (err: unknown): string => debug.traceback(tostring(err), 2);
 
 	const heartbeat = RunService.Heartbeat.Connect(dt => {
 		const now = os.clock();
 		// FIRST, outside the pcall: set after the admit loop, an admit that threw left it on the previous heartbeat, and
 		// the queues' grace counted a whole frame the debt never received (the review of dee095a, N7)
 		beatAt = now;
-		const [ok, err] = pcall(() => {
+		const [ok, err] = xpcall(() => {
 			if (now - admitAt >= ADMIT_INTERVAL) {
 				admitAt = now;
 				for (const player of Players.GetPlayers()) admit(player);
@@ -580,7 +582,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					if (sp !== undefined) publishMetrics(player, sp, link, now);
 				}
 			}
-		});
+		}, tickTrace);
 		if (!ok) {
 			const message = tostring(err);
 			if (message !== lastError) {
