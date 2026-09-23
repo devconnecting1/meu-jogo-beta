@@ -38,6 +38,7 @@
 		"test:screens": "node tools/test-screens.mjs",
 		"test:settings": "node tools/test-settings.mjs",
 		"test:nav": "node tools/test-nav.mjs",
+		"test:tables": "node tools/test-tables.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
 		"test:world-art": "node tools/test-world-art.mjs",

@@ -65,6 +65,10 @@ jobs:
       - name: Menus and strings (open / close / focus without leaks, the pad, achievements, lang.ts and the locale CSV)
         run: npm run test:nav
 
+      # UI-12 / MP-23: the kit's Table and forms, the admin panel, Records and the match scoreboard
+      - name: Tables and forms (row pools without churn, nothing sent while a field is wrong, the scoreboard)
+        run: npm run test:tables
+
       # ART-01..06: worldArtAssets.ts is the generated file, and the town's art only ever adds to the flat town
       - name: Town art (no id = the flat town unchanged, textures, no churn, LEG-03 legibility, render tool)
         run: |

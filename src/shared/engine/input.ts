@@ -39,6 +39,10 @@ export class InputState {
 	reloadPressed = false;
 	backpackPressed = false;
 	pausePressed = false;
+	/** the pad's Back / Select this frame: opens or closes the match scoreboard (MP-23) */
+	scoreboardPressed = false;
+	/** Q is held: the scoreboard shows while it is (MP-23; Tab is the Roblox player list's, UI-02) */
+	keyScoreboard = false;
 	/** 0-based weapon hotkey (keys 1–5) pressed this frame, -1 = none; combat switches weapon */
 	weaponSlotPressed = -1;
 
@@ -90,6 +94,7 @@ export class InputState {
 		this.reloadPressed = false;
 		this.backpackPressed = false;
 		this.pausePressed = false;
+		this.scoreboardPressed = false;
 		this.weaponSlotPressed = -1;
 	}
 
