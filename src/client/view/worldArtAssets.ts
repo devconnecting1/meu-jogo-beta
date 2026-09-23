@@ -105,7 +105,8 @@ export type WorldArtName =
 	| "zombiesFill"
 	| "zombiesRim"
 	| "dogs"
-	| "birds";
+	| "birds"
+	| "itemIcons";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -288,9 +289,11 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	dogs: { id: "", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "", w: 768, h: 360 },
+	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
 };
 
-/** every texture of the world art, for the preload pass */
+/** every texture of the world art (the item icon atlas too), for the preload pass */
 export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"asphalt",
 	"asphaltLot",
@@ -382,4 +385,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"zombiesRim",
 	"dogs",
 	"birds",
+	"itemIcons",
 ];

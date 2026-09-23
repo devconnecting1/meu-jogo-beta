@@ -1024,7 +1024,8 @@ export class GameLoop {
 	 */
 	private drawLight(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
 		const ctx = getCtx();
-		ctx.darkLayer.BackgroundTransparency = 1;
+		// the layer itself stays clear (the light map paints the night): a write only if something changed it
+		if (ctx.darkLayer.BackgroundTransparency !== 1) ctx.darkLayer.BackgroundTransparency = 1;
 		if (this.lightMap === undefined) {
 			this.lightMap = new LightMap(ctx.darkLayer, COLORS.overlayNight);
 		}
