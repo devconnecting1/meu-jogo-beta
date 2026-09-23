@@ -27,7 +27,8 @@
  *      ping is slow to rise and quick to fall, and the melee margin covers what a walker does in a 140 ms view;
  *      and from the review of dee095a: a running view offset past the ceiling (a bite's, a ping that just fell) is
  *      judged AT the ceiling, never past it (S1), and a jump that fits under the ceiling -- a 50 ms link measured at
- *      150 ms -- is clamped by the continuity alone, every time (S2);
+ *      150 ms -- is clamped by the continuity alone, every time (S2); and what the ceiling costs an honest client it
+ *      was not sized for -- a jittery ping, a wider buffer, a Studio hitch the buffer absorbed -- is printed (N5);
  *   d. XP, kills and levels only move when the SERVER decides: the assist share of §3.6, the boss participation
  *      rule, and `stripClientProgress` pinning every reported progress field to the trusted copy once
  *      MP_PHASE ≥ 2 — which is the §11.3 F2 acceptance line "o XP só vem do servidor";
@@ -708,6 +709,11 @@ section("c''. the rewind judges each body where it was DRAWN, and a view cannot 
  *          `extra`), which the server learns from the replication layer (`viewExtraTicks`, here fixed)
  *   jump   on a shot, the client declares a view `jump` ticks OLDER than the one it drew -- inside the ping ceiling --
  *          and aims where the target was then: the "rewind to wherever it hits" cheat
+ *   bufferMs     the client's interpolation buffer (client/net/snapshotBuffer.ts: 80-250 ms, wider with jitter),
+ *                where the server assumes INTERP_DEFAULT_S
+ *   absorbEvery  every so many ticks a hitch the client's buffer absorbs (`absorbTicks` more delay at once, eased
+ *                back at RENDER_DELAY_RATE: snapshotBuffer.ts `advance`, a Studio hitch)
+ *   warmShots    shots before the clamps are counted (the ping filter settling)
  */
 function stream({
 	rttMs,
@@ -720,6 +726,10 @@ function stream({
 	shots = 150,
 	seed = 11,
 	speed = TARGET_SPEED,
+	bufferMs = CFG.INTERP_DEFAULT_S * 1000,
+	absorbEvery = 0,
+	absorbTicks = 0,
+	warmShots = 0,
 }) {
 	// the same zig-zag as `targetY`, at `speed`
 	const targetY = tickValue => {
@@ -735,7 +745,7 @@ function stream({
 		return s / 0x7fffffff;
 	};
 	const owdTicks = (rttMs / 2000) * CFG.SIM_HZ;
-	const interpTicks = CFG.INTERP_DEFAULT_S * CFG.SIM_HZ;
+	const interpTicks = (bufferMs / 1000) * CFG.SIM_HZ;
 	// (an older src has no midViewExtraTicks: it drew the mid ring the same near interval further back)
 	const extra = mid ? (CFG.midViewExtraTicks?.(CFG.SIM_HZ) ?? 3) : 0;
 	const fx = newFixture();
@@ -747,11 +757,21 @@ function stream({
 	let fired = 0;
 	let registered = 0;
 	let seq = 1;
+	let absorbed = 0;
+	let clampedWarm = 0;
+	let registeredWarm = 0;
+	let pingSum = 0;
+	let pingN = 0;
+	const easeBack = CFG.RENDER_DELAY_RATE ?? 0.05;
 	for (let tick = 1; fired < shots && tick < shots * 40; tick++) {
 		z.y = targetY(tick);
 		fx.combat.afterWorld(tick);
 		if (tick % CFG.SIM_HZ === 1) {
 			fx.combat.setPing(0, (serverPingMs + (rand() * 2 - 1) * pingNoiseMs) / 1000);
+			if (fired >= warmShots) {
+				pingSum += fx.combat.pingOf(0);
+				pingN += 1;
+			}
 		}
 		// what landed since the last tick, in the order it landed
 		inbox.sort((a, b) => a.at - b.at);
@@ -764,9 +784,16 @@ function stream({
 		if (fx.shots.length > before) {
 			fired++;
 			if (fx.shots[fx.shots.length - 1].hits.some(h => h.hit === P.HitKind.Zombie)) registered++;
+			if (fired === warmShots) {
+				clampedWarm = fx.combat.statsOf(0).rewindClamped;
+				registeredWarm = registered;
+			}
 		}
+		// a hitch the buffer absorbed: that much more delay at once, eased back at ±5 % of real time
+		absorbed =
+			absorbEvery > 0 && tick % absorbEvery === 0 ? absorbed + absorbTicks : Math.max(0, absorbed - easeBack);
 		// the client's frame: it draws `view` (the target `extra` further back), and says so
-		const view = tick - owdTicks - interpTicks;
+		const view = tick - owdTicks - interpTicks - absorbed;
 		const shoot = tick % 8 === 0;
 		const declared = shoot ? view - jump : view;
 		const cmd = shoot
@@ -780,7 +807,19 @@ function stream({
 		const delay = owdTicks + ((rand() * 2 - 1) * jitterMs * CFG.SIM_HZ) / 1000;
 		inbox.push({ at: tick + Math.max(1, delay), packet });
 	}
-	return { fired, registered, rate: fired > 0 ? registered / fired : 0, stats: fx.combat.statsOf(0) };
+	const stats = fx.combat.statsOf(0);
+	const counted = fired - warmShots;
+	return {
+		fired,
+		registered,
+		rate: fired > 0 ? registered / fired : 0,
+		stats,
+		/** after the warm-up: shots, clamps, the share registered, and where the ping filter sat on average */
+		counted,
+		clamped: stats.rewindClamped - clampedWarm,
+		countedRate: counted > 0 ? (registered - registeredWarm) / counted : 0,
+		pingS: pingN > 0 ? pingSum / pingN : fx.combat.pingOf(0),
+	};
 }
 
 {
@@ -835,6 +874,34 @@ function stream({
 		inside.rate <= roomy.rate,
 		`and aiming at the past buys nothing (${pct(inside)} against the honest ${pct(roomy)})`,
 	);
+
+	/*
+	 * N5 (the review of dee095a): what the ceiling costs an honest client it was not sized for, MEASURED -- the
+	 * ceiling assumes the client's buffer is INTERP_DEFAULT_S (100 ms) and takes the ping through a filter that is
+	 * slow to rise and quick to fall. Printed, not asserted, except the one row the ceiling is sized for: the rest is
+	 * the owner's call (docs/MULTIPLAYER.md §2.3 "Teto por jogador" lists it). 360 shots after a 90-shot warm-up.
+	 */
+	const n5 = (label, o) => {
+		const r = stream({ jitterMs: o.jitter, pingNoiseMs: o.jitter, shots: 450, warmShots: 90, ...o });
+		info(
+			`N5 ${label}: filtered ping ${(r.pingS * 1000).toFixed(0)} ms, clamped ${r.clamped} of ${r.counted}, ` +
+				`${(r.countedRate * 100).toFixed(1)} % register`,
+		);
+		return r;
+	};
+	const sized = n5("150 ms ±20 ms, the assumed 100 ms buffer", { rttMs: 150, jitter: 20 });
+	check(sized.clamped === 0, `the client the ceiling is sized for is never clamped (${sized.clamped})`);
+	n5("150 ms ±50 ms, the assumed 100 ms buffer", { rttMs: 150, jitter: 50 });
+	n5("150 ms ±50 ms, a 117 ms buffer (its jitter widens it)", { rttMs: 150, jitter: 50, bufferMs: 117 });
+	n5("150 ms ±20 ms, a 150 ms buffer", { rttMs: 150, jitter: 20, bufferMs: 150 });
+	n5("Studio, 16 ms, 80 ms buffer, a 5-tick hitch absorbed every 3 s", {
+		rttMs: 16,
+		jitter: 4,
+		bufferMs: 80,
+		absorbEvery: 180,
+		absorbTicks: 5,
+	});
+	n5("the same at 450 u/s", { rttMs: 16, jitter: 4, bufferMs: 80, absorbEvery: 180, absorbTicks: 5, speed: 450 });
 
 	// #2: the shooter draws the target in its mid ring, 3 ticks further back than its declared view. A fast body
 	// (450 u/s: 22 u in those 3 ticks, more than a walker's radius) so that judging it at the wrong instant misses
