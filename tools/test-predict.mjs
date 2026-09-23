@@ -983,6 +983,36 @@ console.log(`\n[knockback] 200 ms RTT, a bite every 0.5 s — the correction the
 	else fail(`${p.snaps} visual snap(s): a correction above ${CFG.VISUAL_SNAP_DIST} u had to teleport the survivor`);
 }
 
+// ---- dead: the prediction goes nowhere, exactly like the server's body (shared/sim/playerMove.ts)
+//
+// The server consumes a dead survivor's commands and moves nothing (security review, Sep 2026: a corpse walked,
+// invulnerable, scouting for its team). The prediction runs the same `stepPlayer`, so it must stop with it — or
+// the client would draw its own corpse strolling off and be yanked back by every snapshot.
+console.log(`\n[dead] a dead survivor's prediction stands still, like the server's body`);
+{
+	const scene = buildScene(SEED);
+	const save = defaultSave();
+	const p = createPlayer(save, scene.lane.x, scene.lane.y);
+	const prediction = new Prediction();
+	prediction.attach(scene.world, p, save);
+	for (let s = 1; s <= 30; s++) prediction.step(SIM.makeCommand(s, 1, 0, 1, 0, 0, 0));
+	const walked = prediction.exact().x - scene.lane.x;
+	if (walked > 20) ok(`alive, 30 commands down the clear lane walk ${walked.toFixed(1)} u`);
+	else fail(`alive, the prediction only walked ${walked.toFixed(1)} u down a clear lane`);
+	p.dead = true;
+	const at = prediction.exact();
+	for (let s = 31; s <= 150; s++) prediction.step(SIM.makeCommand(s, 1, 0, 1, 0.3 * s, 0, 0));
+	const after = prediction.exact();
+	const moved = Math.hypot(after.x - at.x, after.y - at.y);
+	if (moved === 0) ok("dead, 120 more commands move the predicted body by 0 u");
+	else fail(`dead, the predicted body still walked ${moved.toFixed(2)} u`);
+	// the render lead (§5.2: up to one tick of the live input drawn ahead) must not slide the corpse either
+	prediction.present(1 / 60, 0.9, SIM.makeCommand(151, 1, 0, 1, 0, 0, 0));
+	const drawn = Math.hypot(p.x - after.x, p.y - after.y);
+	if (drawn === 0) ok("…and the render lead draws it where it lies");
+	else fail(`the render lead draws the corpse ${drawn.toFixed(2)} u ahead of where it lies`);
+}
+
 const secs = ((Date.now() - started) / 1000).toFixed(1);
 if (failures > 0) {
 	console.log(`\n[test-predict] ${failures} failure(s) in ${secs}s`);

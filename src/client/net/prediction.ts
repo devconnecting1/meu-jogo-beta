@@ -252,7 +252,8 @@ export class Prediction {
 		const p = this.player;
 		const save = this.save;
 		if (world === undefined || p === undefined || save === undefined) return;
-		if (live === undefined || live.moveMag <= 0) return;
+		// a dead body does not move (shared/sim/playerMove.ts), so it has nothing to lead with either
+		if (live === undefined || live.moveMag <= 0 || p.dead) return;
 		const t = math.clamp(phase, 0, 1) * TICK_DT;
 		if (t <= 0) return;
 		const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;

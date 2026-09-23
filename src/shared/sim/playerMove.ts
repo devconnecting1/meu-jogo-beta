@@ -31,9 +31,19 @@ export interface StepResult {
 	died: boolean;
 }
 
+/** what a step of a body that is already dead returns: it goes nowhere, and it does not die a second time */
+const LIFELESS: StepResult = { moved: 0, walking: false, died: false };
+
 /**
  * Advances `p` by one command. Mutates the survivor (position, hp, hunger, buffs, knockback) and returns what the
  * view needs. `dt` is the step length in seconds (fixed 1/60 from F1 on; the F0 client loop passes its frame time).
+ *
+ * A DEAD body is inert: the command is consumed as if it were standing still, and nothing else moves either --
+ * no turning, no knockback, no hunger, no regeneration. Before this it kept walking (security review, Sep 2026):
+ * the server consumed the dead survivor's commands like anyone's, the zombies ignore the dead, and the interest
+ * rings and the proximity chat follow the body, so a corpse was an invulnerable scout for its team. It also
+ * regenerated from 0 hp while lying there. The server and the client's prediction run this very function, so
+ * both stop together (tools/test-server-sim.mjs, tools/test-predict.mjs).
  */
 export function stepPlayer(
 	world: WorldData,
@@ -42,6 +52,7 @@ export function stepPlayer(
 	cmd: InputCommand,
 	dt: number,
 ): StepResult {
+	if (p.dead) return LIFELESS;
 	p.angle = aimOf(cmd.aim);
 
 	// wanted direction in world space, normalised exactly like the stick vector was before F0
