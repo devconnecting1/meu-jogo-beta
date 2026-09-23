@@ -66,14 +66,27 @@ export function canRepair(s: Solid): boolean {
 	return s.hp < s.hpMax && REPAIRABLE.includes(s.tags);
 }
 
-/** nearest ground item within reach (DESIGN.ITEM_GET_DISTANCE) */
+/**
+ * Nearest ground item within reach (DESIGN.ITEM_GET_DISTANCE).
+ *
+ * This runs every frame, for the "E: pick up" hint, over every item in the world — and the world's item
+ * count only grows as a run explores. It used to take a square root for each one. Two things fix that
+ * without a new index: reject on the bounding box first (two subtractions and two compares kill everything
+ * that is not within 40 u), and then compare SQUARED distances, since `a < b` and `a² < b²` agree for
+ * non-negative numbers. The answer is identical; the arithmetic is not.
+ */
 export function nearestGroundItem(world: WorldData, x: number, y: number): GroundItem | undefined {
+	const reach = DESIGN.ITEM_GET_DISTANCE;
 	let best: GroundItem | undefined;
-	let bestD: number = DESIGN.ITEM_GET_DISTANCE;
+	let bestD2 = reach * reach;
 	for (const it of world.items) {
-		const d = math.sqrt((it.x - x) * (it.x - x) + (it.y - y) * (it.y - y));
-		if (d < bestD) {
-			bestD = d;
+		const dx = it.x - x;
+		if (dx > reach || dx < -reach) continue;
+		const dy = it.y - y;
+		if (dy > reach || dy < -reach) continue;
+		const d2 = dx * dx + dy * dy;
+		if (d2 < bestD2) {
+			bestD2 = d2;
 			best = it;
 		}
 	}

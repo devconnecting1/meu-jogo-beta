@@ -24,17 +24,42 @@
  */
 import { isFiniteNumber } from "shared/net/codec";
 import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
-import { FxEvent } from "shared/net/protocol";
-import { WorldData } from "shared/game/world";
+import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
+import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { PlayerState } from "shared/game/player";
+import { ZombieState } from "shared/game/entities";
+import { gameHours } from "shared/sim/clock";
+import { InputCommand } from "shared/net/protocol";
 import { stepPlayer } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
+import { ServerBuild } from "./build";
 import { ServerCombat } from "./combat";
-import { Progress, creditDaySurvived } from "./progress";
+import { BackpackOutcome, ServerCraft } from "./craft";
+import { InteractOutcome, ServerInteraction } from "./interaction";
+import { ServerItems } from "./items";
+import { DayCredit, Progress, creditDaySurvived } from "./progress";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
 import { WorldClock } from "./waves";
+import { WorldOut } from "./worldOut";
 import { ZombieWorld } from "./zombies";
+
+/**
+ * MP_PHASE from which the SERVER owns the interactive world too: ground items, loot, doors, lights,
+ * constructions, crafting and the backpack (docs/MULTIPLAYER.md §11.3 F3).
+ *
+ * It is deliberately one phase ABOVE the shipped `MP_PHASE`, because flipping it is a two-sided move: the
+ * moment the server owns the items, the client must stop making its own and start drawing the `ItemAdd` /
+ * `DoorSet` / `SolidAdd` deltas it currently ignores (client/net/netClient.ts, F3 front 3B/3C). Turning this
+ * on before that lands would empty the town instead of sharing it. Everything below is written, wired and
+ * tested at `world: true`; the switch is the last line of F3, not the first.
+ */
+export const WORLD_SERVER_PHASE = 3;
+
+/** backpack intents one survivor may have waiting for their next tick (§8.2 caps the wire rate anyway) */
+const INTENT_QUEUE_MAX = 8;
+/** what an absent horde falls back to, so the queries never allocate a list per tick */
+const EMPTY_ZOMBIES: ReadonlyArray<ZombieState> = [];
 
 /** a single Heartbeat delta is clamped to this before it reaches the accumulator (Studio breakpoints, hitches) */
 const MAX_FRAME_S = 1;
@@ -67,6 +92,12 @@ export interface SimulationOptions {
 	 * replication sends it (§4.5 `Clock`), so it is built here rather than inside either of them.
 	 */
 	clock?: WorldClock;
+	/**
+	 * Own the INTERACTIVE world here too (§11.3 F3): ground items and loot, doors and lights, constructions,
+	 * crafting and the backpack. Defaults to MP_PHASE >= WORLD_SERVER_PHASE; tests pass `true` to exercise it
+	 * without moving the phase switch, exactly as `zombies` does for the horde.
+	 */
+	interactive?: boolean;
 }
 
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
@@ -86,6 +117,17 @@ export class ServerSimulation {
 	onTick?: (tick: number) => void;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
+	/**
+	 * Midnight paid this survivor (§3.6). The save is ALREADY updated — this is the hook the session layer
+	 * uses to mark it dirty and push the new wallet, not a chance to change the number.
+	 */
+	onDayCredit?: (sp: ServerPlayer, credit: DayCredit) => void;
+	/**
+	 * May this survivor's run earn coins? (§9.3 assisted run: an admin used world tools in it.) The
+	 * simulation has no idea who an admin is; server/main.server.ts owns that and wires this in. Left
+	 * undefined, every run pays — which is what a pure test wants.
+	 */
+	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here.
@@ -108,6 +150,21 @@ export class ServerSimulation {
 	/** arrows, flames, acid and needles in flight (§3.1 step 2) */
 	readonly projectiles?: ServerProjectiles;
 	/**
+	 * The interactive world (§11.3 F3), or undefined while every client still owns its own copy of it.
+	 * `worldOut` exists either way, because it costs nothing and it keeps server/net/replication.ts from
+	 * having to ask whether F3 is on.
+	 */
+	readonly items?: ServerItems;
+	readonly interaction?: ServerInteraction;
+	readonly build?: ServerBuild;
+	readonly craft?: ServerCraft;
+	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
+	readonly worldOut = new WorldOut();
+	/** the result of a survivor's action press, for the caller's sounds and toasts */
+	onInteract?: (sp: ServerPlayer, outcome: InteractOutcome) => void;
+	/** the result of a backpack intent (craft, use, equip, learn) */
+	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
+	/**
 	 * A cosmetic effect the simulation asked for, already in wire form (§4.1 Fx). server/net/mpHost.ts points
 	 * it at the replicator; a caller that leaves it undefined simply drops the effects, which is what the
 	 * pure tests want.
@@ -119,6 +176,12 @@ export class ServerSimulation {
 	private readonly order = new Array<number>();
 	/** the same survivors, in the same order, as one reusable array the world half of the tick walks */
 	private readonly roster = new Array<ServerPlayer>();
+	/** the bodies and the horde, as the interaction and placement queries want them (rebuilt per tick) */
+	private readonly bodies = new Array<PlayerState>();
+	/** the slot of each entry of `bodies`, in the same order: the roster index is NOT the slot */
+	private readonly bodySlots = new Array<number>();
+	/** backpack intents waiting for their slot's next step (§2.4) */
+	private readonly intents = new Map<number, Array<IntentMessage>>();
 	private acc = 0;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
@@ -129,14 +192,48 @@ export class ServerSimulation {
 		this.simHz = hz > 0 ? hz : SIM_HZ;
 		this.tickDt = 1 / this.simHz;
 		this.clock = options.clock ?? new WorldClock();
-		// §3.6: the world rolled into a new day, and everybody who is in it lived through that night
+		// §3.6: the world rolled into a new day, and everybody who is in it lived through that night —
+		// +1 day of life, the day's coins and any record milestone, paid HERE because this is where the
+		// day is generated (§6.3: a reward the server generates is a reward the server pays)
 		this.clock.onNewDay = () => {
-			for (const sp of this.roster) creditDaySurvived(sp.save);
+			for (const sp of this.roster) {
+				const credit = creditDaySurvived(sp.save, this.pays(sp));
+				if (this.onDayCredit !== undefined) this.onDayCredit(sp, credit);
+			}
 		};
+		// ---- F3: the interactive world (items, loot, doors, lights, builds, crafting) ----------------
+		if (options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE) {
+			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
+			// tell "the server made this" from "we both generated this from the seed"
+			serverWorld(this.world);
+			const items = new ServerItems({ world: this.world, out: this.worldOut });
+			this.items = items;
+			this.build = new ServerBuild({
+				world: this.world,
+				out: this.worldOut,
+				// the horde is built below; the closure defers the lookup so a wall dirties the flow field
+				// (§3.3) whether or not there is a horde walking it yet
+				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+			});
+			this.craft = new ServerCraft({ world: this.world, build: this.build });
+			this.interaction = new ServerInteraction({
+				world: this.world,
+				items,
+				out: this.worldOut,
+				fx: event => this.onFx?.(event),
+			});
+		}
+
 		if (!(options.zombies ?? MP_PHASE >= 2)) return;
 		const horde = new ZombieWorld(options.world, this.clock);
 		this.horde = horde;
-		const progress = new Progress({ saveOf: slot => this.bySlot.get(slot)?.save });
+		const progress = new Progress({
+			saveOf: slot => this.bySlot.get(slot)?.save,
+			paysRewards: slot => {
+				const sp = this.bySlot.get(slot);
+				return sp === undefined || this.pays(sp);
+			},
+		});
 		this.progress = progress;
 		const projectiles = new ServerProjectiles({
 			playerOf: slot => this.bySlot.get(slot),
@@ -167,6 +264,11 @@ export class ServerSimulation {
 		// `onExp` fires LATER, from the brain that removes the body, for that very same zombie: paying it
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
+	}
+
+	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
+	private pays(sp: ServerPlayer): boolean {
+		return this.paysRewards === undefined || this.paysRewards(sp);
 	}
 
 	/** the slot of the survivor this `PlayerState` belongs to, or -1 (the damage sink refuses those) */
@@ -208,6 +310,11 @@ export class ServerSimulation {
 		// inherited by whoever takes it next (§4.4: a slot is stable for a session, not beyond it)
 		this.combat?.remove(slot);
 		this.progress?.remove(slot);
+		// a construction still on the cursor is refunded, not forfeited: they paid for it
+		this.build?.remove(slot, sp.save);
+		this.craft?.remove(slot);
+		this.interaction?.remove(slot);
+		this.intents.delete(slot);
 		this.bySlot.delete(slot);
 		for (let i = 0; i < this.order.size(); i++) {
 			if (this.order[i] === slot) {
@@ -282,6 +389,7 @@ export class ServerSimulation {
 	step(): void {
 		this.tick += 1;
 		this.stats.ticks += 1;
+		this.refreshBodies();
 		for (const sp of this.roster) {
 			const cmd = takeCommand(sp);
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
@@ -289,6 +397,9 @@ export class ServerSimulation {
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later
 			this.combat?.stepPlayer(sp, cmd, this.tick, this.tickDt);
+			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
+			// the player made them during, which is the one just consumed
+			this.stepWorldActions(sp, cmd);
 			if (res.died && this.onDeath !== undefined) this.onDeath(sp);
 		}
 		// the horde walks in the SAME tick as the survivors: one world, one clock, one set of positions
@@ -305,10 +416,114 @@ export class ServerSimulation {
 				this.clock.step(this.tickDt);
 			}
 		}
+		this.stepInteractiveWorld();
 		// §3.1 step 3, and it MUST be here: the history a shot rewinds into is the world as it ended this
 		// tick, so recording it before the horde moved would compensate latency against stale positions
 		this.combat?.afterWorld(this.tick);
 		if (this.onTick !== undefined) this.onTick(this.tick);
+	}
+
+	// ---------------------------------------------------------------- the interactive world (F3)
+
+	/**
+	 * A backpack intent (craft, use, equip, learn) from one survivor (§2.4, §8.1). It is queued rather than
+	 * applied on arrival, so it lands inside a tick, in order, next to the command it belongs to -- a craft
+	 * and the movement that carried the player to the desk never interleave the wrong way round.
+	 *
+	 * The presence verbs are NOT handled here: server/net/mpHost.ts owns who is in the world.
+	 */
+	queueIntent(slot: number, msg: IntentMessage): boolean {
+		if (this.craft === undefined) return false;
+		if (msg.kind === IntentKind.EnterWorld || msg.kind === IntentKind.LeaveWorld) return false;
+		if (!this.bySlot.has(slot)) return false;
+		let list = this.intents.get(slot);
+		if (list === undefined) {
+			list = new Array<IntentMessage>();
+			this.intents.set(slot, list);
+		}
+		// one tick's worth: a client that floods is already rate-limited on the wire (§8.2), and the
+		// per-verb cooldowns in server/sim/craft.ts refuse the rest anyway
+		if (list.size() >= INTENT_QUEUE_MAX) return false;
+		list.push(msg);
+		return true;
+	}
+
+	/** the bodies array the interaction and placement queries take, rebuilt once per tick */
+	private refreshBodies(): void {
+		this.bodies.clear();
+		this.bodySlots.clear();
+		for (const sp of this.roster) {
+			this.bodies.push(sp.state);
+			this.bodySlots.push(sp.slot);
+		}
+	}
+
+	/**
+	 * The discrete half of one survivor's command (§2.4). While a construction is on the cursor the three
+	 * edges mean build, exactly as `BuildSystem.handleInput` swallows the frame on the client; otherwise the
+	 * action press is the E key and the server picks the target itself.
+	 */
+	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand): void {
+		const craft = this.craft;
+		const build = this.build;
+		const interaction = this.interaction;
+		if (craft === undefined || build === undefined || interaction === undefined) return;
+		const queued = this.intents.get(sp.slot);
+		if (queued !== undefined && queued.size() > 0) {
+			// a dead survivor does not craft, eat or re-equip: the asks are dropped, not held, so they
+			// cannot all fire at once on the tick they are revived (F4)
+			if (!sp.state.dead) {
+				for (const msg of queued) this.applyIntent(sp, msg, craft);
+			}
+			queued.clear();
+		}
+		if (sp.state.dead) return;
+		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
+		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);
+		const reload = edgeCount(cmd.edges, EdgeShift.Reload);
+		if (build.placing(sp.slot)) {
+			// keep the sticky ghost tracking this tick's position before any edge consumes it
+			build.ghost(sp.slot, sp.state);
+			if (reload > 0) build.rotate(sp.slot);
+			if (action > 0) build.cancel(sp.slot, sp.save);
+			if (attack > 0 && build.placing(sp.slot)) {
+				build.place(sp.slot, sp.state, this.bodies, this.horde?.zombies ?? EMPTY_ZOMBIES);
+			}
+			return;
+		}
+		if (action <= 0) return;
+		const outcome = interaction.act({
+			slot: sp.slot,
+			state: sp.state,
+			save: sp.save,
+			players: this.bodies,
+			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
+			hours: gameHours(this.clock.day, this.clock.dayTime),
+		});
+		if (this.onInteract !== undefined) this.onInteract(sp, outcome);
+	}
+
+	private applyIntent(sp: ServerPlayer, msg: IntentMessage, craft: ServerCraft): void {
+		let outcome: BackpackOutcome;
+		if (msg.kind === IntentKind.Craft) outcome = craft.craft(sp.slot, sp.state, sp.save, msg.arg);
+		else if (msg.kind === IntentKind.UseItem) outcome = craft.useItem(sp.slot, sp.state, sp.save, msg.arg);
+		else if (msg.kind === IntentKind.Equip) outcome = craft.equip(sp.save, msg.arg);
+		else if (msg.kind === IntentKind.Unequip) outcome = craft.unequip(sp.save, msg.arg);
+		else if (msg.kind === IntentKind.LearnSkill) outcome = craft.learnSkill(sp.save, msg.arg);
+		else return;
+		if (this.onBackpack !== undefined) this.onBackpack(sp, outcome);
+	}
+
+	/** the world's own upkeep: items in flight, loot that may respawn, fires burning down, cooldowns */
+	private stepInteractiveWorld(): void {
+		const items = this.items;
+		if (items === undefined) return;
+		updateGroundItems(this.world, this.tickDt);
+		this.craft?.step(this.tickDt);
+		this.build?.step(this.tickDt);
+		if (this.roster.size() === 0) return;
+		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}
 
 	/** has this survivor's 3 s spawn protection expired? (§7.1) */

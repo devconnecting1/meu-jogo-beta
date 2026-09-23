@@ -17,6 +17,7 @@ import {
 	PlayerRow,
 	ServerInfo,
 } from "shared/admin/protocol";
+import { ADMIN_LOG_STORE } from "../save/stores";
 
 /*
  * Server side of the admin panel.
@@ -36,7 +37,8 @@ const TextService = game.GetService("TextService");
 const Workspace = game.GetService("Workspace");
 
 const LOG_PREFIX = "[PZ-ADMIN]";
-const AUDIT_STORE = "ProjectZ_AdminLog";
+/** suffixed in Studio, so a playtest never appends to the live audit log (server/save/stores.ts) */
+const AUDIT_STORE = ADMIN_LOG_STORE;
 const AUDIT_KEY = "recent";
 /** entries kept in memory (panel) and in the DataStore document */
 const AUDIT_MEMORY = 200;

@@ -1,0 +1,869 @@
+#!/usr/bin/env node
+/*
+ * The interactive world, owned by the server (F3, docs/MULTIPLAYER.md §2.4, §4.5, §8.1, §8.3;
+ * acceptance in §11.3 F3).
+ *
+ *   node tools/test-world.mjs
+ *   node tools/test-world.mjs --seed 7
+ *   PZ_SRC=path/to/src node tools/test-world.mjs
+ *
+ * It runs the REAL modules — server/sim/{items,interaction,build,craft,simulation}.ts and
+ * server/net/replication.ts — on a small hand-built world where every distance is known, driving them the
+ * way a client does: `encodeInput` → `ingestInput` → `sim.step()`. Nothing calls a server function directly
+ * on behalf of a player, because the whole question is what a PACKET can make the server do.
+ *
+ * What it proves, in the order of the §11.3 F3 acceptance list:
+ *
+ *   a. TWO CLIENTS, ONE ITEM: both press E on the same can in the same tick; one walks away with it and the
+ *      other walks away with nothing, and the item leaves the world exactly once (§8.3 "atomicidade");
+ *   b. TWO CLIENTS, ONE HOUSE: both search the same building in the same tick; the first takes everything,
+ *      the second is told it is empty — the loot is not rolled twice and the content never travels (§4.3);
+ *   c. ONE DOOR FOR EVERYBODY: opening it is one global `DoorSet`, the solid itself changed (there is one
+ *      world, not six), and closing it on a body is refused (§8.1);
+ *   d. NO DUPLICATION FROM A FORGED PACKET: a client that claims three action presses in every command, for
+ *      hundreds of ticks, at an item and at a looted house, ends with exactly what one press earns;
+ *   e. DISTANCE IS THE SERVER'S: a client pressing E from across the street picks up nothing, whatever it
+ *      believes about its own position (§8.3 — and there is no position field to lie in);
+ *   f. CONSTRUCTION: a craft puts a placeable on the cursor, the attack edge places it where the SERVER says
+ *      the survivor is aiming, the flow field is told which tiles changed (§3.3), the §8.1 caps hold, and a
+ *      cancel gives the ingredients back;
+ *   g. CRAFTING: a forged recipe id, a missing ingredient and a missing station are all refused, and a
+ *      refused craft costs nothing (the client's version consumed before it checked);
+ *   h. THE DELTAS REACH THE WIRE: everything the tick produced encodes through `encodeWorld` and decodes
+ *      back through `decodeWorld` with the same ids, and a late joiner's WorldInit carries the constructions
+ *      and the open doors that were made before they arrived (§4.5).
+ *
+ * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
+ * the switch `zombies: true` already uses for the horde.
+ */
+import { join } from "node:path";
+import { installShims, setSeed } from "./luau-shim.mjs";
+
+const args = process.argv.slice(2);
+const argValue = (name, fallback) => {
+	const i = args.indexOf(name);
+	return i >= 0 && args[i + 1] !== undefined ? Number(args[i + 1]) : fallback;
+};
+const SEED = argValue("--seed", 1);
+
+const { SRC, require } = installShims({ seed: SEED });
+
+const W = require(join(SRC, "shared/game/world.ts"));
+const SAVE = require(join(SRC, "shared/game/save.ts"));
+const P = require(join(SRC, "shared/net/protocol.ts"));
+const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+const PL = require(join(SRC, "server/sim/players.ts"));
+const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
+const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
+const { Replicator, mapHashOf } = require(join(SRC, "server/net/replication.ts"));
+const { PLACEABLES } = require(join(SRC, "shared/sim/placement.ts"));
+const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+const { countItem, addItem } = require(join(SRC, "shared/sim/inventory.ts"));
+const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+
+// ---------------------------------------------------------------- tiny harness
+
+let failures = 0;
+let checks = 0;
+
+function check(ok, what, detail) {
+	checks += 1;
+	console.log(`  ${ok ? "ok   " : "FALHA"} ${what}${detail !== undefined ? `  (${detail})` : ""}`);
+	if (!ok) failures += 1;
+	return ok;
+}
+
+function checkEq(got, want, what) {
+	return check(got === want, what, got === want ? undefined : `esperado ${want}, veio ${got}`);
+}
+
+function section(title) {
+	console.log(`\n${title}`);
+}
+
+// ---------------------------------------------------------------- a world, and clients that only send packets
+
+/** an empty field with a floor of solid ground: every distance below is deliberate */
+function emptyWorld() {
+	const world = W.createWorld(8000, 8000);
+	return W.serverWorld(world);
+}
+
+/** the simulation under test: the interactive world on, no horde (this suite is not about zombies) */
+function newSim(world, clock) {
+	return new ServerSimulation({
+		world,
+		clock: clock ?? new WorldClock({ day: 1, dayTime: 12 }),
+		zombies: false,
+		interactive: true,
+	});
+}
+
+/** a survivor with a known backpack, standing exactly where the test puts them */
+function addPlayer(sim, slot, x, y, save) {
+	const s = save ?? SAVE.defaultSave();
+	const sp = PL.createServerPlayer({ slot, userId: 900 + slot, name: `p${slot}` }, s, x, y, sim.tick, sim.simHz);
+	sim.add(sp);
+	// createServerPlayer places the body; pin it, so a test's distances are the test's
+	sp.state.x = x;
+	sp.state.y = y;
+	return sp;
+}
+
+/**
+ * Sends one command through the REAL wire: encode → the token bucket and the decoder of `ingestInput`.
+ * `edges` is `packEdges(attackPress, attackRelease, actionPress, reload)`.
+ */
+function send(sp, seq, aim, edges, now) {
+	const cmd = P.makeCommand(seq, 0, 0, aim, 0, edges);
+	const packet = { viewTick: 0, viewFrac: 0, cmds: [cmd] };
+	const payload = P.encodeInput(packet);
+	return PL.ingestInput(sp, payload, now ?? 0);
+}
+
+/** presses E once, this tick */
+const PRESS_E = P.packEdges(0, 0, 1, 0);
+/** the forged packet: three of every edge, every single command */
+const PRESS_ALL_X3 = P.packEdges(3, 0, 3, 3);
+
+/** runs `n` ticks and collects every world delta the simulation produced */
+function run(sim, n = 1) {
+	const seen = [];
+	sim.onInteract = (sp, outcome) => seen.push({ slot: sp.slot, outcome });
+	for (let i = 0; i < n; i++) sim.step();
+	return seen;
+}
+
+/** the deltas waiting in the simulation's outbox, drained (what server/net/replication.ts would send) */
+function drain(sim) {
+	const out = [];
+	sim.worldOut.take(out);
+	return out;
+}
+
+function countDeltas(pending, tag) {
+	return pending.filter(p => p.ev.t === tag).length;
+}
+
+/**
+ * Rolls a building's loot until the roll produces something, walking the seed.
+ *
+ * Every slot of the original's table may come up empty -- most entries are "a 15 % chance of exactly one" --
+ * so a fixed seed sometimes rolls three blanks and the test would be measuring the dice. The search is
+ * deterministic (it always starts at the same seed and always walks the same way), and the seed it lands on
+ * is printed, so a failure is still reproducible.
+ */
+function rollLootUntilFilled(sim, building, fromSeed) {
+	for (let seed = fromSeed; seed < fromSeed + 64; seed++) {
+		setSeed(seed);
+		sim.items.rollLoot(building);
+		if (building.lootItems.size() > 0) return seed;
+	}
+	return -1;
+}
+
+// ================================================================ a. two clients, one item
+
+section("a) dois clientes disputam o mesmo item: um leva, o outro nao (§8.3, aceite F3)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const a = addPlayer(sim, 0, 1000, 1000);
+	const b = addPlayer(sim, 1, 1010, 1000);
+	// wood, right between them and inside everybody's reach
+	const item = W.spawnGroundItem(world, 4, 23, 7, 1005, 1000);
+	drain(sim);
+
+	const beforeA = countItem(a.save, 4, 23);
+	const beforeB = countItem(b.save, 4, 23);
+	send(a, 1, 0, PRESS_E);
+	send(b, 1, 0, PRESS_E);
+	run(sim, 1);
+
+	const gotA = countItem(a.save, 4, 23) - beforeA;
+	const gotB = countItem(b.save, 4, 23) - beforeB;
+	checkEq(gotA + gotB, 7, "a madeira foi parar em exatamente uma mochila, inteira");
+	check(gotA === 0 || gotB === 0, "e a outra mochila nao recebeu nada", `A +${gotA}, B +${gotB}`);
+	checkEq(world.items.size(), 0, "o item saiu do mundo");
+	const pending = drain(sim);
+	checkEq(countDeltas(pending, P.WorldEv.ItemRemove), 1, "e sumiu do mundo UMA vez (um ItemRemove)");
+
+	// the loser presses again, at an item that is gone
+	const again = countItem(gotA > 0 ? b.save : a.save, 4, 23);
+	send(gotA > 0 ? b : a, 2, 0, PRESS_E);
+	run(sim, 1);
+	checkEq(countItem(gotA > 0 ? b.save : a.save, 4, 23), again, "e insistir no item que ja foi nao rende nada");
+	checkEq(item.id >= CFG.DYNAMIC_ID_BASE, true, "o item nasceu com id dinamico (§4.5)");
+}
+
+// ================================================================ b. two clients, one house
+
+section("b) dois clientes revistam o mesmo predio: so um recebe (aceite F3)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const b = W.addSolid(world, {
+		kind: "building",
+		x: 900,
+		y: 900,
+		w: 400,
+		h: 400,
+		hp: 100,
+		hpMax: 100,
+		destructible: false,
+		tags: "house",
+		buildingType: 0,
+		passable: true,
+		lootSlots: 3,
+		lootItems: [],
+		lootTimer: 0,
+	});
+	const p0 = addPlayer(sim, 0, 1000, 1000);
+	const p1 = addPlayer(sim, 1, 1100, 1100);
+	// roll the loot once, exactly as the proximity sweep would
+	const usedSeed = rollLootUntilFilled(sim, b, SEED + 1);
+	const rolled = b.lootItems.map(d => ({ ...d }));
+	check(rolled.length > 0, "o predio tem loot", `${rolled.length} entrada(s), seed ${usedSeed}`);
+	drain(sim);
+
+	const before0 = rolled.map(d => countItem(p0.save, d.kind, d.id));
+	const before1 = rolled.map(d => countItem(p1.save, d.kind, d.id));
+	send(p0, 1, 0, PRESS_E);
+	send(p1, 1, 0, PRESS_E);
+	const seen = run(sim, 1);
+
+	const got0 = rolled.reduce((n, d, i) => n + (countItem(p0.save, d.kind, d.id) - before0[i]), 0);
+	const got1 = rolled.reduce((n, d, i) => n + (countItem(p1.save, d.kind, d.id) - before1[i]), 0);
+	const total = rolled.reduce((n, d) => n + d.count, 0);
+	checkEq(got0 + got1, total, "o loot inteiro foi para uma mochila");
+	check(got0 === 0 || got1 === 0, "e a outra ficou vazia", `p0 +${got0}, p1 +${got1}`);
+	checkEq(b.lootItems.size(), 0, "o predio ficou vazio");
+	check(
+		b.lootTimer > 0,
+		"e so volta a ter loot depois do respawn em horas de jogo",
+		`lootTimer ${b.lootTimer.toFixed(1)} h`,
+	);
+	const searches = seen.filter(s => s.outcome.kind === "search");
+	checkEq(searches.length, 1, "houve exatamente um saque na tick, nao dois");
+	/*
+	 * Why the second player's press is a "none" and not a refusal: `interactTarget` only offers a building
+	 * that still HAS loot, so once the first survivor emptied it there is nothing to press E on — which is
+	 * also why the second one's HUD stops showing "E: Search". `search()` still double-checks, because the
+	 * ordering that makes this safe is a property of the tick and not something to rely on by accident.
+	 */
+	const secondTry = sim.items.search(p1.save, p1.state.x, p1.state.y, 12);
+	checkEq(secondTry.building, b, "o segundo pedido ainda encontra o predio");
+	checkEq(secondTry.taken.size(), 0, "e recebe vazio (§8.1: o primeiro pedido leva tudo)");
+}
+
+// ================================================================ c. one door for everybody
+
+section("c) a porta e a mesma para todo mundo (§4.5, aceite F3)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const door = W.addSolid(world, {
+		kind: "door",
+		x: 1000,
+		y: 1000,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: false,
+		placeable: 11,
+		owner: 0,
+	});
+	const a = addPlayer(sim, 0, 1064, 980);
+	const b = addPlayer(sim, 1, 1064, 1500);
+	drain(sim);
+
+	send(a, 1, 0, PRESS_E);
+	run(sim, 1);
+	checkEq(door.open, true, "a porta abriu");
+	const pending = drain(sim);
+	const doorSets = pending.filter(p => p.ev.t === P.WorldEv.DoorSet);
+	checkEq(doorSets.length, 1, "um unico DoorSet foi enfileirado");
+	checkEq(doorSets[0].slot, CFG.SLOT_NONE, "para TODO MUNDO, nao por interesse (todos preveem colisao nela)");
+	checkEq(doorSets[0].ev.state, P.SolidState.Open, "dizendo que ela esta aberta");
+	// b is 500 u away, out of reach, and reads the very same solid: there is one world
+	checkEq(W.querySolids(world, 1000, 1000, 1128, 1032).find(s => s.id === door.id).open, true, "b ve a mesma porta");
+
+	// §8.1: a door cannot be closed on a body
+	b.state.x = 1064;
+	b.state.y = 1016;
+	send(a, 2, 0, PRESS_E);
+	const seen = run(sim, 1);
+	checkEq(door.open, true, "fechar a porta em cima de alguem e recusado");
+	checkEq(seen[0].outcome.kind, "refused", "e o servidor diz por que");
+	checkEq(seen[0].outcome.why, "blocked", "'blocked'");
+
+	// move the body out of the way and it closes
+	b.state.y = 1500;
+	send(a, 3, 0, PRESS_E);
+	run(sim, 1);
+	checkEq(door.open, false, "com o caminho livre, fecha");
+
+	// and a client standing across the street cannot touch it at all
+	const far = addPlayer(sim, 2, 3000, 3000);
+	send(far, 1, 0, PRESS_E);
+	run(sim, 1);
+	checkEq(door.open, false, "quem esta longe nao abre porta nenhuma (§8.1: alcance do SERVIDOR)");
+}
+
+// ================================================================ d. the forged packet
+
+section("d) pacote forjado: 3 pressoes por comando, centenas de ticks, e nada duplica (§8.1, §9.1)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 1000, 1000);
+	W.spawnGroundItem(world, 4, 23, 5, 1005, 1000);
+	drain(sim);
+
+	const before = countItem(p.save, 4, 23);
+	// the hostile client: every command claims the maximum number of every edge, for 300 ticks
+	for (let seq = 1; seq <= 300; seq++) send(p, seq, 0, PRESS_ALL_X3, seq / CFG.SIM_HZ);
+	run(sim, 300);
+	checkEq(countItem(p.save, 4, 23) - before, 5, "a madeira entrou exatamente uma vez");
+	checkEq(world.items.size(), 0, "e o mundo nao tem itens fantasma");
+	const pending = drain(sim);
+	checkEq(countDeltas(pending, P.WorldEv.ItemRemove), 1, "um unico ItemRemove");
+
+	// the same client, on a building it already emptied
+	const b = W.addSolid(world, {
+		kind: "building",
+		x: 900,
+		y: 900,
+		w: 400,
+		h: 400,
+		hp: 100,
+		hpMax: 100,
+		destructible: false,
+		tags: "house",
+		buildingType: 0,
+		passable: true,
+		lootSlots: 2,
+		lootItems: [],
+		lootTimer: 1e9,
+	});
+	rollLootUntilFilled(sim, b, SEED + 2);
+	const loot = b.lootItems.map(d => ({ ...d }));
+	check(loot.length > 0, "o predio tem loot para roubar", `${loot.length} entrada(s)`);
+	const had = loot.map(d => countItem(p.save, d.kind, d.id));
+	for (let seq = 301; seq <= 600; seq++) send(p, seq, 0, PRESS_ALL_X3, seq / CFG.SIM_HZ);
+	run(sim, 300);
+	const gained = loot.reduce((n, d, i) => n + (countItem(p.save, d.kind, d.id) - had[i]), 0);
+	checkEq(
+		gained,
+		loot.reduce((n, d) => n + d.count, 0),
+		"o predio pagou o saque uma unica vez",
+	);
+	checkEq(b.lootItems.size(), 0, "e continua vazio");
+}
+
+// ================================================================ e. the distance is the server's
+
+section("e) a distancia e medida na posicao do SERVIDOR (§8.3)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 1000, 1000);
+	// just past the allowance: DESIGN.ITEM_GET_DISTANCE is also what `nearestGroundItem` uses to FIND it
+	const far = DESIGN.ITEM_GET_DISTANCE + 60;
+	W.spawnGroundItem(world, 4, 23, 3, 1000 + far, 1000);
+	drain(sim);
+	const before = countItem(p.save, 4, 23);
+	for (let seq = 1; seq <= 60; seq++) send(p, seq, 0, PRESS_E, seq / CFG.SIM_HZ);
+	run(sim, 60);
+	checkEq(countItem(p.save, 4, 23), before, `um item a ${far} u nao entra na mochila`);
+	checkEq(world.items.size(), 1, "e continua no chao");
+}
+
+// ================================================================ f. construction
+
+section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.5, §8.1)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 2000, 2000);
+	p.state.angle = 0;
+	drain(sim);
+
+	// a barricade recipe: whatever craftKind 1 makes, taken straight from the data
+	const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && PLACEABLES[r.resultIndex] !== undefined);
+	check(recipe !== undefined, "existe uma receita de construcao nos dados");
+	for (const ing of recipe.ingredients) addItem(p.save, ing.kind, ing.index, ing.count * 4);
+	const spent = recipe.ingredients.map(ing => countItem(p.save, ing.kind, ing.index));
+
+	checkEq(sim.craft.craft(0, p.state, p.save, recipe.id).kind, "holding", "craftar um placeavel poe no cursor");
+	checkEq(sim.build.placing(0), true, "e o servidor sabe que ele esta posicionando");
+	for (let i = 0; i < recipe.ingredients.size(); i++) {
+		const ing = recipe.ingredients[i];
+		checkEq(countItem(p.save, ing.kind, ing.index), spent[i] - ing.count, `o ingrediente ${ing.index} foi gasto`);
+	}
+
+	const solidsBefore = world.solids.size();
+	send(p, 1, 0, P.packEdges(1, 0, 0, 0));
+	run(sim, 1);
+	checkEq(world.solids.size(), solidsBefore + 1, "a construcao entrou no mundo");
+	const built = world.solids[world.solids.size() - 1];
+	check(built.id >= CFG.DYNAMIC_ID_BASE, "com id dinamico (§4.5)", `id ${built.id}`);
+	checkEq(built.owner, 0, "e com dono");
+	checkEq(sim.build.countOf(0), 1, "que conta para o teto por jogador");
+	checkEq(sim.build.placing(0), false, "o cursor ficou livre");
+	const pending = drain(sim);
+	const adds = pending.filter(d => d.ev.t === P.WorldEv.SolidAdd);
+	checkEq(adds.length, 1, "um SolidAdd foi enfileirado");
+	checkEq(adds[0].slot, CFG.SLOT_NONE, "global: todo mundo colide com ela");
+	checkEq(adds[0].ev.id, built.id, "com o id certo");
+	checkEq(adds[0].ev.placeable, recipe.resultIndex, "e o placeavel certo");
+
+	// the ghost lands where the SERVER says the survivor is aiming, on the grid
+	check(
+		Math.abs(built.x - p.state.x) < 400 && Math.abs(built.y - p.state.y) < 400,
+		"e ela nasceu junto do sobrevivente, na direcao da mira",
+		`(${built.x}, ${built.y}) vs (${p.state.x}, ${p.state.y})`,
+	);
+
+	// a cancel gives the ingredients back
+	const before = recipe.ingredients.map(ing => countItem(p.save, ing.kind, ing.index));
+	sim.craft.craft(0, p.state, p.save, recipe.id);
+	send(p, 2, 0, P.packEdges(0, 0, 1, 0));
+	run(sim, 1);
+	checkEq(sim.build.placing(0), false, "cancelar tira do cursor");
+	for (let i = 0; i < recipe.ingredients.size(); i++) {
+		const ing = recipe.ingredients[i];
+		checkEq(countItem(p.save, ing.kind, ing.index), before[i], `o ingrediente ${ing.index} voltou`);
+	}
+
+	// a destroyed construction gives its cap slot back and announces itself
+	W.removeSolid(world, built);
+	checkEq(sim.build.countOf(0), 0, "derrubar a construcao devolve a vaga do teto");
+	checkEq(countDeltas(drain(sim), P.WorldEv.SolidRemove), 1, "e manda um SolidRemove");
+}
+
+section("f2) uma construcao suja exatamente os tiles dela no flow field (§3.3)");
+{
+	const world = emptyWorld();
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	// with the horde on, so the hook the build system calls is the horde's real one
+	const sim = new ServerSimulation({ world, clock, zombies: true, interactive: true });
+	const p = addPlayer(sim, 0, 3000, 3000);
+	p.state.angle = 0;
+	const dirtied = [];
+	const real = sim.horde.refs.onSolidChanged;
+	sim.horde.refs.onSolidChanged = (x, y, w, h) => {
+		dirtied.push({ x, y, w, h });
+		real(x, y, w, h);
+	};
+	sim.build.hold(0, 10, undefined);
+	const placed = sim.build.place(0, p.state, [p.state], []);
+	checkEq(placed.kind, "placed", "a construcao entrou");
+	checkEq(dirtied.length, 1, "e o flow field foi avisado uma vez");
+	checkEq(dirtied[0].x, placed.solid.x, "com o x da construcao");
+	checkEq(dirtied[0].w, placed.solid.w, "e a largura dela (nao o mundo inteiro)");
+
+	W.removeSolid(world, placed.solid);
+	checkEq(dirtied.length, 2, "derruba-la tambem avisa");
+}
+
+section("g) os tetos de construcao do §8.1 valem");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 4000, 4000);
+	// fill the player's quota straight into the world (the cap counts constructions, not placements)
+	for (let i = 0; i < CFG.MAX_BUILDS_PER_PLAYER; i++) {
+		W.addSolid(world, {
+			kind: "barricade",
+			x: 10 + (i % 50) * 130,
+			y: 10 + Math.floor(i / 50) * 130,
+			w: 64,
+			h: 64,
+			hp: 100,
+			hpMax: 100,
+			destructible: true,
+			tags: "barricade",
+			placeable: 10,
+			owner: 0,
+		});
+	}
+	checkEq(sim.build.countOf(0), CFG.MAX_BUILDS_PER_PLAYER, `o jogador ja tem ${CFG.MAX_BUILDS_PER_PLAYER}`);
+	sim.build.hold(0, 10, undefined);
+	const refused = sim.build.place(0, p.state, [p.state], []);
+	checkEq(refused.kind, "refused", "a proxima e recusada");
+	checkEq(refused.why, "capPlayer", "pelo teto por jogador");
+	checkEq(sim.build.placing(0), true, "e ela continua no cursor (nao se perde)");
+}
+
+// ================================================================ h. crafting
+
+section("h) craft: receita forjada, ingrediente faltando e bancada ausente sao recusados (§8.1)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 5000, 5000);
+
+	checkEq(sim.craft.craft(0, p.state, p.save, 99999).kind, "refused", "um id de receita inventado e recusado");
+	checkEq(sim.craft.craft(0, p.state, p.save, -1).kind, "refused", "um id negativo tambem");
+
+	const needsDesk = CRAFT_RECIPES.find(r => r.needsDesk && r.craftKind !== 1);
+	check(needsDesk !== undefined, "existe uma receita que precisa de bancada");
+	for (const ing of needsDesk.ingredients) addItem(p.save, ing.kind, ing.index, ing.count * 2);
+	const stock = needsDesk.ingredients.map(ing => countItem(p.save, ing.kind, ing.index));
+	const noDesk = sim.craft.craft(0, p.state, p.save, needsDesk.id);
+	checkEq(noDesk.kind, "refused", "sem bancada por perto, recusado");
+	checkEq(noDesk.why, "station", "por 'station'");
+	for (let i = 0; i < needsDesk.ingredients.size(); i++) {
+		const ing = needsDesk.ingredients[i];
+		checkEq(countItem(p.save, ing.kind, ing.index), stock[i], `e o ingrediente ${ing.index} NAO foi gasto`);
+	}
+
+	// put a desk next to them and it works
+	W.addSolid(world, {
+		kind: "structure",
+		x: 5050,
+		y: 5000,
+		w: 96,
+		h: 64,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "craftdesk_pro",
+		placeable: 1,
+		owner: 0,
+	});
+	const made = sim.craft.craft(0, p.state, p.save, needsDesk.id);
+	checkEq(made.kind, "crafted", "com bancada, sai");
+	checkEq(countItem(p.save, needsDesk.resultKind, needsDesk.resultIndex) > 0, true, "e o resultado entrou");
+
+	// the rate limit, and an empty backpack
+	sim.craft.step(1);
+	const empty = SAVE.defaultSave();
+	const q = addPlayer(sim, 1, 5000, 5000, empty);
+	q.state.x = 5000;
+	q.state.y = 5000;
+	const broke = sim.craft.craft(1, q.state, q.save, needsDesk.id);
+	checkEq(broke.kind, "refused", "sem ingredientes, recusado");
+	checkEq(broke.why, "ingredients", "por 'ingredients'");
+}
+
+section("i) aprender skill e equipar passam pelas mesmas regras");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 6000, 6000);
+	p.save.skillPoint = 0;
+	checkEq(sim.craft.learnSkill(p.save, 0).kind, "refused", "sem ponto de skill, nao aprende");
+	p.save.skillPoint = 2;
+	const learned = sim.craft.learnSkill(p.save, 0);
+	checkEq(learned.kind, "learned", "com ponto, aprende");
+	checkEq(p.save.skillPoint, 1, "e o ponto foi gasto");
+	checkEq(sim.craft.learnSkill(p.save, 99999).kind, "refused", "uma skill inventada e recusada");
+	checkEq(sim.craft.equip(p.save, 99999).kind, "refused", "um equipamento inventado e recusado");
+	checkEq(sim.craft.equip(p.save, 0).kind === "refused", true, "e um que nao se possui tambem");
+}
+
+section("m) o LootFlag vai para o SLOT certo, nao para a posicao na lista (§4.3)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const b = W.addSolid(world, {
+		kind: "building",
+		x: 900,
+		y: 900,
+		w: 400,
+		h: 400,
+		hp: 100,
+		hpMax: 100,
+		destructible: false,
+		tags: "house",
+		buildingType: 0,
+		passable: true,
+		lootSlots: 3,
+		lootItems: [],
+		lootTimer: 0,
+	});
+	// slots 0 and 3, deliberately NOT 0 and 1: the roster index and the slot are different numbers, and
+	// sending a directed delta to the index is a bug that only shows up when they differ
+	const outside = addPlayer(sim, 0, 5000, 5000);
+	const inside = addPlayer(sim, 3, 1100, 1100);
+	rollLootUntilFilled(sim, b, SEED + 5);
+	drain(sim);
+
+	run(sim, 1);
+	const flags = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag);
+	checkEq(flags.length, 1, "um unico LootFlag");
+	checkEq(flags[0].slot, 3, "para o slot 3, que e quem esta dentro");
+	checkEq(flags[0].ev.hasLoot, true, "dizendo que ha o que revistar");
+	checkEq(flags[0].ev.buildingId, b.id, "naquele predio");
+	check(outside.slot === 0 && inside.slot === 3, "os slots do teste sao mesmo 0 e 3");
+
+	// emptying it turns the hint off, for whoever is inside
+	send(inside, 1, 0, PRESS_E);
+	run(sim, 2);
+	const off = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag && d.ev.hasLoot === false);
+	checkEq(off.length, 1, "e esvaziar apaga a dica");
+	checkEq(off[0].slot, 3, "para o mesmo slot");
+
+	// walking out of the building does not send a second "off"
+	inside.state.x = 6000;
+	inside.state.y = 6000;
+	run(sim, 2);
+	checkEq(drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag).length, 0, "sair nao repete o aviso");
+}
+
+section("n) as construcoes de quem sai param de contar para o slot (§4.4)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 7000, 7000);
+	for (let i = 0; i < 3; i++) {
+		W.addSolid(world, {
+			kind: "barricade",
+			x: 100 + i * 200,
+			y: 100,
+			w: 64,
+			h: 64,
+			hp: 100,
+			hpMax: 100,
+			destructible: true,
+			tags: "barricade",
+			placeable: 10,
+			owner: 0,
+		});
+	}
+	checkEq(sim.build.countOf(0), 3, "o jogador construiu 3");
+	checkEq(sim.build.count(), 3, "e o servidor conta 3");
+	sim.remove(p.slot);
+	checkEq(sim.build.countOf(0), 0, "ele saiu: o slot 0 volta limpo para quem chegar");
+	checkEq(sim.build.count(), 3, "mas as paredes continuam de pe, e contam para o teto do servidor");
+	checkEq(world.solids.size(), 3, "o mundo nao perdeu a base");
+}
+
+section("o) as consultas de item continuam corretas, e param de custar caro");
+{
+	const world = emptyWorld();
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const reach = DESIGN.ITEM_GET_DISTANCE;
+	// one just inside reach, one just outside, one far away: the box+quadrado tem de dar a MESMA resposta
+	const inside = W.spawnGroundItem(world, 4, 23, 1, 1000 + reach - 1, 1000);
+	W.spawnGroundItem(world, 4, 23, 1, 1000 + reach + 1, 1000);
+	W.spawnGroundItem(world, 4, 23, 1, 4000, 4000);
+	checkEq(IQ.nearestGroundItem(world, 1000, 1000), inside, "pega o que esta dentro do alcance");
+	checkEq(IQ.nearestGroundItem(world, 1000, 1000 + reach + 5), undefined, "e nenhum quando nada esta perto");
+	// the nearest wins, not the first in the list
+	const nearer = W.spawnGroundItem(world, 4, 23, 1, 1005, 1000);
+	checkEq(IQ.nearestGroundItem(world, 1000, 1000), nearer, "e escolhe o mais proximo, nao o primeiro");
+	// exactly at the limit is out, as it always was (strictly less than)
+	const edgeWorld = emptyWorld();
+	W.spawnGroundItem(edgeWorld, 4, 23, 1, 1000 + reach, 1000);
+	checkEq(IQ.nearestGroundItem(edgeWorld, 1000, 1000), undefined, `exatamente a ${reach} u fica de fora`);
+
+	// items at rest are not integrated any more; the ones in flight still are
+	const moving = emptyWorld();
+	const still = W.spawnGroundItem(moving, 4, 23, 1, 2000, 2000);
+	const thrown = W.spawnGroundItem(moving, 4, 23, 1, 2000, 2000, 120, 0);
+	W.updateGroundItems(moving, 1 / 60);
+	checkEq(still.x, 2000, "o item parado nao se moveu");
+	check(thrown.x > 2000, "e o que foi arremessado se moveu", `x ${thrown.x.toFixed(1)}`);
+	for (let i = 0; i < 300; i++) W.updateGroundItems(moving, 1 / 60);
+	checkEq(thrown.vx, 0, "o arremessado acabou parando");
+	check(thrown.life === undefined && still.life === undefined, "e nenhum item carrega um 'life' morto");
+
+	// a scavenged town: 4000 items lying around, the per-frame cost of the two things that touch them all
+	const heavy = emptyWorld();
+	for (let i = 0; i < 4000; i++) {
+		W.spawnGroundItem(heavy, 4, 23, 1, 200 + (i % 80) * 90, 200 + Math.floor(i / 80) * 90);
+	}
+	const FRAMES = 600;
+	let t0 = performance.now();
+	for (let f = 0; f < FRAMES; f++) W.updateGroundItems(heavy, 1 / 60);
+	const physMs = (performance.now() - t0) / FRAMES;
+	t0 = performance.now();
+	for (let f = 0; f < FRAMES; f++) IQ.nearestGroundItem(heavy, 3000, 3000);
+	const queryMs = (performance.now() - t0) / FRAMES;
+	console.log(
+		`        4000 itens no chao: fisica ${physMs.toFixed(4)} ms/quadro . busca do E ${queryMs.toFixed(4)} ms/quadro`,
+	);
+	check(physMs < 0.5, "a fisica de 4000 itens parados custa quase nada", `${physMs.toFixed(4)} ms`);
+	check(queryMs < 0.5, "e a busca do E tambem", `${queryMs.toFixed(4)} ms`);
+}
+
+// ================================================================ the wire
+
+section("j) tudo isso chega ao fio: encodeWorld -> decodeWorld sem perder um id (§4.5)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const p = addPlayer(sim, 0, 1000, 1000);
+	const door = W.addSolid(world, {
+		kind: "door",
+		x: 1000,
+		y: 1040,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: false,
+		placeable: 11,
+		owner: 0,
+	});
+	W.spawnGroundItem(world, 4, 23, 2, 1010, 1000);
+	send(p, 1, 0, PRESS_E);
+	run(sim, 1);
+	const pending = drain(sim);
+	const events = pending.map(d => d.ev);
+	check(events.length > 0, "a tick produziu deltas", `${events.length}`);
+	const encoded = P.encodeWorld({ tick: 7, events });
+	checkEq(encoded.dropped, 0, "nenhum delta foi grande demais para o pacote");
+	let decoded = 0;
+	const ids = [];
+	for (const packet of encoded.packets) {
+		const batch = P.decodeWorld(packet);
+		check(batch !== undefined, "o pacote decodifica");
+		for (const e of batch.events) {
+			decoded += 1;
+			if (e.id !== undefined) ids.push(e.id);
+		}
+	}
+	checkEq(decoded, events.length, "e volta com a mesma quantidade de eventos");
+	check(
+		ids.every(id => id >= CFG.DYNAMIC_ID_BASE || id === door.id),
+		"todo id dinamico sobreviveu a viagem",
+		ids.join(", "),
+	);
+}
+
+section("k) quem entra depois recebe o mundo que ja existia (WorldInit, §4.5)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const first = addPlayer(sim, 0, 1000, 1000);
+	first.state.angle = 0;
+	// something built, a door somebody opened, and an item on the ground
+	const built = W.addSolid(world, {
+		kind: "barricade",
+		x: 1200,
+		y: 1000,
+		w: 64,
+		h: 64,
+		hp: 100,
+		hpMax: 100,
+		destructible: true,
+		tags: "barricade",
+		placeable: 10,
+		owner: 0,
+	});
+	const door = W.addSolid(world, {
+		kind: "door",
+		x: 1400,
+		y: 1000,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: true,
+		placeable: 11,
+		owner: 0,
+	});
+	// a door that is part of the generated map (no `placeable`): it has no SolidAdd to ride, so its open
+	// state is the one thing about it the mirror could not have generated for itself
+	const mapDoor = W.addSolid(world, {
+		kind: "door",
+		x: 1600,
+		y: 1000,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: true,
+	});
+	const item = W.spawnGroundItem(world, 4, 23, 1, 1100, 1000);
+	drain(sim);
+
+	const sent = [];
+	const replicator = new Replicator(
+		sim,
+		{
+			snap: () => {},
+			fx: () => {},
+			world: (slot, packet) => sent.push({ slot, packet }),
+			worldAll: packet => sent.push({ slot: CFG.SLOT_NONE, packet }),
+		},
+		{ tick0Time: 0, mapHash: mapHashOf(world) },
+	);
+	const late = addPlayer(sim, 1, 1000, 1000);
+	replicator.welcome(late);
+	replicator.afterTick(1);
+
+	const mine = sent.filter(s => s.slot === 1);
+	check(mine.length > 0, "o recem-chegado recebeu um lote reliable", `${mine.length} pacote(s)`);
+	const got = [];
+	for (const s of mine) {
+		const batch = P.decodeWorld(s.packet);
+		check(batch !== undefined, "que decodifica");
+		for (const e of batch.events) got.push(e);
+	}
+	checkEq(got[0].t, P.WorldEv.InitBegin, "comecando por InitBegin");
+	check(
+		got.some(e => e.t === P.WorldEv.SolidAdd && e.id === built.id),
+		"a construcao que ja existia veio",
+	);
+	// a BUILT door is a construction: its open state rides its own SolidAdd, not a separate DoorSet
+	const doorAdd = got.find(e => e.t === P.WorldEv.SolidAdd && e.id === door.id);
+	check(doorAdd !== undefined, "a porta construida veio como construcao");
+	check(doorAdd !== undefined && (doorAdd.state & P.SolidState.Open) !== 0, "e ja veio aberta, como alguem a deixou");
+	check(
+		got.some(e => e.t === P.WorldEv.DoorSet && e.id === mapDoor.id && e.state === P.SolidState.Open),
+		"uma porta do mapa gerado que alguem abriu vem como DoorSet",
+	);
+	check(
+		got.some(e => e.t === P.WorldEv.ItemAdd && e.id === item.id),
+		"e o item no chao, que esta dentro do interesse",
+	);
+}
+
+section("l) itens fora do interesse nao viajam (§4.3, §4.5)");
+{
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const near = addPlayer(sim, 0, 1000, 1000);
+	const far = addPlayer(sim, 1, 1000 + CFG.ITEM_INTEREST + 500, 1000);
+	drain(sim);
+	W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
+	const pending = drain(sim);
+	const adds = pending.filter(d => d.ev.t === P.WorldEv.ItemAdd);
+	checkEq(adds.length, 1, "um ItemAdd foi enfileirado");
+	checkEq(adds[0].range, CFG.ITEM_INTEREST, `filtrado por ${CFG.ITEM_INTEREST} u de interesse`);
+	check(near.slot === 0 && far.slot === 1, "com um jogador perto e um longe");
+	// the filter itself is applied by the replicator; check the geometry it will use
+	const dx = far.state.x - adds[0].x;
+	check(
+		Math.abs(dx) > CFG.ITEM_INTEREST,
+		"e o jogador distante esta fora desse raio",
+		`${Math.abs(dx).toFixed(0)} u`,
+	);
+}
+
+// ---------------------------------------------------------------- verdict
+
+console.log("");
+if (failures > 0) {
+	console.log(`${failures} de ${checks} verificacao(oes) falharam`);
+	process.exit(1);
+}
+console.log(`${checks} verificacoes, 0 falhas`);

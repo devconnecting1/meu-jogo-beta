@@ -2,6 +2,7 @@ import { COLORS, Z } from "shared/engine/colors";
 import { DESIGN, TOWN } from "shared/engine/constants";
 import { chance, rnd, rndInt, rndRange } from "shared/engine/rng";
 import { Vec2, v2 } from "shared/engine/vec2";
+import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
 
 export type SolidKind =
 	| "wall_h"
@@ -59,12 +60,33 @@ export interface Solid {
 	 * abandoned ones sit a few degrees askew. Collision stays the axis-aligned rect.
 	 */
 	heading?: number;
+	/**
+	 * Server (docs/MULTIPLAYER.md §4.5): the PLACEABLES id this construction was built from, and the slot of
+	 * whoever built it. Both travel in the `SolidAdd` delta — the id so the mirror knows what to draw, the
+	 * owner so the per-player build cap (§8.1) can be kept by the construction itself rather than by a
+	 * bookkeeping table that a destroyed wall could desynchronise.
+	 */
+	placeable?: number;
+	owner?: number;
 	/** set by removeSolid, so stale references (AI targets, UI) can notice */
 	removed?: boolean;
 	/** internal: spatial-grid query stamp used to de-duplicate multi-cell solids */
 	gridStamp?: number;
 }
 
+/**
+ * Something lying on the ground, waiting to be picked up.
+ *
+ * There is no lifetime here, and that is a decision rather than an omission. The field used to exist
+ * (`life: 120`), was written on every spawn and was never read by anything — an expiry somebody intended and
+ * nobody built. Giving it a meaning now would mean deciding, for the whole game, that a pile of ammunition
+ * a player deliberately left on the floor of their base evaporates while they are out scavenging, which is
+ * the opposite of what a base is for. So: ground items are permanent, by design.
+ *
+ * If a lifetime is ever wanted, it has to distinguish WHO made the item — world litter (a zombie's drop, a
+ * bin's contents, a tree's wood) may reasonably rot; anything a player put down may not — and that
+ * distinction does not exist in this type yet. Until it does, the honest state is no field at all.
+ */
 export interface GroundItem {
 	id: number;
 	kind: number;
@@ -72,9 +94,9 @@ export interface GroundItem {
 	count: number;
 	x: number;
 	y: number;
+	/** 0 when at rest, which is the common case and the one `updateGroundItems` skips */
 	vx: number;
 	vy: number;
-	life: number;
 }
 
 export interface Rect {
@@ -188,6 +210,49 @@ export interface WorldData {
 	bossAnchors: Array<{ day: number; x: number; y: number; type: number; nextDay: number }>;
 	nextId: number;
 	grid: SolidGrid;
+	/**
+	 * Server only (docs/MULTIPLAYER.md §4.5). 0 = off, which is the map generator and every client.
+	 *
+	 * The static map is generated identically on both sides from the same seed, so a static solid has the
+	 * same id everywhere and travels for free. Anything created AFTER generation — a construction, a dropped
+	 * item, a loot spill — exists only because the server made it, and its id has to be one the client could
+	 * not have invented: `DYNAMIC_ID_BASE` (1 000 000) upwards. Switching this on is what turns a world into
+	 * THE world; `serverWorld()` does it.
+	 */
+	nextDynamicId: number;
+	/**
+	 * Server only: told about every change a client has to be told about, at the single place that makes it
+	 * (§4.5 deltas). A hook instead of call sites, because the creators are scattered — a zombie's death drop
+	 * is in shared/sim/ai/zombieBrain.ts, a boss's in bossBrain.ts, the horde's in population.ts, a player's
+	 * in the interaction code. Routing all of them by hand is a list you can forget to add to; a hook on the
+	 * mutation itself cannot be forgotten, which is the whole point when the failure mode is "one player sees
+	 * an item that does not exist for anyone else".
+	 */
+	onItemAdd?: (w: WorldData, item: GroundItem) => void;
+	onItemRemove?: (w: WorldData, item: GroundItem) => void;
+	onSolidAdd?: (w: WorldData, solid: Solid) => void;
+	onSolidRemove?: (w: WorldData, solid: Solid) => void;
+}
+
+/**
+ * Turns a freshly generated world into the SERVER's world (§4.5): from here on everything it creates takes a
+ * dynamic id. Call it once, after `generateTown`, before anybody plays in it.
+ */
+export function serverWorld(w: WorldData, from = DYNAMIC_ID_BASE): WorldData {
+	w.nextDynamicId = math.max(from, w.nextId + 1);
+	return w;
+}
+
+/** the id the next created object takes: dynamic on the server, the plain counter everywhere else */
+function takeId(w: WorldData): number {
+	if (w.nextDynamicId > 0) {
+		const id = w.nextDynamicId;
+		w.nextDynamicId += 1;
+		return id;
+	}
+	const id = w.nextId;
+	w.nextId += 1;
+	return id;
 }
 
 function rectOverlap(
@@ -227,6 +292,7 @@ export function createWorld(width: number, height: number): WorldData {
 			{ day: DESIGN.BOSS4_DAY, x: DESIGN.BOSS4_X, y: DESIGN.BOSS4_Y, type: 4, nextDay: DESIGN.BOSS4_DAY },
 		],
 		nextId: 1,
+		nextDynamicId: 0,
 		grid: { cell, cols, rows, cells, stamp: 0 },
 	};
 }
@@ -270,9 +336,10 @@ function gridRemove(g: SolidGrid, s: Solid): void {
 
 /** The ONLY way to add a solid (keeps the spatial grid in sync). Solids must not move afterwards. */
 export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
-	const solid: Solid = { ...s, id: w.nextId++ };
+	const solid: Solid = { ...s, id: takeId(w) };
 	w.solids.push(solid);
 	gridInsert(w.grid, solid);
+	if (w.onSolidAdd !== undefined) w.onSolidAdd(w, solid);
 	return solid;
 }
 
@@ -282,6 +349,7 @@ export function removeSolid(w: WorldData, s: Solid): void {
 	if (i >= 0) w.solids.remove(i);
 	gridRemove(w.grid, s);
 	s.removed = true;
+	if (w.onSolidRemove !== undefined) w.onSolidRemove(w, s);
 }
 
 /**
@@ -2005,9 +2073,9 @@ export function spawnGroundItem(
 	y: number,
 	vx = 0,
 	vy = 0,
-): void {
-	w.items.push({
-		id: w.nextId++,
+): GroundItem {
+	const item: GroundItem = {
+		id: takeId(w),
 		kind,
 		itemId,
 		count,
@@ -2015,13 +2083,45 @@ export function spawnGroundItem(
 		y,
 		vx,
 		vy,
-		life: 120,
-	});
+	};
+	w.items.push(item);
+	if (w.onItemAdd !== undefined) w.onItemAdd(w, item);
+	return item;
 }
 
+/**
+ * Takes one ground item out of the world; answers whether it was still there.
+ *
+ * The answer is the whole point on the server (§8.3 "Atomicidade"): two survivors pressing E on the same
+ * can of food in the same tick both find it with `interactTarget`, and this is the check-and-remove that
+ * decides which of them is holding it. Luau is single-threaded and nothing here yields, so the second call
+ * returns false and that player gets nothing — never a second copy.
+ */
+export function removeGroundItem(w: WorldData, item: GroundItem): boolean {
+	const i = w.items.indexOf(item);
+	if (i < 0) return false;
+	w.items.remove(i);
+	if (w.onItemRemove !== undefined) w.onItemRemove(w, item);
+	return true;
+}
+
+/**
+ * Slides the items that are still moving, and leaves the rest alone.
+ *
+ * An item spends a fraction of a second in flight after it is thrown and the rest of the run lying still, so
+ * almost every entry of this list is at rest almost all of the time. Integrating a velocity of exactly zero
+ * — and re-testing the world bounds of something that has not moved — is work that grows with the size of
+ * the town and buys nothing. The early exit turns the per-frame cost of a scavenged town into one compare
+ * per item.
+ *
+ * It runs on the client today (client/gameLoop.ts) and, from MP_PHASE 3, on the authoritative server as
+ * well (server/sim/simulation.ts), which is the other reason it is worth being cheap.
+ */
 export function updateGroundItems(w: WorldData, dt: number): void {
 	for (let i = w.items.size() - 1; i >= 0; i--) {
 		const it = w.items[i];
+		// at rest: it cannot move, and something that has not moved cannot have left the world
+		if (it.vx === 0 && it.vy === 0) continue;
 		it.x += it.vx * dt;
 		it.y += it.vy * dt;
 		it.vx *= 0.9;
@@ -2032,6 +2132,7 @@ export function updateGroundItems(w: WorldData, dt: number): void {
 		}
 		if (it.x < 0 || it.y < 0 || it.x > w.width || it.y > w.height) {
 			w.items.remove(i);
+			if (w.onItemRemove !== undefined) w.onItemRemove(w, it);
 		}
 	}
 }
@@ -2053,12 +2154,19 @@ export function nearestInteractables(
 			solid = s;
 		}
 	}
+	// box first, then squared distance: no square root per item (same reasoning as
+	// shared/sim/interactQuery.ts's nearestGroundItem, which is the one the E key actually uses)
+	const reach = DESIGN.ITEM_GET_DISTANCE + 20;
 	let item: GroundItem | undefined;
-	let bestI = DESIGN.ITEM_GET_DISTANCE + 20;
+	let bestI2 = reach * reach;
 	for (const it of w.items) {
-		const d = math.sqrt((it.x - x) * (it.x - x) + (it.y - y) * (it.y - y));
-		if (d < bestI) {
-			bestI = d;
+		const dx = it.x - x;
+		if (dx > reach || dx < -reach) continue;
+		const dy = it.y - y;
+		if (dy > reach || dy < -reach) continue;
+		const d2 = dx * dx + dy * dy;
+		if (d2 < bestI2) {
+			bestI2 = d2;
 			item = it;
 		}
 	}

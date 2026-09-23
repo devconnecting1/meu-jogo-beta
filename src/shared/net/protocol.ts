@@ -1803,10 +1803,44 @@ export function decodeTimePong(payload: unknown): TimePong | undefined {
 export const IntentKind = {
 	EnterWorld: 1,
 	LeaveWorld: 2,
+	/** F3, §8.1: arg = CRAFT_RECIPES id */
+	Craft: 3,
+	/** F3, §8.1: arg = USABLES id */
+	UseItem: 4,
+	/** F3, §8.1: arg = EQUIPS id */
+	Equip: 5,
+	/** F3, §8.1: arg = equipment slot 1..4 (`equipSlotOf`) */
+	Unequip: 6,
+	/** F3, §8.1: arg = SKILLS id */
+	LearnSkill: 7,
 } as const;
 export type IntentKind = (typeof IntentKind)[keyof typeof IntentKind];
+const INTENT_KIND_MAX = 7;
 
+/**
+ * The presence verbs (EnterWorld / LeaveWorld) are a bare kind and nothing else — that is the whole payload,
+ * and it stays that way. From F3 the backpack verbs carry one argument and the `seq` of the command the
+ * player made them during (§2.4), so "I switched, then I crafted" applies in that order however the packets
+ * arrive. Two lengths, one header: a decoder tells them apart by size, and anything else is malformed.
+ *
+ * Note what is NOT here. There is no `pickup(itemId)`, no `interact(solidId)`, no `place(x, y)`: those ride
+ * the input command's own edges and the server picks the target itself, at the position it simulated
+ * (server/sim/interaction.ts). A verb that names a target is a verb that can name the wrong one.
+ */
 export const INTENT_BYTES = 2;
+/** kind, verb, atSeq u16, arg u16, reserved u16 */
+export const INTENT_ARGS_BYTES = 8;
+/** the first verb that carries arguments */
+const INTENT_ARGS_FROM = 3;
+
+/** a decoded intent: `arg` and `atSeq` are 0 for the two presence verbs */
+export interface IntentMessage {
+	kind: IntentKind;
+	/** the `seq` of the command this was made during (§2.4); 0 when the sender did not say */
+	atSeq: number;
+	/** the verb's single argument — a recipe, a usable, an equipment, a slot or a skill */
+	arg: number;
+}
 
 export function encodeIntent(kind: IntentKind): buffer | undefined {
 	const w = new NetWriter(INTENT_BYTES, INTENT_BYTES);
@@ -1815,15 +1849,49 @@ export function encodeIntent(kind: IntentKind): buffer | undefined {
 	return w.finish();
 }
 
-/** undefined for anything that is not exactly one of the intents above (§8.1: never trust the client) */
-export function decodeIntent(payload: unknown): IntentKind | undefined {
-	if (!typeIs(payload, "buffer") || buffer.len(payload) !== INTENT_BYTES) return undefined;
+/** one of the F3 verbs, with its argument and the command it belongs to (§2.4) */
+export function encodeIntentArgs(kind: IntentKind, atSeq: number, arg: number): buffer | undefined {
+	if (kind < INTENT_ARGS_FROM || kind > INTENT_KIND_MAX) return undefined;
+	const w = new NetWriter(INTENT_ARGS_BYTES, INTENT_ARGS_BYTES);
+	w.u8(PacketKind.Intent * 16);
+	w.u8(kind);
+	w.u16(wrapU16(atSeq));
+	w.u16(clampInt(arg, 0, 65535));
+	w.u16(0);
+	return w.finish();
+}
+
+/**
+ * Undefined for anything that is not exactly one of the intents above (§8.1: never trust the client).
+ * The presence verbs only ever arrive in the short form and the backpack verbs only in the long one, so a
+ * Craft packed as 2 bytes — or an EnterWorld padded to 8 — is malformed, not "close enough".
+ */
+export function decodeIntentMessage(payload: unknown): IntentMessage | undefined {
+	if (!typeIs(payload, "buffer")) return undefined;
+	const len = buffer.len(payload);
+	if (len !== INTENT_BYTES && len !== INTENT_ARGS_BYTES) return undefined;
 	const r = new NetReader(payload);
 	if (r.u8() !== PacketKind.Intent * 16) return undefined;
 	const kind = r.u8();
+	if (kind < 1 || kind > INTENT_KIND_MAX) return undefined;
+	if (len === INTENT_BYTES) {
+		if (kind >= INTENT_ARGS_FROM || !r.done()) return undefined;
+		return { kind: kind as IntentKind, atSeq: 0, arg: 0 };
+	}
+	if (kind < INTENT_ARGS_FROM) return undefined;
+	const atSeq = r.u16();
+	const arg = r.u16();
+	if (r.u16() !== 0) return undefined;
 	if (!r.done()) return undefined;
-	if (kind !== IntentKind.EnterWorld && kind !== IntentKind.LeaveWorld) return undefined;
-	return kind as IntentKind;
+	return { kind: kind as IntentKind, atSeq, arg };
+}
+
+/** the presence half of `decodeIntentMessage`, kept for server/net/mpHost.ts's EnterWorld/LeaveWorld handler */
+export function decodeIntent(payload: unknown): IntentKind | undefined {
+	const msg = decodeIntentMessage(payload);
+	if (msg === undefined) return undefined;
+	if (msg.kind !== IntentKind.EnterWorld && msg.kind !== IntentKind.LeaveWorld) return undefined;
+	return msg.kind;
 }
 
 /** round-trip time of a pong received at `clientNow` (same clock as the ping's clientTime) */

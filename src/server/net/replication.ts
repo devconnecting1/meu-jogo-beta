@@ -37,6 +37,8 @@ import {
 	SelfFlag,
 	SelfSnap,
 	Snapshot,
+	SolidState,
+	WItemAdd,
 	WorldEv,
 	WorldEvent,
 	ZombieFlag,
@@ -48,7 +50,8 @@ import {
 import { fxPosition, fxSlot, toWireFx } from "shared/net/fxWire";
 import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
-import { WorldData, buildingAt } from "shared/game/world";
+import { Solid, WorldData, buildingAt } from "shared/game/world";
+import { isDoor } from "shared/sim/interactQuery";
 import {
 	ActorInterest,
 	InterestTable,
@@ -65,6 +68,8 @@ import { DeathCause as HordeDeathCause, ZombieDeath } from "../sim/zombies";
 import { BossDeath } from "../sim/bosses";
 import { ServerPlayer, bufferDepth } from "../sim/players";
 import { ServerSimulation } from "../sim/simulation";
+import { solidAdd } from "../sim/build";
+import { PendingWorld } from "../sim/worldOut";
 
 /** rough per-event framing the engine adds on top of the payload; only used for the §12.2 bandwidth attribute */
 export const REMOTE_OVERHEAD_BYTES = 20;
@@ -360,6 +365,10 @@ export class Replicator {
 	private readonly zombiePool = new Array<ZombieSnap>();
 	private readonly bossBlocks = new Array<BossSnap>();
 	private readonly fxForViewer = new Array<FxEvent>();
+	/** the F3 outbox, drained once per tick */
+	private readonly interactive = new Array<PendingWorld>();
+	private readonly initSolids = new Array<Solid>();
+	private readonly initItems = new Array<WItemAdd>();
 
 	constructor(
 		private readonly sim: ServerSimulation,
@@ -417,6 +426,39 @@ export class Replicator {
 			this.queueFor(sp.slot, joinedEvent(other));
 			if (other.slot !== sp.slot) this.queueFor(other.slot, joined);
 		}
+		this.welcomeWorld(sp);
+	}
+
+	/**
+	 * The dynamic world, for one joining survivor (§4.5 WorldInit).
+	 *
+	 * The STATIC map is not sent and never will be: both sides generate it from the seed, and `mapHash` in
+	 * InitBegin is how they check they agree. What has to travel is everything that happened since -- every
+	 * construction and every door somebody opened (global, so all of them), and the ground items near where
+	 * this survivor is standing (§4.5's 1800 u). Without this, a player joining a three-hour-old server walks
+	 * into a base that, for them, was never built.
+	 *
+	 * `encodeWorld` splits the batch into 16 KB packets on its own, so a long game does not need chunking
+	 * here; `InitBegin.chunks` stays 1 until somebody needs the batch spread over several ticks.
+	 */
+	private welcomeWorld(sp: ServerPlayer): void {
+		const build = this.sim.build;
+		if (build !== undefined) {
+			this.initSolids.clear();
+			for (const solid of build.initAll(this.initSolids)) this.queueFor(sp.slot, solidAdd(solid));
+			this.initSolids.clear();
+		}
+		// a door of the generated map that somebody opened: the mirror generated it closed
+		for (const solid of this.sim.world.solids) {
+			if (solid.placeable !== undefined) continue;
+			if (!isDoor(solid) || solid.open !== true) continue;
+			this.queueFor(sp.slot, { t: WorldEv.DoorSet, id: solid.id, state: SolidState.Open });
+		}
+		const items = this.sim.items;
+		if (items === undefined) return;
+		this.initItems.clear();
+		for (const add of items.initFor(sp.state.x, sp.state.y, this.initItems)) this.queueFor(sp.slot, add);
+		this.initItems.clear();
 	}
 
 	left(slot: number): void {
@@ -474,6 +516,40 @@ export class Replicator {
 		const tickEvent = clock.clockEvent(tick);
 		if (tickEvent !== undefined) this.queue(tickEvent);
 		for (const a of clock.takeAnnouncements()) this.queue(clock.announceEvent(a));
+		this.collectInteractive();
+	}
+
+	/**
+	 * The F3 half (§4.5): everything the interactive world changed this tick -- a door, a construction, an
+	 * item picked up or dropped, a light, a repaired barricade, a looted house.
+	 *
+	 * The simulation writes these into `sim.worldOut` without knowing what a client is (server/sim/worldOut.ts
+	 * explains why); this is where they meet the audiences. Global events go out to everybody because everyone
+	 * predicts movement against them; the rest is filtered, either to one slot or by distance, which is both
+	 * cheaper and the §4.3 rule that a modified client is not handed a map of every drop in town.
+	 */
+	private collectInteractive(): void {
+		const out = this.sim.worldOut;
+		if (out.size() === 0) return;
+		out.take(this.interactive);
+		for (const p of this.interactive) {
+			if (p.slot !== SLOT_NONE) {
+				this.queueFor(p.slot, p.ev);
+				continue;
+			}
+			if (p.range <= 0) {
+				this.queue(p.ev);
+				continue;
+			}
+			const r2 = p.range * p.range;
+			for (const viewer of this.sim.players()) {
+				const at = interestPoint(viewer);
+				const dx = at.x - p.x;
+				const dy = at.y - p.y;
+				if (dx * dx + dy * dy <= r2) this.queueFor(viewer.slot, p.ev);
+			}
+		}
+		this.interactive.clear();
 	}
 
 	/** one ZombieDied, to each client that could see that zombie in the last rounds (§4.3, §4.4) */

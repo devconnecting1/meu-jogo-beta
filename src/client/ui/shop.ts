@@ -39,7 +39,10 @@ export function actionErrorText(reason: ShopActionReason | undefined, langType: 
 	if (reason === "rate") return tr("Please wait a moment");
 	if (reason === "loading") return tr("Still loading your progress");
 	if (reason === "readonly") return tr("Progress not loaded");
-	if (reason === "outdated") return tr("Please try again");
+	// "outdated" = the request named a run the session has already moved past. client/main.client.ts retries
+	// it once with the corrected runRev, so reaching this text means the two really do disagree -- say that,
+	// instead of "Please try again", which told a player to repeat the click that had just failed.
+	if (reason === "outdated") return tr("Your progress changed, try again");
 	return tr("Connection problem, try again");
 }
 

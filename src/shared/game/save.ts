@@ -7,8 +7,20 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
 
-/** v1: raw client JSON (shopHave = pending packs). v2: server-validated, packsBought/packsOpened/costumes. */
-export const SAVE_VERSION = 2;
+/**
+ * v1: raw client JSON (shopHave = pending packs). v2: server-validated, packsBought/packsOpened/costumes.
+ * v3 (docs/MULTIPLAYER.md §6.4): the SERVER owns the run, so the run's body travels with the save —
+ * `runHp` and `runHunger`. Nothing else changes: `day` keeps its value and only gains a clearer meaning
+ * (days survived in this life, §6.2).
+ *
+ * The migration is additive and therefore reversible. v3 lives in the SAME DataStore document as v2
+ * (`{data, lock}`), `sanitizeStoredSave` fills the two new fields from `emptySave()` when a v2 document has
+ * no trace of them, and a server rolled back to v2 code simply drops them as unknown keys. So: no save is
+ * rewritten, no save is lost, and a rollback costs at most one run's HP bar.
+ */
+export const SAVE_VERSION = 3;
+/** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
+export const SAVE_VERSION_RUN_BODY = 3;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -18,6 +30,10 @@ export const SAVE_LIMITS = {
 	AMMO_MAX: 99999,
 	MONEY_MAX: 100000000,
 	COUNTER_MAX: 10000000,
+	/** v3 run body: hp is 100 + 10 per "tough" skill level, so this is far above any legitimate value */
+	RUN_HP_MAX: 100000,
+	/** v3 run body: hunger accumulated; DESIGN.PLAYER_HUNGRY is the bar, this is a generous ceiling */
+	RUN_HUNGER_MAX: 100000,
 } as const;
 
 export interface SettingsData {
@@ -78,6 +94,14 @@ export interface PlayerSaveData {
 	costumes: Array<number>;
 	/** the current run ended in a game over (needs a paid rebirth or a new run to continue) */
 	runOver: boolean;
+	/**
+	 * v3 (§6.1): the run's HP when the session ended, so coming back does not hand out a free heal.
+	 * 0 means "not recorded" (a v2 save, a fresh run, or a run that ended in death) and the survivor
+	 * spawns at full — never at 0 hp, which would kill them on arrival.
+	 */
+	runHp: number;
+	/** v3 (§6.1): hunger ACCUMULATED, so 0 = full. `PlayerState.hungry` counts the other way (it runs down). */
+	runHunger: number;
 	/** bumped by the server on every rebirth / new run: reports from before it are stale */
 	runRev: number;
 	settings: SettingsData;
@@ -124,6 +148,12 @@ function copyArray(src: Array<number>): Array<number> {
 		a.push(v);
 	}
 	return a;
+}
+
+/** overwrites `dst` with `src`'s contents, in place (the array identity is what callers rely on) */
+function copyInto(dst: Array<number>, src: Array<number>): void {
+	dst.clear();
+	for (const v of src) dst.push(v);
 }
 
 function idByName(list: Array<{ id: number; name: string }>, name: string): number {
@@ -177,6 +207,9 @@ export function resetRun(save: PlayerSaveData): void {
 	save.day = 1;
 	save.deathCount = 0;
 	save.runOver = false;
+	// a new run starts with a new body: never inherit the HP bar the last one died on (v3, §6.1)
+	save.runHp = 0;
+	save.runHunger = 0;
 	save.equipDeco = save.equipDeco >= 0 && ownsEquip(save, save.equipDeco) ? save.equipDeco : -1;
 }
 
@@ -199,6 +232,8 @@ function emptySave(): PlayerSaveData {
 		packsOpened: zeros(SHOP_PACKS.size()),
 		costumes: zeros(COSTUMES.size()),
 		runOver: false,
+		runHp: 0,
+		runHunger: 0,
 		runRev: 0,
 		settings: defaultSettings(),
 		invenWeapon: zeros(WEAPONS.size()),
@@ -357,6 +392,9 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		packsOpened: copyArray(fb.packsOpened),
 		costumes: copyArray(fb.costumes),
 		runOver: readBool(r.runOver, fb.runOver),
+		// v3: absent in a v2 document, so the fallback (0 = "not recorded") is exactly the migration
+		runHp: readInt(r.runHp, fb.runHp, 0, L.RUN_HP_MAX),
+		runHunger: readInt(r.runHunger, fb.runHunger, 0, L.RUN_HUNGER_MAX),
 		runRev: fb.runRev,
 		settings: readSettings(r.settings, fb.settings),
 		invenWeapon: readIntArray(r.invenWeapon, WEAPONS.size(), itemMax, fb.invenWeapon),
@@ -418,7 +456,75 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.equipHand = validEquip(s, s.equipHand, 2);
 	s.equipGun = validEquip(s, s.equipGun, 3);
 	s.equipDeco = validEquip(s, s.equipDeco, 4);
+	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
+	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
+	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
+	s.runHunger = math.clamp(math.floor(s.runHunger), 0, L.RUN_HUNGER_MAX);
 	s.version = SAVE_VERSION;
+}
+
+/**
+ * The version a stored document claims, or 0 when it does not say (v1 never wrote the field).
+ * Only used for logging and for the migration test: `sanitizeStoredSave` needs no version to do its job,
+ * because every field falls back on its own.
+ */
+export function storedVersion(raw: unknown): number {
+	if (!typeIs(raw, "table")) return 0;
+	const v = (raw as Record<string, unknown>).version;
+	return isFiniteNumber(v) ? math.max(0, math.floor(v)) : 0;
+}
+
+/**
+ * Copies `src` field by field into `dst`, keeping `dst`'s identity (docs/MULTIPLAYER.md §6.3).
+ *
+ * From F2 on the SERVER writes into the live save table while a session is open — XP at the instant a zombie
+ * dies (server/sim/progress.ts), coins at midnight, and from F3 the inventory itself. Replacing that table
+ * with a new one (`session.save = updated`) silently detaches every holder of the old one: server/sim's
+ * `ServerPlayer.save` keeps the orphan, and whatever the server wrote into it between the swap and the next
+ * `adoptSave` pass is simply gone. Copying in place removes the whole class of bug — there is only ever one
+ * table per session, so there is nothing to re-point and nothing to lose.
+ *
+ * Arrays are copied element by element for the same reason: `dst.skillLevels` may be aliased elsewhere.
+ */
+export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSaveData {
+	if (dst === src) return dst;
+	dst.version = src.version;
+	dst.level = src.level;
+	dst.exp = src.exp;
+	dst.skillPoint = src.skillPoint;
+	copyInto(dst.skillLevels, src.skillLevels);
+	dst.money = src.money;
+	dst.day = src.day;
+	dst.bestDay = src.bestDay;
+	dst.deathCount = src.deathCount;
+	dst.bossKills = src.bossKills;
+	dst.firstInstall = src.firstInstall;
+	dst.tutorialDone = src.tutorialDone;
+	copyInto(dst.achievements, src.achievements);
+	copyInto(dst.packsBought, src.packsBought);
+	copyInto(dst.packsOpened, src.packsOpened);
+	copyInto(dst.costumes, src.costumes);
+	dst.runOver = src.runOver;
+	dst.runHp = src.runHp;
+	dst.runHunger = src.runHunger;
+	dst.runRev = src.runRev;
+	dst.settings = src.settings;
+	copyInto(dst.invenWeapon, src.invenWeapon);
+	copyInto(dst.invenEquip, src.invenEquip);
+	copyInto(dst.invenUse, src.invenUse);
+	copyInto(dst.invenEtc, src.invenEtc);
+	dst.ammoNormal = src.ammoNormal;
+	dst.ammoShotgun = src.ammoShotgun;
+	dst.ammoMachinegun = src.ammoMachinegun;
+	dst.ammoArrow = src.ammoArrow;
+	dst.oil = src.oil;
+	dst.electric = src.electric;
+	dst.equipWeapon = src.equipWeapon;
+	dst.equipCloth = src.equipCloth;
+	dst.equipHand = src.equipHand;
+	dst.equipGun = src.equipGun;
+	dst.equipDeco = src.equipDeco;
+	return dst;
 }
 
 /**
@@ -459,6 +565,10 @@ export function sanitizeClientReport(raw: unknown, base: PlayerSaveData): Player
 	if (!typeIs(raw, "table")) return undefined;
 	const r = raw as Record<string, unknown>;
 	const s = readProgress(r, base);
+	// v3: the run's body is the SERVER's (§2.1 "HP, fome, buffs ... ✅ servidor"). A report may mirror it,
+	// never move it — otherwise "report full hp" is a one-line heal.
+	s.runHp = base.runHp;
+	s.runHunger = base.runHunger;
 	const reported = readIntArray(r.packsOpened, SHOP_PACKS.size(), () => SAVE_LIMITS.COUNTER_MAX, base.packsOpened);
 	for (let i = 0; i < SHOP_PACKS.size(); i++) {
 		const bought = base.packsBought[i] ?? 0;

@@ -23,6 +23,8 @@
 		"test:smoothness": "node tools/test-smoothness.mjs",
 		"test:input": "node tools/test-input-buffer.mjs",
 		"test:chat": "node tools/test-chat.mjs",
+		"test:world": "node tools/test-world.mjs",
+		"test:save": "node tools/test-save.mjs",
 		"test:contrast": "node tools/test-contrast.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",

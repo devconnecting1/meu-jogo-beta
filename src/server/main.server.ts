@@ -1,5 +1,6 @@
 import { GAME_NAME } from "shared/module";
 import {
+	copySaveInto,
 	defaultSave,
 	enforceSaveInvariants,
 	PlayerSaveData,
@@ -23,10 +24,13 @@ import {
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
-import { MP_PHASE } from "shared/net/mpConfig";
+import { INTENT_BURST, INTENT_RATE, MP_PHASE } from "shared/net/mpConfig";
+import { decodeIntentMessage, IntentKind } from "shared/net/protocol";
+import { onIntent } from "./net/remotes";
 import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
-import { stripClientProgress } from "./sim/progress";
+import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
+import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { startProximityChat } from "./chat/proximityChat";
 
 /*
@@ -45,12 +49,13 @@ const RunService = game.GetService("RunService");
 Players.CharacterAutoLoads = false;
 
 /**
- * v2 documents ({ data, lock }) live in their own store: a server still running the v1 code expects a
- * raw string there and would overwrite anything else with a blank save.
+ * v2/v3 documents ({ data, lock }) live in their own store: a server still running the v1 code expects a
+ * raw string there and would overwrite anything else with a blank save. In Studio both names carry a
+ * suffix, so a playtest can never write over a live player's save (server/save/stores.ts).
  */
-const DATA_STORE_NAME = "ProjectZ_Save_v2";
+const DATA_STORE_NAME = SAVE_STORE;
 /** v1 store (raw JSON strings, written by the client-trusting server): read to migrate a first v2 session */
-const LEGACY_STORE_NAME = "ProjectZ_Save_v1";
+const LEGACY_STORE_NAME = LEGACY_STORE;
 /** v1 balances were written by the client (free "+5" buttons / exploit): cap what is carried over */
 const LEGACY_MONEY_CAP = 500;
 const AUTOSAVE_INTERVAL = 60;
@@ -193,6 +198,57 @@ function persists(s: Session): boolean {
 
 function isReadOnly(s: Session): boolean {
 	return s.status === "error" || s.lockLost;
+}
+
+/** the session of a `ServerPlayer` (the simulation only knows UserIds); at most MAX_PLAYERS entries */
+function sessionOfUserId(userId: number): Session | undefined {
+	for (const [player, s] of sessions) {
+		if (player.UserId === userId) return s;
+	}
+	return undefined;
+}
+
+/** the server just wrote into this survivor's save: the next autosave must carry it */
+function markDirty(userId: number): void {
+	const s = sessionOfUserId(userId);
+	if (s !== undefined && !s.closed) s.dirty = true;
+}
+
+/**
+ * The F3 backpack verbs (craft, use, equip, unequip, learn) on the `Intent` channel (§4.1, §8.1).
+ *
+ * This is a SECOND listener on the same remote, beside the one server/net/mpHost.ts installs for EnterWorld
+ * and LeaveWorld. Roblox fires every connection, and the two decoders are disjoint by packet length, so each
+ * handler sees only its own verbs and drops the other's as malformed. It lives here rather than in mpHost
+ * because the session layer is what owns "this player's save is now dirty"; when F3's front 3B folds the
+ * `Self` channel in, the natural home for both halves is one dispatcher inside mpHost.
+ *
+ * §8.2's token bucket is enforced here too: mpHost rate-limits presence, not this.
+ */
+function startIntentListener(host: MpHost): void {
+	const tokens = new Map<Player, number>();
+	const at = new Map<Player, number>();
+	onIntent(host.remotes, (player, payload) => {
+		const sp = host.playerOf(player);
+		if (sp === undefined) return;
+		const msg = decodeIntentMessage(payload);
+		// EnterWorld / LeaveWorld belong to mpHost's handler; anything malformed belongs to nobody
+		if (msg === undefined || msg.kind === IntentKind.EnterWorld || msg.kind === IntentKind.LeaveWorld) return;
+		const now = os.clock();
+		const last = at.get(player) ?? now;
+		const left = math.min(INTENT_BURST, (tokens.get(player) ?? INTENT_BURST) + (now - last) * INTENT_RATE);
+		at.set(player, now);
+		if (left < 1) {
+			tokens.set(player, left);
+			return;
+		}
+		tokens.set(player, left - 1);
+		host.simulation.queueIntent(sp.slot, msg);
+	});
+	Players.PlayerRemoving.Connect(player => {
+		tokens.delete(player);
+		at.delete(player);
+	});
 }
 
 function resetCredits(s: Session): void {
@@ -547,6 +603,14 @@ function applyProgressLimits(
 	refillCredits(s);
 	const reward: Reward = { coins: 0, days: 0, bosses: 0, clamped: false };
 	const credit = (c: number): number => (trusted ? math.huge : math.floor(c));
+	/*
+	 * Who pays. From MP_PHASE 2 on the server counts the day and the boss itself and pays for them the
+	 * moment they happen (server/sim/progress.ts), so this path must not pay again. `stripClientProgress`
+	 * has already pinned `day` and `bossKills` to `prev`, which makes the windows below unreachable — but
+	 * "unreachable" is a property of another function, and if the pin ever moves, silently paying twice is
+	 * the worst possible failure. The flag makes it a rule.
+	 */
+	const payHere = !serverOwnsProgress();
 
 	// days: at most the credited amount; each new day pays, each new record multiple of 5 pays a bonus
 	if (upd.day > prev.day) {
@@ -555,9 +619,9 @@ function applyProgressLimits(
 		s.credits.day = math.max(0, s.credits.day - gained);
 		upd.day = prev.day + gained;
 		reward.days = gained;
-		reward.coins += gained * ECONOMY.COINS_PER_DAY;
+		if (payHere) reward.coins += gained * ECONOMY.COINS_PER_DAY;
 	}
-	if (upd.day > prev.bestDay) {
+	if (payHere && upd.day > prev.bestDay) {
 		for (let d = prev.bestDay + 1; d <= upd.day; d++) {
 			if (d % ECONOMY.MILESTONE_EVERY === 0) reward.coins += ECONOMY.MILESTONE_BONUS;
 		}
@@ -573,7 +637,7 @@ function applyProgressLimits(
 		s.credits.boss = math.max(0, s.credits.boss - gained);
 		upd.bossKills = prev.bossKills + gained;
 		reward.bosses = gained;
-		reward.coins += gained * ECONOMY.COINS_PER_BOSS;
+		if (payHere) reward.coins += gained * ECONOMY.COINS_PER_BOSS;
 	}
 
 	// levels: limited per real minute (the rest is accepted by later reports as credit refills)
@@ -667,7 +731,11 @@ function processReport(s: Session, json: string): void {
 	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
-	s.save = upd;
+	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —
+	// XP the moment a zombie dies, coins at midnight — and it holds the reference through
+	// `ServerPlayer.save`. Swapping the table would orphan it and lose every server-side write made
+	// between the swap and mpHost's next `adoptSave` pass.
+	copySaveInto(s.save, upd);
 	s.dirty = true;
 	sendSaveAck(s, {
 		ok: true,
@@ -779,6 +847,17 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		// continue the current run after a game over; the price grows with every continue of the run.
 		// The request names the run it continues: a stale/duplicated request is refused (idempotent).
 		if (req.runRev !== save.runRev) return fail("outdated", s);
+		/*
+		 * MP-21: on a SHARED server a death waits for daybreak — the host revives at 06:00 and nobody buys
+		 * their way past the night. The official client refuses the button there, but a refusal that only
+		 * lives in the client is not a rule: a modified one would send this anyway, spend the coins and skip
+		 * the wait. The rule belongs here.
+		 *
+		 * A private server (`PrivateServerId !== ""`) is the player's own, and solo play runs in one, so the
+		 * paid continue keeps working exactly where it always did. `newRun` stays allowed everywhere — MP-20
+		 * makes it THE way out of a game over on a shared server, and it costs nothing to refuse.
+		 */
+		if (MP_PHASE >= 2 && game.PrivateServerId === "") return fail("invalid", s);
 		price = rebirthPrice(save.deathCount);
 		if (save.money < price) return fail("funds", s);
 		save.money -= price;
@@ -891,7 +970,8 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
 	// an edit keeps the run (still assisted if it was); a reset starts a new one
 	s.assistedRunRev = ops !== undefined && s.assistedRunRev === before.runRev ? edited.runRev : undefined;
-	s.save = edited;
+	// same reason as processReport: one table per session, for its whole life
+	copySaveInto(s.save, edited);
 	s.dirty = true;
 	s.pending = undefined;
 	s.pendingToken = undefined;
@@ -901,7 +981,8 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	s.patchResend = undefined;
 	s.patchResentAt = os.clock();
 	s.patchResends = 0;
-	return { ok: true, runRev: edited.runRev, rev: adminPatchSerial, persist: persists(s), save: edited };
+	// the LIVE table, not the scratch copy: whoever reads it next must see what the session now holds
+	return { ok: true, runRev: s.save.runRev, rev: adminPatchSerial, persist: persists(s), save: s.save };
 }
 
 admin = startAdminServer({
@@ -977,6 +1058,27 @@ if (MP_PHASE >= 1) {
 			return s.save;
 		},
 	});
+	const sim = mpHost.simulation;
+	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an
+	// admin; this file owns `assistedRunRev`, so the rule is wired in from here.
+	sim.paysRewards = sp => {
+		const s = sessionOfUserId(sp.userId);
+		return s === undefined || s.assistedRunRev === undefined || s.assistedRunRev !== s.save.runRev;
+	};
+	// §3.6: midnight already paid the day and its coins straight into the live save. All that is left is to
+	// make sure the DataStore learns about it. (The new balance reaches the client on the next report ack;
+	// when the `Self` channel of §4.1 lands it should be pushed here instead.)
+	sim.onDayCredit = (sp, credit) => {
+		const s = sessionOfUserId(sp.userId);
+		if (s === undefined || s.closed) return;
+		s.dirty = true;
+		if (credit.coins > 0) admin?.onReport(s.player);
+	};
+	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
+	// something the client reports, it is something the server writes)
+	sim.onBackpack = sp => markDirty(sp.userId);
+	sim.onInteract = sp => markDirty(sp.userId);
+	startIntentListener(mpHost);
 	game.BindToClose(() => {
 		// stop simulating while the save flush above uses the remaining shutdown budget
 		if (mpHost !== undefined) mpHost.stop();

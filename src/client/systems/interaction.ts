@@ -125,6 +125,13 @@ function worldHours(refs: GameRefs): number {
 
 // --- fires (campfire / brazier) burn wood -------------------------------------------------------
 
+/**
+ * How often the lazy loot sweep runs. It is NOT per frame: a survivor cannot cross the 320 u trigger radius
+ * in half a second, and the sweep is a grid query per survivor. Same cadence as the authoritative version
+ * (`LOOT_SWEEP_S`, server/sim/items.ts).
+ */
+const LOOT_SWEEP_S = 0.5;
+
 /** obj_campfire: 1000 wood burning 0.1/frame → ~5.5 min of fire; relighting costs 5 wood */
 const FIRE_TIME = 1000 / 0.1 / 30;
 const FIRE_WOOD = 5;
@@ -132,6 +139,7 @@ const WOOD_INDEX = 23;
 /** seconds of fire left per campfire/brazier (absent = freshly built, full) */
 const fireFuel = new Map<Solid, number>();
 let fireTick = 0;
+const fireBuf: Array<Solid> = [];
 
 function fuelOf(s: Solid): number {
 	return fireFuel.get(s) ?? FIRE_TIME;
@@ -168,7 +176,8 @@ function burnFires(refs: GameRefs, dt: number): void {
 	const step = fireTick;
 	fireTick = 0;
 	const p = refs.player;
-	for (const s of querySolids(refs.world, p.x - 2500, p.y - 2500, p.x + 2500, p.y + 2500)) {
+	// reused: this box covers a hundred grid cells, so the result table is the expensive part
+	for (const s of querySolids(refs.world, p.x - 2500, p.y - 2500, p.x + 2500, p.y + 2500, fireBuf)) {
 		if (!isFire(s) || s.powered !== true) continue;
 		const left = fuelOf(s) - step;
 		fireFuel.set(s, left);
@@ -177,6 +186,7 @@ function burnFires(refs: GameRefs, dt: number): void {
 			s.powered = false;
 		}
 	}
+	fireBuf.clear();
 	for (const [s] of fireFuel) {
 		if (s.removed === true) fireFuel.delete(s);
 	}
@@ -278,6 +288,10 @@ export function interactHint(refs: GameRefs, by: PlayerState = refs.player): str
 }
 
 export class Interaction {
+	/** seconds until the next loot sweep, and the buffer it reuses */
+	private lootSweep = 0;
+	private readonly lootBuf: Array<Solid> = [];
+
 	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
 		if (refs.pendingPlace >= 0) return;
 		const target = interactTarget(refs.world, by.x, by.y);
@@ -331,18 +345,37 @@ export class Interaction {
 				hitCooldowns.set(solid, nt);
 			}
 		}
+		this.rollNearbyLoot(refs, dt);
+	}
 
+	/*
+	 * Loot is rolled lazily, when a survivor comes near a building that has none — but "near" was tested
+	 * EVERY FRAME, with a fresh 640 x 640 grid query (and a fresh result table) per survivor. In a dense
+	 * block that is a few hundred solid visits and one throwaway array sixty times a second, for a question
+	 * whose answer changes at walking pace: it is a slow, steady cost that grows as the player explores into
+	 * denser parts of town, which is exactly what it felt like.
+	 *
+	 * Twice a second is more often than a survivor can cross 320 units, and it is the same cadence the
+	 * authoritative version uses (LOOT_SWEEP_S in server/sim/items.ts). The scratch buffer is reused, so the
+	 * sweep stops allocating at all.
+	 */
+	private rollNearbyLoot(refs: GameRefs, dt: number): void {
+		this.lootSweep -= dt;
+		if (this.lootSweep > 0) return;
+		this.lootSweep = LOOT_SWEEP_S;
 		const radius = 320;
 		const now = worldHours(refs);
 		for (const p of refs.players) {
-			for (const s of querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius)) {
+			const found = querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius, this.lootBuf);
+			for (const s of found) {
 				if (s.kind !== "building") continue;
-				if (edgeDist(s, p.x, p.y) >= radius) continue;
 				const loot = s.lootItems;
-				if (loot !== undefined && loot.size() === 0 && now >= (s.lootTimer ?? 0)) {
-					rollLoot(s);
-				}
+				if (loot === undefined || loot.size() > 0) continue;
+				if (now < (s.lootTimer ?? 0)) continue;
+				if (edgeDist(s, p.x, p.y) >= radius) continue;
+				rollLoot(s);
 			}
+			this.lootBuf.clear();
 		}
 	}
 }
