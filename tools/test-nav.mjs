@@ -801,15 +801,23 @@ function textsIn(root, where) {
 		() => showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
 		"Menu",
 	);
-	const summary = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false };
-	visit(
-		"Fim de partida",
-		() => showRunSummary(ctx, summary, { onRebirth: noop, onNewRun: noop, onHome: noop }),
-		"RunOver",
-	);
+	// the end-of-run screen's four epitaphs (gameOver.ts closingLine): a record, five days, a first death, the rest
+	const summaries = [
+		{ days: 12, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+		{ days: 6, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+		{ days: 1, bestDay: 3, level: 1, kills: 0, bosses: 0, first: true },
+		{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+	];
+	for (const summary of summaries) {
+		visit(
+			`Fim de partida (${summary.days} dias)`,
+			() => showRunSummary(ctx, summary, { onRebirth: noop, onNewRun: noop, onHome: noop }),
+			"RunOver",
+		);
+	}
 	visit(
 		"Espera do amanhecer",
-		() => showDaybreakWait(ctx, summary, { onRebirth: noop, onNewRun: noop, onHome: noop }).close,
+		() => showDaybreakWait(ctx, summaries[3], { onRebirth: noop, onNewRun: noop, onHome: noop }).close,
 		"RunOver",
 	);
 	for (let t = 0; t < 6; t++) {
