@@ -22,6 +22,7 @@ import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { stepPlayer } from "shared/sim/playerMove";
 import { moveDirX, moveDirY, SPEED_SCALE } from "shared/sim/types";
+import { packRide, rideLead, unpackRide } from "shared/sim/vehicle";
 
 /**
  * A correction this big is worth counting: §11.3 F1 accepts fewer than one per minute outside knockback,
@@ -67,7 +68,12 @@ interface Sampled {
 	seq: number;
 	x: number;
 	y: number;
+	/** (VEI-05) the ride after this command, as `packRide` (0 on foot): compared with the self block's at the ack */
+	ride: number;
 }
+
+/** scratch for the render lead of a rider (no allocation per frame) */
+const LEAD = { x: 0, y: 0 };
 
 /** the survivor fields the F1 rewind must not lose (the server does not own them until F2) */
 interface Vitals {
@@ -154,7 +160,7 @@ export class Prediction {
 		stepPlayer(world, p, save, cmd, TICK_DT);
 		this.exactX = p.x;
 		this.exactY = p.y;
-		this.history.push({ seq: cmd.seq, x: p.x, y: p.y });
+		this.history.push({ seq: cmd.seq, x: p.x, y: p.y, ride: packRide(p.ride) });
 		while (this.history.size() > 256) this.history.remove(0);
 	}
 
@@ -189,19 +195,23 @@ export class Prediction {
 		this.applyModFlags(snap);
 		if (ADOPT_VITALS) this.applyVitals(snap, p);
 
-		// the position is always the server's; nothing else in the protocol can put the client back in place
-		const needsReplay = mine === undefined || err > RECONCILE_EPS;
+		// the position is always the server's; nothing else in the protocol can put the client back in place.
+		// VEI-05: so is the ride -- getting on or off, a crash, a zombie that stopped the vehicle are the server's, and
+		// a ride that differs at the ack is a divergence even where the position still agrees
+		const serverRide = snap.ride ?? 0;
+		const needsReplay = mine === undefined || err > RECONCILE_EPS || mine.ride !== serverRide;
 		if (needsReplay) {
 			const kept = ADOPT_VITALS ? undefined : captureVitals(p);
 			p.x = snap.x;
 			p.y = snap.y;
 			p.reactionSpeed = snap.reactionSpeed;
 			p.reactionDir = snap.reactionDir;
+			p.ride = unpackRide(serverRide);
 			this.history.clear();
 			let replayed = 0;
 			for (const cmd of unacked) {
 				stepPlayer(world, p, save, cmd, TICK_DT);
-				this.history.push({ seq: cmd.seq, x: p.x, y: p.y });
+				this.history.push({ seq: cmd.seq, x: p.x, y: p.y, ride: packRide(p.ride) });
 				replayed += 1;
 			}
 			this.lastReplayed = replayed;
@@ -253,9 +263,17 @@ export class Prediction {
 		const save = this.save;
 		if (world === undefined || p === undefined || save === undefined) return;
 		// a dead body does not move (shared/sim/playerMove.ts), so it has nothing to lead with either
-		if (live === undefined || live.moveMag <= 0 || p.dead) return;
+		if (live === undefined || p.dead) return;
 		const t = math.clamp(phase, 0, 1) * TICK_DT;
 		if (t <= 0) return;
+		if (p.ride !== undefined) {
+			// VEI-05: a vehicle rolls on without the stick; its lead is its own speed along its heading
+			rideLead(world, this.exactX, this.exactY, p.ride, p.noclip === true, t, LEAD);
+			this.leadX = LEAD.x;
+			this.leadY = LEAD.y;
+			return;
+		}
+		if (live.moveMag <= 0) return;
 		const speed = recalcMoveSpeed(p, save) * SPEED_SCALE;
 		const dx = moveDirX(live.moveAng) * speed * t;
 		const dy = moveDirY(live.moveAng) * speed * t;

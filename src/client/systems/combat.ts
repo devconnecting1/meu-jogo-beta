@@ -1057,7 +1057,8 @@ export class Combat {
 		const rt = p.weapon;
 		this.fireCd = math.max(this.fireCd - dt, -dt);
 		this.recoverRecoil(refs, dt);
-		if (refs.pendingPlace >= 0 || p.dead) {
+		// a rider has both hands on the bars (VEI-05): the attack button is the bell or the horn, on the server
+		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined) {
 			this.swing.active = false;
 			this.drawTime = 0;
 			p.swingerActive = false;
@@ -1152,7 +1153,7 @@ export class Combat {
 		this.fireCd = math.max(this.fireCd - dt, -dt);
 		this.recoverRecoil(refs, dt);
 
-		if (refs.pendingPlace >= 0 || p.dead) {
+		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined) {
 			this.swing.active = false;
 			this.drawTime = 0;
 			p.swingerActive = false;

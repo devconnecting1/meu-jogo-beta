@@ -20,6 +20,10 @@
  *      broken, it is repaired with steel; zombies ahead throw you off or stop you, riders get bitten; the engine
  *      and the horn are the noise event the horde hears; no weapon on a vehicle; leaving and dying leave the
  *      vehicle in town; the self block and the player block carry the ride through the real wire.
+ *   C. THE CLIENT: the prediction replays a ride from the server's self block to within RECONCILE_EPS while it
+ *      accelerates, weaves and brakes (client/net/prediction.ts); a client that pretends to ride is rewound to a
+ *      walk; another client's snapshot buffer carries the rider's vehicle and heading; the vehicle is drawn inside
+ *      its footprint, under its rider, whose hands hold the bars and no weapon, with no Instance after warm-up.
  *
  * Pure Node (>= 18) + the project's TypeScript, on the shared shims (tools/luau-shim.mjs).
  */
@@ -899,6 +903,367 @@ section("B9. replication: the rider's own ride in the self block, the vehicle un
 	const mine = P.decodeSnapshotPart(P.encodeSnapshot({ ...snap, self }).parts[0]);
 	checkEq(mine.self.ride, self.ride, "a's own block through the wire: bit-exact");
 });
+
+// ================================================================ C. the client: prediction, the others, the drawing
+
+const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+const { seqNewer } = require(join(SRC, "shared/net/codec.ts"));
+const { RECONCILE_EPS } = require(join(SRC, "shared/net/mpConfig.ts"));
+
+/** the server's self block for `sp`, through the real wire (encode → decode) */
+function selfThroughWire(sim, sp) {
+	const snap = { tick: sim.tick, self: REP.selfBlockOf(sim, sp), players: [], zombies: [], bosses: [] };
+	return P.decodeSnapshotPart(P.encodeSnapshot(snap).parts[0]).self;
+}
+
+/**
+ * A client predicting its survivor against the real server, `latency` ticks each way: its commands reach the server
+ * that much later, the self block comes back that much later, and every self block is reconciled with the commands
+ * the server has not simulated yet (§2.2).
+ */
+function predictedSession({ latency = 6, oil = 40, x = 2000, y = 3000 } = {}) {
+	const { world, sim, events } = serverWith({ width: 16000, height: 8000 });
+	const sp = addPlayer(sim, 0, x, y, fueled(oil));
+	const clientWorld = W.createWorld(16000, 8000);
+	const clientSave = fueled(oil);
+	const me = Ply.createPlayer(clientSave, x, y);
+	const pred = new Prediction();
+	pred.attach(clientWorld, me, clientSave);
+	const up = [];
+	const down = [];
+	const sent = [];
+	let seq = 1000;
+	let t = 0;
+	const errs = [];
+	return {
+		world,
+		sim,
+		sp,
+		me,
+		pred,
+		events,
+		errs,
+		/** one tick: the client makes and predicts a command, the server runs, the wire delivers what is due */
+		tick(mx, my, edges = 0) {
+			seq += 1;
+			t += 1;
+			const cmd = P.makeCommand(seq, mx, my, 0, 0, edges);
+			pred.restoreExact();
+			pred.step(cmd);
+			sent.push(cmd);
+			up.push({ at: t + latency, cmd });
+			while (up.length > 0 && up[0].at <= t) {
+				const { cmd: c } = up.shift();
+				PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [c] }), t / 60);
+			}
+			sim.step();
+			down.push({ at: t + latency, block: selfThroughWire(sim, sp) });
+			while (down.length > 0 && down[0].at <= t) {
+				const { block } = down.shift();
+				while (sent.length > 0 && !seqNewer(sent[0].seq, block.ackSeq)) sent.shift();
+				pred.reconcile(block, sent, t / 60);
+				errs.push(pred.stats().last);
+			}
+		},
+	};
+}
+
+section("C1. prediction: the client replays the ride from the server's own numbers, to the bit", () => {
+	const s = predictedSession();
+	park(s.world, 22, 2000, 3040);
+	s.tick(0, 0, PRESS_E);
+	let mountedAt;
+	for (let i = 0; i < 40; i++) {
+		s.tick(0, 0);
+		if (mountedAt === undefined && s.me.ride !== undefined) mountedAt = i;
+	}
+	check(s.sim.vehicles.riding(0), "the server put the survivor on the motorcycle");
+	check(
+		mountedAt !== undefined && s.me.ride?.kind === VehicleKind.Motorcycle,
+		"the client learnt it from the self block",
+		`after ${mountedAt} ticks`,
+	);
+	const from = s.errs.length;
+	// ten seconds of riding: full throttle, weaving, braking round, coasting
+	for (let i = 0; i < 600; i++) {
+		const a = Math.sin(i / 40) * 1.2 + (i > 300 && i < 360 ? Math.PI : 0);
+		if (i % 150 > 130) s.tick(0, 0);
+		else s.tick(Math.cos(a), Math.sin(a));
+	}
+	const riding = s.errs.slice(from + 12);
+	const worst = Math.max(...riding);
+	check(riding.length > 500, "reconciled every tick while riding", `${riding.length}`);
+	check(
+		worst <= RECONCILE_EPS,
+		`predicted vs server at every ack: ≤ ${RECONCILE_EPS} u (no correction at all)`,
+		`worst ${worst.toExponential(2)} u`,
+	);
+	// and off again: E, the server lets them off, the client walks
+	s.tick(0, 0, PRESS_E);
+	for (let i = 0; i < 20; i++) s.tick(0, 0);
+	check(
+		!s.sim.vehicles.riding(0) && s.me.ride === undefined,
+		"E: off on the server, and on the client from the self block",
+	);
+});
+
+section("C2. a client that pretends to ride goes at a walk: the server never granted the ride", () => {
+	const s = predictedSession();
+	// a modified client puts itself on a motorcycle at top speed, with no vehicle anywhere
+	s.me.ride = { kind: VehicleKind.Motorcycle, heading: 0, speed: V.topSteps(MOTO) };
+	const x0 = s.sp.state.x;
+	const consumed0 = s.sp.counters.consumed;
+	for (let i = 0; i < 120; i++) s.tick(1, 0);
+	const serverRan = s.sp.state.x - x0;
+	const commands = s.sp.counters.consumed - consumed0;
+	check(
+		Math.abs(serverRan - (commands * 210) / 60) < 1,
+		`the server moved it at a walk: ${commands} commands × 210 u/s`,
+		f1(serverRan),
+	);
+	check(s.me.ride === undefined, "the self block took the ride away from the client");
+	check(
+		s.pred.stats().replays >= 1,
+		"the client was rewound to the server's walk",
+		`${s.pred.stats().replays} replays`,
+	);
+	check(
+		Math.abs(s.pred.exact().x - s.sp.state.x) < (210 * 7) / 60,
+		"and it predicts from where the server has it (one latency of walking ahead)",
+		f1(s.pred.exact().x - s.sp.state.x),
+	);
+});
+
+section("C3. the others see the rider: the kind and the heading through the snapshot buffer", () => {
+	const { world, sim } = serverWith({ width: 16000 });
+	const a = addPlayer(sim, 0, 2000, 2000);
+	const b = addPlayer(sim, 1, 2300, 2000);
+	park(world, 21, 2000, 2040);
+	const d = driver(sim, a);
+	d.tick(0, 0, PRESS_E);
+	const buffer = new SnapshotBuffer();
+	const headings = new Map();
+	for (let i = 0; i < 180; i++) {
+		d.tick(Math.cos(i / 25), Math.sin(i / 25));
+		headings.set(sim.tick, V.rideHeading(a.state.ride));
+		if (sim.tick % 3 === 0) {
+			const snap = {
+				tick: sim.tick,
+				self: REP.selfBlockOf(sim, b),
+				players: [REP.playerBlockOf(a)],
+				zombies: [],
+				bosses: [],
+			};
+			for (const part of P.encodeSnapshot(snap).parts)
+				buffer.receive(P.decodeSnapshotPart(part), sim.tick, sim.tick / 60);
+		}
+		buffer.advance(1 / 60, sim.tick, sim.tick / 60, world);
+	}
+	const st = buffer.states().find(x => x.slot === 0);
+	checkEq(st?.ride, VehicleKind.Bicycle, "client B's buffer: slot 0 rides a bicycle");
+	const at = Math.round(buffer.renderNow());
+	const want = headings.get(at) ?? headings.get(at - 1);
+	const err = Math.abs(((st.moveAng - want + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+	check(err < 0.1, "...facing where A faced at the render time", `${err.toFixed(3)} rad`);
+	// A gets off: B sees it on foot
+	for (let i = 0; i < 30; i++) d.tick(0, 0);
+	d.tick(0, 0, PRESS_E);
+	for (let i = 0; i < 30; i++) {
+		d.tick(0, 0);
+		if (sim.tick % 3 === 0) {
+			const snap = { tick: sim.tick, players: [REP.playerBlockOf(a)], zombies: [], bosses: [] };
+			for (const part of P.encodeSnapshot(snap).parts)
+				buffer.receive(P.decodeSnapshotPart(part), sim.tick, sim.tick / 60);
+		}
+		buffer.advance(1 / 60, sim.tick, sim.tick / 60, world);
+	}
+	checkEq(buffer.states().find(x => x.slot === 0)?.ride, 0, "...and on foot once A got off");
+});
+
+// ---------------------------------------------------------------- C4. the drawing, on a fake Instance tree
+
+class Vector2 {
+	constructor(x = 0, y = 0) {
+		this.X = x;
+		this.Y = y;
+	}
+}
+class UDim {
+	constructor(scale = 0, offset = 0) {
+		this.Scale = scale;
+		this.Offset = offset;
+	}
+}
+class UDim2 {
+	constructor(xs = 0, xo = 0, ys = 0, yo = 0) {
+		this.X = new UDim(xs, xo);
+		this.Y = new UDim(ys, yo);
+	}
+	static fromOffset(x, y) {
+		return new UDim2(0, x, 0, y);
+	}
+	static fromScale(x, y) {
+		return new UDim2(x, 0, y, 0);
+	}
+}
+globalThis.Vector2 ??= Vector2;
+globalThis.UDim ??= UDim;
+globalThis.UDim2 ??= UDim2;
+globalThis.Enum ??= {
+	ApplyStrokeMode: { Border: "Border", Contextual: "Contextual" },
+	ResamplerMode: { Pixelated: "Pixelated", Default: "Default" },
+	ScaleType: { Stretch: "Stretch", Tile: "Tile", Slice: "Slice" },
+};
+const tree = { created: 0 };
+function makeInstance(className) {
+	const state = { ClassName: className, Name: className, children: [], parent: undefined };
+	const proxy = new Proxy(state, {
+		get(t, k) {
+			if (k === "Parent") return t.parent;
+			if (k === "Destroy") return () => (t.parent = undefined);
+			if (k === "GetChildren") return () => [...t.children];
+			if (k === "__state") return t;
+			return t[k];
+		},
+		set(t, k, v) {
+			if (k === "Parent") {
+				t.parent = v;
+				if (v !== undefined) v.__state.children.push(proxy);
+				return true;
+			}
+			t[k] = v;
+			return true;
+		},
+	});
+	tree.created += 1;
+	return proxy;
+}
+globalThis.Instance ??= function Instance(className) {
+	return makeInstance(className);
+};
+
+section(
+	"C4. the drawing: a bicycle and a motorcycle under their rider, hands on the bars, no Instance after warm-up",
+	() => {
+		const { Z, COLORS } = require(join(SRC, "shared/engine/colors.ts"));
+		const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+		const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
+		const VV = require(join(SRC, "client/view/vehicleView.ts"));
+		const SVW = require(join(SRC, "client/view/survivorView.ts"));
+		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		// what a frame asks of the renderer, recorded
+		const calls = [];
+		const rec = {
+			drawRect: (cam, x, y, o) => calls.push({ x, y, ...o }),
+			drawCircle: (cam, x, y, d, o) => calls.push({ x, y, w: d, h: d, circle: true, ...o }),
+			drawSegment: (cam, x1, y1, x2, y2, o) =>
+				calls.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2, segment: true, ...o }),
+		};
+		for (const def of VEHICLES) {
+			for (const heading of [0, Math.PI / 3, Math.PI]) {
+				calls.length = 0;
+				VV.drawVehicle(rec, undefined, def.kind, 1000, 1000, heading, 4, 4, Z.player - 2);
+				const body = calls.filter(c => c.zIndex >= Z.player - 2);
+				const inside = body.every(c => {
+					const dx = c.x - 1000;
+					const dy = c.y - 1000;
+					const f = dx * Math.cos(heading) + dy * Math.sin(heading);
+					const l = -dx * Math.sin(heading) + dy * Math.cos(heading);
+					return (
+						Math.abs(f) + (c.w ?? 0) / 2 <= def.length / 2 + 1 &&
+						Math.abs(l) + (c.h ?? 0) / 2 <= def.width / 2 + 1
+					);
+				});
+				check(
+					body.length >= 5 && inside,
+					`${def.name} at ${f1((heading * 180) / Math.PI)}°: ${body.length} parts, all inside its ${def.length} × ${def.width} footprint`,
+				);
+				// the rider's layers (survivorView): feet Z.player - 1, torso + 1, hands + 3: the bars sit over the feet
+				check(
+					body.every(c => c.zIndex <= Z.player),
+					"...all under the rider's body (torso at Z.player + 1)",
+				);
+			}
+		}
+		calls.length = 0;
+		VV.drawVehicle(rec, undefined, VehicleKind.Motorcycle, 0, 0, 0, 0, 0, Z.player - 2);
+		check(
+			calls.some(c => c.color === COLORS.motoPaint) && calls.some(c => c.color === COLORS.tyre),
+			"the motorcycle in its paint, on its tyres",
+		);
+		calls.length = 0;
+		VV.drawVehicle(rec, undefined, VehicleKind.Bicycle, 0, 0, 0, 0, 0, Z.player - 2);
+		check(
+			calls.some(c => c.color === COLORS.bikeFrame),
+			"the bicycle in its frame colour",
+		);
+		// the rider: the survivor drawing with `riding` -- no weapon, both hands on the bars, no body shadow
+		const look = SVW.createLook();
+		look.x = 0;
+		look.y = 0;
+		look.angle = 0;
+		look.weapon = WEAPONS.find(w => w.name === "Pistol");
+		look.riding = true;
+		calls.length = 0;
+		SVW.drawSurvivor(rec, undefined, look, SVW.createSwingTrail());
+		const hands = calls.filter(c => c.circle === true && c.w === 10);
+		check(
+			hands.length === 2 &&
+				hands.every(
+					h => Math.abs(h.x - SVW.RIDE_GRIP_F) < 0.01 && Math.abs(Math.abs(h.y) - SVW.RIDE_GRIP_L) < 0.01,
+				),
+			"the rider's two hands on the grips",
+		);
+		check(!calls.some(c => c.color === COLORS.weapon && c.zIndex === look.z), "...no pistol in them");
+		check(!calls.some(c => c.circle === true && c.w === 38), "...and no body shadow (the vehicle casts it)");
+		look.riding = false;
+		calls.length = 0;
+		SVW.drawSurvivor(rec, undefined, look, SVW.createSwingTrail());
+		check(
+			calls.some(c => c.color === COLORS.weapon && c.zIndex === look.z),
+			"on foot the same survivor holds the pistol again",
+		);
+		// the real renderer on a fake tree: riding, parking and riding again create no Instance after the first frame
+		const root = makeInstance("Frame");
+		const r = new Renderer(root, "World");
+		const cam = new Camera();
+		cam.setView(800, 600);
+		cam.x = 1000;
+		cam.y = 1000;
+		const parked = {
+			x: 1100,
+			y: 1000,
+			w: MOTO.length,
+			h: MOTO.width,
+			hp: 60,
+			hpMax: 120,
+			tags: "vehicle",
+			placeable: 22,
+			rot: 0,
+		};
+		const frame = i => {
+			r.beginFrame();
+			look.riding = true;
+			look.x = 1000 + i;
+			look.y = 1000;
+			look.angle = i / 30;
+			VV.drawVehicle(r, cam, 1 + (i % 2), look.x, look.y, look.angle, 4, 4, Z.player - 2);
+			SVW.drawSurvivor(r, cam, look, SVW.createSwingTrail());
+			VV.drawParkedVehicle(r, cam, parked, 4, 4);
+			r.endFrame();
+		};
+		frame(0);
+		frame(1);
+		const warm = tree.created;
+		for (let i = 2; i < 300; i++) frame(i);
+		checkEq(
+			tree.created - warm,
+			0,
+			"300 frames of a rider and a parked vehicle: no Instance created after warm-up",
+		);
+	},
+);
 
 // ================================================================ the end
 

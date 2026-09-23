@@ -107,7 +107,7 @@ export const VEHICLES: Array<VehicleDef> = [
 		grip: 1320,
 		radius: 20,
 		length: 72,
-		width: 24,
+		width: 28,
 		hpMax: 100,
 		crashSpeed: 240,
 		crashDamage: 12,

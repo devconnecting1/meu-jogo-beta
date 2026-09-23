@@ -138,6 +138,8 @@ export interface RemoteState {
 	speed: number;
 	/** the render time is past the newest sample: the state is extrapolated or held */
 	stale: boolean;
+	/** (VEI-05) the VehicleKind they ride at the sample at or before the render time, 0 on foot; `moveAng` is its heading */
+	ride: number;
 }
 
 /**
@@ -199,6 +201,7 @@ interface Sample {
 	swing: number;
 	hp: number;
 	revive: number;
+	ride: number;
 }
 
 function sampleOf(tick: number, p: PlayerSnap): Sample {
@@ -213,6 +216,7 @@ function sampleOf(tick: number, p: PlayerSnap): Sample {
 		swing: p.swing,
 		hp: p.hp,
 		revive: p.revive,
+		ride: p.ride ?? 0,
 	};
 }
 
@@ -982,6 +986,7 @@ export class SnapshotBuffer {
 			feetCycle: track.feetCycle,
 			speed,
 			stale,
+			ride: base.ride,
 		};
 	}
 

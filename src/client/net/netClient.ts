@@ -1139,5 +1139,8 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		feetCycle: state.feetCycle,
 		swinging: (state.flags & PlayerFlag.Swinging) !== 0,
 		swing: state.swing,
+		// VEI-05: on a vehicle the feet direction the snapshot carries is the vehicle's heading
+		ride: state.ride,
+		rideHeading: state.moveAng,
 	};
 }

@@ -77,6 +77,13 @@ export const COLORS = {
 	parcel: Color3.fromRGB(220, 180, 100),
 	bullet: Color3.fromRGB(255, 240, 160),
 	arrow: Color3.fromRGB(200, 170, 110),
+	// the rideable builds (VEI-05): a steel-blue bicycle frame and a dull red motorcycle, plausible and a little
+	// weathered like every car in town (VEI-04); tyres, bare metal and the saddle
+	bikeFrame: Color3.fromRGB(64, 104, 140),
+	motoPaint: Color3.fromRGB(150, 58, 50),
+	tyre: Color3.fromRGB(30, 30, 33),
+	vehicleMetal: Color3.fromRGB(150, 154, 160),
+	vehicleSeat: Color3.fromRGB(44, 38, 34),
 };
 
 /**

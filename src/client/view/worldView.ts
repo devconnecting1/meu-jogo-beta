@@ -29,6 +29,7 @@ import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import { GroundRect, hash01, Lot, querySolids, Rect, Road, Solid, WorldData } from "shared/game/world";
 import { drawBuildingSign } from "./buildingSigns";
+import { drawParkedVehicle } from "./vehicleView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { artId, artSize, artSlice } from "./worldArt";
 import { WORLD_TEXEL, WorldArtName } from "./worldArtAssets";
@@ -491,6 +492,10 @@ export class WorldView {
 					if (!this.drawTrashArt(r, cam, s)) this.drawTrash(r, cam, s);
 				} else if (s.kind === "car") {
 					if (!this.drawCarArt(r, cam, s)) this.drawCar(r, cam, s);
+				} else if (s.tags === "vehicle") {
+					// a parked bicycle or motorcycle (VEI-05): drawn by the same code as a ridden one
+					const so = this.shadow(s.x + s.w / 2, s.y + s.h / 2, 6);
+					drawParkedVehicle(r, cam, s, so.x, so.y);
 				} else {
 					this.drawStructure(r, cam, s);
 				}

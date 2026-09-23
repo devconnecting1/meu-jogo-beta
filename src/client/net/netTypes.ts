@@ -49,6 +49,12 @@ export interface RemotePlayerView {
 	 */
 	swinging: boolean;
 	swing: number;
+	/**
+	 * (VEI-05) The VehicleKind they ride (0 on foot) and where it points, radians: the view draws the bicycle or the
+	 * motorcycle under them and the rider on it (client/view/vehicleView.ts). Both ride the snapshot (§4.2).
+	 */
+	ride: number;
+	rideHeading: number;
 }
 
 /** true once the client is in a server-simulated session (MP_PHASE >= 1 and the handshake is done) */

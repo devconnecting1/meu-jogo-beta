@@ -37,6 +37,7 @@ import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
 import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
+import { rideHeading } from "shared/sim/rideKey";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
 import {
@@ -59,6 +60,7 @@ import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
 import { PlayersView } from "./view/playersView";
 import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
+import { drawVehicle } from "./view/vehicleView";
 import { drawPet } from "./view/cosmeticsView";
 import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
@@ -563,7 +565,9 @@ export class GameLoop {
 		const moved = math.sqrt(dx * dx + dy * dy);
 		this.walkPhase += moved * FEET_CYCLE_PER_UNIT;
 		const speed = dt > 0 ? moved / dt : 0;
-		this.walkAmp = lerp(this.walkAmp, speed > NET_WALK_SPEED ? 1 : 0, ease(0.25, dt));
+		// a rider's feet are on the pedals: no walk cycle, no footsteps (VEI-05)
+		const walking = speed > NET_WALK_SPEED && p.ride === undefined;
+		this.walkAmp = lerp(this.walkAmp, walking ? 1 : 0, ease(0.25, dt));
 		if (p.dead) ctx.phase = "dead";
 	}
 
@@ -859,6 +863,14 @@ export class GameLoop {
 		const save = getCtx().save;
 		look.outfit = outfitLookOf(save);
 		this.drawOwnPet(r, cam, petLookOf(save), p.x, p.y, p.angle);
+		// VEI-05: on a vehicle the rider faces where it points, feet on the pedals, over the vehicle
+		const ride = p.ride;
+		look.riding = ride !== undefined;
+		if (ride !== undefined) {
+			look.angle = rideHeading(ride);
+			look.feetAmp = 0;
+			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, so.x, so.y, Z.player - 2);
+		}
 		drawSurvivor(r, cam, look, this.swing);
 	}
 

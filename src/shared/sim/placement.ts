@@ -62,7 +62,7 @@ export const PLACEABLES: Record<number, PlaceableDef> = {
 	19: p("cooker", "structure", 56, 48, 300),
 	20: p("furnace", "structure", 56, 48, 300),
 	// the vehicles' footprint IS their drawing (VEHICLES length × width, shared/data/buildings.ts), nose along +x
-	21: p("vehicle", "structure", 72, 24, 100, true, true, undefined, true),
+	21: p("vehicle", "structure", 72, 28, 100, true, true, undefined, true),
 	22: p("vehicle", "structure", 88, 32, 120, true, true, undefined, true),
 	39: p("craftdesk", "structure", 96, 72, 240),
 	40: p("craftdesk_pro", "structure", 112, 80, 480),
