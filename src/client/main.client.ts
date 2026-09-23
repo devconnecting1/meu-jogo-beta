@@ -773,9 +773,14 @@ function mountRun(enterWorld = true): void {
 	gameAudio.startRun(loop.getRefs());
 	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
 	attachRun(ctx, loop.getRefs());
+	// only a run's frame clears the one-shot presses (GameLoop.update -> beginFrame): a P, B, Start or LB pressed in the
+	// menus was still pending here, and the first frame opened the Menu or the Bag on entering the city
+	ctx.input.beginFrame();
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
+		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own)
+		if (input.scoreboardPressed) hud.toggleScoreboard();
 		if (input.pausePressed && ctx.phase === "playing") {
 			if (pauseCleanup === undefined) openPause();
 			else closePause();
@@ -993,7 +998,7 @@ function doRebirth(): void {
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
 	const price = rebirthPrice(ctx.save.deathCount);
 	if (ctx.save.money < price) {
-		toast(ctx, `${tr("Not enough coins")} (need ${fmtInt(price)})`, "error");
+		toast(ctx, `${tr("Not enough coins")}: ${fmtInt(price - ctx.save.money)} ${tr("more needed")}`, "error");
 		return;
 	}
 	if (!net.sessionReady()) {
@@ -1125,7 +1130,12 @@ pack.onUse = id => {
 
 pack.onCraft = id => {
 	// a refused recipe answers with a message (and the UI's error toast): only a real craft is heard
-	if (craft(loop.getRefs(), id)) gameAudio.crafted();
+	const refs = loop.getRefs();
+	if (!craft(refs, id)) return;
+	gameAudio.crafted();
+	// the recipe ate the weapon in hand (a pistol into an auto pistol): the blade comes back to the hands, and the
+	// magazine back to its pool -- the same rule as an admin patch that takes the weapon away (admin/patches.ts)
+	if (!ownsWeapon(ctx.save, refs.player.weapon.pointer)) switchWeapon(refs, 0);
 };
 
 pack.craftCheck = id => {

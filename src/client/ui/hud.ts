@@ -3,6 +3,7 @@ import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
 import { CONSOLE_MARGIN, HudConsole, HudDay, HudState } from "./hudConsole";
+import { ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	Badge,
@@ -168,6 +169,8 @@ export class Hud {
 	onBackpack: (() => void) | undefined;
 	/** tapping the on-screen action button (mobile) */
 	onAction: (() => void) | undefined;
+	/** where the scoreboard reads who is in town (default: the server's roster, or your save offline; tests set it) */
+	scoreSource: ScoreSource | undefined;
 
 	private ctx: GameContext;
 	private root: Frame | undefined;
@@ -175,6 +178,8 @@ export class Hud {
 	private console: HudConsole | undefined;
 	/** top centre: the world's day, the phase, the watch's clock and this life's day (MP-13) */
 	private day: HudDay | undefined;
+	/** the match scoreboard and its chip beside the day plate (MP-23, client/ui/scoreboard.ts) */
+	private board: Scoreboard | undefined;
 	/** the "UI size" setting at mount (80%..120%) */
 	private uiK = 1;
 	private vignette: Array<Frame> = [];
@@ -247,6 +252,14 @@ export class Hud {
 		this.buildVignette(root);
 		const tr = (key: string): string => this.tr(key);
 		this.day = new HudDay(root, tr, k);
+		// who else is in the town (MP-23): hold Q, the pad's Back, or the chip beside the day plate. Never pauses
+		// (UI-06), never covers the thumbs, never takes the pad
+		this.board = new Scoreboard(root, this.day.frame, tr, {
+			touch: mobile,
+			keyLegend: () => (mobile ? "" : gamepadActive() ? "Back" : "Q"),
+			gamepad: gamepadActive,
+			source: this.scoreSource ?? scoreSourceOf(ctx),
+		});
 		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
 		// and Menu buttons), sized and placed between the thumbs by placeConsole()
 		this.console = new HudConsole(root, tr, mobile, k, {
@@ -377,7 +390,7 @@ export class Hud {
 		makeLabel(
 			this.fireBtn,
 			"FireTag",
-			"FIRE",
+			this.tr("FIRE"),
 			0,
 			0,
 			L.aim.baseR * 1.48,
@@ -527,7 +540,10 @@ export class Hud {
 
 	/** banner (waves, morning, night, boss) as a bordered card + the feed of short messages below it */
 	private buildMessages(root: Frame, k: number): void {
-		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, 20 + 64 * k, true);
+		// the HUD size setting scales the messages too, as its description promises ("Console, day plate, hints and
+		// messages"): the banner under the day plate, the feed under the banner, all at `k`
+		const bannerY = 20 + 64 * k;
+		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, bannerY, true, k);
 		// the card is resized to the message in showBanner; the texts stay centred over it
 		const card = Card(bannerBox, "Card", {
 			x: 0,
@@ -578,7 +594,7 @@ export class Hud {
 		scale.Parent = bannerBox;
 		this.bannerScale = scale;
 
-		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, 136 + 64 * k, true);
+		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, bannerY + (BANNER_H + 6) * k, true, k);
 		const layout = new Instance("UIListLayout");
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
 		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center;
@@ -624,6 +640,8 @@ export class Hud {
 		this.root = undefined;
 		this.console = undefined;
 		this.day = undefined;
+		this.board?.destroy();
+		this.board = undefined;
 		this.vignette = [];
 		this.vignetteT = 1;
 		this.feed = undefined;
@@ -656,6 +674,16 @@ export class Hud {
 		return this.mounted;
 	}
 
+	/** the pad's Back / Select (client/main.client.ts): the scoreboard opens, or closes (MP-23) */
+	toggleScoreboard(): void {
+		this.board?.toggle();
+	}
+
+	/** the match scoreboard of this mount (MP-23), for tests and the admin overlay */
+	scoreboard(): Scoreboard | undefined {
+		return this.board;
+	}
+
 	update(state: HudState): void {
 		if (!this.mounted || this.root === undefined) return;
 		const now = os.clock();
@@ -663,6 +691,7 @@ export class Hud {
 		// the console (bars, hotbar, weapon) and the day plate: both write only what changed, and create nothing
 		this.console?.update(state, this.ctx.save, now);
 		this.day?.update(state);
+		this.board?.update(this.ctx.input.keyScoreboard, now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
 		// a melee weapon has nothing to reload: the touch button says so instead of doing nothing when pressed

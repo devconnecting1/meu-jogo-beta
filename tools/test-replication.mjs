@@ -330,7 +330,9 @@ const P = require(join(SRC, "shared/net/protocol.ts"));
 const { seqDiff } = require(join(SRC, "shared/net/codec.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
-const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS } = require(join(SRC, "server/net/replication.ts"));
+const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS, TALLY_EVERY_TICKS, TALLY_AFTER_JOIN_TICKS } = require(
+	join(SRC, "server/net/replication.ts"),
+);
 
 const TICK_DT = 1 / CFG.SIM_HZ;
 
@@ -469,6 +471,9 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		profiles: [],
 		/** Announce events received (MON-05: a title unlock is one, addressed to its owner alone) */
 		announces: [],
+		/** PlayerTally deltas received (MP-23), and those for a slot this client did not know yet (dropped) */
+		tallies: [],
+		tallyDrops: 0,
 	});
 	return sp;
 }
@@ -492,6 +497,15 @@ function applyRoster(client, e) {
 		entry.outfit = e.outfit;
 		entry.pet = e.pet;
 		entry.title = e.title;
+	} else if (e.t === P.WorldEv.PlayerTally) {
+		client.tallies.push(e);
+		const entry = client.roster.get(e.slot);
+		if (entry === undefined) {
+			client.tallyDrops += 1;
+			return;
+		}
+		entry.lifeDay = e.lifeDay;
+		entry.kills = e.kills;
 	} else if (e.t === P.WorldEv.PlayerLeft) {
 		client.roster.delete(e.slot);
 	}
@@ -577,7 +591,12 @@ function tickServer(server, opts = {}) {
 			continue;
 		}
 		for (const e of batch.events) {
-			if (e.t === P.WorldEv.PlayerJoined || e.t === P.WorldEv.PlayerProfile || e.t === P.WorldEv.PlayerLeft) {
+			if (
+				e.t === P.WorldEv.PlayerJoined ||
+				e.t === P.WorldEv.PlayerProfile ||
+				e.t === P.WorldEv.PlayerLeft ||
+				e.t === P.WorldEv.PlayerTally
+			) {
 				if (slot === undefined) for (const [, c] of server.clients) applyRoster(c, e);
 				else if (server.clients.has(slot)) applyRoster(server.clients.get(slot), e);
 				continue;
@@ -1097,6 +1116,94 @@ section("(h) the title under the name reaches the others only when the server sa
 	for (let i = 0; i < 12; i++) tickServer(server);
 	checkEq(ca.roster.get(1)?.title, 0, "which everybody sees too");
 	check(a.title === wire(TIT.TitleId.Survivor) && b.title === 0, "the server's profile fields agree");
+}
+
+// ================================================================ (i) the scoreboard's numbers (MP-23, §4.4)
+
+section(
+	"(i) the scoreboard: every survivor's life day and zombies put down, the server's, only when they move (MP-23)",
+);
+{
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	const veteran = defaultSave();
+	veteran.day = 9;
+	veteran.zombieKills = 137;
+	const a = addSurvivor(server, 0, cx, cy, veteran);
+	const b = addSurvivor(server, 1, cx + 40, cy);
+	const ca = server.clients.get(0);
+	const cb = server.clients.get(1);
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	checkEq(cb.roster.get(0)?.lifeDay, 9, "an ally's scoreboard has the veteran's day of life (the server's save)");
+	checkEq(cb.roster.get(0)?.kills, 137, "and the zombies it put down");
+	checkEq(ca.roster.get(0)?.kills, 137, "its own client is told the same numbers (one source for every row)");
+	checkEq(ca.roster.get(1)?.lifeDay, 1, "a new life is day 1");
+	checkEq(ca.roster.get(1)?.kills, 0, "with nothing put down");
+	checkEq(ca.tallyDrops + cb.tallyDrops, 0, "no tally ever reached a client before the PlayerJoined of its slot");
+
+	// quiet: nothing moved, nothing is sent (a steady server costs the scoreboard nothing)
+	const quietFrom = ca.tallies.length;
+	for (let i = 0; i < TALLY_EVERY_TICKS * 3; i++) tickServer(server);
+	checkEq(ca.tallies.length - quietFrom, 0, `3 s with nothing moving: no PlayerTally at all`);
+
+	// a fight: slot 1 puts down 12 zombies in half a second -- the others hear it within a second, in ONE delta
+	while (server.sim.tick % TALLY_EVERY_TICKS !== 1) tickServer(server);
+	const fightFrom = ca.tallies.length;
+	for (let k = 0; k < 12; k++) {
+		server.sim.progress.zombieKilled(990000 + k, 10, 1, server.now);
+		tickServer(server);
+		tickServer(server);
+	}
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(
+		ca.roster.get(1)?.kills,
+		12,
+		"the other client sees the 12 kills (the server's kill credit, MON-05's counter)",
+	);
+	checkEq(cb.roster.get(1)?.kills, b.save.zombieKills, "and the killer's own row agrees with its save");
+	const fightTallies = ca.tallies.slice(fightFrom).filter(e => e.slot === 1).length;
+	check(
+		fightTallies >= 1 && fightTallies <= 2,
+		`12 kills in 24 ticks cost ${fightTallies} PlayerTally (at most one a second per survivor, TALLY_EVERY_TICKS = ${TALLY_EVERY_TICKS})`,
+	);
+
+	// the midnight that credits a day (server/sim/progress.ts writes the save): the day moves on everybody's board
+	b.save.day += 1;
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.lifeDay, 2, "a credited midnight moves the life day on the others' scoreboard");
+	// a New game (resetRun) takes it back to 1 -- also just the save
+	b.save.day = 1;
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.lifeDay, 1, "a new life goes back to day 1 on every board");
+
+	// a report can never move either number: the kills are the server's (MON-05, `sanitizeClientReport`) and so is the
+	// day from PROGRESS_SERVER_PHASE on (`stripClientProgress`, which server/main.server.ts runs on every report)
+	const forged = JSON.parse(JSON.stringify(b.save));
+	forged.day = 400;
+	forged.zombieKills = 9000;
+	const upd = sanitizeClientReport(forged, b.save);
+	PROG.stripClientProgress(b.save, upd);
+	copySaveInto(b.save, upd);
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	check(
+		ca.roster.get(1)?.lifeDay === 1 && ca.roster.get(1)?.kills === 12,
+		"a forged report (day 400, 9000 kills) moves neither number on anyone's board",
+	);
+
+	// the worst join: a change is pending and the very next tick is a tally pass. The newcomer still ends with the
+	// numbers of NOW for everybody, and never drops a tally for a slot it did not know yet
+	while ((server.sim.tick + 1) % TALLY_EVERY_TICKS !== 0) tickServer(server);
+	a.save.zombieKills += 1;
+	addSurvivor(server, 2, cx - 40, cy);
+	const cc = server.clients.get(2);
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	checkEq(cc.roster.get(0)?.kills, 138, "a newcomer's scoreboard has the kills of NOW");
+	checkEq(cc.roster.get(1)?.lifeDay, 1, "and every other survivor's day");
+	checkEq(cc.roster.get(2)?.lifeDay, 1, "and its own");
+	checkEq(cc.tallyDrops, 0, "and it never dropped a tally for a slot it did not know");
+	checkEq(ca.roster.get(2)?.kills, 0, "the others hear the newcomer's numbers too");
+	check(a.kills === 138 && b.lifeDay === 1, "the server's last-told fields agree");
 }
 
 // ---------------------------------------------------------------- verdict

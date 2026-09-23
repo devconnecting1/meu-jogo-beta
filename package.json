@@ -36,9 +36,13 @@
 		"test:menus": "node tools/test-menus.mjs",
 		"test:lobby": "node tools/test-lobby.mjs",
 		"test:screens": "node tools/test-screens.mjs",
+		"test:settings": "node tools/test-settings.mjs",
+		"test:nav": "node tools/test-nav.mjs",
+		"test:tables": "node tools/test-tables.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
 		"test:world-art": "node tools/test-world-art.mjs",
+		"test:items": "node tools/test-items.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""

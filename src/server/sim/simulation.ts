@@ -475,6 +475,17 @@ export class ServerSimulation {
 		if (acted) p.activeTick = this.tick;
 	}
 
+	/**
+	 * §9.3, the admin's players table: seconds since this survivor last sent a REAL command with movement or an edge
+	 * (the same test MP-13's AFK rule uses), counted from their entry when they have sent none. Read-only; undefined
+	 * for someone not in the world.
+	 */
+	idleSeconds(sp: ServerPlayer): number {
+		const since = this.presence.get(sp.userId)?.activeTick;
+		const from = since !== undefined ? math.max(since, sp.joinTick) : sp.joinTick;
+		return math.max(0, (this.tick - from) / this.simHz);
+	}
+
 	/** the slot of the survivor this `PlayerState` belongs to, or -1 (the damage sink refuses those) */
 	private slotOfState(p: PlayerState): number {
 		for (const sp of this.roster) {

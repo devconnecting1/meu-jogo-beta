@@ -2,6 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
 import { TEXT, THEME, TRANSPARENCY, space } from "./theme";
+import { SCHEMES, SCHEME_TOUCH, currentScheme } from "./tutorial";
 import {
 	Badge,
 	Button,
@@ -11,6 +12,7 @@ import {
 	CardHeader,
 	CoinIcon,
 	autoFocus,
+	badgeWidth,
 	cardStripHeight,
 	centredRect,
 	fmtInt,
@@ -153,16 +155,26 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		const innerW = w - pad * 2;
 		const panel = Card(body, "Panel", centredRect(PAUSE_W, PAUSE_H));
 		const stripH = cardStripHeight();
-		const top = CardHeader(panel, tr("Menu"), undefined, { action: KEY_BADGE + space(2) });
-		// the "P" key cap rides on the title strip
-		Badge(panel, "KeyHint", "P", {
-			x: w - CARD_STRIP_INSET - space(2) - KEY_BADGE,
-			y: CARD_STRIP_INSET + (stripH - KEY_BADGE) / 2,
-			w: KEY_BADGE,
-			h: KEY_BADGE,
-			textSize: TEXT.sm,
-			zIndex: 4,
-		});
+		// the key cap on the title strip is the key that opens this menu on the player's device (tutorial.ts SCHEMES,
+		// as the HUD's Menu plate reads it): P on a keyboard, Start on a pad; a touch screen has a MENU button, not a
+		// key, so no cap. It used to say "P" on every device
+		const scheme = currentScheme();
+		let menuKey = "";
+		if (scheme !== SCHEME_TOUCH) {
+			for (const [chip, does] of SCHEMES[scheme].rows) if (does === "Menu") menuKey = chip;
+		}
+		const keyW = menuKey === "" ? 0 : math.max(KEY_BADGE, badgeWidth(menuKey, TEXT.sm, KEY_BADGE));
+		const top = CardHeader(panel, tr("Menu"), undefined, { action: keyW > 0 ? keyW + space(2) : 0 });
+		if (keyW > 0) {
+			Badge(panel, "KeyHint", menuKey, {
+				x: w - CARD_STRIP_INSET - space(2) - keyW,
+				y: CARD_STRIP_INSET + (stripH - KEY_BADGE) / 2,
+				w: keyW,
+				h: KEY_BADGE,
+				textSize: TEXT.sm,
+				zIndex: 4,
+			});
+		}
 		const items: Array<{ key: string; fn: (() => void) | undefined; variant: ButtonVariant }> = [
 			// "Back to game", not "Resume": nothing was suspended, the survivor only stood still (UI-06)
 			{ key: "Back to game", fn: handlers.onResume, variant: "default" },

@@ -540,7 +540,7 @@ export class SurvivorScreen {
 			}
 			const short = price - save.money;
 			// the Rebirth stays pressable either way: the server answers with the reason, and this says it first
-			if (short > 0) last.push(`${tr("Not enough coins")} (need ${fmtInt(short)} more)`);
+			if (short > 0) last.push(`${tr("Not enough coins")}: ${fmtInt(short)} ${tr("more needed")}`);
 			if (last.size() > 0) lines.push(last.join("  ·  "));
 		} else {
 			const day = state.worldDay ?? save.day;

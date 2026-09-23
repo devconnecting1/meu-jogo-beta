@@ -1,12 +1,13 @@
 import { SURFACE, TEXT, THEME, fontOf, roleFont, space } from "../ui/theme";
-import { makeFrame, makeLabel, makeSurface, scaleText, setSurface, uiScale } from "../ui/widgets";
+import { designOf, makeSurface, scaleText, setSurface, uiScale } from "../ui/widgets";
+import * as Kit from "../ui/window";
 
 /*
- * Form controls the UI kit does not have yet (Input, Switch, Tooltip), built the same way as the kit: design units
- * relative to the parent (DesignW/DesignH), colours only from theme tokens, relief from the kit's surfaces
- * (skin.ts). In the "Pixel Quest relief" look:
+ * Form controls of the panel, built the same way as the kit: design units relative to the parent (DesignW/DesignH),
+ * colours only from theme tokens, relief from the kit's surfaces (skin.ts). In the "Pixel Quest relief" look:
  * - Input: a WELL sunk into the panel (dark fill + 1 px `input` border), the border turning `ring` while focused
- * - Switch: the track is a well (`input` off / `primary` on), the thumb a small raised plate
+ * - Switch: the kit's own form row and Switch (window.ts SettingCell + Switch, the Settings form's), wrapped so the
+ *   sections keep one call
  * - Tooltip: a well popover with the dark text contour of the reference art
  *
  * Skin layers are children with a negative ZIndex, and with ZIndexBehavior.Sibling children always draw ABOVE
@@ -113,7 +114,7 @@ export interface SwitchProps {
 	y: number;
 	w: number;
 	label: string;
-	/** muted line under the label */
+	/** one line under the label (the kit's form row: one line, cut with an ellipsis when too long) */
 	description?: string;
 	value: boolean;
 	onChange: (value: boolean) => void;
@@ -122,73 +123,48 @@ export interface SwitchProps {
 
 export interface SwitchHandle {
 	frame: Frame;
+	/** shows `value` without calling onChange */
 	set(value: boolean): void;
 	get(): boolean;
 }
 
-const TRACK_W = 40;
-const TRACK_H = 22;
-const THUMB = 16;
+/** the value cell of a switch row: the kit Switch at SETTING_CONTROL_X, and as much room after it */
+export const SWITCH_CELL_W = Kit.SETTING_CONTROL_X * 2 + Kit.SWITCH_W;
 
-/** shadcn Switch + Label row: the whole row toggles */
+/**
+ * An on / off row of the panel, the kit's own (DESIGN_RULES UI-07, the Settings form's): a SettingCell -- the label
+ * and, with a description, its one muted line in the label cell -- and the kit's Switch at SETTING_CONTROL_X of the
+ * value cell (the plate groove, blue when on, the "On" / "Off" legend, the pad's left / right). 46 tall with a
+ * description, 38 without (Kit.SETTING_DESC_ROW_H / SETTING_ROW_H).
+ */
 export function Switch(parent: Instance, name: string, props: SwitchProps): SwitchHandle {
 	const hasDesc = props.description !== undefined && props.description !== "";
-	const h = hasDesc ? 44 : 30;
-	const z = props.zIndex ?? 2;
-	const row = makeFrame(parent, name, props.x, props.y, props.w, h, THEME.background, { transparency: 1, zIndex: z });
-	const textW = props.w - TRACK_W - space(3);
-	makeLabel(row, "Label", props.label, 0, 0, textW, hasDesc ? 22 : h, TEXT.sm, THEME.foreground, {
-		font: "label",
-		align: "left",
-		zIndex: z + 1,
+	const row = Kit.SettingCell(parent, name, {
+		x: props.x,
+		y: props.y,
+		w: props.w,
+		labelW: props.w - SWITCH_CELL_W,
+		label: props.label,
+		description: hasDesc ? props.description : undefined,
+		zIndex: props.zIndex ?? 2,
 	});
-	if (hasDesc) {
-		makeLabel(row, "Description", props.description!, 0, 22, textW, 20, TEXT.xs, THEME.mutedForeground, {
-			align: "left",
-			valign: "top",
-			zIndex: z + 1,
-		});
-	}
-	const trackY = hasDesc ? 2 : (h - TRACK_H) / 2;
-	// track: a well (dark `input` off, `primary` on); thumb: a small raised plate, as in the reference art
-	const track = makeSurface(row, "Track", props.w - TRACK_W, trackY, TRACK_W, TRACK_H, "well", {
-		fill: props.value ? THEME.primary : THEME.input,
-		border: SURFACE.line,
-		zIndex: z + 1,
-	});
-	const thumb = makeSurface(track, "Thumb", 3, (TRACK_H - THUMB) / 2, THUMB, THUMB, "raised", {
-		fill: THEME.foreground,
-		zIndex: z + 2,
-	});
-	const hit = new Instance("TextButton");
-	hit.Name = "Hit";
-	hit.Size = UDim2.fromScale(1, 1);
-	hit.BackgroundTransparency = 1;
-	hit.BackgroundColor3 = THEME.background;
-	hit.TextColor3 = THEME.foreground;
-	hit.Text = "";
-	hit.AutoButtonColor = false;
-	hit.ZIndex = z + 3;
-	hit.Parent = row;
-	let value = props.value;
-	const draw = (): void => {
-		setSurface(track, "well", { fill: value ? THEME.primary : THEME.input, border: SURFACE.line });
-		thumb.Position = UDim2.fromScale((value ? TRACK_W - THUMB - 3 : 3) / TRACK_W, thumb.Position.Y.Scale);
-	};
-	draw();
-	hit.Activated.Connect(() => {
-		value = !value;
-		draw();
-		props.onChange(value);
+	const [, h] = designOf(row.value);
+	const sw = Kit.Switch(row.value, "Switch", {
+		x: Kit.SETTING_CONTROL_X,
+		y: (h - Kit.SWITCH_H) / 2,
+		value: props.value,
+		onText: "On",
+		offText: "Off",
+		zIndex: row.value.ZIndex + 1,
+		onChange: props.onChange,
 	});
 	return {
-		frame: row,
+		frame: row.frame,
 		set(v: boolean): void {
-			value = v;
-			draw();
+			sw.set(v);
 		},
 		get(): boolean {
-			return value;
+			return sw.get();
 		},
 	};
 }
