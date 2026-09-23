@@ -24,6 +24,12 @@
  *   5. THE PREVIEW is the world drawing magnified (3–4×): every outfit × every pet fits inside the box without
  *      clipping, the head is 22 u × scale, a redraw with nothing changed writes no property, a small box shrinks
  *      the scale instead of clipping, and destroy() cleans up.
+ *   6. THE WARDROBE'S TILES draw one cosmetic alone (`subject`): an outfit's tile the survivor only, a pet's tile
+ *      the pet only, framed on it, and every one of them fits its tile without clipping.
+ *
+ * The wardrobe SCREEN (tabs, tile states, the one action, the try-on preview) runs in tools/test-backpack.mjs,
+ * whose fake tree carries the whole UI kit; the purchase itself is the server's, in tools/test-save.mjs (§17)
+ * and, through the real ShopAction remote, tools/test-body.mjs (§10).
  *
  * Pure Node (>= 18) + the project's TypeScript, on tools/luau-shim.mjs plus the few Roblox datatypes the renderer
  * touches. The fake tree has no layout engine: it records what was asked of it.
@@ -818,6 +824,95 @@ section("5) a previa do guarda-roupa: o mesmo desenho do mundo, ampliado, sem co
 		PV.PREVIEW_OUTFITS.length === 4 && PV.PREVIEW_PETS.length === 7,
 		"listas prontas para a grade do guarda-roupa (4 trajes, 6 pets + nenhum)",
 	);
+}
+
+// ================================================================ 6. the wardrobe's tiles
+
+section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, inteiro no ladrilho");
+{
+	const panel = makeInstance("Frame");
+	// the wardrobe's tile drawing box (client/ui/wardrobe.ts: a 104 tile less 6 on each side)
+	const S = 92;
+	const clipOf = (preview, w, h) => {
+		let out = 0;
+		for (const s of spritesOf(preview.renderer)) {
+			const b = boxOf(s);
+			out = Math.max(out, -b.minX, -b.minY, b.maxX - w, b.maxY - h);
+		}
+		return out;
+	};
+	const isPet = s => s.z >= CV.PET_Z && s.z <= CV.PET_Z + 3;
+	const isSurvivor = s => s.z >= Z.player - 1 && s.z <= Z.player + 5;
+
+	let worst = 0;
+	let worstWhat = "";
+	let strays = 0;
+	for (const [name, look] of OUTFITS) {
+		const tile = new PV.SurvivorPreview(panel, { w: S, h: S, subject: "outfit" });
+		tile.setOutfit(look);
+		tile.setPet(COS.PetLook.Eagle); // ignored: an outfit's tile shows the outfit only
+		tile.draw(0);
+		const out = clipOf(tile, S, S);
+		if (out > worst) {
+			worst = out;
+			worstWhat = name;
+		}
+		const sprites = spritesOf(tile.renderer);
+		strays += sprites.filter(isPet).length;
+		check(sprites.some(isSurvivor), `${name}: o ladrilho desenha o sobrevivente vestindo o traje`);
+		tile.destroy();
+	}
+	check(
+		worst <= 0.5,
+		"todo traje cabe inteiro no ladrilho",
+		worst > 0 ? `saiu ${worst.toFixed(1)} px (${worstWhat})` : `${S} x ${S}`,
+	);
+	check(strays === 0, "e o ladrilho de traje nao desenha pet nenhum", `${strays} sprites de pet`);
+
+	worst = 0;
+	strays = 0;
+	for (const [name, look] of PETS) {
+		const tile = new PV.SurvivorPreview(panel, { w: S, h: S, subject: "pet" });
+		tile.setPet(look);
+		tile.setOutfit(COS.OutfitLook.Cowboy); // ignored: a pet's tile shows the pet only
+		for (const clock of [0, 0.7, 1.5]) {
+			tile.draw(clock);
+			const out = clipOf(tile, S, S);
+			if (out > worst) {
+				worst = out;
+				worstWhat = `${name} t=${clock}`;
+			}
+		}
+		const sprites = spritesOf(tile.renderer);
+		strays += sprites.filter(isSurvivor).length;
+		check(
+			sprites.filter(isPet).length >= 5,
+			`${name}: o ladrilho desenha o pet`,
+			`${sprites.filter(isPet).length} sprites`,
+		);
+		tile.destroy();
+	}
+	check(
+		worst <= 0.5,
+		"todo pet cabe inteiro no ladrilho, abanando o rabo ou nao",
+		worst > 0 ? `saiu ${worst.toFixed(1)} px (${worstWhat})` : `${S} x ${S}`,
+	);
+	check(strays === 0, "e o ladrilho de pet nao desenha o sobrevivente", `${strays} sprites do sobrevivente`);
+
+	// the pet's tile frames the PET: it is drawn big, not as the corner of the full scene
+	const full = new PV.SurvivorPreview(panel, { w: S, h: S });
+	const petTile = new PV.SurvivorPreview(panel, { w: S, h: S, subject: "pet" });
+	check(
+		petTile.scale > full.scale * 1.5,
+		"o pet sozinho aparece bem maior que na cena inteira (a caixa e dele)",
+		`${petTile.scale.toFixed(2)}x contra ${full.scale.toFixed(2)}x`,
+	);
+	check(
+		PV.previewFit(S, S, 10, PV.OUTFIT_SCENE).scale === S / (PV.OUTFIT_SCENE.maxY - PV.OUTFIT_SCENE.minY),
+		"previewFit enquadra a cena pedida (a do traje, aqui)",
+	);
+	full.destroy();
+	petTile.destroy();
 }
 
 // ---------------------------------------------------------------- verdict

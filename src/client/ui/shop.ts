@@ -1,8 +1,6 @@
 import { GameContext } from "shared/game/context";
-import { ownsCostume, pendingPacks } from "shared/game/save";
-import { COSTUMES, ECONOMY, SHOP_PACKS } from "shared/data/shop";
-import { EQUIPS, EquipSlot } from "shared/data/equips";
-import { cosmeticSlotOf } from "shared/data/cosmetics";
+import { pendingPacks } from "shared/game/save";
+import { ECONOMY, SHOP_PACKS } from "shared/data/shop";
 import { langGet } from "shared/data/lang";
 import { ShopActionReason, ShopActionRequest } from "shared/net/net";
 import { invokeShopAction, onWalletChanged, sessionReady } from "../systems/saveClient";
@@ -47,7 +45,13 @@ export function actionErrorText(reason: ShopActionReason | undefined, langType: 
 	return tr("Connection problem, try again");
 }
 
-const TAB_KEYS = ["Packs", "Costumes", "Earn coins"];
+/**
+ * The rail. "Wardrobe" is not a page of this screen: it OPENS the wardrobe (client/ui/wardrobe.ts, MON-04), where
+ * outfits and pets are tried on, bought and worn. It replaced the costume cards that used to live here, so there
+ * is one place to buy a cosmetic, not two.
+ */
+const TAB_KEYS = ["Packs", "Wardrobe", "Earn coins"];
+const TAB_WARDROBE = 1;
 
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
 
@@ -113,7 +117,7 @@ function badgeAt(card: Frame, name: string, text: string, right: number, centerY
 	return w;
 }
 
-export function showShop(ctx: GameContext, onBack: () => void): () => void {
+export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () => void): () => void {
 	const lang = ctx.save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
 	const { root, body } = makeScreen(ctx.uiLayer, "Shop");
@@ -143,6 +147,12 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 		items: TAB_KEYS.map(k => tr(k)),
 		value: tab,
 		onChange: (i: number): void => {
+			if (i === TAB_WARDROBE) {
+				// a door, not a page: leave the rail on the page that is showing, and go
+				nav.setActive(tab);
+				onWardrobe();
+				return;
+			}
 			tab = i;
 			render();
 		},
@@ -183,7 +193,7 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 		render();
 	};
 
-	/** card footer, right side: Buy / Unlock (outline when the player can't afford it; the server still answers) */
+	/** card footer, right side: Buy (outline when the player can't afford it; the server still answers) */
 	const actionButton = (card: Frame, name: string, text: string, price: number, onClick: () => void): TextButton =>
 		Button(card, name, text, {
 			x: CARD_W - CARD_PAD - ACTION_W,
@@ -213,37 +223,6 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 			const btn = actionButton(card, "Buy", tr("Buy"), pack.price, () =>
 				buy({ kind: "buyPack", packId: pack.id }, name, btn, tr("Purchased")),
 			);
-		}
-	};
-
-	const renderCostumes = (): void => {
-		for (let i = 0; i < COSTUMES.size(); i++) {
-			const c = COSTUMES[i];
-			const [x, y] = cell(i);
-			const owned = ownsCostume(ctx.save, c.id);
-			const card = Card(content, `Costume${c.id}`, {
-				x,
-				y,
-				w: CARD_W,
-				h: CARD_H,
-				pad: CARD_PAD,
-				border: owned ? GAME.success : undefined,
-			});
-			const name = tr(c.name);
-			CardTitle(card, name, { y: CARD_PAD, h: TITLE_H, size: TEXT.lg });
-			// which of the two cosmetic slots it goes in (MON-04): an outfit is worn, a pet follows
-			const item = EQUIPS[c.equipId];
-			const itemName = item !== undefined ? tr(item.name) : name;
-			const slotName = cosmeticSlotOf(c.equipId) === EquipSlot.Pet ? tr("Pet") : tr("Outfit");
-			CardDescription(card, `${slotName}: ${itemName}`, { y: DESC_Y });
-			if (owned) {
-				badgeAt(card, "Owned", tr("Owned"), CARD_W - CARD_PAD, FOOTER_Y + ACTION_H / 2, GAME.success);
-			} else {
-				priceTag(card, c.price);
-				const btn = actionButton(card, "Unlock", tr("Unlock"), c.price, () =>
-					buy({ kind: "buyCostume", costumeId: c.id }, name, btn, tr("Unlocked")),
-				);
-			}
 		}
 	};
 
@@ -324,7 +303,6 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 		coins.refresh();
 		note.Text = tab === 0 ? tr("Delivered when your next game starts") : "";
 		if (tab === 0) renderPacks();
-		else if (tab === 1) renderCostumes();
 		else renderEarn();
 	};
 

@@ -474,9 +474,7 @@ export const LANG_TABLE: Array<string> = [
 	"Close",
 	"Buy",
 	"Owned",
-	"Unlock",
 	"Packs",
-	"Costumes",
 	"Earn coins",
 	"Delivered when your next game starts",
 	"Progress not loaded",
@@ -502,7 +500,6 @@ export const LANG_TABLE: Array<string> = [
 	"Your run is over",
 	"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
 	"Purchased",
-	"Unlocked",
 	"Not enough coins",
 	"Too many packs waiting",
 	"Already owned",
@@ -602,6 +599,18 @@ export const LANG_TABLE: Array<string> = [
 	"Tap",
 	"Unequip",
 	"Open Craft",
+	// the wardrobe (client/ui/wardrobe.ts, DESIGN_RULES MON-04); "Buy for" and "coins" frame a price: "Buy for 30 coins"
+	"Wardrobe",
+	"Outfits",
+	"Pets",
+	"Status",
+	"Equipped",
+	"From a pack",
+	"Buy for",
+	"coins",
+	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
+	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
+	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it.",
 ];
 
 /**
