@@ -180,6 +180,14 @@ export function emitSound(refs: Ctx.AiRefs, x: number, y: number, rMax: number, 
 }
 
 function updateNoise(refs: Ctx.AiRefs, dt: number): void {
+	// a survivor who left (a leave, a rejoin: a new body is a new PlayerState) takes their footstep track with
+	// them; kept, the map grew by one per rejoin and held every old body alive until the next world
+	const tracks = refs.ai.tracks;
+	if (tracks.size() > refs.players.size()) {
+		for (const [p] of tracks) {
+			if (!refs.players.includes(p)) tracks.delete(p);
+		}
+	}
 	for (const p of refs.players) {
 		const t = Ctx.trackOf(refs, p);
 		let moved = 0;

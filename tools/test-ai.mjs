@@ -871,6 +871,26 @@ function testHearing() {
 			"the server grades each shot by the gun that fired it (named by the combat, or the one its shooter holds)",
 		);
 	}
+	// a survivor who leaves takes their footstep track along (review NIT 8): a rejoin is a new body, not one more
+	// entry holding the old one alive until the next world
+	{
+		setSeed(SEED);
+		const world = W.createWorld(3000, 3000);
+		const refs = makeRefs(world, 1500, 1500);
+		still(addZombie(refs, 1, 2500, 2500));
+		run(refs, 2);
+		for (let i = 0; i < 5; i++) {
+			const again = createPlayer(refs.save, 1500, 1500);
+			refs.players[0] = again;
+			refs.player = again;
+			run(refs, 2);
+		}
+		const tracks = zombieAI.aiContext(refs).ai.tracks;
+		check(
+			tracks.size() === 1 && tracks.has(refs.player),
+			`five rejoins: one footstep track, the current body's (${tracks.size()})`,
+		);
+	}
 }
 // ---------------------------------------------------------------- 2. states and memory
 
