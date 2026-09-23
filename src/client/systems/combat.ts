@@ -3,7 +3,7 @@ import { WeaponKind } from "shared/data/kinds";
 import { isChoppingTool, meleeReach, usesMagazine, WeaponDef, WEAPONS } from "shared/data/weapons";
 import { angleDiff } from "shared/engine/vec2";
 import { choose, damageCal, rndRange } from "shared/engine/rng";
-import { currentWeapon, damageToPlayer, PlayerState } from "shared/game/player";
+import { currentWeapon, damageIsServerOwned, damageToPlayer, PlayerState } from "shared/game/player";
 import { ownsWeapon } from "shared/game/save";
 import { querySolids, Solid } from "shared/game/world";
 import { blocksShots, PLAYER_RADIUS, raycast, rayCircle, segmentClear } from "shared/game/physics";
@@ -12,11 +12,21 @@ import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState, ZombieState, zombieRadi
 import { addPuddle, emitSound, reactToHit } from "./zombieAI";
 import { hitMapItem } from "./interaction";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
+import { isHitscan, predictedSpread, WeaponFx } from "../predict/weaponFx";
 
 /*
  * Weapons of the local survivor: magazine, cadence, spread, hitscan, melee sweep, projectiles and turrets.
  * Everything cosmetic (muzzle kick, blood, debris, tracers) is asked for through refs.fx and played by the view,
  * never drawn from here (docs/MULTIPLAYER.md §11.3 F0 0C → server/sim/combat.ts + client/predict/weaponFx.ts in F2).
+ *
+ * TWO MODES, chosen by MP_PHASE (§11.1):
+ *   < 2  the path below resolves everything locally — the single-player game, unchanged;
+ *   ≥ 2  `server/sim/combat.ts` resolves every shot, swing and point of damage, and `updatePredicted` keeps
+ *        only what a client is allowed to own (§2.5): the flash, the tracer, the kick, the swing animation and
+ *        a predicted magazine for the HUD. Not one line of the local path can take hp off anything.
+ *
+ * The branch is one `if` at the top of `update`, on purpose: the F2 rollback to MP_PHASE 1 is a constant, and
+ * a reader can see in one place which half of the file is authoritative in which phase.
  */
 
 const DEG = math.pi / 180;
@@ -298,9 +308,16 @@ export class Combat {
 	private turretCd = new Map<Solid, number>();
 	private nearBuf: Array<Solid> = [];
 	private zombieById = new Map<number, ZombieState>();
+	/** cosmetic-only feedback used when the server owns combat (MP_PHASE ≥ 2) */
+	private readonly fx = new WeaponFx();
 
 	/** last value of `switchSerial` this instance reacted to */
 	private seenSwitch = 0;
+
+	/** the predicted-shot bookkeeping the debug overlay reads (§12.2 "concordância de acerto") */
+	weaponFx(): WeaponFx {
+		return this.fx;
+	}
 
 	resetWeaponState(): void {
 		this.fireCd = 0;
@@ -938,6 +955,175 @@ export class Combat {
 		rt.angleRange = rt.angleRange <= con ? 0 : rt.angleRange - con;
 	}
 
+	// ---- predicted (MP_PHASE ≥ 2) ---------------------------------------------------------------
+
+	/**
+	 * Reload prediction for the HUD. Deliberately does NOT spend the reserve: the ammo pool lives in the
+	 * save, the server owns it (§2.1), and the `Self` mirror of F3 will push it back. Showing the magazine
+	 * fill a few frames early is worth it; inventing rounds in the pool is not.
+	 */
+	private predictReload(refs: GameRefs, w: WeaponDef, dt: number): void {
+		const rt = refs.player.weapon;
+		const reserve = poolGet(refs, w);
+		if (!usesMagazine(w) || rt.ammoCount >= w.mag || reserve <= 0) {
+			rt.reloading = false;
+			rt.reloadCount = 0;
+			rt.autoReloadIdle = 0;
+			return;
+		}
+		const want =
+			rt.reloading ||
+			refs.input.reloadPressed ||
+			rt.ammoCount <= 0 ||
+			w.kind === WeaponKind.Shotgun ||
+			rt.autoReloadIdle >= 1;
+		if (!want) {
+			rt.autoReloadIdle += dt;
+			return;
+		}
+		if (this.fireCd > 0) {
+			rt.reloading = false;
+			rt.reloadCount = 0;
+			return;
+		}
+		if (!rt.reloading) {
+			rt.reloading = true;
+			rt.reloadTotal = reloadTime(refs, w);
+			rt.reloadCount = rt.reloadTotal;
+		}
+		rt.reloadCount -= dt;
+		if (rt.reloadCount > 0) return;
+		const want2 = w.kind === WeaponKind.Shotgun ? 1 : w.mag - rt.ammoCount;
+		rt.ammoCount = math.min(w.mag, rt.ammoCount + math.max(0, math.min(want2, reserve)));
+		rt.reloading = false;
+		rt.reloadCount = 0;
+		rt.autoReloadIdle = 0;
+	}
+
+	/** the blade's animation, and the thump when it crosses a body — the hit itself is the server's */
+	private predictSwing(refs: GameRefs, w: WeaponDef, aim: number, dt: number): void {
+		const s = this.swing;
+		const p = refs.player;
+		if (s.delay > 0) {
+			s.delay -= dt;
+		} else {
+			const prev = s.angle;
+			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
+			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			for (const z of refs.zombies) {
+				if (z.hp <= 0 || s.hitIds.has(z.id)) continue;
+				const dx = z.x - p.x;
+				const dy = z.y - p.y;
+				const d = math.sqrt(dx * dx + dy * dy);
+				const zr = zombieRadius(z);
+				if (d - zr > s.reach) continue;
+				const rel = angleDiff(aim, math.atan2(dy, dx)) / DEG;
+				const pad = d > zr ? math.deg(math.asin(zr / d)) : 90;
+				if (rel + pad < prev || rel - pad > s.angle) continue;
+				s.hitIds.add(z.id);
+				s.hits++;
+				s.delay = HITSTOP;
+				this.fx.predictMeleeContact(refs);
+				break;
+			}
+		}
+		p.swingerActive = true;
+		p.swingerAngle = aim + s.angle * DEG;
+		p.swingReach = s.reach;
+		if (s.angle > s.limit) {
+			s.active = false;
+			this.fireCd = math.max(this.fireCd, 0) + w.cooldown;
+		}
+	}
+
+	/**
+	 * MP_PHASE ≥ 2: the server already resolved this tick's shot (server/sim/combat.ts) against ITS zombies,
+	 * ITS magazine and ITS spread. What is left is the feel. Bullets, turrets, the ammo reserve and every hp
+	 * in the world are untouched here — the only state this path writes is the local weapon runtime, which
+	 * the snapshot's self block overwrites anyway (§4.2).
+	 */
+	private updatePredicted(refs: GameRefs, dt: number): void {
+		const p = refs.player;
+		const input = refs.input;
+		const aim = p.angle;
+		if (input.weaponSlotPressed >= 0 && refs.pendingPlace < 0) {
+			const id = ownedWeapons(refs)[input.weaponSlotPressed];
+			if (id !== undefined) switchWeapon(refs, id);
+		}
+		if (this.seenSwitch !== switchSerial) {
+			this.seenSwitch = switchSerial;
+			this.resetWeaponState();
+		}
+		const w = currentWeapon(p);
+		const rt = p.weapon;
+		this.fireCd = math.max(this.fireCd - dt, -dt);
+		this.recoverRecoil(refs, dt);
+		if (refs.pendingPlace >= 0 || p.dead) {
+			this.swing.active = false;
+			this.drawTime = 0;
+			p.swingerActive = false;
+			return;
+		}
+		const blocked = input.attackBlocked;
+		const held = input.attackHeld && !blocked;
+		const pressed = input.attackPressed && !blocked;
+		const released = input.attackReleased && !blocked;
+		this.predictReload(refs, w, dt);
+
+		if (w.id === 5) {
+			// chainsaw: the rev bar and the arc are cosmetic; the cutting happens on the server
+			const revving = held && refs.save.oil > 0;
+			rt.chainCount = revving ? math.min(CHAINSAW_MAX, rt.chainCount + dt) : math.max(0, rt.chainCount - dt);
+			p.swingerActive = revving && rt.chainCount >= CHAINSAW_WARMUP;
+			p.swingerAngle = aim;
+			p.swingReach = meleeReach(w);
+			return;
+		}
+		if (w.kind === WeaponKind.Melee) {
+			rt.chainCount = 0;
+			if (this.swing.active) {
+				this.predictSwing(refs, w, aim, dt);
+			} else {
+				p.swingerActive = false;
+				if ((held || pressed) && this.fireCd <= 0) {
+					this.startSwing(w);
+					this.predictSwing(refs, w, aim, dt);
+				}
+			}
+			return;
+		}
+		p.swingerActive = false;
+
+		if (w.kind === WeaponKind.Bow && w.id !== 23) {
+			const drawNeeded = w.cooldown;
+			if (held && refs.save.ammoArrow > 0) this.drawTime += dt;
+			rt.bowCount = drawNeeded > 0 ? math.min(1, this.drawTime / drawNeeded) : 1;
+			if (released) {
+				if (this.drawTime >= drawNeeded && this.fireCd <= 0 && refs.save.ammoArrow > 0) {
+					this.fireCd = w.cooldown;
+					this.fx.predictKick(refs, 1, 0.05);
+				}
+				this.drawTime = 0;
+				rt.bowCount = 0;
+			} else if (!held) {
+				this.drawTime = 0;
+				rt.bowCount = 0;
+			}
+			return;
+		}
+
+		const want = w.kind === WeaponKind.Sniper ? released || (w.auto && held) : w.auto ? held || pressed : pressed;
+		if (!want || this.fireCd > 0 || rt.ammoCount <= 0) return;
+		rt.ammoCount--;
+		rt.autoReloadIdle = 0;
+		// the flamethrower throws a projectile the server flies (§2.3): predicting a hitscan line for it would
+		// draw a laser where a flame belongs, so it gets the kick and waits for the real ProjSpawn
+		if (isHitscan(w)) this.fx.predictShot(refs, w, aim, { spread: predictedSpread(w, rt, this.moveSpread) });
+		else this.fx.predictKick(refs, w.recoil / 10 + 1, 0.08);
+		rt.angleRange = math.min(40, rt.angleRange + w.recoil);
+		this.fireCd += math.max(w.cooldown, 1 / 60);
+	}
+
 	update(refs: GameRefs, dt: number): void {
 		const p = refs.player;
 		const input = refs.input;
@@ -945,6 +1131,10 @@ export class Combat {
 		// the aim of this frame: the gameLoop refreshed it from the survivor's new position
 		const aim = p.angle;
 		this.trackMovement(p, dt, refs.save.skillLevels[18] > 0);
+		if (damageIsServerOwned()) {
+			this.updatePredicted(refs, dt);
+			return;
+		}
 		this.updateBullets(refs, dt);
 		this.updateTurrets(refs, dt);
 

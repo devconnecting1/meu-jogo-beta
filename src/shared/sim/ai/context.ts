@@ -1,0 +1,274 @@
+/*
+ * What the enemy simulation needs from the world it runs in (docs/MULTIPLAYER.md §3, §11.2).
+ *
+ * The AI used to read a client-side `GameRefs`: one survivor, one save, one day/night object, one camera to
+ * shake. F2 moves it to the server, where there are up to six survivors with six saves, and the client keeps
+ * running the very same code until the zombie replication of F2-2D lands (MP_PHASE < 2). So the behaviour is
+ * written once, against THIS interface, and both sides supply it:
+ *
+ *   - the client (client/systems/zombieAI.ts) fills it from its GameRefs, with one flow field centred on the
+ *     local survivor, and every `saveOf` answering the local save;
+ *   - the server (server/sim/zombies.ts) fills it from the authoritative roster, with the multi-source flow
+ *     field of §3.3 and each survivor's own save.
+ *
+ * Pure: no Instances, no services, no camera, no getCtx. Everything cosmetic goes out as an FxEvent.
+ */
+import { PlayerState } from "shared/game/player";
+import { PlayerSaveData } from "shared/game/save";
+import { WorldData } from "shared/game/world";
+import { BossState, ZombieState } from "shared/game/entities";
+import { Bullet } from "shared/game/bullets";
+import { BloodSource, DebrisMaterial, FxEvent, TracerKind } from "shared/sim/types";
+import * as Flank from "shared/sim/ai/flank";
+import * as Sense from "shared/sim/ai/perception";
+
+// ---------------------------------------------------------------- world objects the AI owns
+
+/** spitter acid puddle on the ground: slows a survivor standing in it */
+export interface Puddle {
+	x: number;
+	y: number;
+	r: number;
+	life: number;
+	lifeMax: number;
+}
+
+/** expanding noise ring: the zombies it reaches go and look where it came from */
+export interface SoundRing {
+	x: number;
+	y: number;
+	r: number;
+	rMax: number;
+	shot: boolean;
+}
+
+/** blast of a dead exploder: grows to rMax, hurting whoever the front passes over */
+export interface Explosion {
+	x: number;
+	y: number;
+	r: number;
+	rMax: number;
+	/** seconds the (already full-size) blast stays drawable */
+	life: number;
+}
+
+// ---------------------------------------------------------------- navigation (§3.3)
+
+/**
+ * The chase field, as the AI queries it. The OWNER drives the rebuild (the client one window around the local
+ * survivor, the server the multi-source tiles of §3.3); the AI only ever reads it, so neither side can make
+ * the horde path differently by accident.
+ */
+export interface NavField extends Flank.PathField {
+	/** heading (radians) to follow the gradient from (x, y), or undefined outside / at the target */
+	heading(x: number, y: number): number | undefined;
+	/**
+	 * Index in `AiRefs.players` of the survivor this cell routes to — "the nearest one along a real path",
+	 * which is not the nearest one in a straight line when a wall is in the way (§3.3 `targetOf`).
+	 * -1 when the point is outside the field.
+	 */
+	targetOf(x: number, y: number): number;
+}
+
+// ---------------------------------------------------------------- the clock
+
+/** what the AI and the population need from the day/night clock (client DayNight, server waves.ts) */
+export interface AiClock {
+	day: number;
+	dayTime: number;
+	/** 0 = full daylight, 1 = deepest night */
+	darkAlpha: number;
+	isNight: boolean;
+	isRaining: boolean;
+	/** +1 every time the clock passes 7:00: non-wave zombies lose the trail then */
+	morningCount: number;
+	/** daytime without rain: footsteps and shots are worth simulating */
+	soundMatters(): boolean;
+	/** night wave queues (walkers / specials) and which of the three is pouring right now */
+	waveQueues: Array<number>;
+	specialWaveQueues: Array<number>;
+	wave1Active: boolean;
+	wave2Active: boolean;
+	wave3Active: boolean;
+}
+
+// ---------------------------------------------------------------- per-survivor bookkeeping
+
+/** footsteps and velocity of one survivor (the spitter leads its target with it) */
+export interface PlayerTrack {
+	lastX?: number;
+	lastY: number;
+	vx: number;
+	vy: number;
+	walkAccum: number;
+	walkTimer: number;
+}
+
+/**
+ * State the horde carries between frames. It lives on the refs (one per simulated world) instead of in module
+ * locals, so a client world and a server world never share a flow timer or a kill counter — and a test can run
+ * two worlds side by side.
+ */
+export interface BrainState {
+	/** frame counter used to stagger expensive per-zombie checks */
+	frameNo: number;
+	/** the world this state was built for; a different one resets everything */
+	boundWorld?: WorldData;
+	/** last `clock.morningCount` seen, so 7:00 clears the trail exactly once */
+	seenMorning: number;
+	/** zombies killed since the population director last looked */
+	killCount: number;
+	/** crowd map of the hunting zombies: the flanking probes price the busy lanes with it */
+	crowd: Flank.Congestion;
+	/** per survivor, in `players` order: how far each sense reaches for THAT survivor this frame */
+	senses: Array<Sense.SenseRanges>;
+	tracks: Map<PlayerState, PlayerTrack>;
+}
+
+export function newBrainState(): BrainState {
+	return {
+		frameNo: 0,
+		seenMorning: -1,
+		killCount: 0,
+		crowd: new Flank.Congestion(),
+		senses: new Array<Sense.SenseRanges>(),
+		tracks: new Map<PlayerState, PlayerTrack>(),
+	};
+}
+
+// ---------------------------------------------------------------- the refs
+
+/** the world the enemy simulation runs in; both the client loop and the server tick supply one */
+export interface AiRefs {
+	world: WorldData;
+	/** every survivor in this world, in a stable order (the server: slot order) */
+	players: Array<PlayerState>;
+	zombies: Array<ZombieState>;
+	bosses: Array<BossState>;
+	bullets: Array<Bullet>;
+	/** cosmetic effects the simulation asks for; the view (or the Fx channel) plays and clears them */
+	fx: Array<FxEvent>;
+	clock: AiClock;
+	field: NavField;
+	ai: BrainState;
+	/**
+	 * That survivor's save: armour, equipped light and skills are PER PERSON. The client answers the local
+	 * save for everyone (it only ever simulates its own horde); the server answers each player's own.
+	 */
+	saveOf: (p: PlayerState) => PlayerSaveData;
+	/** xp for a kill at (x, y); the server attributes it (§3.6), the client credits the local survivor */
+	onExp: (amount: number, x: number, y: number) => void;
+	/** a solid was added or removed by the simulation: the server marks the flow-field tile dirty (§3.3) */
+	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	/**
+	 * A zombie is about to leave the world, at the position it is standing in right now. `killed` separates
+	 * the two endings the client has to draw differently (§4.4 `ZombieDied`): hp reached 0 (blood, a corpse
+	 * and a drop, exactly there) or the population recycled it far from everyone (nothing at all).
+	 */
+	onZombieGone?: (z: ZombieState, killed: boolean) => void;
+	puddles?: Array<Puddle>;
+	sounds?: Array<SoundRing>;
+	explosions?: Array<Explosion>;
+}
+
+// ---------------------------------------------------------------- helpers
+
+export function actorDist(ax: number, ay: number, bx: number, by: number): number {
+	const dx = ax - bx;
+	const dy = ay - by;
+	return math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Index of the nearest living survivor to (x, y), or -1 when nobody is alive. The AI turns that index into a
+ * PlayerState, a save and an Fx target, so it never has to search the array again.
+ */
+export function nearestPlayerIndex(refs: AiRefs, x: number, y: number): number {
+	let best = -1;
+	let bestD = math.huge;
+	const players = refs.players;
+	for (let i = 0; i < players.size(); i++) {
+		const p = players[i];
+		if (p.dead) continue;
+		const dx = p.x - x;
+		const dy = p.y - y;
+		const d = dx * dx + dy * dy;
+		if (d < bestD) {
+			bestD = d;
+			best = i;
+		}
+	}
+	return best;
+}
+
+/**
+ * Whom this zombie is hunting: the survivor the flow field routes its cell to ("nearest along a real path",
+ * §3.3), falling back to the nearest one in a straight line when the field has no answer here.
+ */
+export function targetIndexFor(refs: AiRefs, x: number, y: number): number {
+	const owned = refs.field.targetOf(x, y);
+	if (owned >= 0) {
+		const p = refs.players[owned];
+		if (p !== undefined && !p.dead) return owned;
+	}
+	return nearestPlayerIndex(refs, x, y);
+}
+
+export function trackOf(refs: AiRefs, p: PlayerState): PlayerTrack {
+	let t = refs.ai.tracks.get(p);
+	if (t === undefined) {
+		t = { lastY: 0, vx: 0, vy: 0, walkAccum: 0, walkTimer: 0 };
+		refs.ai.tracks.set(p, t);
+	}
+	return t;
+}
+
+/** how far each sense reaches against survivor `index` this frame (its Stealth skill is its own) */
+export function sensesOf(refs: AiRefs, index: number): Sense.SenseRanges {
+	const s = refs.ai.senses[index];
+	if (s !== undefined) return s;
+	return { sight: 0, cone: 0, smell: 0 };
+}
+
+// ---------------------------------------------------------------- cosmetic effects (§4.1 Fx)
+
+/** shake the camera of the survivor at `player` (its index in refs.players = its slot on the server) */
+export function fxShake(refs: AiRefs, player: number, magnitude: number, duration: number): void {
+	if (player < 0) return;
+	refs.fx.push({ kind: "shake", player, magnitude, duration });
+}
+
+/** blood spray; `dir` (radians) biases it away from the hit; big bursts (≥ 8) also leave a pool */
+export function fxBlood(
+	refs: AiRefs,
+	x: number,
+	y: number,
+	count: number,
+	source: BloodSource = "zombie",
+	dir?: number,
+): void {
+	refs.fx.push({ kind: "blood", x, y, count, source, dir });
+}
+
+/** debris (wood chips, sparks, dust) */
+export function fxDebris(refs: AiRefs, x: number, y: number, count: number, material: DebrisMaterial): void {
+	refs.fx.push({ kind: "debris", x, y, count, material });
+}
+
+/** a shot line that fades over `life` seconds (it also lights the night briefly) */
+export function fxTracer(
+	refs: AiRefs,
+	x1: number,
+	y1: number,
+	x2: number,
+	y2: number,
+	tracer: TracerKind,
+	life: number,
+): void {
+	refs.fx.push({ kind: "tracer", x1, y1, x2, y2, tracer, life });
+}
+
+/** HUD message for one survivor, or for everyone when `player` is undefined */
+export function fxMessage(refs: AiRefs, text: string, player?: number): void {
+	refs.fx.push({ kind: "message", text, player });
+}

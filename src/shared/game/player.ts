@@ -5,6 +5,7 @@ import { WeaponDef, WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { PlayerSaveData } from "shared/game/save";
+import { MP_PHASE } from "shared/net/mpConfig";
 
 export interface BuffState {
 	speed: number;
@@ -175,12 +176,26 @@ export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: nu
 }
 
 /**
+ * MP_PHASE from which a survivor may only lose HP inside `server/sim/combat.ts` (docs/MULTIPLAYER.md §2.3
+ * "Dano em jogadores", §8.3, MP-00). Below it the current single-player path stays exactly as it was.
+ */
+export const DAMAGE_SERVER_PHASE = 2;
+
+/** true when the server, and only the server, decides how much HP a survivor loses */
+export function damageIsServerOwned(): boolean {
+	return MP_PHASE >= DAMAGE_SERVER_PHASE;
+}
+
+/**
  * Hurt the player. Normal hits respect the 1.5 s i-frames and the armour; `bypassDef` (explosions,
  * the centipede's body, poison-like damage) ignores both. Returns true when damage was actually
  * applied — callers use it to stun the attacker only on a real hit (like obj_player_body).
  * The caller sets p.reactionDir (knockback direction).
+ *
+ * This is the SERVER entry point (and, below DAMAGE_SERVER_PHASE, the local one). Client systems go through
+ * `damageToPlayer`, which stops being a damage source once the server owns it.
  */
-export function damageToPlayer(p: PlayerState, save: PlayerSaveData, raw: number, bypassDef = false): boolean {
+export function applyPlayerDamage(p: PlayerState, save: PlayerSaveData, raw: number, bypassDef = false): boolean {
 	if (p.dead || p.godMode === true) return false;
 	if (p.attacked && !bypassDef) return false;
 	let dd = raw;
@@ -197,6 +212,22 @@ export function damageToPlayer(p: PlayerState, save: PlayerSaveData, raw: number
 		return true;
 	}
 	return dd > 0;
+}
+
+/**
+ * What every client system (zombie bites, boss attacks, the boss needle) still calls. From
+ * DAMAGE_SERVER_PHASE on it does NOTHING and answers false: the bite that matters was already resolved on
+ * the server, against ITS zombie positions, and arrives as a `hp` field in the snapshot (§4.2 self block).
+ *
+ * Keeping the call sites and neutering the function here — instead of deleting the calls — is deliberate:
+ * it is ONE place to audit ("who can take HP off a survivor?"), it keeps the F2 rollback to MP_PHASE 1 a
+ * one-constant change, and a system added later that forgets the rule is harmless by default. The playtest
+ * that started this front (two players in the same place, one at 84/100 from zombies only his client knew
+ * about) is impossible once this returns false.
+ */
+export function damageToPlayer(p: PlayerState, save: PlayerSaveData, raw: number, bypassDef = false): boolean {
+	if (damageIsServerOwned()) return false;
+	return applyPlayerDamage(p, save, raw, bypassDef);
 }
 
 /** reserve of an ammo pool (1 normal, 2 shotgun, 3 MG, 4 arrow, 5 oil — 48 accepted as oil too) */

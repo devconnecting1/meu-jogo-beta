@@ -17,10 +17,12 @@
  * millisecond reading per tick for the §12.2 metrics.
  */
 import { isFiniteNumber } from "shared/net/codec";
-import { MAX_CATCHUP_TICKS, MAX_PLAYERS, SIM_HZ } from "shared/net/mpConfig";
+import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
 import { WorldData } from "shared/game/world";
 import { stepPlayer } from "shared/sim/playerMove";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
+import { WorldClock } from "./waves";
+import { ZombieWorld } from "./zombies";
 
 /** a single Heartbeat delta is clamped to this before it reaches the accumulator (Studio breakpoints, hitches) */
 const MAX_FRAME_S = 1;
@@ -42,6 +44,17 @@ export interface SimulationOptions {
 	world: WorldData;
 	/** defaults to mpConfig.SIM_HZ; the §3.1 fallback to 30 Hz needs no protocol change */
 	simHz?: number;
+	/**
+	 * Simulate the horde here (§3.1 step 2). Defaults to MP_PHASE >= 2: with MP_PHASE = 1 the zombies are
+	 * still local to each client (§11.3 F1), so the server must not spawn a second one. Tests pass `true`
+	 * to exercise the authoritative horde without moving the phase switch.
+	 */
+	zombies?: boolean;
+	/**
+	 * The world's clock and night waves (server/sim/waves.ts). One per server: the horde reads it and the
+	 * replication sends it (§4.5 `Clock`), so it is built here rather than inside either of them.
+	 */
+	clock?: WorldClock;
 }
 
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
@@ -61,10 +74,23 @@ export class ServerSimulation {
 	onTick?: (tick: number) => void;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
+	/**
+	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
+	 * its own. F2-2D reads the zombies, their netIds and their deaths from here.
+	 */
+	readonly horde?: ZombieWorld;
+	/**
+	 * The world's clock: one day, one night and one set of wave queues for everybody (§4.6, §6.2). It ticks
+	 * inside the horde's step when the server owns the world, and stands still at MP_PHASE < 2, where every
+	 * client still runs its own DayNight.
+	 */
+	readonly clock: WorldClock;
 
 	private readonly bySlot = new Map<number, ServerPlayer>();
 	/** slots in ascending order: iteration is deterministic (a Luau Map is not ordered) */
 	private readonly order = new Array<number>();
+	/** the same survivors, in the same order, as one reusable array the world half of the tick walks */
+	private readonly roster = new Array<ServerPlayer>();
 	private acc = 0;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
@@ -74,6 +100,8 @@ export class ServerSimulation {
 		const hz = options.simHz ?? SIM_HZ;
 		this.simHz = hz > 0 ? hz : SIM_HZ;
 		this.tickDt = 1 / this.simHz;
+		this.clock = options.clock ?? new WorldClock();
+		if (options.zombies ?? MP_PHASE >= 2) this.horde = new ZombieWorld(options.world, this.clock);
 	}
 
 	// ---------------------------------------------------------------- roster
@@ -96,6 +124,7 @@ export class ServerSimulation {
 			i -= 1;
 		}
 		this.order[i] = sp.slot;
+		this.refreshRoster();
 		return true;
 	}
 
@@ -109,7 +138,17 @@ export class ServerSimulation {
 				break;
 			}
 		}
+		this.refreshRoster();
 		return sp;
+	}
+
+	/** the roster is rebuilt when somebody joins or leaves, never inside the tick */
+	private refreshRoster(): void {
+		this.roster.clear();
+		for (const slot of this.order) {
+			const sp = this.bySlot.get(slot);
+			if (sp !== undefined) this.roster.push(sp);
+		}
 	}
 
 	get(slot: number): ServerPlayer | undefined {
@@ -157,22 +196,23 @@ export class ServerSimulation {
 	}
 
 	/**
-	 * One fixed step: input → movement, in the §3.1 order (the world half lands in F2).
+	 * One fixed step, in the §3.1 order: (1) input and movement for every survivor, (2) the world — clock,
+	 * population, flow field, zombies, bosses — and then the replication through `onTick`.
 	 *
-	 * A survivor keeps being stepped after `dead`: F1 has no damage source on the server, and §7.3 (downed,
-	 * crawling at 20%, revive, spectate) is F4's — it gates the command here, in one place.
+	 * A survivor keeps being stepped after `dead`: §7.3 (downed, crawling at 20%, revive, spectate) is F4's —
+	 * it gates the command here, in one place.
 	 */
 	step(): void {
 		this.tick += 1;
 		this.stats.ticks += 1;
-		for (const slot of this.order) {
-			const sp = this.bySlot.get(slot);
-			if (sp === undefined) continue;
+		for (const sp of this.roster) {
 			const cmd = takeCommand(sp);
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
 			noteStep(sp, cmd, res.walking);
 			if (res.died && this.onDeath !== undefined) this.onDeath(sp);
 		}
+		// the horde walks in the SAME tick as the survivors: one world, one clock, one set of positions
+		if (this.horde !== undefined) this.horde.step(this.roster, this.tickDt, this.tick);
 		if (this.onTick !== undefined) this.onTick(this.tick);
 	}
 

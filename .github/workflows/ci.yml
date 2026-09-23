@@ -49,6 +49,12 @@ jobs:
       - name: Zombie AI (perception, alert, flanking, pace director, cost)
         run: npm run test:ai
 
+      - name: Authoritative combat (hit validation, rewind, cadence, server-side progress)
+        run: npm run test:combat
+
+      - name: Match clock and night waves (one server clock, lossy client, the original headcount)
+        run: npm run test:clock
+
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 

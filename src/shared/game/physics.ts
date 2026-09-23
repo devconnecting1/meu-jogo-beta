@@ -290,6 +290,12 @@ export class FlowField {
 	oy = 0;
 	targetX = 0;
 	targetY = 0;
+	/**
+	 * Index (in the AI's player list) of the survivor this field was built for. One source means one owner for
+	 * every cell, so `targetOf` is that index everywhere; the server's multi-source field answers per cell
+	 * (server/sim/flowField.ts, docs/MULTIPLAYER.md §3.3).
+	 */
+	targetIndex = 0;
 	/** a complete field is available for queries */
 	valid = false;
 	/** a rebuild is in progress in the back buffer */
@@ -555,6 +561,11 @@ export class FlowField {
 		const target = aim ?? first;
 		if (target === undefined) return undefined;
 		return math.atan2(this.cellCenterY(target) - y, this.cellCenterX(target) - x);
+	}
+
+	/** the survivor every cell of this field leads to, or -1 while no complete field exists */
+	targetOf(): number {
+		return this.valid ? this.targetIndex : -1;
 	}
 
 	/** path distance (in cells) from the point to the target, huge when unreachable */

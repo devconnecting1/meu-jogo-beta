@@ -18,7 +18,11 @@
  *   6. MP-09     nothing is ever placed within 720 u of a survivor, and the horde never passes 150;
  *   7. DETERM.   same seed → same state hash (the AI may move to the server without drifting from the client);
  *   8. BITE      the bite is telegraphed, can be stepped out of, and a heavy hit staggers;
- *   9. COST      average µs per zombie per frame with 150 zombies, near and far (the §3.4 LOD).
+ *   9. COST      average µs per zombie per frame with 150 zombies, near and far (the §3.4 LOD);
+ *  10. SERVER    one authoritative horde for everyone: the multi-source field owns each cell by the survivor
+ *                it can really reach first (§3.3), MP-09 holds against ALL survivors, netIds are stable and
+ *                recycled (§4.4), deaths come out once — and the client stops simulating at MP_PHASE >= 2;
+ *  11. TICK      the §3.2 measurement: cost of a whole server tick with 150 zombies and 6 survivors.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the fly, with the same
  * Luau / roblox-ts shims tools/test-sim.mjs uses. `math.random` is replaced by a seeded generator, so every
@@ -28,6 +32,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Buffer } from "node:buffer";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = resolve(process.env.PZ_SRC ?? join(ROOT, "src"));
@@ -134,6 +139,30 @@ shim("clear", function () {
 shim("insert", function (i, v) {
 	this.splice(i, 0, v);
 });
+// roblox-ts Map/Set expose size() as a method, and a string knows its own length the same way
+const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, "size").get;
+Object.defineProperty(Map.prototype, "size", {
+	value: function () {
+		return mapSize.call(this);
+	},
+	configurable: true,
+	writable: true,
+});
+const setSize = Object.getOwnPropertyDescriptor(Set.prototype, "size").get;
+Object.defineProperty(Set.prototype, "size", {
+	value: function () {
+		return setSize.call(this);
+	},
+	configurable: true,
+	writable: true,
+});
+Object.defineProperty(String.prototype, "size", {
+	value: function () {
+		return Buffer.byteLength(this.valueOf(), "utf8");
+	},
+	configurable: true,
+	writable: true,
+});
 const jsSort = AP.sort;
 shim("sort", function (cmp) {
 	if (!cmp) return jsSort.call(this);
@@ -144,10 +173,133 @@ shim("sort", function (cmp) {
 	});
 });
 
+// Luau `buffer` and `typeIs`, the same strict shims tools/test-server-sim.mjs uses: the server modules
+// reach shared/net/protocol.ts, which builds packets at load time.
+class LuauBuffer {
+	constructor(size) {
+		this.bytes = new Uint8Array(size);
+		this.view = new DataView(this.bytes.buffer);
+	}
+}
+
+function bcheck(b, offset, n) {
+	if (!(b instanceof LuauBuffer)) throw new TypeError("buffer expected");
+	if (typeof offset !== "number" || !Number.isInteger(offset)) throw new TypeError(`offset ${offset} not an integer`);
+	if (offset < 0 || offset + n > b.bytes.length) {
+		throw new RangeError(`buffer access out of bounds (offset ${offset}, ${n} B, len ${b.bytes.length})`);
+	}
+}
+
+function icheck(v, lo, hi, what) {
+	if (typeof v !== "number" || !Number.isInteger(v) || v < lo || v > hi) {
+		throw new RangeError(`${what}: ${v} is not an integer in [${lo}, ${hi}] (Luau would wrap it)`);
+	}
+}
+
+globalThis.buffer = {
+	create(size) {
+		if (!Number.isInteger(size) || size < 0) throw new RangeError(`buffer.create(${size})`);
+		return new LuauBuffer(size);
+	},
+	len(b) {
+		if (!(b instanceof LuauBuffer)) throw new TypeError("buffer expected");
+		return b.bytes.length;
+	},
+	readu8: (b, o) => (bcheck(b, o, 1), b.view.getUint8(o)),
+	readi8: (b, o) => (bcheck(b, o, 1), b.view.getInt8(o)),
+	readu16: (b, o) => (bcheck(b, o, 2), b.view.getUint16(o, true)),
+	readi16: (b, o) => (bcheck(b, o, 2), b.view.getInt16(o, true)),
+	readu32: (b, o) => (bcheck(b, o, 4), b.view.getUint32(o, true)),
+	readi32: (b, o) => (bcheck(b, o, 4), b.view.getInt32(o, true)),
+	readf32: (b, o) => (bcheck(b, o, 4), b.view.getFloat32(o, true)),
+	readf64: (b, o) => (bcheck(b, o, 8), b.view.getFloat64(o, true)),
+	writeu8(b, o, v) {
+		bcheck(b, o, 1);
+		icheck(v, 0, 255, "writeu8");
+		b.view.setUint8(o, v);
+	},
+	writei8(b, o, v) {
+		bcheck(b, o, 1);
+		icheck(v, -128, 127, "writei8");
+		b.view.setInt8(o, v);
+	},
+	writeu16(b, o, v) {
+		bcheck(b, o, 2);
+		icheck(v, 0, 65535, "writeu16");
+		b.view.setUint16(o, v, true);
+	},
+	writei16(b, o, v) {
+		bcheck(b, o, 2);
+		icheck(v, -32768, 32767, "writei16");
+		b.view.setInt16(o, v, true);
+	},
+	writeu32(b, o, v) {
+		bcheck(b, o, 4);
+		icheck(v, 0, 4294967295, "writeu32");
+		b.view.setUint32(o, v, true);
+	},
+	writef32(b, o, v) {
+		bcheck(b, o, 4);
+		if (typeof v !== "number") throw new TypeError("writef32 expects a number");
+		b.view.setFloat32(o, v, true);
+	},
+	writef64(b, o, v) {
+		bcheck(b, o, 8);
+		if (typeof v !== "number") throw new TypeError("writef64 expects a number");
+		b.view.setFloat64(o, v, true);
+	},
+	readstring(b, o, count) {
+		bcheck(b, o, count);
+		return Buffer.from(b.bytes.subarray(o, o + count)).toString("utf8");
+	},
+	writestring(b, o, value, count) {
+		const bytes = Buffer.from(String(value), "utf8");
+		const n = count === undefined ? bytes.length : count;
+		if (!Number.isInteger(n) || n < 0 || n > bytes.length) throw new RangeError(`writestring count ${n}`);
+		bcheck(b, o, n);
+		b.bytes.set(bytes.subarray(0, n), o);
+	},
+	copy(target, targetOffset, source, sourceOffset = 0, count) {
+		const n = count === undefined ? buffer.len(source) - sourceOffset : count;
+		bcheck(source, sourceOffset, n);
+		bcheck(target, targetOffset, n);
+		target.bytes.set(source.bytes.subarray(sourceOffset, sourceOffset + n), targetOffset);
+	},
+	fill(b, offset, value, count) {
+		const n = count === undefined ? buffer.len(b) - offset : count;
+		bcheck(b, offset, n);
+		icheck(value, 0, 255, "fill");
+		b.bytes.fill(value, offset, offset + n);
+	},
+};
+
+globalThis.typeIs = (v, t) => {
+	switch (t) {
+		case "buffer":
+			return v instanceof LuauBuffer;
+		case "number":
+			return typeof v === "number";
+		case "string":
+			return typeof v === "string";
+		case "boolean":
+			return typeof v === "boolean";
+		case "nil":
+			return v === undefined || v === null;
+		case "function":
+			return typeof v === "function";
+		case "table":
+			return typeof v === "object" && v !== null && !(v instanceof LuauBuffer);
+		default:
+			return false;
+	}
+};
+
 // "shared/x" → SRC/shared/x.ts, transpiled with the project's TypeScript
 const resolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (req, parent, ...rest) {
-	if (req.startsWith("shared/") || req.startsWith("client/")) return join(SRC, req + ".ts");
+	if (req.startsWith("shared/") || req.startsWith("client/") || req.startsWith("server/")) {
+		return join(SRC, req + ".ts");
+	}
 	if (req.startsWith(".") && parent?.filename?.endsWith(".ts")) {
 		const p = resolve(dirname(parent.filename), req);
 		if (existsSync(p + ".ts")) return p + ".ts";
@@ -174,10 +326,17 @@ const { DayNight } = require(join(SRC, "client/systems/daynight.ts"));
 function optional(path) {
 	try {
 		return require(join(SRC, path));
-	} catch {
+	} catch (err) {
+		if (process.env.PZ_DEBUG) console.log("optional failed:", path, String(err).slice(0, 300));
 		return undefined;
 	}
 }
+const simulationMod = optional("server/sim/simulation.ts");
+const serverPlayers = optional("server/sim/players.ts");
+const flowFieldMod = optional("server/sim/flowField.ts");
+const zombiesMod = optional("server/sim/zombies.ts");
+const mpConfig = optional("shared/net/mpConfig.ts");
+const SERVER = simulationMod !== undefined && flowFieldMod !== undefined && zombiesMod !== undefined;
 const perception = optional("shared/sim/ai/perception.ts");
 const memoryMod = optional("shared/sim/ai/memory.ts");
 const alertMod = optional("shared/sim/ai/alert.ts");
@@ -193,6 +352,8 @@ const numArg = (name, fallback) => {
 };
 const SEED = numArg("--seed", 20260922);
 const BENCH_ONLY = args.includes("--bench");
+/** only the §3.2 server-tick measurement: a clean process, so the numbers are not a previous test's GC */
+const TICK_ONLY = args.includes("--tick");
 
 let failures = 0;
 const fail = msg => {
@@ -395,10 +556,7 @@ function testAlert() {
 		"every woken zombie is on cooldown: an alert cannot relay itself",
 	);
 	const reported = woken.filter(z => z.lastSeenX !== undefined && dist(z.lastSeenX, z.lastSeenY, 1500, 1500) < 1);
-	check(
-		reported.length === woken.length,
-		"they are told WHERE the survivor was seen, not where the survivor is now",
-	);
+	check(reported.length === woken.length, "they are told WHERE the survivor was seen, not where the survivor is now");
 	// and it does not snowball: the far half of the crowd is still unaware
 	check(crowd.filter(z => z.detect !== true).length >= 12 - alertMod.ALERT_MAX_WAKE, "no cascade across the crowd");
 }
@@ -463,7 +621,8 @@ function runSiege(frames = 60 * 60) {
 			if (dist(z.x, z.y, east.x, east.y) < 110) atEast.add(z.id);
 		}
 	}
-	return { north: atNorth.size, east: atEast.size, total: refs.zombies.length };
+	// Map/Set expose size() as a METHOD here (the roblox-ts shim above), not as a property
+	return { north: atNorth.size(), east: atEast.size(), total: refs.zombies.length };
 }
 
 function testFlank() {
@@ -767,13 +926,239 @@ function testCost() {
 	info(`LOD saving, far vs near: ${(100 - (far.ms / near.ms) * 100).toFixed(0)} % of the per-frame cost`);
 }
 
+// ---------------------------------------------------------------- 10. the authoritative horde
+
+/** a server simulation with the horde on, `n` survivors placed `spread` apart, and `zeds` walkers injected */
+function serverScene(n, spread, zeds, hour = 18.2, day = 20) {
+	setSeed(SEED);
+	resetEntityIds();
+	const world = W.generateTown(DESIGN.TOWN_SEED);
+	const sim = new simulationMod.ServerSimulation({ world, zombies: true });
+	const horde = sim.horde;
+	horde.clock.setClock(hour, day);
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	for (let i = 0; i < n; i++) {
+		const a = (i / Math.max(1, n)) * Math.PI * 2;
+		const around = spread > 0 ? { x: cx + Math.cos(a) * spread, y: cy + Math.sin(a) * spread } : { x: cx, y: cy };
+		const spot = serverPlayers.findSpawnPoint(world, { allies: [around] });
+		const sp = serverPlayers.createServerPlayer(
+			{ slot: i, userId: 1000 + i, name: `bot${i}` },
+			defaultSave(),
+			spot.x,
+			spot.y,
+			sim.tick,
+			sim.simHz,
+		);
+		// the §3.2 measurement wants six survivors ALIVE for the whole run, and MP-09 is about where a zombie
+		// may appear, not about whether a bot can fight: godMode keeps the roster standing without touching
+		// the horde's behaviour (it still hunts, bites and crowds them).
+		sp.state.godMode = true;
+		sim.add(sp);
+	}
+	// the §3.2 scenario spawns the horde the way the admin panel does, instead of waiting for a whole night
+	const players = sim.players();
+	for (let i = 0; i < zeds; i++) {
+		const p = players[i % players.length].state;
+		const a = (i / zeds) * Math.PI * 2 + (i % 7) * 0.13;
+		const r = 300 + ((i * 37) % 500);
+		const z = createZombie(i % 11 === 0 ? 2 + (i % 4) : 1, p.x + Math.cos(a) * r, p.y + Math.sin(a) * r, day, true);
+		z.detect = true;
+		horde.zombies.push(z);
+	}
+	return { world, sim, horde };
+}
+
+/**
+ * A placement is sampled at the END of the tick it happened in, and by then the zombie has already taken one
+ * step towards its target (a charger at full speed covers 12 u). MP-09 is about where the server may PUT a
+ * body, so the sample gives that one step back.
+ */
+const CLOSING = 16;
+
+function testServerHorde() {
+	console.log("\n[10] the server owns the horde: one for everyone (§3.3, §3.5, §4.4)");
+
+	// (a) the field's OWNER is the survivor a zombie can really reach first, not the nearest in a line
+	{
+		setSeed(SEED);
+		const world = W.createWorld(3000, 3000);
+		wall(world, 1500, 0, 32, 1400); // a wall whose only way round is at the bottom
+		const field = new flowFieldMod.MultiFlowField();
+		field.rebuild(world, [
+			{ x: 600, y: 200, index: 0, seed: 0 },
+			{ x: 1800, y: 200, index: 1, seed: 0 },
+		]);
+		const owner = field.targetOf(1400, 200);
+		const straight = dist(1400, 200, 600, 200) < dist(1400, 200, 1800, 200) ? 0 : 1;
+		info("a body at (1400, 200): 800 u from survivor 0, 400 u from survivor 1 through a wall");
+		check(straight === 1, "the nearest survivor in a STRAIGHT line is the one behind the wall");
+		check(owner === 0, "...but the field hands the cell to the one it can actually walk to (targetOf = 0)");
+		check(field.targetOf(1900, 200) === 1, "a body on the other side belongs to the survivor on that side");
+		check(field.contains(1400, 200) && field.pathCells(1400, 200) < 1e8, "the cell is inside the field");
+	}
+
+	// (b) MP-09 with SIX survivors, not just the local one
+	{
+		const { sim, horde } = serverScene(6, 1200, 0);
+		const last = new Map();
+		let placed = 0;
+		let worst = Infinity;
+		let peak = 0;
+		let violations = 0;
+		for (let t = 0; t < 60 * 120; t++) {
+			sim.step();
+			peak = Math.max(peak, horde.zombies.length);
+			for (const z of horde.zombies) {
+				const prev = last.get(z.id);
+				const jumped = prev === undefined || Math.hypot(z.x - prev.x, z.y - prev.y) > 300;
+				last.set(z.id, { x: z.x, y: z.y });
+				if (!jumped) continue;
+				placed++;
+				let d = Infinity;
+				for (const sp of sim.players()) d = Math.min(d, dist(z.x, z.y, sp.state.x, sp.state.y));
+				worst = Math.min(worst, d);
+				if (d < 720 - CLOSING) violations++;
+			}
+		}
+		info(`${placed} placements . closest to ANY of the 6 survivors ${worst.toFixed(0)} u . peak ${peak}`);
+		info(`cluster scales S(k) in play: ${horde.population.scales().join(", ")}`);
+		check(placed > 20, `the server night actually spawned (${placed} placements)`);
+		check(violations === 0, "no zombie was ever placed within 720 u of ANY survivor (MP-09)");
+		check(peak <= 150, `the horde never passed the 150 ceiling (peak ${peak})`);
+	}
+
+	// (c) identity: every zombie has a netId, it never changes while it lives, and a death is announced once
+	{
+		const { sim, horde } = serverScene(2, 400, 40);
+		sim.step();
+		const seen = new Map();
+		let zero = 0;
+		for (const z of horde.zombies) {
+			const id = horde.netIdOf(z);
+			if (id === 0) zero++;
+			seen.set(z.id, id);
+		}
+		check(zero === 0, `every zombie got a netId (${horde.zombies.length} of them)`);
+		check(new Set(seen.values()).size() === seen.size(), "no two zombies share a netId");
+		for (let t = 0; t < 30; t++) sim.step();
+		let moved = 0;
+		for (const z of horde.zombies) {
+			if (seen.get(z.id) !== horde.netIdOf(z)) moved++;
+		}
+		check(moved === 0, "a netId never changes under a living zombie");
+
+		const victim = horde.zombies[0];
+		const victimNet = horde.netIdOf(victim);
+		const vx = victim.x;
+		const vy = victim.y;
+		victim.hp = 0;
+		sim.step();
+		const deaths = horde.takeDeaths([]);
+		const row = deaths.find(d => d.netId === victimNet);
+		check(row !== undefined, "a zombie that dies is reported once, by netId");
+		if (row !== undefined) {
+			check(
+				row.cause === zombiesMod.DeathCause.Killed,
+				"...with the cause the client needs (blood, corpse, drop)",
+			);
+			check(dist(row.x, row.y, vx, vy) < 40, "...at the place it fell");
+		}
+		check(horde.takeDeaths([]).length === 0, "and never twice");
+	}
+
+	// (d) the client must not simulate a horde it does not own
+	{
+		setSeed(SEED);
+		const world = W.createWorld(3000, 3000);
+		const refs = makeRefs(world, 1500, 1500);
+		const z = addZombie(refs, 1, 1500, 1200, Math.PI / 2);
+		z.detect = true;
+		const phase = mpConfig.MP_PHASE;
+		mpConfig.MP_PHASE = 2;
+		const x0 = z.x;
+		const y0 = z.y;
+		for (let f = 0; f < 60; f++) zombieAI.updateZombies(refs, DT);
+		const still = dist(z.x, z.y, x0, y0) === 0;
+		mpConfig.MP_PHASE = phase;
+		check(still, "with MP_PHASE >= 2 the client does not move a single zombie (the server owns them)");
+		for (let f = 0; f < 60; f++) zombieAI.updateZombies(refs, DT);
+		check(dist(z.x, z.y, x0, y0) > 0, "...and with MP_PHASE < 2 the old single-player path still runs");
+	}
+}
+
+// ---------------------------------------------------------------- 11. the §3.2 tick budget
+
+function testTickCost() {
+	console.log("\n[11] cost of a server tick with 150 zombies and 6 survivors (§3.2: p95 <= 6 ms in Luau)");
+	const runs = [
+		{ label: "6 survivors together (one cluster)", spread: 300 },
+		{ label: "6 survivors spread out (worst case for the field)", spread: 3000 },
+	];
+	for (const run of runs) {
+		const { sim, horde } = serverScene(6, run.spread, 150);
+		// §12.2 wants the cost per STEP, not only per tick: the same hook the live server gives os.clock
+		horde.nowMs = () => performance.now();
+		for (let t = 0; t < 120; t++) sim.step(); // warm-up: the first field and the JIT
+		const N = 1800;
+		const samples = new Float64Array(N);
+		const phases = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+		const peaks = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+		for (let t = 0; t < N; t++) {
+			const t0 = performance.now();
+			sim.step();
+			samples[t] = performance.now() - t0;
+			const c = horde.cost;
+			phases.clock += c.clock;
+			phases.population += c.population;
+			phases.field += c.field;
+			phases.zombies += c.zombies;
+			phases.bosses += c.bosses;
+			phases.book += c.book;
+			for (const k in peaks) if (c[k] > peaks[k]) peaks[k] = c[k];
+		}
+		const sorted = Float64Array.from(samples).sort();
+		let total = 0;
+		for (const v of samples) total += v;
+		const avg = total / N;
+		const p95 = sorted[Math.floor(N * 0.95)];
+		const p99 = sorted[Math.floor(N * 0.99)];
+		info(
+			`${run.label}: avg ${avg.toFixed(3)} ms . p95 ${p95.toFixed(3)} ms . p99 ${p99.toFixed(3)} ms ` +
+				`(${horde.zombies.length} zombies)`,
+		);
+		info(
+			`   field: ${horde.field.lastTiles} active tiles . ${horde.field.lastCells} cells per rebuild . ` +
+				`${horde.field.cachedTiles()} tiles cached`,
+		);
+		info(
+			"   per step (avg ms): " +
+				Object.keys(phases)
+					.map(k => `${k} ${(phases[k] / N).toFixed(3)}`)
+					.join(" . "),
+		);
+		info(
+			"   worst step (ms):   " +
+				Object.keys(peaks)
+					.map(k => `${k} ${peaks[k].toFixed(3)}`)
+					.join(" . "),
+		);
+		check(avg > 0, "the measurement ran");
+		// a regression guard, not the Luau verdict: Node is faster than a Roblox server, so this only has to
+		// catch an accidental O(n^2) or an allocation storm. The real number comes from a Studio playtest.
+		check(p95 < 16.7, `p95 stays inside one 60 Hz tick under Node (${p95.toFixed(3)} ms)`);
+	}
+}
+
 // ---------------------------------------------------------------- run
 
 const started = Date.now();
 console.log(`[test-ai] src ${SRC}`);
 console.log(`[test-ai] seed ${SEED}${MODERN ? "" : " · older src: only the measurements run"}`);
 
-if (!BENCH_ONLY) {
+if (TICK_ONLY) {
+	if (SERVER) testTickCost();
+} else if (!BENCH_ONLY) {
 	if (MODERN) {
 		testSight();
 		testMemory();
@@ -786,8 +1171,12 @@ if (!BENCH_ONLY) {
 	}
 	testDeterminism();
 	if (MODERN) testBite();
+	if (SERVER) testServerHorde();
 }
-testCost();
+if (!TICK_ONLY) {
+	testCost();
+	if (SERVER) testTickCost();
+}
 
 console.log(`\n[test-ai] ${failures === 0 ? "all good" : `${failures} failure(s)`} in ${Date.now() - started} ms`);
 process.exit(failures === 0 ? 0 : 1);

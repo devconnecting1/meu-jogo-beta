@@ -40,9 +40,70 @@ export function clockSpeed(dayTime: number): number {
 	return DESIGN.TIME_SPEED * (isNightAt(dayTime) ? 1.2 : 0.8);
 }
 
-/** the clock after `dt` seconds, NOT wrapped: ≥ HOURS_PER_DAY means a new day started */
+/**
+ * Speed of the interval that STARTS at `dayTime`, which is what an integration step needs.
+ *
+ * It only differs from clockSpeed at the single instant 19:00: `isNightAt` calls it day (the night is
+ * "after 19:00"), but the stretch ahead of it is night. Integrating that stretch at day speed would make
+ * the clock depend on where the ticks happened to fall.
+ */
+function forwardSpeed(dayTime: number): number {
+	return DESIGN.TIME_SPEED * (dayTime >= 19 || dayTime < 6 ? 1.2 : 0.8);
+}
+
+/** the next hour at which the speed changes, starting from `dayTime` in [0, 24); 30 = 06:00 of the next day */
+function nextSpeedEdge(dayTime: number): number {
+	if (dayTime < 6) return 6;
+	if (dayTime < 19) return 19;
+	return HOURS_PER_DAY + 6;
+}
+
+/** a step never needs more splits than this; the guard exists so a nonsense dt cannot spin here */
+const MAX_EDGE_SPLITS = 64;
+
+/**
+ * The clock after `dt` seconds, NOT wrapped: ≥ HOURS_PER_DAY means a new day started.
+ *
+ * The step is split at 06:00 and 19:00 instead of being integrated at the speed it started in. That costs
+ * one comparison per frame and buys the property the whole of F2 rests on: the hour a step lands on does
+ * not depend on the step SIZE. The server ticks at a fixed 1/60 s, a client replays a 10 s gap between two
+ * Clock deltas in one go (§4.6), and an admin skips half a night in a single call — all three have to agree,
+ * or the survivors would be looking at different clocks again.
+ */
 export function advanceClock(dayTime: number, dt: number): number {
-	return dayTime + clockSpeed(dayTime) * dt;
+	if (!(dt > 0)) return dayTime;
+	let carried = 0;
+	let t = dayTime;
+	if (t >= HOURS_PER_DAY || t < 0) {
+		const days = math.floor(t / HOURS_PER_DAY);
+		carried = days * HOURS_PER_DAY;
+		t -= carried;
+	}
+	let left = dt;
+	for (let i = 0; i < MAX_EDGE_SPLITS && left > 0; i++) {
+		const speed = forwardSpeed(t);
+		const toEdge = (nextSpeedEdge(t) - t) / speed;
+		if (left <= toEdge) {
+			t += speed * left;
+			left = 0;
+			break;
+		}
+		left -= toEdge;
+		t = nextSpeedEdge(t);
+		if (t >= HOURS_PER_DAY) {
+			t -= HOURS_PER_DAY;
+			carried += HOURS_PER_DAY;
+		}
+	}
+	// the guard tripped (a dt of many game days): finish in one piece rather than return a stalled clock
+	if (left > 0) t += forwardSpeed(t) * left;
+	return carried + t;
+}
+
+/** `dayTime` folded back into [0, 24), moving whole days onto `day` (a step may cross midnight) */
+export function normalizeClock(day: number, dayTime: number): { day: number; dayTime: number } {
+	const days = math.floor(dayTime / HOURS_PER_DAY);
+	return { day: day + days, dayTime: dayTime - days * HOURS_PER_DAY };
 }
 
 /** did the clock pass hour `t` going from `prev` to `cur` (both already wrapped to [0, 24))? */
@@ -63,6 +124,33 @@ export function waveActive(wave: number, dayTime: number): boolean {
 /** inside the window in which the night's wave queues are filled */
 export function inWaveFillWindow(dayTime: number): boolean {
 	return dayTime > WAVE_FILL_FROM && dayTime < WAVE_FILL_TO;
+}
+
+/*
+ * Wave bits of the Clock delta (§4.5 `waveFlags`). The server decides which of the three queues is pouring
+ * and the client MIRRORS the answer instead of recomputing it from its own hour: at the moment a wave
+ * starts, the client's replayed clock is up to an interpolation delay away from the server's, and "is the
+ * wave on" is exactly the question that must not be answered twice.
+ */
+export const WAVE_FLAG_1 = 1;
+export const WAVE_FLAG_2 = 2;
+export const WAVE_FLAG_3 = 4;
+export const WAVE_FLAG_MASK = 7;
+
+/** the three wave bits for this time of day */
+export function waveFlagsAt(dayTime: number): number {
+	let flags = 0;
+	if (waveActive(1, dayTime)) flags += WAVE_FLAG_1;
+	if (waveActive(2, dayTime)) flags += WAVE_FLAG_2;
+	if (waveActive(3, dayTime)) flags += WAVE_FLAG_3;
+	return flags;
+}
+
+/** is wave `wave` (1–3) pouring, according to a received `waveFlags` byte? */
+export function waveActiveInFlags(flags: number, wave: number): boolean {
+	const bit = wave === 1 ? WAVE_FLAG_1 : wave === 2 ? WAVE_FLAG_2 : WAVE_FLAG_3;
+	// no bitwise operators: roblox-ts maps them onto bit32, and a plain remainder reads the same in both
+	return math.floor(flags / bit) % 2 === 1;
 }
 
 /**

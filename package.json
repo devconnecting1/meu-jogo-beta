@@ -13,6 +13,8 @@
 		"test:server-sim": "node tools/test-server-sim.mjs",
 		"test:predict": "node tools/test-predict.mjs",
 		"test:ai": "node tools/test-ai.mjs",
+		"test:combat": "node tools/test-combat.mjs",
+		"test:clock": "node tools/test-clock.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
 		"test:smoothness": "node tools/test-smoothness.mjs",
 		"test:chat": "node tools/test-chat.mjs",
