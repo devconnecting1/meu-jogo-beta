@@ -908,7 +908,7 @@ section("6) nobody alive and nobody paying: the world is lost, once (the owner's
 		);
 		s.run(5);
 		check(wipes.length === 1, "…and not again while they lie there");
-		info("until the reset to day 1 exists, the daybreak wait still stands them up (see 5a/5b)");
+		info("the world then ends and a new town begins on day 1 (MP-22): tools/test-reset.mjs");
 	}
 	{
 		const s = bootServer();
@@ -1213,6 +1213,69 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 		"the save written on leaving has the costume, the coins it cost and the outfit worn",
 		stored === undefined ? "no document" : `money ${stored.money}, costume ${stored.costumes[santa.id]}`,
 	);
+});
+
+section("11) the XP the server credits reaches the client: its wallet is pushed with level and XP in it", () => {
+	// the owner's playtest (2026-09-23): the HUD's XP bar sat at "LV 1 · 0 / 120" through a whole run. From
+	// MP_PHASE 2 the server credits every kill into the live save (server/sim/progress.ts), and nothing carried it
+	// back: the only wallet the client heard came in its next report's ack, and that wallet had no XP in it
+	const s = bootServer();
+	const { applyWallet, defaultSave, expMaxInit } = require(join(SRC, "shared/game/save.ts"));
+	const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+	const acks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p);
+	const pushes = p => acks(p).filter(e => e.args[0]?.push === true);
+	const p = s.join(newUser(), "hunter");
+	const sp = s.enter(p);
+	const save = s.save(p);
+	s.run(1);
+	check(pushes(p).length === 0, "nothing is pushed while nothing changed (the LoadAck already had it all)");
+
+	// one kill, credited by the server exactly as combat does
+	const need = expMaxInit(save.level);
+	s.sim.progress.zombieKilled(900001, 10, sp.slot, 0);
+	s.run(0.5);
+	const first = pushes(p).pop()?.args[0];
+	check(first !== undefined, "a kill the server credited pushes the wallet within half a second");
+	check(
+		first?.wallet?.exp === save.exp && first?.wallet?.level === save.level && save.exp === 10,
+		"…carrying the level and the XP of the live save",
+		JSON.stringify({ exp: first?.wallet?.exp, level: first?.wallet?.level, live: save.exp }),
+	);
+
+	// the client side: the real applyWallet on the client's own copy
+	const mine = defaultSave();
+	mine.skillLevels[1] = 0;
+	applyWallet(mine, first.wallet);
+	check(mine.exp === 10 && mine.level === 1, "the client's save now reads 10 XP (the HUD bar moves)");
+
+	// enough for a level: the level, the XP left over and the skill point all reach the client
+	s.sim.progress.zombieKilled(900002, need, sp.slot, 0);
+	s.run(0.5);
+	const second = pushes(p).pop()?.args[0];
+	applyWallet(mine, second.wallet);
+	check(
+		mine.level === 2 && mine.exp === save.exp && mine.skillPoint === 1,
+		"a level-up arrives with its skill point (level - 1 - skills learned)",
+		JSON.stringify({ level: mine.level, exp: mine.exp, points: mine.skillPoint }),
+	);
+	// a skill learned on the client a moment before the next push is not handed back as a free point
+	mine.skillLevels[1] = 1;
+	mine.skillPoint = 0;
+	applyWallet(mine, second.wallet);
+	check(mine.skillPoint === 0, "a point already spent here stays spent when the same wallet lands again");
+
+	// the pushes are paced and only on change: a quiet minute sends nothing
+	const before = pushes(p).length;
+	s.run(60);
+	check(pushes(p).length === before, "a quiet minute pushes nothing", `${pushes(p).length - before} pushes`);
+	// a wallet from an older server, without level or XP, moves neither
+	const older = { ...second.wallet };
+	delete older.level;
+	delete older.exp;
+	const keep = { level: mine.level, exp: mine.exp };
+	applyWallet(mine, older);
+	check(mine.level === keep.level && mine.exp === keep.exp, "a wallet without level or XP leaves them alone");
+	s.quit(p);
 });
 
 // ================================================================

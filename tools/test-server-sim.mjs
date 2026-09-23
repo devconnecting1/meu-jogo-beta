@@ -1012,6 +1012,7 @@ section("(e) the snapshots decode back with the right positions, ackSeq and ring
 	check(init !== undefined, "the newcomer gets InitBegin (§4.5)");
 	if (init !== undefined) {
 		checkEq(init.mapHash, mapHashOf(world), "InitBegin carries the map hash the client will compare");
+		checkEq(init.seed, DESIGN.TOWN_SEED, "InitBegin names the town's seed (MP-22: it changes when a world ends)");
 		checkEq(init.simHz, CFG.SIM_HZ, "InitBegin carries SIM_HZ");
 	}
 	const joined = events.filter(e => e.t === P.WorldEv.PlayerJoined);

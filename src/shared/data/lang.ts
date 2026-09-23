@@ -499,6 +499,8 @@ export const LANG_TABLE: Array<string> = [
 	"Continue price",
 	"Your run is over",
 	"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
+	// the same choice where the server owns the death (MP-21): a New game is a new life that still waits for daybreak
+	"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept.",
 	"Purchased",
 	"Not enough coins",
 	"Too many packs waiting",
@@ -525,6 +527,9 @@ export const LANG_TABLE: Array<string> = [
 	"Survive the night",
 	"Already at full health",
 	"Back on your feet",
+	// MP-22: nobody was left alive, the world ended and a new town begins at day 1 (the day it fell on follows)
+	"The town fell on day",
+	"A new town rises: day 1",
 	"Bosses",
 	"Continue this run",
 	"Daybreak in",
@@ -540,7 +545,9 @@ export const LANG_TABLE: Array<string> = [
 	"Reload",
 	"Skip",
 	"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it.",
-	"The town is not yours to restart.#You wake with the others, at first light.",
+	// the wait for daybreak says what really happens (MP-21, MP-22): first light, or a new town if nobody is left
+	"You wake at first light.#If nobody is left standing, a new town begins at day 1.",
+	"Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1.",
 	"You have",
 	"You survived",
 	"You survived a day",
@@ -611,6 +618,13 @@ export const LANG_TABLE: Array<string> = [
 	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
 	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it.",
+	// the HUD console (client/ui/hudConsole.ts, DESIGN_RULES UI-09): the bar prefixes ("HP 88 / 100", "LV 3 · 30 / 120")
+	// and the weapon hotbar's row of the controls reference (tutorial.ts SCHEMES)
+	"HP",
+	"FOOD",
+	"LV",
+	"Switch weapon",
+	"Tap a weapon",
 ];
 
 /**

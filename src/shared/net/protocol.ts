@@ -34,7 +34,7 @@
  *  7. Fx and World events carry a 1-byte type tag (not counted in the doc's per-event sizes). MapItemHit (tree,
  *     car, bin shake) is the Fx event SolidShake, since §4.5 routes it "via Fx". A batch bigger than one packet
  *     is split into several packets (never truncated); an event that cannot fit alone is dropped and counted.
- *  8. WorldInit = World batches whose first event is InitBegin{mapHash, tick0Time, simHz, chunk, chunks},
+ *  8. WorldInit = World batches whose first event is InitBegin{mapHash, seed, tick0Time, simHz, chunk, chunks},
  *     followed by the ordinary SolidAdd/DoorSet/LightSet/ItemAdd/Clock deltas. Clock dayTime is hours × 2048
  *     (u16, < 24 h); rain is a boolean. Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids must be
  *     dynamic (≥ 1 000 000). Item velocity is i16 in 1/8 u/s. User ids are f64 (Roblox ids exceed 2^32 and
@@ -52,6 +52,13 @@
  *     bytes that nothing drew. `PlayerProfile{slot, level, outfit, pet}` is the in-session delta: a level-up or a
  *     change of outfit/pet reaches everybody without a second PlayerJoined (which would reset the life state).
  *     Both are range-checked on decode; the server only ever sends looks it checked ownership of.
+ * 13. (MP-22) The town is no longer always DESIGN.TOWN_SEED: when every survivor dies the world ends and a new town
+ *     is born from a new seed. `InitBegin` carries the `seed` (u32, 1 … TOWN_SEED_MAX, next to the map hash it is
+ *     checked with), so a client entering the world knows which town to build; `WorldReset{seed, endedDay, lives}`
+ *     is broadcast to EVERY connected client — the lobby included — the moment a world ends: the new seed, the
+ *     world day the old one fell on, and each new life: the UserId the server reset to day 1 and the `runRev` that
+ *     reset left in its save (u8 count + f64 + u32 each). The client SETS its runRev from that number — adding one to
+ *     its own drifted whenever a wallet carrying the new runRev overtook the reset (review of f851ad2, B2).
  */
 import {
 	NetReader,
@@ -84,6 +91,7 @@ import {
 	SLOT_NONE,
 	SNAP_MAX_BYTES,
 	SNAP_MAX_PARTS,
+	TOWN_SEED_MAX,
 	WORLD_MAX_BYTES,
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
@@ -1266,6 +1274,8 @@ export const WorldEv = {
 	InitBegin: 15,
 	/** (MON-04) the roster's in-session delta: level, outfit, pet */
 	PlayerProfile: 16,
+	/** (MP-22) the world ended: a new town from a new seed, back to day 1 */
+	WorldReset: 17,
 } as const;
 
 /** SolidAdd.state / DoorSet.state */
@@ -1291,6 +1301,10 @@ export const NAME_MAX_BYTES = 80;
 export const SOLID_HP_MAX_ENTRIES = 255;
 /** largest integer an f64 user id may carry */
 const MAX_SAFE_INT = 9007199254740991;
+/** UserIds one WorldReset can name (its count is a u8; a server holds far fewer players than this) */
+export const WORLD_RESET_MAX_LIVES = 255;
+/** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
+const RUN_REV_MAX = 4294967295;
 
 export const DeathCause = {
 	Shot: 0,
@@ -1469,6 +1483,8 @@ export interface WInitBegin {
 	t: typeof WorldEv.InitBegin;
 	/** solid count + Σ id × coordinates mod 2^32 (§4.5) */
 	mapHash: number;
+	/** (MP-22) the seed the server's town was generated from: 1 … TOWN_SEED_MAX */
+	seed: number;
 	/** workspace:GetServerTimeNow() at tick 0 (§4.6) */
 	tick0Time: number;
 	/** the server's SIM_HZ */
@@ -1476,6 +1492,28 @@ export interface WInitBegin {
 	/** 0..chunks-1 */
 	chunk: number;
 	chunks: number;
+}
+
+/** (MP-22) one survivor the end of a world gave a new life: who, and the run the server's save is on now */
+export interface WorldResetLife {
+	userId: number;
+	/** the save's runRev after the reset: the client takes it as it is (never its own value + 1) */
+	runRev: number;
+}
+
+/**
+ * (MP-22) Nobody was left alive and nobody paid a Rebirth: the world ended on `endedDay` and a new town was born from
+ * `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
+ * and a client named in `lives` mirrors the new life the server gave it (the same reset as New game).
+ */
+export interface WWorldReset {
+	t: typeof WorldEv.WorldReset;
+	/** 1 … TOWN_SEED_MAX */
+	seed: number;
+	/** the world day the old town fell on (≥ 1) */
+	endedDay: number;
+	/** the survivors whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
+	lives: Array<WorldResetLife>;
 }
 
 export type WorldEvent =
@@ -1494,7 +1532,8 @@ export type WorldEvent =
 	| WPlayerLeft
 	| WPlayerLife
 	| WInitBegin
-	| WPlayerProfile;
+	| WPlayerProfile
+	| WWorldReset;
 
 export interface WorldBatch {
 	tick: number;
@@ -1591,11 +1630,23 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			break;
 		case WorldEv.InitBegin:
 			w.u32(e.mapHash);
+			w.u32(clampInt(e.seed, 1, TOWN_SEED_MAX));
 			w.f64(e.tick0Time);
 			w.u8(clampInt(e.simHz, 1, 255));
 			w.u8(e.chunk);
 			w.u8(clampInt(e.chunks, 1, 255));
 			break;
+		case WorldEv.WorldReset: {
+			w.u32(clampInt(e.seed, 1, TOWN_SEED_MAX));
+			w.u16(clampInt(e.endedDay, 1, 65535));
+			const n = math.min(e.lives.size(), WORLD_RESET_MAX_LIVES);
+			w.u8(n);
+			for (let i = 0; i < n; i++) {
+				w.f64(e.lives[i].userId);
+				w.u32(clampInt(e.lives[i].runRev, 0, RUN_REV_MAX));
+			}
+			break;
+		}
 	}
 }
 
@@ -1706,14 +1757,33 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		return { t: WorldEv.PlayerLife, slot, state };
 	} else if (t === WorldEv.InitBegin) {
 		const mapHash = r.u32();
+		const seed = r.u32();
 		const tick0Time = r.f64();
 		const simHz = r.u8();
 		const chunk = r.u8();
 		const chunks = r.u8();
-		if (simHz < 1 || chunks < 1 || chunk >= chunks) return undefined;
-		return { t: WorldEv.InitBegin, mapHash, tick0Time, simHz, chunk, chunks };
+		if (!validTownSeed(seed) || simHz < 1 || chunks < 1 || chunk >= chunks) return undefined;
+		return { t: WorldEv.InitBegin, mapHash, seed, tick0Time, simHz, chunk, chunks };
+	} else if (t === WorldEv.WorldReset) {
+		const seed = r.u32();
+		const endedDay = r.u16();
+		const n = r.u8();
+		if (!validTownSeed(seed) || endedDay < 1 || n * 12 > r.remaining()) return undefined;
+		const lives = new Array<WorldResetLife>();
+		for (let i = 0; i < n; i++) {
+			const userId = r.f64();
+			const runRev = r.u32();
+			if (userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
+			lives.push({ userId, runRev });
+		}
+		return { t: WorldEv.WorldReset, seed, endedDay, lives };
 	}
 	return undefined;
+}
+
+/** a seed TownRng (shared/game/world.ts) turns into a town of its own: 1 … TOWN_SEED_MAX */
+function validTownSeed(seed: number): boolean {
+	return seed >= 1 && seed <= TOWN_SEED_MAX;
 }
 
 const worldWriter = new NetWriter(1024, WORLD_MAX_BYTES);

@@ -34,6 +34,7 @@ import { buyCostume } from "./save/costumes";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
+import { startWorldLog } from "./save/worldLog";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -448,6 +449,10 @@ function readLegacy(key: string): LoadOutcome {
 function loadSession(s: Session): void {
 	if (s.loading) return;
 	s.loading = true;
+	// a second load in one session is always the retry of a failed one: until now the player had the blank,
+	// read-only table below, and "Play without saving" may have played a life on it
+	const retried = s.lastLoadAttempt !== -math.huge;
+	const blank = s.save;
 	waitUntil(() => !releasing.has(s.player.UserId), 20);
 	let status: LoadStatus;
 	let save: PlayerSaveData;
@@ -501,6 +506,14 @@ function loadSession(s: Session): void {
 	s.lastWrite = os.clock();
 	resetCredits(s);
 	s.lastLoadAttempt = os.clock();
+	// a real save replaced the blank one: whatever the body lived through on the blank table (a death, a kept
+	// body) happened to nobody's save, and must not carry into this one (server/sim/life.ts `forgetUnsaved`;
+	// review of de4ba1e, R3b). A retry that failed again keeps playing, unsaved, on the next blank table
+	if (retried && status !== "error") mpHost?.forgetUnsaved(s.player, blank);
+	// a stored save meets the body this server kept, BEFORE the LoadAck shows it to the client: a reconnect is
+	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
+	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
+	if (status === "ok" && mpHost?.adopt(s.player, save) === true) s.dirty = true;
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {
@@ -564,11 +577,17 @@ remotes.loadRequest.OnServerEvent.Connect(player => {
 	if (s.status === "error") {
 		// the player asked to retry a failed load: run it once the cooldown has passed
 		if (s.loading || s.retryQueued) return;
+		// never under a body in the world (review of de4ba1e, R3b/N4): it was built on the blank table, and the real
+		// save must not be swapped in beneath it — its death, or its being alive, would become the real save's. The
+		// client offers Retry only from the lobby; from the street the request is dropped, and can be sent again there
+		if (mpHost?.playerOf(s.player) !== undefined) return;
 		s.retryQueued = true;
 		const wait = math.max(0, LOAD_RETRY_COOLDOWN - (os.clock() - s.lastLoadAttempt));
 		task.delay(wait, () => {
 			s.retryQueued = false;
 			if (s.closed || s.status !== "error") return;
+			// (the queued retry holds admission, see `saveOf` below, so nobody walked in meanwhile)
+			if (mpHost?.playerOf(s.player) !== undefined) return;
 			s.loaded = false;
 			loadSession(s);
 		});
@@ -956,6 +975,51 @@ task.spawn(() => {
 	}
 });
 
+/*
+ * The simulation writes XP, levels and midnight's coins straight into the live save (server/sim/progress.ts),
+ * and before this nothing carried them back: the client only heard its wallet in the ack of its next report,
+ * and that wallet had no XP in it at all -- the HUD's XP bar sat at 0 for a whole run (owner's playtest,
+ * 2026-09-23). The wallet is pushed as soon as it changes, at most WALLET_PUSH_S apart. This stands in for the
+ * reliable `Self` channel of docs/MULTIPLAYER.md §4.1 until that lands.
+ */
+const WALLET_PUSH_S = 0.25;
+const pushedWallet = new Map<Player, string>();
+
+function walletSignature(save: PlayerSaveData): string {
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}`;
+}
+
+function pushWallets(): void {
+	for (const [player] of pushedWallet) {
+		if (!sessions.has(player)) pushedWallet.delete(player);
+	}
+	for (const [player, s] of sessions) {
+		if (s.closed || !s.loaded) continue;
+		const sig = walletSignature(s.save);
+		const last = pushedWallet.get(player);
+		pushedWallet.set(player, sig);
+		// the first look only takes note: the LoadAck already carried the whole save
+		if (last === undefined || last === sig) continue;
+		sendSaveAck(s, {
+			ok: true,
+			push: true,
+			earned: 0,
+			earnedDays: 0,
+			earnedBosses: 0,
+			clamped: false,
+			wallet: walletOf(s.save),
+		});
+	}
+}
+
+let walletPushAcc = 0;
+RunService.Heartbeat.Connect(dt => {
+	walletPushAcc += dt;
+	if (walletPushAcc < WALLET_PUSH_S || shuttingDown) return;
+	walletPushAcc = 0;
+	pushWallets();
+});
+
 // ---------------------------------------------------------------- admin panel host
 
 /**
@@ -1063,19 +1127,24 @@ admin = startAdminServer({
  * is what `stepPlayer` reads the skill levels from.
  */
 if (MP_PHASE >= 1) {
+	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
+	const worldLog = startWorldLog();
 	mpHost = startMpHost({
 		saveOf: player => {
 			const s = sessions.get(player);
 			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
-			// in single player. A session that is still loading, or already closing, is not admitted yet.
-			if (s === undefined || s.closed || !s.loaded) return undefined;
+			// in single player. A session that is still loading, or already closing, is not admitted yet — nor one
+			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b)
+			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
 			return s.save;
 		},
-		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1)
+		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
+		// world that ended gave its fallen a new life (MP-22): `resetRun` and a new `runRev` in the live save
 		saveChanged: userId => markDirty(userId),
-		// `onWorldWiped` (server/sim/life.ts rule 6: everybody in the world is dead and nobody paid inside the
-		// window) is where the world's reset to day 1 will hang, from HERE. Not yet: the host only logs it, and
-		// the daybreak wait still stands everybody up.
+		// MP-22: everybody in the world died and nobody paid inside the window (server/sim/life.ts rule 6), so the
+		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
+		// is the record of the world that ended — persisted off this thread, the reset never waits for it
+		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an

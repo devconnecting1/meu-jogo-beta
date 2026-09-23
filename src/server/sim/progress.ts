@@ -18,15 +18,15 @@
  * Pure module: no Instances, no services, no os.clock. Every entry point takes `now` in seconds, which is what
  * lets the ledgers be replayed deterministically in Node (tools/test-combat.mjs).
  */
-import { SAVE_LIMITS, expMaxInit, PlayerSaveData } from "shared/game/save";
+import { SAVE_LIMITS, expMaxInit, PlayerSaveData, PROGRESS_SERVER_PHASE } from "shared/game/save";
 import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
 
 // ---------------------------------------------------------------- constants (§3.6)
 
-/** MP_PHASE from which the server, not the report, decides progress (§11.3 F2) */
-export const PROGRESS_SERVER_PHASE = 2;
+/** MP_PHASE from which the server, not the report, decides progress (§11.3 F2); the client reads it too */
+export { PROGRESS_SERVER_PHASE };
 
 /** a hit counts as helping to kill for this long (§3.6 "nos últimos 10 s") */
 export const ASSIST_WINDOW_S = 10;

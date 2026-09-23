@@ -847,6 +847,45 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	);
 }
 
+section('18) "Nao" ao tutorial desliga o tutorial inteiro, inclusive as licoes da partida (bug do dono, 2026-09-23)');
+{
+	// the lobby's "No" set only `tutorialDone`; the in-run coach (client/onboarding/index.ts) runs off
+	// `firstInstall`, so the lessons appeared in the first match anyway
+	const fresh = SAVE.defaultSave();
+	check(fresh.firstInstall === true && fresh.tutorialDone === false, "um save novo ainda nao respondeu");
+	SAVE.declineTutorial(fresh);
+	check(fresh.tutorialDone === true, "declineTutorial: a pergunta foi respondida");
+	check(fresh.firstInstall === false, "declineTutorial: o coach da primeira partida nao comeca");
+
+	// the source: whoever answers "No" goes through declineTutorial, and only the "Yes" card (tutorial.ts) marks
+	// the question answered by hand -- that path wants the coach, so it must leave `firstInstall` alone
+	const { readdirSync, statSync } = await import("node:fs");
+	const offenders = [];
+	let callers = 0;
+	(function walk(dir) {
+		for (const name of readdirSync(dir)) {
+			const p = join(dir, name);
+			if (statSync(p).isDirectory()) walk(p);
+			else if (p.endsWith(".ts")) {
+				const text = readFileSync(p, "utf8");
+				if (/declineTutorial\(/.test(text)) callers++;
+				if (/tutorialDone\s*=\s*true/.test(text) && !p.endsWith(join("ui", "tutorial.ts"))) offenders.push(p);
+			}
+		}
+	})(join(SRC, "client"));
+	check(callers > 0, "o cliente responde 'Nao' por declineTutorial");
+	check(
+		offenders.length === 0,
+		"nenhum arquivo do cliente marca tutorialDone a mao fora do cartao do 'Sim'",
+		offenders.join(", "),
+	);
+	const coachGate = readFileSync(join(SRC, "client/onboarding/index.ts"), "utf8");
+	check(
+		/if \(ctx\.save\.firstInstall\)/.test(coachGate),
+		"o coach continua ligado a firstInstall (o que o 'Nao' desliga)",
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

@@ -17,8 +17,16 @@ import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
-import { netEnterWorld, netLeaveWorld, netPrewarm } from "./net/netClient";
-import { attachRun, DaybreakWait, detachRun, runSummary, showDaybreakWait, showRunSummary } from "./onboarding";
+import { netActive, netEnterWorld, netHosted, netLeaveWorld, netOnTown, netPrewarm, TownNotice } from "./net/netClient";
+import {
+	attachRun,
+	DaybreakWait,
+	detachRun,
+	RunSummary,
+	runSummary,
+	showDaybreakWait,
+	showRunSummary,
+} from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { switchWeapon } from "./systems/combat";
 import { interactHint } from "./systems/interaction";
@@ -56,9 +64,10 @@ const LOAD_FALLBACK_SEC = 8;
 const NO_AMMO_COOLDOWN = 2;
 /**
  * How long after daybreak the client waits for the server's revive before handing the ordinary end-of-run
- * choice back (MP-21). The revive is a reliable PlayerLife delta decided on the server, so it should be here
- * within a round trip; this only exists so that a server which is NOT going to send one (no MP host, a slot
- * lost in between) leaves the player with a way forward instead of a countdown reading 0:00 for ever.
+ * choice back (MP-21) — and only once the session itself is gone (`netActive()` false: no MP host, a slot lost
+ * in between). While the session is live the revive is on its way whatever this client's countdown says: the
+ * owner's playtest of 23 Sep 2026 saw the client give up 12 s before the server stood the survivor up, and the
+ * choice it fell back to ("New game") then drew a living survivor the server still held dead.
  */
 const DAYBREAK_GRACE_S = 4;
 
@@ -92,6 +101,15 @@ let dawnWait: DaybreakWait | undefined;
 let dawnBudget = 0;
 /** real seconds the wait has been over with no revive from the server (see DAYBREAK_GRACE_S) */
 let dawnOverdue = 0;
+/**
+ * MP-21: a New game the server accepted, whose new life is still waiting for daybreak (a new life, not a new body).
+ * The death screen is the wait for THAT life: no second New game on it, and its own words.
+ */
+let newLifeWaiting = false;
+/** the life that ended, as it was when New game replaced it: the wait for the new life still shows ITS numbers */
+let endedLife: RunSummary | undefined;
+/** MP-22: worlds that ended while this client was connected; a run action that raced one is superseded by it */
+let worldResets = 0;
 
 /**
  * MP-21 (as the owner rewrote it on 23 Sep 2026): does the SERVER stand this survivor back up at daybreak?
@@ -304,8 +322,11 @@ function closeDawnWait(): void {
 	dawnOverdue = 0;
 }
 
-/** stops the frame loop and hides the in-game UI; the run itself stays in `loop` */
-function stopGame(): void {
+/**
+ * Stops the frame loop and hides the in-game UI; the run itself stays in `loop`. `keepBody`: the survivor stays in
+ * the world (MP-22's rebuild around a new town, which remounts at once), so the body and the slot are not given back.
+ */
+function stopGame(keepBody = false): void {
 	if (heartbeat !== undefined) {
 		heartbeat.Disconnect();
 		heartbeat = undefined;
@@ -315,7 +336,7 @@ function stopGame(): void {
 		gameAudio.stopRun();
 	}
 	// leaving the run: give the body and the slot back instead of standing in the street from the menus
-	netLeaveWorld();
+	if (!keepBody) netLeaveWorld();
 	hud.unmount();
 	detachRun();
 	pack.close();
@@ -479,6 +500,8 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
+		// the hotbar's blue tile; the tiles themselves are the list keys 1-5 pick from (shared/game/weaponSlots.ts)
+		weaponId: rt.pointer,
 		weaponName: tr(w.name),
 		mag: rt.ammoCount,
 		magSize: w.mag,
@@ -545,23 +568,32 @@ function openDeath(): void {
 	deathShown = true;
 	pack.close();
 	closePause();
+	// a wait already on screen is being opened again for the new life a New game chose: the same night
+	const counting = dawnWait !== undefined;
+	closeDawnWait();
 	ctx.save.runOver = true;
 	net.requestSave("death");
-	const summary = runSummary(ctx, ctx.save.deathCount <= 1);
+	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx, ctx.save.deathCount <= 1);
 	// `serverDriven` is the one honest test for "somebody out there will stand me back up": the hour on this
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
-	// on it, and MP-21's short wait would read as a hang.
-	if (serverRevives() && loop.getRefs().daynight.serverDriven()) {
+	// on it, and MP-21's short wait would read as a hang. A new life the server just granted (New game) needs
+	// no such proof: the server that accepted it is the one that holds the body.
+	if (serverRevives() && (loop.getRefs().daynight.serverDriven() || newLifeWaiting)) {
 		/*
 		 * MP-21: a death is a night lost, not a run ended, on every server kind. The survivor watches the town
 		 * carry on and the server puts them back on the street at 06:00 (server/sim/life.ts) — or right now, for
-		 * coins (Rebirth). "New game" starts a new life, which still waits for daybreak; the per-frame half of
-		 * this lives in `updateDawnWait`.
+		 * coins (Rebirth), or in a new town if nobody is left standing (MP-22). "New game" starts a new life,
+		 * which still waits for daybreak; the per-frame half of this lives in `updateDawnWait`.
 		 */
-		dawnBudget = daybreakWaitSeconds(loop.getRefs().daynight.dayTime);
+		if (!counting) dawnBudget = daybreakWaitSeconds(loop.getRefs().daynight.dayTime);
 		dawnOverdue = 0;
-		dawnWait = showDaybreakWait(ctx, summary, { onRebirth: doRebirth, onNewRun: doNewRun, onHome: goLobby });
+		dawnWait = showDaybreakWait(
+			ctx,
+			summary,
+			{ onRebirth: doRebirth, onNewRun: newLifeWaiting ? undefined : doNewRun, onHome: goLobby },
+			newLifeWaiting,
+		);
 		return;
 	}
 	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
@@ -573,13 +605,30 @@ function openDeath(): void {
 }
 
 /**
+ * MP-21: into the world with a body the server holds DEAD — a New game's new life, waiting for daybreak. The survivor
+ * is dead from the very first frame and the wait opens at once: never a living survivor drawn first and struck down
+ * by the next PlayerLife (the owner's playtest: "spawns and dies at the same instant, every click"). The welcome says
+ * the truth either way (server/net/replication.ts tells a newcomer its own state): if daybreak came while this
+ * client was in the lobby, or a world ended and gave it a new life (MP-22), that is an Up, and the wait closes.
+ */
+function enterToWait(): void {
+	runActive = false;
+	newWorld();
+	const p = loop.getRefs().player;
+	p.dead = true;
+	p.hp = 0;
+	setPhase("dead");
+}
+
+/**
  * One frame of the MP-21 wait: refresh the countdown, and take the screen away the moment the server has put
  * this survivor back on their feet — `refs.player.dead` is written by the reliable PlayerLife delta (§4.5,
  * §7.1), so it is the server's answer and not a guess made here.
  *
- * The grace timer is the escape hatch: if 06:00 goes by and no revive arrives (a server not running the MP
- * host, a slot lost in between), the ordinary end-of-run choice comes back. A screen that can only ever be
- * left by the server is a screen that can strand a player.
+ * The grace timer is the escape hatch: if 06:00 goes by and no revive arrives because there is no session left to
+ * send one (a server not running the MP host, a slot lost in between), the ordinary end-of-run choice comes back.
+ * A screen that can only ever be left by the server is a screen that can strand a player — but a live session
+ * WILL answer, and giving up on it early is what put a stale "New game" in front of the owner (DAYBREAK_GRACE_S).
  */
 function updateDawnWait(dt: number): void {
 	const wait = dawnWait;
@@ -588,6 +637,8 @@ function updateDawnWait(dt: number): void {
 	if (!refs.player.dead) {
 		closeDawnWait();
 		deathShown = false;
+		newLifeWaiting = false;
+		endedLife = undefined;
 		// the wait WAS the price: the run continues, so the save has to stop saying it is over
 		ctx.save.runOver = false;
 		net.requestSave("death");
@@ -607,17 +658,22 @@ function updateDawnWait(dt: number): void {
 	}
 	dawnOverdue += math.max(0, dt);
 	if (dawnOverdue < DAYBREAK_GRACE_S) return;
+	// the session is live: the server's answer (daybreak, or a new world) is on its way, late clock or not
+	if (netActive()) return;
 	closeDawnWait();
-	warn("[PZ] daybreak passed without a revive from the server; falling back to the end-of-run choice");
+	warn("[PZ] daybreak passed without a revive and the session is gone; falling back to the end-of-run choice");
 	pauseCleanup = showRunSummary(ctx, runSummary(ctx, ctx.save.deathCount <= 1), {
 		onRebirth: doRebirth,
-		onNewRun: doNewRun,
+		onNewRun: newLifeWaiting ? undefined : doNewRun,
 		onHome: goLobby,
 	});
 }
 
-/** starts the frame loop and in-game UI for the run held by `loop` */
-function mountRun(): void {
+/**
+ * Starts the frame loop and in-game UI for the run held by `loop`. `enterWorld` false: the survivor never left it
+ * (MP-22's rebuild around a new town), so no body is asked for.
+ */
+function mountRun(enterWorld = true): void {
 	setPhase("playing");
 	hud.onPause = () => {
 		if (pauseCleanup === undefined && ctx.phase === "playing") openPause();
@@ -630,7 +686,7 @@ function mountRun(): void {
 	deathShown = false;
 	saveTimer = 0;
 	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
-	netEnterWorld();
+	if (enterWorld) netEnterWorld();
 	gameAudio.startRun(loop.getRefs());
 	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
 	attachRun(ctx, loop.getRefs());
@@ -687,6 +743,13 @@ function newWorld(): void {
 	clearScreen();
 	stopGame();
 	deliverPacks();
+	buildRun();
+	raiseAchievement(0, 1);
+	mountRun();
+}
+
+/** `loop` builds the server's town around the current save, and the run's trackers start from it */
+function buildRun(): void {
 	loop.init(ctx.save);
 	runActive = true;
 	const refs = loop.getRefs();
@@ -700,9 +763,74 @@ function newWorld(): void {
 	lastDay = ctx.save.day;
 	lastLevel = ctx.save.level;
 	lastWood = WOOD_ID >= 0 ? (ctx.save.invenEtc[WOOD_ID] ?? 0) : 0;
-	raiseAchievement(0, 1);
-	mountRun();
 }
+
+/** MP-22: "The town fell on day N. A new town rises: day 1." */
+function townFellText(day: number): string {
+	return `${tr("The town fell on day")} ${fmtInt(day)}. ${tr("A new town rises: day 1")}`;
+}
+
+/**
+ * MP-22: what the server says about its town (client/net/netClient.ts `netOnTown`) — the InitBegin of every entry,
+ * and the WorldReset of a world that ended because nobody was left alive in it.
+ *
+ * It runs INSIDE the World event, ahead of the rest of its batch: the day-1 Clock and the PlayerLife that the server
+ * sends right behind a WorldReset must land on the rebuilt town, not be wiped by the rebuild (`netReset`).
+ *
+ *   - a new life (this survivor fell with the old world): the same reset the server made, as New game mirrors it —
+ *     life day 1 and the starter kit, level, skills, coins and packs kept (MP-20) — and `runRev` moves on with it,
+ *     so a report of the old life's backpack is refused as outdated;
+ *   - in the menus: the run in memory stood in the old town, so the next Play builds the new one;
+ *   - in the street: the run is rebuilt in place around the new town WITHOUT leaving the world — the server has
+ *     already put this survivor's new body there — exactly as `newWorld` builds one, minus Leave/Enter. The same
+ *     rebuild answers an InitBegin whose town is not the one this client built (it guessed before entering).
+ */
+function onTown(notice: TownNotice): void {
+	const fellOn = notice.endedDay;
+	if (fellOn !== undefined) worldResets += 1;
+	if (fellOn !== undefined && notice.newLife) {
+		// THIS survivor's new life ends whatever it was waiting for; a reset that named somebody else ends nothing of
+		// ours — a new life the server still owes us arrives with our own save (review of f851ad2, L4)
+		newLifeWaiting = false;
+		endedLife = undefined;
+		resetRun(ctx.save);
+		// the runRev the SERVER wrote, never ours + 1: a wallet that already carried it (a report answered in the
+		// same instant) would have made that one too many, and every report after it "outdated" for the rest of
+		// the session (review B2). Monotonic like applyWallet, so a wallet from after the reset is not undone
+		const rev = notice.runRev;
+		if (rev !== undefined) ctx.save.runRev = math.max(ctx.save.runRev, rev);
+		// a "Your run is over" still open in the lobby is about a death that is over
+		for (const child of ctx.uiLayer.GetChildren()) {
+			if (child.Name === "PopupOverlay") child.Destroy();
+		}
+	}
+	if (heartbeat === undefined) {
+		if (fellOn === undefined) return;
+		runActive = false;
+		if (ctx.phase !== "boot") toast(ctx, townFellText(fellOn));
+		return;
+	}
+	// the everyday case: the InitBegin of an entry confirms the town this client already built
+	if (fellOn === undefined && notice.seed === loop.townSeed) return;
+	// a death this notice does not end stays a death — a survivor who entered to wait, whose town had to be built
+	// again; one not given a new life (never the case for a survivor in the world at a wipe). The PlayerLife that
+	// follows settles it either way; a rebuilt survivor must not stand in between
+	const keepDead = loop.getRefs().player.dead && !(fellOn !== undefined && notice.newLife);
+	clearScreen();
+	stopGame(true);
+	deliverPacks();
+	buildRun();
+	mountRun(false);
+	if (keepDead) {
+		const p = loop.getRefs().player;
+		p.dead = true;
+		p.hp = 0;
+		setPhase("dead");
+	}
+	if (fellOn !== undefined) hud.showMessage(townFellText(fellOn));
+}
+
+netOnTown(onTown);
 
 function resumeRun(): void {
 	clearScreen();
@@ -714,6 +842,8 @@ function resumeRun(): void {
 /** brings the dead player of the run in memory back (or a fresh map at the same day) */
 function revive(): void {
 	ctx.save.runOver = false;
+	newLifeWaiting = false;
+	endedLife = undefined;
 	if (!runActive) {
 		newWorld();
 		return;
@@ -780,42 +910,99 @@ function doRebirth(): void {
 		return;
 	}
 	const target = ctx.save;
+	const resets = worldResets;
 	actionBusy = true;
 	const res = invokeRunAction("rebirth");
 	actionBusy = false;
 	if (ctx.save !== target) return; // the save was replaced while waiting
+	// MP-22: a world ended while we asked; its new life (already mirrored by `onTown`) is the answer (review L2)
+	if (worldResets !== resets) return;
 	if (!res.ok) {
-		toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
+		if (!aliveAfterAll(res)) toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
 		return;
 	}
 	revive();
 }
 
+/**
+ * A Rebirth or a New game refused as "invalid": for those two that means the server holds this survivor ALIVE
+ * (server/sim/life.ts `runActionRefusal`) — a daybreak, a new world, or a new life a world owed them got there first.
+ * The client believes it rather than strand the player on a death that is over (review of f851ad2, L1): the run is on
+ * again. Returns true when that is what happened, so the caller has no error to show.
+ */
+function aliveAfterAll(res: ShopActionResult): boolean {
+	if (res.ok || res.reason !== "invalid" || !serverRevives()) return false;
+	ctx.save.runOver = false;
+	newLifeWaiting = false;
+	endedLife = undefined;
+	closeDawnWait();
+	closePause();
+	for (const child of ctx.uiLayer.GetChildren()) {
+		if (child.Name === "PopupOverlay") child.Destroy();
+	}
+	if (heartbeat !== undefined) {
+		loop.getRefs().player.dead = false;
+		deathShown = false;
+		setPhase("playing");
+	}
+	toast(ctx, tr("Back on your feet"), "success");
+	return true;
+}
+
+/**
+ * New game: a new LIFE (MP-20) — day 1 and the starter kit; level, skills, coins and packs kept.
+ *
+ * Where the server owns the death (MP-21, `hosted`), that life is NOT a new body: the server keeps it dead until
+ * daybreak, a Rebirth, or the end of the world (MP-22: if nobody is left standing, the world ends and everybody
+ * wakes in a new town — solo, a New game is exactly that, at once, since the only survivor just declined to pay).
+ * So the client stays on the wait, now for the new life, and never draws a living survivor. It used to run
+ * `newWorld()` — a fresh, standing survivor that the next PlayerLife struck down: the owner's "spawns and dies at the
+ * same instant, every click" (playtest of 23 Sep 2026). Offline the client owns its death and nothing waits.
+ */
 function doNewRun(): void {
 	if (actionBusy || !ctx.save.runOver) return; // a stale dialog: the run is not over
 	const target = ctx.save;
-	if (net.savingEnabled()) {
+	const resets = worldResets;
+	const hosted = serverRevives() && netHosted();
+	if (net.savingEnabled() || hosted) {
 		actionBusy = true;
 		const res = invokeRunAction("newRun");
 		actionBusy = false;
 		if (ctx.save !== target) return;
+		// MP-22: a world ended while we asked, and the new life it gave (already mirrored by `onTown`) replaces this
+		if (worldResets !== resets) return;
 		if (!res.ok) {
-			toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
+			if (!aliveAfterAll(res)) toast(ctx, actionErrorText(res.reason, ctx.save.settings.langType), "error");
 			return;
 		}
 	}
+	if (hosted) endedLife = runSummary(ctx, ctx.save.deathCount <= 1);
 	// same reset as the server (offline: local only, nothing is saved anyway)
 	resetRun(ctx.save);
+	if (hosted) {
+		// the server's save says the same (server/sim/life.ts `newLife`): the death stands until daybreak
+		ctx.save.runOver = true;
+		newLifeWaiting = true;
+		if (heartbeat !== undefined) openDeath();
+		else enterToWait();
+		return;
+	}
 	runActive = false;
 	newWorld();
 }
 
 function showGameOverChoice(): void {
-	// the same two ways out on every server kind (MP-21 as the owner rewrote it): pay to continue, or a new life
+	// the same two ways out on every server kind (MP-21 as the owner rewrote it): pay to continue, or a new life —
+	// which, where the server owns the death, still waits for first light (the text says so, it used to promise day 1
+	// on the spot)
 	const price = rebirthPrice(ctx.save.deathCount);
 	const short = price - ctx.save.money;
 	let body = nl(
-		tr("Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."),
+		tr(
+			serverRevives() && netHosted()
+				? "Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
+				: "Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept.",
+		),
 	);
 	// the Rebirth button below stays enabled either way (destructive-styled when unaffordable); spell
 	// out the missing amount here so it isn't a silent no-op if the player taps it anyway
@@ -830,7 +1017,10 @@ function showGameOverChoice(): void {
 
 function startRun(): void {
 	if (ctx.save.runOver) {
-		showGameOverChoice();
+		// a new life already chosen, waiting for daybreak (MP-21): Play goes back to that wait, not to a choice
+		// that was already made
+		if (newLifeWaiting && serverRevives() && netHosted()) enterToWait();
+		else showGameOverChoice();
 		return;
 	}
 	if (runActive && !loop.getRefs().player.dead) resumeRun();

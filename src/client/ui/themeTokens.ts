@@ -3,7 +3,7 @@
 // regenerate: `npm run theme` (or `npm run theme -- <tweakcn registry url>`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 	background: Color3;
 	foreground: Color3;
@@ -35,50 +35,53 @@ export interface ThemeColors {
 	statValue: Color3;
 	statBonus: Color3;
 	statEffect: Color3;
+	barHp: Color3;
+	barFood: Color3;
+	barXp: Color3;
 }
 
 export const THEME_NAME = "Meu tema global";
 
 /** .dark tokens (the game UI uses this mode) */
 export const DARK: ThemeColors = {
-	/** background: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	background: Color3.fromRGB(14, 15, 17),
-	/** foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	foreground: Color3.fromRGB(249, 251, 254),
-	/** card: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	card: Color3.fromRGB(14, 15, 17),
-	/** card-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	cardForeground: Color3.fromRGB(249, 251, 254),
-	/** popover: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	popover: Color3.fromRGB(14, 15, 17),
-	/** popover-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	popoverForeground: Color3.fromRGB(249, 251, 254),
-	/** primary: oklch(0.5438 0.1187 154.9491) #248350 */
-	primary: Color3.fromRGB(36, 131, 80),
-	/** primary-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	primaryForeground: Color3.fromRGB(249, 251, 254),
-	/** secondary: oklch(0.5583 0.0223 250.5100) #6a7581 */
-	secondary: Color3.fromRGB(106, 117, 129),
-	/** secondary-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	secondaryForeground: Color3.fromRGB(249, 251, 254),
-	/** muted: oklch(0.1682 0.0045 264.4500) #0e0f11 */
-	muted: Color3.fromRGB(14, 15, 17),
-	/** muted-foreground: oklch(0.6339 0.0200 250.0000) #818c96 */
-	mutedForeground: Color3.fromRGB(129, 140, 150),
-	/** accent: oklch(0.5447 0.0223 250.0000) #67717d */
-	accent: Color3.fromRGB(103, 113, 125),
-	/** accent-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	accentForeground: Color3.fromRGB(249, 251, 254),
+	/** background: #141414 #141414 */
+	background: Color3.fromRGB(20, 20, 20),
+	/** foreground: #fafafa #fafafa */
+	foreground: Color3.fromRGB(250, 250, 250),
+	/** card: #141414 #141414 */
+	card: Color3.fromRGB(20, 20, 20),
+	/** card-foreground: #fafafa #fafafa */
+	cardForeground: Color3.fromRGB(250, 250, 250),
+	/** popover: #141414 #141414 */
+	popover: Color3.fromRGB(20, 20, 20),
+	/** popover-foreground: #fafafa #fafafa */
+	popoverForeground: Color3.fromRGB(250, 250, 250),
+	/** primary: #597388 #597388 */
+	primary: Color3.fromRGB(89, 115, 136),
+	/** primary-foreground: #fafafa #fafafa */
+	primaryForeground: Color3.fromRGB(250, 250, 250),
+	/** secondary: #727272 #727272 */
+	secondary: Color3.fromRGB(114, 114, 114),
+	/** secondary-foreground: #fafafa #fafafa */
+	secondaryForeground: Color3.fromRGB(250, 250, 250),
+	/** muted: #141414 #141414 */
+	muted: Color3.fromRGB(20, 20, 20),
+	/** muted-foreground: #9c9c9c #9c9c9c */
+	mutedForeground: Color3.fromRGB(156, 156, 156),
+	/** accent: #5a5a5a #5a5a5a */
+	accent: Color3.fromRGB(90, 90, 90),
+	/** accent-foreground: #fafafa #fafafa */
+	accentForeground: Color3.fromRGB(250, 250, 250),
 	/** destructive: oklch(0.6368 0.2078 25.3313) #ef4444 */
 	destructive: Color3.fromRGB(239, 68, 68),
-	/** destructive-foreground: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	destructiveForeground: Color3.fromRGB(249, 251, 254),
-	/** border: oklch(0.6117 0.0223 250.5100) #7a8591 */
-	border: Color3.fromRGB(122, 133, 145),
-	/** input: oklch(0.6117 0.0223 250.5100) #7a8591 */
-	input: Color3.fromRGB(122, 133, 145),
-	/** ring: oklch(0.9880 0.0045 250.0000) #f9fbfe */
-	ring: Color3.fromRGB(249, 251, 254),
+	/** destructive-foreground: #fafafa #fafafa */
+	destructiveForeground: Color3.fromRGB(250, 250, 250),
+	/** border: #6b6b6b #6b6b6b */
+	border: Color3.fromRGB(107, 107, 107),
+	/** input: #6b6b6b #6b6b6b */
+	input: Color3.fromRGB(107, 107, 107),
+	/** ring: #fafafa #fafafa */
+	ring: Color3.fromRGB(250, 250, 250),
 	/** chart-1: oklch(0.6000 0.1187 154.9491) #399560 */
 	chart1: Color3.fromRGB(57, 149, 96),
 	/** chart-2: oklch(0.6094 0.0993 245.7394) #4c88bb */
@@ -89,18 +92,24 @@ export const DARK: ThemeColors = {
 	chart4: Color3.fromRGB(172, 87, 255),
 	/** chart-5: oklch(0.6224 0.1151 44.6044) #c06e4a */
 	chart5: Color3.fromRGB(192, 110, 74),
-	/** tab-active: oklch(0.5544 0.0993 245.7394) #3c78a9 */
-	tabActive: Color3.fromRGB(60, 120, 169),
-	/** cell: oklch(0.4500 0.0160 250.0000) #4f565e */
-	cell: Color3.fromRGB(79, 86, 94),
-	/** window: oklch(0.2600 0.0070 250.0000) #222427 */
-	window: Color3.fromRGB(34, 36, 39),
+	/** tab-active: #597388 #597388 */
+	tabActive: Color3.fromRGB(89, 115, 136),
+	/** cell: #565656 #565656 */
+	cell: Color3.fromRGB(86, 86, 86),
+	/** window: #262626 #262626 */
+	window: Color3.fromRGB(38, 38, 38),
 	/** stat-value: oklch(0.8800 0.1500 95.0000) #f6d653 */
 	statValue: Color3.fromRGB(246, 214, 83),
 	/** stat-bonus: oklch(0.7600 0.1500 155.0000) #52cd86 */
 	statBonus: Color3.fromRGB(82, 205, 134),
 	/** stat-effect: oklch(0.7400 0.1500 50.0000) #f58b4b */
 	statEffect: Color3.fromRGB(245, 139, 75),
+	/** bar-hp: oklch(0.5800 0.2078 25.3313) #da2d33 */
+	barHp: Color3.fromRGB(218, 45, 51),
+	/** bar-food: oklch(0.5700 0.1550 50.2665) #bc5500 */
+	barFood: Color3.fromRGB(188, 85, 0),
+	/** bar-xp: oklch(0.5564 0.0993 245.7394) #3c78aa */
+	barXp: Color3.fromRGB(60, 120, 170),
 };
 
 /** :root (light) tokens */
@@ -165,6 +174,12 @@ export const LIGHT: ThemeColors = {
 	statBonus: Color3.fromRGB(57, 149, 96),
 	/** stat-effect: var(--chart-3) #d2691e */
 	statEffect: Color3.fromRGB(210, 105, 30),
+	/** bar-hp: var(--destructive) #ef4444 */
+	barHp: Color3.fromRGB(239, 68, 68),
+	/** bar-food: var(--chart-3) #d2691e */
+	barFood: Color3.fromRGB(210, 105, 30),
+	/** bar-xp: var(--chart-2) #4c88bb */
+	barXp: Color3.fromRGB(76, 136, 187),
 };
 
 /** sidebar (navigation) tokens: --sidebar-* without the prefix */
@@ -189,22 +204,22 @@ export interface SidebarColors {
 
 /** .dark sidebar tokens (navigation rails) */
 export const DARK_SIDEBAR: SidebarColors = {
-	/** sidebar: oklch(0.2178 0.0060 250.0000) #181a1d */
-	background: Color3.fromRGB(24, 26, 29),
-	/** sidebar-foreground: oklch(0.9702 0.0045 250.0000) #f3f5f8 */
-	foreground: Color3.fromRGB(243, 245, 248),
-	/** sidebar-primary: oklch(0.9702 0.0045 250.0000) #f3f5f8 */
-	primary: Color3.fromRGB(243, 245, 248),
-	/** sidebar-primary-foreground: oklch(0.2178 0.0060 250.0000) #181a1d */
-	primaryForeground: Color3.fromRGB(24, 26, 29),
-	/** sidebar-accent: oklch(0.3900 0.0150 250.0000) #3f464d */
-	accent: Color3.fromRGB(63, 70, 77),
-	/** sidebar-accent-foreground: oklch(0.9702 0.0045 250.0000) #f3f5f8 */
-	accentForeground: Color3.fromRGB(243, 245, 248),
-	/** sidebar-border: oklch(0.5309 0.0200 250.0000) #646d78 */
-	border: Color3.fromRGB(100, 109, 120),
-	/** sidebar-ring: oklch(0.9702 0.0045 250.0000) #f3f5f8 */
-	ring: Color3.fromRGB(243, 245, 248),
+	/** sidebar: #1a1a1a #1a1a1a */
+	background: Color3.fromRGB(26, 26, 26),
+	/** sidebar-foreground: #f4f4f4 #f4f4f4 */
+	foreground: Color3.fromRGB(244, 244, 244),
+	/** sidebar-primary: #f4f4f4 #f4f4f4 */
+	primary: Color3.fromRGB(244, 244, 244),
+	/** sidebar-primary-foreground: #1b1b1b #1b1b1b */
+	primaryForeground: Color3.fromRGB(27, 27, 27),
+	/** sidebar-accent: #444444 #444444 */
+	accent: Color3.fromRGB(68, 68, 68),
+	/** sidebar-accent-foreground: #f4f4f4 #f4f4f4 */
+	accentForeground: Color3.fromRGB(244, 244, 244),
+	/** sidebar-border: #6b6b6b #6b6b6b */
+	border: Color3.fromRGB(107, 107, 107),
+	/** sidebar-ring: #f4f4f4 #f4f4f4 */
+	ring: Color3.fromRGB(244, 244, 244),
 };
 
 /** :root (light) sidebar tokens */

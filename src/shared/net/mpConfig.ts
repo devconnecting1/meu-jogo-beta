@@ -111,6 +111,18 @@ export const DYNAMIC_ID_BASE = 1000000;
 /** constructions per player / per server (§8.1) */
 export const MAX_BUILDS_PER_PLAYER = 150;
 export const MAX_BUILDS_PER_SERVER = 600;
+/**
+ * Largest town seed (MP-22). shared/game/world.ts `TownRng` is MINSTD: it reduces a seed modulo 2^31 − 1 and maps 0
+ * to 1, so 1 … 2^31 − 2 are exactly the seeds that each build a town of their own. InitBegin and WorldReset carry
+ * one; the server draws a new one when a world ends (server/sim/worldReset.ts).
+ */
+export const TOWN_SEED_MAX = 2147483646;
+/**
+ * Workspace attribute holding the seed of the town the server runs NOW (MP-22). Replicated state, so a client that
+ * connected after a world ended builds the right town when it presses Play; the InitBegin it gets on entry confirms
+ * it, and a WorldReset tells a client that is already connected at the moment it changes.
+ */
+export const WORLD_SEED_ATTRIBUTE = "pz_world_seed";
 
 // ---------------------------------------------------------------- input (§2.2, §8.1)
 

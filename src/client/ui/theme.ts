@@ -3,7 +3,7 @@
  *
  * Raw tokens come from the author's tweakcn theme ("Meu tema global"), generated into themeTokens.ts by
  * `npm run theme`. This file maps them to roles:
- * - THEME: shadcn semantic roles, dark mode (olive neutrals fit the zombie / military mood)
+ * - THEME: shadcn semantic roles, dark mode (neutral greys and one steel-blue accent, see PALETTE)
  * - SIDEBAR: the neutral navigation palette (category rails of the backpack, shop and settings)
  * - GAME: game meanings of the chart palette (HP, food, XP, heal, boss/rare, materials, coins)
  * - spacing (space(n) = n x 4), radius (4), borders, typography roles (TYPE) and fonts
@@ -17,27 +17,28 @@
  * Transparency is only used where the UI sits over the game world (TRANSPARENCY, documented below) and for
  * enter/exit fades.
  *
- * PALETTE ("mixed"): near-black body, cold-iron relief. The world is already grey -- asphalt, concrete -- so a
- * mid-grey panel over a mid-grey street disappears and only its outline holds the reading. The body therefore
- * stays almost black (`background` #0E0F11) and separates by darkness, while the RELIEF is cold iron
- * (`border` / `input` / `secondary` #7A8591): a pixel bevel is a stamped metal plate, and a stamped plate is
- * cold, which the old warm olive (#606055 over #10100E) never was.
+ * PALETTE (owner, 2026-09-23, from the reference Wardrobe window: "clean, polished"): NEUTRAL greys with no hue,
+ * in clear steps, and ONE accent. The slate-blue tint every grey used to carry (chroma 0,02 at hue 250), the
+ * shadcn green main action and a saturated tab blue made three families that never matched -- the owner's "looks
+ * AI-made". The steps, darkest first: `background` #141414 (wells, header band), `sidebar` #1A1A1A (panels,
+ * grooves), `window` #262626 (a window's body), `sidebar-accent` #444444 (sections, keys, label cells), `cell`
+ * #565656, `secondary` #727272 (the iron plate: inactive tab, other actions). The accent is the reference's
+ * steel blue #597388, for what is chosen AND the main action. The world is already grey -- asphalt, concrete --
+ * so the body stays dark and separates by darkness; the relief (plate.ts) is the light and dark washes.
  *
  * Labels on plates (DESIGN_RULES UI-04 / UI-05, the owner's rules):
  * - text never carries a contour -- no UIStroke on text, no TextStroke. It reads as ugly, full stop;
- * - a label on a plate is ALWAYS the light `foreground` (#F9FBFE), never the near-black body colour. Dark
+ * - a label on a plate is ALWAYS the light `foreground` (#FAFAFA), never the near-black body colour. Dark
  *   letters on the iron plates were tried and read as disabled buttons;
  * - so the PLATE carries the contrast. Button titles (large, SemiBold/Bold) need 3:1 against it; small text on
  *   a plate (the "Day 1" under PLAY, the subtitles of the menu tiles, key legends) needs 4,5:1. Where the
- *   owner's plate colour did not reach that, the plate was darkened by the smallest step that does, hue and
- *   chroma unchanged:
- *     secondary (iron)  #7A8591 -> #6A7581   3,62:1 -> 4,53:1   (border / input keep #7A8591: no text on them)
- *     primary (green)   #399560 -> #248350   3,59:1 -> 4,57:1   (chart-1 / GAME.success keep #399560: it is
- *                                                                  drawn AS text on the dark body and needs
- *                                                                  the lighter green there)
- *     destructive (red) #EF4444 unchanged    3,63:1             (carries titles only -- Close, Quit -- so 3:1)
- *     tab-active (blue) #4C88BB -> #3C78A9   3,65:1 -> 4,55:1   (a new role, from chart-2; chart-2 / GAME.xp keep
- *                                                                  #4C88BB: drawn AS text on the dark body)
+ *   reference's plate colour did not reach that, the plate was darkened by the smallest step that does:
+ *     secondary (iron)   #767676 -> #727272   4,35:1 -> 4,6:1 under #FAFAFA (the reference's white is #FFFFFF)
+ *     primary / tab-active (steel blue) #597388 as in the reference, 4,9:1
+ *     destructive (red)  #EF4444, NOT the reference's X red #A71000: this token is also the HP bar, the damage
+ *                        text and the penalty rows, which that dark red would drop under 3:1 on the dark body
+ *   chart-1 / GAME.success (#399560) and chart-2 / GAME.xp (#4C88BB) are game colours drawn AS text on the dark
+ *   body; they are not UI roles and did not move.
  * Every ratio here is measured by `npm run test:contrast`, which reads this file's role map, so re-pointing a
  * role moves the test with it; the same test fails if a plate label stops being `foreground`.
  *
@@ -45,7 +46,7 @@
  * - background / foreground: full-screen pages (lobby, shop, settings, credits) and default text
  * - card (+ border, radius): panels and windows (survivor card, backpack, shop cards, menu, game over, HUD)
  * - popover (+ border): dialogs, tutorial, toasts, tooltips, nameplate, round banners
- * - primary (the green): the ONE main action of a screen; secondary (iron): other actions (menu tiles, Back)
+ * - primary (the steel blue): the ONE main action of a screen; secondary (iron): other actions (menu tiles, Back)
  *   and the active tab; destructive (red): dangerous actions and the Close (X) buttons. All three carry
  *   `*-foreground`, which is the light `foreground` (see "Labels on plates" above)
  * - accent: states only (hover / pressed of outline, ghost and inactive tabs; the selected list row).
@@ -82,9 +83,9 @@ export const THEME = {
 	cardForeground: TOKENS.cardForeground,
 	popover: TOKENS.popover,
 	popoverForeground: TOKENS.popoverForeground,
-	/** the main action of a screen, a green relief plate: one step darker than chart-1 so light text reads */
+	/** the main action of a screen: the steel-blue relief plate, the palette's one accent (4,9:1 under the light text) */
 	primary: TOKENS.primary,
-	/** the text on that plate: the light foreground, 4,57:1 (see "Labels on plates" above) */
+	/** the text on that plate: the light foreground, 4,9:1 (see "Labels on plates" above) */
 	primaryForeground: TOKENS.primaryForeground,
 	secondary: TOKENS.secondary,
 	secondaryForeground: TOKENS.secondaryForeground,
@@ -98,8 +99,8 @@ export const THEME = {
 	input: TOKENS.input,
 	ring: TOKENS.ring,
 	/**
-	 * The ACTIVE tab, the chosen segment, the selected rail item and grid tile (UI-07): a blue plate. chart-2's hue
-	 * and chroma, one step darker (#4C88BB -> #3C78A9, 3,65:1 -> 4,55:1) so small text on it also reads (UI-05).
+	 * The ACTIVE tab, the chosen segment, the selected rail item and grid tile (UI-07): the reference's steel-blue
+	 * plate (#597388, 4,9:1 under the light text, so small text on it also reads -- UI-05).
 	 */
 	tabActive: TOKENS.tabActive,
 	/** the text on that plate: the light foreground (UI-05) */
@@ -114,40 +115,40 @@ export const SIDEBAR = SIDEBAR_TOKENS;
  * plates; what holds content (lists, rows, tracks, inactive tabs) is a `well` sunk into it, outlined in `line`.
  */
 export const SURFACE = {
-	/** panel interior (#181A1D) */
+	/** panel interior (#1A1A1A) */
 	panel: SIDEBAR_TOKENS.background,
-	/** thick panel frame and title strips (#3F464D); also the hover fill of recessed controls */
+	/** thick panel frame and title strips (#444444); also the hover fill of recessed controls */
 	frame: SIDEBAR_TOKENS.accent,
 	/**
-	 * face of a KEY (Keycap, the E-prompt Badge): the dark iron (#3F464D, 9,2:1 under `foreground`). Darker
+	 * face of a KEY (Keycap, the E-prompt Badge): the dark iron (#444444, 9,3:1 under `foreground`). Darker
 	 * than every button plate on purpose -- a key legend is information, and must never look clickable.
 	 */
 	key: SIDEBAR_TOKENS.accent,
 	/**
-	 * Outline of a well, of an inactive tab and of a list row (#646D78). This one is iron and not a dark grey
+	 * Outline of a well, of an inactive tab and of a list row (#6B6B6B). This one is iron and not a dark grey
 	 * on purpose: at the old #404040 it measured 1,68:1 against the panel (docs/research/ui.md 6.4), i.e. the
-	 * structure of every window was almost invisible. It now reads 3,3:1 over the panel and 3,7:1 over a well.
+	 * structure of every window was almost invisible. It reads over 3:1 on the panel and on a well (test:contrast).
 	 */
 	line: SIDEBAR_TOKENS.border,
-	/** the recessed fill itself: the darkest token (#0E0F11) */
+	/** the recessed fill itself: the darkest token (#141414) */
 	well: TOKENS.background,
 
 	// ---- the window vocabulary (DESIGN_RULES UI-07), from dark to light, the order of the reference art:
 	/** header band of a window (title, "?", X): the body colour, a shade darker than the window under it */
 	header: TOKENS.background,
 	/**
-	 * body of a modal window (#222427): graphite, one step LIGHTER than the panels, as in the reference -- it is
+	 * body of a modal window (#262626): graphite, one step LIGHTER than the panels, as in the reference -- it is
 	 * what makes the thick frame and the tabs stand off the page. Only as light as `muted-foreground` allows
 	 * (4,54:1 on it); the HUD and the other panels keep `panel`, whose game-colour texts need the darker fill.
 	 */
 	window: TOKENS.window,
-	/** the list inside a section: the gaps between its rows are the grooves (#181A1D) */
+	/** the list inside a section: the gaps between its rows are the grooves (#1A1A1A) */
 	groove: SIDEBAR_TOKENS.background,
-	/** the SECTION plate of a window ("Keybinds"), lighter than the window body (#3F464D, 1,8:1 over the panel) */
+	/** the SECTION plate of a window ("Keybinds"), lighter than the window body (#444444, 1,55:1 over the window) */
 	section: SIDEBAR_TOKENS.accent,
-	/** label cell of a settings row: the darker, left side, with the label centred in it (#3F464D) */
+	/** label cell of a settings row: the darker, left side, with the label centred in it (#444444) */
 	cellLabel: SIDEBAR_TOKENS.accent,
-	/** value cell of a settings row: one step lighter (#4F565E, 1,29:1 over the label cell, like the reference) */
+	/** value cell of a settings row: one step lighter (#565656, over 1,3:1 on the label cell, like the reference) */
 	cell: TOKENS.cell,
 };
 
@@ -249,6 +250,24 @@ export const STAT = {
 	effect: TOKENS.statEffect,
 	/** what the item takes away: rotten meat's health, heavy armour's speed */
 	penalty: TOKENS.destructive,
+};
+
+/**
+ * The fills of the HUD console's three bars (client/ui/hudConsole.ts, DESIGN_RULES UI-09). Each bar carries its value
+ * as a light label centred on it ("HP 88 / 100"), small Bold text, so under UI-05 the FILL owes it 4,5:1 -- the
+ * game colours themselves only reach 3,5-3,7:1 (they were drawn under a 3:1 "large text" rule the old HUD never
+ * met). Each fill is its game colour with the same hue and chroma, darkened by the smallest OKLCH step that passes,
+ * never the text: HP #EF4444 -> #DC2F34 (4,50:1), food #D2691E -> #BD5600 (4,51:1), XP #4C88BB -> #3C78AA (4,54:1).
+ * GAME.hp / food / xp keep the lighter colours, because they are also drawn AS text on the dark body. Measured by
+ * `npm run test:contrast`, with each fill against the dark groove it runs in (3:1, non-text).
+ */
+export const BAR = {
+	/** HP: red, the colour of the survivor's blood (LEG-02) */
+	hp: TOKENS.barHp,
+	/** food: orange */
+	food: TOKENS.barFood,
+	/** XP and level: blue */
+	xp: TOKENS.barXp,
 };
 
 // ---------------------------------------------------------------- spacing & radius

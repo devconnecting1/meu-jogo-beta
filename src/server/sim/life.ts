@@ -30,9 +30,10 @@
  *                   Rebirth. It is never a free revive.
  *   6. THE WORLD WIPE. When nobody is left alive, a WIPE_DECISION_S window opens. If it closes with nobody standing
  *      — or sooner, once every dead survivor has shown they will not pay (New game, Home, leaving the server) —
- *      `onWorldWiped` fires, once. That hook is the ONE place the world's reset to day 1 plugs in (the owner's next
- *      task); until it exists the daybreak wait still stands everybody up, which is also what keeps a server whose
- *      survivors all died from staying sterile for ever (`rebuildClusters` skips the dead).
+ *      `onWorldWiped` fires, once, and the world ENDS (MP-22, the owner's rule of 23 Sep 2026): server/net/mpHost.ts
+ *      has server/sim/worldReset.ts build a new town from a new seed on day 1, and `restartWorld` below hands every
+ *      survivor who fell with the old one a new life in it. A server whose survivors all died therefore never
+ *      stays sterile (`rebuildClusters` skips the dead): it becomes a new world.
  *
  * Pure module: no Instances, no services, no os.clock. server/net/mpHost.ts feeds `step(dt)` from its Heartbeat and
  * maps Players to UserIds; tools/test-body.mjs drives the real host through its remotes.
@@ -41,15 +42,24 @@ import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
-import { PlayerSaveData, SAVE_LIMITS, ownsWeapon } from "shared/game/save";
+import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
 import { daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
-import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, createServerPlayer, findSpawnPoint } from "./players";
+import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import type { ServerSimulation } from "./simulation";
 
-/** §7.2: "O estado de mundo fica 5 min em memória" after a disconnect (seconds) */
+/**
+ * §7.2: "O estado de mundo fica 5 min em memória" after a disconnect (seconds).
+ *
+ * Everything a record holds lives only here, in THIS server's memory, and only this long — the new life a world that
+ * ended owes an absent survivor (MP-22, `newLifeOwed`) included. Known limit, accepted for now (review of de4ba1e,
+ * N3): a survivor who fell with a world, left during its window and comes back after this, or joins ANOTHER server,
+ * finds only their save — dead, the old backpack and life day — and waits for that world's daybreak or pays a
+ * Rebirth, like any other death they carried in. Hopping servers therefore dodges the new life (never a death: the
+ * save still says dead). Closing it needs a world epoch in the save; nothing is persisted for it yet.
+ */
 export const KEEP_AFTER_LEAVE_S = 300;
 /**
  * The owner's rule (23 Sep 2026): once the last living survivor falls, how long the world waits for somebody to
@@ -231,8 +241,8 @@ export interface WipeReport {
 	dead: Array<number>;
 }
 
-/** why a body stood back up */
-export type StandReason = "daybreak" | "rebirth";
+/** why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22) */
+export type StandReason = "daybreak" | "rebirth" | "newWorld";
 
 interface LifeRecord {
 	userId: number;
@@ -258,6 +268,18 @@ interface LifeRecord {
 	entered: boolean;
 	/** what the departure wrote into the save, to tell on reconnect whether the save moved elsewhere meanwhile */
 	banked?: BankedBody;
+	/**
+	 * MP-22: this survivor fell with a world that ended while they were NOT here with a loaded save — away from the
+	 * server, or back and still loading — so the new life everybody else got is owed to them. It is granted the
+	 * first time their loaded save comes back (`recordFor`), and ONLY against a departure it can be checked with:
+	 * the save must still be exactly what their leaving banked (`reconcile`). No departure to compare with, or a
+	 * save that moved on elsewhere meanwhile, and the debt is dropped: that save decides. It lives as long as the
+	 * record does (KEEP_AFTER_LEAVE_S, and see N3 there). Review of f851ad2, B1 and M1: the reset used to write the
+	 * new life into the CLOSED session's table and forget the record, and the fresh load came back with the old
+	 * backpack. Review of de4ba1e, N1: granted without a departure, it reset a REAL save that had never been part
+	 * of this world — a read-only session's death on a blank save became the real save's life day 1.
+	 */
+	newLifeOwed: boolean;
 }
 
 /** the v3 run body as the last departure wrote it (§7.2) */
@@ -269,12 +291,19 @@ interface BankedBody {
 }
 
 export class LifeKeeper {
-	/** rule 6: the world is lost. The ONE place the reset to day 1 plugs in; nothing is reset yet */
+	/** rule 6: the world is lost. The ONE place the reset to day 1 plugs in (server/net/mpHost.ts, MP-22) */
 	onWorldWiped?: (report: WipeReport) => void;
 	/** the server just wrote into this survivor's save (death, stand-up, the body banked): persist it */
 	onSaveChanged?: (userId: number) => void;
 	/** a body stood back up (for the host's log and the tests) */
 	onStandUp?: (sp: ServerPlayer, why: StandReason) => void;
+	/**
+	 * The live, LOADED save of a connected survivor by UserId — the session's (server/net/mpHost.ts) — or undefined
+	 * while it is still loading. Rule 6 counts only survivors whose save is really here: behind a reconnect that is
+	 * still loading there is nothing but the CLOSED session's table (review of f851ad2, B1). Unset (a pure test):
+	 * every record's own last save counts, as before.
+	 */
+	liveSave?: (userId: number) => PlayerSaveData | undefined;
 
 	private readonly sim: ServerSimulation;
 	private readonly wire: LifeWire;
@@ -545,6 +574,172 @@ export class LifeKeeper {
 		this.stepWipe(dt);
 	}
 
+	// ------------------------------------------------------------ the world ends (rule 6, MP-22)
+
+	/**
+	 * Which of `dead` (a WipeReport's) will `restartWorld` give a new life: the ones this keeper still holds, on this
+	 * server. Asked BEFORE the restart, so the clients can be told who they are before the first body stands up.
+	 */
+	fallenOf(dead: ReadonlyArray<number>, saveOf: (userId: number) => PlayerSaveData | undefined): Array<number> {
+		const out = new Array<number>();
+		for (const userId of dead) {
+			const rec = this.records.get(userId);
+			// only a survivor whose LOADED save is here now: anyone else is owed the new life instead (B1)
+			if (rec === undefined || rec.goneFor !== undefined || saveOf(userId) === undefined) continue;
+			if (!out.includes(userId)) out.push(userId);
+		}
+		return out;
+	}
+
+	/**
+	 * MP-22: the world ended, and the simulation already stands in a new town (server/sim/worldReset.ts). No body
+	 * outlives the streets it stood in:
+	 *
+	 *   - `fallen` (from `fallenOf`), the survivors whose deaths ended it and whose loaded save is here, start a NEW
+	 *     LIFE — the reset New game gives (`resetRun`: day 1, the starter kit; level, skills, coins, packs and
+	 *     costumes stay, MP-20) — and are alive again: in the world, a fresh, full body at a safe point of the new
+	 *     town with the 3 s shield (MP-04), the first one anywhere and the rest around them; in the lobby, the next
+	 *     entry builds one. `runRev` moves on, so a report captured in the old life is refused as outdated;
+	 *   - a survivor who fell with this world but is not here with a loaded save — gone from the server during the
+	 *     window, or back and still loading — is OWED that new life (`newLifeOwed`), granted when their save loads if
+	 *     it is still what their departure banked (N1; see `newLifeOwed`, and N3 at KEEP_AFTER_LEAVE_S).
+	 *     Leaving is not a way out of the reset (MP-21: leaving never buys anything a death costs; review M1), and
+	 *     nothing is ever written into a CLOSED session's table (review B1);
+	 *   - anybody else keeps their LIFE but not their body: the spot it stood on belongs to a town that no longer
+	 *     exists, so a kept body goes into the loaded save (or already went into the save it left with) and the next
+	 *     entry rebuilds it (rule 2); one in the world (never the case at a wipe, where nobody is standing) is moved
+	 *     to a safe point as it is. What a departure banked stays, so a reconnect is still reconciled.
+	 *
+	 * `saveOf` is the session's live, loaded save of a connected player (undefined while loading), the table to reset.
+	 *
+	 * Two things a reader should know (review of f851ad2, L6):
+	 *   - the "keeps their life" branch never has a LIVING body to handle at a wipe: a kept body that is alive counts
+	 *     as alive for rule 6 and stops the wipe, so its banking and `moveKept` do not run today. They stay so that
+	 *     `restartWorld` is right for any record whatever calls it, instead of trusting that only a wipe ever will;
+	 *   - after the reset, everybody out of the world (the fallen in the lobby with their new life among them) is
+	 *     `entered = false`, so rule 6 does not count them until they walk into the NEW town. Before the reset, a
+	 *     living survivor in the lobby who had entered the old town held the world up; now a lone survivor who enters
+	 *     the new town and dies ends it, whoever is still in the lobby. Deliberate: nobody is a survivor of a town
+	 *     they have not set foot in (the same as a player who joins and never enters).
+	 */
+	restartWorld(fallen: ReadonlyArray<number>, saveOf: (userId: number) => PlayerSaveData | undefined): void {
+		const owns = serverOwnsLife();
+		const reborn = new Set<number>();
+		for (const userId of fallen) reborn.add(userId);
+		const place = new Array<LifeRecord>();
+		for (const [userId, rec] of this.records) {
+			const save = rec.goneFor === undefined ? saveOf(userId) : undefined;
+			// through `recordFor`, like every other entry point: a save that moved on elsewhere is reconciled first
+			if (save !== undefined) this.recordFor(userId, save);
+			const sp = this.inWorld(rec);
+			// the table the session holds NOW is the one to reset (mpHost's admit pass would adopt it anyway)
+			if (sp !== undefined && save !== undefined) adoptSave(sp, save);
+			if (reborn.has(userId) && save !== undefined) {
+				// the old life's rounds died with it: nothing in the fallen body goes back into the new reserve
+				if (owns && sp !== undefined) sp.state.weapon.ammoCount = 0;
+				this.grantNewLife(rec, save);
+			} else {
+				if (rec.dead && rec.entered && sp === undefined && save === undefined) rec.newLifeOwed = true;
+				// unreachable at a wipe for a living body (L6 above): kept for any other caller. With no loaded save
+				// the body is dropped with nothing written, magazine included (review of de4ba1e, N4): the only save
+				// that can be loading is a reconnect's, whose departure already put the rounds back into it (`bank`),
+				// or a retry's after a read-only session, whose blank table was never anybody's (`forgetUnsaved`)
+				if (sp === undefined && rec.body !== undefined && save !== undefined && owns) {
+					if (!rec.unloaded) unloadMagazine(rec.body, save);
+					if (writeRunBody(save, rec.body)) this.onSaveChanged?.(userId);
+				}
+				rec.body = undefined;
+				rec.unloaded = false;
+			}
+			if (sp !== undefined) place.push(rec);
+			// nobody out of the world has had a body in the NEW world yet (rule 6 counts only those who have)
+			else rec.entered = false;
+		}
+		for (const rec of place) {
+			const sp = this.inWorld(rec);
+			if (sp === undefined) continue;
+			if (reborn.has(rec.userId)) this.standUp(rec, sp, "newWorld");
+			else this.moveKept(rec, sp);
+		}
+		this.wipeIn = undefined;
+		this.wiped = false;
+	}
+
+	/**
+	 * A connected survivor's save has just finished loading (server/main.server.ts, BEFORE its LoadAck goes out):
+	 * the record catches up with it now — the reconcile of a reconnect, and a new life a world owed them (MP-22) —
+	 * so the first save the client sees is already the truth, not a death the server has moved past. Nothing for a
+	 * survivor this server has never seen. Returns whether the save changed.
+	 */
+	adopt(userId: number, save: PlayerSaveData): boolean {
+		if (!this.records.has(userId)) return false;
+		const rev = save.runRev;
+		this.recordFor(userId, save);
+		return save.runRev !== rev;
+	}
+
+	/**
+	 * A session whose save could not be read played on a BLANK table (server/main.server.ts status "error", "Play
+	 * without saving"), and a retry has just loaded the real save. Whatever this record learned from that blank
+	 * table — a body, a death, the declined flag, a new life a world owed — happened to nobody's save: the record is
+	 * dropped, and the real save is met as a first sight (rule 2: dead only if its `runOver` says so, the next body
+	 * built from it). Review of de4ba1e, R3b: that death used to carry over into the real save (the survivor
+	 * entered dead and `runOver` was persisted), and a living blank body into a real save that was dead.
+	 *
+	 * Only a record built on `blank` (a reconnect's record, with its departure banked, is reconciled as usual), and
+	 * only out of the world: the host never runs that retry while the survivor is in it, nor admits them while it
+	 * is pending (server/main.server.ts `loadRequest`). Returns whether the record was dropped.
+	 */
+	forgetUnsaved(userId: number, blank: PlayerSaveData): boolean {
+		const rec = this.records.get(userId);
+		if (rec === undefined || rec.save !== blank || this.inWorld(rec) !== undefined) return false;
+		this.records.delete(userId);
+		return true;
+	}
+
+	/**
+	 * The fallback when `restartWorld` failed part-way (server/sim/worldReset.ts; review of de4ba1e, N2): the new town
+	 * already stands, so no fallen survivor may be left down in it — nobody else could end the window either. Every
+	 * one of `fallen` whose loaded save is here and who is still down gets the new life now, standing at a safe
+	 * point if they are in the world, and rule 6 is armed again. Who already has it is left alone.
+	 */
+	settleFallen(fallen: ReadonlyArray<number>, saveOf: (userId: number) => PlayerSaveData | undefined): void {
+		const owns = serverOwnsLife();
+		for (const userId of fallen) {
+			const rec = this.records.get(userId);
+			const save = saveOf(userId);
+			if (rec === undefined || save === undefined) continue;
+			const sp = this.inWorld(rec);
+			if (sp !== undefined ? !sp.state.dead : !rec.dead) continue;
+			if (sp !== undefined) {
+				adoptSave(sp, save);
+				if (owns) sp.state.weapon.ammoCount = 0;
+			}
+			this.grantNewLife(rec, save);
+			if (sp !== undefined) this.standUp(rec, sp, "newWorld");
+		}
+		this.wipeIn = undefined;
+		this.wiped = false;
+	}
+
+	/** MP-22: the new life a world's end gives (the reset New game gives), and a body that stands up for it */
+	private grantNewLife(rec: LifeRecord, save: PlayerSaveData): void {
+		if (serverOwnsLife()) {
+			resetRun(save);
+			save.runRev = math.min(save.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
+		}
+		rec.save = save;
+		rec.dead = false;
+		rec.downFor = undefined;
+		rec.declined = false;
+		rec.fullNext = true;
+		rec.newLifeOwed = false;
+		rec.body = undefined;
+		rec.unloaded = false;
+		rec.banked = undefined;
+		this.onSaveChanged?.(rec.userId);
+	}
+
 	// ------------------------------------------------------------ internals
 
 	private recordFor(userId: number, save: PlayerSaveData | undefined): LifeRecord {
@@ -560,11 +755,20 @@ export class LifeKeeper {
 				declined: false,
 				unloaded: false,
 				entered: false,
+				newLifeOwed: false,
 				downFor: dead ? daybreakWaitSeconds(this.sim.clock.dayTime) : undefined,
 			};
 			this.records.set(userId, rec);
-		} else if (rec.banked !== undefined && save !== undefined && save !== rec.save) {
-			this.reconcile(rec, save);
+		} else if (save !== undefined && save !== rec.save) {
+			// true only when there IS a departure to compare with and the save is still exactly what it banked
+			const kept = rec.banked !== undefined && this.reconcile(rec, save);
+			if (rec.newLifeOwed) {
+				rec.newLifeOwed = false;
+				// the save they left with, back unchanged: the world that ended while they were away owes them this
+				// life. Anything else — a save that moved on elsewhere, or one no departure of theirs ever banked (a
+				// read-only session's blank table was all this record knew: N1) — decides for itself
+				if (kept && this.inWorld(rec) === undefined) this.grantNewLife(rec, save);
+			}
 		}
 		if (save !== undefined) rec.save = save;
 		return rec;
@@ -574,9 +778,10 @@ export class LifeKeeper {
 	 * A reconnect within the 5 min: the session loaded a NEW save table. If it still holds exactly what the departure
 	 * banked, the kept body is the survivor's. If not, the save moved somewhere else meanwhile — another server hurt
 	 * them, killed them, sold them a Rebirth — and a body kept here would be a heal (or a revive) bought by hopping
-	 * back. The save is the truth then, except that a death on EITHER side stands.
+	 * back. The save is the truth then, except that a death on EITHER side stands. Returns whether the save was
+	 * still exactly what the departure banked.
 	 */
-	private reconcile(rec: LifeRecord, save: PlayerSaveData): void {
+	private reconcile(rec: LifeRecord, save: PlayerSaveData): boolean {
 		const b = rec.banked;
 		rec.banked = undefined;
 		if (
@@ -586,7 +791,7 @@ export class LifeKeeper {
 				b.runOver === save.runOver &&
 				b.runRev === save.runRev)
 		) {
-			return;
+			return true;
 		}
 		rec.body = undefined;
 		rec.unloaded = false;
@@ -599,6 +804,7 @@ export class LifeKeeper {
 		if (dead && !rec.dead) rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
 		if (!dead) rec.downFor = undefined;
 		rec.dead = dead;
+		return false;
 	}
 
 	private inWorld(rec: LifeRecord): ServerPlayer | undefined {
@@ -636,6 +842,22 @@ export class LifeKeeper {
 		});
 		state.x = spot.x;
 		state.y = spot.y;
+	}
+
+	/**
+	 * MP-22, for a body in the world that is NOT starting a new life (a living one; a wipe never has any, since
+	 * nobody is standing when it fires): the same body — hp, hunger, magazine — carried to a safe point of the new
+	 * town, with the shield a newcomer gets there. Nothing about its life changes, so the roster hears nothing.
+	 */
+	private moveKept(rec: LifeRecord, sp: ServerPlayer): void {
+		const sim = this.sim;
+		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
+		sp.state.x = spawn.x;
+		sp.state.y = spawn.y;
+		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
+		if (serverOwnsLife() && rec.save !== undefined && writeRunBody(rec.save, sp.state)) {
+			this.onSaveChanged?.(rec.userId);
+		}
 	}
 
 	/** daybreak or a Rebirth: a fresh, full body at a safe point with the 3 s shield (§7.3), and the roster told */
@@ -688,7 +910,17 @@ export class LifeKeeper {
 			// body in it (a death carried in from another session, asked about from the lobby) never was
 			if (rec.goneFor !== undefined || !rec.entered) continue;
 			const sp = this.inWorld(rec);
-			if (sp !== undefined ? !sp.state.dead : !rec.dead && (rec.body !== undefined || rec.fullNext)) {
+			// a body standing in the street is standing, whatever its save is doing
+			if (sp !== undefined && !sp.state.dead) {
+				alive += 1;
+				continue;
+			}
+			// anybody else whose save is still loading is not counted yet, dead or alive: all that stands behind a
+			// reconnect is the CLOSED session's table (B1), and behind a retry the blank one — the world must not end,
+			// nor reset anybody, on its word, and a body carried dead into a new town must not end it again every
+			// window until the load is done (review of de4ba1e, N4; the host no longer runs a retry in the world)
+			if (this.liveSave !== undefined && this.liveSave(userId) === undefined) continue;
+			if (sp === undefined && !rec.dead && (rec.body !== undefined || rec.fullNext)) {
 				alive += 1;
 				continue;
 			}
