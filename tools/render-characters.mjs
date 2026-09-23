@@ -456,10 +456,10 @@ function findStreet() {
 /** 60 zombies of every type closing in on four survivors with their pets */
 function streetCast(cx, cy) {
 	const survivors = [
-		{ x: cx - 40, y: cy - 30, angle: Math.PI, outfit: OutfitLook.None, weapon: 2, pet: PetLook.Carolina },
-		{ x: cx + 40, y: cy - 30, angle: 0, outfit: OutfitLook.Cowboy, weapon: 10, pet: PetLook.Eagle },
-		{ x: cx - 40, y: cy + 40, angle: 2.4, outfit: OutfitLook.Santa, weapon: 6, pet: PetLook.Malamute },
-		{ x: cx + 40, y: cy + 40, angle: 0.8, outfit: OutfitLook.Zombie, weapon: 13, pet: PetLook.Pigeon },
+		{ x: cx - 70, y: cy - 45, angle: Math.PI + 0.3, outfit: OutfitLook.None, weapon: 2, pet: PetLook.Carolina },
+		{ x: cx + 70, y: cy - 45, angle: -0.3, outfit: OutfitLook.Cowboy, weapon: 10, pet: PetLook.Eagle },
+		{ x: cx - 70, y: cy + 55, angle: 2.4, outfit: OutfitLook.Santa, weapon: 6, pet: PetLook.Malamute },
+		{ x: cx + 70, y: cy + 55, angle: 0.7, outfit: OutfitLook.Zombie, weapon: 13, pet: PetLook.Pigeon },
 	];
 	const zombies = [];
 	let seed = 11;
@@ -470,7 +470,7 @@ function streetCast(cx, cy) {
 	const types = [1, 1, 1, 1, 1, 1, 4, 4, 2, 3, 5, 1];
 	for (let tries = 0; zombies.length < 60 && tries < 5000; tries++) {
 		const a = rnd() * Math.PI * 2;
-		const d = 180 + rnd() * 470;
+		const d = 230 + rnd() * 440;
 		const x = cx + Math.cos(a) * d * 1.3;
 		const y = cy + Math.sin(a) * d * 0.75;
 		if (!surfaceFree(x, y)) continue;
@@ -509,7 +509,8 @@ function drawStreet(hour, fight) {
 		drawZombieAt(st, z, shadow);
 	});
 	cast.survivors.forEach((s, i) => {
-		const heel = s.angle + Math.PI * 0.75;
+		// at the heel, on the outer side of the group
+		const heel = Math.atan2(s.y - c.y, s.x - c.x) + (i % 2 ? 0.6 : -0.6);
 		const flies = petFlies(s.pet);
 		drawPetAt(
 			st,

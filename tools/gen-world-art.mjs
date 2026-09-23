@@ -1330,7 +1330,7 @@ function build() {
 	add_("acUnit", "sprite", acUnit(), "rooftop air conditioner");
 	add_("vent", "sprite", vent(), "roof vent");
 	add_("chimney", "sprite", chimney(), "brick chimney on a house roof");
-	// the survivors, their arms and weapons, the horde and the pets (ART-07..ART-10)
+	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-07..ART-10)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 }
 

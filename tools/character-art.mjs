@@ -1,16 +1,19 @@
 /*
- * The characters' pixel art: survivors (each outfit, walking and downed), their arms and weapons, zombies (each
- * type) and pets, rasterised from tools/character-model.mjs into the sprite sheets laid out by
- * src/client/view/charSheets.ts. Called by tools/gen-world-art.mjs, so the sheets go through the town's pipeline:
- * design/world-art/*.png, the manifest, `npm run cloud -- upload-art`, worldArtAssets.ts.
+ * The characters' pixel art: survivors (each outfit, each grip, walking, swinging and downed, arms baked in), the
+ * weapons in their hands, zombies (each type) and pets, rasterised from tools/character-model.mjs into the sprite
+ * sheets laid out by src/client/view/charSheets.ts. Called by tools/gen-world-art.mjs, so the sheets go through the
+ * town's pipeline: design/world-art/*.png, the manifest, `npm run cloud -- upload-art`, worldArtAssets.ts.
  *
  * Art direction (docs/DESIGN_RULES.md ART-07..ART-10), the town's rules applied to bodies:
  *   - 4 world units per texel (the survivor is 9 texels across the shoulders), nearest-neighbour, no anti-aliasing;
  *   - every heading pre-drawn (CHAR_DIRS columns), so a sprite is never rotated on screen: its texels stay square
  *     with the town's and the light stays where the town's is, the top left of the screen (ART-02);
- *   - a one-texel near-black outline round the silhouette (LEG-03), a one-texel shadow cast down-right by whatever
- *     stands higher (a head on the shoulders, a pack on the back);
- *   - three-step ramps per part (charRamp: cool shadows, warm lights) lit as domes and pillows; no random noise.
+ *   - a one-texel near-black outline round the silhouette (LEG-03) -- only on the shadow side for the weapons, so a
+ *     blade stays one texel of steel --, a dark line round a head or a hat where it lies over the body (`ring`, the
+ *     selective outline), a one-texel shadow cast down-right by whatever stands higher (a head on the shoulders,
+ *     a pack on the back);
+ *   - three- and four-step ramps per part (charRamp: cool shadows, warm lights) lit as domes and pillows; a clean-up
+ *     pass that fixes what tracing leaves on a small grid (specks, notches, spurs); no random noise.
  *
  *   import { characterArt } from "./character-art.mjs";
  *   for (const t of characterArt(Tex)) textures.push(t);   // { name, kind, tex, description }

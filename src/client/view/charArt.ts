@@ -12,14 +12,15 @@
  *
  * WHAT IT COSTS. One Frame + ImageLabel per layer, from the renderer's pool: a zombie is ONE sprite (plus its round
  * shadow), a pet one, a survivor two -- the whole body with its arms baked per grip, and the weapon under it. The
- * flat drawing it replaces spent 5-7 Frames on a zombie and 8-14 on a survivor. A hit or the exploder's fuse adds the two masks while it lasts: Fill
- * (the silhouette, tinted with the flash colour at the flash's strength) and Rim (the outline, tinted with the
- * outline colour of the flat drawing). Nothing here allocates: one scratch SpriteOpts, colours built once.
+ * flat drawing it replaces spent 5-7 Frames on a zombie and 8-14 on a survivor. A hit or the exploder's fuse adds
+ * the two masks while it lasts: Fill (the silhouette, tinted with the flash colour at the flash's strength) and Rim
+ * (the outline, tinted with the outline colour of the flat drawing). Nothing here allocates: one scratch SpriteOpts,
+ * colours built once (tools/test-world-art.mjs §8 measures a horde of 60, flat against art).
  *
  * WITHOUT IDS, NOTHING CHANGES (ART-01). Each group only draws when every sheet it needs has an asset id (survivors:
- * both outfit sheets, their masks and the weapons; zombies: sheet and masks; dogs; birds); otherwise these functions answer false and
- * the caller draws the flat look it always drew, with the same calls. So the game is unchanged until the owner's
- * next `npm run cloud -- upload-art`, and a half-finished upload shows only the groups that are complete.
+ * both outfit sheets, their masks and the weapons; zombies: sheet and masks; dogs; birds); otherwise these functions
+ * answer false and the caller draws the flat look it always drew, with the same calls. So the game is unchanged
+ * until the owner's next `npm run cloud -- upload-art`, and a half-finished upload shows only the complete groups.
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS } from "shared/engine/colors";
