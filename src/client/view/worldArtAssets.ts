@@ -83,7 +83,17 @@ export type WorldArtName =
 	| "pump"
 	| "acUnit"
 	| "vent"
-	| "chimney";
+	| "chimney"
+	| "survivors"
+	| "survivorsFill"
+	| "survivorsRim"
+	| "arms"
+	| "weapons"
+	| "zombies"
+	| "zombiesFill"
+	| "zombiesRim"
+	| "dogs"
+	| "birds";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -222,6 +232,26 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
+	/** sheet: survivors: 4 outfits x 5 strides, then the downed crawl (ART-08) */
+	survivors: { id: "", w: 640, h: 640 },
+	/** mask: survivors: white silhouettes of the walking cells (tint: hit flash, poison) */
+	survivorsFill: { id: "", w: 640, h: 400 },
+	/** mask: survivors: white outlines of the walking cells (tint: the red hit outline, LEG-02) */
+	survivorsRim: { id: "", w: 640, h: 400 },
+	/** sheet: survivors' arms, shoulder to hand, per outfit x 9 lengths (placed on the weapon's grip) */
+	arms: { id: "", w: 576, h: 648 },
+	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows */
+	weapons: { id: "", w: 768, h: 840 },
+	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 5 strides; spitter wind-ups, jumper in the air, charger charging (ART-09) */
+	zombies: { id: "", w: 768, h: 792 },
+	/** mask: zombies: white silhouettes of the same cells (tint: hit flash, lit fuse) */
+	zombiesFill: { id: "", w: 768, h: 792 },
+	/** mask: zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow) */
+	zombiesRim: { id: "", w: 768, h: 792 },
+	/** sheet: pets: Carolina, Malamute, Doberman x 5 trot strides + 3 tail wags (ART-10) */
+	dogs: { id: "", w: 576, h: 432 },
+	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-10) */
+	birds: { id: "", w: 768, h: 360 },
 };
 
 /** every texture of the world art, for the preload pass */
@@ -294,4 +324,14 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
+	"survivors",
+	"survivorsFill",
+	"survivorsRim",
+	"arms",
+	"weapons",
+	"zombies",
+	"zombiesFill",
+	"zombiesRim",
+	"dogs",
+	"birds",
 ];
