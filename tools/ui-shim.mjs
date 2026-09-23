@@ -622,7 +622,8 @@ function install(options) {
 			s.IsServer = () => false;
 		} else if (name === "Players") {
 			const player = makeInstance("Player", false);
-			Object.assign(player, { Name: "Tester", UserId: 1 });
+			// DisplayName: the wardrobe's Titles tab previews the player's own nameplate (MON-05)
+			Object.assign(player, { Name: "Tester", DisplayName: "Tester", UserId: 1 });
 			const playerGui = makeInstance("PlayerGui", false);
 			playerGui.Name = "PlayerGui";
 			playerGui.Parent = player;

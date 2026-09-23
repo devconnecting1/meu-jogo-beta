@@ -273,6 +273,28 @@ const PAIRS = [
 	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "sulco entre duas linhas contra a celula de rotulo"],
 	["SURFACE.cell", "SURFACE.cellLabel", MIN_TONE, "celula de valor x celula de rotulo (dois tons da mesma linha)"],
 
+	// --- the form pieces of the kit (UI-07, window.ts): the form row, the Switch, the stacked radio group ---
+	[
+		"SURFACE.cellCaption",
+		"SURFACE.cellLabel",
+		MIN_TEXT,
+		"linha de formulario / opcao de radio: a descricao sob o rotulo, na celula de rotulo",
+	],
+	["THEME.foreground", "SURFACE.cellLabel", MIN_TEXT, "linha de formulario / opcao de radio: o rotulo Bold"],
+	["SURFACE.well", "SURFACE.cell", MIN_RELIEF, "Switch: o sulco escuro sobre a celula de valor"],
+	["THEME.tabActive", "SURFACE.well", MIN_UI, "Switch: o aco-azul de ligado dentro do sulco"],
+	["THEME.secondary", "SURFACE.well", MIN_UI, "Switch: o pino de ferro contra o sulco"],
+	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, 'Switch: a legenda "On" sobre o azul'],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, 'Switch: a legenda "Off" sobre o sulco'],
+	["THEME.ring", "SURFACE.cell", MIN_UI, "Switch: o anel de foco na borda do sulco, sobre a celula de valor"],
+	["SURFACE.well", "SURFACE.cellLabel", MIN_RELIEF, "radio: o soquete escuro na opcao"],
+	["THEME.tabActive", "SURFACE.well", MIN_UI, "radio: o ponto azul da opcao escolhida, no soquete"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "radio: a borda azul da opcao escolhida sobre o leito"],
+	["THEME.ring", "SURFACE.groove", MIN_UI, "radio: a borda de foco (controle / teclado) sobre o leito"],
+	["THEME.secondary", "SURFACE.groove", MIN_UI, "radio: a borda de ferro sob o ponteiro"],
+	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "radio: a opcao sobre o leito escuro"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "Controls: a nota do dispositivo no leito sob o radio"],
+
 	// --- the item card (UI-08, client/ui/itemCard.ts): a popover Card, so its body is SURFACE.panel; every voice is
 	// small text there (a stat value is TEXT.base, the notes TEXT.sm), so 4,5:1 -- the skin only darkens the panel
 	["STAT.value", "SURFACE.panel", MIN_TEXT, "cartao de item: numeros em amarelo (dano, recarga, alcance)"],
@@ -395,6 +417,12 @@ const PAIRS = [
  */
 const RECORDED_FAILS = [
 	["GAME.success", "SURFACE.row", MIN_TEXT, "MON-05: o verde pedido para [Survivor] na linha -> STAT.bonus"],
+	[
+		"THEME.mutedForeground",
+		"SURFACE.cellLabel",
+		MIN_TEXT,
+		"UI-07: o cinza mudo na celula de rotulo (a descricao da linha de formulario) -> SURFACE.cellCaption",
+	],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */

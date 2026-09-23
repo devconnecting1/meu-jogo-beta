@@ -208,6 +208,9 @@ export class TownFlyover {
 		layer.BorderSizePixel = 0;
 		layer.ClipsDescendants = true;
 		layer.Active = false;
+		// it lives in the UI layer, under every menu screen, but it is not a screen: the interface audio must not hear
+		// it open or close (client/audio/uiAudio.ts), nor count it as a menu still open
+		layer.SetAttribute("Backdrop", true);
 		this.layer = layer;
 		this.renderer = new Renderer(layer, "Town");
 		this.renderer.layer.ZIndex = Z_TOWN;

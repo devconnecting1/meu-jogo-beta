@@ -297,7 +297,12 @@ export class Backpack {
 		this.tip = undefined;
 		this.hoverTile = undefined;
 		this.headerSig = "";
-		const at: W.DesignRect = { x: (W.DESIGN_W - WIN_W) / 2, y: math.floor((W.DESIGN_H - WIN_H) / 2), w: WIN_W, h: WIN_H };
+		const at: W.DesignRect = {
+			x: (W.DESIGN_W - WIN_W) / 2,
+			y: math.floor((W.DESIGN_H - WIN_H) / 2),
+			w: WIN_W,
+			h: WIN_H,
+		};
 		const screen = W.makeScreen(this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
 			transparency: TRANSPARENCY.overWorld,

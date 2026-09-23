@@ -34,7 +34,15 @@
  *   5. OVER A RUN      Settings opened from the in-run menu shows the WORLD: the see-through scrim of every screen over
  *                      a run (UI-06), under the damage flash, no town flyover, no credits page; a popup over a run
  *                      dims the street instead of hiding it. Source guards: main.client.ts opens it over the run and
- *                      back to the menu, and every menu screen pins the flyover.
+ *                      back to the menu (remounting the HUD when its size changed there), and every menu screen pins
+ *                      the flyover.
+ *   6. THE FORM        Settings as a form in the window kit (UI-07, the owner's "Retomar com Forms"): one window size on
+ *                      every tab with no band of empty window under General; every row that changes something is a form
+ *                      row (label + one muted line); no label or description clips on any of the six screens; the
+ *                      Switch flips its save field by click and by the pad's left / right, with the focus ring, and
+ *                      creates no Instance (nor does the touch preview it redraws); the Controls radio group; each
+ *                      tab's Defaults asks first and resets only its fields to defaultSettings(); no Save / Cancel. And
+ *                      the interface audio does not take the town under the menus for a screen.
  *
  * Pure Node (>= 18) plus the project's TypeScript. No layout engine: the rects are computed here from the Scale /
  * Offset / AnchorPoint / aspect the kit writes, the way the engine does.
@@ -615,6 +623,352 @@ setScreen(1365, 567, 58, 160);
 	flush();
 }
 
+// ================================================================ 6. Settings as a form, in our plates (UI-07)
+
+console.log("\n6) a Settings como formulario no nosso desenho: linhas com descricao, Switch, radio, Defaults\n");
+
+ctx.phase = "lobby";
+const { defaultSettings } = require(join(SRC, "shared/game/save.ts"));
+const { SURFACE } = require(join(SRC, "client/ui/theme.ts"));
+const UIS = service("UserInputService");
+const settingsRoot = () => layer.FindFirstChild("Settings");
+const findIn = (root, name, cls) =>
+	root?.GetDescendants().find(d => d.Name === name && (cls === undefined || d.ClassName === cls));
+const openTab = i => {
+	findIn(settingsRoot(), "Tabs").FindFirstChild(`Tab${i}`).Activated.Fire();
+	flush();
+};
+const shownIn = (g, root) => {
+	for (let p = g; p !== undefined && p !== root; p = p.Parent) if (p.IsA("GuiObject") && !p.Visible) return false;
+	return true;
+};
+
+/**
+ * Does `label` show its text whole? TextScaled picks a size between the constraint's min and max; the text fits if
+ * at some size in that range it stays inside its box -- on one line when it does not wrap. The width is estimated
+ * from the character count at 0,55 em (regular) / 0,6 em (bold): wider than the game's font, so the check is strict.
+ */
+function textFits(label) {
+	const r = rectOf(label);
+	const c = label.FindFirstChildOfClass("UITextSizeConstraint");
+	const max = c?.MaxTextSize ?? label.TextSize;
+	const min = c?.MinTextSize ?? max;
+	const bold = /Bold|Heavy|Black/.test(label.FontFace?.Weight?.Name ?? "");
+	const chars = Array.from(String(label.Text)).length;
+	for (let size = max; size >= min - 1e-9; size -= 0.5) {
+		const w = chars * size * (bold ? 0.6 : 0.55);
+		if (!label.TextWrapped && w > r.w + 0.5) continue;
+		const lines = label.TextWrapped ? Math.max(1, Math.ceil((w * 1.1) / r.w)) : 1;
+		if (lines * size <= r.h + 0.5) return { ok: true, size };
+	}
+	return { ok: false, detail: `"${label.Text}" ${chars} chars, ${min}-${max} px in ${px(r.w)}x${px(r.h)}` };
+}
+
+{
+	// ---- fixed window, and no band of empty window under General's sections
+	setScreen(1120, 630);
+	const close = showSettings(
+		ctx,
+		() => {},
+		() => {},
+	);
+	flush();
+	const winFrame = () => settingsRoot().FindFirstChild("Body").FindFirstChild("Window");
+	const win0 = rectOf(winFrame());
+	const sectionsBottom = names =>
+		Math.max(...names.map(n => rectOf(findIn(settingsRoot(), n)).y + rectOf(findIn(settingsRoot(), n)).h));
+	// at 1120 x 630 without a bar a design unit is a pixel: the window's bottom padding is space(5) = 20
+	const bottom = win0.y + win0.h - 20;
+	const generalBand = bottom - sectionsBottom(["Audio", "Interface"]);
+	openTab(1);
+	const touchBand = bottom - sectionsBottom(["Page1"]);
+	check(
+		"a janela nao muda de tamanho entre as abas, e General e Touch enchem a pagina (sem faixa vazia embaixo)",
+		JSON.stringify(rectOf(winFrame())) === JSON.stringify(win0) && generalBand <= 8 && touchBand <= 8,
+		`faixa: General ${px(generalBand)}, Touch ${px(touchBand)} unidades (antes: General 80)`,
+	);
+
+	// ---- every row that changes something is a form row: label + one muted line, in the label cell
+	const formRows = [];
+	for (const tab of [0, 1]) {
+		openTab(tab);
+		for (const d of settingsRoot().GetDescendants()) {
+			if (
+				d.Name !== "Description" ||
+				!shownIn(d, settingsRoot()) ||
+				d.Parent.FindFirstChild("SegLabelC") === undefined
+			)
+				continue;
+			formRows.push(d);
+		}
+	}
+	const rowNames = formRows.map(d => d.Parent.Name);
+	const wanted = [
+		"Sfx",
+		"Bgm",
+		"UiSize",
+		"Motion",
+		"Defaults",
+		"LeftSize",
+		"LeftPos",
+		"RightSize",
+		"RightPos",
+		"Relative",
+		"Mirror",
+	];
+	check(
+		"General e Touch: toda linha e uma linha de formulario (rotulo + descricao), com Defaults no fim de cada aba",
+		wanted.every(n => rowNames.includes(n)) && rowNames.filter(n => n === "Defaults").length === 2,
+		rowNames.join(", "),
+	);
+	check(
+		"...a descricao e uma linha so (nao quebra), em SURFACE.cellCaption, sob o rotulo claro e Bold alinhado a esquerda",
+		formRows.every(
+			d =>
+				d.TextWrapped === false &&
+				sameColor(d.TextColor3, SURFACE.cellCaption) &&
+				sameColor(d.Parent.FindFirstChild("Label").TextColor3, THEME.foreground) &&
+				d.Parent.FindFirstChild("Label").TextXAlignment === Enum.TextXAlignment.Left,
+		),
+	);
+
+	// ---- nothing clips, on any screen: every row label, description, legend and note of every tab
+	for (const [w, h, bar, buttons, label] of SCREENS) {
+		setScreen(w, h, bar, buttons);
+		const bad = [];
+		let seen = 0;
+		for (let tab = 0; tab < 4; tab++) {
+			openTab(tab);
+			for (const d of settingsRoot().GetDescendants()) {
+				// a key's legend is drawn at its size and the KEY grows to fit it (Keycap): nothing there can clip
+				if (d.ClassName !== "TextLabel" || d.Text === "" || !d.TextScaled || !shownIn(d, settingsRoot()))
+					continue;
+				if (!["Label", "Description", "Legend", "Note", "Text", "Title"].includes(d.Name)) continue;
+				seen++;
+				const fit = textFits(d);
+				if (!fit.ok) bad.push(`aba ${tab} ${d.Parent.Name}.${d.Name}: ${fit.detail}`);
+			}
+		}
+		check(
+			`${label}: todo rotulo e descricao cabem, sem cortar (${seen} textos nas 4 abas)`,
+			bad.length === 0,
+			bad.join("; "),
+		);
+	}
+	setScreen(1365, 567, 58, 160);
+
+	// ---- the Switch: the boolean it stands for, flipped by every input, and nothing built
+	openTab(1);
+	const mirror = settingsRoot()
+		.GetDescendants()
+		.find(d => d.Name === "Mirror" && d.ClassName === "TextButton");
+	const floating = settingsRoot()
+		.GetDescendants()
+		.find(d => d.Name === "Relative" && d.ClassName === "TextButton");
+	const knobX = sw => sw.FindFirstChild("Inner").FindFirstChild("Knob").Position.X.Scale;
+	check(
+		"Switch: Selectable, com o anel de foco do kit, e esquerda / direita ficam nele (como no Slider)",
+		mirror !== undefined &&
+			mirror.Selectable === true &&
+			mirror.SelectionImageObject !== undefined &&
+			mirror.SelectionBehaviorLeft === Enum.SelectionBehavior.Stop &&
+			mirror.SelectionBehaviorRight === Enum.SelectionBehavior.Stop,
+	);
+	const s = ctx.save.settings;
+	s.mirror = false;
+	const stickX = () => rectOf(findIn(settingsRoot(), "Stick")).x;
+	const stickBefore = stickX();
+	let r = measure(() => mirror.Activated.Fire());
+	check(
+		"clique / toque / A do controle: Left-handed liga -- o campo do save muda, o botao desliza para a direita, e o preview troca o lado do analogico",
+		s.mirror === true && knobX(mirror) > 0.5 && stickX() > stickBefore,
+		`mirror ${s.mirror}, pino ${knobX(mirror).toFixed(2)}, analogico ${px(stickBefore)} -> ${px(stickX())}`,
+	);
+	check(
+		"...sem criar nem destruir Instance (o preview e um pool)",
+		r.created === 0 && r.destroyed === 0,
+		`${r.created} / ${r.destroyed}`,
+	);
+	r = measure(() => {
+		mirror.Activated.Fire();
+		floating.Activated.Fire();
+		floating.Activated.Fire();
+	});
+	check(
+		"...e desliga de volta; Floating stick liga e desliga o seu (leftRelative), sem Instance",
+		s.mirror === false && s.leftRelative === true && knobX(mirror) === 0 && r.created === 0 && r.destroyed === 0,
+		`mirror ${s.mirror}, leftRelative ${s.leftRelative}, ${r.created} criadas`,
+	);
+	// the pad: the focus ring on the groove's edge, left / right set it
+	r = measure(() => {
+		GuiService.SelectedObject = mirror;
+		flush();
+		UIS.InputBegan.Fire({ UserInputType: Enum.UserInputType.Gamepad1, KeyCode: Enum.KeyCode.DPadRight }, false);
+		flush();
+	});
+	const ringOn = sameColor(mirror.FindFirstChild("PlateBand").BackgroundColor3, THEME.ring);
+	const afterRight = s.mirror;
+	UIS.InputBegan.Fire({ UserInputType: Enum.UserInputType.Gamepad1, KeyCode: Enum.KeyCode.DPadLeft }, false);
+	flush();
+	check(
+		"controle: com o foco, o sulco ganha o anel; direita liga, esquerda desliga -- sem Instance",
+		ringOn && afterRight === true && s.mirror === false && r.created === 0,
+		`anel ${ringOn}, direita -> ${afterRight}, esquerda -> ${s.mirror}, ${r.created} criadas`,
+	);
+	GuiService.SelectedObject = undefined;
+	flush();
+	check(
+		'...legenda: "On" clara sobre o azul, "Off" muda sobre o escuro (o estado nao depende so da cor)',
+		floating.FindFirstChild("Inner").FindFirstChild("Legend").Text === "On" &&
+			floating.FindFirstChild("Inner").FindFirstChild("Fill").Visible === true &&
+			mirror.FindFirstChild("Inner").FindFirstChild("Legend").Text === "Off" &&
+			mirror.FindFirstChild("Inner").FindFirstChild("Fill").Visible === false,
+	);
+
+	// ---- Defaults: asks with the kit's popup, then puts THAT tab's fields back to defaultSettings()
+	const d0 = defaultSettings();
+	s.leftSize = 0.9;
+	s.rightPos = 0.1;
+	s.mirror = true;
+	s.leftRelative = false;
+	s.soundEffect = 0.2;
+	const touchReset = findIn(findIn(findIn(settingsRoot(), "Page1"), "Defaults"), "Action");
+	touchReset.Activated.Fire();
+	flush();
+	let pop = layer.FindFirstChild("PopupOverlay");
+	check(
+		"Defaults (Touch) pergunta antes, com o popup do kit",
+		pop !== undefined && findIn(pop, "PopupBtn1") !== undefined,
+	);
+	findIn(pop, "PopupBtn0").Activated.Fire();
+	flush();
+	check(
+		"...Cancel nao muda nada",
+		s.leftSize === 0.9 && s.mirror === true && layer.FindFirstChild("PopupOverlay") === undefined,
+	);
+	touchReset.Activated.Fire();
+	flush();
+	pop = layer.FindFirstChild("PopupOverlay");
+	r = measure(() => findIn(pop, "PopupBtn1").Activated.Fire());
+	check(
+		"...Reset poe os seis campos de Touch em defaultSettings(), redesenha os controles, e nao toca no SFX (outra aba)",
+		s.leftSize === d0.leftSize &&
+			s.rightPos === d0.rightPos &&
+			s.mirror === d0.mirror &&
+			s.leftRelative === d0.leftRelative &&
+			knobX(mirror) === 0 &&
+			knobX(floating) > 0.5 &&
+			s.soundEffect === 0.2,
+		`leftSize ${s.leftSize}, mirror ${s.mirror}, leftRelative ${s.leftRelative}, sfx ${s.soundEffect}`,
+	);
+	openTab(0);
+	s.uiSize = 1;
+	s.bgm = 0;
+	findIn(findIn(settingsRoot(), "Interface"), "Action").Activated.Fire();
+	flush();
+	findIn(layer.FindFirstChild("PopupOverlay"), "PopupBtn1").Activated.Fire();
+	flush();
+	const keyText = name => findIn(findIn(settingsRoot(), name), "Legend").Text;
+	check(
+		"Defaults (General): SFX, BGM e HUD size de volta a defaultSettings(), e as teclas mostram 50%",
+		s.soundEffect === d0.soundEffect &&
+			s.bgm === d0.bgm &&
+			s.uiSize === d0.uiSize &&
+			keyText("SfxValue") === "50%" &&
+			keyText("UiSizeValue") === "50%",
+		`${s.soundEffect} / ${s.bgm} / ${s.uiSize}: ${keyText("SfxValue")}`,
+	);
+	check(
+		"Reduce motion: a configuracao do Roblox numa tecla (informacao, nao controle), acompanhando-a ao vivo",
+		(() => {
+			const before = keyText("Motion");
+			GuiService.ReducedMotionEnabled = true;
+			flush();
+			const on = keyText("Motion");
+			GuiService.ReducedMotionEnabled = false;
+			flush();
+			return before === "Off" && on === "On" && keyText("Motion") === "Off";
+		})(),
+	);
+	check(
+		"sem rodape Save / Cancel e sem estado sujo: a janela aplica ao vivo (UI-07)",
+		!settingsRoot()
+			.GetDescendants()
+			.some(d => d.ClassName === "TextButton" && ["Save", "Cancel", "Apply", "Discard"].includes(d.Text)),
+	);
+
+	// ---- the radio group (Controls): which device's keys, each option with its line
+	openTab(2);
+	const radio = findIn(settingsRoot(), "Schemes");
+	const options = radio.GetChildren().filter(c => c.ClassName === "TextButton");
+	check(
+		"Controls: um grupo de radio empilhado, uma opcao por esquema, cada uma com rotulo e descricao, selecionaveis",
+		options.length === 3 &&
+			options.every(o => o.Selectable && o.FindFirstChild("Label") && o.FindFirstChild("Description")),
+	);
+	const listShown = () =>
+		[0, 1, 2].filter(i => findIn(findIn(settingsRoot(), "Keys"), `List${i}`).Visible).map(i => i);
+	r = measure(() => {
+		options[2].Activated.Fire();
+		GuiService.SelectedObject = options[1];
+		flush();
+		GuiService.SelectedObject = undefined;
+		flush();
+	});
+	const keysTitle = findIn(settingsRoot(), "Keys").FindFirstChild("Title").Text;
+	check(
+		"...escolher Gamepad mostra as teclas dele, o titulo e a nota dele, e acende o ponto azul -- sem Instance",
+		listShown().join() === "2" &&
+			keysTitle === "Gamepad" &&
+			findIn(settingsRoot(), "Note", "TextLabel").Text.startsWith("Menus are navigated") &&
+			options[2].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
+			!options[0].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
+			r.created === 0,
+		`listas ${listShown()}, titulo ${keysTitle}, ${r.created} criadas`,
+	);
+	const rowsFit = [0, 1, 2].every(i => {
+		const list = findIn(findIn(settingsRoot(), "Keys"), `List${i}`);
+		const sf =
+			list.FindFirstChildOfClass("ScrollingFrame") ??
+			list.GetDescendants().find(d => d.ClassName === "ScrollingFrame");
+		const rows = sf.GetChildren().filter(c => c.IsA("GuiObject"));
+		const need = rows.reduce((a, c) => a + rectOf(c).h, 0);
+		return need <= rectOf(sf).h + 1;
+	});
+	check("...e as teclas de cada esquema cabem sem rolar (Touch tem nove linhas)", rowsFit);
+	close();
+	flush();
+}
+
+// the town under the menus is not a screen: the interface audio neither hears it open nor counts it as a menu left open
+{
+	const { audio } = require(join(SRC, "client/audio/audio.ts"));
+	const played = [];
+	audio.play = name => played.push(name);
+	const { startUiAudio } = require(join(SRC, "client/audio/uiAudio.ts"));
+	startUiAudio(ctx);
+	ctx.phase = "lobby";
+	Fly.pinFlyover(layer, SEED);
+	flush();
+	const onPin = [...played];
+	played.length = 0;
+	const close = showSettings(
+		ctx,
+		() => {},
+		() => {},
+	);
+	flush();
+	close();
+	flush();
+	check(
+		"audio da interface: prender a cidade nao toca 'abrir'; fechar a ultima tela toca 'fechar' com a cidade ainda atras",
+		onPin.length === 0 && played.includes("uiOpen") && played.includes("uiClose"),
+		`ao prender: [${onPin}], Settings: [${played}]`,
+	);
+	Fly.releaseFlyover();
+	flush();
+}
+
 // source guards: what main.client.ts does (it does not load under Node)
 {
 	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
@@ -641,6 +995,12 @@ setScreen(1365, 567, 58, 160);
 			/showSettings\(\s*ctx,[\s\S]*?true,?\s*\)/.test(fn("settingsOverRun")) &&
 			!/stopGame\(/.test(fn("settingsOverRun")) &&
 			/openPause\(\)/.test(fn("settingsOverRun")),
+	);
+	check(
+		"...e um HUD size mudado ali vale ao fechar (a HUD le o tamanho ao montar: e remontada), nao so na proxima partida",
+		/uiSize/.test(fn("settingsOverRun")) &&
+			/hud\.unmount\(\)/.test(fn("settingsOverRun")) &&
+			/hud\.mount\(\)/.test(fn("settingsOverRun")),
 	);
 	const lobbySrc = readFileSync(join(SRC, "client/ui/lobby.ts"), "utf8");
 	check("lobby.ts: fechar o lobby nao tira o voo (so a partida o solta)", !/detachFlyover\(/.test(lobbySrc));

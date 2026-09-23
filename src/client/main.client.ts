@@ -426,10 +426,13 @@ function openCredits(): void {
  * keeps moving behind its see-through scrim, the survivor stands held, the red flash warns of a hit -- and its X goes
  * back to that menu. It used to leave the world and draw an opaque page (and its X dropped the player in the lobby).
  * No credits row there: that page is text straight on the screen, which a bright street would wash out.
+ * The HUD reads its size when it mounts, so a HUD size changed here remounts it on the way out: a setting applies
+ * when it is changed, not at the next run.
  */
 function settingsOverRun(): void {
 	closePause();
-	pauseCleanup = showSettings(
+	const hudSize = ctx.save.settings.uiSize;
+	const close = showSettings(
 		ctx,
 		() => {
 			closePause();
@@ -438,6 +441,12 @@ function settingsOverRun(): void {
 		undefined,
 		true,
 	);
+	pauseCleanup = () => {
+		close();
+		if (ctx.save.settings.uiSize === hudSize || heartbeat === undefined) return;
+		hud.unmount();
+		hud.mount();
+	};
 }
 
 function openTutorial(thenPlay: boolean): void {
