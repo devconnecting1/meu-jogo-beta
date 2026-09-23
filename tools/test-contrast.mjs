@@ -9,7 +9,10 @@
  * A palette has no compiler: the next theme regeneration can quietly undo it. So the ratios are a test.
  *
  * The owner's rules for text (docs/DESIGN_RULES.md UI-04 / UI-05), which this file enforces:
- *  1. text NEVER carries a contour: no UIStroke on a TextLabel / TextButton / TextBox, no TextStroke;
+ *  1. text NEVER carries a contour: no UIStroke on a TextLabel / TextButton / TextBox, no TextStroke. The one effect
+ *     allowed is the pixel DROP SHADOW of text drawn straight over the world (the nameplate), and only through the
+ *     kit's skin.ts textShadow, whose shape (one copy, one pixel down-right, under the letter) is checked here; its
+ *     colours against the real grounds are test:world-art's section 8;
  *  2. a label on a plate (button, active tab, key) is the LIGHT `foreground`, never the near-black body;
  *  3. so the PLATE carries the contrast: a button title (large, SemiBold/Bold) needs 3:1 against its plate,
  *     small text on a plate ("Day 1" under PLAY, the menu-tile subtitles, key legends) needs 4,5:1.
@@ -176,7 +179,7 @@ const PAIRS = [
 	// --- text on the dark body ---
 	["THEME.foreground", "THEME.background", MIN_TEXT, "texto das paginas cheias (lobby, loja, ajustes)"],
 	["THEME.cardForeground", "THEME.card", MIN_TEXT, "texto de card"],
-	["THEME.popoverForeground", "THEME.popover", MIN_TEXT, "texto de dialogo, toast, tutorial, nameplate"],
+	["THEME.popoverForeground", "THEME.popover", MIN_TEXT, "texto de dialogo, toast, tutorial"],
 	["THEME.foreground", "SURFACE.panel", MIN_TEXT, "texto sobre o interior de um painel"],
 	["THEME.foreground", "SURFACE.well", MIN_TEXT, "texto dentro de um well (listas, trilhos, barras)"],
 	["THEME.foreground", "SURFACE.frame", MIN_TEXT, "titulo na faixa do painel"],
@@ -347,7 +350,12 @@ const PAIRS = [
 	["BAR.xp", "SURFACE.groove", MIN_UI, "console: preenchimento de XP contra o sulco"],
 	// the grooves sit in SECTION plates, never straight on the graphite body (the groove there would be 1,12:1 and
 	// the empty part of a bar would vanish): body -> section -> groove, as in the Settings window
-	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "console: secoes (vitais, armas, arma na mao) sobre o corpo"],
+	[
+		"SURFACE.section",
+		"SURFACE.window",
+		MIN_RELIEF,
+		"console: secoes (ceu, vitais, armas, arma na mao) sobre o corpo",
+	],
 	["SURFACE.groove", "SURFACE.section", MIN_RELIEF, "console: sulco das barras e leito da hotbar dentro da secao"],
 	["THEME.secondary", "SURFACE.window", MIN_UI, "console: chapas Bag / Menu sobre o corpo, embaixo da hotbar"],
 	["THEME.tabActive", "SURFACE.groove", MIN_UI, "hotbar: a arma na mao (azul em relevo) sobre o leito"],
@@ -359,13 +367,22 @@ const PAIRS = [
 	["STAT.penalty", "SURFACE.well", MIN_TEXT, "hotbar: municao acabada em vermelho no chip"],
 	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "console: icone e tecla (B / P, LB / Start) nas chapas"],
 	["THEME.foreground", "SURFACE.section", MIN_TEXT, "console: nome e tipo da arma na mao, sobre a secao (claros)"],
-	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'placa do dia: "Day N" e a fase; a dica "E: ..."'],
-	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "placa do dia: HH:MM e o dia da vida"],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'a dica "E: ..." logo acima do console'],
 	["STAT.value", "SURFACE.groove", MIN_TEXT, "console: o pente no leitor da coluna da arma"],
 	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "console: o pente vazio no leitor"],
 	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "console: a reserva e o Reloading... no leitor"],
-	["GAME.sun", "SURFACE.window", MIN_UI, "placa do dia: o sol de pixel"],
-	["GAME.moon", "SURFACE.window", MIN_UI, "placa do dia: a lua de pixel"],
+	// --- the sky (client/ui/hudSky.ts): the day clock, a section of the console (desktop) or its own plate in the touch
+	// controls' top row -- the same window body -> section -> groove either way. Every text and mark sits on the groove
+	["THEME.foreground", "SURFACE.groove", MIN_TEXT, 'ceu: "Day N" (o dia do MUNDO) e "Night in" / "Daybreak in"'],
+	["STAT.value", "SURFACE.groove", MIN_TEXT, "ceu: o numero da contagem (amarelo dos numeros)"],
+	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "ceu: a contagem nos ultimos 30 s antes do anoitecer (vermelho)"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, 'ceu: "Life day N" e o HH:MM do relogio (o item)'],
+	["GAME.sun", "SURFACE.groove", MIN_UI, "ceu: o sol de pixel no arco"],
+	["GAME.moon", "SURFACE.groove", MIN_UI, "ceu: a lua de pixel no arco"],
+	["SURFACE.line", "SURFACE.groove", MIN_UI, "ceu: o horizonte e os pontos do caminho que falta"],
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "ceu: os pontos do caminho ja feito (apagados, mas ainda la)"],
+	["STAT.penalty", "SURFACE.groove", MIN_UI, "ceu: o pip vermelho da horda (anoitecer; as tres ondas)"],
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "ceu (toque): a secao dentro da placa propria"],
 	// --- the lobby and the Survivor screen (UI-10, client/ui/lobby.ts + survivor.ts): the menu's plates and sections
 	// stand straight on the page (the town flyover under its scrim), the Survivor screen is a UI-07 window
 	["THEME.primary", "THEME.background", MIN_UI, "chapa azul do START sobre a pagina"],
@@ -390,13 +407,12 @@ const PAIRS = [
 	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, 'aviso "carregando" do lobby na plaquinha do painel'],
 	["THEME.destructive", "SURFACE.panel", MIN_TEXT, "aviso offline do lobby (vermelho) na plaquinha do painel"],
 
-	// --- titles (MON-05): the title is TEXT in its game colour, under the name on the nameplate (the popover) and on
-	// the wardrobe's rows (graphite `row`; a locked row is `well`). GAME.success, the green the owner named for
-	// Survivor, reads on the plate (4,95:1) but not on the row (4,07:1): client/ui/titleStyle.ts uses the nearest game
-	// token that passes both, STAT.bonus (the same green, lighter). The pair that failed is kept below as a record.
-	["STAT.bonus", "THEME.popover", MIN_TEXT, "titulo [Survivor] sob o nome, na placa"],
-	["STAT.effect", "THEME.popover", MIN_TEXT, "titulo [Horde Breaker] sob o nome, na placa"],
-	["STAT.value", "THEME.popover", MIN_TEXT, "titulo [Week One] sob o nome, na placa"],
+	// --- titles (MON-05): the title is TEXT in its game colour, under the name on the nameplate and on the wardrobe's
+	// rows (graphite `row`; a locked row is `well`). The nameplate has no surface any more: it is text straight over the
+	// WORLD with the pixel shadow (UI-04 clarification), and every one of its voices -- the titles included -- is
+	// measured against the real grounds by `npm run test:world-art` (section 8), not here. GAME.success, the green the
+	// owner named for Survivor, does not read on the row (4,07:1): client/ui/titleStyle.ts uses the nearest game token
+	// that passes, STAT.bonus (the same green, lighter). The pair that failed is kept below as a record.
 	["STAT.bonus", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Survivor]"],
 	["STAT.effect", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Horde Breaker]"],
 	["STAT.value", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Week One]"],
@@ -451,7 +467,9 @@ for (const [frontPath, backPath, min, why] of PAIRS) {
 }
 
 // MON-05: every title's tone (shared/data/titles.ts) resolves, in client/ui/titleStyle.ts, to a token whose pairs on
-// the nameplate and on both row faces are measured above -- a new title, or a tone moved, cannot skip this table
+// both row faces are measured above -- a new title, or a tone moved, cannot skip this table. On the nameplate a title
+// is text over the WORLD: test:world-art (section 8) measures EVERY title of TITLES there, through titleColor, so it
+// cannot skip that table either (checked below, on the sources)
 {
 	const titlesSrc = readFileSync(join(SRC, "shared", "data", "titles.ts"), "utf8");
 	const styleSrc = readFileSync(join(UI, "titleStyle.ts"), "utf8");
@@ -468,14 +486,21 @@ for (const [frontPath, backPath, min, why] of PAIRS) {
 		const token = resolve(tone);
 		check(
 			`titulo de tom "${tone}" -> ${token}`.padEnd(width),
-			token !== undefined &&
-				measured(token, "THEME.popover") &&
-				measured(token, "SURFACE.row") &&
-				measured(token, "SURFACE.well"),
-			"medido na placa e nas duas faces da linha",
+			token !== undefined && measured(token, "SURFACE.row") && measured(token, "SURFACE.well"),
+			"medido nas duas faces da linha (na placa: sobre o mundo, test:world-art 8)",
 		);
 	}
 	check("os titulos de hoje sao 3", tones.length === 3, `${tones.length} tons em titles.ts`);
+	const worldArt = readFileSync(join(ROOT, "tools", "test-world-art.mjs"), "utf8");
+	const plateSrc = readFileSync(join(UI, "nameplate.ts"), "utf8");
+	check(
+		"a placa pinta o titulo por titleColor, e test:world-art 8 mede cada voz dela (e cada titulo de TITLES) sobre o chao",
+		plateSrc.includes(".TextColor3 = titleColor(") &&
+			worldArt.includes("...TITLES.map((t, i) => [`[${t.name}]`, titleColor(i)])") &&
+			["OVER_WORLD.name", "OVER_WORLD.level", "OVER_WORLD.handle", "OVER_WORLD.shadow"].every(v =>
+				worldArt.includes(`TH.${v}`),
+			),
+	);
 }
 
 for (const [frontPath, backPath, min, why] of RECORDED_FAILS) {
@@ -553,6 +578,40 @@ for (const [file, src] of kit) {
 	check(`${file}: nao cria contorno de texto por textOutline()`, !/\btextOutline\(/.test(src));
 }
 
+// UI-04, clarification (2026-09-23): A SHADOW IS NOT AN OUTLINE. The one text effect the game allows -- and only for
+// text drawn straight over the WORLD, where no plate may go (the nameplate) -- is the kit's pixel drop shadow,
+// skin.ts textShadow: ONE copy of the label, one skin pixel down and to the right, under it, in the shadow colour.
+// A contour rings the glyph on every side; this marks one side. Its shape is checked here, and section 4 checks that
+// nothing else in src/ makes a text shadow by hand
+const textShadowBody = functionBody(skin, "textShadow");
+check(
+	"skin.ts textShadow existe: a UNICA sombra de texto do jogo (UI-04, esclarecimento)",
+	textShadowBody !== undefined,
+);
+if (textShadowBody !== undefined) {
+	check(
+		"textShadow faz UMA copia (um TextLabel, sem laco: copias em volta da letra seriam um contorno)",
+		(textShadowBody.match(/new Instance\("TextLabel"\)/g) ?? []).length === 1 &&
+			!/\b(for|while|repeat)\b/.test(textShadowBody),
+	);
+	check(
+		"a copia cai so para baixo e para a direita, TEXT_SHADOW_PX pixel de pele, e TEXT_SHADOW_PX = 1",
+		/const px = TEXT_SHADOW_PX \* skinPx\(\);/.test(textShadowBody) &&
+			/p\.X\.Offset \+ px/.test(textShadowBody) &&
+			/p\.Y\.Offset \+ px/.test(textShadowBody) &&
+			!/Offset - px/.test(textShadowBody) &&
+			/export const TEXT_SHADOW_PX = 1;/.test(skin),
+	);
+	check(
+		"sob a letra (ZIndex - 1), na cor da sombra e na transparencia do tema, sem TextStroke",
+		/s\.ZIndex = label\.ZIndex - 1;/.test(textShadowBody) &&
+			/s\.TextColor3 = OVER_WORLD\.shadow;/.test(textShadowBody) &&
+			/TRANSPARENCY\.textShadow/.test(textShadowBody) &&
+			/s\.TextStrokeTransparency = 1;/.test(textShadowBody) &&
+			!/UIStroke/.test(textShadowBody),
+	);
+}
+
 // ---------------------------------------------------------------- run: text never carries a contour, in ALL of src/
 
 console.log("\n4) nenhum contorno de texto em TODO src/, nao so no kit (UI-04 vale para o jogo inteiro)\n");
@@ -577,6 +636,13 @@ function codeAt(path) {
 
 let sweepFiles = 0;
 let sweepFailures = 0;
+/**
+ * The files that draw text straight over the WORLD with no plate behind it -- the only ones allowed the pixel shadow
+ * (UI-04 clarification): the nameplate under each survivor. Anything else sits on a plate, a panel or a scrim and is
+ * read against it (UI-05).
+ */
+const SHADOWED_OVER_WORLD = ["src/client/ui/nameplate.ts"];
+let shadowHelpers = 0;
 for (const file of listTsFiles(SRC)) {
 	sweepFiles++;
 	const rel = relative(ROOT, file).split("\\").join("/");
@@ -600,7 +666,26 @@ for (const file of listTsFiles(SRC)) {
 		sweepFailures++;
 		check(`${rel}: nao usa a opcao "outline" (o kit a ignora desde UI-04; nunca desenhou nada)`, false);
 	}
+	// the shadow (UI-04 clarification): only through skin.ts textShadow, and only for text straight over the world
+	if (rel !== "src/client/ui/skin.ts") {
+		if (/\btextShadow\(/.test(src) && !SHADOWED_OVER_WORLD.includes(rel)) {
+			sweepFailures++;
+			check(
+				`${rel}: textShadow() so para texto direto sobre o MUNDO (${SHADOWED_OVER_WORLD.join(", ")}); texto sobre chapa se le pela chapa (UI-05)`,
+				false,
+			);
+		}
+		if (/OVER_WORLD\.shadow/.test(src) || /\.Name\s*=\s*[`"'][^`"'\n]*Shadow[`"']/.test(src)) {
+			sweepFailures++;
+			check(`${rel}: sombra de texto feita a mao (so skin.ts textShadow a faz, com a forma medida)`, false);
+		}
+	} else shadowHelpers += (src.match(/\nexport function textShadow\(/g) ?? []).length;
 }
+check(
+	"UI-04 (esclarecimento): a sombra de texto nasce em UM lugar (skin.ts textShadow), so sob texto sobre o mundo",
+	shadowHelpers === 1,
+	`${shadowHelpers} definicao(oes); usada so em ${SHADOWED_OVER_WORLD.join(", ")}`,
+);
 check(
 	`TODO src/ (${sweepFiles} arquivos .ts): nenhum contorno de texto fora do kit`,
 	sweepFailures === 0,
