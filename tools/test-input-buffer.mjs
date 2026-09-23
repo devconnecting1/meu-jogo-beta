@@ -676,6 +676,77 @@ console.log(
 				: "teto da fila fixo (--no-grace)"),
 );
 
+/*
+ * The grace rule itself (server/sim/heartbeat.ts `grace`), heartbeat by heartbeat, before the runs that measure what
+ * it does to a queue: a hitch opens a repayment and earns its ticks, a server that cannot keep time earns nothing.
+ */
+{
+	console.log("");
+	console.log("0) a regra da folga, heartbeat a heartbeat (server/sim/heartbeat.ts)");
+	const beats = (acc, n, dt) => {
+		for (let i = 0; i < n; i++) acc.take(dt);
+	};
+	// a 100 ms hitch on a 60 Hz server: 6 ticks owed, 2 run at once, 4 repaid one a heartbeat
+	const hitch = new TickAccumulator(SIM_DT);
+	beats(hitch, 120, SIM_DT);
+	const during = hitch.grace(0.1);
+	hitch.take(0.1);
+	const after = [hitch.grace(0)];
+	for (let i = 0; i < 4; i++) {
+		hitch.take(SIM_DT);
+		after.push(hitch.grace(0));
+	}
+	check(
+		"um engasgo de 100 ms guarda os comandos que o pagamento vai consumir, e so eles",
+		during === 5 && after.join(",") === "3,2,1,0,0",
+		`durante ${during}, depois ${after.join(", ")}`,
+	);
+	// Below 30 Hz the debt only grows to its cap and drops: nothing is ever repaid. The first heartbeats of the
+	// slowdown cannot know that yet (a tick or two, for as long as the debt stays within half a tick of where it
+	// started): from the tenth on, nothing.
+	const slow = new TickAccumulator(SIM_DT);
+	beats(slow, 120, SIM_DT);
+	let slowMax = 0;
+	for (let i = 0; i < 100; i++) {
+		slow.take(0.04);
+		if (i >= 10) slowMax = Math.max(slowMax, slow.grace(0), slow.grace(0.02), slow.grace(0.04));
+	}
+	check(
+		"um heartbeat a 25 Hz sustentado nao da folga nenhuma",
+		slowMax === 0 && slow.droppedTicks > 0,
+		`maior folga ${slowMax}, ${slow.droppedTicks} ticks descartados`,
+	);
+	// a second hitch in the middle of a repayment: the debt climbs past what the first left -- not being repaid
+	const twice = new TickAccumulator(SIM_DT);
+	beats(twice, 120, SIM_DT);
+	twice.take(0.15);
+	twice.take(SIM_DT);
+	const before = twice.grace(0);
+	twice.take(0.1);
+	const behind = twice.grace(0);
+	beats(twice, 10, SIM_DT);
+	const back = twice.grace(0.1);
+	check(
+		"um engasgo por cima de um pagamento fecha a folga ate o servidor ficar em dia",
+		before > 0 && behind === 0 && back === 5,
+		`antes ${before}, depois do segundo ${behind}, em dia de novo ${back}`,
+	);
+	// a tick that costs half a heartbeat: each catch-up heartbeat is 1.9 ticks long and repays a tenth of a tick
+	const crawl = new TickAccumulator(SIM_DT);
+	beats(crawl, 120, SIM_DT);
+	crawl.take(0.25);
+	let crawlMax = 0;
+	for (let i = 0; i < 30; i++) {
+		crawl.take(1.9 * SIM_DT);
+		crawlMax = Math.max(crawlMax, crawl.grace(0));
+	}
+	check(
+		"um pagamento que se arrasta so guarda o que paga em INPUT_GRACE_MAX heartbeats",
+		crawlMax <= Math.ceil(0.1 * CFG.INPUT_GRACE_MAX) && crawl.owed() > 5 * SIM_DT,
+		`maior folga ${crawlMax}, divida ainda ${(crawl.owed() / SIM_DT).toFixed(1)} ticks`,
+	);
+}
+
 /** one frame in twenty takes `ms`: a machine that is busy with something else now and then */
 const hitchEvery20 = ms => i => (i % 20 === 19 ? ms / 1000 : SIM_DT);
 /** one frame every two seconds takes `ms`, the rest run at 60 FPS: each long frame is on its own */
