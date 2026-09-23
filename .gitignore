@@ -16,3 +16,7 @@ out
 .env
 .env.*
 !.env.example
+
+# Claude Code: worktrees temporarios dos agentes e ajustes pessoais ficam fora do git
+.claude/worktrees/
+.claude/settings.local.json
