@@ -70,6 +70,9 @@ jobs:
       - name: World day vs life day, the daybreak wait and the runRev retry (MP-13, MP-20, MP-21)
         run: npm run test:life
 
+      - name: Night waves end to end (queue -> real spawner -> zombie, the sterile world, the daybreak revive)
+        run: npm run test:waves
+
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
 

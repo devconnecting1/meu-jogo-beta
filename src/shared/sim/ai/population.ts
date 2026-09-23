@@ -53,6 +53,31 @@ export function clusterScale(k: number): number {
 	return k > 0 ? 1 + 0.5 * (k - 1) : 1;
 }
 
+/**
+ * A world with survivors in it and nobody standing among them (docs/DESIGN_RULES.md MP-21).
+ *
+ * The clusters are built from the LIVING on purpose (`rebuildClusters`: a horde spawned around a body is a
+ * horde nobody can fight), so when every survivor present is dead there is no cluster, and with no cluster
+ * nothing spawns — no ambient walker, no special, and not the night's waves, whose queues sit full on the
+ * clock until somebody is back on their feet. On a shared server the daybreak revive (server/net/mpHost.ts)
+ * ends it within one night; in the owner's own world a rebirth does, and until then the stall IS the rule.
+ *
+ * What was missing was a way to SEE it: "the waves never came" in a playtest was exactly this, and nothing
+ * said so (tools/test-waves.mjs). These numbers are for the server log and the admin panel only — they
+ * change nothing about the game, and on a client that still runs its own population (MP_PHASE < 2) nobody
+ * reads them.
+ */
+export interface PopulationStall {
+	/** survivors present and none of them standing, as of the last `update` */
+	active: boolean;
+	/** how many times the world went from spawning to stalled since boot */
+	episodes: number;
+	/** seconds spent stalled since boot */
+	seconds: number;
+	/** seconds the current stall has lasted (0 while the world is spawning) */
+	current: number;
+}
+
 /** one group of survivors that the population is computed for */
 interface Cluster {
 	/** lowest player index in the group: a stable name while the group holds together */
@@ -151,6 +176,9 @@ export class Population {
 	 * splitting and re-forming: with one survivor it is the only director there has ever been.
 	 */
 	readonly director = new Dir.PaceDirector();
+
+	/** survivors present, none standing, nothing spawning: observed here, never acted on (see PopulationStall) */
+	readonly stall: PopulationStall = { active: false, episodes: 0, seconds: 0, current: 0 };
 
 	private directorFor(ci: number, st: ClusterState): Dir.PaceDirector {
 		return ci === 0 ? this.director : st.director;
@@ -505,14 +533,39 @@ export class Population {
 		}
 	}
 
+	/**
+	 * The symmetric case of the empty world below: survivors ARE here and there is still no cluster, because
+	 * `rebuildClusters` only groups the living. Counted, not corrected — see PopulationStall.
+	 */
+	private noteStall(stalled: boolean, dt: number): void {
+		const s = this.stall;
+		if (!stalled) {
+			s.active = false;
+			s.current = 0;
+			return;
+		}
+		if (!s.active) {
+			s.active = true;
+			s.episodes += 1;
+			s.current = 0;
+		}
+		s.seconds += dt;
+		s.current += dt;
+	}
+
 	update(refs: Ctx.AiRefs, dt: number): void {
-		// nobody in the world: nothing to spawn around, and nothing to recycle against
-		if (refs.players.size() === 0) return;
+		// nobody in the world: nothing to spawn around, and nothing to recycle against — empty, not stalled
+		if (refs.players.size() === 0) {
+			this.noteStall(false, dt);
+			return;
+		}
 		this.clusterTimer += dt;
 		if (this.clusterTimer >= CLUSTER_TICK || this.clusterRoster !== refs.players.size()) {
 			this.clusterTimer = 0;
 			this.rebuildClusters(refs);
 		}
+		// survivors here, and every one of them down: the loop below has nothing to spawn around
+		this.noteStall(this.clusters.size() === 0, dt);
 		// one drain for the whole world: every cluster's director hears about every kill, because a fight
 		// anywhere is pressure the pacing has to answer for
 		const kills = takeKills(refs.ai);
