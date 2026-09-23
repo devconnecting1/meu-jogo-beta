@@ -327,6 +327,7 @@ const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerCombat } = require(join(SRC, "server/sim/combat.ts"));
 const { biteRewindCapS, judgedTick, PositionHistory, rewindCapS } = require(join(SRC, "server/sim/history.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
+const { AchievementId: ACH } = require(join(SRC, "shared/data/achievements.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
 
@@ -817,6 +818,44 @@ section("d. progress only moves when the server decides it (§3.6, §8.3, MP-15)
 	checkEq(sp.save.exp, 40, "the XP was written straight into the live save");
 	checkEq(fx.progress.statsOf(0).kills, 1, "and the kill was counted on the server");
 	checkEq(fx.history.has(z.id), false, "a dead body's history track is released");
+	// CON-04 (ACH-2): the kill achievements come from this same credit, with what the server knows about the kill
+	checkEq(sp.save.achievements[ACH.ZombieSlayer], 1, "the rifle kill moved Zombie slayer, on the server");
+	checkEq(sp.save.achievements[ACH.MeleeExpert], 0, "...not Melee weapons expert (a rifle was in hand)");
+	checkEq(sp.save.achievements[ACH.SpecialZombieSlayer], 0, "...nor Special zombie slayer (a Walker)");
+}
+
+{
+	// CON-04 (ACH-2): a blade on a Charger, swung by the server's weapon machine -- the credit carries the zombie's kind
+	// and the kind of the weapon the SERVER says was in hand; the ally who only helped moves no achievement
+	const fx = newFixture();
+	const sp = makePlayer(fx, 0, 1000, 1000, 0); // Dagger
+	const ally = makePlayer(fx, 1, 900, 1000, 13);
+	const z = createZombie(2, 1040, 1000, 1); // a Charger
+	z.hp = 1;
+	z.hpMax = 1;
+	fx.zombies.push(z);
+	fx.progress.noteZombieDamage(z.id, 1, 30, 0);
+	fx.combat.afterWorld(1);
+	for (let t = 2; t < 122 && z.hp > 0; t++) tickPlayer(fx, sp, aimCommand(sp, t, 2000, 1000, t === 2 ? 1 : 0), t);
+	check(z.hp <= 0, "the Charger went down to a server-resolved swing");
+	const a = sp.save.achievements;
+	check(
+		a[ACH.ZombieSlayer] === 1 && a[ACH.SpecialZombieSlayer] === 1 && a[ACH.MeleeExpert] === 1,
+		"the swing moved Zombie slayer, Special zombie slayer and Melee weapons expert, once each",
+		`${a[ACH.ZombieSlayer]} / ${a[ACH.SpecialZombieSlayer]} / ${a[ACH.MeleeExpert]}`,
+	);
+	check(
+		ally.save.achievements.every(v => v === 0) && ally.save.exp > 0,
+		"the assist was paid its XP and moved no achievement (an assist is not a zombie you put down)",
+	);
+	// an assisted run (§9.3) earns no achievement, as it earns no coins and no title
+	const saves = new Map([[0, defaultSave()]]);
+	const prog = new PROG.Progress({ saveOf: slot => saves.get(slot), paysRewards: () => false });
+	prog.zombieKilled(77, 10, 0, 0, 2, 7);
+	check(
+		saves.get(0).achievements.every(v => v === 0) && saves.get(0).zombieKills === 0,
+		"an assisted run's kill moves no achievement and no kill count",
+	);
 }
 
 // ================================================================ e. MP_PHASE 2: the client stops deciding

@@ -43,6 +43,7 @@ import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
 import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
+import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
 import { daybreakWaitSeconds } from "shared/sim/clock";
@@ -489,6 +490,8 @@ export class LifeKeeper {
 		rec.declined = false;
 		rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
 		if (serverOwnsLife()) {
+			// EVERY death of this life, whatever answers it (CON-04: Never die; `deathCount` only counts paid Rebirths)
+			countLifeDeath(sp.save);
 			writeRunBody(sp.save, sp.state);
 			this.onSaveChanged?.(sp.userId);
 		}

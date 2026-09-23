@@ -1089,11 +1089,15 @@ task.spawn(() => {
 const WALLET_PUSH_S = 0.25;
 const pushedWallet = new Map<Player, string>();
 
-/** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
+/**
+ * Everything in the wallet the simulation can move on its own: a change in any of them is pushed. The achievement
+ * counters (CON-04) ride here too: this push is how they -- and the "Achievement unlocked" toast -- reach the client.
+ */
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}`;
+	const achievements = save.achievements.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}`;
 }
 
 function pushWallets(): void {

@@ -25,6 +25,7 @@
  *
  * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original.
  */
+import { ItemKind } from "shared/data/kinds";
 import { BUILDING_SPAWNS } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt, rndRange } from "shared/engine/rng";
@@ -42,6 +43,7 @@ import {
 	buildingAt,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
+import { creditWood } from "../save/achievements";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -141,6 +143,8 @@ export class ServerItems {
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
+		// CON-04 Woods collector: wood the SERVER put into the backpack
+		if (item.kind === ItemKind.Etc && item.itemId === WOOD_INDEX) creditWood(save, item.count);
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -161,6 +165,7 @@ export class ServerItems {
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
 		for (const drop of loot) {
 			addItem(save, drop.kind, drop.id, drop.count);
+			if (drop.kind === ItemKind.Etc && drop.id === WOOD_INDEX) creditWood(save, drop.count);
 			taken.push(drop);
 		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is

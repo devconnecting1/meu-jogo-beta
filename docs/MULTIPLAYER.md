@@ -528,6 +528,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 | Dado | Persistido por jogador (DataStore) | Sessão do servidor (morre com ele) |
 |---|---|---|
 | Nível, XP, pontos e níveis de skill, conquistas | ✅ | |
+| **Novo (v6, CON-04):** `lifeDeaths` (as mortes desta vida, do servidor); `achievements` passa a ser do servidor (§6.7) | ✅ | |
 | Moedas, pacotes (comprados e abertos), figurinos, `runRev`, `deathCount`, `bestDay`, `bossKills` | ✅ (o servidor já é o dono) | |
 | Inventário (armas, equipamentos, usáveis, etc), munição, óleo, eletricidade, equipados | ✅ | |
 | `day` = **dias sobrevividos nesta vida**, `runOver` | ✅ | |
@@ -580,6 +581,26 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - **Reset do admin durante um rollback para v4:** o código v4 não conhece `titleEpoch` e não o incrementa, então o registro de títulos (de época igual ou maior) devolveria na volta para v5 tudo o que o reset tirou. Resetou um jogador enquanto o v4 estava no ar? Apague também a chave dele em `ProjectZ_Titles`.
 - **Apagar um jogador** (wipe, pedido de exclusão de dados): apague a chave `<UserId>` em **`ProjectZ_Save_v2`, `ProjectZ_Save_v1` e `ProjectZ_Titles`** (no Studio, os mesmos nomes com o sufixo `_studio`, `server/save/stores.ts`), e tire do documento único `ProjectZ_AdminLog` as entradas que citam esse UserId. Um registro de títulos esquecido sozinho não traz nada de volta (regra acima), mas continua sendo dado do jogador.
 - Testado em `tools/test-save.mjs` (seções 19–24) e, pelo servidor real, em `tools/test-body.mjs` (seções 12–16).
+
+### 6.7 Migração do save v5 → v6 (conquistas do servidor, CON-04)
+
+- **O bug (ACH-2):** desde a F2 a horda é do servidor e o cliente só desenha um espelho dela, cujos corpos nunca chegam a hp 0 (`client/view/actorsView.ts`); o contador do cliente ("um corpo que foi a 0 entre dois quadros") não via abate nenhum — só o zumbi-bomba de pavio aceso, que contava como abate. As conquistas de abate (Melee weapons expert, Zombie slayer, Special zombie slayer) e o "zumbis" do fim de partida pararam no multiplayer. E os contadores iam no **relatório** do cliente: qualquer cliente escrevia `achievements[12] = 500`.
+- **A escolha: contadores no servidor, entregues pela carteira empurrada** (e não um `Announce{AchievementUnlocked}` novo). Motivos: (1) a janela de conquistas mostra **progresso** ("340 / 1000"), não só o desbloqueio, então os contadores precisam chegar ao cliente de qualquer jeito — um aviso só levaria o fim; (2) a carteira já é o substituto do canal `Self` da §4.1 ("conquistas, carteira") e já é empurrada a cada mudança (`pushWallets`, ≤ 4 Hz, só quando a assinatura muda) — cada abate já muda XP e `zombieKills`, então nada passa a ser enviado a mais; (3) nenhum remote, código de protocolo ou evento de replicação novo: nenhuma superfície nova para validar; (4) o aviso vira uma **transição** na cópia do cliente, que só cresce (`applyWallet` guarda o maior), então sai uma vez — e um save que **substitui** a cópia (LoadAck, reset do admin) é linha de base, nunca anúncio (`client/ui/achievementNotice.ts`).
+- **Quem conta o quê** (`server/save/achievements.ts`, o único que escreve `achievements` e `lifeDeaths` num save vivo; tudo na thread do tick, sem yield entre checar e escrever):
+
+| Conquista | Evento do servidor | Onde |
+|---|---|---|
+| Zombie slayer, Special zombie slayer (tipo ≠ Walker), Melee weapons expert (arma corpo a corpo na mão) | golpe final do crédito de abate — o mesmo lugar de `zombieKills` (MON-05); assistência não conta; run assistida (§9.3) não conta | `server/sim/progress.ts` `creditKill`, com o tipo do zumbi e o `WeaponKind` da arma que o **servidor** diz estar na mão (`server/sim/combat.ts` `damageZombie`) |
+| Good day, Never die | meia-noite creditada à vida (a contagem da MP-13, nunca numa run assistida); Never die = `lifeNights` enquanto `lifeDeaths` = 0 | `server/save/titles.ts` `creditLifeNight` |
+| (Never die) | **toda** morte que o servidor decide: `lifeDeaths` + 1 | `server/sim/life.ts` `died` |
+| First steps | o primeiro corpo do sobrevivente na cidade | `server/net/mpHost.ts` `admit` |
+| Blacksmith, Chef | receita feita pelo servidor: comida cozida (o `cook` de outra linha de `USABLES`) é do Chef, o resto do Blacksmith; outro caminho de cozinhar chama `creditCook` | `server/sim/craft.ts` `craft` |
+| Woods collector | madeira que o servidor põe na mochila | `server/sim/items.ts` `pickup`, `search` |
+
+- **Campos:** `achievements` passa a ser **do servidor** (como `titles`): `sanitizeClientReport` o copia do save confiável e nunca lê o do relatório; `sanitizeStoredSave` lê o gravado, cada contador entre 0 e a meta da linha. Entra `lifeDeaths` (as mortes desta vida, **do servidor**, volta a 0 com a vida no `resetRun`): `deathCount` só conta os Rebirths pagos (é o que precifica o próximo), por isso o Never die seguia contando depois de uma morte respondida pela espera do amanhecer (ACH-4). A carteira ganha `achievements` (opcional: carteira de servidor antigo não tem). `version = 6`.
+- **Aditiva, no mesmo documento.** Um documento v5 tem os contadores que os clientes relataram: ficam como estão (nada ganho se perde); não tem `lifeDeaths`: 0, a resposta da regra antiga. **Rollback:** um servidor v5 descarta `lifeDeaths` e volta a aceitar conquistas do relatório; nada ganho some.
+- **Limite honesto:** com `MP_PHASE` 2 a mochila e a madeira ainda são do cliente (o `ServerCraft` e os itens do servidor rodam com o mundo interativo, `WORLD_SERVER_PHASE`, ou quando as intenções de mochila chegarem ao servidor): até lá **Blacksmith, Chef e Woods collector não andam** — o preço de o cliente não poder mais concedê-las. Os gatilhos já estão nos lugares onde o servidor decide craft e itens, e um caminho novo de cozinhar ou de craft chama `creditCook` / `creditCraft` pelo nome.
+- Testado em `tools/test-save.mjs` (seções 25–27: migração, relatório forjado, carteira que só sobe, cada crédito, o `ServerCraft` real), `tools/test-combat.mjs` (d: um tiro e uma facada resolvidos pela máquina de armas do servidor movem as conquistas certas; a assistência e a run assistida, nenhuma) e `tools/test-nav.mjs` (seção 5: toda conquista à vista tem gatilho alcançado por um arquivo do servidor, o cliente não escreve nenhuma, o fim de partida conta o crédito do servidor e não o pavio aceso, Never die para em qualquer morte).
 
 ---
 

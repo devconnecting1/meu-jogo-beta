@@ -1168,7 +1168,8 @@ export class ServerCombat {
 		else this.defaultReaction(z, dir, knock, stun);
 		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
 		if (z.hp <= 0) {
-			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS);
+			// the credit says what did it too -- the zombie's kind and the weapon the server says was in hand (CON-04)
+			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS, z.type, Wp.WEAPONS[st.weaponId]?.kind ?? -1);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, sp.slot);
 		}

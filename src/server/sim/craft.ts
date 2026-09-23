@@ -27,6 +27,7 @@ import { countItem, addItem, removeItem, unequipGone } from "shared/sim/inventor
 import { querySolids, Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
+import { creditCraft } from "../save/achievements";
 import { ServerBuild } from "./build";
 
 /** the original's desk/fire reach (client/systems/craftSystem.ts) */
@@ -153,6 +154,8 @@ export class ServerCraft {
 			if (dwarf > 0 && chance(dwarf >= 2 ? 30 : 15)) count *= 2;
 		}
 		addItem(save, r.resultKind, r.resultIndex, count);
+		// CON-04: a cooked food is Chef's, anything else made is Blacksmith's -- counted where the server crafts
+		creditCraft(save, r.resultKind, r.resultIndex, count);
 		return { kind: "crafted", recipe: r.id, count };
 	}
 

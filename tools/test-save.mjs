@@ -229,7 +229,7 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
 	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
-	checkEq(SAVE.SAVE_VERSION, 5, "SAVE_VERSION e 5 (titulos, MON-05)");
+	checkEq(SAVE.SAVE_VERSION, 6, "SAVE_VERSION e 6 (conquistas do servidor e lifeDeaths, CON-04)");
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
 	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
 	checkEq(save.equipPet, -1, "e nenhum pet");
@@ -921,7 +921,7 @@ section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 	const doc = productionV4();
 	checkEq(SAVE.storedVersion(doc), 4, "o documento lido se declara v4");
 	const save = SAVE.sanitizeStoredSave(doc);
-	checkEq(save.version, 5, "e sai v5");
+	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
 	checkArrayEq(save.titles, new Array(TITLES_N).fill(0), "nenhum titulo: nenhum servidor contou nada antes do v5");
 	checkEq(save.zombieKills, 0, "e nenhum abate contado");
 	checkEq(save.lifeNights, 0, "nem noite creditada pelo servidor (Week One conta a partir do v5)");
@@ -1331,6 +1331,210 @@ section("24) o registro custa uma escrita so quando importa: titulo, historia no
 		/if \(release && recordBeforeRelease\(\)\) syncTitleRecord\(s, true\)/.test(flush) &&
 			/!release\) syncTitleRecord\(s, false\)/.test(flush),
 		"main.server.ts flush: exato na saida (antes do save que solta a trava), por degraus no autosave",
+	);
+}
+
+// ---------------------------------------------------------------- v6: achievements are the server's (CON-04)
+
+const ACHV = require(join(SRC, "server/save/achievements.ts"));
+const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+const { AchievementId: AID } = require(join(SRC, "shared/data/achievements.ts"));
+const { WeaponKind, ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
+const TITLESRV = require(join(SRC, "server/save/titles.ts"));
+
+section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a migracao v5 -> v6 nao perde nada");
+{
+	// a v5 document: counters the client used to report, and no lifeDeaths
+	const v5 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV4())));
+	v5.version = 5;
+	v5.achievements = ACHIEVEMENTS.map(a => Math.min(3, a.max));
+	delete v5.lifeDeaths;
+	const save = SAVE.sanitizeStoredSave(v5);
+	checkEq(save.version, SAVE.SAVE_VERSION, "o v5 sobe para v6");
+	checkArrayEq(
+		save.achievements,
+		v5.achievements,
+		"os contadores gravados voltam como estavam (nada ganho se perde)",
+	);
+	checkEq(save.lifeDeaths, 0, "lifeDeaths ausente no v5 vira 0");
+	const junk = JSON.parse(JSON.stringify(save));
+	junk.achievements = ACHIEVEMENTS.map(() => 1e9);
+	junk.achievements[0] = -5;
+	junk.lifeDeaths = "x";
+	const read = SAVE.sanitizeStoredSave(junk);
+	check(
+		read.achievements.every((v, i) => v === (i === 0 ? 0 : ACHIEVEMENTS[i].max)),
+		"um contador gravado com lixo fica entre 0 e a meta de cada linha",
+	);
+	checkEq(read.lifeDeaths, 0, "e lifeDeaths lixo vira 0");
+
+	// the report: every counter at its goal and a life with no death -- the server keeps its own
+	const base = SAVE.sanitizeStoredSave(productionV4());
+	base.lifeDeaths = 2;
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.achievements = ACHIEVEMENTS.map(a => a.max);
+	forged.lifeDeaths = 0;
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	checkArrayEq(
+		upd.achievements,
+		base.achievements,
+		"um relatorio com todas as conquistas completas nao muda nenhuma",
+	);
+	checkEq(upd.lifeDeaths, 2, "nem apaga as mortes desta vida");
+	check(upd.achievements !== base.achievements, "(a copia do relatorio e outra tabela: a viva nao e tocada)");
+
+	// the wallet carries them, and the client's copy only ever raises them
+	const w = SAVE.walletOf(base);
+	checkArrayEq(w.achievements, base.achievements, "a carteira leva os contadores do servidor");
+	const client = SAVE.sanitizeStoredSave(productionV4());
+	client.achievements.fill(0);
+	const pushed = JSON.parse(JSON.stringify(w));
+	pushed.achievements[AID.ZombieSlayer] = 42;
+	SAVE.applyWallet(client, pushed);
+	checkEq(client.achievements[AID.ZombieSlayer], 42, "o cliente adota o contador que o servidor empurrou");
+	const stale = JSON.parse(JSON.stringify(pushed));
+	stale.achievements[AID.ZombieSlayer] = 7;
+	stale.achievements[AID.GoodDay] = 99;
+	SAVE.applyWallet(client, stale);
+	checkEq(client.achievements[AID.ZombieSlayer], 42, "uma carteira atrasada nao tira um contador");
+	checkEq(client.achievements[AID.GoodDay], 1, "e um valor acima da meta fica na meta");
+	const older = JSON.parse(JSON.stringify(w));
+	delete older.achievements;
+	SAVE.applyWallet(client, older);
+	checkEq(
+		client.achievements[AID.ZombieSlayer],
+		42,
+		"uma carteira de servidor antigo (sem o campo) nao mexe em nada",
+	);
+}
+
+section("26) quem move cada conquista: so os eventos do servidor (server/save/achievements.ts)");
+{
+	const s = SAVE.defaultSave();
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Pistol);
+	check(
+		s.achievements[AID.ZombieSlayer] === 1 &&
+			s.achievements[AID.SpecialZombieSlayer] === 0 &&
+			s.achievements[AID.MeleeExpert] === 0,
+		"um Walker a tiro: Zombie slayer",
+	);
+	ACHV.creditKillAchievements(s, 2, WeaponKind.Melee);
+	check(
+		s.achievements[AID.ZombieSlayer] === 2 &&
+			s.achievements[AID.SpecialZombieSlayer] === 1 &&
+			s.achievements[AID.MeleeExpert] === 1,
+		"um Charger na faca: Zombie slayer, Special zombie slayer e Melee weapons expert",
+	);
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Bow);
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Sniper);
+	check(
+		s.achievements[AID.BowExpert] === 0 && s.achievements[AID.Sniper] === 0,
+		"arco e sniper estao desligados (CON-03): nada conta para eles",
+	);
+	check(!ACHV.raiseAchievement(s, AID.CentipedeSlayer, 1), "e nenhuma linha desligada e creditada");
+	checkEq(s.achievements[AID.CentipedeSlayer], 0, "(o contador salvo dela fica como estava)");
+	s.achievements[AID.ZombieSlayer] = ACHIEVEMENTS[AID.ZombieSlayer].max - 1;
+	check(ACHV.addAchievement(s, AID.ZombieSlayer, 1), "o abate que chega a meta completa a conquista");
+	check(!ACHV.addAchievement(s, AID.ZombieSlayer, 1), "e o seguinte nao completa de novo");
+	checkEq(s.achievements[AID.ZombieSlayer], ACHIEVEMENTS[AID.ZombieSlayer].max, "(nunca passa da meta)");
+	check(
+		!ACHV.addAchievement(s, AID.WoodsCollector, -3) &&
+			!ACHV.addAchievement(s, AID.WoodsCollector, 0.5) &&
+			!ACHV.raiseAchievement(s, AID.WoodsCollector, Number.NaN),
+		"quantidade negativa, fracionaria ou NaN nao move nada",
+	);
+
+	// the nights: Good day, and Never die while this life has not died once
+	const life = SAVE.defaultSave();
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	check(
+		life.achievements[AID.GoodDay] === 1 && life.achievements[AID.NeverDie] === 2,
+		"duas meias-noites creditadas: Good day, e Never die em 2",
+	);
+	ACHV.countLifeDeath(life);
+	checkEq(life.lifeDeaths, 1, "uma morte (qualquer uma: Rebirth, espera do amanhecer) conta para esta vida");
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 2, "ACH-4: depois de uma morte, Never die para de contar nesta vida");
+	life.deathCount = 0; // the old rule's test: only a paid Rebirth moved deathCount
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 2, "...mesmo com deathCount 0 (a morte esperada ate o amanhecer)");
+	SAVE.resetRun(life);
+	checkEq(life.lifeDeaths, 0, "uma vida nova (New game, fim do mundo) comeca sem morte");
+	checkEq(life.achievements[AID.NeverDie], 2, "e guarda o melhor Never die, como toda conquista");
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 3, "a vida nova sobe o recorde quando o passa");
+
+	// the rest: first steps, crafting, cooking, wood
+	const s2 = SAVE.defaultSave();
+	ACHV.creditFirstSteps(s2);
+	ACHV.creditFirstSteps(s2);
+	checkEq(s2.achievements[AID.FirstSteps], 1, "First steps: o primeiro corpo na cidade");
+	const cooked = USABLES.findIndex(u => u.name === "Cooked meat");
+	check(ACHV.isCookedFood(ItemKind.Use, cooked), "carne cozida e comida cozida (o `cook` de outra linha)");
+	check(
+		!ACHV.isCookedFood(
+			ItemKind.Use,
+			USABLES.findIndex(u => u.name === "Bandage"),
+		),
+		"bandagem nao e",
+	);
+	ACHV.creditCraft(s2, ItemKind.Use, cooked, 2);
+	ACHV.creditCraft(s2, ItemKind.Weapon, 2, 1);
+	ACHV.creditCook(s2, 3);
+	ACHV.creditWood(s2, 4);
+	check(
+		s2.achievements[AID.Chef] === 5 &&
+			s2.achievements[AID.Blacksmith] === 1 &&
+			s2.achievements[AID.WoodsCollector] === 4,
+		"craft de comida cozida e o creditCook vao para o Chef, o resto para o Blacksmith, madeira para o Woods collector",
+		`${s2.achievements[AID.Chef]} / ${s2.achievements[AID.Blacksmith]} / ${s2.achievements[AID.WoodsCollector]}`,
+	);
+}
+
+section("27) os caminhos reais do servidor chamam o credito (craft, madeira, morte, entrada, abate)");
+{
+	// crafting through the server's own ServerCraft (the craft intent's path)
+	const world = createWorld(4000, 4000);
+	const craft = new ServerCraft({ world, build: { placing: () => false, hold: () => {} } });
+	const s = SAVE.defaultSave();
+	const recipe = CRAFT_RECIPES.find(r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro && r.needsFire !== true);
+	for (const ing of recipe.ingredients) {
+		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+	}
+	const state = PLAYER.createPlayer(s, 1000, 1000);
+	const out = craft.craft(0, state, s, recipe.id);
+	check(
+		out.kind === "crafted" && s.achievements[AID.Blacksmith] === 1,
+		"ServerCraft.craft credita o Blacksmith do que o servidor fez",
+		`${out.kind}, Blacksmith ${s.achievements[AID.Blacksmith]}`,
+	);
+	// the source of the other callers: one line each, where the server decides
+	const src = f => readFileSync(join(SRC, f), "utf8");
+	check(
+		/creditWood\(save, item\.count\)/.test(src("server/sim/items.ts")) &&
+			/creditWood\(save, drop\.count\)/.test(src("server/sim/items.ts")),
+		"ServerItems: a madeira pega e a revistada vao para o Woods collector",
+	);
+	check(/countLifeDeath\(sp\.save\)/.test(src("server/sim/life.ts")), "LifeKeeper.died conta TODA morte desta vida");
+	check(
+		/creditFirstSteps\(save\)/.test(src("server/net/mpHost.ts")),
+		"o host credita First steps ao admitir o corpo",
+	);
+	check(
+		/zombieKilled\(z\.id, z\.exp, sp\.slot, this\.nowS, z\.type, Wp\.WEAPONS\[st\.weaponId\]\?\.kind \?\? -1\)/.test(
+			src("server/sim/combat.ts"),
+		),
+		"o combate do servidor passa o tipo do zumbi e o da arma na mao ao credito de abate",
+	);
+	check(
+		/achievements = save\.achievements\.join/.test(src("server/main.server.ts")),
+		"a carteira empurrada muda quando uma conquista muda (walletSignature)",
 	);
 }
 

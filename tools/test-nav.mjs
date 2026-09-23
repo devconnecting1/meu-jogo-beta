@@ -21,8 +21,10 @@
  *                       frame of the next run: main.client.ts drops them when a run mounts.
  *   4. UI-06            Settings opened over a run keeps the survivor held like the menu it came from (source guard).
  *   5. ACHIEVEMENTS     the lobby's count and each row's progress are the save's (hidden ones out); every visible
- *      AND RECORDS      achievement has a trigger in the client -- the ones that cannot be earned today are the KNOWN
- *                       list, which must be kept exact; Records shows the save's real values.
+ *      AND RECORDS      achievement has a trigger on the SERVER (server/save/achievements.ts, reached from a server
+ *                       file) and the client writes none (CON-04): a report cannot move one, the end-of-run kills are
+ *                       the server's kill credit, Never die stops at ANY death; nothing of content outside Núcleo 1
+ *                       is on view (CON-03); Records shows the save's real values.
  *   6. STRINGS          every literal key the code asks lang.ts for is in LANG_TABLE; every text any of these screens
  *                       shows is a LANG_TABLE entry, made of entries and numbers, or a proper noun; and the CSV that
  *                       `npm run locale` writes is the committed one.
@@ -82,7 +84,7 @@ const { showLobby } = require(join(SRC, "client/ui/lobby.ts"));
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
 const { Hud } = require(join(SRC, "client/ui/hud.ts"));
 const { showRunSummary, showDaybreakWait } = require(join(SRC, "client/onboarding/gameOver.ts"));
-const { ACHIEVEMENTS } = require(join(SRC, "shared/data/achievements.ts"));
+const { ACHIEVEMENTS, AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
@@ -597,36 +599,95 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	closeLobby();
 	save.achievements.fill(0);
 
-	// what can raise each achievement: main.client.ts's raiseAchievement / addAchievement calls (the only writers)
-	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
-	const raised = new Set();
-	for (const m of main.matchAll(/(?:raise|add)Achievement\((\d+)\s*(?:\+\s*b\.type)?/g)) {
-		const id = +m[1];
-		if (/\+\s*b\.type/.test(m[0])) for (let t = 1; t <= 4; t++) raised.add(id + t);
-		else raised.add(id);
+	// ---- who raises each achievement: ONLY the server (server/save/achievements.ts, CON-04 / ACH-2)
+	const achSrc = readFileSync(join(SRC, "server/save/achievements.ts"), "utf8");
+	/** each exported credit function of the module: the ids it names and the other credit functions it calls */
+	const fns = new Map();
+	for (const m of achSrc.matchAll(/export function (\w+)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)) {
+		const ids = [...m[2].matchAll(/AchievementId\.(\w+)/g)].map(x => AchievementId[x[1]]);
+		fns.set(m[1], { ids, calls: [] });
 	}
-	const unreachable = visible.filter(a => !raised.has(a.id)).map(a => a.id);
-	/**
-	 * ACH-1 (decided): the visible rows with no trigger were switched off (shared/data/achievements.ts `hidden`), except
-	 * Chef and Blacksmith, which go to the server's cooking and crafting -- until that commit they are the list below
-	 */
-	const KNOWN_UNREACHABLE = [5, 6];
-	knownBug(
-		"ACH-1",
-		`${KNOWN_UNREACHABLE.length} das ${visible.length} conquistas visiveis nao tem gatilho nenhum: ${KNOWN_UNREACHABLE.map(i => ACHIEVEMENTS[i].title).join(", ")}`,
-		"main.client.ts raiseAchievement / addAchievement",
-		JSON.stringify(unreachable) === JSON.stringify(KNOWN_UNREACHABLE),
+	for (const [name, f] of fns) {
+		const body = achSrc.slice(achSrc.indexOf(`export function ${name}(`));
+		const end = body.indexOf("\n}");
+		for (const other of fns.keys())
+			if (other !== name && new RegExp(`\\b${other}\\(`).test(body.slice(0, end))) f.calls.push(other);
+	}
+	// the server files that call a credit function (the module itself does not count: something must reach it)
+	const serverFiles = [];
+	const walkServer = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkServer(p);
+			else if (p.endsWith(".ts") && !p.endsWith(join("save", "achievements.ts"))) serverFiles.push(p);
+		}
+	};
+	walkServer(join(SRC, "server"));
+	const callers = new Map();
+	for (const p of serverFiles) {
+		const text = readFileSync(p, "utf8");
+		for (const name of fns.keys()) {
+			if (new RegExp(`\\b${name}\\(`).test(text))
+				callers.set(name, [...(callers.get(name) ?? []), p.slice(SRC.length + 1)]);
+		}
+	}
+	const reached = new Set();
+	const visit = name => {
+		if (reached.has(name)) return;
+		reached.add(name);
+		for (const c of fns.get(name)?.calls ?? []) visit(c);
+	};
+	for (const name of callers.keys()) visit(name);
+	const raised = new Set();
+	for (const name of reached) for (const id of fns.get(name).ids) raised.add(id);
+	const unreachable = visible.filter(a => !raised.has(a.id)).map(a => a.title);
+	check(
+		"ACH-1: toda conquista a vista tem um gatilho no SERVIDOR (uma funcao de server/save/achievements.ts que um arquivo do servidor chama)",
+		unreachable.length === 0 && [...reached].length > 0,
+		unreachable.join(", ") ||
+			[...reached].map(n => `${n} <- ${(callers.get(n) ?? ["(interna)"]).join(", ")}`).join("; "),
 	);
-
-	// the kill-based ones count bodies whose hp fell to 0 between two frames; from MP_PHASE 2 the horde is the
-	// server's and the client's bodies are the mirror's (client/view/actorsView.ts), whose hp is never 0 unless the
-	// fuse is lit: a zombie killed on the server simply leaves the list with hp 1
-	const { MP_PHASE } = require(join(SRC, "shared/net/mpConfig.ts"));
-	const countsHp = /if \(z\.hp <= 0\) \{\s*kills\+\+;/.test(main);
-	// the REAL mirror: one zombie arrives, the server kills it (it stops arriving), and trackBefore / trackAfter's test
-	// (alive = hp > 0 before the frame, a kill = hp <= 0 after it) runs on the bodies the mirror handed over
-	let mirrorKills = -1;
+	// ...and the client raises none: no call, no write into `achievements` anywhere under client/
+	const clientWrites = [];
+	const walkClient = d => {
+		for (const f of readdirSync(d)) {
+			const p = join(d, f);
+			if (statSync(p).isDirectory()) walkClient(p);
+			else if (p.endsWith(".ts")) {
+				const text = readFileSync(p, "utf8");
+				if (/achievements\[[^\]]+\]\s*=(?!=)|(?:raise|add)Achievement\(/.test(text))
+					clientWrites.push(p.slice(SRC.length + 1));
+			}
+		}
+	};
+	walkClient(join(SRC, "client"));
+	check(
+		"ACH-2: nenhum arquivo do cliente escreve uma conquista (o cliente so recebe a carteira do servidor)",
+		clientWrites.length === 0,
+		clientWrites.join(", "),
+	);
+	// ...and a report cannot: the server keeps its own counters whatever the client sends
 	{
+		const SAVE = require(join(SRC, "shared/game/save.ts"));
+		const base = SAVE.defaultSave();
+		const forged = JSON.parse(JSON.stringify(base));
+		forged.achievements = ACHIEVEMENTS.map(a => a.max);
+		const upd = SAVE.sanitizeClientReport(forged, base);
+		check(
+			"ACH-2: um relatorio com todas as conquistas completas nao move nenhuma (sanitizeClientReport, save v6)",
+			upd.achievements.every(v => v === 0),
+		);
+	}
+
+	// ACH-2: the kill counts come from the SERVER's kill credit. The client's copy of a zombie is the mirror's
+	// (client/view/actorsView.ts), whose hp is never 0 unless the fuse is lit: the old per-frame count saw no kill
+	// at all, except a lit exploder, which it took for one. The real mirror, a walker the server kills and an exploder
+	// lighting its fuse, and the end-of-run count over them
+	{
+		const { MP_PHASE } = require(join(SRC, "shared/net/mpConfig.ts"));
+		const { PROGRESS_SERVER_PHASE } = require(join(SRC, "shared/game/save.ts"));
+		const onboarding = require(join(SRC, "client/onboarding/index.ts"));
+		const PROG = require(join(SRC, "server/sim/progress.ts"));
 		const netClient = require(join(SRC, "client/net/netClient.ts"));
 		const saved = [netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths];
 		let remote = [];
@@ -635,22 +696,43 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		netClient.takeZombieDeaths = () => {};
 		const { ActorsView } = require(join(SRC, "client/view/actorsView.ts"));
 		const view = new ActorsView();
-		const refs = { zombies: [], bosses: [] };
+		const refs = { zombies: [], bosses: [], player: { dead: false, x: 0, y: 0 }, input: { held: false } };
+		const firstInstall = save.firstInstall;
+		save.firstInstall = false; // no coach: only the counters
+		save.zombieKills = 40;
+		onboarding.attachRun(ctx, refs);
 		const walker = { netId: 7, x: 0, y: 0, angle: 0, flags: 0, type: 1, big: false, extra: 0 };
-		remote = [{ ...walker, feetCycle: 0, speed: 0, alpha: 1, stale: false }];
+		const bomber = { netId: 8, x: 50, y: 0, angle: 0, flags: 0, type: 3, big: false, extra: 0 };
+		const mirror = z => ({ ...z, feetCycle: 0, speed: 0, alpha: 1, stale: false });
+		remote = [mirror(walker), mirror(bomber)];
 		view.sync(refs, 1 / 60, () => {});
-		const before = refs.zombies.filter(z => z.hp > 0);
-		remote = [];
-		view.sync(refs, 1 / 60, () => {});
-		mirrorKills = before.length === 1 ? before.filter(z => z.hp <= 0).length : -1;
+		// the server kills the walker (it stops arriving) and credits it; the exploder only lights its fuse
+		const saves = new Map([[0, save]]);
+		const prog = new PROG.Progress({ saveOf: slot => saves.get(slot) });
+		prog.zombieKilled(7, 10, 0, 0, 1, 7);
+		remote = [mirror({ ...bomber, extra: 1 })];
+		for (let i = 0; i < 12; i++) {
+			view.sync(refs, 1 / 60, () => {});
+			RunService.Heartbeat.Fire(0.1);
+			flush();
+		}
+		const summary = onboarding.runSummary(ctx, false);
+		onboarding.detachRun();
 		[netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths] = saved;
+		save.firstInstall = firstInstall;
+		check(
+			"ACH-2: o fim de partida conta o abate que o SERVIDOR creditou (1), nao o pavio aceso de um bombardeiro (MP_PHASE 2)",
+			MP_PHASE >= PROGRESS_SERVER_PHASE && summary.kills === 1 && save.zombieKills === 41,
+			`kills ${summary.kills}, zombieKills ${save.zombieKills}`,
+		);
+		check(
+			"...e o mesmo credito moveu as conquistas de abate (Zombie slayer, Melee weapons expert) no save do servidor",
+			save.achievements[AchievementId.ZombieSlayer] === 1 && save.achievements[AchievementId.MeleeExpert] === 1,
+		);
+		save.achievements.fill(0);
+		save.zombieKills = 0;
 	}
-	knownBug(
-		"ACH-2",
-		"de MP_PHASE 2 em diante as conquistas de abate (2, 3, 7, 12, 13) e o 'zumbis' do fim de partida nao contam: o espelho da horda nunca tem hp 0 (so o pavio aceso conta, e conta como abate)",
-		"main.client.ts trackAfter, onboarding/index.ts scanKills x client/view/actorsView.ts fillZombie",
-		MP_PHASE >= 2 && mirrorKills === 0 && countsHp,
-	);
+
 	// ACH-3 / CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe" -- no bow, no sniper, no
 	// electricity, no vehicle, no turret. An achievement about content the game does not have is switched off (hidden)
 	// until that content comes back, as the Records window lost its boss line for the same reason (UI-10)
@@ -677,17 +759,26 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		"...e escondida nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
 		ACHIEVEMENTS.length === 22 && ACHIEVEMENTS.every((a, i) => a.id === i),
 	);
-	// "Never die" counts the life's days while `deathCount` is 0, but only a PAID Rebirth moves it
-	// (server/main.server.ts): a death answered by the free wait for daybreak (MP-21) does not reset the streak
-	const server = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
-	knownBug(
-		"ACH-4",
-		"'Never die' (17) segue contando depois de uma morte esperada ate o amanhecer (MP-21): so o Rebirth pago move deathCount",
-		"main.client.ts trackAfter x server/main.server.ts (rebirth)",
-		/if \(save\.deathCount === 0\) raiseAchievement\(17/.test(main) &&
-			(server.match(/deathCount \+= 1/g) ?? []).length === 1 &&
-			/if \(!due\) save\.deathCount \+= 1/.test(server),
-	);
+	// ACH-4: Never die counts the nights of a life that has not died -- EVERY death, not only a paid Rebirth
+	{
+		const SAVE = require(join(SRC, "shared/game/save.ts"));
+		const TITLES_SRV = require(join(SRC, "server/save/titles.ts"));
+		const ACH_SRV = require(join(SRC, "server/save/achievements.ts"));
+		const life = SAVE.defaultSave();
+		TITLES_SRV.creditLifeNight(life);
+		ACH_SRV.countLifeDeath(life); // a death answered by the wait for daybreak: deathCount stays 0
+		TITLES_SRV.creditLifeNight(life);
+		const lifeSrc = readFileSync(join(SRC, "server/sim/life.ts"), "utf8");
+		const died = lifeSrc.slice(lifeSrc.indexOf("\tdied(sp: ServerPlayer)"), lifeSrc.indexOf("\trebirth(userId"));
+		check(
+			"ACH-4: Never die para na primeira morte da vida, paga ou esperada (lifeDeaths, que LifeKeeper.died conta em TODA morte)",
+			life.deathCount === 0 &&
+				life.lifeDeaths === 1 &&
+				life.achievements[AchievementId.NeverDie] === 1 &&
+				/countLifeDeath\(sp\.save\)/.test(died),
+			`deathCount ${life.deathCount}, lifeDeaths ${life.lifeDeaths}, Never die ${life.achievements[AchievementId.NeverDie]}`,
+		);
+	}
 }
 
 // ================================================================ 6. strings
