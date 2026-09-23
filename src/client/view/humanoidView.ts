@@ -14,6 +14,8 @@ import { part, SIDES } from "./drawKit";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
+/** how far towards black a zombie's rim is (body outline and arms); 0.3 was the lawn's own colour for a walker */
+export const RIM_DARKEN = 0.75;
 
 /** body colour of a zombie type (1 walker ... 5) */
 export function zombieColor(t: number): Color3 {
@@ -45,7 +47,10 @@ export function drawHumanoid(
 ): void {
 	const body = flash > 0 ? color.Lerp(WHITE, 0.75 * flash) : color;
 	const dark = color.Lerp(BLACK, 0.3);
-	const edge = outline ?? (flash > 0 ? WHITE : dark);
+	// LEG-03: the rim has to be darker than any ground a zombie walks on. `dark` alone was the lawn's own colour
+	// for a walker (70,105,63 on 74,108,62): measured by tools/test-world-art.mjs, its edge all but vanished on grass
+	const rim = color.Lerp(BLACK, RIM_DARKEN);
+	const edge = outline ?? (flash > 0 ? WHITE : rim);
 	const step = math.sin(phase) * 8 * sc;
 	for (const side of SIDES) {
 		const along = step * side;
@@ -64,6 +69,10 @@ export function drawHumanoid(
 			color: flash > 0 ? body : dark,
 			alpha,
 			cornerRadius: 3 * sc,
+			// the reaching arms are the zombie's silhouette (LEG-03): they get the rim too
+			stroke: rim,
+			strokeThickness: 1,
+			strokeAlpha: alpha,
 			zIndex: z + 1,
 		});
 	}
@@ -74,7 +83,7 @@ export function drawHumanoid(
 		alpha,
 		cornerRadius: 9 * sc,
 		stroke: edge,
-		strokeThickness: flash > 0 || outline !== undefined ? 3 : 1.5,
+		strokeThickness: flash > 0 || outline !== undefined ? 3 : 2,
 		strokeAlpha: alpha,
 		zIndex: z + 2,
 	});

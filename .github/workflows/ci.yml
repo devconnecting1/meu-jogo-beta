@@ -53,6 +53,13 @@ jobs:
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
         run: npm run test:cosmetics
 
+      # ART-01..06: worldArtAssets.ts is the generated file, and the town's art only ever adds to the flat town
+      - name: Town art (no id = the flat town unchanged, textures, no churn, LEG-03 legibility, render tool)
+        run: |
+          npm run art:world -- --no-sheet
+          git diff --exit-code -- src/client/view/worldArtAssets.ts design/world-art/manifest.json
+          npm run test:world-art
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

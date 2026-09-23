@@ -1,0 +1,154 @@
+{
+	"street": {
+		"title": "Residential street",
+		"rect": {
+			"x": 16476,
+			"y": 11722,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 106,
+			"images": 60,
+			"flat": 46,
+			"strokes": 25,
+			"corners": 41,
+			"instances": 235
+		}
+	},
+	"downtown": {
+		"title": "Commercial crossing",
+		"rect": {
+			"x": 7764,
+			"y": 9854,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 141,
+			"images": 87,
+			"flat": 54,
+			"strokes": 28,
+			"corners": 46,
+			"instances": 305
+		}
+	},
+	"park": {
+		"title": "Park",
+		"rect": {
+			"x": 2724,
+			"y": 14928,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 102,
+			"images": 53,
+			"flat": 49,
+			"strokes": 27,
+			"corners": 48,
+			"instances": 233
+		}
+	},
+	"school": {
+		"title": "School yard",
+		"rect": {
+			"x": 4445,
+			"y": 2742,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 70,
+			"images": 29,
+			"flat": 41,
+			"strokes": 18,
+			"corners": 36,
+			"instances": 156
+		}
+	},
+	"gas": {
+		"title": "Gas station",
+		"rect": {
+			"x": 941,
+			"y": 8801,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 108,
+			"images": 58,
+			"flat": 50,
+			"strokes": 29,
+			"corners": 43,
+			"instances": 241
+		}
+	},
+	"wreck": {
+		"title": "Abandoned car",
+		"rect": {
+			"x": 3859,
+			"y": 6772,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 135,
+			"images": 77,
+			"flat": 58,
+			"strokes": 32,
+			"corners": 46,
+			"instances": 293
+		}
+	},
+	"street-night": {
+		"title": "Residential street, 22:00",
+		"rect": {
+			"x": 16476,
+			"y": 11722,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"counts": {
+			"sprites": 106,
+			"images": 60,
+			"flat": 46,
+			"strokes": 25,
+			"corners": 41,
+			"instances": 504
+		}
+	},
+	"overview": {
+		"title": "Overview 3000 x 2000",
+		"rect": {
+			"x": 12200,
+			"y": 5000,
+			"w": 3000,
+			"h": 2000
+		},
+		"hour": 10,
+		"scale": 0.5,
+		"counts": {
+			"sprites": 342,
+			"images": 291,
+			"flat": 51,
+			"strokes": 53,
+			"corners": 35,
+			"instances": 724
+		}
+	}
+}
