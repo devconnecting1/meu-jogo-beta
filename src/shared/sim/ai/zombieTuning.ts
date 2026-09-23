@@ -7,6 +7,8 @@
  * from booting. Imported as `import * as T from "shared/sim/ai/zombieTuning"`, the whole table costs one.
  */
 import { SPEED_SCALE } from "shared/sim/types";
+import { EQUIP_LIGHTS } from "shared/data/equips";
+import { FLASHLIGHT_ID, SURVIVOR_LIGHT_R } from "shared/sim/survivorLight";
 
 /** stunned_time 30 frames */
 export const STUN_TIME = 1;
@@ -44,6 +46,12 @@ export const EXPLODER_NEAR_TARGET = 900;
 export const EXPLODER_CLUSTER = 320;
 /** charger */
 export const RUSH_MIN_DIST = 100;
+/**
+ * Half-width of the band a charger keeps its distance in (LEG-05): it backs off below `RUSH_MIN_DIST + 10 −
+ * KEEP_BAND`, closes in above `+ KEEP_BAND`, and stands in between. Wider than one tick of its walk (1.25 u at
+ * 60 Hz) so a single step can never cross the whole band, which is what made the old single line shiver.
+ */
+export const KEEP_BAND = 6;
 export const RUSH_TIME = 2;
 export const RUSH_COOLDOWN = 3;
 export const RUSH_SPEED_MIN = 5;
@@ -81,6 +89,13 @@ export const WINDUP_TIME = 0.26;
 export const WINDUP_BACK = 1.2;
 export const BITE_KEEP = 16;
 export const WHIFF_RECOVER = 0.35;
+/**
+ * A body within this many units of touching another (or its target) counts as touching it, and its walk stops
+ * pushing that way (LEG-05, zombieBrain `alongContacts`). Under the 3 u the bite reads as contact, so a walker
+ * that stops against a survivor still bites; wider than one tick of a walk (1.5 u), so one step never makes a new
+ * overlap for the separation to throw back on the next.
+ */
+export const CONTACT_MARGIN = 2;
 /** knockback power (combat.ts: melee 6, headshot 9, blast 9) that visibly staggers a zombie */
 export const STAGGER_KNOCK = 6;
 export const STAGGER_TIME = 0.45;
@@ -89,11 +104,12 @@ export const DIRECT_CHASE = 200;
 
 /**
  * Visibility radii at night. They match the renderer's light map (gameLoop PLAYER_LIGHT_R / LIGHT_R) so a
- * zombie is never invisible while standing on lit ground.
+ * zombie is never invisible while standing on lit ground. A survivor's own light (the circle, the torch, night
+ * vision, the flashlight's cone) is shared/sim/survivorLight.ts, the rule the light map reads too (LUZ-04).
  */
-export const PLAYER_LIGHT_R = 250;
+export const PLAYER_LIGHT_R = SURVIVOR_LIGHT_R;
 export const STRUCTURE_LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
-/** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px */
-export const FLASHLIGHT_R = 560;
+/** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px (shared/data/equips.ts EQUIP_LIGHTS) */
+export const FLASHLIGHT_R = EQUIP_LIGHTS[FLASHLIGHT_ID].radius;
 /** how far around a survivor the AI looks for lit structures and shaking solids */
 export const LIGHT_WINDOW = 1400;

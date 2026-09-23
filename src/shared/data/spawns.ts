@@ -8,6 +8,61 @@ export interface SpawnEntry {
 	max: number;
 }
 
+/** one line of a map item's table (tree, car, bin) */
+export interface MapLootEntry {
+	kind: ItemKind;
+	index: number;
+	/** < 1: the probability of getting exactly one. Otherwise the quantity. */
+	amount: number;
+}
+
+/**
+ * What hitting or searching a tree, a car or a bin can give: ONE table, read by the client's MP_PHASE 2 path
+ * (client/systems/interaction.ts) and by the server's (server/sim/items.ts) through shared/sim/loot.ts.
+ *
+ * Until 2026-09-23 each side had its own copy and they had drifted (QA L1): the client's was the original's, the
+ * server's had been rewritten (a blueprint from a tree, a Steel bar and gold out of a car, although Steel is only
+ * ever smelted), so moving the map items to the server at F3 would have silently changed what the town gives.
+ * These are the original's (obj_tree1, obj_car, obj_trash), which make sense as they are: a tree gives wood and
+ * the odd fruit, a wreck gives scrap to smelt and a few parts, a bin gives scraps of everything.
+ */
+export const MAP_ITEM_LOOT: { tree: Array<MapLootEntry>; car: Array<MapLootEntry>; trash: Array<MapLootEntry> } = {
+	tree: [
+		{ kind: 4, index: 23, amount: 2 },
+		{ kind: 3, index: 17, amount: 0.1 },
+		{ kind: 3, index: 18, amount: 0.1 },
+	],
+	car: [
+		{ kind: 4, index: 25, amount: 1 },
+		{ kind: 4, index: 30, amount: 0.1 },
+		{ kind: 4, index: 36, amount: 0.05 },
+	],
+	trash: [
+		{ kind: 4, index: 23, amount: 1 },
+		{ kind: 4, index: 24, amount: 1 },
+		{ kind: 4, index: 25, amount: 0.1 },
+		{ kind: 4, index: 29, amount: 0.1 },
+		{ kind: 4, index: 30, amount: 0.1 },
+	],
+};
+
+/**
+ * What each boss leaves besides its six rolls of the general table: its trophy, as in the original
+ * (obj_boss_rewards). The centipede the Flamethrower, the rafflesia a Robot suit, the giant the Plastic armor, the
+ * hedgehog three voltage circuits and three radioactive materials. Without this the Flamethrower and the Plastic
+ * armor had no source at all -- no loot table, no recipe, no pack (QA row audit, 2026-09-23) -- and the item a boss
+ * dropped was the same handful of scrap a walker drops. By boss type (1..4, shared/game/entities.ts createBoss).
+ */
+export const BOSS_TROPHIES: Record<number, Array<{ kind: ItemKind; index: number; count: number }>> = {
+	1: [{ kind: 1, index: 25, count: 1 }],
+	2: [{ kind: 2, index: 14, count: 1 }],
+	3: [{ kind: 2, index: 5, count: 1 }],
+	4: [
+		{ kind: 4, index: 36, count: 3 },
+		{ kind: 4, index: 43, count: 3 },
+	],
+};
+
 export interface DayPopulation {
 	ambient: number;
 	ambientSpecial: number;

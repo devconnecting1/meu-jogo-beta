@@ -44,7 +44,23 @@ function install(options) {
 			return [false, String(e?.message ?? e)];
 		}
 	};
-	globalThis.utf8 = { len: s => [Array.from(s).length] };
+	globalThis.utf8 = {
+		len: s => [Array.from(s).length],
+		// the byte position where the n-th character starts (Luau's utf8.offset, for n >= 1)
+		offset: (s, n) => {
+			const chars = Array.from(s);
+			if (n < 1 || n > chars.length + 1) return undefined;
+			return Buffer.byteLength(chars.slice(0, n - 1).join(""), "utf8") + 1;
+		},
+	};
+	// Luau's conversions (the admin forms and the tables write numbers as text and read them back)
+	globalThis.tostring = v => (v === undefined || v === null ? "nil" : String(v));
+	globalThis.tonumber = v => {
+		if (typeof v === "number") return v;
+		if (typeof v !== "string" || v.trim() === "") return undefined;
+		const n = Number(v);
+		return Number.isNaN(n) ? undefined : n;
+	};
 
 	/** Lua pattern -> RegExp (the subset the UI uses: classes, sets, anchors, quantifiers) */
 	function luaPattern(p, flags) {
@@ -111,6 +127,19 @@ function install(options) {
 		});
 		return [out, count];
 	});
+	// Luau's string.find: [start, end] (1-based, inclusive) or [undefined]; `plain` searches the text as is
+	def(SP, "find", function (pattern, init = 1, plain = false) {
+		const s = String(this);
+		const from = Math.max(0, (init ?? 1) - 1);
+		if (plain) {
+			const i = s.indexOf(pattern, from);
+			return i < 0 ? [undefined] : [i + 1, i + pattern.length];
+		}
+		const re = luaPattern(pattern, "g");
+		re.lastIndex = from;
+		const m = re.exec(s);
+		return m === null ? [undefined] : [m.index + 1, m.index + m[0].length];
+	});
 	// `str.match("^%d")` in the TypeScript is Luau's string.match: a Lua pattern and a tuple (captures or the whole
 	// match). A RegExp argument is JavaScript's own call (the TypeScript compiler runs in this process too)
 	const jsMatch = SP.match;
@@ -121,6 +150,7 @@ function install(options) {
 		return m.length > 1 ? m.slice(1) : [m[0]];
 	});
 	globalThis.string = {
+		char: (...codes) => String.fromCharCode(...codes),
 		format: (fmt, ...args) => {
 			let k = 0;
 			return fmt.replace(/%([-0 +#]*)(\d*)(?:\.(\d+))?([dfisxX%])/g, (_, flags, width, prec, type) => {
@@ -337,6 +367,8 @@ function install(options) {
 		"WindowFocusReleased",
 		"SelectionGained",
 		"SelectionLost",
+		"Focused",
+		"FocusLost",
 		"ChildAdded",
 		"ChildRemoved",
 		"DescendantAdded",

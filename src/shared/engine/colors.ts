@@ -79,6 +79,8 @@ export const COLORS = {
 	uiBlue: Color3.fromRGB(70, 120, 200),
 	uiYellow: Color3.fromRGB(230, 200, 70),
 	overlayNight: Color3.fromRGB(8, 10, 30),
+	/** the night seen through night vision (E2): the dark of a phosphor screen, green instead of blue */
+	overlayNightVision: Color3.fromRGB(4, 26, 10),
 	overlayDawn: Color3.fromRGB(180, 90, 50),
 	door: Color3.fromRGB(150, 110, 70),
 	ironDoor: Color3.fromRGB(170, 175, 185),

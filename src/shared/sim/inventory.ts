@@ -3,8 +3,9 @@
  * PlayerSaveData: the client uses them today, the server's live save from F3 on (the client then only reads).
  * Ammo, arrows and oil are ETC items 44–48 kept in their own save fields (moved as-is from items.ts).
  */
+import { EQUIP_SLOT_MAX } from "shared/data/equips";
 import { ItemKind } from "shared/data/kinds";
-import { PlayerSaveData } from "shared/game/save";
+import { PlayerSaveData, equippedIn, ownsEquip, ownsWeapon, setEquipped } from "shared/game/save";
 
 function ammoArray(save: PlayerSaveData, index: number): number {
 	if (index === 44) return save.ammoNormal;
@@ -70,4 +71,27 @@ export function removeItem(save: PlayerSaveData, kind: number, index: number, co
 		}
 	}
 	return true;
+}
+
+/**
+ * Takes off whatever the survivor holds or wears but no longer owns -- what a craft just ate: the pistol that became
+ * an auto pistol, the steel armour inside a robot suit, the flashlight inside a laser sight. Without this the slot
+ * kept pointing at an item the backpack no longer had: the armour went on protecting and the pistol stayed in the
+ * client's hands until a report reached the server, whose `enforceSaveInvariants` then quietly took them away.
+ *
+ * The weapon goes back to -1 (the default blade, as `enforceSaveInvariants` leaves it); a cosmetic unlocked by a
+ * costume is still owned (`ownsEquip`) and stays on. Returns true when the weapon in hand was the one that went, so
+ * the client can put the blade in the survivor's hands (client/main.client.ts `pack.onCraft`).
+ */
+export function unequipGone(save: PlayerSaveData): boolean {
+	let weaponGone = false;
+	if (save.equipWeapon >= 0 && !ownsWeapon(save, save.equipWeapon)) {
+		save.equipWeapon = -1;
+		weaponGone = true;
+	}
+	for (let slot = 1; slot <= EQUIP_SLOT_MAX; slot++) {
+		const id = equippedIn(save, slot);
+		if (id >= 0 && !ownsEquip(save, id)) setEquipped(save, slot, -1);
+	}
+	return weaponGone;
 }

@@ -3,8 +3,10 @@
  * looking at (docs/MULTIPLAYER.md §2.3 "Compensação de latência", §3.1 step 3).
  *
  * Why a ring indexed by the tick itself: `tick % ticks` IS the slot, so a rewind costs two array reads and a
- * lerp with no per-tick allocation and no search. HISTORY_TICKS (24 = 400 ms at 60 Hz) covers REWIND_MAX_S
- * (300 ms) with enough margin left to interpolate the far end of the window.
+ * lerp with no per-tick allocation and no search. HISTORY_TICKS (24 = 400 ms at 60 Hz) covers the deepest rewind,
+ * a body the shooter draws in the mid ring -- REWIND_MAX_S + MID_REWIND_EXTRA_S = 350 ms, 21 ticks -- with the tick
+ * after it (to interpolate the far end) and the tick being simulated (not recorded yet) to spare; tools/test-combat.mjs
+ * c' checks it against the constants, so raising either ceiling cannot outgrow the ring unnoticed.
  *
  * Why the simulation's entity id and not the netId: the wire never names the target of a shot (§4.2: a
  * ShotResult carries end POINTS, not ids) and the netId pool recycles after 2 s (§4.4). `ZombieState.id` never
@@ -169,15 +171,21 @@ export class PositionHistory {
 // ---------------------------------------------------------------- how far a shooter may rewind (§2.3)
 
 /**
- * `min(REWIND_MAX_S, ping/2 + interpolation delay + 2 ticks)` (§2.3 "Teto por jogador"). The ping is the one
- * the SERVER measured (`Player:GetNetworkPing()`), so declaring a stale view never widens the window: a lag
- * switch loses the compensation instead of gaining it (§9.1).
+ * `min(REWIND_MAX_S, ping + interpolation delay + 2 ticks)` (§2.3 "Teto por jogador"). The ping is the one the
+ * SERVER measured (`Player:GetNetworkPing()`), so declaring a stale view never widens the window: a lag switch
+ * loses the compensation instead of gaining it (§9.1).
+ *
+ * The WHOLE round trip, not half of it: what a client draws is its newest snapshot (which left the server a
+ * downstream trip ago) held `interpolation delay` further back (§5.1), and its shot reaches the server an upstream
+ * trip later. The half-ping version was written for a client that drew `interp` behind the server's clock and
+ * made up the downstream trip by extrapolating -- which is what put zombies where the server never had them
+ * (client/net/snapshotBuffer.ts, tools/test-zombie-motion.mjs). REWIND_MAX_S still caps it.
  */
 export function rewindCapS(pingS: number, interpS = INTERP_DEFAULT_S, simHz = SIM_HZ, maxS = REWIND_MAX_S): number {
 	const ping = isFiniteNumber(pingS) && pingS > 0 ? pingS : 0;
 	const interp = isFiniteNumber(interpS) && interpS > 0 ? interpS : 0;
 	const tick = simHz > 0 ? 1 / simHz : TICK_DT;
-	return math.clamp(ping / 2 + interp + 2 * tick, 0, maxS);
+	return math.clamp(ping + interp + 2 * tick, 0, maxS);
 }
 
 /**

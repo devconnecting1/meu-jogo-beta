@@ -13,6 +13,9 @@
  *   a. THREE CLIENTS SEE THE SAME ZOMBIES. Three survivors standing together receive the same `netId`s and
  *      draw them within ±4 u of one another after interpolation, and within ±4 u of the server's own
  *      positions. That is the one thing F2 exists for: before it, every client made up its own horde.
+ *   a2. CROSSING 800 U (the review of dee095a, S3). Hunters closing in change ring on every screen; the server
+ *      judges a shot at each where the client drew it all through the second the client takes to ease its extra
+ *      delay, and a body hovering on the border does not flip its ring (INTEREST_NEAR_EXIT).
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
  *      every light is not sent either, unless it is within DARK_SENSE_RANGE — which is what stops the wire
  *      being a wallhack, and is measured here rather than asserted in a comment.
@@ -330,7 +333,9 @@ const P = require(join(SRC, "shared/net/protocol.ts"));
 const { seqDiff } = require(join(SRC, "shared/net/codec.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
-const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS } = require(join(SRC, "server/net/replication.ts"));
+const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS, TALLY_EVERY_TICKS, TALLY_AFTER_JOIN_TICKS } = require(
+	join(SRC, "server/net/replication.ts"),
+);
 
 const TICK_DT = 1 / CFG.SIM_HZ;
 
@@ -418,7 +423,19 @@ function newWorldServer() {
 	sim.onTick = tick => replicator.afterTick(tick);
 	sim.onFx = event => replicator.queueFx(event);
 	const clients = new Map();
-	return { sim, transport, replicator, clients, now: 0 };
+	/** where every zombie was at each recent tick (netId -> {x, y}), to judge a screen against its own render tick */
+	const hist = new Map();
+	return { sim, transport, replicator, clients, hist, now: 0 };
+}
+
+/** the server's position of `netId` at a fractional tick, from the recent history, or undefined */
+function serverAt(server, netId, tick) {
+	const k = Math.floor(tick);
+	const a = server.hist.get(k)?.get(netId);
+	const b = server.hist.get(k + 1)?.get(netId);
+	if (a === undefined || b === undefined) return a;
+	const f = tick - k;
+	return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
 }
 
 /**
@@ -469,6 +486,9 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		profiles: [],
 		/** Announce events received (MON-05: a title unlock is one, addressed to its owner alone) */
 		announces: [],
+		/** PlayerTally deltas received (MP-23), and those for a slot this client did not know yet (dropped) */
+		tallies: [],
+		tallyDrops: 0,
 	});
 	return sp;
 }
@@ -492,6 +512,15 @@ function applyRoster(client, e) {
 		entry.outfit = e.outfit;
 		entry.pet = e.pet;
 		entry.title = e.title;
+	} else if (e.t === P.WorldEv.PlayerTally) {
+		client.tallies.push(e);
+		const entry = client.roster.get(e.slot);
+		if (entry === undefined) {
+			client.tallyDrops += 1;
+			return;
+		}
+		entry.lifeDay = e.lifeDay;
+		entry.kills = e.kills;
 	} else if (e.t === P.WorldEv.PlayerLeft) {
 		client.roster.delete(e.slot);
 	}
@@ -521,6 +550,13 @@ function tickServer(server, opts = {}) {
 	const started = process.hrtime.bigint();
 	server.sim.step();
 	const ms = Number(process.hrtime.bigint() - started) / 1e6;
+	const horde = server.sim.horde;
+	if (horde !== undefined) {
+		const at = new Map();
+		for (const z of horde.zombies) at.set(horde.netIdOf(z), { x: z.x, y: z.y });
+		server.hist.set(server.sim.tick, at);
+		server.hist.delete(server.sim.tick - 180);
+	}
 	const t = server.transport;
 	for (const [slot, list] of t.snaps) {
 		const client = server.clients.get(slot);
@@ -577,7 +613,12 @@ function tickServer(server, opts = {}) {
 			continue;
 		}
 		for (const e of batch.events) {
-			if (e.t === P.WorldEv.PlayerJoined || e.t === P.WorldEv.PlayerProfile || e.t === P.WorldEv.PlayerLeft) {
+			if (
+				e.t === P.WorldEv.PlayerJoined ||
+				e.t === P.WorldEv.PlayerProfile ||
+				e.t === P.WorldEv.PlayerLeft ||
+				e.t === P.WorldEv.PlayerTally
+			) {
 				if (slot === undefined) for (const [, c] of server.clients) applyRoster(c, e);
 				else if (server.clients.has(slot)) applyRoster(server.clients.get(slot), e);
 				continue;
@@ -631,7 +672,7 @@ function percentile(values, p) {
 
 // ================================================================ (a) three clients, one horde
 
-section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u after interpolation)");
+section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u of the server at the tick each draws)");
 {
 	const server = newWorldServer();
 	const cx = world.width / 2;
@@ -642,6 +683,13 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 	addSurvivor(server, 1, cx + 40, cy);
 	addSurvivor(server, 2, cx - 40, cy + 30);
 	seedHorde(server, 60, cx, cy, 600);
+	// and ten in the MID ring (800-1800 u, §4.3): drawn a near interval further back, and judged there (review #2)
+	for (let i = 0; i < 10; i++) {
+		const ang = (i / 10) * Math.PI * 2 + 0.3;
+		const z = createZombie(1, cx + Math.cos(ang) * (950 + 15 * i), cy + Math.sin(ang) * (950 + 15 * i), 5, false);
+		z.alpha = 1;
+		server.sim.horde.zombies.push(z);
+	}
 	// the horde needs a few ticks to be registered (netIds) and a few more to fill the interpolation buffer
 	for (let i = 0; i < 90; i++) {
 		tickServer(server);
@@ -657,10 +705,26 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 	checkEq(c.size(), a.size(), "client 2 draws the same number of zombies");
 	let missing = 0;
 	let worst = 0;
-	let worstServer = 0;
+	let worstJudged = 0;
+	let across = 0;
+	let acrossOver = -Infinity;
+	let compared = 0;
+	let expected = 0;
+	// the server's own bodies by netId: where it would judge a shot at each, for each viewer (§2.3)
 	const horde = server.sim.horde;
-	const serverById = new Map();
-	for (const z of horde.zombies) serverById.set(horde.netIdOf(z), z);
+	const byNetId = new Map();
+	for (const z of horde.zombies) byNetId.set(horde.netIdOf(z), z);
+	/** the zombie's own speed on the server over the last 10 ticks, u/tick */
+	const speedOf = netId => {
+		let fastest = 0;
+		for (let t = server.sim.tick - 10; t < server.sim.tick; t++) {
+			const p = server.hist.get(t)?.get(netId);
+			const q = server.hist.get(t + 1)?.get(netId);
+			if (p !== undefined && q !== undefined) fastest = Math.max(fastest, Math.hypot(q.x - p.x, q.y - p.y));
+		}
+		return fastest;
+	};
+	const lagOf = slot => server.clients.get(slot).lag;
 	for (const [netId, za] of a) {
 		const zb = b.get(netId);
 		const zc = c.get(netId);
@@ -668,17 +732,65 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 			missing += 1;
 			continue;
 		}
-		worst = Math.max(worst, Math.hypot(za.x - zb.x, za.y - zb.y), Math.hypot(za.x - zc.x, za.y - zc.y));
-		const truth = serverById.get(netId);
-		if (truth !== undefined) worstServer = Math.max(worstServer, Math.hypot(za.x - truth.x, za.y - truth.y));
+		/*
+		 * Every screen draws the server's own path, each at the tick it is drawing. A client 100 ms further away
+		 * draws that path 100 ms later (§5.1: the delay is the measured lateness plus the buffer), so two screens
+		 * side by side differ by the zombie's walk in that time -- which is the truth, not an error. The version of
+		 * this check that compared the three screens with each other held because the far client EXTRAPOLATED over
+		 * its latency, drawing zombies where the server never had them (tools/test-zombie-motion.mjs).
+		 */
+		const onServer = byNetId.get(netId);
+		for (const [slot, z] of [
+			[0, za],
+			[1, zb],
+			[2, zc],
+		]) {
+			// a body the server already let go (a far one despawned, §4.4) is still drawn until its ring's timeout
+			if (onServer === undefined) continue;
+			expected += 1;
+			const truth = serverAt(server, netId, z.tick);
+			if (truth === undefined) continue;
+			compared += 1;
+			worst = Math.max(worst, Math.hypot(z.x - truth.x, z.y - truth.y));
+			// review #2: where the server JUDGES a shot this viewer fires at it -- the declared view (the buffer's
+			// render time) minus the ring's extra delay (server/net/replication.ts `viewLagOf`) -- is where it is drawn
+			const view = server.clients.get(slot).buffer.renderNow();
+			const lag = onServer !== undefined ? (server.replicator.viewLagOf?.(slot, onServer, view) ?? 0) : 0;
+			const judged = serverAt(server, netId, view - lag);
+			if (judged !== undefined) worstJudged = Math.max(worstJudged, Math.hypot(z.x - judged.x, z.y - judged.y));
+		}
+		// review #8: two screens differ by the zombie's walk over their latency difference, and by little else
+		const walk = speedOf(netId);
+		for (const [slot, z] of [
+			[1, zb],
+			[2, zc],
+		]) {
+			const gap = Math.hypot(za.x - z.x, za.y - z.y);
+			across = Math.max(across, gap);
+			acrossOver = Math.max(acrossOver, gap - (walk * Math.abs(lagOf(slot) - lagOf(0)) + 4));
+		}
 	}
 	checkEq(missing, 0, "every netId one client draws, the other two draw too");
 	check(
-		worst <= 4,
-		`the same zombie is within 4 u on every screen, at 0/50/100 ms and 0/1/2 % loss ` +
-			`(worst ${worst.toFixed(2)} u)`,
+		expected >= 3 * (a.size() - 1) && compared === expected,
+		`every body the server still has, on every screen, has its position at the tick it is drawn ` +
+			`(${compared} of ${expected}; ${3 * a.size() - expected} drawn after the server let them go)`,
 	);
-	info(`worst distance from the server's own position: ${worstServer.toFixed(2)} u (interpolation delay)`);
+	check(
+		worst <= 4,
+		`every screen draws each zombie within 4 u of the server at the tick it draws, at 0/50/100 ms and ` +
+			`0/1/2 % loss (worst ${worst.toFixed(2)} u over ${compared} bodies)`,
+	);
+	check(
+		worstJudged <= 4,
+		`…and within 4 u of where the server judges a shot at it: the declared view minus its ring's extra delay ` +
+			`(worst ${worstJudged.toFixed(2)} u)`,
+	);
+	check(
+		acrossOver <= 0,
+		`two screens differ by no more than the zombie's walk over their latency difference + 4 u ` +
+			`(widest gap ${across.toFixed(2)} u, ${acrossOver > 0 ? "+" : ""}${acrossOver.toFixed(2)} u against that bound)`,
+	);
 	// the same body, the same type: a client must never be shown a different creature
 	let sameType = true;
 	for (const [netId, za] of a) {
@@ -686,6 +798,115 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 		if (zb !== undefined && zb.type !== za.type) sameType = false;
 	}
 	check(sameType, "and it is the same archetype on every screen");
+}
+
+// ================================================================ (a2) crossing the near ring's border
+
+section("(a2) a zombie crossing 800 u is judged where it is drawn, all through the crossing (review of dee095a, S3)");
+{
+	/*
+	 * A body that changes ring changes how far back its viewer draws it: the client eases its `extra` over a second
+	 * from the `mid` flag it received (client/net/snapshotBuffer.ts), and the server switched it at once with the
+	 * ring. For about a second after each crossing a shot was judged up to 3 ticks away from the body on screen -- the
+	 * error review #2 fixed for the steady mid ring -- and every chasing zombie crosses 800 u once, inside the 800 u
+	 * and 1200 u rifle ranges. Here 24 hunters close in on three survivors from 950-1150 u, and on every frame of
+	 * every client each body is compared with where the server would judge a shot at it: the declared view (the
+	 * buffer's render time) minus `viewLagOf` at that view. The ring switched at once is measured next to it.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	addSurvivor(server, 1, cx + 40, cy);
+	addSurvivor(server, 2, cx - 40, cy + 30);
+	const horde = server.sim.horde;
+	for (let i = 0; i < 24; i++) {
+		const ang = (i / 24) * Math.PI * 2 + 0.1;
+		const r = 950 + 8 * i;
+		const z = createZombie(1, cx + Math.cos(ang) * r, cy + Math.sin(ang) * r, 5, false);
+		z.alpha = 1;
+		z.detect = true;
+		horde.zombies.push(z);
+	}
+	const midExtra = CFG.midViewExtraTicks(CFG.SIM_HZ);
+	let worstNew = 0;
+	let worstOld = 0;
+	let worstNewEasing = 0;
+	let worstOldEasing = 0;
+	let easingFrames = 0;
+	let frames = 0;
+	const crossed = new Set();
+	/** the ring each (viewer, netId) was last SENT in, to count the crossings the clients actually saw */
+	const lastMid = new Map();
+	for (let i = 0; i < 60 * 8; i++) {
+		tickServer(server);
+		const drawn = drawClients(server);
+		if (i < 60) continue;
+		const byNetId = new Map();
+		for (const z of horde.zombies) byNetId.set(horde.netIdOf(z), z);
+		for (const [slot, bodies] of drawn) {
+			const client = server.clients.get(slot);
+			const view = client.buffer.renderNow();
+			for (const [netId, z] of bodies) {
+				const onServer = byNetId.get(netId);
+				if (onServer === undefined) continue;
+				const truth = serverAt(server, netId, z.tick);
+				if (truth === undefined) continue;
+				const key = slot * 65536 + netId;
+				const track = client.buffer.zombies.get(netId);
+				if (track !== undefined) {
+					if (lastMid.has(key) && lastMid.get(key) !== track.mid) crossed.add(key);
+					lastMid.set(key, track.mid);
+				}
+				// where the server judges a shot this viewer fires at it now, and where it did with the ring switched at once
+				const judged = serverAt(server, netId, view - server.replicator.viewLagOf(slot, onServer, view));
+				const ring = server.replicator.hordeRings.ring(slot, netId);
+				const old = serverAt(server, netId, view - (ring === 1 ? midExtra : 0));
+				if (judged === undefined || old === undefined) continue;
+				// against the server's own body at the tick this screen drew it: the drawing's own error (a lost
+				// snapshot, extrapolation) is (a)'s business, this is only the instant the shot is judged at
+				frames += 1;
+				const errNew = Math.hypot(truth.x - judged.x, truth.y - judged.y);
+				const errOld = Math.hypot(truth.x - old.x, truth.y - old.y);
+				worstNew = Math.max(worstNew, errNew);
+				worstOld = Math.max(worstOld, errOld);
+				const extra = view - z.tick;
+				if (extra > 0.05 && extra < midExtra - 0.05) {
+					easingFrames += 1;
+					worstNewEasing = Math.max(worstNewEasing, errNew);
+					worstOldEasing = Math.max(worstOldEasing, errOld);
+				}
+			}
+		}
+	}
+	info(
+		`${crossed.size()} crossings seen by the three clients, ${easingFrames} of ${frames} body-frames drawn while ` +
+			`easing; judged vs drawn: worst ${worstNew.toFixed(2)} u (while easing ${worstNewEasing.toFixed(2)} u), ` +
+			`with the ring switched at once ${worstOld.toFixed(2)} u (${worstOldEasing.toFixed(2)} u)`,
+	);
+	check(
+		crossed.size() >= 24,
+		`the hunters crossed the near ring's border on the clients' screens (${crossed.size()})`,
+	);
+	check(
+		worstNew <= 1,
+		`every body is judged within 1 u of the instant it is drawn at, through the crossing (worst ` +
+			`${worstNew.toFixed(2)} u; ${worstOld.toFixed(2)} u with the ring switched at once)`,
+	);
+
+	// and a body hovering on the border does not flip it: the near ring is left only past INTEREST_NEAR_EXIT
+	const { ActorInterest, Ring } = require(join(SRC, "server/net/interest.ts"));
+	const rings = new ActorInterest();
+	let flips = 0;
+	let was = Ring.Out;
+	for (let round = 0; round < 200; round++) {
+		const d = CFG.INTEREST_NEAR + 40 * Math.cos(round / 3);
+		const ring = rings.update(0, 7, d * d, round);
+		if (was !== Ring.Out && ring !== was) flips += 1;
+		was = ring;
+	}
+	checkEq(flips, 1, `a body swinging ±40 u across ${CFG.INTEREST_NEAR} u changes ring once, not every swing`);
+	checkEq(rings.update(0, 7, (CFG.INTEREST_NEAR_EXIT + 1) ** 2, 201), Ring.Mid, "and past the exit band it is mid");
 }
 
 // ================================================================ (b) interest, walls and the dark
@@ -1097,6 +1318,94 @@ section("(h) the title under the name reaches the others only when the server sa
 	for (let i = 0; i < 12; i++) tickServer(server);
 	checkEq(ca.roster.get(1)?.title, 0, "which everybody sees too");
 	check(a.title === wire(TIT.TitleId.Survivor) && b.title === 0, "the server's profile fields agree");
+}
+
+// ================================================================ (i) the scoreboard's numbers (MP-23, §4.4)
+
+section(
+	"(i) the scoreboard: every survivor's life day and zombies put down, the server's, only when they move (MP-23)",
+);
+{
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	const veteran = defaultSave();
+	veteran.day = 9;
+	veteran.zombieKills = 137;
+	const a = addSurvivor(server, 0, cx, cy, veteran);
+	const b = addSurvivor(server, 1, cx + 40, cy);
+	const ca = server.clients.get(0);
+	const cb = server.clients.get(1);
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	checkEq(cb.roster.get(0)?.lifeDay, 9, "an ally's scoreboard has the veteran's day of life (the server's save)");
+	checkEq(cb.roster.get(0)?.kills, 137, "and the zombies it put down");
+	checkEq(ca.roster.get(0)?.kills, 137, "its own client is told the same numbers (one source for every row)");
+	checkEq(ca.roster.get(1)?.lifeDay, 1, "a new life is day 1");
+	checkEq(ca.roster.get(1)?.kills, 0, "with nothing put down");
+	checkEq(ca.tallyDrops + cb.tallyDrops, 0, "no tally ever reached a client before the PlayerJoined of its slot");
+
+	// quiet: nothing moved, nothing is sent (a steady server costs the scoreboard nothing)
+	const quietFrom = ca.tallies.length;
+	for (let i = 0; i < TALLY_EVERY_TICKS * 3; i++) tickServer(server);
+	checkEq(ca.tallies.length - quietFrom, 0, `3 s with nothing moving: no PlayerTally at all`);
+
+	// a fight: slot 1 puts down 12 zombies in half a second -- the others hear it within a second, in ONE delta
+	while (server.sim.tick % TALLY_EVERY_TICKS !== 1) tickServer(server);
+	const fightFrom = ca.tallies.length;
+	for (let k = 0; k < 12; k++) {
+		server.sim.progress.zombieKilled(990000 + k, 10, 1, server.now);
+		tickServer(server);
+		tickServer(server);
+	}
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(
+		ca.roster.get(1)?.kills,
+		12,
+		"the other client sees the 12 kills (the server's kill credit, MON-05's counter)",
+	);
+	checkEq(cb.roster.get(1)?.kills, b.save.zombieKills, "and the killer's own row agrees with its save");
+	const fightTallies = ca.tallies.slice(fightFrom).filter(e => e.slot === 1).length;
+	check(
+		fightTallies >= 1 && fightTallies <= 2,
+		`12 kills in 24 ticks cost ${fightTallies} PlayerTally (at most one a second per survivor, TALLY_EVERY_TICKS = ${TALLY_EVERY_TICKS})`,
+	);
+
+	// the midnight that credits a day (server/sim/progress.ts writes the save): the day moves on everybody's board
+	b.save.day += 1;
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.lifeDay, 2, "a credited midnight moves the life day on the others' scoreboard");
+	// a New game (resetRun) takes it back to 1 -- also just the save
+	b.save.day = 1;
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.lifeDay, 1, "a new life goes back to day 1 on every board");
+
+	// a report can never move either number: the kills are the server's (MON-05, `sanitizeClientReport`) and so is the
+	// day from PROGRESS_SERVER_PHASE on (`stripClientProgress`, which server/main.server.ts runs on every report)
+	const forged = JSON.parse(JSON.stringify(b.save));
+	forged.day = 400;
+	forged.zombieKills = 9000;
+	const upd = sanitizeClientReport(forged, b.save);
+	PROG.stripClientProgress(b.save, upd);
+	copySaveInto(b.save, upd);
+	for (let i = 0; i < TALLY_EVERY_TICKS; i++) tickServer(server);
+	check(
+		ca.roster.get(1)?.lifeDay === 1 && ca.roster.get(1)?.kills === 12,
+		"a forged report (day 400, 9000 kills) moves neither number on anyone's board",
+	);
+
+	// the worst join: a change is pending and the very next tick is a tally pass. The newcomer still ends with the
+	// numbers of NOW for everybody, and never drops a tally for a slot it did not know yet
+	while ((server.sim.tick + 1) % TALLY_EVERY_TICKS !== 0) tickServer(server);
+	a.save.zombieKills += 1;
+	addSurvivor(server, 2, cx - 40, cy);
+	const cc = server.clients.get(2);
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	checkEq(cc.roster.get(0)?.kills, 138, "a newcomer's scoreboard has the kills of NOW");
+	checkEq(cc.roster.get(1)?.lifeDay, 1, "and every other survivor's day");
+	checkEq(cc.roster.get(2)?.lifeDay, 1, "and its own");
+	checkEq(cc.tallyDrops, 0, "and it never dropped a tally for a slot it did not know");
+	checkEq(ca.roster.get(2)?.kills, 0, "the others hear the newcomer's numbers too");
+	check(a.kills === 138 && b.lifeDay === 1, "the server's last-told fields agree");
 }
 
 // ---------------------------------------------------------------- verdict

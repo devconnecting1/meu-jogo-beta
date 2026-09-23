@@ -6,8 +6,8 @@
  *   Fx     unreliable, one batch per tick when something happened: blood, debris, shakes, tracers, shots
  *   World  reliable, batched per tick: InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
  *          outfit, a pet or the title shown changes in session — MON-04, MON-05), PlayerLife, ZombieDied, Clock,
- *          Announce (§4.5; a title earned is one, sent to its owner only), and WorldReset when every survivor died
- *          and a new town replaced the old one (MP-22)
+ *          Announce (§4.5; a title earned is one, sent to its owner only), WorldReset when every survivor died
+ *          and a new town replaced the old one (MP-22), and PlayerTally, the scoreboard's two numbers (MP-23)
  *
  * This is the last link of F2: the server has simulated one horde, one clock and one set of waves since 2A/2B,
  * and until this file put them on the wire no client could see any of it. Everything here is therefore about
@@ -30,6 +30,7 @@ import {
 	SNAP_ZOMBIE_CAP,
 	UNRELIABLE_PAYLOAD_LIMIT,
 	WORLD_FLUSH_EVERY_TICKS,
+	midViewExtraTicks,
 } from "shared/net/mpConfig";
 import {
 	AnnounceKind,
@@ -73,7 +74,7 @@ import {
 } from "./interest";
 import { DeathCause as HordeDeathCause, ZombieDeath } from "../sim/zombies";
 import { BossDeath } from "../sim/bosses";
-import { ServerPlayer, bufferDepth, refreshProfile } from "../sim/players";
+import { ServerPlayer, bufferDepth, refreshProfile, refreshTally } from "../sim/players";
 import { ServerSimulation } from "../sim/simulation";
 import { solidAdd } from "../sim/build";
 import { PendingWorld } from "../sim/worldOut";
@@ -95,6 +96,14 @@ const INTEREST_SWEEP_EVERY = 100;
  * comparisons per survivor ten times a second instead of sixty.
  */
 export const PROFILE_EVERY_TICKS = 6;
+/**
+ * (MP-23) Ticks between two looks at every survivor's scoreboard numbers (this life's day, the zombies put down):
+ * 60 ticks is once a second at 60 Hz. The kills move in a fight far more often than an outfit does, and a scoreboard
+ * a second late is still right -- so a survivor costs the others at most one 8-byte `PlayerTally` a second.
+ */
+export const TALLY_EVERY_TICKS = 60;
+/** (MP-23) ticks after a join when every tally is sent again: after the newcomer's PlayerJoined has been flushed */
+export const TALLY_AFTER_JOIN_TICKS = 2;
 /** spitter head recoil is 0..10 on the wire's raw u8: 25 steps per unit keeps the wind-up smooth */
 export const SPIT_EXTRA_SCALE = 25;
 /**
@@ -398,6 +407,8 @@ export class Replicator {
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
+	/** (MP-23) the tick at which every tally goes out again (a survivor joined), or undefined */
+	private tallyRound: number | undefined;
 
 	constructor(
 		private readonly sim: ServerSimulation,
@@ -406,6 +417,22 @@ export class Replicator {
 	) {
 		this.mapHash = options.mapHash;
 		this.seed = options.seed ?? DESIGN.TOWN_SEED;
+		// the shot's rewind needs what only this layer knows: which ring a zombie is in for which viewer (§2.3)
+		sim.zombieViewLag = (slot, z, viewTick) => this.viewLagOf(slot, z, viewTick);
+	}
+
+	/**
+	 * How many ticks further back than `viewTick` -- the render time of the frame that declared it -- `slot` drew
+	 * zombie `z`: a body sent in the mid ring is drawn one near interval later than the buffer's render time
+	 * (client/net/snapshotBuffer.ts, `extra`), a near one at it, and a body that changed ring somewhere in between,
+	 * because the client eases that over a second. The answer mirrors that easing from the `mid` flags the snapshots
+	 * actually carried to this viewer (`hordeRings`, `zombiesFor`); switched at once with the ring, it was up to
+	 * 3 ticks off for a second after every crossing of 800 u (the review of dee095a, S3).
+	 */
+	viewLagOf(slot: number, z: ZombieState, viewTick: number): number {
+		const netId = this.sim.horde?.netIdOf(z) ?? 0;
+		if (!(netId > 0)) return 0;
+		return this.hordeRings.viewExtra(slot, netId, viewTick, this.sim.simHz);
 	}
 
 	// ------------------------------------------------------------ reliable deltas (§4.5)
@@ -472,6 +499,15 @@ export class Replicator {
 			}
 		}
 		this.welcomeWorld(sp);
+		/*
+		 * MP-23: the scoreboard's numbers go out to EVERYBODY a couple of ticks from now, not inside this welcome. The
+		 * broadcast half of a flush goes before the directed half, so a tally broadcast in the same flush as this
+		 * newcomer's PlayerJoined would reach it for a slot it does not know yet, and be dropped -- and a directed one
+		 * written now could be overtaken by a newer broadcast in that same flush. Two ticks on, every PlayerJoined of
+		 * this welcome has been flushed, and one full round tells the newcomer every survivor's numbers (and the
+		 * others the newcomer's), in order.
+		 */
+		this.tallyRound = this.sim.tick + TALLY_AFTER_JOIN_TICKS;
 	}
 
 	/**
@@ -590,6 +626,15 @@ export class Replicator {
 		this.collectWorldDeltas(tick);
 		this.collectFx();
 		if (tick % PROFILE_EVERY_TICKS === 0) this.collectProfiles();
+		// a full round is due after a join; until it goes, the periodic pass waits for it (a delta broadcast in the
+		// same flush as a newcomer's PlayerJoined would reach it for a slot it does not know yet)
+		const round = this.tallyRound !== undefined && tick >= this.tallyRound;
+		if (round) {
+			this.tallyRound = undefined;
+			this.collectTallies(true);
+		} else if (this.tallyRound === undefined && tick % TALLY_EVERY_TICKS === 0) {
+			this.collectTallies(false);
+		}
 		if (tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
 		this.flushFx(tick);
 		if (tick % SNAP_NEAR_EVERY_TICKS === 0) this.sendSnapshots();
@@ -670,6 +715,17 @@ export class Replicator {
 	private collectProfiles(): void {
 		for (const sp of this.sim.players()) {
 			if (refreshProfile(sp)) this.queue(profileEvent(sp));
+		}
+	}
+
+	/**
+	 * (MP-23) Whoever's day of life or kill count moved since the roster last said so gets a `PlayerTally`, to everybody
+	 * -- their own client included, which is how the scoreboard shows the server's numbers for everyone alike. `all`
+	 * (the round after a join) sends every survivor's, moved or not.
+	 */
+	private collectTallies(all: boolean): void {
+		for (const sp of this.sim.players()) {
+			if (refreshTally(sp) || all) this.queue(tallyEvent(sp));
 		}
 	}
 
@@ -900,6 +956,8 @@ export class Replicator {
 		// the least worth drawing, and the client's despawn timeout (§4.4) retires it without a flicker
 		this.stats.droppedEntities += picks.size() - n;
 		const blocks = this.zombiePool;
+		const tick = this.sim.tick;
+		const midExtra = midViewExtraTicks(this.sim.simHz);
 		for (let i = 0; i < n; i++) {
 			const pick = picks[i];
 			let block = blocks[i];
@@ -910,6 +968,8 @@ export class Replicator {
 				fillZombieBlock(block, pick.entry.z, pick.entry.netId, pick.mid);
 			}
 			out.push(block);
+			// what this viewer's track will hold, and so how far back it will draw the body (`viewLagOf`)
+			this.hordeRings.noteSent(viewer.slot, pick.entry.netId, pick.mid, tick, midExtra);
 		}
 		return out;
 	}
@@ -958,6 +1018,10 @@ function joinedEvent(sp: ServerPlayer): WorldEvent {
 		pet: sp.pet,
 		title: sp.title,
 	};
+}
+
+function tallyEvent(sp: ServerPlayer): WorldEvent {
+	return { t: WorldEv.PlayerTally, slot: sp.slot, lifeDay: sp.lifeDay, kills: sp.kills };
 }
 
 function lifeEvent(slot: number, state: number): WorldEvent {

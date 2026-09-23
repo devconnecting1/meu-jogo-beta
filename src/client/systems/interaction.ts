@@ -1,10 +1,10 @@
 import { DESIGN } from "shared/engine/constants";
-import { choose, chance, rndInt, rndRange } from "shared/engine/rng";
+import { rndRange } from "shared/engine/rng";
 import type { PlayerState } from "shared/game/player";
 import { GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
-import { BUILDING_SPAWNS } from "shared/data/spawns";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import { mapItemLoot, rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
 import {
 	bodiesOverlapRect,
 	canRepair,
@@ -26,40 +26,6 @@ import { fxMessage, GameRefs } from "./types";
 
 /** cooldown (seconds left) per map item (tree/car/trash) since its last hit */
 const hitCooldowns = new Map<Solid, number>();
-
-interface LootEntry {
-	kind: number;
-	index: number;
-	/** < 1 → probability (as a fraction) of dropping exactly 1; otherwise the quantity dropped */
-	amount: number;
-}
-
-const TREE_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 23, amount: 2 },
-	{ kind: 3, index: 17, amount: 0.1 },
-	{ kind: 3, index: 18, amount: 0.1 },
-];
-
-const CAR_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 25, amount: 1 },
-	{ kind: 4, index: 30, amount: 0.1 },
-	{ kind: 4, index: 36, amount: 0.05 },
-];
-
-const TRASH_LOOT: Array<LootEntry> = [
-	{ kind: 4, index: 23, amount: 1 },
-	{ kind: 4, index: 24, amount: 1 },
-	{ kind: 4, index: 25, amount: 0.1 },
-	{ kind: 4, index: 29, amount: 0.1 },
-	{ kind: 4, index: 30, amount: 0.1 },
-];
-
-function lootTableFor(s: Solid): Array<LootEntry> | undefined {
-	if (s.kind === "tree") return TREE_LOOT;
-	if (s.tags === "car") return CAR_LOOT;
-	if (s.tags === "trash") return TRASH_LOOT;
-	return undefined;
-}
 
 /** spawn point: nearest point of the solid's rect to the survivor, pushed 24px further out towards them */
 function spawnFromSolid(refs: GameRefs, by: PlayerState, s: Solid, kind: number, index: number, count: number): void {
@@ -98,24 +64,10 @@ export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean, by: 
 	if (cd !== undefined && cd > 0) return false;
 	hitCooldowns.set(s, DESIGN.MAP_ITEM_HIT_TIME);
 	flinch(s, 0.25);
-
-	const lootTable = lootTableFor(s);
-	if (lootTable === undefined) return true;
-	if (!chance(DESIGN.MAP_ITEM_PERCENT)) return true;
-
-	if (choppingTool && s.kind === "tree") {
-		const count = 2 + (chance(50) ? 1 : 0);
-		spawnFromSolid(refs, by, s, 4, 23, count);
-		return true;
-	}
-
-	const entry = choose(lootTable);
-	if (entry.amount < 1) {
-		if (!chance(entry.amount * 100)) return true;
-		spawnFromSolid(refs, by, s, entry.kind, entry.index, 1);
-	} else {
-		spawnFromSolid(refs, by, s, entry.kind, entry.index, entry.amount);
-	}
+	// the shared table and roll (shared/sim/loot.ts): the server's hitMapItem rolls the very same
+	if (mapItemLoot(s) === undefined) return true;
+	const drop = rollMapItemDrop(s, choppingTool);
+	if (drop !== undefined) spawnFromSolid(refs, by, s, drop.kind, drop.index, drop.count);
 	return true;
 }
 
@@ -199,22 +151,9 @@ function takeItem(refs: GameRefs, it: GroundItem): void {
 	if (idx >= 0) refs.world.items.remove(idx);
 }
 
+/** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes */
 function rollLoot(s: Solid): void {
-	const bt = s.buildingType ?? 0;
-	const lootTable = bt < BUILDING_SPAWNS.size() ? BUILDING_SPAWNS[bt] : BUILDING_SPAWNS[0];
-	const slots = s.lootSlots ?? 2;
-	const loot: Array<{ kind: number; id: number; count: number }> = [];
-	for (let i = 0; i < slots; i++) {
-		const e = choose(lootTable);
-		let count = 1;
-		if (e.max < 1) {
-			if (math.random() * 100 >= e.max * 100) continue;
-		} else {
-			count = rndInt(e.min, e.max);
-		}
-		loot.push({ kind: e.kind, id: e.index, count });
-	}
-	s.lootItems = loot;
+	s.lootItems = rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 }
 
 function tryRepair(refs: GameRefs, s: Solid): boolean {
@@ -327,6 +266,9 @@ export class Interaction {
 		for (const drop of loot) {
 			addItem(refs.save, drop.kind, drop.id, drop.count);
 		}
+		// Thief: one more slot of this building's table, for this searcher alone (shared/sim/loot.ts)
+		const extra = thiefFind(refs.save, b.buildingType ?? 0);
+		if (extra !== undefined) addItem(refs.save, extra.kind, extra.id, extra.count);
 		b.lootItems = [];
 		// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
 		b.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;

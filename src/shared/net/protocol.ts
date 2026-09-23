@@ -63,6 +63,12 @@
  *     name (shared/data/titles.ts `titleToWire`: 0 = none, else the title id + 1), range-checked on decode like the
  *     looks, and only ever one the server knows that survivor EARNED (`titleWireOf`). A title earned is announced to
  *     its owner alone as `Announce{msg = TitleUnlocked, arg = title byte}`, whose arg is checked (1..TITLE_WIRE_MAX).
+ * 15. (MP-23, the match scoreboard) `PlayerTally{slot, lifeDay, kills}`, 8 B with the tag: the day of THIS life (u16,
+ *     1..65535; the save allows 99 999, which the wire clamps -- a life that long has other problems) and the zombies
+ *     the server's kill credit gave that survivor (`zombieKills`, u32, 0..SAVE_LIMITS.COUNTER_MAX), both read off the
+ *     save the SERVER owns (never a client's report). Broadcast only when one of them moved, looked at once a second
+ *     (server/net/replication.ts TALLY_EVERY_TICKS), plus one full round two ticks after a survivor joins, so the
+ *     newcomer hears everybody's AFTER its PlayerJoined for each of them. Range-checked on decode like the roster.
  */
 import {
 	NetReader,
@@ -101,6 +107,7 @@ import {
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
+import { SAVE_LIMITS } from "shared/game/save";
 
 // ================================================================ remotes (§4.1)
 
@@ -1281,6 +1288,8 @@ export const WorldEv = {
 	PlayerProfile: 16,
 	/** (MP-22) the world ended: a new town from a new seed, back to day 1 */
 	WorldReset: 17,
+	/** (MP-23) the scoreboard's two numbers of a survivor: the day of this life and the zombies put down */
+	PlayerTally: 18,
 } as const;
 
 /** SolidAdd.state / DoorSet.state */
@@ -1310,6 +1319,10 @@ const MAX_SAFE_INT = 9007199254740991;
 export const WORLD_RESET_MAX_LIVES = 255;
 /** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
 const RUN_REV_MAX = 4294967295;
+/** (MP-23) the largest life day PlayerTally carries (a u16; the save's own ceiling is higher and is clamped) */
+export const TALLY_DAY_MAX = 65535;
+/** (MP-23) the largest kill count PlayerTally carries: the save's own counter ceiling */
+export const TALLY_KILLS_MAX = SAVE_LIMITS.COUNTER_MAX;
 
 export const DeathCause = {
 	Shot: 0,
@@ -1484,6 +1497,20 @@ export interface WPlayerLeft {
 	slot: number;
 }
 
+/**
+ * (MP-23) The scoreboard's numbers of one survivor, as the SERVER's save has them: the day of this life and the zombies
+ * its kill credit gave them (lifetime, MON-05's counter). 8 B with the tag; sent when one of them moves (at most once
+ * a second per survivor) and in the round that follows a join.
+ */
+export interface WPlayerTally {
+	t: typeof WorldEv.PlayerTally;
+	slot: number;
+	/** 1..TALLY_DAY_MAX */
+	lifeDay: number;
+	/** 0..TALLY_KILLS_MAX */
+	kills: number;
+}
+
 export interface WPlayerLife {
 	t: typeof WorldEv.PlayerLife;
 	slot: number;
@@ -1545,7 +1572,8 @@ export type WorldEvent =
 	| WPlayerLife
 	| WInitBegin
 	| WPlayerProfile
-	| WWorldReset;
+	| WWorldReset
+	| WPlayerTally;
 
 export interface WorldBatch {
 	tick: number;
@@ -1637,6 +1665,11 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			break;
 		case WorldEv.PlayerLeft:
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
+			break;
+		case WorldEv.PlayerTally:
+			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
+			w.u16(clampInt(e.lifeDay, 1, TALLY_DAY_MAX));
+			w.u32(clampInt(e.kills, 0, TALLY_KILLS_MAX));
 			break;
 		case WorldEv.PlayerLife:
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
@@ -1769,6 +1802,12 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const slot = r.u8();
 		if (!validSlot(slot)) return undefined;
 		return { t: WorldEv.PlayerLeft, slot };
+	} else if (t === WorldEv.PlayerTally) {
+		const slot = r.u8();
+		const lifeDay = r.u16();
+		const kills = r.u32();
+		if (!validSlot(slot) || lifeDay < 1 || kills > TALLY_KILLS_MAX) return undefined;
+		return { t: WorldEv.PlayerTally, slot, lifeDay, kills };
 	} else if (t === WorldEv.PlayerLife) {
 		const slot = r.u8();
 		const state = r.u8();

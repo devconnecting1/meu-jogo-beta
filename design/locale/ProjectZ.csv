@@ -127,14 +127,14 @@ Key,Context,Example,Source
 ,,,Brazier
 ,,,Electric turret
 ,,,Trap
-,,,signal generator
+,,,Signal generator
 ,,,Cooker
 ,,,Electric furnace
 ,,,Bicycle
 ,,,Motorcycle
 ,,,Wood
 ,,,Stone
-,,,Piece of steel 
+,,,Piece of steel
 ,,,Steel
 ,,,Piece of gold
 ,,,Gold
@@ -302,7 +302,7 @@ Key,Context,Example,Source
 ,,,Trot
 ,,,Patience
 ,,,Pickpocket
-,,,Theif
+,,,Thief
 ,,,Chef
 ,,,Dwarf
 ,,,Robotics
@@ -317,7 +317,7 @@ Key,Context,Example,Source
 ,,,Recovery increases
 ,,,Knockback increases
 ,,,Melee damage increases
-,,,Roload becomes faster
+,,,Reload becomes faster
 ,,,Accuracy improves
 ,,,Bow accuracy improves
 ,,,Speed increases
@@ -332,7 +332,7 @@ Key,Context,Example,Source
 ,,,Night vision increases
 ,,,Repair speed increases
 ,,,Accuracy improves with moving
-,,,Able to shot heads
+,,,Able to shoot heads
 ,,,Get less damage from poison
 ,,,Starter pack
 ,,,Food aid
@@ -387,6 +387,12 @@ Key,Context,Example,Source
 ,,,Records
 ,,,How to play
 ,,,Credits
+,,,Top-down zombie survival for Roblox
+,,,Inspired by Dead Town
+,,,by Lemon Puppy Games
+,,,Special thanks (original Dead Town credits)
+,,,Built with roblox-ts
+,,,Thank you for playing!
 ,,,General
 ,,,Touch controls
 ,,,Controls
@@ -432,6 +438,19 @@ Key,Context,Example,Source
 ,,,Gamepad
 ,,,Menu
 ,,,Backpack
+,,,Move
+,,,Aim
+,,,"Interact, search, loot"
+,,,Right click also interacts.
+,,,Move (the stick opens under it)
+,,,Drag to aim
+,,,Fire the aimed shot
+,,,Automatics keep firing
+,,,Interact (appears when you can)
+,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
+,,,Interact
+,,,Menus
+,,,Menus are navigated with the stick; the selected button carries a focus ring.
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival
@@ -477,6 +496,10 @@ Key,Context,Example,Source
 ,,,Save
 ,,,Home
 ,,,Game over
+,,,A new record. The town remembers.
+,,,Five days is more than most.
+,,,Everyone's first night ends this way. The second one goes better.
+,,,The street took it back. Take it again.
 ,,,Rebirth
 ,,,Survival days
 ,,,Continue price
@@ -485,6 +508,7 @@ Key,Context,Example,Source
 ,,,"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Purchased
 ,,,Not enough coins
+,,,more needed
 ,,,Too many packs waiting
 ,,,Already owned
 ,,,Please wait a moment
@@ -520,6 +544,10 @@ Key,Context,Example,Source
 ,,,Getting started
 ,,,Got it
 ,,,Life day
+,,,Camp
+,,,North
+,,,No camp yet
+,,,N
 ,,,Nice.
 ,,,Night came first
 ,,,Rebirth is for your own world; here you wake at daybreak
@@ -560,6 +588,7 @@ Key,Context,Example,Source
 ,,,Steady aim
 ,,,Pain relief
 ,,,Cooks into
+,,,"Cook it at a lit fire, from the Craft tab."
 ,,,Slot
 ,,,Used in recipes
 ,,,Used to craft
@@ -613,6 +642,7 @@ Key,Context,Example,Source
 ,,,HP
 ,,,FOOD
 ,,,LV
+,,,FIRE
 ,,,Switch weapon
 ,,,Tap a weapon
 ,,,Start
@@ -668,6 +698,11 @@ Key,Context,Example,Source
 ,,,Need a craft desk
 ,,,Need a lit fire
 ,,,Lit fire nearby
+,,,smelter
+,,,Need a lit brazier
+,,,Lit brazier nearby
+,,,"Light a brazier and stand next to it (a campfire is not hot enough for metal), then open the backpack again."
+,,,Need brazier
 ,,,You can craft this here.
 ,,,"Light a campfire or brazier and stand next to it, then open the backpack again."
 ,,,"Stand next to the right desk, then open the backpack again."
@@ -688,3 +723,18 @@ Key,Context,Example,Source
 ,,,No skill points
 ,,,No skill points to spend. Level up to earn more.
 ,,,"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.#Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.#Level up to earn skill points, and spend them in Skills.#The backpack and the menu never stop the world: open them somewhere safe."
+,,,All time
+,,,Titles earned
+,,,Rebirths
+,,,Survivors
+,,,Sort by
+,,,Lv
+,,,Put down
+,,,Name
+,,,Alive
+,,,Down
+,,,Dead
+,,,until dawn
+,,,Click a column to sort
+,,,Waiting for the town's list...
+,,,Survivors in town

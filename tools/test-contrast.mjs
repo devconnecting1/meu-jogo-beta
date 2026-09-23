@@ -409,6 +409,32 @@ const PAIRS = [
 	["SURFACE.line", "SURFACE.groove", MIN_UI, "o contorno de ferro da linha sobre o leito escuro"],
 	["THEME.tabActive", "SURFACE.groove", MIN_UI, "o anel azul da linha selecionada sobre o leito"],
 	["SURFACE.row", "SURFACE.well", MIN_TONE, "linha ganha x linha bloqueada: a bloqueada e mais escura"],
+
+	// --- tables and forms (UI-12, client/ui/table.ts / numberField.ts): the Records window, the match scoreboard
+	// (MP-23) and the admin panel. Rows are the wardrobe's (SURFACE.row, or SURFACE.well in the denser admin table), on
+	// the groove; the header is the form row's label cell, blue when it is the sorted column
+	["THEME.foreground", "SURFACE.cellLabel", MIN_TEXT, "Table: cabecalho (Bold) na celula de ferro"],
+	["THEME.foreground", "THEME.tabActive", MIN_TEXT, "Table: cabecalho da coluna ordenada e suas setas, no azul"],
+	["SURFACE.cellLabel", "SURFACE.groove", MIN_RELIEF, "Table: cabecalho sobre o leito"],
+	["THEME.foreground", "SURFACE.row", MIN_TEXT, "Table: texto e numeros da linha (Records, placar)"],
+	["THEME.mutedForeground", "SURFACE.row", MIN_TEXT, 'Table: segunda linha e traco "-" (placar: "until dawn")'],
+	["STAT.bonus", "SURFACE.row", MIN_TEXT, "placar: Alive; [Survivor] sob o nome"],
+	["STAT.effect", "SURFACE.row", MIN_TEXT, "placar: Down; [Horde Breaker] sob o nome"],
+	["THEME.secondary", "SURFACE.groove", MIN_UI, "Table: o anel de ferro da linha sob o ponteiro"],
+	["THEME.foreground", "SURFACE.groove", MIN_UI, "Table: o anel claro da sua linha (placar)"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "Table: o anel azul da linha selecionada (admin)"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "Table: o estado vazio no leito (Loading..., nenhum casa)"],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, "admin: texto e numeros da linha da tabela Players"],
+	["STAT.bonus", "SURFACE.well", MIN_TEXT, "admin: Alive"],
+	["STAT.effect", "SURFACE.well", MIN_TEXT, "admin: AFK"],
+	["THEME.destructive", "SURFACE.well", MIN_TEXT, "admin: Dead; o erro do campo na linha de Items"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "admin: Lobby / Loading; a contagem da linha de Items"],
+	["THEME.destructive", "SURFACE.well", MIN_UI, "NumberField: a borda vermelha do campo errado contra o seu poco"],
+	["THEME.ring", "SURFACE.well", MIN_UI, "NumberField: a borda do campo em foco"],
+	["SURFACE.well", "SURFACE.cell", MIN_RELIEF, "NumberField: o poco na celula de valor da linha de formulario"],
+	["THEME.foreground", "SURFACE.cellLabel", MIN_TEXT, "linha de formulario: o erro do campo no lugar da descricao"],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, "placar: o chip ao lado da placa do dia (contagem, tecla)"],
+	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, "placar: o chip aceso enquanto o placar esta aberto"],
 ];
 
 /**
@@ -422,6 +448,12 @@ const RECORDED_FAILS = [
 		"SURFACE.cellLabel",
 		MIN_TEXT,
 		"UI-07: o cinza mudo na celula de rotulo (a descricao da linha de formulario) -> SURFACE.cellCaption",
+	],
+	[
+		"THEME.destructive",
+		"SURFACE.cellLabel",
+		MIN_TEXT,
+		"UI-12: o erro em vermelho na celula de rotulo -> o erro vai na voz clara (THEME.foreground) no lugar da descricao",
 	],
 ];
 

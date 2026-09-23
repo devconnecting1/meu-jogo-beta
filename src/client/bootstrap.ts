@@ -43,6 +43,11 @@ disableCoreGui(Enum.CoreGuiType.EmotesMenu);
 pcall(() => {
 	GuiService.GuiNavigationEnabled = true;
 });
+// ...but not the engine's "Select picks a GUI" (AutoSelectGuiEnabled): every screen of the kit focuses itself
+// (widgets.autoFocus, focusFirstMenuControl below), and Back / Select is the match scoreboard's (MP-23)
+pcall(() => {
+	GuiService.AutoSelectGuiEnabled = false;
+});
 
 const player = Players.LocalPlayer;
 const playerGui = player.WaitForChild("PlayerGui") as PlayerGui;
@@ -406,6 +411,9 @@ function handleGamepadButton(key: Enum.KeyCode, down: boolean): void {
 		input.backpackPressed = true;
 	} else if (key === Enum.KeyCode.ButtonStart) {
 		input.pausePressed = true;
+	} else if (key === Enum.KeyCode.ButtonSelect) {
+		// the match scoreboard (MP-23): press to open, press again to close
+		input.scoreboardPressed = true;
 	}
 }
 
@@ -445,6 +453,9 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 		} else if (k === Enum.KeyCode.P || k === Enum.KeyCode.Escape) {
 			if (k === Enum.KeyCode.Escape) input.keyEsc = true;
 			input.pausePressed = true;
+		} else if (k === Enum.KeyCode.Q) {
+			// held: the match scoreboard shows while Q is down (MP-23; Tab is the Roblox player list's, UI-02)
+			input.keyScoreboard = true;
 		} else {
 			const slot = WEAPON_KEYS.indexOf(k);
 			if (slot >= 0) input.weaponSlotPressed = slot;
@@ -452,9 +463,11 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
 		handleTouchBegin(inputObj);
 	} else if (inputObj.UserInputType.Name.sub(1, 7) === "Gamepad") {
-		// a selected menu owns the pad: only Start (pause) still reaches the game
+		// a selected menu owns the pad: only the two toggles still reach the game -- Start (the menu) and LB (the Bag),
+		// so the button that opened a screen closes it too (UI-11: "B / LB keep opening and closing"; the Bag takes the
+		// focus when a pad opens it, and LB used to be swallowed right there)
 		if (menuHasFocus()) {
-			if (inputObj.KeyCode !== Enum.KeyCode.ButtonStart) return;
+			if (inputObj.KeyCode !== Enum.KeyCode.ButtonStart && inputObj.KeyCode !== Enum.KeyCode.ButtonL1) return;
 		} else if (focusFirstMenuControl()) {
 			// a screen was open with nothing selected: this press is what wakes the navigation up
 			return;
@@ -480,6 +493,7 @@ UserInputService.InputEnded.Connect(inputObj => {
 		else if (k === Enum.KeyCode.R) input.keyR = false;
 		else if (k === Enum.KeyCode.Tab) input.keyTab = false;
 		else if (k === Enum.KeyCode.Escape) input.keyEsc = false;
+		else if (k === Enum.KeyCode.Q) input.keyScoreboard = false;
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
 		handleTouchEnd(inputObj);
 	} else if (inputObj.UserInputType.Name.sub(1, 7) === "Gamepad") {
@@ -667,6 +681,7 @@ UserInputService.WindowFocusReleased.Connect(() => {
 	input.keyR = false;
 	input.keyTab = false;
 	input.keyEsc = false;
+	input.keyScoreboard = false;
 	input.joystickActive = false;
 	input.moveX = 0;
 	input.moveY = 0;
