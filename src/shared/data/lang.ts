@@ -431,7 +431,7 @@ export const LANG_TABLE: Array<string> = [
 	"BGM",
 	"Night music, ambience and the heartbeat.",
 	"HUD size",
-	"Console, day plate, hints and messages.",
+	"Console, hints and messages.",
 	"Reduce motion",
 	"Set in the Roblox menu. Stills the town.",
 	"Stick size",
@@ -692,6 +692,9 @@ export const LANG_TABLE: Array<string> = [
 	"LV",
 	// the touch fire pad's tag (client/ui/hud.ts)
 	"FIRE",
+	// the console's sky (client/ui/hudSky.ts): by day the countdown to nightfall and the horde ("Night in 2:10"); at night
+	// it counts to daybreak in the dawn wait's own words ("Daybreak in 1:05")
+	"Night in",
 	"Switch weapon",
 	"Tap a weapon",
 	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor

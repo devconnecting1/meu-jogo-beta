@@ -1,0 +1,138 @@
+{
+	"survivors": {
+		"title": "The survivor, each outfit, eight facings",
+		"before": {
+			"sprites": 372,
+			"images": 4,
+			"flat": 368,
+			"strokes": 128,
+			"corners": 320
+		},
+		"after": {
+			"sprites": 100,
+			"images": 68,
+			"flat": 32,
+			"strokes": 0,
+			"corners": 32
+		}
+	},
+	"weapons": {
+		"title": "Weapons in the hands, held and swung",
+		"before": {
+			"sprites": 295,
+			"images": 3,
+			"flat": 292,
+			"strokes": 86,
+			"corners": 242
+		},
+		"after": {
+			"sprites": 91,
+			"images": 51,
+			"flat": 40,
+			"strokes": 0,
+			"corners": 24
+		}
+	},
+	"states": {
+		"title": "Hit, poisoned, downed",
+		"before": {
+			"sprites": 79,
+			"images": 4,
+			"flat": 75,
+			"strokes": 25,
+			"corners": 68
+		},
+		"after": {
+			"sprites": 33,
+			"images": 25,
+			"flat": 8,
+			"strokes": 0,
+			"corners": 8
+		}
+	},
+	"pets": {
+		"title": "Pets: standing, and on the move",
+		"before": {
+			"sprites": 129,
+			"images": 3,
+			"flat": 126,
+			"strokes": 48,
+			"corners": 122
+		},
+		"after": {
+			"sprites": 27,
+			"images": 15,
+			"flat": 12,
+			"strokes": 0,
+			"corners": 12
+		}
+	},
+	"zombies": {
+		"title": "Every zombie variant, eight facings and its special pose",
+		"before": {
+			"sprites": 382,
+			"images": 4,
+			"flat": 378,
+			"strokes": 163,
+			"corners": 378
+		},
+		"after": {
+			"sprites": 118,
+			"images": 64,
+			"flat": 54,
+			"strokes": 0,
+			"corners": 54
+		}
+	},
+	"horde-day": {
+		"title": "A horde of 60 and four survivors with pets, 10:00",
+		"before": {
+			"sprites": 640,
+			"images": 115,
+			"flat": 525,
+			"strokes": 233,
+			"corners": 508
+		},
+		"after": {
+			"sprites": 273,
+			"images": 187,
+			"flat": 86,
+			"strokes": 21,
+			"corners": 75
+		}
+	},
+	"horde-night": {
+		"title": "The same street at 22:00, lit by the survivors only",
+		"before": {
+			"sprites": 642,
+			"images": 115,
+			"flat": 527,
+			"strokes": 233,
+			"corners": 508
+		},
+		"after": {
+			"sprites": 275,
+			"images": 187,
+			"flat": 88,
+			"strokes": 21,
+			"corners": 75
+		}
+	},
+	"fight": {
+		"title": "A fight: hit flashes, a lit fuse, a swing, a hit survivor",
+		"before": {
+			"sprites": 644,
+			"images": 115,
+			"flat": 529,
+			"strokes": 233,
+			"corners": 508
+		},
+		"after": {
+			"sprites": 304,
+			"images": 214,
+			"flat": 90,
+			"strokes": 21,
+			"corners": 75
+		}
+	}
+}
