@@ -666,7 +666,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			// lobby — is banked into its save before server/main.server.ts writes them all
 			const everyone = new Array<Player>();
 			for (const [player] of links) everyone.push(player);
-			for (const player of everyone) release(player);
+			for (const player of everyone) {
+				// one body that cannot be banked leaves the others to be (F5)
+				const [ok, err] = xpcall(() => release(player), tickTrace);
+				if (!ok) warn(`[${GAME_NAME}] banking ${player.Name} at shutdown failed: ${tostring(err)}`);
+			}
 			links.clear();
 			bySlot.clear();
 			destroyMpRemotes(remotes);

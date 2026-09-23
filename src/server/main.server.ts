@@ -414,6 +414,15 @@ function writeWithLock(s: Session, json: string | undefined, release: boolean, d
 }
 
 /**
+ * A session on its way out whose own write cannot be made (it threw, it is too large, the session is read-only): its
+ * lock at least goes back -- only while it is still this session's, the stored data untouched -- so the player's next
+ * server loads the last save that landed without waiting LOCK_WAIT for this one (F5)
+ */
+function handBackLock(s: Session, delays: Array<number>): void {
+	if (writeWithLock(s, undefined, true, delays) !== "failed") s.released = true;
+}
+
+/**
  * The title record (server/save/titleRecord.ts) brought up to date with the save when it is due (`titleRecordDue`:
  * a title, a new history, a step of kills -- or, `final`, anything at all on leaving).
  */
@@ -462,7 +471,12 @@ function recordBeforeRelease(): boolean {
  */
 function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAYS): boolean {
 	if (!s.loaded || s.released) return true;
-	if (!persists(s)) return false;
+	if (!persists(s)) {
+		// a read-only session may still hold the lock its load took (a load that threw after it, a stored save that is
+		// not JSON): on the way out it goes back all the same
+		if (release && s.status === "error" && !s.lockLost && dataStore !== undefined) handBackLock(s, delays);
+		return false;
+	}
 	if (!waitUntil(() => !s.writing, 30)) return false;
 	if (s.released) return true;
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
@@ -474,10 +488,8 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	if (!ran) {
 		warn(`[${GAME_NAME}] save ${s.key} failed: ${tostring(written)}`);
 		s.dirty = true;
-		// a session on its way out gets no other try: its lock at least goes back (only while it is still this
-		// session's, see writeWithLock), so the player's next server loads the last save that landed without waiting
-		// LOCK_WAIT for this one
-		if (release && !s.released && writeWithLock(s, undefined, true, delays) === "ok") s.released = true;
+		// a session on its way out gets no other try
+		if (release && !s.released) handBackLock(s, delays);
 	}
 	s.writing = false;
 	return ran && written === true;
@@ -495,6 +507,7 @@ function writeSession(s: Session, release: boolean, delays: Array<number>): bool
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
 		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
+		if (release) handBackLock(s, delays);
 		return false;
 	}
 	const wasDirty = s.dirty;
@@ -666,8 +679,11 @@ function readSession(s: Session): void {
 	if (retried && status !== "error") mpHost?.forgetUnsaved(s.player, blank);
 	// a stored save meets the body this server kept, BEFORE the LoadAck shows it to the client: a reconnect is
 	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
-	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
-	if (status === "ok" && mpHost?.adopt(s.player, save) === true) s.dirty = true;
+	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth.
+	// Guarded (F5): what the keeper already did with this save -- an owed new life granted on it, which it will not
+	// grant twice -- stays with the session that keeps the save, instead of going down with a load thrown away
+	const adopted = status === "ok" && guarded(`${s.key}: meeting the kept body`, () => mpHost?.adopt(s.player, save));
+	if (adopted === true) s.dirty = true;
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {
@@ -1046,7 +1062,17 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
 		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
 		if (refusal !== undefined) return fail(refusal, s);
+		const host = mpHost;
 		if (req.kind === "rebirth") {
+			// what the sale changes, to take back if the body does not stand (F5). Nothing yields in here, so nobody
+			// (a report, a wallet push) can have seen the new runRev before it goes back
+			const before = {
+				money: save.money,
+				deathCount: save.deathCount,
+				runOver: save.runOver,
+				runRev: save.runRev,
+				assisted: s.assistedRunRev,
+			};
 			price = due ? 0 : rebirthPrice(save.deathCount);
 			save.money -= price;
 			if (!due) save.deathCount += 1;
@@ -1056,13 +1082,44 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 			save.runRev += 1;
 			// the SAVE says the run continues; this is what makes the simulated survivor agree (§7.1). Without
 			// it the coins were gone and the body stayed dead, so the button looked like it did nothing.
-			mpHost?.rebirth(player, save);
+			const stood =
+				host === undefined ||
+				guarded(`${s.key}: rebirth`, () => {
+					host.rebirth(player, save);
+					return true;
+				}) === true ||
+				// it threw: sold only if the body stood up all the same (a throw after that point keeps the Rebirth)
+				guarded(`${s.key}: rebirth check`, () => host.isDead(player, save)) === false;
+			if (!stood) {
+				// nothing was sold: the charge, the continue and the run go back, so the client's next Rebirth pays once
+				// (whatever the keeper moved before it threw, the corpse's rounds into the reserve, goes with the save)
+				save.money = before.money;
+				save.deathCount = before.deathCount;
+				save.runOver = before.runOver;
+				save.runRev = before.runRev;
+				s.assistedRunRev = before.assisted;
+				s.dirty = true;
+				return fail("network", s);
+			}
 		} else {
 			price = 0;
 			resetRun(save);
 			save.runRev += 1;
 			s.assistedRunRev = undefined;
-			mpHost?.newLife(player, save);
+			const renewed =
+				host === undefined ||
+				guarded(`${s.key}: new life`, () => {
+					host.newLife(player, save);
+					return true;
+				}) === true;
+			if (!renewed) {
+				// the new life stands, and so does the death (F5): resetRun cleared what newLife writes back. A save
+				// saying "alive" under a body the keeper holds dead is the free revive rule 5 forbids (a crash would
+				// hand it out on the next join)
+				save.runOver = true;
+				save.runHp = 0;
+				save.runHunger = 0;
+			}
 		}
 	} else {
 		return fail("invalid", s);
@@ -1094,7 +1151,10 @@ Players.PlayerRemoving.Connect(player => {
 	// run in no guaranteed order, and this write is the last one the session gets.
 	if (s.loaded) guarded(`${s.key}: banking the body`, () => mpHost?.release(player, s.save));
 	guarded(`${s.key}: final save`, () => flush(s, true));
-	// only now, the final write made (and the lock with it) or given up: the `releasing` mark is what keeps this
+	// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
+	// it, and the mark below stays until then
+	if (s.writing && waitUntil(() => !s.writing, 60)) guarded(`${s.key}: final save`, () => flush(s, true));
+	// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps this
 	// user's next session here from taking the lock under that write. Left behind, it held every later join 20-35 s
 	sessions.delete(player);
 	releasing.delete(userId);

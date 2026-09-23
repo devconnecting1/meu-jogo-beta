@@ -60,6 +60,11 @@
  *                           write, the lock's release or the cleanup after it (session, `releasing` mark, BindToClose's
  *                           count, the autosave loop), and the log gets the error WITH its traceback. Threads here run as
  *                           Roblox runs them: an error kills its own thread only.
+ *  26–28. THE F5 REVIEW     a read-only session (a load that threw after taking the lock, a save that is not JSON) and
+ *                           a save too large to write hand their lock back on the way out; a Rebirth whose stand-up
+ *                           throws is not sold (refunded, then paid once) unless the body stood; a New game whose new
+ *                           life throws keeps the death in the save; one body that cannot be banked at shutdown leaves
+ *                           the others banked.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -2034,18 +2039,23 @@ function failEncode(srv, n = 1) {
 	};
 }
 
-/** `mod[name]` throws the next `n` times it is called (a module the server reads through its exports) */
-function failNext(mod, name, message, n = 1) {
-	const real = mod[name];
-	mod[name] = (...a) => {
+/**
+ * `obj[name]` throws the next `n` times it is called: a module the server reads through its exports, or an object's
+ * method (called with its own `this`). Answers the undo.
+ */
+function failNext(obj, name, message, n = 1) {
+	const own = Object.prototype.hasOwnProperty.call(obj, name);
+	const real = obj[name];
+	obj[name] = function (...a) {
 		if (n > 0) {
 			n -= 1;
 			throw new Error(message);
 		}
-		return real(...a);
+		return real.apply(this, a);
 	};
 	return () => {
-		mod[name] = real;
+		if (own) obj[name] = real;
+		else delete obj[name];
 	};
 }
 
@@ -2400,6 +2410,272 @@ section("25) a simulation tick that throws is logged with its traceback (F6)", (
 		"the tick's failure reaches the log with its traceback",
 		firstLine(message),
 	);
+});
+
+// ================================================================ 26–28: the review of the F5 fix
+
+/** a returning survivor: one session that stored `money` and left */
+function returning(money, name) {
+	const u = newUser();
+	const first = bootServer();
+	const p = first.join(u, name);
+	first.save(p).money = money;
+	first.quit(p);
+	return u;
+}
+
+/** the player's next server: how long its join waited for the lock (s), and the money its LoadAck carried */
+function nextServerJoin(u, name) {
+	const next = bootServer();
+	let q;
+	const waited = waitedDuring(() => {
+		q = next.join(u, name);
+	});
+	const money = next.save(q)?.money;
+	next.quit(q);
+	return { waited, money };
+}
+
+section("26) a read-only session, and a save too large to write, hand the lock back on the way out (F5 review)", () => {
+	// a load that throws after loadWithLock took the lock, and the player leaves without a Retry (review R1)
+	{
+		const u = returning(555, "leaker");
+		const srv = bootServer();
+		const restore = failNext(
+			require(join(SRC, "server/save/titleRecord.ts")),
+			"loadTitleRecord",
+			"injected: the load failed",
+		);
+		let p;
+		try {
+			asRoblox(() => {
+				p = srv.join(u, "leaker");
+			});
+		} finally {
+			restore();
+		}
+		const held = saveDocOf(u)?.lock !== undefined;
+		srv.quit(p);
+		check(
+			held && lockFree(u) && srv.stored(u)?.money === 555,
+			"a load that threw after taking the lock: its read-only session hands the lock back on the way out",
+			`held ${held}, lock after ${JSON.stringify(saveDocOf(u)?.lock)}, stored ${srv.stored(u)?.money}`,
+		);
+		const next = nextServerJoin(u, "leaker");
+		check(
+			next.waited < 1 && next.money === 555,
+			"…so the next server loads the save at once",
+			`waited ${next.waited.toFixed(1)} s, money ${next.money}`,
+		);
+	}
+	// the stored save is not valid JSON (read-only from the start)
+	{
+		const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const u = returning(1, "unreadable");
+		fakeStore(SAVE_STORE).data.get(String(u)).data = "{not json";
+		const srv = bootServer();
+		const p = srv.join(u, "unreadable");
+		const held = saveDocOf(u)?.lock !== undefined;
+		srv.quit(p);
+		check(
+			held && lockFree(u) && saveDocOf(u)?.data === "{not json",
+			"a stored save that is not JSON: the read-only session hands the lock back, the stored data untouched",
+			`held ${held}, lock after ${JSON.stringify(saveDocOf(u)?.lock)}, data ${JSON.stringify(saveDocOf(u)?.data)}`,
+		);
+		const next = nextServerJoin(u, "unreadable");
+		check(next.waited < 1, "…so the next server does not wait out the lock", `waited ${next.waited.toFixed(1)} s`);
+	}
+	// a save too large to store, on the way out
+	{
+		const u = returning(1234, "hoarder");
+		const srv = bootServer();
+		const p = srv.join(u, "hoarder");
+		srv.save(p).money = 4321;
+		const http = srv.env.services.HttpService;
+		const encode = http.JSONEncode;
+		let big = 1;
+		http.JSONEncode = v => (big-- > 0 ? "x".repeat(3_900_001) : encode(v));
+		srv.quit(p);
+		check(
+			lockFree(u) && srv.stored(u)?.money === 1234,
+			"a save too large to store on the way out: not written, and the lock handed back over the last save that landed",
+			`lock ${JSON.stringify(saveDocOf(u)?.lock)}, stored ${srv.stored(u)?.money}`,
+		);
+		const next = nextServerJoin(u, "hoarder");
+		check(
+			next.waited < 1 && next.money === 1234,
+			"…so the next server loads that save at once",
+			`waited ${next.waited.toFixed(1)} s, money ${next.money}`,
+		);
+	}
+});
+
+section(
+	"27) a Rebirth or a New game whose simulation step throws: nothing sold twice, no free revive (F5 review)",
+	() => {
+		const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
+		/** a survivor down in the world with 1000 coins, and a witness standing so the world does not end */
+		function fallen(s, name) {
+			const w = s.join(newUser(), "witness");
+			s.immortal.add(w);
+			s.enter(w);
+			const u = newUser();
+			const p = s.join(u, name);
+			s.enter(p);
+			const save = s.save(p);
+			save.money = 1000;
+			s.kill(p);
+			return { u, p, save };
+		}
+		/** the ShopAction answer, or what it threw */
+		function ask(s, p, req) {
+			try {
+				return s.shop(p, req);
+			} catch (e) {
+				return { threw: e?.message ?? String(e) };
+			}
+		}
+		// the stand-up throws before the body is up (review R2)
+		{
+			const s = bootServer();
+			const { p, save } = fallen(s, "payer");
+			const rev = save.runRev;
+			const deaths = save.deathCount;
+			const price = rebirthPrice(deaths);
+			const restore = failNext(s.host, "rebirth", "injected: the rebirth failed");
+			let res;
+			try {
+				res = ask(s, p, { kind: "rebirth", runRev: rev });
+			} finally {
+				restore();
+			}
+			check(
+				res?.ok === false && res.reason === "network" && res.wallet?.money === 1000,
+				"a Rebirth whose stand-up throws is not sold: refused, and the wallet shows nothing taken",
+				JSON.stringify(res),
+			);
+			check(
+				save.money === 1000 &&
+					save.deathCount === deaths &&
+					save.runRev === rev &&
+					save.runOver === true &&
+					s.body(p)?.state.dead === true,
+				"…the save is as it was (coins, continues, run) and the body is still down",
+				`money ${save.money}, deaths ${save.deathCount}, runRev ${save.runRev}/${rev}, runOver ${save.runOver}, ` +
+					`dead ${s.body(p)?.state.dead}`,
+			);
+			const again = ask(s, p, { kind: "rebirth", runRev: save.runRev });
+			check(
+				again?.ok === true &&
+					again.price === price &&
+					save.money === 1000 - price &&
+					save.deathCount === deaths + 1 &&
+					s.body(p)?.state.dead === false,
+				"…and the client's next Rebirth stands the body up for ONE charge",
+				`${JSON.stringify({ ok: again?.ok, price: again?.price })}, charged ${1000 - save.money} of ${price}, ` +
+					`deaths ${save.deathCount}`,
+			);
+		}
+		// the stand-up throws after the body is up (review R2b)
+		{
+			const s = bootServer();
+			const { p, save } = fallen(s, "late thrower");
+			const price = rebirthPrice(save.deathCount);
+			const real = s.host.rebirth;
+			s.host.rebirth = (...a) => {
+				real(...a);
+				throw new Error("injected: after the stand-up");
+			};
+			let res;
+			try {
+				res = ask(s, p, { kind: "rebirth", runRev: save.runRev });
+			} finally {
+				s.host.rebirth = real;
+			}
+			check(
+				res?.ok === true &&
+					res.price === price &&
+					save.money === 1000 - price &&
+					save.runOver === false &&
+					s.body(p)?.state.dead === false,
+				"a Rebirth that throws after the body stood up is sold, once: the body up, one charge, the save agrees",
+				`${JSON.stringify(res)}, money ${save.money}, runOver ${save.runOver}, dead ${s.body(p)?.state.dead}`,
+			);
+		}
+		// New game from the lobby, and the new life throws (review R3)
+		{
+			const s = bootWithAutosave();
+			const { u, p, save } = fallen(s, "quitter");
+			s.exit(p);
+			save.day = 5;
+			const rev = save.runRev;
+			const restore = failNext(s.host, "newLife", "injected: the new life failed");
+			let res;
+			try {
+				res = ask(s, p, { kind: "newRun", runRev: rev });
+			} finally {
+				restore();
+			}
+			check(
+				res?.ok === true && save.day === 1 && save.runRev === rev + 1,
+				"a New game whose new life throws: the new life is given (life day 1, a new run), as the client is told",
+				`${JSON.stringify(res)}, day ${save.day}, runRev ${save.runRev}/${rev}`,
+			);
+			check(
+				save.runOver === true && s.host.isDead(p, save) === true,
+				"…and the death stands, in the save as in the keeper",
+				`runOver ${save.runOver}, keeper dead ${s.host.isDead(p, save)}`,
+			);
+			s.autosave();
+			check(
+				s.stored(u)?.runOver === true,
+				"…so the DataStore never says alive for a survivor the server keeps dead (a crash would revive them)",
+				`stored runOver ${s.stored(u)?.runOver}`,
+			);
+			const back = s.enter(p);
+			check(
+				back?.state.dead === true,
+				"…nor does the next entry stand them up for free",
+				`dead ${back?.state.dead}`,
+			);
+		}
+	},
+);
+
+section("28) at shutdown, one body that cannot be banked leaves the others banked (F5 review)", () => {
+	const srv = bootServer();
+	const u1 = newUser();
+	const u2 = newUser();
+	const a = srv.join(u1, "first");
+	const b = srv.join(u2, "second");
+	for (const p of [a, b]) {
+		armPistol(srv.save(p), 30);
+		srv.immortal.add(p);
+	}
+	srv.enter(a);
+	const sp = srv.enter(b);
+	sp.state.hp = 55.5;
+	sp.state.weapon.ammoCount = 6;
+	const reserve = sp.save.ammoNormal;
+	// the first body banked (join order) throws
+	const restore = failNext(srv.host.lives, "disconnect", "injected: banking one body failed");
+	let died;
+	try {
+		died = asRoblox(() => srv.shutdown());
+	} finally {
+		restore();
+	}
+	const doc = srv.stored(u2);
+	check(
+		doc?.runHp === 55 && doc?.ammoNormal === reserve + 6,
+		"one body that cannot be banked at shutdown: the next one is banked all the same (runHp, magazine back)",
+		`runHp ${doc?.runHp}, reserve ${reserve} + 6 → ${doc?.ammoNormal}`,
+	);
+	check(
+		srv.stored(u1) !== undefined && lockFree(u1) && lockFree(u2),
+		"…and every save is written, every lock handed back",
+	);
+	check(died.length === 0, "…and no thread died of it", died.join(" | "));
 });
 
 // ================================================================
