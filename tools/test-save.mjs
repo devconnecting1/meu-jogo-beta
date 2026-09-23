@@ -17,7 +17,10 @@
  *
  *    v4 (MON-04) does the same for the cosmetic slots: the single `equipDeco` of a v2/v3 document becomes
  *    `equipOutfit` or `equipPet` by what it is, a rollback to v3 forgets only WHICH cosmetic was worn (never one
- *    that was bought), and a client report can never wear a cosmetic the server does not know it owns.
+ *    that was bought), and a client report can never wear a cosmetic the server does not know it owns. The
+ *    wardrobe's purchase (server/save/costumes.ts) is the one way coins become a costume: unknown ids, too few
+ *    coins and a costume already owned are refused with the save untouched, and a purchase takes exactly the
+ *    catalogue price.
  *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
@@ -27,6 +30,7 @@
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installShims } from "./luau-shim.mjs";
 
@@ -738,6 +742,109 @@ section("16) MON-01: um cosmetico nao muda nada numa noite (defesa e velocidade)
 	checkEq(PLAYER.recalcMoveSpeed(p, save), speed0, "traje + pet: velocidade igual");
 	cowboy.def = was.def;
 	cowboy.speed = was.speed;
+}
+
+section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/save/costumes.ts, MON-04)");
+{
+	const { buyCostume } = require(join(SRC, "server/save/costumes.ts"));
+	const santa = costumeOf("Santa");
+	const eagle = costumeOf("Eagle");
+	const PRICE = COSTUMES[santa].price;
+	const snapshot = s => JSON.stringify({ money: s.money, costumes: s.costumes, equipOutfit: s.equipOutfit });
+
+	// unknown ids: nothing is read from the catalogue, nothing moves
+	const rich = SAVE.defaultSave();
+	rich.money = 1000;
+	const before = snapshot(rich);
+	const junk = [COSTUMES.length, 99, -1, 1.5, NaN, Infinity, -Infinity, "6", undefined, null, {}, [6], true];
+	const refusals = junk.map(id => buyCostume(rich, id));
+	check(
+		refusals.every(r => r.ok === false && r.reason === "invalid"),
+		"id desconhecido (fora do catalogo, negativo, fracao, NaN, infinito, texto, tabela) -> recusado como invalid",
+		refusals
+			.filter(r => r.ok !== false || r.reason !== "invalid")
+			.map(r => JSON.stringify(r))
+			.join(" ") || `${junk.length} ids`,
+	);
+	checkEq(snapshot(rich), before, "e o save nao mudou nada (moedas, trajes)");
+
+	// not enough coins
+	const poor = SAVE.defaultSave();
+	poor.money = PRICE - 1;
+	const funds = buyCostume(poor, santa);
+	checkEq(
+		funds.ok === false ? funds.reason : "ok",
+		"funds",
+		`moedas insuficientes (${PRICE - 1} < ${PRICE}) -> funds`,
+	);
+	checkEq(poor.money, PRICE - 1, "nenhuma moeda sai");
+	checkEq(poor.costumes[santa], 0, "e o traje continua bloqueado");
+
+	// a successful purchase: the catalogue price, exactly, and the costume is theirs
+	const buyer = SAVE.defaultSave();
+	buyer.money = 100;
+	checkEq(
+		new ServerCraft({ world: undefined, build: undefined }).equip(buyer, SANTA).kind,
+		"refused",
+		"antes da compra o servidor recusa vestir o Santa",
+	);
+	const bought = buyCostume(buyer, santa);
+	check(bought.ok === true && bought.price === PRICE, "compra aceita, ao preco do catalogo", JSON.stringify(bought));
+	checkEq(buyer.money, 100 - PRICE, "desconta exatamente o preco");
+	checkEq(buyer.costumes[santa], 1, "e o traje passa a ser dele (costumes)");
+	check(SAVE.ownsCostume(buyer, santa) && SAVE.ownsEquip(buyer, SANTA), "ownsCostume / ownsEquip dizem que e dele");
+	checkEq(buyer.costumes[eagle], 0, "so aquele traje: os outros continuam bloqueados");
+
+	// already owned: a double click or a replayed request never charges twice
+	const again = buyCostume(buyer, santa);
+	checkEq(again.ok === false ? again.reason : "ok", "owned", "comprar de novo -> owned");
+	checkEq(buyer.money, 100 - PRICE, "e nada e cobrado de novo");
+
+	// the exact amount is enough, and the balance can reach zero, never below
+	const exact = SAVE.defaultSave();
+	exact.money = COSTUMES[eagle].price;
+	check(buyCostume(exact, eagle).ok === true && exact.money === 0, "com o valor exato compra e fica com 0");
+
+	// a catalogue row that does not resolve to a drawable cosmetic is not sold (MON-04: bought = drawn)
+	const row = COSTUMES[santa];
+	const was = row.equipId;
+	row.equipId = -1;
+	const broken = SAVE.defaultSave();
+	broken.money = 1000;
+	const orphan = buyCostume(broken, santa);
+	row.equipId = was;
+	check(
+		orphan.ok === false && orphan.reason === "invalid" && broken.money === 1000,
+		"traje sem cosmetico desenhavel nao e vendido",
+	);
+
+	// wearing what was bought, and nothing else, on both server paths
+	const craft = new ServerCraft({ world: undefined, build: undefined });
+	checkEq(
+		craft.equip(buyer, SANTA).kind,
+		"equipped",
+		"depois da compra o servidor aceita vestir o Santa (intent Equip)",
+	);
+	checkEq(craft.equip(buyer, EAGLE).kind, "refused", "mas nao a Eagle, que nao foi comprada");
+	checkEq(buyer.equipPet, -1, "e o slot do pet fica vazio");
+	const report = JSON.parse(JSON.stringify(buyer));
+	report.equipOutfit = SANTA;
+	report.equipPet = EAGLE;
+	report.money = 99999;
+	report.costumes = report.costumes.map(() => 1);
+	const upd = SAVE.sanitizeClientReport(report, buyer);
+	checkEq(upd.equipOutfit, SANTA, "relatorio vestindo o traje comprado: aceito");
+	checkEq(upd.equipPet, -1, "relatorio vestindo um pet nao comprado: corrigido para nenhum");
+	checkEq(upd.money, buyer.money, "e as moedas do relatorio sao ignoradas");
+	checkEq(upd.costumes[eagle], 0, "assim como os trajes que o relatorio diz ter");
+
+	// the wiring: handleAction hands the raw id to buyCostume and never reads a price from the request
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const branch = main.slice(main.indexOf('req.kind === "buyCostume"'), main.indexOf('req.kind === "rebirth"'));
+	check(
+		/buyCostume\(save, req\.costumeId\)/.test(branch) && !/req\.price|COSTUMES\[/.test(branch),
+		"main.server.ts: o pedido buyCostume vai inteiro para buyCostume(save, req.costumeId), sem ler preco do cliente",
+	);
 }
 
 // ---------------------------------------------------------------- verdict

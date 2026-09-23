@@ -59,6 +59,14 @@ const COLOR_TOKENS = [
 	["cell", "sidebar-accent"],
 	/** the body of a modal window: one step lighter than the panels (sidebar), so the window stands off the page */
 	["window", "sidebar"],
+	// the item card's three voices (docs/DESIGN_RULES UI-08): numbers, bonuses, status effects. A theme without them
+	// falls back to plain light numbers, the heal green and the food orange -- the card loses its yellow, not its text
+	/** the numbers of an item card (damage, cooldown, range...): yellow */
+	["stat-value", "foreground"],
+	/** what an item adds (health, hunger, defense): green */
+	["stat-bonus", "chart-1"],
+	/** a status effect and how long it lasts (speed boost, pain relief): orange */
+	["stat-effect", "chart-3"],
 ];
 
 /** navigation (sidebar) tokens, emitted as a separate group; keys drop the "sidebar-" prefix */
@@ -393,7 +401,7 @@ async function main() {
 // regenerate: \`npm run theme\` (or \`npm run theme -- <tweakcn registry url>\`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 ${iface}
 }

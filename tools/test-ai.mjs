@@ -863,6 +863,78 @@ function testBite() {
 		check((z.stagger ?? 0) > 0, "a heavy hit staggers (stagger, for the view to flinch)");
 		check(z.windup === undefined, "…and kills the bite it was winding up");
 	}
+	// (d) LEG-04: surrounded is deadlier than alone, and no bite is drawn without blood (owner's playtest,
+	// 2026-09-23: "with more than 2 zombies only 2 attacked me, the others 'attack' but I take no damage")
+	{
+		const one = crowdBites(1);
+		const six = crowdBites(6);
+		info(
+			`10 s standing still: 1 walker ${one.hp.toFixed(0)} hp in ${one.hits} hits · ` +
+				`6 walkers ${six.hp.toFixed(0)} hp in ${six.hits} hits`,
+		);
+		check(
+			six.hp >= 2 * one.hp,
+			`six walkers take at least twice what one does (${six.hp.toFixed(0)} vs ${one.hp.toFixed(0)})`,
+		);
+		check(six.empty === 0, `no walker finishes a bite that draws no blood (${six.empty} empty bites)`);
+		check(one.empty === 0, `…nor a lone one (${one.empty})`);
+		const gap = DESIGN.IFRAMES - DT / 2;
+		check(
+			six.minGap >= gap,
+			`a crowd's bites are spaced by the guard (${six.minGap.toFixed(2)} s ≥ ${DESIGN.IFRAMES} s)`,
+		);
+	}
+}
+
+/**
+ * `n` walkers in a ring around a survivor who stands still for 10 s (hp raised so nobody dies mid-count).
+ * An EMPTY bite is a wind-up that ends with the walker neither stunned by a bite that landed (STUN_TIME) nor
+ * recovering from a whiff — exactly what the survivor saw: a bite animation and no damage.
+ */
+function crowdBites(n) {
+	setSeed(SEED);
+	const world = W.createWorld(3000, 3000);
+	const refs = makeRefs(world, 1500, 1500);
+	const p = refs.player;
+	p.hpMax = 100000;
+	p.hp = p.hpMax;
+	for (let i = 0; i < n; i++) {
+		const a = (i / n) * Math.PI * 2;
+		const z = addZombie(refs, 1, 1500 + Math.cos(a) * 60, 1500 + Math.sin(a) * 60, a + Math.PI);
+		z.detect = true;
+	}
+	const wound = refs.zombies.map(() => false);
+	let hits = 0;
+	let empty = 0;
+	let lastHit = -Infinity;
+	let minGap = Infinity;
+	for (let f = 0; f < 60 * 10; f++) {
+		// stepPlayer is not in this harness: run its i-frame bookkeeping by hand, and keep them standing
+		if (p.attacked) {
+			p.iframe -= DT;
+			if (p.iframe <= 0) {
+				p.attacked = false;
+				p.iframe = 0;
+			}
+		}
+		p.x = 1500;
+		p.y = 1500;
+		p.reactionSpeed = 0;
+		const before = p.hp;
+		zombieAI.updateZombies(refs, DT);
+		if (p.hp < before) {
+			hits += 1;
+			const t = f * DT;
+			minGap = Math.min(minGap, t - lastHit);
+			lastHit = t;
+		}
+		refs.zombies.forEach((z, i) => {
+			const now = z.windup !== undefined;
+			if (wound[i] && !now && (z.stunned ?? 0) <= 0) empty += 1;
+			wound[i] = now;
+		});
+	}
+	return { hp: p.hpMax - p.hp, hits, empty, minGap };
 }
 
 // ---------------------------------------------------------------- 9. cost
