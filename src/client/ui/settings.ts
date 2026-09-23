@@ -364,9 +364,10 @@ export function showSettings(
 			title: tr("Interface"),
 		});
 		const uiList = SettingsList(ui.frame, "List", LIST_X, listY, LIST_W, INTERFACE_LIST_H);
-		// hud.ts (console, day plate, the E hint, the messages) and the first run's coach read it when a run mounts
+		// hud.ts (the console -- the day clock and the scoreboard's chip are in it --, the E hint, the messages) and
+		// the first run's coach read it when a run mounts
 		sliderRow(
-			SettingRow(uiList, "UiSize", 0, tr("HUD size"), form("Console, day plate, hints and messages.")),
+			SettingRow(uiList, "UiSize", 0, tr("HUD size"), form("Console, hints and messages.")),
 			"UiSize",
 			valueW,
 			() => s.uiSize,

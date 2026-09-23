@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /*
- * The in-run HUD (docs/DESIGN_RULES.md UI-09): the console at the bottom centre and the day plate at the top.
+ * The in-run HUD (docs/DESIGN_RULES.md UI-09): the console at the bottom centre, with the day clock (the sky) at its
+ * left end -- on touch, in its own plate in the top corner, under Menu and Bag.
  *
  *   npm run test:hud
  *   PZ_SRC=<another checkout>/src node tools/test-hud.mjs    (measures that version)
@@ -18,11 +19,18 @@
  *     picked up appears in its slot rewriting the tiles in place;
  *  3. clicking tile k writes the field key k writes (InputState.weaponSlotPressed, through bootstrap's real
  *     InputBegan handler), and the Bag / Menu plates call what B / P call;
- *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip, the day plate -- and the life's
- *     day only when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
+ *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip -- and the sky (4b): the world's
+ *     day, the countdown to nightfall ("Night in 2:14") and at night to daybreak, in real seconds, the sun / moon on
+ *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
+ *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
- *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide.
+ *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
+ *     plate sits under the row of Menu and Bag and covers nothing -- the thumbs, Menu, Bag, the console, nor the
+ *     banner and feed over the top centre (phones included, and a crowded one); the match scoreboard's chip (MP-23)
+ *     is in that row, left of Menu (desktop: the third plate of the console's row, after Bag and Menu), a thumb
+ *     target, and covers nothing either -- the sky included; and at the largest HUD size the banner is 1,2x, still
+ *     at the top, and still narrows off the corner.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -33,7 +41,7 @@ const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
 
 const boot = require(join(SRC, "client/bootstrap.ts"));
-const { Hud } = require(join(SRC, "client/ui/hud.ts"));
+const { Hud, messageReach } = require(join(SRC, "client/ui/hud.ts"));
 const { COMPACT_LAYOUT, DESKTOP_LAYOUT } = require(join(SRC, "client/ui/hudConsole.ts"));
 const { ownedWeapons } = require(join(SRC, "client/systems/combat.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
@@ -41,6 +49,9 @@ const { computeTouchLayout, MIN_TOUCH_PX } = require(join(SRC, "shared/engine/in
 const { THEME, SURFACE, BAR, STAT, GAME } = require(join(SRC, "client/ui/theme.ts"));
 const { iconOf } = require(join(SRC, "shared/data/itemIcons.ts"));
 const { iconFrameCount } = require(join(SRC, "client/ui/itemIcon.ts"));
+const Clock = require(join(SRC, "shared/sim/clock.ts"));
+const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
+const { NIGHTFALL_WARN_S, SKY_PLATE_W, SKY_PLATE_H } = require(join(SRC, "client/ui/hudSky.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -124,7 +135,6 @@ function deepAll(root, name) {
 const deep = (root, name) => deepAll(root, name)[0];
 const hudRoot = () => ctx.hudLayer.FindFirstChild("HudRoot");
 const consoleFrame = () => deep(hudRoot(), "Console");
-const dayPlate = () => deep(hudRoot(), "DayPlate");
 const tile = k => deep(consoleFrame(), `Slot${k + 1}`);
 /** the notched plate a kit host wears (plate.ts): its face colour, and whether it is raised or ringed */
 const face = host => host?.FindFirstChild("PlateFace")?.BackgroundColor3;
@@ -194,6 +204,33 @@ check(
 		deep(hudRoot(), "WeaponBox") === undefined &&
 		deep(hudRoot(), "BagBox") === undefined,
 );
+// the match scoreboard's chip (MP-23) goes where Bag and Menu are: the third plate of their row, inside the console
+{
+	const [bag, menu, slot, weapons] = ["Bag", "Menu", "ChipSlot", "Weapons"].map(n => deep(consoleFrame(), n));
+	const x0 = f => f.Position.X.Scale;
+	const x1 = f => f.Position.X.Scale + f.Size.X.Scale;
+	const same = (a, b) => Math.abs(a - b) < 1e-9;
+	check(
+		"o chip do placar (MP-23) e a terceira chapa da fileira, depois de Bag e Menu, do mesmo tamanho, sob a secao das armas",
+		slot !== undefined &&
+			deep(slot, "Survivors") !== undefined &&
+			x0(bag) < x0(menu) &&
+			x1(menu) < x0(slot) &&
+			same(slot.Position.Y.Scale, bag.Position.Y.Scale) &&
+			same(slot.Size.X.Scale, bag.Size.X.Scale) &&
+			same(slot.Size.Y.Scale, bag.Size.Y.Scale) &&
+			x0(bag) >= x0(weapons) - 1e-9 &&
+			x1(slot) <= x1(weapons) + 1e-9,
+		slot === undefined
+			? "sem ChipSlot"
+			: `Bag ${x0(bag).toFixed(3)} Menu ${x0(menu).toFixed(3)} chip ${x0(slot).toFixed(3)}`,
+	);
+	check(
+		"...e o console nao cresceu por ele: 778 x 114 unidades, e nada fora dele no topo (a placa do dia saiu)",
+		DESKTOP_LAYOUT.w === 778 && DESKTOP_LAYOUT.h === 114 && deep(hudRoot(), "DayPlate") === undefined,
+		`${DESKTOP_LAYOUT.w} x ${DESKTOP_LAYOUT.h}`,
+	);
+}
 
 const WEAPON_CYCLE = [PISTOL, PISTOL, AXE, DAGGER, PISTOL];
 function frameState(i) {
@@ -473,28 +510,159 @@ check(
 	`${deep(consoleFrame(), "WeaponName")?.Text} / ${deep(consoleFrame(), "WeaponType")?.Text} / ${deep(consoleFrame(), "Magazine")?.Text}`,
 );
 
-// the day plate: the world's day, this life's day only when they differ (MP-13 / MP-20)
-const dayText = name => deep(dayPlate(), name)?.Text;
-hud.update(state({ day: 5, lifeDay: 5 }));
+// ---------------------------------------------------------------- 4b) the sky (the day clock, hudSky.ts)
+
+console.log("\n4b) o ceu: o relogio do dia virou uma secao do console (UI-09)\n");
+
+const sky = () => deep(consoleFrame(), "SkyWindow");
+const skyText = name => deep(sky(), name)?.Text;
+const bodyX = () => deep(sky(), "Body").Position.X.Scale;
+const bodyY = () => deep(sky(), "Body").Position.Y.Scale;
+/** the countdown as the sky must write it: the phase's words and the dawn wait's own M:SS, the number in `color` */
+const hexOf = c =>
+	`#${[c.R, c.G, c.B]
+		.map(v =>
+			Math.round(v * 255)
+				.toString(16)
+				.padStart(2, "0"),
+		)
+		.join("")}`;
+const expectCount = (t, color = STAT.value) => {
+	const night = Clock.isNightAt(t);
+	const left = Clock.secondsUntilHour(t, night ? Clock.DAY_BREAK_HOUR : Clock.NIGHTFALL_HOUR);
+	return `${night ? "Daybreak in" : "Night in"} <font color="${hexOf(color)}">${countdown(left)}</font>`;
+};
+check("a placa do dia solta no topo saiu", deep(hudRoot(), "DayPlate") === undefined);
+{
+	const sections = ["Sky", "Vitals", "Weapons", "Hand"].map(n => deep(consoleFrame(), n));
+	check(
+		"o ceu e a primeira secao do console, na ponta esquerda: Sky | Vitals | Weapons | Hand",
+		sections.every(f => f !== undefined) &&
+			sections.every((f, i) => i === 0 || f.Position.X.Scale > sections[i - 1].Position.X.Scale),
+		sections.map(f => f?.Position.X.Scale.toFixed(3)).join(" < "),
+	);
+	check(
+		"o console so ficou mais largo, nao mais alto (a altura e o que o mundo menos pode ceder)",
+		DESKTOP_LAYOUT.h === 114 && DESKTOP_LAYOUT.w === 778,
+		`${DESKTOP_LAYOUT.w} x ${DESKTOP_LAYOUT.h}`,
+	);
+}
+hud.update(state({ day: 5, lifeDay: 5, dayTime: 14.5 }));
 check(
-	'"Day 5" em ExtraBold, e nenhum dia da vida quando os dois concordam',
-	dayText("Day") === "Day 5" &&
-		dayText("Life") === "" &&
-		deep(dayPlate(), "Day").FontFace.Weight.Name === "ExtraBold",
-	`${dayText("Day")} / "${dayText("Life")}"`,
+	'"Day 5" (o dia do MUNDO) em ExtraBold, e nenhum dia da vida quando os dois concordam',
+	skyText("Day") === "Day 5" &&
+		deep(sky(), "Day").FontFace.Weight.Name === "ExtraBold" &&
+		deep(sky(), "Extra").Visible === false,
+	`${skyText("Day")} / extra ${deep(sky(), "Extra").Visible}`,
 );
-hud.update(state({ day: 5, lifeDay: 2 }));
-check("New game: Life day 2 ao lado do Day 5", dayText("Day") === "Day 5" && dayText("Life") === "Life day 2");
-hud.update(state({ day: 5, lifeDay: 5 }));
-check("de novo iguais: o segundo numero some", dayText("Life") === "");
-check("sem relogio no inventario, sem HH:MM", dayText("Clock") === "" && dayText("Phase") === "Afternoon");
+check(
+	"de dia: a contagem ate o anoitecer, em segundos reais, no amarelo dos numeros",
+	skyText("Countdown") === expectCount(14.5),
+	skyText("Countdown"),
+);
+hud.update(state({ day: 5, lifeDay: 2, dayTime: 14.5 }));
+check(
+	"New game: Life day 2 embaixo, e o Day 5 do mundo nao muda",
+	skyText("Day") === "Day 5" && deep(sky(), "Extra").Visible && skyText("Extra") === "Life day 2",
+	skyText("Extra"),
+);
+hud.update(state({ day: 5, lifeDay: 5, dayTime: 14.5 }));
+check("de novo iguais: a linha some", deep(sky(), "Extra").Visible === false);
 hud.update(state({ showClock: true, dayTime: 14.5 }));
-check("com relogio: 14:30", dayText("Clock") === "14:30", dayText("Clock"));
-hud.update(state({ dayTime: 21, isNight: true }));
+check("com relogio (o item): 14:30 na linha de baixo", skyText("Extra") === "14:30", skyText("Extra"));
+hud.update(state({ showClock: true, lifeDay: 2, dayTime: 14.5 }));
+check("os dois juntos", skyText("Extra") === "Life day 2 · 14:30", skyText("Extra"));
+
+// the sun travels the arc left -> right from 06:00 to 19:00, and the path it left behind goes dim
+const xs = [];
+for (const t of [6.01, 9, 12.5, 16, 18.99]) {
+	hud.update(state({ dayTime: t }));
+	xs.push(bodyX());
+}
+hud.update(state({ dayTime: 12.5 }));
 check(
-	"a noite: lua de pixel, Night",
-	deep(dayPlate(), "Moon").Visible && !deep(dayPlate(), "Sun").Visible && dayText("Phase") === "Night",
+	"o sol anda da esquerda (06:00) para a direita (19:00), subindo ate o meio-dia",
+	xs.every((x, i) => i === 0 || x > xs[i - 1]) && xs[0] < 0.2 && xs[4] > 0.8 && bodyY() < 0.2,
+	xs.map(x => x.toFixed(2)).join(" -> "),
 );
+const dotColors = () =>
+	deep(sky(), "Dot1") === undefined
+		? []
+		: sky()
+				.GetChildren()
+				.filter(c => c.Name.startsWith("Dot"))
+				.map(c => (sameColor(c.BackgroundColor3, SURFACE.section) ? "." : "o"))
+				.join("");
+check(
+	"o caminho que o sol ja fez fica apagado; o que falta do dia fica claro",
+	/^\.+o+$/.test(dotColors()),
+	dotColors(),
+);
+const pips = () =>
+	sky()
+		.GetChildren()
+		.filter(c => c.Name.startsWith("Pip") && c.Visible);
+check(
+	"de dia, um pip vermelho so, na ponta do por do sol: a horda vem ao anoitecer",
+	pips().length === 1 && pips()[0].Position.X.Scale > 0.9 && sameColor(pips()[0].BackgroundColor3, STAT.penalty),
+);
+check("de dia: o sol, nao a lua", deep(sky(), "Sun").Visible && !deep(sky(), "Moon").Visible);
+
+// the night: the moon, the three waves, the countdown to daybreak (MP-21's words)
+hud.update(state({ dayTime: 23, isNight: true }));
+check(
+	"a noite: a lua de pixel, e a contagem ate o amanhecer (06:00) nas palavras da espera (Daybreak in)",
+	deep(sky(), "Moon").Visible && !deep(sky(), "Sun").Visible && skyText("Countdown") === expectCount(23),
+	skyText("Countdown"),
+);
+check(
+	"a noite: um pip por onda (19:00, 22:00, 01:00); as que ja comecaram ficam apagadas",
+	pips().length === 3 &&
+		pips().filter(p => sameColor(p.BackgroundColor3, STAT.penalty)).length === 1 &&
+		pips().filter(p => sameColor(p.BackgroundColor3, SURFACE.section)).length === 2,
+	pips()
+		.map(p => (sameColor(p.BackgroundColor3, STAT.penalty) ? "!" : "."))
+		.join(""),
+);
+hud.update(state({ dayTime: 2, isNight: true }));
+check(
+	"depois da 01:00 as tres ja comecaram",
+	pips().every(p => sameColor(p.BackgroundColor3, SURFACE.section)),
+);
+
+// the last seconds before nightfall: the number turns red and pulses once a second; Reduce Motion keeps it red
+const lastDay = 19 - 20 * Clock.clockSpeed(18.9); // ~20 real seconds before 19:00
+setClock(100.1);
+hud.update(state({ dayTime: lastDay }));
+const pulseA = skyText("Countdown");
+setClock(100.6);
+hud.update(state({ dayTime: lastDay }));
+const pulseB = skyText("Countdown");
+check(
+	`nos ultimos ${NIGHTFALL_WARN_S} s do dia o numero pisca vermelho / amarelo, 1 vez por segundo (< 3/s)`,
+	[pulseA, pulseB].includes(expectCount(lastDay, STAT.penalty)) &&
+		[pulseA, pulseB].includes(expectCount(lastDay, STAT.value)) &&
+		pulseA !== pulseB,
+	`${pulseA} | ${pulseB}`,
+);
+const gui = service("GuiService");
+gui.ReducedMotionEnabled = true;
+flush();
+const still1 = (setClock(101.1), hud.update(state({ dayTime: lastDay })), skyText("Countdown"));
+const still2 = (setClock(101.6), hud.update(state({ dayTime: lastDay })), skyText("Countdown"));
+gui.ReducedMotionEnabled = false;
+flush();
+check(
+	"com Reduzir Movimento: vermelho parado, sem piscar",
+	still1 === still2 && still1 === expectCount(lastDay, STAT.penalty),
+	still1,
+);
+hud.update(state({ dayTime: 12 }));
+check("longe do anoitecer, amarelo de novo", skyText("Countdown") === expectCount(12), skyText("Countdown"));
+const skyIdle = phase("60 quadros no mesmo segundo do relogio", () => {
+	for (let i = 0; i < 60; i++) hud.update(state({ dayTime: 12 }));
+});
+check("o ceu parado nao escreve nada", skyIdle.writes === 0 && zero(skyIdle), cost(skyIdle));
 hud.update(state());
 
 // UI-04: no contour on any text of the HUD
@@ -546,7 +714,7 @@ function consoleRect() {
 }
 
 /** checks the console against the geometry bootstrap hit-tests with, recomputed here from the same inputs */
-function checkTouch(label, w, h, prefs, atBottom = true) {
+function checkTouch(label, w, h, prefs, atBottom = true, skyHome = atBottom) {
 	const L = computeTouchLayout(prefs, w, h, TOP_BAR);
 	const live = boot.getTouchLayout();
 	const same =
@@ -584,7 +752,127 @@ function checkTouch(label, w, h, prefs, atBottom = true) {
 		hint.Position.Y.Offset <= c[1],
 		`${hint.Position.Y.Offset} <= ${Math.round(c[1])}`,
 	);
+	checkSky(label, L, c, w, h, skyHome);
 	return c;
+}
+
+/**
+ * The touch sky (hudSky.ts skyPlate, hudConsole.ts placeTouchSky): under the row of Menu and Bag, flush with its outer
+ * end, as tall as they are; never over the console, a thumb control, Menu / Bag, a Roblox button, nor the reach of the
+ * messages over the top centre (the banner at its widest, popping, and the feed: hud.ts messageReach); when the console
+ * floats up there (a crowded phone), wherever the corner -- or the console's side -- is still free.
+ */
+/** hud.ts BANNER_MIN_W: the narrowest banner card (its own minimum) */
+const BANNER_MIN_W_UNITS = 280;
+function checkSky(label, L, c, w, h, atHome, chipHome = atHome) {
+	const f = deep(hudRoot(), "SkyPlate");
+	const r = [
+		f.Position.X.Offset,
+		f.Position.Y.Offset,
+		f.Position.X.Offset + f.Size.X.Offset,
+		f.Position.Y.Offset + f.Size.Y.Offset,
+	];
+	// the messages as the HUD draws them now: on touch narrowed so they stop short of the sky (hud.ts fitMessages)
+	const [bannerW, feedW] = hud.messageWidths();
+	// at the HUD size the HUD was mounted with (hud.ts: k = 0,8 + 0,4 x uiSize)
+	const [banner, feed] = messageReach(w, h, L.inset, bannerW, feedW, 0.8 + 0.4 * settings.uiSize);
+	const others = [
+		["o console", c],
+		["o analogico", circle(L.move.homeX, L.move.homeY, L.floating ? L.move.baseR : L.move.grabR)],
+		["o pad de mira", circle(L.aim.homeX, L.aim.homeY, L.aim.baseR)],
+		["RELOAD", circle(L.reload.x, L.reload.y, Math.max(L.reload.r, MIN_TOUCH_PX / 2))],
+		["USE", circle(L.use.x, L.use.y, Math.max(L.use.r, MIN_TOUCH_PX / 2))],
+		["Menu", circle(L.pause.x, L.pause.y, L.pause.r)],
+		["Bag", circle(L.bag.x, L.bag.y, L.bag.r)],
+		["a faixa (onda, manha) no maior tamanho que a HUD desenha, no pulo", banner],
+		["as mensagens embaixo dela", feed],
+	];
+	const hit = others.filter(([, o]) => overlaps(r, o)).map(([n]) => n);
+	check(
+		`${label}: o relogio (toque) nao cobre nada: console, polegares, Menu, Bag, faixa, mensagens`,
+		hit.length === 0,
+		hit.length > 0 ? `sobre ${hit.join(", ")} ${fmt(r)}` : fmt(r),
+	);
+	check(
+		`${label}: o relogio fica na tela, abaixo da barra do Roblox`,
+		r[0] >= 0 && r[2] <= w && r[1] >= L.inset && r[3] <= h,
+		fmt(r),
+	);
+	const rowR = Math.max(L.pause.x + L.pause.r, L.bag.x + L.bag.r);
+	const rowB = Math.max(L.pause.y + L.pause.r, L.bag.y + L.bag.r);
+	if (atHome) {
+		check(
+			`${label}: logo abaixo da fileira do Menu e do Bag, rente a ponta dela`,
+			Math.abs(r[2] - rowR) <= 1 && r[1] >= rowB && r[1] - rowB <= L.pause.r,
+			`${fmt(r)} / fileira ate x ${Math.round(rowR)}, y ${Math.round(rowB)}`,
+		);
+	}
+	check(
+		`${label}: a faixa e as mensagens ficam no centro, e continuam largas (faixa >= ${BANNER_MIN_W_UNITS} unidades)`,
+		bannerW >= BANNER_MIN_W_UNITS && feedW >= 200,
+		`faixa ate ${Math.round(bannerW)} de 720 unidades, linha ate ${Math.round(feedW)} de 560`,
+	);
+	const px = (r[3] - r[1]) / SKY_PLATE_H;
+	check(
+		`${label}: o texto do relogio nao fica abaixo do piso de 9 px`,
+		["Day", "Countdown"].every(n => {
+			const c2 = deep(f, n)?.FindFirstChildOfClass("UITextSizeConstraint");
+			return c2 !== undefined && c2.MaxTextSize >= 9;
+		}),
+		`${px.toFixed(2)} px por unidade, largura ${Math.round(r[2] - r[0])} px (${SKY_PLATE_W} unidades)`,
+	);
+	checkChip(label, L, others, r, chipHome);
+}
+
+/**
+ * The match scoreboard's survivors chip on touch (MP-23; hudConsole.ts placeTouchChip): where Bag and Menu are, in
+ * their row left of Menu, and with the sky right under the row its left edge is the sky's (the corner is one block);
+ * a thumb target that covers nothing -- the console, a thumb control, Menu, Bag, the sky, nor the banner and the feed
+ * as the HUD draws them now (narrowed off the corner, hud.ts fitMessages).
+ */
+function checkChip(label, L, others, sky, atHome) {
+	const slot = deep(hudRoot(), "ChipSlot");
+	const found = slot !== undefined && deep(slot, "Survivors") !== undefined;
+	check(`${label}: o chip do placar esta no canto de toque`, found);
+	if (!found) return;
+	const r = [
+		slot.Position.X.Offset,
+		slot.Position.Y.Offset,
+		slot.Position.X.Offset + slot.Size.X.Offset,
+		slot.Position.Y.Offset + slot.Size.Y.Offset,
+	];
+	const hit = [...others, ["o relogio", sky]].filter(([, o]) => overlaps(r, o)).map(([n]) => n);
+	check(
+		`${label}: o chip nao cobre nada: console, polegares, Menu, Bag, relogio, faixa, mensagens`,
+		hit.length === 0,
+		hit.length > 0 ? `sobre ${hit.join(", ")} ${fmt(r)}` : fmt(r),
+	);
+	check(
+		`${label}: o chip fica na tela, abaixo da barra do Roblox, e e um alvo de polegar (>= ${MIN_TOUCH_PX} px)`,
+		r[0] >= 0 &&
+			r[2] <= L.viewW &&
+			r[1] >= L.inset &&
+			r[3] <= L.viewH &&
+			r[2] - r[0] >= MIN_TOUCH_PX - 0.5 &&
+			r[3] - r[1] >= MIN_TOUCH_PX - 0.5,
+		`${Math.round(r[2] - r[0])} x ${Math.round(r[3] - r[1])} px`,
+	);
+	if (atHome) {
+		const menuL = L.pause.x - L.pause.r;
+		const rowB = Math.max(L.pause.y + L.pause.r, L.bag.y + L.bag.r);
+		// with the sky right under the row the corner is one block: the chip starts where the clock starts
+		const skyUnder = sky[1] >= rowB && sky[1] - rowB <= L.pause.r;
+		check(
+			`${label}: o chip e o terceiro botao da fileira, a esquerda do Menu${skyUnder ? ", e comeca onde o relogio comeca" : ""}`,
+			r[2] <= menuL &&
+				menuL - r[2] <= L.pause.r &&
+				Math.abs((r[1] + r[3]) / 2 - L.pause.y) <= 1 &&
+				(!skyUnder || Math.abs(r[0] - sky[0]) <= 1),
+			`${fmt(r)} / Menu a partir de x ${Math.round(menuL)}, relogio a partir de x ${Math.round(sky[0])}`,
+		);
+	}
+	const c = deep(slot, "Count")?.FindFirstChildOfClass("UITextSizeConstraint");
+	check(`${label}: a contagem do chip nao fica abaixo do piso de 9 px`, c !== undefined && c.MaxTextSize >= 9);
 }
 
 setViewport(1120, 630, TOP_BAR);
@@ -610,6 +898,32 @@ const touchRect = checkTouch("1120x630 (phone)", 1120, 630, DEFAULT_PREFS);
 console.log(
 	`  console no phone: ${fmt(touchRect)} = ${Math.round(touchRect[2] - touchRect[0])} x ${Math.round(touchRect[3] - touchRect[1])} px`,
 );
+// messageReach is makeAnchored's recipe written out: it must be where the real banner and feed frames land
+{
+	const pxOf = (fr, vw, vh) => {
+		const ar = fr.FindFirstChildOfClass("UIAspectRatioConstraint").AspectRatio;
+		const pw = Math.min(fr.Size.X.Scale * vw, fr.Size.Y.Scale * vh * ar);
+		const ph = pw / ar;
+		const x = fr.Position.X.Scale * vw + fr.Position.X.Offset - fr.AnchorPoint.X * pw;
+		const y = fr.Position.Y.Scale * vh + fr.Position.Y.Offset - fr.AnchorPoint.Y * ph;
+		return [x, y, x + pw, y + ph];
+	};
+	const [reachBanner, reachFeed] = messageReach(1120, 630, TOP_BAR);
+	const banner = pxOf(deep(hudRoot(), "BannerBox"), 1120, 630);
+	const feed = pxOf(deep(hudRoot(), "Feed"), 1120, 630);
+	const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 1);
+	const popped = [
+		(banner[0] + banner[2]) / 2 - ((banner[2] - banner[0]) * 1.2) / 2,
+		banner[1],
+		(banner[0] + banner[2]) / 2 + ((banner[2] - banner[0]) * 1.2) / 2,
+		banner[1] + (banner[3] - banner[1]) * 1.2,
+	];
+	check(
+		"o alcance das mensagens (hud.ts messageReach) e onde a faixa (no pulo de 1,2x) e as mensagens ficam de verdade",
+		near(reachBanner, popped) && near(reachFeed, feed),
+		`faixa ${fmt(reachBanner)} / ${fmt(popped)}; mensagens ${fmt(reachFeed)} / ${fmt(feed)}`,
+	);
+}
 
 input.beginFrame();
 tile(2).Activated.Fire();
@@ -649,7 +963,8 @@ for (const [w, h] of [
 		const prefs = { ...DEFAULT_PREFS, ...over };
 		Object.assign(settings, prefs);
 		const re = phase(`toque ${w}x${h} ${name}: reposiciona`, () => boot.refreshTouchLayout());
-		checkTouch(`${w}x${h} ${name}`, w, h, prefs);
+		// with the controls at their largest the corner under Menu and Bag may be RELOAD's: the sky takes the next free place
+		checkTouch(`${w}x${h} ${name}`, w, h, prefs, true, !name.includes("maximo"));
 		check(
 			`${w}x${h} ${name}: reposicionar o console nao cria nada nele`,
 			re.log.every(e => !e.inst[INTERNAL] || !isUnder(e.inst, consoleFrame())),
@@ -675,6 +990,66 @@ setViewport(390, 844, 47);
 		all.every(r => !overlaps(c, r)) && c[0] >= 0 && c[2] <= 390 && c[1] >= 47,
 		`console ${fmt(c)}`,
 	);
+	// the chip's home in the row, left of Menu, is where the banner reaches on a portrait phone: it goes beside the sky
+	checkSky("390x844 (retrato)", L, c, 390, 844, true, false);
+}
+// a crowded phone: 844 x 390 with every control at its largest and raised -- the console floats up to the top row, so
+// the clock has to find the other free place (the row's left end, or the console's side)
+{
+	const prefs = {
+		...DEFAULT_PREFS,
+		mirror: true,
+		leftSize: 1,
+		rightSize: 1,
+		leftRelative: false,
+		leftPos: 1,
+		rightPos: 1,
+	};
+	Object.assign(settings, prefs);
+	setViewport(844, 390, 36);
+	boot.refreshTouchLayout();
+	checkSky("844x390 lotado", computeTouchLayout(prefs, 844, 390, 36), consoleRect(), 844, 390, false);
+	Object.assign(settings, DEFAULT_PREFS);
+}
+for (const [w, h, bar] of [
+	[844, 390, 36],
+	[932, 430, 47],
+	[667, 375, 20],
+]) {
+	setViewport(w, h, bar);
+	boot.refreshTouchLayout();
+	// on the 667 x 375 phone the thumbs meet, the console floats up above them (placeTouchConsole's last step) and takes
+	// the band under Menu and Bag: the sky goes to the other end of their row
+	const L = computeTouchLayout(DEFAULT_PREFS, w, h, bar);
+	checkSky(`${w}x${h} (celular)`, L, consoleRect(), w, h, w !== 667, true);
+}
+// the HUD size setting at its largest (x1,2, test:settings §3): the banner and the feed are 20% bigger, still at the
+// top, and on touch they still narrow off the corner -- the sky and the chip -- keeping at least their minimum
+{
+	const k = settings.uiSize;
+	settings.uiSize = 1;
+	for (const [w, h, bar] of [
+		[844, 390, 36],
+		[1120, 630, TOP_BAR],
+	]) {
+		setViewport(w, h, bar);
+		hud.unmount();
+		hud.mount();
+		hud.update(state());
+		const L = computeTouchLayout(DEFAULT_PREFS, w, h, bar);
+		const [bannerW, feedW] = hud.messageWidths();
+		const [banner] = messageReach(w, h, L.inset, bannerW, feedW, 1.2);
+		const unscaled = messageReach(w, h, L.inset, bannerW, feedW, 1)[0];
+		check(
+			`${w}x${h} (HUD size 120%): a faixa e 1,2x maior e continua no topo`,
+			Math.abs(banner[2] - banner[0] - (unscaled[2] - unscaled[0]) * 1.2) < 0.01 && banner[1] === unscaled[1],
+			fmt(banner),
+		);
+		checkSky(`${w}x${h} (HUD size 120%)`, L, consoleRect(), w, h, true, true);
+	}
+	settings.uiSize = k;
+	hud.unmount();
+	hud.mount();
 }
 setViewport(1120, 630, TOP_BAR);
 

@@ -185,8 +185,8 @@ const WINDOWS = [
 		frame: () => layer.FindFirstChild("Menu")?.FindFirstChild("Body")?.FindFirstChild("Panel"),
 	},
 	// the lobby's Records window (UI-12). Not here: the match scoreboard (MP-23) -- a HUD panel, not a screen: it
-	// stands at the LEFT, under the day plate, so it never covers the survivor in the middle of the screen, and its
-	// place is checked by test:tables (on screen, under the bar, clear of the day plate, the survivor and the thumbs)
+	// stands at the LEFT, so it never covers the survivor in the middle of the screen, and its place is checked by
+	// test:tables (on screen, under the bar, clear of the day clock, the console, the survivor and the thumbs)
 	{
 		name: "Records",
 		open: () => showRecords(ctx),

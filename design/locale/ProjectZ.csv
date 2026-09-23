@@ -404,7 +404,7 @@ Key,Context,Example,Source
 ,,,BGM
 ,,,"Night music, ambience and the heartbeat."
 ,,,HUD size
-,,,"Console, day plate, hints and messages."
+,,,"Console, hints and messages."
 ,,,Reduce motion
 ,,,Set in the Roblox menu. Stills the town.
 ,,,Stick size
@@ -638,6 +638,7 @@ Key,Context,Example,Source
 ,,,FOOD
 ,,,LV
 ,,,FIRE
+,,,Night in
 ,,,Switch weapon
 ,,,Tap a weapon
 ,,,Start

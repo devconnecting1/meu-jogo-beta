@@ -13,17 +13,23 @@
  *   │ └────────────────────────────────────────────────────┘ │
  *   └───────────────────────────────────────────────────────┘
  *
- * How it opens: HOLD Q (release closes it), a tap or click on the survivors chip beside the day plate, or the pad's
- * Back / Select (press again to close). Not Tab: the Roblox player list owns it (UI-02); Select is freed for this by
- * turning off the engine's Select-to-pick-a-GUI (client/bootstrap.ts, `AutoSelectGuiEnabled`), which the kit never
- * needed -- every screen focuses itself.
+ * How it opens: HOLD Q (release closes it), a tap or click on the survivors chip, or the pad's Back / Select (press
+ * again to close). Not Tab: the Roblox player list owns it (UI-02); Select is freed for this by turning off the
+ * engine's Select-to-pick-a-GUI (client/bootstrap.ts, `AutoSelectGuiEnabled`), which the kit never needed -- every
+ * screen focuses itself.
+ *
+ * The chip goes where the Bag and the Menu go on the device (hud.ts gives it a slot to fill): on desktop the third
+ * plate of the console's button row, after Bag and Menu (hudConsole.ts chipSlot, style "row": iron like them, raised,
+ * the icon, the count and Q / Back); on touch the corner row of Menu and Bag, left of Menu, over the day clock
+ * (hudConsole.ts placeTouchChip, style "plate": the sky plate's graphite, as tall as it, a thumb target). The day plate
+ * it used to stand beside moved into the console (UI-09).
  *
  * What it never does: pause (UI-06 -- it is part of the HUD, the loop goes on and so does the survivor: holding Q you
- * still walk and shoot), hide the world (no scrim, no input blocker; the panel sits at the left under the day plate's
- * row, clear of the survivor in the middle of the screen, of the day plate and of the console), or take the pad from
- * the survivor (nothing in it is selectable; the pad steps the sort with the D-pad while it is open). On a short phone
- * the open panel can reach down to where the move stick rests: the touch controls are drawn above it and the panel
- * does not take their touches (only its X, its headers and its sort bar are buttons), so the stick still works.
+ * still walk and shoot), hide the world (no scrim, no input blocker; the panel sits at the left, clear of the survivor
+ * in the middle of the screen, of the day clock and of the console), or take the pad from the survivor (nothing in it
+ * is selectable; the pad steps the sort with the D-pad while it is open). On a short phone the open panel can reach
+ * down to where the move stick rests: the touch controls are drawn above it and the panel does not take their touches
+ * (only its X, its headers and its sort bar are buttons), so the stick still works.
  *
  * The numbers are the SERVER's: the roster (PlayerJoined / PlayerProfile / PlayerLife) and, for the day of each life
  * and the kills, `PlayerTally` (shared/net/protocol.ts note 15). Offline it is just you, from your own save.
@@ -37,7 +43,7 @@ import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { LifeState } from "shared/net/protocol";
 import { RosterView, netActive, netHosted, netRoster } from "../net/netClient";
 import { paintPlate } from "./plate";
-import { PixelIcon } from "./pixelIcon";
+import { Px, pixelIcon } from "./hudSky";
 import { STAT, SURFACE, TEXT, THEME, fontOf } from "./theme";
 import { titleColor, titleText } from "./titleStyle";
 import {
@@ -58,6 +64,7 @@ import {
 	makeFrame,
 	makeLabel,
 	onLayoutChange,
+	scaleText,
 	setDesign,
 	setVisible,
 	topInset,
@@ -68,6 +75,22 @@ import * as Kit from "./window";
 const UserInputService = game.GetService("UserInputService");
 const GuiService = game.GetService("GuiService");
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
+
+/**
+ * the chip's icon: a survivor's head and shoulders (pixelIcon.ts "people", the lobby's "in town") redrawn on the 7 x 7
+ * grid of the console's Bag and Menu icons (hudSky.ts pixelIcon: Frames that fill their host, so it scales with the
+ * chip on desktop and on touch alike)
+ */
+const PEOPLE: Array<Px> = [
+	[2, 0, 3, 2],
+	[1, 3, 5, 1],
+	[0, 4, 7, 1],
+	[0, 5, 1, 1],
+	[2, 5, 3, 1],
+	[6, 5, 1, 1],
+	[2, 6, 1, 1],
+	[4, 6, 1, 1],
+];
 
 /** alive / down (MP-03, bleeding) / dead until dawn (the server stands them up at 06:00, MP-21) / dead offline */
 export type ScoreStatus = "alive" | "down" | "dawn" | "dead";
@@ -167,7 +190,11 @@ export function scoreSourceOf(ctx: GameContext): ScoreSource {
 
 /** the panel's margins from the screen's left edge and from under the bar (design units of the HUD's 1120 x 630) */
 const PANEL_X = 16;
-/** under the day plate's row (the plate is 10..54, 10..63 at the largest UI size): the plate stays readable */
+/**
+ * a band under the bar left above it (where the day plate's row was): the Roblox buttons' corner and the top of the
+ * messages; the full town still fits above the console at the largest HUD size (it ends at 436, the console's top is
+ * at 481 there)
+ */
 const PANEL_Y = 66;
 /** ends at x = 536 at 16:9 (further left on a wider screen), left of the survivor in the middle (x = 560) */
 const PANEL_W = 520;
@@ -181,9 +208,33 @@ const CELL_PAD = 5;
 const TABLE_W = PANEL_W - PAD * 2;
 /** the sort bar, right-aligned in the caption row: four segments of ~79 units, a thumb wide on a phone */
 const SORT_W = 330;
-/** the chip beside the day plate (design units of the day plate) */
-const CHIP_GAP = 8;
-const CHIP_W = 92;
+/**
+ * the touch chip's width, in the design units of the sky's plate (hudSky.ts SKY_PLATE_H tall): the icon and the count
+ * -- touch has no key to show -- and at least a thumb wide on every phone (hudConsole.ts placeTouchChip)
+ */
+export const SCORE_CHIP_TOUCH_W = 64;
+
+/**
+ * How the chip is drawn in its slot: "row" = a plate of the console's button row (desktop: iron and raised like Bag and
+ * Menu, the icon, the count and the key); "plate" = its own small plate (touch: the sky plate's graphite, flat until
+ * touched, the icon and the count large).
+ */
+export type ChipStyle = "row" | "plate";
+
+/** the chip's parts in its slot (design units of the slot): the icon's centre and side, the count's box, the key's box */
+interface ChipGeom {
+	iconX: number;
+	iconS: number;
+	countX: number;
+	countW: number;
+	countSize: number;
+	keyX: number;
+}
+function chipGeom(style: ChipStyle): ChipGeom {
+	// row: Bag and Menu put their 12-unit icon at 10..22 and their key from 28 (hudConsole.ts makeIconPlate)
+	if (style === "row") return { iconX: 16, iconS: 12, countX: 26, countW: 12, countSize: TEXT.sm, keyX: 38 };
+	return { iconX: 20, iconS: 18, countX: 34, countW: 26, countSize: TEXT.xl, keyX: 58 };
+}
 
 /** sized so every header and every value reads at the 9 px floor on a 844 x 390 phone (test:tables) */
 export const SCORE_COLUMNS: Array<TableColumn> = [
@@ -239,6 +290,8 @@ function touchHit(host: GuiObject, onClick: () => void, minSize: boolean): TextB
 export interface ScoreboardOptions {
 	/** the player is on a touch screen: thumb-sized hit areas, the sort bar */
 	touch: boolean;
+	/** how the chip is drawn in the slot hud.ts gives it (see ChipStyle) */
+	chipStyle: ChipStyle;
 	/** the key legend on the chip ("Q", "Back"; "" on touch) */
 	keyLegend: () => string;
 	/** a pad is in the player's hands now (the sort bar shows; the D-pad steps it) */
@@ -261,6 +314,8 @@ export class Scoreboard {
 	private readonly chipCount: TextLabel;
 	private readonly chipKey: TextLabel;
 	private readonly chipHit: TextButton;
+	private readonly chipIcon: Frame;
+	private readonly chipGeom: ChipGeom;
 	private toggled = false;
 	private held = false;
 	private open = false;
@@ -268,14 +323,19 @@ export class Scoreboard {
 	private dpad: RBXScriptConnection | undefined;
 	private shownCount = -1;
 	private sortShown: boolean | undefined;
+	private chipText: Color3 | undefined;
 
-	constructor(root: Frame, dayPlate: Frame, tr: (k: string) => string, opts: ScoreboardOptions) {
+	/**
+	 * `chipSlot` is the frame the survivors chip fills (hud.ts: the console's button row on desktop, a frame in the touch
+	 * corner, placed in pixels): the chip takes the slot's design space, whatever its size on screen.
+	 */
+	constructor(root: Frame, chipSlot: Frame, tr: (k: string) => string, opts: ScoreboardOptions) {
 		this.tr = tr;
 		this.opts = opts;
 		// pinned to the screen's LEFT edge under the bar, at the scale of the HUD's 1120 x 630 space under the bar (the
 		// largest one that fits both ways): on a screen wider than 16:9 (the owner's 1365 x 567 playtest window) it
 		// moves away from the survivor in the middle instead of centring with a 16:9 box, and it keeps the size that
-		// fits between the day plate's row and the console at the bottom (UI-09). No scrim and no input blocker: the
+		// fits between a band under the bar and the console at the bottom (UI-09). No scrim and no input blocker: the
 		// world stays visible and every click outside the panel still reaches the game (UI-06)
 		const frame = new Instance("Frame");
 		frame.Name = "Scoreboard";
@@ -402,38 +462,79 @@ export class Scoreboard {
 		this.table.setItems([]);
 		setVisible(frame, false);
 
-		// ---- the chip beside the day plate: the survivors icon, how many are in town, and the key that opens this
-		const [dw, dh] = designSpace(dayPlate);
-		const chip = makeFrame(dayPlate, "Survivors", dw + CHIP_GAP, 0, CHIP_W, dh, THEME.background, {
+		// ---- the chip, filling its slot: the survivors icon, how many are in town, and the key that opens this
+		const [dw, dh] = designSpace(chipSlot);
+		const g = chipGeom(opts.chipStyle);
+		this.chipGeom = g;
+		const chip = makeFrame(chipSlot, "Survivors", 0, 0, dw, dh, THEME.background, {
 			transparency: 1,
-			zIndex: dayPlate.ZIndex + 1,
+			zIndex: chipSlot.ZIndex + 1,
 		});
 		this.chip = chip;
 		const cz = chip.ZIndex + 1;
-		PixelIcon(chip, "Icon", "people", 20, dh / 2, 18, THEME.foreground, cz);
-		this.chipCount = makeLabel(chip, "Count", "", 34, 0, 26, dh, TEXT.xl, THEME.foreground, {
+		const fg = this.chipForeground();
+		// the survivor's head and shoulders (the lobby's "in town" icon) on the 7 x 7 grid of the console's Bag and Menu
+		// icons, Frames that fill their host: it scales with the chip wherever it is drawn
+		const iconHost = makeFrame(chip, "Icon", g.iconX - g.iconS / 2, (dh - g.iconS) / 2, g.iconS, g.iconS, fg, {
+			transparency: 1,
+			zIndex: cz,
+		});
+		this.chipIcon = pixelIcon(iconHost, "Pixels", PEOPLE, fg, cz);
+		this.chipCount = makeLabel(chip, "Count", "", g.countX, 0, g.countW, dh, g.countSize, fg, {
 			font: BOLD,
 			align: "left",
 			zIndex: cz,
 		});
-		// light on the plate (UI-05): the chip is the window's graphite at rest and blue while the board is open
-		this.chipKey = makeLabel(chip, "Key", "", 58, 0, CHIP_W - 64, dh, TEXT.xs, THEME.foreground, {
-			font: "label",
+		// light on the plate (UI-05): iron like Bag and Menu in the console's row, the sky plate's graphite on touch,
+		// and blue while the board is open. Touch shows no key (the thumb taps the chip), so it may have no room for one
+		this.chipKey = makeLabel(chip, "Key", "", g.keyX, 0, math.max(0, dw - g.keyX - 4), dh, TEXT.xs, fg, {
+			font: opts.chipStyle === "row" ? BOLD : "label",
 			align: "right",
 			zIndex: cz,
 		});
+		this.chipText = fg;
 		this.chipHit = touchHit(chip, () => this.toggle(), opts.touch);
 		this.chipHit.ZIndex = cz + 2;
 		this.chipHit.GetPropertyChangedSignal("GuiState").Connect(() => this.paintChip());
 		this.paintChip();
 	}
 
+	/** the chip's text and icon colour: light on its face (UI-05), the pair each face is measured with (test:contrast) */
+	private chipForeground(): Color3 {
+		if (this.open) return THEME.tabActiveForeground;
+		return this.opts.chipStyle === "row" ? THEME.secondaryForeground : THEME.foreground;
+	}
+
 	private paintChip(): void {
 		const gs = this.chipHit.GuiState;
-		const hot = gs === Enum.GuiState.Hover || gs === Enum.GuiState.Press;
-		// the day plate's graphite at rest; blue while the board is open ("what is chosen is blue", UI-07)
-		const face = this.open ? THEME.tabActive : SURFACE.window;
-		paintPlate(this.chip, face, gs === Enum.GuiState.Press ? "press" : hot || this.open ? "idle" : "flat", 3);
+		const press = gs === Enum.GuiState.Press;
+		const hot = gs === Enum.GuiState.Hover || press;
+		if (this.opts.chipStyle === "row") {
+			// a plate of the console's button row: iron and raised like Bag and Menu (the kit's secondary button),
+			// blue while the board is open ("what is chosen is blue", UI-07)
+			const face = this.open ? THEME.tabActive : THEME.secondary;
+			paintPlate(this.chip, face, press ? "press" : hot ? "hot" : "idle");
+		} else {
+			// its own small plate: the sky plate's graphite at rest, blue while the board is open
+			const face = this.open ? THEME.tabActive : SURFACE.window;
+			paintPlate(this.chip, face, press ? "press" : hot || this.open ? "idle" : "flat", 3);
+		}
+		const fg = this.chipForeground();
+		if (fg !== this.chipText) {
+			this.chipText = fg;
+			this.chipCount.TextColor3 = fg;
+			this.chipKey.TextColor3 = fg;
+			for (const px of this.chipIcon.GetChildren()) if (px.IsA("Frame")) px.BackgroundColor3 = fg;
+		}
+	}
+
+	/**
+	 * Touch: hud.ts draws the chip's slot at the sky plate's scale, in screen pixels, not at the kit's UI scale; its text
+	 * follows, as the sky's does (hudSky.ts setTextScale). Called on a change of the touch geometry, never per frame.
+	 */
+	setChipTextScale(mult: number): void {
+		scaleText(this.chipCount, this.chipGeom.countSize * mult);
+		scaleText(this.chipKey, TEXT.xs * mult);
 	}
 
 	private cell(e: ScoreEntry, column: string, out: TableCell): void {

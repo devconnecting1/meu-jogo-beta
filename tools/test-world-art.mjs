@@ -38,6 +38,11 @@
  *      number of sprites (flat and art, every kind of wear); rasterised with the textures it reads against its roof
  *      and the ground in front by day and in the survivor's light at 22:00, and out of the light it is exactly as
  *      dark as its roof (no sign glows, LUZ-02); the textured roofs keep the type colours apart.
+ *   9. THE NAMEPLATE OVER THE WORLD (UI-04 clarification). The plate has no background, so each of its voices (name,
+ *      level, handle, every title) is measured with its pixel drop shadow against the real ground pixels of every
+ *      ground a survivor stands on, by day and under the night tint: the letter against its own shadow at 4,5:1 even
+ *      on pure white, and the letter or its shadow 30 ΔE off every ground pixel. `PZ_PLATE_RECORD=<file>` writes
+ *      the per-ground table as JSON.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -1263,6 +1268,225 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		`closest ΔE ${minRoof.toFixed(1)} (types ${roofPair})`,
 	);
 	setArt({});
+}
+
+// ================================================================ 9. the nameplate over the world
+
+section("9) the nameplate (UI-04 clarification): every voice with its pixel shadow, on every ground, day and night");
+{
+	/*
+	 * The nameplate has no background (the owner, 2026-09-23) and text never has a contour (UI-04), so each line lands
+	 * on the ground with ONE pixel drop shadow (client/ui/skin.ts textShadow): a copy in OVER_WORLD.shadow at
+	 * TRANSPARENCY.textShadow, one skin pixel down-right. What the eye gets is a glyph with a dark edge on its lower
+	 * right side (letter against its own shadow) and the ground on its upper left.
+	 *
+	 * The grounds are the town's REAL ground, drawn by the real WorldView with every texture on (tints, kerb shadows,
+	 * paint and decals included) and rasterised; each pixel is kept only where the town says that ground is
+	 * (surfaceAt), so a "grass" sample is grass pixels and nothing else. Floors are the raw textures (interiors draw
+	 * them untinted). Night: every ground pixel under COLORS.overlayNight at half and at full darkness (MAX_DARK) --
+	 * the plate itself is drawn ABOVE the light map (gameLoop NAMEPLATE_Z), so only its ground goes dark.
+	 *
+	 * The two rules, per voice (name, level, handle, every title):
+	 *   A. the letter against its own shadow is >= 4,5:1 over ANY ground: checked on pure white, the brightest thing a
+	 *      shadow at partial opacity can sit on, and on every ground pixel below;
+	 *   B. the plate never melts into a ground: on every ground pixel, the letter or its shadow is >= 30 ΔE (CIELAB)
+	 *      from it -- the bar the survivor's own silhouette clears in section 5 (LEG-03).
+	 * And, printed for the record (not a gate: the shadow side of the glyph carries A), the letter against the ground
+	 * itself: its WCAG ratio to the ground's mean colour and the ΔE to its nearest pixel.
+	 */
+	// theme.ts names font weights at load (its type scale); the fake tree of this suite draws no text, so it has none
+	globalThis.Enum.FontWeight ??= Object.fromEntries(
+		["Thin", "ExtraLight", "Light", "Regular", "Medium", "SemiBold", "Bold", "ExtraBold", "Heavy"].map(n => [
+			n,
+			{ Name: n, EnumType: "FontWeight" },
+		]),
+	);
+	const TH = require(join(SRC, "client/ui/theme.ts"));
+	const { titleColor } = require(join(SRC, "client/ui/titleStyle.ts"));
+	const { TITLES } = require(join(SRC, "shared/data/titles.ts"));
+	const { MAX_DARK } = require(join(SRC, "shared/sim/clock.ts"));
+	const c255 = c => [c.R * 255, c.G * 255, c.B * 255];
+	const voices = [
+		["name", TH.OVER_WORLD.name],
+		["level", TH.OVER_WORLD.level],
+		["handle", TH.OVER_WORLD.handle],
+		...TITLES.map((t, i) => [`[${t.name}]`, titleColor(i)]),
+	].map(([n, c]) => [n, c255(c)]);
+	const shadowRgb = c255(TH.OVER_WORLD.shadow);
+	const shadowA = 1 - TH.TRANSPARENCY.textShadow;
+	const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+	/** the shadow as it lands on ground `g` */
+	const shadowOn = g => mix(g, shadowRgb, shadowA);
+	const lum = ([r, g, b]) => {
+		const f = v => {
+			const c = v / 255;
+			return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+		};
+		return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+	};
+	const ratio = (a, b) => {
+		const x = lum(a);
+		const y = lum(b);
+		return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+	};
+	const dE = (a, b) => {
+		const p = lab(...a);
+		const q = lab(...b);
+		return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+	};
+
+	// A on pure white: the bound for every ground there is
+	for (const [n, c] of voices) {
+		const r = ratio(c, shadowOn([255, 255, 255]));
+		check(r >= 4.5, `${n.padEnd(15)} reads against its own shadow even on pure white`, `${r.toFixed(2)}:1`);
+	}
+
+	// the grounds, sampled from the real drawing
+	const P = 192;
+	function patchAt(x, y) {
+		setArt(ALL.ids);
+		const st = stage(P, P, 1);
+		const view = new WorldView(shadowFn(false));
+		st.cam.x = x;
+		st.cam.y = y;
+		const v = st.cam.viewRect(32);
+		st.r.beginFrame();
+		view.drawGround(st.r, st.cam, v, world);
+		view.drawSolids(st.r, st.cam, v, world);
+		st.r.endFrame();
+		return rasterise({ layer: st.r.layer, vw: P, vh: P }, COLORS.bg, localImage);
+	}
+	/** up to `max` pixels of ground `kind` (or inside a crosswalk, for "zebra"), from up to three patches */
+	function groundPixels(kind, max = 6000) {
+		const out = [];
+		let patches = 0;
+		const crossings = world.crossings ?? [];
+		for (let i = 0; i < 400000 && patches < 3 && out.length < max; i++) {
+			let cx;
+			let cy;
+			if (kind === "zebra") {
+				const c = crossings[(i * 7) % Math.max(1, crossings.length)];
+				if (c === undefined || i >= crossings.length) break;
+				cx = c.x + c.w / 2;
+				cy = c.y + c.h / 2;
+			} else {
+				cx = 1000 + ((i * 7919) % 20000);
+				cy = 1000 + ((i * 104729) % 14600);
+				if (surfaceAt(cx, cy) !== kind) continue;
+			}
+			const img = patchAt(cx, cy);
+			patches++;
+			for (let py = 0; py < P; py += 2) {
+				for (let px = 0; px < P; px += 2) {
+					const wx = cx - P / 2 + px + 0.5;
+					const wy = cy - P / 2 + py + 0.5;
+					const inside =
+						kind === "zebra"
+							? crossings.some(c => inRect(c, wx, wy)) && surfaceAt(wx, wy) === "road"
+							: surfaceAt(wx, wy) === kind;
+					if (!inside) continue;
+					const k = (py * P + px) * 4;
+					out.push([img.data[k], img.data[k + 1], img.data[k + 2]]);
+				}
+			}
+		}
+		return out;
+	}
+	const grounds = [
+		["sidewalk (concrete slabs)", "sidewalk"],
+		["walk (light pavers)", "walk"],
+		["plaza (downtown pavers)", "plaza"],
+		["road (asphalt)", "road"],
+		["zebra crossing", "zebra"],
+		["parking lot", "parking"],
+		["gas forecourt", "apron"],
+		["driveway", "drive"],
+		["grass (lawn)", "grass"],
+		["long grass", "grassLong"],
+		["park grass", "park"],
+		["verge", "verge"],
+		["school yard (dirt)", "playground"],
+		["park path", "path"],
+		["curb ramp (tactile)", "ramp"],
+	].map(([label, kind]) => [label, groundPixels(kind)]);
+	for (const floor of ["floorWood", "floorTile", "floorShop"]) {
+		const img = localImage(ALL.ids[floor]);
+		const px = [];
+		for (let i = 0; i < img.w * img.h; i++) px.push([img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]]);
+		grounds.push([`floor: ${floor.slice(5).toLowerCase()}`, px]);
+	}
+	const night = c255(COLORS.overlayNight);
+	const lights = [
+		["day", 0],
+		["night, half-lit", 0.5],
+		["night, dark", MAX_DARK],
+	];
+	const empty = grounds.filter(([, px]) => px.length === 0).map(([l]) => l);
+	check(
+		empty.length === 0,
+		"every ground was found in the town and sampled",
+		empty.join(", ") || `${grounds.length} grounds`,
+	);
+
+	const record = [];
+	let worstA = Infinity;
+	let worstAAt = "";
+	let worstB = Infinity;
+	let worstBAt = "";
+	for (const [label, pixels] of grounds) {
+		if (pixels.length === 0) continue;
+		for (const [light, dark] of lights) {
+			const px = dark > 0 ? pixels.map(p => mix(p, night, dark)) : pixels;
+			const mean = [0, 1, 2].map(i => px.reduce((s, p) => s + p[i], 0) / px.length);
+			const row = { ground: label, light, mean: mean.map(Math.round), voices: {} };
+			for (const [n, c] of voices) {
+				let a = Infinity;
+				let b = Infinity;
+				let near = Infinity;
+				for (const g of px) {
+					a = Math.min(a, ratio(c, shadowOn(g)));
+					b = Math.min(b, Math.max(dE(c, g), dE(shadowOn(g), g)));
+					near = Math.min(near, dE(c, g));
+				}
+				row.voices[n] = { shadow: a, block: b, ground: ratio(c, mean), nearest: near };
+				if (a < worstA) {
+					worstA = a;
+					worstAAt = `${n} on ${label}, ${light}`;
+				}
+				if (b < worstB) {
+					worstB = b;
+					worstBAt = `${n} on ${label}, ${light}`;
+				}
+			}
+			record.push(row);
+		}
+	}
+	check(
+		worstA >= 4.5,
+		"A: every voice against its own shadow, on every ground pixel",
+		`worst ${worstA.toFixed(2)}:1 (${worstAAt})`,
+	);
+	check(
+		worstB >= 30,
+		"B: the letter or its shadow stands 30 ΔE off every ground pixel",
+		`worst ${worstB.toFixed(1)} ΔE (${worstBAt})`,
+	);
+
+	// the record: the letter against the ground's mean colour (WCAG) and its own shadow (worst pixel), per ground
+	const shown = ["name", "level", "handle", ...TITLES.map(t => `[${t.name}]`)];
+	console.log(
+		`\n    ground x light                          mean     ${shown.map(n => n.slice(0, 9).padStart(10)).join("")}`,
+	);
+	for (const row of record) {
+		const cells = shown.map(n => {
+			const v = row.voices[n];
+			return `${v.ground.toFixed(1)}/${v.shadow.toFixed(1)}`.padStart(10);
+		});
+		const hexOf = row.mean.map(v => v.toString(16).padStart(2, "0")).join("");
+		console.log(`    ${`${row.ground}, ${row.light}`.padEnd(40)}#${hexOf}${cells.join("")}`);
+	}
+	console.log("    (each cell: the letter against the ground's mean colour / against its own shadow, worst pixel)");
+	if (process.env.PZ_PLATE_RECORD) writeFileSync(process.env.PZ_PLATE_RECORD, JSON.stringify(record, undefined, 1));
 }
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);
