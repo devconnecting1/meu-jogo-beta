@@ -78,26 +78,41 @@ let lastInVault = false;
 /** set by resolveCircle: the body's position BEFORE this step (fromX, fromY) lies in a window's vault zone */
 let startInVault = false;
 
+/** how far past the body the collision query of `resolveCircle` reaches, so its passes can share it */
+const RESOLVE_MARGIN = 6;
+
 /**
- * Push a circle out of every blocking rect it overlaps (a few Gauss-Seidel passes). The first pass's query also
- * reaches every window whose vault zone holds (x, y) or the step's start (fromX, fromY): the climb costs no query
- * of its own (for a walker's step of a unit or two, the box is the one the collision needs anyway).
+ * Push a circle out of every blocking rect it overlaps (a few Gauss-Seidel passes). ONE query serves every pass:
+ * it reaches RESOLVE_MARGIN past the body, and is made again only if the pushes carried the body further than
+ * that (a body wedged in a corner of furniture runs all four passes a tick: in a furnished building that was four
+ * queries of a dense neighbourhood). It also reaches every window whose vault zone holds (x, y) or the step's
+ * start (fromX, fromY): the climb costs no query of its own.
  */
 function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX: number, fromY: number): MoveResult {
 	let hit: Solid | undefined;
 	lastInVault = false;
 	startInVault = false;
+	let pad = math.max(r + RESOLVE_MARGIN, VAULT_REACH + math.max(math.abs(x - fromX), math.abs(y - fromY)));
+	let ox = x;
+	let oy = y;
+	scratch.clear();
+	querySolids(world, x - pad, y - pad, x + pad, y + pad, scratch);
+	for (const s of scratch) {
+		if (s.kind !== "window") continue;
+		if (inVaultZone(s, x, y)) lastInVault = true;
+		if (inVaultZone(s, fromX, fromY)) startInVault = true;
+	}
 	for (let iter = 0; iter < 4; iter++) {
-		scratch.clear();
-		const pad = iter === 0 ? math.max(r, VAULT_REACH + math.max(math.abs(x - fromX), math.abs(y - fromY))) : r;
-		querySolids(world, x - pad, y - pad, x + pad, y + pad, scratch);
+		if (math.abs(x - ox) > pad - r || math.abs(y - oy) > pad - r) {
+			// pushed out of the queried box: everything the body can touch now is in a new one
+			pad = r + RESOLVE_MARGIN;
+			ox = x;
+			oy = y;
+			scratch.clear();
+			querySolids(world, x - pad, y - pad, x + pad, y + pad, scratch);
+		}
 		let moved = false;
 		for (const s of scratch) {
-			if (iter === 0 && s.kind === "window") {
-				if (inVaultZone(s, x, y)) lastInVault = true;
-				if (inVaultZone(s, fromX, fromY)) startInVault = true;
-				continue;
-			}
 			if (!isBlocking(s)) continue;
 			const qx = math.clamp(x, s.x, s.x + s.w);
 			const qy = math.clamp(y, s.y, s.y + s.h);
