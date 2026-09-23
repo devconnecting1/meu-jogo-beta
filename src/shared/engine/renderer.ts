@@ -86,6 +86,7 @@ interface SpriteImage {
 /**
  * One pooled Frame plus the last values written to it. Every draw writes ALL properties, but only
  * the ones that changed reach the engine (Roblox property writes are the expensive part).
+ * Its ZIndex is its bucket's, written once before it is parented and never again.
  */
 interface Sprite {
 	frame: Frame;
@@ -100,7 +101,6 @@ interface Sprite {
 	rot: number;
 	color: Color3;
 	transp: number;
-	z: number;
 	/** -1 = circle, 0 = square, >0 = radius px */
 	cornerKey: number;
 	strokeOn: boolean;
@@ -109,6 +109,24 @@ interface Sprite {
 	strokeTransp: number;
 	/** created the first time this sprite draws an image, hidden (never destroyed) while it draws a plain rect */
 	img?: SpriteImage;
+}
+
+/**
+ * The sprites of one ZIndex: a stack with a cursor, as the whole pool once was. Slot i of a bucket is "the i-th
+ * thing drawn at this ZIndex this frame", so something appearing or vanishing only moves the sprites drawn after
+ * it AT ITS OWN ZIndex, and a slot never changes ZIndex.
+ */
+interface Bucket {
+	z: number;
+	sprites: Array<Sprite>;
+	/** sprites [0, cursor) are in use this frame */
+	cursor: number;
+	/** sprites [0, shown) may be visible on screen (in use last frame) */
+	shown: number;
+	/** how many sprites `reserve` asked for ahead of need, and how many of those come rounded / outlined */
+	want: number;
+	wantCorner: number;
+	wantStroke: number;
 }
 
 const DEFAULT_COLOR = Color3.fromRGB(200, 200, 200);
@@ -123,22 +141,41 @@ const ORIGIN = UDim2.fromOffset(0, 0);
  * Immediate-mode pooled GUI sprite renderer. All world visuals are Frames under one layer.
  *
  * Per frame: `beginFrame()` → any number of `drawRect()` / `acquire()` → `endFrame()`.
- * The pool is a stack with a cursor: acquire = O(1) (reuse sprites[cursor++] or create one),
- * endFrame hides only the leftovers of the previous frame. Because draw order is stable, sprite i
- * usually draws the same thing as last frame, so the property cache skips most engine writes.
+ * The pool is one stack with a cursor PER ZIndex (a `Bucket`): a draw at ZIndex z = O(1) (reuse the bucket's
+ * sprites[cursor++] or create one), endFrame hides only each bucket's leftovers of the previous frame. Because draw
+ * order is stable, sprite i of a bucket usually draws the same thing as last frame, so the property cache skips
+ * most engine writes.
+ *
+ * Why per ZIndex: with a single stack, a blood decal, an edge tile or a dropped item appearing early in the draw
+ * order handed every later slot the job of its neighbour, and each of them rewrote its properties, ZIndex
+ * included (one decal on a 336-sprite street: 676 writes, 257 of them ZIndex). A ZIndex change is what makes the
+ * engine rebuild the ScreenGui's whole Z-order list (MicroProfiler tag table, "Rebuild Z-order list"). Now a
+ * sprite is created at its bucket's ZIndex and keeps it, so that event costs one Visible write and steady-state
+ * frames write no ZIndex at all.
+ *
+ * Draw order is unchanged: every sprite is still a direct child of `layer`, siblings are sorted by ZIndex
+ * (ZIndexBehavior.Sibling) and equal ZIndexes keep child order, which inside a bucket is its slot order, which
+ * is the order they were drawn in.
  *
  * Images (`SpriteOpts.image`, the town's pixel art): the pooled Frame gets a child ImageLabel the first time
- * its slot draws one, kept (hidden) afterwards like the UIStroke, so an image sprite keeps the pool's single
- * draw order (a separate pool of ImageLabels would tie with the Frames at equal ZIndex) and costs no churn.
+ * its slot draws one, kept (hidden) afterwards like the UIStroke, so an image sprite keeps its bucket's draw
+ * order (a separate pool of ImageLabels would tie with the Frames at equal ZIndex) and costs no churn.
+ *
+ * Growth: `reserve()` + `warm()` build a bucket's sprites ahead of need, a few per frame behind the menus, so
+ * the frame a horde first walks in does not create hundreds of Instances at once.
  */
 export class Renderer {
 	readonly layer: Frame;
-	private sprites: Array<Sprite> = [];
 	private byFrame = new Map<Frame, Sprite>();
-	/** sprites [0, cursor) are in use this frame */
-	private cursor = 0;
-	/** sprites [0, shown) may be visible on screen (in use last frame) */
-	private shown = 0;
+	private buckets = new Map<number, Bucket>();
+	/** every bucket, in creation order (begin/endFrame walk them) */
+	private list: Array<Bucket> = [];
+	/** the bucket of the previous draw: draws come in runs of one ZIndex, so most skip the map */
+	private last: Bucket | undefined;
+	/** sprites drawn so far this frame, all buckets */
+	private drawn = 0;
+	/** sprites created so far, all buckets */
+	private created = 0;
 	private viewW = 1120;
 	private viewH = 630;
 
@@ -159,30 +196,90 @@ export class Renderer {
 
 	/** number of sprites drawn so far this frame (debug/perf overlay) */
 	drawCount(): number {
-		return this.cursor;
+		return this.drawn;
+	}
+
+	/** number of sprites in the pool, shown or not (every bucket) */
+	poolSize(): number {
+		return this.created;
 	}
 
 	/** Start a new frame: every sprite becomes reusable (nothing is hidden yet). */
 	beginFrame(): void {
-		this.cursor = 0;
+		for (const b of this.list) b.cursor = 0;
+		this.drawn = 0;
 	}
 
 	/** Hide the sprites that were used last frame but not this one. */
 	endFrame(): void {
-		for (let i = this.cursor; i < this.shown; i++) {
-			this.hide(this.sprites[i]);
+		for (const b of this.list) {
+			const sprites = b.sprites;
+			for (let i = b.cursor; i < b.shown; i++) {
+				this.hide(sprites[i]);
+			}
+			b.shown = b.cursor;
 		}
-		this.shown = this.cursor;
 	}
 
 	/** Hide everything immediately (e.g. leaving the game). */
 	releaseAll(): void {
-		const n = math.max(this.shown, this.cursor);
-		for (let i = 0; i < n; i++) {
-			this.hide(this.sprites[i]);
+		for (const b of this.list) {
+			const sprites = b.sprites;
+			const n = math.max(b.shown, b.cursor);
+			for (let i = 0; i < n; i++) {
+				this.hide(sprites[i]);
+			}
+			b.cursor = 0;
+			b.shown = 0;
 		}
-		this.cursor = 0;
-		this.shown = 0;
+		this.drawn = 0;
+	}
+
+	/**
+	 * Asks for `n` sprites at ZIndex `z` to exist before they are needed, `corners` of them with a UICorner and
+	 * `strokes` with a (disabled) UIStroke, as that layer draws them. Creates nothing: `warm()` does, a few per
+	 * call. Asking again raises the target, never lowers it; a pool never shrinks.
+	 */
+	reserve(z: number, n: number, corners = 0, strokes = 0): void {
+		const b = this.bucket(z);
+		b.want = math.max(b.want, n);
+		b.wantCorner = math.max(b.wantCorner, math.min(corners, b.want));
+		b.wantStroke = math.max(b.wantStroke, math.min(strokes, b.want));
+	}
+
+	/**
+	 * Creates up to `budget` of the sprites `reserve` asked for (hidden, at their ZIndex, with their modifiers) and
+	 * returns how many are still missing: 0 = the pool is warm. Call it once a frame while nothing is drawn with
+	 * this renderer's sprites in view (the menus, a loading screen): a sprite created here is one the frame a
+	 * horde walks in does not have to create.
+	 */
+	warm(budget: number): number {
+		let left = budget;
+		let missing = 0;
+		for (const b of this.list) {
+			const sprites = b.sprites;
+			for (let i = 0; i < b.want; i++) {
+				// sprites are contiguous: past the end, sprites[i] is the next one to create
+				let sp: Sprite | undefined = sprites[i];
+				const corner = i < b.wantCorner;
+				const stroke = i < b.wantStroke;
+				if (sp !== undefined && (!corner || sp.corner !== undefined) && (!stroke || sp.stroke !== undefined)) {
+					continue;
+				}
+				if (left <= 0) {
+					missing++;
+					continue;
+				}
+				if (sp === undefined) {
+					sp = this.create(b.z);
+					sprites.push(sp);
+				}
+				if (corner && sp.corner === undefined) this.ensureCorner(sp);
+				if (stroke && sp.stroke === undefined) this.ensureStroke(sp);
+				left--;
+			}
+		}
+		return missing;
 	}
 
 	/**
@@ -190,8 +287,8 @@ export class Renderer {
 	 * no outline, no rotation, ZIndex 1, 32×32 at 0,0). Valid until the next beginFrame().
 	 */
 	acquire(): Frame {
-		const sp = this.next();
-		this.apply(sp, 0, 0, 32, 32, false, 0, DEFAULT_COLOR, 0, 1, 0, undefined, 2, 0);
+		const sp = this.next(1);
+		this.apply(sp, 0, 0, 32, 32, false, 0, DEFAULT_COLOR, 0, 0, undefined, 2, 0);
 		if (sp.img !== undefined && sp.img.on) {
 			sp.img.on = false;
 			sp.img.label.Visible = false;
@@ -212,7 +309,7 @@ export class Renderer {
 	 * to whole pixels edge-by-edge so adjacent tiles/walls never leave seams.
 	 */
 	drawRect(cam: Camera, wx: number, wy: number, opts: SpriteOpts): Frame {
-		const sp = this.next();
+		const sp = this.next(opts.zIndex ?? 1);
 		let ww = opts.w ?? 32;
 		let wh = opts.h ?? 32;
 		const worldRot = opts.rotation ?? 0;
@@ -282,7 +379,6 @@ export class Renderer {
 				0,
 				bg,
 				bgTransp,
-				opts.zIndex ?? 1,
 				corner,
 				opts.stroke,
 				opts.strokeThickness ?? 2,
@@ -299,7 +395,6 @@ export class Renderer {
 				deg,
 				bg,
 				bgTransp,
-				opts.zIndex ?? 1,
 				corner,
 				opts.stroke,
 				opts.strokeThickness ?? 2,
@@ -454,17 +549,35 @@ export class Renderer {
 		return this.drawRect(cam, (x1 + x2) * 0.5, (y1 + y2) * 0.5, opts);
 	}
 
-	private next(): Sprite {
-		let sp = this.sprites[this.cursor];
-		if (sp === undefined) {
-			sp = this.create();
-			this.sprites.push(sp);
+	/** the next free sprite of ZIndex `z`'s bucket (created when the bucket has none left) */
+	private next(z: number): Sprite {
+		let b = this.last;
+		if (b === undefined || b.z !== z) {
+			b = this.bucket(z);
+			this.last = b;
 		}
-		this.cursor++;
+		let sp = b.sprites[b.cursor];
+		if (sp === undefined) {
+			sp = this.create(z);
+			b.sprites.push(sp);
+		}
+		b.cursor++;
+		this.drawn++;
 		return sp;
 	}
 
-	private create(): Sprite {
+	/** ZIndex `z`'s bucket, made (empty: no Instance) the first time the ZIndex is drawn or reserved */
+	private bucket(z: number): Bucket {
+		let b = this.buckets.get(z);
+		if (b === undefined) {
+			b = { z, sprites: [], cursor: 0, shown: 0, want: 0, wantCorner: 0, wantStroke: 0 };
+			this.buckets.set(z, b);
+			this.list.push(b);
+		}
+		return b;
+	}
+
+	private create(z: number): Sprite {
 		const f = new Instance("Frame");
 		f.Name = "S";
 		f.BorderSizePixel = 0;
@@ -474,7 +587,8 @@ export class Renderer {
 		f.BackgroundColor3 = DEFAULT_COLOR;
 		f.BackgroundTransparency = 0;
 		f.Rotation = 0;
-		f.ZIndex = 1;
+		// the bucket's ZIndex, for good: written before the Frame joins the tree, never again
+		f.ZIndex = z;
 		f.Visible = false;
 		f.Parent = this.layer;
 		const sp: Sprite = {
@@ -488,7 +602,6 @@ export class Renderer {
 			rot: 0,
 			color: DEFAULT_COLOR,
 			transp: 0,
-			z: 1,
 			cornerKey: 0,
 			strokeOn: false,
 			strokeColor: BLACK,
@@ -496,7 +609,37 @@ export class Renderer {
 			strokeTransp: 0,
 		};
 		this.byFrame.set(f, sp);
+		this.created++;
 		return sp;
+	}
+
+	/** the sprite's UICorner, created (with the radius its cache says) the first time it is needed */
+	private ensureCorner(sp: Sprite): UICorner {
+		let c = sp.corner;
+		if (c === undefined) {
+			c = new Instance("UICorner");
+			c.CornerRadius = cornerRadius(sp.cornerKey);
+			c.Parent = sp.frame;
+			sp.corner = c;
+		}
+		return c;
+	}
+
+	/** the sprite's UIStroke, created disabled the first time it is needed and only disabled afterwards */
+	private ensureStroke(sp: Sprite): UIStroke {
+		let st = sp.stroke;
+		if (st === undefined) {
+			st = new Instance("UIStroke");
+			st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+			// engine defaults differ (Thickness 1): write the cached values so cache == instance
+			st.Color = sp.strokeColor;
+			st.Thickness = sp.strokeThick;
+			st.Transparency = sp.strokeTransp;
+			st.Enabled = sp.strokeOn;
+			st.Parent = sp.frame;
+			sp.stroke = st;
+		}
+		return st;
 	}
 
 	private hide(sp: Sprite): void {
@@ -517,7 +660,6 @@ export class Renderer {
 		rot: number,
 		color: Color3,
 		transp: number,
-		z: number,
 		cornerKey: number,
 		stroke: Color3 | undefined,
 		strokeThick: number,
@@ -550,36 +692,18 @@ export class Renderer {
 			sp.transp = transp;
 			f.BackgroundTransparency = transp;
 		}
-		if (sp.z !== z) {
-			sp.z = z;
-			f.ZIndex = z;
-		}
 		// UICorner: always reset — a reused frame must never keep another sprite's rounding
 		if (sp.cornerKey !== cornerKey) {
 			sp.cornerKey = cornerKey;
-			let c = sp.corner;
-			if (c === undefined) {
-				c = new Instance("UICorner");
-				c.Parent = f;
-				sp.corner = c;
-			}
-			c.CornerRadius = cornerKey < 0 ? new UDim(0.5, 0) : new UDim(0, cornerKey);
+			const c = sp.corner;
+			// a new UICorner is born with this radius
+			if (c === undefined) this.ensureCorner(sp);
+			else c.CornerRadius = cornerRadius(cornerKey);
 		}
 		// UIStroke: created lazily, disabled (not destroyed) when unused
 		const strokeOn = stroke !== undefined;
 		if (strokeOn || sp.strokeOn) {
-			let st = sp.stroke;
-			if (st === undefined) {
-				st = new Instance("UIStroke");
-				st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-				// engine defaults differ (Thickness 1): write the cached values so cache == instance
-				st.Color = sp.strokeColor;
-				st.Thickness = sp.strokeThick;
-				st.Transparency = sp.strokeTransp;
-				st.Enabled = false;
-				st.Parent = f;
-				sp.stroke = st;
-			}
+			const st = this.ensureStroke(sp);
 			if (sp.strokeOn !== strokeOn) {
 				sp.strokeOn = strokeOn;
 				st.Enabled = strokeOn;
@@ -624,6 +748,13 @@ function rectVector(x: number, y: number): Vector2 {
 
 function clamp01(v: number): number {
 	return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+const HALF_ROUND = new UDim(0.5, 0);
+
+/** a sprite's corner key as a UICorner radius: -1 = circle (50%), 0 = square, >0 = radius px */
+function cornerRadius(key: number): UDim {
+	return key < 0 ? HALF_ROUND : new UDim(0, key);
 }
 
 /** a light in world space: full brightness up to `r * inner`, smooth falloff to 0 at `r` */

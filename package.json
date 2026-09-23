@@ -43,6 +43,8 @@
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
 		"test:world-art": "node tools/test-world-art.mjs",
+		"test:pool": "node tools/test-pool.mjs",
+		"test:icons": "node tools/test-icons.mjs",
 		"test:items": "node tools/test-items.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
