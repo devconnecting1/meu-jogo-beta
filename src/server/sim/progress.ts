@@ -187,6 +187,14 @@ export function dayRefusal(
 }
 
 /**
+ * MON-05: how recently a Survivor must have been at the controls when the night ends. Midnight to 06:00 is only
+ * ~2 real minutes (shared/sim/clock.ts, night speed), so §9.1's AFK_WINDOW_S (3 min) at 06:00 would reach back to
+ * before that midnight: a player who stopped at 23:30 and slept through the rest would pass. One minute, and the
+ * input must also come AFTER the midnight (see `survivedNight`).
+ */
+export const NIGHT_AFK_WINDOW_S = 60;
+
+/**
  * MON-05 "Survivor": did this survivor live through the night that ends at 06:00 (DAY_BREAK_HOUR)? Asked at that
  * tick by server/sim/simulation.ts, with the same bookkeeping as `dayRefusal`, and stricter, because a night is short:
  *   - `credited`: the midnight inside this night PAID them (`dayRefusal` said yes: alive, in the world for half the
@@ -194,7 +202,8 @@ export function dayRefusal(
  *   - alive now, and alive in the world for EVERY tick since that midnight (`aliveTicks === nightTicks`): a death
  *     after midnight, a Rebirth or a daybreak stand-up, a trip to the lobby -- any of them and this night was not
  *     survived;
- *   - still at the controls: a real input with movement or an edge in the last AFK_WINDOW_S.
+ *   - awake through it: a real input with movement or an edge AFTER that midnight (`tick - nightTicks` is its tick)
+ *     and in the last NIGHT_AFK_WINDOW_S.
  */
 export function survivedNight(
 	credited: boolean,
@@ -206,7 +215,8 @@ export function survivedNight(
 	simHz: number,
 ): boolean {
 	if (!credited || dead || nightTicks <= 0 || aliveTicks < nightTicks) return false;
-	return lastActiveTick !== undefined && tick - lastActiveTick <= AFK_WINDOW_S * simHz;
+	if (lastActiveTick === undefined || lastActiveTick <= tick - nightTicks) return false;
+	return tick - lastActiveTick <= NIGHT_AFK_WINDOW_S * simHz;
 }
 
 /**

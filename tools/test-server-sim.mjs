@@ -36,7 +36,8 @@
  *   (h, i: the dead do not walk; midnight pays only who lived through the day -- MP-13.)
  *   j. titles (MON-05) are earned on the server's own counters, each announced once: Survivor at the 06:00 after a
  *      midnight that paid you, alive in the world all night; Week One when a life reaches day 8 on that same day
- *      count; neither for the idle, the AFK, the dead-and-stood-up or the lobby hopper, nor for an admin's clock.
+ *      count; neither for the idle, the AFK, the dead-and-stood-up, the lobby hopper or who slept through the
+ *      night after the midnight paid them, nor for an admin's clock.
  *      Horde Breaker (j2) at the 100th killing blow the real weapon machine lands -- an assist never counts.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src/ on the fly, with the Luau
@@ -1519,6 +1520,8 @@ section(
 	const FILL7 = 7004; // day 7, one command and then silence (filled ticks): AFK -> nothing
 	const DIED = 7005; // paid at midnight, dies at 02:00, stands up at 03:00 (a Rebirth): did NOT survive the night
 	const HOPPER = 7006; // paid at midnight, in the lobby 01:00-02:00: was not there for the whole night
+	const QUIT = 7007; // plays until 23:30, then idles to 06:00: paid at midnight, but asleep through the night
+	const ONCE = 7008; // plays through midnight, one press just after it, then idles the last ~2 min to 06:00
 	const players = new Map([
 		[ACTIVE, arrive(0, ACTIVE)],
 		[WEEK, arrive(1, WEEK, 7)],
@@ -1526,6 +1529,8 @@ section(
 		[FILL7, arrive(3, FILL7, 7)],
 		[DIED, arrive(4, DIED)],
 		[HOPPER, arrive(5, HOPPER)],
+		[QUIT, arrive(6, QUIT)],
+		[ONCE, arrive(7, ONCE)],
 	]);
 	let first = true;
 	let midnightTitles = -1;
@@ -1533,15 +1538,19 @@ section(
 	const nightOver = () => clock.day === 5 && clock.dayTime >= 6;
 	while (!nightOver() && guard-- > 0) {
 		const hour = clock.dayTime;
+		const night = clock.day === 5;
 		for (const [id, sp] of players) {
 			sp.state.hungry = sp.state.hungryMax;
 			if (id === IDLE7) press(sp, 0);
 			else if (id === FILL7) {
 				if (first) press(sp, RELOAD);
+			} else if (id === QUIT) {
+				if (!night && hour < 23.5) press(sp, RELOAD);
+			} else if (id === ONCE) {
+				if (!night || hour < 0.25) press(sp, RELOAD);
 			} else press(sp, RELOAD);
 		}
 		first = false;
-		const night = clock.day === 5;
 		if (night && hour >= 1 && hour < 2 && players.has(HOPPER)) {
 			sim.remove(players.get(HOPPER).slot);
 			players.delete(HOPPER);
@@ -1605,6 +1614,14 @@ section(
 		"paid at midnight but in the lobby for an hour of the night: no Survivor",
 	);
 	check(
+		day(QUIT) === 2 && !owns(QUIT, TIT.TitleId.Survivor),
+		"paid at midnight (its last input came 30 min before it), then idle to 06:00: no Survivor",
+	);
+	check(
+		day(ONCE) === 2 && !owns(ONCE, TIT.TitleId.Survivor),
+		`one press just after midnight, then nothing for more than ${PROG.NIGHT_AFK_WINDOW_S ?? 60} s before 06:00: no Survivor`,
+	);
+	check(
 		unlocks.every(([u]) => u === ACTIVE || u === WEEK),
 		`nobody else earned anything (${JSON.stringify(unlocks)})`,
 	);
@@ -1632,11 +1649,11 @@ section(
 		"and no title is announced a second time",
 	);
 	check(
-		owns(DIED, TIT.TitleId.Survivor) && owns(HOPPER, TIT.TitleId.Survivor),
-		"the two who did not live the first night whole lived this one, and are Survivors now",
+		[DIED, HOPPER, QUIT, ONCE].every(id => owns(id, TIT.TitleId.Survivor)),
+		"the four who did not live the first night whole (or awake) played this one through, and are Survivors now",
 	);
 	check(!owns(IDLE7, TIT.TitleId.Survivor) && !owns(FILL7, TIT.TitleId.Survivor), "the idle still are not");
-	checkEq(unlocks.length, before + 2, "two new titles in all");
+	checkEq(unlocks.length, before + 4, "four new titles in all");
 
 	// what a client report claims about any of it is ignored (it is the server's, and so is the day)
 	const idle = saves.get(IDLE7);

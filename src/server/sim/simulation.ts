@@ -398,7 +398,7 @@ export class ServerSimulation {
 
 	/**
 	 * MON-05 at 06:00: the night is over. A Survivor is whoever the midnight inside it paid AND who stayed alive in the
-	 * world for every tick since, still at the controls (`survivedNight`). `dayTicks` restarted at that midnight, so
+	 * world for every tick since, awake at the controls after it (`survivedNight`). `dayTicks` restarted at that midnight, so
 	 * it is exactly the ticks of the night since. Nobody keeps the mark past this: the next night starts from zero.
 	 */
 	private creditDawn(): void {
