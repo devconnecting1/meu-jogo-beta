@@ -604,7 +604,7 @@ setScreen(1365, 567, 58, 160);
 	check(
 		"...sem a linha dos creditos (uma pagina de texto solto nao le sobre uma rua clara)",
 		about !== undefined &&
-			root.GetDescendants().some(d => d.Name === "Built") &&
+			root.GetDescendants().some(d => d.Name === "Developer") &&
 			!root.GetDescendants().some(d => d.Name === "OpenCredits"),
 	);
 	const win = rectOf(root.FindFirstChild("Body").FindFirstChild("Window"));
