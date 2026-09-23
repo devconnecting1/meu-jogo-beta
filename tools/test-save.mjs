@@ -38,7 +38,7 @@
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { installShims } from "./luau-shim.mjs";
 
@@ -229,7 +229,7 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
 	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
-	checkEq(SAVE.SAVE_VERSION, 5, "SAVE_VERSION e 5 (titulos, MON-05)");
+	checkEq(SAVE.SAVE_VERSION, 6, "SAVE_VERSION e 6 (conquistas do servidor e lifeDeaths, CON-04)");
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
 	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
 	checkEq(save.equipPet, -1, "e nenhum pet");
@@ -921,7 +921,7 @@ section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 	const doc = productionV4();
 	checkEq(SAVE.storedVersion(doc), 4, "o documento lido se declara v4");
 	const save = SAVE.sanitizeStoredSave(doc);
-	checkEq(save.version, 5, "e sai v5");
+	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
 	checkArrayEq(save.titles, new Array(TITLES_N).fill(0), "nenhum titulo: nenhum servidor contou nada antes do v5");
 	checkEq(save.zombieKills, 0, "e nenhum abate contado");
 	checkEq(save.lifeNights, 0, "nem noite creditada pelo servidor (Week One conta a partir do v5)");
@@ -1332,6 +1332,459 @@ section("24) o registro custa uma escrita so quando importa: titulo, historia no
 			/!release\) syncTitleRecord\(s, false\)/.test(flush),
 		"main.server.ts flush: exato na saida (antes do save que solta a trava), por degraus no autosave",
 	);
+}
+
+// ---------------------------------------------------------------- v6: achievements are the server's (CON-04)
+
+const ACHV = require(join(SRC, "server/save/achievements.ts"));
+const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+const { AchievementId: AID } = require(join(SRC, "shared/data/achievements.ts"));
+const { WeaponKind, ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
+const TITLESRV = require(join(SRC, "server/save/titles.ts"));
+
+section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a migracao v5 -> v6 nao perde nada");
+{
+	// a v5 document: counters the client used to report, and no lifeDeaths
+	const v5 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV4())));
+	v5.version = 5;
+	v5.achievements = ACHIEVEMENTS.map(a => Math.min(3, a.max));
+	delete v5.lifeDeaths;
+	const save = SAVE.sanitizeStoredSave(v5);
+	checkEq(save.version, SAVE.SAVE_VERSION, "o v5 sobe para v6");
+	checkArrayEq(
+		save.achievements,
+		v5.achievements,
+		"os contadores gravados voltam como estavam (nada ganho se perde)",
+	);
+	checkEq(
+		save.lifeDeaths,
+		v5.deathCount > 0 || v5.runOver ? 1 : 0,
+		"lifeDeaths ausente no v5: 1 se a vida ja morreu pelo que o documento sabe, 0 senao",
+	);
+	// a v5 life that already died must not start Never die again: a paid Rebirth (`deathCount`, where the old rule
+	// stopped) or a body lying dead (`runOver`) is a death of this life. A death answered by waiting for daybreak left no
+	// record in v5 -- that life counts again, as it did under the old rule
+	const v5life = (deathCount, runOver) => {
+		const doc = JSON.parse(JSON.stringify(v5));
+		doc.deathCount = deathCount;
+		doc.runOver = runOver;
+		doc.lifeNights = 4;
+		doc.achievements[AID.NeverDie] = 3;
+		const migrated = SAVE.sanitizeStoredSave(doc);
+		TITLESRV.creditLifeNight(migrated);
+		return migrated;
+	};
+	for (const [what, deathCount, runOver] of [
+		["um Rebirth pago (deathCount 2)", 2, false],
+		["o corpo caido esperando (runOver)", 0, true],
+	]) {
+		const m = v5life(deathCount, runOver);
+		check(
+			m.lifeDeaths === 1 && m.achievements[AID.NeverDie] === 3,
+			`v5 com ${what}: lifeDeaths 1, e a meia-noite seguinte nao move o Never die`,
+			`lifeDeaths ${m.lifeDeaths}, Never die ${m.achievements[AID.NeverDie]}`,
+		);
+	}
+	const clean = v5life(0, false);
+	check(
+		clean.lifeDeaths === 0 && clean.achievements[AID.NeverDie] === 5,
+		"v5 sem morte registrada: lifeDeaths 0, e o Never die segue (5 noites nesta vida)",
+		`lifeDeaths ${clean.lifeDeaths}, Never die ${clean.achievements[AID.NeverDie]}`,
+	);
+	const v6junk = JSON.parse(JSON.stringify(save));
+	v6junk.lifeDeaths = 0;
+	v6junk.deathCount = 3;
+	checkEq(
+		SAVE.sanitizeStoredSave(v6junk).lifeDeaths,
+		0,
+		"(um documento v6 guarda o proprio lifeDeaths: o deathCount so decide quando o campo falta)",
+	);
+	const junk = JSON.parse(JSON.stringify(save));
+	junk.achievements = ACHIEVEMENTS.map(() => 1e9);
+	junk.achievements[0] = -5;
+	junk.lifeDeaths = "x";
+	const read = SAVE.sanitizeStoredSave(junk);
+	check(
+		read.achievements.every((v, i) => v === (i === 0 ? 0 : ACHIEVEMENTS[i].max)),
+		"um contador gravado com lixo fica entre 0 e a meta de cada linha",
+	);
+	checkEq(
+		read.lifeDeaths,
+		save.deathCount > 0 || save.runOver ? 1 : 0,
+		"e lifeDeaths lixo cai na regra do campo ausente (nunca abaixo do que o documento sabe)",
+	);
+
+	// the report: every counter at its goal and a life with no death -- the server keeps its own
+	const base = SAVE.sanitizeStoredSave(productionV4());
+	base.lifeDeaths = 2;
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.achievements = ACHIEVEMENTS.map(a => a.max);
+	forged.lifeDeaths = 0;
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	checkArrayEq(
+		upd.achievements,
+		base.achievements,
+		"um relatorio com todas as conquistas completas nao muda nenhuma",
+	);
+	checkEq(upd.lifeDeaths, 2, "nem apaga as mortes desta vida");
+	check(upd.achievements !== base.achievements, "(a copia do relatorio e outra tabela: a viva nao e tocada)");
+
+	// the report path's own pin (server/main.server.ts processReport, beside stripClientProgress / stripClientLife):
+	// even a report that got past the sanitizer with forged counters -- a regression there -- is put back, titles too
+	const bypass = JSON.parse(JSON.stringify(base));
+	bypass.achievements = ACHIEVEMENTS.map(a => a.max);
+	bypass.titles = bypass.titles.map(() => 1);
+	bypass.lifeDeaths = 0;
+	check(
+		ACHV.stripClientAchievements(base, bypass),
+		"stripClientAchievements aponta o relatorio que tentou (sinal de relatorio velho, §9.3)",
+	);
+	check(
+		JSON.stringify(bypass.achievements) === JSON.stringify(base.achievements) &&
+			JSON.stringify(bypass.titles) === JSON.stringify(base.titles) &&
+			bypass.lifeDeaths === 2,
+		"...e devolve as conquistas, os titulos e as mortes desta vida do servidor",
+	);
+	check(
+		bypass.achievements !== base.achievements && bypass.titles !== base.titles,
+		"(copias: a tabela confiavel nao fica compartilhada com o relatorio)",
+	);
+	check(
+		!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(JSON.parse(JSON.stringify(base)), base)),
+		"um relatorio que so espelha o servidor nao e apontado",
+	);
+	// the real path: the sanitizer has already put the trusted values into `upd`, so the claim is only visible in the
+	// report as decoded -- that is what `processReport` hands over, and what makes the staleness signal work
+	const claim = JSON.parse(JSON.stringify(base));
+	claim.achievements = ACHIEVEMENTS.map(a => a.max);
+	const sanitized = SAVE.sanitizeClientReport(claim, base);
+	check(
+		ACHV.stripClientAchievements(base, sanitized, claim),
+		"...e o relatorio forjado que o sanitizador ja limpou E apontado, pelo relatorio decodificado (claimed)",
+	);
+	const mirror = JSON.parse(JSON.stringify(base));
+	check(
+		!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(mirror, base), mirror) &&
+			!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport({ day: base.day }, base), { day: base.day }),
+		"...um espelho fiel nao e, nem um relatorio sem esses campos (cliente antigo)",
+	);
+	const titled = JSON.parse(JSON.stringify(base));
+	titled.titles = titled.titles.map(() => 1);
+	const dead = JSON.parse(JSON.stringify(base));
+	dead.lifeDeaths = 0;
+	check(
+		ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(titled, base), titled) &&
+			ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(dead, base), dead),
+		"...e e apontado tambem o que so pede os titulos, e o que so apaga as mortes desta vida",
+	);
+
+	// the wallet carries them, and the client's copy only ever raises them
+	const w = SAVE.walletOf(base);
+	checkArrayEq(w.achievements, base.achievements, "a carteira leva os contadores do servidor");
+	const client = SAVE.sanitizeStoredSave(productionV4());
+	client.achievements.fill(0);
+	const pushed = JSON.parse(JSON.stringify(w));
+	pushed.achievements[AID.ZombieSlayer] = 42;
+	SAVE.applyWallet(client, pushed);
+	checkEq(client.achievements[AID.ZombieSlayer], 42, "o cliente adota o contador que o servidor empurrou");
+	const stale = JSON.parse(JSON.stringify(pushed));
+	stale.achievements[AID.ZombieSlayer] = 7;
+	stale.achievements[AID.GoodDay] = 99;
+	SAVE.applyWallet(client, stale);
+	checkEq(client.achievements[AID.ZombieSlayer], 42, "uma carteira atrasada nao tira um contador");
+	checkEq(client.achievements[AID.GoodDay], 1, "e um valor acima da meta fica na meta");
+	const older = JSON.parse(JSON.stringify(w));
+	delete older.achievements;
+	SAVE.applyWallet(client, older);
+	checkEq(
+		client.achievements[AID.ZombieSlayer],
+		42,
+		"uma carteira de servidor antigo (sem o campo) nao mexe em nada",
+	);
+}
+
+section("26) quem move cada conquista: so os eventos do servidor (server/save/achievements.ts)");
+{
+	const s = SAVE.defaultSave();
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Pistol);
+	check(
+		s.achievements[AID.ZombieSlayer] === 1 &&
+			s.achievements[AID.SpecialZombieSlayer] === 0 &&
+			s.achievements[AID.MeleeExpert] === 0,
+		"um Walker a tiro: Zombie slayer",
+	);
+	ACHV.creditKillAchievements(s, 2, WeaponKind.Melee);
+	check(
+		s.achievements[AID.ZombieSlayer] === 2 &&
+			s.achievements[AID.SpecialZombieSlayer] === 1 &&
+			s.achievements[AID.MeleeExpert] === 1,
+		"um Charger na faca: Zombie slayer, Special zombie slayer e Melee weapons expert",
+	);
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Bow);
+	ACHV.creditKillAchievements(s, 1, WeaponKind.Sniper);
+	check(
+		s.achievements[AID.BowExpert] === 1 &&
+			s.achievements[AID.Sniper] === 1 &&
+			s.achievements[AID.ZombieSlayer] === 4,
+		"uma flecha e um tiro de sniper: Bow expert e Sniper (armas que funcionam, CON-03)",
+	);
+	ACHV.creditBossAchievement(s, 3);
+	for (const bad of [0, 5, -1, 1.5, Number.NaN]) ACHV.creditBossAchievement(s, bad);
+	check(
+		s.achievements[AID.GiantSlayer] === 1 &&
+			s.achievements[AID.CentipedeSlayer] === 0 &&
+			s.achievements[AID.RafflesiaSlayer] === 0 &&
+			s.achievements[AID.HedgehogSlayer] === 0,
+		"o chefe do tipo 3 e o Giant slayer; um tipo fora de 1..4 nao move nada",
+	);
+	check(!ACHV.raiseAchievement(s, AID.Rider, 1), "e nenhuma linha desligada e creditada");
+	checkEq(s.achievements[AID.Rider], 0, "(o contador salvo dela fica como estava)");
+	s.achievements[AID.ZombieSlayer] = ACHIEVEMENTS[AID.ZombieSlayer].max - 1;
+	check(ACHV.addAchievement(s, AID.ZombieSlayer, 1), "o abate que chega a meta completa a conquista");
+	check(!ACHV.addAchievement(s, AID.ZombieSlayer, 1), "e o seguinte nao completa de novo");
+	checkEq(s.achievements[AID.ZombieSlayer], ACHIEVEMENTS[AID.ZombieSlayer].max, "(nunca passa da meta)");
+	check(
+		!ACHV.addAchievement(s, AID.WoodsCollector, -3) &&
+			!ACHV.addAchievement(s, AID.WoodsCollector, 0.5) &&
+			!ACHV.raiseAchievement(s, AID.WoodsCollector, Number.NaN),
+		"quantidade negativa, fracionaria ou NaN nao move nada",
+	);
+
+	// the nights: Good day, and Never die while this life has not died once
+	const life = SAVE.defaultSave();
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	check(
+		life.achievements[AID.GoodDay] === 1 && life.achievements[AID.NeverDie] === 2,
+		"duas meias-noites creditadas: Good day, e Never die em 2",
+	);
+	ACHV.countLifeDeath(life);
+	checkEq(life.lifeDeaths, 1, "uma morte (qualquer uma: Rebirth, espera do amanhecer) conta para esta vida");
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 2, "ACH-4: depois de uma morte, Never die para de contar nesta vida");
+	life.deathCount = 0; // the old rule's test: only a paid Rebirth moved deathCount
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 2, "...mesmo com deathCount 0 (a morte esperada ate o amanhecer)");
+	SAVE.resetRun(life);
+	checkEq(life.lifeDeaths, 0, "uma vida nova (New game, fim do mundo) comeca sem morte");
+	checkEq(life.achievements[AID.NeverDie], 2, "e guarda o melhor Never die, como toda conquista");
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	TITLESRV.creditLifeNight(life);
+	checkEq(life.achievements[AID.NeverDie], 3, "a vida nova sobe o recorde quando o passa");
+
+	// the rest: first steps, cooking and smelting (ITM-01's heat), wood
+	const s2 = SAVE.defaultSave();
+	ACHV.creditFirstSteps(s2);
+	ACHV.creditFirstSteps(s2);
+	checkEq(s2.achievements[AID.FirstSteps], 1, "First steps: o primeiro corpo na cidade");
+	ACHV.creditCraft(s2, "cook", 2);
+	ACHV.creditCraft(s2, "smelt", 1);
+	ACHV.creditCraft(s2, undefined, 5);
+	ACHV.creditCraft(s2, "cook", -4);
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	ACHV.creditTaken(s2, ItemKind.Etc, wood, 4);
+	ACHV.creditTaken(s2, ItemKind.Etc, wood === 0 ? 1 : 0, 9);
+	ACHV.creditTaken(s2, ItemKind.Use, wood, 9);
+	check(
+		s2.achievements[AID.Chef] === 2 &&
+			s2.achievements[AID.Blacksmith] === 1 &&
+			s2.achievements[AID.WoodsCollector] === 4,
+		"cozinhar vai para o Chef, fundir para o Blacksmith, o craft frio para nenhum; so madeira vai para o Woods collector",
+		`${s2.achievements[AID.Chef]} / ${s2.achievements[AID.Blacksmith]} / ${s2.achievements[AID.WoodsCollector]}`,
+	);
+}
+
+section("27) os caminhos reais do servidor chamam o credito (craft, madeira, morte, entrada, abate)");
+{
+	// crafting through the server's own ServerCraft (the craft intent's path), beside a lit brazier -- it cooks (a
+	// lit fire) and it smelts: the recipe's heat (ITM-01) says whose the craft is
+	const { addSolid } = require(join(SRC, "shared/game/world.ts"));
+	const world = createWorld(4000, 4000);
+	addSolid(world, {
+		kind: "structure",
+		x: 1040,
+		y: 970,
+		w: 96,
+		h: 64,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "brazier",
+		powered: true,
+	});
+	const craft = new ServerCraft({ world, build: { placing: () => false, hold: () => {} } });
+	const s = SAVE.defaultSave();
+	const plain = r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro;
+	const cold = CRAFT_RECIPES.find(r => plain(r) && r.needsCook !== true && r.needsFire !== true);
+	const cook = CRAFT_RECIPES.find(r => plain(r) && r.needsCook === true);
+	const smelt = CRAFT_RECIPES.find(r => plain(r) && r.needsFire === true && r.needsCook !== true);
+	const state = PLAYER.createPlayer(s, 1000, 1000);
+	const outs = [cold, cook, smelt].map(recipe => {
+		for (const ing of recipe.ingredients) {
+			if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		}
+		craft.step(1);
+		return craft.craft(0, state, s, recipe.id);
+	});
+	check(
+		outs.every(o => o.kind === "crafted") &&
+			outs[0].heat === undefined &&
+			s.achievements[AID.Chef] === outs[1].count &&
+			s.achievements[AID.Blacksmith] === outs[2].count &&
+			outs[1].count > 0 &&
+			outs[2].count > 0,
+		`ServerCraft.craft: ${cold.id} (frio) para ninguem, ${cook.id} (cozinhar) para o Chef, ${smelt.id} (fundir) para o Blacksmith`,
+		`${outs.map(o => o.kind).join(",")}, Chef ${s.achievements[AID.Chef]}, Blacksmith ${s.achievements[AID.Blacksmith]}`,
+	);
+	// the source of the other callers: one line each, where the server decides
+	const src = f => readFileSync(join(SRC, f), "utf8");
+	check(
+		/creditTaken\(save, item\.kind, item\.itemId, item\.count\)/.test(src("server/sim/items.ts")) &&
+			/creditTaken\(save, drop\.kind, drop\.id, drop\.count\)/.test(src("server/sim/items.ts")) &&
+			/creditTaken\(save, extra\.kind, extra\.id, extra\.count\)/.test(src("server/sim/items.ts")),
+		"ServerItems: o que o servidor poe na mochila (pegar, revistar, o achado do Thief) passa pelo creditTaken",
+	);
+	check(/countLifeDeath\(sp\.save\)/.test(src("server/sim/life.ts")), "LifeKeeper.died conta TODA morte desta vida");
+	check(
+		/creditFirstSteps\(save\)/.test(src("server/net/mpHost.ts")),
+		"o host credita First steps ao admitir o corpo",
+	);
+	check(
+		/const kind = weaponKind \?\? Wp\.WEAPONS\[st\.weaponId\]\?\.kind \?\? -1;/.test(src("server/sim/combat.ts")) &&
+			/zombieKilled\(z\.id, z\.exp, sp\.slot, this\.nowS, z\.type, kind\)/.test(src("server/sim/combat.ts")) &&
+			/bossKilled\(b\.id, b\.exp, b\.hpMax, sp\.slot, b\.type\)/.test(src("server/sim/combat.ts")),
+		"o combate do servidor passa o tipo do zumbi e o da arma (a que lancou, ou a da mao) ao credito; o do chefe tambem",
+	);
+	check(
+		/achievements = save\.achievements\.join/.test(src("server/main.server.ts")),
+		"a carteira empurrada muda quando uma conquista muda (walletSignature)",
+	);
+	check(
+		/stripClientLife\(prev, upd\)[^]*stripClientAchievements\(prev, upd, decoded\)[^]*applyProgressLimits\(s, prev, upd/.test(
+			src("server/main.server.ts"),
+		),
+		"processReport fixa as conquistas antes de juntar o relatorio, com o relatorio decodificado (stripClientAchievements)",
+	);
+}
+
+section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods collector: revisao de seguranca)");
+{
+	// the build-cancel refund (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the ingredients
+	// come back through addItem, never through creditTaken -- a credited refund would farm Woods collector (craft a
+	// wooden placeable, cancel, repeat), and a refunded cooking would farm Chef the same way
+	const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const world = createWorld(4000, 4000);
+	const build = new ServerBuild({ world, out: new WorldOut() });
+	const craft = new ServerCraft({ world, build });
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	const recipe = CRAFT_RECIPES.find(
+		r =>
+			r.craftKind === 1 &&
+			!r.needsDesk &&
+			!r.needsPro &&
+			r.needsCook !== true &&
+			r.needsFire !== true &&
+			r.ingredients.some(i => i.kind === ItemKind.Etc && i.index === wood),
+	);
+	const s = SAVE.defaultSave();
+	for (const ing of recipe.ingredients) {
+		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+	}
+	const woodBefore = s.invenEtc[wood];
+	const state = PLAYER.createPlayer(s, 1000, 1000);
+	let rounds = 0;
+	for (let i = 0; i < 5; i++) {
+		craft.step(1);
+		build.step(1);
+		const made = craft.craft(0, state, s, recipe.id);
+		const back = build.cancel(0, s);
+		if (made.kind === "holding" && back.kind === "cancelled" && back.refunded === true) rounds += 1;
+	}
+	craft.step(1);
+	const last = craft.craft(0, state, s, recipe.id);
+	build.remove(0, s); // leaving the world with it still on the cursor: the same refund
+	check(
+		rounds === 5 &&
+			last.kind === "holding" &&
+			s.invenEtc[wood] === woodBefore &&
+			s.achievements.every(v => v === 0),
+		`receita ${recipe.id} (madeira): seis vezes fazer e devolver (cancelar, sair do mundo) -- a madeira volta toda e nenhuma conquista anda`,
+		`${rounds} cancelamentos, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
+	);
+
+	// who may call the two "what came into the backpack" credits at all -- an allowlist, so a new road that fills the
+	// backpack (a refund, a pack, a dropped item picked back up) is added here on purpose, by someone who read why
+	const ALLOWED = { creditTaken: ["server/sim/items.ts"], creditCraft: ["server/sim/craft.ts"] };
+	const found = { creditTaken: [], creditCraft: [] };
+	const walk = d => {
+		for (const f of readdirSync(d)) {
+			const full = join(d, f);
+			if (statSync(full).isDirectory()) walk(full);
+			else if (full.endsWith(".ts") && !full.endsWith(join("save", "achievements.ts"))) {
+				const text = readFileSync(full, "utf8");
+				const rel = full
+					.slice(SRC.length + 1)
+					.split("\\")
+					.join("/");
+				for (const name of Object.keys(found))
+					if (new RegExp(`\\b${name}\\(`).test(text)) found[name].push(rel);
+			}
+		}
+	};
+	walk(join(SRC, "server"));
+	check(
+		JSON.stringify(found) === JSON.stringify(ALLOWED),
+		"so o ServerItems (pegar, revistar, o Thief) chama creditTaken e so o ServerCraft chama creditCraft -- build.ts nao",
+		JSON.stringify(found),
+	);
+
+	// PACK_DELIVERY_HOOK: the server's pack delivery (server/sim/backpack.ts `deliverPacks`, on the backpack branch) must
+	// not credit anything either -- a pack of wood is not wood collected. Until that module is on this branch the hook
+	// only says it is waiting; once it is, it runs for real (and the allowlist above keeps creditTaken out of it)
+	const backpackFile = join(SRC, "server/sim/backpack.ts");
+	const BP = existsSync(backpackFile) ? require(backpackFile) : undefined;
+	if (BP?.deliverPacks === undefined) {
+		console.log("  PENDENTE  PACK_DELIVERY_HOOK: server/sim/backpack.ts deliverPacks ainda nao esta nesta branch");
+	} else {
+		const packs = SAVE.defaultSave();
+		for (const pack of SHOP_PACKS) packs.packsBought[pack.id] = 1;
+		const opened = BP.deliverPacks(packs);
+		check(
+			opened > 0 && packs.achievements.every(v => v === 0),
+			"PACK_DELIVERY_HOOK: o servidor entregar todos os pacotes da loja nao move conquista nenhuma",
+			`${opened} pacote(s), Woods collector ${packs.achievements[AID.WoodsCollector]}`,
+		);
+	}
+}
+
+section("29) o maior relatorio honesto cabe com folga em MAX_SAVE_PAYLOAD (revisao de seguranca de 5967a18, #12)");
+{
+	const { MAX_SAVE_PAYLOAD } = require(join(SRC, "shared/net/net.ts"));
+	// the client reports its whole save (client/systems/saveClient.ts): every counter at a width no save can pass --
+	// 8 digits in every array, 11 digits and a fraction in every number, 17 significant digits in every setting
+	const worst = JSON.parse(JSON.stringify(SAVE.defaultSave()));
+	for (const k of Object.keys(worst)) {
+		const v = worst[k];
+		if (Array.isArray(v)) worst[k] = v.map(() => 10000000);
+		else if (typeof v === "number") worst[k] = -12345678901.5;
+	}
+	for (const k of Object.keys(worst.settings)) {
+		if (typeof worst.settings[k] === "number") worst.settings[k] = 0.12345678901234567;
+	}
+	const size = JSON.stringify(worst).length;
+	check(
+		size * 2 <= MAX_SAVE_PAYLOAD,
+		`o pior relatorio possivel tem ${size} B: mais de 2x de folga em ${MAX_SAVE_PAYLOAD} B`,
+	);
+	check(MAX_SAVE_PAYLOAD <= 8192, "e o teto nao passa de 8 KB (antes 100 KB de lixo eram lidos inteiros)");
 }
 
 // ---------------------------------------------------------------- verdict

@@ -9,7 +9,9 @@
  * What is true now:
  *   - ONE set of items, with server-issued dynamic ids (§4.5), replicated as ItemAdd/ItemRemove within
  *     ITEM_INTEREST. The mutation hooks live on `WorldData` itself, so a zombie's death drop deep inside
- *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists.
+ *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists. Who was told about
+ *     which item is kept per slot: an item that comes into range later is sent then (`sweepInterest`), and a
+ *     removal reaches every client that was told, however far away it is now (`retract`).
  *   - PICKUP is a request, resolved at the server's position of the survivor, and it is atomic: the world's
  *     `removeGroundItem` is the arbiter, so of two survivors reaching for the same can in the same tick, one
  *     gets a can and the other gets nothing (§8.3 "checar + mutar sem yield no meio"). That is the §11.3 F3
@@ -40,8 +42,11 @@ import {
 	spawnGroundItem,
 	WorldData,
 	buildingAt,
+	isBlocking,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
+import { creditTaken } from "../save/achievements";
+import { segmentClear } from "shared/game/physics";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -53,6 +58,12 @@ export const LOOT_ROLL_RANGE = 320;
 export const LOOT_SWEEP_S = 0.5;
 /** a map item (tree, car, bin) cannot be harvested again for this long — PER SOLID, for everybody (§8.1) */
 export const MAP_ITEM_COOLDOWN = DESIGN.MAP_ITEM_HIT_TIME;
+/** how often each survivor's item interest is swept for items that came within ITEM_INTEREST (§4.5) */
+export const ITEM_SWEEP_S = 0.5;
+/** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
+export const ITEM_INTEREST_EXIT = ITEM_INTEREST + 300;
+const NO_VIEWERS: ReadonlyArray<{ x: number; y: number }> = [];
+const NO_SLOTS: ReadonlyArray<number> = [];
 
 /** what a `search` found: the building the survivor was inside (if any) and what came out of it */
 export interface SearchResult {
@@ -62,7 +73,8 @@ export interface SearchResult {
 
 /** why a pickup did not happen; `ok` carries what went into the backpack */
 export type PickupResult =
-	{ ok: true; kind: number; itemId: number; count: number } | { ok: false; why: "none" | "range" | "taken" };
+	| { ok: true; kind: number; itemId: number; count: number }
+	| { ok: false; why: "none" | "range" | "blocked" | "taken" };
 
 export interface ServerItemsOptions {
 	world: WorldData;
@@ -76,20 +88,124 @@ export class ServerItems {
 	private readonly cooldowns = new Map<Solid, number>();
 	private sweep = 0;
 	private readonly scratch = new Array<Solid>();
+	/**
+	 * Who is watching (§4.5 "Interesse (1800 u)"): the simulation's own body and slot arrays, refreshed in place every
+	 * tick, so an item made anywhere in the tick is announced to whoever is near it NOW.
+	 */
+	private viewers: ReadonlyArray<{ x: number; y: number }> = NO_VIEWERS;
+	private viewerSlots: ReadonlyArray<number> = NO_SLOTS;
+	/**
+	 * Which items each slot's client has been TOLD about and not told to forget. A mirror is only as good as its
+	 * removals: before this an ItemRemove went to whoever was near the item when it went, so a survivor who saw a
+	 * drop and walked on kept a ghost of it for ever once somebody else took it — and a drop made while they were
+	 * across town never appeared when they got there.
+	 */
+	private readonly told = new Map<number, Set<number>>();
+	private interestSweep = 0;
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
 		// §4.5: every ground item that appears or disappears, whoever made it, becomes a delta here
-		this.world.onItemAdd = (w, item) => this.out.queueNear(itemAddOf(item), item.x, item.y, ITEM_INTEREST);
-		this.world.onItemRemove = (w, item) =>
-			this.out.queueNear({ t: WorldEv.ItemRemove, id: item.id }, item.x, item.y, ITEM_INTEREST);
+		this.world.onItemAdd = (w, item) => this.announce(item);
+		this.world.onItemRemove = (w, item) => this.retract(item);
+	}
+
+	/** the bodies (and their slots, in the same order) that see items; the simulation hands its own arrays over */
+	watch(players: ReadonlyArray<{ x: number; y: number }>, slots: ReadonlyArray<number>): void {
+		this.viewers = players;
+		this.viewerSlots = slots;
+	}
+
+	/**
+	 * A survivor entered the world at (x, y), and the welcome (server/net/replication.ts `welcomeWorld`) is handing
+	 * them every item `initFor` finds there: those are told, so the sweep does not send them a second time.
+	 */
+	welcomed(slot: number, x: number, y: number): void {
+		const set = new Set<number>();
+		const r2 = ITEM_INTEREST * ITEM_INTEREST;
+		for (const item of this.world.items) {
+			const dx = item.x - x;
+			const dy = item.y - y;
+			if (dx * dx + dy * dy <= r2) set.add(item.id);
+		}
+		this.told.set(slot, set);
+	}
+
+	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
+	forget(slot: number): void {
+		this.told.delete(slot);
+	}
+
+	/**
+	 * §4.5 at walking pace: an item that came within ITEM_INTEREST of a survivor since they were last told is sent
+	 * now, and one they were told about that is now past ITEM_INTEREST_EXIT is taken off their screen (they will be
+	 * told again when they come back). Twice a second, like the loot sweep: nobody crosses 300 u in half a second.
+	 */
+	sweepInterest(dt: number): void {
+		this.interestSweep -= dt;
+		if (this.interestSweep > 0) return;
+		this.interestSweep = ITEM_SWEEP_S;
+		const inR2 = ITEM_INTEREST * ITEM_INTEREST;
+		const outR2 = ITEM_INTEREST_EXIT * ITEM_INTEREST_EXIT;
+		for (let i = 0; i < this.viewers.size(); i++) {
+			const v = this.viewers[i];
+			const slot = this.viewerSlots[i] ?? i;
+			const set = this.toldOf(slot);
+			for (const item of this.world.items) {
+				const dx = item.x - v.x;
+				const dy = item.y - v.y;
+				const d2 = dx * dx + dy * dy;
+				if (d2 <= inR2 && !set.has(item.id)) {
+					set.add(item.id);
+					this.out.queueFor(slot, itemAddOf(item));
+				} else if (d2 > outR2 && set.has(item.id)) {
+					set.delete(item.id);
+					this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
+				}
+			}
+		}
+	}
+
+	private toldOf(slot: number): Set<number> {
+		let set = this.told.get(slot);
+		if (set === undefined) {
+			set = new Set<number>();
+			this.told.set(slot, set);
+		}
+		return set;
+	}
+
+	/** a new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) */
+	private announce(item: GroundItem): void {
+		const r2 = ITEM_INTEREST * ITEM_INTEREST;
+		let ev: WItemAdd | undefined;
+		for (let i = 0; i < this.viewers.size(); i++) {
+			const v = this.viewers[i];
+			const dx = item.x - v.x;
+			const dy = item.y - v.y;
+			if (dx * dx + dy * dy > r2) continue;
+			const slot = this.viewerSlots[i] ?? i;
+			ev = ev ?? itemAddOf(item);
+			this.toldOf(slot).add(item.id);
+			this.out.queueFor(slot, ev);
+		}
+	}
+
+	/** an item left the world: EVERY client that was told about it is told it is gone, near or not */
+	private retract(item: GroundItem): void {
+		for (const [slot, set] of this.told) {
+			if (!set.has(item.id)) continue;
+			set.delete(item.id);
+			this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
+		}
 	}
 
 	/** stops feeding the outbox (the world outlives the session in tests) */
 	detach(): void {
 		this.world.onItemAdd = undefined;
 		this.world.onItemRemove = undefined;
+		this.told.clear();
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)
@@ -108,8 +224,17 @@ export class ServerItems {
 		const dx = item.x - x;
 		const dy = item.y - y;
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
+		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall. Not the
+		// solid the item rests INSIDE: a drop slides with no wall collision, and ~28 % of a zombie's drops at a base wall
+		// end up inside it -- blocked by its own wall it could never be picked up, and as E's first target it hid the
+		// door beside it for good (re-review of f8ccaf0)
+		const blocks = (o: Solid): boolean =>
+			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
+		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
+		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
+		creditTaken(save, item.kind, item.itemId, item.count);
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -130,6 +255,7 @@ export class ServerItems {
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
 		for (const drop of loot) {
 			addItem(save, drop.kind, drop.id, drop.count);
+			creditTaken(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
@@ -137,6 +263,7 @@ export class ServerItems {
 		const extra = thiefFind(save, b.buildingType ?? 0);
 		if (extra !== undefined) {
 			addItem(save, extra.kind, extra.id, extra.count);
+			creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is

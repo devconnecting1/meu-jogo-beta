@@ -1,6 +1,7 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { DEVELOPER, INSPIRED_BY } from "shared/module";
+import { registerBack } from "./backStack";
 import { TEXT, THEME } from "./theme";
 import { Button, autoFocus, makeFrame, makeLabel, makeScreen } from "./widgets";
 
@@ -69,6 +70,8 @@ export function showCredits(ctx: GameContext, onBack: () => void): () => void {
 		if (scrollY < -580) scrollY = 500;
 		text.Position = UDim2.fromScale(0, scrollY / 500);
 	});
+	// B / Backspace goes Back (backStack.ts)
+	registerBack(back, onBack);
 	autoFocus(back);
 
 	return (): void => {

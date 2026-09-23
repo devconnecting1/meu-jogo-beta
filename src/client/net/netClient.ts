@@ -23,6 +23,12 @@
  *   netTownSeed()          (MP-22) the seed of the server's town, for GameLoop.init; `netOnTown(fn)` hears the
  *                          InitBegin that confirms it and the WorldReset that replaces it when a world ends
  *   netRoster(out)         (MP-23) the survivors in the world as the reliable roster has them, for the scoreboard
+ *   netSendBackpackIntent  (F3, §4.8) one backpack verb on the Intent remote; netNextSeq() is the `atSeq` it belongs to
+ *
+ * From WORLD_SERVER_PHASE the interactive world is the server's: the SolidAdd / DoorSet / ItemAdd / LootFlag ...
+ * deltas are queued as they arrive and laid over the loop's town in `netUpdate`, right after `bind`
+ * (client/net/worldMirror.ts). Every InitBegin starts that queue over with a reset: the WorldInit behind it carries
+ * the whole dynamic world, so nothing older than it can still be true.
  *
  * While MP_PHASE = 0 netActive() is false, no remote is ever looked up, and the game loop keeps stepping the local
  * player itself — the single-player build behaves exactly as before.
@@ -47,7 +53,15 @@ import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
 import { DESIGN } from "shared/engine/constants";
 import { titleFromWire } from "shared/data/titles";
-import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE, TOWN_SEED_MAX, WORLD_SEED_ATTRIBUTE } from "shared/net/mpConfig";
+import {
+	DYNAMIC_ID_BASE,
+	MAX_PLAYERS,
+	MP_PHASE,
+	TIME_SYNC_RATE,
+	TOWN_SEED_MAX,
+	WORLD_SEED_ATTRIBUTE,
+	WORLD_SERVER_PHASE,
+} from "shared/net/mpConfig";
 import {
 	AnnounceKind,
 	FxEvent,
@@ -71,6 +85,7 @@ import {
 	decodeWorld,
 	encodeInput,
 	encodeIntent,
+	encodeIntentArgs,
 	encodeTimePing,
 	pongRtt,
 } from "shared/net/protocol";
@@ -80,6 +95,7 @@ import { PlayerState } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { HitchMeter, ZOMBIE_MOVING_UPS } from "./hitchMeter";
+import { applyMirrorEvent, forgetMirrorIndex, isMirrorEvent, resetMirror } from "./worldMirror";
 
 const Players = game.GetService("Players");
 const ReplicatedStorage = game.GetService("ReplicatedStorage");
@@ -99,6 +115,13 @@ const MAX_QUEUED_FX = 256;
 const MAX_QUEUED_DEATHS = 256;
 /** how long the handshake may take before it is worth a line in the log (seconds) */
 const RunService = game.GetService("RunService");
+/** F3: this client mirrors the server's interactive world instead of simulating its own (shared/net/mpConfig.ts) */
+const MIRRORS_WORLD = MP_PHASE >= WORLD_SERVER_PHASE;
+/**
+ * World deltas waiting for the next `netUpdate`. Global deltas also reach a client in the menus, and the next
+ * InitBegin supersedes all of them, so the oldest is the one to drop.
+ */
+const MAX_MIRROR_QUEUE = 8192;
 
 const HANDSHAKE_WARN_S = 10;
 
@@ -250,6 +273,15 @@ const ZOMBIE_VIEW_PAD = 32;
 const fxQueue = new Array<FxEvent>();
 const deaths = new Array<ZombieDeathEvent>();
 const pendingAnnounce = new Array<string>();
+const mirrorQueue = new Array<WorldEvent>();
+/** an InitBegin came: the mirror is wiped before the queue (its WorldInit) is laid down */
+let mirrorReset = false;
+/**
+ * Between an InitBegin and leaving the world: only then is there a town these deltas belong to. In the lobby the
+ * global ones kept arriving and were queued up to MAX_MIRROR_QUEUE only to be thrown away by the next InitBegin,
+ * whose WorldInit carries all of it anyway (correctness review of 5967a18, J).
+ */
+let mirrorArmed = false;
 let pendingClock: { worldDay: number; dayTime: number; tick: number; rain: boolean; waveFlags: number } | undefined;
 const sampled = new Array<InputCommand>();
 /** this frame's Input packets, one per command built (commands.ts `flush`) */
@@ -310,6 +342,8 @@ let warnedSlow = false;
 let boundWorld: WorldData | undefined;
 let boundPlayer: PlayerState | undefined;
 let boundSave: PlayerSaveData | undefined;
+/** the refs of the run this session is bound to (client/net/backpackSync.ts writes the build cursor on them) */
+let boundRefs: GameRefs | undefined;
 
 /**
  * The admin switches the game loop owns (`GameLoop.admin`). They are bound once, by reference, so the free camera
@@ -330,8 +364,14 @@ const U32 = 4294967296;
  * TODO(F2): this belongs next to the wire format in shared/net, together with the server's copy.
  */
 function mapHashOf(world: WorldData): number {
-	let acc = world.solids.size() % U32;
+	// the generated town only: what the server built since (§4.5 dynamic ids) is not part of the map the seed makes
+	let n = 0;
 	for (const s of world.solids) {
+		if (s.id < DYNAMIC_ID_BASE) n += 1;
+	}
+	let acc = n % U32;
+	for (const s of world.solids) {
+		if (s.id >= DYNAMIC_ID_BASE) continue;
 		const coords = math.floor(s.x) + math.floor(s.y) * 7 + math.floor(s.w) * 13 + math.floor(s.h) * 17;
 		acc = (acc + ((s.id * coords) % U32)) % U32;
 	}
@@ -401,6 +441,12 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		hasEpoch = true;
 		serverMapHash = e.mapHash;
 		checkMapHash();
+		// F3: the WorldInit behind this carries the whole dynamic world, so nothing older than it is still true
+		if (MIRRORS_WORLD) {
+			mirrorQueue.clear();
+			mirrorReset = true;
+			mirrorArmed = true;
+		}
 		return;
 	}
 	if (e.t === WorldEv.WorldReset) {
@@ -490,7 +536,22 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		pendingAnnounce.push(announceText(e.msg, e.arg));
 		return;
 	}
-	// the remaining deltas (constructions, doors, items) land in F3, when the client stops owning them
+	// F3: constructions, doors, lights, items and loot flags, laid over the loop's town in `netUpdate`
+	if (MIRRORS_WORLD && mirrorArmed && isMirrorEvent(e)) {
+		if (mirrorQueue.size() >= MAX_MIRROR_QUEUE) mirrorQueue.remove(0);
+		mirrorQueue.push(e);
+	}
+}
+
+/** the queued world deltas, onto the town the loop draws (client/net/worldMirror.ts) */
+function drainMirror(world: WorldData): void {
+	if (mirrorReset) {
+		mirrorReset = false;
+		resetMirror(world);
+	}
+	if (mirrorQueue.size() === 0) return;
+	for (const e of mirrorQueue) applyMirrorEvent(world, e);
+	mirrorQueue.clear();
 }
 
 /** §4.5: the wire carries an AnnounceKind and an argument; the text is the client's (shared/data/lang.ts) */
@@ -615,6 +676,7 @@ export function netHosted(): boolean {
 /** one frame of the session; only called while netActive() (see the frame order at the top of the file) */
 export function netUpdate(refs: GameRefs, dt: number): void {
 	if (!bind(refs)) return;
+	drainMirror(refs.world);
 	const now = os.clock();
 	applyLife(refs);
 	const tick = clock.update(dt, Workspace.GetServerTimeNow());
@@ -861,6 +923,10 @@ export function netReset(): void {
 	boundWorld = undefined;
 	boundPlayer = undefined;
 	boundSave = undefined;
+	boundRefs = undefined;
+	mirrorQueue.clear();
+	mirrorReset = false;
+	forgetMirrorIndex();
 	mapHash = 0;
 	// a guard armed in the lobby would unwrap against a tick minutes later (see `townResetTick`)
 	townResetTick = undefined;
@@ -939,6 +1005,29 @@ function sendIntent(kind: IntentKind): void {
 	if (payload !== undefined) remotes?.intent.FireServer(payload);
 }
 
+/**
+ * F3 (§4.8): one backpack verb — switch, use, equip, unequip, learn, craft — made during the command `atSeq`, with the
+ * client's `nonce`. False when it could not go (no MP host, a bad argument). The caller predicted it already
+ * (client/net/backpackSync.ts), and the server's bag reconciles the prediction.
+ */
+export function netSendBackpackIntent(kind: IntentKind, atSeq: number, arg: number, nonce: number): boolean {
+	if (MP_PHASE < 1 || !connect()) return false;
+	const payload = encodeIntentArgs(kind, atSeq, arg, nonce);
+	if (payload === undefined) return false;
+	remotes?.intent.FireServer(payload);
+	return true;
+}
+
+/** the seq of the next command this client will build: a verb made now belongs to it (§2.4 `atSeq`) */
+export function netNextSeq(): number {
+	return commands.nextSeq();
+}
+
+/** the run the session is bound to, while it is (the build cursor lives on it) */
+export function netRefs(): GameRefs | undefined {
+	return boundRefs;
+}
+
 /** a run is starting: ask for a body (client/main.client.ts, mountRun) */
 export function netEnterWorld(): void {
 	// the handshake budget starts NOW, not at boot (see `startedAt`'s own comment): restarting a run (LeaveWorld
@@ -952,6 +1041,8 @@ export function netEnterWorld(): void {
 /** the run is over or the player went back to the menus: give the body and the slot back */
 export function netLeaveWorld(): void {
 	sendIntent(IntentKind.LeaveWorld);
+	mirrorArmed = false;
+	mirrorQueue.clear();
 	// no run is being asked for any more: disarm the timer so idle time back in the menus is never mistaken
 	// for a stalled handshake if `netActive()` happens to be polled again before the next EnterWorld
 	startedAt = 0;
@@ -964,6 +1055,7 @@ export function netDisconnect(): void {
 	connections = new Array<RBXScriptConnection>();
 	remotes = undefined;
 	hasEpoch = false;
+	mirrorArmed = false;
 	serverMapHash = undefined;
 	mySlot = -1;
 	startedAt = 0;
@@ -983,6 +1075,7 @@ function bind(refs: GameRefs): boolean {
 	boundWorld = refs.world;
 	boundPlayer = refs.player;
 	boundSave = refs.save;
+	boundRefs = refs;
 	mapHash = mapHashOf(refs.world);
 	mapMismatch = false;
 	// the server's hash may already be here (a town rebuilt after its InitBegin, MP-22): compare it now
