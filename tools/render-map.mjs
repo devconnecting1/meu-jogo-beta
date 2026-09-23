@@ -45,7 +45,7 @@ function parseArgs(argv) {
 		if (a.startsWith("--")) {
 			const key = a.slice(2);
 			const next = argv[i + 1];
-			if (["no-actors", "no-art", "quiet"].includes(key)) out.flags.add(key);
+			if (["no-actors", "no-art", "quiet", "roof-off", "only-uploaded"].includes(key)) out.flags.add(key);
 			else if (key === "compare") {
 				out.compare = [argv[i + 1], argv[i + 2]];
 				i += 2;
@@ -202,8 +202,18 @@ function useLocalArt(on) {
 	const manifestPath = join(ART_DIR, "manifest.json");
 	if (!existsSync(manifestPath)) return false;
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+	// --only-uploaded: what the owner's place shows today -- the textures with an asset id (assets.json, or the
+	// file --uploaded names) drawn from their local PNGs, every newer one still flat until the next upload-art
+	let uploaded;
+	if (args.flags.has("only-uploaded") || args.uploaded !== undefined) {
+		const file = resolve(args.uploaded ?? join(ART_DIR, "assets.json"));
+		uploaded = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).ids ?? {}) : {};
+	}
 	const ids = {};
-	for (const t of manifest.textures) ids[t.name] = LOCAL + t.name;
+	for (const t of manifest.textures) {
+		if (uploaded !== undefined && !uploaded[t.name]) continue;
+		ids[t.name] = LOCAL + t.name;
+	}
 	worldArt.overrideWorldArt(ids);
 	return true;
 }
@@ -487,6 +497,117 @@ function scenes(world) {
 	return out;
 }
 
+// ---------------------------------------------------------------- the interiors set (docs/art/interiors)
+
+/**
+ * One building of each kind, seen from inside (its roof off, the survivor at a loot spot, a walker climbing in
+ * through a window, one at the door, one in the next room), plus exterior shots of the new footprints and an
+ * overview. `match` (a list of buildings of ANOTHER checkout, --match) restricts the picks to buildings standing
+ * in both towns, so the "before" of the same scene shows the same building.
+ */
+const INTERIOR_KINDS = [
+	{ name: "house-small", title: "House, small", pick: b => b.buildingType === 1 && b.w * b.h < 300000 },
+	{ name: "house", title: "House, medium", pick: b => b.buildingType === 1 && b.w * b.h >= 300000 },
+	{ name: "house-large", title: "House, large", pick: b => b.buildingType === 2 && b.w * b.h < 1000000 },
+	{ name: "pharmacy", title: "Pharmacy", pick: b => b.buildingType === 6 },
+	{ name: "market-small", title: "Corner market", pick: b => b.buildingType === 8 },
+	{ name: "market", title: "Supermarket", pick: b => b.buildingType === 7 },
+	{ name: "gunshop", title: "Gun shop", pick: b => b.buildingType === 9 },
+	{ name: "cloth", title: "Clothing store", pick: b => b.buildingType === 10 },
+	{ name: "restaurant", title: "Restaurant", pick: b => b.buildingType === 11 },
+	{ name: "gas", title: "Gas station shop", pick: b => b.buildingType === 5 },
+	{ name: "school", title: "School", pick: b => b.buildingType === 3 },
+	{ name: "hospital", title: "Hospital", pick: b => b.buildingType === 4 },
+];
+
+function sameBox(a, b) {
+	return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && a.w === b.w && a.h === b.h;
+}
+
+/** a free point for a body (radius 18) near (x, y), or undefined */
+function freeNear(world, x, y) {
+	for (let i = 0; i < 60; i++) {
+		const a = i * 2.39996;
+		const d = 6 * Math.sqrt(i) * 3;
+		const px = Math.round(x + Math.cos(a) * d);
+		const py = Math.round(y + Math.sin(a) * d);
+		if (pointInSolid(world, px, py, 20) === undefined) return { x: px, y: py };
+	}
+	return undefined;
+}
+
+function interiorScenes(world, match) {
+	const out = [];
+	const buildings = world.solids.filter(s => s.kind === "building");
+	for (const kind of INTERIOR_KINDS) {
+		let cands = buildings.filter(kind.pick);
+		if (match !== undefined) cands = cands.filter(b => match.some(m => m.type === b.buildingType && sameBox(m, b)));
+		if (cands.length === 0) continue;
+		// the richest plan of its kind: most rooms, then most furniture
+		const richness = b => (b.rooms?.length ?? 0) * 100 + (b.openings?.length ?? 0);
+		cands.sort((a, b) => richness(b) - richness(a) || a.id - b.id);
+		const b = cands[0];
+		const scale = Math.max(0.45, Math.min(1.25, Math.min(W / (b.w + 360), H / (b.h + 280))));
+		const rw = Math.round(W / scale);
+		const rh = Math.round(H / scale);
+		const rect = sceneAround(b.x + b.w / 2, b.y + b.h / 2, rw, rh);
+		// the survivor stands where one searches (a loot spot), facing the room
+		const spot = b.lootSpots?.[0] ?? { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+		const survivor = freeNear(world, spot.x, spot.y) ?? spot;
+		const zombies = [];
+		const win = (b.openings ?? []).find(o => o.kind === "window");
+		if (win !== undefined) {
+			// in the window's gap: climbing through (EDI-10)
+			zombies.push({ x: win.x + win.w / 2, y: win.y + win.h / 2, type: 1, angle: Math.atan2(survivor.y - win.y, survivor.x - win.x) });
+		}
+		const door = (b.openings ?? []).find(o => o.kind === "door" && !o.main) ?? (b.openings ?? []).find(o => o.main);
+		if (door !== undefined) {
+			const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[door.side];
+			const p = freeNear(world, door.x + door.w / 2 + n[0] * 90, door.y + door.h / 2 + n[1] * 90);
+			if (p !== undefined) zombies.push({ ...p, type: 4, angle: Math.atan2(-n[1], -n[0]) });
+		}
+		const other = (b.rooms ?? []).find(q => Math.hypot(q.x + q.w / 2 - survivor.x, q.y + q.h / 2 - survivor.y) > 260);
+		if (other !== undefined) {
+			const p = freeNear(world, other.x + other.w / 2, other.y + other.h / 2);
+			if (p !== undefined) zombies.push({ ...p, type: 1, angle: Math.atan2(survivor.y - p.y, survivor.x - p.x) });
+		}
+		out.push({
+			name: kind.name,
+			title: `${kind.title}, inside`,
+			rect,
+			hour: 10,
+			scale,
+			inside: { x: b.x + b.w / 2, y: b.y + b.h / 2, box: { x: b.x, y: b.y, w: b.w, h: b.h } },
+			actors: { survivor: { ...survivor, angle: 0 }, zombies },
+		});
+	}
+	const street = findStreet(world);
+	if (street) out.push({ name: "ext-street", title: "Houses from the street", rect: street, hour: 10, noActors: true });
+	const downtown = findDowntown(world);
+	if (downtown) out.push({ name: "ext-downtown", title: "Shops from the street", rect: downtown, hour: 10, noActors: true });
+	for (const [name, type, title] of [
+		["ext-school", 3, "School from outside"],
+		["ext-hospital", 4, "Hospital from outside"],
+	]) {
+		const b = buildings.find(s => s.buildingType === type && (match === undefined || match.some(m => sameBox(m, s))));
+		if (b === undefined) continue;
+		const scale = Math.max(0.45, Math.min(1, Math.min(W / (b.w + 700), H / (b.h + 500))));
+		out.push({
+			name,
+			title,
+			rect: sceneAround(b.x + b.w / 2, b.y + b.h / 2, Math.round(W / scale), Math.round(H / scale)),
+			hour: 10,
+			scale,
+			noActors: true,
+		});
+	}
+	const overview = findOverview(world);
+	if (overview) {
+		out.push({ name: "overview", title: "Overview 3000 x 2000", rect: overview, hour: 10, scale: 0.5, noActors: true });
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------- drawing a scene into the fake tree
 
 function makeShadow(state) {
@@ -562,7 +683,34 @@ function drawScene(world, scene, opts) {
 	cam.zoom = scale;
 	cam.x = scene.rect.x + scene.rect.w / 2;
 	cam.y = scene.rect.y + scene.rect.h / 2;
-	const actors = opts.actors && !scene.noActors ? actorsFor(world, scene) : { survivor: undefined, zombies: [] };
+	let actors = { survivor: undefined, zombies: [] };
+	if (opts.actors && !scene.noActors) {
+		if (scene.actors !== undefined) {
+			// a saved cast (the interiors set): the same bodies in the before and the after, minus any that would
+			// stand inside a solid of this town (a walker in a window that the older town does not have)
+			const ok = p => pointInSolid(world, p.x, p.y, 12) === undefined;
+			const s = scene.actors.survivor;
+			actors = {
+				survivor: s !== undefined && ok(s) ? { x: s.x, y: s.y } : undefined,
+				zombies: scene.actors.zombies.filter(ok),
+			};
+		} else {
+			actors = actorsFor(world, scene);
+		}
+	}
+	// roofs off: every building of the scene (--roof-off), or the one the survivor is inside (an interior scene)
+	const lifted = [];
+	if (args.flags.has("roof-off")) {
+		for (const s of solidsIn(world, scene.rect)) if (s.kind === "building") lifted.push(s);
+	}
+	if (scene.inside !== undefined) {
+		const box = scene.inside.box;
+		const b =
+			buildingAt(world, scene.inside.x, scene.inside.y) ??
+			world.solids.find(s => s.kind === "building" && box !== undefined && sameBox(s, box));
+		if (b !== undefined) lifted.push(b);
+	}
+	for (const b of lifted) b.roofAlpha = 0;
 	const state = { hour: scene.hour, lightX: actors.survivor?.x ?? cam.x, lightY: actors.survivor?.y ?? cam.y };
 	const shadow = makeShadow(state);
 	const view = new WorldView(shadow);
@@ -611,6 +759,7 @@ function drawScene(world, scene, opts) {
 			lights.push({ x: actors.survivor.x, y: actors.survivor.y, r: 250, inner: 0.4 });
 		lm.update(cam, darkness, lights);
 	}
+	for (const b of lifted) b.roofAlpha = 1;
 	return { root, renderer, dark, vw, vh, actors };
 }
 
@@ -669,12 +818,32 @@ console.log(
 	`render-map: seed ${SEED}, src ${SRC}${worldArt === undefined ? " (no world art module: flat)" : artOn ? `, art ${ART_DIR}` : " (world art off: flat)"}`,
 );
 
-if (args.preset !== undefined) {
-	const all = scenes(world);
-	const wanted = args.preset === "all" ? all : all.filter(s => s.name === args.preset);
-	if (wanted.length === 0) {
-		console.error(`no preset "${args.preset}" (have: ${all.map(s => s.name).join(", ")}, all)`);
-		process.exit(1);
+if (args["dump-buildings"] !== undefined) {
+	// the buildings of this checkout's town, for --match in another one (same scenes before and after)
+	const list = world.solids
+		.filter(s => s.kind === "building")
+		.map(s => ({ x: s.x, y: s.y, w: s.w, h: s.h, type: s.buildingType }));
+	writeFileSync(resolve(args["dump-buildings"]), `${JSON.stringify(list)}\n`);
+	console.log(`  ${list.length} buildings -> ${args["dump-buildings"]}`);
+	process.exit(0);
+}
+
+if (args.preset !== undefined || args.scenes !== undefined) {
+	let wanted;
+	if (args.scenes !== undefined) {
+		// replay a saved scene list (the "before" of the interiors set renders exactly the "after"'s scenes)
+		const saved = JSON.parse(readFileSync(resolve(args.scenes), "utf8"));
+		wanted = Object.entries(saved).map(([name, s]) => ({ name, ...s }));
+	} else if (args.preset === "interiors") {
+		const match = args.match !== undefined ? JSON.parse(readFileSync(resolve(args.match), "utf8")) : undefined;
+		wanted = interiorScenes(world, match);
+	} else {
+		const all = scenes(world);
+		wanted = args.preset === "all" ? all : all.filter(s => s.name === args.preset);
+		if (wanted.length === 0) {
+			console.error(`no preset "${args.preset}" (have: ${all.map(s => s.name).join(", ")}, all, interiors)`);
+			process.exit(1);
+		}
 	}
 	const outDir = resolve(args.out ?? join(ROOT, "docs", "art", "render"));
 	const meta = {};
@@ -686,6 +855,9 @@ if (args.preset !== undefined) {
 			rect: scene.rect,
 			hour: scene.hour,
 			scale: scene.scale ?? opts.scale ?? 1,
+			...(scene.inside !== undefined ? { inside: scene.inside } : {}),
+			...(scene.actors !== undefined ? { actors: scene.actors } : {}),
+			...(scene.noActors === true ? { noActors: true } : {}),
 			counts: res.counts,
 		};
 	}

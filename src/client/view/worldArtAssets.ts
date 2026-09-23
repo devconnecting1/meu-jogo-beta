@@ -83,7 +83,10 @@ export type WorldArtName =
 	| "pump"
 	| "acUnit"
 	| "vent"
-	| "chimney";
+	| "chimney"
+	| "floorCarpet"
+	| "floorKitchen"
+	| "floorBath";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -222,6 +225,12 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "", w: 8, h: 8 },
+	/** tile: bedroom / office carpet: a low loop pile */
+	floorCarpet: { id: "", w: 16, h: 16 },
+	/** tile: kitchen floor: checker tiles */
+	floorKitchen: { id: "", w: 16, h: 16 },
+	/** tile: bathroom / cold room: small tiles */
+	floorBath: { id: "", w: 16, h: 16 },
 };
 
 /** every texture of the world art, for the preload pass */
@@ -294,4 +303,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
+	"floorCarpet",
+	"floorKitchen",
+	"floorBath",
 ];

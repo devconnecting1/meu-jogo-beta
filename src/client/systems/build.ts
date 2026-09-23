@@ -3,7 +3,14 @@ import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { InputState } from "shared/engine/input";
 import { addSolid } from "shared/game/world";
-import { ghostRectSticky, PLACEABLES, placedSolid, placementValid, placeRecipe } from "shared/sim/placement";
+import {
+	ghostRectSticky,
+	PLACEABLES,
+	placedSolid,
+	placementValid,
+	placeRecipe,
+	snapToOpening,
+} from "shared/sim/placement";
 import { addItem } from "shared/sim/inventory";
 import { GameRefs } from "./types";
 
@@ -24,6 +31,9 @@ export interface Ghost {
 }
 
 export class BuildSystem {
+	/** the ghost's cell on the placement grid (the sticky deadband's memory), before any snap into an opening */
+	private gridX = 0;
+	private gridY = 0;
 	private ghostX = 0;
 	private ghostY = 0;
 	private ghostW = 0;
@@ -77,15 +87,19 @@ export class BuildSystem {
 		const p = refs.player;
 		// sticky, not raw: the drawn position now carries the server's per-frame correction, and a plain grid
 		// snap on top of that makes the ghost flicker between two cells forever
-		const g = ghostRectSticky(
+		const grid = ghostRectSticky(
 			def,
 			p.x,
 			p.y,
 			p.angle,
 			this.rot,
-			this.hasGhost ? this.ghostX : undefined,
-			this.hasGhost ? this.ghostY : undefined,
+			this.hasGhost ? this.gridX : undefined,
+			this.hasGhost ? this.gridY : undefined,
 		);
+		this.gridX = grid.x;
+		this.gridY = grid.y;
+		// a barricade or a door aimed at a doorway or a window fills it (EDI-13), exactly as the server places it
+		const g = snapToOpening(refs.world, def, grid);
 		this.ghostX = g.x;
 		this.ghostY = g.y;
 		this.ghostW = g.w;
