@@ -860,6 +860,20 @@ function textsIn(root, where) {
 	visit("Shop", () => showShop(ctx, noop, noop), "Shop");
 	visit("Credits", () => showCredits(ctx, noop), "Credits");
 	visit("How to play", () => showTutorial(ctx, noop), "HowToPlay");
+	// the game rules (compliance F3): How to play › Rules, the kit's popup over the card
+	visit(
+		"How to play › Rules",
+		() => {
+			const close = showTutorial(ctx, noop);
+			flush();
+			findIn(layer.FindFirstChild("HowToPlay"), "Rules", "TextButton").Activated.Fire();
+			return () => {
+				layer.FindFirstChild("PopupOverlay")?.Destroy();
+				close();
+			};
+		},
+		"PopupOverlay",
+	);
 	ctx.phase = "playing";
 	visit(
 		"Menu",
@@ -977,6 +991,37 @@ function textsIn(root, where) {
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });
 	}
+}
+
+// ================================================================ 7. the game rules (compliance F3)
+
+console.log("\n7) as regras do jogo: How to play › Rules, com o caminho de recurso\n");
+{
+	const { RULES_TEXT } = require(join(SRC, "shared/data/rules.ts"));
+	ctx.phase = "tutorial";
+	const close = showTutorial(ctx, noop);
+	flush();
+	const card = layer.FindFirstChild("HowToPlay");
+	const rulesBtn = findIn(card, "Rules", "TextButton");
+	check("How to play tem o botao Rules", rulesBtn !== undefined && shown(rulesBtn, layer));
+	rulesBtn?.Activated.Fire();
+	flush();
+	const pop = layer.FindFirstChild("PopupOverlay");
+	const body = findIn(pop, "PopupBody");
+	const lines = RULES_TEXT.split("#");
+	check(
+		"...que abre as regras, linha por linha, com o recurso por ultimo",
+		body !== undefined && lines.every(l => String(body.Text).includes(l)) && lines.at(-1).startsWith("Appeals:"),
+		body === undefined ? "sem popup" : `${lines.length} linhas`,
+	);
+	findIn(pop, "PopupBtn0", "TextButton")?.Activated.Fire();
+	flush();
+	check(
+		"...e o Close fecha o popup e deixa o cartao aberto",
+		layer.FindFirstChild("PopupOverlay") === undefined && layer.FindFirstChild("HowToPlay") !== undefined,
+	);
+	close();
+	flush();
 }
 
 console.log("");
