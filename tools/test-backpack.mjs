@@ -1678,7 +1678,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const { equipTitle } = require(join(SRC, "server/save/titles.ts"));
 	const { THEME, SURFACE, STAT } = require(join(SRC, "client/ui/theme.ts"));
 	const TIT = require(join(SRC, "shared/data/titles.ts"));
-	const { Nameplate, TITLE_TEXT } = require(join(SRC, "client/ui/nameplate.ts"));
+	const { Nameplate, TITLE_TEXT, YIELD_FADE } = require(join(SRC, "client/ui/nameplate.ts"));
 
 	// a survivor who earned Survivor and shows it; 37 zombies put down; this life is at day 8, but only 2 of its
 	// midnights were credited by the server (the others were counted before it counted days, or set by an admin)
@@ -1891,51 +1891,174 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	close();
 	check("fechar remove a tela", screen() === undefined);
 
-	// the nameplate itself, measured (MON-02 / the owner's "it must not hide the survivor")
+	// the nameplate itself, measured (MON-02 / the owner's "it must not hide the survivor", and his "no background
+	// behind it"): an ally's plate, with a handle that differs from the name, at 1080p
+	const { OVER_WORLD, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
+	const { skinPx, TEXT_SHADOW_PX } = require(join(SRC, "client/ui/skin.ts"));
 	const host = makeInstance("Frame", false);
 	host.Parent = ctx.uiLayer;
-	const plate = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" });
+	const plate = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" }, { world: true });
 	flush();
 	plate.update(100, 100, 12, true, 0);
 	const pill = host.FindFirstChild("Nameplate");
 	const nameRow = pill.FindFirstChild("NameRow");
-	const titleLabel = pill.FindFirstChild("TitleLabel");
-	const pad = pill.FindFirstChildOfClass("UIPadding");
-	const badge = nameRow.FindFirstChild("LevelBadge");
-	const badgePad = badge.FindFirstChildOfClass("UIPadding");
-	const oneLine =
-		pad.PaddingTop.Offset +
-		pad.PaddingBottom.Offset +
-		Math.max(
-			badge.TextSize + badgePad.PaddingTop.Offset + badgePad.PaddingBottom.Offset,
-			nameRow.FindFirstChild("NameLabel").TextSize,
+	const voiceOf = n => nameRow.FindFirstChild(`${n}Box`)?.FindFirstChild(n);
+	const levelLabel = voiceOf("LevelLabel");
+	const nameLabel = voiceOf("NameLabel");
+	const handleLabel = voiceOf("HandleLabel");
+	const titleBox = pill.FindFirstChild("TitleLabelBox");
+	const titleLabel = titleBox?.FindFirstChild("TitleLabel");
+	const labels = [levelLabel, nameLabel, handleLabel, titleLabel];
+	const sp = skinPx();
+	check(
+		"a linha do nome: LV 12 no azul do XP, o nome, o @handle (difere do nome) em cinza, nessa ordem",
+		levelLabel?.Text === "LV 12" &&
+			sameColor(levelLabel.TextColor3, OVER_WORLD.level) &&
+			nameLabel?.Text === "Zed" &&
+			sameColor(nameLabel.TextColor3, OVER_WORLD.name) &&
+			handleLabel?.Text === "@zed_survives" &&
+			sameColor(handleLabel.TextColor3, OVER_WORLD.handle) &&
+			levelLabel.Parent.LayoutOrder < nameLabel.Parent.LayoutOrder &&
+			nameLabel.Parent.LayoutOrder < handleLabel.Parent.LayoutOrder,
+		`${levelLabel?.Text} | ${nameLabel?.Text} | ${handleLabel?.Text}`,
+	);
+	check(
+		"o nome e a ancora: o maior e o mais pesado; o nivel e o @handle menores",
+		nameLabel.TextSize > levelLabel.TextSize &&
+			levelLabel.TextSize >= handleLabel.TextSize &&
+			nameLabel.FontFace.Weight.Name === "Bold",
+		`${levelLabel.TextSize} / ${nameLabel.TextSize} / ${handleLabel.TextSize} px`,
+	);
+	// NO background: not one surface in the whole plate -- no fill, no border, no corner, no badge plate
+	const surfaces = [pill, ...pill.GetDescendants()].filter(
+		d =>
+			((d.ClassName === "Frame" || d.ClassName === "TextLabel") && (d.BackgroundTransparency ?? 0) < 1) ||
+			d.ClassName === "UIStroke" ||
+			d.ClassName === "UICorner" ||
+			d.ClassName === "ImageLabel",
+	);
+	check(
+		"sem fundo: nenhuma superficie na placa (nem pilula, nem borda, nem chapa do nivel)",
+		surfaces.length === 0,
+		surfaces.map(d => `${d.ClassName} ${d.Name}`).join(", ") || "0",
+	);
+	// UI-04 (clarification): each line lands on the ground with ONE pixel shadow, down-right, never a contour
+	const shadowOk = l => {
+		const s = l?.Parent?.FindFirstChild(`${l.Name}Shadow`);
+		return (
+			s !== undefined &&
+			s.ClassName === "TextLabel" &&
+			s.Text === l.Text &&
+			s.TextSize === l.TextSize &&
+			sameColor(s.TextColor3, OVER_WORLD.shadow) &&
+			Math.abs(s.TextTransparency - TRANSPARENCY.textShadow) < 1e-6 &&
+			s.Position.X.Offset === l.Position.X.Offset + TEXT_SHADOW_PX * sp &&
+			s.Position.Y.Offset === l.Position.Y.Offset + TEXT_SHADOW_PX * sp &&
+			s.ZIndex < l.ZIndex &&
+			l.Parent.GetChildren().filter(c => c.ClassName === "TextLabel").length === 2
 		);
-	check("sem titulo, a segunda linha nao existe (escondida, sem ocupar espaco)", titleLabel.Visible === false);
+	};
+	check(
+		`cada linha tem UMA sombra de pixel, ${TEXT_SHADOW_PX * sp} px para baixo e para a direita, sob ela (UI-04: sombra, nao contorno)`,
+		labels.every(shadowOk),
+		labels.map(l => `${l?.Name}:${shadowOk(l)}`).join(" "),
+	);
+	check(
+		"e nenhum contorno de texto (UIStroke ou TextStroke) em nenhuma linha nem sombra",
+		[pill, ...pill.GetDescendants()].every(
+			d => d.FindFirstChildOfClass?.("UIStroke") === undefined && (d.TextStrokeTransparency ?? 1) >= 1,
+		),
+	);
+	// the heights, from the engine's own numbers (the fake tree has no layout): a line is its tallest text, plus the
+	// pixel its shadow reaches below it
+	const lineH = ls => Math.max(...ls.filter(l => l !== undefined).map(l => l.TextSize)) + TEXT_SHADOW_PX * sp;
+	const oneLine = lineH([levelLabel, nameLabel, handleLabel]);
+	check(
+		"sem titulo, a segunda linha nao existe (escondida, sem ocupar espaco)",
+		titleBox.Visible === false && !plate.isYielding(),
+	);
 	plate.update(100, 100, 12, true, TIT.titleToWire(TIT.TitleId.WeekOne));
-	const twoLines = oneLine + titleLabel.TextSize + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0);
+	const twoLines = oneLine + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0) + lineH([titleLabel]);
 	check(
 		"com titulo: a segunda linha, sob o nome, na cor dele, sem contorno (UI-04)",
-		titleLabel.Visible &&
+		titleBox.Visible &&
 			titleLabel.Text === "[Week One]" &&
 			sameColor(titleLabel.TextColor3, STAT.value) &&
-			titleLabel.LayoutOrder > nameRow.LayoutOrder &&
+			titleBox.LayoutOrder > nameRow.LayoutOrder &&
 			titleLabel.FindFirstChildOfClass("UIStroke") === undefined &&
-			(titleLabel.TextStrokeTransparency ?? 1) >= 1,
+			(titleLabel.TextStrokeTransparency ?? 1) >= 1 &&
+			titleBox.FindFirstChild("TitleLabelShadow")?.Text === "[Week One]",
 	);
 	check(
 		`legivel: ${titleLabel.TextSize} px (piso de 9 px do kit)`,
 		titleLabel.TextSize >= 9 && titleLabel.TextSize >= TITLE_TEXT,
 	);
-	// the pill hangs from its TOP at PLAYER_RADIUS + 14 u under the survivor's centre (gameLoop / allyPlate): a second
-	// line grows it downward, away from the body, so it can never cover the survivor; what it costs is height below
+	// the plate hangs from its TOP at PLAYER_RADIUS + 14 u under the survivor's centre (gameLoop / allyPlate): a
+	// second line grows it downward, away from the body, so it can never cover the survivor; what it costs is height
+	// below. The popover pill of before measured 41 -> 62 px here (its padding and the level badge's)
 	const PLAYER_R = 18;
 	const GAP = 14;
 	check(
-		`a placa cresce ${twoLines - oneLine} px (${oneLine} -> ${twoLines} px a 1080p), para BAIXO: o topo segue ${GAP} px abaixo do corpo`,
-		pill.AnchorPoint.Y === 0 && twoLines - oneLine <= oneLine * 0.75 && PLAYER_R + GAP > PLAYER_R,
+		`a placa cresce ${twoLines - oneLine} px (${oneLine} -> ${twoLines} px a 1080p; a pilula de antes: 41 -> 62), para BAIXO: o topo segue ${GAP} px abaixo do corpo`,
+		pill.AnchorPoint.Y === 0 && twoLines - oneLine <= oneLine && twoLines < 62 && PLAYER_R + GAP > PLAYER_R,
 	);
 	plate.update(100, 100, 12, true, 99);
-	check("um byte que nao e titulo nao desenha nada", titleLabel.Visible === false);
+	check("um byte que nao e titulo nao desenha nada", titleBox.Visible === false);
+
+	// yours shows less: no "@handle" (only you would read it), the level and the title stay
+	const mine = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" }, { self: true, world: true });
+	const minePill = host.GetChildren().filter(c => c.Name === "Nameplate")[1];
+	mine.update(400, 400, 12, true, TIT.titleToWire(TIT.TitleId.Survivor));
+	const mineRow = minePill.FindFirstChild("NameRow");
+	check(
+		"a sua placa: LV e nome, sem o @handle; o titulo embaixo",
+		mineRow.FindFirstChild("HandleLabelBox") === undefined &&
+			mineRow.FindFirstChild("LevelLabelBox")?.FindFirstChild("LevelLabel")?.Text === "LV 12" &&
+			minePill.FindFirstChild("TitleLabelBox")?.Visible === true,
+	);
+
+	// overlapping plates give way: the fake tree has no layout, so the sizes are given here as the engine would
+	const size = (p, w, h) => {
+		p.AbsoluteSize = new Vector2(w, h);
+	};
+	size(pill, 180, 26);
+	size(minePill, 120, 26);
+	const faded = p => p.GetDescendants().filter(d => d.ClassName === "TextLabel" && !d.Name.endsWith("Shadow"));
+	plate.update(100, 100, 12, true, 0);
+	mine.update(400, 400, 12, true, 0);
+	plate.update(100, 100, 12, true, 0);
+	check(
+		"longe um do outro: nenhuma placa esmaece",
+		!plate.isYielding() && !mine.isYielding() && faded(minePill).every(l => l.TextTransparency === 0),
+	);
+	const r0 = phase("as duas placas se sobrepoem (MP-02: sobreviventes nao colidem)", () => {
+		mine.update(120, 108, 12, true, 0);
+		plate.update(100, 100, 12, true, 0);
+	});
+	check(
+		"sobrepostas: a SUA cede a do aliado (a do aliado e a que diz algo), esmaecendo junto com a sombra",
+		mine.isYielding() &&
+			!plate.isYielding() &&
+			faded(minePill).every(l => l.TextTransparency > 0.5) &&
+			minePill
+				.GetDescendants()
+				.filter(d => d.Name.endsWith("Shadow"))
+				.every(
+					s => Math.abs(s.TextTransparency - (1 - (1 - TRANSPARENCY.textShadow) * (1 - YIELD_FADE))) < 1e-6,
+				),
+		`sem criar Instance: ${cost(r0)}`,
+	);
+	check("ceder nao cria nem destroi Instance", zero(r0), cost(r0));
+	mine.update(120 + 150, 108, 12, true, 0);
+	check("separadas de novo: a sua volta", !mine.isYielding() && faded(minePill).every(l => l.TextTransparency === 0));
+	const still = phase("60 quadros parados", () => {
+		for (let i = 0; i < 60; i++) {
+			mine.update(270, 108, 12, true, 0);
+			plate.update(100, 100, 12, true, 0);
+		}
+	});
+	check("placa parada nao escreve nada", still.writes === 0 && zero(still), cost(still));
+	mine.destroy();
 	plate.destroy();
 	host.Destroy();
 }

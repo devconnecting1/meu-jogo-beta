@@ -953,7 +953,10 @@ export class GameLoop {
 			const root = ctx.darkLayer.Parent;
 			if (root === undefined || !root.IsA("GuiObject")) return;
 			// yours: no @handle, and it gives way to an ally's plate it overlaps (client/ui/nameplate.ts)
-			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer), { self: true, world: true });
+			this.nameplate = new Nameplate(root, NAMEPLATE_Z, profileOf(Players.LocalPlayer), {
+				self: true,
+				world: true,
+			});
 		}
 		const p = this.player;
 		const at = cam.worldToScreen(p.x, p.y + PLAYER_RADIUS + NAMEPLATE_GAP);

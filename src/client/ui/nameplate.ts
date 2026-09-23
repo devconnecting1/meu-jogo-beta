@@ -287,20 +287,27 @@ export class Nameplate {
 		return other.serial < this.serial;
 	}
 
-	/** the overlap rule: fade while a plate that outranks this one covers it (read-only on the others; writes on change) */
+	/**
+	 * The overlap rule: fade while a plate that outranks this one covers it (read-only on the others; writes on change).
+	 * The rectangles come from the top-centres the owners wrote (every world plate hangs in a full-screen frame at the
+	 * origin: the local one in the world's GUI root, an ally's in its full-size host in that root) and the sizes the
+	 * layout gave: a size is at most one frame old, and a hair of lag in a fade is invisible.
+	 */
 	private giveWay(): void {
-		const a = this.plate.AbsolutePosition;
 		const s = this.plate.AbsoluteSize;
 		// once faded, the plate waits until it is YIELD_SLACK px clear before it comes back
 		const m = this.yielded ? YIELD_SLACK : 0;
 		let give = false;
 		if (s.X > 0 && s.Y > 0) {
+			const ax = this.lastX - s.X / 2;
+			const ay = this.lastY;
 			for (const other of worldPlates) {
 				if (other === this || !other.shown || !this.outrankedBy(other)) continue;
-				const b = other.plate.AbsolutePosition;
 				const t = other.plate.AbsoluteSize;
 				if (t.X <= 0 || t.Y <= 0) continue;
-				if (a.X - m < b.X + t.X && b.X < a.X + s.X + m && a.Y - m < b.Y + t.Y && b.Y < a.Y + s.Y + m) {
+				const bx = other.lastX - t.X / 2;
+				const by = other.lastY;
+				if (ax - m < bx + t.X && bx < ax + s.X + m && ay - m < by + t.Y && by < ay + s.Y + m) {
 					give = true;
 					break;
 				}
