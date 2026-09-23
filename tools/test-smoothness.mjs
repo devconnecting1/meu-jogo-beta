@@ -440,7 +440,11 @@ console.log("6) ate o pixel: camera travada no jogador local + arredondamento do
 	// E o caso que pegaria uma interpolacao que anda em degraus.
 	const parado = pixelFaults(drawnPixels(drawn, () => 1000));
 	check("parado: nenhum pixel para tras", parado.back === 0, parado.back + " quadros");
-	check("parado: nenhum congelamento longo", parado.worstStill <= 1, "maior parada " + parado.worstStill + " quadros");
+	check(
+		"parado: nenhum congelamento longo",
+		parado.worstStill <= 1,
+		"maior parada " + parado.worstStill + " quadros",
+	);
 
 	/*
 	 * (b) voces dois andando JUNTOS, mesma velocidade e direcao.
@@ -474,8 +478,81 @@ console.log("6) ate o pixel: camera travada no jogador local + arredondamento do
 	 * pulo: 2 px ou mais de uma vez, ou seja, o desenho corrigindo de supetao algo que deveria ter
 	 * acompanhado. E isso que este check proibe.
 	 */
-	check("junto: o aliado nunca pula", maxStep <= 1, "maior passo " + maxStep + " px (faixa total " + (hi - lo) + " px)");
+	check(
+		"junto: o aliado nunca pula",
+		maxStep <= 1,
+		"maior passo " + maxStep + " px (faixa total " + (hi - lo) + " px)",
+	);
 }
+// ---------------------------------------------------------------- 7: the meter the live game prints
+
+/*
+ * client/net/hitchMeter.ts counts, on the real client, the jolts an eye calls a stutter, and prints them in the
+ * [PZ-NET] line. A meter nobody has checked is a second source of false reports, so it is held to the same
+ * standard here: silent on the real buffer, exact on the four shapes it has to tell apart.
+ */
+const { HitchMeter } = require(join(SRC, "client/net/hitchMeter.ts"));
+
+console.log("");
+console.log("7) o medidor de tranco que o jogo imprime no [PZ-NET]");
+{
+	const feed = frames => {
+		const m = new HitchMeter();
+		for (const f of frames) {
+			m.beginFrame(f.dt);
+			m.observe(1, f.x, f.y, f.dt);
+		}
+		return m.take();
+	};
+	/** 4 s of walking along x, `stepAt(i)` world units on frame i, every frame lasting `dtAt(i)` */
+	const walk = (stepAt, dtAt = () => FRAME_DT) => {
+		const frames = [];
+		let x = 1000;
+		for (let i = 0; i < 240; i++) {
+			x += stepAt(i);
+			frames.push({ dt: dtAt(i), x, y: 1000 });
+		}
+		return frames;
+	};
+	const step = WALK * FRAME_DT;
+
+	// (a) the real buffer on a jittery, lossy line: what the game must print when nothing is wrong
+	const { drawn } = run({ rtt: 0.06, jitter: 0.008, loss: 0.02, path: straight });
+	const real = feed(drawn);
+	check(
+		"buffer real: nenhum tranco",
+		real.jolts === 0,
+		real.jolts + " em " + real.walkingS.toFixed(1) + " s andando",
+	);
+
+	// (b) one frozen frame and then on as before: the stutter the playtest described
+	const freeze = feed(walk(i => (i === 120 ? 0 : step)));
+	check("congela 1 quadro e segue: 1 tranco", freeze.jolts === 1, freeze.jolts + " trancos");
+
+	// (c) a jump to catch up
+	const jump = feed(walk(i => (i === 120 ? step * 3 : step)));
+	check("pula 3 passos de uma vez: 1 tranco", jump.jolts === 1, jump.jolts + " trancos");
+
+	// (d) a real stop is the player letting go of the key, not a stutter, and is not walking time either
+	const stop = feed(walk(i => (i >= 120 ? 0 : step)));
+	check("parada de verdade: nenhum tranco", stop.jolts === 0, stop.jolts + " trancos");
+	check("o tempo parado nao conta como andando", stop.walkingS < 2.1, stop.walkingS.toFixed(2) + " s de 4");
+
+	// (e) the machine hitching: a 100 ms frame covers 100 ms of walk. Speed is distance over THAT frame's dt,
+	// so this is no jolt -- the mistake that once invented a 1890 u/s teleport in case 5.
+	const longFrame = feed(
+		walk(
+			i => (i === 120 ? WALK * 0.1 : step),
+			i => (i === 120 ? 0.1 : FRAME_DT),
+		),
+	);
+	check("quadro longo proporcional: nenhum tranco", longFrame.jolts === 0, longFrame.jolts + " trancos");
+
+	// (f) starting to walk from standing is not a jump
+	const start = feed(walk(i => (i < 60 ? 0 : step)));
+	check("comecar a andar: nenhum tranco", start.jolts === 0, start.jolts + " trancos");
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);

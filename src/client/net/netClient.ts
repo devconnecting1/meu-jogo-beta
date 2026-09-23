@@ -73,6 +73,7 @@ import { GAME_NAME } from "shared/module";
 import { PlayerState } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
+import { HitchMeter } from "./hitchMeter";
 
 const Players = game.GetService("Players");
 const ReplicatedStorage = game.GetService("ReplicatedStorage");
@@ -197,6 +198,12 @@ const snapshots = new SnapshotBuffer();
 const roster = new Map<number, RosterEntry>();
 const queue = new Array<SnapshotPart>();
 const views = new Array<RemotePlayerView>();
+/**
+ * Watches the position every ally is about to be DRAWN at, and counts the jolts an eye would call a stutter
+ * (see hitchMeter.ts). Reported in the [PZ-NET] line: offline, every layer that could cause one measures
+ * clean, so the only place left to look is this client on this machine.
+ */
+const allyHitches = new HitchMeter();
 /** effects and deaths that arrived since the last frame; the view drains both (see `netUpdate`) */
 const fxQueue = new Array<FxEvent>();
 const deaths = new Array<ZombieDeathEvent>();
@@ -473,6 +480,8 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	predict(refs, dt);
 	snapshots.advance(dt, tick, now, refs.world);
 	rebuildViews();
+	allyHitches.beginFrame(dt);
+	for (const v of views) allyHitches.observe(v.slot, v.x, v.y, dt);
 	send(now);
 	sendTimePing(now);
 	prediction.present(dt, commands.phase(), commands.newest());
@@ -490,11 +499,12 @@ function logStats(now: number): void {
 	framesSinceLog = 0;
 	loggedAt = now;
 	const st = netStats();
+	const h = allyHitches.take();
 	print(
 		string.format(
 			"[PZ-NET] slot %d | roster %d | outros %d | zumbis %d | chefes %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
 				"SUAVIDADE: atraso %.0f ms, intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d | " +
-				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f%s",
+				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f | aliado: %d trancos em %.0f s andando (%d em quadro longo, pior %.0f%%)%s",
 			st.slot,
 			st.roster,
 			views.size(),
@@ -516,6 +526,10 @@ function logStats(now: number): void {
 			st.sampleHz,
 			st.pending,
 			fps,
+			h.jolts,
+			h.walkingS,
+			h.inLongFrames,
+			h.worst * 100,
 			st.mapMismatch ? " | MAPA DIFERENTE" : "",
 		),
 	);
