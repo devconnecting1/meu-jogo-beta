@@ -21,8 +21,11 @@
  *   d. with an empty queue the survivor STOPS instead of coasting, and the filled tick WAITS: it spends no seq
  *      and acknowledges nothing, so a command that arrives late is still simulated — the delayed walker ends
  *      bit for bit where the punctual one does (§2.2) — while a lag switch banks at most INPUT_BUFFER_MAX
- *      ticks, a stalled client simply carries on, a numbering that jumped past the window or restarted is
- *      re-anchored, and copies of simulated commands never re-anchor (nothing is simulated twice);
+ *      ticks of movement, the queue's ceiling drops movement but carries every tap to the new head (once, and
+ *      at most 3 per counter), a stalled client simply carries on, a numbering AHEAD of the window (an upstream
+ *      outage) is re-anchored, and nothing behind it ever is -- neither copies of simulated commands nor a stale
+ *      packet from before a re-anchor nor a restarted numbering (nothing is simulated twice, the ack never walks
+ *      backwards);
  *   e. the snapshots the replicator produces decode back (decodeSnapshotPart) with the right positions,
  *      `lastSeq`/`ackSeq` for the reconciliation, and the three interest rings of §4.3 (near in every
  *      snapshot, mid in half of them, nothing past the hysteresis band); the reliable World batch carries
@@ -794,6 +797,59 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 	);
 }
 
+/*
+ * The ceiling drops a command's MOVEMENT, never its TAPS: they ride on in the new head, once. A server hitch (or
+ * two bursts landing together) overflows the queue with a player's shots and reloads in it, and those are the one
+ * input nothing can compensate for (tools/test-input-buffer.mjs case 5 lost 161 of 1080 taps before this).
+ */
+{
+	const sp = PL.createServerPlayer({ slot: 0, userId: 4242, name: "tapper" }, defaultSave(), spawnA.x, spawnA.y, 0);
+	const S = [P.EdgeShift.AttackPress, P.EdgeShift.AttackRelease, P.EdgeShift.ActionPress, P.EdgeShift.Reload];
+	const tapsOf = list => S.map(s => list.reduce((n, cmd) => n + P.edgeCount(cmd.edges, s), 0));
+	// seven commands, each with a tap of its own, land on an empty queue one packet at a time
+	const kinds = [
+		[1, 0, 0, 0],
+		[0, 0, 1, 0],
+		[0, 0, 0, 1],
+		[1, 0, 0, 0],
+		[0, 1, 0, 0],
+		[1, 0, 0, 0],
+		[0, 0, 1, 0],
+	];
+	const cmds = kinds.map((k, i) => P.makeCommand(500 + i, 1, 0, 0, 0, P.packEdges(k[0], k[1], k[2], k[3])));
+	for (const cmd of cmds) PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
+	checkEq(sp.queue.length, CFG.INPUT_BUFFER_MAX, "the queue holds its ceiling");
+	checkEq(sp.counters.inputOverflow, cmds.length - CFG.INPUT_BUFFER_MAX, "the oldest overflowed");
+	checkEq(
+		tapsOf(sp.queue).join(","),
+		tapsOf(cmds).join(","),
+		"every tap of the dropped commands is still in the queue (press, release, E, reload)",
+	);
+	// the redundancy brings the dropped ones again: they are late now, and their taps are not carried twice
+	const lateBefore = sp.counters.late;
+	PL.acceptInput(sp, { viewTick: 0, viewFrac: 0, cmds: [cmds[2], cmds[1], cmds[0]] }, 0);
+	checkEq(sp.counters.late - lateBefore, 3, "a later copy of a dropped command is late");
+	checkEq(tapsOf(sp.queue).join(","), tapsOf(cmds).join(","), "and carries nothing a second time");
+	// the movement is still capped: INPUT_BUFFER_MAX commands, then the queue is dry
+	const took = [];
+	for (let t = 0; t < CFG.INPUT_BUFFER_MAX + 1; t++) took.push(PL.takeCommand(sp));
+	checkEq(sp.counters.consumed, CFG.INPUT_BUFFER_MAX, "one command per tick, INPUT_BUFFER_MAX of them");
+	checkEq(sp.counters.filled, 1, "and then a wait");
+	checkEq(tapsOf(took).join(","), tapsOf(cmds).join(","), "the simulation sees every tap, exactly once");
+
+	// a lag switch cannot bank a volley through it: a counter still holds at most 3 per command (§2.2)
+	const lag = PL.createServerPlayer({ slot: 1, userId: 4243, name: "volley" }, defaultSave(), spawnA.x, spawnA.y, 0);
+	for (let i = 0; i < 20; i++) {
+		const cmd = P.makeCommand(900 + i, 1, 0, 0, 0, P.packEdges(1, 0, 0, 0));
+		PL.acceptInput(lag, { viewTick: 0, viewFrac: 0, cmds: [cmd] }, 0);
+	}
+	checkEq(
+		P.edgeCount(lag.queue[0].edges, P.EdgeShift.AttackPress),
+		3,
+		"20 held presses reach the head as 3 at most (the weapon's cadence still gates every shot)",
+	);
+}
+
 // a stalled client (alt-tab, a long hitch) keeps its own numbering: the server waited, so it simply carries on
 {
 	const server = newServer({ replicate: false });
@@ -821,41 +877,87 @@ section("(d) with an empty queue the survivor stops and WAITS: a late command is
 	checkEq(c.sp.counters.consumed - consumed, 10, "still exactly one command per tick");
 }
 
-// numbering that JUMPED past the window (commands.ts skips a backlog longer than INPUT_SEQ_WINDOW) or RESTARTED
-// (netReset) is the safety net's job: re-anchored once the queue has been idle, never frozen out for good
+/*
+ * The re-anchor goes FORWARD ONLY. An upstream outage longer than the window (the client kept numbering while every
+ * packet was lost) lands AHEAD of it and is re-anchored once the queue has been idle, so the survivor is never
+ * frozen out. Nothing honest lands BEHIND it any more -- a stall carries the numbering on (commands.ts
+ * `dropBacklog`), and a new run is a new ServerPlayer whose client carried its numbering on too (commands.ts
+ * `reset`) -- so what arrives back there is a stale copy. The rule before re-anchored BACK on it: the reviewer's
+ * reproduction, below, simulated [98, 99, 100] a second time and walked the ack backwards.
+ */
 {
 	const server = newServer({ replicate: false });
 	const c = enter(server, spawnA.x, spawnA.y);
+	const walked = [];
 	for (let t = 0; t < 100; t++) {
-		send(server, c, commandAt(c.seq + t, run.angle));
+		const cmd = commandAt(c.seq + t, run.angle);
+		walked.push(cmd);
+		send(server, c, cmd);
 		tick(server);
 	}
-	const STALL = CFG.INPUT_SEQ_WINDOW + 30;
+	// the packet that carried the last three commands, [100, 99, 98] relative to the walk, held up in the network
+	const stale = packetOf([walked[99], walked[98], walked[97]]);
+	const OUTAGE = CFG.INPUT_SEQ_WINDOW + 30;
 	const clientSeq = c.sp.lastSeq;
-	for (let t = 0; t < STALL; t++) tick(server);
-	// the stall was longer than the window, and the client skipped its backlog to stay on the clock
+	for (let t = 0; t < OUTAGE; t++) tick(server);
+	// every packet of the outage was lost, and the client kept numbering: the next one lands past the window
 	const x = c.sp.state.x;
 	const y = c.sp.state.y;
 	const consumed = c.sp.counters.consumed;
 	c.history.length = 0;
 	for (let t = 0; t < 10; t++) {
-		send(server, c, commandAt(clientSeq + STALL + 1 + t, run.angle));
+		send(server, c, commandAt(clientSeq + OUTAGE + 1 + t, run.angle));
 		tick(server);
 	}
-	checkEq(c.sp.counters.resync, 1, "a numbering past the window is re-anchored exactly once");
+	checkEq(c.sp.counters.resync, 1, "a numbering AHEAD of the window is re-anchored exactly once");
 	check(Math.hypot(c.sp.state.x - x, c.sp.state.y - y) > 0, "and the survivor is not frozen out of its own session");
 	checkEq(c.sp.counters.consumed - consumed, 10, "still exactly one command per tick");
 
-	// a new run (netReset): the numbering restarts far behind the server's
+	// the stale copy finally lands, with the queue empty and idle long enough for the old rule to re-anchor on it
+	for (let t = 0; t < PL.RESYNC_IDLE_TICKS + 5; t++) tick(server);
+	check(c.sp.idleFills >= PL.RESYNC_IDLE_TICKS, `the queue has been idle for ${c.sp.idleFills} ticks`);
+	const ackBefore = c.sp.ackSeq;
+	const lastBefore = c.sp.lastSeq;
+	const consumedBefore = c.sp.counters.consumed;
+	const windowBefore = c.sp.counters.seqWindow;
+	const sx = c.sp.state.x;
+	const sy = c.sp.state.y;
+	PL.ingestInput(c.sp, stale, server.now);
+	checkEq(c.sp.counters.resync, 1, "a stale copy BEHIND the window never re-anchors it backwards");
+	checkEq(c.sp.counters.seqWindow - windowBefore, 3, "its three commands are refused as outside the window");
+	checkEq(c.sp.queue.length, 0, "and none of them is queued");
+	for (let t = 0; t < 5; t++) tick(server);
+	checkEq(c.sp.counters.consumed - consumedBefore, 0, "nothing is simulated a second time");
+	checkEq(c.sp.state.x, sx, "the survivor did not replay the stale steps (x)");
+	checkEq(c.sp.state.y, sy, "the survivor did not replay the stale steps (y)");
+	checkEq(c.sp.ackSeq, ackBefore, "the ack never steps backwards");
+	checkEq(c.sp.lastSeq, lastBefore, "and the window stays where the live numbering is");
+
+	// the live numbering carries on as if nothing had happened
+	for (let t = 0; t < 5; t++) {
+		send(server, c, commandAt(clientSeq + OUTAGE + 11 + t, run.angle));
+		tick(server);
+	}
+	checkEq(c.sp.counters.consumed - consumedBefore, 5, "and the live stream is still consumed one per tick");
+	check(seqDiff(c.sp.ackSeq, ackBefore) === 5, "with the ack moving forward only");
+
+	// a numbering that RESTARTED behind the window on the SAME body is refused too -- it is indistinguishable from a
+	// stale copy. No flow does that: a new run is a new ServerPlayer, which anchors on whatever it sees first
 	for (let t = 0; t < PL.RESYNC_IDLE_TICKS; t++) tick(server);
-	c.history.length = 0;
 	const restartAt = c.sp.counters.consumed;
+	c.history.length = 0;
 	for (let t = 0; t < 10; t++) {
 		send(server, c, commandAt(1 + t, run.angle));
 		tick(server);
 	}
-	checkEq(c.sp.counters.resync, 2, "a restarted numbering is re-anchored too");
-	checkEq(c.sp.counters.consumed - restartAt, 10, "and consumed one command per tick from its first");
+	checkEq(c.sp.counters.resync, 1, "a numbering that restarted behind the window is never re-anchored on");
+	checkEq(c.sp.counters.consumed - restartAt, 0, "so the same body never consumes it");
+	const fresh = enter(server, spawnA.x, spawnA.y, "new run");
+	for (let t = 0; t < 10; t++) {
+		send(server, fresh, commandAt(1 + t, run.angle));
+		tick(server);
+	}
+	checkEq(fresh.sp.counters.consumed, 10, "while a new run's new body anchors on it and consumes it from its first");
 }
 
 // after an outage, the first packet carries copies of commands already simulated: they must NOT re-anchor
