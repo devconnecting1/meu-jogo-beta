@@ -441,7 +441,7 @@ Key,Context,Example,Source
 ,,,Move
 ,,,Aim
 ,,,"Interact, search, loot"
-,,,Right click also interacts.
+,,,Right click also interacts; Backspace goes back in menus.
 ,,,Move (the stick opens under it)
 ,,,Drag to aim
 ,,,Fire the aimed shot
@@ -450,7 +450,7 @@ Key,Context,Example,Source
 ,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
 ,,,Interact
 ,,,Menus
-,,,Menus are navigated with the stick; the selected button carries a focus ring.
+,,,"Menus: the stick moves the focus ring, B goes back."
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival

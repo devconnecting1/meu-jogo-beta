@@ -920,13 +920,37 @@ const PROBES = {
 	},
 	"D-pad": () => GuiService.GuiNavigationEnabled === true,
 };
+/**
+ * NAV-B: `inputObj` (the pad's B, the keyboard's Backspace) backs out of the screen on top through the bootstrap's
+ * real handler -- a Settings window opened in the lobby, closed by it as by its X (client/ui/backStack.ts)
+ */
+function backsOut(inputObj) {
+	let backs = 0;
+	const phase = ctx.phase;
+	ctx.phase = "lobby";
+	const close = showSettings(
+		ctx,
+		() => backs++,
+		() => {},
+	);
+	flush();
+	tap(inputObj);
+	flush();
+	close();
+	flush();
+	ctx.phase = phase;
+	return backs === 1;
+}
 /** a scheme's note that promises a binding too */
 const NOTE_PROBES = {
-	"Right click also interacts.": () => {
+	"Right click also interacts; Backspace goes back in menus.": () => {
 		fresh();
 		tap(mouse("MouseButton2"));
-		return input.actionPressed;
+		const rightClick = input.actionPressed;
+		return rightClick && backsOut(key("Backspace"));
 	},
+	"Menus: the stick moves the focus ring, B goes back.": () =>
+		GuiService.GuiNavigationEnabled === true && backsOut(pad("ButtonB")),
 };
 {
 	const missing = [];

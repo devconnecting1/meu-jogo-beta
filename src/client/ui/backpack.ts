@@ -59,6 +59,7 @@ import { BagPanel, PanelModel } from "./bagPanel";
 import { ItemCard, ItemCardHandle, ItemCardModel } from "./itemCard";
 import { IconView, drawIcon } from "./itemIcon";
 import * as Info from "./itemInfo";
+import { raiseBack } from "./backStack";
 import { popup, toast } from "./popup";
 import { GAME, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import { SCHEME_TOUCH, currentScheme } from "./tutorial";
@@ -211,6 +212,8 @@ export class Backpack {
 	private ctx: GameContext;
 	private root: Frame | undefined;
 	private win: Frame | undefined;
+	/** the window's X: B / Backspace's way out (client/ui/backStack.ts), raised to the top at every open */
+	private closeBtn: TextButton | undefined;
 	/** where the window rests (the entrance slides it up to here) */
 	private winAt = new UDim2();
 	/** where the grids and the panel start (window design units) */
@@ -265,6 +268,8 @@ export class Backpack {
 			W.tween(win, 0.18, { Position: this.winAt });
 		}
 		W.setVisible(root, true);
+		// kept built: shown again, it is the screen on top for B / Backspace, over whatever the pad held before it
+		if (this.closeBtn !== undefined) raiseBack(this.closeBtn);
 		this.rebuild();
 		this.focusSelection();
 
@@ -321,6 +326,7 @@ export class Backpack {
 			},
 		});
 		this.win = win.frame;
+		this.closeBtn = win.close;
 		this.winAt = win.frame.Position;
 		const tabsY = win.contentY + space(1);
 		this.mountTabs(win.frame, tabsY);

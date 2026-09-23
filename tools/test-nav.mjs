@@ -16,7 +16,11 @@
  *                       wires, and five more open / close cycles leave no Instance and no connection behind.
  *   2. THE PAD          with a menu holding the pad's focus, the buttons that would act in the world (A, X, Y, RT)
  *                       stay the menu's; the two toggles still reach the game: Start (the menu) and LB (the Bag -- the
- *                       button that opens it closes it, UI-11). B: see KNOWN below.
+ *                       button that opens it closes it, UI-11).
+ *   2b. B / BACKSPACE   back out of the screen on top (client/ui/backStack.ts, NAV-B): every screen of section 1, by
+ *                       both keys, through the same handler as its own control; a help popup closes alone and gives
+ *                       the pad back to its "?"; a question is dismissed, never answered; never the lobby's own menu,
+ *                       the end-of-run choice, the daybreak wait or the HUD's scoreboard; nothing eaten in a run.
  *   3. MENU PRESSES     a toggle pressed in the lobby (P, B, Start, a weapon key) is not left pending for the first
  *                       frame of the next run: main.client.ts drops them when a run mounts.
  *   4. UI-06            Settings opened over a run keeps the survivor held like the menu it came from (source guard).
@@ -420,8 +424,6 @@ ctx.phase = "playing";
 	tap(pad("ButtonStart"));
 	const startCloses = input.pausePressed;
 	input.beginFrame();
-	tap(pad("ButtonB"));
-	const bCloses = layer.FindFirstChild("Menu") === undefined || input.pausePressed;
 	close();
 	flush();
 	check("Menu da partida pelo controle: Start (que o abriu) chega ao jogo, que o fecha", startCloses === true);
@@ -450,17 +452,216 @@ ctx.phase = "playing";
 		onKeyboard === "P" && onPad === "Start" && onTouch === undefined,
 		`teclado ${onKeyboard}, controle ${onPad}, toque ${onTouch}`,
 	);
-	lastInput.type = Enum.UserInputType.Gamepad1;
-	knownBug(
-		"NAV-B",
-		"o B do controle nao fecha nenhuma tela (so tira a selecao); fechar e so pelo X / Back ou pelo botao que abriu",
-		"widgets.ts / window.ts (sem tratamento de ButtonB)",
-		!bCloses,
-	);
 	GuiService.SelectedObject = undefined;
 	lastInput.type = Enum.UserInputType.MouseMovement;
 	input.beginFrame();
 	flush();
+}
+
+// ================================================================ 2b. B / Backspace: back out of the screen on top
+
+console.log(
+	"\n2b) NAV-B: o B do controle e o Backspace fecham a tela de cima -- nunca o menu do lobby, nunca uma escolha, nada na partida\n",
+);
+
+{
+	const B = () => pad("ButtonB");
+	const BACKSPACE = () => kbd("Backspace");
+	/** a screen opened as main.client.ts opens it, then backed out of with `key` instead of its own control */
+	const backCycle = (sc, key, gpe) => {
+		ctx.phase = sc.phase;
+		let closedBy = 0;
+		let cleanup;
+		const done = () => {
+			closedBy++;
+			cleanup?.();
+			cleanup = undefined;
+		};
+		const ret = sc.open(done);
+		if (typeof ret === "function") cleanup = ret;
+		flush();
+		const opened = layer.FindFirstChild(sc.root) !== undefined;
+		tap(key, gpe);
+		const after = layer.FindFirstChild(sc.root);
+		const gone = sc.isOpen !== undefined ? !sc.isOpen() && after?.Visible === false : after === undefined;
+		cleanup?.();
+		flush();
+		return { opened, gone, handled: sc.selfClosing === true || closedBy === 1 };
+	};
+	const bad = [];
+	const keys = [
+		// with a control selected the engine's GUI navigation takes the press too (gameProcessedEvent)
+		["B", B(), true, Enum.UserInputType.Gamepad1],
+		["B sem selecao", B(), false, Enum.UserInputType.Gamepad1],
+		["Backspace", BACKSPACE(), false, Enum.UserInputType.Keyboard],
+	];
+	for (const sc of SCREENS) {
+		for (const [label, key, gpe, device] of keys) {
+			if (sc.needsLobby) openLobby();
+			lastInput.type = device;
+			const r = backCycle(sc, key, gpe);
+			if (!(r.opened && r.gone && r.handled)) bad.push(`${sc.name} / ${label}: ${JSON.stringify(r)}`);
+			if (sc.needsLobby) {
+				if (layer.FindFirstChild("Lobby") === undefined)
+					bad.push(`${sc.name} / ${label}: o lobby fechou junto`);
+				closeLobby();
+			}
+			GuiService.SelectedObject = undefined;
+			lastInput.type = Enum.UserInputType.MouseMovement;
+			input.beginFrame();
+			flush();
+		}
+	}
+	check(
+		"B (com e sem selecao) e Backspace fecham cada tela pela mesma via do X / Back / Got it / Back to game dela",
+		bad.length === 0,
+		bad.join("; ") || `${SCREENS.length} telas x 3 teclas`,
+	);
+
+	// a help popup over a window: B closes the popup only, the pad lands back on the "?", and the next B closes the window
+	{
+		ctx.phase = "lobby";
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		let backs = 0;
+		const close = showSettings(ctx, () => backs++, noop);
+		flush();
+		const root = layer.FindFirstChild("Settings");
+		const help = root?.GetDescendants().find(d => d.Name === "Help" && d.IsA("GuiButton"));
+		GuiService.SelectedObject = help;
+		help?.Activated.Fire();
+		flush();
+		const up = layer.FindFirstChild("PopupOverlay") !== undefined;
+		tap(B(), true);
+		const popupGone = layer.FindFirstChild("PopupOverlay") === undefined;
+		const windowStays = layer.FindFirstChild("Settings") !== undefined && backs === 0;
+		const onHelp = GuiService.SelectedObject === help;
+		tap(B(), true);
+		const windowClosed = backs === 1;
+		close();
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			'um popup de ajuda sobre a Settings: o B fecha so o popup, o controle volta ao "?", e o B seguinte fecha a janela',
+			up && popupGone && windowStays && onHelp && windowClosed,
+			JSON.stringify({ up, popupGone, windowStays, onHelp, windowClosed }),
+		);
+	}
+
+	// a question is dismissed, never answered: B on "watch the tutorial?" neither declines it nor enters the city
+	{
+		ctx.phase = "lobby";
+		const save = ctx.save;
+		const tutorialDone = save.tutorialDone;
+		const firstInstall = save.firstInstall;
+		save.tutorialDone = false;
+		save.firstInstall = true;
+		let played = 0;
+		const h = showLobby(ctx, { ...lobbyHandlers, onPlay: () => played++ }, lobbyStatus, "survivor");
+		flush();
+		findIn(layer.FindFirstChild("Lobby"), "Enter")?.Activated.Fire();
+		flush();
+		const asked = layer.FindFirstChild("PopupOverlay") !== undefined;
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		tap(B(), true);
+		const dismissed = layer.FindFirstChild("PopupOverlay") === undefined;
+		const unanswered = save.tutorialDone === false && save.firstInstall === true && played === 0;
+		const survivorStays = h.page() === "survivor";
+		h.close();
+		save.tutorialDone = tutorialDone;
+		save.firstInstall = firstInstall;
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			'"watch the tutorial?" + B: a pergunta sai sem resposta (nem "No", nem a cidade), e a tela Survivor fica',
+			asked && dismissed && unanswered && survivorStays,
+			JSON.stringify({ asked, dismissed, unanswered, survivorStays }),
+		);
+	}
+
+	// what B must never close: the lobby's own menu, the end-of-run choice, the daybreak wait, the HUD's scoreboard
+	{
+		ctx.phase = "lobby";
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		openLobby();
+		GuiService.SelectedObject = findIn(layer.FindFirstChild("Lobby"), "Start");
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const lobbyStays = layer.FindFirstChild("Lobby") !== undefined && lobby.page() === "menu";
+		closeLobby();
+
+		ctx.phase = "dead";
+		const summary = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false };
+		let chose = 0;
+		const handlers = { onRebirth: () => chose++, onNewRun: () => chose++, onHome: () => chose++ };
+		const closeOver = showRunSummary(ctx, summary, handlers);
+		flush();
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const overStays = layer.FindFirstChild("RunOver") !== undefined && chose === 0;
+		closeOver();
+		const wait = showDaybreakWait(ctx, summary, handlers);
+		flush();
+		tap(B(), true);
+		tap(BACKSPACE(), false);
+		const waitStays = layer.FindFirstChild("RunOver") !== undefined && chose === 0;
+		wait.close();
+		flush();
+
+		ctx.phase = "playing";
+		const h = new Hud(ctx);
+		h.mount();
+		flush();
+		h.toggleScoreboard();
+		flush();
+		const boardUp = h.scoreboard()?.isOpen() === true;
+		tap(B(), false);
+		const boardStays = h.scoreboard()?.isOpen() === true;
+		h.unmount();
+		ctx.phase = "lobby";
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			"...o B e o Backspace nao fecham o menu do lobby, nem a escolha do fim de partida, nem a espera do amanhecer, nem o placar da HUD",
+			lobbyStays && overStays && waitStays && boardUp && boardStays,
+			JSON.stringify({ lobbyStays, overStays, waitStays, boardUp, boardStays }),
+		);
+	}
+
+	// in a run with no screen up nothing is eaten: the keyboard's B is still the Backpack, the pad's B does nothing
+	{
+		ctx.phase = "playing";
+		input.beginFrame();
+		tap(kbd("B"));
+		const bag = input.backpackPressed === true;
+		input.beginFrame();
+		lastInput.type = Enum.UserInputType.Gamepad1;
+		tap(B(), false);
+		const quiet =
+			!input.backpackPressed &&
+			!input.pausePressed &&
+			!input.attackPressed &&
+			!input.actionPressed &&
+			!input.reloadPressed;
+		// Backspace typed into a text box (gameProcessedEvent) is the text box's
+		let backs = 0;
+		ctx.phase = "lobby";
+		const close = showSettings(ctx, () => backs++, noop);
+		flush();
+		tap(BACKSPACE(), true);
+		const typing = backs === 0 && layer.FindFirstChild("Settings") !== undefined;
+		close();
+		input.beginFrame();
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			"...na partida sem tela o B do teclado continua sendo o Bag e o B do controle nao faz nada; Backspace digitado numa caixa de texto e da caixa",
+			bag && quiet && typing,
+			JSON.stringify({ bag, quiet, typing }),
+		);
+	}
 }
 
 // ================================================================ 3. presses made in the menus

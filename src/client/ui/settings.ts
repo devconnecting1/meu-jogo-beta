@@ -549,7 +549,7 @@ export function showSettings(
 			lists.push(list.frame.Parent as Frame);
 		}
 		// which device's keys: three options that differ in more than a word, so a stacked radio group, each with the
-		// line that says how that device plays -- and under it, that device's note ("Right click also interacts.")
+		// line that says how that device plays -- and under it, that device's note ("Right click also interacts; ...")
 		const deviceW = DEVICE_W - LIST_X * 2;
 		const radioH = radioGroupHeight(SCHEMES.size());
 		const device = Section(page, "Device", {

@@ -23,6 +23,7 @@
  * Separate from widgets.ts on purpose: that module is close to Luau's 200-locals-per-chunk budget
  * (npm run check:registers), and these pieces are compositions of it, not primitives.
  */
+import { registerBack } from "./backStack";
 import { SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { PlateState, drawPadlock, paintPlate, paintSegment, reliefPx } from "./plate";
 import {
@@ -125,6 +126,8 @@ export function Window(parent: Instance, name: string, props: WindowProps): Wind
 			zIndex: card.ZIndex + 3,
 			onClick: (): void => onClose(),
 		});
+		// B / Backspace backs out of the window the way its X does (backStack.ts)
+		registerBack(handle.close, onClose);
 	}
 	if (props.onHelp !== undefined) {
 		handle.help = HelpButton(card, "Help", margin, btnY, side, props.onHelp, card.ZIndex + 3);
@@ -152,6 +155,8 @@ export function HelpButton(
 	b.Size = UDim2.fromScale(side / dw, side / dh);
 	setDesign(b, side, side);
 	b.AutoButtonColor = false;
+	// the pad's too, like every control of the kit (a help popup closed with B gives the pad back to it, backStack.ts)
+	b.Selectable = true;
 	b.BorderSizePixel = 0;
 	b.BackgroundTransparency = 1;
 	b.BackgroundColor3 = THEME.background;
