@@ -115,6 +115,7 @@ function parseAck(raw: unknown): SaveAckPayload | undefined {
 		earnedBosses: num(r.earnedBosses),
 		clamped: r.clamped === true,
 		wallet: r.wallet as SaveAckPayload["wallet"],
+		push: r.push === true,
 	};
 }
 
@@ -144,6 +145,11 @@ export function startNet(): void {
 		r.saveAck.OnClientEvent.Connect((raw: unknown) => {
 			const ack = parseAck(raw);
 			if (ack === undefined) return;
+			// the server pushed its wallet on its own (XP, a level, midnight's coins): no report is being answered
+			if (ack.push === true) {
+				if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
+				return;
+			}
 			const manual = manualInFlight;
 			manualInFlight = false;
 			if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
