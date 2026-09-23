@@ -46,6 +46,10 @@ jobs:
       - name: The Bag is built once (tab switches and actions create no Instances)
         run: npm run test:backpack
 
+      # UI-06: no menu pauses the world -- the client's own input with the Bag open, against the real server
+      - name: No menu pauses the world (Bag open, the horde, the clock and the damage go on; the hit flash)
+        run: npm run test:menus
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

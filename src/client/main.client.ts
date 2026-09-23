@@ -482,7 +482,10 @@ function pushHud(): void {
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
 	});
-	hud.setInteractHint(pack.isOpen() || pauseCleanup !== undefined ? undefined : interactHint(refs));
+	// no "E: ..." prompt for a survivor who cannot act: a screen over the run, or dead (UI-06: the loop, and this,
+	// now run behind the MP-21 wait for daybreak too)
+	const held = pack.isOpen() || pauseCleanup !== undefined || dawnWait !== undefined || p.dead;
+	hud.setInteractHint(held ? undefined : interactHint(refs));
 }
 
 function warnNoAmmo(): void {

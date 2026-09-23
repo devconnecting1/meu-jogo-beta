@@ -58,7 +58,10 @@ export function readRawInput(cam: Camera, input: InputState, frozen: boolean, ou
 	out.magnitude = magnitude;
 	out.aim = input.aimAngle;
 	let held = 0;
-	if (input.attackHeld && !input.held) held += HeldBit.Attack;
+	// a BLOCKED attack button is not held either: InputState.attackBlocked means "ignore it until it is released"
+	// (a click that confirmed a placement, the admin free camera, a button still down when the Bag closed), and
+	// the server swings on this bit -- reading attackHeld alone made that block client-only (tools/test-menus.mjs)
+	if (input.attackHeld && !input.attackBlocked && !input.held) held += HeldBit.Attack;
 	if (input.keyE && !input.held) held += HeldBit.Action;
 	out.held = held;
 	return out;
