@@ -135,7 +135,12 @@ globalThis.pcall = (fn, ...args) => {
 };
 globalThis.tostring = v => String(v);
 globalThis.tonumber = v => (Number.isFinite(Number(v)) ? Number(v) : undefined);
-globalThis.$tuple = (...a) => a[0];
+/** what an UpdateAsync transform returned after the value (userIds, metadata): the fake store keeps the userIds */
+let tupleRest = [];
+globalThis.$tuple = (...a) => {
+	tupleRest = a.slice(1);
+	return a[0];
+};
 globalThis.utf8 = { len: s => [Array.from(String(s)).length], offset: (s, n) => n };
 globalThis.string = {
 	char: (...codes) => String.fromCharCode(...codes),
@@ -257,6 +262,8 @@ function fakeStore(name) {
 	const data = new Map();
 	s = {
 		data,
+		/** the UserIds each key was tagged with by its last write (GlobalDataStore: "for GDPR tracking") */
+		userIds: new Map(),
 		/** fault injection: how many of the next calls of each kind throw, as a DataStore outage does */
 		fail: { get: 0, update: 0 },
 		UpdateAsync(key, transform) {
@@ -264,8 +271,12 @@ function fakeStore(name) {
 				s.fail.update -= 1;
 				throw new Error(`injected UpdateAsync failure on ${name}`);
 			}
+			tupleRest = [];
 			const next = transform(clone(data.get(key)));
-			if (next !== undefined) data.set(key, clone(next));
+			if (next !== undefined) {
+				data.set(key, clone(next));
+				s.userIds.set(key, clone(tupleRest[0]));
+			}
 			storeLog.push({ store: name, op: "update", key });
 			return [next];
 		},
@@ -1460,6 +1471,14 @@ section(
 			record?.titles[HB] === 1 && record?.zombieKills === TIT.HORDE_BREAKER_KILLS,
 			"and the title record has what was earned",
 			JSON.stringify(record),
+		);
+		// right to erasure: both documents say whose data they hold, in the key's own UserIds (stores.ts ownerTag)
+		const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const tags = [SAVE_STORE, TITLE_STORE].map(n => JSON.stringify(fakeStore(n).userIds.get(String(userId))));
+		check(
+			tags.every(t => t === JSON.stringify([userId])),
+			"the save and the title record are both tagged with the player's UserId",
+			tags.join(" / "),
 		);
 
 		// a server rolled back to v4 code rewrites the save without the three v5 keys

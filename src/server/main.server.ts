@@ -29,7 +29,7 @@ import { decodeIntentMessage, IntentKind } from "shared/net/protocol";
 import { onIntent } from "./net/remotes";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
-import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
+import { LEGACY_STORE, ownerTag, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
@@ -348,7 +348,8 @@ function loadWithLock(s: Session): LoadOutcome {
 				}
 				data = doc?.data;
 				result = data === undefined ? "empty" : "found";
-				return $tuple({ data, lock: { job: JOB_ID, sid: s.sid, t: now } });
+				// tagged with its owner's UserId (GDPR tooling reads it from the key: server/save/stores.ts ownerTag)
+				return $tuple({ data, lock: { job: JOB_ID, sid: s.sid, t: now } }, ownerTag(s.player.UserId));
 			});
 		});
 		if (ok) {
@@ -383,7 +384,7 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 				}
 				lost = false;
 				const nextLock = release ? undefined : { job: JOB_ID, sid: s.sid, t: os.time() };
-				return $tuple({ data: json, lock: nextLock });
+				return $tuple({ data: json, lock: nextLock }, ownerTag(s.player.UserId));
 			});
 		});
 		if (ok) return lost ? "lost" : "ok";
@@ -404,7 +405,7 @@ function syncTitleRecord(s: Session, final: boolean): void {
 	// start a new history over whatever is there (a missing save, an admin reset); replace a record this session
 	// has read; merge into one it never saw
 	const mode = s.titleReplace ? "restart" : s.titleMark !== undefined ? "replace" : "merge";
-	const written = TitleRecord.storeTitleRecord(s.key, s.save, mode);
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, mode, s.player.UserId);
 	if (written === undefined) return;
 	s.titleReplace = false;
 	// what landed goes back into the save (which is then written again): what a merge found and the load could not
