@@ -75,8 +75,11 @@ function closingLine(s: RunSummary): string {
 	return "The street took it back. Take it again.";
 }
 
-/** M:SS of a real-seconds countdown; never negative, because "-0:01 to dawn" reads as a broken clock */
-function countdown(seconds: number): string {
+/**
+ * M:SS of a real-seconds countdown; never negative, because "-0:01 to dawn" reads as a broken clock. The lobby's
+ * Survivor screen counts the same way (client/ui/survivor.ts).
+ */
+export function countdown(seconds: number): string {
 	const total = math.max(0, math.ceil(seconds));
 	return string.format("%d:%02d", math.floor(total / 60), total % 60);
 }
