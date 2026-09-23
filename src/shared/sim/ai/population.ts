@@ -59,8 +59,9 @@ export function clusterScale(k: number): number {
  * The clusters are built from the LIVING on purpose (`rebuildClusters`: a horde spawned around a body is a
  * horde nobody can fight), so when every survivor present is dead there is no cluster, and with no cluster
  * nothing spawns — no ambient walker, no special, and not the night's waves, whose queues sit full on the
- * clock until somebody is back on their feet. On a shared server the daybreak revive (server/net/mpHost.ts)
- * ends it within one night; in the owner's own world a rebirth does, and until then the stall IS the rule.
+ * clock until somebody is back on their feet. With survivors still standing elsewhere, a Rebirth or the daybreak
+ * revive (server/sim/life.ts) ends it within one night; with nobody left alive at all it lasts the 30 s decision
+ * window at most, because then the world itself ends and a new town begins (MP-22, server/sim/worldReset.ts).
  *
  * What was missing was a way to SEE it: "the waves never came" in a playtest was exactly this, and nothing
  * said so (tools/test-waves.mjs). These numbers are for the server log and the admin panel only — they

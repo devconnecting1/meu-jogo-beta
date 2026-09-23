@@ -15,7 +15,9 @@
  *   1. admit players whose save finished loading (§7.1: safe spawn point, MP-04)
  *   2. sim.advance(dt) → one fixed tick per 1/SIM_HZ, at most MAX_CATCHUP_TICKS per heartbeat
  *   3. per tick, the replicator flushes the reliable World batch and (every 3 ticks) the snapshots
- *   4. the bodies' own clock (`lives.step`): daybreak, the 5 min memory, the wipe window
+ *   4. the bodies' own clock (`lives.step`): daybreak, the 5 min memory, the wipe window — and, when that window
+ *      closes on a world with nobody alive, the end of that world and a new town on day 1 (MP-22, server/sim/
+ *      worldReset.ts)
  *   5. once a second, publish the §12.2 metrics
  */
 import { GAME_NAME } from "shared/module";
@@ -26,6 +28,7 @@ import {
 	MAX_PLAYERS,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
+	WORLD_SEED_ATTRIBUTE,
 } from "shared/net/mpConfig";
 import { IntentKind, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
@@ -56,6 +59,7 @@ import {
 } from "../sim/players";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
+import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
 
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
@@ -74,8 +78,10 @@ export interface MpHostOptions {
 	 * server/main.server.ts owns the sessions; the host never reads the DataStore itself.
 	 */
 	saveOf: (player: Player) => PlayerSaveData | undefined;
-	/** the shared town; generated from DESIGN.TOWN_SEED when omitted (client and server build the same map, §4.5) */
+	/** the shared town; generated from `seed` when omitted (client and server build the same map, §4.5) */
 	world?: WorldData;
+	/** the seed of the first town (DESIGN.TOWN_SEED by default): InitBegin tells every client which it is (MP-22) */
+	seed?: number;
 	/** false disables the periodic metric attributes (used by tests) */
 	metrics?: boolean;
 	/**
@@ -84,10 +90,12 @@ export interface MpHostOptions {
 	 */
 	saveChanged?: (userId: number) => void;
 	/**
-	 * The world is lost: everybody in it died and nobody paid a Rebirth inside the decision window (server/sim/
-	 * life.ts rule 6). The ONE place the world's reset to day 1 will plug in; nothing is reset yet.
+	 * The world ended: everybody in it died and nobody paid a Rebirth inside the decision window (server/sim/life.ts
+	 * rule 6), and the host has ALREADY replaced it with a new town on day 1 and given the fallen a new life in it
+	 * (MP-22, server/sim/worldReset.ts). `outcome.ended` is the record to keep: server/main.server.ts persists it
+	 * (server/save/worldLog.ts). Fired once per world.
 	 */
-	onWorldWiped?: (report: WipeReport) => void;
+	onWorldWiped?: (report: WipeReport, outcome: WorldEnd) => void;
 }
 
 /** one line of the §9.3 / F6 admin view: who the player is and what their counters say */
@@ -104,7 +112,10 @@ export interface MpHost {
 	simulation: ServerSimulation;
 	replicator: Replicator;
 	remotes: MpRemotes;
+	/** the town the server is running NOW: it is replaced when a world ends (MP-22) */
 	world: WorldData;
+	/** the seed `world` was generated from (DESIGN.TOWN_SEED until the first world ends) */
+	seed: number;
 	/** every survivor's body, in the world and out of it: death, daybreak, Rebirth, New game (server/sim/life.ts) */
 	lives: LifeKeeper;
 	/** the server entity of a connected player, or undefined when they are not in the world */
@@ -128,6 +139,18 @@ export interface MpHost {
 	release(player: Player, save?: PlayerSaveData): void;
 	/** the live body into `save`, without moving it (the autosave); true when the save changed */
 	settle(player: Player, save: PlayerSaveData): boolean;
+	/**
+	 * The player's save has just finished loading, and its LoadAck has not gone out yet (server/main.server.ts): the
+	 * body the server kept catches up with it — a reconnect reconciled, and a new life a world that ended while they
+	 * were away owed them (MP-22) — so the client's first look at its save is the truth. True when it changed.
+	 */
+	adopt(player: Player, save: PlayerSaveData): boolean;
+	/**
+	 * A retry just loaded the real save of a session that had been playing on the blank, read-only one (status
+	 * "error"): what the body lived through on that blank table is nobody's, and is forgotten (server/sim/life.ts
+	 * `forgetUnsaved`; review of de4ba1e, R3b). Call it BEFORE `adopt`. True when something was dropped.
+	 */
+	forgetUnsaved(player: Player, blank: PlayerSaveData): boolean;
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
@@ -176,7 +199,9 @@ interface Link {
 export function startMpHost(options: MpHostOptions): MpHost {
 	// a second host would fight the first one for the remotes and the Heartbeat: the newest one wins
 	if (active !== undefined) active.stop();
-	const world = options.world ?? generateTown(DESIGN.TOWN_SEED);
+	/** the world running now: its seed and when it began (MP-22 records it when it ends) */
+	let town: TownState = { seed: options.seed ?? DESIGN.TOWN_SEED, startedAt: os.time() };
+	const world = options.world ?? generateTown(town.seed);
 	const remotes = createMpRemotes();
 	const sim = new ServerSimulation({ world });
 	const links = new Map<Player, Link>();
@@ -204,7 +229,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				sendWorldAll(remotes, packet);
 			},
 		},
-		{ tick0Time, mapHash: mapHashOf(world) },
+		{ tick0Time, mapHash: mapHashOf(world), seed: town.seed },
 	);
 	sim.onTick = tick => replicator.afterTick(tick);
 	// every cosmetic the simulation asks for goes out on the Fx channel, filtered by interest (§4.1, §4.3)
@@ -230,16 +255,6 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			`[${GAME_NAME}] ${sp.name} is back on their feet (${why}) in slot ${sp.slot} at ` +
 				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})`,
 		);
-	};
-	lives.onWorldWiped = report => {
-		// rule 6: the single point where "nobody alive, nobody paying" is known. The reset of the world to day 1 is
-		// the owner's next task and will hang off `options.onWorldWiped`; until then the daybreak wait still stands
-		// everybody up, which keeps the town from staying sterile.
-		warn(
-			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
-				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
-		);
-		options.onWorldWiped?.(report);
 	};
 
 	// ------------------------------------------------------------ lifecycle
@@ -540,7 +555,13 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	const removingConn = Players.PlayerRemoving.Connect(player => release(player));
 	for (const player of Players.GetPlayers()) linkOf(player);
 
-	print(`[${GAME_NAME}] MP host up: ${sim.simHz} Hz, ${MAX_PLAYERS} slots, map hash ${mapHashOf(world)}`);
+	print(
+		`[${GAME_NAME}] MP host up: ${sim.simHz} Hz, ${MAX_PLAYERS} slots, town seed ${town.seed}, ` +
+			`map hash ${mapHashOf(world)}`,
+	);
+	// MP-22: which town this server runs, for a client building its town before it enters (client/net/netClient.ts
+	// `netTownSeed`); InitBegin confirms it on entry
+	pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, town.seed));
 
 	let stopped = false;
 	const host: MpHost = {
@@ -548,6 +569,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		replicator,
 		remotes,
 		world,
+		seed: town.seed,
 		lives,
 		playerOf(player) {
 			const link = links.get(player);
@@ -567,6 +589,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		},
 		settle(player, save) {
 			return lives.settle(player.UserId, save);
+		},
+		adopt(player, save) {
+			return lives.adopt(player.UserId, save);
+		},
+		forgetUnsaved(player, blank) {
+			return lives.forgetUnsaved(player.UserId, blank);
 		},
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
@@ -601,6 +629,78 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			if (active === host) active = undefined;
 		},
 	};
+
+	/**
+	 * The live, LOADED save of a connected player by UserId (the session's), or undefined. A user can have two links
+	 * for a moment — the Player instance that is leaving and the one that just rejoined — and neither has a save
+	 * while one closes and the other loads: the first link is not the answer, the first link WITH a save is (B1).
+	 */
+	function saveOfUser(userId: number): PlayerSaveData | undefined {
+		for (const [player] of links) {
+			if (player.UserId !== userId) continue;
+			const save = options.saveOf(player);
+			if (save !== undefined) return save;
+		}
+		return undefined;
+	}
+	// rule 6 counts only survivors whose save is really here (server/sim/life.ts `liveSave`)
+	lives.liveSave = userId => saveOfUser(userId);
+
+	lives.onWorldWiped = report => {
+		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
+		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell
+		warn(
+			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
+				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
+		);
+		const previous = sim.world;
+		const now = os.time();
+		const [returned, result] = pcall(() =>
+			endWorld({ sim, lives, replicator }, report, town, {
+				now,
+				job: game.JobId,
+				saveOf: saveOfUser,
+				clock: () => os.clock(),
+				// the reset is committed the moment the simulation stands in the new town (review of de4ba1e, N2): the
+				// host names THAT town at once — seed, map, the attribute a joining client builds from — whatever fails
+				// after it
+				onSwitched: newTown => {
+					town = { seed: newTown.seed, startedAt: now };
+					host.world = newTown.world;
+					host.seed = newTown.seed;
+					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));
+				},
+			}),
+		);
+		// what decides is the town the simulation runs, not whether endWorld returned (N2)
+		if (sim.world === previous) {
+			// endWorld builds everything before it changes anything (review of f851ad2, M2): the old world is intact,
+			// and it goes on under the rule that held before MP-22 — the dead stand up at daybreak, a Rebirth still
+			// works, and the next fall of the last survivor tries again
+			warn(
+				`[${GAME_NAME}] the new town could not be made (${returned ? "no new town" : tostring(result)}): ` +
+					`this world goes on until daybreak`,
+			);
+			return;
+		}
+		if (!returned) {
+			// every step after the switch is contained inside endWorld, so this is a bug there: the new town stands
+			// (and `onSwitched` named it), but nothing else about this reset can be vouched for
+			warn(`[${GAME_NAME}] the new town stands, but the end of the old one failed after it: ${tostring(result)}`);
+			return;
+		}
+		const outcome = result as WorldEnd;
+		for (const failure of outcome.failures) {
+			warn(`[${GAME_NAME}] the new world went on past a failure (${failure})`);
+		}
+		print(
+			`[${GAME_NAME}] the town of seed ${outcome.ended.seed} lasted ${outcome.ended.days} day(s); a new one rises from ` +
+				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms) on day 1, ` +
+				`and ${outcome.lives.size()} survivor(s) start a new life`,
+		);
+		options.onWorldWiped?.(report, outcome);
+	};
+
 	active = host;
 	return host;
 }
