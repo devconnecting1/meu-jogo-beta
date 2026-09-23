@@ -93,7 +93,7 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	if (ctx.save.firstInstall) {
 		const c = new Coach(ctx);
 		coach = c;
-		// resuming where it left off: pause → shop → back tears the run UI down and builds it again, and
+		// resuming where it left off: menu → shop → back tears the run UI down and builds it again, and
 		// being sent back to "take a walk" for that would be worse than no coach at all
 		c.start(
 			refs,

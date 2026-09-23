@@ -31,6 +31,12 @@ export function createRawInput(): RawInput {
  *
  * `frozen` is the admin free camera: the survivor stands still, which is a command with no movement rather than a
  * special case anywhere downstream.
+ *
+ * `input.held` (DESIGN_RULES UI-06) is a menu over the run, or a dead survivor: the same standing command, and
+ * with empty hands too -- no held attack, no held E -- while the commands keep flowing at 60 Hz. That is the
+ * honest thing to send: the survivor is in the Bag, not out of the world, and the server keeps the world going.
+ * The aim is the last one the survivor had (the loop stops refreshing it while held), so they do not spin round
+ * following a cursor that is busy with the menu.
  */
 export function readRawInput(cam: Camera, input: InputState, frozen: boolean, out: RawInput): RawInput {
 	syncKeyboardMove();
@@ -38,7 +44,7 @@ export function readRawInput(cam: Camera, input: InputState, frozen: boolean, ou
 	let dy = 0;
 	let magnitude = 0;
 	// input is screen-space; in top-down it maps 1:1 to world (camera rotation undone)
-	if (input.moveMagnitude > 0 && !frozen) {
+	if (input.moveMagnitude > 0 && !frozen && !input.held) {
 		const d = cam.screenDirToWorld(input.moveX, input.moveY);
 		const l = math.sqrt(d.x * d.x + d.y * d.y);
 		if (l > 0.0001) {
@@ -52,8 +58,11 @@ export function readRawInput(cam: Camera, input: InputState, frozen: boolean, ou
 	out.magnitude = magnitude;
 	out.aim = input.aimAngle;
 	let held = 0;
-	if (input.attackHeld) held += HeldBit.Attack;
-	if (input.keyE) held += HeldBit.Action;
+	// a BLOCKED attack button is not held either: InputState.attackBlocked means "ignore it until it is released"
+	// (a click that confirmed a placement, the admin free camera, a button still down when the Bag closed), and
+	// the server swings on this bit -- reading attackHeld alone made that block client-only (tools/test-menus.mjs)
+	if (input.attackHeld && !input.attackBlocked && !input.held) held += HeldBit.Attack;
+	if (input.keyE && !input.held) held += HeldBit.Action;
 	out.held = held;
 	return out;
 }

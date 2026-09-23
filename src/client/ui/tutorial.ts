@@ -29,7 +29,8 @@ const KEY_MIN_W = KEY_H;
 const KEY_GAP = space(2);
 const COL_TITLE_H = 26;
 const NOTE_H = 40;
-const TIPS_H = 68;
+/** five one-line tips at TEXT.xs */
+const TIPS_H = 84;
 const FOOTER_W = 170;
 
 interface Scheme {
@@ -51,8 +52,8 @@ const SCHEMES: Array<Scheme> = [
 			["E", "Interact, search, loot"],
 			["R", "Reload"],
 			["1 – 5", "Switch weapon"],
-			["B", "Backpack (pauses)"],
-			["P", "Pause menu"],
+			["B", "Backpack"],
+			["P", "Menu"],
 		],
 		note: "Right click also interacts.",
 	},
@@ -66,7 +67,7 @@ const SCHEMES: Array<Scheme> = [
 			["USE", "Interact (appears when you can)"],
 			["RELOAD", "Reload"],
 			["BAG", "Backpack"],
-			["II", "Pause"],
+			["MENU", "Menu"],
 		],
 		note: "Size, height, floating stick and left-handed: Settings › Touch controls.",
 	},
@@ -79,7 +80,7 @@ const SCHEMES: Array<Scheme> = [
 			["X", "Interact"],
 			["Y", "Reload"],
 			["LB", "Backpack"],
-			["Start", "Pause menu"],
+			["Start", "Menu"],
 			["D-pad", "Menus"],
 		],
 		note: "Menus are navigated with the stick; the selected button carries a focus ring.",
@@ -87,6 +88,8 @@ const SCHEMES: Array<Scheme> = [
 ];
 
 const SURVIVAL_TIPS = [
+	// DESIGN_RULES UI-06: the rule the old "Backpack (pauses)" row had backwards, said once for every device
+	"The backpack and the menu never stop the world: open them somewhere safe.",
 	"Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.",
 	"Houses are looted once with E; their shelves refill after half a day.",
 	"Hunger drains all day: eat before it empties, not after.",
@@ -106,7 +109,7 @@ const TIPS_Y = ROWS_Y + MAX_ROWS() * ROW_H + space(1) + NOTE_H + space(3);
 const FOOTER_H = BUTTON_SIZE.lg.h;
 const PANEL_H = TIPS_Y + TIPS_H + PAD;
 
-/** the reference card, opened from the lobby's "How to play" and from the pause menu */
+/** the reference card, opened from the lobby's "How to play" */
 export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	const lang = ctx.save.settings.langType;
 	const tr = (key: string): string => langGet(key, lang);

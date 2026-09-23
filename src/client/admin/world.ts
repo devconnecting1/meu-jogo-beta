@@ -809,7 +809,8 @@ export class LocalAdminWorld implements AdminWorld {
 	/** every rendered frame (after GameLoop.render) */
 	afterRender(dt: number): void {
 		if (dt > 0) this.fps = this.fps + (1 / dt - this.fps) * math.min(1, dt * 4);
-		const show = this.ctx.phase === "playing" || this.ctx.phase === "paused";
+		// the world is drawn on every frame of a run, a death included (no "paused" phase exists: DESIGN_RULES UI-06)
+		const show = this.ctx.phase === "playing" || this.ctx.phase === "dead";
 		if (!show) {
 			this.overlayView.hide();
 			return;

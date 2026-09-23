@@ -791,7 +791,15 @@ function staleSelf(tick: number): boolean {
 function predict(refs: GameRefs, dt: number): void {
 	const ctx = getCtx();
 	const input = refs.input;
-	commands.addEdges(input.attackPressed, input.attackReleased, input.actionPressed, input.reloadPressed);
+	// the release of a BLOCKED attack button is no release either -- exactly what client combat does with it
+	// (`released = attackReleased && !blocked`): letting go of a button that was held through the Bag must not
+	// fire the server's bolt-action on the edge (DESIGN_RULES UI-06, tools/test-menus.mjs)
+	commands.addEdges(
+		input.attackPressed,
+		input.attackReleased && !input.attackBlocked,
+		input.actionPressed,
+		input.reloadPressed,
+	);
 	readRawInput(ctx.cam, input, adminFlags?.frozen === true, raw);
 	sampled.clear();
 	commands.sample(dt, raw, sampled);

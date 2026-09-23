@@ -492,7 +492,7 @@ function buildPreview(ctx: GameContext, card: Frame, y: number): () => void {
 		btn("Use", L.use, THEME.primary);
 		btn("Reload", L.reload, THEME.secondary);
 		btn("Bag", L.bag, THEME.secondary);
-		btn("Pause", L.pause, THEME.secondary);
+		btn("Menu", L.pause, THEME.secondary);
 		// the weapon card of the HUD, so the player can see nothing is covered
 		makeFrame(screen, "Weapon", w / 2 - w * 0.11, h - h * 0.13, w * 0.22, h * 0.09, GAME.info, {
 			radius: RADIUS.sm,

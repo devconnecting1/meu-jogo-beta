@@ -16,6 +16,12 @@
  * Rule 1 is checked on the kit's source (skin.ts / widgets.ts / tutorial.ts), since a Luau GuiObject tree does
  * not exist here; rules 2 and 3 on the tokens.
  *
+ * And the owner's rule for menus (UI-06, section 5): no menu pauses the world, so no string literal anywhere
+ * in src/ -- lang.ts included -- may promise it ("(pauses)", "Paused", "Pause menu", "Resume", the "II" glyph);
+ * the screens opened over a run use the see-through scrim TRANSPARENCY.overWorld; and the red flash that warns
+ * of a hit (client/ui/dangerFlash.ts) sits above all of them, in theme colours, at under 3 flashes a second.
+ * What the client DOES with a menu open (the world keeps being stepped) is tools/test-menus.mjs's job.
+ *
  * Criterion (ours, not Roblox's): the Roblox accessibility page asks for "sufficient color contrast" without a
  * number, so we adopt WCAG 2.x -- 4,5:1 for text, 3:1 for large text and for the non-text parts that carry
  * meaning (outlines, tracks, bar fills, focus rings).
@@ -176,9 +182,9 @@ const PAIRS = [
 
 	// --- labels on plates: the plate carries the contrast (UI-05) ---
 	["THEME.primaryForeground", "THEME.primary", MIN_LARGE, "chapa verde: titulo (PLAY, Got it, Equip)"],
-	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "chapa verde: texto pequeno (o \"Day 1\" do PLAY)"],
+	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, 'chapa verde: texto pequeno (o "Day 1" do PLAY)'],
 	["THEME.secondaryForeground", "THEME.secondary", MIN_LARGE, "chapa de ferro: titulo (Shop, Settings, aba ativa)"],
-	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "chapa de ferro: subtitulos (\"0 / 20\"), badge"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, 'chapa de ferro: subtitulos ("0 / 20"), badge'],
 	["THEME.destructiveForeground", "THEME.destructive", MIN_LARGE, "chapa vermelha: titulo (Close X, Quit)"],
 	["THEME.accentForeground", "THEME.accent", MIN_TEXT, "o par `accent` do mapa de papeis (theme.ts)"],
 	["THEME.foreground", "SURFACE.key", MIN_TEXT, "legenda de tecla (How to play, prompt E)"],
@@ -187,8 +193,13 @@ const PAIRS = [
 	["THEME.foreground", "GAME.food", MIN_LARGE, "valor sobre a barra de fome (numeric Bold)"],
 	["THEME.foreground", "GAME.xp", MIN_LARGE, "valor sobre a barra de XP (numeric Bold)"],
 	["THEME.foreground", "THEME.primary", MIN_LARGE, "valor sobre uma barra de progresso padrao"],
-	["THEME.foreground", "GAME.coin", MIN_LARGE, "glifo \"$\" do icone de moeda (CoinIcon) e do chip do toast de moeda"],
-	["THEME.foreground", "GAME.info", MIN_LARGE, "glifo do chip de toast (kind padrao \"info\"; success/coin/error tambem sobem deste piso)"],
+	["THEME.foreground", "GAME.coin", MIN_LARGE, 'glifo "$" do icone de moeda (CoinIcon) e do chip do toast de moeda'],
+	[
+		"THEME.foreground",
+		"GAME.info",
+		MIN_LARGE,
+		'glifo do chip de toast (kind padrao "info"; success/coin/error tambem sobem deste piso)',
+	],
 
 	// --- game colours used as text / numbers / glyphs ---
 	["GAME.success", "SURFACE.panel", MIN_TEXT, "cura, equipado, ingrediente presente"],
@@ -229,7 +240,11 @@ for (const [frontPath, backPath, min, why] of PAIRS) {
 	const back = role(backPath);
 	const r = contrast(front, back);
 	const label = `${frontPath} / ${backPath}`.padEnd(width);
-	check(label, r + 1e-9 >= min, `${r.toFixed(2).padStart(5)}:1  (min ${min})  ${hex(front)} sobre ${hex(back)}  ${why}`);
+	check(
+		label,
+		r + 1e-9 >= min,
+		`${r.toFixed(2).padStart(5)}:1  (min ${min})  ${hex(front)} sobre ${hex(back)}  ${why}`,
+	);
 }
 
 // ---------------------------------------------------------------- run: plate labels are light
@@ -279,7 +294,7 @@ const skin = kit.get("skin.ts");
 const boxStroke = functionBody(skin, "boxStroke");
 const strokeHost = functionBody(skin, "strokeHost");
 check(
-	'o kit cria UIStroke em UM lugar so (skin.ts boxStroke)',
+	"o kit cria UIStroke em UM lugar so (skin.ts boxStroke)",
 	strokeCreations === 1 && boxStroke !== undefined && boxStroke.includes('new Instance("UIStroke")'),
 	`${strokeCreations} criacao(oes) de UIStroke em ${KIT_FILES.join(", ")}`,
 );
@@ -326,7 +341,9 @@ for (const file of listTsFiles(SRC)) {
 	sweepFiles++;
 	const rel = relative(ROOT, file).split("\\").join("/");
 	const src = codeAt(file);
-	const badStrokes = [...src.matchAll(/TextStrokeTransparency\s*=(?!=)\s*([\d.]+)/g)].map(m => +m[1]).filter(t => t < 1);
+	const badStrokes = [...src.matchAll(/TextStrokeTransparency\s*=(?!=)\s*([\d.]+)/g)]
+		.map(m => +m[1])
+		.filter(t => t < 1);
 	if (badStrokes.length > 0) {
 		sweepFailures++;
 		check(`${rel}: nenhum TextStroke visivel`, false, `valores: ${badStrokes.join(", ")}`);
@@ -350,11 +367,156 @@ check(
 	sweepFailures > 0 ? `${sweepFailures} violacao(oes) acima` : undefined,
 );
 
+// ---------------------------------------------------------------- run: no menu pauses the world (UI-06)
+
+console.log("\n5) nenhum menu pausa o mundo, nenhum texto promete pausa, e o menu nao esconde o perigo (UI-06)\n");
+
+/**
+ * The contents of every string literal of a TypeScript source ("...", '...', and the text parts of `...`),
+ * comments skipped. A tiny lexer rather than a regex: a regex that looks for quotes runs from the closing
+ * quote of one literal to the opening quote of the next and "finds" code there.
+ */
+function stringLiterals(src) {
+	const out = [];
+	let i = 0;
+	const n = src.length;
+	while (i < n) {
+		const c = src[i];
+		const next = src[i + 1];
+		if (c === "/" && next === "/") {
+			while (i < n && src[i] !== "\n") i++;
+		} else if (c === "/" && next === "*") {
+			const end = src.indexOf("*/", i + 2);
+			i = end < 0 ? n : end + 2;
+		} else if (c === '"' || c === "'") {
+			let text = "";
+			i++;
+			while (i < n && src[i] !== c && src[i] !== "\n") {
+				if (src[i] === "\\") i++;
+				text += src[i] ?? "";
+				i++;
+			}
+			out.push(text);
+			i++;
+		} else if (c === "`") {
+			let text = "";
+			i++;
+			while (i < n && src[i] !== "`") {
+				if (src[i] === "\\") {
+					text += src[i + 1] ?? "";
+					i += 2;
+				} else if (src[i] === "$" && src[i + 1] === "{") {
+					// ${...}: code, not text -- skip to its closing brace (literals inside are rare and never UI text)
+					let depth = 1;
+					i += 2;
+					while (i < n && depth > 0) {
+						if (src[i] === "{") depth++;
+						else if (src[i] === "}") depth--;
+						i++;
+					}
+					text += " ";
+				} else {
+					text += src[i];
+					i++;
+				}
+			}
+			out.push(text);
+			i++;
+		} else {
+			i++;
+		}
+	}
+	return out;
+}
+
+/**
+ * What a text shown to the player may not say, since the world never stops for a menu: "(pauses)", "Paused",
+ * "Pause menu", "the game pauses", "Resume" (it resumes something that was suspended), and the "II" glyph the
+ * menu button used to wear. Word-bounded on purpose: an Instance name such as "PauseBtn" or an identifier is
+ * not text, and `\bpause\b` does not match inside it.
+ */
+const PAUSE_PROMISES = [/\bpaus(e|es|ed|ing)\b/i, /\bresum(e|es|ed|ing)\b/i, /^II$/];
+let promiseFiles = 0;
+let promises = 0;
+for (const file of listTsFiles(SRC)) {
+	promiseFiles++;
+	const rel = relative(ROOT, file).split("\\").join("/");
+	for (const text of stringLiterals(readFileSync(file, "utf8"))) {
+		const hit = PAUSE_PROMISES.find(re => re.test(text));
+		if (hit === undefined) continue;
+		promises++;
+		check(`${rel}: nenhum texto promete pausa`, false, JSON.stringify(text));
+	}
+}
+check(
+	`TODO src/ (${promiseFiles} arquivos .ts, lang.ts incluido): nenhum texto com "(pauses)", "Paused", "Pause menu", "Resume" ou o glifo "II"`,
+	promises === 0,
+	promises > 0 ? `${promises} texto(s) acima` : undefined,
+);
+
+/** { key: number } of the numeric entries of theme.ts TRANSPARENCY (`overlay: 0.2,`) */
+function transparencyPresets() {
+	const out = new Map();
+	for (const m of block(themeSrc, "TRANSPARENCY").matchAll(/^\t(\w+): ([\d.]+),$/gm)) out.set(m[1], +m[2]);
+	return out;
+}
+const T = transparencyPresets();
+const overWorld = T.get("overWorld");
+const overlay = T.get("overlay");
+check(
+	"TRANSPARENCY.overWorld existe e deixa o mundo visivel (scrim de no maximo 50%)",
+	overWorld !== undefined && overWorld >= 0.5 && overWorld < 1,
+	`overWorld = ${overWorld} (fundo a ${overWorld === undefined ? "?" : Math.round((1 - overWorld) * 100)}%)`,
+);
+check(
+	"o scrim sobre a partida e mais leve que o de um dialogo fora dela",
+	overWorld !== undefined && overlay !== undefined && overWorld > overlay,
+	`overWorld ${overWorld} > overlay ${overlay}`,
+);
+
+/** the screens that open OVER a run, and must dim the street rather than hide it */
+const OVER_RUN = ["client/ui/backpack.ts", "client/ui/pauseMenu.ts", "client/onboarding/gameOver.ts"];
+const overRunZ = [];
+for (const rel of OVER_RUN) {
+	const src = codeAt(join(SRC, rel));
+	check(
+		`${rel}: scrim TRANSPARENCY.overWorld, nunca o opaco TRANSPARENCY.overlay`,
+		/TRANSPARENCY\.overWorld/.test(src) && !/TRANSPARENCY\.overlay\b/.test(src),
+	);
+	for (const m of src.matchAll(/makeScreen\([^;]*?zIndex:\s*(\d+)/g)) overRunZ.push(+m[1]);
+}
+const popupZ = [...codeAt(join(UI, "popup.ts")).matchAll(/Dialog\([^;]*?zIndex:\s*(\d+)/g)].map(m => +m[1]);
+const flashSrc = codeAt(join(UI, "dangerFlash.ts"));
+const flashZ = +(flashSrc.match(/const FLASH_Z = (\d+);/)?.[1] ?? NaN);
+const highest = Math.max(...overRunZ, ...popupZ);
+check(
+	"o flash de dano (dangerFlash.ts) fica ACIMA de todo menu sobre a partida e dos popups",
+	Number.isFinite(flashZ) && overRunZ.length >= OVER_RUN.length && flashZ > highest,
+	`FLASH_Z ${flashZ} > ${highest} (telas ${overRunZ.join("/")}, popups ${popupZ.join("/")})`,
+);
+check(
+	"o flash usa so o tema: GAME.blood e TRANSPARENCY.alarm (UI-01), sem texto (UI-04)",
+	/GAME\.blood/.test(flashSrc) &&
+		/TRANSPARENCY\.alarm/.test(flashSrc) &&
+		T.has("alarm") &&
+		!/Color3\.(fromRGB|new|fromHex)|new Color3/.test(flashSrc) &&
+		!/"TextLabel"|"TextButton"/.test(flashSrc),
+);
+const gap = +(codeAt(join(UI, "hitAlarm.ts")).match(/GAP_S:\s*([\d.]+)/)?.[1] ?? NaN);
+check(
+	"no maximo 3 flashes por segundo (WCAG 2.3.1): HIT_ALARM.GAP_S >= 1/3 s",
+	gap >= 1 / 3,
+	`GAP_S = ${gap} s -> ${(1 / gap).toFixed(2)} flashes/s no pior caso`,
+);
+
 console.log("");
 if (failures > 0) {
-	console.error(`${failures} verificacao(oes) falharam: ajuste design/tweakcn-theme.json (e rode \`npm run theme\`) ou o kit`);
+	console.error(
+		`${failures} verificacao(oes) falharam: ajuste design/tweakcn-theme.json (e rode \`npm run theme\`) ou o kit`,
+	);
 	process.exit(1);
 }
 console.log(
-	`OK: ${PAIRS.length} pares, ${PLATE_LABELS.length} rotulos de chapa claros, nenhum contorno em texto no kit nem em ${sweepFiles} arquivos de src/`,
+	`OK: ${PAIRS.length} pares, ${PLATE_LABELS.length} rotulos de chapa claros, nenhum contorno em texto no kit nem em ${sweepFiles} arquivos de src/, ` +
+		"nenhum texto prometendo pausa e os menus sobre a partida deixando o mundo a vista (UI-06)",
 );

@@ -420,10 +420,11 @@ Key,Context,Example,Source
 ,,,Saving...
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
-,,,Resume
+,,,Menu
+,,,Back to game
+,,,Backpack
 ,,,Save
 ,,,Home
-,,,Paused
 ,,,Game over
 ,,,Rebirth
 ,,,Survival days
@@ -456,21 +457,30 @@ Key,Context,Example,Source
 ,,,Zombies are coming
 ,,,Survive the night
 ,,,Already at full health
+,,,Back on your feet
 ,,,Bosses
 ,,,Continue this run
+,,,Daybreak in
 ,,,Days survived
 ,,,"Everything the game listens to, on every device"
 ,,,Fire lights the night and cooks what you find. Build one when you can.
 ,,,Getting started
 ,,,Got it
+,,,Life day
 ,,,Nice.
 ,,,Night came first
+,,,Rebirth is for your own world; here you wake at daybreak
 ,,,Reload
 ,,,Skip
+,,,"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it."
+,,,"The town is not yours to restart.#You wake with the others, at first light."
 ,,,You have
 ,,,You survived
 ,,,You survived a day
 ,,,You're already full
 ,,,"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1."
+,,,"Your progress changed, try again"
 ,,,Zombies killed
 ,,,days
+,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
+,,,The backpack and the menu never stop the world: open them somewhere safe

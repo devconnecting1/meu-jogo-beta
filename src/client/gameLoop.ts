@@ -399,7 +399,7 @@ export class GameLoop {
 	private chat?: ChatBubbles;
 	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
 	private readonly selfBody = { x: 0, y: 0 };
-	/** last frame time, so render() can ease what it has to ease (update() may be skipped while paused) */
+	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
 	private lastDt = 1 / 60;
 	/** when the local survivor's foot lands (the walk cycle knows; client/view/footsteps.ts reports it) */
 	private readonly foot = new FootCycle();
@@ -605,22 +605,39 @@ export class GameLoop {
 		this.fxView.playSim(this.refs, ctx.cam, this.particles);
 	}
 
+	/**
+	 * One frame of the world. DESIGN_RULES UI-06: this runs on EVERY frame of a mounted run -- with the Bag or
+	 * the menu open, and with the survivor dead behind the end-of-run screen. The town is the server's and is
+	 * shared, so a client that stopped here would only be drawing a still photograph of a street that is still
+	 * moving (a playtest lost 65 HP to zombies it could not see, behind a Bag that "paused"); solo follows the
+	 * same rule so there is only one.
+	 *
+	 * What a menu or a death stops is the SURVIVOR: `input.held` (set by main.client.ts before this call) makes
+	 * them stand still with empty hands -- no interact, no build, no aim, a standing command with no buttons --
+	 * while the horde, the allies, the clock, the snapshots and the damage carry on.
+	 */
 	update(dt: number): void {
 		const ctx = getCtx();
 		const refs = this.refs;
 		const p = this.player;
-		if (p.dead) return;
+		const input = ctx.input;
 		this.clock += dt;
 		this.lastDt = dt;
-		const handled = this.build.handleInput(refs, ctx.input);
-		if (!handled && ctx.input.actionPressed) {
-			this.interaction.tryInteract(refs);
+		const acting = !input.held && !p.dead;
+		if (acting) {
+			const handled = this.build.handleInput(refs, input);
+			if (!handled && input.actionPressed) {
+				this.interaction.tryInteract(refs);
+			}
 		}
 		this.build.update(refs);
 		// F1: in a server session the survivor's position is the server's, predicted and reconciled by netUpdate;
-		// everything else in this loop (zombies, combat, the clock) is still simulated locally on every client
+		// everything else in this loop (zombies, combat, the clock) is still simulated locally on every client.
+		// The session runs for a dead survivor too: the server keeps stepping them (server/sim/simulation.ts),
+		// and it is `netUpdate` that brings the revive (PlayerLife, MP-21), the allies and the horde. Offline, a
+		// dead body is simply not stepped -- stepPlayer would regenerate it.
 		if (netActive()) this.stepNetPlayer(ctx, dt);
-		else this.stepLocalPlayer(ctx, dt);
+		else if (!p.dead) this.stepLocalPlayer(ctx, dt);
 		// F2: and from MP_PHASE 2 the horde and the bosses are the server's as well. `netUpdate` (above) has
 		// just interpolated them for this frame's render time, and the mirror writes them into the very
 		// arrays the rest of the client already reads — canopies, audio, stuck arrows, the admin overlay.
@@ -628,8 +645,9 @@ export class GameLoop {
 		if (mirrored) this.actors.sync(refs, dt, this.onZombieDeath);
 		this.foot.advance(this.walkPhase, this.walkAmp, p.x, p.y, true);
 		this.fxView.decayTracers(dt);
-		// aim from the survivor's NEW position every frame, not only when the mouse moves
-		p.angle = refreshAim(p.x, p.y);
+		// aim from the survivor's NEW position every frame, not only when the mouse moves -- unless they are held:
+		// the cursor is busy with the menu, and a survivor spinning round to follow it would be a lie too
+		if (acting) p.angle = refreshAim(p.x, p.y);
 		this.combat.update(refs, dt);
 		// the three below are no-ops from MP_PHASE 2 on (they say so themselves); below it they ARE the
 		// horde, and `mirrored` is false, so exactly one of the two owners writes those arrays in any phase

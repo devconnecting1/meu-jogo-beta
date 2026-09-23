@@ -123,7 +123,8 @@ export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: 
 	const tr = (key: string): string => langGet(key, lang);
 	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
 		color: THEME.background,
-		transparency: TRANSPARENCY.overlay,
+		// over the run: the town keeps going behind this screen too (UI-06), so it is dimmed, not hidden
+		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
 	});
 	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H) / 2, w: W, h: H });
@@ -226,8 +227,9 @@ export function showDaybreakWait(ctx: GameContext, summary: RunSummary, handlers
 	const tr = (key: string): string => langGet(key, lang);
 	const { root, body } = makeScreen(ctx.uiLayer, "RunOver", {
 		color: THEME.background,
-		// lighter than the run-over overlay on purpose: the world behind this one is the whole message
-		transparency: math.min(1, TRANSPARENCY.overlay + 0.18),
+		// the world behind this one is the whole message: the same see-through scrim as every screen over a
+		// run (UI-06), and since UI-06 the town behind it really moves -- the loop no longer stops for a death
+		transparency: TRANSPARENCY.overWorld,
 		zIndex: 250,
 	});
 	const panel = Card(body, "Panel", { x: (1120 - W) / 2, y: (630 - H_WAIT) / 2, w: W, h: H_WAIT });

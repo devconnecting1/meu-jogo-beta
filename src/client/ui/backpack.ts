@@ -75,6 +75,7 @@ import {
 	setSurface,
 	setVisible,
 	tween,
+	worldTransparency,
 } from "./widgets";
 
 const RunService = game.GetService("RunService");
@@ -673,9 +674,11 @@ export class Backpack {
 		if (this.keyHint !== undefined) this.keyHint.Visible = UserInputService.KeyboardEnabled;
 		this.opened = true;
 
-		// entrance: fade the scrim in, slide the panel up a little
+		// entrance: fade the scrim in, slide the panel up a little. The scrim only DIMS the street (UI-06: the
+		// Bag pauses nothing, so what is coming has to stay visible round the panel), and it goes through
+		// worldTransparency like every surface over the world, so the player's Background Transparency holds
 		root.BackgroundTransparency = 1;
-		tween(root, 0.15, { BackgroundTransparency: TRANSPARENCY.overlay });
+		tween(root, 0.15, { BackgroundTransparency: worldTransparency(TRANSPARENCY.overWorld) });
 		const panel = this.panel;
 		if (panel !== undefined) {
 			panel.Position = this.panelAt.add(UDim2.fromScale(0, 0.025));
@@ -711,7 +714,7 @@ export class Backpack {
 		this.headerSig = "";
 		const screen = makeScreen(this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
-			transparency: TRANSPARENCY.overlay,
+			transparency: TRANSPARENCY.overWorld,
 			zIndex: 200,
 		});
 		this.root = screen.root;
