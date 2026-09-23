@@ -1943,6 +1943,69 @@ section("(k) the rewind ceiling's ping survives a leave/enter and a new town (§
 	);
 }
 
+{
+	/*
+	 * NIT 3 (the second review of the zombie-motion branch): the ping is kept as long as the body is (life.ts
+	 * KEEP_AFTER_LEAVE_S), not for the life of the server. Someone gone longer comes back as a newcomer, and the table
+	 * holds the survivors measured lately rather than one entry for everyone who ever played here.
+	 */
+	const { KEEP_AFTER_LEAVE_S } = require(join(SRC, "server/sim/life.ts"));
+	const sim = new ServerSimulation({ world, zombies: true });
+	const hz = sim.simHz;
+	const enter = (slot, userId) => {
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: "p" },
+			defaultSave(),
+			spawnA.x,
+			spawnA.y,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		return sp;
+	};
+	let sp = enter(0, 8300);
+	for (let i = 0; i < 5; i++) sim.setPing(sp, 0.05);
+	sim.remove(sp.slot);
+	// the server runs on (nothing here reads the tick but the ping's age)
+	sim.tick += (KEEP_AFTER_LEAVE_S - 60) * hz;
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.3);
+	checkNear(
+		sim.combat.pingOf(sp.slot),
+		0.05 + 0.25 * 0.1,
+		1e-9,
+		`back ${KEEP_AFTER_LEAVE_S - 60} s after leaving, while the body is still kept, the first sample is filtered`,
+	);
+	sim.remove(sp.slot);
+	// twenty others come and go, a minute apart
+	for (let i = 0; i < 20; i++) {
+		sim.tick += 60 * hz;
+		const other = enter(1, 8400 + i);
+		sim.setPing(other, 0.1);
+		sim.remove(other.slot);
+	}
+	check(!sim.pings.has(8300), `a survivor gone longer than KEEP_AFTER_LEAVE_S is forgotten`);
+	check(
+		sim.pings.size() <= KEEP_AFTER_LEAVE_S / 60 + 1,
+		`the table holds the survivors measured in the last ${KEEP_AFTER_LEAVE_S} s, not all 21 (${sim.pings.size()})`,
+	);
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.3);
+	checkNear(
+		sim.combat.pingOf(sp.slot),
+		0.3,
+		1e-9,
+		"and when they come back they start at their sample, as a newcomer",
+	);
+	// with nobody else measured meanwhile, an entry too old to seed is not used either
+	sim.remove(sp.slot);
+	sim.tick += (KEEP_AFTER_LEAVE_S + 1) * hz;
+	sp = enter(0, 8300);
+	sim.setPing(sp, 0.2);
+	checkNear(sim.combat.pingOf(sp.slot), 0.2, 1e-9, "however quiet the server was while they were away");
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
