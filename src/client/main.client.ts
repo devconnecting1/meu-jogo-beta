@@ -773,6 +773,9 @@ function mountRun(enterWorld = true): void {
 	gameAudio.startRun(loop.getRefs());
 	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
 	attachRun(ctx, loop.getRefs());
+	// only a run's frame clears the one-shot presses (GameLoop.update -> beginFrame): a P, B, Start or LB pressed in the
+	// menus was still pending here, and the first frame opened the Menu or the Bag on entering the city
+	ctx.input.beginFrame();
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
