@@ -389,6 +389,19 @@ export const LANG_TABLE: Array<string> = [
 	"Carolina the dog X 1",
 	"Please try again",
 	"You can't use that now",
+	// the game rules and what a kicked or banned player reads (shared/data/rules.ts; compliance F3, F10): the rules are
+	// How to play › Rules, and the ban message points to the experience page, the one place a banned player can open
+	"Rules",
+	"Play fair: no exploits, cheats or scripts, and no abusing bugs.#Be kind: no harassment, hate, bullying or scams in chat.#Keep personal information private: yours and everyone else's.#Don't ruin the game for other survivors on purpose.#Follow the Roblox Community Standards.#Breaking a rule can get you kicked or banned. Only a person bans, never the game on its own.#Appeals: contact the developer through the group linked on this experience's page.",
+	"You were kicked by an administrator",
+	"You are banned from this experience for breaking its rules",
+	"The rules and how to appeal are on this experience's page",
+	"Disconnected for sending too many network messages",
+	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
+	"Your progress was updated by an administrator",
+	"Your progress was reset by an administrator",
+	// the lobby has no body, so nobody hears it (MP-18): the chat bar is off there, and this says why, once
+	"Chat reaches the survivors near you in town. Enter the city to talk.",
 	"First steps",
 	"Thomas Edison",
 	"Melee weapons expert",
