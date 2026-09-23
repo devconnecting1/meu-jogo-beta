@@ -906,6 +906,36 @@ function stream({
 
 {
 	/*
+	 * N1, N2 (the review of dee095a): the view a shot is judged in is the one its command was BUILT under, and only a
+	 * command the queue took can say what that was. A packet set `viewTick` on arrival whatever became of it, so on a
+	 * tick that waits a held trigger fired in the view of the latest packet -- a late copy included, a free ±3-tick
+	 * choice inside the continuity; and a command refused as out of the window (its ring slot 32 apart from a queued
+	 * one) or a second copy of a queued one rewrote that one's view before it was consumed.
+	 */
+	const fx = newFixture();
+	const sp = makePlayer(fx, 0, SHOOTER_X, SHOOTER_Y, 15);
+	const pkt = (viewTick, seqs) => ({
+		viewTick,
+		viewFrac: 0,
+		cmds: seqs.map(s => P.makeCommand(s, 0, 0, 0, P.HeldBit.Attack, 0)),
+	});
+	PL.acceptInput(sp, pkt(500, [10]), 0);
+	PL.takeCommand(sp);
+	PL.acceptInput(sp, pkt(497, [10]), 0); // a late copy of 10, naming another view
+	PL.takeCommand(sp); // nothing queued: this tick waits, trigger held
+	checkEq(sp.viewTick, 500, "a tick that waits fires in the last consumed command's view, not a late packet's");
+	PL.acceptInput(sp, pkt(510, [11]), 0);
+	PL.acceptInput(sp, pkt(470, [11]), 0); // a second copy of the queued 11
+	PL.takeCommand(sp);
+	checkEq(sp.viewTick, 510, "a copy of a queued command cannot re-declare its view");
+	PL.acceptInput(sp, pkt(520, [12]), 0);
+	PL.acceptInput(sp, pkt(430, [12 + 96]), 0); // out of the window, and in the same ring slot as 12
+	PL.takeCommand(sp);
+	checkEq(sp.viewTick, 520, "a command refused as out of the window does not overwrite a queued one's view");
+}
+
+{
+	/*
 	 * S1 (the review of dee095a): a running view offset further back than the ceiling reaches -- a bite's shorter one,
 	 * or a ping that has just fallen -- is judged AT the ceiling. `judge` answered the newest end of the continuity
 	 * window instead, past the ceiling: an offset of 16 ticks judged 13 back under a ceiling of 6, 9 or 12.

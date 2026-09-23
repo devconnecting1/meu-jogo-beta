@@ -209,7 +209,10 @@ export interface ServerPlayer {
 	/**
 	 * The snapshot tick the client said it was drawing, for the F2 rewind (§2.3): the view of the command THIS tick
 	 * consumes (`takeCommand`), the frame that built it -- not the latest packet's, which is a queue's depth newer.
-	 * Between ticks (and on a tick that waits) it is the latest packet's.
+	 * Only a consumed command sets it: on a tick that waits it is still the last consumed command's, the one whose
+	 * held trigger the fill repeats. It used to follow every packet between ticks, and a packet refused as late or
+	 * out of the window still set it, so a held trigger on a filled tick fired in whatever view the latest (stale)
+	 * packet named (the review of dee095a, N1).
 	 */
 	viewTick: number;
 	viewFrac: number;
@@ -393,7 +396,8 @@ function carryEdges(edges: number, queue: Array<InputCommand>): void {
 	}
 }
 
-function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
+/** one command into the queue (see the header); true when the queue took it -- not late, out of the window or a copy */
+function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): boolean {
 	const seq = cmd.seq;
 	if (sp.started) {
 		const gap = seqDiff(seq, sp.lastSeq);
@@ -422,18 +426,18 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
 	const d = seqDiff(seq, sp.lastSeq);
 	if (d > INPUT_SEQ_WINDOW || d < -INPUT_SEQ_WINDOW) {
 		sp.counters.seqWindow += 1;
-		return;
+		return false;
 	}
 	if (d <= 0) {
 		// already consumed (the second and third copies of the §2.2 redundancy), jumped over by a newer one when
 		// it never came, or dropped at the ceiling; a FILLED tick never makes a command late, as it spends no seq
 		sp.counters.late += 1;
-		return;
+		return false;
 	}
 	for (const q of sp.queue) {
 		if (q.seq === seq) {
 			sp.counters.duplicate += 1;
-			return;
+			return false;
 		}
 	}
 	// insertion sort: the queue holds at most its ceiling + 3 entries for an instant
@@ -458,6 +462,7 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
 		// that lands on a full queue, must not eat a shot. tools/test-input-buffer.mjs case 5 lost 161 of 1080.
 		if (dropped.edges !== 0) carryEdges(dropped.edges, sp.queue);
 	}
+	return true;
 }
 
 /**
@@ -471,28 +476,28 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): void {
 export function acceptInput(sp: ServerPlayer, packet: InputPacket, now: number, grace = 0): void {
 	sp.counters.packets += 1;
 	bumpWindow(sp.inputWindow, now, FLOOD_RATE_WINDOW_S);
-	sp.viewTick = packet.viewTick;
-	sp.viewFrac = packet.viewFrac;
 	const room = grace > 0 && grace < math.huge ? math.min(math.floor(grace), INPUT_GRACE_MAX) : 0;
-	// oldest first, so the queue keeps its order with a single pass
-	for (let i = packet.cmds.size() - 1; i >= 0; i--) enqueue(sp, packet.cmds[i], room);
-	/*
-	 * The view of each command still waiting: the packet names the frame of its NEWEST command, and that is the
-	 * command it belongs to. A redundant copy only fills in for a command whose own packet never came, one frame
-	 * earlier per place. `takeCommand` hands the consumed command's view to the rewind (§2.3): the latest packet's
-	 * was a queue's depth newer than the frame that pulled the trigger, and let a view declared for one shot be
-	 * overwritten by the next packets before that shot was simulated.
-	 */
 	const takes = sp.counters.consumed + sp.counters.filled;
-	for (let i = 0; i < packet.cmds.size(); i++) {
-		const seq = packet.cmds[i].seq;
-		if (seqDiff(seq, sp.lastSeq) <= 0) continue;
-		const slot = seq % VIEW_RING;
-		if (i > 0 && sp.viewSeqs[slot] === seq) continue;
-		if (sp.viewSeqs[slot] !== seq) sp.viewTakes[slot] = takes;
-		sp.viewSeqs[slot] = seq;
+	// oldest first, so the queue keeps its order with a single pass
+	for (let i = packet.cmds.size() - 1; i >= 0; i--) {
+		const cmd = packet.cmds[i];
+		if (!enqueue(sp, cmd, room)) continue;
+		/*
+		 * The view of a command the queue TOOK: the packet names the frame of its NEWEST command, and that is the
+		 * command it belongs to; a redundant copy that is taken fills in for a command whose own packet never came,
+		 * one frame earlier per place. `takeCommand` hands the consumed command's view to the rewind (§2.3): the
+		 * latest packet's was a queue's depth newer than the frame that pulled the trigger, and let a view declared
+		 * for one shot be overwritten by the next packets before that shot was simulated.
+		 *
+		 * Only a command the queue took (the review of dee095a, N2). A command refused as out of the window shares
+		 * its ring slot with a queued one 32 apart and overwrote that one's view; a copy of a command already queued
+		 * re-declared its view after the fact.
+		 */
+		const slot = cmd.seq % VIEW_RING;
+		sp.viewSeqs[slot] = cmd.seq;
 		sp.viewTicks[slot] = wrapU16(packet.viewTick - i);
 		sp.viewFracs[slot] = packet.viewFrac;
+		sp.viewTakes[slot] = takes;
 	}
 }
 
@@ -603,7 +608,10 @@ export function takeCommand(sp: ServerPlayer): InputCommand {
 		return STANDING;
 	}
 	// the queue is dry: this tick WAITS for the command (see the header). The fill carries no new seq, so
-	// `lastSeq` and `ackSeq` stay put and the real command is still welcome when it lands.
+	// `lastSeq` and `ackSeq` stay put and the real command is still welcome when it lands. It repeats the last
+	// command's held buttons, and a trigger held through it fires in that command's view: `viewTick` is left as the
+	// last consumed command set it, whatever packets landed since (N1) -- a tick older now, which its wait counts
+	sp.viewWait += 1;
 	const fill: InputCommand = {
 		seq: sp.lastSeq,
 		moveAng: sp.lastCmd.moveAng,
