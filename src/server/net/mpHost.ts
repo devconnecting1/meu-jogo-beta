@@ -72,6 +72,12 @@ const ADMIT_INTERVAL = 0.5;
 const METRIC_INTERVAL = 1;
 /** an anomaly line is logged at most this often per player, so a cheater cannot spam the server log */
 const ANOMALY_LOG_INTERVAL = 10;
+/**
+ * A world reset's new town is generated this many seconds of work per frame at most (MP-22; review of ea5cf71): a
+ * town is ~150 buildings planned room by room, a second or more of Luau, and the heartbeat, the lobby and the
+ * network go on meanwhile. Everyone in the world that ended is down, so the wait costs nobody a thing.
+ */
+const RESET_SLICE_S = 0.008;
 
 export interface MpHostOptions {
 	/**
@@ -688,7 +694,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	// rule 6 counts only survivors whose save is really here (server/sim/life.ts `liveSave`)
 	lives.liveSave = userId => saveOfUser(userId);
 
-	lives.onWorldWiped = report => {
+	function worldWiped(report: WipeReport): void {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
 		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell
 		warn(
@@ -697,12 +703,25 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		);
 		const previous = sim.world;
 		const now = os.time();
+		// the generator calls this between two buildings: past RESET_SLICE_S of work in this frame it waits for the
+		// next one. A host stopped meanwhile (the server shutting down) abandons the reset before anything changed
+		let sliceStart = os.clock();
+		let frames = 1;
+		const pace = () => {
+			if (stopped) error("the host stopped");
+			if (os.clock() - sliceStart < RESET_SLICE_S) return;
+			task.wait();
+			frames += 1;
+			sliceStart = os.clock();
+			if (stopped) error("the host stopped");
+		};
 		const [returned, result] = pcall(() =>
 			endWorld({ sim, lives, replicator }, report, town, {
 				now,
 				job: game.JobId,
 				saveOf: saveOfUser,
 				clock: () => os.clock(),
+				pace,
 				// the reset is committed the moment the simulation stands in the new town (review of de4ba1e, N2): the
 				// host names THAT town at once — seed, map, the attribute a joining client builds from — whatever fails
 				// after it
@@ -737,10 +756,24 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		}
 		print(
 			`[${GAME_NAME}] the town of seed ${outcome.ended.seed} lasted ${outcome.ended.days} day(s); a new one rises from ` +
-				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms) on day 1, ` +
-				`and ${outcome.lives.size()} survivor(s) start a new life`,
+				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms over ` +
+				`${frames} frame(s)) on day 1, and ${outcome.lives.size()} survivor(s) start a new life`,
 		);
 		options.onWorldWiped?.(report, outcome);
+	}
+
+	/** a world reset under way (its new town is being generated, a slice per frame): a second report waits for it */
+	let resetting = false;
+	lives.onWorldWiped = report => {
+		if (resetting) return;
+		resetting = true;
+		// in its own thread, so the new town can be generated a slice per frame (`pace` below) while this tick, and
+		// the ones after it, go on in the old world
+		task.spawn(() => {
+			const [ok, err] = pcall(() => worldWiped(report));
+			resetting = false;
+			if (!ok) warn(`[${GAME_NAME}] the world reset failed: ${tostring(err)}`);
+		});
 	};
 
 	active = host;

@@ -60,6 +60,7 @@ const { PLACEABLES } = require(join(SRC, "shared/sim/placement.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const { countItem, addItem } = require(join(SRC, "shared/sim/inventory.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+const PH = require(join(SRC, "shared/game/physics.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -883,6 +884,30 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		return { p, out: sim.build.place(slot, p.state, [p.state], []) };
 	};
 	const win = house.openings.find(o => o.kind === "window");
+	/**
+	 * A body `radius` wide, 40 u in from the opening, walks straight out through it (60 steps of 4 u) with the one
+	 * moveActor the server, the client's prediction and every zombie move by: how far past the opening's middle it
+	 * ends, outwards (negative: still inside)
+	 */
+	const walkOut = (o, radius) => {
+		const n = NORMAL[o.side];
+		const mx = o.x + o.w / 2;
+		const my = o.y + o.h / 2;
+		let x = mx - n[0] * 40;
+		let y = my - n[1] * 40;
+		for (let i = 0; i < 60; i++) {
+			const r = PH.moveActor(world, x, y, radius, n[0] * 4, n[1] * 4);
+			x = r.x;
+			y = r.y;
+		}
+		return (x - mx) * n[0] + (y - my) * n[1];
+	};
+	const openBefore = walkOut(win, PH.PLAYER_RADIUS);
+	check(
+		openBefore > 60,
+		"antes: um sobrevivente sai pela janela (pulando, EDI-10)",
+		`${openBefore.toFixed(0)} u para fora`,
+	);
 	const a = fortify(win, 0, 10);
 	checkEq(a.out.kind, "placed", "a barricada mirada na janela entra");
 	const s = a.out.solid;
@@ -897,6 +922,15 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		s !== undefined ? `${s.kind} hp ${s.hp}` : "nada",
 	);
 	check(s !== undefined && W.isBlocking(s), "e bloqueia o corpo: ninguem pula a janela barricada");
+	// placed by the SERVER's build path (ServerBuild.hold / place, the same snapToOpening as the client's ghost): the
+	// server's own movement stops at it, a survivor's and a zombie's alike
+	const survivorAfter = walkOut(win, PH.PLAYER_RADIUS);
+	const zombieAfter = walkOut(win, PH.ZOMBIE_RADIUS);
+	check(
+		survivorAfter < 0 && zombieAfter < 0,
+		"depois: o movimento do servidor para na barricada -- nem sobrevivente nem zumbi atravessa",
+		`sobrevivente ${survivorAfter.toFixed(0)} u, zumbi ${zombieAfter.toFixed(0)} u`,
+	);
 	// the building's entrances, the main one first (world.ts entrancesOf, the API the facade signs read)
 	const entrances = W.entrancesOf(house, []);
 	check(
@@ -916,6 +950,46 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	// the same opening twice: the second one lands on the first and is refused
 	const c = fortify(win, 2, 12);
 	checkEq(c.out.kind, "refused", "uma segunda barricada na mesma janela e recusada (o vao ja esta tomado)");
+	// an interior opening is not fortified (review of ea5cf71): an open-plan side can be 300 u wide, and one barricade
+	// would seal it. A ghost aimed at one, with no door or window near, keeps the grid rect
+	const fortifiable = o => o.kind === "door" || o.kind === "window";
+	let inner;
+	let innerHouse;
+	for (const b of world.solids) {
+		if (b.kind !== "building" || inner !== undefined) continue;
+		for (const o of b.openings ?? []) {
+			if (o.kind !== "inner") continue;
+			const cx = o.x + o.w / 2;
+			const cy = o.y + o.h / 2;
+			const clear = world.solids.every(
+				q =>
+					q.kind !== "building" ||
+					(q.openings ?? []).every(
+						e =>
+							!fortifiable(e) ||
+							Math.max(Math.abs(e.x + e.w / 2 - cx), Math.abs(e.y + e.h / 2 - cy)) > 240,
+					),
+			);
+			if (clear) {
+				inner = o;
+				innerHouse = b;
+				break;
+			}
+		}
+	}
+	check(inner !== undefined, "a cidade tem um vao interno longe de portas e janelas", innerHouse?.id);
+	if (inner !== undefined) {
+		const n = NORMAL[inner.side];
+		const q = addPlayer(sim, 4, inner.x + inner.w / 2 - n[0] * 64, inner.y + inner.h / 2 - n[1] * 64);
+		q.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(4, 10, undefined);
+		const gi = sim.build.ghost(4, q.state);
+		check(
+			gi !== undefined && !(gi.x === inner.x && gi.y === inner.y && gi.w === inner.w && gi.h === inner.h),
+			"uma barricada mirada num vao interno fica na grade (so portas e janelas se preenchem)",
+			gi ? `${gi.x},${gi.y} ${gi.w}x${gi.h} vs vao ${inner.w}x${inner.h}` : "-",
+		);
+	}
 	// away from any opening, the grid as before
 	const field = addPlayer(sim, 3, 60, 60);
 	field.state.angle = 0;
@@ -926,6 +1000,21 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		"longe de qualquer vao, a grade de sempre",
 		g ? `${g.w}x${g.h}` : "-",
 	);
+}
+
+section("q) a cidade gerada em fatias e a mesma: o servidor cede entre dois predios num reset (MP-22)");
+{
+	// server/net/mpHost.ts generates a world reset's town a slice per frame through `pace`; the town must not know
+	let calls = 0;
+	const sliced = W.generateTown(DESIGN.TOWN_SEED, () => {
+		calls += 1;
+	});
+	const whole = W.generateTown(DESIGN.TOWN_SEED);
+	const buildings = whole.solids.filter(s => s.kind === "building").length;
+	checkEq(calls, buildings, "pace e chamado uma vez por predio, depois do interior dele");
+	const key = w => w.solids.map(s => `${s.kind}:${s.x}:${s.y}:${s.w}:${s.h}:${s.parentId}`).join("|");
+	check(key(sliced) === key(whole), "e a cidade e a mesma, solido por solido", `${sliced.solids.length} solidos`);
+	checkEq(mapHashOf(sliced), mapHashOf(whole), "o mesmo mapHash (o que o cliente confere ao entrar)");
 }
 
 // ---------------------------------------------------------------- verdict

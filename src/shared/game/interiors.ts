@@ -1578,6 +1578,8 @@ class Planner {
 				this.clear.push(z);
 				this.clearTight.push(z);
 			}
+			this.nearClear.clear();
+			this.nearClearTight.clear();
 			return;
 		}
 	}
@@ -1921,7 +1923,7 @@ class Planner {
 	 */
 	fits(p: LR, room: LR, island: boolean, tight = false): boolean {
 		if (p.u0 < room.u0 - 0.5 || p.u1 > room.u1 + 0.5 || p.v0 < room.v0 - 0.5 || p.v1 > room.v1 + 0.5) return false;
-		for (const c of tight ? this.clearTight : this.clear) if (overlapLR(p, c)) return false;
+		for (const c of this.clearNear(room, tight)) if (overlapLR(p, c)) return false;
 		for (const w of this.wallsNear(room)) {
 			if (overlapLR(p, w)) return false;
 			if (island ? gapLR(p, w) < PATH : narrowBetween(p, w, NOOK)) return false;
@@ -1940,6 +1942,27 @@ class Planner {
 			if (room.v1 - p.v1 < PATH && room.v1 - p.v1 > 0.5) return false;
 		}
 		return true;
+	}
+
+	/** the zones of `clear` / `clearTight` that reach a room's floor rect, per rect (a new zone empties both) */
+	private readonly nearClear = new Map<LR, Array<LR>>();
+	private readonly nearClearTight = new Map<LR, Array<LR>>();
+
+	clearNear(room: LR, tight: boolean): Array<LR> {
+		const cache = tight ? this.nearClearTight : this.nearClear;
+		let list = cache.get(room);
+		if (list === undefined) {
+			list = [];
+			// `fits` keeps a piece within half a unit of its room: a zone further off cannot overlap it
+			for (const c of tight ? this.clearTight : this.clear) {
+				if (c.u0 > room.u1 + 0.5 || c.u1 < room.u0 - 0.5 || c.v0 > room.v1 + 0.5 || c.v1 < room.v0 - 0.5) {
+					continue;
+				}
+				list.push(c);
+			}
+			cache.set(room, list);
+		}
+		return list;
 	}
 
 	/** the walls within PATH of a room's floor rect (`fits` looks at no other), per rect, while furnishing */
@@ -2125,8 +2148,16 @@ class Planner {
 	private gy0 = 0;
 	private gcols = 0;
 	private grows = 0;
-	/** the generation `P_SEEN` marks the cells of this planner's last flood with */
+	/**
+	 * The generations this planner's last `removePockets` marked the module's grids with: a cell is inside the
+	 * footprint when P_INSIDE holds `insideGen`; P_MARK holds `blockedGen` on a cell a wall or piece blocks and
+	 * `seenGen` on one the survivor's flood reached. Anything older is a free cell nobody reached.
+	 */
+	private insideGen = 0;
+	private blockedGen = 0;
 	private seenGen = 0;
+	/** inside cells that `stampBody` blocked since the last try began */
+	private insideBlocked = 0;
 
 	/**
 	 * EDI-11 (no safe spot) and CID-05 (no sealed pocket), checked the way tools/validate-world.mjs checks them.
@@ -2142,10 +2173,12 @@ class Planner {
 	 * The local rules of `fits` keep the paths two bodies wide, but they cannot see every pocket two pieces close off
 	 * with a wall: the piece nearest such a pocket, the latest placed first, comes out again, until there is none.
 	 *
-	 * Cost: the town plans ~150 buildings at every world start on the server and on every client, so the grids are
-	 * module scratch (grown, never freed, filled by index; a flood marks with a generation number instead of
-	 * clearing), the walls are stamped once, a blocked border ring spares the flood its bounds checks, and the inside
-	 * mask is filled part by part.
+	 * Cost: the town plans ~150 buildings at every world start on the server and on every client (~900,000 cells
+	 * of this grid per town), so nothing here clears a grid. The grids are module scratch, grown once and never
+	 * freed; a cell holds the generation that last marked it (P_GEN only grows, so an older mark reads as free);
+	 * the border ring is marked blocked, so the flood needs no bounds check; the inside cells are counted, and the
+	 * cells blocked among them while stamping, so the grid is only searched for a pocket when the flood came up
+	 * short of the count.
 	 */
 	removePockets(): void {
 		const r = this.inp.rect;
@@ -2161,35 +2194,35 @@ class Planner {
 		this.gcols = cols;
 		this.grows = rows;
 		const n = cols * rows;
+		growTo(P_INSIDE, n);
+		growTo(P_MARK, n);
+		growTo(P_QUEUE, n);
 		const inside = P_INSIDE;
-		const base = P_WALLS;
-		const blocked = P_BLOCKED;
-		const seen = P_SEEN;
+		const mark = P_MARK;
 		const queue = P_QUEUE;
 		// the inside mask, part by part: a cell is inside when its centre lies in a part (edges included)
-		for (let k = 0; k < n; k++) inside[k] = 0;
+		P_GEN++;
+		const ig = P_GEN;
+		this.insideGen = ig;
+		let insideCount = 0;
 		for (const lp of this.merged((i, j) => this.at(i, j) >= 0)) {
 			const p = this.f.rect(lp);
 			const i0 = math.max(0, math.ceil((p.x - gx0 - C / 2) / C));
 			const i1 = math.min(cols - 1, math.floor((p.x + p.w - gx0 - C / 2) / C));
 			const j0 = math.max(0, math.ceil((p.y - gy0 - C / 2) / C));
 			const j1 = math.min(rows - 1, math.floor((p.y + p.h - gy0 - C / 2) / C));
-			for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) inside[j * cols + i] = 1;
+			for (let j = j0; j <= j1; j++) {
+				for (let i = i0; i <= i1; i++) {
+					const k = j * cols + i;
+					if (inside[k] !== ig) {
+						inside[k] = ig;
+						insideCount++;
+					}
+				}
+			}
 		}
-		// the walls, stamped once, and the border ring: every iteration starts from this
 		const walls: Array<Rect> = [];
 		for (const w of this.walls) walls.push(this.f.rect(w.r));
-		for (let k = 0; k < n; k++) blocked[k] = 0;
-		for (const w of walls) this.stampBody(w, R);
-		for (let i = 0; i < cols; i++) {
-			blocked[i] = 1;
-			blocked[(rows - 1) * cols + i] = 1;
-		}
-		for (let j = 0; j < rows; j++) {
-			blocked[j * cols] = 1;
-			blocked[j * cols + cols - 1] = 1;
-		}
-		for (let k = 0; k < n; k++) base[k] = blocked[k];
 		let seedX = 0;
 		let seedY = 0;
 		for (const o of this.openings) {
@@ -2200,17 +2233,32 @@ class Planner {
 		}
 		const pieces: Array<Rect> = [];
 		for (let iter = 0; iter < POCKET_TRIES; iter++) {
-			for (let k = 0; k < n; k++) blocked[k] = base[k];
+			// this try's blocked cells, under a new generation: the walls, the border ring, the pieces
+			P_GEN++;
+			const bg = P_GEN;
+			this.blockedGen = bg;
+			this.insideBlocked = 0;
+			for (const w of walls) this.stampBody(w, R);
+			for (let i = 0; i < cols; i++) {
+				mark[i] = bg;
+				mark[(rows - 1) * cols + i] = bg;
+			}
+			for (let j = 0; j < rows; j++) {
+				mark[j * cols] = bg;
+				mark[j * cols + cols - 1] = bg;
+			}
 			pieces.clear();
 			for (const p of this.pieces) pieces.push(this.f.rect(p));
 			for (const p of pieces) this.stampBody(p, R);
+			// the survivor's flood from the main door: a cell is free and not yet reached when its mark is older than bg
 			P_GEN++;
 			const gen = P_GEN;
 			this.seenGen = gen;
 			let tail = 0;
+			let reachedInside = 0;
 			const s0 = this.cellAt(seedX, seedY);
-			if (s0 >= 0 && blocked[s0] === 0) {
-				seen[s0] = gen;
+			if (s0 >= 0 && mark[s0] < bg) {
+				mark[s0] = gen;
 				queue[tail] = s0;
 				tail++;
 			}
@@ -2218,31 +2266,35 @@ class Planner {
 			while (head < tail) {
 				const k = queue[head];
 				head++;
+				if (inside[k] === ig) reachedInside++;
 				// the four neighbours, inline and unchecked (the border ring is blocked): every cell of every building
-				if (seen[k - 1] !== gen && blocked[k - 1] === 0) {
-					seen[k - 1] = gen;
+				if (mark[k - 1] < bg) {
+					mark[k - 1] = gen;
 					queue[tail] = k - 1;
 					tail++;
 				}
-				if (seen[k + 1] !== gen && blocked[k + 1] === 0) {
-					seen[k + 1] = gen;
+				if (mark[k + 1] < bg) {
+					mark[k + 1] = gen;
 					queue[tail] = k + 1;
 					tail++;
 				}
-				if (seen[k - cols] !== gen && blocked[k - cols] === 0) {
-					seen[k - cols] = gen;
+				if (mark[k - cols] < bg) {
+					mark[k - cols] = gen;
 					queue[tail] = k - cols;
 					tail++;
 				}
-				if (seen[k + cols] !== gen && blocked[k + cols] === 0) {
-					seen[k + cols] = gen;
+				if (mark[k + cols] < bg) {
+					mark[k + cols] = gen;
 					queue[tail] = k + cols;
 					tail++;
 				}
 			}
+			// a pocket: an inside cell neither blocked nor reached (looked for only when the counts say there is one)
 			let pocket = -1;
-			for (let k = 0; k < n && pocket < 0; k++) {
-				if (inside[k] === 1 && blocked[k] === 0 && seen[k] !== gen) pocket = k;
+			if (reachedInside < insideCount - this.insideBlocked) {
+				for (let k = 0; k < n && pocket < 0; k++) {
+					if (inside[k] === ig && mark[k] < bg) pocket = k;
+				}
 			}
 			if (pocket < 0) pocket = this.hordePocket(walls, pieces);
 			if (pocket < 0) return;
@@ -2277,6 +2329,12 @@ class Planner {
 	 * blocked cell -- and flooded from every free cell outside the footprint (a window is a gap: the field crosses
 	 * it). A spot is reached when its own field cell is, or when a reached cell lies within DIRECT_REACH with a clear
 	 * straight line to it (the chase's last stretch goes straight, not by the field).
+	 *
+	 * One array holds the field (F_MARK: `hard` on a blocked cell, `gen` on a reached one, older = free, unreached).
+	 * Only the spots under a field cell the field did not reach are searched, and the spots of one field cell
+	 * usually get through by the same neighbour: the last one that let a spot of the cell through is tried first,
+	 * with only the walls and pieces near the cell when the neighbour is next to it. All of that only saves work: a
+	 * spot is reached when ANY neighbour lets it through, so the answer is the one the full search gives.
 	 */
 	private hordePocket(walls: Array<Rect>, pieces: Array<Rect>): number {
 		const r = this.inp.rect;
@@ -2287,17 +2345,21 @@ class Planner {
 		const fcols = math.ceil((r.x + r.w + M - fx0) / FC);
 		const frows = math.ceil((r.y + r.h + M - fy0) / FC);
 		const fn = fcols * frows;
-		const hard = F_HARD;
-		const seen = F_SEEN;
+		growTo(F_MARK, fn);
+		growTo(F_QUEUE, fn);
+		const fmark = F_MARK;
 		const queue = F_QUEUE;
-		for (let k = 0; k < fn; k++) hard[k] = 0;
-		for (let q = 0; q < walls.size() + pieces.size(); q++) {
-			const s = q < walls.size() ? walls[q] : pieces[q - walls.size()];
+		const nWalls = walls.size();
+		const nRects = nWalls + pieces.size();
+		P_GEN++;
+		const hard = P_GEN;
+		for (let q = 0; q < nRects; q++) {
+			const s = q < nWalls ? walls[q] : pieces[q - nWalls];
 			const i0 = math.max(0, math.floor((s.x - FIELD_INFLATE - fx0) / FC));
 			const j0 = math.max(0, math.floor((s.y - FIELD_INFLATE - fy0) / FC));
 			const i1 = math.min(fcols - 1, math.floor((s.x + s.w + FIELD_INFLATE - fx0) / FC));
 			const j1 = math.min(frows - 1, math.floor((s.y + s.h + FIELD_INFLATE - fy0) / FC));
-			for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) hard[j * fcols + i] = 1;
+			for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) fmark[j * fcols + i] = hard;
 		}
 		P_GEN++;
 		const gen = P_GEN;
@@ -2306,8 +2368,8 @@ class Planner {
 			const cy = fy0 + j * FC + FC / 2;
 			for (let i = 0; i < fcols; i++) {
 				const k = j * fcols + i;
-				if (hard[k] === 1 || this.insideWorld(fx0 + i * FC + FC / 2, cy)) continue;
-				seen[k] = gen;
+				if (fmark[k] === hard || this.insideWorld(fx0 + i * FC + FC / 2, cy)) continue;
+				fmark[k] = gen;
 				queue[tail] = k;
 				tail++;
 			}
@@ -2325,42 +2387,107 @@ class Planner {
 					const ni = ci + di;
 					if ((di === 0 && dj === 0) || ni < 0 || ni >= fcols) continue;
 					const nk = nj * fcols + ni;
-					if (seen[nk] === gen || hard[nk] === 1) continue;
-					if (di !== 0 && dj !== 0 && (hard[cj * fcols + ni] === 1 || hard[nj * fcols + ci] === 1)) continue;
-					seen[nk] = gen;
+					// free and not reached yet: older than `hard` (this call's marks are hard, then gen)
+					if (fmark[nk] >= hard) continue;
+					if (di !== 0 && dj !== 0 && (fmark[cj * fcols + ni] === hard || fmark[nj * fcols + ci] === hard)) {
+						continue;
+					}
+					fmark[nk] = gen;
 					queue[tail] = nk;
 					tail++;
 				}
 			}
 		}
-		// every spot of the survivor's flood (inside, standable, reached from the door): the horde must reach it too
+		// every spot of the survivor's flood (inside, standable, reached from the door): the horde must reach it too.
+		// Only under the field cells the field did not reach: the 8 u grid and the field are both aligned on 8 u, so
+		// a field cell is 4 × 4 cells of the 8 u grid. One field row covers whole rows of the 8 u grid, so the first
+		// spot that fails in a field row is the first in the 8 u grid's order (the one this returns)
 		const C = POCKET_CELL;
+		const per = FC / C;
 		const cols = this.gcols;
-		const n = cols * this.grows;
+		const rows = this.grows;
+		const ig = this.insideGen;
+		const sg = this.seenGen;
+		const inside = P_INSIDE;
+		const mark = P_MARK;
+		const near = F_NEAR;
+		const gx0 = this.gx0;
+		const gy0 = this.gy0;
+		// whole numbers: both origins are multiples of 8 (math.floor of a coordinate, times the cell)
+		const offI = (gx0 - fx0) / C;
+		const offJ = (gy0 - fy0) / C;
 		const RING = math.ceil(DIRECT_REACH / FC);
-		for (let k = 0; k < n; k++) {
-			if (P_INSIDE[k] !== 1 || P_SEEN[k] !== this.seenGen) continue;
-			const px = this.gx0 + (k % cols) * C + C / 2;
-			const py = this.gy0 + math.floor(k / cols) * C + C / 2;
-			const gi = math.floor((px - fx0) / FC);
-			const gj = math.floor((py - fy0) / FC);
-			if (seen[gj * fcols + gi] === gen) continue;
-			let ok = false;
-			for (let ring = 1; ring <= RING && !ok; ring++) {
-				for (let dj = -ring; dj <= ring && !ok; dj++) {
-					for (let di = -ring; di <= ring && !ok; di++) {
-						if (math.max(math.abs(di), math.abs(dj)) !== ring) continue;
-						const ni = gi + di;
-						const nj = gj + dj;
-						if (ni < 0 || nj < 0 || ni >= fcols || nj >= frows || seen[nj * fcols + ni] !== gen) continue;
-						const cx = fx0 + ni * FC + FC / 2;
-						const cy = fy0 + nj * FC + FC / 2;
-						if ((cx - px) * (cx - px) + (cy - py) * (cy - py) > DIRECT_REACH * DIRECT_REACH) continue;
-						if (segmentFree(cx, cy, px, py, walls) && segmentFree(cx, cy, px, py, pieces)) ok = true;
+		const reach2 = DIRECT_REACH * DIRECT_REACH;
+		for (let fj = 0; fj < frows; fj++) {
+			const j0 = math.max(0, fj * per - offJ);
+			const j1 = math.min(rows - 1, fj * per - offJ + per - 1);
+			if (j0 > j1) continue;
+			let first = -1;
+			for (let fi = 0; fi < fcols; fi++) {
+				const fk = fj * fcols + fi;
+				if (fmark[fk] === gen) continue;
+				const i0 = math.max(0, fi * per - offI);
+				const i1 = math.min(cols - 1, fi * per - offI + per - 1);
+				if (i0 > i1) continue;
+				// the walls and pieces a line to a neighbouring cell can cross (it stays in the 3 × 3 cells around)
+				let nearReady = false;
+				// the reached cell that let the last spot of this cell through: the next spot tries it first
+				let good = -1;
+				for (let j = j0; j <= j1; j++) {
+					const py = gy0 + j * C + C / 2;
+					for (let i = i0; i <= i1; i++) {
+						const k = j * cols + i;
+						if (inside[k] !== ig || mark[k] !== sg || (first >= 0 && k > first)) continue;
+						if (!nearReady) {
+							nearReady = true;
+							const bx0 = fx0 + (fi - 1) * FC;
+							const bx1 = fx0 + (fi + 2) * FC;
+							const by0 = fy0 + (fj - 1) * FC;
+							const by1 = fy0 + (fj + 2) * FC;
+							near.clear();
+							for (let q = 0; q < nRects; q++) {
+								const s = q < nWalls ? walls[q] : pieces[q - nWalls];
+								if (s.x > bx1 || s.x + s.w < bx0 || s.y > by1 || s.y + s.h < by0) continue;
+								near.push(s);
+							}
+						}
+						const px = gx0 + i * C + C / 2;
+						let ok = false;
+						for (let ring = good >= 0 ? 0 : 1; ring <= RING && !ok; ring++) {
+							for (let dj = -ring; dj <= ring && !ok; dj++) {
+								for (let di = -ring; di <= ring && !ok; di++) {
+									// ring 0: the last good neighbour, before the rings are searched in order
+									let ni = fi + di;
+									let nj = fj + dj;
+									if (ring === 0) {
+										ni = good % fcols;
+										nj = (good - ni) / fcols;
+									} else if (math.max(math.abs(di), math.abs(dj)) !== ring) {
+										continue;
+									}
+									if (ni < 0 || nj < 0 || ni >= fcols || nj >= frows) continue;
+									const nk = nj * fcols + ni;
+									if (fmark[nk] !== gen) continue;
+									const cx = fx0 + ni * FC + FC / 2;
+									const cy = fy0 + nj * FC + FC / 2;
+									if ((cx - px) * (cx - px) + (cy - py) * (cy - py) > reach2) continue;
+									const close = math.abs(ni - fi) <= 1 && math.abs(nj - fj) <= 1;
+									if (
+										close
+											? segmentFree(cx, cy, px, py, near)
+											: segmentFree(cx, cy, px, py, walls) && segmentFree(cx, cy, px, py, pieces)
+									) {
+										ok = true;
+										good = nk;
+									}
+								}
+							}
+						}
+						if (!ok) first = k;
 					}
 				}
 			}
-			if (!ok) return k;
+			if (first >= 0) return first;
 		}
 		return -1;
 	}
@@ -2368,7 +2495,7 @@ class Planner {
 	/** is the world point (x, y) inside the footprint (the inside mask of the last `removePockets`)? */
 	private insideWorld(x: number, y: number): boolean {
 		const k = this.cellAt(x, y);
-		return k >= 0 && P_INSIDE[k] === 1;
+		return k >= 0 && P_INSIDE[k] === this.insideGen;
 	}
 
 	private cellAt(x: number, y: number): number {
@@ -2378,30 +2505,41 @@ class Planner {
 		return j * this.gcols + i;
 	}
 
-	/** marks the cells whose centre is closer than `R` to the world rect `w` */
+	/** marks blocked (this try's generation) the cells whose centre is closer than `R` to the world rect `w` */
 	private stampBody(w: Rect, R: number): void {
 		const C = POCKET_CELL;
 		const cols = this.gcols;
-		const blocked = P_BLOCKED;
-		const i0 = math.max(0, math.floor((w.x - R - this.gx0) / C));
-		const i1 = math.min(cols - 1, math.floor((w.x + w.w + R - this.gx0) / C));
-		const j0 = math.max(0, math.floor((w.y - R - this.gy0) / C));
-		const j1 = math.min(this.grows - 1, math.floor((w.y + w.h + R - this.gy0) / C));
+		const mark = P_MARK;
+		const inside = P_INSIDE;
+		const bg = this.blockedGen;
+		const ig = this.insideGen;
+		const gx0 = this.gx0;
+		const gy0 = this.gy0;
+		let blockedInside = 0;
+		const i0 = math.max(0, math.floor((w.x - R - gx0) / C));
+		const i1 = math.min(cols - 1, math.floor((w.x + w.w + R - gx0) / C));
+		const j0 = math.max(0, math.floor((w.y - R - gy0) / C));
+		const j1 = math.min(this.grows - 1, math.floor((w.y + w.h + R - gy0) / C));
 		for (let j = j0; j <= j1; j++) {
-			const py = this.gy0 + j * C + C / 2;
+			const py = gy0 + j * C + C / 2;
 			const dy = math.max(w.y - py, 0, py - w.y - w.h);
 			for (let i = i0; i <= i1; i++) {
-				const px = this.gx0 + i * C + C / 2;
+				const px = gx0 + i * C + C / 2;
 				const dx = math.max(w.x - px, 0, px - w.x - w.w);
-				if (dx * dx + dy * dy < R * R) blocked[j * cols + i] = 1;
+				if (dx * dx + dy * dy >= R * R) continue;
+				const k = j * cols + i;
+				if (mark[k] === bg) continue;
+				mark[k] = bg;
+				if (inside[k] === ig) blockedInside++;
 			}
 		}
+		this.insideBlocked += blockedInside;
 	}
 
 	/** did the last `removePockets` (of this planner, the latest one) reach the world point (x, y) from the door? */
 	reached(x: number, y: number): boolean {
 		const k = this.cellAt(x, y);
-		return k >= 0 && P_SEEN[k] === this.seenGen;
+		return k >= 0 && P_MARK[k] === this.seenGen;
 	}
 
 	/** is this local rect floor inside the building, touching no wall and no piece? (where flat clutter may lie) */
@@ -2441,17 +2579,19 @@ const ISLAND_OFFSETS: Array<[number, number]> = [
 ];
 /** a loot spot stands this far out from the front of its piece */
 const LOOT_FRONT = 44;
-/** `removePockets`' grids, shared by every planner (one building is planned at a time): grown, never shrunk */
+/**
+ * `removePockets`' grids, shared by every planner (one building is planned at a time): grown, never shrunk, never
+ * cleared -- a cell holds the generation (P_GEN) that last marked it. P_INSIDE: the footprint; P_MARK: blocked or
+ * reached; P_QUEUE: the flood's queue.
+ */
 const P_INSIDE: Array<number> = [];
-const P_WALLS: Array<number> = [];
-const P_BLOCKED: Array<number> = [];
-const P_SEEN: Array<number> = [];
+const P_MARK: Array<number> = [];
 const P_QUEUE: Array<number> = [];
-/** the horde's field for `hordePocket`: blocked cells, flood marks, queue */
-const F_HARD: Array<number> = [];
-const F_SEEN: Array<number> = [];
+/** the horde's field for `hordePocket`: blocked or reached, the flood's queue; the walls and pieces near one cell */
+const F_MARK: Array<number> = [];
 const F_QUEUE: Array<number> = [];
-/** the flood generation: a cell is seen when it holds the current one (nothing is ever cleared) */
+const F_NEAR: Array<Rect> = [];
+/** the latest generation: only grows, so a cell marked by any earlier flood or stamp reads as unmarked */
 let P_GEN = 0;
 /** the horde's flow field (server/sim/flowField.ts CELL, INFLATE) */
 const FIELD_CELL = 32;
@@ -2463,6 +2603,11 @@ const POCKET_CELL = 8;
 const BODY = 18;
 /** at most this many pieces come out of one building for its pockets */
 const POCKET_TRIES = 24;
+
+/** grows a scratch grid to `n` cells with zeros (older than any generation); a grid is never shrunk */
+function growTo(a: Array<number>, n: number): void {
+	for (let k = a.size(); k < n; k++) a.push(0);
+}
 
 /** does the segment (x0, y0)-(x1, y1) cross none of the rects? (slab test; touching an edge is crossing) */
 function segmentFree(x0: number, y0: number, x1: number, y1: number, rects: Array<Rect>): boolean {

@@ -231,8 +231,11 @@ export interface SolidGrid {
 	cell: number;
 	cols: number;
 	rows: number;
+	/** a cell that never held a solid is the shared EMPTY_CELL (a fine grid is ~22,000 cells, most of them empty) */
 	cells: Array<Array<Solid>>;
 	stamp: number;
+	/** solids held: a grid that holds none is skipped by every query (the fine grid, while the town is being laid) */
+	count: number;
 }
 
 export interface WorldData {
@@ -313,14 +316,17 @@ function rectOverlap(
 }
 
 /** an empty spatial grid of `cell`-sized cells over width × height */
+/** the one cell every grid starts with everywhere: never written (gridInsert gives a cell its own list first) */
+const EMPTY_CELL: Array<Solid> = [];
+
 function newGrid(width: number, height: number, cell: number): SolidGrid {
 	const cols = math.max(1, math.ceil(width / cell));
 	const rows = math.max(1, math.ceil(height / cell));
 	const cells: Array<Array<Solid>> = [];
 	for (let i = 0; i < cols * rows; i++) {
-		cells.push([]);
+		cells.push(EMPTY_CELL);
 	}
-	return { cell, cols, rows, cells, stamp: 0 };
+	return { cell, cols, rows, cells, stamp: 0, count: 0 };
 }
 
 /** the cell of the grid of building parts (walls, windows, furniture): a room, not a block */
@@ -367,9 +373,16 @@ function gridInsert(g: SolidGrid, s: Solid): void {
 	const r1 = cellRow(g, s.y + s.h);
 	for (let r = r0; r <= r1; r++) {
 		for (let c = c0; c <= c1; c++) {
-			g.cells[r * g.cols + c].push(s);
+			const k = r * g.cols + c;
+			let bucket = g.cells[k];
+			if (bucket === EMPTY_CELL) {
+				bucket = [];
+				g.cells[k] = bucket;
+			}
+			bucket.push(s);
 		}
 	}
+	g.count++;
 }
 
 function gridRemove(g: SolidGrid, s: Solid): void {
@@ -384,6 +397,7 @@ function gridRemove(g: SolidGrid, s: Solid): void {
 			if (i >= 0) bucket.unorderedRemove(i);
 		}
 	}
+	g.count = math.max(0, g.count - 1);
 }
 
 /** the grid a solid lives in: a building's own parts in the fine one, everything else in the coarse one */
@@ -430,6 +444,7 @@ export function querySolids(
 }
 
 function queryGrid(g: SolidGrid, stamp: number, x0: number, y0: number, x1: number, y1: number, out: Array<Solid>) {
+	if (g.count === 0) return;
 	const c0 = cellCol(g, x0);
 	const c1 = cellCol(g, x1);
 	const r0 = cellRow(g, y0);
@@ -480,6 +495,7 @@ export function querySegment(
 	const hy = math.max(y0, y1) + 1;
 	queryGrid(w.grid, stamp, lx, ly, hx, hy, out);
 	const g = w.fine;
+	if (g.count === 0) return out;
 	const c0 = cellCol(g, lx);
 	const c1 = cellCol(g, hx);
 	const dx = x1 - x0;
@@ -516,6 +532,7 @@ export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid
 }
 
 function pointInGrid(g: SolidGrid, x: number, y: number, pad: number): Solid | undefined {
+	if (g.count === 0) return undefined;
 	const c0 = cellCol(g, x - pad);
 	const c1 = cellCol(g, x + pad);
 	const r0 = cellRow(g, y - pad);
@@ -541,6 +558,7 @@ export function rectHitsSolid(w: WorldData, x: number, y: number, rw: number, rh
 }
 
 function rectInGrid(g: SolidGrid, left: number, top: number, rw: number, rh: number): Solid | undefined {
+	if (g.count === 0) return undefined;
 	const c0 = cellCol(g, left);
 	const c1 = cellCol(g, left + rw);
 	const r0 = cellRow(g, top);
@@ -934,6 +952,8 @@ interface Gen {
 	shopDeck: Array<number>;
 	/** the town's seed: mixed into every building's own seed (interiors never draw from `rng`) */
 	townSeed: number;
+	/** called between two buildings' interiors (generateTown's `pace`): may yield, never changes the town */
+	pace?: () => void;
 }
 
 function cutsOf(g: Gen, e: LotEdge): Array<Cut> {
@@ -1809,14 +1829,22 @@ function planInteriors(g: Gen): void {
 					if (rectOverlap(q.x, q.y, q.w, q.h, y.x, y.y, y.w, y.h)) lot.patches.remove(i);
 				}
 			}
+			// between two buildings, and only there: nothing is half-planned while the caller yields
+			if (g.pace !== undefined) g.pace();
 		}
 	}
 }
 
 // ---------------------------------------------------------------------------
 
-/** Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins. */
-export function generateTown(seed = 0): WorldData {
+/**
+ * Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins.
+ *
+ * A pure function of `seed` (0: a random one). `pace`, when given, is called between two buildings' interiors -- the
+ * bulk of the work -- so a server rebuilding the world can yield there (server/net/mpHost.ts, at a world reset); it
+ * cannot change the town, and nothing is half-built when it runs.
+ */
+export function generateTown(seed = 0, pace?: () => void): WorldData {
 	const w = createWorld(DESIGN.WORLD_W, DESIGN.WORLD_H);
 	const townSeed = seed !== 0 ? seed : rndInt(1, 2147483646);
 	const rng = new TownRng(townSeed);
@@ -1831,6 +1859,7 @@ export function generateTown(seed = 0): WorldData {
 		phase: [],
 		shopDeck: [],
 		townSeed,
+		pace,
 	};
 	const SW = TOWN.SIDEWALK;
 	for (const a of w.bossAnchors) {
