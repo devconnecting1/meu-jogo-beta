@@ -206,6 +206,8 @@ const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { ZOMBIES } = require(join(SRC, "shared/data/zombies.ts"));
 const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+// the ride grid alone (shared/sim/rideKey.ts) plus the vehicle table: the protocol loads nothing heavier (VEI-05)
+const VEH = { ...require(join(SRC, "shared/sim/rideKey.ts")), ...require(join(SRC, "shared/data/buildings.ts")) };
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
 const TIT = require(join(SRC, "shared/data/titles.ts"));
 const SAVE = require(join(SRC, "shared/game/save.ts"));
@@ -638,7 +640,15 @@ function randSelf() {
 		bleed: rnd(),
 		modFlags: rint(0, 7),
 		weapon: rint(0, 29),
+		ride: randRide(),
 	};
+}
+/** VEI-05: on foot half the time, else any ride the simulation can be in (shared/sim/vehicle.ts packRide) */
+function randRide() {
+	if (rbool()) return 0;
+	const kind = rint(1, 2);
+	const def = VEH.vehicleDef(kind);
+	return VEH.packRide({ kind, heading: rint(0, VEH.HEADING_STEPS - 1), speed: rint(0, VEH.topSteps(def)) });
 }
 function randPlayer(slot) {
 	return {
@@ -652,6 +662,7 @@ function randPlayer(slot) {
 		hp: rnd(),
 		revive: rnd(),
 		moveAng: rang(),
+		ride: rint(0, P.RIDE_KIND_MAX),
 	};
 }
 function randZombie(netId, withExtra = rbool(), mid = rbool()) {
@@ -739,6 +750,8 @@ function compareSnapshot(sent, got) {
 		near("self.bleed", b.bleed, a.bleed, FRAC8_TOL);
 		eq("self.modFlags", b.modFlags, a.modFlags);
 		eq("self.weapon", b.weapon, a.weapon);
+		// exact, not near: the prediction replays from it (VEI-05)
+		eq("self.ride", b.ride, a.ride ?? 0);
 	}
 	eq("player count", got.players.length, sent.players.length);
 	for (let i = 0; i < sent.players.length; i++) {
@@ -754,6 +767,7 @@ function compareSnapshot(sent, got) {
 		near("player hp", b.hp, a.hp, FRAC8_TOL);
 		near("player revive", b.revive, a.revive, FRAC8_TOL);
 		angNear("player moveAng", b.moveAng, a.moveAng, ANG8_TOL);
+		eq("player ride", b.ride, a.ride ?? 0);
 	}
 	eq("boss count", got.bosses.length, sent.bosses.length);
 	for (let i = 0; i < sent.bosses.length; i++) {
@@ -891,6 +905,60 @@ test("Snap: snapshotBytes() matches the encoder", () => {
 			total,
 		);
 	}
+});
+
+test("Snap: the ride fields (VEI-05) round-trip exactly and refuse what no vehicle can be", () => {
+	const moto = VEH.packRide({ kind: 2, heading: 12345, speed: 255 });
+	const self = { ...randSelf(), ride: moto };
+	const other = { ...randPlayer(5), ride: 1 };
+	const snap = { tick: 9, self, players: [other], zombies: [], bosses: [] };
+	const bytes = bytesOf(P.encodeSnapshot(snap).parts[0]);
+	eq(
+		"same size as before riding existed",
+		bytes.length,
+		P.SNAP_HEADER_BYTES + P.SNAP_SELF_BYTES + P.SNAP_PLAYER_BYTES,
+	);
+	const d = P.decodeSnapshotPart(bufOf(bytes));
+	eq("self ride back", d?.self?.ride, moto);
+	eq("other's vehicle kind back", d?.players[0]?.ride, 1);
+	eq("other's slot back", d?.players[0]?.slot, 5);
+	// the three bytes that were reserved: u16 (kind · 16384 + heading) then u8 speed
+	const at = P.SNAP_HEADER_BYTES + P.SNAP_SELF_BYTES - 3;
+	eq("ride u16 low byte", bytes[at], Math.floor(moto / 256) % 256);
+	eq("ride speed byte", bytes[at + 2], 255);
+	const withKey = (u16, speed) => {
+		const b = bytes.slice();
+		b[at] = u16 % 256;
+		b[at + 1] = Math.floor(u16 / 256);
+		b[at + 2] = speed;
+		return P.decodeSnapshotPart(bufOf(b));
+	};
+	eq("kind 3 refused", withKey(3 * VEH.HEADING_STEPS, 0), undefined);
+	eq(
+		"a bicycle above its top speed refused",
+		withKey(VEH.HEADING_STEPS, VEH.topSteps(VEH.vehicleDef(1)) + 1),
+		undefined,
+	);
+	eq("on foot must be all zero (speed 1)", withKey(0, 1), undefined);
+	eq("on foot must be all zero (heading 7)", withKey(7, 0), undefined);
+	ok(withKey(0, 0) !== undefined, "all zero is on foot");
+	eq("...and decodes as 0", withKey(0, 0)?.self?.ride, 0);
+	const slotAt = P.SNAP_HEADER_BYTES + P.SNAP_SELF_BYTES;
+	const withSlot = v => {
+		const b = bytes.slice();
+		b[slotAt] = v;
+		return P.decodeSnapshotPart(bufOf(b));
+	};
+	eq("slot byte 48 (kind 3) refused", withSlot(48), undefined);
+	eq("slot byte 38 (slot 6 on a motorcycle) refused", withSlot(38), undefined);
+	eq("slot byte 37 = slot 5 on a motorcycle", withSlot(37)?.players[0]?.ride, 2);
+	eq("slot byte 5 = slot 5 on foot", withSlot(5)?.players[0]?.ride, 0);
+	// the encoder never writes a key the decoder would refuse
+	const bad = P.encodeSnapshot({ ...snap, self: { ...self, ride: 3 * VEH.HEADING_STEPS * 256 } });
+	eq("an invalid key is sent as on foot", P.decodeSnapshotPart(bad.parts[0])?.self?.ride, 0);
+	const noField = P.encodeSnapshot({ ...snap, self: { ...self, ride: undefined }, players: [randPlayer(2)] });
+	const back = P.decodeSnapshotPart(noField.parts[0]);
+	eq("an absent field is on foot", back?.self?.ride, 0);
 });
 
 test("Snap: malformed parts are refused", () => {

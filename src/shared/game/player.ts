@@ -6,7 +6,7 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { PlayerSaveData } from "shared/game/save";
 import { MP_PHASE } from "shared/net/mpConfig";
-import type { RideState } from "shared/sim/vehicle";
+import type { RideState } from "shared/sim/rideKey";
 
 export interface BuffState {
 	speed: number;

@@ -8,10 +8,11 @@
  *      carries only the stick (direction) and the buttons, never a speed, so a client can go exactly as fast as the
  *      server's own `PlayerState.ride` lets it -- and only the server ever sets that (server/sim/vehicles.ts).
  *
- *   2. The STATE the wire carries for it, `RideState`, kept on the exact grid the self block can hold: the heading in
- *      HEADING_STEPS steps of a turn (14 bits) and the speed in SPEED_STEP u/s steps (8 bits), plus the kind (2
- *      bits). The step quantises its own result every tick, so the state the server sends back is BIT-exact and the
- *      client's replay from it lands where the server did (prediction.ts compares at RECONCILE_EPS = 0.01 u).
+ *   2. The STATE the wire carries for it, `RideState` (shared/sim/rideKey.ts, re-exported here), kept on the exact
+ *      grid the self block can hold: the heading in HEADING_STEPS steps of a turn (14 bits) and the speed in
+ *      SPEED_STEP u/s steps (8 bits), plus the kind (2 bits). The step quantises its own result every tick, so the
+ *      state the server sends back is BIT-exact and the client's replay from it lands where the server did
+ *      (prediction.ts compares at RECONCILE_EPS = 0.01 u).
  *
  *   3. The QUERIES around a parked vehicle: which kind a solid is, whether it can be ridden, where it goes when the
  *      rider gets off.
@@ -34,16 +35,12 @@ import { moveActor } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import type { PlayerSaveData } from "shared/game/save";
 import type { Solid, WorldData } from "shared/game/world";
+import { headingOf, quantHeading, quantSpeed, RideState, SPEED_STEP, unpackRide } from "./rideKey";
 import { InputCommand, MOVE_ANGLE_STEPS, SPEED_SCALE } from "./types";
 
 const TAU = math.pi * 2;
 const QUARTER = math.pi / 2;
 
-/** heading steps per turn: 14 bits of the self block's u16 (0.022°) */
-export const HEADING_STEPS = 16384;
-/** speed step on the wire and in the simulation, u/s: a u8 of them reaches 510, the motorcycle's top speed */
-export const SPEED_STEP = 2;
-export const SPEED_STEPS_MAX = 255;
 /** the stick further than this from the heading brakes instead of opening the throttle */
 export const BRAKE_ANGLE = math.rad(100);
 /** a step that got less than this fraction of its length forward was head-on */
@@ -52,80 +49,6 @@ export const CRASH_ALONG = 0.5;
 export const BROKEN_RATIO = 0.25;
 /** the tag every parked vehicle carries (shared/sim/placement.ts) */
 export const VEHICLE_TAG = "vehicle";
-
-/** a mounted survivor's vehicle, on the wire's grid (see the header) */
-export interface RideState {
-	/** VehicleKind: 1 bicycle, 2 motorcycle */
-	kind: number;
-	/** integer 0..HEADING_STEPS-1, world frame (0 = +x, a quarter = +y, i.e. down the screen) */
-	heading: number;
-	/** integer 0..SPEED_STEPS_MAX, in SPEED_STEP u/s */
-	speed: number;
-}
-
-// ---------------------------------------------------------------- the grid
-
-/** v wrapped into [0, n) with floor semantics (identical in Luau and JS) */
-function wrapInt(v: number, n: number): number {
-	return v - math.floor(v / n) * n;
-}
-
-/** radians → heading step */
-export function quantHeading(rad: number): number {
-	return wrapInt(math.floor((rad / TAU) * HEADING_STEPS + 0.5), HEADING_STEPS);
-}
-
-/** heading step → radians in [0, 2π) */
-export function headingOf(step: number): number {
-	return (step / HEADING_STEPS) * TAU;
-}
-
-/** the most speed steps a kind can hold (its top speed on the grid) */
-export function topSteps(def: VehicleDef): number {
-	return math.min(SPEED_STEPS_MAX, math.floor(def.topSpeed / SPEED_STEP));
-}
-
-/** u/s → speed step, within what this vehicle can do */
-export function quantSpeed(v: number, def: VehicleDef): number {
-	return math.clamp(math.floor(v / SPEED_STEP + 0.5), 0, topSteps(def));
-}
-
-/** the ride's speed in u/s */
-export function rideSpeed(r: RideState): number {
-	return r.speed * SPEED_STEP;
-}
-
-/** the ride's heading in radians */
-export function rideHeading(r: RideState): number {
-	return headingOf(r.heading);
-}
-
-/**
- * The ride as ONE number, the 24 bits the self block carries (docs/MULTIPLAYER.md §4.2): kind · 2²² + heading · 2⁸
- * + speed, and 0 on foot. Prediction keeps it per command to compare with the server's at the ack.
- */
-export function packRide(r: RideState | undefined): number {
-	if (r === undefined) return 0;
-	return (r.kind * HEADING_STEPS + r.heading) * 256 + r.speed;
-}
-
-/** is `key` a ride the server could have sent? (kind 0..2, on foot = 0 exactly, speed within the kind's top) */
-export function rideKeyValid(key: number): boolean {
-	if (key !== math.floor(key) || key < 0) return false;
-	if (key === 0) return true;
-	const kind = math.floor(key / (HEADING_STEPS * 256));
-	const def = vehicleDef(kind);
-	if (def === undefined) return false;
-	return key % 256 <= topSteps(def);
-}
-
-/** the ride a valid key names, or undefined on foot (see `rideKeyValid`) */
-export function unpackRide(key: number): RideState | undefined {
-	if (key <= 0) return undefined;
-	const speed = key % 256;
-	const hk = math.floor(key / 256);
-	return { kind: math.floor(hk / HEADING_STEPS), heading: hk % HEADING_STEPS, speed };
-}
 
 /** puts the ride named by `key` on the survivor (a fresh table: the old one may be in a history) */
 export function applyRideKey(p: PlayerState, key: number): void {
@@ -299,7 +222,8 @@ export function parkedHeading(s: Solid): number {
 
 /** the quarter turn (0..3) nearest to a heading in radians: how a vehicle is left when the rider gets off */
 export function quarterOf(rad: number): number {
-	return wrapInt(math.floor(rad / QUARTER + 0.5), 4);
+	const q = math.floor(rad / QUARTER + 0.5);
+	return q - math.floor(q / 4) * 4;
 }
 
 /** the axis-aligned footprint of a vehicle of `def` parked at (cx, cy) on quarter turn `rot` */
@@ -316,3 +240,5 @@ export function parkedRect(
 }
 
 export { VEHICLES, vehicleDef, VehicleKind };
+// the wire's grid (packRide, rideKeyValid, the steps...) lives in ./rideKey so the protocol can load it bare
+export * from "./rideKey";
