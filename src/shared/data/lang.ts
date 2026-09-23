@@ -615,6 +615,13 @@ export const LANG_TABLE: Array<string> = [
 	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
 	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Pick an item to try it on in the preview, then buy or wear it.",
+	// the HUD console (client/ui/hudConsole.ts, DESIGN_RULES UI-09): the bar prefixes ("HP 88 / 100", "LV 3 · 30 / 120")
+	// and the weapon hotbar's row of the controls reference (tutorial.ts SCHEMES)
+	"HP",
+	"FOOD",
+	"LV",
+	"Switch weapon",
+	"Tap a weapon",
 	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor
 	// screen, which enters the city; "Day" frames the town's day ("Enter the city  ·  Day 7")
 	"Start",

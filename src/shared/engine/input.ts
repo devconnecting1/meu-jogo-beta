@@ -192,7 +192,7 @@ export interface TouchLayout {
 	use: TouchButton;
 	/** reload, above the aim pad */
 	reload: TouchButton;
-	/** backpack and pause: top corner opposite the vitals card, never under the Roblox bar */
+	/** backpack and pause: the top-right corner, never under the Roblox bar */
 	bag: TouchButton;
 	pause: TouchButton;
 }
@@ -347,7 +347,8 @@ export function computeTouchLayout(prefs: TouchPrefs, viewW: number, viewH: numb
 		y: math.max(aim.homeY - arc * 0.52, topY + btnR * 2 + gap),
 		r: btnR,
 	};
-	// backpack + pause live in the top-right corner (the vitals card owns the top-left on every layout)
+	// backpack + pause live in the top-right corner, clear of both thumbs (the vitals are in the HUD's bottom
+	// console, which client/ui/hudConsole.ts fits between the thumbs from these same numbers)
 	const bag: TouchButton = { x: viewW - marginX - btnR, y: topY, r: btnR };
 	const pause: TouchButton = { x: bag.x - btnR * 2 - gap, y: topY, r: btnR };
 
