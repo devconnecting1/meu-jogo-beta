@@ -5,12 +5,16 @@
  * MP_PHASE decides how much of the game the server owns (§11.1), and it grows one phase at a time:
  *   0  each client simulates its own world; the server only owns save, coins and shop.
  *   1  the server owns PLAYER MOVEMENT (tick, input queue, snapshots, interest); zombies are still
- *      simulated locally by each client, so two clients see different hordes -- expected until F2.
+ *      simulated locally by each client, so two clients see different hordes.
+ *   2  the server owns THE WORLD: the horde and the bosses (§3.3, §3.5), the clock and the night waves
+ *      (§4.6), every shot, bite and point of damage (§2.3) and the XP (§3.6). The client simulates
+ *      nothing any more -- it draws the snapshot it receives (§4.2) and predicts only its own movement
+ *      and its own weapon cosmetics (§2.5). One horde, one clock, one set of netIds, on every screen.
  * tools/test-net.mjs pins the value, so it cannot move by accident: change both together.
  */
 
 /** migration phase switch (§11.1): 0 = current game (one world per client); 1..5 = server subsystems on */
-export const MP_PHASE = 1 as number;
+export const MP_PHASE = 2 as number;
 
 // ---------------------------------------------------------------- frequencies (§0.1, §3.1, §3.4)
 
@@ -146,6 +150,13 @@ export const UNRELIABLE_MAX_BYTES = 900;
 export const SNAP_MAX_BYTES = UNRELIABLE_MAX_BYTES;
 /** a snapshot is split into self-contained parts; the header has 2 bits for the count (§4.2) */
 export const SNAP_MAX_PARTS = 4;
+/**
+ * Zombies in ONE snapshot, nearest first (§4.2's worst case: 60 of the near ring + half of a 60-strong mid
+ * ring). The protocol would carry four parts, but four parts at 20 Hz is 72 kB/s — three times the §4.7
+ * budget — so the cap is what keeps a 150-strong horde inside two packets and inside the bandwidth target.
+ * Whatever does not fit is the FURTHEST away, which is also the least worth drawing.
+ */
+export const SNAP_ZOMBIE_CAP = 90;
 /** one Fx batch (§4.1) */
 export const FX_MAX_BYTES = UNRELIABLE_MAX_BYTES;
 /** one World batch / WorldInit block (§4.5: blocks of buffer ≤ 16 KB) */

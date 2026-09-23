@@ -10,6 +10,13 @@
 export interface RemotePlayerView {
 	/** Players.UserId — stable id of the entity across snapshots */
 	userId: number;
+	/**
+	 * Their player slot, 0..MAX_PLAYERS-1 (§4.4). The view pools plates and bodies by userId, which is what
+	 * survives a slot being freed and handed to somebody else; the SLOT is what the binary channels address
+	 * a survivor by (§4.2's `Shot`, §4.2's `Shake`), so a view that has to resolve "who fired this" needs
+	 * both. Without it a received shot can only draw its impacts and no line.
+	 */
+	slot: number;
 	/** what the nameplate shows */
 	displayName: string;
 	level: number;

@@ -9,13 +9,17 @@
  *   prediction.ts      predict the local survivor, reconcile with the last ack, bleed the error off (§2.2, §5.2)
  *   snapshotBuffer.ts  reassemble snapshots and interpolate everyone else for the render time (§4.4, §5.1)
  *
- * The seam the game loop sees is three functions and nothing else:
+ * The seam the game loop sees is a handful of functions and nothing else:
  *
  *   netActive()            is this client in a server-simulated session?
  *   netUpdate(refs, dt)    once per frame: sample input into 60 Hz commands, send them (with redundancy), predict
- *                          the local survivor into refs.player, reconcile with the last ack, and advance the
- *                          interpolation of everyone else
+ *                          the local survivor into refs.player, reconcile with the last ack, advance the
+ *                          interpolation of everyone else, and apply the world deltas that arrived
  *   remotePlayers()        the other survivors, interpolated for the current render time
+ *   remoteZombies()        the horde, interpolated: from F2 the client draws it and simulates none of it
+ *   remoteBosses()         the same for bosses (the centipede's body is rebuilt by the view from its head)
+ *   takeNetFx(out)         the cosmetic effects of the ticks since the last frame (§4.1 Fx)
+ *   takeZombieDeaths(out)  the reliable deaths of §4.4: blood, a corpse and a drop, where the body fell
  *
  * While MP_PHASE = 0 netActive() is false, no remote is ever looked up, and the game loop keeps stepping the local
  * player itself — the single-player build behaves exactly as before.
@@ -34,15 +38,18 @@ import { RemotePlayerView } from "./netTypes";
 import { ClockSync } from "./clockSync";
 import { CommandStream, RawInput } from "./commands";
 import { Prediction } from "./prediction";
-import { RemoteState, SnapshotBuffer } from "./snapshotBuffer";
+import { RemoteBoss, RemoteState, RemoteZombie, SnapshotBuffer } from "./snapshotBuffer";
 import { createRawInput, readRawInput } from "./localInput";
 import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, TIME_SYNC_RATE } from "shared/net/mpConfig";
 import {
+	AnnounceKind,
+	FxEvent,
 	InputCommand,
 	IntentKind,
 	LifeState,
+	REMOTE_FX,
 	REMOTE_INPUT,
 	REMOTE_INTENT,
 	REMOTE_SNAP,
@@ -51,6 +58,7 @@ import {
 	SnapshotPart,
 	WorldEv,
 	WorldEvent,
+	decodeFx,
 	decodeSnapshotPart,
 	decodeTimePong,
 	decodeWorld,
@@ -77,6 +85,10 @@ const TIME_SYNC_PERIOD = 1 / math.max(1, TIME_SYNC_RATE / 2);
  * than a fresh one, so the oldest is the one to drop.
  */
 const MAX_QUEUED_PARTS = 96;
+/** effects waiting for the next frame; a second of a heavy firefight, and the oldest is the one to drop */
+const MAX_QUEUED_FX = 256;
+/** deaths waiting for the next frame: reliable, so they are never dropped in flight, only if nobody draws */
+const MAX_QUEUED_DEATHS = 256;
 /** how long the handshake may take before it is worth a line in the log (seconds) */
 const RunService = game.GetService("RunService");
 
@@ -113,8 +125,18 @@ interface Remotes {
 	input: UnreliableRemoteEvent;
 	intent: RemoteEvent;
 	snap: UnreliableRemoteEvent;
+	fx: UnreliableRemoteEvent;
 	world: RemoteEvent;
 	timeSync: UnreliableRemoteEvent;
+}
+
+/** one zombie death the view still has to play: blood, a corpse and a drop, where the body fell (§4.4) */
+export interface ZombieDeathEvent {
+	netId: number;
+	x: number;
+	y: number;
+	/** DeathCause (§4.4): which blood and which debris */
+	cause: number;
 }
 
 export interface NetStats {
@@ -153,6 +175,11 @@ export interface NetStats {
 	snapDropped: number;
 	/** remote survivors the buffer is interpolating */
 	tracked: number;
+	/** zombies and bosses the buffer is interpolating — the number that must match on every client (§11.3) */
+	zombies: number;
+	bosses: number;
+	/** Fx events thrown away because the queue was full (the client was not drawing) */
+	fxDropped: number;
 	/** commands still waiting for an ack */
 	pending: number;
 	/** current sampling rate, 58.8 … 61.2 Hz */
@@ -169,6 +196,11 @@ const snapshots = new SnapshotBuffer();
 const roster = new Map<number, RosterEntry>();
 const queue = new Array<SnapshotPart>();
 const views = new Array<RemotePlayerView>();
+/** effects and deaths that arrived since the last frame; the view drains both (see `netUpdate`) */
+const fxQueue = new Array<FxEvent>();
+const deaths = new Array<ZombieDeathEvent>();
+const pendingAnnounce = new Array<string>();
+let pendingClock: { worldDay: number; dayTime: number; tick: number; rain: boolean; waveFlags: number } | undefined;
 const sampled = new Array<InputCommand>();
 const raw: RawInput = createRawInput();
 
@@ -179,6 +211,7 @@ let hasEpoch = false;
 let mapHash = 0;
 let mapMismatch = false;
 let queueDropped = 0;
+let fxDropped = 0;
 let malformed = 0;
 let lastSelfTick = -math.huge;
 /** the local survivor's last reliable life state (§7.3), and whether it still has to reach refs.player */
@@ -234,6 +267,7 @@ function findRemotes(): Remotes | undefined {
 	const input = folder.FindFirstChild(REMOTE_INPUT);
 	const intent = folder.FindFirstChild(REMOTE_INTENT);
 	const snap = folder.FindFirstChild(REMOTE_SNAP);
+	const fx = folder.FindFirstChild(REMOTE_FX);
 	const world = folder.FindFirstChild(REMOTE_WORLD);
 	const timeSync = folder.FindFirstChild(REMOTE_TIME_SYNC);
 	if (
@@ -243,6 +277,8 @@ function findRemotes(): Remotes | undefined {
 		!intent.IsA("RemoteEvent") ||
 		snap === undefined ||
 		!snap.IsA("UnreliableRemoteEvent") ||
+		fx === undefined ||
+		!fx.IsA("UnreliableRemoteEvent") ||
 		world === undefined ||
 		!world.IsA("RemoteEvent") ||
 		timeSync === undefined ||
@@ -250,7 +286,7 @@ function findRemotes(): Remotes | undefined {
 	) {
 		return undefined;
 	}
-	return { input, intent, snap, world, timeSync };
+	return { input, intent, snap, fx, world, timeSync };
 }
 
 /** looks the remotes up (they only exist when the server runs the MP host) and wires the handlers up once */
@@ -262,6 +298,7 @@ function connect(): boolean {
 	remotes = found;
 	connections.push(found.world.OnClientEvent.Connect(payload => onWorld(payload)));
 	connections.push(found.snap.OnClientEvent.Connect(payload => onSnap(payload)));
+	connections.push(found.fx.OnClientEvent.Connect(payload => onFx(payload)));
 	connections.push(found.timeSync.OnClientEvent.Connect(payload => onTimeSync(payload)));
 	return true;
 }
@@ -311,8 +348,36 @@ function applyWorldEvent(e: WorldEvent): void {
 			localLife = e.state;
 			localLifeDirty = true;
 		}
+		return;
 	}
-	// every other delta (world, items, clock) lands in F2/F3, when the client stops owning those systems
+	if (e.t === WorldEv.ZombieDied) {
+		// reliable, so it can be acted on at once: the body leaves the interpolation NOW and the view plays
+		// the blood, the corpse and the drop at the position this event carries, not at the last one guessed
+		snapshots.forgetZombie(e.netId);
+		if (deaths.size() >= MAX_QUEUED_DEATHS) deaths.remove(0);
+		deaths.push({ netId: e.netId, x: e.x, y: e.y, cause: e.cause });
+		return;
+	}
+	if (e.t === WorldEv.Clock) {
+		// the age of the delta matters: it was sampled at `e.tick`, and by the time it is applied the world
+		// has moved on. Replaying that gap is what keeps the received hour from pulling the clock backwards.
+		pendingClock = e;
+		return;
+	}
+	if (e.t === WorldEv.Announce) {
+		pendingAnnounce.push(announceText(e.msg, e.arg));
+		return;
+	}
+	// the remaining deltas (constructions, doors, items) land in F3, when the client stops owning them
+}
+
+/** §4.5: the wire carries an AnnounceKind and an argument; the text is the client's (shared/data/lang.ts) */
+function announceText(msg: number, arg: number): string {
+	if (msg === AnnounceKind.Wave) return `Wave ${math.max(1, math.floor(arg))}`;
+	if (msg === AnnounceKind.Night) return "Night";
+	if (msg === AnnounceKind.BossSpawn) return "Boss";
+	if (msg === AnnounceKind.BossKilled) return "Boss defeated";
+	return "Good morning";
 }
 
 /** compares InitBegin's hash with the town this client generated, once both are known (§4.5) */
@@ -335,6 +400,27 @@ function onSnap(payload: unknown): void {
 		queueDropped += 1;
 	}
 	queue.push(part);
+}
+
+/**
+ * One `Fx` batch (§4.1). Unreliable and ephemeral by design: a lost batch is a blood spurt nobody saw, which
+ * is worth far less than the head-of-line delay reliability would put on every packet behind it. The queue is
+ * drained by the game loop once a frame, and it is capped because a client that is not drawing (a menu, a
+ * load) must not grow a table of effects it will never play.
+ */
+function onFx(payload: unknown): void {
+	const batch = decodeFx(payload);
+	if (batch === undefined) {
+		malformed += 1;
+		return;
+	}
+	for (const e of batch.events) {
+		if (fxQueue.size() >= MAX_QUEUED_FX) {
+			fxQueue.remove(0);
+			fxDropped += 1;
+		}
+		fxQueue.push(e);
+	}
 }
 
 function onTimeSync(payload: unknown): void {
@@ -381,6 +467,7 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	const now = os.clock();
 	applyLife(refs);
 	const tick = clock.update(dt, Workspace.GetServerTimeNow());
+	applyClock(refs, tick);
 	reconcile(now);
 	predict(refs, dt);
 	snapshots.advance(dt, tick, now, refs.world);
@@ -404,12 +491,14 @@ function logStats(now: number): void {
 	const st = netStats();
 	print(
 		string.format(
-			"[PZ-NET] slot %d | roster %d | outros %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
+			"[PZ-NET] slot %d | roster %d | outros %d | zumbis %d | chefes %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
 				"SUAVIDADE: atraso %.0f ms, intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d | " +
 				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f%s",
 			st.slot,
 			st.roster,
 			views.size(),
+			st.zombies,
+			st.bosses,
 			st.rtt * 1000,
 			st.errorP99,
 			st.correctionsPerMinute,
@@ -437,6 +526,33 @@ export function remotePlayers(): ReadonlyArray<RemotePlayerView> {
 }
 
 /**
+ * The horde, interpolated for this frame's render time. In phase 2 this is the ONLY horde a client has: the
+ * local simulation is switched off (client/systems/zombieAI.ts), so what is drawn is what the server sent —
+ * same bodies, same `netId`s, same positions on every screen (§11.3 F2).
+ */
+export function remoteZombies(): ReadonlyArray<RemoteZombie> {
+	return snapshots.zombieStates();
+}
+
+export function remoteBosses(): ReadonlyArray<RemoteBoss> {
+	return snapshots.bossStates();
+}
+
+/** the effects received since the last call, appended to `out` and cleared here (§4.1 Fx) */
+export function takeNetFx(out: Array<FxEvent>): Array<FxEvent> {
+	for (const e of fxQueue) out.push(e);
+	fxQueue.clear();
+	return out;
+}
+
+/** the zombie deaths received since the last call (§4.4), appended to `out` and cleared here */
+export function takeZombieDeaths(out: Array<ZombieDeathEvent>): Array<ZombieDeathEvent> {
+	for (const d of deaths) out.push(d);
+	deaths.clear();
+	return out;
+}
+
+/**
  * Binds the admin switches the game loop owns, by reference. Called once, from GameLoop.init(); the free camera
  * has to freeze the survivor in a server session exactly as it does locally.
  */
@@ -452,6 +568,10 @@ export function netReset(): void {
 	snapshots.reset();
 	queue.clear();
 	views.clear();
+	fxQueue.clear();
+	deaths.clear();
+	pendingAnnounce.clear();
+	pendingClock = undefined;
 	lastSelfTick = -math.huge;
 	localLife = LifeState.Up;
 	localLifeDirty = false;
@@ -486,6 +606,9 @@ export function netStats(): NetStats {
 		snapAccepted: sb.accepted,
 		snapDropped: sb.dropped,
 		tracked: sb.tracked,
+		zombies: sb.zombies,
+		bosses: sb.bosses,
+		fxDropped,
 		pending: c.pending,
 		sampleHz: c.sampleHz,
 	};
@@ -568,8 +691,27 @@ function bind(refs: GameRefs): boolean {
 	snapshots.reset();
 	queue.clear();
 	views.clear();
+	fxQueue.clear();
+	deaths.clear();
 	lastSelfTick = -math.huge;
 	return true;
+}
+
+/**
+ * The world clock and its announcements (§4.5, §4.6), onto the DayNight the loop owns. The delta is aged by
+ * the ticks that passed between the sample and this frame, so applying it never drags the visible hour back;
+ * `applyClock` itself decides whether to ease the error away or jump (an admin moving the clock).
+ */
+function applyClock(refs: GameRefs, tickNow: number): void {
+	const c = pendingClock;
+	if (c !== undefined) {
+		pendingClock = undefined;
+		const age = math.max(0, (tickNow - unwrapTick(c.tick, math.floor(tickNow))) / clock.rate());
+		refs.daynight.applyClock(c, age);
+	}
+	if (pendingAnnounce.size() === 0) return;
+	for (const text of pendingAnnounce) refs.daynight.announce(text);
+	pendingAnnounce.clear();
 }
 
 /**
@@ -655,6 +797,7 @@ function rebuildViews(): void {
 function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 	return {
 		userId: entry.userId,
+		slot: entry.slot,
 		displayName: entry.displayName,
 		level: entry.level,
 		x: state.x,

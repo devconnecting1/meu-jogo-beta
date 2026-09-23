@@ -449,7 +449,7 @@ test("mpConfig: values match the doc and the game data", () => {
 	// Pinned on purpose: the phase decides how much of the game the server owns, so it must never move by
 	// accident. Bump this together with docs/MULTIPLAYER.md S11.3 when a phase actually lands. F1 (server
 	// owns player movement; zombies still local per client) is on for internal testing.
-	eq("MP_PHASE", CFG.MP_PHASE, 1);
+	eq("MP_PHASE", CFG.MP_PHASE, 2);
 	eq("SIM_HZ", CFG.SIM_HZ, 60);
 	near("TICK_DT", CFG.TICK_DT, 1 / 60, 1e-12);
 	eq("MAX_PLAYERS", CFG.MAX_PLAYERS, 6);
@@ -939,7 +939,7 @@ test("Snap: malformed parts are refused", () => {
 // ---------------------------------------------------------------- 5. Fx (S→C)
 
 function randFxEvent() {
-	const kind = rint(1, 8);
+	const kind = rint(1, 10);
 	if (kind === P.FxType.Shot) {
 		const hits = [];
 		const n = rint(0, 5);
@@ -965,13 +965,32 @@ function randFxEvent() {
 		return { t: P.FxType.Blood, x: rx(), y: ry(), angle: rang(), amount: rint(0, 255), kind: rint(0, 1) };
 	}
 	if (kind === P.FxType.Debris) {
-		return { t: P.FxType.Debris, x: rx(), y: ry(), angle: rang(), material: rint(0, 255) };
+		return { t: P.FxType.Debris, x: rx(), y: ry(), angle: rang(), material: rint(0, 255), count: rint(0, 255) };
 	}
 	if (kind === P.FxType.SolidShake) {
 		return { t: P.FxType.SolidShake, solidId: rint(1, 2000000), angle: rang(), strength: rnd() };
 	}
 	if (kind === P.FxType.Explosion) {
 		return { t: P.FxType.Explosion, x: rx(), y: ry(), radius: rint(0, 255) * 4, kind: rint(0, 255) };
+	}
+	if (kind === P.FxType.Shake) {
+		return {
+			t: P.FxType.Shake,
+			slot: rint(0, CFG.MAX_PLAYERS - 1),
+			magnitude: rint(0, 255) * P.SHAKE_MAG_STEP,
+			duration: rint(0, 255) * P.FX_TIME_STEP,
+		};
+	}
+	if (kind === P.FxType.Tracer) {
+		return {
+			t: P.FxType.Tracer,
+			x1: rx(),
+			y1: ry(),
+			x2: rx(),
+			y2: ry(),
+			kind: rint(1, P.TRACER_KIND_MAX),
+			life: rint(0, 255) * P.FX_TIME_STEP,
+		};
 	}
 	return { t: P.FxType.Sound, sound: rint(0, 255), x: rx(), y: ry(), volume: rnd() };
 }
@@ -1012,6 +1031,7 @@ function compareFxEvent(a, b) {
 		case P.FxType.Debris:
 			near("debris y", b.y, a.y, POS_TOL);
 			eq("material", b.material, a.material);
+			eq("debris count", b.count, a.count);
 			break;
 		case P.FxType.SolidShake:
 			eq("solid id", b.solidId, a.solidId);
@@ -1025,6 +1045,17 @@ function compareFxEvent(a, b) {
 		case P.FxType.Sound:
 			eq("sound", b.sound, a.sound);
 			near("volume", b.volume, a.volume, FRAC8_TOL);
+			break;
+		case P.FxType.Shake:
+			eq("shake slot", b.slot, a.slot);
+			near("shake magnitude", b.magnitude, a.magnitude, P.SHAKE_MAG_STEP);
+			near("shake duration", b.duration, a.duration, P.FX_TIME_STEP);
+			break;
+		case P.FxType.Tracer:
+			near("tracer x1", b.x1, a.x1, POS_TOL);
+			near("tracer y2", b.y2, a.y2, POS_TOL);
+			eq("tracer kind", b.kind, a.kind);
+			near("tracer life", b.life, a.life, P.FX_TIME_STEP);
 			break;
 	}
 }
@@ -1536,6 +1567,18 @@ test("bandwidth: measured sizes vs the estimates of §4.7", () => {
 		`${(docSnapBps / 1000).toFixed(1)} kB/s (§4.7)`,
 	]);
 	ok(snapBps < CFG.BANDWIDTH_WORST_BPS, `snapshots alone (${snapBps} B/s) must stay under the worst-case budget`);
+	// what the server ACTUALLY sends from F2 on: the replicator sorts by distance and cuts at SNAP_ZOMBIE_CAP,
+	// which is the knob that keeps a 150-strong horde inside two packets and inside the §4.7 budget
+	const capped = randSnapshot(5, CFG.SNAP_ZOMBIE_CAP, 2, true, true);
+	const cappedRes = P.encodeSnapshot(capped);
+	const cappedBytes = cappedRes.parts.reduce((a, p) => a + buffer.len(p), 0);
+	eq("nothing is dropped at the replicator's own cap", cappedRes.dropped, 0);
+	ok(cappedRes.parts.length <= 2, `the cap holds a snapshot to 2 parts (${cappedRes.parts.length})`);
+	sizes.push([
+		`Downstream, snapshots at SNAP_ZOMBIE_CAP (${CFG.SNAP_ZOMBIE_CAP})`,
+		`${((cappedBytes * CFG.SNAP_NEAR_HZ) / 1000).toFixed(1)} kB/s (${cappedBytes} B in ${cappedRes.parts.length} parts)`,
+		"measured end to end in tools/test-replication.mjs",
+	]);
 	const typical = randSnapshot(2, 25, 0, true, false);
 	for (const z of typical.zombies) delete z.extra;
 	const typBytes = P.encodeSnapshot(typical).parts.reduce((a, p) => a + buffer.len(p), 0);

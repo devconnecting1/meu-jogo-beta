@@ -135,6 +135,13 @@ function rollGroundLoot(): { kind: number; index: number; count: number } {
  */
 export class Population {
 	private clusterTimer = CLUSTER_TICK;
+	/**
+	 * How many survivors the current clusters were built for. A cluster stores INDICES into `refs.players`,
+	 * so somebody joining or leaving renumbers every survivor after them: waiting out the 1 s CLUSTER_TICK
+	 * with a stale partition means spawning around, and reading the hp of, a survivor who is not there any
+	 * more — which, on a server that owns the horde, is a crash a player can cause by walking out.
+	 */
+	private clusterRoster = -1;
 	private clusters: Array<Cluster> = [];
 	private readonly states = new Map<number, ClusterState>();
 
@@ -209,6 +216,7 @@ export class Population {
 	private rebuildClusters(refs: Ctx.AiRefs): void {
 		const players = refs.players;
 		const n = players.size();
+		this.clusterRoster = n;
 		const parent = new Array<number>();
 		for (let i = 0; i < n; i++) parent.push(i);
 		const find = (i: number): number => {
@@ -276,7 +284,8 @@ export class Population {
 	private ringPlayer(refs: Ctx.AiRefs, c: Cluster, st: ClusterState): { x: number; y: number } {
 		const i = c.members[st.rr % c.members.size()];
 		st.rr = (st.rr + 1) % c.members.size();
-		return refs.players[i];
+		// the same one-tick staleness as `updateDirector`: ring the first survivor rather than a hole
+		return refs.players[i] ?? refs.players[0];
 	}
 
 	private spawnZombie(refs: Ctx.AiRefs, c: Cluster, st: ClusterState, zType: ZombieType, wave: boolean): boolean {
@@ -385,7 +394,9 @@ export class Population {
 		let alive = 0;
 		for (const i of c.members) {
 			const p = refs.players[i];
-			if (p.dead) continue;
+			// belt and braces over the rebuild above: a member index is only ever stale for one tick, and
+			// one tick of a wrong hp reading is cheaper than a crash in the middle of a night
+			if (p === undefined || p.dead) continue;
 			alive++;
 			hp += math.max(0, p.hp);
 			hpMax += p.hpMax;
@@ -399,6 +410,7 @@ export class Population {
 			if (z.hp <= 0) continue;
 			for (const i of c.members) {
 				const p = refs.players[i];
+				if (p === undefined) continue;
 				const dx = p.x - z.x;
 				const dy = p.y - z.y;
 				if (dx * dx + dy * dy < Dir.DIRECTOR_NEAR * Dir.DIRECTOR_NEAR) {
@@ -497,7 +509,7 @@ export class Population {
 		// nobody in the world: nothing to spawn around, and nothing to recycle against
 		if (refs.players.size() === 0) return;
 		this.clusterTimer += dt;
-		if (this.clusterTimer >= CLUSTER_TICK) {
+		if (this.clusterTimer >= CLUSTER_TICK || this.clusterRoster !== refs.players.size()) {
 			this.clusterTimer = 0;
 			this.rebuildClusters(refs);
 		}

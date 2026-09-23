@@ -44,6 +44,9 @@
  *     measure RTT and check GetServerTimeNow's offset while testing; it has its own rate limit (mpConfig).
  * 10. Projectile speed u8 in 8 u/s (≤ 2040 u/s: arrows 600, bullets 1800); explosion radius u8 in 4 u.
  *     Boss flags/phase/extra and zombie `extra` are raw bytes whose meaning F2 defines (not validated).
+ * 11. (F2-2D) Two Fx events the horde needs and F0 had no place for: `Shake` (§4.2 lists "Blood/Debris/Shake"),
+ *     the camera kick of ONE survivor, and `Tracer`, a drawn shot line nobody can predict (a boss beam). A
+ *     survivor's own muzzle flash, kick and tracer stay client-side (§2.5), so neither is ever sent for one.
  */
 import {
 	NetReader,
@@ -856,6 +859,10 @@ export const FxType = {
 	SolidShake: 6,
 	Explosion: 7,
 	Sound: 8,
+	/** camera shake of ONE survivor (§4.2 lists "Blood/Debris/Shake"); F2-2D: the horde asks for it */
+	Shake: 9,
+	/** a drawn shot line the client cannot predict (a boss beam); the survivors' own tracers are local */
+	Tracer: 10,
 } as const;
 
 /** what a hitscan projectile ended on */
@@ -899,6 +906,12 @@ export const FX_SHOT_MAX_HITS = 16;
 export const PROJ_SPEED_STEP = 8;
 /** explosion radius step (u) */
 export const EXPLOSION_RADIUS_STEP = 4;
+/** Shake.magnitude step: the simulation asks for 3..7, so 1/8 of a unit is finer than anyone can see */
+export const SHAKE_MAG_STEP = 1 / 8;
+/** seconds per step of Shake.duration and Tracer.life (both are fractions of a second) */
+export const FX_TIME_STEP = 1 / 100;
+/** TracerKind ids 1..3 (shared/sim/types.ts: bullet, electric, boss) */
+export const TRACER_KIND_MAX = 3;
 
 export interface ShotHit {
 	x: number;
@@ -955,8 +968,10 @@ export interface FxDebris {
 	x: number;
 	y: number;
 	angle: number;
-	/** material id (raw) */
+	/** material id (shared/net/fxWire.ts) */
 	material: number;
+	/** particles, 0..255 — the same field `Blood` has, so a 3-chip hit and an exploder differ on screen */
+	count: number;
 }
 
 export interface FxSolidShake {
@@ -987,7 +1002,30 @@ export interface FxSound {
 	volume: number;
 }
 
-export type FxEvent = FxShot | FxProjSpawn | FxProjEnd | FxBlood | FxDebris | FxSolidShake | FxExplosion | FxSound;
+export interface FxShake {
+	t: typeof FxType.Shake;
+	/** whose camera shakes; SLOT_NONE would shake nobody, so the encoder drops those */
+	slot: number;
+	/** 0..31.875 in SHAKE_MAG_STEP */
+	magnitude: number;
+	/** 0..2.55 s in FX_TIME_STEP */
+	duration: number;
+}
+
+export interface FxTracer {
+	t: typeof FxType.Tracer;
+	x1: number;
+	y1: number;
+	x2: number;
+	y2: number;
+	/** TracerKind 1..3 */
+	kind: number;
+	/** 0..2.55 s in FX_TIME_STEP */
+	life: number;
+}
+
+export type FxEvent =
+	FxShot | FxProjSpawn | FxProjEnd | FxBlood | FxDebris | FxSolidShake | FxExplosion | FxSound | FxShake | FxTracer;
 
 export interface FxBatch {
 	tick: number;
@@ -1038,6 +1076,7 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 			w.pos(e.y);
 			w.angle8(e.angle);
 			w.u8(e.material);
+			w.u8(e.count);
 			break;
 		case FxType.SolidShake:
 			w.u32(e.solidId);
@@ -1055,6 +1094,19 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 			w.pos(e.x);
 			w.pos(e.y);
 			w.frac8(e.volume);
+			break;
+		case FxType.Shake:
+			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
+			w.u8(e.magnitude / SHAKE_MAG_STEP);
+			w.u8(e.duration / FX_TIME_STEP);
+			break;
+		case FxType.Tracer:
+			w.pos(e.x1);
+			w.pos(e.y1);
+			w.pos(e.x2);
+			w.pos(e.y2);
+			w.u8(clampInt(e.kind, 1, TRACER_KIND_MAX));
+			w.u8(e.life / FX_TIME_STEP);
 			break;
 	}
 }
@@ -1106,7 +1158,8 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const material = r.u8();
-		return { t: FxType.Debris, x, y, angle, material };
+		const count = r.u8();
+		return { t: FxType.Debris, x, y, angle, material, count };
 	} else if (t === FxType.SolidShake) {
 		const solidId = r.u32();
 		const angle = r.angle8();
@@ -1125,6 +1178,21 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const volume = r.frac8();
 		return { t: FxType.Sound, sound, x, y, volume };
+	} else if (t === FxType.Shake) {
+		const slot = r.u8();
+		const magnitude = r.u8() * SHAKE_MAG_STEP;
+		const duration = r.u8() * FX_TIME_STEP;
+		if (!validSlot(slot)) return undefined;
+		return { t: FxType.Shake, slot, magnitude, duration };
+	} else if (t === FxType.Tracer) {
+		const x1 = r.pos();
+		const y1 = r.pos();
+		const x2 = r.pos();
+		const y2 = r.pos();
+		const kind = r.u8();
+		const life = r.u8() * FX_TIME_STEP;
+		if (kind < 1 || kind > TRACER_KIND_MAX) return undefined;
+		return { t: FxType.Tracer, x1, y1, x2, y2, kind, life };
 	}
 	return undefined;
 }

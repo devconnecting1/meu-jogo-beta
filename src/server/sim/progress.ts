@@ -71,6 +71,23 @@ export function creditBossKill(save: PlayerSaveData): void {
 }
 
 /**
+ * The world's clock passed midnight and this survivor lived through it (§3.6 "Dia sobrevivido", §6.2).
+ *
+ * `day` is the survivor's OWN day — how long this run has lasted — which is not the world's day: somebody
+ * joining on world day 30 starts their run at 1. Before F2 the client counted it and reported it; with the
+ * report's progress fields now pinned (`stripClientProgress`), this is the only thing that can still move
+ * it, and without it a run's day would be frozen for ever.
+ *
+ * The §3.6 refinements — at least half the day in the world, and not AFK — need the presence machine of F4
+ * (§7.2); until then everybody who is in the world at midnight is credited, which is what the single-player
+ * game did for the one player it had.
+ */
+export function creditDaySurvived(save: PlayerSaveData): void {
+	save.day = math.min(SAVE_LIMITS.DAY_MAX, save.day + 1);
+	save.bestDay = math.clamp(math.max(save.bestDay, save.day), 1, SAVE_LIMITS.DAY_MAX);
+}
+
+/**
  * Overwrites every server-owned progress field of a client report with the trusted copy, and answers whether
  * the report had tried to move any of them. With MP_PHASE ≥ 2 the server counted those numbers itself, so a
  * report carrying different ones is not "suspicious", it is simply **stale** — §9.2 level 0, corrected in

@@ -21,6 +21,9 @@
 import { angleLerp, lerp } from "shared/engine/vec2";
 import { unwrapTick } from "shared/net/codec";
 import {
+	DESPAWN_FADE_S,
+	DESPAWN_MID_S,
+	DESPAWN_NEAR_S,
 	EXTRAPOLATE_MAX_S,
 	INTERP_DEFAULT_S,
 	INTERP_MAX_S,
@@ -28,8 +31,9 @@ import {
 	SIM_HZ,
 	SNAP_NEAR_HZ,
 } from "shared/net/mpConfig";
-import { PlayerSnap, SnapshotPart } from "shared/net/protocol";
+import { BossSnap, PlayerSnap, SnapshotPart, ZombieSnap } from "shared/net/protocol";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
+import { ZOMBIE_BASE_RADIUS } from "shared/game/entities";
 import { WorldData } from "shared/game/world";
 
 /** samples kept per entity: 1.5 s at 20 Hz, comfortably more than INTERP_MAX_S + EXTRAPOLATE_MAX_S */
@@ -46,6 +50,13 @@ const SLOT_TIMEOUT_S = 2;
 export const FEET_CYCLE_PER_UNIT = 0.09;
 /** a render time this far behind the previous frame's is a resync, not jitter: let it through */
 const RENDER_RESET_S = 1;
+/**
+ * How fast a received body fades in and out, per second. It is the very rate the horde's own `updateAlpha`
+ * used before F2 (shared/sim/ai/zombieBrain.ts), and §4.3 leans on it: with the interest hiding whatever is
+ * outside every light at night, a zombie stepping into a lamp's circle appears — and this is what stops it
+ * appearing as a pop. §4.4's despawn fade rides the same number.
+ */
+const ALPHA_RATE = 3;
 
 /** one survivor as the interpolation sees them right now */
 export interface RemoteState {
@@ -80,6 +91,52 @@ export interface RemoteState {
 	stale: boolean;
 }
 
+/**
+ * One zombie as the interpolation sees it right now (§4.2's 9-byte record, made continuous again).
+ *
+ * In phase 2 the client SIMULATES nothing: every field here was decided on the server and every one that is
+ * not on the wire is derived from what is — `feetCycle` from the distance actually travelled, `alpha` from
+ * how long the body has been visible (§4.3's fade-in, §4.4's fade-out). There is no second horde to drift.
+ */
+export interface RemoteZombie {
+	netId: number;
+	x: number;
+	y: number;
+	/** the heading the server DREW with (`angleSlow`), interpolated the short way round */
+	angle: number;
+	/** ZombieFlag bits of the sample at or before the render time */
+	flags: number;
+	/** 1..ZOMBIE_TYPE_MAX */
+	type: number;
+	big: boolean;
+	/** jump height, or the spitter's head recoil — which one is told by the flags */
+	extra: number;
+	/** walk-cycle phase, advanced by the interpolated speed */
+	feetCycle: number;
+	/** world units per second, from the interpolation */
+	speed: number;
+	/** 0..1: fades in when it appears and out when it stops arriving (§4.3, §4.4) */
+	alpha: number;
+	/** the render time is past the newest sample: the state is extrapolated or held */
+	stale: boolean;
+}
+
+/** one boss, interpolated. The centipede's body is rebuilt by the view from this head (§4.2) */
+export interface RemoteBoss {
+	netId: number;
+	type: number;
+	x: number;
+	y: number;
+	angle: number;
+	/** 0..1 of its own maximum */
+	hp: number;
+	flags: number;
+	/** the per-type animation counter (`moveCycle` / `movePos`) */
+	phase: number;
+	alpha: number;
+	stale: boolean;
+}
+
 interface Sample {
 	tick: number;
 	x: number;
@@ -108,6 +165,24 @@ function sampleOf(tick: number, p: PlayerSnap): Sample {
 	};
 }
 
+/**
+ * Inserts one sample in tick order, dropping duplicates (the §2.2 redundancy, a resent part) and anything so
+ * far behind the newest that it can no longer be interpolated through. Shared by survivors, zombies and
+ * bosses: `Snap` is unreliable and unordered for all three, so there is one answer to that, in one place.
+ */
+function insertSample<T extends { tick: number }>(list: Array<T>, s: T): boolean {
+	const n = list.size();
+	if (n > 0 && s.tick <= list[n - 1].tick - MAX_REORDER_TICKS) return false;
+	let at = n;
+	while (at > 0 && list[at - 1].tick > s.tick) at -= 1;
+	if (at > 0 && list[at - 1].tick === s.tick) return false; // duplicate (redundant part or resend)
+	list.push(s);
+	for (let i = n; i > at; i--) list[i] = list[i - 1];
+	list[at] = s;
+	while (list.size() > SAMPLES_PER_SLOT) list.remove(0);
+	return true;
+}
+
 class SlotTrack {
 	readonly samples = new Array<Sample>();
 	lastSeen = 0;
@@ -118,23 +193,74 @@ class SlotTrack {
 
 	/** inserts in tick order; ignores duplicates and packets too old to matter */
 	insert(s: Sample): boolean {
-		const list = this.samples;
-		const n = list.size();
-		if (n > 0 && s.tick <= list[n - 1].tick - MAX_REORDER_TICKS) return false;
-		let at = n;
-		while (at > 0 && list[at - 1].tick > s.tick) at -= 1;
-		if (at > 0 && list[at - 1].tick === s.tick) return false; // duplicate (redundant part or resend)
-		list.push(s);
-		for (let i = n; i > at; i--) list[i] = list[i - 1];
-		list[at] = s;
-		while (list.size() > SAMPLES_PER_SLOT) list.remove(0);
-		return true;
+		return insertSample(this.samples, s);
 	}
 
 	newestTick(): number {
 		const n = this.samples.size();
 		return n > 0 ? this.samples[n - 1].tick : -math.huge;
 	}
+}
+
+/** one sample of a zombie or a boss; the unused half is simply zero (a zombie has no hp on the wire) */
+interface ActorSample {
+	tick: number;
+	x: number;
+	y: number;
+	angle: number;
+	flags: number;
+	type: number;
+	big: boolean;
+	extra: number;
+	hp: number;
+	phase: number;
+}
+
+class ActorTrack {
+	readonly samples = new Array<ActorSample>();
+	/** `arrival` of the newest sample: §4.4's despawn timeout is measured on it */
+	lastSeen = 0;
+	/** the entity was last seen in the mid ring, which gets 600 ms instead of 300 before it retires (§4.4) */
+	mid = false;
+	feetCycle = 0;
+	alpha = 0;
+	hasDrawn = false;
+	drawnX = 0;
+	drawnY = 0;
+
+	insert(s: ActorSample): boolean {
+		return insertSample(this.samples, s);
+	}
+}
+
+function zombieSample(tick: number, z: ZombieSnap): ActorSample {
+	return {
+		tick,
+		x: z.x,
+		y: z.y,
+		angle: z.angle,
+		flags: z.flags,
+		type: z.type,
+		big: z.big,
+		extra: z.extra ?? 0,
+		hp: 0,
+		phase: 0,
+	};
+}
+
+function bossSample(tick: number, b: BossSnap): ActorSample {
+	return {
+		tick,
+		x: b.x,
+		y: b.y,
+		angle: b.angle,
+		flags: b.flags,
+		type: b.type,
+		big: false,
+		extra: b.extra,
+		hp: b.hp,
+		phase: b.phase,
+	};
 }
 
 export interface SnapshotStats {
@@ -152,13 +278,57 @@ export interface SnapshotStats {
 	dropped: number;
 	/** entities currently tracked */
 	tracked: number;
+	/** zombies and bosses currently tracked (§11.3 F2: the horde must be the same on every screen) */
+	zombies: number;
+	bosses: number;
 	/** frames whose render time had to be held because it would have gone backwards */
 	stalls: number;
+}
+
+/**
+ * One scratch sample and one "was it extrapolated" flag, shared by every actor of a frame. The interpolation
+ * answers hundreds of times per frame with a value nobody keeps past the next call, so a table per answer
+ * would hand the collector the whole horde, twice a frame, for nothing.
+ */
+const SCRATCH: ActorSample = {
+	tick: 0,
+	x: 0,
+	y: 0,
+	angle: 0,
+	flags: 0,
+	type: 1,
+	big: false,
+	extra: 0,
+	hp: 0,
+	phase: 0,
+};
+let STALE = false;
+
+function copySample(into: ActorSample, from: ActorSample): void {
+	into.tick = from.tick;
+	into.x = from.x;
+	into.y = from.y;
+	into.angle = from.angle;
+	into.flags = from.flags;
+	into.type = from.type;
+	into.big = from.big;
+	into.extra = from.extra;
+	into.hp = from.hp;
+	into.phase = from.phase;
 }
 
 export class SnapshotBuffer {
 	private readonly tracks = new Map<number, SlotTrack>();
 	private readonly out = new Array<RemoteState>();
+	/** one track per zombie netId and per boss netId (§4.4: identity comes from the snapshot itself) */
+	private readonly zombies = new Map<number, ActorTrack>();
+	private readonly bosses = new Map<number, ActorTrack>();
+	private readonly zOut = new Array<RemoteZombie>();
+	private readonly bOut = new Array<RemoteBoss>();
+	/** the view reads these every frame, so they are refilled in place instead of rebuilt */
+	private readonly zPool = new Array<RemoteZombie>();
+	private readonly bPool = new Array<RemoteBoss>();
+	private readonly retire = new Array<number>();
 	private simHz = SIM_HZ;
 	private delayS = INTERP_DEFAULT_S;
 	private targetS = INTERP_DEFAULT_S;
@@ -179,7 +349,11 @@ export class SnapshotBuffer {
 
 	reset(): void {
 		this.tracks.clear();
+		this.zombies.clear();
+		this.bosses.clear();
 		this.out.clear();
+		this.zOut.clear();
+		this.bOut.clear();
 		this.delayS = INTERP_DEFAULT_S;
 		this.targetS = INTERP_DEFAULT_S;
 		this.intervalS = 1 / SNAP_NEAR_HZ;
@@ -192,6 +366,19 @@ export class SnapshotBuffer {
 	/** PlayerLeft (§4.4): stop drawing that slot at once */
 	forget(slot: number): void {
 		this.tracks.delete(slot);
+	}
+
+	/**
+	 * `ZombieDied` (§4.4): the body is gone NOW, at the position the reliable event carries, and the view
+	 * draws the blood and the corpse there. Letting the despawn timeout retire it instead would leave it
+	 * standing for another 300 ms and then fade it out somewhere else entirely.
+	 */
+	forgetZombie(netId: number): void {
+		this.zombies.delete(netId);
+	}
+
+	forgetBoss(netId: number): void {
+		this.bosses.delete(netId);
 	}
 
 	/**
@@ -216,6 +403,27 @@ export class SnapshotBuffer {
 				this.tracks.set(p.slot, track);
 			}
 			if (track.insert(sampleOf(tick, p))) track.lastSeen = arrival;
+		}
+		// §4.4 "implícitos pelo snapshot": a body the client has never seen IS its spawn, and the record
+		// carries the type and the variant it needs to draw it — there is no reliable spawn event to wait for
+		for (const z of part.zombies) {
+			let track = this.zombies.get(z.netId);
+			if (track === undefined) {
+				track = new ActorTrack();
+				this.zombies.set(z.netId, track);
+			}
+			if (track.insert(zombieSample(tick, z))) {
+				track.lastSeen = arrival;
+				track.mid = z.mid;
+			}
+		}
+		for (const b of part.bosses) {
+			let track = this.bosses.get(b.netId);
+			if (track === undefined) {
+				track = new ActorTrack();
+				this.bosses.set(b.netId, track);
+			}
+			if (track.insert(bossSample(tick, b))) track.lastSeen = arrival;
 		}
 		return true;
 	}
@@ -272,6 +480,188 @@ export class SnapshotBuffer {
 			this.out.push(this.stateOf(slot, track, render, step, world));
 		}
 		for (const slot of gone) this.tracks.delete(slot);
+		this.advanceActors(render, step, now, world);
+	}
+
+	/**
+	 * The horde and the bosses at the render time (§5.1), plus the two fades §4.3 and §4.4 lean on:
+	 *
+	 *   in   a body appears the first time a snapshot carries it — because it walked into a light, because
+	 *        the viewer walked towards it, or because it just spawned. All three look the same from here,
+	 *        and all three are covered by easing the alpha up instead of popping a body into frame.
+	 *   out  a body that stops arriving for its ring's timeout (300 ms near, 600 ms mid) is retired over
+	 *        DESPAWN_FADE_S. A body that DIED never comes through here: `ZombieDied` is reliable and takes
+	 *        it away at once, at the place it fell.
+	 */
+	private advanceActors(render: number, dt: number, now: number, world?: WorldData): void {
+		this.zOut.clear();
+		this.bOut.clear();
+		const retire = this.retire;
+		retire.clear();
+		for (const [netId, track] of this.zombies) {
+			if (track.samples.size() === 0) {
+				retire.push(netId);
+				continue;
+			}
+			const missing = now - track.lastSeen > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S);
+			track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+			if (missing && track.alpha <= 0) {
+				retire.push(netId);
+				continue;
+			}
+			this.zOut.push(this.zombieStateOf(netId, track, render, dt, world));
+		}
+		for (const netId of retire) this.zombies.delete(netId);
+		retire.clear();
+		for (const [netId, track] of this.bosses) {
+			if (track.samples.size() === 0) {
+				retire.push(netId);
+				continue;
+			}
+			const missing = now - track.lastSeen > DESPAWN_MID_S;
+			track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+			if (missing && track.alpha <= 0) {
+				retire.push(netId);
+				continue;
+			}
+			this.bOut.push(this.bossStateOf(netId, track, render, world));
+		}
+		for (const netId of retire) this.bosses.delete(netId);
+	}
+
+	/**
+	 * Position and heading of one actor at `render`, written into `SCRATCH`. Exactly the survivors' rule:
+	 * interpolate between the two samples around the render time, extrapolate for at most EXTRAPOLATE_MAX_S
+	 * when the buffer runs dry (never through a wall), then hold. The discrete fields — flags, type, the
+	 * extra byte — come from the sample at or before the render time and are never blended: a hit flash
+	 * halfway between on and off is not a state the server was ever in.
+	 */
+	private sampleAt(track: ActorTrack, render: number, radius: number, world?: WorldData): ActorSample {
+		const list = track.samples;
+		const n = list.size();
+		const last = list[n - 1];
+		const scratch = SCRATCH;
+		if (render <= list[0].tick) {
+			copySample(scratch, list[0]);
+			STALE = false;
+			return scratch;
+		}
+		if (render >= last.tick) {
+			STALE = true;
+			copySample(scratch, last);
+			const ahead = math.min(render - last.tick, EXTRAPOLATE_MAX_S * this.simHz);
+			const prev = n > 1 ? list[n - 2] : undefined;
+			if (prev !== undefined && last.tick > prev.tick && ahead > 0) {
+				const span = last.tick - prev.tick;
+				const ex = last.x + ((last.x - prev.x) / span) * ahead;
+				const ey = last.y + ((last.y - prev.y) / span) * ahead;
+				if (world === undefined || radius <= 0 || circleBlocked(world, ex, ey, radius) === undefined) {
+					scratch.x = ex;
+					scratch.y = ey;
+				}
+			}
+			return scratch;
+		}
+		let i = n - 2;
+		while (i > 0 && list[i].tick > render) i -= 1;
+		const a = list[i];
+		const b = list[i + 1];
+		const span = b.tick - a.tick;
+		const t = span > 0 ? math.clamp((render - a.tick) / span, 0, 1) : 0;
+		copySample(scratch, a);
+		scratch.x = lerp(a.x, b.x, t);
+		scratch.y = lerp(a.y, b.y, t);
+		scratch.angle = angleLerp(a.angle, b.angle, t);
+		scratch.hp = lerp(a.hp, b.hp, t);
+		scratch.extra = lerp(a.extra, b.extra, t);
+		STALE = false;
+		return scratch;
+	}
+
+	private zombieStateOf(
+		netId: number,
+		track: ActorTrack,
+		render: number,
+		dt: number,
+		world?: WorldData,
+	): RemoteZombie {
+		const at = this.sampleAt(track, render, ZOMBIE_BASE_RADIUS, world);
+		const stale = STALE;
+		let speed = 0;
+		if (track.hasDrawn && dt > 0) {
+			const dx = at.x - track.drawnX;
+			const dy = at.y - track.drawnY;
+			const moved = math.sqrt(dx * dx + dy * dy);
+			// the feet are driven by the distance the body actually covered, the way an ally's are: the wire
+			// carries no walk cycle, and one derived from the drawn movement cannot desync from the drawing
+			track.feetCycle += moved * FEET_CYCLE_PER_UNIT;
+			speed = moved / dt;
+		}
+		track.drawnX = at.x;
+		track.drawnY = at.y;
+		track.hasDrawn = true;
+		let out = this.zPool[this.zOut.size()];
+		if (out === undefined) {
+			out = {
+				netId,
+				x: 0,
+				y: 0,
+				angle: 0,
+				flags: 0,
+				type: 1,
+				big: false,
+				extra: 0,
+				feetCycle: 0,
+				speed: 0,
+				alpha: 0,
+				stale: false,
+			};
+			this.zPool.push(out);
+		}
+		out.netId = netId;
+		out.x = at.x;
+		out.y = at.y;
+		out.angle = at.angle;
+		out.flags = at.flags;
+		out.type = at.type;
+		out.big = at.big;
+		out.extra = at.extra;
+		out.feetCycle = track.feetCycle;
+		out.speed = speed;
+		out.alpha = track.alpha;
+		out.stale = stale;
+		return out;
+	}
+
+	private bossStateOf(netId: number, track: ActorTrack, render: number, world?: WorldData): RemoteBoss {
+		const at = this.sampleAt(track, render, 0, world);
+		const stale = STALE;
+		let out = this.bPool[this.bOut.size()];
+		if (out === undefined) {
+			out = { netId, type: 1, x: 0, y: 0, angle: 0, hp: 0, flags: 0, phase: 0, alpha: 0, stale: false };
+			this.bPool.push(out);
+		}
+		out.netId = netId;
+		out.type = at.type;
+		out.x = at.x;
+		out.y = at.y;
+		out.angle = at.angle;
+		out.hp = at.hp;
+		out.flags = at.flags;
+		out.phase = at.phase;
+		out.alpha = track.alpha;
+		out.stale = stale;
+		return out;
+	}
+
+	/** the interpolated horde of this frame (rebuilt by advance; do not keep the array) */
+	zombieStates(): ReadonlyArray<RemoteZombie> {
+		return this.zOut;
+	}
+
+	/** the interpolated bosses of this frame (rebuilt by advance; do not keep the array) */
+	bossStates(): ReadonlyArray<RemoteBoss> {
+		return this.bOut;
 	}
 
 	/** the interpolated (or extrapolated) state of one survivor at `render` */
@@ -396,6 +786,8 @@ export class SnapshotBuffer {
 			accepted: this.accepted,
 			dropped: this.dropped,
 			tracked: this.tracks.size(),
+			zombies: this.zombies.size(),
+			bosses: this.bosses.size(),
 			stalls: this.stalls,
 		};
 	}

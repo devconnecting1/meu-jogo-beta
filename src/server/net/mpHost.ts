@@ -31,6 +31,7 @@ import {
 	onInput,
 	onIntent,
 	onTimeSync,
+	sendFx,
 	sendSnap,
 	sendTimePong,
 	sendWorld,
@@ -153,6 +154,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				const player = bySlot.get(slot);
 				if (player !== undefined) sendSnap(remotes, player, part);
 			},
+			fx(slot, packet) {
+				const player = bySlot.get(slot);
+				if (player !== undefined) sendFx(remotes, player, packet);
+			},
 			world(slot, packet) {
 				const player = bySlot.get(slot);
 				if (player !== undefined) sendWorld(remotes, player, packet);
@@ -164,6 +169,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		{ tick0Time, mapHash: mapHashOf(world) },
 	);
 	sim.onTick = tick => replicator.afterTick(tick);
+	// every cosmetic the simulation asks for goes out on the Fx channel, filtered by interest (§4.1, §4.3)
+	sim.onFx = event => replicator.queueFx(event);
 	// the snapshot's Dead flag is unreliable, so the transition itself goes out reliably (§4.5); F4 turns this
 	// into downed → revive → dead with the same event
 	sim.onDeath = sp => replicator.life(sp.slot, LifeState.Dead);
@@ -226,9 +233,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		for (const other of sim.players()) {
 			if (!other.state.dead) allies.push({ x: other.state.x, y: other.state.y });
 		}
-		// F1 has no zombies on the server, so MP-04's ≥ 900 u rule has nothing to test against yet; the query
-		// already takes the list, and F2 passes the live horde without touching this call site.
-		const spawn = findSpawnPoint(world, { allies });
+		// MP-04: nobody enters the world inside the horde. The list is the LIVE one from F2 on — with an
+		// empty list (MP_PHASE < 2, where each client has its own horde) the rule has nothing to test.
+		const spawn = findSpawnPoint(world, { allies, zombies: sim.horde?.zombies ?? [] });
 		const sp = createServerPlayer(
 			{ slot, userId: player.UserId, name: player.DisplayName },
 			save,
@@ -361,6 +368,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	// ------------------------------------------------------------ metrics and anomaly log (§9.3, §12.2)
 
 	function publishMetrics(player: Player, sp: ServerPlayer, link: Link, now: number): void {
+		// §2.3: the rewind ceiling is the ping the SERVER measured, never one the client declares. Once a
+		// second is plenty — it only ever caps the compensation, and leaving it at 0 compensates less.
+		const [pingOk, ping] = pcall(() => player.GetNetworkPing());
+		if (pingOk && typeIs(ping, "number")) sim.combat?.setPing(sp.slot, ping);
 		const bytes = replicator.takeBytes(sp.slot);
 		if (options.metrics !== false) {
 			pcall(() => player.SetAttribute("pz_out_Bps", math.floor(bytes / METRIC_INTERVAL)));
@@ -403,6 +414,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					Workspace.SetAttribute("pz_tick_p95_ms", sim.p95Ms());
 					Workspace.SetAttribute("pz_sim_players", sim.count());
 					Workspace.SetAttribute("pz_dropped_ticks", sim.stats.droppedTicks);
+					// what a playtest reads off the server window to know the world is actually running
+					Workspace.SetAttribute("pz_zombies", sim.horde?.count() ?? 0);
+					Workspace.SetAttribute("pz_world_day", sim.clock.day);
+					Workspace.SetAttribute("pz_day_time", sim.clock.dayTime);
 				}
 				for (const [player, link] of links) {
 					if (link.slot === undefined) continue;

@@ -271,6 +271,13 @@ defineMethod(Array.prototype, "unorderedRemove", function (i) {
 defineMethod(Array.prototype, "clear", function () {
 	this.length = 0;
 });
+defineMethod(Array.prototype, "insert", function (i, v) {
+	this.splice(i, 0, v);
+});
+defineMethod(Array.prototype, "pop", function () {
+	// roblox-ts pop() is Luau's table.remove(t): the last element, and undefined on an empty table
+	return this.length === 0 ? undefined : this.splice(this.length - 1, 1)[0];
+});
 defineMethod(String.prototype, "size", function () {
 	return Buffer.byteLength(this.valueOf(), "utf8");
 });
@@ -363,6 +370,7 @@ const world = generateTown(DESIGN.TOWN_SEED);
 function recordingTransport() {
 	const snaps = new Map();
 	const worlds = new Map();
+	const fxs = new Map();
 	const broadcasts = [];
 	const push = (map, slot, packet) => {
 		let list = map.get(slot);
@@ -375,9 +383,13 @@ function recordingTransport() {
 	return {
 		snaps,
 		worlds,
+		fxs,
 		broadcasts,
 		snap(slot, part) {
 			push(snaps, slot, part);
+		},
+		fx(slot, packet) {
+			push(fxs, slot, packet);
 		},
 		world(slot, packet) {
 			push(worlds, slot, packet);
@@ -959,14 +971,19 @@ section("(g) cost of a full tick with 6 players (§3.2 budget: avg ≤ 3 ms, p95
 		`${BENCH_TICKS} ticks (${seconds.toFixed(1)} s of game) with ${CFG.MAX_PLAYERS} players, Node ${process.version}`,
 	);
 	info(`tick cost: avg ${avg.toFixed(4)} ms · p95 ${p95.toFixed(4)} ms · p99 ${p99.toFixed(4)} ms`);
-	info(`downstream: ${(perClient / 1024).toFixed(2)} KB/s per client (F1 has no zombies yet; §4.7 budgets 23 KB/s)`);
+	info(
+		`downstream: ${(perClient / 1024).toFixed(2)} KB/s per client with the ambient horde ` +
+			`(${server.sim.horde?.count() ?? 0} zombies); the worst case is measured in tools/test-replication.mjs`,
+	);
 	info(
 		`upstream: ${((CFG.INPUT_MAX_BYTES + 20) * CFG.INPUT_HZ) / 1024} KB/s per client at ${CFG.INPUT_HZ} packets/s (§11.3 F1: ≤ 3 KB/s)`,
 	);
 	info("Luau on a Roblox server is slower than Node: these numbers are a regression guard, not the §3.2 verdict");
-	// a guard against an accidental O(n²) or a per-tick allocation storm, not a Luau budget
-	check(avg < 0.5, `the average tick stays far under the 16.7 ms period (${avg.toFixed(4)} ms)`);
-	check(p95 < 1, `p95 stays far under the period (${p95.toFixed(4)} ms)`);
+	// A guard against an accidental O(n²) or a per-tick allocation storm, not a Luau budget. The numbers are
+	// the §3.2 ones because from MP_PHASE 2 this tick is the WHOLE world (clock, population, flow field,
+	// horde, combat) and not only the six survivors it was when the thresholds were first written.
+	check(avg < CFG.TICK_BUDGET_AVG_MS, `the average tick stays inside the §3.2 budget (${avg.toFixed(4)} ms)`);
+	check(p95 < CFG.TICK_BUDGET_P95_MS, `p95 stays inside the §3.2 budget (${p95.toFixed(4)} ms)`);
 	checkEq(server.sim.stats.droppedTicks, 0, "no tick was dropped");
 	for (const c of clients) {
 		if (c.sp.counters.inputOverflow > 0) fail(`slot ${c.sp.slot} overflowed while sending exactly 1 command/tick`);

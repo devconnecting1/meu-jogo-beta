@@ -13,6 +13,7 @@
 		"test:net": "node tools/test-net.mjs",
 		"test:sim": "node tools/test-sim.mjs",
 		"test:server-sim": "node tools/test-server-sim.mjs",
+		"test:replication": "node tools/test-replication.mjs",
 		"test:predict": "node tools/test-predict.mjs",
 		"test:ai": "node tools/test-ai.mjs",
 		"test:combat": "node tools/test-combat.mjs",

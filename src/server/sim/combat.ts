@@ -1191,6 +1191,33 @@ export class ServerCombat {
 		}
 	}
 
+	/**
+	 * A projectile in flight reached this zombie (server/sim/projectiles.ts). The flight belongs to the world
+	 * half of the tick (§3.1 step 2); the DAMAGE belongs here, and going through the same private path as a
+	 * bullet is what stops an arrow ever paying different XP, or leaving a different assist trail, from a
+	 * rifle round that did the same harm.
+	 */
+	hitZombieWith(
+		sp: ServerPlayer,
+		z: Ent.ZombieState,
+		damage: number,
+		knock: number,
+		stun: number,
+		away?: number,
+	): void {
+		this.damageZombie(sp, this.slotOf(sp.slot), z, damage, knock, stun, away);
+	}
+
+	/** the same for a boss (`x`, `y` are where the projectile touched it, for the blood) */
+	hitBossWith(sp: ServerPlayer, b: Ent.BossState, damage: number, x: number, y: number): void {
+		this.damageBoss(sp, this.slotOf(sp.slot), b, damage, x, y);
+	}
+
+	/** the server's damage roll, so a projectile rolls it exactly as a bullet does */
+	rollDamage(n: number): number {
+		return this.damageRoll(n);
+	}
+
 	/** what 2A's reactToHit does, in the plain form, so this module works (and is tested) on its own */
 	private defaultReaction(z: Ent.ZombieState, dir: number, knock: number, stun: number): void {
 		z.hitFlash = 1;

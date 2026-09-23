@@ -878,7 +878,7 @@ const PHASE_BEFORE = CFG.MP_PHASE;
 }
 
 CFG.MP_PHASE = PHASE_BEFORE;
-checkEq(CFG.MP_PHASE, 1, "MP_PHASE is put back where the repository has it (tools/test-net.mjs pins it)");
+checkEq(CFG.MP_PHASE, 2, "MP_PHASE is put back where the repository has it (tools/test-net.mjs pins it)");
 
 // ================================================================ f. the fair bite (§2.3)
 

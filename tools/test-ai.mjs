@@ -336,6 +336,14 @@ const serverPlayers = optional("server/sim/players.ts");
 const flowFieldMod = optional("server/sim/flowField.ts");
 const zombiesMod = optional("server/sim/zombies.ts");
 const mpConfig = optional("shared/net/mpConfig.ts");
+/*
+ * These tests drive the shared AI through the CLIENT adapter (client/systems/zombieAI.ts), and that adapter
+ * is deliberately inert from MP_PHASE 2 on — the server owns the horde, so a client that still stepped it
+ * would be simulating a second one. The behaviour under test is the same in both phases (one `updateZombies`
+ * in shared/sim/ai), so the harness pins the phase to 1 and the one test that is ABOUT the phase (see
+ * "MP_PHASE >= 2 the client does not move a single zombie") flips it around itself.
+ */
+if (mpConfig !== undefined) mpConfig.MP_PHASE = 1;
 const SERVER = simulationMod !== undefined && flowFieldMod !== undefined && zombiesMod !== undefined;
 const perception = optional("shared/sim/ai/perception.ts");
 const memoryMod = optional("shared/sim/ai/memory.ts");

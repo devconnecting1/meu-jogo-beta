@@ -26,6 +26,7 @@ import { AdminOp, applyAdminOps } from "shared/admin/ops";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
+import { stripClientProgress } from "./sim/progress";
 import { startProximityChat } from "./chat/proximityChat";
 
 /*
@@ -146,6 +147,12 @@ interface Session {
 	patchResends: number;
 	/** runRev of a run in which an admin used world tools: it earns no coins / achievements / records */
 	assistedRunRev: number | undefined;
+	/**
+	 * Reports that tried to move a progress field the SERVER owns from MP_PHASE 2 on (§11.3 F2). It is not an
+	 * accusation — an honest client still mirrors what it thinks its XP is — only a number for the admin
+	 * panel (§9.3), so a client that is genuinely out of date can be told apart from one that never listens.
+	 */
+	staleProgressReports: number;
 }
 
 interface StoredLock {
@@ -479,6 +486,7 @@ function newSession(player: Player): Session {
 		patchResend: undefined,
 		patchResentAt: 0,
 		patchResends: 0,
+		staleProgressReports: 0,
 		assistedRunRev: undefined,
 	};
 }
@@ -652,6 +660,11 @@ function processReport(s: Session, json: string): void {
 		rejectReport(s, "invalid");
 		return;
 	}
+	// §11.3 F2, "o XP só vem do servidor": from MP_PHASE 2 on the server counted the kills, the levels and
+	// the days itself (server/sim/progress.ts), so a report carrying different numbers is not suspicious,
+	// it is simply stale — pinned to the trusted copy in silence (§9.2 level 0). With those fields frozen
+	// the credit windows below have nothing left to clamp and the coins follow the server's own events.
+	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	s.save = upd;

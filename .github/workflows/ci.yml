@@ -46,6 +46,9 @@ jobs:
       - name: Client prediction (divergence under latency, loss and reordering)
         run: npm run test:predict
 
+      - name: Replication (three clients, one horde; interest, bandwidth and tick cost)
+        run: npm run test:replication
+
       - name: Zombie AI (perception, alert, flanking, pace director, cost)
         run: npm run test:ai
 

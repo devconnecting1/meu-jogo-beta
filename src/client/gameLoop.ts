@@ -26,14 +26,7 @@ import {
 	WorldData,
 	Solid,
 } from "shared/game/world";
-import {
-	BOSS1_SEGMENT_RADIUS,
-	bossHitRadius,
-	resetEntityIds,
-	BossState,
-	ZombieState,
-	zombieRadius,
-} from "shared/game/entities";
+import { resetEntityIds, BossState, ZombieState } from "shared/game/entities";
 import { resetBullets, Bullet } from "shared/game/bullets";
 import { DayNight } from "./systems/daynight";
 import { ParticleSystem } from "./systems/particles";
@@ -43,14 +36,26 @@ import { updateBosses } from "./systems/bossAI";
 import { Combat } from "./systems/combat";
 import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
-import { Explosion, GameRefs, Tracer } from "./systems/types";
+import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
-import { DebrisMaterial, FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD, TracerKind } from "shared/sim/types";
+import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
-import { playFxEvent } from "./audio";
-import { netActive, netBindAdmin, netReset, netUpdate, remotePlayers } from "./net/netClient";
+import {
+	netActive,
+	netBindAdmin,
+	netReset,
+	netStats,
+	netUpdate,
+	remotePlayers,
+	takeNetFx,
+	ZombieDeathEvent,
+} from "./net/netClient";
 import { createRawInput, readRawInput } from "./net/localInput";
 import { RemotePlayerView } from "./net/netTypes";
+import { MP_PHASE } from "shared/net/mpConfig";
+import { FxEvent as WireFxEvent } from "shared/net/protocol";
+import { ActorDrawOpts, ActorsView } from "./view/actorsView";
+import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
 import { PlayersView } from "./view/playersView";
 import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
@@ -58,8 +63,13 @@ import { FootCycle } from "./view/footsteps";
 
 const Players = game.GetService("Players");
 
-/** the local survivor's slot in refs.players: an FxEvent aimed at another survivor is not ours to play */
-const LOCAL_SLOT = 0;
+/**
+ * From this phase the SERVER owns the horde, the bosses and every projectile (§11.1), so the client mirrors
+ * them instead of simulating them (client/view/actorsView.ts). `netActive()` on its own is not the test:
+ * at MP_PHASE 1 a client is in a server session AND still simulates a horde of its own, and the mirror would
+ * fight that simulation for the same array every frame.
+ */
+const SERVER_ACTORS = MP_PHASE >= 2;
 
 /** nameplate sits between the night light map (Dark, 80) and the HUD (90) so it stays readable at night */
 const NAMEPLATE_Z = 85;
@@ -73,10 +83,6 @@ const CANOPY_SEE_THROUGH = 0.35;
 /** night light radii (world units): the player's own light and built light sources */
 const PLAYER_LIGHT_R = 250;
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
-/** humanoid sprites are 36 × scale wide at the shoulders: scale = hit radius / 18 matches the hitbox */
-const HUMANOID_HALF_WIDTH = 18;
-/** spitter puddle size (zombieAI) — the landing marker of an acid blob uses it */
-const SPIT_MARK_R = 40;
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -106,21 +112,6 @@ const GROUND = {
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
 };
-/** what a debris burst is made of (FxEvent "debris") */
-const DEBRIS_COLOR: Record<DebrisMaterial, Color3> = {
-	impact: COLORS.shadow,
-	tree: COLORS.treeTrunk,
-	car: COLORS.car,
-	structure: COLORS.barricade,
-	exploder: COLORS.zombie3,
-	boss: COLORS.boss,
-};
-/** shot lines (FxEvent "tracer") */
-const TRACER_COLOR: Record<TracerKind, Color3> = {
-	bullet: COLORS.bullet,
-	electric: COLORS.uiBlue,
-	boss: COLORS.boss,
-};
 
 /** road markings: dash period/length, crosswalk stripe width/period */
 const DASH_PERIOD = 160;
@@ -149,14 +140,6 @@ function overlaps(x: number, y: number, w: number, h: number, v: ViewRect): bool
 
 function circleInView(x: number, y: number, r: number, v: ViewRect): boolean {
 	return x + r > v.minX && x - r < v.maxX && y + r > v.minY && y - r < v.maxY;
-}
-
-function zombieColor(t: number): Color3 {
-	if (t === 2) return COLORS.zombie2;
-	if (t === 3) return COLORS.zombie3;
-	if (t === 4) return COLORS.zombie4;
-	if (t === 5) return COLORS.zombie5;
-	return COLORS.zombie1;
 }
 
 // ------------------------------------------------------------------ ground items
@@ -362,11 +345,6 @@ const GLINT_PERIOD = 2.6;
 const GLINT_LEN = 0.45;
 const GLINT_ARM = 14;
 
-/** 1 while a blast grows, then fades over its remaining life (0.4 s in zombieAI) */
-function explosionFade(e: Explosion): number {
-	return e.r < e.rMax ? 1 : clamp(e.life / 0.4, 0, 1);
-}
-
 /** outward unit normal of a building wall */
 function sideNormal(side: string | undefined): { x: number; y: number } {
 	if (side === "top") return { x: 0, y: -1 };
@@ -383,7 +361,6 @@ export class GameLoop {
 	private zombies: Array<ZombieState> = [];
 	private bosses: Array<BossState> = [];
 	private bullets: Array<Bullet> = [];
-	private tracers: Array<Tracer> = [];
 	/** every survivor in this world (F0: only the local one, players[0]) */
 	private players: Array<PlayerState> = [];
 	/** cosmetic effects the systems asked for; played (and cleared) by playFx */
@@ -410,10 +387,6 @@ export class GameLoop {
 	private lightMap?: LightMap;
 	private nameplate?: Nameplate;
 	private lights: Array<LightSource> = [];
-	/** stuck arrows: the victim's heading when the arrow went in, so it turns with the body */
-	private stuckRef = new Map<number, { a: number; seen: number }>();
-	private zombieById = new Map<number, ZombieState>();
-	private frameNo = 0;
 	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
 	private seq = 0;
 	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
@@ -433,6 +406,28 @@ export class GameLoop {
 	/** the sun/light accessor handed to the views, bound once so a frame allocates no closure */
 	private readonly shadowFor = (x: number, y: number, len: number): { x: number; y: number } =>
 		this.shadowOffset(x, y, len);
+	/** the horde and the bosses: the mirror of the server's bodies (§4.2) and everything that draws them */
+	private readonly actors = new ActorsView();
+	/** blood, debris, shot lines, blasts and the projectiles the server flies (§4.1 Fx) */
+	private readonly fxView = new FxView();
+	/** what the actor views need from the loop each frame, refilled in place instead of rebuilt */
+	private readonly drawOpts: ActorDrawOpts = { shadow: this.shadowFor, clock: 0 };
+	/** this frame's §4.2 Fx events, drained from the network layer into one reused buffer */
+	private readonly netFx = new Array<WireFxEvent>();
+	/**
+	 * `shooterAt` answers where a survivor's shot starts, by SLOT: §4.2's `Shot` names the shooter that way
+	 * and the tracer has to leave THEIR hands. The local survivor is never looked up here — their own shot is
+	 * predicted (client/predict/weaponFx.ts), which is what makes firing feel instant at 150 ms of RTT.
+	 */
+	private readonly shooterAt = (slot: number): { x: number; y: number } | undefined => {
+		for (const ally of remotePlayers()) {
+			if (ally.slot === slot) return ally;
+		}
+		return undefined;
+	};
+	private readonly wireOpts: WireFxOpts = { localSlot: -1, shooterAt: this.shooterAt };
+	/** a reliable `ZombieDied` (§4.4): the mirror hands it over, the effect view decides what it still owes */
+	private readonly onZombieDeath = (d: ZombieDeathEvent): void => this.fxView.noteDeath(d);
 
 	constructor() {
 		const save = getCtx().save;
@@ -466,7 +461,11 @@ export class GameLoop {
 		this.zombies.clear();
 		this.bosses.clear();
 		this.bullets.clear();
-		this.tracers.clear();
+		// a new world has none of the old one's bodies, shot lines, blasts or server-flown projectiles
+		this.actors.reset();
+		this.fxView.clear(this.refs);
+		this.netFx.clear();
+		this.wireOpts.localSlot = -1;
 		this.particles.clear();
 		const spawn = this.findSpawnPoint();
 		this.player = createPlayer(save, spawn.x, spawn.y);
@@ -580,46 +579,25 @@ export class GameLoop {
 		if (p.dead) ctx.phase = "dead";
 	}
 
-	/** shot lines age here (Combat did it until F0) so new ones live a full life */
-	private decayTracers(dt: number): void {
-		const list = this.tracers;
-		for (let i = list.size() - 1; i >= 0; i--) {
-			list[i].life -= dt;
-			if (list[i].life <= 0) list.remove(i);
-		}
-	}
-
 	/**
-	 * Plays and clears what the simulation asked for (refs.fx): camera shake, blood, debris, tracers and HUD
-	 * messages. This is the only place in the client that turns simulation events into pixels.
+	 * Every cosmetic effect of the frame, from both channels (client/view/fxView.ts).
+	 *
+	 * The wire is drained FIRST because `Blood`, `Debris` and `Tracer` come back as simulation events and are
+	 * pushed into `refs.fx` — so draining that second plays a received bite and a locally simulated one in
+	 * the same frame, through the same code, in the same order.
 	 */
 	private playFx(ctx: GameContext): void {
-		const list = this.fx;
-		if (list.size() === 0) return;
-		for (const e of list) {
-			// audio reads the same channel the view does: one call, and client/audio/fxAudio.ts has every event
-			// (shots, hits, deaths, debris) instead of deriving half of them from the state (setFxAudioMode)
-			playFxEvent(e);
-			if (e.kind === "shake") {
-				if (e.player === LOCAL_SLOT) ctx.cam.shake(e.magnitude, e.duration);
-			} else if (e.kind === "blood") {
-				this.particles.bloodBurst(e.x, e.y, e.count, e.source, e.dir);
-			} else if (e.kind === "debris") {
-				this.particles.debrisBurst(e.x, e.y, e.count, DEBRIS_COLOR[e.material]);
-			} else if (e.kind === "tracer") {
-				this.tracers.push({
-					x1: e.x1,
-					y1: e.y1,
-					x2: e.x2,
-					y2: e.y2,
-					color: TRACER_COLOR[e.tracer],
-					life: e.life,
-				});
-			} else if (e.player === undefined || e.player === LOCAL_SLOT) {
-				this.refs.onMessage(e.text);
+		if (SERVER_ACTORS && netActive()) {
+			const wire = this.netFx;
+			wire.clear();
+			takeNetFx(wire);
+			if (wire.size() > 0) {
+				// the slot only has to be looked up until the roster names it; it does not change inside a run
+				if (this.wireOpts.localSlot < 0) this.wireOpts.localSlot = netStats().slot;
+				this.fxView.playWire(this.refs, wire, ctx.cam, this.particles, this.wireOpts);
 			}
 		}
-		list.clear();
+		this.fxView.playSim(this.refs, ctx.cam, this.particles);
 	}
 
 	update(dt: number): void {
@@ -638,14 +616,24 @@ export class GameLoop {
 		// everything else in this loop (zombies, combat, the clock) is still simulated locally on every client
 		if (netActive()) this.stepNetPlayer(ctx, dt);
 		else this.stepLocalPlayer(ctx, dt);
+		// F2: and from MP_PHASE 2 the horde and the bosses are the server's as well. `netUpdate` (above) has
+		// just interpolated them for this frame's render time, and the mirror writes them into the very
+		// arrays the rest of the client already reads — canopies, audio, stuck arrows, the admin overlay.
+		const mirrored = SERVER_ACTORS && netActive();
+		if (mirrored) this.actors.sync(refs, dt, this.onZombieDeath);
 		this.foot.advance(this.walkPhase, this.walkAmp, p.x, p.y, true);
-		this.decayTracers(dt);
+		this.fxView.decayTracers(dt);
 		// aim from the survivor's NEW position every frame, not only when the mouse moves
 		p.angle = refreshAim(p.x, p.y);
 		this.combat.update(refs, dt);
+		// the three below are no-ops from MP_PHASE 2 on (they say so themselves); below it they ARE the
+		// horde, and `mirrored` is false, so exactly one of the two owners writes those arrays in any phase
 		updateZombies(refs, dt);
 		updateBosses(refs, dt);
 		this.spawner.update(refs, dt);
+		// with the systems above silent, the blasts, the struck solids and the server's projectiles have
+		// nobody left to carry them but the view that put them there
+		if (mirrored) this.fxView.advance(refs, dt);
 		this.daynight.update(dt);
 		// shake before cam.update, particles before particles.update: same frame as before F0
 		this.playFx(ctx);
@@ -1488,152 +1476,11 @@ export class GameLoop {
 		}
 	}
 
-	// ------------------------------------------------------------------ actors
-
-	/**
-	 * Top-down humanoid (zombies, boss 3): 2 animated feet, body, 2 arms reaching forward, head.
-	 * All offsets are in world space: forward f = (cos a, sin a), lateral l = (-f.y, f.x).
-	 */
-	private drawHumanoid(
-		r: Renderer,
-		cam: Camera,
-		x: number,
-		y: number,
-		a: number,
-		sc: number,
-		color: Color3,
-		flash: number,
-		alpha: number,
-		phase: number,
-		z: number,
-		windup = 0,
-		outline?: Color3,
-	): void {
-		const body = flash > 0 ? color.Lerp(WHITE, 0.75 * flash) : color;
-		const dark = color.Lerp(BLACK, 0.3);
-		const edge = outline ?? (flash > 0 ? WHITE : dark);
-		const step = math.sin(phase) * 8 * sc;
-		for (const side of [-1, 1]) {
-			const along = step * side;
-			this.part(r, cam, x, y, a, along, side * 9 * sc, {
-				w: 12 * sc,
-				h: 9 * sc,
-				color: COLORS.zombieFeet,
-				alpha,
-				cornerRadius: 3 * sc,
-				zIndex: z,
-			});
-			// arms reach straight ahead, swaying a little with the gait
-			this.part(r, cam, x, y, a, 22 * sc - along * 0.25, side * 12 * sc, {
-				w: 24 * sc,
-				h: 7 * sc,
-				color: flash > 0 ? body : dark,
-				alpha,
-				cornerRadius: 3 * sc,
-				zIndex: z + 1,
-			});
-		}
-		this.part(r, cam, x, y, a, 0, 0, {
-			w: 26 * sc,
-			h: 36 * sc,
-			color: body,
-			alpha,
-			cornerRadius: 9 * sc,
-			stroke: edge,
-			strokeThickness: flash > 0 || outline !== undefined ? 3 : 1.5,
-			strokeAlpha: alpha,
-			zIndex: z + 2,
-		});
-		// head; a spitter winding up (windup 0..10) pulls it back and swells its acid sac
-		const k = clamp(windup / 10, 0, 1);
-		const headFwd = (3 - 9 * k) * sc;
-		let headColor = flash > 0 ? body : color.Lerp(BLACK, 0.12);
-		if (k > 0) headColor = headColor.Lerp(COLORS.acid, 0.7 * k);
-		r.drawCircle(cam, x + math.cos(a) * headFwd, y + math.sin(a) * headFwd, 20 * sc * (1 + 0.4 * k), {
-			color: headColor,
-			alpha,
-			stroke: k > 0 ? COLORS.bloodZombie : undefined,
-			strokeThickness: 2,
-			strokeAlpha: alpha * k,
-			zIndex: z + 3,
-		});
-	}
-
-	private drawZombies(r: Renderer, cam: Camera, v: ViewRect): void {
-		const up = cam.screenDirToWorld(0, -1);
-		for (const zb of this.zombies) {
-			const rad = zombieRadius(zb);
-			if (!circleInView(zb.x, zb.y, rad * 3.5 + 40, v)) continue;
-			const alpha = clamp(zb.alpha, 0, 1);
-			if (alpha <= 0.01) continue;
-			const sc = rad / HUMANOID_HALF_WIDTH;
-			// jumper: the body rises (0..28) and grows a little; the shadow stays on the ground
-			const lift = math.max(0, zb.jumpHeight ?? 0);
-			const liftScale = 1 + lift / 100;
-			const so = this.shadowOffset(zb.x, zb.y, 10);
-			r.drawCircle(cam, zb.x + so.x, zb.y + so.y, (rad * 2.1) / liftScale, {
-				color: BLACK,
-				alpha: 0.3 * alpha * (1 - lift / 70),
-				zIndex: Z.actorShadow,
-			});
-			let color = zombieColor(zb.type);
-			let outline: Color3 | undefined;
-			const fuse = zb.fuse ?? -1;
-			if (zb.type === 3 && fuse > 0) {
-				// lit fuse: red blink that accelerates as it burns (frequency ∝ 1 / time left)
-				if (math.sin(math.pi * 2 * 3 * math.log(fuse + 0.1)) > 0) {
-					color = color.Lerp(COLORS.uiRed, 0.8);
-					outline = COLORS.uiYellow;
-				}
-			}
-			const bx = zb.x + up.x * lift;
-			const by = zb.y + up.y * lift;
-			const standing = zb.hp > 0 || fuse > 0;
-			this.drawHumanoid(
-				r,
-				cam,
-				bx,
-				by,
-				zb.angleSlow,
-				sc * liftScale,
-				color,
-				clamp(zb.hitFlash ?? 0, 0, 1),
-				alpha,
-				zb.feetCycle ?? 0,
-				standing ? Z.zombie : Z.zombie - 5,
-				zb.type === 2 ? (zb.headX ?? 0) : 0,
-				outline,
-			);
-			if (zb.detectShow > 0 && zb.hp > 0) {
-				// "!" made of two rects, always upright on screen
-				const k = math.min(1, zb.detectShow * 4);
-				const hx = zb.x + up.x * (rad * 2.6 + lift);
-				const hy = zb.y + up.y * (rad * 2.6 + lift);
-				r.drawRect(cam, hx + up.x * 6, hy + up.y * 6, {
-					w: 6,
-					h: 16,
-					color: COLORS.detect,
-					alpha: k,
-					rotation: -cam.angle,
-					stroke: BLACK,
-					strokeThickness: 1,
-					strokeAlpha: k * 0.6,
-					zIndex: Z.actorFx,
-				});
-				r.drawRect(cam, hx - up.x * 8, hy - up.y * 8, {
-					w: 6,
-					h: 6,
-					color: COLORS.detect,
-					alpha: k,
-					rotation: -cam.angle,
-					stroke: BLACK,
-					strokeThickness: 1,
-					strokeAlpha: k * 0.6,
-					zIndex: Z.actorFx,
-				});
-			}
-		}
-	}
+	// ------------------------------------------------------------------ the survivor and the particles
+	//
+	// The rest of the actors left this file in F2: the horde, the bosses, the arrows and the projectiles are
+	// drawn by client/view/actorsView.ts and the effects by client/view/fxView.ts, from the same arrays. What
+	// stays is what the loop alone knows — the survivor it steers, and the particle pool it owns.
 
 	/**
 	 * The local survivor, through the very same `drawSurvivor` every ally goes through (docs/MULTIPLAYER.md §5.3).
@@ -1663,303 +1510,6 @@ export class GameLoop {
 		drawSurvivor(r, cam, look, this.swing);
 	}
 
-	private drawBosses(r: Renderer, cam: Camera, v: ViewRect): void {
-		for (const b of this.bosses) {
-			const flash = clamp(b.hitFlash ?? 0, 0, 1);
-			const color = flash > 0 ? COLORS.boss.Lerp(WHITE, 0.7 * flash) : COLORS.boss;
-			const dark = COLORS.boss.Lerp(BLACK, 0.4);
-			if (b.type === 1) {
-				const bodyX = b.bodyX;
-				const bodyY = b.bodyY;
-				if (bodyX === undefined || bodyY === undefined) continue;
-				// centipede: every segment is drawn at its hit radius, the head at bossHitRadius
-				const n = bodyX.size();
-				const seg = BOSS1_SEGMENT_RADIUS * 2;
-				const head = bossHitRadius(b) * 2;
-				for (let i = n - 1; i >= 0; i--) {
-					const size = i === 0 ? head : seg;
-					if (!circleInView(bodyX[i], bodyY[i], size, v)) continue;
-					if (i > 0 && i % 3 === 0) {
-						// legs on every third segment, across the local body direction
-						const j0 = math.max(0, i - 1);
-						const j1 = math.min(n - 1, i + 1);
-						const da = math.atan2(bodyY[j0] - bodyY[j1], bodyX[j0] - bodyX[j1]);
-						const swing = math.sin(this.clock * 12 + i) * 0.35;
-						for (const side of [-1, 1]) {
-							this.part(r, cam, bodyX[i], bodyY[i], da + side * (math.pi / 2 + swing), seg * 0.55, 0, {
-								w: seg * 0.5,
-								h: 7,
-								color: dark,
-								cornerRadius: 3,
-								zIndex: Z.boss - 1,
-							});
-						}
-					}
-					r.drawCircle(cam, bodyX[i], bodyY[i], size, {
-						color: i === 0 || i % 2 === 0 ? color : color.Lerp(BLACK, 0.2),
-						stroke: dark,
-						strokeThickness: 2,
-						zIndex: Z.boss + (i === 0 ? 2 : 0),
-					});
-				}
-				if (n > 1) {
-					const ha = math.atan2(bodyY[0] - bodyY[1], bodyX[0] - bodyX[1]);
-					for (const side of [-1, 1]) {
-						this.part(r, cam, bodyX[0], bodyY[0], ha, head * 0.22, side * head * 0.2, {
-							w: head * 0.12,
-							h: head * 0.12,
-							circle: true,
-							color: COLORS.detect,
-							zIndex: Z.boss + 3,
-						});
-						// mandibles
-						this.part(r, cam, bodyX[0], bodyY[0], ha + side * 0.35, head * 0.55, 0, {
-							w: head * 0.3,
-							h: 8,
-							color: dark,
-							cornerRadius: 3,
-							zIndex: Z.boss + 1,
-						});
-					}
-				}
-				continue;
-			}
-			// types 2-4: drawn at their hit radius so what you see is what you hit
-			const size = bossHitRadius(b) * 2;
-			if (!circleInView(b.x, b.y, size + 60, v)) continue;
-			const so = this.shadowOffset(b.x, b.y, 14);
-			r.drawCircle(cam, b.x + so.x, b.y + so.y, size * 1.05, {
-				color: BLACK,
-				alpha: 0.35,
-				zIndex: Z.actorShadow,
-			});
-			if (b.type === 3) {
-				this.drawHumanoid(
-					r,
-					cam,
-					b.x,
-					b.y,
-					b.angle,
-					size / 2 / HUMANOID_HALF_WIDTH,
-					color,
-					flash,
-					1,
-					math.rad(b.moveCycle ?? 0),
-					Z.boss,
-				);
-				continue;
-			}
-			if (b.type === 2) {
-				// tentacles slowly sweeping around the stationary body
-				for (let i = 0; i < 6; i++) {
-					const ta = this.clock * 0.6 + (i * math.pi) / 3;
-					this.part(r, cam, b.x, b.y, ta, size * 0.62, 0, {
-						w: 80,
-						h: 16,
-						color: dark,
-						cornerRadius: 8,
-						zIndex: Z.boss,
-					});
-				}
-			} else {
-				// needles
-				for (let i = 0; i < 8; i++) {
-					this.part(r, cam, b.x, b.y, b.angle + (i * math.pi) / 4, size * 0.55, 0, {
-						w: 30,
-						h: 8,
-						color: dark,
-						zIndex: Z.boss,
-					});
-				}
-			}
-			r.drawCircle(cam, b.x, b.y, size, {
-				color,
-				stroke: flash > 0 ? WHITE : dark,
-				strokeThickness: flash > 0 ? 4 : 2,
-				zIndex: Z.boss + 1,
-			});
-			for (const side of [-1, 1]) {
-				this.part(r, cam, b.x, b.y, b.angle, size * 0.3, side * size * 0.16, {
-					w: size * 0.12,
-					h: size * 0.12,
-					circle: true,
-					color: COLORS.detect,
-					zIndex: Z.boss + 2,
-				});
-			}
-		}
-	}
-
-	/** arrow sprite (shaft, head, fletching) centred on (x, y) */
-	private drawArrow(r: Renderer, cam: Camera, x: number, y: number, a: number, alpha: number, z: number): void {
-		this.part(r, cam, x, y, a, 0, 0, { w: 26, h: 3, color: COLORS.arrow, alpha, zIndex: z });
-		this.part(r, cam, x, y, a, 14, 0, {
-			w: 6,
-			h: 6,
-			color: COLORS.ironDoor,
-			alpha,
-			cornerRadius: 1,
-			zIndex: z + 1,
-		});
-		this.part(r, cam, x, y, a, -12, 0, {
-			w: 7,
-			h: 7,
-			color: COLORS.uiRed,
-			alpha,
-			cornerRadius: 1,
-			zIndex: z + 1,
-		});
-	}
-
-	private drawBullets(r: Renderer, cam: Camera, v: ViewRect): void {
-		this.frameNo++;
-		const byId = this.zombieById;
-		byId.clear();
-		let anyStuck = false;
-		for (const b of this.bullets) {
-			if (b.stuckTo !== undefined) {
-				anyStuck = true;
-				break;
-			}
-		}
-		if (anyStuck) {
-			for (const zb of this.zombies) byId.set(zb.id, zb);
-		}
-		const up = cam.screenDirToWorld(0, -1);
-		for (const b of this.bullets) {
-			if (!circleInView(b.x, b.y, 90, v)) continue;
-			if (b.fromPlayer && b.kind === "arrow") {
-				const zb = b.stuckTo !== undefined ? byId.get(b.stuckTo) : undefined;
-				if (zb !== undefined) {
-					// stuck in a zombie: keeps its offset in the body's frame, turning (and jumping) with it
-					let ref = this.stuckRef.get(b.id);
-					if (ref === undefined) {
-						ref = { a: zb.angleSlow, seen: this.frameNo };
-						this.stuckRef.set(b.id, ref);
-					}
-					ref.seen = this.frameNo;
-					const d = zb.angleSlow - ref.a;
-					const ox = b.stuckDX ?? 0;
-					const oy = b.stuckDY ?? 0;
-					const lift = math.max(0, zb.jumpHeight ?? 0);
-					const ax = zb.x + ox * math.cos(d) - oy * math.sin(d) + up.x * lift;
-					const ay = zb.y + ox * math.sin(d) + oy * math.cos(d) + up.y * lift;
-					const aa = b.angle + d;
-					// only the back half sticks out of the body
-					this.drawArrow(r, cam, ax - math.cos(aa) * 8, ay - math.sin(aa) * 8, aa, 1, Z.zombie + 4);
-				} else if (b.grounded === true) {
-					// lying on the ground, dimmed; the player walks over it to pick it up
-					this.drawArrow(r, cam, b.x, b.y, b.angle, 0.6, Z.item);
-				} else {
-					this.drawArrow(r, cam, b.x, b.y, b.angle, 1, Z.projectile);
-				}
-				continue;
-			}
-			if (!b.fromPlayer) {
-				if (b.targetX !== undefined && b.targetY !== undefined) {
-					// spitter acid: a lobbed blob — shadow on the ground, blob arcing above it, and a
-					// landing marker so the player can read where the puddle will appear
-					const t = clamp(b.travel / math.max(1, b.range), 0, 1);
-					const arc = math.sin(t * math.pi);
-					const h = arc * math.min(70, 20 + b.range * 0.2);
-					r.drawCircle(cam, b.targetX, b.targetY, SPIT_MARK_R * 2, {
-						color: COLORS.acid,
-						alpha: 0.08 + 0.12 * t,
-						stroke: COLORS.acid,
-						strokeThickness: 2,
-						strokeAlpha: 0.3 + 0.5 * t,
-						zIndex: Z.decal + 2,
-					});
-					r.drawCircle(cam, b.x, b.y, 12, { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow });
-					r.drawCircle(cam, b.x + up.x * h, b.y + up.y * h, 14 * (1 + 0.5 * arc), {
-						color: COLORS.acid,
-						stroke: COLORS.bloodZombie,
-						strokeThickness: 2,
-						zIndex: Z.projectile,
-					});
-				} else {
-					// boss needle (any enemy shot without a landing point): a thin bone spike
-					this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
-						w: 28,
-						h: 3,
-						color: COLORS.blade.Lerp(COLORS.parcel, 0.4),
-						zIndex: Z.projectile,
-					});
-					this.part(r, cam, b.x, b.y, b.angle, 15, 0, {
-						w: 6,
-						h: 4,
-						color: COLORS.boss,
-						cornerRadius: 2,
-						zIndex: Z.projectile + 1,
-					});
-				}
-				continue;
-			}
-			if (b.kind === "fire") {
-				r.drawCircle(cam, b.x, b.y, 12 + math.sin(this.clock * 30 + b.id) * 3, {
-					color: COLORS.campfire,
-					alpha: 0.85,
-					zIndex: Z.projectile,
-				});
-			} else if (b.kind === "electric") {
-				this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
-					w: 14,
-					h: 6,
-					color: COLORS.uiBlue,
-					cornerRadius: 3,
-					zIndex: Z.projectile,
-				});
-			} else {
-				this.part(r, cam, b.x, b.y, b.angle, 0, 0, {
-					w: 16,
-					h: 4,
-					color: COLORS.bullet,
-					cornerRadius: 2,
-					zIndex: Z.projectile,
-				});
-			}
-		}
-		for (const [id, ref] of this.stuckRef) {
-			if (ref.seen !== this.frameNo) this.stuckRef.delete(id);
-		}
-	}
-
-	/** exploder blasts: expanding shock ring + hot core, fading once full size */
-	private drawExplosions(r: Renderer, cam: Camera, v: ViewRect): void {
-		const list = this.refs.explosions;
-		if (list === undefined) return;
-		for (const e of list) {
-			if (!circleInView(e.x, e.y, e.rMax, v)) continue;
-			const fade = explosionFade(e);
-			const grow = clamp(e.r / math.max(1, e.rMax), 0, 1);
-			const d = math.max(4, e.r * 2);
-			r.drawCircle(cam, e.x, e.y, d, {
-				color: COLORS.campfire,
-				alpha: 0.35 * fade,
-				stroke: COLORS.uiYellow,
-				strokeThickness: 5,
-				strokeAlpha: 0.9 * fade,
-				zIndex: Z.particle + 1,
-			});
-			r.drawCircle(cam, e.x, e.y, d * 0.45, {
-				color: COLORS.lamp.Lerp(WHITE, 0.5),
-				alpha: 0.7 * fade * (1 - grow * 0.6),
-				zIndex: Z.particle + 2,
-			});
-		}
-	}
-
-	private drawTracers(r: Renderer, cam: Camera): void {
-		for (const t of this.tracers) {
-			r.drawSegment(cam, t.x1, t.y1, t.x2, t.y2, {
-				h: 3,
-				color: t.color,
-				alpha: clamp(t.life * 5, 0, 1),
-				zIndex: Z.projectile,
-			});
-		}
-	}
-
 	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {
 		this.particles.forActive(p => {
 			if (!circleInView(p.x, p.y, p.size, v)) return;
@@ -1980,20 +1530,23 @@ export class GameLoop {
 		renderer.beginFrame();
 		const view = cam.viewRect(32);
 		this.updateShadowDir();
+		// the actor views read the loop's sun and its animation clock; the object is refilled, never rebuilt
+		const opts = this.drawOpts;
+		opts.clock = this.clock;
 		// the allies of this frame, already interpolated for the render time (§5.1); empty when solo
 		const allies = netActive() ? remotePlayers() : NO_REMOTES;
 		this.drawGround(renderer, cam, view);
 		this.drawDecals(renderer, cam, view);
 		this.drawItems(renderer, cam, view);
 		this.drawSolids(renderer, cam, view);
-		this.drawZombies(renderer, cam, view);
+		this.actors.drawZombies(renderer, cam, view, this.refs, opts);
 		// allies first, then you: at the same ZIndex the one who has to read cleanly is the one you steer
 		this.playersView.draw(renderer, cam, view, allies, this.lastDt, this.clock, this.shadowFor);
 		this.drawPlayer(renderer, cam);
-		this.drawBosses(renderer, cam, view);
-		this.drawBullets(renderer, cam, view);
-		this.drawExplosions(renderer, cam, view);
-		this.drawTracers(renderer, cam);
+		this.actors.drawBosses(renderer, cam, view, this.refs, opts);
+		this.actors.drawBullets(renderer, cam, view, this.refs, opts);
+		this.fxView.drawExplosions(renderer, cam, view, this.refs);
+		this.fxView.drawTracers(renderer, cam);
 		this.drawParticles(renderer, cam, view);
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
@@ -2076,7 +1629,7 @@ export class GameLoop {
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
 			lights.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: r * flicker, inner: 0.5 });
 		}
-		for (const t of this.tracers) {
+		for (const t of this.fxView.shotLines()) {
 			const k = clamp(t.life * 5, 0, 1);
 			if (k > 0.05) lights.push({ x: t.x1, y: t.y1, r: 150, k: 0.85 * k, inner: 0.2 });
 		}
