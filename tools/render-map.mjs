@@ -640,6 +640,26 @@ function freeNear(world, x, y) {
 	return undefined;
 }
 
+/**
+ * The `rw` x `rh` world rect, centred on a building `pick` likes, that holds the most such buildings whole (ties:
+ * the lowest id) -- in the "after" town; the "before" replays the same rects (--scenes)
+ */
+function findCluster(buildings, pick, rw, rh, match) {
+	let best;
+	let bestN = -1;
+	const cands = buildings.filter(b => pick(b) && (match === undefined || match.some(m => sameBox(m, b))));
+	for (const c of cands) {
+		const r = sceneAround(c.x + c.w / 2, c.y + c.h / 2, rw, rh);
+		let n = 0;
+		for (const b of cands) if (b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h) n++;
+		if (n > bestN) {
+			bestN = n;
+			best = r;
+		}
+	}
+	return best;
+}
+
 function interiorScenes(world, match) {
 	const out = [];
 	const buildings = world.solids.filter(s => s.kind === "building");
@@ -692,12 +712,24 @@ function interiorScenes(world, match) {
 			actors: { survivor: { ...survivor, angle: 0 }, zombies },
 		});
 	}
-	const street = findStreet(world);
-	if (street)
-		out.push({ name: "ext-street", title: "Houses from the street", rect: street, hour: 10, noActors: true });
-	const downtown = findDowntown(world);
-	if (downtown)
-		out.push({ name: "ext-downtown", title: "Shops from the street", rect: downtown, hour: 10, noActors: true });
+	// from outside, roofs on: the new footprints, and the marks of the doors and windows on the roofs' edges
+	for (const [name, kindName, title] of [
+		["ext-house", "house", "House, medium, from outside"],
+		["ext-market", "market", "Supermarket from outside"],
+	]) {
+		const inner = out.find(s => s.name === kindName);
+		if (inner === undefined) continue;
+		out.push({ name, title, rect: inner.rect, hour: 10, scale: inner.scale, noActors: true });
+	}
+	const clusters = [
+		["ext-houses", "Houses from above", b => b.buildingType === 1 || b.buildingType === 2, 2560, 1600, 0.5],
+		["ext-shops", "Shops from above", b => b.buildingType >= 5, 2560, 1600, 0.5],
+		["overview", "Overview 5120 x 3200", () => true, 5120, 3200, 0.25],
+	];
+	for (const [name, title, pick, rw, rh, scale] of clusters) {
+		const rect = findCluster(buildings, pick, rw, rh, match);
+		if (rect !== undefined) out.push({ name, title, rect, hour: 10, scale, noActors: true });
+	}
 	for (const [name, type, title] of [
 		["ext-school", 3, "School from outside"],
 		["ext-hospital", 4, "Hospital from outside"],
@@ -713,17 +745,6 @@ function interiorScenes(world, match) {
 			rect: sceneAround(b.x + b.w / 2, b.y + b.h / 2, Math.round(W / scale), Math.round(H / scale)),
 			hour: 10,
 			scale,
-			noActors: true,
-		});
-	}
-	const overview = findOverview(world);
-	if (overview) {
-		out.push({
-			name: "overview",
-			title: "Overview 3000 x 2000",
-			rect: overview,
-			hour: 10,
-			scale: 0.5,
 			noActors: true,
 		});
 	}

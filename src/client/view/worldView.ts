@@ -116,6 +116,9 @@ const FLOOR_ART: Record<FloorKind, WorldArtName> = {
 	bath: "floorBath",
 	concrete: "concrete",
 };
+/** half the width of a flat roof's seam cover: the parapet's rim (4 texels), the flat drawing's stroke (3 px) */
+const SEAM_RIM_ART = 16;
+const SEAM_RIM_FLAT = 4;
 /** a back room's concrete floor: the sidewalk's concrete texture, darkened to COLORS.floorConcrete (test:world-art §6) */
 export const CONCRETE_FLOOR_TINT = Color3.fromRGB(214, 214, 212);
 
@@ -217,6 +220,9 @@ export class WorldView {
 	readonly interior = new InteriorView();
 	/** a building without parts is one part: itself (reused, never allocated per frame) */
 	private readonly onePart: Array<Rect> = [];
+	/** the seams of each compound flat roof, flat and art drawing (`seamsOf`), per world */
+	private readonly seamsFlat = new Map<Solid, Array<Rect>>();
+	private readonly seamsArt = new Map<Solid, Array<Rect>>();
 
 	constructor(shadow: ShadowFn) {
 		this.shadow = shadow;
@@ -495,6 +501,8 @@ export class WorldView {
 		querySolids(world, v.minX - 140, v.minY - 140, v.maxX + 140, v.maxY + 140, list);
 		if (world !== this.shadesFor) {
 			this.roofShades.clear();
+			this.seamsFlat.clear();
+			this.seamsArt.clear();
 			this.shadesFor = world;
 		}
 		for (const s of list) {
@@ -547,6 +555,38 @@ export class WorldView {
 		if (parts !== undefined) return parts;
 		this.onePart[0] = s;
 		return this.onePart;
+	}
+
+	/**
+	 * Where two parts of a flat roof meet: one roof, not two buildings side by side, so the rims drawn along the
+	 * seam are covered, `rim` short of each end (the outer rim runs on across it). Built once per building.
+	 */
+	private seamsOf(s: Solid, rim: number): Array<Rect> {
+		const key = rim === SEAM_RIM_ART ? this.seamsArt : this.seamsFlat;
+		const cached = key.get(s);
+		if (cached !== undefined) return cached;
+		const out: Array<Rect> = [];
+		const parts = s.parts ?? [];
+		for (let i = 0; i < parts.size(); i++) {
+			for (let j = i + 1; j < parts.size(); j++) {
+				const a = parts[i];
+				const b = parts[j];
+				const x = math.abs(a.x + a.w - b.x) < 0.5 ? b.x : math.abs(b.x + b.w - a.x) < 0.5 ? a.x : undefined;
+				if (x !== undefined) {
+					const y0 = math.max(a.y, b.y) + rim;
+					const y1 = math.min(a.y + a.h, b.y + b.h) - rim;
+					if (y1 > y0) out.push({ x: x - rim, y: y0, w: rim * 2, h: y1 - y0 });
+				}
+				const y = math.abs(a.y + a.h - b.y) < 0.5 ? b.y : math.abs(b.y + b.h - a.y) < 0.5 ? a.y : undefined;
+				if (y !== undefined) {
+					const x0 = math.max(a.x, b.x) + rim;
+					const x1 = math.min(a.x + a.w, b.x + b.w) - rim;
+					if (x1 > x0) out.push({ x: x0, y: y - rim, w: x1 - x0, h: rim * 2 });
+				}
+			}
+		}
+		key.set(s, out);
+		return out;
 	}
 
 	/**
@@ -662,6 +702,18 @@ export class WorldView {
 					h: alongX ? 12 : math.max(12, p.h - 80),
 					color: roofDark,
 					alpha: roofA * 0.8,
+					zIndex: Z.roof + 1,
+				});
+			}
+		}
+		if (!isHouse) {
+			// one flat roof over the whole footprint: the parts' strokes along the seams are covered
+			for (const q of this.seamsOf(s, SEAM_RIM_FLAT)) {
+				r.drawRect(cam, q.x + q.w / 2, q.y + q.h / 2, {
+					w: q.w,
+					h: q.h,
+					color: roof,
+					alpha: roofA,
 					zIndex: Z.roof + 1,
 				});
 			}
@@ -1392,6 +1444,15 @@ export class WorldView {
 					const o = sliced(artOpts(parapet, p.w, p.h, Z.roof + 2), "parapet", WORLD_TEXEL);
 					o.alpha = roofA;
 					r.drawRect(cam, px, py, o);
+				}
+			}
+		}
+		if (!isHouse) {
+			// one flat roof over the whole footprint: the parapets' rims along the seams are covered with roof
+			const id = artId(flatTex);
+			if (id !== undefined) {
+				for (const q of this.seamsOf(s, SEAM_RIM_ART)) {
+					this.tileRect(r, cam, q.x, q.y, q.w, q.h, v, flatTex, id, Z.roof + 3, roof, roofA);
 				}
 			}
 		}
