@@ -897,6 +897,15 @@ section("G1. the grid publishes only what changed, with the level of each store"
 			`${POW.levelOf(f, prev)}`,
 		);
 	}
+	// a lamp switched on with no box in reach: published ON and not working (the HUD says "E: Turn off")
+	const dark = g.place(ID.lamp, 4000, 4000);
+	g.power.act(0, { dead: false }, saveWith(), dark);
+	const darkBits = g.published.filter(p => p.id === dark.id).at(-1)?.state ?? 0;
+	check(
+		POW.powerOn(darkBits) && !POW.powerWorking(darkBits),
+		"a lamp switched on with no power: published on, not working",
+		`state ${darkBits}`,
+	);
 	const bits = POW.packPowerState(true, 2, true);
 	check(
 		POW.powerWorking(bits) && POW.powerLevel(bits) === 2 && POW.powerFlying(bits) && bits <= POW.POWER_STATE_MASK,

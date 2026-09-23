@@ -215,23 +215,26 @@ export function givesCookingHeat(s: Solid): boolean {
 // ---------------------------------------------------------------- published state (the wire and the mirror)
 
 /**
- * `PowerSet.state` and the client mirror: bit 0 working (a consumer fed and on, a generator running, a box holding
- * charge), bits 1-2 the level of its store (box charge, drone battery, oil tank: 0 empty, 1 low, 2 half, 3 high),
- * bit 3 a drone in the air. Bits 4-7 are reserved and must be 0.
+ * `PowerSet.state` and the client mirror: bit 0 working (a consumer fed and switched on, a generator running, a box
+ * holding charge), bits 1-2 the level of its store (box charge, drone battery, oil tank: 0 empty, 1 low, 2 half,
+ * 3 high), bit 3 a drone in the air, bit 4 a switched machine's switch is on (a lamp can be on and still dark: no
+ * power). Bits 5-7 are reserved and must be 0.
  */
 export const PowerBit = {
 	Working: 1,
 	LevelShift: 1,
 	LevelMask: 6,
 	Flying: 8,
+	On: 16,
 } as const;
-export const POWER_STATE_MASK = 15;
+export const POWER_STATE_MASK = 31;
 export const POWER_LEVEL_MAX = 3;
 
-export function packPowerState(working: boolean, level: number, flying: boolean): number {
+export function packPowerState(working: boolean, level: number, flying: boolean, on = false): number {
 	let s = working ? PowerBit.Working : 0;
 	s += math.clamp(math.floor(level), 0, POWER_LEVEL_MAX) * 2;
 	if (flying) s += PowerBit.Flying;
+	if (on) s += PowerBit.On;
 	return s;
 }
 
@@ -245,6 +248,11 @@ export function powerLevel(state: number): number {
 
 export function powerFlying(state: number): boolean {
 	return math.floor(state / 8) % 2 === 1;
+}
+
+/** a switched machine's switch (E) is on, fed or not */
+export function powerOn(state: number): boolean {
+	return math.floor(state / 16) % 2 === 1;
 }
 
 /** the level bands: empty below 2 %, then thirds */

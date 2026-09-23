@@ -570,7 +570,12 @@ export class ServerPower {
 		let working = st.working;
 		// a box "works" while it holds charge: its lamp says whether anything can be drawn from it
 		if (st.def.role === "battery") working = st.store >= 1;
-		return packPowerState(working, st.level, st.def.role === "drone" && st.pilot !== SLOT_NONE);
+		return packPowerState(
+			working,
+			st.level,
+			st.def.role === "drone" && st.pilot !== SLOT_NONE,
+			st.def.switched && st.on,
+		);
 	}
 
 	private publishOne(st: MachineState): boolean {

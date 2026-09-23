@@ -1586,7 +1586,7 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	const pkt = P.encodeWorld({ tick: 3, events: [docked, flying] }).packets[0];
 	// header 5 B + 2 × (tag 1 B + id u32 + state u8 + pilot u8)
 	eq("PowerSet size", buffer.len(pkt), 5 + 2 * 7);
-	sizes.push(["World PowerSet", "7 B", "id, state (working, level, flying), pilot (ELE-01..08)"]);
+	sizes.push(["World PowerSet", "7 B", "id, state (working, level, flying, on), pilot (ELE-01..08)"]);
 	const d = P.decodeWorld(pkt);
 	ok(d !== undefined, "the PowerSet pair did not decode");
 	if (d === undefined) return;
@@ -1598,7 +1598,8 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	const fixed = P.decodeWorld(
 		P.encodeWorld({ tick: 1, events: [{ ...docked, pilot: 2, state: 0xf0 | docked.state }] }).packets[0],
 	);
-	eq("reserved bits masked on encode", fixed?.events[0].state, docked.state);
+	eq("reserved bits masked on encode", fixed?.events[0].state, docked.state | POW.PowerBit.On);
+	ok(POW.powerOn(fixed?.events[0].state ?? 0), "the switch bit survives the round trip");
 	eq("a pilot without the Flying bit is written as none", fixed?.events[0].pilot, CFG.SLOT_NONE);
 	const noPilot = P.decodeWorld(P.encodeWorld({ tick: 1, events: [{ ...flying, pilot: 9 }] }).packets[0]);
 	eq("a flying drone with a bogus pilot does not decode (its pilot is written as none)", noPilot, undefined);
@@ -1612,7 +1613,7 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	staticId[9] = 0;
 	eq("a PowerSet for a map solid (id 5, not dynamic)", P.decodeWorld(bufOf(staticId)), undefined);
 	const reserved = raw.slice();
-	reserved[10] = raw[10] | 16;
+	reserved[10] = raw[10] | 32;
 	eq("a PowerSet with a reserved bit", P.decodeWorld(bufOf(reserved)), undefined);
 	const grounded = raw.slice();
 	grounded[10] = raw[10] & ~POW.PowerBit.Flying;

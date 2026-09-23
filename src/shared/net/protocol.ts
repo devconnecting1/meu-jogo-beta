@@ -82,7 +82,8 @@
  * 17. (ELE-01..08, the electric grid) `PowerSet{id u32, state u8, pilot u8}`, 7 B with the tag: an electric build's
  *     state as server/sim/power.ts publishes it — bit 0 working (a consumer fed and switched on, a generator
  *     running, a box holding charge), bits 1-2 the level of its store (box charge, drone battery, oil tank: 0..3),
- *     bit 3 a drone in the air — and the slot that drone escorts. GLOBAL, sent only on a change (a store crossing a
+ *     bit 3 a drone in the air, bit 4 a switched machine's switch (a lamp can be on and dark: no power; the HUD's
+ *     "E: Turn off" needs to know) — and the slot that drone escorts. GLOBAL, sent only on a change (a store crossing a
  *     third with 3 % of hysteresis, a switch, a launch), at most POWER_PUBLISH_MAX per settle of the grid (4 Hz),
  *     and once per machine in a newcomer's WorldInit, after the SolidAdds. The decoder refuses a non-dynamic id,
  *     a reserved bit, an invalid slot, a drone in the air with nobody to escort and a pilot for anything else. What
@@ -1439,7 +1440,7 @@ export interface WPowerSet {
 	t: typeof WorldEv.PowerSet;
 	/** the construction's dynamic id (≥ 1 000 000) */
 	id: number;
-	/** shared/data/power.ts `PowerBit`: bit 0 working, bits 1-2 the store's level 0..3, bit 3 a drone in the air */
+	/** shared/data/power.ts `PowerBit`: bit 0 working, bits 1-2 the store's level 0..3, bit 3 a drone in the air, bit 4 on */
 	state: number;
 	/** the slot a drone in the air escorts; SLOT_NONE for everything else (and required iff the Flying bit is set) */
 	pilot: number;
