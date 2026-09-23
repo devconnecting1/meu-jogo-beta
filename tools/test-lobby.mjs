@@ -1470,6 +1470,11 @@ r = measure(() => {
 const moved = Math.hypot(fly.cameraAt()[0] - prev[0], fly.cameraAt()[1] - prev[1]);
 check("600 quadros a 60 fps depois do aquecimento: nenhuma Instance criada nem destruida", zero(r), cost(r));
 check("...e a camera andou", moved > 50, `${moved.toFixed(0)} u`);
+// the cuts get their own warm-up: one unmeasured run of the same frames. A sprite slot of the pool makes its UIStroke
+// the first time a stroked rect lands in it (renderer.ts: lazily, then kept); with compound roofs (a stroked rect
+// per part, EDI-14) the loops above do not always meet every such slot, and the first run with cuts would. After
+// this one the pool is saturated: six more runs of 600 frames created nothing (measured when this was added).
+for (let i = 0; i < 600; i++) frame(0.25);
 r = measure(() => {
 	for (let i = 0; i < 600; i++) frame(0.25);
 });
