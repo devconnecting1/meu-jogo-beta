@@ -30,7 +30,9 @@
  *   F. LOOT        every building type's table (EDI-03) and every roll lands in the backpack.
  *   G. SHOP        the REAL server (server/main.server.ts on the fake Roblox of test-body): every pack charges its
  *                  price and delivers what it declares (MON-03); a pack pet stays until a New game; a report
- *                  cannot conjure a pet; every costume is sold at the catalogue's price.
+ *                  cannot conjure a pet; every costume is sold at the catalogue's price. And the seams of
+ *                  MP_PHASE 2, where the server already owns the body and the combat but the backpack is still
+ *                  the client's and reaches the server only in a save report (NET-1..6).
  *
  * KNOWN BUGS. Some findings are too big to fix here (another front's files, or a design question): each is a
  * `knownBug(id, reproduces, ...)` line. While the bug reproduces it prints `BUG` and does not fail the suite; the day
@@ -2507,6 +2509,893 @@ section("F4. trees, cars and bins drop the same things on the client and on the 
 		"the map-item loot the client rolls today (MP_PHASE 2) is not the table the server will roll at F3: switching phases silently changes what trees, cars and bins give (the server's car even drops Steel, which crafts.ts says never drops)",
 		differ.map(k => `${k}: client [${client[k].join(", ")}] vs server [${server[k].join(", ")}]`).join(" | "),
 	);
+});
+
+// ================================================================ G. the real server: shop, packs, wardrobe, and the MP_PHASE 2 seams
+
+/*
+ * Everything above ran the server's MODULES. This part boots the server itself -- server/main.server.ts with its
+ * MP host, on test-body's fake Roblox (Players, Heartbeat, remotes, an in-memory DataStore) -- and talks to it only
+ * the way a client can: PlayerAdded, the Intent / Input / SaveRequest remotes and the ShopAction RemoteFunction.
+ * It installs its own globals over the UI shims, so it runs last.
+ */
+function fakeRoblox() {
+	/** a thread that yields (task.wait, Signal:Wait) is abandoned there: nothing under test needs it resumed */
+	class Yield extends Error {}
+	function runThread(fn, args) {
+		try {
+			return fn(...args);
+		} catch (e) {
+			if (e instanceof Yield) return undefined;
+			throw e;
+		}
+	}
+
+	let clockNow = 1000;
+	const timers = [];
+	const tickErrors = [];
+	globalThis.print = (...a) => {
+		if (VERBOSE) console.log("        [print]", ...a);
+	};
+	globalThis.warn = (...a) => {
+		const line = a.join(" ");
+		if (line.includes("tick failed")) tickErrors.push(line);
+		if (VERBOSE) console.log("        [warn]", line);
+	};
+	globalThis.os = { clock: () => clockNow, time: () => Math.floor(1_700_000_000 + clockNow) };
+	globalThis.task = {
+		spawn: (fn, ...args) => runThread(fn, args),
+		defer: (fn, ...args) => runThread(fn, args),
+		delay: (s, fn, ...args) => timers.push({ at: clockNow + s, fn: () => runThread(fn, args) }),
+		wait: () => {
+			throw new Yield();
+		},
+	};
+	globalThis.pcall = (fn, ...args) => {
+		try {
+			return [true, fn(...args)];
+		} catch (e) {
+			if (e instanceof Yield) throw e;
+			return [false, e instanceof Error ? e.message : e];
+		}
+	};
+	globalThis.tostring = v => String(v);
+	globalThis.tonumber = v => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+	globalThis.$tuple = (...a) => a[0];
+	globalThis.utf8 = { len: s => [Array.from(String(s)).length], offset: (s, n) => n };
+	globalThis.string = {
+		char: (...codes) => String.fromCharCode(...codes),
+		match: () => [undefined],
+		format: (fmt, ...args) => {
+			let i = 0;
+			return fmt.replace(/%([-0]*)(\d+)?(?:\.(\d+))?([dsfixq%])/g, (m, flags, width, prec, conv) => {
+				if (conv === "%") return "%";
+				const v = args[i++];
+				let s;
+				if (conv === "d" || conv === "i") s = String(Math.trunc(Number(v)));
+				else if (conv === "f") s = Number(v).toFixed(prec === undefined ? 6 : Number(prec));
+				else if (conv === "x") s = (Number(v) >>> 0).toString(16);
+				else s = String(v);
+				if (width !== undefined && s.length < Number(width))
+					s = s.padStart(Number(width), flags.includes("0") ? "0" : " ");
+				return s;
+			});
+		},
+	};
+	const enumProxy = new Proxy({}, { get: (_, a) => new Proxy({}, { get: (__, b) => `${String(a)}.${String(b)}` }) });
+	globalThis.Enum = enumProxy;
+
+	class Signal {
+		constructor() {
+			this.handlers = [];
+		}
+		Connect(fn) {
+			const h = { fn, on: true };
+			this.handlers.push(h);
+			return {
+				Connected: true,
+				Disconnect: () => {
+					h.on = false;
+					this.handlers = this.handlers.filter(x => x !== h);
+				},
+			};
+		}
+		Fire(...args) {
+			for (const h of [...this.handlers]) if (h.on) runThread(h.fn, args);
+		}
+		/** Roblox guarantees no order between connections: this fires them the other way round */
+		FireReversed(...args) {
+			for (const h of [...this.handlers].reverse()) if (h.on) runThread(h.fn, args);
+		}
+		Wait() {
+			throw new Yield();
+		}
+	}
+
+	class Inst {
+		constructor(className) {
+			this.ClassName = className;
+			this.Name = className;
+			this._children = [];
+			this._parent = undefined;
+			this._attrs = new Map();
+			// Roblox fires ChildAdded on every parent change; shared/chat/channelWait.ts listens to it (2d622b7)
+			this.ChildAdded = new Signal();
+			if (className.endsWith("RemoteEvent")) {
+				this.OnServerEvent = new Signal();
+				this.OnClientEvent = new Signal();
+				this.sent = [];
+			}
+		}
+		get Parent() {
+			return this._parent;
+		}
+		set Parent(p) {
+			if (this._parent !== undefined) this._parent._children = this._parent._children.filter(c => c !== this);
+			this._parent = p;
+			if (p !== undefined) {
+				p._children.push(this);
+				p.ChildAdded.Fire(this);
+			}
+		}
+		FindFirstChild(name) {
+			return this._children.find(c => c.Name === name);
+		}
+		WaitForChild(name) {
+			return this.FindFirstChild(name);
+		}
+		GetChildren() {
+			return [...this._children];
+		}
+		IsA(className) {
+			return this.ClassName === className || className === "Instance";
+		}
+		Destroy() {
+			this.Parent = undefined;
+		}
+		SetAttribute(k, v) {
+			this._attrs.set(k, v);
+		}
+		GetAttribute(k) {
+			return this._attrs.get(k);
+		}
+		FireClient(player, ...args) {
+			this.sent.push({ to: player, args });
+			if (this.sent.length > 4000) this.sent.splice(0, 2000);
+		}
+		FireAllClients(...args) {
+			this.sent.push({ to: undefined, args });
+			if (this.sent.length > 4000) this.sent.splice(0, 2000);
+		}
+	}
+	globalThis.Instance = Inst;
+
+	/** Roblox's DataStores outlive a server: one map per store name for the whole run */
+	const stores = new Map();
+	const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+	/** every DataStore call that went through, in order: { store, op, key } (the tests read the order of writes) */
+	const storeLog = [];
+	/** GetDataStore(name) throws this many more times per store name (a store the service cannot open yet) */
+	const openFailures = new Map();
+	function fakeStore(name) {
+		let s = stores.get(name);
+		if (s !== undefined) return s;
+		const data = new Map();
+		s = {
+			data,
+			/** fault injection: how many of the next calls of each kind throw, as a DataStore outage does */
+			fail: { get: 0, update: 0 },
+			UpdateAsync(key, transform) {
+				if (s.fail.update > 0) {
+					s.fail.update -= 1;
+					throw new Error(`injected UpdateAsync failure on ${name}`);
+				}
+				const next = transform(clone(data.get(key)));
+				if (next !== undefined) data.set(key, clone(next));
+				storeLog.push({ store: name, op: "update", key });
+				return [next];
+			},
+			GetAsync(key) {
+				if (s.fail.get > 0) {
+					s.fail.get -= 1;
+					throw new Error(`injected GetAsync failure on ${name}`);
+				}
+				storeLog.push({ store: name, op: "get", key });
+				return [clone(data.get(key))];
+			},
+			SetAsync: (key, v) => data.set(key, clone(v)),
+		};
+		stores.set(name, s);
+		return s;
+	}
+
+	let guid = 0;
+	function makeGame(privateServer) {
+		const ReplicatedStorage = new Inst("ReplicatedStorage");
+		const Workspace = new Inst("Workspace");
+		Workspace.GetServerTimeNow = () => clockNow;
+		const Players = {
+			list: [],
+			PlayerAdded: new Signal(),
+			PlayerRemoving: new Signal(),
+			MaxPlayers: 6,
+			CharacterAutoLoads: true,
+			GetPlayers() {
+				return [...this.list];
+			},
+			GetPlayerByUserId(id) {
+				return this.list.find(p => p.UserId === id);
+			},
+		};
+		const RunService = {
+			Heartbeat: new Signal(),
+			IsStudio: () => false,
+			IsServer: () => true,
+			IsClient: () => false,
+		};
+		const HttpService = {
+			GenerateGUID: () => `guid-${++guid}`,
+			JSONEncode: v => JSON.stringify(v),
+			JSONDecode: s => JSON.parse(s),
+		};
+		const DataStoreService = {
+			GetDataStore: name => {
+				const left = openFailures.get(name) ?? 0;
+				if (left > 0) {
+					openFailures.set(name, left - 1);
+					throw new Error(`injected GetDataStore failure on ${name}`);
+				}
+				return fakeStore(name);
+			},
+			GetRequestBudgetForRequestType: () => 100,
+		};
+		const services = {
+			ReplicatedStorage,
+			Workspace,
+			Players,
+			RunService,
+			HttpService,
+			DataStoreService,
+			TextChatService: new Inst("TextChatService"),
+			TextService: {},
+		};
+		const closers = [];
+		globalThis.game = {
+			GetService(name) {
+				const s = services[name];
+				if (s === undefined) throw new Error(`the fake Roblox has no ${name}`);
+				return s;
+			},
+			JobId: `job-${++guid}`,
+			PrivateServerId: privateServer ? "vip-server" : "",
+			PrivateServerOwnerId: privateServer ? 7 : 0,
+			PlaceId: 1,
+			PlaceVersion: 1,
+			BindToClose: fn => closers.push(fn),
+		};
+		return { services, closers };
+	}
+
+	function makePlayer(userId, name) {
+		const p = new Inst("Player");
+		p.Name = name;
+		p.UserId = userId;
+		p.DisplayName = name;
+		p.kicked = false;
+		p.Kick = () => {
+			p.kicked = true;
+		};
+		p.GetNetworkPing = () => 0.05;
+		return p;
+	}
+
+	// ---------------------------------------------------------------- a server "process"
+
+	/**
+	 * Boots server/main.server.ts from scratch: every module under src is loaded again, so a second boot is a second
+	 * server process (its own JobId, its own world, its own memory) that shares nothing with the first but the
+	 * DataStore — exactly what a server hop is.
+	 */
+	function bootServer({ privateServer = false } = {}) {
+		for (const k of Object.keys(require.cache)) if (k.startsWith(SRC)) delete require.cache[k];
+		const env = makeGame(privateServer);
+		require(join(SRC, "server/main.server.ts"));
+		const host = require(join(SRC, "server/net/mpHost.ts")).activeMpHost();
+		if (host === undefined) throw new Error("main.server.ts did not start the MP host (MP_PHASE < 1?)");
+		const P = require(join(SRC, "shared/net/protocol.ts"));
+		const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const { Players, RunService, ReplicatedStorage } = env.services;
+		const net = ReplicatedStorage.FindFirstChild("Net");
+		const remote = name => {
+			const r = net.FindFirstChild(name);
+			if (r === undefined) throw new Error(`no remote ${name}`);
+			return r;
+		};
+		const seqs = new Map();
+		const server = {
+			env,
+			host,
+			P,
+			sim: host.simulation,
+			privateServer,
+			/** PlayerAdded (the session loads at once: the DataStore is in memory) and the client's LoadRequest */
+			join(userId, name = `p${userId}`) {
+				const p = makePlayer(userId, name);
+				// a connected Player is parented to the Players service; a removed one is not (Roblox sets it to nil)
+				p._parent = Players;
+				Players.list.push(p);
+				Players.PlayerAdded.Fire(p);
+				remote("LoadRequest").OnServerEvent.Fire(p);
+				return p;
+			},
+			/** the player leaves the SERVER; `reversed` fires the PlayerRemoving handlers the other way round */
+			quit(p, reversed = false) {
+				Players.list = Players.list.filter(x => x !== p);
+				if (reversed) Players.PlayerRemoving.FireReversed(p);
+				else Players.PlayerRemoving.Fire(p);
+				p._parent = undefined;
+			},
+			/** the live session save, as the LoadAck handed it to the client */
+			save(p) {
+				const acks = remote("LoadAck").sent.filter(e => e.to === p);
+				return acks[acks.length - 1]?.args[0]?.save;
+			},
+			token(p) {
+				const acks = remote("LoadAck").sent.filter(e => e.to === p);
+				return acks[acks.length - 1]?.args[0]?.token;
+			},
+			intent(p, kind) {
+				remote("Intent").OnServerEvent.Fire(p, P.encodeIntent(kind));
+			},
+			/** EnterWorld, then long enough for the admit pass (ADMIT_INTERVAL) whatever the cooldown said */
+			enter(p) {
+				server.intent(p, P.IntentKind.EnterWorld);
+				server.run(0.6);
+				return server.body(p);
+			},
+			exit(p) {
+				server.intent(p, P.IntentKind.LeaveWorld);
+				server.beat();
+			},
+			/** one Input packet, newest command first with the §2.2 redundancy, walking along `angle` */
+			walk(p, angle) {
+				const seq = (seqs.get(p) ?? 0) + 1;
+				seqs.set(p, seq);
+				const cmds = [];
+				for (let k = 0; k < 3 && seq - k >= 1; k++)
+					cmds.push(P.makeCommand(seq - k, Math.cos(angle), Math.sin(angle), 0, 0, 0));
+				remote("Input").OnServerEvent.Fire(p, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+			},
+			/** the live session save's client-visible remotes, for a suite that sends its own packets */
+			remote,
+			shop(p, req) {
+				return remote("ShopAction").OnServerInvoke(p, req);
+			},
+			/** a client progress report (SaveRequest) of the live save with `fields` overridden */
+			report(p, fields) {
+				const json = JSON.stringify({ ...server.save(p), ...fields });
+				remote("SaveRequest").OnServerEvent.Fire(p, server.token(p), json);
+				return remote("SaveAck")
+					.sent.filter(e => e.to === p)
+					.pop()?.args[0];
+			},
+			body(p) {
+				return host.playerOf(p);
+			},
+			/** the survivor's own view of the life states on the reliable World channel, in order */
+			lifeEventsOf(p) {
+				const out = [];
+				let mySlot = -1;
+				for (const e of remote("World").sent) {
+					if (e.to !== undefined && e.to !== p) continue;
+					const batch = P.decodeWorld(e.args[0]);
+					if (batch === undefined) continue;
+					for (const ev of batch.events) {
+						if (ev.t === P.WorldEv.PlayerJoined && ev.userId === p.UserId) mySlot = ev.slot;
+						if (ev.t === P.WorldEv.PlayerLife && ev.slot === mySlot) out.push(ev.state);
+					}
+				}
+				return out;
+			},
+			clearWorldLog() {
+				remote("World").sent.length = 0;
+			},
+			/** a death through the server's own damage path, then the tick that notices it */
+			kill(p) {
+				const sp = server.body(p);
+				sp.state.godMode = false;
+				server.sim.combat.damageActor(sp.slot, sp.state, sp.save, sp.state.hpMax * 10, true);
+				server.beat();
+				server.beat();
+				return sp;
+			},
+			/** the stored document, as the next session anywhere would load it */
+			stored(userId) {
+				const doc = fakeStore(SAVE_STORE).data.get(String(userId));
+				if (doc === undefined) return undefined;
+				return typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+			},
+			storeDoc(userId, edit) {
+				const store = fakeStore(SAVE_STORE);
+				const doc = store.data.get(String(userId));
+				const data = JSON.parse(doc.data);
+				edit(data);
+				doc.data = JSON.stringify(data);
+				store.data.set(String(userId), doc);
+			},
+			/** keep these survivors out of the horde's teeth, so the only deaths are the scripted ones */
+			immortal: new Set(),
+			beat(dt = 1 / 60) {
+				clockNow += dt;
+				for (let i = timers.length - 1; i >= 0; i--) {
+					if (timers[i].at <= clockNow) {
+						const t = timers.splice(i, 1)[0];
+						t.fn();
+					}
+				}
+				for (const p of server.immortal) {
+					const sp = host.playerOf(p);
+					if (sp !== undefined && !sp.state.dead) {
+						sp.state.godMode = true;
+						sp.state.hungry = Math.max(sp.state.hungry, 1);
+					}
+				}
+				RunService.Heartbeat.Fire(dt);
+				if (tickErrors.length > 0)
+					throw new Error(`the simulation tick failed: ${tickErrors.splice(0).join(" | ")}`);
+			},
+			run(seconds, dt = 1 / 60) {
+				const n = Math.round(seconds / dt);
+				for (let i = 0; i < n; i++) server.beat(dt);
+			},
+			/** real seconds until `pred` holds, or -1 when it did not within `limit` */
+			runUntil(pred, limit, dt = 1 / 60) {
+				let t = 0;
+				while (t < limit) {
+					if (pred()) return t;
+					server.beat(dt);
+					t += dt;
+				}
+				return pred() ? t : -1;
+			},
+			/** the world clock `seconds` of real time before daybreak (night runs at 1.2× TIME_SPEED) */
+			nightLeft(seconds) {
+				const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+				const hours = seconds * DESIGN.TIME_SPEED * 1.2;
+				server.sim.clock.setClock(6 - hours);
+			},
+			shutdown() {
+				for (const fn of env.closers) runThread(fn, []);
+			},
+			/** every `onWorldWiped` report, through the keeper's own hook (chained, the host still logs) */
+			wipes() {
+				const lives = host.lives;
+				if (lives.__wipes === undefined) {
+					lives.__wipes = [];
+					const prev = lives.onWorldWiped;
+					lives.onWorldWiped = r => {
+						lives.__wipes.push(r);
+						prev?.(r);
+					};
+				}
+				return lives.__wipes;
+			},
+		};
+		return server;
+	}
+
+	return { bootServer };
+}
+
+const Roblox = fakeRoblox();
+let nextUser = 7000;
+const newUser = () => ++nextUser;
+/** what client/main.client.ts deliverPacks does to the client's copy: every pending pack's items, × how many */
+function deliverPacksLikeTheClient(save, addItem) {
+	for (const p of SHOP_PACKS) {
+		const n = Math.max(0, (save.packsBought[p.id] ?? 0) - (save.packsOpened[p.id] ?? 0));
+		if (n <= 0) continue;
+		for (const item of p.items) if (item.index >= 0) addItem(save, item.kind, item.index, item.count * n);
+		save.packsOpened[p.id] = save.packsBought[p.id];
+	}
+}
+/** the backpack fields a client report carries, from the client's own copy */
+const reportOf = c => ({
+	invenWeapon: c.invenWeapon,
+	invenEquip: c.invenEquip,
+	invenUse: c.invenUse,
+	invenEtc: c.invenEtc,
+	ammoNormal: c.ammoNormal,
+	ammoShotgun: c.ammoShotgun,
+	ammoMachinegun: c.ammoMachinegun,
+	ammoArrow: c.ammoArrow,
+	oil: c.oil,
+	electric: c.electric,
+	packsOpened: c.packsOpened,
+	equipWeapon: c.equipWeapon,
+	equipCloth: c.equipCloth,
+	equipHand: c.equipHand,
+	equipGun: c.equipGun,
+	equipOutfit: c.equipOutfit,
+	equipPet: c.equipPet,
+	skillLevels: c.skillLevels,
+});
+const clone = v => JSON.parse(JSON.stringify(v));
+
+section("G1. every pack: its declared contents, its price charged by the server, delivered exactly (MON-03)", () => {
+	checkRows("the contents line a player reads names exactly the items the pack delivers", SHOP_PACKS, p => {
+		const lines = p.contents.split("#").map(l => {
+			const m = /^(.*) X (\d+)$/.exec(l.trim());
+			return m && { name: m[1], count: Number(m[2]) };
+		});
+		if (lines.some(l => l === null) || lines.length !== p.items.length)
+			return `"${p.contents}" vs ${p.items.length} item(s)`;
+		for (let i = 0; i < p.items.length; i++) {
+			const it = p.items[i];
+			const real = nameOf(it.kind, it.index);
+			if (it.index < 0 || real === undefined) return `item ${i} does not resolve`;
+			if (lines[i].count !== it.count || !(lines[i].name === real || lines[i].name.startsWith(`${real} the `)))
+				return `"${lines[i].name} X ${lines[i].count}" vs ${real} x${it.count}`;
+		}
+		return true;
+	});
+	checkRows("MON-03 / MON-01: a pack is fixed, and sells no weapon or ammunition", SHOP_PACKS, p =>
+		p.items.every(it => it.count > 0) &&
+		!p.items.some(it => it.kind === ItemKind.Etc && it.index >= 44 && it.index <= 48)
+			? true
+			: "sells ammunition",
+	);
+	const s = Roblox.bootServer();
+	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+	const SHOP2 = require(join(SRC, "shared/data/shop.ts"));
+	checkRows(
+		"bought through ShopAction: exactly its price, one more bought, refused when short or at the pending cap",
+		SHOP_PACKS,
+		p => {
+			const pl = s.join(newUser(), `pack${p.id}`);
+			const save = s.save(pl);
+			save.money = p.price + 7;
+			const ok = s.shop(pl, { kind: "buyPack", packId: p.id, price: 0 });
+			if (!ok.ok || ok.price !== p.price)
+				return `buy: ${JSON.stringify({ ok: ok.ok, price: ok.price, reason: ok.reason })}`;
+			if (save.money !== 7 || save.packsBought[p.id] !== 1)
+				return `money ${save.money}, bought ${save.packsBought[p.id]}`;
+			s.run(0.6);
+			const poor = s.shop(pl, { kind: "buyPack", packId: p.id });
+			if (poor.ok || poor.reason !== "funds" || save.money !== 7 || save.packsBought[p.id] !== 1)
+				return `short: ${poor.reason}`;
+			s.run(0.6);
+			save.money = 10000;
+			save.packsBought[p.id] = SHOP2.ECONOMY.MAX_PENDING_PACKS;
+			const capped = s.shop(pl, { kind: "buyPack", packId: p.id });
+			if (capped.ok || capped.reason !== "limit" || save.money !== 10000) return `pending cap: ${capped.reason}`;
+			save.packsBought[p.id] = 1;
+			s.run(0.6);
+			// the client delivers it at the next run's start and reports: the server takes exactly the pack's items
+			const client = clone(save);
+			deliverPacksLikeTheClient(client, INV2.addItem);
+			const before = p.items.map(it => INV2.countItem(save, it.kind, it.index));
+			const ack = s.report(pl, reportOf(client));
+			if (ack?.ok !== true) return `report ${JSON.stringify(ack)}`;
+			for (let i = 0; i < p.items.length; i++) {
+				const it = p.items[i];
+				if (INV2.countItem(save, it.kind, it.index) !== before[i] + it.count)
+					return `${nameOf(it.kind, it.index)}: ${before[i]} -> ${INV2.countItem(save, it.kind, it.index)}`;
+			}
+			s.quit(pl);
+			return save.packsOpened[p.id] === 1 || `opened ${save.packsOpened[p.id]}`;
+		},
+	);
+	checkRows(
+		"a report cannot open a pack it did not buy, nor take a pack pet twice",
+		SHOP_PACKS.filter(p => p.items.some(it => it.kind === ItemKind.Equip && COSMETIC(EQUIPS[it.index]))),
+		p => {
+			const pl = s.join(newUser(), `cheat${p.id}`);
+			const save = s.save(pl);
+			const pet = p.items.find(it => it.kind === ItemKind.Equip).index;
+			const client = clone(save);
+			client.packsOpened[p.id] = 3;
+			client.invenEquip[pet] = 3;
+			s.report(pl, reportOf(client));
+			const unbought = save.invenEquip[pet];
+			s.quit(pl);
+			return (
+				(unbought === 0 && save.packsOpened[p.id] === 0) ||
+				`unbought: ${nameOf(ItemKind.Equip, pet)} x${unbought}, opened ${save.packsOpened[p.id]}`
+			);
+		},
+	);
+});
+
+section("G2. a pack pet stays through death and Rebirth, and goes with a New game; a bought one stays (MON-04)", () => {
+	const s = Roblox.bootServer();
+	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+	const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+	const pack = SHOP_PACKS.find(p => p.items.some(it => it.kind === ItemKind.Equip && COSMETIC(EQUIPS[it.index])));
+	const pet = pack.items.find(it => it.kind === ItemKind.Equip).index;
+	const pl = s.join(newUser(), "petowner");
+	s.immortal.add(pl);
+	const save = s.save(pl);
+	save.money = 1000;
+	check(s.shop(pl, { kind: "buyPack", packId: pack.id }).ok, `the ${pack.name} is bought`);
+	const client = clone(save);
+	deliverPacksLikeTheClient(client, INV2.addItem);
+	client.equipPet = pet;
+	s.report(pl, reportOf(client));
+	check(
+		save.invenEquip[pet] === 1 && save.equipPet === pet,
+		`delivered and worn: the server says ${EQUIPS[pet].name} is theirs and on`,
+	);
+	check(SAVE2.petLookOf(save) !== 0, "and it is what goes on the wire (petLookOf)");
+	s.enter(pl);
+	s.immortal.delete(pl);
+	s.kill(pl);
+	s.run(0.6);
+	const reborn = s.shop(pl, { kind: "rebirth", runRev: save.runRev });
+	s.run(0.6);
+	check(reborn.ok === true, "a Rebirth is bought", reborn.reason);
+	check(
+		save.invenEquip[pet] === 1 && save.equipPet === pet,
+		"the pack pet is still theirs and on after a death and a Rebirth",
+	);
+	s.kill(pl);
+	s.run(0.6);
+	const fresh = s.shop(pl, { kind: "newRun", runRev: save.runRev });
+	check(fresh.ok === true, "a New game is started", fresh.reason);
+	check(
+		save.invenEquip[pet] === 0 && save.equipPet === -1,
+		'a New game takes the pack pet away ("it stays until a New game")',
+		`owned ${save.invenEquip[pet]}, worn ${save.equipPet}`,
+	);
+	// a pet bought as a costume is forever
+	const bought = COSTUMES.find(c => c.equipId !== pet && COS.cosmeticSlotOf(c.equipId) === EquipSlot.Pet);
+	s.run(0.6);
+	check(s.shop(pl, { kind: "buyCostume", costumeId: bought.id }).ok, `the ${bought.name} costume is bought`);
+	save.equipPet = bought.equipId;
+	s.kill(pl);
+	s.run(0.6);
+	s.shop(pl, { kind: "newRun", runRev: save.runRev });
+	check(
+		save.costumes[bought.id] === 1 && save.equipPet === bought.equipId,
+		"a costume pet survives a New game, still worn",
+	);
+});
+
+section("G3. every costume: sold at the catalogue's price, once, and wearable (MON-04)", () => {
+	const s = Roblox.bootServer();
+	const pl = s.join(newUser(), "wardrobe");
+	const save = s.save(pl);
+	checkRows("ShopAction buyCostume charges exactly the price, marks it owned, refuses a second one", COSTUMES, c => {
+		s.run(0.6);
+		save.money = c.price + 3;
+		const ok = s.shop(pl, { kind: "buyCostume", costumeId: c.id, price: 1 });
+		if (!ok.ok || ok.price !== c.price || save.money !== 3 || save.costumes[c.id] !== 1)
+			return `${JSON.stringify({ ok: ok.ok, price: ok.price })}, money ${save.money}`;
+		s.run(0.6);
+		const again = s.shop(pl, { kind: "buyCostume", costumeId: c.id });
+		return (again.ok === false && again.reason === "owned" && save.money === 3) || `second: ${again.reason}`;
+	});
+	const outfit = COSTUMES.find(c => COS.cosmeticSlotOf(c.equipId) === EquipSlot.Outfit);
+	const pet = COSTUMES.find(c => COS.cosmeticSlotOf(c.equipId) === EquipSlot.Pet);
+	const client = clone(save);
+	client.equipOutfit = outfit.equipId;
+	client.equipPet = pet.equipId;
+	s.report(pl, reportOf(client));
+	check(
+		save.equipOutfit === outfit.equipId && save.equipPet === pet.equipId,
+		`wearing the bought ${outfit.name} and ${pet.name} is accepted from the report`,
+	);
+});
+
+section("G4. the MP_PHASE 2 seams: what the server owns now, and what still only reaches it in a report", () => {
+	const s = Roblox.bootServer();
+	const P2 = s.P;
+	const SIM2 = require(join(SRC, "server/sim/simulation.ts"));
+	const Ply2 = require(join(SRC, "shared/game/player.ts"));
+	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+	const CFG2 = require(join(SRC, "shared/net/mpConfig.ts"));
+	let seq = 0;
+	/** one Input command from `pl`: nothing else of a key press or a Bag click can travel (§2.2) */
+	const press = (pl, held, edges) => {
+		seq += 1;
+		const cmds = [];
+		for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, held, edges));
+		s.env.services.ReplicatedStorage.FindFirstChild("Net")
+			.FindFirstChild("Input")
+			.OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+	};
+	const clientSrc = [
+		"client/main.client.ts",
+		"client/net/netClient.ts",
+		"client/ui/backpack.ts",
+		"client/systems/combat.ts",
+	]
+		.map(source)
+		.join("\n");
+	const intentArgsSent = /encodeIntentArgs\(/.test(clientSrc);
+	const autosave = Number(/const AUTOSAVE_SEC = (\d+)/.exec(source("client/main.client.ts"))?.[1]);
+	info(
+		`MP_PHASE ${CFG2.MP_PHASE}; WORLD_SERVER_PHASE ${SIM2.WORLD_SERVER_PHASE}; client autosave every ${autosave} s`,
+	);
+	check(
+		CFG2.MP_PHASE === 2 && SIM2.WORLD_SERVER_PHASE === 3,
+		"the shipped phase: the server owns the body and the combat, not yet the backpack",
+	);
+
+	{
+		// NET-1: keys 1-5 / the Bag's Equip change the CLIENT's save; the server's weapon machine reads its own
+		const pl = s.join(newUser(), "switcher");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		save.invenWeapon[10] = 1;
+		save.ammoNormal = 30;
+		save.equipWeapon = 0;
+		const sp = s.enter(pl);
+		const client = clone(save);
+		client.equipWeapon = 10; // what switchWeapon writes on the client when key 2 is pressed
+		for (let i = 0; i < 120; i++) {
+			press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
+			s.beat();
+		}
+		const held = sp.state.weapon.pointer;
+		const shots = s.sim.combat.statsOf(sp.slot).shots;
+		knownBug(
+			"NET-1",
+			held === 0 && shots === 0 && !intentArgsSent,
+			`a weapon switch (keys 1–5, the hotbar, the Bag) never reaches the server: 2 s after pressing 2 for the pistol the server still swings the ${WEAPONS[held]?.name}, until the next save report (autosave ${autosave} s)`,
+			`server holds ${WEAPONS[held]?.name}, ${shots} shot(s) fired`,
+		);
+		s.report(pl, reportOf(client));
+		s.beat();
+		check(sp.state.weapon.pointer === 10, "the report is the only road: after it the server holds the pistol");
+		s.quit(pl);
+	}
+	{
+		// NET-2: the Bag's Use / Eat runs itemUseEffect on the client's copy of the body; the server owns hp and hunger
+		const pl = s.join(newUser(), "eater");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
+		const CAN = USABLES.find(u => u.name === "Canned food").id;
+		const sp = s.enter(pl);
+		s.immortal.delete(pl);
+		sp.state.godMode = false;
+		sp.state.hp = 40;
+		sp.state.hungry = 30;
+		const client = clone(save);
+		const body = Ply2.createPlayer(client, 0, 0);
+		body.hp = 40;
+		body.hungry = 30;
+		const ateB = Ply2.itemUseEffect(body, client, BANDAGE);
+		const ateC = Ply2.itemUseEffect(body, client, CAN);
+		s.report(pl, reportOf(client));
+		s.run(0.5);
+		knownBug(
+			"NET-2",
+			ateB &&
+				ateC &&
+				save.invenUse[BANDAGE] === client.invenUse[BANDAGE] &&
+				sp.state.hp < 55 &&
+				sp.state.hungry < 50,
+			"eating and using items does nothing: the effect lands on the client's copy of the body (overwritten by the next snapshot), the server's hp and hunger never move, and the report then takes the item away",
+			`client ${body.hp.toFixed(0)} hp / ${body.hungry.toFixed(0)} food; server ${sp.state.hp.toFixed(0)} hp / ${sp.state.hungry.toFixed(0)} food; bandages left on the server ${save.invenUse[BANDAGE]}`,
+		);
+		s.quit(pl);
+	}
+	{
+		// NET-3: the server spends the reserve on its reloads; the client's predicted reload never does, and its report
+		// carries the unspent number back
+		const pl = s.join(newUser(), "shooter");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		save.invenWeapon[10] = 1;
+		save.equipWeapon = 10;
+		save.ammoNormal = 40;
+		const sp = s.enter(pl);
+		// the client's own copy, through the client's real predicted weapon machine: fire and reload for 10 s
+		const client = clone(save);
+		const clientStart = client.ammoNormal;
+		const cRefs = {
+			world: W.createWorld(4000, 4000),
+			players: [],
+			player: Ply.createPlayer(client, 1000, 1000),
+			save: client,
+			input: new InputState(),
+			zombies: [],
+			bosses: [],
+			bullets: [],
+			pendingPlace: -1,
+			fx: [],
+			onMessage: () => {},
+			onExp: () => {},
+		};
+		cRefs.players.push(cRefs.player);
+		const cCombat = new CCombat.Combat();
+		for (let i = 0; i < 600; i++) {
+			cRefs.input.attackHeld = true;
+			cRefs.input.attackPressed = true;
+			cCombat.update(cRefs, 1 / 60);
+		}
+		for (let i = 0; i < 600; i++) {
+			press(pl, P2.HeldBit.Attack, P2.packEdges(1, 0, 0, 0));
+			s.beat();
+		}
+		const fired = s.sim.combat.statsOf(sp.slot).shots;
+		const serverLeft = save.ammoNormal;
+		s.report(pl, reportOf(client));
+		knownBug(
+			"NET-3",
+			fired > 10 &&
+				client.ammoNormal === clientStart &&
+				serverLeft < clientStart &&
+				save.ammoNormal === clientStart,
+			"ammunition refills itself: the client's predicted reloads never spend its copy of the reserve (the HUD's reserve never drops), and each report writes that unspent number over the server's",
+			`server fired ${fired}, its reserve ${serverLeft} -> ${save.ammoNormal} after the report; client reserve ${client.ammoNormal}`,
+		);
+		s.quit(pl);
+	}
+	{
+		// NET-4: armour and skills too -- chosen in the Bag, they reach the server's damage and movement at the report
+		const pl = s.join(newUser(), "armoured");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		const STEEL = EQUIPS.find(e => e.name === "Steel armor").id;
+		save.invenEquip[STEEL] = 1;
+		save.level = 4;
+		save.skillPoint = 3;
+		s.enter(pl);
+		const client = clone(save);
+		client.equipCloth = STEEL; // the Bag's Equip
+		client.skillLevels[7] = 1; // the Bag's Learn: Trot
+		client.skillPoint = 2;
+		s.run(1);
+		const defBefore = Ply2.playerEquipDefence(save);
+		const trotBefore = save.skillLevels[7];
+		s.report(pl, reportOf(client));
+		knownBug(
+			"NET-4",
+			defBefore === 0 &&
+				trotBefore === 0 &&
+				Ply2.playerEquipDefence(save) === EQUIPS[STEEL].def &&
+				save.skillLevels[7] === 1,
+			`armour, gadgets and skills chosen in the Bag reach the server's damage and speed only with the next report (autosave ${autosave} s): until then the Steel armor protects nothing and Trot adds nothing`,
+			`defence ${defBefore} -> ${Ply2.playerEquipDefence(save)}, Trot ${trotBefore} -> ${save.skillLevels[7]} at the report`,
+		);
+		s.quit(pl);
+	}
+	{
+		// NET-5: the report is also a way to write any backpack at all (F3 takes the inventory away from it)
+		const pl = s.join(newUser(), "forger");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		const sp = s.enter(pl);
+		const HMG = WEAPONS.find(w => w.name === "Heavy machine gun").id;
+		const client = clone(save);
+		client.invenWeapon[HMG] = 1;
+		client.equipWeapon = HMG;
+		client.ammoMachinegun = 99999;
+		client.invenEtc[29] = 999;
+		s.report(pl, reportOf(client));
+		s.beat();
+		knownBug(
+			"NET-5",
+			save.invenWeapon[HMG] === 1 && save.ammoMachinegun === 99999 && sp.state.weapon.pointer === HMG,
+			"a save report can write any weapon, ammunition or material into the backpack, and the server's combat then fires it (only cosmetics, coins and progress are guarded)",
+			`after one forged report: ${WEAPONS[HMG].name} in hand, ${save.ammoMachinegun} MG rounds, ${save.invenEtc[29]} blueprints`,
+		);
+		s.quit(pl);
+	}
+	{
+		// NET-6: what the survivor builds at MP_PHASE 2 lives only in the builder's client
+		const build = source("client/systems/build.ts");
+		const local = /addSolid\(refs\.world/.test(build) && !/FireServer|sendIntent|net\./.test(build);
+		knownBug(
+			"NET-6",
+			s.sim.build === undefined && local,
+			"a barricade, door, campfire or desk built at MP_PHASE 2 exists only in the builder's client: the server's zombies walk through it and the other players never see it",
+			`server build system: ${s.sim.build === undefined ? "off" : "on"}`,
+		);
+	}
 });
 
 // ---------------------------------------------------------------- verdict
