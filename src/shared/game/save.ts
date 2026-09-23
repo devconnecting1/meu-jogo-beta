@@ -8,6 +8,7 @@ import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
 import { TITLES, titleToWire } from "shared/data/titles";
+import { MP_PHASE } from "shared/net/mpConfig";
 
 /**
  * v1: raw client JSON (shopHave = pending packs). v2: server-validated, packsBought/packsOpened/costumes.
@@ -173,7 +174,19 @@ export interface Wallet {
 	/** v5 (MON-05): what the server says was earned, and the kill count a locked Horde Breaker shows */
 	titles: Array<number>;
 	zombieKills: number;
+	/**
+	 * Level and XP, from PROGRESS_SERVER_PHASE on (§11.3 F2) the SERVER's (server/sim/progress.ts `awardExp`): this
+	 * wallet is how they reach the client. Optional so a wallet from an older server still parses.
+	 */
+	level?: number;
+	exp?: number;
 }
+
+/**
+ * From this MP_PHASE on the server counts XP, levels and days (server/sim/progress.ts re-exports it): a client
+ * report no longer moves them, and the wallet brings them back.
+ */
+export const PROGRESS_SERVER_PHASE = 2;
 
 function zeros(n: number): Array<number> {
 	const a: Array<number> = [];
@@ -236,6 +249,17 @@ export function defaultSave(): PlayerSaveData {
 	const save = emptySave();
 	giveStarterKit(save);
 	return save;
+}
+
+/**
+ * The player answered "No" to "Do you want to watch the tutorial?". Two flags carry the tutorial and the answer
+ * has to clear both: `tutorialDone` (the lobby's question and the How to play card) and `firstInstall` (the
+ * in-run coach, client/onboarding). Clearing only the first was the bug the owner hit on 2026-09-23 -- "No" still
+ * started the coach's lessons in the first match.
+ */
+export function declineTutorial(save: PlayerSaveData): void {
+	save.tutorialDone = true;
+	save.firstInstall = false;
 }
 
 /**
@@ -441,6 +465,8 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		runRev: save.runRev,
 		titles: copyArray(save.titles),
 		zombieKills: save.zombieKills,
+		level: save.level,
+		exp: save.exp,
 	};
 }
 
@@ -784,5 +810,15 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	save.zombieKills = math.max(save.zombieKills, readInt(w.zombieKills, save.zombieKills, 0, L.COUNTER_MAX));
 	// a title the server no longer lists is not shown by this copy either
 	save.equipTitle = validTitle(save, save.equipTitle);
+	// XP and levels are the server's from PROGRESS_SERVER_PHASE on, and nothing else ever told this client: the
+	// HUD's XP bar sat at 0 and a level-up never arrived (owner's playtest, 2026-09-23). Below that phase the
+	// client levels itself and a wallet carrying the last REPORTED copy would roll its XP back, so it is ignored.
+	// The skill points are not sent: they follow from the level by the save's own rule (enforceSaveInvariants),
+	// so a skill learned here a moment before this wallet arrived is never handed back as a free point.
+	if (MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.level)) {
+		save.level = readInt(w.level, save.level, 1, L.LEVEL_MAX);
+		save.exp = readInt(w.exp, save.exp, 0, expMaxInit(save.level));
+		save.skillPoint = math.max(0, save.level - 1 - sum(save.skillLevels));
+	}
 	return true;
 }

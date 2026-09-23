@@ -62,6 +62,11 @@ export interface SaveAckPayload {
 	/** part of the progress was held back by the server's time limits: report again later */
 	clamped: boolean;
 	wallet?: Wallet;
+	/**
+	 * Not an answer to a report: the server pushed the wallet because the simulation changed it (XP, a level,
+	 * midnight's coins). The client applies the wallet and nothing else -- no retry, no "saved" toast.
+	 */
+	push?: boolean;
 }
 
 export type ShopActionRequest =

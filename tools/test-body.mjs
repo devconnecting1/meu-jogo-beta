@@ -36,7 +36,8 @@
  *  10. THE WARDROBE         MON-04's purchase through the real ShopAction: unknown ids, too few coins and a costume
  *                           already owned are refused; a request naming its own price pays the catalogue's; what
  *                           was bought can be worn, what was not is taken off; the DataStore gets both.
- *  11. THE TITLES           MON-05 through the real server: a title nobody earned cannot be shown (ShopAction nor
+ *  11. THE XP PUSH          the XP the server credits reaches the client in a pushed wallet (level and XP).
+ *  12. THE TITLES           MON-05 through the real server: a title nobody earned cannot be shown (ShopAction nor
  *                           report), a report cannot grant one or count a kill, the server's own killing blow makes a
  *                           Horde Breaker and tells that player alone, and the title record brings back what a server
  *                           rolled back to v4 wrote the save without -- forgetting only which title was shown.
@@ -1219,10 +1220,75 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	);
 });
 
-// ================================================================ 11: titles, end to end (MON-05)
+// ================================================================ 11: the XP wallet push (PR #8)
+
+section("11) the XP the server credits reaches the client: its wallet is pushed with level and XP in it", () => {
+	// the owner's playtest (2026-09-23): the HUD's XP bar sat at "LV 1 · 0 / 120" through a whole run. From
+	// MP_PHASE 2 the server credits every kill into the live save (server/sim/progress.ts), and nothing carried it
+	// back: the only wallet the client heard came in its next report's ack, and that wallet had no XP in it
+	const s = bootServer();
+	const { applyWallet, defaultSave, expMaxInit } = require(join(SRC, "shared/game/save.ts"));
+	const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+	const acks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p);
+	const pushes = p => acks(p).filter(e => e.args[0]?.push === true);
+	const p = s.join(newUser(), "hunter");
+	const sp = s.enter(p);
+	const save = s.save(p);
+	s.run(1);
+	check(pushes(p).length === 0, "nothing is pushed while nothing changed (the LoadAck already had it all)");
+
+	// one kill, credited by the server exactly as combat does
+	const need = expMaxInit(save.level);
+	s.sim.progress.zombieKilled(900001, 10, sp.slot, 0);
+	s.run(0.5);
+	const first = pushes(p).pop()?.args[0];
+	check(first !== undefined, "a kill the server credited pushes the wallet within half a second");
+	check(
+		first?.wallet?.exp === save.exp && first?.wallet?.level === save.level && save.exp === 10,
+		"…carrying the level and the XP of the live save",
+		JSON.stringify({ exp: first?.wallet?.exp, level: first?.wallet?.level, live: save.exp }),
+	);
+
+	// the client side: the real applyWallet on the client's own copy
+	const mine = defaultSave();
+	mine.skillLevels[1] = 0;
+	applyWallet(mine, first.wallet);
+	check(mine.exp === 10 && mine.level === 1, "the client's save now reads 10 XP (the HUD bar moves)");
+
+	// enough for a level: the level, the XP left over and the skill point all reach the client
+	s.sim.progress.zombieKilled(900002, need, sp.slot, 0);
+	s.run(0.5);
+	const second = pushes(p).pop()?.args[0];
+	applyWallet(mine, second.wallet);
+	check(
+		mine.level === 2 && mine.exp === save.exp && mine.skillPoint === 1,
+		"a level-up arrives with its skill point (level - 1 - skills learned)",
+		JSON.stringify({ level: mine.level, exp: mine.exp, points: mine.skillPoint }),
+	);
+	// a skill learned on the client a moment before the next push is not handed back as a free point
+	mine.skillLevels[1] = 1;
+	mine.skillPoint = 0;
+	applyWallet(mine, second.wallet);
+	check(mine.skillPoint === 0, "a point already spent here stays spent when the same wallet lands again");
+
+	// the pushes are paced and only on change: a quiet minute sends nothing
+	const before = pushes(p).length;
+	s.run(60);
+	check(pushes(p).length === before, "a quiet minute pushes nothing", `${pushes(p).length - before} pushes`);
+	// a wallet from an older server, without level or XP, moves neither
+	const older = { ...second.wallet };
+	delete older.level;
+	delete older.exp;
+	const keep = { level: mine.level, exp: mine.exp };
+	applyWallet(mine, older);
+	check(mine.level === keep.level && mine.exp === keep.exp, "a wallet without level or XP leaves them alone");
+	s.quit(p);
+});
+
+// ================================================================ 12: titles, end to end (MON-05)
 
 section(
-	"11) titles: only what the server granted is shown, and a rollback cannot erase what was earned (MON-05)",
+	"12) titles: only what the server granted is shown, and a rollback cannot erase what was earned (MON-05)",
 	() => {
 		const s = bootServer();
 		const TIT = require(join(SRC, "shared/data/titles.ts"));

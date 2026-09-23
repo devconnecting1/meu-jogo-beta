@@ -2,19 +2,19 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
+import { CONSOLE_MARGIN, HudConsole, HudDay, HudState } from "./hudConsole";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	Badge,
-	Bar,
 	Button,
 	Card,
-	Progress,
+	DESIGN_H,
+	DESIGN_W,
 	addAspect,
 	addStroke,
 	badgeWidth,
 	fadeSurface,
 	fadeText,
-	fmtInt,
 	gamepadActive,
 	makeAnchored,
 	makeFrame,
@@ -27,40 +27,13 @@ import {
 	uiScale,
 } from "./widgets";
 
-export interface HudState {
-	hp: number;
-	hpMax: number;
-	hunger: number;
-	hungerMax: number;
-	level: number;
-	exp: number;
-	expMax: number;
-	/**
-	 * The WORLD's day (MP-13, MP-20): what the town is living through, shared by everyone on the server.
-	 * It is the number in the spotlight because it is the one the night, the horde and the waves follow.
-	 */
-	day: number;
-	/**
-	 * This survivor's own day (MP-13): how long THIS life has lasted. It goes back to 1 on "New game" while
-	 * `day` above does not move at all, which is the whole point of MP-20 -- so the HUD shows it next to the
-	 * world's day whenever the two have parted company, and stays out of the way while they agree (alone in
-	 * your own world they always do, and printing the same number twice explains nothing).
-	 */
-	lifeDay: number;
-	/** 0..24 in-game hours */
-	dayTime: number;
-	isNight: boolean;
-	/** a watch/sundial is equipped: show HH:MM (as in the original, the time is an item perk) */
-	showClock: boolean;
-	weaponName: string;
-	mag: number;
-	magSize: number;
-	reloading: boolean;
-	reloadRatio: number;
-	ammoPool: number;
-	/** 1 → 0 after taking damage */
-	hitFlash: number;
-}
+/*
+ * The in-run HUD (docs/DESIGN_RULES.md UI-09). The vitals, the weapons and the Bag / Menu buttons live in ONE
+ * framed console at the bottom centre and the day in a plate at the top centre -- both in client/ui/hudConsole.ts,
+ * in the vocabulary of the owner's Settings window (UI-07). This file keeps what floats over the world: the damage
+ * vignette, the interaction prompt, the banners and the message feed, and the touch layer.
+ */
+export type { HudState } from "./hudConsole";
 
 type MessageKind = "wave" | "morning" | "night" | "boss" | "level" | "warn" | "normal";
 
@@ -88,6 +61,9 @@ const CENTER = UDim2.fromScale(0.5, 0.5);
 const BANNER_W = 720;
 const BANNER_H = 110;
 const BANNER_MIN_W = 280;
+
+/** between the interaction prompt and the top of the console (design units of the console) */
+const HINT_GAP = 8;
 
 /*
  * ---------------------------------------------------------------- touch layer (pixel space)
@@ -195,20 +171,12 @@ export class Hud {
 
 	private ctx: GameContext;
 	private root: Frame | undefined;
-	private hpBar: Bar | undefined;
-	private hungerBar: Bar | undefined;
-	private expBar: Bar | undefined;
-	private levelLabel: TextLabel | undefined;
-	private dayLabel: TextLabel | undefined;
-	/** MP-13's second number: this life's day, shown only when it has parted from the world's */
-	private lifeLabel: TextLabel | undefined;
-	private phaseLabel: TextLabel | undefined;
-	private clockLabel: TextLabel | undefined;
-	private dayIcon: Frame | undefined;
-	private weaponLabel: TextLabel | undefined;
-	private magLabel: TextLabel | undefined;
-	private ammoLabel: TextLabel | undefined;
-	private reloadBar: Bar | undefined;
+	/** bottom centre: vitals, the weapon hotbar, Bag / Menu, the weapon in hand (hudConsole.ts) */
+	private console: HudConsole | undefined;
+	/** top centre: the world's day, the phase, the watch's clock and this life's day (MP-13) */
+	private day: HudDay | undefined;
+	/** the "UI size" setting at mount (80%..120%) */
+	private uiK = 1;
 	private vignette: Array<Frame> = [];
 	private vignetteT = 1;
 	private flash = 0;
@@ -230,7 +198,6 @@ export class Hud {
 	private hintLabel: TextLabel | undefined;
 	private mounted = false;
 	private last = new Map<string, string>();
-	private ratios = new Map<string, number>();
 	// ---- touch layer (pixel space; see the helpers above)
 	private touchLayer: Frame | undefined;
 	private touchOff: (() => void) | undefined;
@@ -242,9 +209,6 @@ export class Hud {
 	private joyDead: Frame | undefined;
 	private useLabel: TextLabel | undefined;
 	private reloadBtn: TextButton | undefined;
-	/** design-space controls that the pixel layer replaces on a touch device */
-	private bagBox: Frame | undefined;
-	private menuBtn: TextButton | undefined;
 	private hintGamepad: boolean | undefined;
 
 	constructor(ctx: GameContext) {
@@ -262,28 +226,16 @@ export class Hud {
 		label.Text = text;
 	}
 
-	/** sets a bar's fill only when the ratio changed */
-	private setRatio(bar: Bar | undefined, key: string, ratio: number): void {
-		if (bar === undefined || this.ratios.get(key) === ratio) return;
-		this.ratios.set(key, ratio);
-		bar.setRatio(ratio);
-	}
-
-	/** sets a bar's indicator colour only when it changed */
-	private setFill(bar: Bar | undefined, color: Color3): void {
-		if (bar !== undefined && bar.fill.BackgroundColor3 !== color) bar.setColor(color);
-	}
-
 	mount(): void {
 		if (this.mounted) return;
 		this.mounted = true;
 		this.last.clear();
-		this.ratios.clear();
 		const ctx = this.ctx;
 		const mobile = UserInputService.TouchEnabled;
 		this.touch = mobile;
 		// "UI size" setting (0..1, default 0.5): 80% .. 120% of the HUD controls
 		const k = 0.8 + 0.4 * math.clamp(ctx.save.settings.uiSize, 0, 1);
+		this.uiK = k;
 		const root = new Instance("Frame");
 		root.Name = "HudRoot";
 		root.Size = UDim2.fromScale(1, 1);
@@ -293,225 +245,53 @@ export class Hud {
 		this.root = root;
 
 		this.buildVignette(root);
-		this.buildStatus(root, k);
-		this.buildDay(root, k);
-
-		// ---- top-right: backpack (touch devices get the big pixel button of the touch layer instead)
-		const bagBox = makeAnchored(root, "BagBox", 1, 0, 132, 56, 14, 10, true, k);
-		Button(bagBox, "Backpack", "BAG  (B)", {
-			x: 0,
-			y: 0,
-			w: 132,
-			variant: "secondary",
-			size: "lg",
-			onClick: (): void => this.onBackpack?.(),
+		const tr = (key: string): string => this.tr(key);
+		this.day = new HudDay(root, tr, k);
+		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
+		// and Menu buttons), sized and placed between the thumbs by placeConsole()
+		this.console = new HudConsole(root, tr, mobile, k, {
+			// the field key 1-5 writes (client/bootstrap.ts): combat has ONE way to switch weapons
+			onSlot: (slot: number): void => {
+				this.ctx.input.weaponSlotPressed = slot;
+			},
+			onBag: (): void => this.onBackpack?.(),
+			onMenu: (): void => this.onPause?.(),
 		});
-		bagBox.Visible = !mobile;
-		this.bagBox = bagBox;
-
-		this.buildWeapon(root, k, mobile);
 		this.buildHint(root, k);
 		this.buildMessages(root, k);
 		// the save (and with it the player's control preferences) arrives long after bootstrap ran: recompute
 		// the geometry now, so the first run of a session already uses their own sizes and their own side
 		refreshTouchLayout();
 		this.buildTouch(root);
-		// the controls follow the settings sliders and the viewport (rotation, split screen, top bar)
+		this.placeConsole();
+		// the controls follow the settings sliders and the viewport (rotation, split screen, top bar), and the
+		// console and the prompt follow the controls
 		this.touchOff = onTouchLayoutChanged(() => {
-			if (this.mounted && this.root !== undefined) this.buildTouch(this.root);
-		});
-	}
-
-	/** top-left: menu button + vitals card (HP, food, level / XP) */
-	private buildStatus(root: Frame, k: number): void {
-		const w = 350;
-		const h = 92;
-		const status = makeAnchored(root, "Status", 0, 0, w, h, 14, 10, true, k);
-		const menuSize = 56;
-		const menuBtn = Button(status, "Menu", "", {
-			x: 0,
-			y: 0,
-			w: menuSize,
-			h: menuSize,
-			variant: "secondary",
-			size: "icon",
-			zIndex: 5,
-			onClick: (): void => this.onPause?.(),
-		});
-		// the same frame-drawn menu glyph as the touch button (UI-06: no "II", nothing here pauses)
-		const glyph = makeFrame(menuBtn, "MenuIcon", 0, 0, menuSize, menuSize, THEME.background, {
-			transparency: 1,
-			zIndex: menuBtn.ZIndex + 6,
-		});
-		drawIcon(glyph, "menu", menuSize, THEME.secondaryForeground, 1);
-		// on touch the pixel layer owns the menu button (a design-unit button shrinks below a thumb on a phone)
-		menuBtn.Visible = !this.touch;
-		this.menuBtn = menuBtn;
-
-		const vitalsX = menuSize + space(2);
-		const vitalsW = w - vitalsX;
-		const vitals = Card(status, "Vitals", { x: vitalsX, y: 0, w: vitalsW, h, variant: "hud" });
-		const pad = space(3);
-		const tagW = 44;
-		const rowH = 20;
-		const barX = pad + tagW;
-		const barW = vitalsW - barX - pad;
-		const rowY = (i: number): number => space(2) + i * (rowH + space(2));
-		const tag = (name: string, text: string, row: number, color: Color3): TextLabel =>
-			makeLabel(vitals, name, text, pad, rowY(row), tagW, rowH, TEXT.xs, color, {
-				weight: Enum.FontWeight.Bold,
-				align: "left",
-				zIndex: 2,
-			});
-
-		tag("HpTag", "HP", 0, GAME.hp);
-		this.hpBar = Progress(vitals, "HpBar", {
-			x: barX,
-			y: rowY(0),
-			w: barW,
-			h: rowH,
-			color: GAME.hp,
-			label: true,
-			textSize: TEXT.xs,
-		});
-		tag("FoodTag", "FOOD", 1, GAME.food);
-		this.hungerBar = Progress(vitals, "FoodBar", {
-			x: barX,
-			y: rowY(1),
-			w: barW,
-			h: rowH,
-			color: GAME.food,
-			label: true,
-			textSize: TEXT.xs,
-		});
-		this.levelLabel = tag("Level", "LV 1", 2, GAME.xp);
-		const xpH = 10;
-		this.expBar = Progress(vitals, "ExpBar", {
-			x: barX,
-			y: rowY(2) + (rowH - xpH) / 2,
-			w: barW,
-			h: xpH,
-			color: GAME.xp,
-		});
-	}
-
-	/** top-centre: sun / moon, the world's "Day N" (+ this life's day), phase (+ HH:MM with a watch) */
-	private buildDay(root: Frame, k: number): void {
-		// 40 units wider than it used to be, to carry the second number of MP-13 without either of them
-		// having to shrink: the floor of ui/skin.ts is 9 px of text, so "tighter" was never an option
-		const w = 270;
-		const h = 52;
-		const dayBox = makeAnchored(root, "DayBox", 0.5, 0, w, h, 0, 10, true, k);
-		Card(dayBox, "Bg", { x: 0, y: 0, w, h, variant: "hud" });
-		const iconSize = 28;
-		const icon = makeFrame(dayBox, "SunMoon", space(3), (h - iconSize) / 2, iconSize, iconSize, GAME.sun, {
-			radius: RADIUS.full,
-			zIndex: 2,
-		});
-		addAspect(icon, 1);
-		this.dayIcon = icon;
-		const textX = space(3) + iconSize + space(3);
-		const textW = w - textX - space(3);
-		// the two numbers share the top line: the world's day reads first and large, this life's day sits at
-		// the far end in the muted role, next to the watch column below it so the card keeps one right edge
-		const lifeW = 96;
-		this.dayLabel = makeLabel(
-			dayBox,
-			"Day",
-			"Day 1",
-			textX,
-			5,
-			textW - lifeW - space(1),
-			26,
-			TEXT.xl,
-			THEME.foreground,
-			{
-				font: "heading",
-				align: "left",
-				zIndex: 2,
-			},
-		);
-		this.lifeLabel = makeLabel(
-			dayBox,
-			"Life",
-			"",
-			textX + textW - lifeW,
-			7,
-			lifeW,
-			22,
-			TEXT.xs,
-			THEME.mutedForeground,
-			{
-				font: "caption",
-				align: "right",
-				zIndex: 2,
-			},
-		);
-		this.phaseLabel = makeLabel(dayBox, "Phase", "", textX, 29, textW, 18, TEXT.xs, THEME.mutedForeground, {
-			font: "caption",
-			align: "left",
-			zIndex: 2,
-		});
-		this.clockLabel = makeLabel(dayBox, "Clock", "", textX, 29, textW, 18, TEXT.xs, THEME.mutedForeground, {
-			mono: true,
-			weight: Enum.FontWeight.Regular,
-			align: "right",
-			zIndex: 2,
+			if (!this.mounted || this.root === undefined) return;
+			this.buildTouch(this.root);
+			this.placeConsole();
 		});
 	}
 
 	/**
-	 * Weapon name, magazine, reserve and reload progress. On PC it sits in the bottom-right corner; on touch it
-	 * moves to the bottom CENTRE, the one strip of screen no thumb ever covers — and the one place that is still
-	 * free when the player is left-handed and the two controls swap sides.
+	 * Places what sits at the bottom centre. Desktop: the console is anchored (hudConsole.ts) and the prompt rides
+	 * above it in the same design space. Touch: the console goes into the band between the thumbs, measured on the
+	 * touch layout (placeTouchConsole), and the prompt rides above THAT. Never per frame: on mount and on a change
+	 * of the touch geometry.
 	 */
-	private buildWeapon(root: Frame, k: number, mobile: boolean): void {
-		const w = 230;
-		const h = 70;
-		const weaponBox = mobile
-			? makeAnchored(root, "WeaponBox", 0.5, 1, w, h, 0, 14, false, k)
-			: makeAnchored(root, "WeaponBox", 1, 1, w, h, 14, 14, false, k);
-		Card(weaponBox, "Bg", { x: 0, y: 0, w, h, variant: "hud" });
-		const pad = space(3);
-		const innerW = w - pad * 2;
-		const magW = 144;
-		this.weaponLabel = makeLabel(weaponBox, "WeaponName", "", pad, 6, innerW, 18, TEXT.sm, THEME.mutedForeground, {
-			font: "caption",
-			align: "left",
-			zIndex: 2,
-		});
-		this.magLabel = makeLabel(weaponBox, "Mag", "", pad, 24, magW, 32, TEXT.xl2, THEME.foreground, {
-			font: "numeric",
-			align: "left",
-			zIndex: 2,
-		});
-		this.ammoLabel = makeLabel(
-			weaponBox,
-			"Pool",
-			"",
-			pad + magW,
-			30,
-			innerW - magW,
-			24,
-			TEXT.base,
-			THEME.mutedForeground,
-			{
-				mono: true,
-				align: "right",
-				zIndex: 2,
-			},
-		);
-		const reload = Progress(weaponBox, "Reload", {
-			x: pad,
-			y: 58,
-			w: innerW,
-			h: 6,
-			color: GAME.success,
-			value: 0,
-			zIndex: 2,
-		});
-		reload.frame.Visible = false;
-		this.reloadBar = reload;
+	private placeConsole(): void {
+		const deck = this.console;
+		const hint = this.hintBox;
+		if (deck === undefined) return;
+		if (!this.touch) {
+			const bottom = CONSOLE_MARGIN + deck.layout.h * this.uiK + HINT_GAP;
+			if (hint !== undefined) hint.Position = new UDim2(0.5, 0, 1 - bottom / DESIGN_H, 0);
+			return;
+		}
+		const p = deck.placeTouch(getTouchLayout(), this.uiK);
+		if (hint !== undefined) {
+			hint.Position = UDim2.fromOffset(math.round(p.x + p.w / 2), math.round(p.y - HINT_GAP * p.scale));
+		}
 	}
 
 	/**
@@ -703,12 +483,27 @@ export class Hud {
 		);
 	}
 
-	/** interaction prompt ("E  Open door"), bottom centre */
+	/**
+	 * Interaction prompt ("E  Open door"), bottom centre, just above the console: the console's graphite body and
+	 * frame (UI-07), the key as the kit's dark-iron key, the text light. Anchored by its bottom edge and placed by
+	 * placeConsole() -- not by makeAnchored, whose own layout handler would put it back under a touch console.
+	 */
 	private buildHint(root: Frame, k: number): void {
 		const w = 440;
 		const h = 46;
-		const hintBox = makeAnchored(root, "HintBox", 0.5, 1, w, h, 0, 96, false, k);
-		const hintBg = Card(hintBox, "Bg", { x: 0, y: 0, w, h, variant: "popover", transparency: TRANSPARENCY.hud });
+		const hintBox = new Instance("Frame");
+		hintBox.Name = "HintBox";
+		hintBox.AnchorPoint = new Vector2(0.5, 1);
+		hintBox.BackgroundTransparency = 1;
+		hintBox.BackgroundColor3 = THEME.background;
+		hintBox.BorderSizePixel = 0;
+		hintBox.ZIndex = 3;
+		hintBox.Size = UDim2.fromScale((w * k) / DESIGN_W, (h * k) / DESIGN_H);
+		hintBox.SetAttribute("TextScale", k);
+		setDesign(hintBox, w, h);
+		addAspect(hintBox, w / h);
+		hintBox.Parent = root;
+		const hintBg = Card(hintBox, "Bg", { x: 0, y: 0, w, h, fill: SURFACE.window });
 		const keySize = 32;
 		const keyPad = (h - keySize) / 2;
 		this.hintKey = Badge(hintBg, "Key", "E", {
@@ -721,22 +516,11 @@ export class Hud {
 			zIndex: 2,
 		});
 		const textX = keyPad + keySize + space(3);
-		this.hintLabel = makeLabel(
-			hintBg,
-			"Text",
-			"",
-			textX,
-			0,
-			w - textX - space(4),
-			h,
-			TEXT.lg,
-			THEME.popoverForeground,
-			{
-				font: "label",
-				align: "left",
-				zIndex: 2,
-			},
-		);
+		this.hintLabel = makeLabel(hintBg, "Text", "", textX, 0, w - textX - space(4), h, TEXT.lg, THEME.foreground, {
+			font: "label",
+			align: "left",
+			zIndex: 2,
+		});
 		hintBox.Visible = false;
 		this.hintBox = hintBox;
 	}
@@ -838,19 +622,8 @@ export class Hud {
 		this.touchOff = undefined;
 		this.root?.Destroy();
 		this.root = undefined;
-		this.hpBar = undefined;
-		this.hungerBar = undefined;
-		this.expBar = undefined;
-		this.levelLabel = undefined;
-		this.dayLabel = undefined;
-		this.lifeLabel = undefined;
-		this.phaseLabel = undefined;
-		this.clockLabel = undefined;
-		this.dayIcon = undefined;
-		this.weaponLabel = undefined;
-		this.magLabel = undefined;
-		this.ammoLabel = undefined;
-		this.reloadBar = undefined;
+		this.console = undefined;
+		this.day = undefined;
 		this.vignette = [];
 		this.vignetteT = 1;
 		this.feed = undefined;
@@ -872,8 +645,6 @@ export class Hud {
 		this.aimCursor = undefined;
 		this.useLabel = undefined;
 		this.reloadBtn = undefined;
-		this.bagBox = undefined;
-		this.menuBtn = undefined;
 		this.hintBox = undefined;
 		this.hintKey = undefined;
 		this.hintLabel = undefined;
@@ -885,71 +656,15 @@ export class Hud {
 		return this.mounted;
 	}
 
-	private phaseName(t: number): string {
-		if (t >= 19 || t < 6) return this.tr("Night");
-		if (t < 11) return this.tr("Morning");
-		if (t < 16) return this.tr("Afternoon");
-		return this.tr("Evening");
-	}
-
 	update(state: HudState): void {
 		if (!this.mounted || this.root === undefined) return;
 		const now = os.clock();
 
-		// vitals
+		// the console (bars, hotbar, weapon) and the day plate: both write only what changed, and create nothing
+		this.console?.update(state, this.ctx.save, now);
+		this.day?.update(state);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
-		this.setRatio(this.hpBar, "hp", hpRatio);
-		this.setText(this.hpBar?.label, "hpText", `${math.max(0, math.ceil(state.hp))} / ${state.hpMax}`);
-		const foodRatio = state.hungerMax > 0 ? state.hunger / state.hungerMax : 0;
-		this.setRatio(this.hungerBar, "food", foodRatio);
-		this.setText(this.hungerBar?.label, "foodText", `${math.clamp(math.floor(foodRatio * 100 + 0.5), 0, 100)}%`);
-		// low HP: blinks hp <-> foreground; low food: blinks food <-> destructive (exact tokens, never blended)
-		const wave = math.sin(now * 8);
-		this.setFill(this.hpBar, hpRatio < 0.25 && wave > 0 ? THEME.foreground : GAME.hp);
-		this.setFill(this.hungerBar, foodRatio < 0.15 && wave > 0 ? THEME.destructive : GAME.food);
-		this.setRatio(this.expBar, "exp", state.expMax > 0 ? state.exp / state.expMax : 0);
-		this.setText(this.levelLabel, "level", `LV ${state.level}`);
 
-		// day / phase / clock. MP-13 + MP-20: the big number is the WORLD's day, the small one is this life's,
-		// and the small one only appears once "New game" (or joining a town that was already old) has pushed
-		// them apart -- while they agree, the second number would be noise with nothing to say.
-		this.setText(this.dayLabel, "day", `${this.tr("Day")} ${state.day}`);
-		const life = state.lifeDay !== state.day ? `${this.tr("Life day")} ${state.lifeDay}` : "";
-		this.setText(this.lifeLabel, "life", life);
-		this.setText(this.phaseLabel, "phase", this.phaseName(state.dayTime));
-		let clock = "";
-		if (state.showClock) {
-			const h = math.floor(state.dayTime) % 24;
-			const m = math.floor((state.dayTime % 1) * 60);
-			clock = string.format("%02d:%02d", h, m);
-		}
-		this.setText(this.clockLabel, "clock", clock);
-		if (this.dayIcon !== undefined) {
-			const c = state.isNight ? GAME.moon : GAME.sun;
-			if (this.dayIcon.BackgroundColor3 !== c) this.dayIcon.BackgroundColor3 = c;
-		}
-
-		// weapon
-		this.setText(this.weaponLabel, "weapon", state.weaponName);
-		if (state.magSize <= 0) {
-			this.setText(this.magLabel, "mag", this.tr("Melee"));
-			this.setText(this.ammoLabel, "pool", "");
-		} else if (state.reloading) {
-			this.setText(this.magLabel, "mag", `${this.tr("Reloading")}...`);
-			this.setText(this.ammoLabel, "pool", fmtInt(state.ammoPool));
-		} else {
-			this.setText(this.magLabel, "mag", `${state.mag} / ${state.magSize}`);
-			this.setText(this.ammoLabel, "pool", fmtInt(state.ammoPool));
-		}
-		if (this.magLabel !== undefined) {
-			const empty = state.magSize > 0 && state.mag <= 0 && !state.reloading;
-			const c = empty ? THEME.destructive : THEME.foreground;
-			if (this.magLabel.TextColor3 !== c) this.magLabel.TextColor3 = c;
-		}
-		if (this.reloadBar !== undefined) {
-			if (this.reloadBar.frame.Visible !== state.reloading) this.reloadBar.frame.Visible = state.reloading;
-			if (state.reloading) this.setRatio(this.reloadBar, "reload", state.reloadRatio);
-		}
 		// a melee weapon has nothing to reload: the touch button says so instead of doing nothing when pressed
 		if (this.reloadBtn !== undefined) {
 			const canReload = state.magSize > 0;

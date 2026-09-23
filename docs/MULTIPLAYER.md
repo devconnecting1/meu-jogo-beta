@@ -573,7 +573,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - Entram `titles` (uma marca por título de `shared/data/titles.ts`, **do servidor**, como `costumes`), `zombieKills` (os golpes finais que o crédito de abate do servidor deu ao jogador, **do servidor**, só cresce) e `equipTitle` (o título mostrado, -1 = nenhum, checado contra `titles` como um traje contra `costumes`). `version = 5`.
 - **Aditiva, no mesmo documento.** Um documento v4 não tem nenhum dos três: nada ganho, nada contado, nada mostrado — a verdade, porque nenhum servidor contou isso antes do v5. Nada é concedido retroativamente.
 - **Rollback:** um servidor v4 reescreve o save **sem** as três chaves. Para que isso não apague o que foi ganho, cada sessão v5 grava também `{titles, zombieKills}` num segundo documento que o v4 nunca abre (`server/save/titleRecord.ts`, store `ProjectZ_Titles`, chave = UserId), logo depois de gravar o save; a carga v5 seguinte fica com o **maior** dos dois. Ao voltar para v5 o jogador só perdeu **qual** título estava mostrado (um clique no guarda-roupa). O registro é substituído por quem o leu na carga (uma edição do admin pode baixá-lo) e mesclado por quem não conseguiu lê-lo.
-- Testado em `tools/test-save.mjs` (seções 18–21) e, pelo servidor real, em `tools/test-body.mjs` (seção 11).
+- Testado em `tools/test-save.mjs` (seções 19–22) e, pelo servidor real, em `tools/test-body.mjs` (seção 12).
 
 ---
 

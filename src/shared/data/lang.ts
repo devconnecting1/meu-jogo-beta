@@ -625,7 +625,7 @@ export const LANG_TABLE: Array<string> = [
 	"None",
 	"Unequip title",
 	"Locked",
-	"Survivor",
+	// "Survivor" is already listed (the lobby's survivor card)
 	"Horde Breaker",
 	"Week One",
 	"Survive your first night.",
@@ -638,6 +638,13 @@ export const LANG_TABLE: Array<string> = [
 	"Earned by playing, never sold. Everyone sees it under your name.",
 	"No title under your name.",
 	"Titles are earned by playing, never sold. Everyone sees yours under your name.",
+	// the HUD console (client/ui/hudConsole.ts, DESIGN_RULES UI-09): the bar prefixes ("HP 88 / 100", "LV 3 · 30 / 120")
+	// and the weapon hotbar's row of the controls reference (tutorial.ts SCHEMES)
+	"HP",
+	"FOOD",
+	"LV",
+	"Switch weapon",
+	"Tap a weapon",
 ];
 
 /**

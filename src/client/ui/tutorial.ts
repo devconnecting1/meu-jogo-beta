@@ -77,6 +77,8 @@ export const SCHEMES: Array<Scheme> = [
 			["Keep holding", "Automatics keep firing"],
 			["USE", "Interact (appears when you can)"],
 			["RELOAD", "Reload"],
+			// the HUD's weapon hotbar: a tap on a tile does what the 1-5 keys do (client/ui/hudConsole.ts)
+			["Tap a weapon", "Switch weapon"],
 			["BAG", "Backpack"],
 			["MENU", "Menu"],
 		],

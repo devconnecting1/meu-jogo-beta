@@ -853,6 +853,45 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	);
 }
 
+section('18) "Nao" ao tutorial desliga o tutorial inteiro, inclusive as licoes da partida (bug do dono, 2026-09-23)');
+{
+	// the lobby's "No" set only `tutorialDone`; the in-run coach (client/onboarding/index.ts) runs off
+	// `firstInstall`, so the lessons appeared in the first match anyway
+	const fresh = SAVE.defaultSave();
+	check(fresh.firstInstall === true && fresh.tutorialDone === false, "um save novo ainda nao respondeu");
+	SAVE.declineTutorial(fresh);
+	check(fresh.tutorialDone === true, "declineTutorial: a pergunta foi respondida");
+	check(fresh.firstInstall === false, "declineTutorial: o coach da primeira partida nao comeca");
+
+	// the source: whoever answers "No" goes through declineTutorial, and only the "Yes" card (tutorial.ts) marks
+	// the question answered by hand -- that path wants the coach, so it must leave `firstInstall` alone
+	const { readdirSync, statSync } = await import("node:fs");
+	const offenders = [];
+	let callers = 0;
+	(function walk(dir) {
+		for (const name of readdirSync(dir)) {
+			const p = join(dir, name);
+			if (statSync(p).isDirectory()) walk(p);
+			else if (p.endsWith(".ts")) {
+				const text = readFileSync(p, "utf8");
+				if (/declineTutorial\(/.test(text)) callers++;
+				if (/tutorialDone\s*=\s*true/.test(text) && !p.endsWith(join("ui", "tutorial.ts"))) offenders.push(p);
+			}
+		}
+	})(join(SRC, "client"));
+	check(callers > 0, "o cliente responde 'Nao' por declineTutorial");
+	check(
+		offenders.length === 0,
+		"nenhum arquivo do cliente marca tutorialDone a mao fora do cartao do 'Sim'",
+		offenders.join(", "),
+	);
+	const coachGate = readFileSync(join(SRC, "client/onboarding/index.ts"), "utf8");
+	check(
+		/if \(ctx\.save\.firstInstall\)/.test(coachGate),
+		"o coach continua ligado a firstInstall (o que o 'Nao' desliga)",
+	);
+}
+
 // ---------------------------------------------------------------- v5: titles (MON-05)
 
 const TIT = require(join(SRC, "shared/data/titles.ts"));
@@ -873,7 +912,7 @@ function productionV4() {
 	return v4;
 }
 
-section("18) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo muda");
+section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo muda");
 {
 	const doc = productionV4();
 	checkEq(SAVE.storedVersion(doc), 4, "o documento lido se declara v4");
@@ -906,7 +945,7 @@ section("18) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 	checkEq(read.equipTitle, -1, "e um titulo mostrado que nao foi ganho e tirado");
 }
 
-section("19) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca um titulo ou um abate");
+section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca um titulo ou um abate");
 {
 	const v5 = SAVE.sanitizeStoredSave(productionV4());
 	v5.titles[TIT.TitleId.Survivor] = 1;
@@ -951,7 +990,7 @@ section("19) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	);
 }
 
-section("20) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-21, MP-22)");
+section("21) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-21, MP-22)");
 {
 	const LIFE = require(join(SRC, "server/sim/life.ts"));
 	const save = SAVE.defaultSave();
@@ -985,7 +1024,7 @@ section("20) o que foi ganho atravessa a morte, o New game e o fim do mundo (MP-
 	check(stored.titles.every(v => v === 1) && stored.equipTitle === TIT.TitleId.WeekOne, "e o DataStore tambem");
 }
 
-section("21) so o servidor concede: nem o relatorio nem o pedido de equipar (server/save/titles.ts)");
+section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (server/save/titles.ts)");
 {
 	// a report declaring titles, kills and a title shown, on a survivor who earned nothing
 	const base = SAVE.defaultSave();
