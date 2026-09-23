@@ -1,0 +1,31 @@
+{
+	"note": "digests of client/ui/itemIcon.ts drawing every icon, dimmed icon and glyph with Frames (no atlas id): tools/test-icons.mjs --golden",
+	"recordedFrom": "38c363a (the Frame drawer before the atlas)",
+	"digests": {
+		"pooled48": {
+			"steps": 219,
+			"sha1": "e0329e2056660da76aeb97006f971912f5e68910"
+		},
+		"pooled44": {
+			"steps": 219,
+			"sha1": "8ee19c0a070a690690284c90e2d395004acf34ed"
+		},
+		"pooled32": {
+			"steps": 219,
+			"sha1": "0a1471794941face9097b90ba2a237c2b5072b56"
+		},
+		"pooled20": {
+			"steps": 219,
+			"sha1": "c13cc1dcdbbeadbec86a27e16f3cd78714b0bce8"
+		},
+		"pooled0": {
+			"steps": 219,
+			"sha1": "788b0306bcc33fb619a005bfaed0e712370e4d23"
+		},
+		"reserved48": {
+			"steps": 3,
+			"reserve": 50,
+			"sha1": "59878f902e66ad4360b4629faaf2bf4e3c5fd033"
+		}
+	}
+}
