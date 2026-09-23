@@ -15,6 +15,7 @@
  */
 import { GAME_NAME } from "shared/module";
 import { ChatBody, shouldDeliver } from "shared/chat/chatRules";
+import { waitForChildRobust } from "shared/chat/channelWait";
 
 export interface ProximityChatOptions {
 	/**
@@ -42,11 +43,12 @@ export function startProximityChat(options: ProximityChatOptions): void {
 	const Players = game.GetService("Players");
 
 	task.spawn(() => {
-		const channels = TextChatService.WaitForChild("TextChannels", CHANNEL_WAIT);
-		const general = channels?.WaitForChild("RBXGeneral", CHANNEL_WAIT);
+		const channels = waitForChildRobust(TextChatService, "TextChannels", CHANNEL_WAIT);
+		const general = channels !== undefined ? waitForChildRobust(channels, "RBXGeneral", CHANNEL_WAIT) : undefined;
 		if (general === undefined || !general.IsA("TextChannel")) {
-			// no general channel: the place is on the legacy chat, or default channels are turned off. Chat
-			// still works, it is simply not filtered by distance — say so instead of failing silently.
+			// no general channel after a genuinely robust wait: the place is on the legacy chat, or default
+			// channels are turned off. Chat still works, it is simply not filtered by distance — say so instead
+			// of failing silently.
 			warn(`[${GAME_NAME}] proximity chat: RBXGeneral not found, chat is not range-limited`);
 			return;
 		}

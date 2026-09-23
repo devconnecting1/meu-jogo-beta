@@ -18,6 +18,7 @@
  */
 import { Camera, ViewRect } from "shared/engine/camera";
 import { ChatBody, dropCount, lineFade } from "shared/chat/chatRules";
+import { waitForChildRobust } from "shared/chat/channelWait";
 import { GAME_NAME } from "shared/module";
 import { RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "../ui/theme";
 import { addStroke, onLayoutChange, uiScale } from "../ui/widgets";
@@ -118,10 +119,10 @@ export class ChatBubbles {
 		this.parent = parent;
 		this.zIndex = zIndex;
 		this.selfId = Players.LocalPlayer.UserId;
-		// the channel appears a moment after joining, and WaitForChild yields: never on the render thread
+		// the channel appears a moment after joining, and waitForChildRobust yields: never on the render thread
 		task.spawn(() => {
-			const channels = TextChatService.WaitForChild("TextChannels", CHANNEL_WAIT);
-			const general = channels?.WaitForChild("RBXGeneral", CHANNEL_WAIT);
+			const channels = waitForChildRobust(TextChatService, "TextChannels", CHANNEL_WAIT);
+			const general = channels !== undefined ? waitForChildRobust(channels, "RBXGeneral", CHANNEL_WAIT) : undefined;
 			if (this.closed) return;
 			if (general === undefined || !general.IsA("TextChannel")) {
 				warn(`[${GAME_NAME}] chat bubbles: RBXGeneral not found, nothing will float over anyone`);
