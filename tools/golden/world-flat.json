@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the interiors branch (compound footprints, doors, windows, porches; ART-07 signs on the main wing); noSigns = the same without the signage hook",
+	"recordedFrom": "the interiors branch (compound footprints and one roof over them, every door and window marked, porches and patios; ART-07 signs on the main wing); noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
 			"count": 1264,
@@ -11,11 +11,11 @@
 			}
 		},
 		"downtown": {
-			"count": 1384,
-			"sha1": "5be3147268ee3d8cb081cdedf9ee5fc818e4695b",
+			"count": 1403,
+			"sha1": "1e825472d7f0257821532a8b3db1254a40e8a9b7",
 			"noSigns": {
-				"count": 1189,
-				"sha1": "ba5b5824dfded6771a0d3422650d9c3fb4880f0d"
+				"count": 1208,
+				"sha1": "c4d7c816b12f3ee90e03fd493ce4f671e7219b5d"
 			}
 		},
 		"park": {
@@ -27,19 +27,19 @@
 			}
 		},
 		"school": {
-			"count": 865,
-			"sha1": "ee9966ed57ad1b1d443b0efa2b537568da676f51",
+			"count": 891,
+			"sha1": "fab88d8baed36f2b06485c0c4677c2fbd324ec8b",
 			"noSigns": {
-				"count": 592,
-				"sha1": "299a1b9cc5947001db5ac72a18cb2ae48787107e"
+				"count": 618,
+				"sha1": "a66a89b900ec4946df186852e73f0ded979d7fc8"
 			}
 		},
 		"gas": {
-			"count": 1022,
-			"sha1": "f7e2ea5fab579645ef956b9ef54983ef68d4437e",
+			"count": 1035,
+			"sha1": "b4ba56169e23471a6bc11dcd0ddb6f2fa05d8264",
 			"noSigns": {
-				"count": 762,
-				"sha1": "63fd5d47274003495e6abd2ec1c9662da7d265da"
+				"count": 775,
+				"sha1": "adb96cfc9b25d2e2fb68637909cf90883a1d3c4b"
 			}
 		},
 		"street-night": {
@@ -51,11 +51,11 @@
 			}
 		},
 		"overview": {
-			"count": 4897,
-			"sha1": "9ca320ffea345260f70b9da286d1aa9536c673a9",
+			"count": 4923,
+			"sha1": "af7023d135d22087b1e9ceae636e92cef0ef5c3c",
 			"noSigns": {
-				"count": 4585,
-				"sha1": "2912710b9804a622903259360187471d3a633d1d"
+				"count": 4611,
+				"sha1": "d055fce8bd0c6922601bd30bb844f164993b632e"
 			}
 		},
 		"border": {
