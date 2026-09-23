@@ -629,7 +629,7 @@ export const LANG_TABLE: Array<string> = [
 	"Stay alive for 7 days in one life.",
 	"Nights survived",
 	"Zombies put down",
-	"Days survived in this life",
+	"Nights survived in this life",
 	"Title unlocked",
 	"Earned by playing, never sold. Everyone sees it under your name.",
 	"No title under your name.",

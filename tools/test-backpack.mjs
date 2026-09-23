@@ -1834,7 +1834,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	click(row(3), "Week One");
 	check(
 		"Week One conta as noites que o SERVIDOR creditou a esta vida (nao o dia do save): 2 / 7",
-		noteText() === "Stay alive for 7 days in one life. Days survived in this life: 2 / 7",
+		noteText() === "Stay alive for 7 days in one life. Nights survived in this life: 2 / 7",
 		noteText(),
 	);
 

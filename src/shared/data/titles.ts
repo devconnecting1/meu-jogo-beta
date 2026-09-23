@@ -75,7 +75,7 @@ export const TITLES: Array<TitleDef> = [
 		id: TitleId.WeekOne,
 		name: "Week One",
 		howTo: "Stay alive for 7 days in one life.",
-		progressLabel: "Days survived in this life",
+		progressLabel: "Nights survived in this life",
 		goal: WEEK_ONE_NIGHTS,
 		tone: "value",
 	},
