@@ -21,6 +21,7 @@ import {
 	cardHeaderHeight,
 	clearChildren,
 	fmtInt,
+	linkGrid,
 	makeCoinPill,
 	makeFrame,
 	makeLabel,
@@ -207,6 +208,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		});
 
 	const renderPacks = (): void => {
+		const buys: Array<TextButton> = [];
 		for (let i = 0; i < SHOP_PACKS.size(); i++) {
 			const pack = SHOP_PACKS[i];
 			const [x, y] = cell(i);
@@ -225,7 +227,10 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			const btn = actionButton(card, "Buy", tr("Buy"), pack.price, () =>
 				buy({ kind: "buyPack", packId: pack.id }, name, btn, tr("Purchased")),
 			);
+			buys.push(btn);
 		}
+		// the pad walks the cards' Buy buttons as the grid they are, row by row (the rail stays to their left)
+		linkGrid(buys, COLS);
 	};
 
 	const renderEarn = (): void => {

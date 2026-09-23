@@ -146,6 +146,40 @@ export function autoFocus(obj: GuiObject): void {
 }
 
 /**
+ * The D-pad through a grid (GuiObject.NextSelection*): `cells` in reading order, `cols` to a row (a tab bar is one row,
+ * a rail one column). A press moves exactly one cell, row by row and column by column, instead of the engine's
+ * nearest-object guess -- which skips a row or jumps across to the panel beside the grid when a row is short. Down from
+ * a column the next row does not reach lands on that row's last cell. The outer edges stay the engine's (nil), so the
+ * focus still leaves the grid for the tabs above it or the panel beside it, and B / Back still close the screen.
+ * Writes only what changed (a grid re-rendered with the same cells writes nothing).
+ */
+export function linkGrid(cells: ReadonlyArray<GuiObject>, cols: number): void {
+	const n = cells.size();
+	const width = math.max(1, cols);
+	for (let i = 0; i < n; i++) {
+		const c = cells[i];
+		const col = i % width;
+		const nextRow = (math.floor(i / width) + 1) * width;
+		const left = col > 0 ? cells[i - 1] : undefined;
+		const right = col < width - 1 && i + 1 < n ? cells[i + 1] : undefined;
+		const up = i >= width ? cells[i - width] : undefined;
+		const down = i + width < n ? cells[i + width] : nextRow < n ? cells[n - 1] : undefined;
+		if (c.NextSelectionLeft !== left) c.NextSelectionLeft = left;
+		if (c.NextSelectionRight !== right) c.NextSelectionRight = right;
+		if (c.NextSelectionUp !== up) c.NextSelectionUp = up;
+		if (c.NextSelectionDown !== down) c.NextSelectionDown = down;
+	}
+}
+
+/** takes `cell` out of any grid linkGrid put it in (an empty cell, a tile given back to a pool) */
+export function unlinkCell(cell: GuiObject): void {
+	if (cell.NextSelectionLeft !== undefined) cell.NextSelectionLeft = undefined;
+	if (cell.NextSelectionRight !== undefined) cell.NextSelectionRight = undefined;
+	if (cell.NextSelectionUp !== undefined) cell.NextSelectionUp = undefined;
+	if (cell.NextSelectionDown !== undefined) cell.NextSelectionDown = undefined;
+}
+
+/**
  * Shows / hides `obj` (a page kept built for reuse, a pooled row). Hiding also takes the gamepad / keyboard
  * selection off it or off anything inside it: bootstrap.ts reads "something is selected" as "a menu has the pad",
  * so a hidden control that kept the selection would keep the buttons from the game.
@@ -1379,6 +1413,8 @@ function tabTriggers(list: Frame, props: TabsProps, inset: number, gap: number):
 		triggers.push(t);
 		x += tw + gap;
 	}
+	// left / right walk the bar, one tab at a time, and never drop into the page under it or the title strip above
+	linkGrid(triggers, triggers.size());
 	handle.setActive(props.value ?? 0);
 	return handle;
 }
@@ -1506,6 +1542,8 @@ export function Sidebar(parent: Instance, name: string, props: SidebarProps): Si
 		);
 		buttons.push(b);
 	}
+	// up / down walk the rail, one item at a time (the note under it is not a control)
+	linkGrid(buttons, 1);
 	handle.setActive(props.value ?? 0);
 	return handle;
 }

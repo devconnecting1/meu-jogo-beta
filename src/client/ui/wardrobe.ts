@@ -19,6 +19,7 @@ import {
 	autoFocus,
 	centredRect,
 	fmtInt,
+	linkGrid,
 	makeCoinPill,
 	makeFrame,
 	makeLabel,
@@ -512,6 +513,11 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			icons.push(icon);
 			page.tiles.push(tile);
 		}
+		// the pad walks the tiles as the grid they are, row by row (the details panel stays to their right)
+		linkGrid(
+			page.tiles.map(t => t.button),
+			COLS,
+		);
 		pages.push(page);
 	}
 

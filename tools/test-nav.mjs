@@ -13,7 +13,10 @@
  *
  *   1. OPEN / CLOSE     each screen opens, a pad player lands on a control of it, its own close control (X, Back,
  *                       Close, Got it, Back to game) is selectable and closes it through the handler main.client.ts
- *                       wires, and five more open / close cycles leave no Instance and no connection behind.
+ *                       wires, and five more open / close cycles leave no Instance and no connection behind; the
+ *                       menus' ScreenGui draws while a screen is open and stops when it closes; and the D-pad walks
+ *                       every grid one cell at a time (the Bag with a short last row, its tabs, the shop's cards and
+ *                       rail, the Settings tabs, the wardrobe: GuiObject.NextSelection*, widgets.linkGrid).
  *   2. THE PAD          with a menu holding the pad's focus, the buttons that would act in the world (A, X, Y, RT)
  *                       stay the menu's; the two toggles still reach the game: Start (the menu) and LB (the Bag -- the
  *                       button that opens it closes it, UI-11). B: see KNOWN below.
@@ -386,6 +389,121 @@ for (const sc of SCREENS) {
 		bad.length === 0,
 		bad.join("; "),
 	);
+}
+
+// the D-pad through the grids, one cell at a time (GuiObject.NextSelection*, widgets.linkGrid): the engine's nearest-
+// object guess skips a row or jumps to the panel beside a grid whose last row is short. The shim has no spatial
+// navigation of its own, so what is checked is the links the screens set -- the ones the engine follows first
+{
+	/**
+	 * What is wrong with `cells` (reading order, `cols` to a row) as a grid the pad walks: Right walks a row and stops at
+	 * its end; Left is its way back; Down goes to the same column of the next row, or to that row's last cell when the
+	 * row is short, and stops at the last row; Up goes back up a column; every link lands on a shown, selectable cell of
+	 * the grid. The outer edges are left to the engine (no link): the focus still leaves for the tabs or the panel.
+	 */
+	const gridIssues = (label, cells, cols) => {
+		const bad = [];
+		const n = cells.length;
+		const at = c => cells.indexOf(c);
+		for (let i = 0; i < n; i++) {
+			const c = cells[i];
+			const col = i % cols;
+			const row = Math.floor(i / cols);
+			const rowEnd = Math.min((row + 1) * cols, n) - 1;
+			const right = c.NextSelectionRight;
+			if (i < rowEnd ? right !== cells[i + 1] : right !== undefined)
+				bad.push(`${label} ${i}: Right -> ${at(right)}`);
+			const left = c.NextSelectionLeft;
+			if (col > 0 ? left !== cells[i - 1] : left !== undefined) bad.push(`${label} ${i}: Left -> ${at(left)}`);
+			const down = c.NextSelectionDown;
+			const nextRow = (row + 1) * cols;
+			const wantDown = nextRow >= n ? undefined : i + cols < n ? cells[i + cols] : cells[n - 1];
+			if (down !== wantDown) bad.push(`${label} ${i}: Down -> ${at(down)}`);
+			const up = c.NextSelectionUp;
+			if (row > 0 ? up !== cells[i - cols] : up !== undefined) bad.push(`${label} ${i}: Up -> ${at(up)}`);
+			for (const t of [right, left, down, up]) {
+				if (t !== undefined && !(at(t) >= 0 && t.Selectable && shown(t, layer)))
+					bad.push(`${label} ${i}: fora da grade`);
+			}
+		}
+		return bad;
+	};
+	const bad = [];
+	const counts = [];
+	// the Bag: seven weapons, so the second row is short (five, then two)
+	ctx.phase = "playing";
+	const { COLS: BAG_COLS } = require(join(SRC, "client/ui/bagGrid.ts"));
+	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+	const weaponsBefore = [...ctx.save.invenWeapon];
+	for (let id = 0, owned = 0; id < WEAPONS.length && owned < 7; id++) {
+		if (WEAPONS[id] === undefined) continue;
+		ctx.save.invenWeapon[id] = 1;
+		owned = ctx.save.invenWeapon.filter(v => v > 0).length;
+	}
+	pack.open();
+	flush();
+	const bag = layer.FindFirstChild("Backpack");
+	const page = bag?.GetDescendants().find(d => /^Page\d+$/.test(d.Name) && shown(d, layer));
+	const tiles = (page?.GetDescendants() ?? [])
+		.filter(d => /^Tile\d+$/.test(d.Name) && d.IsA("GuiButton") && d.Selectable && shown(d, layer))
+		.sort((a, b) => a.Parent.LayoutOrder - b.Parent.LayoutOrder || a.Position.X.Scale - b.Position.X.Scale);
+	counts.push(`Bag ${tiles.length}`);
+	if (tiles.length <= BAG_COLS) bad.push(`Bag: ${tiles.length} itens, sem uma segunda fileira curta`);
+	bad.push(...gridIssues("Bag", tiles, BAG_COLS));
+	const bagTabs =
+		findIn(bag, "Tabs")
+			?.GetChildren()
+			.filter(c => /^Tab\d+$/.test(c.Name)) ?? [];
+	bagTabs.sort((a, b) => Number(a.Name.slice(3)) - Number(b.Name.slice(3)));
+	counts.push(`abas do Bag ${bagTabs.length}`);
+	bad.push(...gridIssues("abas do Bag", bagTabs, bagTabs.length));
+	pack.close();
+	flush();
+	ctx.save.invenWeapon = weaponsBefore;
+	// the shop: the cards' Buy buttons (3 to a row) and the rail beside them
+	ctx.phase = "shop";
+	const closeShop = showShop(ctx, noop, noop);
+	flush();
+	const shop = layer.FindFirstChild("Shop");
+	const buys = (findIn(shop, "Content")?.GetChildren() ?? [])
+		.filter(c => /^Pack\d+$/.test(c.Name))
+		.sort((a, b) => Number(a.Name.slice(4)) - Number(b.Name.slice(4)))
+		.map(c => findIn(c, "Buy"));
+	const rail = (findIn(shop, "Categories")?.GetChildren() ?? []).filter(c => /^Item\d+$/.test(c.Name));
+	counts.push(`loja ${buys.length}`, `trilho ${rail.length}`);
+	bad.push(...gridIssues("loja", buys, 3), ...gridIssues("trilho", rail, 1));
+	closeShop();
+	flush();
+	// Settings: the tab bar is one row, Left / Right never drop into the page or the title strip
+	ctx.phase = "settings";
+	const closeSettings = showSettings(ctx, noop, noop);
+	flush();
+	const tabs = (findIn(layer.FindFirstChild("Settings"), "Tabs")?.GetChildren() ?? []).filter(c =>
+		/^Tab\d+$/.test(c.Name),
+	);
+	tabs.sort((a, b) => Number(a.Name.slice(3)) - Number(b.Name.slice(3)));
+	counts.push(`abas da Settings ${tabs.length}`);
+	bad.push(...gridIssues("abas da Settings", tabs, tabs.length));
+	closeSettings();
+	flush();
+	// the wardrobe's tiles (3 to a row) on the page that shows
+	ctx.phase = "shop";
+	const closeWardrobe = showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop });
+	flush();
+	const worn = (layer.FindFirstChild("Wardrobe")?.GetDescendants() ?? [])
+		.filter(d => /^Tile\d+$/.test(d.Name) && d.IsA("GuiButton") && shown(d, layer))
+		.sort((a, b) => Number(a.Name.slice(4)) - Number(b.Name.slice(4)));
+	counts.push(`guarda-roupa ${worn.length}`);
+	bad.push(...gridIssues("guarda-roupa", worn, 3));
+	closeWardrobe?.();
+	layer.FindFirstChild("Wardrobe")?.Destroy();
+	flush();
+	check(
+		"o direcional anda nas grades uma celula por vez: Bag (fileira curta), abas do Bag, loja, trilho da loja, abas da Settings, guarda-roupa",
+		bad.length === 0 && tiles.length > BAG_COLS && buys.length > 3 && rail.length > 1 && tabs.length > 1,
+		bad.length > 0 ? bad.slice(0, 6).join("; ") : counts.join(", "),
+	);
+	GuiService.SelectedObject = undefined;
 }
 
 // ================================================================ 2. the pad through a focused menu

@@ -27,6 +27,7 @@ import { Groove, Section } from "./window";
 import {
 	ScrollList,
 	isFocused,
+	linkGrid,
 	makeFrame,
 	makeLabel,
 	makeScrollList,
@@ -35,6 +36,7 @@ import {
 	setDesign,
 	setVisible,
 	sizeRow,
+	unlinkCell,
 } from "./widgets";
 
 // ---------------------------------------------------------------- geometry (design units)
@@ -260,6 +262,7 @@ export class BagGrid {
 		this.byKey = kept;
 		const rowCount = math.ceil(cells / COLS);
 		this.ensureRows(rowCount);
+		const itemButtons: Array<GuiObject> = [];
 		for (let i = 0; i < cells; i++) {
 			const k = keys[i];
 			let t = kept.get(k);
@@ -269,10 +272,16 @@ export class BagGrid {
 			}
 			this.put(t, i);
 			this.fill(t, k, i < n ? models[i] : undefined);
+			if (i < n) itemButtons.push(t.button);
+			else unlinkCell(t.button);
 		}
+		// the pad walks the items cell by cell (the items fill the grid from the first cell, so only the last row can be
+		// short): no row skipped, no jump across to the details panel mid-grid
+		linkGrid(itemButtons, COLS);
 		for (const t of free) {
 			t.key = "";
 			setVisible(t.button, false);
+			unlinkCell(t.button);
 		}
 		this.spare = free;
 		this.reveal();
