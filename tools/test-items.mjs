@@ -1916,6 +1916,63 @@ section("D6. crafting with the item in your hands: what the recipe ate comes off
 	}
 });
 
+section("D7. what each build does once it stands, and whether the content stage (CON-03) is switched on", () => {
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const { placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+	const horde = [
+		"shared/sim/ai/zombieBrain.ts",
+		"server/sim/zombies.ts",
+		"server/sim/combat.ts",
+		"server/sim/projectiles.ts",
+		"server/sim/interaction.ts",
+	]
+		.map(source)
+		.join("\n");
+	/** what a standing build of ETC index `id` does in the shipped game, or undefined */
+	const does = id => {
+		const def = PLACEABLES[id];
+		const solid = placedSolid(def, { x: 1000, y: 1000, w: def.w, h: def.h }, 0);
+		if (IQ.isLight(solid)) return "E lights it";
+		const w = W.createWorld(3000, 3000);
+		W.addSolid(w, solid);
+		for (const st of ["desk", "pro", "fire"])
+			if (SCRAFT.stationNear(w, 1000 + def.w / 2, 1000 + def.h / 2, st) !== undefined) return `a ${st} station`;
+		if (["barricade", "door", "iron_barricade", "iron_door"].includes(def.kind)) return "it blocks the way";
+		if (new RegExp(`"${def.tag}"`).test(horde)) return "the horde reacts to it";
+		return undefined;
+	};
+	const builds = Object.keys(PLACEABLES).map(Number);
+	for (const id of builds) info(`${ETC_ITEMS[id].name}: ${does(id) ?? "nothing"}`);
+	const idle = builds.filter(id => does(id) === undefined);
+	knownBug(
+		"P1",
+		idle.length > 0,
+		"builds that cost a recipe and do nothing once placed (the turrets fire only in the pre-F2 client path; nothing reads generators, vehicles, the cooker or the signal generator; a lamp drone cannot be switched on)",
+		idle.map(id => ETC_ITEMS[id].name).join(", "),
+	);
+	// CON-03: "Receita e pacote de loja se ligam sozinhos ... e a trava vale no servidor" -- is anything outside Núcleo 1 off?
+	const hmg = CRAFT_RECIPES.find(
+		r => r.resultKind === ItemKind.Weapon && WEAPONS[r.resultIndex].name === "Heavy machine gun",
+	);
+	const save = stocked(hmg);
+	const onClient = CCraft.craft(craftRefs(save, stationOf(hmg)), hmg.id);
+	const world = W.createWorld(4000, 4000);
+	station(world, stationOf(hmg), 1000, 1000);
+	const save2 = stocked(hmg);
+	const onServer =
+		new SCRAFT.ServerCraft({ world, build: { placing: () => false } }).craft(
+			0,
+			Ply.createPlayer(save2, 1000, 1000),
+			save2,
+			hmg.id,
+		).kind === "crafted";
+	knownBug(
+		"CON-3",
+		onClient && onServer,
+		"CON-03's content stage is not implemented: nothing outside Núcleo 1 is switched off (a Heavy machine gun crafts on the client and on the server; every pack and recipe is live)",
+	);
+});
+
 // ================================================================ E. skills
 
 section("E1. learning: a point a level, never past the maximum, on the server and in the Bag", () => {
