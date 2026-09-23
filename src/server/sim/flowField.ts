@@ -1,6 +1,6 @@
 import { isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { TOWN } from "shared/engine/constants";
-import { isPlayerBuilt } from "shared/game/physics";
+import { isPlayerBuilt, stampWindow, WINDOW_COST } from "shared/game/physics";
 
 /*
  * Multi-source chase field (docs/MULTIPLAYER.md §3.3). SERVER ONLY — but a pure module: no Instances, no
@@ -30,8 +30,10 @@ import { isPlayerBuilt } from "shared/game/physics";
  */
 
 const FREE = 0;
-const SOFT = 1;
-const HARD = 2;
+/** a window's sill (docs/DESIGN_RULES.md EDI-10): passable at WINDOW_COST, so a door nearby wins */
+const VAULT = 1;
+const SOFT = 2;
+const HARD = 3;
 const INF = 1e9;
 const COST_ORTHO = 10;
 const COST_DIAG = 14;
@@ -187,6 +189,12 @@ export class MultiFlowField {
 		buf.clear();
 		querySolids(world, t.ox, t.oy, t.ox + span, t.oy + span, buf);
 		for (const s of buf) {
+			if (s.kind === "window") {
+				stampWindow(s, t.ox, t.oy, CELL, TILE, (gx, gy) => {
+					if (grid[gy * TILE + gx] < VAULT) grid[gy * TILE + gx] = VAULT;
+				});
+				continue;
+			}
 			if (isPlayerBuilt(s)) continue;
 			if (!isBlocking(s)) continue;
 			this.stamp(grid, t, s, HARD);
@@ -425,6 +433,7 @@ export class MultiFlowField {
 						cost = COST_DIAG;
 					}
 					if (g === SOFT) cost += COST_SOFT;
+					else if (g === VAULT) cost += WINDOW_COST;
 					const nd = d + cost;
 					if (nd < dist[nl]) {
 						dist[nl] = nd;
@@ -456,6 +465,7 @@ export class MultiFlowField {
 					cost = COST_DIAG;
 				}
 				if (g === SOFT) cost += COST_SOFT;
+				else if (g === VAULT) cost += WINDOW_COST;
 				const nd = d + cost;
 				const ndist = nt.bDist as Array<number>;
 				if (nd < ndist[nl]) {

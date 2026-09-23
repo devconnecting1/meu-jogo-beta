@@ -17,6 +17,7 @@ import {
 	buildingAt,
 	createWorld,
 	generateTown,
+	insideBuilding,
 	isOnRoad,
 	querySolids,
 	randomOpenPoint,
@@ -676,7 +677,8 @@ export class GameLoop {
 		}
 		const p = this.player;
 		for (const s of this.fadingRoofs) {
-			const inside = p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h;
+			// the footprint's parts, not its box: standing on the porch or in a loading notch is outside (EDI-04)
+			const inside = insideBuilding(s, p.x, p.y);
 			const target = clamp(roofTargetAlpha(inside), 0, 1);
 			const a = lerp(s.roofAlpha ?? 1, target, ease(ROOF_LERP, dt));
 			if (target >= 1 && a > 0.995) {
