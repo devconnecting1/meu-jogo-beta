@@ -22,7 +22,7 @@ import { SAVE_LIMITS, expMaxInit, PlayerSaveData, PROGRESS_SERVER_PHASE } from "
 import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
-import { creditKillAchievements } from "../save/achievements";
+import { creditBossAchievement, creditKillAchievements } from "../save/achievements";
 import { creditZombieKill } from "../save/titles";
 
 // ---------------------------------------------------------------- constants (§3.6)
@@ -431,7 +431,7 @@ export class Progress {
 	 * themselves are server/main.server.ts's, paid from `bossKills`). A participant either did ≥ 3 % of `hpMax`
 	 * or stayed ≥ 20 s nearby while it lived.
 	 */
-	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number): Array<ExpAward> {
+	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number, bossType = -1): Array<ExpAward> {
 		const l = this.bosses.get(bossId);
 		this.bosses.delete(bossId);
 		const out = new Array<ExpAward>();
@@ -444,13 +444,13 @@ export class Progress {
 				const isKiller = c.slot === killerSlot;
 				killerPaid = killerPaid || isKiller;
 				out.push(this.pay(c.slot, base, isKiller));
-				this.creditBoss(c.slot);
+				this.creditBoss(c.slot, bossType);
 			}
 		}
 		// the killing blow always counts, even from someone who only just arrived: they finished it
 		if (killerSlot >= 0 && !killerPaid) {
 			out.push(this.pay(killerSlot, base, true));
-			this.creditBoss(killerSlot);
+			this.creditBoss(killerSlot, bossType);
 		}
 		return out;
 	}
@@ -506,10 +506,13 @@ export class Progress {
 		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
 	}
 
-	private creditBoss(slot: number): void {
+	private creditBoss(slot: number, bossType: number): void {
 		const save = this.saveOf(slot);
 		const stats = this.bump(slot);
-		if (save !== undefined) stats.coins += creditBossKill(save, this.paysRewards(slot));
+		const pays = this.paysRewards(slot);
+		if (save !== undefined) stats.coins += creditBossKill(save, pays);
+		// CON-04: every participant has brought it down (MP-15), not in an assisted run (§9.3)
+		if (save !== undefined && pays) creditBossAchievement(save, bossType);
 		stats.bossKills += 1;
 	}
 

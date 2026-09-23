@@ -3,6 +3,9 @@ import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
 import { CONSOLE_MARGIN, HudConsole, HudDay, HudState } from "./hudConsole";
+import { HudNav } from "./hudNav";
+import type { PlayerSaveData } from "shared/game/save";
+import type { WorldData } from "shared/game/world";
 import { ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
@@ -180,6 +183,8 @@ export class Hud {
 	private day: HudDay | undefined;
 	/** the match scoreboard and its chip beside the day plate (MP-23, client/ui/scoreboard.ts) */
 	private board: Scoreboard | undefined;
+	/** top left: the compass's needle or the GPS map, when one is in hand (E2, client/ui/hudNav.ts) */
+	private nav: HudNav | undefined;
 	/** the "UI size" setting at mount (80%..120%) */
 	private uiK = 1;
 	private vignette: Array<Frame> = [];
@@ -260,6 +265,7 @@ export class Hud {
 			gamepad: gamepadActive,
 			source: this.scoreSource ?? scoreSourceOf(ctx),
 		});
+		this.nav = new HudNav(root, tr, k);
 		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
 		// and Menu buttons), sized and placed between the thumbs by placeConsole()
 		this.console = new HudConsole(root, tr, mobile, k, {
@@ -640,6 +646,7 @@ export class Hud {
 		this.root = undefined;
 		this.console = undefined;
 		this.day = undefined;
+		this.nav = undefined;
 		this.board?.destroy();
 		this.board = undefined;
 		this.vignette = [];
@@ -682,6 +689,20 @@ export class Hud {
 	/** the match scoreboard of this mount (MP-23), for tests and the admin overlay */
 	scoreboard(): Scoreboard | undefined {
 		return this.board;
+	}
+
+	/** the navigation plate of this mount (E2), for tests */
+	navPlate(): HudNav | undefined {
+		return this.nav;
+	}
+
+	/**
+	 * The compass / GPS in the hand (E2): which plate shows, where the needle points, the map. Every frame of a run;
+	 * writes only what changed and creates nothing (client/ui/hudNav.ts).
+	 */
+	updateNav(world: WorldData, x: number, y: number, save: PlayerSaveData): void {
+		if (!this.mounted) return;
+		this.nav?.update(world, x, y, save, os.clock());
 	}
 
 	update(state: HudState): void {

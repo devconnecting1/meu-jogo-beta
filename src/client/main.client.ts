@@ -503,6 +503,7 @@ function refreshDeskFlags(): void {
 	pack.nearbyPro = pro;
 	pack.nearbyDesk = pro || stationNear(refs, "desk") !== undefined;
 	pack.nearbyFire = stationNear(refs, "fire") !== undefined;
+	pack.nearbyCook = stationNear(refs, "cook") !== undefined;
 }
 
 function toggleBackpack(): void {
@@ -562,6 +563,8 @@ function pushHud(): void {
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
 	});
+	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
+	hud.updateNav(refs.world, p.x, p.y, save);
 	// no "E: ..." prompt for a survivor who cannot act: a screen over the run, or dead (UI-06: the loop, and this,
 	// now run behind the MP-21 wait for daybreak too)
 	const held = pack.isOpen() || pauseCleanup !== undefined || dawnWait !== undefined || p.dead;

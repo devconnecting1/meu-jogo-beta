@@ -226,8 +226,12 @@ function usableParts(u: UsableDef, tr: Tr): Parts {
 		stats.push(effect(tr, "Pain relief", u.pain));
 		notes.push(tr("Hits don't slow you down while it lasts."));
 	}
+	// the `cook` column IS a recipe (shared/data/crafts.ts cookingRecipes): the Craft tab makes it at a lit fire
 	const cooked = u.cook >= 0 ? USABLES[u.cook] : undefined;
-	if (cooked !== undefined) stats.push(stat(tr("Cooks into"), tr(cooked.name), "text"));
+	if (cooked !== undefined) {
+		stats.push(stat(tr("Cooks into"), tr(cooked.name), "text"));
+		notes.push(tr("Cook it at a lit fire, from the Craft tab."));
+	}
 	return { type: tr(isMedicine(u) ? "Medicine" : "Food"), stats, notes, hints: [] };
 }
 

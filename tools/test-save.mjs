@@ -1428,11 +1428,22 @@ section("26) quem move cada conquista: so os eventos do servidor (server/save/ac
 	ACHV.creditKillAchievements(s, 1, WeaponKind.Bow);
 	ACHV.creditKillAchievements(s, 1, WeaponKind.Sniper);
 	check(
-		s.achievements[AID.BowExpert] === 0 && s.achievements[AID.Sniper] === 0,
-		"arco e sniper estao desligados (CON-03): nada conta para eles",
+		s.achievements[AID.BowExpert] === 1 &&
+			s.achievements[AID.Sniper] === 1 &&
+			s.achievements[AID.ZombieSlayer] === 4,
+		"uma flecha e um tiro de sniper: Bow expert e Sniper (armas que funcionam, CON-03)",
 	);
-	check(!ACHV.raiseAchievement(s, AID.CentipedeSlayer, 1), "e nenhuma linha desligada e creditada");
-	checkEq(s.achievements[AID.CentipedeSlayer], 0, "(o contador salvo dela fica como estava)");
+	ACHV.creditBossAchievement(s, 3);
+	for (const bad of [0, 5, -1, 1.5, Number.NaN]) ACHV.creditBossAchievement(s, bad);
+	check(
+		s.achievements[AID.GiantSlayer] === 1 &&
+			s.achievements[AID.CentipedeSlayer] === 0 &&
+			s.achievements[AID.RafflesiaSlayer] === 0 &&
+			s.achievements[AID.HedgehogSlayer] === 0,
+		"o chefe do tipo 3 e o Giant slayer; um tipo fora de 1..4 nao move nada",
+	);
+	check(!ACHV.raiseAchievement(s, AID.Rider, 1), "e nenhuma linha desligada e creditada");
+	checkEq(s.achievements[AID.Rider], 0, "(o contador salvo dela fica como estava)");
 	s.achievements[AID.ZombieSlayer] = ACHIEVEMENTS[AID.ZombieSlayer].max - 1;
 	check(ACHV.addAchievement(s, AID.ZombieSlayer, 1), "o abate que chega a meta completa a conquista");
 	check(!ACHV.addAchievement(s, AID.ZombieSlayer, 1), "e o seguinte nao completa de novo");
@@ -1467,59 +1478,80 @@ section("26) quem move cada conquista: so os eventos do servidor (server/save/ac
 	TITLESRV.creditLifeNight(life);
 	checkEq(life.achievements[AID.NeverDie], 3, "a vida nova sobe o recorde quando o passa");
 
-	// the rest: first steps, crafting, cooking, wood
+	// the rest: first steps, cooking and smelting (ITM-01's heat), wood
 	const s2 = SAVE.defaultSave();
 	ACHV.creditFirstSteps(s2);
 	ACHV.creditFirstSteps(s2);
 	checkEq(s2.achievements[AID.FirstSteps], 1, "First steps: o primeiro corpo na cidade");
-	const cooked = USABLES.findIndex(u => u.name === "Cooked meat");
-	check(ACHV.isCookedFood(ItemKind.Use, cooked), "carne cozida e comida cozida (o `cook` de outra linha)");
+	ACHV.creditCraft(s2, "cook", 2);
+	ACHV.creditCraft(s2, "smelt", 1);
+	ACHV.creditCraft(s2, undefined, 5);
+	ACHV.creditCraft(s2, "cook", -4);
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	ACHV.creditTaken(s2, ItemKind.Etc, wood, 4);
+	ACHV.creditTaken(s2, ItemKind.Etc, wood === 0 ? 1 : 0, 9);
+	ACHV.creditTaken(s2, ItemKind.Use, wood, 9);
 	check(
-		!ACHV.isCookedFood(
-			ItemKind.Use,
-			USABLES.findIndex(u => u.name === "Bandage"),
-		),
-		"bandagem nao e",
-	);
-	ACHV.creditCraft(s2, ItemKind.Use, cooked, 2);
-	ACHV.creditCraft(s2, ItemKind.Weapon, 2, 1);
-	ACHV.creditCook(s2, 3);
-	ACHV.creditWood(s2, 4);
-	check(
-		s2.achievements[AID.Chef] === 5 &&
+		s2.achievements[AID.Chef] === 2 &&
 			s2.achievements[AID.Blacksmith] === 1 &&
 			s2.achievements[AID.WoodsCollector] === 4,
-		"craft de comida cozida e o creditCook vao para o Chef, o resto para o Blacksmith, madeira para o Woods collector",
+		"cozinhar vai para o Chef, fundir para o Blacksmith, o craft frio para nenhum; so madeira vai para o Woods collector",
 		`${s2.achievements[AID.Chef]} / ${s2.achievements[AID.Blacksmith]} / ${s2.achievements[AID.WoodsCollector]}`,
 	);
 }
 
 section("27) os caminhos reais do servidor chamam o credito (craft, madeira, morte, entrada, abate)");
 {
-	// crafting through the server's own ServerCraft (the craft intent's path)
+	// crafting through the server's own ServerCraft (the craft intent's path), beside a lit brazier -- it cooks (a
+	// lit fire) and it smelts: the recipe's heat (ITM-01) says whose the craft is
+	const { addSolid } = require(join(SRC, "shared/game/world.ts"));
 	const world = createWorld(4000, 4000);
+	addSolid(world, {
+		kind: "structure",
+		x: 1040,
+		y: 970,
+		w: 96,
+		h: 64,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "brazier",
+		powered: true,
+	});
 	const craft = new ServerCraft({ world, build: { placing: () => false, hold: () => {} } });
 	const s = SAVE.defaultSave();
-	const recipe = CRAFT_RECIPES.find(r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro && r.needsFire !== true);
-	for (const ing of recipe.ingredients) {
-		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
-	}
+	const plain = r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro;
+	const cold = CRAFT_RECIPES.find(r => plain(r) && r.needsCook !== true && r.needsFire !== true);
+	const cook = CRAFT_RECIPES.find(r => plain(r) && r.needsCook === true);
+	const smelt = CRAFT_RECIPES.find(r => plain(r) && r.needsFire === true && r.needsCook !== true);
 	const state = PLAYER.createPlayer(s, 1000, 1000);
-	const out = craft.craft(0, state, s, recipe.id);
+	const outs = [cold, cook, smelt].map(recipe => {
+		for (const ing of recipe.ingredients) {
+			if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		}
+		craft.step(1);
+		return craft.craft(0, state, s, recipe.id);
+	});
 	check(
-		out.kind === "crafted" && s.achievements[AID.Blacksmith] === 1,
-		"ServerCraft.craft credita o Blacksmith do que o servidor fez",
-		`${out.kind}, Blacksmith ${s.achievements[AID.Blacksmith]}`,
+		outs.every(o => o.kind === "crafted") &&
+			outs[0].heat === undefined &&
+			s.achievements[AID.Chef] === outs[1].count &&
+			s.achievements[AID.Blacksmith] === outs[2].count &&
+			outs[1].count > 0 &&
+			outs[2].count > 0,
+		`ServerCraft.craft: ${cold.id} (frio) para ninguem, ${cook.id} (cozinhar) para o Chef, ${smelt.id} (fundir) para o Blacksmith`,
+		`${outs.map(o => o.kind).join(",")}, Chef ${s.achievements[AID.Chef]}, Blacksmith ${s.achievements[AID.Blacksmith]}`,
 	);
 	// the source of the other callers: one line each, where the server decides
 	const src = f => readFileSync(join(SRC, f), "utf8");
 	check(
-		/creditWood\(save, item\.count\)/.test(src("server/sim/items.ts")) &&
-			/creditWood\(save, drop\.count\)/.test(src("server/sim/items.ts")),
-		"ServerItems: a madeira pega e a revistada vao para o Woods collector",
+		/creditTaken\(save, item\.kind, item\.itemId, item\.count\)/.test(src("server/sim/items.ts")) &&
+			/creditTaken\(save, drop\.kind, drop\.id, drop\.count\)/.test(src("server/sim/items.ts")) &&
+			/creditTaken\(save, extra\.kind, extra\.id, extra\.count\)/.test(src("server/sim/items.ts")),
+		"ServerItems: o que o servidor poe na mochila (pegar, revistar, o achado do Thief) passa pelo creditTaken",
 	);
 	check(/countLifeDeath\(sp\.save\)/.test(src("server/sim/life.ts")), "LifeKeeper.died conta TODA morte desta vida");
 	check(
@@ -1527,10 +1559,10 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 		"o host credita First steps ao admitir o corpo",
 	);
 	check(
-		/zombieKilled\(z\.id, z\.exp, sp\.slot, this\.nowS, z\.type, Wp\.WEAPONS\[st\.weaponId\]\?\.kind \?\? -1\)/.test(
-			src("server/sim/combat.ts"),
-		),
-		"o combate do servidor passa o tipo do zumbi e o da arma na mao ao credito de abate",
+		/const kind = weaponKind \?\? Wp\.WEAPONS\[st\.weaponId\]\?\.kind \?\? -1;/.test(src("server/sim/combat.ts")) &&
+			/zombieKilled\(z\.id, z\.exp, sp\.slot, this\.nowS, z\.type, kind\)/.test(src("server/sim/combat.ts")) &&
+			/bossKilled\(b\.id, b\.exp, b\.hpMax, sp\.slot, b\.type\)/.test(src("server/sim/combat.ts")),
+		"o combate do servidor passa o tipo do zumbi e o da arma (a que lancou, ou a da mao) ao credito; o do chefe tambem",
 	);
 	check(
 		/achievements = save\.achievements\.join/.test(src("server/main.server.ts")),

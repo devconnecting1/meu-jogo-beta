@@ -306,7 +306,7 @@ watch the tutorial?"
 ,,,Trot
 ,,,Patience
 ,,,Pickpocket
-,,,Theif
+,,,Thief
 ,,,Chef
 ,,,Dwarf
 ,,,Robotics
@@ -321,7 +321,7 @@ watch the tutorial?"
 ,,,Recovery increases
 ,,,Knockback increases
 ,,,Melee damage increases
-,,,Roload becomes faster
+,,,Reload becomes faster
 ,,,Accuracy improves
 ,,,Bow accuracy improves
 ,,,Speed increases
@@ -336,7 +336,7 @@ watch the tutorial?"
 ,,,Night vision increases
 ,,,Repair speed increases
 ,,,Accuracy improves with moving
-,,,Able to shot heads
+,,,Able to shoot heads
 ,,,Get less damage from poison
 ,,,Starter pack
 ,,,Food aid
@@ -570,6 +570,10 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Getting started
 ,,,Got it
 ,,,Life day
+,,,Camp
+,,,North
+,,,No camp yet
+,,,N
 ,,,Nice.
 ,,,Night came first
 ,,,Rebirth is for your own world; here you wake at daybreak
@@ -619,6 +623,7 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,Steady aim
 ,,,Pain relief
 ,,,Cooks into
+,,,"Cook it at a lit fire, from the Craft tab."
 ,,,Slot
 ,,,Used in recipes
 ,,,Used to craft
@@ -747,6 +752,11 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,Need a craft desk
 ,,,Need a lit fire
 ,,,Lit fire nearby
+,,,smelter
+,,,Need a lit brazier
+,,,Lit brazier nearby
+,,,"Light a brazier and stand next to it (a campfire is not hot enough for metal), then open the backpack again."
+,,,Need brazier
 ,,,You can craft this here.
 ,,,"Light a campfire or brazier and stand next to it, then open the backpack again."
 ,,,"Stand next to the right desk, then open the backpack again."

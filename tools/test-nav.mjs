@@ -90,6 +90,7 @@ const { showLobby } = require(join(SRC, "client/ui/lobby.ts"));
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
 const { Hud } = require(join(SRC, "client/ui/hud.ts"));
 const { showRunSummary, showDaybreakWait } = require(join(SRC, "client/onboarding/gameOver.ts"));
+const REC = require(join(SRC, "client/ui/records.ts"));
 const { ACHIEVEMENTS, AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
@@ -750,7 +751,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	const done = visible.filter(a => (save.achievements[a.id] ?? 0) >= a.max).length;
 	check(
 		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora: CON-03 / CON-04)",
-		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 9,
+		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 15,
 		sub,
 	);
 	nav(2).Activated.Fire();
@@ -764,7 +765,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		return v !== `${cur.toLocaleString("en-US")} / ${a.max.toLocaleString("en-US")}` || check !== cur >= a.max;
 	});
 	check(
-		"a janela lista as 9 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
+		"a janela lista as 15 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
 		rows.every(r => r !== undefined) &&
 			wrong.length === 0 &&
 			!ACHIEVEMENTS.some(a => a.hidden && findIn(dialog, `Ach${a.id}`)),
@@ -774,26 +775,24 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	flush();
 	nav(3).Activated.Fire();
 	flush();
-	// the Records window (client/ui/records.ts): one table row per record, the label and the value in two cells
 	const records = layer.FindFirstChild("Records");
-	const rowText = label => {
-		const cell = records?.GetDescendants().find(d => d.ClassName === "TextLabel" && d.Text === label);
-		const row = cell?.Parent;
-		return row?.GetDescendants().find(d => d.ClassName === "TextLabel" && d !== cell && d.Text !== "")?.Text;
-	};
-	const shownRecords = {
-		best: rowText("Best day"),
-		life: rowText("Life day"),
-		level: rowText("Level"),
-		rebirths: rowText("Rebirths"),
-	};
+	// the window's own rows (client/ui/table.ts: a row is "Row<n>", its cells "Clabel" / "Cvalue"), against what
+	// recordRows(save) says the save holds -- All time (Best day, Level, Zombies put down, Titles earned) and
+	// This life (Life day, Nights survived in this life, Rebirths)
+	const recRows = REC.recordRows(save);
+	const shownRows = new Map(
+		records
+			.GetDescendants()
+			.filter(d => /^Row\d+$/.test(d.Name))
+			.map(r => [findIn(r, "Clabel")?.Text, findIn(r, "Cvalue")?.Text]),
+	);
+	const wrongRecs = recRows.filter(r => shownRows.get(r.label) !== r.value);
 	check(
 		"Records: o recorde, o dia desta vida, o nivel e os Rebirths sao os do save",
-		shownRecords.best === "12" &&
-			shownRecords.life === "3" &&
-			shownRecords.level === "7" &&
-			shownRecords.rebirths === "2",
-		JSON.stringify(shownRecords),
+		// Map#size is a method under the Luau shims (see the LANG_COUNT comment above)
+		wrongRecs.length === 0 && shownRows.size() === recRows.length,
+		wrongRecs.map(r => `${r.label}: mostra "${shownRows.get(r.label)}", esperado "${r.value}"`).join("; ") ||
+			[...shownRows].map(([l, v]) => `${l}=${v}`).join(", "),
 	);
 	findIn(records, "Close").Activated.Fire();
 	flush();
@@ -936,30 +935,29 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		save.zombieKills = 0;
 	}
 
-	// ACH-3 / CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe" -- no bow, no sniper, no
-	// electricity, no vehicle, no turret. An achievement about content the game does not have is switched off (hidden)
-	// until that content comes back, as the Records window lost its boss line for the same reason (UI-10)
-	const OFF_CONTENT = {
-		1: "eletricidade",
-		3: "arco",
-		7: "sniper",
-		8: "chefe",
-		9: "chefe",
-		10: "chefe",
-		11: "chefe",
-		16: "veiculo",
-		21: "torreta",
-	};
-	const onView = Object.keys(OFF_CONTENT)
-		.map(Number)
-		.filter(id => visible.some(a => a.id === id));
+	// ACH-3 / CON-03 (as rewritten by the owner, 2026-09-23: everything in the data works): an achievement is on view
+	// exactly when the game can give it today. The bow and the sniper are weapons that work; the bosses SPAWN (the town's
+	// anchors, shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies. Off: what is still `BUG` in
+	// test:items (energy: Thomas Edison, Turret; vehicles: Rider), what has no trigger (Collector, Ninja) and the
+	// original's store and ads (Thanks, Ads addict)
+	const OFF = [1, 4, 16, 18, 19, 20, 21];
+	const offNow = ACHIEVEMENTS.filter(a => a.hidden === true).map(a => a.id);
+	const population = readFileSync(join(SRC, "shared/sim/ai/population.ts"), "utf8");
+	const world = readFileSync(join(SRC, "shared/game/world.ts"), "utf8");
+	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+	const { WeaponKind } = require(join(SRC, "shared/data/kinds.ts"));
 	check(
-		"ACH-3: nenhuma conquista de conteudo fora do Nucleo 1 esta a vista (chefes 8-11, arco, sniper, eletricidade, veiculo, torreta: CON-03)",
-		onView.length === 0,
-		onView.map(id => `${ACHIEVEMENTS[id].title} (${OFF_CONTENT[id]})`).join(", ") || "todas escondidas",
+		"ACH-3: a vista exatamente o que o jogo de hoje da: desligadas so energia, veiculo, sem gatilho e loja/anuncios do original",
+		JSON.stringify(offNow) === JSON.stringify(OFF) &&
+			visible.length === ACHIEVEMENTS.length - OFF.length &&
+			WEAPONS.some(w => w.kind === WeaponKind.Bow) &&
+			WEAPONS.some(w => w.kind === WeaponKind.Sniper) &&
+			/this\.spawnBoss\(refs\)/.test(population) &&
+			/bossAnchors: \[/.test(world),
+		`desligadas ${JSON.stringify(offNow)}, ${visible.length} a vista`,
 	);
 	check(
-		"...e escondida nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
+		"...e desligada nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
 		ACHIEVEMENTS.length === 22 && ACHIEVEMENTS.every((a, i) => a.id === i),
 	);
 	// ACH-4: Never die counts the nights of a life that has not died -- EVERY death, not only a paid Rebirth
