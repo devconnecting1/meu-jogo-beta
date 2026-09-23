@@ -70,6 +70,12 @@ function checkEq(got, want, what) {
 function near(a, b, tol) {
 	return Math.abs(a - b) <= tol;
 }
+/** how a failing row is named: its name, or a recipe by its id and what it makes */
+function labelOf(row) {
+	if (row.name !== undefined) return row.name;
+	if (row.resultKind !== undefined) return `recipe #${row.id} (${nameOf(row.resultKind, row.resultIndex)})`;
+	return String(row.id ?? JSON.stringify(row));
+}
 /** a check over many rows: one line per area, every failing row named */
 function checkRows(what, rows, fn) {
 	const bad = [];
@@ -80,7 +86,7 @@ function checkRows(what, rows, fn) {
 		} catch (e) {
 			why = `threw ${e?.message ?? e}`;
 		}
-		if (why !== undefined && why !== true) bad.push(`${row.name ?? row.id}: ${why === false ? "no" : why}`);
+		if (why !== undefined && why !== true) bad.push(`${labelOf(row)}: ${why === false ? "no" : why}`);
 	}
 	checks += 1;
 	if (bad.length === 0) {
@@ -1383,6 +1389,426 @@ section("C4. cooking: what the card and the How to play promise (Núcleo 1: raw 
 		`nothing cooks: ${raw.length} usables have a "Cooks into" row on their card${tip ? ' and How to play says fire "cooks what you find"' : ""}, but no recipe or code turns raw into cooked`,
 		raw.map(u => `${u.name} → ${USABLES[u.cook].name}`).join(", "),
 	);
+});
+
+// ================================================================ D. crafting
+
+const INV_FIELD = { 1: "invenWeapon", 2: "invenEquip", 3: "invenUse", 4: "invenEtc" };
+/** a station of `kind` ("desk", "pro", "fire", "furnace", "cold", "campfire") next to (x, y) */
+function station(world, kind, x, y) {
+	const tags = {
+		desk: "craftdesk",
+		pro: "craftdesk_pro",
+		fire: "brazier",
+		cold: "brazier",
+		furnace: "furnace",
+		campfire: "campfire",
+	}[kind];
+	return W.addSolid(world, {
+		kind: "structure",
+		x: x + 40,
+		y: y - 30,
+		w: 96,
+		h: 64,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags,
+		powered: kind === "fire" || kind === "campfire" ? true : kind === "cold" ? false : undefined,
+	});
+}
+/** the one station a recipe asks for, or undefined for a hand recipe */
+const stationOf = r => (r.needsPro ? "pro" : r.needsDesk ? "desk" : r.needsFire === true ? "fire" : undefined);
+/** a save holding exactly `times` × the recipe's ingredients and nothing else of them */
+function stocked(r, times = 1) {
+	const s = bareSave();
+	for (let i = 0; i < s.invenWeapon.length; i++) s.invenWeapon[i] = 0;
+	for (const ing of r.ingredients) INV.addItem(s, ing.kind, ing.index, ing.count * times);
+	return s;
+}
+/** the client refs `craft` / `craftBlocker` read (client/systems/craftSystem.ts: the path MP_PHASE 2 ships) */
+function craftRefs(save, stationKind) {
+	const world = W.createWorld(4000, 4000);
+	const player = Ply.createPlayer(save, 1000, 1000);
+	if (stationKind !== undefined) station(world, stationKind, 1000, 1000);
+	return { world, players: [player], player, save, pendingPlace: -1, fx: [], onMessage: () => {} };
+}
+const ingredientsLeft = (save, r) => r.ingredients.map(i => INV.countItem(save, i.kind, i.index)).join(",");
+
+section("D1. every recipe is coherent: real ingredients, a real result, and a placeable for every build", () => {
+	checkRows(
+		"ids are the row's index",
+		CRAFT_RECIPES,
+		r => CRAFT_RECIPES[r.id] === r || `row ${CRAFT_RECIPES.indexOf(r)}`,
+	);
+	checkRows("every ingredient and every result is a real item, counted above zero", CRAFT_RECIPES, r => {
+		for (const i of r.ingredients)
+			if (nameOf(i.kind, i.index) === undefined || !(i.count > 0))
+				return `ingredient ${i.kind}:${i.index} x${i.count}`;
+		if (nameOf(r.resultKind, r.resultIndex) === undefined) return `result ${r.resultKind}:${r.resultIndex}`;
+		return r.resultCount > 0 || `makes ${r.resultCount}`;
+	});
+	checkRows(
+		"a build recipe (craftKind 1) makes something the world can place",
+		CRAFT_RECIPES.filter(r => r.craftKind === 1),
+		r =>
+			(r.resultKind === ItemKind.Etc && PLACEABLES[r.resultIndex] !== undefined) ||
+			`result ${r.resultKind}:${r.resultIndex}`,
+	);
+	checkRows(
+		"every placeable has a recipe",
+		Object.keys(PLACEABLES).map(k => ({ id: Number(k), name: ETC_ITEMS[Number(k)].name })),
+		p => CRAFT_RECIPES.some(r => r.craftKind === 1 && r.resultIndex === p.id) || "no recipe builds it",
+	);
+	checkRows(
+		"a recipe asks for one station at most (hand, desk, pro desk or fire)",
+		CRAFT_RECIPES,
+		r => [r.needsDesk, r.needsPro, r.needsFire === true].filter(Boolean).length <= 1 || "two stations",
+	);
+});
+
+section(
+	"D2. every recipe through the client's craft (MP_PHASE 2): station, exact ingredients, MAKES ×N, no double",
+	() => {
+		setSeed(11);
+		checkRows(
+			"without its station it is refused and nothing is spent",
+			CRAFT_RECIPES.filter(r => stationOf(r) !== undefined),
+			r => {
+				const save = stocked(r);
+				const refs = craftRefs(save, undefined);
+				const before = ingredientsLeft(save, r);
+				if (CCraft.craft(refs, r.id)) return "crafted with no station";
+				return ingredientsLeft(save, r) === before || `spent: ${before} -> ${ingredientsLeft(save, r)}`;
+			},
+		);
+		checkRows(
+			"with a station of the WRONG kind it is refused too (a desk is not a pro desk, an unlit brazier no fire)",
+			CRAFT_RECIPES.filter(r => r.needsPro || r.needsFire === true),
+			r => {
+				const save = stocked(r);
+				const refs = craftRefs(save, r.needsPro ? "desk" : "cold");
+				return !CCraft.craft(refs, r.id) || `crafted next to a ${r.needsPro ? "plain desk" : "cold brazier"}`;
+			},
+		);
+		checkRows("without its ingredients it is refused and nothing is spent", CRAFT_RECIPES, r => {
+			for (let k = 0; k < r.ingredients.length; k++) {
+				const save = stocked(r);
+				const ing = r.ingredients[k];
+				INV.removeItem(save, ing.kind, ing.index, 1);
+				const refs = craftRefs(save, stationOf(r));
+				const before = ingredientsLeft(save, r);
+				if (CCraft.craft(refs, r.id)) return `crafted one ${nameOf(ing.kind, ing.index)} short`;
+				if (ingredientsLeft(save, r) !== before) return "spent on a refusal";
+			}
+			return true;
+		});
+		checkRows(
+			"with them: every ingredient goes exactly, and MAKES ×N comes out (a build goes on the cursor)",
+			CRAFT_RECIPES,
+			r => {
+				const save = stocked(r);
+				const refs = craftRefs(save, stationOf(r));
+				const had = INV.countItem(save, r.resultKind, r.resultIndex);
+				if (!CCraft.craft(refs, r.id)) return `refused: ${CCraft.craftBlocker(refs, r)}`;
+				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
+					return `left over ${ingredientsLeft(save, r)}`;
+				if (r.craftKind === 1)
+					return (
+						(refs.pendingPlace === r.resultIndex && refs.pendingRecipe === r.id) ||
+						`cursor ${refs.pendingPlace}`
+					);
+				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				return got === r.resultCount || `made ${got}, MAKES ×${r.resultCount}`;
+			},
+		);
+		checkRows("a double click with ingredients for one crafts once", CRAFT_RECIPES, r => {
+			const save = stocked(r);
+			const refs = craftRefs(save, stationOf(r));
+			const had = INV.countItem(save, r.resultKind, r.resultIndex);
+			const first = CCraft.craft(refs, r.id);
+			const second = CCraft.craft(refs, r.id);
+			if (!first || second) return `first ${first}, second ${second}`;
+			return (
+				r.craftKind === 1 ||
+				INV.countItem(save, r.resultKind, r.resultIndex) - had === r.resultCount ||
+				"made twice"
+			);
+		});
+		checkRows(
+			"a desk recipe also works at a pro desk, and smelting at the electric furnace",
+			CRAFT_RECIPES.filter(r => (r.needsDesk && !r.needsPro) || r.needsFire === true),
+			r => {
+				const save = stocked(r);
+				const refs = craftRefs(save, r.needsFire === true ? "furnace" : "pro");
+				return CCraft.craft(refs, r.id) || CCraft.craftBlocker(refs, r);
+			},
+		);
+		{
+			// Dwarf (skill 12): smelting sometimes yields double -- 15 % at level 1, 30 % at level 2 (item_fire)
+			const smelt = CRAFT_RECIPES.find(r => r.needsFire === true);
+			for (const lv of [0, 1, 2]) {
+				setSeed(100 + lv);
+				let doubles = 0;
+				const N = 2000;
+				for (let i = 0; i < N; i++) {
+					const save = stocked(smelt);
+					save.skillLevels[12] = lv;
+					CCraft.craft(craftRefs(save, "fire"), smelt.id);
+					if (INV.countItem(save, smelt.resultKind, smelt.resultIndex) === 2 * smelt.resultCount) doubles++;
+				}
+				const want = [0, 0.15, 0.3][lv];
+				check(
+					near(doubles / N, want, 0.03),
+					`Dwarf ${lv}: ${(want * 100).toFixed(0)} % of smelts come out double`,
+					`${((doubles / N) * 100).toFixed(1)} %`,
+				);
+			}
+		}
+	},
+);
+
+section(
+	"D3. every recipe through the server's craft (F3's intent): the same rules, one transaction, 4 per second",
+	() => {
+		const build = { placing: () => false, hold: () => {} };
+		const serverCraft = (r, stationKind, save) => {
+			const world = W.createWorld(4000, 4000);
+			if (stationKind !== undefined) station(world, stationKind, 1000, 1000);
+			const c = new SCRAFT.ServerCraft({ world, build });
+			return { c, p: Ply.createPlayer(save, 1000, 1000) };
+		};
+		checkRows(
+			"refused without its station, and nothing spent",
+			CRAFT_RECIPES.filter(r => stationOf(r) !== undefined),
+			r => {
+				const save = stocked(r);
+				const before = ingredientsLeft(save, r);
+				const { c, p } = serverCraft(r, undefined, save);
+				const out = c.craft(0, p, save, r.id);
+				return (
+					(out.kind === "refused" && out.why === "station" && ingredientsLeft(save, r) === before) ||
+					JSON.stringify(out)
+				);
+			},
+		);
+		checkRows("refused one ingredient short, and nothing spent", CRAFT_RECIPES, r => {
+			const save = stocked(r);
+			const ing = r.ingredients[r.ingredients.length - 1];
+			INV.removeItem(save, ing.kind, ing.index, 1);
+			const before = ingredientsLeft(save, r);
+			const { c, p } = serverCraft(r, stationOf(r), save);
+			const out = c.craft(0, p, save, r.id);
+			return (
+				(out.kind === "refused" && out.why === "ingredients" && ingredientsLeft(save, r) === before) ||
+				JSON.stringify(out)
+			);
+		});
+		checkRows(
+			"with them: exact ingredients out, MAKES ×N in (a build is held for the cursor)",
+			CRAFT_RECIPES,
+			r => {
+				const save = stocked(r);
+				const { c, p } = serverCraft(r, stationOf(r), save);
+				const had = INV.countItem(save, r.resultKind, r.resultIndex);
+				const out = c.craft(0, p, save, r.id);
+				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
+					return `left over ${ingredientsLeft(save, r)}`;
+				if (r.craftKind === 1)
+					return (out.kind === "holding" && out.placeable === r.resultIndex) || JSON.stringify(out);
+				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				return (
+					(out.kind === "crafted" && got === r.resultCount && out.count === r.resultCount) ||
+					`${JSON.stringify(out)}, made ${got}`
+				);
+			},
+		);
+		checkRows(
+			"two crafts in the same tick with ingredients for two: the second waits for the 4/s limit",
+			CRAFT_RECIPES,
+			r => {
+				const save = stocked(r, 2);
+				const { c, p } = serverCraft(r, stationOf(r), save);
+				c.craft(0, p, save, r.id);
+				const second = c.craft(0, p, save, r.id);
+				if (second.kind !== "refused" || second.why !== "rate") return `second: ${JSON.stringify(second)}`;
+				c.step(1 / SCRAFT.CRAFT_RATE);
+				return c.craft(0, p, save, r.id).kind !== "refused" || "still refused after 0.25 s";
+			},
+		);
+		check(
+			[99999, -1, 0.5, CRAFT_RECIPES.length].every(
+				id =>
+					new SCRAFT.ServerCraft({ world: W.createWorld(100, 100), build }).craft(
+						0,
+						Ply.createPlayer(bareSave(), 50, 50),
+						bareSave(),
+						id,
+					).kind === "refused",
+			),
+			"a recipe id that does not exist is refused",
+		);
+		{
+			// "near a desk": the client (and so the Bag's Craft button) measures the box distance, the server the true one
+			const world = W.createWorld(4000, 4000);
+			W.addSolid(world, {
+				kind: "structure",
+				x: 1000,
+				y: 1000,
+				w: 96,
+				h: 64,
+				hp: 200,
+				hpMax: 200,
+				destructible: true,
+				tags: "craftdesk",
+			});
+			const x = 1000 + 96 + 150;
+			const y = 1000 + 64 + 150; // 150 u off the corner on both axes: 212 u away
+			const clientNear = CCraft.stationNear({ world, player: { x, y } }, "desk") !== undefined;
+			const serverNear = SCRAFT.stationNear(world, x, y, "desk") !== undefined;
+			knownBug(
+				"D2",
+				clientNear && !serverNear,
+				'client and server disagree on "near a desk" off a corner (box vs true distance): from F3 the Bag would offer a craft the server refuses',
+				`client ${clientNear}, server ${serverNear} at 212 u`,
+			);
+		}
+	},
+);
+
+section(
+	"D4. the Bag's craft panel: MAKES ×N, the counts it shows and the station it asks for (client/ui/backpack.ts)",
+	() => {
+		checkRows("the panel says MAKES ×resultCount and shows the backpack's real counts", CRAFT_RECIPES, r => {
+			const save = stocked(r);
+			const bag = bagFor(save);
+			bag.nearbyDesk = true;
+			bag.nearbyPro = true;
+			bag.nearbyFire = true;
+			const [m] = bag.recipePanel(r);
+			if (m.state !== `MAKES ×${r.resultCount}`) return `"${m.state}"`;
+			for (let k = 0; k < r.ingredients.length; k++) {
+				const ing = r.ingredients[k];
+				const want = `${INV.countItem(save, ing.kind, ing.index)} / ${ing.count}`;
+				if (m.ingredients[k].count !== want)
+					return `${nameOf(ing.kind, ing.index)}: "${m.ingredients[k].count}", backpack ${want}`;
+			}
+			return (m.action.enabled && m.action.text === "Craft") || `"${m.action.text}" enabled ${m.action.enabled}`;
+		});
+		checkRows(
+			"away from its station the button names what is missing, and is off",
+			CRAFT_RECIPES.filter(r => stationOf(r) !== undefined),
+			r => {
+				const bag = bagFor(stocked(r));
+				const [m] = bag.recipePanel(r);
+				const want = r.needsFire === true ? "Need fire" : r.needsPro ? "Need pro desk" : "Need craft desk";
+				return (
+					(m.action.text === want && !m.action.enabled) || `"${m.action.text}" enabled ${m.action.enabled}`
+				);
+			},
+		);
+	},
+);
+
+section("D5. every build recipe, placed through the SERVER world (server/sim/build.ts, as test:world)", () => {
+	const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
+	const PRESS_E = P.packEdges(0, 0, 1, 0);
+	checkRows(
+		"craft → cursor → the attack places it, with the placeable's tag, owner and hp; E cancels and refunds",
+		CRAFT_RECIPES.filter(r => r.craftKind === 1),
+		r => {
+			const world = W.serverWorld(W.createWorld(8000, 8000));
+			const sim = new ServerSimulation({
+				world,
+				clock: new WorldClock({ day: 1, dayTime: 12 }),
+				zombies: false,
+				interactive: true,
+			});
+			const save = stocked(r, 2);
+			const sp = PL.createServerPlayer(
+				{ slot: 0, userId: 900, name: "p0" },
+				save,
+				3000,
+				3000,
+				sim.tick,
+				sim.simHz,
+			);
+			sim.add(sp);
+			sp.state.x = 3000;
+			sp.state.y = 3000;
+			const s = stationOf(r);
+			if (s !== undefined) station(world, s, 3000, 2800);
+			let seq = 0;
+			const send = edges =>
+				PL.ingestInput(
+					sp,
+					P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, 0, 0, edges)] }),
+					0,
+				);
+			const held = sim.craft.craft(0, sp.state, save, r.id);
+			if (held.kind !== "holding") return `craft: ${JSON.stringify(held)}`;
+			const solids = world.solids.length;
+			send(PRESS_ATTACK);
+			sim.step();
+			if (world.solids.length !== solids + 1) return "the attack placed nothing";
+			const built = world.solids[world.solids.length - 1];
+			const def = PLACEABLES[r.resultIndex];
+			if (built.tags !== def.tag || built.hp !== def.hp || built.owner !== 0)
+				return `placed ${built.tags} hp ${built.hp} owner ${built.owner}`;
+			// the second one: on the cursor, then cancelled -- the ingredients come back
+			sim.craft.step(1);
+			sim.craft.craft(0, sp.state, save, r.id);
+			const spent = ingredientsLeft(save, r);
+			send(PRESS_E);
+			sim.step();
+			if (sim.build.placing(0)) return "E did not cancel";
+			const back = ingredientsLeft(save, r);
+			return back === r.ingredients.map(i => i.count).join(",") || `after the cancel: ${spent} -> ${back}`;
+		},
+	);
+	{
+		// a placed lamp starts dark; E switches it on, and then it lights the night for the horde's visibility
+		const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+		const world = W.serverWorld(W.createWorld(8000, 8000));
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 0 }),
+			zombies: true,
+			interactive: true,
+		});
+		const save = bareSave();
+		const sp = PL.createServerPlayer({ slot: 0, userId: 900, name: "p0" }, save, 3000, 3000, sim.tick, sim.simHz);
+		sim.add(sp);
+		const lamp = W.addSolid(world, {
+			kind: "structure",
+			x: 3030,
+			y: 2980,
+			w: 48,
+			h: 48,
+			hp: 400,
+			hpMax: 400,
+			destructible: true,
+			tags: "lamp",
+			powered: false,
+			placeable: 4,
+			owner: 0,
+		});
+		const spot = () => {
+			sp.state.x = 3000;
+			sp.state.y = 3000;
+			for (let i = 0; i < 4; i++) sim.step();
+			return Brain.spawnAlpha(sim.horde.refs, 3054 + 330, 3004) === 1;
+		};
+		check(!spot(), "a placed lamp starts off: 330 u from it is dark");
+		PL.ingestInput(
+			sp,
+			P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(1, 0, 0, 0, 0, P.packEdges(0, 0, 1, 0))] }),
+			0,
+		);
+		sim.step();
+		check(lamp.powered === true, "E switches it on (server interaction)");
+		check(spot(), "and then it lights 330 u around it at midnight");
+	}
 });
 
 // ---------------------------------------------------------------- verdict
