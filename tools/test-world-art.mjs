@@ -43,6 +43,12 @@
  *      ground a survivor stands on, by day and under the night tint: the letter against its own shadow at 4,5:1 even
  *      on pure white, and the letter or its shadow 30 ΔE off every ground pixel. `PZ_PLATE_RECORD=<file>` writes
  *      the per-ground table as JSON.
+ *  10. THE CHARACTERS' ART (ART-08..ART-11). The sheets have the layout client/view/charSheets.ts reads, within
+ *      1024 px, with a clear margin round every cell and Fill + Rim masks that are exactly each cell. With no
+ *      character id every survivor, zombie and pet makes the draw calls it made before the art
+ *      (tools/golden/characters-flat.json, recorded from f3c5564); each group falls back on its own; with the
+ *      sheets a survivor is two sprites, a zombie and a pet one. The cost of a night -- 60 zombies, 4 survivors and
+ *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -55,8 +61,11 @@ import { installShims, ROOT } from "./luau-shim.mjs";
 import { installFakeGui } from "./fake-gui.mjs";
 import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
+import { castDrawer, characterCast } from "./character-cast.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
+// --golden-chars: rewrites tools/golden/characters-flat.json from the CURRENT src (run it on the commit before the
+// characters' art, with PZ_SRC, and PZ_GOLDEN_FROM naming it)
 const GOLDEN = join(ROOT, "tools", "golden", "world-flat.json");
 const ART_DIR = join(ROOT, "design", "world-art");
 
@@ -202,6 +211,37 @@ function digestOf(scene, noSigns = false) {
 	capturing = false;
 	const json = JSON.stringify(calls);
 	return { count: calls.length, sha1: createHash("sha1").update(json).digest("hex"), layer: st.r.layer };
+}
+
+// the characters' draw calls with no character id (§10), and --golden-chars: record them from this src
+const GOLDEN_CHARS = join(ROOT, "tools", "golden", "characters-flat.json");
+function charDigest() {
+	const cast = characterCast(require, SRC);
+	const drawMember = castDrawer(require, SRC, shadowFn(false));
+	const st = stage(1400, 1400, 1);
+	st.cam.x = 600;
+	st.cam.y = 600;
+	calls.length = 0;
+	capturing = true;
+	st.r.beginFrame();
+	cast.forEach((m, i) => drawMember(st, m, (i % 12) * 110, Math.floor(i / 12) * 110));
+	st.r.endFrame();
+	capturing = false;
+	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
+	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
+}
+if (process.argv.includes("--golden-chars")) {
+	setArt({});
+	const d = charDigest();
+	const out = {
+		note: "draw-call digest of the flat survivors, zombies and pets of tools/character-cast.mjs (tools/test-world-art.mjs --golden-chars)",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		count: d.count,
+		sha1: d.sha1,
+	};
+	writeFileSync(GOLDEN_CHARS, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_CHARS} (${d.count} calls)`);
+	process.exit(0);
 }
 
 section("1) no asset id: the town is drawn exactly as the golden flat town");
@@ -489,8 +529,18 @@ function spotOn(kind) {
 	return undefined;
 }
 const S = 160;
-function shot(p, actor, art) {
-	setArt(art ? ALL.ids : {});
+/**
+ * The three looks of a frame: "flat" (no id at all), "town" (the town's textures, the characters still flat: what
+ * the owner's Studio shows today) and "chars" (the town and the characters' pixel art, ART-08).
+ */
+const CHAR_SHEETS = new Set(
+	ALL.manifest.textures
+		.filter(t => t.kind === "sheet" || /^(survivors[A-Z]|zombies)(Fill|Rim)$/.test(t.name))
+		.map(t => t.name),
+);
+const TOWN_IDS = Object.fromEntries(Object.entries(ALL.ids).filter(([name]) => !CHAR_SHEETS.has(name)));
+function shot(p, actor, look) {
+	setArt(look === "chars" ? ALL.ids : look === "town" ? TOWN_IDS : {});
 	const st = stage(S, S, 1);
 	const view = new WorldView(shadowFn(false));
 	st.cam.x = p.x;
@@ -507,8 +557,9 @@ function shot(p, actor, art) {
 			alpha: 0.3,
 			zIndex: Z.actorShadow,
 		});
+	// the walker the horde draws (humanoidView.drawZombie: its pixel art with the character sheets live)
 	if (actor === "zombie")
-		HV.drawHumanoid(st.r, st.cam, p.x, p.y, 0.7, 16 / 18, HV.zombieColor(1), 0, 1, 0.8, Z.zombie);
+		HV.drawZombie(st.r, st.cam, p.x, p.y, 0.7, 16 / 18, 1, 0, 1, 0.8, Z.zombie, 0, false, false, false);
 	if (actor === "survivor") {
 		const look = SV.createLook();
 		look.x = p.x;
@@ -536,8 +587,15 @@ function lab(r, g, b) {
 	return [116 * h(Y) - 16, 500 * (h(X) - h(Y)), 200 * (h(Y) - h(Zc))];
 }
 /**
+ * How deep into the body the step is looked for: one texel of the art (4 px at zoom 1) and a pixel. It was 3 px,
+ * enough for the flat drawing's 2-px rims; with the characters' pixel art (ART-08) the outline is a whole texel,
+ * and a near-black texel on dark asphalt is only half of what separates a body from the road -- the other half is
+ * the jacket's blue a texel further in. Both drawings are measured with the same window.
+ */
+const REACH = 5;
+/**
  * Silhouette contrast: for every ground pixel touching the body, the strongest colour step (ΔE) to a body pixel
- * within 3 px -- a dark rim, a bright body or both. Averaged along the whole outline.
+ * within REACH px -- a dark rim, a bright body or both. Averaged along the whole outline.
  */
 function silhouette(ground, withBody) {
 	const n = S * S;
@@ -572,8 +630,8 @@ function silhouette(ground, withBody) {
 		}
 		if (!touching) continue;
 		let best = 0;
-		for (let dy = -3; dy <= 3; dy++) {
-			for (let dx = -3; dx <= 3; dx++) {
+		for (let dy = -REACH; dy <= REACH; dy++) {
+			for (let dx = -REACH; dx <= REACH; dx++) {
 				const xx = x + dx;
 				const yy = y + dy;
 				if (xx < 0 || xx >= S || yy < 0 || yy >= S || !mask[yy * S + xx]) continue;
@@ -590,6 +648,8 @@ function silhouette(ground, withBody) {
 	const kinds = ["grass", "park", "grassLong", "road", "plaza", "apron", "parking"];
 	let worstZombie = Infinity;
 	let worstSurvivor = Infinity;
+	let worstZombieChars = Infinity;
+	let worstSurvivorChars = Infinity;
 	for (const kind of kinds) {
 		const p = spotOn(kind);
 		if (p === undefined) {
@@ -598,17 +658,20 @@ function silhouette(ground, withBody) {
 		}
 		const res = {};
 		for (const actor of ["zombie", "survivor"]) {
-			for (const art of [false, true]) {
-				const base = shot(p, actor === "zombie" ? "zombieShadow" : "none", art);
-				res[`${actor}${art ? "Art" : "Flat"}`] = silhouette(base, shot(p, actor, art));
+			for (const look of ["flat", "town", "chars"]) {
+				const base = shot(p, actor === "zombie" ? "zombieShadow" : "none", look);
+				res[`${actor}.${look}`] = silhouette(base, shot(p, actor, look));
 			}
 		}
-		worstZombie = Math.min(worstZombie, res.zombieArt);
-		worstSurvivor = Math.min(worstSurvivor, res.survivorArt);
+		const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+		worstZombie = Math.min(worstZombie, res["zombie.town"]);
+		worstSurvivor = Math.min(worstSurvivor, res["survivor.town"]);
+		worstZombieChars = Math.min(worstZombieChars, res["zombie.chars"]);
+		worstSurvivorChars = Math.min(worstSurvivorChars, res["survivor.chars"]);
 		check(
-			res.zombieArt >= res.zombieFlat * 0.9 && res.survivorArt >= res.survivorFlat * 0.9,
+			res["zombie.town"] >= res["zombie.flat"] * 0.9 && res["survivor.town"] >= res["survivor.flat"] * 0.9,
 			`${kind.padEnd(9)}: the textures keep both silhouettes`,
-			`walker ${res.zombieFlat.toFixed(1)} -> ${res.zombieArt.toFixed(1)}, survivor ${res.survivorFlat.toFixed(1)} -> ${res.survivorArt.toFixed(1)} ΔE`,
+			`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE`,
 		);
 	}
 	// e097eb3 measured 15.1 for a walker on grass (its outline was the lawn's own colour) and ~35-42 elsewhere
@@ -618,6 +681,17 @@ function silhouette(ground, withBody) {
 		`${worstZombie.toFixed(1)} ΔE`,
 	);
 	check(worstSurvivor >= 30, "the survivor stands out on the worst ground", `${worstSurvivor.toFixed(1)} ΔE`);
+	// the characters' pixel art (ART-08): a near-black outline a texel wide round every body, on every ground
+	check(
+		worstZombieChars >= 40,
+		"with the characters' art, the walker stands out further on the worst ground",
+		`${worstZombieChars.toFixed(1)} ΔE`,
+	);
+	check(
+		worstSurvivorChars >= 35,
+		"with the characters' art, the survivor still clears the bar on the worst ground",
+		`${worstSurvivorChars.toFixed(1)} ΔE`,
+	);
 }
 setArt({});
 
@@ -1488,6 +1562,268 @@ section("9) the nameplate (UI-04 clarification): every voice with its pixel shad
 	console.log("    (each cell: the letter against the ground's mean colour / against its own shadow, worst pixel)");
 	if (process.env.PZ_PLATE_RECORD) writeFileSync(process.env.PZ_PLATE_RECORD, JSON.stringify(record, undefined, 1));
 }
+// ================================================================ 10. the characters' pixel art
+
+section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost of a horde");
+{
+	const CS = require(join(SRC, "client/view/charSheets.ts"));
+	const manifest = ALL.manifest;
+	const byName = Object.fromEntries(manifest.textures.map(t => [t.name, t]));
+	const img = name => decodePNG(readFileSync(join(ART_DIR, `${name}.png`)));
+
+	// ---- 10a. the sheets
+	const sheets = [
+		["survivorsA", CS.SURVIVOR_CELL, CS.SURVIVOR_ROWS, true],
+		["survivorsB", CS.SURVIVOR_CELL, CS.SURVIVOR_ROWS, true],
+		["weapons", CS.WEAPON_CELL, CS.WEAPON_ROWS, false],
+		["zombies", CS.ZOMBIE_CELL, CS.ZOMBIE_ROWS, true],
+		["dogs", CS.DOG_CELL, CS.DOG_ROWS, false],
+		["birds", CS.BIRD_CELL, CS.BIRD_ROWS, false],
+	];
+	const bad = [];
+	for (const [name, cell, rows, masks] of sheets) {
+		const t = byName[name];
+		if (t === undefined) {
+			bad.push(`${name} missing`);
+			continue;
+		}
+		if (t.w !== CS.CHAR_DIRS * cell || t.h !== rows * cell) bad.push(`${name} is ${t.w}x${t.h}`);
+		if (t.w > 1024 || t.h > 1024) bad.push(`${name} over 1024`);
+		const colour = img(name);
+		const fill = masks ? img(`${name}Fill`) : undefined;
+		const rim = masks ? img(`${name}Rim`) : undefined;
+		let empty = 0;
+		let margin = 0;
+		let maskMismatch = 0;
+		for (let r = 0; r < rows; r++) {
+			for (let c = 0; c < CS.CHAR_DIRS; c++) {
+				let any = false;
+				for (let y = 0; y < cell; y++) {
+					for (let x = 0; x < cell; x++) {
+						const i = ((r * cell + y) * colour.w + c * cell + x) * 4;
+						const a = colour.data[i + 3] > 0;
+						if (!a) {
+							if (fill !== undefined && (fill.data[i + 3] > 0 || rim.data[i + 3] > 0)) maskMismatch++;
+							continue;
+						}
+						any = true;
+						if (x === 0 || y === 0 || x === cell - 1 || y === cell - 1) margin++;
+						// every opaque texel is either the silhouette (Fill) or its outline (Rim), never both
+						if (fill !== undefined && fill.data[i + 3] > 0 === rim.data[i + 3] > 0) maskMismatch++;
+					}
+				}
+				if (!any) empty++;
+			}
+		}
+		if (empty > 0) bad.push(`${name}: ${empty} empty cells`);
+		if (margin > 0) bad.push(`${name}: ${margin} texels on a cell's border`);
+		if (maskMismatch > 0) bad.push(`${name}: ${maskMismatch} texels where Fill + Rim != the cell`);
+	}
+	check(
+		bad.length === 0,
+		"every sheet is CHAR_DIRS x rows cells, within 1024 px, no empty cell, a clear margin, Fill + Rim = the cell",
+		bad.slice(0, 4).join("; "),
+	);
+
+	// ---- 10b. the scripted cast (tools/character-cast.mjs): every outfit x grip x state, every zombie pose, every pet
+	const cast = characterCast(require, SRC);
+	const drawMember = castDrawer(require, SRC, shadowFn(false));
+	const drawCast = (st, list) => list.forEach((m, i) => drawMember(st, m, (i % 12) * 110, Math.floor(i / 12) * 110));
+
+	// ---- 10c. without ids the characters are drawn exactly as before (ART-01)
+	setArt(TOWN_IDS);
+	{
+		const d = charDigest();
+		const g = JSON.parse(readFileSync(GOLDEN_CHARS, "utf8"));
+		check(
+			d.count === g.count && d.sha1 === g.sha1,
+			`no character id: the ${cast.length} survivors, zombies and pets make the same ${d.count} draw calls as ${g.recordedFrom.split(" ")[0]}`,
+			`${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}, ${g.count} calls`,
+		);
+		check(d.images === 0, "and not one of them shows an image", `${d.images}`);
+	}
+
+	// ---- 10d. each group falls back on its own; with its sheets it is drawn from them
+	const imagesOf = (ids, list) => {
+		setArt(ids);
+		const st = stage(1400, 1400, 1);
+		st.cam.x = 600;
+		st.cam.y = 600;
+		st.r.beginFrame();
+		drawCast(st, list);
+		st.r.endFrame();
+		const used = {};
+		for (const f of st.r.layer.GetChildren()) {
+			if (f.Visible === false) continue;
+			const im = f.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible !== false);
+			if (im !== undefined) used[nameOf[im.Image] ?? im.Image] = (used[nameOf[im.Image] ?? im.Image] ?? 0) + 1;
+		}
+		return { used, counts: countSprites(st.r.layer) };
+	};
+	const only = names => ({ ...TOWN_IDS, ...Object.fromEntries(names.map(n => [n, ALL.ids[n]])) });
+	const zombiesOnly = imagesOf(only(["zombies", "zombiesFill", "zombiesRim"]), cast);
+	check(
+		(zombiesOnly.used.zombies ?? 0) === cast.filter(m => m.kind === "zombie").length &&
+			zombiesOnly.used.survivorsA === undefined &&
+			zombiesOnly.used.dogs === undefined,
+		"only the zombies uploaded: every zombie is its cell, survivors and pets stay flat",
+		JSON.stringify(zombiesOnly.used),
+	);
+	const noWeapons = imagesOf(
+		only(["survivorsA", "survivorsAFill", "survivorsARim", "survivorsB", "survivorsBFill", "survivorsBRim"]),
+		cast,
+	);
+	check(
+		noWeapons.used.survivorsA === undefined && noWeapons.used.survivorsB === undefined,
+		"a survivor needs every one of its sheets: without the weapons it is drawn flat, never half art",
+		JSON.stringify(noWeapons.used),
+	);
+	const all = imagesOf(ALL.ids, cast);
+	const survivors = cast.filter(m => m.kind === "survivor");
+	const standing = survivors.filter(m => !m.downed);
+	const hit = standing.filter(m => (m.flash ?? 0) > 0).length;
+	const poisoned = standing.filter(m => m.poisoned).length;
+	const zombies = cast.filter(m => m.kind === "zombie");
+	const flashing = zombies.filter(m => m.flash > 0 || m.blink).length;
+	const want = {
+		survivors: survivors.length + hit * 2 + poisoned,
+		weapons: standing.length,
+		zombies: zombies.length + flashing * 2,
+		dogs: cast.filter(m => m.kind === "pet" && m.look >= 4).length,
+		birds: cast.filter(m => m.kind === "pet" && m.look <= 3).length,
+	};
+	const got = {
+		survivors: ["A", "B"].reduce(
+			(n, s) =>
+				n +
+				(all.used[`survivors${s}`] ?? 0) +
+				(all.used[`survivors${s}Fill`] ?? 0) +
+				(all.used[`survivors${s}Rim`] ?? 0),
+			0,
+		),
+		weapons: all.used.weapons ?? 0,
+		zombies: (all.used.zombies ?? 0) + (all.used.zombiesFill ?? 0) + (all.used.zombiesRim ?? 0),
+		dogs: all.used.dogs ?? 0,
+		birds: all.used.birds ?? 0,
+	};
+	check(
+		JSON.stringify(got) === JSON.stringify(want),
+		"with every sheet: a survivor is its body cell + its weapon (+ the two masks on a hit, the veil when poisoned), a zombie one cell (+ two masks on a hit or a lit fuse), a pet one cell",
+		JSON.stringify(got),
+	);
+	check(
+		all.counts.strokes === 0,
+		"and no character needs a UIStroke any more (the outline is in the texels)",
+		`${all.counts.strokes}`,
+	);
+
+	// ---- 10e. the cost of a night: 60 zombies closing in on 4 survivors with their pets, 300 frames
+	const horde = [];
+	for (let i = 0; i < 60; i++) {
+		horde.push({
+			kind: "zombie",
+			type: [1, 1, 1, 4, 2, 1, 3, 1, 5, 1][i % 10],
+			big: i % 23 === 0,
+			angle: 0,
+			phase: i,
+		});
+	}
+	const party = [0, 1, 2, 3].map(o => ({
+		kind: "survivor",
+		outfit: o,
+		weapon: [2, 10, 6, 13][o],
+		angle: o,
+		phase: o,
+		amp: 1,
+	}));
+	const pets = [4, 3, 5, 1].map((look, i) => ({
+		kind: "pet",
+		look,
+		angle: i,
+		moving: 1,
+		phase: i,
+		lift: look === 3 || look === 1 ? 1 : 0,
+	}));
+	const HORDE_SHADOW = { color: COLORS.shadow, alpha: 0.3, zIndex: Z.actorShadow };
+	function night(ids) {
+		setArt(ids);
+		const st = stage(1280, 800, 1);
+		st.cam.x = 0;
+		st.cam.y = 0;
+		const frame = f => {
+			st.r.beginFrame();
+			horde.forEach((z, i) => {
+				const a = (i / 60) * Math.PI * 2 + f * 0.002;
+				const d = 520 - ((f * 0.9 + i * 7) % 380);
+				z.angle = a + Math.PI + Math.sin(f * 0.05 + i) * 0.3;
+				z.phase = f * 0.12 + i;
+				z.flash = (f + i) % 45 < 4 ? 1 - ((f + i) % 45) / 4 : 0;
+				const x = Math.cos(a) * d * 1.3;
+				const y = Math.sin(a) * d * 0.8;
+				// its round drop shadow, as client/view/actorsView.ts draws it under every zombie (flat or art)
+				st.r.drawCircle(st.cam, x + 2.6, y + 9.7, (z.big ? 22.4 : 16) * 2.1, HORDE_SHADOW);
+				drawMember(st, z, x, y);
+			});
+			party.forEach((s, i) => {
+				s.angle = i * 1.6 + f * 0.03;
+				s.phase = f * 0.2;
+				s.swing = i === 0 && f % 30 < 12 ? -1 + ((f % 30) / 12) * 2 : undefined;
+				s.flash = (f + i * 20) % 80 < 5 ? 0.8 : 0;
+				drawMember(st, s, (i % 2 ? 50 : -50) + Math.sin(f * 0.01) * 20, i < 2 ? -40 : 40);
+			});
+			pets.forEach((p, i) => {
+				p.angle = f * 0.03 + i;
+				p.phase = f * 0.3;
+				drawMember(st, p, i % 2 ? 110 : -110, i < 2 ? -80 : 80);
+			});
+			st.r.endFrame();
+		};
+		for (let f = 0; f < 120; f++) frame(f);
+		const created0 = gui.stats.created;
+		const writes0 = gui.stats.writes;
+		const t0 = process.hrtime.bigint();
+		const N = 300;
+		for (let f = 120; f < 120 + N; f++) frame(f);
+		const us = Number(process.hrtime.bigint() - t0) / 1000 / N;
+		const counts = countSprites(st.r.layer);
+		return {
+			created: gui.stats.created - created0,
+			writes: (gui.stats.writes - writes0) / N,
+			us,
+			counts,
+			pool:
+				st.r.layer.GetChildren().length +
+				st.r.layer.GetChildren().reduce((n, f) => n + f.GetChildren().length, 0),
+		};
+	}
+	const flat = night(TOWN_IDS);
+	const art = night(ALL.ids);
+	for (const [label, m] of [
+		["flat", flat],
+		["art ", art],
+	]) {
+		console.log(
+			`       ${label} ${String(m.counts.sprites).padStart(4)} sprites: ${String(m.counts.flat).padStart(3)} Frames + ${String(m.counts.images).padStart(3)} ImageLabels, ${String(m.counts.strokes).padStart(3)} strokes, ${String(m.counts.corners).padStart(3)} corners; ${m.pool} Instances in the pool; ${m.writes.toFixed(0)} property writes/frame; ${m.us.toFixed(0)} µs/frame (Node)`,
+		);
+	}
+	check(
+		flat.created === 0 && art.created === 0,
+		"no Instance created after the warm-up, flat or art",
+		`${flat.created}, ${art.created}`,
+	);
+	check(
+		art.counts.sprites <= flat.counts.sprites * 0.6,
+		"the art draws the horde with at most 60 % of the flat drawing's sprites",
+		`${art.counts.sprites} vs ${flat.counts.sprites}`,
+	);
+	check(art.pool <= flat.pool, "and keeps no more Instances in the pool", `${art.pool} vs ${flat.pool}`);
+	check(
+		art.writes <= flat.writes,
+		"and writes no more properties per frame",
+		`${art.writes.toFixed(0)} vs ${flat.writes.toFixed(0)}`,
+	);
+}
+setArt({});
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

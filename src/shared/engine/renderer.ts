@@ -43,6 +43,14 @@ export interface SpriteOpts {
 	sliceScale?: number;
 	/** nearest-neighbour sampling, what pixel art needs (default true) */
 	pixelated?: boolean;
+	/**
+	 * One cell of a sprite sheet (ImageRectOffset / ImageRectSize, in image px): the characters' sheets
+	 * (client/view/charSheets.ts). Leave `rectW` undefined for the whole image, which writes nothing.
+	 */
+	rectX?: number;
+	rectY?: number;
+	rectW?: number;
+	rectH?: number;
 }
 
 /** how an image fills its rect: ScaleType.Stretch, Tile or Slice */
@@ -68,6 +76,11 @@ interface SpriteImage {
 	s3: number;
 	sliceScale: number;
 	pixelated: boolean;
+	/** ImageRectOffset / ImageRectSize as last written (0, 0, 0, 0 = the engine default: the whole image) */
+	rx: number;
+	ry: number;
+	rw: number;
+	rh: number;
 }
 
 /**
@@ -334,6 +347,10 @@ export class Renderer {
 				s3: -1,
 				sliceScale: -1,
 				pixelated: true,
+				rx: 0,
+				ry: 0,
+				rw: 0,
+				rh: 0,
 			};
 			label.ImageColor3 = WHITE;
 			label.ImageTransparency = 0;
@@ -395,6 +412,21 @@ export class Renderer {
 				im.sliceScale = ss;
 				label.SliceScale = ss;
 			}
+		}
+		// a sheet cell: only a sprite that ever asked for one writes the two properties (and only when they change)
+		const rw = opts.rectW ?? 0;
+		const rh = opts.rectH ?? 0;
+		const rx = rw > 0 ? (opts.rectX ?? 0) : 0;
+		const ry = rw > 0 ? (opts.rectY ?? 0) : 0;
+		if (im.rx !== rx || im.ry !== ry) {
+			im.rx = rx;
+			im.ry = ry;
+			label.ImageRectOffset = rectVector(rx, ry);
+		}
+		if (im.rw !== rw || im.rh !== rh) {
+			im.rw = rw;
+			im.rh = rh;
+			label.ImageRectSize = rectVector(rw, rh);
 		}
 		if (!im.on) {
 			im.on = true;
@@ -572,6 +604,22 @@ export class Renderer {
 			f.Visible = true;
 		}
 	}
+}
+
+/**
+ * The Vector2 of a sheet cell's offset or size, built once per value: a walking horde changes cells every few
+ * frames (a stride, a turn), and a fresh Vector2 per change would be garbage the collector walks mid-frame. Sheets
+ * are at most 1024 px on a side (client/view/charSheets.ts), so x * 4096 + y is a unique key.
+ */
+const RECT_VECTORS = new Map<number, Vector2>();
+function rectVector(x: number, y: number): Vector2 {
+	const key = x * 4096 + y;
+	let v = RECT_VECTORS.get(key);
+	if (v === undefined) {
+		v = new Vector2(x, y);
+		RECT_VECTORS.set(key, v);
+	}
+	return v;
 }
 
 function clamp01(v: number): number {
