@@ -4,7 +4,7 @@ import { isChoppingTool, meleeReach, usesMagazine, WeaponDef, WEAPONS } from "sh
 import { angleDiff } from "shared/engine/vec2";
 import { choose, damageCal, rndRange } from "shared/engine/rng";
 import { currentWeapon, damageIsServerOwned, damageToPlayer, PlayerState } from "shared/game/player";
-import { ownsWeapon } from "shared/game/save";
+import { weaponKeyOrder } from "shared/game/weaponSlots";
 import { querySolids, Solid } from "shared/game/world";
 import { blocksShots, PLAYER_RADIUS, raycast, rayCircle, segmentClear } from "shared/game/physics";
 import { Bullet } from "shared/game/bullets";
@@ -258,13 +258,12 @@ export function switchWeapon(refs: GameRefs, weaponId: number): void {
 	switchSerial++;
 }
 
-/** weapons the survivor can pick with the number keys: owned ones (and the equipped one), by id */
-function ownedWeapons(refs: GameRefs): Array<number> {
-	const list: Array<number> = [];
-	for (let i = 0; i < WEAPONS.size(); i++) {
-		if (ownsWeapon(refs.save, i) || i === refs.player.weapon.pointer) list.push(i);
-	}
-	return list;
+/**
+ * weapons the survivor can pick with the number keys: owned ones (and the equipped one), by id. The list itself is
+ * shared/game/weaponSlots.ts, which the HUD's hotbar draws too: the tile under key k is always what key k picks.
+ */
+export function ownedWeapons(refs: GameRefs): Array<number> {
+	return weaponKeyOrder(refs.save, refs.player.weapon.pointer);
 }
 
 // --------------------------------------------------------------------------------------------

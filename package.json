@@ -29,6 +29,7 @@
 		"test:save": "node tools/test-save.mjs",
 		"test:contrast": "node tools/test-contrast.mjs",
 		"test:backpack": "node tools/test-backpack.mjs",
+		"test:hud": "node tools/test-hud.mjs",
 		"test:menus": "node tools/test-menus.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
