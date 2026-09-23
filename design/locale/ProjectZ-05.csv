@@ -1,76 +1,26 @@
 Key,Context,Example,Source
-,,,Loading your progress...
-,,,Packs & costumes
-,,,Personal bests
-,,,Back
-,,,Close
-,,,Buy
-,,,Owned
-,,,Unlock
-,,,Packs
-,,,Costumes
-,,,Earn coins
-,,,Delivered when your next game starts
-,,,Progress not loaded
-,,,"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving."
-,,,Retry
-,,,Play without saving
-,,,Saving is unavailable in this environment
-,,,Progress saved
-,,,Saving...
-,,,Could not save
-,,,"Welcome, survivor! Here are 20 coins to start"
-,,,Resume
-,,,Save
-,,,Home
-,,,Paused
-,,,Game over
-,,,Rebirth
-,,,Survival days
-,,,Continue price
-,,,Your run is over
-,,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
-,,,Purchased
-,,,Unlocked
-,,,Not enough coins
-,,,Too many packs waiting
-,,,Already owned
-,,,Please wait a moment
-,,,"Connection problem, try again"
-,,,Still loading your progress
-,,,Coins are earned by playing
-,,,Day survived
-,,,Record day (every 5 days)
-,,,Boss defeated
-,,,Welcome gift
-,,,No ammo
-,,,Melee
-,,,Night
-,,,Morning
-,,,Afternoon
-,,,Evening
-,,,Day
-,,,Achievement unlocked
-,,,Delivered
-,,,Your progress was loaded; it applies when you return to the lobby
-,,,Zombies are coming
-,,,Survive the night
-,,,Already at full health
-,,,Bosses
-,,,Continue this run
-,,,Days survived
-,,,"Everything the game listens to, on every device"
-,,,Fire lights the night and cooks what you find. Build one when you can.
-,,,Getting started
-,,,Got it
-,,,Nice.
-,,,Night came first
-,,,Reload
-,,,Skip
-,,,You have
-,,,You survived
-,,,You survived a day
-,,,You're already full
-,,,"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1."
-,,,Zombies killed
-,,,days
+,,,Canned food
+,,,Frozen pizza
+,,,Pizza
+,,,Bandage
+,,,Frozen meal
+,,,Cooked meal
+,,,Mushroom
+,,,Mushroom soup
+,,,Apple
+,,,Berry
+,,,Craft desk
+,,,Pro craft desk
+,,,Turret
+,,,Turret drone
+,,,Lamp
+,,,Lamp drone
+,,,Battery box
+,,,Solar generator
+,,,Nuclear reactor
+,,,Oil generator
+,,,Wooden barricade
+,,,Wooden door
+,,,Steel barricade
+,,,Steel door
+,,,Campfire

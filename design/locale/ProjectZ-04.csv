@@ -1,101 +1,26 @@
 Key,Context,Example,Source
-,,,Trot
-,,,Patience
-,,,Pickpocket
-,,,Theif
-,,,Chef
-,,,Dwarf
-,,,Robotics
-,,,Engineering
-,,,Cat
-,,,Nocturnal
-,,,Repairman
-,,,Move shooting
-,,,Head shooter
-,,,Poison immunity
-,,,Health increases
-,,,Recovery increases
-,,,Knockback increases
-,,,Melee damage increases
-,,,Roload becomes faster
-,,,Accuracy improves
-,,,Bow accuracy improves
-,,,Speed increases
-,,,Hungry decreases
-,,,Zombies drop more items
-,,,Find more items
-,,,A chance to get more foods
-,,,A chance to get more metal
-,,,Turret reinforced
-,,,Generator reinforced
-,,,Footsteps sound decreases
-,,,Night vision increases
-,,,Repair speed increases
-,,,Accuracy improves with moving
-,,,Able to shot heads
-,,,Get less damage from poison
-,,,Starter pack
-,,,Food aid
-,,,Emergency kit
-,,,Basic craft kit
-,,,Pro craft kit
-,,,Electric craft kit
-,,,Ammo craft kit
-,,,Pigeon the bird
-,,,Carolina the dog
-,,,5 coins
-,,,100 coins
-,,,300 + 30 coins
-,,,600 + 100 coins
-,,,1000 + 300 coins
-,,,Watch ads
-,,,Wait for ads
-,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
-,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
-,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
-,,,Wood X 20#Cloth X 10#Stone X 20
-,,,Blueprint X 5#Steel X 20#Machine parts X 10
-,,,Battery X 5#Computer chip X 2#Bulb X 2
-,,,Steel X 10#Gunpowder X 10
-,,,Pigeon the bird X 1
-,,,Carolina the dog X 1
-,,,Please try again
-,,,You can't use that now
-,,,First steps
-,,,Thomas Edison
-,,,Melee weapons expert
-,,,Bow expert
-,,,Collector
-,,,Blacksmith
-,,,Sniper
-,,,Centipede slayer
-,,,Rafflesia slayer
-,,,Giant slayer
-,,,Hedgehog slayer
-,,,Zombie slayer
-,,,Special zombie slayer
-,,,Woods collector
-,,,Good day
-,,,Rider
-,,,Never die
-,,,Ninja
-,,,Play
-,,,Continue
-,,,New game
-,,,Shop
-,,,Settings
-,,,Achievements
-,,,Records
-,,,How to play
-,,,Credits
-,,,Survivor
-,,,Current day
-,,,Best day
-,,,Level
-,,,Bosses defeated
-,,,Loadout
-,,,Clothes
-,,,Hand
-,,,Gun
-,,,Deco
-,,,Zombie survival
+,,,Cotton clothes
+,,,Leather jacket
+,,,Leather armor
+,,,Wooden armor
+,,,Steel armor
+,,,Plastic armor
+,,,Night vision
+,,,Laser sight
+,,,Compass
+,,,Sundial
+,,,Watch
+,,,Digital Watch
+,,,Gun silencer
+,,,Flashlight
+,,,Robot suit
+,,,Torchlight
+,,,Raw meat
+,,,Cooked meat
+,,,Potato
+,,,Baked potato
+,,,Bread
+,,,First aid kit
+,,,Pain killer
+,,,Adrenaline
+,,,Sedative
