@@ -14,6 +14,7 @@ import {
 	isFire,
 	repairMaterial,
 } from "shared/sim/interactQuery";
+import { flinch } from "../view/solidFlinch";
 import { itemName } from "./craftSystem";
 import { fxMessage, GameRefs } from "./types";
 
@@ -96,7 +97,7 @@ export function hitMapItem(refs: GameRefs, s: Solid, choppingTool: boolean, by: 
 	const cd = hitCooldowns.get(s);
 	if (cd !== undefined && cd > 0) return false;
 	hitCooldowns.set(s, DESIGN.MAP_ITEM_HIT_TIME);
-	s.hitShake = 0.25;
+	flinch(s, 0.25);
 
 	const lootTable = lootTableFor(s);
 	if (lootTable === undefined) return true;

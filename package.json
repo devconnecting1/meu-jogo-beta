@@ -31,6 +31,7 @@
 		"test:backpack": "node tools/test-backpack.mjs",
 		"test:menus": "node tools/test-menus.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
+		"test:flinch": "node tools/test-flinch.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""
