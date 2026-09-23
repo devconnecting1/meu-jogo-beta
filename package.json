@@ -20,6 +20,7 @@
 		"test:clock": "node tools/test-clock.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
 		"test:smoothness": "node tools/test-smoothness.mjs",
+		"test:input": "node tools/test-input-buffer.mjs",
 		"test:chat": "node tools/test-chat.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
