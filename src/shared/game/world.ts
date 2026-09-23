@@ -249,6 +249,12 @@ export interface WorldData {
 	nextId: number;
 	grid: SolidGrid;
 	/**
+	 * The walls, windows and furniture of the buildings (`Solid.parentId` set, shared/game/interiors.ts) live in
+	 * this finer grid instead of `grid`: a 512 u cell of a built-up block holds a hundred of them, and every
+	 * collision query of every body would walk them all. Both grids answer every query; a solid is in one.
+	 */
+	fine: SolidGrid;
+	/**
 	 * Server only (docs/MULTIPLAYER.md §4.5). 0 = off, which is the map generator and every client.
 	 *
 	 * The static map is generated identically on both sides from the same seed, so a static solid has the
@@ -306,14 +312,21 @@ function rectOverlap(
 	return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-export function createWorld(width: number, height: number): WorldData {
-	const cell = TOWN.GRID_CELL;
+/** an empty spatial grid of `cell`-sized cells over width × height */
+function newGrid(width: number, height: number, cell: number): SolidGrid {
 	const cols = math.max(1, math.ceil(width / cell));
 	const rows = math.max(1, math.ceil(height / cell));
 	const cells: Array<Array<Solid>> = [];
 	for (let i = 0; i < cols * rows; i++) {
 		cells.push([]);
 	}
+	return { cell, cols, rows, cells, stamp: 0 };
+}
+
+/** the cell of the grid of building parts (walls, windows, furniture): a room, not a block */
+const FINE_CELL = 128;
+
+export function createWorld(width: number, height: number): WorldData {
 	return {
 		solids: [],
 		items: [],
@@ -331,7 +344,8 @@ export function createWorld(width: number, height: number): WorldData {
 		],
 		nextId: 1,
 		nextDynamicId: 0,
-		grid: { cell, cols, rows, cells, stamp: 0 },
+		grid: newGrid(width, height, TOWN.GRID_CELL),
+		fine: newGrid(width, height, FINE_CELL),
 	};
 }
 
@@ -372,11 +386,16 @@ function gridRemove(g: SolidGrid, s: Solid): void {
 	}
 }
 
+/** the grid a solid lives in: a building's own parts in the fine one, everything else in the coarse one */
+function gridOf(w: WorldData, s: Solid): SolidGrid {
+	return s.parentId !== undefined ? w.fine : w.grid;
+}
+
 /** The ONLY way to add a solid (keeps the spatial grid in sync). Solids must not move afterwards. */
 export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
 	const solid: Solid = { ...s, id: takeId(w) };
 	w.solids.push(solid);
-	gridInsert(w.grid, solid);
+	gridInsert(gridOf(w, solid), solid);
 	if (w.onSolidAdd !== undefined) w.onSolidAdd(w, solid);
 	return solid;
 }
@@ -385,7 +404,7 @@ export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
 export function removeSolid(w: WorldData, s: Solid): void {
 	const i = w.solids.indexOf(s);
 	if (i >= 0) w.solids.remove(i);
-	gridRemove(w.grid, s);
+	gridRemove(gridOf(w, s), s);
 	s.removed = true;
 	if (w.onSolidRemove !== undefined) w.onSolidRemove(w, s);
 }
@@ -402,9 +421,15 @@ export function querySolids(
 	y1: number,
 	out: Array<Solid> = [],
 ): Array<Solid> {
-	const g = w.grid;
-	g.stamp++;
-	const stamp = g.stamp;
+	// one stamp for both grids (a solid is in one of them): each solid once per query
+	w.grid.stamp++;
+	const stamp = w.grid.stamp;
+	queryGrid(w.grid, stamp, x0, y0, x1, y1, out);
+	queryGrid(w.fine, stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
+function queryGrid(g: SolidGrid, stamp: number, x0: number, y0: number, x1: number, y1: number, out: Array<Solid>) {
 	const c0 = cellCol(g, x0);
 	const c1 = cellCol(g, x1);
 	const r0 = cellRow(g, y0);
@@ -420,7 +445,6 @@ export function querySolids(
 			}
 		}
 	}
-	return out;
 }
 
 /**
@@ -437,7 +461,10 @@ export function isBlocking(s: Solid): boolean {
 
 /** First blocking solid containing the point (± pad). Bullets, line of sight, spawn checks. */
 export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid | undefined {
-	const g = w.grid;
+	return pointInGrid(w.grid, x, y, pad) ?? pointInGrid(w.fine, x, y, pad);
+}
+
+function pointInGrid(g: SolidGrid, x: number, y: number, pad: number): Solid | undefined {
 	const c0 = cellCol(g, x - pad);
 	const c1 = cellCol(g, x + pad);
 	const r0 = cellRow(g, y - pad);
@@ -459,7 +486,10 @@ export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid
 export function rectHitsSolid(w: WorldData, x: number, y: number, rw: number, rh: number): Solid | undefined {
 	const left = x - rw / 2;
 	const top = y - rh / 2;
-	const g = w.grid;
+	return rectInGrid(w.grid, left, top, rw, rh) ?? rectInGrid(w.fine, left, top, rw, rh);
+}
+
+function rectInGrid(g: SolidGrid, left: number, top: number, rw: number, rh: number): Solid | undefined {
 	const c0 = cellCol(g, left);
 	const c1 = cellCol(g, left + rw);
 	const r0 = cellRow(g, top);

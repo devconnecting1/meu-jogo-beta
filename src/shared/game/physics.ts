@@ -75,18 +75,29 @@ export function vaultFactor(world: WorldData, x: number, y: number): number {
 const scratch: Array<Solid> = [];
 /** set by resolveCircle: the position it was asked about lies in a window's vault zone */
 let lastInVault = false;
+/** set by resolveCircle: the body's position BEFORE this step (fromX, fromY) lies in a window's vault zone */
+let startInVault = false;
 
-/** push a circle out of every blocking rect it overlaps (a few Gauss-Seidel passes) */
-function resolveCircle(world: WorldData, x: number, y: number, r: number): MoveResult {
+/**
+ * Push a circle out of every blocking rect it overlaps (a few Gauss-Seidel passes). The first pass's query also
+ * reaches every window whose vault zone holds (x, y) or the step's start (fromX, fromY): the climb costs no query
+ * of its own (for a walker's step of a unit or two, the box is the one the collision needs anyway).
+ */
+function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX: number, fromY: number): MoveResult {
 	let hit: Solid | undefined;
 	lastInVault = false;
+	startInVault = false;
 	for (let iter = 0; iter < 4; iter++) {
 		scratch.clear();
-		querySolids(world, x - r, y - r, x + r, y + r, scratch);
+		const pad = iter === 0 ? math.max(r, VAULT_REACH + math.max(math.abs(x - fromX), math.abs(y - fromY))) : r;
+		querySolids(world, x - pad, y - pad, x + pad, y + pad, scratch);
 		let moved = false;
 		for (const s of scratch) {
-			// the window under the body is found by the query this step already paid for
-			if (iter === 0 && s.kind === "window" && inVaultZone(s, x, y)) lastInVault = true;
+			if (iter === 0 && s.kind === "window") {
+				if (inVaultZone(s, x, y)) lastInVault = true;
+				if (inVaultZone(s, fromX, fromY)) startInVault = true;
+				continue;
+			}
 			if (!isBlocking(s)) continue;
 			const qx = math.clamp(x, s.x, s.x + s.w);
 			const qy = math.clamp(y, s.y, s.y + s.h);
@@ -127,7 +138,9 @@ function resolveCircle(world: WorldData, x: number, y: number, r: number): MoveR
  *
  * A body in a window's vault zone moves at VAULT_SLOW (EDI-10): each sub-step is scaled by where the last one
  * landed, the first by where the body starts. Server, prediction and zombies all come through here, so the
- * climb is the same for everyone and the prediction never disagrees with the server about it.
+ * climb is the same for everyone and the prediction never disagrees with the server about it. The zone is read
+ * off the collision query the step makes anyway; only a body that STARTS in a window re-does its first sub-step
+ * at the climbing speed.
  */
 export function moveActor(world: WorldData, x: number, y: number, radius: number, dx: number, dy: number): MoveResult {
 	let len = math.sqrt(dx * dx + dy * dy);
@@ -142,9 +155,14 @@ export function moveActor(world: WorldData, x: number, y: number, radius: number
 	const sx = dx / steps;
 	const sy = dy / steps;
 	let hit: Solid | undefined;
-	let k = len > 1e-6 ? vaultFactor(world, x, y) : 1;
+	let k = 1;
 	for (let i = 0; i < steps; i++) {
-		const r = resolveCircle(world, x + sx * k, y + sy * k, radius);
+		let r = resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
+		if (i === 0 && startInVault && len >= 1e-6) {
+			// it starts in a window: the first sub-step is a climbing one too
+			k = VAULT_SLOW;
+			r = resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
+		}
 		x = r.x;
 		y = r.y;
 		if (hit === undefined && r.hit !== undefined) hit = r.hit;
@@ -152,7 +170,7 @@ export function moveActor(world: WorldData, x: number, y: number, radius: number
 	}
 	if (len < 1e-6) {
 		// still resolve a standing actor (e.g. a door closed on it)
-		const r = resolveCircle(world, x, y, radius);
+		const r = resolveCircle(world, x, y, radius, x, y);
 		x = r.x;
 		y = r.y;
 		hit = r.hit;
