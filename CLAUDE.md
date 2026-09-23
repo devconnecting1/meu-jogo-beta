@@ -12,12 +12,23 @@ Remake 2D top-down de sobrevivência zumbi (inspirado em Dead Town) para Roblox,
 ## Comandos
 
 ```bash
-npm run build          # rbxtsc
-npm run watch          # rbxtsc -w (com `rojo serve` + plugin Rojo no Studio)
+npm run build            # rbxtsc
+npm run watch            # rbxtsc -w (com `rojo serve` + plugin Rojo no Studio)
 npm run lint
 npm run format:check
-npm run validate:world # regras [auto] da bíblia de ambientação
+npm run validate:world   # regras [auto] da bíblia de ambientação
+npm run check:registers  # limite de 200 locais por chunk do Luau (invisível ao tsc; o cliente não sobe)
+npm run theme            # design/tweakcn-theme.json -> src/client/ui/themeTokens.ts (nunca edite o gerado)
+npm run locale           # exporta lang.ts para o CSV da tabela de localização do Roblox
 ```
+
+Testes em Node rodam o TypeScript real com shims de Luau (`npm run test:<nome>`); rode os da área que você tocou:
+
+- rede e servidor: `net`, `server-sim`, `replication`, `predict`, `input` (fila de input), `smoothness` (aliado desenhado)
+- simulação e mundo: `sim`, `ai`, `combat`, `clock`, `life` (dia do mundo × dia de vida), `world` (itens/portas/construção no servidor), `save`
+- UI e conteúdo: `contrast` (contraste e regra "texto sem contorno" em todo `src/`), `footsteps`, `chat`
+
+O que Node não pega (limite de registradores, asset que não carrega, remote) só aparece no Studio: rode `check:registers` e, com o Studio conectado ao MCP, um playtest.
 
 ## Arquitetura (resumo)
 
