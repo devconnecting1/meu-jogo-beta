@@ -1,6 +1,6 @@
 import { DESIGN } from "shared/engine/constants";
 import { chance } from "shared/engine/rng";
-import { difficultyOfDay, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
+import { difficultyOfDay, PlayerSaveData, PROGRESS_SERVER_PHASE, SAVE_LIMITS } from "shared/game/save";
 import { getDayPopulation } from "shared/data/spawns";
 import { MP_PHASE } from "shared/net/mpConfig";
 import {
@@ -314,11 +314,11 @@ export class DayNight {
 		if (norm.day !== this.day) {
 			this.day = norm.day;
 			// no rain roll here: the weather is the server's (§3.6). `save.day` is NOT the world's day, it is
-			// this survivor's own (§6.2, MP-13), so it does not follow `this.day` -- it is bumped by one,
-			// mirroring what server/sim/progress.ts `creditDaySurvived` just did to the authoritative copy.
-			// The mirror is for the HUD: a report's `day` is pinned by `stripClientProgress`, so it can never
-			// inflate anything, and the next LoadAck replaces it with the server's number either way.
-			this.save.day = math.min(SAVE_LIMITS.DAY_MAX, this.save.day + 1);
+			// this survivor's own (§6.2, MP-13), so it does not follow `this.day`. From PROGRESS_SERVER_PHASE the
+			// server's midnight decides it -- and may refuse it: dead, absent, AFK -- and the pushed wallet brings
+			// it here (shared/game/save.ts `applyWallet`). Bumping it here as well counted that midnight twice
+			// whenever the wallet landed before this clock got there. Below that phase this mirror is all there is.
+			if (MP_PHASE < PROGRESS_SERVER_PHASE) this.save.day = math.min(SAVE_LIMITS.DAY_MAX, this.save.day + 1);
 			this.refreshPopulation();
 		}
 		this.dayTime = norm.dayTime;

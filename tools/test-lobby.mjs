@@ -1429,10 +1429,18 @@ check(
 	townSprites().length > 50 && inView.length > 0,
 	`${townSprites().length} sprites, ${inView.length} ponto(s) de referencia no quadro`,
 );
-const roofColors = town.solids.filter(s => s.kind === "building").map(s => s.roofColor);
+// a roof is either flat (the Frame's own colour) or, once its texture is uploaded (ART-01..06), a grey image TINTED
+// with the roof's colour or one of its shades (worldView.ts roofShadesOf: the sunlit slope, the shaded one, the ridge)
+const roofTones = town.solids
+	.filter(s => s.kind === "building" && s.roofColor !== undefined)
+	.flatMap(s => [0, 0.1, 0.24, 0.4].map(k => s.roofColor.Lerp(Color3.fromRGB(0, 0, 0), k)));
+const toneOf = f => {
+	const img = f.FindFirstChild("I");
+	return img !== undefined && img.Visible !== false && img.Image !== "" ? img.ImageColor3 : f.BackgroundColor3;
+};
 check(
-	"...com os telhados da cidade (as cores dos predios gerados)",
-	townSprites().some(f => roofColors.some(c => c !== undefined && sameColor(f.BackgroundColor3, c))),
+	"...com os telhados da cidade (as cores dos predios gerados, lisas ou tingindo a textura)",
+	townSprites().some(f => roofTones.some(c => sameColor(toneOf(f), c))),
 );
 check(
 	"o scrim entre a cidade e os menus e o da pagina, em TRANSPARENCY.backdrop",

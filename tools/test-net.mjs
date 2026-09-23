@@ -207,6 +207,7 @@ const { ZOMBIES } = require(join(SRC, "shared/data/zombies.ts"));
 const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
+const TIT = require(join(SRC, "shared/data/titles.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -1190,8 +1191,12 @@ function randWorldEvent(kind = rint(1, 17)) {
 				rain: rbool(),
 				waveFlags: rint(0, 255),
 			};
-		case P.WorldEv.Announce:
-			return { t: kind, msg: rint(1, 5), arg: rint(0, 65535) };
+		case P.WorldEv.Announce: {
+			// MON-05: a TitleUnlocked names a title that exists; every other kind carries any u16
+			const msg = rint(1, P.AnnounceKind.TitleUnlocked);
+			const arg = msg === P.AnnounceKind.TitleUnlocked ? rint(1, TIT.TITLE_WIRE_MAX) : rint(0, 65535);
+			return { t: kind, msg, arg };
+		}
 		case P.WorldEv.ZombieDied:
 			return { t: kind, netId: rint(1, 65535), x: rx(), y: ry(), cause: rint(0, 7) };
 		case P.WorldEv.PlayerJoined:
@@ -1203,6 +1208,7 @@ function randWorldEvent(kind = rint(1, 17)) {
 				level: rint(1, 999),
 				outfit: rint(0, COS.OUTFIT_LOOK_MAX),
 				pet: rint(0, COS.PET_LOOK_MAX),
+				title: rint(0, TIT.TITLE_WIRE_MAX),
 			};
 		case P.WorldEv.PlayerProfile:
 			return {
@@ -1211,6 +1217,7 @@ function randWorldEvent(kind = rint(1, 17)) {
 				level: rint(1, 999),
 				outfit: rint(0, COS.OUTFIT_LOOK_MAX),
 				pet: rint(0, COS.PET_LOOK_MAX),
+				title: rint(0, TIT.TITLE_WIRE_MAX),
 			};
 		case P.WorldEv.PlayerLeft:
 			return { t: kind, slot: rint(0, 5) };
@@ -1306,12 +1313,14 @@ function compareWorldEvent(a, b) {
 			eq("level", b.level, a.level);
 			eq("outfit", b.outfit, a.outfit);
 			eq("pet", b.pet, a.pet);
+			eq("title", b.title, a.title);
 			break;
 		case P.WorldEv.PlayerProfile:
 			eq("profile slot", b.slot, a.slot);
 			eq("profile level", b.level, a.level);
 			eq("profile outfit", b.outfit, a.outfit);
 			eq("profile pet", b.pet, a.pet);
+			eq("profile title", b.title, a.title);
 			break;
 		case P.WorldEv.PlayerLeft:
 			eq("slot", b.slot, a.slot);
@@ -1363,7 +1372,11 @@ test("World: round trip of every delta", () => {
 	sizes.push(["World ItemAdd", `${one(P.WorldEv.ItemAdd)} B`, "id, kind, itemId, count, x, y, vx, vy (§4.5)"]);
 	sizes.push(["World ZombieDied", `${one(P.WorldEv.ZombieDied)} B`, "netId, x, y, cause (§4.4)"]);
 	sizes.push(["World Clock", `${one(P.WorldEv.Clock)} B`, "worldDay, dayTime, tick, rain, waveFlags (§4.5)"]);
-	sizes.push(["World PlayerProfile", `${one(P.WorldEv.PlayerProfile)} B`, "slot, level, outfit, pet (MON-04)"]);
+	sizes.push([
+		"World PlayerProfile",
+		`${one(P.WorldEv.PlayerProfile)} B`,
+		"slot, level, outfit, pet, title (MON-04/05)",
+	]);
 	const reset2 = {
 		t: P.WorldEv.WorldReset,
 		seed: 12345,
@@ -1387,6 +1400,7 @@ test("World: the roster carries outfit and pet, and refuses looks that do not ex
 		level: 17,
 		outfit: COS.OutfitLook.Cowboy,
 		pet: COS.PetLook.Eagle,
+		title: 0,
 	};
 	const profile = {
 		t: P.WorldEv.PlayerProfile,
@@ -1394,6 +1408,7 @@ test("World: the roster carries outfit and pet, and refuses looks that do not ex
 		level: 18,
 		outfit: COS.OutfitLook.Santa,
 		pet: COS.PetLook.None,
+		title: 0,
 	};
 	const pkt = P.encodeWorld({ tick: 5, events: [joined, profile] }).packets[0];
 	const d = P.decodeWorld(pkt);
@@ -1411,7 +1426,7 @@ test("World: the roster carries outfit and pet, and refuses looks that do not ex
 	eq("negative pet clamped on encode", clamped.events[0].pet, 0);
 	// the decoder refuses a byte that names no look (a hostile or corrupt packet)
 	const pb = bytesOf(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]);
-	// header 5 B, tag 1 B, slot 1 B, level 2 B, outfit 1 B, pet 1 B
+	// header 5 B, tag 1 B, slot 1 B, level 2 B, outfit 1 B, pet 1 B, title 1 B (MON-05)
 	const badOutfit = pb.slice();
 	badOutfit[9] = COS.OUTFIT_LOOK_MAX + 1;
 	eq("profile with an unknown outfit", P.decodeWorld(bufOf(badOutfit)), undefined);
@@ -1422,13 +1437,73 @@ test("World: the roster carries outfit and pet, and refuses looks that do not ex
 	badSlot[6] = 6;
 	eq("profile for slot 6", P.decodeWorld(bufOf(badSlot)), undefined);
 	const jb = bytesOf(P.encodeWorld({ tick: 1, events: [joined] }).packets[0]);
+	// PlayerJoined ends with outfit, pet, title (MON-05): the pet is the second-to-last byte, the outfit before it
 	const badJoinPet = jb.slice();
-	badJoinPet[jb.length - 1] = 200;
+	badJoinPet[jb.length - 2] = 200;
 	eq("PlayerJoined with an unknown pet", P.decodeWorld(bufOf(badJoinPet)), undefined);
 	const badJoinOutfit = jb.slice();
-	badJoinOutfit[jb.length - 2] = 200;
+	badJoinOutfit[jb.length - 3] = 200;
 	eq("PlayerJoined with an unknown outfit", P.decodeWorld(bufOf(badJoinOutfit)), undefined);
-	eq("PlayerProfile size", buffer.len(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]), 5 + 6);
+	eq("PlayerProfile size", buffer.len(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]), 5 + 7);
+});
+
+test("World: the roster carries the title under the name, and nothing but a real title (MON-05)", () => {
+	const HB = TIT.titleToWire(TIT.TitleId.HordeBreaker);
+	const joined = {
+		t: P.WorldEv.PlayerJoined,
+		slot: 1,
+		userId: 42,
+		name: "Breaker",
+		level: 9,
+		outfit: 0,
+		pet: 0,
+		title: HB,
+	};
+	const profile = { t: P.WorldEv.PlayerProfile, slot: 1, level: 9, outfit: 0, pet: 0, title: 0 };
+	const d = P.decodeWorld(P.encodeWorld({ tick: 3, events: [joined, profile] }).packets[0]);
+	ok(d !== undefined, "the roster pair with a title did not decode");
+	if (d === undefined) return;
+	eq("joined title", d.events[0].title, HB);
+	eq("profile takes the title off (0 = none)", d.events[1].title, 0);
+	eq("wire byte -> title id", TIT.titleFromWire(d.events[0].title), TIT.TitleId.HordeBreaker);
+	eq("0 -> no title", TIT.titleFromWire(0), -1);
+	eq("a byte past the table -> no title", TIT.titleFromWire(TIT.TITLE_WIRE_MAX + 1), -1);
+	// an encoder handed a title out of range writes the nearest valid byte, never an unknown one
+	const clamped = P.decodeWorld(P.encodeWorld({ tick: 1, events: [{ ...profile, title: 99 }] }).packets[0]);
+	eq("out-of-range title clamped on encode", clamped.events[0].title, TIT.TITLE_WIRE_MAX);
+	// the decoder refuses a byte that names no title, in both events (a hostile or corrupt packet)
+	const jb = bytesOf(P.encodeWorld({ tick: 1, events: [joined] }).packets[0]);
+	const badJoin = jb.slice();
+	badJoin[jb.length - 1] = TIT.TITLE_WIRE_MAX + 1;
+	eq("PlayerJoined with a title that does not exist", P.decodeWorld(bufOf(badJoin)), undefined);
+	const pb = bytesOf(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]);
+	const badProfile = pb.slice();
+	badProfile[pb.length - 1] = 255;
+	eq("PlayerProfile with a title that does not exist", P.decodeWorld(bufOf(badProfile)), undefined);
+
+	// the unlock notice: Announce{TitleUnlocked, arg = title byte}, and only a real title
+	const note = { t: P.WorldEv.Announce, msg: P.AnnounceKind.TitleUnlocked, arg: HB };
+	const nb = P.encodeWorld({ tick: 7, events: [note] }).packets[0];
+	const got = P.decodeWorld(nb);
+	eq("TitleUnlocked decodes", got?.events[0].msg, P.AnnounceKind.TitleUnlocked);
+	eq("…with its title", got?.events[0].arg, HB);
+	eq("Announce size is unchanged", buffer.len(nb), 5 + 4);
+	const raw = bytesOf(nb);
+	for (const bad of [0, TIT.TITLE_WIRE_MAX + 1, 65535]) {
+		const b = raw.slice();
+		// header 5 B, tag 1 B, msg 1 B, arg u16 (little-endian)
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`TitleUnlocked naming title byte ${bad}`, P.decodeWorld(bufOf(b)), undefined);
+	}
+	const bogusKind = raw.slice();
+	bogusKind[6] = P.AnnounceKind.TitleUnlocked + 1;
+	eq("an Announce kind past TitleUnlocked", P.decodeWorld(bufOf(bogusKind)), undefined);
+	// a boss kill keeps carrying any u16: the check is for titles only
+	const boss = P.decodeWorld(
+		P.encodeWorld({ tick: 1, events: [{ t: P.WorldEv.Announce, msg: 5, arg: 900 }] }).packets[0],
+	);
+	eq("other Announce kinds are untouched", boss?.events[0].arg, 900);
 });
 
 test("World: WorldInit in blocks of ≤ 16 KB", () => {

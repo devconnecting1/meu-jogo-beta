@@ -5,8 +5,9 @@
  *          bosses and the horde — each entity filtered by the interest rings and the visibility rules of §4.3
  *   Fx     unreliable, one batch per tick when something happened: blood, debris, shakes, tracers, shots
  *   World  reliable, batched per tick: InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
- *          outfit or a pet changes in session — MON-04), PlayerLife, ZombieDied, Clock, Announce (§4.5), and
- *          WorldReset when every survivor died and a new town replaced the old one (MP-22)
+ *          outfit, a pet or the title shown changes in session — MON-04, MON-05), PlayerLife, ZombieDied, Clock,
+ *          Announce (§4.5; a title earned is one, sent to its owner only), and WorldReset when every survivor died
+ *          and a new town replaced the old one (MP-22)
  *
  * This is the last link of F2: the server has simulated one horde, one clock and one set of waves since 2A/2B,
  * and until this file put them on the wire no client could see any of it. Everything here is therefore about
@@ -18,6 +19,7 @@
  * and tools/test-replication.mjs implement with an array (so the tests decode exactly the bytes a client receives).
  */
 import { DESIGN } from "shared/engine/constants";
+import { titleToWire } from "shared/data/titles";
 import { quantPos, dequantPos } from "shared/net/codec";
 import {
 	INTEREST_EXIT,
@@ -88,7 +90,7 @@ const INTEREST_SWEEP_AGE = 200;
 /** rounds between two sweeps: they walk the whole table, so they are rare and the table is small anyway */
 const INTEREST_SWEEP_EVERY = 100;
 /**
- * Ticks between two looks at every survivor's profile (level, outfit, pet — MON-04). 6 ticks is 10 Hz at 60 Hz:
+ * Ticks between two looks at every survivor's profile (level, outfit, pet, title — MON-04, MON-05). 6 ticks is 10 Hz at 60 Hz:
  * a change of outfit reaches the others within 100 ms of the server accepting it, and the check costs a few
  * comparisons per survivor ten times a second instead of sixty.
  */
@@ -572,6 +574,15 @@ export class Replicator {
 		this.queue({ t: WorldEv.PlayerLife, slot, state });
 	}
 
+	/**
+	 * MON-05: the survivor in `slot` just earned `titleId` (the save already has it). Reliable, and DIRECTED: it is
+	 * their news, for their toast. What the others see is the title they choose to show, which reaches everybody
+	 * through the profile (`PlayerProfile`) like an outfit does.
+	 */
+	titleUnlocked(slot: number, titleId: number): void {
+		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.TitleUnlocked, arg: titleToWire(titleId) });
+	}
+
 	// ------------------------------------------------------------ per tick (§3.1 step 4)
 
 	/** call once per simulation tick, after the step */
@@ -945,6 +956,7 @@ function joinedEvent(sp: ServerPlayer): WorldEvent {
 		level: sp.level,
 		outfit: sp.outfit,
 		pet: sp.pet,
+		title: sp.title,
 	};
 }
 
@@ -953,7 +965,14 @@ function lifeEvent(slot: number, state: number): WorldEvent {
 }
 
 function profileEvent(sp: ServerPlayer): WorldEvent {
-	return { t: WorldEv.PlayerProfile, slot: sp.slot, level: sp.level, outfit: sp.outfit, pet: sp.pet };
+	return {
+		t: WorldEv.PlayerProfile,
+		slot: sp.slot,
+		level: sp.level,
+		outfit: sp.outfit,
+		pet: sp.pet,
+		title: sp.title,
+	};
 }
 
 /**

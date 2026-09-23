@@ -31,6 +31,8 @@ import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminSe
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
+import { equipTitle } from "./save/titles";
+import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { startProximityChat } from "./chat/proximityChat";
@@ -161,6 +163,21 @@ interface Session {
 	 * panel (§9.3), so a client that is genuinely out of date can be told apart from one that never listens.
 	 */
 	staleProgressReports: number;
+	/**
+	 * MON-05: the fingerprint of what the title record (server/save/titleRecord.ts) holds for this player (nothing
+	 * stored = an empty record of this save's history), so a flush rewrites it only when something was earned.
+	 * undefined = the load could not read it: the next write MERGES into the record instead of replacing it, because
+	 * this session never saw what is there.
+	 */
+	titleMark: string | undefined;
+	/** the same, with the kills in steps (`titleRecordStep`): what an autosave compares against */
+	titleStep: string | undefined;
+	/**
+	 * MON-05: the next record write REPLACES the record whatever this session read of it -- the save is a new title
+	 * history (a missing save, an admin reset) that nothing in the record may flow back into. Cleared by the first
+	 * write that lands.
+	 */
+	titleReplace: boolean;
 }
 
 interface StoredLock {
@@ -379,6 +396,43 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 }
 
 /**
+ * The title record (server/save/titleRecord.ts) brought up to date with the save when it is due (`titleRecordDue`:
+ * a title, a new history, a step of kills -- or, `final`, anything at all on leaving).
+ */
+function syncTitleRecord(s: Session, final: boolean): void {
+	if (!TitleRecord.titleRecordDue(s.save, s.titleMark, s.titleStep, s.titleReplace, final)) return;
+	// start a new history over whatever is there (a missing save, an admin reset); replace a record this session
+	// has read; merge into one it never saw
+	const mode = s.titleReplace ? "restart" : s.titleMark !== undefined ? "replace" : "merge";
+	const written = TitleRecord.storeTitleRecord(s.key, s.save, mode);
+	if (written === undefined) return;
+	s.titleReplace = false;
+	// what landed goes back into the save (which is then written again): what a merge found and the load could not
+	// read, the epoch a restart stamped, or a LATER history this session was not told of (it lost the lock without
+	// knowing: its save write is about to be refused anyway). From here on replacing can never lower the record
+	if (TitleRecord.mergeTitleRecord(s.save, written)) s.dirty = true;
+	s.titleMark = TitleRecord.titleRecordMark(written);
+	s.titleStep = TitleRecord.titleRecordStep(written);
+}
+
+/**
+ * May a leave write the title record BEFORE its save (review S2)? That save releases the session lock, and every
+ * second in front of it is a second the player's next server waits for the lock (LOCK_WAIT) -- past that, it takes
+ * the lock and this save comes back "lost", with up to a minute of play. So the record stays out of the way:
+ *   - at shutdown: BindToClose shares SHUTDOWN_BUDGET among every save and its retries;
+ *   - on a low UpdateAsync budget (the autosave's own floor): a queued request waits in front of the save;
+ *   - while the title store is slow or failing (server/save/titleRecord.ts `titleStoreHealthy`).
+ * Nothing is lost by skipping it: the save has what was earned, and the player's next session writes the record
+ * from it (`titleRecordDue` sees the difference).
+ */
+function recordBeforeRelease(): boolean {
+	if (shuttingDown || !TitleRecord.titleStoreHealthy()) return false;
+	return (
+		DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync) >= AUTOSAVE_MIN_BUDGET
+	);
+}
+
+/**
  * Writes the session to the DataStore when needed. Calls are serialized per session.
  * `release` also drops the session lock (player left / server closing).
  */
@@ -389,15 +443,25 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	if (s.released) return true;
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
 	if (!release && !s.dirty && !refreshDue) return true;
+	s.writing = true;
+	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, by the session that
+	// believes it holds the lock and inside the same writing window. On release it goes FIRST: the save write below
+	// drops the lock, and from then on another server may load this player and own both documents -- a record
+	// written after that could land on top of theirs. (Anything the record hands back is in the save encoded below.)
+	// A server that already lost the lock without knowing it still gets here; `nextTitleRecord` never lets its write
+	// land over a later history (a reset made where the lock went).
+	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
+		s.writing = false;
 		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
 		return false;
 	}
-	s.writing = true;
 	const wasDirty = s.dirty;
 	s.dirty = false;
 	const outcome = writeWithLock(s, json, release, delays);
+	// every other write: right after the save, which just proved this session still holds the lock
+	if (outcome === "ok" && !release) syncTitleRecord(s, false);
 	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
@@ -495,9 +559,40 @@ function loadSession(s: Session): void {
 		status = "error";
 		save = defaultSave();
 	}
+	// MON-05: a server rolled back to v4 code rewrites the save without what was earned; the title record it never
+	// opens still has it (server/save/titleRecord.ts). Only for a save this session will write.
+	let restored = false;
+	let titleMark: string | undefined;
+	let titleStep: string | undefined;
+	let titleReplace = false;
+	if (status === "ok" || status === "new") {
+		const read = TitleRecord.loadTitleRecord(s.key);
+		const record = read.ok ? read.record : undefined;
+		if (status === "new") {
+			// no save: a first visit, or a key deleted on purpose. Whatever the record holds is a history that ended
+			// -- never merged, replaced at the first write (as is one that could not be read), and this save starts
+			// a later one
+			const recordEpoch = record !== undefined ? record.epoch : 0;
+			save.titleEpoch = math.min(math.max(os.time(), recordEpoch + 1), SAVE_LIMITS.EPOCH_MAX);
+			titleReplace = !read.ok || record !== undefined;
+		} else if (record !== undefined) {
+			restored = TitleRecord.mergeTitleRecord(save, record);
+			// a record of a history this save ended (an admin reset whose record write failed): replaced at once
+			titleReplace = record.epoch < save.titleEpoch;
+		}
+		if (read.ok) {
+			// nothing stored reads as nothing earned in this save's history: no write until something is
+			const known = record ?? TitleRecord.emptyTitleRecord(save.titleEpoch);
+			titleMark = TitleRecord.titleRecordMark(known);
+			titleStep = TitleRecord.titleRecordStep(known);
+		}
+	}
 	s.status = status;
 	s.save = save;
-	s.dirty = status === "new" || (status === "ok" && migrated);
+	s.titleMark = titleMark;
+	s.titleStep = titleStep;
+	s.titleReplace = titleReplace;
+	s.dirty = status === "new" || (status === "ok" && migrated) || restored;
 	s.lockLost = false;
 	s.token = HttpService.GenerateGUID(false);
 	s.pending = undefined;
@@ -559,6 +654,9 @@ function newSession(player: Player): Session {
 		patchResends: 0,
 		staleProgressReports: 0,
 		assistedRunRev: undefined,
+		titleMark: undefined,
+		titleStep: undefined,
+		titleReplace: false,
 	};
 }
 
@@ -864,6 +962,12 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const bought = buyCostume(save, req.costumeId);
 		if (!bought.ok) return fail(bought.reason, s);
 		price = bought.price;
+	} else if (req.kind === "equipTitle") {
+		// the wardrobe's Titles tab (MON-05): only a title the SERVER granted can be shown (server/save/titles.ts);
+		// the replicator's profile pass then puts it under the name for everybody
+		const shown = equipTitle(save, req.titleId);
+		if (!shown.ok) return fail(shown.reason, s);
+		price = 0;
 	} else if (req.kind === "rebirth" || req.kind === "newRun") {
 		/*
 		 * The two ways out of a death, decided HERE and not by the client (server/sim/life.ts rule 5, the owner's
@@ -985,8 +1089,11 @@ task.spawn(() => {
 const WALLET_PUSH_S = 0.25;
 const pushedWallet = new Map<Player, string>();
 
+/** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
 function walletSignature(save: PlayerSaveData): string {
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}`;
+	let titles = "";
+	for (const v of save.titles) titles += v > 0 ? "1" : "0";
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}`;
 }
 
 function pushWallets(): void {
@@ -1045,9 +1152,18 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 		applyAdminOps(edited, ops);
 	}
 	enforceSaveInvariants(edited);
+	// MON-05: a reset (or an edit that takes away something earned) starts a new title history, and the title record
+	// is replaced by it at the next write that lands -- it can never hand the old one back (server/save/titleRecord.ts)
+	if (ops === undefined || TitleRecord.lowersEarned(before, edited)) {
+		edited.titleEpoch = math.min(math.max(before.titleEpoch + 1, os.time()), SAVE_LIMITS.EPOCH_MAX);
+		s.titleReplace = true;
+	}
 	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
-	// an edit keeps the run (still assisted if it was); a reset starts a new one
-	s.assistedRunRev = ops !== undefined && s.assistedRunRev === before.runRev ? edited.runRev : undefined;
+	// an edit keeps the run (still assisted if it was); a reset starts a new one. An edit that moves the life's DAY
+	// is an admin living days for the player (§9.3, MP-13): from here the run is assisted, like a world tool's
+	const dayMoved = ops !== undefined && edited.day !== before.day;
+	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
+	s.assistedRunRev = assisted ? edited.runRev : undefined;
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
 	s.dirty = true;

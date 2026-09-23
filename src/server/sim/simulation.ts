@@ -37,7 +37,9 @@ import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
 import { ServerItems } from "./items";
-import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal } from "./progress";
+import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
+import { TitleId } from "shared/data/titles";
+import { creditLifeNight, grantTitle } from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
 import { WorldClock } from "./waves";
@@ -127,6 +129,11 @@ interface Presence {
 	aliveTicks: number;
 	/** the last tick a REAL command moved or pressed something (§9.1), or undefined */
 	activeTick?: number;
+	/**
+	 * MON-05: the last midnight PAID this survivor (and their run pays rewards), so the 06:00 that follows may make
+	 * them a Survivor. Cleared at every daybreak, and by a new world.
+	 */
+	nightCredited?: boolean;
 }
 
 export class ServerSimulation {
@@ -151,6 +158,11 @@ export class ServerSimulation {
 	onDayCredit?: (sp: ServerPlayer, credit: DayCredit) => void;
 	/** Midnight did NOT pay this survivor, and why (§3.6: dead, absent for most of the day, or AFK) */
 	onDayRefused?: (sp: ServerPlayer, reason: DayRefusal) => void;
+	/**
+	 * MON-05: this survivor just EARNED a title -- the save already has it (server/save/titles.ts `grantTitle`), and
+	 * it fires once per title per save, ever. server/net/mpHost.ts tells the survivor and has the session written.
+	 */
+	onTitleUnlocked?: (sp: ServerPlayer, titleId: number) => void;
 	/**
 	 * May this survivor's run earn coins? (§9.3 assisted run: an admin used world tools in it.) The
 	 * simulation has no idea who an admin is; server/main.server.ts owns that and wires this in. Left
@@ -235,6 +247,13 @@ export class ServerSimulation {
 		// generates is a reward the server pays). Before the security review of Sep 2026 the whole roster was
 		// paid: the dead, and a bot parked in the street.
 		this.clock.onNewDay = () => this.creditMidnight();
+		// MON-05: at 06:00 the night is over, and who lived through ALL of it since the midnight that paid them is a
+		// Survivor. Like the midnight, it happens only as the clock runs: an admin moving the hands credits nobody
+		this.clock.onDaybreak = () => this.creditDawn();
+		// ...and a night the admin skipped through is nobody's (the hands moved: that midnight's credit is forgotten)
+		this.clock.onClockSet = () => {
+			for (const [, p] of this.presence) p.nightCredited = false;
+		};
 		this.ownsInteractive = options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE;
 		this.ownsHorde = options.zombies ?? MP_PHASE >= 2;
 		this.adoptSystems(this.buildAround(this.world));
@@ -273,8 +292,11 @@ export class ServerSimulation {
 		this.worldOut.clear();
 		this.intents.clear();
 		// §3.6 counts the new world's first day from its first tick, exactly as a midnight would start it (the last
-		// real input is about minutes, not days, and is kept)
-		for (const [, p] of this.presence) p.aliveTicks = 0;
+		// real input is about minutes, not days, and is kept); a night half-lived in the old town is no Survivor's
+		for (const [, p] of this.presence) {
+			p.aliveTicks = 0;
+			p.nightCredited = false;
+		}
 		this.dayTicks = 0;
 		this.world = world;
 		this.clock.restart();
@@ -335,6 +357,11 @@ export class ServerSimulation {
 				const sp = this.bySlot.get(slot);
 				return sp === undefined || this.pays(sp);
 			},
+			// MON-05: the killing blow that made a Horde Breaker
+			titleUnlocked: (slot, titleId) => {
+				const sp = this.bySlot.get(slot);
+				if (sp !== undefined) this.onTitleUnlocked?.(sp, titleId);
+			},
 		});
 		out.progress = progress;
 		const projectiles = new ServerProjectiles({
@@ -379,13 +406,23 @@ export class ServerSimulation {
 		const span = this.dayTicks;
 		for (const sp of this.roster) {
 			const p = this.presence.get(sp.userId);
+			if (p !== undefined) p.nightCredited = false;
 			const refused = dayRefusal(sp.state.dead, p?.aliveTicks ?? 0, span, p?.activeTick, this.tick, this.simHz);
 			if (refused !== undefined) {
 				if (this.onDayRefused !== undefined) this.onDayRefused(sp, refused);
 				continue;
 			}
-			const credit = creditDaySurvived(sp.save, this.pays(sp));
+			const paid = this.pays(sp);
+			const credit = creditDaySurvived(sp.save, paid);
 			if (this.onDayCredit !== undefined) this.onDayCredit(sp, credit);
+			// MON-05, on the very day count that paid it (so its presence and AFK rules come with it): this midnight
+			// may make a Survivor at 06:00, and it is one more night of this life -- the seventh makes a Week One. An
+			// assisted run (§9.3) keeps its day and earns no title and no night, as it earns no coins
+			if (!paid) continue;
+			if (p !== undefined) p.nightCredited = true;
+			if (!credit.advanced) continue;
+			const unlocked = creditLifeNight(sp.save);
+			if (unlocked >= 0 && this.onTitleUnlocked !== undefined) this.onTitleUnlocked(sp, unlocked);
 		}
 		// a new day for everybody: the survivors in the world start it at 0, anybody else is forgotten (they start
 		// at 0 too whenever they come back); the last real input is kept, it is about minutes, not days
@@ -396,6 +433,35 @@ export class ServerSimulation {
 			else this.presence.delete(userId);
 		}
 		this.dayTicks = 0;
+	}
+
+	/**
+	 * MON-05 at 06:00: the night is over. A Survivor is whoever the midnight inside it paid AND who stayed alive in the
+	 * world for every tick since, awake at the controls after it (`survivedNight`). `dayTicks` restarted at that midnight, so
+	 * it is exactly the ticks of the night since. Nobody keeps the mark past this: the next night starts from zero.
+	 */
+	private creditDawn(): void {
+		for (const sp of this.roster) {
+			const p = this.presence.get(sp.userId);
+			if (p === undefined) continue;
+			const lived = survivedNight(
+				p.nightCredited === true,
+				sp.state.dead,
+				p.aliveTicks,
+				this.dayTicks,
+				p.activeTick,
+				this.tick,
+				this.simHz,
+			);
+			// …and a run an admin helped along since midnight (§9.3) earns nothing, as at midnight itself
+			if (lived && this.pays(sp)) this.unlockTitle(sp, TitleId.Survivor);
+		}
+		for (const [, p] of this.presence) p.nightCredited = false;
+	}
+
+	/** `titleId` is this survivor's now: into the save once, and announced once (server/save/titles.ts) */
+	private unlockTitle(sp: ServerPlayer, titleId: number): void {
+		if (grantTitle(sp.save, titleId) && this.onTitleUnlocked !== undefined) this.onTitleUnlocked(sp, titleId);
 	}
 
 	/** one tick of §3.6 bookkeeping; `acted` = a REAL command with movement or an edge was consumed this tick */
