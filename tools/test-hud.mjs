@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /*
- * The in-run HUD (docs/DESIGN_RULES.md UI-09): the console at the bottom centre and the day plate at the top.
+ * The in-run HUD (docs/DESIGN_RULES.md UI-09): the console at the bottom centre, with the day clock (the sky) at its
+ * left end -- on touch, in its own plate in the row of Menu and Bag.
  *
  *   npm run test:hud
  *   PZ_SRC=<another checkout>/src node tools/test-hud.mjs    (measures that version)
@@ -18,11 +19,14 @@
  *     picked up appears in its slot rewriting the tiles in place;
  *  3. clicking tile k writes the field key k writes (InputState.weaponSlotPressed, through bootstrap's real
  *     InputBegan handler), and the Bag / Menu plates call what B / P call;
- *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip, the day plate -- and the life's
- *     day only when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
+ *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip -- and the sky (4b): the world's
+ *     day, the countdown to nightfall ("Night in 2:14") and at night to daybreak, in real seconds, the sun / moon on
+ *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
+ *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
- *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide.
+ *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
+ *     plate sits in the row of Menu and Bag and covers nothing (phones included, and a crowded one).
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -508,7 +512,7 @@ check("a placa do dia solta no topo saiu", deep(hudRoot(), "DayPlate") === undef
 	);
 	check(
 		"o console so ficou mais largo, nao mais alto (a altura e o que o mundo menos pode ceder)",
-		DESKTOP_LAYOUT.h === 114 && DESKTOP_LAYOUT.w === 766,
+		DESKTOP_LAYOUT.h === 114 && DESKTOP_LAYOUT.w === 778,
 		`${DESKTOP_LAYOUT.w} x ${DESKTOP_LAYOUT.h}`,
 	);
 }

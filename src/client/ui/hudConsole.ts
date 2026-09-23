@@ -3,7 +3,7 @@
  * (UI-07). Layout idea from Pixel Quest's HUD -- one framed console at the bottom centre -- and nothing else from it:
  * every piece below is one of OUR kit's pieces and means something in OUR game.
  *
- *   desktop, 766 x 114 design units (x the UI size setting), 12 above the bottom edge
+ *   desktop, 778 x 114 design units (x the UI size setting), 12 above the bottom edge
  *   #==========================================================================================================#
  *   # .------------. .-----------------------. .----------------------------------. .-------------------.    #
  *   # | .  . O .   | | [####HP 88 / 100####..] | |[1 ]  [2 ]  [3 ]  [   ]  [   ]   | | Pistol            |    #
@@ -169,9 +169,9 @@ function sized(L: Layout): Layout {
 }
 
 /**
- * 10 + 120 + 8 + 200 + 8 + 266 + 8 + 136 + 10 = 766 wide, 10 + 94 + 10 = 114 tall: the sky 108 x 82 in its
+ * 10 + 132 + 8 + 200 + 8 + 266 + 8 + 136 + 10 = 778 wide, 10 + 94 + 10 = 114 tall: the sky 120 x 82 in its
  * section, bars 188 x 22 (3 x 22 + 2 x 8 = 82), tiles 46 (the bed 254 x 54), the Bag / Menu row 22 under the
- * hotbar's section. The sky made it 128 wider and not one unit taller: height is what the world can least spare on
+ * hotbar's section. The sky made it 140 wider and not one unit taller: height is what the world can least spare on
  * a wide screen (the owner's 1365 x 567 shows 567 px of town).
  */
 export const DESKTOP_LAYOUT: Layout = sized({

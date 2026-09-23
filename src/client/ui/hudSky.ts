@@ -5,7 +5,7 @@
  *
  *   the sky window (a dark groove)           desktop: a section at the LEFT end of the console (hudConsole.ts)
  *   .-------------------------------.        touch:   a plate in the top-right row, left of Menu and Bag -- the
- *   |          .  .  O  .           |                 thumbs own the bottom (hud.ts placeSky)
+ *   |          .  .  O  .           |                 thumbs own the bottom (hudConsole.ts placeTouchSky)
  *   |      .    the sun, or the moon .  |
  *   |   .     travels the arc      ! |    <- red pips: where the horde comes (nightfall by day; the three waves at night)
  *   |_______________________________|    <- the horizon
@@ -137,25 +137,28 @@ interface SkyGeom {
 	extraAlign: W.TextAlign;
 }
 
-/** desktop: the console's section at its left end, text under the sky */
+/**
+ * desktop: the console's section at its left end, text under the sky. 120 wide so the longest line, the night's
+ * "Daybreak in 2:48" (~111 units of Bold at TEXT.sm), keeps its design size instead of shrinking to fit
+ */
 const STACK: SkyGeom = {
-	w: 108,
+	w: 120,
 	h: 82,
-	cx: 54,
+	cx: 60,
 	hy: 30,
-	rx: 44,
+	rx: 50,
 	ry: 23,
 	glyph: 12,
 	dot: 2,
 	pip: 4,
 	dots: 15,
 	h0: 4,
-	h1: 104,
-	day: [2, 33, 104, 20],
-	count: [2, 55, 104, 17],
-	dayX: [2, 31, 104, 19],
-	countX: [2, 50, 104, 16],
-	extra: [2, 66, 104, 14],
+	h1: 116,
+	day: [2, 33, 116, 20],
+	count: [2, 55, 116, 17],
+	dayX: [2, 31, 116, 19],
+	countX: [2, 50, 116, 16],
+	extra: [2, 66, 116, 14],
 	daySize: TEXT.lg,
 	countSize: TEXT.sm,
 	extraSize: TEXT.xs,
@@ -243,6 +246,9 @@ export class HudSky {
 	private day = -1;
 	private extraText = "";
 	private extraShown: boolean | undefined;
+	/** what the extra line was built from: this life's day (-1 = same as the world's) and the watch's minute (-1 = none) */
+	private life = -2;
+	private minute = -2;
 	private night: boolean | undefined;
 	private passed = -1;
 	private pipsPassed = -1;
@@ -353,10 +359,10 @@ export class HudSky {
 			this.seconds = -1;
 		}
 
-		// the body on the arc, in half-unit steps
-		const [bx, by] = this.arc(f);
-		const qx = math.round(bx * 2) / 2;
-		const qy = math.round(by * 2) / 2;
+		// the body on the arc, in half-unit steps (the arc's maths inline: nothing is allocated per frame)
+		const a = math.pi * f;
+		const qx = math.round((g.cx - g.rx * math.cos(a)) * 2) / 2;
+		const qy = math.round((g.hy - g.ry * math.sin(a)) * 2) / 2;
 		if (qx !== this.bodyX || qy !== this.bodyY) {
 			this.bodyX = qx;
 			this.bodyY = qy;
@@ -394,19 +400,22 @@ export class HudSky {
 			this.countLabel.Text = `${word} <font color="${hex(color)}">${countdown(left)}</font>`;
 		}
 
-		// the extra line: this life's day where it has parted from the world's, HH:MM with a watch
-		const parts: Array<string> = [];
-		if (state.lifeDay !== state.day) parts.push(`${this.tr("Life day")} ${state.lifeDay}`);
-		if (state.showClock) {
-			const minute = math.floor(t * 60) % (24 * 60);
-			parts.push(string.format("%02d:%02d", math.floor(minute / 60), minute % 60));
+		// the extra line: this life's day where it has parted from the world's, HH:MM with a watch. Rebuilt only when
+		// one of the two changes (a game minute is ~0,7 real seconds): no string is made on a frame that shows the same
+		const life = state.lifeDay !== state.day ? state.lifeDay : -1;
+		const minute = state.showClock ? math.floor(t * 60) % (24 * 60) : -1;
+		if (life !== this.life || minute !== this.minute) {
+			this.life = life;
+			this.minute = minute;
+			const lifeText = life >= 0 ? `${this.tr("Life day")} ${life}` : "";
+			const clockText = minute >= 0 ? string.format("%02d:%02d", math.floor(minute / 60), minute % 60) : "";
+			const extra = lifeText !== "" && clockText !== "" ? `${lifeText} · ${clockText}` : lifeText + clockText;
+			if (extra !== this.extraText) {
+				this.extraText = extra;
+				this.extraLabel.Text = extra;
+			}
 		}
-		const extra = parts.join(" · ");
-		if (extra !== this.extraText) {
-			this.extraText = extra;
-			this.extraLabel.Text = extra;
-		}
-		const shown = extra !== "";
+		const shown = this.extraText !== "";
 		if (shown !== this.extraShown) {
 			this.extraShown = shown;
 			this.extraLabel.Visible = shown;
