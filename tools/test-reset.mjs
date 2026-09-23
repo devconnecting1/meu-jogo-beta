@@ -2073,6 +2073,13 @@ section("17) the reset's own time is not the new world's to repay, and the clien
 		"the clients' clock re-anchors on the tick the server actually runs (TimePong), within 2 ticks",
 		`clock ${clock.tickNow().toFixed(1)}, server ${s.sim.tick}, epoch moved ${((clock.stats().epochShift ?? 0) * 1000).toFixed(0)} ms`,
 	);
+	// (not the reset's, but the same live host: the admin rows carry the rewind's MP-16 evidence, review #3)
+	const row = s.host.anomalies().find(r => r.userId === a.UserId);
+	check(
+		row !== undefined && typeof row.rewindClamped === "number" && typeof row.shots === "number",
+		"the admin view's row for a survivor carries the rewind clamps and the shots they are out of (MP-16)",
+		row === undefined ? "no row" : `${row.rewindClamped} of ${row.shots}`,
+	);
 });
 
 // ================================================================

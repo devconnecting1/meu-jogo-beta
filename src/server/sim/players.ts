@@ -149,6 +149,18 @@ function bumpWindow(w: RateWindow, now: number, span: number): number {
 
 const STANDING: InputCommand = { seq: 0, moveAng: 0, moveMag: 0, aim: 0, held: 0, edges: 0 };
 
+/**
+ * Commands whose view is remembered: every one the queue can hold (INPUT_BUFFER_MAX + INPUT_GRACE_MAX) plus the
+ * redundancy's copies, so two commands in the queue never share a slot.
+ */
+const VIEW_RING = 32;
+
+function newViewRing(fill: number): Array<number> {
+	const out = new Array<number>();
+	for (let i = 0; i < VIEW_RING; i++) out.push(fill);
+	return out;
+}
+
 export interface ServerPlayer {
 	/** 0..MAX_PLAYERS-1, stable for the whole session (§4.4) */
 	slot: number;
@@ -190,9 +202,24 @@ export interface ServerPlayer {
 	lastCmd: InputCommand;
 	/** consecutive filled ticks since the last real command (the stall detector of `enqueue`) */
 	idleFills: number;
-	/** the snapshot tick the client said it was drawing, for the F2 rewind (§2.3) */
+	/**
+	 * The snapshot tick the client said it was drawing, for the F2 rewind (§2.3): the view of the command THIS tick
+	 * consumes (`takeCommand`), the frame that built it -- not the latest packet's, which is a queue's depth newer.
+	 * Between ticks (and on a tick that waits) it is the latest packet's.
+	 */
 	viewTick: number;
 	viewFrac: number;
+	/** the view each queued command was built under, by seq (a ring of VIEW_RING: seq, u16 tick, 1/256 fraction) */
+	viewSeqs: Array<number>;
+	viewTicks: Array<number>;
+	viewFracs: Array<number>;
+	/** ...and how many ticks had been taken when it landed, to measure its wait */
+	viewTakes: Array<number>;
+	/**
+	 * Ticks the command this tick consumed waited in the queue: measured HERE, never claimed. It is part of how old
+	 * an honest view is when its shot is judged, and the rewind ceiling counts it (server/sim/combat.ts).
+	 */
+	viewWait: number;
 	/** token bucket (§8.2) */
 	tokens: number;
 	tokenAt: number;
@@ -257,6 +284,11 @@ export function createServerPlayer(
 		idleFills: 0,
 		viewTick: 0,
 		viewFrac: 0,
+		viewSeqs: newViewRing(-1),
+		viewTicks: newViewRing(0),
+		viewFracs: newViewRing(0),
+		viewTakes: newViewRing(0),
+		viewWait: 0,
 		tokens: INPUT_BURST,
 		tokenAt: 0,
 		counters: newCounters(),
@@ -412,6 +444,24 @@ export function acceptInput(sp: ServerPlayer, packet: InputPacket, now: number, 
 	const room = grace > 0 && grace < math.huge ? math.min(math.floor(grace), INPUT_GRACE_MAX) : 0;
 	// oldest first, so the queue keeps its order with a single pass
 	for (let i = packet.cmds.size() - 1; i >= 0; i--) enqueue(sp, packet.cmds[i], room);
+	/*
+	 * The view of each command still waiting: the packet names the frame of its NEWEST command, and that is the
+	 * command it belongs to. A redundant copy only fills in for a command whose own packet never came, one frame
+	 * earlier per place. `takeCommand` hands the consumed command's view to the rewind (§2.3): the latest packet's
+	 * was a queue's depth newer than the frame that pulled the trigger, and let a view declared for one shot be
+	 * overwritten by the next packets before that shot was simulated.
+	 */
+	const takes = sp.counters.consumed + sp.counters.filled;
+	for (let i = 0; i < packet.cmds.size(); i++) {
+		const seq = packet.cmds[i].seq;
+		if (seqDiff(seq, sp.lastSeq) <= 0) continue;
+		const slot = seq % VIEW_RING;
+		if (i > 0 && sp.viewSeqs[slot] === seq) continue;
+		if (sp.viewSeqs[slot] !== seq) sp.viewTakes[slot] = takes;
+		sp.viewSeqs[slot] = seq;
+		sp.viewTicks[slot] = wrapU16(packet.viewTick - i);
+		sp.viewFracs[slot] = packet.viewFrac;
+	}
 }
 
 /** what one raw Input payload did (§8.1); the Roblox layer only decides whether to kick on top of this */
@@ -497,6 +547,17 @@ export function takeCommand(sp: ServerPlayer): InputCommand {
 		sp.queue.shift();
 		sp.lastSeq = head.seq;
 		sp.ackSeq = head.seq;
+		// the frame that built this command is the view its shot is judged in (§2.3, `acceptInput`), and the
+		// ticks it sat here are part of how old that view is by now
+		const slot = head.seq % VIEW_RING;
+		if (sp.viewSeqs[slot] === head.seq) {
+			sp.viewTick = sp.viewTicks[slot];
+			sp.viewFrac = sp.viewFracs[slot];
+			// the ticks taken since it landed, plus the one it landed in: it may have come right after a tick
+			sp.viewWait = math.max(0, sp.counters.consumed + sp.counters.filled - sp.viewTakes[slot]) + 1;
+		} else {
+			sp.viewWait = 0;
+		}
 		sp.lastCmd = head;
 		sp.idleFills = 0;
 		sp.counters.consumed += 1;

@@ -28,6 +28,7 @@ import {
 	SNAP_ZOMBIE_CAP,
 	UNRELIABLE_PAYLOAD_LIMIT,
 	WORLD_FLUSH_EVERY_TICKS,
+	midViewExtraTicks,
 } from "shared/net/mpConfig";
 import {
 	AnnounceKind,
@@ -404,6 +405,19 @@ export class Replicator {
 	) {
 		this.mapHash = options.mapHash;
 		this.seed = options.seed ?? DESIGN.TOWN_SEED;
+		// the shot's rewind needs what only this layer knows: which ring a zombie is in for which viewer (§2.3)
+		sim.zombieViewLag = (slot, z) => this.viewLagOf(slot, z);
+	}
+
+	/**
+	 * How many ticks further back than its declared view `slot` draws zombie `z`: a body sent in the mid ring is
+	 * drawn one near interval later than the buffer's render time (client/net/snapshotBuffer.ts, `extra`), a near
+	 * one at it. The snapshot's `mid` flag and this answer come from the same table (`hordeRings`).
+	 */
+	viewLagOf(slot: number, z: ZombieState): number {
+		const netId = this.sim.horde?.netIdOf(z) ?? 0;
+		if (!(netId > 0)) return 0;
+		return this.hordeRings.ring(slot, netId) === Ring.Mid ? midViewExtraTicks(this.sim.simHz) : 0;
 	}
 
 	// ------------------------------------------------------------ reliable deltas (§4.5)

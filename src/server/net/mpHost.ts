@@ -106,6 +106,13 @@ export interface MpAnomalyRow {
 	/** current input queue depth (§2.2) */
 	depth: number;
 	counters: InputCounters;
+	/**
+	 * MP-16 level 1 (§9.2 "sinalizar"): shots whose declared view the rewind had to move -- past the measured ping
+	 * ceiling, or away from where this survivor's view normally sits (server/sim/combat.ts `judge`) -- out of how
+	 * many it resolved. An honest client is not clamped (tools/test-combat.mjs c''); evidence, never an action.
+	 */
+	rewindClamped: number;
+	shots: number;
 }
 
 export interface MpHost {
@@ -194,6 +201,7 @@ interface Link {
 	/** counters already reported, to log deltas instead of totals */
 	reportedOverflow: number;
 	reportedMalformed: number;
+	reportedClamped: number;
 }
 
 export function startMpHost(options: MpHostOptions): MpHost {
@@ -274,6 +282,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				lastAnomalyLog: 0,
 				reportedOverflow: 0,
 				reportedMalformed: 0,
+				reportedClamped: 0,
 			};
 			links.set(player, link);
 			// a body kept from a disconnect a moment ago stops expiring (§7.2)
@@ -494,14 +503,23 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		const c = sp.counters;
 		const newOverflow = c.inputOverflow - link.reportedOverflow;
 		const newMalformed = c.malformed - link.reportedMalformed;
-		if ((newOverflow > 0 || newMalformed > 0) && now - link.lastAnomalyLog >= ANOMALY_LOG_INTERVAL) {
+		// MP-16 level 1: a declared view the rewind had to move (server/sim/combat.ts `judge`) is evidence, not guilt
+		const fight = sp.slot >= 0 ? sim.combat?.statsOf(sp.slot) : undefined;
+		const clamped = fight?.rewindClamped ?? 0;
+		const newClamped = clamped - link.reportedClamped;
+		if (
+			(newOverflow > 0 || newMalformed > 0 || newClamped > 0) &&
+			now - link.lastAnomalyLog >= ANOMALY_LOG_INTERVAL
+		) {
 			link.lastAnomalyLog = now;
 			link.reportedOverflow = c.inputOverflow;
 			link.reportedMalformed = c.malformed;
+			link.reportedClamped = clamped;
 			warn(
 				`[${GAME_NAME}] input anomaly ${player.Name} (${player.UserId}): ` +
 					`+${newOverflow} overflow, +${newMalformed} malformed, ` +
-					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}`,
+					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}, ` +
+					`+${newClamped} rewind clamped (${clamped} of ${fight?.shots ?? 0} shots)`,
 			);
 		}
 	}
@@ -608,12 +626,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();
 			for (const sp of sim.players()) {
+				const fight = sim.combat?.statsOf(sp.slot);
 				rows.push({
 					slot: sp.slot,
 					userId: sp.userId,
 					name: sp.name,
 					depth: sp.queue.size(),
 					counters: sp.counters,
+					rewindClamped: fight?.rewindClamped ?? 0,
+					shots: fight?.shots ?? 0,
 				});
 			}
 			return rows;

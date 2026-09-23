@@ -645,6 +645,13 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u o
 	addSurvivor(server, 1, cx + 40, cy);
 	addSurvivor(server, 2, cx - 40, cy + 30);
 	seedHorde(server, 60, cx, cy, 600);
+	// and ten in the MID ring (800-1800 u, §4.3): drawn a near interval further back, and judged there (review #2)
+	for (let i = 0; i < 10; i++) {
+		const ang = (i / 10) * Math.PI * 2 + 0.3;
+		const z = createZombie(1, cx + Math.cos(ang) * (950 + 15 * i), cy + Math.sin(ang) * (950 + 15 * i), 5, false);
+		z.alpha = 1;
+		server.sim.horde.zombies.push(z);
+	}
 	// the horde needs a few ticks to be registered (netIds) and a few more to fill the interpolation buffer
 	for (let i = 0; i < 90; i++) {
 		tickServer(server);
@@ -660,8 +667,26 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u o
 	checkEq(c.size(), a.size(), "client 2 draws the same number of zombies");
 	let missing = 0;
 	let worst = 0;
+	let worstJudged = 0;
 	let across = 0;
+	let acrossOver = -Infinity;
 	let compared = 0;
+	let expected = 0;
+	// the server's own bodies by netId: where it would judge a shot at each, for each viewer (§2.3)
+	const horde = server.sim.horde;
+	const byNetId = new Map();
+	for (const z of horde.zombies) byNetId.set(horde.netIdOf(z), z);
+	/** the zombie's own speed on the server over the last 10 ticks, u/tick */
+	const speedOf = netId => {
+		let fastest = 0;
+		for (let t = server.sim.tick - 10; t < server.sim.tick; t++) {
+			const p = server.hist.get(t)?.get(netId);
+			const q = server.hist.get(t + 1)?.get(netId);
+			if (p !== undefined && q !== undefined) fastest = Math.max(fastest, Math.hypot(q.x - p.x, q.y - p.y));
+		}
+		return fastest;
+	};
+	const lagOf = slot => server.clients.get(slot).lag;
 	for (const [netId, za] of a) {
 		const zb = b.get(netId);
 		const zc = c.get(netId);
@@ -676,22 +701,57 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u o
 		 * this check that compared the three screens with each other held because the far client EXTRAPOLATED over
 		 * its latency, drawing zombies where the server never had them (tools/test-zombie-motion.mjs).
 		 */
-		for (const z of [za, zb, zc]) {
+		const onServer = byNetId.get(netId);
+		for (const [slot, z] of [
+			[0, za],
+			[1, zb],
+			[2, zc],
+		]) {
+			// a body the server already let go (a far one despawned, §4.4) is still drawn until its ring's timeout
+			if (onServer === undefined) continue;
+			expected += 1;
 			const truth = serverAt(server, netId, z.tick);
 			if (truth === undefined) continue;
 			compared += 1;
 			worst = Math.max(worst, Math.hypot(z.x - truth.x, z.y - truth.y));
+			// review #2: where the server JUDGES a shot this viewer fires at it -- the declared view (the buffer's
+			// render time) minus the ring's extra delay (server/net/replication.ts `viewLagOf`) -- is where it is drawn
+			const view = server.clients.get(slot).buffer.renderNow();
+			const lag = onServer !== undefined ? (server.replicator.viewLagOf?.(slot, onServer) ?? 0) : 0;
+			const judged = serverAt(server, netId, view - lag);
+			if (judged !== undefined) worstJudged = Math.max(worstJudged, Math.hypot(z.x - judged.x, z.y - judged.y));
 		}
-		across = Math.max(across, Math.hypot(za.x - zb.x, za.y - zb.y), Math.hypot(za.x - zc.x, za.y - zc.y));
+		// review #8: two screens differ by the zombie's walk over their latency difference, and by little else
+		const walk = speedOf(netId);
+		for (const [slot, z] of [
+			[1, zb],
+			[2, zc],
+		]) {
+			const gap = Math.hypot(za.x - z.x, za.y - z.y);
+			across = Math.max(across, gap);
+			acrossOver = Math.max(acrossOver, gap - (walk * Math.abs(lagOf(slot) - lagOf(0)) + 4));
+		}
 	}
 	checkEq(missing, 0, "every netId one client draws, the other two draw too");
 	check(
-		compared >= 3 * a.size() - 3 && worst <= 4,
+		expected >= 3 * (a.size() - 1) && compared === expected,
+		`every body the server still has, on every screen, has its position at the tick it is drawn ` +
+			`(${compared} of ${expected}; ${3 * a.size() - expected} drawn after the server let them go)`,
+	);
+	check(
+		worst <= 4,
 		`every screen draws each zombie within 4 u of the server at the tick it draws, at 0/50/100 ms and ` +
 			`0/1/2 % loss (worst ${worst.toFixed(2)} u over ${compared} bodies)`,
 	);
-	info(
-		`widest gap between two screens at the same instant: ${across.toFixed(2)} u (their latencies differ by 100 ms)`,
+	check(
+		worstJudged <= 4,
+		`…and within 4 u of where the server judges a shot at it: the declared view minus its ring's extra delay ` +
+			`(worst ${worstJudged.toFixed(2)} u)`,
+	);
+	check(
+		acrossOver <= 0,
+		`two screens differ by no more than the zombie's walk over their latency difference + 4 u ` +
+			`(widest gap ${across.toFixed(2)} u, ${acrossOver > 0 ? "+" : ""}${acrossOver.toFixed(2)} u against that bound)`,
 	);
 	// the same body, the same type: a client must never be shown a different creature
 	let sameType = true;

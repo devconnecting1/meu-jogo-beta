@@ -225,8 +225,32 @@ export const FLOOD_MALFORMED_WINDOW_S = 10;
 export const HISTORY_TICKS = 24;
 /** maximum hitscan rewind */
 export const REWIND_MAX_S = 0.3;
-/** melee is not rewound; it gets a latency margin instead */
+/**
+ * A target the shooter draws in the MID ring is drawn that much further back (client/net/snapshotBuffer.ts, the
+ * track's `extra`: one near interval, 3 ticks at 60 Hz), so the server rewinds it that much further too -- and
+ * lets its ceiling reach this much further for it alone (§2.3; the review of 2026-09-23, #2).
+ */
+export const MID_REWIND_EXTRA_S = 0.05;
+/**
+ * The declared view is judged within this many ticks of the shooter's own running offset (§2.3 continuity): an
+ * honest client's view moves smoothly, so a view that jumps inside the ping ceiling for one shot is clamped back.
+ */
+export const VIEW_CONTINUITY_TICKS = 3;
+
+/** how many ticks further back than the buffer's render time a client draws a body of the mid ring (§4.3, §5.1) */
+export function midViewExtraTicks(simHz = SIM_HZ): number {
+	return math.max(0, ticksPer(SNAP_MID_HZ, simHz) - ticksPer(SNAP_NEAR_HZ, simHz));
+}
+/**
+ * Melee is not rewound; it gets a latency margin of reach instead (§2.3): what a walker (MELEE_MARGIN_UPS) covers
+ * in the time an honest view is old -- the measured ping, the queue wait and the interpolation delay -- never less
+ * than MELEE_RANGE_MARGIN (the old fixed 130 ms) nor more than MELEE_RANGE_MARGIN_MAX (server/sim/combat.ts
+ * `meleeMargin`). At 140 ms of RTT a body is drawn ~225 ms old: 20 u of walk the fixed 12 u did not cover.
+ */
 export const MELEE_RANGE_MARGIN = 12;
+export const MELEE_RANGE_MARGIN_MAX = 24;
+/** the walker speed the melee margin is sized for, units per second (90 u/s, shared/data/zombies.ts type 1) */
+export const MELEE_MARGIN_UPS = 90;
 export const MELEE_ARC_MARGIN_DEG = 6;
 /** optional "fair bite": rewind cap of the victim's view */
 export const FAIR_BITE_REWIND_MAX_S = 0.15;

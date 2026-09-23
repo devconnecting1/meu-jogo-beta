@@ -57,8 +57,8 @@ import {
 	INTERP_MAX_S,
 	INTERP_MIN_S,
 	SIM_HZ,
-	SNAP_MID_HZ,
 	SNAP_NEAR_HZ,
+	midViewExtraTicks,
 	ticksPer,
 } from "shared/net/mpConfig";
 import { BossSnap, PlayerSnap, SnapshotPart, ZombieSnap } from "shared/net/protocol";
@@ -442,9 +442,8 @@ export class SnapshotBuffer {
 	private readonly pending = new Array<number>();
 	private relocks = 0;
 	private absorbedTicks = 0;
-	/** sample spacing of the near and mid rings at this server's rate, in ticks (3 and 6 at 60 Hz) */
+	/** sample spacing of the near ring at this server's rate, in ticks (3 at 60 Hz; the mid ring's is 6) */
 	private nearTicks = ticksPer(SNAP_NEAR_HZ, SIM_HZ);
-	private midTicks = ticksPer(SNAP_MID_HZ, SIM_HZ);
 	private newest = -math.huge;
 	private lastRender = -math.huge;
 	private accepted = 0;
@@ -456,7 +455,6 @@ export class SnapshotBuffer {
 		if (simHz < 1) return;
 		this.simHz = simHz;
 		this.nearTicks = ticksPer(SNAP_NEAR_HZ, simHz);
-		this.midTicks = ticksPer(SNAP_MID_HZ, simHz);
 	}
 
 	reset(): void {
@@ -675,7 +673,8 @@ export class SnapshotBuffer {
 		this.lastRender = render;
 		// a track's own extra delay moves at the same ±5 % of real time as the buffer's
 		const extraStep = maxMove * this.simHz;
-		const midExtra = math.max(0, this.midTicks - this.nearTicks);
+		// the very number the server rewinds a mid-ring target by (server/net/replication.ts `viewLagOf`, §2.3)
+		const midExtra = midViewExtraTicks(this.simHz);
 		this.out.clear();
 		const gone = new Array<number>();
 		for (const [slot, track] of this.tracks) {

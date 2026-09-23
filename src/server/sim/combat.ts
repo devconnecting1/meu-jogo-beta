@@ -15,14 +15,18 @@
  *
  * What IS compensated is latency, and only within a measured ceiling (§2.3):
  *   - hitscan is traced against zombies/bosses REWOUND to the instant the shooter was drawing
- *     (`server/sim/history.ts`), capped by `min(REWIND_MAX_S, ping/2 + interp + 2 ticks)` — the ping the server
- *     measured, never the one the client declares, so a lag switch loses compensation instead of buying it;
+ *     (`server/sim/history.ts`), capped by `min(REWIND_MAX_S, ping + interp + 2 ticks)` — the ping the server
+ *     measured (slow to rise, quick to fall), never the one the client declares, so a lag switch loses compensation
+ *     instead of buying it — and kept within VIEW_CONTINUITY_TICKS of the shooter's own running view offset, so a
+ *     view that jumps for one shot inside the ceiling is clamped too (`judge`). A zombie the shooter draws in the
+ *     MID ring is drawn a near interval further back, and is rewound that much further (`viewExtraTicks`);
  *   - walls, doors and constructions are traced in the PRESENT: rewinding them would let someone shoot through
  *     a door another player just closed;
  *   - the damage, the reaction and the knockback land on the zombie in the PRESENT;
  *   - melee is not rewound at all (it happens at contact distance, where the zombie's server position is also
  *     what decides its bite; mixing the two clocks creates "I killed it but it still bit me"). It gets a
- *     latency MARGIN instead: +MELEE_RANGE_MARGIN units of reach and ±MELEE_ARC_MARGIN_DEG of arc.
+ *     latency MARGIN instead: what a walker covers in the measured age of the view (`meleeMargin`, 12-24 units)
+ *     of reach and ±MELEE_ARC_MARGIN_DEG of arc.
  *
  * Spread is rolled with the SERVER's RNG and never sent (§2.3 "Seed da dispersão"), which is what makes
  * no-spread and no-recoil impossible rather than merely detectable (§9.1).
@@ -43,7 +47,7 @@
  *     combat.afterWorld(this.tick);                                           // §3.1 step 3
  *     …replication (step 4)…
  *
- * and, wherever the host already reads `Player:GetNetworkPing()` (milliseconds), `combat.setPing(slot, ms/1000)`
+ * and, wherever the host already reads `Player:GetNetworkPing()` (it returns SECONDS), `combat.setPing(slot, s)`
  * once a second: that measurement is the rewind ceiling, and leaving it at 0 only ever compensates LESS.
  * `combat.remove(slot)` on leave.
  */
@@ -116,6 +120,12 @@ const MAX_SHOTS_PER_TICK = 3;
 /** §2.3 "Mordida justa": the zombie must also be within contact + this, where the VICTIM saw it */
 export const FAIR_BITE_MARGIN = 24;
 
+/** the measured ping: a higher sample moves the ceiling this fraction of the way, a lower one PING_FALL (§2.3) */
+export const PING_RISE = 0.1;
+export const PING_FALL = 0.5;
+/** weight of one new view in a survivor's running view offset (per tick with a fresh Input: ~1/3 s to follow) */
+const VIEW_OFFSET_ALPHA = 0.05;
+
 /** exactly the shape of `damageToPlayer`, so a call site swaps one identifier (see `ServerCombat.damageSink`) */
 export type PlayerDamageSink = (p: Ply.PlayerState, save: PlayerSaveData, raw: number, bypassDef?: boolean) => boolean;
 
@@ -125,6 +135,12 @@ export interface CombatTargets {
 	/** live zombies, present tick (2A owns the list and its order) */
 	zombies: () => ReadonlyArray<Ent.ZombieState>;
 	bosses: () => ReadonlyArray<Ent.BossState>;
+	/**
+	 * How many ticks further back than its declared view the survivor in `slot` DRAWS this zombie: the mid ring's
+	 * extra delay (client/net/snapshotBuffer.ts), 0 in the near ring. The replication layer knows the rings
+	 * (server/net/replication.ts sets it through ServerSimulation.zombieViewLag); absent, every body counts as near.
+	 */
+	viewExtraTicks?: (slot: number, z: Ent.ZombieState) => number;
 }
 
 /** a projectile the server must fly (§2.3): combat validates and asks, 2A/2D own the flight and the Fx */
@@ -221,8 +237,14 @@ interface SlotState {
 	swing: Swing;
 	/** the weapon the machine is currently built for: a change resets cadence, reload and swing */
 	weaponId: number;
-	/** ping measured by the server (`Player:GetNetworkPing()`), in seconds — never a client number */
+	/** ping measured by the server (`Player:GetNetworkPing()`), in seconds — never a client number; filtered */
 	pingS: number;
+	pingSeen: boolean;
+	/** running `tick − declared view`, in ticks: where this survivor's view normally sits (§2.3 continuity) */
+	viewOffset: number;
+	viewSeen: boolean;
+	/** the survivor's consumed-command count when the offset last moved: it only moves on a command's own view */
+	viewPackets: number;
 	stats: CombatStats;
 }
 
@@ -312,9 +334,21 @@ export class ServerCombat {
 		return this.slotOf(slot).stats;
 	}
 
-	/** the ping the SERVER measured for this survivor, in seconds (§2.3 rewind ceiling) */
+	/**
+	 * The ping the SERVER measured for this survivor, in seconds (§2.3 rewind ceiling), once a second. Slow to rise,
+	 * quick to fall: the first sample is taken as it is, a lower one is followed at PING_FALL a sample, a higher one
+	 * at PING_RISE. A client that throttles its own link for a moment -- to widen the window for the shots right
+	 * after -- moves its ceiling a tenth of the way per second; an honest ping that settles lower is trusted at once.
+	 */
 	setPing(slot: number, seconds: number): void {
-		this.slotOf(slot).pingS = isFiniteNumber(seconds) && seconds > 0 ? math.min(seconds, 1) : 0;
+		const st = this.slotOf(slot);
+		const sample = isFiniteNumber(seconds) && seconds > 0 ? math.min(seconds, 1) : 0;
+		if (!st.pingSeen) {
+			st.pingSeen = true;
+			st.pingS = sample;
+			return;
+		}
+		st.pingS += (sample - st.pingS) * (sample < st.pingS ? PING_FALL : PING_RISE);
 	}
 
 	pingOf(slot: number): number {
@@ -338,6 +372,10 @@ export class ServerCombat {
 				swing: newSwing(),
 				weaponId: -1,
 				pingS: 0,
+				pingSeen: false,
+				viewOffset: 0,
+				viewSeen: false,
+				viewPackets: -1,
 				stats: newStats(),
 			};
 			this.slots.set(slot, st);
@@ -354,6 +392,7 @@ export class ServerCombat {
 	stepPlayer(sp: ServerPlayer, cmd: Net.InputCommand, tick: number, dt: number): void {
 		this.nowS = tick / this.simHz;
 		const st = this.slotOf(sp.slot);
+		this.noteView(sp, st, tick);
 		const p = sp.state;
 		p.hitFlash = math.max(0, (p.hitFlash ?? 0) - dt);
 		st.fireCd = math.max(st.fireCd - dt, -dt);
@@ -488,8 +527,9 @@ export class ServerCombat {
 	biteAllowed(sp: ServerPlayer, z: Ent.ZombieState, contact: number, tick: number): boolean {
 		if (!this.fairBite) return true;
 		const st = this.slotOf(sp.slot);
-		const cap = biteRewindCapS(st.pingS, Cfg.INTERP_DEFAULT_S, this.simHz);
-		const at = judgedTick(tick, this.declaredView(sp, tick), cap, this.simHz);
+		const cap = biteRewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, this.simHz);
+		// the same continuity as a shot: a view that jumps to where the zombie was still far would dodge the bite
+		const at = this.judge(st, tick, this.declaredView(sp, tick), cap, 0);
 		if (!this.history.sampleInto(z.id, at, this.point)) return true; // no past: the present already decided
 		const reach = contact + FAIR_BITE_MARGIN;
 		const dx = this.point.x - sp.state.x;
@@ -852,7 +892,7 @@ export class ServerCombat {
 			s.limit = w.cone;
 			s.angle = -w.cone;
 			s.speed = math.max(1, w.range);
-			s.reach = Wp.meleeReach(w) + Cfg.MELEE_RANGE_MARGIN;
+			s.reach = Wp.meleeReach(w) + this.meleeMargin(sp, st);
 			s.hits = 0;
 			s.delay = 0;
 			s.hitIds.clear();
@@ -877,9 +917,21 @@ export class ServerCombat {
 	}
 
 	/**
+	 * The melee's latency margin of reach (§2.3): what a walker covers in the time this survivor's honest view is old
+	 * -- the measured ping and queue wait (`lagOf`) plus the interpolation delay -- between MELEE_RANGE_MARGIN and
+	 * MELEE_RANGE_MARGIN_MAX. The fixed 12 u was a walker in 130 ms; at 140 ms of RTT a body is drawn ~225 ms old
+	 * (a round trip plus the buffer, client/net/snapshotBuffer.ts), 20 u of walk (the review of 2026-09-23, #6).
+	 * Only server measurements go in, so it is no wider for a client that claims more.
+	 */
+	private meleeMargin(sp: ServerPlayer, st: SlotState): number {
+		const age = this.lagOf(sp, st) + Cfg.INTERP_DEFAULT_S;
+		return math.clamp(Cfg.MELEE_MARGIN_UPS * age, Cfg.MELEE_RANGE_MARGIN, Cfg.MELEE_RANGE_MARGIN_MAX);
+	}
+
+	/**
 	 * The blade sweeps from −cone to +cone around the aim; bodies inside the reach whose bearing it crosses
 	 * this tick are hit (2 per swing), each hit pausing it for a few frames. The arc gets ±MELEE_ARC_MARGIN_DEG
-	 * and the reach +MELEE_RANGE_MARGIN of latency margin (§2.3) — roughly what a walker covers in 130 ms.
+	 * and the reach `meleeMargin` of latency margin (§2.3).
 	 */
 	private sweep(sp: ServerPlayer, st: SlotState, w: Wp.WeaponDef, aim: number, fromDeg: number, toDeg: number): void {
 		const s = st.swing;
@@ -942,7 +994,7 @@ export class ServerCombat {
 		const fuelled = held && sp.save.oil > 0 && this.spendFuel(sp, st, w, CHAINSAW_OIL_PER_SEC * dt);
 		rt.chainCount = fuelled ? math.min(CHAINSAW_MAX, rt.chainCount + dt) : math.max(0, rt.chainCount - dt);
 		const cutting = fuelled && rt.chainCount >= CHAINSAW_WARMUP;
-		const reach = Wp.meleeReach(w) + Cfg.MELEE_RANGE_MARGIN;
+		const reach = Wp.meleeReach(w) + this.meleeMargin(sp, st);
 		p.swingerActive = cutting;
 		p.swingerAngle = aim;
 		p.swingReach = reach;
@@ -1014,22 +1066,79 @@ export class ServerCombat {
 
 	// ---------------------------------------------------------------- tracing with rewind (§2.3)
 
-	/** the (fractional) tick this client SAYS it was drawing; §8.3 never trusts it, `judgedTick` clamps it */
+	/**
+	 * What the rewind ceiling counts as this shooter's latency, in seconds: the ping the SERVER measured (filtered,
+	 * `setPing`), plus the ticks the consumed command waited in the input queue (players.ts `viewWait`, measured here
+	 * too, and never more than INPUT_BUFFER_MAX). An honest view is a round trip, the client's buffer AND that wait
+	 * old when its shot is simulated; without the wait a 150 ms client sat on the edge of its ceiling and a
+	 * quarter of its shots were clamped (tools/test-combat.mjs, c'').
+	 */
+	private lagOf(sp: ServerPlayer, st: SlotState): number {
+		const wait = isFiniteNumber(sp.viewWait) ? math.clamp(sp.viewWait, 0, Cfg.INPUT_BUFFER_MAX) : 0;
+		return st.pingS + wait / this.simHz;
+	}
+
+	/** the (fractional) tick this client SAYS it was drawing; §8.3 never trusts it, `judge` clamps it */
 	private declaredView(sp: ServerPlayer, tick: number): number {
 		return unwrapTick(sp.viewTick, tick) + sp.viewFrac / 256;
+	}
+
+	/**
+	 * Keeps the survivor's running view offset (`tick − declared`, in ticks), once per tick that consumed a real
+	 * command -- whose view is the frame that built it (players.ts `takeCommand`). An honest client's view moves
+	 * smoothly (its delay changes at ±5 %, §5.1) with a tick or two of arrival jitter on top; a view that jumps for
+	 * one shot shows up against it. Only views the ceiling allows feed it, and a wait (no command) holds it where
+	 * it was instead of letting a stale view drag it.
+	 */
+	private noteView(sp: ServerPlayer, st: SlotState, tick: number): void {
+		const consumed = sp.counters.consumed;
+		if (consumed === 0 || consumed === st.viewPackets) return;
+		st.viewPackets = consumed;
+		const hz = this.simHz;
+		const cap = rewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, hz) * hz;
+		const offset = math.clamp(tick - this.declaredView(sp, tick), 0, cap);
+		if (!st.viewSeen) {
+			st.viewSeen = true;
+			st.viewOffset = offset;
+			return;
+		}
+		st.viewOffset += (offset - st.viewOffset) * VIEW_OFFSET_ALPHA;
+	}
+
+	/**
+	 * The (fractional) tick a declared view is judged at (§2.3): inside the ping ceiling `[now − cap, now]`
+	 * (`judgedTick`), and within VIEW_CONTINUITY_TICKS of where this survivor's view normally sits, shifted by
+	 * `extra` for a body the survivor draws further back (the mid ring). Either bound may cut: the ceiling stops a
+	 * view older than the ping explains, the continuity a view that jumps for one shot inside it.
+	 */
+	private judge(st: SlotState, tick: number, declared: number, capS: number, extra: number): number {
+		const hz = this.simHz;
+		const at = judgedTick(tick, declared, capS, hz);
+		if (!st.viewSeen) return at;
+		const oldest = tick - capS * hz;
+		const lo = math.max(oldest, tick - (st.viewOffset + extra + Cfg.VIEW_CONTINUITY_TICKS));
+		const hi = math.min(tick, tick - math.max(0, st.viewOffset + extra - Cfg.VIEW_CONTINUITY_TICKS));
+		return lo <= hi ? math.clamp(at, lo, hi) : hi;
 	}
 
 	/**
 	 * Rewinds every live target to the instant the shooter was drawing, once per shot (not per pellet), into
 	 * the parallel candidate arrays. A target with no history yet (it appeared this tick) keeps its present
 	 * position: the honest answer, and never a free hit.
+	 *
+	 * A zombie the shooter draws in the MID ring is drawn a near interval further back than the declared view (the
+	 * buffer's render time; client/net/snapshotBuffer.ts `extra`), and is judged there, with MID_REWIND_EXTRA_S more
+	 * ceiling for it alone. Judged at the declared view it stood 3 ticks ahead of the body on the shooter's screen:
+	 * 4.5 u at the median, 10 u at worst (the review of 2026-09-23, #2).
 	 */
 	private prepareTargets(sp: ServerPlayer, st: SlotState, tick: number): void {
-		const cap = rewindCapS(st.pingS, Cfg.INTERP_DEFAULT_S, this.simHz);
+		const cap = rewindCapS(this.lagOf(sp, st), Cfg.INTERP_DEFAULT_S, this.simHz);
 		const declared = this.declaredView(sp, tick);
-		const at = judgedTick(tick, declared, cap, this.simHz);
-		if (declared < at - 1e-6) st.stats.rewindClamped += 1;
+		const at = this.judge(st, tick, declared, cap, 0);
+		// MP-16 level 1 evidence (server/net/mpHost.ts `anomalies`): a view the ceiling or the continuity had to move
+		if (math.abs(declared - at) > 1e-6) st.stats.rewindClamped += 1;
 		const rewind = at < tick - 1e-6;
+		const midCap = cap + Cfg.MID_REWIND_EXTRA_S;
 		this.candZ.clear();
 		this.candX.clear();
 		this.candY.clear();
@@ -1040,7 +1149,9 @@ export class ServerCombat {
 			if (z.hp <= 0) continue;
 			let x = z.x;
 			let y = z.y;
-			if (rewind && this.history.sampleInto(z.id, at, this.point)) {
+			const extra = this.targets.viewExtraTicks?.(sp.slot, z) ?? 0;
+			const zAt = extra > 0 ? this.judge(st, tick, declared - extra, midCap, extra) : at;
+			if (zAt < tick - 1e-6 && this.history.sampleInto(z.id, zAt, this.point)) {
 				x = this.point.x;
 				y = this.point.y;
 			}
