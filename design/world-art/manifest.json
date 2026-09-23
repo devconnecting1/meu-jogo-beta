@@ -569,16 +569,16 @@
 			"name": "signSchool",
 			"file": "signSchool.png",
 			"kind": "sprite",
-			"w": 24,
-			"h": 16,
+			"w": 32,
+			"h": 20,
 			"description": "storefront sign (type 3): an open book on a chalkboard"
 		},
 		{
 			"name": "signHospital",
 			"file": "signHospital.png",
 			"kind": "sprite",
-			"w": 24,
-			"h": 16,
+			"w": 32,
+			"h": 20,
 			"description": "storefront sign (type 4): the white H of the hospital road sign, on blue"
 		},
 		{
@@ -587,7 +587,7 @@
 			"kind": "sprite",
 			"w": 24,
 			"h": 16,
-			"description": "storefront sign (type 5): a fuel pump, its display dark"
+			"description": "storefront sign (type 5): a fuel pump, its hose and nozzle hanging on its side"
 		},
 		{
 			"name": "signPharmacy",
@@ -601,8 +601,8 @@
 			"name": "signMarket",
 			"file": "signMarket.png",
 			"kind": "sprite",
-			"w": 24,
-			"h": 16,
+			"w": 32,
+			"h": 20,
 			"description": "storefront sign (type 7): a shopping cart"
 		},
 		{
@@ -611,7 +611,7 @@
 			"kind": "sprite",
 			"w": 24,
 			"h": 16,
-			"description": "storefront sign (type 8): a basket of greens, bread and apples"
+			"description": "storefront sign (type 8): a paper grocery bag with a baguette and an apple"
 		},
 		{
 			"name": "signGuns",
@@ -633,9 +633,9 @@
 			"name": "signDiner",
 			"file": "signDiner.png",
 			"kind": "sprite",
-			"w": 24,
-			"h": 16,
-			"description": "storefront sign (type 11): fork and knife"
+			"w": 32,
+			"h": 20,
+			"description": "storefront sign (type 11): a plate between a fork and a knife"
 		},
 		{
 			"name": "helipad",

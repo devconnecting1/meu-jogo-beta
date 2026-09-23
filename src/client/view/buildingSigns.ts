@@ -5,55 +5,56 @@
  *
  *   drawBuildingSign(r, cam, view, type, doorX, doorY, doorSide, roof, roofAlpha, shadow)
  *
- * It is the ONE hook client/view/worldView.ts calls, from the flat drawing and from the art drawing alike, with only
- * what a sign needs to know: the building's type, where its main entrance is and on which wall, and the roof rect
- * the sign stands on (the main wing's, once a building has several).
+ * It is the ONE hook client/view/worldView.ts calls (`drawSignage`), from the flat drawing and from the art drawing
+ * alike, with only what a sign needs to know: the building's type, where its main entrance is and in which wall,
+ * and the roof rect the sign stands on (the main wing's, once a building has several).
  *
- * Where: on the entrance wall, inside the footprint (on the parapet's coping, SIGN_INSET in from the facade), next to
- * the doorway on the side with more room, SIGN_GAP clear of it. Never over the doorway, never over the sidewalk: the
- * roof layer covers what is under it, and a sign hanging over the sidewalk would hide a zombie walking there
+ * Where: on the entrance wall, inside the footprint (on the parapet's coping, SIGN_INSET in from the facade), next
+ * to the doorway on the side with more room, SIGN_GAP clear of it. Never over the doorway, never over the sidewalk:
+ * the roof layer covers what is under it, and a sign hanging over the sidewalk would hide a zombie walking there
  * (LEG-03). Always upright on screen, whichever wall it is on: a pictogram is read, not a direction.
  *
  * What: the board (flat: its grid as a few rectangles; art: one ImageLabel of the same pixels once its texture has
  * an id, client/view/worldArt.ts), a small drop shadow on the roof that moves with the light (LUZ-01) and what a
  * few days did to it (APO-01), picked by a hash of the building: most are only grimy, some cracked, some chipped at
- * a corner, some bleached by the sun. It fades with the roof (roofAlpha) so it never hides the inside of a building
+ * a corner, some bleached by the sun. It fades with the roof (roofAlpha), so it never hides the inside of a building
  * the survivor walked into.
  *
  * Night: the signs are dark. The power is out a few days after the outbreak; a lit or flickering sign would be a
- * light with no reason (LUZ-02) and a beacon across the dark town, and a flicker would write properties every frame
- * (a still camera writes nothing, test:world-art). They read at night where everything does: in the survivor's light.
+ * light with no reason (LUZ-02), a beacon across the dark town and a promise of power the town cannot keep (P3),
+ * and a flicker would write properties every frame (a still camera writes nothing, test:world-art). They read at
+ * night where everything does: in the survivor's light.
  *
  * Cost: nothing allocates per frame (one scratch SpriteOpts, one scratch rect, the runs decomposed once per type);
- * flat 8 to 28 sprites a sign (the helipad 6 more), with art at most 6. The pool never grows after warm-up.
+ * flat at most SIGN_MAX_FLAT sprites a building (board runs + shadow + wear, the helipad 6 more on a board of 11),
+ * with art at most SIGN_MAX_ART. The pool never grows after warm-up.
  */
 import { Camera, ViewRect } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
 import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
-import { BUILDING_SIGNS, HELIPAD, SIGN_ART, SIGN_COLS, SIGN_ROWS, SIGN_TEXEL } from "shared/data/buildingSigns";
+import { BUILDING_SIGNS, BuildingSign, HELIPAD, SIGN_ART, SIGN_TEXEL } from "shared/data/buildingSigns";
 import { DoorSide, hash01, Rect } from "shared/game/world";
 import { artId } from "./worldArt";
 import { WORLD_ART, WorldArtName } from "./worldArtAssets";
 
-/** a board in world units */
-export const SIGN_W = SIGN_COLS * SIGN_TEXEL;
-export const SIGN_H = SIGN_ROWS * SIGN_TEXEL;
 /** how far inside the facade the board stands: on the parapet's coping, never over the sidewalk */
 export const SIGN_INSET = 4;
 /** clear space between the doorway's edge and the board */
 export const SIGN_GAP = 16;
 /** how close to a corner of the building the board may go */
 export const SIGN_EDGE = 16;
-/** the most sprites one building's signage may cost: flat (board runs + shadow + wear + helipad), and with art */
-export const SIGN_MAX_FLAT = 34;
+/** the most sprites one building's signage costs: flat (board runs + shadow + wear), and with art */
+export const SIGN_MAX_FLAT = 32;
 export const SIGN_MAX_ART = 6;
 
 /** Z layers (Z.roof + 1 .. + 9): all over the roof, its units and its rim, all under the tree canopy (Z.canopy) */
 const Z_PAINT = Z.roof + 1;
 const Z_SHADOW = Z.roof + 3;
 const Z_BOARD = Z.roof + 4;
-const Z_WEAR = Z.roof + 9;
+/** the board's runs stack at most this many layers above Z_BOARD (test:world-art checks every sign) */
+export const SIGN_MAX_LAYER = 4;
+const Z_WEAR = Z_BOARD + SIGN_MAX_LAYER + 1;
 
 const BLACK = COLORS.shadow;
 const OUTLINE = SIGN_ART.k;
@@ -80,14 +81,14 @@ const runsCache = new Map<number, Array<SignRun>>();
  * run it overlaps, so a board needs 3 to 5 layers, not one per colour.
  */
 function decompose(rows: Array<string>, order: string): Array<SignRun> {
-	const n = SIGN_COLS;
-	const m = SIGN_ROWS;
+	const m = rows.size();
+	const n = (rows[0] ?? "").size();
 	const rankOf = new Map<string, number>();
 	const orderChars = order.split("");
 	for (let i = 0; i < orderChars.size(); i++) rankOf.set(orderChars[i], i);
 	const rank: Array<number> = [];
 	for (let y = 0; y < m; y++) {
-		const chars = (rows[y] ?? "").split("");
+		const chars = rows[y].split("");
 		for (let x = 0; x < n; x++) rank.push(rankOf.get(chars[x] ?? "") ?? -1);
 	}
 	const runs: Array<SignRun> = [];
@@ -178,27 +179,37 @@ export function signRuns(bt: number): Array<[number, number, number, number, num
 	return out;
 }
 
-/** the texture of a type's sign when the town art knows it (a name missing from worldArtAssets.ts: draw flat) */
-function textureOf(bt: number): WorldArtName | undefined {
-	const sign = BUILDING_SIGNS[bt];
-	if (sign === undefined) return undefined;
+/** the texture of a type's sign in the town art (a name missing from worldArtAssets.ts: always drawn flat) */
+function textureOf(sign: BuildingSign): WorldArtName | undefined {
 	const name = sign.texture as WorldArtName;
 	return WORLD_ART[name] !== undefined ? name : undefined;
 }
 
 // ------------------------------------------------------------------ where
 
+/** a board's size in texels */
+function colsOf(sign: BuildingSign): number {
+	return (sign.rows[0] ?? "").size();
+}
+function rowsOf(sign: BuildingSign): number {
+	return sign.rows.size();
+}
+
 /**
- * Where the sign of a building with its main entrance at (doorX, doorY) in wall `side` of `roof` stands, written
- * into `out` (top-left corner and size, world units): along the entrance wall, SIGN_INSET inside the facade, next
- * to the doorway on the side with more room.
+ * Where the sign of type `bt` stands on a building with its main entrance at (doorX, doorY) in wall `side` of
+ * `roof`, written into `out` (top-left corner and size, world units): along the entrance wall, SIGN_INSET inside
+ * the facade, next to the doorway on the side with more room. False for a type without a sign (a house).
  */
-export function placeSign(out: Rect, side: DoorSide, doorX: number, doorY: number, roof: Rect): Rect {
+export function placeSign(out: Rect, bt: number, side: DoorSide, doorX: number, doorY: number, roof: Rect): boolean {
+	const sign = BUILDING_SIGNS[bt];
+	if (sign === undefined) return false;
+	const w = colsOf(sign) * SIGN_TEXEL;
+	const h = rowsOf(sign) * SIGN_TEXEL;
 	const alongX = side === "top" || side === "bottom";
 	const u = alongX ? doorX : doorY;
 	const lo = alongX ? roof.x : roof.y;
 	const hi = alongX ? roof.x + roof.w : roof.y + roof.h;
-	const len = alongX ? SIGN_W : SIGN_H;
+	const len = alongX ? w : h;
 	const clear = TOWN.DOOR_W / 2 + SIGN_GAP;
 	const roomHi = hi - SIGN_EDGE - (u + clear);
 	const roomLo = u - clear - (lo + SIGN_EDGE);
@@ -209,21 +220,22 @@ export function placeSign(out: Rect, side: DoorSide, doorX: number, doorY: numbe
 	// a facade too short for a sign beside its door (no generated building is): the far end of the longer side
 	else a = roomHi >= roomLo ? hi - SIGN_EDGE - len : lo + SIGN_EDGE;
 	a = math.floor(a + 0.5);
-	out.w = SIGN_W;
-	out.h = SIGN_H;
+	out.w = w;
+	out.h = h;
 	if (alongX) {
 		out.x = a;
-		out.y = side === "top" ? roof.y + SIGN_INSET : roof.y + roof.h - SIGN_INSET - SIGN_H;
+		out.y = side === "top" ? roof.y + SIGN_INSET : roof.y + roof.h - SIGN_INSET - h;
 	} else {
 		out.y = a;
-		out.x = side === "left" ? roof.x + SIGN_INSET : roof.x + roof.w - SIGN_INSET - SIGN_W;
+		out.x = side === "left" ? roof.x + SIGN_INSET : roof.x + roof.w - SIGN_INSET - w;
 	}
-	return out;
+	return true;
 }
 
-/** tests and tools/validate-world.mjs: `placeSign` into a new rect */
-export function signRect(side: DoorSide, doorX: number, doorY: number, roof: Rect): Rect {
-	return placeSign({ x: 0, y: 0, w: 0, h: 0 }, side, doorX, doorY, roof);
+/** tests and tools/validate-world.mjs: `placeSign` into a new rect, or undefined for a type without a sign */
+export function signRect(bt: number, side: DoorSide, doorX: number, doorY: number, roof: Rect): Rect | undefined {
+	const out = { x: 0, y: 0, w: 0, h: 0 };
+	return placeSign(out, bt, side, doorX, doorY, roof) ? out : undefined;
 }
 
 /** does type `bt` paint a helipad on its roof? */
@@ -295,33 +307,42 @@ function texels(
  * edge), 15% chipped at a corner (the plastic face broken out, the dark box behind it showing), 20% bleached by the
  * sun; the rest only carry the grime of their bottom row. At most three sprites.
  */
-function drawWear(r: Renderer, cam: Camera, x0: number, y0: number, roof: Rect, a: number): void {
+function drawWear(
+	r: Renderer,
+	cam: Camera,
+	x0: number,
+	y0: number,
+	cols: number,
+	rows: number,
+	roof: Rect,
+	a: number,
+): void {
 	const h = hash01(roof.x, roof.y, 91);
 	if (h < 0.3) {
 		// the pale stress line of cracked plastic: it reads as damage over a light face and a dark pictogram alike
 		const right = hash01(roof.x, roof.y, 92) < 0.5;
 		const k = math.floor(hash01(roof.x, roof.y, 93) * 3);
-		const col = right ? SIGN_COLS - 3 - k : 2 + k;
+		const col = right ? cols - 3 - k : 2 + k;
 		const step = right ? -1 : 1;
 		texels(r, cam, x0, y0, col, 1, 1, 2, Z_WEAR, CRACK, 0.9 * a);
 		texels(r, cam, x0, y0, col + step, 3, 1, 1, Z_WEAR, CRACK, 0.9 * a);
 		texels(r, cam, x0, y0, col + step * 2, 4, 1, 2, Z_WEAR, CRACK, 0.7 * a);
 	} else if (h < 0.45) {
-		if (hash01(roof.x, roof.y, 94) < 0.5) texels(r, cam, x0, y0, SIGN_COLS - 4, 1, 3, 2, Z_WEAR, OUTLINE, a);
-		else texels(r, cam, x0, y0, 1, SIGN_ROWS - 3, 3, 2, Z_WEAR, OUTLINE, a);
+		if (hash01(roof.x, roof.y, 94) < 0.5) texels(r, cam, x0, y0, cols - 4, 1, 3, 2, Z_WEAR, OUTLINE, a);
+		else texels(r, cam, x0, y0, 1, rows - 3, 3, 2, Z_WEAR, OUTLINE, a);
 	} else if (h < 0.65) {
-		texels(r, cam, x0, y0, 1, 1, SIGN_COLS - 2, SIGN_ROWS - 2, Z_WEAR, BLEACH, 0.2 * a);
+		texels(r, cam, x0, y0, 1, 1, cols - 2, rows - 2, Z_WEAR, BLEACH, 0.2 * a);
 	}
 }
 
-/** the hospital's helipad: flat, the ring, the white cross and the red H; with art, one sprite */
+/** the hospital's helipad: flat, the deck with its ring, the white cross and the red H; with art, one sprite */
 function drawHelipad(r: Renderer, cam: Camera, v: ViewRect, roof: Rect, a: number): void {
 	const T = SIGN_TEXEL;
 	const cx = roof.x + roof.w / 2;
 	const cy = roof.y + roof.h / 2;
 	const half = (HELIPAD.size * T) / 2;
 	if (cx + half < v.minX || cx - half > v.maxX || cy + half < v.minY || cy - half > v.maxY) return;
-	const tex = WORLD_ART["helipad" as WorldArtName] !== undefined ? artId("helipad" as WorldArtName) : undefined;
+	const tex = artId("helipad");
 	if (tex !== undefined) {
 		const o = fresh(half * 2, half * 2, Z_PAINT, BLACK, a);
 		o.color = undefined;
@@ -369,17 +390,18 @@ export function drawBuildingSign(
 	shadow: (x: number, y: number, len: number) => { x: number; y: number },
 ): void {
 	if (alpha <= 0.01) return;
-	const runs = runsOf(bt);
-	if (runs === undefined) return;
-	if (hasHelipad(bt)) drawHelipad(r, cam, v, roof, alpha);
-	const q = placeSign(SPOT, side, doorX, doorY, roof);
+	const sign = BUILDING_SIGNS[bt];
+	if (sign === undefined) return;
+	if (sign.roofMark === "helipad") drawHelipad(r, cam, v, roof, alpha);
+	const q = SPOT;
+	placeSign(q, bt, side, doorX, doorY, roof);
 	if (q.x > v.maxX || q.x + q.w < v.minX || q.y > v.maxY || q.y + q.h < v.minY) return;
 	const cx = q.x + q.w / 2;
 	const cy = q.y + q.h / 2;
 	// a box on the parapet: its shadow on the roof, short (it stands a hand's width proud of the coping)
 	const so = shadow(cx, cy, SIGN_INSET);
 	r.drawRect(cam, cx + so.x, cy + so.y, fresh(q.w, q.h, Z_SHADOW, BLACK, 0.3 * alpha));
-	const name = textureOf(bt);
+	const name = textureOf(sign);
 	const tex = name !== undefined ? artId(name) : undefined;
 	if (tex !== undefined) {
 		const o = fresh(q.w, q.h, Z_BOARD, BLACK, alpha);
@@ -387,9 +409,12 @@ export function drawBuildingSign(
 		o.image = tex;
 		r.drawRect(cam, cx, cy, o);
 	} else {
-		for (const run of runs) {
-			texels(r, cam, q.x, q.y, run.x, run.y, run.w, run.h, Z_BOARD + run.z, run.color, alpha);
+		const runs = runsOf(bt);
+		if (runs !== undefined) {
+			for (const run of runs) {
+				texels(r, cam, q.x, q.y, run.x, run.y, run.w, run.h, Z_BOARD + run.z, run.color, alpha);
+			}
 		}
 	}
-	drawWear(r, cam, q.x, q.y, roof, alpha);
+	drawWear(r, cam, q.x, q.y, colsOf(sign), rowsOf(sign), roof, alpha);
 }

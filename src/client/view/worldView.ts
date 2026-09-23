@@ -593,9 +593,11 @@ export class WorldView {
 	}
 
 	/**
-	 * How the building says what it is (client/view/buildingSigns.ts, DESIGN_RULES ART-07): the storefront sign
-	 * beside the main entrance and, on a hospital, the helipad. The one hook of the signage, shared by the flat and
-	 * the art drawing: the type, the main entrance (where, and in which wall) and the roof the sign stands on.
+	 * How the building says what it is (client/view/buildingSigns.ts, DESIGN_RULES EDI-03, ART-07): the storefront
+	 * sign beside the main entrance and, on a hospital, the helipad. The ONE hook of the signage, shared by the flat
+	 * and the art drawing and by the menus' flyover: it hands the sign the building's type, its main entrance (where,
+	 * and in which wall) and the roof rect the sign stands on -- the only lines to change when a building has several
+	 * wings or entrances (the main one's, and the main wing's rect). Nothing else here knows a sign exists.
 	 */
 	private drawSignage(r: Renderer, cam: Camera, v: ViewRect, s: Solid, a: number): void {
 		drawBuildingSign(
@@ -1359,9 +1361,11 @@ export class WorldView {
 		const h = hash01(s.x, s.y, 71);
 		// which end of the back the air conditioner takes, picked by the building
 		const flip = h < 0.5 ? 1 : -1;
-		// the entrance wall's outward normal: the units go the other way
-		const n = sideNormal(s.doorSide);
-		const alongX = n.y !== 0;
+		// the entrance wall's outward normal (nx, ny): the units go the other way
+		const side = s.doorSide;
+		const nx = side === "left" ? -1 : side === "right" ? 1 : 0;
+		const ny = nx !== 0 ? 0 : side === "top" ? -1 : 1;
+		const alongX = ny !== 0;
 		for (const k of SIDES) {
 			const big = k < 0;
 			const id = big ? ac : vent;
@@ -1370,8 +1374,8 @@ export class WorldView {
 			const size = artSize(big ? "acUnit" : "vent");
 			const along = k * flip * (alongX ? s.w : s.h) * (0.26 + 0.06 * hash01(s.x, s.y + k, 72));
 			const back = (alongX ? s.h : s.w) * (0.24 + 0.06 * hash01(s.x + k, s.y, 73));
-			const ux = alongX ? cx + along : cx - n.x * back;
-			const uy = alongX ? cy - n.y * back : cy + along;
+			const ux = alongX ? cx + along : cx - nx * back;
+			const uy = alongX ? cy - ny * back : cy + along;
 			const o = artOpts(id, size.w * WORLD_TEXEL, size.h * WORLD_TEXEL, Z.roof + 1);
 			o.alpha = a;
 			r.drawRect(cam, ux, uy, o);
