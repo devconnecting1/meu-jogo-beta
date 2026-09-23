@@ -766,9 +766,19 @@ section("E1. ten turrets and a full horde: searches bounded and staggered (§3.2
 	const stats = f.sim.turrets.stats;
 	stats.maxSearchesInTick = 0;
 	const s0 = stats.searches;
+	// the turrets' own share of the tick, timed around their step
+	const live = f.sim.turrets;
+	const step = live.step.bind(live);
+	let turretMs = 0;
+	live.step = (t, dt) => {
+		const a = performance.now();
+		step(t, dt);
+		turretMs += performance.now() - a;
+	};
 	const t0 = performance.now();
 	const ticks = f.run(5);
 	const ms = performance.now() - t0;
+	live.step = step;
 	const searches = stats.searches - s0;
 	check(
 		stats.maxSearchesInTick <= Math.ceil(10 / SEARCH_EVERY),
@@ -781,7 +791,12 @@ section("E1. ten turrets and a full horde: searches bounded and staggered (§3.2
 		`${searches} in ${ticks} ticks`,
 	);
 	console.log(
-		`        (the whole simulation with 10 turrets and 150 zombies: ${(ms / ticks).toFixed(2)} ms a tick in Node)`,
+		`        (10 turrets, 150 zombies: the turrets ${(turretMs / ticks).toFixed(3)} ms a tick, the whole simulation ${(ms / ticks).toFixed(2)} ms, Node)`,
+	);
+	check(
+		turretMs / ticks < 0.5,
+		"the turrets' share of a tick stays small (< 0.5 ms in Node; §3.2 gives combat 0.3 ms)",
+		`${(turretMs / ticks).toFixed(3)} ms`,
 	);
 	// 600 turrets (the server's build cap): the budget holds
 	const g = gridFixture();
@@ -888,6 +903,86 @@ section("G1. the grid publishes only what changed, with the level of each store"
 		"the state bits round-trip (working, level, flying)",
 	);
 });
+
+// ================================================================ H. the real path: crafted and placed on the server
+
+section(
+	"H1. crafted with the backpack verb and placed by the server's build: a battery box and a turret that shoots",
+	() => {
+		const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+		const { addItem } = require(join(SRC, "shared/sim/inventory.ts"));
+		const f = simFixture();
+		const save = saveWith();
+		const sp = f.player(0, 3000, 3000, save);
+		sp.state.godMode = true;
+		// a pro desk within reach (both recipes need one)
+		W.addSolid(f.world, {
+			kind: "structure",
+			x: 2800,
+			y: 2970,
+			w: 112,
+			h: 80,
+			hp: 400,
+			hpMax: 400,
+			destructible: true,
+			tags: "craftdesk_pro",
+		});
+		const box = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === ID.battery);
+		const gun = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === ID.turret);
+		for (const r of [box, gun]) for (const ing of r.ingredients) addItem(save, ing.kind, ing.index, ing.count);
+		// the ambient horde is out there: keep it away from the ghosts and the test zombie
+		const park = () => {
+			for (const z of f.sim.horde.zombies) {
+				if (z.test === true) continue;
+				z.x = 200;
+				z.y = 200;
+			}
+		};
+		let seq = f.sim.tick;
+		const verb = (kind, arg, nonce) => P.decodeIntentMessage(P.encodeIntentArgs(kind, 0, arg, nonce));
+		/** one real command through the wire (aim, held, edges), then the tick that consumes it */
+		const tick = (aim = 0, edges = 0, held = 0) => {
+			seq += 1;
+			const cmd = P.makeCommand(seq, 0, 0, aim, held, edges);
+			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), f.sim.tick);
+			park();
+			f.sim.step();
+		};
+		const place = (recipe, aim, nonce) => {
+			f.sim.queueIntent(0, verb(P.IntentKind.Craft, recipe.id, nonce));
+			for (let i = 0; i < 20; i++) tick(aim);
+			const before = f.world.solids.length;
+			tick(aim, P.packEdges(1, 0, 0, 0), P.HeldBit.Attack);
+			for (let i = 0; i < 10; i++) tick(aim);
+			return f.world.solids.length === before + 1 ? f.world.solids[f.world.solids.length - 1] : undefined;
+		};
+		const placedBox = place(box, 0, 1);
+		check(
+			placedBox?.tags === "battery",
+			"the battery box: crafted (verb), on the server's cursor, placed by the attack edge",
+			placedBox?.tags,
+		);
+		const placedGun = place(gun, Math.PI / 2, 2);
+		check(
+			placedGun?.tags === "turret" && placedGun.owner === 0,
+			"the turret: the same, built by slot 0",
+			placedGun?.tags,
+		);
+		if (placedBox === undefined || placedGun === undefined) return;
+		const st = f.sim.power.stateOf(placedGun);
+		check(st?.link?.solid === placedBox, "the grid plugged the turret into the new box (ServerBuild.onSolid)");
+		for (let i = 0; i < 20; i++) tick(Math.PI / 2);
+		check(placedGun.powered === true, "and it is armed");
+		const cx = placedGun.x + placedGun.w / 2;
+		const cy = placedGun.y + placedGun.h / 2;
+		const z = f.zombie(cx + 40, cy + 220, 100);
+		z.test = true;
+		const exp0 = save.exp;
+		for (let i = 0; i < 360 && z.hp > 0; i++) tick(Math.PI / 2);
+		check(z.hp <= 0, "a walker 225 u from it is shot dead by the server", `hp ${z.hp}`);
+		check(save.exp > exp0, "and its builder was paid the XP", `+${save.exp - exp0}`);
+	},
+);
 
 // ---------------------------------------------------------------- verdict
 
