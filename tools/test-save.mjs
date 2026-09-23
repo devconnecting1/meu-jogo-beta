@@ -988,7 +988,7 @@ section("20) rollback v5 -> v4 -> v5: esquece QUAL titulo estava mostrado, nunca
 	checkEq(merged.zombieKills, 120, "gravar sem ter lido o registro MESCLA: nada que ele tinha se perde");
 	checkEq(merged.titles[TIT.TitleId.HordeBreaker], 1, "nem um titulo");
 	const replaced = REC.nextTitleRecord(record, REC.titleRecordOf(SAVE.sanitizeStoredSave(productionV4())), true);
-	checkEq(replaced.zombieKills, 0, "quem leu o registro o SUBSTITUI (uma edicao do admin pode baixar)");
+	checkEq(replaced.zombieKills, 0, "quem leu o registro o SUBSTITUI (um reset do admin o baixa)");
 	checkEq(REC.readTitleRecord("lixo"), undefined, "um registro que nao e tabela e ignorado");
 	checkEq(
 		REC.readTitleRecord({ titles: [9], zombieKills: 1e12 }).zombieKills,
@@ -1111,7 +1111,7 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	checkEq(creditLifeNight(life), TIT.TitleId.WeekOne, "a 7a noite creditada desbloqueia Week One");
 	checkEq(creditLifeNight(life), -1, "a 8a nao desbloqueia de novo");
 
-	// an admin taking a title back takes it off the plate; the wallet carries both halves to the client
+	// the wallet carries both halves to the client, and no copy shows a title its save does not hold
 	killer.equipTitle = TIT.TitleId.HordeBreaker;
 	const wallet = SAVE.walletOf(killer);
 	checkEq(wallet.zombieKills, 101, "a carteira leva a contagem de abates");
@@ -1138,7 +1138,7 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	check(mirror.day === 8 && mirror.lifeNights === 2, "uma carteira sem eles (servidor antigo) nao os mexe");
 	killer.titles[TIT.TitleId.HordeBreaker] = 0;
 	SAVE.enforceSaveInvariants(killer);
-	checkEq(killer.equipTitle, -1, "tirar o titulo (admin) o tira do nome");
+	checkEq(killer.equipTitle, -1, "um save que nao tem o titulo (documento editado a mao) nao o mostra");
 
 	// the wiring: handleAction hands the raw id to equipTitle and nothing else
 	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");

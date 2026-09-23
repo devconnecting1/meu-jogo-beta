@@ -665,7 +665,7 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.equipOutfit = validEquip(s, s.equipOutfit, EquipSlot.Outfit);
 	s.equipPet = validEquip(s, s.equipPet, EquipSlot.Pet);
 	// MON-05: the same rule for the title line -- only one the server granted (`titles`) is shown, so a report
-	// naming one it never earned is corrected to none, and an admin taking a title back takes it off the plate
+	// (or a hand-edited document) naming one the save does not hold is corrected to none
 	s.equipTitle = validTitle(s, s.equipTitle);
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);

@@ -487,10 +487,9 @@ export const LANG_TABLE: Array<string> = [
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
-	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks)
-	"Menu",
+	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
+	// "Menu" and "Backpack" are already listed (the settings' Controls tab)
 	"Back to game",
-	"Backpack",
 	"Save",
 	"Home",
 	"Game over",

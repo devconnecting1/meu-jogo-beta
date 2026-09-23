@@ -627,6 +627,29 @@ check(
 	promises > 0 ? `${promises} texto(s) acima` : undefined,
 );
 
+/*
+ * The translation registry (src/shared/data/lang.ts LANG_TABLE) lists each string ONCE: its keys are the English
+ * text, so a second "Survivor" is the same key twice -- `npm run locale` silently dropped the repeat, and the
+ * one reading the table could not tell which of the two places a translation override would reach.
+ */
+{
+	const langSrc = readFileSync(join(SRC, "shared", "data", "lang.ts"), "utf8");
+	const start = langSrc.indexOf("export const LANG_TABLE");
+	const end = langSrc.indexOf("\n];", start);
+	const keys = stringLiterals(langSrc.slice(langSrc.indexOf("[", start), end));
+	const seen = new Set();
+	const repeated = [];
+	for (const k of keys) {
+		if (seen.has(k)) repeated.push(k);
+		seen.add(k);
+	}
+	check(
+		`lang.ts LANG_TABLE: cada texto uma vez so (${keys.length} chaves)`,
+		start >= 0 && keys.length > 100 && repeated.length === 0,
+		repeated.length > 0 ? `repetidos: ${JSON.stringify(repeated)}` : undefined,
+	);
+}
+
 /** { key: number } of the numeric entries of theme.ts TRANSPARENCY (`overlay: 0.2,`) */
 function transparencyPresets() {
 	const out = new Map();
