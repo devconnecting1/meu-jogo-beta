@@ -6,8 +6,10 @@
  * and the wallet brings them here, pushed as soon as they change (server/main.server.ts `pushWallets`, the stand-in
  * for the §4.1 `Self` channel); `applyWallet` only ever raises them. What is left for this module is the toast: a
  * counter that was below its goal in this copy before a wallet and is at it after. Once per achievement, because the
- * copy only grows -- and a save that REPLACES the copy (a LoadAck, an admin reset) is taken as the new baseline, never
- * announced: whatever it already holds was earned before, and was announced then.
+ * copy only grows -- and a save that is REPLACED or REWRITTEN from outside is taken as the new baseline, never
+ * announced: a LoadAck (`onActivate`, or a new save object), and an admin reset or edit, which rewrites ctx.save IN
+ * PLACE (client/admin/patches.ts calls `rebaseAchievementNotices`). Without that last one, a survivor whose progress an
+ * admin reset would never hear about re-earning First steps: the old "already complete" set outlived the reset.
  */
 import { GameContext } from "shared/game/context";
 import { PlayerSaveData } from "shared/game/save";
@@ -26,30 +28,58 @@ function completed(save: PlayerSaveData): Set<number> {
 	return done;
 }
 
-/** listens to the server's wallets for the rest of the session (call once, at boot) */
-export function startAchievementNotices(ctx: GameContext): void {
-	let seenSave = ctx.save;
+/** the toast's memory: which achievements this copy already had complete */
+export interface NoticeTracker {
+	/** the save as it is now is the baseline: nothing it already holds is news */
+	rebase: () => void;
+	/** the ids completed since the last look, in the achievements' order; a save swapped meanwhile is a baseline */
+	newlyCompleted: () => Array<number>;
+}
+
+/** pure (no Instances): tools/test-nav.mjs drives it directly */
+export function noticeTracker(current: () => PlayerSaveData): NoticeTracker {
+	let seenSave = current();
 	let seen = completed(seenSave);
-	// a LoadAck adopted as ctx.save is the new baseline, taken the moment it is adopted -- not at the next wallet, which
-	// may already be the one that completes something (First steps, granted as the survivor enters the town)
-	onActivate(() => {
-		seenSave = ctx.save;
-		seen = completed(seenSave);
-	});
-	onWalletChanged(() => {
-		const save = ctx.save;
-		const now = completed(save);
-		// a save swapped in some other way is a baseline too: nothing it already holds is news
-		if (save !== seenSave) {
+	return {
+		rebase: () => {
+			seenSave = current();
+			seen = completed(seenSave);
+		},
+		newlyCompleted: () => {
+			const save = current();
+			const now = completed(save);
+			const out = new Array<number>();
+			if (save === seenSave) {
+				for (const a of ACHIEVEMENTS) {
+					if (now.has(a.id) && !seen.has(a.id)) out.push(a.id);
+				}
+			}
 			seenSave = save;
 			seen = now;
-			return;
+			return out;
+		},
+	};
+}
+
+let active: NoticeTracker | undefined;
+
+/** an admin rewrote ctx.save in place (a reset, an edit): its contents are the new baseline, never announced */
+export function rebaseAchievementNotices(): void {
+	active?.rebase();
+}
+
+/** listens to the server's wallets for the rest of the session (call once, at boot) */
+export function startAchievementNotices(ctx: GameContext): void {
+	const tracker = noticeTracker(() => ctx.save);
+	active = tracker;
+	// a LoadAck adopted as ctx.save is the new baseline, taken the moment it is adopted -- not at the next wallet, which
+	// may already be the one that completes something (First steps, granted as the survivor enters the town)
+	onActivate(() => tracker.rebase());
+	onWalletChanged(() => {
+		const ids = tracker.newlyCompleted();
+		const lang = ctx.save.settings.langType;
+		for (const id of ids) {
+			toast(ctx, `${langGet("Achievement unlocked", lang)}: ${langGet(ACHIEVEMENTS[id].title, lang)}`, "success");
 		}
-		const lang = save.settings.langType;
-		for (const a of ACHIEVEMENTS) {
-			if (!now.has(a.id) || seen.has(a.id)) continue;
-			toast(ctx, `${langGet("Achievement unlocked", lang)}: ${langGet(a.title, lang)}`, "success");
-		}
-		seen = now;
 	});
 }

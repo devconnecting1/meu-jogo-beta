@@ -111,22 +111,43 @@ export function creditNightAchievements(save: PlayerSaveData): void {
  * `achievements` and `lifeDeaths` from the trusted save (v6); they are pinned again here, where the report is merged,
  * so the rule has a guard of its own that does not hang on how the sanitizer reads a report. `titles` goes with them:
  * nothing an achievement could stand for may be granted by a report either (MON-05: only `grantTitle` writes a
- * title). Answers whether the report had tried (a staleness signal for the admin panel, §9.3).
+ * title).
+ *
+ * Answers whether the report had tried (a staleness signal for the admin panel, §9.3): `claimed` is the report as it
+ * was decoded, BEFORE the sanitizer copied the trusted values over it -- the only place a claim is still visible. A
+ * copy that lags one wallet behind is flagged too, which is what "stale" means (as `stripClientProgress` does).
  */
-export function stripClientAchievements(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
-	let changed = upd.lifeDeaths !== prev.lifeDeaths;
-	changed =
-		changed || upd.achievements.size() !== prev.achievements.size() || upd.titles.size() !== prev.titles.size();
-	for (let i = 0; i < prev.achievements.size(); i++) {
-		if (upd.achievements[i] !== prev.achievements[i]) changed = true;
+export function stripClientAchievements(prev: PlayerSaveData, upd: PlayerSaveData, claimed?: unknown): boolean {
+	let tried = false;
+	if (typeIs(claimed, "table")) {
+		const raw = claimed as Record<string, unknown>;
+		tried =
+			claimDiffers(prev.achievements, raw.achievements) ||
+			claimDiffers(prev.titles, raw.titles) ||
+			(raw.lifeDeaths !== undefined && raw.lifeDeaths !== prev.lifeDeaths);
 	}
-	for (let i = 0; i < prev.titles.size(); i++) {
-		if (upd.titles[i] !== prev.titles[i]) changed = true;
-	}
+	// and whatever reached `upd` anyway (the sanitizer copies these from `prev`: only a regression there leaves a trace)
+	tried =
+		tried ||
+		claimDiffers(prev.achievements, upd.achievements) ||
+		claimDiffers(prev.titles, upd.titles) ||
+		upd.lifeDeaths !== prev.lifeDeaths;
 	upd.achievements = [...prev.achievements];
 	upd.titles = [...prev.titles];
 	upd.lifeDeaths = prev.lifeDeaths;
-	return changed;
+	return tried;
+}
+
+/** does a list the report carries differ from the trusted one? Absent is no claim; anything but a list is one */
+function claimDiffers(trusted: ReadonlyArray<number>, claim: unknown): boolean {
+	if (claim === undefined) return false;
+	if (!typeIs(claim, "table")) return true;
+	const list = claim as ReadonlyArray<unknown>;
+	if (list.size() !== trusted.size()) return true;
+	for (let i = 0; i < trusted.size(); i++) {
+		if (list[i] !== trusted[i]) return true;
+	}
+	return false;
 }
 
 /** a death the server decided (server/sim/life.ts): one more for this life; `resetRun` puts it back to 0 */

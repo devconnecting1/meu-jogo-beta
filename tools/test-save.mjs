@@ -1453,6 +1453,30 @@ section("25) v6 (CON-04, ACH-2): um relatorio nao move conquista nenhuma, e a mi
 		!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(JSON.parse(JSON.stringify(base)), base)),
 		"um relatorio que so espelha o servidor nao e apontado",
 	);
+	// the real path: the sanitizer has already put the trusted values into `upd`, so the claim is only visible in the
+	// report as decoded -- that is what `processReport` hands over, and what makes the staleness signal work
+	const claim = JSON.parse(JSON.stringify(base));
+	claim.achievements = ACHIEVEMENTS.map(a => a.max);
+	const sanitized = SAVE.sanitizeClientReport(claim, base);
+	check(
+		ACHV.stripClientAchievements(base, sanitized, claim),
+		"...e o relatorio forjado que o sanitizador ja limpou E apontado, pelo relatorio decodificado (claimed)",
+	);
+	const mirror = JSON.parse(JSON.stringify(base));
+	check(
+		!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(mirror, base), mirror) &&
+			!ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport({ day: base.day }, base), { day: base.day }),
+		"...um espelho fiel nao e, nem um relatorio sem esses campos (cliente antigo)",
+	);
+	const titled = JSON.parse(JSON.stringify(base));
+	titled.titles = titled.titles.map(() => 1);
+	const dead = JSON.parse(JSON.stringify(base));
+	dead.lifeDeaths = 0;
+	check(
+		ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(titled, base), titled) &&
+			ACHV.stripClientAchievements(base, SAVE.sanitizeClientReport(dead, base), dead),
+		"...e e apontado tambem o que so pede os titulos, e o que so apaga as mortes desta vida",
+	);
 
 	// the wallet carries them, and the client's copy only ever raises them
 	const w = SAVE.walletOf(base);
@@ -1640,10 +1664,10 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 		"a carteira empurrada muda quando uma conquista muda (walletSignature)",
 	);
 	check(
-		/stripClientLife\(prev, upd\)[^]*stripClientAchievements\(prev, upd\)[^]*applyProgressLimits\(s, prev, upd/.test(
+		/stripClientLife\(prev, upd\)[^]*stripClientAchievements\(prev, upd, decoded\)[^]*applyProgressLimits\(s, prev, upd/.test(
 			src("server/main.server.ts"),
 		),
-		"processReport fixa as conquistas antes de juntar o relatorio (stripClientAchievements)",
+		"processReport fixa as conquistas antes de juntar o relatorio, com o relatorio decodificado (stripClientAchievements)",
 	);
 }
 

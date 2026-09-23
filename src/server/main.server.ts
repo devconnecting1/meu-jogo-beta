@@ -852,7 +852,7 @@ function processReport(s: Session, json: string): void {
 	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
 	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
 	// …and so are the achievements and what they could stand for (CON-04, MON-05): counted on its own events only
-	if (stripClientAchievements(prev, upd)) s.staleProgressReports += 1;
+	if (stripClientAchievements(prev, upd, decoded)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —

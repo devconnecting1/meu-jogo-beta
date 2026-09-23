@@ -960,6 +960,48 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		"...e desligada nao e apagada: as 22 linhas continuam, com os ids do save (CON-03)",
 		ACHIEVEMENTS.length === 22 && ACHIEVEMENTS.every((a, i) => a.id === i),
 	);
+	// the toast (client/ui/achievementNotice.ts): a counter crossing its goal in this copy is announced once; a save
+	// rewritten from outside is the new baseline. An admin reset rewrites ctx.save IN PLACE (client/admin/patches.ts):
+	// before the rebase hook, the old "already complete" set outlived it and re-earning First steps was never told
+	{
+		const { noticeTracker } = require(join(SRC, "client/ui/achievementNotice.ts"));
+		const { defaultSave: freshSave } = require(join(SRC, "shared/game/save.ts"));
+		const live = freshSave();
+		const tracker = noticeTracker(() => live);
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const first = tracker.newlyCompleted();
+		const again = tracker.newlyCompleted();
+		// the admin reset: the same object, emptied, then the wallet brings First steps back
+		const wipe = () => live.achievements.fill(0);
+		wipe();
+		tracker.rebase();
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const reEarned = tracker.newlyCompleted();
+		// the same without the rebase: the bug the review found
+		const stale = noticeTracker(() => live);
+		wipe();
+		live.achievements[AchievementId.FirstSteps] = 1;
+		const missed = stale.newlyCompleted();
+		// an admin EDIT that completes one is not an achievement earned: rebased, never toasted
+		live.achievements[AchievementId.GoodDay] = 1;
+		tracker.rebase();
+		const edited = tracker.newlyCompleted();
+		const patches = readFileSync(join(SRC, "client/admin/patches.ts"), "utf8");
+		check(
+			"toast: uma vez ao completar; depois do reset do admin (no lugar) e re-ganha, avisa de novo; a edicao do admin nao avisa",
+			JSON.stringify(first) === JSON.stringify([AchievementId.FirstSteps]) &&
+				again.length === 0 &&
+				JSON.stringify(reEarned) === JSON.stringify([AchievementId.FirstSteps]) &&
+				missed.length === 0 &&
+				edited.length === 0 &&
+				/copyInto\(save, sanitizeStoredSave\(ev\.reset\)\);[^]*?rebaseAchievementNotices\(\);[^]*?deps\.endRun\(\)/.test(
+					patches,
+				) &&
+				/applyAdminOps\(save, ops\);[^]*?rebaseAchievementNotices\(\);/.test(patches),
+			`primeiro ${JSON.stringify(first)}, depois do reset ${JSON.stringify(reEarned)} (sem o rebase: ${JSON.stringify(missed)}), edicao ${JSON.stringify(edited)}`,
+		);
+	}
+
 	// ACH-4: Never die counts the nights of a life that has not died -- EVERY death, not only a paid Rebirth
 	{
 		const SAVE = require(join(SRC, "shared/game/save.ts"));
