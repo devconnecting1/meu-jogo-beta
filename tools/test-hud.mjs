@@ -873,6 +873,19 @@ function checkChip(label, L, others, sky, atHome) {
 	}
 	const c = deep(slot, "Count")?.FindFirstChildOfClass("UITextSizeConstraint");
 	check(`${label}: a contagem do chip nao fica abaixo do piso de 9 px`, c !== undefined && c.MaxTextSize >= 9);
+	// the open scoreboard, pinned to the left edge, never covers the day clock nor its own chip (MP-23) -- with the
+	// largest controls the two move to the top left, where the panel opens
+	const board = hud.scoreboard();
+	board.toggle();
+	const p = board.frame.Position;
+	const s = board.frame.Size;
+	const panel = [p.X.Offset, p.Y.Offset, p.X.Offset + s.X.Offset, p.Y.Offset + s.Y.Offset];
+	board.toggle();
+	check(
+		`${label}: o placar aberto nao cobre o relogio nem o chip, e cabe na tela`,
+		!overlaps(panel, sky) && !overlaps(panel, r) && panel[1] >= L.inset && panel[3] <= L.viewH + 0.5,
+		fmt(panel),
+	);
 }
 
 setViewport(1120, 630, TOP_BAR);

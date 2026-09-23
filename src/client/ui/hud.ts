@@ -346,7 +346,7 @@ export class Hud {
 		if (chipSlot !== undefined) {
 			this.board = new Scoreboard(root, chipSlot, tr, {
 				touch: mobile,
-				chipStyle: mobile ? "plate" : "row",
+				chipStyle: mobile ? "corner" : "console",
 				keyLegend: () => (mobile ? "" : gamepadActive() ? "Back" : "Q"),
 				gamepad: gamepadActive,
 				source: this.scoreSource ?? scoreSourceOf(ctx),
@@ -415,6 +415,8 @@ export class Hud {
 				corner.push([c.x, c.y, c.x + c.w, c.y + c.h]);
 			}
 			this.fitMessages(corner);
+			// the open scoreboard, pinned to the left edge, stays under the sky and the chip if they moved there
+			this.board?.avoid(corner);
 		}
 	}
 

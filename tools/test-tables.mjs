@@ -1054,7 +1054,10 @@ check("...e de novo fecha", !board.isOpen());
 deep(board.chip, "Hit").Activated.Fire();
 check("tocar / clicar no chip abre", board.isOpen() && sameColor(faceOf(board.chip), THEME.tabActive));
 deep(board.panel, "Close").Activated.Fire();
-check("o X fecha", !board.isOpen());
+check(
+	"o X fecha, e o chip volta ao ferro de Bag e Menu (a chapa secundaria do kit)",
+	!board.isOpen() && sameColor(faceOf(board.chip), THEME.secondary),
+);
 
 // sorting: the sort bar (pad / touch) and the headers (mouse), kept in agreement
 uis.GetLastInputType = () => Enum.UserInputType.Gamepad1;

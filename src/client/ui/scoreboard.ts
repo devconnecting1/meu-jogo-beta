@@ -18,11 +18,12 @@
  * engine's Select-to-pick-a-GUI (client/bootstrap.ts, `AutoSelectGuiEnabled`), which the kit never needed -- every
  * screen focuses itself.
  *
- * The chip goes where the Bag and the Menu go on the device (hud.ts gives it a slot to fill): on desktop the third
- * plate of the console's button row, after Bag and Menu (hudConsole.ts chipSlot, style "row": iron like them, raised,
- * the icon, the count and Q / Back); on touch the corner row of Menu and Bag, left of Menu, over the day clock
- * (hudConsole.ts placeTouchChip, style "plate": the sky plate's graphite, as tall as it, a thumb target). The day plate
- * it used to stand beside moved into the console (UI-09).
+ * The chip goes where the Bag and the Menu go on the device (hud.ts gives it a slot to fill), and it looks like them:
+ * iron and raised (the kit's secondary button), blue while the board is open. On desktop the third plate of the
+ * console's button row, after Bag and Menu (hudConsole.ts chipSlot, style "console": the icon, the count and Q /
+ * Back); on touch the corner row of Menu and Bag, left of Menu, over the day clock (hudConsole.ts placeTouchChip,
+ * style "corner": as tall as the sky's plate, the icon and the count large, a thumb target). The day plate it used to
+ * stand beside moved into the console (UI-09).
  *
  * What it never does: pause (UI-06 -- it is part of the HUD, the loop goes on and so does the survivor: holding Q you
  * still walk and shoot), hide the world (no scrim, no input blocker; the panel sits at the left, clear of the survivor
@@ -43,8 +44,9 @@ import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { LifeState } from "shared/net/protocol";
 import { RosterView, netActive, netHosted, netRoster } from "../net/netClient";
 import { paintPlate } from "./plate";
+import type { PxRect } from "./hudConsole";
 import { Px, pixelIcon } from "./hudSky";
-import { STAT, SURFACE, TEXT, THEME, fontOf } from "./theme";
+import { STAT, TEXT, THEME, fontOf } from "./theme";
 import { titleColor, titleText } from "./titleStyle";
 import {
 	SortOption,
@@ -215,11 +217,11 @@ const SORT_W = 330;
 export const SCORE_CHIP_TOUCH_W = 64;
 
 /**
- * How the chip is drawn in its slot: "row" = a plate of the console's button row (desktop: iron and raised like Bag and
- * Menu, the icon, the count and the key); "plate" = its own small plate (touch: the sky plate's graphite, flat until
- * touched, the icon and the count large).
+ * How the chip is laid out in its slot -- iron and raised either way, like the buttons it stands with: "console" = a
+ * plate of the console's button row (desktop: 76 x 22 like Bag and Menu, the icon, the count and the key); "corner" =
+ * a button of the touch corner's row (as tall as the sky's plate: the icon and the count large; touch has no key).
  */
-export type ChipStyle = "row" | "plate";
+export type ChipStyle = "console" | "corner";
 
 /** the chip's parts in its slot (design units of the slot): the icon's centre and side, the count's box, the key's box */
 interface ChipGeom {
@@ -232,7 +234,7 @@ interface ChipGeom {
 }
 function chipGeom(style: ChipStyle): ChipGeom {
 	// row: Bag and Menu put their 12-unit icon at 10..22 and their key from 28 (hudConsole.ts makeIconPlate)
-	if (style === "row") return { iconX: 16, iconS: 12, countX: 26, countW: 12, countSize: TEXT.sm, keyX: 38 };
+	if (style === "console") return { iconX: 16, iconS: 12, countX: 26, countW: 12, countSize: TEXT.sm, keyX: 38 };
 	return { iconX: 20, iconS: 18, countX: 34, countW: 26, countSize: TEXT.xl, keyX: 58 };
 }
 
@@ -324,6 +326,8 @@ export class Scoreboard {
 	private shownCount = -1;
 	private sortShown: boolean | undefined;
 	private chipText: Color3 | undefined;
+	/** what of the HUD's corner the open panel must stay under (touch: the sky and the chip, when they are on the left) */
+	private keepClear: ReadonlyArray<PxRect> = [];
 
 	/**
 	 * `chipSlot` is the frame the survivors chip fills (hud.ts: the console's button row on desktop, a frame in the touch
@@ -346,15 +350,9 @@ export class Scoreboard {
 		// above the vignette and the console, under the touch layer (ZIndex 8): the thumbs' controls stay on top
 		frame.ZIndex = 6;
 		setDesign(frame, PANEL_W, SCOREBOARD_H);
-		onLayoutChange(frame, () => {
-			const v = viewportSize();
-			const inset = topInset();
-			const s = math.min(v.X / DESIGN_W, math.max(0, v.Y - inset) / DESIGN_H);
-			frame.Position = UDim2.fromOffset(math.floor(PANEL_X * s), math.floor(inset + PANEL_Y * s));
-			frame.Size = UDim2.fromOffset(PANEL_W * s, SCOREBOARD_H * s);
-		});
-		frame.Parent = root;
 		this.frame = frame;
+		onLayoutChange(frame, () => this.placePanel());
+		frame.Parent = root;
 
 		const win = Kit.Window(frame, "Panel", {
 			x: 0,
@@ -485,10 +483,10 @@ export class Scoreboard {
 			align: "left",
 			zIndex: cz,
 		});
-		// light on the plate (UI-05): iron like Bag and Menu in the console's row, the sky plate's graphite on touch,
-		// and blue while the board is open. Touch shows no key (the thumb taps the chip), so it may have no room for one
+		// light on the plate (UI-05): iron like Bag and Menu, blue while the board is open. Touch shows no key (the
+		// thumb taps the chip), so the corner chip may have no room for one
 		this.chipKey = makeLabel(chip, "Key", "", g.keyX, 0, math.max(0, dw - g.keyX - 4), dh, TEXT.xs, fg, {
-			font: opts.chipStyle === "row" ? BOLD : "label",
+			font: BOLD,
 			align: "right",
 			zIndex: cz,
 		});
@@ -501,24 +499,17 @@ export class Scoreboard {
 
 	/** the chip's text and icon colour: light on its face (UI-05), the pair each face is measured with (test:contrast) */
 	private chipForeground(): Color3 {
-		if (this.open) return THEME.tabActiveForeground;
-		return this.opts.chipStyle === "row" ? THEME.secondaryForeground : THEME.foreground;
+		return this.open ? THEME.tabActiveForeground : THEME.secondaryForeground;
 	}
 
 	private paintChip(): void {
 		const gs = this.chipHit.GuiState;
 		const press = gs === Enum.GuiState.Press;
 		const hot = gs === Enum.GuiState.Hover || press;
-		if (this.opts.chipStyle === "row") {
-			// a plate of the console's button row: iron and raised like Bag and Menu (the kit's secondary button),
-			// blue while the board is open ("what is chosen is blue", UI-07)
-			const face = this.open ? THEME.tabActive : THEME.secondary;
-			paintPlate(this.chip, face, press ? "press" : hot ? "hot" : "idle");
-		} else {
-			// its own small plate: the sky plate's graphite at rest, blue while the board is open
-			const face = this.open ? THEME.tabActive : SURFACE.window;
-			paintPlate(this.chip, face, press ? "press" : hot || this.open ? "idle" : "flat", 3);
-		}
+		// a button with Bag and Menu: iron and raised like them (the kit's secondary button), blue while the board is
+		// open ("what is chosen is blue", UI-07)
+		const face = this.open ? THEME.tabActive : THEME.secondary;
+		paintPlate(this.chip, face, press ? "press" : hot ? "hot" : "idle");
 		const fg = this.chipForeground();
 		if (fg !== this.chipText) {
 			this.chipText = fg;
@@ -526,6 +517,34 @@ export class Scoreboard {
 			this.chipKey.TextColor3 = fg;
 			for (const px of this.chipIcon.GetChildren()) if (px.IsA("Frame")) px.BackgroundColor3 = fg;
 		}
+	}
+
+	/**
+	 * Pinned to the left edge under the bar at the HUD's scale; and below anything of `keepClear` that stands in its
+	 * column (touch with the largest controls moves the sky and the chip to the top left, hudConsole.ts placeTouchSky):
+	 * the open board never covers the day clock nor its own chip (MP-23), as long as it still fits on screen.
+	 */
+	private placePanel(): void {
+		const v = viewportSize();
+		const inset = topInset();
+		const s = math.min(v.X / DESIGN_W, math.max(0, v.Y - inset) / DESIGN_H);
+		const x = math.floor(PANEL_X * s);
+		const w = PANEL_W * s;
+		const h = SCOREBOARD_H * s;
+		let y = math.floor(inset + PANEL_Y * s);
+		for (const r of this.keepClear) {
+			// in the panel's column, and above its middle: the panel goes under it
+			if (r[0] < x + w && x < r[2] && r[1] < y + h / 2) y = math.max(y, math.ceil(r[3] + PAD * s));
+		}
+		y = math.min(y, math.max(inset, math.floor(v.Y - h)));
+		this.frame.Position = UDim2.fromOffset(x, y);
+		this.frame.Size = UDim2.fromOffset(w, h);
+	}
+
+	/** hud.ts, on a change of the touch geometry: the corner's pieces the open panel must stay clear of (never per frame) */
+	avoid(rects: ReadonlyArray<PxRect>): void {
+		this.keepClear = rects;
+		this.placePanel();
 	}
 
 	/**

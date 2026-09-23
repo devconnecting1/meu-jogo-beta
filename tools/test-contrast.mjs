@@ -449,18 +449,12 @@ const PAIRS = [
 	["THEME.ring", "SURFACE.well", MIN_UI, "NumberField: a borda do campo em foco"],
 	["SURFACE.well", "SURFACE.cell", MIN_RELIEF, "NumberField: o poco na celula de valor da linha de formulario"],
 	["THEME.foreground", "SURFACE.cellLabel", MIN_TEXT, "linha de formulario: o erro do campo no lugar da descricao"],
-	// the chip lives where Bag and Menu do (UI-09): the console's row on desktop, the touch corner's row on touch
+	// the chip lives where Bag and Menu do, and looks like them (UI-09): the console's row, the touch corner's row
 	[
 		"THEME.secondaryForeground",
 		"THEME.secondary",
 		MIN_TEXT,
-		"placar: o chip na fileira do console (icone, contagem, Q)",
-	],
-	[
-		"THEME.foreground",
-		"SURFACE.window",
-		MIN_TEXT,
-		"placar: o chip no canto de toque, grafite do ceu (icone, contagem)",
+		"placar: o chip de ferro com Bag e Menu (icone, contagem)",
 	],
 	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, "placar: o chip aceso enquanto o placar esta aberto"],
 ];
