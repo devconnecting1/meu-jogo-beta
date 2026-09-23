@@ -9,9 +9,11 @@
  *     would be dead centre at full level anyway; playing it flat (no position) is the same result without
  *     an emitter attachment, and it stays steady while the camera leads the aim. Allies ARE in the world:
  *     their steps are panned, which is how you hear someone coming up on your left.
- *  2. A footstep does not carry. The mixer is silent at AUDIO_RANGE (1600 u, ~29 m); boots on asphalt are
- *     gone long before that, so this module culls at FOOTSTEP_RANGE and fades over it. Hearing a stranger's
- *     steps across two blocks would also be free information about where people are.
+ *  2. A footstep does not carry -- but the ENGINE is what shortens it, not this file. The catalogue entry
+ *     carries `range: 900`, so the mixer gives the voice its own roll-off and the sound dies within a
+ *     street. A curve applied here on top of the engine's would attenuate twice, and did: a step at 500 u
+ *     came out at 0.44 where it should have been 0.59. Hearing a stranger's boots two blocks away would
+ *     also be free information about where people are, which is the other half of why the range is short.
  *  3. Two takes alternate. One id at two steps per second reads as a metronome no matter how much the pitch
  *     wanders, and the pitch range in the catalogue is there to finish the job.
  *
@@ -19,12 +21,6 @@
  * this module does not change: it will be fed by the event channel instead of the view, with the same call.
  */
 import { audio } from "./audio";
-
-/** past this many world units a footstep is not heard at all (the mixer's own range is 1600) */
-const FOOTSTEP_RANGE = 900;
-
-/** inside this radius an ally's step is at full level; beyond it the level falls to 0 at FOOTSTEP_RANGE */
-const FOOTSTEP_NEAR = 220;
 
 /** your own boots, a touch under an ally's: they are constant, and constant is what gets tiring */
 const LOCAL_SCALE = 0.85;
@@ -46,10 +42,6 @@ export function playFootstep(x: number, y: number, isLocal: boolean): void {
 		return;
 	}
 
-	const dist = audio.distanceToListener(x, y);
-	if (dist >= FOOTSTEP_RANGE) return;
-	// linear fade over the tail of the range, on top of the engine's own roll-off (rule 2)
-	const near = 1 - math.clamp((dist - FOOTSTEP_NEAR) / (FOOTSTEP_RANGE - FOOTSTEP_NEAR), 0, 1);
-	if (near <= 0.02) return;
-	audio.play(name, { x, y, scale: near });
+	// no curve here: the entry's own range does it, once (rule 2)
+	audio.play(name, { x, y });
 }

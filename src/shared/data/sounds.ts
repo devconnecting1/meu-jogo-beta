@@ -38,6 +38,13 @@ export interface SoundDef {
 	priority: number;
 	/** loops forever until stopped (music/ambience/heartbeat) */
 	loop?: boolean;
+	/**
+	 * World units at which THIS sound is silent, when it should not carry as far as the rest (default:
+	 * AUDIO_RANGE). A footstep is not a gunshot: it has to die within a street, and the engine has to be the
+	 * one to do it -- a second curve applied by the caller on top of the engine's attenuates twice, which is
+	 * how footsteps ended up at 0.44 where they should have been at 0.59.
+	 */
+	range?: number;
 	/** positioned in the 2D world (volume + stereo side by distance to the camera) */
 	spatial?: boolean;
 	/** skip this many seconds of the file (room tone before the take) */
@@ -406,6 +413,7 @@ export const SOUNDS = {
 	//     (design/audio-credits.md, pendency A). maxPlay 0.22 s keeps the first one and nothing else — at two
 	//     steps per second a second thump inside the same step would read as a limp.
 	footstepA: {
+		range: 900,
 		id: PSE_FOOTSTEP_A,
 		bus: "sfx",
 		category: "world",
@@ -418,6 +426,7 @@ export const SOUNDS = {
 		maxPlay: 0.22,
 	},
 	footstepB: {
+		range: 900,
 		id: PSE_FOOTSTEP_B,
 		bus: "sfx",
 		category: "world",

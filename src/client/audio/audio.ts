@@ -22,11 +22,18 @@
  *  - There is no 3D world, so there is no position to attach a Sound to. We build a minimal one: a single
  *    invisible anchored Part at the origin holds one Attachment per spatial voice, and the listener is
  *    pinned to the origin with an identity CFrame (SoundService:SetListener). Before a voice plays we place
- *    its Attachment at the event's position RELATIVE TO THE CAMERA, mapped as
- *        studs.x = (worldX - camX) * STUDS_PER_UNIT   (screen right -> listener right)
- *        studs.z = (worldY - camY) * STUDS_PER_UNIT   (screen down  -> behind the listener)
+ *    its Attachment at the event's ABSOLUTE position, mapped as
+ *        studs.x = worldX * STUDS_PER_UNIT   (screen right -> listener right)
+ *        studs.z = worldY * STUDS_PER_UNIT   (screen down  -> behind the listener)
  *        studs.y = 0
- *    so Roblox's own panner gives the stereo side and the distance roll-off (Linear, silent at AUDIO_RANGE).
+ *    and the LISTENER is moved to the camera every frame. Roblox then recomputes pan and distance itself,
+ *    every frame, for free.
+ *
+ *    That last part is the whole design, and it was wrong once: the first version pinned the listener to
+ *    the origin and placed each voice relative to the camera AT THE MOMENT IT WAS TRIGGERED. A one-shot was
+ *    fine, but anything that lasts glued itself to the listener and travelled with them -- at 210 u/s a
+ *    2.1 s boss roar drifts about 28 of the 100 studs of range, so the roar that should sweep past you as
+ *    you run by just followed you. Moving the listener instead is the same two numbers, the right way round.
  *  - Limitation, on purpose: a top-down plane has no elevation, and "up the screen" maps to "in front of
  *    the listener" while "down the screen" maps to "behind" — on stereo speakers front and back sound the
  *    same, so the player hears LEFT/RIGHT and NEAR/FAR, not above/below. That is exactly what a 2D top-down
@@ -239,7 +246,13 @@ class AudioEngine {
 			return p;
 		});
 		if (ok) this.emitter = made as BasePart;
+		// the listener starts at the origin and is moved to the camera by setListener() every frame
 		pcall(() => SoundService.SetListener(Enum.ListenerType.CFrame, new CFrame()));
+		// a moving listener would otherwise bend the pitch of everything it passes: this is a top-down plane,
+		// not a racing game, and a footstep that changes note because the camera panned is just a glitch
+		pcall(() => {
+			SoundService.DopplerScale = 0;
+		});
 
 		for (let i = 0; i < SPATIAL_VOICES; i++) this.voices.push(this.makeVoice(true, i));
 		for (let i = 0; i < FLAT_VOICES; i++) this.voices.push(this.makeVoice(false, i));
@@ -299,6 +312,15 @@ class AudioEngine {
 	setListener(x: number, y: number): void {
 		this.listenerX = x;
 		this.listenerY = y;
+		// move the ear, not the world: every playing voice is re-panned and re-attenuated by the engine from
+		// here, which is what makes a long sound sweep past instead of following the camera
+		if (!this.started) return;
+		pcall(() =>
+			SoundService.SetListener(
+				Enum.ListenerType.CFrame,
+				new CFrame(new Vector3(x * STUDS_PER_UNIT, 0, y * STUDS_PER_UNIT)),
+			),
+		);
 	}
 
 	/**
@@ -339,6 +361,8 @@ class AudioEngine {
 		if (def === undefined || def.id === "") return;
 		if (this.busGain(def.bus) <= 0) return;
 
+		// a sound may die closer than the rest (footsteps): the engine enforces it, not the caller
+		const range = def.range ?? AUDIO_RANGE;
 		const hasPos = opts !== undefined && opts.x !== undefined && opts.y !== undefined;
 		// the engine only pans and attenuates what hangs off the emitter Part
 		const spatial = hasPos && def.spatial === true && this.emitter !== undefined;
@@ -347,11 +371,11 @@ class AudioEngine {
 			const dx = (opts!.x as number) - this.listenerX;
 			const dy = (opts!.y as number) - this.listenerY;
 			const dist = math.sqrt(dx * dx + dy * dy);
-			if (dist >= AUDIO_RANGE) return;
+			if (dist >= range) return;
 			// flat voice with a world position (no emitter, or an entry that asked not to be panned):
 			// the distance curve is applied here instead
 			if (!spatial) {
-				flatScale = 1 - math.clamp((dist - AUDIO_NEAR) / (AUDIO_RANGE - AUDIO_NEAR), 0, 1);
+				flatScale = 1 - math.clamp((dist - AUDIO_NEAR) / (range - AUDIO_NEAR), 0, 1);
 				if (flatScale <= 0.01) return;
 			}
 		}
@@ -365,11 +389,16 @@ class AudioEngine {
 		sound.Looped = false;
 		sound.Volume = def.volume * math.clamp(opts?.scale ?? 1, 0, 1) * flatScale;
 		sound.PlaybackSpeed = opts?.pitch ?? this.randomPitch(def);
+
+		// the voice is pooled, so its roll-off belongs to the ENTRY playing through it right now
+		if (spatial) sound.RollOffMaxDistance = range * STUDS_PER_UNIT;
 		if (spatial && voice.attachment !== undefined) {
+			// absolute, because the listener is where the camera is: the engine does the subtraction, every
+			// frame, instead of us doing it once at trigger time
 			voice.attachment.Position = new Vector3(
-				((opts!.x as number) - this.listenerX) * STUDS_PER_UNIT,
+				(opts!.x as number) * STUDS_PER_UNIT,
 				0,
-				((opts!.y as number) - this.listenerY) * STUDS_PER_UNIT,
+				(opts!.y as number) * STUDS_PER_UNIT,
 			);
 		}
 		voice.name = name;
