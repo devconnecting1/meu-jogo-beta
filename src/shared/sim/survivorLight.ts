@@ -25,10 +25,12 @@ export const FLASHLIGHT_ID = 13;
 export const CONE_HALF_ANGLE = math.rad(EQUIP_LIGHTS[FLASHLIGHT_ID].coneDeg ?? 45);
 
 /**
- * Night vision on the wearer's own screen: the night's darkness × this (a quarter of it lifted everywhere), in the
- * phosphor green of COLORS.overlayNightVision. Only the screen: the horde's visibility is the `sight` circle.
+ * Night vision on the wearer's own screen: the night's darkness × this (15 % of it lifted everywhere), in the
+ * phosphor green of COLORS.overlayNightVision. Only the screen: the horde's visibility is the `sight` circle, so the
+ * lift stays small -- the ground past the circle reads a little, but it is still night there, and a zombie there is
+ * still unseen (LUZ-04).
  */
-export const NIGHT_VISION_DARK = 0.75;
+export const NIGHT_VISION_DARK = 0.85;
 
 /** the light row of a worn gadget, or undefined */
 function lightOf(id: number): EquipLight | undefined {

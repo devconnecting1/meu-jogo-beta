@@ -1288,7 +1288,7 @@ section(
 				/SurvivorLight\.wearsNightVision\(save\)/.test(body) &&
 					/setColor\(nightVision \? COLORS\.overlayNightVision : COLORS\.overlayNight\)/.test(body) &&
 					/darkAlpha \* \(nightVision \? SurvivorLight\.NIGHT_VISION_DARK : 1\)/.test(body),
-				`and on the wearer's screen the night is ${(1 - Light.NIGHT_VISION_DARK) * 100} % lighter, in phosphor green (gameLoop drawLight)`,
+				`and on the wearer's screen the night is ${((1 - Light.NIGHT_VISION_DARK) * 100).toFixed(0)} % lighter, in phosphor green (gameLoop drawLight)`,
 			);
 		}
 		{
