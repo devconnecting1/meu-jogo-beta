@@ -8,15 +8,16 @@
  *   npm run test:icons
  *   node tools/test-icons.mjs --golden     # rewrites tools/golden/item-icons-flat.json from the CURRENT src
  *                                          # (only when the Frame drawing changes on purpose)
+ *   node tools/test-icons.mjs --render docs/art/icons   # also writes before.png (Frames) / after.png (atlas)
  *
  * What this proves:
  *   1. THE ATLAS. The manifest's atlas entry, the PNG and the generated client/ui/itemIconAtlas.ts agree; every
  *      icon has a cell and a dimmed cell, every glyph a cell; the cells stay inside the atlas (<= 1024 x 1024, the
- *      upload limit), never overlap, keep a 2-texel transparent gutter and sit on even texels; each cell is its
- *      icon's Frame runs (itemIcon.ts iconRuns) painted in order, texel for texel, in ICON_ART (the dimmed cell in
- *      the drawer's greys, a glyph in white for ImageColor3 to tint); nothing else is painted; the id in
- *      worldArtAssets.ts is "" or belongs to THIS PNG (assets.json's sha1), and the town's preload list leaves the
- *      atlas out.
+ *      upload limit), never overlap, keep a 2-texel transparent gutter and sit on even texels; each cell is what the
+ *      Frame drawer paints at one screen pixel per texel, texel for texel, in ICON_ART (the dimmed cell in the
+ *      drawer's greys, a glyph in white for ImageColor3 to tint); nothing else is painted; the id in
+ *      worldArtAssets.ts is "" or belongs to THIS PNG (assets.json's sha1), and the boot's preload fetches it with
+ *      the town's textures.
  *   2. NO ID, NO CHANGE. With no atlas id every icon, dimmed icon and glyph, at five sizes (and in Scale, before the
  *      view knows its size), in one pooled view and in a reserved one, draws the same Frames with the same colours
  *      as before the atlas: the digest of every Frame's properties after every draw equals
@@ -34,10 +35,10 @@
  * Pure Node (>= 18) + the project's TypeScript on tools/ui-shim.mjs (the counted fake Instance tree).
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
-import { decodePNG } from "./png-lite.mjs";
+import { decodePNG, encodePNG } from "./png-lite.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
@@ -49,7 +50,6 @@ const Icon = require(join(SRC, "client/ui/itemIcon.ts"));
 const WA = require(join(SRC, "client/view/worldArt.ts"));
 const { WORLD_ART, WORLD_ART_NAMES } = require(join(SRC, "client/view/worldArtAssets.ts"));
 const { ITEM_ICONS, ICON_GLYPHS } = require(join(SRC, "shared/data/itemIcons.ts"));
-const { ICON_ART } = require(join(SRC, "shared/engine/colors.ts"));
 const { THEME, GAME } = require(join(SRC, "client/ui/theme.ts"));
 flush();
 
@@ -86,19 +86,21 @@ const fmtColor = c => (c === undefined ? "-" : [c.R, c.G, c.B].map(fmtN).join(" 
 /** everything a player could see of a view: its attributes and every child's drawn properties, in child order */
 function snap(view) {
 	const f = view.frame;
-	const kids = f.GetChildren().map(k =>
-		[
-			k.ClassName,
-			k.Name,
-			k.Visible,
-			fmtUDim2(k.Position),
-			fmtUDim2(k.Size),
-			fmtColor(k.BackgroundColor3),
-			fmtN(k.BackgroundTransparency),
-			k.ZIndex,
-			k.BorderSizePixel,
-		].join(","),
-	);
+	const kids = f
+		.GetChildren()
+		.map(k =>
+			[
+				k.ClassName,
+				k.Name,
+				k.Visible,
+				fmtUDim2(k.Position),
+				fmtUDim2(k.Size),
+				fmtColor(k.BackgroundColor3),
+				fmtN(k.BackgroundTransparency),
+				k.ZIndex,
+				k.BorderSizePixel,
+			].join(","),
+		);
 	return [f.GetAttribute("Icon"), f.GetAttribute("Dim"), ...kids].join(";");
 }
 
@@ -580,7 +582,11 @@ section("4) no churn: repaints, clears and resizes create nothing and write only
 	check(same.writes === 0, "the same icon again writes nothing", `${same.writes} writes`);
 	const other = measure(() => Icon.drawIcon(v, "axe"));
 	const img = v.frame.GetChildren()[0];
-	check(other.writes === 1, "another icon of the same size writes only its ImageRectOffset", `${other.writes} writes`);
+	check(
+		other.writes === 1,
+		"another icon of the same size writes only its ImageRectOffset",
+		`${other.writes} writes`,
+	);
 	const first = img.ImageRectOffset;
 	Icon.drawIcon(v, "pistol");
 	Icon.drawIcon(v, "axe");
@@ -638,6 +644,80 @@ section("5) the atlas does not load: every live view repaints as its Frame drawi
 	);
 	WA.overrideWorldArt(undefined);
 }
+
+// ================================================================ the pictures (--render <dir>)
+
+/**
+ * Every icon, dimmed icon and inked glyph on the Bag's tile iron, at 48 px and at a phone's 44 px: `before.png` drawn
+ * by the Frames, `after.png` by the atlas (the review images of docs/art/icons).
+ */
+function renderSheets(dir) {
+	const COLS = 16;
+	const PAD = 8;
+	const cases = [
+		...ICON_KEYS.map(k => [k, false, undefined]),
+		...ICON_KEYS.map(k => [k, true, undefined]),
+		...GLYPH_KEYS.map(k => [k, false, THEME.foreground]),
+	];
+	const rowsOf = n => Math.ceil(n / COLS);
+	const blocks = [48, 44];
+	const W = COLS * (blocks[0] + PAD) + PAD;
+	const H = blocks.reduce((s, size) => s + (rowsOf(ICON_KEYS.length) * 2 + 1) * (size + PAD) + PAD * 3, PAD);
+	const bg = [0x2a, 0x2c, 0x33];
+	for (const [file, atlas] of [
+		["before.png", ""],
+		["after.png", FAKE],
+	]) {
+		const data = Buffer.alloc(W * H * 4);
+		for (let i = 0; i < W * H; i++) data.set([...bg, 255], i * 4);
+		let y0 = PAD;
+		for (const size of blocks) {
+			setAtlas(atlas);
+			const view = viewAt(size);
+			let row = 0;
+			let col = 0;
+			let group = "";
+			for (const [k, dim, ink] of cases) {
+				const g = ink !== undefined ? "glyph" : dim ? "dim" : "icon";
+				if (g !== group && group !== "") {
+					row += col > 0 ? 1 : 0;
+					col = 0;
+					y0 += PAD;
+				}
+				group = g;
+				Icon.drawIcon(view, k, { dim, ink });
+				const px = atlas === "" ? rasterFrames(view, size, size) : rasterImage(view, size, size);
+				const x0 = PAD + col * (size + PAD);
+				const yy = y0 + row * (size + PAD);
+				for (let y = 0; y < size; y++) {
+					for (let x = 0; x < size; x++) {
+						const s = (y * size + x) * 4;
+						if (px[s + 3] === 0) continue;
+						px.copy(data, ((yy + y) * W + x0 + x) * 4, s, s + 4);
+					}
+				}
+				col++;
+				if (col === COLS) {
+					col = 0;
+					row++;
+				}
+			}
+			y0 += (row + (col > 0 ? 1 : 0)) * (size + PAD) + PAD * 2;
+			view.frame.Destroy();
+		}
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, file), encodePNG({ w: W, h: H, data }, true));
+		console.log(`  wrote ${join(dir, file)} (${W} x ${H})`);
+	}
+	setAtlas("");
+}
+
+const renderAt = process.argv.indexOf("--render");
+if (renderAt >= 0) {
+	section("the pictures");
+	renderSheets(process.argv[renderAt + 1] ?? join(ROOT, "docs", "art", "icons"));
+}
+WA.overrideWorldArt(undefined);
 
 // ================================================================ report
 

@@ -1102,7 +1102,10 @@ check("desmontar remove tudo", hudRoot() === undefined);
 
 console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, nenhum Frame de icone reservado\n");
 {
-	const named = name => hudRoot().GetDescendants().filter(d => d.Name === name).length;
+	const named = name =>
+		hudRoot()
+			.GetDescendants()
+			.filter(d => d.Name === name).length;
 	setIconAtlas("");
 	const flatMount = phase("monta a HUD (toque), icones em Frames", () => {
 		hud.mount();
@@ -1136,7 +1139,9 @@ console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, n
 	const cellOk = k => {
 		const img = deep(tile(k), "ItemIcon")?.GetChildren()[0];
 		const c = ICON_ATLAS_CELLS[iconKey(k)];
-		return img?.Visible === true && c !== undefined && img.ImageRectOffset.X === c[0] && img.ImageRectOffset.Y === c[1];
+		return (
+			img?.Visible === true && c !== undefined && img.ImageRectOffset.X === c[0] && img.ImageRectOffset.Y === c[1]
+		);
 	};
 	const armed = [0, 1, 2, 3, 4].filter(k => iconKey(k) !== undefined);
 	check(

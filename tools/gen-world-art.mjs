@@ -1567,8 +1567,12 @@ function writeIconAtlasModule() {
 	L.push(`export const ICON_ATLAS_H = ${atlas.h};`);
 	L.push("");
 	L.push("/**");
-	L.push(" * Per icon or glyph key: [x, y, n, dimX, dimY] in texels -- the top-left corner of its cell, the cell's side");
-	L.push(" * (16 for an icon, 8 for a glyph) and the corner of its dimmed copy (a glyph's is its own cell: the ink wins).");
+	L.push(
+		" * Per icon or glyph key: [x, y, n, dimX, dimY] in texels -- the top-left corner of its cell, the cell's side",
+	);
+	L.push(
+		" * (16 for an icon, 8 for a glyph) and the corner of its dimmed copy (a glyph's is its own cell: the ink wins).",
+	);
 	L.push(" */");
 	L.push("export const ICON_ATLAS_CELLS: Record<string, readonly [number, number, number, number, number]> = {");
 	for (const key of atlas.order) {
