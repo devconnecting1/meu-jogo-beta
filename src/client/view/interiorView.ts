@@ -149,32 +149,55 @@ export class InteriorView {
 				flat(fx !== 0 ? back : w, fy !== 0 ? back : h, cloth.Lerp(BLACK, 0.3), z + 1),
 			);
 			if (t === "booth") {
-				r.drawRect(cam, cx + fx * 6, cy + fy * 6, flat(fx !== 0 ? w * 0.4 : w * 0.7, fy !== 0 ? h * 0.4 : h * 0.7, COLORS.furnWood, z + 2));
+				r.drawRect(
+					cam,
+					cx + fx * 6,
+					cy + fy * 6,
+					flat(fx !== 0 ? w * 0.4 : w * 0.7, fy !== 0 ? h * 0.4 : h * 0.7, COLORS.furnWood, z + 2),
+				);
 			}
 			return;
 		}
 		if (t === "bed" || t === "hospbed") {
 			const frame = t === "hospbed" ? COLORS.metal : COLORS.furnDark;
 			r.drawRect(cam, cx, cy, edged(flat(w, h, frame, z), BLACK, 0.5));
-			// the blanket, and the pillow at the head (against the wall)
+			// the head: against the wall when the bed stands out from it, else (a bed whose side is on the wall)
+			// at one end of its length
+			let hx = -fx;
+			let hy = -fy;
+			if ((fx !== 0 && h > w) || (fy !== 0 && w > h)) {
+				const headAt = k % 2 === 0 ? 1 : -1;
+				hx = wide ? headAt : 0;
+				hy = wide ? 0 : headAt;
+			}
+			// the blanket, off the head, and the pillow at the head
 			const sheet = t === "hospbed" ? COLORS.bedding : k % 2 === 0 ? COLORS.fabric : COLORS.fabricRed;
-			r.drawRect(cam, cx + fx * 8, cy + fy * 8, flat(w - 8 - math.abs(fx) * 16, h - 8 - math.abs(fy) * 16, sheet, z + 1));
-			const px = cx - fx * ((w - 20) / 2);
-			const py = cy - fy * ((h - 20) / 2);
-			const pw = fx !== 0 ? 16 : w - 16;
-			const ph = fy !== 0 ? 16 : h - 16;
-			const pillow = flat(pw, ph, COLORS.bedding, z + 2);
+			const blanket = flat(w - 8 - math.abs(hx) * 16, h - 8 - math.abs(hy) * 16, sheet, z + 1);
+			r.drawRect(cam, cx - hx * 8, cy - hy * 8, blanket);
+			const pillow = flat(hx !== 0 ? 16 : w - 16, hy !== 0 ? 16 : h - 16, COLORS.bedding, z + 2);
 			pillow.cornerRadius = 4;
-			r.drawRect(cam, px, py, pillow);
+			r.drawRect(cam, cx + hx * ((w - 20) / 2), cy + hy * ((h - 20) / 2), pillow);
 			return;
 		}
-		if (t === "table" || t === "desk" || t === "schooldesk" || t === "teacherdesk" || t === "nightstand" || t === "bench") {
+		if (
+			t === "table" ||
+			t === "desk" ||
+			t === "schooldesk" ||
+			t === "teacherdesk" ||
+			t === "nightstand" ||
+			t === "bench"
+		) {
 			const wood = t === "teacherdesk" ? COLORS.furnDark : COLORS.furnWood;
 			const o = edged(flat(w, h, wood, z), BLACK, 0.55);
 			o.cornerRadius = t === "table" ? 6 : 2;
 			r.drawRect(cam, cx, cy, o);
 			if (t === "desk" || t === "teacherdesk") {
-				r.drawRect(cam, cx + (wide ? w * 0.18 : 0), cy + (wide ? 0 : h * 0.18), flat(18, 14, COLORS.paper, z + 1));
+				r.drawRect(
+					cam,
+					cx + (wide ? w * 0.18 : 0),
+					cy + (wide ? 0 : h * 0.18),
+					flat(18, 14, COLORS.paper, z + 1),
+				);
 			}
 			return;
 		}
@@ -184,11 +207,21 @@ export class InteriorView {
 			if (t === "counter") {
 				// the sink, at one end or the other
 				const off = (k % 2 === 0 ? 1 : -1) * (wide ? w : h) * 0.28;
-				r.drawRect(cam, cx + (wide ? off : 0), cy + (wide ? 0 : off), edged(flat(28, 22, COLORS.metal, z + 1), BLACK, 0.4));
+				r.drawRect(
+					cam,
+					cx + (wide ? off : 0),
+					cy + (wide ? 0 : off),
+					edged(flat(28, 22, COLORS.metal, z + 1), BLACK, 0.4),
+				);
 			} else if (t === "display") {
 				r.drawRect(cam, cx, cy, flat(w - 10, h - 10, COLORS.glassCold, z + 1));
 			} else if (t === "checkout" || t === "reception") {
-				r.drawRect(cam, cx + (wide ? w * 0.3 : 0), cy + (wide ? 0 : h * 0.3), flat(16, 16, COLORS.metalDark, z + 1));
+				r.drawRect(
+					cam,
+					cx + (wide ? w * 0.3 : 0),
+					cy + (wide ? 0 : h * 0.3),
+					flat(16, 16, COLORS.metalDark, z + 1),
+				);
 			}
 			return;
 		}
@@ -211,24 +244,47 @@ export class InteriorView {
 				r.drawRect(cam, cx + fx * 3, cy + fy * 3, inner);
 			} else {
 				// the handle on the front
-				r.drawRect(cam, cx + fx * (w / 2 - 5), cy + fy * (h / 2 - 5), flat(fx !== 0 ? 3 : w * 0.5, fy !== 0 ? 3 : h * 0.5, COLORS.metal, z + 1));
+				r.drawRect(
+					cam,
+					cx + fx * (w / 2 - 5),
+					cy + fy * (h / 2 - 5),
+					flat(fx !== 0 ? 3 : w * 0.5, fy !== 0 ? 3 : h * 0.5, COLORS.metal, z + 1),
+				);
 			}
 			return;
 		}
 		if (t === "tv" || t === "wardrobe" || t === "bookcase" || t === "cabinet" || t === "lockers") {
-			const body = t === "tv" ? COLORS.metalDark : t === "lockers" || t === "cabinet" ? COLORS.metal : COLORS.furnWood;
+			const body =
+				t === "tv" ? COLORS.metalDark : t === "lockers" || t === "cabinet" ? COLORS.metal : COLORS.furnWood;
 			r.drawRect(cam, cx, cy, edged(flat(w, h, body, z), BLACK, 0.6));
 			if (t === "tv") {
 				r.drawRect(cam, cx, cy, flat(wide ? w * 0.7 : 6, wide ? 6 : h * 0.7, GLASS_DARK, z + 1));
 			} else if (t === "bookcase") {
-				r.drawRect(cam, cx, cy, flat(wide ? w - 10 : h * 0.5, wide ? h * 0.5 : h - 10, COLORS.goodsA.Lerp(COLORS.goodsB, (k % 3) / 3), z + 1));
+				r.drawRect(
+					cam,
+					cx,
+					cy,
+					flat(
+						wide ? w - 10 : h * 0.5,
+						wide ? h * 0.5 : h - 10,
+						COLORS.goodsA.Lerp(COLORS.goodsB, (k % 3) / 3),
+						z + 1,
+					),
+				);
 			} else {
 				// the doors' seams (a wardrobe's two leaves, a locker row's doors)
 				r.drawRect(cam, cx, cy, flat(wide ? 2 : w - 6, wide ? h - 6 : 2, body.Lerp(BLACK, 0.4), z + 1));
 			}
 			return;
 		}
-		if (t === "shelf" || t === "gondola" || t === "rack" || t === "coldcase" || t === "gunrack" || t === "clothesrack") {
+		if (
+			t === "shelf" ||
+			t === "gondola" ||
+			t === "rack" ||
+			t === "coldcase" ||
+			t === "gunrack" ||
+			t === "clothesrack"
+		) {
 			const frame = t === "gunrack" ? COLORS.furnDark : t === "clothesrack" ? COLORS.metalDark : COLORS.metal;
 			r.drawRect(cam, cx, cy, edged(flat(w, h, frame, z), BLACK, 0.6));
 			let goods = COLORS.goodsA.Lerp(COLORS.goodsC, (k % 4) / 4);
@@ -367,7 +423,11 @@ export class InteriorView {
 			if (!overlaps(cx - 80, cy - 80, 160, 160, v)) continue;
 			const across = nx !== 0;
 			if (step !== undefined) {
-				const so = edged(flat(across ? 20 : o.w + 20, across ? o.h + 20 : 20, step, Z.floorDetail), BLACK, 0.22);
+				const so = edged(
+					flat(across ? 20 : o.w + 20, across ? o.h + 20 : 20, step, Z.floorDetail),
+					BLACK,
+					0.22,
+				);
 				r.drawRect(cam, cx - nx * 4, cy - ny * 4, so);
 			}
 			const m = flat(across ? 22 : o.w - 24, across ? o.h - 24 : 22, MAT, Z.floorDetail + 1);

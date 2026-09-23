@@ -211,8 +211,9 @@ const END_MARGIN = T + 16;
 const DOOR_MARGIN = T + 4;
 /** the main door's run of wall reaches at least this far on each side of its centre */
 const MAIN_HALF = DOOR / 2 + DOOR_MARGIN;
-/** re-cutting the columns around the main door never leaves a column narrower than this (a room, not a slot) */
-const MIN_COL = 144;
+/** re-cutting the columns around the main door never leaves a column narrower than this: a room with its bed
+ * or its sofa AND a window, not a slot (a narrower one falls back to the next template) */
+const MIN_COL = 200;
 
 // ---------------------------------------------------------------------------------------------- rng
 
@@ -303,7 +304,7 @@ const HOUSE_S_DEEP: Array<Template> = [
 	},
 	{
 		cols: [50, 50],
-		rows: [44, 26, 30],
+		rows: [34, 42, 24],
 		map: [
 			["L", "L"],
 			["K", "B"],
@@ -326,7 +327,7 @@ const HOUSE_S_DEEP: Array<Template> = [
 /** small house, wide (552 × 428) */
 const HOUSE_S_WIDE: Array<Template> = [
 	{
-		cols: [36, 30, 34],
+		cols: [32, 30, 38],
 		rows: [45, 55],
 		map: [
 			[".", "L", "L"],
@@ -367,8 +368,8 @@ const HOUSE_S_WIDE: Array<Template> = [
 
 /** medium / large house with a hall (4 columns): living, hall to the bedrooms, kitchen with the back door */
 const HOUSE_HALL: Template = {
-	cols: [28, 22, 20, 30],
-	rows: [28, 36, 36],
+	cols: [26, 22, 18, 34],
+	rows: [26, 34, 40],
 	map: [
 		[".", "L", "L", "B"],
 		["L", "L", "H", "B"],
@@ -463,7 +464,7 @@ const HOUSE_M_DEEP: Array<Template> = [
 	},
 	{
 		cols: [52, 48],
-		rows: [40, 30, 30],
+		rows: [36, 38, 26],
 		map: [
 			["L", "L"],
 			["K", "B"],
@@ -550,7 +551,7 @@ function smallShop(back: string): Array<Template> {
 const SMALL_MARKET: Array<Template> = [
 	{
 		cols: [36, 34, 30],
-		rows: [66, 34],
+		rows: [62, 38],
 		map: [
 			["S", "S", "S"],
 			["F", "R", "."],
@@ -562,10 +563,11 @@ const SMALL_MARKET: Array<Template> = [
 			[1, 1, "K", 0.5],
 		],
 		extra: 1,
+		// the walk-in cooler and the stockroom both open onto the sales floor (a third doorway between them
+		// left the stockroom no wall for a rack)
 		links: [
 			[0, 0, 0, 1, 0],
 			[1, 0, 1, 1, 0],
-			[0, 1, 1, 1, 0],
 		],
 	},
 	...smallShop("R"),
@@ -876,29 +878,38 @@ function fallbackFor(bt: number): Template {
 
 interface RoomInfo {
 	floor: FloorKind;
-	/** 0 no windows, 1 on its outside walls, 2 only on the street face (a shop window) */
+	/**
+	 * 0 no windows; 1 on its outside walls; 2 a shop front: a row of windows along the street face, and one on a
+	 * side wall where it is free
+	 */
 	win: number;
+	/**
+	 * The room's first window is cut BEFORE the furniture (a hall-like room whose furniture is sparse: classroom,
+	 * ward, lobby, dining room of a restaurant). A home's rooms are furnished first and get their windows where the
+	 * wall is still free, as a real room does: the bed against the wall, the window beside it.
+	 */
+	early: boolean;
 }
 
 const ROOM_INFO: Record<RoomKind, RoomInfo> = {
-	living: { floor: "wood", win: 1 },
-	kitchen: { floor: "kitchen", win: 1 },
-	dining: { floor: "wood", win: 1 },
-	bedroom: { floor: "carpet", win: 1 },
-	bath: { floor: "bath", win: 0 },
-	hall: { floor: "wood", win: 0 },
-	sales: { floor: "shop", win: 2 },
-	stock: { floor: "concrete", win: 0 },
-	cold: { floor: "bath", win: 0 },
-	secure: { floor: "concrete", win: 0 },
-	office: { floor: "carpet", win: 1 },
-	classroom: { floor: "shop", win: 1 },
-	corridor: { floor: "tile", win: 0 },
-	lobby: { floor: "tile", win: 1 },
-	ward: { floor: "tile", win: 1 },
-	treatment: { floor: "tile", win: 0 },
-	diner: { floor: "wood", win: 1 },
-	galley: { floor: "kitchen", win: 0 },
+	living: { floor: "wood", win: 1, early: false },
+	kitchen: { floor: "kitchen", win: 1, early: false },
+	dining: { floor: "wood", win: 1, early: false },
+	bedroom: { floor: "carpet", win: 1, early: false },
+	bath: { floor: "bath", win: 0, early: false },
+	hall: { floor: "wood", win: 0, early: false },
+	sales: { floor: "shop", win: 2, early: true },
+	stock: { floor: "concrete", win: 0, early: false },
+	cold: { floor: "bath", win: 0, early: false },
+	secure: { floor: "concrete", win: 0, early: false },
+	office: { floor: "carpet", win: 1, early: false },
+	classroom: { floor: "shop", win: 1, early: true },
+	corridor: { floor: "tile", win: 0, early: false },
+	lobby: { floor: "tile", win: 1, early: true },
+	ward: { floor: "tile", win: 1, early: true },
+	treatment: { floor: "tile", win: 0, early: false },
+	diner: { floor: "wood", win: 1, early: true },
+	galley: { floor: "kitchen", win: 0, early: false },
 };
 
 // ---------------------------------------------------------------------------------------------- local geometry
@@ -1387,40 +1398,148 @@ class Planner {
 	firstWindows(): void {
 		for (let room = 0; room < this.kinds.size(); room++) {
 			const info = ROOM_INFO[this.kinds[room]];
-			if (info.win === 0) continue;
+			if (info.win === 0 || !info.early) continue;
 			let best: Edge | undefined;
+			const fronts: Array<string> = [];
 			for (let j = 0; j < this.nr; j++) {
 				for (let i = 0; i < this.nc; i++) {
 					if (this.at(i, j) !== room) continue;
 					for (const s of LSIDES) {
 						const e = this.edgeOf(i, j, s);
 						if (e.out === undefined || (info.win === 2 && s !== "F")) continue;
-						if (e.b - e.a - END_MARGIN * 2 < WINDOW_W + 40) continue;
 						if (info.win === 2) {
-							// a shop front: a row of windows wherever the front's doors leave wall, 140 apart
-							const run = this.runOf(i, j, s);
-							const whole = run.b - run.a > e.b - e.a ? run : e;
+							// a shop front: one row of windows along the room's whole street face (however many
+							// cells it spans), wherever its doors leave wall, 140 apart
+							const run = this.frontRun(i, j);
+							const key = `${run.at}:${run.a}`;
+							if (fronts.includes(key)) continue;
+							fronts.push(key);
 							for (
-								let c = whole.a + END_MARGIN + WINDOW_W / 2;
-								c <= whole.b - END_MARGIN - WINDOW_W / 2;
+								let c = run.a + END_MARGIN + WINDOW_W / 2;
+								c <= run.b - END_MARGIN - WINDOW_W / 2;
 								c += 140
 							) {
 								const o: LOpening = {
-									band: bandOf(whole, c - WINDOW_W / 2, c + WINDOW_W / 2),
+									band: bandOf(run, c - WINDOW_W / 2, c + WINDOW_W / 2),
 									kind: "window",
-									out: whole.out,
-									alongU: whole.alongU,
+									out: run.out,
+									alongU: run.alongU,
 									main: false,
 								};
 								if (this.freeOf(o, 40)) this.openings.push(o);
 							}
 							continue;
 						}
+						if (e.b - e.a - END_MARGIN * 2 < WINDOW_W + 40) continue;
 						if (best === undefined || e.b - e.a > best.b - best.a) best = e;
 					}
 				}
 			}
 			if (best !== undefined) this.tryWindow(best, 0.5, undefined);
+		}
+	}
+
+	/** the street face of cell (i, j) run along every neighbour of the same room whose front is outside too */
+	frontRun(i: number, j: number): Edge {
+		const id = this.at(i, j);
+		const out = (k: number) => this.at(k, j) === id && this.at(k, j - 1) < 0;
+		let lo = i;
+		let hi = i;
+		while (lo > 0 && out(lo - 1)) lo--;
+		while (hi < this.nc - 1 && out(hi + 1)) hi++;
+		return { alongU: true, at: this.vs[j], a: this.us[lo], b: this.us[hi + 1], out: "F" };
+	}
+
+	/** does a window open into this room? (an outside wall lies inside its cell, so the gap's middle is in the room) */
+	hasWindow(room: number): boolean {
+		for (const o of this.openings) {
+			if (o.kind !== "window") continue;
+			const cu = (o.band.u0 + o.band.u1) / 2;
+			const cv = (o.band.v0 + o.band.v1) / 2;
+			for (let j = 0; j < this.nr; j++) {
+				if (cv < this.vs[j] || cv > this.vs[j + 1]) continue;
+				for (let i = 0; i < this.nc; i++) {
+					if (cu >= this.us[i] && cu <= this.us[i + 1] && this.at(i, j) === room) return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A window for a room that has none: the first free place on any of its outside walls (any length the window
+	 * fits in, every nudge); failing that, the place with the fewest pieces in front, and those pieces go. A piece
+	 * that defines the room (its bed, sofa, counter) goes only when `anyPiece` says the building needs this window
+	 * to have a second way in; otherwise such a room keeps its bed and has no window, like many a real one.
+	 */
+	forceWindow(room: number, added: Array<LOpening>, anyPiece: boolean): void {
+		const edges: Array<Edge> = [];
+		for (let j = 0; j < this.nr; j++) {
+			for (let i = 0; i < this.nc; i++) {
+				if (this.at(i, j) !== room) continue;
+				for (const s of LSIDES) {
+					const e = this.edgeOf(i, j, s);
+					if (e.out !== undefined) edges.push(e);
+				}
+			}
+		}
+		for (const e of edges) if (this.tryWindow(e, 0.5, added)) return;
+		let best: LOpening | undefined;
+		let bestCost = math.huge;
+		for (const e of edges) {
+			for (const nudge of WINDOW_NUDGE) {
+				const o = this.cutIn(e, WINDOW_W, 0.5 + nudge, "window", false);
+				if (o === undefined || !this.freeOf(o, 36)) continue;
+				let cost = 0;
+				for (const z of this.zonesOf(o, WINDOW_CLEAR_DEPTH, WINDOW_CLEAR_SIDE)) {
+					for (const p of this.pieces) if (overlapLR(z, p)) cost += DEFINING.includes(p.kind) ? 10 : 1;
+				}
+				if (cost < bestCost && (anyPiece || cost < 10)) {
+					bestCost = cost;
+					best = o;
+				}
+			}
+		}
+		if (best === undefined) return;
+		for (const z of this.zonesOf(best, WINDOW_CLEAR_DEPTH, WINDOW_CLEAR_SIDE)) {
+			for (let q = this.pieces.size() - 1; q >= 0; q--) if (overlapLR(z, this.pieces[q])) this.pieces.remove(q);
+		}
+		this.openings.push(best);
+		added.push(best);
+	}
+
+	/** windows cut while furnishing (`roomWindow`): the walls are already built, `cutWindows` cuts these out too */
+	readonly late: Array<LOpening> = [];
+
+	/**
+	 * A home's room gets its window right after the piece that defines it (the bed, the sofa, the counter), before
+	 * the smaller pieces: on the longest outside wall where the piece left room, and nothing is placed in front of
+	 * it afterwards. So a small bedroom has its bed AND its window, and the wardrobe goes where it can.
+	 */
+	roomWindow(ctx: RoomCtx): void {
+		if (ROOM_INFO[ctx.kind].win === 0 || this.hasWindow(ctx.id)) return;
+		const edges: Array<Edge> = [];
+		for (let j = 0; j < this.nr; j++) {
+			for (let i = 0; i < this.nc; i++) {
+				if (this.at(i, j) !== ctx.id) continue;
+				for (const s of LSIDES) {
+					const e = this.edgeOf(i, j, s);
+					if (e.out !== undefined) edges.push(e);
+				}
+			}
+		}
+		// longest first; a total order (Luau's sort is not stable, and every machine must pick the same wall)
+		edges.sort((p, q) => {
+			if (p.b - p.a !== q.b - q.a) return p.b - p.a > q.b - q.a;
+			if (p.alongU !== q.alongU) return p.alongU;
+			if (p.at !== q.at) return p.at < q.at;
+			return p.a < q.a;
+		});
+		for (const e of edges) {
+			const n = this.late.size();
+			if (!this.tryWindow(e, 0.5, this.late)) continue;
+			for (const z of this.zonesOf(this.late[n], WINDOW_CLEAR_DEPTH, WINDOW_CLEAR_SIDE)) this.clear.push(z);
+			return;
 		}
 	}
 
@@ -1448,7 +1567,8 @@ class Planner {
 	 */
 	cutWindows(): void {
 		const isHouse = this.inp.type === 1 || this.inp.type === 2;
-		const added: Array<LOpening> = [];
+		// the windows the rooms took while being furnished are cut out of the walls with these
+		const added: Array<LOpening> = [...this.late];
 		for (let j = 0; j < this.nr; j++) {
 			for (let i = 0; i < this.nc; i++) {
 				const room = this.at(i, j);
@@ -1469,18 +1589,35 @@ class Planner {
 				}
 			}
 		}
-		// never a single way in (EDI-09): a building with one door and no window gets one wherever a wall is free
+		// every room that has windows gets one (EDI-10), and so no building is ever a single way in (EDI-09): a room
+		// the pass above left without (its only outside wall was a skipped side, or pieces stood along it) takes the
+		// first free stretch of any of its outside walls -- and when there is none, the piece in front of the best
+		// one goes (a bookcase gives way to the window, never the other way round)
+		for (let room = 0; room < this.kinds.size(); room++) {
+			if (ROOM_INFO[this.kinds[room]].win === 0 || this.hasWindow(room)) continue;
+			this.forceWindow(room, added, false);
+		}
+		// and never a single way in (EDI-09): with one door and no window yet, the biggest room with windows gets
+		// one even if its bed or its sofa has to go
 		let exits = 0;
 		for (const o of this.openings) if (o.kind !== "inner") exits++;
-		for (let j = 0; j < this.nr && exits < 2; j++) {
-			for (let i = 0; i < this.nc && exits < 2; i++) {
-				const room = this.at(i, j);
-				if (room < 0 || ROOM_INFO[this.kinds[room]].win === 0) continue;
-				for (const s of LSIDES) {
-					const e = this.edgeOf(i, j, s);
-					if (e.out !== undefined && exits < 2 && this.tryWindow(e, 0.5, added)) exits++;
+		if (exits < 2) {
+			let best = -1;
+			let area = -1;
+			for (let room = 0; room < this.kinds.size(); room++) {
+				if (ROOM_INFO[this.kinds[room]].win === 0) continue;
+				let a = 0;
+				for (let j = 0; j < this.nr; j++) {
+					for (let i = 0; i < this.nc; i++) {
+						if (this.at(i, j) === room) a += (this.us[i + 1] - this.us[i]) * (this.vs[j + 1] - this.vs[j]);
+					}
+				}
+				if (a > area) {
+					area = a;
+					best = room;
 				}
 			}
+			if (best >= 0) this.forceWindow(best, added, true);
 		}
 		if (added.size() === 0) return;
 		const kept: Array<{ r: LR; inner: boolean }> = [];
@@ -1672,8 +1809,9 @@ class Planner {
 				const inset: Record<LSide, number> = { F: 0, K: 0, L: 0, R: 0 };
 				for (const s of LSIDES) {
 					const e = this.edgeOf(i, j, s);
-					if (e.out !== undefined) inset[s] = T;
-					else {
+					if (e.out !== undefined) {
+						inset[s] = T;
+					} else {
 						const other = this.at(
 							i + (s === "L" ? -1 : s === "R" ? 1 : 0),
 							j + (s === "F" ? -1 : s === "K" ? 1 : 0),
@@ -1843,8 +1981,9 @@ class Planner {
 		vFrom: number,
 		vTo: number,
 		gap: number,
+		cell?: LR,
 	): number {
-		const r = biggest(ctx).inner;
+		const r = cell ?? biggest(ctx).inner;
 		const pw = alongU ? len : depth;
 		const ph = alongU ? depth : len;
 		const W = r.u1 - r.u0;
@@ -1881,8 +2020,9 @@ class Planner {
 		// the checkouts: at the front of a side wall (the till by the door), or free-standing on a big floor
 		if (!this.againstWall(ctx, "checkout", 96, 44, "L", true)) this.againstWall(ctx, "checkout", 96, 44, "R", true);
 		if (H > 500) {
-			for (const du of CHECKOUT_AT)
+			for (const du of CHECKOUT_AT) {
 				this.island(ctx, "checkout", 96, 44, false, du * W, -H / 2 + CLEAR_DEPTH + 40);
+			}
 		}
 		// gondolas: columns running from the front aisle to the back aisle, or rows when the floor is too shallow;
 		// a big floor keeps a band at the front for its free-standing checkouts
@@ -2161,6 +2301,22 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	bench: { low: true, loot: false },
 };
 
+/** the pieces that say what a room is: a window takes their place only as a last resort (`forceWindow`) */
+const DEFINING: Array<FurnitureKind> = [
+	"bed",
+	"sofa",
+	"counter",
+	"stove",
+	"toilet",
+	"tub",
+	"hospbed",
+	"optable",
+	"teacherdesk",
+	"checkout",
+	"reception",
+	"safe",
+];
+
 // ---------------------------------------------------------------------------------------------- furnishing by room
 
 function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
@@ -2168,6 +2324,7 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 	const rng = pl.rng;
 	if (k === "living") {
 		if (!pl.againstWall(ctx, "sofa", 136, 52)) pl.againstWall(ctx, "sofa", 100, 48);
+		pl.roomWindow(ctx);
 		pl.againstWall(ctx, "tv", 96, 28);
 		if (rng.chance(0.7)) pl.againstWall(ctx, "bookcase", 88, 28);
 		if (rng.chance(0.5)) pl.againstWall(ctx, "armchair", 52, 52);
@@ -2176,14 +2333,30 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 			pl.againstWall(ctx, "counter", 200, 40) ||
 			pl.againstWall(ctx, "counter", 136, 40) ||
 			pl.againstWall(ctx, "counter", 96, 40);
+		pl.roomWindow(ctx);
 		pl.againstWall(ctx, "fridge", 48, 44);
 		if (counter) pl.againstWall(ctx, "stove", 56, 40);
 		if (rng.chance(0.6)) pl.island(ctx, "table", 88, 64, true);
 	} else if (k === "dining") {
-		pl.island(ctx, "table", 120, 72, rng.chance(0.5));
+		// a table in the middle with room to walk round it, or pushed against a wall in a narrow room
+		const along = rng.chance(0.5);
+		const placed =
+			pl.island(ctx, "table", 120, 72, along) ||
+			pl.island(ctx, "table", 120, 72, !along) ||
+			pl.island(ctx, "table", 112, 60, along) ||
+			pl.island(ctx, "table", 112, 60, !along);
+		if (!placed) pl.againstWall(ctx, "table", 120, 64);
+		pl.roomWindow(ctx);
 		pl.againstWall(ctx, "cabinet", 88, 32);
 	} else if (k === "bedroom") {
-		const bed = pl.againstWall(ctx, "bed", 104, 124, "K") || pl.againstWall(ctx, "bed", 76, 116);
+		// a double bed with its head on the back wall, else a single one: head on a wall, or its side on it
+		const bed =
+			pl.againstWall(ctx, "bed", 104, 124, "K") ||
+			pl.againstWall(ctx, "bed", 76, 116) ||
+			pl.againstWall(ctx, "bed", 116, 76) ||
+			pl.againstWall(ctx, "bed", 64, 108) ||
+			pl.againstWall(ctx, "bed", 108, 64);
+		pl.roomWindow(ctx);
 		if (bed) pl.againstWall(ctx, "nightstand", 32, 28);
 		pl.againstWall(ctx, "wardrobe", 88, 40);
 	} else if (k === "bath") {
@@ -2217,7 +2390,7 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 		}
 	} else if (k === "stock") {
 		if (!pl.againstWall(ctx, "rack", 160, 44, "K")) pl.againstWall(ctx, "rack", 112, 44);
-		pl.againstWall(ctx, "rack", 112, 44);
+		if (!pl.againstWall(ctx, "rack", 112, 44)) pl.againstWall(ctx, "rack", 80, 40);
 	} else if (k === "cold") {
 		if (!pl.againstWall(ctx, "coldcase", 140, 44, "K")) pl.againstWall(ctx, "coldcase", 96, 44);
 		pl.againstWall(ctx, "coldcase", 96, 44);
@@ -2226,6 +2399,7 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 		pl.againstWall(ctx, "gunrack", 120, 28);
 	} else if (k === "office") {
 		pl.againstWall(ctx, "desk", 96, 48);
+		pl.roomWindow(ctx);
 		pl.againstWall(ctx, "cabinet", 56, 36);
 	} else if (k === "classroom") {
 		if (!pl.againstWall(ctx, "teacherdesk", 112, 52, "F")) pl.againstWall(ctx, "teacherdesk", 112, 52);
@@ -2263,7 +2437,9 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 		pl.againstWall(ctx, "cabinet", 72, 36);
 	} else if (k === "diner") {
 		for (let n = 0; n < 3; n++) pl.againstWall(ctx, "booth", 112, 64);
-		pl.grid(ctx, "table", 72, 72, true, 4, 3, 0.18, 0.95, PATH);
+		// tables across the whole dining room, cell by cell (an L-shaped room is set in both its arms)
+		if (ctx.whole !== undefined) pl.grid(ctx, "table", 72, 72, true, 4, 3, 0.18, 0.95, PATH);
+		else for (const c of ctx.cells) pl.grid(ctx, "table", 72, 72, true, 4, 3, 0.12, 0.95, PATH, c.inner);
 	} else if (k === "galley") {
 		pl.againstWall(ctx, "stove", 112, 56, "K");
 		pl.againstWall(ctx, "counter", 160, 44);
