@@ -862,10 +862,13 @@ function testHearing() {
 		sp.state.weapon.pointer = 20;
 		const sniper = sim.gunNoise(2000, 2000, 800);
 		const nobody = sim.gunNoise(100, 100, 800);
+		// the combat names the gun that fired (review NIT 7): no search by position, wherever the shooter is now
+		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		const named = sim.gunNoise(100, 100, 800, WEAPONS[20]);
 		info(`server: a shot fired with a pistol is heard ${pistol} u away, with a sniper rifle ${sniper} u`);
 		check(
-			pistol === 800 && sniper === 1400 && nobody === 800,
-			"the server grades each shot by the gun its shooter holds",
+			pistol === 800 && sniper === 1400 && nobody === 800 && named === 1400,
+			"the server grades each shot by the gun that fired it (named by the combat, or the one its shooter holds)",
 		);
 	}
 }
