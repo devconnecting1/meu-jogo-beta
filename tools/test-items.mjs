@@ -1126,6 +1126,265 @@ section(
 	},
 );
 
+// ================================================================ C. usables
+
+/** the Bag itself (client/ui/backpack.ts), on the ui-shim tree: its labels are read off its own detail builders */
+const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
+function bagFor(save) {
+	const gui = ui.makeInstance("ScreenGui", false);
+	const layer = ui.makeInstance("Frame", false);
+	layer.Parent = gui;
+	return new Backpack({ phase: "playing", save, uiLayer: layer, screen: gui });
+}
+
+section(
+	"C1. every usable, eaten through the server's useItem: exactly what the data says (server/sim/craft.ts)",
+	() => {
+		const craft = new SCRAFT.ServerCraft({ world: W.createWorld(2000, 2000), build: { placing: () => false } });
+		/** a hungry, hurt survivor holding two of `u` */
+		const holder = u => {
+			const save = bareSave();
+			save.invenUse[u.id] = 2;
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = u.hp < 0 ? p.hpMax : p.hpMax - 60;
+			p.hungry = 40;
+			return { save, p };
+		};
+		checkRows(
+			"hp, hunger, speed, calm and pain change by the data's numbers, and one leaves the backpack",
+			USABLES,
+			u => {
+				const { save, p } = holder(u);
+				const hp = p.hp;
+				craft.remove(0); // a fresh survivor: no cooldown carried over from the previous row
+				const out = craft.useItem(0, p, save, u.id);
+				if (out.kind !== "used") return JSON.stringify(out);
+				if (p.hp !== Math.min(p.hpMax, hp + u.hp)) return `hp ${hp} -> ${p.hp}, data ${u.hp}`;
+				if (p.hungry !== Math.min(p.hungryMax, 40 + u.hunger))
+					return `hunger 40 -> ${p.hungry}, data ${u.hunger}`;
+				if (p.buffs.speed !== u.speed * 60 || p.buffs.calm !== u.calm * 60 || p.buffs.pain !== u.pain * 60) {
+					return `buffs ${p.buffs.speed}/${p.buffs.calm}/${p.buffs.pain} s, data ${u.speed}/${u.calm}/${u.pain} min`;
+				}
+				return save.invenUse[u.id] === 1 || `count ${save.invenUse[u.id]}`;
+			},
+		);
+		checkRows(
+			"the 0.25 s cooldown holds: a second use at once is refused, and goes through after it",
+			USABLES,
+			u => {
+				const { save, p } = holder(u);
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				const again = craft.useItem(0, p, save, u.id);
+				if (again.kind !== "refused" || again.why !== "rate" || save.invenUse[u.id] !== 1)
+					return `at once: ${JSON.stringify(again)}`;
+				craft.step(SCRAFT.USE_COOLDOWN - 0.01);
+				if (craft.useItem(0, p, save, u.id).kind !== "refused") return "went through before 0.25 s";
+				craft.step(0.02);
+				p.hp = u.hp < 0 ? p.hpMax : 1;
+				p.hungry = 1;
+				const later = craft.useItem(0, p, save, u.id);
+				return (
+					(later.kind === "used" && save.invenUse[u.id] === 0) ||
+					`after the cooldown: ${JSON.stringify(later)}`
+				);
+			},
+		);
+		checkRows('with none left it is refused and nothing changes (the Bag\'s "None left")', USABLES, u => {
+			const save = bareSave();
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = 10;
+			p.hungry = 10;
+			craft.remove(0);
+			const out = craft.useItem(0, p, save, u.id);
+			return (
+				(out.kind === "refused" && p.hp === 10 && p.hungry === 10 && save.invenUse[u.id] === 0) ||
+				JSON.stringify(out)
+			);
+		});
+		checkRows("a dead survivor eats nothing", USABLES, u => {
+			const { save, p } = holder(u);
+			p.dead = true;
+			craft.remove(0);
+			const out = craft.useItem(0, p, save, u.id);
+			return (out.kind === "refused" && out.why === "busy" && save.invenUse[u.id] === 2) || JSON.stringify(out);
+		});
+		checkRows(
+			"food with nothing to fill and no buff is not wasted when full (itemUseEffect's no-op rule)",
+			USABLES.filter(u => u.hp >= 0 && u.speed === 0 && u.calm === 0 && u.pain === 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				craft.remove(0);
+				const out = craft.useItem(0, p, save, u.id);
+				return (
+					(out.kind === "refused" && out.why === "noop" && save.invenUse[u.id] === 1) || JSON.stringify(out)
+				);
+			},
+		);
+		checkRows(
+			"a medicine with a timed effect is used even at full health (the buff is the point)",
+			USABLES.filter(u => u.speed > 0 || u.calm > 0 || u.pain > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				craft.remove(0);
+				return craft.useItem(0, p, save, u.id).kind === "used" || "refused at full health";
+			},
+		);
+		{
+			// Rotten meat hurts: at 5 hp it kills, through the server's own stepPlayer
+			const rotten = USABLES.find(u => u.hp < 0);
+			const save = bareSave();
+			save.invenUse[rotten.id] = 1;
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = 5;
+			craft.remove(0);
+			craft.useItem(0, p, save, rotten.id);
+			stepPlayer(W.createWorld(2000, 2000), p, save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			check(p.dead, `${rotten.name} at 5 hp kills (${rotten.hp} hp)`, `hp ${p.hp}`);
+		}
+	},
+);
+
+section(
+	"C2. the three timed effects do what the card says, and wear off (shared/game/player.ts, server/sim/combat.ts)",
+	() => {
+		const world = W.createWorld(8000, 8000);
+		const walk = (p, save) => {
+			const x = p.x;
+			const cmd = P.makeCommand(1, 1, 0, 0, 0, 0);
+			for (let i = 0; i < CFG.SIM_HZ; i++) stepPlayer(world, p, save, cmd, TICK_DT);
+			return p.x - x;
+		};
+		checkRows(
+			"speed: +2 walking speed for its minutes, then gone",
+			USABLES.filter(u => u.speed > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				const plain = walk(p, save);
+				Ply.itemUseEffect(p, save, u.id);
+				const fast = walk(p, save);
+				if (!near(fast - plain, 2 * SPEED_SCALE, 0.5)) return `${plain.toFixed(0)} -> ${fast.toFixed(0)} u/s`;
+				p.buffs.speed = 0.5;
+				walk(p, save);
+				return near(walk(p, save), plain, 0.5) || "still fast after it ran out";
+			},
+		);
+		checkRows(
+			"pain relief: a bite no longer slows the survivor down while it lasts",
+			USABLES.filter(u => u.pain > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.attacked = true;
+				p.iframe = 100;
+				const slowed = Ply.recalcMoveSpeed(p, save);
+				Ply.itemUseEffect(p, save, u.id);
+				return Ply.recalcMoveSpeed(p, save) === slowed + 1.5 || `${slowed} -> ${Ply.recalcMoveSpeed(p, save)}`;
+			},
+		);
+		checkRows(
+			"steady aim: the server's recoil settles faster while it lasts",
+			USABLES.filter(u => u.calm > 0),
+			u => {
+				const settle = calm => {
+					const fx = weaponFixture(15);
+					fx.sp.state.weapon.angleRange = 30;
+					if (calm) {
+						fx.save.invenUse[u.id] = 1;
+						Ply.itemUseEffect(fx.sp.state, fx.save, u.id);
+					}
+					fx.run(0.25, {});
+					return fx.sp.state.weapon.angleRange;
+				};
+				const plain = settle(false);
+				const steady = settle(true);
+				return (
+					steady < plain || `recoil left after 0.25 s: ${plain.toFixed(2)} plain, ${steady.toFixed(2)} steady`
+				);
+			},
+		);
+	},
+);
+
+section('C3. the Bag says Eat for food and Use for medicine, and "None left" at zero (client/ui/backpack.ts)', () => {
+	const MEDICINE = u => u.pain > 0 || u.speed > 0 || u.calm > 0 || (u.hunger <= 0 && u.hp > 0);
+	checkRows("the card's type: Medicine for what treats or heals without feeding, Food for the rest", USABLES, u => {
+		const card = Info.describeItem(bareSave(), ItemKind.Use, u.id);
+		return card.type === (MEDICINE(u) ? "Medicine" : "Food") || `card "${card.type}"`;
+	});
+	checkRows('the button: Eat on food, Use on medicine, disabled "None left" at zero', USABLES, u => {
+		const save = bareSave();
+		save.invenUse[u.id] = 1;
+		const bag = bagFor(save);
+		const one = bag.usableDetail(u.id);
+		const want = MEDICINE(u) ? "Use" : "Eat";
+		if (one.act.text !== want || !one.act.enabled) return `with one: "${one.act.text}" enabled ${one.act.enabled}`;
+		save.invenUse[u.id] = 0;
+		const none = bag.usableDetail(u.id);
+		return (
+			(none.act.text === "None left" && !none.act.enabled) ||
+			`with none: "${none.act.text}" enabled ${none.act.enabled}`
+		);
+	});
+	checkRows("the card lists what the data says: health, hunger and each timed effect in minutes", USABLES, u => {
+		const card = Info.describeItem(bareSave(), ItemKind.Use, u.id);
+		const m = new Map(card.stats.map(s => [s.label, s.value]));
+		const sign = v => (v > 0 ? `+${v}` : `${v}`);
+		if (m.get("Health recovery") !== (u.hp !== 0 ? sign(u.hp) : undefined))
+			return `hp "${m.get("Health recovery")}"`;
+		if (m.get("Hunger recovery") !== (u.hunger !== 0 ? sign(u.hunger) : undefined))
+			return `hunger "${m.get("Hunger recovery")}"`;
+		for (const [label, v] of [
+			["Speed boost", u.speed],
+			["Steady aim", u.calm],
+			["Pain relief", u.pain],
+		]) {
+			if (m.get(label) !== (v > 0 ? `${v} min` : undefined)) return `${label} "${m.get(label)}"`;
+		}
+		return true;
+	});
+});
+
+section("C4. cooking: what the card and the How to play promise (Núcleo 1: raw meat → cooked, CON-03)", () => {
+	const raw = USABLES.filter(u => u.cook >= 0);
+	const card = Info.describeItem(bareSave(), ItemKind.Use, raw[0].id);
+	check(
+		card.stats.some(s => s.label === "Cooks into"),
+		`the ${raw[0].name} card says "Cooks into ${USABLES[raw[0].cook].name}"`,
+	);
+	const tip = source("client/ui/tutorial.ts").includes("cooks what you find");
+	// every way a cooked row could come out of a raw one: a recipe taking it, or any code reading `.cook`
+	const cooked = raw.filter(u =>
+		CRAFT_RECIPES.some(
+			r =>
+				r.resultKind === ItemKind.Use &&
+				r.resultIndex === u.cook &&
+				r.ingredients.some(i => i.kind === ItemKind.Use && i.index === u.id),
+		),
+	);
+	const readers = [
+		"client/systems/interaction.ts",
+		"server/sim/interaction.ts",
+		"client/systems/craftSystem.ts",
+		"server/sim/craft.ts",
+		"client/main.client.ts",
+		"client/gameLoop.ts",
+	].filter(rel => /\.cook\b/.test(source(rel)));
+	knownBug(
+		"C1",
+		cooked.length === 0 && readers.length === 0,
+		`nothing cooks: ${raw.length} usables have a "Cooks into" row on their card${tip ? ' and How to play says fire "cooks what you find"' : ""}, but no recipe or code turns raw into cooked`,
+		raw.map(u => `${u.name} → ${USABLES[u.cook].name}`).join(", "),
+	);
+});
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
