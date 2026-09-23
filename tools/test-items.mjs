@@ -3676,9 +3676,10 @@ const clone = v => JSON.parse(JSON.stringify(v));
 
 section("G1. every pack: its declared contents, its price charged by the server, delivered exactly (MON-03)", () => {
 	checkRows("the contents line a player reads names exactly the items the pack delivers", SHOP_PACKS, p => {
+		// one "count × item" line per item, the item by its own name (compliance F6: our format, not the original's)
 		const lines = p.contents.split("#").map(l => {
-			const m = /^(.*) X (\d+)$/.exec(l.trim());
-			return m && { name: m[1], count: Number(m[2]) };
+			const m = /^(\d+) × (.*)$/.exec(l.trim());
+			return m && { name: m[2], count: Number(m[1]) };
 		});
 		if (lines.some(l => l === null) || lines.length !== p.items.length)
 			return `"${p.contents}" vs ${p.items.length} item(s)`;
@@ -3686,8 +3687,8 @@ section("G1. every pack: its declared contents, its price charged by the server,
 			const it = p.items[i];
 			const real = nameOf(it.kind, it.index);
 			if (it.index < 0 || real === undefined) return `item ${i} does not resolve`;
-			if (lines[i].count !== it.count || !(lines[i].name === real || lines[i].name.startsWith(`${real} the `)))
-				return `"${lines[i].name} X ${lines[i].count}" vs ${real} x${it.count}`;
+			if (lines[i].count !== it.count || lines[i].name !== real)
+				return `"${lines[i].count} × ${lines[i].name}" vs ${real} x${it.count}`;
 		}
 		return true;
 	});
