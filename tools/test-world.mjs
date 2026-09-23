@@ -859,6 +859,68 @@ section("l) itens fora do interesse nao viajam (§4.3, §4.5)");
 	);
 }
 
+section("p) fortificar: barricada ou porta mirada numa janela ou num vao de predio o preenche (EDI-13)");
+{
+	// the generated town: its buildings have doorways and windows (shared/game/interiors.ts)
+	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+	const sim = newSim(world);
+	const house = world.solids.find(
+		s =>
+			s.kind === "building" &&
+			(s.openings ?? []).some(o => o.kind === "window") &&
+			(s.openings ?? []).some(o => o.kind === "door" && !o.main),
+	);
+	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	/** a survivor inside, 64 u in from the opening, aiming at it; then place `placeable` */
+	const fortify = (o, slot, placeable) => {
+		const n = NORMAL[o.side];
+		const cx = o.x + o.w / 2 - n[0] * 64;
+		const cy = o.y + o.h / 2 - n[1] * 64;
+		const p = addPlayer(sim, slot, cx, cy);
+		p.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(slot, placeable, undefined);
+		return { p, out: sim.build.place(slot, p.state, [p.state], []) };
+	};
+	const win = house.openings.find(o => o.kind === "window");
+	const a = fortify(win, 0, 10);
+	checkEq(a.out.kind, "placed", "a barricada mirada na janela entra");
+	const s = a.out.solid;
+	check(
+		s !== undefined && s.x === win.x && s.y === win.y && s.w === win.w && s.h === win.h,
+		"e preenche exatamente o vao da janela, na grossura da parede",
+		s !== undefined ? `${s.x},${s.y} ${s.w}x${s.h} vs ${win.x},${win.y} ${win.w}x${win.h}` : "nada",
+	);
+	check(
+		s !== undefined && s.destructible === true && s.hp > 0 && s.kind === "barricade",
+		"com os pontos de vida dela: a horda derruba (o flow field a ve como SOFT, zombieBrain bate nela)",
+		s !== undefined ? `${s.kind} hp ${s.hp}` : "nada",
+	);
+	check(s !== undefined && W.isBlocking(s), "e bloqueia o corpo: ninguem pula a janela barricada");
+	const back = house.openings.find(o => o.kind === "door" && !o.main);
+	const b = fortify(back, 1, 11);
+	checkEq(b.out.kind, "placed", "uma porta construida no vao dos fundos entra");
+	const d = b.out.solid;
+	check(
+		d !== undefined && d.x === back.x && d.y === back.y && d.w === back.w && d.h === back.h && d.open === false,
+		"e preenche o vao, fechada (abre com E, como toda porta construida)",
+		d !== undefined ? `${d.x},${d.y} ${d.w}x${d.h} open ${d.open}` : "nada",
+	);
+	// the same opening twice: the second one lands on the first and is refused
+	const c = fortify(win, 2, 12);
+	checkEq(c.out.kind, "refused", "uma segunda barricada na mesma janela e recusada (o vao ja esta tomado)");
+	// away from any opening, the grid as before
+	const field = addPlayer(sim, 3, 60, 60);
+	field.state.angle = 0;
+	sim.build.hold(3, 10, undefined);
+	const g = sim.build.ghost(3, field.state);
+	check(
+		g !== undefined && g.w === 128 && g.h === 32,
+		"longe de qualquer vao, a grade de sempre",
+		g ? `${g.w}x${g.h}` : "-",
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
