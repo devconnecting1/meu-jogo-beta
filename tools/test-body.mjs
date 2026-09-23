@@ -2059,77 +2059,80 @@ const lockFree = userId => saveDocOf(userId) !== undefined && saveDocOf(userId).
 const traced = (lines, what) => lines.some(l => l.includes(what) && l.includes("stack traceback"));
 const firstLine = s => (s === undefined ? "none" : String(s).split("\n")[0]);
 
-section("20) a leave whose banking of the body or last report throws still writes, and cleans up after itself (F5)", () => {
-	// banking the body (mpHost.release) throws
-	{
-		const srv = bootServer();
-		const admin = srv.join(ADMIN_ID, "admin");
-		const u = newUser();
-		const p = srv.join(u, "unbanked");
-		srv.enter(p);
-		const save = srv.save(p);
-		save.money += 7;
-		srv.host.release = () => {
-			throw new Error("injected: banking the body failed");
-		};
-		let warns = [];
-		const died = asRoblox(() => {
-			warns = warnsDuring(() => srv.quit(p));
-		});
-		check(
-			srv.stored(u)?.money === save.money,
-			"banking the body throws on the way out: the final write lands all the same",
-			`stored ${srv.stored(u)?.money}, live ${save.money}`,
-		);
-		check(lockFree(u), "…and hands the session lock back", JSON.stringify(saveDocOf(u)?.lock));
-		check(died.length === 0, "…and no thread died of it", died.join(" | "));
-		check(
-			traced(warns, "injected: banking the body failed"),
-			"…the failure is in the log, with its traceback (F6)",
-			firstLine(warns.find(l => l.includes("banking"))),
-		);
-		const info = adminRequest(srv, admin, { kind: "serverInfo" });
-		check(
-			/\(1\/1 sessions/.test(info?.data?.dataStore ?? ""),
-			"…the session is gone: only the admin's is left",
-			info?.data?.dataStore,
-		);
-		const again = srv.join(u, "unbanked");
-		check(
-			srv.save(again)?.money === save.money,
-			"…and so is its `releasing` mark: the player joins this server again and loads at once",
-			`money ${srv.save(again)?.money}`,
-		);
-	}
-	// the last report, still pending when the player leaves, throws
-	{
-		const srv = bootServer();
-		const u = newUser();
-		const p = srv.join(u, "reporter");
-		const save = srv.save(p);
-		srv.report(p, {});
-		// inside SAVE_MIN_INTERVAL: kept as the pending report, processed by the leave
-		srv.report(p, {});
-		save.money += 3;
-		const restore = failNext(
-			require(join(SRC, "shared/game/save.ts")),
-			"sanitizeClientReport",
-			"injected: the last report failed",
-		);
-		let died;
-		try {
-			died = asRoblox(() => srv.quit(p));
-		} finally {
-			restore();
+section(
+	"20) a leave whose banking of the body or last report throws still writes, and cleans up after itself (F5)",
+	() => {
+		// banking the body (mpHost.release) throws
+		{
+			const srv = bootServer();
+			const admin = srv.join(ADMIN_ID, "admin");
+			const u = newUser();
+			const p = srv.join(u, "unbanked");
+			srv.enter(p);
+			const save = srv.save(p);
+			save.money += 7;
+			srv.host.release = () => {
+				throw new Error("injected: banking the body failed");
+			};
+			let warns = [];
+			const died = asRoblox(() => {
+				warns = warnsDuring(() => srv.quit(p));
+			});
+			check(
+				srv.stored(u)?.money === save.money,
+				"banking the body throws on the way out: the final write lands all the same",
+				`stored ${srv.stored(u)?.money}, live ${save.money}`,
+			);
+			check(lockFree(u), "…and hands the session lock back", JSON.stringify(saveDocOf(u)?.lock));
+			check(died.length === 0, "…and no thread died of it", died.join(" | "));
+			check(
+				traced(warns, "injected: banking the body failed"),
+				"…the failure is in the log, with its traceback (F6)",
+				firstLine(warns.find(l => l.includes("banking"))),
+			);
+			const info = adminRequest(srv, admin, { kind: "serverInfo" });
+			check(
+				/\(1\/1 sessions/.test(info?.data?.dataStore ?? ""),
+				"…the session is gone: only the admin's is left",
+				info?.data?.dataStore,
+			);
+			const again = srv.join(u, "unbanked");
+			check(
+				srv.save(again)?.money === save.money,
+				"…and so is its `releasing` mark: the player joins this server again and loads at once",
+				`money ${srv.save(again)?.money}`,
+			);
 		}
-		check(
-			srv.stored(u)?.money === save.money && lockFree(u),
-			"a pending report that throws on the way out: the final write lands and the lock is handed back",
-			`stored ${srv.stored(u)?.money}, live ${save.money}`,
-		);
-		check(died.length === 0, "…and no thread died of it", died.join(" | "));
-	}
-});
+		// the last report, still pending when the player leaves, throws
+		{
+			const srv = bootServer();
+			const u = newUser();
+			const p = srv.join(u, "reporter");
+			const save = srv.save(p);
+			srv.report(p, {});
+			// inside SAVE_MIN_INTERVAL: kept as the pending report, processed by the leave
+			srv.report(p, {});
+			save.money += 3;
+			const restore = failNext(
+				require(join(SRC, "shared/game/save.ts")),
+				"sanitizeClientReport",
+				"injected: the last report failed",
+			);
+			let died;
+			try {
+				died = asRoblox(() => srv.quit(p));
+			} finally {
+				restore();
+			}
+			check(
+				srv.stored(u)?.money === save.money && lockFree(u),
+				"a pending report that throws on the way out: the final write lands and the lock is handed back",
+				`stored ${srv.stored(u)?.money}, live ${save.money}`,
+			);
+			check(died.length === 0, "…and no thread died of it", died.join(" | "));
+		}
+	},
+);
 
 section("21) a save that cannot be encoded never blocks the session's later writes, nor keeps its lock (F5)", () => {
 	// an autosave whose encode throws once: the writing flag comes back down and the next round writes
@@ -2254,7 +2257,11 @@ section("22) a title record step that throws never costs the save it rides with 
 		const next = bootServer();
 		next.quit(next.join(u, "titled leaver"));
 		const rec = fakeStore(TITLE_STORE).data.get(String(u));
-		check(rec?.titles[HB] === 1, "…and the player's next session writes the record from the save", JSON.stringify(rec));
+		check(
+			rec?.titles[HB] === 1,
+			"…and the player's next session writes the record from the save",
+			JSON.stringify(rec),
+		);
 	}
 });
 
@@ -2279,7 +2286,11 @@ section("23) BindToClose: a save or a simulation that throws never holds the shu
 			"a save that throws at shutdown: BindToClose does not sit out its whole 25 s budget",
 			`waited ${waited.toFixed(1)} s`,
 		);
-		check(srv.stored(u2)?.money === sb.money, "…the other survivor's save lands", `stored ${srv.stored(u2)?.money}`);
+		check(
+			srv.stored(u2)?.money === sb.money,
+			"…the other survivor's save lands",
+			`stored ${srv.stored(u2)?.money}`,
+		);
 		check(lockFree(u1) && lockFree(u2), "…and both locks are handed back");
 		check(died.length === 0, "…and no thread died of it", died.join(" | "));
 	}
@@ -2303,69 +2314,72 @@ section("23) BindToClose: a save or a simulation that throws never holds the shu
 	}
 });
 
-section("24) the autosave loop outlives a body that cannot be settled, and a load that throws is not stuck (F5)", () => {
-	// settling a body throws in the loop: every save of the round is still written
-	{
-		const srv = bootWithAutosave();
-		const u1 = newUser();
-		const u2 = newUser();
-		const sa = srv.save(srv.join(u1, "settled a"));
-		const sb = srv.save(srv.join(u2, "settled b"));
-		sa.money += 2;
-		sb.money += 3;
-		srv.host.settle = () => {
-			throw new Error("injected: settling the body failed");
-		};
-		const died = srv.autosave();
-		check(
-			srv.stored(u1)?.money === sa.money && srv.stored(u2)?.money === sb.money,
-			"settling a body throws in an autosave round: every save of the round is still written " +
-				"(the loop used to die there, and every autosave on the server with it)",
-			`stored ${srv.stored(u1)?.money}/${srv.stored(u2)?.money}, live ${sa.money}/${sb.money}`,
-		);
-		check(died.length === 0, "…and no thread died of it", died.join(" | "));
-	}
-	// the load itself throws (here, reading the title record): a read-only session the client can retry, not a
-	// session stuck "loading" that answers nothing, refuses every Retry and keeps its lock
-	{
-		const u = newUser();
+section(
+	"24) the autosave loop outlives a body that cannot be settled, and a load that throws is not stuck (F5)",
+	() => {
+		// settling a body throws in the loop: every save of the round is still written
 		{
-			const first = bootServer();
-			const p = first.join(u, "loader");
-			first.save(p).money = 777;
-			first.quit(p);
+			const srv = bootWithAutosave();
+			const u1 = newUser();
+			const u2 = newUser();
+			const sa = srv.save(srv.join(u1, "settled a"));
+			const sb = srv.save(srv.join(u2, "settled b"));
+			sa.money += 2;
+			sb.money += 3;
+			srv.host.settle = () => {
+				throw new Error("injected: settling the body failed");
+			};
+			const died = srv.autosave();
+			check(
+				srv.stored(u1)?.money === sa.money && srv.stored(u2)?.money === sb.money,
+				"settling a body throws in an autosave round: every save of the round is still written " +
+					"(the loop used to die there, and every autosave on the server with it)",
+				`stored ${srv.stored(u1)?.money}/${srv.stored(u2)?.money}, live ${sa.money}/${sb.money}`,
+			);
+			check(died.length === 0, "…and no thread died of it", died.join(" | "));
 		}
-		const srv = bootServer();
-		const restore = failNext(
-			require(join(SRC, "server/save/titleRecord.ts")),
-			"loadTitleRecord",
-			"injected: the load failed",
-		);
-		let p;
-		let died;
-		try {
-			died = asRoblox(() => {
-				p = srv.join(u, "loader");
-			});
-		} finally {
-			restore();
+		// the load itself throws (here, reading the title record): a read-only session the client can retry, not a
+		// session stuck "loading" that answers nothing, refuses every Retry and keeps its lock
+		{
+			const u = newUser();
+			{
+				const first = bootServer();
+				const p = first.join(u, "loader");
+				first.save(p).money = 777;
+				first.quit(p);
+			}
+			const srv = bootServer();
+			const restore = failNext(
+				require(join(SRC, "server/save/titleRecord.ts")),
+				"loadTitleRecord",
+				"injected: the load failed",
+			);
+			let p;
+			let died;
+			try {
+				died = asRoblox(() => {
+					p = srv.join(u, "loader");
+				});
+			} finally {
+				restore();
+			}
+			// the client's LoadRequest found a failed load and asked for the retry, which runs after LOAD_RETRY_COOLDOWN
+			srv.run(11, 0.5);
+			const acks = srv.env.services.ReplicatedStorage.FindFirstChild("Net")
+				.FindFirstChild("LoadAck")
+				.sent.filter(e => e.to === p);
+			const last = acks[acks.length - 1]?.args[0];
+			check(
+				last?.status === "ok" && last.save.money === 777,
+				"a load that throws: the client's Retry loads the save",
+				`status ${last?.status}, money ${last?.save?.money}`,
+			);
+			check(died.length === 0, "…and no thread died of it", died.join(" | "));
+			srv.quit(p);
+			check(lockFree(u) && srv.stored(u)?.money === 777, "…and the leave hands the lock back");
 		}
-		// the client's LoadRequest found a failed load and asked for the retry, which runs after LOAD_RETRY_COOLDOWN
-		srv.run(11, 0.5);
-		const acks = srv.env.services.ReplicatedStorage.FindFirstChild("Net")
-			.FindFirstChild("LoadAck")
-			.sent.filter(e => e.to === p);
-		const last = acks[acks.length - 1]?.args[0];
-		check(
-			last?.status === "ok" && last.save.money === 777,
-			"a load that throws: the client's Retry loads the save",
-			`status ${last?.status}, money ${last?.save?.money}`,
-		);
-		check(died.length === 0, "…and no thread died of it", died.join(" | "));
-		srv.quit(p);
-		check(lockFree(u) && srv.stored(u)?.money === 777, "…and the leave hands the lock back");
-	}
-});
+	},
+);
 
 section("25) a simulation tick that throws is logged with its traceback (F6)", () => {
 	const srv = bootServer();
