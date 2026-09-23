@@ -1,6 +1,5 @@
 import { choose, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
-import { damageToPlayer } from "shared/game/player";
 import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState } from "shared/game/entities";
 import { spawnGroundItem } from "shared/game/world";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
@@ -65,7 +64,7 @@ function touchDamage(refs: Ctx.AiRefs, b: BossState, reach: number): void {
 	for (const p of refs.players) {
 		if (Ctx.actorDist(p.x, p.y, b.x, b.y) >= reach) continue;
 		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		if (damageToPlayer(p, refs.saveOf(p), b.damage)) p.reactionDir = ang;
+		if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) p.reactionDir = ang;
 	}
 }
 
@@ -122,7 +121,7 @@ function updateSerpent(refs: Ctx.AiRefs, b: BossState, dt: number): void {
 				const ang = math.atan2(p.y - bodyY[i], p.x - bodyX[i]);
 				const perFrame = i === 0 ? b.damage * 2 : b.damage;
 				const wasHit = p.attacked;
-				damageToPlayer(p, refs.saveOf(p), perFrame * SPEED_SCALE * dt, true);
+				Ctx.hurtPlayer(refs, p, refs.saveOf(p), perFrame * SPEED_SCALE * dt, true);
 				if (!wasHit) {
 					p.reactionDir = ang;
 					Ctx.fxBlood(refs, p.x, p.y, 4, "player");
@@ -147,7 +146,7 @@ function updateStationary(refs: Ctx.AiRefs, b: BossState, dt: number): void {
 				p.x = tx;
 				p.y = ty;
 			}
-			if (damageToPlayer(p, refs.saveOf(p), b.damage)) p.reactionDir = ang + math.pi;
+			if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) p.reactionDir = ang + math.pi;
 			Ctx.fxTracer(refs, b.x, b.y, p.x, p.y, "boss", 0.3);
 			Ctx.fxBlood(refs, p.x, p.y, 6, "player");
 		}

@@ -13,7 +13,7 @@
  *
  * Pure: no Instances, no services, no camera, no getCtx. Everything cosmetic goes out as an FxEvent.
  */
-import { PlayerState } from "shared/game/player";
+import { damageToPlayer, PlayerState } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { BossState, ZombieState } from "shared/game/entities";
@@ -166,9 +166,36 @@ export interface AiRefs {
 	 * and a drop, exactly there) or the population recycled it far from everyone (nothing at all).
 	 */
 	onZombieGone?: (z: ZombieState, killed: boolean) => void;
+	/**
+	 * How a bite, a blast or a boss takes HP off a survivor (§2.3 "Dano em jogadores", MP-00).
+	 *
+	 * `damageToPlayer` deliberately becomes a no-op at MP_PHASE ≥ 2 (shared/game/player.ts), because a CLIENT
+	 * must never decide how much HP anybody loses. The same brains run on the server, where the damage is
+	 * legitimate, so the owner of the horde injects its own sink here (server/sim/combat.ts `damageSink`,
+	 * which also records who hurt whom and emits the blood). Leave it undefined and the shared default
+	 * applies, which is exactly the single-player game below phase 2.
+	 */
+	damagePlayer?: (p: PlayerState, save: PlayerSaveData, raw: number, bypassDef?: boolean) => boolean;
 	puddles?: Array<Puddle>;
 	sounds?: Array<SoundRing>;
 	explosions?: Array<Explosion>;
+}
+
+/**
+ * The one place the enemy simulation is allowed to hurt a survivor. Routing every brain through it is what
+ * lets the server own the damage without `damageToPlayer` having to tell a server apart from a client — a
+ * gate with an exception is a gate with a hole.
+ */
+export function hurtPlayer(
+	refs: AiRefs,
+	p: PlayerState,
+	save: PlayerSaveData,
+	raw: number,
+	bypassDef = false,
+): boolean {
+	const sink = refs.damagePlayer;
+	if (sink !== undefined) return sink(p, save, raw, bypassDef);
+	return damageToPlayer(p, save, raw, bypassDef);
 }
 
 // ---------------------------------------------------------------- helpers

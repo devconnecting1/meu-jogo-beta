@@ -120,6 +120,9 @@ export class ZombieWorld {
 	constructor(world: WorldData, clock?: WorldClock) {
 		this.world = world;
 		this.clock = clock ?? new WorldClock();
+		// §3.5, the hook 2B left for 2A: the night's headcount is decided once, by the clock, and rationed
+		// across the clusters that exist when dusk falls (server/sim/population.ts explains the split).
+		this.clock.onWaveFill = fill => this.population.split(fill, this.clock);
 		this.refs = {
 			world,
 			players: this.players,

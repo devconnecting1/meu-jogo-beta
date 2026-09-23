@@ -1,7 +1,7 @@
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, damageCal, rnd, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
-import { damageToPlayer, PlayerState } from "shared/game/player";
+import { PlayerState } from "shared/game/player";
 import { isBlocking, querySolids, removeSolid, Solid, spawnGroundItem, WorldData } from "shared/game/world";
 import * as Phys from "shared/game/physics";
 import { ZombieState, zombieRadius } from "shared/game/entities";
@@ -313,7 +313,7 @@ function updateExplosions(refs: Ctx.AiRefs, dt: number): void {
 			for (const p of refs.players) {
 				if (Ctx.actorDist(p.x, p.y, e.x, e.y) >= e.r + Phys.PLAYER_RADIUS * 0.5) continue;
 				const wasHit = p.attacked;
-				damageToPlayer(p, refs.saveOf(p), T.BLAST_DPS * dt, true);
+				Ctx.hurtPlayer(refs, p, refs.saveOf(p), T.BLAST_DPS * dt, true);
 				if (!wasHit) {
 					p.reactionDir = math.atan2(p.y - e.y, p.x - e.x);
 					Ctx.fxBlood(refs, p.x, p.y, 4, "player");
@@ -992,7 +992,7 @@ function cancelWindup(z: ZombieState): void {
 function bite(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, pi: number): void {
 	const rushing = z.rush === true;
 	const dmg = rushing ? (z.damageRush ?? z.damage) : z.damage;
-	if (damageToPlayer(p, refs.saveOf(p), dmg)) {
+	if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), dmg)) {
 		p.reactionDir = math.atan2(p.y - z.y, p.x - z.x);
 		if (rushing) p.reactionSpeed = math.max(p.reactionSpeed, DESIGN.REACTION_MAX + 4);
 		Ctx.fxBlood(refs, p.x, p.y, 4, "player");
