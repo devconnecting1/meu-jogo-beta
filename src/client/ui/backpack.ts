@@ -54,7 +54,7 @@ import { iconOf, skillIconOf } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
 import { weaponReserve } from "shared/game/player";
 import { equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
-import { BagGrid, BagTile, GRID_H, GRID_W, TileModel } from "./bagGrid";
+import { BagGrid, BagTile, GRID_H, GRID_W, TileModel, gridCells } from "./bagGrid";
 import { BagPanel, PanelModel } from "./bagPanel";
 import { ItemCard, ItemCardHandle, ItemCardModel } from "./itemCard";
 import { IconView, drawIcon } from "./itemIcon";
@@ -213,7 +213,8 @@ export class Backpack {
 	private win: Frame | undefined;
 	/** where the window rests (the entrance slides it up to here) */
 	private winAt = new UDim2();
-	/** where the grids and the panel start (window design units) */
+	/** where the tab bar, and the grids and the panel under it, start (window design units) */
+	private tabsY = 0;
 	private bodyY = 0;
 	private tabs: W.TabsHandle | undefined;
 	private skillBadge: Frame | undefined;
@@ -232,6 +233,11 @@ export class Backpack {
 	/** the item card over the grid: the tile under the mouse, if it is not the selected one */
 	private tip: ItemCardHandle | undefined;
 	private hoverTile: BagTile | undefined;
+	/** idle-time warm-up (warmStep): per tab, how many of its tiles are built; whether its panel was shown once */
+	private warmAt: Array<number> = [0, 0, 0, 0, 0, 0];
+	private warmPanel: Array<boolean> = [false, false, false, false, false, false];
+	/** the tooltip card: how many item tabs it was shown for (weapons, gear, usables, materials) */
+	private warmTip = 0;
 
 	constructor(ctx: GameContext) {
 		this.ctx = ctx;
@@ -250,6 +256,8 @@ export class Backpack {
 		// the window is built once, and again only if something destroyed it
 		let root = this.root;
 		if (root === undefined || root.Parent === undefined) root = this.mount();
+		// a warm-up that stopped half-way (warmStep) may have left the tabs or the panel to build
+		this.finishMount();
 		// reopen on the last tab, every grid scrolled to the top
 		for (const g of this.grids) if (g !== undefined) g.list.frame.CanvasPosition = new Vector2();
 		this.opened = true;
@@ -290,25 +298,41 @@ export class Backpack {
 		this.refreshTip();
 	}
 
-	/** builds the window: header, tabs and the panel (the grids come as their tabs are shown) */
-	private mount(): Frame {
+	/**
+	 * Builds the window: header, tabs and the panel (the grids come as their tabs are shown). `hidden`: the idle-time
+	 * warm-up builds it before anybody asked for it -- out of sight from its very first frame, since the interface
+	 * audio (client/audio/uiAudio.ts) hears a screen that appears visible under the UI layer as a panel opening -- and
+	 * leaves the tabs and the panel to its next steps (finishMount).
+	 */
+	private mount(hidden = false): Frame {
 		this.grids = [];
+		this.tabs = undefined;
+		this.skillBadge = undefined;
 		this.panel = undefined;
 		this.tip = undefined;
 		this.hoverTile = undefined;
 		this.headerSig = "";
+		this.warmAt = [0, 0, 0, 0, 0, 0];
+		this.warmPanel = [false, false, false, false, false, false];
+		this.warmTip = 0;
 		const at: W.DesignRect = {
 			x: (W.DESIGN_W - WIN_W) / 2,
 			y: math.floor((W.DESIGN_H - WIN_H) / 2),
 			w: WIN_W,
 			h: WIN_H,
 		};
-		const screen = W.makeScreen(this.ctx.uiLayer, "Backpack", {
+		const holder = hidden ? new Instance("Folder") : undefined;
+		const screen = W.makeScreen(holder ?? this.ctx.uiLayer, "Backpack", {
 			color: THEME.background,
 			transparency: TRANSPARENCY.overWorld,
 			zIndex: 200,
 			content: at,
 		});
+		if (holder !== undefined) {
+			screen.root.Visible = false;
+			screen.root.Parent = this.ctx.uiLayer;
+			holder.Destroy();
+		}
 		this.root = screen.root;
 		const win = Kit.Window(screen.body, "Window", {
 			...at,
@@ -322,16 +346,32 @@ export class Backpack {
 		});
 		this.win = win.frame;
 		this.winAt = win.frame.Position;
-		const tabsY = win.contentY + space(1);
-		this.mountTabs(win.frame, tabsY);
-		const bodyY = tabsY + TAB_H + space(3);
-		this.bodyY = bodyY;
-		const panelX = PAD + GRID_W + COL_GAP;
-		this.panel = new BagPanel(win.frame, "Details", panelX, bodyY, WIN_W - PAD - panelX, GRID_H, (k: string) =>
-			this.tr(k),
-		);
-		this.panel.onAction = (): void => this.run();
+		this.tabsY = win.contentY + space(1);
+		this.bodyY = this.tabsY + TAB_H + space(3);
+		if (!hidden) this.finishMount();
 		return screen.root;
+	}
+
+	/** builds what the window still lacks -- the tabs, then the panel -- all of it or (`oneStep`) one piece; true if it built */
+	private finishMount(oneStep = false): boolean {
+		const win = this.win;
+		if (win === undefined) return false;
+		let built = false;
+		if (this.tabs === undefined) {
+			this.mountTabs(win, this.tabsY);
+			built = true;
+			if (oneStep) return true;
+		}
+		if (this.panel === undefined) {
+			const panelX = PAD + GRID_W + COL_GAP;
+			const panel = new BagPanel(win, "Details", panelX, this.bodyY, WIN_W - PAD - panelX, GRID_H, (k: string) =>
+				this.tr(k),
+			);
+			panel.onAction = (): void => this.run();
+			this.panel = panel;
+			built = true;
+		}
+		return built;
 	}
 
 	/** the reference's tab bar: one plate per tab, each with its glyph; the Skills tab carries the points badge */
@@ -429,24 +469,15 @@ export class Backpack {
 		const panel = this.panel;
 		if (win === undefined || panel === undefined || !this.opened) return;
 		this.refreshHeader();
-		let grid = this.grids[this.cat];
-		if (grid === undefined) {
-			grid = new BagGrid(win, `Page${this.cat}`, PAD, this.bodyY, {
-				onSelect: (key: string): void => this.select(key),
-				onHover: (tile: BagTile, on: boolean): void => {
-					if (on) this.hoverTile = tile;
-					else if (this.hoverTile === tile) this.hoverTile = undefined;
-					this.refreshTip();
-				},
-			});
-			this.grids[this.cat] = grid;
-		}
-		for (let i = 0; i < this.grids.size(); i++) {
+		const grid = this.grids[this.cat] ?? this.makeGrid(win, this.cat);
+		// every tab, not `grids.size()`: a tab visited out of order leaves a hole, and a Luau length stops at a hole
+		for (let i = 0; i < TAB_DEFS.size(); i++) {
 			const g = this.grids[i];
 			if (g !== undefined) W.setVisible(g.frame, i === this.cat);
 		}
 		const models = this.models(this.cat);
 		grid.render(models);
+		this.warmAt[this.cat] = gridCells(models.size());
 		let sel = this.selected[this.cat];
 		if (!models.some(m => m.key === sel)) {
 			sel = models[0]?.key ?? "";
@@ -457,6 +488,90 @@ export class Backpack {
 		this.run = run;
 		panel.set(model);
 		this.refreshTip();
+	}
+
+	/** the grid of tab `cat`, built the first time the tab is shown (or warmed) */
+	private makeGrid(win: Frame, cat: number): BagGrid {
+		const grid = new BagGrid(win, `Page${cat}`, PAD, this.bodyY, {
+			onSelect: (key: string): void => this.select(key),
+			onHover: (tile: BagTile, on: boolean): void => {
+				if (on) this.hoverTile = tile;
+				else if (this.hoverTile === tile) this.hoverTile = undefined;
+				this.refreshTip();
+			},
+		});
+		this.grids[cat] = grid;
+		return grid;
+	}
+
+	// ------------------------------------------------------------ idle-time warm-up (client/boot/warmup.ts)
+
+	/**
+	 * Builds, out of sight, what the first open() and the first visit of each tab would build -- the window, each tab's
+	 * grid a few tiles at a time (`tilesPerStep`), the panel and the tooltip card for each kind of item -- so the first
+	 * B press mid-fight creates nothing. One call is one small step; it answers true when nothing is left to build. It
+	 * never shows anything, and it leaves an open Bag alone (that one builds what it shows, as it always did).
+	 */
+	warmStep(tilesPerStep: number): boolean {
+		if (this.opened) return false;
+		const root = this.root;
+		if (root === undefined || root.Parent === undefined) {
+			this.mount(true);
+			return false;
+		}
+		// the tab bar, then the panel: one step each
+		if (this.finishMount(true)) return false;
+		const win = this.win;
+		const panel = this.panel;
+		if (win === undefined || panel === undefined) return true;
+		// the tab open() shows first; Craft, the biggest, last
+		const order = [this.cat, CAT_WEAPONS, CAT_EQUIP, CAT_USABLES, CAT_MATERIALS, CAT_SKILLS, CAT_CRAFT];
+		for (const cat of order) {
+			const built = this.grids[cat];
+			if (built === undefined) {
+				W.setVisible(this.makeGrid(win, cat).frame, false);
+				return false;
+			}
+			const models = this.models(cat);
+			const cells = gridCells(models.size());
+			if (this.warmAt[cat] < cells) {
+				// a few cells at a time (a tile's plate and icon are its cost): the tiles are a pool keyed by what they
+				// show, so the whole grid at the end -- open() -- finds every one of them already there
+				const k = math.min(cells, this.warmAt[cat] + math.max(1, tilesPerStep));
+				built.render(models, k);
+				this.warmAt[cat] = k;
+				return false;
+			}
+			if (!this.warmPanel[cat]) {
+				// the panel is one for every tab: showing each tab's selection once gives its pool what that tab needs
+				this.warmPanel[cat] = true;
+				let sel = this.selected[cat];
+				if (!models.some(m => m.key === sel)) sel = models[0]?.key ?? "";
+				this.selected[cat] = sel;
+				built.setSelected(sel);
+				panel.set(this.panelOf(cat, sel)[0]);
+				return false;
+			}
+		}
+		// the mouse's card, once for each kind of item carried (a weapon's stats, a gear's, a usable's, a material's)
+		while (this.warmTip <= CAT_MATERIALS) {
+			const cat = this.warmTip;
+			this.warmTip += 1;
+			const first = this.models(cat)[0];
+			if (first === undefined) continue;
+			const [kind, id] = keyParts(first.key);
+			const card = Info.describeItem(this.ctx.save, tonumber(kind) ?? 0, id, {
+				tag: first.tag ? this.tr("EQUIPPED") : first.count,
+				tagColor: first.tag ? GAME.success : THEME.mutedForeground,
+			});
+			if (card === undefined) continue;
+			const tip = this.tip ?? ItemCard(win, "Tooltip", { x: 0, y: 0, w: TIP_W, zIndex: TIP_Z });
+			this.tip = tip;
+			tip.set(card);
+			W.setVisible(tip.frame, false);
+			return false;
+		}
+		return true;
 	}
 
 	// ------------------------------------------------------------ the tooltip card (mouse only)
