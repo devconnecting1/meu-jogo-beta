@@ -2304,6 +2304,211 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 	}
 });
 
+// ================================================================ F. loot
+
+section("F1. every building type has a well-formed loot table", () => {
+	const types = Object.entries(BuildingType).map(([name, id]) => ({ id, name }));
+	checkRows("every building type has a table, and every line of it is a real item", types, t => {
+		const table = BUILDING_SPAWNS[t.id];
+		if (table === undefined || table.length === 0) return "no table";
+		for (const e of table) {
+			if (nameOf(e.kind, e.index) === undefined) return `line ${e.kind}:${e.index}`;
+			if (e.building !== t.id) return `a line of table ${t.id} says building ${e.building}`;
+		}
+		return true;
+	});
+	checkRows("each line is either a chance of one (min = max < 1) or a whole range 1 ≤ min ≤ max", types, t => {
+		for (const e of BUILDING_SPAWNS[t.id]) {
+			const chanceOfOne = e.max < 1 && e.min === e.max && e.max > 0;
+			const range = e.min >= 1 && e.max >= e.min && Number.isInteger(e.min) && Number.isInteger(e.max);
+			if (!chanceOfOne && !range) return `${nameOf(e.kind, e.index)} [${e.min}, ${e.max}]`;
+		}
+		return true;
+	});
+});
+
+section("F2. EDI-03: what each kind of building holds is what it sold (DESIGN_RULES EDI-03)", () => {
+	const name = e => nameOf(e.kind, e.index);
+	const is = {
+		medicine: e => e.kind === ItemKind.Use && /first aid|pain killer|bandage|adrenaline|sedative/i.test(name(e)),
+		food: e => e.kind === ItemKind.Use && !/first aid|pain killer|bandage|adrenaline|sedative/i.test(name(e)),
+		ammo: e => e.kind === ItemKind.Etc && e.index >= 44 && e.index <= 47,
+		gunpowder: e => e.kind === ItemKind.Etc && /gunpowder/i.test(name(e)),
+		oil: e => e.kind === ItemKind.Etc && e.index === 48,
+		cloth: e =>
+			(e.kind === ItemKind.Etc && /cloth|leather/i.test(name(e))) ||
+			(e.kind === ItemKind.Equip && EQUIPS[e.index].kind === EquipSlot.Cloth),
+		weapon: e => e.kind === ItemKind.Weapon,
+	};
+	const need = [
+		[BuildingType.Hospital, ["medicine"]],
+		[BuildingType.Pharmacy, ["medicine"]],
+		[BuildingType.GunShop, ["ammo", "gunpowder"]],
+		[BuildingType.Market, ["food"]],
+		[BuildingType.SmallMarket, ["food"]],
+		[BuildingType.Restaurant, ["food"]],
+		[BuildingType.GasStation, ["oil"]],
+		[BuildingType.ClothShop, ["cloth"]],
+	].map(([id, cats]) => ({ id, cats, name: Object.keys(BuildingType).find(k => BuildingType[k] === id) }));
+	checkRows(
+		"each shop holds what its sign says (medicine, ammo AND gunpowder, food, oil, cloth)",
+		need,
+		t =>
+			t.cats.every(c => BUILDING_SPAWNS[t.id].some(is[c])) ||
+			`missing ${t.cats.filter(c => !BUILDING_SPAWNS[t.id].some(is[c])).join(", ")}`,
+	);
+	const shops = need.map(t => t.id);
+	checkRows(
+		"guns and ammunition come only from the gun shop (and zombies), never a pharmacy or a restaurant",
+		need.filter(t => t.id !== BuildingType.GunShop),
+		t => !BUILDING_SPAWNS[t.id].some(e => is.weapon(e) || is.ammo(e)) || "sells guns or ammo",
+	);
+	checkRows(
+		"a restaurant is all food",
+		[{ id: BuildingType.Restaurant, name: "Restaurant" }],
+		t => BUILDING_SPAWNS[t.id].every(is.food) || "not only food",
+	);
+	check(shops.length === 8, "the eight shop types are all checked");
+});
+
+section("F3. rolled loot comes from the table, in its ranges, and lands in the backpack (server/sim/items.ts)", () => {
+	const { ServerItems } = require(join(SRC, "server/sim/items.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const types = Object.entries(BuildingType).map(([name, id]) => ({ id, name }));
+	setSeed(21);
+	checkRows(
+		"500 rolls per building type: only table lines, counts within [min, max], a chance line gives exactly one",
+		types,
+		t => {
+			const world = W.serverWorld(W.createWorld(4000, 4000));
+			const items = new ServerItems({ world, out: new WorldOut() });
+			const b = W.addSolid(world, {
+				kind: "building",
+				x: 1000,
+				y: 1000,
+				w: 400,
+				h: 400,
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "house",
+				buildingType: t.id,
+				passable: true,
+				lootSlots: 3,
+				lootItems: [],
+				lootTimer: 0,
+			});
+			const table = BUILDING_SPAWNS[t.id];
+			let got = 0;
+			for (let i = 0; i < 500; i++) {
+				items.rollLoot(b);
+				for (const d of b.lootItems) {
+					const line = table.find(
+						e =>
+							e.kind === d.kind &&
+							e.index === d.id &&
+							(e.max < 1 ? d.count === 1 : d.count >= e.min && d.count <= e.max),
+					);
+					if (line === undefined) return `rolled ${nameOf(d.kind, d.id)} x${d.count}`;
+					got++;
+				}
+			}
+			return got > 0 || "500 rolls, nothing";
+		},
+	);
+	checkRows(
+		"searching gives the backpack exactly what was rolled, ammo and oil into their own counters",
+		types,
+		t => {
+			const world = W.serverWorld(W.createWorld(4000, 4000));
+			const items = new ServerItems({ world, out: new WorldOut() });
+			const b = W.addSolid(world, {
+				kind: "building",
+				x: 1000,
+				y: 1000,
+				w: 400,
+				h: 400,
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				tags: "house",
+				buildingType: t.id,
+				passable: true,
+				lootSlots: 3,
+				lootItems: [],
+				lootTimer: 0,
+			});
+			// every line of the table, once, as if it had been rolled
+			b.lootItems = BUILDING_SPAWNS[t.id].map(e => ({ kind: e.kind, id: e.index, count: Math.max(1, e.min) }));
+			const save = bareSave();
+			const before = b.lootItems.map(d => INV.countItem(save, d.kind, d.id));
+			const out = items.search(save, 1200, 1200, 0);
+			if (out.taken.length !== b.lootItems.length && b.lootItems.length !== 0) return "not everything was taken";
+			const want = new Map();
+			for (const d of out.taken) want.set(`${d.kind}:${d.id}`, (want.get(`${d.kind}:${d.id}`) ?? 0) + d.count);
+			for (const [key, n] of want) {
+				const [k, i] = key.split(":").map(Number);
+				const had = before[out.taken.findIndex(d => d.kind === k && d.id === i)];
+				if (INV.countItem(save, k, i) - had !== n)
+					return `${nameOf(k, i)}: +${INV.countItem(save, k, i) - had}, rolled ${n}`;
+			}
+			return b.lootItems.length === 0 || "the building still holds it";
+		},
+	);
+	checkRows(
+		"a ground item of every kind a table can drop is picked up into the right counter (client pickup, MP_PHASE 2)",
+		itemSources().filter(s => s.from === "loot"),
+		s => {
+			const CInter = require(join(SRC, "client/systems/interaction.ts"));
+			const world = W.createWorld(4000, 4000);
+			const save = bareSave();
+			const player = Ply.createPlayer(save, 1000, 1000);
+			W.spawnGroundItem(world, s.kind, s.index, 3, 1010, 1000);
+			const had = INV.countItem(save, s.kind, s.index);
+			new CInter.Interaction().tryInteract({
+				world,
+				players: [player],
+				player,
+				save,
+				zombies: [],
+				pendingPlace: -1,
+				fx: [],
+				daynight: { day: 1, dayTime: 12 },
+			});
+			return (
+				(INV.countItem(save, s.kind, s.index) - had === 3 && world.items.length === 0) ||
+				`+${INV.countItem(save, s.kind, s.index) - had}`
+			);
+		},
+	);
+});
+
+section("F4. trees, cars and bins drop the same things on the client and on the server", () => {
+	const tables = rel => {
+		const src = source(rel);
+		const out = {};
+		for (const m of src.matchAll(/const (TREE|CAR|TRASH)_LOOT[^=]*=\s*\[([\s\S]*?)\];/g)) {
+			out[m[1]] = [...m[2].matchAll(/kind: (\d), index: (\d+), amount: ([\d.]+)/g)]
+				.map(x => `${nameOf(Number(x[1]), Number(x[2]))} ${x[3]}`)
+				.sort();
+		}
+		return out;
+	};
+	const client = tables("client/systems/interaction.ts");
+	const server = tables("server/sim/items.ts");
+	const differ = ["TREE", "CAR", "TRASH"].filter(k => JSON.stringify(client[k]) !== JSON.stringify(server[k]));
+	check(
+		Object.keys(client).length === 3 && Object.keys(server).length === 3,
+		"both sides have the three map-item tables",
+	);
+	knownBug(
+		"L1",
+		differ.length > 0,
+		"the map-item loot the client rolls today (MP_PHASE 2) is not the table the server will roll at F3: switching phases silently changes what trees, cars and bins give (the server's car even drops Steel, which crafts.ts says never drops)",
+		differ.map(k => `${k}: client [${client[k].join(", ")}] vs server [${server[k].join(", ")}]`).join(" | "),
+	);
+});
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
