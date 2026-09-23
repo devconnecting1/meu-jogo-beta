@@ -45,10 +45,8 @@ import { langGet } from "shared/data/lang";
 import { titleFromWire } from "shared/data/titles";
 import { OVER_WORLD, TEXT, THEME, fontOf, space } from "./theme";
 import { screenSize } from "./device";
-import { fixedTextPx, onLayoutChange, reducedMotion, textShadow, uiScale } from "./skin";
+import { fixedTextPx, motionTween, onLayoutChange, reducedMotion, textShadow, uiScale } from "./skin";
 import { titleColor, titleText } from "./titleStyle";
-
-const TweenService = game.GetService("TweenService");
 
 /** design sizes (scaled by the UI scale, never under the kit's 9 px floor) */
 export const NAME_TEXT = TEXT.sm;
@@ -338,10 +336,10 @@ export class Nameplate {
 			label.TextColor3 = OVER_WORLD.level;
 		});
 		this.plateScale.Scale = 1;
+		// the pop is motion: under Reduce Motion the flash of the level says it alone (the kit's tween would make it a
+		// zero-length there-and-back, i.e. nothing, anyway)
 		if (reducedMotion()) return;
-		const pop = new TweenInfo(PULSE_TIME / 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true);
-		this.pulses = [TweenService.Create(this.plateScale, pop, { Scale: 1.12 })];
-		for (const t of this.pulses) t.Play();
+		this.pulses = [motionTween(this.plateScale, PULSE_TIME / 2, { Scale: 1.12 }, true)];
 	}
 
 	destroy(): void {

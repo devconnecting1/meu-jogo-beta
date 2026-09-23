@@ -4,7 +4,7 @@ import { MIN_TOUCH_PX } from "shared/engine/input";
 import type { GameRefs } from "../systems/types";
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, space } from "../ui/theme";
 import { toast } from "../ui/popup";
-import { coverWholeScreen } from "../ui/skin";
+import { coverWholeScreen, reducedMotion } from "../ui/skin";
 import { Bar, Button, Card, Progress, makeAnchored, makeFrame, makeLabel, setDesign, uiScale } from "../ui/widgets";
 import {
 	FIRE_DEADLINE_HOUR,
@@ -271,7 +271,8 @@ export class Coach {
 			for (const part of this.arrowParts) part.BackgroundColor3 = color;
 			dist.TextColor3 = color;
 		}
-		const bob = math.sin(os.clock() * 4) * 4;
+		// the nod is motion: under Reduce Motion the arrow just points
+		const bob = reducedMotion() ? 0 : math.sin(os.clock() * 4) * 4;
 		const margin = 64;
 		const onScreen = p.x > margin && p.x < w - margin && p.y > margin && p.y < h - margin;
 		if (onScreen) {

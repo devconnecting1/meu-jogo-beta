@@ -50,6 +50,7 @@ import {
 	focusSurface,
 	hairline,
 	motionTime,
+	motionTween,
 	onLayoutChange,
 	paintSurface,
 	panelSurface,
@@ -73,7 +74,6 @@ import {
 } from "./skin";
 
 const GuiService = game.GetService("GuiService");
-const TweenService = game.GetService("TweenService");
 const UserInputService = game.GetService("UserInputService");
 
 export {
@@ -240,10 +240,7 @@ export function addAspect(g: GuiObject, ratio: number): UIAspectRatioConstraint 
  * lands on its final value at once instead of being skipped -- so nothing ends up half-animated.
  */
 export function tween<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
-	const t = TweenService.Create(obj, info, props);
-	t.Play();
-	return t;
+	return motionTween(obj, time, props);
 }
 
 export function clearChildren(container: Instance): void {

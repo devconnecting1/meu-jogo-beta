@@ -569,12 +569,26 @@ function findBoxStroke(target: GuiObject, name: string): UIStroke | undefined {
 	return nested !== undefined && nested.IsA("UIStroke") ? nested : undefined;
 }
 
-/** every fade of the kit lands here; `motionTime` is what makes Reduce Motion cut them to an instant jump */
-function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+/**
+ * THE tween of the interface: every fade and move of the kit, widgets.tween, the logo and the nameplate's pop land here,
+ * and nothing else in src/ calls TweenService (`npm run test:settings` checks it). `motionTime` is what makes Reduce
+ * Motion cut every one of them to an instant jump. `reverses`: it plays back to where it started (a pop).
+ */
+export function motionTween<T extends Instance>(
+	obj: T,
+	time: number,
+	props: Partial<ExtractMembers<T, Tweenable>>,
+	reverses = false,
+): Tween {
+	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, reverses);
 	const t = TweenService.Create(obj, info, props);
 	t.Play();
 	return t;
+}
+
+/** every fade of the kit lands here */
+function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
+	return motionTween(obj, time, props);
 }
 
 /** a missed texture fetch is often transient; this is how long we wait before asking again */

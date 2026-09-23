@@ -25,6 +25,7 @@ import {
 	makeAnchored,
 	makeFrame,
 	makeLabel,
+	reducedMotion,
 	setBadge,
 	setButtonEnabled,
 	setDesign,
@@ -903,12 +904,14 @@ export class Hud {
 			}
 		}
 
-		// damage vignette: hit flash + a slow pulse when HP is low
+		// damage vignette: hit flash + a slow pulse when HP is low -- held at its middle under Reduce Motion, as the hit
+		// flash over the menus holds instead of easing (dangerFlash.ts): the danger still shows, it just does not throb
 		this.flash = math.max(0, this.flash - 1.6 / 60);
 		let intensity = math.max(math.clamp(state.hitFlash, 0, 1) * 0.75, this.flash);
 		if (hpRatio > 0 && hpRatio < 0.3) {
 			const low = (0.3 - hpRatio) / 0.3;
-			intensity = math.max(intensity, low * (0.3 + 0.15 * math.sin(now * 4)));
+			const pulse = reducedMotion() ? 0 : 0.15 * math.sin(now * 4);
+			intensity = math.max(intensity, low * (0.3 + pulse));
 		}
 		const transparency = 1 - math.clamp(intensity, 0, 0.9);
 		if (transparency !== this.vignetteT) {

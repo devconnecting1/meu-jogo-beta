@@ -22,7 +22,8 @@
  *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip -- and the sky (4b): the world's
  *     day, the countdown to nightfall ("Night in 2:14") and at night to daybreak, in real seconds, the sun / moon on
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
- *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
+ *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
+ *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
@@ -496,6 +497,48 @@ hud.update(state({ hunger: 10 }));
 check("fome baixa pisca a barra de fome em vermelho", sameColor(face(barFill("Food")), BAR.hp));
 blinkAt(false);
 hud.update(state());
+
+// Reduce Motion: nothing throbs. Low HP holds its fill lit and low food holds it red at both phases of the blink, and the
+// low-HP vignette holds one value through the whole pulse (its middle), like the hit flash over the menus
+{
+	const gs = service("GuiService");
+	const vignetteTop = deep(hudRoot(), "VignetteTop");
+	const across = over => {
+		const seen = { hpFill: new Set(), foodRed: new Set(), vignette: new Set() };
+		for (let i = 0; i < 48; i++) {
+			setClock(5000 + i / 30);
+			hud.update(state(over));
+			seen.hpFill.add(barFill("Hp").Visible);
+			seen.foodRed.add(sameColor(face(barFill("Food")), BAR.hp));
+			seen.vignette.add(vignetteTop.BackgroundTransparency.toFixed(4));
+		}
+		return seen;
+	};
+	// (the Luau shims make a Set's size a method, as roblox-ts has it)
+	const count = set => [...set].length;
+	const moving = across({ hp: 10, hunger: 10 });
+	gs.ReducedMotionEnabled = true;
+	flush();
+	const still = across({ hp: 10, hunger: 10 });
+	gs.ReducedMotionEnabled = false;
+	flush();
+	check(
+		"sem Reduce Motion a HP baixa pisca, a fome baixa pisca e a vinheta pulsa (o controle do teste)",
+		count(moving.hpFill) === 2 && count(moving.foodRed) === 2 && count(moving.vignette) > 5,
+		`HP ${[...moving.hpFill]}, fome ${[...moving.foodRed]}, vinheta ${count(moving.vignette)} valores`,
+	);
+	check(
+		"com Reduce Motion nada pulsa: HP baixa acesa, fome baixa vermelha, a vinheta de HP baixa num valor so",
+		count(still.hpFill) === 1 &&
+			still.hpFill.has(true) &&
+			count(still.foodRed) === 1 &&
+			still.foodRed.has(true) &&
+			count(still.vignette) === 1 &&
+			Number([...still.vignette][0]) < 1,
+		`HP ${[...still.hpFill]}, fome vermelha ${[...still.foodRed]}, vinheta ${[...still.vignette].join(", ")}`,
+	);
+	hud.update(state());
+}
 
 // ammo: magazine / reserve on the gun in hand, the reserve alone on the others, red when empty
 check(
