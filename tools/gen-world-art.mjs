@@ -30,8 +30,10 @@
  * the kerb's shadow) is computed by client/view/worldView.ts every frame (LUZ-01).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { encodePNG } from "./png-lite.mjs";
 import { drawText } from "./pixel-font.mjs";
 
@@ -1234,6 +1236,88 @@ function chimney() {
 	return withShadow(t);
 }
 
+// ---------------------------------------------------------------- building signs (DESIGN_RULES ART-07)
+
+/**
+ * The signs are DATA in src/shared/data/buildingSigns.ts (the game draws the same grids flat when a texture has no
+ * id): that module imports nothing, so a bare transpile runs it here with a Color3 that returns [r, g, b].
+ */
+function loadSigns() {
+	const ts = createRequire(import.meta.url)("typescript");
+	const src = readFileSync(join(ROOT, "src", "shared", "data", "buildingSigns.ts"), "utf8");
+	const js = ts.transpileModule(src, {
+		compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+	}).outputText;
+	const exports = {};
+	runInNewContext(js, { exports, module: { exports }, Color3: { fromRGB: (r, g, b) => [r, g, b] } });
+	return exports;
+}
+
+/** a sign board, texel for texel from its grid */
+function signBoard(sign, palette) {
+	const t = new Tex(sign.rows[0].length, sign.rows.length);
+	sign.rows.forEach((row, y) => {
+		for (let x = 0; x < row.length; x++) t.set(x, y, palette[row[x]]);
+	});
+	return t;
+}
+
+/**
+ * The hospital's helipad (ICAO's hospital heliport: a red H on a white cross of five squares, on the dark deck of
+ * the landing area inside its white ring), painted on the roof: the paint is a little thin everywhere and worn
+ * through in places, with a crack or two. Its geometry is HELIPAD's, the same numbers the flat drawing uses.
+ */
+function helipad(pad, palette) {
+	const n = pad.size;
+	const t = new Tex(n, n);
+	const c = (n - 1) / 2;
+	const r = rng(141);
+	const deck = palette[pad.deck];
+	const paint = palette[pad.paint];
+	const mark = palette[pad.mark];
+	const base = Math.round(255 * pad.alpha);
+	const put = (x, y, col) => {
+		// worn paint: most texels a little thin, some worn through to the membrane
+		const roll = r();
+		const a = roll < 0.06 ? base * 0.35 : roll < 0.2 ? base * 0.75 : base;
+		t.set(x, y, add(col, (r() - 0.5) * 10), Math.round(a));
+	};
+	const outer = pad.ring / 2;
+	const inner = outer - pad.ringWidth;
+	const sq = pad.square;
+	const s0 = Math.floor(c - sq / 2) + 1;
+	const inCross = (x, y) =>
+		(x >= s0 && x < s0 + sq && y >= s0 - sq && y < s0 + sq * 2) ||
+		(y >= s0 && y < s0 + sq && x >= s0 - sq && x < s0 + sq * 2);
+	const l0 = s0 + (sq - pad.letter) / 2;
+	const inH = (x, y) => {
+		if (y < l0 || y >= l0 + pad.letter || x < l0 || x >= l0 + pad.letter) return false;
+		if (x < l0 + pad.leg || x >= l0 + pad.letter - pad.leg) return true;
+		const b0 = l0 + (pad.letter - pad.bar) / 2;
+		return y >= b0 && y < b0 + pad.bar;
+	};
+	for (let y = 0; y < n; y++) {
+		for (let x = 0; x < n; x++) {
+			const d = Math.hypot(x - c, y - c);
+			if (inH(x, y)) put(x, y, mark);
+			else if (inCross(x, y) || (d <= outer && d > inner)) put(x, y, paint);
+			else if (d <= inner) t.set(x, y, add(deck, (r() - 0.5) * 8), base);
+		}
+	}
+	// two hairline cracks through the paint, where the membrane moved
+	for (const [x0, y0, dx] of [
+		[s0 - sq + 2, s0 + 3, 1],
+		[s0 + sq + 4, s0 - sq + 1, -1],
+	]) {
+		let x = x0;
+		for (let y = y0; y < y0 + 7; y++) {
+			if (t.alpha(x, y) > 0) t.set(x, y, mix(paint, BLACK, 0.55), Math.round(base * 0.7));
+			if (r() < 0.5) x += dx;
+		}
+	}
+	return t;
+}
+
 // ================================================================ the list
 
 function build() {
@@ -1327,6 +1411,18 @@ function build() {
 	add_("acUnit", "sprite", acUnit(), "rooftop air conditioner");
 	add_("vent", "sprite", vent(), "roof vent");
 	add_("chimney", "sprite", chimney(), "brick chimney on a house roof");
+	// the storefront signs and the hospital's helipad (src/shared/data/buildingSigns.ts)
+	const signs = loadSigns();
+	for (const type of Object.keys(signs.BUILDING_SIGNS).sort((a, b) => Number(a) - Number(b))) {
+		const sign = signs.BUILDING_SIGNS[type];
+		add_(sign.texture, "sprite", signBoard(sign, signs.SIGN_ART), `storefront sign (type ${type}): ${sign.shows}`);
+	}
+	add_(
+		"helipad",
+		"sprite",
+		helipad(signs.HELIPAD, signs.SIGN_ART),
+		"hospital roof: the heliport's red H on a white cross",
+	);
 }
 
 // ---------------------------------------------------------------- output
