@@ -750,6 +750,8 @@ function mountRun(enterWorld = true): void {
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
+		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own)
+		if (input.scoreboardPressed) hud.toggleScoreboard();
 		if (input.pausePressed && ctx.phase === "playing") {
 			if (pauseCleanup === undefined) openPause();
 			else closePause();

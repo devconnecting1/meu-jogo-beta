@@ -1,4 +1,5 @@
 import {
+	ADMIN_AFK_S,
 	ADMIN_LIMITS,
 	BAN_DURATION_LABEL,
 	BAN_DURATIONS,
@@ -6,15 +7,12 @@ import {
 	BanHistoryResult,
 	PlayerRow,
 } from "shared/admin/protocol";
-import { GAME, TEXT, THEME, space } from "../ui/theme";
+import { STAT, SURFACE, TEXT, THEME, space } from "../ui/theme";
+import { Table, TableCell, TableColumn, TableSort, fitText } from "../ui/table";
 import {
-	Badge,
 	Button,
-	Card,
 	Dialog,
-	ListRowButton,
 	Tabs,
-	badgeWidth,
 	clearChildren,
 	fmtInt,
 	makeLabel,
@@ -34,21 +32,16 @@ import {
 	region,
 	rowLabel,
 	sessionText,
-	signature,
 } from "./panelTypes";
 
 /*
- * Players (server): who is in this server and what the server knows about them (its copy of the save: day, level,
- * coins, bosses, session / DataStore state, last progress report). Kick / Ban / Unban / ban history go through the
- * server, which re-checks everything. "Spectate" is disabled: each client simulates its own world today, so there
- * is no remote world to look at — "Follow live" streams the player's data on every progress report instead.
+ * Players (server): who is in this server and what the server knows about them -- its copy of the save (day, level,
+ * coins, rebirths, session / DataStore state, last progress report) and, from the simulation, the body in the town
+ * (HP, dead or alive, how long since a real input: AFK past MP-13's 3 minutes) and the client's ping (§9.3). A DATA
+ * table (client/ui/table.ts, DESIGN_RULES UI-12): filter by name, sort by a header, select a row, act with the buttons
+ * under it. Kick / Ban / Unban / ban history go through the server, which re-checks everything (the kick and the ban
+ * are their own confirmation dialogs). "Follow live" streams the selected player's data on every progress report.
  */
-
-const LIST_Y = 34;
-/** list + detail card: the card needs >= 242 so its three rows (stats, follow, actions) never overlap */
-const LIST_H = 116;
-const ROW_H = 50;
-const DETAIL_Y = LIST_Y + LIST_H + 8;
 
 /** kick confirmation: optional reason (shown to the player, text-filtered by the server) */
 export function openKickDialog(p: PanelCtx, row: PlayerRow): void {
@@ -225,26 +218,93 @@ export function openBanDialog(p: PanelCtx, target: string, label: string): void 
 	refreshGo();
 }
 
-/** caption + value; returns the value label */
-function statCell(
-	parent: Frame,
-	name: string,
-	x: number,
-	y: number,
-	w: number,
-	caption: string,
-	value: string,
-): TextLabel {
-	makeLabel(parent, `${name}Caption`, caption, x, y, w, 16, TEXT.xs, THEME.mutedForeground, {
-		align: "left",
-		zIndex: 3,
-	});
-	return makeLabel(parent, `${name}Value`, value, x, y + 16, w, 20, TEXT.sm, THEME.foreground, {
-		font: "label",
-		align: "left",
-		zIndex: 3,
-	});
+/** what a player is doing, in one word (the Status column): the save, then the body in the town (§9.3) */
+export type PlayerStatus = "loading" | "lobby" | "dead" | "afk" | "alive";
+
+export function playerStatus(row: PlayerRow): PlayerStatus {
+	if (!row.loaded) return "loading";
+	if (!row.inWorld) return "lobby";
+	if (row.dead) return "dead";
+	if (row.idleS >= ADMIN_AFK_S) return "afk";
+	return "alive";
 }
+
+const STATUS_TEXT: Record<PlayerStatus, string> = {
+	loading: "Loading",
+	lobby: "Lobby",
+	dead: "Dead",
+	afk: "AFK",
+	alive: "Alive",
+};
+/** the order the Status column sorts in: who is out there first */
+const STATUS_ORDER: Record<PlayerStatus, number> = { alive: 0, afk: 1, dead: 2, lobby: 3, loading: 4 };
+
+/** the colour of a status on the table's dark rows (SURFACE.well: every one 4,5:1 there, test:contrast) */
+function statusColor(status: PlayerStatus): Color3 {
+	if (status === "alive") return STAT.bonus;
+	if (status === "afk") return STAT.effect;
+	if (status === "dead") return THEME.destructive;
+	return THEME.mutedForeground;
+}
+
+/** the players table's columns: the name, then numbers right-aligned in the numeric voice, then the status */
+export const PLAYER_COLUMNS: Array<TableColumn> = [
+	{ key: "name", header: "Name", flex: 1, sortable: true },
+	{ key: "level", header: "Lv", width: 36, numeric: true, sortable: true, descendingFirst: true },
+	{ key: "day", header: "Day", width: 44, numeric: true, sortable: true, descendingFirst: true },
+	{ key: "hp", header: "HP", width: 64, numeric: true, sortable: true },
+	{ key: "ping", header: "Ping", width: 50, numeric: true, sortable: true, descendingFirst: true },
+	{ key: "status", header: "Status", width: 62, sortable: true },
+];
+
+/** the rows the name filter lets through (case-insensitive, on the name, the display name or the UserId) */
+export function filterPlayers(rows: ReadonlyArray<PlayerRow>, filter: string): Array<PlayerRow> {
+	const [trimmed] = filter.lower().gsub("^%s+", "");
+	const [f] = trimmed.gsub("%s+$", "");
+	const out: Array<PlayerRow> = [];
+	for (const r of rows) {
+		if (f === "") {
+			out.push(r);
+			continue;
+		}
+		const hay = `${r.name} ${r.displayName} ${r.userId}`.lower();
+		if (hay.find(f, 1, true)[0] !== undefined) out.push(r);
+	}
+	return out;
+}
+
+function playerCell(row: PlayerRow, column: string, out: TableCell): void {
+	const status = playerStatus(row);
+	if (column === "name") {
+		out.text = fitText(row.isAdmin ? `${rowLabel(row)} · ADMIN` : rowLabel(row), 28);
+	} else if (column === "level") {
+		out.text = row.loaded ? tostring(row.level) : "–";
+	} else if (column === "day") {
+		out.text = row.loaded ? tostring(row.day) : "–";
+	} else if (column === "hp") {
+		out.text = row.inWorld ? `${row.hp}/${row.hpMax}` : "–";
+		if (row.inWorld && row.dead) out.color = THEME.destructive;
+	} else if (column === "ping") {
+		out.text = row.pingMs >= 0 ? tostring(row.pingMs) : "–";
+	} else {
+		out.text = STATUS_TEXT[status];
+		out.color = statusColor(status);
+	}
+	if (out.color === undefined && !row.loaded) out.color = THEME.mutedForeground;
+}
+
+function playerSortValue(row: PlayerRow, column: string): number | string {
+	if (column === "name") return rowLabel(row);
+	// a save still loading shows "–" and sorts under every real number
+	if (column === "level") return row.loaded ? row.level : -1;
+	if (column === "day") return row.loaded ? row.day : -1;
+	if (column === "hp") return row.inWorld ? row.hp : -1;
+	if (column === "ping") return row.pingMs;
+	return STATUS_ORDER[playerStatus(row)];
+}
+
+/** remembered across visits to the section (like the backpack's tab) */
+const playersMemory: { filter: string; sort: TableSort } = { filter: "", sort: { column: "name", descending: false } };
 
 export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 	const tabsH = 36;
@@ -252,7 +312,9 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 	const bodyH = CONTENT_H - tabsH - 8;
 	let selected: number | undefined;
 	let following: number | undefined;
-	let online: { refreshList: () => void; refreshDetail: (row?: PlayerRow) => void } | undefined;
+	/** the first player list has arrived (before it, the empty table says "loading", not "nobody") */
+	let heard = p.players.size() > 0;
+	let online: { refresh: () => void; onWatch: (row: PlayerRow) => void } | undefined;
 
 	const stopFollowing = (): void => {
 		if (following !== undefined) {
@@ -261,12 +323,36 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 		}
 	};
 
+	/*
+	 * Online: a DATA table (client/ui/table.ts, DESIGN_RULES UI-12) -- filter by name, sort by a header, select a row,
+	 * then act with the buttons under it. What the server knows about the selected one (ids, save, report) sits between
+	 * the table and the buttons, rewritten in place; nothing here is rebuilt on a poll.
+	 */
 	const buildOnline = (): void => {
 		clearChildren(body);
-		const countLabel = makeLabel(body, "Count", "", 0, 0, CONTENT_W - 110, 30, TEXT.sm, THEME.foreground, {
-			font: "label",
-			align: "left",
+		const filter = TextInput(body, "Filter", {
+			x: 0,
+			y: 0,
+			w: 206,
+			h: 30,
+			placeholder: "Filter by name or UserId",
+			text: playersMemory.filter,
+			maxLength: ADMIN_LIMITS.TARGET,
 		});
+		const countLabel = makeLabel(
+			body,
+			"Count",
+			"",
+			214,
+			0,
+			CONTENT_W - 214 - 108,
+			30,
+			TEXT.xs,
+			THEME.mutedForeground,
+			{
+				align: "left",
+			},
+		);
 		Button(body, "Refresh", "Refresh", {
 			x: CONTENT_W - 100,
 			y: 0,
@@ -276,246 +362,173 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 			variant: "outline",
 			onClick: () => p.refreshPlayers(),
 		});
-		const list = makeScrollList(body, "List", 0, LIST_Y, CONTENT_W, LIST_H);
-		const detailH = bodyH - DETAIL_Y;
-		const detailCard = Card(body, "Detail", { x: 0, y: DETAIL_Y, w: CONTENT_W, h: detailH, variant: "muted" });
-		// rebuilt content lives in a region, so the card keeps its own corner / border
-		const detail = region(detailCard, "Body", 0, 0, CONTENT_W, detailH);
-		const pad = space(3);
-		const innerW = CONTENT_W - pad * 2;
-		/** labels updated in place every refresh (timers), so hovering / clicking is never interrupted */
-		let liveIds: TextLabel | undefined;
-		let liveReport: TextLabel | undefined;
-		const rowInfo = new Map<number, TextLabel>();
 
-		const idsText = (row: PlayerRow): string =>
-			`UserId ${row.userId} · account ${fmtInt(row.accountAge)} days · in server ${durationText(row.sessionAge)}`;
-		const infoText = (row: PlayerRow): string =>
-			`Day ${row.day} · Lv ${row.level} · ${fmtInt(row.money)} coins · report ${agoText(row.lastReportAgo)} · ${sessionText(row)}`;
-		/** the row without its timers (they change every refresh) */
-		const stable = (row: PlayerRow | undefined): unknown =>
-			row === undefined ? undefined : { ...row, lastReportAgo: row.lastReportAgo >= 0, sessionAge: 0 };
+		const tableY = 38;
+		const tableH = 214;
+		// assigned below (it needs the buttons); the table's selection callback reads it
+		let refreshDetail: (live?: PlayerRow) => void = () => {};
+		const grid = Table<PlayerRow>(body, "Players", {
+			x: 0,
+			y: tableY,
+			w: CONTENT_W,
+			h: tableH,
+			columns: PLAYER_COLUMNS,
+			rowH: 28,
+			headerH: 24,
+			textSize: TEXT.sm,
+			rowFace: SURFACE.well,
+			selectable: true,
+			keyOf: r => tostring(r.userId),
+			cell: playerCell,
+			sortValue: playerSortValue,
+			sort: playersMemory.sort,
+			onSort: sort => {
+				playersMemory.sort = sort;
+			},
+			onSelect: key => {
+				const id = key !== undefined ? tonumber(key) : undefined;
+				if (following !== undefined && following !== id) stopFollowing();
+				selected = id;
+				refreshDetail();
+			},
+		});
 
-		const buildDetail = (row: PlayerRow | undefined): void => {
-			clearChildren(detail);
-			liveIds = undefined;
-			liveReport = undefined;
+		// ---- the selected player: what the server knows, in muted lines (rewritten, never rebuilt)
+		const detailY = tableY + tableH + 6;
+		const pad = space(1);
+		const lineW = CONTENT_W - pad * 2;
+		const nameLine = makeLabel(body, "SelName", "", pad, detailY, CONTENT_W - 240, 20, TEXT.sm, THEME.foreground, {
+			font: "label",
+			align: "left",
+		});
+		const muted = (name: string, y: number): TextLabel =>
+			makeLabel(body, name, "", pad, y, lineW, 16, TEXT.xs, THEME.mutedForeground, { align: "left" });
+		const idsLine = muted("SelIds", detailY + 24);
+		const saveLine = muted("SelSave", detailY + 42);
+		const reportLine = muted("SelReport", detailY + 60);
+		const follow = Switch(body, "Follow", {
+			x: CONTENT_W - 230,
+			y: detailY - 2,
+			w: 230,
+			label: "Follow live",
+			value: false,
+			onChange: on => {
+				const id = selected;
+				task.spawn(() => {
+					if (on && id !== undefined) {
+						const res = p.request({ kind: "watch", userId: id });
+						if (res.ok) following = id;
+						// the switch shows what really happened
+						else if (follow.frame.Parent !== undefined) follow.set(false);
+					} else {
+						stopFollowing();
+					}
+				});
+			},
+		});
+
+		// ---- the row actions: select a row, then act (no per-row menu, DESIGN_RULES UI-12)
+		const actionsY = bodyH - 36;
+		const bw = (CONTENT_W - space(2) * 2) / 3;
+		const edit = Button(body, "Edit", "Edit progress", {
+			x: 0,
+			y: actionsY,
+			w: bw,
+			h: 36,
+			size: "sm",
+			variant: "secondary",
+			onClick: () => {
+				if (selected === undefined) return;
+				p.target = selected;
+				p.goTo("progress");
+			},
+		});
+		const kick = Button(body, "Kick", "Kick…", {
+			x: bw + space(2),
+			y: actionsY,
+			w: bw,
+			h: 36,
+			size: "sm",
+			variant: "outline",
+			onClick: () => {
+				const row = p.players.find(r => r.userId === selected);
+				if (row !== undefined) openKickDialog(p, row);
+			},
+		});
+		const ban = Button(body, "Ban", "Ban…", {
+			x: (bw + space(2)) * 2,
+			y: actionsY,
+			w: bw,
+			h: 36,
+			size: "sm",
+			variant: "destructive",
+			onClick: () => {
+				const row = p.players.find(r => r.userId === selected);
+				if (row !== undefined) openBanDialog(p, tostring(row.userId), `${row.name} (${row.userId})`);
+			},
+		});
+		attachTooltip(kick, "Admins (you included) cannot be kicked or banned");
+		attachTooltip(ban, "Admins (you included) cannot be kicked or banned");
+
+		refreshDetail = (live?: PlayerRow): void => {
+			const row = live ?? p.players.find(r => r.userId === selected);
+			const locked = row === undefined || row.userId === p.selfUserId || row.isAdmin;
+			setButtonEnabled(edit, row !== undefined);
+			setButtonEnabled(kick, !locked);
+			setButtonEnabled(ban, !locked);
 			if (row === undefined) {
-				makeLabel(
-					detail,
-					"Empty",
-					"Select a player above.",
-					pad,
-					pad,
-					innerW,
-					20,
-					TEXT.sm,
-					THEME.mutedForeground,
-					{
-						align: "left",
-						zIndex: 3,
-					},
-				);
+				nameLine.Text = "Select a player in the table.";
+				idsLine.Text = "Then act on them with the buttons below.";
+				saveLine.Text = "";
+				reportLine.Text = "";
+				if (follow.get()) follow.set(false);
 				return;
 			}
-			makeLabel(detail, "Name", rowLabel(row), pad, pad, innerW - 150, 22, TEXT.base, THEME.foreground, {
-				font: "heading",
-				align: "left",
-				zIndex: 3,
-			});
-			let bx = innerW - 140 + pad;
-			if (row.isAdmin) {
-				Badge(detail, "AdminBadge", "ADMIN", { x: bx, y: pad, color: GAME.rare, zIndex: 3 });
-				bx += badgeWidth("ADMIN") + space(1);
-			}
-			if (row.userId === p.selfUserId) {
-				Badge(detail, "YouBadge", "You", { x: bx, y: pad, variant: "secondary", zIndex: 3 });
-			}
-			liveIds = makeLabel(
-				detail,
-				"Ids",
-				idsText(row),
-				pad,
-				pad + 24,
-				innerW,
-				16,
-				TEXT.xs,
-				THEME.mutedForeground,
-				{
-					align: "left",
-					zIndex: 3,
-				},
-			);
-			const colW = innerW / 3;
-			const y1 = pad + 46;
-			statCell(detail, "Day", pad, y1, colW, "Day (best)", `${row.day} (${row.bestDay})`);
-			statCell(detail, "Level", pad + colW, y1, colW, "Level · skill pts", `${row.level} · ${row.skillPoint}`);
-			statCell(detail, "Coins", pad + colW * 2, y1, colW, "Coins", fmtInt(row.money));
-			const y2 = y1 + 40;
-			statCell(
-				detail,
-				"Bosses",
-				pad,
-				y2,
-				colW,
-				"Bosses · deaths",
-				`${row.bossKills} · ${row.deathCount}${row.runOver ? " · game over" : ""}`,
-			);
-			liveReport = statCell(detail, "Report", pad + colW, y2, colW, "Last report", agoText(row.lastReportAgo));
-			statCell(
-				detail,
-				"Save",
-				pad + colW * 2,
-				y2,
-				colW,
-				"Session / save",
-				sessionText(row) + (row.patchPending ? " · patch pending" : ""),
-			);
-			const y3 = y2 + 44;
-			const follow = Switch(detail, "Follow", {
-				x: pad,
-				y: y3,
-				w: 230,
-				label: "Follow live",
-				description: "Updates on every progress report",
-				value: following === row.userId,
-				zIndex: 3,
-				onChange: on => {
-					task.spawn(() => {
-						if (on) {
-							const res = p.request({ kind: "watch", userId: row.userId });
-							if (res.ok) following = row.userId;
-							// the switch shows what really happened
-							else if (follow.frame.Parent !== undefined) follow.set(false);
-						} else {
-							stopFollowing();
-						}
-					});
-				},
-			});
-			const spectate = Button(detail, "Spectate", "Spectate", {
-				x: CONTENT_W - pad - 130,
-				y: y3 + 4,
-				w: 130,
-				h: 34,
-				size: "sm",
-				variant: "outline",
-				disabled: true,
-				zIndex: 3,
-			});
-			attachTooltip(spectate, "Available with multiplayer (each client simulates its own world today)", 300);
-			const y4 = math.max(y3 + 52, detailH - pad - 36);
-			const locked = row.userId === p.selfUserId || row.isAdmin;
-			const bw = (innerW - space(2) * 2) / 3;
-			Button(detail, "Edit", "Edit progress", {
-				x: pad,
-				y: y4,
-				w: bw,
-				h: 36,
-				size: "sm",
-				variant: "secondary",
-				zIndex: 3,
-				onClick: () => {
-					p.target = row.userId;
-					p.goTo("progress");
-				},
-			});
-			const kick = Button(detail, "Kick", "Kick…", {
-				x: pad + bw + space(2),
-				y: y4,
-				w: bw,
-				h: 36,
-				size: "sm",
-				variant: "outline",
-				disabled: locked,
-				zIndex: 3,
-				onClick: () => openKickDialog(p, row),
-			});
-			const ban = Button(detail, "Ban", "Ban…", {
-				x: pad + (bw + space(2)) * 2,
-				y: y4,
-				w: bw,
-				h: 36,
-				size: "sm",
-				variant: "destructive",
-				disabled: locked,
-				zIndex: 3,
-				onClick: () => openBanDialog(p, tostring(row.userId), `${row.name} (${row.userId})`),
-			});
-			if (locked) {
-				attachTooltip(kick, "Admins (you included) cannot be kicked or banned");
-				attachTooltip(ban, "Admins (you included) cannot be kicked or banned");
-			}
+			const tags = `${row.isAdmin ? " · ADMIN" : ""}${row.userId === p.selfUserId ? " · you" : ""}`;
+			nameLine.Text = fitText(`${rowLabel(row)}${tags}`, 30);
+			idsLine.Text = `UserId ${row.userId} · account ${fmtInt(row.accountAge)} days · in server ${durationText(row.sessionAge)}`;
+			saveLine.Text =
+				`Day ${row.day} (best ${row.bestDay}) · Lv ${row.level} · ${row.skillPoint} skill pts · ` +
+				`${fmtInt(row.money)} coins · ${row.deathCount} rebirths${row.runOver ? " · run over" : ""}`;
+			const idle = row.inWorld ? ` · idle ${durationText(row.idleS)}` : "";
+			const pending = row.patchPending ? " · patch pending" : "";
+			reportLine.Text = `Report ${agoText(row.lastReportAgo)} · ${sessionText(row)}${pending}${idle}`;
+			const on = following === row.userId;
+			if (follow.get() !== on) follow.set(on);
 		};
 
-		let detailSig = "";
-		const refreshDetail = (live?: PlayerRow): void => {
-			const row = live ?? p.players.find(r => r.userId === selected);
-			const sig = signature({ row: stable(row) ?? false, following: following ?? 0, selected: selected ?? 0 });
-			if (sig !== detailSig) {
-				detailSig = sig;
-				buildDetail(row);
+		const refresh = (): void => {
+			const shown = filterPlayers(p.players, filter.get());
+			grid.setItems(shown);
+			const total = p.players.size();
+			countLabel.Text =
+				shown.size() === total
+					? `${total} player${total === 1 ? "" : "s"}`
+					: `${shown.size()} of ${total} players`;
+			if (!heard) grid.setEmpty("Loading the player list…");
+			else if (total === 0) grid.setEmpty("Nobody is in this server.");
+			else grid.setEmpty(`No player matches "${filter.get()}". Clear the filter to see all ${total}.`);
+			// the first time, the admin's own row is selected, like the old list did
+			if (selected === undefined && grid.selected() === undefined && shown.size() > 0) {
+				const mine = shown.find(r => r.userId === p.selfUserId) ?? shown[0];
+				grid.select(tostring(mine.userId));
 			}
-			if (row !== undefined) {
-				if (liveIds !== undefined) liveIds.Text = idsText(row);
-				if (liveReport !== undefined) liveReport.Text = agoText(row.lastReportAgo);
-			}
+			refreshDetail();
 		};
-
-		let listSig = "";
-		const refreshList = (): void => {
-			countLabel.Text = `${p.players.size()} player${p.players.size() === 1 ? "" : "s"} in this server`;
-			if (selected === undefined && p.players.size() > 0) selected = p.players[0].userId;
-			const sig = signature({ rows: p.players.map(r => stable(r) ?? false), selected: selected ?? 0 });
-			if (sig !== listSig) {
-				listSig = sig;
-				clearRows(list.frame);
-				rowInfo.clear();
-				let order = 0;
-				for (const row of p.players) {
-					const b = ListRowButton(list, `Row${row.userId}`, order++, ROW_H, () => {
-						selected = row.userId;
-						if (following !== undefined && following !== row.userId) stopFollowing();
-						refreshList();
-						refreshDetail();
-					});
-					const mark = row.userId === selected ? "▸ " : "";
-					const name = `${mark}${rowLabel(row)}${row.isAdmin ? "  · ADMIN" : ""}`;
-					makeLabel(b, "Name", name, space(3), 4, CONTENT_W - space(6), 22, TEXT.sm, THEME.cardForeground, {
-						font: "label",
-						align: "left",
-						zIndex: b.ZIndex + 1,
-					});
-					const info = makeLabel(
-						b,
-						"Info",
-						"",
-						space(3),
-						26,
-						CONTENT_W - space(6),
-						18,
-						TEXT.xs,
-						THEME.mutedForeground,
-						{
-							align: "left",
-							zIndex: b.ZIndex + 1,
-						},
-					);
-					rowInfo.set(row.userId, info);
-				}
-			}
-			for (const row of p.players) {
-				const info = rowInfo.get(row.userId);
-				if (info !== undefined) info.Text = infoText(row);
-			}
+		filter.box.GetPropertyChangedSignal("Text").Connect(() => {
+			playersMemory.filter = filter.get();
+			refresh();
+		});
+		online = {
+			refresh,
+			onWatch: row => refreshDetail(row),
 		};
-		online = { refreshList, refreshDetail };
-		refreshList();
-		refreshDetail();
+		refresh();
 	};
 
 	const buildBans = (): void => {
 		online = undefined;
+		stopFollowing();
 		clearChildren(body);
 		makeLabel(
 			body,
@@ -687,13 +700,13 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 
 	return {
 		onPlayers(): void {
+			heard = true;
 			// the followed player left: stop the server's live feed
 			if (following !== undefined && p.players.find(r => r.userId === following) === undefined) stopFollowing();
-			online?.refreshList();
-			if (following === undefined) online?.refreshDetail();
+			online?.refresh();
 		},
 		onWatch(row: PlayerRow): void {
-			if (row.userId === following && row.userId === selected) online?.refreshDetail(row);
+			if (row.userId === following && row.userId === selected) online?.onWatch(row);
 		},
 		destroy(): void {
 			stopFollowing();

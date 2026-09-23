@@ -1,6 +1,7 @@
 import { TEXT, THEME, space } from "../ui/theme";
 import { Button, Slider, SliderHandle, Tabs, clearChildren, makeLabel } from "../ui/widgets";
 import { Switch, SwitchHandle } from "./controls";
+import { confirmAction } from "../ui/numberField";
 import { logLocal } from "./net";
 import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTypes";
 import { ActionResult, BUILDING_KINDS, OverlayKind } from "./world";
@@ -118,8 +119,17 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 			h: 36,
 			size: "sm",
 			variant: "destructive",
+			// destructive (DESIGN_RULES UI-12): asks first
 			onClick: () => {
-				if (needRun(p)) report(p, p.world.killAll(), "killAll");
+				if (!needRun(p)) return;
+				confirmAction(p.layer, {
+					title: "Kill all zombies?",
+					body: "Every zombie and boss is removed outright: no XP, no loot, no exploder blasts. The run becomes assisted.",
+					action: "Kill all",
+					onConfirm: () => {
+						if (needRun(p)) report(p, p.world.killAll(), "killAll");
+					},
+				});
 			},
 		});
 		Button(body, "Clear", "Clear bodies & blood", {
@@ -130,7 +140,15 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 			size: "sm",
 			variant: "destructive",
 			onClick: () => {
-				if (needRun(p)) report(p, p.world.clearCorpses(), "clear");
+				if (!needRun(p)) return;
+				confirmAction(p.layer, {
+					title: "Clear bodies and blood?",
+					body: "Every corpse and blood stain in your world is removed.",
+					action: "Clear",
+					onConfirm: () => {
+						if (needRun(p)) report(p, p.world.clearCorpses(), "clear");
+					},
+				});
 			},
 		});
 		makeLabel(

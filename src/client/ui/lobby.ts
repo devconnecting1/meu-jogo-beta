@@ -11,7 +11,7 @@ import { attachFlyover, detachFlyover, TownFlyover } from "../view/townFlyover";
 import { Wordmark } from "./logo";
 import { paintPlate } from "./plate";
 import { PixelIcon, PixelIconKind } from "./pixelIcon";
-import { popup } from "./popup";
+import { showRecords } from "./records";
 import { RunState, SurvivorScreen } from "./survivor";
 import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
@@ -208,22 +208,6 @@ function showAchievements(ctx: GameContext): void {
 	}
 }
 
-/**
- * The personal bests. No "Bosses defeated" line: Núcleo 1 has no boss (CON-03), and a counter of something the
- * game does not have yet only ever says 0.
- */
-function showRecords(ctx: GameContext): void {
-	const s = ctx.save;
-	const tr = (k: string): string => langGet(k, s.settings.langType);
-	const lines = [
-		`${tr("Best day")}:  ${s.bestDay}`,
-		`${tr("Life day")}:  ${s.day}`,
-		`${tr("Level")}:  ${s.level}`,
-		`${tr("Rebirth")}:  ${s.deathCount}`,
-	];
-	popup(ctx, tr("Personal bests"), lines.join("\n"), [{ text: tr("Close"), variant: "secondary" }]);
-}
-
 // ---------------------------------------------------------------- the menu page (1120 x 630 design units)
 
 const MARGIN = 40;
@@ -369,7 +353,9 @@ class MenuPage {
 			{
 				key: "Records",
 				icon: "records",
-				onClick: (): void => showRecords(ctx),
+				onClick: (): void => {
+					showRecords(ctx);
+				},
 				sub: () => `${tr("Best day")} ${ctx.save.bestDay}`,
 			},
 			{ key: "How to play", icon: "help", onClick: (): void => handlers.onTutorial(false) },
