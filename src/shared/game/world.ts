@@ -459,6 +459,57 @@ export function isBlocking(s: Solid): boolean {
 	return true;
 }
 
+/**
+ * Every solid whose rect may meet the segment (x0, y0)–(x1, y1), each once: the coarse grid over the segment's box
+ * (as `querySolids`), and of the building parts' fine grid only the cells the segment (± 1 u) crosses -- a long
+ * line of sight across a built-up block no longer walks every room it passes by. Rays: physics.ts `raycast`.
+ */
+export function querySegment(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	const stamp = w.grid.stamp;
+	const lx = math.min(x0, x1) - 1;
+	const hx = math.max(x0, x1) + 1;
+	const ly = math.min(y0, y1) - 1;
+	const hy = math.max(y0, y1) + 1;
+	queryGrid(w.grid, stamp, lx, ly, hx, hy, out);
+	const g = w.fine;
+	const c0 = cellCol(g, lx);
+	const c1 = cellCol(g, hx);
+	const dx = x1 - x0;
+	for (let c = c0; c <= c1; c++) {
+		// the stretch of the segment inside this column (± 1 u), and so the rows it crosses
+		let ya = ly;
+		let yb = hy;
+		if (math.abs(dx) > 1e-9) {
+			const xa = math.max(lx, c * g.cell);
+			const xb = math.min(hx, (c + 1) * g.cell);
+			const ta = math.clamp((xa - x0) / dx, 0, 1);
+			const tb = math.clamp((xb - x0) / dx, 0, 1);
+			const ya0 = y0 + (y1 - y0) * ta;
+			const yb0 = y0 + (y1 - y0) * tb;
+			ya = math.min(ya0, yb0) - 1;
+			yb = math.max(ya0, yb0) + 1;
+		}
+		const r0 = cellRow(g, ya);
+		const r1 = cellRow(g, yb);
+		for (let r = r0; r <= r1; r++) {
+			for (const s of g.cells[r * g.cols + c]) {
+				if (s.gridStamp === stamp) continue;
+				s.gridStamp = stamp;
+				if (s.x < hx && s.x + s.w > lx && s.y < hy && s.y + s.h > ly) out.push(s);
+			}
+		}
+	}
+	return out;
+}
+
 /** First blocking solid containing the point (± pad). Bullets, line of sight, spawn checks. */
 export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid | undefined {
 	return pointInGrid(w.grid, x, y, pad) ?? pointInGrid(w.fine, x, y, pad);

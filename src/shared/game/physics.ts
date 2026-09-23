@@ -1,4 +1,4 @@
-import { isBlocking, querySolids, Solid, WorldData } from "./world";
+import { isBlocking, querySegment, querySolids, Solid, WorldData } from "./world";
 
 /** collision radius of the player body (world units) */
 export const PLAYER_RADIUS = 18;
@@ -256,14 +256,7 @@ export function raycast(
 	const x1 = x0 + dx * maxDist;
 	const y1 = y0 + dy * maxDist;
 	rayScratch.clear();
-	querySolids(
-		world,
-		math.min(x0, x1) - 1,
-		math.min(y0, y1) - 1,
-		math.max(x0, x1) + 1,
-		math.max(y0, y1) + 1,
-		rayScratch,
-	);
+	querySegment(world, x0, y0, x1, y1, rayScratch);
 	let best = maxDist;
 	let bestSolid: Solid | undefined;
 	for (const s of rayScratch) {
