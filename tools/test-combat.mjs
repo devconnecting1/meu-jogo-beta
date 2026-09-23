@@ -573,8 +573,11 @@ function targetY(tickValue) {
 }
 
 /**
- * One measurement: a client at `rttMs` firing at what it SEES (the world INTERP_DEFAULT_S behind the server,
- * which is what §5.1 draws), with its command arriving half an RTT later.
+ * One measurement: a client at `rttMs` firing at what it SEES, with its command arriving half an RTT later. What
+ * it sees is its newest snapshot -- which left the server half an RTT ago -- held INTERP_DEFAULT_S further back
+ * (§5.1: the delay is the measured lateness plus the buffer, client/net/snapshotBuffer.ts). An earlier version
+ * of this test drew the world INTERP_DEFAULT_S behind the server's clock with no downstream trip in it, which
+ * is the extrapolating client tools/test-zombie-motion.mjs measured and replaced.
  *
  *   mode "fair"      — the client declares the view it really drew and the server measured its ping: §2.3
  *   mode "none"      — no compensation at all (the client declares the present): what F1 would have done
@@ -613,7 +616,7 @@ function measure(rttMs, mode) {
 		}
 		// the client pulls the trigger at its own rate, aiming at the body it is drawing right now
 		if (tick % 8 === 0) {
-			const view = tick - interpTicks;
+			const view = tick - owdTicks - interpTicks;
 			const cmd = aimCommand(sp, seq++, TARGET_X, targetY(view), 1);
 			const declared = mode === "none" ? tick + owdTicks : mode === "lagswitch" ? view - CFG.SIM_HZ : view;
 			// a packet can never be consumed in the tick that produced it, however fast the link is
@@ -633,6 +636,13 @@ function measure(rttMs, mode) {
 		check(
 			row.r.rate >= 0.95,
 			`≥ 95 % of the shots that hit on screen register at ${row.rtt} ms RTT (${(row.r.rate * 100).toFixed(1)} %)`,
+		);
+		// the ceiling exists for the dishonest view: the view an honest client really drew is never cut short.
+		// With the half-ping ceiling a 150 ms client lost 40 ms of compensation on every shot (10 u on this
+		// target, 30 u on a charging charger) -- inside a zombie's body here, which is why the rate alone missed it
+		check(
+			row.r.stats.rewindClamped === 0,
+			`an honest ${row.rtt} ms client's view is never clamped (${row.r.stats.rewindClamped} of ${row.r.fired})`,
 		);
 	}
 
@@ -669,7 +679,7 @@ function measure(rttMs, mode) {
 {
 	// the ceiling itself (§2.3 "Teto por jogador"), independent of any geometry
 	checkEq(rewindCapS(0, 0, 60, 0.3), 2 / 60, "with no ping and no interpolation the rewind is 2 ticks");
-	check(Math.abs(rewindCapS(0.15, 0.1, 60) - (0.075 + 0.1 + 2 / 60)) < 1e-9, "ping/2 + interpolation + 2 ticks");
+	check(Math.abs(rewindCapS(0.15, 0.1, 60) - (0.15 + 0.1 + 2 / 60)) < 1e-9, "ping + interpolation + 2 ticks");
 	checkEq(rewindCapS(2, 0.25, 60), CFG.REWIND_MAX_S, "and it never exceeds REWIND_MAX_S, whatever the ping");
 	check(biteRewindCapS(2, 0.25, 60) === CFG.FAIR_BITE_REWIND_MAX_S, "a bite gets the shorter FAIR_BITE ceiling");
 	checkEq(judgedTick(100, 400, 0.3, 60), 100, "a view from the FUTURE collapses to the present");

@@ -28,8 +28,15 @@ export const SIM_HZ = 60 as number;
 export const SIM_HZ_FALLBACK = 30;
 /** seconds per simulation tick */
 export const TICK_DT = 1 / SIM_HZ;
-/** at most this many ticks per server Heartbeat when catching up; beyond that time is dropped (§3.1) */
+/** at most this many ticks per server Heartbeat when catching up (§3.1) */
 export const MAX_CATCHUP_TICKS = 2;
+/**
+ * Heartbeat debt the server carries into the next heartbeats instead of dropping it (§3.1). Every client's clock
+ * is `tick0Time + tick / SIM_HZ` (§4.6), so a dropped tick shifts the whole server behind every client's render
+ * time for good; a hitch shorter than this is paid back at MAX_CATCHUP_TICKS per heartbeat instead. Only a debt
+ * past it is dropped, where catching up would be the storm the cap exists to avoid.
+ */
+export const MAX_BACKLOG_S = 0.25;
 /** simulation budget per tick, p95, 6 players + 150 zombies (§3.2) */
 export const TICK_BUDGET_P95_MS = 6;
 /** expected average simulation cost per tick (§3.2) */

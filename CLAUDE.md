@@ -24,7 +24,7 @@ npm run locale           # exporta lang.ts para o CSV da tabela de localização
 
 Testes em Node rodam o TypeScript real com shims de Luau (`npm run test:<nome>`); rode os da área que você tocou:
 
-- rede e servidor: `net`, `server-sim`, `replication`, `predict`, `input` (fila de input), `smoothness` (aliado desenhado)
+- rede e servidor: `net`, `server-sim`, `replication`, `predict`, `input` (fila de input), `smoothness` (aliado desenhado), `zombie-motion` (a horda desenhada: servidor → fio → cliente → câmera → pixel, em link limpo, WAN e quadros do Studio)
 - simulação e mundo: `sim`, `ai`, `combat`, `clock`, `life` (dia do mundo × dia de vida), `world` (itens/portas/construção no servidor), `save`
 - UI e conteúdo: `contrast` (contraste, texto sem contorno e nenhum texto prometendo pausa, em todo `src/`), `backpack` (o Bag não recria Instances), `menus` (Bag aberto: o mundo segue), `cosmetics` (traje e pet desenhados), `flinch` (árvore/carro atingido para de tremer), `footsteps`, `chat`
 - vida e noite: `body` (o corpo é do servidor: morte, Rebirth, amanhecer, reconexão), `waves` (a horda da noite de ponta a ponta)

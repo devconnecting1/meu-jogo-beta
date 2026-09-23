@@ -11,8 +11,11 @@
  *   4. replication, through `onTick`.
  *
  *   - fixed step of TICK_DT (1/SIM_HZ = 1/60 s), accumulated on the caller's Heartbeat delta;
- *   - at most MAX_CATCHUP_TICKS (2) ticks per call: beyond that the surplus time is DROPPED and counted
- *     (`droppedTicks`), so a slow heartbeat never spirals into a catch-up storm;
+ *   - at most MAX_CATCHUP_TICKS (2) ticks per call. What a late heartbeat could not run is carried as debt and
+ *     paid by the next heartbeats, up to MAX_BACKLOG_S; only debt beyond that is DROPPED and counted
+ *     (`droppedTicks`), so a slow heartbeat never spirals into a catch-up storm. Carrying it matters: the
+ *     clients' clock is `tick0Time + tick / SIM_HZ` (§4.6), and every dropped tick moves the whole world behind
+ *     their render time for good (tools/test-zombie-motion.mjs measured what that looks like);
  *   - exactly one input command per player per tick, through the same `stepPlayer` the client predicts with
  *     (shared/sim/playerMove.ts), so there is no second implementation to drift.
  *
@@ -23,7 +26,7 @@
  * millisecond reading per tick for the §12.2 metrics.
  */
 import { isFiniteNumber } from "shared/net/codec";
-import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
+import { MAX_BACKLOG_S, MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
 import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { PlayerState } from "shared/game/player";
@@ -406,8 +409,8 @@ export class ServerSimulation {
 
 	/**
 	 * Accumulates `dt` (the Heartbeat delta) and runs whole ticks. Returns how many ran: normally 1, at most
-	 * MAX_CATCHUP_TICKS. Surplus time beyond that is dropped and counted — the world slows down instead of
-	 * entering a catch-up spiral (§3.1).
+	 * MAX_CATCHUP_TICKS. What is left over is debt for the next heartbeats, up to MAX_BACKLOG_S; beyond that it
+	 * is dropped and counted — the world slows down instead of entering a catch-up spiral (§3.1).
 	 */
 	advance(dt: number): number {
 		if (!isFiniteNumber(dt) || dt <= 0) return 0;
@@ -418,8 +421,9 @@ export class ServerSimulation {
 			this.step();
 			ran += 1;
 		}
-		if (this.acc >= this.tickDt) {
-			const dropped = math.floor(this.acc / this.tickDt);
+		const backlog = math.floor(MAX_BACKLOG_S / this.tickDt) * this.tickDt;
+		if (this.acc >= this.tickDt + backlog) {
+			const dropped = math.floor((this.acc - backlog) / this.tickDt);
 			this.stats.droppedTicks += dropped;
 			this.stats.lateFrames += 1;
 			this.acc -= dropped * this.tickDt;

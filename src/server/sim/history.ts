@@ -169,15 +169,21 @@ export class PositionHistory {
 // ---------------------------------------------------------------- how far a shooter may rewind (§2.3)
 
 /**
- * `min(REWIND_MAX_S, ping/2 + interpolation delay + 2 ticks)` (§2.3 "Teto por jogador"). The ping is the one
- * the SERVER measured (`Player:GetNetworkPing()`), so declaring a stale view never widens the window: a lag
- * switch loses the compensation instead of gaining it (§9.1).
+ * `min(REWIND_MAX_S, ping + interpolation delay + 2 ticks)` (§2.3 "Teto por jogador"). The ping is the one the
+ * SERVER measured (`Player:GetNetworkPing()`), so declaring a stale view never widens the window: a lag switch
+ * loses the compensation instead of gaining it (§9.1).
+ *
+ * The WHOLE round trip, not half of it: what a client draws is its newest snapshot (which left the server a
+ * downstream trip ago) held `interpolation delay` further back (§5.1), and its shot reaches the server an upstream
+ * trip later. The half-ping version was written for a client that drew `interp` behind the server's clock and
+ * made up the downstream trip by extrapolating -- which is what put zombies where the server never had them
+ * (client/net/snapshotBuffer.ts, tools/test-zombie-motion.mjs). REWIND_MAX_S still caps it.
  */
 export function rewindCapS(pingS: number, interpS = INTERP_DEFAULT_S, simHz = SIM_HZ, maxS = REWIND_MAX_S): number {
 	const ping = isFiniteNumber(pingS) && pingS > 0 ? pingS : 0;
 	const interp = isFiniteNumber(interpS) && interpS > 0 ? interpS : 0;
 	const tick = simHz > 0 ? 1 / simHz : TICK_DT;
-	return math.clamp(ping / 2 + interp + 2 * tick, 0, maxS);
+	return math.clamp(ping + interp + 2 * tick, 0, maxS);
 }
 
 /**

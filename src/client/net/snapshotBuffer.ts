@@ -6,12 +6,27 @@
  * server tick, duplicates and stale packets are dropped, and the view reads a position INTERPOLATED for a
  * render time that sits `delay` behind the client's server-tick estimate:
  *
- *   renderTick = clockNow − delay × SIM_HZ            delay = clamp(2 × interval + 2 × jitter, 80, 250) ms
+ *   renderTick = clockNow − delay × SIM_HZ
+ *   delay      = lateness + clamp(interval + 2 × lateness deviation + 1 tick, 80, 250) ms
  *
- * The delay starts at 100 ms (two snapshot intervals at 20 Hz), adapts to the measured arrival interval and
- * jitter, and is only ever allowed to move by ±5 % of real time so it never shows up as a jolt (§5.1). When
- * the history runs dry the state is extrapolated with the velocity of the last two samples, for at most
- * EXTRAPOLATE_MAX_S and never through a wall, and then held still until a packet arrives.
+ * `lateness` is MEASURED, not assumed: how far behind the client's clock each fresh snapshot lands (clockNow at
+ * arrival − the tick it carries). It holds everything that keeps a snapshot from being there the instant its tick
+ * happens: the downstream latency, the wait for the next client frame, the server's heartbeat bunching, and any
+ * ticks the server DROPPED to get over a hitch (server/sim/simulation.ts `advance`) -- which shift its tick
+ * numbering behind `tick0Time` for good. The first version of this buffer used `clamp(2 × interval + 2 × jitter)`
+ * with no lateness in it, as if a snapshot arrived the moment it was made: the latency was paid out of the buffer,
+ * and every dropped tick moved the render time closer to (and then past) the newest data. Measured in
+ * tools/test-zombie-motion.mjs on the frame times of the owner's Studio playtest: 69 % of the zombie frames were
+ * drawn extrapolated or held, 2.4-6.8 frozen frames a second per zombie -- the "laggy, with micro-stutters".
+ *
+ * The delay starts at the first measured value, and after that is only ever allowed to move by ±5 % of real time
+ * so it never shows up as a jolt (§5.1); a gap wider than DELAY_SNAP_S is a resync and jumps. When the history
+ * runs dry the state is extrapolated with the velocity of the last two samples, for at most EXTRAPOLATE_MAX_S and
+ * never through a wall, and then held still until a packet arrives.
+ *
+ * A body sampled at the mid ring's 10 Hz (§4.3) needs one more near interval of buffer than one sampled at 20 Hz,
+ * or half of its frames run past its newest sample. It is drawn that much further back, per track (`extra`), eased
+ * at the same ±5 % when it changes ring (`easeExtra`): the near ring keeps the short delay, the wire stays as it is.
  *
  * The render time is monotonic by construction: it is clamped against the previous frame's, so a tightening
  * buffer or a jittery clock can stall the movement for a frame but can never run it backwards.
@@ -29,7 +44,9 @@ import {
 	INTERP_MAX_S,
 	INTERP_MIN_S,
 	SIM_HZ,
+	SNAP_MID_HZ,
 	SNAP_NEAR_HZ,
+	ticksPer,
 } from "shared/net/mpConfig";
 import { BossSnap, PlayerSnap, SnapshotPart, ZombieSnap } from "shared/net/protocol";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
@@ -42,8 +59,12 @@ const SAMPLES_PER_SLOT = 32;
 const MAX_REORDER_TICKS = 60;
 /** the adaptive delay never moves faster than this fraction of real time (§5.1) */
 const DELAY_MAX_RATE = 0.05;
-/** weight of one arrival sample in the interval / jitter averages */
+/** weight of one arrival sample in the interval / jitter averages, and in the lateness mean / deviation */
 const ARRIVAL_ALPHA = 0.1;
+/** ticks of margin on top of the measured lateness edge: a sample that lands exactly on time is already late */
+const SAFETY_TICKS = 1;
+/** a target this far from the delay in use is a resync (a long stall, a rejoin, a new run), not jitter: jump */
+const DELAY_SNAP_S = 0.3;
 /** a slot with no sample for this long is dropped even without a PlayerLeft (§4.4 safety net) */
 const SLOT_TIMEOUT_S = 2;
 /** walk-cycle phase per world unit travelled — the same constant the local survivor uses in the game loop */
@@ -119,6 +140,8 @@ export interface RemoteZombie {
 	alpha: number;
 	/** the render time is past the newest sample: the state is extrapolated or held */
 	stale: boolean;
+	/** the (fractional) server tick this body was drawn at: the buffer's render time, minus its ring's extra delay */
+	tick: number;
 }
 
 /** one boss, interpolated. The centipede's body is rebuilt by the view from this head (§4.2) */
@@ -183,6 +206,15 @@ function insertSample<T extends { tick: number }>(list: Array<T>, s: T): boolean
 	return true;
 }
 
+/**
+ * Moves a track's extra delay (ticks) towards `target` at no more than `maxStep`; a track that has none yet takes
+ * its target at once (a body that first appears in the mid ring is drawn at the mid ring's delay from frame one).
+ */
+function easeExtra(current: number, target: number, maxStep: number): number {
+	if (current < 0) return target;
+	return current + math.clamp(target - current, -maxStep, maxStep);
+}
+
 class SlotTrack {
 	readonly samples = new Array<Sample>();
 	lastSeen = 0;
@@ -190,10 +222,25 @@ class SlotTrack {
 	hasDrawn = false;
 	drawnX = 0;
 	drawnY = 0;
+	/** this track's render delay on top of the buffer's, in ticks (the mid ring's spacing); -1 = unset */
+	extra = -1;
+	/**
+	 * Tick gaps before the newest two samples. The wire does not say which ring an ally is in (§4.2), but the
+	 * spacing does: two gaps of the mid interval in a row are the mid ring; one wide gap is just a lost packet.
+	 */
+	gapA = 0;
+	gapB = 0;
 
 	/** inserts in tick order; ignores duplicates and packets too old to matter */
 	insert(s: Sample): boolean {
-		return insertSample(this.samples, s);
+		const n = this.samples.size();
+		const newest = n > 0 ? this.samples[n - 1].tick : undefined;
+		const ok = insertSample(this.samples, s);
+		if (ok && newest !== undefined && s.tick > newest) {
+			this.gapB = this.gapA;
+			this.gapA = s.tick - newest;
+		}
+		return ok;
 	}
 
 	newestTick(): number {
@@ -227,6 +274,8 @@ class ActorTrack {
 	hasDrawn = false;
 	drawnX = 0;
 	drawnY = 0;
+	/** this track's render delay on top of the buffer's, in ticks: the mid ring's wider spacing; -1 = unset */
+	extra = -1;
 
 	insert(s: ActorSample): boolean {
 		return insertSample(this.samples, s);
@@ -264,13 +313,16 @@ function bossSample(tick: number, b: BossSnap): ActorSample {
 }
 
 export interface SnapshotStats {
-	/** interpolation delay currently in use, seconds */
+	/** interpolation delay currently in use, seconds (lateness + buffer) */
 	delay: number;
 	/** where the delay is heading (the adaptive target) */
 	targetDelay: number;
 	/** measured arrival interval and its mean deviation, seconds */
 	interval: number;
 	jitter: number;
+	/** how far behind the client's clock a fresh snapshot lands, and its mean deviation, seconds */
+	lateness: number;
+	latenessDev: number;
 	/** newest server tick any part has carried */
 	newestTick: number;
 	/** parts accepted, and those dropped as stale, duplicate or out of the reorder window */
@@ -336,6 +388,14 @@ export class SnapshotBuffer {
 	private jitterS = 0;
 	private arrivalSeen = false;
 	private lastArrival = 0;
+	/** lateness of the fresh snapshots (see the header), in ticks: running mean and mean deviation */
+	private lateMean = 0;
+	private lateDev = 0;
+	/** the delay has been set from a measured lateness at least once since the last reset */
+	private delayLocked = false;
+	/** sample spacing of the near and mid rings at this server's rate, in ticks (3 and 6 at 60 Hz) */
+	private nearTicks = ticksPer(SNAP_NEAR_HZ, SIM_HZ);
+	private midTicks = ticksPer(SNAP_MID_HZ, SIM_HZ);
 	private newest = -math.huge;
 	private lastRender = -math.huge;
 	private accepted = 0;
@@ -344,7 +404,10 @@ export class SnapshotBuffer {
 
 	/** the server's SIM_HZ, from InitBegin (§3.1: it may be the 30 Hz fallback) */
 	setRate(simHz: number): void {
-		if (simHz >= 1) this.simHz = simHz;
+		if (simHz < 1) return;
+		this.simHz = simHz;
+		this.nearTicks = ticksPer(SNAP_NEAR_HZ, simHz);
+		this.midTicks = ticksPer(SNAP_MID_HZ, simHz);
 	}
 
 	reset(): void {
@@ -359,6 +422,9 @@ export class SnapshotBuffer {
 		this.intervalS = 1 / SNAP_NEAR_HZ;
 		this.jitterS = 0;
 		this.arrivalSeen = false;
+		this.lateMean = 0;
+		this.lateDev = 0;
+		this.delayLocked = false;
 		this.newest = -math.huge;
 		this.lastRender = -math.huge;
 	}
@@ -392,7 +458,7 @@ export class SnapshotBuffer {
 			return false;
 		}
 		if (tick > this.newest) {
-			this.noteArrival(arrival);
+			this.noteArrival(arrival, refTick - tick);
 			this.newest = tick;
 		}
 		this.accepted += 1;
@@ -428,17 +494,46 @@ export class SnapshotBuffer {
 		return true;
 	}
 
-	/** arrival interval and jitter → the §5.1 target delay */
-	private noteArrival(arrival: number): void {
+	/**
+	 * One fresh snapshot: its arrival interval and jitter (the [PZ-NET] numbers) and its LATENESS (ticks between
+	 * the tick it carries and the client's clock when it landed) → the §5.1 target delay.
+	 *
+	 *   target = lateness + clamp(near interval + 2 × lateness deviation + SAFETY_TICKS, INTERP_MIN_S, INTERP_MAX_S)
+	 *
+	 * The render time must stay behind the newest sample it can have: that sample left the server up to one near
+	 * interval before `clock − lateness`, and lands a deviation or two later than the mean. Only the BUFFER part is
+	 * clamped: the lateness is whatever the link and the server make it, and clamping it would put the render time
+	 * past the data again (a Studio session that dropped a second of ticks has a second of lateness, for good).
+	 */
+	private noteArrival(arrival: number, late: number): void {
 		if (this.arrivalSeen) {
 			const gap = math.max(0, arrival - this.lastArrival);
 			const dev = math.abs(gap - this.intervalS);
 			this.intervalS += (gap - this.intervalS) * ARRIVAL_ALPHA;
 			this.jitterS += (dev - this.jitterS) * ARRIVAL_ALPHA;
+			const lateDev = math.abs(late - this.lateMean);
+			this.lateMean += (late - this.lateMean) * ARRIVAL_ALPHA;
+			this.lateDev += (lateDev - this.lateDev) * ARRIVAL_ALPHA;
+		} else {
+			this.lateMean = late;
+			this.lateDev = 0;
 		}
 		this.arrivalSeen = true;
 		this.lastArrival = arrival;
-		this.targetS = math.clamp(2 * this.intervalS + 2 * this.jitterS, INTERP_MIN_S, INTERP_MAX_S);
+		const hz = this.simHz;
+		const buffer = math.clamp(
+			1 / SNAP_NEAR_HZ + (2 * this.lateDev + SAFETY_TICKS) / hz,
+			INTERP_MIN_S,
+			INTERP_MAX_S,
+		);
+		this.targetS = math.max(0, this.lateMean / hz) + buffer;
+		if (!this.delayLocked) {
+			// the first measurement IS the delay: easing to it from a guess at ±5 % would take seconds. Nothing has
+			// been drawn from a sample yet, so the render time is re-based too instead of being held (a "stall")
+			this.delayLocked = true;
+			this.delayS = this.targetS;
+			this.lastRender = -math.huge;
+		}
 	}
 
 	/** current interpolation delay in seconds */
@@ -467,9 +562,15 @@ export class SnapshotBuffer {
 		const step = math.max(0, dt);
 		const maxMove = DELAY_MAX_RATE * step;
 		const diff = this.targetS - this.delayS;
-		this.delayS += math.clamp(diff, -maxMove, maxMove);
+		// a gap this wide is not jitter: a resync (a stall, a long hitch) is followed at once, and renderTick lets a
+		// jump of more than RENDER_RESET_S through as well; anything smaller is eased, never felt
+		if (math.abs(diff) > DELAY_SNAP_S) this.delayS = this.targetS;
+		else this.delayS += math.clamp(diff, -maxMove, maxMove);
 		const render = this.renderTick(clockTick);
 		this.lastRender = render;
+		// a track's own extra delay moves at the same ±5 % of real time as the buffer's
+		const extraStep = maxMove * this.simHz;
+		const midExtra = math.max(0, this.midTicks - this.nearTicks);
 		this.out.clear();
 		const gone = new Array<number>();
 		for (const [slot, track] of this.tracks) {
@@ -477,10 +578,13 @@ export class SnapshotBuffer {
 				gone.push(slot);
 				continue;
 			}
-			this.out.push(this.stateOf(slot, track, render, step, world));
+			// the ring an ally is in shows in its own spacing: two mid-ring gaps in a row are the mid ring
+			const spacing = track.gapA > 0 && track.gapB > 0 ? math.min(track.gapA, track.gapB) : this.nearTicks;
+			track.extra = easeExtra(track.extra, math.clamp(spacing - this.nearTicks, 0, midExtra), extraStep);
+			this.out.push(this.stateOf(slot, track, render - track.extra, step, world));
 		}
 		for (const slot of gone) this.tracks.delete(slot);
-		this.advanceActors(render, step, now, world);
+		this.advanceActors(render, step, now, world, extraStep, midExtra);
 	}
 
 	/**
@@ -493,7 +597,14 @@ export class SnapshotBuffer {
 	 *        DESPAWN_FADE_S. A body that DIED never comes through here: `ZombieDied` is reliable and takes
 	 *        it away at once, at the place it fell.
 	 */
-	private advanceActors(render: number, dt: number, now: number, world?: WorldData): void {
+	private advanceActors(
+		render: number,
+		dt: number,
+		now: number,
+		world: WorldData | undefined,
+		extraStep: number,
+		midExtra: number,
+	): void {
 		this.zOut.clear();
 		this.bOut.clear();
 		const retire = this.retire;
@@ -509,7 +620,10 @@ export class SnapshotBuffer {
 				retire.push(netId);
 				continue;
 			}
-			this.zOut.push(this.zombieStateOf(netId, track, render, dt, world));
+			// the record says which ring it travels in (§4.2 `mid`): a mid-ring body is drawn one near interval
+			// further back, so its 10 Hz samples are interpolated instead of run past
+			track.extra = easeExtra(track.extra, track.mid ? midExtra : 0, extraStep);
+			this.zOut.push(this.zombieStateOf(netId, track, render - track.extra, dt, world));
 		}
 		for (const netId of retire) this.zombies.delete(netId);
 		retire.clear();
@@ -615,6 +729,7 @@ export class SnapshotBuffer {
 				speed: 0,
 				alpha: 0,
 				stale: false,
+				tick: 0,
 			};
 			this.zPool.push(out);
 		}
@@ -630,6 +745,7 @@ export class SnapshotBuffer {
 		out.speed = speed;
 		out.alpha = track.alpha;
 		out.stale = stale;
+		out.tick = render;
 		return out;
 	}
 
@@ -782,6 +898,8 @@ export class SnapshotBuffer {
 			targetDelay: this.targetS,
 			interval: this.intervalS,
 			jitter: this.jitterS,
+			lateness: this.lateMean / this.simHz,
+			latenessDev: this.lateDev / this.simHz,
 			newestTick: this.newest,
 			accepted: this.accepted,
 			dropped: this.dropped,

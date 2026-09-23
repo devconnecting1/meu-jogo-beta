@@ -417,7 +417,19 @@ function newWorldServer() {
 	sim.onTick = tick => replicator.afterTick(tick);
 	sim.onFx = event => replicator.queueFx(event);
 	const clients = new Map();
-	return { sim, transport, replicator, clients, now: 0 };
+	/** where every zombie was at each recent tick (netId -> {x, y}), to judge a screen against its own render tick */
+	const hist = new Map();
+	return { sim, transport, replicator, clients, hist, now: 0 };
+}
+
+/** the server's position of `netId` at a fractional tick, from the recent history, or undefined */
+function serverAt(server, netId, tick) {
+	const k = Math.floor(tick);
+	const a = server.hist.get(k)?.get(netId);
+	const b = server.hist.get(k + 1)?.get(netId);
+	if (a === undefined || b === undefined) return a;
+	const f = tick - k;
+	return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
 }
 
 /**
@@ -510,6 +522,13 @@ function tickServer(server, opts = {}) {
 	const started = process.hrtime.bigint();
 	server.sim.step();
 	const ms = Number(process.hrtime.bigint() - started) / 1e6;
+	const horde = server.sim.horde;
+	if (horde !== undefined) {
+		const at = new Map();
+		for (const z of horde.zombies) at.set(horde.netIdOf(z), { x: z.x, y: z.y });
+		server.hist.set(server.sim.tick, at);
+		server.hist.delete(server.sim.tick - 180);
+	}
 	const t = server.transport;
 	for (const [slot, list] of t.snaps) {
 		const client = server.clients.get(slot);
@@ -615,7 +634,7 @@ function percentile(values, p) {
 
 // ================================================================ (a) three clients, one horde
 
-section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u after interpolation)");
+section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u of the server at the tick each draws)");
 {
 	const server = newWorldServer();
 	const cx = world.width / 2;
@@ -641,10 +660,8 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 	checkEq(c.size(), a.size(), "client 2 draws the same number of zombies");
 	let missing = 0;
 	let worst = 0;
-	let worstServer = 0;
-	const horde = server.sim.horde;
-	const serverById = new Map();
-	for (const z of horde.zombies) serverById.set(horde.netIdOf(z), z);
+	let across = 0;
+	let compared = 0;
 	for (const [netId, za] of a) {
 		const zb = b.get(netId);
 		const zc = c.get(netId);
@@ -652,17 +669,30 @@ section("(a) three clients see the SAME zombies (§11.3 F2: same netIds, ±4 u a
 			missing += 1;
 			continue;
 		}
-		worst = Math.max(worst, Math.hypot(za.x - zb.x, za.y - zb.y), Math.hypot(za.x - zc.x, za.y - zc.y));
-		const truth = serverById.get(netId);
-		if (truth !== undefined) worstServer = Math.max(worstServer, Math.hypot(za.x - truth.x, za.y - truth.y));
+		/*
+		 * Every screen draws the server's own path, each at the tick it is drawing. A client 100 ms further away
+		 * draws that path 100 ms later (§5.1: the delay is the measured lateness plus the buffer), so two screens
+		 * side by side differ by the zombie's walk in that time -- which is the truth, not an error. The version of
+		 * this check that compared the three screens with each other held because the far client EXTRAPOLATED over
+		 * its latency, drawing zombies where the server never had them (tools/test-zombie-motion.mjs).
+		 */
+		for (const z of [za, zb, zc]) {
+			const truth = serverAt(server, netId, z.tick);
+			if (truth === undefined) continue;
+			compared += 1;
+			worst = Math.max(worst, Math.hypot(z.x - truth.x, z.y - truth.y));
+		}
+		across = Math.max(across, Math.hypot(za.x - zb.x, za.y - zb.y), Math.hypot(za.x - zc.x, za.y - zc.y));
 	}
 	checkEq(missing, 0, "every netId one client draws, the other two draw too");
 	check(
-		worst <= 4,
-		`the same zombie is within 4 u on every screen, at 0/50/100 ms and 0/1/2 % loss ` +
-			`(worst ${worst.toFixed(2)} u)`,
+		compared >= 3 * a.size() - 3 && worst <= 4,
+		`every screen draws each zombie within 4 u of the server at the tick it draws, at 0/50/100 ms and ` +
+			`0/1/2 % loss (worst ${worst.toFixed(2)} u over ${compared} bodies)`,
 	);
-	info(`worst distance from the server's own position: ${worstServer.toFixed(2)} u (interpolation delay)`);
+	info(
+		`widest gap between two screens at the same instant: ${across.toFixed(2)} u (their latencies differ by 100 ms)`,
+	);
 	// the same body, the same type: a client must never be shown a different creature
 	let sameType = true;
 	for (const [netId, za] of a) {
