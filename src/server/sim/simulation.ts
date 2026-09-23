@@ -23,7 +23,7 @@
  * millisecond reading per tick for the §12.2 metrics.
  */
 import { isFiniteNumber } from "shared/net/codec";
-import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
+import { MAX_CATCHUP_TICKS, MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { PlayerState } from "shared/game/player";
@@ -48,15 +48,11 @@ import { ZombieWorld } from "./zombies";
 
 /**
  * MP_PHASE from which the SERVER owns the interactive world too: ground items, loot, doors, lights,
- * constructions, crafting and the backpack (docs/MULTIPLAYER.md §11.3 F3).
- *
- * It is deliberately one phase ABOVE the shipped `MP_PHASE`, because flipping it is a two-sided move: the
- * moment the server owns the items, the client must stop making its own and start drawing the `ItemAdd` /
- * `DoorSet` / `SolidAdd` deltas it currently ignores (client/net/netClient.ts, F3 front 3B/3C). Turning this
- * on before that lands would empty the town instead of sharing it. Everything below is written, wired and
- * tested at `world: true`; the switch is the last line of F3, not the first.
+ * constructions, crafting and the backpack (docs/MULTIPLAYER.md §11.3 F3). It lives in shared/net/mpConfig.ts
+ * because it is a two-sided switch — the client mirrors the `World` deltas and sends the backpack verbs from the
+ * same phase — and is re-exported here for the callers that always read it from the simulation.
  */
-export const WORLD_SERVER_PHASE = 3;
+export { WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 
 /** backpack intents one survivor may have waiting for their next tick (§8.2 caps the wire rate anyway) */
 const INTENT_QUEUE_MAX = 8;

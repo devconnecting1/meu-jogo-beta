@@ -16,6 +16,20 @@
 /** migration phase switch (§11.1): 0 = current game (one world per client); 1..5 = server subsystems on */
 export const MP_PHASE = 2 as number;
 
+/**
+ * MP_PHASE from which the SERVER owns the interactive world AND the backpack (§11.3 F3): ground items, loot,
+ * doors, lights, fires, trees/cars/bins, constructions, crafting, the inventory, the ammunition, what is equipped
+ * and the skills. Both sides read it: server/sim/simulation.ts builds the F3 systems, server/main.server.ts pins
+ * the backpack fields of a report to the server's copy (server/sim/backpack.ts `stripClientBackpack`), and the
+ * client stops making its own items and doors, mirrors the `World` deltas and sends the backpack verbs as
+ * intents (client/net/backpackSync.ts, client/net/worldMirror.ts).
+ *
+ * It is ONE switch on purpose: a report may only stop carrying the inventory when every road that fills it
+ * (pickups, loot, crafting, a refunded build) runs on the server. Raise it above MP_PHASE to roll back to the
+ * report-driven backpack.
+ */
+export const WORLD_SERVER_PHASE = 3 as number;
+
 // ---------------------------------------------------------------- frequencies (§0.1, §3.1, §3.4)
 
 /**
@@ -182,6 +196,14 @@ export const INPUT_BURST = 40;
 /** Intent (reliable C→S) */
 export const INTENT_RATE = 20;
 export const INTENT_BURST = 30;
+/**
+ * §2.4: a backpack verb waits for the command it was made during (`atSeq`) at most this many ticks after it
+ * arrived; past that it lands on the next tick anyway. 0.5 s at 60 Hz: far above any honest reordering between
+ * the reliable `Intent` and the unreliable `Input`, and short enough that a forged `atSeq` buys nothing.
+ */
+export const INTENT_HOLD_TICKS = 30;
+/** backpack verbs one survivor may have waiting in the simulation at once (the wire rate caps it anyway) */
+export const INTENT_QUEUE_MAX = 8;
 /** ShopAction (already enforced by server/main.server.ts) */
 export const SHOP_RATE = 2;
 export const SHOP_BURST = 6;

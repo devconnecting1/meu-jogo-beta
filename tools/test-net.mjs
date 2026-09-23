@@ -177,6 +177,9 @@ const defineMethod = (proto, name, fn) =>
 defineMethod(Array.prototype, "size", function () {
 	return this.length;
 });
+defineMethod(Array.prototype, "clear", function () {
+	this.length = 0;
+});
 defineMethod(String.prototype, "size", function () {
 	return Buffer.byteLength(this.valueOf(), "utf8");
 });
@@ -1662,6 +1665,178 @@ test("TimeSync: ping/pong and the tick timeline (§4.6)", () => {
 	eq("ping decoded as pong", P.decodeTimePong(P.encodeTimePing({ seq: 1, clientTime: 0 })), undefined);
 });
 
+// ---------------------------------------------------------------- 7b. Intent (C→S, §2.4, §8.1, QA NET-1..6)
+
+const BACKPACK_VERBS = [
+	P.IntentKind.Craft,
+	P.IntentKind.UseItem,
+	P.IntentKind.Equip,
+	P.IntentKind.Unequip,
+	P.IntentKind.LearnSkill,
+	P.IntentKind.SwitchWeapon,
+];
+const PRESENCE_VERBS = [P.IntentKind.EnterWorld, P.IntentKind.LeaveWorld];
+/** a valid backpack intent with random fields, for the fuzz below */
+function randIntent() {
+	const kind = pick(BACKPACK_VERBS);
+	const [lo, hi] = P.intentArgRange(kind);
+	return P.encodeIntentArgs(kind, rint(0, 65535), rint(lo, hi), rint(0, 65535));
+}
+
+test("Intent: presence (2 B) and backpack verbs (8 B), round trip and exact sizes", () => {
+	eq("the header is PacketKind.Intent in the high nibble", P.INTENT_HEADER, P.PacketKind.Intent * 16);
+	eq("SwitchWeapon is the new verb 8", P.IntentKind.SwitchWeapon, 8);
+	for (const kind of PRESENCE_VERBS) {
+		const b = P.encodeIntent(kind);
+		eq(`presence ${kind}: size`, buffer.len(b), P.INTENT_BYTES);
+		const d = P.decodeIntentMessage(b);
+		eq(`presence ${kind}: kind`, d?.kind, kind);
+		eq(`presence ${kind}: no atSeq/arg/nonce`, `${d?.atSeq},${d?.arg},${d?.nonce}`, "0,0,0");
+		eq(`presence ${kind}: decodeIntent`, P.decodeIntent(b), kind);
+		ok(!P.isBackpackIntent(kind), `presence ${kind} is not a backpack verb`);
+		eq(`presence ${kind}: has no long form`, P.encodeIntentArgs(kind, 1, 0, 1), undefined);
+	}
+	for (const kind of BACKPACK_VERBS) {
+		ok(P.isBackpackIntent(kind), `verb ${kind} is a backpack verb`);
+		eq(`verb ${kind}: has no short form`, P.encodeIntent(kind), undefined);
+		const [lo, hi] = P.intentArgRange(kind);
+		for (const arg of [lo, hi, rint(lo, hi)]) {
+			const atSeq = rint(0, 65535);
+			const nonce = rint(0, 65535);
+			const b = P.encodeIntentArgs(kind, atSeq, arg, nonce);
+			eq(`verb ${kind} arg ${arg}: size`, buffer.len(b), P.INTENT_ARGS_BYTES);
+			const d = P.decodeIntentMessage(b);
+			eq(`verb ${kind} arg ${arg}: round trip`, JSON.stringify(d), JSON.stringify({ kind, atSeq, arg, nonce }));
+			eq(`verb ${kind}: decodeIntent (presence only) ignores it`, P.decodeIntent(b), undefined);
+		}
+		// the encoder refuses what the decoder would refuse
+		eq(`verb ${kind}: arg below the range`, P.encodeIntentArgs(kind, 0, lo - 1, 0), undefined);
+		eq(`verb ${kind}: arg above the range`, P.encodeIntentArgs(kind, 0, hi + 1, 0), undefined);
+		eq(`verb ${kind}: fractional arg`, P.encodeIntentArgs(kind, 0, lo + 0.5, 0), undefined);
+		eq(`verb ${kind}: NaN arg`, P.encodeIntentArgs(kind, 0, NaN, 0), undefined);
+		// …and a hand-built packet with an argument outside the table is malformed
+		for (const bad of [hi + 1, 65535]) {
+			eq(
+				`verb ${kind}: decoded arg ${bad} out of range`,
+				P.decodeIntentMessage(bufOf([96, kind, 1, 0, bad & 255, bad >> 8, 0, 0])),
+				undefined,
+			);
+		}
+		if (lo > 0)
+			eq(
+				`verb ${kind}: decoded arg 0 below range`,
+				P.decodeIntentMessage(bufOf([96, kind, 1, 0, 0, 0, 0, 0])),
+				undefined,
+			);
+	}
+	// the ranges are the data tables' (§8.1: the argument is an index the server looks up)
+	eq("SwitchWeapon range", P.intentArgRange(P.IntentKind.SwitchWeapon).join(","), `0,${WEAPONS.length - 1}`);
+	eq("Unequip range: the equipment slots", P.intentArgRange(P.IntentKind.Unequip).join(","), "1,5");
+	eq("no range for a presence verb", P.intentArgRange(P.IntentKind.EnterWorld), undefined);
+	// seq and nonce are u16 and wrap like every sequence number on the wire
+	const w = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.SwitchWeapon, 65536 + 5, 0, -1));
+	eq("atSeq wraps", w.atSeq, 5);
+	eq("nonce wraps", w.nonce, 65535);
+	sizes.push([
+		"Intent: presence / backpack verb",
+		`${P.INTENT_BYTES} B / ${P.INTENT_ARGS_BYTES} B`,
+		"≤ 20/s (§4.1, §8.2)",
+	]);
+});
+
+test("Intent: hostile payloads are refused (§8.1)", () => {
+	for (const bad of [undefined, null, 0, 8, "x", {}, [], true, [96, 4, 0, 0, 0, 0, 0, 0]]) {
+		eq(`decodeIntentMessage(${JSON.stringify(bad)})`, P.decodeIntentMessage(bad), undefined);
+	}
+	// every length but 2 and 8 is malformed, whatever the bytes
+	for (let len = 0; len <= 16; len++) {
+		if (len === P.INTENT_BYTES || len === P.INTENT_ARGS_BYTES) continue;
+		const b = buffer.create(len);
+		if (len > 0) buffer.writeu8(b, 0, 96);
+		if (len > 1) buffer.writeu8(b, 1, P.IntentKind.UseItem);
+		eq(`length ${len}`, P.decodeIntentMessage(b), undefined);
+	}
+	// every header but Intent's, every kind outside 1..8, and each form with the other form's verbs
+	let accepted = 0;
+	for (let head = 0; head < 256; head++) {
+		for (let kind = 0; kind < 256; kind++) {
+			const short = P.decodeIntentMessage(bufOf([head, kind]));
+			const long = P.decodeIntentMessage(bufOf([head, kind, 7, 0, 1, 0, 9, 0]));
+			const shortOk = head === 96 && (kind === 1 || kind === 2);
+			const longOk = head === 96 && kind >= 3 && kind <= 8;
+			if ((short !== undefined) !== shortOk)
+				fail(`short form head ${head} kind ${kind}: ${JSON.stringify(short)}`);
+			// arg = 1 is inside every backpack verb's range
+			if ((long !== undefined) !== longOk) fail(`long form head ${head} kind ${kind}: ${JSON.stringify(long)}`);
+			if (short !== undefined) accepted += 1;
+			if (long !== undefined) accepted += 1;
+			checks += 2;
+		}
+	}
+	eq("exactly the 2 presence and 6 backpack verbs decode", accepted, 8);
+});
+
+// ---------------------------------------------------------------- 7c. the backpack mirror (S→C wallet `bag`, F3)
+
+test("Wallet bag: the server's backpack round trips into the client's copy, and junk is clamped", () => {
+	const server = SAVE.defaultSave();
+	server.invenWeapon[3] = 2;
+	server.invenEtc[23] = 41;
+	server.ammoNormal = 120;
+	server.oil = 7;
+	server.equipWeapon = 3;
+	server.equipCloth = 1;
+	server.skillLevels[7] = 2;
+	server.skillPoint = 3;
+	const bag = SAVE.bagOf(server, 10, 777, 65000);
+	const client = SAVE.defaultSave();
+	const read = SAVE.readBag(JSON.parse(JSON.stringify(bag)));
+	ok(read !== undefined, "a bag the server wrote reads back");
+	SAVE.applyBag(client, read);
+	for (const f of ["invenWeapon", "invenEquip", "invenUse", "invenEtc", "skillLevels"]) {
+		eq(`bag ${f}`, client[f].join(","), server[f].join(","));
+	}
+	for (const f of ["ammoNormal", "ammoShotgun", "ammoMachinegun", "ammoArrow", "oil", "electric"])
+		eq(`bag ${f}`, client[f], server[f]);
+	for (const f of ["equipWeapon", "equipCloth", "equipHand", "equipGun", "equipOutfit", "equipPet", "skillPoint"])
+		eq(`bag ${f}`, client[f], server[f]);
+	eq("bag place", read.place, 10);
+	eq("bag ack", read.ack, 777);
+	eq("bag seq", read.seq, 65000);
+	// the signature moves with every field that can change, and not with seq
+	const sig = SAVE.bagSignature(server, 10, 777);
+	eq("same bag, same signature", SAVE.bagSignature(server, 10, 777), sig);
+	server.ammoArrow += 1;
+	ok(SAVE.bagSignature(server, 10, 777) !== sig, "ammo moves the signature");
+	ok(SAVE.bagSignature(server, 11, 777) !== SAVE.bagSignature(server, 10, 777), "place moves it");
+	ok(SAVE.bagSignature(server, 10, 778) !== SAVE.bagSignature(server, 10, 777), "ack moves it");
+	// hostile or broken tables: not a bag, or clamped to what a save allows
+	for (const bad of [undefined, 3, "bag", {}, { ...bag, invenUse: 7 }, { ...bag, equip: undefined }]) {
+		eq(`readBag(${JSON.stringify(bad)?.slice(0, 40)})`, SAVE.readBag(bad), undefined);
+	}
+	const junk = SAVE.readBag({
+		...JSON.parse(JSON.stringify(bag)),
+		invenWeapon: [1e12, -5, NaN, "x"],
+		ammo: [-1, 1e12, NaN],
+		equip: [9999, -7, 1.5],
+		skillLevels: [99, -1],
+		skillPoint: -3,
+		place: 1e9,
+		ack: -1,
+		seq: 1e9,
+	});
+	eq("a count is capped at ITEM_MAX", junk.invenWeapon[0], SAVE.SAVE_LIMITS.ITEM_MAX);
+	eq("a negative count reads 0", junk.invenWeapon[1], 0);
+	eq("the array keeps the table's size", junk.invenWeapon.length, WEAPONS.length);
+	eq("ammo is capped", junk.ammo[1], SAVE.SAVE_LIMITS.AMMO_MAX);
+	eq("the weapon slot is capped to a real weapon", junk.equip[0], WEAPONS.length - 1);
+	eq("-1 stays 'nothing equipped'", junk.equip[1], -1);
+	eq("a skill never passes its maximum", junk.skillLevels[0] <= 5, true);
+	eq("skill points never go negative", junk.skillPoint, 0);
+	eq("ack stays a u16", junk.ack, 0);
+	eq("seq stays a u16", junk.seq, 65535);
+});
+
 // ---------------------------------------------------------------- 8. fuzz
 
 const DECODERS = [
@@ -1671,6 +1846,7 @@ const DECODERS = [
 	["decodeWorld", P.decodeWorld],
 	["decodeTimePing", P.decodeTimePing],
 	["decodeTimePong", P.decodeTimePong],
+	["decodeIntentMessage", P.decodeIntentMessage],
 ];
 
 test(`fuzz: ${FUZZ_N} random/truncated buffers per decoder never throw`, () => {
@@ -1717,6 +1893,8 @@ test(`fuzz: ${FUZZ_N} mutations of valid packets never throw`, () => {
 			P.encodeTimePing({ seq: rint(0, 65535), clientTime: rfloat(0, 1e6) }),
 			P.decodeTimePing,
 		]);
+		samples.push(["decodeIntentMessage", randIntent(), P.decodeIntentMessage]);
+		samples.push(["decodeIntentMessage", P.encodeIntent(pick(PRESENCE_VERBS)), P.decodeIntentMessage]);
 	}
 	let survivors = 0;
 	for (let i = 0; i < FUZZ_N; i++) {

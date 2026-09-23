@@ -369,13 +369,13 @@ O drop de zumbi usa a skill do **matador** (`skillLevels[9]`). O loot de prédio
 | Remote | Tipo | Sentido | Conteúdo | Taxa |
 |---|---|---|---|---|
 | `Input` | Unreliable | C→S | `buffer` de 28 B: 3 comandos + `viewTick` | 60/s |
-| `Intent` | RemoteEvent | C→S | `{k, atSeq, …}` (tabela pequena, validada) | Sob demanda, ≤ 20/s |
+| `Intent` | RemoteEvent | C→S | `buffer` binário: presença 2 B (`kind, verbo`); verbo da mochila 8 B (`kind, verbo, atSeq u16, arg u16, nonce u16`) — §4.8 | Sob demanda, ≤ 20/s (rajada de 30) |
 | `ShopAction` | RemoteFunction | C→S | **Já existe** (loja, Rebirth, New game) | Existente |
 | `LoadRequest` / `LoadAck` | RemoteEvent | ↔ | **Já existe**. O `LoadAck` passa a trazer também as informações do servidor (modo, dia do mundo, seed, hash do mapa, `tick0`, `SIM_HZ`). | Existente |
 | `Snap` | Unreliable | S→C | `buffer` ≤ 900 B por parte (1–2 partes por snapshot, cada parte **autocontida**) | 20/s no anel próximo (a cada 3 ticks); zumbis do anel médio entram por completo a cada 2 pacotes, em rodízio → 10 Hz por entidade |
 | `Fx` | Unreliable | S→C | Lote por tick: `ShotResult`, `ProjSpawn/End`, sangue, impacto, explosão, tremida de sólido, som | ≤ 60/s |
 | `World` | RemoteEvent | S→C | Deltas do mundo (seção 4.5), `WorldInit` em blocos, relógio, anúncios, morte de zumbi, entrada e saída de jogador, derrubado/reviveu/morreu | Lote por tick, só quando há algo |
-| `Self` | RemoteEvent | S→C | Espelho do save próprio: deltas de inventário, XP/nível/skills, conquistas, carteira | Sob demanda |
+| `Self` | RemoteEvent | S→C | Espelho do save próprio: deltas de inventário, XP/nível/skills, conquistas, carteira. *Até ele existir, a mochila vai no `bag` da carteira empurrada pelo `SaveAck` (§4.8).* | Sob demanda |
 | `SaveRequest` / `SaveAck` | — | — | **Removidos na F3** | — |
 
 Regra geral: tudo que for contínuo ou efêmero e se autocorrige no próximo pacote vai em **Unreliable**. Tudo que muda estado persistente do mundo ou do jogador e não pode se perder vai em **RemoteEvent** (confiável e ordenado).
@@ -476,6 +476,38 @@ Quantização: posição em **u16 com 0,5 u** de resolução (x ≤ 22 400 → 4
 - **Cliente, subida:** ≈ **3 KB/s**.
 - **Caso típico** (dia, 3 jogadores, 25 zumbis visíveis): ≈ **7–8 KB/s** por cliente.
 - **Comparação:** a documentação não fixa limite de banda; a referência prática usada pela comunidade é ~50 KB/s por cliente. O pior caso fica em **~46%** disso, com folga para a compressão de buffers do engine (que só reduz o número). **Isso passa do alvo informal de ≤ 20 KB/s** usado nas fases anteriores; a primeira alavanca abaixo (anel médio a 5 Hz) já traz o total de volta a ~20,3 KB/s. **Medir na F2** (seção 12). Alavancas, na ordem: anel médio a 5 Hz (em vez de 10 Hz, economiza ~2,7 KB/s), codificação delta em relação ao último snapshot confirmado (o ack já viaja no `Input`) e teto de 120 zumbis.
+
+### 4.8 Verbos da mochila no fio (F3; bugs NET-1..6 da varredura de QA)
+
+A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.ts`). O cliente **pede** pelo `Intent` e **espelha** o que o servidor devolve na carteira. Nada da mochila sobe mais no relatório (§8.4).
+
+**C→S — `Intent` (RemoteEvent confiável e ordenado; `shared/net/intentWire.ts`, reexportado por `protocol.ts`):**
+
+| Forma | Bytes | Campos | Verbos |
+|---|---|---|---|
+| Presença | 2 | `0x60` (PacketKind.Intent na nibble alta), verbo | `EnterWorld` 1, `LeaveWorld` 2 |
+| Mochila | 8 | `0x60`, verbo, `atSeq u16`, `arg u16`, `nonce u16` | `Craft` 3 (receita), `UseItem` 4 (usável), `Equip` 5 (EQUIPS), `Unequip` 6 (slot 1–5), `LearnSkill` 7 (skill), `SwitchWeapon` 8 (arma) |
+
+- **`arg`** é conferido na decodificação contra a tabela do verbo (`intentArgRange`): fora dela o pacote é **malformado**, como um comprimento errado, um verbo de presença com 8 B ou um da mochila com 2 B.
+- **`atSeq`** é o `seq` do **primeiro comando simulado com a mudança** (§2.4): o servidor aplica o verbo logo antes de simular esse comando — movimento **e** máquina da arma —, então "troquei e atirei" nunca vira "atirei com a arma velha". Chegou atrasado (o comando já foi consumido): aplica no próximo tick. Chegou adiantado: espera o comando no máximo `INTENT_HOLD_TICKS` (30 ticks, 0,5 s).
+- **`nonce`** é o número do pedido **no cliente** (u16, dá a volta; 0 = nenhum). O servidor só o **ecoa** (`bag.ack`): é como o cliente sabe quais previsões ainda repetir. Nada no servidor é decidido por ele.
+- **O que não é verbo:** recarregar, pegar, interagir e colocar construção continuam nas **arestas do comando** (§2.2 `edges`), e o servidor escolhe o alvo na posição que ele simulou. Um verbo que nomeia alvo pode nomear o alvo errado.
+- **Taxa:** `INTENT_RATE` 20/s com rajada de `INTENT_BURST` 30 por jogador, contado também no limite de flood (§8.2). Uso real: um clique por verbo, bem abaixo disso. Subida: 8 B + overhead por pedido.
+
+**S→C — o `bag` da carteira (`shared/game/save.ts` `BagMirror`), empurrado pelo `SaveAck` (`push: true`) até o `Self` existir:**
+
+| Campo | Conteúdo |
+|---|---|
+| `invenWeapon`, `invenEquip`, `invenUse`, `invenEtc` | contagens do inventário do servidor |
+| `ammo` | `ammoNormal, ammoShotgun, ammoMachinegun, ammoArrow, oil, electric` |
+| `equip` | `equipWeapon, equipCloth, equipHand, equipGun, equipOutfit, equipPet` |
+| `skillLevels`, `skillPoint` | as skills |
+| `place` | a construção no cursor do servidor (PLACEABLES, −1 = nenhuma) |
+| `ack` | o `nonce` do último verbo que o servidor **tratou** (aplicou ou recusou) |
+| `seq` | o último comando consumido quando o `bag` foi escrito (−1 = fora do mundo) |
+
+- Vai **só quando muda** (assinatura de tudo menos `seq`: recarga, coleta, craft, troca, resposta a um pedido), no máximo a cada 0,25 s — ~150 números (~1,5 KB) por envio. Num tiroteio isso é uma recarga a cada poucos segundos: < 1 KB/s.
+- O cliente lê com `readBag` (tamanhos e limites do save; S→C, defensivo) e aplica com `applyBag`, preservando a identidade dos arrays.
 
 ---
 
