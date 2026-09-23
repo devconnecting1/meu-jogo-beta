@@ -2,7 +2,8 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
-import { CONSOLE_MARGIN, HudConsole, HudDay, HudState } from "./hudConsole";
+import { CONSOLE_MARGIN, HudConsole, HudState, placeTouchSky } from "./hudConsole";
+import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	Badge,
@@ -28,10 +29,11 @@ import {
 } from "./widgets";
 
 /*
- * The in-run HUD (docs/DESIGN_RULES.md UI-09). The vitals, the weapons and the Bag / Menu buttons live in ONE
- * framed console at the bottom centre and the day in a plate at the top centre -- both in client/ui/hudConsole.ts,
- * in the vocabulary of the owner's Settings window (UI-07). This file keeps what floats over the world: the damage
- * vignette, the interaction prompt, the banners and the message feed, and the touch layer.
+ * The in-run HUD (docs/DESIGN_RULES.md UI-09). The day clock, the vitals, the weapons and the Bag / Menu buttons live
+ * in ONE framed console at the bottom centre (client/ui/hudConsole.ts, the clock in hudSky.ts), in the vocabulary of
+ * the owner's Settings window (UI-07). On touch the thumbs own the bottom, so the clock rides where the Bag and the
+ * Menu go there: the top-right row (placeConsole). This file keeps what floats over the world: the damage vignette,
+ * the interaction prompt, the banners and the message feed, and the touch layer.
  */
 export type { HudState } from "./hudConsole";
 
@@ -61,6 +63,12 @@ const CENTER = UDim2.fromScale(0.5, 0.5);
 const BANNER_W = 720;
 const BANNER_H = 110;
 const BANNER_MIN_W = 280;
+/**
+ * the banner's distance under the top bar, and the feed's under the banner: the top centre is theirs now (the day plate
+ * that sat there moved into the console, UI-09)
+ */
+const BANNER_TOP = 20;
+const FEED_GAP = 6;
 
 /** between the interaction prompt and the top of the console (design units of the console) */
 const HINT_GAP = 8;
@@ -173,8 +181,12 @@ export class Hud {
 	private root: Frame | undefined;
 	/** bottom centre: vitals, the weapon hotbar, Bag / Menu, the weapon in hand (hudConsole.ts) */
 	private console: HudConsole | undefined;
-	/** top centre: the world's day, the phase, the watch's clock and this life's day (MP-13) */
-	private day: HudDay | undefined;
+	/**
+	 * touch only: the day clock's own plate in the top-right row (on desktop it is a section of the console, which
+	 * updates it)
+	 */
+	private sky: HudSky | undefined;
+	private skyFrame: Frame | undefined;
 	/** the "UI size" setting at mount (80%..120%) */
 	private uiK = 1;
 	private vignette: Array<Frame> = [];
@@ -246,7 +258,7 @@ export class Hud {
 
 		this.buildVignette(root);
 		const tr = (key: string): string => this.tr(key);
-		this.day = new HudDay(root, tr, k);
+		if (mobile) [this.skyFrame, this.sky] = skyPlate(root, tr);
 		// one console at the bottom centre; on touch the compact one (bars + hotbar: the touch layer has the Bag
 		// and Menu buttons), sized and placed between the thumbs by placeConsole()
 		this.console = new HudConsole(root, tr, mobile, k, {
@@ -258,7 +270,7 @@ export class Hud {
 			onMenu: (): void => this.onPause?.(),
 		});
 		this.buildHint(root, k);
-		this.buildMessages(root, k);
+		this.buildMessages(root);
 		// the save (and with it the player's control preferences) arrives long after bootstrap ran: recompute
 		// the geometry now, so the first run of a session already uses their own sizes and their own side
 		refreshTouchLayout();
@@ -288,9 +300,18 @@ export class Hud {
 			if (hint !== undefined) hint.Position = new UDim2(0.5, 0, 1 - bottom / DESIGN_H, 0);
 			return;
 		}
-		const p = deck.placeTouch(getTouchLayout(), this.uiK);
+		const L = getTouchLayout();
+		const p = deck.placeTouch(L, this.uiK);
 		if (hint !== undefined) {
 			hint.Position = UDim2.fromOffset(math.round(p.x + p.w / 2), math.round(p.y - HINT_GAP * p.scale));
+		}
+		// the clock: in the row of Menu and Bag, as tall as they are (hudConsole.ts placeTouchSky)
+		const sky = this.skyFrame;
+		if (sky !== undefined) {
+			const s = placeTouchSky(L, [p.x, p.y, p.x + p.w, p.y + p.h], SKY_PLATE_W, SKY_PLATE_H);
+			sky.Position = UDim2.fromOffset(math.round(s.x), math.round(s.y));
+			sky.Size = UDim2.fromOffset(math.ceil(s.w), math.ceil(s.h));
+			this.sky?.setTextScale(math.clamp(s.scale / math.max(uiScale(), 0.05), 0.5, 4));
 		}
 	}
 
@@ -526,8 +547,8 @@ export class Hud {
 	}
 
 	/** banner (waves, morning, night, boss) as a bordered card + the feed of short messages below it */
-	private buildMessages(root: Frame, k: number): void {
-		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, 20 + 64 * k, true);
+	private buildMessages(root: Frame): void {
+		const bannerBox = makeAnchored(root, "BannerBox", 0.5, 0, BANNER_W, BANNER_H, 0, BANNER_TOP, true);
 		// the card is resized to the message in showBanner; the texts stay centred over it
 		const card = Card(bannerBox, "Card", {
 			x: 0,
@@ -578,7 +599,7 @@ export class Hud {
 		scale.Parent = bannerBox;
 		this.bannerScale = scale;
 
-		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, 136 + 64 * k, true);
+		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, BANNER_TOP + BANNER_H + FEED_GAP, true);
 		const layout = new Instance("UIListLayout");
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
 		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center;
@@ -623,7 +644,8 @@ export class Hud {
 		this.root?.Destroy();
 		this.root = undefined;
 		this.console = undefined;
-		this.day = undefined;
+		this.sky = undefined;
+		this.skyFrame = undefined;
 		this.vignette = [];
 		this.vignetteT = 1;
 		this.feed = undefined;
@@ -660,9 +682,10 @@ export class Hud {
 		if (!this.mounted || this.root === undefined) return;
 		const now = os.clock();
 
-		// the console (bars, hotbar, weapon) and the day plate: both write only what changed, and create nothing
+		// the console (the sky, bars, hotbar, weapon) and, on touch, the sky's own plate: both write only what changed,
+		// and create nothing
 		this.console?.update(state, this.ctx.save, now);
-		this.day?.update(state);
+		this.sky?.update(state, now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
 		// a melee weapon has nothing to reload: the touch button says so instead of doing nothing when pressed
