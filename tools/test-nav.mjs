@@ -610,15 +610,35 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	// the kill-based ones count bodies whose hp fell to 0 between two frames; from MP_PHASE 2 the horde is the
 	// server's and the client's bodies are the mirror's (client/view/actorsView.ts), whose hp is never 0 unless the
 	// fuse is lit: a zombie killed on the server simply leaves the list with hp 1
-	const actors = readFileSync(join(SRC, "client/view/actorsView.ts"), "utf8");
 	const { MP_PHASE } = require(join(SRC, "shared/net/mpConfig.ts"));
-	const mirrorHp = /z\.hp = lit \? 0 : 1;/.test(actors);
 	const countsHp = /if \(z\.hp <= 0\) \{\s*kills\+\+;/.test(main);
+	// the REAL mirror: one zombie arrives, the server kills it (it stops arriving), and trackBefore / trackAfter's test
+	// (alive = hp > 0 before the frame, a kill = hp <= 0 after it) runs on the bodies the mirror handed over
+	let mirrorKills = -1;
+	{
+		const netClient = require(join(SRC, "client/net/netClient.ts"));
+		const saved = [netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths];
+		let remote = [];
+		netClient.remoteZombies = () => remote;
+		netClient.remoteBosses = () => [];
+		netClient.takeZombieDeaths = () => {};
+		const { ActorsView } = require(join(SRC, "client/view/actorsView.ts"));
+		const view = new ActorsView();
+		const refs = { zombies: [], bosses: [] };
+		const walker = { netId: 7, x: 0, y: 0, angle: 0, flags: 0, type: 1, big: false, extra: 0 };
+		remote = [{ ...walker, feetCycle: 0, speed: 0, alpha: 1, stale: false }];
+		view.sync(refs, 1 / 60, () => {});
+		const before = refs.zombies.filter(z => z.hp > 0);
+		remote = [];
+		view.sync(refs, 1 / 60, () => {});
+		mirrorKills = before.length === 1 ? before.filter(z => z.hp <= 0).length : -1;
+		[netClient.remoteZombies, netClient.remoteBosses, netClient.takeZombieDeaths] = saved;
+	}
 	knownBug(
 		"ACH-2",
 		"de MP_PHASE 2 em diante as conquistas de abate (2, 3, 7, 12, 13) e o 'zumbis' do fim de partida nao contam: o espelho da horda nunca tem hp 0 (so o pavio aceso conta, e conta como abate)",
 		"main.client.ts trackAfter, onboarding/index.ts scanKills x client/view/actorsView.ts fillZombie",
-		MP_PHASE >= 2 && mirrorHp && countsHp,
+		MP_PHASE >= 2 && mirrorKills === 0 && countsHp,
 	);
 	// CON-03: Núcleo 1 is the Dagger, the Axe, the bat and the Pistol, and "sem chefe"; the Records window already
 	// lost its boss line for that reason (UI-10), but the achievements for bosses, the bow and the sniper are on view
@@ -630,6 +650,17 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		"as quatro de chefe (8-11), Bow expert e Sniper estao a vista, mas o Nucleo 1 nao tem chefe, arco nem sniper (CON-03)",
 		"shared/data/achievements.ts (hidden) x CON-03",
 		/sem chefe/.test(con03) && !/arco|sniper/i.test(con03) && offContent.length === 6,
+	);
+	// "Never die" counts the life's days while `deathCount` is 0, but only a PAID Rebirth moves it
+	// (server/main.server.ts): a death answered by the free wait for daybreak (MP-21) does not reset the streak
+	const server = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	knownBug(
+		"ACH-4",
+		"'Never die' (17) segue contando depois de uma morte esperada ate o amanhecer (MP-21): so o Rebirth pago move deathCount",
+		"main.client.ts trackAfter x server/main.server.ts (rebirth)",
+		/if \(save\.deathCount === 0\) raiseAchievement\(17/.test(main) &&
+			(server.match(/deathCount \+= 1/g) ?? []).length === 1 &&
+			/if \(!due\) save\.deathCount \+= 1/.test(server),
 	);
 }
 
