@@ -338,6 +338,119 @@ const WALKER_SPEED = 90;
  */
 const REACH_BOUND_S = 12;
 
+/** the piece(s) that say what a room is (EDI-08): a room of that kind without any of them fails */
+const DEFINING = {
+	living: ["sofa", "armchair"],
+	kitchen: ["counter", "stove", "fridge"],
+	dining: ["table"],
+	bedroom: ["bed"],
+	bath: ["toilet", "tub", "basin"],
+	sales: ["shelf", "gondola", "gunrack", "clothesrack", "display", "coldcase", "checkout"],
+	stock: ["rack"],
+	cold: ["coldcase"],
+	secure: ["safe", "gunrack"],
+	office: ["desk"],
+	classroom: ["schooldesk", "teacherdesk"],
+	ward: ["hospbed"],
+	treatment: ["optable"],
+	diner: ["table", "booth"],
+	galley: ["stove", "counter", "prep"],
+	lobby: ["reception", "bench", "cabinet"],
+};
+
+/**
+ * The last stretch of a chase is a straight line, not the field (zombieBrain `chaseHeading`: DIRECT_CHASE =
+ * 200 u with a clear segment); 160 u keeps a margin under it.
+ */
+const DIRECT_CHASE_MARGIN = 160;
+
+/**
+ * The horde's own view of a building (server/sim/flowField.ts, shared/game/physics.ts FlowField): 32 u cells on
+ * the world grid, every blocking solid inflated by 4 u and HARD, a window's sill passable (stampWindow); from
+ * every free cell outside the footprint, which cells can the field reach (8 neighbours, no corner cutting)?
+ * `near(x, y)`: a zombie the field brought to a reached cell sees (x, y) down a clear line, close enough to
+ * chase straight there.
+ */
+function fieldReach(w, b) {
+	const CELL = 32;
+	const INFLATE = 4;
+	const M = 256;
+	const ox = Math.floor((b.x - M) / CELL) * CELL;
+	const oy = Math.floor((b.y - M) / CELL) * CELL;
+	const cols = Math.ceil((b.x + b.w + M - ox) / CELL);
+	const rows = Math.ceil((b.y + b.h + M - oy) / CELL);
+	const size = Math.max(cols, rows);
+	const HARD = 2;
+	const grid = new Uint8Array(size * size);
+	for (const s of W.querySolids(w, ox, oy, ox + size * CELL, oy + size * CELL)) {
+		if (s.kind === "window") {
+			physics.stampWindow(s, ox, oy, CELL, size, (gx, gy) => {
+				if (grid[gy * size + gx] < 1) grid[gy * size + gx] = 1;
+			});
+			continue;
+		}
+		if (!W.isBlocking(s)) continue;
+		const gx0 = Math.max(0, Math.floor((s.x - INFLATE - ox) / CELL));
+		const gy0 = Math.max(0, Math.floor((s.y - INFLATE - oy) / CELL));
+		const gx1 = Math.min(size - 1, Math.floor((s.x + s.w + INFLATE - ox) / CELL));
+		const gy1 = Math.min(size - 1, Math.floor((s.y + s.h + INFLATE - oy) / CELL));
+		for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) grid[gy * size + gx] = HARD;
+	}
+	const seen = new Uint8Array(size * size);
+	const queue = [];
+	for (let k = 0; k < size * size; k++) {
+		if (grid[k] === HARD) continue;
+		const x = ox + (k % size) * CELL + CELL / 2;
+		const y = oy + Math.floor(k / size) * CELL + CELL / 2;
+		if (W.buildingAt(w, x, y) === b) continue;
+		seen[k] = 1;
+		queue.push(k);
+	}
+	for (let head = 0; head < queue.length; head++) {
+		const k = queue[head];
+		const cx = k % size;
+		const cy = (k - cx) / size;
+		for (let dy = -1; dy <= 1; dy++) {
+			for (let dx = -1; dx <= 1; dx++) {
+				if (dx === 0 && dy === 0) continue;
+				const gx = cx + dx;
+				const gy = cy + dy;
+				if (gx < 0 || gy < 0 || gx >= size || gy >= size) continue;
+				const nk = gy * size + gx;
+				if (seen[nk] || grid[nk] === HARD) continue;
+				if (dx !== 0 && dy !== 0 && (grid[cy * size + gx] === HARD || grid[gy * size + cx] === HARD)) continue;
+				seen[nk] = 1;
+				queue.push(nk);
+			}
+		}
+	}
+	return {
+		cells: queue.length,
+		near(x, y) {
+			// a reached cell within DIRECT_CHASE_MARGIN, with a straight clear line from its centre to (x, y)
+			const gx = Math.floor((x - ox) / CELL);
+			const gy = Math.floor((y - oy) / CELL);
+			const R = Math.ceil(DIRECT_CHASE_MARGIN / CELL);
+			// ring by ring from the spot's own cell: the nearest reached cell is almost always the answer
+			for (let ring = 0; ring <= R; ring++) {
+				for (let dy = -ring; dy <= ring; dy++) {
+					for (let dx = -ring; dx <= ring; dx++) {
+						if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+						const ax = gx + dx;
+						const ay = gy + dy;
+						if (ax < 0 || ay < 0 || ax >= size || ay >= size || !seen[ay * size + ax]) continue;
+						const px = ox + ax * CELL + CELL / 2;
+						const py = oy + ay * CELL + CELL / 2;
+						if (Math.hypot(px - x, py - y) > DIRECT_CHASE_MARGIN) continue;
+						if (physics.segmentClear(w, px, py, x, y, physics.blocksMovement)) return true;
+					}
+				}
+			}
+			return false;
+		},
+	};
+}
+
 /** raster of one building's surroundings: blocked for a body of radius r, window vault zones, the footprint */
 function buildingRaster(w, b, r, margin) {
 	const C = 8;
@@ -477,6 +590,7 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 	const byType = {};
 	let compound = 0;
 	let worst = { s: 0 };
+	let fieldCells = 0;
 	for (const b of buildings) {
 		if ((b.parts?.length ?? 1) > 1) compound++;
 		const openings = b.openings ?? [];
@@ -637,6 +751,33 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 				);
 			}
 		}
+		// EDI-11, as the horde really walks: the server's flow field (32 u cells, solids inflated 4 u, a window's
+		// sill passable) reaches, from outside, a cell next to every spot a survivor can stand on -- the last few
+		// metres are the straight chase (DIRECT_CHASE, 200 u), not the field
+		const field = fieldReach(w, b);
+		for (let k = 0; k < ras.cols * ras.rows; k++) {
+			if (!ras.inside[k] || ras.blocked[k]) continue;
+			const px = (k % ras.cols) * ras.C + ras.x0 + ras.C / 2;
+			const py = Math.floor(k / ras.cols) * ras.C + ras.y0 + ras.C / 2;
+			if (!field.near(px, py)) {
+				fail("EDI-11", `${b.tags} #${b.id}: the horde's flow field reaches nothing near this spot`, px, py);
+				break;
+			}
+		}
+		fieldCells += field.cells;
+		// EDI-08: every room has the piece that says what it is (a bedroom its bed, a ward its beds...)
+		const seenD = new Set();
+		for (const q of rooms) {
+			if (seenD.has(q.room)) continue;
+			seenD.add(q.room);
+			const want = DEFINING[q.kind];
+			if (want === undefined || want.length === 0) continue;
+			const rects = rooms.filter(p => p.room === q.room);
+			const has = furniture.some(
+				f => want.includes(f.tags) && rects.some(r => inside({ x: cx(f), y: cy(f), w: 0, h: 0 }, r)),
+			);
+			if (!has) fail("EDI-08", `${b.tags} #${b.id}: the ${q.kind} has none of ${want.join("/")}`, cx(q), cy(q));
+		}
 	}
 	for (const [t, tt] of Object.entries(byType)) {
 		const share = tt.target / tt.n;
@@ -653,6 +794,7 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 		fail("EDI-14", `only ${compound}/${buildings.length} footprints are not a plain box (< 50%)`, 0, 0);
 	}
 	stats.compound = compound;
+	stats.fieldCells = fieldCells;
 	stats.worstReach = worst.s;
 	stats.worstRoom = worst.b ? `${worst.b.tags} #${worst.b.id} ${worst.room}` : "-";
 	stats.doorsByType = Object.fromEntries(
