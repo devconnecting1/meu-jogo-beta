@@ -1108,11 +1108,14 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 	const creditsSrc = readFileSync(join(SRC, "client/ui/credits.ts"), "utf8");
 	const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 	check("Game: o nome do jogo (GAME_NAME de shared/module.ts)", value("Game") === GAME_NAME, value("Game"));
+	const moduleSrc = readFileSync(join(SRC, "shared/module.ts"), "utf8");
 	check(
-		"Inspired by: o original e o estudio, como a CON-01 e a tela de creditos dizem",
-		value("Inspired") === "Dead Town (Lemon Puppy Games)" &&
-			creditsSrc.includes('"Inspired by Dead Town"') &&
-			creditsSrc.includes('"by Lemon Puppy Games"'),
+		"Inspired by: so o nome do original, sem estudio (CON-01), o mesmo da tela de creditos",
+		value("Inspired") === "Dead Town" &&
+			moduleSrc.includes('INSPIRED_BY = "Dead Town"') &&
+			creditsSrc.includes('"Inspired by the original"') &&
+			creditsSrc.includes("INSPIRED_BY") &&
+			!/Lemon Puppy/.test(creditsSrc),
 		value("Inspired"),
 	);
 	check(
@@ -1121,10 +1124,13 @@ console.log("\n7) About: os fatos sao os do codigo\n");
 		value("Mode"),
 	);
 	check(
-		"Built with: roblox-ts, o compilador do projeto (package.json), como os creditos dizem",
-		value("Built") === "roblox-ts" &&
-			pkg.devDependencies["roblox-ts"] !== undefined &&
-			creditsSrc.includes("roblox-ts"),
+		"Developed by: Luvitlua (shared/module.ts), como os creditos dizem; nenhuma ferramenta ou empresa",
+		value("Developer") === "Luvitlua" &&
+			moduleSrc.includes('DEVELOPER = "Luvitlua"') &&
+			creditsSrc.includes('"Developed by"') &&
+			creditsSrc.includes("DEVELOPER") &&
+			!/roblox-ts|Yoyo|Lemon Puppy/.test(creditsSrc),
+		value("Developer"),
 	);
 	const open = findIn(about, "OpenCredits");
 	open?.Activated.Fire();

@@ -286,7 +286,7 @@ Pedido do dono (2026-09-23), comparando com o Pixel Quest: a cidade era retângu
 
 ## 13. Conteúdo e propriedade intelectual (CON)
 
-- **CON-01** ❌ Nome, logo ou arte do Dead Town. ✅ Créditos mantêm "Inspired by Dead Town (Lemon Puppy Games)".
+- **CON-01** ❌ Nome, logo ou arte do Dead Town. ✅ Créditos e Settings › About dizem só "Developed by Luvitlua" e "Inspired by the original Dead Town" (`shared/module.ts`: `DEVELOPER`, `INSPIRED_BY`) — sem estúdio, empresa ou ferramenta (decisão do dono, 2026-09-23). Checado por `test:settings` §7.
 - **CON-02** ❌ Marcas reais em lojas, carros ou produtos.
 - **CON-03 [revisão + auto]** ✅ **Tudo o que está nos dados funciona e faz sentido; nada se esconde.** Decisão do dono (2026-09-23, depois da varredura de itens): "Faz todos os itens, equipamentos, consumíveis, receitas e skills funcionarem e que faça sentido". Substitui, para itens, receitas, pacotes e skills, a trava por etapa que esta regra previa ("Núcleo 1 primeiro, o resto desligado", nunca implementada): nenhum item, receita, pacote ou skill é escondido por etapa, e o que não funcionava passou a funcionar (ITM-01..05). ❌ Vender, fabricar ou ensinar algo que não faz nada (P3). ❌ Apagar item: saves reais podem tê-lo, e o catálogo inteiro continua validado pelos testes.
     - **O Núcleo 1 continua sendo a ordem de polimento:** Dagger, Axe, Baseball bat e Pistol; carne crua → cozida, maçã, enlatado e bandagem; madeira, pedra, aço, tecido, munição, fogueira, barricada, porta e bancada; roupa de algodão e lanterna — o conjunto com **desenho próprio** (UI-11). Os **zumbis** do Núcleo 1 (Walker e Charger, **sem chefe**) são conteúdo, não item: essa parte da regra não mudou.
