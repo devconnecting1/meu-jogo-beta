@@ -773,6 +773,9 @@ function mountRun(enterWorld = true): void {
 	gameAudio.startRun(loop.getRefs());
 	// onboarding: the coach (first run only) and the aim-assist targets live as long as the run does
 	attachRun(ctx, loop.getRefs());
+	// only a run's frame clears the one-shot presses (GameLoop.update -> beginFrame): a P, B, Start or LB pressed in the
+	// menus was still pending here, and the first frame opened the Menu or the Bag on entering the city
+	ctx.input.beginFrame();
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
@@ -993,7 +996,7 @@ function doRebirth(): void {
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
 	const price = rebirthPrice(ctx.save.deathCount);
 	if (ctx.save.money < price) {
-		toast(ctx, `${tr("Not enough coins")} (need ${fmtInt(price)})`, "error");
+		toast(ctx, `${tr("Not enough coins")}: ${fmtInt(price - ctx.save.money)} ${tr("more needed")}`, "error");
 		return;
 	}
 	if (!net.sessionReady()) {

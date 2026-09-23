@@ -36,6 +36,8 @@
 		"test:menus": "node tools/test-menus.mjs",
 		"test:lobby": "node tools/test-lobby.mjs",
 		"test:screens": "node tools/test-screens.mjs",
+		"test:settings": "node tools/test-settings.mjs",
+		"test:nav": "node tools/test-nav.mjs",
 		"test:cosmetics": "node tools/test-cosmetics.mjs",
 		"test:flinch": "node tools/test-flinch.mjs",
 		"test:world-art": "node tools/test-world-art.mjs",

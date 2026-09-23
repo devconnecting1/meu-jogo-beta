@@ -359,6 +359,9 @@ class AudioEngine {
 		if (!this.started) return;
 		const def = soundDef(name);
 		if (def === undefined || def.id === "") return;
+		// the sliders are read here too, not only on the next frame: the Settings preview of a slider moved up from 0
+		// plays in the same instant the slider moved, and a gain still at 0 would drop exactly that one (two compares)
+		this.refreshGains(false);
 		if (this.busGain(def.bus) <= 0) return;
 
 		// a sound may die closer than the rest (footsteps): the engine enforces it, not the caller

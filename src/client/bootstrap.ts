@@ -452,9 +452,11 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 	} else if (inputObj.UserInputType === Enum.UserInputType.Touch) {
 		handleTouchBegin(inputObj);
 	} else if (inputObj.UserInputType.Name.sub(1, 7) === "Gamepad") {
-		// a selected menu owns the pad: only Start (pause) still reaches the game
+		// a selected menu owns the pad: only the two toggles still reach the game -- Start (the menu) and LB (the Bag),
+		// so the button that opened a screen closes it too (UI-11: "B / LB keep opening and closing"; the Bag takes the
+		// focus when a pad opens it, and LB used to be swallowed right there)
 		if (menuHasFocus()) {
-			if (inputObj.KeyCode !== Enum.KeyCode.ButtonStart) return;
+			if (inputObj.KeyCode !== Enum.KeyCode.ButtonStart && inputObj.KeyCode !== Enum.KeyCode.ButtonL1) return;
 		} else if (focusFirstMenuControl()) {
 			// a screen was open with nothing selected: this press is what wakes the navigation up
 			return;
