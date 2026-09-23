@@ -897,7 +897,14 @@ section("p) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		s !== undefined ? `${s.kind} hp ${s.hp}` : "nada",
 	);
 	check(s !== undefined && W.isBlocking(s), "e bloqueia o corpo: ninguem pula a janela barricada");
-	const back = house.openings.find(o => o.kind === "door" && !o.main);
+	// the building's entrances, the main one first (world.ts entrancesOf, the API the facade signs read)
+	const entrances = W.entrancesOf(house, []);
+	check(
+		entrances.length >= 2 && entrances[0].main && entrances.slice(1).every(o => !o.main && o.kind === "door"),
+		"entrancesOf: a entrada principal primeiro, depois as outras portas",
+		`${entrances.length} entradas`,
+	);
+	const back = entrances[1];
 	const b = fortify(back, 1, 11);
 	checkEq(b.out.kind, "placed", "uma porta construida no vao dos fundos entra");
 	const d = b.out.solid;

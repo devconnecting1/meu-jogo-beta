@@ -50,7 +50,12 @@ export interface Solid {
 	hitShake?: number;
 	/** true → ignored by collision (e.g. the building record whose walls are separate solids) */
 	passable?: boolean;
-	/** building only: centre of the doorway (on the wall's mid-line) and which wall it is in */
+	/**
+	 * building only: its MAIN entrance -- the doorway facing the street (EDI-01) -- by the centre of its gap (on
+	 * the wall's mid-line) and the side of the box that wall faces. It may be set back from the box's edge into a
+	 * porch or an entrance court (the facade that holds it is the street edge of `mainWing`). Every entrance,
+	 * this one first: `entrancesOf`.
+	 */
 	doorX?: number;
 	doorY?: number;
 	doorSide?: DoorSide;
@@ -62,7 +67,11 @@ export interface Solid {
 	 * every doorway / window / interior opening, the flat decoration, and where the loot can be searched (EDI-03).
 	 */
 	parts?: Array<Rect>;
-	/** building: the part the main entrance opens into (the main wing: where the rooftop sign goes) */
+	/**
+	 * building: the main wing -- the block behind the stretch of facade that holds the main entrance, as deep as
+	 * the footprint stays full behind all of it (inside the footprint; its street edge is that facade). The
+	 * storefront sign stands on its edge by the door (client/view/buildingSigns.ts), the roof units on its back.
+	 */
 	mainWing?: Rect;
 	rooms?: Array<RoomRect>;
 	openings?: Array<Opening>;
@@ -480,6 +489,20 @@ export function insideBuilding(s: Solid, x: number, y: number): boolean {
 		if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) return true;
 	}
 	return false;
+}
+
+/**
+ * Every entrance of a building (EDI-09), the MAIN one first: the doorways of its plan, each with its gap (the
+ * wall-thick rect) and the side it looks out of. Windows are not entrances here (`Solid.openings` has them).
+ * `out` is filled and returned (no allocation per call); a building without a plan has none.
+ */
+export function entrancesOf(s: Solid, out: Array<Opening>): Array<Opening> {
+	out.clear();
+	const list = s.openings;
+	if (list === undefined) return out;
+	for (const o of list) if (o.kind === "door" && o.main) out.push(o);
+	for (const o of list) if (o.kind === "door" && !o.main) out.push(o);
+	return out;
 }
 
 /** Building record whose footprint contains the point (walls included), if any. */
