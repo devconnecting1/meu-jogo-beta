@@ -182,9 +182,9 @@ export const TRANSPARENCY = {
 	 * DESIGN_RULES UI-10: the scrim of the menus' town flyover (client/view/townFlyover.ts) -- the page colour at 60%
 	 * over the drifting town, so the world shows at 40% at most. That ceiling is a contrast bound, not a taste: the
 	 * brightest thing the town can put behind the scrim is white (a zebra, a rooftop plate), and at 40% the
-	 * composite still holds `foreground` at 4,5:1 (tools/test-contrast.mjs measures it). No text is drawn on it
-	 * anyway -- the menus keep every label on a plate, a section, a window or the opaque header band -- but a
-	 * label that lands there by mistake still reads.
+	 * composite still holds `foreground` at 4,5:1 (tools/test-contrast.mjs measures it). That is what lets the lobby's
+	 * title and tagline stand straight on it, in `foreground`; every other colour sits on a plate, a section or a
+	 * window (test:lobby checks it).
 	 */
 	backdrop: 0.4,
 	/**

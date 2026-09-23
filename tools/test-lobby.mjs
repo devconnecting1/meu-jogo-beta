@@ -884,7 +884,21 @@ check(
 	"ninguem conta chefes (CON-03: o Nucleo 1 nao tem chefe)",
 	texts(lobbyRoot()).every(t => !/boss/i.test(t)),
 );
-check("a faixa opaca do cabecalho esta la, sob o titulo", shown(lobbyRoot().FindFirstChild("HeaderBand")));
+// the owner, 2026-09-23: the opaque band behind the header read as a black strip cut across the town
+check("nenhuma faixa opaca cortando a cidade no topo", lobbyRoot().FindFirstChild("HeaderBand") === undefined);
+{
+	const plate = menuPage().FindFirstChild("StatusPlate");
+	lobby.refresh(status({ hosted: false, offlineNote: "Saving is unavailable in this environment" }));
+	check(
+		"o aviso (vermelho) mora numa plaquinha do painel, nao solto sobre a cidade",
+		plate !== undefined &&
+			shown(plate) &&
+			sameColor(plate.BackgroundColor3, SURFACE.panel) &&
+			plate.FindFirstChild("Status")?.Text !== "",
+	);
+	lobby.refresh(status({ hosted: true }));
+	check("sem aviso, sem plaquinha", !shown(plate));
+}
 
 // ================================================================ 2. the Survivor screen
 
@@ -1285,18 +1299,15 @@ function textProblems(root, strict) {
 	return problems;
 }
 
-/** a label straight on the menu page floats over the town: it must sit on the opaque header band */
+/**
+ * A label straight on the menu page floats over the town. Only `foreground` may: the scrim holds it at 4,5:1 over a
+ * white world (test:contrast, UI-10). Anything in another colour has to sit on a plate of its own.
+ */
 function floatingText(page) {
-	const band = lobbyRoot().FindFirstChild("HeaderBand");
-	const grad = band.FindFirstChildOfClass("UIGradient");
-	const solid = band.Size.Y.Offset * grad.Transparency.Keypoints[1].Time;
 	return page
 		.GetChildren()
 		.filter(c => c.ClassName === "TextLabel" && shown(c) && c.Text !== "")
-		.filter(c => {
-			const r2 = rectOf(c);
-			return r2.y + r2.h > solid + EPS;
-		})
+		.filter(c => !sameColor(c.TextColor3, THEME.foreground))
 		.map(c => c.Name);
 }
 
@@ -1325,7 +1336,7 @@ for (const [w, h, inset, label] of SCREENS) {
 		if (page === "menu") {
 			const fl = floatingText(root);
 			check(
-				`${label}: nenhum texto do menu solto sobre a cidade (so na faixa opaca)`,
+				`${label}: nenhum texto do menu solto sobre a cidade fora da cor clara (as outras cores em plaquinha)`,
 				fl.length === 0,
 				fl.join(", "),
 			);
