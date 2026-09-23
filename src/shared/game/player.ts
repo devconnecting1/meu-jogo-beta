@@ -108,10 +108,14 @@ export function createPlayer(save: PlayerSaveData, x: number, y: number): Player
 	};
 }
 
+/**
+ * Defence from what the survivor wears. Only the Cloth slot counts: the outfit and the pet are cosmetics and, by
+ * MON-01, change nothing that happens in a night — so they are left out HERE, by construction, instead of trusting
+ * every kind-4 row of the data table to keep `def: 0` forever.
+ */
 export function playerEquipDefence(save: PlayerSaveData): number {
 	let def = 0;
 	if (save.equipCloth >= 0) def += EQUIPS[save.equipCloth].def;
-	if (save.equipDeco >= 0) def += EQUIPS[save.equipDeco].def;
 	return def;
 }
 
@@ -127,8 +131,8 @@ const STARVING_RATIO = 0.25;
  */
 export function recalcMoveSpeed(p: PlayerState, save: PlayerSaveData): number {
 	let s = DESIGN.MOVE_SPEED + save.skillLevels[7] * 0.3;
+	// the cosmetic slots never move this number (MON-01; see playerEquipDefence)
 	if (save.equipCloth >= 0) s += EQUIPS[save.equipCloth]?.speed ?? 0;
-	if (save.equipDeco >= 0) s += EQUIPS[save.equipDeco]?.speed ?? 0;
 	if (p.buffs.speed > 0) s += 2;
 	const fed = p.hungryMax > 0 ? p.hungry / p.hungryMax : 1;
 	if (fed < STARVING_RATIO) {

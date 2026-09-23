@@ -30,6 +30,7 @@ O que de fato é visível para os outros jogadores, hoje, no que já desenhamos:
 | Cone de lanterna | luz noturna | Sim, à noite |
 | Decoração de base | fogueira e construções persistem | Sim, e é vista por quem passa |
 | Roupa, chapéu, acessório | — | **Não.** Não construir. |
+| Traje (cor do torso inteiro + silhueta: aba larga, pompom) e pet ao lado (MON-04) | `view/survivorView.ts`, `view/cosmeticsView.ts` | **Sim** — desenhados para se ler pela cor e pela silhueta, não pelo detalhe |
 
 ## O que vender, em ordem
 

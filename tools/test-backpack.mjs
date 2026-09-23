@@ -578,7 +578,7 @@ globalThis.game = { GetService: service };
 // ---------------------------------------------------------------- the modules under test (the shared .ts loader)
 
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
-const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+const { defaultSave, equipSlotOf, setEquipped } = require(join(SRC, "shared/game/save.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
@@ -648,17 +648,10 @@ pack.onEquipWeapon = id => {
 	save.equipWeapon = id;
 };
 pack.onEquipItem = id => {
-	const slot = EQUIPS[id].kind;
-	if (slot === 1) save.equipCloth = id;
-	else if (slot === 2) save.equipHand = id;
-	else if (slot === 3) save.equipGun = id;
-	else save.equipDeco = id;
+	setEquipped(save, equipSlotOf(id), id);
 };
 pack.onUnequipItem = slot => {
-	if (slot === 1) save.equipCloth = -1;
-	else if (slot === 2) save.equipHand = -1;
-	else if (slot === 3) save.equipGun = -1;
-	else save.equipDeco = -1;
+	setEquipped(save, slot, -1);
 };
 pack.onUse = id => {
 	if ((save.invenUse[id] ?? 0) > 0) save.invenUse[id] -= 1;

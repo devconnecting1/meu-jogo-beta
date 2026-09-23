@@ -50,6 +50,9 @@ jobs:
       - name: No menu pauses the world (Bag open, the horde, the clock and the damage go on; the hit flash)
         run: npm run test:menus
 
+      - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
+        run: npm run test:cosmetics
+
       - name: Net protocol tests (round-trip, limits, fuzz)
         run: npm run test:net
 

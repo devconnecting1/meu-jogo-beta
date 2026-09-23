@@ -319,7 +319,9 @@ Module._extensions[".ts"] = function (m, filename) {
 
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { generateTown } = require(join(SRC, "shared/game/world.ts"));
-const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+const { defaultSave, sanitizeClientReport, copySaveInto } = require(join(SRC, "shared/game/save.ts"));
+const COS = require(join(SRC, "shared/data/cosmetics.ts"));
+const { COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
 const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
@@ -327,7 +329,7 @@ const P = require(join(SRC, "shared/net/protocol.ts"));
 const { seqDiff } = require(join(SRC, "shared/net/codec.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
-const { Replicator, mapHashOf, wirePosition } = require(join(SRC, "server/net/replication.ts"));
+const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS } = require(join(SRC, "server/net/replication.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
 
@@ -432,8 +434,7 @@ const CLIENT_LAG_TICKS = [0, 3, 6];
  */
 const CLIENT_LOSS = [0, 0.01, 0.02];
 
-function addSurvivor(server, slot, x, y) {
-	const save = defaultSave();
+function addSurvivor(server, slot, x, y, save = defaultSave()) {
 	const sp = PL.createServerPlayer(
 		{ slot, userId: 1000 + slot, name: `p${slot}` },
 		save,
@@ -461,8 +462,28 @@ function addSurvivor(server, slot, x, y) {
 		snapshots: 0,
 		/** slots named by every `Shake` this client received: all of them must be this client's own */
 		shakeSlots: new Set(),
+		/** the reliable roster, kept exactly as client/net/netClient.ts keeps it (§4.4, MON-04) */
+		roster: new Map(),
+		/** PlayerProfile deltas received */
+		profiles: [],
 	});
 	return sp;
+}
+
+/** what client/net/netClient.ts `applyWorldEvent` does with the roster events, for one client */
+function applyRoster(client, e) {
+	if (e.t === P.WorldEv.PlayerJoined) {
+		client.roster.set(e.slot, { userId: e.userId, name: e.name, level: e.level, outfit: e.outfit, pet: e.pet });
+	} else if (e.t === P.WorldEv.PlayerProfile) {
+		client.profiles.push(e);
+		const entry = client.roster.get(e.slot);
+		if (entry === undefined) return;
+		entry.level = e.level;
+		entry.outfit = e.outfit;
+		entry.pet = e.pet;
+	} else if (e.t === P.WorldEv.PlayerLeft) {
+		client.roster.delete(e.slot);
+	}
 }
 
 /** one command per tick for every survivor, so the input queue never runs dry (§2.2) */
@@ -545,6 +566,11 @@ function tickServer(server, opts = {}) {
 			continue;
 		}
 		for (const e of batch.events) {
+			if (e.t === P.WorldEv.PlayerJoined || e.t === P.WorldEv.PlayerProfile || e.t === P.WorldEv.PlayerLeft) {
+				if (slot === undefined) for (const [, c] of server.clients) applyRoster(c, e);
+				else if (server.clients.has(slot)) applyRoster(server.clients.get(slot), e);
+				continue;
+			}
 			if (e.t !== P.WorldEv.ZombieDied) continue;
 			const client = server.clients.get(slot);
 			if (client === undefined) continue;
@@ -906,6 +932,86 @@ section("(f) the cost of a tick with 150 zombies and 6 survivors (§3.2 budget: 
 		`p95 stays under the tick period (${p95.toFixed(3)} ms < ${(1000 / CFG.SIM_HZ).toFixed(1)} ms)`,
 	);
 	checkEq(server.sim.stats.droppedTicks, 0, "no tick was dropped");
+}
+
+// ================================================================ (g) what a survivor wears (MON-04, §4.4)
+
+section("(g) the roster carries outfit and pet, and a change mid-session reaches everybody (MON-04, §4.4)");
+{
+	const equipOf = name => COSTUMES.find(c => c.name === name).equipId;
+	const costumeOf = name => COSTUMES.find(c => c.name === name).id;
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	// slot 0 walks in already wearing what it bought: the Cowboy outfit and the Eagle
+	const dressed = defaultSave();
+	dressed.costumes[costumeOf("Cowboy")] = 1;
+	dressed.costumes[costumeOf("Eagle")] = 1;
+	dressed.equipOutfit = equipOf("Cowboy");
+	dressed.equipPet = equipOf("Eagle");
+	const a = addSurvivor(server, 0, cx, cy, dressed);
+	const b = addSurvivor(server, 1, cx + 40, cy);
+	for (let i = 0; i < 3; i++) tickServer(server);
+	const ca = server.clients.get(0);
+	const cb = server.clients.get(1);
+	checkEq(cb.roster.get(0)?.outfit, COS.OutfitLook.Cowboy, "the ally's PlayerJoined carries the outfit it wears");
+	checkEq(cb.roster.get(0)?.pet, COS.PetLook.Eagle, "and the pet at its heel");
+	checkEq(ca.roster.get(0)?.outfit, COS.OutfitLook.Cowboy, "its own client is told the same (the server's word)");
+	checkEq(cb.roster.get(1)?.outfit, COS.OutfitLook.None, "a survivor with nothing bought wears nothing");
+	checkEq(ca.profiles.length + cb.profiles.length, 0, "and nothing changed, so no PlayerProfile was sent");
+
+	// mid-session: slot 1 buys Santa and the Doberman in the shop (the server writes `costumes`), then equips
+	// them in the backpack -- which reaches the server as a save report, exactly the processReport path
+	b.save.costumes[costumeOf("Santa")] = 1;
+	b.save.costumes[costumeOf("Doberman")] = 1;
+	const report = JSON.parse(JSON.stringify(b.save));
+	report.equipOutfit = equipOf("Santa");
+	report.equipPet = equipOf("Doberman");
+	copySaveInto(b.save, sanitizeClientReport(report, b.save));
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(
+		ca.roster.get(1)?.outfit,
+		COS.OutfitLook.Santa,
+		"the other client sees the new outfit, in the same session",
+	);
+	checkEq(ca.roster.get(1)?.pet, COS.PetLook.Doberman, "and the new pet");
+	checkEq(cb.roster.get(1)?.outfit, COS.OutfitLook.Santa, "the owner's client hears what the server accepted");
+	checkEq(ca.profiles.length, 1, "one change, one PlayerProfile (not one per tick)");
+	check(ca.profiles.length > 0 && ca.profiles[0].slot === 1, "and it names the survivor who changed (slot 1)");
+
+	// a report wearing something NOT bought is corrected on the server and never reaches the wire
+	const forged = JSON.parse(JSON.stringify(b.save));
+	forged.equipOutfit = equipOf("Zombie");
+	forged.equipPet = equipOf("Malamute");
+	forged.costumes = forged.costumes.map(() => 1);
+	copySaveInto(b.save, sanitizeClientReport(forged, b.save));
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.outfit, COS.OutfitLook.None, "a forged outfit is taken off, not shown to anyone");
+	checkEq(ca.roster.get(1)?.pet, COS.PetLook.None, "and so is a forged pet");
+	// even a live table somebody wrote into directly is checked again before it is replicated
+	b.save.equipOutfit = equipOf("Zombie");
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.outfit, COS.OutfitLook.None, "an unowned outfit in the live save never goes on the wire");
+
+	// the level on the plate is part of the same profile: before this it never changed inside a session
+	const before = ca.roster.get(1)?.level;
+	b.save.level += 1;
+	for (let i = 0; i < 12; i++) tickServer(server);
+	checkEq(ca.roster.get(1)?.level, before + 1, "a level-up reaches the allies' plates mid-session");
+
+	// someone joining in the same tick as a change still reads the current look. The worst case is pinned: the
+	// very next tick is a periodic profile pass, whose PlayerProfile goes out in the BROADCAST half of the flush
+	// -- before the newcomer's own PlayerJoined for that survivor, so the newcomer would drop it as "unknown
+	// slot" and keep the stale look for good. `welcome` refreshing the profiles first is what prevents that.
+	while ((server.sim.tick + 1) % PROFILE_EVERY_TICKS !== 0) tickServer(server);
+	b.save.equipOutfit = equipOf("Santa");
+	const c = addSurvivor(server, 2, cx - 40, cy);
+	for (let i = 0; i < 3; i++) tickServer(server);
+	const cc = server.clients.get(2);
+	checkEq(cc.roster.get(1)?.outfit, COS.OutfitLook.Santa, "a newcomer's roster has the outfit worn NOW");
+	checkEq(cc.roster.get(0)?.pet, COS.PetLook.Eagle, "and every other survivor's pet");
+	checkEq(cc.roster.get(2)?.outfit, COS.OutfitLook.None, "and its own plain look");
+	check(c.outfit === COS.OutfitLook.None && a.pet === COS.PetLook.Eagle, "the server's profile fields agree");
 }
 
 // ---------------------------------------------------------------- verdict

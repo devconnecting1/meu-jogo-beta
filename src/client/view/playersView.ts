@@ -9,6 +9,9 @@
  *   the plate     one pooled `AllyPlate` per userId: name and level, a thin HP bar while they are hurt, and the
  *                 revive ring plus bleed-out countdown while they are down — readable in the dark (MP-08)
  *   the light     every standing ally lights the night map for everyone, not just for themselves (LUZ-02/MP-08)
+ *   the cosmetics what they bought, as the server replicated it (MON-04): the outfit rides the same `drawSurvivor`,
+ *                 and the pet is a `PetFollower` per ally that follows where THIS client draws them — it is never
+ *                 an entity, never on the wire beyond the one byte that says which animal it is
  *
  * Nothing is built inside a frame: plates are pooled by userId, retired only after they have been out of the
  * snapshot for RETIRE_S, and the `SurvivorLook` is one scratch object refilled per ally.
@@ -31,6 +34,9 @@ import {
 	weaponById,
 } from "./survivorView";
 import { meleeReach } from "shared/data/weapons";
+import { PetLook, petFlies } from "shared/data/cosmetics";
+import { drawPet } from "./cosmeticsView";
+import { PetFollower, createPetFollower, stepPetFollower } from "./petFollow";
 
 /** a plate whose ally has been out of the snapshot this long is destroyed (§4.4's despawn, with slack) */
 const RETIRE_S = 3;
@@ -46,6 +52,8 @@ const WALK_SPEED = 8;
 const AMP_EASE = 0.25;
 /** where an ally's own light sits between "fully lit" and the falloff, same as the local survivor's */
 const LIGHT_INNER = 0.4;
+/** culling radius of a pet: the eagle's open wings are the widest thing any of them draws */
+const PET_CULL = 60;
 
 /**
  * One pooled ally: their melee-sweep memory, the walk-cycle bookkeeping and — once a parent Frame is known —
@@ -63,6 +71,9 @@ interface Pooled {
 	lastCycle: number;
 	amp: number;
 	started: boolean;
+	/** their pet, following where this client draws them (MON-04), and which animal it was last frame */
+	pet: PetFollower;
+	petLook: number;
 }
 
 /** where a survivor's drop shadow falls; the game loop owns the sun and passes its own accessor */
@@ -93,10 +104,12 @@ export class PlayersView {
 		for (const rp of list) {
 			const slot = this.slotOf(rp, clock);
 			this.advanceWalk(slot, rp, dt);
+			this.drawPetOf(r, cam, v, slot, rp, dt, clock, shadow);
 			if (!circleInView(rp.x, rp.y, SURVIVOR_R + CULL_MARGIN, v)) continue;
 			look.x = rp.x;
 			look.y = rp.y;
 			look.angle = rp.angle;
+			look.outfit = rp.outfit;
 			look.weapon = weaponById(rp.weaponId);
 			look.feetPhase = rp.feetCycle;
 			look.feetAmp = slot.amp;
@@ -182,12 +195,38 @@ export class PlayersView {
 				lastCycle: rp.feetCycle,
 				amp: 0,
 				started: false,
+				pet: createPetFollower(),
+				petLook: PetLook.None,
 			};
 			this.pool.set(rp.userId, slot);
 			this.pooled += 1;
 		}
 		slot.seen = clock;
 		return slot;
+	}
+
+	/**
+	 * An ally's pet (MON-04). It is stepped every frame whether or not its owner is on screen, so it is already at
+	 * their heel when they walk into view; a new animal (or none) makes the next one appear at the heel instead of
+	 * a dog turning into a bird mid-stride.
+	 */
+	private drawPetOf(
+		r: Renderer,
+		cam: Camera,
+		v: ViewRect,
+		slot: Pooled,
+		rp: RemotePlayerView,
+		dt: number,
+		clock: number,
+		shadow: ShadowFn,
+	): void {
+		if (rp.pet !== slot.petLook) {
+			slot.petLook = rp.pet;
+			slot.pet.started = false;
+		}
+		if (rp.pet === PetLook.None) return;
+		stepPetFollower(slot.pet, rp.x, rp.y, rp.angle, dt, petFlies(rp.pet));
+		if (circleInView(slot.pet.x, slot.pet.y, PET_CULL, v)) drawPet(r, cam, slot.pet, rp.pet, clock, shadow);
 	}
 
 	/** feet amplitude from the interpolated speed, eased exactly like the local survivor's */

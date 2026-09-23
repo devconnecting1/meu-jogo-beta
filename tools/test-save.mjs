@@ -15,6 +15,10 @@
  *    checks the way back: a v3 document read by v2 code (unknown keys dropped) still yields the same save,
  *    so a rollback is safe, and the v1 legacy path (`shopHave`) still migrates.
  *
+ *    v4 (MON-04) does the same for the cosmetic slots: the single `equipDeco` of a v2/v3 document becomes
+ *    `equipOutfit` or `equipPet` by what it is, a rollback to v3 forgets only WHICH cosmetic was worn (never one
+ *    that was bought), and a client report can never wear a cosmetic the server does not know it owns.
+ *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
  *    unreachable, and a day survived silently paid nothing. The fix moves the payment next to the event, so
@@ -37,6 +41,10 @@ const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 const { SHOP_PACKS, COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
+const COS = require(join(SRC, "shared/data/cosmetics.ts"));
+const { EquipSlot } = require(join(SRC, "shared/data/equips.ts"));
+const PLAYER = require(join(SRC, "shared/game/player.ts"));
+const { ServerCraft } = require(join(SRC, "server/sim/craft.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
 const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
@@ -161,7 +169,8 @@ const V2_SCALARS = [
 	"equipCloth",
 	"equipHand",
 	"equipGun",
-	"equipDeco",
+	// `equipDeco` is not here on purpose: v4 replaced it with `equipOutfit` / `equipPet`, and section 12 checks
+	// that its value lands in the right one of the two
 ];
 const V2_ARRAYS = [
 	"skillLevels",
@@ -207,9 +216,12 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const doc = productionV2();
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
-	checkEq(save.version, SAVE.SAVE_VERSION, "e sai como v3");
-	checkEq(SAVE.SAVE_VERSION, 3, "SAVE_VERSION e 3");
+	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
+	checkEq(SAVE.SAVE_VERSION, 4, "SAVE_VERSION e 4 (dois slots cosmeticos, MON-04)");
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
+	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
+	checkEq(save.equipPet, -1, "e nenhum pet");
+	check(!("equipDeco" in save), "equipDeco nao existe mais no save v4");
 	checkEq(save.runHp, 0, "runHp nasce em 0 (= nao registrado, entra com a vida cheia)");
 	checkEq(save.runHunger, 0, "runHunger nasce em 0 (= cheio)");
 	check(save.settings.mirror === true, "settings.mirror (canhoto) sobreviveu");
@@ -227,7 +239,7 @@ section("2) o save v3 gravado volta inteiro, e um rollback para v2 e seguro");
 	save.runHunger = 412;
 	// what the server writes back to the DataStore
 	const stored = JSON.parse(JSON.stringify(save));
-	checkEq(SAVE.storedVersion(stored), 3, "o documento gravado se declara v3");
+	checkEq(SAVE.storedVersion(stored), SAVE.SAVE_VERSION, "o documento gravado se declara na versao atual");
 	const again = SAVE.sanitizeStoredSave(stored);
 	checkEq(again.runHp, 73, "runHp voltou");
 	checkEq(again.runHunger, 412, "runHunger voltou");
@@ -259,7 +271,7 @@ section("3) o save v1 legado (shopHave) continua migrando");
 	};
 	const save = SAVE.sanitizeStoredSave(v1);
 	checkEq(SAVE.storedVersion(v1), 0, "um documento v1 nao declara versao");
-	checkEq(save.version, 3, "e sobe direto para v3");
+	checkEq(save.version, SAVE.SAVE_VERSION, "e sobe direto para a versao atual");
 	checkEq(save.level, 12, "o nivel veio");
 	checkEq(save.money, 240, "as moedas vieram");
 	checkEq(save.day, 9, "o dia veio");
@@ -495,6 +507,237 @@ section("11) uma run assistida por admin nao recebe as moedas da meia-noite");
 	for (let i = 0; i < 60 * 60; i++) playTick(sim, clock, 1 / 60);
 	checkEq(save.day, 2, "o dia passou");
 	checkEq(save.money, 0, "e nao pagou nada");
+}
+
+// ---------------------------------------------------------------- v4: two cosmetic slots (MON-04)
+
+const equipId = name => {
+	const e = EQUIPS.find(x => x.name === name);
+	if (e === undefined) throw new Error(`no equipment "${name}"`);
+	return e.id;
+};
+const costumeOf = name => {
+	const c = COSTUMES.find(x => x.name === name);
+	if (c === undefined) throw new Error(`no costume "${name}"`);
+	return c.id;
+};
+const SANTA = equipId("Santa");
+const ZOMBIE = equipId("Zombie");
+const COWBOY = equipId("Cowboy");
+const PIGEON = equipId("Pigeon");
+const EAGLE = equipId("Eagle");
+const CAROLINA = equipId("Carolina");
+
+/** the production v2 document, as a v3 server last wrote it, wearing `deco` in the one old slot */
+function productionV3(deco) {
+	const doc = productionV2();
+	doc.version = 3;
+	doc.runHp = 60;
+	doc.runHunger = 210;
+	doc.equipDeco = deco;
+	return doc;
+}
+
+section("12) migracao v3 -> v4: o equipDeco vai para o slot certo, e so se for possuido");
+{
+	// the fixture owns the even costumes (Pigeon, Eagle, Malamute, Santa, Cowboy) and, in the inventory, every
+	// 7th equipment -- id 21 is Carolina, so Carolina is owned through a pack, not a costume
+	const fixture = productionV2();
+	check(fixture.costumes[costumeOf("Santa")] === 1, "fixture: o traje Santa foi comprado");
+	check(fixture.costumes[costumeOf("Zombie")] === 0, "fixture: o traje Zombie nao");
+	check(
+		fixture.invenEquip[CAROLINA] > 0 && fixture.costumes[costumeOf("Carolina")] === 0,
+		"fixture: Carolina so no inventario",
+	);
+
+	const santa = SAVE.sanitizeStoredSave(productionV3(SANTA));
+	checkEq(santa.version, SAVE.SAVE_VERSION, "o v3 sobe para v4");
+	checkEq(santa.equipOutfit, SANTA, "um traje (Santa) no equipDeco vira equipOutfit");
+	checkEq(santa.equipPet, -1, "e o slot de pet fica vazio");
+	checkEq(santa.runHp, 60, "o corpo da run (v3) atravessa a migracao");
+	assertSameAsV2(productionV3(SANTA), santa, "nenhum outro campo mudou");
+
+	const eagle = SAVE.sanitizeStoredSave(productionV3(EAGLE));
+	checkEq(eagle.equipPet, EAGLE, "um pet (Eagle) no equipDeco vira equipPet");
+	checkEq(eagle.equipOutfit, -1, "e o slot de traje fica vazio");
+
+	const carolina = SAVE.sanitizeStoredSave(productionV3(CAROLINA));
+	checkEq(carolina.equipPet, CAROLINA, "um pet que veio num pacote (inventario) tambem migra");
+
+	const zombie = SAVE.sanitizeStoredSave(productionV3(ZOMBIE));
+	checkEq(zombie.equipOutfit, -1, "um traje NAO possuido no equipDeco nao e vestido depois da migracao");
+	checkEq(zombie.equipPet, -1, "nem vai parar no slot de pet");
+
+	const json = SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(santa)));
+	checkEq(json.equipOutfit, SANTA, "o v4 gravado (JSON) volta com o traje");
+	checkEq(json.equipPet, -1, "e sem pet");
+
+	// a v4 document never falls back to a stray legacy key: the new fields win
+	const mixed = JSON.parse(JSON.stringify(santa));
+	mixed.equipOutfit = COWBOY;
+	mixed.equipPet = -1;
+	mixed.equipDeco = EAGLE;
+	const read = SAVE.sanitizeStoredSave(mixed);
+	checkEq(read.equipOutfit, COWBOY, "um documento que ja fala v4 e lido como v4");
+	checkEq(read.equipPet, -1, "e um equipDeco esquecido nele e ignorado");
+}
+
+section("13) rollback v4 -> v3 -> v4: esquece QUAL cosmetico estava vestido, nunca o que foi comprado");
+{
+	const v4 = SAVE.sanitizeStoredSave(productionV3(SANTA));
+	v4.equipPet = EAGLE;
+	SAVE.enforceSaveInvariants(v4);
+	checkEq(v4.equipPet, EAGLE, "v4 com traje e pet ao mesmo tempo");
+	const stored = JSON.parse(JSON.stringify(v4));
+	// what a v3 server does with it: unknown keys dropped, and its own `equipDeco` read as missing (-1) and written
+	const v3 = JSON.parse(JSON.stringify(stored));
+	delete v3.equipOutfit;
+	delete v3.equipPet;
+	v3.equipDeco = -1;
+	v3.version = 3;
+	const back = SAVE.sanitizeStoredSave(v3);
+	checkEq(back.equipOutfit, -1, "de volta ao v4: nenhum traje vestido");
+	checkEq(back.equipPet, -1, "nenhum pet");
+	checkArrayEq(back.costumes, v4.costumes, "mas todos os trajes comprados continuam comprados");
+	checkArrayEq(back.invenEquip, v4.invenEquip, "e o inventario (pets de pacote) intacto");
+	check(SAVE.ownsCosmetic(back, SANTA) && SAVE.ownsCosmetic(back, EAGLE), "e os dois continuam vestiveis");
+	assertSameAsV2(productionV3(SANTA), back, "e todo o resto igual");
+}
+
+section("14) posse no servidor: o cliente nunca declara o que possui");
+{
+	const base = SAVE.defaultSave();
+	base.money = 500;
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.equipOutfit = SANTA;
+	forged.equipPet = EAGLE;
+	forged.costumes = forged.costumes.map(() => 1);
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	checkEq(upd.equipOutfit, -1, "relatorio vestindo um traje nao comprado -> corrigido para nenhum");
+	checkEq(upd.equipPet, -1, "relatorio com um pet nao comprado -> nenhum");
+	check(
+		upd.costumes.every(v => v === 0),
+		"e o `costumes` forjado no relatorio e ignorado (e do servidor)",
+	);
+
+	// owned, but in the wrong slot
+	const owner = SAVE.defaultSave();
+	owner.costumes[costumeOf("Eagle")] = 1;
+	owner.costumes[costumeOf("Cowboy")] = 1;
+	const wrong = JSON.parse(JSON.stringify(owner));
+	wrong.equipOutfit = EAGLE;
+	wrong.equipPet = COWBOY;
+	const w = SAVE.sanitizeClientReport(wrong, owner);
+	checkEq(w.equipOutfit, -1, "um pet no slot de traje nao e aceito");
+	checkEq(w.equipPet, -1, "nem um traje no slot de pet");
+	const right = JSON.parse(JSON.stringify(owner));
+	right.equipOutfit = COWBOY;
+	right.equipPet = EAGLE;
+	const ok = SAVE.sanitizeClientReport(right, owner);
+	checkEq(ok.equipOutfit, COWBOY, "o traje comprado e aceito");
+	checkEq(ok.equipPet, EAGLE, "e o pet comprado tambem -- os dois ao mesmo tempo");
+
+	// the pack path: a pigeon in the inventory only exists if a pack the SERVER counted delivered it
+	const smuggle = JSON.parse(JSON.stringify(base));
+	smuggle.invenEquip[PIGEON] = 1;
+	smuggle.equipPet = PIGEON;
+	const s = SAVE.sanitizeClientReport(smuggle, base);
+	checkEq(s.invenEquip[PIGEON], 0, "um pombo que nenhum pacote entregou nao entra no inventario");
+	checkEq(s.equipPet, -1, "e portanto nao e vestido");
+	const pigeonPack = SHOP_PACKS.find(p => p.items.some(it => it.index === PIGEON && it.kind === 2));
+	check(pigeonPack !== undefined, "existe um pacote que entrega o Pigeon");
+	const bought = SAVE.defaultSave();
+	bought.packsBought[pigeonPack.id] = 1;
+	const opened = JSON.parse(JSON.stringify(bought));
+	opened.packsOpened[pigeonPack.id] = 1;
+	opened.invenEquip[PIGEON] = 1;
+	opened.equipPet = PIGEON;
+	const o = SAVE.sanitizeClientReport(opened, bought);
+	checkEq(o.equipPet, PIGEON, "com o pacote comprado (servidor) e aberto, o pombo pode ser vestido");
+
+	// what goes on the wire asks ownership again, even of a live table somebody wrote into directly
+	const raw = SAVE.defaultSave();
+	raw.equipOutfit = SANTA;
+	raw.equipPet = EAGLE;
+	checkEq(SAVE.outfitLookOf(raw), COS.OutfitLook.None, "outfitLookOf nao desenha um traje nao possuido");
+	checkEq(SAVE.petLookOf(raw), COS.PetLook.None, "petLookOf nao desenha um pet nao possuido");
+	raw.costumes[costumeOf("Santa")] = 1;
+	raw.costumes[costumeOf("Eagle")] = 1;
+	checkEq(SAVE.outfitLookOf(raw), COS.OutfitLook.Santa, "possuido: o traje e desenhado");
+	checkEq(SAVE.petLookOf(raw), COS.PetLook.Eagle, "possuido: o pet e desenhado");
+
+	// an admin taking a costume back takes it off
+	raw.costumes[costumeOf("Santa")] = 0;
+	SAVE.enforceSaveInvariants(raw);
+	checkEq(raw.equipOutfit, -1, "trancar o traje (admin) tira ele do corpo");
+	checkEq(raw.equipPet, EAGLE, "sem mexer no pet");
+}
+
+section("15) os dois slots: quem vai onde, equipar pelo servidor, e o New game");
+{
+	for (const c of COSTUMES) {
+		const want = ["Santa", "Zombie", "Cowboy"].includes(c.name) ? EquipSlot.Outfit : EquipSlot.Pet;
+		checkEq(
+			SAVE.equipSlotOf(c.equipId),
+			want,
+			`${c.name} vai no slot ${want === EquipSlot.Outfit ? "Outfit" : "Pet"}`,
+		);
+	}
+	const kind4 = EQUIPS.filter(e => e.kind === 4);
+	check(
+		kind4.every(e => SAVE.equipSlotOf(e.id) !== 0),
+		"todo equipamento kind 4 tem um slot (nada vendido fica sem desenho)",
+	);
+	check(
+		kind4.every(e => COS.outfitLookOfEquip(e.id) !== 0 || COS.petLookOfEquip(e.id) !== 0),
+		"e todo kind 4 tem um visual (traje ou pet)",
+	);
+
+	const craft = new ServerCraft({ world: undefined, build: undefined });
+	const save = SAVE.defaultSave();
+	checkEq(craft.equip(save, SANTA).kind, "refused", "o servidor recusa vestir um traje nao possuido");
+	checkEq(save.equipOutfit, -1, "e nada muda");
+	save.costumes[costumeOf("Santa")] = 1;
+	save.costumes[costumeOf("Eagle")] = 1;
+	const e1 = craft.equip(save, SANTA);
+	checkEq(e1.kind === "equipped" ? e1.slot : 0, EquipSlot.Outfit, "Santa vai para o slot 4 (Outfit)");
+	const e2 = craft.equip(save, EAGLE);
+	checkEq(e2.kind === "equipped" ? e2.slot : 0, EquipSlot.Pet, "Eagle vai para o slot 5 (Pet)");
+	checkEq(save.equipOutfit, SANTA, "e o traje continua vestido: os dois ao mesmo tempo");
+	checkEq(craft.unequip(save, EquipSlot.Pet).kind, "unequipped", "tirar o pet (slot 5)");
+	checkEq(save.equipPet, -1, "o pet saiu");
+	checkEq(save.equipOutfit, SANTA, "o traje ficou");
+	checkEq(craft.unequip(save, 6).kind, "refused", "slot 6 nao existe");
+
+	// New game: a costume is forever, a pack's pigeon lived in the inventory the starter kit replaces
+	const run = SAVE.defaultSave();
+	run.costumes[costumeOf("Santa")] = 1;
+	run.invenEquip[PIGEON] = 1;
+	run.equipOutfit = SANTA;
+	run.equipPet = PIGEON;
+	SAVE.resetRun(run);
+	checkEq(run.equipOutfit, SANTA, "New game mantem o traje comprado");
+	checkEq(run.equipPet, -1, "e larga o pombo que veio num pacote (o inventario recomecou)");
+}
+
+section("16) MON-01: um cosmetico nao muda nada numa noite (defesa e velocidade)");
+{
+	const save = SAVE.defaultSave();
+	const p = PLAYER.createPlayer(save, 0, 0);
+	const def0 = PLAYER.playerEquipDefence(save);
+	const speed0 = PLAYER.recalcMoveSpeed(p, save);
+	save.costumes = save.costumes.map(() => 1);
+	save.equipOutfit = COWBOY;
+	save.equipPet = EAGLE;
+	// even a data row that forgot MON-01 must not leak into the numbers
+	const cowboy = EQUIPS[COWBOY];
+	const was = { def: cowboy.def, speed: cowboy.speed };
+	cowboy.def = 5;
+	cowboy.speed = 3;
+	checkEq(PLAYER.playerEquipDefence(save), def0, "traje + pet: defesa igual");
+	checkEq(PLAYER.recalcMoveSpeed(p, save), speed0, "traje + pet: velocidade igual");
+	cowboy.def = was.def;
+	cowboy.speed = was.speed;
 }
 
 // ---------------------------------------------------------------- verdict

@@ -206,6 +206,7 @@ const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { ZOMBIES } = require(join(SRC, "shared/data/zombies.ts"));
 const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+const COS = require(join(SRC, "shared/data/cosmetics.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -1138,7 +1139,7 @@ test("Fx: malformed packets are refused", () => {
 
 // ---------------------------------------------------------------- 6. World (S→C, reliable)
 
-function randWorldEvent(kind = rint(1, 15)) {
+function randWorldEvent(kind = rint(1, 16)) {
 	const dynId = () => CFG.DYNAMIC_ID_BASE + rint(0, 100000);
 	switch (kind) {
 		case P.WorldEv.SolidAdd:
@@ -1200,8 +1201,16 @@ function randWorldEvent(kind = rint(1, 15)) {
 				userId: rbool() ? rint(1, 9000000000) : -rint(1, 8),
 				name: pick(["Builder", "Zé do Caixão", "🧟 survivor", "", "x".repeat(40)]),
 				level: rint(1, 999),
-				costume: rint(0, 20),
-				deco: rint(0, 20),
+				outfit: rint(0, COS.OUTFIT_LOOK_MAX),
+				pet: rint(0, COS.PET_LOOK_MAX),
+			};
+		case P.WorldEv.PlayerProfile:
+			return {
+				t: kind,
+				slot: rint(0, 5),
+				level: rint(1, 999),
+				outfit: rint(0, COS.OUTFIT_LOOK_MAX),
+				pet: rint(0, COS.PET_LOOK_MAX),
 			};
 		case P.WorldEv.PlayerLeft:
 			return { t: kind, slot: rint(0, 5) };
@@ -1285,7 +1294,14 @@ function compareWorldEvent(a, b) {
 			eq("userId", b.userId, a.userId);
 			eq("name", b.name, a.name);
 			eq("level", b.level, a.level);
-			eq("costume", b.costume, a.costume);
+			eq("outfit", b.outfit, a.outfit);
+			eq("pet", b.pet, a.pet);
+			break;
+		case P.WorldEv.PlayerProfile:
+			eq("profile slot", b.slot, a.slot);
+			eq("profile level", b.level, a.level);
+			eq("profile outfit", b.outfit, a.outfit);
+			eq("profile pet", b.pet, a.pet);
 			break;
 		case P.WorldEv.PlayerLeft:
 			eq("slot", b.slot, a.slot);
@@ -1331,6 +1347,60 @@ test("World: round trip of every delta", () => {
 	sizes.push(["World ItemAdd", `${one(P.WorldEv.ItemAdd)} B`, "id, kind, itemId, count, x, y, vx, vy (§4.5)"]);
 	sizes.push(["World ZombieDied", `${one(P.WorldEv.ZombieDied)} B`, "netId, x, y, cause (§4.4)"]);
 	sizes.push(["World Clock", `${one(P.WorldEv.Clock)} B`, "worldDay, dayTime, tick, rain, waveFlags (§4.5)"]);
+	sizes.push(["World PlayerProfile", `${one(P.WorldEv.PlayerProfile)} B`, "slot, level, outfit, pet (MON-04)"]);
+});
+
+test("World: the roster carries outfit and pet, and refuses looks that do not exist (MON-04)", () => {
+	const joined = {
+		t: P.WorldEv.PlayerJoined,
+		slot: 2,
+		userId: 123456789,
+		name: "Cowboy Joe",
+		level: 17,
+		outfit: COS.OutfitLook.Cowboy,
+		pet: COS.PetLook.Eagle,
+	};
+	const profile = {
+		t: P.WorldEv.PlayerProfile,
+		slot: 2,
+		level: 18,
+		outfit: COS.OutfitLook.Santa,
+		pet: COS.PetLook.None,
+	};
+	const pkt = P.encodeWorld({ tick: 5, events: [joined, profile] }).packets[0];
+	const d = P.decodeWorld(pkt);
+	ok(d !== undefined, "the roster pair did not decode");
+	if (d === undefined) return;
+	eq("joined outfit", d.events[0].outfit, COS.OutfitLook.Cowboy);
+	eq("joined pet", d.events[0].pet, COS.PetLook.Eagle);
+	eq("profile type", d.events[1].t, P.WorldEv.PlayerProfile);
+	eq("profile level", d.events[1].level, 18);
+	eq("profile outfit", d.events[1].outfit, COS.OutfitLook.Santa);
+	eq("profile pet", d.events[1].pet, COS.PetLook.None);
+	// an encoder handed a look out of range writes the nearest valid one instead of an unknown byte
+	const clamped = P.decodeWorld(P.encodeWorld({ tick: 1, events: [{ ...profile, outfit: 99, pet: -4 }] }).packets[0]);
+	eq("out-of-range outfit clamped on encode", clamped.events[0].outfit, COS.OUTFIT_LOOK_MAX);
+	eq("negative pet clamped on encode", clamped.events[0].pet, 0);
+	// the decoder refuses a byte that names no look (a hostile or corrupt packet)
+	const pb = bytesOf(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]);
+	// header 5 B, tag 1 B, slot 1 B, level 2 B, outfit 1 B, pet 1 B
+	const badOutfit = pb.slice();
+	badOutfit[9] = COS.OUTFIT_LOOK_MAX + 1;
+	eq("profile with an unknown outfit", P.decodeWorld(bufOf(badOutfit)), undefined);
+	const badPet = pb.slice();
+	badPet[10] = COS.PET_LOOK_MAX + 1;
+	eq("profile with an unknown pet", P.decodeWorld(bufOf(badPet)), undefined);
+	const badSlot = pb.slice();
+	badSlot[6] = 6;
+	eq("profile for slot 6", P.decodeWorld(bufOf(badSlot)), undefined);
+	const jb = bytesOf(P.encodeWorld({ tick: 1, events: [joined] }).packets[0]);
+	const badJoinPet = jb.slice();
+	badJoinPet[jb.length - 1] = 200;
+	eq("PlayerJoined with an unknown pet", P.decodeWorld(bufOf(badJoinPet)), undefined);
+	const badJoinOutfit = jb.slice();
+	badJoinOutfit[jb.length - 2] = 200;
+	eq("PlayerJoined with an unknown outfit", P.decodeWorld(bufOf(badJoinOutfit)), undefined);
+	eq("PlayerProfile size", buffer.len(P.encodeWorld({ tick: 1, events: [profile] }).packets[0]), 5 + 6);
 });
 
 test("World: WorldInit in blocks of ≤ 16 KB", () => {

@@ -1,5 +1,5 @@
 import { GameContext } from "shared/game/context";
-import { expMaxInit, totalPendingPacks } from "shared/game/save";
+import { equippedIn, expMaxInit, totalPendingPacks } from "shared/game/save";
 import { TIPS } from "shared/data/tips";
 import { ACHIEVEMENTS } from "shared/data/achievements";
 import { WEAPONS } from "shared/data/weapons";
@@ -66,10 +66,8 @@ function equipName(ctx: GameContext, slot: number): string {
 		return def !== undefined ? langGet(def.name, lang) : "—";
 	};
 	if (slot === 0) return pick(save.equipWeapon >= 0 ? save.equipWeapon : 0, WEAPONS);
-	if (slot === 1) return pick(save.equipCloth, EQUIPS);
-	if (slot === 2) return pick(save.equipHand, EQUIPS);
-	if (slot === 3) return pick(save.equipGun, EQUIPS);
-	return pick(save.equipDeco, EQUIPS);
+	// 1..5 are EquipSlot: cloth, hand, gun, outfit, pet
+	return pick(equippedIn(save, slot), EQUIPS);
 }
 
 const ACH_W = 660;
@@ -288,9 +286,10 @@ export function showLobby(ctx: GameContext, handlers: LobbyHandlers, status?: Lo
 			align: "left",
 		},
 	);
-	const slotKeys = ["Weapon", "Clothes", "Hand", "Gun", "Deco"];
+	// the outfit and the pet are two slots worn at once (MON-04); six rows on a 20 u pitch end where five on 24 did
+	const slotKeys = ["Weapon", "Clothes", "Hand", "Gun", "Outfit", "Pet"];
 	for (let i = 0; i < slotKeys.size(); i++) {
-		const y = loadoutY + space(2) + 24 + i * 24;
+		const y = loadoutY + space(2) + 24 + i * 20;
 		makeLabel(card, `SlotTag${i}`, tr(slotKeys[i]), pad, y, 110, 22, TEXT.sm, THEME.mutedForeground, {
 			align: "left",
 		});

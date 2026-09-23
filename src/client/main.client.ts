@@ -1,10 +1,10 @@
 import { GAME_NAME } from "shared/module";
-import { equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, pendingPacks, resetRun } from "shared/game/save";
+import { equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, pendingPacks, resetRun, setEquipped } from "shared/game/save";
 import { BossState, ZombieState } from "shared/game/entities";
 import { currentWeapon, itemUseEffect, weaponReserve } from "shared/game/player";
 import { ACHIEVEMENTS } from "shared/data/achievements";
 import { CRAFT_RECIPES } from "shared/data/crafts";
-import { EQUIPS } from "shared/data/equips";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { WeaponKind } from "shared/data/kinds";
 import { langGet } from "shared/data/lang";
@@ -866,20 +866,21 @@ pack.onEquipWeapon = id => {
 	switchWeapon(loop.getRefs(), id);
 };
 
+// 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet (EquipSlot). An outfit or a pet is what OTHER people see (MON-04), so
+// changing one asks for a report now: the server re-checks ownership and replicates the look (PlayerProfile)
+// within one report window instead of at the next minute's autosave.
+function cosmeticChanged(slot: number): void {
+	if (slot === EquipSlot.Outfit || slot === EquipSlot.Pet) net.requestSave("equip");
+}
+
 pack.onEquipItem = id => {
 	if (!ownsEquip(ctx.save, id)) return;
 	const slot = equipSlotOf(id);
-	if (slot === 1) ctx.save.equipCloth = id;
-	else if (slot === 2) ctx.save.equipHand = id;
-	else if (slot === 3) ctx.save.equipGun = id;
-	else if (slot === 4) ctx.save.equipDeco = id;
+	if (setEquipped(ctx.save, slot, id)) cosmeticChanged(slot);
 };
 
 pack.onUnequipItem = slot => {
-	if (slot === 1) ctx.save.equipCloth = -1;
-	else if (slot === 2) ctx.save.equipHand = -1;
-	else if (slot === 3) ctx.save.equipGun = -1;
-	else if (slot === 4) ctx.save.equipDeco = -1;
+	if (setEquipped(ctx.save, slot, -1)) cosmeticChanged(slot);
 };
 
 // ---------------------------------------------------------------- boot

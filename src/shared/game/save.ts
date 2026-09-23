@@ -1,11 +1,12 @@
 import { SKILLS } from "shared/data/skills";
 import { ACHIEVEMENTS } from "shared/data/achievements";
 import { WEAPONS } from "shared/data/weapons";
-import { EQUIPS } from "shared/data/equips";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
+import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
 
 /**
  * v1: raw client JSON (shopHave = pending packs). v2: server-validated, packsBought/packsOpened/costumes.
@@ -17,10 +18,21 @@ import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop
  * (`{data, lock}`), `sanitizeStoredSave` fills the two new fields from `emptySave()` when a v2 document has
  * no trace of them, and a server rolled back to v2 code simply drops them as unknown keys. So: no save is
  * rewritten, no save is lost, and a rollback costs at most one run's HP bar.
+ *
+ * v4 (MON-04, docs/MULTIPLAYER.md §6.5): the single "Deco" slot becomes TWO cosmetic slots worn at once —
+ * `equipOutfit` (Santa, Zombie, Cowboy: the body) and `equipPet` (the pigeons, the eagle, the dogs: a companion).
+ * `equipDeco` is gone from the schema. Same rules as v3: same document, additive, reversible —
+ *   - a v3 document has `equipDeco` and neither new field: `readProgress` routes that one id to the slot it
+ *     belongs to (`cosmeticSlotOf`), so whatever was equipped stays equipped;
+ *   - a server rolled back to v3 code drops the two unknown keys and reads no `equipDeco`, so the survivor comes
+ *     back with no cosmetic EQUIPPED. What they OWN (`costumes`, the inventory) is untouched in both directions:
+ *     a rollback costs one click in the backpack, never a purchase.
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
+/** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
+export const SAVE_VERSION_COSMETIC_SLOTS = 4;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -119,7 +131,10 @@ export interface PlayerSaveData {
 	equipCloth: number;
 	equipHand: number;
 	equipGun: number;
-	equipDeco: number;
+	/** v4 (MON-04): EQUIPS id of the worn outfit (EquipSlot.Outfit), -1 = none. Drawn on the body, for everyone. */
+	equipOutfit: number;
+	/** v4 (MON-04): EQUIPS id of the pet that follows the survivor (EquipSlot.Pet), -1 = none */
+	equipPet: number;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -199,8 +214,8 @@ export function defaultSave(): PlayerSaveData {
 
 /**
  * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
- * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and a costume deco) and settings.
- * The server applies it on the "newRun" action; the client applies the same to its copy.
+ * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked)
+ * and settings. The server applies it on the "newRun" action; the client applies the same to its copy.
  */
 export function resetRun(save: PlayerSaveData): void {
 	giveStarterKit(save);
@@ -210,7 +225,9 @@ export function resetRun(save: PlayerSaveData): void {
 	// a new run starts with a new body: never inherit the HP bar the last one died on (v3, §6.1)
 	save.runHp = 0;
 	save.runHunger = 0;
-	save.equipDeco = save.equipDeco >= 0 && ownsEquip(save, save.equipDeco) ? save.equipDeco : -1;
+	// a costume is forever; a pigeon that came in a pack lived in the inventory the starter kit just replaced
+	save.equipOutfit = validEquip(save, save.equipOutfit, EquipSlot.Outfit);
+	save.equipPet = validEquip(save, save.equipPet, EquipSlot.Pet);
 }
 
 function emptySave(): PlayerSaveData {
@@ -250,7 +267,8 @@ function emptySave(): PlayerSaveData {
 		equipCloth: -1,
 		equipHand: -1,
 		equipGun: -1,
-		equipDeco: -1,
+		equipOutfit: -1,
+		equipPet: -1,
 	};
 }
 
@@ -279,7 +297,7 @@ export function ownsCostume(save: PlayerSaveData, costumeId: number): boolean {
 	return (save.costumes[costumeId] ?? 0) > 0;
 }
 
-/** equipment in the inventory, or a deco permanently unlocked by a costume */
+/** equipment in the inventory, or a cosmetic permanently unlocked by a costume */
 export function ownsEquip(save: PlayerSaveData, equipId: number): boolean {
 	if (equipId < 0 || equipId >= EQUIPS.size()) return false;
 	if ((save.invenEquip[equipId] ?? 0) > 0) return true;
@@ -287,11 +305,66 @@ export function ownsEquip(save: PlayerSaveData, equipId: number): boolean {
 	return c !== undefined && ownsCostume(save, c.id);
 }
 
-/** equipment slot of an EQUIPS entry: 1 cloth, 2 hand, 3 gun, 4 deco */
+/**
+ * Equipment slot of an EQUIPS entry (`EquipSlot`): 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet — or 0 for a row that
+ * fits no slot (a kind-4 row shared/data/cosmetics.ts does not know how to draw).
+ */
 export function equipSlotOf(equipId: number): number {
 	const e = EQUIPS[equipId];
 	if (e === undefined) return 0;
-	return e.kind === 1 || e.kind === 2 || e.kind === 3 ? e.kind : 4;
+	if (e.kind === EquipSlot.Cloth || e.kind === EquipSlot.Hand || e.kind === EquipSlot.Gun) return e.kind;
+	return cosmeticSlotOf(equipId);
+}
+
+/** the EQUIPS id worn in `slot` (EquipSlot), or -1 when it is empty or `slot` is not an equipment slot */
+export function equippedIn(save: PlayerSaveData, slot: number): number {
+	if (slot === EquipSlot.Cloth) return save.equipCloth;
+	if (slot === EquipSlot.Hand) return save.equipHand;
+	if (slot === EquipSlot.Gun) return save.equipGun;
+	if (slot === EquipSlot.Outfit) return save.equipOutfit;
+	if (slot === EquipSlot.Pet) return save.equipPet;
+	return -1;
+}
+
+/**
+ * Writes `equipId` (-1 = take it off) into `slot`. No ownership check: the callers (the client's backpack, the
+ * server's `ServerCraft.equip`) check first, and `enforceSaveInvariants` checks again on every save the server
+ * accepts. False when `slot` is not an equipment slot.
+ */
+export function setEquipped(save: PlayerSaveData, slot: number, equipId: number): boolean {
+	if (slot === EquipSlot.Cloth) save.equipCloth = equipId;
+	else if (slot === EquipSlot.Hand) save.equipHand = equipId;
+	else if (slot === EquipSlot.Gun) save.equipGun = equipId;
+	else if (slot === EquipSlot.Outfit) save.equipOutfit = equipId;
+	else if (slot === EquipSlot.Pet) save.equipPet = equipId;
+	else return false;
+	return true;
+}
+
+/**
+ * Does this survivor own this cosmetic (MON-04)? Two ways, and both are the SERVER's:
+ *   - the costume was bought (`costumes`, written only by the shop action in server/main.server.ts), or
+ *   - a pack delivered one into the inventory (the Pigeon and Carolina packs) — `sanitizeClientReport` caps that
+ *     count at what the server-counted packs delivered, so a report cannot make one up.
+ * The client never declares what it owns: every look that leaves the server goes through `outfitLookOf` /
+ * `petLookOf`, which ask this.
+ */
+export function ownsCosmetic(save: PlayerSaveData, equipId: number): boolean {
+	return cosmeticSlotOf(equipId) !== 0 && ownsEquip(save, equipId);
+}
+
+/** what the outfit slot DRAWS (OutfitLook): the equipped outfit if it is one and it is owned, otherwise none */
+export function outfitLookOf(save: PlayerSaveData): number {
+	const id = save.equipOutfit;
+	if (id < 0 || !ownsCosmetic(save, id)) return OutfitLook.None;
+	return outfitLookOfEquip(id);
+}
+
+/** what the pet slot DRAWS (PetLook): the equipped pet if it is one and it is owned, otherwise none */
+export function petLookOf(save: PlayerSaveData): number {
+	const id = save.equipPet;
+	if (id < 0 || !ownsCosmetic(save, id)) return PetLook.None;
+	return petLookOfEquip(id);
 }
 
 export function pendingPacks(save: PlayerSaveData, packId: number): number {
@@ -371,9 +444,23 @@ function readSettings(v: unknown, fb: SettingsData): SettingsData {
 
 const itemMax = (): number => SAVE_LIMITS.ITEM_MAX;
 
+/**
+ * v3 → v4: the fallback of one cosmetic slot. A document that already speaks v4 (either new field present) is read
+ * as it is; one that does not still has the old single `equipDeco`, and that id goes to the slot it belongs to —
+ * an outfit to `equipOutfit`, a pet to `equipPet`, anything else nowhere. `fb` answers when there is neither.
+ * Ownership is not decided here: `enforceSaveInvariants` does that for every slot, migrated or not.
+ */
+function legacyCosmetic(r: Record<string, unknown>, slot: number, fb: number): number {
+	if (r.equipOutfit !== undefined || r.equipPet !== undefined) return fb;
+	if (!isFiniteNumber(r.equipDeco)) return fb;
+	const deco = readInt(r.equipDeco, -1, -1, EQUIPS.size() - 1);
+	return deco >= 0 && cosmeticSlotOf(deco) === slot ? deco : fb;
+}
+
 /** reads every client-simulated field of `r`, falling back to `fb` field by field */
 function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSaveData {
 	const L = SAVE_LIMITS;
+	const eqMax = EQUIPS.size() - 1;
 	return {
 		version: SAVE_VERSION,
 		level: readInt(r.level, fb.level, 1, L.LEVEL_MAX),
@@ -408,10 +495,12 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		oil: readInt(r.oil, fb.oil, 0, L.AMMO_MAX),
 		electric: readInt(r.electric, fb.electric, 0, L.AMMO_MAX),
 		equipWeapon: readInt(r.equipWeapon, fb.equipWeapon, -1, WEAPONS.size() - 1),
-		equipCloth: readInt(r.equipCloth, fb.equipCloth, -1, EQUIPS.size() - 1),
-		equipHand: readInt(r.equipHand, fb.equipHand, -1, EQUIPS.size() - 1),
-		equipGun: readInt(r.equipGun, fb.equipGun, -1, EQUIPS.size() - 1),
-		equipDeco: readInt(r.equipDeco, fb.equipDeco, -1, EQUIPS.size() - 1),
+		equipCloth: readInt(r.equipCloth, fb.equipCloth, -1, eqMax),
+		equipHand: readInt(r.equipHand, fb.equipHand, -1, eqMax),
+		equipGun: readInt(r.equipGun, fb.equipGun, -1, eqMax),
+		// v4: absent in a v3 document, whose `equipDeco` is routed to the right one of the two (the migration)
+		equipOutfit: readInt(r.equipOutfit, legacyCosmetic(r, EquipSlot.Outfit, fb.equipOutfit), -1, eqMax),
+		equipPet: readInt(r.equipPet, legacyCosmetic(r, EquipSlot.Pet, fb.equipPet), -1, eqMax),
 	};
 }
 
@@ -452,10 +541,13 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 		s.packsOpened[i] = math.clamp(s.packsOpened[i] ?? 0, 0, s.packsBought[i]);
 	}
 	if (s.equipWeapon >= 0 && !ownsWeapon(s, s.equipWeapon)) s.equipWeapon = -1;
-	s.equipCloth = validEquip(s, s.equipCloth, 1);
-	s.equipHand = validEquip(s, s.equipHand, 2);
-	s.equipGun = validEquip(s, s.equipGun, 3);
-	s.equipDeco = validEquip(s, s.equipDeco, 4);
+	s.equipCloth = validEquip(s, s.equipCloth, EquipSlot.Cloth);
+	s.equipHand = validEquip(s, s.equipHand, EquipSlot.Hand);
+	s.equipGun = validEquip(s, s.equipGun, EquipSlot.Gun);
+	// MON-04: a cosmetic is worn only if it is one of THAT slot and the server says it is owned (`ownsEquip` reads
+	// `costumes` and the pack-capped inventory). A report naming one it does not own is corrected to none.
+	s.equipOutfit = validEquip(s, s.equipOutfit, EquipSlot.Outfit);
+	s.equipPet = validEquip(s, s.equipPet, EquipSlot.Pet);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -523,7 +615,8 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipCloth = src.equipCloth;
 	dst.equipHand = src.equipHand;
 	dst.equipGun = src.equipGun;
-	dst.equipDeco = src.equipDeco;
+	dst.equipOutfit = src.equipOutfit;
+	dst.equipPet = src.equipPet;
 	return dst;
 }
 
@@ -575,7 +668,7 @@ export function sanitizeClientReport(raw: unknown, base: PlayerSaveData): Player
 		const floor = math.min(base.packsOpened[i] ?? 0, bought);
 		s.packsOpened[i] = math.min(math.max(reported[i], floor), bought);
 	}
-	// shop-only decos (costume pets) are not found or crafted in the world: a report may only add
+	// shop-only cosmetics (outfits and pets) are not found or crafted in the world: a report may only add
 	// the ones delivered by the packs it opens
 	for (const c of COSTUMES) {
 		const id = c.equipId;

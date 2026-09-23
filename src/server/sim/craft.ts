@@ -25,7 +25,7 @@ import { SKILLS } from "shared/data/skills";
 import { chance } from "shared/engine/rng";
 import { countItem, addItem, removeItem } from "shared/sim/inventory";
 import { querySolids, Solid, WorldData } from "shared/game/world";
-import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
+import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
 import { ServerBuild } from "./build";
 
@@ -166,23 +166,16 @@ export class ServerCraft {
 		return { kind: "used", item: usableId };
 	}
 
+	/** MON-04 included: an outfit or a pet is equipped only if `ownsEquip` (costume bought, or pack-delivered) */
 	equip(save: PlayerSaveData, equipId: number): BackpackOutcome {
 		if (!ownsEquip(save, equipId)) return { kind: "refused", why: "owned" };
 		const slotOf = equipSlotOf(equipId);
-		if (slotOf === 1) save.equipCloth = equipId;
-		else if (slotOf === 2) save.equipHand = equipId;
-		else if (slotOf === 3) save.equipGun = equipId;
-		else if (slotOf === 4) save.equipDeco = equipId;
-		else return { kind: "refused", why: "unknown" };
+		if (!setEquipped(save, slotOf, equipId)) return { kind: "refused", why: "unknown" };
 		return { kind: "equipped", equip: equipId, slot: slotOf };
 	}
 
 	unequip(save: PlayerSaveData, equipSlot: number): BackpackOutcome {
-		if (equipSlot === 1) save.equipCloth = -1;
-		else if (equipSlot === 2) save.equipHand = -1;
-		else if (equipSlot === 3) save.equipGun = -1;
-		else if (equipSlot === 4) save.equipDeco = -1;
-		else return { kind: "refused", why: "unknown" };
+		if (!setEquipped(save, equipSlot, -1)) return { kind: "refused", why: "unknown" };
 		return { kind: "unequipped", slot: equipSlot };
 	}
 

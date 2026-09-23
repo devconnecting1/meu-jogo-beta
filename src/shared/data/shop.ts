@@ -154,7 +154,10 @@ export interface CostumeDef {
 	name: string;
 	/** coin price (the original sold these for real money; here they are unlocked with coins earned in game) */
 	price: number;
-	/** the "Deco" equipment this costume unlocks permanently (EQUIPS index, kind 4) */
+	/**
+	 * the cosmetic this costume unlocks permanently (EQUIPS index, kind 4): an outfit or a pet, by
+	 * shared/data/cosmetics.ts `cosmeticSlotOf` (MON-04)
+	 */
 	equipId: number;
 }
 

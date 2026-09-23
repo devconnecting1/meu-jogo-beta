@@ -47,6 +47,11 @@
  * 11. (F2-2D) Two Fx events the horde needs and F0 had no place for: `Shake` (§4.2 lists "Blood/Debris/Shake"),
  *     the camera kick of ONE survivor, and `Tracer`, a drawn shot line nobody can predict (a boss beam). A
  *     survivor's own muzzle flash, kick and tracer stay client-side (§2.5), so neither is ever sent for one.
+ * 12. (MON-04) The roster carries what a survivor LOOKS like: `PlayerJoined` has `outfit` and `pet` (OutfitLook /
+ *     PetLook of shared/data/cosmetics.ts — what to draw, never an EQUIPS index), replacing F0's `costume/deco`
+ *     bytes that nothing drew. `PlayerProfile{slot, level, outfit, pet}` is the in-session delta: a level-up or a
+ *     change of outfit/pet reaches everybody without a second PlayerJoined (which would reset the life state).
+ *     Both are range-checked on decode; the server only ever sends looks it checked ownership of.
  */
 import {
 	NetReader,
@@ -82,6 +87,7 @@ import {
 	WORLD_MAX_BYTES,
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
+import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
 
 // ================================================================ remotes (§4.1)
 
@@ -1258,6 +1264,8 @@ export const WorldEv = {
 	PlayerLeft: 13,
 	PlayerLife: 14,
 	InitBegin: 15,
+	/** (MON-04) the roster's in-session delta: level, outfit, pet */
+	PlayerProfile: 16,
 } as const;
 
 /** SolidAdd.state / DoorSet.state */
@@ -1427,8 +1435,22 @@ export interface WPlayerJoined {
 	userId: number;
 	name: string;
 	level: number;
-	costume: number;
-	deco: number;
+	/** OutfitLook (0 = none), MON-04 */
+	outfit: number;
+	/** PetLook (0 = none), MON-04 */
+	pet: number;
+}
+
+/**
+ * (MON-04) What changed about a survivor already in the roster: the level on their plate, the outfit on their body,
+ * the pet at their heel. Always all three (6 B with the tag): a delta this rare is not worth a bitmask.
+ */
+export interface WPlayerProfile {
+	t: typeof WorldEv.PlayerProfile;
+	slot: number;
+	level: number;
+	outfit: number;
+	pet: number;
 }
 
 export interface WPlayerLeft {
@@ -1471,7 +1493,8 @@ export type WorldEvent =
 	| WPlayerJoined
 	| WPlayerLeft
 	| WPlayerLife
-	| WInitBegin;
+	| WInitBegin
+	| WPlayerProfile;
 
 export interface WorldBatch {
 	tick: number;
@@ -1549,9 +1572,15 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
 			w.f64(e.userId);
 			w.str(e.name, NAME_MAX_BYTES);
-			w.u16(e.level);
-			w.u8(e.costume);
-			w.u8(e.deco);
+			w.u16(clampInt(e.level, 0, 65535));
+			w.u8(clampInt(e.outfit, 0, OUTFIT_LOOK_MAX));
+			w.u8(clampInt(e.pet, 0, PET_LOOK_MAX));
+			break;
+		case WorldEv.PlayerProfile:
+			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
+			w.u16(clampInt(e.level, 0, 65535));
+			w.u8(clampInt(e.outfit, 0, OUTFIT_LOOK_MAX));
+			w.u8(clampInt(e.pet, 0, PET_LOOK_MAX));
 			break;
 		case WorldEv.PlayerLeft:
 			w.u8(clampInt(e.slot, 0, MAX_PLAYERS - 1));
@@ -1654,10 +1683,18 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const userId = r.f64();
 		const name = r.str(NAME_MAX_BYTES);
 		const level = r.u16();
-		const costume = r.u8();
-		const deco = r.u8();
+		const outfit = r.u8();
+		const pet = r.u8();
 		if (!validSlot(slot) || userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
-		return { t: WorldEv.PlayerJoined, slot, userId, name, level, costume, deco };
+		if (outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX) return undefined;
+		return { t: WorldEv.PlayerJoined, slot, userId, name, level, outfit, pet };
+	} else if (t === WorldEv.PlayerProfile) {
+		const slot = r.u8();
+		const level = r.u16();
+		const outfit = r.u8();
+		const pet = r.u8();
+		if (!validSlot(slot) || outfit > OUTFIT_LOOK_MAX || pet > PET_LOOK_MAX) return undefined;
+		return { t: WorldEv.PlayerProfile, slot, level, outfit, pet };
 	} else if (t === WorldEv.PlayerLeft) {
 		const slot = r.u8();
 		if (!validSlot(slot)) return undefined;
@@ -1809,7 +1846,7 @@ export const IntentKind = {
 	UseItem: 4,
 	/** F3, §8.1: arg = EQUIPS id */
 	Equip: 5,
-	/** F3, §8.1: arg = equipment slot 1..4 (`equipSlotOf`) */
+	/** F3, §8.1: arg = equipment slot 1..5 (`EquipSlot`: cloth, hand, gun, outfit, pet) */
 	Unequip: 6,
 	/** F3, §8.1: arg = SKILLS id */
 	LearnSkill: 7,

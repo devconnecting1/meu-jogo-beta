@@ -1,7 +1,8 @@
 import { GameContext } from "shared/game/context";
 import { ownsCostume, pendingPacks } from "shared/game/save";
 import { COSTUMES, ECONOMY, SHOP_PACKS } from "shared/data/shop";
-import { EQUIPS } from "shared/data/equips";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
+import { cosmeticSlotOf } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
 import { ShopActionReason, ShopActionRequest } from "shared/net/net";
 import { invokeShopAction, onWalletChanged, sessionReady } from "../systems/saveClient";
@@ -230,9 +231,11 @@ export function showShop(ctx: GameContext, onBack: () => void): () => void {
 			});
 			const name = tr(c.name);
 			CardTitle(card, name, { y: CARD_PAD, h: TITLE_H, size: TEXT.lg });
-			const deco = EQUIPS[c.equipId];
-			const decoName = deco !== undefined ? tr(deco.name) : name;
-			CardDescription(card, `${tr("Deco")}: ${decoName}`, { y: DESC_Y });
+			// which of the two cosmetic slots it goes in (MON-04): an outfit is worn, a pet follows
+			const item = EQUIPS[c.equipId];
+			const itemName = item !== undefined ? tr(item.name) : name;
+			const slotName = cosmeticSlotOf(c.equipId) === EquipSlot.Pet ? tr("Pet") : tr("Outfit");
+			CardDescription(card, `${slotName}: ${itemName}`, { y: DESC_Y });
 			if (owned) {
 				badgeAt(card, "Owned", tr("Owned"), CARD_W - CARD_PAD, FOOTER_Y + ACTION_H / 2, GAME.success);
 			} else {
