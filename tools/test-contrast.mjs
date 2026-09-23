@@ -282,6 +282,19 @@ const PAIRS = [
 	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, "cartao de item: tipo, rotulos, notas, dica de controle"],
 	["GAME.success", "SURFACE.panel", MIN_TEXT, 'cartao de item: etiqueta "EQUIPPED" do cabecalho'],
 	["SURFACE.line", "SURFACE.panel", MIN_UI, "cartao de item: o fio entre as secoes"],
+
+	// --- the wardrobe's tiles (UI-07 "Ladrilho", client/ui/wardrobe.ts): on the dark groove, one state per face ---
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "ladrilho seu / bloqueado (liso escuro) sobre o leito"],
+	["THEME.secondary", "SURFACE.groove", MIN_UI, "ladrilho em uso (ferro) sobre o leito escuro"],
+	["THEME.tabActive", "SURFACE.groove", MIN_UI, "ladrilho selecionado (azul em relevo) sobre o leito escuro"],
+	["THEME.secondary", "SURFACE.section", MIN_TONE, "ladrilho em uso x ladrilho seu: o que voce veste se destaca"],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, "cadeado de pixel e preco sobre o ladrilho bloqueado"],
+	[
+		"THEME.tabActiveForeground",
+		"THEME.tabActive",
+		MIN_TEXT,
+		"cadeado e preco sobre o ladrilho bloqueado selecionado",
+	],
 ];
 
 /** labels drawn ON a plate: each must be the light `foreground` (UI-05), never the body colour */
