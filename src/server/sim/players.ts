@@ -8,25 +8,44 @@
  *
  * Input queue rules (§2.2), all enforced here:
  *   - target depth INPUT_BUFFER_TARGET (2), hard maximum INPUT_BUFFER_MAX (4);
- *   - exactly ONE command is consumed per simulation tick (this is what makes a speedhack impossible: sending
- *     twice as many commands only fills the queue and raises `inputOverflow`, it never moves anyone faster);
+ *   - exactly ONE command is used per simulation tick, consumed or filled, never two (this is what makes a
+ *     speedhack impossible: sending twice as many commands only fills the queue and raises `inputOverflow`, it
+ *     never moves anyone faster);
  *   - a command whose seq is outside ±INPUT_SEQ_WINDOW of the last consumed one is refused (§8.1);
- *   - a command for a tick the server already simulated (consumed OR filled) is refused as `late`;
+ *   - a command the server already CONSUMED (or jumped over, see below) is refused as `late`: with the §2.2
+ *     redundancy every command arrives three times, so this is mostly the second and third copies;
  *   - a command already sitting in the queue is refused as `duplicate` (that is the §2.2 redundancy working);
  *   - out-of-order commands are inserted at the right place while they have not been consumed;
+ *   - a gap at the head of the queue is a command that will never come (its three copies were lost, or the
+ *     client dropped it in a hitch): the head is consumed at once instead of waiting for it;
  *   - over INPUT_BUFFER_MAX the OLDEST are dropped and `inputOverflow` counts them;
  *   - the packet itself passes a token bucket of INPUT_RATE/s with a burst of INPUT_BURST (§8.2);
- *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a stale command RE-ANCHORS the window instead
- *     of being refused for ever: a client that stalled (alt-tab, a hitch) keeps its own numbering, and the
- *     server must not freeze it out of its own session. It is still one command per tick, so it buys nothing.
+ *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a command OUTSIDE the window re-anchors it
+ *     instead of being refused for ever: a client whose numbering restarted (netReset) or jumped more than the
+ *     window (a stall longer than INPUT_SEQ_WINDOW ticks, see commands.ts `skipBacklog`) must not be frozen out
+ *     of its own session. It is still one command per tick, so it buys nothing.
  *
- * Empty queue (author's decision for F1, documented): the tick is FILLED with the last command's aim and held
- * buttons but `moveMag = 0` and `edges = 0` — the survivor stands still and stays vulnerable (§9.1 "Lag switch:
- * sem comandos o personagem fica parado e vulnerável"), and no discrete action (attack press, reload) is ever
- * replayed. §2.2 also allows coasting one tick on the last movement before stopping; standing still from the
- * first missed tick is the stricter of the two and costs at most one tick of smoothness on a lost packet, which
- * the client's own prediction hides. The filled slot advances `lastSeq`, so the real command for that tick is
- * discarded when it finally arrives (§2.2).
+ * Empty queue: the tick WAITS. It is filled with the last command's aim and held buttons but `moveMag = 0` and
+ * `edges = 0` — the survivor stands still and stays vulnerable (§9.1 "Lag switch: sem comandos o personagem fica
+ * parado e vulnerável"), and no discrete action (attack press, reload) is ever replayed — and it spends NO
+ * sequence number and acknowledges nothing. The real command that was late for it is not late at all: it enters
+ * the queue when it lands and is consumed on the next tick, one tick later than planned.
+ *
+ * Why waiting and not "the fill takes the command's number" (the F1 rule until tools/test-input-buffer.mjs
+ * measured it): a fill that spends the seq makes the real command arrive `late` and be thrown away, so the queue
+ * cannot refill — the next tick fills again, the next real command is thrown away too, and a client that hitched
+ * once (a long frame makes at most MAX_COMMANDS_PER_FRAME commands) locked into it: 30 filled ticks a second, the
+ * body stopping in the world everyone else watches. That rule "cost one tick of smoothness the client's
+ * prediction hides" — true only for the owner. Waiting instead makes every fill buy one tick of queue depth, so a
+ * hitch costs the ticks it lasted and not one more; the extra depth is drained by the -2% dilation, and it can
+ * never pass INPUT_BUFFER_MAX, which is also the most a lag switch can bank. Coasting (repeating the last
+ * movement) was rejected with it: coasting a tick and then consuming the real command late would move the body
+ * twice for one command.
+ *
+ * A stall no longer needs the re-anchor: the server waited, so a client that resumes its own numbering is exactly
+ * where the server left it. And a command BEHIND `lastSeq` inside the window is now a copy of one already consumed
+ * (or one the server jumped over), so it never re-anchors: that would simulate consumed commands a second time and
+ * walk the ack backwards.
  */
 import { dequantAngle8, seqDiff, seqNewer, wrapU16 } from "shared/net/codec";
 import {
@@ -61,13 +80,13 @@ export interface InputCounters {
 	seqWindow: number;
 	/** commands already queued — the §2.2 redundancy doing its job, not an anomaly on its own */
 	duplicate: number;
-	/** commands for a tick the server already simulated (consumed or filled) */
+	/** commands already consumed (or jumped over): mostly the redundant copies of §2.2, harmless */
 	late: number;
 	/** commands dropped because the queue was over INPUT_BUFFER_MAX (§2.2, §9.1 speedhack signal) */
 	inputOverflow: number;
-	/** ticks filled because the queue was empty (lost packets, or a lag switch) */
+	/** ticks that WAITED because the queue was empty (a client hitch, lost packets, a lag switch) */
 	filled: number;
-	/** times the sequence window had to be re-anchored after a client stall (§2.2, see `enqueue`) */
+	/** times the window was re-anchored: numbering that restarted or jumped past it (§2.2, see `enqueue`) */
 	resync: number;
 	/** commands actually consumed by the simulation */
 	consumed: number;
@@ -129,9 +148,12 @@ export interface ServerPlayer {
 	queue: Array<InputCommand>;
 	/** false until the first accepted command: the client's first seq bootstraps `lastSeq` */
 	started: boolean;
-	/** last seq consumed OR filled; anything not newer than this is late (§2.2) */
+	/** last seq CONSUMED (a filled tick spends none); anything not newer than this is late (§2.2) */
 	lastSeq: number;
-	/** last REAL command consumed — what the snapshot acknowledges (filled ticks do not ack) */
+	/**
+	 * last REAL command consumed — what the snapshot acknowledges. Equal to `lastSeq` now that a fill spends no
+	 * number; kept apart so the contract is explicit: the ack names a command the server really simulated.
+	 */
 	ackSeq: number;
 	/** last command applied (real or filled): the fill inherits its aim and held buttons */
 	lastCmd: InputCommand;
@@ -170,9 +192,9 @@ export interface ServerPlayerInfo {
 /** spawn protection, in seconds (§7.1) */
 export const SPAWN_SHIELD_S = 3;
 /**
- * Filled ticks with an empty queue after which a stale command re-anchors the sequence window (see `enqueue`).
- * 15 ticks = 250 ms at 60 Hz: far longer than any packet loss burst the §2.2 redundancy already covers, and
- * short enough that a player coming back from a stall does not notice the recovery.
+ * Filled ticks with an empty queue after which a command outside the sequence window re-anchors it (see
+ * `enqueue`). 15 ticks = 250 ms at 60 Hz: far longer than any packet loss burst the §2.2 redundancy already
+ * covers, and short enough that a player coming back from a stall does not notice the recovery.
  */
 export const RESYNC_IDLE_TICKS = 15;
 
@@ -264,13 +286,16 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 	const seq = cmd.seq;
 	if (sp.started) {
 		const gap = seqDiff(seq, sp.lastSeq);
-		const stale = gap <= 0 || gap > INPUT_SEQ_WINDOW || gap < -INPUT_SEQ_WINDOW;
-		// A client that STALLS (alt-tab, a long hitch, a breakpoint) stops numbering while the server keeps
-		// filling its ticks, so when it comes back every command it sends is behind `lastSeq` — and would be
-		// refused as late forever, freezing the survivor. After RESYNC_IDLE_TICKS filled ticks with nothing
-		// queued, the stream is re-anchored on whatever numbering the client is using now. This gives a cheater
-		// nothing: the tick still consumes exactly one command, and the protocol has no position or dt.
-		if (stale && sp.queue.size() === 0 && sp.idleFills >= RESYNC_IDLE_TICKS) {
+		const outside = gap > INPUT_SEQ_WINDOW || gap < -INPUT_SEQ_WINDOW;
+		// A client whose numbering RESTARTED (netReset: a new run, a rebirth) or JUMPED past the window (a stall
+		// longer than INPUT_SEQ_WINDOW ticks, which commands.ts skips over) would have every command refused by
+		// §8.1 forever, freezing the survivor. After RESYNC_IDLE_TICKS filled ticks with nothing queued, the
+		// stream is re-anchored on whatever numbering the client is using now. This gives a cheater nothing: the
+		// tick still consumes exactly one command, and the protocol has no position or dt.
+		// Only OUTSIDE the window: a filled tick spends no seq, so a command behind `lastSeq` inside it is a
+		// copy of one already consumed (the §2.2 redundancy, or a delayed packet after an outage) or one the
+		// head jumped over, and re-anchoring on it would simulate consumed commands again and walk the ack back.
+		if (outside && sp.queue.size() === 0 && sp.idleFills >= RESYNC_IDLE_TICKS) {
 			sp.started = false;
 			sp.counters.resync += 1;
 		}
@@ -288,7 +313,8 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 		return;
 	}
 	if (d <= 0) {
-		// already consumed, or the slot was filled while it was in flight (§2.2)
+		// already consumed (the second and third copies of the §2.2 redundancy), or jumped over by a newer one
+		// when it never came; a FILLED tick never makes a command late, because a fill spends no seq
 		sp.counters.late += 1;
 		return;
 	}
@@ -376,6 +402,7 @@ export function adoptSave(sp: ServerPlayer, save: PlayerSaveData): boolean {
 export function takeCommand(sp: ServerPlayer): InputCommand {
 	const head = sp.queue[0];
 	if (head !== undefined) {
+		// the head may be ahead of lastSeq + 1: the commands in between never came, so there is nothing to wait for
 		sp.queue.shift();
 		sp.lastSeq = head.seq;
 		sp.ackSeq = head.seq;
@@ -388,15 +415,16 @@ export function takeCommand(sp: ServerPlayer): InputCommand {
 		// nothing has ever arrived: stand still without moving the sequence window
 		return STANDING;
 	}
+	// the queue is dry: this tick WAITS for the command (see the header). The fill carries no new seq, so
+	// `lastSeq` and `ackSeq` stay put and the real command is still welcome when it lands.
 	const fill: InputCommand = {
-		seq: wrapU16(sp.lastSeq + 1),
+		seq: sp.lastSeq,
 		moveAng: sp.lastCmd.moveAng,
 		moveMag: 0,
 		aim: sp.lastCmd.aim,
 		held: sp.lastCmd.held,
 		edges: 0,
 	};
-	sp.lastSeq = fill.seq;
 	sp.lastCmd = fill;
 	sp.idleFills += 1;
 	sp.counters.filled += 1;

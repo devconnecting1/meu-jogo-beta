@@ -18,9 +18,11 @@
  *      `inputOverflow` (§2.2, §9.1 "speedhack: impossível por construção"); a 4× client also hits the token
  *      bucket (§8.2);
  *   c. duplicated (the §2.2 redundancy) and out-of-order commands move the survivor exactly once, in order;
- *   d. with an empty queue the survivor STOPS instead of coasting, and the filled slots discard the real
- *      commands that arrive late for them (§2.2) — while a client that STALLED long enough to fall behind its
- *      own numbering is re-anchored instead of frozen out of the session, still at one command per tick;
+ *   d. with an empty queue the survivor STOPS instead of coasting, and the filled tick WAITS: it spends no seq
+ *      and acknowledges nothing, so a command that arrives late is still simulated — the delayed walker ends
+ *      bit for bit where the punctual one does (§2.2) — while a lag switch banks at most INPUT_BUFFER_MAX
+ *      ticks, a stalled client simply carries on, a numbering that jumped past the window or restarted is
+ *      re-anchored, and copies of simulated commands never re-anchor (nothing is simulated twice);
  *   e. the snapshots the replicator produces decode back (decodeSnapshotPart) with the right positions,
  *      `lastSeq`/`ackSeq` for the reconciliation, and the three interest rings of §4.3 (near in every
  *      snapshot, mid in half of them, nothing past the hysteresis band); the reliable World batch carries
@@ -644,49 +646,155 @@ section("(c) duplicated and out-of-order commands move the survivor once, in ord
 	checkEq(c.sp.queue.length, 0, "and nothing was queued");
 }
 
-// ---------------------------------------------------------------- (d) an empty queue stops the survivor
+// ---------------------------------------------------------------- (d) an empty queue stops the survivor and WAITS
 
-section("(d) with an empty queue the survivor stops instead of coasting (§2.2)");
+section("(d) with an empty queue the survivor stops and WAITS: a late command is simulated, not discarded (§2.2)");
 
+/*
+ * This case used to assert the opposite: "the filled slots advanced lastSeq" and "the real command for a filled
+ * tick is discarded". That was the F1 rule, and tools/test-input-buffer.mjs measured what it costs: a client that
+ * hitches once locks into it (each fill spends the real command's number, the real command is refused, the queue
+ * cannot refill), 30 filled ticks a second of the body stopping in everyone else's world. The rule is now that a
+ * filled tick WAITS: it stands the survivor still, spends no seq and acknowledges nothing, so the delayed command
+ * is still welcome when it lands. What must still hold, and is checked here: the silence stops the survivor, one
+ * command per tick, the ack only names what was simulated, and a lag switch banks at most INPUT_BUFFER_MAX ticks.
+ */
 {
 	const server = newServer({ replicate: false });
-	const c = enter(server, spawnA.x, spawnA.y);
-	for (let t = 0; t < 60; t++) {
+	// the same walk twice: once on time, once with the packets delayed by a silence in the middle of it
+	const punctual = enter(server, spawnA.x, spawnA.y, "punctual");
+	const delayed = enter(server, spawnA.x, spawnA.y, "delayed");
+	const WALK = 60;
+	const AFTER = 30;
+	const TOTAL = WALK + AFTER;
+	// shorter than RESYNC_IDLE_TICKS, so no safety net is involved: this is the plain rule
+	const SILENCE = PL.RESYNC_IDLE_TICKS - 5;
+	const angleAt = t => run.angle + 0.3 * Math.sin(t / 9);
+	const cmdP = [];
+	const cmdD = [];
+	for (let t = 0; t < TOTAL; t++) {
+		cmdP.push(commandAt(punctual.seq + t, angleAt(t)));
+		cmdD.push(commandAt(delayed.seq + t, angleAt(t)));
+	}
+
+	for (let t = 0; t < WALK; t++) {
+		send(server, punctual, cmdP[t]);
+		send(server, delayed, cmdD[t]);
+		tick(server);
+	}
+	const movedBefore = Math.hypot(delayed.sp.state.x - spawnA.x, delayed.sp.state.y - spawnA.y);
+	check(movedBefore > 10, `the survivor was walking before the packets stopped (${movedBefore.toFixed(1)} u)`);
+	const x = delayed.sp.state.x;
+	const y = delayed.sp.state.y;
+	const filledBefore = delayed.sp.counters.filled;
+	const lastSeq = delayed.sp.lastSeq;
+	const ackSeq = delayed.sp.ackSeq;
+
+	// the delayed client's packets stop arriving; the punctual one keeps walking
+	for (let t = WALK; t < WALK + SILENCE; t++) {
+		send(server, punctual, cmdP[t]);
+		tick(server);
+	}
+	checkEq(delayed.sp.state.x, x, "x did not move during the silence");
+	checkEq(delayed.sp.state.y, y, "y did not move during the silence");
+	checkEq(delayed.sp.counters.filled - filledBefore, SILENCE, `every silent tick was filled (${SILENCE})`);
+	checkEq(delayed.sp.lastSeq, lastSeq, "a filled tick spends no sequence number: lastSeq did not move");
+	checkEq(delayed.sp.ackSeq, ackSeq, "and it acknowledges nothing: no command was simulated");
+
+	// the command that was due during the silence finally lands: it is NOT late, it is queued (§2.2)
+	const lateBefore = delayed.sp.counters.late;
+	send(server, delayed, cmdD[WALK]);
+	checkEq(delayed.sp.queue.length, 1, "the delayed command enters the queue");
+	checkEq(delayed.sp.queue[0].seq, cmdD[WALK].seq, "and it is the one that was due, not a newer one");
+	// its packet also carries the two commands before it (the redundancy): those ran already, so THEY are late
+	checkEq(delayed.sp.counters.late - lateBefore, 2, "only the redundant copies of simulated commands are late");
+	send(server, punctual, cmdP[WALK + SILENCE]);
+	tick(server);
+	checkEq(delayed.sp.ackSeq, cmdD[WALK].seq, "the next tick simulates it, and the snapshot acknowledges it");
+	check(Math.hypot(delayed.sp.state.x - x, delayed.sp.state.y - y) > 0, "the survivor walks again at once");
+
+	// the rest of the delayed stream arrives one per tick, SILENCE ticks behind the punctual one
+	for (let t = WALK + SILENCE + 1; t < TOTAL + SILENCE; t++) {
+		if (t < TOTAL) send(server, punctual, cmdP[t]);
+		send(server, delayed, cmdD[t - SILENCE]);
+		tick(server);
+	}
+	checkEq(delayed.sp.counters.consumed, TOTAL, `every command the delayed client sent was simulated (${TOTAL})`);
+	checkEq(punctual.sp.counters.consumed, TOTAL, "and so was every command of the punctual one");
+	checkEq(delayed.sp.counters.filled, SILENCE, "the delayed survivor stood still for the silence and no longer");
+	// waiting cost the silence, not the commands: the late walker ends bit for bit where the punctual one does,
+	// and where the client's own prediction put both -- so the owner is never corrected for a delay
+	const predicted = predict(spawnA.x, spawnA.y, delayed.save, cmdD);
+	checkEq(
+		delayed.sp.state.x,
+		punctual.sp.state.x,
+		"the delayed survivor ends exactly where the punctual one does (x)",
+	);
+	checkEq(
+		delayed.sp.state.y,
+		punctual.sp.state.y,
+		"the delayed survivor ends exactly where the punctual one does (y)",
+	);
+	checkEq(delayed.sp.state.x, predicted.x, "which is the client's own prediction of those commands (x)");
+	checkEq(delayed.sp.state.y, predicted.y, "which is the client's own prediction of those commands (y)");
+	checkEq(
+		delayed.sp.ackSeq,
+		cmdD[TOTAL - 1].seq,
+		"and the last ack names the last command, the one really simulated",
+	);
+}
+
+// a lag switch: hold every packet, keep making commands, release them all at once
+{
+	const server = newServer({ replicate: false });
+	const c = enter(server, spawnA.x, spawnA.y, "lagger");
+	const WALK = 30;
+	// well past the queue's depth, well inside the ±64 window: the switch every guide describes
+	const LAG = 20;
+	for (let t = 0; t < WALK; t++) {
 		send(server, c, commandAt(c.seq + t, run.angle));
 		tick(server);
 	}
-	const movedBefore = Math.hypot(c.sp.state.x - spawnA.x, c.sp.state.y - spawnA.y);
-	check(movedBefore > 10, `the survivor was walking before the packets stopped (${movedBefore.toFixed(1)} u)`);
 	const x = c.sp.state.x;
 	const y = c.sp.state.y;
-	const filledBefore = c.sp.counters.filled;
-	const lastSeq = c.sp.lastSeq;
-	const ackSeq = c.sp.ackSeq;
-	// shorter than RESYNC_IDLE_TICKS: a brief silence must NOT re-anchor the sequence window (see the stall
-	// case below), so a command for one of these filled ticks is still refused
-	const SILENCE = PL.RESYNC_IDLE_TICKS - 5;
-	for (let t = 0; t < SILENCE; t++) tick(server);
-	checkEq(c.sp.state.x, x, "x did not move during the silence");
-	checkEq(c.sp.state.y, y, "y did not move during the silence");
-	checkEq(c.sp.counters.filled - filledBefore, SILENCE, `every silent tick was filled (${SILENCE})`);
-	checkEq(seqDiff(c.sp.lastSeq, lastSeq), SILENCE, "the filled slots advanced lastSeq");
-	checkEq(c.sp.ackSeq, ackSeq, "but they did NOT acknowledge a command the client never got simulated");
-
-	// the real command for a filled tick arrives late: the server already simulated that time (§2.2)
-	const lateBefore = c.sp.counters.late;
-	PL.ingestInput(c.sp, packetOf([commandAt(lastSeq + 1, run.angle)]), server.now);
-	check(c.sp.counters.late > lateBefore, "the real command for a filled tick is discarded");
-	checkEq(c.sp.queue.length, 0, "and it never reaches the queue");
-
-	// and the client is back in control on the next command
-	const resume = commandAt(c.sp.lastSeq + 1, run.angle);
-	PL.ingestInput(c.sp, packetOf([resume]), server.now);
-	tick(server);
-	check(Math.hypot(c.sp.state.x - x, c.sp.state.y - y) > 0, "the survivor walks again as soon as a command arrives");
-	checkEq(c.sp.ackSeq, resume.seq, "and the snapshot acknowledges that command");
+	const held = [];
+	const lagged = [];
+	for (let t = WALK; t < WALK + LAG; t++) {
+		const cmd = commandAt(c.seq + t, run.angle);
+		lagged.push(cmd);
+		c.history.unshift(cmd);
+		while (c.history.length > CFG.INPUT_REDUNDANCY) c.history.pop();
+		held.push(packetOf(c.history));
+		tick(server);
+	}
+	checkEq(c.sp.state.x, x, "while the switch is on the survivor stands still (x)");
+	checkEq(c.sp.state.y, y, "while the switch is on the survivor stands still (y)");
+	const overflowBefore = c.sp.counters.inputOverflow;
+	const consumedBefore = c.sp.counters.consumed;
+	for (const payload of held) PL.ingestInput(c.sp, payload, server.now);
+	check(c.sp.queue.length <= CFG.INPUT_BUFFER_MAX, `the burst never grows the queue past ${CFG.INPUT_BUFFER_MAX}`);
+	checkEq(
+		c.sp.counters.inputOverflow - overflowBefore,
+		LAG - CFG.INPUT_BUFFER_MAX,
+		"everything older than the newest INPUT_BUFFER_MAX commands overflowed",
+	);
+	for (let t = 0; t < CFG.INPUT_BUFFER_MAX + 3; t++) tick(server);
+	checkEq(c.sp.counters.consumed - consumedBefore, CFG.INPUT_BUFFER_MAX, "one command per tick, and only those");
+	// the whole switch bought exactly INPUT_BUFFER_MAX steps of the LAG it was held for
+	const banked = predict(x, y, c.save, lagged.slice(LAG - CFG.INPUT_BUFFER_MAX));
+	checkEq(
+		c.sp.state.x,
+		banked.x,
+		`a ${LAG}-tick lag switch banks exactly ${CFG.INPUT_BUFFER_MAX} ticks of movement (x)`,
+	);
+	checkEq(
+		c.sp.state.y,
+		banked.y,
+		`a ${LAG}-tick lag switch banks exactly ${CFG.INPUT_BUFFER_MAX} ticks of movement (y)`,
+	);
 }
 
-// a stalled client (alt-tab, a long hitch) keeps its own numbering: the server must not freeze it forever
+// a stalled client (alt-tab, a long hitch) keeps its own numbering: the server waited, so it simply carries on
 {
 	const server = newServer({ replicate: false });
 	const c = enter(server, spawnA.x, spawnA.y);
@@ -699,23 +807,82 @@ section("(d) with an empty queue the survivor stops instead of coasting (§2.2)"
 	const clientSeq = c.sp.lastSeq;
 	for (let t = 0; t < STALL; t++) tick(server);
 	check(c.sp.idleFills >= STALL, `the server filled the whole stall (${c.sp.idleFills} ticks)`);
+	checkEq(c.sp.lastSeq, clientSeq, "without moving its sequence: it waited for this client");
 
-	// back from the stall, the client carries on from ITS sequence — far behind the server's lastSeq
 	const x = c.sp.state.x;
 	const y = c.sp.state.y;
+	const consumed = c.sp.counters.consumed;
 	for (let t = 0; t < 10; t++) {
 		send(server, c, commandAt(clientSeq + 1 + t, run.angle));
 		tick(server);
 	}
-	checkEq(c.sp.counters.resync, 1, "the sequence window is re-anchored exactly once");
-	check(Math.hypot(c.sp.state.x - x, c.sp.state.y - y) > 0, "and the survivor is not frozen out of its own session");
-	// the recovery must not hand out free ticks: still one command per tick
-	const consumed = c.sp.counters.consumed;
-	for (let t = 0; t < 10; t++) {
-		PL.ingestInput(c.sp, packetOf([commandAt(c.sp.lastSeq + 1, run.angle)]), server.now);
+	checkEq(c.sp.counters.resync, 0, "the client's own numbering is accepted as it is: nothing to re-anchor");
+	check(Math.hypot(c.sp.state.x - x, c.sp.state.y - y) > 0, "and the survivor walks again at once");
+	checkEq(c.sp.counters.consumed - consumed, 10, "still exactly one command per tick");
+}
+
+// numbering that JUMPED past the window (commands.ts skips a backlog longer than INPUT_SEQ_WINDOW) or RESTARTED
+// (netReset) is the safety net's job: re-anchored once the queue has been idle, never frozen out for good
+{
+	const server = newServer({ replicate: false });
+	const c = enter(server, spawnA.x, spawnA.y);
+	for (let t = 0; t < 100; t++) {
+		send(server, c, commandAt(c.seq + t, run.angle));
 		tick(server);
 	}
-	checkEq(c.sp.counters.consumed - consumed, 10, "and still consumes exactly one command per tick");
+	const STALL = CFG.INPUT_SEQ_WINDOW + 30;
+	const clientSeq = c.sp.lastSeq;
+	for (let t = 0; t < STALL; t++) tick(server);
+	// the stall was longer than the window, and the client skipped its backlog to stay on the clock
+	const x = c.sp.state.x;
+	const y = c.sp.state.y;
+	const consumed = c.sp.counters.consumed;
+	c.history.length = 0;
+	for (let t = 0; t < 10; t++) {
+		send(server, c, commandAt(clientSeq + STALL + 1 + t, run.angle));
+		tick(server);
+	}
+	checkEq(c.sp.counters.resync, 1, "a numbering past the window is re-anchored exactly once");
+	check(Math.hypot(c.sp.state.x - x, c.sp.state.y - y) > 0, "and the survivor is not frozen out of its own session");
+	checkEq(c.sp.counters.consumed - consumed, 10, "still exactly one command per tick");
+
+	// a new run (netReset): the numbering restarts far behind the server's
+	for (let t = 0; t < PL.RESYNC_IDLE_TICKS; t++) tick(server);
+	c.history.length = 0;
+	const restartAt = c.sp.counters.consumed;
+	for (let t = 0; t < 10; t++) {
+		send(server, c, commandAt(1 + t, run.angle));
+		tick(server);
+	}
+	checkEq(c.sp.counters.resync, 2, "a restarted numbering is re-anchored too");
+	checkEq(c.sp.counters.consumed - restartAt, 10, "and consumed one command per tick from its first");
+}
+
+// after an outage, the first packet carries copies of commands already simulated: they must NOT re-anchor
+{
+	const server = newServer({ replicate: false });
+	const c = enter(server, spawnA.x, spawnA.y);
+	const cmds = [];
+	for (let t = 0; t < 40; t++) cmds.push(commandAt(c.seq + t, run.angle + 0.2 * Math.sin(t / 5)));
+	for (let t = 0; t < 30; t++) {
+		send(server, c, cmds[t]);
+		tick(server);
+	}
+	// the link goes quiet for longer than RESYNC_IDLE_TICKS, then the next packet lands: [30, 29, 28]
+	for (let t = 0; t < PL.RESYNC_IDLE_TICKS + 5; t++) tick(server);
+	const ackBefore = c.sp.ackSeq;
+	const x = c.sp.state.x;
+	const y = c.sp.state.y;
+	const lateBefore = c.sp.counters.late;
+	send(server, c, cmds[30]);
+	checkEq(c.sp.counters.resync, 0, "copies of simulated commands never re-anchor the window");
+	checkEq(c.sp.counters.late - lateBefore, 2, "they are refused as late, as redundant copies are");
+	checkEq(c.sp.queue.length, 1, "and only the new command is queued");
+	tick(server);
+	checkEq(seqDiff(c.sp.ackSeq, ackBefore), 1, "the ack moves forward by one, never backwards");
+	const oneStep = predict(x, y, c.save, [cmds[30]]);
+	checkEq(c.sp.state.x, oneStep.x, "nothing was simulated twice: exactly one step (x)");
+	checkEq(c.sp.state.y, oneStep.y, "nothing was simulated twice: exactly one step (y)");
 }
 
 // ---------------------------------------------------------------- (e) snapshots decode back (§4.2, §4.3)

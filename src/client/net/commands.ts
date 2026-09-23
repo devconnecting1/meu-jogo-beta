@@ -174,15 +174,14 @@ export class CommandStream {
 	 * queue could ever hold, so the backlog is dropped instead of fired as a burst it would only throw away.
 	 *
 	 * Dropping N commands means ADVANCING `seq` BY N. The sequence is not a counter of packets sent — it is this
-	 * client's copy of the server's tick numbering (§2.2: one command is worth exactly one tick). While the client
-	 * was away the server filled those ticks and moved its own `lastSeq` on, so a client that resumed at the old
-	 * number would have every single command from then on read as late, and the survivor would stand still for
-	 * good. (The server also re-anchors itself after ~250 ms of filled ticks, but that is the safety net; keeping
-	 * the numbering aligned here is what makes the recovery immediate and costs nothing.)
+	 * client's copy of the server's tick numbering (§2.2: one command is worth exactly one tick), and prediction
+	 * replays against it. The server WAITED through those ticks without spending their numbers (server/sim/
+	 * players.ts: a fill never advances `lastSeq`), so it takes the jump in one step as long as it stays inside
+	 * ±INPUT_SEQ_WINDOW; a stall long enough to leave the window is re-anchored there instead.
 	 *
-	 * The unacked queue goes with it: the redundancy window has to carry consecutive seqs, and everything in it
-	 * belongs to ticks the server has already filled and will refuse. The next reconciliation finds no history for
-	 * the ack and rebuilds from the server's position, which is exactly right after a stall.
+	 * The unacked queue goes with it: the redundancy window has to carry consecutive seqs. Whatever of it was
+	 * already sent still lands and is simulated; the next reconciliation finds no history for that ack and
+	 * rebuilds from the server's position, which is exactly right after a stall.
 	 */
 	private skipBacklog(step: number): void {
 		const skipped = math.floor(this.acc / step);
