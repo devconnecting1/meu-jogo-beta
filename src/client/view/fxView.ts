@@ -16,12 +16,14 @@
  * else, an explosion, a solid being struck, a projectile appearing and disappearing.
  *
  * OWNERSHIP, and why `advance` exists. At MP_PHASE ≥ 2 the client's own systems stop running: nothing grows
- * a blast, ages a solid's flinch or flies a projectile any more. Whatever this file puts into the world it
- * therefore also has to carry — which is exactly the set `advance` walks, and nothing else.
+ * a blast or flies a projectile any more. Whatever this file puts into the world it therefore also has to
+ * carry — which is exactly the set `advance` walks, and nothing else. A solid's flinch is the exception: the
+ * client starts those from two places (this wire and E on a tree), so they share one clock in solidFlinch.ts.
  */
 import { Bullet } from "shared/game/bullets";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { circleInView } from "./drawKit";
+import { clearFlinches, flinch } from "./solidFlinch";
 import { clamp } from "shared/engine/vec2";
 import { COLORS, Z } from "shared/engine/colors";
 import { DebrisMaterial, FxEvent as SimFx, TracerKind } from "shared/sim/types";
@@ -111,8 +113,6 @@ export class FxView {
 	private readonly tracers = new Array<Tracer>();
 	/** blasts this view put into `refs.explosions`, and therefore has to grow and age itself */
 	private readonly blasts = new Array<Explosion>();
-	/** solids this view set `hitShake` on; nothing else counts it down at MP_PHASE ≥ 2 */
-	private readonly shaken = new Array<Solid>();
 	/** projectiles announced by the wire, by `projId` */
 	private readonly projs = new Map<number, WireProj>();
 	/** `world.solids` by id, rebuilt when the town changes (there is no index on WorldData) */
@@ -305,17 +305,7 @@ export class FxView {
 	private playSolidShake(refs: GameRefs, e: Net.FxSolidShake): void {
 		const s = this.solidById(refs.world, e.solidId);
 		if (s === undefined) return;
-		const want = SOLID_SHAKE_S * clamp(e.strength, 0, 1);
-		if (want <= 0) return;
-		s.hitShake = math.max(s.hitShake ?? 0, want);
-		let known = false;
-		for (const had of this.shaken) {
-			if (had === s) {
-				known = true;
-				break;
-			}
-		}
-		if (!known) this.shaken.push(s);
+		flinch(s, SOLID_SHAKE_S * clamp(e.strength, 0, 1));
 	}
 
 	/**
@@ -427,14 +417,6 @@ export class FxView {
 				}
 			}
 		}
-		// the flinch of a struck solid is counted down by the horde's own sweep below MP_PHASE 2
-		// (zombieBrain.sweepAround); with the horde on the server, the shakes this view started are ours
-		for (let i = this.shaken.size() - 1; i >= 0; i--) {
-			const s = this.shaken[i];
-			const left = math.max(0, (s.hitShake ?? 0) - step);
-			s.hitShake = left;
-			if (left <= 0) this.shaken.remove(i);
-		}
 		// the acid a spit left behind: `zombieBrain.updatePuddles` ages these below MP_PHASE 2, and the
 		// SERVER ages its own copy above it — this one is the drawing, and it has to dry up on its own
 		const puddles = refs.puddles;
@@ -483,7 +465,7 @@ export class FxView {
 		refs.explosions?.clear();
 		this.tracers.clear();
 		this.blasts.clear();
-		this.shaken.clear();
+		clearFlinches();
 		this.projs.clear();
 		this.deaths.clear();
 		this.bloodX.clear();

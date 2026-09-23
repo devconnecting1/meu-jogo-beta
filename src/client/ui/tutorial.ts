@@ -1,7 +1,18 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { TEXT, THEME, space } from "./theme";
-import { BUTTON_SIZE, Button, Dialog, Keycap, autoFocus, cardHeaderHeight, makeLabel, nl, uiScale } from "./widgets";
+import {
+	BUTTON_SIZE,
+	Button,
+	Dialog,
+	Keycap,
+	autoFocus,
+	cardHeaderHeight,
+	gamepadActive,
+	makeLabel,
+	nl,
+	uiScale,
+} from "./widgets";
 
 /*
  * "How to play": the one reference card of the game.
@@ -86,6 +97,21 @@ export const SCHEMES: Array<Scheme> = [
 		note: "Menus are navigated with the stick; the selected button carries a focus ring.",
 	},
 ];
+
+/** SCHEMES index of each device */
+export const SCHEME_KEYBOARD = 0;
+export const SCHEME_TOUCH = 1;
+export const SCHEME_GAMEPAD = 2;
+
+/**
+ * The scheme the player is on NOW (a SCHEMES index): the pad if the last input came from one, touch on a device
+ * with no mouse, the keyboard otherwise. One rule for every key hint (Settings › Controls opens on it, the item
+ * card's usage hint speaks it), so a phone player and a pad player each read their own keys first.
+ */
+export function currentScheme(): number {
+	if (gamepadActive()) return SCHEME_GAMEPAD;
+	return UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? SCHEME_TOUCH : SCHEME_KEYBOARD;
+}
 
 const SURVIVAL_TIPS = [
 	// DESIGN_RULES UI-06: the rule the old "Backpack (pauses)" row had backwards, said once for every device

@@ -33,6 +33,9 @@
  *                           hook, once; a Rebirth inside the window keeps the world going.
  *   7. THE DEAD STAY PUT    moving commands from a dead survivor, through the Input remote, move nothing.
  *   8. SHUTDOWN             BindToClose banks every body into the save before it is written.
+ *  10. THE WARDROBE         MON-04's purchase through the real ShopAction: unknown ids, too few coins and a costume
+ *                           already owned are refused; a request naming its own price pays the catalogue's; what
+ *                           was bought can be worn, what was not is taken off; the DataStore gets both.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -1144,6 +1147,72 @@ section("9) the corners: a pending death, a save that moved on another server, a
 			"a late remote from a departed Player neither brings it back nor stops its body expiring after 5 min",
 		);
 	}
+});
+
+// ================================================================ 10: the wardrobe's purchase, end to end
+
+section("10) the wardrobe: coins become a costume only through ShopAction, at the catalogue's price (MON-04)", () => {
+	const s = bootServer();
+	const { COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
+	const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+	const costume = name => COSTUMES.find(c => c.name === name);
+	const equipOf = name => EQUIPS.find(e => e.name === name).id;
+	const santa = costume("Santa");
+	const p = s.join(newUser(), "shopper");
+	const save = s.save(p);
+	const start = save.money;
+	info(`a new survivor starts with ${start} coins; Santa costs ${santa.price}`);
+
+	// refusals, each with the save untouched (the action bucket holds 6, so the calls are paced)
+	const refused = [99, -1, 1.5, "6", undefined].map(id => s.shop(p, { kind: "buyCostume", costumeId: id }));
+	check(
+		refused.every(r => r.ok === false && r.reason === "invalid"),
+		"an unknown costume id (out of range, negative, fraction, text, missing) is refused as invalid",
+		refused.map(r => r.reason).join(","),
+	);
+	s.run(3);
+	save.money = santa.price - 1;
+	const poor = s.shop(p, { kind: "buyCostume", costumeId: santa.id });
+	check(poor.ok === false && poor.reason === "funds", "one coin short: refused as funds", JSON.stringify(poor));
+	check(save.money === santa.price - 1 && save.costumes[santa.id] === 0, "…and nothing moved");
+	check(
+		poor.wallet !== undefined && poor.wallet.money === santa.price - 1,
+		"…and the refusal carries the wallet back",
+	);
+
+	// a request that names its own price is charged the catalogue's anyway
+	save.money = 100;
+	const ok = s.shop(p, { kind: "buyCostume", costumeId: santa.id, price: 0 });
+	check(
+		ok.ok === true && ok.price === santa.price,
+		"a request carrying `price: 0` pays the catalogue price",
+		JSON.stringify({ ok: ok.ok, price: ok.price }),
+	);
+	check(save.money === 100 - santa.price, "exactly that is taken from the live save", `${save.money}`);
+	check(
+		save.costumes[santa.id] === 1 && ok.wallet?.costumes[santa.id] === 1,
+		"the costume is theirs, and the wallet says so",
+	);
+	const twice = s.shop(p, { kind: "buyCostume", costumeId: santa.id });
+	check(twice.ok === false && twice.reason === "owned", "buying it again is refused as owned");
+	check(save.money === 100 - santa.price, "…and charges nothing");
+
+	// wearing: the bought outfit is accepted from a report, a pet nobody bought is taken off
+	const ack = s.report(p, { equipOutfit: equipOf("Santa"), equipPet: equipOf("Eagle") });
+	check(ack?.ok === true, "the report that wears it is accepted");
+	check(save.equipOutfit === equipOf("Santa"), "the server wears the bought outfit");
+	check(save.equipPet === -1, "…but not the Eagle nobody paid for", `equipPet ${save.equipPet}`);
+
+	// and it reaches the DataStore with the coins it cost
+	s.quit(p);
+	const stored = s.stored(p.UserId);
+	check(
+		stored?.money === 100 - santa.price &&
+			stored?.costumes[santa.id] === 1 &&
+			stored?.equipOutfit === equipOf("Santa"),
+		"the save written on leaving has the costume, the coins it cost and the outfit worn",
+		stored === undefined ? "no document" : `money ${stored.money}, costume ${stored.costumes[santa.id]}`,
+	);
 });
 
 // ================================================================

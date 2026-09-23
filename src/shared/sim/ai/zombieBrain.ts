@@ -1051,6 +1051,12 @@ function contactAttack(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, pi: num
 	}
 	z.windup = (z.windup ?? 0) - dt;
 	if ((z.windup ?? 0) <= 0) {
+		// the survivor is inside the last bite's guard: hold the lean and bite the moment it ends. Biting into
+		// the guard was a bite with no blood — a crowd "attacking" for nothing (LEG-04)
+		if (p.attacked) {
+			z.windup = 0;
+			return;
+		}
 		cancelWindup(z);
 		bite(refs, z, p, pi);
 	}

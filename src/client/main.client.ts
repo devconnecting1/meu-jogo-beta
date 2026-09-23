@@ -44,6 +44,7 @@ import * as net from "./systems/saveClient";
 import { showLogo } from "./ui/logo";
 import { LobbyStatus, showLobby } from "./ui/lobby";
 import { actionErrorText, showShop } from "./ui/shop";
+import { showWardrobe } from "./ui/wardrobe";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
 import { showTutorial } from "./ui/tutorial";
@@ -366,7 +367,15 @@ function lobbyStatus(): LobbyStatus {
 function openShop(back: () => void = goLobby): void {
 	clearScreen();
 	setPhase("shop");
-	cleanup = showShop(ctx, back);
+	// the shop's "Wardrobe" is a door: its X comes back to this shop, whose Back still goes where it went before
+	cleanup = showShop(ctx, back, () => openWardrobe(() => openShop(back)));
+}
+
+/** MON-04: outfits and pets, tried on, bought (by the server) and worn -- from the lobby or from the shop */
+function openWardrobe(back: () => void): void {
+	clearScreen();
+	setPhase("shop");
+	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot });
 }
 
 function openSettings(): void {
@@ -411,6 +420,7 @@ function goLobby(): void {
 		{
 			onPlay: playPressed,
 			onShop: openShop,
+			onWardrobe: () => openWardrobe(goLobby),
 			onSettings: openSettings,
 			onCredits: openCredits,
 			onTutorial: (thenPlay?: boolean) => openTutorial(thenPlay === true),
@@ -1039,15 +1049,19 @@ function cosmeticChanged(slot: number): void {
 	if (slot === EquipSlot.Outfit || slot === EquipSlot.Pet) net.requestSave("equip");
 }
 
-pack.onEquipItem = id => {
+/** the Bag's Equip and the wardrobe's (MON-04) are ONE path: owned, into its slot, and reported */
+function equipItem(id: number): void {
 	if (!ownsEquip(ctx.save, id)) return;
 	const slot = equipSlotOf(id);
 	if (setEquipped(ctx.save, slot, id)) cosmeticChanged(slot);
-};
+}
 
-pack.onUnequipItem = slot => {
+function unequipSlot(slot: number): void {
 	if (setEquipped(ctx.save, slot, -1)) cosmeticChanged(slot);
-};
+}
+
+pack.onEquipItem = equipItem;
+pack.onUnequipItem = unequipSlot;
 
 // ---------------------------------------------------------------- boot
 

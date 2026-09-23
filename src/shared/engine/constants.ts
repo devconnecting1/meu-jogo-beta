@@ -22,7 +22,10 @@ export const DESIGN = {
 	HUNGRY_HURT: 0.02 * 30,
 	BUFF_POISON_HURT: 0.06 * 30,
 	PLAYER_ARM: 20,
-	IFRAMES: 45 / 30,
+	// the guard after a hit. The original's 45 frames (1.5 s, obj_player_body.attacked_delay) made the whole
+	// horde worth one zombie: ten around you bit no harder than one. 0.5 s still stops a crowd landing every
+	// bite in the same frame, and each zombie keeps its own rhythm (STUN_TIME after a bite) — LEG-04
+	IFRAMES: 0.5,
 	REACTION_MAX: 6,
 	REACTION_FRICTION: 0.8 * 30,
 
