@@ -1,6 +1,6 @@
 /*
- * Where each pose of each character sits in the characters' sprite sheets (design/world-art: survivors, arms,
- * weapons, zombies, dogs, birds, and the white Fill / Rim masks of survivors and zombies). tools/character-art.mjs
+ * Where each pose of each character sits in the characters' sprite sheets (design/world-art: survivorsA / B, weapons,
+ * zombies, dogs, birds, and the white Fill / Rim masks of the survivors and the zombies). tools/character-art.mjs
  * writes the sheets from this layout and client/view/charArt.ts reads them with it, so the two can never point at
  * different cells (docs/DESIGN_RULES.md ART-07). Every sheet stays within 1024 x 1024 texels, the largest image
  * Roblox keeps at full resolution.
@@ -8,10 +8,10 @@
  * A sheet is a grid of square cells, one texel = 4 world units (WORLD_TEXEL, like the town). COLUMN = heading: every
  * pose is drawn at CHAR_DIRS screen headings, so a character sprite is never rotated on screen -- its texels stay on
  * the square grid of the town's, and the light baked into it stays at the top left of the screen (ART-02). ROW = pose
- * (a stride of the walk, a wind-up, a flight, an arm's length, a weapon).
+ * (a stride of the walk, a grip, a swing, a wind-up, a flight).
  *
- * Every cell is an even number of texels: a character is drawn as a few sprites (body, arms, weapon), each centred on
- * a point snapped to whole texels from the body's centre, and with even cells their texel grids coincide on screen.
+ * Every cell is an even number of texels: a survivor is two sprites (the weapon under the body), each centred on a
+ * point snapped to whole texels from the body's centre, and with even cells their texel grids coincide on screen.
  *
  * No engine and no renderer here: the generator loads this file under Node.
  */
@@ -31,110 +31,114 @@ export function dirHeading(dir: number): number {
 	return (dir / CHAR_DIRS) * math.pi * 2;
 }
 
-/** strides baked per walk cycle: -1, -0.5, 0, 0.5, 1 of a full stride */
-export const STEPS = 5;
+/** strides baked per walk cycle, the pixel-art walk: one foot forward, both together, the other forward */
+export const STEPS = 3;
 
-/** the row offset of a stride (-1..1): the nearest baked one */
+/** the row offset of a stride (-1..1) */
 export function stepRow(step: number): number {
-	return math.clamp(math.floor((step + 1) * 2 + 0.5), 0, STEPS - 1);
+	if (step < -1 / 3) return 0;
+	if (step > 1 / 3) return 2;
+	return 1;
 }
 
 /** the stride a row offset was baked at (the generator's side of stepRow) */
 export function rowStep(row: number): number {
-	return row / 2 - 1;
-}
-
-// ---------------------------------------------------------------- zombies
-
-/** texels per cell: the walker's reaching arms at any heading, the exploder's belly, the outline and a margin */
-export const ZOMBIE_CELL = 24;
-/** rows: five strides per type (1..5), the spitter's two wind-ups, the jumper in the air, the charger charging */
-export const ZOMBIE_ROW_WINDUP = 25;
-export const ZOMBIE_ROW_AIR = 27;
-export const ZOMBIE_ROW_RUSH = 28;
-export const ZOMBIE_ROWS = 33;
-/** the radius each type is baked at (shared/data/zombies.ts `radius`): a sprite is drawn at radius / this */
-export const ZOMBIE_BAKED_RADIUS = [16, 16, 16, 17, 17, 16];
-
-/**
- * The row of a zombie of `kind` (1..5) in a pose: `windup` 0..1 (spitter), `air` (jumper), `rush` (charger), or
- * the stride `step` (-1..1). Unknown kinds draw as walkers.
- */
-export function zombieRow(kind: number, step: number, windup: number, air: boolean, rush: boolean): number {
-	if (kind === 2 && windup > 0.05) return windup < 0.75 ? ZOMBIE_ROW_WINDUP : ZOMBIE_ROW_WINDUP + 1;
-	if (kind === 5 && air) return ZOMBIE_ROW_AIR;
-	if (kind === 4 && rush) return ZOMBIE_ROW_RUSH + stepRow(step);
-	const k = kind >= 1 && kind <= 5 ? kind : 1;
-	return (k - 1) * STEPS + stepRow(step);
+	return row - 1;
 }
 
 // ---------------------------------------------------------------- survivors
 
 /** OutfitLook 0..3 (shared/data/cosmetics.ts) */
 export const OUTFITS = 4;
-/** texels per cell: a downed survivor lying full length, the cowboy's brim */
+/** texels per cell: a downed survivor lying full length, a long gun's support hand, the cowboy's brim */
 export const SURVIVOR_CELL = 20;
+
 /**
- * A standing survivor is two layers, because the arms go between them: the BODY (boots, torso, pack) under the
- * arms, and the HEAD (hair, or the hat with its brim and Santa's pom-pom) over them -- from above, a hand held
- * up by the shoulder passes under the brim, never over the face.
- *
- * rows: five strides per outfit (body), one head per outfit, then three crawl poses per outfit (downed, MP-03: one
- * cell, no arms of their own to place, no weapon)
+ * How the hands hold what they hold. A survivor cell is the WHOLE body -- boots, torso, pack, both arms, head or hat
+ * -- rasterised as one silhouette with one outline, so the arms are baked per grip; only the weapon is a sprite of
+ * its own (client/view/survivorView.ts puts it where these hands hold it).
  */
-export const SURVIVOR_ROW_HEAD = OUTFITS * STEPS;
-export const SURVIVOR_ROW_DOWNED = SURVIVOR_ROW_HEAD + OUTFITS;
-export const SURVIVOR_ROWS = SURVIVOR_ROW_DOWNED + OUTFITS * 3;
+export const Grip = {
+	/** a melee weapon held low in the right hand, the left hand free */
+	Idle: 0,
+	/** a pistol in both hands, straight ahead */
+	Pistol: 1,
+	/** a long gun (rifle, shotgun, MG, sniper, flamethrower, stun gun): right hand on the grip, left under the barrel */
+	Long: 2,
+	/** a bow held out in the left hand, the right at the string */
+	Bow: 3,
+} as const;
+export const GRIPS = 4;
+
 /**
- * The Fill and Rim masks have the walking BODY rows only: a hit and the poison colour the torso, as the flat drawing
- * always did, and the flat drawing never flashed a downed body either.
+ * Where the hands are, in the body's frame (world units: f along the heading, l to the body's right), right hand
+ * first. The same numbers the flat drawing uses (survivorView.ts), except the long gun's support hand, which the flat
+ * drawing slides out along the barrel and the pixel art keeps within its cell.
  */
-export const SURVIVOR_MASK_ROWS = SURVIVOR_ROW_HEAD;
+export const GRIP_HANDS: ReadonlyArray<readonly [number, number, number, number]> = [
+	[12, 14, 10, -14],
+	[18, 6, 18, -2],
+	[16, 7, 27, 3],
+	[10, 8, 24, 0],
+];
+
+/** a melee swing: the blade hand 16 u out along the sweep (the left hand stays at (10, -14)) */
+export const SWING_HAND = 16;
+/** the sweep angles baked off the aim (radians): every melee cone is at most 60 degrees each way */
+export const SWINGS = [-math.pi / 3, -math.pi / 6, 0, math.pi / 6, math.pi / 3];
+
+/** per outfit: GRIPS x STEPS standing, then the swings, then three crawl poses (downed, MP-03) */
+export const SURVIVOR_ROW_SWING = GRIPS * STEPS;
+export const SURVIVOR_ROW_DOWNED = SURVIVOR_ROW_SWING + SWINGS.size();
+export const SURVIVOR_ROWS_EACH = SURVIVOR_ROW_DOWNED + 3;
+/** two outfits per sheet: survivorsA (plain, Santa), survivorsB (Zombie, Cowboy); their masks share the layout */
+export const OUTFITS_PER_SHEET = 2;
+export const SURVIVOR_SHEETS = OUTFITS / OUTFITS_PER_SHEET;
+export const SURVIVOR_ROWS = SURVIVOR_ROWS_EACH * OUTFITS_PER_SHEET;
 
 function outfitIndex(outfit: number): number {
 	return outfit >= 0 && outfit < OUTFITS ? outfit : 0;
 }
 
-/** the body of a standing survivor at stride `step` (-1..1) */
-export function survivorRow(outfit: number, step: number): number {
-	return outfitIndex(outfit) * STEPS + stepRow(step);
+/** which sheet (0 = A, 1 = B) an outfit is drawn from */
+export function survivorSheet(outfit: number): number {
+	return math.floor(outfitIndex(outfit) / OUTFITS_PER_SHEET);
 }
 
-/** the head (or hat) of a standing survivor */
-export function headRow(outfit: number): number {
-	return SURVIVOR_ROW_HEAD + outfitIndex(outfit);
+function outfitBase(outfit: number): number {
+	return (outfitIndex(outfit) % OUTFITS_PER_SHEET) * SURVIVOR_ROWS_EACH;
 }
 
-/** `drag` -1..1: which arm is pulling */
-export function downedRow(outfit: number, drag: number): number {
-	return SURVIVOR_ROW_DOWNED + outfitIndex(outfit) * 3 + math.clamp(math.floor(drag + 1.5), 0, 2);
+/** a standing survivor holding with `grip`, at stride `step` (-1..1) */
+export function survivorRow(outfit: number, grip: number, step: number): number {
+	return outfitBase(outfit) + math.clamp(grip, 0, GRIPS - 1) * STEPS + stepRow(step);
 }
 
-/** where the arms leave the body (body frame, world units): the shoulder joints under the torso's edge */
-export const SHOULDER_F = 1;
-export const SHOULDER_L = 10;
-
-/** an arm is baked at each of these lengths (shoulder to the hand's centre, world units), per outfit */
-export const ARM_LENGTHS = [8, 12, 16, 20, 25, 30, 36, 42, 48];
-export const ARM_CELL = 18;
-export const ARM_ROWS = OUTFITS * ARM_LENGTHS.size();
-
-/** the baked length nearest `len` (an index into ARM_LENGTHS) */
-export function armLengthIndex(len: number): number {
+/** mid-swing, the blade `rel` radians off the aim: the nearest baked sweep */
+export function swingRow(outfit: number, rel: number): number {
 	let best = 0;
 	let bestD = math.huge;
-	for (let i = 0; i < ARM_LENGTHS.size(); i++) {
-		const d = math.abs(ARM_LENGTHS[i] - len);
+	for (let i = 0; i < SWINGS.size(); i++) {
+		const d = math.abs(SWINGS[i] - rel);
 		if (d < bestD) {
 			bestD = d;
 			best = i;
 		}
 	}
-	return best;
+	return outfitBase(outfit) + SURVIVOR_ROW_SWING + best;
 }
 
-export function armRow(outfit: number, lengthIndex: number): number {
-	return outfitIndex(outfit) * ARM_LENGTHS.size() + lengthIndex;
+/** `drag` -1..1: which arm is pulling */
+export function downedRow(outfit: number, drag: number): number {
+	return outfitBase(outfit) + SURVIVOR_ROW_DOWNED + math.clamp(math.floor(drag + 1.5), 0, 2);
+}
+
+/** the grip a weapon is held with (melee weapons are Idle between swings) */
+export function gripOf(kind: number): number {
+	if (kind === WeaponKind.Melee) return Grip.Idle;
+	if (kind === WeaponKind.Pistol) return Grip.Pistol;
+	if (kind === WeaponKind.Bow) return Grip.Bow;
+	return Grip.Long;
 }
 
 // ---------------------------------------------------------------- weapons
@@ -193,9 +197,36 @@ export function meleeIdleLength(reach: number): number {
 	return math.max(18, reach * 0.55);
 }
 
+/** how far into a weapon's length the hand holds it, from its back end (the middle of the handle or the grip) */
+export const HANDLE = 5;
+
+// ---------------------------------------------------------------- zombies
+
+/** texels per cell: the walker's reaching arms at any heading, the charger's shoulders, the outline and a margin */
+export const ZOMBIE_CELL = 24;
+/** rows: three strides per type (1..5), the spitter's two wind-ups, the jumper in the air, the charger charging */
+export const ZOMBIE_ROW_WINDUP = 5 * STEPS;
+export const ZOMBIE_ROW_AIR = ZOMBIE_ROW_WINDUP + 2;
+export const ZOMBIE_ROW_RUSH = ZOMBIE_ROW_AIR + 1;
+export const ZOMBIE_ROWS = ZOMBIE_ROW_RUSH + STEPS;
+/** the radius each type is baked at (shared/data/zombies.ts `radius`): a sprite is drawn at radius / this */
+export const ZOMBIE_BAKED_RADIUS = [16, 16, 16, 17, 17, 16];
+
+/**
+ * The row of a zombie of `kind` (1..5) in a pose: `windup` 0..1 (spitter), `air` (jumper), `rush` (charger), or
+ * the stride `step` (-1..1). Unknown kinds draw as walkers.
+ */
+export function zombieRow(kind: number, step: number, windup: number, air: boolean, rush: boolean): number {
+	if (kind === 2 && windup > 0.05) return windup < 0.6 ? ZOMBIE_ROW_WINDUP : ZOMBIE_ROW_WINDUP + 1;
+	if (kind === 5 && air) return ZOMBIE_ROW_AIR;
+	if (kind === 4 && rush) return ZOMBIE_ROW_RUSH + stepRow(step);
+	const k = kind >= 1 && kind <= 5 ? kind : 1;
+	return (k - 1) * STEPS + stepRow(step);
+}
+
 // ---------------------------------------------------------------- pets
 
-/** dogs: five trot strides, then three tail wags standing, per dog (PetLook 4 Carolina, 5 Malamute, 6 Doberman) */
+/** dogs: three trot strides, then three tail wags standing, per dog (PetLook 4 Carolina, 5 Malamute, 6 Doberman) */
 export const DOG_CELL = 18;
 export const DOG_ROWS_EACH = STEPS + 3;
 export const DOG_ROWS = 3 * DOG_ROWS_EACH;

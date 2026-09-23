@@ -84,10 +84,12 @@ export type WorldArtName =
 	| "acUnit"
 	| "vent"
 	| "chimney"
-	| "survivors"
-	| "survivorsFill"
-	| "survivorsRim"
-	| "arms"
+	| "survivorsA"
+	| "survivorsAFill"
+	| "survivorsARim"
+	| "survivorsB"
+	| "survivorsBFill"
+	| "survivorsBRim"
 	| "weapons"
 	| "zombies"
 	| "zombiesFill"
@@ -232,24 +234,28 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
-	/** sheet: survivors: 4 outfits x 5 strides, then the downed crawl (ART-08) */
-	survivors: { id: "", w: 640, h: 720 },
-	/** mask: survivors: white silhouettes of the walking cells (tint: hit flash, poison) */
-	survivorsFill: { id: "", w: 640, h: 400 },
-	/** mask: survivors: white outlines of the walking cells (tint: the red hit outline, LEG-02) */
-	survivorsRim: { id: "", w: 640, h: 400 },
-	/** sheet: survivors' arms, shoulder to hand, per outfit x 9 lengths (placed on the weapon's grip) */
-	arms: { id: "", w: 576, h: 648 },
-	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows */
+	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-08) */
+	survivorsA: { id: "", w: 640, h: 800 },
+	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
+	survivorsAFill: { id: "", w: 640, h: 800 },
+	/** mask: survivorsA: white outlines of the same cells (tint: the red hit outline, LEG-02) */
+	survivorsARim: { id: "", w: 640, h: 800 },
+	/** sheet: survivors, Zombie costume and Cowboy: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms (ART-08) */
+	survivorsB: { id: "", w: 640, h: 800 },
+	/** mask: survivorsB: white silhouettes of the same cells (tint: hit flash, poison) */
+	survivorsBFill: { id: "", w: 640, h: 800 },
+	/** mask: survivorsB: white outlines of the same cells (tint: the red hit outline, LEG-02) */
+	survivorsBRim: { id: "", w: 640, h: 800 },
+	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows (ART-08) */
 	weapons: { id: "", w: 768, h: 840 },
-	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 5 strides; spitter wind-ups, jumper in the air, charger charging (ART-09) */
-	zombies: { id: "", w: 768, h: 792 },
+	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 3 strides; spitter wind-ups, jumper in the air, charger charging (ART-09) */
+	zombies: { id: "", w: 768, h: 504 },
 	/** mask: zombies: white silhouettes of the same cells (tint: hit flash, lit fuse) */
-	zombiesFill: { id: "", w: 768, h: 792 },
+	zombiesFill: { id: "", w: 768, h: 504 },
 	/** mask: zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow) */
-	zombiesRim: { id: "", w: 768, h: 792 },
-	/** sheet: pets: Carolina, Malamute, Doberman x 5 trot strides + 3 tail wags (ART-10) */
-	dogs: { id: "", w: 576, h: 432 },
+	zombiesRim: { id: "", w: 768, h: 504 },
+	/** sheet: pets: Carolina, Malamute, Doberman x 3 trot strides + 3 tail wags (ART-10) */
+	dogs: { id: "", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-10) */
 	birds: { id: "", w: 768, h: 360 },
 };
@@ -324,10 +330,12 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
-	"survivors",
-	"survivorsFill",
-	"survivorsRim",
-	"arms",
+	"survivorsA",
+	"survivorsAFill",
+	"survivorsARim",
+	"survivorsB",
+	"survivorsBFill",
+	"survivorsBRim",
 	"weapons",
 	"zombies",
 	"zombiesFill",

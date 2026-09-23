@@ -1,7 +1,7 @@
 /*
  * The characters' pixel art at run time (docs/DESIGN_RULES.md ART-07..ART-10): the survivors, the horde and the pets
- * drawn from the sprite sheets tools/character-art.mjs bakes (design/world-art: survivors, arms, weapons, zombies,
- * dogs, birds and the white Fill / Rim masks), laid out by client/view/charSheets.ts.
+ * drawn from the sprite sheets tools/character-art.mjs bakes (design/world-art: survivorsA / B, weapons, zombies, dogs,
+ * birds and the white Fill / Rim masks), laid out by client/view/charSheets.ts.
  *
  * WHY SHEETS, AND NOT ROTATED SPRITES. Every pose is baked at CHAR_DIRS (32) screen headings, and a character sprite
  * is always drawn UNROTATED on screen, from the column of its heading (ImageRectOffset). A rotated Pixelated
@@ -11,13 +11,13 @@
  * town's 4-units-per-texel scale, and the light where the town's is (ART-02).
  *
  * WHAT IT COSTS. One Frame + ImageLabel per layer, from the renderer's pool: a zombie is ONE sprite (plus its round
- * shadow), a pet one, a survivor four (body, two arms, head) plus the weapon. The flat drawing it replaces spent 5-7
- * Frames on a zombie and 8-14 on a survivor. A hit or the exploder's fuse adds the two masks while it lasts: Fill
+ * shadow), a pet one, a survivor two -- the whole body with its arms baked per grip, and the weapon under it. The
+ * flat drawing it replaces spent 5-7 Frames on a zombie and 8-14 on a survivor. A hit or the exploder's fuse adds the two masks while it lasts: Fill
  * (the silhouette, tinted with the flash colour at the flash's strength) and Rim (the outline, tinted with the
  * outline colour of the flat drawing). Nothing here allocates: one scratch SpriteOpts, colours built once.
  *
  * WITHOUT IDS, NOTHING CHANGES (ART-01). Each group only draws when every sheet it needs has an asset id (survivors:
- * body, masks, arms, weapons; zombies: sheet and masks; dogs; birds); otherwise these functions answer false and
+ * both outfit sheets, their masks and the weapons; zombies: sheet and masks; dogs; birds); otherwise these functions answer false and
  * the caller draws the flat look it always drew, with the same calls. So the game is unchanged until the owner's
  * next `npm run cloud -- upload-art`, and a half-finished upload shows only the groups that are complete.
  */
@@ -25,24 +25,20 @@ import { Camera } from "shared/engine/camera";
 import { COLORS } from "shared/engine/colors";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import {
-	ARM_CELL,
-	ARM_LENGTHS,
 	BIRD_CELL,
-	CHAR_DIRS,
 	DOG_CELL,
 	SURVIVOR_CELL,
 	WEAPON_CELL,
 	ZOMBIE_BAKED_RADIUS,
 	ZOMBIE_CELL,
-	armLengthIndex,
-	armRow,
 	birdRow,
 	dirIndex,
 	dogRow,
+	survivorSheet,
 	zombieRow,
 } from "./charSheets";
 import { artId } from "./worldArt";
-import { WORLD_TEXEL } from "./worldArtAssets";
+import { WORLD_TEXEL, WorldArtName } from "./worldArtAssets";
 
 const WHITE = COLORS.white;
 
@@ -51,15 +47,18 @@ const HUMANOID_HALF_WIDTH = 18;
 
 // ---------------------------------------------------------------- which groups are live
 
-/** every sheet a standing survivor needs, or undefined: the survivor is drawn flat */
+/** the survivors' sheets, their Fill and Rim masks: A holds outfits 0-1, B outfits 2-3 (charSheets.survivorSheet) */
+const SURVIVOR_SHEETS: ReadonlyArray<readonly [WorldArtName, WorldArtName, WorldArtName]> = [
+	["survivorsA", "survivorsAFill", "survivorsARim"],
+	["survivorsB", "survivorsBFill", "survivorsBRim"],
+];
+
+/** every sheet a survivor needs (each outfit's cells, their masks, the weapons), or the survivor is drawn flat */
 export function survivorArtLive(): boolean {
-	return (
-		artId("survivors") !== undefined &&
-		artId("survivorsFill") !== undefined &&
-		artId("survivorsRim") !== undefined &&
-		artId("arms") !== undefined &&
-		artId("weapons") !== undefined
-	);
+	for (const names of SURVIVOR_SHEETS) {
+		for (const name of names) if (artId(name) === undefined) return false;
+	}
+	return artId("weapons") !== undefined;
 }
 
 export function zombieArtLive(): boolean {
@@ -121,18 +120,13 @@ export function columnOf(cam: Camera, a: number): number {
 	return dirIndex(a + cam.angle);
 }
 
-/** the screen heading a column was baked at, back in world terms */
-export function columnHeading(cam: Camera, col: number): number {
-	return (col / CHAR_DIRS) * math.pi * 2 - cam.angle;
-}
-
 /** result of `snapped` (one scratch point: read it before the next call) */
 export const SNAP = { x: 0, y: 0 };
 
 /**
- * (x, y) moved so its offset from the anchor (ax, ay) is a whole number of texels on SCREEN: a character is a few
- * sprites (body, arms, weapon, head), and with every cell an even number of texels wide their texel grids then
- * coincide, so the arms never look drawn on a finer or shifted grid than the body.
+ * (x, y) moved so its offset from the anchor (ax, ay) is a whole number of texels on SCREEN: a survivor is two
+ * sprites (the body and the weapon), and with every cell an even number of texels wide their texel grids then
+ * coincide, so the weapon never looks drawn on a finer or shifted grid than the hands holding it.
  */
 export function snapped(cam: Camera, ax: number, ay: number, x: number, y: number, scale: number): void {
 	const t = WORLD_TEXEL * scale;
@@ -154,37 +148,10 @@ export function snapped(cam: Camera, ax: number, ay: number, x: number, y: numbe
 
 // ---------------------------------------------------------------- survivors' pieces
 
-/** a survivor's arm: from the shoulder at (sx, sy) to the hand at (hx, hy), world units, snapped to the body */
-export function drawArm(
-	r: Renderer,
-	cam: Camera,
-	id: string,
-	outfit: number,
-	bodyX: number,
-	bodyY: number,
-	sx: number,
-	sy: number,
-	hx: number,
-	hy: number,
-	z: number,
-): void {
-	const dx = hx - sx;
-	const dy = hy - sy;
-	const len = math.sqrt(dx * dx + dy * dy);
-	const col = columnOf(cam, math.atan2(dy, dx));
-	const li = armLengthIndex(len);
-	// the hand lands ON the grip: the baked arm lies along its column's heading, hand at +len/2 of the cell centre
-	const ca = columnHeading(cam, col);
-	const half = ARM_LENGTHS[li] / 2;
-	snapped(cam, bodyX, bodyY, hx - math.cos(ca) * half, hy - math.sin(ca) * half, 1);
-	drawCell(r, cam, id, ARM_CELL, col, armRow(outfit, li), SNAP.x, SNAP.y, 1, z, 1, WHITE);
-}
-
 /** a weapon in the hands: its long axis along world heading `a`, centred on (cx, cy), snapped to the body */
 export function drawWeaponCell(
 	r: Renderer,
 	cam: Camera,
-	id: string,
 	row: number,
 	bodyX: number,
 	bodyY: number,
@@ -194,27 +161,15 @@ export function drawWeaponCell(
 	z: number,
 ): void {
 	snapped(cam, bodyX, bodyY, cx, cy, 1);
-	drawCell(r, cam, id, WEAPON_CELL, columnOf(cam, a), row, SNAP.x, SNAP.y, 1, z, 1, WHITE);
+	drawCell(r, cam, artId("weapons") ?? "", WEAPON_CELL, columnOf(cam, a), row, SNAP.x, SNAP.y, 1, z, 1, WHITE);
 }
 
-/** a cell of the survivors' sheet: a body, a head or a downed survivor */
+/** a cell of an outfit's survivor sheet (a grip and stride, a swing or a crawl): 0 colour, 1 Fill, 2 Rim */
 export function drawSurvivorCell(
 	r: Renderer,
 	cam: Camera,
-	row: number,
-	col: number,
-	x: number,
-	y: number,
-	z: number,
-): void {
-	drawCell(r, cam, artId("survivors") ?? "", SURVIVOR_CELL, col, row, x, y, 1, z, 1, WHITE);
-}
-
-/** the white silhouette (Fill) or outline (Rim) of a survivor's body cell, tinted */
-export function drawSurvivorMask(
-	r: Renderer,
-	cam: Camera,
-	rim: boolean,
+	outfit: number,
+	layer: number,
 	row: number,
 	col: number,
 	x: number,
@@ -223,7 +178,7 @@ export function drawSurvivorMask(
 	alpha: number,
 	tint: Color3,
 ): void {
-	const id = artId(rim ? "survivorsRim" : "survivorsFill") ?? "";
+	const id = artId(SURVIVOR_SHEETS[survivorSheet(outfit)][layer]) ?? "";
 	drawCell(r, cam, id, SURVIVOR_CELL, col, row, x, y, 1, z, alpha, tint);
 }
 

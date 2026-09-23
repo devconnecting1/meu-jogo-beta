@@ -566,36 +566,52 @@
 			"description": "brick chimney on a house roof"
 		},
 		{
-			"name": "survivors",
-			"file": "survivors.png",
+			"name": "survivorsA",
+			"file": "survivorsA.png",
 			"kind": "sheet",
 			"w": 640,
-			"h": 720,
-			"description": "survivors: 4 outfits x 5 strides, then the downed crawl (ART-08)"
+			"h": 800,
+			"description": "survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-08)"
 		},
 		{
-			"name": "survivorsFill",
-			"file": "survivorsFill.png",
+			"name": "survivorsAFill",
+			"file": "survivorsAFill.png",
 			"kind": "mask",
 			"w": 640,
-			"h": 400,
-			"description": "survivors: white silhouettes of the walking cells (tint: hit flash, poison)"
+			"h": 800,
+			"description": "survivorsA: white silhouettes of the same cells (tint: hit flash, poison)"
 		},
 		{
-			"name": "survivorsRim",
-			"file": "survivorsRim.png",
+			"name": "survivorsARim",
+			"file": "survivorsARim.png",
 			"kind": "mask",
 			"w": 640,
-			"h": 400,
-			"description": "survivors: white outlines of the walking cells (tint: the red hit outline, LEG-02)"
+			"h": 800,
+			"description": "survivorsA: white outlines of the same cells (tint: the red hit outline, LEG-02)"
 		},
 		{
-			"name": "arms",
-			"file": "arms.png",
+			"name": "survivorsB",
+			"file": "survivorsB.png",
 			"kind": "sheet",
-			"w": 576,
-			"h": 648,
-			"description": "survivors' arms, shoulder to hand, per outfit x 9 lengths (placed on the weapon's grip)"
+			"w": 640,
+			"h": 800,
+			"description": "survivors, Zombie costume and Cowboy: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms (ART-08)"
+		},
+		{
+			"name": "survivorsBFill",
+			"file": "survivorsBFill.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 800,
+			"description": "survivorsB: white silhouettes of the same cells (tint: hit flash, poison)"
+		},
+		{
+			"name": "survivorsBRim",
+			"file": "survivorsBRim.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 800,
+			"description": "survivorsB: white outlines of the same cells (tint: the red hit outline, LEG-02)"
 		},
 		{
 			"name": "weapons",
@@ -603,22 +619,22 @@
 			"kind": "sheet",
 			"w": 768,
 			"h": 840,
-			"description": "weapons in hand: each melee weapon swung and held, then the guns and bows"
+			"description": "weapons in hand: each melee weapon swung and held, then the guns and bows (ART-08)"
 		},
 		{
 			"name": "zombies",
 			"file": "zombies.png",
 			"kind": "sheet",
 			"w": 768,
-			"h": 792,
-			"description": "zombies: walker, spitter, exploder, charger, jumper x 5 strides; spitter wind-ups, jumper in the air, charger charging (ART-09)"
+			"h": 504,
+			"description": "zombies: walker, spitter, exploder, charger, jumper x 3 strides; spitter wind-ups, jumper in the air, charger charging (ART-09)"
 		},
 		{
 			"name": "zombiesFill",
 			"file": "zombiesFill.png",
 			"kind": "mask",
 			"w": 768,
-			"h": 792,
+			"h": 504,
 			"description": "zombies: white silhouettes of the same cells (tint: hit flash, lit fuse)"
 		},
 		{
@@ -626,7 +642,7 @@
 			"file": "zombiesRim.png",
 			"kind": "mask",
 			"w": 768,
-			"h": 792,
+			"h": 504,
 			"description": "zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow)"
 		},
 		{
@@ -634,8 +650,8 @@
 			"file": "dogs.png",
 			"kind": "sheet",
 			"w": 576,
-			"h": 432,
-			"description": "pets: Carolina, Malamute, Doberman x 5 trot strides + 3 tail wags (ART-10)"
+			"h": 324,
+			"description": "pets: Carolina, Malamute, Doberman x 3 trot strides + 3 tail wags (ART-10)"
 		},
 		{
 			"name": "birds",
