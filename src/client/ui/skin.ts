@@ -526,7 +526,9 @@ function applySurface(host: GuiObject, live: LiveSurface): void {
 	fallbackStroke(host, spec, false);
 	fallbackCorner(host, 0);
 	const wanted = spec.layers.size();
-	while (live.labels.size() > wanted) live.labels.pop()?.Destroy();
+	// a layer this state does not use is HIDDEN, not destroyed: a button going raised (3 layers) -> disabled or
+	// pressed (2) -> raised again, or a rail item hovered and left, reuses its ImageLabels instead of churning them
+	for (let i = wanted; i < live.labels.size(); i++) live.labels[i].Visible = false;
 	for (let i = 0; i < wanted; i++) {
 		const layer = spec.layers[i];
 		const tex = SKIN_TEXTURES[layer.tex];
@@ -552,6 +554,7 @@ function applySurface(host: GuiObject, live: LiveSurface): void {
 			label.Parent = host;
 			live.labels[i] = label;
 		}
+		label.Visible = true;
 		label.Image = tex.id;
 		label.SliceCenter = new Rect(tex.slice[0], tex.slice[1], tex.slice[2], tex.slice[3]);
 		label.ImageColor3 = layer.tint;
@@ -559,7 +562,10 @@ function applySurface(host: GuiObject, live: LiveSurface): void {
 	}
 }
 
-/** draws `spec` on `host` (creates / updates / removes its skin layers); call it again on every state change */
+/** what a cleared surface draws: nothing (its layers stay, hidden, for the next paint) */
+const CLEARED: SurfaceSpec = { layers: [], bg: THEME.background, bgT: 1, radius: 0 };
+
+/** draws `spec` on `host` (creates / updates / hides its skin layers); call it again on every state change */
 export function paintSurface(host: GuiObject, spec: SurfaceSpec): void {
 	let live = surfaces.get(host);
 	if (live === undefined) {
@@ -572,15 +578,17 @@ export function paintSurface(host: GuiObject, spec: SurfaceSpec): void {
 	applySurface(host, live);
 }
 
-/** removes the surface from `host` (back to a plain transparent object) */
+/**
+ * Removes the surface from `host` (back to a plain transparent object). Its skin layers are hidden, not
+ * destroyed: a ghost control (a rail item) clears itself every time the pointer leaves it, and paints again on
+ * the next hover.
+ */
 export function clearSurface(host: GuiObject): void {
 	const live = surfaces.get(host);
 	if (live === undefined) return;
-	for (const l of live.labels) l.Destroy();
-	surfaces.delete(host);
-	const s = findBoxStroke(host, "SurfaceBorder");
-	if (s !== undefined) s.Enabled = false;
-	host.BackgroundTransparency = 1;
+	live.spec = CLEARED;
+	live.extraT = 0;
+	applySurface(host, live);
 }
 
 /** extra transparency over the surface's own (HUD cards over the world, enter / exit fades) */
@@ -602,8 +610,10 @@ export function fadeSurface(host: GuiObject, time: number, transparency: number)
 		return;
 	}
 	live.extraT = math.clamp(transparency, 0, 1);
-	if (live.labels.size() > 0) {
-		for (let i = 0; i < live.labels.size(); i++) {
+	// only the layers the current state draws (the others are hidden, kept for another state)
+	const shown = math.min(live.labels.size(), live.spec.layers.size());
+	if (shown > 0) {
+		for (let i = 0; i < shown; i++) {
 			const base = worldTransparency(live.spec.layers[i]?.transparency ?? 0);
 			tweenTo(live.labels[i], time, { ImageTransparency: combine(base, live.extraT) });
 		}
