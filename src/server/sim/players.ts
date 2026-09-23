@@ -22,8 +22,17 @@
  *     consumed at once instead of waiting for it. The client never leaves a gap on purpose -- a hitch drops time,
  *     not numbers (client/net/commands.ts `dropBacklog`);
  *   - over INPUT_BUFFER_MAX the OLDEST are dropped and `inputOverflow` counts them. Their MOVEMENT is gone -- that
- *     is what caps a lag switch at INPUT_BUFFER_MAX ticks -- but their TAPS are carried to the new head (`enqueue`):
- *     a server hitch or a burst must not delete a shot, a reload or an E;
+ *     is what caps a lag switch at INPUT_BUFFER_MAX ticks -- but their TAPS are carried to the commands still queued
+ *     (`carryEdges`): a server hitch or a burst must not delete a shot, a reload or an E;
+ *   - EXCEPT while the server itself is repaying ticks it owes: the ceiling is raised by `grace`, one command per
+ *     tick the Heartbeat still has to run (server/sim/heartbeat.ts `grace`, at most INPUT_GRACE_MAX). A server hitch
+ *     is repaid at two ticks a heartbeat, and each repaid tick consumes a command; the ones that landed during the
+ *     hitch are exactly those, and capping them at INPUT_BUFFER_MAX threw them away and left every repaid tick to WAIT
+ *     (the review of 2026-09-23: 3.91 waits a second, tools/test-input-buffer.mjs case 5). Only a debt that is being
+ *     REPAID counts: a server that cannot keep up owes ticks it never runs, and granting them kept every queue as deep
+ *     as the debt for good (the review of dee095a, B1: 352 ms from input to simulation at a 25 Hz heartbeat). Only
+ *     the server's lateness raises it -- nothing a client sends does -- and it is still one command per tick, so a
+ *     lag switch banks nothing it could spend faster than the world runs;
  *   - the packet itself passes a token bucket of INPUT_RATE/s with a burst of INPUT_BURST (§8.2);
  *   - after RESYNC_IDLE_TICKS filled ticks with an empty queue, a command AHEAD of the window re-anchors it instead
  *     of being refused for ever: an upstream outage longer than INPUT_SEQ_WINDOW ticks (the client kept numbering,
@@ -43,7 +52,8 @@
  * body stopping in the world everyone else watches. That rule "cost one tick of smoothness the client's
  * prediction hides" — true only for the owner. Waiting instead makes every fill buy one tick of queue depth, so a
  * hitch costs the ticks it lasted and not one more; the extra depth is drained by the -2% dilation, and it can
- * never pass INPUT_BUFFER_MAX, which is also the most a lag switch can bank. Coasting (repeating the last
+ * never pass INPUT_BUFFER_MAX (plus the ticks a late SERVER is repaying, see `grace` above), which is also the most a lag
+ * switch can bank. Coasting (repeating the last
  * movement) was rejected with it: coasting a tick and then consuming the real command late would move the body
  * twice for one command.
  *
@@ -65,11 +75,12 @@ import {
 	FLOOD_RATE_WINDOW_S,
 	INPUT_BUFFER_MAX,
 	INPUT_BURST,
+	INPUT_GRACE_MAX,
 	INPUT_RATE,
 	INPUT_SEQ_WINDOW,
 	SIM_HZ,
 } from "shared/net/mpConfig";
-import { EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
+import { EDGE_MAX, EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
 import { PlayerSaveData, outfitLookOf, petLookOf, titleWireOf } from "shared/game/save";
@@ -140,6 +151,18 @@ function bumpWindow(w: RateWindow, now: number, span: number): number {
 
 const STANDING: InputCommand = { seq: 0, moveAng: 0, moveMag: 0, aim: 0, held: 0, edges: 0 };
 
+/**
+ * Commands whose view is remembered: every one the queue can hold (INPUT_BUFFER_MAX + INPUT_GRACE_MAX) plus the
+ * redundancy's copies, so two commands in the queue never share a slot.
+ */
+const VIEW_RING = 32;
+
+function newViewRing(fill: number): Array<number> {
+	const out = new Array<number>();
+	for (let i = 0; i < VIEW_RING; i++) out.push(fill);
+	return out;
+}
+
 export interface ServerPlayer {
 	/** 0..MAX_PLAYERS-1, stable for the whole session (§4.4) */
 	slot: number;
@@ -167,7 +190,7 @@ export interface ServerPlayer {
 	state: PlayerState;
 	/** the live save the server owns (server/main.server.ts session) */
 	save: PlayerSaveData;
-	/** pending commands, oldest first, at most INPUT_BUFFER_MAX */
+	/** pending commands, oldest first, at most INPUT_BUFFER_MAX (plus the server's grace while it owes ticks) */
 	queue: Array<InputCommand>;
 	/** false until the first accepted command: the client's first seq bootstraps `lastSeq` */
 	started: boolean;
@@ -189,9 +212,27 @@ export interface ServerPlayer {
 	lastCmd: InputCommand;
 	/** consecutive filled ticks since the last real command (the stall detector of `enqueue`) */
 	idleFills: number;
-	/** the snapshot tick the client said it was drawing, for the F2 rewind (§2.3) */
+	/**
+	 * The snapshot tick the client said it was drawing, for the F2 rewind (§2.3): the view of the command THIS tick
+	 * consumes (`takeCommand`), the frame that built it -- not the latest packet's, which is a queue's depth newer.
+	 * Only a consumed command sets it: on a tick that waits it is still the last consumed command's, the one whose
+	 * held trigger the fill repeats. It used to follow every packet between ticks, and a packet refused as late or
+	 * out of the window still set it, so a held trigger on a filled tick fired in whatever view the latest (stale)
+	 * packet named (the review of dee095a, N1).
+	 */
 	viewTick: number;
 	viewFrac: number;
+	/** the view each queued command was built under, by seq (a ring of VIEW_RING: seq, u16 tick, 1/256 fraction) */
+	viewSeqs: Array<number>;
+	viewTicks: Array<number>;
+	viewFracs: Array<number>;
+	/** ...and how many ticks had been taken when it landed, to measure its wait */
+	viewTakes: Array<number>;
+	/**
+	 * Ticks the command this tick consumed waited in the queue: measured HERE, never claimed. It is part of how old
+	 * an honest view is when its shot is judged, and the rewind ceiling counts it (server/sim/combat.ts).
+	 */
+	viewWait: number;
 	/** token bucket (§8.2) */
 	tokens: number;
 	tokenAt: number;
@@ -259,6 +300,11 @@ export function createServerPlayer(
 		idleFills: 0,
 		viewTick: 0,
 		viewFrac: 0,
+		viewSeqs: newViewRing(-1),
+		viewTicks: newViewRing(0),
+		viewFracs: newViewRing(0),
+		viewTakes: newViewRing(0),
+		viewWait: 0,
 		tokens: INPUT_BURST,
 		tokenAt: 0,
 		counters: newCounters(),
@@ -318,21 +364,48 @@ export function floodReason(sp: ServerPlayer): string | undefined {
 
 // ---------------------------------------------------------------- the input queue (§2.2)
 
-/** `onto` with the one-shot counters of `from` added to its own (each still capped at 3, §2.2) */
-function carryEdges(from: InputCommand, onto: InputCommand): InputCommand {
-	const a = from.edges;
-	const b = onto.edges;
-	const edges = packEdges(
-		edgeCount(a, EdgeShift.AttackPress) + edgeCount(b, EdgeShift.AttackPress),
-		edgeCount(a, EdgeShift.AttackRelease) + edgeCount(b, EdgeShift.AttackRelease),
-		edgeCount(a, EdgeShift.ActionPress) + edgeCount(b, EdgeShift.ActionPress),
-		edgeCount(a, EdgeShift.Reload) + edgeCount(b, EdgeShift.Reload),
-	);
-	// a new table: the decoded command may be shared with whoever handed the packet over
-	return { seq: onto.seq, moveAng: onto.moveAng, moveMag: onto.moveMag, aim: onto.aim, held: onto.held, edges };
+/**
+ * Hands the one-shot counters of a command the ceiling dropped to the commands still queued, oldest first. Each takes
+ * what its own counters still hold (EDGE_MAX a kind: two bits, §2.2) and the rest moves on to the next: piled onto
+ * the head alone they were capped at 3, and a hitch that drops a dozen commands at once -- a 250 ms one, or a
+ * crawling repayment's grace taken back (server/sim/heartbeat.ts) -- lost the presses past the third
+ * (tools/test-input-buffer.mjs case 16: 1075 of 1080 taps with the fixed ceiling).
+ */
+function carryEdges(edges: number, queue: Array<InputCommand>): void {
+	let press = edgeCount(edges, EdgeShift.AttackPress);
+	let release = edgeCount(edges, EdgeShift.AttackRelease);
+	let action = edgeCount(edges, EdgeShift.ActionPress);
+	let reload = edgeCount(edges, EdgeShift.Reload);
+	for (let i = 0; i < queue.size() && press + release + action + reload > 0; i++) {
+		const q = queue[i];
+		const e = q.edges;
+		const p = edgeCount(e, EdgeShift.AttackPress);
+		const r = edgeCount(e, EdgeShift.AttackRelease);
+		const a = edgeCount(e, EdgeShift.ActionPress);
+		const l = edgeCount(e, EdgeShift.Reload);
+		const tp = math.min(press, EDGE_MAX - p);
+		const tr = math.min(release, EDGE_MAX - r);
+		const ta = math.min(action, EDGE_MAX - a);
+		const tl = math.min(reload, EDGE_MAX - l);
+		if (tp + tr + ta + tl === 0) continue;
+		press -= tp;
+		release -= tr;
+		action -= ta;
+		reload -= tl;
+		// a new table: the decoded command may be shared with whoever handed the packet over
+		queue[i] = {
+			seq: q.seq,
+			moveAng: q.moveAng,
+			moveMag: q.moveMag,
+			aim: q.aim,
+			held: q.held,
+			edges: packEdges(p + tp, r + tr, a + ta, l + tl),
+		};
+	}
 }
 
-function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
+/** one command into the queue (see the header); true when the queue took it -- not late, out of the window or a copy */
+function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): boolean {
 	const seq = cmd.seq;
 	if (sp.started) {
 		const gap = seqDiff(seq, sp.lastSeq);
@@ -361,21 +434,21 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 	const d = seqDiff(seq, sp.lastSeq);
 	if (d > INPUT_SEQ_WINDOW || d < -INPUT_SEQ_WINDOW) {
 		sp.counters.seqWindow += 1;
-		return;
+		return false;
 	}
 	if (d <= 0) {
 		// already consumed (the second and third copies of the §2.2 redundancy), jumped over by a newer one when
 		// it never came, or dropped at the ceiling; a FILLED tick never makes a command late, as it spends no seq
 		sp.counters.late += 1;
-		return;
+		return false;
 	}
 	for (const q of sp.queue) {
 		if (q.seq === seq) {
 			sp.counters.duplicate += 1;
-			return;
+			return false;
 		}
 	}
-	// insertion sort: the queue holds at most INPUT_BUFFER_MAX + 3 entries for an instant
+	// insertion sort: the queue holds at most its ceiling + 3 entries for an instant
 	sp.queue.push(cmd);
 	let i = sp.queue.size() - 1;
 	while (i > 0 && seqNewer(sp.queue[i - 1].seq, seq)) {
@@ -383,7 +456,7 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 		i -= 1;
 	}
 	sp.queue[i] = cmd;
-	while (sp.queue.size() > INPUT_BUFFER_MAX) {
+	while (sp.queue.size() > INPUT_BUFFER_MAX + grace) {
 		const dropped = sp.queue.shift();
 		if (dropped === undefined) break;
 		sp.counters.inputOverflow += 1;
@@ -395,21 +468,45 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand): void {
 		// (a shot still waits for the weapon's cadence, a reload or an E happens once however many presses carry
 		// it), and dropping it is the one loss the player cannot be compensated for: a server hitch, or a burst
 		// that lands on a full queue, must not eat a shot. tools/test-input-buffer.mjs case 5 lost 161 of 1080.
-		if (dropped.edges !== 0) sp.queue[0] = carryEdges(dropped, sp.queue[0]);
+		if (dropped.edges !== 0) carryEdges(dropped.edges, sp.queue);
 	}
+	return true;
 }
 
 /**
  * Applies one decoded Input packet (§2.2: 1..3 commands, newest first). Call it only after the token bucket
  * accepted the packet. Never throws: every field of `packet` already went through decodeInput.
+ *
+ * `grace` is the SERVER's (ServerSimulation.inputGrace): how many ticks of a debt it is repaying it owes right now
+ * beyond the next one, each of which will consume a command. Clamped here as well, so no caller can open the
+ * ceiling further.
  */
-export function acceptInput(sp: ServerPlayer, packet: InputPacket, now: number): void {
+export function acceptInput(sp: ServerPlayer, packet: InputPacket, now: number, grace = 0): void {
 	sp.counters.packets += 1;
 	bumpWindow(sp.inputWindow, now, FLOOD_RATE_WINDOW_S);
-	sp.viewTick = packet.viewTick;
-	sp.viewFrac = packet.viewFrac;
+	const room = grace > 0 && grace < math.huge ? math.min(math.floor(grace), INPUT_GRACE_MAX) : 0;
+	const takes = sp.counters.consumed + sp.counters.filled;
 	// oldest first, so the queue keeps its order with a single pass
-	for (let i = packet.cmds.size() - 1; i >= 0; i--) enqueue(sp, packet.cmds[i]);
+	for (let i = packet.cmds.size() - 1; i >= 0; i--) {
+		const cmd = packet.cmds[i];
+		if (!enqueue(sp, cmd, room)) continue;
+		/*
+		 * The view of a command the queue TOOK: the packet names the frame of its NEWEST command, and that is the
+		 * command it belongs to; a redundant copy that is taken fills in for a command whose own packet never came,
+		 * one frame earlier per place. `takeCommand` hands the consumed command's view to the rewind (§2.3): the
+		 * latest packet's was a queue's depth newer than the frame that pulled the trigger, and let a view declared
+		 * for one shot be overwritten by the next packets before that shot was simulated.
+		 *
+		 * Only a command the queue took (the review of dee095a, N2). A command refused as out of the window shares
+		 * its ring slot with a queued one 32 apart and overwrote that one's view; a copy of a command already queued
+		 * re-declared its view after the fact.
+		 */
+		const slot = cmd.seq % VIEW_RING;
+		sp.viewSeqs[slot] = cmd.seq;
+		sp.viewTicks[slot] = wrapU16(packet.viewTick - i);
+		sp.viewFracs[slot] = packet.viewFrac;
+		sp.viewTakes[slot] = takes;
+	}
 }
 
 /** what one raw Input payload did (§8.1); the Roblox layer only decides whether to kick on top of this */
@@ -431,7 +528,7 @@ export type InputVerdict = (typeof InputVerdict)[keyof typeof InputVerdict];
  *
  * The caller (server/net/mpHost.ts) calls `floodReason` afterwards and kicks when it answers (§8.2).
  */
-export function ingestInput(sp: ServerPlayer, payload: unknown, now: number): InputVerdict {
+export function ingestInput(sp: ServerPlayer, payload: unknown, now: number, grace = 0): InputVerdict {
 	noteMessage(sp, now);
 	if (!takeInputToken(sp, now)) return InputVerdict.Rate;
 	const packet = decodeInput(payload);
@@ -439,7 +536,7 @@ export function ingestInput(sp: ServerPlayer, payload: unknown, now: number): In
 		noteMalformed(sp, now);
 		return InputVerdict.Malformed;
 	}
-	acceptInput(sp, packet, now);
+	acceptInput(sp, packet, now, grace);
 	return InputVerdict.Ok;
 }
 
@@ -517,6 +614,17 @@ export function takeCommand(sp: ServerPlayer): InputCommand {
 		sp.queue.shift();
 		sp.lastSeq = head.seq;
 		sp.ackSeq = head.seq;
+		// the frame that built this command is the view its shot is judged in (§2.3, `acceptInput`), and the
+		// ticks it sat here are part of how old that view is by now
+		const slot = head.seq % VIEW_RING;
+		if (sp.viewSeqs[slot] === head.seq) {
+			sp.viewTick = sp.viewTicks[slot];
+			sp.viewFrac = sp.viewFracs[slot];
+			// the ticks taken since it landed, plus the one it landed in: it may have come right after a tick
+			sp.viewWait = math.max(0, sp.counters.consumed + sp.counters.filled - sp.viewTakes[slot]) + 1;
+		} else {
+			sp.viewWait = 0;
+		}
 		sp.lastCmd = head;
 		sp.idleFills = 0;
 		sp.counters.consumed += 1;
@@ -527,7 +635,10 @@ export function takeCommand(sp: ServerPlayer): InputCommand {
 		return STANDING;
 	}
 	// the queue is dry: this tick WAITS for the command (see the header). The fill carries no new seq, so
-	// `lastSeq` and `ackSeq` stay put and the real command is still welcome when it lands.
+	// `lastSeq` and `ackSeq` stay put and the real command is still welcome when it lands. It repeats the last
+	// command's held buttons, and a trigger held through it fires in that command's view: `viewTick` is left as the
+	// last consumed command set it, whatever packets landed since (N1) -- a tick older now, which its wait counts
+	sp.viewWait += 1;
 	const fill: InputCommand = {
 		seq: sp.lastSeq,
 		moveAng: sp.lastCmd.moveAng,

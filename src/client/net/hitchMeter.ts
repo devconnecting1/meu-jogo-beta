@@ -27,6 +27,11 @@
 
 /** below this smoothed speed a body is standing or shuffling, and a speed change there means nothing */
 export const MOVING_UPS = 100;
+/**
+ * The same threshold for the horde. A walker moves at 90 u/s (3 px/frame at 30 fps), under a survivor's 100: judged
+ * from MOVING_UPS it would never be judged at all. Half a walker's pace still tells walking from shuffling.
+ */
+export const ZOMBIE_MOVING_UPS = 40;
 /** one frame drawn this much faster than the smoothed speed is a jump */
 export const SPIKE = 1.8;
 /** one frame drawn this much slower than the smoothed speed starts a suspected freeze */
@@ -78,6 +83,9 @@ export class HitchMeter {
 	private walkingS = 0;
 	private worst = 0;
 
+	/** `movingUps`: the speed from which a body counts as walking (MOVING_UPS for survivors, ZOMBIE_MOVING_UPS) */
+	constructor(private readonly movingUps = MOVING_UPS) {}
+
 	/** once per frame, before any `observe` of that frame */
 	beginFrame(dt: number): void {
 		if (dt > 0) this.clock += dt;
@@ -114,7 +122,7 @@ export class HitchMeter {
 
 		if (t.settle < SETTLE_FRAMES) {
 			// standing, or only just started walking: follow the speed as it is and judge nothing
-			t.settle = speed >= MOVING_UPS ? t.settle + 1 : 0;
+			t.settle = speed >= this.movingUps ? t.settle + 1 : 0;
 			t.ema = speed;
 			t.dipAge = -1;
 			return;
@@ -147,6 +155,14 @@ export class HitchMeter {
 			return;
 		}
 		t.ema += (speed - t.ema) * k;
+	}
+
+	/**
+	 * Stops judging body `id` until it is observed again, from standing. For a body that left the view: when it
+	 * comes back, the distance it covered unseen must not read as one enormous frame.
+	 */
+	forget(id: number): void {
+		this.tracks.delete(id);
 	}
 
 	/** what happened since the last call, and a fresh start */
