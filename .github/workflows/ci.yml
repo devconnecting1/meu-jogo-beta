@@ -113,6 +113,9 @@ jobs:
       - name: Night waves end to end (queue -> real spawner -> zombie, the sterile world, the daybreak revive)
         run: npm run test:waves
 
+      - name: Analytics (onboarding funnel once and in order, economy balances, no per-kill event, under the rate cap)
+        run: npm run test:analytics
+
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
 

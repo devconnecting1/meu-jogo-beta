@@ -15,7 +15,7 @@
  *      would eat the whole budget in one fight. Kills are only ever a count at a natural checkpoint (the first one
  *      of a new player, a session summary), crafts and items used likewise.
  *   3. LOW CARDINALITY. The custom fields are a few fixed strings each ("Life day - 4-7", "Time - Night"): no free
- *      text, no names, no UserIds. The SKUs are the catalogue's own names (8 packs, 9 costumes and 7 more).
+ *      text, no names, no UserIds. The SKUs are the catalogue's own names (9 packs, 9 costumes and 7 more).
  *   4. UNDER THE CAP. The documented limit is 120 + 20 x CCU requests a minute per server (event-types.md). This
  *      module spends at most RATE_SHARE of it in any 60 s window (`limitNow`); what does not fit waits in a bounded
  *      queue and goes out as the window frees. An economy event that has to wait is MERGED into the same player's
@@ -317,17 +317,30 @@ export class ServerAnalytics {
 
 	// ------------------------------------------------------------ the rate guard
 
+	/**
+	 * The CCU the cap is computed for: the players still here whose save loaded (one who left is not counted, even
+	 * while the module keeps them for LEAVE_GRACE_S; one still loading is not counted either -- both err low).
+	 */
+	private ccu(): number {
+		let here = 0;
+		if (this.playerCount !== undefined) {
+			here = this.playerCount();
+		} else {
+			for (const [, e] of this.entries) {
+				if (e.leftAt === undefined) here += 1;
+			}
+		}
+		return math.clamp(here, 1, MAX_PLAYERS);
+	}
+
 	/** events this module may send in the current window: RATE_SHARE of 120 + 20 x CCU */
 	limitNow(): number {
-		const counted = this.playerCount !== undefined ? this.playerCount() : this.entries.size();
-		const ccu = math.clamp(counted, 1, MAX_PLAYERS);
-		return math.floor(RATE_SHARE * (RATE_BASE + RATE_PER_PLAYER * ccu));
+		return math.floor(RATE_SHARE * (RATE_BASE + RATE_PER_PLAYER * this.ccu()));
 	}
 
 	/** the documented cap itself, for the same CCU (the tests compare against it) */
 	capNow(): number {
-		const counted = this.playerCount !== undefined ? this.playerCount() : this.entries.size();
-		return RATE_BASE + RATE_PER_PLAYER * math.clamp(counted, 1, MAX_PLAYERS);
+		return RATE_BASE + RATE_PER_PLAYER * this.ccu();
 	}
 
 	private expire(now: number): void {
@@ -828,6 +841,15 @@ function drySink(): AnalyticsSink {
  */
 export function start(): ServerAnalytics | undefined {
 	if (active !== undefined) return active;
+	// the server's boot must never depend on this: anything that throws here leaves analytics off, and that is all
+	const [ok, result] = pcall(boot);
+	if (ok) return result;
+	active = undefined;
+	warn(`[${GAME_NAME}] analytics could not start (${tostring(result)}); the game runs without it`);
+	return undefined;
+}
+
+function boot(): ServerAnalytics | undefined {
 	const RunService = game.GetService("RunService");
 	const Players = game.GetService("Players");
 	const Workspace = game.GetService("Workspace");
