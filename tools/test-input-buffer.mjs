@@ -368,6 +368,7 @@ function run({
 	serverDt = () => SIM_DT,
 	taps = false,
 	burstReorder = false,
+	grace = GRACE,
 }) {
 	const client = new CommandStream();
 	client.reset(0);
@@ -418,6 +419,14 @@ function run({
 	const predictedAt = new Map();
 	const arrived = new Set();
 	const simulated = new Set();
+	/**
+	 * Input-to-simulation latency of every command predicted inside the steady window: from the client frame that
+	 * built it to the heartbeat whose tick simulated it -- half the RTT, the jitter, and every tick it waited in the
+	 * queue. A queue kept deep for nothing shows up here and nowhere else (the review of dee095a, B1).
+	 */
+	let latencySum = 0;
+	let latencyMax = 0;
+	let latencyN = 0;
 	/** every seq that ever sat in the server's queue: one that left it without being simulated hit the ceiling */
 	const queued = new Set();
 	/**
@@ -448,7 +457,7 @@ function run({
 	while (clientAt < seconds || serverAt < seconds) {
 		if (clientAt <= serverAt) {
 			// ---- client frame: read what came down, then sample and send
-			const dt = clientDt(clientFrame++);
+			const dt = clientDt(clientFrame++, clientAt);
 			clientAt += dt;
 			const t = clientAt;
 			now = 1000 + t;
@@ -486,7 +495,7 @@ function run({
 			});
 		} else {
 			// ---- server heartbeat: packets that landed meanwhile, then the ticks it owes
-			const dt = serverDt(serverBeat++);
+			const dt = serverDt(serverBeat++, serverAt);
 			serverAt += dt;
 			const t = serverAt;
 			now = 1000 + t;
@@ -521,7 +530,7 @@ function run({
 					}
 				}
 				// server/net/mpHost.ts: the grace is how many ticks the server owes `dt` after its last heartbeat
-				PL.acceptInput(sp, pkt, now, GRACE ? beat.grace(dt) : 0);
+				PL.acceptInput(sp, pkt, now, grace ? beat.grace(dt) : 0);
 				// everything newer than lastSeq entered the queue, if only for the instant before it overflowed
 				for (const seq of entering) queued.add(seq);
 				// a re-anchor inside the packet moves lastSeq mid-way: the prediction above no longer applies
@@ -551,6 +560,13 @@ function run({
 				if (consumed > 0) {
 					simulated.add(cmd.seq);
 					tapsConsumed += edgeTotal(cmd.edges);
+					const at = predictedAt.get(cmd.seq);
+					if (at !== undefined && at >= WARMUP_S && at < seconds - TAIL_S) {
+						const lat = t - at;
+						latencySum += lat;
+						latencyN += 1;
+						if (lat > latencyMax) latencyMax = lat;
+					}
 				}
 				if (t >= WARMUP_S) {
 					ticksSteady += 1;
@@ -614,6 +630,9 @@ function run({
 		tapsBuilt,
 		tapsSent,
 		tapsConsumed,
+		latencyMean: latencySum / Math.max(1, latencyN),
+		latencyMax,
+		simulatedSteady: latencyN,
 	};
 }
 
@@ -637,6 +656,9 @@ const isolatedHitch = ms => i => (i % 120 === 119 ? ms / 1000 : SIM_DT);
  * It was one tick more while the frame that ended a hitch cleared its unacked queue and sent nothing.
  */
 const starvedTicks = ms => Math.ceil((ms / 1000) * CFG.SIM_HZ);
+
+/** `fastS` seconds at 60 FPS, then `slowS` seconds at `slowFps`, over and over: by the clock of the side it paces */
+const phased = (fastS, slowS, slowFps) => (_i, at) => (at % (fastS + slowS) < fastS ? SIM_DT : 1 / slowFps);
 
 const CASES = [
 	// the clean links are the regression guard: the queue must never run dry on them
@@ -734,6 +756,46 @@ const CASES = [
 		clientDt: i => (i % 30 === 29 ? 0.15 : 1 / 15),
 		tapGuard: true,
 	},
+	/*
+	 * The server that CANNOT keep up (the review of dee095a, B1). Below 30 Hz a heartbeat is longer than the
+	 * MAX_CATCHUP_TICKS it may run, so the debt only grows, sits at MAX_BACKLOG_S and drops the rest, heartbeat after
+	 * heartbeat: the ticks it "owes" are never run. Granting the queue one command per tick owed kept every queue
+	 * about as deep as the debt for as long as the slowdown lasted -- 352 ms from input to simulation at 25 Hz where
+	 * the fixed ceiling gives 80 ms, 313 ms against 69 ms with Studio at 28 fps -- and every honest shot clamped,
+	 * since the rewind counts at most 4 ticks of queue. Grace is for a debt that is being REPAID; these two must look
+	 * like the fixed ceiling (`slowServer`: against the same run with `grace` off).
+	 */
+	{
+		name: "12) servidor lento: heartbeat a 25 Hz sustentado",
+		rtt: 0.06,
+		jitter: 0.008,
+		serverDt: () => 1 / 25,
+		slowServer: true,
+		tapGuard: true,
+	},
+	{
+		name: "13) Studio a 28 fps: servidor e cliente no mesmo quadro",
+		rtt: 0.02,
+		jitter: 0.004,
+		clientDt: () => 1 / 28,
+		serverDt: () => 1 / 28,
+		slowServer: true,
+		tapGuard: true,
+	},
+	/*
+	 * Both regimes in turn: 3 s at 60 FPS, 3 s at 28, server and client on the same frames. The slow stretches build a
+	 * debt the fast ones repay -- which is what grace is for -- and must not keep the queues deep while they build it.
+	 */
+	{
+		name: "14) misto: 3 s a 60 fps, 3 s a 28 fps (servidor e cliente no mesmo quadro)",
+		rtt: 0.02,
+		jitter: 0.004,
+		clientDt: phased(3, 3, 28),
+		serverDt: phased(3, 3, 28),
+		slowServer: true,
+		mixed: true,
+		tapGuard: true,
+	},
 ];
 
 for (const c of CASES) {
@@ -775,6 +837,10 @@ for (const c of CASES) {
 	console.log(
 		`        toques: ${r.tapsMade} feitos, ${r.tapsBuilt} empacotados, ${r.tapsSent} enviados, ` +
 			`${r.tapsConsumed} simulados pelo servidor`,
+	);
+	console.log(
+		`        do input a simulacao: media ${(r.latencyMean * 1000).toFixed(0)} ms, ` +
+			`pior ${(r.latencyMax * 1000).toFixed(0)} ms (${r.simulatedSteady} comandos)`,
 	);
 
 	// the harness's own sorting of the refusals must agree with the server's counter, or the lines below lie
@@ -854,6 +920,41 @@ for (const c of CASES) {
 		);
 		if (c.clientHitchMs === undefined) {
 			check("o engasgo do servidor sozinho nunca seca a fila", r.fills === 0, r.fills + " preenchimentos");
+		}
+	}
+
+	if (c.slowServer) {
+		/*
+		 * The same run with the queue's ceiling fixed at INPUT_BUFFER_MAX (no grace), same client, same link, same
+		 * draws. Grace may buy a slow server's repayment its commands; it may not buy a queue that is deep for good.
+		 */
+		const seedAfter = seed;
+		seed = seedBefore;
+		const fixed = run({ ...c, taps: true, seconds, grace: false });
+		seed = seedAfter;
+		console.log(
+			`        com o teto fixo: media ${(fixed.latencyMean * 1000).toFixed(0)} ms, pior ` +
+				`${(fixed.latencyMax * 1000).toFixed(0)} ms, profundidade ${fixed.avgDepth.toFixed(2)}, ` +
+				`${fixed.fillsPerSecond.toFixed(2)} preench./s, ${fixed.realLost} comandos reais nunca simulados ` +
+				`(com a folga: ${r.fillsPerSecond.toFixed(2)} preench./s, ${r.realLost})`,
+		);
+		check(
+			`a fila de um servidor lento nao passa de INPUT_BUFFER_MAX + 1 em media`,
+			r.avgDepth <= CFG.INPUT_BUFFER_MAX + 1,
+			`${r.avgDepth.toFixed(2)} contra ${fixed.avgDepth.toFixed(2)} com o teto fixo`,
+		);
+		check(
+			"a folga nao atrasa o input mais que 1 tick alem do teto fixo",
+			r.latencyMean <= fixed.latencyMean + SIM_DT,
+			`${(r.latencyMean * 1000).toFixed(0)} ms contra ${(fixed.latencyMean * 1000).toFixed(0)} ms`,
+		);
+		if (c.mixed) {
+			// where the debt IS repaid, grace is what keeps the repayment fed: never worse than the fixed ceiling
+			check(
+				"onde a divida e paga, a folga nao espera nem perde mais que o teto fixo",
+				r.fills <= fixed.fills && r.realLost <= fixed.realLost,
+				`${r.fills} preenchimentos e ${r.realLost} perdidos contra ${fixed.fills} e ${fixed.realLost}`,
+			);
 		}
 	}
 
