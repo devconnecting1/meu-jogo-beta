@@ -17,6 +17,7 @@ import {
 	Keycap,
 	Tabs,
 	autoFocus,
+	centredRect,
 	fmtInt,
 	makeCoinPill,
 	makeFrame,
@@ -221,14 +222,12 @@ export function drawingBox(
 export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () => void {
 	const lang = ctx.save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
-	const { root, body } = makeScreen(ctx.uiLayer, "Wardrobe");
+	// a menu screen: see-through, over the town flyover behind the menus (UI-10), its window centred on the screen
+	const { root, body } = makeScreen(ctx.uiLayer, "Wardrobe", { transparency: 1, content: centredRect(WIN_W, WIN_H) });
 	const RunService = game.GetService("RunService");
 
 	const win = Kit.Window(body, "Window", {
-		x: (1120 - WIN_W) / 2,
-		y: (630 - WIN_H) / 2,
-		w: WIN_W,
-		h: WIN_H,
+		...centredRect(WIN_W, WIN_H),
 		title: tr("Wardrobe"),
 		onClose: (): void => handlers.onBack(),
 		onHelp: (): void => {

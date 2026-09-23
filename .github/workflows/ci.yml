@@ -53,6 +53,10 @@ jobs:
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
         run: npm run test:cosmetics
 
+      # UI-07 / UI-10 / UI-06: windows centred on the full screen, the town behind every menu, the world behind a run's
+      - name: Menu screens (centred clear of the Roblox buttons; the town flyover pinned behind every menu)
+        run: npm run test:screens
+
       # ART-01..06: worldArtAssets.ts is the generated file, and the town's art only ever adds to the flat town
       - name: Town art (no id = the flat town unchanged, textures, no churn, LEG-03 legibility, render tool)
         run: |

@@ -27,8 +27,10 @@
  *   a fixed key is the blur this kit used to draw
  * - buttons have hover / press / disabled states and a pixel `ring` when selected with a gamepad or keyboard
  *   (GuiService.SelectedObject), replacing Roblox's default selection highlight
- * - full screens use makeScreen(): the content is letterboxed at 16:9 inside the safe area (below the Roblox
- *   top bar); HUD clusters use makeAnchored() (corner anchored, fixed aspect ratio)
+ * - full screens use makeScreen(): a 16:9 design space at the menus' one scale (skin.ts fitScale), placed so the
+ *   screen's content -- its window, or the whole space for a page -- is centred on the FULL screen and pushed down
+ *   only by a real overlap with a Roblox top-bar button; HUD clusters use makeAnchored() (corner anchored, fixed
+ *   aspect ratio)
  * - no skin textures (or a failed fetch) = the previous flat look, drawn from the same tokens (skin.ts)
  */
 import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
@@ -51,6 +53,7 @@ import {
 	onLayoutChange,
 	paintSurface,
 	panelSurface,
+	placeContent,
 	preferredTextScale,
 	reducedMotion,
 	scaleText,
@@ -61,6 +64,7 @@ import {
 	skinEnabled,
 	skinPx,
 	stripSurface,
+	topBar,
 	topInset,
 	uiScale,
 	viewportSize,
@@ -1510,20 +1514,52 @@ export function Sidebar(parent: Instance, name: string, props: SidebarProps): Si
 
 // ---------------------------------------------------------------- screens & anchored clusters
 
+/** a rectangle in design units */
+export interface DesignRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/** the whole 1120 x 630 design space: the content of a page whose layout reaches the screen's edges */
+export const FULL_SCREEN: DesignRect = { x: 0, y: 0, w: DESIGN_W, h: DESIGN_H };
+
+/** a w x h window centred in the design space (where every UI-07 window of the game sits) */
+export function centredRect(w: number, h: number): DesignRect {
+	return { x: (DESIGN_W - w) / 2, y: (DESIGN_H - h) / 2, w, h };
+}
+
 export interface Screen {
 	/** full-screen background (blocks clicks to what is below) */
 	root: Frame;
-	/** letterboxed 1120x630 design space inside the safe area */
+	/** the 1120x630 design space, placed so the screen's content is centred on the full screen (skin.ts placeContent) */
 	body: Frame;
+	/** what the screen shows now (a page whose two views differ: the lobby's menu and its Survivor window) */
+	setContent(content?: DesignRect): void;
 }
 
 export interface ScreenOpts {
 	color?: Color3;
 	transparency?: number;
 	zIndex?: number;
+	/**
+	 * What the screen shows, in design units: its window (centred on the full screen, pushed down only by a real
+	 * overlap with a Roblox button), or -- the default -- the whole design space, for a page whose layout reaches the
+	 * screen's edges (the lobby's logo, the shop's Back), which is kept clear of the buttons the same way.
+	 */
+	content?: DesignRect;
 }
 
-/** full-screen page or modal overlay; place content in `body` using 1120x630 design units */
+/**
+ * Full-screen page or modal overlay; place content in `body` using 1120x630 design units.
+ *
+ * DESIGN_RULES UI-07: a window is centred on the FULL screen. The Roblox top bar is not a band across the top: its
+ * buttons sit in a corner of it (GuiService.TopbarInset), so the rest of its height is screen like any other, and a
+ * window only moves down when its own rect would really run under a button -- by exactly that much. The body used to
+ * start below the bar across the whole width, which is what left every window visibly low (the owner's 1365 x 567
+ * Settings: 85 px above it, 26 below).
+ */
 export function makeScreen(parent: Instance, name: string, opts?: ScreenOpts): Screen {
 	const root = new Instance("Frame");
 	root.Name = name;
@@ -1548,20 +1584,33 @@ export function makeScreen(parent: Instance, name: string, opts?: ScreenOpts): S
 	const body = new Instance("Frame");
 	body.Name = "Body";
 	body.ZIndex = 1;
-	body.AnchorPoint = new Vector2(0.5, 0.5);
 	body.BackgroundTransparency = 1;
 	body.BackgroundColor3 = THEME.background;
 	body.BorderSizePixel = 0;
 	setDesign(body, DESIGN_W, DESIGN_H);
-	addAspect(body, DESIGN_W / DESIGN_H);
 	body.Parent = root;
-	onLayoutChange(root, () => {
-		const inset = topInset();
-		body.Size = new UDim2(1, 0, 1, -inset);
-		body.Position = new UDim2(0.5, 0, 0.5, inset / 2);
-	});
+	let content = opts?.content ?? FULL_SCREEN;
+	// the design space at the one scale of the menus, where its content is centred on the full screen: in Scale of
+	// the root (the whole screen), so a fractional px is exact instead of truncated to UDim's integer Offset
+	const layout = (): void => {
+		const v = viewportSize();
+		const s = uiScale();
+		const [x, y] = placeContent(v.X, v.Y, topBar(), s, content.x, content.y, content.w, content.h);
+		body.Position = UDim2.fromScale(x / v.X, y / v.Y);
+		body.Size = UDim2.fromScale((DESIGN_W * s) / v.X, (DESIGN_H * s) / v.Y);
+	};
+	onLayoutChange(root, layout);
 	root.Parent = parent;
-	return { root, body };
+	return {
+		root,
+		body,
+		setContent(shown?: DesignRect): void {
+			const c = shown ?? FULL_SCREEN;
+			if (c.x === content.x && c.y === content.y && c.w === content.w && c.h === content.h) return;
+			content = c;
+			layout();
+		},
+	};
 }
 
 /**
@@ -1615,6 +1664,11 @@ export interface DialogProps {
 	/** top-right "X" (destructive icon button, as in the reference art) */
 	closeButton?: boolean;
 	onClose?: () => void;
+	/**
+	 * The scrim's transparency (default TRANSPARENCY.overlay: a modal dims the screen it opens over). A dialog that is
+	 * a menu screen of its own, standing on the town flyover (How to play), passes 1: the flyover's scrim is the one.
+	 */
+	scrim?: number;
 }
 
 export interface DialogHandle {
@@ -1628,18 +1682,15 @@ export interface DialogHandle {
 
 /** shadcn Dialog: scrim (background at 80%) + centred panel with its title strip (zoom-in-95 / fade-in) */
 export function Dialog(layer: Instance, name: string, props: DialogProps): DialogHandle {
+	const scrim = props.scrim ?? TRANSPARENCY.overlay;
+	const rect = centredRect(props.w, props.h);
 	const { root, body } = makeScreen(layer, name, {
 		color: THEME.background,
-		transparency: TRANSPARENCY.overlay,
+		transparency: scrim,
 		zIndex: props.zIndex,
+		content: rect,
 	});
-	const card = Card(body, "DialogContent", {
-		x: (DESIGN_W - props.w) / 2,
-		y: (DESIGN_H - props.h) / 2,
-		w: props.w,
-		h: props.h,
-		variant: "popover",
-	});
+	const card = Card(body, "DialogContent", { ...rect, variant: "popover" });
 	let contentY = space(6);
 	// the close button rides on the title strip, like the reference's red "X"
 	const closeW = props.closeButton === true ? cardStripHeight() - space(2) : 0;
@@ -1676,7 +1727,7 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 	}
 	// entrance: fade the scrim in, zoom the card from 95% (both instant under Reduce Motion, via tween())
 	root.BackgroundTransparency = 1;
-	tween(root, 0.15, { BackgroundTransparency: worldTransparency(TRANSPARENCY.overlay) });
+	tween(root, 0.15, { BackgroundTransparency: worldTransparency(scrim) });
 	const zoom = new Instance("UIScale");
 	zoom.Scale = 0.95;
 	zoom.Parent = card;

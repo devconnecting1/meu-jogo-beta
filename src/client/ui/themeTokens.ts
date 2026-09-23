@@ -31,6 +31,7 @@ export interface ThemeColors {
 	chart5: Color3;
 	tabActive: Color3;
 	cell: Color3;
+	cellMutedForeground: Color3;
 	window: Color3;
 	statValue: Color3;
 	statBonus: Color3;
@@ -96,6 +97,8 @@ export const DARK: ThemeColors = {
 	tabActive: Color3.fromRGB(89, 115, 136),
 	/** cell: #565656 #565656 */
 	cell: Color3.fromRGB(86, 86, 86),
+	/** cell-muted-foreground: #b1b1b1 #b1b1b1 */
+	cellMutedForeground: Color3.fromRGB(177, 177, 177),
 	/** window: #262626 #262626 */
 	window: Color3.fromRGB(38, 38, 38),
 	/** stat-value: oklch(0.8800 0.1500 95.0000) #f6d653 */
@@ -166,6 +169,8 @@ export const LIGHT: ThemeColors = {
 	tabActive: Color3.fromRGB(76, 136, 187),
 	/** cell: var(--sidebar-accent) #e9e9e9 */
 	cell: Color3.fromRGB(233, 233, 233),
+	/** cell-muted-foreground: var(--muted-foreground) #666666 */
+	cellMutedForeground: Color3.fromRGB(102, 102, 102),
 	/** window: var(--sidebar) #ffffff */
 	window: Color3.fromRGB(255, 255, 255),
 	/** stat-value: var(--foreground) #1a1a1a */

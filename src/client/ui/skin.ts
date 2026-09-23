@@ -55,10 +55,97 @@ export function viewportSize(): Vector2 {
 	return new Vector2(DESIGN_W, DESIGN_H);
 }
 
-/** pixels per design unit of a letterboxed 1120x630 layout on the current screen */
+/**
+ * The Roblox top bar as the layout needs it: how tall it is, and the stretch of it its buttons leave free.
+ *
+ * `GuiService.TopbarInset` is "the unoccupied area between the Roblox left-most controls and the edge of the device
+ * safe area", in the coordinates of a ScreenGui with IgnoreGuiInset (ours, bootstrap.ts): the buttons sit left of
+ * `Min.X` (and right of `Max.X`, should a platform put any there), from the top of the screen down to the bar's
+ * height. The rest of the bar's height is empty screen, and a window may use it (DESIGN_RULES UI-07).
+ *
+ * Without that Rect (an old client, or a harness that does not model it) the WHOLE bar counts as buttons: what the kit
+ * assumed before it knew better, so nothing ever lands under a button it could not see.
+ */
+export interface TopBar {
+	/** the bar's height (px): what topInset() reports */
+	h: number;
+	/** the buttons occupy x < freeMin ... */
+	freeMin: number;
+	/** ... and x > freeMax (px) */
+	freeMax: number;
+}
+
+export function topBar(): TopBar {
+	const h = topInset();
+	const v = viewportSize();
+	const bar: TopBar = { h, freeMin: v.X, freeMax: v.X };
+	const [ok, value] = pcall(() => GuiService.TopbarInset);
+	if (ok) {
+		const rect = value as Rect;
+		if (rect.Height > 0) {
+			bar.freeMin = rect.Min.X;
+			bar.freeMax = math.max(rect.Max.X, rect.Min.X);
+		}
+	}
+	return bar;
+}
+
+/** a rect's worth of rounding (px) that never counts as touching a button */
+const BAR_EPS = 0.5;
+
+/** true when a rect whose top-left is (x, y) and whose width is w (px) would have part of itself under a Roblox button */
+export function underTopBar(bar: TopBar, x: number, y: number, w: number): boolean {
+	if (bar.h <= 0 || y >= bar.h - BAR_EPS) return false;
+	return x < bar.freeMin - BAR_EPS || x + w > bar.freeMax + BAR_EPS;
+}
+
+/**
+ * Pixels per design unit on a vw x vh screen under `bar`: the largest 1120 x 630 letterbox centred on the FULL screen.
+ * Only when that would put a corner of it under a Roblox button does it give ground, the least it has to: slid down
+ * below the bar, or narrowed until the buttons stand beside it -- whichever keeps it bigger.
+ *
+ * It is the ONE scale of the menus: the lobby, every window and every dialog are drawn at it, so going from one to the
+ * next never zooms the plates, the text or the pixel relief (the kit's text sizes, hairlines and skin pixels all read
+ * it). A window is then centred on the full screen at this scale (placeContent).
+ */
+export function fitScale(vw: number, vh: number, bar: TopBar): number {
+	const full = math.min(vw / DESIGN_W, vh / DESIGN_H);
+	if (!underTopBar(bar, (vw - DESIGN_W * full) / 2, (vh - DESIGN_H * full) / 2, DESIGN_W * full)) return full;
+	const below = (vh - bar.h) / DESIGN_H;
+	const side = math.max(bar.freeMin, vw - bar.freeMax);
+	const beside = (vw - 2 * side) / DESIGN_W;
+	return math.min(full, math.max(below, beside));
+}
+
+/** pixels per design unit of the 1120 x 630 layout on the current screen (fitScale) */
 export function uiScale(): number {
 	const v = viewportSize();
-	return math.max(0.35, math.min(v.X / DESIGN_W, (v.Y - topInset()) / DESIGN_H));
+	return math.max(0.35, fitScale(v.X, v.Y, topBar()));
+}
+
+/**
+ * Where a screen puts its 1120 x 630 design space (at `scale` px per unit) so that its CONTENT -- the window it shows,
+ * or the whole space for a page that reaches its edges -- is centred on the FULL screen, and moved down only as far as
+ * a real overlap with a Roblox button demands (to the bar's bottom edge: just enough). The content's top-left lands on
+ * a whole pixel, so a window's pixel frame never straddles two screen pixels.
+ *
+ * Returns the design space's top-left, in px. Nothing is shrunk here: at fitScale's scale a content inside the design
+ * space always fits below the bar once pushed (fitScale made room for the whole space there).
+ */
+export function placeContent(
+	vw: number,
+	vh: number,
+	bar: TopBar,
+	scale: number,
+	cx: number,
+	cy: number,
+	cw: number,
+	ch: number,
+): [number, number] {
+	const left = math.round((vw - cw * scale) / 2);
+	let top = math.round((vh - ch * scale) / 2);
+	if (underTopBar(bar, left, top, cw * scale)) top = math.ceil(bar.h);
+	return [left - cx * scale, top - cy * scale];
 }
 
 /** screen px for a border of `width` design px: 1 px up to ~1440p, thicker on 4K (like CSS px on a HiDPI screen) */
