@@ -52,6 +52,7 @@ import { netActive, netBindAdmin, netReset, netUpdate, remotePlayers } from "./n
 import { createRawInput, readRawInput } from "./net/localInput";
 import { RemotePlayerView } from "./net/netTypes";
 import { PlayersView } from "./view/playersView";
+import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
 import { FootCycle } from "./view/footsteps";
 
@@ -421,6 +422,10 @@ export class GameLoop {
 	private readonly raw = createRawInput();
 	/** the other survivors of a server session: bodies, pooled nameplates and their light (§5.3) */
 	private readonly playersView = new PlayersView();
+	/** what anyone within earshot just said, floating over their head; built on the first frame that can host it */
+	private chat?: ChatBubbles;
+	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
+	private readonly selfBody = { x: 0, y: 0 };
 	/** last frame time, so render() can ease what it has to ease (update() may be skipped while paused) */
 	private lastDt = 1 / 60;
 	/** when the local survivor's foot lands (the walk cycle knows; client/view/footsteps.ts reports it) */
@@ -1995,6 +2000,23 @@ export class GameLoop {
 		this.drawLight(cam, view, allies);
 		this.drawNameplate(cam);
 		this.drawAllyPlates(cam, view, allies);
+		this.drawChatBubbles(cam, view, allies);
+	}
+
+	/** chat bubbles ride the same layer as the plates, so a survivor's name and their words scale together */
+	private drawChatBubbles(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		let chat = this.chat;
+		if (chat === undefined) {
+			const root = getCtx().darkLayer.Parent;
+			if (root === undefined || !root.IsA("GuiObject")) return;
+			chat = new ChatBubbles(root, NAMEPLATE_Z);
+			this.chat = chat;
+		}
+		const p = this.player;
+		this.selfBody.x = p.x;
+		this.selfBody.y = p.y;
+		// dead: no body, so nothing to hang your own line on — the rule the nameplate already follows
+		chat.update(cam, v, allies, p.dead ? undefined : this.selfBody);
 	}
 
 	/** one pooled plate per ally, in the same layer and at the same ZIndex as the local survivor's (§5.3) */
@@ -2077,6 +2099,7 @@ export class GameLoop {
 		this.lightMap?.hide();
 		this.nameplate?.update(0, 0, ctx.save.level, false);
 		this.playersView.hide();
+		this.chat?.hide();
 		ctx.darkLayer.BackgroundTransparency = 1;
 	}
 

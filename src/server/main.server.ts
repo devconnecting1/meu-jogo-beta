@@ -26,6 +26,7 @@ import { AdminOp, applyAdminOps } from "shared/admin/ops";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { AdminEditOutcome, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
+import { startProximityChat } from "./chat/proximityChat";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -964,5 +965,18 @@ if (MP_PHASE >= 1) {
 		if (mpHost !== undefined) mpHost.stop();
 	});
 }
+
+// ---------------------------------------------------------------- proximity chat (§4.3, §9.1)
+
+/*
+ * Chat is range-limited on the server for the same reason a zombie in the dark is not replicated (§4.3): what
+ * the client is never told, a modified client cannot read. The body below is the MP host's authoritative
+ * entity, which only exists between EnterWorld and LeaveWorld — whoever is in the lobby has no position, and
+ * shared/chat/chatRules.ts answers "no" for them. With MP_PHASE = 0 there is no host, nobody has a position
+ * at all, and the same rule falls back to delivering every line to everyone.
+ */
+startProximityChat({
+	bodyOf: player => mpHost?.playerOf(player)?.state,
+});
 
 print(`[${GAME_NAME}] server ready (job ${JOB_ID}${MP_PHASE >= 1 ? `, MP phase ${MP_PHASE}` : ""})`);

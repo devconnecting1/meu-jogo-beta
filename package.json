@@ -14,6 +14,7 @@
 		"test:predict": "node tools/test-predict.mjs",
 		"test:ai": "node tools/test-ai.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
+		"test:chat": "node tools/test-chat.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""

@@ -52,6 +52,9 @@ jobs:
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 
+      - name: Proximity chat (earshot, presence and the bubble stack)
+        run: npm run test:chat
+
       - name: Upload compiled Luau
         uses: actions/upload-artifact@v6
         with:
