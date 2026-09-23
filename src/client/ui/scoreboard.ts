@@ -50,19 +50,7 @@ import {
 	TableSortBarHandle,
 	fitText,
 } from "./table";
-import {
-	DESIGN_H,
-	DESIGN_W,
-	addAspect,
-	cardHeaderHeight,
-	fmtInt,
-	makeFrame,
-	makeLabel,
-	onLayoutChange,
-	setDesign,
-	setVisible,
-	topInset,
-} from "./widgets";
+import { cardHeaderHeight, fmtInt, makeAnchored, makeFrame, makeLabel, setVisible } from "./widgets";
 import * as Kit from "./window";
 
 const UserInputService = game.GetService("UserInputService");
@@ -165,10 +153,11 @@ export function scoreSourceOf(ctx: GameContext): ScoreSource {
 
 // ---------------------------------------------------------------- layout (design units of the 1120 x 630 space)
 
+/** the panel's margins from the screen's left edge and from under the bar (design units of the HUD's 1120 x 630) */
 const PANEL_X = 16;
 /** under the day plate's row (the plate is 10..54, 10..63 at the largest UI size): the plate stays readable */
 const PANEL_Y = 66;
-/** ends at x = 536, left of the survivor, who stands in the middle of the screen (x = 560) */
+/** ends at x = 536 at 16:9 (further left on a wider screen), left of the survivor in the middle (x = 560) */
 const PANEL_W = 520;
 const PAD = 12;
 const TITLE_SIZE = TEXT.xl;
@@ -271,30 +260,19 @@ export class Scoreboard {
 	constructor(root: Frame, dayPlate: Frame, tr: (k: string) => string, opts: ScoreboardOptions) {
 		this.tr = tr;
 		this.opts = opts;
-		// the 1120 x 630 design space, letterboxed under the Roblox bar like a screen's body -- but no scrim and no
-		// input blocker: the world stays visible and every click outside the panel still reaches the game (UI-06)
-		const frame = new Instance("Frame");
-		frame.Name = "Scoreboard";
-		frame.AnchorPoint = new Vector2(0.5, 0.5);
-		frame.BackgroundTransparency = 1;
-		frame.BackgroundColor3 = THEME.background;
-		frame.BorderSizePixel = 0;
+		// a HUD cluster (makeAnchored's recipe, like the day plate): pinned to the screen's LEFT edge under the bar, so
+		// a screen wider than 16:9 (the owner's 1365 x 567 playtest window) moves it away from the survivor in the
+		// middle instead of centring it with a 16:9 box. No scrim and no input blocker: the world stays visible and
+		// every click outside the panel still reaches the game (UI-06)
+		const frame = makeAnchored(root, "Scoreboard", 0, 0, PANEL_W, SCOREBOARD_H, PANEL_X, PANEL_Y, true);
 		frame.Active = false;
 		// above the vignette and the console, under the touch layer (ZIndex 8): the thumbs' controls stay on top
 		frame.ZIndex = 6;
-		setDesign(frame, DESIGN_W, DESIGN_H);
-		addAspect(frame, DESIGN_W / DESIGN_H);
-		onLayoutChange(frame, () => {
-			const inset = topInset();
-			frame.Size = new UDim2(1, 0, 1, -inset);
-			frame.Position = new UDim2(0.5, 0, 0.5, inset / 2);
-		});
-		frame.Parent = root;
 		this.frame = frame;
 
 		const win = Kit.Window(frame, "Panel", {
-			x: PANEL_X,
-			y: PANEL_Y,
+			x: 0,
+			y: 0,
 			w: PANEL_W,
 			h: SCOREBOARD_H,
 			title: tr("Survivors"),
