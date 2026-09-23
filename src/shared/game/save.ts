@@ -90,6 +90,38 @@ export interface SettingsData {
 	langType: number;
 }
 
+/** every field of SettingsData (the order is irrelevant; `carrySettings` walks it) */
+const SETTINGS_KEYS: ReadonlyArray<keyof SettingsData> = [
+	"soundEffect",
+	"bgm",
+	"uiSize",
+	"leftSize",
+	"leftPos",
+	"leftRelative",
+	"rightSize",
+	"rightPos",
+	"mirror",
+	"langType",
+];
+
+/**
+ * The settings a player changed on a save that was never the server's -- the fallback save the lobby shows while the
+ * LoadAck is on its way, or a session that does not persist -- are carried into the save that replaces it
+ * (client/main.client.ts `applyLoad`): every field where `mine` differs from `base` (what that save started with) is
+ * written into `into`, and only those, so what the player did not touch comes from the save arriving. Returns whether
+ * anything was carried. The values are the client's own settings, never anything the server owns: the report that
+ * follows goes through `readSettings` like every other.
+ */
+export function carrySettings(mine: SettingsData, base: SettingsData, into: SettingsData): boolean {
+	let carried = false;
+	for (const k of SETTINGS_KEYS) {
+		if (mine[k] === base[k]) continue;
+		(into as unknown as Record<string, unknown>)[k] = mine[k];
+		carried = true;
+	}
+	return carried;
+}
+
 export function defaultSettings(): SettingsData {
 	return {
 		soundEffect: 0.5,

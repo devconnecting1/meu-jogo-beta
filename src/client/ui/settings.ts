@@ -3,6 +3,7 @@ import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
 import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
+import { GAME_BUILD, GAME_VERSION } from "shared/version";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
@@ -592,8 +593,8 @@ export function showSettings(
 
 	const buildAbout = (index: number): Frame => {
 		const page = pageFrame(index);
-		// five rows about the game, and the way to the credits where there is one
-		const rows = [SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H];
+		// six rows about the game, and the way to the credits where there is one
+		const rows = [SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H, SETTING_ROW_H];
 		if (onCredits !== undefined) rows.push(SETTING_ROW_H);
 		const aboutListH = settingsListHeight(rows);
 		const about = Section(page, "About", {
@@ -616,9 +617,13 @@ export function showSettings(
 			`${tr("Co-op, up to")} ${MAX_PLAYERS} ${tr("survivors")}`,
 		);
 		textRow(SettingRow(list, "Built", 4, tr("Built with")), valueW, "roblox-ts");
+		// which build this is, from one source (package.json -> shared/version.ts, `npm run stamp`; the CI stamps the
+		// commit into the place it publishes), so a report says which build it was
+		const build = GAME_BUILD === "dev" ? GAME_VERSION : `${GAME_VERSION} (${GAME_BUILD})`;
+		textRow(SettingRow(list, "Version", 5, tr("Version")), valueW, build);
 		const openCredits = onCredits;
 		if (openCredits === undefined) return page;
-		const credits = SettingRow(list, "Credits", 5, tr("Credits"));
+		const credits = SettingRow(list, "Credits", 6, tr("Credits"));
 		Button(credits.value, "OpenCredits", tr("Open credits"), {
 			x: (valueW - 180) / 2,
 			y: (SETTING_ROW_H - 30) / 2,

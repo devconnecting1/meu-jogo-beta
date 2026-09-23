@@ -493,6 +493,7 @@ export const LANG_TABLE: Array<string> = [
 	"Co-op, up to",
 	"survivors",
 	"Built with",
+	"Version",
 	"Open credits",
 	"Your screen",
 	"General: how loud the sounds and the music are, and how big the panels of a run are.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to, on each device.#About: the game and its credits.#A change applies at once and is saved with your progress. Defaults puts a tab back as it came.",

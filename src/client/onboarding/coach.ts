@@ -69,6 +69,11 @@ export class Coach {
 	private budget = TOTAL_BUDGET;
 	private lastClock = -1;
 	private onFinished: (() => void) | undefined;
+	/** the HUD size (settings.uiSize) the card was built at: a change during the run rebuilds it at the new one */
+	private builtSize = -1;
+	/** what the card says now, so a rebuild at a new size says the same */
+	private lastCard: [string, string, string, number, Color3] | undefined;
+	private lastStep = "";
 
 	constructor(ctx: GameContext) {
 		this.ctx = ctx;
@@ -120,6 +125,9 @@ export class Coach {
 		this.bar = undefined;
 		this.view = undefined;
 		this.onFinished = undefined;
+		this.lastCard = undefined;
+		this.lastStep = "";
+		this.builtSize = -1;
 	}
 
 	/** the player pressed Skip, or the lessons ran out: never a failure, just the end of the hand-holding */
@@ -133,6 +141,9 @@ export class Coach {
 
 	update(refs: GameRefs, dt: number): void {
 		if (this.phase === "done" || this.root === undefined) return;
+		// the HUD size is a setting of the run (Settings over the run remounts the HUD at the new one when it closes):
+		// the coach is part of the HUD, so it follows, even while the survivor is held behind that screen
+		this.fitHudSize();
 		// Time spent out of play is not the coach's time: a lesson must not run out while the player reads the
 		// Bag. No menu freezes the world any more (DESIGN_RULES UI-06), so the clock no longer says so on its
 		// own; the held survivor does (InputState.setHeld: a screen over the run, or dead). A clock that stood
@@ -227,13 +238,24 @@ export class Coach {
 		}
 		this.setCard(this.tr(objective.title), this.tr(objective.hint), progress, view.ratio, THEME.foreground);
 		const step = `${this.tr("Getting started")}  ·  ${this.index + 1} / ${OBJECTIVES.size()}`;
+		this.lastStep = step;
 		if (this.stepLabel !== undefined && this.stepLabel.Text !== step) this.stepLabel.Text = step;
 		this.setPointer(view.target);
 	}
 
 	// ---------------------------------------------------------------- drawing
 
+	/** rebuilt at the HUD size the settings say now, when it is not the one it was built at, saying the same thing */
+	private fitHudSize(): void {
+		if (this.ctx.save.settings.uiSize === this.builtSize) return;
+		this.build();
+		const card = this.lastCard;
+		if (card !== undefined) this.setCard(card[0], card[1], card[2], card[3], card[4]);
+		if (this.stepLabel !== undefined) this.stepLabel.Text = this.lastStep;
+	}
+
 	private setCard(title: string, hint: string, progress: string, ratio: number, color: Color3): void {
+		this.lastCard = [title, hint, progress, ratio, color];
 		// the card is refreshed every frame: only write what actually changed
 		if (this.titleLabel !== undefined) {
 			if (this.titleLabel.Text !== title) this.titleLabel.Text = title;
@@ -304,6 +326,7 @@ export class Coach {
 		this.root?.Destroy();
 		// the Skip button has to stay thumb-sized on a phone, where a design unit is about half a pixel
 		const touch = UserInputService.TouchEnabled;
+		this.builtSize = ctx.save.settings.uiSize;
 		const k = 0.8 + 0.4 * math.clamp(ctx.save.settings.uiSize, 0, 1);
 		const scale = touch ? math.clamp(MIN_TOUCH_PX / (SKIP_H * math.max(uiScale(), 0.05)), k, 1.6) : k;
 		const box = makeAnchored(ctx.hudLayer, "Coach", 0, 0.5, CARD_W, CARD_H, 14, 0, false, scale);

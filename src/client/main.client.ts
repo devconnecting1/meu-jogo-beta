@@ -1,5 +1,14 @@
 import { GAME_NAME } from "shared/module";
-import { equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, pendingPacks, resetRun, setEquipped } from "shared/game/save";
+import {
+	carrySettings,
+	equipSlotOf,
+	expMaxInit,
+	ownsEquip,
+	ownsWeapon,
+	pendingPacks,
+	resetRun,
+	setEquipped,
+} from "shared/game/save";
 import { BossState } from "shared/game/entities";
 import { currentWeapon, itemUseEffect, weaponReserve } from "shared/game/player";
 import { CRAFT_RECIPES } from "shared/data/crafts";
@@ -100,6 +109,8 @@ let actionBusy = false;
 let started = false;
 /** adopted LoadAck (undefined = still waiting for the server) */
 let loadInfo: net.LoadInfo | undefined;
+/** the settings the save on screen started with: what the player changed since is theirs to keep (`applyLoad`) */
+let settingsBase = { ...ctx.save.settings };
 /** LoadAck that arrived during a run: applied when the player is back in the menus */
 let pendingLoad: net.LoadInfo | undefined;
 /** status message to show once the lobby is on screen */
@@ -199,10 +210,17 @@ function applyLoad(info: net.LoadInfo): void {
 	for (const child of ctx.uiLayer.GetChildren()) {
 		if (child.Name === "PopupOverlay" || child.Name === "Achievements") child.Destroy();
 	}
+	// what the player changed in Settings on a save that was never the server's -- the lobby shown before the LoadAck,
+	// a session that does not persist -- is kept, field by field, over the save arriving (and reported with it)
+	const carried =
+		(loadInfo === undefined || !loadInfo.persist) &&
+		carrySettings(ctx.save.settings, settingsBase, info.save.settings);
 	ctx.save = info.save;
+	settingsBase = { ...info.save.settings };
 	loadInfo = info;
 	runActive = false; // a run in memory belonged to the previous (fallback) save
 	net.activate(info);
+	if (carried) net.requestSave("menu");
 	pendingNotice = info;
 }
 
