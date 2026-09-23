@@ -50,6 +50,8 @@ const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts")
 const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const { isLight } = require(join(SRC, "shared/sim/interactQuery.ts"));
+const CR = require(join(SRC, "shared/sim/craftRule.ts"));
+const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
@@ -836,19 +838,22 @@ section("F1. a working cooker is heat to cook on; a cold one is not (the cooking
 	const g = gridFixture();
 	const box = g.place(ID.battery, 1000, 1000);
 	const cooker = g.place(ID.cooker, 1100, 1000);
+	// the one craft rule both sides read (shared/sim/craftRule.ts): a cooking recipe next to the cooker, no fire
+	const recipe = CRAFT_RECIPES.find(r => r.needsCook === true);
+	const nearX = cooker.x + cooker.w + 60;
+	const nearY = cooker.y + cooker.h / 2;
+	const cooks = () => CR.matchesStation(cooker, "cook") && CR.stationOk(g.world, nearX, nearY, recipe);
 	g.run(0.25);
-	check(!POW.givesCookingHeat(cooker), "switched off: cold");
+	check(recipe !== undefined && !cooks(), "switched off: cold (a cooking recipe beside it is refused)");
 	g.st(cooker).on = true;
 	g.run(0.25);
-	check(POW.isWorkingCooker(cooker) && POW.givesCookingHeat(cooker), "switched on with power: cooking heat");
+	check(
+		CR.isWorkingCooker(cooker) && cooks(),
+		"switched on with power: cooking heat (the recipe's station is met by the cooker alone)",
+	);
 	g.st(box).store = 0;
 	g.run(0.5);
-	check(!POW.givesCookingHeat(cooker), "its box empty: cold again (an electric cooker without electricity)");
-	check(
-		POW.givesCookingHeat({ tags: "campfire", powered: true }) &&
-			!POW.givesCookingHeat({ tags: "campfire", powered: false }),
-		"a lit campfire is heat, a dead one is not",
-	);
+	check(!cooks(), "its box empty: cold again (an electric cooker without electricity)");
 });
 
 section("F2. the signal generator: switched on and fed, it is a beacon (the client draws the way home to it)", () => {
@@ -918,7 +923,6 @@ section("G1. the grid publishes only what changed, with the level of each store"
 section(
 	"H1. crafted with the backpack verb and placed by the server's build: a battery box and a turret that shoots",
 	() => {
-		const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 		const { addItem } = require(join(SRC, "shared/sim/inventory.ts"));
 		const f = simFixture();
 		const save = saveWith();

@@ -2425,7 +2425,9 @@ section("D7. what each build does once it stands, and whether the content stage 
 		if (!m.switched) return undefined;
 		power.act(0, body, save, s);
 		power.settle(0.25);
-		if (def.tag === "cooker") return POW.givesCookingHeat(s) ? "cooking heat" : undefined;
+		// the one craft rule (shared/sim/craftRule.ts): the cooker is the "cook" station beside it once the grid feeds it
+		if (def.tag === "cooker")
+			return SCRAFT.stationNear(w, s.x + s.w / 2, s.y + s.h + 60, "cook") === s ? "cooking heat" : undefined;
 		return s.powered === true ? (def.tag === "gps" ? "a beacon home" : "lights, on the grid") : undefined;
 	};
 	/** what a standing build of ETC index `id` does in the shipped game, or undefined */
@@ -2454,8 +2456,7 @@ section("D7. what each build does once it stands, and whether the content stage 
 		row => machineDoes(row.id) !== undefined || "nothing",
 	);
 	const idle = builds.filter(id => does(id) === undefined);
-	// the powered and placed builds (turrets, drones, battery, generators, signal generator, cooker, vehicles) are the
-	// power stage's front: reported here until it lands. The cooker's hook is in place (craftRule isWorkingCooker)
+	// what is left is the vehicles' (another front): nothing rides them yet
 	knownBug(
 		"P1",
 		idle.length > 0,

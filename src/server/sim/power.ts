@@ -12,7 +12,7 @@
  *   3. drones on their pad drink from the pad's box; drones in the air drink their own battery and come home empty;
  *   4. what changed is published — `publish(solid, state, pilot)` — for the wire (`PowerSet`, global) and for
  *      `Solid.powered`, which is the one flag the rest of the game already reads (a lamp lights the night for the
- *      horde, a cooker is cooking heat: shared/data/power.ts `givesCookingHeat`).
+ *      horde, a cooker is cooking heat: shared/sim/craftRule.ts `isWorkingCooker`).
  *
  * The survivor's E on a machine comes here through server/sim/interaction.ts (`act`): charge the stun gun at a box,
  * refuel the oil generator, flip a switch, launch or call back a drone. Anything this module does not claim falls

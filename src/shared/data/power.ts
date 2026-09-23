@@ -196,21 +196,8 @@ export function linkDist2(a: Solid, b: Solid): number {
 }
 
 // ---------------------------------------------------------------- stations
-
-/** a cooker that is switched on AND fed by the grid: the contract of `Solid.powered` for machines (ELE-03) */
-export function isWorkingCooker(s: Solid): boolean {
-	return s.tags === "cooker" && s.powered === true && s.removed !== true;
-}
-
-/**
- * Heat to cook on (the cooking rule: "near a lit fire or a working cooker"). A cooker needs power (P3: an electric
- * cooker without electricity is cold); a campfire or a brazier needs to be lit.
- */
-export function givesCookingHeat(s: Solid): boolean {
-	if (s.removed === true) return false;
-	if (s.tags === "campfire" || s.tags === "brazier") return s.powered === true;
-	return isWorkingCooker(s);
-}
+// A cooker is cooking heat while its `powered` is set: the grid writes it (switched on AND fed, ELE-03) and the one
+// craft rule reads it (shared/sim/craftRule.ts `isWorkingCooker`, station "cook"); nothing about cooking lives here.
 
 // ---------------------------------------------------------------- published state (the wire and the mirror)
 
