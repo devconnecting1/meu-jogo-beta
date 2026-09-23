@@ -36,7 +36,9 @@ import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
 import { ITEM_INTEREST } from "shared/net/mpConfig";
+import { isMachine } from "shared/data/power";
 import { ServerItems } from "./items";
+import type { MachineOutcome } from "./power";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: the reach checks get the same latency allowance as `pickup` */
@@ -66,7 +68,14 @@ export type InteractOutcome =
 	| { kind: "mapItem"; solid: Solid; dropped: boolean }
 	| { kind: "repair"; solid: Solid }
 	| { kind: "search"; building: Solid; taken: number }
+	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
+	| { kind: "machine"; machine: MachineOutcome }
 	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
+
+/** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
+export interface MachineActions {
+	act(slot: number, body: PlayerState, save: PlayerSaveData, s: Solid): MachineOutcome | undefined;
+}
 
 export interface ServerInteractionOptions {
 	world: WorldData;
@@ -74,6 +83,8 @@ export interface ServerInteractionOptions {
 	out: WorldOut;
 	/** cosmetic effects (a tree shaking); left undefined they are simply dropped, which is what tests want */
 	fx?: (event: FxEvent) => void;
+	/** the electric grid: E on a machine is its job first (ELE-03), the ordinary E (repair, a light) only if not */
+	machines?: MachineActions;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -93,6 +104,7 @@ export class ServerInteraction {
 	private readonly items: ServerItems;
 	private readonly out: WorldOut;
 	private readonly fx?: (event: FxEvent) => void;
+	private readonly machines?: MachineActions;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -105,6 +117,7 @@ export class ServerInteraction {
 		this.items = options.items;
 		this.out = options.out;
 		this.fx = options.fx;
+		this.machines = options.machines;
 	}
 
 	/**
@@ -127,6 +140,16 @@ export class ServerInteraction {
 		}
 
 		if (target.kind === "door") return this.door(ctx, target.solid);
+		if (
+			(target.kind === "light" || target.kind === "solid") &&
+			this.machines !== undefined &&
+			isMachine(target.solid)
+		) {
+			const s = target.solid;
+			if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+			const done = this.machines.act(ctx.slot, ctx.state, ctx.save, s);
+			if (done !== undefined) return { kind: "machine", machine: done };
+		}
 		if (target.kind === "light") return this.light(ctx, target.solid);
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
 		if (target.kind === "solid") return this.repair(ctx, target.solid);

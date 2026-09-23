@@ -408,6 +408,9 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 	}
 	if (refs.clock.darkAlpha <= 0.05) return;
 	for (const l of structureLights) addLight(l.x, l.y, l.r, l.kind, l.angle);
+	// a lamp drone in the air (ELE-05): lit like a lamp, where it flies this tick
+	const carried = refs.carriedLights;
+	if (carried !== undefined) for (const l of carried) addLight(l.x, l.y, l.r, 1, 0);
 }
 
 /**

@@ -828,7 +828,9 @@ export class WorldView {
 		if (s.tags === "trap" || s.tags === "trap_electric") return COLORS.trap;
 		if (s.tags === "lamp") return COLORS.lamp;
 		if (s.tags === "campfire" || s.tags === "brazier") return COLORS.campfire;
-		if (s.tags === "generator" || s.tags === "battery") return COLORS.uiBlue;
+		if (s.tags === "solar" || s.tags === "reactor" || s.tags === "oil_generator" || s.tags === "battery") {
+			return COLORS.uiBlue;
+		}
 		return COLORS.uiPanelLight;
 	}
 

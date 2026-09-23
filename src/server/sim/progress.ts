@@ -362,15 +362,19 @@ export class Progress {
 	 * ASSIST_SHARE of it (§3.6, MP-15 "acaba com o roubo de abate"). The ledger is dropped, so a body can never
 	 * pay twice — which also means 2A must call this exactly once per death, whatever killed it.
 	 */
-	zombieKilled(zombieId: number, exp: number, killerSlot: number, now: number): Array<ExpAward> {
+	zombieKilled(zombieId: number, exp: number, killerSlot: number, now: number, countsKill = true): Array<ExpAward> {
 		const l = this.zombies.get(zombieId);
 		this.zombies.delete(zombieId);
 		const out = new Array<ExpAward>();
 		const base = isFiniteNumber(exp) && exp > 0 ? exp : 0;
 		if (killerSlot >= 0) {
 			out.push(this.pay(killerSlot, base, true));
-			this.bump(killerSlot).kills += 1;
-			this.creditKill(killerSlot);
+			// a turret's or a drone's kill (`countsKill` false) pays its survivor the XP (§3.6) but is not a zombie
+			// THEY put down: the session's kill count, the lifetime count and Horde Breaker (MON-05) stay theirs alone
+			if (countsKill) {
+				this.bump(killerSlot).kills += 1;
+				this.creditKill(killerSlot);
+			}
 		}
 		if (l !== undefined) {
 			for (const c of l.by) {
