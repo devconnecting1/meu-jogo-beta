@@ -208,15 +208,16 @@ export const TRANSPARENCY = {
 	/** HUD cards / popovers drawn over the world: background at 85% */
 	hud: 0.15,
 	/**
-	 * a thin gauge drawn over the world: the ally's HP / bleed-out track under their name (client/view/allyPlate.ts),
-	 * background at 75%. (The nameplate itself has NO background any more: see OVER_WORLD and textShadow below.)
+	 * a thin gauge drawn over the world: the ally's HP / bleed-out track, between their body and their name
+	 * (client/view/allyPlate.ts), background at 75%. (The nameplate itself has NO background any more: see OVER_WORLD
+	 * and textShadow below.)
 	 */
 	nameplate: 0.25,
 	/**
 	 * UI-04 (clarification): the pixel drop shadow of text drawn straight over the WORLD (skin.ts textShadow), 85%
-	 * opaque. The least opacity at which every voice of the nameplate still reads at 4,5:1 against its own shadow on
-	 * the brightest ground of the town (a zebra stripe), measured by `npm run test:world-art` section 8 -- at 0.8 the
-	 * orange of [Horde Breaker] falls to 4,49:1 there.
+	 * opaque: the lightest step at which every voice of the nameplate still reads at 4,5:1 against its own shadow even
+	 * where that shadow lies on pure white (`npm run test:world-art` section 8). At 80% the orange of [Horde Breaker]
+	 * would fall to 4,09:1 there; at 85% it is 4,90:1 (5,39:1 on the town's brightest real ground, a zebra stripe).
 	 */
 	textShadow: 0.15,
 	/** touch controls drawn over the world (thumbs must still see the map): joystick base idle / dragging */
@@ -287,18 +288,23 @@ export const STAT = {
  * DESIGN_RULES UI-04 (clarification, 2026-09-23): the owner asked for the name, level and title with nothing behind
  * them, and text never carries a contour -- so each line lands on the ground with the kit's pixel DROP SHADOW (skin.ts
  * `textShadow`): a copy in `shadow`, one skin pixel down and to the right, at TRANSPARENCY.textShadow. Every colour
- * here is measured WITH that shadow against the real ground textures, by day and under the night tint, by
- * `npm run test:world-art` (section 8): the letter against its own shadow at 4,5:1 on the brightest ground (a zebra
- * stripe), and the letter or its shadow at least 30 ΔE from every ground -- the bar the survivor's own silhouette
- * clears (LEG-03).
+ * here is measured WITH that shadow against the real ground pixels (18 grounds, drawn by the real WorldView), by day
+ * and under the night tint, by `npm run test:world-art` (section 8): the letter against its own shadow at 4,5:1 even
+ * where the shadow lies on pure white, and the letter or its shadow at least 30 ΔE from every ground pixel -- the bar
+ * the survivor's own silhouette clears (LEG-03).
  */
 export const OVER_WORLD = {
 	/** the display name: the anchor of the plate */
 	name: TOKENS.foreground,
-	/** "@username", only when it adds something: the light caption grey (#B1B1B1). The muted #9C9C9C is 4,61:1 against its
-	 * shadow on a zebra but only 26 ΔE from a lit asphalt texel: it would sink into the road */
+	/**
+	 * "@username", only when it adds something: the light caption grey (#B1B1B1, 5,53:1 against its shadow on white).
+	 * The muted #9C9C9C would be 4,32:1 there
+	 */
 	handle: TOKENS.cellMutedForeground,
-	/** "LV 12": the XP blue (chart-2's hue and chroma) made light enough to read on grass at night (#87C4FA) */
+	/**
+	 * "LV 12": the XP blue (chart-2's hue and chroma) made lighter for the world (#87C4FA, 6,39:1 against its shadow on
+	 * white). chart-2 itself would be 3,13:1 there
+	 */
 	level: TOKENS.statLevel,
 	/** the shadow every line casts: the page's near-black */
 	shadow: TOKENS.background,
