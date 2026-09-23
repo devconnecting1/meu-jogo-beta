@@ -11,6 +11,18 @@
  * that still fails keeps the record for the next world's write and for the shutdown flush. A world that ends while
  * the DataStore is down is therefore late in the document, never in the game. UpdateAsync (not SetAsync) because
  * every server appends to the same document: each append is read-modify-write on whatever the others left.
+ *
+ * Known limits, accepted (review of f851ad2, L5) — the record is a statistic, not a save, and none of this can touch
+ * the game:
+ *   - a write still retrying when the server shuts down makes the BindToClose flush return at once (`writing`), and
+ *     if that last attempt fails its records are lost with the server;
+ *   - a write that went through but came back as an error (a timeout after the commit) is appended again by the next
+ *     write: the document may hold a world twice. `appendEnded` does not dedupe; a reader can, by (job, endedAt);
+ *   - every server appends to the SAME key, so the per-key write limits are shared by all of them. A world ends
+ *     rarely (every survivor on the server dead, then the decision window), far below the limit today; many servers
+ *     at once would want one key per server;
+ *   - a failed write can never block or break the reset: it runs on its own thread, inside pcall, after the new town
+ *     is already up (server/net/mpHost.ts `onWorldWiped`).
  */
 import { GAME_NAME } from "shared/module";
 import { EndedWorld, WORLD_LOG_KEEP, WORLD_LOG_MEMORY, appendEnded, readEndedList } from "../sim/worldReset";
@@ -80,6 +92,7 @@ export function startWorldLog(): WorldLog {
 		warn(`[${GAME_NAME}] world record not saved yet (${unsaved.size()} waiting): ${tostring(lastErr)}`);
 	}
 
+	// a write already in flight makes this a no-op (`writing`): its own retries decide those records (L5 above)
 	game.BindToClose(() => flush(SHUTDOWN_DELAYS));
 
 	return {

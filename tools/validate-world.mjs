@@ -354,7 +354,10 @@ const CATEGORY = {
 const REQUIRED = { 4: "medical", 6: "medical", 9: "ammo", 7: "food", 8: "food", 11: "food", 5: "oil", 10: "cloth" };
 
 function emblemTypes() {
-	const f = join(SRC, "client/gameLoop.ts");
+	// the town's drawing moved out of the game loop into client/view/worldView.ts (the run and the menus' flyover
+	// share it, DESIGN_RULES UI-10); an older checkout still has it in gameLoop.ts
+	const moved = join(SRC, "client/view/worldView.ts");
+	const f = existsSync(moved) ? moved : join(SRC, "client/gameLoop.ts");
 	if (!existsSync(f)) return undefined;
 	const src = readFileSync(f, "utf8");
 	// the method definition (not the call in drawBuilding), up to its closing brace
@@ -684,7 +687,7 @@ function validate(seed) {
 			roofByType.set(t, key);
 		}
 		if (emblems && t >= 3 && !emblems.has(t)) {
-			fail("EDI-03", `${b.tags} (type ${t}) has no rooftop emblem in gameLoop.drawEmblem`, cx(b), cy(b));
+			fail("EDI-03", `${b.tags} (type ${t}) has no rooftop emblem in worldView.drawEmblem`, cx(b), cy(b));
 		}
 	}
 	const seenRoof = new Map();

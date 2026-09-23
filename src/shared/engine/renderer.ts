@@ -22,6 +22,52 @@ export interface SpriteOpts {
 	strokeThickness?: number;
 	/** outline opacity 0..1 (default 1) */
 	strokeAlpha?: number;
+	/**
+	 * Draw this image (a content id, "rbxassetid://...") over the rect instead of the background colour: `color`
+	 * and `cornerRadius` are then ignored, `alpha` is the image's opacity and `stroke` still outlines the rect.
+	 * A rotated image turns like any sprite; unlike a plain rect it is never swapped for a 90°/180° equivalent.
+	 */
+	image?: string;
+	/** ImageColor3: multiplies the image (default white = the image as authored) */
+	imageTint?: Color3;
+	/** how the image fills the rect (default "stretch") */
+	scaleType?: ImageFill;
+	/** "tile": one tile's size in world units; the tiling starts at the rect's top-left corner */
+	tileW?: number;
+	tileH?: number;
+	/** "slice": 9-slice centre in image px (SliceCenter) and world units per image px of the border (SliceScale) */
+	sliceX0?: number;
+	sliceY0?: number;
+	sliceX1?: number;
+	sliceY1?: number;
+	sliceScale?: number;
+	/** nearest-neighbour sampling, what pixel art needs (default true) */
+	pixelated?: boolean;
+}
+
+/** how an image fills its rect: ScaleType.Stretch, Tile or Slice */
+export type ImageFill = "stretch" | "tile" | "slice";
+
+const FILL_STRETCH = 0;
+const FILL_TILE = 1;
+const FILL_SLICE = 2;
+
+/** the child ImageLabel of a sprite that draws an image, and the last values written to it */
+interface SpriteImage {
+	label: ImageLabel;
+	on: boolean;
+	id: string;
+	tint: Color3;
+	transp: number;
+	fill: number;
+	tileX: number;
+	tileY: number;
+	s0: number;
+	s1: number;
+	s2: number;
+	s3: number;
+	sliceScale: number;
+	pixelated: boolean;
 }
 
 /**
@@ -48,12 +94,17 @@ interface Sprite {
 	strokeColor: Color3;
 	strokeThick: number;
 	strokeTransp: number;
+	/** created the first time this sprite draws an image, hidden (never destroyed) while it draws a plain rect */
+	img?: SpriteImage;
 }
 
 const DEFAULT_COLOR = Color3.fromRGB(200, 200, 200);
 const BLACK = Color3.fromRGB(0, 0, 0);
+const WHITE = Color3.fromRGB(255, 255, 255);
 const TOP_LEFT = new Vector2(0, 0);
 const CENTRE = new Vector2(0.5, 0.5);
+const FILL = UDim2.fromScale(1, 1);
+const ORIGIN = UDim2.fromOffset(0, 0);
 
 /**
  * Immediate-mode pooled GUI sprite renderer. All world visuals are Frames under one layer.
@@ -62,6 +113,10 @@ const CENTRE = new Vector2(0.5, 0.5);
  * The pool is a stack with a cursor: acquire = O(1) (reuse sprites[cursor++] or create one),
  * endFrame hides only the leftovers of the previous frame. Because draw order is stable, sprite i
  * usually draws the same thing as last frame, so the property cache skips most engine writes.
+ *
+ * Images (`SpriteOpts.image`, the town's pixel art): the pooled Frame gets a child ImageLabel the first time
+ * its slot draws one, kept (hidden) afterwards like the UIStroke, so an image sprite keeps the pool's single
+ * draw order (a separate pool of ImageLabels would tie with the Frames at equal ZIndex) and costs no churn.
  */
 export class Renderer {
 	readonly layer: Frame;
@@ -124,6 +179,10 @@ export class Renderer {
 	acquire(): Frame {
 		const sp = this.next();
 		this.apply(sp, 0, 0, 32, 32, false, 0, DEFAULT_COLOR, 0, 1, 0, undefined, 2, 0);
+		if (sp.img !== undefined && sp.img.on) {
+			sp.img.on = false;
+			sp.img.label.Visible = false;
+		}
 		return sp.frame;
 	}
 
@@ -157,29 +216,44 @@ export class Renderer {
 			cy += ox * s + oy * c;
 		}
 		const zoom = cam.zoom;
+		const image = opts.image;
 		// project(), not worldToScreen(): one table per sprite times 1500-3000 sprites is what makes the
 		// collector pause mid-frame (see Camera.screenX)
 		cam.project(cx, cy);
-		// normalise to [0, 180): a rect rotated by 180° is the same rect; 90° is a w/h swap
-		let deg = cam.spriteRotationDeg(worldRot) % 180;
-		if (deg < 0) deg += 180;
-		if (deg > 179.95) deg = 0;
-		if (math.abs(deg - 90) < 0.05) {
-			const t = ww;
-			ww = wh;
-			wh = t;
-			deg = 0;
+		let deg: number;
+		if (image === undefined) {
+			// normalise to [0, 180): a rect rotated by 180° is the same rect; 90° is a w/h swap
+			deg = cam.spriteRotationDeg(worldRot) % 180;
+			if (deg < 0) deg += 180;
+			if (deg > 179.95) deg = 0;
+			if (math.abs(deg - 90) < 0.05) {
+				const t = ww;
+				ww = wh;
+				wh = t;
+				deg = 0;
+			}
+		} else {
+			// an image has a top and a bottom: only a full turn is the same picture
+			deg = cam.spriteRotationDeg(worldRot) % 360;
+			if (deg < 0) deg += 360;
+			if (deg > 359.95) deg = 0;
 		}
 		const pw = ww * zoom;
 		const ph = wh * zoom;
 		let corner = 0;
-		if (opts.circle === true) {
+		if (image !== undefined) {
+			corner = 0;
+		} else if (opts.circle === true) {
 			corner = -1;
 		} else if (opts.cornerRadius !== undefined && opts.cornerRadius > 0) {
 			corner = math.max(1, math.floor(opts.cornerRadius * zoom + 0.5));
 		}
 		const alpha = clamp01(opts.alpha ?? 1);
 		const strokeAlpha = clamp01(opts.strokeAlpha ?? 1);
+		// an image sprite shows no background of its own: the picture is the child label (and its cached
+		// background colour is left alone, so turning a slot into an image and back writes nothing extra)
+		const bgTransp = image === undefined ? 1 - alpha : 1;
+		const bg = image === undefined ? (opts.color ?? DEFAULT_COLOR) : sp.color;
 		if (deg < 0.05) {
 			const l = math.floor(cam.screenX - pw * 0.5 + 0.5);
 			const t = math.floor(cam.screenY - ph * 0.5 + 0.5);
@@ -193,8 +267,8 @@ export class Renderer {
 				math.max(1, b - t),
 				false,
 				0,
-				opts.color ?? DEFAULT_COLOR,
-				1 - alpha,
+				bg,
+				bgTransp,
 				opts.zIndex ?? 1,
 				corner,
 				opts.stroke,
@@ -210,8 +284,8 @@ export class Renderer {
 				math.max(1, math.floor(ph + 0.5)),
 				true,
 				deg,
-				opts.color ?? DEFAULT_COLOR,
-				1 - alpha,
+				bg,
+				bgTransp,
 				opts.zIndex ?? 1,
 				corner,
 				opts.stroke,
@@ -219,7 +293,113 @@ export class Renderer {
 				1 - strokeAlpha,
 			);
 		}
+		if (image !== undefined) {
+			this.applyImage(sp, image, opts, zoom, 1 - alpha);
+		} else if (sp.img !== undefined && sp.img.on) {
+			sp.img.on = false;
+			sp.img.label.Visible = false;
+		}
 		return sp.frame;
+	}
+
+	/**
+	 * The image half of a sprite: a child ImageLabel filling the Frame, created the first time the slot draws an
+	 * image and only hidden afterwards (like the UIStroke), with every property behind the same write cache.
+	 */
+	private applyImage(sp: Sprite, id: string, opts: SpriteOpts, zoom: number, transp: number): void {
+		let im = sp.img;
+		if (im === undefined) {
+			const label = new Instance("ImageLabel");
+			label.Name = "I";
+			label.BackgroundTransparency = 1;
+			label.BorderSizePixel = 0;
+			label.Size = FILL;
+			label.Position = ORIGIN;
+			label.ScaleType = Enum.ScaleType.Stretch;
+			label.ResampleMode = Enum.ResamplerMode.Pixelated;
+			label.Visible = false;
+			label.Parent = sp.frame;
+			im = {
+				label,
+				on: false,
+				id: "",
+				tint: WHITE,
+				transp: 0,
+				fill: FILL_STRETCH,
+				tileX: -1,
+				tileY: -1,
+				s0: -1,
+				s1: -1,
+				s2: -1,
+				s3: -1,
+				sliceScale: -1,
+				pixelated: true,
+			};
+			label.ImageColor3 = WHITE;
+			label.ImageTransparency = 0;
+			sp.img = im;
+		}
+		const label = im.label;
+		if (im.id !== id) {
+			im.id = id;
+			label.Image = id;
+		}
+		const tint = opts.imageTint ?? WHITE;
+		if (im.tint !== tint) {
+			im.tint = tint;
+			label.ImageColor3 = tint;
+		}
+		if (im.transp !== transp) {
+			im.transp = transp;
+			label.ImageTransparency = transp;
+		}
+		const pixelated = opts.pixelated !== false;
+		if (im.pixelated !== pixelated) {
+			im.pixelated = pixelated;
+			label.ResampleMode = pixelated ? Enum.ResamplerMode.Pixelated : Enum.ResamplerMode.Default;
+		}
+		const st = opts.scaleType;
+		const fill = st === "tile" ? FILL_TILE : st === "slice" ? FILL_SLICE : FILL_STRETCH;
+		if (im.fill !== fill) {
+			im.fill = fill;
+			label.ScaleType =
+				fill === FILL_TILE
+					? Enum.ScaleType.Tile
+					: fill === FILL_SLICE
+						? Enum.ScaleType.Slice
+						: Enum.ScaleType.Stretch;
+		}
+		if (fill === FILL_TILE) {
+			// whole screen px per tile, so neighbouring tiles never drift apart by a rounding
+			const tx = math.max(1, math.floor((opts.tileW ?? 64) * zoom + 0.5));
+			const ty = math.max(1, math.floor((opts.tileH ?? opts.tileW ?? 64) * zoom + 0.5));
+			if (im.tileX !== tx || im.tileY !== ty) {
+				im.tileX = tx;
+				im.tileY = ty;
+				label.TileSize = UDim2.fromOffset(tx, ty);
+			}
+		} else if (fill === FILL_SLICE) {
+			const s0 = opts.sliceX0 ?? 0;
+			const s1 = opts.sliceY0 ?? 0;
+			const s2 = opts.sliceX1 ?? 0;
+			const s3 = opts.sliceY1 ?? 0;
+			if (im.s0 !== s0 || im.s1 !== s1 || im.s2 !== s2 || im.s3 !== s3) {
+				im.s0 = s0;
+				im.s1 = s1;
+				im.s2 = s2;
+				im.s3 = s3;
+				label.SliceCenter = new Rect(s0, s1, s2, s3);
+			}
+			const ss = math.max(0.01, (opts.sliceScale ?? 1) * zoom);
+			if (im.sliceScale !== ss) {
+				im.sliceScale = ss;
+				label.SliceScale = ss;
+			}
+		}
+		if (!im.on) {
+			im.on = true;
+			label.Visible = true;
+		}
 	}
 
 	/** Circle of diameter `d` (world units) centred at a world position. */

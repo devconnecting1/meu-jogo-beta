@@ -334,6 +334,44 @@ export function SettingRow(
 	return { frame: row, label: text, value };
 }
 
+export interface SettingCellProps {
+	x: number;
+	y: number;
+	w: number;
+	/** default SETTING_ROW_H */
+	h?: number;
+	/** label cell width (design units of the row) */
+	labelW: number;
+	label: string;
+	zIndex?: number;
+}
+
+/**
+ * The settings row's shape (label cell | value cell, ONE notched shape in two tones) placed at x, y in any frame
+ * instead of stacked in a SettingsList: for a few fixed rows laid out side by side on a Groove (the Survivor
+ * screen's stats, two to a line). Same tones, same Bold centred label, same value design space.
+ */
+export function SettingCell(parent: Instance, name: string, props: SettingCellProps): SettingRowHandle {
+	const h = props.h ?? SETTING_ROW_H;
+	const { w, labelW } = props;
+	const row = makeFrame(parent, name, props.x, props.y, w, h, THEME.background, {
+		transparency: 1,
+		zIndex: props.zIndex,
+	});
+	const split = labelW / w;
+	paintSegment(row, "Label", SURFACE.cellLabel, 0, split, 3);
+	paintSegment(row, "Value", SURFACE.cell, split, 1, 3);
+	const text = makeLabel(row, "Label", props.label, space(2), 0, labelW - space(4), h, TEXT.lg, THEME.foreground, {
+		font: BOLD,
+		zIndex: row.ZIndex + 1,
+	});
+	const value = makeFrame(row, "Value", labelW, 0, w - labelW, h, THEME.background, {
+		transparency: 1,
+		zIndex: row.ZIndex + 1,
+	});
+	return { frame: row, label: text, value };
+}
+
 /** a muted caption line in a SettingsList (muted-foreground on the groove, never on a cell) */
 export function SettingNote(list: ScrollList, name: string, order: number, text: string, h = 40): TextLabel {
 	const holder = new Instance("Frame");

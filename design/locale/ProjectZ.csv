@@ -379,7 +379,6 @@ Key,Context,Example,Source
 ,,,Rider
 ,,,Never die
 ,,,Ninja
-,,,Play
 ,,,Continue
 ,,,New game
 ,,,Shop
@@ -427,7 +426,6 @@ Key,Context,Example,Source
 ,,,Your screen
 ,,,"General: sound effects and music volume, and the size of the on-screen panels.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to.#About: the game and its credits.#Changes are saved with your progress, by themselves."
 ,,,Survivor
-,,,Current day
 ,,,Best day
 ,,,Level
 ,,,Bosses defeated
@@ -521,7 +519,6 @@ Key,Context,Example,Source
 ,,,Zombies killed
 ,,,days
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
-,,,The backpack and the menu never stop the world: open them somewhere safe
 ,,,Rifle
 ,,,Machine gun
 ,,,Shotgun
@@ -600,3 +597,76 @@ Key,Context,Example,Source
 ,,,LV
 ,,,Switch weapon
 ,,,Tap a weapon
+,,,Start
+,,,Enter the city
+,,,Stats
+,,,This life
+,,,Record
+,,,Empty
+,,,Town
+,,,in town
+,,,Solo
+,,,your own town
+,,,last town fell
+,,,Your new life wakes at first light
+,,,Delivered when you enter the city
+,,,The town keeps its own day. This life and your record count yours.
+,,,"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else."
+,,,Wait for daybreak
+,,,"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.#New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept."
+,,,Weapons
+,,,Usables
+,,,Materials
+,,,Skills
+,,,EQUIPPED
+,,,DEFAULT
+,,,COSTUME
+,,,MAKES
+,,,Not owned
+,,,Currently equipped.
+,,,Nothing is worn in this slot now.
+,,,This is the weapon in your hands.
+,,,Eat
+,,,None left
+,,,Consumed when used.
+,,,No weapons yet
+,,,No equipment yet
+,,,No usables yet
+,,,No materials yet
+,,,Find them in buildings or craft them in the Craft tab.
+,,,"Find it in buildings, craft it in the Craft tab, or unlock outfits and pets in the shop."
+,,,Search buildings and fallen zombies for food and medicine.
+,,,"Gather wood, stone and scrap while you explore. Materials are used in the Craft tab."
+,,,Ingredients
+,,,pro craft desk
+,,,craft desk
+,,,lit fire
+,,,Near you
+,,,Nothing near you: hand recipes only.
+,,,No desk needed
+,,,Pro craft desk nearby
+,,,Need a pro craft desk
+,,,Craft desk nearby
+,,,Need a craft desk
+,,,Need a lit fire
+,,,Lit fire nearby
+,,,You can craft this here.
+,,,"Light a campfire or brazier and stand next to it, then open the backpack again."
+,,,"Stand next to the right desk, then open the backpack again."
+,,,"Gather what is missing (in red), then craft."
+,,,Need fire
+,,,Need pro desk
+,,,Need craft desk
+,,,Missing items
+,,,Can't craft
+,,,Survival skill
+,,,Fighting skill
+,,,Utility skill
+,,,Next level
+,,,Max
+,,,Max level
+,,,skill point to spend.
+,,,skill points to spend.
+,,,No skill points
+,,,No skill points to spend. Level up to earn more.
+,,,"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.#Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.#Level up to earn skill points, and spend them in Skills.#The backpack and the menu never stop the world: open them somewhere safe."

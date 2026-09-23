@@ -297,6 +297,22 @@ const PAIRS = [
 		"cadeado e preco sobre o ladrilho bloqueado selecionado",
 	],
 
+	// --- the Bag (UI-11, client/ui/bagGrid.ts / bagPanel.ts): tiles on the groove, the details panel's dark beds. The
+	// tile chips are the hotbar's (count / ammo on SURFACE.well, below); what is new is listed here
+	["GAME.success", "SURFACE.well", MIN_UI, "Bag: o check verde de EQUIPPED no chip escuro do ladrilho"],
+	["THEME.foreground", "SURFACE.section", MIN_UI, "Bag: glifo da estacao e cadeado sobre o ladrilho (ferro escuro)"],
+	["THEME.foreground", "THEME.secondary", MIN_UI, "Bag: glifo da estacao sobre o ladrilho equipado; glifo da aba"],
+	["THEME.foreground", "THEME.tabActive", MIN_UI, "Bag: glifo da estacao sobre o ladrilho selecionado / aba ativa"],
+	["STAT.value", "SURFACE.groove", MIN_TEXT, "Bag: painel, numeros em amarelo no leito dos stats"],
+	["STAT.bonus", "SURFACE.groove", MIN_TEXT, "Bag: painel, bonus em verde no leito dos stats"],
+	["STAT.effect", "SURFACE.groove", MIN_TEXT, "Bag: painel, efeito de status em laranja no leito dos stats"],
+	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "Bag: painel, penalidade e ingrediente faltando em vermelho"],
+	["GAME.success", "SURFACE.groove", MIN_TEXT, "Bag: receita, a estacao esta perto (verde)"],
+	["THEME.destructive", "SURFACE.groove", MIN_TEXT, "Bag: receita, falta a estacao (vermelho)"],
+	["GAME.xp", "SURFACE.groove", MIN_TEXT, "Bag: skills, os pontos para gastar"],
+	["GAME.xp", "SURFACE.well", MIN_UI, "Bag: pip aceso do nivel da skill no chip escuro"],
+	["SURFACE.line", "SURFACE.well", MIN_UI, "Bag: pip apagado do nivel da skill"],
+
 	// --- the HUD console (UI-09, client/ui/hudConsole.ts): the UI-07 window body at the bottom centre. The bar labels
 	// ("HP 88 / 100") are small Bold text centred on the bar, so the FILL owes them 4,5:1 (UI-05); where the bar is
 	// empty the same label sits on the dark groove
@@ -328,6 +344,29 @@ const PAIRS = [
 	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "console: a reserva e o Reloading... no leitor"],
 	["GAME.sun", "SURFACE.window", MIN_UI, "placa do dia: o sol de pixel"],
 	["GAME.moon", "SURFACE.window", MIN_UI, "placa do dia: a lua de pixel"],
+	// --- the lobby and the Survivor screen (UI-10, client/ui/lobby.ts + survivor.ts): the menu's plates and sections
+	// stand straight on the page (the town flyover under its scrim), the Survivor screen is a UI-07 window
+	["THEME.primary", "THEME.background", MIN_UI, "chapa azul do START sobre a pagina"],
+	["THEME.secondary", "THEME.background", MIN_UI, "chapa de ferro do menu (Shop, Wardrobe...) sobre a pagina"],
+	["SURFACE.section", "THEME.background", MIN_RELIEF, "poco do palco e da cidade (lobby) sobre a pagina"],
+	[
+		"THEME.primaryForeground",
+		"THEME.primary",
+		MIN_TEXT,
+		'START: o icone de pixel e o subtitulo ("Continue this run")',
+	],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, 'chapa do menu: icone de pixel e subtitulo ("3 / 20")'],
+	[
+		"THEME.foreground",
+		"SURFACE.section",
+		MIN_TEXT,
+		"celula da cidade (Day 7, 2 / 6, in town) e ladrilho vazio do loadout",
+	],
+	["THEME.foreground", "THEME.secondary", MIN_TEXT, "ladrilho ocupado do loadout: WEAPON / Dagger em ferro"],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "nota da tela Survivor (a escolha da MP-21, os pacotes)"],
+	["THEME.foreground", "SURFACE.cell", MIN_TEXT, "valor da linha de estatistica (Day 3, 340 / 800 XP)"],
+	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, 'aviso "carregando" do lobby na plaquinha do painel'],
+	["THEME.destructive", "SURFACE.panel", MIN_TEXT, "aviso offline do lobby (vermelho) na plaquinha do painel"],
 
 	// --- titles (MON-05): the title is TEXT in its game colour, under the name on the nameplate (the popover) and on
 	// the wardrobe's rows (graphite `row`; a locked row is `well`). GAME.success, the green the owner named for
@@ -669,6 +708,33 @@ check(
 	overWorld !== undefined && overlay !== undefined && overWorld > overlay,
 	`overWorld ${overWorld} > overlay ${overlay}`,
 );
+
+/*
+ * UI-10: the town flyover behind the lobby and the Survivor screen. Between the town and the menus sits the page
+ * colour at TRANSPARENCY.backdrop, so the world shows through at `backdrop` at most. No label is drawn on it (the
+ * menus keep every text on a plate, a section or a window, or in `foreground` straight over the scrim -- test:lobby checks that), but
+ * the ceiling is set so that one that lands there by mistake still reads: over the brightest thing the town can
+ * put under the scrim -- white -- the composite must hold `foreground` at 4,5:1.
+ */
+const backdrop = T.get("backdrop");
+{
+	const bg = role("THEME.background");
+	const a = backdrop ?? 1;
+	const composite = bg.map(c => Math.round(c * (1 - a) + 255 * a));
+	const r = contrast(role("THEME.foreground"), composite);
+	check(
+		"UI-10: o scrim da cidade atras dos menus (TRANSPARENCY.backdrop) segura o foreground a 4,5:1 sobre um mundo branco",
+		backdrop !== undefined && backdrop > 0 && r >= MIN_TEXT,
+		`backdrop = ${backdrop} -> mundo a ${Math.round(a * 100)}%, pior caso ${hex(composite)}, ${r.toFixed(2)}:1`,
+	);
+	const flySrc = codeAt(join(SRC, "client/view/townFlyover.ts"));
+	check(
+		"...e o voo usa esse scrim, na cor da pagina, e so tokens do tema e do mundo (nenhuma cor literal)",
+		/TRANSPARENCY\.backdrop/.test(flySrc) &&
+			/THEME\.background/.test(flySrc) &&
+			!/Color3\.(fromRGB|new|fromHex)|new Color3/.test(flySrc),
+	);
+}
 
 /** the screens that open OVER a run, and must dim the street rather than hide it */
 const OVER_RUN = ["client/ui/backpack.ts", "client/ui/pauseMenu.ts", "client/onboarding/gameOver.ts"];

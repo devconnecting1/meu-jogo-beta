@@ -1,11 +1,11 @@
 /*
  * Item card: what an item IS, in one card (docs/DESIGN_RULES.md UI-08, in the style of the owner's reference
- * windows). The Bag shows it as the tooltip of the row under the pointer or the pad's selection, and as the left
- * half of its item page; any screen that shows an item can drop it in.
+ * windows). The Bag shows it as the tooltip of the tile under the mouse (an item other than the selected one, whose
+ * card is the details panel, client/ui/bagPanel.ts); any screen that shows an item can drop it in.
  *
  *   +--------------------------------+
- *   | [A]  Axe                   x 2 |  header: the item's glyph (the Bag's icon: its initial in a well outlined
- *   |      Weapon · Melee            |  in the kind's tone), the name, the type; an optional tag at the right
+ *   | [#]  Axe                   x 2 |  header: the item's pixel icon (UI-11: the same drawing as the Bag's tile and
+ *   |      Weapon · Melee            |  the HUD hotbar) on a small dark-iron tile, the name, the type; a tag at right
  *   | ------------------------------ |  the fio: a thin rule in `line` between two sections
  *   | Damage                      50 |  stats: the label muted, the value in its voice (theme.ts STAT) --
  *   | Cooldown                 0.4 s |  numbers yellow, bonuses green, status effects orange, penalties red
@@ -19,70 +19,18 @@
  *
  * The card only DRAWS a model (ItemCardModel); what goes in it -- read from the shared data, only the fields an
  * item really has -- is client/ui/itemInfo.ts. Built once, then rewritten in place: set() with another item
- * writes the new texts onto the same lines and resizes the card to what it shows now, so moving the selection
- * over a list creates no Instance (npm run test:backpack). The lines a model needs beyond those built with the
- * card are made once and kept.
+ * writes the new texts onto the same lines and resizes the card to what it shows now, so moving the mouse over a
+ * grid creates no Instance (npm run test:backpack): the icon holds as many Frames as the costliest icon from the start,
+ * and the lines a model needs beyond those built with the card are made once and kept.
  *
  * Text: light or muted, never with a contour (UI-04); every colour is a theme role (UI-01), every string comes in
  * the model already through lang.ts (UI-03).
  */
-import { ItemKind } from "shared/data/kinds";
-import { GAME, STAT, SURFACE, TEXT, THEME, fontOf, hex, space } from "./theme";
+import { IconView, drawItemIcon, maxItemFrames } from "./itemIcon";
+import { paintPlate } from "./plate";
+import { STAT, SURFACE, TEXT, THEME, fontOf, hex, space } from "./theme";
 import { setValueKey } from "./window";
-import {
-	Card,
-	Keycap,
-	Separator,
-	designOf,
-	makeFrame,
-	makeLabel,
-	makeSurface,
-	setDesign,
-	setSurface,
-	uiScale,
-} from "./widgets";
-
-// ---------------------------------------------------------------- the glyph (the Bag's item icon)
-
-/** the item's initial in a square well, drawn by setGlyph: the Bag's rows, its craft list and the card's header */
-export interface Glyph {
-	frame: Frame;
-	letter: TextLabel;
-}
-
-export function makeGlyph(parent: Instance, x: number, y: number, size: number, zIndex = 2): Glyph {
-	const frame = makeSurface(parent, "Glyph", x, y, size, size, "well", {
-		fill: SURFACE.well,
-		border: SURFACE.line,
-		zIndex,
-	});
-	const letter = makeLabel(frame, "Letter", "", 0, 0, size, size, size / 2, THEME.foreground, {
-		weight: Enum.FontWeight.Bold,
-		zIndex: zIndex + 1,
-	});
-	return { frame, letter };
-}
-
-/**
- * Square well with the item's initial, outlined in the item kind's tone (muted: the plain well outline). Like
- * the kit's accent Badge, the tone rides the BORDER and the letter stays `foreground` (18.5:1 on the well fill),
- * one light letter for every kind. That is a choice of look, not a contrast workaround: the GAME tones would read
- * as text there too (success 4.68:1 and material 4.63:1 even on the lighter panel, `npm run test:contrast`).
- * The letter has no contour (UI-04): the well behind it is what carries it.
- */
-export function setGlyph(g: Glyph, name: string, tone: Color3, muted: boolean): void {
-	setSurface(g.frame, "well", { fill: SURFACE.well, border: muted ? SURFACE.line : tone });
-	g.letter.Text = name.sub(1, 1).upper();
-	g.letter.TextColor3 = muted ? THEME.mutedForeground : THEME.foreground;
-}
-
-/** tone of an item kind: weapons destructive, equipment info, usables success, materials material */
-export function kindTone(kind: number): Color3 {
-	if (kind === ItemKind.Weapon) return THEME.destructive;
-	if (kind === ItemKind.Equip) return GAME.info;
-	if (kind === ItemKind.Use) return GAME.success;
-	return GAME.material;
-}
+import { Card, Keycap, Separator, designOf, makeFrame, makeLabel, setDesign, uiScale } from "./widgets";
 
 // ---------------------------------------------------------------- the model
 
@@ -103,8 +51,9 @@ export interface CardHint {
 
 /** everything a card shows; every string already through lang.ts */
 export interface ItemCardModel {
-	/** ItemKind: the tone of the glyph's outline */
+	/** ItemKind and id: the icon of the header (shared/data/itemIcons.ts iconOf) */
 	kind: number;
+	id: number;
 	name: string;
 	/** "Weapon · Melee", "Food", "Clothing"... */
 	type: string;
@@ -119,7 +68,8 @@ export interface ItemCardModel {
 	hints: Array<CardHint>;
 }
 
-function toneColor(tone: StatTone): Color3 {
+/** the colour of a stat's voice (theme.ts STAT): the card and the Bag's details panel speak the same way */
+export function toneColor(tone: StatTone): Color3 {
 	if (tone === "value") return STAT.value;
 	if (tone === "bonus") return STAT.bonus;
 	if (tone === "effect") return STAT.effect;
@@ -129,7 +79,7 @@ function toneColor(tone: StatTone): Color3 {
 
 /** what a model draws: two models with the same signature draw the same card */
 function modelSig(m: ItemCardModel): string {
-	let s = `${m.kind}|${m.name}|${m.type}|${m.tag}|${hex(m.tagColor)}|${m.notes}`;
+	let s = `${m.kind}:${m.id}|${m.name}|${m.type}|${m.tag}|${hex(m.tagColor)}|${m.notes}`;
 	for (const st of m.stats) s += `|${st.label}=${st.value}:${st.tone}`;
 	for (const h of m.hints) s += `|${h.key}>${h.text}`;
 	return s;
@@ -141,7 +91,7 @@ const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 /** the "numeric" role (theme.ts TYPE): tabular digits */
 const NUMERIC = fontOf("mono", Enum.FontWeight.Bold);
 const PAD = space(4);
-/** the header: the glyph, and the name over the type beside it */
+/** the header: the icon, and the name over the type beside it */
 const ICON = 44;
 const NAME_H = 24;
 const TYPE_H = 18;
@@ -240,9 +190,12 @@ export function ItemCard(parent: Instance, name: string, props: ItemCardProps): 
 	const block = (blockName: string, h: number): Frame =>
 		makeFrame(frame, blockName, PAD, 0, innerW, h, THEME.card, { transparency: 1, zIndex: z });
 
-	// header: glyph, name over type, tag at the right
+	// header: icon, name over type, tag at the right
 	const header = block("Header", ICON);
-	const glyph = makeGlyph(header, 0, 0, ICON, z + 1);
+	// the icon on a small tile of dark iron (the Bag's tile face), as many Frames as any icon needs from the start
+	const iconTile = makeFrame(header, "IconTile", 0, 0, ICON, ICON, THEME.card, { transparency: 1, zIndex: z + 1 });
+	paintPlate(iconTile, SURFACE.section, "flat", 3);
+	const icon = IconView(iconTile, "ItemIcon", 4, 4, ICON - 8, z + 2, maxItemFrames());
 	const textX = ICON + space(3);
 	const title = makeLabel(header, "Name", "", textX, 0, innerW - textX, NAME_H, TEXT.lg, THEME.foreground, {
 		font: BOLD,
@@ -352,7 +305,7 @@ export function ItemCard(parent: Instance, name: string, props: ItemCardProps): 
 			while (hints.size() < m.hints.size()) hints.push(makeHint(hints.size()));
 
 			// header
-			setGlyph(glyph, m.name, kindTone(m.kind), false);
+			drawItemIcon(icon, m.kind, m.id);
 			title.Text = m.name;
 			typeLabel.Text = m.type;
 			tag.Text = m.tag;
