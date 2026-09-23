@@ -83,18 +83,19 @@ const runsCache = new Map<number, Array<SignRun>>();
 function decompose(rows: Array<string>, order: string): Array<SignRun> {
 	const m = rows.size();
 	const n = (rows[0] ?? "").size();
+	// one character at a time with Luau's string.sub, as client/ui/itemIcon.ts reads its grids
 	const rankOf = new Map<string, number>();
-	const orderChars = order.split("");
-	for (let i = 0; i < orderChars.size(); i++) rankOf.set(orderChars[i], i);
+	const colours = order.size();
+	for (let i = 1; i <= colours; i++) rankOf.set(order.sub(i, i), i - 1);
 	const rank: Array<number> = [];
 	for (let y = 0; y < m; y++) {
-		const chars = rows[y].split("");
-		for (let x = 0; x < n; x++) rank.push(rankOf.get(chars[x] ?? "") ?? -1);
+		const row = rows[y];
+		for (let x = 0; x < n; x++) rank.push(rankOf.get(row.sub(x + 1, x + 1)) ?? -1);
 	}
 	const runs: Array<SignRun> = [];
 	const layers: Array<number> = [];
-	for (let L = 0; L < orderChars.size(); L++) {
-		const color = SIGN_ART[orderChars[L]];
+	for (let L = 0; L < colours; L++) {
+		const color = SIGN_ART[order.sub(L + 1, L + 1)];
 		if (color === undefined) continue;
 		const covered: Array<boolean> = [];
 		for (let i = 0; i < n * m; i++) covered.push(false);
