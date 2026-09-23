@@ -535,6 +535,8 @@ function onTimeSync(payload: unknown): void {
 		return;
 	}
 	clock.noteRtt(pongRtt(pong, Workspace.GetServerTimeNow()));
+	// the server's clock and tick, stamped together: the epoch follows the time the server dropped (clockSync.ts)
+	clock.noteServerTick(pong.serverTime, pong.serverTick);
 }
 
 function sendTimePing(now: number): void {
@@ -581,6 +583,8 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	const now = os.clock();
 	applyLife(refs);
 	const tick = clock.update(dt, Workspace.GetServerTimeNow());
+	// before this frame's snapshots are measured against the corrected clock: the render time ignores the correction
+	snapshots.clockCorrected(clock.lastCorrection());
 	applyClock(refs, tick);
 	reconcile(now);
 	predict(refs, dt);
@@ -588,14 +592,18 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	rebuildViews();
 	allyHitches.beginFrame(dt);
 	for (const v of views) allyHitches.observe(v.slot, v.x, v.y, dt);
-	observeZombies(dt);
 	send(now);
 	sendTimePing(now);
+	// metering only: after the frame's packets are on their way, never in front of them
+	observeZombies(dt);
 	prediction.present(dt, commands.phase(), commands.newest());
 	logStats(now);
 }
 
-/** step 5c: every zombie on screen through the hitch meter, exactly as the allies go through theirs */
+/**
+ * After step 6: every zombie on screen through the hitch meter, exactly as the allies go through theirs. It only
+ * measures, so it runs once the frame's Input and TimePing are sent (the review of 2026-09-23, #9).
+ */
 function observeZombies(dt: number): void {
 	zombieHitches.beginFrame(dt);
 	const view = getCtx().cam.viewRect(ZOMBIE_VIEW_PAD);
@@ -613,6 +621,12 @@ function observeZombies(dt: number): void {
 /** the server's dropped-tick counter (server/net/mpHost.ts publishes it on Workspace), or -1 before it has */
 function serverDroppedTicks(): number {
 	const v = Workspace.GetAttribute("pz_dropped_ticks");
+	return typeIs(v, "number") ? v : -1;
+}
+
+/** the server's Heartbeat debt being repaid right now, in ms (mpHost.ts `pz_backlog_ms`), or -1 before it has one */
+function serverBacklogMs(): number {
+	const v = Workspace.GetAttribute("pz_backlog_ms");
 	return typeIs(v, "number") ? v : -1;
 }
 
@@ -634,7 +648,7 @@ function logStats(now: number): void {
 	print(
 		string.format(
 			"[PZ-NET] slot %d | roster %d | outros %d | zumbis %d | chefes %d | rtt %.0f ms | erro p99 %.2f u | correcoes %.1f/min | " +
-				"SUAVIDADE: atraso %.0f ms (latencia medida %.0f ms), intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d, ticks perdidos no servidor %d | " +
+				"SUAVIDADE: atraso %.0f ms (latencia medida %.0f ms), intervalo %.0f ms, jitter %.0f ms, travadas %d, aceitos %d, buffer-descartou %d, ticks perdidos no servidor %d (divida agora %d ms, relogio reancorado +%.0f ms) | " +
 				"fila %d | descartes %d | malformados %d | stale %d | envio %.0f Hz | pendentes %d | fps %.0f | aliado: %d trancos em %.0f s andando (%d em quadro longo, pior %.0f%%) | " +
 				"zumbis: %d trancos em %.0f s visiveis (%.0f s andando, %d em quadro longo, pior %.0f%%)%s",
 			st.slot,
@@ -653,6 +667,8 @@ function logStats(now: number): void {
 			st.snapAccepted,
 			st.snapDropped,
 			serverDroppedTicks(),
+			serverBacklogMs(),
+			clock.stats().epochShift * 1000,
 			st.queued,
 			st.queueDropped,
 			st.malformed,

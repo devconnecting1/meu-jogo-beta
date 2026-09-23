@@ -382,6 +382,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		return link.strangerCount > FLOOD_MESSAGES;
 	}
 
+	/** os.clock() when the last Heartbeat began: how late the next one is, for the input queue's grace */
+	let beatAt = os.clock();
+
 	const inputConn = onInput(remotes, (player, payload) => {
 		if (departed(player)) return;
 		const link = linkOf(player);
@@ -393,8 +396,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		const sp = sim.get(link.slot);
 		if (sp === undefined) return;
 		// the whole validation lives in the pure module (token bucket, decode, counters); a malformed payload
-		// is dropped in silence (§9.2 level 0) and only ever counted
-		const verdict = ingestInput(sp, payload, now);
+		// is dropped in silence (§9.2 level 0) and only ever counted. The grace is the SERVER's lateness: the
+		// commands for the ticks it owes are kept for the repayment instead of capped (server/sim/heartbeat.ts)
+		const verdict = ingestInput(sp, payload, now, sim.inputGrace(now - beatAt));
 		if (verdict !== InputVerdict.Ok || sp.counters.packets % 32 === 0) guardFlood(link, sp);
 	});
 
@@ -515,7 +519,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				admitAt = now;
 				for (const player of Players.GetPlayers()) admit(player);
 			}
+			beatAt = now;
 			const started = os.clock();
+			// the heartbeat after a world reset runs one tick and forgets the rest of its delta: that was the new
+			// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
 			const ran = sim.advance(dt);
 			if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
 			// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
@@ -527,6 +534,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					Workspace.SetAttribute("pz_tick_p95_ms", sim.p95Ms());
 					Workspace.SetAttribute("pz_sim_players", sim.count());
 					Workspace.SetAttribute("pz_dropped_ticks", sim.stats.droppedTicks);
+					// the Heartbeat debt still being repaid right now (§3.1): next to the dropped ticks in [PZ-NET]
+					Workspace.SetAttribute("pz_backlog_ms", math.floor(sim.backlogS() * 1000 + 0.5));
 					// what a playtest reads off the server window to know the world is actually running
 					Workspace.SetAttribute("pz_zombies", sim.horde?.count() ?? 0);
 					Workspace.SetAttribute("pz_world_day", sim.clock.day);

@@ -29,11 +29,22 @@
  *
  * Scenarios: (a) one walker chasing a survivor who walks, then stops; (b) ten walkers crowding a standing survivor
  * (the owner's screenshot); (c) a walker crossing the 800 u near/mid boundary on a 1920x1080 screen; (d) a charger
- * keeping its distance and rushing, plus a walker knocked back twice. Each on three links:
+ * keeping its distance and rushing, plus a walker knocked back twice. Each on four links:
  *
  *   clean   60 Hz heartbeat and 60 fps apart, 80 ms RTT;
  *   wan     the same with 140 ms RTT, 15 ms jitter and 2 % loss;
- *   studio  server and client in ONE process sharing irregular frames, as the owner's [PZ-NET] log showed them.
+ *   studio  server and client in ONE process sharing irregular frames, as the owner's [PZ-NET] log showed them;
+ *   server  the same irregular frames on the server's Heartbeat ALONE, the client at a steady 60 fps (a live server
+ *           that hitches: nothing on the client stands still with it).
+ *
+ * And three that break the timeline on purpose, each judged on its own (the review of 2026-09-23, #4 and #5):
+ * (e) a 10 s breakpoint on the server, apart and in one process; (f) a 0.6 s pause while the client goes on drawing;
+ * (g) the client's GetServerTimeNow() stepping 0.6 s with the server perfectly fine. Every one of them failed on
+ * 097f484: the fixed epoch left a 9.8 s delay after (e) for good and drew 81-95 frames past the server, (f) ended
+ * on 463 ms, and in (g) the render time jumped with the clock (37x in one frame) and 26 frames ran past the data.
+ * The clock now re-anchors on the TimePongs (client/net/clockSync.ts), the render time no longer moves with the
+ * clock's corrections at all (snapshotBuffer.ts `clockCorrected`), and a resync re-locks the delay and re-bases the
+ * render time instead of holding it.
  *
  * What was found, and what this suite now holds the code to (commit 7fb3e89 → this one, same seed; 31 failed
  * checks → 0):
@@ -72,7 +83,10 @@ const { Replicator, mapHashOf } = require(join(SRC, "server/net/replication.ts")
 const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
 const { CommandStream } = require(join(SRC, "client/net/commands.ts"));
 const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
-const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+const SB = require(join(SRC, "client/net/snapshotBuffer.ts"));
+const { SnapshotBuffer } = SB;
+/** a client frame this long is a hitch (an older src has no such notion: judge every frame then) */
+const HITCH_FRAME_S = SB.HITCH_FRAME_S ?? Infinity;
 const HM = require(join(SRC, "client/net/hitchMeter.ts"));
 const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
 
@@ -119,6 +133,8 @@ const ZOMBIE_MOVING_UPS = HM.ZOMBIE_MOVING_UPS ?? 40;
  */
 const HITCH_S = 0.1;
 const HITCH_SHADOW_S = 0.15;
+/** client/net/netClient.ts: a clock probe every this many seconds */
+const TIME_SYNC_PERIOD = 1 / Math.max(1, CFG.TIME_SYNC_RATE / 2);
 
 // ---------------------------------------------------------------- the link (as in tools/test-predict.mjs)
 
@@ -205,6 +221,12 @@ const PROFILES = {
 	clean: { oneWay: 0.04, jitter: 0.004, loss: 0.005, shared: false, clockNoise: 0.002 },
 	wan: { oneWay: 0.07, jitter: 0.015, loss: 0.02, shared: false, clockNoise: 0.002 },
 	studio: { oneWay: 0.004, jitter: 0.003, loss: 0, shared: true, clockNoise: 0 },
+	/*
+	 * A real server that hitches while the client does not: the Studio frame times drive the server's Heartbeat
+	 * alone, the client draws at a steady 60 fps over the clean link. The server drops the time it cannot catch up
+	 * (§3.1) and nothing on the client stood still with it, so this is where a lost tick would show.
+	 */
+	server: { oneWay: 0.04, jitter: 0.004, loss: 0.005, shared: false, clockNoise: 0.002, serverOnly: true },
 };
 
 // ---------------------------------------------------------------- one run of the whole chain
@@ -321,25 +343,42 @@ function run(scn, profileName) {
 	const down = new Link({ oneWay: prof.oneWay, jitter: prof.jitter, loss: prof.loss, random });
 	const up = new Link({ oneWay: prof.oneWay, jitter: prof.jitter, loss: prof.loss, random: randomUp });
 	const rel = new Reliable(prof.oneWay);
+	// the TimeSync RemoteEvent both ways (reliable): a probe a second, answered with the server's clock and tick
+	const pingUp = new Reliable(prof.oneWay);
+	const pongDown = new Reliable(prof.oneWay);
+	let pingAt = -Infinity;
+	let pingSeq = 0;
 
 	// ---- the timeline: server heartbeats and client frames in wall-clock order
-	const dts = prof.shared
-		? studioFrames(scn.seconds + 1, randomFrames)
-		: new Array(Math.ceil((scn.seconds + 1) * 60)).fill(1 / 60);
+	// a breakpoint (`scn.pause`): the server's Heartbeat stops for `seconds` at `at`, and its next delta says so. In
+	// one process the client stops with it; apart, it goes on drawing through it
+	const pause = scn.pause;
+	const pauseS = pause?.seconds ?? 0;
+	const steady = new Array(Math.ceil((scn.seconds + 1 + pauseS) * 60)).fill(1 / 60);
+	const irregular = prof.shared || prof.serverOnly ? studioFrames(scn.seconds + 1, randomFrames) : steady;
+	const dts = prof.shared ? irregular : steady;
 	const events = [];
+	/** wall time of the first heartbeat after the breakpoint */
+	let resumeAt = Infinity;
 	{
-		let t = T0;
-		for (const dt of dts) {
-			t += dt;
-			events.push({ at: t, kind: "server", dt });
-		}
+		const lay = (frames, start, kind, stops) => {
+			let t = start;
+			let stopped = false;
+			for (const dt0 of frames) {
+				let dt = dt0;
+				if (stops && pause !== undefined && !stopped && t + dt > T0 + pause.at) {
+					stopped = true;
+					dt += pauseS;
+					if (kind === "server") resumeAt = t + dt;
+				}
+				t += dt;
+				events.push({ at: t, kind, dt });
+			}
+		};
+		lay(irregular, T0, "server", true);
 		// in one process the client's frame follows the server's step of the same frame; apart, the client is a
 		// third of a frame out of phase so the two clocks are not in lock-step
-		t = T0 + (prof.shared ? 1e-6 : 0.37 / 60);
-		for (const dt of dts) {
-			t += dt;
-			events.push({ at: t, kind: "client", dt });
-		}
+		lay(dts, T0 + (prof.shared ? 1e-6 : 0.37 / 60), "client", prof.shared);
 		events.sort((a, b) => a.at - b.at || (a.kind === "server" ? -1 : 1));
 	}
 
@@ -347,16 +386,33 @@ function run(scn, profileName) {
 	/** client time of the last frame long enough to be the machine hitching (the whole screen stood still) */
 	let hitchAt = -Infinity;
 	const lag = [];
+	/** the client time of each `lag` entry */
+	const lagT = [];
 	const delays = [];
 	const rates = [];
 	let lastRender;
-	const endWall = T0 + scn.seconds;
+	const endWall = T0 + scn.seconds + pauseS;
 
 	for (const ev of events) {
 		if (ev.at > endWall) break;
 		if (ev.kind === "server") {
 			serverWall = ev.at;
-			for (const payload of up.poll(ev.at)) PL.ingestInput(sp, payload, ev.at);
+			// server/net/mpHost.ts: the queue keeps the commands for the ticks the server owes (an older src ignores it)
+			const grace = sim.inputGrace?.(ev.dt) ?? 0;
+			for (const payload of up.poll(ev.at)) PL.ingestInput(sp, payload, ev.at, grace);
+			// server/net/mpHost.ts: the clock and the tick in the same instant -- before this frame's ticks, the late
+			// side of where a RemoteEvent handler can run
+			for (const payload of pingUp.poll(ev.at)) {
+				const ping = P.decodeTimePing(payload);
+				if (ping === undefined) continue;
+				const pong = P.encodeTimePong({
+					seq: ping.seq,
+					clientTime: ping.clientTime,
+					serverTime: ev.at,
+					serverTick: sim.tick,
+				});
+				if (pong !== undefined) pongDown.send(ev.at, pong);
+			}
 			if (scn.event !== undefined) scn.event(ev.at - T0, { watched, sx, sy });
 			sim.advance(ev.dt);
 			for (const part of snaps) down.send(ev.at, part);
@@ -379,8 +435,19 @@ function run(scn, profileName) {
 			const part = P.decodeSnapshotPart(payload);
 			if (part !== undefined) cl.queue.push(part);
 		}
-		const serverNow = now + (prof.clockNoise > 0 ? (random() - 0.5) * 2 * prof.clockNoise : 0);
+		// `scn.clockStep`: GetServerTimeNow() itself steps (the engine re-syncing it) -- the client's clock re-locks
+		const step = scn.clockStep !== undefined && clientT >= scn.clockStep.at ? scn.clockStep.seconds : 0;
+		const serverNow = now + step + (prof.clockNoise > 0 ? (random() - 0.5) * 2 * prof.clockNoise : 0);
+		// netClient.onTimeSync, which runs off its RemoteEvent before the frame
+		for (const payload of pongDown.poll(now)) {
+			const pong = P.decodeTimePong(payload);
+			if (pong === undefined) continue;
+			cl.clock.noteRtt(P.pongRtt(pong, serverNow));
+			// (an older src, run with PZ_SRC for the "before" column, has neither of these)
+			cl.clock.noteServerTick?.(pong.serverTime, pong.serverTick);
+		}
 		const tick = cl.clock.update(dt, serverNow);
+		cl.snapshots.clockCorrected?.(cl.clock.lastCorrection?.() ?? 0);
 		const refTick = cl.clock.tickNow();
 		for (const part of cl.queue) {
 			const partTick = codec.unwrapTick(part.tick, Math.floor(refTick));
@@ -412,6 +479,13 @@ function run(scn, profileName) {
 			if (payload !== undefined) burst.push(payload);
 		}
 		if (burst.length > 0) up.sendBurst(now, burst);
+		// netClient.sendTimePing
+		if (now - pingAt >= TIME_SYNC_PERIOD) {
+			pingAt = now;
+			pingSeq = (pingSeq + 1) % 65536;
+			const ping = P.encodeTimePing({ seq: pingSeq, clientTime: serverNow });
+			if (ping !== undefined) pingUp.send(now, ping);
+		}
 		cl.prediction.present(dt, cl.commands.phase(), cl.commands.newest());
 		// client/gameLoop.ts: the camera eases onto the DRAWN survivor
 		cam.follow(local.x, local.y, Math.min(1, dt * 8));
@@ -423,8 +497,10 @@ function run(scn, profileName) {
 			lastRender = render;
 			continue;
 		}
-		// hypothesis 1: how fast the render clock runs against real time (1 = exactly real time)
-		if (lastRender !== undefined && dt > 0) rates.push((render - lastRender) / (dt * SIM_HZ));
+		// hypothesis 1: how fast the render clock runs against real time (1 = exactly real time). Not on a hitch frame:
+		// the screen stood still through it, and not running the render time through what the server never simulated
+		// is the point there (snapshotBuffer.ts HITCH_FRAME_S)
+		if (lastRender !== undefined && dt > 0 && dt < HITCH_FRAME_S) rates.push((render - lastRender) / (dt * SIM_HZ));
 		lastRender = render;
 		// how old the drawing is in wall-clock time: the "laggy" half of the complaint
 		const rt = Math.floor(render);
@@ -432,6 +508,7 @@ function run(scn, profileName) {
 		const w1 = tickWall[rt + 1];
 		if (w0 !== undefined && w1 !== undefined) lag.push(now - (w0 + (w1 - w0) * (render - rt)));
 		else lag.push(NaN); // the render time is past anything the server has simulated
+		lagT.push(clientT);
 		delays.push(cl.snapshots.delay());
 
 		for (const z of cl.snapshots.zombieStates()) {
@@ -466,6 +543,8 @@ function run(scn, profileName) {
 				ta: tr.a,
 				ix: ideal.x,
 				iy: ideal.y,
+				// where the server has it RIGHT NOW (its newest tick): moving, while the drawing stands, is a freeze
+				live: hist.get(sim.tick),
 				shadow: clientT - hitchAt <= HITCH_SHADOW_S,
 				px,
 				py,
@@ -481,10 +560,18 @@ function run(scn, profileName) {
 		rec,
 		truth,
 		lag,
+		lagT,
 		delays,
 		rates,
 		dropped: sim.stats.droppedTicks,
 		fps: dts.length / dts.reduce((a, b) => a + b, 0),
+		// what the clock re-anchored onto (the time the server dropped) and what hitch frames did not run through
+		epochShift: cl.clock.stats().epochShift ?? 0,
+		absorbed: cl.snapshots.stats().absorbedS ?? 0,
+		relocks: cl.snapshots.stats().relocks ?? 0,
+		// a breakpoint scenario: when the server came back (client time), and the delay the run ended on
+		resumeT: scn.clockStep !== undefined ? scn.clockStep.at : resumeAt - T0,
+		delayEnd: cl.snapshots.delay(),
 	};
 }
 
@@ -762,6 +849,33 @@ function summarize(res) {
 	return sum;
 }
 
+/**
+ * A breakpoint run after the server came back: the longest the (only) zombie's drawing stood still while the server
+ * had it walking, how many frames from half a second on were drawn past what the server had simulated, and the delay
+ * the run ended on.
+ */
+function afterPause(res) {
+	const [frames] = [...res.rec.values()];
+	let freeze = 0;
+	let still = 0;
+	let prev;
+	for (const f of frames ?? []) {
+		if (f.t > res.resumeT && prev !== undefined && f.live !== undefined && prev.live !== undefined) {
+			const drawn = Math.hypot(f.x - prev.x, f.y - prev.y);
+			const live = Math.hypot(f.live.x - prev.live.x, f.live.y - prev.live.y);
+			if (drawn < 0.05 && live > 0.3) still += f.dt;
+			else if (drawn >= 0.05) still = 0;
+			freeze = Math.max(freeze, still);
+		}
+		prev = f;
+	}
+	let pastAfter = 0;
+	for (let i = 0; i < res.lag.length; i++) {
+		if (res.lagT[i] > res.resumeT + 0.5 && !Number.isFinite(res.lag[i])) pastAfter += 1;
+	}
+	return { freeze, pastAfter, delayEnd: res.delayEnd };
+}
+
 const rate = (n, s) => (s > 0 ? n / s : 0);
 const f2 = v => v.toFixed(2);
 
@@ -778,7 +892,9 @@ function printRow(label, s, res) {
 	console.log(
 		`           tempo: atraso real ${(s.lagMean * 1000).toFixed(0)} ms (p95 ${(s.lagP95 * 1000).toFixed(0)}), ` +
 			`alem do servidor ${s.lagPast} quadros | buffer ${(s.delayMin * 1000).toFixed(0)}-${(s.delayMax * 1000).toFixed(0)} ms | ` +
-			`relogio de render ${f2(s.rateMin)}x-${f2(s.rateMax)}x | ticks perdidos ${res.dropped} | fps ${res.fps.toFixed(0)}`,
+			`relogio de render ${f2(s.rateMin)}x-${f2(s.rateMax)}x | ticks perdidos ${res.dropped} | fps ${res.fps.toFixed(0)} | ` +
+			`epoca reancorada +${(res.epochShift * 1000).toFixed(0)} ms, travadas absorvidas ${(res.absorbed * 1000).toFixed(0)} ms, ` +
+			`atraso fixado ${res.relocks}x`,
 	);
 	console.log(
 		`           servidor: trancos ${f2(rate(s.trTruth, s.seconds))}/s-zumbi | reversoes ${f2(rate(s.srvReversals, s.srvSeconds))}/s | ` +
@@ -843,6 +959,52 @@ const SCENARIOS = {
 		setup: ({ sx, sy }) => [hunter(1, sx - 900, sy - 200, sx, sy)],
 		input: t => (t >= 5 && t < 9 ? { x: 1, y: 0 } : still()),
 	},
+	/*
+	 * A Studio breakpoint on the server (review of 2026-09-23, #4). The Heartbeat stops for 10 s; its next delta is
+	 * clipped to MAX_FRAME_S and the rest is dropped (§3.1). With the epoch fixed at tick0Time the clients' delay
+	 * then held those ~10 s for the rest of the session; re-anchored on the TimePongs it comes back down.
+	 */
+	e: {
+		title: "(e) breakpoint de 10 s no servidor, com um andador vindo de longe",
+		seconds: 10,
+		warmup: 0.5,
+		pause: { at: 2, seconds: 10 },
+		profiles: ["clean", "studio"],
+		ownVerdict: true,
+		setup: ({ sx, sy }) => [hunter(1, sx - 760, sy + 40, sx, sy)],
+		input: still,
+	},
+	/*
+	 * A pause between DELAY_SNAP_S (0.3 s) and RENDER_RESET_S (it was 1 s), on a client that goes on drawing through
+	 * it: the delay snapped up, the render time jumped back by less than RENDER_RESET_S and was HELD -- the horde stood
+	 * frozen for the whole pause again after the server was back.
+	 */
+	f: {
+		title: "(f) o servidor para 0,6 s e o cliente segue desenhando",
+		seconds: 9,
+		warmup: 0.5,
+		pause: { at: 2, seconds: 0.6 },
+		profiles: ["clean"],
+		ownVerdict: true,
+		setup: ({ sx, sy }) => [hunter(1, sx - 760, sy + 40, sx, sy)],
+		input: still,
+	},
+	/*
+	 * The client's clock re-locking (review #4): GetServerTimeNow() steps 0.6 s -- past CLOCK_SNAP_S, so the tick
+	 * estimate jumps -- while the server and the link are perfectly fine. The render time used to follow the clock:
+	 * it jumped with it, the delay snapped after it, and the jump back was HELD (it was under the old 1 s
+	 * RENDER_RESET_S), the horde standing still for the whole step with every snapshot arriving on time.
+	 */
+	g: {
+		title: "(g) o relogio do cliente salta 0,6 s (GetServerTimeNow ressincroniza) com o servidor normal",
+		seconds: 9,
+		warmup: 0.5,
+		clockStep: { at: 3, seconds: 0.6 },
+		profiles: ["clean"],
+		ownVerdict: true,
+		setup: ({ sx, sy }) => [hunter(1, sx - 760, sy + 40, sx, sy)],
+		input: still,
+	},
 	d: {
 		title: "(d) um investidor guardando distancia e investindo, e um andador recuando de tiro duas vezes",
 		seconds: 12,
@@ -870,15 +1032,27 @@ console.log(
 );
 
 const results = {};
-for (const key of Object.keys(SCENARIOS)) {
+/** the breakpoint scenarios' raw runs, judged on their own (`ownVerdict`) */
+const pauses = {};
+for (const key of Object.keys(SCENARIOS).sort()) {
 	const scn = SCENARIOS[key];
 	console.log("\n" + scn.title);
 	results[key] = {};
-	for (const prof of Object.keys(PROFILES)) {
+	for (const prof of scn.profiles ?? Object.keys(PROFILES)) {
 		const res = run(scn, prof);
 		const s = summarize(res);
 		results[key][prof] = s;
 		printRow(prof, s, res);
+		if (scn.pause !== undefined || scn.clockStep !== undefined) {
+			const p = afterPause(res);
+			p.clockStep = scn.clockStep !== undefined;
+			p.summary = s;
+			pauses[`(${key}) ${prof}`] = p;
+			console.log(
+				`           depois do evento: parado no maximo ${(p.freeze * 1000).toFixed(0)} ms com o zumbi andando, ` +
+					`${p.pastAfter} quadros alem do servidor, atraso final ${(res.delayEnd * 1000).toFixed(0)} ms`,
+			);
+		}
 	}
 }
 
@@ -888,6 +1062,7 @@ console.log("\nveredito");
 
 console.log(" o desenho (o cliente contra o cliente perfeito, em todo cenario e link)");
 for (const key of Object.keys(results)) {
+	if (SCENARIOS[key].ownVerdict) continue;
 	for (const prof of Object.keys(results[key])) {
 		const s = results[key][prof];
 		const tag = `(${key}) ${prof}`;
@@ -948,6 +1123,38 @@ console.log(" o atraso (o 'meio lagado')");
 	);
 	const cl = results.a.clean;
 	check("(a) clean: atraso real medio <= 150 ms", cl.lagMean <= 0.15, `${(cl.lagMean * 1000).toFixed(0)} ms`);
+}
+
+console.log(" a pausa do servidor (breakpoint) e o salto do relogio");
+for (const [tag, p] of Object.entries(pauses)) {
+	if (p.clockStep) {
+		// the render time is measured on the snapshots' arrivals, not on the clock: a clock that re-locks moves it by
+		// nothing (snapshotBuffer.ts `clockCorrected`)
+		const s = p.summary;
+		check(
+			`${tag}: o relogio de render nao salta com o relogio do cliente (1x ±12 %)`,
+			s.rateMin >= 0.88 && s.rateMax <= 1.12,
+			`${f2(s.rateMin)}x-${f2(s.rateMax)}x`,
+		);
+	} else {
+		// review #4: with a fixed epoch the delay kept the whole pause for good (9.8 s after a 10 s breakpoint)
+		check(
+			`${tag}: o atraso volta ao normal (<= 300 ms)`,
+			p.delayEnd <= 0.3,
+			`${(p.delayEnd * 1000).toFixed(0)} ms`,
+		);
+	}
+	// review #4: between DELAY_SNAP_S and the old 1 s RENDER_RESET_S the render time was HELD after a resync
+	check(
+		`${tag}: depois do evento, o desenho nunca fica parado mais de 250 ms com o zumbi andando no servidor`,
+		p.freeze <= 0.25,
+		`${(p.freeze * 1000).toFixed(0)} ms`,
+	);
+	check(
+		`${tag}: meio segundo depois da volta, nada desenhado alem do servidor`,
+		p.pastAfter === 0,
+		`${p.pastAfter} quadros`,
+	);
 }
 
 console.log("");

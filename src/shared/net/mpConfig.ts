@@ -28,13 +28,18 @@ export const SIM_HZ = 60 as number;
 export const SIM_HZ_FALLBACK = 30;
 /** seconds per simulation tick */
 export const TICK_DT = 1 / SIM_HZ;
-/** at most this many ticks per server Heartbeat when catching up (§3.1) */
+/** at most this many ticks per server Heartbeat when catching up (§3.1, server/sim/heartbeat.ts) */
 export const MAX_CATCHUP_TICKS = 2;
 /**
- * Heartbeat debt the server carries into the next heartbeats instead of dropping it (§3.1). Every client's clock
- * is `tick0Time + tick / SIM_HZ` (§4.6), so a dropped tick shifts the whole server behind every client's render
- * time for good; a hitch shorter than this is paid back at MAX_CATCHUP_TICKS per heartbeat instead. Only a debt
- * past it is dropped, where catching up would be the storm the cap exists to avoid.
+ * Heartbeat debt the server carries into the next heartbeats instead of dropping it (§3.1, server/sim/heartbeat.ts):
+ * a hitch shorter than this is paid back at MAX_CATCHUP_TICKS per heartbeat, and the world loses no time. Only a
+ * debt past it is dropped, where catching up would be the storm the cap exists to avoid -- and the clients follow
+ * that on their own (client/net/clockSync.ts re-anchors on the server's tick).
+ *
+ * A repaid tick consumes a command like any other, so the input queue keeps the commands that landed during the
+ * hitch instead of capping them at INPUT_BUFFER_MAX (INPUT_GRACE_MAX below, server/sim/players.ts): without that
+ * the repayment emptied every queue (the review of 2026-09-23: 0 -> 3.91 waits a second, tools/test-input-buffer.mjs
+ * case 5). Dropping instead costs every client a hitch of the whole world (tools/test-zombie-motion.mjs, `server`).
  */
 export const MAX_BACKLOG_S = 0.25;
 /** simulation budget per tick, p95, 6 players + 150 zombies (§3.2) */
@@ -137,6 +142,12 @@ export const INPUT_MAX_BYTES = INPUT_HEADER_BYTES + INPUT_REDUNDANCY * CMD_BYTES
 /** server input queue: target depth and maximum (§2.2) */
 export const INPUT_BUFFER_TARGET = 2;
 export const INPUT_BUFFER_MAX = 4;
+/**
+ * The most the queue's ceiling may be raised while the SERVER owes ticks (a hitch, then its debt): one command for
+ * every tick the Heartbeat will still run, so the repayment finds its commands (MAX_BACKLOG_S). The client cannot
+ * raise it -- only the server's own lateness does -- and every tick still consumes exactly one command.
+ */
+export const INPUT_GRACE_MAX = math.floor(MAX_BACKLOG_S * SIM_HZ + 0.5) + MAX_CATCHUP_TICKS;
 /** a command seq must be within ±64 of the last consumed one (§8.1) */
 export const INPUT_SEQ_WINDOW = 64;
 

@@ -19,10 +19,23 @@
  * tools/test-zombie-motion.mjs on the frame times of the owner's Studio playtest: 69 % of the zombie frames were
  * drawn extrapolated or held, 2.4-6.8 frozen frames a second per zombie -- the "laggy, with micro-stutters".
  *
- * The delay starts at the first measured value, and after that is only ever allowed to move by ±5 % of real time
- * so it never shows up as a jolt (§5.1); a gap wider than DELAY_SNAP_S is a resync and jumps. When the history
- * runs dry the state is extrapolated with the velocity of the last two samples, for at most EXTRAPOLATE_MAX_S and
- * never through a wall, and then held still until a packet arrives.
+ * The delay LOCKS on the median of the first LOCK_SAMPLES latenesses after a reset (the first one alone may be a
+ * straggler; it only gets the drawing started), and after that is only ever allowed to move by ±5 % of real time
+ * so it never shows up as a jolt (§5.1). The one exception is a resync: RESYNC_SAMPLES fresh snapshots in a row
+ * landing more than DELAY_SNAP_S away from the mean (a breakpoint, a rejoin) re-lock it the same way, and the
+ * render time follows at once instead of holding. One straggler that far off is left out of the mean. When the
+ * history runs dry the state is extrapolated with the velocity of the last two samples, for at most
+ * EXTRAPOLATE_MAX_S and never through a wall, and then held still until a packet arrives.
+ *
+ * Two things the render time is kept clear of:
+ *   - the CLOCK's corrections (`clockCorrected`): the lateness is measured against the clock, so when the clock
+ *     eases or re-locks (client/net/clockSync.ts, which re-anchors on the server's tick) the mean and the delay move
+ *     with it and the render time does not move at all;
+ *   - a HITCH frame's overrun: a frame of HITCH_FRAME_S or more never carries the render time past the newest tick
+ *     received. In one process (a Studio playtest) the server stood still for that frame too and simulated only
+ *     what its Heartbeat debt allowed (server/sim/heartbeat.ts); the part of the frame it never simulated is added
+ *     to the delay on the spot, which nobody sees -- the screen already stood still that long. Without it the
+ *     render time ran past the data on every hitch and spent seconds easing back behind it.
  *
  * A body sampled at the mid ring's 10 Hz (§4.3) needs one more near interval of buffer than one sampled at 20 Hz,
  * or half of its frames run past its newest sample. It is drawn that much further back, per track (`extra`), eased
@@ -63,14 +76,25 @@ const DELAY_MAX_RATE = 0.05;
 const ARRIVAL_ALPHA = 0.1;
 /** ticks of margin on top of the measured lateness edge: a sample that lands exactly on time is already late */
 const SAFETY_TICKS = 1;
-/** a target this far from the delay in use is a resync (a long stall, a rejoin, a new run), not jitter: jump */
+/** fresh latenesses this far from the mean, RESYNC_SAMPLES in a row, are a resync (a breakpoint, a rejoin) */
 const DELAY_SNAP_S = 0.3;
+/** latenesses whose median locks the delay after a reset */
+const LOCK_SAMPLES = 3;
+/** far-off latenesses on the same side whose median re-locks it on a resync */
+const RESYNC_SAMPLES = 2;
+/** a client frame this long is a hitch: it never carries the render time past the newest tick received */
+export const HITCH_FRAME_S = 0.05;
 /** a slot with no sample for this long is dropped even without a PlayerLeft (§4.4 safety net) */
 const SLOT_TIMEOUT_S = 2;
 /** walk-cycle phase per world unit travelled — the same constant the local survivor uses in the game loop */
 export const FEET_CYCLE_PER_UNIT = 0.09;
-/** a render time this far behind the previous frame's is a resync, not jitter: let it through */
-const RENDER_RESET_S = 1;
+/**
+ * A render time this far behind the previous frame's is a resync, not jitter: let it through. It is DELAY_SNAP_S,
+ * not the 1 s it used to be: between the two, a jump back was HELD, and the whole horde stood frozen for up to a
+ * second (the review of 2026-09-23). With the clock's corrections taken out and a re-lock re-basing the render
+ * time itself, only a caller that skips `clockCorrected` can still get here.
+ */
+const RENDER_RESET_S = DELAY_SNAP_S;
 /**
  * How fast a received body fades in and out, per second. It is the very rate the horde's own `updateAlpha`
  * used before F2 (shared/sim/ai/zombieBrain.ts), and §4.3 leans on it: with the interest hiding whatever is
@@ -335,6 +359,27 @@ export interface SnapshotStats {
 	bosses: number;
 	/** frames whose render time had to be held because it would have gone backwards */
 	stalls: number;
+	/** times the delay was (re)locked from a median: once after a reset, then once per resync */
+	relocks: number;
+	/** seconds of hitch frames the render time did not run through, because no tick had arrived for them */
+	absorbedS: number;
+}
+
+/** the median of a few values (LOCK_SAMPLES), without touching the caller's array */
+function medianOf(values: ReadonlyArray<number>): number {
+	const s = new Array<number>();
+	for (const v of values) {
+		let at = s.size();
+		s.push(v);
+		while (at > 0 && s[at - 1] > v) {
+			s[at] = s[at - 1];
+			at -= 1;
+		}
+		s[at] = v;
+	}
+	const n = s.size();
+	if (n === 0) return 0;
+	return n % 2 === 1 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 
 /**
@@ -391,8 +436,12 @@ export class SnapshotBuffer {
 	/** lateness of the fresh snapshots (see the header), in ticks: running mean and mean deviation */
 	private lateMean = 0;
 	private lateDev = 0;
-	/** the delay has been set from a measured lateness at least once since the last reset */
+	/** the delay has been locked on a median of LOCK_SAMPLES latenesses since the last reset */
 	private delayLocked = false;
+	/** latenesses waiting to (re)lock the delay: the first ones after a reset, or a run of far-off ones */
+	private readonly pending = new Array<number>();
+	private relocks = 0;
+	private absorbedTicks = 0;
 	/** sample spacing of the near and mid rings at this server's rate, in ticks (3 and 6 at 60 Hz) */
 	private nearTicks = ticksPer(SNAP_NEAR_HZ, SIM_HZ);
 	private midTicks = ticksPer(SNAP_MID_HZ, SIM_HZ);
@@ -425,8 +474,24 @@ export class SnapshotBuffer {
 		this.lateMean = 0;
 		this.lateDev = 0;
 		this.delayLocked = false;
+		this.pending.clear();
 		this.newest = -math.huge;
 		this.lastRender = -math.huge;
+	}
+
+	/**
+	 * The client clock moved by `ticks` beyond the frame's own time (client/net/clockSync.ts `lastCorrection`:
+	 * its easing, a re-lock, a new anchor). Called right after the clock's update, before this frame's snapshots
+	 * are received. The lateness is measured against that clock, so the mean and the delay move with it and the
+	 * render time -- clock minus delay -- does not move at all: which tick is drawn is decided by when the
+	 * snapshots arrive, never by how the clock is being corrected.
+	 */
+	clockCorrected(ticks: number): void {
+		if (ticks === 0 || !(ticks > -math.huge && ticks < math.huge) || !this.arrivalSeen) return;
+		this.lateMean += ticks;
+		for (let i = 0; i < this.pending.size(); i++) this.pending[i] += ticks;
+		this.delayS += ticks / this.simHz;
+		this.targetS += ticks / this.simHz;
 	}
 
 	/** PlayerLeft (§4.4): stop drawing that slot at once */
@@ -503,34 +568,66 @@ export class SnapshotBuffer {
 	 * The render time must stay behind the newest sample it can have: that sample left the server up to one near
 	 * interval before `clock − lateness`, and lands a deviation or two later than the mean. Only the BUFFER part is
 	 * clamped: the lateness is whatever the link and the server make it, and clamping it would put the render time
-	 * past the data again (a Studio session that dropped a second of ticks has a second of lateness, for good).
+	 * past the data again (a Studio session that dropped a second of ticks has a second of lateness until the clock
+	 * re-anchors). The lateness may be negative (a clock anchored a scrap late): the render time is the arrival's
+	 * tick minus the buffer either way, so it is not clamped at zero either.
 	 */
 	private noteArrival(arrival: number, late: number): void {
-		if (this.arrivalSeen) {
+		const first = !this.arrivalSeen;
+		if (!first) {
 			const gap = math.max(0, arrival - this.lastArrival);
 			const dev = math.abs(gap - this.intervalS);
 			this.intervalS += (gap - this.intervalS) * ARRIVAL_ALPHA;
 			this.jitterS += (dev - this.jitterS) * ARRIVAL_ALPHA;
-			const lateDev = math.abs(late - this.lateMean);
-			this.lateMean += (late - this.lateMean) * ARRIVAL_ALPHA;
-			this.lateDev += (lateDev - this.lateDev) * ARRIVAL_ALPHA;
-		} else {
-			this.lateMean = late;
-			this.lateDev = 0;
 		}
 		this.arrivalSeen = true;
 		this.lastArrival = arrival;
 		const hz = this.simHz;
+		let lock = false;
+		if (first) {
+			// the drawing has to start somewhere: the first lateness, until LOCK_SAMPLES of them can outvote it
+			this.pending.push(late);
+			this.lateMean = late;
+			this.lateDev = 0;
+			lock = true;
+		} else if (!this.delayLocked || math.abs(late - this.lateMean) > DELAY_SNAP_S * hz) {
+			// the first few after a reset, or one far off: kept apart. A run of far-off ones on the same side is a
+			// resync; a lone straggler (a packet that sat in a stalled link) is simply never averaged in
+			if (this.delayLocked && this.pending.size() > 0) {
+				const side = this.pending[0] > this.lateMean;
+				if (late > this.lateMean !== side) this.pending.clear();
+			}
+			this.pending.push(late);
+			// a resync re-locks on two: the drawing stands still while it waits (the render time is past the data), and
+			// two far-off samples on the same side, 50 ms apart, are no longer one packet stuck in a link
+			if (this.pending.size() >= (this.delayLocked ? RESYNC_SAMPLES : LOCK_SAMPLES)) {
+				// the median and the median deviation: the straggler that was first after a reset outvoted on both
+				const mid = medianOf(this.pending);
+				const spread = new Array<number>();
+				for (const v of this.pending) spread.push(math.abs(v - mid));
+				this.lateMean = mid;
+				this.lateDev = medianOf(spread);
+				this.pending.clear();
+				this.delayLocked = true;
+				this.relocks += 1;
+				lock = true;
+			}
+		} else {
+			this.pending.clear();
+			const lateDev = math.abs(late - this.lateMean);
+			this.lateMean += (late - this.lateMean) * ARRIVAL_ALPHA;
+			this.lateDev += (lateDev - this.lateDev) * ARRIVAL_ALPHA;
+		}
 		const buffer = math.clamp(
 			1 / SNAP_NEAR_HZ + (2 * this.lateDev + SAFETY_TICKS) / hz,
 			INTERP_MIN_S,
 			INTERP_MAX_S,
 		);
-		this.targetS = math.max(0, this.lateMean / hz) + buffer;
-		if (!this.delayLocked) {
-			// the first measurement IS the delay: easing to it from a guess at ±5 % would take seconds. Nothing has
-			// been drawn from a sample yet, so the render time is re-based too instead of being held (a "stall")
-			this.delayLocked = true;
+		this.targetS = this.lateMean / hz + buffer;
+		if (lock) {
+			// a measured lateness IS the delay: easing onto it from a guess at ±5 % would take seconds. The render
+			// time is re-based too instead of being held (a "stall"): after a reset nothing has been drawn from a
+			// sample yet, and after a resync what is on screen is already a held or extrapolated body
 			this.delayS = this.targetS;
 			this.lastRender = -math.huge;
 		}
@@ -561,12 +658,20 @@ export class SnapshotBuffer {
 	advance(dt: number, clockTick: number, now: number, world?: WorldData): void {
 		const step = math.max(0, dt);
 		const maxMove = DELAY_MAX_RATE * step;
-		const diff = this.targetS - this.delayS;
-		// a gap this wide is not jitter: a resync (a stall, a long hitch) is followed at once, and renderTick lets a
-		// jump of more than RENDER_RESET_S through as well; anything smaller is eased, never felt
-		if (math.abs(diff) > DELAY_SNAP_S) this.delayS = this.targetS;
-		else this.delayS += math.clamp(diff, -maxMove, maxMove);
-		const render = this.renderTick(clockTick);
+		// always eased, never felt: the one jump is a (re)lock, which `noteArrival` makes and re-bases the render for
+		this.delayS += math.clamp(this.targetS - this.delayS, -maxMove, maxMove);
+		let render = this.renderTick(clockTick);
+		// a hitch frame never carries the drawing past the newest tick received (see the header): what it would have
+		// run through is time the server has not simulated yet, so it goes into the delay instead, all at once, unseen.
+		// Only the delay: the target stays, and the delay eases back onto it at ±5 % as the server repays its debt
+		if (step >= HITCH_FRAME_S && this.lastRender > -math.huge && this.newest > -math.huge && render > this.newest) {
+			const held = math.max(this.newest, this.lastRender);
+			if (render > held) {
+				this.delayS += (render - held) / this.simHz;
+				this.absorbedTicks += render - held;
+				render = held;
+			}
+		}
 		this.lastRender = render;
 		// a track's own extra delay moves at the same ±5 % of real time as the buffer's
 		const extraStep = maxMove * this.simHz;
@@ -907,6 +1012,8 @@ export class SnapshotBuffer {
 			zombies: this.zombies.size(),
 			bosses: this.bosses.size(),
 			stalls: this.stalls,
+			relocks: this.relocks,
+			absorbedS: this.absorbedTicks / this.simHz,
 		};
 	}
 }
