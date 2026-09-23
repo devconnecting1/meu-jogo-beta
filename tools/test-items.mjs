@@ -1914,6 +1914,396 @@ section("D6. crafting with the item in your hands: what the recipe ate comes off
 	}
 });
 
+// ================================================================ E. skills
+
+section("E1. learning: a point a level, never past the maximum, on the server and in the Bag", () => {
+	checkRows(
+		"ids are the row's index, and every skill has a maximum and a kind",
+		SKILLS,
+		k =>
+			(SKILLS[k.id] === k && k.maxLevel >= 1 && [1, 2, 3].includes(k.kind)) || `max ${k.maxLevel} kind ${k.kind}`,
+	);
+	const craft = new SCRAFT.ServerCraft({ world: W.createWorld(100, 100), build: { placing: () => false } });
+	checkRows(
+		"server (F3's learnSkill): no point, no skill; each level costs one; the maximum refuses and keeps the point",
+		SKILLS,
+		k => {
+			const s = bareSave();
+			s.skillPoint = 0;
+			if (craft.learnSkill(s, k.id).kind !== "refused" || s.skillLevels[k.id] !== 0)
+				return "learnt with no point";
+			s.skillPoint = k.maxLevel + 2;
+			for (let lv = 1; lv <= k.maxLevel; lv++) {
+				const out = craft.learnSkill(s, k.id);
+				if (out.kind !== "learned" || out.level !== lv || s.skillPoint !== k.maxLevel + 2 - lv)
+					return `level ${lv}: ${JSON.stringify(out)} sp ${s.skillPoint}`;
+			}
+			const over = craft.learnSkill(s, k.id);
+			return (
+				(over.kind === "refused" && s.skillLevels[k.id] === k.maxLevel && s.skillPoint === 2) ||
+				`past the max: ${JSON.stringify(over)}`
+			);
+		},
+	);
+	checkRows(
+		"client (the Bag's Learn, MP_PHASE 2): the same, and its button says Learn / No skill points / Max level",
+		SKILLS,
+		k => {
+			const s = bareSave();
+			s.level = 30;
+			s.skillPoint = 0;
+			const bag = bagFor(s);
+			let [m, run] = bag.skillPanel(k);
+			if (m.action.text !== "No skill points" || m.action.enabled) return `with no point: "${m.action.text}"`;
+			run();
+			if (s.skillLevels[k.id] !== 0) return "learnt with no point";
+			s.skillPoint = k.maxLevel + 1;
+			for (let lv = 1; lv <= k.maxLevel; lv++) {
+				[m, run] = bag.skillPanel(k);
+				if (m.action.text !== "Learn" || !m.action.enabled) return `level ${lv - 1}: "${m.action.text}"`;
+				run();
+				if (s.skillLevels[k.id] !== lv || s.skillPoint !== k.maxLevel + 1 - lv)
+					return `level ${lv}: ${s.skillLevels[k.id]}, sp ${s.skillPoint}`;
+			}
+			[m, run] = bag.skillPanel(k);
+			run();
+			return (
+				(m.action.text === "Max level" &&
+					!m.action.enabled &&
+					s.skillLevels[k.id] === k.maxLevel &&
+					s.skillPoint === 1) ||
+				`at max: "${m.action.text}", sp ${s.skillPoint}`
+			);
+		},
+	);
+	checkRows("the Bag's skill has a glyph and its detail text is in lang.ts", SKILLS, k =>
+		inLang(k.name) && inLang(k.detail) ? true : "missing from lang.ts",
+	);
+});
+
+section("E2. points come from levels: skillPoint = level − 1 − spent (server/sim/progress.ts, save.ts)", () => {
+	const PROG = require(join(SRC, "server/sim/progress.ts"));
+	{
+		const s = bareSave();
+		let levels = 0;
+		for (let i = 0; i < 40; i++) levels += PROG.awardExp(s, SAVE.expMaxInit(s.level));
+		checkEq(s.level, 1 + levels, `the server's XP took the survivor to level ${s.level}`);
+		checkEq(s.skillPoint, s.level - 1, "with one skill point per level gained");
+	}
+	checkRows("after learning, the wallet's rule gives back exactly level − 1 − spent (applyWallet)", SKILLS, k => {
+		const s = bareSave();
+		s.level = 12;
+		s.skillLevels[k.id] = k.maxLevel;
+		SAVE.applyWallet(s, { ...SAVE.walletOf(s), level: 12, exp: 0 });
+		return s.skillPoint === 12 - 1 - k.maxLevel || `sp ${s.skillPoint}`;
+	});
+	checkRows(
+		"a report cannot learn past the maximum, spend points it has not got, or keep a point it spent",
+		SKILLS,
+		k => {
+			const base = bareSave();
+			base.level = 3;
+			base.skillPoint = 2;
+			const over = SAVE.sanitizeClientReport(
+				{ ...base, skillLevels: base.skillLevels.map((v, i) => (i === k.id ? k.maxLevel + 5 : v)) },
+				base,
+			);
+			if (over.skillLevels[k.id] > k.maxLevel) return `level ${over.skillLevels[k.id]} past max ${k.maxLevel}`;
+			const spree = SAVE.sanitizeClientReport(
+				{ ...base, skillLevels: base.skillLevels.map(() => 1), skillPoint: 99 },
+				base,
+			);
+			const spent = spree.skillLevels.reduce((a, b) => a + b, 0);
+			if (spent > base.level - 1) return `spent ${spent} of ${base.level - 1}`;
+			const learnt = SAVE.sanitizeClientReport(
+				{ ...base, skillLevels: base.skillLevels.map((v, i) => (i === k.id ? 1 : v)), skillPoint: 2 },
+				base,
+			);
+			return learnt.skillPoint === 1 || `learnt one and kept ${learnt.skillPoint} points`;
+		},
+	);
+});
+
+section("E3. every skill's effect, measured where the game applies it", () => {
+	const world = W.createWorld(8000, 8000);
+	const withSkill = (id, lv) => {
+		const s = bareSave();
+		s.skillLevels[id] = lv;
+		return s;
+	};
+	const effect = {};
+	// 0 Health: +10 max hp a level, on the body the server builds (createPlayer)
+	effect[0] = lv =>
+		Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax === 100 + 10 * lv ||
+		`hpMax ${Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax}`;
+	// 1 Recovery: regeneration × (1 + level) (stepPlayer)
+	effect[1] = lv => {
+		const regen = s => {
+			const p = Ply.createPlayer(s, 1000, 1000);
+			p.hp = 10;
+			for (let i = 0; i < CFG.SIM_HZ; i++) stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			return p.hp - 10;
+		};
+		const a = regen(bareSave());
+		const b = regen(withSkill(1, lv));
+		return near(b / a, 1 + lv, 0.01) || `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+	};
+	/** one blade hit on a zombie through the server's weapon machine: its damage and its knockback */
+	const bladeHit = s => {
+		const fx = weaponFixture(6, { skills: Object.fromEntries(s.skillLevels.map((v, i) => [i, v])) });
+		const z = fx.zombie(1040, 1000);
+		for (let i = 0; i < 30 && fx.combat.statsOf(0).melee === 0; i++) fx.step({ held: true, tx: 2000, ty: 1000 });
+		return { dmg: 1e9 - z.hp, knock: z.reactionSpeed };
+	};
+	// 2 Knockback: +3 a level on a blade's push (server melee)
+	effect[2] = lv => {
+		const a = bladeHit(bareSave()).knock;
+		const b = bladeHit(withSkill(2, lv)).knock;
+		return near(b - a, Math.min(9, a + 3 * lv) - a, 0.01) || `knock ${a} -> ${b}`;
+	};
+	// 3 Melee damage: × (1 + level / 4)
+	effect[3] = lv => {
+		const a = bladeHit(bareSave()).dmg;
+		const b = bladeHit(withSkill(3, lv)).dmg;
+		return b === Math.floor(a * (1 + lv / 4)) || `${a} -> ${b}`;
+	};
+	// 4 Quick reload: reload / (1 + level / 4)
+	effect[4] = lv => {
+		const fx = weaponFixture(10, { mag: 0, skills: { 4: lv } });
+		let t = 0;
+		while (fx.sp.state.weapon.ammoCount === 0 && t < 600) {
+			fx.step({});
+			t++;
+		}
+		return near(t / CFG.SIM_HZ, WEAPONS[10].reload / (1 + lv / 4), 1.01 / CFG.SIM_HZ) || `${(t / 60).toFixed(3)} s`;
+	};
+	/** mean miss distance of 200 rifle shots at 600 u, with the spread roll on a fixed sequence (no recoil) */
+	const scatter = (s, moving) => {
+		const values = [0.9, 0.1, 0.7, 0.3, 0.95, 0.05, 0.6, 0.4, 0.99, 0.01, 0.8];
+		let r = 0;
+		const miss = [];
+		const combat = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			random: () => values[r++ % values.length],
+			hooks: { fx: e => e.t === P.FxType.Shot && miss.push(Math.abs(e.hits[0].y - 4000)) },
+		});
+		s.invenWeapon[13] = 1;
+		s.equipWeapon = 13;
+		s.ammoNormal = 1000;
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 1000, 4000, 0);
+		for (let t = 1; t <= 600; t++) {
+			// running (if `moving`) along the line of fire: the miss is still the y off the survivor's row
+			const cmd = P.makeCommand(t, moving ? 1 : 0, 0, 0, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+			stepPlayer(world, sp.state, s, cmd, TICK_DT);
+			sp.state.weapon.angleRange = 0;
+			combat.stepPlayer(sp, cmd, t, TICK_DT);
+		}
+		return miss.reduce((a, b) => a + b, 0) / Math.max(1, miss.length);
+	};
+	// 5 Shooting skill: a narrower spread roll
+	effect[5] = lv => scatter(withSkill(5, lv), false) < scatter(bareSave(), false) || "no tighter";
+	// 6 Robin Hood: arrows fly at 40 px/frame instead of 25, with half the spread
+	effect[6] = lv => {
+		const speed = s => {
+			const fx = weaponFixture(22, { arrow: 5, skills: { 6: s } });
+			fx.run(1.1, { held: true });
+			fx.step({ release: 1 });
+			return fx.projectiles[0]?.r.speed;
+		};
+		return near(speed(lv) / speed(0), 40 / 25, 1e-6) || `${speed(0)} -> ${speed(lv)}`;
+	};
+	// 7 Trot: +0.3 walking speed a level
+	effect[7] = lv => {
+		const p = Ply.createPlayer(withSkill(7, lv), 0, 0);
+		return (
+			near(Ply.recalcMoveSpeed(p, withSkill(7, lv)), DESIGN.MOVE_SPEED + 0.3 * lv, 1e-9) ||
+			`${Ply.recalcMoveSpeed(p, withSkill(7, lv))}`
+		);
+	};
+	// 8 Patience: hunger drains × (1 − level / 3)
+	effect[8] = lv => {
+		const drain = s => {
+			const p = Ply.createPlayer(s, 1000, 1000);
+			for (let i = 0; i < CFG.SIM_HZ * 10; i++) stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			return p.hungryMax - p.hungry;
+		};
+		return (
+			near(drain(withSkill(8, lv)) / drain(bareSave()), 1 - lv / 3, 0.001) ||
+			`${drain(bareSave()).toFixed(2)} -> ${drain(withSkill(8, lv)).toFixed(2)}`
+		);
+	};
+	// 12 Dwarf: measured in D2 (15 % / 30 % double smelts)
+	effect[12] = () => true;
+	// 16 Nocturnal: the survivor's own light, 1.5× wider for the horde's visibility (the screen: daynight darkAlpha)
+	effect[16] = lv => {
+		const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+		const lit = s => {
+			const w = W.createWorld(8000, 8000);
+			const sim = new ServerSimulation({
+				world: w,
+				clock: new WorldClock({ day: 1, dayTime: 0 }),
+				zombies: true,
+				interactive: false,
+			});
+			const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 4000, 4000, sim.tick, sim.simHz);
+			sim.add(sp);
+			for (let i = 0; i < 3; i++) sim.step();
+			sp.state.x = 4000;
+			sp.state.y = 4000;
+			sim.step();
+			return Brain.spawnAlpha(sim.horde.refs, sp.state.x + 330, sp.state.y) === 1;
+		};
+		return (!lit(bareSave()) && lit(withSkill(16, lv))) || "330 u is not lit by the wider light";
+	};
+	// 17 Repairman: a repair restores half the hp instead of a quarter (server interaction)
+	effect[17] = lv => {
+		const repaired = s => {
+			const w = W.serverWorld(W.createWorld(8000, 8000));
+			const sim = new ServerSimulation({
+				world: w,
+				clock: new WorldClock({ day: 1, dayTime: 12 }),
+				zombies: false,
+				interactive: true,
+			});
+			s.invenEtc[23] = 5;
+			const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 3000, 3000, sim.tick, sim.simHz);
+			sim.add(sp);
+			sp.state.x = 3000;
+			sp.state.y = 3000;
+			const b = W.addSolid(w, {
+				kind: "barricade",
+				x: 2950,
+				y: 3025,
+				w: 128,
+				h: 32,
+				hp: 100,
+				hpMax: 700,
+				destructible: true,
+				tags: "barricade",
+				placeable: 10,
+				owner: 0,
+			});
+			PL.ingestInput(
+				sp,
+				P.encodeInput({
+					viewTick: 0,
+					viewFrac: 0,
+					cmds: [P.makeCommand(1, 0, 0, 0, 0, P.packEdges(0, 0, 1, 0))],
+				}),
+				0,
+			);
+			sim.step();
+			return (b.hp - 100) / b.hpMax;
+		};
+		const a = repaired(bareSave());
+		const b = repaired(withSkill(17, lv));
+		return (near(a, 0.25, 1e-9) && near(b, 0.5, 1e-9)) || `${a} -> ${b} of the hp`;
+	};
+	// 18 Move shooting: running adds no spread
+	effect[18] = lv => {
+		const runPlain = scatter(bareSave(), true);
+		const runSkilled = scatter(withSkill(18, lv), true);
+		return runSkilled < runPlain || `running: ${runPlain.toFixed(1)} -> ${runSkilled.toFixed(1)}`;
+	};
+	// 19 Head shooter: a shot within 2° of the body centre, 10 % of the time, deals +50 %
+	effect[19] = lv => {
+		const hit = s => {
+			const world2 = W.createWorld(4000, 4000);
+			const z = createZombie(1, 1200, 1000, 1);
+			z.hp = 1e9;
+			const combat = new ServerCombat({
+				world: world2,
+				targets: { zombies: () => [z], bosses: () => [] },
+				random: () => 0.05,
+			});
+			s.invenWeapon[10] = 1;
+			s.equipWeapon = 10;
+			s.ammoNormal = 10;
+			const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 1000, 1000, 0);
+			const cmd = P.makeCommand(1, 0, 0, 0, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+			stepPlayer(world2, sp.state, s, cmd, TICK_DT);
+			combat.stepPlayer(sp, cmd, 1, TICK_DT);
+			return 1e9 - z.hp;
+		};
+		const a = hit(bareSave());
+		const b = hit(withSkill(19, lv));
+		return b === a + Math.floor(a / 2) || `${a} -> ${b}`;
+	};
+	// 20 Poison immunity: half the poison damage
+	effect[20] = lv => {
+		// an empty belly on both sides, so no regeneration muddies it: starving costs the same with or without the skill
+		const poisoned = (s, poison) => {
+			const p = Ply.createPlayer(s, 1000, 1000);
+			p.buffs.poison = poison ? 100 : 0;
+			const hp = p.hp;
+			for (let i = 0; i < CFG.SIM_HZ; i++) {
+				p.hungry = 0;
+				stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			}
+			return hp - p.hp;
+		};
+		const starving = poisoned(bareSave(), false);
+		const a = poisoned(bareSave(), true) - starving;
+		const b = poisoned(withSkill(20, lv), true) - starving;
+		return (a > 0 && near(b, a / 2, 0.01)) || `poison ${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+	};
+	const measured = SKILLS.filter(k => effect[k.id] !== undefined);
+	checkRows("each measurable skill does what it says at every level", measured, k => {
+		for (let lv = 1; lv <= k.maxLevel; lv++) {
+			const out = effect[k.id](lv);
+			if (out !== true) return `level ${lv}: ${out === false ? "no effect" : out}`;
+		}
+		return true;
+	});
+	// the rest act inside the horde (server): read, at least, by the code that runs at MP_PHASE 2
+	const brain = source("shared/sim/ai/zombieBrain.ts");
+	check(
+		/skillLevels\[9\]/.test(brain),
+		"Pickpocket (9) is read where a zombie's drop is rolled (zombieBrain dropLoot)",
+	);
+	check(/skillLevels\[15\]/.test(brain), "Cat (15) is read where footsteps make noise (zombieBrain)");
+	{
+		// who reads each skill id, in the modules the shipped phase runs (the client's non-predicted combat does not)
+		const running = [
+			"server/sim/combat.ts",
+			"server/sim/craft.ts",
+			"server/sim/interaction.ts",
+			"server/sim/items.ts",
+			"shared/sim/playerMove.ts",
+			"shared/sim/ai/zombieBrain.ts",
+			"shared/game/player.ts",
+			"client/systems/craftSystem.ts",
+			"client/systems/interaction.ts",
+			"client/systems/daynight.ts",
+		].map(rel => source(rel));
+		const reads = id => running.some(src => new RegExp(`skillLevels\\[${id}\\]|SKILL_[A-Z_]+ = ${id};`).test(src));
+		const dead = SKILLS.filter(k => !reads(k.id));
+		knownBug(
+			"K1",
+			dead.length > 0,
+			"skills that cost a point and do nothing in the shipped game (read by no running code)",
+			dead.map(k => `${k.name} (${k.detail})`).join("; "),
+		);
+	}
+	{
+		// Health bought mid-life: the body keeps the max hp it was built with until the next body (death, new life)
+		const craft = new SCRAFT.ServerCraft({ world, build: { placing: () => false } });
+		const s = bareSave();
+		s.level = 5;
+		s.skillPoint = 4;
+		const p = Ply.createPlayer(s, 1000, 1000);
+		craft.learnSkill(s, 0);
+		for (let i = 0; i < CFG.SIM_HZ; i++) stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+		knownBug(
+			"K2",
+			p.hpMax === 100,
+			"Health learnt mid-life gives no max hp until the next body (hpMax is set only by createPlayer)",
+			`hpMax ${p.hpMax} after learning Health 1`,
+		);
+	}
+});
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
