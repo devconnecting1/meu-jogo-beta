@@ -1006,6 +1006,60 @@ section(
 	}
 }
 
+// ================================================================ (a4) what the server notes as sent is what went out
+
+section("(a4) the server takes a body as drawn only if a part that went out carried it (second review, NIT 2)");
+{
+	/*
+	 * Which bodies a viewer has a track for, and in which ring, is what `viewLagOf` judges its shots by. It was noted
+	 * as the snapshot was BUILT, before the encoder, which drops whatever does not fit its four parts: a body cut there
+	 * was marked sent -- with a ring -- to a client that never had a track for it. SNAP_ZOMBIE_CAP keeps the live horde
+	 * well inside four parts, so it is lifted here to let the encoder do the cutting: 600 zombies within 800 u of one
+	 * survivor at noon, and after a few snapshots every body the server marks sent must be one the client decoded,
+	 * and the other way round.
+	 */
+	const cap = CFG.SNAP_ZOMBIE_CAP;
+	CFG.SNAP_ZOMBIE_CAP = 1000;
+	try {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		server.sim.clock.setClock(12);
+		seedHorde(server, 600, cx, cy, 780);
+		for (let i = 0; i < 12; i++) tickServer(server);
+		const client = server.clients.get(0);
+		const horde = server.sim.horde;
+		let inInterest = 0;
+		let carried = 0;
+		let notedNotCarried = 0;
+		let carriedNotNoted = 0;
+		for (const z of horde.zombies) {
+			const netId = horde.netIdOf(z);
+			// slot 0's half of the (viewer, netId) table: its keys are the netIds themselves
+			const pair = server.replicator.hordeRings.rings.get(netId);
+			if (pair === undefined) continue;
+			inInterest += 1;
+			const got = client.counts.has(netId);
+			if (got) carried += 1;
+			if (pair.sent && !got) notedNotCarried += 1;
+			if (!pair.sent && got) carriedNotNoted += 1;
+		}
+		info(
+			`${inInterest} zombies in interest, ${carried} carried by the parts that went out, ` +
+				`${server.replicator.stats.droppedEntities} cut on the way`,
+		);
+		check(
+			carried > 0 && carried < inInterest,
+			`the encoder's ${CFG.SNAP_MAX_PARTS} parts carried some of the horde and not all of it (${carried} of ${inInterest})`,
+		);
+		checkEq(notedNotCarried, 0, "no body the parts left out is taken as drawn by the client");
+		checkEq(carriedNotNoted, 0, "and every body they carried is");
+	} finally {
+		CFG.SNAP_ZOMBIE_CAP = cap;
+	}
+}
+
 // ================================================================ (b) interest, walls and the dark
 
 section("(b) interest rings and the anti-wallhack rules of §4.3");

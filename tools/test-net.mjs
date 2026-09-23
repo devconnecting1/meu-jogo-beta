@@ -862,6 +862,16 @@ test("Snap: worst case of the doc fits 900 B per packet", () => {
 	ok(floodRes.dropped > 0, "zombies past the last part must be counted as dropped");
 	const floodGot = decodeParts(floodRes.parts);
 	eq("dropped accounting", floodGot.zombies.length + floodRes.dropped, flood.zombies.length);
+	// which zombies went out, part by part: the replicator notes those, and only those, as sent (server/net/replication.ts)
+	eq("one count per part", floodRes.partZombies.length, floodRes.parts.length);
+	let from = 0;
+	for (let i = 0; i < floodRes.parts.length; i++) {
+		const got = P.decodeSnapshotPart(floodRes.parts[i]).zombies.map(z => z.netId);
+		const want = flood.zombies.slice(from, from + floodRes.partZombies[i]).map(z => z.netId);
+		eq(`part ${i} carries the zombies partZombies says, in order`, got.join(","), want.join(","));
+		from += floodRes.partZombies[i];
+	}
+	eq("and the rest is what was dropped", flood.zombies.length - from, floodRes.dropped);
 	// players/bosses above the caps are dropped and counted too
 	const many = randSnapshot(9, 0, 5, true, false);
 	const manyRes = P.encodeSnapshot(many);
