@@ -28,8 +28,21 @@ export const SIM_HZ = 60 as number;
 export const SIM_HZ_FALLBACK = 30;
 /** seconds per simulation tick */
 export const TICK_DT = 1 / SIM_HZ;
-/** at most this many ticks per server Heartbeat when catching up; beyond that time is dropped (§3.1) */
+/** at most this many ticks per server Heartbeat when catching up (§3.1, server/sim/heartbeat.ts) */
 export const MAX_CATCHUP_TICKS = 2;
+/**
+ * Heartbeat debt the server carries into the next heartbeats instead of dropping it (§3.1, server/sim/heartbeat.ts):
+ * a hitch shorter than this is paid back at MAX_CATCHUP_TICKS per heartbeat, and the world loses no time. Only a
+ * debt past it is dropped, where catching up would be the storm the cap exists to avoid -- and the clients follow
+ * that on their own (client/net/clockSync.ts re-anchors on the server's tick).
+ *
+ * A repaid tick consumes a command like any other, so the input queue keeps the commands that landed during the
+ * hitch instead of capping them at INPUT_BUFFER_MAX (INPUT_GRACE_MAX below, server/sim/players.ts): without that
+ * the repayment emptied every queue (the review of 2026-09-23: 0 -> 3.91 waits a second, tools/test-input-buffer.mjs
+ * case 5). Only while the debt IS repaid: a heartbeat under 30 Hz owes ticks it never runs (server/sim/heartbeat.ts).
+ * Dropping instead costs every client a hitch of the whole world (tools/test-zombie-motion.mjs, `server`).
+ */
+export const MAX_BACKLOG_S = 0.25;
 /** simulation budget per tick, p95, 6 players + 150 zombies (§3.2) */
 export const TICK_BUDGET_P95_MS = 6;
 /** expected average simulation cost per tick (§3.2) */
@@ -130,6 +143,13 @@ export const INPUT_MAX_BYTES = INPUT_HEADER_BYTES + INPUT_REDUNDANCY * CMD_BYTES
 /** server input queue: target depth and maximum (§2.2) */
 export const INPUT_BUFFER_TARGET = 2;
 export const INPUT_BUFFER_MAX = 4;
+/**
+ * The most the queue's ceiling may be raised while the SERVER repays ticks it owes (a hitch, then its debt): one
+ * command for every tick the Heartbeat will still run, so the repayment finds its commands (MAX_BACKLOG_S). Only a
+ * debt being repaid counts (server/sim/heartbeat.ts `grace`); the client cannot raise it -- only the server's own
+ * lateness does -- and every tick still consumes exactly one command.
+ */
+export const INPUT_GRACE_MAX = math.floor(MAX_BACKLOG_S * SIM_HZ + 0.5) + MAX_CATCHUP_TICKS;
 /** a command seq must be within ±64 of the last consumed one (§8.1) */
 export const INPUT_SEQ_WINDOW = 64;
 
@@ -137,6 +157,13 @@ export const INPUT_SEQ_WINDOW = 64;
 
 /** near ring (snapshots at SNAP_NEAR_HZ) */
 export const INTEREST_NEAR = 800;
+/**
+ * A body already in the near ring leaves it only past this (hysteresis, like INTEREST_EXIT over INTEREST_MID). Each
+ * change of ring changes how far back the client draws it (client/net/snapshotBuffer.ts `extra`, eased over a second)
+ * and the server has to follow that to judge a shot at it (server/net/interest.ts); a body hovering on 800 u must not
+ * flip it every snapshot (the review of dee095a, S3).
+ */
+export const INTEREST_NEAR_EXIT = 880;
 /** mid ring (per entity at SNAP_MID_HZ) */
 export const INTEREST_MID = 1500;
 /** leave-interest radius (hysteresis over INTEREST_MID) */
@@ -203,12 +230,43 @@ export const FLOOD_MALFORMED_WINDOW_S = 10;
 
 // ---------------------------------------------------------------- lag compensation (§2.3)
 
-/** zombie/boss position history ring: 24 ticks = 400 ms at 60 Hz */
+/**
+ * zombie/boss position history ring: 24 ticks = 400 ms at 60 Hz, which must hold the deepest rewind --
+ * REWIND_MAX_S + MID_REWIND_EXTRA_S -- plus two ticks (tools/test-combat.mjs c' checks it)
+ */
 export const HISTORY_TICKS = 24;
-/** maximum hitscan rewind */
+/**
+ * Maximum hitscan rewind of a body the shooter draws in the NEAR ring. One drawn in the mid ring is rewound up to
+ * MID_REWIND_EXTRA_S further (350 ms in all): it is drawn that much further back (§2.3; the review of dee095a, N3).
+ */
 export const REWIND_MAX_S = 0.3;
-/** melee is not rewound; it gets a latency margin instead */
+/**
+ * A target the shooter draws in the MID ring is drawn that much further back (client/net/snapshotBuffer.ts, the
+ * track's `extra`: one near interval, 3 ticks at 60 Hz), so the server rewinds it that much further too -- and
+ * lets its ceiling reach this much further for it alone (§2.3; the review of 2026-09-23, #2).
+ */
+export const MID_REWIND_EXTRA_S = 0.05;
+/**
+ * The declared view is judged within this many ticks of the shooter's own running offset (§2.3 continuity): an
+ * honest client's view moves smoothly, so a view that jumps inside the ping ceiling for one shot is clamped back.
+ */
+export const VIEW_CONTINUITY_TICKS = 3;
+
+/** how many ticks further back than the buffer's render time a client draws a body of the mid ring (§4.3, §5.1) */
+export function midViewExtraTicks(simHz = SIM_HZ): number {
+	return math.max(0, ticksPer(SNAP_MID_HZ, simHz) - ticksPer(SNAP_NEAR_HZ, simHz));
+}
+/**
+ * Melee is not rewound; it gets a latency margin of reach instead (§2.3): what a walker (MELEE_MARGIN_UPS) covers
+ * in the time an honest view is old -- the measured ping, the queue's TARGET wait (the measured one is the client's
+ * to choose: a queue kept at INPUT_BUFFER_MAX bought ~6 u) and the interpolation delay -- never less
+ * than MELEE_RANGE_MARGIN (the old fixed 130 ms) nor more than MELEE_RANGE_MARGIN_MAX (server/sim/combat.ts
+ * `meleeMargin`). At 140 ms of RTT a body is drawn ~225 ms old: 20 u of walk the fixed 12 u did not cover.
+ */
 export const MELEE_RANGE_MARGIN = 12;
+export const MELEE_RANGE_MARGIN_MAX = 24;
+/** the walker speed the melee margin is sized for, units per second (90 u/s, shared/data/zombies.ts type 1) */
+export const MELEE_MARGIN_UPS = 90;
 export const MELEE_ARC_MARGIN_DEG = 6;
 /** optional "fair bite": rewind cap of the victim's view */
 export const FAIR_BITE_REWIND_MAX_S = 0.15;
@@ -219,6 +277,12 @@ export const FAIR_BITE_REWIND_MAX_S = 0.15;
 export const INTERP_DEFAULT_S = 0.1;
 export const INTERP_MIN_S = 0.08;
 export const INTERP_MAX_S = 0.25;
+/**
+ * The client's render delay never moves faster than this fraction of real time (§5.1): the buffer's own, and a
+ * mid-ring body's extra near interval when it changes ring (client/net/snapshotBuffer.ts). The server mirrors the
+ * second to judge a shot where the body was drawn (server/net/interest.ts `viewExtra`), so both read it here.
+ */
+export const RENDER_DELAY_RATE = 0.05;
 /** extrapolation when the interpolation buffer runs dry */
 export const EXTRAPOLATE_MAX_S = 0.1;
 /** reconciliation: re-simulate above this error; visual offset decays with this τ; snaps above this */
