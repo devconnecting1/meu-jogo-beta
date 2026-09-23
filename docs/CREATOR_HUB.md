@@ -39,10 +39,21 @@ desktop/mobile/tablet/console habilitados.
   > be picked back up.
   >
   > No pay-to-win: everything that decides whether you live through the night is earned in the game.
+  >
+  > Rules: play fair (no exploits, cheats or scripts, no abusing bugs), be kind in chat, keep personal
+  > information private, don't ruin the game for other survivors on purpose, and follow the Roblox Community
+  > Standards. Breaking a rule can get you kicked or banned; only a person bans, never the game on its own.
+  > Appeals: message us through our group: <link do grupo>.
 
-  A última linha não é marketing: é a regra que já governa a loja, e dizê-la na página filtra a expectativa
-  certa de quem entra.
-- **Classificação 13+**: correta. Violência estilizada contra zumbis, sem sangue realista.
+  A linha do pay-to-win não é marketing: é a regra que já governa a loja, e dizê-la na página filtra a
+  expectativa certa de quem entra. **As regras e o recurso são obrigatórios** (diretrizes de ban do Roblox:
+  regras que todo usuário possa ler, e um jeito de recorrer ao criador): são o mesmo texto de
+  `src/shared/data/rules.ts` (no jogo em How to play › Rules), e a mensagem de ban aponta para **esta página**,
+  que é o único lugar que um jogador banido ainda consegue abrir. Troque `<link do grupo>` pelo link do grupo
+  e ponha o mesmo grupo em **Social links**.
+- **Classificação**: não se escolhe aqui — sai do questionário (abaixo, "Maturity & Compliance"). Com as
+  respostas honestas o jogo fica **Moderate (13+)**: o sobrevivente derrubado rasteja sangrando (consequência
+  realista = violência moderada) e há sangue de pixel a cada golpe, poças por 10 s e manchas secas no mapa.
 - **Gêneros**: Survival como principal; Action como secundário.
 - **Dispositivos**: desktop, celular e tablet ligados (temos controles de toque medidos em 500 combinações de
   tela). **Console pode ficar ligado** — o suporte a gamepad existe e foi construído junto. VR desligado.
@@ -87,26 +98,75 @@ Alerta de taxa de erro e de crash. É o que avisa que algo quebrou sem depender 
 O jogo não chama serviço externo nenhum. A nossa chave de Open Cloud vive no `.env` local, fora do jogo, e
 **não** deve ser colocada aqui.
 
-### Webhooks — **opcional**
+### Webhooks — **opcional (depois dos modelos de RTBF)**
 
-Útil o dia em que quisermos avisar de moderação ou de publicação num canal. Não é bloqueante.
+Um gatilho **Right to Erasure Request** (com segredo) avisa na hora de um pedido de exclusão, em vez de
+esperar a mensagem diária da caixa de entrada. Não é bloqueante: os modelos de RTBF (abaixo) apagam sozinhos
+o que cabe neles, e o resto sai com `npm run cloud -- erase <userId>`.
 
-### Data Stores manager — **atenção agora**
+### Data Stores manager — **RTBF: faça antes de publicar**
 
-Contém `ProjectZ_Save_v2`, com save real dentro (já verificado por API). **Risco ativo**: com o acesso do
-Studio a serviços de API ligado, um playtest no Studio escreve nesse mesmo store — o de produção. A F3 vai
-mexer no formato do save (v3), e testar migração contra o store de produção é a receita para perder save. A
-correção é de três linhas (sufixo `_studio` quando `RunService:IsStudio()`) e está na fila, esperando o
-arquivo `server/main.server.ts` sair da mão do agente da F2-2D.
+O Roblox manda **todo dia** para a caixa de entrada do Creator Hub a lista de pedidos de exclusão de dados
+(direito ao esquecimento, RTBF), e quem responde por apagar é o criador. O caminho recomendado são os **modelos
+de exclusão**: com eles, o Roblox apaga sozinho as chaves de quem pediu.
+
+**Checklist — Configure → Data Stores Manager → RTBF → Create template** (uma linha por modelo):
+
+| # | Tipo | Data store | Chave (`key pattern`) | Escopo |
+| --- | --- | --- | --- | --- |
+| 1 | Standard | `ProjectZ_Save_v2` | `{UserId}` | `global` |
+| 2 | Standard | `ProjectZ_Save_v1` | `{UserId}` | `global` |
+| 3 | Standard | `ProjectZ_Titles` | `{UserId}` | `global` |
+| 4 | Standard | `ProjectZ_Save_v2_studio` | `{UserId}` | `global` |
+| 5 | Standard | `ProjectZ_Save_v1_studio` | `{UserId}` | `global` |
+| 6 | Standard | `ProjectZ_Titles_studio` | `{UserId}` | `global` |
+
+- [ ] Escreva `{UserId}` exatamente assim (`{userId}` não vale) e confira a **amostra** de cada modelo: um UserId
+      de teste deve virar a chave `12345` no escopo `global`.
+- [ ] **Se o painel recusar a chave `{UserId}` sozinha**, não mude as chaves do jogo: use o comando abaixo para
+      cada pedido da mensagem diária.
+- [ ] `ProjectZ_AdminLog` **não tem modelo**: é um log com vários jogadores por chave (uma por servidor por dia,
+      `log_AAAAMMDD_<job>`). Ele guarda só UserIds e texto filtrado (`server/admin/auditLog.ts`); para cada pedido,
+      `npm run cloud -- erase <userId>` tira as entradas sobre aquele jogador.
+- [ ] `ProjectZ_Worlds` não tem dado de jogador (semente, dias, JobId, uma contagem): fica de fora.
+- [ ] **Para cada pedido da mensagem diária:** `npm run cloud -- erase <userId> --dry-run` (mostra o plano, não
+      lê a chave), depois `npm run cloud -- erase <userId>` no PC, com o `.env`. A chave precisa de ler, listar,
+      atualizar e apagar **entradas** de data store. Apagar marca a chave como apagada; o Roblox remove as versões
+      antigas em até 30 dias (o mesmo prazo dos modelos).
+
+Cada gravação do save e do registro de títulos leva o UserId do dono (`UpdateAsync` devolve `[userId]`), então
+o próprio Data Stores Manager mostra de quem é cada chave. O sufixo `_studio` (feito) separa os playtests do
+Studio dos saves de produção.
 
 ### Leaderboard — **depois da F2**
 
 Recorde de dias sobrevividos, via `OrderedDataStore`. Depende do XP e do progresso já serem do servidor
 (F2-2C), senão o ranking premia quem edita o cliente.
 
-### Extended services / Questionnaire — **pule**
+### Maturity & Compliance Questionnaire — **obrigatório, e declarando o sangue**
 
-Nada que o jogo use hoje.
+Sem o questionário completo e correto, o Roblox **restringe a experiência para todos**; declarar menos do que o
+jogo mostra é o que gera moderação (declarar a mais não é punido). O jogo tem: sangue vermelho do sobrevivente e
+verde dos zumbis a cada golpe, poças que duram 10 s, manchas de sangue seco no mapa, o sobrevivente derrubado que
+**rasteja sangrando** por 30 s (MP-03), zumbis que somem ao morrer, armas e hordas à noite.
+
+**Checklist — Configure → Maturity & Compliance (Questionnaire):**
+
+- [ ] **Violence:** Yes → intensidade **Moderate**. Os zumbis somem ao morrer (seria Mild), mas basta **um**
+      momento de consequência realista, e o sobrevivente derrubado rastejando e sangrando imita um ferimento real.
+- [ ] **Blood:** Yes → **Unrealistic** (pixel, e verde nos zumbis) → **não** é "infrequent / fleeting" (a cada
+      golpe, poças de 10 s, manchas permanentes no mapa): o nível pesado do sangue irrealista.
+- [ ] **Fear:** Yes → **Mild** (NPCs assustadores, música e batimento cardíaco, tensão das ondas à noite; nada de
+      susto repentino nem conteúdo perturbador).
+- [ ] **Crude humor:** No. **Romance:** No. **Alcohol:** No. **Strong language:** No (o chat é filtrado pelo
+      Roblox; conteúdo de jogador não conta).
+- [ ] **Gambling:** No. **Paid random items:** No (os pacotes da loja têm conteúdo fixo e declarado e custam
+      moedas do jogo, não Robux — MON-03). **Paid item trading:** No.
+- [ ] **Free-form user creation:** No (construir barricada/porta é peça pronta, sem texto nem desenho livre).
+      **Social hangout:** No (é um jogo de sobrevivência).
+- [ ] Rótulo esperado: **Moderate (13+)** — o mesmo `AGE_RATING_13_PLUS` que a API mostra hoje. Confira também
+      o resultado de conformidade regional.
+- [ ] Refaça o questionário quando o conteúdo mudar (ex.: Robux, anúncios, sangue realista).
 
 ---
 
@@ -154,10 +214,14 @@ carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**
 - **Access settings**: mantenha **privado** até a F2 fechar e o teste de 2 clientes passar. Publicar um jogo
   em que dois jogadores veem hordas diferentes queima a primeira impressão, que não volta.
 - **Communication settings**: o chat já está no `TextChatService` (trocado do legado). O nosso chat é **por
-  proximidade**, filtrado no servidor (MP-17). Voz continua desligada: não está no design e adiciona
-  superfície de moderação.
+  proximidade**, filtrado no servidor (MP-17), **sem sussurro** (o `/whisper` do Roblox fica desligado pelo
+  jogo) e sem barra de digitar no lobby, onde ninguém ouve (MP-18). Voz continua desligada: não está no design
+  e adiciona superfície de moderação.
 - **Localization**: os textos do jogo passam por `src/shared/data/lang.ts`. O original tinha coreano; hoje
   respondemos em inglês. Traduzir é barato e amplia alcance, mas só depois que os textos pararem de mudar.
+  A **Automatic Text Capture** pode ser ligada: todo rótulo que mostra nome de jogador ou texto digitado (placar,
+  palco do lobby, aviso do admin, painel de admin) tem `AutoLocalize` desligado, então nenhum nome vai parar na
+  tabela de tradução.
 
 ---
 
@@ -179,9 +243,27 @@ carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**
 
 ---
 
+## Moderação e bans
+
+- **`Players.BanningEnabled`** liga o `BanAsync` / `UnbanAsync` / `GetBanHistoryAsync` do painel de admin e não
+  pode ser mudado por script. Ele agora vai **fixo** no `default.project.json`, então todo `rojo build` (o place
+  da CI e o `npm run cloud -- publish`) o leva ligado; a CI confere o `.rbxlx` que o Rojo escreveu
+  (`npm run check:place`), e o `publish` se recusa a subir sem ele. Depois do próximo publish, abra o painel de
+  admin e peça o **Ban history** de um UserId qualquer: deve responder sem "Ban API failed".
+- A mensagem de ban diz o motivo **filtrado** e aponta para as regras e o recurso na página da experiência.
+- O log do painel guarda só UserIds e texto filtrado, numa chave por servidor por dia (`server/admin/auditLog.ts`).
+- Os bans podem ser revistos em Creator Hub → **Moderation → Bans**.
+
+---
+
 ## Resumo do que depende de você
 
-1. **Nome e descrição** em Settings (a API ignora esses dois).
-2. **Server management**: decidir como será o "jogar sozinho".
-3. **Alerts**: ligar antes de publicar.
-4. **Access settings**: manter privado até a F2 fechar.
+1. **Nome e descrição** em Settings (a API ignora esses dois), **com as regras e o recurso** e o link do grupo.
+2. **Maturity & Compliance Questionnaire**: responder como na checklist acima (Moderate, sangue irrealista
+   frequente, medo leve).
+3. **RTBF**: criar os seis modelos do Data Stores Manager; para cada pedido da mensagem diária, `npm run cloud
+   -- erase <userId>`.
+4. **Server management**: decidir como será o "jogar sozinho".
+5. **Alerts**: ligar antes de publicar.
+6. **Access settings**: manter privado até a F2 fechar.
+7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
