@@ -22,7 +22,7 @@
  * repaints itself as the previous flat look (BackgroundColor3 + UIStroke + UICorner). The UI is never blank.
  */
 import { SKIN_TEXTURES, SKIN_TEXTURE_NAMES, SKIN_UNIT, SkinTextureName } from "./skinAssets";
-import { BORDER, RADIUS, THEME } from "./theme";
+import { BORDER, OVER_WORLD, RADIUS, THEME, TRANSPARENCY } from "./theme";
 
 const ContentProvider = game.GetService("ContentProvider");
 const GuiService = game.GetService("GuiService");
@@ -441,6 +441,78 @@ export function clearTextOutline(label: TextLabel | TextButton | TextBox): void 
 /** fades a text object */
 export function fadeText(label: TextLabel | TextButton, time: number, transparency: number): void {
 	tweenTo(label, time, { TextTransparency: transparency });
+}
+
+/** how far the drop shadow of textShadow falls, down and to the right: one skin pixel */
+export const TEXT_SHADOW_PX = 1;
+
+/**
+ * DESIGN_RULES UI-04, clarification (2026-09-23): A SHADOW IS NOT AN OUTLINE. The one text effect the game allows, and
+ * only for text drawn straight over the WORLD, where no plate may go (the nameplate, client/ui/nameplate.ts): a pixel
+ * DROP SHADOW -- a copy of the label in OVER_WORLD.shadow at TRANSPARENCY.textShadow, TEXT_SHADOW_PX skin pixel down
+ * and to the right, under it. It traces each glyph on ONE side and "lands" the text on the ground, the way classic
+ * pixel games write over their maps; a contour would ring the glyph on every side, and that is still forbidden.
+ * `npm run test:contrast` accepts this function as the only source of a text shadow in src/ and checks its shape;
+ * `npm run test:world-art` (section 8) measures the colours that use it against every ground, by day and at night.
+ *
+ * Call it once, after the label is set up and parented. Plain, fixed-size text only: a RichText colour tag would
+ * colour the shadow, and TextScaled would fit the copy on its own. From then on the copy follows the label by itself
+ * -- text, size, font, place, visibility and fade -- so the owner keeps writing the label and nothing else, and no
+ * Instance is created after this call. It goes when the label goes.
+ */
+export function textShadow(label: TextLabel): TextLabel {
+	const s = new Instance("TextLabel");
+	s.Name = `${label.Name}Shadow`;
+	s.BackgroundTransparency = 1;
+	s.BackgroundColor3 = THEME.background;
+	s.BorderSizePixel = 0;
+	s.Active = false;
+	s.TextColor3 = OVER_WORLD.shadow;
+	s.TextStrokeTransparency = 1;
+	s.RichText = false;
+	s.TextScaled = false;
+	s.AutoLocalize = label.AutoLocalize;
+	s.AnchorPoint = label.AnchorPoint;
+	s.AutomaticSize = label.AutomaticSize;
+	s.Size = label.Size;
+	s.TextXAlignment = label.TextXAlignment;
+	s.TextYAlignment = label.TextYAlignment;
+	s.TextWrapped = label.TextWrapped;
+	// under the label it shadows: siblings draw by ZIndex
+	s.ZIndex = label.ZIndex - 1;
+	const place = (): void => {
+		const px = TEXT_SHADOW_PX * skinPx();
+		const p = label.Position;
+		s.Position = new UDim2(p.X.Scale, p.X.Offset + px, p.Y.Scale, p.Y.Offset + px);
+	};
+	const fade = (): void => {
+		// the shadow fades with its letters: at the label's full opacity it is TRANSPARENCY.textShadow
+		s.TextTransparency = 1 - (1 - TRANSPARENCY.textShadow) * (1 - label.TextTransparency);
+	};
+	s.Text = label.Text;
+	s.FontFace = label.FontFace;
+	s.TextSize = label.TextSize;
+	s.Visible = label.Visible;
+	fade();
+	label.GetPropertyChangedSignal("Text").Connect(() => {
+		s.Text = label.Text;
+	});
+	label.GetPropertyChangedSignal("FontFace").Connect(() => {
+		s.FontFace = label.FontFace;
+	});
+	label.GetPropertyChangedSignal("TextSize").Connect(() => {
+		s.TextSize = label.TextSize;
+	});
+	label.GetPropertyChangedSignal("Visible").Connect(() => {
+		s.Visible = label.Visible;
+	});
+	label.GetPropertyChangedSignal("TextTransparency").Connect(fade);
+	label.GetPropertyChangedSignal("Position").Connect(place);
+	label.Destroying.Connect(() => s.Destroy());
+	// the skin pixel grows with the screen (1 px at 720p, 2 at 1080p)
+	onLayoutChange(s, place);
+	s.Parent = label.Parent;
+	return s;
 }
 
 // ---------------------------------------------------------------- box strokes (frames only)

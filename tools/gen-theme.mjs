@@ -73,6 +73,11 @@ const COLOR_TOKENS = [
 	["stat-bonus", "chart-1"],
 	/** a status effect and how long it lasts (speed boost, pain relief): orange */
 	["stat-effect", "chart-3"],
+	/**
+	 * the level written straight over the WORLD (the nameplate's "LV 12", docs/DESIGN_RULES UI-04): chart-2's hue and
+	 * chroma, lighter, so it reads on every ground with its pixel shadow. A theme without it falls back to chart-2
+	 */
+	["stat-level", "chart-2"],
 	// the HUD console's bar fills (docs/DESIGN_RULES UI-09): each is its game colour made one step darker, so the light
 	// label centred on the bar reads at 4,5:1 (UI-05). A theme without them falls back to the game colour itself
 	/** the HP bar's fill: destructive's hue and chroma, darker */

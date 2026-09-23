@@ -1,25 +1,30 @@
 /*
- * The HUD console and the day plate (docs/DESIGN_RULES.md UI-09): the in-run HUD in the vocabulary of the owner's
- * "Settings" window (UI-07). Layout idea from Pixel Quest's HUD -- one framed console at the bottom centre --
- * and nothing else from it: every piece below is one of OUR kit's pieces and means something in OUR game.
+ * The HUD console (docs/DESIGN_RULES.md UI-09): the in-run HUD in the vocabulary of the owner's "Settings" window
+ * (UI-07). Layout idea from Pixel Quest's HUD -- one framed console at the bottom centre -- and nothing else from it:
+ * every piece below is one of OUR kit's pieces and means something in OUR game.
  *
- *   desktop, 638 x 114 design units (x the UI size setting), 12 above the bottom edge
- *   #=============================================================================================#
- *   # .-----------------------. .--------------------------------------. .-------------------.   #
- *   # | [####HP 88 / 100####..] | |[1 ]  [2 ]  [3 ]  [   ]  [   ]       | | Pistol            |   #
- *   # | [##FOOD 58 / 100##....] | |[ D]  [ A]  [ P]  (   )  (   )       | | Pistol            |   #
- *   # | [#LV 3 · 30 / 120.....] | |           [7/41]                   | | [ 7 / 41        ] |   #
- *   # '-----------------------' '--------------------------------------' '-------------------'   #
- *   #                                [bag  B]  [menu  P]                                          #
- *   #=============================================================================================#
- *     the UI-07 frame and graphite body; three section plates (lighter iron) holding dark grooves:
- *     vitals (three bars)          weapons (five tiles on a groove bed)   the weapon in hand (name,
- *                                  and under it the Bag / Menu plates     type, a magazine readout)
+ *   desktop, 766 x 114 design units (x the UI size setting), 12 above the bottom edge
+ *   #==========================================================================================================#
+ *   # .------------. .-----------------------. .----------------------------------. .-------------------.    #
+ *   # | .  . O .   | | [####HP 88 / 100####..] | |[1 ]  [2 ]  [3 ]  [   ]  [   ]   | | Pistol            |    #
+ *   # |.         !.| | [##FOOD 58 / 100##....] | |[ D]  [ A]  [ P]  (   )  (   )   | | Pistol            |    #
+ *   # |___________ | | [#LV 3 · 30 / 120.....] | |           [7/41]               | | [ 7 / 41        ] |    #
+ *   # |   Day 5    | '-----------------------' '----------------------------------' '-------------------'    #
+ *   # |Night in 2:10|                             [bag  B]  [menu  P]                                       #
+ *   #==========================================================================================================#
+ *     the UI-07 frame and graphite body; four section plates (lighter iron) holding dark grooves:
+ *     the sky (hudSky.ts: the day    vitals (three bars)   weapons (five tiles on a groove    the weapon in hand
+ *     clock -- the sun's arc, the                          bed, and under it the Bag / Menu    (name, type, a
+ *     world's day, the countdown)                          plates)                             magazine readout)
  *
  *   touch (compact): the vitals and the weapons sections only, 512 x 88 design units, scaled so a tile is a thumb
- *   wide and placed in the free band between the move stick and the fire controls (placeTouchConsole).
+ *   wide and placed in the free band between the move stick and the fire controls (placeTouchConsole). The sky goes
+ *   where the touch controls put the Bag and the Menu: the top-right row (hud.ts), not into the thumbs' band.
  *
  * What each part is in the game:
+ *  - the sky, at the left end: the world's clock read the way a survivor needs it -- the WORLD's day (MP-20), how long
+ *    until nightfall and the horde, and at night how long until daybreak (hudSky.ts). It replaced the day plate that
+ *    floated at the top centre, the last loose card of the HUD;
  *  - the three bars are the survivor's HP, food (hunger, 0..100) and XP towards the next level, with the level
  *    written in the XP bar ("LV 3 · 30 / 120"), like the reference. Each fill is a plate in relief (plate.ts) in
  *    its BAR token, darkened until the light label reads at 4,5:1 (UI-05); the label is never outlined (UI-04);
@@ -53,7 +58,8 @@ import { iconKeys } from "shared/data/itemIcons";
 import { IconView, drawItemIcon, maxFrameCount } from "./itemIcon";
 import { weaponKindName } from "./itemInfo";
 import { PlateState, paintPlate, reliefPx } from "./plate";
-import { BAR, GAME, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
+import { BAR, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
+import { HudSky, Px, SKY_STACK_H, SKY_STACK_W, pixelIcon, skySection } from "./hudSky";
 import { SCHEMES, currentScheme } from "./tutorial";
 import { Groove, Section } from "./window";
 import * as W from "./widgets";
@@ -97,7 +103,6 @@ export interface HudState {
 }
 
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
-const EXTRA_BOLD = fontOf("sans", Enum.FontWeight.ExtraBold);
 const NUMERIC = fontOf("mono", Enum.FontWeight.Bold);
 
 // ---------------------------------------------------------------- layout (design units)
@@ -115,7 +120,10 @@ interface Layout {
 	barH: number;
 	barGap: number;
 	tile: number;
-	/** the weapon column and the Bag / Menu plates (desktop only: on touch the touch layer owns those buttons) */
+	/**
+	 * the sky section, the weapon column and the Bag / Menu plates (desktop only: on touch the touch layer owns those
+	 * buttons, and the sky rides in their row)
+	 */
 	full: boolean;
 }
 
@@ -141,20 +149,30 @@ function barsH(L: Layout): number {
 	return 3 * L.barH + 2 * L.barGap;
 }
 
-/** the console's size from its parts: [vitals] [hotbar (+ the Bag / Menu row)] [weapon], each in its section */
+/** the sky section and the gap after it (desktop only; 0 on touch) */
+function skyW(L: Layout): number {
+	return L.full ? L.inset * 2 + SKY_STACK_W + L.colGap : 0;
+}
+
+/**
+ * the console's size from its parts: [sky] [vitals] [hotbar (+ the Bag / Menu row)] [weapon], each in its section
+ */
 function sized(L: Layout): Layout {
 	const vitalsW = L.inset * 2 + L.barW;
 	const hotbarW = L.inset * 2 + bedW(L.tile);
 	const sideW = L.full ? L.colGap + L.inset * 2 + SIDE_W : 0;
-	L.w = L.pad * 2 + vitalsW + L.colGap + hotbarW + sideW;
+	L.w = L.pad * 2 + skyW(L) + vitalsW + L.colGap + hotbarW + sideW;
 	const hotbarH = L.inset * 2 + L.tile + BED_PAD * 2 + (L.full ? ICON_ROW_GAP + ICON_H : 0);
-	L.h = L.pad * 2 + math.max(L.inset * 2 + barsH(L), hotbarH);
+	const skyH = L.full ? L.inset * 2 + SKY_STACK_H : 0;
+	L.h = L.pad * 2 + math.max(L.inset * 2 + barsH(L), hotbarH, skyH);
 	return L;
 }
 
 /**
- * 10 + 200 + 8 + 266 + 8 + 136 + 10 = 638 wide, 10 + 94 + 10 = 114 tall: bars 188 x 22 (3 x 22 + 2 x 8 = 82),
- * tiles 46 (the bed 254 x 54), the Bag / Menu row 22 under the hotbar's section.
+ * 10 + 120 + 8 + 200 + 8 + 266 + 8 + 136 + 10 = 766 wide, 10 + 94 + 10 = 114 tall: the sky 108 x 82 in its
+ * section, bars 188 x 22 (3 x 22 + 2 x 8 = 82), tiles 46 (the bed 254 x 54), the Bag / Menu row 22 under the
+ * hotbar's section. The sky made it 128 wider and not one unit taller: height is what the world can least spare on
+ * a wide screen (the owner's 1365 x 567 shows 567 px of town).
  */
 export const DESKTOP_LAYOUT: Layout = sized({
 	w: 0,
@@ -203,30 +221,8 @@ const HIT_HOT = 0.4;
 /** the blink: sin(t x 8) -- 1,27 blinks a second, far under the 3 a second of WCAG 2.3.1 */
 const BLINK_RATE = 8;
 
-// ---------------------------------------------------------------- pixel icons
+// ---------------------------------------------------------------- pixel icons (7 x 7 grids: hudSky.ts pixelIcon)
 
-/** a pixel-art icon: [x, y, w, h] rectangles on a grid, drawn with Frames that fill their host */
-type Px = [number, number, number, number];
-
-const SUN: Array<Px> = [
-	[2, 2, 3, 3],
-	[3, 0, 1, 1],
-	[3, 6, 1, 1],
-	[0, 3, 1, 1],
-	[6, 3, 1, 1],
-	[1, 1, 1, 1],
-	[5, 1, 1, 1],
-	[1, 5, 1, 1],
-	[5, 5, 1, 1],
-];
-/** a crescent, horns to the right */
-const MOON: Array<Px> = [
-	[2, 0, 3, 1],
-	[1, 1, 2, 1],
-	[0, 2, 2, 3],
-	[1, 5, 2, 1],
-	[2, 6, 3, 1],
-];
 /** a satchel: the handle, and the body with its buckle (the hole shows the plate) */
 const BAG: Array<Px> = [
 	[2, 0, 3, 1],
@@ -243,30 +239,6 @@ const MENU: Array<Px> = [
 	[0, 3, 7, 1],
 	[0, 6, 7, 1],
 ];
-
-/** draws `rects` (a 7 x 7 grid) in `color`, filling `host`; returns the icon's frame (shown / hidden as one) */
-function pixelIcon(host: GuiObject, name: string, rects: Array<Px>, color: Color3, zIndex: number): Frame {
-	const icon = new Instance("Frame");
-	icon.Name = name;
-	icon.BackgroundTransparency = 1;
-	icon.BackgroundColor3 = THEME.background;
-	icon.BorderSizePixel = 0;
-	icon.Size = UDim2.fromScale(1, 1);
-	icon.ZIndex = zIndex;
-	for (let i = 0; i < rects.size(); i++) {
-		const [x, y, w, h] = rects[i];
-		const f = new Instance("Frame");
-		f.Name = `Px${i}`;
-		f.BorderSizePixel = 0;
-		f.BackgroundColor3 = color;
-		f.Position = UDim2.fromScale(x / 7, y / 7);
-		f.Size = UDim2.fromScale(w / 7, h / 7);
-		f.ZIndex = zIndex;
-		f.Parent = icon;
-	}
-	icon.Parent = host;
-	return icon;
-}
 
 // ---------------------------------------------------------------- key legends (tutorial.ts SCHEMES)
 
@@ -370,6 +342,49 @@ export function placeTouchConsole(L: TouchLayout, layout: Layout, k: number): Co
 	const w = layout.w * scale;
 	const h = layout.h * scale;
 	return { x: cx - w / 2, y: math.max(L.inset + edge, ceiling - h), w, h, scale };
+}
+
+function overlapsAny(r: PxRect, list: Array<PxRect>): boolean {
+	for (const [x0, y0, x1, y1] of list) if (r[0] < x1 && x0 < r[2] && r[1] < y1 && y0 < r[3]) return true;
+	return false;
+}
+
+/**
+ * Where the touch sky plate goes (hudSky.ts skyPlate): in the touch controls' top row, the row of Menu and Bag -- the
+ * one strip of a touch screen no thumb control reaches (input.ts keeps RELOAD and USE a whole button under it) -- and
+ * as tall as those buttons, so the three read as one row. Its first free place, from the geometry bootstrap.ts
+ * hit-tests with and the console's own rect `deck`:
+ *  1. just left of the Menu button (its normal home);
+ *  2. at the left end of the row, when the console floats up there (a crowded phone: placeTouchConsole's last step);
+ *  3. under the console, and 4. over it, when the whole row is taken.
+ * "Free" = on screen, below the Roblox bar, clear by TOUCH_GAP of the thumbs, of Menu / Bag and of the console.
+ */
+export function placeTouchSky(L: TouchLayout, deck: PxRect, plateW: number, plateH: number): ConsolePlacement {
+	const unit = math.max(L.scale, 0.5);
+	const gap = TOUCH_GAP * unit;
+	const edge = TOUCH_EDGE * unit;
+	const h = L.pause.r * 2;
+	const scale = h / plateH;
+	const w = plateW * scale;
+	const top = L.pause.y - L.pause.r;
+	const grow = (r: PxRect): PxRect => [r[0] - gap, r[1] - gap, r[2] + gap, r[3] + gap];
+	const obstacles: Array<PxRect> = [];
+	for (const r of thumbRects(L)) obstacles.push(grow(r));
+	for (const b of [L.pause, L.bag]) obstacles.push(grow([b.x - b.r, b.y - b.r, b.x + b.r, b.y + b.r]));
+	obstacles.push(grow(deck));
+	const cx = (deck[0] + deck[2]) / 2 - w / 2;
+	const spots: Array<[number, number]> = [
+		[L.pause.x - L.pause.r - gap - w, top],
+		[edge, top],
+		[cx, deck[3] + gap],
+		[cx, deck[1] - gap - h],
+	];
+	for (const [x, y] of spots) {
+		const r: PxRect = [x, y, x + w, y + h];
+		const onScreen = x >= edge - 0.001 && x + w <= L.viewW - edge + 0.001 && y >= L.inset && y + h <= L.viewH;
+		if (onScreen && !overlapsAny(r, obstacles)) return { x, y, w, h, scale };
+	}
+	return { x: spots[0][0], y: top, w, h, scale };
 }
 
 // ---------------------------------------------------------------- bars
@@ -480,6 +495,8 @@ export class HudConsole {
 	private readSize = -1;
 	private readPool = -1;
 	private readReloading = false;
+	/** the sky at the left end (desktop; on touch hud.ts places its own in the top-right row) */
+	private sky: HudSky | undefined;
 
 	constructor(root: Frame, tr: (key: string) => string, compact: boolean, k: number, cb: ConsoleCallbacks) {
 		const L = compact ? COMPACT_LAYOUT : DESKTOP_LAYOUT;
@@ -516,9 +533,13 @@ export class HudConsole {
 		const z = body.ZIndex + 1;
 		const inner = L.h - L.pad * 2;
 
-		// ---- left: the three bars
+		// ---- left end (desktop): the sky -- the world's day, the sun's arc and the countdown to the horde (hudSky.ts)
+		if (L.full) this.sky = skySection(body, tr, L.pad, L.pad, L.inset, z);
+		const vitalsX = L.pad + skyW(L);
+
+		// ---- then the three bars
 		const vitalsW = L.inset * 2 + L.barW;
-		const vitals = Section(body, "Vitals", { x: L.pad, y: L.pad, w: vitalsW, h: inner, zIndex: z }).frame;
+		const vitals = Section(body, "Vitals", { x: vitalsX, y: L.pad, w: vitalsW, h: inner, zIndex: z }).frame;
 		const barY = (i: number): number => L.inset + (inner - L.inset * 2 - barsH(L)) / 2 + i * (L.barH + L.barGap);
 		const faces = [BAR.hp, BAR.food, BAR.xp];
 		const names = ["Hp", "Food", "Xp"];
@@ -527,7 +548,7 @@ export class HudConsole {
 		}
 
 		// ---- middle: the hotbar on its groove bed, in its section
-		const hotbarX = L.pad + vitalsW + L.colGap;
+		const hotbarX = vitalsX + vitalsW + L.colGap;
 		const hotbarW = L.inset * 2 + bedW(L.tile);
 		const hotbarH = L.inset * 2 + L.tile + BED_PAD * 2;
 		const hotbar = Section(body, "Weapons", { x: hotbarX, y: L.pad, w: hotbarW, h: hotbarH, zIndex: z }).frame;
@@ -878,6 +899,7 @@ export class HudConsole {
 			this.updateTile(this.tiles[k], k, order[k] ?? -1, state, save, schemeChanged);
 		}
 		if (this.layout.full) this.updateSide(state);
+		this.sky?.update(state, now);
 	}
 
 	private setBar(bar: ConsoleBar, ratio: number, face: Color3, plate: PlateState, on: boolean): void {
@@ -1007,135 +1029,5 @@ export class HudConsole {
 		// the magazine in the numbers' yellow (the empty one in red), the reserve after it in the muted voice
 		const magColor = state.mag <= 0 ? STAT.penalty : STAT.value;
 		label.Text = `<font color="${hex(magColor)}">${state.mag}</font> / ${W.fmtInt(state.ammoPool)}`;
-	}
-}
-
-// ---------------------------------------------------------------- the day plate
-
-const DAY_W = 300;
-const DAY_H = 44;
-const DAY_ICON = 21;
-const DAY_TEXT_X = 44;
-const DAY_TEXT_W = 100;
-const DAY_RIGHT_X = 160;
-const DAY_RIGHT_W = DAY_W - DAY_RIGHT_X - 12;
-
-/** morning / afternoon / evening / night of an in-game hour */
-function phaseKey(t: number): string {
-	if (t >= 19 || t < 6) return "Night";
-	if (t < 11) return "Morning";
-	if (t < 16) return "Afternoon";
-	return "Evening";
-}
-
-/**
- * The day plate, top centre: a small UI-07 window body with the sun (or the moon at night) in pixels, the WORLD's
- * "Day N" in ExtraBold, and at its right the phase; under the phase, HH:MM when a watch is equipped and this life's
- * day when it has parted from the world's (MP-13 / MP-20: while they agree, the second number explains nothing).
- */
-export class HudDay {
-	readonly frame: Frame;
-	private readonly tr: (key: string) => string;
-	private readonly dayLabel: TextLabel;
-	private readonly phaseLabel: TextLabel;
-	private readonly clockLabel: TextLabel;
-	private readonly lifeLabel: TextLabel;
-	private readonly sun: Frame;
-	private readonly moon: Frame;
-	private day = -1;
-	private life = -1;
-	private phase = "";
-	private minute = -1;
-	private night: boolean | undefined;
-	private twoLines: boolean | undefined;
-
-	constructor(root: Frame, tr: (key: string) => string, k: number) {
-		this.tr = tr;
-		const box = W.makeAnchored(root, "DayPlate", 0.5, 0, DAY_W, DAY_H, 0, 10, true, k);
-		box.ZIndex = 2;
-		this.frame = box;
-		const body = W.Card(box, "Body", { x: 0, y: 0, w: DAY_W, h: DAY_H, fill: SURFACE.window, pad: 12 });
-		const z = body.ZIndex + 1;
-		const icon = W.makeFrame(body, "SunMoon", 14, (DAY_H - DAY_ICON) / 2, DAY_ICON, DAY_ICON, THEME.background, {
-			transparency: 1,
-			zIndex: z,
-		});
-		this.sun = pixelIcon(icon, "Sun", SUN, GAME.sun, z);
-		this.moon = pixelIcon(icon, "Moon", MOON, GAME.moon, z);
-		this.moon.Visible = false;
-		this.dayLabel = W.makeLabel(body, "Day", "", DAY_TEXT_X, 0, DAY_TEXT_W, DAY_H, TEXT.xl2, THEME.foreground, {
-			font: EXTRA_BOLD,
-			align: "left",
-			zIndex: z,
-		});
-		W.Separator(body, "Divider", {
-			x: DAY_RIGHT_X - 10,
-			y: 10,
-			length: DAY_H - 20,
-			vertical: true,
-			color: SURFACE.line,
-			zIndex: z,
-		});
-		this.phaseLabel = W.makeLabel(body, "Phase", "", DAY_RIGHT_X, 13, DAY_RIGHT_W, 18, TEXT.sm, THEME.foreground, {
-			font: "label",
-			align: "left",
-			zIndex: z,
-		});
-		this.clockLabel = W.makeLabel(body, "Clock", "", DAY_RIGHT_X, 24, 48, 15, TEXT.xs, THEME.mutedForeground, {
-			mono: true,
-			weight: Enum.FontWeight.Regular,
-			align: "left",
-			zIndex: z,
-		});
-		this.lifeLabel = W.makeLabel(
-			body,
-			"Life",
-			"",
-			DAY_RIGHT_X + 48,
-			24,
-			DAY_RIGHT_W - 48,
-			15,
-			TEXT.xs,
-			THEME.mutedForeground,
-			{
-				font: "caption",
-				align: "right",
-				zIndex: z,
-			},
-		);
-	}
-
-	update(state: HudState): void {
-		if (state.day !== this.day) {
-			this.day = state.day;
-			this.dayLabel.Text = `${this.tr("Day")} ${state.day}`;
-		}
-		// MP-13 + MP-20: this life's day only once "New game" (or joining an old town) has parted it from the world's
-		const life = state.lifeDay !== state.day ? state.lifeDay : -1;
-		if (life !== this.life) {
-			this.life = life;
-			this.lifeLabel.Text = life >= 0 ? `${this.tr("Life day")} ${life}` : "";
-		}
-		const phase = phaseKey(state.dayTime);
-		if (phase !== this.phase) {
-			this.phase = phase;
-			this.phaseLabel.Text = this.tr(phase);
-		}
-		const minute = state.showClock ? math.floor(state.dayTime * 60) % (24 * 60) : -1;
-		if (minute !== this.minute) {
-			this.minute = minute;
-			this.clockLabel.Text = minute >= 0 ? string.format("%02d:%02d", math.floor(minute / 60), minute % 60) : "";
-		}
-		// the phase takes the middle of the plate when nothing goes under it
-		const twoLines = minute >= 0 || life >= 0;
-		if (twoLines !== this.twoLines) {
-			this.twoLines = twoLines;
-			this.phaseLabel.Position = UDim2.fromScale(DAY_RIGHT_X / DAY_W, (twoLines ? 5 : 13) / DAY_H);
-		}
-		if (state.isNight !== this.night) {
-			this.night = state.isNight;
-			this.sun.Visible = !state.isNight;
-			this.moon.Visible = state.isNight;
-		}
 	}
 }

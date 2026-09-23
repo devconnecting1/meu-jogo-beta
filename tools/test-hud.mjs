@@ -41,6 +41,9 @@ const { computeTouchLayout, MIN_TOUCH_PX } = require(join(SRC, "shared/engine/in
 const { THEME, SURFACE, BAR, STAT, GAME } = require(join(SRC, "client/ui/theme.ts"));
 const { iconOf } = require(join(SRC, "shared/data/itemIcons.ts"));
 const { iconFrameCount } = require(join(SRC, "client/ui/itemIcon.ts"));
+const Clock = require(join(SRC, "shared/sim/clock.ts"));
+const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
+const { NIGHTFALL_WARN_S, SKY_PLATE_W, SKY_PLATE_H } = require(join(SRC, "client/ui/hudSky.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -124,7 +127,6 @@ function deepAll(root, name) {
 const deep = (root, name) => deepAll(root, name)[0];
 const hudRoot = () => ctx.hudLayer.FindFirstChild("HudRoot");
 const consoleFrame = () => deep(hudRoot(), "Console");
-const dayPlate = () => deep(hudRoot(), "DayPlate");
 const tile = k => deep(consoleFrame(), `Slot${k + 1}`);
 /** the notched plate a kit host wears (plate.ts): its face colour, and whether it is raised or ringed */
 const face = host => host?.FindFirstChild("PlateFace")?.BackgroundColor3;
@@ -473,28 +475,159 @@ check(
 	`${deep(consoleFrame(), "WeaponName")?.Text} / ${deep(consoleFrame(), "WeaponType")?.Text} / ${deep(consoleFrame(), "Magazine")?.Text}`,
 );
 
-// the day plate: the world's day, this life's day only when they differ (MP-13 / MP-20)
-const dayText = name => deep(dayPlate(), name)?.Text;
-hud.update(state({ day: 5, lifeDay: 5 }));
+// ---------------------------------------------------------------- 4b) the sky (the day clock, hudSky.ts)
+
+console.log("\n4b) o ceu: o relogio do dia virou uma secao do console (UI-09)\n");
+
+const sky = () => deep(consoleFrame(), "SkyWindow");
+const skyText = name => deep(sky(), name)?.Text;
+const bodyX = () => deep(sky(), "Body").Position.X.Scale;
+const bodyY = () => deep(sky(), "Body").Position.Y.Scale;
+/** the countdown as the sky must write it: the phase's words and the dawn wait's own M:SS, the number in `color` */
+const hexOf = c =>
+	`#${[c.R, c.G, c.B]
+		.map(v =>
+			Math.round(v * 255)
+				.toString(16)
+				.padStart(2, "0"),
+		)
+		.join("")}`;
+const expectCount = (t, color = STAT.value) => {
+	const night = Clock.isNightAt(t);
+	const left = Clock.secondsUntilHour(t, night ? Clock.DAY_BREAK_HOUR : Clock.NIGHTFALL_HOUR);
+	return `${night ? "Daybreak in" : "Night in"} <font color="${hexOf(color)}">${countdown(left)}</font>`;
+};
+check("a placa do dia solta no topo saiu", deep(hudRoot(), "DayPlate") === undefined);
+{
+	const sections = ["Sky", "Vitals", "Weapons", "Hand"].map(n => deep(consoleFrame(), n));
+	check(
+		"o ceu e a primeira secao do console, na ponta esquerda: Sky | Vitals | Weapons | Hand",
+		sections.every(f => f !== undefined) &&
+			sections.every((f, i) => i === 0 || f.Position.X.Scale > sections[i - 1].Position.X.Scale),
+		sections.map(f => f?.Position.X.Scale.toFixed(3)).join(" < "),
+	);
+	check(
+		"o console so ficou mais largo, nao mais alto (a altura e o que o mundo menos pode ceder)",
+		DESKTOP_LAYOUT.h === 114 && DESKTOP_LAYOUT.w === 766,
+		`${DESKTOP_LAYOUT.w} x ${DESKTOP_LAYOUT.h}`,
+	);
+}
+hud.update(state({ day: 5, lifeDay: 5, dayTime: 14.5 }));
 check(
-	'"Day 5" em ExtraBold, e nenhum dia da vida quando os dois concordam',
-	dayText("Day") === "Day 5" &&
-		dayText("Life") === "" &&
-		deep(dayPlate(), "Day").FontFace.Weight.Name === "ExtraBold",
-	`${dayText("Day")} / "${dayText("Life")}"`,
+	'"Day 5" (o dia do MUNDO) em ExtraBold, e nenhum dia da vida quando os dois concordam',
+	skyText("Day") === "Day 5" &&
+		deep(sky(), "Day").FontFace.Weight.Name === "ExtraBold" &&
+		deep(sky(), "Extra").Visible === false,
+	`${skyText("Day")} / extra ${deep(sky(), "Extra").Visible}`,
 );
-hud.update(state({ day: 5, lifeDay: 2 }));
-check("New game: Life day 2 ao lado do Day 5", dayText("Day") === "Day 5" && dayText("Life") === "Life day 2");
-hud.update(state({ day: 5, lifeDay: 5 }));
-check("de novo iguais: o segundo numero some", dayText("Life") === "");
-check("sem relogio no inventario, sem HH:MM", dayText("Clock") === "" && dayText("Phase") === "Afternoon");
+check(
+	"de dia: a contagem ate o anoitecer, em segundos reais, no amarelo dos numeros",
+	skyText("Countdown") === expectCount(14.5),
+	skyText("Countdown"),
+);
+hud.update(state({ day: 5, lifeDay: 2, dayTime: 14.5 }));
+check(
+	"New game: Life day 2 embaixo, e o Day 5 do mundo nao muda",
+	skyText("Day") === "Day 5" && deep(sky(), "Extra").Visible && skyText("Extra") === "Life day 2",
+	skyText("Extra"),
+);
+hud.update(state({ day: 5, lifeDay: 5, dayTime: 14.5 }));
+check("de novo iguais: a linha some", deep(sky(), "Extra").Visible === false);
 hud.update(state({ showClock: true, dayTime: 14.5 }));
-check("com relogio: 14:30", dayText("Clock") === "14:30", dayText("Clock"));
-hud.update(state({ dayTime: 21, isNight: true }));
+check("com relogio (o item): 14:30 na linha de baixo", skyText("Extra") === "14:30", skyText("Extra"));
+hud.update(state({ showClock: true, lifeDay: 2, dayTime: 14.5 }));
+check("os dois juntos", skyText("Extra") === "Life day 2 · 14:30", skyText("Extra"));
+
+// the sun travels the arc left -> right from 06:00 to 19:00, and the path it left behind goes dim
+const xs = [];
+for (const t of [6.01, 9, 12.5, 16, 18.99]) {
+	hud.update(state({ dayTime: t }));
+	xs.push(bodyX());
+}
+hud.update(state({ dayTime: 12.5 }));
 check(
-	"a noite: lua de pixel, Night",
-	deep(dayPlate(), "Moon").Visible && !deep(dayPlate(), "Sun").Visible && dayText("Phase") === "Night",
+	"o sol anda da esquerda (06:00) para a direita (19:00), subindo ate o meio-dia",
+	xs.every((x, i) => i === 0 || x > xs[i - 1]) && xs[0] < 0.2 && xs[4] > 0.8 && bodyY() < 0.2,
+	xs.map(x => x.toFixed(2)).join(" -> "),
 );
+const dotColors = () =>
+	deep(sky(), "Dot1") === undefined
+		? []
+		: sky()
+				.GetChildren()
+				.filter(c => c.Name.startsWith("Dot"))
+				.map(c => (sameColor(c.BackgroundColor3, SURFACE.section) ? "." : "o"))
+				.join("");
+check(
+	"o caminho que o sol ja fez fica apagado; o que falta do dia fica claro",
+	/^\.+o+$/.test(dotColors()),
+	dotColors(),
+);
+const pips = () =>
+	sky()
+		.GetChildren()
+		.filter(c => c.Name.startsWith("Pip") && c.Visible);
+check(
+	"de dia, um pip vermelho so, na ponta do por do sol: a horda vem ao anoitecer",
+	pips().length === 1 && pips()[0].Position.X.Scale > 0.9 && sameColor(pips()[0].BackgroundColor3, STAT.penalty),
+);
+check("de dia: o sol, nao a lua", deep(sky(), "Sun").Visible && !deep(sky(), "Moon").Visible);
+
+// the night: the moon, the three waves, the countdown to daybreak (MP-21's words)
+hud.update(state({ dayTime: 23, isNight: true }));
+check(
+	"a noite: a lua de pixel, e a contagem ate o amanhecer (06:00) nas palavras da espera (Daybreak in)",
+	deep(sky(), "Moon").Visible && !deep(sky(), "Sun").Visible && skyText("Countdown") === expectCount(23),
+	skyText("Countdown"),
+);
+check(
+	"a noite: um pip por onda (19:00, 22:00, 01:00); as que ja comecaram ficam apagadas",
+	pips().length === 3 &&
+		pips().filter(p => sameColor(p.BackgroundColor3, STAT.penalty)).length === 1 &&
+		pips().filter(p => sameColor(p.BackgroundColor3, SURFACE.section)).length === 2,
+	pips()
+		.map(p => (sameColor(p.BackgroundColor3, STAT.penalty) ? "!" : "."))
+		.join(""),
+);
+hud.update(state({ dayTime: 2, isNight: true }));
+check(
+	"depois da 01:00 as tres ja comecaram",
+	pips().every(p => sameColor(p.BackgroundColor3, SURFACE.section)),
+);
+
+// the last seconds before nightfall: the number turns red and pulses once a second; Reduce Motion keeps it red
+const lastDay = 19 - 20 * Clock.clockSpeed(18.9); // ~20 real seconds before 19:00
+setClock(100.1);
+hud.update(state({ dayTime: lastDay }));
+const pulseA = skyText("Countdown");
+setClock(100.6);
+hud.update(state({ dayTime: lastDay }));
+const pulseB = skyText("Countdown");
+check(
+	`nos ultimos ${NIGHTFALL_WARN_S} s do dia o numero pisca vermelho / amarelo, 1 vez por segundo (< 3/s)`,
+	[pulseA, pulseB].includes(expectCount(lastDay, STAT.penalty)) &&
+		[pulseA, pulseB].includes(expectCount(lastDay, STAT.value)) &&
+		pulseA !== pulseB,
+	`${pulseA} | ${pulseB}`,
+);
+const gui = service("GuiService");
+gui.ReducedMotionEnabled = true;
+flush();
+const still1 = (setClock(101.1), hud.update(state({ dayTime: lastDay })), skyText("Countdown"));
+const still2 = (setClock(101.6), hud.update(state({ dayTime: lastDay })), skyText("Countdown"));
+gui.ReducedMotionEnabled = false;
+flush();
+check(
+	"com Reduzir Movimento: vermelho parado, sem piscar",
+	still1 === still2 && still1 === expectCount(lastDay, STAT.penalty),
+	still1,
+);
+hud.update(state({ dayTime: 12 }));
+check("longe do anoitecer, amarelo de novo", skyText("Countdown") === expectCount(12), skyText("Countdown"));
+const skyIdle = phase("60 quadros no mesmo segundo do relogio", () => {
+	for (let i = 0; i < 60; i++) hud.update(state({ dayTime: 12 }));
+});
+check("o ceu parado nao escreve nada", skyIdle.writes === 0 && zero(skyIdle), cost(skyIdle));
 hud.update(state());
 
 // UI-04: no contour on any text of the HUD
@@ -584,7 +717,60 @@ function checkTouch(label, w, h, prefs, atBottom = true) {
 		hint.Position.Y.Offset <= c[1],
 		`${hint.Position.Y.Offset} <= ${Math.round(c[1])}`,
 	);
+	checkSky(label, L, c, w, h, atBottom);
 	return c;
+}
+
+/**
+ * The touch sky (hudSky.ts skyPlate, hudConsole.ts placeTouchSky): in the row of Menu and Bag, as tall as they are,
+ * never over the console, a thumb control, Menu / Bag or a Roblox button; when the console floats up there (a crowded
+ * phone), wherever the row -- or the console's side -- is still free.
+ */
+function checkSky(label, L, c, w, h, atHome) {
+	const f = deep(hudRoot(), "SkyPlate");
+	const r = [
+		f.Position.X.Offset,
+		f.Position.Y.Offset,
+		f.Position.X.Offset + f.Size.X.Offset,
+		f.Position.Y.Offset + f.Size.Y.Offset,
+	];
+	const others = [
+		["o console", c],
+		["o analogico", circle(L.move.homeX, L.move.homeY, L.floating ? L.move.baseR : L.move.grabR)],
+		["o pad de mira", circle(L.aim.homeX, L.aim.homeY, L.aim.baseR)],
+		["RELOAD", circle(L.reload.x, L.reload.y, Math.max(L.reload.r, MIN_TOUCH_PX / 2))],
+		["USE", circle(L.use.x, L.use.y, Math.max(L.use.r, MIN_TOUCH_PX / 2))],
+		["Menu", circle(L.pause.x, L.pause.y, L.pause.r)],
+		["Bag", circle(L.bag.x, L.bag.y, L.bag.r)],
+	];
+	const hit = others.filter(([, o]) => overlaps(r, o)).map(([n]) => n);
+	check(
+		`${label}: o relogio (toque) nao cobre nada: console, polegares, Menu, Bag`,
+		hit.length === 0,
+		hit.length > 0 ? `sobre ${hit.join(", ")} ${fmt(r)}` : fmt(r),
+	);
+	check(
+		`${label}: o relogio fica na tela, abaixo da barra do Roblox`,
+		r[0] >= 0 && r[2] <= w && r[1] >= L.inset && r[3] <= h,
+		fmt(r),
+	);
+	const row = Math.abs(r[1] - (L.pause.y - L.pause.r)) <= 1 && Math.abs(r[3] - r[1] - L.pause.r * 2) <= 1;
+	if (atHome) {
+		check(
+			`${label}: na fileira do Menu e do Bag, da altura deles, a esquerda do Menu`,
+			row && r[2] <= L.pause.x - L.pause.r,
+			`${fmt(r)} / Menu em ${Math.round(L.pause.x)}, ${Math.round(L.pause.y)} r ${Math.round(L.pause.r)}`,
+		);
+	}
+	const px = (r[3] - r[1]) / SKY_PLATE_H;
+	check(
+		`${label}: o texto do relogio nao fica abaixo do piso de 9 px`,
+		["Day", "Countdown"].every(n => {
+			const c2 = deep(f, n)?.FindFirstChildOfClass("UITextSizeConstraint");
+			return c2 !== undefined && c2.MaxTextSize >= 9;
+		}),
+		`${px.toFixed(2)} px por unidade, largura ${Math.round(r[2] - r[0])} px (${SKY_PLATE_W} unidades)`,
+	);
 }
 
 setViewport(1120, 630, TOP_BAR);
@@ -675,6 +861,34 @@ setViewport(390, 844, 47);
 		all.every(r => !overlaps(c, r)) && c[0] >= 0 && c[2] <= 390 && c[1] >= 47,
 		`console ${fmt(c)}`,
 	);
+	checkSky("390x844 (retrato)", L, c, 390, 844, true);
+}
+// a crowded phone: 844 x 390 with every control at its largest and raised -- the console floats up to the top row, so
+// the clock has to find the other free place (the row's left end, or the console's side)
+{
+	const prefs = {
+		...DEFAULT_PREFS,
+		mirror: true,
+		leftSize: 1,
+		rightSize: 1,
+		leftRelative: false,
+		leftPos: 1,
+		rightPos: 1,
+	};
+	Object.assign(settings, prefs);
+	setViewport(844, 390, 36);
+	boot.refreshTouchLayout();
+	checkSky("844x390 lotado", computeTouchLayout(prefs, 844, 390, 36), consoleRect(), 844, 390, false);
+	Object.assign(settings, DEFAULT_PREFS);
+}
+for (const [w, h, bar] of [
+	[844, 390, 36],
+	[932, 430, 47],
+	[667, 375, 20],
+]) {
+	setViewport(w, h, bar);
+	boot.refreshTouchLayout();
+	checkSky(`${w}x${h} (celular)`, computeTouchLayout(DEFAULT_PREFS, w, h, bar), consoleRect(), w, h, true);
 }
 setViewport(1120, 630, TOP_BAR);
 

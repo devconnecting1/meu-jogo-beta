@@ -36,6 +36,7 @@ export interface ThemeColors {
 	statValue: Color3;
 	statBonus: Color3;
 	statEffect: Color3;
+	statLevel: Color3;
 	barHp: Color3;
 	barFood: Color3;
 	barXp: Color3;
@@ -107,6 +108,8 @@ export const DARK: ThemeColors = {
 	statBonus: Color3.fromRGB(82, 205, 134),
 	/** stat-effect: oklch(0.7400 0.1500 50.0000) #f58b4b */
 	statEffect: Color3.fromRGB(245, 139, 75),
+	/** stat-level: oklch(0.8000 0.0993 245.7394) #87c4fa */
+	statLevel: Color3.fromRGB(135, 196, 250),
 	/** bar-hp: oklch(0.5800 0.2078 25.3313) #da2d33 */
 	barHp: Color3.fromRGB(218, 45, 51),
 	/** bar-food: oklch(0.5700 0.1550 50.2665) #bc5500 */
@@ -179,6 +182,8 @@ export const LIGHT: ThemeColors = {
 	statBonus: Color3.fromRGB(57, 149, 96),
 	/** stat-effect: var(--chart-3) #d2691e */
 	statEffect: Color3.fromRGB(210, 105, 30),
+	/** stat-level: var(--chart-2) #4c88bb */
+	statLevel: Color3.fromRGB(76, 136, 187),
 	/** bar-hp: var(--destructive) #ef4444 */
 	barHp: Color3.fromRGB(239, 68, 68),
 	/** bar-food: var(--chart-3) #d2691e */

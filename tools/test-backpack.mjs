@@ -1728,6 +1728,8 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const title = () => details()?.FindFirstChild("Title")?.Text;
 	const disabled = b => b.GetAttribute("Disabled") === true;
 	const previewTitle = () => deep(deep(details(), "TitlePreview"), "TitleLabel");
+	/** the title line shows: its label and the holder the plate's list hides as one (client/ui/nameplate.ts) */
+	const titleShown = () => previewTitle()?.Visible === true && previewTitle().Parent?.Visible === true;
 
 	// the Pets page once, unmeasured: its pack buttons pick up their skin on their first "outline" (part 9's page, not
 	// this one) -- from here on every step is measured, the Titles tab's first opening included
@@ -1799,11 +1801,11 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	check(
 		"a previa e a placa do mundo, com o titulo SOB o nome, na cor dele",
-		previewTitle()?.Visible === true &&
+		titleShown() &&
 			previewTitle().Text === "[Survivor]" &&
 			sameColor(previewTitle().TextColor3, STAT.bonus) &&
-			previewTitle().Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
-			previewTitle().LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
+			previewTitle().Parent.Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
+			previewTitle().Parent.LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
 	);
 	check(
 		"a previa do guarda-roupa de trajes fica escondida",
@@ -1850,7 +1852,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	check("o servidor tirou, e a copia do cliente tambem", save.equipTitle === -1 && !worn(1));
 	check("sem titulo mostrado, [None] nao tem o que tirar", status() === "Equipped" && disabled(action()));
-	check("e a placa da previa fica so com o nome", previewTitle().Visible === false);
+	check("e a placa da previa fica so com o nome", !titleShown());
 
 	// Equip the earned one
 	click(row(1), "Survivor");
