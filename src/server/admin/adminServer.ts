@@ -65,6 +65,17 @@ export interface AdminSessionView {
 	/** os.clock() when the player joined */
 	joinedAt: number;
 	patchPending: boolean;
+	/** the body in the town, as the simulation has it (undefined = not in the world / MP_PHASE 0) */
+	live?: AdminLiveView;
+}
+
+/** §9.3: what the simulation says about a survivor in the town, read-only, for the admin's players table */
+export interface AdminLiveView {
+	dead: boolean;
+	hp: number;
+	hpMax: number;
+	/** seconds since the last real input (MP-13's AFK test) */
+	idleS: number;
 }
 
 export interface AdminEditOutcome {
@@ -278,6 +289,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		const s = host.session(p);
 		const now = os.clock();
 		const save = s?.save;
+		const live = s?.live;
+		// the engine's own measure of this client's round trip (seconds); an old client or a test may not have it
+		const [pingOk, ping] = pcall(() => p.GetNetworkPing());
 		return {
 			userId: p.UserId,
 			name: p.Name,
@@ -301,6 +315,12 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			lastReportAgo: s !== undefined && s.lastReport > -math.huge ? math.floor(now - s.lastReport) : -1,
 			sessionAge: s !== undefined ? math.floor(now - s.joinedAt) : 0,
 			patchPending: s?.patchPending ?? false,
+			inWorld: live !== undefined,
+			dead: live?.dead ?? false,
+			hp: live !== undefined ? math.floor(live.hp) : 0,
+			hpMax: live !== undefined ? math.floor(live.hpMax) : 0,
+			idleS: live !== undefined ? math.floor(live.idleS) : -1,
+			pingMs: pingOk && typeIs(ping, "number") && ping === ping && ping >= 0 ? math.floor(ping * 1000) : -1,
 		};
 	}
 

@@ -180,6 +180,12 @@ export interface ServerPlayer {
 	pet: number;
 	/** MON-05: the title under their name, as the wire byte (0 = none), already checked against what they EARNED */
 	title: number;
+	/**
+	 * MP-23, the match scoreboard: the day of this life and the zombies put down, as the others were LAST TOLD
+	 * (`PlayerTally`). Like the profile above, `refreshTally` compares them with the save and says when to tell again.
+	 */
+	lifeDay: number;
+	kills: number;
 	/** the authoritative survivor; the client never sends a position (§2.2, MP-00) */
 	state: PlayerState;
 	/** the live save the server owns (server/main.server.ts session) */
@@ -282,6 +288,8 @@ export function createServerPlayer(
 		outfit: outfitLookOf(save),
 		pet: petLookOf(save),
 		title: titleWireOf(save),
+		lifeDay: save.day,
+		kills: save.zombieKills,
 		state: createPlayer(save, x, y),
 		save,
 		queue: new Array<InputCommand>(),
@@ -570,6 +578,25 @@ export function refreshProfile(sp: ServerPlayer): boolean {
 	sp.outfit = outfit;
 	sp.pet = pet;
 	sp.title = title;
+	return true;
+}
+
+/**
+ * (MP-23) Brings the scoreboard numbers the roster advertises (this life's day, the zombies put down) up to date with
+ * the save the server owns, and answers whether they moved -- i.e. whether everybody has to be told (`PlayerTally`).
+ *
+ * The same idea as `refreshProfile`: every path that changes them writes the SAVE -- the midnight that credits a day
+ * (server/sim/progress.ts), the kill credit (`zombieKilled`), a New game or a world that ended (`resetRun`), an admin
+ * edit -- so watching the save is what makes it impossible to add a path and forget to tell the others. Both numbers
+ * are the server's own: a client report never writes `zombieKills`, and from PROGRESS_SERVER_PHASE never the day.
+ */
+export function refreshTally(sp: ServerPlayer): boolean {
+	const save = sp.save;
+	const day = save.day;
+	const kills = save.zombieKills;
+	if (day === sp.lifeDay && kills === sp.kills) return false;
+	sp.lifeDay = day;
+	sp.kills = kills;
 	return true;
 }
 

@@ -83,7 +83,17 @@ export type WorldArtName =
 	| "pump"
 	| "acUnit"
 	| "vent"
-	| "chimney";
+	| "chimney"
+	| "signSchool"
+	| "signHospital"
+	| "signGas"
+	| "signPharmacy"
+	| "signMarket"
+	| "signGrocery"
+	| "signGuns"
+	| "signClothes"
+	| "signDiner"
+	| "helipad";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -222,6 +232,26 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
 	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
+	/** sprite: storefront sign (type 3): an open book on a chalkboard */
+	signSchool: { id: "rbxassetid://98558286094610", w: 32, h: 20 },
+	/** sprite: storefront sign (type 4): the white H of the hospital road sign, on blue */
+	signHospital: { id: "rbxassetid://72752078983539", w: 32, h: 20 },
+	/** sprite: storefront sign (type 5): a fuel pump, its hose and nozzle hanging on its side */
+	signGas: { id: "rbxassetid://102981392384732", w: 24, h: 16 },
+	/** sprite: storefront sign (type 6): a green cross lightbox */
+	signPharmacy: { id: "rbxassetid://103233203209784", w: 24, h: 16 },
+	/** sprite: storefront sign (type 7): a shopping cart */
+	signMarket: { id: "rbxassetid://96888495851566", w: 32, h: 20 },
+	/** sprite: storefront sign (type 8): a paper grocery bag with a baguette and an apple */
+	signGrocery: { id: "rbxassetid://122210622314467", w: 24, h: 16 },
+	/** sprite: storefront sign (type 9): a pistol */
+	signGuns: { id: "rbxassetid://81619965285369", w: 24, h: 16 },
+	/** sprite: storefront sign (type 10): a T-shirt */
+	signClothes: { id: "rbxassetid://99147626160535", w: 24, h: 16 },
+	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
+	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
+	/** sprite: hospital roof: the heliport's red H on a white cross */
+	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 };
 
 /** every texture of the world art, for the preload pass */
@@ -294,4 +324,14 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"acUnit",
 	"vent",
 	"chimney",
+	"signSchool",
+	"signHospital",
+	"signGas",
+	"signPharmacy",
+	"signMarket",
+	"signGrocery",
+	"signGuns",
+	"signClothes",
+	"signDiner",
+	"helipad",
 ];

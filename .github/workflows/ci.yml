@@ -57,6 +57,18 @@ jobs:
       - name: Menu screens (centred clear of the Roblox buttons; the town flyover pinned behind every menu)
         run: npm run test:screens
 
+      # every Settings row followed to its real effect: the mixer, the HUD size, the touch geometry, the keys, the save
+      - name: Settings do what they say (audio, HUD size, touch layout, every SCHEMES key, Defaults, persistence)
+        run: npm run test:settings
+
+      # every menu walked as a player would; the pad; achievements and records; every string in lang.ts and the CSV
+      - name: Menus and strings (open / close / focus without leaks, the pad, achievements, lang.ts and the locale CSV)
+        run: npm run test:nav
+
+      # UI-12 / MP-23: the kit's Table and forms, the admin panel, Records and the match scoreboard
+      - name: Tables and forms (row pools without churn, nothing sent while a field is wrong, the scoreboard)
+        run: npm run test:tables
+
       # ART-01..06: worldArtAssets.ts is the generated file, and the town's art only ever adds to the flat town
       - name: Town art (no id = the flat town unchanged, textures, no churn, LEG-03 legibility, render tool)
         run: |
@@ -102,6 +114,9 @@ jobs:
 
       - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
         run: npm run test:save
+
+      - name: Every item row by row (weapons, equipment, usables, recipes, skills, loot, shop; known bugs listed)
+        run: npm run test:items
 
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps

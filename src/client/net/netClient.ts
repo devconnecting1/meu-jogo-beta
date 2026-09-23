@@ -22,6 +22,7 @@
  *   takeZombieDeaths(out)  the reliable deaths of §4.4: blood, a corpse and a drop, where the body fell
  *   netTownSeed()          (MP-22) the seed of the server's town, for GameLoop.init; `netOnTown(fn)` hears the
  *                          InitBegin that confirms it and the WorldReset that replaces it when a world ends
+ *   netRoster(out)         (MP-23) the survivors in the world as the reliable roster has them, for the scoreboard
  *
  * While MP_PHASE = 0 netActive() is false, no remote is ever looked up, and the game loop keeps stepping the local
  * player itself — the single-player build behaves exactly as before.
@@ -122,6 +123,9 @@ interface RosterEntry {
 	pet: number;
 	/** the title byte under the name (MON-05, `titleToWire`: 0 = none), kept current the same way */
 	title: number;
+	/** (MP-23) the day of this life and the zombies put down, from `PlayerTally`; 0 / -1 until the first one */
+	lifeDay: number;
+	kills: number;
 	/**
 	 * LifeState of the last `PlayerLife` delta (§4.5, §7.3). This — and NOT the snapshot's PlayerFlag.Dead /
 	 * Downed — is what says whether a survivor is up, down or gone: `Snap` is unreliable, and a death that is
@@ -420,6 +424,8 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 			outfit: e.outfit,
 			pet: e.pet,
 			title: e.title,
+			lifeDay: 0,
+			kills: -1,
 			life: 0,
 		});
 		// this is how a client learns its own slot (§4.4: the newcomer's roster includes itself)
@@ -435,6 +441,15 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		entry.outfit = e.outfit;
 		entry.pet = e.pet;
 		entry.title = e.title;
+		return;
+	}
+	if (e.t === WorldEv.PlayerTally) {
+		// MP-23: the scoreboard's numbers, the server's (a slot the roster does not know yet is dropped: the round the
+		// server sends after every join comes after that join)
+		const entry = roster.get(e.slot);
+		if (entry === undefined) return;
+		entry.lifeDay = e.lifeDay;
+		entry.kills = e.kills;
 		return;
 	}
 	if (e.t === WorldEv.PlayerLeft) {
@@ -726,6 +741,54 @@ export function remoteZombies(): ReadonlyArray<RemoteZombie> {
 
 export function remoteBosses(): ReadonlyArray<RemoteBoss> {
 	return snapshots.bossStates();
+}
+
+/** (MP-23) one survivor of the roster, as the scoreboard reads it */
+export interface RosterView {
+	slot: number;
+	userId: number;
+	displayName: string;
+	level: number;
+	/** the title byte (`titleToWire`: 0 = none) */
+	title: number;
+	/** this life's day, 0 until the server's first PlayerTally */
+	lifeDay: number;
+	/** zombies put down, -1 until the server's first PlayerTally */
+	kills: number;
+	/** LifeState */
+	life: number;
+	/** this client's own survivor */
+	you: boolean;
+}
+
+/**
+ * (MP-23) The survivors in the world, as the reliable roster has them (PlayerJoined / PlayerProfile / PlayerLife /
+ * PlayerTally), in slot order, written into `out` (cleared first; its entries are reused, so a scoreboard that
+ * reads this every frame allocates nothing once warm). Empty outside a server session.
+ */
+export function netRoster(out: Array<RosterView>): Array<RosterView> {
+	let n = 0;
+	for (let slot = 0; slot < MAX_PLAYERS; slot++) {
+		const e = roster.get(slot);
+		if (e === undefined) continue;
+		let v = out[n];
+		if (v === undefined) {
+			v = { slot: 0, userId: 0, displayName: "", level: 0, title: 0, lifeDay: 0, kills: -1, life: 0, you: false };
+			out[n] = v;
+		}
+		v.slot = e.slot;
+		v.userId = e.userId;
+		v.displayName = e.displayName;
+		v.level = e.level;
+		v.title = e.title;
+		v.lifeDay = e.lifeDay;
+		v.kills = e.kills;
+		v.life = e.life;
+		v.you = e.slot === mySlot;
+		n += 1;
+	}
+	while (out.size() > n) out.pop();
+	return out;
 }
 
 /** the effects received since the last call, appended to `out` and cleared here (§4.1 Fx) */

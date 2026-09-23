@@ -1,33 +1,40 @@
 import { GameContext } from "shared/game/context";
+import { langGet } from "shared/data/lang";
 import { TEXT, THEME } from "./theme";
 import { Button, autoFocus, makeFrame, makeLabel, makeScreen } from "./widgets";
 
-const CREDIT_LINES = [
-	"PROJECT Z",
-	"Top-down zombie survival for Roblox",
-	"",
-	"Inspired by Dead Town",
-	"by Lemon Puppy Games",
-	"",
-	"Special thanks (original Dead Town credits)",
-	"Yoyo games",
-	"Crazy GM",
-	"Play GM",
-	"opengameart.org",
-	"dlf0325",
-	"sodium031",
-	"zizonpink",
-	"",
-	"Built with roblox-ts",
-	"",
-	"Thank you for playing!",
+/**
+ * The credits, a line each. `true`: words a translator translates, so they go through lang.ts (UI-03) and are in its
+ * table; `false`: a name -- the game's, a studio's, a site's, a person's handle -- which reads the same in every
+ * language. An empty line is a gap.
+ */
+const CREDIT_LINES: Array<[string, boolean]> = [
+	["PROJECT Z", false],
+	["Top-down zombie survival for Roblox", true],
+	["", false],
+	["Inspired by Dead Town", true],
+	["by Lemon Puppy Games", true],
+	["", false],
+	["Special thanks (original Dead Town credits)", true],
+	["Yoyo games", false],
+	["Crazy GM", false],
+	["Play GM", false],
+	["opengameart.org", false],
+	["dlf0325", false],
+	["sodium031", false],
+	["zizonpink", false],
+	["", false],
+	["Built with roblox-ts", true],
+	["", false],
+	["Thank you for playing!", true],
 ];
 
 export function showCredits(ctx: GameContext, onBack: () => void): () => void {
+	const tr = (key: string): string => langGet(key, ctx.save.settings.langType);
 	// a menu page over the town flyover (UI-10): every line is `foreground`, which the flyover's scrim holds at 4,5:1
 	const { root, body } = makeScreen(ctx.uiLayer, "Credits", { transparency: 1 });
 
-	const back = Button(body, "Back", "‹  Back", {
+	const back = Button(body, "Back", `‹  ${tr("Back")}`, {
 		x: 40,
 		y: 28,
 		w: 124,
@@ -35,7 +42,10 @@ export function showCredits(ctx: GameContext, onBack: () => void): () => void {
 		variant: "secondary",
 		onClick: onBack,
 	});
-	makeLabel(body, "Title", "Credits", 184, 24, 400, 58, TEXT.xl4, THEME.foreground, { font: "title", align: "left" });
+	makeLabel(body, "Title", tr("Credits"), 184, 24, 400, 58, TEXT.xl4, THEME.foreground, {
+		font: "title",
+		align: "left",
+	});
 
 	const scroller = makeFrame(body, "Scroller", 260, 104, 600, 500, THEME.background, {
 		transparency: 1,
@@ -44,7 +54,7 @@ export function showCredits(ctx: GameContext, onBack: () => void): () => void {
 	const text = makeLabel(
 		scroller,
 		"CreditText",
-		CREDIT_LINES.join("\n"),
+		CREDIT_LINES.map(([line, words]) => (words ? tr(line) : line)).join("\n"),
 		0,
 		500,
 		600,
