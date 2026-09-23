@@ -77,6 +77,29 @@ if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(OUT, lines.join("\n") + "\n", "utf8");
 
 console.log(`${rows.length} textos (inglês) -> ${OUT}`);
+
+/*
+ * --split N also writes the table in chunks of N rows.
+ *
+ * The Localization tab's importer answers `upstream request timeout` on the whole table sometimes. That is a
+ * gateway error on their side, not a format problem: ours is 27 kB, has no parameter syntax in it, and every
+ * column header is one the docs list. Uploading is a merge keyed by Source, so the same table split across
+ * several files ends up identical to one upload -- and a chunk that times out can be retried on its own
+ * instead of starting the whole thing over.
+ */
+const splitAt = process.argv.indexOf("--split");
+if (splitAt >= 0) {
+	const size = Math.max(1, Number(process.argv[splitAt + 1] ?? 100));
+	const body = lines.slice(1);
+	const parts = Math.ceil(body.length / size);
+	for (let i = 0; i < parts; i++) {
+		const chunk = [lines[0], ...body.slice(i * size, (i + 1) * size)];
+		const name = join(OUT_DIR, `ProjectZ-${String(i + 1).padStart(2, "0")}.csv`);
+		writeFileSync(name, chunk.join("\n") + "\n", "utf8");
+		console.log(`  parte ${i + 1}/${parts}: ${chunk.length - 1} textos -> ${name}`);
+	}
+}
+
 console.log(
 	"\nantes de ligar a tradução automática: preencha a coluna Context das entradas de uma ou duas palavras.\n" +
 		'"Round" (carregador), "Use", "Drop", "Melt" e "Learn" não têm como ser traduzidos sem ela.',
