@@ -6,7 +6,7 @@ import { WEAPONS } from "shared/data/weapons";
 import { chance } from "shared/engine/rng";
 import { querySolids, Solid } from "shared/game/world";
 import type { PlayerState } from "shared/game/player";
-import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
 import { fxMessage, GameRefs } from "./types";
 
 /** how close (edge distance) a desk / fire must be */
@@ -105,6 +105,9 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 	for (const ing of r.ingredients) {
 		removeItem(refs.save, ing.kind, ing.index, ing.count);
 	}
+	// the recipe may have eaten what the survivor held or wore (a pistol, the steel armour): it comes off. The weapon
+	// in HAND is swapped for the blade by the caller (main.client pack.onCraft), which owns the weapon switch
+	unequipGone(refs.save);
 	if (r.craftKind === 1) {
 		refs.pendingPlace = r.resultIndex;
 		refs.pendingRecipe = r.id;

@@ -1125,7 +1125,12 @@ pack.onUse = id => {
 
 pack.onCraft = id => {
 	// a refused recipe answers with a message (and the UI's error toast): only a real craft is heard
-	if (craft(loop.getRefs(), id)) gameAudio.crafted();
+	const refs = loop.getRefs();
+	if (!craft(refs, id)) return;
+	gameAudio.crafted();
+	// the recipe ate the weapon in hand (a pistol into an auto pistol): the blade comes back to the hands, and the
+	// magazine back to its pool -- the same rule as an admin patch that takes the weapon away (admin/patches.ts)
+	if (!ownsWeapon(ctx.save, refs.player.weapon.pointer)) switchWeapon(refs, 0);
 };
 
 pack.craftCheck = id => {

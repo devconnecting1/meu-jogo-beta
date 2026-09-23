@@ -1811,6 +1811,109 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 	}
 });
 
+section("D6. crafting with the item in your hands: what the recipe ate comes off (fixed, QA 2026-09-23)", () => {
+	// a recipe that eats a weapon or a piece of equipment the survivor has EQUIPPED: the pistol that becomes an auto
+	// pistol, the steel armour that becomes a robot suit, the flashlight inside a laser sight. Before the fix the
+	// slot kept the eaten item: the armour went on protecting and the pistol stayed in the client's hands.
+	const eating = CRAFT_RECIPES.filter(r =>
+		r.ingredients.some(i => i.kind === ItemKind.Weapon || i.kind === ItemKind.Equip),
+	);
+	const stale = save => {
+		const out = [];
+		if (save.equipWeapon >= 0 && !SAVE.ownsWeapon(save, save.equipWeapon))
+			out.push(`weapon ${WEAPONS[save.equipWeapon].name}`);
+		for (let slot = 1; slot <= EQUIP_SLOT_MAX; slot++) {
+			const id = SAVE.equippedIn(save, slot);
+			if (id >= 0 && !SAVE.ownsEquip(save, id)) out.push(`${SLOT_FIELD[slot]} ${EQUIPS[id].name}`);
+		}
+		return out;
+	};
+	const wearAll = (save, r) => {
+		for (const i of r.ingredients) {
+			if (i.kind === ItemKind.Weapon) save.equipWeapon = i.index;
+			if (i.kind === ItemKind.Equip) SAVE.setEquipped(save, SAVE.equipSlotOf(i.index), i.index);
+		}
+	};
+	checkRows("client craft: nothing stays equipped that the backpack no longer has", eating, r => {
+		const save = stocked(r);
+		wearAll(save, r);
+		const refs = craftRefs(save, stationOf(r));
+		if (!CCraft.craft(refs, r.id)) return `refused: ${CCraft.craftBlocker(refs, r)}`;
+		const left = stale(save);
+		return left.length === 0 || `still equipped: ${left.join(", ")}`;
+	});
+	{
+		// ...and the hands: main.client's pack.onCraft puts the blade back and the magazine in its pool
+		const onCraft = source("client/main.client.ts");
+		const body = onCraft.slice(onCraft.indexOf("pack.onCraft = "), onCraft.indexOf("pack.craftCheck = "));
+		check(
+			/!ownsWeapon\(ctx\.save, refs\.player\.weapon\.pointer\)\) switchWeapon\(refs, 0\)/.test(body),
+			"main.client's pack.onCraft swaps an eaten weapon for the blade",
+		);
+		checkRows(
+			"client: craft, then that swap -- the blade in hand, the eaten gun's magazine back in its pool",
+			eating.filter(r => r.ingredients.some(i => i.kind === ItemKind.Weapon)),
+			r => {
+				const eaten = r.ingredients.find(i => i.kind === ItemKind.Weapon).index;
+				const save = stocked(r);
+				save.equipWeapon = eaten;
+				const refs = craftRefs(save, stationOf(r));
+				CCombat.switchWeapon(refs, 0);
+				CCombat.switchWeapon(refs, eaten);
+				const w = WEAPONS[eaten];
+				const field = POOL_FIELD[w.ammoPool];
+				const rounds = usesMagazine(w) ? 1 : 0;
+				refs.player.weapon.ammoCount = rounds;
+				const pool = save[field];
+				if (!CCraft.craft(refs, r.id)) return "refused";
+				if (!SAVE.ownsWeapon(save, refs.player.weapon.pointer)) CCombat.switchWeapon(refs, 0);
+				if (refs.player.weapon.pointer !== 0 || save.equipWeapon !== 0)
+					return `in hand ${refs.player.weapon.pointer}`;
+				return save[field] === pool + rounds || `${field} ${pool} -> ${save[field]}`;
+			},
+		);
+	}
+	checkRows("server craft: the same, in the same step", eating, r => {
+		const save = stocked(r);
+		wearAll(save, r);
+		const world = W.createWorld(4000, 4000);
+		const s = stationOf(r);
+		if (s !== undefined) station(world, s, 1000, 1000);
+		const c = new SCRAFT.ServerCraft({ world, build: { placing: () => false, hold: () => {} } });
+		const out = c.craft(0, Ply.createPlayer(save, 1000, 1000), save, r.id);
+		if (out.kind === "refused") return JSON.stringify(out);
+		const left = stale(save);
+		return left.length === 0 || `still equipped: ${left.join(", ")}`;
+	});
+	{
+		// on the server the combat then holds the blade and banks the eaten pistol's rounds (weaponOf)
+		const r = CRAFT_RECIPES.find(
+			x =>
+				x.resultKind === ItemKind.Weapon &&
+				x.ingredients.some(i => i.kind === ItemKind.Weapon && i.index === 10),
+		);
+		const fx = weaponFixture(10, { normal: 30 });
+		for (const ing of r.ingredients)
+			INV.addItem(fx.save, ing.kind, ing.index, ing.kind === ItemKind.Weapon ? 0 : ing.count);
+		fx.step({});
+		const mag = fx.sp.state.weapon.ammoCount;
+		station(fx.world, stationOf(r), fx.sp.state.x, fx.sp.state.y);
+		const out = new SCRAFT.ServerCraft({ world: fx.world, build: { placing: () => false, hold: () => {} } }).craft(
+			0,
+			fx.sp.state,
+			fx.save,
+			r.id,
+		);
+		fx.step({});
+		check(
+			out.kind === "crafted" && fx.sp.state.weapon.pointer === 0,
+			`server: after crafting the ${WEAPONS[r.resultIndex].name} the survivor holds the blade`,
+			`pointer ${fx.sp.state.weapon.pointer}`,
+		);
+		checkEq(fx.save.ammoNormal, 30 + mag, `and the pistol's ${mag} rounds went back to the pool`);
+	}
+});
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
