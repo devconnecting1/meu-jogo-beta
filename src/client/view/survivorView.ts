@@ -259,8 +259,9 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			hand(10, -14);
 		}
 	} else if (w.kind === WeaponKind.Bow) {
-		if (art) holdWeapon(weaponRow(w.id, w.kind, false), 26, 0, 0, Grip.Bow, false);
-		else {
+		if (art) {
+			holdWeapon(weaponRow(w.id, w.kind, false), 26, 0, 0, Grip.Bow, false);
+		} else {
 			part(r, cam, look.x, look.y, a, 26, 0, {
 				w: 6,
 				h: 44,
@@ -273,8 +274,9 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 		hand(10, 8);
 	} else {
 		const len = gunLength(w.kind);
-		if (art) holdWeapon(weaponRow(w.id, w.kind, false), 12 + len / 2, 3, 0, gripOf(w.kind), false);
-		else {
+		if (art) {
+			holdWeapon(weaponRow(w.id, w.kind, false), 12 + len / 2, 3, 0, gripOf(w.kind), false);
+		} else {
 			part(r, cam, look.x, look.y, a, 12 + len / 2, 3, {
 				w: len,
 				h: w.kind === WeaponKind.Pistol ? 6 : 7,

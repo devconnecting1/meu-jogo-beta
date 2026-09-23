@@ -421,12 +421,12 @@ export class Renderer {
 		if (im.rx !== rx || im.ry !== ry) {
 			im.rx = rx;
 			im.ry = ry;
-			label.ImageRectOffset = new Vector2(rx, ry);
+			label.ImageRectOffset = rectVector(rx, ry);
 		}
 		if (im.rw !== rw || im.rh !== rh) {
 			im.rw = rw;
 			im.rh = rh;
-			label.ImageRectSize = new Vector2(rw, rh);
+			label.ImageRectSize = rectVector(rw, rh);
 		}
 		if (!im.on) {
 			im.on = true;
@@ -604,6 +604,22 @@ export class Renderer {
 			f.Visible = true;
 		}
 	}
+}
+
+/**
+ * The Vector2 of a sheet cell's offset or size, built once per value: a walking horde changes cells every few
+ * frames (a stride, a turn), and a fresh Vector2 per change would be garbage the collector walks mid-frame. Sheets
+ * are at most 1024 px on a side (client/view/charSheets.ts), so x * 4096 + y is a unique key.
+ */
+const RECT_VECTORS = new Map<number, Vector2>();
+function rectVector(x: number, y: number): Vector2 {
+	const key = x * 4096 + y;
+	let v = RECT_VECTORS.get(key);
+	if (v === undefined) {
+		v = new Vector2(x, y);
+		RECT_VECTORS.set(key, v);
+	}
+	return v;
 }
 
 function clamp01(v: number): number {

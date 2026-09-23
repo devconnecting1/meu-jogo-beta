@@ -970,6 +970,7 @@ section("8) the characters' pixel art (ART-07..ART-10): sheets, fallback, cost o
 		phase: i,
 		lift: look === 3 || look === 1 ? 1 : 0,
 	}));
+	const HORDE_SHADOW = { color: COLORS.shadow, alpha: 0.3, zIndex: Z.actorShadow };
 	function night(ids) {
 		setArt(ids);
 		const st = stage(1280, 800, 1);
@@ -983,7 +984,11 @@ section("8) the characters' pixel art (ART-07..ART-10): sheets, fallback, cost o
 				z.angle = a + Math.PI + Math.sin(f * 0.05 + i) * 0.3;
 				z.phase = f * 0.12 + i;
 				z.flash = (f + i) % 45 < 4 ? 1 - ((f + i) % 45) / 4 : 0;
-				drawMember(st, z, Math.cos(a) * d * 1.3, Math.sin(a) * d * 0.8);
+				const x = Math.cos(a) * d * 1.3;
+				const y = Math.sin(a) * d * 0.8;
+				// its round drop shadow, as client/view/actorsView.ts draws it under every zombie (flat or art)
+				st.r.drawCircle(st.cam, x + 2.6, y + 9.7, (z.big ? 22.4 : 16) * 2.1, HORDE_SHADOW);
+				drawMember(st, z, x, y);
 			});
 			party.forEach((s, i) => {
 				s.angle = i * 1.6 + f * 0.03;
