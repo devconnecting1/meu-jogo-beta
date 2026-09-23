@@ -22,7 +22,8 @@
  *     the scroll) or none;
  *   - a row: the wardrobe's list row (window.ts ListRow) -- a graphite plate (`SURFACE.row`, or `SURFACE.well` for a
  *     denser admin table) drawn by its ring: `SURFACE.line` at rest, iron under the mouse, the kit's focus ring
- *     under the pad, BLUE when selected. A "marked" row (your own, on the scoreboard) wears the iron ring. The
+ *     under the pad, BLUE when selected. A "marked" row (your own, on the scoreboard) wears the LIGHT ring
+ *     (`foreground`): the iron one is a step from the rest line (#727272 on #6B6B6B) and could not be told apart. The
  *     separators are the groove itself: the rows stand GROOVE units apart.
  *
  * Performance (the Bag's rule, test:tables): rows are a POOL of Frames built on first need and rewritten in place.
@@ -133,7 +134,7 @@ export interface TableProps<T> {
 	/** rows take a click / a tap / the pad's A and show the blue ring (default false) */
 	selectable?: boolean;
 	onSelect?: (key: string | undefined, item: T | undefined) => void;
-	/** a row to wear the iron ring (your own on the scoreboard) */
+	/** a row to wear the light ring (your own on the scoreboard; a table that uses it is not selectable) */
 	marked?: (item: T) => boolean;
 	/** the row plate: `SURFACE.row` (default) or `SURFACE.well` (denser admin tables) */
 	rowFace?: Color3;
@@ -173,6 +174,11 @@ export interface TableHandle<T> {
 interface CellView {
 	label: TextLabel;
 	sub?: TextLabel;
+	/** a two-line column's main line: where it stands with a second line under it, and alone (centred in the row) */
+	twoAt?: [UDim2, UDim2];
+	oneAt?: [UDim2, UDim2];
+	/** the layout shown now: true = two lines */
+	twoShown?: boolean;
 	text: string;
 	subText: string;
 	color?: Color3;
@@ -437,7 +443,8 @@ export function Table<T extends defined>(parent: Instance, name: string, props: 
 		let ring = SURFACE.line;
 		if (r.selected) ring = THEME.tabActive;
 		else if (selectable && isFocused(r.button)) ring = THEME.ring;
-		else if (hover || r.marked) ring = THEME.secondary;
+		else if (r.marked) ring = THEME.foreground;
+		else if (hover) ring = THEME.secondary;
 		paintPlate(r.button, face, "outline", ROW_UNIT, ring);
 	};
 
@@ -488,6 +495,11 @@ export function Table<T extends defined>(parent: Instance, name: string, props: 
 			label.TextTruncate = Enum.TextTruncate.AtEnd;
 			const view: CellView = { label, text: "", subText: "" };
 			if (two) {
+				// a cell with no second line (a survivor without a title, "Alive") centres its one line in the row like
+				// every other column; with one, the main line sits above it
+				view.twoAt = [label.Position, label.Size];
+				view.oneAt = [UDim2.fromScale((cx + cellPad) / rowW, 0), UDim2.fromScale((cw - cellPad * 2) / rowW, 1)];
+				view.twoShown = true;
 				const sub = makeLabel(
 					b,
 					`S${col.key}`,
@@ -561,6 +573,14 @@ export function Table<T extends defined>(parent: Instance, name: string, props: 
 			if (view.subText !== st) {
 				view.subText = st;
 				sub.Text = st;
+			}
+			const two = st !== "";
+			if (view.twoShown !== two && view.twoAt !== undefined && view.oneAt !== undefined) {
+				view.twoShown = two;
+				const [pos, size] = two ? view.twoAt : view.oneAt;
+				view.label.Position = pos;
+				view.label.Size = size;
+				view.label.TextYAlignment = two ? Enum.TextYAlignment.Bottom : Enum.TextYAlignment.Center;
 			}
 			const sc = out.subColor ?? THEME.mutedForeground;
 			if (view.subColor !== sc) {

@@ -50,7 +50,19 @@ import {
 	TableSortBarHandle,
 	fitText,
 } from "./table";
-import { cardHeaderHeight, fmtInt, makeAnchored, makeFrame, makeLabel, setVisible } from "./widgets";
+import {
+	DESIGN_H,
+	DESIGN_W,
+	cardHeaderHeight,
+	fmtInt,
+	makeFrame,
+	makeLabel,
+	onLayoutChange,
+	setDesign,
+	setVisible,
+	topInset,
+	viewportSize,
+} from "./widgets";
 import * as Kit from "./window";
 
 const UserInputService = game.GetService("UserInputService");
@@ -260,14 +272,28 @@ export class Scoreboard {
 	constructor(root: Frame, dayPlate: Frame, tr: (k: string) => string, opts: ScoreboardOptions) {
 		this.tr = tr;
 		this.opts = opts;
-		// a HUD cluster (makeAnchored's recipe, like the day plate): pinned to the screen's LEFT edge under the bar, so
-		// a screen wider than 16:9 (the owner's 1365 x 567 playtest window) moves it away from the survivor in the
-		// middle instead of centring it with a 16:9 box. No scrim and no input blocker: the world stays visible and
-		// every click outside the panel still reaches the game (UI-06)
-		const frame = makeAnchored(root, "Scoreboard", 0, 0, PANEL_W, SCOREBOARD_H, PANEL_X, PANEL_Y, true);
+		// pinned to the screen's LEFT edge under the bar, at the scale of the HUD's 1120 x 630 space under the bar (the
+		// largest one that fits both ways): on a screen wider than 16:9 (the owner's 1365 x 567 playtest window) it
+		// moves away from the survivor in the middle instead of centring with a 16:9 box, and it keeps the size that
+		// fits between the day plate's row and the console at the bottom (UI-09). No scrim and no input blocker: the
+		// world stays visible and every click outside the panel still reaches the game (UI-06)
+		const frame = new Instance("Frame");
+		frame.Name = "Scoreboard";
+		frame.BackgroundTransparency = 1;
+		frame.BackgroundColor3 = THEME.background;
+		frame.BorderSizePixel = 0;
 		frame.Active = false;
 		// above the vignette and the console, under the touch layer (ZIndex 8): the thumbs' controls stay on top
 		frame.ZIndex = 6;
+		setDesign(frame, PANEL_W, SCOREBOARD_H);
+		onLayoutChange(frame, () => {
+			const v = viewportSize();
+			const inset = topInset();
+			const s = math.min(v.X / DESIGN_W, math.max(0, v.Y - inset) / DESIGN_H);
+			frame.Position = UDim2.fromOffset(math.floor(PANEL_X * s), math.floor(inset + PANEL_Y * s));
+			frame.Size = UDim2.fromOffset(PANEL_W * s, SCOREBOARD_H * s);
+		});
+		frame.Parent = root;
 		this.frame = frame;
 
 		const win = Kit.Window(frame, "Panel", {

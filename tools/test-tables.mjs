@@ -1012,9 +1012,25 @@ check(
 	cellText(byName("NewOne"), "lifeDay") === "–" && cellText(byName("NewOne"), "kills") === "–",
 );
 check(
-	"a sua linha usa o anel de ferro (marcada), as outras o fio",
-	sameColor(ringOf(byName("Tester")), THEME.secondary) && sameColor(ringOf(byName("Marta")), SURFACE.line),
+	"a sua linha usa o anel claro (marcada), as outras o fio",
+	sameColor(ringOf(byName("Tester")), THEME.foreground) && sameColor(ringOf(byName("Marta")), SURFACE.line),
 );
+// a two-line column: with a second line the main one sits above it; without, it is centred in the row like the rest
+{
+	const one = byName("Joao").FindFirstChild("Cname");
+	const two = byName("Marta").FindFirstChild("Cname");
+	const status = byName("Marta").FindFirstChild("Cstatus");
+	check(
+		"sem titulo, o nome fica no meio da linha; com titulo, em cima dele (e Alive, sem 2a linha, no meio)",
+		one.Position.Y.Scale === 0 &&
+			one.Size.Y.Scale === 1 &&
+			one.TextYAlignment === Enum.TextYAlignment.Center &&
+			two.Size.Y.Scale < 1 &&
+			two.TextYAlignment === Enum.TextYAlignment.Bottom &&
+			status.Size.Y.Scale === 1,
+		`Joao ${one.Position.Y.Scale}/${one.Size.Y.Scale}, Marta ${two.Position.Y.Scale.toFixed(2)}/${two.Size.Y.Scale.toFixed(2)}`,
+	);
+}
 input.keyScoreboard = false;
 setClock(5002);
 hud.update(hudState);
@@ -1252,6 +1268,9 @@ for (const [w, h, bar, label, buttons] of SCREENS) {
 		);
 		const day = rectOf(deep(hud.scoreboard().chip.Parent.Parent, "DayPlate"));
 		check(`${tag}: nem a placa do dia`, !overlapR(panel, day), `${fmtR(panel)} / ${fmtR(day)}`);
+		// the console owns the bottom of the screen (UI-09): the board never lies over the bars or the hotbar
+		const hudConsole = rectOf(deep(hud.scoreboard().chip.Parent.Parent, "Console"));
+		check(`${tag}: nem o console da HUD`, !overlapR(panel, hudConsole), `${fmtR(panel)} / ${fmtR(hudConsole)}`);
 		check(`${tag}: cabecalhos sobre as suas colunas`, headerAligned(b.table, SB.SCORE_COLUMNS));
 		const tp = textProblems(b.frame);
 		check(`${tag}: nenhum texto abaixo de ${MIN_PX} px ou cortado`, tp.length === 0, tp.slice(0, 3).join(" | "));
