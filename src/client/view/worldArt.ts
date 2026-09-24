@@ -165,11 +165,23 @@ export function preloadWorldArt(): void {
 			lost.add("blood");
 			warn("[world] the blood's atlas did not load: the blood is drawn flat");
 		}
+		// the trees' atlas (VEG-06): a crown that never arrives is a trunk that stops the body with nothing drawn on it
+		// (P3, COL-01), so the trees go back to their flat drawing
+		if (WORLD_ART.trees.id !== "" && missing.includes(WORLD_ART.trees.id)) {
+			lost.add("trees");
+			warn("[world] the trees' atlas did not load: the trees are drawn flat");
+		}
 		// the town's fixtures' atlas (ART-16): a market table or a dumpster that never arrives would be an invisible
 		// thing that still stops the body (P3, COL-01), so the fixtures go back to their Frames
 		if (WORLD_ART.townProps.id !== "" && missing.includes(WORLD_ART.townProps.id)) {
 			lost.add("townProps");
 			warn("[world] the town's fixtures' atlas did not load: the fixtures are drawn with Frames");
+		}
+		// the entrances' atlas (ART-17): a doorstep that never arrives would be a door with nothing in front of it, so
+		// the entrances go back to their flat drawing
+		if (WORLD_ART.entrances.id !== "" && missing.includes(WORLD_ART.entrances.id)) {
+			lost.add("entrances");
+			warn("[world] the entrances' atlas did not load: the doors are drawn flat");
 		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");

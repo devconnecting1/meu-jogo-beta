@@ -150,6 +150,7 @@ const PERCEPTION = require(join(SRC, "shared/sim/ai/perception.ts"));
 const TUNING = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
+const TREES = require(join(SRC, "shared/data/trees.ts"));
 /** the campus (EDI-17): its planner, when this checkout has one (an older one, through PZ_SRC, has no campus) */
 const CAMPUS_MODULE = join(SRC, "shared/game/campus.ts");
 const CAMPUS = existsSync(CAMPUS_MODULE) ? require(CAMPUS_MODULE) : undefined;
@@ -190,11 +191,9 @@ const CORNER = TOWN.CORNER_CLEAR ?? 200;
 const PITCH_MIN = 440;
 const PITCH_MAX = 660;
 const LANE_FREE = TOWN.LANE_FREE ?? 150;
-/** ESC-01 table (world units) and tolerance */
+/** ESC-01 table (world units) and tolerance; a crown's size is its kind's (shared/data/trees.ts, VEG-06) */
 const SCALE = {
 	trunk: 44,
-	canopyMin: 150,
-	canopyMax: 172,
 	carL: 200,
 	carW: 100,
 	trash: 36,
@@ -203,6 +202,15 @@ const SCALE = {
 	sidewalk: 128,
 };
 const TOL = 0.3;
+/** VEG-06: at most this share of the town's trees dead (APO-01: a few) */
+const VEG06_DEAD_MAX = 0.05;
+/** VEG-06: a planted street's commonest kind at least this share of its grown trees (young and dead aside) */
+const VEG06_STREET_MAIN = 0.6;
+/**
+ * VEG-06: a park's trees stand in groves when a tree's nearest neighbour is of its own kind at least this many times as
+ * often as a random mix of the same trees would make it (the groves measured 1.27-2.2x chance over 90 towns)
+ */
+const VEG06_GROVES = 1.2;
 const TYPE_TAG = {
 	1: "house",
 	2: "house",
@@ -2372,6 +2380,12 @@ function validate(seed) {
 
 	// --- VEG-02: street trees in the service strip / median, aligned, regularly spaced
 	const groups = new Map();
+	/** VEG-06: the kinds along each planted street (the same keys) */
+	const plantedKinds = new Map();
+	const plant = (key, s) => {
+		if (!plantedKinds.has(key)) plantedKinds.set(key, []);
+		if (s.variant !== undefined) plantedKinds.get(key).push(TREES.treeSpecies(s.variant));
+	};
 	for (const s of trees) {
 		const m = medians.find(q => inside(s, q));
 		if (m) {
@@ -2381,6 +2395,7 @@ function validate(seed) {
 			if (off > 2) fail("VEG-02", `median tree #${s.id} off the median axis by ${fmt(off)} u`, cx(s), cy(s));
 			if (!groups.has(key)) groups.set(key, []);
 			groups.get(key).push(v ? cy(s) : cx(s));
+			plant(key, s);
 			continue;
 		}
 		for (const { e } of allEdges) {
@@ -2392,6 +2407,7 @@ function validate(seed) {
 			const key = `${e.side}${e.curb},${e.a}`;
 			if (!groups.has(key)) groups.set(key, []);
 			groups.get(key).push(uv.u);
+			plant(key, s);
 		}
 	}
 	let streetTrees = 0;
@@ -2422,6 +2438,120 @@ function validate(seed) {
 		}
 		if (!(s.canopyR > 0)) fail("VEG-04", `tree #${s.id} without a canopy`, cx(s), cy(s));
 	}
+
+	// --- VEG-06: the trees' kinds (shared/data/trees.ts). Every tree is a known kind in one of its looks, its crown in
+	// its kind's range; a few dead ones (APO-01); a planted street keeps one kind; a park grows in groves, not the even
+	// scatter of a yard; and no tree has its very drawing (kind and look) beside it
+	const SPECIES = TREES.TREE_SPECIES;
+	const kinds = SPECIES.map(() => 0);
+	for (const s of trees) {
+		const k = s.variant === undefined ? -1 : TREES.treeSpecies(s.variant);
+		const sp = SPECIES[k];
+		if (sp === undefined || TREES.treeLook(s.variant) >= sp.looks) {
+			fail("VEG-06", `tree #${s.id} is no kind and look (variant ${s.variant})`, cx(s), cy(s));
+			continue;
+		}
+		kinds[k]++;
+		if (!(s.canopyR >= sp.rMin && s.canopyR <= sp.rMax)) {
+			fail(
+				"VEG-06",
+				`${sp.name} #${s.id}: crown ${fmt(s.canopyR)} u outside ${sp.rMin}-${sp.rMax}`,
+				cx(s),
+				cy(s),
+			);
+		}
+		if (s.tint === undefined) fail("VEG-06", `${sp.name} #${s.id} without its green`, cx(s), cy(s));
+	}
+	const deadShare = kinds[TREES.TREE_DEAD] / Math.max(1, trees.length);
+	if (deadShare > VEG06_DEAD_MAX) {
+		fail("VEG-06", `${fmt(deadShare * 100)}% of the trees dead (APO-01: a few, <= ${VEG06_DEAD_MAX * 100}%)`, 0, 0);
+	}
+	const missing = SPECIES.filter((_, k) => kinds[k] === 0).map(sp => sp.name);
+	if (missing.length > 0) fail("VEG-06", `no ${missing.join(", ")} in the whole town`, 0, 0);
+	// a twin: a tree of the same kind and look within TREE_TWIN_NEAR, planted before it (a lower id). The generator's
+	// freeLook takes one only when every look of the kind already stood that close to the spot
+	const NEAR = TREES.TREE_TWIN_NEAR;
+	let twins = 0;
+	for (const b of trees) {
+		const sp = SPECIES[TREES.treeSpecies(b.variant ?? 0)];
+		if (sp === undefined) continue;
+		const near = W.querySolids(w, cx(b) - NEAR, cy(b) - NEAR, cx(b) + NEAR, cy(b) + NEAR).filter(
+			a =>
+				a.kind === "tree" &&
+				a.id < b.id &&
+				a.variant !== undefined &&
+				TREES.treeSpecies(a.variant) === TREES.treeSpecies(b.variant) &&
+				Math.hypot(cx(a) - cx(b), cy(a) - cy(b)) < NEAR,
+		);
+		if (!near.some(a => a.variant === b.variant)) continue;
+		twins++;
+		const taken = new Set(near.map(a => TREES.treeLook(a.variant)));
+		if (taken.size < sp.looks) {
+			fail(
+				"VEG-06",
+				`${sp.name} #${b.id}: the same look as a tree within ${NEAR} u, another look free`,
+				cx(b),
+				cy(b),
+			);
+		}
+	}
+	// a planted street (a verge's trees along one lot edge, a median's): one kind, but for its young and dead ones
+	let plantedWorst = 1;
+	for (const [key, list] of plantedKinds) {
+		const main = list.filter(k => k !== TREES.TREE_YOUNG && k !== TREES.TREE_DEAD);
+		if (main.length < 4) continue;
+		const counts = {};
+		for (const k of main) counts[k] = (counts[k] ?? 0) + 1;
+		const share = Math.max(...Object.values(counts)) / main.length;
+		plantedWorst = Math.min(plantedWorst, share);
+		if (share < VEG06_STREET_MAIN) {
+			fail("VEG-06", `a planted street of mixed kinds (${fmt(share * 100)}% one kind) [${key}]`, 0, 0);
+		}
+	}
+	// the parks in groves: a grove is a stand of one kind, so a park tree's nearest grown neighbour (shrubs and dead
+	// ones aside) is of its own kind far more often than if the park's kinds were mixed at random. (A count of trees
+	// per quadrat no longer tells: a park's playground and court, MOB-05, empty whole quarters of any layout.)
+	let sameKind = 0;
+	let byChance = 0;
+	let parkTrees = 0;
+	for (const p of w.lots.filter(l => l.kind === "park")) {
+		const Y = p.yard;
+		const grown = W.querySolids(w, Y.x, Y.y, Y.x + Y.w, Y.y + Y.h).filter(
+			s =>
+				s.kind === "tree" &&
+				s.variant !== undefined &&
+				TREES.treeSpecies(s.variant) !== TREES.TREE_SHRUB &&
+				TREES.treeSpecies(s.variant) !== TREES.TREE_DEAD,
+		);
+		if (grown.length < 3) continue;
+		const freq = {};
+		for (const s of grown) freq[TREES.treeSpecies(s.variant)] = (freq[TREES.treeSpecies(s.variant)] ?? 0) + 1;
+		for (const a of grown) {
+			let best;
+			let bd = Infinity;
+			for (const b of grown) {
+				const d = b === a ? Infinity : Math.hypot(cx(a) - cx(b), cy(a) - cy(b));
+				if (d < bd) {
+					bd = d;
+					best = b;
+				}
+			}
+			const k = TREES.treeSpecies(a.variant);
+			parkTrees++;
+			if (TREES.treeSpecies(best.variant) === k) sameKind++;
+			byChance += (freq[k] - 1) / (grown.length - 1);
+		}
+	}
+	const groves = parkTrees > 0 ? sameKind / Math.max(1e-9, byChance) : 0;
+	if (parkTrees > 0 && groves < VEG06_GROVES) {
+		fail(
+			"VEG-06",
+			`the parks' kinds are mixed at random, not in groves (a tree's nearest is its kind ${fmt((sameKind / parkTrees) * 100)}% of the time, ${groves.toFixed(2)}x chance)`,
+			0,
+			0,
+		);
+	}
+	const treeKinds = { kinds, deadShare, twins, plantedWorst, groves };
 	for (const b of buildings) {
 		if (b.passable !== true) fail("COL-02", `${b.tags} #${b.id}: footprint/roof record collides`, cx(b), cy(b));
 	}
@@ -2614,9 +2744,17 @@ function validate(seed) {
 	const within = (v, ref) => v >= ref * (1 - TOL) && v <= ref * (1 + TOL);
 	for (const s of trees) {
 		if (!within(s.w, SCALE.trunk)) fail("ESC-01", `tree #${s.id} trunk ${s.w} u`, cx(s), cy(s));
-		const d = (s.canopyR ?? 0) * 2;
-		if (d < SCALE.canopyMin * (1 - TOL) || d > SCALE.canopyMax * (1 + TOL)) {
-			fail("ESC-01", `tree #${s.id} canopy ${fmt(d)} u`, cx(s), cy(s));
+	}
+	// the crowns' table is each kind's (shared/data/trees.ts; VEG-06 checks every tree against it): VEG-05, never
+	// smaller than the survivor nor the size of a building (the smallest house)
+	for (const sp of TREES.TREE_SPECIES) {
+		if (sp.rMin * 2 <= BODY_R * 2 || sp.rMax * 2 >= 428) {
+			fail(
+				"VEG-05",
+				`${sp.name}: crown ${sp.rMin * 2}-${sp.rMax * 2} u (a body is ${BODY_R * 2}, a house 428)`,
+				0,
+				0,
+			);
 		}
 	}
 	for (const s of cars) {
@@ -2668,6 +2806,7 @@ function validate(seed) {
 		interior,
 		mix,
 		campus,
+		treeKinds,
 		bank,
 		everyday,
 	};
@@ -2703,6 +2842,11 @@ for (const seed of seeds) {
 	if (stats.campus?.present) {
 		console.log(`  campus: block ${stats.campus.block} | quad: ${stats.campus.props}, ${stats.campus.trees} trees`);
 	}
+	const tk = stats.treeKinds;
+	console.log(
+		`  trees (VEG-06): ${TREES.TREE_SPECIES.map((sp, k) => `${sp.name} ${tk.kinds[k]}`).join(", ")} | dead ${fmt(tk.deadShare * 100)}% | ` +
+			`twins ${tk.twins} | planted streets >= ${fmt(tk.plantedWorst * 100)}% one kind | parks' groves ${tk.groves.toFixed(2)}x chance`,
+	);
 	CAMPUS_RUN.towns++;
 	if (stats.campus?.present) CAMPUS_RUN.campus++;
 	const ev = stats.everyday;
