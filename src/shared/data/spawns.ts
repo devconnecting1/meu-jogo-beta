@@ -145,6 +145,132 @@ export function getDayPopulation(day: number): DayPopulation {
 	return DAY_POPULATION[4];
 }
 
+/**
+ * The everyday town's buildings (docs/DESIGN_RULES.md EDI-18, EDI-03: what each held before the outbreak), by
+ * building type (shared/data/buildings.ts BuildingType 16..26). A record beside BUILDING_SPAWNS, not more rows of it:
+ * the ids jump past the college campus's (12-15, EDI-17), and a hole in an array is a hole in the Luau table. Read
+ * through `spawnRows`. Only items that already exist, each line a small share of a 2-3 slot search: a hardware store is
+ * wood and steel pieces with the odd tool, a pawn shop pieces of gold (never Gold: it is only smelted) and a watch, the
+ * police station's armoury a few rounds -- guns stay the gun shop's (a pistol at 4 % of a line) -- and the fire station
+ * the medic kit and the axe on the wall. The loot per town, category by category, is in EDI-18 (`tools/town-census.mjs`).
+ */
+export const TOWN_SPAWNS: Record<number, Array<SpawnEntry>> = {
+	// hardware store: lumber, steel, stone, and the tools on the wall
+	16: [
+		{ building: 16, kind: 4, index: 23, min: 2, max: 4 },
+		{ building: 16, kind: 4, index: 25, min: 1, max: 3 },
+		{ building: 16, kind: 4, index: 24, min: 1, max: 2 },
+		{ building: 16, kind: 4, index: 30, min: 0.3, max: 0.3 },
+		{ building: 16, kind: 4, index: 31, min: 0.3, max: 0.3 },
+		{ building: 16, kind: 4, index: 32, min: 0.4, max: 0.4 },
+		{ building: 16, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: 16, kind: 1, index: 2, min: 0.08, max: 0.08 },
+		{ building: 16, kind: 1, index: 3, min: 0.08, max: 0.08 },
+		{ building: 16, kind: 1, index: 4, min: 0.08, max: 0.08 },
+		// a small town's hardware store keeps a case of shotgun shells for the hunting season
+		{ building: 16, kind: 4, index: 45, min: 2, max: 5 },
+	],
+	// auto repair: motor oil, spare parts, scrap steel; now and then an engine on the stand
+	17: [
+		{ building: 17, kind: 4, index: 48, min: 3, max: 6 },
+		{ building: 17, kind: 4, index: 30, min: 1, max: 2 },
+		{ building: 17, kind: 4, index: 25, min: 2, max: 3 },
+		{ building: 17, kind: 4, index: 31, min: 0.4, max: 0.4 },
+		{ building: 17, kind: 4, index: 32, min: 0.3, max: 0.3 },
+		{ building: 17, kind: 4, index: 37, min: 0.05, max: 0.05 },
+		{ building: 17, kind: 1, index: 3, min: 0.05, max: 0.05 },
+	],
+	// electronics: batteries, bulbs, chips; a flashlight or a watch off the shelf
+	18: [
+		{ building: 18, kind: 4, index: 31, min: 1, max: 2 },
+		{ building: 18, kind: 4, index: 32, min: 1, max: 2 },
+		{ building: 18, kind: 4, index: 35, min: 0.3, max: 0.3 },
+		{ building: 18, kind: 4, index: 36, min: 0.1, max: 0.1 },
+		{ building: 18, kind: 4, index: 42, min: 0.05, max: 0.05 },
+		{ building: 18, kind: 2, index: 13, min: 0.1, max: 0.1 },
+		{ building: 18, kind: 2, index: 11, min: 0.1, max: 0.1 },
+		{ building: 18, kind: 2, index: 10, min: 0.05, max: 0.05 },
+	],
+	// bakery: bread, and what the counter sold with it
+	19: [
+		{ building: 19, kind: 3, index: 4, min: 1, max: 3 },
+		{ building: 19, kind: 3, index: 18, min: 1, max: 2 },
+		{ building: 19, kind: 3, index: 17, min: 0.5, max: 0.5 },
+		{ building: 19, kind: 3, index: 14, min: 0.3, max: 0.3 },
+	],
+	// pawn shop: pieces of gold, watches, a compass, a bat or a club behind the counter -- no guns (they are the gun shop's)
+	20: [
+		{ building: 20, kind: 4, index: 27, min: 1, max: 2 },
+		{ building: 20, kind: 2, index: 10, min: 0.25, max: 0.25 },
+		{ building: 20, kind: 2, index: 11, min: 0.15, max: 0.15 },
+		{ building: 20, kind: 2, index: 8, min: 0.1, max: 0.1 },
+		{ building: 20, kind: 2, index: 13, min: 0.1, max: 0.1 },
+		{ building: 20, kind: 2, index: 1, min: 0.1, max: 0.1 },
+		{ building: 20, kind: 1, index: 6, min: 0.1, max: 0.1 },
+		{ building: 20, kind: 1, index: 8, min: 0.1, max: 0.1 },
+		{ building: 20, kind: 4, index: 31, min: 0.3, max: 0.3 },
+		// a box of rounds pawned with a gun long sold
+		{ building: 20, kind: 4, index: 44, min: 3, max: 6 },
+	],
+	// post office: the parcels nobody delivered -- a little of everything, rarely much
+	21: [
+		{ building: 21, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: 21, kind: 4, index: 41, min: 0.3, max: 0.3 },
+		{ building: 21, kind: 3, index: 9, min: 0.4, max: 0.4 },
+		{ building: 21, kind: 3, index: 12, min: 0.4, max: 0.4 },
+		{ building: 21, kind: 4, index: 31, min: 0.3, max: 0.3 },
+		{ building: 21, kind: 4, index: 32, min: 0.2, max: 0.2 },
+		{ building: 21, kind: 2, index: 8, min: 0.05, max: 0.05 },
+		{ building: 21, kind: 2, index: 10, min: 0.05, max: 0.05 },
+	],
+	// bank: the vault's pieces of gold, a watch in a safe-deposit box, the staff's first aid kit
+	22: [
+		{ building: 22, kind: 4, index: 27, min: 1, max: 2 },
+		{ building: 22, kind: 2, index: 11, min: 0.1, max: 0.1 },
+		{ building: 22, kind: 2, index: 10, min: 0.1, max: 0.1 },
+		{ building: 22, kind: 3, index: 5, min: 0.1, max: 0.1 },
+		{ building: 22, kind: 4, index: 34, min: 1, max: 1 },
+	],
+	// church: the food pantry's shelves, blankets, the parish first aid box
+	23: [
+		{ building: 23, kind: 3, index: 9, min: 1, max: 2 },
+		{ building: 23, kind: 3, index: 4, min: 1, max: 2 },
+		{ building: 23, kind: 3, index: 12, min: 0.5, max: 0.5 },
+		{ building: 23, kind: 3, index: 5, min: 0.1, max: 0.1 },
+		{ building: 23, kind: 4, index: 34, min: 1, max: 2 },
+	],
+	// fire station: the EMS bag, the axe on the truck, turnout leather, the generator's fuel
+	24: [
+		{ building: 24, kind: 3, index: 5, min: 0.3, max: 0.3 },
+		{ building: 24, kind: 3, index: 12, min: 1, max: 2 },
+		{ building: 24, kind: 3, index: 6, min: 0.2, max: 0.2 },
+		{ building: 24, kind: 1, index: 2, min: 0.15, max: 0.15 },
+		{ building: 24, kind: 2, index: 13, min: 0.15, max: 0.15 },
+		{ building: 24, kind: 4, index: 41, min: 1, max: 1 },
+		{ building: 24, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: 24, kind: 4, index: 48, min: 2, max: 4 },
+	],
+	// police station: a few rounds from the armoury, the stun gun and the flashlight off a belt, the first aid kit
+	25: [
+		{ building: 25, kind: 4, index: 44, min: 6, max: 12 },
+		{ building: 25, kind: 4, index: 45, min: 3, max: 6 },
+		{ building: 25, kind: 3, index: 12, min: 1, max: 1 },
+		{ building: 25, kind: 3, index: 5, min: 0.2, max: 0.2 },
+		{ building: 25, kind: 2, index: 13, min: 0.25, max: 0.25 },
+		{ building: 25, kind: 1, index: 26, min: 0.05, max: 0.05 },
+		{ building: 25, kind: 1, index: 10, min: 0.04, max: 0.04 },
+	],
+	// offices: the supply cupboard (batteries, bulbs, a chip), the kitchenette's can, a coat left on a hook
+	26: [
+		{ building: 26, kind: 4, index: 31, min: 0.4, max: 0.4 },
+		{ building: 26, kind: 4, index: 32, min: 0.4, max: 0.4 },
+		{ building: 26, kind: 4, index: 35, min: 0.15, max: 0.15 },
+		{ building: 26, kind: 3, index: 9, min: 0.3, max: 0.3 },
+		{ building: 26, kind: 4, index: 34, min: 1, max: 1 },
+		{ building: 26, kind: 2, index: 10, min: 0.05, max: 0.05 },
+	],
+};
+
 export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 	[
 		{ building: 0, kind: 4, index: 23, min: 2, max: 5 },
@@ -304,3 +430,13 @@ export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 		{ building: 11, kind: 3, index: 1, min: 1, max: 2 },
 	],
 ];
+
+/**
+ * The table a building of type `bt` searches: its row of BUILDING_SPAWNS, or the everyday town's (TOWN_SPAWNS), or
+ * undefined for a type with neither (shared/sim/loot.ts `buildingLootRows` falls back to the general table).
+ */
+export function spawnRows(bt: number): Array<SpawnEntry> | undefined {
+	const extra = TOWN_SPAWNS[bt];
+	if (extra !== undefined) return extra;
+	return bt >= 0 && bt < BUILDING_SPAWNS.size() ? BUILDING_SPAWNS[bt] : undefined;
+}

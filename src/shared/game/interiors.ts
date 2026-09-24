@@ -52,7 +52,11 @@ export type RoomKind =
 	| "ward"
 	| "treatment"
 	| "diner"
-	| "galley";
+	| "galley"
+	// the everyday town (docs/DESIGN_RULES.md EDI-18): a church's nave, a workshop or fire engine bay, a holding cell
+	| "nave"
+	| "garage"
+	| "cell";
 
 export type FloorKind = "wood" | "tile" | "shop" | "carpet" | "kitchen" | "bath" | "concrete";
 
@@ -830,8 +834,214 @@ const HOSPITAL: Array<Template> = [
 	},
 ];
 
+// ---------------------------------------------------------------------------------------------- the everyday town
+
+/** EDI-18's rooms: a shop's, and the lobby, office, secure room, garage, nave and cell of the civic buildings */
+const TOWN_ROOMS: Record<string, RoomKind> = {
+	S: "sales",
+	R: "stock",
+	X: "secure",
+	O: "office",
+	o: "office",
+	E: "lobby",
+	K: "galley",
+	G: "garage",
+	N: "nave",
+	C: "cell",
+	B: "bedroom",
+};
+
+/** the bakery (684 × 556): the shop with its pastry case on the street, the bakehouse behind */
+const BAKERY: Array<Template> = [
+	{
+		cols: [62, 38],
+		rows: [64, 36],
+		map: [
+			["S", "S"],
+			["K", "."],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "R", 0.5],
+			[0, 1, "K", 0.5],
+		],
+		extra: 1,
+		links: [[0, 0, 0, 1, 0]],
+	},
+	{
+		cols: [26, 48, 26],
+		rows: [64, 36],
+		map: [
+			["S", "S", "S"],
+			[".", "K", "."],
+		],
+		rooms: TOWN_ROOMS,
+		main: [1, 0],
+		doors: [[1, 1, "K", 0.5]],
+		extra: 1,
+		links: [[1, 0, 1, 1, 0]],
+	},
+];
+
+/** the auto repair shop (684 × 556): the workshop bay on the street, the counter beside it, parts behind */
+const AUTO_REPAIR: Array<Template> = [
+	{
+		cols: [62, 38],
+		rows: [62, 38],
+		map: [
+			["G", "S"],
+			["G", "R"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 0, "F", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 2,
+		links: [
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the bank (684 × 556): the banking hall with the tellers' counter, the manager's office and the vault */
+const BANK: Array<Template> = [
+	{
+		cols: [58, 42],
+		rows: [60, 40],
+		map: [
+			["E", "E"],
+			["O", "X"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[0, 1, "L", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[0, 1, 1, 1, 0],
+		],
+	},
+];
+
+/** offices (684 × 556): the reception on the street, two offices behind */
+const OFFICES: Array<Template> = [
+	{
+		cols: [50, 50],
+		rows: [54, 46],
+		map: [
+			["E", "E"],
+			["O", "o"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the church (808 × 684): the entrance tower on the street, the nave behind it with a side door each way */
+const CHURCH: Array<Template> = [
+	{
+		cols: [28, 44, 28],
+		rows: [24, 76],
+		map: [
+			[".", "E", "."],
+			["N", "N", "N"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [1, 0],
+		doors: [
+			[0, 1, "L", 0.5],
+			[2, 1, "R", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 2,
+		links: [[1, 0, 1, 1, 1]],
+	},
+];
+
+/** the fire station (808 × 684): the engine bay on the apron, the office and the crew's bunk room beside it */
+const FIRE_STATION: Array<Template> = [
+	{
+		cols: [60, 40],
+		rows: [55, 45],
+		map: [
+			["G", "O"],
+			["G", "B"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 1, "K", 0.5],
+			[1, 0, "F", 0.5],
+		],
+		extra: 2,
+		links: [
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the police station (808 × 684): the lobby, the officers' room, the holding cell and the armoury */
+const POLICE_STATION: Array<Template> = [
+	{
+		cols: [55, 45],
+		rows: [52, 48],
+		map: [
+			["E", "O"],
+			["C", "X"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[1, 0, "R", 0.5],
+			[0, 0, "L", 0.5],
+			[1, 0, "F", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the everyday town's templates (EDI-18), or undefined for a type that is not one of them */
+function townTemplates(bt: number): Array<Template> | undefined {
+	if (bt === 16 || bt === 18 || bt === 21) return smallShop("R");
+	if (bt === 17) return AUTO_REPAIR;
+	if (bt === 19) return BAKERY;
+	if (bt === 20) return smallShop("X");
+	if (bt === 22) return BANK;
+	if (bt === 23) return CHURCH;
+	if (bt === 24) return FIRE_STATION;
+	if (bt === 25) return POLICE_STATION;
+	if (bt === 26) return OFFICES;
+	return undefined;
+}
+
 /** the templates that fit a footprint of this type, `along` × `depth` */
 function templatesFor(bt: number, along: number, depth: number): Array<Template> {
+	const town = townTemplates(bt);
+	if (town !== undefined) return town;
 	if (bt === 1 || bt === 2) {
 		const area = along * depth;
 		if (area > 1000000) return [HOUSE_XL];
@@ -916,6 +1126,9 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	treatment: { floor: "tile", win: 0, early: false },
 	diner: { floor: "wood", win: 1, early: true },
 	galley: { floor: "kitchen", win: 0, early: false },
+	nave: { floor: "wood", win: 1, early: true },
+	garage: { floor: "concrete", win: 0, early: false },
+	cell: { floor: "concrete", win: 0, early: false },
 };
 
 // ---------------------------------------------------------------------------------------------- local geometry
@@ -2746,7 +2959,112 @@ const DEFINING: Array<FurnitureKind> = [
 
 // ---------------------------------------------------------------------------------------------- furnishing by room
 
+/**
+ * The everyday town's rooms (EDI-18), each with the piece that says what it is (EDI-08) -- the existing pieces only:
+ * the hardware store's shelves and lumber rack, the pawn shop's glass cases, the post office's counter and sorting
+ * racks, the bank's tellers' counter and vault safe, the church's pews and altar table, the workshop's racks and
+ * workbench, the fire crew's lockers, the holding cell's bench and toilet. Answers whether it furnished the room
+ * (false: the ordinary furnishing of its kind, `furnish`, does).
+ */
+function furnishTown(pl: Planner, ctx: RoomCtx, bt: number): boolean {
+	const k = ctx.kind;
+	if (k === "nave") {
+		// the altar table against the back wall, two banks of pews facing it with the aisle between them
+		if (!pl.againstWall(ctx, "table", 136, 56, "K")) pl.againstWall(ctx, "table", 112, 52);
+		if (pl.grid(ctx, "bench", 132, 36, true, 2, 5, 0.1, 0.72, PATH) === 0) {
+			pl.grid(ctx, "bench", 104, 36, true, 2, 4, 0.1, 0.8, PATH);
+		}
+		pl.roomWindow(ctx);
+		return true;
+	}
+	if (k === "garage") {
+		// the bay stays open (an engine or a car on the lift); racks, lockers and the bench along its walls
+		if (bt === 24) {
+			pl.againstWall(ctx, "lockers", 160, 32, "K");
+			pl.againstWall(ctx, "lockers", 128, 32);
+			pl.againstWall(ctx, "rack", 112, 44);
+		} else {
+			pl.againstWall(ctx, "rack", 160, 44, "K");
+			pl.againstWall(ctx, "counter", 136, 44);
+			pl.againstWall(ctx, "cabinet", 56, 36);
+		}
+		return true;
+	}
+	if (k === "cell") {
+		pl.againstWall(ctx, "bench", 112, 36, "K");
+		pl.againstWall(ctx, "toilet", 32, 40);
+		return true;
+	}
+	if (k === "galley" && bt === 19) {
+		// the bakehouse: the oven, the kneading bench, the proving rack -- sized for a shop's back room
+		if (!pl.againstWall(ctx, "stove", 112, 52, "K")) pl.againstWall(ctx, "stove", 72, 44);
+		if (!pl.againstWall(ctx, "counter", 144, 44)) pl.againstWall(ctx, "counter", 96, 40);
+		if (!pl.againstWall(ctx, "rack", 96, 40)) pl.island(ctx, "prep", 96, 48, true);
+		return true;
+	}
+	if (k === "secure" && (bt === 20 || bt === 22)) {
+		// the pawn shop's back room and the bank's vault: the safe, and a cabinet of deposit boxes -- no gun rack
+		pl.againstWall(ctx, "safe", 56, 56, "K");
+		pl.againstWall(ctx, "cabinet", 88, 36);
+		return true;
+	}
+	if (k === "lobby" && (bt === 22 || bt === 25 || bt === 26)) {
+		// the tellers' counter, the police front desk, an office's reception; a bench to wait on
+		pl.island(ctx, "reception", 168, 52, true);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bench", 112, 36);
+		if (bt !== 25) pl.againstWall(ctx, "cabinet", 56, 36);
+		return true;
+	}
+	if (k !== "sales") return false;
+	if (bt === 16) {
+		// hardware: shelves of tools and fittings, the lumber rack, aisles between the gondolas
+		pl.againstWall(ctx, "shelf", 180, 36, "K");
+		pl.againstWall(ctx, "rack", 140, 44);
+		pl.aisles(ctx, "gondola", 48);
+		return true;
+	}
+	if (bt === 17) {
+		// the auto repair shop's counter: the till and a shelf of parts
+		pl.againstWall(ctx, "checkout", 112, 52, "K");
+		pl.againstWall(ctx, "shelf", 112, 36);
+		return true;
+	}
+	if (bt === 18) {
+		// electronics: wall shelves, a display table in the middle, the till by the door
+		pl.againstWall(ctx, "shelf", 180, 36, "K");
+		pl.againstWall(ctx, "shelf", 140, 36);
+		pl.island(ctx, "display", 150, 44, true, 0, 30);
+		pl.againstWall(ctx, "checkout", 112, 52, "L");
+		return true;
+	}
+	if (bt === 19) {
+		// bakery: the pastry case across the shop, bread shelves behind it
+		pl.island(ctx, "display", 180, 44, true, 0, -20);
+		pl.againstWall(ctx, "shelf", 160, 36, "K");
+		pl.againstWall(ctx, "checkout", 96, 44, "L");
+		return true;
+	}
+	if (bt === 20) {
+		// pawn shop: glass cases, the shelves of what was pawned, the counter
+		pl.island(ctx, "display", 140, 44, true, -90, 10);
+		pl.island(ctx, "display", 140, 44, true, 90, 10);
+		pl.againstWall(ctx, "shelf", 160, 36, "K");
+		pl.againstWall(ctx, "checkout", 96, 44, "L");
+		return true;
+	}
+	if (bt === 21) {
+		// post office: the counter across the back, the wall of P.O. boxes
+		pl.againstWall(ctx, "counter", 200, 44, "K");
+		pl.againstWall(ctx, "shelf", 160, 36);
+		pl.againstWall(ctx, "bench", 112, 36);
+		return true;
+	}
+	return false;
+}
+
 function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
+	if (furnishTown(pl, ctx, bt)) return;
 	const k = ctx.kind;
 	const rng = pl.rng;
 	if (k === "living") {

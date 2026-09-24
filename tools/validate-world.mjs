@@ -137,8 +137,14 @@ Module._extensions[".ts"] = function (m, filename) {
 
 const W = require(join(SRC, "shared/game/world.ts"));
 const { DESIGN, TOWN } = require(join(SRC, "shared/engine/constants.ts"));
+/** the everyday town's layout module (EDI-18..EDI-22), on a checkout that has it */
+const TL_FILE = join(SRC, "shared/game/townLots.ts");
+const TL = existsSync(TL_FILE) ? require(TL_FILE) : undefined;
 const physics = require(join(SRC, "shared/game/physics.ts"));
-const { BUILDING_SPAWNS, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+const SPAWNS = require(join(SRC, "shared/data/spawns.ts"));
+const { BUILDING_SPAWNS, PUMP_LOOT } = SPAWNS;
+/** the table a building type searches (spawns.ts `spawnRows`: the everyday town's types are in their own record) */
+const spawnRows = t => (SPAWNS.spawnRows !== undefined ? SPAWNS.spawnRows(t) : BUILDING_SPAWNS[t]);
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 
@@ -203,8 +209,21 @@ const TYPE_TAG = {
 	9: "gunshop",
 	10: "cloth",
 	11: "restaurant",
+	// the everyday town (EDI-18)
+	16: "hardware",
+	17: "autorepair",
+	18: "electronics",
+	19: "bakery",
+	20: "pawn",
+	21: "postoffice",
+	22: "bank",
+	23: "church",
+	24: "firestation",
+	25: "police",
+	26: "office",
 };
-const SHOPS = [6, 7, 8, 9, 10, 11];
+/** the buildings that stand at the sidewalk (EDI-02): the shops, and Main Street's offices, bank and police station */
+const SHOPS = [6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22, 25, 26];
 
 // ---------------------------------------------------------------- geometry helpers
 
@@ -338,7 +357,31 @@ function reachability(w, start) {
 // ---------------------------------------------------------------- interiors (EDI-08..EDI-14)
 
 /** the doors a type is meant to have (front + back / service / exits), EDI-09 */
-const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2 };
+const DOOR_TARGET = {
+	1: 2,
+	2: 2,
+	3: 3,
+	4: 3,
+	5: 2,
+	6: 2,
+	7: 3,
+	8: 2,
+	9: 2,
+	10: 2,
+	11: 2,
+	// the everyday town (EDI-18): the front and a back or side door; the church a side door each way
+	16: 2,
+	17: 2,
+	18: 2,
+	19: 2,
+	20: 2,
+	21: 2,
+	22: 2,
+	23: 3,
+	24: 2,
+	25: 2,
+	26: 2,
+};
 /**
  * share of a type's buildings that must reach DOOR_TARGET (a secondary door is dropped where the ground outside is
  * taken), over all the towns of a run: per town it is noise (3-9 pharmacies or gun shops a town)
@@ -347,7 +390,19 @@ const DOOR_SHARE = 0.6;
 /** type → buildings and those with all their doors, summed over every seed of the run */
 const DOOR_RUN = {};
 /** rooms that never get a window (EDI-10): a bathroom, a hall, the back rooms, the gun shop's secure room */
-const NO_WINDOW = new Set(["bath", "hall", "stock", "cold", "secure", "corridor", "treatment", "galley"]);
+const NO_WINDOW = new Set([
+	"bath",
+	"hall",
+	"stock",
+	"cold",
+	"secure",
+	"corridor",
+	"treatment",
+	"galley",
+	// the everyday town's back rooms (EDI-18): a workshop or engine bay, a holding cell
+	"garage",
+	"cell",
+]);
 /** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
 const APPROACH = 80;
 /** walker speed (u/s): 3 px/frame at 30 fps, shared/data/zombies.ts */
@@ -378,6 +433,10 @@ const DEFINING = {
 	diner: ["table", "booth"],
 	galley: ["stove", "counter", "prep"],
 	lobby: ["reception", "bench", "cabinet"],
+	// the everyday town (EDI-18): a nave its pews, a workshop or engine bay its racks, lockers or bench, a cell its bench
+	nave: ["bench"],
+	garage: ["rack", "lockers", "counter"],
+	cell: ["bench", "toilet"],
 };
 
 /**
@@ -823,6 +882,115 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 	);
 }
 
+// ---------------------------------------------------------------- the everyday town's mix (EDI-18, EDI-19)
+
+/** the kinds every town has at least one of (EDI-18): medicine, food, ammunition, tools, the law, the fire engine */
+const ESSENTIAL = [
+	["pharmacy", [6]],
+	["a food store", [7, 8]],
+	["gun shop", [9]],
+	["hardware store", [16]],
+	["police station", [25]],
+	["fire station", [24]],
+	["hospital", [4]],
+	["school", [3]],
+];
+
+/**
+ * EDI-18: no kind past its quota (world.ts SHOP_QUOTA, SCHOOLS, HOSPITALS, GAS_STATIONS; two churches, one fire
+ * station) and none of the essentials missing. EDI-19: two of a kind at least their `apart` blocks apart (Chebyshev,
+ * on the grid of lots), never two on one block or facing each other across a street, never more than GAS_PER_AVENUE
+ * gas stations on one avenue. Answers a summary for the seed's line.
+ */
+function mixChecks(w, buildings, fail) {
+	const quota = W.SHOP_QUOTA;
+	if (quota === undefined) return { shops: 0 };
+	const cap = { 3: W.SCHOOLS ?? 2, 4: W.HOSPITALS ?? 2, 5: W.GAS_STATIONS ?? 4, 23: 2, 24: 1 };
+	const apart = { 3: 3, 4: 3, 5: 2, 23: 3, 24: 1 };
+	for (const q of quota) {
+		cap[q.type] = q.cap;
+		apart[q.type] = Math.max(1, q.apart);
+	}
+	const xs = [...new Set(w.lots.map(l => l.x))].sort((a, b) => a - b);
+	const ys = [...new Set(w.lots.map(l => l.y))].sort((a, b) => a - b);
+	const lotOf = b => w.lots.find(l => cx(b) >= l.x && cx(b) < l.x + l.w && cy(b) >= l.y && cy(b) < l.y + l.h);
+	const byType = new Map();
+	for (const b of buildings) {
+		const t = b.buildingType;
+		if (t <= 2) continue;
+		if (!byType.has(t)) byType.set(t, []);
+		byType.get(t).push({ b, lot: lotOf(b) });
+	}
+	for (const [t, list] of byType) {
+		if (cap[t] !== undefined && list.length > cap[t]) {
+			fail(
+				"EDI-18",
+				`${list.length} ${TYPE_TAG[t]} buildings in town (at most ${cap[t]})`,
+				cx(list[0].b),
+				cy(list[0].b),
+			);
+		}
+	}
+	for (const [what, types] of ESSENTIAL) {
+		if (!types.some(t => (byType.get(t) ?? []).length > 0)) fail("EDI-18", `no ${what} in town`, 0, 0);
+	}
+	const opposite = { top: "bottom", bottom: "top", left: "right", right: "left" };
+	let pairs = 0;
+	for (const [t, list] of byType) {
+		for (let i = 0; i < list.length; i++) {
+			for (let k = i + 1; k < list.length; k++) {
+				pairs++;
+				const a = list[i];
+				const o = list[k];
+				if (a.lot === undefined || o.lot === undefined) continue;
+				const blocks = Math.max(
+					Math.abs(xs.indexOf(a.lot.x) - xs.indexOf(o.lot.x)),
+					Math.abs(ys.indexOf(a.lot.y) - ys.indexOf(o.lot.y)),
+				);
+				const need = apart[t] ?? 1;
+				if (a.lot === o.lot) {
+					fail("EDI-19", `two ${TYPE_TAG[t]} on one block (#${a.b.id}, #${o.b.id})`, cx(a.b), cy(a.b));
+				} else if (blocks < need) {
+					fail(
+						"EDI-19",
+						`${TYPE_TAG[t]} #${a.b.id} and #${o.b.id} ${blocks} block(s) apart (at least ${need})`,
+						cx(a.b),
+						cy(a.b),
+					);
+				}
+				// facing each other across one street: neighbouring blocks, the doors looking at each other, close along it
+				if (blocks === 1 && o.b.doorSide === opposite[a.b.doorSide]) {
+					const along = alongX(a.b.doorSide);
+					const du = along ? Math.abs(a.b.doorX - o.b.doorX) : Math.abs(a.b.doorY - o.b.doorY);
+					if (du < 700) {
+						fail(
+							"EDI-19",
+							`${TYPE_TAG[t]} #${a.b.id} and #${o.b.id} face each other across a street`,
+							cx(a.b),
+							cy(a.b),
+						);
+					}
+				}
+			}
+		}
+	}
+	// gas stations: at most GAS_PER_AVENUE on each avenue (the street their forecourt opens onto)
+	const perRoad = new Map();
+	for (const { b, lot } of byType.get(5) ?? []) {
+		const e = lot === undefined ? undefined : lotEdges(w, lot).find(x => x.side === b.doorSide);
+		if (e === undefined || e.road === undefined) continue;
+		perRoad.set(e.road, (perRoad.get(e.road) ?? 0) + 1);
+	}
+	for (const [road, n] of perRoad) {
+		if (w.roads[road]?.avenue && n > (W.GAS_PER_AVENUE ?? 2)) {
+			fail("EDI-19", `${n} gas stations on one avenue (at most ${W.GAS_PER_AVENUE ?? 2})`, 0, 0);
+		}
+	}
+	let shops = 0;
+	for (const [t, list] of byType) if (t >= 3) shops += list.length;
+	return { shops, kinds: byType.size, pairs };
+}
+
 /** gameLoop.findSpawnPoint, replayed with a seeded Math.random */
 function spawnPoints(w, n) {
 	const out = [];
@@ -855,8 +1023,33 @@ const CATEGORY = {
 	food: /bread|canned|meat|potato|pizza|meal|mushroom|apple|berry|soup/i,
 	oil: /^oil$/i,
 	cloth: /cloth|leather/i,
+	// the everyday town's (EDI-18): building material, electrical parts, pieces of gold
+	materials: /^wood$|^stone$|piece of steel/i,
+	parts: /battery|bulb|computer chip|machine parts|voltage circuit/i,
+	gold: /piece of gold/i,
 };
-const REQUIRED = { 4: "medical", 6: "medical", 9: "ammo", 7: "food", 8: "food", 11: "food", 5: "oil", 10: "cloth" };
+const REQUIRED = {
+	4: "medical",
+	6: "medical",
+	9: "ammo",
+	7: "food",
+	8: "food",
+	11: "food",
+	5: "oil",
+	10: "cloth",
+	// EDI-18: what each of the everyday town's buildings held before the outbreak
+	16: "materials",
+	17: "oil",
+	18: "parts",
+	19: "food",
+	20: "gold",
+	21: "cloth",
+	22: "gold",
+	23: "food",
+	24: "medical",
+	25: "ammo",
+	26: "parts",
+};
 
 /**
  * How each type says what it is from outside (EDI-03): the storefront signs of shared/data/buildingSigns.ts
@@ -926,7 +1119,8 @@ function validate(seed) {
 	const drives = w.lots.flatMap(l => (l.ground ?? []).filter(g => g.kind === "drive" || g.kind === "apron"));
 	// a gas station's forecourt furniture (EDI-16): the canopy, the price sign's footing, the cars at the pumps
 	const aprons = w.lots.flatMap(l => (l.ground ?? []).filter(g => g.kind === "apron"));
-	const canopies = S.filter(s => s.kind === "canopy");
+	// a gas station's canopy (tags "canopy"); a market stall's tent and a bus shelter are canopies of their own (EDI-20, MOB-04)
+	const canopies = S.filter(s => s.kind === "canopy" && s.tags === "canopy");
 	const gasSigns = S.filter(s => s.tags === "gas_sign");
 	const pumpCars = cars.filter(s => s.variant !== undefined && aprons.some(a => inside(s, a)));
 	const forecourtProp = s => s.tags === "pump" || s.tags === "gas_sign" || pumpCars.includes(s);
@@ -1202,6 +1396,38 @@ function validate(seed) {
 				b.doorY,
 			);
 		}
+		// the church keeps a front lawn like the houses beside it (EDI-18)
+		if (t === 23 && (front < TOWN.SETBACK_HOUSE_MIN - 8 || front > TOWN.SETBACK_HOUSE_MAX + 8)) {
+			fail("EDI-02", `church #${b.id}: front lawn ${fmt(front)} u`, b.doorX, b.doorY);
+		}
+		// the fire station stands behind its apron, clear of everything (EDI-22)
+		if (t === 24) {
+			const apronDepth = TL?.FIRE_APRON ?? 256;
+			if (front < apronDepth - 8)
+				fail("EDI-22", `firestation #${b.id}: apron only ${fmt(front)} u deep`, b.doorX, b.doorY);
+			const court =
+				d.n[0] === 0
+					? { x: b.x, y: Math.min(b.y, b.y + d.n[1] * front) + (d.n[1] > 0 ? b.h : 0), w: b.w, h: front }
+					: { x: Math.min(b.x, b.x + d.n[0] * front) + (d.n[0] > 0 ? b.w : 0), y: b.y, w: front, h: b.h };
+			if (!aprons.some(a => overlap(a, court) && a.w * a.h >= court.w * court.h * 0.9)) {
+				fail("EDI-22", `firestation #${b.id}: no apron in front of its bay`, cx(court), cy(court));
+			}
+			const stuff = W.querySolids(
+				w,
+				court.x + 1,
+				court.y + 1,
+				court.x + court.w - 1,
+				court.y + court.h - 1,
+			).filter(s => W.isBlocking(s) && s.parentId !== b.id);
+			if (stuff.length > 0) {
+				fail(
+					"EDI-22",
+					`firestation #${b.id}: apron obstructed by ${stuff[0].kind}/${stuff[0].tags}`,
+					cx(stuff[0]),
+					cy(stuff[0]),
+				);
+			}
+		}
 		if (t === 5) {
 			if (front < (TOWN.FORECOURT ?? 280) - 8) {
 				fail("EDI-02", `gas #${b.id}: forecourt only ${fmt(front)} u deep`, b.doorX, b.doorY);
@@ -1261,7 +1487,7 @@ function validate(seed) {
 		if (TYPE_TAG[t] !== b.tags) {
 			fail("EDI-03", `building #${b.id}: type ${t} tagged "${b.tags}" (expected "${TYPE_TAG[t]}")`, cx(b), cy(b));
 		}
-		const table = BUILDING_SPAWNS[t];
+		const table = spawnRows(t);
 		if (!table) {
 			fail("EDI-03", `building #${b.id}: no loot table for type ${t}`, cx(b), cy(b));
 		} else if (REQUIRED[t] && !table.some(e => CATEGORY[REQUIRED[t]].test(itemName(e.kind, e.index)))) {
@@ -1400,6 +1626,9 @@ function validate(seed) {
 	for (const c of canopies) {
 		if (!aprons.some(a => inside(c, a))) fail("EDI-16", `canopy #${c.id} over no forecourt`, cx(c), cy(c));
 	}
+
+	// --- EDI-18 / EDI-19: the everyday town's mix, and no kind repeated on every corner
+	const mix = mixChecks(w, buildings, fail);
 
 	// --- EDI-05: buildings off sidewalks and roads, alleys of at least BUILDING_GAP
 	for (const b of buildings) {
@@ -1740,6 +1969,7 @@ function validate(seed) {
 		trash: trash.length,
 		crossings: crossings.length,
 		interior,
+		mix,
 	};
 	return { fails, stats };
 }

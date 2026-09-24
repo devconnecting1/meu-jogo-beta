@@ -19,6 +19,7 @@ import {
 	PUMP_LOOT,
 	PUMP_LOOT_SLOTS,
 	SpawnEntry,
+	spawnRows,
 } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
@@ -39,7 +40,7 @@ const WOOD_INDEX = 23;
 
 /** the table a building of type `bt` rolls from (the general table for a type that has none) */
 export function buildingLootRows(bt: number): Array<SpawnEntry> {
-	return bt >= 0 && bt < BUILDING_SPAWNS.size() ? BUILDING_SPAWNS[bt] : BUILDING_SPAWNS[0];
+	return spawnRows(bt) ?? BUILDING_SPAWNS[0];
 }
 
 /** one slot: a line of the table, then its chance (min = max < 1) or its range (min..max); undefined = empty */
