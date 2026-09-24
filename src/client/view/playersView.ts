@@ -105,8 +105,13 @@ export class PlayersView {
 		for (const rp of list) {
 			const slot = this.slotOf(rp, clock);
 			this.advanceWalk(slot, rp, dt);
+			// an ally who appeared somewhere new fades in there, body, vehicle and pet together (N3)
+			r.alphaScale = rp.alpha ?? 1;
 			this.drawPetOf(r, cam, v, slot, rp, dt, clock, shadow);
-			if (!circleInView(rp.x, rp.y, SURVIVOR_R + CULL_MARGIN, v)) continue;
+			if (!circleInView(rp.x, rp.y, SURVIVOR_R + CULL_MARGIN, v)) {
+				r.alphaScale = 1;
+				continue;
+			}
 			look.x = rp.x;
 			look.y = rp.y;
 			look.angle = rp.angle;
@@ -137,6 +142,7 @@ export class PlayersView {
 				drawVehicle(r, cam, rp.ride, rp.x, rp.y, rp.rideHeading, so.x, so.y, look.z - 2);
 			}
 			drawSurvivor(r, cam, look, slot.trail);
+			r.alphaScale = 1;
 		}
 	}
 
@@ -161,9 +167,13 @@ export class PlayersView {
 				plate = new AllyPlate(parent, zIndex, rp);
 				slot.plate = plate;
 			}
-			// off screen: keep the instances, show nothing (a plate on the edge would point at empty asphalt)
-			if (circleInView(rp.x, rp.y, SURVIVOR_R + CULL_MARGIN, v)) plate.update(cam, rp, clock);
-			else plate.hide();
+			// off screen: keep the instances, show nothing (a plate on the edge would point at empty asphalt); and the plate
+			// of a body still fading in where it appeared (N3) waits for the body to be there
+			if (circleInView(rp.x, rp.y, SURVIVOR_R + CULL_MARGIN, v) && (rp.alpha ?? 1) >= 0.5) {
+				plate.update(cam, rp, clock);
+			} else {
+				plate.hide();
+			}
 		}
 		this.retire(clock);
 	}

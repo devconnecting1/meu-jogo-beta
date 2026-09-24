@@ -41,7 +41,7 @@ import {
 } from "shared/net/shopGuard";
 import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
-import { MpHost, startMpHost } from "./net/mpHost";
+import { LINGER_S, MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, ownerTag, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
@@ -105,8 +105,15 @@ const AUTOSAVE_MIN_BUDGET = 4;
 const LOCK_STALE = 300;
 /** rewrite (refreshing the lock) at least this often even without changes (s) */
 const LOCK_REFRESH = 150;
-/** how long a join waits for another server to release the lock before taking it over (s) */
-const LOCK_WAIT = 15;
+/** the combat-log guard's backstop: a leaving session's last write is made at most this long after LINGER_S (s) */
+const GUARD_BACKSTOP_S = 2;
+/**
+ * How long a join waits for another server to release the lock before taking it over (s): 15, plus the combat-log
+ * guard's longest hold on a leaving session's last write (LINGER_S, then the backstop) -- a player who quits mid-bite
+ * and joins another server at once must load the save written after the guard, not take the lock under it (review of
+ * 6e6dfa0).
+ */
+const LOCK_WAIT = 15 + LINGER_S + GUARD_BACKSTOP_S;
 const JOB_ID = game.JobId !== "" ? game.JobId : `studio-${HttpService.GenerateGUID(false)}`;
 
 /** client can re-request a failed load at most this often (s) */
@@ -1399,22 +1406,68 @@ Players.PlayerRemoving.Connect(player => {
 	waitUntil(() => s.loaded, 60);
 	// every step is guarded (F5): none may cost the session its last write, nor skip the cleanup below
 	if (s.pending !== undefined) guarded("last report", () => processPending(s), s.key);
+	/** the last write, and the cleanup after it: once, now or when the combat-log guard lets the body go */
+	let written = false;
+	const finish = (): void => {
+		// a shutdown writes every session still here itself (BindToClose), a lingering one included
+		if (written || shuttingDown) return;
+		written = true;
+		guarded("final save", () => flush(s, true), s.key);
+		// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
+		// it, and the mark below stays until then
+		if (s.writing && waitUntil(() => !s.writing, 60)) guarded("final save", () => flush(s, true), s.key);
+		// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps
+		// this user's next session here from taking the lock under that write. Left behind, it held every later join
+		// 20-35 s
+		sessions.delete(player);
+		releasing.delete(userId);
+	};
 	// §7.2 "Desconectar": the body goes into the save — runHp, runHunger, runOver, the magazine back into the
 	// reserve — BEFORE the final write. mpHost's own PlayerRemoving handler does the same, but the two handlers
-	// run in no guaranteed order, and this write is the last one the session gets.
-	if (s.loaded) guarded("banking the body", () => mpHost?.release(player, s.save), s.key);
-	guarded("final save", () => flush(s, true), s.key);
-	// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
-	// it, and the mark below stays until then
-	if (s.writing && waitUntil(() => !s.writing, 60)) guarded("final save", () => flush(s, true), s.key);
-	// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps this
-	// user's next session here from taking the lock under that write. Left behind, it held every later join 20-35 s
-	sessions.delete(player);
-	releasing.delete(userId);
+	// run in no guaranteed order, and this write is the last one the session gets. The combat-log guard (§7.2 F4): a
+	// body in a fight stays in the street LINGER_S more and is banked only then -- the final write (and the lock's
+	// release, which another server's load is waiting on, LOCK_WAIT) waits for it, and `finish` runs from there
+	const lingers =
+		s.loaded && guarded("banking the body", () => mpHost?.release(player, s.save, finish) === true, s.key) === true;
+	if (!lingers) {
+		finish();
+		return;
+	}
+	// the backstop: a heartbeat that stopped, a host replaced -- the session's last write never waits on the body for
+	// longer than the guard itself (and `finish` runs once, whichever comes first). The body is banked FIRST, as it
+	// stands, so the write carries it -- never the save from before the bank (review of 6e6dfa0)
+	task.delay(LINGER_S + GUARD_BACKSTOP_S, () => {
+		if (written || shuttingDown) return;
+		guarded("banking the body", () => mpHost?.bankLingering(userId), s.key);
+		finish();
+	});
 });
 
-game.BindToClose(() => {
+game.BindToClose(reason => {
 	shuttingDown = true;
+	const closing = os.clock();
+	// the combat-log guard on an EMPTY server (review of 6e6dfa0, HIGH): the last player quitting mid-bite empties it
+	// -- Play solo, a private town of one, the last one on a public server -- and the platform closes it a moment later.
+	// That close is the player's doing, not the server's: the host keeps ticking (the Heartbeat runs while this waits)
+	// until the guard has let every body go, as it would have on a server that stayed up, at most LINGER_S + 0.5 s --
+	// taken out of the writes' budget below, so the whole callback stays under the platform's 30 s. Any other reason
+	// (an update, maintenance, a developer's shutdown) is the server's doing: the bodies are banked as they stand
+	const host = mpHost;
+	const held = host !== undefined && guarded("the combat-log guard", () => host.guarding()) === true;
+	let guardOutcome = held ? "bodies in the guard banked as they stand" : "no body in the guard";
+	if (held && host !== undefined && reason === Enum.CloseReason.ServerEmpty) {
+		const emptied = waitUntil(
+			() => guarded("the combat-log guard", () => host.guarding()) !== true,
+			LINGER_S + 0.5,
+		);
+		guardOutcome = emptied ? "the guard emptied" : "the guard timed out";
+	}
+	// one line per close, for the owner reading a server's last minute (the log, never the Error Report): why it
+	// closed, what the guard did and how long it held the close
+	print(
+		`[${GAME_NAME}] closing (${tostring(reason)}): ${guardOutcome} after ` +
+			`${string.format("%.1f", os.clock() - closing)} s`,
+	);
 	// §7.2 "Servidor desligando": stop the simulation and bank every body into its save before the writes below
 	// capture them (a second BindToClose would race this one, so the host is stopped here, first). Guarded (F5): a
 	// simulation that cannot stop must not keep a single save from being written
@@ -1433,7 +1486,8 @@ game.BindToClose(() => {
 			remaining -= 1;
 		});
 	}
-	waitUntil(() => remaining <= 0, SHUTDOWN_BUDGET);
+	// whatever the guard's wait above took comes out of this budget: the callback as a whole stays SHUTDOWN_BUDGET
+	waitUntil(() => remaining <= 0, math.max(0, SHUTDOWN_BUDGET - (os.clock() - closing)));
 });
 
 task.spawn(() => {

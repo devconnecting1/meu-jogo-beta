@@ -526,6 +526,78 @@
 			"description": "manhole cover"
 		},
 		{
+			"name": "puddle0",
+			"file": "puddle0.png",
+			"kind": "sprite",
+			"w": 38,
+			"h": 11,
+			"description": "rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo)"
+		},
+		{
+			"name": "puddle0V",
+			"file": "puddle0V.png",
+			"kind": "sprite",
+			"w": 11,
+			"h": 38,
+			"description": "rain puddle in a gutter: long, stepped edge, on a vertical road"
+		},
+		{
+			"name": "puddle1",
+			"file": "puddle1.png",
+			"kind": "sprite",
+			"w": 30,
+			"h": 10,
+			"description": "rain puddle in a gutter, a small pool past its end (sky streaks, lit rim, wet halo)"
+		},
+		{
+			"name": "puddle1V",
+			"file": "puddle1V.png",
+			"kind": "sprite",
+			"w": 10,
+			"h": 30,
+			"description": "rain puddle in a gutter, a small pool past its end, on a vertical road"
+		},
+		{
+			"name": "puddle2",
+			"file": "puddle2.png",
+			"kind": "sprite",
+			"w": 22,
+			"h": 14,
+			"description": "rain puddle in a lane: a dip in the asphalt (sky streaks, lit rim, wet halo)"
+		},
+		{
+			"name": "puddle2V",
+			"file": "puddle2V.png",
+			"kind": "sprite",
+			"w": 14,
+			"h": 22,
+			"description": "rain puddle in a lane: a dip in the asphalt, on a vertical road"
+		},
+		{
+			"name": "puddle3",
+			"file": "puddle3.png",
+			"kind": "sprite",
+			"w": 32,
+			"h": 15,
+			"description": "rain puddle in a lane, a small pool before it (sky streaks, lit rim, wet halo)"
+		},
+		{
+			"name": "puddle3V",
+			"file": "puddle3V.png",
+			"kind": "sprite",
+			"w": 15,
+			"h": 32,
+			"description": "rain puddle in a lane, a small pool before it, on a vertical road"
+		},
+		{
+			"name": "puddleDrop",
+			"file": "puddleDrop.png",
+			"kind": "sprite",
+			"w": 3,
+			"h": 3,
+			"description": "a drop's ring on a puddle (4 texels)"
+		},
+		{
 			"name": "drain",
 			"file": "drain.png",
 			"kind": "sprite",

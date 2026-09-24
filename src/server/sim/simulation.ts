@@ -402,7 +402,7 @@ export class ServerSimulation {
 	 * boot took (`buildAround`): the horde and the bosses, the projectiles in flight, the combat's rewind history,
 	 * the kill credit, and — where the server owns them (F3) — the ground items, the loot timers, the doors, the
 	 * fires and the constructions. The clock opens day 1 at 07:00 with no night promised (`WorldClock.restart`),
-	 * and the §3.6 day count starts again.
+	 * and the §3.6 day count starts again; `seed`, the new town's, rolls its weather from then on (LUZ-05).
 	 *
 	 * What stays: the survivors in their slots, their input queues and the tick counter — the session (and the
 	 * clock epoch every client is anchored to) does not end with the town. Their BODIES belong to the old streets,
@@ -414,7 +414,7 @@ export class ServerSimulation {
 	 * simulation exactly as it was — the one thing construction touches outside itself, the clock's `onWaveFill`
 	 * (a ZombieWorld subscribes on construction), is put back — so the caller can let the old world go on.
 	 */
-	restartWorld(world: WorldData): void {
+	restartWorld(world: WorldData, seed?: number): void {
 		const fill = this.clock.onWaveFill;
 		const [built, systems] = pcall(() => this.buildAround(world));
 		if (!built) {
@@ -439,7 +439,8 @@ export class ServerSimulation {
 		}
 		this.dayTicks = 0;
 		this.world = world;
-		this.clock.restart();
+		// day 1 at 07:00, and the new town's own skies (LUZ-05: the weather is rolled from the town's seed)
+		this.clock.restart(1, 7, seed);
 		this.adoptSystems(systems as TownSystems);
 		// the reset is committed: the old world's Heartbeat debt is not the new one's to repay, and neither is the
 		// time this reset is taking (generating the town, 100-250 ms), which the NEXT heartbeat's delta will carry
@@ -729,6 +730,9 @@ export class ServerSimulation {
 		// `onExp` fires LATER, from the brain that removes the body, for that very same zombie: paying it
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
+		// a body the population moves across the map is a new body to every client (a new netId): the past a shot could
+		// be rewound into belongs to the one that left (review of 577c729, L4)
+		horde.onMoved = z => combat.history.forget(z.id);
 		return out;
 	}
 

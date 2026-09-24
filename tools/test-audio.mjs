@@ -54,6 +54,9 @@
  *   K.  UPLOAD         `npm run cloud -- upload-audio`: the dry run reads no key; against tools/fake-open-cloud.mjs,
  *                      Audio assets in audio/wav, only new or changed banks, ids and hashes written, a stale id left
  *                      out of the module, a bank refused by moderation kept out.
+ *   L.  THUNDER        (LUZ-05) a storm plays one thunderclap per clap of the schedule the server masks the horde's ears
+ *                      with, at the strike's level; none in a plain rain or a clear day; a clock that jumps plays none;
+ *                      the library's thunder without the bank's id, our three takes with it.
  *
  * Pure Node (>= 18) + the project's TypeScript on the shared shims (tools/ui-shim.mjs).
  */
@@ -869,7 +872,7 @@ const asked = [];
 const askedOf = n => asked.filter(a => a === n).length;
 const isFlat = snd => snd.Parent?.ClassName !== "Attachment";
 const BANK_IDS = { ui: "rbxassetid://7001", items: "rbxassetid://7002", weapons: "rbxassetid://7003" };
-Object.assign(BANK_IDS, { impacts: "rbxassetid://7004", cues: "rbxassetid://7005" });
+Object.assign(BANK_IDS, { impacts: "rbxassetid://7004", cues: "rbxassetid://7005", weather: "rbxassetid://7006" });
 /** hands every bank an id (as an upload would), or takes them all away */
 function banks(on) {
 	for (const b of Object.keys(AA.AUDIO_BANK_IDS)) AA.AUDIO_BANK_IDS[b] = on ? BANK_IDS[b] : "";
@@ -1700,7 +1703,7 @@ section(
 		}
 		check(
 			drift.length === 0,
-			"os 5 bancos em design/audio/banks sao os do gerador (deterministico; npm run audio:sfx)",
+			`os ${SFX.BANKS.length} bancos em design/audio/banks sao os do gerador (deterministico; npm run audio:sfx)`,
 			drift.join(", "),
 		);
 		const windowsMatch = Object.entries(sounds).every(
@@ -1759,8 +1762,10 @@ section(
 			env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ROBLOX_"))),
 		});
 		check(
-			dry.status === 0 && /nenhuma chave foi lida/.test(dry.stdout) && /5 bancos de som/.test(dry.stdout),
-			"--dry-run lista os 5 bancos sem ler chave nenhuma",
+			dry.status === 0 &&
+				/nenhuma chave foi lida/.test(dry.stdout) &&
+				new RegExp(`${SFX.BANKS.length} bancos de som`).test(dry.stdout),
+			`--dry-run lista os ${SFX.BANKS.length} bancos sem ler chave nenhuma`,
 			(dry.stdout || dry.stderr).split("\n")[0],
 		);
 		const tmp = mkdtempSync(join(tmpdir(), "pz-audio-"));
@@ -1818,11 +1823,11 @@ section(
 			const ts = readFileSync(tsOut, "utf8");
 			check(
 				first.status === 0 &&
-					first.uploads.length === 5 &&
+					first.uploads.length === SFX.BANKS.length &&
 					first.uploads.every(
 						u => u.assetType === "Audio" && u.contentType === "audio/wav" && u.creator.userId === "4242",
 					),
-				"a primeira vez: os 5 bancos sobem como Audio, audio/wav, do criador do .env",
+				`a primeira vez: os ${SFX.BANKS.length} bancos sobem como Audio, audio/wav, do criador do .env`,
 				first.status === 0
 					? first.uploads.map(u => u.displayName).join(", ")
 					: first.out.trim().split("\n").slice(-2).join(" | "),
@@ -1908,6 +1913,117 @@ section(
 			);
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
+		}
+	},
+);
+
+// ================================================================ L. the thunder (LUZ-05)
+
+section(
+	"L. o trovao (LUZ-05): um por estrondo da agenda da tempestade, alto se o raio caiu perto; nada fora dela; um relogio que pula nao toca",
+	() => {
+		const W = require(join(SRC, "shared/sim/weather.ts"));
+		const CLOCK = require(join(SRC, "shared/sim/clock.ts"));
+		banks(false);
+		const lib = S.soundDef("thunder");
+		check(
+			lib === S.librarySoundDef("thunder") &&
+				lib.id === S.SOUNDS.stingerWave1.id &&
+				lib.bus === "sfx" &&
+				lib.spatial !== true &&
+				lib.volume <= 0.6 &&
+				(lib.minGap ?? 0) >= 1,
+			"sem id: o trovao da biblioteca (o mesmo das vinhetas), no SFX, plano (e o ceu), volume <= 0,6, um por vez",
+			`${lib.id}, ${lib.bus}, vol ${lib.volume}`,
+		);
+		banks(true);
+		const ours = S.soundDef("thunder");
+		check(
+			ours.id === BANK_IDS.weather &&
+				ours.source === "synth" &&
+				ours.takes?.length === 3 &&
+				ours.bus === lib.bus &&
+				AA.SYNTH_SOUNDS.thunder.bank === "weather" &&
+				Object.values(AA.SYNTH_SOUNDS).every(s => s.bank !== "weather" || s === AA.SYNTH_SOUNDS.thunder),
+			"com o banco no ar: os nossos 3 takes no banco `weather`, o dele (o `cues` aprovado nao muda), com o papel da biblioteca",
+			`${ours.id}, ${ours.source}, ${ours.takes?.length} takes`,
+		);
+		banks(false);
+
+		// the spy above keeps names; this one keeps the level each clap was asked at
+		const levels = [];
+		const spied = audio.play;
+		audio.play = (name, opts) => {
+			if (name === "thunder") levels.push(opts?.scale ?? 1);
+			spied(name, opts);
+		};
+		try {
+			const listen = (kind, day, from, hours, jumpAt) => {
+				const ga = new GameAudio();
+				const refs = runRefs();
+				const dn = { isNight: false, day, dayTime: from, weather: kind };
+				refs.daynight = dn;
+				ga.startRun(refs);
+				runFrame(ga, refs);
+				levels.length = 0;
+				const c0 = created;
+				let jumped = false;
+				while (dn.dayTime < from + hours) {
+					if (jumpAt !== undefined && !jumped && dn.dayTime >= jumpAt) {
+						// an admin moving the clock an hour on: the claps it flew over are not played
+						dn.dayTime += 1;
+						jumped = true;
+					}
+					dn.dayTime = CLOCK.advanceClock(dn.dayTime, 1 / 60);
+					runFrame(ga, refs);
+				}
+				const made = created - c0;
+				ga.stopRun();
+				advance(0.5);
+				const out = [...levels];
+				out.made = made;
+				return out;
+			};
+			const day = W.STORM_FROM_DAY + 5;
+			const from = 8;
+			const hours = 3;
+			const claps = W.strikesOfDay(day).filter(s => {
+				const onset = s.hour + s.delay * CLOCK.clockSpeed(s.hour);
+				return onset > from && onset <= from + hours;
+			});
+			// a first storm builds the thunder's voices (the mixer's pool); the next one creates nothing
+			listen(W.Weather.Storm, day, from, hours);
+			const heard = listen(W.Weather.Storm, day, from, hours);
+			check(
+				heard.length === claps.length && claps.length >= 2,
+				"3 horas de tempestade a 60 quadros por segundo: um trovao por estrondo da agenda (a mesma do servidor)",
+				`${heard.length} trovoes, ${claps.length} estrondos`,
+			);
+			check(
+				heard.every((v, i) => Math.abs(v - claps[i].power) < 1e-9) && Math.min(...heard) >= 0.5,
+				"...cada um no nivel da distancia do raio (1 perto, 0,5 longe)",
+				heard.map(v => v.toFixed(2)).join(" "),
+			);
+			check(
+				heard.made === 0,
+				"...e uma segunda tempestade nao cria Instance nenhuma (as vozes do pool)",
+				`${heard.made}`,
+			);
+			const rain = listen(W.Weather.Rain, day, from, hours);
+			const clear = listen(W.Weather.Clear, day, from, hours);
+			check(rain.length === 0 && clear.length === 0, "chuva sem tempestade e dia limpo: nenhum trovao");
+			const jump = listen(W.Weather.Storm, day, from, hours, from + 0.5);
+			const skipped = claps.filter(s => {
+				const onset = s.hour + s.delay * CLOCK.clockSpeed(s.hour);
+				return onset > from + 0.5 && onset <= from + 1.5;
+			}).length;
+			check(
+				jump.length <= claps.length - skipped,
+				"um relogio que pula uma hora nao toca os trovoes que pulou",
+				`${jump.length} de ${claps.length} (${skipped} pulados)`,
+			);
+		} finally {
+			audio.play = spied;
 		}
 	},
 );

@@ -38,14 +38,18 @@ import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
 import { rideHeading } from "shared/sim/rideKey";
 import * as SurvivorLight from "shared/sim/survivorLight";
+import { FLASH_LIFT, Weather } from "shared/sim/weather";
 import { STRUCTURE_LIGHT_R } from "shared/sim/ai/zombieTuning";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
 import {
 	netActive,
 	netBindAdmin,
+	netHosted,
+	netPlaced,
 	netReset,
 	netServerSeconds,
+	netSnaps,
 	netStats,
 	netTownSeed,
 	netUpdate,
@@ -53,6 +57,7 @@ import {
 	takeNetFx,
 	ZombieDeathEvent,
 } from "./net/netClient";
+import { EntryHold } from "./net/entryHold";
 import { createRawInput, readRawInput } from "./net/localInput";
 import { RemotePlayerView } from "./net/netTypes";
 import { MP_PHASE } from "shared/net/mpConfig";
@@ -76,6 +81,7 @@ import { BodyGrid } from "./view/bodyGrid";
 import { priceSignRect } from "./view/buildingSigns";
 import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
+import { WeatherFrame, WeatherView } from "./view/weatherView";
 import * as Quality from "./view/quality";
 import { reducedMotion } from "./ui/skin";
 
@@ -221,8 +227,16 @@ export class GameLoop {
 	private readonly groundItems = new GroundItemsView(this.shadowFor);
 	/** the horde and the bosses: the mirror of the server's bodies (§4.2) and everything that draws them */
 	private readonly actors = new ActorsView();
+	/**
+	 * Nothing of a new run is drawn until the server has placed the survivor, and then the camera is cut onto them
+	 * (client/net/entryHold.ts): the first frame is the server's spawn, never the client's guess sliding over to it.
+	 */
+	private readonly entry = new EntryHold();
 	/** blood, debris, shot lines, blasts and the projectiles the server flies (§4.1 Fx) */
 	private readonly fxView = new FxView();
+	/** the weather's fog, rain and puddles (LUZ-05); the lightning is the night overlay's own (drawLight) */
+	private readonly weather = new WeatherView();
+	private readonly weatherFrame: WeatherFrame = { clock: 0, reduceMotion: false, low: false };
 	/** what the actor views need from the loop each frame, refilled in place instead of rebuilt */
 	private readonly drawOpts: ActorDrawOpts = { shadow: this.shadowFor, clock: 0 };
 	/** this frame's §4.2 Fx events, drained from the network layer into one reused buffer */
@@ -289,6 +303,14 @@ export class GameLoop {
 		this.actors.reset();
 		this.fxView.clear(this.refs);
 		this.machines.clear();
+		// a new town's streets are dry until its sky says otherwise (the first frame settles on the clock's weather); its
+		// puddles are placed now and the fog's light map is built, not on the first frame it rains or fogs (LUZ-05)
+		this.weather.reset();
+		this.weather.prepare(this.world);
+		{
+			const ctx = getCtx();
+			this.weather.warmFog(ctx.darkLayer, ctx.viewW, ctx.viewH, Quality.lowDetail(save.settings.graphics));
+		}
 		this.netFx.clear();
 		this.wireOpts.localSlot = -1;
 		this.particles.clear();
@@ -302,7 +324,8 @@ export class GameLoop {
 		// (and everybody else on it) was still in the middle of night three. When the WORLD itself ends (MP-22) the
 		// handover still happens, and the day-1 Clock delta the server sends right behind its WorldReset jumps it
 		const previousClock = this.daynight;
-		this.daynight = new DayNight(save);
+		// offline the town's skies are rolled here, from its seed, as the server rolls them (LUZ-05)
+		this.daynight = new DayNight(save, this.townSeed);
 		this.daynight.adoptWorld(previousClock);
 		this.daynight.onAnnounce = msg => {
 			this.fx.push({ kind: "message", text: msg });
@@ -342,6 +365,9 @@ export class GameLoop {
 		const ctx = getCtx();
 		ctx.cam.x = this.player.x;
 		ctx.cam.y = this.player.y;
+		// ...but on a server the spot above is only this client's guess: where the survivor enters is the server's
+		// (the safe spawn, a kept body, a corpse), and nothing is drawn until it says so (client/net/entryHold.ts)
+		this.entry.begin(netHosted(), netSnaps());
 	}
 
 	/** Start on a street near the centre of town: never inside a building, a car or a tree. */
@@ -475,8 +501,10 @@ export class GameLoop {
 		// The session runs for a dead survivor too: the server keeps stepping them (server/sim/simulation.ts),
 		// and it is `netUpdate` that brings the revive (PlayerLife, MP-21), the allies and the horde. Offline, a
 		// dead body is simply not stepped -- stepPlayer would regenerate it.
+		// ...and while a hosted run waits for the server to place the survivor (client/net/entryHold.ts) there is no
+		// offline step either: walking the client's own guess around only moved the spot the first frame jumped from
 		if (netActive()) this.stepNetPlayer(ctx, dt);
-		else if (!p.dead) this.stepLocalPlayer(ctx, dt);
+		else if (!p.dead && !this.entry.holding()) this.stepLocalPlayer(ctx, dt);
 		// F2: and from MP_PHASE 2 the horde and the bosses are the server's as well. `netUpdate` (above) has
 		// just interpolated them for this frame's render time, and the mirror writes them into the very
 		// arrays the rest of the client already reads — canopies, audio, stuck arrows, the admin overlay.
@@ -513,7 +541,29 @@ export class GameLoop {
 		this.particles.update(dt);
 		updateGroundItems(this.world, dt);
 		this.interaction.update(refs, dt);
-		ctx.cam.follow(p.x, p.y, math.min(1, dt * 8));
+		// the camera eases after the survivor -- except onto the server's spot at the end of the entry hold, and after a
+		// teleport (a daybreak or Rebirth stand-up, an admin): cut there, not panned across the town
+		const cam = ctx.cam;
+		const zoom = math.max(cam.zoom, 0.01);
+		if (
+			this.entry.frame(
+				dt,
+				netActive() && netPlaced(),
+				netSnaps(),
+				p.x - cam.x,
+				p.y - cam.y,
+				cam.viewW / 2 / zoom,
+				cam.viewH / 2 / zoom,
+			)
+		) {
+			// (the admin's free camera stays where the admin put it: `follow` ignores it too)
+			if (!ctx.cam.detached) {
+				ctx.cam.x = p.x;
+				ctx.cam.y = p.y;
+			}
+		} else if (!this.entry.holding()) {
+			ctx.cam.follow(p.x, p.y, math.min(1, dt * 8));
+		}
 		ctx.cam.update(dt);
 		this.updateWorldFx(ctx.cam, dt);
 		ctx.input.beginFrame();
@@ -740,6 +790,14 @@ export class GameLoop {
 		// MicroProfiler labels (docs/research/performance.md): the sprite pool's frame, then the night's light map
 		debug.profilebegin("pz.world");
 		renderer.beginFrame();
+		if (this.entry.holding()) {
+			// the server has not placed the survivor yet (client/net/entryHold.ts): the canvas's backdrop, not a guess --
+			// and none of what is drawn over the world either, from this run or the one before it (review of 577c729, L7)
+			renderer.endFrame();
+			debug.profileend();
+			this.hideOverlays();
+			return;
+		}
 		const view = cam.viewRect(32);
 		this.updateShadowDir();
 		// the actor views read the loop's sun and its animation clock; the object is refilled, never rebuilt
@@ -753,6 +811,15 @@ export class GameLoop {
 		town.reduceMotion = reducedMotion();
 		this.machines.reduceMotion = town.reduceMotion;
 		town.drawGround(renderer, cam, view, this.world);
+		// the weather of the frame (LUZ-05): the rain eases in and out, the streets fill and dry
+		const dn = this.daynight;
+		const weather = this.weather;
+		const wf = this.weatherFrame;
+		wf.clock = this.clock;
+		wf.reduceMotion = reducedMotion();
+		wf.low = Quality.lowDetail(getCtx().save.settings.graphics);
+		weather.step(this.lastDt, dn.isRaining, dn.weather === Weather.Storm);
+		weather.drawPuddles(renderer, cam, view, this.world, wf);
 		this.drawDecals(renderer, cam, view);
 		const items = this.groundItems;
 		items.reduceMotion = reducedMotion();
@@ -776,6 +843,7 @@ export class GameLoop {
 		this.fxView.drawExplosions(renderer, cam, view, this.refs);
 		this.fxView.drawTracers(renderer, cam);
 		this.drawParticles(renderer, cam, view);
+		weather.drawRain(renderer, cam, view, wf);
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
 		debug.profileend();
@@ -786,6 +854,21 @@ export class GameLoop {
 		this.drawNameplate(cam);
 		this.drawAllyPlates(cam, view, allies);
 		this.drawChatBubbles(cam, view, allies);
+	}
+
+	/**
+	 * Everything drawn over the world outside the renderer's pool -- the night's light map, the zombies' marks, the
+	 * plates and the chat bubbles -- put away while the entry hold draws nothing (client/net/entryHold.ts, L7): the
+	 * light map and the marks of the last frame drawn (the lobby's run, the previous town) would stand over the backdrop.
+	 * Each hides only if it exists and writes only what changes.
+	 */
+	private hideOverlays(): void {
+		this.lightMap?.hide();
+		this.awareness?.hide();
+		this.chat?.hide();
+		this.playersView.hide();
+		const ctx = getCtx();
+		this.nameplate?.update(0, 0, ctx.save.level, false, titleWireOf(ctx.save));
 	}
 
 	/** the zombies' awareness marks (IA-05), over the night overlay and never over a survivor */
@@ -884,7 +967,17 @@ export class GameLoop {
 		this.lightMap.setLowDetail(Quality.lowDetail(save.settings.graphics));
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
-		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
+		// the fog (LUZ-05) under the night: clear round the survivor, thickening with distance (weatherView); the screen's
+		// fog, eased when the day's weather changes (the horde's is instant)
+		const dn = this.daynight;
+		const p = this.player;
+		const low = Quality.lowDetail(save.settings.graphics);
+		this.weather.drawFog(ctx.darkLayer, cam, dn.fogShown, p.dead ? cam.x : p.x, p.dead ? cam.y : p.y, low);
+		// the lightning lifts the night (LUZ-05): the real flash, or with Reduce Motion one slow swell -- the screen's
+		// choice; the horde lives by the server's real one
+		const flash = this.weatherFrame.reduceMotion ? dn.gentleFlash : dn.flash;
+		const darkAlpha = flash > 0 ? dn.darkBase * (1 - FLASH_LIFT * flash) : dn.darkBase;
+		const dark = darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
 		// the awareness marks follow this very darkness and these very lights (drawAwareness)
 		this.markNight.dark = dark > 0.004 ? dark : 0;
 		if (dark <= 0.004) {
@@ -894,7 +987,6 @@ export class GameLoop {
 		// refilled from its pool of records: no table per light per frame (M4)
 		const lights = this.lights;
 		lights.clear();
-		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim -- or the motorcycle's headlight
@@ -941,6 +1033,7 @@ export class GameLoop {
 		const ctx = getCtx();
 		ctx.renderer.releaseAll();
 		this.lightMap?.hide();
+		this.weather.hide();
 		this.nameplate?.update(0, 0, ctx.save.level, false);
 		this.playersView.hide();
 		this.chat?.hide();

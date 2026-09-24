@@ -1148,6 +1148,12 @@ export class ServerAnalytics {
 	 * The server killed this survivor (server/sim/life.ts `died`, after `lifeDeaths` counted it). `survivors` is who
 	 * is in the world with them (kept for the callers; the group question moved to the Night funnel's first step);
 	 * `body` and `bosses` are what the cause is read from (`causeOfDeath`).
+	 *
+	 * Not for a player who has LEFT (review of 6e6dfa0): the combat-log guard keeps a body in the fight LINGER_S after
+	 * its player quit (server/net/mpHost.ts `linger`), and it can die there. Their session already ended -- SessionEnded
+	 * went out at the departure, with the Player still here (`playerLeft`: nothing documents an event for a Player
+	 * already gone) -- so that death is not logged: no Died after SessionEnded, no Rebirth funnel for somebody who
+	 * cannot pay one. It is in the save (`runOver`), which is what the next session starts from.
 	 */
 	death(
 		save: PlayerSaveData,
@@ -1157,7 +1163,7 @@ export class ServerAnalytics {
 		bosses?: ReadonlyArray<DeathBoss>,
 	): void {
 		const e = this.entryOfSave(save);
-		if (e === undefined) return;
+		if (e === undefined || e.leftAt !== undefined) return;
 		e.lastDay = save.day;
 		e.lastDeaths = save.deathCount;
 		// tonight is over for them: a Rebirth before the next hour is a new body, not a night lived through
@@ -1271,7 +1277,18 @@ export class ServerAnalytics {
 				if (first !== undefined) break;
 			}
 		}
+		// who carries it, in order: a fallen survivor given the new life here, then any of the fallen still connected,
+		// then (a restart) the keeper who asked, then anybody connected -- the fallen come first, the keeper included
+		// when they fell with it (a restart ends every life, so they usually did)
 		if (first === undefined && report.by !== undefined) first = this.entryOfUser(report.by);
+		// the fallen all left the server (a world its dead walked out of ends only with somebody connected, MP-22 and the
+		// review of 577c729, L1): the world is still one event, on whoever is here -- in the lobby, or just connected
+		if (first === undefined) {
+			for (const [, e] of this.entries) {
+				if (e.leftAt !== undefined) continue;
+				if (first === undefined || (first.ephemeral && !e.ephemeral)) first = e;
+			}
+		}
 		if (first === undefined) return;
 		const fallen = outcome.ended.fallen;
 		const reason =
