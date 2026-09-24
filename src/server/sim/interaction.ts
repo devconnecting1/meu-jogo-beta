@@ -176,8 +176,14 @@ export class ServerInteraction {
 	private readonly pressCd = new Map<number, number>();
 	/** seconds until this door or lamp can change again (TOGGLE_COOLDOWN_S) */
 	private readonly toggleCd = new Map<Solid, number>();
-	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
+	/**
+	 * The town's containers out in the open -- pump islands, stalls, piles, sheds -- listed the first time the loot flags
+	 * need them (static: the world is this one's); a bank's deposit boxes are not among them (they are told only inside
+	 * the vault: `vaultBoxes`, EDI-24)
+	 */
 	private pumps?: Array<Solid>;
+	/** each bank's deposit boxes, by the bank's id (listed with `pumps`) */
+	private readonly vaultBoxes = new Map<number, Solid>();
 	/** the bank's vault: the work at its door, the door giving way, the alarm (EDI-24) */
 	readonly vaults: ServerVaults;
 
@@ -504,14 +510,15 @@ export class ServerInteraction {
 			const p = players[i];
 			let b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
 			if (!p.dead && (b === undefined || inVault(b, p.x, p.y))) {
-				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
-				// outside: the pump island (or the stall, the pile, the shed) in reach; inside the bank's vault: its
-				// deposit boxes (EDI-24), not the bank's own drawers
-				const near = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
+				const pumps = this.containers();
 				if (b === undefined) {
+					// outside: the pump island (or the stall, the pile, the shed) in reach -- never a bank's deposit boxes,
+					// even with only the vault's wall between (EDI-24)
+					const near = nearestPump(pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
 					b = near !== undefined && edgeDist(near, p.x, p.y) < PUMP_FLAG_REACH ? near : undefined;
-				} else if (near !== undefined && isVaultBox(near) && near.bankId === b.id) {
-					b = near;
+				} else {
+					// inside the bank's vault: its deposit boxes, not the bank's own drawers
+					b = this.vaultBoxes.get(b.id) ?? b;
 				}
 			}
 			const has = b !== undefined && this.items.hasLoot(b);
@@ -525,6 +532,20 @@ export class ServerInteraction {
 			}
 			if (id !== 0) this.out.queueFor(slot, { t: WorldEv.LootFlag, buildingId: id, hasLoot: true });
 		}
+	}
+
+	/** the town's containers out in the open, and each bank's deposit boxes (listed once: the town is static) */
+	private containers(): Array<Solid> {
+		let pumps = this.pumps;
+		if (pumps === undefined) {
+			pumps = [];
+			for (const s of pumpsOf(this.world)) {
+				if (!isVaultBox(s)) pumps.push(s);
+				else if (s.bankId !== undefined) this.vaultBoxes.set(s.bankId, s);
+			}
+			this.pumps = pumps;
+		}
+		return pumps;
 	}
 
 	/** the survivor left: forget which building they were told about (§4.4, a slot is per session) */

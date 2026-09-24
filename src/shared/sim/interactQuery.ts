@@ -11,6 +11,7 @@ import type { PlayerState } from "shared/game/player";
 import { buildingAt, GroundItem, isBlocking, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
 import { WINDOW_REACH, windowIntact } from "shared/game/windows";
 import { rectCircleOverlap } from "./placement";
+import { inVaultOf, isVaultBox } from "./vault";
 import { vehicleBroken } from "./vehicle";
 
 /** solids are looked up in a box of this half-size around the survivor */
@@ -219,6 +220,8 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		// nor does a fixture of the town that holds nothing (a bench, a hydrant, a street lamp): only the searchable
 		// ones -- a market stall, a pile, a shed -- are E's (`isYardContainer`)
 		if (s.kind === "prop" && s.lootSlots === undefined) continue;
+		// a bank's deposit boxes are reached from inside its vault only, never through the wall (EDI-24)
+		if (isVaultBox(s) && !inVaultOf(world, s.bankId, x, y)) continue;
 		const isADoor = isDoor(s);
 		const limit = isADoor ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);

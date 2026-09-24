@@ -2819,7 +2819,10 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 		const cam = new Camera();
 		const noShadow = () => ({ x: 0, y: 0 });
 		const calls = [];
-		const rec = { drawRect: (c, x, y, o) => calls.push({ x, y, w: o.w, h: o.h, image: o.image, z: o.zIndex }) };
+		const rec = {
+			drawRect: (c, x, y, o) => calls.push({ x, y, w: o.w, h: o.h, image: o.image, z: o.zIndex }),
+			drawCircle: (c, x, y, d, o) => calls.push({ x, y, w: d, h: d, image: undefined, z: o.zIndex }),
+		};
 		// without the atlas every call answers false and draws nothing: townView's Frames, as before (ART-01; §1)
 		setArt({});
 		let silent = true;
@@ -2828,6 +2831,57 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 			if (s.kind === "canopy" && s.tags !== "portico" && TPA.drawCanopyArt(rec, cam, s, noShadow)) silent = false;
 		}
 		check(silent && calls.length === 0, "no id: no fixture is drawn from the atlas (townView draws them flat)");
+		// ...and the flat fallback stays lean (the review of e9b0fbb, L5): a town holds hundreds of fixtures, so each is
+		// at most two Frames with its shadow -- a lamp or a bus stop its pole and its head, the food truck its awning too,
+		// a standing tent its canvas and three stripes (and a rent or a puddle) -- and the market's litter none at all
+		{
+			const TV = require(join(SRC, "client/view/townView.ts"));
+			const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+			const view = new WorldView(noShadow);
+			const LIMIT = { foodtruck: 3, tent: 6, shelter: 2, column: 4, bank: 0 };
+			const v = { minX: -1e9, minY: -1e9, maxX: 1e9, maxY: 1e9 };
+			const most = {};
+			let over = [];
+			for (const s of world.solids) {
+				const canopy = s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter");
+				if (s.kind !== "prop" && !canopy) continue;
+				calls.length = 0;
+				let drawn = canopy
+					? TV.drawTownCanopy(rec, cam, s, v, noShadow)
+					: TV.drawTownProp(rec, cam, s, world, noShadow);
+				// a bench (and the campus quad's fountain and statue) is worldView's own drawProp
+				if (!drawn && !canopy) {
+					view.drawProp(rec, cam, s);
+					drawn = true;
+				}
+				const n = calls.length;
+				most[s.tags] = Math.max(most[s.tags] ?? 0, n);
+				const cap = LIMIT[s.tags] ?? (s.tags === "fountain" || s.tags === "statue" ? 5 : 2);
+				if (n > cap && over.length < 6) over.push(`${s.tags}: ${n}`);
+			}
+			let litter = 0;
+			for (const l of world.lots) {
+				for (const g of l.ground) {
+					if (g.kind !== "spill" && g.kind !== "paper" && g.kind !== "bag") continue;
+					calls.length = 0;
+					TV.drawTownGround(rec, cam, g, v);
+					litter += calls.length;
+				}
+			}
+			check(
+				over.length === 0,
+				"no id: every fixture's flat fallback is at most two Frames (a lamp, a bus stop: pole and head; the food truck: 3; a tent: 5-6)",
+				over.join("; ") ||
+					Object.entries(most)
+						.map(([k, n]) => `${k} ${n}`)
+						.join(", "),
+			);
+			check(
+				litter === 0,
+				"no id: the market's litter is the pixel art's only (a decorative extra, ART-04)",
+				`${litter} calls`,
+			);
+		}
 		setArt(ALL.ids);
 		const id = ALL.ids.townProps;
 		const TOWN = new Set([

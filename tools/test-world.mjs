@@ -50,6 +50,7 @@
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installShims, setSeed } from "./luau-shim.mjs";
 
@@ -2822,6 +2823,158 @@ section(
 		checkEq(CInter.interactHint(refs, at), "Vault: needs Crowbar", "a pilula diz o que falta: um pe de cabra");
 		addItem(refs.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
 		checkEq(CInter.interactHint(refs, at), "E: Crack vault (hold)", "com ele: segurar E arromba");
+	}
+	// the review of e9b0fbb, M1: the ringing portico's light is ONE table -- the client's light map draws the server's
+	// radii, so the ground the survivor sees lit is the ground the horde sees lit (LUZ-04)
+	{
+		const T = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
+		const ZB = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+		const loop = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+		const decl = /const LIGHT_R[^=]*=\s*([^;]+);/.exec(loop);
+		let client = {};
+		if (decl !== null && decl[1].trim() === "STRUCTURE_LIGHT_R") client = T.STRUCTURE_LIGHT_R;
+		else if (decl !== null) {
+			for (const m of decl[1].matchAll(/(\w+)\s*:\s*(\d+)/g)) client[m[1]] = Number(m[2]);
+		}
+		const ck = Object.keys(client).sort().join(",");
+		const sk = Object.keys(T.STRUCTURE_LIGHT_R).sort().join(",");
+		check(
+			decl !== null && ck === sk && Object.keys(client).every(k => client[k] === T.STRUCTURE_LIGHT_R[k]),
+			"as luzes do cliente (gameLoop LIGHT_R) sao as do servidor (STRUCTURE_LIGHT_R): as mesmas fontes, os mesmos raios",
+			`${ck} | ${sk}`,
+		);
+		checkEq(T.STRUCTURE_LIGHT_R.portico, 220, "o portico com o sino tocando e uma delas (220 u)");
+		const w3 = W.serverWorld(W.generateTown(7331));
+		const po = w3.solids.find(s => V.isPortico(s));
+		const sim3 = new ServerSimulation({
+			world: w3,
+			clock: new WorldClock({ day: 1, dayTime: 23 }),
+			zombies: true,
+			interactive: true,
+		});
+		const pcx = po.x + po.w / 2;
+		const pcy = po.y + po.h / 2;
+		// a survivor 700 u off: their own light does not reach the portico
+		addPlayer(sim3, 0, pcx, pcy + 700);
+		po.powered = true;
+		for (let i = 0; i < 10; i++) sim3.step();
+		check(
+			[0, 100, 200].every(d => ZB.positionLit(sim3.horde.refs, pcx + d, pcy)),
+			"a noite, o chao ate 200 u do portico tocando esta aceso tambem para a horda",
+		);
+		po.powered = false;
+		for (let i = 0; i < Math.ceil(sim3.simHz * 1.2); i++) sim3.step();
+		check(!ZB.positionLit(sim3.horde.refs, pcx + 100, pcy), "e apaga quando o sino cala");
+	}
+	// M2: the deposit boxes are reached from inside that bank's vault only -- never the hint, the flag or the E from
+	// behind the vault's back wall (outside the bank) or from the office beside it
+	{
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const w4 = W.serverWorld(W.generateTown(7331));
+		const bk = w4.solids.find(s => s.kind === "building" && s.buildingType === 22);
+		const bx = w4.solids.find(s => V.isVaultBox(s) && s.bankId === bk.id);
+		const R = PH.PLAYER_RADIUS;
+		/** a spot within E's reach of the boxes' edge, where a body fits, outside the vault: outside the bank or in it */
+		let outside;
+		let inside;
+		for (let x = bx.x - 70; x <= bx.x + bx.w + 70 && !(outside && inside); x += 2) {
+			for (let y = bx.y - 70; y <= bx.y + bx.h + 70; y += 2) {
+				if (V.inVault(bk, x, y) || IQ.edgeDist(bx, x, y) > IQ.SOLID_REACH - 2) continue;
+				if (PH.circleBlocked(w4, x, y, R - 1) !== undefined) continue;
+				const hb = W.buildingAt(w4, x, y);
+				if (hb === undefined && outside === undefined) outside = { x, y };
+				if (hb === bk && inside === undefined) inside = { x, y };
+			}
+		}
+		check(
+			outside !== undefined && inside !== undefined,
+			"ha lugar ao alcance das caixas, fora do banco e no gabinete ao lado",
+			JSON.stringify({ outside, inside }),
+		);
+		const sim4 = new ServerSimulation({
+			world: w4,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: false,
+			interactive: true,
+		});
+		const spots = [outside, inside].filter(Boolean);
+		const who = spots.map((s, i) => addPlayer(sim4, i, s.x, s.y));
+		for (let i = 0; i < Math.ceil(sim4.simHz * 1.2); i++) sim4.step();
+		check(bx.lootItems.length > 0, "as caixas rolaram (alguem chegou perto)");
+		const flags = drain(sim4).filter(
+			p => p.ev.t === P.WorldEv.LootFlag && p.ev.buildingId === bx.id && p.ev.hasLoot,
+		);
+		checkEq(
+			flags.length,
+			0,
+			"ninguem fora da caixa-forte recebe o LootFlag das caixas (nem pela parede, nem do gabinete)",
+		);
+		for (let i = 0; i < spots.length; i++) {
+			const where = i === 0 ? "atras da parede, fora do banco" : "no gabinete ao lado";
+			check(IQ.interactTarget(w4, spots[i].x, spots[i].y)?.solid !== bx, `${where}: o alvo do E nao e as caixas`);
+			const cw = W.generateTown(7331);
+			const cbx = cw.solids.find(s => s.id === bx.id);
+			cbx.lootItems = [{ kind: 4, id: 27, count: 1 }];
+			const refs = {
+				world: cw,
+				pendingPlace: -1,
+				save: SAVE.defaultSave(),
+				players: [],
+				zombies: [],
+				player: { x: spots[i].x, y: spots[i].y, dead: false },
+				input: { keyE: false },
+			};
+			check(
+				CInter.interactHint(refs, spots[i]) !== "E: Open deposit boxes",
+				`${where}: a pilula nao oferece as caixas, mesmo sabendo que tem algo nelas`,
+				String(CInter.interactHint(refs, spots[i])),
+			);
+			const before = bx.lootItems.length;
+			send(who[i], 50 + i, 0, PRESS_E, sim4.tick / sim4.simHz);
+			const res = run(sim4, 1);
+			check(
+				bx.lootItems.length === before && !res.some(s => s.outcome.kind === "pump" && s.outcome.solid === bx),
+				`${where}: o E nao esvazia as caixas`,
+			);
+		}
+		// from inside the vault, all of it does (the cracked door, a body at the boxes)
+		const vd = w4.solids.find(s => V.isVaultDoor(s) && s.bankId === bk.id);
+		vd.open = true;
+		const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[bx.face];
+		const vin = { x: bx.x + bx.w / 2 + n[0] * (bx.w / 2 + 26), y: bx.y + bx.h / 2 + n[1] * (bx.h / 2 + 26) };
+		checkEq(IQ.interactTarget(w4, vin.x, vin.y)?.solid, bx, "dentro da caixa-forte, o alvo do E sao as caixas");
+	}
+	// L1: nothing spawns inside a vault -- no zombie and no item of the ring (population.ts ringOpen)
+	{
+		const w5 = W.generateTown(7331);
+		const bk = w5.solids.find(s => s.kind === "building" && s.buildingType === 22);
+		const vr = bk.rooms.find(r => r.kind === "vault");
+		const vx = vr.x + vr.w / 2;
+		const vy = vr.y + vr.h / 2;
+		const POP = readFileSync(join(SRC, "shared/sim/ai/population.ts"), "utf8");
+		check(
+			/inAnyVault\(world, p\.x, p\.y\)\) continue/.test(POP) &&
+				V.inAnyVault(w5, vx, vy) &&
+				!V.inAnyVault(w5, bk.x - 50, vy),
+			"o anel de nascimento (zumbis e itens) pula todo ponto dentro de uma caixa-forte",
+		);
+	}
+	// L2: the work's 0.5 s grace is refreshed by a command that arrived, not by the last input repeated: a client that
+	// sends one packet with E down and goes silent stops working within the grace (the idle fill repeats `held`)
+	{
+		const w6 = W.serverWorld(W.generateTown(7331));
+		const d6 = w6.solids.find(s => V.isVaultDoor(s));
+		const sim6 = newSim(w6);
+		const c = addPlayer(sim6, 0, at.x, at.y);
+		addItem(c.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		const cmd = P.makeCommand(1, 0, 0, 0, HOLD, PRESS_E);
+		PL.ingestInput(c, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim6.tick / sim6.simHz);
+		run(sim6, 1);
+		check(sim6.interaction.vaults.working(0), "o aperto que chegou comeca o trabalho");
+		run(sim6, Math.ceil(sim6.simHz * (V.VAULT_GRACE_S + 0.2)));
+		check(!sim6.interaction.vaults.working(0), "sem comando novo, o trabalho para dentro da tolerancia (0,5 s)");
+		run(sim6, Math.ceil(sim6.simHz * (V.VAULT_CRACK_S + 2)));
+		checkEq(d6.open, false, "e um cliente calado com o E apertado nunca arromba o cofre");
 	}
 }
 

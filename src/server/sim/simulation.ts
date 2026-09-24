@@ -1095,7 +1095,8 @@ export class ServerSimulation {
 			// rider's step never "walks" (no feet, no footsteps: VEI-05), so for them the stick moving the vehicle is the
 			// presence -- else three minutes on a motorcycle read as AFK and lost the day's credit (review V1)
 			const went = res.walking || (rode && res.moved > WALK_EPSILON);
-			this.notePresence(sp, sp.counters.consumed > consumed && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
+			const arrived = sp.counters.consumed > consumed;
+			this.notePresence(sp, arrived && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
@@ -1112,7 +1113,7 @@ export class ServerSimulation {
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
-			this.stepWorldActions(sp, cmd);
+			this.stepWorldActions(sp, cmd, arrived);
 			if (died && this.onDeath !== undefined) this.onDeath(sp);
 		}
 		prof?.end();
@@ -1193,13 +1194,14 @@ export class ServerSimulation {
 	 * edges mean build, exactly as `BuildSystem.handleInput` swallows the frame on the client; otherwise the
 	 * action press is the E key and the server picks the target itself.
 	 */
-	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand): void {
+	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand, arrived: boolean): void {
 		const build = this.build;
 		const interaction = this.interaction;
 		if (build === undefined || interaction === undefined) return;
 		// E held down (the command's held Action bit): the work at a bank's vault door goes on (EDI-24); a survivor who
-		// died, walked off or let go stops there
-		interaction.hold(sp.slot, sp.state, sp.save, (cmd.held & HeldBit.Action) !== 0);
+		// died, walked off or let go stops there. Only a command the client really sent holds it: a tick filled with the
+		// last input (players.ts) repeats the held bit, and a client gone silent with E down must not crack a vault
+		interaction.hold(sp.slot, sp.state, sp.save, arrived && (cmd.held & HeldBit.Action) !== 0);
 		if (sp.state.dead) return;
 		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
 		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);

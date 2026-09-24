@@ -53,82 +53,10 @@ const TIMBER = Color3.fromRGB(120, 86, 56);
 const SLAB = Color3.fromRGB(184, 182, 174);
 const SLAB_EDGE = Color3.fromRGB(128, 124, 116);
 const SOIL = Color3.fromRGB(92, 68, 48);
-const SOIL_ROW = Color3.fromRGB(88, 134, 64);
 /** a court's key under each hoop (its paint a shade darker), and its size */
 const COURT_KEY = Color3.fromRGB(150, 84, 64);
 const KEY_WIDE = 96;
 const KEY_DEEP = 112;
-/**
- * The street market's litter (EDI-21, APO-01): produce a shade darker and a size smaller than any item's icon on the
- * ground (LEG-03: nothing here reads as something to pick up), paper, a kraft shopping bag
- */
-const APPLE = Color3.fromRGB(138, 40, 34);
-const ORANGE = Color3.fromRGB(176, 102, 34);
-const CABBAGE = Color3.fromRGB(84, 116, 56);
-const PRODUCE: ReadonlyArray<Color3> = [APPLE, ORANGE, CABBAGE];
-const LITTER_PAPER = Color3.fromRGB(198, 192, 174);
-const KRAFT = Color3.fromRGB(162, 124, 80);
-const KRAFT_SHADE = Color3.fromRGB(120, 88, 56);
-/** a spill's three pieces of produce: where (shares of the rect) and how big */
-const SPILL_AT: ReadonlyArray<[number, number, number]> = [
-	[-0.3, -0.2, 10],
-	[0.05, 0.25, 12],
-	[0.32, -0.12, 10],
-];
-
-/** a litter rect's own pick of `n` (from its corner: the same every frame and on every client) */
-function litterPick(g: Rect, n: number): number {
-	return math.floor(math.abs(g.x * 0.37 + g.y * 0.61) / 8) % n;
-}
-
-/** what the market's crowd dropped: a spill of produce, two sheets of paper, a shopping bag on its side */
-function drawLitter(r: Renderer, cam: Camera, g: GroundRect): void {
-	const cx = g.x + g.w / 2;
-	const cy = g.y + g.h / 2;
-	const z = Z.ground + 4;
-	const p = litterPick(g, 3);
-	if (g.kind === "paper") {
-		r.drawRect(cam, cx - g.w * 0.2, cy - g.h * 0.15, {
-			w: 16,
-			h: 12,
-			rotation: 0.35 + p * 0.3,
-			color: LITTER_PAPER,
-			alpha: 0.9,
-			zIndex: z,
-		});
-		r.drawRect(cam, cx + g.w * 0.22, cy + g.h * 0.18, {
-			w: 14,
-			h: 11,
-			rotation: -0.5 - p * 0.2,
-			color: LITTER_PAPER,
-			alpha: 0.85,
-			zIndex: z,
-		});
-		return;
-	}
-	if (g.kind === "bag") {
-		const rot = 0.3 + p * 0.4;
-		r.drawRect(cam, cx, cy, { w: 24, h: 16, rotation: rot, color: KRAFT, zIndex: z });
-		r.drawRect(cam, cx + math.cos(rot) * 10, cy + math.sin(rot) * 10, {
-			w: 5,
-			h: 16,
-			rotation: rot,
-			color: KRAFT_SHADE,
-			zIndex: z + 1,
-		});
-		r.drawCircle(cam, cx + math.cos(rot) * 20, cy + math.sin(rot) * 20 + 4, 10, {
-			color: PRODUCE[p],
-			zIndex: z,
-		});
-		return;
-	}
-	for (let i = 0; i < SPILL_AT.size(); i++) {
-		const [fx, fy, d] = SPILL_AT[i];
-		const c = PRODUCE[(p + i) % 3];
-		r.drawCircle(cam, cx + g.w * fx, cy + g.h * fy, c === CABBAGE ? d + 3 : d, { color: c, zIndex: z });
-	}
-}
-
 /** a building site's bare earth, and the ruts the trucks left */
 const EARTH = Color3.fromRGB(128, 100, 72);
 const EARTH_RUT = Color3.fromRGB(104, 80, 58);
@@ -144,8 +72,10 @@ const STEP = 24;
  */
 export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): boolean {
 	const k = g.kind;
+	// the market's litter -- dropped produce, paper, a bag (EDI-21) -- is a decorative extra: the pixel art draws it,
+	// the flat fallback does not (ART-04, like the drains and the dried blood; the review of e9b0fbb, L5)
 	if (k === "spill" || k === "paper" || k === "bag") {
-		if (overlaps(g.x, g.y, g.w, g.h, v) && !drawGroundArt(r, cam, g)) drawLitter(r, cam, g);
+		if (overlaps(g.x, g.y, g.w, g.h, v)) drawGroundArt(r, cam, g);
 		return true;
 	}
 	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site") {
@@ -162,16 +92,10 @@ export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewR
 		return true;
 	}
 	if (k === "steps") {
-		// the stone, its joint round it, and each step's edge: the lit nosing, the riser's shadow under it
+		// the stone, its joint round it, and each step's edge: the riser's shadow under it
 		r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: STONE, stroke: STONE_JOINT, strokeThickness: 2, zIndex: z });
 		const across = alongX ? g.h : g.w;
 		for (let t = STEP; t < across; t += STEP) {
-			r.drawRect(cam, alongX ? cx : g.x + t - 4, alongX ? g.y + t - 4 : cy, {
-				w: alongX ? g.w - 4 : 3,
-				h: alongX ? 3 : g.h - 4,
-				color: STONE_LIT,
-				zIndex: z + 1,
-			});
 			r.drawRect(cam, alongX ? cx : g.x + t, alongX ? g.y + t : cy, {
 				w: alongX ? g.w - 4 : 5,
 				h: alongX ? 5 : g.h - 4,
@@ -182,31 +106,8 @@ export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewR
 		return true;
 	}
 	if (k === "court") {
-		r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: COURT, zIndex: z });
-		// the boundary, the half-court line and the centre circle
-		r.drawRect(cam, cx, cy, {
-			w: g.w - 16,
-			h: g.h - 16,
-			color: COURT,
-			alpha: 0,
-			stroke: COURT_LINE,
-			strokeThickness: 2,
-			zIndex: z + 1,
-		});
-		r.drawRect(cam, cx, cy, {
-			w: alongX ? 4 : g.w - 16,
-			h: alongX ? g.h - 16 : 4,
-			color: COURT_LINE,
-			zIndex: z + 1,
-		});
-		r.drawCircle(cam, cx, cy, 72, {
-			color: COURT,
-			alpha: 0,
-			stroke: COURT_LINE,
-			strokeThickness: 2,
-			zIndex: z + 1,
-		});
-		// the keys under the two hoops
+		// the acrylic with its boundary line, and the keys under the two hoops (the rest of the lines: the pixel art's)
+		r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: COURT, stroke: COURT_LINE, strokeThickness: 2, zIndex: z });
 		const len = alongX ? g.w : g.h;
 		for (const sgn of [-1, 1]) {
 			const off = sgn * (len / 2 - 8 - KEY_DEEP / 2);
@@ -229,17 +130,8 @@ export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewR
 		r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: SLAB, stroke: SLAB_EDGE, strokeThickness: 3, zIndex: z });
 		return true;
 	}
-	// a vegetable bed: dark soil, and the rows of what was planted in spring
+	// a vegetable bed: dark soil in its timber edge (its rows: the pixel art's)
 	r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: SOIL, stroke: TIMBER, strokeThickness: 2, zIndex: z });
-	const across = alongX ? g.h : g.w;
-	for (let t = 16; t < across - 8; t += 24) {
-		r.drawRect(cam, alongX ? cx : g.x + t, alongX ? g.y + t : cy, {
-			w: alongX ? g.w - 16 : 8,
-			h: alongX ? 8 : g.h - 16,
-			color: SOIL_ROW,
-			zIndex: z + 1,
-		});
-	}
 	return true;
 }
 
@@ -614,8 +506,6 @@ const SHADOW_A = 0.28;
 const WOOD_LIT = Color3.fromRGB(196, 158, 108);
 const WOOD = Color3.fromRGB(158, 118, 76);
 const WOOD_SHADE = Color3.fromRGB(112, 80, 50);
-/** the lit edge of a crate stacked on another (the light reaches it first) */
-const WOOD_TOP = WOOD_LIT.Lerp(WHITE, 0.2);
 /** painted and galvanised metal */
 const GALV = Color3.fromRGB(150, 156, 160);
 const GALV_LIT = Color3.fromRGB(196, 200, 204);
@@ -636,11 +526,8 @@ const TENT_STRIPES: ReadonlyArray<Color3> = [
 ];
 /** the food truck: its white body, its windscreen, its striped awning */
 const TRUCK_BODY = Color3.fromRGB(230, 226, 212);
-const TRUCK_SHADE = Color3.fromRGB(184, 180, 166);
-const GLASS_DARK = Color3.fromRGB(46, 58, 70);
 /** the building site: the pile's lumber, bricks and steel; the toilet's blue, the mixer's orange, the dumpster's green */
 const BRICK = Color3.fromRGB(160, 78, 58);
-const BRICK_LIT = Color3.fromRGB(196, 110, 84);
 const STEEL_BAR = Color3.fromRGB(110, 116, 124);
 const TOILET_BLUE = Color3.fromRGB(58, 104, 168);
 const MIXER_ORANGE = Color3.fromRGB(214, 120, 40);
@@ -650,30 +537,21 @@ const PLAY_RED = Color3.fromRGB(196, 62, 50);
 const PLAY_YELLOW = Color3.fromRGB(226, 184, 58);
 const PLAY_BLUE = Color3.fromRGB(62, 116, 186);
 const RUBBER = Color3.fromRGB(34, 34, 38);
-/** the lit tones of those (built once: the renderer's write cache keys on the Color3) */
+/** the joint of a brick pile (built once: the renderer's write cache keys on the Color3) */
 const BRICK_JOINT = BRICK.Lerp(INK, 0.35);
-const TOILET_LIT = TOILET_BLUE.Lerp(WHITE, 0.3);
-const DUMPSTER_LIT = DUMPSTER_GREEN.Lerp(WHITE, 0.25);
-const PLAY_YELLOW_LIT = PLAY_YELLOW.Lerp(WHITE, 0.35);
-const SPRINGER_LIT = WHITE.Lerp(PLAY_YELLOW, 0.4);
 /** a hoop's backboard and rim */
 const BOARD_WHITE = Color3.fromRGB(232, 232, 226);
 const RIM_ORANGE = Color3.fromRGB(222, 110, 38);
 /** the street: a lamp's pole and head, a hydrant, a mailbox, the blue collection box, a bus stop's sign */
 const LAMP_HEAD = Color3.fromRGB(88, 92, 98);
 const HYDRANT_RED = Color3.fromRGB(190, 52, 42);
-const HYDRANT_CAP = Color3.fromRGB(226, 196, 70);
-const MAIL_FLAG = Color3.fromRGB(200, 50, 44);
 const POST_BLUE = Color3.fromRGB(44, 72, 136);
-const POST_BLUE_LIT = Color3.fromRGB(78, 108, 172);
 const SIGN_BLUE = Color3.fromRGB(44, 92, 164);
 /** a bus shelter's roof: smoked glass on a steel frame */
 const SHELTER_GLASS = Color3.fromRGB(120, 150, 164);
 /** the backyards: a shed's roof, a pool's water and coping, a trampoline's mat and pads, a grill */
 const SHED_ROOF = Color3.fromRGB(96, 104, 96);
-const SHED_ROOF_LIT = Color3.fromRGB(128, 138, 128);
 const WATER = Color3.fromRGB(64, 152, 196);
-const WATER_LIT = Color3.fromRGB(120, 196, 226);
 const COPING = Color3.fromRGB(220, 216, 204);
 const PAD_BLUE = Color3.fromRGB(56, 110, 180);
 
@@ -717,21 +595,20 @@ const TIP = 0.35;
 const TIP_NX = -math.sin(TIP);
 const TIP_NY = math.cos(TIP);
 
-/** a crate, two stacked, or one tipped over with its produce rolling out (townLots.ts CRATE_ONE .. CRATE_TIPPED) */
-function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+/**
+ * THE FLAT FALLBACK (ART-01: no atlas id, or an atlas that did not load). Until the town's fixtures' atlas is up
+ * (ART-16) a town holds hundreds of these, so each is drawn in at most two Frames -- its body with the town's outline
+ * and the one thing that says what it is -- and only what stands tall casts a shadow (the review of e9b0fbb, L5: the
+ * detailed drawing nearly doubled a park's draw calls). The detail is the pixel art's.
+ */
+
+/** a crate, two stacked, or one tipped over (townLots.ts CRATE_ONE .. CRATE_TIPPED): two Frames */
+function drawCrates(r: Renderer, cam: Camera, s: Solid): void {
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
 	const v = s.variant ?? 0;
 	if (v === CRATE_TIPPED) {
-		const so = shadow(cx, cy, 4);
-		r.drawRect(cam, cx + so.x, cy + so.y, {
-			w: s.w - 6,
-			h: s.h - 12,
-			rotation: TIP,
-			color: BLACK,
-			alpha: SHADOW_A,
-			zIndex: Z.shadow,
-		});
+		// on its side, and its open top, dark inside
 		r.drawRect(cam, cx, cy, {
 			w: s.w - 6,
 			h: s.h - 12,
@@ -742,7 +619,6 @@ function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void 
 			strokeAlpha: 0.8,
 			zIndex: Z.structure,
 		});
-		// its open top, dark inside, and an apple and a cabbage that rolled out of it
 		const o = (s.h - 12) / 2 - 4;
 		r.drawRect(cam, cx + TIP_NX * o, cy + TIP_NY * o, {
 			w: s.w - 12,
@@ -751,24 +627,9 @@ function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void 
 			color: WOOD_SHADE,
 			zIndex: Z.structure + 1,
 		});
-		r.drawCircle(cam, cx + TIP_NX * (o + 10) - 8, cy + TIP_NY * (o + 10), 10, {
-			color: APPLE,
-			zIndex: Z.structure + 1,
-		});
-		r.drawCircle(cam, cx + TIP_NX * (o + 14) + 10, cy + TIP_NY * (o + 12), 13, {
-			color: CABBAGE,
-			zIndex: Z.structure + 1,
-		});
 		return;
 	}
-	const wide = s.w >= s.h;
-	box(r, cam, s, WOOD, WOOD_LIT, v === CRATE_STACKED ? 10 : 0, shadow);
-	r.drawRect(cam, cx, cy, {
-		w: wide ? 4 : s.w - 8,
-		h: wide ? s.h - 8 : 4,
-		color: WOOD_SHADE,
-		zIndex: Z.structure + 2,
-	});
+	box(r, cam, s, WOOD, undefined, 0, NO_SHADOW);
 	if (v === CRATE_STACKED) {
 		// a second one on top, a size smaller and off-square: the lit one
 		box(
@@ -776,55 +637,41 @@ function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void 
 			cam,
 			{ x: s.x + 3, y: s.y + 2, w: s.w - 12, h: s.h - 12 },
 			WOOD_LIT,
-			WOOD_TOP,
+			undefined,
 			0,
-			shadow,
+			NO_SHADOW,
 			0,
 			Z.structure + 3,
 		);
-		r.drawRect(cam, cx - 3, cy - 4, {
-			w: wide ? 4 : s.w - 20,
-			h: wide ? s.h - 20 : 4,
-			color: WOOD,
-			zIndex: Z.structure + 5,
-		});
+		return;
 	}
+	const wide = s.w >= s.h;
+	r.drawRect(cam, cx, cy, {
+		w: wide ? 4 : s.w - 8,
+		h: wide ? s.h - 8 : 4,
+		color: WOOD_SHADE,
+		zIndex: Z.structure + 2,
+	});
 }
 
-/**
- * A trestle table knocked over in the rush (EDI-21): its top's underside, the two trestles sticking up at its ends,
- * the cloth half off it on the aisle side (its wares are the spill in front of it: townLots.ts).
- */
-function drawTrestle(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+/** a trestle table knocked over in the rush (EDI-21): its top's underside, and the cloth half off it on the aisle side */
+function drawTrestle(r: Renderer, cam: Camera, s: Solid): void {
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
 	const wide = s.w >= s.h;
-	box(r, cam, s, WOOD_SHADE, undefined, 2, shadow);
-	for (const f of [-0.33, 0.33]) {
-		r.drawRect(cam, wide ? cx + s.w * f : cx, wide ? cy : cy + s.h * f, {
-			w: wide ? 6 : s.w - 8,
-			h: wide ? s.h - 8 : 6,
-			color: WOOD_LIT,
-			stroke: INK,
-			strokeThickness: 1,
-			zIndex: Z.structure + 2,
-		});
-	}
+	box(r, cam, s, WOOD_SHADE, undefined, 0, NO_SHADOW);
 	const n = sideN(s.face);
 	r.drawRect(cam, cx + n.x * 16 + (wide ? s.w * 0.12 : 0), cy + n.y * 16 + (wide ? 0 : s.h * 0.12), {
 		w: wide ? s.w * 0.55 : s.w - 4,
 		h: wide ? s.h - 4 : s.h * 0.55,
 		rotation: (s.variant ?? 0) === 1 ? -0.22 : 0.18,
 		color: CANVAS_SHADE,
-		stroke: INK,
-		strokeThickness: 1,
-		strokeAlpha: 0.6,
 		zIndex: Z.structure + 1,
 	});
 }
 
-/** the hand cart a vendor left in an aisle: its bed, the wheels at its sides, the handle at its `face` end */
-function drawCart(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+/** the hand cart a vendor left in an aisle: its bed, and the handle at its `face` end */
+function drawCart(r: Renderer, cam: Camera, s: Solid): void {
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
 	const wide = s.w >= s.h;
@@ -834,26 +681,15 @@ function drawCart(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
 	const bx = cx - n.x * 12;
 	const by = cy - n.y * 12;
 	const bedRect: Rect = wide
-		? { x: bx - bed / 2, y: s.y + 4, w: bed, h: s.h - 8 }
-		: { x: s.x + 4, y: by - bed / 2, w: s.w - 8, h: bed };
-	for (const sgn of [-1, 1]) {
-		r.drawRect(cam, wide ? bx : cx + sgn * (s.w / 2 - 3), wide ? cy + sgn * (s.h / 2 - 3) : by, {
-			w: wide ? 18 : 6,
-			h: wide ? 6 : 18,
-			color: RUBBER,
-			zIndex: Z.structure,
-		});
-	}
-	box(r, cam, bedRect, WOOD, WOOD_LIT, 6, shadow, 0, Z.structure + 1);
+		? { x: bx - bed / 2, y: s.y + 2, w: bed, h: s.h - 4 }
+		: { x: s.x + 2, y: by - bed / 2, w: s.w - 4, h: bed };
+	box(r, cam, bedRect, WOOD, undefined, 0, NO_SHADOW);
 	r.drawRect(cam, cx + n.x * (len / 2 - 6), cy + n.y * (len / 2 - 6), {
 		w: wide ? 4 : s.w - 10,
 		h: wide ? s.h - 10 : 4,
 		color: IRON,
 		zIndex: Z.structure + 1,
 	});
-	if ((s.variant ?? 0) === 1) {
-		box(r, cam, { x: bx - 14, y: by - 14, w: 28, h: 28 }, WOOD_LIT, undefined, 0, shadow, 0, Z.structure + 3);
-	}
 }
 
 /** a box of the town: its shadow on the sun's side (`lift` long), the body with its outline, a lit top edge */
@@ -902,6 +738,9 @@ function box(
 	}
 }
 
+/** for a box that casts no shadow (its `lift` is 0: never called) */
+const NO_SHADOW: ShadowFn = () => ({ x: 0, y: 0 });
+
 /** the outward normal of a side */
 function sideN(side: string | undefined): { x: number; y: number } {
 	if (side === "top") return { x: 0, y: -1 };
@@ -911,8 +750,9 @@ function sideN(side: string | undefined): { x: number; y: number } {
 }
 
 /**
- * A fixture of the everyday town (townLots.ts); false for anything else (the campus quad's fountain and statue and
- * every bench: worldView's own `drawProp`, which draws a bench the way the campus's are drawn).
+ * A fixture of the everyday town (townLots.ts); false for anything else (the campus quad's fountain and statue: worldView's
+ * own `drawProp`; a bench too, without the atlas). With the atlas, its pixel art (./townPropArt.ts); without it, the
+ * flat fallback above: at most two Frames each.
  */
 export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldData, shadow: ShadowFn): boolean {
 	const t = s.tags;
@@ -936,56 +776,25 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	// ---- the street market (EDI-21)
 	if (market) {
 		if (t === "crates") {
-			drawCrates(r, cam, s, shadow);
-			return true;
+			drawCrates(r, cam, s);
+		} else if (t === "trestle") {
+			drawTrestle(r, cam, s);
+		} else {
+			// the table under its cloth, the colour of what it sold (spawns.ts YARD_LOOT `stall0..2`)
+			box(r, cam, s, WOOD, undefined, 0, shadow);
+			r.drawRect(cam, cx, cy, { w: s.w - 10, h: s.h - 10, color: WARES[k % 3][0], zIndex: Z.structure + 1 });
 		}
-		if (t === "trestle") {
-			drawTrestle(r, cam, s, shadow);
-			return true;
-		}
-		// the table, its cloth, and what is still on it
-		box(r, cam, s, WOOD, undefined, 0, shadow);
-		const [a, b] = WARES[k % 3];
-		r.drawRect(cam, cx, cy, { w: s.w - 10, h: s.h - 10, color: CANVAS_SHADE, zIndex: Z.structure + 1 });
-		r.drawRect(cam, cx - (wide ? s.w / 5 : 0), cy - (wide ? 0 : s.h / 5), {
-			w: wide ? s.w / 3 : s.w - 18,
-			h: wide ? s.h - 18 : s.h / 3,
-			color: a,
-			cornerRadius: 4,
-			zIndex: Z.structure + 2,
-		});
-		r.drawRect(cam, cx + (wide ? s.w / 4 : 0), cy + (wide ? 0 : s.h / 4), {
-			w: wide ? s.w / 4 : s.w - 20,
-			h: wide ? s.h - 20 : s.h / 4,
-			color: b,
-			cornerRadius: 4,
-			zIndex: Z.structure + 2,
-		});
 		return true;
 	}
 	if (t === "handcart") {
-		drawCart(r, cam, s, shadow);
+		drawCart(r, cam, s);
 		return true;
 	}
 	if (t === "foodtruck") {
-		// the body, the cab's windscreen at the front (`face`), the roof vent, the serving hatch's awning on its side
-		box(r, cam, s, TRUCK_BODY, TRUCK_SHADE, 10, shadow, 6);
+		// its shadow and white body, and the serving hatch's striped awning on its side
+		box(r, cam, s, TRUCK_BODY, undefined, 10, shadow, 6);
 		const n = sideN(s.face);
 		const len = wide ? s.w : s.h;
-		r.drawRect(cam, cx + n.x * (len / 2 - 22), cy + n.y * (len / 2 - 22), {
-			w: wide ? 14 : s.w - 16,
-			h: wide ? s.h - 16 : 14,
-			color: GLASS_DARK,
-			zIndex: Z.structure + 2,
-		});
-		r.drawRect(cam, cx - n.x * 20, cy - n.y * 20, {
-			w: 24,
-			h: 24,
-			color: TRUCK_SHADE,
-			stroke: INK,
-			strokeThickness: 1,
-			zIndex: Z.structure + 2,
-		});
 		r.drawRect(cam, wide ? cx - n.x * 20 : s.x - 10, wide ? s.y - 10 : cy - n.y * 20, {
 			w: wide ? len * 0.45 : 16,
 			h: wide ? 16 : len * 0.45,
@@ -999,69 +808,51 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	// ---- the building site (EDI-22)
 	if (t === "fence") {
 		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: GALV, stroke: IRON, strokeThickness: 1, zIndex: Z.structure });
-		r.drawRect(cam, cx, cy, { w: wide ? s.w : 2, h: wide ? 2 : s.h, color: GALV_LIT, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "studs") {
-		box(r, cam, s, WOOD_LIT, undefined, 4, shadow);
+		box(r, cam, s, WOOD_LIT, undefined, 0, shadow);
 		return true;
 	}
 	if (t === "scaffold") {
-		// the planks between two runs of tube
-		box(r, cam, s, WOOD, undefined, 14, shadow);
+		// the planks, the tubes round them
 		r.drawRect(cam, cx, cy, {
 			w: s.w,
 			h: s.h,
-			color: GALV,
-			alpha: 0,
+			color: WOOD,
 			stroke: GALV_LIT,
 			strokeThickness: 3,
-			zIndex: Z.structure + 1,
+			zIndex: Z.structure,
 		});
 		return true;
 	}
 	if (t === "pile") {
-		if (k === 1) {
-			box(r, cam, s, BRICK, BRICK_LIT, 6, shadow);
-		} else if (k === 2) {
-			box(r, cam, s, STEEL_BAR, GALV_LIT, 4, shadow);
-		} else {
-			box(r, cam, s, WOOD, WOOD_LIT, 6, shadow);
-		}
+		box(r, cam, s, k === 1 ? BRICK : k === 2 ? STEEL_BAR : WOOD, undefined, 0, shadow);
 		// the stack's rows
-		for (const f of [-0.2, 0.2]) {
-			r.drawRect(cam, wide ? cx : cx + s.w * f, wide ? cy + s.h * f : cy, {
-				w: wide ? s.w - 8 : 2,
-				h: wide ? 2 : s.h - 8,
-				color: k === 1 ? BRICK_JOINT : WOOD_SHADE,
-				zIndex: Z.structure + 2,
-			});
-		}
-		return true;
-	}
-	if (t === "portapotty") {
-		box(r, cam, s, TOILET_BLUE, TOILET_LIT, 16, shadow, 4);
-		r.drawRect(cam, cx, cy, { w: 12, h: 12, color: CANVAS, cornerRadius: 6, zIndex: Z.structure + 2 });
-		return true;
-	}
-	if (t === "mixer") {
-		box(r, cam, s, IRON, undefined, 6, shadow, 4);
-		r.drawCircle(cam, cx - 2, cy - 2, s.w - 14, {
-			color: MIXER_ORANGE,
-			stroke: INK,
-			strokeThickness: 2,
-			zIndex: Z.structure + 1,
+		r.drawRect(cam, cx, cy, {
+			w: wide ? s.w - 8 : 2,
+			h: wide ? 2 : s.h - 8,
+			color: k === 1 ? BRICK_JOINT : WOOD_SHADE,
+			zIndex: Z.structure + 2,
 		});
 		return true;
 	}
+	if (t === "portapotty") {
+		box(r, cam, s, TOILET_BLUE, undefined, 16, shadow, 4);
+		return true;
+	}
+	if (t === "mixer") {
+		box(r, cam, s, IRON, undefined, 0, shadow, 4);
+		r.drawCircle(cam, cx - 2, cy - 2, s.w - 14, { color: MIXER_ORANGE, zIndex: Z.structure + 1 });
+		return true;
+	}
 	if (t === "dumpster") {
-		box(r, cam, s, DUMPSTER_GREEN, DUMPSTER_LIT, 12, shadow, 3);
-		r.drawRect(cam, cx, cy, { w: wide ? 3 : s.w - 6, h: wide ? s.h - 6 : 3, color: INK, zIndex: Z.structure + 2 });
+		box(r, cam, s, DUMPSTER_GREEN, undefined, 12, shadow, 3);
 		return true;
 	}
 	// ---- the parks (MOB-05)
 	if (t === "swings") {
-		// the top bar end to end, the A-frame's feet, three seats hanging from it
+		// the top bar end to end, and its shadow
 		const so = shadow(cx, cy, 18);
 		r.drawRect(cam, cx + so.x, cy + so.y, {
 			w: wide ? s.w : 4,
@@ -1071,76 +862,52 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 			zIndex: Z.shadow,
 		});
 		r.drawRect(cam, cx, cy, {
-			w: wide ? s.w : 6,
-			h: wide ? 6 : s.h,
+			w: wide ? s.w : 8,
+			h: wide ? 8 : s.h,
 			color: PLAY_RED,
 			stroke: INK,
 			strokeThickness: 1,
 			zIndex: Z.structure + 1,
 		});
-		for (const e of [-1, 1]) {
-			r.drawRect(cam, wide ? cx + e * (s.w / 2 - 4) : cx, wide ? cy : cy + e * (s.h / 2 - 4), {
-				w: wide ? 8 : s.w,
-				h: wide ? s.h : 8,
-				color: PLAY_RED,
-				stroke: INK,
-				strokeThickness: 1,
-				zIndex: Z.structure,
-			});
-		}
-		for (const f of [-0.22, 0.22]) {
-			r.drawRect(cam, wide ? cx + s.w * f : cx + 10, wide ? cy + 10 : cy + s.h * f, {
-				w: wide ? 20 : 8,
-				h: wide ? 8 : 20,
-				color: RUBBER,
-				zIndex: Z.structure + 2,
-			});
-		}
 		return true;
 	}
 	if (t === "slide") {
-		box(r, cam, s, PLAY_YELLOW, PLAY_YELLOW_LIT, 14, shadow, 4);
+		box(r, cam, s, PLAY_YELLOW, undefined, 0, shadow, 4);
 		// the ladder's platform at one end
 		r.drawRect(cam, wide ? s.x + 12 : cx, wide ? cy : s.y + 12, {
 			w: wide ? 20 : s.w,
 			h: wide ? s.h : 20,
 			color: PLAY_BLUE,
-			stroke: INK,
-			strokeThickness: 1,
 			zIndex: Z.structure + 2,
 		});
 		return true;
 	}
 	if (t === "climber") {
-		box(r, cam, s, PLAY_BLUE, undefined, 16, shadow);
+		// its shadow, and the frame: the blue box with the yellow bars round it
+		const so = shadow(cx, cy, 16);
+		r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
 		r.drawRect(cam, cx, cy, {
-			w: s.w - 16,
-			h: s.h - 16,
-			color: CANVAS,
-			alpha: 0,
+			w: s.w,
+			h: s.h,
+			color: PLAY_BLUE,
 			stroke: PLAY_YELLOW,
 			strokeThickness: 3,
-			zIndex: Z.structure + 1,
+			zIndex: Z.structure,
 		});
-		r.drawRect(cam, cx, cy, { w: 4, h: s.h - 4, color: PLAY_YELLOW, zIndex: Z.structure + 2 });
-		r.drawRect(cam, cx, cy, { w: s.w - 4, h: 4, color: PLAY_YELLOW, zIndex: Z.structure + 2 });
 		return true;
 	}
 	if (t === "springer") {
-		const so = shadow(cx, cy, 6);
-		r.drawCircle(cam, cx + so.x, cy + so.y, s.w, { color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
 		r.drawCircle(cam, cx, cy, s.w, {
 			color: k % 2 === 0 ? PLAY_YELLOW : PLAY_RED,
 			stroke: INK,
 			strokeThickness: 2,
 			zIndex: Z.structure,
 		});
-		r.drawCircle(cam, cx - 4, cy - 5, 10, { color: SPRINGER_LIT, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "hoop") {
 		// the backboard across the baseline, the rim over the court (the side it faces)
-		box(r, cam, s, BOARD_WHITE, undefined, 22, shadow);
+		box(r, cam, s, BOARD_WHITE, undefined, 0, shadow);
 		const n = sideN(s.face);
 		r.drawCircle(cam, cx + n.x * 18, cy + n.y * 18, 22, {
 			color: RIM_ORANGE,
@@ -1153,20 +920,16 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	}
 	if (t === "picnic") {
 		// the table between its two benches, all one frame of planks
-		box(r, cam, s, WOOD_SHADE, undefined, 6, shadow, 2);
+		box(r, cam, s, WOOD_SHADE, undefined, 0, shadow, 2);
 		r.drawRect(cam, cx, cy, {
 			w: wide ? s.w - 4 : s.w - 36,
 			h: wide ? s.h - 36 : s.h - 4,
 			color: WOOD,
-			stroke: INK,
-			strokeThickness: 1,
 			zIndex: Z.structure + 1,
 		});
 		return true;
 	}
-	// ---- the street (MOB-04)
-	// the street's most numerous fixtures are two sprites each, and no outline (a town holds hundreds: the flyover's pool
-	// and the frame budget of a street, test:lobby and test:world-art §4)
+	// ---- the street (MOB-04): the most numerous fixtures, one or two Frames each and no outline
 	if (t === "streetlight") {
 		// the pole's foot, and its dark lamp head out over the curb (the power is out: LUZ-02), high above the street
 		r.drawCircle(cam, cx, cy, s.w, { color: INK, zIndex: Z.structure });
@@ -1182,23 +945,19 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	}
 	if (t === "hydrant") {
 		r.drawCircle(cam, cx, cy, s.w, { color: HYDRANT_RED, zIndex: Z.structure });
-		r.drawCircle(cam, cx - 1, cy - 1, s.w - 10, { color: HYDRANT_CAP, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "mailbox") {
-		// the box on its post, the red flag up on its side
 		r.drawRect(cam, cx, cy, { w: 14, h: 22, color: IRON, cornerRadius: 5, zIndex: Z.structure });
-		r.drawRect(cam, cx + 8, cy - 4, { w: 4, h: 10, color: MAIL_FLAG, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "postbox") {
-		box(r, cam, s, POST_BLUE, POST_BLUE_LIT, 12, shadow, 6);
-		r.drawRect(cam, cx, cy - s.h / 6, { w: s.w - 12, h: 4, color: INK, zIndex: Z.structure + 2 });
+		box(r, cam, s, POST_BLUE, undefined, 0, shadow, 6);
 		return true;
 	}
 	if (t === "busstop") {
-		// the pole, and its sign standing upright above it (ART-07: a picture, no text: the bus's front)
-		r.drawCircle(cam, cx, cy, s.w, { color: IRON, stroke: INK, strokeThickness: 1, zIndex: Z.structure });
+		// the pole, and its sign standing upright above it (ART-07: no text)
+		r.drawCircle(cam, cx, cy, s.w, { color: IRON, zIndex: Z.structure });
 		r.drawRect(cam, cx, cy - 26, {
 			w: 26,
 			h: 26,
@@ -1207,26 +966,11 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 			strokeThickness: 2,
 			zIndex: Z.roof - 1,
 		});
-		r.drawRect(cam, cx, cy - 28, { w: 14, h: 12, color: WHITE, zIndex: Z.roof });
 		return true;
 	}
 	// ---- the backyards (MOB-06)
 	if (t === "shed") {
-		// its gable roof from above: the lit slope, the shaded one, the ridge
 		box(r, cam, s, SHED_ROOF, undefined, 16, shadow);
-		r.drawRect(cam, wide ? cx : s.x + s.w / 4, wide ? s.y + s.h / 4 : cy, {
-			w: wide ? s.w - 4 : s.w / 2 - 2,
-			h: wide ? s.h / 2 - 2 : s.h - 4,
-			color: SHED_ROOF_LIT,
-			zIndex: Z.structure + 1,
-		});
-		r.drawRect(cam, cx, cy, {
-			w: wide ? s.w - 4 : 3,
-			h: wide ? 3 : s.h - 4,
-			color: INK,
-			alpha: 0.7,
-			zIndex: Z.structure + 2,
-		});
 		return true;
 	}
 	if (t === "pool") {
@@ -1241,28 +985,15 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 			zIndex: Z.ground + 4,
 		});
 		r.drawRect(cam, cx, cy, { w: s.w - 14, h: s.h - 14, color: WATER, cornerRadius: 4, zIndex: Z.ground + 5 });
-		r.drawRect(cam, cx - s.w / 6, cy - s.h / 6, {
-			w: s.w / 3,
-			h: 6,
-			color: WATER_LIT,
-			alpha: 0.7,
-			cornerRadius: 3,
-			zIndex: Z.ground + 6,
-		});
 		return true;
 	}
 	if (t === "trampoline") {
-		const so = shadow(cx, cy, 10);
-		r.drawCircle(cam, cx + so.x, cy + so.y, s.w, { color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
 		r.drawCircle(cam, cx, cy, s.w, { color: PAD_BLUE, stroke: INK, strokeThickness: 2, zIndex: Z.structure });
 		r.drawCircle(cam, cx, cy, s.w - 16, { color: RUBBER, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "grill") {
-		const so = shadow(cx, cy, 8);
-		r.drawCircle(cam, cx + so.x, cy + so.y, s.w, { color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
 		r.drawCircle(cam, cx, cy, s.w, { color: RUBBER, stroke: INK, strokeThickness: 2, zIndex: Z.structure });
-		r.drawRect(cam, cx - 3, cy - 3, { w: 10, h: 4, color: GALV_LIT, zIndex: Z.structure + 1 });
 		return true;
 	}
 	return false;
@@ -1307,11 +1038,11 @@ const TEAR = Color3.fromRGB(58, 54, 48);
 const PUDDLE = Color3.fromRGB(84, 106, 118);
 
 /**
- * A market stall's tent (EDI-21): its canvas, three stripes across the ridge and the shaded slope (the bottom / right
- * half: light from the top left), turned by its `heading` (a few degrees: nobody set them square). Torn: a dark rent
- * and a flap hanging off its edge; sagging: the belly between the poles darker, old rain in it. Standing, it is
- * aerial and see-through with a body under it (`canopyAlpha`). Down, it lies on its tables under the actors: crumpled,
- * two stripes skewed by the fold, a pole sticking out -- and whatever is under it shows round it.
+ * A market stall's tent (EDI-21), the flat fallback (ART-01; the pixel art is ART-16's): its shadow, its canvas and
+ * three stripes across it, turned by its `heading` (a few degrees: nobody set them square); torn, a dark rent; sagging,
+ * the old rain lying in it. Standing, it is aerial and see-through with a body under it (`canopyAlpha`). Down, it lies
+ * on its tables under the actors: the sheet, the part of it that slumped in shade, a pole sticking out -- and whatever
+ * is under it shows round it.
  */
 function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, shadow: ShadowFn): void {
 	const st = tentState(s);
@@ -1323,7 +1054,6 @@ function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, sh
 	if (st === TENT_DOWN) {
 		// over the stacked crates' lids (Z.structure + 5), under every actor
 		const z = Z.structure + 6;
-		// the sheet, and the part of it that slumped off the tables in a heap, in shade
 		const mx = wide ? -s.w * 0.06 : -s.w * 0.05;
 		const my = wide ? -s.h * 0.05 : -s.h * 0.06;
 		r.drawRect(cam, cx + mx * c - my * sn, cy + mx * sn + my * c, {
@@ -1342,37 +1072,12 @@ function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, sh
 			w: s.w * (wide ? 0.46 : 0.55),
 			h: s.h * (wide ? 0.55 : 0.46),
 			rotation: th + 0.35,
-			color: CANVAS_SHADE,
+			color: stripe,
 			stroke: INK,
 			strokeThickness: 2,
 			strokeAlpha: 0.7,
 			zIndex: z + 1,
 		});
-		const across = wide ? s.w : s.h;
-		for (const f of [-0.26, 0.08]) {
-			const d = across * f;
-			r.drawRect(cam, cx + (wide ? d * c : -d * sn) + mx, cy + (wide ? d * sn : d * c) + my, {
-				w: wide ? across / 9 : s.w * 0.6,
-				h: wide ? s.h * 0.6 : across / 9,
-				rotation: th + 0.1,
-				color: stripe,
-				zIndex: z + 2,
-			});
-		}
-		// the folds it came down in, and a pole that fell with it
-		for (const [len, turn] of [
-			[0.7, -0.15],
-			[0.4, 0.55],
-		] as Array<[number, number]>) {
-			r.drawRect(cam, cx + mx, cy + my, {
-				w: wide ? s.w * len : 8,
-				h: wide ? 8 : s.h * len,
-				rotation: th + turn,
-				color: BLACK,
-				alpha: 0.22,
-				zIndex: z + 3,
-			});
-		}
 		const px = wide ? s.w * 0.44 : 0;
 		const py = wide ? 0 : s.h * 0.44;
 		r.drawRect(cam, cx + px * c - py * sn, cy + px * sn + py * c, {
@@ -1417,19 +1122,8 @@ function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, sh
 			zIndex: Z.roof + 1,
 		});
 	}
-	// the shaded slope
-	const hx = wide ? 0 : s.w / 4;
-	const hy = wide ? s.h / 4 : 0;
-	r.drawRect(cam, cx + hx * c - hy * sn, cy + hx * sn + hy * c, {
-		w: wide ? s.w : s.w / 2,
-		h: wide ? s.h / 2 : s.h,
-		rotation: th,
-		color: BLACK,
-		alpha: 0.14 * a,
-		zIndex: Z.roof + 2,
-	});
 	if (st === TENT_TORN) {
-		// the rent, off the middle, and the flap hanging over the edge on the shaded side
+		// the rent, off the middle
 		const tx = wide ? s.w * 0.18 : -s.w * 0.1;
 		const ty = wide ? -s.h * 0.1 : s.h * 0.18;
 		r.drawRect(cam, cx + tx * c - ty * sn, cy + tx * sn + ty * c, {
@@ -1440,30 +1134,8 @@ function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, sh
 			alpha: 0.85 * a,
 			zIndex: Z.roof + 3,
 		});
-		const fx = wide ? s.w * 0.28 : s.w / 2 + 8;
-		const fy = wide ? s.h / 2 + 8 : s.h * 0.28;
-		r.drawRect(cam, cx + fx * c - fy * sn, cy + fx * sn + fy * c, {
-			w: 34,
-			h: 20,
-			rotation: th + 0.5,
-			color: stripe,
-			alpha: a,
-			stroke: INK,
-			strokeThickness: 1,
-			strokeAlpha: 0.7 * a,
-			zIndex: Z.roof + 3,
-		});
 	} else if (st === TENT_SAGGING) {
-		// the belly between the poles, and the old rain lying in it
-		r.drawRect(cam, cx, cy, {
-			w: s.w * 0.62,
-			h: s.h * 0.5,
-			rotation: th,
-			color: BLACK,
-			alpha: 0.16 * a,
-			cornerRadius: 12,
-			zIndex: Z.roof + 3,
-		});
+		// the old rain lying in the belly between the poles
 		r.drawRect(cam, cx - 6 * sn, cy + 6 * c, {
 			w: wide ? s.w * 0.28 : s.w * 0.22,
 			h: wide ? s.h * 0.2 : s.h * 0.28,

@@ -21,7 +21,7 @@
  * rings the bell it is told about (client/audio/bankAlarm.ts). Pure: numbers and predicates, no Instances.
  */
 import type { PlayerSaveData } from "shared/game/save";
-import type { Solid } from "shared/game/world";
+import { buildingAt, Solid, WorldData } from "shared/game/world";
 import { countItem } from "./inventory";
 
 /** the bank's building type (shared/data/buildings.ts BuildingType.Bank) */
@@ -60,6 +60,23 @@ export function isVaultBox(s: Solid): boolean {
 /** the bank's portico, where the alarm bell hangs (`powered`: ringing) */
 export function isPortico(s: Solid): boolean {
 	return s.kind === "canopy" && s.tags === PORTICO_TAG;
+}
+
+/**
+ * Is (x, y) inside the vault of the bank `bankId`? The deposit boxes are within reach from there only (EDI-24): the E
+ * query, the hint and the server's LootFlag all ask it, so a survivor behind the vault's back wall, or in the office
+ * beside it, is never told of the boxes nor able to empty them through the wall.
+ */
+export function inVaultOf(world: WorldData, bankId: number | undefined, x: number, y: number): boolean {
+	if (bankId === undefined) return false;
+	const b = buildingAt(world, x, y);
+	return b !== undefined && b.id === bankId && inVault(b, x, y);
+}
+
+/** is (x, y) inside any bank's vault? (nothing spawns there: a shut vault is sealed, EDI-24) */
+export function inAnyVault(world: WorldData, x: number, y: number): boolean {
+	const b = buildingAt(world, x, y);
+	return b !== undefined && inVault(b, x, y);
 }
 
 /** is (x, y) inside the vault of this building (a bank's vault room: world.ts `bankVault`)? */

@@ -242,10 +242,15 @@ let vaultSince = math.huge;
 function vaultHint(refs: GameRefs, s: Solid): string | undefined {
 	// cracked: it hangs open for good, and E there does nothing
 	if (s.open === true) return undefined;
-	if (!hasVaultTool(refs.save)) return `Vault: needs ${itemName(VAULT_TOOL_KIND, VAULT_TOOL_INDEX)}`;
+	// the words through lang.ts (the item's name too), the numbers as they are: "Vault: needs Crowbar", "Cracking
+	// vault 40%" read in the survivor's language like "E: Pick up Wood"
+	const lang = refs.save.settings.langType;
+	if (!hasVaultTool(refs.save)) {
+		return `${langGet("Vault: needs", lang)} ${langGet(itemName(VAULT_TOOL_KIND, VAULT_TOOL_INDEX), lang)}`;
+	}
 	if (vaultAt === s && vaultSince <= VAULT_GRACE_S) {
 		const pct = math.floor(math.min(1, vaultWork / VAULT_CRACK_S) * 100);
-		return `E: Cracking vault ${pct}%`;
+		return `E: ${langGet("Cracking vault", lang)} ${pct}%`;
 	}
 	return "E: Crack vault (hold)";
 }

@@ -1319,6 +1319,27 @@ export class WorldView {
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		const t = s.tags;
+		if (t !== "fountain" && t !== "statue") {
+			// a bench, flat (ART-01; its pixel art is ART-16's): the slats in their iron ends, the back rest on the side
+			// away from where it faces -- two Frames, no shadow: a town holds hundreds of benches (the review of e9b0fbb, L5)
+			const n = sideNormal(s.face);
+			const horizontal = s.w >= s.h;
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: COLORS.furnWood,
+				stroke: PROP.iron,
+				strokeThickness: 2,
+				zIndex: Z.structure,
+			});
+			r.drawRect(cam, cx - n.x * (s.w / 2 - 4), cy - n.y * (s.h / 2 - 4), {
+				w: horizontal ? s.w - 4 : 5,
+				h: horizontal ? 5 : s.h - 4,
+				color: COLORS.furnDark,
+				zIndex: Z.structure + 1,
+			});
+			return;
+		}
 		const so = this.shadow(cx, cy, t === "statue" ? 14 : 6);
 		const round = t === "fountain";
 		r.drawRect(cam, cx + so.x, cy + so.y, {
@@ -1376,24 +1397,7 @@ export class WorldView {
 				cornerRadius: 8,
 				zIndex: Z.structure + 2,
 			});
-			return;
 		}
-		// a bench: the iron ends, the slats, the back rest on the side away from where it faces
-		const n = sideNormal(s.face);
-		const horizontal = s.w >= s.h;
-		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: PROP.iron, cornerRadius: 2, zIndex: Z.structure });
-		r.drawRect(cam, cx + n.x * 3, cy + n.y * 3, {
-			w: horizontal ? s.w - 8 : s.w - 10,
-			h: horizontal ? s.h - 10 : s.h - 8,
-			color: COLORS.furnWood,
-			zIndex: Z.structure + 1,
-		});
-		r.drawRect(cam, cx - n.x * (s.w / 2 - 4), cy - n.y * (s.h / 2 - 4), {
-			w: horizontal ? s.w - 4 : 5,
-			h: horizontal ? 5 : s.h - 4,
-			color: COLORS.furnDark,
-			zIndex: Z.structure + 2,
-		});
 	}
 
 	private drawTrash(r: Renderer, cam: Camera, s: Solid): void {
