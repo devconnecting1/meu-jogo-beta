@@ -548,7 +548,12 @@ globalThis.task.wait = () => {};
 
 const { WORLD_ART, WORLD_ART_NAMES } = require(join(SRC, "client/view/worldArtAssets.ts"));
 const { SKIN_TEXTURES, SKIN_TEXTURE_NAMES } = require(join(SRC, "client/ui/skinAssets.ts"));
-const { SOUNDS } = require(join(SRC, "shared/data/sounds.ts"));
+const { soundDef, soundNames } = require(join(SRC, "shared/data/sounds.ts"));
+/** what the catalogue plays NOW: our bank where it has an id (the CI uploads them on main), the library otherwise */
+const playing = () =>
+	soundNames()
+		.map(soundDef)
+		.filter(d => d !== undefined);
 const Plan = require(join(SRC, "client/boot/preloadPlan.ts"));
 const WorldArt = require(join(SRC, "client/view/worldArt.ts"));
 
@@ -565,7 +570,7 @@ const busRank = { ui: 0, sfx: 1, bgm: 2 };
 /** the earliest bus a sound id is used on (the same file can be a click and an effect) */
 const rankOf = id =>
 	Math.min(
-		...Object.values(SOUNDS)
+		...playing()
 			.filter(d => d.id === id)
 			.map(d => busRank[d.bus]),
 	);
@@ -632,7 +637,7 @@ check(
 	const everyId = new Set([
 		...skinIds,
 		...artIds,
-		...Object.values(SOUNDS)
+		...playing()
 			.map(d => d.id)
 			.filter(id => id !== ""),
 	]);
