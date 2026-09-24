@@ -23,15 +23,15 @@ export const ROBUX_OFFER_ATTR = "pz_robux_products";
 
 /** developer product id of each costume, by its COSTUMES name; 0 = not created yet */
 export const ROBUX_PRODUCT_IDS: { [costumeName: string]: number } = {
-	Pigeon: 0,
-	"White pigeon": 0,
-	Carolina: 0,
-	Malamute: 0,
-	Doberman: 0,
-	Santa: 0,
-	Cowboy: 0,
-	Eagle: 0,
-	Zombie: 0,
+	Pigeon: 3495866678,
+	"White pigeon": 3714559418,
+	Carolina: 3714559436,
+	Malamute: 3714559453,
+	Doberman: 3714559476,
+	Santa: 3714559574,
+	Cowboy: 3714559597,
+	Eagle: 3714559618,
+	Zombie: 3714559638,
 };
 
 /** the Robux price of COSTUMES[costumeId] (its tier's), or undefined for none */

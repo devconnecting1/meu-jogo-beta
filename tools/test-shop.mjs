@@ -729,9 +729,11 @@ function main() {
 	}
 
 	/** a server "process": every module under src loaded again, sharing nothing with the last one but the DataStore */
-	function bootServer(config, market) {
+	function bootServer(config, market, prepare) {
 		for (const k of Object.keys(require.cache)) if (k.startsWith(SRC)) delete require.cache[k];
 		const env = makeGame(config, market);
+		// runs on the fresh modules before the server starts (e.g. to blank the shipped product ids)
+		if (prepare !== undefined) prepare();
 		require(join(SRC, "server/main.server.ts"));
 		const host = require(join(SRC, "server/net/mpHost.ts")).activeMpHost();
 		if (host === undefined) throw new Error("main.server.ts did not start the MP host (MP_PHASE < 1?)");
@@ -1988,8 +1990,12 @@ function main() {
 			const doberman = costume("Doberman");
 			const white = costume("White pigeon");
 
-			// ---- no product configured (how the game ships): no offer, no GetProductInfo, no prompt, coins as ever
-			const s = bootServer(undefined, market);
+			// ---- no product configured (the ids blanked: a costume whose product is not created yet): no offer, no
+			// GetProductInfo, no prompt, coins as ever
+			const s = bootServer(undefined, market, () => {
+				const blank = require(join(SRC, "shared/data/robuxProducts.ts"));
+				for (const c of COSTUMES) blank.ROBUX_PRODUCT_IDS[c.name] = 0;
+			});
 			const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
 			let ROBUX = require(join(SRC, "server/save/robux.ts"));
 			let RP = require(join(SRC, "shared/data/robuxProducts.ts"));
