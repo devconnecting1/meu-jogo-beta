@@ -903,9 +903,9 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		// the pole's foot, and its dark lamp head out over the curb (the power is out: LUZ-02), high above the street
 		r.drawCircle(cam, cx, cy, s.w, { color: INK, zIndex: Z.structure });
 		const n = sideN(s.face);
-		r.drawRect(cam, cx + n.x * 36, cy + n.y * 36, {
-			w: n.x !== 0 ? 48 : 14,
-			h: n.x !== 0 ? 14 : 48,
+		r.drawRect(cam, cx + n.x * 24, cy + n.y * 24, {
+			w: n.x !== 0 ? 36 : 12,
+			h: n.x !== 0 ? 12 : 36,
 			color: LAMP_HEAD,
 			cornerRadius: 4,
 			zIndex: Z.roof - 1,
