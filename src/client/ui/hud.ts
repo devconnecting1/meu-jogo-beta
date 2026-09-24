@@ -10,6 +10,9 @@ import type { WorldData } from "shared/game/world";
 import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
 import { PickupToast, pickupFlashTransparency } from "./pickupToast";
 import { PickupNote, takePickupNotes } from "../systems/pickups";
+import type { NightReport } from "../systems/nightReport";
+import type { StoreState } from "shared/net/net";
+import { DAWN_H, DAWN_W, DawnCard } from "./dawnCard";
 import { SCORE_CHIP_TOUCH_W, ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
@@ -291,6 +294,8 @@ export class Hud {
 	private hintLabel: TextLabel | undefined;
 	/** "+12 Wood" over the prompt and the Bag's flash (ITM-07, client/ui/pickupToast.ts) */
 	private toast: PickupToast | undefined;
+	/** the night in numbers at dawn, in the banner's box (BEM-04, client/ui/dawnCard.ts) */
+	private dawn: DawnCard | undefined;
 	private readonly notes = new Array<PickupNote>();
 	/** touch: the light laid over the Bag button when something went into the backpack, and how bright it is now */
 	private bagFlash: Frame | undefined;
@@ -815,6 +820,11 @@ export class Hud {
 		scale.Parent = bannerBox;
 		this.bannerScale = scale;
 
+		// BEM-04: the dawn card lives in the banner's own box (the same anchor, the same height): at dawn it IS the
+		// morning's banner, so it covers nothing the banner does not
+		const dawnBox = makeAnchored(root, "DawnBox", 0.5, 0, DAWN_W, DAWN_H, 0, BANNER_TOP, true, k);
+		this.dawn = new DawnCard(dawnBox, (key: string): string => this.tr(key));
+
 		const feed = makeAnchored(root, "Feed", 0.5, 0, FEED_W, FEED_H, 0, feedTop(k), true, k);
 		const layout = new Instance("UIListLayout");
 		layout.SortOrder = Enum.SortOrder.LayoutOrder;
@@ -875,6 +885,7 @@ export class Hud {
 		this.banner = undefined;
 		this.bannerSub = undefined;
 		this.bannerScale = undefined;
+		this.dawn = undefined;
 		this.joyBase = undefined;
 		this.joyKnob = undefined;
 		this.joyDead = undefined;
@@ -936,6 +947,7 @@ export class Hud {
 		this.sky?.update(state, now);
 		this.board?.update(this.ctx.input.keyScoreboard, now);
 		this.updatePickups(now);
+		this.dawn?.update(now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
 		// a melee weapon has nothing to reload, nor a weapon put away (ITM-06): the touch button says so instead of doing
@@ -1083,7 +1095,8 @@ export class Hud {
 		} else if (kind === "night") {
 			this.showBanner(shown, GAME.moon, this.tr("Survive the night"));
 		} else if (kind === "morning") {
-			this.showBanner(shown, GAME.sun, "");
+			// the dawn card, when up, IS the morning's banner (BEM-04): the same box, the night's report in it
+			if (this.dawn?.isShown() !== true) this.showBanner(shown, GAME.sun, "");
 		} else if (kind === "boss") {
 			this.showBanner(shown, GAME.rare, "");
 		} else {
@@ -1100,6 +1113,8 @@ export class Hud {
 		const sub = this.bannerSub;
 		const scale = this.bannerScale;
 		if (card === undefined || banner === undefined || sub === undefined || scale === undefined) return;
+		// a banner is news (a wave, a boss): it takes the box from the dawn card, which was only a report
+		this.dawn?.hide();
 		const gen = ++this.bannerGen;
 		banner.Text = text;
 		banner.TextColor3 = color;
@@ -1130,6 +1145,45 @@ export class Hud {
 			fadeText(banner, 0.5, 1);
 			fadeText(sub, 0.5, 1);
 		});
+	}
+
+	/**
+	 * BEM-08 (research §4.4): a level-up that says what it gave -- "Level 5 · +1 skill point · Bag › Skills" -- in the
+	 * XP's blue on the feed, instead of a bare "Level UP". A level gives exactly one skill point and nothing else
+	 * (server/sim/progress.ts `awardExp`), so that is what it says; `gained` levels at once give that many points.
+	 */
+	showLevelUp(level: number, gained: number): void {
+		const n = math.max(1, math.floor(gained));
+		const points = `+${n} ${this.tr(n === 1 ? "skill point" : "skill points")}`;
+		const text = `${this.tr("Level")} ${math.floor(level)} · ${points} · ${this.tr("Bag")} › ${this.tr("Skills")}`;
+		this.pushFeed(text, GAME.xp);
+	}
+
+	/**
+	 * BEM-04: the night in numbers, at dawn, for a survivor who lived through it (client/systems/nightReport.ts decides
+	 * that). `breakLine`: a long session (nightReport.ts `breakNudgeDue`). Takes the banner's box: a "Good morning" is not
+	 * drawn over it. Never blocks anything and goes by itself (client/ui/dawnCard.ts).
+	 */
+	showDawnReport(report: NightReport, breakLine: boolean): void {
+		const dawn = this.dawn;
+		if (!this.mounted || dawn === undefined) return;
+		// the banner's box is the card's now: a "Good morning" already up gives way at once (a 0 s fade replaces any
+		// fade of the banner still running, so none of them brings it back)
+		this.bannerGen += 1;
+		if (this.bannerCard !== undefined) fadeSurface(this.bannerCard, 0, 1);
+		if (this.banner !== undefined) fadeText(this.banner, 0, 1);
+		if (this.bannerSub !== undefined) fadeText(this.bannerSub, 0, 1);
+		dawn.show(report, breakLine, math.min(this.bannerMaxW, DAWN_W), os.clock());
+	}
+
+	/** what the server said about a write of this player's save (saveClient.ts `onStoreState`): the dawn card's line */
+	dawnStoreNotice(state: StoreState): void {
+		this.dawn?.storeNotice(state, os.clock());
+	}
+
+	/** the dawn card of this mount (BEM-04), for tests */
+	dawnCard(): DawnCard | undefined {
+		return this.dawn;
 	}
 
 	/** toast-like line (small HUD card) under the banner; repeated messages refresh instead of stacking */

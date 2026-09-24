@@ -1730,6 +1730,13 @@ if (MP_PHASE >= 1) {
 		saveSoon(s, "day");
 		if (credit.coins > 0) admin?.onReport(s.player);
 	};
+	// BEM-04 / SAV-01: a night lived through to daybreak is a moment that matters -- the dawn card tells the survivor what
+	// is saved only once the server says a write landed, so the write goes soon (coalesced like every event save; an
+	// unchanged save is still not rewritten)
+	sim.onDawn = sp => {
+		const s = sessionOfUserId(sp.userId);
+		if (s !== undefined) saveSoon(s, "dawn");
+	};
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = (sp, outcome) => {

@@ -27,7 +27,7 @@ Referências: as páginas oficiais `production/analytics` (índice, `get-started
 3. **Cardinalidade baixa.** Os campos customizados são poucos textos fixos ("Life day - 4-7", "Time - Night"):
    nada de texto livre, nome ou UserId. Os SKUs são os nomes do catálogo (9 pacotes, 9 trajes) e mais 7 fixos. O
    teste (§13 da suíte) prova que cada valor visto é de um conjunto fechado e que o teto de combinações dos três
-   campos é **337**, contra o limite de **8.000** por experiência.
+   campos é **350**, contra o limite de **8.000** por experiência.
 4. **Abaixo do limite.** O limite documentado é **120 + 20 × CCU chamadas por minuto** por servidor. O módulo usa no
    máximo **75 %** disso em qualquer janela de 60 s (`RATE_SHARE`); o que não cabe espera numa fila limitada (512) e
    sai quando a janela abre. Um evento de economia que precisa esperar é **somado** ao último evento de economia do
@@ -210,18 +210,20 @@ por admin não é mandado. **Pergunta:** quantos jogadores chegam a cada nível?
 
 ## 5. Eventos custom (`LogCustomEvent`) — todos agregados
 
-| Evento         | Valor                     | Campos                                                                     | Quando                                                                                                            | Pergunta                                                |
-| -------------- | ------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| TutorialChoice | —                         | `Choice - Accepted` / `Declined`                                           | a resposta chegou ao save do servidor (jogador novo)                                                              | quantos aceitam o tutorial?                             |
-| Died           | dia da vida               | `Life day - …`; `Time - Night` / `Day`; `Cause - Hunger/Poison/Boss/Horde` | o servidor matou o sobrevivente (`life.ts` `died`)                                                                | onde, quando e **de quê** se morre                      |
-| LifeEnded      | dia que a vida alcançou   | `End - New game` / `World end`; `Life day - …`; `Rebirths - 0/1/2/3+`      | New game aceito, ou o mundo acabou (MP-22)                                                                        | quanto dura uma vida; quem paga Rebirth vai mais longe? |
-| WorldEnded     | dias que o mundo durou    | `Reason - Timeout` / `Declined`; `Fallen - 1/2/3+`; `World day - …`        | uma vez por mundo, no primeiro sobrevivente conectado que caiu com ele (`worldLog.ts` guarda o registro completo) | quanto dura um mundo; solo desiste mais que grupo?      |
-| TitleEarned    | —                         | `Title - Survivor` / `Horde Breaker` / `Week One`                          | o servidor concedeu o título (MON-05), uma vez por save                                                           | quantos ganham cada título por dia?                     |
-| SessionEnded   | minutos jogados na sessão | `Where - Lobby/City/Dead`; `Time - Night/Day`; `Visit - First/Returning`   | ao sair do servidor, **toda** sessão gravável (inclusive quem nunca entrou na cidade)                             | **onde se desiste**: no lobby, na cidade, morto?        |
-| SessionKills   | golpes finais na sessão   | `Kills - 0/1-9/10-49/50-199/200+`                                          | ao sair do servidor, se entrou na cidade                                                                          | quanto se luta por sessão                               |
-| WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`  | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
-| Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                    | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
-| ItemsUsed      | itens usados na sessão    | —                                                                          | ao sair, se > 0                                                                                                   | consumo por sessão                                      |
+| Evento         | Valor                     | Campos                                                                        | Quando                                                                                                            | Pergunta                                                |
+| -------------- | ------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| TutorialChoice | —                         | `Choice - Accepted` / `Declined`                                              | a resposta chegou ao save do servidor (jogador novo)                                                              | quantos aceitam o tutorial?                             |
+| Died           | dia da vida               | `Life day - …`; `Time - Night` / `Day`; `Cause - Hunger/Poison/Boss/Horde`    | o servidor matou o sobrevivente (`life.ts` `died`)                                                                | onde, quando e **de quê** se morre                      |
+| LifeEnded      | dia que a vida alcançou   | `End - New game` / `World end`; `Life day - …`; `Rebirths - 0/1/2/3+`         | New game aceito, ou o mundo acabou (MP-22)                                                                        | quanto dura uma vida; quem paga Rebirth vai mais longe? |
+| WorldEnded     | dias que o mundo durou    | `Reason - Timeout` / `Declined`; `Fallen - 1/2/3+`; `World day - …`           | uma vez por mundo, no primeiro sobrevivente conectado que caiu com ele (`worldLog.ts` guarda o registro completo) | quanto dura um mundo; solo desiste mais que grupo?      |
+| TitleEarned    | —                         | `Title - Survivor` / `Horde Breaker` / `Week One`                             | o servidor concedeu o título (MON-05), uma vez por save                                                           | quantos ganham cada título por dia?                     |
+| SessionEnded   | minutos jogados na sessão | `Where - Lobby/City/Dead`; `Time - Night/Dawn/Day`; `Visit - First/Returning` | ao sair do servidor, **toda** sessão gravável (inclusive quem nunca entrou na cidade)                             | **onde se desiste**: no lobby, na cidade, morto?        |
+| SessionLength  | minutos jogados na sessão | `Length - 0-14 min/15-59 min/1-2 h/2-3 h/3 h+`                                | junto do SessionEnded, **toda** sessão gravável                                                                   | a cauda da sessão (guarda da BEM-07, §15)               |
+| BreakNudge     | —                         | `Left - Yes` / `No`                                                           | uma vez por sessão: o amanhecer que deu a linha da pausa (§15); sai na saída ou 2 min depois                      | a linha da pausa é ouvida? (BEM-04)                     |
+| SessionKills   | golpes finais na sessão   | `Kills - 0/1-9/10-49/50-199/200+`                                             | ao sair do servidor, se entrou na cidade                                                                          | quanto se luta por sessão                               |
+| WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`     | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
+| Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                       | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
+| ItemsUsed      | itens usados na sessão    | —                                                                             | ao sair, se > 0                                                                                                   | consumo por sessão                                      |
 
 Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificuldade, não um valor por dia).
 
@@ -232,7 +234,18 @@ Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificul
   valores dizem a dimensão no próprio texto, os dois nunca se confundem num gráfico.
 - **SessionEnded**: onde e quando vêm da última leitura por segundo, nunca do instante da saída (o `PlayerRemoving`
   do `mpHost` pode já ter tirado o corpo da cidade: os dois handlers rodam em ordem nenhuma). `Where - Dead` é quem
-  sai esperando Rebirth ou amanhecer — a tela de morte como ponto de desistência.
+  sai esperando Rebirth ou amanhecer — a tela de morte como ponto de desistência. **`Time - Dawn`** (2026-09-24,
+  BEM-07): a saída entre 06:00 e 07:30 do mundo (`shared/data/wellbeing.ts` `isDawnAt`), a parada saudável que o
+  cartão do amanhecer oferece (BEM-04); antes ela caía em `Time - Day`, que agora é o resto do dia.
+- **SessionLength** (2026-09-24, BEM-07): o mesmo valor do SessionEnded, com o comprimento num balde. A página de
+  eventos custom dá média, mínimo e máximo de um valor, **nunca um percentil**: a cauda (a fatia de sessões acima de
+  2 h e de 3 h) só se lê contando por `Length`. Um evento a mais por sessão, na saída.
+- **BreakNudge** (2026-09-24, BEM-04): às 06:00, o servidor dá a linha da pausa pela **mesma regra** que o cliente a
+  mostra (`shared/data/wellbeing.ts`): sessão de 90 min ou mais (`BREAK_NUDGE_MIN`, desde a carga do save) e uma
+  noite vivida de pé na cidade (metade dela, `NIGHT_LIVED_S`), uma vez por sessão; `Left - Yes` se a saída veio em
+  até 2 min (`BREAK_NUDGE_LEFT_S`), `Left - No` quando os 2 min passam com o jogador ainda aqui. O relógio do cliente
+  começa ao entrar no servidor e o do servidor na carga do save (segundos depois): uma sessão que cruza os 90 min
+  exatamente no amanhecer pode ver a linha sem o evento — ruído, não viés.
 - **WeaponKills**: a contagem é por abate (`progress.ts` `creditKill` / `creditMachineKill`, depois da trava de run
   assistida, igual a `zombieKills`), mas só vira evento na saída: 1 a 3 por sessão na prática, nunca um por abate. A
   soma por `Weapon` é o total de abates com cada tipo; "usuários únicos" diz quantos usam cada um.
@@ -249,12 +262,12 @@ Uma New game que nunca ficou de pé e é engolida por um fim de mundo não conta
 - **Uma hora pessimista de 6 jogadores** (§8: todos jogando a hora toda, 2 abates por segundo cada com armas
   nomeadas, morte e Rebirth toda noite, chefe toda noite, uma visita à loja com compra a cada 3 minutos, o funil
   Night de todos toda noite, níveis subindo, um fim de mundo, duas reconexões e o servidor fechando no fim):
-  **1.036 eventos/hora ≈ 17/min** (Night 141, Rebirth 114, Shop 360, SessionEnded 8, WeaponKills 16); o minuto
-  mais cheio tem **66 = 28 % do limite**. Nada esperou na fila.
+  **1.044 eventos/hora ≈ 17/min** (Night 141, Rebirth 114, Shop 360, SessionEnded 8, SessionLength 8, WeaponKills
+  16); o minuto mais cheio tem **66 = 28 % do limite**. Nada esperou na fila.
 - **Enxurrada** (§8: 6 jogadores ricos comprando 150 pacotes cada em 10 s, muito além do balde do ShopAction):
   nenhum minuto passa de 180, nada é descartado, cada moeda chega (900 compras viram 186 eventos somados).
 - Por tipo, também longe dos tetos: 1 moeda (limite 5), 5 transactionTypes (20), 25 SKUs (100), 6 funis com o
-  Onboarding (10), 13 passos no maior (100), 10 nomes custom (100), teto de 337 combinações de campos (8.000).
+  Onboarding (10), 13 passos no maior (100), 12 nomes custom (100), teto de 350 combinações de campos (8.000).
 
 ## 7. O que o dono vê no Creator Hub, e quando
 
@@ -430,7 +443,7 @@ Onze de 20. O save do jogo é DataStore com trava de sessão: uma falha de data 
 ## 14. Checklist do dono no Creator Hub
 
 1. **Publicar** e, em minutos, conferir **View Events** em Economy, Funnels e Custom: os 6 funis (Onboarding,
-   NightSurvival, Night, Rebirth, Shop, Levels) e os 10 eventos custom.
+   NightSurvival, Night, Rebirth, Shop, Levels) e os 12 eventos custom.
 2. **Funnels:** criar as abas (até 10); usar o breakdown pelos campos customizados (são os do passo 1).
 3. **Custom dashboard:** Died por `Cause`; SessionEnded (contagem) por `Where`; WeaponKills (soma e usuários únicos)
    por `Weapon`; LifeEnded (média) por `Rebirths`; Shop por `Coins`.
@@ -445,3 +458,31 @@ Onze de 20. O save do jogo é DataStore com trava de sessão: uma falha de data 
 8. **Performance / Crashes:** depois de cada publish, breakdown por **Place Version**; crash de servidor por memória
    → "Server memory by age".
 9. **Insights / Analytics Home:** pôr o jogo na watchlist; os relatórios de IA vêm com 1.000+ DAU.
+10. **Guardas (§15):** no Custom dashboard, SessionLength (contagem) por `Length`, SessionEnded (contagem) por `Time`,
+    BreakNudge (contagem) por `Left`; toda semana, com a retenção D7 da página Retention e a página Feedback.
+
+## 15. Guardas de bem-estar (DESIGN_RULES BEM-07)
+
+Decisão de 2026-09-24 (a BEM-07, a partir de `docs/research/MOTIVATION_AND_ETHICS.md` §6): **nenhuma mudança fica por
+aumentar tempo de sessão ou gasto de moedas se piorar o retorno, a avaliação da página ou a parada ao amanhecer.**
+Tempo de sessão mede o "querer"; a volta espontânea e a opinião do jogador medem o "gostar" (research §1.2). Toda
+mudança de retenção, economia ou feedback é lida com **uma métrica de sucesso e uma guarda**, e a hipótese se escreve
+antes (§12). Tudo abaixo continua agregado, do servidor e de cardinalidade baixa (§1).
+
+| Guarda                | Onde se lê                                                                                                             | O que é alarme (ponto de partida: olhar 2–4 semanas de base antes de fixar)                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Cauda da sessão**   | `SessionLength` (contagem) por `Length`: a fatia de `2-3 h` e de `3 h+`; o máximo e a média do valor do `SessionEnded` | a fatia acima de 3 h (ou de 2 h) sobe mais de **15%** depois de uma mudança **sem** a D7 subir junto                         |
+| **Onde se para**      | `SessionEnded` (contagem) por `Time`: `Dawn` + `Day` contra `Night`                                                    | a fatia que para de dia ou ao amanhecer **cai**; queremos que ela suba (o cartão do amanhecer é a aposta, BEM-04)            |
+| **Retorno (D7)**      | Creator Hub → Retention (vem sozinha, sem código): D1, **D7**, D30                                                     | D7 cai depois de uma mudança, mesmo com a sessão subindo                                                                     |
+| **Gostar (a página)** | Creator Hub → Feedback: votos e comentários da página, semanalmente                                                    | queda depois de uma mudança de retenção é alarme **mesmo com a D7 subindo**                                                  |
+| **A linha da pausa**  | `BreakNudge` por `Left`                                                                                                | nenhum: é medida do que a linha faz (a fatia de `Left - Yes`); a guarda dela é a D7 e a página não caírem                    |
+| **Gasto sob pressão** | funil Rebirth (§4.3) por `Afford - Yes`                                                                                | a conversão sobe depois de uma mudança de interface **sem** as vidas ficarem mais longas (`LifeEnded`): é empurrão, não jogo |
+
+**O que existe, por guarda** (conferido em 2026-09-24): a cauda e o lugar da parada são nossos (`SessionLength` e o
+`Time - Dawn` do `SessionEnded`, novos nesta data; o `SessionEnded` já tinha `Where` e `Time`); a D7 e a página de
+Feedback são da plataforma (§7, §11: não existe API para pedir avaliação de dentro do jogo, e não pediríamos); o
+`BreakNudge` é novo; o funil Rebirth já existia. Nada aqui lê dado de um cliente, nem cria evento por abate.
+
+**Os limites:** o painel não dá percentil de um valor custom, então "p95 da sessão" vira a fatia por balde; a D7 e a
+página não saem por experimento dentro do jogo (a página Experiments dá D1, D7, playtime e session time por braço — use
+esses). Mudança que só se justifica por tempo de sessão ou gasto não entra (BEM-07; research §5, item 18).

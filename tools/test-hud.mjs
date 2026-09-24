@@ -62,6 +62,13 @@
  *     theme colours per state, in the Roblox top bar right of its buttons (under the bar when it has no free stretch)
  *     and covering nothing of the HUD, taking no input; "Saved" holds then fades (Reduce Motion: it just goes), the
  *     failure stays until a write lands; 400 notices and 3000 frames create no Instance, and a still frame writes nothing.
+ *  10. the dawn card (DESIGN_RULES BEM-04, client/ui/dawnCard.ts + client/systems/nightReport.ts) and the level-up
+ *     (BEM-08): the night's tally (a death drops it, a Rebirth restarts it, half a night lived is the floor, one card
+ *     a dawn), the break line only after BREAK_NUDGE_MIN minutes and once; the card built on its first dawn, in the
+ *     banner's box (a "Good morning" gives way to it, a wave takes it), "Progress saved" only after the server's
+ *     "saved" pushed once it is up, nothing Selectable, a tap sends it away, it goes by itself (a write in flight is
+ *     waited for, capped), nothing moves, 20 dawns and 600 frames create no Instance; the level-up line says
+ *     "Level 5 · +1 skill point · Bag › Skills"; main.client.ts wires all of it.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -2253,6 +2260,289 @@ console.log('\n9) o indicador de save (SAV-01): "Saving..." / "Saved" no canto, 
 		label.TextStrokeTransparency === 1 && label.GetChildren().every(c => c.ClassName !== "UIStroke"),
 	);
 	root.Destroy();
+	hud.unmount();
+	flush();
+}
+
+// ---------------------------------------------------------------- 10) the dawn card and the level-up (BEM-04, BEM-08)
+
+console.log("\n10) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu (BEM-08)\n");
+{
+	const NR = require(join(SRC, "client/systems/nightReport.ts"));
+	const DCard = require(join(SRC, "client/ui/dawnCard.ts"));
+	const W = require(join(SRC, "shared/data/wellbeing.ts"));
+	const NIGHT = Clock.NIGHT_REAL_SECONDS;
+
+	// (a) the tally: what a night was, and which nights earn a card
+	/** a night of `NIGHT` real seconds, frame by frame: `from` (share of the night) the survivor stands, `dies` kills them */
+	const night = ({ from = 0, dies, rises, hits = [], heals = [], kills = 0, pickups = 0 } = {}) => {
+		const t = new NR.NightTally();
+		let hp = 100;
+		let k = 0;
+		let pk = 0;
+		let report;
+		let reports = 0;
+		const frames = Math.round(NIGHT);
+		for (let s = 0; s <= frames + 2; s++) {
+			const f = s / frames;
+			const nightNow = s <= frames;
+			let alive = f >= from;
+			if (dies !== undefined && f >= dies && (rises === undefined || f < rises)) alive = false;
+			if (hits.includes(s)) hp -= 10;
+			if (heals.includes(s)) hp += 5;
+			if (s === Math.round(frames / 2)) {
+				k += kills;
+				pk += pickups;
+			}
+			const r = t.step({ night: nightNow, alive, hp, kills: k, pickups: pk, now: s });
+			if (r !== undefined) {
+				report = r;
+				reports++;
+			}
+		}
+		return { report, reports };
+	};
+	const full = night({ hits: [30, 60, 90], heals: [70], kills: 12, pickups: 7 });
+	check(
+		"uma noite inteira de pe: o cartao sai UMA vez, na primeira luz, com zumbis 12, dano 30 (a cura nao desconta) e itens 7",
+		full.reports === 1 && full.report?.zombies === 12 && full.report?.damage === 30 && full.report?.items === 7,
+		JSON.stringify(full),
+	);
+	const died = night({ dies: 0.7 });
+	const risen = night({ dies: 0.3, rises: 0.8 });
+	const late = night({ from: 0.4 });
+	const tooLate = night({ from: 0.6 });
+	check(
+		`morreu na noite: nenhum cartao; levantou com 20% da noite: nenhum; entrou com 60% dela: cartao; com 40%: nenhum (${W.MIN_NIGHT_SHARE * 100}%)`,
+		died.reports === 0 && risen.reports === 0 && late.reports === 1 && tooLate.reports === 0,
+		JSON.stringify([died.reports, risen.reports, late.reports, tooLate.reports]),
+	);
+	check(
+		`a linha da pausa: so numa sessao de ${W.BREAK_NUDGE_MIN} min ou mais, e uma vez por sessao`,
+		!NR.breakNudgeDue(W.BREAK_NUDGE_MIN * 60 - 1, false) &&
+			NR.breakNudgeDue(W.BREAK_NUDGE_MIN * 60, false) &&
+			!NR.breakNudgeDue(W.BREAK_NUDGE_MIN * 60 * 3, true),
+	);
+
+	// (b) the card on the HUD
+	setViewport(1365, 567, 58, 160);
+	uis.TouchEnabled = false;
+	uis.MouseEnabled = true;
+	uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+	uis.PreferredInput = undefined;
+	ctx.phase = "playing";
+	const hud = new Hud(ctx);
+	hud.mount();
+	hud.update(state());
+	const box = () => deep(hudRoot(), "DawnBox");
+	const card = () => deep(box(), "DawnCard");
+	const txt = name => deep(card(), name)?.Text;
+	const up = () => card()?.Visible === true;
+	check(
+		"antes do primeiro amanhecer o cartao nem existe: montar a HUD nao paga nada por ele (so a caixa ancorada)",
+		box() !== undefined &&
+			card() === undefined &&
+			box()
+				.GetChildren()
+				.filter(c => c.IsA("GuiObject")).length === 0,
+	);
+	hud.dawnStoreNotice("saved");
+	hud.showMessage("Good morning");
+	const bannerLabel = deep(hudRoot(), "Banner");
+	const bannerBefore = bannerLabel.Text;
+	const first = phase("cartao do amanhecer: o primeiro (constroi)", () =>
+		hud.showDawnReport({ zombies: 12, damage: 85, items: 7 }, false),
+	);
+	layoutGame(ui, ctx);
+	check(
+		'"Night survived" e a noite em numeros: 12 zombies, 85 damage taken, 7 items found (no amarelo dos numeros)',
+		up() &&
+			txt("Title") === "Night survived" &&
+			txt("Value1") === "12" &&
+			txt("Key1") === "zombies" &&
+			txt("Value2") === "85" &&
+			txt("Key2") === "damage taken" &&
+			txt("Value3") === "7" &&
+			txt("Key3") === "items found" &&
+			[1, 2, 3].every(i => sameColor(deep(card(), `Value${i}`).TextColor3, STAT.value)) &&
+			first.created > 0,
+		[1, 2, 3].map(i => `${txt(`Value${i}`)} ${txt(`Key${i}`)}`).join(" | "),
+	);
+	check(
+		'o "Good morning" da caixa sai na hora: o cartao E o banner da manha',
+		bannerBefore === "Good morning" && bannerLabel.TextTransparency === 1,
+	);
+	hud.showMessage("Good morning");
+	check("...e um Good morning com o cartao de pe nao e desenhado por cima", bannerLabel.TextTransparency === 1);
+	check(
+		'nada salvo e dito antes de o servidor falar DEPOIS de o cartao abrir: sem linha (o "saved" de antes nao conta)',
+		deep(card(), "Store").Visible === false && deep(card(), "Disk").Visible === false,
+	);
+	hud.dawnStoreNotice("saving");
+	const saving = [txt("Store"), deep(card(), "Store").Visible, deep(card(), "Store").TextColor3];
+	hud.dawnStoreNotice("saved");
+	const diskPx = deep(card(), "Disk")
+		.GetChildren()
+		.filter(f => f.ClassName === "Frame");
+	check(
+		'"Saving..." em cinza enquanto a gravacao voa; "Progress saved" com o disquete verde quando o servidor diz que gravou',
+		saving[0] === "Saving..." &&
+			saving[1] === true &&
+			sameColor(saving[2], THEME.mutedForeground) &&
+			txt("Store") === "Progress saved" &&
+			sameColor(deep(card(), "Store").TextColor3, THEME.foreground) &&
+			diskPx.length > 0 &&
+			sameColor(diskPx[0].BackgroundColor3, GAME.success),
+		`${saving[0]} -> ${txt("Store")}`,
+	);
+	hud.dawnStoreNotice("failing");
+	check(
+		'uma gravacao que falhou e dita em vermelho: "Progress not saved — retrying"',
+		txt("Store") === "Progress not saved — retrying" && sameColor(deep(card(), "Store").TextColor3, STAT.penalty),
+	);
+	// where: the banner's own box at the top centre, never over the console
+	const cr = rectOf(card());
+	const [bannerW, feedW] = hud.messageWidths();
+	const [reach] = messageReach(1365, 567, 58, bannerW, feedW, 0.8 + 0.4 * save.settings.uiSize);
+	const inside =
+		cr.x >= reach[0] - 0.5 &&
+		cr.x + cr.w <= reach[2] + 0.5 &&
+		cr.y >= reach[1] - 0.5 &&
+		cr.y + cr.h <= reach[3] + 0.5;
+	const con = rectOf(consoleFrame());
+	const overlapR = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+	check(
+		"no lugar do banner (topo central, a caixa das mensagens), longe do console e do sobrevivente no meio da tela",
+		inside && !overlapR(cr, con) && cr.y + cr.h < 567 / 2,
+		`cartao ${Math.round(cr.x)},${Math.round(cr.y)} ${Math.round(cr.w)}x${Math.round(cr.h)}`,
+	);
+	// the pad is never taken, and nothing asks for B
+	const selectable = box()
+		.GetDescendants()
+		.filter(d => d.IsA("GuiObject") && d.Selectable === true);
+	check(
+		"nada no cartao e Selectable: o controle continua do sobrevivente (UI-09), o cartao nunca toma o foco",
+		selectable.length === 0,
+		selectable.map(d => d.Name).join(", "),
+	);
+	// it goes by itself; a write in flight is waited for; "Progress saved" stays a moment
+	const t0 = getClock();
+	const at = s => {
+		setClock(t0 + s);
+		hud.update(state());
+	};
+	hud.showDawnReport({ zombies: 1, damage: 0, items: 1 }, false);
+	check(
+		'no singular: "1 zombie", "1 item found"',
+		txt("Key1") === "zombie" && txt("Key3") === "item found" && txt("Value2") === "0",
+	);
+	at(DCard.DAWN_SHOW_S - 0.1);
+	const stillUp = up();
+	at(DCard.DAWN_SHOW_S + 0.1);
+	check(`some sozinho em ${DCard.DAWN_SHOW_S} s (nunca espera o jogador)`, stillUp && !up());
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	const t1 = getClock();
+	setClock(t1 + DCard.DAWN_SHOW_S - 1);
+	hud.dawnStoreNotice("saving");
+	setClock(t1 + DCard.DAWN_SHOW_S + 2);
+	hud.update(state());
+	const waited = up();
+	setClock(t1 + DCard.DAWN_SHOW_S + 3);
+	hud.dawnStoreNotice("saved");
+	setClock(t1 + DCard.DAWN_SHOW_S + 3 + DCard.DAWN_SAVED_HOLD_S - 0.1);
+	hud.update(state());
+	const held = up() && txt("Store") === "Progress saved";
+	setClock(t1 + DCard.DAWN_SHOW_S + 3 + DCard.DAWN_SAVED_HOLD_S + 0.1);
+	hud.update(state());
+	check(
+		`uma gravacao em voo e esperada (ate ${DCard.DAWN_MAX_S} s); "Progress saved" fica ${DCard.DAWN_SAVED_HOLD_S} s e o cartao vai`,
+		waited && held && !up(),
+	);
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	setClock(getClock() + 1);
+	hud.dawnStoreNotice("saving");
+	setClock(getClock() + DCard.DAWN_MAX_S + 1);
+	hud.update(state());
+	check(`...mas nunca mais que ${DCard.DAWN_MAX_S} s, com ou sem resposta`, !up());
+	// a tap (or a click) sends it away; a banner with news takes the box
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	const target = deep(card(), "Dismiss");
+	target.Activated.Fire();
+	const tapped = !up() && hud.dawnCard().wasDismissed();
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	hud.showMessage("Wave 1");
+	check(
+		"um toque ou clique no cartao o manda embora; uma onda (noticia) toma a caixa dele",
+		tapped && !up() && target.ClassName === "TextButton" && target.Selectable === false,
+	);
+	// the break line, once a session after a long one: the card grows to the banner's height for it
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, true);
+	const tall = hud.dawnCard().size();
+	const breakShown =
+		deep(card(), "Break").Visible === true &&
+		txt("Break") === "You've played for over 90 minutes. Dawn is a good time for a break.";
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	const short = hud.dawnCard().size();
+	check(
+		"a linha da pausa, gentil, so quando pedida (sessao longa): o cartao cresce ate a altura do banner para ela",
+		breakShown && deep(card(), "Break").Visible === false && tall[1] === DCard.DAWN_H && short[1] < tall[1],
+		`${tall.join("x")} / ${short.join("x")}`,
+	);
+	check("a caixa do cartao tem a altura da caixa do banner (o mesmo lugar)", DCard.DAWN_H === 110);
+	// no churn once built: 20 dawns, their notices and 600 frames
+	const churn = phase("cartao do amanhecer: 20 amanheceres, avisos e 600 quadros", () => {
+		for (let i = 0; i < 20; i++) {
+			hud.showDawnReport({ zombies: i, damage: i * 7, items: i % 3 }, i % 4 === 0);
+			hud.dawnStoreNotice(i % 2 === 0 ? "saving" : "saved");
+			for (let f = 0; f < 30; f++) {
+				setClock(getClock() + 1 / 60);
+				hud.update(state());
+			}
+		}
+	});
+	check(
+		"depois de construido: 20 amanheceres, avisos e 600 quadros sem criar nem destruir Instance",
+		zero(churn),
+		cost(churn),
+	);
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 }, false);
+	const still = phase("cartao do amanhecer: 120 quadros de pe", () => {
+		for (let f = 0; f < 120; f++) {
+			setClock(getClock() + 1 / 60);
+			hud.update(state());
+		}
+	});
+	check("...e de pe por 120 quadros, nada criado nem destruido", zero(still) && up(), cost(still));
+	const dcSrc = readFileSync(join(SRC, "client/ui/dawnCard.ts"), "utf8");
+	check(
+		"nada se move: o cartao aparece e some (sem tween, sem pulso), entao o Reduzir Movimento nao tem o que tirar; texto sem contorno",
+		!/tween|fadeText|fadeSurface|motionTween|math\.sin/.test(dcSrc) &&
+			card()
+				.GetDescendants()
+				.every(d => d.ClassName !== "UIStroke"),
+	);
+
+	// (c) the level-up says what it gave (BEM-08)
+	hud.showLevelUp(5, 1);
+	hud.showLevelUp(7, 2);
+	const lines = deepAll(hudRoot(), "Line").map(l => [l.GetAttribute("Text"), l.FindFirstChild("Text")?.TextColor3]);
+	const one = lines.find(([t]) => t === "Level 5 · +1 skill point · Bag › Skills");
+	const two = lines.find(([t]) => t === "Level 7 · +2 skill points · Bag › Skills");
+	check(
+		'o level-up diz o que deu e onde gastar: "Level 5 · +1 skill point · Bag › Skills" (e "+2 skill points"), no azul do XP',
+		one !== undefined && two !== undefined && sameColor(one[1], GAME.xp),
+		lines.map(([t]) => t).join(" | "),
+	);
+	// the run wires it all: the tally every frame (the dead too), the server's store notices, the level line
+	const mainSrc = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
+	check(
+		"main.client.ts: a noite contada a cada quadro (fora do `if (alive)`), o aviso de gravacao do servidor no cartao, o level-up novo",
+		/\n\t\tstepNight\(!refs\.player\.dead\);/.test(mainSrc) &&
+			/net\.onStoreState\(state => hud\.dawnStoreNotice\(state\)\);/.test(mainSrc) &&
+			/hud\.showLevelUp\(save\.level, save\.level - lastLevel\);/.test(mainSrc) &&
+			!/hud\.showMessage\("Level UP"\)/.test(mainSrc) &&
+			/nightTally\.reset\(\);/.test(mainSrc),
+	);
 	hud.unmount();
 	flush();
 }

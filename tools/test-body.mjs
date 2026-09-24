@@ -80,6 +80,9 @@
  *                           to what landed; the leave still retries in place; a save that cannot be encoded or is too
  *                           large backs off too; a notice that cannot be sent never costs a write; a refresh is silent;
  *                           a lost lock is announced ("stopped") and never written over (the review of a454292).
+ *  33. BEM                  (DESIGN_RULES UI-13 / BEM-04) a death tells the one who died, alone, why -- Announce{Died}:
+ *                           starving at 22:00 is Hunger at night, poisoned at 14:00 Poison by day; and daybreak with a
+ *                           survivor standing asks for an event save ("dawn"), landed and told "saved" within the delay.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -3818,6 +3821,109 @@ section("32) SAV-01: no client-chosen write, coalesced event saves, the budget f
 			check(times.length === 0, "…and no event save tries again from here", `${times.length} write(s)`);
 		} finally {
 			undo();
+		}
+	}
+});
+
+// ================================================================ 33: BEM, the death that teaches and the dawn
+
+section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks for a write (BEM-04)", () => {
+	const DC = require(join(SRC, "shared/data/deathCause.ts"));
+	const Cad = require(join(SRC, "server/save/saveCadence.ts"));
+	const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	/** every World event this player's client received, in order (directed to it, or to everybody) */
+	const worldTo = (srv, p) => {
+		const out = [];
+		for (const e of srv.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World").sent) {
+			if (e.to !== undefined && e.to !== p) continue;
+			const batch = srv.P.decodeWorld(e.args[0]);
+			if (batch !== undefined) out.push(...batch.events);
+		}
+		return out;
+	};
+	const causes = (srv, p) =>
+		worldTo(srv, p)
+			.filter(e => e.t === srv.P.WorldEv.Announce && e.msg === srv.P.AnnounceKind.Died)
+			.map(e => DC.deathFromWire(e.arg));
+
+	// (a) starving at night, poisoned by day: each death told once, to the one who died, with its cause
+	{
+		const s = bootServer();
+		const a = s.join(newUser(), "starved");
+		const b = s.join(newUser(), "witness");
+		const c = s.join(newUser(), "poisoned");
+		s.immortal.add(b);
+		const spA = s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(22);
+		s.run(0.5);
+		spA.state.hungry = 0;
+		s.kill(a);
+		const first = causes(s, a);
+		check(
+			first.length === 1 && first[0]?.kind === DC.DeathKind.Hunger && first[0]?.night === true,
+			"a survivor who starves at 22:00 is told Announce{Died}: Hunger, at night -- once",
+			JSON.stringify(first),
+		);
+		check(causes(s, b).length === 0, "…and nobody else hears it (directed, like a title)");
+		// another survivor, in the afternoon: fed, poisoned
+		s.sim.clock.setClock(14);
+		const spC = s.enter(c);
+		// past the entry's spawn shield (server/sim/players.ts SPAWN_SHIELD_S), so the blow lands
+		const { SPAWN_SHIELD_S } = require(join(SRC, "server/sim/players.ts"));
+		s.run(SPAWN_SHIELD_S + 0.5);
+		spC.state.hungry = spC.state.hungryMax;
+		spC.state.buffs.poison = 10;
+		s.kill(c);
+		const poisoned = causes(s, c);
+		check(
+			s.body(c)?.state.dead === true &&
+				poisoned.length === 1 &&
+				poisoned[0]?.kind === DC.DeathKind.Poison &&
+				poisoned[0]?.night === false &&
+				causes(s, a).length === 1,
+			"a death poisoned at 14:00: Poison, by day (the same rule as the analytics Died event), told to that one only",
+			JSON.stringify(poisoned),
+		);
+	}
+
+	// (b) daybreak with a survivor standing: an event save ("dawn"), so the dawn card can say "Progress saved"
+	{
+		const s = bootServer();
+		const u = newUser();
+		const p = s.join(u, "dawn");
+		s.immortal.add(p);
+		const sp = s.enter(p);
+		// the load's own write (it took the lock) more than a gap ago, and something new to write
+		s.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		sp.save.settings.bgm = 0.123;
+		const store = fakeStore(SAVE_STORE);
+		const times = [];
+		const original = store.UpdateAsync;
+		store.UpdateAsync = (k, transform) => {
+			if (k === String(u)) times.push(clockNow);
+			return original(k, transform);
+		};
+		try {
+			s.nightLeft(1);
+			const t0 = clockNow;
+			const dawnAt = s.runUntil(() => s.sim.clock.dayTime >= 6 && s.sim.clock.dayTime < 12, 10, 0.25);
+			s.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+			const told = s.env.services.ReplicatedStorage.FindFirstChild("Net")
+				.FindFirstChild("SaveAck")
+				.sent.filter(e => e.to === p && e.args[0]?.store !== undefined)
+				.map(e => e.args[0].store);
+			check(
+				dawnAt >= 0 &&
+					times.length === 1 &&
+					times[0] - t0 <= dawnAt + Cad.EVENT_SAVE_DELAY + 0.5 &&
+					s.stored(u)?.settings?.bgm === 0.123 &&
+					told.includes("saved"),
+				`daybreak with the survivor standing: one write ${Cad.EVENT_SAVE_DELAY} s after it, and "saved" told (the dawn card's line)`,
+				`${times.length} write(s) ${times.map(t => (t - t0).toFixed(2)).join(", ")} s in (dawn ${dawnAt} s); told ${JSON.stringify(told)}`,
+			);
+		} finally {
+			store.UpdateAsync = original;
 		}
 	}
 });

@@ -1819,6 +1819,132 @@ section("12) experiments: the welcome pack is read from the player's snapshot, o
 
 // ================================================================ 13: the catalogue within the documented limits
 
+section("12b) the wellbeing guards (DESIGN_RULES BEM-07, docs/ANALYTICS.md §15): the tail, the dawn, the break", () => {
+	const W = require(join(SRC, "shared/data/wellbeing.ts"));
+	const { readFileSync } = require("node:fs");
+	// the buckets of the tail: a percentile is not on the dashboard, so the share past 2 h / 3 h is counted by bucket
+	const cuts = [0, 14.9, 15, 59.9, 60, 119.9, 120, 179.9, 180, 600].map(m => AN.lengthBucket(m));
+	check(
+		JSON.stringify(cuts) ===
+			JSON.stringify([
+				"0-14 min",
+				"0-14 min",
+				"15-59 min",
+				"15-59 min",
+				"1-2 h",
+				"1-2 h",
+				"2-3 h",
+				"2-3 h",
+				"3 h+",
+				"3 h+",
+			]),
+		"SessionLength's buckets: 0-14 min, 15-59 min, 1-2 h, 2-3 h, 3 h+ (the edges where they belong)",
+		JSON.stringify(cuts),
+	);
+	// a town whose clock the test drives: noon for the first 95 minutes, then a night that runs to 06:30 in 200 s
+	const h = makeCore();
+	let t = 0;
+	const NIGHT_AT = 95 * 60;
+	const hour = () => (t < NIGHT_AT ? 12 : Math.min(6.5, 1 + ((t - NIGHT_AT) / 200) * 5.5));
+	const bodies = new Map();
+	h.core.bindWorld({
+		dayTime: hour,
+		day: () => (t < NIGHT_AT ? 1 : 2),
+		bodyOf: pl => bodies.get(pl.UserId),
+		standing: () => 1,
+	});
+	const load = (id, name) => {
+		const pl = fakePlayer(id, name);
+		h.core.sessionLoaded(pl, "ok", blankSave());
+		h.core.enteredWorld(pl);
+		bodies.set(id, { dead: false });
+		return pl;
+	};
+	const leaver = load(1501, "leaver");
+	const stayer = load(1502, "stayer");
+	const risen = load(1503, "risen");
+	let fresh;
+	let dawnAt;
+	let leftAt;
+	const step = () => {
+		t += 1;
+		h.advance(1);
+		h.core.poll();
+	};
+	while (t < NIGHT_AT + 400) {
+		// a short session: it joins 30 minutes before the night
+		if (t === NIGHT_AT - 30 * 60) fresh = load(1504, "short");
+		// one that died in the night and stood up again 20 s before the dawn: it did not live the night
+		if (t === NIGHT_AT + 60) bodies.set(1503, { dead: true });
+		if (t === NIGHT_AT + 160) bodies.set(1503, { dead: false });
+		step();
+		if (dawnAt === undefined && t > NIGHT_AT && hour() >= 6) dawnAt = t;
+		// the leaver goes 30 s after the dawn, the dawn window still open (06:00-07:30)
+		if (dawnAt !== undefined && leftAt === undefined && t === dawnAt + 30) {
+			leftAt = t;
+			leaver.Parent = undefined;
+			h.core.playerLeft(leaver);
+		}
+	}
+	const nudges = id => h.rows.filter(r => r.userId === id && r.kind === "custom" && r.name === AN.EVENT.BreakNudge);
+	const ended = id => h.rows.find(r => r.userId === id && r.name === AN.EVENT.SessionEnded);
+	const length = id => h.rows.find(r => r.userId === id && r.name === AN.EVENT.SessionLength);
+	check(
+		nudges(1501).length === 1 && nudges(1501)[0].fields.CustomField01 === "Left - Yes",
+		"a long session that lived the night and left 30 s after the dawn: one BreakNudge, Left - Yes",
+		JSON.stringify(nudges(1501).map(r => r.fields)),
+	);
+	check(
+		nudges(1502).length === 1 &&
+			nudges(1502)[0].fields.CustomField01 === "Left - No" &&
+			nudges(1502)[0].t - dawnAt > W.BREAK_NUDGE_LEFT_S &&
+			nudges(1502)[0].t - dawnAt <= W.BREAK_NUDGE_LEFT_S + 2,
+		"one that stayed: Left - No, sent when the 2 minutes ran out (and only once)",
+		JSON.stringify(nudges(1502).map(r => [r.fields.CustomField01, r.t - dawnAt])),
+	);
+	check(
+		nudges(1503).length === 0 && nudges(1504).length === 0,
+		"no line for a session under 90 minutes, nor for one that died in the night and stood up just before dawn",
+	);
+	check(
+		ended(1501)?.fields.CustomField02 === "Time - Dawn" &&
+			length(1501)?.fields.CustomField01 === "Length - 1-2 h" &&
+			length(1501)?.value === ended(1501)?.value,
+		"the leaver's SessionEnded says Time - Dawn (06:00-07:30), and its SessionLength is the same minutes, Length - 1-2 h",
+		JSON.stringify([ended(1501)?.fields, length(1501)?.fields, length(1501)?.value]),
+	);
+	// the others leave later in the day: after the dawn window it is Day again
+	t += 1;
+	const late = () => {
+		for (const pl of [stayer, risen, fresh]) {
+			pl.Parent = undefined;
+			h.core.playerLeft(pl);
+		}
+		h.core.poll();
+	};
+	const hourBefore = hour();
+	late();
+	check(
+		hourBefore >= 6 &&
+			hourBefore < W.DAWN_END_HOUR &&
+			ended(1502)?.fields.CustomField02 === "Time - Dawn" &&
+			length(1504)?.fields.CustomField01 === "Length - 15-59 min",
+		"still in the dawn window: Time - Dawn for the others too; the short session is Length - 15-59 min",
+		JSON.stringify([hourBefore, ended(1502)?.fields, length(1504)?.fields]),
+	);
+	check(
+		W.isDawnAt(6) && W.isDawnAt(7.49) && !W.isDawnAt(7.5) && !W.isDawnAt(5.99) && !W.isDawnAt(12),
+		"the dawn window is 06:00 to 07:30 of the world clock (shared/data/wellbeing.ts isDawnAt)",
+	);
+	check(
+		W.BREAK_NUDGE_MIN === 90 &&
+			readFileSync(join(SRC, "shared/data/lang.ts"), "utf8").includes(
+				'"You\'ve played for over 90 minutes. Dawn is a good time for a break."',
+			),
+		"the line the player reads says the number the rule uses (BREAK_NUDGE_MIN = 90)",
+	);
+});
+
 section("13) every row of this run: within the documented limits, low cardinality, no PII", () => {
 	const A = require(join(SRC, "server/analytics/events.ts"));
 	const rows = EVERY_ROW;
@@ -1861,7 +1987,9 @@ section("13) every row of this run: within the documented limits, low cardinalit
 	const allowed = [
 		`Life day - ${bucket}`,
 		`World day - ${bucket}`,
-		"Time - (Night|Day)",
+		"Time - (Night|Dawn|Day)",
+		"Length - (0-14 min|15-59 min|1-2 h|2-3 h|3 h\\+)",
+		"Left - (Yes|No)",
 		"Survivors - (Solo|Group)",
 		"Cause - (Hunger|Poison|Boss|Horde|Unknown)",
 		"Choice - (Accepted|Declined)",
@@ -1909,8 +2037,10 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		TITLES.length + // TitleEarned
 		5 + // SessionKills
 		3 + // Crafted
-		3 * 2 * 2 + // SessionEnded (+ its combos without the hour)
+		3 * 3 * 2 + // SessionEnded: where x time (night, dawn, day) x visit (+ its combos without the hour)
 		3 * 2 +
+		5 + // SessionLength: the length bucket
+		2 + // BreakNudge: left or not
 		(A.WEAPON_KIND_NAMES.length + 2) + // WeaponKills
 		4 + // Rebirth economy: Continue
 		2 + // Shop economy: Category

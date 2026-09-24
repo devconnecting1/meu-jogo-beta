@@ -56,6 +56,7 @@ import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
 import { DESIGN } from "shared/engine/constants";
 import { titleFromWire } from "shared/data/titles";
+import { DeathNote, deathFromWire } from "shared/data/deathCause";
 import {
 	DYNAMIC_ID_BASE,
 	MAX_PLAYERS,
@@ -325,6 +326,11 @@ let lastSelfTick = -math.huge;
 /** the local survivor's last reliable life state (§7.3), and whether it still has to reach refs.player */
 let localLife = LifeState.Up as number;
 let localLifeDirty = false;
+/**
+ * UI-13: why the local survivor last died, as the server told them alone (`Announce{Died}`, protocol note 21) -- the
+ * death screen's cause line and tip. Forgotten when they stand up again and on a new session.
+ */
+let deathNote: DeathNote | undefined;
 let staleSelfBlocks = 0;
 let timeSeq = 0;
 let timeAt = 0;
@@ -515,6 +521,8 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		if (e.slot === mySlot) {
 			localLife = e.state;
 			localLifeDirty = true;
+			// back on their feet: the last death's cause is not the next one's
+			if (e.state === LifeState.Up) deathNote = undefined;
 		}
 		return;
 	}
@@ -538,6 +546,11 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		// MON-05: a title this survivor just earned is their news, not the round banner's (the decoder checked the id)
 		if (e.msg === AnnounceKind.TitleUnlocked) {
 			noticeTitle(titleFromWire(e.arg));
+			return;
+		}
+		// UI-13: why this survivor just died -- for the death screen, never the round banner (the decoder checked it)
+		if (e.msg === AnnounceKind.Died) {
+			deathNote = deathFromWire(e.arg);
 			return;
 		}
 		pendingAnnounce.push(announceText(e.msg, e.arg));
@@ -923,6 +936,14 @@ export function netOnTown(fn: (notice: TownNotice) => void): void {
 }
 
 /**
+ * UI-13: why the local survivor last died, as the server read it off the body and told them alone (`Announce{Died}`):
+ * undefined before it arrives, offline, and once they stand up again. client/onboarding/gameOver.ts polls it.
+ */
+export function netDeathNote(): DeathNote | undefined {
+	return deathNote;
+}
+
+/**
  * MON-05: `fn` hears each title the SERVER granted this survivor (a TITLES id), once, the moment it did -- the
  * `Announce{TitleUnlocked}` sent to this client alone. client/ui/titleNotice.ts mirrors it into the save's display
  * copy and shows the toast.
@@ -947,6 +968,7 @@ export function netReset(): void {
 	lastSelfTick = -math.huge;
 	localLife = LifeState.Up;
 	localLifeDirty = false;
+	deathNote = undefined;
 	boundWorld = undefined;
 	boundPlayer = undefined;
 	boundSave = undefined;

@@ -38,6 +38,7 @@
  * Pure module: no Instances, no services, no os.clock. server/net/mpHost.ts feeds `step(dt)` from its Heartbeat and
  * maps Players to UserIds; tools/test-body.mjs drives the real host through its remotes.
  */
+import { deathKindOf, deathWireOf } from "shared/data/deathCause";
 import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
@@ -53,7 +54,7 @@ import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/s
 import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
-import { DAY_BREAK_HOUR, daybreakWaitSeconds } from "shared/sim/clock";
+import { DAY_BREAK_HOUR, daybreakWaitSeconds, isNightAt } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import { canEscape } from "./enclosure";
@@ -268,6 +269,11 @@ export interface LifeWire {
 	left(slot: number): void;
 	/** a reliable PlayerLife delta (§4.5) */
 	life(slot: number, state: number): void;
+	/**
+	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 21; `arg` is
+	 * shared/data/deathCause.ts `deathWireOf`). Optional: a keeper wired to no client (a test) has nobody to tell.
+	 */
+	died?(slot: number, arg: number): void;
 }
 
 /** what `onWorldWiped` is told */
@@ -552,8 +558,13 @@ export class LifeKeeper {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
-		// the body and the bosses standing are what the cause is read from (hunger, poison, a boss, the horde)
-		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count(), sp.state, this.sim.horde?.bossRoster.list);
+		// the body and the bosses standing are what the cause is read from (hunger, poison, a boss, the horde): the
+		// dead survivor is told (UI-13, their death screen teaches), and the dashboard counts it -- one rule for both
+		const bosses = this.sim.horde?.bossRoster.list;
+		const dayTime = this.sim.clock.dayTime;
+		const arg = deathWireOf(deathKindOf(sp.state, bosses), isNightAt(dayTime));
+		if (arg !== undefined) this.wire.died?.(sp.slot, arg);
+		Analytics.death(sp.save, dayTime, this.sim.count(), sp.state, bosses);
 	}
 
 	/**

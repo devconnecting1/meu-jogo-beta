@@ -39,6 +39,8 @@
  * the Funnel page charts.
  */
 import { GAME_NAME } from "shared/module";
+import { DeathBody, DeathBoss, DeathKind, deathKindOf } from "shared/data/deathCause";
+import { BREAK_NUDGE_LEFT_S, BREAK_NUDGE_MIN, NIGHT_LIVED_S, isDawnAt } from "shared/data/wellbeing";
 import { COSTUMES, SHOP_PACKS, rebirthPrice } from "shared/data/shop";
 import { TITLES, TitleId } from "shared/data/titles";
 import { PlayerSaveData, ownsTitle } from "shared/game/save";
@@ -149,8 +151,8 @@ export const SHOP_VISIT_S = 600;
 export const SHOP_OPEN_MIN_S = 1;
 export const SHOP_VISITS_MAX = 30;
 
-/** a living boss this close to a body at its death is what killed it: a needle's reach (shared/sim/ai/bossBrain.ts) */
-export const BOSS_REACH = 900;
+/** a living boss this close to a body at its death is what killed it: a needle's reach (shared/data/deathCause.ts) */
+export { BOSS_REACH } from "shared/data/deathCause";
 
 /**
  * The weapon kinds of the kill credit (shared/data/kinds.ts WeaponKind, 1-8), by name, for WeaponKills. A machine's
@@ -173,6 +175,13 @@ export const EVENT = {
 	SessionEnded: "SessionEnded",
 	/** a session's killing blows with one kind of weapon (one per kind used, on leaving) */
 	WeaponKills: "WeaponKills",
+	/**
+	 * BEM-07's guard on the tail (docs/ANALYTICS.md §15): a session's length in minutes, bucketed -- the dashboards give
+	 * a custom value's mean, min and max but no percentile, so the share of sessions past 2 h / 3 h is read by `Length`
+	 */
+	SessionLength: "SessionLength",
+	/** BEM-04: the dawn card's break line was earned (a long session, a night lived), and whether they left soon after */
+	BreakNudge: "BreakNudge",
 } as const;
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
@@ -269,6 +278,15 @@ export function dayBucket(day: number): string {
 	return "30+";
 }
 
+/** "0-14 min", "15-59 min", "1-2 h", "2-3 h", "3 h+": a session's length, for the tail guard (BEM-07) */
+export function lengthBucket(minutes: number): string {
+	if (minutes < 15) return "0-14 min";
+	if (minutes < 60) return "15-59 min";
+	if (minutes < 120) return "1-2 h";
+	if (minutes < 180) return "2-3 h";
+	return "3 h+";
+}
+
 function killBucket(kills: number): string {
 	if (kills <= 0) return "0";
 	if (kills < 10) return "1-9";
@@ -296,38 +314,18 @@ export function weaponName(kind: number): string {
 	return WEAPON_KIND_NAMES[kind - 1] ?? "Other";
 }
 
-/** what a body carries into its death, as far as the cause goes (a PlayerState is one) */
-export interface DeathBody {
-	x: number;
-	y: number;
-	/** 0 = starving: the hunger drain is taking hp (shared/sim/playerMove.ts) */
-	hungry: number;
-	buffs: { poison: number };
-}
+export type { DeathBody, DeathBoss } from "shared/data/deathCause";
 
-/** a boss as far as the cause goes (a BossState is one) */
-export interface DeathBoss {
-	x: number;
-	y: number;
-	hp: number;
-}
+/** the dashboard's word for each cause (shared/data/deathCause.ts DeathKind, by value) */
+const CAUSE_NAMES = ["Cause - Unknown", "Cause - Horde", "Cause - Hunger", "Cause - Poison", "Cause - Boss"];
 
 /**
  * Why a survivor died, from what the server holds at that instant (the damage itself carries no source): starving,
  * poisoned, a living boss within a needle's reach, or else the horde. Low cardinality by construction: four values.
+ * The rule is shared/data/deathCause.ts `deathKindOf`, the same one the dead survivor's death screen is told (UI-13).
  */
 export function causeOfDeath(body: DeathBody | undefined, bosses: ReadonlyArray<DeathBoss> | undefined): string {
-	if (body === undefined) return "Cause - Unknown";
-	if (body.hungry <= 0) return "Cause - Hunger";
-	if (body.buffs.poison > 0) return "Cause - Poison";
-	if (bosses !== undefined) {
-		for (const b of bosses) {
-			const dx = b.x - body.x;
-			const dy = b.y - body.y;
-			if (b.hp > 0 && dx * dx + dy * dy <= BOSS_REACH * BOSS_REACH) return "Cause - Boss";
-		}
-	}
-	return "Cause - Horde";
+	return CAUSE_NAMES[deathKindOf(body, bosses)] ?? CAUSE_NAMES[DeathKind.Unknown];
 }
 
 /** a life's funnel session: `runRev` less the continues bought in it -- a paid Rebirth moves both, a new life resets
@@ -406,6 +404,13 @@ interface Entry {
 	/** where the last read found them (`poll`): a body in the city, and the world's hour a night one */
 	inWorld: boolean;
 	atNight: boolean | undefined;
+	/** ...and the dawn window (06:00-07:30, shared/data/wellbeing.ts `isDawnAt`): the healthy stopping point (BEM-04) */
+	atDawn: boolean;
+	/** clock() since which the body has stood in the city alive, without a break (undefined: not standing now) */
+	standingSince?: number;
+	/** clock() of this session's dawn that earned the break line (BEM-04), and whether its BreakNudge went out */
+	nudgedAt?: number;
+	nudgeLogged: boolean;
 	/** tonight's Night funnel session, while it is open */
 	night?: { id: string; step: number };
 	/** the shop visit that is open, and the rate guard on opening one */
@@ -707,6 +712,9 @@ export class ServerAnalytics {
 			loadedAt: old?.loadedAt ?? this.clock(),
 			inWorld: old !== undefined && old.inWorld,
 			atNight: old?.atNight,
+			atDawn: old?.atDawn ?? false,
+			nudgedAt: old?.nudgedAt,
+			nudgeLogged: old?.nudgeLogged ?? false,
 			shopOpenedAt: old?.shopOpenedAt ?? -math.huge,
 			shopVisits: old?.shopVisits ?? 0,
 		};
@@ -750,14 +758,28 @@ export class ServerAnalytics {
 		// the quit point, lobby sessions included (a new player who never walks in is the drop-off that matters most).
 		// Where and when come from the last once-a-second read, never from now: the host's own PlayerRemoving may
 		// already have taken the body out of the city (the two handlers run in no set order)
-		const minutes = math.max(0, (e.leftAt ?? this.clock()) - e.loadedAt) / 60;
+		const endedAt = e.leftAt ?? this.clock();
+		const minutes = math.max(0, endedAt - e.loadedAt) / 60;
 		const where = e.save.runOver ? "Dead" : e.inWorld ? "City" : "Lobby";
 		const fields: CustomFields = {
 			CustomField01: `Where - ${where}`,
 			CustomField03: e.fresh ? "Visit - First" : "Visit - Returning",
 		};
-		if (e.atNight !== undefined) fields.CustomField02 = e.atNight ? "Time - Night" : "Time - Day";
-		this.custom(e, EVENT.SessionEnded, math.floor(minutes * 10 + 0.5) / 10, fields);
+		// BEM-07: the dawn is told apart from the rest of the day -- the share of sessions that end there is a guard
+		if (e.atNight !== undefined) {
+			fields.CustomField02 = e.atNight ? "Time - Night" : e.atDawn ? "Time - Dawn" : "Time - Day";
+		}
+		const tenths = math.floor(minutes * 10 + 0.5) / 10;
+		this.custom(e, EVENT.SessionEnded, tenths, fields);
+		// BEM-07: the tail of the session length, by bucket (no percentile on a custom value: docs/ANALYTICS.md §15)
+		this.custom(e, EVENT.SessionLength, tenths, { CustomField01: `Length - ${lengthBucket(minutes)}` });
+		// BEM-04: a break line earned and not yet told: did they leave within BREAK_NUDGE_LEFT_S of it?
+		if (e.nudgedAt !== undefined && !e.nudgeLogged) {
+			e.nudgeLogged = true;
+			this.custom(e, EVENT.BreakNudge, undefined, {
+				CustomField01: endedAt - e.nudgedAt <= BREAK_NUDGE_LEFT_S ? "Left - Yes" : "Left - No",
+			});
+		}
 		if (!e.entered) return;
 		const kills = math.max(0, e.save.zombieKills - e.killsAtLoad);
 		this.custom(e, EVENT.SessionKills, kills, { CustomField01: `Kills - ${killBucket(kills)}` });
@@ -792,7 +814,15 @@ export class ServerAnalytics {
 				continue;
 			}
 			this.pollEntry(e);
-			for (const step of hours) this.nightPhase(e, step);
+			for (const step of hours) {
+				this.nightPhase(e, step);
+				if (step === NIGHT_PHASE_HOURS.size()) this.breakAtDawn(e, now);
+			}
+			// BEM-04: the break line stood for BREAK_NUDGE_LEFT_S and they are still here
+			if (e.nudgedAt !== undefined && !e.nudgeLogged && now - e.nudgedAt > BREAK_NUDGE_LEFT_S) {
+				e.nudgeLogged = true;
+				this.custom(e, EVENT.BreakNudge, undefined, { CustomField01: "Left - No" });
+			}
 		}
 		for (const player of gone) {
 			const e = this.entries.get(player);
@@ -858,12 +888,31 @@ export class ServerAnalytics {
 		if (step >= NIGHT_PHASE_HOURS.size()) e.night = undefined;
 	}
 
+	/**
+	 * BEM-04 at 06:00: the dawn card's break line is earned by the rule the client shows it by -- a session of
+	 * BREAK_NUDGE_MIN minutes and a night lived standing in the city (NIGHT_LIVED_S of it) -- once per session. Counted
+	 * here, told on leaving or BREAK_NUDGE_LEFT_S later (`Left - Yes/No`).
+	 */
+	private breakAtDawn(e: Entry, now: number): void {
+		if (e.ephemeral || e.nudgedAt !== undefined) return;
+		const since = e.standingSince;
+		if (since === undefined || now - since < NIGHT_LIVED_S) return;
+		if (now - e.loadedAt < BREAK_NUDGE_MIN * 60) return;
+		e.nudgedAt = now;
+	}
+
 	private pollEntry(e: Entry): void {
 		const save = e.save;
 		const w = this.world;
 		if (w !== undefined) {
-			e.inWorld = w.bodyOf(e.player) !== undefined;
-			e.atNight = isNightAt(w.dayTime());
+			const body = w.bodyOf(e.player);
+			e.inWorld = body !== undefined;
+			const hour = w.dayTime();
+			e.atNight = isNightAt(hour);
+			e.atDawn = isDawnAt(hour);
+			// standing in the city, alive, without a break (a death, the lobby): how long a night they lived
+			if (body === undefined || body.dead) e.standingSince = undefined;
+			else if (e.standingSince === undefined) e.standingSince = this.clock();
 		}
 		const key = lifeKeyOf(save);
 		if (key !== e.lifeKey) {

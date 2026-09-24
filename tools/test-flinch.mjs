@@ -20,7 +20,11 @@
  *      restarts it instead of stacking a second clock;
  *   3. a solid removed while shaking is let go;
  *   4. nothing in src/client writes `hitShake` behind solidFlinch.ts's back, and GameLoop.update runs the
- *      clock outside `if (mirrored)` (offline at MP_PHASE 2 nothing else would).
+ *      clock outside `if (mirrored)` (offline at MP_PHASE 2 nothing else would);
+ *   5. Reduce Motion (DESIGN_RULES BEM-08): the camera never shakes -- a recoil, the simulation's shake, the server's
+ *      Shake -- and settles at once if the setting comes on mid-kick; a struck solid (the town's drawing) and a struck
+ *      machine hold still while the flinch itself keeps counting; the loop feeds the setting every frame, and nothing
+ *      but camera.ts writes the shake state.
  *
  * Pure Node (>= 18) + the project's TypeScript on the shared shims of tools/luau-shim.mjs.
  */
@@ -142,6 +146,99 @@ check(
 	"GameLoop.update runs ageFlinches on its own line, not under `if (mirrored)`",
 	/\n\t\tif \(SERVER_ACTORS\) ageFlinches\(dt\);/.test(loop),
 );
+
+// 5. Reduce Motion (docs/DESIGN_RULES.md BEM-08, research P0-2): the camera never shakes and a struck solid holds still.
+// The choice is to TAKE the motion away, not to swap it: every kick doubled a cue that does not move and stays (the
+// shot's line and sound, the blow's blood, the bite's flashes, the solid's debris and drop). The flinch itself still
+// counts down, so turning the setting off mid-flinch shows the rest of it, and nothing else about 1-4 changes.
+{
+	const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+	const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+	const noParticles = {};
+	/** the camera's offset after a kick of `magnitude` for `duration`, one frame later: [x, y] in px */
+	const kick = (cam, how) => {
+		how(cam);
+		cam.update(FRAME);
+		cam.project(0, 0);
+		return [cam.screenX - cam.viewW / 2, cam.screenY - cam.viewH / 2];
+	};
+	const moved = ([x, y]) => Math.abs(x) + Math.abs(y) > 1e-9;
+	const sim = cam =>
+		view.playSim({ ...refs, fx: [{ kind: "shake", player: 0, magnitude: 5, duration: 0.3 }] }, cam, noParticles);
+	const wire = cam =>
+		view.playWire(refs, [{ t: Net.FxType.Shake, slot: 0, magnitude: 5, duration: 0.3 }], cam, noParticles, {
+			localSlot: 0,
+		});
+	const direct = cam => cam.shake(5, 0.3);
+	const off = [direct, sim, wire].map(how => moved(kick(new Camera(), how)));
+	const on = [direct, sim, wire].map(how => {
+		const cam = new Camera();
+		cam.reduceMotion = true;
+		return moved(kick(cam, how));
+	});
+	check(
+		"without Reduce Motion a kick shakes the camera (a shot's recoil, the simulation's shake, the server's Shake)",
+		off.every(Boolean),
+		JSON.stringify(off),
+	);
+	check(
+		"with Reduce Motion none of the three moves the camera: the view stays exactly where it follows",
+		on.every(m => !m),
+		JSON.stringify(on),
+	);
+	// switched on in the middle of a kick: the view settles on the next frame instead of finishing it
+	const cam = new Camera();
+	cam.shake(6, 1);
+	cam.update(FRAME);
+	cam.reduceMotion = true;
+	const settled = !moved(kick(cam, () => {}));
+	check("Reduce Motion turned on mid-kick: the next frame is still", settled && cam.shakeT === 0);
+
+	// the solids: the town's own drawing offset (worldView.ts `shake`), the one every tree / car / bin / build reads
+	const town = new WorldView(() => ({ x: 0, y: 0 }));
+	flinch(tree, 0.25);
+	town.clock = 0.37;
+	const offFlinch = town.shake(tree);
+	town.reduceMotion = true;
+	const onFlinch = town.shake(tree);
+	check(
+		"a struck tree shakes without Reduce Motion, and holds still with it (offset 0, 0)",
+		(offFlinch.x !== 0 || offFlinch.y !== 0) && onFlinch.x === 0 && onFlinch.y === 0,
+		`${JSON.stringify(offFlinch)} -> ${JSON.stringify(onFlinch)}`,
+	);
+	const n5 = framesToRest(tree);
+	check("...and its flinch still counts down and ends within 0.25 s (the clock of 1-4 is untouched)", n5 <= LIMIT);
+	clearFlinches();
+
+	// the machines draw their own flinch (machinesView.ts), and the loop hands both views and the camera the setting
+	const machines = readFileSync(join(SRC, "client/view/machinesView.ts"), "utf8");
+	check(
+		"a struck machine holds still too (machinesView.ts: `hit > 0 && !this.reduceMotion`)",
+		/if \(hit > 0 && !this\.reduceMotion\)/.test(machines),
+	);
+	check(
+		"GameLoop reads Reduce Motion every frame into the camera (update) and the town and machines (draw)",
+		/ctx\.cam\.reduceMotion = reducedMotion\(\);/.test(loop) &&
+			/town\.reduceMotion = reducedMotion\(\);/.test(loop) &&
+			/this\.machines\.reduceMotion = town\.reduceMotion;/.test(loop),
+	);
+	const writersOfShake = [];
+	(function walk(dir) {
+		for (const name of readdirSync(dir)) {
+			const p = join(dir, name);
+			if (statSync(p).isDirectory()) walk(p);
+			else if (p.endsWith(".ts") && !p.endsWith("camera.ts")) {
+				const text = readFileSync(p, "utf8");
+				if (/\bshake(X|Y|T|Mag)\s*=(?!=)/.test(text)) writersOfShake.push(relative(SRC, p));
+			}
+		}
+	})(SRC);
+	check(
+		"nothing outside shared/engine/camera.ts writes the camera's shake state (the gate cannot be walked around)",
+		writersOfShake.length === 0,
+		writersOfShake.join(", "),
+	);
+}
 
 console.log(failures === 0 ? "flinch: all checks passed" : `flinch: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

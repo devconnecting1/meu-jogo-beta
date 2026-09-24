@@ -488,7 +488,22 @@ const PAIRS = [
 	// plates. Numbers speak in the card's voices (UI-08): the count and the stats in the numbers' yellow, the town's fall
 	// in the penalty red, a record in the bonus green -- no game colour (GAME.success / GAME.xp) as a stat value
 	["THEME.foreground", "SURFACE.header", MIN_TEXT, "morte: o titulo (o estado: Dead until dawn, You died...)"],
-	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "morte: o epitafio e a nota do Rebirth sobre o corpo"],
+	[
+		"THEME.mutedForeground",
+		"SURFACE.window",
+		MIN_TEXT,
+		"morte: o epitafio, a dica e a nota do Rebirth sobre o corpo",
+	],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'morte: a causa ("Killed by the horde at night.", BEM-08)'],
+	// --- the dawn card (BEM-04, client/ui/dawnCard.ts): a popover Card over the run like the banner, so its body is
+	// SURFACE.panel (the item card's rule, above); the numbers in the numbers' yellow, the save line in the indicator's words
+	["THEME.foreground", "SURFACE.panel", MIN_TEXT, 'amanhecer: "Night survived" e "Progress saved"'],
+	["THEME.mutedForeground", "SURFACE.panel", MIN_TEXT, 'amanhecer: "zombies", "damage taken", a linha da pausa'],
+	["STAT.value", "SURFACE.panel", MIN_TEXT, "amanhecer: os numeros da noite (amarelo, UI-08)"],
+	["STAT.penalty", "SURFACE.panel", MIN_TEXT, 'amanhecer: "Progress not saved — retrying" (vermelho)'],
+	["GAME.success", "SURFACE.panel", MIN_UI, "amanhecer: o disquete verde do salvo"],
+	["GAME.sun", "SURFACE.panel", MIN_UI, "amanhecer: o sol de pixel ao lado do titulo"],
+	["THEME.mutedForeground", "SURFACE.panel", MIN_UI, "amanhecer: o X desenhado que diz que o cartao sai"],
 	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "morte: as secoes (o ceu, a vida) sobre o corpo da janela"],
 	["SURFACE.groove", "SURFACE.section", MIN_RELIEF, "morte: o sulco do ceu e da faixa dentro da secao"],
 	["THEME.foreground", "SURFACE.groove", MIN_TEXT, 'morte: "Daybreak in" / "Town falls in" sobre o ceu'],

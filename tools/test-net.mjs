@@ -1635,8 +1635,33 @@ test("World: the roster carries the title under the name, and nothing but a real
 		eq(`TitleUnlocked naming title byte ${bad}`, P.decodeWorld(bufOf(b)), undefined);
 	}
 	const bogusKind = raw.slice();
-	bogusKind[6] = P.AnnounceKind.TitleUnlocked + 1;
-	eq("an Announce kind past TitleUnlocked", P.decodeWorld(bufOf(bogusKind)), undefined);
+	bogusKind[6] = P.AnnounceKind.Died + 1;
+	eq("an Announce kind past the last one (Died)", P.decodeWorld(bufOf(bogusKind)), undefined);
+
+	// UI-13 (protocol note 21): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
+	const DC = require(join(SRC, "shared/data/deathCause.ts"));
+	for (const kind of [DC.DeathKind.Horde, DC.DeathKind.Hunger, DC.DeathKind.Poison, DC.DeathKind.Boss]) {
+		for (const night of [false, true]) {
+			const arg = DC.deathWireOf(kind, night);
+			const d = P.decodeWorld(
+				P.encodeWorld({ tick: 2, events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.Died, arg }] })
+					.packets[0],
+			);
+			eq(`Died ${kind}${night ? " at night" : ""} decodes`, d?.events[0].arg, arg);
+			const note = DC.deathFromWire(d?.events[0].arg ?? -1);
+			ok(note?.kind === kind && note?.night === night, `Died ${kind}/${night} reads back as the same cause`);
+		}
+	}
+	eq("the Unknown cause is never written", DC.deathWireOf(DC.DeathKind.Unknown, true), undefined);
+	const died = bytesOf(
+		P.encodeWorld({ tick: 2, events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.Died, arg: 1 }] }).packets[0],
+	);
+	for (const bad of [0, 5, 7, 8, 13, 16, 17, 255, 65535]) {
+		const b = died.slice();
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`Died with a cause the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
+	}
 	// a boss kill keeps carrying any u16: the check is for titles only
 	const boss = P.decodeWorld(
 		P.encodeWorld({ tick: 1, events: [{ t: P.WorldEv.Announce, msg: 5, arg: 900 }] }).packets[0],

@@ -237,6 +237,8 @@ export class MachinesView {
 	/** the animation clock (seconds) and the server's (for the drones' orbit), set each frame */
 	private clock = 0;
 	private serverSeconds = 0;
+	/** the player asked for reduced motion (set by the loop, like worldView's): a struck machine holds still (BEM-08) */
+	reduceMotion = false;
 
 	constructor(shadow: ShadowFn) {
 		this.shadow = shadow;
@@ -356,7 +358,7 @@ export class MachinesView {
 		let cy = s.y + s.h / 2;
 		// a struck machine shakes like any construction; a running engine shivers
 		const hit = s.hitShake ?? 0;
-		if (hit > 0) {
+		if (hit > 0 && !this.reduceMotion) {
 			const amp = 4 * math.min(1, hit / 0.25);
 			cx += math.sin(t * 70) * amp;
 			cy += math.cos(t * 55) * amp * 0.6;

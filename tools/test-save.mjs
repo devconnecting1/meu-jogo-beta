@@ -2628,9 +2628,45 @@ section(
 	const LANG = new Set(require(join(SRC, "shared/data/lang.ts")).LANG_TABLE);
 	check(
 		!LANG.has("Save") &&
-			!LANG.has("Progress saved") &&
 			["Saving...", "Saved", "Progress not saved — retrying", "Progress not saved"].every(k => LANG.has(k)),
-		'lang.ts: "Save" e "Progress saved" sairam; os textos do indicador estao la',
+		'lang.ts: "Save" saiu; os textos do indicador estao la',
+	);
+	// "Progress saved" was the Save button's toast, and it lied (a report, not a write). It came back in ONE place only
+	// (DESIGN_RULES BEM-04): the dawn card's line for the server's "saved" push -- a write that landed -- and nowhere else
+	const said = [];
+	/** the code of a file without its comments: a comment may talk about the line, only code can show it */
+	const code = text => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+	(function walk(dir) {
+		for (const name of readdirSync(dir)) {
+			const p = join(dir, name);
+			if (statSync(p).isDirectory()) walk(p);
+			else if (
+				p.endsWith(".ts") &&
+				!p.endsWith("lang.ts") &&
+				code(readFileSync(p, "utf8")).includes('"Progress saved"')
+			)
+				said.push(p.slice(SRC.length + 1));
+		}
+	})(SRC);
+	const card = src("client/ui/dawnCard.ts");
+	check(
+		said.length === 1 &&
+			said[0] === join("client", "ui", "dawnCard.ts") &&
+			/saved: \{ key: "Progress saved"/.test(card) &&
+			/if \(state === "saved"\) this\.savedAt = now;/.test(card),
+		'"Progress saved" so no cartao do amanhecer, e so no estado "saved" que o servidor empurra (BEM-04)',
+		said.join(", "),
+	);
+	// BEM-04: the dawn is an event of the list -- the server asks for the write for each survivor standing at 06:00,
+	// through the same coalesced saveSoon (the real server does it in test:body)
+	const cadenceSrc = src("server/save/saveCadence.ts");
+	const simSrc = src("server/sim/simulation.ts");
+	const mainSrc = src("server/main.server.ts");
+	check(
+		/\| "dawn"/.test(cadenceSrc) &&
+			/for \(const sp of this\.roster\) if \(!sp\.state\.dead\) this\.onDawn\(sp\);/.test(simSrc) &&
+			/sim\.onDawn = sp => \{[^}]*saveSoon\(s, "dawn"\);/.test(mainSrc),
+		'o amanhecer vivo e um save por evento ("dawn"): a simulacao avisa quem esta de pe, o main.server pede o saveSoon',
 	);
 }
 

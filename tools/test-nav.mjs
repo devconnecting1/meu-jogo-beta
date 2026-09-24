@@ -1026,6 +1026,115 @@ console.log(
 	flush();
 }
 
+// ================================================================ 2d. the dawn card and the death's lesson with a pad
+
+console.log(
+	"\n2d) o cartao do amanhecer (BEM-04) e a licao da tela de morte (UI-13) pelo controle: nenhum toma o foco nem uma tecla\n",
+);
+
+{
+	lastInput.type = Enum.UserInputType.Gamepad1;
+	ctx.phase = "playing";
+	const hud = new Hud(ctx);
+	hud.mount();
+	GuiService.SelectedObject = undefined;
+	/** what each of the pad's buttons does to the frame's input, with the card up or not */
+	const presses = () => {
+		const out = {};
+		for (const k of [
+			"ButtonA",
+			"ButtonX",
+			"ButtonY",
+			"ButtonB",
+			"ButtonR2",
+			"ButtonR1",
+			"ButtonL1",
+			"ButtonStart",
+		]) {
+			input.beginFrame();
+			tap(pad(k));
+			out[k] = [
+				input.attackPressed,
+				input.actionPressed,
+				input.reloadPressed,
+				input.backpackPressed,
+				input.pausePressed,
+			].join(",");
+			input.attackHeld = false;
+		}
+		input.beginFrame();
+		return JSON.stringify(out);
+	};
+	const without = presses();
+	hud.showDawnReport({ zombies: 4, damage: 30, items: 2 }, true);
+	flush();
+	const card = findIn(ctx.hudLayer, "DawnCard");
+	const focusAfterShow = GuiService.SelectedObject;
+	const withCard = presses();
+	const stillUp = card?.Visible === true;
+	const selectable = (card?.GetDescendants() ?? []).filter(d => d.IsA("GuiObject") && d.Selectable === true);
+	check(
+		"o cartao abre sem tomar o foco do controle, nada nele e Selectable, e cada botao do controle faz o mesmo que sem ele (B incluido: nao e dele)",
+		card !== undefined &&
+			focusAfterShow === undefined &&
+			selectable.length === 0 &&
+			withCard === without &&
+			stillUp,
+		JSON.stringify({
+			focus: focusAfterShow?.Name,
+			selectable: selectable.map(d => d.Name),
+			same: withCard === without,
+		}),
+	);
+	const texts = (card?.GetDescendants() ?? [])
+		.filter(d => (d.ClassName === "TextLabel" || d.ClassName === "TextButton") && d.Text !== "")
+		.map(d => d.Text);
+	const numbers = /^[0-9,]+$/;
+	const outside = texts.filter(t => !numbers.test(t) && !lang.LANG_TABLE.includes(t));
+	check(
+		"todo texto do cartao e uma entrada da LANG_TABLE (ou um numero)",
+		texts.length >= 7 && outside.length === 0,
+		outside.join(" | "),
+	);
+	hud.unmount();
+	flush();
+
+	// the death screen's lesson: two lines of text, never a stop of the pad -- the focus lands where it always did
+	const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
+	const save = ctx.save;
+	const money = save.money;
+	save.money = rebirthPrice(save.deathCount);
+	ctx.phase = "dead";
+	const summary = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false };
+	const w = showDaybreakWait(
+		ctx,
+		summary,
+		{ onRebirth: () => {}, onNewRun: () => {}, onHome: () => {}, cause: () => ({ kind: 2, night: true }) },
+		false,
+		() => 1,
+	);
+	w.setRemaining(120, true);
+	flush();
+	const death = layer.FindFirstChild("RunOver");
+	const lesson = ["Cause", "Tip"].map(n => findIn(death, n));
+	check(
+		'a licao ("Starved." e a dica) e texto, nunca uma parada do controle: o foco cai no Rebirth como sempre',
+		lesson.every(l => l !== undefined && l.ClassName === "TextLabel") &&
+			lesson[0].Text === "Starved." &&
+			lesson[1].Text.startsWith("Tip: ") &&
+			GuiService.SelectedObject?.Name === "Rebirth",
+		`${lesson.map(l => l?.Text).join(" / ")}; foco ${GuiService.SelectedObject?.Name}`,
+	);
+	w.close();
+	flush();
+	GuiService.SelectedObject = undefined;
+	save.money = money;
+	lastInput.type = Enum.UserInputType.MouseMovement;
+	input.beginFrame();
+	ctx.phase = "lobby";
+	flush();
+}
+
 // ================================================================ 3. presses made in the menus
 
 console.log("\n3) teclas apertadas nos menus nao ficam pendentes para o primeiro quadro da partida\n");
