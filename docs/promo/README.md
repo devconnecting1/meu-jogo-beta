@@ -4,6 +4,8 @@ Tudo nesta pasta é gerado por `npm run promo` (`tools/render-promo.mjs`) com o 
 
 Determinístico: a mesma semente dá os mesmos bytes (`npm run promo` duas vezes = arquivos idênticos).
 
+Os ícones dos produtos em Robux (`products/`) vêm de outro comando, `npm run promo:products` (`tools/render-products.mjs`), com o mesmo código real: ver "Os ícones dos produtos (Robux)" abaixo.
+
 O **texto** da página (o nome "Last Town: Zombie Survival", a descrição com as regras e o recurso, e o About do
 repositório no GitHub) está em [`DESCRIPTION.md`](DESCRIPTION.md). No jogo, o título do lobby e o splash usam o mesmo
 desenho do wordmark como a textura `wordmark` do `npm run art:world` (`client/ui/logo.ts`), que a CI sobe com a cidade.
@@ -22,7 +24,9 @@ desenho do wordmark como a textura `wordmark` do `npm run art:world` (`client/ui
 | `logo/last-town-logo.png`                                       | 1032 × 234  | logo com "ZOMBIE SURVIVAL", fundo transparente (lobby, splash)                                                                                       |
 | `logo/last-town-logo-stacked.png`                               | 756 × 390   | o mesmo empilhado (telas quadradas, créditos)                                                                                                        |
 | `logo/last-town-wordmark.png`                                   | 516 × 78    | só o nome, pequeno (cantos, placas)                                                                                                                  |
+| `products/<traje>.png` (9)                                      | 512 × 512   | ícone de cada developer product de traje em Robux (`npm run promo:products`; qual vai em qual produto: "Os ícones dos produtos (Robux)")             |
 | `previews/*.png`                                                | —           | não sobe: cada thumbnail a 480 × 270 e 256 × 144, cada ícone a 256, 150, redondo e 50, e os logos no escuro e no claro — como o site e o app mostram |
+| `previews/products.png`                                         | —           | não sobe: cada ícone de produto a 150 (o prompt de compra) e a 50, por faixa                                                                         |
 
 Todos PNG, abaixo de 1 MB cada (o limite do upload de thumbnails da Home Page é 3 MB).
 
@@ -86,13 +90,55 @@ O usado (`icon-c-horde`) não mudou nesta versão: o desenho novo da cidade não
 - `icon-b-walker`: um zumbi de perto na luz, o `!` em cima, o nome embaixo.
 - `icon-c-horde` (**o escolhido**, `icon/icon.png`): três zumbis entrando na luz com os braços esticados e três `!` vermelhos, o nome embaixo. É o que melhor se lê de 512 a 50 px (três marcas vermelhas sobre verde e o nome), cabe inteiro no recorte redondo e diz o gênero de relance, com um só acento quente (o vermelho).
 
+## Os ícones dos produtos (Robux)
+
+Cada traje vendido em Robux tem o seu developer product, e cada produto leva o seu ícone de `products/` (512 × 512, o
+que o Creator Hub pede; o prompt de compra o mostra a 150). **Subir, à mão:** Creator Hub → o jogo → **Monetization ›
+Developer Products** → o produto → **Edit** → **Icon** → o PNG da tabela → **Save**. Passa pela moderação antes de
+aparecer. Nenhum texto no ícone: o Roblox escreve o nome e o preço do produto ao lado.
+
+| Arquivo                     | Traje        | Product id | Faixa  | O ícone                                                                                 |
+| --------------------------- | ------------ | ---------- | ------ | --------------------------------------------------------------------------------------- |
+| `products/pigeon.png`       | Pigeon       | 3495866678 | common | o pombo cinza-ardósia em voo, asas abertas, de frente                                   |
+| `products/white-pigeon.png` | White pigeon | 3714559418 | common | o pombo branco em voo, asas abertas, de frente                                          |
+| `products/carolina.png`     | Carolina     | 3714559436 | common | a cachorra caramelo de pé, de lado (a cabeça para a direita)                            |
+| `products/malamute.png`     | Malamute     | 3714559453 | rare   | o Malamute cinza e branco de pé, de lado: a cara branca e o rabo branco enrolado        |
+| `products/doberman.png`     | Doberman     | 3714559476 | rare   | o Doberman preto e castanho de pé, de lado                                              |
+| `products/santa.png`        | Santa        | 3714559574 | rare   | o sobrevivente de Santa (casaco vermelho com a barra branca, o gorro), de frente, adaga |
+| `products/cowboy.png`       | Cowboy       | 3714559597 | rare   | o sobrevivente de Cowboy (o chapéu de palha largo, colete de couro), de frente, adaga   |
+| `products/eagle.png`        | Eagle        | 3714559618 | top    | a águia marrom de asas todas abertas, a cabeça dourada, de frente                       |
+| `products/zombie.png`       | Zombie       | 3714559638 | top    | o sobrevivente com o traje Zombie (trapos rasgados, pele verde), de frente, adaga       |
+
+**O que é desenhado, e por quê.** Tudo é o código do jogo (`tools/render-products.mjs`): o traje é o próprio ladrilho do
+guarda-roupa (`client/view/cosmeticPreview.ts` `SurvivorPreview`, os mesmos `drawPet` / `drawSurvivor` do mundo, MON-04)
+com a pixel art dos personagens de `design/world-art`, ampliada só por um número inteiro de pixels por texel (19–32 px:
+o maior que cabe em 75% do ícone) e com os texels em pixels inteiros. Um pet aparece sozinho, enquadrado nos seus
+próprios texels: os pássaros em voo, de asas abertas e de frente (como as figuras dos pacotes da loja: pousado e visto
+de cima, um pombo é um oval cinza); os cachorros de lado, a mais longa e mais "cachorro" das 32 direções (de frente,
+um cachorro é um borrão curto). Um traje aparece no sobrevivente de frente, com a adaga, como o ladrilho o mostra.
+
+**O fundo** é só tokens do tema (`client/ui/theme.ts`), no estilo do ícone do jogo: a página escura nos cantos e um
+círculo de luz atrás do traje, em degraus na grade de texels do próprio traje, do grafite da janela até o ferro dos
+botões — o mais claro fica sob quase todo o traje, para o preto do Doberman e o contorno escuro de cada sprite se
+destacarem. **A moldura** fina (12 px, 3,5 px a 150) diz a faixa de preço, em cores que o jogo já usa para valor:
+**common** verde (`STAT.bonus`, o verde do cartão de item e dos títulos, MON-05), **rare** violeta (`GAME.rare`, o
+chart-4 dos itens raros e dos chefes), **top** dourado (`STAT.value`, o dourado do cartão de item e dos títulos). A
+faixa de cada traje vem de `COSTUMES` quando a linha tem `tier` (`shared/data/shop.ts`, com os preços em Robux) e, sem
+ele, da tabela `TIER_OF` da ferramenta (a de `docs/SHOP.md`).
+
+**Legível a 150 px:** `previews/products.png` mostra cada ícone a 150 (o prompt de compra) e a 50, por faixa; rever
+antes de subir. Se o desenho de um traje mudar (a arte dos personagens, `npm run art:world`, ou o `cosmeticsView.ts`),
+rode `npm run promo:products` de novo e troque o ícone do produto.
+
 ## Regenerar
 
 ```bash
-npm run promo                                     # tudo em docs/promo/
+npm run promo                                     # tudo em docs/promo/ (menos products/)
 npm run promo -- --only thumbnails                # ou icon, logo, previews, ou um nome: survive-the-night, build-barricade-hold, crack-the-vault, defeat-the-bosses, new-town-every-world
 npm run promo -- --seed 1234 --out /tmp/promo     # outra cidade: cada cena é procurada nela
 npm run promo -- --only defeat-the-bosses --boss 3 --boss-hour 10   # outro chefe (1 centopeia, 2 rafflesia, 3 gigante, 4 ouriço), outra hora
+npm run promo:products                            # os 9 ícones dos produtos em Robux em products/ (e previews/products.png)
+npm run promo:products -- --only eagle,santa      # só alguns (o nome do arquivo, sem .png); --out <pasta> para outra pasta
 ```
 
 Outras opções: `--storm-flash` (o relâmpago da 01, de 0 a 1, padrão 0,75; 0 = a noite de tempestade entre dois raios), `--vault-hour` (a hora do banco, padrão 21), `--vault-zoom` (padrão 2), `--town-zoom` (zoom da vista da cidade, padrão 0,5). Um zoom fica em múltiplos de 0,25 (um número inteiro de pixels por texel). Com outra `--seed`, um banco virado para cima ou para baixo da tela cabe pior no quadro da 03 (a caixa-forte, o salão e a rua em fila vertical): o da cidade padrão fica de frente para a direita. As fontes: o título usa a fonte pixel grossa de `tools/title-font.mjs` (desenhada em código), e o "ZOMBIE SURVIVAL" a fonte 5 × 7 de `tools/pixel-font.mjs`.
