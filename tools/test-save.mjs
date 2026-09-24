@@ -2659,8 +2659,9 @@ section(
 		said.length === 1 &&
 			said[0] === join("client", "ui", "dawnCard.ts") &&
 			/saved: \{ key: "Progress saved"/.test(card) &&
-			/if \(state === "saved"\) this\.savedAt = now;/.test(card),
-		'"Progress saved" so no cartao do amanhecer, e so no estado "saved" que o servidor empurra (BEM-04)',
+			/const older = state === "saved" && !answersDawn;/.test(card) &&
+			/if \(shown === "saved"\) this\.savedAt = now;/.test(card),
+		'"Progress saved" so no cartao do amanhecer, e so no "saved" que responde a pergunta do amanhecer (answersDawn, BEM-04)',
 		said.join(", "),
 	);
 	// BEM-04: the dawn is an event of the list -- the server asks for the write for each survivor standing at 06:00,
