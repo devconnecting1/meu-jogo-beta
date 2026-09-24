@@ -25,6 +25,10 @@
  *   D. CRAFTING    every recipe, through the client's craft (the path MP_PHASE 2 ships) AND the server's: the
  *                  station holds, the ingredients go exactly, MAKES ×N comes out, nothing without ingredients or
  *                  station, no double craft from a double click; every placeable is placed by the server world.
+ *                  (ITM-09) Every construction kit IN the backpack is on the Bag's Build tab with Place, goes onto
+ *                  the cursor through the client and the server's Place verb, and is spent only where it stands; and
+ *                  every row the save can hold -- weapon, gear, usable, material, kit, round, Oil -- is on exactly
+ *                  one tab with an action that makes sense (D9, D10; G12 on the real server).
  *   E. SKILLS      every skill: one point per level, never past its maximum, points = level − 1 − spent; and the
  *                  effect each one promises is measured where the game applies it.
  *   F. LOOT        every building type's table (EDI-03) and every roll lands in the backpack.
@@ -3668,6 +3672,263 @@ section(
 );
 
 // ================================================================ E. skills
+
+section(
+	"D9. every construction kit IN the backpack: the Build tab, Place, the cursor, placed and spent (ITM-09; was a hole: ETC 0-22 never shown, nothing placed them)",
+	() => {
+		const PLC = require(join(SRC, "shared/sim/placement.ts"));
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+		const KITS = PLC.PLACEABLE_IDS.map(id => ({ id, name: ETC_ITEMS[id].name }));
+		const BUILD_TAB = 4;
+		const MATERIALS_TAB = 3;
+		const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
+		const PRESS_E = P.packEdges(0, 0, 1, 0);
+		check(
+			KITS.length === Object.keys(PLACEABLES).length && KITS.every(k => ETC_ITEMS[k.id] !== undefined),
+			`the kits are every PLACEABLES key, each a row of ETC_ITEMS (${KITS.length}: 0-22 and the night desks 39, 40)`,
+		);
+		/** a survivor holding one of kit `id` and nothing else of it */
+		const holding = id => {
+			const save = bareSave();
+			INV.addItem(save, ItemKind.Etc, id, 1);
+			return save;
+		};
+		checkRows("the Bag's Build tab lists it (never Materials), with its icon, x1 and an enabled Place", KITS, k => {
+			const bag = bagFor(holding(k.id));
+			const placed = [];
+			bag.onPlace = id => placed.push(id);
+			bag.placeCheck = () => undefined;
+			const key = `4:${k.id}`;
+			const tile = bag.models(BUILD_TAB).find(m => m.key === key);
+			if (tile === undefined) return "not in Build";
+			if (bag.models(MATERIALS_TAB).some(m => m.key === key)) return "also in Materials";
+			if (tile.icon !== iconOf(ItemKind.Etc, k.id).key || tile.count !== "×1")
+				return `tile ${tile.icon} ${tile.count}`;
+			const d = bag.itemDetail(ItemKind.Etc, k.id);
+			if (d?.act === undefined || d.act.text !== "Place" || !d.act.enabled)
+				return `action ${d?.act?.text} ${d?.act?.enabled}`;
+			d.act.run();
+			return placed.join(",") === String(k.id) || `onPlace got ${placed.join(",")}`;
+		});
+		checkRows("its card says what it is and what it does, every word in lang.ts (UI-03)", KITS, k => {
+			const card = Info.describeItem(holding(k.id), ItemKind.Etc, k.id);
+			if (card === undefined) return "no card";
+			if (card.type !== "Buildable" && card.type !== "Vehicle") return `type ${card.type}`;
+			if (card.notes === "" || !inLang(card.notes)) return `notes "${card.notes}"`;
+			// (the number in the card's grouping: 1,700 for a steel barricade)
+			const hp = card.stats.find(s => s.label === "Health")?.value.replace(/[^0-9]/g, "");
+			if (hp !== String(PLACEABLES[k.id].hp)) return `Health ${hp}`;
+			return card.hints.some(h => h.text === "Place") || "no Place key";
+		});
+		checkRows(
+			"the client's Place (offline: its own cursor; online: the verb's prediction) puts it on the cursor and spends nothing",
+			KITS,
+			k => {
+				const save = holding(k.id);
+				const player = Ply.createPlayer(save, 1000, 1000);
+				const refs = {
+					save,
+					player,
+					pendingPlace: -1,
+					fx: [],
+					world: W.createWorld(2000, 2000),
+					players: [player],
+				};
+				if (CCraft.placeBlocker(refs, k.id) !== undefined) return `blocked: ${CCraft.placeBlocker(refs, k.id)}`;
+				if (!CCraft.placeKit(refs, k.id)) return "placeKit refused";
+				if (refs.pendingPlace !== k.id || refs.pendingKit !== true) return `cursor ${refs.pendingPlace}`;
+				if (INV.countItem(save, ItemKind.Etc, k.id) !== 1) return "spent on the cursor";
+				if (CCraft.placeBlocker(refs, k.id) !== "Finish the current build first")
+					return "a second one not blocked";
+				const cursor = { pendingPlace: -1, player };
+				if (!BP.predictVerb(save, cursor, P.IntentKind.Place, k.id, player)) return "prediction refused";
+				return (
+					(cursor.pendingPlace === k.id && cursor.pendingKit === true) || `predicted ${cursor.pendingPlace}`
+				);
+			},
+		);
+		checkRows(
+			"the SERVER: the Place verb holds it, the attack places it (its tag and hp) and spends it; E before that gives nothing back and loses nothing",
+			KITS,
+			k => {
+				const world = W.serverWorld(W.createWorld(8000, 8000));
+				const sim = new ServerSimulation({
+					world,
+					clock: new WorldClock({ day: 1, dayTime: 12 }),
+					zombies: false,
+					interactive: true,
+				});
+				const save = holding(k.id);
+				const sp = PL.createServerPlayer(
+					{ slot: 0, userId: 900, name: "p0" },
+					save,
+					3000,
+					3000,
+					sim.tick,
+					sim.simHz,
+				);
+				sim.add(sp);
+				sp.state.x = 3000;
+				sp.state.y = 3000;
+				let seq = 0;
+				let nonce = 0;
+				const tick = edges => {
+					PL.ingestInput(
+						sp,
+						P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, 0, 0, edges)] }),
+						seq / CFG.SIM_HZ,
+					);
+					sim.step();
+				};
+				const place = () => {
+					sim.queueIntent(0, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Place, 0, k.id, ++nonce)));
+					for (let i = 0; i < CFG.SIM_HZ / 2; i++) tick(0);
+				};
+				place();
+				if (sim.build.pendingOf(0) !== k.id) return "the verb did not hold it";
+				tick(PRESS_E);
+				if (sim.build.placing(0) || INV.countItem(save, ItemKind.Etc, k.id) !== 1)
+					return `after E: cursor ${sim.build.pendingOf(0)}, count ${INV.countItem(save, ItemKind.Etc, k.id)}`;
+				place();
+				const solids = world.solids.length;
+				tick(PRESS_ATTACK);
+				if (world.solids.length !== solids + 1) return "the attack placed nothing";
+				const built = world.solids[world.solids.length - 1];
+				const def = PLACEABLES[k.id];
+				if (built.placeable !== k.id || built.tags !== def.tag || built.hp !== def.hp || built.owner !== 0)
+					return `placed ${built.placeable} ${built.tags} hp ${built.hp}`;
+				return INV.countItem(save, ItemKind.Etc, k.id) === 0 || "not spent";
+			},
+		);
+		checkRows(
+			"offline, this client's own build mode (client/systems/build.ts): E keeps it, the attack builds it and spends it",
+			KITS,
+			k => {
+				const { BuildSystem } = require(join(SRC, "client/systems/build.ts"));
+				const save = holding(k.id);
+				const world = W.createWorld(8000, 8000);
+				const player = Ply.createPlayer(save, 3000, 3000);
+				player.angle = 0;
+				const refs = { save, player, world, players: [player], zombies: [], pendingPlace: -1, fx: [] };
+				const build = new BuildSystem();
+				const press = what => {
+					const input = new InputState();
+					input[what] = true;
+					build.update(refs);
+					build.handleInput(refs, input);
+				};
+				if (!CCraft.placeKit(refs, k.id)) return "placeKit refused";
+				press("actionPressed");
+				if (refs.pendingPlace !== -1 || INV.countItem(save, ItemKind.Etc, k.id) !== 1)
+					return `after E: cursor ${refs.pendingPlace}, count ${INV.countItem(save, ItemKind.Etc, k.id)}`;
+				// and never the ingredients of the recipe that makes it
+				const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === k.id);
+				if (recipe?.ingredients.some(i => INV.countItem(save, i.kind, i.index) > 0)) return "refunded a recipe";
+				CCraft.placeKit(refs, k.id);
+				const solids = world.solids.length;
+				press("attackPressed");
+				if (world.solids.length !== solids + 1) return "nothing built";
+				return (
+					(INV.countItem(save, ItemKind.Etc, k.id) === 0 && refs.pendingPlace === -1) ||
+					`count ${INV.countItem(save, ItemKind.Etc, k.id)}, cursor ${refs.pendingPlace}`
+				);
+			},
+		);
+		checkRows(
+			"on the ground: walked up like a material (ITM-07), its own icon, and the prompt names it",
+			KITS,
+			k => {
+				if (!RULE.walkPickup(ItemKind.Etc, k.id) || RULE.groundTier(ItemKind.Etc, k.id) !== "supply")
+					return "not a walked-up supply";
+				if (iconOf(ItemKind.Etc, k.id).key === "cat_item") return "the generic icon";
+				const world = W.createWorld(4000, 4000);
+				const save = bareSave();
+				const player = Ply.createPlayer(save, 1000, 1000);
+				const refs = { world, players: [player], player, save, zombies: [], pendingPlace: -1, fx: [] };
+				W.spawnGroundItem(world, ItemKind.Etc, k.id, 1, 1030, 1000);
+				const hint = CInter.interactHint(refs);
+				return hint === `E: Pick up ${k.name}` || hint;
+			},
+		);
+		{
+			// build mode says how to get out of it -- the pill's "E:" is also the touch USE button (hud.ts)
+			const save = holding(10);
+			const player = Ply.createPlayer(save, 1000, 1000);
+			const refs = { world: W.createWorld(4000, 4000), players: [player], player, save, zombies: [], fx: [] };
+			refs.pendingPlace = 10;
+			check(
+				CInter.interactHint(refs) === "E: Cancel build" && inLang("Cancel build"),
+				'build mode\'s pill is "E: Cancel build" (touch gets its USE button to leave build mode)',
+				CInter.interactHint(refs),
+			);
+		}
+	},
+);
+
+section(
+	"D10. every row the save can hold is on a tab of the Bag with an action that makes sense (ITM-09 audit; was: kits, the night desks and every round and the Oil hidden or dead)",
+	() => {
+		const PLC = require(join(SRC, "shared/sim/placement.ts"));
+		const ITEM_TABS = [0, 1, 2, 3, 4];
+		const TAB_OF = { [ItemKind.Weapon]: 0, [ItemKind.Equip]: 1, [ItemKind.Use]: 2 };
+		const OIL = 48;
+		const rows = [
+			...WEAPONS.map(w => ({ id: w.id, kind: ItemKind.Weapon, name: w.name })),
+			...EQUIPS.map(e => ({ id: e.id, kind: ItemKind.Equip, name: e.name })),
+			...USABLES.map(u => ({ id: u.id, kind: ItemKind.Use, name: u.name })),
+			...ETC_ITEMS.map(e => ({ id: e.id, kind: ItemKind.Etc, name: e.name })),
+		];
+		/** the action each kind of row offers (the Bag's own verbs; UI-11) */
+		const wanted = r => {
+			if (r.kind === ItemKind.Weapon) return ["Equip", "Put away"];
+			if (r.kind === ItemKind.Equip) return ["Equip", "Unequip"];
+			if (r.kind === ItemKind.Use) return ["Eat", "Use"];
+			if (PLC.isPlaceable(r.id)) return ["Place"];
+			return ["Open Craft"];
+		};
+		checkRows("on exactly one item tab (the one of its kind), with its count and an enabled action", rows, r => {
+			const save = bareSave();
+			INV.addItem(save, r.kind, r.id, 3);
+			const bag = bagFor(save);
+			// what main.client wires: the weapon's Equip / Put away, the gear's Unequip, the kit's Place
+			bag.onEquipWeapon = () => {};
+			bag.onUnequipItem = () => {};
+			bag.onPlace = () => {};
+			bag.placeCheck = () => undefined;
+			const key = `${r.kind}:${r.id}`;
+			const tabs = ITEM_TABS.filter(t => bag.models(t).some(m => m.key === key));
+			const want = r.kind === ItemKind.Etc ? (PLC.isPlaceable(r.id) ? 4 : 3) : TAB_OF[r.kind];
+			if (tabs.length !== 1 || tabs[0] !== want) return `on tabs [${tabs}], want ${want}`;
+			const tile = bag.models(want).find(m => m.key === key);
+			if (tile.count !== "×3" && !(r.kind === ItemKind.Weapon || r.kind === ItemKind.Equip))
+				return `count ${tile.count}`;
+			const d = bag.itemDetail(r.kind, r.id);
+			if (d === undefined) return "no panel";
+			// the one row with no button: the Oil -- no recipe makes or takes it; its card says what burns it
+			if (r.kind === ItemKind.Etc && r.id === OIL) {
+				return (d.act === undefined && d.card.notes.startsWith("Burned by")) || `Oil: ${d.act?.text}`;
+			}
+			if (d.act === undefined) return "no action";
+			return (wanted(r).includes(d.act.text) && d.act.enabled) || `"${d.act.text}" enabled ${d.act.enabled}`;
+		});
+		check(
+			"the rounds and the Oil are counted where the save keeps them (the ammo fields), not in invenEtc",
+			(() => {
+				const save = bareSave();
+				save.ammoNormal = 41;
+				save.oil = 7;
+				const tiles = bagFor(save).models(3);
+				return (
+					tiles.find(m => m.key === "4:44")?.count === "×41" &&
+					tiles.find(m => m.key === "4:48")?.count === "×7" &&
+					save.invenEtc[44] === 0
+				);
+			})(),
+		);
+	},
+);
 
 section("E1. learning: a point a level, never past the maximum, on the server and in the Bag", () => {
 	checkRows(
@@ -7431,6 +7692,113 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 		);
 	}
 });
+
+section(
+	"G12. ITM-09 on the real server: the Build tab's Place verb, the kit spent where it stands, the bag and the DataStore",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const PLC2 = require(join(SRC, "shared/sim/placement.ts"));
+		const TURRET = 2;
+		let seq = 0;
+		let nonce = 0;
+		const press = (pl, edges) => {
+			seq += 1;
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, 0, edges));
+			s.remote("Input").OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+		};
+		const untilConsumed = sp => {
+			for (let i = 0; i < 90 && sp.ackSeq < seq; i++) s.beat();
+			return sp.ackSeq >= seq;
+		};
+		/** the Bag's Place: the verb for the NEXT command, with a fresh nonce (client/net/backpackSync.ts) */
+		const placeVerb = (pl, id) => {
+			nonce += 1;
+			s.verb(pl, IK.Place, id, seq + 1, nonce);
+			return nonce;
+		};
+		const pl = s.join(newUser(), "turret owner");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		INV2.addItem(save, ItemKind.Etc, TURRET, 1);
+		const sp = s.enter(pl);
+		// an open patch of street, as G4 finds one: the server's rule is what is measured, not a car in the way
+		const world = s.sim.world;
+		const def = PLC2.PLACEABLES[TURRET];
+		const clear = (x, y) =>
+			x > 400 &&
+			y > 400 &&
+			x < world.width - 400 &&
+			y < world.height - 400 &&
+			W2.querySolids(world, x - 260, y - 260, x + 260, y + 260, []).every(q => q.passable === true) &&
+			(s.sim.horde?.zombies ?? []).every(z => Math.hypot(z.x - x, z.y - y) > 500) &&
+			PLC2.placementValid(world, PLC2.ghostRect(def, x, y, 0, 0), [{ x, y }], []);
+		let spot;
+		for (let r = 1; r < 60 && spot === undefined; r++) {
+			for (let a = 0; a < 8 && spot === undefined; a++) {
+				const x = Math.round(sp.state.x + Math.cos((a * Math.PI) / 4) * r * 160);
+				const y = Math.round(sp.state.y + Math.sin((a * Math.PI) / 4) * r * 160);
+				if (clear(x, y)) spot = [x, y];
+			}
+		}
+		sp.state.x = spot[0];
+		sp.state.y = spot[1];
+		press(pl, 0);
+		untilConsumed(sp);
+		const n1 = placeVerb(pl, TURRET);
+		press(pl, 0);
+		untilConsumed(sp);
+		s.run(0.3);
+		const held = SAVE2.readBag(s.lastBag(pl));
+		check(
+			s.sim.build.pendingOf(sp.slot) === TURRET && held?.place === TURRET && held?.ack === n1,
+			"the Place verb puts the turret on the SERVER's cursor, and the bag says so (place, ack)",
+			`cursor ${s.sim.build.pendingOf(sp.slot)}, bag place ${held?.place} ack ${held?.ack}/${n1}`,
+		);
+		check(
+			INV2.countItem(save, ItemKind.Etc, TURRET) === 1 && held?.invenEtc[TURRET] === 1,
+			"...and the backpack still holds it: holding spends nothing",
+		);
+		press(pl, P2.packEdges(1, 0, 0, 0));
+		untilConsumed(sp);
+		s.run(0.3);
+		const built = world.solids.find(q => q.placeable === TURRET && q.owner === sp.slot);
+		const after = SAVE2.readBag(s.lastBag(pl));
+		check(
+			built !== undefined && s.sim.build.pendingOf(sp.slot) === -1,
+			"the click places it in the server's world and frees the cursor",
+		);
+		check(
+			INV2.countItem(save, ItemKind.Etc, TURRET) === 0 && after?.invenEtc[TURRET] === 0 && after?.place === -1,
+			"...and it left the server's backpack in that step: the bag pushed says 0, no cursor",
+			`save ${INV2.countItem(save, ItemKind.Etc, TURRET)}, bag ${after?.invenEtc[TURRET]}`,
+		);
+		// a forged second Place with none left: refused, answered, nothing held
+		const n2 = placeVerb(pl, TURRET);
+		press(pl, 0);
+		untilConsumed(sp);
+		s.run(0.3);
+		const refused = SAVE2.readBag(s.lastBag(pl));
+		check(
+			s.sim.build.pendingOf(sp.slot) === -1 && refused?.ack === n2 && refused?.place === -1,
+			"a Place with none left is refused and answered by its nonce (the client's prediction is undone)",
+			`cursor ${s.sim.build.pendingOf(sp.slot)}, ack ${refused?.ack}/${n2}`,
+		);
+		s.quit(pl);
+		s.run(1);
+		const stored = s.stored(pl.UserId);
+		check(
+			stored !== undefined && INV2.countItem(stored, ItemKind.Etc, TURRET) === 0,
+			"the DataStore has the kit spent (the save written with it gone)",
+			`stored ${stored === undefined ? "none" : INV2.countItem(stored, ItemKind.Etc, TURRET)}`,
+		);
+	},
+);
 
 // ---------------------------------------------------------------- verdict
 

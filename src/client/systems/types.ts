@@ -58,6 +58,12 @@ export interface GameRefs {
 	/** CRAFT_RECIPES id that produced pendingPlace (so cancelling refunds the right ingredients) */
 	pendingRecipe?: number;
 	/**
+	 * pendingPlace came out of the backpack (the Bag's Build tab, DESIGN_RULES ITM-09), not out of a craft: placing it
+	 * spends one, cancelling gives nothing back because nothing was taken. Only this client's own world reads it (the
+	 * server's cursor keeps its own, server/sim/build.ts)
+	 */
+	pendingKit?: boolean;
+	/**
 	 * Cosmetic effects asked for by the systems (shake, blood, debris, tracers, messages). Systems only push; the
 	 * gameLoop plays and clears them (docs/MULTIPLAYER.md §11.3 F0).
 	 */

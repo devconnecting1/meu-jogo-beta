@@ -293,6 +293,14 @@ export const PUMP_HINT = "E: Siphon Oil";
 export const WINDOW_HINT = "E: Break window";
 
 /**
+ * The pill while a construction is on the build cursor (LEG-01, DESIGN_RULES ITM-09): E takes it off -- a crafted one
+ * refunds its ingredients, a kit from the Bag's Build tab stays in the backpack (it was never taken). Said, because the
+ * "E:" is also what gives a touch player the USE button (client/ui/hud.ts setInteractHint): without the pill a phone
+ * had no way out of build mode but placing the thing.
+ */
+export const BUILD_HINT = "E: Cancel build";
+
+/**
  * The pane E would break right now (EDI-18): the intact one at hand -- `nearestIntactWindow`, the server's test --
  * when E has nothing else to do here. The hint and the press both ask this, so the pill names exactly what the press
  * will be sent as.
@@ -436,7 +444,8 @@ export function interactHint(refs: GameRefs, by: PlayerState = refs.player): str
 	hinted = -1;
 	// on a vehicle E means one thing, whatever is in reach (server/sim/vehicles.ts takes the press first)
 	if (by.ride !== undefined) return rideHint(refs, by);
-	if (refs.pendingPlace >= 0) return undefined;
+	// build mode: the press is the build's (client/systems/build.ts takes it first), and it cancels
+	if (refs.pendingPlace >= 0) return BUILD_HINT;
 	// the server's query, full stacks passed over (ITM-07): a full stack never hides the door or the search behind it
 	const target = interactTarget(refs.world, by.x, by.y, noRoomIn(refs.save));
 	if (target !== undefined) return hintFor(refs, target);

@@ -13,6 +13,9 @@
  *   useItem(id)      the item is owned and would do something (`itemUseEffect` decides both). 0.25 s apart.
  *   equip/unequip    `ownsEquip` and the right slot (`equipSlotOf`).
  *   learnSkill(id)   `skillPoint > 0` and the skill is below its maximum.
+ *   placeKit(id)     (ITM-09) a construction kit the backpack holds goes onto the build cursor: the shared rule
+ *                    (shared/sim/placement.ts `kitRefusal`: a kit, owned, alive, on foot, nothing on the cursor), on
+ *                    the craft's own clock. Nothing is spent here: the placement spends it (server/sim/build.ts).
  *
  * The ingredient consumption is one transaction: everything is CHECKED first, then taken, with no yield in
  * between (§8.3). The client's version took the ingredients one by one and had no rollback, so a recipe that
@@ -23,6 +26,7 @@
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS } from "shared/data/skills";
 import { countItem, addItem, removeItem, unequipGone } from "shared/sim/inventory";
+import { kitRefusal } from "shared/sim/placement";
 import * as Rule from "shared/sim/craftRule";
 import type { CraftHeat } from "shared/sim/craftRule";
 import { Solid, WorldData } from "shared/game/world";
@@ -196,6 +200,25 @@ export class ServerCraft {
 	unequip(save: PlayerSaveData, equipSlot: number): BackpackOutcome {
 		if (!setEquipped(save, equipSlot, -1)) return { kind: "refused", why: "unknown" };
 		return { kind: "unequipped", slot: equipSlot };
+	}
+
+	/**
+	 * (ITM-09, protocol.ts note 26) The Bag's Place: construction kit `id`, which the backpack holds, goes onto this
+	 * survivor's build cursor, and the attack edge places it where the SERVER says they aim (server/sim/build.ts, which
+	 * spends it then). The ONE rule is shared/sim/placement.ts `kitRefusal` -- the client's prediction and its Place
+	 * button ask it too -- checked here against the server's own save and body; the craft's clock paces it (4 a second,
+	 * held rather than refused, like a craft), and there is no cursor to put it on without the server's world.
+	 */
+	placeKit(slot: number, state: PlayerState, save: PlayerSaveData, id: number): BackpackOutcome {
+		const l = this.limitsOf(slot);
+		if (l.craft > 0) return { kind: "refused", why: "rate" };
+		const build = this.build;
+		if (build === undefined) return { kind: "refused", why: "unknown" };
+		const why = kitRefusal(save, id, build.placing(slot), state);
+		if (why !== undefined) return { kind: "refused", why };
+		l.craft = 1 / CRAFT_RATE;
+		build.hold(slot, id, undefined, true);
+		return { kind: "holding", placeable: id };
 	}
 
 	learnSkill(save: PlayerSaveData, skillId: number): BackpackOutcome {

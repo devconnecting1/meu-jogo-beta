@@ -1227,6 +1227,13 @@ pack.craftCheck = id => {
 	return r === undefined ? "Unknown recipe" : craftBlocker(loop.getRefs(), r);
 };
 
+// ITM-09, the Build tab: a kit from the backpack onto the build cursor (the server's Place verb, predicted), and the Bag
+// steps aside so the ghost in front of the survivor is what the player sees
+pack.onPlace = id => {
+	if (Bag.placeKit(loop.getRefs(), id)) pack.close();
+};
+pack.placeCheck = id => Bag.placeBlocker(loop.getRefs(), id);
+
 pack.onEquipWeapon = id => {
 	if (!ownsWeapon(ctx.save, id)) return;
 	// ITM-06: the weapon in hand, chosen again, is put away or drawn back (combat.ts `chooseWeapon`)

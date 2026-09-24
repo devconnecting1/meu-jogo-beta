@@ -15,6 +15,12 @@
  * which means no new message, no id from the client, and the placement is ordered with the movement it
  * happened during for free (§2.4). A client cannot ask for a wall somewhere it is not.
  *
+ * What goes ON the cursor comes two ways: a craft of a construction (server/sim/craft.ts: the ingredients are spent,
+ * a cancel refunds them), or a kit the backpack already holds -- the Bag's Build tab, the `Place` verb (DESIGN_RULES
+ * ITM-09, protocol.ts note 26; craft.ts `placeKit`). A kit is spent where it is PLACED, not where it is held: the
+ * attack edge checks the backpack still has it and takes it in the same step as the wall goes up, so a cancel, a
+ * death or a trip out of the world with it on the cursor gives nothing back because nothing was taken.
+ *
  * Rules the client never enforced and could not have:
  *   - the CAPS of §8.1, 150 constructions per player and 600 per server. They are counted from the
  *     constructions themselves, so a wall the horde eats gives its place back -- and the per-player one by the
@@ -32,7 +38,8 @@
  *
  * Pure module: no Instances, no services, no os.clock.
  */
-import { addItem } from "shared/sim/inventory";
+import { ItemKind } from "shared/data/kinds";
+import { addItem, countItem, removeItem } from "shared/sim/inventory";
 import {
 	ghostRectSticky,
 	PLACEABLES,
@@ -76,11 +83,13 @@ const ROT_STEPS = 4;
 
 /** why a placement was refused, or what it produced */
 export type PlaceOutcome =
-	| { kind: "placed"; solid: Solid }
+	/** `kit`: it came from the backpack (the Place verb) and one was spent from it just now */
+	| { kind: "placed"; solid: Solid; kit?: boolean }
 	| { kind: "cancelled"; refunded: boolean }
 	| { kind: "rotated"; rot: number }
 	| { kind: "none" }
-	| { kind: "refused"; why: "invalid" | "rate" | "capPlayer" | "capServer" | "sealed" | "unknown" };
+	/** `owned`: a kit from the backpack that the backpack no longer holds (it comes off the cursor) */
+	| { kind: "refused"; why: "invalid" | "rate" | "capPlayer" | "capServer" | "sealed" | "unknown" | "owned" };
 
 /** one survivor's pending construction — the client's `refs.pendingPlace` / `pendingRecipe`, server side */
 interface Pending {
@@ -95,6 +104,11 @@ interface Pending {
 	placeable: number;
 	/** the CRAFT_RECIPES id that produced it, so a cancel refunds exactly what was spent */
 	recipe: number | undefined;
+	/**
+	 * It came out of the backpack (the Place verb, ITM-09), not out of a craft: nothing was spent to hold it, the
+	 * placement spends one from the backpack, and a cancel refunds nothing (never a recipe's ingredients)
+	 */
+	kit: boolean;
 	rot: number;
 	/** last ghost position, for `ghostRectSticky`'s grid deadband */
 	prevX: number | undefined;
@@ -195,11 +209,15 @@ export class ServerBuild {
 		return this.pending.get(slot)?.turns ?? 0;
 	}
 
-	/** a craft produced a placeable: it goes on the cursor instead of into the backpack (craftKind 1) */
-	hold(slot: number, placeable: number, recipe: number | undefined): void {
+	/**
+	 * A craft produced a placeable: it goes on the cursor instead of into the backpack (craftKind 1). Or (`kit`) a kit the
+	 * backpack holds goes on it -- the Place verb (craft.ts `placeKit`, which checked it is owned): nothing is taken here
+	 */
+	hold(slot: number, placeable: number, recipe: number | undefined, kit = false): void {
 		const p = this.stateOf(slot);
 		p.placeable = placeable;
-		p.recipe = recipe;
+		p.recipe = kit ? undefined : recipe;
+		p.kit = kit;
 		p.rot = 0;
 		p.prevX = undefined;
 		p.prevY = undefined;
@@ -231,12 +249,15 @@ export class ServerBuild {
 	/**
 	 * Places the construction where the survivor is aiming. Everything is revalidated here — §8.1's "fantasma
 	 * válido", the world bounds, the caps and the rate — because the client's ghost is a drawing, not a claim.
+	 * `save` is the survivor's (the server's copy): a kit from the backpack (ITM-09) is checked in it and spent from it
+	 * in the same step the wall goes up; without it a kit is never placed.
 	 */
 	place(
 		slot: number,
 		state: PlayerState,
 		players: ReadonlyArray<PlayerState>,
 		zombies: ReadonlyArray<ZombieState>,
+		save?: PlayerSaveData,
 	): PlaceOutcome {
 		const p = this.pending.get(slot);
 		if (p === undefined || p.placeable < 0) return { kind: "none" };
@@ -247,6 +268,13 @@ export class ServerBuild {
 			// an unknown id can never become a solid: drop it rather than leave it stuck on the cursor
 			this.clear(p);
 			return { kind: "refused", why: "unknown" };
+		}
+		// ITM-09: a kit is the backpack's until it stands. Gone from the backpack since it was held (an admin's edit, a
+		// save laid over this one): it comes off the cursor -- a wall is never placed out of nothing
+		const kit = p.kit;
+		if (kit && (save === undefined || countItem(save, ItemKind.Etc, p.placeable) < 1)) {
+			this.clear(p);
+			return { kind: "refused", why: "owned" };
 		}
 		if (this.countOf(slot) >= MAX_BUILDS_PER_PLAYER) return this.refuse(p, "capPlayer");
 		if (this.total >= MAX_BUILDS_PER_SERVER) return this.refuse(p, "capServer");
@@ -282,6 +310,9 @@ export class ServerBuild {
 		const placeable = p.placeable;
 		this.clear(p);
 		p.cooldown = 1 / PLACE_RATE;
+		// the kit leaves the backpack in the very step the construction enters the world (checked above: no yield
+		// between the two, so there is no moment where it is both, or neither)
+		if (kit && save !== undefined) removeItem(save, ItemKind.Etc, placeable, 1);
 		// `addSolid` fires `onSolidAdd`, which is what queues the delta and bumps the caps
 		const solid = addSolid(this.world, {
 			...shape,
@@ -289,7 +320,7 @@ export class ServerBuild {
 			owner: slot,
 			builder: this.userOf?.(slot),
 		});
-		return { kind: "placed", solid };
+		return kit ? { kind: "placed", solid, kit: true } : { kind: "placed", solid };
 	}
 
 	/**
@@ -331,12 +362,16 @@ export class ServerBuild {
 		return { kind: "placed", solid };
 	}
 
-	/** §8.1 `cancelPlace`: the construction leaves the cursor and its ingredients come back */
+	/**
+	 * §8.1 `cancelPlace`: the construction leaves the cursor and its ingredients come back. A kit from the backpack
+	 * (ITM-09) never left it: nothing comes back, and never the ingredients of a recipe that makes one
+	 */
 	cancel(slot: number, save: PlayerSaveData): PlaceOutcome {
 		const p = this.pending.get(slot);
 		if (p === undefined || p.placeable < 0) return { kind: "none" };
 		p.turns += 1;
-		const recipe = placeRecipe(p.placeable, p.recipe);
+		const kit = p.kit;
+		const recipe = kit ? undefined : placeRecipe(p.placeable, p.recipe);
 		this.clear(p);
 		if (recipe === undefined) return { kind: "cancelled", refunded: false };
 		for (const ing of recipe.ingredients) addItem(save, ing.kind, ing.index, ing.count);
@@ -575,7 +610,16 @@ export class ServerBuild {
 	private stateOf(slot: number): Pending {
 		let p = this.pending.get(slot);
 		if (p === undefined) {
-			p = { turns: 0, placeable: -1, recipe: undefined, rot: 0, prevX: undefined, prevY: undefined, cooldown: 0 };
+			p = {
+				turns: 0,
+				placeable: -1,
+				recipe: undefined,
+				kit: false,
+				rot: 0,
+				prevX: undefined,
+				prevY: undefined,
+				cooldown: 0,
+			};
 			this.pending.set(slot, p);
 		}
 		return p;
@@ -596,6 +640,7 @@ export class ServerBuild {
 	private clear(p: Pending): void {
 		p.placeable = -1;
 		p.recipe = undefined;
+		p.kit = false;
 		p.rot = 0;
 		p.prevX = undefined;
 		p.prevY = undefined;

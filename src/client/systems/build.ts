@@ -11,7 +11,8 @@ import {
 	placeRecipe,
 	snapToOpening,
 } from "shared/sim/placement";
-import { addItem } from "shared/sim/inventory";
+import { ItemKind } from "shared/data/kinds";
+import { addItem, removeItem } from "shared/sim/inventory";
 import { noteBuildEdge, serverOwnsWorld } from "../net/authority";
 import { notePlaced, noteRefused } from "./buildCues";
 import { GameRefs } from "./types";
@@ -87,8 +88,7 @@ export class BuildSystem {
 		}
 		const def = PLACEABLES[refs.pendingPlace];
 		if (def === undefined) {
-			refs.pendingPlace = -1;
-			this.active = false;
+			this.clearCursor(refs);
 			return;
 		}
 		const p = refs.player;
@@ -128,18 +128,27 @@ export class BuildSystem {
 			this.leaveCursor(refs);
 			return;
 		}
+		// offline, a kit from the backpack (ITM-09) is spent here, as the server spends it where it places it; gone from
+		// the backpack meanwhile, it comes off the cursor and nothing is built
+		if (refs.pendingKit === true && !removeItem(refs.save, ItemKind.Etc, refs.pendingPlace, 1)) {
+			this.clearCursor(refs);
+			return;
+		}
 		const r = { x: this.ghostX, y: this.ghostY, w: this.ghostW, h: this.ghostH };
 		addSolid(refs.world, placedSolid(def, r, this.rot));
+		this.clearCursor(refs);
+	}
+
+	private clearCursor(refs: GameRefs): void {
 		refs.pendingPlace = -1;
 		refs.pendingRecipe = undefined;
+		refs.pendingKit = undefined;
 		this.active = false;
 	}
 
 	/** F3: the server places it, or refunds it; the cursor frees at once and the bag says what really happened */
 	private leaveCursor(refs: GameRefs): void {
-		refs.pendingPlace = -1;
-		refs.pendingRecipe = undefined;
-		this.active = false;
+		this.clearCursor(refs);
 		noteBuildEdge();
 	}
 
@@ -149,7 +158,8 @@ export class BuildSystem {
 			return;
 		}
 		const id = refs.pendingPlace;
-		if (id >= 0) {
+		// a kit from the backpack never left it: nothing to give back (and never a recipe's ingredients)
+		if (id >= 0 && refs.pendingKit !== true) {
 			const r = placeRecipe(id, refs.pendingRecipe);
 			if (r !== undefined) {
 				for (const ing of r.ingredients) {
@@ -157,9 +167,7 @@ export class BuildSystem {
 				}
 			}
 		}
-		refs.pendingPlace = -1;
-		refs.pendingRecipe = undefined;
-		this.active = false;
+		this.clearCursor(refs);
 	}
 
 	draw(renderer: Renderer, cam: Camera): void {

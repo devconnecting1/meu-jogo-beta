@@ -3,11 +3,14 @@
  * shared by the client's build ghost and, from F3 on, the server's validation of a `place` intent.
  */
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
+import { ItemKind } from "shared/data/kinds";
 import type { ZombieState } from "shared/game/entities";
 import type { Opening } from "shared/game/interiors";
 import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
+import type { PlayerSaveData } from "shared/game/save";
 import { querySolids, Solid, SolidKind, WorldData } from "shared/game/world";
+import { countItem } from "./inventory";
 
 export interface PlaceableDef {
 	tag: string;
@@ -69,6 +72,44 @@ export const PLACEABLES: Record<number, PlaceableDef> = {
 	39: p("craftdesk", "structure", 96, 72, 240),
 	40: p("craftdesk_pro", "structure", 112, 80, 480),
 };
+
+/**
+ * Is ETC item `id` a construction kit -- a key of PLACEABLES, the night desks (39, 40) included? What the Bag's Build
+ * tab lists (DESIGN_RULES ITM-09) and the only thing the Place verb takes onto the cursor.
+ */
+export function isPlaceable(id: number): boolean {
+	return PLACEABLES[id] !== undefined;
+}
+
+/** the PLACEABLES ids in ETC order: the Build tab's order (the Luau table's own `pairs` order is not one) */
+export const PLACEABLE_IDS: ReadonlyArray<number> = ((): Array<number> => {
+	const out = new Array<number>();
+	for (let id = 0; id <= 255; id++) if (PLACEABLES[id] !== undefined) out.push(id);
+	return out;
+})();
+
+/** why a kit from the backpack cannot go onto the cursor now (the Place verb, protocol.ts note 26) */
+export type KitRefusal = "unknown" | "owned" | "busy" | "dead";
+
+/**
+ * The ONE rule for taking a construction kit out of the backpack onto the build cursor (DESIGN_RULES ITM-09): it is a
+ * kit (`isPlaceable`), the backpack holds one, nothing is on the cursor already (`placing`), and the survivor is alive
+ * and on foot -- on a vehicle the build edges are the vehicle's (server/sim/simulation.ts `stepWorldActions`). The
+ * server refuses with it (server/sim/craft.ts `placeKit`); the client's prediction and the Bag's Place button ask the
+ * same (client/net/bagPrediction.ts, client/systems/craftSystem.ts). Undefined = it may go.
+ */
+export function kitRefusal(
+	save: PlayerSaveData,
+	id: number,
+	placing: boolean,
+	body?: { dead: boolean; hp: number; ride?: unknown },
+): KitRefusal | undefined {
+	if (!isPlaceable(id)) return "unknown";
+	if (body !== undefined && (body.dead || body.hp <= 0)) return "dead";
+	if (placing || (body !== undefined && body.ride !== undefined)) return "busy";
+	if (countItem(save, ItemKind.Etc, id) < 1) return "owned";
+	return undefined;
+}
 
 /** the ghost sits this far in front of the survivor (along the aim) ... */
 export const PLACE_DISTANCE = 96;

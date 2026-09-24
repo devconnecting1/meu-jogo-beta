@@ -8,20 +8,22 @@
  *
  *   presence   2 B   kind, verb                                   EnterWorld, LeaveWorld
  *   backpack   8 B   kind, verb, atSeq u16, arg u16, nonce u16    Craft, UseItem, Equip, Unequip, LearnSkill,
- *                                                                 SwitchWeapon, Holster
+ *                                                                 SwitchWeapon, Holster, Place
  *
  * A decoder tells them apart by size, and anything else is malformed: a Craft packed as 2 bytes, an EnterWorld
- * padded to 8, a verb above Holster, an `arg` outside the verb's table (`intentArgRange`), a trailing byte.
+ * padded to 8, a verb above Place, an `arg` outside the verb's table (`intentArgRange`), a trailing byte.
  *
  * Note what is NOT here. There is no `pickup(itemId)`, no `interact(solidId)`, no `place(x, y)` and no `reload`:
  * those ride the input command's own edges (§2.2 `edges`: attack, action, reload) and the server picks the target
  * itself, at the position it simulated (server/sim/interaction.ts, server/sim/build.ts). A verb that names a
- * target is a verb that can name the wrong one.
+ * target is a verb that can name the wrong one. `Place` (protocol.ts note 26) names no spot either: it only takes a
+ * construction kit the backpack holds onto the build cursor, and the attack edge places it where the SERVER says.
  *
  * Pure module: no Instances, no services. Both sides import it, so tools/test-net.mjs fuzzes it in Node.
  */
 import { CRAFT_RECIPES } from "shared/data/crafts";
 import * as Equips from "shared/data/equips";
+import { ETC_ITEMS } from "shared/data/etcItems";
 import { SKILLS } from "shared/data/skills";
 import { USABLES } from "shared/data/usables";
 import { WEAPONS } from "shared/data/weapons";
@@ -51,9 +53,16 @@ export const IntentKind = {
 	 * same. The key of the weapon in hand pressed again, its hotbar tile, the Bag's Put away / Equip on it
 	 */
 	Holster: 9,
+	/**
+	 * (DESIGN_RULES ITM-09, protocol.ts note 26) a construction kit the backpack holds goes onto the build cursor: arg =
+	 * ETC_ITEMS id (the server refuses anything that is not a PLACEABLES key, not owned, or with a construction already
+	 * on the cursor). The Bag's Build tab. Nothing is spent here: the attack edge that places it spends one, and a cancel
+	 * gives nothing back because nothing was taken
+	 */
+	Place: 10,
 } as const;
 export type IntentKind = (typeof IntentKind)[keyof typeof IntentKind];
-const INTENT_KIND_MAX = 9;
+const INTENT_KIND_MAX = 10;
 
 /** `IntentKind.Holster`'s two args: the weapon drawn again, or put away */
 export const HOLSTER_DRAW = 0;
@@ -110,6 +119,9 @@ export function intentArgRange(kind: number): [number, number] | undefined {
 	if (kind === IntentKind.LearnSkill) return [0, SKILLS.size() - 1];
 	if (kind === IntentKind.SwitchWeapon) return [0, WEAPONS.size() - 1];
 	if (kind === IntentKind.Holster) return [HOLSTER_DRAW, HOLSTER_AWAY];
+	// the ETC table the kits are rows of: which rows ARE kits (shared/sim/placement.ts PLACEABLES) is the server's next
+	// question, like a recipe id's existence is for Craft
+	if (kind === IntentKind.Place) return [0, ETC_ITEMS.size() - 1];
 	return undefined;
 }
 

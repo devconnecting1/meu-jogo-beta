@@ -2,9 +2,10 @@
  * What an item card says (client/ui/itemCard.ts, DESIGN_RULES UI-08), read from the shared data -- and only the
  * fields an item really has. The card never invents a stat: a weapon has damage, cooldown and range, and a gun a
  * magazine, a reload and an ammo pool; food and medicine have health, hunger and three timed effects; clothing
- * has defense and speed; a material has the recipes that use it. There is no durability, weight, warmth or stack
- * size in the data, so the card shows none. What an item does in CODE rather than in data (a compass, a watch)
- * is not a stat either: such an item shows its name, its type and how to equip it.
+ * has defense and speed; a material has the recipes that use it; a construction kit (ITM-09) the health it stands
+ * with (shared/sim/placement.ts PLACEABLES) and what it does once placed; ammunition the guns it feeds. There is no
+ * durability, weight, warmth or stack size in the data, so the card shows none. What an item does in CODE rather
+ * than in data (a compass, a watch) is not a stat either: such an item shows its name, its type and how to equip it.
  *
  * Also the helpers the Bag's lists share with the card (names, weapon kinds, damage text, which recipes use a
  * material), so both say the same thing about the same item.
@@ -22,13 +23,62 @@ import { USABLES, UsableDef } from "shared/data/usables";
 import { WEAPONS, WeaponDef, isChoppingTool, meleeReach, usesMagazine } from "shared/data/weapons";
 import { weaponReserve } from "shared/game/player";
 import { PlayerSaveData, equipSlotOf } from "shared/game/save";
+import { PLACEABLES, isPlaceable } from "shared/sim/placement";
 import { CardHint, CardStat, ItemCardModel, StatTone } from "./itemCard";
 import { THEME } from "./theme";
 import { SCHEMES, SCHEME_GAMEPAD, SCHEME_TOUCH, currentScheme } from "./tutorial";
 import { fmtInt, fmtNum, fmtSeconds } from "./widgets";
 
-/** ETC_ITEMS below this index are buildables (placed from the build menu), not materials */
-export const MAT_START = 23;
+/**
+ * Is ETC item `id` a construction kit -- the Bag's Build tab (DESIGN_RULES ITM-09), placed with its Place -- rather than
+ * a material? Every key of shared/sim/placement.ts PLACEABLES: the rows 0-22 and the two night desks (39, 40), which
+ * used to sit in Materials as a "Material" no recipe used, with nothing to do with them.
+ */
+export function isBuildable(id: number): boolean {
+	return isPlaceable(id);
+}
+
+/** the two vehicles among the kits (VEI-05): a vehicle, not a building, on the card */
+const BICYCLE = 21;
+const MOTORCYCLE = 22;
+
+/**
+ * What each construction kit does once it stands (DESIGN_RULES ELE-01..ELE-06, VEI-05, EDI-13, ITM-01): one line on
+ * its card, so a turret found in the backpack says what it is for. Every claim is the server's rule: power from a
+ * battery box (server/sim/power.ts), a trap's stun (shared/sim/ai/zombieBrain.ts), a fire's wood (server/sim/
+ * interaction.ts), the stations of shared/sim/craftRule.ts, the snap into a doorway (shared/sim/placement.ts). No key
+ * is named: the interact button is E, X or USE by device, and the card's hints below say which.
+ */
+const KIT_NOTES: Record<number, string> = {
+	0: "Stand next to it to craft the desk recipes.",
+	1: "Stand next to it to craft every desk recipe, the pro ones too.",
+	2: "Shoots zombies near it. Needs a battery box nearby.",
+	3: "Launches a drone that escorts you and shoots. A battery box nearby charges it.",
+	4: "Switch it on to light the night. Needs a battery box nearby.",
+	5: "Launches a drone that lights the night around you. A battery box nearby charges it.",
+	6: "Stores power for the machines around it. Generators charge it.",
+	7: "Charges the nearest battery box by day.",
+	8: "Charges the nearest battery box, day and night.",
+	9: "Burns its own oil to charge the nearest battery box. Oil from your backpack refuels it.",
+	10: "Holds the horde back until it breaks. Aim at a doorway or a window to fill it.",
+	11: "Opens and closes. Aim at a doorway or a window to fill it.",
+	12: "Holds the horde back until it breaks. Aim at a doorway or a window to fill it.",
+	13: "Opens and closes. Aim at a doorway or a window to fill it.",
+	14: "Cook next to it while it burns; it lights the night. Burnt out, Wood lights it again.",
+	15: "Hot enough to smelt metal, and it cooks too. Burnt out, Wood lights it again.",
+	16: "Shocks the nearest zombies and holds them still. Needs a battery box nearby.",
+	17: "Zombies that walk over it are stunned.",
+	18: "Switched on and powered, it shows everyone far away the way to it.",
+	19: "Switched on and powered, you can cook next to it.",
+	20: "Smelt metal next to it.",
+	21: "Ride it: quiet, and it needs no fuel.",
+	22: "Ride it: fast and loud, and it burns Oil from your backpack.",
+	39: "Stand next to it to craft the desk recipes.",
+	40: "Stand next to it to craft every desk recipe, the pro ones too.",
+};
+
+/** what the Oil in the backpack is burnt by (VEI-05, ELE-02, the chainsaw's and flamethrower's pool) */
+const OIL_NOTE = "Burned by the chainsaw, the flamethrower and the motorcycle; 5 refuel an oil generator.";
 
 /**
  * The three weapons whose rules are their own in both combat loops (server/sim/combat.ts, and the reserve in
@@ -250,14 +300,59 @@ function equipParts(id: number, tr: Tr): Parts {
 	return { type: tr(SLOT_TYPES[slot] ?? "Equipment"), stats, notes, hints: [] };
 }
 
-function etcParts(id: number, tr: Tr): Parts {
+/**
+ * A construction kit (ITM-09): what it does once placed, the health it stands with, and -- on this device -- the build
+ * mode's three keys, the ones client/systems/build.ts listens to: attack places, reload turns it (only a piece that
+ * turns), the action press cancels (tutorial.ts SCHEMES; on touch "Let go" is the attack and USE the action).
+ */
+function kitParts(id: number, tr: Tr, scheme: number): Parts {
+	const def = PLACEABLES[id];
+	const stats = [stat(tr("Health"), fmtInt(def.hp), "value")];
+	const note = KIT_NOTES[id];
+	const hints: Array<CardHint> = [];
+	const attack = scheme === SCHEME_TOUCH ? "Fire the aimed shot" : "Attack / shoot";
+	hint(hints, keyFor(scheme, attack), tr("Place"));
+	if (def.rotatable) hint(hints, keyFor(scheme, "Reload"), tr("Turn"));
+	const action =
+		scheme === SCHEME_TOUCH
+			? "Interact (appears when you can)"
+			: scheme === SCHEME_GAMEPAD
+				? "Interact"
+				: "Interact, search, loot";
+	hint(hints, keyFor(scheme, action), tr("Cancel"));
+	const vehicle = id === BICYCLE || id === MOTORCYCLE;
+	return { type: tr(vehicle ? "Vehicle" : "Buildable"), stats, notes: note !== undefined ? [tr(note)] : [], hints };
+}
+
+/** the guns a round of `id` (44..47) feeds: every one whose pool it is and that loads a magazine from it */
+function gunsFedBy(id: number): Array<WeaponDef> {
+	const out: Array<WeaponDef> = [];
+	for (const w of WEAPONS) {
+		if (isMelee(w) || w.id === STUN_GUN || w.id === FLAMETHROWER) continue;
+		if (AMMO_ITEM[w.ammoPool] === id) out.push(w);
+	}
+	return out;
+}
+
+function etcParts(id: number, tr: Tr, scheme: number): Parts {
+	if (isBuildable(id)) return kitParts(id, tr, scheme);
 	let what = "Material";
-	if (id < MAT_START) what = "Buildable";
-	else if (id === AMMO_ITEM[AmmoPool.Oil]) what = "Fuel";
+	if (id === AMMO_ITEM[AmmoPool.Oil]) what = "Fuel";
 	else if (id >= AMMO_ITEM[AmmoPool.Normal] && id < AMMO_ITEM[AmmoPool.Oil]) what = "Ammo";
 	const uses = recipesUsing(id);
 	const stats: Array<CardStat> = [];
 	const notes: Array<string> = [];
+	if (what === "Ammo") {
+		// what it is loaded into (a reload takes it from here: shared/game/player.ts weaponReserve)
+		const guns = gunsFedBy(id);
+		const names: Array<string> = [];
+		const named = math.min(guns.size(), MAX_USES_NAMED);
+		for (let i = 0; i < named; i++) names.push(tr(guns[i].name));
+		const more = guns.size() - named;
+		if (named > 0) notes.push(`${tr("Ammo for")} ${names.join(", ")}${more > 0 ? ` +${more}` : ""}.`);
+	} else if (what === "Fuel") {
+		notes.push(tr(OIL_NOTE));
+	}
 	if (uses.size() > 0) {
 		stats.push(stat(tr("Used in recipes"), fmtInt(uses.size()), "value"));
 		const names: Array<string> = [];
@@ -296,7 +391,7 @@ export function describeItem(
 	if (kind === ItemKind.Weapon && WEAPONS[id] !== undefined) parts = weaponParts(save, WEAPONS[id], tr, scheme);
 	else if (kind === ItemKind.Equip && EQUIPS[id] !== undefined) parts = equipParts(id, tr);
 	else if (kind === ItemKind.Use && USABLES[id] !== undefined) parts = usableParts(USABLES[id], tr);
-	else if (kind === ItemKind.Etc && ETC_ITEMS[id] !== undefined) parts = etcParts(id, tr);
+	else if (kind === ItemKind.Etc && ETC_ITEMS[id] !== undefined) parts = etcParts(id, tr, scheme);
 	else return undefined;
 
 	const hints: Array<CardHint> = [];

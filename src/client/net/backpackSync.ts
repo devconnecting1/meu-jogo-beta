@@ -148,6 +148,14 @@ export function learned(skillId: number): void {
  */
 export { pressQuick, quickUse } from "../systems/quickUse";
 
+/*
+ * The Bag's Place (DESIGN_RULES ITM-09): a construction kit from the Build tab onto the build cursor, and why it cannot
+ * go now. They live in client/systems/craftSystem.ts beside `craft` (the same two roads: the server's Place verb,
+ * predicted, or this client's own cursor offline); main.client.ts reaches them through this module for the same reason
+ * as the quick plates above.
+ */
+export { placeBlocker, placeKit } from "../systems/craftSystem";
+
 // ---------------------------------------------------------------- boot
 
 /** once, at boot: the systems learn who owns the world, and the wallet's bag has somewhere to go */

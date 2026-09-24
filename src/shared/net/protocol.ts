@@ -176,6 +176,21 @@
  *     else). A client and its server always run the same build, so no older decoder ever meets the new kinds. Neither
  *     carries anything the survivor could not see or know: their own hunger and poison, whether a boss stood within
  *     BOSS_REACH (bosses are on the snapshot), and how long they have played. No C→S change.
+ * 26. (ITM-09, the Bag's Build tab: a construction kit the backpack holds, placed) One more backpack verb and nothing
+ *     else: `Place` (10), 8 B like every verb of note 16, arg = the ETC_ITEMS row of the kit (`intentArgRange` is the
+ *     ETC table, [0, ETC_ITEMS.size() - 1]; a verb above 10, or an arg past the table, is malformed as before). It
+ *     takes the same road as the others -- the token bucket, the queue, `atSeq`, the nonce and `bag.ack`, a dead
+ *     survivor's refused, and out of the world refused (server/net/intentGate.ts: the lobby has no cursor) -- and the
+ *     server holds it on the craft's own clock (4 a second: both put a construction on the cursor). The server applies
+ *     the shared rule (shared/sim/placement.ts `kitRefusal`): a PLACEABLES key ("unknown" otherwise: a spoofed row such
+ *     as Wood never reaches a cursor), the backpack holds one ("owned"), alive ("dead"), on foot and nothing already on
+ *     the cursor ("busy"). It only puts the kit on the build cursor (`ServerBuild.hold(..., kit)`); it names no spot,
+ *     like the rest: the attack edge places it where the SERVER says the survivor aims, and only THEN is one taken from
+ *     the backpack -- checked again in that step, so a kit gone meanwhile builds nothing and comes off the cursor. A
+ *     cancel (the action edge), a death or a trip out of the world gives nothing back because nothing was taken, and
+ *     never the ingredients of the recipe that makes the kit. S→C nothing new: the bag's `place` already carries the
+ *     cursor and `invenEtc` the count. The client predicts the verb by the same rule (client/net/bagPrediction.ts) and
+ *     its cursor keeps `pendingKit` for its own world offline (client/systems/build.ts spends it there).
  */
 import {
 	NetReader,

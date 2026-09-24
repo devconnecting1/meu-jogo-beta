@@ -40,7 +40,7 @@ import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
 import * as Noise from "shared/sim/ai/noise";
 import type { WeaponDef } from "shared/data/weapons";
 import { ServerBackpack } from "./backpack";
-import { ServerBuild } from "./build";
+import { PlaceOutcome, ServerBuild } from "./build";
 import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
@@ -295,6 +295,11 @@ export class ServerSimulation {
 	private readonly walkPays = (slot: number): boolean => this.paysSlot(slot);
 	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
+	/**
+	 * A build edge that changed the survivor's SAVE: a kit from the backpack placed and spent (ITM-09), or a crafted
+	 * construction cancelled and its ingredients refunded. The session layer marks the save dirty (server/main.server.ts)
+	 */
+	onBuild?: (sp: ServerPlayer, outcome: PlaceOutcome) => void;
 	/**
 	 * The backpack verbs (server/sim/backpack.ts): queued per survivor, applied right before the command they were
 	 * made during (§2.4), acknowledged by nonce. It outlives a town (MP-22): the acks are about the connection.
@@ -1217,9 +1222,20 @@ export class ServerSimulation {
 			// keep the sticky ghost tracking this tick's position before any edge consumes it
 			build.ghost(sp.slot, sp.state);
 			if (reload > 0) build.rotate(sp.slot);
-			if (action > 0) build.cancel(sp.slot, sp.save);
+			if (action > 0) {
+				const cancelled = build.cancel(sp.slot, sp.save);
+				if (cancelled.kind === "cancelled" && cancelled.refunded) this.onBuild?.(sp, cancelled);
+			}
 			if (attack > 0 && build.placing(sp.slot)) {
-				const placed = build.place(sp.slot, sp.state, this.bodies, this.horde?.zombies ?? EMPTY_ZOMBIES);
+				// the save goes along: a kit from the backpack (ITM-09) is spent in the same step it is placed
+				const placed = build.place(
+					sp.slot,
+					sp.state,
+					this.bodies,
+					this.horde?.zombies ?? EMPTY_ZOMBIES,
+					sp.save,
+				);
+				if (placed.kind === "placed" && placed.kit === true) this.onBuild?.(sp, placed);
 				// hammering a construction into place is LOUD (shared/sim/ai/noise.ts): building costs attention
 				const horde = this.horde;
 				if (placed.kind === "placed" && horde !== undefined) {

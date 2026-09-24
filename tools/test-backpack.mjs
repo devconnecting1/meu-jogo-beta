@@ -27,6 +27,11 @@
  *     a. once a screen was built, going back to it creates and destroys ZERO Instances;
  *     b. an action creates at most what the new data needs (one tile for an item the grid never had);
  *     c. what is on screen always matches the save -- the tiles, their icons and counts, the panel.
+ * 8c. the Build tab (DESIGN_RULES ITM-09): empty, it says where constructions come from and offers Open Craft; with
+ *    kits in the backpack it lists every one with its count (the night desks included, never in Materials), each with
+ *    its card and Place; Place hands the kit to the game (main.client -> craftSystem placeKit) and is greyed out with
+ *    the game's reason while it cannot go; Materials lists the ammunition and the Oil too (their counts live in the
+ *    save's ammo fields). Visiting it again, or placing, creates and destroys nothing.
  * 9. the WARDROBE (client/ui/wardrobe.ts, MON-04 / UI-07) on the same kit and fake tree.
  * 10. what a full page costs (all 30 weapons; the 80 recipes), reported.
  * 11. the layout at 1120 x 630 and at 1360 x 435 (a phone), through a small layout pass over the fake tree: no
@@ -595,6 +600,8 @@ const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+const { PLACEABLES, PLACEABLE_IDS } = require(join(SRC, "shared/sim/placement.ts"));
+const { countItem } = require(join(SRC, "shared/sim/inventory.ts"));
 const { SKILLS } = require(join(SRC, "shared/data/skills.ts"));
 const { ITEM_ICONS, ICON_GLYPHS, iconOf, skillIconOf } = require(join(SRC, "shared/data/itemIcons.ts"));
 const { ICON_ART_ORDER } = require(join(SRC, "shared/engine/colors.ts"));
@@ -920,7 +927,13 @@ function click(button, what) {
 	button.Activated.Fire();
 	flush();
 }
-const TABS = ["Weapons", "Gear", "Usables", "Materials", "Craft", "Skills"];
+const TABS = ["Weapons", "Gear", "Usables", "Materials", "Build", "Craft", "Skills"];
+/** the tabs by name (ITM-09 put Build between Materials and Craft) */
+const T_MATERIALS = 3;
+const T_BUILD = 4;
+const T_CRAFT = 5;
+const T_SKILLS = 6;
+const ALL_TABS = TABS.map((_, i) => i);
 const tabBtn = i => win()?.FindFirstChild("Tabs")?.FindFirstChild(`Tab${i}`);
 const tab = i => click(tabBtn(i), `tab ${TABS[i]}`);
 const page = i => win()?.FindFirstChild(`Page${i}`);
@@ -995,10 +1008,19 @@ function expectedTiles(cat, s = save) {
 	} else if (cat === 2) {
 		for (const u of USABLES)
 			if ((s.invenUse[u.id] ?? 0) > 0) out.push([`3:${u.id}`, iconOf(3, u.id).key, `×${s.invenUse[u.id]}`]);
-	} else if (cat === 3) {
-		for (let i = MAT_START; i < ETC_ITEMS.length; i++)
-			if ((s.invenEtc[i] ?? 0) > 0) out.push([`4:${i}`, iconOf(4, i).key, `×${s.invenEtc[i]}`]);
-	} else if (cat === 5) {
+	} else if (cat === T_MATERIALS) {
+		// every ETC row that is not a construction kit, the ammunition and the Oil included (their counts are the save's
+		// ammo fields: countItem, never invenEtc)
+		for (let i = 0; i < ETC_ITEMS.length; i++) {
+			const n = countItem(s, KIND.Etc, i);
+			if (PLACEABLES[i] === undefined && n > 0) out.push([`4:${i}`, iconOf(4, i).key, `×${n}`]);
+		}
+	} else if (cat === T_BUILD) {
+		for (const i of PLACEABLE_IDS) {
+			const n = countItem(s, KIND.Etc, i);
+			if (n > 0) out.push([`4:${i}`, iconOf(4, i).key, `×${n}`]);
+		}
+	} else if (cat === T_SKILLS) {
 		for (const sk of SKILLS) out.push([`s:${sk.id}`, skillIconOf(sk.id), undefined]);
 	}
 	return out;
@@ -1017,8 +1039,8 @@ console.log("\n1) abrir e percorrer as abas\n");
 
 phase("abrir o Bag (1a vez)", () => pack.open());
 check(
-	"o Bag abre numa janela so, com as 6 abas",
-	win() !== undefined && [0, 1, 2, 3, 4, 5].every(i => tabBtn(i)?.Text === TABS[i]),
+	"o Bag abre numa janela so, com as 7 abas (Build entre Materials e Craft, ITM-09)",
+	win() !== undefined && ALL_TABS.every(i => tabBtn(i)?.Text === TABS[i]) && tabBtn(TABS.length) === undefined,
 );
 check(
 	'o cabecalho perdeu o "<" e a tecla B; o "?" e o X vermelho ficam',
@@ -1037,35 +1059,41 @@ check(
 );
 check(
 	"os pontos de skill sao um badge na aba Skills (o SP 0 saiu do cabecalho)",
-	deep(tabBtn(5), "Points")?.Visible === true &&
-		deep(deep(tabBtn(5), "Points"), "Text")?.Text === "2" &&
+	deep(tabBtn(T_SKILLS), "Points")?.Visible === true &&
+		deep(deep(tabBtn(T_SKILLS), "Points"), "Text")?.Text === "2" &&
 		deep(win(), "SkillPoints") === undefined,
 );
+check(
+	"cada aba tem o seu glifo de pixel (Build: a casa, glyph 'build')",
+	ALL_TABS.every(i => deep(tabBtn(i), "Glyph")?.GetAttribute("Icon") !== undefined) &&
+		deep(tabBtn(T_BUILD), "Glyph")?.GetAttribute("Icon") === "build",
+	ALL_TABS.map(i => deep(tabBtn(i), "Glyph")?.GetAttribute("Icon")).join(", "),
+);
 
-const firstVisit = [1, 2, 3, 4, 5, 0].map(i => phase(`1a visita: ${TABS[i]}`, () => tab(i)));
-for (const cat of [1, 2, 3, 5]) {
+const firstVisit = [...ALL_TABS.slice(1), 0].map(i => phase(`1a visita: ${TABS[i]}`, () => tab(i)));
+for (const cat of [1, 2, T_MATERIALS, T_BUILD, T_SKILLS]) {
 	tab(cat);
 	check(`${TABS[cat]} mostra o que o save diz`, ...showsSave(cat));
 }
-tab(4);
+tab(T_CRAFT);
 check(
 	"Craft mostra as receitas, cada uma com o icone do que ela faz",
-	tilesOf(4).length === CRAFT_RECIPES.length &&
-		tilesOf(4)
+	tilesOf(T_CRAFT).length === CRAFT_RECIPES.length &&
+		tilesOf(T_CRAFT)
 			.slice(0, 6)
 			.every(t => {
 				const r = CRAFT_RECIPES.find(x => `r:${x.id}` === keyOf(t));
 				return r !== undefined && iconKey(t) === iconOf(r.resultKind, r.resultIndex).key;
 			}),
-	`${tilesOf(4).length} receitas`,
+	`${tilesOf(T_CRAFT).length} receitas`,
 );
 tab(0);
 
 for (let round = 2; round <= 5; round++) {
-	const r = phase(`volta ${round}: 6 trocas de aba`, () => {
-		for (const i of [1, 2, 3, 4, 5, 0]) tab(i);
+	const r = phase(`volta ${round}: ${TABS.length} trocas de aba`, () => {
+		for (const i of [...ALL_TABS.slice(1), 0]) tab(i);
 	});
-	check(`volta ${round} pelas 6 abas nao cria nem destroi Instance`, zero(r), cost(r));
+	check(`volta ${round} pelas ${TABS.length} abas nao cria nem destroi Instance`, zero(r), cost(r));
 }
 
 // ---------------------------------------------------------------- 2. selecting, and the panel
@@ -1280,8 +1308,8 @@ check("Usables segue batendo com o save", ...showsSave(2));
 console.log("\n4) craft\n");
 const resultName = (RECIPE.resultKind === KIND.Weapon ? WEAPONS : USABLES)[RECIPE.resultIndex].name;
 const resultIcon = iconOf(RECIPE.resultKind, RECIPE.resultIndex).key;
-tab(4);
-const recipeTile = () => tileFor(4, `r:${RECIPE.id}`);
+tab(T_CRAFT);
+const recipeTile = () => tileFor(T_CRAFT, `r:${RECIPE.id}`);
 check(
 	`a receita de ${resultName}: o icone do resultado, a estacao (maos) e quantas da para fazer`,
 	iconKey(recipeTile()) === resultIcon &&
@@ -1303,7 +1331,7 @@ check(
 	deep(details(), "Nearby")?.Text?.startsWith("Near you") && deep(win(), "Notice") === undefined,
 	deep(details(), "Nearby")?.Text,
 );
-const undrawn = new Set(cellsOf(4).filter(t => iconKey(t) === ""));
+const undrawn = new Set(cellsOf(T_CRAFT).filter(t => iconKey(t) === ""));
 r = phase("Craft", act);
 // a craft re-sorts the recipes (what can be made first): a recipe that comes on screen for the first time gets its icon
 // then -- its Frames are the only thing a craft may create (the grid draws an icon when its row is shown)
@@ -1345,9 +1373,9 @@ check(`${TABS[resultTab]} segue batendo com o save`, ...showsSave(resultTab));
 // ---------------------------------------------------------------- 5. skills
 
 console.log("\n5) skills\n");
-tab(5);
+tab(T_SKILLS);
 const skill = SKILLS.find(s => s.maxLevel > 1);
-const skillTile = () => tileFor(5, `s:${skill.id}`);
+const skillTile = () => tileFor(T_SKILLS, `s:${skill.id}`);
 click(skillTile(), skill.name);
 check(
 	"o painel da skill: o glifo, o nivel e os pontos para gastar",
@@ -1371,8 +1399,8 @@ check(
 	panelState() === `LV 1 / ${skill.maxLevel}` && deep(details(), "Extra")?.Text.startsWith("1 skill point "),
 	`${panelState()} / ${deep(details(), "Extra")?.Text}`,
 );
-check("o badge da aba Skills desce para 1", deep(deep(tabBtn(5), "Points"), "Text")?.Text === "1");
-check("Skills segue batendo com o save", ...showsSave(5));
+check("o badge da aba Skills desce para 1", deep(deep(tabBtn(T_SKILLS), "Points"), "Text")?.Text === "1");
+check("Skills segue batendo com o save", ...showsSave(T_SKILLS));
 
 // ---------------------------------------------------------------- 6. a change from outside
 
@@ -1425,13 +1453,196 @@ check(
 // ---------------------------------------------------------------- 8. every tab once more
 
 console.log("\n8) todas as abas mais uma vez\n");
-r = phase("volta final pelas 6 abas", () => {
-	for (const i of [0, 1, 2, 3, 4, 5]) tab(i);
+r = phase(`volta final pelas ${TABS.length} abas`, () => {
+	for (const i of ALL_TABS) tab(i);
 });
 check("depois de tudo, trocar de aba segue sem criar nem destruir", zero(r), cost(r));
-for (const cat of [0, 1, 2, 3, 5]) {
+for (const cat of [0, 1, 2, T_MATERIALS, T_BUILD, T_SKILLS]) {
 	tab(cat);
 	check(`${TABS[cat]} bate com o save`, ...showsSave(cat));
+}
+
+// ---------------------------------------------------------------- 8c. the Build tab (ITM-09)
+
+console.log("\n8c) a aba Build (ITM-09): os kits de construcao da mochila, cada um com Place\n");
+{
+	const TURRET = 2;
+	const BARRICADE = 10;
+	const BICYCLE = 21;
+	const NIGHT_DESK = 39;
+	const placed = [];
+	let blockedWhy;
+	// main.client: `pack.onPlace = id => { if (Bag.placeKit(refs, id)) pack.close() }` -- the game decides; nothing is
+	// spent on the cursor (the placement spends it), so the save does not move here
+	pack.onPlace = id => placed.push(id);
+	pack.placeCheck = () => blockedWhy;
+	const extra = () => deep(details(), "Extra")?.Text;
+	const notes = () => deep(details(), "Notes")?.Text ?? "";
+	const disabled = () => action()?.GetAttribute("Disabled") === true;
+
+	for (const id of PLACEABLE_IDS) save.invenEtc[id] = 0;
+	heartbeat(0.3);
+	r = phase("aba Build vazia (1a vez com o estado vazio)", () => tab(T_BUILD));
+	check(
+		"vazia: diz de onde vem uma construcao e oferece Open Craft (a chapa de ferro)",
+		tilesOf(T_BUILD).length === 0 &&
+			panelTitle() === "Nothing to build yet" &&
+			deep(details(), "Body")?.Text === "Craft turrets, barricades and more in the Craft tab." &&
+			action()?.Text === "Open Craft" &&
+			action()?.GetAttribute("Variant") === "secondary",
+		`${panelTitle()} / ${action()?.Text}`,
+	);
+	act();
+	check("Open Craft leva para a aba Craft", page(T_CRAFT)?.Visible === true && !page(T_BUILD)?.Visible);
+
+	// the owner's turret, three barricades, a bicycle and a night desk (the night desks used to sit in Materials)
+	save.invenEtc[TURRET] = 1;
+	save.invenEtc[BARRICADE] = 3;
+	save.invenEtc[BICYCLE] = 1;
+	save.invenEtc[NIGHT_DESK] = 1;
+	heartbeat(0.3);
+	r = phase("aba Build com 4 kits", () => tab(T_BUILD));
+	check("Build mostra o que o save diz: cada kit, o icone e a contagem", ...showsSave(T_BUILD));
+	tab(T_MATERIALS);
+	check(
+		"a mesa noturna esta em Build e nao em Materials (nenhum kit em Materials)",
+		tileFor(T_MATERIALS, `4:${NIGHT_DESK}`) === undefined &&
+			tilesOf(T_MATERIALS).every(t => PLACEABLES[Number(keyOf(t).split(":")[1])] === undefined),
+	);
+	tab(T_BUILD);
+	click(tileFor(T_BUILD, `4:${TURRET}`), "Turret");
+	check(
+		"o painel da torreta: nome, x1, o tipo, a vida dela de pe e o que ela faz",
+		panelTitle() === "Turret" &&
+			panelState() === "×1" &&
+			deep(details(), "Type")?.Text === "Buildable" &&
+			statValue("Health")?.Text === String(PLACEABLES[TURRET].hp) &&
+			notes().includes("battery box"),
+		`${panelTitle()} / ${panelState()} / ${deep(details(), "Type")?.Text} / ${statValue("Health")?.Text} / ${notes()}`,
+	);
+	check(
+		"o botao e Place, ligado, a chapa azul; a linha diz que colocar gasta um e cancelar guarda",
+		action()?.Text === "Place" &&
+			!disabled() &&
+			action()?.GetAttribute("Variant") === "default" &&
+			extra() === "Placing it uses one. Cancelling keeps it.",
+		`${action()?.Text} / ${extra()}`,
+	);
+	check(
+		"as teclas do modo de construcao no teclado: clique coloca, E cancela (a torreta nao gira: sem R)",
+		legends(details()).includes("Left click") &&
+			legends(details()).includes("E") &&
+			!legends(details()).includes("R"),
+		legends(details()).join(", "),
+	);
+	r = phase("Place na torreta", act);
+	check("Place entrega o kit ao jogo, uma vez (main.client -> craftSystem placeKit)", placed.join(",") === "2");
+	check("Place nao cria nem destroi Instance", zero(r), cost(r));
+	check("o cursor nao gasta: a contagem fica ate a construcao entrar no mundo", save.invenEtc[TURRET] === 1);
+
+	blockedWhy = "Finish the current build first";
+	heartbeat(0.3);
+	check(
+		"com uma construcao ja no cursor o Place fica cinza e diz por que (a regra do jogo)",
+		action()?.Text === "Can't place" && disabled() && extra() === blockedWhy,
+		`${action()?.Text} / ${extra()}`,
+	);
+	act();
+	check("e o botao cinza nao entrega nada", placed.length === 1);
+	blockedWhy = undefined;
+	heartbeat(0.3);
+
+	click(tileFor(T_BUILD, `4:${BARRICADE}`), "Wooden barricade");
+	check(
+		"a barricada gira: R vira; e o card diz que ela entra numa porta ou janela",
+		legends(details()).includes("R") && notes().includes("doorway"),
+		`${legends(details()).join(", ")} / ${notes()}`,
+	);
+	click(tileFor(T_BUILD, `4:${BICYCLE}`), "Bicycle");
+	check(
+		"a bicicleta e um veiculo (VEI-05): o tipo, o Place e o que ela faz",
+		deep(details(), "Type")?.Text === "Vehicle" && action()?.Text === "Place" && notes().startsWith("Ride it"),
+		`${deep(details(), "Type")?.Text} / ${notes()}`,
+	);
+
+	// every kit's panel fits its lower bed: the note (up to two lines), the line under it and the build mode's keys --
+	// three for a piece that turns (a 2-line help line and three keys used to run out of the bed on a barricade)
+	{
+		const had = PLACEABLE_IDS.map(id => save.invenEtc[id]);
+		for (const id of PLACEABLE_IDS) save.invenEtc[id] = 1;
+		heartbeat(0.3);
+		tab(T_BUILD);
+		const over = [];
+		for (const id of PLACEABLE_IDS) {
+			click(tileFor(T_BUILD, `4:${id}`), ETC_ITEMS[id].name);
+			const rows = deep(details(), "Lower")
+				.GetChildren()
+				.filter(c => c.Visible && (c.Name === "Notes" || c.Name === "Extra" || /^Hint\d+$/.test(c.Name)));
+			const out = rows.filter(c => c.Position.Y.Scale + c.Size.Y.Scale > 1.001);
+			if (out.length > 0) over.push(`${ETC_ITEMS[id].name}: ${out.map(c => c.Name).join("+")}`);
+		}
+		check(
+			`o painel de cada um dos ${PLACEABLE_IDS.length} kits cabe no leito de baixo (nota, linha e as teclas do modo de construcao)`,
+			over.length === 0,
+			over.join("; "),
+		);
+		PLACEABLE_IDS.forEach((id, i) => (save.invenEtc[id] = had[i]));
+		heartbeat(0.3);
+		click(tileFor(T_BUILD, `4:${BICYCLE}`), "Bicycle");
+	}
+
+	// the pad: the Build tab lands the focus on its selected kit (the bicycle, just picked), as every tab does
+	service("UserInputService").GetLastInputType = () => Enum.UserInputType.Gamepad1;
+	tab(0);
+	tab(T_BUILD);
+	check(
+		"com o controle, voltar a aba Build poe o foco no kit selecionado (a bicicleta)",
+		service("GuiService").SelectedObject === tileFor(T_BUILD, `4:${BICYCLE}`),
+		service("GuiService").SelectedObject?.GetAttribute("Key"),
+	);
+	service("GuiService").SelectedObject = undefined;
+	service("UserInputService").GetLastInputType = () => Enum.UserInputType.MouseMovement;
+
+	// Materials: the rounds and the Oil the save keeps in its ammo fields (they never showed before)
+	save.oil = 7;
+	save.ammoShotgun = 12;
+	heartbeat(0.3);
+	tab(T_MATERIALS);
+	check("Materials lista a municao e o Oil com as contagens do save", ...showsSave(T_MATERIALS));
+	check(
+		"Normal ammo x41 (o ammoNormal do save) e Oil x7",
+		chip(tileFor(T_MATERIALS, "4:44"), "Count") === "×41" && chip(tileFor(T_MATERIALS, "4:48"), "Count") === "×7",
+	);
+	click(tileFor(T_MATERIALS, "4:45"), "Shotgun ammo");
+	check(
+		"a municao diz em que armas ela entra, e Open Craft (ela se fabrica)",
+		notes().startsWith("Ammo for Pump action shotgun, Semi auto shotgun") && action()?.Text === "Open Craft",
+		`${notes()} / ${action()?.Text}`,
+	);
+	click(tileFor(T_MATERIALS, "4:48"), "Oil");
+	check(
+		"o Oil diz o que o queima e nao tem botao (nenhuma receita o usa ou faz)",
+		notes().startsWith("Burned by the chainsaw") && action()?.Visible === false,
+		`${notes()} / ${action()?.Visible}`,
+	);
+
+	r = phase(`volta pelas ${TABS.length} abas com Build cheia`, () => {
+		for (const i of ALL_TABS) tab(i);
+	});
+	check("voltar a Build (e a todas) nao cria nem destroi Instance", zero(r), cost(r));
+	// the server placed it and spent it: the next bag has none, and the tile goes
+	save.invenEtc[TURRET] = 0;
+	heartbeat(0.3);
+	r = phase("o kit colocado sai da aba", () => tab(T_BUILD));
+	check(
+		"quando a construcao entra no mundo o kit sai da aba, sem Instance nova",
+		tileFor(T_BUILD, `4:${TURRET}`) === undefined && zero(r),
+		cost(r),
+	);
+	check("Build segue batendo com o save", ...showsSave(T_BUILD));
+	pack.onPlace = undefined;
+	pack.placeCheck = undefined;
+	tab(0);
 }
 
 // ---------------------------------------------------------------- 8b. the mouse's card and the pad's cursor
@@ -2301,20 +2512,20 @@ function fullPages(atlas) {
 			tilesOf(0).every(t => iconKey(t) === iconOf(1, Number(keyOf(t).split(":")[1])).key),
 		`${tilesOf(0).length} ladrilhos`,
 	);
-	const craftFirst = phase(`e vai a Craft${tag}`, () => tab(4));
-	out.craft = census(page(4));
+	const craftFirst = phase(`e vai a Craft${tag}`, () => tab(T_CRAFT));
+	out.craft = census(page(T_CRAFT));
 	out.craftFirst = craftFirst;
 	console.log(
 		`  Craft, 1a vista (so as linhas na tela e a seguinte tem icone): ${cost(craftFirst)}; ${fmtCensus(out.craft)}`,
 	);
-	const drawn = () => tilesOf(4).filter(t => iconKey(t) !== "").length;
+	const drawn = () => tilesOf(T_CRAFT).filter(t => iconKey(t) !== "").length;
 	check(
 		`as receitas fora da tela ainda nao pagam o desenho do icone${tag}`,
 		drawn() < CRAFT_RECIPES.length && drawn() >= 25,
 		`${drawn()} de ${CRAFT_RECIPES.length} desenhadas`,
 	);
 	// scroll to the end, a row at a time (the fake tree has no layout: the list gets its size on screen here)
-	const list = deep(page(4), "List");
+	const list = deep(page(T_CRAFT), "List");
 	list.AbsoluteSize = new Vector2(408, 408);
 	const rows = Math.ceil(CRAFT_RECIPES.length / 5);
 	const scrolled = phase(`rola Craft ate o fim${tag}`, () => {
@@ -2324,7 +2535,7 @@ function fullPages(atlas) {
 		}
 	});
 	out.scrolled = scrolled;
-	out.craftAll = census(page(4));
+	out.craftAll = census(page(T_CRAFT));
 	console.log(`  rolar ate o fim: ${cost(scrolled)}; ${fmtCensus(out.craftAll)}`);
 	check(
 		`rolar desenha as linhas que chegam, ate a ultima${tag}`,
@@ -2339,12 +2550,12 @@ function fullPages(atlas) {
 	});
 	check(`rolar de novo nao cria nem destroi Instance${tag}`, zero(again), cost(again));
 	// the other tabs are built on their first visit (part 1 measures that); then they are only shown again
-	for (const t of [0, 1, 2, 3, 5]) tab(t);
-	const cycle = phase(`fecha, reabre e passa as 6 abas 3 vezes${tag}`, () => {
+	for (const t of ALL_TABS) if (t !== T_CRAFT) tab(t);
+	const cycle = phase(`fecha, reabre e passa as ${TABS.length} abas 3 vezes${tag}`, () => {
 		for (let i = 0; i < 3; i++) {
 			p2.close();
 			p2.open();
-			for (const t of [0, 1, 2, 3, 4, 5]) tab(t);
+			for (const t of ALL_TABS) tab(t);
 		}
 	});
 	check(`depois disso, reabrir e trocar de aba nao cria nem destroi Instance${tag}`, zero(cycle), cost(cycle));
@@ -2473,7 +2684,7 @@ for (const [vw, vh, touch] of [
 	uis.TouchEnabled = touch;
 	uis.MouseEnabled = !touch;
 	uis.GetLastInputType = () => (touch ? Enum.UserInputType.Touch : Enum.UserInputType.MouseMovement);
-	for (const cat of [0, 4, 5]) {
+	for (const cat of [0, T_BUILD, T_CRAFT, T_SKILLS]) {
 		tab(cat);
 		layoutAt(vw, vh);
 		const W0 = win();
@@ -2482,7 +2693,7 @@ for (const [vw, vh, touch] of [
 			W0.FindFirstChild("Help"),
 			W0.FindFirstChild("Close"),
 			W0.FindFirstChild("Title"),
-			...[0, 1, 2, 3, 4, 5].map(i => tabBtn(i)),
+			...ALL_TABS.map(i => tabBtn(i)),
 			page(cat),
 			details(),
 		].map(rectOf);
@@ -2529,9 +2740,7 @@ for (const [vw, vh, touch] of [
 			`${where}: e ficam dentro do sulco, na largura`,
 			cells.every(c => c.x >= groove.x - 0.5 && c.x + c.w <= groove.x + groove.w + 0.5),
 		);
-		const glyphsIn = [0, 1, 2, 3, 4, 5].every(i =>
-			within(rectOf(tabBtn(i).FindFirstChild("Glyph")), rectOf(tabBtn(i))),
-		);
+		const glyphsIn = ALL_TABS.every(i => within(rectOf(tabBtn(i).FindFirstChild("Glyph")), rectOf(tabBtn(i))));
 		check(`${where}: o glifo de cada aba fica dentro da aba`, glyphsIn);
 		if (cat === 0) {
 			const tile = cells[0];
