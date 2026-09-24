@@ -34,7 +34,8 @@ import {
 	WorldData,
 } from "shared/game/world";
 import { fortifies, openingAt, PLACEABLES, PlaceableDef, placedSolid, PlaceRect } from "shared/sim/placement";
-import { isDoor } from "shared/sim/interactQuery";
+import { isDoor, isYardContainer } from "shared/sim/interactQuery";
+import { isPortico } from "shared/sim/vault";
 import { hadGlass, isWindow, setWindowGlass } from "shared/game/windows";
 import { itemGone, lootGone } from "../systems/pickups";
 
@@ -171,9 +172,10 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		return;
 	}
 	if (e.t === WorldEv.LootFlag) {
-		// a building, or a gas station's pump island (EDI-16): the two containers the server flags (same message)
+		// a building, or a container out in the open -- a pump island (EDI-16), a market stall, a pile, a shed
+		// (EDI-21..MOB-06): the containers the server flags (same message)
 		const b = ix.solids.get(e.buildingId);
-		if (b === undefined || (b.kind !== "building" && b.tags !== "pump")) return;
+		if (b === undefined || (b.kind !== "building" && !isYardContainer(b))) return;
 		const had = (b.lootItems?.size() ?? 0) > 0;
 		b.lootItems = e.hasLoot ? lootPlaceholder() : [];
 		if (had && !e.hasLoot) lootGone();
@@ -191,9 +193,11 @@ export function resetMirror(world: WorldData): void {
 	for (const s of world.solids) {
 		if (s.id >= DYNAMIC_ID_BASE || s.placeable !== undefined) built.push(s);
 		else if (isDoor(s)) s.open = false;
+		// a bank's alarm bell (EDI-24): silent until the WorldInit says it rings
+		else if (isPortico(s)) s.powered = undefined;
 		// every pane back as the town was generated (EDI-18): the WorldInit names the ones broken since
 		else if (isWindow(s)) setWindowGlass(s, hadGlass(s));
-		else if ((s.kind === "building" || s.tags === "pump") && s.lootItems !== undefined) s.lootItems = [];
+		else if ((s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined) s.lootItems = [];
 	}
 	for (const s of built) {
 		ix.solids.delete(s.id);

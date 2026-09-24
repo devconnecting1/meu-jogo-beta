@@ -3,6 +3,7 @@
  * The client shows the "E: …" hint and acts with them; the server (F3) validates `pickup`, `interact` and `search`
  * with the very same queries, at ITS position of the survivor. No Instances, no random numbers, no state.
  */
+import { YARD_TAGS } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import type { ZombieState } from "shared/game/entities";
 import { PLAYER_RADIUS, segmentClear, ZOMBIE_RADIUS } from "shared/game/physics";
@@ -10,6 +11,7 @@ import type { PlayerState } from "shared/game/player";
 import { buildingAt, GroundItem, isBlocking, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
 import { WINDOW_REACH, windowIntact } from "shared/game/windows";
 import { rectCircleOverlap } from "./placement";
+import { inVaultOf, isVaultBox } from "./vault";
 import { vehicleBroken } from "./vehicle";
 
 /** solids are looked up in a box of this half-size around the survivor */
@@ -93,6 +95,15 @@ export function isPump(s: Solid): boolean {
 	return s.tags === "pump";
 }
 
+/**
+ * A container out in the open, searched like a pump island (the same lazy roll, the same shared take, the same
+ * LootFlag): a pump island, or one of the everyday town's searchable fixtures -- a market stall, the market's food
+ * truck, a pile of building material, a garden shed (shared/data/spawns.ts YARD_TAGS, EDI-21, EDI-22, MOB-06).
+ */
+export function isYardContainer(s: Solid): boolean {
+	return s.tags === "pump" || (s.lootSlots !== undefined && YARD_TAGS.includes(s.tags));
+}
+
 /** does this container (a building, a pump island) hold something, as far as this side knows? */
 export function holdsLoot(s: Solid): boolean {
 	const loot = s.lootItems;
@@ -117,10 +128,13 @@ export function nearestPump(pumps: ReadonlyArray<Solid>, x: number, y: number, r
 	return best;
 }
 
-/** every pump island of the town (static: listed once per world by whoever needs them) */
+/**
+ * Every container out in the open of the town (`isYardContainer`: the pump islands, the market's stalls and food
+ * truck, the construction site's piles, the backyards' sheds) -- static: listed once per world by whoever needs them.
+ */
 export function pumpsOf(world: WorldData): Array<Solid> {
 	const out = new Array<Solid>();
-	for (const s of world.solids) if (isPump(s)) out.push(s);
+	for (const s of world.solids) if (isYardContainer(s)) out.push(s);
 	return out;
 }
 
@@ -203,6 +217,11 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		// a building's own walls and furniture do nothing on E: standing by the pharmacy shelves must search the
 		// pharmacy, not "use" the shelf (a wall within reach used to swallow the search the same way)
 		if (s.parentId !== undefined) continue;
+		// nor does a fixture of the town that holds nothing (a bench, a hydrant, a street lamp): only the searchable
+		// ones -- a market stall, a pile, a shed -- are E's (`isYardContainer`)
+		if (s.kind === "prop" && s.lootSlots === undefined) continue;
+		// a bank's deposit boxes are reached from inside its vault only, never through the wall (EDI-24)
+		if (isVaultBox(s) && !inVaultOf(world, s.bankId, x, y)) continue;
 		const isADoor = isDoor(s);
 		const limit = isADoor ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);
@@ -359,7 +378,8 @@ export function interactTarget(
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };
-		if (isPump(s)) return { kind: "pump", solid: s };
+		// a pump island, or any other container out in the open (a market stall, a shed): taken like the pump's fuel
+		if (isYardContainer(s)) return { kind: "pump", solid: s };
 		return { kind: "solid", solid: s };
 	}
 	const b = buildingToSearch(world, x, y);

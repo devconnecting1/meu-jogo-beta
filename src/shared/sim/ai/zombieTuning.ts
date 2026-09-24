@@ -180,7 +180,18 @@ export const FIELD_GOTO = 400;
  * vision, the flashlight's cone) is shared/sim/survivorLight.ts, the rule the light map reads too (LUZ-04).
  */
 export const PLAYER_LIGHT_R = SURVIVOR_LIGHT_R;
-export const STRUCTURE_LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/**
+ * The built and fixed light sources, while `powered`, by tag: THE table -- the client's light map draws these very radii
+ * (client/gameLoop.ts LIGHT_R is this object), so the ground the horde sees lit is the ground the survivor sees lit.
+ * `portico`: a bank's portico while its alarm bell rings (EDI-24), the bell's flashing lamp.
+ */
+export const STRUCTURE_LIGHT_R: Record<string, number> = {
+	lamp: 400,
+	lamp_drone: 320,
+	campfire: 300,
+	brazier: 330,
+	portico: 220,
+};
 /** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px (shared/data/equips.ts EQUIP_LIGHTS) */
 export const FLASHLIGHT_R = EQUIP_LIGHTS[FLASHLIGHT_ID].radius;
 /** how far around a survivor the AI looks for lit structures and shaking solids */

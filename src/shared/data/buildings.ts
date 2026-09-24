@@ -16,6 +16,19 @@ export const BuildingType = {
 	CampusLibrary: 13,
 	CampusLab: 14,
 	CampusDorm: 15,
+	// the everyday town (docs/DESIGN_RULES.md EDI-19): Main Street's small shops, offices, bank and police station, the
+	// town hall and the fire station on the avenue
+	Hardware: 16,
+	AutoRepair: 17,
+	Electronics: 18,
+	Bakery: 19,
+	PawnShop: 20,
+	PostOffice: 21,
+	Bank: 22,
+	TownHall: 23,
+	FireStation: 24,
+	PoliceStation: 25,
+	Office: 26,
 } as const;
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
 

@@ -8,6 +8,7 @@ import { MAX_BOSSES, MAX_ZOMBIES } from "shared/net/mpConfig";
 import * as Ctx from "shared/sim/ai/context";
 import * as Dir from "shared/sim/ai/director";
 import { seedHunt, spawnAlpha, takeKills } from "shared/sim/ai/zombieBrain";
+import { inAnyVault } from "shared/sim/vault";
 
 /*
  * Population: ambient walkers, specials, night waves, ground items and the bosses (docs/MULTIPLAYER.md §3.5).
@@ -231,6 +232,9 @@ export class Population {
 			const p = randomRingPoint(cx, cy, minR, maxR);
 			if (p.x < 0 || p.y < 0 || p.x > world.width || p.y > world.height) continue;
 			if (circleBlocked(world, p.x, p.y, SPAWN_CLEARANCE) !== undefined) continue;
+			// never inside a bank's vault (EDI-24): shut, it is sealed -- a zombie there could never come out, an item
+			// never be reached -- and cracked, it is still a strongroom, not a street
+			if (inAnyVault(world, p.x, p.y)) continue;
 			if (safe && !this.farFromEveryone(refs, p.x, p.y)) continue;
 			return p;
 		}

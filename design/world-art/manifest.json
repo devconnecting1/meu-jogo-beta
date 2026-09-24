@@ -670,6 +670,94 @@
 			"description": "storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon"
 		},
 		{
+			"name": "signHardware",
+			"file": "signHardware.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 16): a claw hammer, its steel head over a wooden handle, on hardware orange"
+		},
+		{
+			"name": "signAutoRepair",
+			"file": "signAutoRepair.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 17): a wheel: the black tyre, its white rim and the hub, on slate blue"
+		},
+		{
+			"name": "signElectronics",
+			"file": "signElectronics.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 18): a yellow lightning bolt, on indigo"
+		},
+		{
+			"name": "signBakery",
+			"file": "signBakery.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 19): a scored loaf of bread, on rose"
+		},
+		{
+			"name": "signPawn",
+			"file": "signPawn.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 20): the pawnbroker's three gold balls hanging from their bar, on dark brown"
+		},
+		{
+			"name": "signPost",
+			"file": "signPost.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 21): an envelope, its flap folded down, on post blue"
+		},
+		{
+			"name": "signBank",
+			"file": "signBank.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze"
+		},
+		{
+			"name": "signTownHall",
+			"file": "signTownHall.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 23): the town hall: a clock tower over its two wings and the front door, on lavender"
+		},
+		{
+			"name": "signFire",
+			"file": "signFire.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 24): a yellow flame, its white-hot heart, on fire-engine red"
+		},
+		{
+			"name": "signPolice",
+			"file": "signPolice.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 25): a navy shield with a gold star, on pale blue"
+		},
+		{
+			"name": "signOffice",
+			"file": "signOffice.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 26): a briefcase, its brass clasp, on sea-glass green"
+		},
+		{
 			"name": "helipad",
 			"file": "helipad.png",
 			"kind": "sprite",
@@ -889,7 +977,7 @@
 				4,
 				4
 			],
-			"description": "the shadow at the foot of an interior wall (round every wall)"
+			"description": "an interior wall's outline (its centre, tinted) and the shadow at its foot"
 		},
 		{
 			"name": "survivorsA",
@@ -1309,8 +1397,8 @@
 			"file": "furniture.png",
 			"kind": "atlas",
 			"w": 1024,
-			"h": 718,
-			"description": "interiors: 1343 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
+			"h": 923,
+			"description": "interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
 		},
 		{
 			"name": "blood",
@@ -1319,6 +1407,14 @@
 			"w": 96,
 			"h": 264,
 			"description": "combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)"
+		},
+		{
+			"name": "townProps",
+			"file": "townProps.png",
+			"kind": "atlas",
+			"w": 1024,
+			"h": 662,
+			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
 		},
 		{
 			"name": "wordmark",

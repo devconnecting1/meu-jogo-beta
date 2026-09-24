@@ -142,7 +142,10 @@ const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 const { SKILLS } = require(join(SRC, "shared/data/skills.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const { ItemKind, WeaponKind, AmmoPool } = require(join(SRC, "shared/data/kinds.ts"));
-const { BUILDING_SPAWNS } = require(join(SRC, "shared/data/spawns.ts"));
+const SPAWNS = require(join(SRC, "shared/data/spawns.ts"));
+const { BUILDING_SPAWNS } = SPAWNS;
+/** the table a building type searches: spawns.ts `spawnRows` (the everyday town's types, EDI-19, have their own record) */
+const rowsOf = id => (SPAWNS.spawnRows !== undefined ? SPAWNS.spawnRows(id) : BUILDING_SPAWNS[id]);
 const { BuildingType } = require(join(SRC, "shared/data/buildings.ts"));
 const { SHOP_PACKS, COSTUMES, ECONOMY } = require(join(SRC, "shared/data/shop.ts"));
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
@@ -782,6 +785,13 @@ function itemSources() {
 	const out = [];
 	for (const table of BUILDING_SPAWNS)
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "loot" });
+	// the everyday town's buildings (EDI-19), its stalls, piles and sheds (EDI-21, EDI-22, MOB-06) and the bank's vault
+	// (EDI-24), on a checkout that has them
+	for (const table of Object.values(SPAWNS.TOWN_SPAWNS ?? {}))
+		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "town loot" });
+	for (const [what, table] of Object.entries(SPAWNS.YARD_LOOT ?? {}))
+		for (const e of table) out.push({ kind: e.kind, index: e.index, from: what });
+	for (const e of SPAWNS.VAULT_LOOT ?? []) out.push({ kind: e.kind, index: e.index, from: "bank vault" });
 	// a gas station's pump islands (EDI-16), on a checkout that has them
 	for (const e of PUMP_LOOT ?? []) out.push({ kind: e.kind, index: e.index, from: "gas pump" });
 	for (const r of CRAFT_RECIPES) out.push({ kind: r.resultKind, index: r.resultIndex, from: `recipe ${r.id}` });
@@ -4235,7 +4245,7 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 section("F1. every building type has a well-formed loot table", () => {
 	const types = Object.entries(BuildingType).map(([name, id]) => ({ id, name }));
 	checkRows("every building type has a table, and every line of it is a real item", types, t => {
-		const table = BUILDING_SPAWNS[t.id];
+		const table = rowsOf(t.id);
 		if (table === undefined || table.length === 0) return "no table";
 		for (const e of table) {
 			if (nameOf(e.kind, e.index) === undefined) return `line ${e.kind}:${e.index}`;
@@ -4244,7 +4254,7 @@ section("F1. every building type has a well-formed loot table", () => {
 		return true;
 	});
 	checkRows("each line is either a chance of one (min = max < 1) or a whole range 1 ≤ min ≤ max", types, t => {
-		for (const e of BUILDING_SPAWNS[t.id]) {
+		for (const e of rowsOf(t.id)) {
 			const chanceOfOne = e.max < 1 && e.min === e.max && e.max > 0;
 			const range = e.min >= 1 && e.max >= e.min && Number.isInteger(e.min) && Number.isInteger(e.max);
 			if (!chanceOfOne && !range) return `${nameOf(e.kind, e.index)} [${e.min}, ${e.max}]`;
@@ -4280,19 +4290,19 @@ section("F2. EDI-03: what each kind of building holds is what it sold (DESIGN_RU
 		"each shop holds what its sign says (medicine, ammo AND gunpowder, food, oil, cloth)",
 		need,
 		t =>
-			t.cats.every(c => BUILDING_SPAWNS[t.id].some(is[c])) ||
-			`missing ${t.cats.filter(c => !BUILDING_SPAWNS[t.id].some(is[c])).join(", ")}`,
+			t.cats.every(c => rowsOf(t.id).some(is[c])) ||
+			`missing ${t.cats.filter(c => !rowsOf(t.id).some(is[c])).join(", ")}`,
 	);
 	const shops = need.map(t => t.id);
 	checkRows(
 		"guns and ammunition come only from the gun shop (and zombies), never a pharmacy or a restaurant",
 		need.filter(t => t.id !== BuildingType.GunShop),
-		t => !BUILDING_SPAWNS[t.id].some(e => is.weapon(e) || is.ammo(e)) || "sells guns or ammo",
+		t => !rowsOf(t.id).some(e => is.weapon(e) || is.ammo(e)) || "sells guns or ammo",
 	);
 	checkRows(
 		"a restaurant is all food",
 		[{ id: BuildingType.Restaurant, name: "Restaurant" }],
-		t => BUILDING_SPAWNS[t.id].every(is.food) || "not only food",
+		t => rowsOf(t.id).every(is.food) || "not only food",
 	);
 	check(shops.length === 8, "the eight shop types are all checked");
 });
@@ -4324,7 +4334,7 @@ section("F3. rolled loot comes from the table, in its ranges, and lands in the b
 				lootItems: [],
 				lootTimer: 0,
 			});
-			const table = BUILDING_SPAWNS[t.id];
+			const table = rowsOf(t.id);
 			let got = 0;
 			for (let i = 0; i < 500; i++) {
 				items.rollLoot(b);
@@ -4365,7 +4375,7 @@ section("F3. rolled loot comes from the table, in its ranges, and lands in the b
 				lootTimer: 0,
 			});
 			// every line of the table, once, as if it had been rolled
-			b.lootItems = BUILDING_SPAWNS[t.id].map(e => ({ kind: e.kind, id: e.index, count: Math.max(1, e.min) }));
+			b.lootItems = rowsOf(t.id).map(e => ({ kind: e.kind, id: e.index, count: Math.max(1, e.min) }));
 			const save = bareSave();
 			const before = b.lootItems.map(d => INV.countItem(save, d.kind, d.id));
 			const out = items.search(save, 1200, 1200, 0);

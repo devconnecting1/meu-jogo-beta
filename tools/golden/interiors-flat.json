@@ -1,111 +1,174 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "the window glass (EDI-18, 2026-09-24) over 8277c20: a window is drawn as it is now -- intact, the pane with its streak of light; broken (born broken, or broken since), the open frame of before with its shards on the floor inside and on the ground outside, in place of the plan's old glass decoration. With every call within 64 u of a window left out, each of the 15 buildings is the golden before it, 6d21f20's flat interiors, call for call",
+	"recordedFrom": "the everyday town with the window glass (780f2b5), re-recorded on purpose after the review of e9b0fbb (L5): the town's fixtures seen round each building (lamps, hydrants, benches, a yard's things) are the lean flat fallback, two Frames at most; the interiors themselves are 780f2b5's",
 	"scenes": {
 		"type1": {
-			"building": 1,
-			"x": 1272,
-			"y": 672,
-			"count": 897,
-			"sha1": "6574a5b63e03a1bed9fc029e4ad1671261a0c86c"
+			"building": 51,
+			"x": 656,
+			"y": 1164,
+			"count": 935,
+			"sha1": "fe9ac487200264b52c51b6a2a20fffdd03a86d63"
 		},
 		"type2": {
-			"building": 4,
-			"x": 656,
-			"y": 3100,
-			"count": 983,
-			"sha1": "77d564e06af5ea5cd342488b15bdee4c119da471"
+			"building": 56,
+			"x": 712,
+			"y": 2776,
+			"count": 1210,
+			"sha1": "8676efe1b89cd040837add3c0163d8823c87d65b"
 		},
 		"type3": {
-			"building": 54,
-			"x": 4996,
+			"building": 116,
+			"x": 4632,
 			"y": 2800,
-			"count": 1565,
-			"sha1": "b7612c043d958ed0fcce88f3c6f2d3d534b67ecb"
+			"count": 1876,
+			"sha1": "7d9cd63297c86c0bd21b173d1311f61c6bc7bea5"
 		},
 		"type4": {
-			"building": 9,
-			"x": 864,
-			"y": 6988,
-			"count": 1778,
-			"sha1": "e45e0114672b18d473b03c42a732bbecf5b9ece0"
+			"building": 89,
+			"x": 2816,
+			"y": 8952,
+			"count": 1373,
+			"sha1": "d937a4076fe4abf3b0f4b4d49d0c8ddc49c243bf"
 		},
 		"type5": {
-			"building": 15,
+			"building": 62,
 			"x": 1260,
-			"y": 9208,
-			"count": 1465,
-			"sha1": "72847d9bfd8c5eeeef585d4106d841fbd42e58b4"
+			"y": 6988,
+			"count": 1588,
+			"sha1": "e24eafd197e69207673ecbfdf04dd5b69ea731f6"
 		},
 		"type6": {
-			"building": 59,
-			"x": 4624,
-			"y": 7300,
-			"count": 1908,
-			"sha1": "5ce125995c0dfcc979388d771f4432a5935977e0"
+			"building": 71,
+			"x": 696,
+			"y": 8904,
+			"count": 1273,
+			"sha1": "85d9154e0fe34ac2d9d4d6aac0eba32ac415bc88"
 		},
 		"type7": {
-			"building": 65,
-			"x": 4680,
-			"y": 8904,
-			"count": 1435,
-			"sha1": "17c2546715f829f0c6c38fbf1985f8f5737a34c0"
+			"building": 143,
+			"x": 6592,
+			"y": 8896,
+			"count": 1340,
+			"sha1": "fb9452d25b4d06b7dac6bf092fcc64f9680ae1b9"
 		},
 		"type8": {
-			"building": 60,
-			"x": 5172,
-			"y": 6560,
-			"count": 1357,
-			"sha1": "8ae6b6fb5a9d4bd7be3f1059074831a8e12d14ce"
+			"building": 135,
+			"x": 6568,
+			"y": 7308,
+			"count": 1895,
+			"sha1": "321cdafeb87289c0a7d20f6d54c9bd71f42ed3c0"
 		},
 		"type9": {
-			"building": 118,
-			"x": 8488,
-			"y": 8896,
-			"count": 1931,
-			"sha1": "a42666cf45a46df4f7e690535c1e75b8f7357c15"
+			"building": 136,
+			"x": 7100,
+			"y": 6600,
+			"count": 1503,
+			"sha1": "2fd197931308e18955a34376b3e1ff0deb54d255"
 		},
 		"type10": {
-			"building": 82,
-			"x": 6592,
+			"building": 358,
+			"x": 18504,
 			"y": 7300,
-			"count": 1533,
-			"sha1": "a18f970334b29a80141b230ffb81489cf7425513"
+			"count": 1631,
+			"sha1": "1ce983e721069f31370dfb4f8d3902a35c43c59a"
 		},
 		"type11": {
-			"building": 147,
+			"building": 251,
 			"x": 10704,
-			"y": 2744,
-			"count": 1590,
-			"sha1": "e1058adf82940017566d3373b43b317d67db27a7"
+			"y": 4632,
+			"count": 1483,
+			"sha1": "8ec21620e3dba1d2583404bc1cf81cee2bae28eb"
 		},
 		"type12": {
-			"building": 1275,
-			"x": 18488,
-			"y": 2704,
-			"count": 2013,
-			"sha1": "ff0b1c23bdaad9d63b75697f9572d1aab4262d84"
+			"building": 1451,
+			"x": 15120,
+			"y": 3464,
+			"count": 2091,
+			"sha1": "cecf7fb0b3b1b897f0853f1de6782c97377f99b0"
 		},
 		"type13": {
-			"building": 1276,
-			"x": 19000,
+			"building": 1454,
+			"x": 15528,
 			"y": 2704,
-			"count": 1848,
-			"sha1": "2a9ce3a6f64e4967b54fd2deed82e4b26f0a0c9c"
+			"count": 1882,
+			"sha1": "9a0e55e8336dcaf638e9c03c30015267e7e78b3a"
 		},
 		"type14": {
-			"building": 1278,
-			"x": 18488,
-			"y": 3512,
-			"count": 1679,
-			"sha1": "8efad7e183e33900684a3471745a9aa383ebb725"
+			"building": 1452,
+			"x": 14624,
+			"y": 3168,
+			"count": 1925,
+			"sha1": "3533aacbfbd19e637d134fb901c6309e595f63b1"
 		},
 		"type15": {
-			"building": 1277,
-			"x": 19368,
-			"y": 3168,
-			"count": 1940,
-			"sha1": "cec53b89dc8d9ab18d1cdcd6dbfa96cc377d2f28"
+			"building": 1453,
+			"x": 14624,
+			"y": 2704,
+			"count": 1847,
+			"sha1": "d928abefaed399d5cdc75d6349a0979cea9861b1"
+		},
+		"type16": {
+			"building": 226,
+			"x": 8520,
+			"y": 9548,
+			"count": 1476,
+			"sha1": "9d4c4571b6e89a41f67957790fafc70abada3789"
+		},
+		"type17": {
+			"building": 337,
+			"x": 16656,
+			"y": 7292,
+			"count": 1487,
+			"sha1": "8d9d6bd138c9dd627966fc5f83bd8b313848046a"
+		},
+		"type18": {
+			"building": 262,
+			"x": 10704,
+			"y": 8984,
+			"count": 1542,
+			"sha1": "ae5a84a03e0e63d8927df2ab1d334a9bc7c136a3"
+		},
+		"type19": {
+			"building": 231,
+			"x": 8440,
+			"y": 10832,
+			"count": 1713,
+			"sha1": "d356bafba91e045958b3244531b18c6f90dd3ead"
+		},
+		"type22": {
+			"building": 216,
+			"x": 8956,
+			"y": 7008,
+			"count": 1978,
+			"sha1": "969c77fdb348f55f660c463b99e50ac9375993d0"
+		},
+		"type23": {
+			"building": 134,
+			"x": 6632,
+			"y": 4600,
+			"count": 1541,
+			"sha1": "f681d1988880c05545d544131d6234bb586ce8fe"
+		},
+		"type24": {
+			"building": 376,
+			"x": 20456,
+			"y": 6924,
+			"count": 873,
+			"sha1": "3f612b172fcf1dfdab5fc58f59a6a04ff0e76ad6"
+		},
+		"type25": {
+			"building": 225,
+			"x": 8520,
+			"y": 8896,
+			"count": 1640,
+			"sha1": "3c0a40c0691d974e7e4e3a329b59eab5566a1ce2"
+		},
+		"type26": {
+			"building": 230,
+			"x": 9108,
+			"y": 10840,
+			"count": 1730,
+			"sha1": "95fc17b5aee86ab139d3d0f060c68b8047a41b1e"
 		}
 	}
 }

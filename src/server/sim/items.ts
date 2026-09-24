@@ -48,8 +48,15 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
-import { isContainer, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
-import { edgeDist, isMapItem, isPump } from "shared/sim/interactQuery";
+import {
+	isContainer,
+	lootRespawnHours,
+	rollBuildingLoot,
+	rollMapItemDrop,
+	rollYardLoot,
+	thiefFind,
+} from "shared/sim/loot";
+import { edgeDist, isMapItem, isYardContainer } from "shared/sim/interactQuery";
 import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
@@ -571,7 +578,8 @@ export class ServerItems {
 		pays = true,
 	): Array<{ kind: number; id: number; count: number }> {
 		const taken = new Array<{ kind: number; id: number; count: number }>();
-		if (!isPump(pump) || pump.removed === true) return taken;
+		// a pump island, or any other container out in the open (a market stall, a pile, a shed: EDI-21..MOB-06)
+		if (!isYardContainer(pump) || pump.removed === true) return taken;
 		const loot = pump.lootItems;
 		if (loot === undefined || loot.size() === 0) return taken;
 		this.takeAll(save, pump, hours, taken, pays);
@@ -596,7 +604,8 @@ export class ServerItems {
 			taken.push(drop);
 		}
 		c.lootItems = [];
-		c.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
+		// ITEM_RESPAWN_HOURS; the bank's vault never (EDI-24, `lootRespawnHours`)
+		c.lootTimer = hours + lootRespawnHours(c);
 	}
 
 	/** does this building (or pump island) still hold something? (what the `LootFlag` delta carries, §4.5) */
@@ -642,10 +651,10 @@ export class ServerItems {
 	 *
 	 * One function on purpose, and the roll itself is the SHARED one (shared/sim/loot.ts), the very roll the
 	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds. A pump island
-	 * rolls its fuel (EDI-16), a building its type's table.
+	 * rolls its fuel (EDI-16), a market stall, a pile or a shed its own table (EDI-21..MOB-06), a building its type's.
 	 */
 	rollLoot(s: Solid): void {
-		s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+		s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 	}
 
 	// ---------------------------------------------------------------- map items (§8.1)
