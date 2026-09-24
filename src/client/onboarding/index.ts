@@ -59,6 +59,12 @@ let bestAtLife = 0;
  */
 let stoodUp = false;
 let wasDead = false;
+/**
+ * The life's deaths when this run was attached: "as loaded". The live `lifeDeaths` moves on with the pushed wallet
+ * (review of 97cd734, LOW1), so the death being shown may already be counted in it. Undefined before any run was
+ * attached: then the save's own number is all there is
+ */
+let deathsAtRun: number | undefined;
 /** zombie id → its hp when we last saw it: a body that leaves the list at 0 hp was killed */
 const seen = new Map<number, number>();
 let killScan = 0;
@@ -113,6 +119,7 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	kills = 0;
 	killsAtStart = ctx.save.zombieKills;
 	bossesAtStart = ctx.save.bossKills;
+	deathsAtRun = ctx.save.lifeDeaths;
 	const key = ctx.save.runRev - ctx.save.deathCount;
 	if (key !== lifeKey) {
 		lifeKey = key;
@@ -178,7 +185,7 @@ export function runSummary(ctx: GameContext): RunSummary {
 		level: save.level,
 		kills: SERVER_KILLS ? math.max(save.zombieKills - killsAtStart, 0) : kills,
 		bosses: math.max(save.bossKills - bossesAtStart, 0),
-		first: save.runRev === 0 && save.deathCount === 0 && save.lifeDeaths === 0 && !stoodUp,
+		first: save.runRev === 0 && save.deathCount === 0 && (deathsAtRun ?? save.lifeDeaths) === 0 && !stoodUp,
 		record: lifeKey === save.runRev - save.deathCount && save.day > bestAtLife,
 	};
 }

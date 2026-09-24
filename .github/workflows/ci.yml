@@ -240,6 +240,14 @@ jobs:
       - name: Tables and forms (row pools without churn, nothing sent while a field is wrong, the scoreboard)
         run: npm run test:tables
 
+      # MON-05 / MON-07: every earned title through the server's real paths, nobody else grants one, an admin's help
+      # makes a run assisted, and the Supporter mark is only the server's word
+      - name: Earned titles and the Supporter mark (each trigger once, only titles.ts grants, the assisted run)
+        run: npm run test:titles
+
+      - name: Item icon atlas (cell = the Frames drawing, no id = the same Frames, with an id one image, no churn)
+        run: npm run test:icons
+
       # ART-01..06: the generated art (PNGs, manifest, worldArtAssets.ts, itemIconAtlas.ts) is what the generator
       # writes -- a pull request catches a forgotten `npm run art:world` before main does -- and the town's art only
       # ever adds to the flat town
@@ -308,6 +316,12 @@ jobs:
 
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
+
+      - name: Vehicles (top speeds, handling, riding on the server, the odometer, drawn without churn; VEI-05)
+        run: npm run test:vehicles
+
+      - name: Power and defence (every machine a build, the grid, turrets and lamps on the server)
+        run: npm run test:power
 
       # MP-26: the server's seed IS the town -- server = client seed by seed, sliced = whole, no clock/random/Map
       # order/libm read -- and the lobby's town, generated a slice per frame, handed to the match with no regeneration

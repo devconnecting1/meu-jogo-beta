@@ -156,17 +156,19 @@ interface Presence {
 	/**
 	 * MON-05, the night's tally since the last midnight (reset there, and with a new world): what the server saw of this
 	 * survivor's night, read at 06:00 by `creditDawn` for the titles a whole night lived can bring. Only the server's
-	 * own events move it -- the kill credit (`killCredited`), and the body's hp as the tick left it.
+	 * own events move it -- the kill credit (`killCredited`), the hits the body counted (`PlayerState.hurts`), and its
+	 * hp as the tick left it (the lowest share).
 	 */
 	nightKills: number;
 	/** of `nightKills`, the killing blows NOT dealt with a melee weapon */
 	nightOtherKills: number;
-	/** the body lost hp at some tick since midnight */
+	/** the body took a hit since midnight (a bite, a blast, hunger, poison, rotten meat): its `hurts` went up */
 	nightHurt: boolean;
 	/** the lowest hp since midnight, as a share of hpMax (1 = never scratched) */
 	nightLowest: number;
-	/** the hp the last tick left the body with (a drop from it is a hurt), or -1 before the first tick of a body */
-	lastHp: number;
+	/** the body the tally last looked at, and its `hurts` then (a new body counts from its own first hit) */
+	body?: PlayerState;
+	hurtsSeen: number;
 }
 
 /** the night's tally of a presence, back to "nothing happened yet" (a midnight, a new world) */
@@ -938,21 +940,24 @@ export class ServerSimulation {
 	private notePresence(sp: ServerPlayer, acted: boolean): void {
 		let p = this.presence.get(sp.userId);
 		if (p === undefined) {
-			p = { aliveTicks: 0, nightKills: 0, nightOtherKills: 0, nightHurt: false, nightLowest: 1, lastHp: -1 };
+			p = { aliveTicks: 0, nightKills: 0, nightOtherKills: 0, nightHurt: false, nightLowest: 1, hurtsSeen: 0 };
 			this.presence.set(sp.userId, p);
 		}
 		const body = sp.state;
+		// MON-05, the night's tally: a hit is what the body COUNTED where the hp was taken (`PlayerState.hurts`: a bite,
+		// a blast, hunger, poison, rotten meat) -- never a drop of hp between two ticks, which a heal in the same tick
+		// hides (review of 97cd734, LOW2). A new body (a stand-up, a trip back from the lobby) counts from its first hit
+		const hurts = body.hurts ?? 0;
+		if (p.body !== body) {
+			p.body = body;
+			p.hurtsSeen = 0;
+		}
+		if (hurts > p.hurtsSeen) p.nightHurt = true;
+		p.hurtsSeen = hurts;
 		if (!body.dead) {
 			p.aliveTicks += 1;
-			// MON-05, the night's tally: a drop from the hp the last tick left is a hurt (a bite, a spit, hunger,
-			// poison), wherever in the tick it came from; the lowest share is Close Call's. A body that was not here
-			// last tick (a new body, a stand-up) starts from what it has
-			const hp = body.hp;
-			if (p.lastHp >= 0 && hp < p.lastHp) p.nightHurt = true;
-			if (body.hpMax > 0) p.nightLowest = math.min(p.nightLowest, math.max(0, hp) / body.hpMax);
-			p.lastHp = hp;
-		} else {
-			p.lastHp = -1;
+			// the lowest share is Close Call's
+			if (body.hpMax > 0) p.nightLowest = math.min(p.nightLowest, math.max(0, body.hp) / body.hpMax);
 		}
 		if (acted) p.activeTick = this.tick;
 	}

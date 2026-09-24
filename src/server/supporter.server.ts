@@ -8,7 +8,7 @@
 import { GAME_NAME } from "shared/module";
 import { SUPPORTER_SUBSCRIPTION_ID, supporterOffered } from "shared/data/supporter";
 import * as Analytics from "./analytics/events";
-import { SUPPORTER_REFRESH_S, SupporterStatusBook, setSupporterBook } from "./supporter/supporter";
+import { SUPPORTER_REFRESH_S, SupporterStatusBook } from "./supporter/supporter";
 
 function start(): void {
 	if (!supporterOffered(SUPPORTER_SUBSCRIPTION_ID)) return;
@@ -23,7 +23,6 @@ function start(): void {
 		changed: (player, active) => Analytics.supporterChanged(player, active),
 		log: line => print(`[${GAME_NAME}] ${line}`),
 	});
-	setSupporterBook(book);
 	const join = (player: Player): void => {
 		task.spawn(() => book.check(player, "join"));
 	};

@@ -37,6 +37,9 @@ globalThis.pcall ??= (fn, ...a) => {
 		return [false, e instanceof Error ? e.message : e];
 	}
 };
+// Luau's string.char, which shared/admin/ops.ts reads at load (its safeText)
+globalThis.string ??= {};
+globalThis.string.char ??= (...codes) => String.fromCharCode(...codes);
 
 const TIT = require(join(SRC, "shared/data/titles.ts"));
 const SAVE = require(join(SRC, "shared/game/save.ts"));
@@ -52,6 +55,10 @@ const P = require(join(SRC, "shared/net/protocol.ts"));
 const { createWorld } = require(join(SRC, "shared/game/world.ts"));
 const SUP = require(join(SRC, "shared/data/supporter.ts"));
 const SUPSRV = require(join(SRC, "server/supporter/supporter.ts"));
+const { applyPlayerDamage } = require(join(SRC, "shared/game/player.ts"));
+const { ServerVaults } = require(join(SRC, "server/sim/vault.ts"));
+const VAULT = require(join(SRC, "shared/sim/vault.ts"));
+const OPS = require(join(SRC, "shared/admin/ops.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -450,6 +457,9 @@ section(
 	const QUIET = arrive(2, 503); // no kill, no scratch, on world day 10: Ghost
 	const OTHER = arrive(3, 504); // a gun kill and a scratch: only the night's shared ones
 	arrive(4, ASSISTED); // an admin helped this run: nothing at all
+	// LOW2 (review of 97cd734): bitten at 04:00 and healed back to full before the tick ends -- the hp the tick leaves
+	// is what it was, and still that was a bite: no Ghost
+	const HEALED = arrive(5, 506);
 	const TICK_DT = 1 / sim.simHz;
 	const RELOAD = 1 << P.EdgeShift.Reload;
 	const press = sp => {
@@ -460,6 +470,8 @@ section(
 	let killed = false;
 	let hurt = false;
 	let scratched = false;
+	let bittenAndHealed = false;
+	// every hurt through the server's own damage path (shared/game/player.ts), as a bite lands: the body counts it
 	const done = () => clock.day === 10 && clock.dayTime >= 6;
 	while (!done() && guard-- > 0) {
 		for (const sp of players) {
@@ -475,11 +487,17 @@ section(
 		}
 		if (night && clock.dayTime >= 2 && !hurt) {
 			hurt = true;
-			HURT.state.hp = HURT.state.hpMax * 0.08;
+			applyPlayerDamage(HURT.state, HURT.save, HURT.state.hp - HURT.state.hpMax * 0.08, true);
 		}
 		if (night && clock.dayTime >= 3 && !scratched) {
 			scratched = true;
-			OTHER.state.hp -= 1;
+			applyPlayerDamage(OTHER.state, OTHER.save, 1, true);
+		}
+		if (night && clock.dayTime >= 4 && !bittenAndHealed) {
+			bittenAndHealed = true;
+			const hp0 = HEALED.state.hp;
+			applyPlayerDamage(HEALED.state, HEALED.save, 30, true);
+			HEALED.state.hp = hp0;
 		}
 		sim.step();
 		clock.step(TICK_DT);
@@ -503,6 +521,11 @@ section(
 		"um tiro e um arranhao: nenhum dos titulos da noite limpa",
 	);
 	checkEq(unlocks.filter(([u]) => u === ASSISTED).length, 0, "a run assistida nao ganha titulo nenhum");
+	check(
+		of(HEALED).includes(ID.Survivor) && !of(HEALED).includes(ID.Ghost) && (HEALED.state.hurts ?? 0) >= 1,
+		"LOW2: mordido e curado de volta no mesmo tick (o hp nao caiu entre dois ticks): o golpe conta, nada de Ghost",
+		JSON.stringify(of(HEALED)),
+	);
 	check(
 		unlocks.length === new Set(unlocks.map(x => x.join(":"))).size(),
 		"cada titulo anunciado uma vez por sobrevivente",
@@ -534,6 +557,42 @@ section(
 		unlocks.some(([u, t]) => u === maker.userId && t === ID.Safecracker),
 		"o cofre que o trabalho dele abriu: Safecracker",
 	);
+	// LOW3 (review of 97cd734): two survivors at one vault door crack it together -- the real ServerVaults tells the
+	// crack for EVERY worker on it, not only for the one its step happened to count; one who walked off gets nothing
+	{
+		const door = { id: 77, x: 0, y: 0, w: 20, h: 20, tag: VAULT.VAULT_TAG, bankId: 1 };
+		const cracked = [];
+		const vaults = new ServerVaults({
+			world: { solids: [door] },
+			out: { queue: () => {} },
+			reach: body => body.near !== false,
+			onCracked: (d, slot) => cracked.push([d.id, slot]),
+		});
+		const crowbar = () => {
+			const s = SAVE.defaultSave();
+			s.invenWeapon[VAULT.VAULT_TOOL_INDEX] = 1;
+			return s;
+		};
+		const crew = [0, 1, 2].map(slot => ({ slot, save: crowbar(), body: { dead: false, near: true } }));
+		for (const w of crew) vaults.press(w.slot, w.save, door);
+		crew[2].body.near = false; // walked off at once: no longer working it
+		for (let t = 0; t < VAULT.VAULT_CRACK_S + 1 && door.open !== true; t += 0.1) {
+			for (const w of crew) vaults.hold(w.slot, w.body, w.save, true);
+			vaults.step(0.1);
+		}
+		const slots = cracked.map(([, s]) => s).sort();
+		check(
+			door.open === true && cracked.every(([id]) => id === 77) && same(slots, [0, 1]),
+			"LOW3: dois no mesmo cofre -- o cofre abre e o crack e contado para os DOIS (quem saiu antes, nao)",
+			JSON.stringify(cracked),
+		);
+		const pair = [players[1], players[2]];
+		for (const [, slot] of cracked) sim.creditVaultCracked(pair[slot].slot);
+		check(
+			pair.every(sp => unlocks.some(([u, t]) => u === sp.userId && t === ID.Safecracker)),
+			"...e, pelo gancho do servidor, os dois ganham Safecracker",
+		);
+	}
 	const helper = players[4];
 	const n = unlocks.length;
 	sim.backpack.onOutcome(
@@ -550,6 +609,106 @@ section(
 			/if \(placed\.kind === "placed"\) this\.creditPlaced\(sp\);/.test(simSrc) &&
 			/killCredited: \(slot, _zombieType, weaponKind\) => this\.noteNightKill\(slot, weaponKind\)/.test(simSrc),
 		"e os ganchos estao ligados onde o servidor decide (o cofre da interacao, a obra do build, o golpe do Progress)",
+	);
+}
+
+// ---------------------------------------------------------------- 3b. an admin's help makes the run assisted
+
+section("3b) M1: a edicao do admin que ajuda a run (item, nivel, pontos, moedas) a torna assistida; baixar, nao");
+{
+	const base = () => {
+		const s = SAVE.defaultSave();
+		s.level = 10;
+		s.money = 100;
+		return s;
+	};
+	const edited = ops => {
+		const before = base();
+		const after = SAVE.sanitizeStoredSave(before);
+		OPS.applyAdminOps(after, ops);
+		return OPS.adminEditHelps(before, after);
+	};
+	const helps = [
+		["moedas 100 -> 500", [{ op: "stat", field: "money", value: 500 }]],
+		["nivel 10 -> 20", [{ op: "stat", field: "level", value: 20 }]],
+		["XP", [{ op: "stat", field: "exp", value: 50 }]],
+		["pontos de habilidade", [{ op: "stat", field: "skillPoint", value: 5 }]],
+		["uma arma", [{ op: "item", group: "weapon", index: 3, count: 1, mode: "min" }]],
+		["municao", [{ op: "item", group: "ammo", index: 0, count: 100, mode: "set" }]],
+		["um material", [{ op: "item", group: "etc", index: 0, count: 10, mode: "min" }]],
+		["um usavel", [{ op: "item", group: "use", index: 0, count: 3, mode: "min" }]],
+	];
+	const notHelp = [
+		["moedas 100 -> 0", [{ op: "stat", field: "money", value: 0 }]],
+		["nivel 10 -> 5", [{ op: "stat", field: "level", value: 5 }]],
+		["um traje (so aparencia, MON-01)", [{ op: "costume", id: 0, owned: true }]],
+		["o mesmo nivel", [{ op: "stat", field: "level", value: 10 }]],
+	];
+	const wrongHelp = helps.filter(([, ops]) => !edited(ops)).map(([w]) => w);
+	const wrongNot = notHelp.filter(([, ops]) => edited(ops)).map(([w]) => w);
+	check(wrongHelp.length === 0, `ajuda (run assistida): ${helps.map(([w]) => w).join(", ")}`, wrongHelp.join(", "));
+	check(wrongNot.length === 0, `nao ajuda: ${notHelp.map(([w]) => w).join(", ")}`, wrongNot.join(", "));
+	// a respec hands the same points back: not help; a cosmetic item (an outfit or a pet) is a look, not help
+	const spent = base();
+	spent.skillLevels[1] = 3;
+	spent.skillPoint = 6;
+	const respec = SAVE.sanitizeStoredSave(spent);
+	OPS.applyAdminOps(respec, [{ op: "resetSkills" }]);
+	const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+	const { cosmeticSlotOf } = require(join(SRC, "shared/data/cosmetics.ts"));
+	const pet = EQUIPS.findIndex((_, i) => cosmeticSlotOf(i) !== 0);
+	check(
+		respec.skillPoint === 9 &&
+			!OPS.adminEditHelps(spent, respec) &&
+			pet >= 0 &&
+			!edited([{ op: "item", group: "equip", index: pet, count: 1 }]),
+		"um resetSkills (os mesmos pontos de volta) e um item cosmetico (traje ou pet) nao sao ajuda",
+		`skillPoint ${respec.skillPoint}, cosmetico ${pet}`,
+	);
+	// the server wires both: the edit in adminEdit, the pickup of an admin's drop in adminWorld
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	const world = readFileSync(join(SRC, "server/admin/adminWorld.ts"), "utf8");
+	check(
+		/const helped = ops !== undefined && adminEditHelps\(before, edited\);/.test(main) &&
+			/s\.assistedRunRev === before\.runRev \|\| dayMoved \|\| helped/.test(main) &&
+			/function taken\([\s\S]{0,400}deps\.markAssisted\(player\)/.test(world),
+		"ligado no servidor: adminEdit marca a run assistida, e quem pega um item que o admin largou tambem (test:body 17, test:admin 22)",
+	);
+}
+
+// ---------------------------------------------------------------- 3c. the life's deaths reach the wardrobe
+
+section("3c) LOW1: a carteira leva as mortes da vida (o Unbroken do guarda-roupa), e so as da vida atual");
+{
+	const server = SAVE.defaultSave();
+	server.runRev = 3;
+	server.lifeDeaths = 2;
+	const w = SAVE.walletOf(server);
+	const client = SAVE.defaultSave();
+	client.runRev = 3;
+	SAVE.applyWallet(client, w);
+	check(w.lifeDeaths === 2 && client.lifeDeaths === 2, "a carteira do servidor leva lifeDeaths, e o cliente o adota");
+	const next = SAVE.defaultSave();
+	next.runRev = 4;
+	SAVE.applyWallet(next, w);
+	check(next.lifeDeaths === 0, "a carteira da vida anterior, chegando atrasada, nao devolve as mortes a vida nova");
+	const older = { ...w };
+	delete older.lifeDeaths;
+	const kept = SAVE.defaultSave();
+	kept.runRev = 3;
+	kept.lifeDeaths = 1;
+	SAVE.applyWallet(kept, older);
+	check(kept.lifeDeaths === 1, "a carteira de um servidor antigo (sem o campo) nao mexe em nada");
+	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	check(
+		/const achievements = save\.achievements\.join\(","\) \+ `\|\$\{save\.lifeDeaths\}`;/.test(main),
+		"a assinatura da carteira inclui lifeDeaths: uma morte empurra a carteira (main.server.ts walletSignature)",
+	);
+	const onboarding = readFileSync(join(SRC, "client/onboarding/index.ts"), "utf8");
+	check(
+		/deathsAtRun = ctx\.save\.lifeDeaths;/.test(onboarding) &&
+			/\(deathsAtRun \?\? save\.lifeDeaths\) === 0/.test(onboarding),
+		"e a tela de morte le as mortes 'como carregadas' (a do run), nao as que a carteira ja trouxe desta morte",
 	);
 }
 
@@ -765,6 +924,35 @@ section("5) Supporter: so a palavra do servidor, perguntada ao MarketplaceServic
 			serverSide.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, ""),
 		),
 		"MON-01: o codigo do Supporter nao toca save, moedas, XP, titulo nem conquista (so pergunta e marca)",
+	);
+	// LOW4 (review of 97cd734): nothing else on the server -- nor in shared code the server runs -- reads the mark or
+	// asks the book, so nothing of the game can come to depend on a subscription. The client reads it (the nameplate)
+	const supporterFiles = new Set([
+		"server/supporter/supporter.ts",
+		"server/supporter.server.ts",
+		"shared/data/supporter.ts",
+	]);
+	const readers = [];
+	const scan = dir => {
+		for (const f of readdirSync(dir)) {
+			const p = join(dir, f);
+			if (statSync(p).isDirectory()) scan(p);
+			else if (p.endsWith(".ts")) {
+				const rel = relative(SRC, p).replace(/\\/g, "/");
+				if (supporterFiles.has(rel)) continue;
+				const code = readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+				if (/pz_supporter|SUPPORTER_ATTRIBUTE|SupporterStatusBook|isSupporter\(|supporterBook/.test(code)) {
+					readers.push(rel);
+				}
+			}
+		}
+	};
+	scan(join(SRC, "server"));
+	scan(join(SRC, "shared"));
+	check(
+		readers.length === 0 && !/export function supporterBook|setSupporterBook/.test(serverSide),
+		"LOW4: fora dos arquivos do Supporter, nada no servidor (nem no codigo compartilhado) le a marca ou pergunta ao livro",
+		readers.join(", "),
 	);
 
 	// the client's mirror: a fake Players with attribute signals; a server-set mark reaches isSupporterUser

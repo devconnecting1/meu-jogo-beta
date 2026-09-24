@@ -11,7 +11,10 @@
  *             on it removes its entry; so does the shutdown (`withdraw`), which also wins over a write still in
  *             flight. Only a public, live server publishes: a private or reserved server is not anybody's to join
  *             from a list, and Studio has no JobId. The entry names its place: another place of the experience is
- *             never listed nor joined.
+ *             never listed nor joined. And its BUILD (`pv` game.PlaceVersion, `sv` SAVE_VERSION): a server of another
+ *             build is never listed nor joined either -- an old server left running after a publish would rewrite a
+ *             newer save without what it does not know (review of 97cd734, H1). PlaceVersion is 0 in Studio (and in
+ *             an unpublished place): there the SAVE_VERSION still tells two builds apart.
  *   list      `list(player)`: GetRangeAsync over the map, at most READ_COUNT entries, cached READ_CACHE_S for the
  *             whole server (every lobby on it shares one read), and read only when somebody asks. The rows skip this
  *             server and anything stale or malformed, and come sorted: not full first, then the day closest to the
@@ -38,13 +41,14 @@
  * Pure: the MemoryStore map, the teleport and the clocks are ports (`startServerList` plugs the real services in), so
  * tools/test-serverlist.mjs runs all of it under Node against fakes, quota included.
  */
+import { SAVE_VERSION } from "shared/game/save";
 import { SERVER_ROWS_MAX, ServerRow, TownRefusal, TownResponse, isJobId } from "shared/net/townNet";
 import * as Analytics from "../analytics/events";
 
 /** the sorted map every public server writes its entry to (memory stores are kept apart between Studio and live) */
 export const SERVER_LIST_MAP = "ProjectZ_Servers";
-/** the entry's shape version */
-export const ENTRY_VERSION = 1;
+/** the entry's shape version (2: the build, `pv` and `sv`; a v1 entry is an older build's, never listed nor joined) */
+export const ENTRY_VERSION = 2;
 /** how often the wiring calls `tick` (s): no request unless an entry is due */
 export const TICK_S = 5;
 /** an entry that changed is written at most this often (s) */
@@ -98,6 +102,12 @@ export interface ServerListHost {
 	jobId: string;
 	/** game.PlaceId: an entry of another place of the experience is never listed nor joined (review of 0b44458, L6) */
 	placeId: number;
+	/**
+	 * This server's build: game.PlaceVersion (0 in Studio) and SAVE_VERSION. An entry of another build is never listed
+	 * nor joined (review of 97cd734, H1)
+	 */
+	placeVersion: number;
+	saveVersion: number;
 	/** undefined: MemoryStoreService could not be had */
 	store: ListStore | undefined;
 	/** undefined: TeleportService could not be had */
@@ -142,6 +152,9 @@ interface Entry {
 	kind: string;
 	/** the place it runs (game.PlaceId) */
 	place: number;
+	/** its build: game.PlaceVersion and SAVE_VERSION */
+	pv: number;
+	sv: number;
 	seed: number;
 	day: number;
 	n: number;
@@ -159,9 +172,32 @@ export function readEntry(v: unknown): Entry | undefined {
 	if (!typeIs(v, "table")) return undefined;
 	const r = v as Record<string, unknown>;
 	if (r.v !== ENTRY_VERSION || !typeIs(r.kind, "string") || !wholeIn(r.place, 0, 1e15)) return undefined;
+	if (!wholeIn(r.pv, 0, 1e12) || !wholeIn(r.sv, 0, 1e6)) return undefined;
 	if (!wholeIn(r.seed, 1, 2147483646) || !wholeIn(r.day, 1, 1e6)) return undefined;
 	if (!wholeIn(r.max, 1, 100) || !wholeIn(r.n, 0, r.max) || !wholeIn(r.t, 0, 1e12)) return undefined;
-	return { v: r.v, kind: r.kind, place: r.place, seed: r.seed, day: r.day, n: r.n, max: r.max, t: r.t };
+	return {
+		v: r.v,
+		kind: r.kind,
+		place: r.place,
+		pv: r.pv,
+		sv: r.sv,
+		seed: r.seed,
+		day: r.day,
+		n: r.n,
+		max: r.max,
+		t: r.t,
+	};
+}
+
+/** an entry this server may list and join: public, of this very place AND build, and fresh */
+function joinable(h: ServerListHost, entry: Entry): boolean {
+	return (
+		entry.kind === "public" &&
+		entry.place === h.placeId &&
+		entry.pv === h.placeVersion &&
+		entry.sv === h.saveVersion &&
+		h.now() - entry.t <= ENTRY_STALE_S
+	);
 }
 
 /** request units one minute can cost this server at most, with `players` on it (the header's arithmetic) */
@@ -225,6 +261,8 @@ export class ServerList {
 			v: ENTRY_VERSION,
 			kind: "public",
 			place: h.placeId,
+			pv: h.placeVersion,
+			sv: h.saveVersion,
 			seed: town.seed,
 			day: math.max(1, math.floor(town.day)),
 			n: math.clamp(math.floor(h.players()), 0, max),
@@ -331,12 +369,10 @@ export class ServerList {
 		if (h.kind === "studio") return { ok: false, reason: "studio" };
 		const entries = this.entries();
 		if (entries === undefined) return { ok: false, reason: "unavailable" };
-		const now = h.now();
 		const best = h.bestDay(player) ?? 1;
 		const rows = new Array<ServerRow>();
 		for (const { jobId, entry } of entries) {
-			if (jobId === h.jobId || entry.kind !== "public" || entry.place !== h.placeId) continue;
-			if (now - entry.t > ENTRY_STALE_S) continue;
+			if (jobId === h.jobId || !joinable(h, entry)) continue;
 			rows.push({ jobId, seed: entry.seed, day: entry.day, players: entry.n, max: entry.max });
 		}
 		rows.sort((a, b) => {
@@ -389,14 +425,8 @@ export class ServerList {
 			return { ok: false, reason: "unavailable" };
 		}
 		const entry = readEntry(value);
-		if (
-			entry === undefined ||
-			entry.kind !== "public" ||
-			entry.place !== h.placeId ||
-			h.now() - entry.t > ENTRY_STALE_S
-		) {
-			return { ok: false, reason: "gone" };
-		}
+		// another build's server is "gone" for this one: joining it would hand the player's save to other code (H1)
+		if (entry === undefined || !joinable(h, entry)) return { ok: false, reason: "gone" };
 		if (entry.n >= entry.max) return { ok: false, reason: "full" };
 		const row: ServerRow = { jobId, seed: entry.seed, day: entry.day, players: entry.n, max: entry.max };
 		const join: Join = { jobId, row, at: h.clock() };
@@ -466,7 +496,7 @@ export class ServerList {
 /** the host's pieces that are not a Roblox service (server/match/townServices.ts hands them over) */
 export type ServerListGame = Omit<
 	ServerListHost,
-	"kind" | "jobId" | "placeId" | "store" | "teleport" | "clock" | "now" | "wait"
+	"kind" | "jobId" | "placeId" | "placeVersion" | "saveVersion" | "store" | "teleport" | "clock" | "now" | "wait"
 >;
 
 /**
@@ -532,6 +562,8 @@ export function startServerList(game_: ServerListGame, notify: (player: Player, 
 		kind,
 		jobId: game.JobId,
 		placeId: game.PlaceId,
+		placeVersion: game.PlaceVersion,
+		saveVersion: SAVE_VERSION,
 		store,
 		teleport,
 		clock: () => os.clock(),

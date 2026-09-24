@@ -2388,11 +2388,17 @@ section(
 		);
 		const ach0 = bsave.achievements[WOODS] ?? 0;
 		const inv0 = bsave.invenEtc[WOOD] ?? 0;
+		const paid0 = t.s.sim.paysRewards({ userId: t.bob.UserId });
 		const got = t.s.sim.items.pickup(bsave, wood.x, wood.y, wood, b.slot);
 		verify(
 			"Bob picks it up: the wood is his, the Woods collector credit is not",
 			got.ok && (bsave.invenEtc[WOOD] ?? 0) === inv0 + 5 && (bsave.achievements[WOODS] ?? 0) === ach0,
 			`inventory ${inv0}->${bsave.invenEtc[WOOD]} achievement ${ach0}->${bsave.achievements[WOODS]}`,
+		);
+		verify(
+			"...and Bob's run is assisted from then: what an admin handed over made it easier (review of 97cd734, M1)",
+			paid0 === true && t.s.sim.paysRewards({ userId: t.bob.UserId }) === false,
+			`pays(bob) ${paid0} -> ${t.s.sim.paysRewards({ userId: t.bob.UserId })}`,
 		);
 		const taken = t.audit().find(e => e.action === "world:taken");
 		verify(

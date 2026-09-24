@@ -5,7 +5,7 @@
  *
  *   ┌ Last Town Supporter ───────────────────────────────────── NOT SUBSCRIBED ┐
  *   │ ┌ preview ────────────┐  What you get                                     │
- *   │ │   (your survivor)   │  ♥ A heart beside your name, for everyone to see. │
+ *   │ │   (your survivor)   │  ♥ A heart beside your name, for everyone to see. │  (♥: the pixel heart)
  *   │ │  LV 12 ♥ Editor3D   │  Your melee swing trail in the Supporter rose.    │
  *   │ └─────────────────────┘  What it never gives                              │
  *   │                          No coins, XP, items or titles: nothing that       │
@@ -17,8 +17,16 @@
  * - Honest by construction (BEM-02, BEM-08, MON-01): what it gives, what it never gives, that it renews monthly and can
  *   be cancelled -- and the price and period as the platform states them (`GetSubscriptionProductInfoAsync`, the
  *   player's own currency and wording), because the Roblox guidelines ask for price and duration wherever it is
- *   offered. The button says "See price" (never "BUY NOW"); the platform's prompt shows the price again before
- *   anything is paid. Subscribed: the status says so and the button offers the platform's cancel prompt, as plainly.
+ *   offered. The button says "See price" (never "BUY NOW") and stays disabled until the platform has stated that price
+ *   here; a subscription the platform says is not for sale is not offered at all (the button goes, the price line says
+ *   so). An answer that did not come is asked again the next time the tab opens. The platform's prompt shows the price
+ *   again before anything is paid. Subscribed: the status says so and the button offers the platform's cancel prompt,
+ *   as plainly (review of 97cd734, LOW5).
+ * - The heart here is the menus' pixel heart (client/ui/pixelIcon.ts), in the Supporter rose. On the nameplate it stays
+ *   the "♥" glyph: the plate is text only, with a pixel shadow under every line and no surface behind it (DESIGN_RULES
+ *   MON-05 "Placa, sem fundo"; test:backpack 9b counts none), measured for contrast over every ground at night
+ *   (test:world-art §9), and redrawn in the world every frame from a pool -- nine opaque Frames and a shadow of their own
+ *   per plate would break all three for the same heart.
  * - Who is subscribed is the SERVER's word (the `pz_supporter` attribute, client/systems/supporterClient.ts); the page
  *   repaints when it changes (a purchase registered, a lapse), and writes nothing else.
  * - The preview is the street's own drawing: your survivor and your nameplate WITH the heart, so what you see here is
@@ -31,7 +39,8 @@ import { SUPPORTER_SUBSCRIPTION_ID } from "shared/data/supporter";
 import { outfitLookOf } from "shared/game/save";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { drawingBox } from "./drawingBox";
-import { Nameplate, SUPPORTER_MARK, profileOf } from "./nameplate";
+import { Nameplate, profileOf } from "./nameplate";
+import { PixelIcon } from "./pixelIcon";
 import { toast } from "./popup";
 import { OVER_WORLD, TEXT, THEME, fontOf, space } from "./theme";
 import { Button, Keycap, makeFrame, makeLabel, setButtonEnabled, setButtonVariant } from "./widgets";
@@ -43,6 +52,9 @@ const KEY_H = 28;
 const ACTION_H = 44;
 const PREVIEW_W = 300;
 const LINE_H = 22;
+/** the pixel heart before "A heart beside your name": its side, and the gap to the words */
+const HEART_S = 14;
+const HEART_GAP = 8;
 
 /** the lines of the page (lang keys) */
 export const SUPPORTER_TEXT = {
@@ -125,8 +137,9 @@ export function mountSupporterPage(
 	const tx = inset + PREVIEW_W + space(5);
 	const tw = w - tx - inset;
 	let ty = top;
-	const line = (name: string, text: string, color: Color3, bold: boolean, rows = 1): TextLabel => {
-		const l = makeLabel(sec.frame, name, text, tx, ty, tw, LINE_H * rows, bold ? TEXT.base : TEXT.sm, color, {
+	const line = (name: string, text: string, color: Color3, bold: boolean, rows = 1, indent = 0): TextLabel => {
+		const size = bold ? TEXT.base : TEXT.sm;
+		const l = makeLabel(sec.frame, name, text, tx + indent, ty, tw - indent, LINE_H * rows, size, color, {
 			font: bold ? BOLD : undefined,
 			align: "left",
 			valign: "top",
@@ -136,7 +149,9 @@ export function mountSupporterPage(
 		return l;
 	};
 	line("GetsHead", tr(SUPPORTER_TEXT.getsHead), THEME.foreground, true);
-	line("GetsHeart", `${SUPPORTER_MARK}  ${tr(SUPPORTER_TEXT.getsHeart)}`, OVER_WORLD.supporter, false);
+	// the pixel heart, centred on the first text line (the label hangs from its top)
+	PixelIcon(sec.frame, "Heart", "heart", tx + HEART_S / 2, ty + TEXT.sm / 2 + 1, HEART_S, OVER_WORLD.supporter, z);
+	line("GetsHeart", tr(SUPPORTER_TEXT.getsHeart), OVER_WORLD.supporter, false, 1, HEART_S + HEART_GAP);
 	line("GetsTrail", tr(SUPPORTER_TEXT.getsTrail), THEME.foreground, false);
 	ty += space(2);
 	line("NeverHead", tr(SUPPORTER_TEXT.neverHead), THEME.foreground, true);
@@ -148,6 +163,11 @@ export function mountSupporterPage(
 	const note = line("Note", "", OVER_WORLD.supporter, true, 2);
 
 	let busy = false;
+	/** the price and period as the platform stated them ("R$ 99/month"); undefined until it answered with one */
+	let priceText: string | undefined;
+	/** the platform's IsForSale (true until it says otherwise) */
+	let forSale = true;
+	let asking = false;
 	const act = (): void => {
 		if (busy) return;
 		if (localIsSupporter()) {
@@ -160,6 +180,8 @@ export function mountSupporterPage(
 			if (!ok) toast(ctx, tr(SUPPORTER_TEXT.cancelHint), "info");
 			return;
 		}
+		// offered only with its price on the page, and only while the platform sells it
+		if (priceText === undefined || !forSale) return;
 		if (!promptSupporter()) toast(ctx, tr(SUPPORTER_TEXT.unavailable), "error");
 	};
 	const action = Button(sec.frame, "Action", "", {
@@ -172,29 +194,43 @@ export function mountSupporterPage(
 		onClick: act,
 	});
 
-	const refresh = (): void => {
+	/** writes the status, the price line, the note and the button from what is known now (no Instance is created) */
+	const paint = (): void => {
 		if (frame.Parent === undefined) return;
 		const active = localIsSupporter();
 		Kit.setValueKey(status, tr(active ? SUPPORTER_TEXT.active : SUPPORTER_TEXT.inactive));
 		note.Text = active ? tr(SUPPORTER_TEXT.thanks) : "";
+		price.Text = !forSale ? tr(SUPPORTER_TEXT.unavailable) : (priceText ?? tr(SUPPORTER_TEXT.priceUnknown));
 		action.Text = tr(active ? SUPPORTER_TEXT.cancel : SUPPORTER_TEXT.see);
 		setButtonVariant(action, active ? "secondary" : "default");
-		setButtonEnabled(action, !busy);
+		// a subscriber can always reach the cancel prompt; the offer needs its price on the page, and a sale
+		action.Visible = active || forSale;
+		setButtonEnabled(action, !busy && (active || (forSale && priceText !== undefined)));
 		placePlate();
 	};
+	/** the price as the platform states it: a yield, off the opening frame; asked again at the next refresh if it failed */
+	const askPrice = (): void => {
+		if (asking || priceText !== undefined || !forSale) return;
+		asking = true;
+		task.spawn(() => {
+			const [ok, info] = pcall(() =>
+				game.GetService("MarketplaceService").GetSubscriptionProductInfoAsync(SUPPORTER_SUBSCRIPTION_ID),
+			);
+			asking = false;
+			if (!ok || frame.Parent === undefined || !typeIs(info, "table")) return;
+			const i = info as unknown as Record<string, unknown>;
+			forSale = i.IsForSale !== false;
+			const shown = typeIs(i.DisplayPrice, "string") ? i.DisplayPrice : "";
+			const period = typeIs(i.DisplaySubscriptionPeriod, "string") ? i.DisplaySubscriptionPeriod : "";
+			if (shown !== "") priceText = `${shown}${period}`;
+			paint();
+		});
+	};
+	const refresh = (): void => {
+		paint();
+		askPrice();
+	};
 	const unsubscribe = onSupporterChanged(refresh);
-
-	// the price as the platform states it (a yield: fetched once, off the opening frame)
-	task.spawn(() => {
-		const [ok, info] = pcall(() =>
-			game.GetService("MarketplaceService").GetSubscriptionProductInfoAsync(SUPPORTER_SUBSCRIPTION_ID),
-		);
-		if (!ok || frame.Parent === undefined || !typeIs(info, "table")) return;
-		const i = info as unknown as Record<string, unknown>;
-		const shown = typeIs(i.DisplayPrice, "string") ? i.DisplayPrice : "";
-		const period = typeIs(i.DisplaySubscriptionPeriod, "string") ? i.DisplaySubscriptionPeriod : "";
-		if (shown !== "") price.Text = `${shown}${period}`;
-	});
 
 	refresh();
 	return {

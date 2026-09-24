@@ -66,6 +66,13 @@ export interface PlayerState {
 	 */
 	sinceHurt?: number;
 	/**
+	 * Hits this body has taken, counted WHERE the hp is taken (`applyPlayerDamage`, `itemUseEffect`'s rotten meat,
+	 * `stepVitals`' hunger and poison), never guessed from the hp afterwards: a bite healed back within the same tick is
+	 * still a bite. Only grows; undefined = none. The server's night tally reads it (MON-05 Untouched / Ghost,
+	 * server/sim/simulation.ts `notePresence`; review of 97cd734, LOW2). Never on the wire, never saved.
+	 */
+	hurts?: number;
+	/**
 	 * What took this body's hp LAST while it was still alive (shared/data/deathCause.ts `HurtBy`): a blow
 	 * (`applyPlayerDamage`: a bite, a boss, a blast, a crash), the empty stomach, poison, or rotten meat. At the death it
 	 * says what was lethal -- the death screen's cause and the analytics `Died` field read it (UI-13 / BEM-08: "Starved."
@@ -231,7 +238,10 @@ export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: nu
 
 	if (u.hp < 0 && p.hp > 0) p.lastHurt = HurtBy.Item;
 	p.hp = math.clamp(p.hp + u.hp, -1000, p.hpMax);
-	if (u.hp < 0) p.sinceHurt = 0;
+	if (u.hp < 0) {
+		p.sinceHurt = 0;
+		p.hurts = (p.hurts ?? 0) + 1;
+	}
 	p.hungry = math.clamp(p.hungry + u.hunger, 0, p.hungryMax);
 	// buff lengths are minutes; using another one refreshes (never shortens) the buff
 	if (u.speed > 0) p.buffs.speed = math.max(p.buffs.speed, u.speed * 60);
@@ -275,7 +285,10 @@ export function applyPlayerDamage(p: PlayerState, save: PlayerSaveData, raw: num
 	}
 	if (dd > 0 && p.hp > 0) p.lastHurt = HurtBy.Blow;
 	p.hp -= dd;
-	if (dd > 0) p.sinceHurt = 0;
+	if (dd > 0) {
+		p.sinceHurt = 0;
+		p.hurts = (p.hurts ?? 0) + 1;
+	}
 	p.hitFlash = 1;
 	if (!p.attacked) {
 		p.attacked = true;
