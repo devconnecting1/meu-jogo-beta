@@ -19,15 +19,17 @@
  *   4. RESERVE + WARM. `warm(n)` makes at most n sprites a call, hidden, at their ZIndex, rounded / outlined as
  *      reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no stroke left on).
  *   5. THE WARM-UP PROFILE. poolWarmup.ts reserves what the reference fight draws, flat and with the characters'
- *      art: on the warmed pool the fight creates no Frame, UICorner or UIStroke, and no layer is reserved far past
- *      what the fight shows.
+ *      art: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel (the characters' labels
+ *      are built hidden by the warm-up), and no layer is reserved far past what the fight shows.
  *   6. THE DRIVER. warmFightPool warms only while the lobby or its menus are up (not behind the boot logo, not
  *      during a run), WARM_PER_FRAME sprites a frame, and lets go of Heartbeat once the pool is warm.
  *   7. THE API. drawCount, poolSize, acquire, release and releaseAll across the buckets.
  *   8. ONE CLIP. The world layer has no clip of its own: its only child is the renderer's layer, which fills it and
  *      clips to the same rect (rotation support off, nothing rotated above either: the two clips were the same).
  *   9. NO WRITE WITHOUT A CHANGE. A steady music track writes no Volume; the night layer and the touch sticks are
- *      written only when they move (source guards: those two only run on the whole client).
+ *      written only when they move (source guards: those two only run on the whole client); the audio listener is
+ *      moved (a CFrame, an engine call) only when the camera did; a ground item's glint is drawn only while it
+ *      flashes (source guard).
  *  10. NO GARBAGE ON THE ACTOR PATHS (M4). A walking horde -- hit flashes fading, spitters winding up, a lit fuse --
  *      builds no Color3 once warm, draws from 4 option tables and writes no property with the value it already had;
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
@@ -493,6 +495,47 @@ section("4) reserve + warm: built ahead, hidden, at their ZIndex, rounded / outl
 		kids[0].FindFirstChildOfClass("UICorner").CornerRadius.Offset === 0,
 		"...and a rounded slot drawn square is square again",
 	);
+
+	// images: a character's cell is a Frame and its ImageLabel, and both can be built ahead
+	const ri = new Renderer(gui.make("Frame"), "Sprites");
+	ri.setView(1280, 720);
+	ri.reserve(Z.zombie, 6, 0, 0, 4);
+	const ci = gui.stats.created;
+	while (ri.warm(3) > 0);
+	const cells = ri.layer.GetChildren();
+	const labels = cells.map(f => f.FindFirstChildOfClass("ImageLabel")).filter(l => l !== undefined);
+	check(
+		cells.length === 6 &&
+			labels.length === 4 &&
+			gui.stats.created - ci === 10 &&
+			labels.every(l => l.Visible === false && (l.Image ?? "") === ""),
+		"reserve(z, 6, 0, 0, 4): 6 sprites, 4 with a hidden ImageLabel that shows no picture yet (10 Instances)",
+		`${cells.length} sprites, ${labels.length} labels, ${gui.stats.created - ci} Instances`,
+	);
+	const cellDraw = watch(() => {
+		ri.beginFrame();
+		for (let i = 0; i < 4; i++) {
+			ri.drawRect(cam, i * 40, 60, {
+				w: 32,
+				h: 32,
+				image: "rbxassetid://7",
+				rectX: i * 32,
+				rectY: 0,
+				rectW: 32,
+				rectH: 32,
+				zIndex: Z.zombie,
+			});
+		}
+		ri.endFrame();
+	});
+	check(
+		cellDraw.created === 0 &&
+			labels.every(
+				(l, i) => l.Visible === true && l.Image === "rbxassetid://7" && l.ImageRectOffset.X === i * 32,
+			),
+		"a sheet's cells drawn on them create nothing and show their picture and cell",
+		`${cellDraw.created} created`,
+	);
 }
 
 // ================================================================ 5. the warm-up profile
@@ -509,11 +552,13 @@ for (const [label, ids] of [
 	S.state.town = false;
 	PW.reserveFightPool(S.r, 1920, 1080, zArt, sArt);
 	const c0 = gui.stats.created;
+	const images0 = gui.stats.byClass.ImageLabel ?? 0;
 	let frames = 0;
 	while (S.r.warm(PW.WARM_PER_FRAME) > 0) frames++;
 	frames++;
 	const warmed = S.r.poolSize();
 	const instances = gui.stats.created - c0;
+	const warmedImages = (gui.stats.byClass.ImageLabel ?? 0) - images0;
 	const reserved = new Map();
 	for (const f of S.r.layer.GetChildren()) reserved.set(f.ZIndex, (reserved.get(f.ZIndex) ?? 0) + 1);
 	const byClass0 = { ...gui.stats.byClass };
@@ -528,9 +573,9 @@ for (const [label, ids] of [
 		`${label}: the characters' art is ${label === "art" ? "live" : "off"}, and the profile follows it`,
 	);
 	check(
-		made("Frame") + made("UICorner") + made("UIStroke") === 0,
-		`${label}: on the warmed pool the fight creates no Frame, UICorner or UIStroke`,
-		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes`,
+		made("Frame") + made("UICorner") + made("UIStroke") + made("ImageLabel") === 0,
+		`${label}: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel`,
+		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes, ${made("ImageLabel")} images`,
 	);
 	const over = [...reserved].filter(([z, n]) => n > (shown.get(z) ?? 0) * 1.25 + 2);
 	check(
@@ -539,7 +584,7 @@ for (const [label, ids] of [
 		over.map(([z, n]) => `z ${z}: ${n} reserved, ${shown.get(z) ?? 0} shown`).join("; "),
 	);
 	console.log(
-		`       ${label}: ${warmed} sprites (${instances} Instances) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}; the fight then made ${made("ImageLabel")} ImageLabels (born with their picture)`,
+		`       ${label}: ${warmed} sprites (${instances} Instances, ${warmedImages} of them ImageLabels) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}`,
 	);
 }
 {
@@ -730,6 +775,52 @@ section("9) no write without a change");
 			/placeAt\(this\.aimPad, this\.padAt,/.test(body) &&
 			!/this\.(joyBase|aimPad)\.Position\s*=/.test(body),
 		"the stick's base and the aim pad are placed only when they move (Hud.updateTouch, every frame)",
+	);
+
+	// the audio listener follows the camera: a CFrame and an engine call only when the camera moved (L2)
+	const { audio } = require(join(SRC, "client/audio/audio.ts"));
+	const hadCFrame = globalThis.CFrame;
+	const hadVector3 = globalThis.Vector3;
+	const hadPcall = globalThis.pcall;
+	let calls = 0;
+	globalThis.pcall = (fn, ...a) => {
+		calls++;
+		try {
+			return [true, fn(...a)];
+		} catch (e) {
+			return [false, e];
+		}
+	};
+	let cframes = 0;
+	globalThis.CFrame = class {
+		constructor() {
+			cframes++;
+		}
+	};
+	globalThis.Vector3 = class {};
+	audio.started = true;
+	audio.setListener(1000, 2000);
+	const first = cframes;
+	for (let f = 0; f < 120; f++) audio.setListener(1000 + (f % 2) * 0.4, 2000);
+	const still = cframes - first;
+	for (let f = 1; f <= 60; f++) audio.setListener(1000 + f * 3, 2000);
+	const moving = cframes - first - still;
+	audio.started = false;
+	globalThis.CFrame = hadCFrame;
+	globalThis.Vector3 = hadVector3;
+	globalThis.pcall = hadPcall;
+	const items = loop.slice(
+		loop.indexOf("private drawItems("),
+		loop.indexOf("// ---", loop.indexOf("private drawItems(")),
+	);
+	check(
+		/if \(t >= GLINT_LEN\) continue;/.test(items) && !/t < GLINT_LEN \?/.test(items),
+		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (drawItems)",
+	);
+	check(
+		first === 1 && still === 0 && moving === 60 && calls === 61,
+		"the audio listener builds a CFrame and calls the engine only when the camera moved (still or creeping: never)",
+		`first ${first}, 120 still frames ${still}, 60 moving frames ${moving}; ${calls} engine calls`,
 	);
 }
 

@@ -833,8 +833,10 @@ export class GameLoop {
 	/**
 	 * Ground items lie flat where they fell (no floating bob), turned a little, with a short shadow
 	 * cast like every other object's. Each category has its own silhouette (see ITEM_LOOKS); a brief
-	 * glint every few seconds marks them as loot. A fixed number of sprites per item (the glint is
-	 * drawn transparent between flashes) keeps the renderer's pool order stable.
+	 * glint every few seconds marks them as loot. The glint's two sprites exist only while it flashes: its ZIndex is
+	 * its own bucket in the renderer's pool (one sub-pool per ZIndex), so one appearing or going moves no other
+	 * sprite. It used to be drawn transparent between flashes to keep a single pool's order stable -- two sprites per
+	 * item on screen, about 83 % of the time for nothing.
 	 */
 	private drawItems(r: Renderer, cam: Camera, v: ViewRect): void {
 		for (const it of this.world.items) {
@@ -865,7 +867,8 @@ export class GameLoop {
 			}
 			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
 			const t = (this.clock + it.id * 0.61) % GLINT_PERIOD;
-			const s = t < GLINT_LEN ? math.sin((t / GLINT_LEN) * math.pi) : 0;
+			if (t >= GLINT_LEN) continue;
+			const s = math.sin((t / GLINT_LEN) * math.pi);
 			const gx = it.x - 10;
 			const gy = it.y - 11;
 			const arm = 3 + GLINT_ARM * s;
