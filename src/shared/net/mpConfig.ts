@@ -272,7 +272,7 @@ export const INTENT_BURST = 30;
 export const INTENT_HOLD_TICKS = 30;
 /** backpack verbs one survivor may have waiting in the simulation at once (the wire rate caps it anyway) */
 export const INTENT_QUEUE_MAX = 8;
-/** ShopAction (already enforced by server/main.server.ts) */
+/** ShopAction: the bucket of shared/net/shopGuard.ts, kept by the server and by the client alike */
 export const SHOP_RATE = 2;
 export const SHOP_BURST = 6;
 /**

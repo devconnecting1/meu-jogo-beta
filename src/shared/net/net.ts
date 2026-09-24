@@ -91,7 +91,12 @@ export interface SaveAckPayload {
 export type StoreState = "saving" | "saved" | "failing" | "stopped";
 
 export type ShopActionRequest =
-	| { kind: "buyPack"; packId: number }
+	/**
+	 * `nonce` (shared/net/shopGuard.ts): the same nonce again is answered as the first time and never charged twice.
+	 * client/systems/saveClient.ts `invokeShopAction` numbers every purchase; a request that carries none is a purchase
+	 * of its own each time.
+	 */
+	| { kind: "buyPack"; packId: number; nonce?: number }
 	| { kind: "buyCostume"; costumeId: number }
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
@@ -111,7 +116,10 @@ export interface ShopActionResult {
 	reason?: ShopActionReason;
 	/** coins charged */
 	price?: number;
-	/** current server wallet (also sent with most refusals, so the client re-syncs) */
+	/**
+	 * current server wallet (also sent with most refusals, so the client re-syncs). Never with "rate", "loading" or
+	 * "readonly": a refusal that costs the server nothing to make must not cost it a wallet to answer (§8.2)
+	 */
 	wallet?: Wallet;
 }
 

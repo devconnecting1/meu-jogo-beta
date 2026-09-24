@@ -3117,6 +3117,57 @@ section(
 			`${rate} "rate"`,
 		);
 
+		// the verification of 2026-09-24: 300 purchases in a few seconds were all answered "rate" -- each with a whole
+		// wallet -- and never kicked: 300 is far under the connection's 500-in-2-s line. ShopAction has its own §8.2 line
+		// now ("> 3× the limit for 5 s": SHOP_FLOOD_CALLS), and "rate" carries no wallet
+		const SG = require(join(SRC, "shared/net/shopGuard.ts"));
+		const buyer = s.join(newUser(), "buyStorm");
+		const replies = [];
+		for (let i = 0; i < 300 && !buyer.kicked; i++) {
+			replies.push(s.shop(buyer, { kind: "buyPack", packId: 0 }));
+			if (i % 10 === 9) s.run(0.1);
+		}
+		check(
+			buyer.kicked && replies.length === SG.SHOP_FLOOD_CALLS + 1,
+			`300 purchases in 3 s: kicked at the ${SG.SHOP_FLOOD_CALLS + 1}st, inside one 5 s window (§8.2)`,
+			`${replies.length} sent, kicked ${buyer.kicked === true}`,
+		);
+		const rated = replies.filter(r => r?.reason === "rate");
+		check(
+			rated.length > 0 && rated.every(r => r.wallet === undefined),
+			'...and no "rate" answer carries a wallet (a refusal is not a reflector)',
+			`${rated.filter(r => r.wallet !== undefined).length} of ${rated.length} with one`,
+		);
+
+		// an honest client clicking Buy ten times a second for ten seconds: its own copy of the bucket
+		// (client/systems/saveClient.ts) holds back what the server would refuse -- the server never says "rate" to it,
+		// and never comes near the line
+		const clicker = s.join(newUser(), "fastClicker");
+		s.save(clicker).money = 100000;
+		const mine = SG.newShopBucket(os.clock());
+		let sent = 0;
+		let serverRate = 0;
+		for (let i = 0; i < 100; i++) {
+			if (SG.takeShopToken(mine, os.clock())) {
+				sent += 1;
+				if (s.shop(clicker, { kind: "buyPack", packId: 1 + (i % 6) })?.reason === "rate") serverRate += 1;
+			}
+			s.run(0.1);
+		}
+		check(
+			!clicker.kicked && serverRate === 0 && sent > 20 && sent <= CFG.SHOP_BURST + CFG.SHOP_RATE * 10 + 1,
+			'an honest client clicking Buy 10 times a second for 10 s: what it sends is never "rate" and never a kick',
+			`${sent} sent of 100 clicks, ${serverRate} "rate"`,
+		);
+
+		// viewShop is a kind this server knows (it was counted malformed: > 50 opens in 10 s was a kick)
+		const opener = s.join(newUser(), "shopOpener");
+		for (let i = 0; i < 60; i++) {
+			s.shop(opener, { kind: "viewShop", screen: 0 });
+			s.run(1 / 6);
+		}
+		check(!opener.kicked, "opening the shop 60 times in 10 s is no flood: viewShop is not a malformed ShopAction");
+
 		// the admin remote, from somebody who is not an admin: every call is a malformed one
 		const intruder = s.join(newUser(), "notAnAdmin");
 		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++)
@@ -3167,7 +3218,7 @@ section(
 		s.shutdown();
 		const doc = fakeStore(ADMIN_LOG_STORE).data.get(LOG.auditKey(os.time(), globalThis.game.JobId)) ?? [];
 		const kicks = doc.filter(e => e.action === "auto:flood");
-		const kicked = [junk, loader, shopper, intruder, acker];
+		const kicked = [junk, loader, shopper, buyer, intruder, acker];
 		check(
 			kicked.every(p => kicks.some(e => e.targetId === p.UserId && e.adminId === 0 && e.ok === true)),
 			"every flood kick is in the stored audit log (adminId 0 = the server), once per player",
@@ -3176,7 +3227,7 @@ section(
 		check(kicks.length === kicked.length, "one entry per kick", `${kicks.length}`);
 		const json = JSON.stringify(kicks);
 		check(
-			!/junkSaver|loadStorm|shopStorm|notAnAdmin|ackStorm/.test(json),
+			!/junkSaver|loadStorm|shopStorm|buyStorm|notAnAdmin|ackStorm/.test(json),
 			"with UserIds only: no name is stored",
 			json,
 		);

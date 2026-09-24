@@ -6,9 +6,12 @@
  *   achievementNotice  CON-04: "Achievement unlocked" the moment the server's counter reaches its goal
  *   saveIndicator      SAV-01: "Saving..." / "Saved" in the corner when the server writes the save, and
  *                      "Progress not saved — retrying" while it cannot
+ *   packNotice         MON-03: "Delivered: First Night Kit" when the server's wallet says it opened the packs -- into a
+ *                      living body, never when a dead survivor's run is built
  */
 import { GameContext } from "shared/game/context";
 import { startAchievementNotices } from "./achievementNotice";
+import { startPackNotices } from "./packNotice";
 import { startSaveIndicator } from "./saveIndicator";
 import { startTitleNotices } from "./titleNotice";
 
@@ -16,4 +19,5 @@ export function startServerNotices(ctx: GameContext): void {
 	startTitleNotices(ctx);
 	startAchievementNotices(ctx);
 	startSaveIndicator(ctx);
+	startPackNotices(ctx);
 }

@@ -2633,6 +2633,115 @@ section(
 	);
 }
 
+section(
+	"33) uma run assistida (§9.3) nao ganha Camp Cook, Metalworker nem Woodpile: a comida, o lingote e a madeira sim",
+);
+{
+	// the verification of 2026-09-24: the kill, the night, the boss and the lamp asked `paysRewards`, and these did not --
+	// an admin-assisted run still counted Chef (Camp Cook), Blacksmith (Metalworker) and Woods collector (Woodpile).
+	// Through the REAL simulation: its ServerCraft and its ServerInteraction (pickup, search) get the same check
+	const W2 = require(join(SRC, "shared/game/world.ts"));
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	const plain = r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro;
+	const cook = CRAFT_RECIPES.find(r => plain(r) && r.needsCook === true);
+	const smelt = CRAFT_RECIPES.find(r => plain(r) && r.needsFire === true && r.needsCook !== true);
+	const give = (s, recipe) => {
+		for (const ing of recipe.ingredients) {
+			if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		}
+	};
+	const runOnce = assisted => {
+		const world = W2.serverWorld(createWorld(4000, 4000));
+		const clock = new WorldClock({ day: 1, dayTime: 12 });
+		const sim = new ServerSimulation({ world, clock, zombies: false, interactive: true });
+		sim.paysRewards = () => !assisted;
+		// a lit brazier beside the cook (it cooks and it smelts), a house with wood in it for the searcher
+		W2.addSolid(world, {
+			kind: "structure",
+			x: 1040,
+			y: 970,
+			w: 96,
+			h: 64,
+			hp: 200,
+			hpMax: 200,
+			destructible: false,
+			tags: "brazier",
+			powered: true,
+		});
+		W2.addSolid(world, {
+			kind: "building",
+			x: 2600,
+			y: 2600,
+			w: 400,
+			h: 400,
+			hp: 100,
+			hpMax: 100,
+			destructible: false,
+			tags: "house",
+			buildingType: 0,
+			passable: true,
+			lootSlots: 1,
+			lootItems: [{ kind: ItemKind.Etc, id: wood, count: 4 }],
+			lootTimer: 0,
+		});
+		const add = (slot, x, y) => {
+			const sp = createServerPlayer(
+				{ slot, userId: 900 + slot, name: `p${slot}` },
+				SAVE.defaultSave(),
+				x,
+				y,
+				0,
+				60,
+			);
+			sim.add(sp);
+			sp.state.x = x;
+			sp.state.y = y;
+			return sp;
+		};
+		const chef = add(0, 1000, 1000);
+		const picker = add(1, 3500, 1000);
+		const searcher = add(2, 2700, 2700);
+		const outs = [cook, smelt].map(recipe => {
+			give(chef.save, recipe);
+			sim.craft.step(1);
+			return sim.craft.craft(0, chef.state, chef.save, recipe.id);
+		});
+		W2.spawnGroundItem(world, ItemKind.Etc, wood, 3, 3510, 1000);
+		const act = sp =>
+			sim.interaction.act({ slot: sp.slot, state: sp.state, save: sp.save, players: [], zombies: [], hours: 12 });
+		const picked = act(picker);
+		const searched = act(searcher);
+		const a = s => s.achievements;
+		return {
+			got:
+				outs.every(o => o.kind === "crafted" && o.count > 0) &&
+				picked.kind === "item" &&
+				searched.kind === "search" &&
+				picker.save.invenEtc[wood] === 3 &&
+				searcher.save.invenEtc[wood] === 4,
+			chef: a(chef.save)[AID.Chef],
+			smith: a(chef.save)[AID.Blacksmith],
+			woods: a(picker.save)[AID.WoodsCollector] + a(searcher.save)[AID.WoodsCollector],
+			detail: `${outs.map(o => o.kind).join(",")} / ${picked.kind} / ${searched.kind}`,
+		};
+	};
+	const paid = runOnce(false);
+	const helped = runOnce(true);
+	check(
+		paid.got && paid.chef > 0 && paid.smith > 0 && paid.woods === 7,
+		"uma run que paga: cozinhar, fundir, pegar e revistar madeira movem Camp Cook, Metalworker e Woodpile",
+		`${paid.detail}; Chef ${paid.chef}, Blacksmith ${paid.smith}, Woods ${paid.woods}`,
+	);
+	check(
+		helped.got && helped.chef === 0 && helped.smith === 0 && helped.woods === 0,
+		"uma run assistida: a comida, o lingote e a madeira entram na mochila, e nenhuma dessas conquistas anda",
+		`${helped.detail}; Chef ${helped.chef}, Blacksmith ${helped.smith}, Woods ${helped.woods}`,
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

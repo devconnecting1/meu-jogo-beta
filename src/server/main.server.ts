@@ -28,6 +28,16 @@ import {
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
 import { MP_PHASE } from "shared/net/mpConfig";
+import {
+	isShopNonce,
+	keepReceipt,
+	newShopBucket,
+	receiptOf,
+	ShopBucket,
+	ShopReceipt,
+	takesShopToken,
+	takeShopToken,
+} from "shared/net/shopGuard";
 import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
@@ -109,11 +119,12 @@ const LEVEL_SECONDS = 20;
 const LEVEL_CREDIT_MAX = 15;
 const LEVEL_CREDIT_START = 5;
 
-/** shop/rebirth requests: token bucket */
-const ACTION_BURST = 6;
-const ACTION_PER_SECOND = 2;
-/** the ShopAction kinds this server knows: anything else is a malformed request (§8.2) */
-const SHOP_KINDS = new Set<string>(["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun"]);
+/**
+ * The ShopAction kinds this server knows: anything else is a malformed request (§8.2). `viewShop` is one of them: the
+ * shop opening is the client's commonest ShopAction, and counting it malformed kicked a player who opened it 51 times
+ * in 10 s.
+ */
+const SHOP_KINDS = new Set<string>(["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun", "viewShop"]);
 /**
  * A REJECTED report is answered at most this often (s; audit M2). An honest client reports once per
  * SAVE_MIN_INTERVAL and retries an "outdated" one after 1 s, so it never sees this; a stream of junk SaveRequests
@@ -172,8 +183,10 @@ interface Session {
 	lastLoadAttempt: number;
 	retryQueued: boolean;
 	credits: Credits;
-	actionTokens: number;
-	actionAt: number;
+	/** the ShopAction token bucket (shared/net/shopGuard.ts: the client keeps the same one) */
+	shopBucket: ShopBucket;
+	/** the last pack purchases accepted, by the client's nonce: the same nonce again is not charged twice */
+	receipts: Array<ShopReceipt>;
 	closed: boolean;
 	/** os.clock() when the player joined (admin panel) */
 	joinedAt: number;
@@ -266,9 +279,11 @@ function sessionOfUserId(userId: number): Session | undefined {
  * toward the same flood limits as the MP channels, per connection (server/net/mpHost.ts `noteRemote`); `malformed`
  * when the payload is not what the remote takes. True when the message must be dropped (the player is being kicked,
  * or has left). With MP_PHASE 0 there is no host and nothing is counted: the old per-remote limits stand alone.
+ * `channel` "shop": a ShopAction that takes a token, counted toward that channel's own flood line as well (§8.2 "> 3×
+ * o limite por 5 s", shared/net/shopGuard.ts SHOP_FLOOD_CALLS).
  */
-function floodDrop(player: Player, malformed: boolean): boolean {
-	return mpHost?.noteRemote(player, malformed) === true;
+function floodDrop(player: Player, malformed: boolean, channel?: "shop"): boolean {
+	return mpHost?.noteRemote(player, malformed, channel) === true;
 }
 
 /** the server just wrote into this survivor's save: the next autosave must carry it */
@@ -846,8 +861,8 @@ function newSession(player: Player): Session {
 		lastLoadAttempt: -math.huge,
 		retryQueued: false,
 		credits: { day: 0, boss: 0, level: 0, at: os.clock() },
-		actionTokens: ACTION_BURST,
-		actionAt: os.clock(),
+		shopBucket: newShopBucket(os.clock()),
+		receipts: [],
 		closed: false,
 		joinedAt: os.clock(),
 		patchRev: undefined,
@@ -1169,15 +1184,7 @@ function isIndex(v: unknown, size: number): v is number {
 	return typeIs(v, "number") && v % 1 === 0 && v >= 0 && v < size;
 }
 
-function takeActionToken(s: Session): boolean {
-	const now = os.clock();
-	s.actionTokens = math.min(ACTION_BURST, s.actionTokens + (now - s.actionAt) * ACTION_PER_SECOND);
-	s.actionAt = now;
-	if (s.actionTokens < 1) return false;
-	s.actionTokens -= 1;
-	return true;
-}
-
+/** `s` given: the wallet rides along, so the client re-syncs (never for "rate": see handleAction) */
 function fail(reason: ShopActionReason, s?: Session): ShopActionResult {
 	return { ok: false, reason, wallet: s !== undefined && s.loaded ? walletOf(s.save) : undefined };
 }
@@ -1191,7 +1198,9 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		Analytics.shopViewed(player, (raw as Record<string, unknown>).screen);
 		return { ok: true };
 	}
-	if (!takeActionToken(s)) return fail("rate", s);
+	// past the bucket: refused with no wallet -- a storm of these used to be answered with a whole wallet each (§8.2;
+	// the client keeps the same bucket and never sends one, and the flood line kicks well before a storm gets far)
+	if (!takeShopToken(s.shopBucket, os.clock())) return fail("rate");
 	if (isReadOnly(s)) return fail("readonly");
 	if (!typeIs(raw, "table")) return fail("invalid", s);
 	const req = raw as Record<string, unknown>;
@@ -1202,12 +1211,22 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	if (req.kind === "buyPack") {
 		if (!isIndex(req.packId, SHOP_PACKS.size())) return fail("invalid", s);
 		const id = req.packId;
+		const nonce = req.nonce;
+		if (nonce !== undefined && !isShopNonce(nonce)) return fail("invalid", s);
+		// the same purchase again (a replayed request): answered as the first time, charged once. The nonce names ONE
+		// purchase of one pack: the same nonce for another pack is no replay, and is refused
+		const receipt = nonce !== undefined ? receiptOf(s.receipts, nonce) : undefined;
+		if (receipt !== undefined) {
+			if (receipt.packId !== id) return fail("invalid", s);
+			return { ok: true, price: receipt.price, wallet: walletOf(save) };
+		}
 		const pending = (save.packsBought[id] ?? 0) - (save.packsOpened[id] ?? 0);
 		if (pending >= ECONOMY.MAX_PENDING_PACKS) return fail("limit", s);
 		price = SHOP_PACKS[id].price;
 		if (save.money < price) return fail("funds", s);
 		save.money -= price;
 		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
+		if (nonce !== undefined) keepReceipt(s.receipts, { nonce, packId: id, price });
 	} else if (req.kind === "buyCostume") {
 		// the wardrobe (MON-04): id, price, ownership and coins are all decided in server/save/costumes.ts -- the
 		// request carries nothing but the id, and a `price` field in it is never read
@@ -1321,7 +1340,8 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 
 remotes.shopAction.OnServerInvoke = (player, request) => {
 	const kind = typeIs(request, "table") ? (request as Record<string, unknown>).kind : undefined;
-	if (floodDrop(player, !typeIs(kind, "string") || !SHOP_KINDS.has(kind))) return fail("rate");
+	const malformed = !typeIs(kind, "string") || !SHOP_KINDS.has(kind);
+	if (floodDrop(player, malformed, takesShopToken(kind) ? "shop" : undefined)) return fail("rate");
 	return handleAction(player, request);
 };
 
@@ -1473,12 +1493,15 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 /**
  * Everything in the wallet the simulation can move on its own: a change in any of them is pushed. The achievement
  * counters (CON-04) ride here too: this push is how they -- and the "Achievement unlocked" toast -- reach the client.
+ * So do the packs the server opened (server/sim/backpack.ts `deliverPacks`): the client says "Delivered" when this
+ * wallet raises `packsOpened` (client/ui/packNotice.ts), even when the bag did not move (every item already at its cap).
  */
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
 	const achievements = save.achievements.join(",");
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}`;
+	const packs = save.packsOpened.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}`;
 }
 
 function pushWallets(): void {
