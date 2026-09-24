@@ -355,7 +355,9 @@ export class Prediction {
 	 *     it. That includes a bite the armour absorbed whole, which the local path flashed for too. (The `Hit` bit
 	 *     alone would miss a hit landing in the same snapshot interval the i-frames ran out.)
 	 *   - HP fell more than the slow drains take in the time between the two blocks: an explosion, a crash, anything
-	 *     that bypasses the i-frames while they still run.
+	 *     that bypasses the i-frames while they still run. Also HP lost any other way, and on purpose: Rotten meat
+	 *     (-10 HP; offline `itemUseEffect` does not flash, here it does, as the hit alarm over the menus does for
+	 *     it) and an admin cutting max HP (a skill reset: once).
 	 * netClient drops stale blocks, so these arrive in tick order and "since the last block" means what it says.
 	 * The rate is the hit alarm's (client/ui/hitAlarm.ts): at most one new flash every HIT_ALARM.GAP_S (< 3/s, WCAG
 	 * 2.3.1). A hit inside that gap is not lost from view: the flash it lands on is still above 0,6.
