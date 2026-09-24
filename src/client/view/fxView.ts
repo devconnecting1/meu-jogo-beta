@@ -31,7 +31,7 @@ import { Explosion, fxBlood, fxDebris, fxTracer, GameRefs, Tracer } from "../sys
 import { fromWireFx } from "shared/net/fxWire";
 import * as Net from "shared/net/protocol";
 import { ParticleSystem } from "../systems/particles";
-import { audio, playFxEvent } from "../audio";
+import { audio, playFxEvent, remoteProjectileSound, remoteShotSound } from "../audio";
 import { Renderer } from "shared/engine/renderer";
 import { BLAST_GROW, PUDDLE_LIFE, PUDDLE_RADIUS, SPIT_RANGE } from "shared/sim/ai/zombieTuning";
 import { SLOT_NONE } from "shared/net/mpConfig";
@@ -178,12 +178,13 @@ export class FxView {
 				this.playSolidShake(refs, e);
 			} else if (e.t === Net.FxType.ProjSpawn) {
 				this.playProjSpawn(refs, e);
+				// somebody else's arrow or flame is heard from where it left (P0-4; ours is heard by the weapon watcher)
+				if (e.owner !== SLOT_NONE && e.owner !== opts.localSlot) remoteProjectileSound(e.kind, e.owner, e.x, e.y);
 			} else if (e.t === Net.FxType.ProjEnd) {
 				this.playProjEnd(refs, e);
 			}
-			// FxType.Sound is deliberately dropped: client/audio/fxAudio.ts is driven by the SIMULATION
-			// channel and has no wire entry point, and giving it one is F3's job (the audio of a world this
-			// client no longer simulates). Playing it from here would need a sound-id table nobody owns yet.
+			// FxType.Sound never gets here: shared/net/fxWire.ts turns it into the simulation's "sound" event (its
+			// WIRE_SOUNDS table is the id table), and it goes down the path above like a bite's blood (P0-4)
 		}
 	}
 
@@ -248,9 +249,10 @@ export class FxView {
 				color: TRACER_COLOR[e.tracer],
 				life: e.life,
 			});
-		} else if (e.player === undefined || e.player === LOCAL_SLOT) {
-			refs.onMessage(e.text);
+		} else if (e.kind === "message") {
+			if (e.player === undefined || e.player === LOCAL_SLOT) refs.onMessage(e.text);
 		}
+		// "sound" has nothing to draw: playFxEvent above already played it
 	}
 
 	// ---------------------------------------------------------------- the wire-only effects
@@ -265,6 +267,8 @@ export class FxView {
 		const mine = e.slot !== SLOT_NONE && e.slot === opts.localSlot;
 		const from = mine ? { x: refs.player.x, y: refs.player.y } : opts.shooterAt(e.slot);
 		const arc = e.weapon === ARC_WEAPON;
+		// an ally's shot is heard from their body (P0-4: it was silent); ours was heard when the trigger was pulled
+		if (!mine && from !== undefined) remoteShotSound(e.weapon, from.x, from.y);
 		for (const h of e.hits) {
 			if (from === undefined) {
 				// no body to hang the line on: the impacts still land, and they are the honest half

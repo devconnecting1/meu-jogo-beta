@@ -64,6 +64,7 @@ import { installFakeGui } from "./fake-gui.mjs";
 import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
 import { castDrawer, characterCast } from "./character-cast.mjs";
+import { bossCast, bossDrawer } from "./boss-cast.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
 // --golden-chars: rewrites tools/golden/characters-flat.json from the CURRENT src (run it on the commit before the
@@ -232,6 +233,39 @@ function charDigest() {
 	capturing = false;
 	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
 	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
+}
+// the bosses' draw calls with no boss sheet (§10f, ART-13), and --golden-bosses: record them from this src (run it
+// on the commit before the bosses' art, with PZ_SRC, and PZ_GOLDEN_FROM naming it)
+const GOLDEN_BOSSES = join(ROOT, "tools", "golden", "bosses-flat.json");
+/** where member `i` of the boss cast is drawn (far apart: nothing of one lands on another) */
+const bossAt = i => [(i % 6) * 400, Math.floor(i / 6) * 1600];
+function bossDigest() {
+	const cast = bossCast();
+	const drawBoss = bossDrawer(require, SRC, shadowFn(false));
+	const st = stage(1400, 1400, 1);
+	st.cam.x = 600;
+	st.cam.y = 600;
+	calls.length = 0;
+	capturing = true;
+	st.r.beginFrame();
+	cast.forEach((m, i) => drawBoss(st, m, ...bossAt(i)));
+	st.r.endFrame();
+	capturing = false;
+	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
+	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
+}
+if (process.argv.includes("--golden-bosses")) {
+	setArt({});
+	const d = bossDigest();
+	const out = {
+		note: "draw-call digest of the flat bosses of tools/boss-cast.mjs (tools/test-world-art.mjs --golden-bosses)",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		count: d.count,
+		sha1: d.sha1,
+	};
+	writeFileSync(GOLDEN_BOSSES, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_BOSSES} (${d.count} calls)`);
+	process.exit(0);
 }
 if (process.argv.includes("--golden-chars")) {
 	setArt({});

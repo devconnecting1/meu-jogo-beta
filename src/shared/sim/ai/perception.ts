@@ -48,7 +48,7 @@ export interface SenseConditions {
 export interface Beacon {
 	/** the range their own light makes them visible from in the dark (0 = none), before rain and Stealth */
 	range: number;
-	/** the reach of the cone they carry (the flashlight, survivorLight `survivorCone`); 0 = no beam */
+	/** the reach of the beam they cast (the flashlight, or a motorcycle's headlight: survivorLight `survivorBeamReach`); 0 = no beam */
 	beam: number;
 	/** the direction the beam points (the survivor's aim) */
 	beamAngle: number;

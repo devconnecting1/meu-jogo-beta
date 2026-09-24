@@ -1,0 +1,6 @@
+{
+	"note": "draw-call digest of the flat bosses of tools/boss-cast.mjs (tools/test-world-art.mjs --golden-bosses)",
+	"recordedFrom": "923511a (main before the bosses' art)",
+	"count": 307,
+	"sha1": "989d6bc7637ede3198b01ddf5e18ce01854a8d74"
+}

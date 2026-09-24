@@ -27,7 +27,9 @@
  */
 import { isFiniteNumber } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
-import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
+import { EdgeShift, edgeCount, FxEvent, FxType, HeldBit, IntentMessage } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
+import { useSoundOf } from "shared/data/usables";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { applyPlayerDamage, currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -332,7 +334,14 @@ export class ServerSimulation {
 			// client still delivers them into its own copy and reports it
 			deliversPacks: this.ownsInteractive,
 		});
-		this.backpack.onOutcome = (sp, msg, outcome) => this.onBackpack?.(sp, outcome);
+		this.backpack.onOutcome = (sp, msg, outcome) => {
+			// a usable the server accepted is heard where the survivor stands (P0-4): eaten, torn, unzipped, rattled
+			if (outcome.kind === "used") {
+				const sound = wireSoundId(useSoundOf(outcome.item));
+				this.onFx?.({ t: FxType.Sound, sound, x: sp.state.x, y: sp.state.y, volume: 1 });
+			}
+			this.onBackpack?.(sp, outcome);
+		};
 		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
 		this.adoptSystems(this.buildAround(this.world));
 	}

@@ -35,6 +35,7 @@ import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
@@ -206,6 +207,11 @@ export class ServerInteraction {
 		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
 		// client predicts its own movement against it. A door somebody was not told about is a wall.
 		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });
+		// and it is HEARD where it turned (P0-4), by whoever is near: the unreliable Fx channel, interest-filtered
+		// like any effect -- a creak lost on the way costs nothing, the DoorSet above is the door
+		const iron = s.kind === "iron_door";
+		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
+		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
 		return { kind: "door", solid: s, open: willOpen };
 	}
 

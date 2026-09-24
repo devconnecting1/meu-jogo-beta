@@ -35,6 +35,22 @@ Tudo abaixo foi checado no Roblox Studio (modo **Edit**, sem Play, sem alterar o
 > Detalhe que custou tempo e vale registrar: `PreloadAsync` com `Sound` **sem parent** devolve `IsLoaded = false`
 > para tudo. É preciso parentear antes de pré-carregar.
 
+**Os ids do P0-4 (2026-09-24, sessão na nuvem, sem Studio)** — voz da horda, mordida, portas, uso de item,
+lança-chamas, motor, buzina e campainha — foram checados por três APIs públicas da Roblox, id a id:
+
+1. **Busca na biblioteca do próprio criador:** `apis.roblox.com/toolbox-service/v2/assets:search?searchCategoryType=Audio`
+   com `userId=7462895450` (a conta **ProSoundEffects**). Só entra o que a busca devolve **dessa conta**; nada de
+   upload de usuário (a mesma busca sem o filtro devolve "zombie growl" do COD e do Minecraft — rejeitados).
+2. **Detalhes do asset:** `economy.roblox.com/v2/assets/{id}/details` → `Creator.Name = "ProSoundEffects"`,
+   `IsPublicDomain = true`, a descrição "Courtesy of Pro Sound Effects" e a categoria (ex.: "Voices - Beasts").
+3. **Download do arquivo:** `assetdelivery.roblox.com/v2/assetId/{id}` → o OGG baixa **sem autenticação** (um áudio
+   privado, pela regra de privacidade de 2022, é recusado aqui) e foi **decodificado** (libsndfile): duração real,
+   envelope, onde começa e termina cada frase. Os campos `startAt`/`maxPlay`/`loopStart`/`loopEnd` saíram dessa
+   medição, não de chute.
+
+O que essa checagem **não** faz: ouvir. Os takes foram escolhidos pela descrição da biblioteca e cortados pelo
+envelope; a passada de escuta no Studio é a pendência F.
+
 ## Catálogo
 
 ### SFX — armas
@@ -61,8 +77,6 @@ Tudo abaixo foi checado no Roblox Studio (modo **Edit**, sem Play, sem alterar o
 | ------------- | ------------------------------------------------------------------------ | --------------- | ------- | --------------------------------------------------------- |
 | `hitFlesh`    | `rbxasset://sounds/splat.wav`                                            | Roblox (engine) | 0,50 s  |                                                           |
 | `zombieDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Grunhido, tocado 0,60–0,78× (grave).                      |
-| `zombieGrowl` | `rbxassetid://9114628598` — "Goliath Vocal Deep Growling Voice 20 (SFX)" | ProSoundEffects | 1,83 s  | Rosnado ambiente da horda próxima. Ver pendência B.       |
-| `zombieAlert` | `rbxassetid://9114628620` — "Goliath Vocal Deep Growling Voice 21 (SFX)" | ProSoundEffects | 2,26 s  | Um zumbi acabou de te ver.                                |
 | `bossRoar`    | `rbxassetid://9114628818` — "Goliath Vocal Deep Growling Voice 22 (SFX)" | ProSoundEffects | 2,12 s  | Tocado 0,58–0,68× (bem grave).                            |
 | `playerHurt`  | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Mesmo take do zumbi, 1,05–1,20× (agudo). Ver pendência C. |
 | `playerDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | 0,50–0,55×. Ver pendência C.                              |
@@ -75,6 +89,49 @@ Tudo abaixo foi checado no Roblox Studio (modo **Edit**, sem Play, sem alterar o
 | `craftDone`   | `rbxasset://sounds/switch3.wav`                                          | Roblox (engine) | 0,37 s  |                                                           |
 | `footstepA`   | `rbxassetid://9114523345` — "Foot Stomp 3 (SFX)"                         | ProSoundEffects | 0,45 s  | Foley. O arquivo tem **vários** passos: `maxPlay` 0,22 s corta no primeiro. Ver pendência A. |
 | `footstepB`   | `rbxassetid://9114523358` — "Foot Stomp 4 (SFX)"                         | ProSoundEffects | 0,47 s  | Mesma série, alternado com o A (um id só vira metrônomo a 2 passos/s). Ver pendência A.      |
+
+### SFX — P0-4: a horda, a mordida, portas, uso de item, lança-chamas, moto
+
+Todos **ProSoundEffects** (biblioteca oficial gratuita, `IsPublicDomain = true`, verificados como descrito acima).
+"Janela" é o trecho do arquivo que toca (`startAt` → `startAt + maxPlay`), ou o trecho que faz o loop
+(`loopStart`–`loopEnd`, `Sound.LoopRegion`). Quem decide: **servidor** = um `Fx Sound` (§4.2 do
+`docs/MULTIPLAYER.md`, id u8 da lista `WIRE_SOUNDS` de `shared/net/fxWire.ts`, filtrado por interesse como todo
+efeito) no lugar onde aconteceu; **cliente** = derivado do estado que o cliente já tem.
+
+| Evento                           | Nome lógico      | Asset (id — nome na biblioteca)                                   | Janela           | Quem decide | Observação                                                                                         |
+| -------------------------------- | ---------------- | ----------------------------------------------------------------- | ---------------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| Mordida que tirou sangue         | `bite`           | `9114574294` — "Giant Bug Chomps 3" (Gore / mordidas)             | 0,20–0,90 s      | servidor    | "Crunching thuds, tearing, snapping, mushy". Só a mordida que acertou (LEG-04), nunca a inclinação. |
+| Porta de madeira abre            | `doorOpen`       | `9120839599` — "Wood Door Creak Squeak 11"                        | 0,55–1,85 s      | servidor    | Rangido; take baixo (pico −34 dB), volume base 0,5; some a 1100 u.                                  |
+| Porta de madeira fecha           | `doorClose`      | `9120839870` — "Wood Door Open Soft Close 4"                      | 0,95–1,75 s      | servidor    | A batida do trinco.                                                                                 |
+| Porta de ferro abre              | `ironDoorOpen`   | `9116841392` — "Metal Screen Security Door 9" (Creaks and Squeaks) | 0,68–1,58 s      | servidor    |                                                                                                     |
+| Porta de ferro fecha             | `ironDoorClose`  | `9116835170` — "Metal Screen Security Door 2" (Big Bang, Slam)    | 0,00–1,00 s      | servidor    | Take alto: volume base 0,3.                                                                         |
+| Comer (toda comida)              | `useEat`         | `9113138343` — "Apple Chew 1" (Bite and Chew)                     | 0,00–1,45 s      | servidor    | O uso que o servidor ACEITOU (`itemUseEffect`); um recusado não faz som.                            |
+| Enfaixar (Bandage)               | `useBandage`     | `9113827650` — "Cloth Rip Linen 11"                               | 0,00–0,60 s      | servidor    |                                                                                                     |
+| Kit de primeiros socorros        | `useMedkit`      | `9113260699` — "Bag Zipper From Nylon Bag Backpack Luggage 1"     | 0,00–0,80 s      | servidor    | A bolsa do kit aberta.                                                                              |
+| Analgésico, sedativo             | `usePills`       | `9114074235` — "Dice Shake 1" (Rattle)                            | 0,30–1,50 s      | servidor    | Chocalho de dados no lugar do frasco: a biblioteca não tem frasco de comprimido audível (o "Safety Lock Lid Cold Medicine Bottle", `9125891613`, tem pico −43 dB). |
+| Adrenalina (injeção)             | `useInject`      | **vazio** (`id: ""`)                                              | —                | servidor    | **Slot vazio, silêncio.** Ver pendência D.                                                          |
+| Lança-chamas: o jato             | `flameLoop`      | `9120192302` — "Torch Lighter 1" (Steady Mini Rocket Flame)       | loop 1,5–8,5 s   | cliente     | Loop preso enquanto a arma cospe fogo, tocado a 0,55× (o chiado vira rugido).                       |
+| Lança-chamas: a ignição          | `flameIgnite`    | `9117988736` — "Pyro Fire Ball Burst 7"                           | inteiro (0,65 s) | cliente     | Uma vez por rajada. Antes o lança-chamas tocava o "ping" da arma de choque 15×/s.                  |
+| Motor da moto                    | `engineMoto`     | `9112787824` — "Go Kart Exhaust Constant 1" (bicilíndrico 4T)     | loop 28,5–42,5 s | cliente     | O trecho em marcha lenta; altura 0,78× (parada) → 1,8× (máxima) e volume 55 % → 100 % pela velocidade. Todo piloto ao alcance, você e os aliados. |
+| Buzina da moto                   | `hornMoto`       | `9120383448` — "Vehicle Horn Honk European Buzzing Whine 1"       | 0,00–0,50 s      | servidor    | Buzina fina e zumbida, de moto. O mesmo aperto que o `onVehicleNoise` manda à horda.               |
+| Campainha da bicicleta           | `bellBike`       | `9125390319` — "Bicycle Bell Ringing Single Double One Deeper"    | 0,22–0,82 s      | servidor    | O primeiro toque (o arquivo tem vários).                                                           |
+| Gemido 1 (zumbi parado)          | `zombieGroanA`   | `9120231499` — "Tracheotomy Voice 1" (Gross Grunt, Gurgles)       | 1,08–3,13 s      | cliente     | Voz **humana** ("Voices - Misc"): grunhido com gorgolejo e respiração difícil.                     |
+| Gemido 2                         | `zombieGroanB`   | `9120231499` — o mesmo take                                        | 3,46–4,36 s      | cliente     | A engasgada curta do mesmo take.                                                                    |
+| Gemido 3 (respiração)            | `zombieGroanC`   | `9114663862` — "Gross Snoring Cu Breathing Inhale Exhale 8"       | 0,15–2,10 s      | cliente     | "Creature, Beast": respiração molhada pelo nariz.                                                   |
+| Gemido 4 (grunhido)              | `zombieGroanD`   | `9114625030` — "Goblin Growl 9" (Human Generated Roar)            | 0,00–1,10 s      | cliente     | Tocado 0,72–0,82× (vira gemido).                                                                    |
+| Um zumbi te viu                  | `zombieAggroA`   | `9116968474` — "Monster Vocals 12" (Snarling, Growling)           | 0,30–1,35 s      | cliente     | Rosnado.                                                                                            |
+| Um zumbi te viu (outro)          | `zombieAggroB`   | `9114624779` — "Goblin Growl 6" (Human Generated Roar)            | 0,12–1,77 s      | cliente     | Alternado com o A.                                                                                  |
+| Um grupo vira de uma vez         | `zombieShout`    | `9113989593` — "Creature Vocals 1" (Attacking, Throaty Groans)    | 2,28–4,03 s      | cliente     | O grito da IA-03: 3+ zumbis te vendo no mesmo quadro são UM grito.                                  |
+
+**Como a horda não vira barulho** (`client/audio/gameAudio.ts`): toda fala de zumbi gasta uma ficha de um orçamento
+de **3**, que volta **1 a cada 0,75 s**; o gemido ambiente vem a cada `7 / √n` s (n = zumbis a até 1100 u; entre
+1,5 e 7 s, ×0,7–1,3), nunca o mesmo take duas vezes seguidas e nunca o mesmo zumbi em 7 s; a altura segue o tipo
+(charger 0,8×, explosivo 0,9×, cuspidor 1,12×, saltador 1,16×; o grande 0,85×). Medido por `npm run test:audio`
+§G: um zumbi perto, ~6 gemidos por minuto; sessenta, ~40 — nunca sessenta vozes.
+
+**Motor e jato são loops presos** (`audio.holdLoop`): 6 vozes em loop no pool, criadas no início (nenhuma Instance
+por motor ou por rajada), cada uma presa a um emissor que segue a fonte; quem as segura as pede a cada quadro, e
+a que ninguém segurou esvai em 0,25 s e volta ao pool. SFX em 0 as para.
 
 ### UI
 
@@ -152,15 +209,28 @@ explosão, a `0,195`. Com os sliders no máximo: `0,45` e `0,55`.
   têm 160 ms e o arquivo é quase sem perdas, então o bitrate não resolve os transientes; e `PlaybackLoudness`
   não avança no datamodel Edit (o motor de áudio do Studio não roda ali). Fica para uma sessão de Play: se o
   take for um baque só, tirar o `maxPlay` devolve a cauda natural.
-- **B — voz de zumbi.** A série "Goliath Vocal Deep Growling Voice" é catalogada como _Robots - Voice_.
-  Funciona grave, mas não é um zumbi. Não achei rosnado de criatura na biblioteca oficial; todos os resultados
-  de "zombie growl" na busca eram upload de usuário com origem em COD/Minecraft — rejeitados.
+- **B — voz de zumbi. Resolvida (P0-4, 2026-09-24).** A série "Goliath Vocal Deep Growling Voice" (_Robots -
+  Voice_) saiu da horda; ficou só no `bossRoar`. A busca **filtrada pela conta ProSoundEffects** achou vozes humanas
+  e de criatura nas categorias "Voices - Misc" / "Voices - Beasts" (tabela do P0-4 acima). A busca aberta continua
+  devolvendo upload de usuário com origem em COD/Minecraft — rejeitados, como antes.
 - **C — dor do jogador.** `playerHurt` e `playerDeath` reaproveitam o `uuhhh.mp3` do engine com pitch
   diferente. Passa, mas o ideal é um take humano próprio da biblioteca oficial.
-- **D — slots vazios.** Nenhum hoje. O **passo saiu desta lista**: ele não vem de um `FxEvent`, vem do ciclo
-  de caminhada da view (`client/view/footsteps.ts` -> `client/audio/footstepAudio.ts`), que é o único lugar
-  que sabe quando um pé encosta no chão. Os outros (porta, uso de item, tiro do lança-chamas, mordida) ainda
-  não têm som porque **não têm evento** para disparar: ver a lista de `FxEvent` faltando no relatório da tarefa.
+- **D — slots vazios: `useInject` (a adrenalina).** O evento existe e dispara (o servidor manda o `Fx Sound`
+  quando aceita o uso), mas o slot tem `id: ""` e fica em **silêncio**: "syringe", "injection", "needle" e "shot"
+  na biblioteca da ProSoundEffects só acham "Pressure Blast" e robôs, e upload de usuário não entra. **Para o dono
+  preencher:** achar um take oficial (ProSoundEffects / APMOfficial / Roblox) de seringa ou autoinjetor, conferir
+  `Creator` e `IsPublicDomain` (acima), pôr o id em `src/shared/data/sounds.ts` `useInject` e uma linha nesta
+  tabela; `npm run test:audio` §A passa a exigir o crédito. Os outros eventos que não tinham som (porta, uso de
+  item, lança-chamas, mordida, motor, buzina) **agora têm evento e som** (P0-4). O passo continua fora desta lista:
+  vem do ciclo de caminhada da view (`client/view/footsteps.ts` → `client/audio/footstepAudio.ts`).
+- **F — passada de escuta do P0-4.** As janelas (`startAt`, `maxPlay`, `loopStart`/`loopEnd`) foram medidas no
+  envelope decodificado, sem ouvir. No Studio, com o som ligado: o loop do motor (28,5–42,5 s) não pode estalar na
+  volta; o `flameLoop` a 0,55× tem de soar como jato, não como chiado; e cada gemido tem de ser um gemido. Ajustar
+  é mudar um número no catálogo.
+- **G — sons de outros jogadores (P0-4, de brinde).** Até aqui o tiro de um aliado era **mudo** nas outras telas
+  (o `Shot` do fio desenhava a linha e o impacto, sem som). Agora toca o som da arma dele, do corpo dele
+  (`fxAudio.remoteShotSound`), e a flecha e o jato do lança-chamas dele também (`remoteProjectileSound`). As
+  torretas seguem mudas (o fio não diz de onde atiraram).
 - **E — terceiro slider.** O save tem `soundEffect` e `bgm`; o barramento de UI anda pendurado no de SFX. Se
   quisermos um controle separado, é um campo novo em `SettingsData` (`src/shared/game/save.ts`, que não é meu)
   e uma linha em `refreshGains`.

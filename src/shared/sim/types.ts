@@ -148,6 +148,24 @@ export type BloodSource = "zombie" | "player";
 export type DebrisMaterial = "impact" | "tree" | "car" | "structure" | "exploder" | "boss";
 /** kind of shot line; the view picks the colour */
 export type TracerKind = "bullet" | "electric" | "boss";
+/**
+ * A sound the SIMULATION decides (P0-4): the moment it happens and where -- a bite that landed, a door that turned, a
+ * usable the survivor used, a horn or a bell -- heard by whoever is near, as the horde hears its noise. Each name is
+ * the client's catalogue entry (shared/data/sounds.ts); on the wire it is a u8 of shared/net/fxWire.ts WIRE_SOUNDS.
+ */
+export type WorldSound =
+	| "bite"
+	| "doorOpen"
+	| "doorClose"
+	| "ironDoorOpen"
+	| "ironDoorClose"
+	| "useEat"
+	| "useBandage"
+	| "useMedkit"
+	| "usePills"
+	| "useInject"
+	| "hornMoto"
+	| "bellBike";
 
 /**
  * A cosmetic effect asked for by the simulation. `player` is the survivor's index in `refs.players` (its slot from
@@ -158,4 +176,5 @@ export type FxEvent =
 	| { kind: "blood"; x: number; y: number; count: number; source: BloodSource; dir?: number }
 	| { kind: "debris"; x: number; y: number; count: number; material: DebrisMaterial }
 	| { kind: "tracer"; x1: number; y1: number; x2: number; y2: number; tracer: TracerKind; life: number }
-	| { kind: "message"; text: string; player?: number };
+	| { kind: "message"; text: string; player?: number }
+	| { kind: "sound"; sound: WorldSound; x: number; y: number };

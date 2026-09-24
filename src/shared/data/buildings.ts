@@ -92,6 +92,11 @@ export interface VehicleDef {
 	noiseFull: number;
 	/** the bell (bicycle) or the horn (motorcycle), on the attack button */
 	hornRadius: number;
+	/**
+	 * The headlight's reach along the vehicle's heading (LUZ-04, shared/sim/survivorLight.ts `survivorBeam`), 0 = none.
+	 * The flashlight's cone (±45°) a little further: the road ahead of a rider at speed, not the aim of the hands.
+	 */
+	headlight: number;
 }
 
 export const VEHICLES: Array<VehicleDef> = [
@@ -118,6 +123,7 @@ export const VEHICLES: Array<VehicleDef> = [
 		noiseIdle: 0,
 		noiseFull: 0,
 		hornRadius: 250,
+		headlight: 0,
 	},
 	{
 		kind: VehicleKind.Motorcycle,
@@ -142,6 +148,7 @@ export const VEHICLES: Array<VehicleDef> = [
 		noiseIdle: 400,
 		noiseFull: 900,
 		hornRadius: 900,
+		headlight: 640,
 	},
 ];
 
