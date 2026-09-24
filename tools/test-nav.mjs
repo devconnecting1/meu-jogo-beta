@@ -53,6 +53,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CONTEXT } from "./locale-context.mjs";
 import { installUiShims } from "./ui-shim.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
@@ -2018,6 +2019,7 @@ function textsIn(root, where) {
 		mkdirSync(join(tmp, "tools"), { recursive: true });
 		mkdirSync(join(tmp, "src/shared/data"), { recursive: true });
 		writeFileSync(join(tmp, "tools/gen-locale.mjs"), readFileSync(join(ROOT, "tools/gen-locale.mjs")));
+		writeFileSync(join(tmp, "tools/locale-context.mjs"), readFileSync(join(ROOT, "tools/locale-context.mjs")));
 		writeFileSync(join(tmp, "src/shared/data/lang.ts"), readFileSync(join(SRC, "shared/data/lang.ts")));
 		execFileSync(process.execPath, [join(tmp, "tools/gen-locale.mjs")], { stdio: "pipe" });
 		const fresh = readFileSync(join(tmp, "design/locale/ProjectZ.csv"), "utf8");
@@ -2069,6 +2071,22 @@ function textsIn(root, where) {
 			`LOC-NL: as ${multi.length} entradas de varias linhas vao ao CSV como a tela as mostra (quebra de linha real, sem "#")`,
 			multi.length > 0 && unmatched.length === 0 && !body.some(r => r[3].includes("#")),
 			unmatched.map(e => `"${e.slice(0, 40)}"`).join("; ") || `${multi.length} entradas`,
+		);
+		// the Context column is tools/locale-context.mjs, written verbatim (its own Source keys were already
+		// checked against LANG_TABLE by gen-locale.mjs above -- a stale one there makes this whole block throw);
+		// every other row's Context is blank, and none goes over the 80-char budget the map is kept under
+		const byContext = new Map(body.map(r => [r[3], r[1]]));
+		const contextKeys = Object.keys(CONTEXT);
+		const wrong = contextKeys.filter(k => byContext.get(k) !== CONTEXT[k]);
+		const shouldBeBlank = body.filter(r => CONTEXT[r[3]] === undefined && r[1] !== "");
+		const tooLong = contextKeys.filter(k => CONTEXT[k].length > 80);
+		check(
+			`LOC-CTX: as ${contextKeys.length} entradas de tools/locale-context.mjs estao na coluna Context, e mais nenhuma`,
+			wrong.length === 0 && shouldBeBlank.length === 0 && tooLong.length === 0,
+			wrong.map(k => `"${k}"`).join("; ") ||
+				shouldBeBlank.map(r => `"${r[3].slice(0, 40)}"`).join("; ") ||
+				tooLong.map(k => `"${k}" (${CONTEXT[k].length})`).join("; ") ||
+				`${contextKeys.length} com Context`,
 		);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });

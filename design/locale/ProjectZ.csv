@@ -1,38 +1,38 @@
 Key,Context,Example,Source
-,,,Craft
-,,,Item
-,,,Skill
-,,,Placeable
-,,,Weapon
-,,,Equipment
-,,,Etc
-,,,Ammo
-,,,Usable
-,,,Survival
-,,,Fighting
-,,,Material
-,,,Make
-,,,Equip
-,,,Drop
-,,,Use
-,,,Cook
-,,,Melt
-,,,Learn
-,,,Attack
-,,,Defense
-,,,Rate of fire
-,,,Recoil
-,,,Round
-,,,Health recovery
-,,,Hunger recovery
-,,,Speed
-,,,Reloading
-,,,Skill point
-,,,Centipede
-,,,Rafflesia
-,,,Giant
-,,,Hedgehog
-,,,Price
+,Bag tab: the crafting section (make items from materials),,Craft
+,generic item-category label (not drawn today; see the header),,Item
+,"generic skill-category label (a perk), not a rating",,Skill
+,item category: a buildable structure you place down,,Placeable
+,"item-card type label: ""Weapon · Rifle"", ""Weapon · Bow"", etc.",,Weapon
+,item type label: armor/tools slot; also an admin spawn group,,Equipment
+,"item category: misc crafting materials, not weapons or food",,Etc
+,item type / HUD chip label: bullets or arrows for a weapon,,Ammo
+,"item category: a consumable (food, medicine, a tool)",,Usable
+,"skill category name (see ""Survival skill"")",,Survival
+,"skill category name (see ""Fighting skill"")",,Fighting
+,item category: a crafting material,,Material
+,"crafting action button: make/craft an item (see ""Craft"")",,Make
+,"button: put on or hold this item (Bag, Wardrobe)",,Equip
+,"button: discard the item, dropping it on the ground",,Drop
+,"button: consume or activate the item (food shows ""Eat"" instead)",,Use
+,action: prepare raw food at a lit fire or a stove,,Cook
+,action: smelt ore or scrap into metal at a brazier/furnace,,Melt
+,button: spend a skill point to level up this skill,,Learn
+,weapon stat label: offensive power (paired with Defense),,Attack
+,armor stat: how much damage it blocks,,Defense
+,weapon stat: how many shots fire per second,,Rate of fire
+,weapon stat: how much a gun kicks/spreads when fired,,Recoil
+,"weapon stat: bullets held per magazine, not a shape",,Round
+,item stat: HP restored on use (food/medicine),,Health recovery
+,item stat: FOOD/hunger restored on use,,Hunger recovery
+,equipment stat: move-speed bonus from armor/clothing,,Speed
+,HUD status text shown while a gun is reloading,,Reloading
+,the currency spent in the Skills tab to level up a skill,,Skill point
+,boss name: a giant centipede monster,,Centipede
+,boss name: a giant carnivorous-flower monster,,Rafflesia
+,"boss name (a huge zombie), not the adjective",,Giant
+,"boss name (a spiked zombie boss), not the animal",,Hedgehog
+,label: the coin cost on a shop/wardrobe/rebirth card,,Price
 ,,,"Do you want to
 watch the tutorial?"
 ,,,Level UP
@@ -46,7 +46,7 @@ watch the tutorial?"
 ,,,Wooden stick
 ,,,Axe
 ,,,Crowbar
-,,,Saw
+,"weapon item: a hand saw (tool), not the past tense of ""see""",,Saw
 ,,,Chainsaw
 ,,,Baseball bat
 ,,,Machete
@@ -64,7 +64,7 @@ watch the tutorial?"
 ,,,Heavy machine gun
 ,,,Bolt action sniper
 ,,,Semi auto sniper
-,,,Bow
+,"weapon item: a bow and arrow, not a ribbon bow or to bow",,Bow
 ,,,Cross bow
 ,,,Compound bow
 ,,,Flamethrower
@@ -78,14 +78,14 @@ watch the tutorial?"
 ,,,Plastic armor
 ,,,Night vision
 ,,,Laser sight
-,,,Compass
+,"equip item: a navigation compass, not a drawing tool",,Compass
 ,,,Sundial
-,,,Watch
-,,,Digital Watch
+,"equip item: a wristwatch that tells time, not the verb ""watch""",,Watch
+,"same item as ""Watch"", with a digital display",,Digital Watch
 ,,,Gun silencer
 ,,,Flashlight
 ,,,Robot suit
-,,,Torchlight
+,"equip item: a lit torch you carry, not a brand name",,Torchlight
 ,,,Raw meat
 ,,,Cooked meat
 ,,,Potato
@@ -122,9 +122,9 @@ watch the tutorial?"
 ,,,Campfire
 ,,,Brazier
 ,,,Electric turret
-,,,Trap
+,buildable: a device that damages zombies that step on it,,Trap
 ,,,Signal generator
-,,,Cooker
+,buildable: a stove for cooking food,,Cooker
 ,,,Electric furnace
 ,,,Bicycle
 ,,,Motorcycle
@@ -133,17 +133,17 @@ watch the tutorial?"
 ,,,Piece of steel
 ,,,Steel
 ,,,Piece of gold
-,,,Gold
+,"crafting material (raw gold), not the game's currency (coins)",,Gold
 ,,,Blueprint
 ,,,Machine parts
 ,,,Battery
-,,,Bulb
+,"crafting material: a light bulb, not a plant bulb",,Bulb
 ,,,Gunpowder
-,,,Cloth
+,crafting material (fabric); also the item card's Slot value,,Cloth
 ,,,Computer chip
 ,,,Voltage circuit
 ,,,Engine
-,,,Drone
+,"crafting material: a mechanical drone part, not an insect",,Drone
 ,,,Night Craft desk
 ,,,Night pro craft desk
 ,,,Leather
@@ -159,35 +159,35 @@ watch the tutorial?"
 ,,,Pigeon
 ,,,White pigeon
 ,,,Eagle
-,,,Carolina
+,"pet name: a dog breed (Carolina Dog), not the US state",,Carolina
 ,,,Malamute
 ,,,Doberman
-,,,Santa
-,,,Zombie
-,,,Cowboy
+,cosmetic outfit name: a Santa Claus costume,,Santa
+,"cosmetic outfit name: a zombie costume, not the enemy",,Zombie
+,cosmetic outfit name: a cowboy costume,,Cowboy
 ,,,Golden axe
 ,,,Golden katana
-,,,Health
-,,,Recovery
-,,,Knockback
-,,,Melee damage
-,,,Quick reload
-,,,Shooting skill
-,,,Robin Hood
-,,,Trot
-,,,Patience
-,,,Pickpocket
-,,,Thief
-,,,Chef
-,,,Dwarf
-,,,Robotics
-,,,Engineering
-,,,Cat
-,,,Nocturnal
-,,,Repairman
-,,,Move shooting
-,,,Head shooter
-,,,Poison immunity
+,skill name: more maximum HP,,Health
+,skill name: health regenerates faster,,Recovery
+,skill name: melee hits push zombies back further,,Knockback
+,skill name: melee weapons deal more damage,,Melee damage
+,skill name: reloading takes less time,,Quick reload
+,skill name: guns spread less (steadier aim),,Shooting skill
+,skill name: arrows fly faster and straighter,,Robin Hood
+,skill name: you walk faster,,Trot
+,skill name: hunger drains more slowly,,Patience
+,skill name: zombies drop more loot,,Pickpocket
+,skill name: searching a building finds one more item,,Thief
+,skill name: cooking may give double food,,Chef
+,skill name: smelting may give double metal,,Dwarf
+,"skill name: turrets hit harder, drones fly longer",,Robotics
+,"skill name: generators make more power, boxes hold more",,Engineering
+,skill name: your footsteps are quieter,,Cat
+,skill name: you see further at night,,Nocturnal
+,skill name: repairs go faster,,Repairman
+,skill name: moving adds no spread to your shots,,Move shooting
+,skill name: shots can hit the head for extra damage,,Head shooter
+,skill name: poison hurts less,,Poison immunity
 ,,,More maximum health.
 ,,,Health comes back faster.
 ,,,Hits push zombies further back.
@@ -242,7 +242,7 @@ watch the tutorial?"
 ,,,1 × Carolina
 ,,,Please try again
 ,,,You can't use that now
-,,,Rules
+,menu button: opens the game's rules text,,Rules
 ,,,"Play fair: no exploits, cheats or scripts, and no abusing bugs.
 Be kind: no harassment, hate, bullying or scams in chat.
 Keep personal information private: yours and everyone else's.
@@ -256,29 +256,29 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Disconnected for sending too many network messages
 ,,,Your progress was updated by an administrator
 ,,,Your progress was reset by an administrator
-,,,ADMIN
+,button that opens the admin panel (admins only),,ADMIN
 ,,,Chat reaches the survivors near you in town. Enter the city to talk.
 ,,,Whispers are off. Only survivors near you in town hear the chat.
-,,,Arrival
-,,,Lights On
-,,,Close Quarters
-,,,Quiet Archer
-,,,Scavenger
-,,,Metalworker
-,,,Long Shot
-,,,Centipede Down
-,,,Rafflesia Down
-,,,Giant Down
-,,,Hedgehog Down
-,,,Street Sweeper
-,,,Odd Ones Out
-,,,Woodpile
-,,,First Sunrise
-,,,Road Trip
-,,,Deathless
-,,,Unseen
-,,,Camp Cook
-,,,Sentry Builder
+,achievement name: step into the city for the first time,,Arrival
+,achievement name: switch on a powered electric lamp,,Lights On
+,achievement name: put down zombies with melee weapons,,Close Quarters
+,achievement name: put down zombies with a bow,,Quiet Archer
+,"achievement name (currently hidden, has no trigger yet)",,Scavenger
+,achievement name: smelt metal in a brazier or furnace,,Metalworker
+,achievement name: put down zombies with a sniper rifle,,Long Shot
+,achievement name: help defeat the Centipede boss,,Centipede Down
+,achievement name: help defeat the Rafflesia boss,,Rafflesia Down
+,achievement name: help defeat the Giant boss,,Giant Down
+,achievement name: help defeat the Hedgehog boss,,Hedgehog Down
+,achievement name: put down zombies of any kind,,Street Sweeper
+,achievement name: put down special (non-walker) zombies,,Odd Ones Out
+,achievement name: gather wood into your backpack,,Woodpile
+,achievement name: live through a whole day in the city,,First Sunrise
+,achievement name: ride a bicycle or a motorcycle,,Road Trip
+,achievement name: survive nights in one life without dying,,Deathless
+,"achievement name (currently hidden, has no trigger yet)",,Unseen
+,achievement name: cook food over a fire or a stove,,Camp Cook
+,achievement name: put down a zombie with your own turret,,Sentry Builder
 ,,,Step into the city for the first time.
 ,,,Switch on an electric lamp that has power.
 ,,,Put down zombies with melee weapons.
@@ -297,21 +297,21 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Ride a bicycle or a motorcycle.
 ,,,Survive nights in one life without dying.
 ,,,Put down a zombie with a turret you built.
-,,,Unlocked
-,,,In progress
-,,,Not started
+,achievement/title status: earned,,Unlocked
+,"achievement status: partly done, not finished",,In progress
+,achievement status: no progress made yet,,Not started
 ,,,No coins or items: a record of what you did.
 ,,,"Achievements count what you do in the city. The server keeps the count, as you play.
 In progress comes first, the closest to done at the top; then what you have unlocked; then what is left.
 They are a record of what you did: they give no coins and no items. Titles are earned their own way, in the Wardrobe."
-,,,Continue
-,,,New game
+,main menu button: resume your saved survivor (not New game),,Continue
+,main menu button: start a new life (keeps level and coins),,New game
 ,,,Shop
 ,,,Settings
 ,,,Achievements
-,,,Records
+,"menu button: your personal-best stats, not audio/db records",,Records
 ,,,How to play
-,,,Credits
+,"menu button: the credits screen (who made it), not currency",,Credits
 ,,,Developed by
 ,,,Inspired by the original
 ,,,Thank you for playing!
@@ -321,19 +321,19 @@ They are a record of what you did: they give no coins and no items. Titles are e
 ,,,About
 ,,,Audio
 ,,,Interface
-,,,SFX
+,"settings row: sound-effects volume (gunshots, hits, footsteps)",,SFX
 ,,,"Gunshots, hits, footsteps, menu clicks."
-,,,BGM
+,"settings row: background-music volume (night music, ambience)",,BGM
 ,,,"Night music, ambience and the heartbeat."
 ,,,HUD size
 ,,,"Console, hints and messages."
-,,,Reduce motion
+,settings row: stills the moving town for motion sensitivity,,Reduce motion
 ,,,Set in the Roblox menu. Stills the town.
 ,,,Graphics
 ,,,"Low: simpler night, fewer particles."
-,,,Auto
-,,,High
-,,,Low
+,graphics quality option: switches quality automatically,,Auto
+,graphics quality option: highest detail,,High
+,"graphics quality option: simplest, most performant",,Low
 ,,,Stick size
 ,,,How big the move stick is.
 ,,,Stick height
@@ -347,27 +347,27 @@ They are a record of what you did: they give no coins and no items. Titles are e
 ,,,Left-handed
 ,,,Swaps the stick and the aim pad.
 ,,,"They show when you play by touch. The preview is this screen, with the controls where they will sit."
-,,,Off
-,,,On
-,,,Defaults
+,settings toggle value: turned off,,Off
+,settings toggle value: turned on,,On
+,settings button: resets this tab back to its defaults,,Defaults
 ,,,"SFX, BGM, HUD size to 50%, graphics Auto."
 ,,,"SFX, BGM and HUD size go back to 50%, and Graphics to Auto."
 ,,,All six back to how they came.
 ,,,"Sizes and heights back to 50%, a floating stick, the aim pad on the right."
-,,,Reset
+,button: confirm resetting settings back to defaults,,Reset
 ,,,Reset to defaults?
 ,,,Cancel
-,,,Device
+,settings row: which input device's controls to show,,Device
 ,,,"WASD moves, mouse aims."
 ,,,Thumbs move and aim.
 ,,,Sticks move and aim.
 ,,,Keyboard & mouse
 ,,,Touch
 ,,,Gamepad
-,,,Menu
-,,,Backpack
+,control legend: opens the in-run menu (never pauses the game),,Menu
+,control legend: opens the Bag inventory (never pauses the game),,Backpack
 ,,,Move
-,,,Aim
+,control legend: aims your equipped weapon,,Aim
 ,,,"Interact, search, loot"
 ,,,Right click also interacts; Backspace goes back in menus.
 ,,,Move (the stick opens under it)
@@ -376,13 +376,13 @@ They are a record of what you did: they give no coins and no items. Titles are e
 ,,,Automatics keep firing
 ,,,Interact (appears when you can)
 ,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
-,,,Interact
+,"control legend: the context-sensitive action key (loot, use)",,Interact
 ,,,"Menus: the stick or D-pad moves the focus ring, B goes back."
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival
 ,,,Inspired by
-,,,Mode
+,"How to play row: the game's co-op mode, not a settings mode",,Mode
 ,,,"Co-op, up to"
 ,,,survivors
 ,,,Version
@@ -393,16 +393,16 @@ Touch controls: size, height and side of the phone controls, with a preview of y
 Controls: every key and button the game listens to, on each device.
 About: the game and its credits.
 A change applies at once and is saved with your progress. Defaults puts a tab back as it came."
-,,,Survivor
+,your character's name; also a title earned for one night,,Survivor
 ,,,Best day
-,,,Level
+,"stat label: your survivor's XP level, not a floor or a rating",,Level
 ,,,Bosses defeated
 ,,,Loadout
-,,,Clothes
-,,,Hand
-,,,Gun
-,,,Outfit
-,,,Pet
+,loadout slot: the body-clothing item worn,,Clothes
+,"loadout slot: a hand tool/gadget (flashlight, compass, watch)",,Hand
+,loadout slot: the equipped firearm (see Weapon for melee),,Gun
+,loadout slot: the cosmetic costume worn,,Outfit
+,loadout slot: the cosmetic companion that follows you,,Pet
 ,,,Zombie survival
 ,,,Loading your progress...
 ,,,Packs & costumes
@@ -410,11 +410,11 @@ A change applies at once and is saved with your progress. Defaults puts a tab ba
 ,,,Back
 ,,,Close
 ,,,Buy
-,,,Owned
+,shop/wardrobe status: you already bought this item,,Owned
 ,,,Packs
 ,,,Earn coins
 ,,,"Fixed contents, shown in full. A pack goes into your backpack when you enter the city."
-,,,Pending
+,shop status: a pack bought but not yet in your backpack,,Pending
 ,,,Stays until a New game
 ,,,"Every pack has fixed contents, shown in full on its card: what you see is what you get.
 Packs go into your backpack the next time you enter the city.
@@ -427,7 +427,7 @@ Coins are earned by playing: the Earn coins tab shows how, and how far you are f
 ,,,days to go
 ,,,Help bring one down. Bosses wake at landmarks from day
 ,,,"Given once, to every new survivor."
-,,,Received
+,status: a one-time reward already given (welcome gift),,Received
 ,,,Progress not loaded
 ,,,"Your progress could not be loaded.
 Nothing will be overwritten: retry,
@@ -435,8 +435,8 @@ or play without saving."
 ,,,Retry
 ,,,Play without saving
 ,,,Saving is unavailable in this environment
-,,,Saving...
-,,,Saved
+,save indicator: the server is writing your progress now,,Saving...
+,save indicator: your progress was written successfully,,Saved
 ,,,Progress not saved — retrying
 ,,,Progress not saved
 ,,,Could not save
@@ -448,7 +448,7 @@ or play without saving."
 ,,,Five days is more than most.
 ,,,Everyone's first night ends this way. The second one goes better.
 ,,,The street took it back. Take it again.
-,,,Rebirth
+,mechanic: pay coins to revive this life now (vs New game),,Rebirth
 ,,,Survival days
 ,,,Continue price
 ,,,Your run is over
@@ -456,7 +456,7 @@ or play without saving."
 Level, skills, coins and packs are kept."
 ,,,"Rebirth wakes you now. New game starts a new life at day 1,
 which wakes at first light. Level, skills, coins and packs are kept."
-,,,Purchased
+,shop status: this pack/item was just bought,,Purchased
 ,,,Not enough coins
 ,,,more needed
 ,,,Too many packs waiting
@@ -470,14 +470,14 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Boss defeated
 ,,,Welcome gift
 ,,,No ammo
-,,,Melee
-,,,Night
+,weapon type label: close-combat weapons (vs guns or the bow),,Melee
+,"time-of-day label: nighttime, when zombies swarm",,Night
 ,,,Morning
 ,,,Afternoon
 ,,,Evening
-,,,Day
+,"time-of-day label, and also the town's day counter (""Day 7"")",,Day
 ,,,Achievement unlocked
-,,,Delivered
+,shop status: a pack's contents were added to your backpack,,Delivered
 ,,,Your progress was loaded; it applies when you return to the lobby
 ,,,Zombies are coming
 ,,,Survive the night
@@ -493,15 +493,15 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Getting started
 ,,,Got it
 ,,,Life day
-,,,Camp
-,,,North
+,compass/GPS label: your placed camp marker,,Camp
+,compass label: the cardinal direction,,North
 ,,,No camp yet
-,,,N
+,compass dial: abbreviation for North,,N
 ,,,Nice.
 ,,,Night came first
 ,,,Rebirth is for your own world; here you wake at daybreak
-,,,Reload
-,,,Skip
+,control legend: reload the equipped gun,,Reload
+,button: skip the tutorial/onboarding step,,Skip
 ,,,"Start a new life from day 1.
 Level, skills, coins and packs are kept.
 The town keeps its own day: nothing you do resets it."
@@ -539,31 +539,31 @@ Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, n
 Houses are looted once with E; their shelves refill after half a day.
 Hunger drains all day: eat before it empties, not after.
 Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
-,,,Rifle
-,,,Machine gun
-,,,Shotgun
-,,,Sniper rifle
-,,,Special
-,,,Food
-,,,Medicine
-,,,Clothing
-,,,Tool
-,,,Gear
-,,,Buildable
-,,,Fuel
+,weapon type label shown on the item card,,Rifle
+,weapon type label shown on the item card,,Machine gun
+,weapon type label shown on the item card,,Shotgun
+,weapon type label shown on the item card,,Sniper rifle
+,"weapon type label: unique-mechanic weapons (flamethrower, stun gun)",,Special
+,item type label shown on the item card,,Food
+,item type label shown on the item card,,Medicine
+,item type label: body armor/clothes,,Clothing
+,"item type label: hand-held gadgets (flashlight, compass, watch)",,Tool
+,"Bag tab / item type label: tools and equipment, not vehicle gear",,Gear
+,item type label: a placeable structure,,Buildable
+,"item type label: oil, burned by vehicles and generators",,Fuel
 ,,,Damage
-,,,Cooldown
-,,,Draw time
-,,,Range
-,,,Reach
-,,,Magazine
-,,,Charge
+,weapon stat: time between attacks or shots,,Cooldown
+,bow stat: how long you must hold before it fires,,Draw time
+,"weapon stat: shooting distance, not a mountain range or a stove",,Range
+,melee weapon stat: how far it hits,,Reach
+,"gun stat: ammo held before reloading, not a publication",,Magazine
+,"stun gun stat: its charge level, not a fee or to charge",,Charge
 ,,,Speed boost
 ,,,Steady aim
 ,,,Pain relief
 ,,,Cooks into
 ,,,"Cook it at a lit fire, from the Craft tab."
-,,,Slot
+,item-card stat: which equip slot it goes in,,Slot
 ,,,Used in recipes
 ,,,Used to craft
 ,,,Not used in any recipe.
@@ -581,20 +581,20 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,It follows you and everyone sees it. It never fights or collects.
 ,,,Attack / shoot
 ,,,"Drag to aim, let go to attack"
-,,,Click
-,,,Tap
-,,,Unequip
-,,,Put away
+,control legend: mouse click,,Click
+,control legend: touchscreen tap,,Tap
+,button: take off/remove the worn item,,Unequip
+,"button: holster your weapon, leaving your hands empty",,Put away
 ,,,Your hands are empty. Equip draws it again.
 ,,,Open Craft
 ,,,Wardrobe
 ,,,Outfits
 ,,,Pets
-,,,Status
-,,,Equipped
+,"wardrobe row label; its value is Locked, Owned or Equipped",,Status
+,wardrobe status: this outfit or pet is worn now,,Equipped
 ,,,From a pack
 ,,,Buy for
-,,,coins
+,"the game's currency, earned by playing (not literal coins)",,coins
 ,,,Came in a pack: it stays until a New game. Buy it to keep it for good.
 ,,,"What you buy is yours for good, and everyone sees it. Coins are earned by playing."
 ,,,"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.
@@ -603,12 +603,12 @@ Locked items show their price in coins. Coins are earned by playing: days surviv
 Titles are never sold: each one is earned by playing, and shows under your name for everyone.
 Pick an item to try it on in the preview, then buy or wear it."
 ,,,Titles
-,,,Title
-,,,None
+,loadout label: the earned title (singular of the Titles tab),,Title
+,value: no title equipped,,None
 ,,,Unequip title
-,,,Locked
-,,,Horde Breaker
-,,,Week One
+,status: not yet earned or bought,,Locked
+,title name: put down 100 zombies,,Horde Breaker
+,title name: survive 7 days in one life,,Week One
 ,,,Survive your first night.
 ,,,Put down 100 zombies.
 ,,,Stay alive for 7 days in one life.
@@ -619,10 +619,10 @@ Pick an item to try it on in the preview, then buy or wear it."
 ,,,"Earned by playing, never sold. Everyone sees it under your name."
 ,,,No title under your name.
 ,,,"Titles are earned by playing, never sold. Everyone sees yours under your name."
-,,,HP
-,,,FOOD
-,,,LV
-,,,FIRE
+,HUD bar prefix: current/max health,,HP
+,HUD bar prefix: current/max hunger,,FOOD
+,HUD bar prefix: level,,LV
+,touch button: fire the equipped weapon,,FIRE
 ,,,Night in
 ,,,Switch weapon
 ,,,Tap a weapon
@@ -631,15 +631,15 @@ Pick an item to try it on in the preview, then buy or wear it."
 ,,,No healing items
 ,,,No food
 ,,,Eating that would kill you
-,,,Start
+,lobby button: opens the Survivor screen to enter the city,,Start
 ,,,Enter the city
 ,,,Stats
 ,,,This life
 ,,,Record
-,,,Empty
-,,,Town
+,loadout slot value: nothing equipped there,,Empty
+,lobby label: the shared town's current status/day,,Town
 ,,,in town
-,,,Solo
+,lobby value: you're the only survivor in this town,,Solo
 ,,,your own town
 ,,,last town fell
 ,,,Your new life wakes at first light
@@ -656,27 +656,27 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,Usables
 ,,,Materials
 ,,,Skills
-,,,EQUIPPED
-,,,DEFAULT
-,,,COSTUME
-,,,MAKES
-,,,START
-,,,LEVEL
-,,,WEAPON
-,,,CLOTHES
-,,,HAND
-,,,GUN
-,,,OUTFIT
-,,,PET
-,,,TITLE
-,,,USE
-,,,RELOAD
+,Bag item state: this item is worn or held now,,EQUIPPED
+,"Bag item state: empty hands, no weapon equipped",,DEFAULT
+,Bag item state: shown via an equipped cosmetic override,,COSTUME
+,"crafting recipe: how many the recipe produces (""MAKES ×2"")",,MAKES
+,"button label (all caps), same meaning as ""Start""",,START
+,"label (all caps): survivor level, paired with a number",,LEVEL
+,loadout slot key (all caps): the melee weapon equipped,,WEAPON
+,loadout slot key (all caps): body clothing,,CLOTHES
+,"loadout slot key (all caps): a hand tool/gadget, not melee",,HAND
+,loadout slot key (all caps): the firearm equipped,,GUN
+,loadout slot key (all caps): the cosmetic costume worn,,OUTFIT
+,loadout slot key (all caps): the cosmetic companion,,PET
+,loadout slot key (all caps): the earned title,,TITLE
+,touch-button caption (all caps): use the item,,USE
+,touch-button caption (all caps): reload the gun,,RELOAD
 ,,,Change in the Bag during a match
 ,,,Not owned
 ,,,Currently equipped.
 ,,,Nothing is worn in this slot now.
 ,,,This is the weapon in your hands.
-,,,Eat
+,"button: consume a food item (""Use"" is for other items)",,Eat
 ,,,None left
 ,,,Consumed when used.
 ,,,No weapons yet
@@ -700,7 +700,7 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,Need a craft desk
 ,,,Need a lit fire
 ,,,Lit fire nearby
-,,,smelter
+,"""Near you"" list item: a lit brazier/furnace (for smelting)",,smelter
 ,,,Need a lit brazier
 ,,,Lit brazier nearby
 ,,,"Light a brazier and stand next to it (a campfire is not hot enough for metal), then open the backpack again."
@@ -714,11 +714,11 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,Need craft desk
 ,,,Missing items
 ,,,Can't craft
-,,,Survival skill
-,,,Fighting skill
-,,,Utility skill
+,skill category name shown under a survival-type skill,,Survival skill
+,skill category name shown under a combat-type skill,,Fighting skill
+,skill category name shown under a utility-type skill,,Utility skill
 ,,,Next level
-,,,Max
+,value: this skill is at its maximum level,,Max
 ,,,Max level
 ,,,skill point to spend.
 ,,,skill points to spend.
@@ -728,17 +728,17 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.
 Level up to earn skill points, and spend them in Skills.
 The backpack and the menu never stop the world: open them somewhere safe."
-,,,All time
+,Records section: totals across every life ever played,,All time
 ,,,Titles earned
-,,,Rebirths
+,Records stat: how many times you've paid to Rebirth,,Rebirths
 ,,,Survivors
 ,,,Sort by
-,,,Lv
+,scoreboard column header: survivor level,,Lv
 ,,,Put down
 ,,,Name
-,,,Alive
-,,,Down
-,,,Dead
+,"scoreboard status: still playing, not downed",,Alive
+,"scoreboard status: knocked down/incapacitated, not defeated",,Down
+,scoreboard status: this life has ended,,Dead
 ,,,until dawn
 ,,,Click a column to sort
 ,,,Waiting for the town's list...
@@ -753,7 +753,7 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Call back drone
 ,,,Drone charging
 ,,,Pick up
-,,,full
+,pickup prompt: you're already carrying the max of this item,,full
 ,,,Pick something up
 ,,,"Walk over food, ammo and materials. For weapons and gear, press use."
 ,,,Siphon Oil
