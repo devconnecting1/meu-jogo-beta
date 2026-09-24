@@ -75,8 +75,6 @@ export const INPUT_DILATION = 0.02;
 export const SNAP_NEAR_HZ = 20;
 /** per-entity rate of the mid interest ring: half of the mid zombies per snapshot, rotating (§4.3) */
 export const SNAP_MID_HZ = 10;
-/** reliable deltas (World) are flushed as one batch per tick when there is something to send (§3.1) */
-export const WORLD_FLUSH_EVERY_TICKS = 1;
 /** construction HP deltas (SolidHp) are batched at this rate (§4.5) */
 export const SOLID_HP_HZ = 4;
 /** the server re-sends the Clock delta at least this often (seconds) and on every change (§4.5, §4.6) */
@@ -108,6 +106,15 @@ export function ticksPer(hz: number, simHz = SIM_HZ): number {
 export const SNAP_NEAR_EVERY_TICKS = ticksPer(SNAP_NEAR_HZ);
 /** mid-ring full refresh divisor: every 6 ticks at 60 Hz (§4.1) */
 export const SNAP_MID_EVERY_TICKS = ticksPer(SNAP_MID_HZ);
+/**
+ * The reliable `World` deltas and the `Fx` effects go out on the snapshot's cadence, one batch each (audit M3): the
+ * client plays an effect when its drawing reaches the effect's tick (client/net/fxTimeline.ts), so a batch per tick
+ * bought nothing but three times the events -- up to 60 Fx and 60 World a second per client in a fight. What cannot
+ * wait a tick or two -- InitBegin, WorldReset, PlayerLife -- flushes the World batch at once (server/net/replication.ts
+ * `urgent`).
+ */
+export const WORLD_FLUSH_EVERY_TICKS = SNAP_NEAR_EVERY_TICKS;
+export const FX_FLUSH_EVERY_TICKS = SNAP_NEAR_EVERY_TICKS;
 
 // ---------------------------------------------------------------- players and caps (§0 D7, §3.5, §4.4)
 
@@ -132,9 +139,17 @@ export const NET_ID_REUSE_DELAY_S = 2;
 export const BOSS_NET_ID_MAX = 255;
 /** dynamic ids (constructions, ground items) are server-assigned from here up (§1, §4.5) */
 export const DYNAMIC_ID_BASE = 1000000;
-/** constructions per player / per server (§8.1) */
+/** constructions per player (counted by the builder's ACCOUNT, MP-24) / per server (§8.1) */
 export const MAX_BUILDS_PER_PLAYER = 150;
 export const MAX_BUILDS_PER_SERVER = 600;
+/**
+ * (MP-24) A builder out of the world this long -- a disconnect, the shop, the lobby all fit in it -- and their
+ * constructions start to rot; they lose their whole hp over BUILD_ABANDON_DECAY_S more and fall, unless the builder
+ * comes back or somebody in the world repairs them (and so takes them over). One account, or a handful, cannot hold
+ * the server's MAX_BUILDS_PER_SERVER for ever.
+ */
+export const BUILD_ABANDON_GRACE_S = 600;
+export const BUILD_ABANDON_DECAY_S = 300;
 /**
  * Largest town seed (MP-22). shared/game/world.ts `TownRng` is MINSTD: it reduces a seed modulo 2^31 − 1 and maps 0
  * to 1, so 1 … 2^31 − 2 are exactly the seeds that each build a town of their own. InitBegin and WorldReset carry
@@ -190,12 +205,34 @@ export const INTEREST_EXIT = 1650;
 export const DARK_SENSE_RANGE = 150;
 /** ground items interest radius (§4.5) */
 export const ITEM_INTEREST = 1800;
+/**
+ * The server's ground items (§4.5, §8.1; security review of 5967a18, #3): every one is world litter (a drop, a
+ * bin, a tree, the population's scatter, a trophy), and it rots GROUND_ITEM_LIFE_S after it appeared; and the town
+ * never holds more than GROUND_ITEM_CAP, the OLDEST going first. A chainsaw at one car made 73 a minute that
+ * nothing took away, and the sweep, the E press and every join read all of them. An honest night leaves a few
+ * hundred at most: the cap is for a farm, the lifetime for a town nobody tidies.
+ */
+export const GROUND_ITEM_LIFE_S = 600;
+export const GROUND_ITEM_CAP = 1000;
+/**
+ * (§4.3, audit L2) A ground item younger than this is NEWS: it fell where something happened just now -- a zombie
+ * died there, a survivor dropped or spilled something -- so it is told only to a viewer who could see the spot, by the
+ * roof and dark rules the horde is sent by (server/sim/items.ts `sees`). Older, it is litter, told in range as before:
+ * asked of every item, the rule would pop each one into the light as a survivor walks up to it at night (the sweep runs
+ * twice a second) and cost a light test per item in range per sweep.
+ */
+export const ITEM_NEWS_S = 30;
 /** admin free camera (§10): the point the admin's interest follows is kept this close to their body */
 export const FREECAM_MAX_RANGE = 3000;
 /** client-side removal of an entity not seen for this long, by ring, and its fade-out (§4.4) */
 export const DESPAWN_NEAR_S = 0.3;
 export const DESPAWN_MID_S = 0.6;
 export const DESPAWN_FADE_S = 0.15;
+/**
+ * A received body's fade-in, alpha per second (client/net/snapshotBuffer.ts). The server needs it too: a track that
+ * never fully appeared fades out sooner, and server/net/interest.ts has to know when the client's track is gone.
+ */
+export const TRACK_FADE_IN_RATE = 3;
 
 // ---------------------------------------------------------------- packet sizes (§1.1, §4.1, §4.2, §4.5)
 
@@ -316,6 +353,12 @@ export const INTERP_MAX_S = 0.25;
 export const RENDER_DELAY_RATE = 0.05;
 /** extrapolation when the interpolation buffer runs dry */
 export const EXTRAPOLATE_MAX_S = 0.1;
+/**
+ * An effect or a zombie's death waits for the drawing to reach its tick (audit M3: client/net/fxTimeline.ts,
+ * client/net/snapshotBuffer.ts `zombieDied`), never longer than this: a render time that cannot reach it (a tick
+ * unwrapped on the wrong lap, a clock re-anchoring) must not hold an effect for ever.
+ */
+export const FX_HOLD_MAX_S = 1.5;
 /** reconciliation: re-simulate above this error; visual offset decays with this τ; snaps above this */
 export const RECONCILE_EPS = 0.01;
 export const VISUAL_OFFSET_TAU_S = 0.1;

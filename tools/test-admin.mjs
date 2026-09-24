@@ -670,6 +670,11 @@ function town() {
 	return { s, admin, bob, spA, spB, RF, EV, ACK, ask, tool, audit, pays, logStore };
 }
 
+/** enough ticks for the World deltas to go out: they are batched on the snapshot's cadence (WORLD_FLUSH_EVERY_TICKS) */
+function flushWorld(t) {
+	for (let i = 0; i <= CFG.WORLD_FLUSH_EVERY_TICKS; i++) t.s.beat();
+}
+
 /** a point near `sp`, towards the middle of the town, where a circle of radius r fits (undefined when none) */
 function freeNear(s, sp, offset, r = 24) {
 	const w = s.sim.world;
@@ -810,7 +815,7 @@ section(
 		for (let i = 0; i <= CFG.ADMIN_BURST; i++) t.RF.OnServerInvoke(again, { kind: "world", op: "state" });
 		verify("rejoined and flooding again: kicked again", kicksAgain === 1, `kicks ${kicksAgain}`);
 		const log = t.audit();
-		const autos = log.filter(e => e.action === "auto-kick");
+		const autos = log.filter(e => e.action === "auto:flood");
 		verify(
 			"ONE audit entry for the automatic kick per player per server, the flooder as its TARGET and the server as who did it",
 			autos.length === 1 &&
@@ -828,7 +833,7 @@ section(
 		const stored = [...t.logStore.data.values()].flat();
 		verify(
 			"the automatic kick reaches the stored log; DENIED does not",
-			stored.some(e => e.action === "auto-kick") && !stored.some(e => e.action === "DENIED"),
+			stored.some(e => e.action === "auto:flood") && !stored.some(e => e.action === "DENIED"),
 		);
 	},
 );
@@ -1086,7 +1091,7 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		res.ok && Math.abs(c.dayTime - 13.5) < 1e-6,
 		`${res.message} (${c.dayTime})`,
 	);
-	t.s.beat();
+	flushWorld(t);
 	const clocks = [];
 	for (const e of World.sent) {
 		if (e.to !== undefined) continue;
@@ -1432,7 +1437,7 @@ section("10) items and structures through the server world: announced to the cli
 		res.ok && t.s.sim.world.items.length >= n0 + 1 && item !== undefined,
 		`${res.message} ${J(item)}`,
 	);
-	t.s.beat();
+	flushWorld(t);
 	const adds = [];
 	for (const e of World.sent) {
 		if (e.to !== t.admin) continue;
@@ -1463,11 +1468,16 @@ section("10) items and structures through the server world: announced to the cli
 	res = t.tool(t.admin, { op: "spawnStructure", structure: "barricade", x: spot.x, y: spot.y });
 	const wall = t.s.sim.world.solids[t.s.sim.world.solids.length - 1];
 	verify(
-		"a barricade: a construction of the server's world, owned by nobody's slot",
-		res.ok && t.s.sim.world.solids.length === solids + 1 && wall.placeable === 10 && wall.owner === CFG.SLOT_NONE,
-		`${res.message ?? res.error} ${J({ placeable: wall.placeable, owner: wall.owner })}`,
+		"a barricade: a construction of the server's world, built by the ADMIN's account (MP-24: its cap, its rot)",
+		res.ok &&
+			t.s.sim.world.solids.length === solids + 1 &&
+			wall.placeable === 10 &&
+			wall.builder === t.admin.UserId &&
+			wall.owner === t.spA.slot &&
+			t.s.sim.build.countOfUser(t.admin.UserId) === 1,
+		`${res.message ?? res.error} ${J({ placeable: wall.placeable, owner: wall.owner, builder: wall.builder })}`,
 	);
-	t.s.beat();
+	flushWorld(t);
 	const solidAdds = [];
 	for (const e of World.sent) {
 		if (e.to !== undefined) continue;
@@ -2163,19 +2173,19 @@ section(
 		const mem = t.audit();
 		verify(
 			"P9: after 320 auto-kicks the admin's kick is still in the panel's log",
-			mem.some(e => e.action === "kick") && mem.some(e => e.action === "auto-kick"),
-			`${mem.length} entries, ${mem.filter(e => e.action === "auto-kick").length} auto-kick`,
+			mem.some(e => e.action === "kick") && mem.some(e => e.action === "auto:flood"),
+			`${mem.length} entries, ${mem.filter(e => e.action === "auto:flood").length} auto-kick`,
 		);
 		t.s.shutdown();
 		const stored = storedAudit(t);
 		verify(
 			"...and in the stored log (an automatic kick is trimmed before any admin action)",
 			stored.some(e => e.action === "kick"),
-			`${stored.length} stored, ${stored.filter(e => e.action === "auto-kick").length} auto-kick`,
+			`${stored.length} stored, ${stored.filter(e => e.action === "auto:flood").length} auto-kick`,
 		);
 		verify(
 			"...where each auto-kick names the flooder as its target, never as its admin",
-			stored.filter(e => e.action === "auto-kick").every(e => e.adminId === 0 && e.targetId > 0),
+			stored.filter(e => e.action === "auto:flood").every(e => e.adminId === 0 && e.targetId > 0),
 		);
 
 		// a non-admin's refused call between two identical admin lines does not break their merge
@@ -2411,7 +2421,7 @@ section(
 		const count0 = t.s.sim.build.count();
 		World.sent.length = 0;
 		res = t.tool(t.admin, { op: "removeStructure", x: spot.x + 10, y: spot.y });
-		t.s.beat();
+		flushWorld(t);
 		const removes = [];
 		for (const e of World.sent) {
 			if (e.to !== undefined) continue;

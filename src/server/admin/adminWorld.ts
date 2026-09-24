@@ -4,7 +4,7 @@ import { BossState, ZombieType, bossHitRadius, createBoss, createZombie } from "
 import type { PlayerState } from "shared/game/player";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { GroundItem, removeSolid, spawnGroundItem } from "shared/game/world";
-import { MAX_BUILDS_PER_SERVER } from "shared/net/mpConfig";
+import { MAX_BUILDS_PER_PLAYER, MAX_BUILDS_PER_SERVER, SLOT_NONE } from "shared/net/mpConfig";
 import * as Mind from "shared/sim/ai/memory";
 import { spawnAlpha } from "shared/sim/ai/zombieBrain";
 import type { AdminEvent, AdminResponse } from "shared/admin/protocol";
@@ -594,14 +594,23 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		const [x0, y0, x1, y1] = W.townBounds(s.world, 0);
 		if (op.x < x0 || op.y < y0 || op.x > x1 || op.y > y1) return refuse(op.op, "outside the town", what);
 		const bodies = new Array<ServerPlayer["state"]>();
-		for (const sp of s.players()) bodies.push(sp.state);
-		const placed = build.placeFree(info.placeable, op.x, op.y, bodies, s.horde?.zombies ?? []);
+		let own = SLOT_NONE;
+		for (const sp of s.players()) {
+			bodies.push(sp.state);
+			if (sp.userId === caller.UserId) own = sp.slot;
+		}
+		// MP-24: the admin's account builds it (its cap, its rot once the admin is gone, adoptable by a repairer)
+		const placed = build.placeFree(info.placeable, op.x, op.y, bodies, s.horde?.zombies ?? [], {
+			slot: own,
+			userId: caller.UserId,
+		});
 		if (placed.kind !== "placed") {
-			const why =
-				placed.kind === "refused" && placed.why === "capServer"
-					? `the server already holds ${MAX_BUILDS_PER_SERVER} constructions`
-					: "blocked: something is in the way";
-			return refuse(op.op, why, what);
+			const why = placed.kind === "refused" ? placed.why : "unknown";
+			let text = "blocked: something is in the way";
+			if (why === "capServer") text = `the server already holds ${MAX_BUILDS_PER_SERVER} constructions`;
+			else if (why === "capPlayer") text = `your account already holds ${MAX_BUILDS_PER_PLAYER} constructions`;
+			else if (why === "sealed") text = "it would pen a survivor in (MP-24)";
+			return refuse(op.op, text, what);
 		}
 		const marked = deps.markAssisted(caller);
 		return done(caller, op, `${info.label} placed`, marked, "all");
@@ -609,8 +618,9 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 
 	/**
 	 * The construction nearest to the click (`nearestConstruction`), whoever built it -- a survivor's, or an admin's
-	 * (owner SLOT_NONE: no survivor can take one down, and nothing decays). `removeSolid` fires the world's hook: the
-	 * SolidRemove to everybody, the flow field, the grid and the server cap (server/sim/build.ts).
+	 * (no survivor can take one down, MP-11; an abandoned one rots, MP-24, but a standing one only falls here or to the
+	 * horde). `removeSolid` fires the world's hook: the SolidRemove to everybody, the flow field, the grid and both
+	 * caps (server/sim/build.ts).
 	 */
 	function removeStructure(
 		caller: Player,

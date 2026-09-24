@@ -65,6 +65,14 @@ export interface PlayerState {
 	 * with it. `stepPlayer` then moves the survivor with the vehicle's handling instead of the walk.
 	 */
 	ride?: RideState;
+	/**
+	 * (DESIGN_RULES ITM-06) The weapon is PUT AWAY: empty hands, like Dead Town. No attack at all -- no shot, no swing,
+	 * no reload, no fists -- while walking, E, doors, pickups, building and vehicles work as ever. Session state of THIS
+	 * body, never saved: every body (a new life, a Rebirth, daybreak, a rejoin) stands up with the weapon drawn. The
+	 * SERVER decides it (server/sim/backpack.ts, the Holster verb and SwitchWeapon, which draws); the client predicts it
+	 * (client/net/bagPrediction.ts) and the wallet's `bag.holster` reconciles it. Undefined = drawn.
+	 */
+	holstered?: boolean;
 	noMoveKill: number;
 	dead: boolean;
 	/** admin panel "god mode" (and free camera): damageToPlayer does nothing */

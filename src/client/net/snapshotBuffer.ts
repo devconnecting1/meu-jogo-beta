@@ -47,18 +47,21 @@
  * Pure: no Roblox service and no Instance (the world is only used for the extrapolation's wall check).
  */
 import { angleLerp, lerp } from "shared/engine/vec2";
-import { unwrapTick } from "shared/net/codec";
+import { seqDiff, unwrapTick, wrapU16 } from "shared/net/codec";
 import {
 	DESPAWN_FADE_S,
 	DESPAWN_MID_S,
 	DESPAWN_NEAR_S,
 	EXTRAPOLATE_MAX_S,
+	FX_HOLD_MAX_S,
 	INTERP_DEFAULT_S,
 	INTERP_MAX_S,
 	INTERP_MIN_S,
+	NET_ID_REUSE_DELAY_S,
 	RENDER_DELAY_RATE,
 	SIM_HZ,
 	SNAP_NEAR_HZ,
+	TRACK_FADE_IN_RATE,
 	midViewExtraTicks,
 	ticksPer,
 } from "shared/net/mpConfig";
@@ -103,9 +106,10 @@ const RENDER_RESET_S = DELAY_SNAP_S;
  * How fast a received body fades in and out, per second. It is the very rate the horde's own `updateAlpha`
  * used before F2 (shared/sim/ai/zombieBrain.ts), and §4.3 leans on it: with the interest hiding whatever is
  * outside every light at night, a zombie stepping into a lamp's circle appears — and this is what stops it
- * appearing as a pop. §4.4's despawn fade rides the same number.
+ * appearing as a pop. §4.4's despawn fade rides the same number. Shared with the server (TRACK_FADE_IN_RATE), which
+ * has to know when a track that never fully appeared is gone (server/net/interest.ts `retiredAfterS`).
  */
-const ALPHA_RATE = 3;
+const ALPHA_RATE = TRACK_FADE_IN_RATE;
 
 /** one survivor as the interpolation sees them right now */
 export interface RemoteState {
@@ -312,6 +316,10 @@ class ActorTrack {
 	drawnY = 0;
 	/** this track's render delay on top of the buffer's, in ticks: the mid ring's wider spacing; -1 = unset */
 	extra = -1;
+	/** where it stands in the buffer's draw order (`SnapshotBuffer.zOrder`), or -1 */
+	ix = -1;
+
+	constructor(readonly netId: number) {}
 
 	insert(s: ActorSample): boolean {
 		return insertSample(this.samples, s);
@@ -371,6 +379,8 @@ export interface SnapshotStats {
 	/** zombies and bosses currently tracked (§11.3 F2: the horde must be the same on every screen) */
 	zombies: number;
 	bosses: number;
+	/** zombie samples refused because the reliable `ZombieDied` had already buried that netId (§4.4, audit M1) */
+	ghosts: number;
 	/** frames whose render time had to be held because it would have gone backwards */
 	stalls: number;
 	/** times the delay was (re)locked from a median: once after a reset, then once per resync */
@@ -436,12 +446,43 @@ export class SnapshotBuffer {
 	/** one track per zombie netId and per boss netId (§4.4: identity comes from the snapshot itself) */
 	private readonly zombies = new Map<number, ActorTrack>();
 	private readonly bosses = new Map<number, ActorTrack>();
+	/**
+	 * The horde's DRAW order (perf audit M2): the view draws `zombieStates()` in this order and the renderer hands
+	 * out sprite slots by it, so the order of one frame has to be the order of the next. It used to be the iteration
+	 * order of `zombies` -- a Luau table keyed by sparse integers, whose order a recycled netId or a rehash could
+	 * reshuffle wholesale, moving every walker's seven sprites to other slots in one frame. Here a new body is
+	 * appended and a body that goes is replaced by the LAST one (`dropZombie`): a spawn writes one walker's sprites,
+	 * a death two walkers', whatever the horde's size (tools/test-pool.mjs 10).
+	 */
+	private readonly zOrder = new Array<ActorTrack>();
 	private readonly zOut = new Array<RemoteZombie>();
 	private readonly bOut = new Array<RemoteBoss>();
 	/** the view reads these every frame, so they are refilled in place instead of rebuilt */
 	private readonly zPool = new Array<RemoteZombie>();
 	private readonly bPool = new Array<RemoteBoss>();
 	private readonly retire = new Array<number>();
+	/**
+	 * netId → the wire tick (u16) of the batch that carried its `ZombieDied` (§4.4, audit M1). `Snap` is unreliable and
+	 * unordered against the reliable `World`: a part carrying that zombie ALIVE, from a tick before the death, can land
+	 * after the death did -- by jitter, or because it was still sitting in netClient's queue -- and used to build a new
+	 * track: the body stood up again for its ring's despawn timeout, 300 or 600 ms. A zombie sample of a buried netId
+	 * at or before its death tick is refused. The server hands a netId out again only NET_ID_REUSE_DELAY_S later, so
+	 * a newer sample is a new zombie and ends the tomb; `pruneTombs` drops the ones no sample can reach any more.
+	 */
+	private readonly tombs = new Map<number, number>();
+	private ghosts = 0;
+	/**
+	 * Deaths waiting for the drawing to reach them (audit M3): netId -> the wire tick of its `ZombieDied` and when it
+	 * arrived. The body is drawn `delay` behind the clock, so a death acted on the moment it lands took the body away
+	 * while it was still walking to the spot it fell on -- and, once the effects wait for the render time
+	 * (client/net/fxTimeline.ts), ahead of its own blood. It goes when the render time reaches the death's tick
+	 * (`releaseDeaths`), never later than FX_HOLD_MAX_S: the rule the effects follow, so the kill's blood (the same
+	 * tick, the same flush) plays on the very frame the body goes -- which is what lets client/view/fxView.ts pour one
+	 * pool for the two. A mid-ring body, drawn one near interval further back, goes that 50 ms early, at 800 u and more.
+	 */
+	private readonly dying = new Map<number, { tick: number; at: number }>();
+	/** the netIds whose death the last `advance` released (`takeDied`) */
+	private readonly died = new Array<number>();
 	private simHz = SIM_HZ;
 	private delayS = INTERP_DEFAULT_S;
 	private targetS = INTERP_DEFAULT_S;
@@ -476,7 +517,11 @@ export class SnapshotBuffer {
 	reset(): void {
 		this.tracks.clear();
 		this.zombies.clear();
+		this.zOrder.clear();
 		this.bosses.clear();
+		this.tombs.clear();
+		this.dying.clear();
+		this.died.clear();
 		this.out.clear();
 		this.zOut.clear();
 		this.bOut.clear();
@@ -514,12 +559,83 @@ export class SnapshotBuffer {
 	}
 
 	/**
-	 * `ZombieDied` (§4.4): the body is gone NOW, at the position the reliable event carries, and the view
-	 * draws the blood and the corpse there. Letting the despawn timeout retire it instead would leave it
-	 * standing for another 300 ms and then fade it out somewhere else entirely.
+	 * A zombie's body goes NOW (the client takes a `ZombieDied` through `zombieDied`, which waits for the drawing to
+	 * reach it, audit M3; this is the immediate form, for a test or a tool). Letting the despawn timeout retire it
+	 * instead would leave it standing for another 300 ms and then fade it out somewhere else entirely.
+	 *
+	 * `deathTick` is the wire tick (u16) of the World batch that carried the death: from here on a sample of this
+	 * netId at or before it is from the dead body, and is refused (`tombs`, audit M1).
 	 */
-	forgetZombie(netId: number): void {
+	forgetZombie(netId: number, deathTick?: number): void {
+		this.dropZombie(netId);
+		if (deathTick !== undefined) this.tombs.set(netId, wrapU16(deathTick));
+	}
+
+	/** a new zombie track, at the END of the draw order (`zOrder`) */
+	private addZombie(netId: number): ActorTrack {
+		const track = new ActorTrack(netId);
+		track.ix = this.zOrder.size();
+		this.zOrder.push(track);
+		this.zombies.set(netId, track);
+		return track;
+	}
+
+	/** a zombie track goes: the last one of the draw order takes its place, so nobody else moves (`zOrder`) */
+	private dropZombie(netId: number): void {
+		const track = this.zombies.get(netId);
+		if (track === undefined) return;
 		this.zombies.delete(netId);
+		const ix = track.ix;
+		track.ix = -1;
+		if (ix < 0 || this.zOrder[ix] !== track) return;
+		const last = this.zOrder.pop();
+		if (last === undefined || last === track) return;
+		this.zOrder[ix] = last;
+		last.ix = ix;
+	}
+
+	/**
+	 * `ZombieDied` (§4.4), played when the drawing reaches it (audit M3): the body stays drawn until the render time
+	 * reaches `deathTick` (the wire tick of the World batch that carried it), then goes with the corpse and the blood
+	 * of the same tick (`takeDied`). From now on no part from before the death can bring the body back once it went
+	 * (`tombs`, audit M1); until then its own late samples still land in its track, which is still drawn.
+	 */
+	zombieDied(netId: number, deathTick: number, now: number): void {
+		const tick = wrapU16(deathTick);
+		this.tombs.set(netId, tick);
+		this.dying.set(netId, { tick, at: now });
+	}
+
+	/** the netIds whose death `advance` released since the last call, appended to `out` and cleared here */
+	takeDied(out: Array<number>): Array<number> {
+		for (const netId of this.died) out.push(netId);
+		this.died.clear();
+		return out;
+	}
+
+	/** is this sample of `netId`, at wire tick `tick16`, from a body the reliable channel already buried? */
+	private buried(netId: number, tick16: number): boolean {
+		const tomb = this.tombs.get(netId);
+		if (tomb === undefined) return false;
+		// a death still waiting for the drawing: the body is on screen, and its own late samples keep it smooth
+		if (seqDiff(tick16, tomb) <= 0) return !(this.dying.has(netId) && this.zombies.has(netId));
+		// newer than the death: the server gave the netId to a new zombie (never before NET_ID_REUSE_DELAY_S)
+		this.tombs.delete(netId);
+		return false;
+	}
+
+	/** tombs no sample can reach any more: past the reuse delay and the reorder window, relative to the newest tick */
+	private pruneTombs(): void {
+		if (this.tombs.size() === 0 || this.newest === -math.huge) return;
+		const newest16 = wrapU16(this.newest);
+		const keep = NET_ID_REUSE_DELAY_S * this.simHz + MAX_REORDER_TICKS;
+		const gone = this.retire;
+		gone.clear();
+		for (const [netId, tomb] of this.tombs) {
+			if (seqDiff(newest16, tomb) > keep) gone.push(netId);
+		}
+		for (const netId of gone) this.tombs.delete(netId);
+		gone.clear();
 	}
 
 	forgetBoss(netId: number): void {
@@ -551,12 +667,15 @@ export class SnapshotBuffer {
 		}
 		// §4.4 "implícitos pelo snapshot": a body the client has never seen IS its spawn, and the record
 		// carries the type and the variant it needs to draw it — there is no reliable spawn event to wait for
+		const tick16 = wrapU16(tick);
 		for (const z of part.zombies) {
-			let track = this.zombies.get(z.netId);
-			if (track === undefined) {
-				track = new ActorTrack();
-				this.zombies.set(z.netId, track);
+			// ...except a body whose death already came in on the reliable channel: this part is older than it (M1)
+			if (this.buried(z.netId, tick16)) {
+				this.ghosts += 1;
+				continue;
 			}
+			let track = this.zombies.get(z.netId);
+			if (track === undefined) track = this.addZombie(z.netId);
 			if (track.insert(zombieSample(tick, z))) {
 				track.lastSeen = arrival;
 				track.mid = z.mid;
@@ -565,7 +684,7 @@ export class SnapshotBuffer {
 		for (const b of part.bosses) {
 			let track = this.bosses.get(b.netId);
 			if (track === undefined) {
-				track = new ActorTrack();
+				track = new ActorTrack(b.netId);
 				this.bosses.set(b.netId, track);
 			}
 			if (track.insert(bossSample(tick, b))) track.lastSeen = arrival;
@@ -704,6 +823,7 @@ export class SnapshotBuffer {
 			this.out.push(this.stateOf(slot, track, render - track.extra, step, world));
 		}
 		for (const slot of gone) this.tracks.delete(slot);
+		this.pruneTombs();
 		this.advanceActors(render, step, now, world, extraStep, midExtra);
 	}
 
@@ -715,7 +835,8 @@ export class SnapshotBuffer {
 	 *        and all three are covered by easing the alpha up instead of popping a body into frame.
 	 *   out  a body that stops arriving for its ring's timeout (300 ms near, 600 ms mid) is retired over
 	 *        DESPAWN_FADE_S. A body that DIED never comes through here: `ZombieDied` is reliable and takes
-	 *        it away at once, at the place it fell.
+	 *        it away when the drawing reaches the death, at the place it fell (`releaseDeaths`, audit M3) -- and
+	 *        a late part from before the death cannot stand it up again (`tombs`).
 	 */
 	private advanceActors(
 		render: number,
@@ -729,24 +850,27 @@ export class SnapshotBuffer {
 		this.bOut.clear();
 		const retire = this.retire;
 		retire.clear();
-		for (const [netId, track] of this.zombies) {
+		// the retirements first, then the drawing: a body that goes is replaced by the last one (`dropZombie`), and
+		// the frame that retires it already draws the order the next frames will
+		this.releaseDeaths(render, now);
+		const order = this.zOrder;
+		for (const track of order) {
 			if (track.samples.size() === 0) {
-				retire.push(netId);
+				retire.push(track.netId);
 				continue;
 			}
 			const missing = now - track.lastSeen > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S);
 			track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
-			if (missing && track.alpha <= 0) {
-				retire.push(netId);
-				continue;
-			}
+			if (missing && track.alpha <= 0) retire.push(track.netId);
+		}
+		for (const netId of retire) this.dropZombie(netId);
+		retire.clear();
+		for (const track of order) {
 			// the record says which ring it travels in (§4.2 `mid`): a mid-ring body is drawn one near interval
 			// further back, so its 10 Hz samples are interpolated instead of run past
 			track.extra = easeExtra(track.extra, track.mid ? midExtra : 0, extraStep);
-			this.zOut.push(this.zombieStateOf(netId, track, render - track.extra, dt, world));
+			this.zOut.push(this.zombieStateOf(track.netId, track, render - track.extra, dt, world));
 		}
-		for (const netId of retire) this.zombies.delete(netId);
-		retire.clear();
 		for (const [netId, track] of this.bosses) {
 			if (track.samples.size() === 0) {
 				retire.push(netId);
@@ -761,6 +885,25 @@ export class SnapshotBuffer {
 			this.bOut.push(this.bossStateOf(netId, track, render, world));
 		}
 		for (const netId of retire) this.bosses.delete(netId);
+	}
+
+	/** the deaths the drawing has reached (the render time is at the death's tick), or that waited FX_HOLD_MAX_S */
+	private releaseDeaths(render: number, now: number): void {
+		if (this.dying.size() === 0) return;
+		const due = this.retire;
+		due.clear();
+		const at = math.floor(render);
+		for (const [netId, d] of this.dying) {
+			// no body drawn (retired, never carried): nothing to wait for
+			const drawn = this.zombies.has(netId);
+			if (!drawn || unwrapTick(d.tick, at) <= render || now - d.at >= FX_HOLD_MAX_S) due.push(netId);
+		}
+		for (const netId of due) {
+			this.dying.delete(netId);
+			this.dropZombie(netId);
+			this.died.push(netId);
+		}
+		due.clear();
 	}
 
 	/**
@@ -1029,6 +1172,7 @@ export class SnapshotBuffer {
 			tracked: this.tracks.size(),
 			zombies: this.zombies.size(),
 			bosses: this.bosses.size(),
+			ghosts: this.ghosts,
 			stalls: this.stalls,
 			relocks: this.relocks,
 			absorbedS: this.absorbedTicks / this.simHz,

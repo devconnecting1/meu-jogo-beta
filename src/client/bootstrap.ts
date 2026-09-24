@@ -481,6 +481,10 @@ function handleGamepadButton(key: Enum.KeyCode, down: boolean): void {
 	if (!down) return;
 	if (key === Enum.KeyCode.ButtonY) {
 		input.reloadPressed = true;
+	} else if (key === Enum.KeyCode.DPadLeft || key === Enum.KeyCode.DPadRight) {
+		// the pad has no number keys: the D-pad steps through the weapons, drawn (combat.ts `cycleWeapon`, ITM-06). It
+		// only gets here with no menu holding the pad; the open scoreboard keeps it for its sort (main.client.ts)
+		input.weaponCycle = key === Enum.KeyCode.DPadLeft ? -1 : 1;
 	} else if (key === Enum.KeyCode.ButtonL1) {
 		input.backpackPressed = true;
 	} else if (key === Enum.KeyCode.ButtonStart) {

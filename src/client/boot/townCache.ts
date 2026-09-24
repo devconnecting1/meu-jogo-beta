@@ -99,7 +99,9 @@ export function takeTown(seed: number): WorldData {
 	if (hit && world !== undefined && townFingerprint(world) !== cachedPrint) {
 		hit = false;
 		stats.refused += 1;
-		warn(`[PZ-LOAD] town ${seed}: the lobby's copy changed since it was generated; the match generates its own`);
+		// the seed differs per town: the log line, not the Error Report's message (docs/ANALYTICS.md §10)
+		warn("[PZ-LOAD] the lobby's copy of the town changed since it was generated; the match generates its own");
+		print(`[PZ-LOAD] town ${seed}: the lobby's copy was refused`);
 	}
 	cached = undefined;
 	cachedSeed = 0;

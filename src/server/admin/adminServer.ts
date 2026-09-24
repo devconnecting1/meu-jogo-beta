@@ -87,8 +87,10 @@ const CAM_BURST = ADMIN_WORLD_LIMITS.FREECAM_HZ;
 const CAM_PER_SECOND = ADMIN_WORLD_LIMITS.FREECAM_HZ;
 /** the same world-tool line again by one admin inside this window counts on it ("×N"): Shift+click on one spot */
 const MERGE_S = 2;
-/** the lines the server writes itself (adminId 0): the panel names "server" as who did them */
-const SERVER_ACTIONS = new Set<string>(["auto-kick", "world:taken"]);
+/** a line the server writes itself (adminId 0): an automatic one (`auto:`), or a pickup of an admin's drop */
+function serverLine(action: string): boolean {
+	return action.sub(1, 5) === "auto:" || action === "world:taken";
+}
 
 /** what main.server.ts exposes of a player's session (read-only snapshot) */
 export interface AdminSessionView {
@@ -144,11 +146,22 @@ export interface AdminHost {
 	 */
 	markAssisted(player: Player): boolean;
 	jobId: string;
+	/**
+	 * (§8.2, audit M2) One message on an admin remote, counted against the sender's flood limits (server/net/mpHost.ts
+	 * `noteRemote`): a non-admin calling the admin remote at all, or a patch acknowledgement that is not a number, is
+	 * a malformed one. True when the message must be dropped. Absent (MP_PHASE 0): nothing is counted.
+	 */
+	noteRemote?: (player: Player, malformed: boolean) => boolean;
 }
 
 export interface AdminServer {
 	/** a progress report of `player` was accepted (pushes live data to admins watching them) */
 	onReport(player: Player): void;
+	/**
+	 * (§8.2, audit L4) The server kicked `player` for a network flood: an entry of the audit log by the server itself
+	 * (adminId 0), the player by UserId and the counters the server wrote (MP-16: a human reviews every automatic kick).
+	 */
+	floodKick(player: Player, reason: string): void;
 }
 
 interface Bucket {
@@ -212,11 +225,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	const strangers = new Map<number, Tokens>();
 	const flooded = new Set<number>();
 	/**
-	 * Who has an auto-kick line in this server's log. Never cleared (a PlayerRemoving does not forget it): a flooder
-	 * rejoining to flood again is kicked again, but logged once per server, so no stream of them can push the admins'
-	 * own actions out of the log (the review of 8f50bc5, MEDIUM-4).
+	 * The automatic lines (`auto:<action>|<UserId>`) this server has written. Never cleared (a PlayerRemoving does not
+	 * forget it): a flooder rejoining to flood again is kicked again, but logged once per server (the review of 8f50bc5,
+	 * MEDIUM-4); auditLog.ts trims them like tool entries and a key keeps one per action and UserId (net review L6).
 	 */
-	const kickLogged = new Set<number>();
+	const autoLogged = new Set<string>();
 	const denied = new Map<number, number>();
 	/** admin UserId → watched UserId */
 	const watching = new Map<number, number>();
@@ -264,7 +277,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		recordAs(admin.UserId, action, targetId, target, details, ok, persist, merge);
 	}
 
-	/** `record` by UserId: 0 is the SERVER itself (an automatic kick, the pickup of an admin's drop) */
+	/**
+	 * `record` by UserId: 0 is the SERVER itself (an automatic kick, audit L4; the pickup of an admin's drop). An
+	 * automatic line (`auto:`) is written once per action and UserId per server (`autoLogged`): a flooder rejoining to
+	 * flood again, or kicked by two rules at once (this remote's ADMIN_RATE and mpHost's limits), is one line.
+	 */
 	function recordAs(
 		adminId: number,
 		action: string,
@@ -275,6 +292,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		persist = true,
 		merge = false,
 	): void {
+		if (action.sub(1, 5) === "auto:") {
+			const key = `${action}|${targetId}`;
+			if (autoLogged.has(key)) return;
+			autoLogged.add(key);
+		}
 		const byAdmin = adminId !== 0 && isAdminUserId(adminId);
 		const last = lastMerge;
 		if (
@@ -446,7 +468,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			list.push({
 				t: e.t,
 				adminId: e.adminId,
-				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : SERVER_ACTIONS.has(e.action) ? "server" : "?",
+				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : serverLine(e.action) ? "server" : "?",
 				action: e.action,
 				target: e.targetId !== 0 ? `${nameOf(e.targetId, budget)} (${e.targetId})` : e.target,
 				details: e.details,
@@ -935,18 +957,16 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		}
 		if (take(b, ADMIN_BURST, ADMIN_RATE, now)) return;
 		flooded.add(player.UserId);
-		// the SERVER did it, to this player: the flooder is the target, never the "admin" of the line (MEDIUM-4)
-		if (!kickLogged.has(player.UserId)) {
-			kickLogged.add(player.UserId);
-			recordAs(
-				0,
-				"auto-kick",
-				player.UserId,
-				"",
-				`flooded the admin remote (over ${ADMIN_BURST} requests at more than ${ADMIN_RATE}/s) without being an admin`,
-				true,
-			);
-		}
+		// the SERVER did it, to this player: the flooder is the target, never the "admin" of the line (MEDIUM-4); the
+		// same `auto:flood` line mpHost's own flood rules write, once per UserId per server (`recordAs`)
+		recordAs(
+			0,
+			"auto:flood",
+			player.UserId,
+			"",
+			`flooded the admin remote (over ${ADMIN_BURST} requests at more than ${ADMIN_RATE}/s) without being an admin`,
+			true,
+		);
 		pcall(() => player.Kick(floodKickMessage(langTypeOfLocale(player.LocaleId))));
 	}
 
@@ -962,6 +982,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	}
 
 	remotes.request.OnServerInvoke = (player: Player, raw: unknown): AdminResponse => {
+		// 0) §8.2: every call counts toward the flood kick, and one from a non-admin is a malformed one (the panel is
+		// only ever shown to admins, so an honest client never makes it)
+		if (host.noteRemote?.(player, !isAdminUserId(player.UserId)) === true) return fail("forbidden");
 		// 1) authorization by UserId, before looking at the payload
 		if (!isAdminUserId(player.UserId)) {
 			const now = os.clock();
@@ -989,13 +1012,17 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		if (!typeIs(req.kind, "string")) return fail("invalid request");
 		const [ok, res] = pcall(() => handle(player, req));
 		if (!ok) {
-			warn(`${LOG_PREFIX} request "${req.kind}" from ${player.Name} errored: ${tostring(res)}`);
+			// the request's kind is the admin's own text and the name is a person: both go to the log line, never the
+			// Error Report's message (docs/ANALYTICS.md §10)
+			warn(`${LOG_PREFIX} an admin request errored: ${tostring(res)}`);
+			print(`${LOG_PREFIX} request "${req.kind}" from ${player.Name} errored`);
 			return fail("server error (see the server log)");
 		}
 		return res as AdminResponse;
 	};
 
 	remotes.patchAck.OnServerEvent.Connect((player, rev) => {
+		if (host.noteRemote?.(player, !typeIs(rev, "number")) === true) return;
 		if (typeIs(rev, "number")) host.ackPatch(player, rev);
 	});
 
@@ -1025,6 +1052,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	return {
 		onReport(player: Player): void {
 			pushWatch(player);
+		},
+		floodKick(player: Player, reason: string): void {
+			recordAs(0, "auto:flood", player.UserId, "", reason, true, true);
 		},
 	};
 }

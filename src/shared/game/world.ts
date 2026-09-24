@@ -107,6 +107,12 @@ export interface Solid {
 	 */
 	placeable?: number;
 	owner?: number;
+	/**
+	 * Server only (MP-24): the UserId of the account that built it. `owner` is a slot, and a slot is only somebody's
+	 * while they are in the world; the per-player cap and the rot of an abandoned construction go by the account.
+	 * Never on the wire.
+	 */
+	builder?: number;
 	/** set by removeSolid, so stale references (AI targets, UI) can notice */
 	removed?: boolean;
 	/** internal: spatial-grid query stamp used to de-duplicate multi-cell solids */
@@ -116,15 +122,13 @@ export interface Solid {
 /**
  * Something lying on the ground, waiting to be picked up.
  *
- * There is no lifetime here, and that is a decision rather than an omission. The field used to exist
- * (`life: 120`), was written on every spawn and was never read by anything — an expiry somebody intended and
- * nobody built. Giving it a meaning now would mean deciding, for the whole game, that a pile of ammunition
- * a player deliberately left on the floor of their base evaporates while they are out scavenging, which is
- * the opposite of what a base is for. So: ground items are permanent, by design.
- *
- * If a lifetime is ever wanted, it has to distinguish WHO made the item — world litter (a zombie's drop, a
- * bin's contents, a tree's wood) may reasonably rot; anything a player put down may not — and that
- * distinction does not exist in this type yet. Until it does, the honest state is no field at all.
+ * On a client there is no lifetime here: items leave by being picked up, by the population's cleanup (nobody
+ * within ITEM_SPAWN_MAX) or, in a server session, when the server says so. On the SERVER every ground item is
+ * world litter — a zombie's drop, a bin's contents, a tree's wood, the population's scatter, a boss's trophy:
+ * there is no verb that puts a player's own item down — and litter rots: server/sim/items.ts expires it after
+ * GROUND_ITEM_LIFE_S and never holds more than GROUND_ITEM_CAP (the oldest go first), because a chainsaw at one
+ * car made 73 a minute that nothing ever took away (security review of 5967a18, #3). A drop verb, if one is ever
+ * added, must mark what it drops and be exempt: a player's stash in their base is not litter.
  */
 export interface GroundItem {
 	id: number;
@@ -136,12 +140,35 @@ export interface GroundItem {
 	/** 0 when at rest, which is the common case and the one `updateGroundItems` skips */
 	vx: number;
 	vy: number;
+	/** server only: the simulation time (s) it appeared at, for its lifetime (server/sim/items.ts) */
+	born?: number;
 	/**
 	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
-	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire.
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire. It is litter
+	 * like any other ground item (the lifetime and the cap of server/sim/items.ts apply to it too).
 	 */
 	unpaid?: boolean;
 }
+
+/**
+ * Server only (docs/MULTIPLAYER.md §4.5): the ground items filed in coarse square cells, so what asks "which items
+ * are near here" — the interest sweep of every survivor twice a second, the E press, a newcomer's WorldInit — reads
+ * the cells around it instead of every item in the town. Kept by the item functions below and nothing else: an item
+ * that moves is re-filed by `updateGroundItems`, one that goes is taken out by `removeGroundItem`/`removeGroundItemAt`.
+ * A world without it (every client) answers the same questions with a scan, exactly as before.
+ */
+export interface ItemGrid {
+	cell: number;
+	cols: number;
+	rows: number;
+	/** cell index -> the items filed there (a cell nobody filed into yet has no entry) */
+	cells: Map<number, Array<GroundItem>>;
+	/** the cell each item is filed under */
+	at: Map<GroundItem, number>;
+}
+
+/** the ground items' cell: an E press reads one to four of them, a 1800 u interest sweep 225 */
+export const ITEM_GRID_CELL = 256;
 
 export interface Rect {
 	x: number;
@@ -289,6 +316,8 @@ export interface WorldData {
 	onItemRemove?: (w: WorldData, item: GroundItem) => void;
 	onSolidAdd?: (w: WorldData, solid: Solid) => void;
 	onSolidRemove?: (w: WorldData, solid: Solid) => void;
+	/** server only: the ground items by cell (`ItemGrid`, `enableItemGrid`); undefined on every client */
+	itemGrid?: ItemGrid;
 }
 
 /**
@@ -297,6 +326,7 @@ export interface WorldData {
  */
 export function serverWorld(w: WorldData, from = DYNAMIC_ID_BASE): WorldData {
 	w.nextDynamicId = math.max(from, w.nextId + 1);
+	enableItemGrid(w);
 	return w;
 }
 
@@ -2068,6 +2098,90 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	return w;
 }
 
+// ---------------------------------------------------------------- ground items
+
+/** the cell of (x, y) in the item grid, clamped to it (an item in flight may be a little outside the map) */
+function itemCellOf(g: ItemGrid, x: number, y: number): number {
+	// a NaN or an infinity (a velocity gone wrong) files in cell 0 rather than make a NaN key, which Luau refuses (a
+	// NaN fails both comparisons)
+	const fx = x > -math.huge && x < math.huge ? x : 0;
+	const fy = y > -math.huge && y < math.huge ? y : 0;
+	const c = math.clamp(math.floor(fx / g.cell), 0, g.cols - 1);
+	const r = math.clamp(math.floor(fy / g.cell), 0, g.rows - 1);
+	return r * g.cols + c;
+}
+
+function fileItem(g: ItemGrid, item: GroundItem): void {
+	const ix = itemCellOf(g, item.x, item.y);
+	let list = g.cells.get(ix);
+	if (list === undefined) {
+		list = [];
+		g.cells.set(ix, list);
+	}
+	list.push(item);
+	g.at.set(item, ix);
+}
+
+function unfileItem(g: ItemGrid, item: GroundItem): void {
+	const ix = g.at.get(item);
+	if (ix === undefined) return;
+	g.at.delete(item);
+	const list = g.cells.get(ix);
+	if (list === undefined) return;
+	const i = list.indexOf(item);
+	if (i >= 0) list.unorderedRemove(i);
+}
+
+/**
+ * Server only: files the ground items by cell from here on (`ItemGrid`). `serverWorld` calls it; calling it again
+ * keeps the grid it has.
+ */
+export function enableItemGrid(w: WorldData, cell = ITEM_GRID_CELL): ItemGrid {
+	const have = w.itemGrid;
+	if (have !== undefined) return have;
+	const cols = math.max(1, math.ceil(w.width / cell));
+	const rows = math.max(1, math.ceil(w.height / cell));
+	const g: ItemGrid = { cell, cols, rows, cells: new Map(), at: new Map() };
+	for (const item of w.items) fileItem(g, item);
+	w.itemGrid = g;
+	return g;
+}
+
+/**
+ * Every ground item whose position is in [x0, x1] × [y0, y1], appended to `out` (in no particular order). With the
+ * item grid only the cells of the box are read; without it (a client) the whole list is scanned, as before.
+ */
+export function queryGroundItems(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<GroundItem>,
+): Array<GroundItem> {
+	const g = w.itemGrid;
+	if (g === undefined) {
+		for (const it of w.items) {
+			if (it.x >= x0 && it.x <= x1 && it.y >= y0 && it.y <= y1) out.push(it);
+		}
+		return out;
+	}
+	const c0 = math.clamp(math.floor(x0 / g.cell), 0, g.cols - 1);
+	const c1 = math.clamp(math.floor(x1 / g.cell), 0, g.cols - 1);
+	const r0 = math.clamp(math.floor(y0 / g.cell), 0, g.rows - 1);
+	const r1 = math.clamp(math.floor(y1 / g.cell), 0, g.rows - 1);
+	for (let r = r0; r <= r1; r++) {
+		for (let c = c0; c <= c1; c++) {
+			const list = g.cells.get(r * g.cols + c);
+			if (list === undefined) continue;
+			for (const it of list) {
+				if (it.x >= x0 && it.x <= x1 && it.y >= y0 && it.y <= y1) out.push(it);
+			}
+		}
+	}
+	return out;
+}
+
 export function spawnGroundItem(
 	w: WorldData,
 	kind: number,
@@ -2089,6 +2203,8 @@ export function spawnGroundItem(
 		vy,
 	};
 	w.items.push(item);
+	const g = w.itemGrid;
+	if (g !== undefined) fileItem(g, item);
 	if (w.onItemAdd !== undefined) w.onItemAdd(w, item);
 	return item;
 }
@@ -2104,9 +2220,33 @@ export function spawnGroundItem(
 export function removeGroundItem(w: WorldData, item: GroundItem): boolean {
 	const i = w.items.indexOf(item);
 	if (i < 0) return false;
-	w.items.remove(i);
-	if (w.onItemRemove !== undefined) w.onItemRemove(w, item);
+	removeGroundItemAt(w, i);
 	return true;
+}
+
+/**
+ * The item at index `i` of `w.items` leaves the world — through the grid and the `onItemRemove` hook, which is how a
+ * client that was told about it is told it is gone. Every removal goes through here or `removeGroundItem`: the
+ * population's cleanup used to splice the list itself, and on the server that left a ghost on every screen that had
+ * been shown the item (and would leave a stale entry in the grid).
+ */
+export function removeGroundItemAt(w: WorldData, i: number): GroundItem | undefined {
+	const item = w.items[i];
+	if (item === undefined) return undefined;
+	w.items.remove(i);
+	const g = w.itemGrid;
+	if (g !== undefined) unfileItem(g, item);
+	if (w.onItemRemove !== undefined) w.onItemRemove(w, item);
+	return item;
+}
+
+/** every ground item gone at once, WITHOUT the hooks (the client's mirror before a WorldInit, worldMirror.ts) */
+export function clearGroundItems(w: WorldData): void {
+	w.items.clear();
+	const g = w.itemGrid;
+	if (g === undefined) return;
+	g.cells.clear();
+	g.at.clear();
 }
 
 /**
@@ -2122,6 +2262,7 @@ export function removeGroundItem(w: WorldData, item: GroundItem): boolean {
  * well (server/sim/simulation.ts), which is the other reason it is worth being cheap.
  */
 export function updateGroundItems(w: WorldData, dt: number): void {
+	const g = w.itemGrid;
 	for (let i = w.items.size() - 1; i >= 0; i--) {
 		const it = w.items[i];
 		// at rest: it cannot move, and something that has not moved cannot have left the world
@@ -2135,8 +2276,13 @@ export function updateGroundItems(w: WorldData, dt: number): void {
 			it.vy = 0;
 		}
 		if (it.x < 0 || it.y < 0 || it.x > w.width || it.y > w.height) {
-			w.items.remove(i);
-			if (w.onItemRemove !== undefined) w.onItemRemove(w, it);
+			removeGroundItemAt(w, i);
+			continue;
+		}
+		// it slid into another cell: filed there now, or a query around it would miss it
+		if (g !== undefined && g.at.get(it) !== itemCellOf(g, it.x, it.y)) {
+			unfileItem(g, it);
+			fileItem(g, it);
 		}
 	}
 }
@@ -2163,7 +2309,7 @@ export function nearestInteractables(
 	const reach = DESIGN.ITEM_GET_DISTANCE + 20;
 	let item: GroundItem | undefined;
 	let bestI2 = reach * reach;
-	for (const it of w.items) {
+	for (const it of queryGroundItems(w, x - reach, y - reach, x + reach, y + reach, [])) {
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;
