@@ -21,8 +21,9 @@ A apresentação e, embaixo dela, **as regras e o recurso** — cole os dois jun
 
 LAST TOWN is a top-down co-op zombie survival game. Every world is a brand-new town — houses, shops, a hospital, a campus, a bank — and every night the horde comes for it.
 
-☀️ DAY: Loot 24 kinds of buildings, craft weapons and gear, and fortify a house before sunset.
-🌙 NIGHT: Board up the windows, light a fire, and hold the line with up to 6 friends. Every shot is noise, and noise draws them in.
+☀️ DAY: Loot more than 20 kinds of buildings, craft weapons and gear, and fortify a house before sunset.
+🌙 NIGHT: Board up the windows, light a fire, and hold the line with up to 5 friends. Every shot is noise, and noise draws them in.
+⛈️ WEATHER: Fog blinds you and the horde alike, rain dulls their senses, and a thunderclap covers your shots.
 💀 BOSSES & HEISTS: Face bosses that stalk the streets, or crack the bank vault… and survive the alarm.
 📈 GROW: Level up, unlock skills, earn titles, and show off outfits and pets.
 
@@ -52,18 +53,25 @@ das regras é o mesmo de `RULES_TEXT` (no jogo, How to play › Rules); se um mu
 
 ### Conferir antes de publicar
 
-A página só pode prometer o que o jogo faz (as regras de publicidade do Roblox: _Misrepresented Gameplay_). Hoje,
-nesta branch:
+A página só pode prometer o que o jogo faz (as regras de publicidade do Roblox: _Misrepresented Gameplay_). Conferido
+no código em 2026-09-24:
 
-- **"a bank" / "crack the bank vault… and survive the alarm"**: o banco ainda **não** está no jogo (o README desta
-  pasta diz por que a thumbnail 3 é a loja de armas). Publique esta descrição quando o banco entrar — e, junto, a
-  thumbnail 3 nova, "CRACK THE VAULT" (`npm run promo`).
-- **"24 kinds of buildings"**: `src/shared/data/buildings.ts` tem hoje 15 tipos de prédio (casa, casa grande, escola,
-  hospital, posto, farmácia, mercado, mercadinho, loja de armas, loja de roupas, restaurante e os quatro do campus).
-  O número tem que bater com o jogo no dia da publicação.
-- **"hold the line with up to 6 friends"**: o servidor tem **6 vagas** (`MAX_PLAYERS`), ou seja, você e até **5**
-  amigos. Se o número ficar, a frase certa é "with up to 5 friends" (ou "in a squad of up to 6").
-- O campo de descrição tem limite de caracteres: confira no painel que as regras couberam inteiras.
+- **"a bank" / "crack the bank vault… and survive the alarm"**: o banco está no jogo (EDI-24: um por cidade, na
+  avenida; a caixa-forte abre com pé de cabra e dispara o alarme que chama a horda) — é a thumbnail 3, "CRACK THE
+  VAULT". **"houses, shops, a hospital, a campus, a bank"**: toda cidade tem o campus e o banco, e hospitais (conferido
+  em 10 sementes).
+- **"more than 20 kinds of buildings"**: `src/shared/data/buildings.ts` tem **26** tipos de prédio (casa, casa grande,
+  escola, hospital, posto, farmácia, mercado, mercadinho, loja de armas, loja de roupas, restaurante, os quatro do
+  campus, ferragens, oficina, eletrônicos, padaria, penhores, correio, banco, prefeitura, bombeiros, delegacia e
+  escritório), e cada cidade tem **22 a 25** deles (10 sementes conferidas: `generateTown`): "mais de 20" vale em todo
+  mundo. Se o número mudar, mude a frase.
+- **"hold the line with up to 5 friends"**: o servidor tem **6 vagas** (`MAX_PLAYERS`, `src/shared/net/mpConfig.ts`):
+  você e até 5 amigos.
+- **"Fog blinds you and the horde alike, rain dulls their senses, and a thunderclap covers your shots"**: LUZ-05 — a
+  neblina corta os olhos da horda (até 50%) e a tela do sobrevivente; a chuva tira dos olhos e dos ouvidos dela; por
+  3 s depois de um trovão todo barulho vale 40%. A linha é opcional: se a descrição não couber, é a primeira a sair.
+- O campo de descrição tem limite de caracteres: confira no painel que as regras couberam inteiras (a apresentação tem
+  ~860 caracteres e as regras ~580).
 
 ## Repositório no GitHub
 

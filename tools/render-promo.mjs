@@ -8,26 +8,37 @@
  *   npm run promo -- --seed 1234 --out /tmp/promo  # another town (every scene is FOUND in it), another folder
  *
  * More options: --boss 1..4 (the boss of "defeat-the-bosses": 1 centipede, 2 rafflesia, 3 giant, 4 hedgehog) and
- * --boss-hour (default 21), --shop-hour (the gun shop's clock, default 16), --town-zoom (the town's view, default 0.5).
+ * --boss-hour (default 21), --vault-hour (the bank's clock, default 21) and --vault-zoom (default 2), --storm-flash
+ * (the lightning of "survive-the-night", 0-1, default 0.75; 0 = the storm's night between two strikes), --town-zoom
+ * (the town's view, default 0.5). A zoom stays a multiple of 0.25 (a whole number of pixels per texel).
  *
  * Truthful by construction (Roblox asks that thumbnails represent the actual experience; the specs and the policy
  * points applied are in docs/promo/README.md). Every picture is a frame the game can draw:
  *   - the town is shared/game/world.ts `generateTown(seed)`, drawn by client/view/worldView.ts with the town's pixel
  *     art (design/world-art/*.png, the textures `npm run cloud -- upload-art` puts in the game), through
  *     shared/engine/renderer.ts onto the fake GUI tree of tools/fake-gui.mjs and rasterised by tools/gui-raster.mjs,
- *     as tools/render-map.mjs and tools/render-characters.mjs do;
+ *     as tools/render-map.mjs and tools/render-characters.mjs do -- the trees (VEG-06), the entrances (ART-17), the
+ *     street furniture and the market (ART-16), the window glass (EDI-18), the bank with its portico, vault door and
+ *     alarm bell (client/view/townView.ts, EDI-24);
  *   - zombies go through client/view/actorsView.ts `drawZombies` (the horde's own path), survivors through
  *     survivorView.ts `drawSurvivor`, bosses through bossView.ts `drawBoss`, turrets, battery boxes and lamps through
  *     machinesView.ts, the awareness marks (blue dot, gold "?", red "!") through zombieAwareness.ts, the night through
  *     the renderer's LightMap with the clock's darkness (shared/sim/clock.ts) and the lights gameLoop.drawLight
  *     pushes (client/view/lightList.ts: the survivor's circle and the flashlight's cone by the ONE rule of
- *     shared/sim/survivorLight.ts, lamps and fires, the muzzle flash of a shot line);
- *   - constructions are placed by the game's own rules (shared/sim/placement.ts: a barricade snaps into a window or a
- *     doorway, EDI-13) and powered by what the server would say (client/systems/powerMirror.ts `applyPowerSet`);
+ *     shared/sim/survivorLight.ts, lamps and fires, the bank's alarm lamp on its beat, the muzzle flash of a shot);
+ *   - the weather (LUZ-05) is the day's sky of shared/sim/weather.ts -- `weatherDark` for a storm's night and a
+ *     lightning flash lifting it -- drawn by client/view/weatherView.ts: the rain's streaks, the puddles on the
+ *     town's texel grid, the fog under the night;
+ *   - constructions are placed by the game's own rules (shared/sim/placement.ts: the top-left corner on the build
+ *     grid, `placementValid`, a barricade snaps into a window or a doorway, EDI-13) and powered by what the server
+ *     would say (client/systems/powerMirror.ts `applyPowerSet`); a door or a lamp the server opened or lit (the bank's
+ *     vault door, its alarm) is set for the one picture and put back;
  *   - at night a zombie is only as visible as the server makes it (shared/sim/ai/zombieBrain.ts `isLit` /
- *     `updateAlpha`): drawn inside a light, fading out (3 per second) just outside it, not at all in the dark;
- *   - a shot is a tracer from the muzzle as client/predict/weaponFx.ts and fxView.drawTracers draw it, and a hit a
- *     green burst from client/systems/particles.ts, drawn like gameLoop.drawParticles.
+ *     `updateAlpha`): drawn inside a light, fading out (3 per second) just outside it, not at all in the dark -- and
+ *     all of them while a lightning flash lights the town (LIT_AMBIENT, the reveal of LUZ-05);
+ *   - a shot is a tracer from the muzzle as client/predict/weaponFx.ts and fxView.drawTracers draw it, and a hit the
+ *     blood of client/systems/particles.ts in the town's pixel art (client/view/bloodView.ts, ART-15), drawn like
+ *     gameLoop.drawDecals and drawParticles.
  * Only the framing, the moment and the title band on top are chosen. No interface is drawn (no HUD, no buttons),
  * so nothing on the picture pretends to be something you can press.
  *
@@ -87,10 +98,13 @@ const { raycast, blocksShots, rayCircle } = require(join(SRC, "shared/game/physi
 const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
 const SL = require(join(SRC, "shared/sim/survivorLight.ts"));
 const { STRUCTURE_LIGHT_R } = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
-const { PLACEABLES, snapToOpening, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+const { PLACEABLES, PLACE_GRID, snapToOpening, placedSolid, placementValid } = require(
+	join(SRC, "shared/sim/placement.ts"),
+);
 const { packPowerState, TURRET_MUZZLE } = require(join(SRC, "shared/data/power.ts"));
 const { applyPowerSet, resetPowerMirror } = require(join(SRC, "client/systems/powerMirror.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+const { CAMPUS_TYPES } = require(join(SRC, "shared/data/buildings.ts"));
 const { OutfitLook } = require(join(SRC, "shared/data/cosmetics.ts"));
 const { WorldView, SHELTER_SEE_THROUGH } = require(join(SRC, "client/view/worldView.ts"));
 const { ActorsView } = require(join(SRC, "client/view/actorsView.ts"));
@@ -100,6 +114,10 @@ const SV = require(join(SRC, "client/view/survivorView.ts"));
 const AW = require(join(SRC, "client/view/zombieAwareness.ts"));
 const { LightList, addSurvivorLight } = require(join(SRC, "client/view/lightList.ts"));
 const { ParticleSystem } = require(join(SRC, "client/systems/particles.ts"));
+const { BloodView } = require(join(SRC, "client/view/bloodView.ts"));
+const WX = require(join(SRC, "shared/sim/weather.ts"));
+const { WeatherView, puddlesOf } = require(join(SRC, "client/view/weatherView.ts"));
+const { isPortico, isVaultDoor, BANK_TYPE } = require(join(SRC, "shared/sim/vault.ts"));
 const WA = require(join(SRC, "client/view/worldArt.ts"));
 
 const TOWN_SEED = SEED_ARG !== undefined ? Number(SEED_ARG) : DESIGN.TOWN_SEED;
@@ -270,9 +288,12 @@ const DT = 1 / 60;
  *   survivors                [{ x, y, angle, weapon, outfit, flashlight, swing, phase, flash }]
  *   zombies                  ZombieState records (createZombie), their `alpha` set by `lightZombies`
  *   bosses                   BossState records
- *   shots                    [{ x1, y1, x2, y2, life, hit }]: tracers (and a green burst where `hit`)
+ *   shots                    [{ x1, y1, x2, y2, life, hit }]: tracers (and the hit's blood where `hit`)
  *   roofOff                  buildings whose roof is lifted (a survivor is inside: EDI-04)
- *   clock                    the animation clock (legs, flames)
+ *   clock                    the animation clock (legs, flames, the alarm's lamp, the rain's streaks)
+ *   weather                  { kind, flash, fog, wet } (LUZ-05, shared/sim/weather.ts): the day's sky, a lightning
+ *                            flash (0..1, as stormFlashAt gives it), the fog's density (default: the weather's own at
+ *                            `hour`) and how wet the streets are (default: 1 while it rains); undefined = a clear day
  */
 function drawMoment(sc) {
 	const root = gui.make("Frame");
@@ -293,12 +314,20 @@ function drawMoment(sc) {
 	for (const z of zombies) settleAlpha(sc, z);
 	const shots = sc.shots ?? [];
 	const clock = sc.clock ?? 0.4;
-	const darkness = darkAlphaAt(sc.hour, false, false);
+	const darkness = momentDark(sc);
 	const night = darkness > 0.004;
 	const v = cam.viewRect(32);
+	// the weather of the moment (LUZ-05): the real WeatherView, settled on this sky (a picture is one frame)
+	const wx = sc.weather;
+	const weather = wx !== undefined ? new WeatherView() : undefined;
+	const wf = { clock, reduceMotion: false, low: false };
+	if (weather !== undefined) {
+		weather.step(0, WX.weatherRains(wx.kind), wx.kind === WX.Weather.Storm);
+		if (wx.wet !== undefined) weather.wet = wx.wet;
+	}
 
 	// the night's lights, as gameLoop.drawLight pushes them
-	const lights = nightLights(survivors, shots, v);
+	const lights = nightLights(survivors, shots, v, clock);
 	const shadow = shadowFn(sc.hour, lights.items);
 	// roofs lifted over whoever is inside; canopies see-through over a body (VEG-04), as the loop eases them
 	const lifted = sc.roofOff ?? [];
@@ -326,20 +355,21 @@ function drawMoment(sc) {
 	const tracers = shots.map(t => ({ ...t, life: t.life ?? 0.15 }));
 	machines.learn(world, tracers, clock, clock, DT);
 
-	// blood: each hit's spray, a moment after the shot (particles.ts, as fxView plays a ShotResult)
+	// blood: each hit's spray, a moment after the shot (particles.ts, as fxView plays a ShotResult), in the town's
+	// pixel art (ART-15: client/view/bloodView.ts, the atlas `blood` of design/world-art)
 	const particles = new ParticleSystem();
+	particles.pixelArt = true;
 	for (const t of shots) {
 		if (t.hit !== true) continue;
 		particles.bloodBurst(t.x2, t.y2, t.blood ?? 5, "zombie", Math.atan2(t.y2 - t.y1, t.x2 - t.x1));
 	}
 	particles.update(0.05);
+	const blood = new BloodView();
 
 	r.beginFrame();
 	view.drawGround(r, cam, v, world);
-	for (const d of particles.decalRecords()) {
-		if (d.life <= 0) continue;
-		r.drawCircle(cam, d.x, d.y, d.size, { color: d.color, alpha: 0.7 * Math.min(1, d.life / 5), zIndex: Z.decal });
-	}
+	weather?.drawPuddles(r, cam, v, world, wf);
+	blood.drawDecals(r, cam, v, particles, world);
 	view.drawSolids(r, cam, v, world);
 	machines.drawAir(r, cam, v, DT, () => undefined, undefined);
 	actors.drawZombies(r, cam, v, { zombies }, { shadow, clock });
@@ -376,15 +406,15 @@ function drawMoment(sc) {
 			zIndex: Z.projectile,
 		});
 	}
-	// gameLoop.drawParticles
-	for (const p of particles.active()) {
-		r.drawCircle(cam, p.x, p.y, p.size, {
-			color: p.color,
-			alpha: Math.min(1, Math.max(0, (p.life / p.maxLife) * 1.5)),
-			zIndex: Z.particle,
-		});
-	}
+	// gameLoop.drawParticles, then the rain over the street (Z.rain, under the night)
+	blood.drawParticles(r, cam, v, particles);
+	weather?.drawRain(r, cam, v, wf);
 	r.endFrame();
+	// the fog under the night, clear round the survivor this screen follows (the first of the moment)
+	if (weather !== undefined) {
+		const you = survivors[0] ?? { x: sc.cx, y: sc.cy };
+		weather.drawFog(dark, cam, wx.fog ?? WX.fogDensityAt(wx.kind, sc.hour), you.x, you.y, false);
+	}
 	if (night) {
 		const lm = new LightMap(dark, COLORS.overlayNight);
 		lm.update(cam, darkness, lights.items);
@@ -409,8 +439,11 @@ function drawMoment(sc) {
 	return img;
 }
 
-/** gameLoop.drawLight's list: every survivor's circle and flashlight cone, lamps and fires, the shots' flashes */
-function nightLights(survivors, shots, v) {
+/**
+ * gameLoop.drawLight's list: every survivor's circle and flashlight cone, lamps and fires, the bank's alarm lamp (on
+ * the beat of `clock`), the shots' flashes
+ */
+function nightLights(survivors, shots, v, clock) {
 	const lights = new LightList();
 	for (const s of survivors) {
 		addSurvivorLight(
@@ -425,6 +458,11 @@ function nightLights(survivors, shots, v) {
 	for (const s of querySolids(world, v.minX - 400, v.minY - 400, v.maxX + 400, v.maxY + 400, [])) {
 		const rr = STRUCTURE_LIGHT_R[s.tags];
 		if (rr === undefined || s.powered !== true) continue;
+		if (isPortico(s)) {
+			// the alarm's lamp flashes four times a second (gameLoop drawLight, townView drawPortico: one beat)
+			lights.circle(s.x + s.w / 2, s.y + s.h / 2, rr, 0.3, Math.floor(clock * 8) % 2 === 0 ? 0.8 : 0.25);
+			continue;
+		}
 		lights.circle(s.x + s.w / 2, s.y + s.h / 2, rr, 0.5);
 	}
 	for (const t of shots) {
@@ -458,11 +496,23 @@ function shadowFn(hour, lights) {
 }
 
 /**
- * The server's `isLit` (shared/sim/ai/zombieBrain.ts), for the survivors and constructions of a moment: by day
- * everything; at night what stands in a survivor's circle, a flashlight's cone or a lamp's or fire's light.
+ * The moment's darkness, as the server's clock and the client's light map both read it: the night and the rain
+ * (darkAlphaAt), a storm's darker sky and a lightning flash lifting it (weatherDark, LUZ-05)
  */
-function litByServer(hour, survivors, x, y) {
-	if (1 - darkAlphaAt(hour, false, false) >= 0.4) return true;
+function momentDark(sc) {
+	const wx = sc.weather;
+	if (wx === undefined) return darkAlphaAt(sc.hour, false, false);
+	return WX.weatherDark(wx.kind, sc.hour, false, wx.flash ?? 0);
+}
+
+/**
+ * The server's `isLit` (shared/sim/ai/zombieBrain.ts), for the survivors and constructions of a moment: while the
+ * ambient light is at least LIT_AMBIENT everything (the day, the dusk, a lightning flash over the dark town: its
+ * reveal, LUZ-05); at night what stands in a survivor's circle, a flashlight's cone or a lamp's or fire's light.
+ */
+function litByServer(sc, x, y) {
+	const survivors = sc.survivors ?? [];
+	if (1 - momentDark(sc) >= WX.LIT_AMBIENT) return true;
 	for (const s of survivors) {
 		const dx = x - s.x;
 		const dy = y - s.y;
@@ -509,7 +559,7 @@ function zombie(sc, o) {
 
 /** the server's alpha for a zombie of the moment, from the survivors' lights as they finally stand */
 function settleAlpha(sc, z) {
-	const lit = litByServer(sc.hour, sc.survivors ?? [], z.x, z.y);
+	const lit = litByServer(sc, z.x, z.y);
 	z.alpha = lit ? 1 : Math.max(0, 1 - z.promoFade);
 }
 
@@ -716,8 +766,23 @@ function cornerMark(img) {
 const TW = 1920;
 const TH = 1080;
 
-/** a straight residential street well away from any crossing, with houses and parked cars: its middle */
-function findQuietStreet() {
+/** inside the town: on a lot, a road or a crossing (not the forest past the last blocks, not the fence) */
+const inTown = (x, y) =>
+	lotAt(x, y) !== undefined || world.roads.some(r => inRect(r, x, y)) || world.junctions.some(j => inRect(j, x, y));
+
+/** every point of a grid over the rect is in the town */
+function rectInTown(r, step = 96) {
+	for (let y = r.y; y <= r.y + r.h; y += step) {
+		for (let x = r.x; x <= r.x + r.w; x += step) if (!inTown(x, y)) return false;
+	}
+	return true;
+}
+
+/**
+ * A straight residential street well away from any crossing and from the town's edge, with houses on both sides and
+ * parked cars: its middle. `W` x `H` is the view (units) that must fall inside the town round it.
+ */
+function findQuietStreet(W = 900, H = 520) {
 	let best;
 	let bestScore = -Infinity;
 	for (const road of world.roads) {
@@ -731,6 +796,7 @@ function findQuietStreet() {
 			const up = lotAt(t, road.y - 300);
 			const down = lotAt(t, road.y + road.h + 300);
 			if (up?.zone !== "residential" || down?.zone !== "residential") continue;
+			if (!rectInTown({ x: t - W / 2 - 200, y: cy - H / 2, w: W + 400, h: H })) continue;
 			// the frame of the shot: the curb across its middle, the yards above, the road below
 			const rect = { x: t - 430, y: road.y - 200, w: 860, h: 480 };
 			const list = querySolids(world, rect.x, rect.y, rect.x + rect.w, rect.y + rect.h, []);
@@ -748,74 +814,109 @@ function findQuietStreet() {
 }
 
 /**
- * 1. SURVIVE THE NIGHT. 22:00, a residential street: one survivor with a pistol and a flashlight, the beam down
- * the road, and the horde it reveals closing in rank after rank with their red "!" (IA-05). Outside the light the
- * night keeps what it hides (the server's alpha: nothing is drawn in the dark), a few at its edge fading.
+ * The storm's street: a residential street (houses both sides, inside the town, no crossing in the picture) where the
+ * rain has left the most puddles in a `W` x `H` view (client/view/weatherView.ts `puddlesOf`: the same puddles on
+ * every screen), and where no tree crown stands in the survivor's line down the road. Answers the view's centre.
+ */
+function findStormStreet(W, H) {
+	const puddles = puddlesOf(world);
+	let best;
+	let bestScore = -Infinity;
+	for (const road of world.roads) {
+		if (road.avenue || road.vertical) continue;
+		const cy = road.y + road.h / 2;
+		for (let t = road.x + W / 2 + 64; t < road.x + road.w - W / 2 - 64; t += 32) {
+			// the picture thumbSurviveTheNight frames: the road across its lower part
+			const view = { x: t - W / 2, y: road.y + 40 - H / 2, w: W, h: H };
+			const pad = { x: view.x - 150, y: view.y - 150, w: view.w + 300, h: view.h + 300 };
+			const crossing = world.junctions.some(
+				j => j.x < pad.x + pad.w && j.x + j.w > pad.x && j.y < pad.y + pad.h && j.y + j.h > pad.y,
+			);
+			if (crossing) continue;
+			if (!rectInTown(view)) continue;
+			const up = lotAt(t, road.y - 200);
+			const down = lotAt(t, road.y + road.h + 200);
+			if (up?.zone !== "residential" || down?.zone !== "residential") continue;
+			// the line down the road from the survivor's side of the picture, clear of crowns and cars
+			const lane = { x0: t - W * 0.3, x1: t + W / 2, y0: road.y + 30, y1: road.y + road.h - 30 };
+			const blocking = querySolids(world, lane.x0, lane.y0, lane.x1, lane.y1, []).filter(
+				s => s.kind === "tree" || s.tags === "car",
+			).length;
+			const wet = puddles.filter(p => inRect(view, p.x, p.y)).length;
+			const list = querySolids(world, view.x, view.y, view.x + view.w, view.y + view.h, []);
+			const houses = list.filter(s => s.kind === "building").length;
+			const score = wet * 3 + Math.min(houses, 4) - blocking * 6;
+			if (score > bestScore) {
+				bestScore = score;
+				best = { road, x: t, y: cy };
+			}
+		}
+	}
+	return best;
+}
+
+/**
+ * 1. SURVIVE THE NIGHT. 22:00 on a day of thunderstorm (LUZ-05), a residential street in the rain -- the storm's
+ * streaks, the puddles in the gutters -- one survivor with a pistol and a flashlight, and the instant a lightning
+ * flash lights the town: the flash takes 60 % of its strength off the night (FLASH_LIFT, `weatherDark`), the ambient
+ * light passes LIT_AMBIENT, and the whole horde down the street shows at once (the reveal: the server counts the dark
+ * street as lit, the screen draws every zombie whole, `flashReveals`). The nearest ranks see the survivor (the red
+ * "!"), the ones further down the street only heard the shot (the gold "?"), one is closing from behind.
  */
 function thumbSurviveTheNight() {
-	// 9 px a texel: the bodies read on a phone, and there is room for the night round the light
+	// 9 px a texel: the bodies read on a phone, and the street runs the whole width
 	const zoom = 2.25;
 	const hour = 22;
 	const vwU = TW / zoom;
 	const vhU = TH / zoom;
-	// the street: the one findQuietStreet likes, slid along (away from any crossing) to where no tree crown stands
-	// in the beam
-	const st = findQuietStreet();
-	let cx = st.x;
-	for (let k = 0; k < 30; k++) {
-		const x = st.x + (k % 2 === 0 ? 1 : -1) * Math.ceil(k / 2) * 64;
-		const cyy = st.road.y + st.road.h / 2;
-		if (
-			world.junctions.some(
-				j => Math.abs(j.x + j.w / 2 - x) < vwU * 0.5 + 250 && Math.abs(j.y + j.h / 2 - cyy) < 700,
-			)
-		) {
-			continue;
-		}
-		const beam = { x0: x - vwU * 0.15, x1: x + vwU / 2, y0: st.road.y - 100, y1: st.road.y + st.road.h };
-		const trees = querySolids(world, beam.x0, beam.y0, beam.x1, beam.y1, []).filter(s => s.kind === "tree");
-		if (trees.length === 0) {
-			cx = x;
-			break;
-		}
-	}
+	const st = findStormStreet(vwU, vhU);
+	const cx = st.x;
+	// the road across the lower part of the picture, the curb, the sidewalk and the front yards above it
 	const cy = st.road.y + 40;
-	// the survivor on the road just off the curb, in the lower left third, lighting the street ahead
-	const you = { x: cx - vwU * 0.26, y: cy + vhU * 0.2 };
-	const aim0 = -0.1;
+	// the survivor on the road, in the lower left third, lighting the street ahead
+	const you = { x: cx - vwU * 0.28, y: st.road.y + st.road.h * 0.42 };
+	const aim0 = -0.08;
+	// a strike's flash on its way down (stormFlashAt's 16 levels): 0 = the night between two strikes
+	const flash = Number(argOf("storm-flash", 12 / 16));
 	const sc = { vw: TW, vh: TH, zoom, cx, cy, hour, clock: 0.35 };
+	sc.weather = { kind: WX.Weather.Storm, flash };
 	sc.survivors = [{ x: you.x, y: you.y, angle: aim0, weapon: 10, flashlight: true, phase: 0.5, amp: 0 }];
+	/** where a world point lands on the picture */
+	const screen = p => ({ x: (p.x - sc.cx) * zoom + TW / 2, y: (p.y - sc.cy) * zoom + TH / 2 });
+	const clear = p => {
+		const q = screen(p);
+		// a zombie's mark stands ~90 px over its head: never into the title
+		return q.x > 30 && q.x < TW - 30 && q.y > 250 && q.y < TH - 40 && !(q.x < 1180 && q.y < 480);
+	};
 	const rnd = prng(TOWN_SEED ^ 0x51);
 	const cast = [];
 	const put = (a, d, o = {}) => {
-		for (let t = 0; t < 12; t++) {
+		for (let t = 0; t < 14; t++) {
 			const p = along(you.x, you.y, a + (rnd() - 0.5) * 0.12 * t, d + (rnd() - 0.5) * 30 * t);
-			if (!outdoors(p.x, p.y, 22)) continue;
-			if (cast.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 64)) continue;
+			if (!outdoors(p.x, p.y, 22) || !clear(p)) continue;
+			if (cast.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 62)) continue;
 			cast.push({ ...p, ...o });
 			return;
 		}
 	};
-	// three ranks across the beam, the nearest widest (the edge of the survivor's own circle at 250 u)
+	// the ranks down the street: the nearest see the survivor, the far ones only heard the shot
 	const ranks = [
-		[235, 5, 0.62, [1, 1, 4, 1, 1]],
-		[350, 5, 0.5, [1, 2, 1, 1, 1]],
-		[470, 4, 0.36, [1, 3, 1, 5]],
+		[240, 5, 0.6, [1, 1, 4, 1, 1], 3],
+		[360, 6, 0.5, [1, 2, 1, 1, 5, 1], 3],
+		[490, 6, 0.4, [1, 3, 1, 1, 4, 1], 1],
+		[620, 5, 0.3, [1, 1, 2, 1, 1], 1],
 	];
-	for (const [d, n, spread, types] of ranks) {
+	for (const [d, n, spread, types, aware] of ranks) {
 		for (let i = 0; i < n; i++) {
-			put(aim0 + (i / (n - 1) - 0.5) * 2 * spread, d + (rnd() - 0.5) * 50, { type: types[i] });
+			put(aim0 + (i / (n - 1) - 0.5) * 2 * spread, d + (rnd() - 0.5) * 60, { type: types[i], aware });
 		}
 	}
-	// behind the survivor, in the circle of their own light: the ones that got close
-	put(aim0 + Math.PI - 0.55, 185, { type: 1 });
-	// at the light's edge, stepping out of it: fading (updateAlpha) -- never under the title
-	put(aim0 + 0.95, 340, { type: 1, fade: 0.45 });
-	put(aim0 + 0.22, 640, { type: 1, fade: 0.55 });
+	// behind the survivor: the one that got close
+	put(aim0 + Math.PI + 0.35, 150, { type: 1, aware: 3 });
 	const dist = c => Math.hypot(c.x - you.x, c.y - you.y);
 	// the one the survivor shoots: in the first rank, nearest the aim -- the aim (and the beam) turn onto it
 	const lead = cast
-		.filter(c => c.fade === undefined && dist(c) < 300)
+		.filter(c => dist(c) < 320)
 		.sort(
 			(p, q) =>
 				Math.abs(Math.atan2(p.y - you.y, p.x - you.x) - aim0) -
@@ -825,9 +926,9 @@ function thumbSurviveTheNight() {
 	sc.zombies = cast.map((c, i) =>
 		zombie(sc, {
 			...c,
-			angle: Math.atan2(you.y - c.y, you.x - c.x) + (rnd() - 0.5) * 0.3,
+			angle: Math.atan2(you.y - c.y, you.x - c.x) + (rnd() - 0.5) * (c.aware === 1 ? 0.9 : 0.3),
 			phase: rnd() * 6.28,
-			big: i === 7,
+			big: i === 8,
 		}),
 	);
 	sc.shots = fire(sc, you.x, you.y, sc.survivors[0].angle, 10, 0.16);
@@ -869,18 +970,9 @@ function freeSpot(x, y, reach = 60, test = free) {
 	return undefined;
 }
 
-/** a construction's rect on the build grid (placement.ts ghostRect: the top-left corner on PLACE_GRID) */
-function onGrid(index, cx, cy) {
-	const def = PLACEABLES[index];
-	const g = 128;
-	return { x: Math.floor((cx - def.w / 2) / g + 0.5) * g, y: Math.floor((cy - def.h / 2) / g + 0.5) * g };
-}
-
-/** placement.ts placementValid's solid test for a rect (nothing under it) */
-function rectFree(r) {
-	return querySolids(world, r.x, r.y, r.x + r.w, r.y + r.h, []).every(
-		s => !(r.x < s.x + s.w && r.x + r.w > s.x && r.y < s.y + s.h && r.y + r.h > s.y),
-	);
+/** placement.ts placementValid for a construction `index` at rect `r` (bodies are placed after it) */
+function rectFree(index, r) {
+	return placementValid(world, r, [], [], PLACEABLES[index]);
 }
 
 /**
@@ -919,15 +1011,16 @@ function findFortHouse() {
 /**
  * 2. BUILD. BARRICADE. HOLD. 22:00, a house held by four survivors: a wall of wooden barricades on the build grid
  * across the front yard (placement.ts: the 128-unit grid, turned along the wall), the steel barricade snapped into
- * the front door and wood into the windows (EDI-13), two turrets behind the wall wired to a battery box and a lamp
- * on the lawn (ELE-01..04, powered as the server's PowerSet says); the horde piling against the wall in the fire of
- * the turrets and the survivors, two of them behind the wall, two at the windows of the house with its roof off.
+ * the front door and wood into the windows (EDI-13), two turrets behind the wall wired to a battery box (and a lamp
+ * on the lawn where the yard leaves a cell for it: ELE-01..04, powered as the server's PowerSet says); the horde
+ * piling against the wall in the fire of the turrets and the survivors, two of them behind the wall, two at the
+ * windows of the house with its roof off.
  */
 function thumbBuildBarricadeHold() {
 	const b = findFortHouse();
 	const hour = 22;
 	const zoom = 1.5;
-	const G = 128;
+	const G = PLACE_GRID;
 	const f = NORMAL[b.doorSide ?? "bottom"];
 	const s = [-f[1], f[0]];
 	const across = f[0] !== 0 ? b.h : b.w;
@@ -958,7 +1051,7 @@ function thumbBuildBarricadeHold() {
 	sc.roofOff = [b];
 	const placed = [];
 	const place = (idx, r, powered) => {
-		if (!rectFree(r)) return undefined;
+		if (!rectFree(idx, r)) return undefined;
 		const p = construct(idx, r, powered);
 		placed.push(p);
 		return p;
@@ -968,9 +1061,10 @@ function thumbBuildBarricadeHold() {
 	const pieces = [];
 	for (let u = -span; u <= span; u += G) {
 		const c = at(D, u);
+		// turned along the wall, its top-left corner on the grid (ghostRect)
 		const r = horizontal
-			? { x: Math.floor(c.x / G) * G, y: lineCoord - (f[1] > 0 ? 0 : 32), w: 128, h: 32 }
-			: { x: lineCoord - (f[0] > 0 ? 0 : 32), y: Math.floor(c.y / G) * G, w: 32, h: 128 };
+			? { x: Math.floor(c.x / G) * G, y: lineCoord, w: 128, h: 32 }
+			: { x: lineCoord, y: Math.floor(c.y / G) * G, w: 32, h: 128 };
 		if (pieces.some(p => p.x === r.x && p.y === r.y)) continue;
 		const p = place(10, r);
 		if (p !== undefined) pieces.push(p);
@@ -987,32 +1081,56 @@ function thumbBuildBarricadeHold() {
 		});
 		place(idx, r);
 	}
-	// behind the wall: two turrets on the grid, a battery box between them, a lamp by the house -- each on the first
-	// free grid cell near where it is wanted, in the clear part of the picture
-	const onCell = (idx, d, us) => {
+	// behind the wall: two turrets, the battery box that feeds them and a lamp, each on a cell of the build grid
+	// (ghostRect: its top-left corner on PLACE_GRID) between the house and the wall of barricades, touching neither,
+	// in the clear part of the picture -- the turrets nearest the wall, the box between them, the lamp by the house
+	const lo = (r, a) => (a === 0 ? r.x : r.y);
+	const hi = (r, a) => (a === 0 ? r.x + r.w : r.y + r.h);
+	const axis = horizontal ? 1 : 0;
+	const houseEdge = f[axis] > 0 ? hi(b, axis) : lo(b, axis);
+	const wallPiece = pieces[0];
+	const cells = [];
+	for (let d = 0; d <= D + G; d += G / 2) {
+		for (let u = -span; u <= span; u += G / 2) {
+			const q = at(d, u);
+			const c = { x: Math.floor(q.x / G) * G, y: Math.floor(q.y / G) * G };
+			if (!cells.some(k => k.x === c.x && k.y === c.y)) cells.push(c);
+		}
+	}
+	const onCell = (idx, score) => {
 		const def = PLACEABLES[idx];
-		for (const u of us) {
-			for (const dd of [0, -G / 2, G / 2]) {
-				const q = at(d + dd, u);
-				const g = onGrid(idx, q.x, q.y);
-				const r = { x: g.x + (G - def.w) / 2, y: g.y + (G - def.h) / 2, w: def.w, h: def.h };
-				if (!clearOfTitle({ x: r.x + r.w / 2, y: r.y + r.h / 2 })) continue;
-				// between the house and the wall of barricades, never touching either
-				const dist = f[0] !== 0 ? (r.x + r.w / 2 - wall.x) * f[0] : (r.y + r.h / 2 - wall.y) * f[1];
-				if (dist < def.w / 2 + 24 || dist > D - def.w / 2 - 20) continue;
-				const made = place(idx, r, true);
-				if (made !== undefined) return made;
+		let best;
+		let bestScore = -Infinity;
+		for (const c of cells) {
+			const r = { x: c.x, y: c.y, w: def.w, h: def.h };
+			if (!clearOfTitle({ x: r.x + r.w / 2, y: r.y + r.h / 2 })) continue;
+			// out from the house by a body's width, and short of the wall of barricades
+			const near = f[axis] > 0 ? lo(r, axis) - houseEdge : houseEdge - hi(r, axis);
+			const far =
+				wallPiece === undefined
+					? D
+					: f[axis] > 0
+						? lo(wallPiece, axis) - hi(r, axis)
+						: lo(r, axis) - hi(wallPiece, axis);
+			if (near < 24 || far < 16 || !rectFree(idx, r)) continue;
+			const sc0 = score(r, near);
+			if (sc0 > bestScore) {
+				bestScore = sc0;
+				best = r;
 			}
 		}
-		return undefined;
+		return best !== undefined ? place(idx, best, true) : undefined;
 	};
-	const us = [];
-	for (let u = -span; u <= span; u += G / 2) us.push(u);
-	const byScreenY = (list, from) =>
-		[...list].sort((p, q) => Math.abs(screen(at(D, p)).y - from) - Math.abs(screen(at(D, q)).y - from));
-	const turrets = [onCell(2, D - 100, byScreenY(us, 520)), onCell(2, D - 100, byScreenY(us, 860))].filter(t => t);
-	onCell(6, D - 190, byScreenY(us, 690));
-	onCell(4, D - 170, byScreenY(us, 960));
+	const centreY = r => screen({ x: r.x + r.w / 2, y: r.y + r.h / 2 }).y;
+	const turrets = [];
+	for (const want of [540, 860]) {
+		const t = onCell(2, (r, near) => near - Math.abs(centreY(r) - want) * 1.2);
+		if (t !== undefined) turrets.push(t);
+	}
+	const mid = turrets.length === 2 ? (centreY(turrets[0]) + centreY(turrets[1])) / 2 : 700;
+	onCell(6, (r, near) => -Math.abs(centreY(r) - mid) * 2 - near * 0.5);
+	// and a lamp by the house, where a cell is left
+	onCell(4, (r, near) => -near - Math.abs(centreY(r) - 760) * 0.5);
 	// the survivors: two behind the wall, two at the windows of the house
 	const rnd = prng(TOWN_SEED ^ 0xb4);
 	const survivors = [];
@@ -1119,126 +1237,145 @@ function thumbBuildBarricadeHold() {
 }
 
 /**
- * The gun shop of the loot run: its entrance on a street (never up the picture, under the title), with the most
- * open ground in front of its door for the horde to come across.
+ * The town's bank (EDI-24: at most one a town, on an avenue by the avenues' crossing) and its fixtures: the vault room,
+ * the vault's steel door, the deposit boxes, the portico that carries the alarm bell.
  */
-function findGunShop() {
-	let best;
-	let bestScore = -Infinity;
-	for (const b of world.solids) {
-		if (b.kind !== "building" || b.buildingType !== 9) continue;
-		const f = NORMAL[b.doorSide ?? "bottom"];
-		const door = { x: b.doorX ?? b.x + b.w / 2, y: b.doorY ?? b.y + b.h };
-		let clear = 0;
-		for (let d = 80; d <= 560; d += 40) {
-			for (let u = -320; u <= 320; u += 40) {
-				if (outdoors(door.x + f[0] * d - f[1] * u, door.y + f[1] * d + f[0] * u, 16)) clear++;
-			}
-		}
-		// a side entrance: the shop on one side of the picture, the street across the other (a door down or up the
-		// picture would need the whole height for the shop alone)
-		const facing = { left: 30, right: 30, bottom: 0, top: -30 }[b.doorSide ?? "bottom"];
-		const score = clear / 10 + facing;
-		if (score > bestScore) {
-			bestScore = score;
-			best = b;
-		}
-	}
-	return best;
+function findBank() {
+	const b = world.solids.find(s => s.kind === "building" && s.buildingType === BANK_TYPE);
+	if (b === undefined) return undefined;
+	const parts = world.solids.filter(s => s.bankId === b.id);
+	return {
+		b,
+		vault: (b.rooms ?? []).find(q => q.kind === "vault"),
+		door: parts.find(isVaultDoor),
+		boxes: parts.find(s => s.kind === "prop" && s.tags === "vault"),
+		portico: parts.find(isPortico),
+	};
 }
 
 /**
- * 3. LOOT THE GUN SHOP. Dusk (19:00: the light going, the zombies still seen), a gun shop with its roof off (EDI-04:
- * the survivors are inside): one at the gun rack where the loot is (the building's loot spot, EDI-03), one holding
- * the doorway with a pump shotgun, its five pellets fanning into the first of the horde; the street behind them full
- * of zombies coming, the ones that heard the shots still only suspicious (the gold "?", IA-02/IA-05).
+ * 3. CRACK THE VAULT. 21:00 at the bank (EDI-24), its roof lifted over the survivors inside (EDI-04): the vault's
+ * steel door has just given way to a crowbar -- the slab swung back against the vault's wall, as townView draws a
+ * cracked door -- and the survivor who pried it stands in the doorway with the crowbar still in hand, a second one
+ * already at the deposit boxes. The instant the door gives, the alarm rings: the bell's red lamp flashes on the
+ * portico (its `powered`, the server's LightSet) and lights the bank's front, 220 u for the screen and the horde
+ * alike, and the horde of two blocks round comes -- the first already through the front door, the street behind them
+ * converging on the steps (the red "!" of the ones that see the survivors, the gold "?" of the ones that only heard
+ * the alarm: IA-02, IA-05). Two survivors hold the hall, firing into the doorway.
+ *
+ * The door shut (the wheel of its lock) and the alarm ringing are never on screen together: the alarm is what the
+ * door giving way sets off, so the picture is the moment after.
  */
-function thumbLootTheGunShop() {
-	const b = findGunShop();
-	const hour = Number(argOf("shop-hour", 16));
-	const zoom = 2.25;
-	const f = NORMAL[b.doorSide ?? "bottom"];
+function thumbCrackTheVault() {
+	const { b, vault, door, boxes, portico } = findBank();
+	const hour = Number(argOf("vault-hour", 21));
+	// 8 px a texel: the vault, the hall and the steps across the picture, the bodies still readable on a phone
+	const zoom = Number(argOf("vault-zoom", 2));
+	const f = NORMAL[b.doorSide ?? "right"];
 	const s = [-f[1], f[0]];
-	const mainDoor = fortifiable(b).find(o => o.main) ?? { x: b.x, y: b.y + b.h / 2 - 56, w: 20, h: 112 };
-	const dx0 = mainDoor.x + mainDoor.w / 2;
-	const dy0 = mainDoor.y + mainDoor.h / 2;
-	/** the shop's front frame: `d` out of its door (negative: inside), `u` along its front */
-	const at = (d, u) => ({ x: dx0 + f[0] * d + s[0] * u, y: dy0 + f[1] * d + s[1] * u });
-	// the doorway a third of the way across: the street and the horde on one side, the sales floor, the display case
-	// and the back room with the safe on the other (a side entrance: findGunShop)
-	const sc = { vw: TW, vh: TH, zoom, cx: dx0 - f[0] * 130, cy: dy0 - f[1] * 130 - 20, hour, clock: 1.1 };
+	const dx0 = door.x + door.w / 2;
+	const dy0 = door.y + door.h / 2;
+	// the frame: the vault's back wall 40 px in from the side of the picture away from the street, its top just under
+	// the title; the banking hall, the front door, the steps and the street across the rest (a bank facing up or down
+	// the picture: the vault door in the middle)
+	const vwU = TW / zoom;
+	const vhU = TH / zoom;
+	const edge = 40 / zoom;
+	const top = 380 / zoom;
+	const cx = f[0] > 0 ? vault.x - edge + vwU / 2 : f[0] < 0 ? vault.x + vault.w + edge - vwU / 2 : dx0 + vwU * 0.1;
+	const cy = f[0] !== 0 ? vault.y - top + vhU / 2 : dy0;
+	const sc = { vw: TW, vh: TH, zoom, cx, cy, hour, clock: 0.06 };
 	sc.roofOff = [b];
-	const inside = (x, y) => free(x, y, 20) && buildingAt(world, x, y) === b;
-	const onScreen = p => Math.abs((p.x - sc.cx) * zoom) < TW / 2 - 60 && Math.abs((p.y - sc.cy) * zoom) < TH / 2 - 60;
-	const rnd = prng(TOWN_SEED ^ 0x9a);
+	/** where a world point lands on the picture */
+	const screen = p => ({ x: (p.x - sc.cx) * zoom + TW / 2, y: (p.y - sc.cy) * zoom + TH / 2 });
+	/** in the clear part of the picture: under the title band, off the bottom strip Roblox covers, off the edges */
+	const clearOfTitle = p => {
+		const q = screen(p);
+		return q.y > 380 && q.y < TH - 70 && q.x > 40 && q.x < TW - 40;
+	};
+	const inBank = (x, y) => free(x, y, 20) && buildingAt(world, x, y) === b;
+	const rnd = prng(TOWN_SEED ^ 0x7a);
+	// the vault door's doorway: which way the vault lies (into) from it
+	const alongX = door.w >= door.h;
+	const into = alongX ? [0, Math.sign(vault.y + vault.h / 2 - dy0)] : [Math.sign(vault.x + vault.w / 2 - dx0), 0];
+	// the one who pried it, in the doorway, crowbar in hand (WEAPONS 3, the tool the door takes), turned to the vault
+	const cracker = freeSpot(dx0 - into[0] * 8, dy0 - into[1] * 8, 20, inBank) ?? { x: dx0, y: dy0 };
+	// the one at the deposit boxes, a flashlight on the steel wall
+	const bx = boxes.x + boxes.w / 2;
+	const by = boxes.y + boxes.h / 2;
+	const bf = NORMAL[boxes.face ?? "right"];
+	const looter = freeSpot(bx + bf[0] * 50, by + bf[1] * 50 + 30, 30, inBank) ?? { x: bx, y: by };
+	// two holding the hall, between the counter and the front door
+	const main = fortifiable(b).find(o => o.main);
+	const mx = main.x + main.w / 2;
+	const my = main.y + main.h / 2;
+	const hall = (d, u) => freeSpot(mx - f[0] * d + s[0] * u, my - f[1] * d + s[1] * u, 30, inBank) ?? { x: mx, y: my };
+	const guards = [hall(150, 40), hall(120, -110)];
 	const out = Math.atan2(f[1], f[0]);
-	// the guard in the doorway with a pump shotgun; the looter at the loot spot furthest in (the safe, EDI-03),
-	// turned to it; a third at the window the horde is climbing through
-	const guard = freeSpot(at(-58, 26).x, at(-58, 26).y, 30, inside) ?? at(-58, 26);
-	const spots = (b.lootSpots ?? [])
-		.filter(onScreen)
-		.sort((p, q) => Math.hypot(q.x - dx0, q.y - dy0) - Math.hypot(p.x - dx0, p.y - dy0));
-	const spot = spots[0] ?? at(-300, 0);
-	const looter = freeSpot(spot.x, spot.y, 40, inside) ?? spot;
-	const safe = querySolids(world, b.x, b.y, b.x + b.w, b.y + b.h, []).find(p => p.tags === "safe");
-	const lookAt = safe !== undefined ? { x: safe.x + safe.w / 2, y: safe.y + safe.h / 2 } : { x: spot.x, y: spot.y };
 	sc.survivors = [
-		{ ...guard, angle: out, weapon: 16, outfit: OutfitLook.Cowboy, phase: 0.4 },
-		{ ...looter, angle: Math.atan2(lookAt.y - looter.y, lookAt.x - looter.x), weapon: 13, phase: 1.3 },
+		{ ...cracker, angle: Math.atan2(into[1], into[0]) + 0.15, weapon: 3, flashlight: true, phase: 0.4 },
+		{ ...looter, angle: Math.atan2(by - looter.y, bx - looter.x), weapon: 10, flashlight: true, phase: 1.2 },
+		{ ...guards[0], angle: out, weapon: 16, outfit: OutfitLook.Cowboy, flashlight: true, phase: 2.2 },
+		{ ...guards[1], angle: out, weapon: 13, flashlight: true, phase: 0.9 },
 	];
-	// the horde: two at the doorway, one climbing in through a front window in the picture (EDI-10), the street full
+	// the horde converging on the bank's front from the street: the nearest see the survivors (the red "!"), the rest
+	// only heard the alarm and come to look (the gold "?")
+	const front = { x: mx + f[0] * 140, y: my + f[1] * 140 };
 	const cast = [];
-	for (const u of [-30, 34]) {
-		const p = at(46, u);
-		if (outdoors(p.x, p.y, 18)) cast.push({ ...p, type: 1, aware: 3 });
-	}
-	const win = fortifiable(b)
-		.filter(o => o.kind === "window" && o.side === b.doorSide && onScreen({ x: o.x + o.w / 2, y: o.y + o.h / 2 }))
-		.sort((p, q) => q.y - p.y)[0];
-	if (win !== undefined) {
-		const w0 = { x: win.x + win.w / 2, y: win.y + win.h / 2 };
-		cast.push({ ...w0, type: 1, aware: 3, climbing: true });
-		const p = freeSpot(w0.x - f[0] * 110, w0.y - f[1] * 110 - 30, 40, inside);
-		if (p !== undefined) {
-			sc.survivors.push({ ...p, angle: Math.atan2(w0.y - p.y, w0.x - p.x), weapon: 10, phase: 2.1, aimAt: w0 });
+	// the first through the front door, into the hall
+	for (const [d, u] of [
+		[-40, -30],
+		[-12, 42],
+		[-70, 60],
+	]) {
+		const p = { x: mx + f[0] * d + s[0] * u, y: my + f[1] * d + s[1] * u };
+		if (inBank(p.x, p.y) && !sc.survivors.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 70)) {
+			cast.push({ ...p, type: 1, aware: 3, inside: true });
 		}
 	}
-	const types = [1, 1, 4, 1, 1, 2, 1, 1, 1, 3, 1, 5, 1, 1, 1, 1];
-	for (let tries = 0; cast.length < 30 && tries < 10000; tries++) {
-		const d = 110 + Math.pow(rnd(), 0.75) * 720;
-		const u = (rnd() - 0.5) * (300 + d * 1.6);
-		const p = at(d, u);
-		if (!outdoors(p.x, p.y, 22) || !onScreen(p)) continue;
-		if (cast.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 62)) continue;
-		// the back of the crowd only heard the shots: suspicious, walking over to look (IA-02, IA-05)
-		cast.push({ ...p, type: types[cast.length % types.length], aware: d > 400 ? 1 : 3 });
+	const types = [1, 1, 4, 1, 2, 1, 1, 3, 1, 1, 5, 1, 1, 4, 1, 1];
+	for (let tries = 0; cast.length < 30 && tries < 12000; tries++) {
+		const d = 60 + Math.pow(rnd(), 0.8) * 720;
+		const u = (rnd() - 0.5) * (260 + d * 1.5);
+		const p = { x: mx + f[0] * d + s[0] * u, y: my + f[1] * d + s[1] * u };
+		if (!outdoors(p.x, p.y, 22) || !clearOfTitle(p)) continue;
+		if (cast.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 60)) continue;
+		cast.push({ ...p, type: types[cast.length % types.length], aware: d > 330 ? 1 : 3 });
 	}
-	sc.zombies = cast.map(c =>
-		zombie(sc, {
+	sc.zombies = cast.map(c => {
+		// those inside go for the survivors; the street comes to the front door
+		const to = c.inside === true ? guards[0] : front;
+		return zombie(sc, {
 			...c,
-			angle:
-				c.climbing === true
-					? out + Math.PI
-					: Math.atan2(dy0 - c.y, dx0 - c.x) + (rnd() - 0.5) * (c.aware === 1 ? 0.9 : 0.35),
+			angle: Math.atan2(to.y - c.y, to.x - c.x) + (rnd() - 0.5) * (c.aware === 1 ? 0.8 : 0.3),
 			phase: rnd() * 6.28,
-		}),
-	);
-	// the guard fires into the nearest one in the street
-	const near = sc.zombies
-		.filter(z => buildingAt(world, z.x, z.y) !== b && Math.hypot(z.x - guard.x, z.y - guard.y) > 90)
-		.sort((p, q) => Math.hypot(p.x - guard.x, p.y - guard.y) - Math.hypot(q.x - guard.x, q.y - guard.y))[0];
-	if (near !== undefined) sc.survivors[0].angle = Math.atan2(near.y - guard.y, near.x - guard.x);
-	sc.shots = fire(sc, guard.x, guard.y, sc.survivors[0].angle, 16, 0.14);
-	// the one at the window fires at the climber, if the line is clear (a window's frame lets shots through)
-	const sentry = sc.survivors.find(p => p.aimAt !== undefined);
-	if (sentry !== undefined) {
-		const shot = fire(sc, sentry.x, sentry.y, sentry.angle, 10, 0.1);
-		if (shot.some(t => t.hit)) sc.shots.push(...shot);
-	}
+		});
+	});
+	// the two in the hall fire into the nearest of them, each at its own
+	sc.shots = [];
+	const taken = [];
+	sc.survivors.slice(2).forEach(g => {
+		const near = sc.zombies
+			.filter(z => !taken.includes(z) && Math.hypot(z.x - g.x, z.y - g.y) > 60)
+			.sort((p, q) => Math.hypot(p.x - g.x, p.y - g.y) - Math.hypot(q.x - g.x, q.y - g.y))[0];
+		if (near === undefined) return;
+		const a = Math.atan2(near.y - g.y, near.x - g.x);
+		const shot = fire(sc, g.x, g.y, a, g.weapon, 0.14);
+		// only a clear line: nobody fires into the counter or a wall
+		if (!shot.some(t => t.hit)) return;
+		taken.push(near);
+		g.angle = a;
+		sc.shots.push(...shot);
+	});
+	// the door cracked, the alarm ringing (the server's DoorSet and LightSet), for this picture only
+	door.open = true;
+	portico.powered = true;
 	const img = drawMoment(sc);
+	door.open = false;
+	portico.powered = false;
 	vignette(img, 0.3);
-	topBand(img, 380, 0.6);
-	title(img, [[["LOOT THE", BONE]], [["GUN SHOP", AMBER]]], 64, 56, 12);
+	topBand(img, 360, 0.6);
+	title(img, [[["CRACK THE", BONE]], [["VAULT", AMBER]]], 64, 56, 12);
 	cornerMark(img);
 	return img;
 }
@@ -1353,7 +1490,30 @@ function thumbDefeatTheBosses(type = Number(argOf("boss", 1)), hour = Number(arg
  * of a world's town. `w` x `h` is the view in units; answers its centre.
  */
 function findOverview(w, h) {
-	const WEIGHT = { 3: 6, 4: 6, 5: 8, 6: 3, 7: 5, 8: 3, 9: 4, 10: 3, 11: 3, 12: 9 };
+	// shared/data/buildings.ts BuildingType: the campus's four count as one (12); the everyday town's (EDI-19..24)
+	const WEIGHT = {
+		3: 6,
+		4: 6,
+		5: 8,
+		6: 3,
+		7: 5,
+		8: 3,
+		9: 4,
+		10: 3,
+		11: 3,
+		12: 9,
+		16: 3,
+		17: 3,
+		18: 3,
+		19: 3,
+		20: 3,
+		21: 4,
+		22: 8,
+		23: 6,
+		24: 7,
+		25: 6,
+		26: 2,
+	};
 	let best;
 	let bestScore = -Infinity;
 	for (let cy = h / 2 + 200; cy < world.height - h / 2 - 200; cy += 256) {
@@ -1369,7 +1529,7 @@ function findOverview(w, h) {
 						Math.max(0, Math.min(s.y + s.h, r.y + r.h) - Math.max(s.y, r.y))) /
 					(s.w * s.h);
 				if (share < 0.75) continue;
-				const t = s.buildingType >= 12 ? 12 : s.buildingType === 2 ? 1 : s.buildingType;
+				const t = CAMPUS_TYPES.includes(s.buildingType) ? 12 : s.buildingType === 2 ? 1 : s.buildingType;
 				kinds[t] = true;
 				if (t === 1) houses++;
 			}
@@ -1448,7 +1608,7 @@ function thumbNewTown() {
 const THUMBS = {
 	"survive-the-night": { file: "01-survive-the-night.png", draw: thumbSurviveTheNight },
 	"build-barricade-hold": { file: "02-build-barricade-hold.png", draw: thumbBuildBarricadeHold },
-	"loot-the-gun-shop": { file: "03-loot-the-gun-shop.png", draw: thumbLootTheGunShop },
+	"crack-the-vault": { file: "03-crack-the-vault.png", draw: thumbCrackTheVault },
 	"defeat-the-bosses": { file: "04-defeat-the-bosses.png", draw: () => thumbDefeatTheBosses() },
 	"new-town-every-world": { file: "05-new-town-every-world.png", draw: thumbNewTown },
 };
