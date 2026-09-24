@@ -427,16 +427,19 @@ export class InteriorArt {
 	// ------------------------------------------------------------------ walls
 
 	/**
-	 * A building's wall (`s`, tagged bwall with a parent): the shadow at its foot on the floor (`wallShade`), then
-	 * the wall as masonry -- a dark outline under it (its own rect) and the plaster (`wall`, tinted as before) on
-	 * top, in by one texel where the wall is free and one texel into the wall it joins where it meets one, so the
-	 * walls of a building read as one outlined piece instead of a row of boxes. False = draw it flat.
+	 * A building's wall (`s`, tagged bwall with a parent), two sprites: the dark outline under it (its own rect) with
+	 * the shadow at its foot on the floor round it -- one 9-slice, `wallShade` (without it, the outline alone as a
+	 * Frame) -- and the plaster (`wall`, tinted as before) on top, in by one texel where the wall is free and one
+	 * texel into the wall it joins where it meets one, so the walls of a building read as one outlined piece instead
+	 * of a row of boxes. False = draw it flat.
 	 */
 	wall(r: Renderer, cam: Camera, s: Solid, house: boolean): boolean {
 		const id = artId("wall");
 		if (id === undefined || s.parentId === undefined) return false;
 		const shade = artId("wallShade");
 		if (shade !== undefined) {
+			// the outline and the foot shadow, one sprite (the slice's centre is the wall's rect, white, tinted to the
+			// outline's colour; its border the shadow on the floor, black): under the furniture, under the plaster
 			const o = image(shade, s.w + 2 * SHADE_OUT, s.h + 2 * SHADE_OUT, Z.floorDetail);
 			const sl = artSlice("wallShade");
 			o.scaleType = "slice";
@@ -445,10 +448,12 @@ export class InteriorArt {
 			o.sliceX1 = sl[2];
 			o.sliceY1 = sl[3];
 			o.sliceScale = WORLD_TEXEL;
+			o.imageTint = house ? EDGE_HOUSE : EDGE_SHOP;
 			r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, o);
+		} else {
+			r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, edgeOpts(s.w, s.h, house ? EDGE_HOUSE : EDGE_SHOP));
 		}
 		const inner = s.inner === true;
-		r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, edgeOpts(s.w, s.h, house ? EDGE_HOUSE : EDGE_SHOP));
 		let f = this.fills.get(s);
 		if (f === undefined) {
 			f = this.fillOf(s);

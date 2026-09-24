@@ -1885,6 +1885,8 @@ section(
 	R.queueFx({ t: P.FxType.Blood, x: heard.x, y: heard.y, angle: 0, amount: 3, kind: G });
 	// a survivor's blood: a survivor is sent in range whatever the light, and so is theirs
 	R.queueFx({ t: P.FxType.Blood, x: cx + 380, y: cy, angle: 0, amount: 3, kind: P.BloodKind.Red });
+	// where the hidden zombie was when the shots hit it: it drifts a unit or so in the ticks before the checks read the logs
+	const hiddenShot = { x: hidden.x, y: hidden.y };
 	const hits = [
 		{ x: hidden.x, y: hidden.y, hit: P.HitKind.Zombie },
 		{ x: heard.x, y: heard.y, hit: P.HitKind.Zombie },
@@ -1951,7 +1953,7 @@ section(
 		);
 	if (shots.length === 2) {
 		checkEq(shots[0].hits.length, 3, "every pellet is still drawn: a hit the watcher cannot see is not dropped");
-		check(!shots.some(sh => sh.hits.some(h => near(h, hidden))), "no hit names the hidden zombie's spot");
+		check(!shots.some(sh => sh.hits.some(h => near(h, hiddenShot))), "no hit names the hidden zombie's spot");
 		check(
 			pastHidden(shots[0]) !== undefined && shots[0].hits.some(h => near(h, heard)),
 			"the hidden one is drawn as the miss it would have been -- on past the zombie, to the range or a wall",
@@ -1964,7 +1966,7 @@ section(
 	const theirs = shooter.fxLog.filter(e => e.t === P.FxType.Shot);
 	check(theirs.length === 2 && theirs[0].hits.length === 3, "the shooter gets their own shots whole");
 	check(
-		theirs.length === 2 && theirs[1].hits.some(h => near(h, hidden)),
+		theirs.length === 2 && theirs[1].hits.some(h => near(h, hiddenShot)),
 		"(their own hit on the hidden zombie included: their client drew it already)",
 	);
 	const lines = wl.filter(e => e.t === P.FxType.Tracer);

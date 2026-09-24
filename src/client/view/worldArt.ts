@@ -165,6 +165,12 @@ export function preloadWorldArt(): void {
 			lost.add("blood");
 			warn("[world] the blood's atlas did not load: the blood is drawn flat");
 		}
+		// the town's fixtures' atlas (ART-16): a market table or a dumpster that never arrives would be an invisible
+		// thing that still stops the body (P3, COL-01), so the fixtures go back to their Frames
+		if (WORLD_ART.townProps.id !== "" && missing.includes(WORLD_ART.townProps.id)) {
+			lost.add("townProps");
+			warn("[world] the town's fixtures' atlas did not load: the fixtures are drawn with Frames");
+		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");
 	});

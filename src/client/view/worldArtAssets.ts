@@ -97,6 +97,17 @@ export type WorldArtName =
 	| "signLibrary"
 	| "signLab"
 	| "signDorm"
+	| "signHardware"
+	| "signAutoRepair"
+	| "signElectronics"
+	| "signBakery"
+	| "signPawn"
+	| "signPost"
+	| "signBank"
+	| "signTownHall"
+	| "signFire"
+	| "signPolice"
+	| "signOffice"
 	| "helipad"
 	| "gasCanopyN"
 	| "gasCanopyS"
@@ -151,6 +162,7 @@ export type WorldArtName =
 	| "itemIcons"
 	| "furniture"
 	| "blood"
+	| "townProps"
 	| "wordmark";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
@@ -316,6 +328,28 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signLab: { id: "rbxassetid://118500150708359", w: 24, h: 16 },
 	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
 	signDorm: { id: "rbxassetid://101587899989297", w: 24, h: 16 },
+	/** sprite: storefront sign (type 16): a claw hammer, its steel head over a wooden handle, on hardware orange */
+	signHardware: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 17): a wheel: the black tyre, its white rim and the hub, on slate blue */
+	signAutoRepair: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 18): a yellow lightning bolt, on indigo */
+	signElectronics: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 19): a scored loaf of bread, on rose */
+	signBakery: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 20): the pawnbroker's three gold balls hanging from their bar, on dark brown */
+	signPawn: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 21): an envelope, its flap folded down, on post blue */
+	signPost: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze */
+	signBank: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 23): the town hall: a clock tower over its two wings and the front door, on lavender */
+	signTownHall: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 24): a yellow flame, its white-hot heart, on fire-engine red */
+	signFire: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 25): a navy shield with a gold star, on pale blue */
+	signPolice: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 26): a briefcase, its brass clasp, on sea-glass green */
+	signOffice: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://94643764245261", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
@@ -368,7 +402,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://118028356616797", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://114108861727270", w: 16, h: 16 },
-	/** slice: the shadow at the foot of an interior wall (round every wall) */
+	/** slice: an interior wall's outline (its centre, tinted) and the shadow at its foot */
 	wallShade: { id: "rbxassetid://115914959931221", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://72971918566679", w: 640, h: 800 },
@@ -420,10 +454,12 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaRim: { id: "rbxassetid://125105479176447", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
 	itemIcons: { id: "rbxassetid://89487834990160", w: 288, h: 244 },
-	/** atlas: interiors: 1343 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "rbxassetid://102803291216585", w: 1024, h: 718 },
+	/** atlas: interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
 	blood: { id: "rbxassetid://138018740222052", w: 96, h: 264 },
+	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
+	townProps: { id: "", w: 1024, h: 662 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
 	wordmark: { id: "rbxassetid://132745135799721", w: 86, h: 39 },
 };
@@ -511,6 +547,17 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signLibrary",
 	"signLab",
 	"signDorm",
+	"signHardware",
+	"signAutoRepair",
+	"signElectronics",
+	"signBakery",
+	"signPawn",
+	"signPost",
+	"signBank",
+	"signTownHall",
+	"signFire",
+	"signPolice",
+	"signOffice",
 	"helipad",
 	"gasCanopyN",
 	"gasCanopyS",
@@ -565,5 +612,6 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"itemIcons",
 	"furniture",
 	"blood",
+	"townProps",
 	"wordmark",
 ];
