@@ -246,8 +246,11 @@ export interface WipeReport {
 	dead: Array<number>;
 }
 
-/** why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22) */
-export type StandReason = "daybreak" | "rebirth" | "newWorld";
+/**
+ * why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22; "reset": an admin
+ * reset the save, and the body that belonged to the old one is gone with it)
+ */
+export type StandReason = "daybreak" | "rebirth" | "newWorld" | "reset";
 
 interface LifeRecord {
 	userId: number;
@@ -589,6 +592,64 @@ export class LifeKeeper {
 			if (sp !== undefined && sp.state.dead) this.standUp(rec, sp, "daybreak");
 		}
 		this.stepWipe(dt);
+	}
+
+	// ------------------------------------------------------------ the admin (docs/MULTIPLAYER.md §10)
+
+	/**
+	 * An admin reset this survivor's save to a new player's (server/main.server.ts `adminEdit`), IN PLACE: the session
+	 * keeps one table for its whole life, so `recordFor` sees the same save and would never notice (BUG-1 of the admin
+	 * audit, 2026-09-24). Everything this record kept belonged to the save that is gone: the body out of the world and
+	 * its magazine, a death and its daybreak wait, the departure banked, a new life a world owed. Kept, the old body was
+	 * written back into the reset save on the way out, resumed on the next entry, and its magazine refunded into the new
+	 * reserve by `matchWeapon`.
+	 *
+	 * So the record starts over from the reset save. A body IN the world is replaced now by a fresh one from that save
+	 * at a safe point (rule 2: its magazine is paid out of the NEW reserve, and the old one is dropped, never refunded),
+	 * and whatever the old run had on the cursor goes with it. The admin switches (§10) belong to the person and are
+	 * put back on the new body by the simulation (`adminMods`). Returns whether a body was replaced.
+	 */
+	resetLife(userId: number, save: PlayerSaveData): boolean {
+		const rec = this.records.get(userId);
+		if (rec === undefined) return false;
+		rec.save = save;
+		rec.body = undefined;
+		rec.unloaded = false;
+		rec.dead = false;
+		rec.downFor = undefined;
+		rec.declined = false;
+		rec.fullNext = false;
+		rec.newLifeOwed = false;
+		rec.banked = undefined;
+		const sp = this.inWorld(rec);
+		if (sp === undefined) return false;
+		const sim = this.sim;
+		adoptSave(sp, save);
+		// the old run's construction is not the new save's (review R1): gone, not refunded
+		sim.build?.drop(sp.slot);
+		// the old body's magazine was the old save's rounds: they die with it
+		sp.state.weapon.ammoCount = 0;
+		// ...and the weapon machine forgets the old weapon, or its switch to the new save's would pay that magazine back
+		sim.combat?.remove(sp.slot);
+		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
+		sp.state = freshBody(save, spawn.x, spawn.y, true);
+		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
+		if (serverOwnsLife()) writeRunBody(save, sp.state);
+		this.wire.life(sp.slot, LifeState.Up);
+		this.onSaveChanged?.(userId);
+		this.onStandUp?.(sp, "reset");
+		return true;
+	}
+
+	/**
+	 * An admin moved the world's clock (§10): a dead survivor's wait for daybreak is counted again from the new hour,
+	 * so "Dawn" stands them up at the 06:00 it shows and "Night" does not stand them up in the middle of it.
+	 */
+	clockMoved(): void {
+		const dayTime = this.sim.clock.dayTime;
+		for (const [, rec] of this.records) {
+			if (rec.dead && rec.downFor !== undefined && rec.downFor > 0) rec.downFor = daybreakWaitSeconds(dayTime);
+		}
 	}
 
 	// ------------------------------------------------------------ the world ends (rule 6, MP-22)

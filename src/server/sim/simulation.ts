@@ -191,6 +191,12 @@ export class ServerSimulation {
 	 */
 	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
+	 * The admin's switches (docs/MULTIPLAYER.md §10: god, noclip, infinite ammo) onto this survivor's body, right
+	 * before its step. They belong to the PERSON, not to a body: a stand-up, a reset or a trip to the lobby builds a
+	 * new body, and the switch must still be on in it. server/admin/adminWorld.ts sets it; undefined = nobody has any.
+	 */
+	adminMods?: (sp: ServerPlayer) => void;
+	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
 	 * town (combat, progress, projectiles and the F3 world below) it is rebuilt when a world ends (MP-22).
@@ -855,6 +861,7 @@ export class ServerSimulation {
 		this.dayTicks += 1;
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			this.adminMods?.(sp);
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,

@@ -295,6 +295,8 @@ function updatePuddles(refs: Ctx.AiRefs, dt: number): void {
  * over, the nearest survivor is who the table is rolled for — which is exactly who it was before F2.
  */
 function dropLoot(refs: Ctx.AiRefs, z: ZombieState, pi: number): void {
+	// an admin's spawn pays nobody (docs/MULTIPLAYER.md §10): no drop either
+	if (z.unpaid === true) return;
 	const save = refs.saveOf(refs.players[pi < 0 ? 0 : pi]);
 	const rate = DESIGN.ZOMBIE_ITEM_PERCENT + save.skillLevels[9] * 10;
 	if (!chance(rate)) return;

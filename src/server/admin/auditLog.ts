@@ -197,12 +197,14 @@ export function auditIdentity(e: AuditRecord): string {
 }
 
 /**
- * A world tool the admin used in their own run (a spawn, the clock, a teleport...), the "assist" mark or a refused
- * non-admin call: many, cheap, and about nobody else. Everything else (kick, ban, unban, a save edit or reset, an
- * announcement) is an action on players, and is what the log is for.
+ * A world tool (a spawn, the clock, a teleport... in the admin's own world, "local:", or in the server's, "world:"),
+ * the "assist" mark or a refused non-admin call: many, cheap, and mostly about nobody in particular. Everything else
+ * (kick, ban, unban, a save edit or reset, an announcement, an automatic kick) is an action on players, and is what
+ * the log is for.
  */
 function isToolEntry(e: AuditRecord): boolean {
-	return e.action.sub(1, 6) === "local:" || e.action === "assist" || e.action === "DENIED";
+	const head = e.action.sub(1, 6);
+	return head === "local:" || head === "world:" || e.action === "assist" || e.action === "DENIED";
 }
 
 /**

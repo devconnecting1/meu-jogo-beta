@@ -10,7 +10,8 @@ import { logLocal } from "./net";
 /*
  * "Click to place" mode of the admin panel: a ghost with the real footprint follows the cursor (snapped to the
  * nearest free point, never inside a solid), left click places, Shift+click keeps the mode for more, right click or
- * the panel key (F2 / `) cancels. Everything goes through AdminWorld.
+ * the panel key (F2 / `) cancels. Everything goes through AdminWorld -- on a server-owned world, a request the server
+ * validates and runs, whose answer is the toast (success only on its OK) and which it logs itself.
  */
 
 const UserInputService = game.GetService("UserInputService");
@@ -46,7 +47,7 @@ export class Placement {
 
 	begin(spec: PlacementSpec): void {
 		if (!this.world.ready()) {
-			toast(this.ctx, "Start a run first: world tools act on your own world", "error");
+			toast(this.ctx, "Start a run first: world tools need your survivor in the town", "error");
 			return;
 		}
 		this.spec = spec;
@@ -192,7 +193,8 @@ export class Placement {
 			res = this.world.teleport(c.x, c.y);
 			what = `teleport to ${fmtPoint(c)}`;
 		}
-		if (res.ok) logLocal(spec.kind === "teleport" ? "teleport" : "spawn", what);
+		// a server tool is logged by the server; only a tool of this client's own world is logged from here
+		if (res.ok && res.audited !== true) logLocal(spec.kind === "teleport" ? "teleport" : "spawn", what);
 		toast(this.ctx, res.message, res.ok ? "success" : "error");
 		// a teleport is one-shot; spawns stay armed with Shift
 		if (!shift || spec.kind === "teleport") {

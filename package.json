@@ -26,6 +26,7 @@
 		"test:clock": "node tools/test-clock.mjs",
 		"test:life": "node tools/test-life.mjs",
 		"test:body": "node tools/test-body.mjs",
+		"test:admin": "node tools/test-admin.mjs",
 		"test:waves": "node tools/test-waves.mjs",
 		"test:reset": "node tools/test-reset.mjs",
 		"test:analytics": "node tools/test-analytics.mjs",

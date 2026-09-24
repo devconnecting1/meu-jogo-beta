@@ -429,6 +429,13 @@ export class ServerCombat {
 			return;
 		}
 
+		// the admin's infinite ammo (§10): the magazine never runs dry and never reloads; the pools are never spent
+		// (below), and what it held never turns into real rounds (the switch above, life.ts `unloadMagazine`)
+		if (p.infiniteAmmo === true && Wp.usesMagazine(w)) {
+			p.weapon.ammoCount = w.mag;
+			p.weapon.reloading = false;
+			p.weapon.reloadCount = 0;
+		}
 		const held = (cmd.held & Net.HeldBit.Attack) !== 0;
 		const presses = Net.edgeCount(cmd.edges, Net.EdgeShift.AttackPress);
 		const releases = Net.edgeCount(cmd.edges, Net.EdgeShift.AttackRelease);
@@ -696,6 +703,8 @@ export class ServerCombat {
 		const save = sp.save;
 		const have = w.id === 26 ? save.electric : save.oil;
 		if (have <= 0) return false;
+		// the admin's infinite ammo: fuel is needed, never burnt
+		if (sp.state.infiniteAmmo === true) return true;
 		st.fuelDebt += amount;
 		while (st.fuelDebt >= 1) {
 			st.fuelDebt -= 1;
@@ -881,7 +890,8 @@ export class ServerCombat {
 		// a full draw fires; letting go early cancels the shot (no arrow spent) — the draw time is the
 		// server's own, so "instant full draw" is not something a packet can claim
 		if (st.drawTime >= need && st.fireCd <= 0 && sp.save.ammoArrow > 0) {
-			sp.save.ammoArrow -= 1;
+			// the admin's infinite ammo: an arrow is needed, never spent
+			if (sp.state.infiniteAmmo !== true) sp.save.ammoArrow -= 1;
 			this.launchArrow(sp, w, aim, w.cone + rt.angleRange + st.moveSpread);
 			st.fireCd = w.cooldown;
 			rt.autoReloadIdle = 0;
@@ -1323,7 +1333,9 @@ export class ServerCombat {
 			// the credit says what did it too (CON-04): the zombie's kind, and the kind of the weapon -- the one that
 			// launched the projectile, or the one the server says is in hand
 			const kind = weaponKind ?? Wp.WEAPONS[st.weaponId]?.kind ?? -1;
-			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS, z.type, kind);
+			// an admin's spawn pays nobody (§10): no XP, no kill credit, no achievement
+			if (z.unpaid === true) this.progress?.forgetZombie(z.id);
+			else this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS, z.type, kind);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, sp.slot);
 		}
@@ -1340,7 +1352,8 @@ export class ServerCombat {
 		this.hooks.hitBoss?.(b, damage, x, y);
 		this.emitBlood(x, y, math.atan2(y - sp.state.y, x - sp.state.x), 3, Net.BloodKind.Green);
 		if (b.hp <= 0) {
-			this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot, b.type);
+			if (b.unpaid === true) this.progress?.forgetBoss(b.id);
+			else this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot, b.type);
 			this.history.forget(b.id);
 			this.hooks.bossKilled?.(b, sp.slot);
 		}
@@ -1399,7 +1412,8 @@ export class ServerCombat {
 		else this.defaultReaction(z, dir, knock, stun);
 		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
 		if (z.hp <= 0) {
-			this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, z.type, -1, true);
+			if (z.unpaid === true) this.progress?.forgetZombie(z.id);
+			else this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, z.type, -1, true);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, creditSlot);
 		}
@@ -1423,7 +1437,8 @@ export class ServerCombat {
 		this.hooks.hitBoss?.(b, damage, x, y);
 		this.emitBlood(x, y, math.atan2(y - fromY, x - fromX), 3, Net.BloodKind.Green);
 		if (b.hp <= 0) {
-			this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot, b.type, true);
+			if (b.unpaid === true) this.progress?.forgetBoss(b.id);
+			else this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot, b.type, true);
 			this.history.forget(b.id);
 			this.hooks.bossKilled?.(b, creditSlot);
 		}

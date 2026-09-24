@@ -2,84 +2,34 @@ import { DESIGN, TOWN } from "shared/engine/constants";
 import { BuildingType } from "shared/data/buildings";
 import { getDayPopulation } from "shared/data/spawns";
 import { zombieDef } from "shared/data/zombies";
-import { ItemKind } from "shared/data/kinds";
-import { difficultyOfDay } from "shared/game/save";
-import { BossState, bossHitRadius, createBoss, createZombie, ZombieState, ZombieType } from "shared/game/entities";
+import { BossState, bossHitRadius, createBoss, createZombie, ZombieType } from "shared/game/entities";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
 import { currentWeapon } from "shared/game/player";
 import { addSolid, querySolids, Solid, spawnGroundItem, WorldData } from "shared/game/world";
 import type { GameContext } from "shared/game/context";
 import type { ItemGroup } from "shared/admin/ops";
+import * as WO from "shared/admin/worldOps";
+import type { SpawnKind, StructureKind } from "shared/admin/worldOps";
 import { PLACEABLES } from "../systems/build";
+import { debugFlowField } from "../systems/zombieAI";
 import type { GameRefs } from "../systems/types";
 import type { GameLoop } from "../gameLoop";
 import { AdminOverlay, OverlayFlags, PlacementPreview } from "./overlay";
-import { serverOwnsWorld } from "../net/authority";
-
-/**
- * From WORLD_SERVER_PHASE the items and the constructions are the server's (docs/MULTIPLAYER.md §4.8): one made here
- * would exist on this screen only -- nobody else sees it, the server's zombies walk through it, and the next
- * WorldInit wipes it (correctness review of 5967a18, K). Until the admin tools go through the server, they say so.
- */
-const SERVER_WORLD = "Not available while the server owns the world (items and structures are the server's)";
 
 /*
  * AdminWorld: the ONLY way the admin panel touches the game world.
  *
- * Today every client simulates its own world, so LocalAdminWorld acts directly on this client's GameLoop: spawns,
- * clock, weather, god mode... only ever affect the admin's own world. When the game moves to a shared,
- * server-simulated world, a server-backed implementation (admin RemoteFunctions) replaces LocalAdminWorld and the
- * panel does not change. The "view" methods (free camera, overlays, preview, stats) stay on the client either way.
+ * LocalAdminWorld acts directly on this client's GameLoop: that is right only where this client simulates its own
+ * world (MP_PHASE < 2, or offline). From MP_PHASE 2 the server owns the world, and a spawn, the clock, god mode or a
+ * teleport made here would be overwritten by the next snapshot; client/admin/serverWorld.ts (`AdminWorldHost`) then
+ * sends every world tool to the server instead (docs/MULTIPLAYER.md §10, F6-6B) and the panel does not change. The
+ * "view" methods (free camera, overlays, preview, stats) stay on the client either way.
  */
 
-export type SpawnKind =
-	"walker" | "fast" | "big" | "spitter" | "exploder" | "charger" | "jumper" | "boss1" | "boss2" | "boss3" | "boss4";
-
-export interface SpawnKindInfo {
-	kind: SpawnKind;
-	label: string;
-	boss: boolean;
-}
-
-export const SPAWN_KINDS: Array<SpawnKindInfo> = [
-	{ kind: "walker", label: "Walker", boss: false },
-	{ kind: "fast", label: "Fast walker", boss: false },
-	{ kind: "big", label: "Big walker", boss: false },
-	{ kind: "spitter", label: "Spitter", boss: false },
-	{ kind: "exploder", label: "Exploder", boss: false },
-	{ kind: "charger", label: "Charger", boss: false },
-	{ kind: "jumper", label: "Jumper", boss: false },
-	{ kind: "boss1", label: "Boss 1 · Centipede", boss: true },
-	{ kind: "boss2", label: "Boss 2 · Rafflesia", boss: true },
-	{ kind: "boss3", label: "Boss 3 · Giant", boss: true },
-	{ kind: "boss4", label: "Boss 4 · Hedgehog", boss: true },
-];
-
-export type StructureKind =
-	| "barricade"
-	| "steelBarricade"
-	| "door"
-	| "lamp"
-	| "campfire"
-	| "brazier"
-	| "turret"
-	| "electricTurret"
-	| "trap"
-	| "craftDesk";
-
-/** PLACEABLES id (client/systems/build.ts) of every structure the panel can place */
-export const STRUCTURE_KINDS: Array<{ kind: StructureKind; label: string; placeable: number }> = [
-	{ kind: "barricade", label: "Barricade", placeable: 10 },
-	{ kind: "steelBarricade", label: "Steel barricade", placeable: 12 },
-	{ kind: "door", label: "Wooden door", placeable: 11 },
-	{ kind: "lamp", label: "Lamp", placeable: 4 },
-	{ kind: "campfire", label: "Campfire", placeable: 14 },
-	{ kind: "brazier", label: "Brazier", placeable: 15 },
-	{ kind: "turret", label: "Turret", placeable: 2 },
-	{ kind: "electricTurret", label: "Electric turret", placeable: 16 },
-	{ kind: "trap", label: "Trap", placeable: 17 },
-	{ kind: "craftDesk", label: "Craft desk", placeable: 0 },
-];
+// the catalogues are shared with the server, which validates every spawn against them (shared/admin/worldOps.ts)
+export const SPAWN_KINDS = WO.SPAWN_KINDS;
+export const STRUCTURE_KINDS = WO.STRUCTURE_KINDS;
+export type { SpawnKind, StructureKind };
 
 export const BUILDING_KINDS: Array<{ type: number; label: string }> = [
 	{ type: BuildingType.House, label: "House" },
@@ -127,11 +77,18 @@ export interface WorldStats {
 export interface ActionResult {
 	ok: boolean;
 	message: string;
+	/**
+	 * The SERVER ran it and already wrote the audit line (a world tool of a server-owned world): the panel must not log
+	 * it again as a local one. `ok` is then the server's answer, and nothing else.
+	 */
+	audited?: boolean;
 }
 
 export interface AdminWorld {
 	/** a run is on screen and the survivor is alive (world tools do nothing otherwise) */
 	ready(): boolean;
+	/** the world tools go to the server (it owns the world) instead of acting on this client's copy */
+	serverWorld(): boolean;
 	playerPosition(): WorldPoint;
 	screenToWorld(sx: number, sy: number): WorldPoint;
 
@@ -151,11 +108,12 @@ export interface AdminWorld {
 
 	// time & weather
 	clock(): ClockState;
+	/** a slider: on a server-owned world the requests are paced and a refusal is told through `notify` */
 	setClock(hour: number): void;
 	skipToNight(): ActionResult;
 	skipToDawn(): ActionResult;
 	forceWave(): ActionResult;
-	setRain(on: boolean): void;
+	setRain(on: boolean): ActionResult;
 
 	// population
 	killAll(): ActionResult;
@@ -163,11 +121,11 @@ export interface AdminWorld {
 
 	// the survivor
 	heal(): ActionResult;
-	setGod(on: boolean): void;
+	setGod(on: boolean): ActionResult;
 	god(): boolean;
-	setInfiniteAmmo(on: boolean): void;
+	setInfiniteAmmo(on: boolean): ActionResult;
 	infiniteAmmo(): boolean;
-	setNoclip(on: boolean): void;
+	setNoclip(on: boolean): ActionResult;
 	noclip(): boolean;
 	teleport(x: number, y: number): ActionResult;
 	buildingCount(buildingType: number): number;
@@ -181,33 +139,18 @@ export interface AdminWorld {
 	zoom(): number;
 	setOverlay(kind: OverlayKind, on: boolean): void;
 	overlay(kind: OverlayKind): boolean;
+	/** this client has a pathfinding field to draw (it runs the horde itself: never while the server owns it) */
+	hasFlowField(): boolean;
 	setPreview(preview: PlacementPreview | undefined): void;
 	stats(): WorldStats;
 }
 
-const ZOMBIE_TYPE: Record<string, ZombieType> = {
-	walker: 1,
-	fast: 1,
-	big: 1,
-	spitter: 2,
-	exploder: 3,
-	charger: 4,
-	jumper: 5,
-};
-const BOSS_TYPE: Record<string, number> = { boss1: 1, boss2: 2, boss3: 3, boss4: 4 };
-/** bosses are heavy (boss 1 is 50 segments): cap them on the map */
-const MAX_BOSSES = 4;
-const MAX_SPAWN = 20;
-const FREE_SEARCH = 500;
+/** the same caps as the server's (a boss is heavy: boss 1 is 50 segments, and the snapshot carries MAX_BOSSES) */
+const MAX_BOSSES = WO.ADMIN_WORLD_LIMITS.BOSSES;
+const MAX_SPAWN = WO.ADMIN_WORLD_LIMITS.SPAWN_PER_REQUEST;
+const FREE_SEARCH = WO.ADMIN_WORLD_LIMITS.FREE_SEARCH;
 /** how far to look for free ground when noclip ends inside something solid */
-const UNSTICK_SEARCH = 800;
-const ITEM_GROUP_KIND: Record<ItemGroup, number> = {
-	weapon: ItemKind.Weapon,
-	equip: ItemKind.Equip,
-	use: ItemKind.Use,
-	etc: ItemKind.Etc,
-	ammo: ItemKind.Etc,
-};
+const UNSTICK_SEARCH = WO.ADMIN_WORLD_LIMITS.UNSTICK_SEARCH;
 
 function sideNormal(side: string | undefined): WorldPoint {
 	if (side === "top") return { x: 0, y: -1 };
@@ -222,34 +165,14 @@ function rectCircle(rx: number, ry: number, rw: number, rh: number, cx: number, 
 	return (cx - qx) * (cx - qx) + (cy - qy) * (cy - qy) < r * r;
 }
 
-/** the walker variants of createZombie (fast & frail / big & tough), forced instead of rolled */
-function shapeWalker(z: ZombieState, kind: SpawnKind, day: number): void {
-	const d = difficultyOfDay(day);
-	const b = zombieDef(1);
-	let speed = b.speed * (1 + d / 3);
-	let hp = math.floor(b.hp * (1 + d));
-	let scale = 1;
-	if (kind === "fast") {
-		speed *= 2;
-		hp = math.floor(hp / 2);
-	} else if (kind === "big") {
-		hp = math.floor(hp * 1.5);
-		scale = 1.4;
-	}
-	z.moveSpeed = speed;
-	z.hp = hp;
-	z.hpMax = hp;
-	z.scale = scale;
-}
-
 /**
  * LocalAdminWorld: thin implementation over this client's GameLoop. Per-frame hooks (called by adminClient around
  * GameLoop.update / after render) keep god mode, infinite ammo and the overlays in sync.
  */
 export class LocalAdminWorld implements AdminWorld {
-	private godOn = false;
-	private ammoOn = false;
-	private freeOn = false;
+	protected godOn = false;
+	protected ammoOn = false;
+	protected freeOn = false;
 	private flags: OverlayFlags = { solids: false, actors: false, flow: false, lights: false, stats: false };
 	private preview?: PlacementPreview;
 	private overlayView: AdminOverlay;
@@ -265,26 +188,24 @@ export class LocalAdminWorld implements AdminWorld {
 	onAssist: (what: string) => void = () => {};
 
 	constructor(
-		private readonly ctx: GameContext,
-		private readonly loop: GameLoop,
+		protected readonly ctx: GameContext,
+		protected readonly loop: GameLoop,
 		overlayParent: GuiObject,
 	) {
 		this.overlayView = new AdminOverlay(overlayParent);
 	}
 
-	private refs(): GameRefs {
+	protected refs(): GameRefs {
 		return this.loop.getRefs();
 	}
 
-	private world(): WorldData {
+	protected world(): WorldData {
 		return this.refs().world;
 	}
 
 	/** the town inside the border forest, shrunk by `r`: noclip and teleports never leave it */
-	private bounds(r: number): [number, number, number, number] {
-		const w = this.world();
-		const b = TOWN.BORDER + r;
-		return [b, b, w.width - b, w.height - b];
+	protected bounds(r: number): [number, number, number, number] {
+		return WO.townBounds(this.world(), r);
 	}
 
 	/** out of a solid (noclip ended inside a wall / car / tree): to the nearest free ground */
@@ -302,6 +223,10 @@ export class LocalAdminWorld implements AdminWorld {
 		return this.ctx.phase === "playing" && !this.refs().player.dead;
 	}
 
+	serverWorld(): boolean {
+		return false;
+	}
+
 	playerPosition(): WorldPoint {
 		const p = this.refs().player;
 		return { x: p.x, y: p.y };
@@ -315,12 +240,12 @@ export class LocalAdminWorld implements AdminWorld {
 	// ------------------------------------------------------------ spawning
 
 	spawnRadius(kind: SpawnKind): number {
-		const boss = BOSS_TYPE[kind];
-		if (boss !== undefined) {
+		const info = WO.spawnKindInfo(kind);
+		if (info !== undefined && info.boss) {
 			// bossHitRadius only reads the type (no createBoss here: it would burn an entity id every frame)
-			return bossHitRadius({ type: boss } as BossState);
+			return bossHitRadius({ type: info.type } as BossState);
 		}
-		const r = zombieDef(ZOMBIE_TYPE[kind] ?? 1).radius;
+		const r = zombieDef(info?.type ?? 1).radius;
 		return kind === "big" ? r * 1.4 : r;
 	}
 
@@ -328,24 +253,11 @@ export class LocalAdminWorld implements AdminWorld {
 		return kind === "zombie" ? DESIGN.ZOMBIE_SPAWN_MAX : DESIGN.ITEM_SPAWN_MAX;
 	}
 
-	freePoint(x: number, y: number, r: number, search = FREE_SEARCH): WorldPoint | undefined {
-		const w = this.world();
-		const [x0, y0, x1, y1] = this.bounds(r);
-		const inside = (px: number, py: number): boolean => px >= x0 && py >= y0 && px <= x1 && py <= y1;
-		if (inside(x, y) && circleBlocked(w, x, y, r) === undefined) return { x, y };
-		for (let ring = 12; ring <= search; ring += 12) {
-			const n = math.max(8, math.ceil((ring * math.pi * 2) / 14));
-			for (let i = 0; i < n; i++) {
-				const a = (i / n) * math.pi * 2;
-				const px = x + math.cos(a) * ring;
-				const py = y + math.sin(a) * ring;
-				if (inside(px, py) && circleBlocked(w, px, py, r) === undefined) return { x: px, y: py };
-			}
-		}
-		return undefined;
+	freePoint(x: number, y: number, r: number, search: number = FREE_SEARCH): WorldPoint | undefined {
+		return WO.freePointIn(this.world(), x, y, r, search);
 	}
 
-	private tooFar(x: number, y: number, range: number): boolean {
+	protected tooFar(x: number, y: number, range: number): boolean {
 		const p = this.refs().player;
 		return math.abs(x - p.x) > range || math.abs(y - p.y) > range;
 	}
@@ -355,7 +267,8 @@ export class LocalAdminWorld implements AdminWorld {
 		const refs = this.refs();
 		const n = math.clamp(math.floor(count), 1, MAX_SPAWN);
 		const r = this.spawnRadius(kind);
-		const boss = BOSS_TYPE[kind];
+		const info = WO.spawnKindInfo(kind);
+		const boss = info !== undefined && info.boss ? info.type : undefined;
 		if (boss === undefined && this.tooFar(x, y, this.spawnRange("zombie"))) {
 			return { ok: false, message: "Too far from the survivor: the spawner would recycle it" };
 		}
@@ -364,15 +277,14 @@ export class LocalAdminWorld implements AdminWorld {
 		for (let i = 0; i < n; i++) {
 			if (boss !== undefined && refs.bosses.size() >= MAX_BOSSES) break;
 			// sunflower spread around the click: close together, never on top of each other
-			const a = i * 2.39996;
-			const d = i === 0 ? 0 : r * 2.4 * math.sqrt(i);
-			const at = this.freePoint(x + math.cos(a) * d, y + math.sin(a) * d, r + 2);
+			const [dx, dy] = WO.sunflower(i, r);
+			const at = this.freePoint(x + dx, y + dy, r + 2);
 			if (at === undefined) continue;
 			if (boss !== undefined) {
 				refs.bosses.push(createBoss(boss, at.x, at.y));
 			} else {
-				const z = createZombie(ZOMBIE_TYPE[kind] ?? 1, at.x, at.y, day, false);
-				if (z.type === 1) shapeWalker(z, kind, day);
+				const z = createZombie((info?.type ?? 1) as ZombieType, at.x, at.y, day, false);
+				if (z.type === 1) WO.shapeWalker(z, kind, day);
 				z.detect = chase;
 				z.detectShow = chase ? 1 : 0;
 				refs.zombies.push(z);
@@ -391,13 +303,11 @@ export class LocalAdminWorld implements AdminWorld {
 
 	spawnItem(group: ItemGroup, index: number, count: number, x: number, y: number): ActionResult {
 		if (!this.ready()) return { ok: false, message: "Start a run first" };
-		if (serverOwnsWorld()) return { ok: false, message: SERVER_WORLD };
-		let itemId = index;
-		if (group === "ammo") {
-			// ammo pools are ETC items 44..48; electricity has no ground item
-			if (index > 4) return { ok: false, message: "Electricity cannot be dropped on the ground" };
-			itemId = 44 + index;
+		// ammo pools are ETC items 44..48; electricity has no ground item
+		if (group === "ammo" && index > WO.AMMO_GROUND_MAX_INDEX) {
+			return { ok: false, message: "Electricity cannot be dropped on the ground" };
 		}
+		const itemId = WO.groundItemId(group, index);
 		if (this.tooFar(x, y, this.spawnRange("item"))) {
 			return { ok: false, message: "Too far from the survivor: the spawner would recycle it" };
 		}
@@ -405,7 +315,7 @@ export class LocalAdminWorld implements AdminWorld {
 		if (at === undefined) return { ok: false, message: "No free space there" };
 		spawnGroundItem(
 			this.world(),
-			ITEM_GROUP_KIND[group],
+			WO.ITEM_GROUP_KIND[group],
 			itemId,
 			math.clamp(math.floor(count), 1, 9999),
 			at.x,
@@ -443,7 +353,6 @@ export class LocalAdminWorld implements AdminWorld {
 
 	spawnStructure(kind: StructureKind, x: number, y: number): ActionResult {
 		if (!this.ready()) return { ok: false, message: "Start a run first" };
-		if (serverOwnsWorld()) return { ok: false, message: SERVER_WORLD };
 		const info = STRUCTURE_KINDS.find(s => s.kind === kind);
 		const def = info !== undefined ? PLACEABLES[info.placeable] : undefined;
 		if (def === undefined) return { ok: false, message: "Unknown structure" };
@@ -559,11 +468,12 @@ export class LocalAdminWorld implements AdminWorld {
 		return { ok: true, message: label };
 	}
 
-	setRain(on: boolean): void {
+	setRain(on: boolean): ActionResult {
 		const dn = this.refs().daynight;
 		dn.isRaining = on;
 		dn.update(0);
 		this.onAssist("weather");
+		return { ok: true, message: on ? "Rain on" : "Rain off" };
 	}
 
 	// ------------------------------------------------------------ population
@@ -607,17 +517,18 @@ export class LocalAdminWorld implements AdminWorld {
 		return { ok: true, message: "Healed and fed" };
 	}
 
-	setGod(on: boolean): void {
+	setGod(on: boolean): ActionResult {
 		this.godOn = on;
 		this.syncGod();
 		if (on) this.onAssist("god");
+		return { ok: true, message: on ? "God mode on" : "God mode off" };
 	}
 
 	god(): boolean {
 		return this.godOn;
 	}
 
-	setInfiniteAmmo(on: boolean): void {
+	setInfiniteAmmo(on: boolean): ActionResult {
 		const p = this.refs().player;
 		if (this.ammoOn && !on) {
 			// the free magazine must not become real ammo: it is emptied (the weapon reloads from its pool)
@@ -628,17 +539,19 @@ export class LocalAdminWorld implements AdminWorld {
 		this.ammoOn = on;
 		p.infiniteAmmo = on;
 		if (on) this.onAssist("infiniteAmmo");
+		return { ok: true, message: on ? "Infinite ammo on" : "Infinite ammo off" };
 	}
 
 	infiniteAmmo(): boolean {
 		return this.ammoOn;
 	}
 
-	setNoclip(on: boolean): void {
+	setNoclip(on: boolean): ActionResult {
 		const was = this.loop.admin.noclip;
 		this.loop.admin.noclip = on;
 		if (on) this.onAssist("noclip");
 		else if (was) this.unstick();
+		return { ok: true, message: on ? "Noclip on" : "Noclip off" };
 	}
 
 	noclip(): boolean {
@@ -663,7 +576,7 @@ export class LocalAdminWorld implements AdminWorld {
 		return { ok: true, message: "Teleported" };
 	}
 
-	private buildings(buildingType: number): Array<Solid> {
+	protected buildings(buildingType: number): Array<Solid> {
 		const out: Array<Solid> = [];
 		for (const s of this.world().solids) {
 			if (s.kind === "building" && s.buildingType === buildingType) out.push(s);
@@ -689,7 +602,7 @@ export class LocalAdminWorld implements AdminWorld {
 		const dx = (b.doorX ?? b.x + b.w / 2) + n.x * off;
 		const dy = (b.doorY ?? b.y + b.h) + n.y * off;
 		const res = this.teleport(dx, dy);
-		return res.ok ? { ok: true, message: `${label} ${i + 1}/${list.size()}` } : res;
+		return res.ok ? { ok: true, message: `${label} ${i + 1}/${list.size()}`, audited: res.audited } : res;
 	}
 
 	// ------------------------------------------------------------ view
@@ -736,6 +649,10 @@ export class LocalAdminWorld implements AdminWorld {
 		return this.flags[kind];
 	}
 
+	hasFlowField(): boolean {
+		return debugFlowField().valid;
+	}
+
 	setPreview(preview: PlacementPreview | undefined): void {
 		this.preview = preview;
 	}
@@ -766,7 +683,7 @@ export class LocalAdminWorld implements AdminWorld {
 
 	// ------------------------------------------------------------ frame hooks (adminClient)
 
-	private syncGod(): void {
+	protected syncGod(): void {
 		this.refs().player.godMode = this.godOn || this.freeOn;
 	}
 
@@ -843,6 +760,11 @@ export class LocalAdminWorld implements AdminWorld {
 		this.setGod(false);
 		this.setInfiniteAmmo(false);
 		this.setNoclip(false);
+		this.resetView();
+	}
+
+	/** the overlays and the placement ghost off (what is drawn on this screen only) */
+	protected resetView(): void {
 		this.preview = undefined;
 		for (const [k] of pairs(this.flags)) this.flags[k] = false;
 		this.overlayView.hide();

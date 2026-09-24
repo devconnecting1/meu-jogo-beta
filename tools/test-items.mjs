@@ -4967,9 +4967,14 @@ section(
 					/if \(owned\(\)\) return predictAndSend\(IntentKind\.UseItem/.test(sync),
 				"[L] the Bag's Use goes through backpackSync (a server verb when owned), never the local itemUseEffect",
 			);
+			// (F6-6B: they used to refuse, "SERVER_WORLD"; now the server makes them -- tools/test-admin.mjs section 10)
+			const adminWorld = source("client/admin/serverWorld.ts");
 			check(
-				/SERVER_WORLD/.test(source("client/admin/world.ts")),
-				"[K] the admin's item and structure spawns refuse while the server owns the world",
+				/serverWorld\(\)\) return super\.spawnItem/.test(adminWorld) &&
+					/op: "spawnItem"/.test(adminWorld) &&
+					/serverWorld\(\)\) return super\.spawnStructure/.test(adminWorld) &&
+					/op: "spawnStructure"/.test(adminWorld),
+				"[K] while the server owns the world the admin's item and structure spawns are server requests, never local copies",
 			);
 		}
 		s.quit(friend);

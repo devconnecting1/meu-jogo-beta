@@ -3,6 +3,7 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { AMMO_LABELS, ItemGroup, isAmmoEtcId } from "shared/admin/ops";
+import { ADMIN_WORLD_LIMITS } from "shared/admin/worldOps";
 import { TEXT, THEME, space } from "../ui/theme";
 import {
 	Button,
@@ -20,8 +21,11 @@ import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTy
 import { SPAWN_KINDS, STRUCTURE_KINDS, SpawnKind, StructureKind } from "./world";
 
 /*
- * Spawn (the admin's own world, through AdminWorld): pick what, how many and how it behaves, then "Place on map"
- * arms the click-to-place mode (placement.ts) with a ghost of the real footprint under the cursor.
+ * Spawn, through AdminWorld: pick what, how many and how it behaves, then "Place on map" arms the click-to-place mode
+ * (placement.ts) with a ghost of the real footprint under the cursor. Where the server owns the world, each click is a
+ * request it validates and runs (client/admin/serverWorld.ts): what it places is for everybody, and the toast says
+ * what it really did. A spawned zombie or boss pays nobody (no XP, kill, loot or trophy), so spawning is never a way to
+ * farm; items and structures make the admin's own run assisted.
  */
 
 const ITEM_GROUPS: Array<{ group: ItemGroup; label: string }> = [
@@ -134,7 +138,7 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 		});
 		placeButton(y0 + 96, () => {
 			const info = SPAWN_KINDS.find(k => k.kind === memory.kind)!;
-			const count = info.boss ? math.min(memory.count, 4) : memory.count;
+			const count = info.boss ? math.min(memory.count, ADMIN_WORLD_LIMITS.BOSSES) : memory.count;
 			p.placement.begin({
 				kind: "zombie",
 				spawn: memory.kind,
@@ -146,7 +150,7 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 		makeLabel(
 			body,
 			"Hint",
-			`Zombies more than ${p.world.spawnRange("zombie")} u from the survivor are recycled by the spawner. At most 4 bosses at once.`,
+			`Zombies more than ${p.world.spawnRange("zombie")} u from every survivor are recycled. At most ${ADMIN_WORLD_LIMITS.BOSSES} bosses at once. Spawns give no XP or loot.`,
 			0,
 			y0 + 144,
 			CONTENT_W,

@@ -217,6 +217,29 @@ export class ServerBuild {
 		return { kind: "placed", solid };
 	}
 
+	/**
+	 * An admin's construction (docs/MULTIPLAYER.md §10): `placeable` centred on (x, y), unrotated, owned by nobody (the
+	 * server's, like a wall whose builder left) so it never eats a player's quota. The same validity as a survivor's
+	 * placement -- inside the world, over no solid, no survivor and no zombie -- and the server-wide cap still counts
+	 * it. Nothing is spent and there is no cooldown: the admin remote has its own rate limit.
+	 */
+	placeFree(
+		placeable: number,
+		x: number,
+		y: number,
+		players: ReadonlyArray<PlayerState>,
+		zombies: ReadonlyArray<ZombieState>,
+	): PlaceOutcome {
+		const def = PLACEABLES[placeable] as PlaceableDef | undefined;
+		if (def === undefined) return { kind: "refused", why: "unknown" };
+		if (this.total >= MAX_BUILDS_PER_SERVER) return { kind: "refused", why: "capServer" };
+		const r: PlaceRect = { x: x - def.w / 2, y: y - def.h / 2, w: def.w, h: def.h };
+		if (!placementValid(this.world, r, players, zombies)) return { kind: "refused", why: "invalid" };
+		// `addSolid` fires `onSolidAdd`: the delta to everybody, the flow field, the grid (ELE-01) and the cap
+		const solid = addSolid(this.world, { ...placedSolid(def, r, 0), placeable, owner: SLOT_NONE });
+		return { kind: "placed", solid };
+	}
+
 	/** §8.1 `cancelPlace`: the construction leaves the cursor and its ingredients come back */
 	cancel(slot: number, save: PlayerSaveData): PlaceOutcome {
 		const p = this.pending.get(slot);
