@@ -53,7 +53,7 @@ import { costumeForEquip } from "shared/data/shop";
 import { iconOf, skillIconOf } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
 import { weaponReserve } from "shared/game/player";
-import { equipSlotOf, equippedIn, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
+import { equipSlotOf, equippedIn, heldWeaponOf, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
 import { BagGrid, BagTile, GRID_H, GRID_W, TileModel, gridCells } from "./bagGrid";
 import { BagPanel, PanelModel } from "./bagPanel";
 import { ItemCard, ItemCardHandle, ItemCardModel } from "./itemCard";
@@ -219,7 +219,13 @@ interface ItemDetail {
 export class Backpack {
 	onUse: ((itemId: number) => void) | undefined;
 	onCraft: ((recipeId: number) => void) | undefined;
+	/**
+	 * Equip on a weapon, and (DESIGN_RULES ITM-06) Put away / Equip on the one in hand: main.client's `chooseWeapon`,
+	 * the same path as the number keys -- the weapon in hand chosen again goes into the holster or comes out of it
+	 */
 	onEquipWeapon: ((weaponId: number) => void) | undefined;
+	/** ITM-06: is the weapon in hand put away (empty hands)? The run's body answers (main.client.ts); none: never */
+	weaponAway: () => boolean = () => false;
 	onEquipItem: ((equipId: number) => void) | undefined;
 	/** unequip an equipment slot (EquipSlot): 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet */
 	onUnequipItem: ((slot: number) => void) | undefined;
@@ -680,11 +686,13 @@ export class Backpack {
 			pipsOn: 0,
 		});
 		if (cat === CAT_WEAPONS) {
+			// the weapon in the hands (-1, nothing chosen, is the blade: the server's rule), and none while it is put away
+			const inHand = this.weaponAway() ? -1 : heldWeaponOf(save);
 			for (const w of WEAPONS) {
 				if (!ownsWeapon(save, w.id)) continue;
 				const n = save.invenWeapon[w.id] ?? 0;
 				const ammo = Info.showsReserve(w) ? W.fmtInt(weaponReserve(save, w)) : "";
-				out.push(tile(ItemKind.Weapon, w.id, n > 1 ? times(n) : "", save.equipWeapon === w.id, ammo));
+				out.push(tile(ItemKind.Weapon, w.id, n > 1 ? times(n) : "", inHand === w.id, ammo));
 			}
 		} else if (cat === CAT_EQUIP) {
 			for (const e of EQUIPS) {
@@ -846,10 +854,15 @@ export class Backpack {
 		const id = w.id;
 		const owned = ownsWeapon(save, id);
 		const count = save.invenWeapon[id] ?? 0;
-		const equipped = save.equipWeapon === id;
+		// the weapon the hands hold (-1 = the blade), and ITM-06: in the holster it is not in them
+		const chosen = heldWeaponOf(save) === id;
+		const away = chosen && this.weaponAway();
+		const equipped = chosen && !away;
 		let help = "";
 		if (equipped) {
 			help = this.tr("This is the weapon in your hands.");
+		} else if (away) {
+			help = this.tr("Your hands are empty. Equip draws it again.");
 		} else if (!owned) {
 			const r = recipeMaking(ItemKind.Weapon, id);
 			help = r !== undefined ? `You don't have it yet. Craft it: ${stationName(r)}.` : "You don't have it yet.";
@@ -857,9 +870,16 @@ export class Backpack {
 		let state = equipped ? this.tr("EQUIPPED") : times(count);
 		if (!equipped && id === 0 && count === 0) state = this.tr("DEFAULT");
 		let act: DetailAction;
-		if (!owned) act = detailAction(this.tr("Not owned"), "secondary", false, noop);
-		else if (equipped) act = detailAction(this.tr("Equipped"), "secondary", false, noop);
-		else act = detailAction(this.tr("Equip"), "default", true, (): void => this.equipWeapon(id));
+		if (!owned) {
+			act = detailAction(this.tr("Not owned"), "secondary", false, noop);
+		} else if (equipped) {
+			// ITM-06: the one action of the weapon in your hands is to put it away (empty hands, like Dead Town)
+			act = detailAction(this.tr("Put away"), "default", this.onEquipWeapon !== undefined, (): void =>
+				this.equipWeapon(id),
+			);
+		} else {
+			act = detailAction(this.tr("Equip"), "default", true, (): void => this.equipWeapon(id));
+		}
 		const card = this.cardOf(ItemKind.Weapon, id);
 		return card !== undefined ? { card, state, help, act } : undefined;
 	}
@@ -929,10 +949,15 @@ export class Backpack {
 
 	// ------------------------------------------------------------ actions (rules live in main.client)
 
+	/** Equip, or (ITM-06) Put away / Equip on the weapon in hand: one path, main.client's `chooseWeapon` */
 	private equipWeapon(id: number): void {
-		if (!ownsWeapon(this.ctx.save, id) || this.ctx.save.equipWeapon === id) return;
+		const save = this.ctx.save;
+		if (!ownsWeapon(save, id)) return;
+		const wasDrawn = heldWeaponOf(save) === id && !this.weaponAway();
 		this.onEquipWeapon?.(id);
-		if (this.ctx.save.equipWeapon === id) toast(this.ctx, `Equipped ${nameOf(ItemKind.Weapon, id)}`);
+		const drawn = heldWeaponOf(save) === id && !this.weaponAway();
+		if (drawn && !wasDrawn) toast(this.ctx, `Equipped ${nameOf(ItemKind.Weapon, id)}`);
+		else if (wasDrawn && !drawn) toast(this.ctx, `${this.tr("Put away")}: ${this.tr(nameOf(ItemKind.Weapon, id))}`);
 		this.rebuild();
 	}
 

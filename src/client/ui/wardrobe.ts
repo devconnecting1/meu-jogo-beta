@@ -74,6 +74,8 @@ export interface WardrobeHandlers {
 	onEquip: (equipId: number) => void;
 	/** take off what is worn in a slot (EquipSlot) */
 	onUnequip: (slot: number) => void;
+	/** the tab to open on: EquipSlot.Outfit or Pet (the Survivor screen's loadout tile of that slot); none = the first */
+	slot?: number;
 }
 
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
@@ -519,6 +521,11 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			COLS,
 		);
 		pages.push(page);
+	}
+
+	// the Survivor screen's OUTFIT / PET tile asked for its slot's page
+	if (handlers.slot !== undefined) {
+		for (let i = 0; i < pages.size(); i++) if (pages[i].slot === handlers.slot) tab = i;
 	}
 
 	// ---- MON-05: the Titles page -- ROWS on the groove, "[None]" first, then every title in the data table's order

@@ -75,8 +75,11 @@ export interface LobbyHandlers {
 	/** MP-21, the run is over: a new life (main.client's doNewRun) */
 	onNewRun: () => void;
 	onShop: () => void;
-	/** the wardrobe (MON-04); `from` is the page its X comes back to */
-	onWardrobe: (from: LobbyPage) => void;
+	/**
+	 * the wardrobe (MON-04); `from` is the page its X comes back to, `slot` the tab it opens on (EquipSlot.Outfit or
+	 * Pet: the Survivor screen's loadout tile of that slot); none = its first
+	 */
+	onWardrobe: (from: LobbyPage, slot?: number) => void;
 	onSettings: () => void;
 	onCredits?: () => void;
 	/** `thenPlay`: opened from the first-run prompt, the city follows the tutorial */
@@ -632,7 +635,7 @@ export function showLobby(
 			onRebirth: handlers.onRebirth,
 			onWaitDawn: handlers.onWaitDawn,
 			onNewRun: handlers.onNewRun,
-			onWardrobe: (): void => handlers.onWardrobe("survivor"),
+			onWardrobe: (slot?: number): void => handlers.onWardrobe("survivor", slot),
 			onTutorial: handlers.onTutorial,
 		});
 		survivor = s;

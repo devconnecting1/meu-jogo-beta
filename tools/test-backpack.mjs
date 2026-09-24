@@ -587,7 +587,9 @@ globalThis.game = { GetService: service };
 // ---------------------------------------------------------------- the modules under test (the shared .ts loader)
 
 const { Backpack } = require(join(SRC, "client/ui/backpack.ts"));
-const { defaultSave, equipSlotOf, setEquipped, ownsWeapon, ownsEquip } = require(join(SRC, "shared/game/save.ts"));
+const { defaultSave, equipSlotOf, setEquipped, ownsWeapon, ownsEquip, heldWeaponOf } = require(
+	join(SRC, "shared/game/save.ts"),
+);
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
@@ -861,15 +863,25 @@ function newCtx(forSave) {
 }
 const ctx = newCtx(save);
 
-/** what main.client does (without the world): the backpack only asks, the game changes the save */
-function wire(pack, s) {
+/**
+ * What main.client does (without the world): the backpack only asks, the game changes the save. The weapon goes the way
+ * client/systems/combat.ts `chooseWeapon` takes it (DESIGN_RULES ITM-06): the one in hand chosen again is put away, or
+ * drawn back; any other is switched to, drawn. The hands are the body's (`hands.away`), never the save's.
+ */
+function wire(pack, s, hands = { away: false }) {
 	pack.nearbyDesk = true;
 	pack.nearbyPro = true;
 	pack.nearbyFire = true;
 	pack.craftCheck = () => undefined;
 	pack.onEquipWeapon = id => {
+		if (id === heldWeaponOf(s)) {
+			hands.away = !hands.away;
+			return;
+		}
 		s.equipWeapon = id;
+		hands.away = false;
 	};
+	pack.weaponAway = () => hands.away;
 	pack.onEquipItem = id => {
 		setEquipped(s, equipSlotOf(id), id);
 	};
@@ -1130,8 +1142,11 @@ r = phase("e de novo, ida e volta", () => {
 check("ida e volta entre duas armas ja equipadas antes: zero", zero(r), cost(r));
 check("o save tem a arma na mao de novo", save.equipWeapon === weaponOf(toEquip).id);
 check(
-	'o painel diz EQUIPPED e o botao fica "Equipped", desligado',
-	panelState() === "EQUIPPED" && action()?.Text === "Equipped" && action()?.GetAttribute("Disabled") === true,
+	'o painel diz EQUIPPED e o botao e "Put away" (ITM-06: guardar a arma), ligado, a chapa azul',
+	panelState() === "EQUIPPED" &&
+		action()?.Text === "Put away" &&
+		action()?.GetAttribute("Disabled") !== true &&
+		action()?.GetAttribute("Variant") === "default",
 	`${panelState()} / ${action()?.Text}`,
 );
 click(weaponTiles[0], "weapon 1");
@@ -1143,6 +1158,86 @@ check(
 	"a acao principal e a chapa azul (Equip)",
 	action()?.Text === "Equip" && action()?.GetAttribute("Variant") === "default",
 );
+
+// ---------------------------------------------------------------- 2b. ITM-06: putting the weapon away
+
+console.log("\n2b) ITM-06: guardar a arma (maos vazias) e saca-la de novo pelo Bag\n");
+{
+	const heldId = weaponOf(toEquip).id;
+	const helpLine = () => deep(details(), "Extra")?.Text;
+	r = phase("guarda a arma da mao (Put away)", () => {
+		click(toEquip, "the weapon in hand");
+		act();
+	});
+	check("guardar a arma atualiza no lugar: zero Instance", zero(r), cost(r));
+	check(
+		"o jogo guardou a arma, e o save nao mudou (o coldre e do corpo, nunca do save)",
+		pack.weaponAway() === true && save.equipWeapon === heldId,
+		`away ${pack.weaponAway()} / equipWeapon ${save.equipWeapon}`,
+	);
+	check(
+		"maos vazias: NENHUM ladrilho de arma com o check EQUIPPED",
+		tilesOf(0).every(t => !tagShown(t)),
+		tilesOf(0).filter(tagShown).map(keyOf).join(","),
+	);
+	check(
+		'o painel da arma guardada: sem EQUIPPED, "Equip" (a chapa azul) e a linha que diz que as maos estao vazias',
+		panelState() !== "EQUIPPED" &&
+			action()?.Text === "Equip" &&
+			action()?.GetAttribute("Variant") === "default" &&
+			helpLine() === "Your hands are empty. Equip draws it again.",
+		`${panelState()} / ${action()?.Text} / ${helpLine()}`,
+	);
+	r = phase("saca a arma de volta (Equip na arma guardada)", () => act());
+	check("sacar de novo: zero Instance", zero(r), cost(r));
+	check(
+		"Equip na arma guardada a saca (o mesmo caminho da tecla dela): EQUIPPED e Put away de volta",
+		pack.weaponAway() === false &&
+			tagShown(toEquip) &&
+			panelState() === "EQUIPPED" &&
+			action()?.Text === "Put away",
+		`${pack.weaponAway()} / ${panelState()} / ${action()?.Text}`,
+	);
+	// guardada, escolher OUTRA arma a saca (ITM-06: escolher qualquer arma saca)
+	click(toEquip, "the weapon in hand");
+	act();
+	r = phase("guardada, equipa outra arma", () => {
+		click(weaponTiles[0], "weapon 1");
+		act();
+	});
+	check(
+		"guardada, Equip em outra arma troca E saca: ela fica EQUIPPED",
+		pack.weaponAway() === false && save.equipWeapon === weaponOf(weaponTiles[0]).id && tagShown(weaponTiles[0]),
+		`${pack.weaponAway()} / ${save.equipWeapon}`,
+	);
+	check("...sem criar nem destruir Instance", zero(r), cost(r));
+	// the -1 of a save that chose nothing (a craft ate the weapon, a fresh save): the blade is in the hand (the
+	// server's weaponOf), so the Bag says so -- it used to tag no weapon at all (the loadout probe's BUG)
+	save.equipWeapon = -1;
+	heartbeat(0.3);
+	const dagger = tileFor(0, "1:0");
+	click(dagger, "dagger");
+	check(
+		"equipWeapon -1: a adaga (a lamina que a mao segura) tem o check EQUIPPED, e so ela",
+		tagShown(dagger) && tilesOf(0).filter(tagShown).length === 1,
+		tilesOf(0).filter(tagShown).map(keyOf).join(","),
+	);
+	check(
+		'...e o painel dela diz EQUIPPED, com "Put away"',
+		panelState() === "EQUIPPED" && action()?.Text === "Put away",
+		`${panelState()} / ${action()?.Text}`,
+	);
+	act();
+	check(
+		"Put away na adaga de um save -1: guardada, sem trocar a arma do save",
+		pack.weaponAway() === true && save.equipWeapon === -1 && !tagShown(dagger),
+	);
+	act();
+	// back to the walk's state: the weapon it equipped, drawn
+	click(toEquip, "weapon 3");
+	act();
+	check("de volta a arma da caminhada, sacada", save.equipWeapon === heldId && pack.weaponAway() === false);
+}
 
 // ---------------------------------------------------------------- 3. using an item
 
@@ -1731,6 +1826,23 @@ pack.close();
 		typeof artBody === "string" && artApart && typeof flatBody === "object" && flatApart,
 		`Cowboy com a arte: ${lookText(artBody)}; liso: ${lookText(flatBody)}`,
 	);
+	// the Survivor screen's OUTFIT / PET tile (UI-10) opens the wardrobe on that slot's tab
+	{
+		const { EquipSlot } = require(join(SRC, "shared/data/equips.ts"));
+		const opensOn = slot => {
+			const shut = showWardrobe(ctx, { onBack: () => {}, onEquip: () => {}, onUnequip: () => {}, slot });
+			flush();
+			const tab = [0, 1].find(i => page(i)?.Visible === true);
+			shut();
+			flush();
+			return tab;
+		};
+		check(
+			"aberto pelo ladrilho PET do loadout, abre na aba de pets; pelo OUTFIT (ou sem pedido), na de trajes",
+			opensOn(EquipSlot.Pet) === 1 && opensOn(EquipSlot.Outfit) === 0 && opensOn(undefined) === 0,
+			`${opensOn(EquipSlot.Pet)} / ${opensOn(EquipSlot.Outfit)} / ${opensOn(undefined)}`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------- 9b. the titles (MON-05), on the same kit

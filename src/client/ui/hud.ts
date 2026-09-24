@@ -911,9 +911,10 @@ export class Hud {
 		this.board?.update(this.ctx.input.keyScoreboard, now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
-		// a melee weapon has nothing to reload: the touch button says so instead of doing nothing when pressed
+		// a melee weapon has nothing to reload, nor a weapon put away (ITM-06): the touch button says so instead of doing
+		// nothing when pressed
 		if (this.reloadBtn !== undefined) {
-			const canReload = state.magSize > 0;
+			const canReload = state.magSize > 0 && state.holstered !== true;
 			if ((this.reloadBtn.GetAttribute("Disabled") !== true) !== canReload) {
 				setButtonEnabled(this.reloadBtn, canReload);
 			}
