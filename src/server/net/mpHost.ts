@@ -34,12 +34,14 @@ import {
 	FLOOD_MALFORMED_WINDOW_S,
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
+	FLOOD_RATE_WINDOW_S,
 	MAX_PLAYERS,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
 	WORLD_SEED_ATTRIBUTE,
 } from "shared/net/mpConfig";
 import { IntentKind, decodeIntentMessage, decodeTimePing, encodeTimePong, isBackpackIntent } from "shared/net/protocol";
+import { SHOP_FLOOD_CALLS } from "shared/net/shopGuard";
 import { PlayerSaveData } from "shared/game/save";
 import type { SimMetrics } from "shared/admin/protocol";
 import { WorldData, generateTown } from "shared/game/world";
@@ -220,9 +222,12 @@ export interface MpHost {
 	 * (§8.2, audit M2) One message from `player` on a remote this host does not own -- SaveRequest, LoadRequest,
 	 * ShopAction, the admin remotes -- counted against the same flood limits as its own (`malformed`: a payload that is
 	 * not what that remote takes). True when the message must be dropped: the player is being kicked, or has left.
-	 * Call it FIRST in every handler, before the payload is read.
+	 * Call it FIRST in every handler, before the payload is read. `channel` "shop": a ShopAction that takes a token,
+	 * also counted against that channel's own line (§8.2 "> 3× o limite por 5 s": SHOP_FLOOD_CALLS in
+	 * FLOOD_RATE_WINDOW_S, shared/net/shopGuard.ts) -- 300 purchases in a few seconds are far under the 500 messages of
+	 * the connection's line, and were never kicked.
 	 */
-	noteRemote(player: Player, malformed: boolean): boolean;
+	noteRemote(player: Player, malformed: boolean, channel?: "shop"): boolean;
 	/** the §12.2 numbers as last published (once a second): the admin panel's Server info shows them */
 	metrics(): SimMetrics;
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
@@ -252,6 +257,9 @@ interface Link {
 	/** ...and the malformed ones among them (§8.2's second limit; in the world the ServerPlayer counts both) */
 	strangerBadStart: number;
 	strangerBadCount: number;
+	/** token-taking ShopActions in the current FLOOD_RATE_WINDOW_S window, in the world or not (§8.2, `noteRemote`) */
+	shopStart: number;
+	shopCount: number;
 	/**
 	 * The client asked to be IN the world (IntentKind.EnterWorld) and has not asked to leave.
 	 *
@@ -358,6 +366,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				strangerCount: 0,
 				strangerBadStart: 0,
 				strangerBadCount: 0,
+				shopStart: 0,
+				shopCount: 0,
 				wantsWorld: false,
 				worldAt: 0,
 				kicked: false,
@@ -492,6 +502,16 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		}
 		link.strangerBadCount += 1;
 		return link.strangerBadCount > FLOOD_MALFORMED;
+	}
+
+	/** one token-taking ShopAction (§8.2: more than SHOP_FLOOD_CALLS in FLOOD_RATE_WINDOW_S is a flood) */
+	function shopFlood(link: Link, now: number): boolean {
+		if (now - link.shopStart >= FLOOD_RATE_WINDOW_S || now < link.shopStart) {
+			link.shopStart = now;
+			link.shopCount = 0;
+		}
+		link.shopCount += 1;
+		return link.shopCount > SHOP_FLOOD_CALLS;
 	}
 
 	/**
@@ -869,9 +889,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		forgetUnsaved(player, blank) {
 			return lives.forgetUnsaved(player.UserId, blank);
 		},
-		noteRemote(player, malformed) {
+		noteRemote(player, malformed, channel) {
 			if (departed(player)) return true;
-			return noteMessageOf(linkOf(player), os.clock(), malformed);
+			const link = linkOf(player);
+			const now = os.clock();
+			if (noteMessageOf(link, now, malformed)) return true;
+			if (channel === "shop" && shopFlood(link, now)) {
+				kick(link, `${link.shopCount} ShopActions in ${FLOOD_RATE_WINDOW_S}s`);
+			}
+			return link.kicked;
 		},
 		metrics() {
 			// the counter moves between two publications (a tick that keeps failing never reaches `publishTick`)

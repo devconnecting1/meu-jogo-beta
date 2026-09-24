@@ -5,7 +5,8 @@
  * The client never tells the server "I am an admin": every admin remote re-checks the caller's UserId
  * against this list before doing anything. The server marks admins with the ADMIN_ATTRIBUTE attribute so
  * their client knows it may build the panel; a player who forces that attribute locally only gets a panel
- * whose every server request is refused (and world tools that only touch their own simulated world).
+ * whose every server request is refused -- the world tools included, which are server requests wherever the server
+ * owns the world (docs/MULTIPLAYER.md §10) -- and one who calls the remote in a loop is kicked for flooding it.
  */
 
 /** UserIds allowed to use the admin panel */

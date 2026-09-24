@@ -1037,6 +1037,29 @@ section(
 		d.ticks(60 * 3, 1, 0);
 		d.tick(0, 0, PRESS_E);
 		checkEq(sp.save.achievements[RIDER], max, `...and it stops at its goal (${max})`);
+		sim.remove(0);
+		for (const s of vehiclesIn(world)) W.removeSolid(world, s);
+		// §9.3 (the verification of 2026-09-24): an assisted run rides as far as it likes and earns no Road Trip point,
+		// as it earns no coins -- the ride's odometer still turns (the `distance` events), the achievement does not
+		sim.paysRewards = () => false;
+		const helped = addPlayer(sim, 0, 1000, 2000, fueled(20));
+		helped.save.achievements[RIDER] = 0;
+		park(world, 22, 1000, 2040);
+		const dh = driver(sim, helped);
+		dh.tick(0, 0, PRESS_E);
+		const from = events.length;
+		dh.ticks(60 * 4, 1, 0);
+		dh.tick(0, 0, PRESS_E);
+		const ridden = events
+			.slice(from)
+			.filter(e => e.kind === "distance")
+			.reduce((a, e) => a + e.units, 0);
+		check(
+			ridden > 500 && helped.save.achievements[RIDER] === 0,
+			"an assisted run: ridden, and no Road Trip point (§9.3)",
+			`${f1(ridden)} u, Rider ${helped.save.achievements[RIDER]}`,
+		);
+		sim.paysRewards = undefined;
 	},
 );
 
@@ -1248,6 +1271,85 @@ section(
 		}
 	},
 );
+
+section("B12. the motorcycle's headlight (LUZ-04): ONE cone for the horde, the light map and an ally's view", () => {
+	const Light = require(join(SRC, "shared/sim/survivorLight.ts"));
+	const MOTO_DEF = vehicleDef(VehicleKind.Motorcycle);
+	check(
+		MOTO_DEF.headlight > Light.FLASHLIGHT_REACH,
+		"the headlight reaches further than the flashlight",
+		`${MOTO_DEF.headlight} u`,
+	);
+	checkEq(vehicleDef(VehicleKind.Bicycle).headlight, 0, "the bicycle has none");
+	// the rule: riding a motorcycle, the beam is the headlight along the RIDE (not the aim); on foot, the flashlight
+	const save = fueled(20);
+	const p = Ply.createPlayer(save, 0, 0);
+	p.angle = Math.PI;
+	p.ride = { kind: VehicleKind.Motorcycle, heading: V.quantHeading(0), speed: 0 };
+	checkEq(Light.survivorBeamReach(p, save), MOTO_DEF.headlight, "on the motorcycle: the headlight's reach");
+	check(Math.abs(Light.survivorBeamAngle(p)) < 1e-6, "...along the ride's heading, whatever the aim");
+	p.ride = { kind: VehicleKind.Bicycle, heading: 0, speed: 0 };
+	checkEq(Light.survivorBeamReach(p, save), 0, "on the bicycle, no beam (no flashlight in hand either)");
+	p.ride = undefined;
+	check(Light.survivorBeamAngle(p) === Math.PI, "on foot the beam, if any, follows the aim");
+
+	// the server: at 23:00, a walker 500 u AHEAD of a stopped rider is lit (drawn, sent); one 500 u behind is not
+	const lit = item => {
+		const { world, sim } = serverWith({ zombies: true, width: 8000, height: 8000, hour: 23 });
+		const sp = addPlayer(sim, 0, 4000, 4000, fueled(40));
+		park(world, item, 4000, 4040);
+		const d = driver(sim, sp);
+		d.tick(0, 0, PRESS_E);
+		// point the rider at +x (the stick sets the heading), then stop
+		d.ticks(40, 1, 0);
+		d.ticks(120, 0, 0);
+		const h = V.rideHeading(sp.state.ride);
+		const ahead = createZombie(1, sp.state.x + Math.cos(h) * 500, sp.state.y + Math.sin(h) * 500, 1, false);
+		const behind = createZombie(1, sp.state.x - Math.cos(h) * 500, sp.state.y - Math.sin(h) * 500, 1, false);
+		ahead.alpha = 0;
+		behind.alpha = 0;
+		sim.horde.zombies.length = 0;
+		sim.horde.zombies.push(ahead, behind);
+		d.ticks(30, 0, 0);
+		return { ahead: ahead.alpha, behind: behind.alpha };
+	};
+	const moto = lit(22);
+	check(
+		moto.ahead > 0.9 && moto.behind < 0.1,
+		"night, on the motorcycle: the walker ahead is lit, the one behind is not",
+		`${moto.ahead.toFixed(2)} / ${moto.behind.toFixed(2)}`,
+	);
+	const bike = lit(21);
+	check(
+		bike.ahead < 0.1,
+		"on the bicycle (no headlight), the same walker stays in the dark",
+		`${bike.ahead.toFixed(2)}`,
+	);
+
+	// the screen: an ally riding a motorcycle lights their headlight's cone along the ride (playersView.collectLights)
+	const { LightList, addAllyLight } = require(join(SRC, "client/view/lightList.ts"));
+	const lights = new LightList();
+	const ally = {
+		userId: 5,
+		x: 100,
+		y: 100,
+		angle: Math.PI,
+		dead: false,
+		flashlight: false,
+		ride: VehicleKind.Motorcycle,
+		rideHeading: 0.5,
+	};
+	addAllyLight(lights, ally);
+	const cone = lights.items.find(l => l.cone !== undefined);
+	check(
+		cone !== undefined &&
+			cone.r === MOTO_DEF.headlight &&
+			Math.abs(cone.angle - 0.5) < 1e-9 &&
+			cone.cone === Light.CONE_HALF_ANGLE,
+		"an ally on a motorcycle: the headlight's cone, along their ride, as wide as the server's",
+		cone === undefined ? "no cone" : `${cone.r} u at ${cone.angle}`,
+	);
+});
 
 section("C1. prediction: the client replays the ride from the server's own numbers, to the bit", () => {
 	const s = predictedSession();

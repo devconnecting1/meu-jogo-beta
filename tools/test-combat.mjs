@@ -34,7 +34,10 @@
  *      MP_PHASE ≥ 2 — which is the §11.3 F2 acceptance line "o XP só vem do servidor";
  *   e. with MP_PHASE ≥ 2 `damageToPlayer` (the entry point every client system still calls) stops being a
  *      damage source, while the server's `applyPlayerDamage` keeps working — the playtest bug that started this
- *      front (one player at 84/100 from zombies only his client knew about) cannot happen again.
+ *      front (one player at 84/100 from zombies only his client knew about) cannot happen again;
+ *   h. DESIGN_RULES VIT-01: every hit the server lands and that takes hp (a bite, the horde's sink, a blast through
+ *      the i-frames) restarts the wait before healing; a bite refused by the i-frames, one the armour stops whole,
+ *      god mode and a client's own damage path restart nothing; and the server's body heals again 7 s after.
  *
  * MP_PHASE itself is NOT changed in the repository (tools/test-net.mjs pins it on purpose): the test flips the
  * exported value at runtime, around the sections that need phase 2, and puts it back.
@@ -1521,6 +1524,91 @@ section("g. the same resolution covers bosses (§2.3)");
 	tickPlayer(fx, sp, cmd, 3);
 	check(b.hp < b.hpMax, `the boss lost hp to a server-resolved shot (${b.hpMax} → ${b.hp})`);
 	checkEq(fx.combat.statsOf(0).hitsBoss, 1, "and the hit is counted against the boss, not a zombie");
+}
+
+// ================================================================ h. VIT-01: every hit the server lands restarts the wait
+
+section("h. VIT-01: a hit the SERVER lands restarts the wait before healing; nothing a client does can (§2.3, MP-00)");
+
+{
+	const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+	const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+	const RESTED = VIT.REGEN_RESTED_S;
+	/** a rested survivor on the combat fixture, hurt already so there is something to heal */
+	const rested = (fx, slot = 0) => {
+		const sp = makePlayer(fx, slot, 1000, 1000, 10);
+		sp.state.hp = 60;
+		checkEq(
+			sp.state.sinceHurt,
+			RESTED,
+			`a new body has rested (sinceHurt ${RESTED} s: it heals from its first step)`,
+		);
+		return sp;
+	};
+	{
+		const fx = newFixture();
+		const sp = rested(fx);
+		check(fx.combat.damagePlayer(sp, 25, 0), "a bite through the combat's damagePlayer lands");
+		checkEq(sp.state.sinceHurt, 0, "…and the wait starts over");
+		// the rest of the i-frames: a second bite is refused and restarts nothing; a blast goes through them and does
+		stepPlayer(fx.world, sp.state, sp.save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+		const since = sp.state.sinceHurt;
+		checkEq(fx.combat.damagePlayer(sp, 25, 0), false, "a bite inside the i-frames is refused");
+		checkEq(sp.state.sinceHurt, since, "…and took nothing, so the wait runs on");
+		check(fx.combat.damagePlayer(sp, 30, 0, true), "a blast goes through the i-frames (bypassDef)");
+		checkEq(sp.state.sinceHurt, 0, "…and restarts the wait");
+	}
+	{
+		// the horde's sink (shared/sim/ai/* call it through the refs) is the same entry point
+		const fx = newFixture();
+		const sp = rested(fx);
+		const sink = fx.combat.damageSink(p => (p === sp.state ? 0 : -1));
+		check(
+			sink(sp.state, sp.save, 10) && sp.state.sinceHurt === 0,
+			"a zombie's bite through the horde's sink restarts it",
+		);
+	}
+	{
+		// armour that stops a bite whole: no damage taken, no wait (the owner's rule is about damage)
+		const fx = newFixture();
+		const sp = rested(fx);
+		const steel = EQUIPS.findIndex(e => e.name === "Steel armor");
+		sp.save.equipCloth = steel;
+		const hp = sp.state.hp;
+		fx.combat.damagePlayer(sp, EQUIPS[steel].def, 0);
+		check(
+			sp.state.hp === hp && sp.state.sinceHurt === RESTED,
+			`a bite of ${EQUIPS[steel].def} into steel armour (def ${EQUIPS[steel].def}): 0 hp lost, and the wait untouched`,
+		);
+		sp.state.godMode = true;
+		sp.state.attacked = false;
+		fx.combat.damagePlayer(sp, 50, 0, true);
+		check(sp.state.hp === hp && sp.state.sinceHurt === RESTED, "admin god mode: nothing lands, nothing restarts");
+	}
+	{
+		// the client's own damage path at MP_PHASE 2 is inert (e. above): it cannot start or stop a wait either
+		const save = defaultSave();
+		const p = Ply.createPlayer(save, 0, 0);
+		p.hp = 50;
+		checkEq(Ply.damageToPlayer(p, save, 40), false, "a client system's damageToPlayer (MP_PHASE 2) lands nothing…");
+		checkEq(p.sinceHurt, RESTED, "…and restarts no wait: the client's comes from the self block's hp alone");
+	}
+	{
+		// the body the server steps after the bite: the tick's own stepPlayer, the wait, the ramp, on the server
+		const fx = newFixture();
+		const sp = rested(fx);
+		fx.combat.damagePlayer(sp, 20, 0);
+		const hp = sp.state.hp;
+		let first;
+		for (let t = 1; t <= 12 * CFG.SIM_HZ; t++) {
+			tickPlayer(fx, sp, P.makeCommand(t, 0, 0, 0, 0, 0), t);
+			if (first === undefined && sp.state.hp > hp) first = t / CFG.SIM_HZ;
+		}
+		check(
+			first !== undefined && first >= VIT.REGEN_DELAY_S && first <= VIT.REGEN_DELAY_S + 2 / CFG.SIM_HZ,
+			`after that bite the server's body heals again ${first?.toFixed(3)} s later (the wait: ${VIT.REGEN_DELAY_S} s)`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------- verdict

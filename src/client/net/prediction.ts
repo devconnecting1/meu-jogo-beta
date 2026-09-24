@@ -12,6 +12,11 @@
  * The caller (netClient) restores `exact` into the survivor before stepping and writes the drawn position
  * back after; nothing outside this file has to know the difference.
  *
+ * The body (hp, hunger, the wait before healing of DESIGN_RULES VIT-01) is the server's at the ack and predicted from
+ * there, like the position: every snapshot restarts it from the self block and steps it through the unacked commands
+ * with the server's own `stepVitals`. The wait is derived, never sent: from the Hit flag, the poison flag, an empty
+ * stomach, and hp below the prediction (`applyVitals`). The hit flash is read from the same block (`noteHit`).
+ *
  * Pure: no Roblox service and no Instance, so tools/test-predict.mjs runs it against a simulated server.
  */
 import { hasBits } from "shared/net/codec";
@@ -24,6 +29,7 @@ import { WorldData } from "shared/game/world";
 import { stepPlayer } from "shared/sim/playerMove";
 import { moveDirX, moveDirY, SPEED_SCALE } from "shared/sim/types";
 import { packRide, rideLead, unpackRide } from "shared/sim/vehicle";
+import { POISON_HP_PER_S, REGEN_RESTED_S, STARVE_HP_PER_S, stepVitals } from "shared/sim/vitals";
 import { HIT_ALARM } from "client/ui/hitAlarm";
 
 /**
@@ -52,11 +58,11 @@ const ADOPT_VITALS = MP_PHASE >= 2;
  */
 const IFRAME_RESTART_EPS = 0.05;
 /**
- * The fastest the server's HP falls with no hit at all (shared/sim/playerMove.ts): poison, 0,06 × 30 = 1,8 HP/s,
- * plus an empty stomach, 0,02 × 30 = 0,6 HP/s. HP that fell more than this over the time between two self blocks,
- * plus the hit alarm's HIT_ALARM.MIN_DROP, fell to damage.
+ * The fastest the server's HP falls with no hit at all (shared/sim/vitals.ts, DESIGN_RULES VIT-01): poison,
+ * 0,06 × 30 = 1,8 HP/s, plus an empty stomach, 0,02 × 30 = 0,6 HP/s. HP that fell more than this over the time
+ * between two self blocks, plus the hit alarm's HIT_ALARM.MIN_DROP, fell to damage.
  */
-const SLOW_DRAIN_HP_S = 2.4;
+const SLOW_DRAIN_HP_S = POISON_HP_PER_S + STARVE_HP_PER_S;
 
 export interface PredictionStats {
 	/** |predicted(ackSeq) − server| of the last snapshot, world units */
@@ -87,6 +93,46 @@ interface Sampled {
 	y: number;
 	/** (VEI-05) the ride after this command, as `packRide` (0 on foot): compared with the self block's at the ack */
 	ride: number;
+	/**
+	 * (VIT-01) the body after this command as predicted: the reconcile compares the server's hp at the ack with `hp` to
+	 * see a hit the client could not predict, and restarts the replay of the vitals from `hungry` and `sinceHurt`
+	 */
+	hp: number;
+	hungry: number;
+	sinceHurt: number;
+}
+
+/**
+ * VIT-01: hp the server's body has at the ack BELOW what this client predicted for the same command, past which the
+ * difference is HP it lost to something the prediction could not see (a blast or a crash inside the i-frames, rotten
+ * meat) -- a hit that starts the i-frames says so itself, in the self block's Hit flag. Below it is noise, never a
+ * wait to restart: hp travels in 1/100 (±0,005), and a command the server skipped (it came too late) leaves the
+ * server one step of healing behind the prediction -- 0,025 hp, 0,1 with Recovery 3, a few of them at worst between
+ * two acks. A false "hurt" would cost the bar the healing drawn ahead of the ack, taken back on screen.
+ */
+export const HURT_EPS = 0.5;
+/**
+ * VIT-01: how much later than the ack the client's derived wait starts. Command by command the server is not a clock:
+ * a tick it fills runs the body one step AHEAD of the seq, a command it skips (it came too late) one step behind, so
+ * over a 7 s wait the two may part by a few ticks either way. Starting a quarter of a second late keeps the healing
+ * the client draws from ever starting before the server's; it costs nothing visible (the ramp heals 0,02 hp in it).
+ */
+export const WAIT_MARGIN_S = 0.25;
+/** half the step the self block carries hp in (u16 of 1/100) */
+const HP_WIRE_HALF = 0.005;
+
+/**
+ * The self block's hunger is a rounded u8. The predicted value at the ack is moved as little as that allows: by a
+ * whole number when the two are a whole item apart (something was eaten: the fraction the prediction carries is still
+ * right), then into the rounding's interval. At the ack the prediction therefore always rounds as the server does --
+ * which is what VIT-01's food gate tests (`fedEnough`) -- and each time the server's value crosses a half the
+ * prediction is pulled onto it, so the fraction converges instead of drifting. (It used to be adopted only past 1.)
+ */
+export function hungerAtAck(predicted: number, wire: number, max: number): number {
+	let h = predicted;
+	const d = wire - h;
+	if (math.abs(d) >= 1) h += math.round(d);
+	return math.clamp(math.clamp(h, wire - 0.5, wire + 0.499), 0, max);
 }
 
 /** scratch for the render lead of a rider (no allocation per frame) */
@@ -96,6 +142,7 @@ const LEAD = { x: 0, y: 0 };
 interface Vitals {
 	hp: number;
 	hungry: number;
+	sinceHurt: number | undefined;
 	dead: boolean;
 	attacked: boolean;
 	iframe: number;
@@ -127,6 +174,11 @@ export class Prediction {
 	private snaps = 0;
 	private replays = 0;
 	private lastReplayed = 0;
+	/**
+	 * VIT-01: the last self block said the body is poisoned or its stomach empty -- hp it is losing every step: the
+	 * wait is held until one says it is not
+	 */
+	private holding = false;
 	/** the last adopted self block's HP and i-frame timer, and when it arrived (no HP before the first one) */
 	private seenHp?: number;
 	private seenIframe = 0;
@@ -146,6 +198,7 @@ export class Prediction {
 		this.offY = 0;
 		this.leadX = 0;
 		this.leadY = 0;
+		this.holding = false;
 		this.history.clear();
 		// another survivor, or the same one in another town: its first block is compared with nothing
 		this.seenHp = undefined;
@@ -185,9 +238,10 @@ export class Prediction {
 		p.x = this.exactX;
 		p.y = this.exactY;
 		stepPlayer(world, p, save, cmd, TICK_DT);
+		this.holdWait(p);
 		this.exactX = p.x;
 		this.exactY = p.y;
-		this.history.push({ seq: cmd.seq, x: p.x, y: p.y, ride: packRide(p.ride) });
+		this.history.push(sampleOf(cmd.seq, p));
 		while (this.history.size() > 256) this.history.remove(0);
 	}
 
@@ -221,7 +275,7 @@ export class Prediction {
 
 		this.applyModFlags(snap);
 		if (ADOPT_VITALS) {
-			this.applyVitals(snap, p);
+			this.applyVitals(snap, p, mine, unacked.size());
 			this.noteHit(snap, p, now);
 		}
 
@@ -241,7 +295,8 @@ export class Prediction {
 			let replayed = 0;
 			for (const cmd of unacked) {
 				stepPlayer(world, p, save, cmd, TICK_DT);
-				this.history.push({ seq: cmd.seq, x: p.x, y: p.y, ride: packRide(p.ride) });
+				this.holdWait(p);
+				this.history.push(sampleOf(cmd.seq, p));
 				replayed += 1;
 			}
 			this.lastReplayed = replayed;
@@ -253,6 +308,10 @@ export class Prediction {
 			p.reactionSpeed = snap.reactionSpeed;
 			p.reactionDir = snap.reactionDir;
 			this.lastReplayed = 0;
+			// the position needed nothing, but the body starts again from the server's at the ack: its vitals are
+			// stepped through what is still unacked, or the HP bar would sit one round trip behind and jump back to
+			// the ack at every snapshot (VIT-01: the bar a client draws is the server's, never pulled back)
+			if (ADOPT_VITALS) this.replayVitals(p, save, unacked);
 		}
 
 		// hide whatever moved: the screen keeps the old position and eases to the new one over ~τ
@@ -333,10 +392,32 @@ export class Prediction {
 	 * netClient is the one that writes `dead` onto the survivor. SelfFlag.Dead stays on the wire as the
 	 * continuous hint the HUD may tint with, never as the thing that decides.
 	 */
-	private applyVitals(snap: SelfSnap, p: PlayerState): void {
-		p.hp = math.min(snap.hp, p.hpMax);
-		// hunger is a u8 on the wire: only adopt it past the quantisation step, or the bar would jitter
-		if (math.abs(p.hungry - snap.hunger) > 1) p.hungry = math.min(snap.hunger, p.hungryMax);
+	private applyVitals(snap: SelfSnap, p: PlayerState, mine: Sampled | undefined, pending: number): void {
+		// VIT-01, the wait before healing. It is not on the wire: the server restarts its own on every HP the body
+		// loses, and this derives the same from what the self block does carry. Whatever hurt the body did so at the
+		// ack or before it, so the wait restarts WAIT_MARGIN_S after the ack -- never before the server's -- and the
+		// healing this client draws never starts early, nor has to be taken back.
+		// The prediction's own wait for that command, or (none: a fresh attach, a long outage) the current one wound
+		// back by what is unacked:
+		let since =
+			mine !== undefined
+				? mine.sinceHurt
+				: math.max(-WAIT_MARGIN_S, (p.sinceHurt ?? REGEN_RESTED_S) - pending * TICK_DT);
+		// a hit landed less than the i-frames ago (the Hit flag), or hp went missing that nothing predicted (the hit
+		// FLASH is `noteHit`'s, from the same block)
+		const hurt = hasBits(snap.flags, SelfFlag.Hit) || (mine !== undefined && snap.hp < mine.hp - HURT_EPS);
+		// poison and an empty stomach: only a flag and a rounded 0 travel, so when they end on the server is unknown
+		// until a snapshot says so. Until then every step is held as hurt for the wait (`holdWait`)
+		this.holding = hasBits(snap.flags, SelfFlag.Poison) || snap.hunger <= 0;
+		if (hurt || this.holding) since = -WAIT_MARGIN_S;
+		p.sinceHurt = since;
+		// hp travels rounded to 1/100: the prediction at the ack is kept where it rounds as the server's does (no
+		// jitter of half a hundredth), and moved to the server's wherever it does not
+		const wire = snap.hp;
+		const at = mine !== undefined ? math.clamp(mine.hp, wire - HP_WIRE_HALF, wire + HP_WIRE_HALF) : wire;
+		p.hp = math.min(at, p.hpMax);
+		// hunger is a rounded u8 on the wire: the prediction at the ack, moved no further than that rounding allows
+		p.hungry = hungerAtAck(mine !== undefined ? mine.hungry : p.hungry, snap.hunger, p.hungryMax);
 		p.iframe = snap.iframe;
 		p.attacked = hasBits(snap.flags, SelfFlag.Hit);
 		// only the flags travel, not the timers: keep a running buff, start or stop one when the flag moved
@@ -345,6 +426,33 @@ export class Prediction {
 		p.buffs.pain = flagTimer(p.buffs.pain, hasBits(snap.flags, SelfFlag.Pain));
 		p.buffs.poison = flagTimer(p.buffs.poison, hasBits(snap.flags, SelfFlag.Poison));
 		p.puddleSlow = flagTimer(p.puddleSlow ?? 0, hasBits(snap.flags, SelfFlag.Acid));
+	}
+
+	/**
+	 * The body (hp, hunger, the wait, poison) stepped from the server's at the ack through the commands still unacked,
+	 * with the same `stepVitals` the server runs; the history of those commands is rewritten with it, so the next
+	 * snapshot is compared with what this client predicts NOW. A dead body is inert (stepPlayer).
+	 */
+	private replayVitals(p: PlayerState, save: PlayerSaveData, unacked: ReadonlyArray<InputCommand>): void {
+		if (p.dead) return;
+		const list = this.history;
+		let at = 0;
+		for (const cmd of unacked) {
+			stepVitals(p, save, TICK_DT);
+			this.holdWait(p);
+			// the history holds these very commands, oldest first (takeHistory dropped the rest): find each by its seq
+			while (at < list.size() && list[at].seq !== cmd.seq) at += 1;
+			if (at >= list.size()) continue;
+			const h = list[at];
+			h.hp = p.hp;
+			h.hungry = p.hungry;
+			h.sinceHurt = p.sinceHurt ?? REGEN_RESTED_S;
+		}
+	}
+
+	/** VIT-01: poisoned or starving at the last snapshot = still, for the wait (see `applyVitals`) */
+	private holdWait(p: PlayerState): void {
+		if (this.holding && !p.dead && p.godMode !== true) p.sinceHurt = -WAIT_MARGIN_S;
 	}
 
 	/**
@@ -443,6 +551,19 @@ export class Prediction {
 	}
 }
 
+/** what the history keeps of the survivor after command `seq` */
+function sampleOf(seq: number, p: PlayerState): Sampled {
+	return {
+		seq,
+		x: p.x,
+		y: p.y,
+		ride: packRide(p.ride),
+		hp: p.hp,
+		hungry: p.hungry,
+		sinceHurt: p.sinceHurt ?? REGEN_RESTED_S,
+	};
+}
+
 /** a buff whose flag is set keeps running (or starts); one whose flag is clear is over */
 function flagTimer(current: number, on: boolean): number {
 	if (!on) return 0;
@@ -453,6 +574,7 @@ function captureVitals(p: PlayerState): Vitals {
 	return {
 		hp: p.hp,
 		hungry: p.hungry,
+		sinceHurt: p.sinceHurt,
 		dead: p.dead,
 		attacked: p.attacked,
 		iframe: p.iframe,
@@ -468,6 +590,7 @@ function captureVitals(p: PlayerState): Vitals {
 function restoreVitals(p: PlayerState, v: Vitals): void {
 	p.hp = v.hp;
 	p.hungry = v.hungry;
+	p.sinceHurt = v.sinceHurt;
 	p.dead = v.dead;
 	p.attacked = v.attacked;
 	p.iframe = v.iframe;

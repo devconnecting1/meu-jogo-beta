@@ -11,8 +11,9 @@
  *
  * Options: --seed (town seed, default DESIGN.TOWN_SEED), --x --y --w --h (world rect, units), --scale (px per
  * unit, default 1), --hour (0-24, or day / dusk / night), --out (a .png, or a folder for presets), --preset
- * (street, downtown, park, school, gas, gas-night, wreck, street-night, overview, or all; signs: sign-<type> for every building
- * type, signs-night, signs-overview and downtown), --no-actors, --no-art, --art <dir>
+ * (street, downtown, park, school, gas, gas-night, wreck, campus, campus-quad, campus-night, street-night, overview, or
+ * all; signs: sign-<type> for every building type, signs-night, signs-overview and downtown), --no-actors, --no-art,
+ * --art <dir>
  * (the local PNGs the "after" renders sample, default design/world-art), --src <dir> (same as PZ_SRC), --hand <id>
  * and --gun <id> (EQUIPS ids the survivor holds and wears at night: 13 flashlight, 15 torchlight, 6 night vision --
  * lit by the game's own rule, shared/sim/survivorLight.ts, LUZ-04), --aim <degrees> (where the survivor faces).
@@ -452,6 +453,26 @@ function findSchool(world) {
 	return sceneAround(cx, cy, W, H);
 }
 
+/**
+ * The college campus (DESIGN_RULES EDI-17): its whole block (the four buildings round the quad and the four streets
+ * round the block) and a closer frame on the quad, centred on its fountain or statue. Undefined in a town without one.
+ */
+function findCampus(world) {
+	const hall = findBuilding(world, 12);
+	if (hall === undefined) return undefined;
+	const lot = lotAt(world, hall.x + hall.w / 2, hall.y + hall.h / 2);
+	if (lot === undefined) return undefined;
+	const centre = world.solids.find(
+		s => s.kind === "prop" && (s.tags === "fountain" || s.tags === "statue") && inRect(lot, s.x, s.y),
+	);
+	const qx = centre !== undefined ? centre.x + centre.w / 2 : lot.x + lot.w / 2;
+	const qy = centre !== undefined ? centre.y + centre.h / 2 : lot.y + lot.h / 2;
+	return {
+		block: sceneAround(lot.x + lot.w / 2, lot.y + lot.h / 2, 2080, 2080),
+		quad: sceneAround(qx, qy, W, H),
+	};
+}
+
 function findGas(world) {
 	const b = findBuilding(world, 5);
 	if (b === undefined) return undefined;
@@ -496,6 +517,10 @@ const SIGN_TYPES = [
 	[9, "guns", "Gun shop"],
 	[10, "clothes", "Clothing store"],
 	[11, "diner", "Restaurant"],
+	[12, "college", "Campus hall"],
+	[13, "library", "Campus library"],
+	[14, "lab", "Science lab"],
+	[15, "dorm", "Dorm"],
 ];
 
 /** the first building of `type`, preferring one that faces south (its sign reads the way the camera looks) */
@@ -596,6 +621,19 @@ function scenes(world) {
 	if (gas) out.push({ name: "gas-night", title: "Gas station, 22:00", rect: gas, hour: 22 });
 	const wreck = findWreck(world);
 	if (wreck) out.push({ name: "wreck", title: "Abandoned car", rect: wreck, hour: 10 });
+	const campus = findCampus(world);
+	if (campus) {
+		out.push({
+			name: "campus",
+			title: "College campus, its block",
+			rect: campus.block,
+			hour: 10,
+			scale: 0.5,
+			noActors: true,
+		});
+		out.push({ name: "campus-quad", title: "College campus, the quad", rect: campus.quad, hour: 10 });
+		out.push({ name: "campus-night", title: "College campus, the quad at 22:00", rect: campus.quad, hour: 22 });
+	}
 	if (street) out.push({ name: "street-night", title: "Residential street, 22:00", rect: street, hour: 22 });
 	const overview = findOverview(world);
 	if (overview) {
@@ -632,6 +670,10 @@ const INTERIOR_KINDS = [
 	{ name: "gas", title: "Gas station shop", pick: b => b.buildingType === 5 },
 	{ name: "school", title: "School", pick: b => b.buildingType === 3 },
 	{ name: "hospital", title: "Hospital", pick: b => b.buildingType === 4 },
+	{ name: "college", title: "Campus hall", pick: b => b.buildingType === 12 },
+	{ name: "library", title: "Campus library", pick: b => b.buildingType === 13 },
+	{ name: "lab", title: "Science lab", pick: b => b.buildingType === 14 },
+	{ name: "dorm", title: "Dorm", pick: b => b.buildingType === 15 },
 ];
 
 function sameBox(a, b) {

@@ -925,7 +925,8 @@ section("l) itens fora do interesse nao viajam, e o que cada cliente viu e segui
 	// one tick, so the simulation knows where its survivors stand
 	run(sim, 1);
 	drain(sim);
-	const item = W.spawnGroundItem(world, 4, 23, 1, 1000, 1000);
+	// 100 u off the survivor: a supply under the body would be walked up (ITM-07), and this is about who is told
+	const item = W.spawnGroundItem(world, 4, 23, 1, 1100, 1000);
 	const pending = drain(sim);
 	const adds = pending.filter(d => d.ev.t === P.WorldEv.ItemAdd);
 	checkEq(adds.length, 1, "um ItemAdd foi enfileirado");
@@ -2341,6 +2342,39 @@ section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma pr
 			);
 		}
 	}
+}
+
+section("z) andar por cima (ITM-07): o servidor pega o suprimento sob o corpo, sem mensagem do cliente, e todos sabem");
+{
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const save = SAVE.defaultSave();
+	const walker = addPlayer(sim, 0, 2000, 2000, save);
+	const watcher = addPlayer(sim, 1, 2600, 2000);
+	run(sim, 1);
+	drain(sim);
+	const wood = W.spawnGroundItem(world, 4, 23, 4, 2006, 2000);
+	const pistol = W.spawnGroundItem(world, 1, 10, 1, 2004, 2008);
+	drain(sim);
+	const had = countItem(save, 4, 23);
+	const seen = run(sim, Math.ceil((RULE.WALK_PICKUP_DELAY_S + 0.3) * 60));
+	checkEq(countItem(save, 4, 23) - had, 4, "a madeira sob o corpo entrou na mochila sem nenhum comando");
+	check(world.items.includes(pistol) && !world.items.includes(wood), "a pistola ficou no chao (arma e com E)");
+	const gone = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === wood.id);
+	checkEq(gone.length, 2, "o ItemRemove foi para os dois que viram o item (quem pegou e quem olhava)");
+	check(
+		seen.length === 1 && seen[0].slot === walker.slot && seen[0].outcome.kind === "item",
+		"e o servidor avisou uma vez, como um E: o save de quem pegou fica sujo para salvar",
+	);
+	check(
+		watcher.save !== save && countItem(watcher.save, 4, 23) === countItem(SAVE.defaultSave(), 4, 23),
+		"o outro nao recebeu nada",
+	);
+	// E still takes the pistol
+	send(walker, 1, 0, PRESS_E, 0);
+	run(sim, 1);
+	check(!world.items.includes(pistol) && save.invenWeapon[10] >= 1, "o E pega a pistola");
 }
 
 // ---------------------------------------------------------------- verdict

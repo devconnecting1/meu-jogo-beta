@@ -48,7 +48,8 @@ import * as Kit from "./window";
  *   │ ┌ Fabricio ── [👕 Wardrobe] ┐  ┌ Stats ─────────────────────────────┐ │
  *   │ │                           │  │ This life │ Day 3   Record │ Day 12 │ │
  *   │ │    the survivor, as       │  │ Level     │ [7] ▮▮▮▮▯▯  340 / 800 XP │ │
- *   │ │    everyone sees them     │  └────────────────────────────────────┘ │
+ *   │ │    everyone sees them     │  │ Bosses defeated │        2         │ │
+ *   │ │                           │  └────────────────────────────────────┘ │
  *   │ │    (outfit + pet)         │  ┌ Loadout ───────────────────────────┐ │
  *   │ │                           │  │ [D] WEAPON  [ ] CLOTHES  [ ] HAND   │ │
  *   │ │                           │  │ [ ] GUN     [S] OUTFIT   [P] PET    │ │
@@ -116,21 +117,30 @@ export const SURVIVOR_WINDOW: DesignRect = centredRect(WIN_W, WIN_H);
 const PAD = space(6);
 const INSET = space(4);
 const GAP = space(3);
+/** between the sections of a column (Stats, Loadout, the note): tighter than the row's GAP since the bosses' row */
+const SECTION_GAP = space(2);
 const BOTTOM = space(5);
 const STAGE_W = 372;
 const RIGHT_X = PAD + STAGE_W + space(4);
 const RIGHT_W = WIN_W - PAD - RIGHT_X;
 const GROOVE_W = RIGHT_W - INSET * 2;
 const CELL_PAD = 8;
-const ROW_H = Kit.SETTING_ROW_H;
-const STATS_GROOVE_H = CELL_PAD * 2 + ROW_H * 2 + 4;
+/** the stats' groove is a little tighter than the loadout's: three rows of it (life | record, level, bosses) */
+const STATS_PAD = 6;
+const STATS_ROW_GAP = 3;
+/** a stat row: a settings row (Kit.SETTING_ROW_H 38) four units shorter, so the third row fits the window */
+const ROW_H = Kit.SETTING_ROW_H - 4;
+const STATS_ROWS = 3;
+const STATS_GROOVE_H = STATS_PAD * 2 + ROW_H * STATS_ROWS + STATS_ROW_GAP * (STATS_ROWS - 1);
 const STATS_H = Kit.sectionHeight(STATS_GROOVE_H);
-const TILE_H = 52;
+const TILE_H = 46;
 /** the icon's well in a slot tile: a 32 unit icon, 2x its 16 px grid at 1120 x 630 */
 const ICON_WELL = 36;
-const TILE_GAP = 8;
+const TILE_GAP = 6;
 const TILE_W = (GROOVE_W - CELL_PAD * 2 - TILE_GAP * 2) / 3;
 const LOADOUT_GROOVE_H = CELL_PAD * 2 + TILE_H * 2 + TILE_GAP;
+/** the bosses' row: "Bosses defeated" is a long label */
+const BOSSES_LABEL_W = 184;
 const LOADOUT_H = Kit.sectionHeight(LOADOUT_GROOVE_H);
 const ACTION_H = 56;
 const ACTION_Y = WIN_H - BOTTOM - ACTION_H;
@@ -202,6 +212,7 @@ export class SurvivorScreen {
 	private readonly preview: SurvivorPreview;
 	private readonly life: TextLabel;
 	private readonly record: TextLabel;
+	private readonly bosses: TextLabel;
 	private readonly levelKey: Frame;
 	private readonly xp: Bar;
 	private readonly xpText: TextLabel;
@@ -236,7 +247,7 @@ export class SurvivorScreen {
 
 		// ---- the stage: the survivor as everyone sees them (as tall as the stats and the loadout beside it), with the
 		// way to the wardrobe on its title line
-		const stageH = STATS_H + GAP + LOADOUT_H;
+		const stageH = STATS_H + SECTION_GAP + LOADOUT_H;
 		const stage = Kit.Section(panel, "Stage", { x: PAD, y: top, w: STAGE_W, h: stageH });
 		const sz = stage.frame.ZIndex + 1;
 		this.title = makeLabel(
@@ -278,33 +289,48 @@ export class SurvivorScreen {
 		const subject = petLookOf(ctx.save) === PetLook.None ? "outfit" : "both";
 		this.preview = new SurvivorPreview(box, { w: bedW, h: bedH, scale: 4, subject, zIndex: box.ZIndex });
 
-		// ---- stats: this life against the record (MP-13), the level and its XP
+		// ---- stats: this life against the record (MP-13), the level and its XP, and the bosses put down (CON-03: they
+		// are in the game from day 5, and a record that hid them made the player think they were not)
 		const stats = Kit.Section(panel, "Stats", { x: RIGHT_X, y: top, w: RIGHT_W, h: STATS_H, title: tr("Stats") });
 		const sGroove = Kit.Groove(stats.frame, "Rows", INSET, Kit.SECTION_CONTENT_Y, GROOVE_W, STATS_GROOVE_H);
-		const halfW = (GROOVE_W - CELL_PAD * 3) / 2;
+		const halfW = (GROOVE_W - STATS_PAD * 3) / 2;
+		const rowY = (i: number): number => STATS_PAD + i * (ROW_H + STATS_ROW_GAP);
 		const lifeRow = Kit.SettingCell(sGroove, "Life", {
-			x: CELL_PAD,
-			y: CELL_PAD,
+			x: STATS_PAD,
+			y: rowY(0),
 			w: halfW,
+			h: ROW_H,
 			labelW: LABEL_W,
 			label: tr("This life"),
 			zIndex: sGroove.ZIndex + 1,
 		});
 		const recordRow = Kit.SettingCell(sGroove, "Record", {
-			x: CELL_PAD * 2 + halfW,
-			y: CELL_PAD,
+			x: STATS_PAD * 2 + halfW,
+			y: rowY(0),
 			w: halfW,
+			h: ROW_H,
 			labelW: LABEL_W,
 			label: tr("Record"),
 			zIndex: sGroove.ZIndex + 1,
 		});
 		this.life = this.valueText(lifeRow.value, halfW - LABEL_W);
 		this.record = this.valueText(recordRow.value, halfW - LABEL_W);
-		const levelW = GROOVE_W - CELL_PAD * 2;
-		const levelRow = Kit.SettingCell(sGroove, "Level", {
-			x: CELL_PAD,
-			y: CELL_PAD + ROW_H + 4,
+		const levelW = GROOVE_W - STATS_PAD * 2;
+		const bossRow = Kit.SettingCell(sGroove, "Bosses", {
+			x: STATS_PAD,
+			y: rowY(2),
 			w: levelW,
+			h: ROW_H,
+			labelW: BOSSES_LABEL_W,
+			label: tr("Bosses defeated"),
+			zIndex: sGroove.ZIndex + 1,
+		});
+		this.bosses = this.valueText(bossRow.value, levelW - BOSSES_LABEL_W);
+		const levelRow = Kit.SettingCell(sGroove, "Level", {
+			x: STATS_PAD,
+			y: rowY(1),
+			w: levelW,
+			h: ROW_H,
 			labelW: LABEL_W,
 			label: tr("Level"),
 			zIndex: sGroove.ZIndex + 1,
@@ -342,7 +368,7 @@ export class SurvivorScreen {
 		// ---- the loadout: the six slots, with the Bag's icons (UI-11); an empty slot is a dark tile that says so. OUTFIT and
 		// PET open the wardrobe on their tab (what everyone sees is changed here, in the lobby); the other four say where
 		// they are changed -- the Bag, during a match, where the body is
-		const loadoutY = top + STATS_H + GAP;
+		const loadoutY = top + STATS_H + SECTION_GAP;
 		const loadout = Kit.Section(panel, "Loadout", {
 			x: RIGHT_X,
 			y: loadoutY,
@@ -365,12 +391,12 @@ export class SurvivorScreen {
 			});
 			const reserve = maxFrameCount(iconKeys(i === 0 ? ItemKind.Weapon : ItemKind.Equip));
 			const icon = IconView(well, "ItemIcon", 2, 2, ICON_WELL - 4, z + 1, reserve, "drawn");
-			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]), 50, 6, TILE_W - 58, 18, TEXT.xs, THEME.foreground, {
+			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]), 50, 4, TILE_W - 58, 17, TEXT.xs, THEME.foreground, {
 				font: "label",
 				align: "left",
 				zIndex: z,
 			});
-			const name = makeLabel(tile, "Name", "", 50, 24, TILE_W - 58, 22, TEXT.sm, THEME.foreground, {
+			const name = makeLabel(tile, "Name", "", 50, 21, TILE_W - 58, 21, TEXT.sm, THEME.foreground, {
 				font: BOLD,
 				align: "left",
 				zIndex: z,
@@ -384,7 +410,7 @@ export class SurvivorScreen {
 		}
 
 		// ---- the note, across the window, and the action row: Home at the left, the main action at the right
-		const noteY = loadoutY + LOADOUT_H + GAP;
+		const noteY = loadoutY + LOADOUT_H + SECTION_GAP;
 		this.note = makeLabel(
 			panel,
 			"Note",
@@ -507,6 +533,8 @@ export class SurvivorScreen {
 		this.preview.setPet(petLookOf(save));
 		this.write(this.life, `${tr("Day")} ${save.day}`);
 		this.write(this.record, `${tr("Day")} ${save.bestDay}`);
+		// the server's count (`bossKills`, credited to every participant, MP-15), like the Records window's
+		this.write(this.bosses, fmtInt(save.bossKills));
 		Kit.setValueKey(this.levelKey, `${save.level}`);
 		const expMax = expMaxInit(save.level);
 		this.xp.setRatio(save.exp / math.max(expMax, 1));
