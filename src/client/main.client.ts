@@ -13,8 +13,7 @@ import { daybreakWaitSeconds } from "shared/sim/clock";
 import type { GamePhase } from "shared/game/context";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
-import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
-import { onFootstep } from "./view/footsteps";
+import { audio, gameAudio, startAudio } from "./audio";
 import * as Boot from "./boot";
 import {
 	netActive,
@@ -24,6 +23,7 @@ import {
 	netOnTown,
 	netPrewarm,
 	netTownSeed,
+	remotePlayers,
 	TownNotice,
 } from "./net/netClient";
 import {
@@ -275,7 +275,10 @@ function trackAfter(): void {
 		net.requestSave("day");
 	}
 	if (save.level > lastLevel) {
-		if (lastLevel > 0) hud.showMessage("Level UP");
+		if (lastLevel > 0) {
+			hud.showMessage("Level UP");
+			gameAudio.levelUp();
+		}
 		lastLevel = save.level;
 	}
 }
@@ -565,7 +568,7 @@ function warnNoAmmo(): void {
 	if (now - lastNoAmmo < NO_AMMO_COOLDOWN) return;
 	lastNoAmmo = now;
 	hud.showMessage("No ammo");
-	gameAudio.emptyMagazine(refs);
+	gameAudio.emptyMagazine();
 }
 
 function openPause(): void {
@@ -1154,13 +1157,10 @@ function begin(): void {
 	task.delay(1.3, () => Flyover.prewarmTown(netTownSeed()));
 }
 
-// audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
-// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the HUD and menu layers.
-audio.start();
-audio.bindSettings(() => ctx.save.settings);
-startUiAudio(ctx);
-// the walk cycle only reports the moment a foot lands; until something listens, nothing is heard
-onFootstep(playFootstep);
+// audio (src/client/audio/boot.ts): the mixer boots with the client, reads the Settings sliders straight from the
+// save (so it follows a LoadAck that swaps `ctx.save`), hooks the interface by watching the HUD and menu layers and
+// the footsteps; the network is handed to it here, so the audio never imports netClient
+startAudio(ctx, { netActive, remotePlayers });
 // one ordered preload (client/boot/preloadPlan.ts): the skin and the lobby's town, the signs and characters, the sounds
 Boot.startPreload(ids => audio.preloadSounds(ids));
 

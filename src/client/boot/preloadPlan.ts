@@ -25,7 +25,7 @@
  * out of sight; the docs note the engine may drop an invisible texture from memory after the preload, but it stays in
  * the disk cache, which is what saves the download. One line in the Output when it is done: [PZ-LOAD] preload ...
  */
-import { SOUNDS, SoundBus, SoundDef } from "shared/data/sounds";
+import { SoundBus, soundDef, soundNames } from "shared/data/sounds";
 import { preloadSkin } from "../ui/skin";
 import { preloadWorldArt } from "../view/worldArt";
 import { WORLD_ART, WORLD_ART_NAMES, WorldArtName } from "../view/worldArtAssets";
@@ -68,14 +68,17 @@ export function worldArtIds(later: boolean): Array<string> {
 	return out;
 }
 
-/** every sound the catalogue uses, bus by bus in SOUND_ORDER, each asset once (an empty slot is silent: skipped) */
+/**
+ * every sound the catalogue plays NOW (our banks where they have an id, the library otherwise: shared/data/sounds.ts),
+ * bus by bus in SOUND_ORDER, each asset once (an empty slot is silent: skipped)
+ */
 export function soundIdsInOrder(): Array<string> {
 	const seen = new Set<string>();
 	const out: Array<string> = [];
 	for (const bus of SOUND_ORDER) {
-		for (const [, entry] of pairs(SOUNDS)) {
-			const def = entry as SoundDef;
-			if (def.bus !== bus || def.id === "" || seen.has(def.id)) continue;
+		for (const name of soundNames()) {
+			const def = soundDef(name);
+			if (def === undefined || def.bus !== bus || def.id === "" || seen.has(def.id)) continue;
 			seen.add(def.id);
 			out.push(def.id);
 		}

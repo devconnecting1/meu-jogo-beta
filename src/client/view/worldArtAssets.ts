@@ -412,8 +412,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaFill: { id: "", w: 816, h: 68 },
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
 	bossRafflesiaRim: { id: "", w: 816, h: 68 },
-	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */

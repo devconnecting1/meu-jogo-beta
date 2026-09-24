@@ -123,7 +123,7 @@ de cada publish. Precisa de um webhook (Configure → Webhooks). Lista com limit
 ### Secrets — **não precisamos**
 
 O jogo não chama serviço externo nenhum. A nossa chave de Open Cloud vive no `.env` local, fora do jogo, e
-**não** deve ser colocada aqui.
+**não** deve ser colocada aqui (a da CI, só de assets, vive nos secrets do GitHub: "Open Cloud na CI", abaixo).
 
 ### Webhooks — **opcional (depois dos modelos de RTBF)**
 
@@ -308,6 +308,68 @@ mensagem: os avisos do jogo são frases fixas (ids e contagens vão para o log),
 
 ---
 
+## Open Cloud na CI — **faça uma vez** (a arte e o áudio sobem sozinhos)
+
+Com isto, cada push na `main` sobe as texturas novas ou alteradas, espera a moderação, commita os ids na `main` e o
+`ProjectZ-ci.rbxl` do **mesmo** run já sai com eles (`.github/workflows/ci.yml`, job `assets`; como funciona:
+`CLAUDE.md`, "Arte (e áudio) da cidade no jogo"). Sem isto a CI só avisa ("upload pulado") e segue verde; o
+`npm run cloud -- upload-art` do PC continua funcionando como antes.
+
+1. **Uma chave só para assets.** Creator Hub → **Open Cloud → API Keys → Create API Key**
+   (`create.roblox.com/dashboard/credentials`):
+    - Nome: `project-z-ci-assets`.
+    - **Access Permissions**: adicione só a API **Assets**, operações **Read** e **Write** (`asset:read` +
+      `asset:write`). Nada de data store, de publish, de universo: esta chave vai morar fora do seu PC.
+    - **Security → Accepted IP Addresses**: `0.0.0.0/0`. Os runners do GitHub não têm IP fixo (os intervalos
+      publicados mudam e cobrem milhares de endereços), então esta chave não dá para travar por IP como a do `.env`.
+    - **Expiration**: 90 dias (ver o item 4).
+    - Copie a chave: ela só aparece uma vez. Não cole em chat, issue, commit nem no `.env` do PC (lá fica a outra).
+2. **Os secrets do repositório.** GitHub → `devconnecting1/project-z` → **Settings → Secrets and variables →
+   Actions → New repository secret**:
+    - `ROBLOX_API_KEY` = a chave do item 1.
+    - `ROBLOX_CREATOR_USER_ID` = o seu UserId (o número de `roblox.com/users/<id>/profile`). Se a experiência for de
+      um grupo, crie `ROBLOX_CREATOR_GROUP_ID` com o id do grupo no lugar dele.
+3. **Forçar um run** (para subir agora o que falta, sem esperar um push): GitHub → **Actions → CI → Run
+   workflow** → branch `main` → **Run workflow**. No run, o job `assets` mostra no **Summary** a tabela de cada
+   arquivo (aprovado / em análise / recusado / falhou); o `ProjectZ-ci.rbxl` está no artefato **place** do mesmo run.
+   Um commit `art: asset ids uploaded by CI run … [skip ci]` de `github-actions[bot]` aparece na `main`: é
+   esperado (`git pull` no PC antes de mexer).
+4. **Trocar a chave** (a cada 90 dias, ou na hora se ela vazar): crie outra igual ao item 1, cole por cima do secret
+   `ROBLOX_API_KEY` (**Update secret**) e revogue a antiga em Credentials.
+
+Se um dia a `main` ganhar proteção de branch (ou um ruleset), libere o `github-actions[bot]` para dar push nela; sem
+isso o commit dos ids é recusado e o job `assets` falha dizendo isso.
+
+**O risco do `0.0.0.0/0`, e por que é aceitável aqui.** Quem tiver o texto da chave consegue usá-la de qualquer
+lugar. O estrago possível é o do escopo: **criar e atualizar assets em seu nome** (subir imagens ou áudio, ou uma
+versão nova de uma textura nossa), o que pode render moderação na conta. Ela não alcança save de jogador, publish do
+place nem configuração da experiência. As mitigações:
+
+- **Escopo só Assets.** A chave do `.env` do PC (travada por IP) e a `ROBLOX_ERASE_API_KEY` continuam separadas.
+- **Só nos secrets do repositório.** O job `assets` roda só na `main` (push ou Run workflow), nunca em pull request:
+  fork não recebe secret. Só os dois passos de upload recebem a chave; ela é mascarada no log (`::add-mask::`) e o
+  `cloud.mjs` a apaga de qualquer resposta de erro. O repositório é **público** (os logs também): por isso nada
+  disso é opcional.
+- **Nada estranho perto dela.** O job instala as dependências sem scripts de instalação e confere que as ferramentas
+  são as do commit (`node tools/assets-ci.mjs untouched`) antes de a chave entrar.
+- **Rotação.** Expira em 90 dias; se aparecer em qualquer log, chat ou commit, revogue na hora (item 4).
+
+O que foi conferido na documentação do Roblox (Context7, `/websites/create_roblox`, 2026-09-24):
+
+- **Assets API** (`create.roblox.com/docs/cloud/reference/features/assets` e `…/cloud/guides/usage-assets`):
+  autenticação pelo header `x-api-key` (ou OAuth `Authorization: Bearer`); `POST /assets/v1/assets` (form multipart
+  com `request` + `fileContent`; `asset:read` + `asset:write`; 120 por minuto) devolve uma **Operation**
+  (`path: "operations/{id}"`, `done`, `error`, `response`); `GET /assets/v1/operations/{operationId}` (`asset:read`,
+  300 por minuto) até `done: true`, com o asset (e o `assetId`) em `response`. O asset traz
+  `moderationResult.moderationState`: a referência descreve `Reviewing`, `Rejected` e `Approved`, e o `cloud.mjs`
+  sempre leu a forma `MODERATION_STATE_*`: ele aceita as duas, e qualquer outra conta como "em análise".
+  `GET /assets/v1/assets/{assetId}` (120 por minuto) e `…/versions/{n}` releem a moderação de quem ficou pendente.
+  A doc avisa que a moderação pode demorar (fala em até 24 h ao publicar itens de avatar): por isso o `pending`.
+- **API keys** (`create.roblox.com/docs/cloud/auth/api-keys`): restrição por IP em CIDR, data de expiração, "never
+  … committing it to public repositories", uma chave por aplicação e o menor escopo possível.
+
+---
+
 ## Resumo do que depende de você
 
 1. **Nome e descrição** em Settings (a API ignora esses dois), **com as regras e o recurso** e o link do grupo.
@@ -320,3 +382,5 @@ mensagem: os avisos do jogo são frases fixas (ids e contagens vão para o log),
 5. **Alerts**: ligar assim que tiver 100+ DAU (lista na §13 de `docs/ANALYTICS.md`).
 6. **Access settings**: manter privado até a F2 fechar.
 7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
+8. **Open Cloud na CI**: a chave só de Assets (IP `0.0.0.0/0`, 90 dias) e os secrets `ROBLOX_API_KEY` +
+   `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima).

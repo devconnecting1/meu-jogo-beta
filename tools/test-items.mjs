@@ -6171,7 +6171,8 @@ section('G8. the pickup sound and the "Pick something up" lesson hear pickups, n
 	const inter = source("client/systems/interaction.ts");
 	const sync = source("client/net/backpackSync.ts");
 	check(
-		/if \(pickups > this\.prevPickups\) audio\.play\("pickupItem"\)/.test(audioSrc) &&
+		// the sound of what was picked up (DESIGN_RULES SND-02: ammo, food, material, item), still off the count
+		/if \(pickups > this\.prevPickups\) audio\.play\(PICKUP_SOUND\[lastPickupKind\(\)\]\)/.test(audioSrc) &&
 			!/inventoryCount/.test(audioSrc) &&
 			/return pickupCount\(\) > mem\.items;/.test(lesson) &&
 			!/totalItems/.test(lesson),
