@@ -201,7 +201,7 @@ export const PUMP_HINT = "E: Siphon Oil";
 /**
  * The pill at an intact window at hand (EDI-18, LEG-01), when nothing else E could do is: breaking the glass on
  * purpose -- the noisy way in or out. Only a press made while this pill shows breaks glass: the press carries the
- * intent (`HeldBit.Glass`, protocol.ts note 22) and the server acts on nothing else.
+ * intent (`HeldBit.Glass`, protocol.ts note 23) and the server acts on nothing else.
  */
 export const WINDOW_HINT = "E: Break window";
 

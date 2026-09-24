@@ -2623,7 +2623,7 @@ section(
 		const p = addPlayer(sim, 0, 1040, 1040);
 		check(
 			IQ.interactTarget(world, 1040, 1040) === undefined && IQ.nearestIntactWindow(world, 1040, 1040) === g,
-			"o vidro nunca e o alvo do E de sempre: e a sua propria intencao (nearestIntactWindow, nota 22)",
+			"o vidro nunca e o alvo do E de sempre: e a sua propria intencao (nearestIntactWindow, nota 23)",
 		);
 		{
 			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
@@ -2650,7 +2650,7 @@ section(
 		checkEq(sets.length, 1, "um DoorSet da janela foi enfileirado");
 		check(
 			sets[0]?.slot === CFG.SLOT_NONE && sets[0]?.ev.state === P.SolidState.Open,
-			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 22)",
+			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 23)",
 		);
 		check(
 			fx.some(e => e.t === P.FxType.Debris && e.material === 6 && e.count >= 8),
@@ -2834,6 +2834,52 @@ section(
 		run(sim, Math.ceil(sim.simHz * 0.55));
 		p.state.x = panes[3].x + 40;
 		checkEq(sim.windows.byHand(0, p.state, panes[3], WIN.WINDOW_REACH), "broken", "meio segundo depois, quebra");
+	}
+
+	// ---- the review of b61425a: the evidence (§9.3) is the E presses for the glass, never a blade's swing (the combat --
+	// the swing's arc -- lives with the horde: an empty street, emptied every tick)
+	{
+		const world = emptyWorld();
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
+		const step = sim.step.bind(sim);
+		sim.step = () => {
+			sim.horde.zombies.length = 0;
+			step();
+		};
+		const g = pane(world, 1000, 1000);
+		const s = SAVE.defaultSave();
+		s.equipWeapon = 0;
+		const p = addPlayer(sim, 0, 1040, 1030, s);
+		const up = -Math.PI / 2;
+		// the hand's bucket spent (a private field: the test sets the scene), so the glass a swing crosses is refused
+		const town0 = sim.windows.refused.rate;
+		let seq = 1;
+		for (; seq < 30 && sim.windows.refused.rate === town0; seq++) {
+			sim.windows.tokens[0] = 0;
+			send(p, seq, up, seq === 1 ? P.packEdges(1, 0, 0, 0) : 0, sim.tick / sim.simHz, P.HeldBit.Attack);
+			sim.step();
+		}
+		check(
+			sim.windows.refused.rate === town0 + 1 && WIN.windowIntact(g) && sim.windows.refusedOf(0) === 0,
+			"a lamina que cruza o vidro alem do ritmo e recusada (o vidro fica), e nao e evidencia contra o slot: o golpe " +
+				"mirava um zumbi, nao o vidro",
+			`cidade: ${sim.windows.refused.rate - town0} recusa(s) por ritmo, slot: ${sim.windows.refusedOf(0)}`,
+		);
+		sim.windows.tokens[0] = 0;
+		run(sim, Math.ceil(sim.simHz * 0.3));
+		sim.windows.tokens[0] = 0;
+		send(p, seq + Math.ceil(sim.simHz * 0.3), 0, PRESS_E, sim.tick / sim.simHz, P.HeldBit.Glass);
+		const pressed = run(sim, 1);
+		check(
+			pressed[0]?.outcome.kind === "refused" && WIN.windowIntact(g) && sim.windows.refusedOf(0) === 1,
+			"o E para o vidro, recusado pelo mesmo ritmo, e evidencia (L5)",
+			pressed.map(e => `${e.outcome.kind}/${e.outcome.why ?? ""}`).join(",") || "nada",
+		);
 	}
 
 	// ---- the tick's budget: whatever breaks them, WINDOW_BREAKS_PER_TICK a tick

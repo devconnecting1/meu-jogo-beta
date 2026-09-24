@@ -436,11 +436,21 @@ function urgentEvent(e: WorldEvent): boolean {
 }
 
 /**
- * A change of the world's state a client lays on its copy of the town (client/net/worldMirror.ts, and the grid's
- * PowerSet): idempotent -- a DoorSet, an HP, an add or a removal keyed by id -- so sending one twice changes nothing
+ * A change of the town's state that goes to EVERYONE and a client lays on its copy of the town (client/net/worldMirror.ts,
+ * and the grid's PowerSet): idempotent -- a DoorSet, an HP, an add or a removal keyed by id -- so sending one twice
+ * changes nothing. The ground items and the loot flags are not among them: each survivor is told those on their own
+ * (`queueFor`), so they are never in the broadcast `flushWorld` repeats to a newcomer.
  */
 function worldStateEvent(e: WorldEvent): boolean {
-	return (e.t >= WorldEv.SolidAdd && e.t <= WorldEv.LootFlag) || e.t === WorldEv.PowerSet;
+	const t = e.t;
+	return (
+		t === WorldEv.SolidAdd ||
+		t === WorldEv.SolidRemove ||
+		t === WorldEv.DoorSet ||
+		t === WorldEv.SolidHp ||
+		t === WorldEv.LightSet ||
+		t === WorldEv.PowerSet
+	);
 }
 
 /** a set of player slots (0..MAX_PLAYERS-1) in one number */
@@ -708,7 +718,7 @@ export class Replicator {
 			this.initMachines.clear();
 		}
 		// a door of the generated map that somebody opened: the mirror generated it closed. And a window whose glass
-		// broke since the town was generated (EDI-18, protocol.ts note 22): the mirror generated its pane, so it hears the
+		// broke since the town was generated (EDI-18, protocol.ts note 23): the mirror generated its pane, so it hears the
 		// frame is open -- the same DoorSet, 6 B each, and only those (a pane born broken comes from the seed, one never
 		// broken needs nothing): a town has ~370 panes, so a whole town smashed is ~2.2 KB of one 16 KB batch
 		for (const solid of this.sim.world.solids) {
@@ -1001,7 +1011,7 @@ export class Replicator {
 		// its town, and the WorldInit built when it was welcomed -- and a client drops the world's deltas until its
 		// InitBegin. A pane broken, a door opened or a barricade built in between would be lost for it for good: the
 		// world's state changes of this broadcast go again at the end of its batch (all idempotent: a DoorSet, an add
-		// keyed by id), after its WorldInit (the review of ef98768, M3; protocol.ts note 22).
+		// keyed by id), after its WorldInit (the review of ef98768, M3; protocol.ts note 23).
 		if (this.broadcast.size() > 0) {
 			for (const slot of this.welcomedSince) {
 				const list = this.directed.get(slot);

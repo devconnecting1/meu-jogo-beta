@@ -143,7 +143,7 @@ export interface InteractContext {
 	/** the world clock in game hours, `gameHours(day, dayTime)` */
 	hours: number;
 	/**
-	 * (EDI-18) The press is meant for a window's glass: its command carried `HeldBit.Glass` (protocol.ts note 22), set by
+	 * (EDI-18) The press is meant for a window's glass: its command carried `HeldBit.Glass` (protocol.ts note 23), set by
 	 * a client whose hint named the window. Such a press breaks glass and does nothing else; any other press never does.
 	 */
 	glass?: boolean;
@@ -272,7 +272,8 @@ export class ServerInteraction {
 		}
 		// a press that reached a pane spends the cooldown, like any press that reaches something
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
-		const got = windows.byHand(ctx.slot, p, s, WINDOW_REACH);
+		// a press: a refusal is evidence against the slot (§9.3)
+		const got = windows.byHand(ctx.slot, p, s, WINDOW_REACH, true);
 		if (got === "broken") return { kind: "window", solid: s };
 		if (got === "range" || got === "blocked" || got === "rate") return { kind: "refused", why: got };
 		if (got === "budget") return { kind: "refused", why: "cooldown" };

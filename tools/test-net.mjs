@@ -1757,7 +1757,7 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	eq("a truncated PowerSet", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
 });
 
-test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new message (EDI-18, note 22)", () => {
+test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new message (EDI-18, note 23)", () => {
 	const FXW = require(join(SRC, "shared/net/fxWire.ts"));
 	// a window of the generated map: a static id (a town's are < 6000), its frame "open" = the glass broken
 	const broken = { t: P.WorldEv.DoorSet, id: 4321, state: P.SolidState.Open };

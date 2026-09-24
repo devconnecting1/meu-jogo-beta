@@ -3,7 +3,7 @@ import { DESIGN } from "shared/engine/constants";
 import { chance, choose, damageCal, rnd, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
 import { PlayerState } from "shared/game/player";
-import { isBlocking, querySolids, removeSolid, Solid, spawnGroundItem, WorldData } from "shared/game/world";
+import { buildingAt, isBlocking, querySolids, removeSolid, Solid, spawnGroundItem, WorldData } from "shared/game/world";
 import * as Phys from "shared/game/physics";
 import { ZombieState, zombieRadius } from "shared/game/entities";
 import { zombieDef } from "shared/data/zombies";
@@ -449,7 +449,8 @@ const across = { x: 0, y: 0 };
 
 /**
  * A chasing zombie that the move stopped at a pane (EDI-18) pounds on it -- the barricade's rule for glass: every blow
- * a noise ring (GLASS_BANG) and a thud, a charger's rush breaks it at once, the blow that empties it shatters it.
+ * a noise ring (GLASS_BANG) and a thud, a charger's rush breaks it at once (a pane its centre runs into: grazing the
+ * jamb beside one is hitting a wall), the blow that empties it shatters it.
  * `hit` is what stopped the move: the pane itself, or the wall beside it when the body was half in front of the jamb
  * (then the pane it touches, the only query this costs, and only while blocked). Only a body walking INTO the glass
  * pounds on it: one sliding along a storefront towards the door is walking along a wall. False when it did not
@@ -477,8 +478,17 @@ function bangWindow(
 		if (pane === undefined) return false;
 	}
 	Win.acrossWindow(pane, z.x, z.y, across);
-	// a walker has to be walking INTO the glass; a charge that meets it at any angle is a battering ram (M2)
-	if (!rushing && math.cos(heading) * across.x + math.sin(heading) * across.y < T.GLASS_INTO) return false;
+	const into = math.cos(heading) * across.x + math.sin(heading) * across.y;
+	if (rushing) {
+		// A charge is a battering ram at a far wider angle than a walker's push (M2) -- but only on glass it runs INTO:
+		// its centre in front of the pane, heading into it. A body that grazed the jamb beside one hit a wall, and one
+		// scraping along a shop front is not charging the glass: both crash (the review of b61425a)
+		const beside = pane.w >= pane.h ? z.x < pane.x || z.x > pane.x + pane.w : z.y < pane.y || z.y > pane.y + pane.h;
+		if (beside || into < T.GLASS_INTO_RUSH) return false;
+	} else if (into < T.GLASS_INTO) {
+		// a walker has to be walking INTO the glass
+		return false;
+	}
 	const cx = pane.x + pane.w / 2;
 	const cy = pane.y + pane.h / 2;
 	pane.hp = rushing ? 0 : math.max(0, pane.hp - 1);
@@ -1291,6 +1301,7 @@ function thinkCharger(
 	hunting: boolean,
 	dt: number,
 	distP: number,
+	r: number,
 ): boolean {
 	if (z.rush === true) {
 		z.rushTime = (z.rushTime ?? 0) + dt;
@@ -1342,9 +1353,52 @@ function thinkCharger(
 	// 10 Hz wobble on every screen (tools/test-zombie-motion.mjs, 13 reversals a second). Now it backs off below the
 	// band, walks in above it, and stands its ground, facing the target, inside it.
 	const keep = T.RUSH_MIN_DIST + 10;
-	if (distP < keep - T.KEEP_BAND) z.backstep = true;
-	else if (distP < keep + T.KEEP_BAND) z.holdGround = true;
+	if (distP >= keep + T.KEEP_BAND) return false;
+	// ...but not with its back to a wall: in the survivor's own building there is no run-up to take, and a charger
+	// with a wall (or a corner) right behind it has nowhere to back off to. Either way it closes in and bites, like a
+	// walker -- backing off there slid side to side against the wall every tick and never bit (the review of b61425a)
+	if ((z.closeIn ?? 0) > 0 || sameBuilding(refs.world, z, p)) {
+		z.backT = undefined;
+		return false;
+	}
+	if (distP >= keep - T.KEEP_BAND) {
+		z.backT = undefined;
+		z.holdGround = true;
+		return false;
+	}
+	const back = (r + T.BACK_ROOM) / math.max(distP, 1);
+	if (Phys.circleBlocked(refs.world, z.x + (z.x - p.x) * back, z.y + (z.y - p.y) * back, r) !== undefined) {
+		z.closeIn = T.CLOSE_IN_TIME;
+		z.backT = undefined;
+		return false;
+	}
+	z.backstep = true;
+	// Is the back-off getting anywhere (furniture that is no solid, the crowd behind it)? Measured over BACK_CHECK_S,
+	// not a tick: a body sliding along an obstacle flips side to side every tick (full steps) and nets nothing
+	if (z.backT === undefined) {
+		z.backT = 0;
+		z.backX = z.x;
+		z.backY = z.y;
+	} else {
+		z.backT += dt;
+		if (z.backT >= T.BACK_CHECK_S) {
+			const nx = z.x - (z.backX ?? z.x);
+			const ny = z.y - (z.backY ?? z.y);
+			const want = z.moveSpeed * SPEED_SCALE * z.backT * T.BACK_MIN_PROGRESS;
+			if (nx * nx + ny * ny < want * want) {
+				z.closeIn = T.CLOSE_IN_TIME;
+				z.backstep = false;
+			}
+			z.backT = undefined;
+		}
+	}
 	return false;
+}
+
+/** are the zombie and the survivor inside the same building? (a charger there has no run-up to back off for) */
+function sameBuilding(world: WorldData, z: ZombieState, p: PlayerState): boolean {
+	const b = buildingAt(world, p.x, p.y);
+	return b !== undefined && buildingAt(world, z.x, z.y) === b;
 }
 
 const JUMP_TRIES_LEN: Array<number> = [T.JUMP_LENGTH, 150, 100];
@@ -1404,7 +1458,7 @@ function flightClear(
  * and a hunting jumper only spends it when the landing actually shortens its path (flow-field cells), so
  * the jump reads as a shortcut over the traffic instead of a twitch.
  */
-function startJump(refs: Ctx.AiRefs, z: ZombieState, r: number, dir: number, hunting: boolean): boolean {
+function startJump(refs: Ctx.AiRefs, z: ZombieState, r: number, dir: number, hunting: boolean, distP: number): boolean {
 	const field = refs.field;
 	const here = hunting && field.contains(z.x, z.y) ? field.pathCells(z.x, z.y) : undefined;
 	// the best shorter hop, should no leap cut the corner by JUMP_GAIN (below)
@@ -1443,8 +1497,12 @@ function startJump(refs: Ctx.AiRefs, z: ZombieState, r: number, dir: number, hun
 	// corner of a building the field turns round the corner -- often at more than the tries' 40 degrees off the heading,
 	// which points at the survivor through the wall -- and every leap gained less than JUMP_GAIN: a hunting jumper stood
 	// there for good, never reaching the door or the window beyond (the review of ef98768, M2). So the hop looks all
-	// round, a short one, and only when it is stuck (no allocation: the constant tables)
-	if (bestLen === 0 && here !== undefined && here < 1e8) {
+	// round, a short one, and only when it is stuck (no allocation: the constant tables). Fourteen hops of three rays
+	// each: not every half second a jumper within a hop of the survivor finds no leap -- there, only when it has found
+	// none JUMP_HOP_STUCK times running, and never at the survivor's side, biting (the review of b61425a)
+	const stuck = (z.hopFails ?? 0) >= T.JUMP_HOP_STUCK && distP > r + Phys.PLAYER_RADIUS + T.BITE_KEEP;
+	if (bestLen === 0 && here !== undefined && here < 1e8 && (stuck || distP > JUMP_HOP_LEN[JUMP_HOP_LEN.size() - 1])) {
+		if (stuck) z.hopFails = 0;
 		for (const len of JUMP_HOP_LEN) {
 			for (let k = 1; k < 8; k++) {
 				const a = dir + (k * math.pi) / 4;
@@ -1518,9 +1576,12 @@ function thinkJumper(
 		dir = z.wanderDir;
 	}
 	if (dir === undefined) return;
-	if (!startJump(refs, z, r, dir, hunting)) {
+	if (startJump(refs, z, r, dir, hunting, distP)) {
+		z.hopFails = undefined;
+	} else {
 		z.jumpCd = 0.5;
 		if (!hunting) z.wanderDir = rnd() * math.pi * 2;
+		else z.hopFails = (z.hopFails ?? 0) + 1;
 	}
 }
 
@@ -1759,6 +1820,7 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	if ((z.alertCd ?? 0) > 0) z.alertCd = math.max(0, (z.alertCd ?? 0) - dt);
 	if ((z.stagger ?? 0) > 0) z.stagger = math.max(0, (z.stagger ?? 0) - dt);
 	if ((z.strafe ?? 0) > 0) z.strafe = math.max(0, (z.strafe ?? 0) - dt);
+	if ((z.closeIn ?? 0) > 0) z.closeIn = math.max(0, (z.closeIn ?? 0) - dt);
 	if ((z.orbit ?? 0) > 0) z.orbit = math.max(0, (z.orbit ?? 0) - dt);
 
 	if (z.hp <= 0) {
@@ -1848,7 +1910,7 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	const phase = (z.id * 2.399) % (math.pi * 2);
 	if (z.type === 2) thinkSpitter(refs, z, p, seeing, dt, distP);
 	else if (z.type === 3) thinkExploder(refs, z, p, dt, distP);
-	const rushing = z.type === 4 && thinkCharger(refs, z, p, seeing, dt, distP);
+	const rushing = z.type === 4 && thinkCharger(refs, z, p, seeing, dt, distP, r);
 
 	if (rushing) {
 		heading = z.rushDir ?? 0;

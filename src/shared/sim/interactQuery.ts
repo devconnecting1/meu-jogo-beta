@@ -275,7 +275,7 @@ export function bodiesOverlapRect(
  * or not it holds oil (a dry one does nothing, and the hint says nothing).
  *
  * A window's glass (EDI-18) is never one of these: breaking it is its own intent (`nearestIntactWindow`), asked for
- * only when nothing here is in reach and carried as `HeldBit.Glass` (protocol.ts note 22) -- so no press meant for
+ * only when nothing here is in reach and carried as `HeldBit.Glass` (protocol.ts note 23) -- so no press meant for
  * something else can ever smash a pane, on this client's world or on the server's.
  */
 export type InteractTarget =

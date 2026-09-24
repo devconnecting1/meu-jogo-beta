@@ -380,7 +380,7 @@ export function floodReason(sp: ServerPlayer): string | undefined {
  * crawling repayment's grace taken back (server/sim/heartbeat.ts) -- lost the presses past the third
  * (tools/test-input-buffer.mjs case 16: 1075 of 1080 taps with the fixed ceiling).
  *
- * `glass`: the dropped command's E press was meant for a window's glass (`HeldBit.Glass`, protocol.ts note 22). The bit
+ * `glass`: the dropped command's E press was meant for a window's glass (`HeldBit.Glass`, protocol.ts note 23). The bit
  * is its press's own, so it goes where the press goes: onto the command that takes the carried action edges.
  */
 function carryEdges(edges: number, queue: Array<InputCommand>, glass = false): void {

@@ -1,5 +1,5 @@
 /*
- * Window glass, owned by the SERVER (docs/DESIGN_RULES.md EDI-18; docs/MULTIPLAYER.md §4.5, §8.1; protocol.ts note 22).
+ * Window glass, owned by the SERVER (docs/DESIGN_RULES.md EDI-18; docs/MULTIPLAYER.md §4.5, §8.1; protocol.ts note 23).
  *
  * What a window is and how it breaks is shared/game/windows.ts; what a pane giving way does in a simulation -- the crash
  * the horde hears, the glass on the floor, the open frame in the flow field -- is zombieBrain `shatterWindow`. This is
@@ -12,7 +12,7 @@
  *   - THE BUDGET. At most WINDOW_BREAKS_PER_TICK panes break in one tick, whatever broke them (`beginTick` refills it):
  *     a safety valve on the reliable channel and the flow field, which nothing honest reaches.
  *   - WHO MAY BREAK ONE, AND HOW (§8.1). The client never names a pane. E breaks glass only on a press that SAYS so
- *     (`HeldBit.Glass`, protocol.ts note 22), and then the server's own query picks the pane at the SERVER's position
+ *     (`HeldBit.Glass`, protocol.ts note 23), and then the server's own query picks the pane at the SERVER's position
  *     (server/sim/interaction.ts); a blade's arc, a bullet's ray and a turret's shot are the combat's own
  *     (server/sim/combat.ts, projectiles.ts, turrets.ts). On top of that:
  *       · by hand (E, a blade): within reach of the pane's edge (+ the latency slack every E gets) with a clear line to it
@@ -21,9 +21,10 @@
  *         nothing get a rate;
  *       · by a shot, an arrow or a turret: the ray IS the line and the reach (the weapon's range, never through a wall),
  *         and the gun's cadence and its ammunition -- the turret's charge -- are the rate the server already enforces.
- *   - THE EVIDENCE (§9.3). Every refusal of a survivor's attempt is counted against their slot (`refusedOf`), and the
- *     admin view's anomaly row carries it (server/net/mpHost.ts `anomalies`): an honest client, whose hint asked the same
- *     test, is refused only across a latency spike; one that keeps asking from across the street shows.
+ *   - THE EVIDENCE (§9.3). Every refusal of a survivor's E press for the glass is counted against their slot
+ *     (`refusedOf`), and the admin view's anomaly row carries it (server/net/mpHost.ts `anomalies`): an honest client,
+ *     whose hint asked the same test, is refused only across a latency spike; one that keeps asking from across the
+ *     street shows. A blade's refusals are not evidence (a swing is aimed at a zombie, not at the glass its arc crossed).
  *
  * Pure module: no Instances, no services, and nothing allocated per tick.
  */
@@ -77,7 +78,7 @@ export class ServerWindows {
 	private readonly fx?: (event: FxEvent) => void;
 	/** by-hand breaks each slot still has in its bucket (a full burst at rest): one number a slot, no map, no garbage */
 	private readonly tokens = new Array<number>();
-	/** a survivor's refused attempts by hand (range, line, rate), by slot: the §9.3 evidence */
+	/** a survivor's refused E presses for the glass (range, line, rate), by slot: the §9.3 evidence */
 	private readonly refusals = new Array<number>();
 
 	constructor(options: ServerWindowsOptions) {
@@ -107,17 +108,19 @@ export class ServerWindows {
 	}
 
 	/**
-	 * A survivor breaks pane `s` by hand -- an E press meant for the glass, or the blade of a swing that crossed it:
-	 * within `reach` of its edge (plus the slack), with a clear line from the SERVER's position of the survivor to the
-	 * glass (`paneAtHand`), within their rate.
+	 * A survivor breaks pane `s` by hand -- an E press meant for the glass (`pressed`), or the blade of a swing that
+	 * crossed it: within `reach` of its edge (plus the slack), with a clear line from the SERVER's position of the
+	 * survivor to the glass (`paneAtHand`), within their rate. Only a press's refusal is evidence against the slot: a
+	 * swing is aimed at a zombie, and its arc crossing glass behind a wall, or a row of panes past the rate, says nothing
+	 * about the client (the review of b61425a).
 	 */
-	byHand(slot: number, p: PlayerState, s: Solid, reach: number): WindowOutcome {
+	byHand(slot: number, p: PlayerState, s: Solid, reach: number, pressed: boolean): WindowOutcome {
 		if (p.dead || !Win.windowIntact(s) || slot < 0 || slot >= MAX_PLAYERS) return "none";
 		// the client's hint asked the very same test (shared/sim/interactQuery.ts `paneAtHand`), without the slack
 		const at = paneAtHand(this.world, s, p.x, p.y, reach + WINDOW_REACH_SLACK);
-		if (at !== "ok") return this.refuse(slot, at);
+		if (at !== "ok") return this.refuse(slot, at, pressed);
 		const left = this.tokens[slot];
-		if (left < 1) return this.refuse(slot, "rate");
+		if (left < 1) return this.refuse(slot, "rate", pressed);
 		const outcome = this.shatter(s);
 		if (outcome === "broken") this.tokens[slot] = left - 1;
 		return outcome;
@@ -138,10 +141,13 @@ export class ServerWindows {
 	 */
 	missed(slot: number): WindowOutcome {
 		if (slot < 0 || slot >= MAX_PLAYERS) return "none";
-		return this.refuse(slot, "range");
+		return this.refuse(slot, "range", true);
 	}
 
-	/** the attempts by hand the survivor in `slot` had refused -- out of reach, through a wall, past the rate (§9.3) */
+	/**
+	 * The E presses for the glass the survivor in `slot` had refused -- out of reach, through a wall, past the rate
+	 * (§9.3). A blade's refusals count in the town's `refused` only.
+	 */
 	refusedOf(slot: number): number {
 		return this.refusals[slot] ?? 0;
 	}
@@ -159,9 +165,9 @@ export class ServerWindows {
 		this.world.windowBudget = undefined;
 	}
 
-	private refuse(slot: number, why: "range" | "blocked" | "rate"): WindowOutcome {
+	private refuse(slot: number, why: "range" | "blocked" | "rate", pressed: boolean): WindowOutcome {
 		this.refused[why] += 1;
-		this.refusals[slot] += 1;
+		if (pressed) this.refusals[slot] += 1;
 		return why;
 	}
 

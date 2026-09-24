@@ -234,7 +234,7 @@ export class CommandStream {
 	/** builds one command from `raw` -- with the edges seen since the last drain when `withEdges` -- and queues it */
 	private build(raw: RawInput, withEdges: boolean): InputCommand {
 		let edges = 0;
-		// the glass bit is the edge's own (protocol.ts note 22): only the command that carries the E press has it
+		// the glass bit is the edge's own (protocol.ts note 23): only the command that carries the E press has it
 		let held = raw.held - (raw.held & HeldBit.Glass);
 		if (withEdges) {
 			edges = packEdges(this.eAttackPress, this.eAttackRelease, this.eActionPress, this.eReload);

@@ -686,7 +686,8 @@ export class ServerSimulation {
 					if (windows === undefined) return false;
 					if (!melee) return windows.byShot(s) === "broken";
 					const by = this.swinger;
-					return by !== undefined && windows.byHand(by.slot, by.state, s, reach) === "broken";
+					// a swing, not a press: its refusals are no evidence against the swinger
+					return by !== undefined && windows.byHand(by.slot, by.state, s, reach, false) === "broken";
 				},
 			},
 		});
@@ -1207,8 +1208,11 @@ export class ServerSimulation {
 			return;
 		}
 		if (action <= 0) return;
+		// EDI-18: the press is for a window's glass only when its command says so (protocol.ts note 23) -- and then it
+		// is for nothing else: a bike parked under the window does not take it (the review of b61425a)
+		const glass = (cmd.held & HeldBit.Glass) !== 0;
 		// a rideable vehicle in reach takes the press (a broken one falls through: the interaction repairs it)
-		if (vehicles !== undefined && vehicles.tryMount(sp)) return;
+		if (!glass && vehicles !== undefined && vehicles.tryMount(sp)) return;
 		const outcome = interaction.act({
 			slot: sp.slot,
 			state: sp.state,
@@ -1216,8 +1220,7 @@ export class ServerSimulation {
 			players: this.bodies,
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
-			// EDI-18: the press is for a window's glass only when its command says so (protocol.ts note 22)
-			glass: (cmd.held & HeldBit.Glass) !== 0,
+			glass,
 		});
 		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
 		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);

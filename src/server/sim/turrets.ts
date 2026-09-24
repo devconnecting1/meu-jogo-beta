@@ -6,7 +6,8 @@
  *
  *   turret           a rifle on a post: the nearest zombie in TURRET_RANGE with a clear line, hitscan with ±10°, the
  *                    SAME trace a survivor's bullet takes (walls stop it, the player's own constructions do not,
- *                    survivors are not in it at all — MP-01), 25 damage (Robotics ×1.5), every 20 frames;
+ *                    survivors are not in it at all — MP-01), 25 damage (Robotics ×1.5), every 20 frames; through a
+ *                    pane of glass only at a zombie that hunts, and the first bullet breaks it (EDI-18);
  *   electric turret  a shock at the nearest zombie in SHOCK_RANGE that holds it SHOCK_STUN s and jumps to two more;
  *   turret drone     the turret's gun on a drone escorting a survivor, fired from wherever the drone is.
  *
@@ -44,6 +45,7 @@ import { blocksShots, raycast, rayCircle, segmentClear } from "shared/game/physi
 import { Solid, WorldData } from "shared/game/world";
 import { windowIntact } from "shared/game/windows";
 import { FxEvent, FxType } from "shared/net/protocol";
+import { Aware } from "shared/sim/ai/memory";
 import { MachineState, ServerPower } from "./power";
 
 const DEG = math.pi / 180;
@@ -227,6 +229,12 @@ export class ServerTurrets {
 			// shots fly over the survivors' own constructions (physics.blocksShots), walls and trees stop them; a gun sees
 			// through a pane of glass and shoots through it -- the first bullet breaks it (EDI-18), as a survivor's does
 			if (!segmentClear(this.world, x, y, z.x, z.y, throughGlass ? blocksGunSight : blocksShots)) continue;
+			// ...but only at a zombie that hunts (the red '!'): a base's turret does not break its own windows to shoot a
+			// wanderer, or one walking to a noise, that would never have broken them (the review of b61425a). Only such a
+			// zombie behind glass pays the second ray
+			if (throughGlass && z.aware !== Aware.Chasing && !segmentClear(this.world, x, y, z.x, z.y, blocksShots)) {
+				continue;
+			}
 			best = z;
 			bestD = d;
 		}

@@ -130,7 +130,7 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
- * 22. (EDI-18, the window glass) No new message and no byte more.
+ * 23. (EDI-18, the window glass) No new message and no byte more.
  *       - S→C: a window's glass breaking is the `DoorSet` every door already takes, with the window's STATIC id and
  *         `state` = Open (the open frame: shared/game/windows.ts); GLOBAL like a door's, since it changes everybody's
  *         collision and prediction, and at most WINDOW_BREAKS_PER_TICK a tick whoever broke them. Glass only ever
@@ -138,8 +138,11 @@
  *         generated (one born broken comes from the seed); the client's mirror lays each one on its copy of the town
  *         and a reset of the mirror puts the generated glass back. `DoorSet` with Open cleared on a window that had
  *         glass puts it back (nothing sends that today); on one born broken, or on anything that is neither a door nor
- *         a window, it is ignored as before. A pane broken in the tick a survivor is welcomed rides that tick's
- *         broadcast AFTER the welcome's directed batch (server/net/replication.ts `flush`), never before it. The crash
+ *         a window, it is ignored as before. A pane broken in the tick a survivor is welcomed goes out in that tick's
+ *         broadcast first -- which the newcomer drops, being before its InitBegin -- and is repeated after the welcome,
+ *         at the end of its own batch after its WorldInit, with every other global change of the town's state in that
+ *         broadcast (SolidAdd, SolidRemove, DoorSet, SolidHp, LightSet, PowerSet: all idempotent; server/net/
+ *         replication.ts `flushWorld`). The crash
  *         is the `Debris` Fx with the material "glass", appended as wire id 6 (fxWire.ts `GLASS_DEBRIS`): an older
  *         client reads an unknown material as "impact". It is heard in range but, unlike a thud or a hit, not held
  *         back by the sight filter (MP-07): the DoorSet already told everybody that pane broke. A zombie's blows on
@@ -149,7 +152,8 @@
  *         edge and the bit travel together through client/net/commands.ts). HELD_MASK becomes 15: a bit above it is
  *         still malformed. The server breaks a pane only on a press with the bit, and a press with it does nothing
  *         else (server/sim/interaction.ts `act`): E meant for an item, a search, a door or a repair never smashes
- *         glass, whatever the server's own query finds; E meant for the glass never picks something up instead. The
+ *         glass, whatever the server's own query finds; E meant for the glass never picks something up, nor gets on a
+ *         vehicle parked in reach (server/sim/simulation.ts `stepWorldActions`), instead. The
  *         bit follows its edge when a dropped command's edges are carried on (server/sim/players.ts `carryEdges`).
  */
 import {
@@ -262,7 +266,7 @@ export const HeldBit = {
 	Action: 2,
 	SniperAim: 4,
 	/**
-	 * (EDI-18, note 22) This command's E press is meant for a window's GLASS: the client's hint named the window. The
+	 * (EDI-18, note 23) This command's E press is meant for a window's GLASS: the client's hint named the window. The
 	 * server breaks a pane only on a press with this bit, and a press with it does nothing else: an E meant for an
 	 * item, a search or a door never smashes glass, and one meant for the glass never picks something up instead.
 	 */
