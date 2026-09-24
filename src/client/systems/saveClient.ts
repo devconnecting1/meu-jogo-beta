@@ -151,6 +151,7 @@ function parseAck(raw: unknown): SaveAckPayload | undefined {
 		earned: num(r.earned),
 		earnedDays: num(r.earnedDays),
 		earnedBosses: num(r.earnedBosses),
+		earnedRecords: num(r.earnedRecords),
 		clamped: r.clamped === true,
 		wallet: r.wallet as SaveAckPayload["wallet"],
 		push: r.push === true,
@@ -192,6 +193,8 @@ export function startNet(): void {
 				const store = ack.store;
 				const answersDawn = ack.answersDawn === true;
 				if (store !== undefined) for (const fn of storeListeners) task.spawn(fn, store, answersDawn);
+				// MON-06: coins the server paid on its own (a midnight, a boss) are told like a report's: the coin toast
+				if (ack.ok && ack.earned > 0) for (const fn of ackListeners) task.spawn(fn, ack);
 				return;
 			}
 			if (ack.wallet !== undefined) applyServerWallet(ack.wallet);

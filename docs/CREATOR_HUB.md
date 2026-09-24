@@ -262,6 +262,12 @@ Você foi explícito: **não quero pay-to-win**. Isso se traduz assim:
 
 A regra prática para qualquer item futuro: **se dá vantagem numa noite, não se vende.**
 
+**Hoje não há nada a criar aqui:** a loja é toda em moedas do jogo e nenhum passe, produto de desenvolvedor ou id
+existe no código. A tabela de todo produto (onde aparece, preço, o que dá, o que criar no Creator Hub), o modelo de
+horas de jogo por trás de cada preço e a proposta de preços em Robux (servidor privado 50 R$/mês ou grátis — decida
+antes de lançar: mudar o preço depois **cancela as assinaturas** —; cosmético também por Robux, se a MON-04 mudar)
+estão em `docs/SHOP.md`.
+
 ---
 
 ## Monitoring — **liga depois de publicar, e economiza Studio**
@@ -459,3 +465,5 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
    `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova
    ("Mudou de conta").
+9. **Monetization**: nada a criar para a loja de hoje (moedas do jogo, sem id). Decidir o preço do **servidor
+   privado** (grátis ou 50 R$/mês) antes de lançar, e se a proposta de cosmético por Robux entra (`docs/SHOP.md`).

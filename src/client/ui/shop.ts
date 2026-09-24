@@ -1,6 +1,6 @@
 import { GameContext } from "shared/game/context";
-import { ownsEquip, pendingPacks } from "shared/game/save";
-import { ECONOMY, SHOP_PACKS, ShopPack } from "shared/data/shop";
+import { ownsEquip, packPetOwned, pendingPacks } from "shared/game/save";
+import { ECONOMY, SHOP_PACKS, ShopPack, petOfPack } from "shared/data/shop";
 import { ItemKind } from "shared/data/kinds";
 import { petLookOfEquip } from "shared/data/cosmetics";
 import { DESIGN } from "shared/engine/constants";
@@ -46,12 +46,12 @@ import * as Kit from "./window";
  * the X, back where the shop was opened from) -- with two tabs, the coins and the door to the Wardrobe on one line.
  *
  *   ┌ ? ──────────────────────────────── Shop ─────────────────────────────────── X ┐
- *   │ [Packs] [Earn coins]                           [👕 Wardrobe]  (● 20)          │
+ *   │ [Packs] [Earn coins]                           [👕 Wardrobe]  (● 30)          │
  *   │ [bag] Fixed contents, shown in full. A pack goes into your backpack when you   │
  *   │       enter the city.                                                          │
  *   │ ┌ First Night Kit ─────┐ ┌ Pantry Crate ──────────┐ ┌ Medic Bag ───────────┐ │
  *   │ │ [ic][ic][ic] Cotton… │ │ [ic][ic][ic] Cooked…   │ │ [ic][ic][ic] First…  │ │
- *   │ │ ● 20         [ Buy ] │ │ ● 20          [ Buy ]  │ │ ● 30 [10 more needed]│ │
+ *   │ │ ● 20         [ Buy ] │ │ ● 30          [ Buy ]  │ │ ● 45 [15 more needed]│ │
  *   │ └──────────────────────┘ └────────────────────────┘ └──────────────────────┘ │  3 x 3
  *   └───────────────────────────────────────────────────────────────────────────────┘
  *
@@ -97,6 +97,37 @@ export function fundsErrorText(reason: ShopActionReason | undefined, short: numb
 		return `${langGet("Not enough coins", langType)}: ${fmtInt(short)} ${langGet("more needed", langType)}`;
 	}
 	return actionErrorText(reason, langType);
+}
+
+/** what the server said a report or a pushed wallet paid (shared/net/net.ts SaveAckPayload) */
+export interface Earned {
+	earned: number;
+	earnedDays: number;
+	earnedBosses: number;
+	earnedRecords?: number;
+}
+
+/**
+ * MON-06's coin toast, from the server's own numbers: "+13 coins   Day survived ×1  ·  Record day ×1". The coins a
+ * midnight or a boss paid reach the client in a pushed wallet (server/sim/progress.ts `onIncome`); nothing here counts
+ * or guesses them. Empty when nothing was earned.
+ */
+export function earnedText(ack: Earned, langType: number): string {
+	if (!(ack.earned > 0)) return "";
+	const tr = (k: string): string => langGet(k, langType);
+	const parts: Array<string> = [];
+	if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
+	const records = ack.earnedRecords ?? 0;
+	if (records > 0) parts.push(`${tr("Record day")} ×${records}`);
+	if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
+	const head = `+${fmtInt(ack.earned)} ${tr("coins")}`;
+	return parts.size() > 0 ? `${head}   ${parts.join("  ·  ")}` : head;
+}
+
+/** a brand-new save's greeting, with the gift the server gave it (ECONOMY.STARTING_COINS: one number, one place) */
+export function welcomeText(langType: number): string {
+	const tr = (k: string): string => langGet(k, langType);
+	return `${tr("Welcome, survivor! A gift to start")}: +${fmtInt(ECONOMY.STARTING_COINS)} ${tr("coins")}`;
 }
 
 /** the two pages; the Wardrobe is a door beside them (client/ui/wardrobe.ts, MON-04), not a page of this window */
@@ -402,10 +433,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		});
 		setVisible(pending, false);
 		// what is inside: the Bag's icons on tiles with the count, their names beside them in the same order
-		let petEquip = -1;
-		for (const it of pack.items) {
-			if (it.kind === ItemKind.Equip && petLookOfEquip(it.index) !== 0) petEquip = it.index;
-		}
+		const petEquip = petOfPack(pack);
 		const namesX = CARD_PAD + (petEquip >= 0 ? PET_W : pack.items.size() * (TILE + TILE_GAP) - TILE_GAP) + space(2);
 		const lines: Array<string> = [];
 		// where the price starts: at the card's left edge, or right of a pet's picture
@@ -637,8 +665,8 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		row(
 			1,
 			"badge_trophy",
-			tr("Record day (every 5 days)"),
-			tr("Paid the first time a life reaches a new best day that is a multiple of 5."),
+			tr("Record day"),
+			`${tr("Paid the first time a life reaches a new best day that is a multiple of")} ${ECONOMY.MILESTONE_EVERY}.`,
 			ECONOMY.MILESTONE_BONUS,
 			(h, z) => {
 				const meter = Kit.Meter(h, "Meter", {
@@ -666,7 +694,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 				);
 				return () => {
 					const every = ECONOMY.MILESTONE_EVERY;
-					// the next multiple of 5 past the best day: the one that pays; this life has to get there
+					// the next multiple of MILESTONE_EVERY past the best day: the one that pays; this life has to get there
 					const goal = (math.floor(save.bestDay / every) + 1) * every;
 					meter.set(save.day / goal, `${tr("Day")} ${save.day} / ${goal}`);
 					const left = math.max(goal - save.day, 0);
@@ -758,12 +786,13 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			// bought, not delivered yet: it goes into the backpack at the next entry into the city
 			if (waiting > 0) setBadge(c.pending, `${tr("Pending")} ×${waiting}`);
 			const short = c.pack.price - save.money;
-			// a pet pack whose pet is already yours (bought for good in the Wardrobe, or in this life's backpack): a
-			// second one would do nothing, so the card says so instead of selling it
-			const owned = c.pet >= 0 && ownsEquip(save, c.pet);
+			// a pet pack whose pet is already yours (bought for good in the Wardrobe, in this life's backpack, or on its
+			// way in a pack still pending): a second one would do nothing, so the card says so instead of selling it --
+			// the same rule the server refuses it by (shared/game/save.ts `packPetOwned`)
+			const owned = c.pet >= 0 && packPetOwned(save, c.pack.id);
 			const can = short <= 0 && !owned && !busy;
 			let text = tr("Buy");
-			if (owned) text = tr("Owned");
+			if (owned) text = ownsEquip(save, c.pet) ? tr("Owned") : tr("Pending");
 			else if (short > 0) text = `${fmtInt(short)} ${tr("more needed")}`;
 			if (c.buy.Text !== text) c.buy.Text = text;
 			if ((c.buy.GetAttribute("Disabled") === true) === can) setButtonEnabled(c.buy, can);

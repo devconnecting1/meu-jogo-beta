@@ -5,7 +5,7 @@ import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
-import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
+import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip, petOfPack } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
 import { TITLES, titleToWire } from "shared/data/titles";
 import { MP_PHASE } from "shared/net/mpConfig";
@@ -704,6 +704,25 @@ export function totalPendingPacks(save: PlayerSaveData): number {
 	let n = 0;
 	for (let i = 0; i < SHOP_PACKS.size(); i++) n += pendingPacks(save, i);
 	return n;
+}
+
+/**
+ * A pet pack (shared/data/shop.ts `petOfPack`) this survivor has no use for: the pet is already theirs -- for good (the
+ * costume), in this life's backpack, or on its way in a pack of that pet still pending. One pet is worn at a time
+ * (MON-04), so a second copy delivers nothing: the SERVER refuses the purchase as "owned" (server/main.server.ts) and
+ * the shop's card says so (client/ui/shop.ts). Until 2026-09-24 only the card knew, and the server charged a request
+ * that went round it. False for any other pack.
+ */
+export function packPetOwned(save: PlayerSaveData, packId: number): boolean {
+	const pack = SHOP_PACKS[packId];
+	if (pack === undefined) return false;
+	const pet = petOfPack(pack);
+	if (pet < 0) return false;
+	if (ownsEquip(save, pet)) return true;
+	for (const other of SHOP_PACKS) {
+		if (petOfPack(other) === pet && pendingPacks(save, other.id) > 0) return true;
+	}
+	return false;
 }
 
 export function walletOf(save: PlayerSaveData): Wallet {

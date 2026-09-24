@@ -1533,12 +1533,14 @@ pack.close();
 
 	const costume = name => COSTUMES.find(c => c.name === name);
 	const [SANTA, ZOMBIE, COWBOY, CAROLINA] = ["Santa", "Zombie", "Cowboy", "Carolina"].map(costume);
-	// a survivor with 40 coins, the Cowboy bought and worn, and the Carolina of a pack (in the inventory only)
+	// a survivor with Santa's price and 10 coins of change (whatever docs/SHOP.md sets the prices to), the Cowboy bought
+	// and worn, and the Carolina of a pack (in the inventory only)
+	const START = SANTA.price + 10;
 	for (const c of COSTUMES) {
 		save.costumes[c.id] = 0;
 		save.invenEquip[c.equipId] = 0;
 	}
-	save.money = 40;
+	save.money = START;
 	save.costumes[COWBOY.id] = 1;
 	save.equipOutfit = COWBOY.equipId;
 	save.invenEquip[CAROLINA.equipId] = 1;
@@ -1686,7 +1688,7 @@ pack.close();
 	);
 	check("o Cowboy volta a ferro (em uso)", sameColor(face(cowboyTile), THEME.secondary));
 	check(
-		"painel: preco em moedas e Buy for 30 coins",
+		"painel: preco em moedas e Buy for N coins (o preco do catalogo)",
 		statusLabel() === "Price" &&
 			status() === `${SANTA.price} coins` &&
 			action().Text === `Buy for ${SANTA.price} coins`,
@@ -1710,7 +1712,7 @@ pack.close();
 	check("comprar atualiza no lugar", zero(r), cost(r));
 	check(
 		"as moedas e a posse vem do servidor",
-		save.money === 40 - SANTA.price && save.costumes[SANTA.id] === 1,
+		save.money === START - SANTA.price && save.costumes[SANTA.id] === 1,
 		`${save.money}`,
 	);
 	check("o ladrilho perde o cadeado", !locked(santaTile));
@@ -1736,7 +1738,7 @@ pack.close();
 	// outline it used to turn into read as another kind of button, not as "you cannot pay"
 	click(tile(0, 1), "Zombie");
 	check(
-		"sem moedas: a acao desabilita e diz quanto falta ('20 more needed'), na chapa de sempre (sem contorno)",
+		"sem moedas: a acao desabilita e diz quanto falta ('N more needed'), na chapa de sempre (sem contorno)",
 		action().GetAttribute("Disabled") === true &&
 			action().Text === `${ZOMBIE.price - save.money} more needed` &&
 			action().GetAttribute("Variant") === "default",
@@ -1750,7 +1752,7 @@ pack.close();
 	click(action(), "Buy Zombie");
 	check(
 		"o botao desabilitado nao pede nada ao servidor, e nada muda",
-		asked.length === 1 && save.costumes[ZOMBIE.id] === 0 && save.money === 40 - SANTA.price,
+		asked.length === 1 && save.costumes[ZOMBIE.id] === 0 && save.money === START - SANTA.price,
 	);
 
 	// the Pets page
@@ -1771,7 +1773,7 @@ pack.close();
 		status(),
 	);
 	// the review of the wardrobe: the old shop always offered the permanent Buy, and the wardrobe replaced it -- here
-	// with 10 coins for a 30-coin pet, so it says what is missing, disabled, like every Buy the player cannot pay
+	// with 10 coins for a pet that costs more, so it says what is missing, disabled, like every Buy the player cannot pay
 	check(
 		"e a permanente continua a venda ao lado (vestir | comprar), dizendo quanto falta",
 		keep().Visible &&
@@ -1790,10 +1792,10 @@ pack.close();
 		lookText(torso(previewSprites())),
 	);
 	// coins arrive (the next repaint -- here, picking the tile again): the permanent one can be bought now
-	save.money += 100;
+	save.money += CAROLINA.price;
 	click(tile(1, 3), "Carolina");
 	check(
-		"com moedas, o comprar para sempre volta: Buy for 30 coins, habilitado",
+		"com moedas, o comprar para sempre volta: Buy for N coins, habilitado",
 		keep().Text === `Buy for ${CAROLINA.price} coins` && keep().GetAttribute("Disabled") === false,
 		keep()?.Text,
 	);

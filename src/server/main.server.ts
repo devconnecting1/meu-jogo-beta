@@ -5,6 +5,7 @@ import {
 	copySaveInto,
 	defaultSave,
 	enforceSaveInvariants,
+	packPetOwned,
 	PlayerSaveData,
 	resetRun,
 	SAVE_LIMITS,
@@ -47,7 +48,7 @@ import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
 import * as Cadence from "./save/saveCadence";
-import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
+import { Income, onIncome, serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
@@ -246,6 +247,11 @@ interface Session {
 	titleReplace: boolean;
 	/** SAV-01: when this session was last written, what landed, and the early write it has pending (saveCadence.ts) */
 	cadence: Cadence.Cadence;
+	/**
+	 * MON-06: the coins the simulation paid (midnights, bosses: server/sim/progress.ts `onIncome`) since the last pushed
+	 * wallet; the next push says so (`earned`…) and the client shows "+3 coins · Day survived ×1"
+	 */
+	income: Income;
 }
 
 interface StoredLock {
@@ -917,6 +923,7 @@ function newSession(player: Player): Session {
 		titleStep: undefined,
 		titleReplace: false,
 		cadence: Cadence.newCadence(os.clock()),
+		income: { coins: 0, days: 0, bosses: 0, records: 0 },
 	};
 }
 
@@ -992,7 +999,7 @@ function applyProgressLimits(
 	 */
 	const payHere = !serverOwnsProgress();
 
-	// days: at most the credited amount; each new day pays, each new record multiple of 5 pays a bonus
+	// days: at most the credited amount; each new day pays, each new record multiple of MILESTONE_EVERY pays a bonus
 	if (upd.day > prev.day) {
 		const gained = math.min(upd.day - prev.day, credit(s.credits.day));
 		if (gained < upd.day - prev.day) reward.clamped = true;
@@ -1263,6 +1270,9 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		}
 		const pending = (save.packsBought[id] ?? 0) - (save.packsOpened[id] ?? 0);
 		if (pending >= ECONOMY.MAX_PENDING_PACKS) return fail("limit", s);
+		// a pet pack whose pet they already have (for good, in the backpack, or pending): a second copy is coins for
+		// nothing, and the shop's card already says "Owned" -- the server says it too, so no request can go round it
+		if (packPetOwned(save, id)) return fail("owned", s);
 		price = SHOP_PACKS[id].price;
 		if (save.money < price) return fail("funds", s);
 		save.money -= price;
@@ -1618,17 +1628,34 @@ function pushWallets(): void {
 		const wallet = walletOf(s.save);
 		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
 		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq, bag.holster);
+		// MON-06: what the simulation paid since the last push (a midnight, a boss), told once
+		const income = s.income;
+		s.income = { coins: 0, days: 0, bosses: 0, records: 0 };
 		sendSaveAck(s, {
 			ok: true,
 			push: true,
-			earned: 0,
-			earnedDays: 0,
-			earnedBosses: 0,
+			earned: income.coins,
+			earnedDays: income.days,
+			earnedBosses: income.bosses,
+			earnedRecords: income.records,
 			clamped: false,
 			wallet,
 		});
 	}
 }
+
+// MON-06: the coins the simulation pays on its own go on the session whose live save it is, for the next push (the
+// save table is the session's own: the simulation writes into it in place, §6.3)
+onIncome((save, income) => {
+	for (const [, s] of sessions) {
+		if (s.save !== save || s.closed) continue;
+		s.income.coins += income.coins;
+		s.income.days += income.days;
+		s.income.bosses += income.bosses;
+		s.income.records += income.records;
+		return;
+	}
+});
 
 let walletPushAcc = 0;
 let eventScanAcc = 0;

@@ -331,7 +331,11 @@ function killBucket(kills: number): string {
 	return "200+";
 }
 
-/** the coins a player holds, in the steps of the catalogue's prices (packs cost 20-60, a costume more) */
+/**
+ * The coins a player holds, in coarse steps of what they buy (shared/data/shop.ts, docs/SHOP.md): under 10 buys nothing,
+ * 10-49 a pack, 50-199 a pack or a common cosmetic, 200+ a rare one and up. The labels are dashboard values: kept as
+ * they are when prices move (a new label splits the chart), so a step is "about", not a price.
+ */
 export function coinBucket(coins: number): string {
 	if (coins < 10) return "0-9";
 	if (coins < 50) return "10-49";

@@ -3,6 +3,19 @@ import { WEAPONS } from "./weapons";
 import { EQUIPS } from "./equips";
 import { USABLES } from "./usables";
 import { ETC_ITEMS } from "./etcItems";
+import { petLookOfEquip } from "./cosmetics";
+import { DAY_REAL_SECONDS, NIGHT_REAL_SECONDS } from "shared/sim/clock";
+
+/*
+ * The whole economy in one place (docs/SHOP.md): what the SERVER pays, what everything costs, and the model the prices
+ * are set against. The server is the only place where coins change (server/main.server.ts, server/sim/progress.ts,
+ * server/save/costumes.ts); every screen that shows a price or a reward imports it from here, and so does
+ * tools/test-shop.mjs, which fails when a price leaves the band of play its tier promises, or when a screen shows a
+ * number the server does not charge.
+ *
+ * Coins are only ever EARNED BY PLAYING (MON-01): nothing here is sold for Robux (docs/SHOP.md has the Robux plan and
+ * why it is only a plan).
+ */
 
 /**
  * Economy rules. The SERVER is the only place where coins change (see src/server/main.server.ts);
@@ -16,17 +29,117 @@ export const ECONOMY = {
 	MILESTONE_BONUS: 10,
 	/** coins for each boss killed */
 	COINS_PER_BOSS: 8,
-	/** one-time gift for a brand-new save so the shop can be tried right away */
+	/** one-time gift for a brand-new save so the shop can be tried right away (it buys a starter pack) */
 	STARTING_COINS: 20,
 	/** pending (bought but not yet delivered) packs of the same kind */
 	MAX_PENDING_PACKS: 20,
 } as const;
 
-/** price of the n-th continue after a game over (deathCount = continues already bought) */
+// ---------------------------------------------------------------- the model (docs/SHOP.md "O modelo")
+
+/**
+ * Real seconds of one game day: 06:00 → 19:00 at day speed plus 19:00 → 06:00 at night speed (shared/sim/clock.ts,
+ * ~605 s). Midnight pays COINS_PER_DAY once per game day to whoever lived it (server/sim/progress.ts `dayRefusal`).
+ */
+export const GAME_DAY_SECONDS = DAY_REAL_SECONDS + NIGHT_REAL_SECONDS;
+
+/**
+ * How a kind of player earns, per hour spent in the city. Assumptions, written down so they can be argued with (and
+ * checked against the Economy dashboard once the game is public: docs/ANALYTICS.md, "Day survived" / "Boss" sources):
+ */
+export interface IncomeProfile {
+	/**
+	 * The share of midnights that pay: alive at midnight, in the world half the day, not AFK (`dayRefusal`). A death
+	 * between 19:00 and midnight lies through it, so the day is not paid.
+	 */
+	paidDays: number;
+	/** bosses this player helps bring down per hour (MP-15: every participant is paid COINS_PER_BOSS) */
+	bossesPerHour: number;
+	/** new record days that are a multiple of MILESTONE_EVERY, per hour, averaged over the first ~30 hours */
+	recordsPerHour: number;
+}
+
+export const INCOME_PROFILES = {
+	/** dies most nights in waves 1-2 (so the midnight is lost), never near a boss, reaches day 5 in the first ~7 h */
+	new: { paidDays: 0.4, bossesPerHour: 0, recordsPerHour: 0.15 },
+	/** lives most nights, helps with a boss every other hour, a record of ~30 days after ~30 h */
+	average: { paidDays: 0.7, bossesPerHour: 0.5, recordsPerHour: 0.2 },
+	/** nearly never misses a midnight, hunts bosses (they wake from world day 5, every 3 days), ~45 days in ~30 h */
+	strong: { paidDays: 0.95, bossesPerHour: 1.5, recordsPerHour: 0.3 },
+} as const;
+export type IncomeProfileName = keyof typeof INCOME_PROFILES;
+
+/** coins an hour of play earns a player of this profile, from the SAME numbers the server pays with */
+export function coinsPerHour(profile: IncomeProfile): number {
+	const days = 3600 / GAME_DAY_SECONDS;
+	return (
+		days * profile.paidDays * ECONOMY.COINS_PER_DAY +
+		profile.recordsPerHour * ECONOMY.MILESTONE_BONUS +
+		profile.bossesPerHour * ECONOMY.COINS_PER_BOSS
+	);
+}
+
+/** hours of play `coins` cost a player of this profile (the average player by default) */
+export function hoursOfPlay(coins: number, profile: IncomeProfile = INCOME_PROFILES.average): number {
+	return coins / coinsPerHour(profile);
+}
+
+/**
+ * The tiers every price belongs to, and the hours of AVERAGE play each one must cost (inclusive band). The owner's
+ * direction (2026-09-24): "the values must make sense and be challenging" -- a common cosmetic ~3-5 h, a rare one
+ * ~10-15 h, the top ones 25 h and more; the first purchase within the first session or two.
+ *
+ *   starter  the packs a new survivor can buy first: the welcome gift pays for one (STARTING_COINS)
+ *   supply   the other packs: consumables and materials, a few hours of play each (MON-01 note in MON-03)
+ *   rental   a pet pack: the pet until a New game, a fraction of what keeping it for good costs (PET_RENTAL_SHARE)
+ *   common / rare / top   the wardrobe's outfits and pets, kept for good (MON-04)
+ */
+export type PriceTier = "starter" | "supply" | "rental" | "common" | "rare" | "top";
+
+export interface HoursBand {
+	min: number;
+	max: number;
+}
+
+export const PRICE_TIERS: { readonly [K in PriceTier]: HoursBand } = {
+	starter: { min: 0.5, max: 1.5 },
+	supply: { min: 1.5, max: 4 },
+	rental: { min: 0.5, max: 1.5 },
+	common: { min: 3, max: 5 },
+	rare: { min: 10, max: 15 },
+	top: { min: 25, max: 40 },
+};
+
+/** a pet pack costs at most this share of keeping the same pet for good (it goes with the next New game) */
+export const PET_RENTAL_SHARE = 0.35;
+
+/** the model's promises about the early game and the long tail (tools/test-shop.mjs checks each) */
+export const ECONOMY_TARGETS = {
+	/** a new player buys a starter pack from their play alone (the gift aside) within this many hours */
+	newPlayerFirstPackHours: 2,
+	/** a top-tier cosmetic costs even a strong player at least this many hours */
+	topTierStrongHours: 15,
+	/** Rebirth, in hours of average play: the first continue of a life (a first mistake is not a paywall, BEM-08) */
+	firstRebirth: { min: 0.25, max: 1.5 },
+	/** …the third continue of the same life: a real decision */
+	thirdRebirthMinHours: 2,
+	/** …the fifth: more than most of a rare cosmetic */
+	fifthRebirthMinHours: 8,
+} as const;
+
+// ---------------------------------------------------------------- Rebirth
+
+/**
+ * Price of the n-th continue after a game over (deathCount = continues already bought IN THIS LIFE: `resetRun` puts it
+ * back to 0). Dead Town's own curve, kept: 10, 20, 50, 100, 170, 260… -- half an hour of average play for the first,
+ * about nine for the fifth (docs/SHOP.md). The free way back is the wait for daybreak (MP-21).
+ */
 export function rebirthPrice(deathCount: number): number {
 	const d = math.max(0, math.floor(deathCount));
 	return d * d * 10 + 10;
 }
+
+// ---------------------------------------------------------------- packs
 
 export interface PackItem {
 	kind: ItemKind;
@@ -37,8 +150,11 @@ export interface PackItem {
 export interface ShopPack {
 	id: number;
 	name: string;
+	/** "count × item" lines, "#"-separated -- written from `items`, never by hand (one source for the contents) */
 	contents: string;
 	price: number;
+	/** the band of play this price is set in (PRICE_TIERS) */
+	tier: PriceTier;
 	/** what the pack delivers at the start of the next game (resolved by item name) */
 	items: Array<PackItem>;
 }
@@ -59,101 +175,80 @@ function findIndex(kind: ItemKind, name: string): number {
 	return -1;
 }
 
-function item(kind: ItemKind, name: string, count: number): PackItem {
-	return { kind, index: findIndex(kind, name), count };
+/** one line of a pack: the item by its catalogue name, and the name kept for the contents line */
+interface NamedItem {
+	item: PackItem;
+	name: string;
 }
 
+function item(kind: ItemKind, name: string, count: number): NamedItem {
+	return { item: { kind, index: findIndex(kind, name), count }, name };
+}
+
+function pack(id: number, name: string, price: number, tier: PriceTier, lines: Array<NamedItem>): ShopPack {
+	const items: Array<PackItem> = [];
+	const contents: Array<string> = [];
+	for (const l of lines) {
+		items.push(l.item);
+		contents.push(`${l.item.count} × ${l.name}`);
+	}
+	return { id, name, contents: contents.join("#"), price, tier, items };
+}
+
+/** prices: docs/SHOP.md, "Por que cada preço" */
 export const SHOP_PACKS: Array<ShopPack> = [
-	{
-		id: 0,
-		name: "First Night Kit",
-		contents: "1 × Cotton clothes#1 × Axe#1 × Flashlight",
-		price: 20,
-		items: [
-			item(ItemKind.Equip, "Cotton clothes", 1),
-			item(ItemKind.Weapon, "Axe", 1),
-			item(ItemKind.Equip, "Flashlight", 1),
-		],
-	},
-	{
-		id: 1,
-		name: "Pantry Crate",
-		contents: "3 × Cooked meat#3 × Pizza#3 × Cooked meal",
-		price: 20,
-		items: [
-			item(ItemKind.Use, "Cooked meat", 3),
-			item(ItemKind.Use, "Pizza", 3),
-			item(ItemKind.Use, "Cooked meal", 3),
-		],
-	},
-	{
-		id: 2,
-		name: "Medic Bag",
-		contents: "2 × First aid kit#3 × Bandage#2 × Adrenaline",
-		price: 30,
-		items: [
-			item(ItemKind.Use, "First aid kit", 2),
-			item(ItemKind.Use, "Bandage", 3),
-			item(ItemKind.Use, "Adrenaline", 2),
-		],
-	},
-	{
-		id: 3,
-		name: "Builder's Basics",
-		contents: "20 × Wood#10 × Cloth#20 × Stone",
-		price: 10,
-		items: [item(ItemKind.Etc, "Wood", 20), item(ItemKind.Etc, "Cloth", 10), item(ItemKind.Etc, "Stone", 20)],
-	},
-	{
-		id: 4,
-		name: "Workshop Supplies",
-		contents: "5 × Blueprint#20 × Steel#10 × Machine parts",
-		price: 20,
-		items: [
-			item(ItemKind.Etc, "Blueprint", 5),
-			item(ItemKind.Etc, "Steel", 20),
-			item(ItemKind.Etc, "Machine parts", 10),
-		],
-	},
-	{
-		id: 5,
-		name: "Electronics Box",
-		contents: "5 × Battery#2 × Computer chip#2 × Bulb",
-		price: 20,
-		items: [
-			item(ItemKind.Etc, "Battery", 5),
-			item(ItemKind.Etc, "Computer chip", 2),
-			item(ItemKind.Etc, "Bulb", 2),
-		],
-	},
-	{
-		id: 6,
-		name: "Ammo Makings",
-		contents: "10 × Steel#10 × Gunpowder",
-		price: 20,
-		items: [item(ItemKind.Etc, "Steel", 10), item(ItemKind.Etc, "Gunpowder", 10)],
-	},
-	{
-		id: 7,
-		name: "Pet Pigeon",
-		contents: "1 × Pigeon",
-		price: 10,
-		items: [item(ItemKind.Equip, "Pigeon", 1)],
-	},
-	{
-		id: 8,
-		name: "Pet Carolina",
-		contents: "1 × Carolina",
-		price: 10,
-		items: [item(ItemKind.Equip, "Carolina", 1)],
-	},
+	pack(0, "First Night Kit", 20, "starter", [
+		item(ItemKind.Equip, "Cotton clothes", 1),
+		item(ItemKind.Weapon, "Axe", 1),
+		item(ItemKind.Equip, "Flashlight", 1),
+	]),
+	pack(1, "Pantry Crate", 30, "supply", [
+		item(ItemKind.Use, "Cooked meat", 3),
+		item(ItemKind.Use, "Pizza", 3),
+		item(ItemKind.Use, "Cooked meal", 3),
+	]),
+	pack(2, "Medic Bag", 45, "supply", [
+		item(ItemKind.Use, "First aid kit", 2),
+		item(ItemKind.Use, "Bandage", 3),
+		item(ItemKind.Use, "Adrenaline", 2),
+	]),
+	pack(3, "Builder's Basics", 15, "starter", [
+		item(ItemKind.Etc, "Wood", 20),
+		item(ItemKind.Etc, "Cloth", 10),
+		item(ItemKind.Etc, "Stone", 20),
+	]),
+	pack(4, "Workshop Supplies", 60, "supply", [
+		item(ItemKind.Etc, "Blueprint", 5),
+		item(ItemKind.Etc, "Steel", 20),
+		item(ItemKind.Etc, "Machine parts", 10),
+	]),
+	pack(5, "Electronics Box", 60, "supply", [
+		item(ItemKind.Etc, "Battery", 5),
+		item(ItemKind.Etc, "Computer chip", 2),
+		item(ItemKind.Etc, "Bulb", 2),
+	]),
+	pack(6, "Ammo Makings", 40, "supply", [item(ItemKind.Etc, "Steel", 10), item(ItemKind.Etc, "Gunpowder", 10)]),
+	pack(7, "Pet Pigeon", 20, "rental", [item(ItemKind.Equip, "Pigeon", 1)]),
+	pack(8, "Pet Carolina", 20, "rental", [item(ItemKind.Equip, "Carolina", 1)]),
 ];
+
+/** the pet a pack delivers (EQUIPS id; MON-04 `petLookOfEquip`), or -1 when it is not a pet pack */
+export function petOfPack(p: ShopPack): number {
+	for (const it of p.items) {
+		if (it.kind === ItemKind.Equip && petLookOfEquip(it.index) !== 0) return it.index;
+	}
+	return -1;
+}
+
+// ---------------------------------------------------------------- the wardrobe
 
 export interface CostumeDef {
 	id: number;
 	name: string;
 	/** coin price (the original sold these for real money; here they are unlocked with coins earned in game) */
 	price: number;
+	/** the band of play this price is set in (PRICE_TIERS: common, rare or top) */
+	tier: PriceTier;
 	/**
 	 * the cosmetic this costume unlocks permanently (EQUIPS index, kind 4): an outfit or a pet, by
 	 * shared/data/cosmetics.ts `cosmeticSlotOf` (MON-04)
@@ -161,20 +256,21 @@ export interface CostumeDef {
 	equipId: number;
 }
 
-function costume(id: number, name: string, price: number): CostumeDef {
-	return { id, name, price, equipId: findIndex(ItemKind.Equip, name) };
+function costume(id: number, name: string, price: number, tier: PriceTier): CostumeDef {
+	return { id, name, price, tier, equipId: findIndex(ItemKind.Equip, name) };
 }
 
+/** prices: docs/SHOP.md, "Por que cada preço" */
 export const COSTUMES: Array<CostumeDef> = [
-	costume(0, "Pigeon", 30),
-	costume(1, "White pigeon", 30),
-	costume(2, "Eagle", 50),
-	costume(3, "Carolina", 30),
-	costume(4, "Malamute", 30),
-	costume(5, "Doberman", 30),
-	costume(6, "Santa", 30),
-	costume(7, "Zombie", 30),
-	costume(8, "Cowboy", 30),
+	costume(0, "Pigeon", 70, "common"),
+	costume(1, "White pigeon", 90, "common"),
+	costume(2, "Eagle", 600, "top"),
+	costume(3, "Carolina", 70, "common"),
+	costume(4, "Malamute", 220, "rare"),
+	costume(5, "Doberman", 220, "rare"),
+	costume(6, "Santa", 250, "rare"),
+	costume(7, "Zombie", 600, "top"),
+	costume(8, "Cowboy", 250, "rare"),
 ];
 
 /** costume that permanently unlocks the given deco equipment, if any */

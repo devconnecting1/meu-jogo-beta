@@ -62,17 +62,22 @@ export type SaveRejectReason = "readonly" | "stale" | "outdated" | "invalid" | "
 export interface SaveAckPayload {
 	ok: boolean;
 	reason?: SaveRejectReason;
-	/** coins granted by this report (days survived, milestones, bosses) */
+	/**
+	 * coins granted by this report (days survived, milestones, bosses) -- or, on a `push`, the coins the simulation paid
+	 * since the last push (a midnight, a boss: server/sim/progress.ts `onIncome`), told once
+	 */
 	earned: number;
 	earnedDays: number;
 	earnedBosses: number;
+	/** of `earned`, the record milestones paid (a new best day that is a multiple of ECONOMY.MILESTONE_EVERY) */
+	earnedRecords?: number;
 	/** part of the progress was held back by the server's time limits: report again later */
 	clamped: boolean;
 	wallet?: Wallet;
 	/**
 	 * Not an answer to a report: the server pushed the wallet because the simulation changed it (XP, a level,
 	 * midnight's coins), or tells what happened to a write of the save (`store`). The client applies the wallet and
-	 * nothing else -- no retry, no toast.
+	 * nothing else -- no retry -- except the coin toast when it says coins were `earned` (MON-06).
 	 */
 	push?: boolean;
 	/** SAV-01: a push about the DataStore write of this player's save (client/ui/saveIndicator.ts) */

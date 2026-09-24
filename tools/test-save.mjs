@@ -790,7 +790,9 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 
 	// a successful purchase: the catalogue price, exactly, and the costume is theirs
 	const buyer = SAVE.defaultSave();
-	buyer.money = 100;
+	// the price plus some change: the test is about the price, whatever docs/SHOP.md sets it to
+	const FUNDS = PRICE + 50;
+	buyer.money = FUNDS;
 	checkEq(
 		new ServerCraft({ world: undefined, build: undefined }).equip(buyer, SANTA).kind,
 		"refused",
@@ -798,7 +800,7 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	);
 	const bought = buyCostume(buyer, santa);
 	check(bought.ok === true && bought.price === PRICE, "compra aceita, ao preco do catalogo", JSON.stringify(bought));
-	checkEq(buyer.money, 100 - PRICE, "desconta exatamente o preco");
+	checkEq(buyer.money, FUNDS - PRICE, "desconta exatamente o preco");
 	checkEq(buyer.costumes[santa], 1, "e o traje passa a ser dele (costumes)");
 	check(SAVE.ownsCostume(buyer, santa) && SAVE.ownsEquip(buyer, SANTA), "ownsCostume / ownsEquip dizem que e dele");
 	checkEq(buyer.costumes[eagle], 0, "so aquele traje: os outros continuam bloqueados");
@@ -806,7 +808,7 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	// already owned: a double click or a replayed request never charges twice
 	const again = buyCostume(buyer, santa);
 	checkEq(again.ok === false ? again.reason : "ok", "owned", "comprar de novo -> owned");
-	checkEq(buyer.money, 100 - PRICE, "e nada e cobrado de novo");
+	checkEq(buyer.money, FUNDS - PRICE, "e nada e cobrado de novo");
 
 	// the exact amount is enough, and the balance can reach zero, never below
 	const exact = SAVE.defaultSave();

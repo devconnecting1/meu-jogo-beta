@@ -41,8 +41,8 @@ import * as Kit from "./window";
  *   │ [Outfits] [Pets]                                        (● 1,843)    │
  *   │ ┌ Outfits ───── 1 / 3 ┐   ┌ Santa ─────────────────────── OUTFIT ┐   │
  *   │ │ ▣ ▣ ▣               │   │  the survivor wearing it (+ your pet) │   │
- *   │ └─────────────────────┘   │  Price | 30 coins                     │   │
- *   │  caption                  │  [        Buy for 30 coins         ]  │   │
+ *   │ └─────────────────────┘   │  Price | 250 coins                    │   │
+ *   │  caption                  │  [        Buy for 250 coins        ]  │   │
  *   └──────────────────────────────────────────────────────────────────────┘
  *
  * - Only tabs for what exists: one per cosmetic slot that has something in the catalogue (COSTUMES), today

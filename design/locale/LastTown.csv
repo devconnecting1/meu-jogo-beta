@@ -426,7 +426,7 @@ A pet from a pack stays until a New game. The Wardrobe sells outfits and pets yo
 Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones."
 ,,,Paid at every midnight your survivor lives through.
 ,,,Next pay at midnight
-,,,Paid the first time a life reaches a new best day that is a multiple of 5.
+,,,Paid the first time a life reaches a new best day that is a multiple of
 ,,,day to go
 ,,,days to go
 ,,,Help bring one down. Bosses wake at landmarks from day
@@ -444,7 +444,7 @@ or play without saving."
 ,,,Progress not saved — retrying
 ,,,Progress not saved
 ,,,Could not save
-,,,"Welcome, survivor! Here are 20 coins to start"
+,,,"Welcome, survivor! A gift to start"
 ,,,Back to game
 ,,,Home
 ,,,Game over
@@ -470,7 +470,7 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Still loading your progress
 ,,,Coins are earned by playing
 ,,,Day survived
-,,,Record day (every 5 days)
+,,,Record day
 ,,,Boss defeated
 ,,,Welcome gift
 ,,,No ammo

@@ -77,7 +77,9 @@ vender cada uma dessas linhas de uma vez.
 
 Nada disso existe hoje: **não há uma única chamada de `MarketplaceService` no código**. A loja atual usa moeda
 do jogo (`SHOP_PACKS`), e os pacotes têm conteúdo **fixo** — não são caixa aleatória, e devem continuar não
-sendo.
+sendo. Cada preço em moedas, o modelo de horas de jogo que os fixa (MON-07) e a **proposta de preços em Robux**
+(servidor privado, cosmético também por Robux — com o que cada regra permite e proíbe) estão em `docs/SHOP.md`;
+`npm run test:shop` falha se um produto em Robux aparecer no código sem entrar lá.
 
 Para o primeiro produto (paleta do sobrevivente):
 

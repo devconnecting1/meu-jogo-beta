@@ -50,7 +50,7 @@ import * as Match from "./net/matchClient";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
-import { actionErrorText, showShop } from "./ui/shop";
+import { actionErrorText, earnedText, showShop, welcomeText } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
 import { startServerNotices } from "./ui/serverNotices";
 import * as PackNotice from "./ui/packNotice";
@@ -213,7 +213,7 @@ function showLoadNotice(info: net.LoadInfo): void {
 	} else if (info.status === "unavailable") {
 		toast(ctx, tr("Saving is unavailable in this environment"), "error");
 	} else if (info.status === "new") {
-		toast(ctx, tr("Welcome, survivor! Here are 20 coins to start"), "coin");
+		toast(ctx, welcomeText(ctx.save.settings.langType), "coin");
 	}
 }
 
@@ -267,12 +267,8 @@ net.onStoreState((state, answersDawn) => hud.dawnStoreNotice(state, answersDawn)
 
 net.onSaveAck(ack => {
 	if (ack.ok) {
-		if (ack.earned > 0) {
-			const parts: Array<string> = [];
-			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
-			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
-		}
+		// MON-06: a midnight's or a boss's coins, as the server's pushed wallet says it paid them (or a report's)
+		if (ack.earned > 0) toast(ctx, earnedText(ack, ctx.save.settings.langType), "coin");
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");
 	}

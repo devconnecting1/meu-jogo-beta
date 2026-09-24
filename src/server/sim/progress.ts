@@ -79,6 +79,29 @@ export function awardExp(save: PlayerSaveData, amount: number): number {
 }
 
 /**
+ * Coins the server paid on its own -- a midnight lived through (with its record bonus), a boss brought down -- for the
+ * survivor whose live save it is. server/main.server.ts listens, and the next pushed wallet says what was earned, so the
+ * client shows "+3 coins · Day survived ×1" (MON-06's coin toast). Before 2026-09-24 nothing listened: since the server
+ * took the pay over from the report (F2/F3) the report's `earned` was always 0, and the toast never showed.
+ */
+export interface Income {
+	coins: number;
+	/** midnights paid */
+	days: number;
+	/** bosses paid for */
+	bosses: number;
+	/** record milestones paid (a new best day that is a multiple of ECONOMY.MILESTONE_EVERY) */
+	records: number;
+}
+
+let incomeListener: ((save: PlayerSaveData, income: Income) => void) | undefined;
+
+/** the one listener for the coins this module pays (server/main.server.ts); undefined removes it */
+export function onIncome(fn: ((save: PlayerSaveData, income: Income) => void) | undefined): void {
+	incomeListener = fn;
+}
+
+/**
  * A boss went down (§3.6): the lifetime counter, and the coins that go with it.
  *
  * Same regression as `creditDaySurvived`, same cause: `applyProgressLimits` only paid COINS_PER_BOSS when a
@@ -89,9 +112,14 @@ export function creditBossKill(save: PlayerSaveData, paid = true): number {
 	const before = save.bossKills;
 	save.bossKills = math.min(SAVE_LIMITS.COUNTER_MAX, save.bossKills + 1);
 	if (!paid || save.bossKills === before) return 0;
-	const coins = ECONOMY.COINS_PER_BOSS;
-	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + coins);
+	// what actually went into the purse (a full one at MONEY_MAX takes less): the analytics source and the "+8 coins"
+	// the survivor is told are that, never more than the balance moved
+	const had = save.money;
+	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + ECONOMY.COINS_PER_BOSS);
+	const coins = save.money - had;
+	if (coins <= 0) return 0;
 	Analytics.bossCoins(save, coins);
+	incomeListener?.(save, { coins, days: 0, bosses: 1, records: 0 });
 	return coins;
 }
 
@@ -142,13 +170,22 @@ export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit 
 	const out: DayCredit = { day: save.day, advanced, coins: 0, milestone: 0 };
 	// a run stuck at DAY_MAX has not survived another day, so it is not paid for one either
 	if (!advanced || !paid) return out;
-	out.coins = ECONOMY.COINS_PER_DAY;
+	let records = 0;
 	for (let d = bestBefore + 1; d <= save.day; d++) {
-		if (d % ECONOMY.MILESTONE_EVERY === 0) out.milestone += ECONOMY.MILESTONE_BONUS;
+		if (d % ECONOMY.MILESTONE_EVERY === 0) records += 1;
 	}
-	out.coins += out.milestone;
-	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + out.coins);
+	// what actually went into the purse (a full one at MONEY_MAX takes less, the day's part first): the analytics
+	// sources and the survivor's toast are that, so the economy events always add up to the balance
+	const had = save.money;
+	save.money = math.min(
+		SAVE_LIMITS.MONEY_MAX,
+		save.money + ECONOMY.COINS_PER_DAY + records * ECONOMY.MILESTONE_BONUS,
+	);
+	out.coins = save.money - had;
+	out.milestone = math.max(0, out.coins - ECONOMY.COINS_PER_DAY);
+	if (out.coins <= 0) return out;
 	Analytics.dayCoins(save, out.coins, out.milestone);
+	incomeListener?.(save, { coins: out.coins, days: 1, bosses: 0, records: out.milestone > 0 ? records : 0 });
 	return out;
 }
 

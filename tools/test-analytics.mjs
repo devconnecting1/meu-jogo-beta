@@ -693,7 +693,21 @@ section("2) the onboarding funnel: each step once, in the game's order; veterans
 	// a veteran: an old save (before analytics: titleEpoch 0), level 12, day 4 of a life, a record of day 4
 	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 	const vet = defaultSave();
-	Object.assign(vet, { level: 12, exp: 5, day: 4, bestDay: 4, money: 50, tutorialDone: true, firstInstall: false });
+	// enough for section 4's Eagle and two Builder's Basics, whatever docs/SHOP.md prices them at
+	const SHOPDATA = require(join(SRC, "shared/data/shop.ts"));
+	const VET_START =
+		SHOPDATA.COSTUMES.find(c => c.name === "Eagle").price +
+		2 * SHOPDATA.SHOP_PACKS.find(x => x.name === "Builder's Basics").price +
+		50;
+	Object.assign(vet, {
+		level: 12,
+		exp: 5,
+		day: 4,
+		bestDay: 4,
+		money: VET_START,
+		tutorialDone: true,
+		firstInstall: false,
+	});
 	vet.titleEpoch = 0;
 	s.storeSave(veteran, vet);
 	// a new player's second session: born after analytics, answered, entered and killed before; no Survivor yet
@@ -848,7 +862,7 @@ section("2) the onboarding funnel: each step once, in the game's order; veterans
 		s,
 		p: { decliner: pD, late: pL, lobby: pO, veteran: pV, returning: pR, killer: pK },
 		/** the coins each had before this server moved any (a new save: 0, and the gift is its first source) */
-		start: { [decliner]: 0, [late]: 0, [lobby]: 0, [killer]: 0, [veteran]: 50, [returning]: 26 },
+		start: { [decliner]: 0, [late]: 0, [lobby]: 0, [killer]: 0, [veteran]: VET_START, [returning]: 26 },
 	};
 });
 
@@ -896,16 +910,16 @@ section("4) every coin the server moved is one economy event, and they add up to
 	// logged once, or the sinks would add up to more than the coins that left
 	s.run(1.2);
 	const nr = s.log.length;
-	const moneyBefore = s.live(p.lobby).money;
-	const once = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const moneyBefore = s.live(p.veteran).money;
+	const once = s.shop(p.veteran, { kind: "buyPack", packId: craftKit, nonce: 41 });
 	s.run(1.2);
-	const replay = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const replay = s.shop(p.veteran, { kind: "buyPack", packId: craftKit, nonce: 41 });
 	const replaySinks = s.log.slice(nr).filter(r => r.kind === "economy");
 	check(
 		once.ok &&
 			replay.ok &&
 			replay.price === once.price &&
-			s.live(p.lobby).money === moneyBefore - SHOP_PACKS[craftKit].price &&
+			s.live(p.veteran).money === moneyBefore - SHOP_PACKS[craftKit].price &&
 			replaySinks.length === 1 &&
 			replaySinks[0].amount === SHOP_PACKS[craftKit].price,
 		"a replayed purchase (the same nonce): answered ok, charged once, one Sink",

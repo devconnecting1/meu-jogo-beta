@@ -58,6 +58,7 @@
 		"test:light": "node tools/test-light.mjs",
 		"test:icons": "node tools/test-icons.mjs",
 		"test:items": "node tools/test-items.mjs",
+		"test:shop": "node tools/test-shop.mjs",
 		"test:vehicles": "node tools/test-vehicles.mjs",
 		"test:audio": "node tools/test-audio.mjs",
 		"test:power": "node tools/test-power.mjs",

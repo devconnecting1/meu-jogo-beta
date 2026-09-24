@@ -446,7 +446,8 @@ export const LANG_TABLE: Array<string> = [
 	// Earn coins: how each source pays, and how far the player is from it
 	"Paid at every midnight your survivor lives through.",
 	"Next pay at midnight",
-	"Paid the first time a life reaches a new best day that is a multiple of 5.",
+	// "…that is a multiple of 5." (ECONOMY.MILESTONE_EVERY follows)
+	"Paid the first time a life reaches a new best day that is a multiple of",
 	"day to go",
 	"days to go",
 	// "Help bring one down. Bosses wake at landmarks from day 5." (the first boss's world day follows)
@@ -465,7 +466,8 @@ export const LANG_TABLE: Array<string> = [
 	"Progress not saved — retrying",
 	"Progress not saved",
 	"Could not save",
-	"Welcome, survivor! Here are 20 coins to start",
+	// a new save's greeting: "Welcome, survivor! A gift to start: +20 coins" (ECONOMY.STARTING_COINS follows)
+	"Welcome, survivor! A gift to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
 	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
 	// "Menu" and "Backpack" are already listed (the settings' Controls tab). No "Save": saving is automatic (SAV-01)
@@ -495,7 +497,7 @@ export const LANG_TABLE: Array<string> = [
 	"Still loading your progress",
 	"Coins are earned by playing",
 	"Day survived",
-	"Record day (every 5 days)",
+	"Record day",
 	"Boss defeated",
 	"Welcome gift",
 	"No ammo",
@@ -666,7 +668,7 @@ export const LANG_TABLE: Array<string> = [
 	"Put away",
 	"Your hands are empty. Equip draws it again.",
 	"Open Craft",
-	// the wardrobe (client/ui/wardrobe.ts, DESIGN_RULES MON-04); "Buy for" and "coins" frame a price: "Buy for 30 coins"
+	// the wardrobe (client/ui/wardrobe.ts, DESIGN_RULES MON-04); "Buy for" and "coins" frame a price: "Buy for 250 coins"
 	"Wardrobe",
 	"Outfits",
 	"Pets",
