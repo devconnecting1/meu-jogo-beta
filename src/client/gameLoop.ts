@@ -38,6 +38,7 @@ import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
 import { rideHeading } from "shared/sim/rideKey";
 import * as SurvivorLight from "shared/sim/survivorLight";
+import { FLASH_LIFT, Weather } from "shared/sim/weather";
 import { STRUCTURE_LIGHT_R } from "shared/sim/ai/zombieTuning";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
@@ -80,6 +81,7 @@ import { BodyGrid } from "./view/bodyGrid";
 import { priceSignRect } from "./view/buildingSigns";
 import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
+import { WeatherFrame, WeatherView } from "./view/weatherView";
 import * as Quality from "./view/quality";
 import { reducedMotion } from "./ui/skin";
 
@@ -232,6 +234,9 @@ export class GameLoop {
 	private readonly entry = new EntryHold();
 	/** blood, debris, shot lines, blasts and the projectiles the server flies (§4.1 Fx) */
 	private readonly fxView = new FxView();
+	/** the weather's fog, rain and puddles (LUZ-05); the lightning is the night overlay's own (drawLight) */
+	private readonly weather = new WeatherView();
+	private readonly weatherFrame: WeatherFrame = { clock: 0, reduceMotion: false, low: false };
 	/** what the actor views need from the loop each frame, refilled in place instead of rebuilt */
 	private readonly drawOpts: ActorDrawOpts = { shadow: this.shadowFor, clock: 0 };
 	/** this frame's §4.2 Fx events, drained from the network layer into one reused buffer */
@@ -298,6 +303,14 @@ export class GameLoop {
 		this.actors.reset();
 		this.fxView.clear(this.refs);
 		this.machines.clear();
+		// a new town's streets are dry until its sky says otherwise (the first frame settles on the clock's weather); its
+		// puddles are placed now and the fog's light map is built, not on the first frame it rains or fogs (LUZ-05)
+		this.weather.reset();
+		this.weather.prepare(this.world);
+		{
+			const ctx = getCtx();
+			this.weather.warmFog(ctx.darkLayer, ctx.viewW, ctx.viewH, Quality.lowDetail(save.settings.graphics));
+		}
 		this.netFx.clear();
 		this.wireOpts.localSlot = -1;
 		this.particles.clear();
@@ -311,7 +324,8 @@ export class GameLoop {
 		// (and everybody else on it) was still in the middle of night three. When the WORLD itself ends (MP-22) the
 		// handover still happens, and the day-1 Clock delta the server sends right behind its WorldReset jumps it
 		const previousClock = this.daynight;
-		this.daynight = new DayNight(save);
+		// offline the town's skies are rolled here, from its seed, as the server rolls them (LUZ-05)
+		this.daynight = new DayNight(save, this.townSeed);
 		this.daynight.adoptWorld(previousClock);
 		this.daynight.onAnnounce = msg => {
 			this.fx.push({ kind: "message", text: msg });
@@ -795,6 +809,15 @@ export class GameLoop {
 		town.reduceMotion = reducedMotion();
 		this.machines.reduceMotion = town.reduceMotion;
 		town.drawGround(renderer, cam, view, this.world);
+		// the weather of the frame (LUZ-05): the rain eases in and out, the streets fill and dry
+		const dn = this.daynight;
+		const weather = this.weather;
+		const wf = this.weatherFrame;
+		wf.clock = this.clock;
+		wf.reduceMotion = reducedMotion();
+		wf.low = Quality.lowDetail(getCtx().save.settings.graphics);
+		weather.step(this.lastDt, dn.isRaining, dn.weather === Weather.Storm);
+		weather.drawPuddles(renderer, cam, view, this.world, wf);
 		this.drawDecals(renderer, cam, view);
 		const items = this.groundItems;
 		items.reduceMotion = reducedMotion();
@@ -818,6 +841,7 @@ export class GameLoop {
 		this.fxView.drawExplosions(renderer, cam, view, this.refs);
 		this.fxView.drawTracers(renderer, cam);
 		this.drawParticles(renderer, cam, view);
+		weather.drawRain(renderer, cam, view, wf);
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
 		debug.profileend();
@@ -941,7 +965,17 @@ export class GameLoop {
 		this.lightMap.setLowDetail(Quality.lowDetail(save.settings.graphics));
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
-		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
+		// the fog (LUZ-05) under the night: clear round the survivor, thickening with distance (weatherView); the screen's
+		// fog, eased when the day's weather changes (the horde's is instant)
+		const dn = this.daynight;
+		const p = this.player;
+		const low = Quality.lowDetail(save.settings.graphics);
+		this.weather.drawFog(ctx.darkLayer, cam, dn.fogShown, p.dead ? cam.x : p.x, p.dead ? cam.y : p.y, low);
+		// the lightning lifts the night (LUZ-05): the real flash, or with Reduce Motion one slow swell -- the screen's
+		// choice; the horde lives by the server's real one
+		const flash = this.weatherFrame.reduceMotion ? dn.gentleFlash : dn.flash;
+		const darkAlpha = flash > 0 ? dn.darkBase * (1 - FLASH_LIFT * flash) : dn.darkBase;
+		const dark = darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
 		// the awareness marks follow this very darkness and these very lights (drawAwareness)
 		this.markNight.dark = dark > 0.004 ? dark : 0;
 		if (dark <= 0.004) {
@@ -951,7 +985,6 @@ export class GameLoop {
 		// refilled from its pool of records: no table per light per frame (M4)
 		const lights = this.lights;
 		lights.clear();
-		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim -- or the motorcycle's headlight
@@ -998,6 +1031,7 @@ export class GameLoop {
 		const ctx = getCtx();
 		ctx.renderer.releaseAll();
 		this.lightMap?.hide();
+		this.weather.hide();
 		this.nameplate?.update(0, 0, ctx.save.level, false);
 		this.playersView.hide();
 		this.chat?.hide();

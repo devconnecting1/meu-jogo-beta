@@ -398,6 +398,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	const remotes = createMpRemotes();
 	// day 1; a solo or private town moves to its owner's life day before anybody enters (MP-13, `startTownOn`)
 	const sim = new ServerSimulation({ world });
+	// the town's skies are the town's (LUZ-05): the day's weather is rolled from its seed, like its streets
+	sim.clock.reseedWeather(town.seed);
 	const links = new Map<Player, Link>();
 	const bySlot = new Map<number, Player>();
 	const tick0Time = Workspace.GetServerTimeNow();

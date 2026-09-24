@@ -26,7 +26,8 @@
  *      body shown for one snapshot is retired within a frame of each other on both sides.
  *  a7. A RE-ENTRY (N1). A body not sent for longer than its ring's timeout while the viewer got others restarts its
  *      fade on the client; the server's model restarts it too (435 ms for a body shown once after it, as the client; the
- *      old model said 450), and a silence of the whole stream keeps the fade it had.
+ *      old model said 450), and a silence of the whole stream keeps the fade it had. A strike before the gap counts no
+ *      more after it (the alpha started at 0 again); a strike at the re-entry draws it whole, and the full fade holds.
  *  a6. A PART OVER THE LIMIT (S3 NIT 4). It never goes out, what it carried counts as dropped entity by entity, and the
  *      bodies of the parts after it are still the ones taken as drawn.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
@@ -56,6 +57,10 @@
  *      state the server really had for that zombie within the interpolation window; the record stays 9 bytes.
  *   k. EMPTY HANDS (ITM-06, protocol decision 20). A survivor whose weapon is put away reaches every other screen as
  *      WEAPON_HOLSTERED in the weapon byte the record already had, and drawn (or switched) again as the weapon.
+ *  lw. THE LIGHTNING'S REVEAL (LUZ-05, the weather review's M1). A storm night, walkers in the dark 400 u out: nothing
+ *      on the wire before the strike; while the screen -- drawing the flash at the render time -- shows the strike
+ *      lighting the town, the walkers it lights are drawn ≥ 0.6 visible (the client's `reveal`), none drops out while
+ *      the flash fades (the server keeps them on the wire FLASH_REVEAL_HOLD_S after it), and they are gone after.
  *
  * Pure Node (>= 18) + the project's TypeScript, with the Luau shims of tools/test-sim.mjs and the STRICT
  * `buffer` of tools/test-net.mjs (an out-of-range write throws instead of silently corrupting a neighbour).
@@ -1472,6 +1477,56 @@ section("(a7) a re-entry restarts the fade on both sides: the server times the r
 		"a silence of the whole stream (the server sent this viewer nothing) keeps the fade it had, as the client does",
 		`retired ${(wholeGone * 1000).toFixed(0)} ms after, the fade of a full track ${(long * 1000).toFixed(0)} ms`,
 	);
+	/*
+	 * LUZ-05 and N1 together: a track a strike showed was drawn at full alpha at once (client/net/snapshotBuffer.ts
+	 * `reveal`), and the server assumes its whole fade out (`revealed`). The re-entry puts the client's alpha back at 0:
+	 * carried again with no strike, it is a track shown once and the strike before the gap counts no more; carried again
+	 * while a strike lights the town, the client draws it whole at once, and the full fade holds again.
+	 */
+	// an older src (PZ_SRC) without the reveal: nothing to check
+	if (retiredAfterS(false, 0, true) !== retiredAfterS(false, 0)) {
+		const reentry = (litBefore, litAgain) => {
+			const r = new ActorInterest();
+			let t = 0;
+			let n = 0;
+			const snap = (carries, revealed) => {
+				n += 1;
+				r.update(0, netId, dist2, n);
+				r.noteRound(0, t);
+				if (carries) r.noteSent(0, netId, false, n * CFG.SNAP_NEAR_EVERY_TICKS, 3, t, revealed);
+				t += 1 / CFG.SNAP_NEAR_HZ;
+			};
+			for (let i = 0; i < CFG.SNAP_NEAR_HZ; i++) snap(true, litBefore);
+			for (let i = 0; i < 7; i++) snap(false, false);
+			const at0 = t;
+			snap(true, litAgain);
+			let gone = -1;
+			for (let i = 0; i < 20 && gone < 0; i++) {
+				const at = t;
+				snap(false, false);
+				for (let k = 0; k < 10 && gone < 0; k++) {
+					const probe = at + k * 0.005;
+					if (!r.hasTrack(0, netId, probe)) gone = probe - at0;
+				}
+			}
+			return gone;
+		};
+		const once = retiredAfterS(false, 0);
+		const full = retiredAfterS(false, 0, true);
+		const cases = [
+			[true, false, once, "a strike before the gap, none at the re-entry: a track shown once"],
+			[true, true, full, "a strike before the gap and at the re-entry: the whole fade again"],
+			[false, true, full, "dark before the gap, a strike at the re-entry: the whole fade"],
+		];
+		for (const [before, again, want, what] of cases) {
+			const got = reentry(before, again);
+			check(
+				got >= want && got < want + step,
+				`re-entry and strike: ${what} (the server's retirement within 5 ms of the client's)`,
+				`${(got * 1000).toFixed(0)} ms, the client ${(want * 1000).toFixed(0)} ms`,
+			);
+		}
+	}
 }
 
 section("(a6) a Snap part over the limit never goes out, and what it carried is counted, entity by entity (S3 NIT 4)");
@@ -2861,6 +2916,134 @@ section("(k) a weapon put away reaches the other screens as empty hands, in the 
 		buffer.len(snap.parts[0]),
 		8 + P.SNAP_PLAYER_BYTES,
 		"a survivor with empty hands is still one 12-byte record",
+	);
+}
+
+// ================================================================ (lw) the lightning's reveal (LUZ-05, M1)
+
+section("(lw) a strike shows the dark street's horde on the screen while the screen shows the strike (LUZ-05, M1)");
+{
+	const W = require(join(SRC, "shared/sim/weather.ts"));
+	const CL = require(join(SRC, "shared/sim/clock.ts"));
+	const { buildingAt } = require(join(SRC, "shared/game/world.ts"));
+	const { circleBlocked } = require(join(SRC, "shared/game/physics.ts"));
+	const K = W.Weather;
+	// a storm night with a close strike, deep in the dark
+	let day = W.STORM_FROM_DAY;
+	let strike;
+	for (; day < W.STORM_FROM_DAY + 60; day++) {
+		strike = W.strikesOfDay(day).find(st => (st.hour > 21.5 || st.hour < 3.5) && st.power > 0.8);
+		if (strike !== undefined) break;
+	}
+	const LEAD_S = 1.5;
+	/** real seconds from the strike to hour `h` (negative before it) */
+	const sinceStrike = h => {
+		const ahead = CL.secondsUntilHour(strike.hour, h);
+		return ahead < 300 ? ahead : -CL.secondsUntilHour(h, strike.hour);
+	};
+	/**
+	 * One survivor (slot 1: 50 ms away, 1 % loss) in the middle of the town, eight walkers held 400 u out in the open --
+	 * outside the survivor's light, past DARK_SENSE_RANGE -- and the strike LEAD_S into the run. Each frame the client's
+	 * snapshot buffer is told the reveal exactly as client/net/netClient.ts tells it: the flash at the render time (the
+	 * clock minus the buffer's delay, client/systems/daynight.ts). `reveal` false: a client from before the fix.
+	 */
+	const run = reveal => {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 1, cx, cy);
+		const horde = server.sim.horde;
+		const mine = [];
+		for (let k = 0; k < 96 && mine.length < 8; k++) {
+			const a = (k / 96) * Math.PI * 2;
+			const x = cx + Math.cos(a) * 400;
+			const y = cy + Math.sin(a) * 400;
+			if (buildingAt(world, x, y) !== undefined || circleBlocked(world, x, y, 16) !== undefined) continue;
+			if (mine.some(m => Math.hypot(m.x - x, m.y - y) < 100)) continue;
+			const z = createZombie(1, x, y, day, false);
+			z.alpha = 0;
+			horde.zombies.push(z);
+			mine.push({ z, x, y });
+		}
+		const clock = server.sim.clock;
+		clock.setClock(strike.hour - LEAD_S * CL.clockSpeed(strike.hour), day);
+		clock.setWeather(K.Storm);
+		const client = server.clients.get(1);
+		const frames = [];
+		for (let i = 0; i < Math.round(4.5 * CFG.SIM_HZ); i++) {
+			// the walkers stay where they are; nothing else of the town's horde is on this street
+			for (let k = horde.zombies.length - 1; k >= 0; k--) {
+				if (!mine.some(m => m.z === horde.zombies[k])) horde.zombies.splice(k, 1);
+			}
+			for (const m of mine) {
+				m.z.x = m.x;
+				m.z.y = m.y;
+			}
+			tickServer(server);
+			const renderHour = clock.dayTime - client.buffer.delay() * CL.clockSpeed(clock.dayTime);
+			const flash = W.stormFlashAt(K.Storm, day, renderHour);
+			const bright = W.flashReveals(K.Storm, renderHour, flash);
+			client.buffer.reveal = reveal && bright;
+			const drawn = drawClients(server).get(1);
+			frames.push({
+				// seconds from the strike, on the render time (what the screen shows) and on the server's clock
+				render: sinceStrike(renderHour),
+				server: sinceStrike(clock.dayTime),
+				flash,
+				bright,
+				alphas: mine.map(m => drawn.get(horde.netIdOf(m.z))?.alpha ?? 0),
+			});
+		}
+		return { frames, n: mine.length };
+	};
+	const now = run(true);
+	const old = run(false);
+	const stats = r => {
+		const bright = r.frames.filter(f => f.bright);
+		const all = bright.flatMap(f => f.alphas);
+		const mean = all.reduce((a, v) => a + v, 0) / Math.max(1, all.length);
+		const over = all.filter(v => v >= 0.6).length / Math.max(1, all.length);
+		// before the strike on the SERVER's clock: nothing on the wire yet
+		const before = r.frames.filter(f => f.server < 0).flatMap(f => f.alphas);
+		const tail = r.frames.filter(f => f.render > W.FLASH_S + W.FLASH_REVEAL_HOLD_S + 0.9).flatMap(f => f.alphas);
+		const during = r.frames.filter(f => f.render >= 0 && f.render < W.FLASH_S).map(f => Math.min(...f.alphas));
+		return {
+			bright: bright.length,
+			mean,
+			over,
+			before,
+			tail,
+			minDuring: during.length > 0 ? Math.min(...during) : 0,
+		};
+	};
+	const a = stats(now);
+	const b = stats(old);
+	info(
+		`a strike at ${strike.hour.toFixed(3)} h of day ${day} (power ${strike.power.toFixed(2)}), ${now.n} walkers 400 u out in the dark; ` +
+			`the screen's bright part ${a.bright} frames`,
+	);
+	info(
+		`drawn alpha in the bright part: now ${a.mean.toFixed(2)} (${(a.over * 100).toFixed(0)} % ≥ 0.6), ` +
+			`with the old fade-in ${b.mean.toFixed(2)} (${(b.over * 100).toFixed(0)} % ≥ 0.6)`,
+	);
+	check(now.n >= 6, `enough walkers placed in the open (${now.n})`);
+	check(
+		a.before.every(v => v === 0),
+		"before the strike none of them is drawn: in the dark, off the wire (§4.3, no wallhack)",
+	);
+	check(
+		a.bright > 0 && a.mean >= 0.6 && a.over >= 0.75,
+		`while the screen shows the strike lighting the town, the walkers it lights are drawn ≥ 0.6 visible ` +
+			`(mean ${a.mean.toFixed(2)}, ${(a.over * 100).toFixed(0)} % of them; the old fade-in: ${b.mean.toFixed(2)})`,
+	);
+	check(
+		a.minDuring >= 0.6,
+		`and none of them drops out while the screen's flash fades (the wire keeps them FLASH_REVEAL_HOLD_S after it): ` +
+			`the least visible ${a.minDuring.toFixed(2)}`,
+	);
+	check(
+		a.tail.every(v => v === 0),
+		"once the flash and the hold are over they leave the screen again (off the wire, faded out)",
 	);
 }
 

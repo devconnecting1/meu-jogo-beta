@@ -34,8 +34,8 @@
  *   Roblox takes WAV (Open Cloud Assets API: .mp3 / .ogg / .wav / .flac, <= 7 min, <= 20 MB, <= 48 kHz), but it
  *   COUNTS uploads: the Open Cloud guide lists 100 audio uploads a month for an ID-verified account and 10 for one
  *   that is not (docs: cloud/guides/usage-assets). Sixty takes as sixty files would spend a month's quota twice.
- *   So the takes are packed into five banks -- one WAV each, the takes 0.25 s of silence apart -- and the game plays
- *   a window of the bank (shared/data/sounds.ts `takes`, Sound.PlaybackRegion). Five uploads for the whole set; a
+ *   So the takes are packed into six banks -- one WAV each, the takes 0.25 s of silence apart -- and the game plays
+ *   a window of the bank (shared/data/sounds.ts `takes`, Sound.PlaybackRegion). Six uploads for the whole set; a
  *   change re-uploads only its bank.
  *
  * 32 kHz, 16-bit, mono: the sample rate of the 16-bit era, 16 kHz of bandwidth (plenty for these sounds, and part of
@@ -482,6 +482,7 @@ export const TARGETS = {
 	reward: -17,
 	stinger: -16,
 	heart: -18,
+	thunder: -16,
 };
 
 /** the most a take's peaks are pushed down to reach its loudness (dB): a transient keeps its snap */
@@ -665,6 +666,50 @@ function nightStab(rng, { root, dur, boom = 1, grit = 1.2, double = false }) {
 	// the tension: a tritone above, a bell that will not resolve
 	osc(out, { wave: "tri", freq: hz(root + 30), amp: t => 0.12 * envAD(0.01, 0.6)(t), at: 0.05 });
 	return reverb(out, { size: 1.3, feedback: 0.84, damp: 0.35, wet: 0.35, tail: 1.2 });
+}
+
+/**
+ * A thunderclap (LUZ-05): the torn crack of a close strike -- bright noise chopped into irregular bursts, the air
+ * tearing --, then the rumble rolling away: brown noise under a lowpass that closes over the clap's length, in a few
+ * swells at hashed places (the sound bouncing off the town), a sub-bass sine falling under it, and a wide room. A far
+ * strike has no crack and a darker, longer roll. Synthesised on the owner's ask (2026-09-24): a 16-bit storm, not a
+ * field recording -- and a thunder is noise and filters, which is what a synthesiser does well.
+ */
+function thunder(rng, { dur, crack, rumble, swells, cut0, cut1, sub }) {
+	const out = buf(dur);
+	// brown noise: white noise, integrated with a leak (the low end a rumble is made of)
+	const brown = new Float64Array(len(dur));
+	let b = 0;
+	for (let i = 0; i < brown.length; i++) {
+		b = b * 0.996 + (rng() * 2 - 1) * 0.08;
+		brown[i] = b;
+	}
+	const rolls = [];
+	for (let k = 0; k < swells; k++) {
+		const at = 0.04 + rng() * dur * 0.5;
+		const length = 0.5 + rng() * 0.9;
+		rolls.push({ at, bell: bell(length * 0.3, length), amp: 0.45 + rng() * 0.55 });
+	}
+	const roll = t => {
+		let v = 0.3;
+		for (const r of rolls) v += r.amp * r.bell(t - r.at);
+		return v * Math.exp(-t / (dur * 0.42)) * Math.min(1, t / 0.02);
+	};
+	mix(out, shape(filt(brown, "lp", sweep(cut0, cut1, dur * 0.35), 0.8), roll), rumble);
+	if (crack > 0) {
+		// the tear: a new level every 6-24 ms, under a fast decay
+		const tear = [];
+		for (let t0 = 0; t0 < 0.4; t0 += 0.006 + rng() * 0.018) tear.push([t0, 0.25 + 0.75 * rng()]);
+		let k = 0;
+		const level = t => {
+			while (k < tear.length - 1 && tear[k + 1][0] <= t) k++;
+			return tear[k][1];
+		};
+		const cr = noise(rng, 0.4, t => level(t) * envAD(0.002, 0.11)(t));
+		mix(out, filt(filt(cr, "hp", 650), "lp", 5200), crack);
+	}
+	osc(out, { freq: sweep(72, 36, dur * 0.3), amp: t => sub * envAD(0.03, dur * 0.3)(t) });
+	return reverb(saturate(out, 1.25), { size: 1.4, feedback: 0.85, damp: 0.5, wet: 0.28, tail: 1.1 });
 }
 
 // ---------------------------------------------------------------- the set
@@ -1441,6 +1486,24 @@ export const SPEC = [
 		},
 	},
 	{
+		name: "thunder",
+		bank: "weather",
+		category: "thunder",
+		takes: 3,
+		volume: 0.5,
+		pitch: [0.92, 1.05],
+		why: "A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less.",
+		render: (rng, take) =>
+			thunder(
+				rng,
+				[
+					{ dur: 3.1, crack: 1, rumble: 0.9, swells: 3, cut0: 1800, cut1: 160, sub: 0.6 },
+					{ dur: 3.3, crack: 0.45, rumble: 1, swells: 4, cut0: 1100, cut1: 120, sub: 0.5 },
+					{ dur: 3.5, crack: 0, rumble: 1, swells: 5, cut0: 620, cut1: 90, sub: 0.45 },
+				][take],
+			),
+	},
+	{
 		name: "heartbeat1",
 		bank: "cues",
 		category: "heart",
@@ -1472,7 +1535,11 @@ export const SPEC = [
 	},
 ];
 
-export const BANKS = ["ui", "items", "weapons", "impacts", "cues"];
+/**
+ * `weather` (LUZ-05) is a bank of its own, after the five: the thunder came when `cues` already had an approved id, and a
+ * sixth small upload for it leaves the stingers and the heartbeat on the take the owner already has.
+ */
+export const BANKS = ["ui", "items", "weapons", "impacts", "cues", "weather"];
 
 // ---------------------------------------------------------------- rendering
 
@@ -1807,7 +1874,7 @@ function readmeMd(manifest) {
 	L.push("");
 	L.push("## How it gets into the game");
 	L.push("");
-	L.push("1. `npm run audio:sfx` renders every take and packs them into the five banks of `banks/` (one WAV each).");
+	L.push("1. `npm run audio:sfx` renders every take and packs them into the banks of `banks/` (one WAV each).");
 	L.push("2. On the PC, with the `.env`: `npm run cloud -- upload-audio` uploads the banks that are new or changed");
 	L.push(
 		"   (Open Cloud Assets API, `assetType: Audio`, `audio/wav`), writes their ids and hashes to `assets.json` and",

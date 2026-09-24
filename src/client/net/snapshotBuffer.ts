@@ -551,6 +551,15 @@ export class SnapshotBuffer {
 	private readonly dying = new Map<number, { tick: number; at: number }>();
 	/** the netIds whose death the last `advance` released (`takeDied`) */
 	private readonly died = new Array<number>();
+	/**
+	 * A lightning strike lights the town at this frame's RENDER time (LUZ-05; the caller computes it from the storm's
+	 * pure schedule, client/systems/daynight.ts `reveal`): every body drawn is at full alpha at once instead of fading in
+	 * at ALPHA_RATE -- a track started again (`restartTrack`) as well. A flash lasts a fraction of a second; a fade-in of
+	 * a third of a second showed the street's horde only once the flash was already over. The server keeps them on the
+	 * wire until the drawing is past the flash (server/sim/waves.ts `revealing`), and fades them out as usual afterwards;
+	 * a silence of the whole stream holds every alpha as it is, flash or not (`advanceActors`).
+	 */
+	reveal = false;
 	private simHz = SIM_HZ;
 	private delayS = INTERP_DEFAULT_S;
 	private targetS = INTERP_DEFAULT_S;
@@ -1071,7 +1080,8 @@ export class SnapshotBuffer {
 			}
 			if (quiet) continue;
 			const missing = now - track.lastSeen > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S);
-			track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+			if (!missing && this.reveal) track.alpha = 1;
+			else track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
 			if (missing && track.alpha <= 0) retire.push(track.netId);
 		}
 		for (const netId of retire) this.dropZombie(netId);
@@ -1089,7 +1099,8 @@ export class SnapshotBuffer {
 			}
 			const missing = !quiet && now - track.lastSeen > DESPAWN_MID_S;
 			if (!quiet) {
-				track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+				if (!missing && this.reveal) track.alpha = 1;
+				else track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
 			}
 			if (missing && track.alpha <= 0) {
 				retire.push(netId);

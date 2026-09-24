@@ -292,7 +292,8 @@ let mirrorReset = false;
  * whose WorldInit carries all of it anyway (correctness review of 5967a18, J).
  */
 let mirrorArmed = false;
-let pendingClock: { worldDay: number; dayTime: number; tick: number; rain: boolean; waveFlags: number } | undefined;
+let pendingClock:
+	{ worldDay: number; dayTime: number; tick: number; rain: boolean; weather?: number; waveFlags: number } | undefined;
 const sampled = new Array<InputCommand>();
 /** this frame's Input packets, one per command built (commands.ts `flush`) */
 const outbound = new Array<InputPacket>();
@@ -740,6 +741,10 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	applyClock(refs, tick);
 	reconcile(now);
 	predict(refs, dt);
+	// LUZ-05: the storm's flash is drawn at the render time -- where the horde is drawn -- and a strike that lights the
+	// town there shows the bodies it lights at once (client/systems/daynight.ts `renderLagS`, `reveal`)
+	refs.daynight.renderLagS = snapshots.delay();
+	snapshots.reveal = refs.daynight.reveal;
 	snapshots.advance(dt, tick, now, refs.world);
 	releaseDeaths();
 	rebuildViews();

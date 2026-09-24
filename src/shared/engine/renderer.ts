@@ -1183,6 +1183,15 @@ export class LightMap {
 	}
 
 	/**
+	 * Builds the strips for a `viewW` x `viewH` view ahead of the first `update`, the layer still hidden: a map that
+	 * first shows in the middle of a run (the fog, LUZ-05: client/view/weatherView.ts `warmFog`) creates its Instances
+	 * at the run's start instead. A later view size or tier lays them out again as `update` would.
+	 */
+	prepare(viewW: number, viewH: number): void {
+		this.ensureGrid(viewW, viewH);
+	}
+
+	/**
 	 * The colour of the night (night vision paints it green, E2). Rewrites the strips' colour only when it changes:
 	 * no Instance, and nothing at all on the frames it stays the same.
 	 */

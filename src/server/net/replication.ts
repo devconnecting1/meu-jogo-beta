@@ -581,10 +581,20 @@ export class Replicator {
 		const vx = viewer.state.x;
 		const vy = viewer.state.y;
 		if (!visibleThroughWalls(this.buildingIdAt(vx, vy), this.buildingIdAt(x, y))) return false;
-		if (!worldIsDark(this.sim.clock.darkAlpha)) return true;
+		if (!this.wireDark()) return true;
 		const dx = x - vx;
 		const dy = y - vy;
 		return visibleInDark(true, this.litAt(x, y) ? 1 : 0, dx * dx + dy * dy);
+	}
+
+	/**
+	 * Is the town dark for the §4.3 rules right now? The clock's darkness says so -- unless a strike is lighting it
+	 * (LUZ-05, server/sim/waves.ts `revealing`): then everything in a viewer's rings goes out as by day, for as long as
+	 * the screens, drawing the horde behind the server, still show the flash.
+	 */
+	private wireDark(): boolean {
+		const clock = this.sim.clock;
+		return worldIsDark(clock.darkAlpha) && !clock.revealing();
 	}
 
 	/** the id of the building (x, y) is inside, 0 outdoors (§4.3 rule 1) */
@@ -1083,7 +1093,7 @@ export class Replicator {
 	 */
 	private flushFx(tick: number): void {
 		if (this.fxQueue.size() === 0) return;
-		const dark = worldIsDark(this.sim.clock.darkAlpha);
+		const dark = this.wireDark();
 		this.prepareFx(dark);
 		for (const viewer of this.sim.survivors()) {
 			const list = this.fxForViewer;
@@ -1431,9 +1441,11 @@ export class Replicator {
 		now: number,
 	): void {
 		const midExtra = midViewExtraTicks(this.sim.simHz);
+		// carried while a strike lights the town: the client shows it at full alpha at once (LUZ-05)
+		const revealed = this.sim.clock.revealing();
 		for (let k = from; k < from + count; k++) {
 			const z = zombies[k];
-			if (z !== undefined) this.hordeRings.noteSent(slot, z.netId, z.mid, tick, midExtra, now);
+			if (z !== undefined) this.hordeRings.noteSent(slot, z.netId, z.mid, tick, midExtra, now, revealed);
 		}
 	}
 
@@ -1499,7 +1511,7 @@ export class Replicator {
 		const out = this.zombieBlocks;
 		out.clear();
 		if (this.horde.size() === 0) return out;
-		const dark = worldIsDark(this.sim.clock.darkAlpha);
+		const dark = this.wireDark();
 		const view = this.liveView(viewer.slot);
 		const vx = view !== undefined ? view.x : viewer.state.x;
 		const vy = view !== undefined ? view.y : viewer.state.y;
