@@ -93,6 +93,10 @@ export type WorldArtName =
 	| "signGuns"
 	| "signClothes"
 	| "signDiner"
+	| "signCollege"
+	| "signLibrary"
+	| "signLab"
+	| "signDorm"
 	| "helipad"
 	| "gasCanopyN"
 	| "gasCanopyS"
@@ -300,6 +304,14 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signClothes: { id: "rbxassetid://99147626160535", w: 24, h: 16 },
 	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
+	/** sprite: storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon */
+	signCollege: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon */
+	signLibrary: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon */
+	signLab: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
+	signDorm: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
@@ -483,6 +495,10 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signGuns",
 	"signClothes",
 	"signDiner",
+	"signCollege",
+	"signLibrary",
+	"signLab",
+	"signDorm",
 	"helipad",
 	"gasCanopyN",
 	"gasCanopyS",

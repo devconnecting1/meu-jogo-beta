@@ -638,6 +638,38 @@
 			"description": "storefront sign (type 11): a plate between a fork and a knife"
 		},
 		{
+			"name": "signCollege",
+			"file": "signCollege.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon"
+		},
+		{
+			"name": "signLibrary",
+			"file": "signLibrary.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon"
+		},
+		{
+			"name": "signLab",
+			"file": "signLab.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon"
+		},
+		{
+			"name": "signDorm",
+			"file": "signDorm.png",
+			"kind": "sprite",
+			"w": 24,
+			"h": 16,
+			"description": "storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon"
+		},
+		{
 			"name": "helipad",
 			"file": "helipad.png",
 			"kind": "sprite",
