@@ -172,6 +172,8 @@ export class ServerProjectiles {
 			return false;
 		}
 		const wall = raycast(refs.world, b.x, b.y, b.angle, step);
+		// the ray's answer is one shared table (physics.ts, F4): take what is needed from it before anything else runs
+		const blocked = wall.solid !== undefined;
 		b.x += math.cos(b.angle) * wall.dist;
 		b.y += math.sin(b.angle) * wall.dist;
 		b.travel += wall.dist;
@@ -187,7 +189,7 @@ export class ServerProjectiles {
 			}
 			return true;
 		}
-		return wall.solid !== undefined || b.travel >= b.range || b.life <= 0;
+		return blocked || b.travel >= b.range || b.life <= 0;
 	}
 
 	/** an arrow flies, slows down, sticks in what it hits and lies where it stopped */
@@ -211,7 +213,10 @@ export class ServerProjectiles {
 		b.speed = math.max(0, b.speed - (b.friction ?? 0) * dt);
 		const reach = math.min(step, math.max(0, b.range - b.travel)) + 0.01;
 		const wall = raycast(refs.world, b.x, b.y, b.angle, reach, blocksShots);
-		const travel = math.min(step, wall.dist);
+		// one shared table (physics.ts, F4): copied before the hits below get a chance to cast rays of their own
+		const wallDist = wall.dist;
+		const wallHit = wall.solid !== undefined;
+		const travel = math.min(step, wallDist);
 		const nx = b.x + math.cos(b.angle) * travel;
 		const ny = b.y + math.sin(b.angle) * travel;
 		const sp = this.ownerOf(b);
@@ -238,7 +243,7 @@ export class ServerProjectiles {
 		b.x = nx;
 		b.y = ny;
 		b.travel += travel;
-		if (wall.solid !== undefined && wall.dist <= step) {
+		if (wallHit && wallDist <= step) {
 			// stop just short of the wall, so the shaft is drawn in the street and not inside the bricks
 			b.x -= math.cos(b.angle) * 2;
 			b.y -= math.sin(b.angle) * 2;
@@ -252,6 +257,8 @@ export class ServerProjectiles {
 	private stepFire(refs: Ctx.AiRefs, b: Bullet, dt: number): boolean {
 		const step = b.speed * dt;
 		const wall = raycast(refs.world, b.x, b.y, b.angle, step, blocksShots);
+		// one shared table (physics.ts, F4): read before the burns below, which may cast rays of their own
+		const blocked = wall.solid !== undefined;
 		b.x += math.cos(b.angle) * wall.dist;
 		b.y += math.sin(b.angle) * wall.dist;
 		b.travel += wall.dist;
@@ -277,7 +284,7 @@ export class ServerProjectiles {
 		if (boss !== undefined && sp !== undefined) {
 			this.combat?.hitBossWith(sp, boss, damageCal(b.damage) * tick, b.x, b.y);
 		}
-		return wall.solid !== undefined || b.travel >= b.range || b.life <= 0;
+		return blocked || b.travel >= b.range || b.life <= 0;
 	}
 
 	// ---------------------------------------------------------------- helpers

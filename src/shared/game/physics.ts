@@ -6,12 +6,23 @@ export const PLAYER_RADIUS = 18;
 /** collision radius of a normal zombie (the big variant multiplies it by ZombieState.scale) */
 export const ZOMBIE_RADIUS = 16;
 
+/**
+ * What `moveActor` answers. It is ONE table owned by this module and overwritten by the next call (F4): read x, y
+ * and hit at once and never keep the table itself -- every caller copies the fields on the spot.
+ */
 export interface MoveResult {
 	x: number;
 	y: number;
 	/** first solid that blocked the move, if any */
 	hit?: Solid;
 }
+
+/**
+ * The results the hot path hands back, reused instead of allocated. `moveActor` ran for every zombie every tick and
+ * built two tables per call (its own and one per `resolveCircle` step), and every ray one more: together about three
+ * quarters of the server's per-tick garbage, which Luau's incremental GC charges to the Heartbeat that made it.
+ */
+const MOVE: MoveResult = { x: 0, y: 0, hit: undefined };
 
 /** Built by the player (barricades, doors, turrets, lamps…): zombies attack them, bullets fly over them. */
 export function isPlayerBuilt(s: Solid): boolean {
@@ -74,6 +85,10 @@ export function vaultFactor(world: WorldData, x: number, y: number): number {
 // circle vs AABB
 
 const scratch: Array<Solid> = [];
+/** set by resolveCircle: where the body ended up, and the first solid that pushed it (its result, without a table) */
+let resolvedX = 0;
+let resolvedY = 0;
+let resolvedHit: Solid | undefined;
 /** set by resolveCircle: the position it was asked about lies in a window's vault zone */
 let lastInVault = false;
 /** set by resolveCircle: the body's position BEFORE this step (fromX, fromY) lies in a window's vault zone */
@@ -87,9 +102,9 @@ const RESOLVE_MARGIN = 6;
  * it reaches RESOLVE_MARGIN past the body, and is made again only if the pushes carried the body further than
  * that (a body wedged in a corner of furniture runs all four passes a tick: in a furnished building that was four
  * queries of a dense neighbourhood). It also reaches every window whose vault zone holds (x, y) or the step's
- * start (fromX, fromY): the climb costs no query of its own.
+ * start (fromX, fromY): the climb costs no query of its own. The answer is left in resolvedX / resolvedY / resolvedHit.
  */
-function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX: number, fromY: number): MoveResult {
+function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX: number, fromY: number): void {
 	let hit: Solid | undefined;
 	lastInVault = false;
 	startInVault = false;
@@ -143,7 +158,9 @@ function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX:
 		}
 		if (!moved) break;
 	}
-	return { x, y, hit };
+	resolvedX = x;
+	resolvedY = y;
+	resolvedHit = hit;
 }
 
 /**
@@ -157,6 +174,8 @@ function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX:
  * climb is the same for everyone and the prediction never disagrees with the server about it. The zone is read
  * off the collision query the step makes anyway; only a body that STARTS in a window re-does its first sub-step
  * at the climbing speed.
+ *
+ * The answer is the module's one MoveResult (see there): read it before the next call.
  */
 export function moveActor(world: WorldData, x: number, y: number, radius: number, dx: number, dy: number): MoveResult {
 	let len = math.sqrt(dx * dx + dy * dy);
@@ -173,25 +192,28 @@ export function moveActor(world: WorldData, x: number, y: number, radius: number
 	let hit: Solid | undefined;
 	let k = 1;
 	for (let i = 0; i < steps; i++) {
-		let r = resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
+		resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
 		if (i === 0 && startInVault && len >= 1e-6) {
 			// it starts in a window: the first sub-step is a climbing one too
 			k = VAULT_SLOW;
-			r = resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
+			resolveCircle(world, x + sx * k, y + sy * k, radius, x, y);
 		}
-		x = r.x;
-		y = r.y;
-		if (hit === undefined && r.hit !== undefined) hit = r.hit;
+		x = resolvedX;
+		y = resolvedY;
+		if (hit === undefined && resolvedHit !== undefined) hit = resolvedHit;
 		k = lastInVault ? VAULT_SLOW : 1;
 	}
 	if (len < 1e-6) {
 		// still resolve a standing actor (e.g. a door closed on it)
-		const r = resolveCircle(world, x, y, radius, x, y);
-		x = r.x;
-		y = r.y;
-		hit = r.hit;
+		resolveCircle(world, x, y, radius, x, y);
+		x = resolvedX;
+		y = resolvedY;
+		hit = resolvedHit;
 	}
-	return { x, y, hit };
+	MOVE.x = x;
+	MOVE.y = y;
+	MOVE.hit = hit;
+	return MOVE;
 }
 
 /** First blocking solid overlapping the circle (spawn / landing / placement checks). */
@@ -247,6 +269,7 @@ function rayAabb(x0: number, y0: number, dx: number, dy: number, maxDist: number
 	return tmin;
 }
 
+/** What `raycast` answers: like MoveResult, ONE table overwritten by the next call -- read it at once, never keep it. */
 export interface RayHit {
 	/** distance to the first hit (maxDist when nothing was hit) */
 	dist: number;
@@ -254,10 +277,12 @@ export interface RayHit {
 }
 
 const rayScratch: Array<Solid> = [];
+const RAY: RayHit = { dist: 0, solid: undefined };
 
 /**
  * Cast a ray from (x0, y0) along the angle for maxDist; returns the nearest solid accepted by
  * `filter` (default: blocksShots). Exact slab test against every solid of the ray's bounding box.
+ * The answer is the module's one RayHit: read it before the next ray (`segmentClear` is one too).
  */
 export function raycast(
 	world: WorldData,
@@ -283,7 +308,9 @@ export function raycast(
 			bestSolid = s;
 		}
 	}
-	return { dist: best, solid: bestSolid };
+	RAY.dist = best;
+	RAY.solid = bestSolid;
+	return RAY;
 }
 
 /** true when nothing accepted by `filter` lies on the segment */

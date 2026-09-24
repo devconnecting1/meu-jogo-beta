@@ -826,6 +826,8 @@ export class Combat {
 		const p = refs.player;
 		const step = b.speed * dt;
 		const wall = raycast(refs.world, b.x, b.y, b.angle, step, blocksShots);
+		// the ray's answer is one shared table (shared/game/physics.ts): read before the hits below run
+		const blocked = wall.solid !== undefined;
 		b.x += math.cos(b.angle) * wall.dist;
 		b.y += math.sin(b.angle) * wall.dist;
 		b.travel += wall.dist;
@@ -844,7 +846,7 @@ export class Combat {
 			const c = bossContact(boss, b.x, b.y, FIRE_RADIUS);
 			if (c !== undefined) hitBoss(refs, boss, damageCal(b.damage) * tick, b.x, b.y, 0);
 		}
-		return wall.solid !== undefined || b.travel >= b.range || b.life <= 0;
+		return blocked || b.travel >= b.range || b.life <= 0;
 	}
 
 	private updateEnemyShot(refs: GameRefs, b: Bullet, dt: number): boolean {
