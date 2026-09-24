@@ -50,6 +50,7 @@
 		"test:awareness": "node tools/test-awareness.mjs",
 		"test:world-art": "node tools/test-world-art.mjs",
 		"test:pool": "node tools/test-pool.mjs",
+		"test:light": "node tools/test-light.mjs",
 		"test:icons": "node tools/test-icons.mjs",
 		"test:items": "node tools/test-items.mjs",
 		"test:vehicles": "node tools/test-vehicles.mjs",

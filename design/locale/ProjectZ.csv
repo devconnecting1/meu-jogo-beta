@@ -303,6 +303,11 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,"Console, hints and messages."
 ,,,Reduce motion
 ,,,Set in the Roblox menu. Stills the town.
+,,,Graphics
+,,,"Low: simpler night, fewer particles."
+,,,Auto
+,,,High
+,,,Low
 ,,,Stick size
 ,,,How big the move stick is.
 ,,,Stick height
@@ -315,11 +320,12 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,The stick opens under your thumb.
 ,,,Left-handed
 ,,,Swaps the stick and the aim pad.
+,,,"They show when you play by touch. The preview is this screen, with the controls where they will sit."
 ,,,Off
 ,,,On
 ,,,Defaults
-,,,"SFX, BGM and HUD size back to 50%."
-,,,"SFX, BGM and HUD size go back to 50%."
+,,,"SFX, BGM, HUD size to 50%, graphics Auto."
+,,,"SFX, BGM and HUD size go back to 50%, and Graphics to Auto."
 ,,,All six back to how they came.
 ,,,"Sizes and heights back to 50%, a floating stick, the aim pad on the right."
 ,,,Reset
@@ -356,7 +362,7 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Version
 ,,,Open credits
 ,,,Your screen
-,,,"General: how loud the sounds and the music are, and how big the panels of a run are.
+,,,"General: how loud the sounds and the music are, how big the panels of a run are, and the graphics (Auto goes Low when the game runs slow).
 Touch controls: size, height and side of the phone controls, with a preview of your screen.
 Controls: every key and button the game listens to, on each device.
 About: the game and its credits.

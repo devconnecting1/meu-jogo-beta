@@ -1,3 +1,4 @@
+//!native
 /*
  * Binary codec over the Luau `buffer` (docs/MULTIPLAYER.md §1.1, §4.2). Little-endian, like buffer.*.
  * Shared by client and server; pure (no Roblox services), so tools/test-net.mjs runs it in Node.

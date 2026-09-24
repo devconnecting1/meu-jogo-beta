@@ -17,7 +17,8 @@
  *   2. EVERY LOOK IS DRAWN, AND READS AT 32 px (MON-02). Each outfit and each pet draws sprites, their signature
  *      colours are there, they are told apart by colour AND by silhouette (the cowboy's hat is wider than a head,
  *      Santa's pom-pom sits behind it, the eagle is the widest pet, the Malamute bigger than the Carolina), and the
- *      plain survivor is exactly the pre-MON-04 drawing.
+ *      plain survivor is exactly the pre-MON-04 drawing. Sections 2-6 are the FLAT drawing (ART-01): the uploads as
+ *      they are with the characters' sheets taken out, whatever has been uploaded.
  *   3. NOTHING IS ALLOCATED PER FRAME for a pet or an outfit: every pet sprite goes through one scratch SpriteOpts
  *      and no colour is built while drawing (counted, not assumed).
  *   4. LAYERS. The survivor keeps its own band of ZIndex, a pet sits under it; one layer per piece.
@@ -26,12 +27,14 @@
  *      the scale instead of clipping, and destroy() cleans up.
  *   6. THE WARDROBE'S TILES draw one cosmetic alone (`subject`): an outfit's tile the survivor only, a pet's tile
  *      the pet only, framed on it, and every one of them fits its tile without clipping.
- *   7. WITH THE CHARACTERS' PIXEL ART (ART-08, ART-09, ART-11: the sheets handed in as local ids): each outfit is its
- *      body cell (arms and head baked in) from its own sheet plus the weapon, upright and pixelated, and reads by
- *      colour (the blue jacket, Santa's red, the Cowboy's straw hat, the costume's green skin that is not a
- *      zombie's green); each pet is one cell with its own colour and size; a hit and the poison keep their
- *      colours over any outfit (Santa flashes white, keeps the red outline); nothing is built or created per frame;
- *      the wardrobe preview and every tile show the whole cosmetic, texels included, at 4 u x scale per texel.
+ *   7. WITH THE CHARACTERS' PIXEL ART (ART-08, ART-09, ART-11: the uploaded sheets' ids of worldArtAssets.ts, read
+ *      back to design/world-art's PNGs; a local stand-in for one not uploaded yet): MON-04 holds there too -- each
+ *      outfit is a different picture, its body cell (arms and head baked in) from its own sheet plus the weapon,
+ *      upright and pixelated, and reads by colour (the blue jacket, Santa's red, the Cowboy's straw hat, the
+ *      costume's green skin that is not a zombie's green); each pet is one cell with its own colour and size; a hit
+ *      and the poison keep their colours over any outfit (Santa flashes white, keeps the red outline); nothing is
+ *      built or created per frame; the wardrobe preview and every tile show the whole cosmetic, texels included, at
+ *      4 u x scale per texel.
  *
  * The wardrobe SCREEN (tabs, tile states, the one action, the try-on preview) runs in tools/test-backpack.mjs,
  * whose fake tree carries the whole UI kit; the purchase itself is the server's, in tools/test-save.mjs (§17)
@@ -140,6 +143,19 @@ const SV = require(join(SRC, "client/view/survivorView.ts"));
 const PV = require(join(SRC, "client/view/cosmeticPreview.ts"));
 const HV = require(join(SRC, "client/view/humanoidView.ts"));
 const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/**
+ * Sections 2-6 measure the FLAT drawing (ART-01: without the sheets' ids, the survivor and the pets are drawn exactly
+ * as before), whatever has been uploaded: the uploads as they are, with every character sheet's id taken out.
+ * Section 7 draws the same looks from the uploaded sheets.
+ */
+const flatIds = {};
+for (const [name, t] of Object.entries(WORLD_ART)) flatIds[name] = isCharacterSheet(name) ? "" : t.id;
+WA.overrideWorldArt(flatIds);
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -933,13 +949,25 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 
 section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos trajes e pets, das folhas de pixel art");
 {
-	const WA = require(join(SRC, "client/view/worldArt.ts"));
 	const CS = require(join(SRC, "client/view/charSheets.ts"));
 	const artDir = join(SRC, "..", "design", "world-art");
 	const manifest = JSON.parse(readFileSync(join(artDir, "manifest.json"), "utf8"));
+	// the ids the game draws with: the uploaded ones (worldArtAssets.ts), and a local stand-in for a texture that has
+	// none yet; each id is read back to its PNG in design/world-art, so the texels below are the uploaded sheets'
 	const ids = {};
-	for (const t of manifest.textures) ids[t.name] = `local:${t.name}`;
+	const nameOfId = new Map();
+	for (const t of manifest.textures) {
+		const id = WORLD_ART[t.name]?.id || `local:${t.name}`;
+		ids[t.name] = id;
+		nameOfId.set(id, t.name);
+	}
 	WA.overrideWorldArt(ids);
+	const sheets = manifest.textures.map(t => t.name).filter(isCharacterSheet);
+	const standIns = sheets.filter(n => ids[n].startsWith("local:"));
+	console.log(
+		`  (${sheets.length} folhas de personagem: ${sheets.length - standIns.length} com o id enviado` +
+			`${standIns.length > 0 ? `; substituto local para ${standIns.join(", ")}` : ""})`,
+	);
 	const pngs = new Map();
 	const png = name => {
 		if (!pngs.has(name)) pngs.set(name, decodePNG(readFileSync(join(artDir, `${name}.png`))));
@@ -953,7 +981,7 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 				if (im === undefined) return undefined;
 				return {
 					...s,
-					sheet: im.Image.slice("local:".length),
+					sheet: nameOfId.get(im.Image) ?? im.Image,
 					rx: im.ImageRectOffset?.X ?? 0,
 					ry: im.ImageRectOffset?.Y ?? 0,
 					rw: im.ImageRectSize?.X ?? 0,
@@ -1024,6 +1052,8 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 	// ---- each outfit: its body cell and its weapon, from its own sheet, upright, pixelated
 	const outfitSheet = ["survivorsA", "survivorsA", "survivorsB", "survivorsB"];
 	const shares = {};
+	/** each outfit's body as drawn: its sheet and its cell */
+	const pictures = new Map();
 	for (const [name, outfit] of OUTFITS) {
 		const images = imagesOf(drawOneAt(outfit));
 		const body = images.find(s => s.sheet.startsWith("survivors"));
@@ -1048,7 +1078,13 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 			`${name}: celulas em pe na tela (a direcao e a coluna), pixeladas`,
 		);
 		if (body !== undefined) shares[name] = cellOf(body).share;
+		if (body !== undefined) pictures.set(name, `${body.sheet} @ ${body.rx},${body.ry}`);
 	}
+	check(
+		pictures.size() === OUTFITS.length && new Set(pictures.values()).size() === OUTFITS.length,
+		"MON-04: cada traje troca o que e desenhado (quatro celulas diferentes, nenhuma ignora o traje)",
+		[...pictures].map(([n, p]) => `${n}: ${p}`).join("; "),
+	);
 	const pct = v => `${Math.round((v ?? 0) * 100)}%`;
 	check((shares.plain?.blue ?? 0) >= 0.3, "sem traje: a jaqueta azul de sempre", `${pct(shares.plain?.blue)} azul`);
 	check((shares.Santa?.red ?? 0) >= 0.3, "Santa: o vermelho", `${pct(shares.Santa?.red)} vermelho`);

@@ -11,15 +11,27 @@
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS } from "shared/engine/colors";
-import { Renderer } from "shared/engine/renderer";
+import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import { drawZombieArt } from "./charArt";
-import { part, SIDES } from "./drawKit";
+import { mix, part, quantize, SIDES } from "./drawKit";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
 /** how far towards black a zombie's rim is (body outline and arms); 0.3 was the lawn's own colour for a walker */
 export const RIM_DARKEN = 0.75;
+/** the lit fuse's beat turns the body this far towards red (and the outline yellow) */
+const BLINK_RED = 0.8;
+
+/*
+ * One scratch SpriteOpts per piece of the body (M4): a horde of 40 drew 280 option tables a frame through literals.
+ * Each keeps exactly the keys its literal had, every one of them written on every call, so nothing carries over from
+ * one zombie to the next and the draw calls are the same, value for value (tools/golden/characters-flat.json).
+ */
+const FOOT: SpriteOpts = {};
+const ARM: SpriteOpts = {};
+const BODY: SpriteOpts = {};
+const HEAD: SpriteOpts = {};
 
 /** body colour of a zombie type (1 walker ... 5) */
 export function zombieColor(t: number): Color3 {
@@ -49,61 +61,62 @@ export function drawHumanoid(
 	windup = 0,
 	outline?: Color3,
 ): void {
-	const body = flash > 0 ? color.Lerp(WHITE, 0.75 * flash) : color;
-	const dark = color.Lerp(BLACK, 0.3);
+	// every shade is a memoised blend (drawKit.mix): the same Color3 each frame, the hit flash on a 1/40 grid
+	const body = flash > 0 ? mix(color, WHITE, 0.75 * quantize(flash)) : color;
+	const dark = mix(color, BLACK, 0.3);
 	// LEG-03: the rim has to be darker than any ground a zombie walks on. `dark` alone was the lawn's own colour
 	// for a walker (70,105,63 on 74,108,62): measured by tools/test-world-art.mjs, its edge all but vanished on grass
-	const rim = color.Lerp(BLACK, RIM_DARKEN);
+	const rim = mix(color, BLACK, RIM_DARKEN);
 	const edge = outline ?? (flash > 0 ? WHITE : rim);
 	const step = math.sin(phase) * 8 * sc;
+	const foot = FOOT;
+	foot.w = 12 * sc;
+	foot.h = 9 * sc;
+	foot.color = COLORS.zombieFeet;
+	foot.alpha = alpha;
+	foot.cornerRadius = 3 * sc;
+	foot.zIndex = z;
+	// arms reach straight ahead, swaying a little with the gait
+	const arm = ARM;
+	arm.w = 24 * sc;
+	arm.h = 7 * sc;
+	arm.color = flash > 0 ? body : dark;
+	arm.alpha = alpha;
+	arm.cornerRadius = 3 * sc;
+	// the reaching arms are the zombie's silhouette (LEG-03): they get the rim too
+	arm.stroke = rim;
+	arm.strokeThickness = 1;
+	arm.strokeAlpha = alpha;
+	arm.zIndex = z + 1;
 	for (const side of SIDES) {
 		const along = step * side;
-		part(r, cam, x, y, a, along, side * 9 * sc, {
-			w: 12 * sc,
-			h: 9 * sc,
-			color: COLORS.zombieFeet,
-			alpha,
-			cornerRadius: 3 * sc,
-			zIndex: z,
-		});
-		// arms reach straight ahead, swaying a little with the gait
-		part(r, cam, x, y, a, 22 * sc - along * 0.25, side * 12 * sc, {
-			w: 24 * sc,
-			h: 7 * sc,
-			color: flash > 0 ? body : dark,
-			alpha,
-			cornerRadius: 3 * sc,
-			// the reaching arms are the zombie's silhouette (LEG-03): they get the rim too
-			stroke: rim,
-			strokeThickness: 1,
-			strokeAlpha: alpha,
-			zIndex: z + 1,
-		});
+		part(r, cam, x, y, a, along, side * 9 * sc, foot);
+		part(r, cam, x, y, a, 22 * sc - along * 0.25, side * 12 * sc, arm);
 	}
-	part(r, cam, x, y, a, 0, 0, {
-		w: 26 * sc,
-		h: 36 * sc,
-		color: body,
-		alpha,
-		cornerRadius: 9 * sc,
-		stroke: edge,
-		strokeThickness: flash > 0 || outline !== undefined ? 3 : 2,
-		strokeAlpha: alpha,
-		zIndex: z + 2,
-	});
+	const torso = BODY;
+	torso.w = 26 * sc;
+	torso.h = 36 * sc;
+	torso.color = body;
+	torso.alpha = alpha;
+	torso.cornerRadius = 9 * sc;
+	torso.stroke = edge;
+	torso.strokeThickness = flash > 0 || outline !== undefined ? 3 : 2;
+	torso.strokeAlpha = alpha;
+	torso.zIndex = z + 2;
+	part(r, cam, x, y, a, 0, 0, torso);
 	// head; a spitter winding up (windup 0..10) pulls it back and swells its acid sac
 	const k = clamp(windup / 10, 0, 1);
 	const headFwd = (3 - 9 * k) * sc;
-	let headColor = flash > 0 ? body : color.Lerp(BLACK, 0.12);
-	if (k > 0) headColor = headColor.Lerp(COLORS.acid, 0.7 * k);
-	r.drawCircle(cam, x + math.cos(a) * headFwd, y + math.sin(a) * headFwd, 20 * sc * (1 + 0.4 * k), {
-		color: headColor,
-		alpha,
-		stroke: k > 0 ? COLORS.bloodZombie : undefined,
-		strokeThickness: 2,
-		strokeAlpha: alpha * k,
-		zIndex: z + 3,
-	});
+	let headColor = flash > 0 ? body : mix(color, BLACK, 0.12);
+	if (k > 0) headColor = mix(headColor, COLORS.acid, 0.7 * quantize(k));
+	const head = HEAD;
+	head.color = headColor;
+	head.alpha = alpha;
+	head.stroke = k > 0 ? COLORS.bloodZombie : undefined;
+	head.strokeThickness = 2;
+	head.strokeAlpha = alpha * k;
+	head.zIndex = z + 3;
+	r.drawCircle(cam, x + math.cos(a) * headFwd, y + math.sin(a) * headFwd, 20 * sc * (1 + 0.4 * k), head);
 }
 
 /**
@@ -132,7 +145,7 @@ export function drawZombie(
 	let color = zombieColor(kind);
 	let outline: Color3 | undefined;
 	if (blink) {
-		color = color.Lerp(COLORS.uiRed, 0.8);
+		color = mix(color, COLORS.uiRed, BLINK_RED);
 		outline = COLORS.uiYellow;
 	}
 	drawHumanoid(r, cam, x, y, a, sc, color, flash, alpha, phase, z, windup, outline);

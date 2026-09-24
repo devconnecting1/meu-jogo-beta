@@ -1,3 +1,4 @@
+//!native
 /*
  * Uniform spatial hash of the horde (docs/MULTIPLAYER.md §3.4).
  *

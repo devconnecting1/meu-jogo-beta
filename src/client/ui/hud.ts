@@ -19,6 +19,7 @@ import {
 	addAspect,
 	addStroke,
 	badgeWidth,
+	expireAfter,
 	fadeSurface,
 	fadeText,
 	gamepadActive,
@@ -1115,19 +1116,12 @@ export class Hud {
 		label.TextTransparency = 1;
 		fadeSurface(line, 0.2, 0);
 		fadeText(label, 0.2, 0);
-		task.spawn(() => {
-			while (line.Parent !== undefined) {
-				const born = line.GetAttribute("Born");
-				if (typeIs(born, "number") && os.clock() - born >= FEED_TIME) break;
-				task.wait(0.25);
-			}
-			if (line.Parent === undefined) return;
+		expireAfter(line, FEED_TIME, () => {
 			// fading out: the same message arriving now gets a fresh line instead of refreshing this one
 			line.SetAttribute("Text", undefined);
 			fadeSurface(line, 0.4, 1);
 			fadeText(label, 0.4, 1);
-			task.wait(0.4);
-			line.Destroy();
+			task.delay(0.4, () => line.Destroy());
 		});
 	}
 

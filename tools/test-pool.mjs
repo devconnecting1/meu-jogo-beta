@@ -16,18 +16,26 @@
  *      for one decal on a 336-sprite street.)
  *   3. WALKING WRITES NO ZIndex. 600 frames of panning with the horde walking and blood coming and going: not one
  *      ZIndex write, no Instance after the warm-up; the writes per frame are printed.
- *   4. RESERVE + WARM. `warm(n)` makes at most n sprites a call, hidden, at their ZIndex, rounded / outlined as
- *      reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no stroke left on).
+ *   4. RESERVE + WARM. `warm(n)` makes at most n sprites a call, hidden, at their ZIndex, rounded / outlined / with
+ *      a blank ImageLabel as reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no
+ *      stroke left on, a sheet cell drawn on a warmed image creates nothing).
  *   5. THE WARM-UP PROFILE. poolWarmup.ts reserves what the reference fight draws, flat and with the characters'
- *      art: on the warmed pool the fight creates no Frame, UICorner or UIStroke, and no layer is reserved far past
- *      what the fight shows.
+ *      art: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel (the characters' labels
+ *      are built hidden by the warm-up), and no layer is reserved far past what the fight shows.
  *   6. THE DRIVER. warmFightPool warms only while the lobby or its menus are up (not behind the boot logo, not
  *      during a run), WARM_PER_FRAME sprites a frame, and lets go of Heartbeat once the pool is warm.
  *   7. THE API. drawCount, poolSize, acquire, release and releaseAll across the buckets.
  *   8. ONE CLIP. The world layer has no clip of its own: its only child is the renderer's layer, which fills it and
  *      clips to the same rect (rotation support off, nothing rotated above either: the two clips were the same).
  *   9. NO WRITE WITHOUT A CHANGE. A steady music track writes no Volume; the night layer and the touch sticks are
- *      written only when they move (source guards: those two only run on the whole client).
+ *      written only when they move (source guards: those two only run on the whole client); the audio listener is
+ *      moved (a CFrame, an engine call) only when the camera did; a ground item's glint is drawn only while it
+ *      flashes (source guard).
+ *  10. NO GARBAGE ON THE ACTOR PATHS (M4). A walking horde -- hit flashes fading, spitters winding up, a lit fuse --
+ *      builds no Color3 once warm, draws from 4 option tables and writes no property with the value it already had;
+ *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
+ *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
+ *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -84,6 +92,7 @@ const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
 const HV = require(join(SRC, "client/view/humanoidView.ts"));
 const SV = require(join(SRC, "client/view/survivorView.ts"));
 const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
 const CA = require(join(SRC, "client/view/charArt.ts"));
 const PW = require(join(SRC, "client/view/poolWarmup.ts"));
 const { AudioTrack } = require(join(SRC, "client/audio/audio.ts"));
@@ -137,11 +146,11 @@ const top = (byProp, frames = 1, n = 5) =>
 		.map(([k, c]) => `${k} ${(c / frames).toFixed(1)}`)
 		.join(", ");
 
-/** every texture live under a fake id (the characters' sheets included) */
+/** every texture live (the characters' sheets included): its uploaded id, or a fake one while it has none */
 function allIds() {
 	const manifest = JSON.parse(readFileSync(join(ROOT, "design", "world-art", "manifest.json"), "utf8"));
 	const ids = {};
-	manifest.textures.forEach((t, i) => (ids[t.name] = `rbxassetid://${900000 + i}`));
+	manifest.textures.forEach((t, i) => (ids[t.name] = WORLD_ART[t.name]?.id || `rbxassetid://${900000 + i}`));
 	return ids;
 }
 
@@ -488,6 +497,95 @@ section("4) reserve + warm: built ahead, hidden, at their ZIndex, rounded / outl
 		kids[0].FindFirstChildOfClass("UICorner").CornerRadius.Offset === 0,
 		"...and a rounded slot drawn square is square again",
 	);
+
+	// images: a character's cell is a Frame and its ImageLabel, and both can be built ahead
+	const ri = new Renderer(gui.make("Frame"), "Sprites");
+	ri.setView(1280, 720);
+	ri.reserve(Z.zombie, 6, 0, 0, 4);
+	const ci = gui.stats.created;
+	while (ri.warm(3) > 0);
+	const cells = ri.layer.GetChildren();
+	const labels = cells.map(f => f.FindFirstChildOfClass("ImageLabel")).filter(l => l !== undefined);
+	check(
+		cells.length === 6 &&
+			labels.length === 4 &&
+			gui.stats.created - ci === 10 &&
+			labels.every(l => l.Visible === false && (l.Image ?? "") === ""),
+		"reserve(z, 6, 0, 0, 4): 6 sprites, 4 with a hidden ImageLabel that shows no picture yet (10 Instances)",
+		`${cells.length} sprites, ${labels.length} labels, ${gui.stats.created - ci} Instances`,
+	);
+	const cellDraw = watch(() => {
+		ri.beginFrame();
+		for (let i = 0; i < 4; i++) {
+			ri.drawRect(cam, i * 40, 60, {
+				w: 32,
+				h: 32,
+				image: "rbxassetid://7",
+				rectX: i * 32,
+				rectY: 0,
+				rectW: 32,
+				rectH: 32,
+				zIndex: Z.zombie,
+			});
+		}
+		ri.endFrame();
+	});
+	check(
+		cellDraw.created === 0 &&
+			labels.every(
+				(l, i) => l.Visible === true && l.Image === "rbxassetid://7" && l.ImageRectOffset.X === i * 32,
+			),
+		"a sheet's cells drawn on them create nothing and show their picture and cell",
+		`${cellDraw.created} created`,
+	);
+}
+{
+	// a layer of sheet cells (the characters' art): its ImageLabels are built ahead too, hidden and blank
+	const r = new Renderer(gui.make("Frame"), "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	r.reserve(Z.zombie, 8, 0, 0, 8);
+	const c0 = gui.stats.created;
+	while (r.warm(3) > 0);
+	const kids = r.layer.GetChildren();
+	const labels = kids.map(f => f.FindFirstChildOfClass("ImageLabel"));
+	check(
+		kids.length === 8 &&
+			gui.stats.created - c0 === 16 &&
+			labels.every(l => l !== undefined && l.Visible === false && !l.Image),
+		"a layer reserved with images: each sprite comes with its ImageLabel, hidden and blank",
+		`${kids.length} sprites, ${labels.filter(l => l !== undefined).length} ImageLabels, ${gui.stats.created - c0} Instances`,
+	);
+	const drawn = watch(() => {
+		r.beginFrame();
+		for (let i = 0; i < 8; i++) {
+			r.drawRect(cam, i * 40, 100, {
+				w: 32,
+				h: 32,
+				image: "rbxassetid://1",
+				rectX: i * 24,
+				rectY: 24,
+				rectW: 24,
+				rectH: 24,
+				zIndex: Z.zombie,
+			});
+		}
+		r.endFrame();
+	});
+	check(
+		drawn.created === 0 &&
+			labels.every(
+				(l, i) =>
+					l.Visible === true &&
+					l.Image === "rbxassetid://1" &&
+					l.ImageRectOffset.X === i * 24 &&
+					l.ImageRectOffset.Y === 24 &&
+					l.ImageRectSize.X === 24,
+			),
+		"...and a sheet cell drawn on it creates nothing and shows its picture and its cell",
+		`${drawn.created} created`,
+	);
 }
 
 // ================================================================ 5. the warm-up profile
@@ -504,11 +602,13 @@ for (const [label, ids] of [
 	S.state.town = false;
 	PW.reserveFightPool(S.r, 1920, 1080, zArt, sArt);
 	const c0 = gui.stats.created;
+	const images0 = gui.stats.byClass.ImageLabel ?? 0;
 	let frames = 0;
 	while (S.r.warm(PW.WARM_PER_FRAME) > 0) frames++;
 	frames++;
 	const warmed = S.r.poolSize();
 	const instances = gui.stats.created - c0;
+	const warmedImages = (gui.stats.byClass.ImageLabel ?? 0) - images0;
 	const reserved = new Map();
 	for (const f of S.r.layer.GetChildren()) reserved.set(f.ZIndex, (reserved.get(f.ZIndex) ?? 0) + 1);
 	const byClass0 = { ...gui.stats.byClass };
@@ -523,9 +623,9 @@ for (const [label, ids] of [
 		`${label}: the characters' art is ${label === "art" ? "live" : "off"}, and the profile follows it`,
 	);
 	check(
-		made("Frame") + made("UICorner") + made("UIStroke") === 0,
-		`${label}: on the warmed pool the fight creates no Frame, UICorner or UIStroke`,
-		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes`,
+		made("Frame") + made("UICorner") + made("UIStroke") + made("ImageLabel") === 0,
+		`${label}: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel`,
+		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes, ${made("ImageLabel")} images`,
 	);
 	const over = [...reserved].filter(([z, n]) => n > (shown.get(z) ?? 0) * 1.25 + 2);
 	check(
@@ -534,7 +634,7 @@ for (const [label, ids] of [
 		over.map(([z, n]) => `z ${z}: ${n} reserved, ${shown.get(z) ?? 0} shown`).join("; "),
 	);
 	console.log(
-		`       ${label}: ${warmed} sprites (${instances} Instances) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}; the fight then made ${made("ImageLabel")} ImageLabels (born with their picture)`,
+		`       ${label}: ${warmed} sprites (${instances} Instances, ${warmedImages} of them ImageLabels) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}`,
 	);
 }
 {
@@ -725,6 +825,231 @@ section("9) no write without a change");
 			/placeAt\(this\.aimPad, this\.padAt,/.test(body) &&
 			!/this\.(joyBase|aimPad)\.Position\s*=/.test(body),
 		"the stick's base and the aim pad are placed only when they move (Hud.updateTouch, every frame)",
+	);
+
+	// the audio listener follows the camera: a CFrame and an engine call only when the camera moved (L2)
+	const { audio } = require(join(SRC, "client/audio/audio.ts"));
+	const hadCFrame = globalThis.CFrame;
+	const hadVector3 = globalThis.Vector3;
+	const hadPcall = globalThis.pcall;
+	let calls = 0;
+	globalThis.pcall = (fn, ...a) => {
+		calls++;
+		try {
+			return [true, fn(...a)];
+		} catch (e) {
+			return [false, e];
+		}
+	};
+	let cframes = 0;
+	globalThis.CFrame = class {
+		constructor() {
+			cframes++;
+		}
+	};
+	globalThis.Vector3 = class {};
+	audio.started = true;
+	audio.setListener(1000, 2000);
+	const first = cframes;
+	for (let f = 0; f < 120; f++) audio.setListener(1000 + (f % 2) * 0.4, 2000);
+	const still = cframes - first;
+	for (let f = 1; f <= 60; f++) audio.setListener(1000 + f * 3, 2000);
+	const moving = cframes - first - still;
+	audio.started = false;
+	globalThis.CFrame = hadCFrame;
+	globalThis.Vector3 = hadVector3;
+	globalThis.pcall = hadPcall;
+	const items = loop.slice(
+		loop.indexOf("private drawItems("),
+		loop.indexOf("// ---", loop.indexOf("private drawItems(")),
+	);
+	check(
+		/if \(t >= GLINT_LEN\) continue;/.test(items) && !/t < GLINT_LEN \?/.test(items),
+		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (drawItems)",
+	);
+	check(
+		first === 1 && still === 0 && moving === 60 && calls === 61,
+		"the audio listener builds a CFrame and calls the engine only when the camera moved (still or creeping: never)",
+		`first ${first}, 120 still frames ${still}, 60 moving frames ${moving}; ${calls} engine calls`,
+	);
+}
+
+// ================================================================ 10. no garbage on the actor paths
+
+section("10) no garbage per frame on the actor paths (M4): option tables, colours, particle records");
+{
+	WA.overrideWorldArt({});
+	const C = globalThis.Color3;
+	const lerp = C.prototype.Lerp;
+	const fromRGB = C.fromRGB;
+	let built = 0;
+	C.prototype.Lerp = function (...a) {
+		built++;
+		return lerp.apply(this, a);
+	};
+	C.fromRGB = (...a) => {
+		built++;
+		return fromRGB(...a);
+	};
+	const r = new Renderer(gui.make("Frame"), "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	const opts = new Set();
+	const draw = r.drawRect.bind(r);
+	r.drawRect = (c, x, y, o) => {
+		opts.add(o);
+		return draw(c, x, y, o);
+	};
+	// 40 walkers of every type: 4 hit, 2 spitters winding up, one lit fuse; the hit flash fades 1 -> 0 over 60 frames
+	const horde = [];
+	for (let i = 0; i < 40; i++)
+		horde.push({ x: (i % 10) * 110 - 500, y: Math.floor(i / 10) * 140 - 250, a: i * 0.7, kind: 1 + (i % 5) });
+	const frame = f => {
+		r.beginFrame();
+		for (const [i, z] of horde.entries()) {
+			z.x += Math.cos(z.a) * 0.5;
+			const flash = i < 4 ? 1 - (f % 60) / 60 : 0;
+			const windup = i === 6 || i === 11 ? (f % 50) / 5 : 0;
+			HV.drawZombie(
+				r,
+				cam,
+				z.x,
+				z.y,
+				z.a,
+				1,
+				z.kind,
+				flash,
+				1,
+				f * 0.09 + i,
+				Z.zombie,
+				windup,
+				false,
+				false,
+				i === 7,
+			);
+		}
+		r.endFrame();
+	};
+	for (let f = 0; f < 300; f++) frame(f);
+	built = 0;
+	opts.clear();
+	const w = watch(() => {
+		for (let f = 300; f < 600; f++) frame(f);
+	});
+	check(
+		built === 0,
+		"300 frames of a walking horde, a flash fading and spitters winding up: not one Color3 built once warm",
+		`${built} Color3`,
+	);
+	check(
+		opts.size() <= 4,
+		"every walker is drawn from the same 4 option tables (feet, arms, body, head)",
+		`${opts.size()}`,
+	);
+	check(
+		w.rewrites === 0,
+		"and no property is written again with the value it had (a fresh Color3 each frame was an engine write each frame)",
+		`${(w.writes / 300).toFixed(0)} writes/frame, ${w.rewrites} same-value rewrites`,
+	);
+	C.prototype.Lerp = lerp;
+	C.fromRGB = fromRGB;
+
+	// blood: a fight's sprays and splats reuse their records
+	const { ParticleSystem } = require(join(SRC, "client/systems/particles.ts"));
+	const ps = new ParticleSystem();
+	const seen = new Set();
+	let fresh = 0;
+	let sprayed = 0;
+	const fight = f => {
+		if (f % 6 === 0) {
+			ps.bloodBurst(f % 300, 40, 12, "zombie", 0.5);
+			sprayed += 12;
+		}
+		if (f % 9 === 0) {
+			ps.debrisBurst(f % 200, 10, 6, COLORS.fence);
+			sprayed += 6;
+		}
+		ps.update(1 / 60);
+		for (const p of ps.active()) if (!seen.has(p)) (seen.add(p), fresh++);
+		for (const d of ps.decalRecords()) if (!seen.has(d)) (seen.add(d), fresh++);
+	};
+	for (let f = 0; f < 1200; f++) fight(f);
+	fresh = 0;
+	sprayed = 0;
+	for (let f = 1200; f < 2400; f++) fight(f);
+	// a new record only when the fight reaches a new peak of live particles (the free list grows to it, once)
+	check(
+		fresh <= 12,
+		"20 s of a fight's blood and debris after a warm-up: records reused (free list, decal ring rewritten in place)",
+		`${fresh} new records for ${sprayed} particles sprayed; ${ps.active().length} particles, ${ps.decalRecords().length} decals live`,
+	);
+
+	const loop = readFileSync(join(SRC, "client", "gameLoop.ts"), "utf8");
+	const shadow = loop.slice(loop.indexOf("private shadowOffset("), loop.indexOf("private drawDecals("));
+	check(
+		/return out;/.test(shadow) && !/return \{/.test(shadow),
+		"GameLoop.shadowOffset answers in one scratch, like drawKit's (a table per solid, item and actor before)",
+	);
+}
+
+// ================================================================ 11. the canopy asks a grid
+
+section("11) a tree's canopy asks the cells under its crown, not the whole horde (L6)");
+{
+	const { BodyGrid } = require(join(SRC, "client/view/bodyGrid.ts"));
+	const grid = new BodyGrid();
+	let seed = 11;
+	const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+	let mismatch = "";
+	let asked = 0;
+	for (let frame = 0; frame < 40 && mismatch === ""; frame++) {
+		// a horde around a point of the town, some bodies exactly on a cell's edge, and a few outside the map
+		const bodies = [];
+		for (let i = 0; i < 150; i++) {
+			const edge = i % 17 === 0;
+			bodies.push({
+				x: edge ? 256 * (30 + (i % 7)) : 7000 + (rnd() - 0.5) * 3000 - (i % 23 === 0 ? 9000 : 0),
+				y: edge ? 256 * (40 + (i % 5)) : 10000 + (rnd() - 0.5) * 2000,
+			});
+		}
+		grid.clear();
+		for (const b of bodies) grid.add(b.x, b.y);
+		for (let t = 0; t < 60; t++) {
+			const x = 7000 + (rnd() - 0.5) * 3400;
+			const y = 10000 + (rnd() - 0.5) * 2400;
+			const r = 60 + rnd() * 200;
+			const linear = bodies.some(b => (b.x - x) * (b.x - x) + (b.y - y) * (b.y - y) < r * r);
+			asked++;
+			if (grid.anyWithin(x, y, r) !== linear) mismatch = `(${x.toFixed(0)}, ${y.toFixed(0)}) r ${r.toFixed(0)}`;
+		}
+	}
+	check(
+		mismatch === "",
+		"the grid answers exactly as the walk over the whole horde did",
+		`${asked} questions ${mismatch}`,
+	);
+	const fill = () => {
+		grid.clear();
+		for (let i = 0; i < 150; i++) grid.add(7000 + (i % 15) * 90, 10000 + Math.floor(i / 15) * 90);
+		grid.anyWithin(7400, 10300, 120);
+	};
+	fill();
+	const cellArrays = grid.arrays.length;
+	for (let f = 0; f < 60; f++) fill();
+	check(
+		grid.size() === 150 && grid.arrays.length === cellArrays,
+		"refilled every frame, it keeps its cells' arrays (none made after the first fill)",
+		`${grid.arrays.length} arrays`,
+	);
+	const loop = readFileSync(join(SRC, "client", "gameLoop.ts"), "utf8");
+	const canopy = loop.slice(
+		loop.indexOf("private updateCanopy("),
+		loop.indexOf("// ---", loop.indexOf("private updateCanopy(")),
+	);
+	check(
+		/this\.underCanopy\.anyWithin\(cx, cy, r\)/.test(canopy) && !/for \(const z of this\.zombies\)/.test(canopy),
+		"GameLoop.updateCanopy asks the grid, filled once a frame (it walked every zombie for every tree)",
 	);
 }
 

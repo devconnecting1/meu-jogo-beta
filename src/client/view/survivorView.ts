@@ -150,6 +150,8 @@ function hand(f: number, l: number): void {
  * picked by (the hands are baked into it, charSheets.GRIP_HANDS / SWINGS).
  */
 const WEAPON = { row: 0, f: 0, l: 0, rel: 0, grip: 0, swinging: false };
+/** WEAPON.row of empty hands: no weapon cell is drawn (a rider, VEI-05; a weapon put away, ITM-06) */
+const NO_WEAPON = -1;
 
 function holdWeapon(row: number, f: number, l: number, rel: number, grip: number, swinging: boolean): void {
 	WEAPON.row = row;
@@ -160,13 +162,6 @@ function holdWeapon(row: number, f: number, l: number, rel: number, grip: number
 	WEAPON.swinging = swinging;
 }
 
-/** WEAPON.row when nothing is held: drawStandingArt draws no weapon cell */
-const NO_WEAPON_ROW = -1;
-
-/** the art's pose of empty hands (a weapon put away, the bars of a vehicle): the body's `grip`, and no weapon cell */
-function holdNothing(grip: number): void {
-	holdWeapon(NO_WEAPON_ROW, 0, 0, 0, grip, false);
-}
 
 /**
  * A survivor standing or crawling, weapon in hand, with their drop shadow.
@@ -212,13 +207,16 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	const wasSwinging = trail.drawn;
 	trail.drawn = !look.riding && !look.holstered && w.kind === WeaponKind.Melee && look.swinging;
 	if (look.riding) {
-		// VEI-05: both hands on the bars, nothing in them (the art has no bars grip: its hands straight ahead)
-		if (art) holdNothing(Grip.Pistol);
+		// VEI-05: both hands on the bars, nothing in them
 		hand(RIDE_GRIP_F, -RIDE_GRIP_L);
 		hand(RIDE_GRIP_F, RIDE_GRIP_L);
+		// the pixel art: no weapon cell (WEAPON is a scratch: left alone it would hold the last survivor's weapon),
+		// and the sheets bake no riding pose, so the idle grip: both hands out at the bars' width (±14 u, the bars ±13)
+		if (art) holdWeapon(NO_WEAPON, 0, 0, 0, Grip.Idle, false);
 	} else if (look.holstered) {
-		// ITM-06: the weapon put away -- empty hands at rest, where the blade's idle hold keeps them
-		if (art) holdNothing(Grip.Idle);
+		// ITM-06: the weapon put away -- empty hands at rest, where the blade's idle hold keeps them, and (the pixel
+		// art) no weapon cell
+		if (art) holdWeapon(NO_WEAPON, 0, 0, 0, Grip.Idle, false);
 		hand(IDLE_HAND_F, IDLE_HAND_L);
 		hand(10, -14);
 	} else if (w.kind === WeaponKind.Melee) {
@@ -374,10 +372,10 @@ const POISON_VEIL = 0.5;
 const FLASH_FILL = 0.6;
 
 /**
- * The pixel-art survivor (ART-09), from the weapon and the grip the pose above decided: the weapon (z), then the
- * whole body -- boots, torso, what the outfit carries, both arms with the hands on that grip, the head or hat -- as
- * one cell (z + 1), the poison veil (z + 2), and a hit's flash and red outline (z + 3). The weapon is snapped to the
- * body's texel grid (charArt.snapped).
+ * The pixel-art survivor (ART-09), from the weapon and the grip the pose above decided: the weapon (z; a rider has
+ * none), then the whole body -- boots, torso, what the outfit carries, both arms with the hands on that grip, the
+ * head or hat -- as one cell (z + 1), the poison veil (z + 2), and a hit's flash and red outline (z + 3). The weapon
+ * is snapped to the body's texel grid (charArt.snapped).
  */
 function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: number, flashTo: Color3): void {
 	const a = look.angle;
@@ -389,7 +387,7 @@ function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: nu
 	const col = columnOf(cam, a);
 	const wf = WEAPON.f;
 	const wl = WEAPON.l;
-	if (WEAPON.row !== NO_WEAPON_ROW) {
+	if (WEAPON.row !== NO_WEAPON) {
 		drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
 	}
 	const outfit = look.outfit;

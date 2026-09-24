@@ -8,7 +8,8 @@
  *                 into looking like a different species than you (same silhouette, hands, weapon, feet, shadow)
  *   the plate     one pooled `AllyPlate` per userId: name and level, a thin HP bar while they are hurt, and the
  *                 revive ring plus bleed-out countdown while they are down — readable in the dark (MP-08)
- *   the light     every standing ally lights the night map for everyone, not just for themselves (LUZ-02/MP-08)
+ *   the light     every ally lights the night map for everyone, not just for themselves (LUZ-02/MP-08), with the
+ *                 shape the local survivor's light has, their flashlight's cone included (LUZ-04)
  *   the cosmetics what they bought, as the server replicated it (MON-04): the outfit rides the same `drawSurvivor`,
  *                 and the pet is a `PetFollower` per ally that follows where THIS client draws them — it is never
  *                 an entity, never on the wire beyond the one byte that says which animal it is
@@ -17,14 +18,15 @@
  * snapshot for RETIRE_S, and the `SurvivorLook` is one scratch object refilled per ally.
  */
 import { Camera, ViewRect } from "shared/engine/camera";
-import { LightSource, Renderer } from "shared/engine/renderer";
+import { Renderer } from "shared/engine/renderer";
+import * as SurvivorLight from "shared/sim/survivorLight";
+import { FLASHLIGHT_REACH, SURVIVOR_LIGHT_R } from "shared/sim/survivorLight";
 import { RemotePlayerView } from "../net/netTypes";
 import { FEET_CYCLE_PER_UNIT } from "../net/snapshotBuffer";
 import { AllyPlate } from "./allyPlate";
 import { circleInView, ease } from "./drawKit";
 import { FootCycle } from "./footsteps";
 import {
-	SURVIVOR_LIGHT_R,
 	SURVIVOR_R,
 	SwingTrail,
 	SurvivorLook,
@@ -33,6 +35,7 @@ import {
 	drawSurvivor,
 	weaponById,
 } from "./survivorView";
+import { addSurvivorLight, LightList } from "./lightList";
 import { meleeReach } from "shared/data/weapons";
 import { WEAPON_HOLSTERED } from "shared/net/protocol";
 import { PetLook, petFlies } from "shared/data/cosmetics";
@@ -52,8 +55,6 @@ const CULL_MARGIN = 120;
 const WALK_SPEED = 8;
 /** how fast the feet amplitude follows that decision; the same constant the local survivor uses */
 const AMP_EASE = 0.25;
-/** where an ally's own light sits between "fully lit" and the falloff, same as the local survivor's */
-const LIGHT_INNER = 0.4;
 /** culling radius of a pet: the eagle's open wings are the widest thing any of them draws */
 const PET_CULL = 60;
 
@@ -169,11 +170,19 @@ export class PlayersView {
 		this.retire(clock);
 	}
 
-	/** every standing ally's 250 u light, so the night map is lit by the whole group (§5.3, MP-08) */
-	collectLights(list: ReadonlyArray<RemotePlayerView>, out: Array<LightSource>): void {
+	/**
+	 * Every ally's light, so the night map is lit by the whole group (§5.3, MP-08), by the shape and the rule the
+	 * local survivor's is drawn with (LUZ-04, lightList.addSurvivorLight): whoever carries a light
+	 * (`SurvivorLight.carriesLight`: the dead do not, the downed do, as on the server) lights their 250 u circle, and
+	 * the flashlight's cone along their aim when the server's `PlayerFlag.Flashlight` says they hold one.
+	 *
+	 * What the wire does not say is not drawn: a torch, night vision or Nocturnal widen the circle on the server
+	 * (`survivorLightRadius`), and the record has no bit left for it (docs/DESIGN_RULES.md LUZ-04, pending).
+	 */
+	collectLights(list: ReadonlyArray<RemotePlayerView>, out: LightList): void {
 		for (const rp of list) {
-			if (rp.downed) continue;
-			out.push({ x: rp.x, y: rp.y, r: SURVIVOR_LIGHT_R, inner: LIGHT_INNER });
+			if (!SurvivorLight.carriesLight(rp)) continue;
+			addSurvivorLight(out, rp.x, rp.y, rp.angle, SURVIVOR_LIGHT_R, rp.flashlight ? FLASHLIGHT_REACH : undefined);
 		}
 	}
 

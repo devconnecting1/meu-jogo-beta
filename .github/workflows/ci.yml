@@ -76,6 +76,9 @@ jobs:
       - name: Zombie awareness marks (shape + colour, LEG-03 contrast, never over a survivor, Reduce Motion, no churn)
         run: npm run test:awareness
 
+      - name: Night light map (cost per frame, High looks the same, lightAt agrees, Low never tears, Auto hysteresis)
+        run: npm run test:light
+
       - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
         run: npm run test:flinch
 

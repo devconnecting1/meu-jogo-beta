@@ -90,6 +90,8 @@ export interface SettingsData {
 	/** left-handed: the move stick and the aim/fire pad swap sides (shared/engine/input.ts) */
 	mirror: boolean;
 	langType: number;
+	/** Settings › Graphics: 0 Auto (by the frame time), 1 High, 2 Low (client/view/quality.ts) */
+	graphics: number;
 }
 
 /** every field of SettingsData (the order is irrelevant; `carrySettings` walks it) */
@@ -104,6 +106,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof SettingsData> = [
 	"rightPos",
 	"mirror",
 	"langType",
+	"graphics",
 ];
 
 /**
@@ -136,6 +139,7 @@ export function defaultSettings(): SettingsData {
 		rightPos: 0.5,
 		mirror: false,
 		langType: 0,
+		graphics: 0,
 	};
 }
 
@@ -771,6 +775,7 @@ function readSettings(v: unknown, fb: SettingsData): SettingsData {
 		rightPos: readReal(r.rightPos, fb.rightPos, 0, 1),
 		mirror: readBool(r.mirror, fb.mirror),
 		langType: readInt(r.langType, fb.langType, 0, 3),
+		graphics: readInt(r.graphics, fb.graphics, 0, 2),
 	};
 }
 

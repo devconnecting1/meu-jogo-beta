@@ -785,7 +785,11 @@ function mountRun(enterWorld = true): void {
 		}
 		admin?.beforeUpdate(dt);
 		gameAudio.beforeUpdate(refs);
+		// MicroProfiler labels (docs/research/performance.md): pz.update holds pz.net and pz.mirror, pz.render pz.world
+		// and pz.light (client/gameLoop.ts)
+		debug.profilebegin("pz.update");
 		loop.update(dt);
+		debug.profileend();
 		if (alive) trackAfter();
 		gameAudio.afterUpdate(refs, dt);
 		admin?.afterUpdate(dt);
@@ -802,9 +806,13 @@ function mountRun(enterWorld = true): void {
 		// the listener follows the camera, and whatever is still queued in refs.fx is played before
 		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
 		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);
+		debug.profilebegin("pz.render");
 		loop.render();
+		debug.profileend();
 		admin?.afterRender(dt);
+		debug.profilebegin("pz.hud");
 		pushHud();
+		debug.profileend();
 		if (ctx.phase === "dead" && !deathShown) openDeath();
 		updateDawnWait(dt);
 	});
