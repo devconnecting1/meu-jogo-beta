@@ -92,6 +92,11 @@ export interface SurvivorLook {
 	 * (client/view/vehicleView.ts). The body, the outfit and the layers are the standing survivor's, untouched.
 	 */
 	riding: boolean;
+	/**
+	 * (DESIGN_RULES ITM-06) The weapon is put away: nothing in the hands, both at rest beside the body -- the local
+	 * survivor from `PlayerState.holstered`, an ally from the WEAPON_HOLSTERED byte of the wire (protocol.ts note 20).
+	 */
+	holstered: boolean;
 }
 
 /** where a rider's hands hold the bars, in the body's frame (both vehicles put their bars there) */
@@ -118,6 +123,7 @@ export function createLook(): SurvivorLook {
 		clock: 0,
 		outfit: OutfitLook.None,
 		riding: false,
+		holstered: false,
 	};
 }
 
@@ -152,6 +158,14 @@ function holdWeapon(row: number, f: number, l: number, rel: number, grip: number
 	WEAPON.rel = rel;
 	WEAPON.grip = grip;
 	WEAPON.swinging = swinging;
+}
+
+/** WEAPON.row when nothing is held: drawStandingArt draws no weapon cell */
+const NO_WEAPON_ROW = -1;
+
+/** the art's pose of empty hands (a weapon put away, the bars of a vehicle): the body's `grip`, and no weapon cell */
+function holdNothing(grip: number): void {
+	holdWeapon(NO_WEAPON_ROW, 0, 0, 0, grip, false);
 }
 
 /**
@@ -196,11 +210,17 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	const w = look.weapon;
 	handCount = 0;
 	const wasSwinging = trail.drawn;
-	trail.drawn = !look.riding && w.kind === WeaponKind.Melee && look.swinging;
+	trail.drawn = !look.riding && !look.holstered && w.kind === WeaponKind.Melee && look.swinging;
 	if (look.riding) {
-		// VEI-05: both hands on the bars, nothing in them
+		// VEI-05: both hands on the bars, nothing in them (the art has no bars grip: its hands straight ahead)
+		if (art) holdNothing(Grip.Pistol);
 		hand(RIDE_GRIP_F, -RIDE_GRIP_L);
 		hand(RIDE_GRIP_F, RIDE_GRIP_L);
+	} else if (look.holstered) {
+		// ITM-06: the weapon put away -- empty hands at rest, where the blade's idle hold keeps them
+		if (art) holdNothing(Grip.Idle);
+		hand(IDLE_HAND_F, IDLE_HAND_L);
+		hand(10, -14);
 	} else if (w.kind === WeaponKind.Melee) {
 		const reach = look.swingReach;
 		if (look.swinging) {
@@ -369,7 +389,9 @@ function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: nu
 	const col = columnOf(cam, a);
 	const wf = WEAPON.f;
 	const wl = WEAPON.l;
-	drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
+	if (WEAPON.row !== NO_WEAPON_ROW) {
+		drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
+	}
 	const outfit = look.outfit;
 	const row = WEAPON.swinging
 		? swingRow(outfit, WEAPON.rel)

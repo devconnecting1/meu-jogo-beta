@@ -840,6 +840,408 @@ section("A7. every weapon can be fed in play: its ammo, oil or charge comes from
 	);
 });
 
+section(
+	"A8. ITM-06: the weapon put away -- empty hands, by key, tile, D-pad and Bag; the server refuses every attack",
+	() => {
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const REP = require(join(SRC, "server/net/replication.ts"));
+		const AXE = WEAPONS.find(w => w.name === "Axe").id;
+		const PISTOL = WEAPONS.find(w => w.name === "Pistol").id;
+		/** the client refs Combat.update needs (MP_PHASE 2: the predicted path), with no server attached: the local rule */
+		function hands(save) {
+			const player = Ply.createPlayer(save, 1000, 1000);
+			return {
+				world: W.createWorld(4000, 4000),
+				players: [player],
+				player,
+				save,
+				input: new InputState(),
+				zombies: [],
+				bosses: [],
+				bullets: [],
+				pendingPlace: -1,
+				fx: [],
+				onMessage: () => {},
+				onExp: () => {},
+			};
+		}
+		const save = bareSave();
+		save.invenWeapon[AXE] = 1;
+		save.invenWeapon[PISTOL] = 1;
+		save.ammoNormal = 50;
+		const refs = hands(save);
+		const combat = new CCombat.Combat();
+		const frame = (o = {}) => {
+			refs.input.beginFrame();
+			Object.assign(refs.input, o);
+			combat.update(refs, 1 / 60);
+		};
+		const keyOf = id => weaponKeyOrder(save, refs.player.weapon.pointer).indexOf(id);
+		const away = () => refs.player.holstered === true;
+
+		// 1. the key of the weapon in hand, pressed again, puts it away; again draws it (the hotbar tile writes the same
+		// field as the key: test:hud §3; the Bag's Put away calls the same chooseWeapon: test:backpack §2b)
+		frame({ weaponSlotPressed: keyOf(AXE) });
+		check(refs.player.weapon.pointer === AXE && !away(), "the Axe's key draws the Axe");
+		frame({ weaponSlotPressed: keyOf(AXE) });
+		check(
+			away() && refs.player.weapon.pointer === AXE && save.equipWeapon === AXE,
+			"its key again PUTS IT AWAY: empty hands, the Axe still the one chosen (the save does not move)",
+		);
+		frame({ weaponSlotPressed: keyOf(AXE) });
+		check(!away() && refs.player.weapon.pointer === AXE, "...and once more draws it back");
+		frame({ weaponSlotPressed: keyOf(AXE) });
+		frame({ weaponSlotPressed: keyOf(PISTOL) });
+		check(
+			!away() && refs.player.weapon.pointer === PISTOL && save.equipWeapon === PISTOL,
+			"put away, choosing ANOTHER weapon switches to it and draws it",
+		);
+		{
+			// the save that chose nothing (-1): the blade is in the hand, and its key toggles it like any other
+			const blank = bareSave();
+			blank.equipWeapon = -1;
+			const r0 = hands(blank);
+			// the hand the server arms for -1 (combat.ts followServerWeapon, server/sim/combat.ts weaponOf): the blade
+			r0.player.weapon.pointer = 0;
+			CCombat.chooseWeapon(r0, 0);
+			const away0 = r0.player.holstered === true && blank.equipWeapon === -1;
+			CCombat.chooseWeapon(r0, 0);
+			check(
+				away0 && r0.player.holstered !== true && blank.equipWeapon === -1,
+				"equipWeapon -1 (the blade in hand): the blade's key puts it away and draws it, without a switch",
+			);
+		}
+
+		// 2. nothing attacks with empty hands: no sweep, no predicted shot, the magazine untouched
+		CCombat.chooseWeapon(refs, AXE);
+		CCombat.chooseWeapon(refs, AXE);
+		let swung = false;
+		for (let i = 0; i < 30; i++) {
+			frame({ attackHeld: true, attackPressed: i === 0 });
+			swung ||= refs.player.swingerActive;
+		}
+		check(away() && !swung, "the Axe put away: the attack button held for 0.5 s sweeps nothing (predicted)");
+		CCombat.chooseWeapon(refs, PISTOL);
+		refs.player.weapon.ammoCount = 5;
+		CCombat.chooseWeapon(refs, PISTOL);
+		for (let i = 0; i < 30; i++) frame({ attackHeld: true, attackPressed: true });
+		check(
+			away() && refs.player.weapon.ammoCount === 5,
+			"the Pistol put away: a trigger pulled every frame fires no round (predicted)",
+			`mag ${refs.player.weapon.ammoCount}`,
+		);
+		CCombat.chooseWeapon(refs, PISTOL);
+		for (let i = 0; i < 4; i++) frame({ attackHeld: true, attackPressed: true });
+		check(!away() && refs.player.weapon.ammoCount < 5, "drawn again, the same trigger fires");
+
+		// 3. the pad's D-pad: the next / previous weapon, drawn -- and it never puts one away
+		const order = weaponKeyOrder(save, refs.player.weapon.pointer);
+		CCombat.chooseWeapon(refs, order[0]);
+		frame({ weaponCycle: 1 });
+		check(refs.player.weapon.pointer === order[1] && !away(), "D-pad right: the next weapon of the keys' list");
+		frame({ weaponCycle: -1 });
+		check(refs.player.weapon.pointer === order[0], "D-pad left: back to the previous");
+		frame({ weaponCycle: -1 });
+		check(refs.player.weapon.pointer === order[order.length - 1], "left from the first wraps to the last");
+		CCombat.chooseWeapon(refs, refs.player.weapon.pointer);
+		check(away(), "(put away by its key)");
+		frame({ weaponCycle: 1 });
+		check(refs.player.weapon.pointer === order[0] && !away(), "put away, the D-pad takes the next weapon out");
+		{
+			const lone = bareSave();
+			const r1 = hands(lone);
+			const c1 = new CCombat.Combat();
+			r1.input.weaponCycle = 1;
+			c1.update(r1, 1 / 60);
+			const drawnAlone = r1.player.holstered !== true && r1.player.weapon.pointer === 0;
+			CCombat.chooseWeapon(r1, 0);
+			r1.input.beginFrame();
+			r1.input.weaponCycle = 1;
+			c1.update(r1, 1 / 60);
+			check(
+				drawnAlone && r1.player.holstered !== true,
+				"with the blade alone, the D-pad keeps it drawn, and takes it out of the holster -- it never puts one away",
+			);
+		}
+		// no construction on the cursor: its clicks are the builder's, and so are the keys
+		CCombat.chooseWeapon(refs, PISTOL);
+		refs.pendingPlace = 3;
+		frame({ weaponSlotPressed: keyOf(PISTOL), weaponCycle: 1 });
+		check(
+			!away() && refs.player.weapon.pointer === PISTOL,
+			"with a construction on the cursor no key moves the hands",
+		);
+		refs.pendingPlace = -1;
+
+		// 4. a body that dies drops the holster: the next one stands up drawn
+		CCombat.chooseWeapon(refs, PISTOL);
+		refs.player.dead = true;
+		frame();
+		check(!away(), "a dead body drops the holster (every body stands up drawn)");
+		CCombat.chooseWeapon(refs, PISTOL);
+		check(!away(), "and a dead body cannot put one away: the key on a corpse does nothing");
+		refs.player.dead = false;
+
+		// 5. the prediction of the verbs (client/net/bagPrediction.ts) and the server's bag laid over it
+		{
+			const IK = P.IntentKind;
+			const body = Ply.createPlayer(save, 0, 0);
+			const cursor = { pendingPlace: -1, player: body };
+			check(
+				BP.predictVerb(save, cursor, IK.Holster, P.HOLSTER_AWAY, body) && body.holstered === true,
+				"Holster(put away) is predicted at once on the body",
+			);
+			check(
+				!BP.predictVerb(save, cursor, IK.Holster, P.HOLSTER_AWAY, body),
+				"...and not again (nothing to send: it is already away)",
+			);
+			check(
+				!BP.predictVerb(save, { pendingPlace: -1 }, IK.Holster, P.HOLSTER_DRAW),
+				"the lobby's cursor has no hands: nothing is predicted or sent",
+			);
+			const entries = [{ kind: IK.Holster, arg: P.HOLSTER_AWAY, nonce: 5, seq: 0, at: 0 }];
+			const older = SAVE.readBag(SAVE.bagOf(save, -1, 4, 0, false));
+			BP.rebase(save, cursor, older, entries, 0.1);
+			check(
+				body.holstered === true && entries.length === 1,
+				"a bag from before the verb keeps the prediction on top",
+			);
+			const answer = SAVE.readBag(SAVE.bagOf(save, -1, 5, 0, true));
+			BP.rebase(save, cursor, answer, entries, 0.2);
+			check(body.holstered === true && entries.length === 0, "the bag that answers it (holster 1) retires it");
+			entries.push({ kind: IK.Holster, arg: P.HOLSTER_DRAW, nonce: 6, seq: 0, at: 0.3 });
+			body.holstered = undefined;
+			BP.rebase(save, cursor, SAVE.readBag(SAVE.bagOf(save, -1, 6, 0, false)), entries, 0.4);
+			check(body.holstered !== true && entries.length === 0, "the draw, answered with holster 0, stays drawn");
+			entries.push({ kind: IK.Holster, arg: P.HOLSTER_AWAY, nonce: 7, seq: 0, at: 0.5 });
+			body.holstered = true;
+			BP.rebase(save, cursor, SAVE.readBag(SAVE.bagOf(save, -1, 7, 0, false)), entries, 0.6);
+			check(
+				body.holstered !== true && entries.length === 0,
+				"a put away the server refused (its bag answers with holster 0) is undone",
+			);
+			body.holstered = true;
+			check(
+				BP.predictVerb(save, cursor, IK.SwitchWeapon, AXE, body) && body.holstered === undefined,
+				"a predicted SwitchWeapon draws too (the server's switch does)",
+			);
+			body.dead = true;
+			check(
+				!BP.predictVerb(save, cursor, IK.Holster, P.HOLSTER_AWAY, body),
+				"no Holster predicted for a dead body",
+			);
+			body.dead = false;
+			// replayed in order over a bag that says "away": the switch after it draws
+			const replay = [
+				{ kind: IK.Holster, arg: P.HOLSTER_AWAY, nonce: 9, seq: 0, at: 1 },
+				{ kind: IK.SwitchWeapon, arg: PISTOL, nonce: 10, seq: 0, at: 1 },
+			];
+			BP.rebase(save, cursor, SAVE.readBag(SAVE.bagOf(save, -1, 8, 0, true)), replay, 1.1);
+			check(
+				body.holstered === undefined && save.equipWeapon === PISTOL,
+				"replayed in order (Holster away, then a switch), the hands end drawn on the Pistol",
+			);
+		}
+
+		// 6. the SERVER: the Holster verb, and every attack refused while the weapon is away
+		function rig(weaponId) {
+			const sim = new ServerSimulation({
+				world: W.serverWorld(W.createWorld(8000, 8000)),
+				clock: new WorldClock({ day: 1, dayTime: 12 }),
+				zombies: true,
+				interactive: true,
+			});
+			const s = bareSave();
+			s.invenWeapon[weaponId] = 1;
+			s.invenWeapon[PISTOL] = 1;
+			s.equipWeapon = weaponId;
+			s.ammoNormal = 500;
+			const sp = PL.createServerPlayer(
+				{ slot: 0, userId: 77, name: "hands" },
+				s,
+				3000,
+				3000,
+				sim.tick,
+				sim.simHz,
+			);
+			sim.add(sp);
+			sp.state.x = 3000;
+			sp.state.y = 3000;
+			sp.state.godMode = true;
+			const shots = [];
+			sim.onFx = e => {
+				if (e.t === P.FxType.Shot) shots.push(e);
+			};
+			const outcomes = [];
+			sim.onBackpack = (_sp, o) => outcomes.push(o);
+			let seq = 0;
+			let nonce = 0;
+			const r = {
+				sim,
+				sp,
+				shots,
+				outcomes,
+				verb(kind, arg) {
+					nonce += 1;
+					sim.queueIntent(sp.slot, P.decodeIntentMessage(P.encodeIntentArgs(kind, seq + 1, arg, nonce)));
+				},
+				/** a zombie right in front, far too tough to fall */
+				zombie(d = 50) {
+					const z = createZombie(1, sp.state.x + d, sp.state.y, 1);
+					z.hp = 1e9;
+					z.hpMax = 1e9;
+					sim.horde.zombies.push(z);
+					return z;
+				},
+				/** one command through the real wire; `at` is what it aims at. Returns whether a sweep was in the air */
+				tick(o = {}) {
+					seq += 1;
+					const t = o.at;
+					const aim = t !== undefined ? Math.atan2(t.y - sp.state.y, t.x - sp.state.x) : 0;
+					const cmd = P.makeCommand(
+						seq,
+						o.mx ?? 0,
+						0,
+						aim,
+						o.held ? P.HeldBit.Attack : 0,
+						P.packEdges(o.press ? 1 : 0, 0, 0, o.reload ? 1 : 0),
+					);
+					PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
+					sim.step();
+					return sp.state.swingerActive;
+				},
+				/** `seconds` of commands; true when any of them had a sweep in the air */
+				run(seconds, o = {}) {
+					let sweep = false;
+					const n = Math.round(seconds * CFG.SIM_HZ);
+					for (let i = 0; i < n; i++) if (r.tick(typeof o === "function" ? o(i) : o)) sweep = true;
+					return sweep;
+				},
+			};
+			for (let i = 0; i < 3; i++) r.tick();
+			return r;
+		}
+		const IK = P.IntentKind;
+		{
+			const r = rig(AXE);
+			const z = r.zombie();
+			r.verb(IK.Holster, P.HOLSTER_AWAY);
+			r.tick();
+			check(r.sp.state.holstered === true, "server: Holster(put away) puts the Axe away in the tick it lands");
+			check(
+				r.outcomes.some(o => o.kind === "holstered" && o.away === true) && r.sp.save.equipWeapon === AXE,
+				"...answered as `holstered`, and the save still holds the Axe (nothing of it is saved)",
+			);
+			const hp0 = z.hp;
+			const sweptAway = r.run(1, i => ({ held: true, press: i % 6 === 0, at: z }));
+			check(
+				z.hp === hp0 && !sweptAway,
+				"server: 1 s of the attack held and pressed with the Axe put away -- no sweep, the zombie untouched",
+				`hp ${hp0 - z.hp} taken`,
+			);
+			check(
+				REP.playerBlockOf(r.sp).weapon === P.WEAPON_HOLSTERED,
+				"everyone else sees empty hands: the record's weapon byte is WEAPON_HOLSTERED",
+			);
+			// walking still works (the hands are empty, not the feet)
+			const x0 = r.sp.state.x;
+			r.run(0.5, { mx: 1 });
+			check(r.sp.state.x > x0 + 40, "put away, the survivor still walks", `${(r.sp.state.x - x0).toFixed(1)} u`);
+			r.verb(IK.Holster, P.HOLSTER_DRAW);
+			r.tick();
+			check(
+				r.sp.state.holstered !== true && REP.playerBlockOf(r.sp).weapon === AXE,
+				"Holster(draw): the Axe is out, and everyone sees it",
+			);
+			const hp1 = z.hp;
+			const swept = r.run(1, { held: true, press: true, at: z });
+			check(swept && z.hp < hp1, "drawn, the same button sweeps and the zombie is cut", `hp ${hp1 - z.hp} taken`);
+		}
+		{
+			const r = rig(PISTOL);
+			const z = r.zombie(120);
+			r.verb(IK.Holster, P.HOLSTER_AWAY);
+			r.tick();
+			const mag = r.sp.state.weapon.ammoCount;
+			r.run(1, i => ({ held: true, press: true, reload: i === 10, at: z }));
+			check(
+				r.shots.length === 0 && r.sp.state.weapon.ammoCount === mag && !r.sp.state.weapon.reloading,
+				"server: the Pistol put away -- 60 trigger pulls and an R fire nothing, reload nothing",
+				`${r.shots.length} shots, mag ${mag} -> ${r.sp.state.weapon.ammoCount}`,
+			);
+			// choosing a weapon draws it (SwitchWeapon), even the one in the holster
+			r.verb(IK.SwitchWeapon, PISTOL);
+			r.tick();
+			check(
+				r.sp.state.holstered !== true,
+				"server: SwitchWeapon draws the weapon it chooses (here the same Pistol)",
+			);
+			r.run(0.5, { held: true, press: true, at: z });
+			check(r.shots.length > 0, "and the Pistol fires again", `${r.shots.length} shots`);
+		}
+		{
+			// a sweep cut short by putting the blade away stops there, and pays its cadence: out and away again never
+			// restarts a swing early
+			const r = rig(AXE);
+			r.tick({ held: true, press: true });
+			const midSwing = r.tick({ held: true });
+			r.verb(IK.Holster, P.HOLSTER_AWAY);
+			const after = r.tick({ held: true });
+			check(midSwing && !after, "server: putting the Axe away mid-sweep stops the blade there");
+			r.run(0.1);
+			r.verb(IK.Holster, P.HOLSTER_DRAW);
+			let again = -1;
+			for (let i = 0; i < 180 && again < 0; i++) if (r.tick({ held: true, press: i === 0 })) again = i;
+			const cd = Math.round(WEAPONS[AXE].cooldown * CFG.SIM_HZ);
+			check(
+				again >= cd - Math.round(0.1 * CFG.SIM_HZ) - 2,
+				"...and drawn back 0.1 s later, the next sweep still waits for the cadence the cut one owed",
+				`next sweep after ${again} ticks; cadence ${cd}`,
+			);
+		}
+		{
+			// rate: put away and drawn run on the weapon switch's own clock (0.1 s); a dead survivor's verb is refused;
+			// the same state twice is answered as a no-op
+			const r = rig(AXE);
+			r.verb(IK.Holster, P.HOLSTER_AWAY);
+			r.verb(IK.Holster, P.HOLSTER_DRAW);
+			r.tick();
+			const first = r.sp.state.holstered === true;
+			let drawnAt = -1;
+			for (let i = 1; i < 30 && drawnAt < 0; i++) {
+				r.tick();
+				if (r.sp.state.holstered !== true) drawnAt = i;
+			}
+			const wait = Math.round(0.1 * CFG.SIM_HZ);
+			check(
+				first && drawnAt >= wait - 1,
+				"two Holster verbs in one tick: the second waits the switch's 0.1 s (never faster than a switch)",
+				`drawn ${drawnAt} ticks later; the switch waits ${wait}`,
+			);
+			r.outcomes.length = 0;
+			r.verb(IK.Holster, P.HOLSTER_DRAW);
+			r.run(0.2);
+			check(
+				r.outcomes.some(o => o.kind === "refused" && o.why === "noop"),
+				"Holster(draw) when already drawn: answered, refused as a no-op",
+			);
+			r.outcomes.length = 0;
+			r.sp.state.godMode = false;
+			r.sp.state.hp = 0;
+			r.verb(IK.Holster, P.HOLSTER_AWAY);
+			r.tick();
+			check(
+				r.outcomes.some(o => o.kind === "refused" && o.why === "dead") && r.sp.state.holstered !== true,
+				"a dead survivor's Holster is refused",
+			);
+			check(
+				P.encodeIntentArgs(IK.Holster, 1, 2, 1) === undefined,
+				"an arg that is neither draw nor put away never becomes a verb (the wire refuses it: test:net)",
+			);
+		}
+	},
+);
+
 // ================================================================ B. equipment
 
 /** the EQUIPS row of every slot, and the save field it lives in */
@@ -4975,6 +5377,85 @@ section(
 		s.quit(friend);
 	},
 );
+
+section(
+	"G8. ITM-06 on the real server: the weapon put away rides the bag, is never saved, and every body stands up drawn",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const REP2 = require(join(SRC, "server/net/replication.ts"));
+		const pl = s.join(newUser(), "hands");
+		s.immortal.add(pl);
+		const sp = s.enter(pl);
+		check(sp !== undefined && sp.state.holstered !== true, "a survivor enters the city with the weapon drawn");
+		s.verb(pl, IK.Holster, P2.HOLSTER_AWAY, 0, 1);
+		s.run(0.5);
+		const body = s.body(pl);
+		const bag = s.lastBag(pl);
+		check(
+			body.state.holstered === true && bag?.holster === 1 && bag?.ack === 1,
+			"the Intent remote's Holster puts it away, and the bag that answers nonce 1 says holster 1",
+			`holstered ${body.state.holstered} / bag holster ${bag?.holster} ack ${bag?.ack}`,
+		);
+		check(
+			REP2.playerBlockOf(body).weapon === P2.WEAPON_HOLSTERED,
+			"the snapshot record the others get carries the empty hands",
+		);
+		// never saved: the server's live save has no hands in it (the stored document is checked on the way out)
+		check(
+			!/holster/i.test(JSON.stringify(body.save)),
+			"nothing of it is in the server's live save (the body's hands, not the save's)",
+		);
+		// a hostile arg never reaches the simulation (the wire refuses it); a flood is the bucket's (test:net)
+		remoteIntentRaw(s, pl, [96, IK.Holster, 1, 0, 7, 0, 2, 0]);
+		s.run(0.3);
+		check(s.lastBag(pl)?.ack === 1, "a Holster with arg 7 is malformed: never handled, never acked");
+		// leaving the world and coming back: the kept body stands with the weapon drawn (the hands are the session's)
+		s.exit(pl);
+		s.run(0.5);
+		const back = s.enter(pl);
+		s.run(0.5);
+		check(
+			back !== undefined && back.state.holstered !== true && s.lastBag(pl)?.holster === 0,
+			"back in the world (the kept body): the weapon is drawn, and the bag says so",
+			`holstered ${back?.state.holstered} / bag ${s.lastBag(pl)?.holster}`,
+		);
+		// a death drops it too: the body that stands up (daybreak, a Rebirth) is drawn
+		s.verb(pl, IK.Holster, P2.HOLSTER_AWAY, 0, 2);
+		s.run(0.3);
+		const before = s.body(pl).state.holstered === true;
+		s.immortal.delete(pl);
+		const dead = s.kill(pl);
+		s.run(0.3);
+		check(
+			before && dead.state.dead && dead.state.holstered !== true && s.lastBag(pl)?.holster === 0,
+			"put away, then killed: the corpse drops the holster and the bag says drawn",
+			`before ${before} / dead ${dead.state.dead} / holstered ${dead.state.holstered}`,
+		);
+		s.verb(pl, IK.Holster, P2.HOLSTER_AWAY, 0, 3);
+		s.run(0.3);
+		check(
+			s.body(pl).state.holstered !== true && s.lastBag(pl)?.ack === 3,
+			"a dead survivor's Holster is answered (ack 3) and refused: the corpse has no hands",
+		);
+		s.quit(pl);
+		s.run(0.5);
+		const stored = s.stored(pl.UserId);
+		check(
+			stored !== undefined && !/holster/i.test(JSON.stringify(stored)),
+			"...nor in the document the DataStore keeps: the next session starts drawn whatever this one did",
+			`stored ${stored !== undefined}`,
+		);
+	},
+);
+
+/** a hand-built Intent payload on the remote, as a hostile client would send it */
+function remoteIntentRaw(s, p, bytes) {
+	const b = buffer.create(bytes.length);
+	bytes.forEach((v, i) => buffer.writeu8(b, i, v));
+	s.remote("Intent").OnServerEvent.Fire(p, b);
+}
 
 // ---------------------------------------------------------------- verdict
 

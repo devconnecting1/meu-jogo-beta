@@ -33,6 +33,8 @@
  *  ia. THE AWARENESS (IA-03 / IA-05, protocol decision 17). The state the server decided for each zombie (idle,
  *      suspicious, searching, chasing) reaches every screen in 2 bits of the record, and a screen only ever draws a
  *      state the server really had for that zombie within the interpolation window; the record stays 9 bytes.
+ *   k. EMPTY HANDS (ITM-06, protocol decision 20). A survivor whose weapon is put away reaches every other screen as
+ *      WEAPON_HOLSTERED in the weapon byte the record already had, and drawn (or switched) again as the weapon.
  *
  * Pure Node (>= 18) + the project's TypeScript, with the Luau shims of tools/test-sim.mjs and the STRICT
  * `buffer` of tools/test-net.mjs (an out-of-range write throws instead of silently corrupting a neighbour).
@@ -1708,6 +1710,79 @@ section("(ia) every client draws the awareness state the SERVER decided (2 bits 
 		bosses: [],
 	});
 	checkEq(buffer.len(one.parts[0]), 8 + 9, "a zombie record is still 9 bytes with its state (header 8 + 9)");
+}
+
+// ================================================================ (k) empty hands (ITM-06, protocol decision 20)
+
+section("(k) a weapon put away reaches the other screens as empty hands, in the byte the record already had (ITM-06)");
+{
+	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+	const AXE = WEAPONS.find(w => w.name === "Axe").id;
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	const armed = defaultSave();
+	armed.invenWeapon[AXE] = 1;
+	armed.equipWeapon = AXE;
+	addSurvivor(server, 0, cx, cy);
+	const b = addSurvivor(server, 1, cx + 40, cy, armed);
+	/** what client 0's interpolation hands its view for slot 1 after `ticks` more ticks: the weapon byte */
+	const seen = ticks => {
+		for (let i = 0; i < ticks; i++) {
+			tickServer(server);
+			drawClients(server);
+		}
+		return server.clients
+			.get(0)
+			.buffer.states()
+			.find(s => s.slot === 1)?.weapon;
+	};
+	checkEq(seen(40), AXE, "drawn: the other screen gets the ally's Axe");
+	server.sim.queueIntent(1, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Holster, 0, P.HOLSTER_AWAY, 1)));
+	checkEq(seen(40), P.WEAPON_HOLSTERED, "put away (the Holster verb): the other screen gets WEAPON_HOLSTERED");
+	check(
+		b.state.holstered === true && b.save.equipWeapon === AXE,
+		"...while the server keeps the Axe chosen, in its holster",
+	);
+	// the view maps the byte (client/view/playersView.ts): an ally drawn empty-handed, never the blade by default
+	const { weaponById } = require(join(SRC, "client/view/survivorView.ts"));
+	checkEq(
+		weaponById(P.WEAPON_HOLSTERED).id,
+		0,
+		"an older client without decision 20 draws the blade for the byte, never crashes",
+	);
+	server.sim.queueIntent(1, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Holster, 0, P.HOLSTER_DRAW, 2)));
+	checkEq(seen(40), AXE, "drawn again: the Axe is back on the other screen");
+	// the SwitchWeapon verb draws too
+	server.sim.queueIntent(1, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Holster, 0, P.HOLSTER_AWAY, 3)));
+	seen(20);
+	server.sim.queueIntent(1, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.SwitchWeapon, 0, 0, 4)));
+	checkEq(seen(40), 0, "put away, then a switch to the blade: the others see the blade, drawn");
+	// no byte more: the record of a survivor whose weapon is away is the same 12 bytes
+	const snap = P.encodeSnapshot({
+		tick: 1,
+		players: [
+			{
+				slot: 1,
+				x: 10,
+				y: 10,
+				aim: 0,
+				flags: 0,
+				weapon: P.WEAPON_HOLSTERED,
+				swing: 0,
+				hp: 1,
+				revive: 0,
+				moveAng: 0,
+			},
+		],
+		zombies: [],
+		bosses: [],
+	});
+	checkEq(
+		buffer.len(snap.parts[0]),
+		8 + P.SNAP_PLAYER_BYTES,
+		"a survivor with empty hands is still one 12-byte record",
+	);
 }
 
 // ---------------------------------------------------------------- verdict

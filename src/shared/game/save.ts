@@ -282,6 +282,9 @@ export interface Wallet {
  *     world); a build placed or cancelled by an edge of a newer command is still the client's prediction.
  * `place` is the construction on the server's cursor (PLACEABLES id, -1 = none): a craft puts it there, the attack
  * edge places it, the action edge cancels it (server/sim/build.ts).
+ * `holster` is the body's hands (DESIGN_RULES ITM-06, protocol.ts note 20): 1 = the weapon put away, 0 = drawn. It is
+ * NOT the save's -- the body's session state, never written to the DataStore -- and rides here because this is the
+ * push that carries `ack`: the client lays it over its prediction exactly as it lays `equip[0]`.
  *
  * Sizes: ~150 numbers, sent only when one of them changed (or `ack` moved) — a reload, a pickup, a craft, a switch.
  */
@@ -298,6 +301,8 @@ export interface BagMirror {
 	skillPoint: number;
 	/** PLACEABLES id on the server's cursor, -1 = none */
 	place: number;
+	/** (ITM-06) 1 = the weapon is put away, 0 = drawn: the body's state, not the save's (absent from an older server = 0) */
+	holster: number;
 	/** nonce of the last backpack intent the server handled, 0 = none yet (u16) */
 	ack: number;
 	/** the last command seq (u16) the server consumed from this survivor when it wrote this, -1 = not in the world */
@@ -317,8 +322,8 @@ function equipsOf(save: PlayerSaveData): Array<number> {
 	return [save.equipWeapon, save.equipCloth, save.equipHand, save.equipGun, save.equipOutfit, save.equipPet];
 }
 
-/** SERVER: the bag of a live save, for the wallet push */
-export function bagOf(save: PlayerSaveData, place: number, ack: number, seq: number): BagMirror {
+/** SERVER: the bag of a live save, for the wallet push (`holster`: the body's hands, ITM-06) */
+export function bagOf(save: PlayerSaveData, place: number, ack: number, seq: number, holster = false): BagMirror {
 	return {
 		invenWeapon: copyArray(save.invenWeapon),
 		invenEquip: copyArray(save.invenEquip),
@@ -329,6 +334,7 @@ export function bagOf(save: PlayerSaveData, place: number, ack: number, seq: num
 		skillLevels: copyArray(save.skillLevels),
 		skillPoint: save.skillPoint,
 		place,
+		holster: holster ? 1 : 0,
 		ack,
 		seq,
 	};
@@ -338,7 +344,7 @@ export function bagOf(save: PlayerSaveData, place: number, ack: number, seq: num
  * SERVER: everything in the bag that can change, as one string — the push compares it with the last one it sent
  * (`seq` is left out on purpose: it moves every tick and is only ever read together with the rest).
  */
-export function bagSignature(save: PlayerSaveData, place: number, ack: number): string {
+export function bagSignature(save: PlayerSaveData, place: number, ack: number, holster = false): string {
 	return [
 		save.invenWeapon.join(","),
 		save.invenEquip.join(","),
@@ -349,6 +355,7 @@ export function bagSignature(save: PlayerSaveData, place: number, ack: number): 
 		save.skillLevels.join(","),
 		save.skillPoint,
 		place,
+		holster ? 1 : 0,
 		ack,
 	].join("|");
 }
@@ -380,6 +387,7 @@ export function readBag(raw: unknown): BagMirror | undefined {
 		skillLevels: readIntArray(r.skillLevels, SKILLS.size(), i => SKILLS[i].maxLevel, undefined),
 		skillPoint: readInt(r.skillPoint, 0, 0, L.LEVEL_MAX),
 		place: readInt(r.place, -1, -1, BAG_PLACE_MAX),
+		holster: readInt(r.holster, 0, 0, 1),
 		ack: readInt(r.ack, 0, 0, BAG_U16_MAX),
 		seq: readInt(r.seq, -1, -1, BAG_U16_MAX),
 	};
@@ -577,6 +585,17 @@ export function ownsWeapon(save: PlayerSaveData, weaponId: number): boolean {
 	if (weaponId === 0) return true;
 	if (weaponId < 0 || weaponId >= WEAPONS.size()) return false;
 	return (save.invenWeapon[weaponId] ?? 0) > 0;
+}
+
+/**
+ * The weapon this save puts in the survivor's hands: `equipWeapon` when it is owned, else WEAPONS[0], the blade every
+ * survivor has (-1 is "nothing chosen", which the save writes when a craft ate the weapon or on a fresh save). The one
+ * rule the server's weapon machine (server/sim/combat.ts `weaponOf`), the client's hand (`followServerWeapon`) and the
+ * Bag's EQUIPPED tag all read: the Bag used to compare `equipWeapon` itself and showed no weapon at all for -1.
+ */
+export function heldWeaponOf(save: PlayerSaveData): number {
+	const id = save.equipWeapon;
+	return id >= 0 && ownsWeapon(save, id) ? id : 0;
 }
 
 export function ownsCostume(save: PlayerSaveData, costumeId: number): boolean {

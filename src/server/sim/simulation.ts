@@ -875,9 +875,14 @@ export class ServerSimulation {
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
 			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção"). On a
-			// vehicle both hands are on the bars (VEI-05): holstered too, and the attack button is the bell or horn
+			// vehicle both hands are on the bars (VEI-05): holstered too, and the attack button is the bell or horn. And a
+			// weapon the survivor PUT AWAY (ITM-06, the Holster verb) is holstered by choice: no shot, no swing, no reload
+			// -- while this very command's E, build edges and horn still reach `stepWorldActions` below, untouched
 			this.swinger = sp;
-			const holster = this.build?.placing(sp.slot) === true || this.vehicles?.riding(sp.slot) === true;
+			const holster =
+				sp.state.holstered === true ||
+				this.build?.placing(sp.slot) === true ||
+				this.vehicles?.riding(sp.slot) === true;
 			this.combat?.stepPlayer(sp, holster ? holstered(cmd) : cmd, this.tick, this.tickDt);
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command

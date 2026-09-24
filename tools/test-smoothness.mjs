@@ -21,6 +21,8 @@
  *   3. the delay stays inside INTERP_MIN_S..INTERP_MAX_S and follows the measured interval;
  *   4. a turn is rounded, not cut: the path never leaves the corridor the server actually walked;
  *   5. the mid ring (10 Hz, the rate a FAR ally is sent at) is the honest worst case, and is reported.
+ *   9. an ally who puts the weapon away (DESIGN_RULES ITM-06, protocol decision 20) arrives as the reserved weapon
+ *      byte, discrete (never a blend, never a flicker back), with the walk untouched, and is drawn empty-handed.
  *
  * Pure Node (>= 18) plus the project's TypeScript, same shims as the other tools.
  */
@@ -603,6 +605,120 @@ console.log("8) depois de um reset, o atraso trava na mediana das primeiras cheg
 	);
 }
 
+// ---------------------------------------------------------------- 9: an ally whose weapon is put away (ITM-06)
+
+/*
+ * DESIGN_RULES ITM-06 (protocol decision 20): a survivor who puts the weapon away reaches the others as the reserved
+ * WEAPON_HOLSTERED byte in the record's weapon field. It is a DISCRETE field: the buffer must hand the view either the
+ * weapon or the empty hands -- never a blend, never a flicker back -- and the walk it rides must stay smooth across
+ * the change. Then the view draws them empty-handed (client/view/playersView.ts -> survivorView.ts `holstered`).
+ */
+console.log("");
+console.log("9) ITM-06: um aliado que guarda a arma chega de maos vazias, sem piscar, e e desenhado sem arma");
+{
+	// protocol.ts builds a scratch NetWriter when it loads; this suite never encodes, so a stand-in buffer will do
+	globalThis.buffer ??= { create: n => new Uint8Array(n) };
+	const P = require(join(SRC, "shared/net/protocol.ts"));
+	const AXE = 2;
+	const every = CFG.SNAP_NEAR_EVERY_TICKS;
+	/** the same ally walking for 4 s, putting the weapon away 1.5 s in (`flipAt`), or never */
+	const walkWith = flipAt => {
+		const buf = new SnapshotBuffer();
+		buf.setRate(CFG.SIM_HZ);
+		buf.reset();
+		const partAt = tick => ({
+			tick: tick % 65536,
+			part: 0,
+			parts: 1,
+			players: [
+				{
+					slot: 1,
+					x: 1000 + (tick - 600) * WALK * SIM_DT,
+					y: 1000,
+					aim: 0,
+					flags: 1,
+					weapon: tick >= flipAt ? P.WEAPON_HOLSTERED : AXE,
+					swing: 0,
+					hp: 1,
+					revive: 0,
+					moveAng: 0,
+				},
+			],
+			zombies: [],
+			bosses: [],
+			extras: [],
+		});
+		let clockTick = 600;
+		let t = 0;
+		const seen = [];
+		const xs = [];
+		for (let tick = 600; tick < 600 + 240; tick += 1) {
+			if ((tick - 600) % every === 0) buf.receive(partAt(tick), clockTick, 1000 + t);
+			buf.advance(FRAME_DT, clockTick, 1000 + t);
+			const s = buf.states().find(p => p.slot === 1);
+			if (s !== undefined) {
+				seen.push(s.weapon);
+				xs.push(s.x);
+			}
+			clockTick += 1;
+			t += FRAME_DT;
+		}
+		return { seen, xs };
+	};
+	const { seen, xs } = walkWith(600 + 90);
+	const control = walkWith(Infinity);
+	const values = [...new Set(seen)];
+	let flips = 0;
+	for (let i = 1; i < seen.length; i++) if (seen[i] !== seen[i - 1]) flips += 1;
+	check(
+		"o byte e discreto: so a arma ou as maos vazias, nunca outro valor",
+		values.every(v => v === AXE || v === P.WEAPON_HOLSTERED) && values.length === 2,
+		values.join(", "),
+	);
+	check(
+		"troca uma vez so, da arma para as maos vazias (sem piscar de volta)",
+		flips === 1 && seen.at(-1) === P.WEAPON_HOLSTERED,
+	);
+	let worst = 0;
+	for (let i = 0; i < xs.length; i++) worst = Math.max(worst, Math.abs(xs[i] - (control.xs[i] ?? Infinity)));
+	check(
+		"e a caminhada que ela carrega e a mesma, quadro a quadro, de quem nunca guardou a arma (nenhum tranco)",
+		xs.length === control.xs.length && worst === 0,
+		`${xs.length} quadros; maior diferenca ${worst} u`,
+	);
+
+	// the drawing: the very drawSurvivor every survivor goes through, on a renderer that only records
+	const SV = require(join(SRC, "client/view/survivorView.ts"));
+	const { COLORS } = require(join(SRC, "shared/engine/colors.ts"));
+	const calls = [];
+	const rec = {
+		drawRect: (cam, x, y, o) => calls.push({ x, y, ...o }),
+		drawCircle: (cam, x, y, d, o) => calls.push({ x, y, w: d, h: d, circle: true, ...o }),
+		drawSegment: (cam, x1, y1, x2, y2, o) =>
+			calls.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2, segment: true, ...o }),
+	};
+	const draw = weaponByte => {
+		const look = SV.createLook();
+		// what client/view/playersView.ts fills from the interpolated state
+		look.weapon = SV.weaponById(weaponByte);
+		look.holstered = weaponByte === P.WEAPON_HOLSTERED;
+		calls.length = 0;
+		SV.drawSurvivor(rec, undefined, look, SV.createSwingTrail());
+		const inHand = calls.filter(
+			c => c.zIndex === look.z && (c.color === COLORS.blade || c.color === COLORS.weapon),
+		);
+		const hands = calls.filter(c => c.circle === true && c.w === 10);
+		return { inHand: inHand.length, hands: hands.length };
+	};
+	const armed = draw(AXE);
+	const empty = draw(P.WEAPON_HOLSTERED);
+	check("com a arma: o Axe e desenhado na mao", armed.inHand > 0, `${armed.inHand} partes`);
+	check(
+		"com as maos vazias (WEAPON_HOLSTERED): nenhuma arma desenhada, as duas maos em repouso",
+		empty.inHand === 0 && empty.hands === 2,
+		`${empty.inHand} partes de arma, ${empty.hands} maos`,
+	);
+}
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);

@@ -422,10 +422,22 @@ export class ServerCombat {
 		const aim = p.angle;
 		const w = this.weaponOf(sp, st);
 
-		if (p.dead) {
+		if (p.dead || p.holstered === true) {
+			// ITM-06: a weapon put away does nothing at all -- the sweep it was in stops there and pays its cadence as a
+			// finished one (putting it away and out again never restarts a swing early), the bow lets go, the chainsaw
+			// winds down and a reload does not go on in the holster. A body that dies drops the holster with it: the
+			// next one stands up drawn
+			if (st.swing.active && !p.dead) st.fireCd = math.max(st.fireCd, 0) + w.cooldown;
 			st.swing.active = false;
 			st.drawTime = 0;
 			p.swingerActive = false;
+			if (p.holstered === true) {
+				p.weapon.bowCount = 0;
+				p.weapon.chainCount = 0;
+				p.weapon.reloading = false;
+				p.weapon.reloadCount = 0;
+				if (p.dead) p.holstered = undefined;
+			}
 			return;
 		}
 

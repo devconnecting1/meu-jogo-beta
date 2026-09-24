@@ -1,7 +1,7 @@
 import { GameContext } from "shared/game/context";
 import { declineTutorial, equippedIn, expMaxInit, outfitLookOf, petLookOf, totalPendingPacks } from "shared/game/save";
 import { WEAPONS } from "shared/data/weapons";
-import { EQUIPS } from "shared/data/equips";
+import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { ItemKind } from "shared/data/kinds";
 import { iconKeys } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
@@ -14,7 +14,7 @@ import { SurvivorPreview } from "../view/cosmeticPreview";
 import { IconView, clearIcon, drawItemIcon, maxFrameCount } from "./itemIcon";
 import { paintPlate } from "./plate";
 import { PixelIcon } from "./pixelIcon";
-import { popup } from "./popup";
+import { popup, toast } from "./popup";
 import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
 import {
@@ -25,12 +25,16 @@ import {
 	autoFocus,
 	buttonForeground,
 	centredRect,
+	designOf,
 	fmtInt,
+	isFocused,
 	makeFrame,
 	makeLabel,
 	makeSurface,
 	nl,
+	registerFocus,
 	setButtonVariant,
+	setDesign,
 	setVisible,
 } from "./widgets";
 import * as Kit from "./window";
@@ -91,7 +95,8 @@ export interface SurvivorHandlers {
 	/** MP-21: wait for daybreak, the same life (main.client's enterToWait, keeping it) */
 	onWaitDawn: () => void;
 	onNewRun: () => void;
-	onWardrobe: () => void;
+	/** the wardrobe; `slot` (EquipSlot.Outfit / Pet) is the tab it opens on -- the loadout tile of that slot */
+	onWardrobe: (slot?: number) => void;
 	/** `thenPlay`: the first-run prompt's "Yes": the tutorial, then the city */
 	onTutorial: (thenPlay?: boolean) => void;
 }
@@ -150,10 +155,32 @@ const HELP_TEXT = [
 ].join("#");
 
 interface SlotTile {
-	frame: Frame;
+	/** a flat plate that lights under the pointer and the pad's focus ring (the wardrobe's tiles' rule) */
+	frame: TextButton;
 	/** the item's pixel icon (UI-11: the Bag's drawing), in a dark well; empty = the well alone */
 	icon: IconView;
 	name: TextLabel;
+	/** the plate's face: iron with an item in the slot, the dark section when it is empty */
+	face: Color3;
+}
+
+/** a loadout slot's plate: a button the size of the tile (it paints itself: SurvivorScreen.paintTile) */
+function slotButton(parent: Frame, name: string, x: number, y: number, w: number, h: number, z: number): TextButton {
+	const [dw, dh] = designOf(parent);
+	const b = new Instance("TextButton");
+	b.Name = name;
+	b.Position = UDim2.fromScale(x / dw, y / dh);
+	b.Size = UDim2.fromScale(w / dw, h / dh);
+	setDesign(b, w, h);
+	b.AutoButtonColor = false;
+	b.BorderSizePixel = 0;
+	b.BackgroundTransparency = 1;
+	b.BackgroundColor3 = THEME.background;
+	b.Text = "";
+	b.ZIndex = z;
+	b.Selectable = true;
+	b.Parent = parent;
+	return b;
 }
 
 export class SurvivorScreen {
@@ -301,7 +328,9 @@ export class SurvivorScreen {
 			},
 		);
 
-		// ---- the loadout: the six slots, with the Bag's icons (UI-11); an empty slot is a dark tile that says so
+		// ---- the loadout: the six slots, with the Bag's icons (UI-11); an empty slot is a dark tile that says so. OUTFIT and
+		// PET open the wardrobe on their tab (what everyone sees is changed here, in the lobby); the other four say where
+		// they are changed -- the Bag, during a match, where the body is
 		const loadoutY = top + STATS_H + GAP;
 		const loadout = Kit.Section(panel, "Loadout", {
 			x: RIGHT_X,
@@ -314,10 +343,7 @@ export class SurvivorScreen {
 		for (let i = 0; i < SLOT_KEYS.size(); i++) {
 			const x = CELL_PAD + (i % 3) * (TILE_W + TILE_GAP);
 			const y = CELL_PAD + math.floor(i / 3) * (TILE_H + TILE_GAP);
-			const tile = makeFrame(lGroove, `Slot${i}`, x, y, TILE_W, TILE_H, THEME.background, {
-				transparency: 1,
-				zIndex: lGroove.ZIndex + 1,
-			});
+			const tile = slotButton(lGroove, `Slot${i}`, x, y, TILE_W, TILE_H, lGroove.ZIndex + 1);
 			const z = tile.ZIndex + 1;
 			// the well, and in it as many Frames as the costliest icon of the slot's kind from the start: changing
 			// what is equipped rewrites them and creates nothing (the Bag's rule)
@@ -338,7 +364,12 @@ export class SurvivorScreen {
 				align: "left",
 				zIndex: z,
 			});
-			this.slots.push({ frame: tile, icon, name });
+			const slot: SlotTile = { frame: tile, icon, name, face: SURFACE.section };
+			const repaint = (): void => this.paintTile(slot);
+			registerFocus(tile, repaint);
+			tile.GetPropertyChangedSignal("GuiState").Connect(repaint);
+			tile.Activated.Connect(() => this.slotPressed(i));
+			this.slots.push(slot);
 		}
 
 		// ---- the note, across the window, and the action row: Home at the left, the main action at the right
@@ -483,10 +514,31 @@ export class SurvivorScreen {
 			name = id >= 0 ? EQUIPS[id]?.name : undefined;
 		}
 		const shown = name !== undefined ? this.tr(name) : this.tr("Empty");
-		paintPlate(tile.frame, name !== undefined ? THEME.secondary : SURFACE.section, "flat", 4);
+		tile.face = name !== undefined ? THEME.secondary : SURFACE.section;
+		this.paintTile(tile);
 		if (name !== undefined) drawItemIcon(tile.icon, kind, id);
 		else clearIcon(tile.icon);
 		this.write(tile.name, shown);
+	}
+
+	/** a slot's plate: flat at rest, lit under the pointer or the pad's focus ring, pressed while held */
+	private paintTile(tile: SlotTile): void {
+		const gs = tile.frame.GuiState;
+		const pressed = gs === Enum.GuiState.Press;
+		const hot = pressed || gs === Enum.GuiState.Hover || isFocused(tile.frame);
+		paintPlate(tile.frame, tile.face, pressed ? "press" : hot ? "hot" : "flat", 4);
+	}
+
+	/**
+	 * A loadout tile pressed: the outfit and the pet are changed here (MON-04), in the wardrobe on their tab; the weapon,
+	 * the clothes, the hand and the gun belong to the body in the city, so the tile says where -- the Bag, during a match.
+	 */
+	private slotPressed(i: number): void {
+		if (i === EquipSlot.Outfit || i === EquipSlot.Pet) {
+			this.handlers.onWardrobe(i);
+			return;
+		}
+		toast(this.ctx, this.tr("Change in the Bag during a match"));
 	}
 
 	/** lays the MP-21 row out for 2 or 3 buttons (only when that changes: positions are written, nothing is made) */

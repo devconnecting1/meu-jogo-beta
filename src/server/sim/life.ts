@@ -411,6 +411,9 @@ export class LifeKeeper {
 		}
 		rec.body = undefined;
 		rec.unloaded = false;
+		// ITM-06: the hands are the session's and never kept: a survivor back in the world, kept body or not, stands with
+		// the weapon drawn
+		state.holstered = undefined;
 		const sp = createServerPlayer(
 			{ slot, userId: info.userId, name: info.name },
 			save,

@@ -1198,6 +1198,8 @@ interface BagNow {
 	seq: number;
 	place: number;
 	ack: number;
+	/** ITM-06: the body's hands (the weapon put away), carried beside the ack; never the save's */
+	holster: boolean;
 }
 
 /**
@@ -1211,10 +1213,11 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 	const sim = mpHost.simulation;
 	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
 	const ack = sim.backpack.ackOf(player.UserId);
+	const holster = sp !== undefined && sp.state.holstered === true;
 	// every build edge the cursor answered moves the signature, so a REFUSED placement is answered by a bag too
 	const turns = sp !== undefined ? (sim.build?.turnsOf(sp.slot) ?? 0) : 0;
-	const sig = `${bagSignature(save, place, ack)}|${turns}`;
-	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+	const sig = `${bagSignature(save, place, ack, holster)}|${turns}`;
+	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack, holster };
 }
 
 /**
@@ -1249,7 +1252,7 @@ function pushWallets(): void {
 		if (!walletMoved && !bagMoved) continue;
 		const wallet = walletOf(s.save);
 		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
-		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq);
+		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq, bag.holster);
 		sendSaveAck(s, {
 			ok: true,
 			push: true,

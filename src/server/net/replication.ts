@@ -45,6 +45,7 @@ import {
 	SelfSnap,
 	Snapshot,
 	SolidState,
+	WEAPON_HOLSTERED,
 	WItemAdd,
 	WorldEv,
 	WorldEvent,
@@ -244,7 +245,8 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
 		y: p.y,
 		aim: p.angle,
 		flags,
-		weapon: math.max(0, p.weapon.pointer),
+		// ITM-06: a weapon put away is not in their hands -- everyone sees them empty-handed (decision 20)
+		weapon: p.holstered === true ? WEAPON_HOLSTERED : math.max(0, p.weapon.pointer),
 		swing: p.swingerActive ? angleDelta(p.swingerAngle, p.angle) : 0,
 		hp: p.hpMax > 0 ? math.clamp(p.hp / p.hpMax, 0, 1) : 0,
 		revive: 0,
