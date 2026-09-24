@@ -104,6 +104,14 @@ const LEVEL_CREDIT_START = 5;
 /** shop/rebirth requests: token bucket */
 const ACTION_BURST = 6;
 const ACTION_PER_SECOND = 2;
+/** the ShopAction kinds this server knows: anything else is a malformed request (§8.2) */
+const SHOP_KINDS = new Set<string>(["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun"]);
+/**
+ * A REJECTED report is answered at most this often (s; audit M2). An honest client reports once per
+ * SAVE_MIN_INTERVAL and retries an "outdated" one after 1 s, so it never sees this; a stream of junk SaveRequests
+ * used to be reflected one SaveAck (with a wallet) per message.
+ */
+const REJECT_ACK_INTERVAL = 1;
 
 /**
  * After an admin edit the player's reports are refused until their client confirms the patch (AdminPatchAck),
@@ -140,6 +148,14 @@ interface Session {
 	lastWrite: number;
 	ackRequested: boolean;
 	lastAck: number;
+	/** os.clock() of the last rejection answered (REJECT_ACK_INTERVAL) */
+	lastRejectAck: number;
+	/**
+	 * The newest rejection that came inside the window, answered when it ends (`rejectReport`): the client's last
+	 * report always gets its answer, only later. Undefined when nothing is held.
+	 */
+	heldReject: SaveRejectReason | undefined;
+	heldRejectWallet: boolean;
 	lastReport: number;
 	pending: string | undefined;
 	pendingToken: string | undefined;
@@ -233,6 +249,16 @@ function sessionOfUserId(userId: number): Session | undefined {
 		if (player.UserId === userId) return s;
 	}
 	return undefined;
+}
+
+/**
+ * §8.2 for the remotes this file owns (audit M2): every SaveRequest, LoadRequest, ShopAction and admin message counts
+ * toward the same flood limits as the MP channels, per connection (server/net/mpHost.ts `noteRemote`); `malformed`
+ * when the payload is not what the remote takes. True when the message must be dropped (the player is being kicked,
+ * or has left). With MP_PHASE 0 there is no host and nothing is counted: the old per-remote limits stand alone.
+ */
+function floodDrop(player: Player, malformed: boolean): boolean {
+	return mpHost?.noteRemote(player, malformed) === true;
 }
 
 /** the server just wrote into this survivor's save: the next autosave must carry it */
@@ -703,6 +729,9 @@ function newSession(player: Player): Session {
 		lastWrite: 0,
 		ackRequested: false,
 		lastAck: -math.huge,
+		lastRejectAck: -math.huge,
+		heldReject: undefined,
+		heldRejectWallet: false,
 		lastReport: -math.huge,
 		pending: undefined,
 		pendingToken: undefined,
@@ -735,6 +764,7 @@ function onPlayerAdded(player: Player): void {
 }
 
 remotes.loadRequest.OnServerEvent.Connect(player => {
+	if (floodDrop(player, false)) return;
 	const s = sessions.get(player);
 	if (s === undefined || s.closed) return;
 	s.ackRequested = true;
@@ -856,6 +886,32 @@ function sendSaveAck(s: Session, ack: SaveAckPayload): void {
 }
 
 function rejectReport(s: Session, reason: SaveRejectReason, withWallet = false): void {
+	// at most one answer per REJECT_ACK_INTERVAL: a rejection must not be a reflector (audit M2). One inside the window
+	// is not dropped: the newest waits for the window to end (the security review of the net hardening, L5) -- an
+	// honest client whose report was refused a second time in a second must still hear why, or it waits for nothing
+	const now = os.clock();
+	const wait = s.lastRejectAck + REJECT_ACK_INTERVAL - now;
+	if (wait > 0 && now >= s.lastRejectAck) {
+		const queued = s.heldReject !== undefined;
+		s.heldReject = reason;
+		s.heldRejectWallet = s.heldRejectWallet || withWallet;
+		if (!queued) task.delay(wait, () => answerHeldReject(s));
+		return;
+	}
+	answerReject(s, reason, withWallet || s.heldRejectWallet);
+}
+
+/** the rejection held inside the window, at its end (`rejectReport`) */
+function answerHeldReject(s: Session): void {
+	const reason = s.heldReject;
+	if (reason === undefined || s.closed) return;
+	answerReject(s, reason, s.heldRejectWallet);
+}
+
+function answerReject(s: Session, reason: SaveRejectReason, withWallet: boolean): void {
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
+	s.lastRejectAck = os.clock();
 	sendSaveAck(s, {
 		ok: false,
 		reason,
@@ -931,6 +987,9 @@ function processReport(s: Session, json: string): void {
 	// between the swap and mpHost's next `adoptSave` pass.
 	copySaveInto(s.save, upd);
 	s.dirty = true;
+	// the answer to a newer report: a rejection still held for an older one (`rejectReport`) is moot now
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
 	sendSaveAck(s, {
 		ok: true,
 		earned: reward.coins,
@@ -952,6 +1011,8 @@ function processPending(s: Session): void {
 }
 
 remotes.saveRequest.OnServerEvent.Connect((player, token, json) => {
+	const bad = !typeIs(token, "string") || !typeIs(json, "string") || json.size() > MAX_SAVE_PAYLOAD;
+	if (floodDrop(player, bad)) return;
 	const s = sessions.get(player);
 	if (s === undefined || s.closed) return;
 	if (!s.loaded) {
@@ -1143,7 +1204,11 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	return { ok: true, price, wallet: walletOf(save) };
 }
 
-remotes.shopAction.OnServerInvoke = (player, request) => handleAction(player, request);
+remotes.shopAction.OnServerInvoke = (player, request) => {
+	const kind = typeIs(request, "table") ? (request as Record<string, unknown>).kind : undefined;
+	if (floodDrop(player, !typeIs(kind, "string") || !SHOP_KINDS.has(kind))) return fail("rate");
+	return handleAction(player, request);
+};
 
 // ---------------------------------------------------------------- lifecycle
 
@@ -1378,6 +1443,7 @@ function liveViewOf(player: Player): AdminLiveView | undefined {
 
 admin = startAdminServer({
 	jobId: JOB_ID,
+	noteRemote: (player, malformed) => floodDrop(player, malformed),
 	session(player) {
 		const s = sessions.get(player);
 		if (s === undefined) return undefined;
@@ -1459,6 +1525,8 @@ if (MP_PHASE >= 1) {
 		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
 		// is the record of the world that ended — persisted off this thread, the reset never waits for it
 		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
+		// §8.2 "registrado" (audit L4): every automatic kick into the admin audit log, by UserId
+		onFloodKick: (player, reason) => admin?.floodKick(player, reason),
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an

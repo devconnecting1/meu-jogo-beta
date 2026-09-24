@@ -3,17 +3,17 @@
  * glue around the pure checks of server/net/intentGate.ts and the simulation's server/sim/backpack.ts.
  *
  * The remote is shared with the presence verbs, and Roblox fires every connection: server/net/mpHost.ts reads
- * EnterWorld / LeaveWorld (and counts every message of a player who is not in the world yet against its stranger
- * flood limit), and this file reads the rest. The two decoders are disjoint — a presence verb is 2 bytes, a backpack
- * verb 8 — so each handler acts only on its own verbs.
+ * EnterWorld / LeaveWorld and COUNTS EVERY Intent message -- presence or verb, in the world or not, well-formed or not
+ * -- against the §8.2 flood limits (the automatic kick of §9.2 level 2, the only automatic sanction, and audited); this
+ * file reads the rest. Counting in one place is what makes the limit the connection's: it used to be split between
+ * the two handlers, and the kick here wrote a fixed English line. The two decoders are disjoint — a presence verb is
+ * 2 bytes, a backpack verb 8 — so each handler acts only on its own verbs.
  *
  * What a payload goes through here, in order (§8.1, §8.2, §9.2):
  *   1. decode (shared/net/intentWire.ts): exact length, header, verb, `arg` inside the verb's table;
  *   2. a token bucket of INTENT_RATE per second with a burst of INTENT_BURST, per Player — a verb over it is dropped
  *      and its nonce ACKNOWLEDGED, so the client's prediction is undone by the next push instead of lingering;
- *   3. every message counts toward the §8.2 flood limits of the survivor in the world (`noteMessage`), a malformed one
- *      toward the malformed limit (`noteMalformed`, and a window of its own for a player not in the world yet), and
- *      either limit crossed is the automatic kick of §9.2 level 2 — the only automatic sanction;
+ *   3. (the flood limits: mpHost's, above);
  *   4. in the world: queued in the simulation (server/sim/backpack.ts), which checks ownership, counts, cooldowns,
  *      the station and being alive against the SERVER's own save and body, and applies it inside the tick;
  *   5. out of the world (the lobby's wardrobe, MON-04): ONLY a cosmetic slot — outfit or pet — may be equipped or
@@ -23,20 +23,11 @@
  *
  * Nothing in a payload names the player: it is always the remote's first argument (§8.3).
  */
-import { GAME_NAME } from "shared/module";
-import { FLOOD_MALFORMED_WINDOW_S } from "shared/net/mpConfig";
 import { IntentMessage } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
-import { ServerPlayer, floodReason, noteMalformed, noteMessage } from "../sim/players";
+import { ServerPlayer } from "../sim/players";
 import { ServerBackpack } from "../sim/backpack";
-import {
-	IntentGate,
-	IntentVerdict,
-	applyOutOfWorld,
-	ingestBackpackIntent,
-	malformedFlood,
-	newIntentGate,
-} from "./intentGate";
+import { IntentGate, IntentVerdict, applyOutOfWorld, ingestBackpackIntent, newIntentGate } from "./intentGate";
 
 export interface BackpackIntentOptions {
 	/** the `Intent` RemoteEvent (server/net/remotes.ts; the same instance mpHost listens on) */
@@ -57,16 +48,6 @@ export interface BackpackIntentOptions {
 export function startBackpackIntents(options: BackpackIntentOptions): () => void {
 	const Players = game.GetService("Players");
 	const gates = new Map<Player, IntentGate>();
-	const kicked = new Set<Player>();
-
-	function kick(player: Player, reason: string): void {
-		if (kicked.has(player)) return;
-		kicked.add(player);
-		// one Error Report row for every flood kick (docs/ANALYTICS.md §10): who, and why, go to the log line
-		warn(`[${GAME_NAME}] kicking a player: network flood`);
-		print(`[${GAME_NAME}] flood kick: ${player.Name} (${player.UserId}), ${reason}`);
-		pcall(() => player.Kick("Network flood"));
-	}
 
 	const conn = options.intent.OnServerEvent.Connect((player, payload) => {
 		// a remote still in flight when the player left: acting on it would only recreate state for nobody
@@ -79,16 +60,6 @@ export function startBackpackIntents(options: BackpackIntentOptions): () => void
 		}
 		const res = ingestBackpackIntent(gate, payload, now);
 		const sp = options.playerOf(player);
-		if (sp !== undefined) {
-			// EVERY message of a survivor in the world counts toward §8.2, the presence verbs included: mpHost.ts only
-			// counts those for a player who is not in the world yet (security review of 5967a18, R5)
-			noteMessage(sp, now);
-			if (res.verdict === IntentVerdict.Malformed) noteMalformed(sp, now);
-			const reason = floodReason(sp);
-			if (reason !== undefined) kick(player, reason);
-		} else if (res.verdict !== IntentVerdict.Presence && malformedFlood(gate)) {
-			kick(player, `${gate.badCount} malformed intents in ${FLOOD_MALFORMED_WINDOW_S}s`);
-		}
 		if (res.verdict === IntentVerdict.Presence) return;
 		const msg = res.msg;
 		if (msg === undefined) return;
@@ -107,7 +78,6 @@ export function startBackpackIntents(options: BackpackIntentOptions): () => void
 	});
 	const leaving = Players.PlayerRemoving.Connect(player => {
 		gates.delete(player);
-		kicked.delete(player);
 		options.backpack.forget(player.UserId);
 	});
 	return () => {

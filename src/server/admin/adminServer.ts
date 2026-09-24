@@ -131,11 +131,22 @@ export interface AdminHost {
 	 */
 	markAssisted(player: Player): boolean;
 	jobId: string;
+	/**
+	 * (§8.2, audit M2) One message on an admin remote, counted against the sender's flood limits (server/net/mpHost.ts
+	 * `noteRemote`): a non-admin calling the admin remote at all, or a patch acknowledgement that is not a number, is
+	 * a malformed one. True when the message must be dropped. Absent (MP_PHASE 0): nothing is counted.
+	 */
+	noteRemote?: (player: Player, malformed: boolean) => boolean;
 }
 
 export interface AdminServer {
 	/** a progress report of `player` was accepted (pushes live data to admins watching them) */
 	onReport(player: Player): void;
+	/**
+	 * (§8.2, audit L4) The server kicked `player` for a network flood: an entry of the audit log by the server itself
+	 * (adminId 0), the player by UserId and the counters the server wrote (MP-16: a human reviews every automatic kick).
+	 */
+	floodKick(player: Player, reason: string): void;
 }
 
 interface Bucket {
@@ -206,10 +217,23 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		ok: boolean,
 		persist = true,
 	): void {
+		recordAs(admin.UserId, action, targetId, target, details, ok, persist);
+	}
+
+	/** `record` by UserId: 0 is the server itself (an automatic kick, audit L4) */
+	function recordAs(
+		adminId: number,
+		action: string,
+		targetId: number,
+		target: string,
+		details: string,
+		ok: boolean,
+		persist: boolean,
+	): void {
 		// every string is valid UTF-8 and bounded: one bad entry must never block the DataStore flush
 		const e: AuditRecord = {
 			t: os.time(),
-			adminId: admin.UserId,
+			adminId,
 			action: safeText(action, ADMIN_LIMITS.LOG_ACTION + 8),
 			targetId,
 			target: safeText(target, 24),
@@ -356,7 +380,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			list.push({
 				t: e.t,
 				adminId: e.adminId,
-				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : "?",
+				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : e.action.sub(1, 5) === "auto:" ? "server" : "?",
 				action: e.action,
 				target: e.targetId !== 0 ? `${nameOf(e.targetId, budget)} (${e.targetId})` : e.target,
 				details: e.details,
@@ -811,6 +835,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	}
 
 	remotes.request.OnServerInvoke = (player: Player, raw: unknown): AdminResponse => {
+		// 0) §8.2: every call counts toward the flood kick, and one from a non-admin is a malformed one (the panel is
+		// only ever shown to admins, so an honest client never makes it)
+		if (host.noteRemote?.(player, !isAdminUserId(player.UserId)) === true) return fail("forbidden");
 		// 1) authorization by UserId, before looking at the payload
 		if (!isAdminUserId(player.UserId)) {
 			const now = os.clock();
@@ -842,6 +869,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	};
 
 	remotes.patchAck.OnServerEvent.Connect((player, rev) => {
+		if (host.noteRemote?.(player, !typeIs(rev, "number")) === true) return;
 		if (typeIs(rev, "number")) host.ackPatch(player, rev);
 	});
 
@@ -867,6 +895,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	return {
 		onReport(player: Player): void {
 			pushWatch(player);
+		},
+		floodKick(player: Player, reason: string): void {
+			recordAs(0, "auto:flood", player.UserId, "", reason, true, true);
 		},
 	};
 }
