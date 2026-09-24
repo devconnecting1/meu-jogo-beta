@@ -1,26 +1,26 @@
 {
 	"note": "digests of client/ui/itemIcon.ts drawing every icon, dimmed icon and glyph with Frames (no atlas id): tools/test-icons.mjs --golden",
-	"recordedFrom": "the ART-13 icon art (2026-09-24), drawn by the Frame drawer of 38c363a (unchanged)",
+	"recordedFrom": "the ART-13 icon art (2026-09-24) and the Build tab's glyph (ITM-09), drawn by the Frame drawer of 38c363a (unchanged)",
 	"digests": {
 		"pooled48": {
-			"steps": 223,
-			"sha1": "7d3870e48215ee19c4032f728742301f3484a0d4"
+			"steps": 225,
+			"sha1": "688c3c2fc7c92b8671012029e3285f3cde1abf31"
 		},
 		"pooled44": {
-			"steps": 223,
-			"sha1": "16bc9400943bf3fa569b426b27c13ddc84781a7c"
+			"steps": 225,
+			"sha1": "5ab1c7e810ffa345affb1681886ed3c92db15594"
 		},
 		"pooled32": {
-			"steps": 223,
-			"sha1": "977eb23a481c2c14c456e414199094c114ada44b"
+			"steps": 225,
+			"sha1": "2d369d1170b15a6bc169af15dbb6d829d6347113"
 		},
 		"pooled20": {
-			"steps": 223,
-			"sha1": "b6c688ee9a6ad52cc683c90ed56ae158d86287cf"
+			"steps": 225,
+			"sha1": "28b268711657e50f4f63f777aee5f978828bdf6d"
 		},
 		"pooled0": {
-			"steps": 223,
-			"sha1": "15762167f3aa39ed7ce00a0e97d295ba0ad6e62b"
+			"steps": 225,
+			"sha1": "5f4aa5d544a5ec7c2ef159786db6b7108fbd0e1e"
 		},
 		"reserved48": {
 			"steps": 3,

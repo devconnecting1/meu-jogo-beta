@@ -4,9 +4,10 @@
  * (client/systems/interaction.ts), by the "E: …" hint and by the ground items' look (client/view/groundItemsView.ts).
  *
  *   - Supplies are WALKED UP: usables (food, medicine) and materials (ammunition, oil, wood, parts, kits) -- the Bag's
- *     Usables and Materials tabs. The body over the item takes it (WALK_PICKUP_RANGE), once it has been on the ground
- *     WALK_PICKUP_DELAY_S (a drop is seen landing before it is gone), at most one item per survivor every
- *     WALK_PICKUP_RATE_S. The server decides, with the E press's own checks (reach, a clear line, first come).
+ *     Usables, Materials and Build (ITM-09: the construction kits) tabs. The body over the item takes it
+ *     (WALK_PICKUP_RANGE), once it has been on the ground WALK_PICKUP_DELAY_S (a drop is seen landing before it is
+ *     gone), at most one item per survivor every WALK_PICKUP_RATE_S. The server decides, with the E press's own
+ *     checks (reach, a clear line, first come).
  *   - Weapons and equipment take E -- the Bag's Weapons and Gear tabs -- and so does anything rare (a boss's trophy, a
  *     golden weapon: the gold ring), supply or not. A weapon is a choice: it takes a place on keys 1-5
  *     (shared/game/weaponSlots.ts orders them by id, so a new pistol moves the axe from 3 to 4), the game has no drop

@@ -1842,6 +1842,30 @@ console.log("\n5c) o dispositivo do jogador: UserInputService.PreferredInput, um
 		"um celular (sem mouse, o toque em uso): a HUD de toque, como antes",
 		touchDrawn() && currentScheme() === SCHEME_TOUCH,
 	);
+	{
+		// ITM-09: a construction on the build cursor -- a kit placed from the Bag's Build tab, or a craft -- makes the pill
+		// "E: Cancel build", an action: a phone gets its USE button to leave build mode (the pill used to be empty there,
+		// and a phone could only place the thing). The pill is the real client/systems/interaction.ts interactHint's
+		const Inter = require(join(SRC, "client/systems/interaction.ts"));
+		const { createWorld } = require(join(SRC, "shared/game/world.ts"));
+		const Ply = require(join(SRC, "shared/game/player.ts"));
+		const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+		const save = defaultSave();
+		const player = Ply.createPlayer(save, 1000, 1000);
+		const refs = { world: createWorld(4000, 4000), players: [player], player, save, zombies: [], fx: [] };
+		refs.pendingPlace = 2;
+		const pill = Inter.interactHint(refs);
+		const shown = measure(() => hud.setInteractHint(pill));
+		check(
+			'modo de construcao no celular: a pilula "E: Cancel build" e o botao USE aparece (sair sem colocar), sem Instance nova',
+			pill === "E: Cancel build" &&
+				deep(hudRoot(), "UseBtn")?.Visible === true &&
+				deep(hudRoot(), "UseCap")?.Visible === true &&
+				shown.created === 0,
+			`${pill}; USE ${deep(hudRoot(), "UseBtn")?.Visible}, ${shown.created} criadas`,
+		);
+		refs.pendingPlace = -1;
+	}
 	hud.setInteractHint(undefined);
 	void SCHEME_KEYBOARD;
 }

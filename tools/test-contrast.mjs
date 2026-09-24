@@ -1062,6 +1062,27 @@ for (const rel of OVER_RUN) {
 			!/Color3\.(fromRGB|new|fromHex)|new Color3/.test(src),
 	);
 }
+{
+	// ITM-09: the Bag's Build tab (its glyph on the tab plates, the kit's card, Place and the greyed "Can't place", the
+	// empty tab) and the ammunition's and the Oil's cards in Materials go through the same kit and tokens as the rest of
+	// the Bag -- the pairs above (the glyph on tab / tabActive, the stats on the groove) are theirs, nothing literal
+	const files = [
+		"client/ui/backpack.ts",
+		"client/ui/bagGrid.ts",
+		"client/ui/bagPanel.ts",
+		"client/ui/itemCard.ts",
+		"client/ui/itemInfo.ts",
+	];
+	const literal = files.filter(rel => /Color3\.(fromRGB|new|fromHex)|new Color3/.test(codeAt(join(SRC, rel))));
+	const bagSrc = codeAt(join(SRC, "client/ui/backpack.ts"));
+	check(
+		"Bag (UI-11, ITM-09): a aba Build e os cartoes de kit / municao pintam so com tokens do tema; o glifo das abas e THEME.foreground",
+		literal.length === 0 &&
+			/\["Build", "build"\]/.test(bagSrc) &&
+			/drawIcon\(glyph, TAB_DEFS\[i\]\[1\], \{ ink: THEME\.foreground \}\)/.test(bagSrc),
+		literal.join(", "),
+	);
+}
 const popupZ = [...codeAt(join(UI, "popup.ts")).matchAll(/Dialog\([^;]*?zIndex:\s*(\d+)/g)].map(m => +m[1]);
 const flashSrc = codeAt(join(UI, "dangerFlash.ts"));
 const flashZ = +(flashSrc.match(/const FLASH_Z = (\d+);/)?.[1] ?? NaN);

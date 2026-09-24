@@ -2,33 +2,41 @@
  * The Backpack (in-run inventory), docs/DESIGN_RULES.md UI-11: one UI-07 window -- the owner's Wardrobe, grown into an
  * inventory -- with the item icons of UI-11 instead of rows of text.
  *
- *   ┌ ? ─────────────────────────────── Backpack ─────────────────────────────── X ┐
- *   │ [# Weapons] [# Gear] [# Usables] [# Materials] [# Craft] [# Skills (2)]         │  tabs: plate + glyph + label
- *   │ ┌ grid ─────────────────────────┐ ┌ Pistol ──────────────────────── [ ×1 ] ┐ │
- *   │ │ [▣][▣][▣][▣][▣]               │ │ [ icon ]  Weapon · Pistol               │ │  left: 5 x 5 tiles on the
- *   │ │ [▣][▣][ ][ ][ ]               │ │           Damage 25 ...                 │ │  groove (scrolls when more)
- *   │ │ ...                           │ │ notes · usage hint                      │ │  right: the details panel
- *   │ └───────────────────────────────┘ │ [              Equip               ]    │ │  and its one action
- *   └──────────────────────────────────────────────────────────────────────────────┘
+ *   ┌ ? ─────────────────────────────────── Backpack ─────────────────────────────────── X ┐
+ *   │ [# Weapons] [# Gear] [# Usables] [# Materials] [# Build] [# Craft] [# Skills (2)]      │  tabs: plate + glyph + label
+ *   │ ┌ grid ─────────────────────────┐ ┌ Pistol ──────────────────────────────── [ ×1 ] ┐ │
+ *   │ │ [▣][▣][▣][▣][▣]               │ │ [ icon ]  Weapon · Pistol                       │ │  left: 5 x 5 tiles on the
+ *   │ │ [▣][▣][ ][ ][ ]               │ │           Damage 25 ...                         │ │  groove (scrolls when more)
+ *   │ │ ...                           │ │ notes · usage hint                              │ │  right: the details panel
+ *   │ └───────────────────────────────┘ │ [                  Equip                   ]    │ │  and its one action
+ *   └──────────────────────────────────────────────────────────────────────────────────────┘
  *
- * - Tabs: Weapons, Gear (the equipment), Usables, Materials, Craft, Skills. All six fit at 1120 wide with the
- *   reference's tab size (the bar is about 895 of the window's 952 units), so none is merged and the bar does not scroll.
- *   Unspent skill points are a badge on the Skills tab and a line of the Skills panel (the old "SP 0" pill).
+ * - Tabs: Weapons, Gear (the equipment), Usables, Materials, Build, Craft, Skills. All seven fit at 1120 wide on one
+ *   bar that does not scroll (about 971 of the window's 992 units: the plates a little closer to their labels than the
+ *   six of the reference were), so none is merged. Unspent skill points are a badge on the Skills tab and a line of the
+ *   Skills panel (the old "SP 0" pill).
+ * - Build (DESIGN_RULES ITM-09): the construction kits the backpack holds -- turrets, drones, lamps, the power, the
+ *   barricades and doors, the fires, the stations, the trap, the vehicles -- with how many, and Place: the kit goes onto
+ *   the build cursor (the server's Place verb) and the Bag steps aside for the ghost; placing spends one, E puts it back.
+ *   A craft of a construction makes such a kit (it goes straight onto the cursor; cancelled, it waits here), and the
+ *   basic ones turn up in town (shared/data/spawns.ts BASIC_KITS).
+ *   Everything the save can hold is on some tab: Materials lists the ammunition and the Oil too (their counts live in
+ *   the save's ammo fields, shared/sim/inventory.ts, which is why they never showed before).
  * - Left: a grid of tiles (client/ui/bagGrid.ts) -- the item's icon, how many, EQUIPPED as the iron face and a check,
  *   the selection in blue; a recipe tile has its station and how many times it can be made now (red "×0" when an
  *   ingredient is short, a padlock over a grey icon when the station is not near); a skill tile its level pips.
  * - Right: the details panel (client/ui/bagPanel.ts): the item card grown into a panel -- the big icon, the name,
  *   the type, the stats, the notes, the usage hint on this device -- and the one action: the steel-blue plate for
- *   the main one (Equip, Use, Eat, Unequip, Craft, Learn), an iron plate for Open Craft. There is no Drop or Split
- *   in the game, so there is none here.
+ *   the main one (Equip, Use, Eat, Unequip, Place, Craft, Learn), an iron plate for Open Craft. There is no Drop or
+ *   Split in the game, so there is none here.
  * - Mouse: a click selects; the pointer over another item shows its card as a tooltip beside the tile (the
  *   selected one's card is the panel). Pad: the selection moving onto a tile selects it (the panel follows the
  *   cursor); the panel's button is to the right. Touch: a tap selects; no tooltip.
  * - Nothing pauses (UI-06): the see-through scrim, and the damage flash above it (dangerFlash.ts).
  *
- * Every game rule (equip, unequip, use, craft) is delegated to main.client through the callbacks; the Bag only reads
- * the save to draw its state and brings it up to date after each action. The one write it does itself is spending
- * skill points.
+ * Every game rule (equip, unequip, use, place, craft) is delegated to main.client through the callbacks; the Bag only
+ * reads the save to draw its state and brings it up to date after each action. The one write it does itself is
+ * spending skill points.
  *
  * Built once, then only shown and updated in place (the owner: "opening the Bag and going through the tabs should
  * be instant"; npm run test:backpack counts it):
@@ -54,6 +62,8 @@ import { iconOf, skillIconOf } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
 import { weaponReserve } from "shared/game/player";
 import { equipSlotOf, equippedIn, heldWeaponOf, ownsCostume, ownsEquip, ownsWeapon } from "shared/game/save";
+import { countItem } from "shared/sim/inventory";
+import { PLACEABLE_IDS } from "shared/sim/placement";
 import { BagGrid, BagTile, GRID_H, GRID_W, TileModel, gridCells } from "./bagGrid";
 import { BagPanel, PanelModel } from "./bagPanel";
 import { ItemCard, ItemCardHandle, ItemCardModel } from "./itemCard";
@@ -77,21 +87,29 @@ const CAT_WEAPONS = 0;
 const CAT_EQUIP = 1;
 const CAT_USABLES = 2;
 const CAT_MATERIALS = 3;
-const CAT_CRAFT = 4;
-const CAT_SKILLS = 5;
+/** the construction kits (ITM-09): between what they are made of and where they are made */
+const CAT_BUILD = 4;
+const CAT_CRAFT = 5;
+const CAT_SKILLS = 6;
 /** label (lang.ts) and glyph (itemIcons.ts ICON_GLYPHS) of each tab */
 const TAB_DEFS: Array<[string, string]> = [
 	["Weapons", "weapons"],
 	["Gear", "gear"],
 	["Usables", "usables"],
 	["Materials", "materials"],
+	["Build", "build"],
 	["Craft", "craft"],
 	["Skills", "skills"],
 ];
+/** one entry per tab (the per-tab state below) */
+const TAB_COUNT = TAB_DEFS.size();
+/** the last tab of items (the mouse's card, the warm-up's): Weapons .. Build */
+const LAST_ITEM_CAT = CAT_BUILD;
 
 // ---------------------------------------------------------------- layout (window design units)
 
-const WIN_W = 1000;
+/** 1040 (it was 1000 with six tabs): the seventh, Build, on the same one bar, and 40 more for the panel */
+const WIN_W = 1040;
 const WIN_H = 585;
 const PAD = space(6);
 const TAB_H = 38;
@@ -100,6 +118,8 @@ const TAB_GAP = space(3);
 const TAB_ICON = 16;
 const TAB_ICON_X = 14;
 const TAB_LABEL_X = TAB_ICON_X + TAB_ICON + 2;
+/** a tab's plate is its label's width (widgets.ts tabWidth, with its padding) and the glyph's room, less this */
+const TAB_TRIM = space(6);
 /** the Skills tab's badge (unspent points), inside the tab at its right */
 const BADGE_W = 24;
 const BADGE_H = 20;
@@ -112,6 +132,7 @@ const TIP_Z = 30;
 /** the help of the "?" ("#" = a new line) */
 const HELP_TEXT = [
 	"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.",
+	"Build holds the turrets, barricades and other constructions you carry: Place puts one in front of you.",
 	"Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.",
 	"Level up to earn skill points, and spend them in Skills.",
 	"The backpack and the menu never stop the world: open them somewhere safe.",
@@ -132,6 +153,13 @@ const EMPTY: Array<[string, string, string, boolean]> = [
 		"Gather wood, stone and scrap while you explore. Materials are used in the Craft tab.",
 		"wood",
 		false,
+	],
+	// ITM-09: every kit carried -- crafted (and then cancelled or not yet placed) or found: the basic ones are in town
+	[
+		"Nothing to build yet",
+		"Craft turrets, barricades and more in the Craft tab, or find basic kits in town.",
+		"cat_turret",
+		true,
 	],
 ];
 
@@ -186,6 +214,13 @@ function times(n: number): string {
 	return `×${W.fmtInt(n)}`;
 }
 
+/** one `v` per tab */
+function perTab<T extends defined>(v: T): Array<T> {
+	const out = new Array<T>();
+	for (let i = 0; i < TAB_COUNT; i++) out.push(v);
+	return out;
+}
+
 /** the tab a key's item lives in (an item key is "kind:id") */
 function keyParts(key: string): [string, number] {
 	const parts = key.split(":");
@@ -206,12 +241,12 @@ function detailAction(text: string, variant: W.ButtonVariant, enabled: boolean, 
 	return { text, variant, enabled, run };
 }
 
-/** the survivor's side of an item: the card (what it is), the key (how many / equipped), a line, the action */
+/** the survivor's side of an item: the card (what it is), the key (how many / equipped), a line, the action (or none) */
 interface ItemDetail {
 	card: ItemCardModel;
 	state: string;
 	help: string;
-	act: DetailAction;
+	act: DetailAction | undefined;
 }
 
 // ---------------------------------------------------------------- backpack
@@ -239,6 +274,13 @@ export class Backpack {
 	nearbyCook = false;
 	/** authoritative craft check from the game (craftSystem.craftBlocker): reason it can't be crafted, or undefined */
 	craftCheck: ((recipeId: number) => string | undefined) | undefined;
+	/**
+	 * (ITM-09) the Build tab's Place: construction kit `etcId` onto the build cursor (main.client -> craftSystem
+	 * placeKit: the server's Place verb, predicted), which closes the Bag when it went
+	 */
+	onPlace: ((etcId: number) => void) | undefined;
+	/** why kit `etcId` cannot be placed now (craftSystem.placeBlocker: the server's own rule), or undefined */
+	placeCheck: ((etcId: number) => string | undefined) | undefined;
 
 	private ctx: GameContext;
 	private root: Frame | undefined;
@@ -256,7 +298,7 @@ export class Backpack {
 	private grids: Array<BagGrid | undefined> = [];
 	private panel: BagPanel | undefined;
 	/** the selected item of each tab (a TileModel key; "" = none) */
-	private selected: Array<string> = ["", "", "", "", "", ""];
+	private selected: Array<string> = perTab("");
 	/** what the panel's button does now */
 	private run: () => void = noop;
 	private opened = false;
@@ -268,9 +310,9 @@ export class Backpack {
 	private tip: ItemCardHandle | undefined;
 	private hoverTile: BagTile | undefined;
 	/** idle-time warm-up (warmStep): per tab, how many of its tiles are built; whether its panel was shown once */
-	private warmAt: Array<number> = [0, 0, 0, 0, 0, 0];
-	private warmPanel: Array<boolean> = [false, false, false, false, false, false];
-	/** the tooltip card: how many item tabs it was shown for (weapons, gear, usables, materials) */
+	private warmAt: Array<number> = perTab(0);
+	private warmPanel: Array<boolean> = perTab(false);
+	/** the tooltip card: how many item tabs it was shown for (weapons, gear, usables, materials, build) */
 	private warmTip = 0;
 
 	constructor(ctx: GameContext) {
@@ -348,8 +390,8 @@ export class Backpack {
 		this.tip = undefined;
 		this.hoverTile = undefined;
 		this.headerSig = "";
-		this.warmAt = [0, 0, 0, 0, 0, 0];
-		this.warmPanel = [false, false, false, false, false, false];
+		this.warmAt = perTab(0);
+		this.warmPanel = perTab(false);
 		this.warmTip = 0;
 		const at: W.DesignRect = {
 			x: (W.DESIGN_W - WIN_W) / 2,
@@ -414,7 +456,7 @@ export class Backpack {
 	/** the reference's tab bar: one plate per tab, each with its glyph; the Skills tab carries the points badge */
 	private mountTabs(parent: Frame, y: number): void {
 		const names = TAB_DEFS.map(([label]) => this.tr(label));
-		const widths = names.map((n, i) => W.tabWidth(n) + TAB_LABEL_X - space(4) + (i === CAT_SKILLS ? BADGE_W : 0));
+		const widths = names.map((n, i) => W.tabWidth(n) + TAB_LABEL_X - TAB_TRIM + (i === CAT_SKILLS ? BADGE_W : 0));
 		let total = 0;
 		for (const w of widths) total += w;
 		total += TAB_GAP * (widths.size() - 1);
@@ -562,7 +604,7 @@ export class Backpack {
 		const panel = this.panel;
 		if (win === undefined || panel === undefined) return true;
 		// the tab open() shows first; Craft, the biggest, last
-		const order = [this.cat, CAT_WEAPONS, CAT_EQUIP, CAT_USABLES, CAT_MATERIALS, CAT_SKILLS, CAT_CRAFT];
+		const order = [this.cat, CAT_WEAPONS, CAT_EQUIP, CAT_USABLES, CAT_MATERIALS, CAT_BUILD, CAT_SKILLS, CAT_CRAFT];
 		for (const cat of order) {
 			const built = this.grids[cat];
 			if (built === undefined) {
@@ -590,8 +632,9 @@ export class Backpack {
 				return false;
 			}
 		}
-		// the mouse's card, once for each kind of item carried (a weapon's stats, a gear's, a usable's, a material's)
-		while (this.warmTip <= CAT_MATERIALS) {
+		// the mouse's card, once for each kind of item carried (a weapon's stats, a gear's, a usable's, a material's, a
+		// kit's)
+		while (this.warmTip <= LAST_ITEM_CAT) {
 			const cat = this.warmTip;
 			this.warmTip += 1;
 			const first = this.models(cat)[0];
@@ -623,7 +666,7 @@ export class Backpack {
 		const t = this.hoverTile;
 		const m = t?.model;
 		let card: ItemCardModel | undefined;
-		if (this.opened && win !== undefined && t !== undefined && m !== undefined && this.cat <= CAT_MATERIALS) {
+		if (this.opened && win !== undefined && t !== undefined && m !== undefined && this.cat <= LAST_ITEM_CAT) {
 			const [kind, id] = keyParts(m.key);
 			const onScreen = t.button.Visible && this.grids[this.cat]?.tileOf(m.key) === t;
 			if (onScreen && m.key !== this.selected[this.cat] && currentScheme() !== SCHEME_TOUCH) {
@@ -707,10 +750,19 @@ export class Backpack {
 				const n = save.invenUse[u.id] ?? 0;
 				if (n > 0) out.push(tile(ItemKind.Use, u.id, times(n), false));
 			}
+		} else if (cat === CAT_BUILD) {
+			// ITM-09: every construction kit carried, in the ETC table's order (the night desks after the vehicles)
+			for (const id of PLACEABLE_IDS) {
+				const n = countItem(save, ItemKind.Etc, id);
+				if (n > 0) out.push(tile(ItemKind.Etc, id, times(n), false));
+			}
 		} else {
-			for (let i = Info.MAT_START; i < ETC_ITEMS.size(); i++) {
-				const n = save.invenEtc[ETC_ITEMS[i].id] ?? 0;
-				if (n > 0) out.push(tile(ItemKind.Etc, ETC_ITEMS[i].id, times(n), false));
+			// everything else of the ETC table -- the ammunition and the Oil too: `countItem` reads them where the save
+			// keeps them (the ammo fields, shared/sim/inventory.ts), and `invenEtc` never held them
+			for (const e of ETC_ITEMS) {
+				if (Info.isBuildable(e.id)) continue;
+				const n = countItem(save, ItemKind.Etc, e.id);
+				if (n > 0) out.push(tile(ItemKind.Etc, e.id, times(n), false));
 			}
 		}
 		return out;
@@ -819,8 +871,10 @@ export class Backpack {
 		m.notes = d.card.notes;
 		m.extra = d.help;
 		m.hints = d.card.hints;
-		m.action = { text: d.act.text, variant: d.act.variant, enabled: d.act.enabled };
-		return [m, d.act.run];
+		const act = d.act;
+		if (act === undefined) return [m, noop];
+		m.action = { text: act.text, variant: act.variant, enabled: act.enabled };
+		return [m, act.run];
 	}
 
 	private emptyPanel(cat: number): [PanelModel, () => void] {
@@ -841,7 +895,9 @@ export class Backpack {
 		if (kind === ItemKind.Weapon && WEAPONS[id] !== undefined) return this.weaponDetail(WEAPONS[id]);
 		if (kind === ItemKind.Equip && EQUIPS[id] !== undefined) return this.equipDetail(id);
 		if (kind === ItemKind.Use && USABLES[id] !== undefined) return this.usableDetail(id);
-		if (kind === ItemKind.Etc && ETC_ITEMS[id] !== undefined) return this.materialDetail(id);
+		if (kind === ItemKind.Etc && ETC_ITEMS[id] !== undefined) {
+			return Info.isBuildable(id) ? this.kitDetail(id) : this.materialDetail(id);
+		}
 		return undefined;
 	}
 
@@ -940,11 +996,41 @@ export class Backpack {
 		return { card, state: times(count), help: this.tr("Consumed when used."), act };
 	}
 
+	/**
+	 * A material, the ammunition or the Oil. Open Craft when the Craft tab has something to do with it (a recipe takes
+	 * it, or makes it: the ammunition); the Oil is neither -- its card says what burns it -- so it has no button.
+	 */
 	private materialDetail(id: number): ItemDetail | undefined {
-		const count = this.ctx.save.invenEtc[id] ?? 0;
-		const act = detailAction(this.tr("Open Craft"), "secondary", true, (): void => this.selectCat(CAT_CRAFT));
+		const count = countItem(this.ctx.save, ItemKind.Etc, id);
+		const crafted = Info.recipesUsing(id).size() > 0 || recipeMaking(ItemKind.Etc, id) !== undefined;
+		const act = crafted
+			? detailAction(this.tr("Open Craft"), "secondary", true, (): void => this.selectCat(CAT_CRAFT))
+			: undefined;
 		const card = this.cardOf(ItemKind.Etc, id);
 		return card !== undefined ? { card, state: times(count), help: "", act } : undefined;
+	}
+
+	/**
+	 * (ITM-09) A construction kit: how many, what it does (the card), and Place -- onto the build cursor, the Bag steps
+	 * aside for the ghost. The game's own check (craftSystem.placeBlocker, the server's rule) greys it out and says why:
+	 * a build already on the cursor, a vehicle under the survivor.
+	 */
+	private kitDetail(id: number): ItemDetail | undefined {
+		const count = countItem(this.ctx.save, ItemKind.Etc, id);
+		const card = this.cardOf(ItemKind.Etc, id);
+		if (card === undefined) return undefined;
+		const blocker = count > 0 ? this.placeCheck?.(id) : undefined;
+		let help = this.tr("Placing it uses one. Cancelling keeps it.");
+		let act: DetailAction;
+		if (count <= 0) {
+			act = detailAction(this.tr("None left"), "default", false, noop);
+		} else if (blocker !== undefined) {
+			help = this.tr(blocker);
+			act = detailAction(this.tr("Can't place"), "default", false, noop);
+		} else {
+			act = detailAction(this.tr("Place"), "default", this.onPlace !== undefined, (): void => this.placeKit(id));
+		}
+		return { card, state: times(count), help, act };
 	}
 
 	// ------------------------------------------------------------ actions (rules live in main.client)
@@ -978,6 +1064,13 @@ export class Backpack {
 	private useItem(id: number): void {
 		if ((this.ctx.save.invenUse[id] ?? 0) <= 0) return;
 		this.onUse?.(id);
+		this.rebuild();
+	}
+
+	/** ITM-09: the kit onto the build cursor; main.client closes the Bag when it went (the ghost is in the street) */
+	private placeKit(id: number): void {
+		if (countItem(this.ctx.save, ItemKind.Etc, id) <= 0 || this.placeCheck?.(id) !== undefined) return;
+		this.onPlace?.(id);
 		this.rebuild();
 	}
 

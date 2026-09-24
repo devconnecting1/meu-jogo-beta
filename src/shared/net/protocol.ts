@@ -183,6 +183,26 @@
  *     density, a lightning flash, a thunderclap -- is a pure function of (weather, worldDay, dayTime) that client and
  *     server compute alike, so it costs nothing on the wire; the delta still goes out on a change (the weather changes at
  *     midnight, or by the admin) and every CLOCK_RESYNC_S, as before.
+ * 26. (ITM-09, the Bag's Build tab: a construction kit the backpack holds, placed) One more backpack verb and nothing
+ *     else: `Place` (10), 8 B like every verb of note 16, arg = the ETC_ITEMS row of the kit (`intentArgRange` is the
+ *     ETC table, [0, ETC_ITEMS.size() - 1]; a verb above 10, or an arg past the table, is malformed as before). It
+ *     takes the same road as the others -- the token bucket, the queue, `atSeq`, the nonce and `bag.ack`, a dead
+ *     survivor's refused, and out of the world refused (server/net/intentGate.ts: the lobby has no cursor) -- and the
+ *     server holds it on the craft's own clock (4 a second: both put a construction on the cursor). The server applies
+ *     the shared rule (shared/sim/placement.ts `kitRefusal`): a PLACEABLES key ("unknown" otherwise: a spoofed row such
+ *     as Wood never reaches a cursor), the backpack holds one ("owned"), alive ("dead"), on foot and nothing already on
+ *     the cursor ("busy"). It only puts the kit on the build cursor (`ServerBuild.hold(..., kit)`); it names no spot,
+ *     like the rest: the attack edge places it where the SERVER says the survivor aims, and only THEN is one taken from
+ *     the backpack -- checked again in that step, so a kit gone meanwhile builds nothing and comes off the cursor. A
+ *     cancel (the action edge), a death or a trip out of the world leaves the kit in the backpack, and never gives the
+ *     ingredients of its recipe back. `Craft` of a construction now does the same with the kit it makes: into the
+ *     backpack, then onto the cursor as a kit -- the server's cursor only ever holds kits -- and, like Place, only on
+ *     foot ("busy" on a vehicle). S→C nothing new: the bag's `place` already carries the cursor and `invenEtc` the
+ *     count. The client predicts both verbs by the same rules (client/net/bagPrediction.ts) and its cursor keeps
+ *     `pendingKit` for its own world offline (client/systems/build.ts spends it there). Until the bag has ANSWERED the
+ *     verb (`bag.ack`), the client's cursor is a guess the server may have refused, and there the attack edge would be
+ *     a shot and the action edge an interaction: the client sends neither for that cursor meanwhile (client/net/
+ *     authority.ts `buildUnconfirmed`; the security review of 0a7561e, 6) -- nothing on the wire changes.
  */
 import {
 	NetReader,
