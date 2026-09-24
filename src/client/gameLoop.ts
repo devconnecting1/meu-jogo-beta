@@ -72,6 +72,7 @@ import { circleInView, part } from "./view/drawKit";
 import { WorldView } from "./view/worldView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
+import { BodyGrid } from "./view/bodyGrid";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import { reducedMotion } from "./ui/skin";
 
@@ -374,6 +375,8 @@ export class GameLoop {
 	/** buildings whose roof is (or may be) not fully opaque; eased even off-screen */
 	private fadingRoofs = new Set<Solid>();
 	private queryBuf: Array<Solid> = [];
+	/** this frame's standing zombies by position: what a tree's canopy asks (updateCanopy) */
+	private readonly underCanopy = new BodyGrid();
 	/** player walk cycle (feet) */
 	private walkPhase = 0;
 	private walkAmp = 0;
@@ -713,6 +716,12 @@ export class GameLoop {
 		list.clear();
 		// the building records and the trees: never a building's own walls or furniture (queryTown)
 		queryTown(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
+		// the standing zombies, bucketed once for every tree below (L6: each tree walked the whole horde)
+		const under = this.underCanopy;
+		under.clear();
+		for (const z of this.zombies) {
+			if (z.hp > 0) under.add(z.x, z.y);
+		}
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);
@@ -741,23 +750,15 @@ export class GameLoop {
 		// any part of a body (≈18 px radius) under the canopy counts: nobody hides half-covered
 		const r = (s.canopyR ?? 80) + 18;
 		const r2 = r * r;
-		let under = false;
 		const p = this.player;
-		if ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2) {
-			under = true;
-		} else {
-			for (const z of this.zombies) {
-				if (z.hp > 0 && (z.x - cx) * (z.x - cx) + (z.y - cy) * (z.y - cy) < r2) {
+		// the survivor, then the standing zombies from the cells under the crown only (updateWorldFx filled the grid
+		// this frame), then the bosses
+		let under = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r);
+		if (!under) {
+			for (const b of this.bosses) {
+				if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
 					under = true;
 					break;
-				}
-			}
-			if (!under) {
-				for (const b of this.bosses) {
-					if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
-						under = true;
-						break;
-					}
 				}
 			}
 		}

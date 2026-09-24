@@ -31,6 +31,8 @@
  *  10. NO GARBAGE ON THE ACTOR PATHS (M4). A walking horde -- hit flashes fading, spitters winding up, a lit fuse --
  *      builds no Color3 once warm, draws from 4 option tables and writes no property with the value it already had;
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
+ *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
+ *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -847,6 +849,66 @@ section("10) no garbage per frame on the actor paths (M4): option tables, colour
 	check(
 		/return out;/.test(shadow) && !/return \{/.test(shadow),
 		"GameLoop.shadowOffset answers in one scratch, like drawKit's (a table per solid, item and actor before)",
+	);
+}
+
+// ================================================================ 11. the canopy asks a grid
+
+section("11) a tree's canopy asks the cells under its crown, not the whole horde (L6)");
+{
+	const { BodyGrid } = require(join(SRC, "client/view/bodyGrid.ts"));
+	const grid = new BodyGrid();
+	let seed = 11;
+	const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+	let mismatch = "";
+	let asked = 0;
+	for (let frame = 0; frame < 40 && mismatch === ""; frame++) {
+		// a horde around a point of the town, some bodies exactly on a cell's edge, and a few outside the map
+		const bodies = [];
+		for (let i = 0; i < 150; i++) {
+			const edge = i % 17 === 0;
+			bodies.push({
+				x: edge ? 256 * (30 + (i % 7)) : 7000 + (rnd() - 0.5) * 3000 - (i % 23 === 0 ? 9000 : 0),
+				y: edge ? 256 * (40 + (i % 5)) : 10000 + (rnd() - 0.5) * 2000,
+			});
+		}
+		grid.clear();
+		for (const b of bodies) grid.add(b.x, b.y);
+		for (let t = 0; t < 60; t++) {
+			const x = 7000 + (rnd() - 0.5) * 3400;
+			const y = 10000 + (rnd() - 0.5) * 2400;
+			const r = 60 + rnd() * 200;
+			const linear = bodies.some(b => (b.x - x) * (b.x - x) + (b.y - y) * (b.y - y) < r * r);
+			asked++;
+			if (grid.anyWithin(x, y, r) !== linear) mismatch = `(${x.toFixed(0)}, ${y.toFixed(0)}) r ${r.toFixed(0)}`;
+		}
+	}
+	check(
+		mismatch === "",
+		"the grid answers exactly as the walk over the whole horde did",
+		`${asked} questions ${mismatch}`,
+	);
+	const fill = () => {
+		grid.clear();
+		for (let i = 0; i < 150; i++) grid.add(7000 + (i % 15) * 90, 10000 + Math.floor(i / 15) * 90);
+		grid.anyWithin(7400, 10300, 120);
+	};
+	fill();
+	const cellArrays = grid.arrays.length;
+	for (let f = 0; f < 60; f++) fill();
+	check(
+		grid.size() === 150 && grid.arrays.length === cellArrays,
+		"refilled every frame, it keeps its cells' arrays (none made after the first fill)",
+		`${grid.arrays.length} arrays`,
+	);
+	const loop = readFileSync(join(SRC, "client", "gameLoop.ts"), "utf8");
+	const canopy = loop.slice(
+		loop.indexOf("private updateCanopy("),
+		loop.indexOf("// ---", loop.indexOf("private updateCanopy(")),
+	);
+	check(
+		/this\.underCanopy\.anyWithin\(cx, cy, r\)/.test(canopy) && !/for \(const z of this\.zombies\)/.test(canopy),
+		"GameLoop.updateCanopy asks the grid, filled once a frame (it walked every zombie for every tree)",
 	);
 }
 
