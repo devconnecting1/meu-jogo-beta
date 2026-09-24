@@ -306,7 +306,8 @@ export const TOWN_SPAWNS: Record<number, Array<SpawnEntry>> = {
 	23: [
 		{ building: 23, kind: 3, index: 9, min: 1, max: 2 },
 		{ building: 23, kind: 3, index: 4, min: 1, max: 2 },
-		{ building: 23, kind: 3, index: 12, min: 0.5, max: 0.5 },
+		// the parish box's bandages: with the two hospitals and the fewer pharmacies, medicine per town stays where it was
+		{ building: 23, kind: 3, index: 12, min: 1, max: 1 },
 		{ building: 23, kind: 3, index: 5, min: 0.1, max: 0.1 },
 		{ building: 23, kind: 4, index: 34, min: 1, max: 2 },
 	],
