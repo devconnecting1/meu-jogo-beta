@@ -22,7 +22,6 @@ import {
 	netLeaveWorld,
 	netOnTown,
 	netPrewarm,
-	netTownSeed,
 	remotePlayers,
 	TownNotice,
 } from "./net/netClient";
@@ -341,7 +340,8 @@ function lobbyStatus(): LobbyStatus {
 		run,
 		hosted,
 		clockDriven: loop.getRefs().daynight.serverDriven(),
-		seed: netTownSeed(),
+		// the SERVER's town (MP-26), or undefined until heard: the page colour behind the menus, never a guessed town
+		seed: Boot.knownTownSeed(),
 		fellOn: lobbyNav.fellOn,
 		offlineNote: offlineNote(),
 	};
@@ -354,7 +354,7 @@ function lobbyStatus(): LobbyStatus {
 function menuScreen(phase: GamePhase): void {
 	clearScreen();
 	setPhase(phase);
-	Flyover.pinFlyover(ctx.backdropLayer, netTownSeed());
+	Flyover.pinFlyover(ctx.backdropLayer, Boot.knownTownSeed());
 }
 
 /** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
@@ -835,11 +835,6 @@ function buildRun(): void {
 	lastLevel = ctx.save.level;
 }
 
-/** MP-22: "The town fell on day N. A new town rises: day 1." */
-function townFellText(day: number): string {
-	return `${tr("The town fell on day")} ${fmtInt(day)}. ${tr("A new town rises: day 1")}`;
-}
-
 /**
  * MP-22: what the server says about its town (client/net/netClient.ts `netOnTown`) — the InitBegin of every entry,
  * and the WorldReset of a world that ended because nobody was left alive in it.
@@ -857,6 +852,9 @@ function townFellText(day: number): string {
  */
 function onTown(notice: TownNotice): void {
 	const fellOn = notice.endedDay;
+	// MP-22 / MP-26, named (client/boot/serverTown.ts): the town a run in the street stood in, and the notice's new one
+	const news =
+		fellOn !== undefined ? Boot.townEndText(tr, notice, heartbeat !== undefined ? loop.townSeed : undefined) : "";
 	if (fellOn !== undefined) {
 		worldResets += 1;
 		lobbyNav.fellOn = fellOn;
@@ -881,7 +879,7 @@ function onTown(notice: TownNotice): void {
 	if (heartbeat === undefined) {
 		if (fellOn === undefined) return;
 		runActive = false;
-		if (ctx.phase !== "boot") toast(ctx, townFellText(fellOn));
+		if (ctx.phase !== "boot") toast(ctx, news);
 		// the lobby on screen shows the new town (its flyover, its day) and the new life, not a death that is over
 		lobbyNav.handle?.refresh(lobbyStatus());
 		return;
@@ -903,7 +901,7 @@ function onTown(notice: TownNotice): void {
 		p.hp = 0;
 		setPhase("dead");
 	}
-	if (fellOn !== undefined) hud.showMessage(townFellText(fellOn));
+	if (fellOn !== undefined) hud.showMessage(news);
 }
 
 netOnTown(onTown);
@@ -1178,9 +1176,6 @@ function begin(): void {
 	showLogo(ctx.uiLayer, () => {
 		goLobby();
 	});
-	// the town behind the lobby (UI-10) is generated while the logo holds still (its fades end at 1.25 s, the lobby
-	// opens at 1.5 s), not when the lobby opens
-	task.delay(1.3, () => Flyover.prewarmTown(netTownSeed()));
 }
 
 // audio (src/client/audio/boot.ts): the mixer boots with the client, reads the Settings sliders straight from the
@@ -1206,6 +1201,9 @@ Bag.start();
 // F1: assina os remotes do host agora, nao no primeiro quadro da partida -- o servidor admite o jogador
 // assim que ele entra e ja comeca a mandar snapshot (client/net/netClient.ts: netPrewarm)
 netPrewarm();
+// MP-26: the town the SERVER runs, heard the moment this client joins -- generated a slice per frame behind the logo
+// (the lobby draws it; the match takes that very copy) and followed by the menus' flyover when a world ends
+Boot.startServerTown();
 task.delay(LOAD_FALLBACK_SEC, begin);
 
 print(`[${GAME_NAME}] client ready`);

@@ -1895,6 +1895,46 @@ section("12) experiments: the welcome pack is read from the player's snapshot, o
 
 // ================================================================ 13: the catalogue within the documented limits
 
+section(
+	"12b) MP-26: JoinedFromList is counted where the player ARRIVES (review of 0b44458, L5), once a session",
+	() => {
+		const h = makeCore();
+		const pl = fakePlayer(611, "traveller");
+		const save = blankSave();
+		save.bestDay = 9;
+		// the join data is read when the player joins, before the save is here: the event waits for it
+		h.core.arrivedFromList(pl, 6, 3);
+		const before = h.rows.filter(r => r.name === "JoinedFromList").length;
+		h.core.sessionLoaded(pl, "ok", save);
+		const rows = h.rows.filter(r => r.name === "JoinedFromList");
+		check(
+			before === 0 &&
+				rows.length === 1 &&
+				rows[0].value === 6 &&
+				rows[0].fields?.CustomField01 === "Players - 2-3" &&
+				rows[0].fields?.CustomField02 === "World day - 4-7" &&
+				rows[0].fields?.CustomField03 === "Best day - 8-14",
+			"an arrival waits for the save, then ONE JoinedFromList: this town's day, how full it was, the player's best day",
+			JSON.stringify(rows.map(r => ({ value: r.value, fields: r.fields }))),
+		);
+		// a retry loads the session again: still one
+		h.core.sessionLoaded(pl, "ok", save);
+		check(
+			h.rows.filter(r => r.name === "JoinedFromList").length === 1,
+			"...once a session, even when the save loads again",
+		);
+		// somebody who leaves before their save is here is never counted, and is not remembered
+		const gone = fakePlayer(612, "gone");
+		h.core.arrivedFromList(gone, 2, 1);
+		h.core.playerLeft(gone);
+		h.core.sessionLoaded(gone, "ok", blankSave());
+		check(
+			h.rows.filter(r => r.name === "JoinedFromList" && r.userId === 612).length === 0,
+			"...and an arrival that left before its save loaded is forgotten, never counted later",
+		);
+	},
+);
+
 section("13) every row of this run: within the documented limits, low cardinality, no PII", () => {
 	const A = require(join(SRC, "server/analytics/events.ts"));
 	const rows = EVERY_ROW;
@@ -1945,8 +1985,11 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		"Rebirths - (0|1|2|3\\+)",
 		"Continue - (1|2|3|4\\+)",
 		"Afford - (Yes|No)",
-		"Reason - (Timeout|Declined)",
-		"Fallen - (1|2|3\\+)",
+		"Reason - (Timeout|Declined|Restarted)",
+		"Fallen - (0|1|2|3\\+)",
+		// MP-26: JoinedFromList (docs/ANALYTICS.md §5)
+		"Players - (1|2-3|4\\+)",
+		`Best day - ${bucket}`,
 		"Kills - (0|1-9|10-49|50-199|200\\+)",
 		"Kind - (Crafted|Cooked|Smelted)",
 		"Category - (Pack|Costume)",
@@ -1986,7 +2029,7 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		2 + // TutorialChoice
 		B * 2 * 5 + // Died: life day x time x cause
 		2 * B * 4 + // LifeEnded
-		2 * 3 * B + // WorldEnded
+		3 * 4 * B + // WorldEnded: reason (MP-26: Restarted too) x fallen (0 to 3+) x days
 		TITLES.length + // TitleEarned
 		5 + // SessionKills
 		3 + // Crafted
@@ -2001,7 +2044,8 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		2 * 4 * 2 + // Shop step 1
 		B * B * 2 + // TownOffered: world day x record x visit
 		A.TRIP_STAGES.length * A.TRIP_RESULTS.length * 2 + // TripFailed: stage x result x route
-		2 * B * B; // NewTown step 1: route x world day x life day
+		2 * B * B + // NewTown step 1: route x world day x life day
+		3 * B * B; // JoinedFromList (MP-26): players x world day x record
 	check(
 		ceiling < 8000 && distinctOf(combos).length <= ceiling,
 		"unique combinations of the three fields: bounded by the catalogue far below 8,000 (the experience's limit)",

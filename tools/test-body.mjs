@@ -4228,7 +4228,7 @@ section("33) the first frame of a run is drawn where the server put the survivor
  * the server die/stop working?" (the owner, 2026-09-24). The real server with the first player -- slot 0, the first
  * readable load, the owner of a private server -- leaving, dying, being replaced; what the others must keep: the tick,
  * their snapshots, the clock, the town, the horde and its night waves around THEM, the roster and the scoreboard, and a
- * world that ends only by MP-22's rule (tools/test-reset.mjs 19 has the world's end when everybody goes).
+ * world that ends only by MP-22's rule (tools/test-reset.mjs 22 has the world's end when everybody goes).
  */
 section(
 	"34) nobody is the host: the first player leaving, dying or being replaced changes nothing for the others",

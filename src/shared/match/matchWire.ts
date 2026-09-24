@@ -86,7 +86,17 @@ export const TRIP_FAILURES: ReadonlyArray<TripFailure> = [
  * (server/net/mpHost.ts `keptInDanger`). A trip then would be a free, instant escape from a fight (review H1).
  */
 export type TripRefusal =
-	"studio" | "unavailable" | "rate" | "busy" | "dead" | "danger" | "inWorld" | "solo" | "loading" | "noOffer";
+	| "studio"
+	| "unavailable"
+	| "rate"
+	| "busy"
+	| "dead"
+	| "danger"
+	| "inWorld"
+	| "solo"
+	| "loading"
+	| "noOffer"
+	| "joining";
 export const TRIP_REFUSALS: ReadonlyArray<TripRefusal> = [
 	"studio",
 	"unavailable",
@@ -98,6 +108,8 @@ export const TRIP_REFUSALS: ReadonlyArray<TripRefusal> = [
 	"solo",
 	"loading",
 	"noOffer",
+	// a join from the lobby's Servers list is in flight (MP-26, server/match/serverList.ts): one teleport at a time
+	"joining",
 ];
 
 export type TripStage = "start" | "going" | "retry" | "failed";

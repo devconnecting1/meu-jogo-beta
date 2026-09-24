@@ -52,6 +52,8 @@ import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
+import { keepPrivateTown } from "./save/privateTown";
+import { TownServices, startTownServices } from "./match/townServices";
 import * as Analytics from "./analytics/events";
 import { grantWelcomePack } from "./config/experiments";
 import { MatchHost, readKind, startMatch } from "./match/matchHost";
@@ -1262,6 +1264,10 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
 		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
 		if (refusal !== undefined) return fail(refusal, s);
+		// a world is ending (MP-22, or a keeper's restart, MP-26): the life this would buy is about to be replaced by
+		// the new town's, so nothing is sold meanwhile -- "invalid" is what the client already reads as "a new life is
+		// on its way" (review of f851ad2, L1/L2; review of 0b44458, L1: no coins for a life that then ends)
+		if (mpHost !== undefined && mpHost.worldEnding()) return fail("invalid", s);
 		const host = mpHost;
 		if (req.kind === "rebirth") {
 			// what the sale changes, to take back if the body does not stand (F5). Nothing yields in here, so nobody
@@ -1712,6 +1718,8 @@ admin = startAdminServer({
  * The host never reads or writes the DataStore: it only borrows the live save table of a loaded session, which
  * is what `stepPlayer` reads the skill levels from.
  */
+/** MP-26: the Servers list and Restart town (server/match/townServices.ts), started with the host */
+let townServices: TownServices | undefined;
 if (MP_PHASE >= 1) {
 	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
 	// a solo town writes the shared world log at most once per gap, the longest-lasting town of it (§7.4, LOW 5)
@@ -1725,7 +1733,18 @@ if (MP_PHASE >= 1) {
 					onClose: fn => game.BindToClose(fn),
 				})
 			: startWorldLog();
+	// MP-26: the server picks its town and owns it (server/net/mpHost.ts); a PRIVATE server with an owner also keeps it
+	// across its sessions -- read here, before the town is generated, so it never swaps (server/save/privateTown.ts).
+	// A public server keeps nothing: undefined, and the host picks a fresh seed. What comes back is the town (its seed,
+	// the same streets) and when it began, never its day: a private town opens on its owner's LIFE day (MP-13, settled
+	// by server/match/matchHost.ts before anybody enters)
+	const keptTown = keepPrivateTown(() =>
+		mpHost !== undefined ? { seed: mpHost.seed, startedAt: mpHost.startedAt } : undefined,
+	);
+	const kept = keptTown?.initial;
 	mpHost = startMpHost({
+		seed: kept?.seed,
+		startedAt: kept?.startedAt,
 		saveOf: player => {
 			const s = sessions.get(player);
 			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
@@ -1736,15 +1755,24 @@ if (MP_PHASE >= 1) {
 		},
 		// nobody enters the city while their trip to a town of their own is in flight (review M2: the teleport would yank
 		// the new body out of a run), nor before a solo / private town knows the day it opens on (MP-13). Asked only
-		// at the admission: the save stays visible to rule 6 and the kept body meanwhile (second review, LOW 2)
-		mayEnter: player => match === undefined || match.admits(player),
+		// at the admission: the save stays visible to rule 6 and the kept body meanwhile (second review, LOW 2). MP-26:
+		// nor while a join from the Servers list is taking them to another public server
+		mayEnter: player =>
+			(match === undefined || match.admits(player)) && townServices?.list.joining(player) !== true,
 		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
 		// world that ended gave its fallen a new life (MP-22): `resetRun` and a new `runRev` in the live save
 		saveChanged: userId => markDirty(userId),
 		// MP-22: everybody in the world died and nobody paid inside the window (server/sim/life.ts rule 6), so the
 		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
 		// is the record of the world that ended — persisted off this thread, the reset never waits for it
-		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
+		onWorldWiped: (report, outcome) => {
+			// MP-22's worlds go to the shared record; a keeper's restart (MP-26) is this server's business only, kept in
+			// its memory -- it must never push MP-22's records out of the shared list (review of 0b44458, M4)
+			if (report.reason === "restart") worldLog.remember(outcome.ended);
+			else worldLog.record(outcome.ended);
+			// the next session of a private server opens on the NEW town (on its owner's life day, MP-13)
+			keptTown?.note({ seed: outcome.seed, startedAt: outcome.startedAt });
+		},
 		// §8.2 "registrado" (audit L4): every automatic kick into the admin audit log, by UserId
 		onFloodKick: (player, reason) => admin?.floodKick(player, reason),
 	});
@@ -1797,6 +1825,46 @@ if (MP_PHASE >= 1) {
 			if (s !== undefined && !s.closed) s.dirty = true;
 		},
 	});
+	// MP-26: the lobby's Servers list and join (MemoryStore + TeleportService), and the keeper's "Restart town"
+	// (server/match/townServices.ts). The host, the sessions and the audit log are all this file's
+	const host = mpHost;
+	townServices = startTownServices({
+		town: () => ({ seed: host.seed, day: host.simulation.clock.day }),
+		players: () => Players.GetPlayers().size(),
+		capacity: () => Players.MaxPlayers,
+		inWorld: player => host.playerOf(player) !== undefined,
+		loading: player => {
+			const s = sessions.get(player);
+			return s === undefined || !s.loaded || s.closed;
+		},
+		connected: player => sessions.has(player),
+		// the same gates as Play solo's trip (server/match/matchHost.ts): a death answered where it happened (MP-21),
+		// no escape from a fight (H1), one teleport at a time
+		isDead: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded && host.isDead(player, s.save);
+		},
+		keptInDanger: player => host.keptInDanger(player),
+		travelling: player => match?.travel.inFlight(player) === true,
+		bestDay: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded ? s.save.bestDay : undefined;
+		},
+		// MP-26: a join from another server's list is counted where it lands (review of 0b44458, L5)
+		arrived: player => Analytics.arrivedFromList(player, host.simulation.clock.day, Players.GetPlayers().size()),
+		log: line => print(`[${GAME_NAME}] ${line}`),
+		warn: (what, detail) => {
+			// a fixed sentence for the Error Report, the error text in the line after it (docs/ANALYTICS.md §10)
+			warn(`[${GAME_NAME}] ${what}`);
+			print(`[${GAME_NAME}] ${what}: ${detail}`);
+		},
+		restart: by => host.restartTown(by),
+		audit: (userId, ok, details, byAdmin) => {
+			if (admin !== undefined) admin.townAudit(userId, ok, details, byAdmin);
+			else print(`[${GAME_NAME}] town restart by ${userId}: ${ok ? "OK" : "REFUSED"} (${details})`);
+		},
+		noteRemote: (player, malformed) => floodDrop(player, malformed),
+	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
 
@@ -1846,6 +1914,8 @@ match = startMatch({
 	},
 	// §8.2: the Match remote counts toward the connection's flood limits, like every remote this file owns
 	floodDrop: (player, malformed) => floodDrop(player, malformed),
+	// MP-26: never while a join from the lobby's Servers list is taking the player to another public server
+	joining: player => townServices?.list.joining(player) === true,
 	prepare: player => {
 		const s = sessions.get(player);
 		if (s === undefined || s.closed || !s.loaded) return;

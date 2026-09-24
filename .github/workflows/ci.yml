@@ -295,6 +295,18 @@ jobs:
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
 
+      # MP-26: the server's seed IS the town -- server = client seed by seed, sliced = whole, no clock/random/Map
+      # order/libm read -- and the lobby's town, generated a slice per frame, handed to the match with no regeneration
+      - name: One seed, one town everywhere (server = client, sliced = whole, any libm)
+        run: npm run test:seed
+
+      - name: The lobby's town goes to the match (sliced generation, zero regeneration, preload plan, warm-up)
+        run: npm run test:cache
+
+      # MP-26: the lobby's Servers list -- MemoryStore publish / read / join validation and the quota, on fakes
+      - name: The Servers list (who publishes, the list, the join checks, the MemoryStore quota)
+        run: npm run test:serverlist
+
       - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
         run: npm run test:save
 
