@@ -108,7 +108,7 @@ function sameTown(a, b) {
 /** a town and a freshly generated one share no object (the menus' copy and the match's are two towns) */
 function shareNothing(a, b) {
 	const seen = new Set();
-	// the spatial grids share ONE empty cell (world.ts EMPTY_CELL: an insert swaps it for a fresh array, a remove from it
+	// the spatial grids share ONE empty cell (solidGrid.ts EMPTY_CELL: an insert swaps it for a fresh array, a remove from it
 	// finds nothing), so an empty array inside a grid's `cells` is that read-only sentinel, not town data
 	const sentinel = (x, key) => key === "cells" && Array.isArray(x) && x.length === 0;
 	const collect = (x, key) => {

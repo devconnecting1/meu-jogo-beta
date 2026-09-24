@@ -126,6 +126,13 @@ export class ZombieWorld {
 	private solidCount = -1;
 	private readonly hash = new SpatialHash();
 	private hashTick = -1;
+	/** `zombiesNear`'s hash answer (scratch: one per call, never kept) */
+	private readonly nearIdx: Array<number> = [];
+	/**
+	 * Entries in `ids`: roblox-ts compiles a Map's size() to a counting loop over the whole map, and `trackEntities`
+	 * asks it every tick with ~150 entries.
+	 */
+	private idCount = 0;
 
 	constructor(world: WorldData, clock?: WorldClock) {
 		this.world = world;
@@ -320,6 +327,7 @@ export class ZombieWorld {
 		const rec = this.ids.get(z);
 		if (rec === undefined) return; // it never lived long enough to get an id: nobody was ever told about it
 		this.ids.delete(z);
+		this.idCount -= 1;
 		this.releaseNetId(rec.netId, this.lastTick);
 		this.deaths.push({
 			netId: rec.netId,
@@ -336,6 +344,7 @@ export class ZombieWorld {
 			if (rec === undefined) {
 				rec = { netId: this.takeNetId(tick), x: z.x, y: z.y, tick };
 				this.ids.set(z, rec);
+				this.idCount += 1;
 				continue;
 			}
 			rec.x = z.x;
@@ -344,7 +353,7 @@ export class ZombieWorld {
 		}
 		// one integer comparison tells whether anything vanished behind the simulation's back — an admin
 		// clearing the horde, a future system splicing the list. `retire` has already handled the rest.
-		if (this.ids.size() === this.zombies.size()) return;
+		if (this.idCount === this.zombies.size()) return;
 		this.gone.clear();
 		for (const [z, rec] of this.ids) {
 			if (rec.tick !== tick) this.gone.push(z);
@@ -352,6 +361,7 @@ export class ZombieWorld {
 		for (const z of this.gone) {
 			const rec = this.ids.get(z) as ZombieRecord;
 			this.ids.delete(z);
+			this.idCount -= 1;
 			this.releaseNetId(rec.netId, tick);
 			this.deaths.push({ netId: rec.netId, x: rec.x, y: rec.y, cause: DeathCause.Despawned });
 		}
@@ -393,7 +403,8 @@ export class ZombieWorld {
 				this.hash.insert(i, z.x, z.y);
 			}
 		}
-		const found = new Array<number>();
+		const found = this.nearIdx;
+		found.clear();
 		this.hash.within(x, y, radius, found);
 		const r2 = radius * radius;
 		for (const i of found) {

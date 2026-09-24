@@ -823,7 +823,16 @@ export class ServerSimulation {
 		return this.bySlot.get(slot);
 	}
 
-	/** every survivor in the world, always in ascending slot order */
+	/**
+	 * The same survivors as `players()`, in the same order, WITHOUT the copy: the simulation's own roster. For the
+	 * loops that run every tick and cannot see anybody join or leave while they run (the replication's: a join or a
+	 * leave happens between two ticks, and rebuilds this array in place). Never keep it, never write it.
+	 */
+	survivors(): ReadonlyArray<ServerPlayer> {
+		return this.roster;
+	}
+
+	/** every survivor in the world, always in ascending slot order (a copy: see `survivors` for the per-tick loops) */
 	players(): Array<ServerPlayer> {
 		const out = new Array<ServerPlayer>();
 		for (const slot of this.order) {
@@ -951,7 +960,9 @@ export class ServerSimulation {
 			// a skill) and its weapon machine (a switch) already see them, exactly as the client predicted them
 			this.backpack.beforeCommand(sp, cmd, this.tick);
 			const rode = sp.state.ride !== undefined;
+			// one shared table (shared/sim/playerMove.ts): what is read after other systems ran is copied first
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
+			const died = res.died;
 			// VEI-05: what the ride cost or caused this step (a crash, a zombie ahead, fuel, noise), on the same command
 			this.vehicles?.afterStep(sp, res, this.horde?.zombies ?? EMPTY_ZOMBIES, this.tickDt);
 			noteStep(sp, cmd, res.walking);
@@ -973,7 +984,7 @@ export class ServerSimulation {
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
 			this.stepWorldActions(sp, cmd);
-			if (res.died && this.onDeath !== undefined) this.onDeath(sp);
+			if (died && this.onDeath !== undefined) this.onDeath(sp);
 		}
 		prof?.end();
 		t0 = this.lap("players", t0);

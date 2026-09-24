@@ -40,6 +40,12 @@ export interface StepResult {
 
 /** what a step of a body that is already dead returns: it goes nowhere, and it does not die a second time */
 const LIFELESS: StepResult = { moved: 0, walking: false, died: false };
+/**
+ * What every other step returns: ONE table owned by this module, overwritten by the next step (six survivors at
+ * 60 Hz on the server, and every command the prediction replays, used to make a table each). Read it at once and
+ * never keep it -- a caller that collects results copies them.
+ */
+const STEP: StepResult = { moved: 0, walking: false, died: false };
 
 /**
  * Advances `p` by one command. Mutates the survivor (position, hp, hunger, buffs, knockback) and returns what the
@@ -140,5 +146,9 @@ export function stepPlayer(
 		p.dead = true;
 		died = true;
 	}
-	return crash > 0 ? { moved, walking, died, crash } : { moved, walking, died };
+	STEP.moved = moved;
+	STEP.walking = walking;
+	STEP.died = died;
+	STEP.crash = crash > 0 ? crash : undefined;
+	return STEP;
 }
