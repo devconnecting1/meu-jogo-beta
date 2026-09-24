@@ -815,7 +815,7 @@ const asked = [];
 const askedOf = n => asked.filter(a => a === n).length;
 const isFlat = snd => snd.Parent?.ClassName !== "Attachment";
 const BANK_IDS = { ui: "rbxassetid://7001", items: "rbxassetid://7002", weapons: "rbxassetid://7003" };
-Object.assign(BANK_IDS, { impacts: "rbxassetid://7004", cues: "rbxassetid://7005" });
+Object.assign(BANK_IDS, { impacts: "rbxassetid://7004", cues: "rbxassetid://7005", weather: "rbxassetid://7006" });
 /** hands every bank an id (as an upload would), or takes them all away */
 function banks(on) {
 	for (const b of Object.keys(AA.AUDIO_BANK_IDS)) AA.AUDIO_BANK_IDS[b] = on ? BANK_IDS[b] : "";
@@ -1646,7 +1646,7 @@ section(
 		}
 		check(
 			drift.length === 0,
-			"os 5 bancos em design/audio/banks sao os do gerador (deterministico; npm run audio:sfx)",
+			`os ${SFX.BANKS.length} bancos em design/audio/banks sao os do gerador (deterministico; npm run audio:sfx)`,
 			drift.join(", "),
 		);
 		const windowsMatch = Object.entries(sounds).every(
@@ -1705,8 +1705,10 @@ section(
 			env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ROBLOX_"))),
 		});
 		check(
-			dry.status === 0 && /nenhuma chave foi lida/.test(dry.stdout) && /5 bancos de som/.test(dry.stdout),
-			"--dry-run lista os 5 bancos sem ler chave nenhuma",
+			dry.status === 0 &&
+				/nenhuma chave foi lida/.test(dry.stdout) &&
+				new RegExp(`${SFX.BANKS.length} bancos de som`).test(dry.stdout),
+			`--dry-run lista os ${SFX.BANKS.length} bancos sem ler chave nenhuma`,
 			(dry.stdout || dry.stderr).split("\n")[0],
 		);
 		const tmp = mkdtempSync(join(tmpdir(), "pz-audio-"));
@@ -1764,11 +1766,11 @@ section(
 			const ts = readFileSync(tsOut, "utf8");
 			check(
 				first.status === 0 &&
-					first.uploads.length === 5 &&
+					first.uploads.length === SFX.BANKS.length &&
 					first.uploads.every(
 						u => u.assetType === "Audio" && u.contentType === "audio/wav" && u.creator.userId === "4242",
 					),
-				"a primeira vez: os 5 bancos sobem como Audio, audio/wav, do criador do .env",
+				`a primeira vez: os ${SFX.BANKS.length} bancos sobem como Audio, audio/wav, do criador do .env`,
 				first.status === 0
 					? first.uploads.map(u => u.displayName).join(", ")
 					: first.out.trim().split("\n").slice(-2).join(" | "),
@@ -1848,17 +1850,16 @@ section(
 			"sem id: o trovao da biblioteca (o mesmo das vinhetas), no SFX, plano (e o ceu), volume <= 0,6, um por vez",
 			`${lib.id}, ${lib.bus}, vol ${lib.volume}`,
 		);
-		// H3 left this session's `cues` id dropped (a bank that failed to load): a fresh upload of it, a new id
 		banks(true);
-		AA.AUDIO_BANK_IDS.cues = "rbxassetid://7105";
-		S.refreshSounds();
 		const ours = S.soundDef("thunder");
 		check(
-			ours.id === "rbxassetid://7105" &&
+			ours.id === BANK_IDS.weather &&
 				ours.source === "synth" &&
 				ours.takes?.length === 3 &&
-				ours.bus === lib.bus,
-			"com o banco no ar: os nossos 3 takes no banco `cues`, com o papel da biblioteca",
+				ours.bus === lib.bus &&
+				AA.SYNTH_SOUNDS.thunder.bank === "weather" &&
+				Object.values(AA.SYNTH_SOUNDS).every(s => s.bank !== "weather" || s === AA.SYNTH_SOUNDS.thunder),
+			"com o banco no ar: os nossos 3 takes no banco `weather`, o dele (o `cues` aprovado nao muda), com o papel da biblioteca",
 			`${ours.id}, ${ours.source}, ${ours.takes?.length} takes`,
 		);
 		banks(false);

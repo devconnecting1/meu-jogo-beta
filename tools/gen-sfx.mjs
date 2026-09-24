@@ -34,8 +34,8 @@
  *   Roblox takes WAV (Open Cloud Assets API: .mp3 / .ogg / .wav / .flac, <= 7 min, <= 20 MB, <= 48 kHz), but it
  *   COUNTS uploads: the Open Cloud guide lists 100 audio uploads a month for an ID-verified account and 10 for one
  *   that is not (docs: cloud/guides/usage-assets). Sixty takes as sixty files would spend a month's quota twice.
- *   So the takes are packed into five banks -- one WAV each, the takes 0.25 s of silence apart -- and the game plays
- *   a window of the bank (shared/data/sounds.ts `takes`, Sound.PlaybackRegion). Five uploads for the whole set; a
+ *   So the takes are packed into six banks -- one WAV each, the takes 0.25 s of silence apart -- and the game plays
+ *   a window of the bank (shared/data/sounds.ts `takes`, Sound.PlaybackRegion). Six uploads for the whole set; a
  *   change re-uploads only its bank.
  *
  * 32 kHz, 16-bit, mono: the sample rate of the 16-bit era, 16 kHz of bandwidth (plenty for these sounds, and part of
@@ -1487,7 +1487,7 @@ export const SPEC = [
 	},
 	{
 		name: "thunder",
-		bank: "cues",
+		bank: "weather",
 		category: "thunder",
 		takes: 3,
 		volume: 0.5,
@@ -1535,7 +1535,11 @@ export const SPEC = [
 	},
 ];
 
-export const BANKS = ["ui", "items", "weapons", "impacts", "cues"];
+/**
+ * `weather` (LUZ-05) is a bank of its own, after the five: the thunder came when `cues` already had an approved id, and a
+ * sixth small upload for it leaves the stingers and the heartbeat on the take the owner already has.
+ */
+export const BANKS = ["ui", "items", "weapons", "impacts", "cues", "weather"];
 
 // ---------------------------------------------------------------- rendering
 
@@ -1856,7 +1860,7 @@ function readmeMd(manifest) {
 	L.push("");
 	L.push("## How it gets into the game");
 	L.push("");
-	L.push("1. `npm run audio:sfx` renders every take and packs them into the five banks of `banks/` (one WAV each).");
+	L.push("1. `npm run audio:sfx` renders every take and packs them into the banks of `banks/` (one WAV each).");
 	L.push("2. On the PC, with the `.env`: `npm run cloud -- upload-audio` uploads the banks that are new or changed");
 	L.push(
 		"   (Open Cloud Assets API, `assetType: Audio`, `audio/wav`), writes their ids and hashes to `assets.json` and",

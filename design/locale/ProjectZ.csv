@@ -488,7 +488,10 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Already at full health
 ,,,Back on your feet
 ,,,The town fell on day
-,,,A new town rises: day 1
+,,,fell on day
+,,,rises: day 1
+,,,was restarted.
+,,,The town was restarted.
 ,,,Bosses
 ,,,Continue this run
 ,,,Daybreak in
@@ -646,6 +649,40 @@ Pick an item to try it on in the preview, then buy or wear it."
 ,lobby value: you're the only survivor in this town,,Solo
 ,,,your own town
 ,,,last town fell
+,,,Servers
+,,,Public towns
+,,,Players
+,,,Open
+,,,Full
+,,,Refresh
+,,,Join
+,,,Joining
+,,,Travelling to
+,,,Looking for towns...
+,,,No other public towns right now
+,,,1 town open
+,,,towns open
+,,,"The server list works in the published game, not in Studio"
+,,,The server list is unavailable right now
+,,,Too many requests. Try again in a moment
+,,,That town is full
+,,,That town is no longer open
+,,,You are already in that town
+,,,Leave the city before joining another town
+,,,A join is already under way
+,,,Your progress is still loading
+,,,"Your survivor is still in danger where you left the city. Get clear of the zombies first, or wait a little"
+,,,Only this server's owner can restart the town
+,,,Something went wrong. Try again
+,,,Restart town
+,,,Restart town?
+,,,Restart
+,,,"Everyone's current life ends: everybody who played in this town, standing or down, starts a new game on day 1 in a new town. Levels, skills, coins and packs are kept. This town is gone for good."
+,,,The trip did not start. Try again
+,,,A new town is being made...
+,,,The town was restarted a moment ago. Try again later
+,,,A new town is already being made
+,,,The town cannot be restarted right now
 ,,,Your new life wakes at first light
 ,,,Delivered when you enter the city
 ,,,The town keeps its own day. This life and your record count yours.

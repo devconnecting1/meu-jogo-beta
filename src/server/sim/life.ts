@@ -274,10 +274,19 @@ export interface LifeWire {
 export interface WipeReport {
 	/** the world's day on which it was lost */
 	day: number;
-	/** "timeout": the window closed with nobody standing; "declined": every dead survivor chose not to pay */
-	reason: "timeout" | "declined";
-	/** the UserIds of the dead the window waited on */
+	/**
+	 * "timeout": the window closed with nobody standing; "declined": every dead survivor chose not to pay; "restart":
+	 * the private server's keeper (its owner, or an admin on it) asked for a new town (MP-26): EVERY life of this town
+	 * ends, standing or down (`survivorsNow` below, read again when the new town is committed)
+	 */
+	reason: "timeout" | "declined" | "restart";
+	/**
+	 * the UserIds of the dead the window waited on; a restart: every survivor of the town, as the host saw them when it
+	 * was asked -- server/sim/worldReset.ts reads the list again at the commit (review of 0b44458, L1)
+	 */
 	dead: Array<number>;
+	/** "restart" only: the UserId of who asked for it */
+	by?: number;
 }
 
 /**
@@ -748,7 +757,11 @@ export class LifeKeeper {
 	 *     the new town and dies ends it, whoever is still in the lobby. Deliberate: nobody is a survivor of a town
 	 *     they have not set foot in (the same as a player who joins and never enters).
 	 */
-	restartWorld(fallen: ReadonlyArray<number>, saveOf: (userId: number) => PlayerSaveData | undefined): void {
+	restartWorld(
+		fallen: ReadonlyArray<number>,
+		saveOf: (userId: number) => PlayerSaveData | undefined,
+		everyone = false,
+	): void {
 		const owns = serverOwnsLife();
 		const reborn = new Set<number>();
 		for (const userId of fallen) reborn.add(userId);
@@ -765,7 +778,11 @@ export class LifeKeeper {
 				if (owns && sp !== undefined) sp.state.weapon.ammoCount = 0;
 				this.grantNewLife(rec, save);
 			} else {
-				if (rec.dead && rec.entered && sp === undefined && save === undefined) rec.newLifeOwed = true;
+				// MP-26's restart ends EVERY life of the town (`everyone`), not only the fallen's: a survivor who is away
+				// (or still loading) is owed the new life too, granted when their save is back (as MP-22's fallen are)
+				if ((rec.dead || everyone) && rec.entered && sp === undefined && save === undefined) {
+					rec.newLifeOwed = true;
+				}
 				// unreachable at a wipe for a living body (L6 above): kept for any other caller. With no loaded save
 				// the body is dropped with nothing written, magazine included (review of de4ba1e, N4): the only save
 				// that can be loading is a reconnect's, whose departure already put the rounds back into it (`bank`),
@@ -1045,6 +1062,20 @@ export class LifeKeeper {
 		}
 		rec.banked = { runHp: save.runHp, runHunger: save.runHunger, runOver: save.runOver, runRev: save.runRev };
 		if (changed) this.onSaveChanged?.(rec.userId);
+	}
+
+	/**
+	 * MP-26, the town restarted by its keeper (server/match/townRestart.ts; the orchestrator's decision on the review of
+	 * 0b44458, M1 + M2): EVERY survivor of this town -- everyone who had a body in it and is still this server's
+	 * (connected, or gone less than KEEP_AFTER_LEAVE_S), standing or down. A restart is a whole MP-22 world end: all of
+	 * them start a new life on day 1 in the new town (`restartWorld` with `everyone`), so it can never be a way to farm
+	 * the easy first days with a life that goes on, nor end only the lives of the friends who happened to be down.
+	 * Somebody who never set foot in this town (a player still in the lobby since they joined) has no life here to end.
+	 */
+	survivorsNow(): Array<number> {
+		const out = new Array<number>();
+		for (const [userId, rec] of this.records) if (rec.entered) out.push(userId);
+		return out;
 	}
 
 	/** rule 6, once per step */

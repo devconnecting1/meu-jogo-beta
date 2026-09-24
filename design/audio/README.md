@@ -5,7 +5,7 @@ Listen before uploading: open `docs/audio/preview.html` from the repository (it 
 
 ## How it gets into the game
 
-1. `npm run audio:sfx` renders every take and packs them into the five banks of `banks/` (one WAV each).
+1. `npm run audio:sfx` renders every take and packs them into the banks of `banks/` (one WAV each).
 2. On the PC, with the `.env`: `npm run cloud -- upload-audio` uploads the banks that are new or changed
    (Open Cloud Assets API, `assetType: Audio`, `audio/wav`), writes their ids and hashes to `assets.json` and
    regenerates `src/shared/data/audioAssets.ts`. `-- upload-audio --dry-run` lists them without reading any key.
@@ -22,7 +22,8 @@ before (SND-01, like ART-01 for the town's art).
 | `items`   | `banks/items.wav`   | 7.89 s  | 13    | `4b345798f3f8` |
 | `weapons` | `banks/weapons.wav` | 19.53 s | 24    | `519c30e149df` |
 | `impacts` | `banks/impacts.wav` | 9.06 s  | 17    | `ca7855cee3cc` |
-| `cues`    | `banks/cues.wav`    | 34.05 s | 10    | `125312a4bf57` |
+| `cues`    | `banks/cues.wav`    | 21.52 s | 7     | `cf32467032f7` |
+| `weather` | `banks/weather.wav` | 12.73 s | 3     | `e898ce7b5926` |
 
 ## Events
 
@@ -68,10 +69,10 @@ mix level is the loudness plus the catalogue's base volume (in dB) before the Se
 | `stingerWave2`   | cues    | 1     | -16.0                         | -2.1        | -23.3     | 22:00, wave 2: the same motif a whole tone lower (G), grittier.                                                                                                       |
 | `stingerWave3`   | cues    | 1     | -16.0                         | -2.1        | -22.7     | 01:00, wave 3: lower still (F) and the boom doubles like a heartbeat: the worst of the night.                                                                         |
 | `stingerDawn`    | cues    | 1     | -16.0                         | -6.3        | -25.4     | 07:00, you made it: an A-major arpeggio over a soft pad, two bird chirps, a long room.                                                                                |
-| `thunder`        | cues    | 3     | -16.0 / -16.0 / -16.0         | -3.4        | -22.0     | A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less. |
 | `heartbeat1`     | cues    | 1     | -18.0                         | -2.6        | -26.0     | Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.                                                          |
 | `heartbeat2`     | cues    | 1     | -18.0                         | -2.6        | -24.7     | Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's).                                                                |
 | `heartbeat3`     | cues    | 1     | -18.0                         | -2.7        | -23.7     | Below 10 %: 128 bpm, the beats almost on top of each other.                                                                                                           |
+| `thunder`        | weather | 3     | -16.0 / -16.0 / -16.0         | -3.4        | -22.0     | A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less. |
 
 ## What stays on the library, and why
 

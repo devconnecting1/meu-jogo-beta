@@ -47,8 +47,14 @@
 		{
 			"name": "cues",
 			"file": "banks/cues.wav",
-			"seconds": 34.055,
-			"sha1": "125312a4bf577d292b7b4fe0208e878182683e7b"
+			"seconds": 21.525,
+			"sha1": "cf32467032f7dd746bd4279d1f097814cb6a0502"
+		},
+		{
+			"name": "weather",
+			"file": "banks/weather.wav",
+			"seconds": 12.727,
+			"sha1": "e898ce7b59260fa9f38408cd3c12398d19ece60a"
 		}
 	],
 	"sounds": {
@@ -1173,8 +1179,83 @@
 				}
 			]
 		},
-		"thunder": {
+		"heartbeat1": {
 			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
+			"takes": [
+				{
+					"startAt": 13.33,
+					"maxPlay": 3.198
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.158,
+					"lufs": -18,
+					"truePeak": -2.62,
+					"brightness": 0
+				}
+			],
+			"loopStart": 13.34,
+			"loopEnd": 16.497875
+		},
+		"heartbeat2": {
+			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.46,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's).",
+			"takes": [
+				{
+					"startAt": 16.74,
+					"maxPlay": 2.44
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 2.4,
+					"lufs": -18,
+					"truePeak": -2.63,
+					"brightness": 0
+				}
+			],
+			"loopStart": 16.75,
+			"loopEnd": 19.15
+		},
+		"heartbeat3": {
+			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.52,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 10 %: 128 bpm, the beats almost on top of each other.",
+			"takes": [
+				{
+					"startAt": 19.389,
+					"maxPlay": 1.915
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 1.875,
+					"lufs": -18,
+					"truePeak": -2.67,
+					"brightness": 0
+				}
+			],
+			"loopStart": 19.4,
+			"loopEnd": 21.275
+		},
+		"thunder": {
+			"bank": "weather",
 			"category": "thunder",
 			"target": -16,
 			"volume": 0.5,
@@ -1183,15 +1264,15 @@
 			"why": "A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less.",
 			"takes": [
 				{
-					"startAt": 13.33,
+					"startAt": 0.19,
 					"maxPlay": 3.746
 				},
 				{
-					"startAt": 17.29,
+					"startAt": 4.15,
 					"maxPlay": 4.087
 				},
 				{
-					"startAt": 21.59,
+					"startAt": 8.45,
 					"maxPlay": 4.058
 				}
 			],
@@ -1215,81 +1296,6 @@
 					"brightness": 0
 				}
 			]
-		},
-		"heartbeat1": {
-			"bank": "cues",
-			"category": "heart",
-			"target": -18,
-			"volume": 0.4,
-			"pitchMin": 1,
-			"pitchMax": 1,
-			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
-			"takes": [
-				{
-					"startAt": 25.86,
-					"maxPlay": 3.198
-				}
-			],
-			"metrics": [
-				{
-					"seconds": 3.158,
-					"lufs": -18,
-					"truePeak": -2.62,
-					"brightness": 0
-				}
-			],
-			"loopStart": 25.87,
-			"loopEnd": 29.027875
-		},
-		"heartbeat2": {
-			"bank": "cues",
-			"category": "heart",
-			"target": -18,
-			"volume": 0.46,
-			"pitchMin": 1,
-			"pitchMax": 1,
-			"why": "Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's).",
-			"takes": [
-				{
-					"startAt": 29.27,
-					"maxPlay": 2.44
-				}
-			],
-			"metrics": [
-				{
-					"seconds": 2.4,
-					"lufs": -18,
-					"truePeak": -2.63,
-					"brightness": 0
-				}
-			],
-			"loopStart": 29.28,
-			"loopEnd": 31.68
-		},
-		"heartbeat3": {
-			"bank": "cues",
-			"category": "heart",
-			"target": -18,
-			"volume": 0.52,
-			"pitchMin": 1,
-			"pitchMax": 1,
-			"why": "Below 10 %: 128 bpm, the beats almost on top of each other.",
-			"takes": [
-				{
-					"startAt": 31.919,
-					"maxPlay": 1.915
-				}
-			],
-			"metrics": [
-				{
-					"seconds": 1.875,
-					"lufs": -18,
-					"truePeak": -2.67,
-					"brightness": 0
-				}
-			],
-			"loopStart": 31.93,
-			"loopEnd": 33.805
 		}
 	}
 }

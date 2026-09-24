@@ -2,7 +2,7 @@
  * The weather (docs/DESIGN_RULES.md LUZ-05): which weather a day has, how thick its fog is at an hour, and when a
  * thunderstorm's lightning strikes and its thunder rolls. Pure maths, no state, no random numbers -- the same kind of
  * module as shared/sim/clock.ts, and read by the same three places: the server's clock (server/sim/waves.ts), which
- * DECIDES the day's weather and sends it on the wire (WorldEv.Clock's weather byte, shared/net/protocol.ts note 21);
+ * DECIDES the day's weather and sends it on the wire (WorldEv.Clock's weather byte, shared/net/protocol.ts note 24);
  * the client's clock (client/systems/daynight.ts), which mirrors it; and the horde's senses
  * (shared/sim/ai/zombieBrain.ts via AiClock), which read what those clocks derive from it. Everything that depends on
  * the hour -- the fog of a morning, a lightning flash, a thunderclap -- is a function of (weather, world day, hour),

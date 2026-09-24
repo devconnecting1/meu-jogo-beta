@@ -2,15 +2,16 @@
 // banks: design/audio/manifest.json, asset ids: design/audio/assets.json (npm run cloud -- upload-audio)
 // a bank without an id plays nothing of ours: every event on it keeps its library take (DESIGN_RULES SND-01)
 
-export type AudioBank = "ui" | "items" | "weapons" | "impacts" | "cues";
+export type AudioBank = "ui" | "items" | "weapons" | "impacts" | "cues" | "weather";
 
 /** "rbxassetid://...", or "" until the bank is uploaded (or while the upload is not this bank's WAV) */
 export const AUDIO_BANK_IDS: Record<AudioBank, string> = {
-	ui: "",
-	items: "",
-	weapons: "",
-	impacts: "",
-	cues: "",
+	ui: "rbxassetid://116079438683462",
+	items: "rbxassetid://130573583440294",
+	weapons: "rbxassetid://76545253843547",
+	impacts: "rbxassetid://115700679159660",
+	cues: "rbxassetid://71565263542164",
+	weather: "",
 };
 
 /** one take: a window of its bank, in seconds */
@@ -281,42 +282,42 @@ export const SYNTH_SOUNDS: Record<string, SynthSound> = {
 	stingerWave2: { bank: "cues", takes: [{ startAt: 3.44, maxPlay: 3.071 }], volume: 0.43, pitchMin: 1, pitchMax: 1 },
 	stingerWave3: { bank: "cues", takes: [{ startAt: 6.73, maxPlay: 3.359 }], volume: 0.46, pitchMin: 1, pitchMax: 1 },
 	stingerDawn: { bank: "cues", takes: [{ startAt: 10.3, maxPlay: 2.817 }], volume: 0.34, pitchMin: 1, pitchMax: 1 },
-	thunder: {
+	heartbeat1: {
 		bank: "cues",
+		takes: [{ startAt: 13.33, maxPlay: 3.198 }],
+		volume: 0.4,
+		pitchMin: 1,
+		pitchMax: 1,
+		loopStart: 13.34,
+		loopEnd: 16.497875,
+	},
+	heartbeat2: {
+		bank: "cues",
+		takes: [{ startAt: 16.74, maxPlay: 2.44 }],
+		volume: 0.46,
+		pitchMin: 1,
+		pitchMax: 1,
+		loopStart: 16.75,
+		loopEnd: 19.15,
+	},
+	heartbeat3: {
+		bank: "cues",
+		takes: [{ startAt: 19.389, maxPlay: 1.915 }],
+		volume: 0.52,
+		pitchMin: 1,
+		pitchMax: 1,
+		loopStart: 19.4,
+		loopEnd: 21.275,
+	},
+	thunder: {
+		bank: "weather",
 		takes: [
-			{ startAt: 13.33, maxPlay: 3.746 },
-			{ startAt: 17.29, maxPlay: 4.087 },
-			{ startAt: 21.59, maxPlay: 4.058 },
+			{ startAt: 0.19, maxPlay: 3.746 },
+			{ startAt: 4.15, maxPlay: 4.087 },
+			{ startAt: 8.45, maxPlay: 4.058 },
 		],
 		volume: 0.5,
 		pitchMin: 0.92,
 		pitchMax: 1.05,
-	},
-	heartbeat1: {
-		bank: "cues",
-		takes: [{ startAt: 25.86, maxPlay: 3.198 }],
-		volume: 0.4,
-		pitchMin: 1,
-		pitchMax: 1,
-		loopStart: 25.87,
-		loopEnd: 29.027875,
-	},
-	heartbeat2: {
-		bank: "cues",
-		takes: [{ startAt: 29.27, maxPlay: 2.44 }],
-		volume: 0.46,
-		pitchMin: 1,
-		pitchMax: 1,
-		loopStart: 29.28,
-		loopEnd: 31.68,
-	},
-	heartbeat3: {
-		bank: "cues",
-		takes: [{ startAt: 31.919, maxPlay: 1.915 }],
-		volume: 0.52,
-		pitchMin: 1,
-		pitchMax: 1,
-		loopStart: 31.93,
-		loopEnd: 33.805,
 	},
 };

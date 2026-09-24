@@ -38,7 +38,7 @@
  *     is split into several packets (never truncated); an event that cannot fit alone is dropped and counted.
  *  8. WorldInit = World batches whose first event is InitBegin{mapHash, seed, tick0Time, simHz, chunk, chunks},
  *     followed by the ordinary SolidAdd/DoorSet/LightSet/ItemAdd/Clock deltas. Clock dayTime is hours × 2048
- *     (u16, < 24 h); the weather is a u8 (note 21). Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids
+ *     (u16, < 24 h); the weather is a u8 (note 24). Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids
  *     must be dynamic (≥ 1 000 000). Item velocity is i16 in 1/8 u/s. User ids are f64 (Roblox ids exceed 2^32 and
  *     Studio test players are negative). Display names: u8 length, ≤ 80 bytes, cut on a UTF-8 boundary.
  *  9. Clock sync follows §4.6: the source of truth is workspace:GetServerTimeNow() with tick0Time from
@@ -125,7 +125,12 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
- * 21. (LUZ-05, the weather) No new message and no byte more: the Clock delta's rain boolean becomes the day's WEATHER,
+ * 21. (MP-26, the town restarted by its keeper) `WorldReset` has one more byte, `cause` (u8, after `endedDay`):
+ *     WorldResetCause.Fell (0, MP-22: nobody was left standing) or Restarted (1: the private server's owner, or an
+ *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
+ *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
+ *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
+ * 24. (LUZ-05, the weather) No new message and no byte more: the Clock delta's rain boolean becomes the day's WEATHER,
  *     a u8 in the same place -- 0 clear and 1 rain as before, 2 storm, 3 fog at dawn, 4 fog all day (shared/sim/weather.ts
  *     `Weather`). The decoder refuses anything above WEATHER_MAX (a malformed delta, like a bool of 2 was), and derives
  *     `rain` (rain or storm) for every reader of the old field. Everything the hour does with the weather -- the fog's
@@ -1436,7 +1441,7 @@ export const ITEM_VEL_SCALE = 8;
 /** Clock.dayTime: hours × 2048 */
 export const CLOCK_HOUR_SCALE = 2048;
 
-/** the Clock delta's weather byte (note 21): the weather, or for a caller that only knows the rain, 1 / 0 */
+/** the Clock delta's weather byte (note 24): the weather, or for a caller that only knows the rain, 1 / 0 */
 function clockWeatherByte(e: WClock): number {
 	const w = e.weather;
 	if (w !== undefined && isWeather(w)) return w;
@@ -1450,6 +1455,12 @@ export const SOLID_HP_MAX_ENTRIES = 255;
 const MAX_SAFE_INT = 9007199254740991;
 /** UserIds one WorldReset can name (its count is a u8; a server holds far fewer players than this) */
 export const WORLD_RESET_MAX_LIVES = 255;
+/** (note 21) why a world ended: nobody was left standing (MP-22), or its keeper restarted it (MP-26) */
+export const WorldResetCause = {
+	Fell: 0,
+	Restarted: 1,
+} as const;
+export const WORLD_RESET_CAUSE_MAX = 1;
 /** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
 const RUN_REV_MAX = 4294967295;
 /** (MP-23) the largest life day PlayerTally carries (a u16; the save's own ceiling is higher and is clamped) */
@@ -1594,7 +1605,7 @@ export interface WClock {
 	rain: boolean;
 	/**
 	 * The day's weather (shared/sim/weather.ts `Weather`, 0..WEATHER_MAX), in the byte that was the rain boolean
-	 * (note 21). The decoder always fills it; an encoder handed only `rain` writes 1 or 0 for it.
+	 * (note 24). The decoder always fills it; an encoder handed only `rain` writes 1 or 0 for it.
 	 */
 	weather?: number;
 	/** raw wave bits (F2) */
@@ -1695,8 +1706,8 @@ export interface WorldResetLife {
 }
 
 /**
- * (MP-22) Nobody was left alive and nobody paid a Rebirth: the world ended on `endedDay` and a new town was born from
- * `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
+ * (MP-22) Nobody was left alive and nobody paid a Rebirth -- or (note 21) the town's keeper restarted it: the world
+ * ended on `endedDay` and a new town was born from `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
  * and a client named in `lives` mirrors the new life the server gave it (the same reset as New game).
  */
 export interface WWorldReset {
@@ -1705,6 +1716,8 @@ export interface WWorldReset {
 	seed: number;
 	/** the world day the old town fell on (≥ 1) */
 	endedDay: number;
+	/** (note 21) WorldResetCause: it fell (MP-22), or it was restarted by its keeper (MP-26) */
+	cause: number;
 	/** the survivors whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
 	lives: Array<WorldResetLife>;
 }
@@ -1849,6 +1862,7 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 		case WorldEv.WorldReset: {
 			w.u32(clampInt(e.seed, 1, TOWN_SEED_MAX));
 			w.u16(clampInt(e.endedDay, 1, 65535));
+			w.u8(clampInt(e.cause, 0, WORLD_RESET_CAUSE_MAX));
 			const n = math.min(e.lives.size(), WORLD_RESET_MAX_LIVES);
 			w.u8(n);
 			for (let i = 0; i < n; i++) {
@@ -1997,8 +2011,11 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 	} else if (t === WorldEv.WorldReset) {
 		const seed = r.u32();
 		const endedDay = r.u16();
+		const cause = r.u8();
 		const n = r.u8();
-		if (!validTownSeed(seed) || endedDay < 1 || n * 12 > r.remaining()) return undefined;
+		if (!validTownSeed(seed) || endedDay < 1 || cause > WORLD_RESET_CAUSE_MAX || n * 12 > r.remaining()) {
+			return undefined;
+		}
 		const lives = new Array<WorldResetLife>();
 		for (let i = 0; i < n; i++) {
 			const userId = r.f64();
@@ -2006,7 +2023,7 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 			if (userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
 			lives.push({ userId, runRev });
 		}
-		return { t: WorldEv.WorldReset, seed, endedDay, lives };
+		return { t: WorldEv.WorldReset, seed, endedDay, cause, lives };
 	}
 	return undefined;
 }

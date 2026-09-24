@@ -13,7 +13,7 @@
  *  - `volume` is the base level BEFORE the bus gain (the Settings sliders). Keep every one of them <= 0.6:
  *    the player must never be hit by a sudden loud sound.
  *  - OUR OWN SOUNDS (DESIGN_RULES SND-01): the UI, the pickups, the weapons, the impacts, the footsteps and the cues are
- *    also synthesised by tools/gen-sfx.mjs into five banks (design/audio/). An event with a take in a bank that has an
+ *    also synthesised by tools/gen-sfx.mjs into six banks (design/audio/). An event with a take in a bank that has an
  *    asset id (the generated ./audioAssets.ts, `npm run cloud -- upload-audio`) plays OUR take -- a window of the bank
  *    -- with the volume and pitch range the generator gave it; without the id, or once the client failed to load that
  *    bank (`dropSoundAsset`), it plays the library take below exactly as before. The library entry is the fallback
