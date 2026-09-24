@@ -1548,7 +1548,7 @@ function safe(c, L, D, look, r) {
 }
 
 /**
- * The bank vault's wall of safe deposit boxes (DESIGN_RULES EDI-23), from above: the brushed steel top with a seam
+ * The bank vault's wall of safe deposit boxes (DESIGN_RULES EDI-24), from above: the brushed steel top with a seam
  * between each column of boxes, and along the front the little doors in their darker frame, a brass keyhole on each.
  */
 function deposit(c, L, D, look, r, K) {
@@ -1559,7 +1559,7 @@ function deposit(c, L, D, look, r, K) {
 }
 
 /**
- * A row of folding chairs (the town hall's meeting hall, DESIGN_RULES EDI-18), from above: a grey steel seat per
+ * A row of folding chairs (the town hall's meeting hall, DESIGN_RULES EDI-19), from above: a grey steel seat per
  * chair with a gap between them, the back rest a darker bar away from the front (the council table they face), and
  * a chair or two folded flat or pushed askew when the meeting broke up.
  */
@@ -1692,7 +1692,7 @@ const KINDS = {
 export const ART_KIND_BY_TYPE = {
 	shelf: { 6: "shelfMeds", 10: "shelfClothes" },
 	display: { 9: "displayGuns" },
-	// the town hall's one cabinet is its first-aid cabinet (EDI-18: the bandages it handed out)
+	// the town hall's one cabinet is its first-aid cabinet (EDI-19: the bandages it handed out)
 	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed", 23: "cabinetMed" },
 	bench: { 4: "benchSeats" },
 	counter: { 11: "counterSteel" },

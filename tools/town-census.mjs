@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * What the town generator makes, counted over the towns validate:world walks (docs/DESIGN_RULES.md EDI-18..EDI-22):
+ * What the town generator makes, counted over the towns validate:world walks (docs/DESIGN_RULES.md EDI-19..EDI-23):
  * how many of each kind of building, house footprint, special lot, ground feature and street prop a town holds, and
  * how the non-house buildings repeat -- how far each one is from the nearest of its own kind, and how often two of a
  * kind share a block, a block face, a street across or a street corner (the owner, 2026-09-24: "Evitar repetições de
@@ -30,7 +30,7 @@ const rowsOf = bt => (SP.spawnRows !== undefined ? SP.spawnRows(bt) : SP.BUILDIN
 const yardRows = (tag, variant) =>
 	SP.YARD_LOOT?.[SP.yardLootKey !== undefined ? SP.yardLootKey(tag, variant) : tag] ?? SP.YARD_LOOT?.[tag];
 const nameOf = (kind, index) => (kind === 3 ? USABLES[index]?.name : kind === 4 ? ETC_ITEMS[index]?.name : "") ?? "";
-/** the loot categories of the economy (EDI-18): what a line of a table is */
+/** the loot categories of the economy (EDI-19): what a line of a table is */
 function categoryOf(e) {
 	const n = nameOf(e.kind, e.index);
 	if (e.kind === 1) return "weapons";
@@ -103,7 +103,7 @@ function census(seed) {
 	for (const s of S) {
 		let rows;
 		const slots = s.lootSlots ?? 0;
-		// the bank's vault (EDI-23): every box once, and once a world -- counted apart, not in the respawn's loot
+		// the bank's vault (EDI-24): every box once, and once a world -- counted apart, not in the respawn's loot
 		if (s.kind === "prop" && s.tags === "vault") {
 			for (const e of SP.VAULT_LOOT ?? []) {
 				bump(out.vault, categoryOf(e), e.max < 1 ? e.max : (e.min + e.max) / 2);
@@ -244,7 +244,7 @@ for (const k of keysOf(c => c.loot)) {
 }
 console.log("");
 if (keysOf(c => c.vault).length > 0) {
-	console.log("the bank's vault, once a world (expected items: every box rolled once, EDI-23)");
+	console.log("the bank's vault, once a world (expected items: every box rolled once, EDI-24)");
 	for (const k of keysOf(c => c.vault)) {
 		const s = stats(c => c.vault, k);
 		console.log(`  ${k.padEnd(28)} ${s.mean.toFixed(2).padStart(6)}`);

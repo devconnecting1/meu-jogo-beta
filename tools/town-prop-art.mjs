@@ -38,7 +38,7 @@ const FACES = ["top", "bottom", "left", "right"];
 function propMaterials(C) {
 	const m = materials(C);
 	const add = (name, base, opts) => (m[name] = ramp(base, opts));
-	// the market (EDI-20)
+	// the market (EDI-21)
 	add("canvas", [226, 222, 206], { soft: true });
 	add("canvasBack", [204, 196, 176], { soft: true });
 	add("stripeR", [182, 58, 52], { soft: true });
@@ -94,7 +94,7 @@ function propMaterials(C) {
 	add("mat", [34, 34, 38]);
 	add("grill", [44, 44, 50], { shine: true });
 	add("shedRoof", [96, 104, 96]);
-	// the building site (EDI-21)
+	// the building site (EDI-22)
 	add("brick", [160, 78, 58]);
 	add("steelBar", [110, 116, 124], { shine: true });
 	add("toilet", [58, 104, 168]);
@@ -108,7 +108,7 @@ function propMaterials(C) {
 /** the canonical top half ends up at the world's bottom or right (the shaded side, light from the top left) */
 const shadeTop = face => face === "top" || face === "left";
 
-// ---------------------------------------------------------------- the market (EDI-20)
+// ---------------------------------------------------------------- the market (EDI-21)
 
 const WARES = [
 	["apple", "orange", "cabbage"],
@@ -607,7 +607,7 @@ function grill(c, L, D) {
 	c.dot(2, 2, "grill", 6, 2);
 }
 
-// ---------------------------------------------------------------- the building site (EDI-21)
+// ---------------------------------------------------------------- the building site (EDI-22)
 
 /** a pile of what the house is built of (look): lumber, bricks on a pallet, steel bars */
 function pile(c, L, D, look) {
@@ -655,7 +655,7 @@ function scaffold(c, L, D) {
 	for (let x = 0; x < L; x += 16) c.box(x, 0, 1, D, "galv", 8);
 }
 
-/** a stone column of the bank's portico, from above: its round capital, lit (EDI-23) */
+/** a stone column of the bank's portico, from above: its round capital, lit (EDI-24) */
 function column(c, L, D) {
 	const m = (L - 1) / 2;
 	c.ellipse(m, m, m, m, "stone", 8);

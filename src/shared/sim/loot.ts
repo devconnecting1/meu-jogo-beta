@@ -6,7 +6,7 @@
  *
  *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05)
  *   rollPumpLoot       a gas station's pump island: the same, from its own table (EDI-16)
- *   rollYardLoot       any container out in the open: a pump island, a market stall, a pile, a shed (EDI-20..MOB-06)
+ *   rollYardLoot       any container out in the open: a pump island, a market stall, a pile, a shed (EDI-21..MOB-06)
  *   isContainer        what the two sides' lazy sweeps roll: a building or a container out in the open
  *   thiefFind          the Thief skill's extra: one more slot of the building's table, for the searcher alone
  *   rollMapItemDrop    one hit (or E) on a tree, a car or a bin
@@ -77,7 +77,7 @@ export function rollPumpLoot(): Array<LootDrop> {
 }
 
 /**
- * The table of a searchable fixture out in the open (shared/data/spawns.ts YARD_LOOT, EDI-20, EDI-21, MOB-06): a
+ * The table of a searchable fixture out in the open (shared/data/spawns.ts YARD_LOOT, EDI-21, EDI-22, MOB-06): a
  * market stall's by what it displays, a pile's by what it is; undefined for anything else.
  */
 export function yardLootRows(s: Solid): Array<SpawnEntry> | undefined {
@@ -87,7 +87,7 @@ export function yardLootRows(s: Solid): Array<SpawnEntry> | undefined {
 }
 
 /**
- * The bank vault's deposit boxes (EDI-23, spawns.ts VAULT_LOOT): every line once -- a chance line comes or not, a
+ * The bank vault's deposit boxes (EDI-24, spawns.ts VAULT_LOOT): every line once -- a chance line comes or not, a
  * range line gives its amount -- not a slot's random line: the vault is the best of the bank, whatever the dice.
  */
 export function rollVaultLoot(): Array<LootDrop> {
@@ -116,7 +116,7 @@ export function rollYardLoot(s: Solid): Array<LootDrop> {
 
 /**
  * Game hours until an emptied container fills again (MP-05): ITEM_RESPAWN_HOURS for a building, a pump island, a
- * stall; never for the bank's vault (EDI-23: once a town -- a new town, MP-22, has a new vault).
+ * stall; never for the bank's vault (EDI-24: once a town -- a new town, MP-22, has a new vault).
  */
 export function lootRespawnHours(s: Solid): number {
 	return s.tags === "vault" && s.kind === "prop" ? math.huge : DESIGN.ITEM_RESPAWN_HOURS;

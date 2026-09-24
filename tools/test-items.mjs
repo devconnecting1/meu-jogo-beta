@@ -144,7 +144,7 @@ const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const { ItemKind, WeaponKind, AmmoPool } = require(join(SRC, "shared/data/kinds.ts"));
 const SPAWNS = require(join(SRC, "shared/data/spawns.ts"));
 const { BUILDING_SPAWNS } = SPAWNS;
-/** the table a building type searches: spawns.ts `spawnRows` (the everyday town's types, EDI-18, have their own record) */
+/** the table a building type searches: spawns.ts `spawnRows` (the everyday town's types, EDI-19, have their own record) */
 const rowsOf = id => (SPAWNS.spawnRows !== undefined ? SPAWNS.spawnRows(id) : BUILDING_SPAWNS[id]);
 const { BuildingType } = require(join(SRC, "shared/data/buildings.ts"));
 const { SHOP_PACKS, COSTUMES, ECONOMY } = require(join(SRC, "shared/data/shop.ts"));
@@ -785,8 +785,8 @@ function itemSources() {
 	const out = [];
 	for (const table of BUILDING_SPAWNS)
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "loot" });
-	// the everyday town's buildings (EDI-18), its stalls, piles and sheds (EDI-20, EDI-21, MOB-06) and the bank's vault
-	// (EDI-23), on a checkout that has them
+	// the everyday town's buildings (EDI-19), its stalls, piles and sheds (EDI-21, EDI-22, MOB-06) and the bank's vault
+	// (EDI-24), on a checkout that has them
 	for (const table of Object.values(SPAWNS.TOWN_SPAWNS ?? {}))
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "town loot" });
 	for (const [what, table] of Object.entries(SPAWNS.YARD_LOOT ?? {}))

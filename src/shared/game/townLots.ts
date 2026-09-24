@@ -1,5 +1,5 @@
 /*
- * The everyday town (docs/DESIGN_RULES.md EDI-18..EDI-23, MOB-04..MOB-06): what a small North American town holds
+ * The everyday town (docs/DESIGN_RULES.md EDI-19..EDI-24, MOB-04..MOB-06): what a small North American town holds
  * besides its houses and its shops -- the fire station on the avenue, the town hall, the bank on Main
  * Street, the street market, a public parking lot, a house going up, the parks' playgrounds and courts, the backyards'
  * sheds and pools, and the street furniture on the sidewalks' service strip.
@@ -140,7 +140,7 @@ export function inwardHeading(side: DoorSide): number {
 	return math.pi;
 }
 
-// ---------------------------------------------------------------------------------------------- fire station (EDI-22)
+// ---------------------------------------------------------------------------------------------- fire station (EDI-23)
 
 /** the fire station's apron: the concrete from the sidewalk to the apparatus bay, deep enough for the engine */
 export const FIRE_APRON = 256;
@@ -148,7 +148,7 @@ export const FIRE_APRON = 256;
 const STATION_ALONG = 808;
 
 /**
- * The fire station (EDI-22): on an avenue -- where the engine gets out fastest -- at one end of a block's face, the
+ * The fire station (EDI-23): on an avenue -- where the engine gets out fastest -- at one end of a block's face, the
  * houses filling the rest of it. It stands behind its apron: the concrete the engine rolls out on, with a curb cut as
  * wide as the building and nobody parked across it. False when it does not fit on this face.
  */
@@ -176,7 +176,7 @@ export function placeFireStation(kit: TownKit, lot: Lot, e: LotEdge): boolean {
 	return true;
 }
 
-// ---------------------------------------------------------------------------------------------- the bank (EDI-23)
+// ---------------------------------------------------------------------------------------------- the bank (EDI-24)
 
 /** the bank's footprint: along its avenue, and deep (world.ts TOWN_DEFS 22) */
 export const BANK_ALONG = 808;
@@ -202,7 +202,7 @@ export const BANK_PORTICO_EAVE = 24;
 export const BANK_PORTICO_SHOW = 14;
 
 /**
- * The bank (EDI-23): Main Street's landmark, at the end of an avenue face towards the avenues' crossing (`towardA`:
+ * The bank (EDI-24): Main Street's landmark, at the end of an avenue face towards the avenues' crossing (`towardA`:
  * the edge's `a` end), standing back behind its broad stone steps, a portico of four stone columns before its facade
  * under a pediment roof (a "canopy" solid, tags "portico": aerial, see-through with a body under it). The portico
  * carries the alarm bell: while it rings its `powered` is on (server/sim/vault.ts; the LightSet of any light). The
@@ -272,10 +272,10 @@ export function placeBank(kit: TownKit, lot: Lot, e: LotEdge, towardA: boolean):
 	return bank;
 }
 
-// ---------------------------------------------------------------------------------------------- the town hall (EDI-18)
+// ---------------------------------------------------------------------------------------------- the town hall (EDI-19)
 
 /**
- * The town hall (EDI-18): on a residential street, set back behind a front lawn like the houses beside it (EDI-02: a
+ * The town hall (EDI-19): on a residential street, set back behind a front lawn like the houses beside it (EDI-02: a
  * civic building with its yard), at one end of the block's face so the houses fill the rest. False when it does not
  * fit on this face.
  */
@@ -571,7 +571,7 @@ function halfCourt(kit: TownKit, lot: Lot, c: Rect, wide: boolean): void {
 	kit.reserve(grown(c, PATH));
 }
 
-// ---------------------------------------------------------------------------------------------- the street market (EDI-20)
+// ---------------------------------------------------------------------------------------------- the street market (EDI-21)
 
 /** a stall: the table (a container) the vendor stood behind, the crates behind it; the tent over two back to back */
 export const STALL_W = 128;
@@ -587,7 +587,7 @@ const TRUCK_L = 220;
 const TRUCK_W = 100;
 /** the share of the tables still holding something to take */
 const STALL_STOCKED = 0.35;
-/** and never more than this many of them (a market is a street of stalls, not a supermarket: EDI-20) */
+/** and never more than this many of them (a market is a street of stalls, not a supermarket: EDI-21) */
 export const MARKET_STOCKED_MAX = 8;
 
 // the market a few days after the town fell (APO-01): nobody set it up on a grid, and nobody packed it away
@@ -623,7 +623,7 @@ const CART_W = 44;
 const LITTER_PER_AISLE = 4;
 
 /**
- * The street market (EDI-20): a downtown block given to the weekly market, abandoned mid-day when the town fell.
+ * The street market (EDI-21): a downtown block given to the weekly market, abandoned mid-day when the town fell.
  * Rows of stalls back to back -- a table facing the aisle, the crates behind it, a striped tent over each pair --
  * with a wide aisle between two rows and a cross aisle through the middle, every aisle open onto a sidewalk; the
  * food truck parked at the end of an aisle. About a third of the tables still hold what they sold (produce, bread and
@@ -784,7 +784,7 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	return true;
 }
 
-// ---------------------------------------------------------------------------------------------- a house going up (EDI-21)
+// ---------------------------------------------------------------------------------------------- a house going up (EDI-22)
 
 /** the plot: along its street and deep, the fence 16 u behind the sidewalk, its gate in the middle */
 export const SITE_ALONG = 560;
@@ -797,7 +797,7 @@ const SLAB_FRONT = 176;
 const SLAB_DEPTH = 320;
 
 /**
- * A house going up (EDI-21): a plot on a residential street fenced round with a chain-link fence (bullets fly through,
+ * A house going up (EDI-22): a plot on a residential street fenced round with a chain-link fence (bullets fly through,
  * bodies do not) and a gate onto its street; on the poured slab the timber frame of the walls, a door-wide gap in
  * front and one at the side, the scaffolding along the back; in the front yard the piles of what it is built of --
  * lumber, bricks, steel (each a container: spawns.ts YARD_LOOT) -- a portable toilet, a mixer and a dumpster. Every

@@ -2532,7 +2532,7 @@ section(
 }
 
 section(
-	"zb) o cofre do banco: pe de cabra, E segurado 10 s, barulho, a porta abre para todos, o alarme toca e chama a horda, e o cofre so enche uma vez (EDI-23)",
+	"zb) o cofre do banco: pe de cabra, E segurado 10 s, barulho, a porta abre para todos, o alarme toca e chama a horda, e o cofre so enche uma vez (EDI-24)",
 );
 {
 	const V = require(join(SRC, "shared/sim/vault.ts"));

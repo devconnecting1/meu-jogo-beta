@@ -878,7 +878,7 @@ function mountRun(enterWorld = true): void {
 		// the listener follows the camera, and whatever is still queued in refs.fx is played before
 		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
 		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);
-		// a bank's alarm bell, ringing after its vault was cracked (EDI-23)
+		// a bank's alarm bell, ringing after its vault was cracked (EDI-24)
 		stepBankAlarm(refs.world, dt);
 		debug.profilebegin("pz.render");
 		loop.render();

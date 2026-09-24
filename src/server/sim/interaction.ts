@@ -93,7 +93,7 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	/** the bank's vault door is being worked (EDI-23, server/sim/vault.ts): `progress` seconds of the crack so far */
+	/** the bank's vault door is being worked (EDI-24, server/sim/vault.ts): `progress` seconds of the crack so far */
 	| { kind: "vault"; solid: Solid; progress: number }
 	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
 
@@ -123,10 +123,10 @@ export interface ServerInteractionOptions {
 	paysRewards?: (slot: number) => boolean;
 	/**
 	 * A ring of noise the horde hears (zombieBrain's emitSound): the bank vault's work, its door giving way and its
-	 * alarm (EDI-23, server/sim/vault.ts). Undefined: nobody listens (a test that does not look).
+	 * alarm (EDI-24, server/sim/vault.ts). Undefined: nobody listens (a test that does not look).
 	 */
 	noise?: (x: number, y: number, radius: number, shot: boolean) => void;
-	/** a bank vault gave way, cracked by the survivor in `slot` (EDI-23) */
+	/** a bank vault gave way, cracked by the survivor in `slot` (EDI-24) */
 	onVaultCracked?: (door: Solid, slot: number) => void;
 }
 
@@ -162,7 +162,7 @@ export class ServerInteraction {
 	private readonly toggleCd = new Map<Solid, number>();
 	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
 	private pumps?: Array<Solid>;
-	/** the bank's vault: the work at its door, the door giving way, the alarm (EDI-23) */
+	/** the bank's vault: the work at its door, the door giving way, the alarm (EDI-24) */
 	readonly vaults: ServerVaults;
 
 	constructor(options: ServerInteractionOptions) {
@@ -186,7 +186,7 @@ export class ServerInteraction {
 
 	/**
 	 * One command of the survivor in `slot` (the simulation's `stepWorldActions`): E HELD down keeps the work at a
-	 * bank's vault door going (EDI-23: the command's `held` Action bit). Nothing else holds E.
+	 * bank's vault door going (EDI-24: the command's `held` Action bit). Nothing else holds E.
 	 */
 	hold(slot: number, body: PlayerState, save: PlayerSaveData, held: boolean): void {
 		this.vaults.hold(slot, body, save, held);
@@ -263,7 +263,7 @@ export class ServerInteraction {
 
 	private door(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, DOOR_REACH)) return { kind: "refused", why: "range" };
-		// the bank's vault door does not swing on a press: it is cracked, with a crowbar and time (EDI-23)
+		// the bank's vault door does not swing on a press: it is cracked, with a crowbar and time (EDI-24)
 		if (isVaultDoor(s)) return this.vault(ctx, s);
 		if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
 		const willOpen = !(s.open ?? false);
@@ -284,7 +284,7 @@ export class ServerInteraction {
 	}
 
 	/**
-	 * E at the bank's vault door (EDI-23): with a crowbar in the backpack, the work starts or goes on (server/sim/vault.ts
+	 * E at the bank's vault door (EDI-24): with a crowbar in the backpack, the work starts or goes on (server/sim/vault.ts
 	 * counts it while E is held or pressed again); without one, nothing ("material", as a repair without its wood). An
 	 * open vault door stays open: E there does nothing.
 	 */
@@ -457,7 +457,7 @@ export class ServerInteraction {
 			if (!p.dead && (b === undefined || inVault(b, p.x, p.y))) {
 				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
 				// outside: the pump island (or the stall, the pile, the shed) in reach; inside the bank's vault: its
-				// deposit boxes (EDI-23), not the bank's own drawers
+				// deposit boxes (EDI-24), not the bank's own drawers
 				const near = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
 				if (b === undefined) {
 					b = near !== undefined && edgeDist(near, p.x, p.y) < PUMP_FLAG_REACH ? near : undefined;

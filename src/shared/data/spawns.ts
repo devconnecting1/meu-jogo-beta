@@ -80,7 +80,7 @@ export const PUMP_LOOT: Array<SpawnEntry> = [{ building: 5, kind: 4, index: 48, 
 export const PUMP_LOOT_SLOTS = 1;
 
 /**
- * The searchable fixtures out in the open (docs/DESIGN_RULES.md EDI-20, EDI-21, MOB-06), by tag: what a market
+ * The searchable fixtures out in the open (docs/DESIGN_RULES.md EDI-21, EDI-22, MOB-06), by tag: what a market
  * stall, the market's food truck, a pile of building material and a garden shed hold. Rolled like a pump island
  * (shared/sim/loot.ts `rollYardLoot`: lazily when a survivor comes near, one slot, shared by whoever takes it first,
  * back after ITEM_RESPAWN_HOURS -- MP-05), and told to the survivors outside by the same LootFlag. A stall's table is
@@ -121,7 +121,7 @@ export const YARD_LOOT: Record<string, Array<SpawnEntry>> = {
 	],
 };
 /**
- * The bank vault's deposit boxes (docs/DESIGN_RULES.md EDI-23): the best of the bank, and once a town. Every line is
+ * The bank vault's deposit boxes (docs/DESIGN_RULES.md EDI-24): the best of the bank, and once a town. Every line is
  * a box and is rolled once (shared/sim/loot.ts `rollVaultLoot`: a chance line comes or not, a range line gives its
  * amount) -- about 7.5 things, where the bank's own drawers give 2 to 3 a search -- and the boxes are never refilled
  * (loot.ts `lootRespawnHours`). What a town kept in its bank when it fell: gold, watches, a compass, the medicine
@@ -217,13 +217,13 @@ export function getDayPopulation(day: number): DayPopulation {
 }
 
 /**
- * The everyday town's buildings (docs/DESIGN_RULES.md EDI-18, EDI-03: what each held before the outbreak), by
+ * The everyday town's buildings (docs/DESIGN_RULES.md EDI-19, EDI-03: what each held before the outbreak), by
  * building type (shared/data/buildings.ts BuildingType 16..26). A record beside BUILDING_SPAWNS, not more rows of it:
  * the ids jump past the college campus's (12-15, EDI-17), and a hole in an array is a hole in the Luau table. Read
  * through `spawnRows`. Only items that already exist, each line a small share of a 2-3 slot search: a hardware store is
  * wood and steel pieces with the odd tool, a pawn shop pieces of gold (never Gold: it is only smelted) and a watch, the
  * police station's armoury a few rounds -- guns stay the gun shop's (a pistol at 4 % of a line) -- and the fire station
- * the medic kit and the axe on the wall. The loot per town, category by category, is in EDI-18 (`tools/town-census.mjs`).
+ * the medic kit and the axe on the wall. The loot per town, category by category, is in EDI-19 (`tools/town-census.mjs`).
  */
 export const TOWN_SPAWNS: Record<number, Array<SpawnEntry>> = {
 	// hardware store: lumber, steel, stone, and the tools on the wall
@@ -304,7 +304,7 @@ export const TOWN_SPAWNS: Record<number, Array<SpawnEntry>> = {
 	],
 	// town hall: the emergency supplies it handed out when the town fell -- canned food, blankets, flashlight batteries --
 	// and the first-aid cabinet in the lobby, whose bandages keep a town's medicine where it was with the two hospitals
-	// and the fewer pharmacies (EDI-18)
+	// and the fewer pharmacies (EDI-19)
 	23: [
 		{ building: 23, kind: 3, index: 9, min: 2, max: 4 },
 		{ building: 23, kind: 3, index: 12, min: 1, max: 2 },

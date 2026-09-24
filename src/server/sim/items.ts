@@ -578,7 +578,7 @@ export class ServerItems {
 		pays = true,
 	): Array<{ kind: number; id: number; count: number }> {
 		const taken = new Array<{ kind: number; id: number; count: number }>();
-		// a pump island, or any other container out in the open (a market stall, a pile, a shed: EDI-20..MOB-06)
+		// a pump island, or any other container out in the open (a market stall, a pile, a shed: EDI-21..MOB-06)
 		if (!isYardContainer(pump) || pump.removed === true) return taken;
 		const loot = pump.lootItems;
 		if (loot === undefined || loot.size() === 0) return taken;
@@ -604,7 +604,7 @@ export class ServerItems {
 			taken.push(drop);
 		}
 		c.lootItems = [];
-		// ITEM_RESPAWN_HOURS; the bank's vault never (EDI-23, `lootRespawnHours`)
+		// ITEM_RESPAWN_HOURS; the bank's vault never (EDI-24, `lootRespawnHours`)
 		c.lootTimer = hours + lootRespawnHours(c);
 	}
 
@@ -651,7 +651,7 @@ export class ServerItems {
 	 *
 	 * One function on purpose, and the roll itself is the SHARED one (shared/sim/loot.ts), the very roll the
 	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds. A pump island
-	 * rolls its fuel (EDI-16), a market stall, a pile or a shed its own table (EDI-20..MOB-06), a building its type's.
+	 * rolls its fuel (EDI-16), a market stall, a pile or a shed its own table (EDI-21..MOB-06), a building its type's.
 	 */
 	rollLoot(s: Solid): void {
 		s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);

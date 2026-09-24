@@ -62,12 +62,12 @@ export type RoomKind =
 	| "chemstore"
 	| "dormroom"
 	| "common"
-	// the everyday town (docs/DESIGN_RULES.md EDI-18): the town hall's meeting hall, a workshop or fire engine bay, a
+	// the everyday town (docs/DESIGN_RULES.md EDI-19): the town hall's meeting hall, a workshop or fire engine bay, a
 	// holding cell
 	| "meeting"
 	| "garage"
 	| "cell"
-	// the bank's vault (EDI-23): its only way in is the vault door
+	// the bank's vault (EDI-24): its only way in is the vault door
 	| "vault";
 
 export type FloorKind = "wood" | "tile" | "shop" | "carpet" | "kitchen" | "bath" | "concrete";
@@ -115,9 +115,9 @@ export type FurnitureKind =
 	| "chemshelf"
 	| "bunk"
 	| "vending"
-	// the bank's vault (EDI-23): the wall of safe deposit boxes -- the vault's own container, never a piece of the bank
+	// the bank's vault (EDI-24): the wall of safe deposit boxes -- the vault's own container, never a piece of the bank
 	| "deposit"
-	// the town hall's meeting hall (EDI-18): a row of folding chairs
+	// the town hall's meeting hall (EDI-19): a row of folding chairs
 	| "foldchairs";
 
 export type DecorKind =
@@ -1096,7 +1096,7 @@ const CAMPUS_DORM: Array<Template> = [
 
 // ---------------------------------------------------------------------------------------------- the everyday town
 
-/** EDI-18's rooms: a shop's, and the lobby, office, secure room, garage, meeting hall and cell of the civic buildings */
+/** EDI-19's rooms: a shop's, and the lobby, office, secure room, garage, meeting hall and cell of the civic buildings */
 const TOWN_ROOMS: Record<string, RoomKind> = {
 	S: "sales",
 	R: "stock",
@@ -1170,7 +1170,7 @@ const AUTO_REPAIR: Array<Template> = [
 ];
 
 /**
- * The bank (808 × 620, EDI-23): the banking hall across the front with the tellers' counter, and behind it the
+ * The bank (808 × 620, EDI-24): the banking hall across the front with the tellers' counter, and behind it the
  * manager's office, the vault and the loan office. The vault is a leaf: its one doorway opens off the hall, and that
  * doorway is the vault door (world.ts `bankVault`); the staff door is at the back of an office.
  */
@@ -1301,7 +1301,7 @@ const POLICE_STATION: Array<Template> = [
 	},
 ];
 
-/** the everyday town's templates (EDI-18), or undefined for a type that is not one of them */
+/** the everyday town's templates (EDI-19), or undefined for a type that is not one of them */
 function townTemplates(bt: number): Array<Template> | undefined {
 	if (bt === 16 || bt === 18 || bt === 21) return smallShop("R");
 	if (bt === 17) return AUTO_REPAIR;
@@ -1430,12 +1430,12 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	chemstore: { floor: "concrete", win: 0, early: false },
 	dormroom: { floor: "carpet", win: 1, early: true },
 	common: { floor: "wood", win: 1, early: false },
-	// the everyday town (EDI-18): the town hall's meeting hall has its windows before its chairs; a workshop or an
+	// the everyday town (EDI-19): the town hall's meeting hall has its windows before its chairs; a workshop or an
 	// engine bay and a holding cell have none
 	meeting: { floor: "wood", win: 1, early: true },
 	garage: { floor: "concrete", win: 0, early: false },
 	cell: { floor: "concrete", win: 0, early: false },
-	// the bank's vault (EDI-23): steel-lined, windowless
+	// the bank's vault (EDI-24): steel-lined, windowless
 	vault: { floor: "concrete", win: 0, early: false },
 };
 
@@ -3285,7 +3285,7 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	chemshelf: { low: false, loot: true },
 	bunk: { low: false, loot: false },
 	vending: { low: false, loot: true },
-	// the vault's deposit boxes (EDI-23) are a container of their own (world.ts `bankVault`): no loot spot of the bank
+	// the vault's deposit boxes (EDI-24) are a container of their own (world.ts `bankVault`): no loot spot of the bank
 	deposit: { low: false, loot: false },
 	foldchairs: { low: true, loot: false },
 };
@@ -3316,7 +3316,7 @@ const DEFINING: Array<FurnitureKind> = [
 // ---------------------------------------------------------------------------------------------- furnishing by room
 
 /**
- * The everyday town's rooms (EDI-18), each with the piece that says what it is (EDI-08): the hardware store's shelves
+ * The everyday town's rooms (EDI-19), each with the piece that says what it is (EDI-08): the hardware store's shelves
  * and lumber rack, the pawn shop's glass cases, the post office's counter and sorting racks, the bank's tellers'
  * counter and the vault's deposit boxes, the town hall's council table and folding chairs, its clerk's counter and
  * first-aid cabinet, its records' shelves, the workshop's racks and workbench, the fire crew's lockers, the holding
@@ -3386,7 +3386,7 @@ function furnishTown(pl: Planner, ctx: RoomCtx, bt: number): boolean {
 		return true;
 	}
 	if (k === "vault") {
-		// the bank's vault (EDI-23): the wall of deposit boxes facing the door, and nothing else -- no loot spot of the
+		// the bank's vault (EDI-24): the wall of deposit boxes facing the door, and nothing else -- no loot spot of the
 		// bank in here: the boxes are the vault's own container, behind the vault door
 		if (!pl.againstWall(ctx, "deposit", 240, 36, "K")) {
 			if (!pl.againstWall(ctx, "deposit", 176, 36, "K")) pl.againstWall(ctx, "deposit", 128, 36);
@@ -3731,7 +3731,7 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 	if (bt >= 12 && bt <= 15 && (k === "foyer" || k === "corridor" || k === "common")) {
 		noticeBoard(pl, ctx);
 	}
-	// the town hall's (EDI-18): the meeting's agenda and the town's notices, in the lobby and the meeting hall
+	// the town hall's (EDI-19): the meeting's agenda and the town's notices, in the lobby and the meeting hall
 	if (bt === 23 && (k === "lobby" || k === "meeting")) noticeBoard(pl, ctx);
 	// chairs round every table and desk (flat, EDI-12: a chair is clutter, not a wall), a few knocked over
 	for (const p of pl.pieces) {
@@ -3760,7 +3760,7 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 		}
 	}
 	// a few days after the outbreak (APO-01): dried blood in some rooms -- never in the bank's vault, shut since the
-	// town fell (EDI-23)
+	// town fell (EDI-24)
 	if (rng.chance(0.22) && k !== "vault") {
 		pl.decorAt(
 			"blood",

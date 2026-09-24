@@ -1,5 +1,5 @@
 /*
- * The bank's alarm bell, heard (docs/DESIGN_RULES.md EDI-23; the rules: shared/sim/vault.ts).
+ * The bank's alarm bell, heard (docs/DESIGN_RULES.md EDI-24; the rules: shared/sim/vault.ts).
  *
  * While the portico of a bank has its `powered` on -- the server's LightSet, the bell ringing after its vault was
  * cracked -- an electric bell rings there: the bicycle bell's recording (shared/data/sounds.ts `bellBike`) pitched down

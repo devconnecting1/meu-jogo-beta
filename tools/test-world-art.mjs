@@ -179,7 +179,7 @@ function setArt(ids) {
 /**
  * The scenes are framed on what they are named for, found in the town (the fixed rects of before showed an empty yard,
  * a bare crossing and a house where the forecourt used to be once the everyday town moved the buildings round and the
- * mix got its quotas, EDI-18/EDI-19, 2026-09-24): a house of the street with its ridge along x and its front yard, a
+ * mix got its quotas, EDI-19/EDI-20, 2026-09-24): a house of the street with its ridge along x and its front yard, a
  * shop's door at the sidewalk, a park's middle, the first school, a gas station's forecourt whose street is at the top
  * (its canopy is `gasCanopyN`), framed like render-map's `findGas`.
  */
@@ -356,7 +356,7 @@ if (process.argv.includes("--golden-chars")) {
 const GOLDEN_INTERIORS = join(ROOT, "tools", "golden", "interiors-flat.json");
 function interiorBuildings(w) {
 	const out = [];
-	// every type of the town: the 15 of before and the everyday town's (EDI-18..EDI-23: the bank and its vault too)
+	// every type of the town: the 15 of before and the everyday town's (EDI-19..EDI-24: the bank and its vault too)
 	let top = 15;
 	for (const s of w.solids) if (s.kind === "building" && s.buildingType > top) top = s.buildingType;
 	for (let t = 1; t <= top; t++) {
@@ -722,7 +722,7 @@ section("4) cost of a dense screen: downtown, 1920 x 1080, zoom 1");
 /**
  * The screens: the middle of every downtown block. The dense one is the block whose screen draws the most sprites flat
  * (the fixed point of before, 8400 x 10250, framed one market's big roof and no sign once the everyday town moved the
- * buildings round, EDI-18/EDI-19, 2026-09-24); the budget holds there, and over every block's screen together.
+ * buildings round, EDI-19/EDI-20, 2026-09-24); the budget holds there, and over every block's screen together.
  */
 const blockScreens = world.lots.filter(l => l.zone === "commercial").map(l => ({ x: l.x + l.w / 2, y: l.y + l.h / 2 }));
 function spritesAt(ids, at) {

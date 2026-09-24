@@ -163,7 +163,7 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 	}
 	if (e.t === WorldEv.LootFlag) {
 		// a building, or a container out in the open -- a pump island (EDI-16), a market stall, a pile, a shed
-		// (EDI-20..MOB-06): the containers the server flags (same message)
+		// (EDI-21..MOB-06): the containers the server flags (same message)
 		const b = ix.solids.get(e.buildingId);
 		if (b === undefined || (b.kind !== "building" && !isYardContainer(b))) return;
 		const had = (b.lootItems?.size() ?? 0) > 0;
@@ -183,7 +183,7 @@ export function resetMirror(world: WorldData): void {
 	for (const s of world.solids) {
 		if (s.id >= DYNAMIC_ID_BASE || s.placeable !== undefined) built.push(s);
 		else if (isDoor(s)) s.open = false;
-		// a bank's alarm bell (EDI-23): silent until the WorldInit says it rings
+		// a bank's alarm bell (EDI-24): silent until the WorldInit says it rings
 		else if (isPortico(s)) s.powered = undefined;
 		else if ((s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined) s.lootItems = [];
 	}

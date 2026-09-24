@@ -698,7 +698,7 @@ export class Replicator {
 		// a door of the generated map that somebody opened: the mirror generated it closed
 		for (const solid of this.sim.world.solids) {
 			if (solid.placeable !== undefined) continue;
-			// ...and a bank's alarm bell that is ringing right now (EDI-23: the LightSet of its portico)
+			// ...and a bank's alarm bell that is ringing right now (EDI-24: the LightSet of its portico)
 			if (isPortico(solid) && solid.powered === true) {
 				this.queueFor(sp.slot, { t: WorldEv.LightSet, id: solid.id, powered: true });
 				continue;

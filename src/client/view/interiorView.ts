@@ -332,7 +332,7 @@ export class InteriorView {
 		}
 		if (this.drawCampusPiece(r, cam, s, cx, cy, w, h, fx, fy, wide, k)) return;
 		if (t === "foldchairs") {
-			// the town hall's folding chairs (EDI-18): rows of steel seats (a row every 32 u of depth), a chair's width
+			// the town hall's folding chairs (EDI-19): rows of steel seats (a row every 32 u of depth), a chair's width
 			// apart along each row
 			const along = wide;
 			const len = along ? w : h;

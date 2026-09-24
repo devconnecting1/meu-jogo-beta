@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "the everyday town with its town hall (2026-09-24, CON-06: the church replaced; EDI-20: the market left as the crowd ran), recorded from this src with no ids -- at c104e04 the same no-id path matched 36f6df6's pre-art golden call for call on all 26 types; the town hall's meeting hall and folding chairs never existed before the art",
+	"recordedFrom": "the everyday town with its town hall (2026-09-24, CON-06: the church replaced; EDI-21: the market left as the crowd ran), recorded from this src with no ids -- at c104e04 the same no-id path matched 36f6df6's pre-art golden call for call on all 26 types; the town hall's meeting hall and folding chairs never existed before the art",
 	"scenes": {
 		"type1": {
 			"building": 51,

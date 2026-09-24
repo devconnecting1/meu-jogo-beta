@@ -1,5 +1,5 @@
 /*
- * The everyday town, drawn (docs/DESIGN_RULES.md EDI-18..EDI-23, MOB-04..MOB-06; laid out by shared/game/townLots.ts):
+ * The everyday town, drawn (docs/DESIGN_RULES.md EDI-19..EDI-24, MOB-04..MOB-06; laid out by shared/game/townLots.ts):
  * the ground it adds -- the bank's steps, a court, a sand pit, a poured slab, a vegetable bed -- the bank's portico,
  * columns, vault door, deposit boxes and roof, and the fixtures of the streets, the parks and the backyards.
  *
@@ -59,7 +59,7 @@ const COURT_KEY = Color3.fromRGB(150, 84, 64);
 const KEY_WIDE = 96;
 const KEY_DEEP = 112;
 /**
- * The street market's litter (EDI-20, APO-01): produce a shade darker and a size smaller than any item's icon on the
+ * The street market's litter (EDI-21, APO-01): produce a shade darker and a size smaller than any item's icon on the
  * ground (LEG-03: nothing here reads as something to pick up), paper, a kraft shopping bag
  */
 const APPLE = Color3.fromRGB(138, 40, 34);
@@ -243,7 +243,7 @@ export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewR
 	return true;
 }
 
-// ------------------------------------------------------------------ the bank (EDI-23)
+// ------------------------------------------------------------------ the bank (EDI-24)
 
 /** each bank's record and portico, by the bank's id (built once per world: the town is static) */
 interface BankParts {
@@ -292,7 +292,7 @@ const BELL_H = 14;
 const BELL_HZ = 4;
 
 /**
- * The bank's portico (EDI-23): a pediment roof over the columns, its ridge running from the facade to the street --
+ * The bank's portico (EDI-24): a pediment roof over the columns, its ridge running from the facade to the street --
  * the half towards the light lit, the other in shade -- the cornice along its street edge, and the alarm bell's red box
  * in the middle of it. While the bell rings (`powered`, the server's LightSet) its lamp flashes. See-through with a body
  * under it (`canopyAlpha`, the canopy's fade).
@@ -384,7 +384,7 @@ export function drawPortico(r: Renderer, cam: Camera, s0: Solid, v: ViewRect, sh
 
 /**
  * How much of the portico's roof is left out on its street side when drawn: with it, the colonnade's front half shows
- * under the cornice (EDI-23: from the street, with the roof on, the bank reads by its columns and its steps)
+ * under the cornice (EDI-24: from the street, with the roof on, the bank reads by its columns and its steps)
  */
 const PORTICO_TRIM = 10;
 
@@ -420,7 +420,7 @@ function drawColumn(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void 
 }
 
 /**
- * The vault's steel door (EDI-23), while the bank's roof is lifted: shut, a thick slab with its bolts and the wheel of
+ * The vault's steel door (EDI-24), while the bank's roof is lifted: shut, a thick slab with its bolts and the wheel of
  * its lock; cracked, the slab swung back flat against the vault's wall beside the doorway, the doorway empty.
  */
 export function drawVaultDoor(r: Renderer, cam: Camera, s: Solid, world: WorldData): void {
@@ -539,7 +539,7 @@ const BOX_PITCH = 24;
 const PARAPET = 10;
 
 /**
- * The bank's roof (EDI-23), with the signage in both drawings: the stone parapet round it (lit on the top and left
+ * The bank's roof (EDI-24), with the signage in both drawings: the stone parapet round it (lit on the top and left
  * edges, its inner joint in shade) and, over the banking hall, the laylight of dark glass in its stone frame.
  */
 export function drawBankRoof(r: Renderer, cam: Camera, v: ViewRect, s: Solid, a: number): void {
@@ -792,7 +792,7 @@ function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void 
 }
 
 /**
- * A trestle table knocked over in the rush (EDI-20): its top's underside, the two trestles sticking up at its ends,
+ * A trestle table knocked over in the rush (EDI-21): its top's underside, the two trestles sticking up at its ends,
  * the cloth half off it on the aisle side (its wares are the spill in front of it: townLots.ts).
  */
 function drawTrestle(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
@@ -933,7 +933,7 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		drawColumn(r, cam, s, shadow);
 		return true;
 	}
-	// ---- the street market (EDI-20)
+	// ---- the street market (EDI-21)
 	if (market) {
 		if (t === "crates") {
 			drawCrates(r, cam, s, shadow);
@@ -996,7 +996,7 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		});
 		return true;
 	}
-	// ---- the building site (EDI-21)
+	// ---- the building site (EDI-22)
 	if (t === "fence") {
 		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: GALV, stroke: IRON, strokeThickness: 1, zIndex: Z.structure });
 		r.drawRect(cam, cx, cy, { w: wide ? s.w : 2, h: wide ? 2 : s.h, color: GALV_LIT, zIndex: Z.structure + 1 });
@@ -1269,7 +1269,7 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 }
 
 /**
- * The everyday town's roofs on posts (EDI-20, MOB-04): a market stall's striped tent -- its canvas, three stripes
+ * The everyday town's roofs on posts (EDI-21, MOB-04): a market stall's striped tent -- its canvas, three stripes
  * across it, the ridge -- and a bus shelter's smoked glass on its frame. See-through with a body under them
  * (`canopyAlpha`, the canopy's fade), their shadow on the sun's side.
  */
@@ -1307,7 +1307,7 @@ const TEAR = Color3.fromRGB(58, 54, 48);
 const PUDDLE = Color3.fromRGB(84, 106, 118);
 
 /**
- * A market stall's tent (EDI-20): its canvas, three stripes across the ridge and the shaded slope (the bottom / right
+ * A market stall's tent (EDI-21): its canvas, three stripes across the ridge and the shaded slope (the bottom / right
  * half: light from the top left), turned by its `heading` (a few degrees: nobody set them square). Torn: a dark rent
  * and a flap hanging off its edge; sagging: the belly between the poles darker, old rain in it. Standing, it is
  * aerial and see-through with a body under it (`canopyAlpha`). Down, it lies on its tables under the actors: crumpled,

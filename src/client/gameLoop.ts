@@ -101,7 +101,7 @@ const ROOF_LERP = 0.15;
  * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
  */
-/** a bank's portico, while its alarm bell rings (EDI-23): the bell's lamp, flashing */
+/** a bank's portico, while its alarm bell rings (EDI-24): the bell's lamp, flashing */
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330, portico: 220 };
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;

@@ -579,7 +579,7 @@ export class ServerSimulation {
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
 				paysRewards: slot => this.paysSlot(slot),
-				// EDI-23: the bank vault's work, its door giving way and its alarm reach the horde's ears (IA-02)
+				// EDI-24: the bank vault's work, its door giving way and its alarm reach the horde's ears (IA-02)
 				noise: (x, y, radius, shot) => {
 					if (this.horde !== undefined) emitSound(this.horde.refs, x, y, radius, shot);
 				},
@@ -1158,7 +1158,7 @@ export class ServerSimulation {
 		const build = this.build;
 		const interaction = this.interaction;
 		if (build === undefined || interaction === undefined) return;
-		// E held down (the command's held Action bit): the work at a bank's vault door goes on (EDI-23); a survivor who
+		// E held down (the command's held Action bit): the work at a bank's vault door goes on (EDI-24); a survivor who
 		// died, walked off or let go stops there
 		interaction.hold(sp.slot, sp.state, sp.save, (cmd.held & HeldBit.Action) !== 0);
 		if (sp.state.dead) return;

@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the everyday town (2026-09-24, EDI-18..EDI-23 and MOB-04..MOB-06), re-recorded on purpose again the same day: the town hall in place of the church (CON-06), the street market left as the crowd ran (EDI-20: tents askew, down, torn or sagging, tables over, crates stacked and tipped, a hand cart, litter), the bank's columns and steps drawn to read from the street (EDI-23); two gun shops at least (EDI-18) moved Main Street round; scenes framed on what they are named for; noSigns = the same without the signage hook",
+	"recordedFrom": "the everyday town (2026-09-24, EDI-19..EDI-24 and MOB-04..MOB-06), re-recorded on purpose again the same day: the town hall in place of the church (CON-06), the street market left as the crowd ran (EDI-21: tents askew, down, torn or sagging, tables over, crates stacked and tipped, a hand cart, litter), the bank's columns and steps drawn to read from the street (EDI-24); two gun shops at least (EDI-19) moved Main Street round; scenes framed on what they are named for; noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
 			"count": 1156,

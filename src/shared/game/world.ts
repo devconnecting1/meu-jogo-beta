@@ -32,7 +32,7 @@ export type SolidKind =
 	/**
 	 * A gas station's canopy over its pump islands (tags "canopy", EDI-16): aerial like a tree's crown (COL-02),
 	 * passable, drawn over the actors and see-through while a body is under it (`canopyAlpha`, the crown's fade).
-	 * The same kind covers the everyday town's other roofs on posts (EDI-20, MOB-04): a market stall's tent (tags
+	 * The same kind covers the everyday town's other roofs on posts (EDI-21, MOB-04): a market stall's tent (tags
 	 * "tent") and a bus shelter's roof (tags "shelter").
 	 */
 	| "canopy"
@@ -83,7 +83,7 @@ export interface Solid {
 	/** building walls (tags "bwall"), windows and furniture: id of the building record they belong to */
 	parentId?: number;
 	/**
-	 * The bank's own fixtures (EDI-23): its vault door, the vault's deposit boxes, the portico and its columns -- the id
+	 * The bank's own fixtures (EDI-24): its vault door, the vault's deposit boxes, the portico and its columns -- the id
 	 * of the bank's record. Not `parentId`: E reaches the door and the boxes, and they are drawn with the town.
 	 */
 	bankId?: number;
@@ -235,15 +235,15 @@ export type GroundKind =
 	| "court"
 	/** a playground's sand pit */
 	| "sandbox"
-	/** a construction site's poured slab (EDI-21), and the churned earth round it inside the fence */
+	/** a construction site's poured slab (EDI-22), and the churned earth round it inside the fence */
 	| "pad"
 	| "site"
 	/** a backyard vegetable bed */
 	| "garden"
-	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-23) */
+	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-24) */
 	| "steps"
 	/**
-	 * what the street market's crowd dropped as it ran (EDI-20, APO-01): produce rolled out of a crate or off a table,
+	 * what the street market's crowd dropped as it ran (EDI-21, APO-01): produce rolled out of a crate or off a table,
 	 * paper, a shopping bag -- flat on the ground, smaller and darker than anything a survivor picks up (LEG-03)
 	 */
 	| "spill"
@@ -252,7 +252,7 @@ export type GroundKind =
 
 /**
  * What a lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
- * (EDI-20), a public parking lot (MOB-05) or, on a residential block, a house going up among the others (EDI-21; the
+ * (EDI-21), a public parking lot (MOB-05) or, on a residential block, a house going up among the others (EDI-22; the
  * campus never takes a block with a program). A lot without one is the ordinary block its zone says.
  */
 export type LotProgram = "market" | "parking" | "construction";
@@ -586,8 +586,8 @@ const HOUSE_DEFS: Array<BuildingDef> = [
 
 /**
  * The shops of old. The pharmacy and the gun shop search three slots (two until 2026-09-24): a town holds two or three
- * of each now instead of six and five (EDI-18), and the medicine and the ammunition they held are where they were --
- * a little richer each, never a jackpot (the loot per town is in EDI-18).
+ * of each now instead of six and five (EDI-19), and the medicine and the ammunition they held are where they were --
+ * a little richer each, never a jackpot (the loot per town is in EDI-19).
  */
 const SHOP_DEFS: Record<number, BuildingDef> = {
 	6: { type: 6, w: 684, h: 556, slots: 3, name: "pharmacy", weight: 1 },
@@ -599,7 +599,7 @@ const SHOP_DEFS: Record<number, BuildingDef> = {
 };
 
 /**
- * The everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's small shops, offices and police station on the small
+ * The everyday town (docs/DESIGN_RULES.md EDI-19): Main Street's small shops, offices and police station on the small
  * shop's footprint, the town hall and the fire station on the avenue (placed by shared/game/townLots.ts).
  */
 const TOWN_DEFS: Record<number, BuildingDef> = {
@@ -609,7 +609,7 @@ const TOWN_DEFS: Record<number, BuildingDef> = {
 	19: { type: 19, w: 684, h: 556, slots: 2, name: "bakery", weight: 1 },
 	20: { type: 20, w: 684, h: 556, slots: 2, name: "pawn", weight: 1 },
 	21: { type: 21, w: 684, h: 556, slots: 2, name: "postoffice", weight: 1 },
-	// the bank (EDI-23): not from the stock -- one a town, on the avenue by the crossing (townLots.ts placeBank)
+	// the bank (EDI-24): not from the stock -- one a town, on the avenue by the crossing (townLots.ts placeBank)
 	22: { type: 22, w: 808, h: 620, slots: 3, name: "bank", weight: 1 },
 	// the town hall (TOWN_HALLS): one a town, placed by townLots.ts placeTownHall
 	23: { type: 23, w: 808, h: 684, slots: 3, name: "townhall", weight: 1 },
@@ -619,7 +619,7 @@ const TOWN_DEFS: Record<number, BuildingDef> = {
 };
 
 /**
- * Main Street's mix (EDI-18, EDI-19): at most `cap` of each kind a town, and two of a kind at least `apart` blocks
+ * Main Street's mix (EDI-19, EDI-20): at most `cap` of each kind a town, and two of a kind at least `apart` blocks
  * apart (Chebyshev, on the grid of lots: 1 = never on one block, 2 = never on neighbouring blocks either, the street
  * between them included). The owner (2026-09-24): "Evitar repetições de mercados, hospitais, etc em cada esquina".
  * A small North American town has one or two of each, not six pharmacies: the quota is dealt as a shuffled stock,
@@ -655,18 +655,18 @@ const SHOPS_PER_BLOCK = 3;
 const GAS_DEF: BuildingDef = { type: 5, w: 684, h: 556, slots: 2, name: "gas", weight: 1 };
 /** the largest buildings, with room left on the lot for a school yard / parking lot */
 const SCHOOL_DEF: BuildingDef = { type: 3, w: 1064, h: 812, slots: 4, name: "school", weight: 1 };
-/** the hospital searches five slots (four until 2026-09-24, with three hospitals a town; now two: EDI-18) */
+/** the hospital searches five slots (four until 2026-09-24, with three hospitals a town; now two: EDI-19) */
 const HOSPITAL_DEF: BuildingDef = { type: 4, w: 1064, h: 812, slots: 5, name: "hospital", weight: 1 };
 
 /**
- * A small town's civic buildings (EDI-18, EDI-19): two schools (the elementary and the high school) and two hospitals,
+ * A small town's civic buildings (EDI-19, EDI-20): two schools (the elementary and the high school) and two hospitals,
  * three blocks apart or more among their own kind. Until 2026-09-24 three of each: with six pharmacies and ten food
  * stores on twenty downtown blocks, a town of a hundred houses had a hospital for every thirty-five.
  */
 export const SCHOOLS = 2;
 export const HOSPITALS = 2;
 /**
- * Gas stations (EDI-16, EDI-19): four, at most `GAS_PER_AVENUE` on each of the two avenues -- the highways through town,
+ * Gas stations (EDI-16, EDI-20): four, at most `GAS_PER_AVENUE` on each of the two avenues -- the highways through town,
  * where a real one stands -- and two blocks apart or more, so never two at one crossing. Five until 2026-09-24, with
  * three on one avenue.
  */
@@ -680,13 +680,13 @@ export const GAS_PER_AVENUE = 2;
 export const GAS_MIN = 2;
 const GAS_SPARE = 4;
 /**
- * The bank (EDI-23): at most one a town, the landmark of Main Street -- on a downtown block of an avenue, one of the
+ * The bank (EDI-24): at most one a town, the landmark of Main Street -- on a downtown block of an avenue, one of the
  * BANK_LOTS blocks nearest the avenues' crossing, at the end of its face towards the crossing.
  */
 export const BANKS = 1;
 const BANK_LOTS = 4;
 /**
- * The town hall (EDI-18): one a town, on a residential street behind a front lawn -- the records office, the clerk,
+ * The town hall (EDI-19): one a town, on a residential street behind a front lawn -- the records office, the clerk,
  * the meeting hall where the town met, and the emergency supplies it handed out when the town fell. A civic
  * building, never a religious one (docs/DESIGN_RULES.md CON-06).
  */
@@ -731,7 +731,7 @@ const GAS_SIGN_V = 8;
 const PARKS = 6;
 /**
  * Lots on each side of the avenue crossing (along each avenue) that are downtown: Main Street is the two blocks each way
- * from the crossing (EDI-06, EDI-18). Two until 2026-09-24 (twenty blocks of shops for a hundred houses); the blocks it
+ * from the crossing (EDI-06, EDI-19). Two until 2026-09-24 (twenty blocks of shops for a hundred houses); the blocks it
  * gave back are houses again, with a corner shop now and then on the avenue.
  */
 const DOWNTOWN_REACH = 1;
@@ -749,7 +749,7 @@ const SHOP_ROOF: Record<number, Color3> = {
 	9: Color3.fromRGB(78, 82, 90),
 	10: Color3.fromRGB(150, 100, 160),
 	11: Color3.fromRGB(172, 62, 56),
-	// the everyday town (EDI-18): each its own, apart from every other type's once the roof texture tints it (EDI-03)
+	// the everyday town (EDI-19): each its own, apart from every other type's once the roof texture tints it (EDI-03)
 	16: Color3.fromRGB(140, 88, 58),
 	17: Color3.fromRGB(124, 130, 134),
 	18: Color3.fromRGB(50, 128, 140),
@@ -986,9 +986,9 @@ interface Gen {
 	phase: Array<number>;
 	/** Main Street's stock (SHOP_QUOTA): one card per building still to place, shuffled once */
 	shopDeck: Array<number>;
-	/** every non-house building placed so far, by type, with its lot: two of a kind keep their distance (EDI-19) */
+	/** every non-house building placed so far, by type, with its lot: two of a kind keep their distance (EDI-20) */
 	shopsPlaced: Array<{ type: number; lot: Lot }>;
-	/** each lot's column and row on the lot grid (the "blocks" of EDI-19's distances) */
+	/** each lot's column and row on the lot grid (the "blocks" of EDI-20's distances) */
 	lotCell: Map<Lot, { c: number; r: number }>;
 	/** the town's seed: mixed into every building's own seed (interiors never draw from `rng`) */
 	townSeed: number;
@@ -1184,7 +1184,7 @@ function shuffle<T>(rng: TownRng, arr: Array<T>): Array<T> {
 	return arr;
 }
 
-/** a non-house building's definition by type: the shops of old, or the everyday town's (EDI-18) */
+/** a non-house building's definition by type: the shops of old, or the everyday town's (EDI-19) */
 function shopDef(t: number): BuildingDef {
 	return SHOP_DEFS[t] ?? TOWN_DEFS[t];
 }
@@ -1204,7 +1204,7 @@ function quotaApart(t: number): number {
 }
 
 /**
- * May a building of type `t` go up on `lot` (EDI-19)? Never a second one of its kind on the same block, and never
+ * May a building of type `t` go up on `lot` (EDI-20)? Never a second one of its kind on the same block, and never
  * closer than its `apart` to another of its kind.
  */
 function kindFits(g: Gen, t: number, lot: Lot): boolean {
@@ -1216,7 +1216,7 @@ function kindFits(g: Gen, t: number, lot: Lot): boolean {
 }
 
 /**
- * What every town has at least one of (EDI-18): the medicine, the food, the ammunition, the tools and the law -- and
+ * What every town has at least one of (EDI-19): the medicine, the food, the ammunition, the tools and the law -- and
  * two gun shops, the town's ammunition (one alone left a town with half the rounds of the others). Their first cards
  * lead the stock, so none is left out by a town whose Main Street filled up first.
  */
@@ -1244,7 +1244,7 @@ function shopStock(g: Gen): Array<number> {
 }
 
 /**
- * The next kinds of the stock that may go up on this lot (EDI-19): at most `n`, each kind once, in the stock's order.
+ * The next kinds of the stock that may go up on this lot (EDI-20): at most `n`, each kind once, in the stock's order.
  * `only`: the kinds allowed here (a residential corner takes only the small everyday shops).
  */
 function shopCandidates(g: Gen, lot: Lot, n: number, only?: Array<number>): Array<BuildingDef> {
@@ -1260,7 +1260,7 @@ function shopCandidates(g: Gen, lot: Lot, n: number, only?: Array<number>): Arra
 	return out;
 }
 
-/** a kind went up on `lot`: its card leaves the stock, and it is remembered for the distances (EDI-19) */
+/** a kind went up on `lot`: its card leaves the stock, and it is remembered for the distances (EDI-20) */
 function takeShop(g: Gen, lot: Lot, b: BuildingDef): void {
 	const i = g.shopDeck.indexOf(b.type);
 	if (i >= 0) g.shopDeck.remove(i);
@@ -1936,7 +1936,7 @@ function parkCars(g: Gen): void {
 }
 
 // ---------------------------------------------------------------------------
-// the everyday town (shared/game/townLots.ts, docs/DESIGN_RULES.md EDI-18..EDI-22, MOB-04..MOB-06)
+// the everyday town (shared/game/townLots.ts, docs/DESIGN_RULES.md EDI-19..EDI-23, MOB-04..MOB-06)
 
 /** the generator's placement rules and builders, handed to townLots.ts (which never imports this module at run time) */
 function townKit(g: Gen): TL.TownKit {
@@ -2069,7 +2069,7 @@ function placeCampus(g: Gen): void {
 	const eligible: Array<{ lot: Lot; ring: number }> = [];
 	for (const lot of w.lots) {
 		if (lot.kind !== "block" || lot.zone !== "residential" || lot.edges.size() !== 4) continue;
-		// a block given to something (a house going up, EDI-21) keeps it
+		// a block given to something (a house going up, EDI-22) keeps it
 		if (lot.program !== undefined) continue;
 		let ok = true;
 		for (const e of lot.edges) if (w.roads[e.road].avenue) ok = false;
@@ -2325,11 +2325,11 @@ function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: numbe
  */
 /** the bank's type (buildings.ts BuildingType.Bank) */
 const BANK_TYPE = 22;
-/** the vault door is this much thicker than the wall its doorway is cut in, half on each side (EDI-23) */
+/** the vault door is this much thicker than the wall its doorway is cut in, half on each side (EDI-24) */
 const VAULT_DOOR_THICK = 16;
 
 /**
- * The bank's vault (EDI-23), once its plan is laid: a steel door in the vault's one doorway -- shut, and opened only by
+ * The bank's vault (EDI-24), once its plan is laid: a steel door in the vault's one doorway -- shut, and opened only by
  * cracking it (shared/sim/vault.ts) -- and the wall of deposit boxes at its back, a container of its own searched like
  * a market stall and filled once a town (spawns.ts VAULT_LOOT). Both carry the bank's id (`bankId`), not `parentId`:
  * E reaches them, and they are drawn with the town, under the bank's roof.
@@ -2715,9 +2715,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	for (const l of schools) l.zone = "civic";
 	const hospitals = pickLots(HOSPITALS, l => residentialFree(l) && onAvenue(l), 3, []);
 	for (const l of hospitals) l.zone = "civic";
-	// the fire station (EDI-22): on a residential block of an avenue, away from the hospitals
+	// the fire station (EDI-23): on a residential block of an avenue, away from the hospitals
 	const fireLots = pickLots(1, l => residentialFree(l) && onAvenue(l), 3, hospitals);
-	// the town hall (EDI-18): on a residential street, behind its front lawn -- a few candidate blocks, the first whose
+	// the town hall (EDI-19): on a residential street, behind its front lawn -- a few candidate blocks, the first whose
 	// face takes it builds it (the others stay ordinary blocks)
 	const hallLots = pickLots(TOWN_HALLS + 2, l => residentialFree(l) && !onAvenue(l), 2, []);
 	let halls = 0;
@@ -2732,7 +2732,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	const gasLots: Array<Lot> = [];
 	const gasSpare: Array<Lot> = [];
 	{
-		// GAS_PER_AVENUE a road (EDI-19): a lot on a full avenue waits among the spares
+		// GAS_PER_AVENUE a road (EDI-20): a lot on a full avenue waits among the spares
 		const perAvenue = new Map<number, number>();
 		for (const l of gasPick) {
 			let best = -1;
@@ -2752,9 +2752,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	/** stations standing, and picked lots not laid out yet: a spare lot is used only if these two cannot reach GAS_MIN */
 	let gasPlaced = 0;
 	let gasPending = gasLots.size();
-	/** stations standing on each avenue (by road index): at most GAS_PER_AVENUE (EDI-19) */
+	/** stations standing on each avenue (by road index): at most GAS_PER_AVENUE (EDI-20) */
 	const gasOnAvenue = new Map<number, number>();
-	// the bank (EDI-23): the downtown blocks on an avenue nearest the avenues' crossing, nearest first (an insertion
+	// the bank (EDI-24): the downtown blocks on an avenue nearest the avenues' crossing, nearest first (an insertion
 	// sort on a key, stable: Luau's table.sort is not, and would change the town)
 	const crossX = avX >= 0 ? xs[avX].start + xs[avX].size / 2 : w.width / 2;
 	const crossY = avY >= 0 ? ys[avY].start + ys[avY].size / 2 : w.height / 2;
@@ -2851,7 +2851,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			for (const e1 of edges) {
 				if (done) break;
 				if (!w.roads[e1.road].avenue) continue;
-				// never a third station on one avenue (EDI-19)
+				// never a third station on one avenue (EDI-20)
 				if ((gasOnAvenue.get(e1.road) ?? 0) >= GAS_PER_AVENUE) continue;
 				for (const e2 of lot.edges) {
 					if (done || isAlongX(e2.side) === isAlongX(e1.side)) continue;
@@ -2867,14 +2867,14 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 				g.shopsPlaced.push({ type: GAS_DEF.type, lot });
 			}
 		}
-		// the street market (EDI-20) and the public parking lot (MOB-05) take their whole block; one that does not fit
+		// the street market (EDI-21) and the public parking lot (MOB-05) take their whole block; one that does not fit
 		// leaves an ordinary block of Main Street
 		if (lot.program === "market" && !TL.placeMarket(kit, lot)) lot.program = undefined;
 		if (lot.program === "parking" && !TL.placePublicParking(kit, lot)) lot.program = undefined;
 		if (lot.zone === "commercial" && lot.program === undefined) {
-			// Main Street (EDI-18, EDI-19): the stock's next kinds that may stand on this block, a few a block
+			// Main Street (EDI-19, EDI-20): the stock's next kinds that may stand on this block, a few a block
 			let budget = SHOPS_PER_BLOCK;
-			// the bank first, on its avenue, at the end of the face towards the crossing (EDI-23)
+			// the bank first, on its avenue, at the end of the face towards the crossing (EDI-24)
 			if (banks < BANKS && bankLots.includes(lot)) {
 				for (const e of edges) {
 					if (!w.roads[e.road].avenue) continue;
@@ -2901,8 +2901,8 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			const park = bestFrontRect(lot, yardGrid(g, lot), 360, 424);
 			if (park !== undefined) addParking(g, lot, park.e, park.r);
 		} else if (lot.zone === "residential") {
-			// the fire station takes one end of the avenue's face (EDI-22), the town hall one end of a residential
-			// street's (EDI-18); the houses fill the rest
+			// the fire station takes one end of the avenue's face (EDI-23), the town hall one end of a residential
+			// street's (EDI-19); the houses fill the rest
 			if (fireLots.includes(lot)) {
 				for (const e of edges) {
 					if (!w.roads[e.road].avenue) continue;
@@ -2918,7 +2918,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 					}
 				}
 			}
-			// a house going up in the middle of a residential street's face (EDI-21)
+			// a house going up in the middle of a residential street's face (EDI-22)
 			if (lot.program === "construction") {
 				let site = false;
 				for (const e of edges) {
@@ -2928,7 +2928,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 				if (!site) lot.program = undefined;
 			}
 			for (const e of edges) {
-				// the avenue side of a residential lot may open a corner shop, from Main Street's stock (EDI-19)
+				// the avenue side of a residential lot may open a corner shop, from Main Street's stock (EDI-20)
 				if (w.roads[e.road].avenue && rng.chance(0.4)) {
 					packFace(
 						g,

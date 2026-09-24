@@ -1,5 +1,5 @@
 /*
- * The bank's vault (docs/DESIGN_RULES.md EDI-23): what it takes to open it, and what that costs.
+ * The bank's vault (docs/DESIGN_RULES.md EDI-24): what it takes to open it, and what that costs.
  *
  * The bank (shared/game/townLots.ts placeBank, one a town, on Main Street by the avenues' crossing) keeps its best
  * behind a steel door (world.ts `bankVault`, a door solid tagged "vault"). Nobody opens it with a hand: it takes a
@@ -47,7 +47,7 @@ export const VAULT_ALARM_S = 90;
 export const VAULT_ALARM_PERIOD = 2;
 export const VAULT_ALARM_RADIUS = 1600;
 
-/** the vault's steel door (EDI-23) */
+/** the vault's steel door (EDI-24) */
 export function isVaultDoor(s: Solid): boolean {
 	return s.kind === "iron_door" && s.tags === VAULT_TAG;
 }

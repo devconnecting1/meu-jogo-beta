@@ -205,14 +205,14 @@ function takeItem(refs: GameRefs, it: GroundItem): number {
 
 /**
  * the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16), a market
- * stall, a pile or a shed its own table (EDI-20..MOB-06)
+ * stall, a pile or a shed its own table (EDI-21..MOB-06)
  */
 function rollLoot(s: Solid): void {
 	s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 }
 
 /**
- * The pill at the everyday town's searchable fixtures (EDI-20, EDI-21, MOB-06; LEG-01): what E does there, while this
+ * The pill at the everyday town's searchable fixtures (EDI-21, EDI-22, MOB-06; LEG-01): what E does there, while this
  * client knows it holds something -- the same rule as a pump island's.
  */
 const YARD_HINTS: Record<string, string> = {
@@ -220,11 +220,11 @@ const YARD_HINTS: Record<string, string> = {
 	foodtruck: "E: Search food truck",
 	pile: "E: Search pile",
 	shed: "E: Search shed",
-	// the bank's vault, once cracked (EDI-23)
+	// the bank's vault, once cracked (EDI-24)
 	vault: "E: Open deposit boxes",
 };
 
-// --- the bank's vault (EDI-23, shared/sim/vault.ts) ------------------------------------------------------------
+// --- the bank's vault (EDI-24, shared/sim/vault.ts) ------------------------------------------------------------
 
 /**
  * This client's own view of the work at a vault door: the door it is at, the seconds of work so far, and the seconds
@@ -303,7 +303,7 @@ const BUILDING_NAMES: Record<string, string> = {
 	library: "library",
 	lab: "science lab",
 	dorm: "dorm",
-	// the everyday town (EDI-18)
+	// the everyday town (EDI-19)
 	hardware: "hardware store",
 	autorepair: "auto repair shop",
 	electronics: "electronics store",
@@ -449,7 +449,7 @@ export class Interaction {
 			}
 			return;
 		}
-		// a press at a bank's vault door keeps the work going, as E held does (EDI-23: a touch screen taps)
+		// a press at a bank's vault door keeps the work going, as E held does (EDI-24: a touch screen taps)
 		if (target.kind === "door" && isVaultDoor(target.solid)) vaultSince = 0;
 		if (serverOwnsWorld()) {
 			// F3: the press is already on its way in the command's action edge, and the server picks the target itself.
@@ -469,7 +469,7 @@ export class Interaction {
 		}
 		if (target.kind === "door") {
 			const s = target.solid;
-			// the vault is the server's (EDI-23, server/sim/vault.ts): offline it stays shut
+			// the vault is the server's (EDI-24, server/sim/vault.ts): offline it stays shut
 			if (isVaultDoor(s)) return;
 			const willOpen = !(s.open ?? false);
 			if (!willOpen && bodiesOverlapRect(s, refs.players, refs.zombies)) return;
@@ -526,7 +526,7 @@ export class Interaction {
 	update(refs: GameRefs, dt: number): void {
 		// where this survivor is: a supply the server takes from under their feet is theirs (./pickups.ts)
 		survivorAt(refs.player.x, refs.player.y);
-		// the work at a bank's vault door, for the pill (EDI-23)
+		// the work at a bank's vault door, for the pill (EDI-24)
 		stepVaultWork(refs, dt);
 		// F3: the fires burn on the server (LightSet), and the loot is rolled there (LootFlag); the walk-over too
 		if (serverOwnsWorld()) return;

@@ -683,7 +683,7 @@ export class WorldView {
 					// the everyday town's fixtures first (./townView.ts), the campus quad's here
 					if (!drawTownProp(r, cam, s, world, this.shadow)) this.drawProp(r, cam, s);
 				} else if (vaultDoorSolid(s)) {
-					// the bank's vault door (EDI-23): a steel slab, not a built door
+					// the bank's vault door (EDI-24): a steel slab, not a built door
 					drawVaultDoor(r, cam, s, world);
 				} else if (this.machines === undefined || !this.machines.draw(r, cam, s)) {
 					this.drawStructure(r, cam, s);
@@ -935,7 +935,7 @@ export class WorldView {
 			a,
 			this.shadow,
 		);
-		// the bank's stone parapet and the laylight over its hall (EDI-23, ./townView.ts)
+		// the bank's stone parapet and the laylight over its hall (EDI-24, ./townView.ts)
 		if (s.buildingType === 22) drawBankRoof(r, cam, v, s, a);
 	}
 

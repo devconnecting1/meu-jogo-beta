@@ -96,7 +96,7 @@ export function isPump(s: Solid): boolean {
 /**
  * A container out in the open, searched like a pump island (the same lazy roll, the same shared take, the same
  * LootFlag): a pump island, or one of the everyday town's searchable fixtures -- a market stall, the market's food
- * truck, a pile of building material, a garden shed (shared/data/spawns.ts YARD_TAGS, EDI-20, EDI-21, MOB-06).
+ * truck, a pile of building material, a garden shed (shared/data/spawns.ts YARD_TAGS, EDI-21, EDI-22, MOB-06).
  */
 export function isYardContainer(s: Solid): boolean {
 	return s.tags === "pump" || (s.lootSlots !== undefined && YARD_TAGS.includes(s.tags));

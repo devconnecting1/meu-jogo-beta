@@ -86,7 +86,7 @@ export const SIGN_ART: Record<string, Color3> = {
 	D: Color3.fromRGB(86, 22, 40),
 	// and its gold: a tassel, a book's band
 	G: Color3.fromRGB(236, 196, 92),
-	// the everyday town's boards (EDI-18): each a lit top row, a face and a grimy bottom row of its own colour
+	// the everyday town's boards (EDI-19): each a lit top row, a face and a grimy bottom row of its own colour
 	// hardware orange
 	A: Color3.fromRGB(238, 150, 96),
 	J: Color3.fromRGB(214, 108, 52),
@@ -475,7 +475,7 @@ export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 			"kkkkkkkkkkkkkkkkkkkkkkkk",
 		],
 	},
-	// the everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's shops and offices, the town hall, the fire and police
+	// the everyday town (docs/DESIGN_RULES.md EDI-19): Main Street's shops and offices, the town hall, the fire and police
 	// stations -- one pictogram each on its own board colour, read by shape and colour, no letter, no brand (CON-02)
 	16: {
 		texture: "signHardware",

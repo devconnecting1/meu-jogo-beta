@@ -1,5 +1,5 @@
 /*
- * The bank's vault, on the SERVER (docs/DESIGN_RULES.md EDI-23; the rules and the numbers: shared/sim/vault.ts).
+ * The bank's vault, on the SERVER (docs/DESIGN_RULES.md EDI-24; the rules and the numbers: shared/sim/vault.ts).
  *
  * Who is working which vault door, how far the work has gone, and the alarm once a door gave way. Driven by
  * server/sim/interaction.ts: an E press at the door (`press`, after its reach check), the held E of every command
