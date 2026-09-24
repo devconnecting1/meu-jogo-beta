@@ -83,7 +83,9 @@ export function actionErrorText(reason: ShopActionReason | undefined, langType: 
 	if (reason === "loading") return tr("Still loading your progress");
 	if (reason === "readonly") return tr("Progress not loaded");
 	// a Robux prompt for this costume is open (server/save/robux.ts): neither the coins nor a second prompt meanwhile
-	if (reason === "pending") return tr("Finish the Robux purchase first");
+	if (reason === "pending") return tr("Waiting for your Robux purchase");
+	// a Rebirth shown free is not free any more (server/main.server.ts `expectFree`): nothing was charged
+	if (reason === "price") return tr("The price changed, try again");
 	// "outdated" = the request named a run the session has already moved past. client/main.client.ts retries
 	// it once with the corrected runRev, so reaching this text means the two really do disagree -- say that,
 	// instead of "Please try again", which told a player to repeat the click that had just failed.

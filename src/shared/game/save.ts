@@ -64,7 +64,8 @@ import { MP_PHASE } from "shared/net/mpConfig";
  *     rolled back: a fault in it is fixed forward (docs/DESIGN_RULES.md MON-05, "Save v7").
  *
  * v8 (Robux, docs/SHOP.md "Robux: decisões e desenho"): `robuxReceipts`, the developer-product purchases the SERVER
- * granted, as "<costumeId>:<PurchaseId>" (the newest ROBUX_RECEIPTS_MAX). It makes a receipt Roblox delivers twice grant
+ * granted, as `{ c: costumeId, p: PurchaseId }` (at most ROBUX_RECEIPTS_MAX, the oldest dropped first -- never a
+ * costume's only one). It makes a receipt Roblox delivers twice grant
  * once (server/save/robux.ts), keeps a costume paid in real money owned whatever an admin edit says
  * (`enforceSaveInvariants`), and survives an admin reset (`carryRobuxPurchases`). Same document, additive: a v7 document
  * has none (nothing was ever sold for Robux before v8); a server rolled back to v7 drops the list when it writes, which
@@ -86,8 +87,18 @@ export const SAVE_VERSION_TITLE_STATS = 7;
 export const SAVE_VERSION_ROBUX = 8;
 /** Robux receipts kept per save: each costume can be bought once, so the list stays far below this */
 export const ROBUX_RECEIPTS_MAX = 64;
-/** the longest PurchaseId kept (Roblox's are GUID-like, 36 characters) */
-export const PURCHASE_ID_MAX = 64;
+/**
+ * The longest PurchaseId kept. Roblox's are GUID-like (about 32-36 characters) and any character may be in one: the
+ * entry keeps it as its own field, so only its length is bounded -- far above any real id, far below what a save holds
+ * (64 of them are 16 KB of a 4 MB document; the client's report never carries them: client/systems/saveClient.ts)
+ */
+export const PURCHASE_ID_MAX = 256;
+
+/** one Robux purchase the server granted (save v8): the costume (COSTUMES index) and Roblox's PurchaseId */
+export interface RobuxReceipt {
+	c: number;
+	p: string;
+}
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -259,10 +270,10 @@ export interface PlayerSaveData {
 	 */
 	lifeDeaths: number;
 	/**
-	 * v8: the Robux purchases the server granted, "<costumeId>:<PurchaseId>", newest last (at most ROBUX_RECEIPTS_MAX).
+	 * v8: the Robux purchases the server granted, `{ c, p }`, newest last (at most ROBUX_RECEIPTS_MAX).
 	 * Server-owned (server/save/robux.ts): a report never moves it, and it never rides the wallet.
 	 */
-	robuxReceipts: Array<string>;
+	robuxReceipts: Array<RobuxReceipt>;
 	/**
 	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
 	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
@@ -486,34 +497,26 @@ function copyInto<T extends defined>(dst: Array<T>, src: Array<T>): void {
 	for (const v of src) dst.push(v);
 }
 
-function copyList<T extends defined>(src: Array<T>): Array<T> {
-	const a: Array<T> = [];
-	for (const v of src) a.push(v);
-	return a;
-}
-
 // ---------------------------------------------------------------- v8: Robux receipts
 
-/** a PurchaseId this save can keep: a non-empty string of at most PURCHASE_ID_MAX characters, without ":" */
+/** a PurchaseId this save can keep: a non-empty string of at most PURCHASE_ID_MAX characters (any character) */
 export function isPurchaseId(v: unknown): v is string {
-	return typeIs(v, "string") && v.size() > 0 && v.size() <= PURCHASE_ID_MAX && v.split(":").size() === 1;
+	return typeIs(v, "string") && v.size() > 0 && v.size() <= PURCHASE_ID_MAX;
 }
 
-/** the costume a receipt entry ("<costumeId>:<PurchaseId>") names, or -1 when the entry is not one */
+/** the costume a receipt entry (`{ c, p }`) names, or -1 when the entry is not one */
 export function receiptCostume(entry: unknown): number {
-	if (!typeIs(entry, "string")) return -1;
-	const parts = entry.split(":");
-	if (parts.size() !== 2 || !isPurchaseId(parts[1])) return -1;
-	const id = tonumber(parts[0]);
-	if (id === undefined || id % 1 !== 0 || id < 0 || id >= COSTUMES.size() || parts[0] !== `${id}`) return -1;
-	return id;
+	if (!typeIs(entry, "table")) return -1;
+	const e = entry as Record<string, unknown>;
+	const id = e.c;
+	if (!typeIs(id, "number") || id !== id || id % 1 !== 0 || id < 0 || id >= COSTUMES.size()) return -1;
+	return isPurchaseId(e.p) ? id : -1;
 }
 
 /** the receipt entry of `purchaseId` in this save, or undefined */
-export function robuxReceiptOf(save: PlayerSaveData, purchaseId: string): string | undefined {
+export function robuxReceiptOf(save: PlayerSaveData, purchaseId: string): RobuxReceipt | undefined {
 	for (const entry of save.robuxReceipts) {
-		const parts = entry.split(":");
-		if (parts.size() === 2 && parts[1] === purchaseId) return entry;
+		if (entry.p === purchaseId) return entry;
 	}
 	return undefined;
 }
@@ -521,9 +524,39 @@ export function robuxReceiptOf(save: PlayerSaveData, purchaseId: string): string
 /** was COSTUMES[costumeId] paid for in Robux in this save? (an admin never takes it back: shared/admin/ops.ts) */
 export function robuxPaid(save: PlayerSaveData, costumeId: number): boolean {
 	for (const entry of save.robuxReceipts) {
-		if (receiptCostume(entry) === costumeId) return true;
+		if (entry.c === costumeId) return true;
 	}
 	return false;
+}
+
+/**
+ * Keeps at most ROBUX_RECEIPTS_MAX entries, in place: the oldest go first, but never the only receipt of a costume --
+ * that one is what keeps a costume paid in real money the player's (`enforceSaveInvariants`) and out of an admin's
+ * reach. Each costume can be bought once, so the list only grows past the cap through receipts for costumes already
+ * owned (a purchase from outside the game), and those always have a twin to drop.
+ */
+export function trimReceipts(list: Array<RobuxReceipt>): void {
+	while (list.size() > ROBUX_RECEIPTS_MAX) {
+		let drop = -1;
+		for (let i = 0; i < list.size() && drop < 0; i++) {
+			const c = list[i].c;
+			for (let j = i + 1; j < list.size(); j++) {
+				if (list[j].c === c) {
+					drop = i;
+					break;
+				}
+			}
+		}
+		// every entry its costume's only one: more costumes than the cap, which COSTUMES never has -- the oldest goes
+		list.remove(drop >= 0 ? drop : 0);
+	}
+}
+
+/** a copy of each entry (the receipts of two saves never share a table) */
+function copyReceipts(src: Array<RobuxReceipt>): Array<RobuxReceipt> {
+	const out: Array<RobuxReceipt> = [];
+	for (const e of src) out.push({ c: e.c, p: e.p });
+	return out;
 }
 
 /**
@@ -531,24 +564,27 @@ export function robuxPaid(save: PlayerSaveData, costumeId: number): boolean {
  * still theirs: the receipts go over, and with them the costumes they paid for (`enforceSaveInvariants`).
  */
 export function carryRobuxPurchases(from: PlayerSaveData, to: PlayerSaveData): void {
-	copyInto(to.robuxReceipts, from.robuxReceipts);
-	for (const entry of to.robuxReceipts) {
-		const costumeId = receiptCostume(entry);
-		if (costumeId >= 0) to.costumes[costumeId] = 1;
-	}
+	copyInto(to.robuxReceipts, copyReceipts(from.robuxReceipts));
+	for (const entry of to.robuxReceipts) to.costumes[entry.c] = 1;
 }
 
-/** a stored list, entry by entry: well-formed entries only, no PurchaseId twice, the newest ROBUX_RECEIPTS_MAX */
-function readReceipts(v: unknown): Array<string> {
-	const out: Array<string> = [];
+/**
+ * A stored list, entry by entry: well-formed entries only, each PurchaseId once (the first kept), and at most
+ * ROBUX_RECEIPTS_MAX of them (`trimReceipts`: never a costume's only receipt)
+ */
+function readReceipts(v: unknown): Array<RobuxReceipt> {
+	const out: Array<RobuxReceipt> = [];
 	if (!typeIs(v, "table")) return out;
 	const seen = new Set<string>();
 	for (const entry of v as Array<unknown>) {
-		if (!typeIs(entry, "string") || receiptCostume(entry) < 0 || seen.has(entry)) continue;
-		seen.add(entry);
-		out.push(entry);
+		const c = receiptCostume(entry);
+		if (c < 0) continue;
+		const p = (entry as RobuxReceipt).p;
+		if (seen.has(p)) continue;
+		seen.add(p);
+		out.push({ c, p });
 	}
-	while (out.size() > ROBUX_RECEIPTS_MAX) out.remove(0);
+	trimReceipts(out);
 	return out;
 }
 
@@ -987,7 +1023,7 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		// v7: the SERVER's (copied, never read from `r`), like `titles`
 		titleStats: copyArray(fb.titleStats),
 		// v8: the SERVER's (copied, never read from `r`); `sanitizeStoredSave` reads the stored list
-		robuxReceipts: copyList(fb.robuxReceipts),
+		robuxReceipts: copyReceipts(fb.robuxReceipts),
 	};
 }
 
@@ -1044,8 +1080,7 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.titleStats = readTitleStats(s.titleStats, undefined);
 	// v8: a costume paid in real money is owned, whatever else happened to the save (an admin edit included)
 	for (const entry of s.robuxReceipts) {
-		const costumeId = receiptCostume(entry);
-		if (costumeId >= 0) s.costumes[costumeId] = 1;
+		if (receiptCostume(entry) >= 0) s.costumes[entry.c] = 1;
 	}
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
@@ -1123,7 +1158,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.titleEpoch = src.titleEpoch;
 	dst.lifeDeaths = src.lifeDeaths;
 	copyInto(dst.titleStats, src.titleStats);
-	copyInto(dst.robuxReceipts, src.robuxReceipts);
+	copyInto(dst.robuxReceipts, copyReceipts(src.robuxReceipts));
 	return dst;
 }
 

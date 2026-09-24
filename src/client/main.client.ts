@@ -1050,8 +1050,14 @@ function revive(): void {
  * move, so a genuine disagreement can never turn into a loop.
  */
 function invokeRunAction(kind: "rebirth" | "newRun"): ShopActionResult {
+	// a Rebirth the lobby showed at 0 says so: the server then never charges a price the player did not see
+	const expectFree = kind === "rebirth" && net.rebirthShownFree();
 	const request = (runRev: number): ShopActionRequest =>
-		kind === "rebirth" ? { kind: "rebirth", runRev } : { kind: "newRun", runRev };
+		kind === "rebirth"
+			? expectFree
+				? { kind: "rebirth", runRev, expectFree: true }
+				: { kind: "rebirth", runRev }
+			: { kind: "newRun", runRev };
 	const asked = ctx.save.runRev;
 	const first = net.invokeShopAction(request(asked));
 	if (first.ok || first.reason !== "outdated") return first;

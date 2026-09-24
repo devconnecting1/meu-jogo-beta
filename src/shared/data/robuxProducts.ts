@@ -21,6 +21,13 @@ import { COSTUMES, ROBUX_TIER_PRICE } from "./shop";
  */
 export const ROBUX_OFFER_ATTR = "pz_robux_products";
 
+/**
+ * The attribute on the Player where the server lists the costumes a Robux payment of theirs may be on its way for
+ * ("3,7": server/save/robux.ts `heldCostumes`) -- sold neither for coins nor in a second prompt until it lands, and shown
+ * as Pending in the wardrobe. Absent: none.
+ */
+export const ROBUX_PENDING_ATTR = "pz_robux_pending";
+
 /** developer product id of each costume, by its COSTUMES name; 0 = not created yet */
 export const ROBUX_PRODUCT_IDS: { [costumeName: string]: number } = {
 	Pigeon: 3495866678,
@@ -89,6 +96,22 @@ export function decodeRobuxOffer(raw: unknown): Map<number, number> {
 		if (id === undefined || price === undefined || COSTUMES[id] === undefined || id % 1 !== 0) continue;
 		if (price !== robuxPriceOf(id)) continue;
 		out.set(id, price);
+	}
+	return out;
+}
+
+/** "3,7" -- a list of costume ids, for ROBUX_PENDING_ATTR */
+export function encodeCostumeList(ids: ReadonlyArray<number>): string {
+	return ids.join(",");
+}
+
+/** the attribute back into costume ids; anything that is not a costume is left out */
+export function decodeCostumeList(raw: unknown): Set<number> {
+	const out = new Set<number>();
+	if (!typeIs(raw, "string") || raw.size() === 0 || raw.size() > 200) return out;
+	for (const part of raw.split(",")) {
+		const id = tonumber(part);
+		if (id !== undefined && id % 1 === 0 && COSTUMES[id] !== undefined) out.add(id);
 	}
 	return out;
 }

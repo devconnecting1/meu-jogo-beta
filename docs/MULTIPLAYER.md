@@ -816,7 +816,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 
 ### 6.7a Save v8: os recibos de Robux (`docs/SHOP.md`, "Robux")
 
-- **Campo novo, do servidor:** `robuxReceipts: Array<string>` ("<costumeId>:<PurchaseId>", os 64 mais novos). Só o `ProcessReceipt` (`server/save/robux.ts`) escreve; `readProgress` copia o do servidor (um relatório nunca o move, e o cliente nem o envia: `reportJson`); `sanitizeStoredSave` lê entrada a entrada (traje válido, `PurchaseId` de 1–64 caracteres sem ":", sem repetição); `enforceSaveInvariants` devolve o traje de todo recibo; o reset do admin o leva (`carryRobuxPurchases`).
+- **Campo novo, do servidor:** `robuxReceipts: Array<{ c, p }>` (o traje e o `PurchaseId` inteiro, até 256 caracteres; no máximo 64, sem nunca cortar o único recibo de um traje). Só o `ProcessReceipt` (`server/save/robux.ts`) escreve; `readProgress` copia o do servidor (um relatório nunca o move, e o cliente nem o envia: `reportJson`); `sanitizeStoredSave` lê entrada a entrada (traje válido, `PurchaseId` de 1–256 caracteres, cada um uma vez); `enforceSaveInvariants` devolve o traje de todo recibo; o reset do admin o leva (`carryRobuxPurchases`).
 - **Migração:** aditiva. Um documento v7 (ou mais velho) não tem o campo (nada foi vendido em Robux antes do v8) e sobe com a lista vazia, sem mudar mais nada; um servidor de volta ao v7 o descarta ao gravar — inofensivo, porque o traje continua em `costumes` e conceder de novo o mesmo traje é concedê-lo uma vez. `npm run test:save` §35.
 - **Gravação:** a concessão é gravada **na hora** (`flush` sob a trava, fora do coalescimento: a exceção da SAV-01 para uma compra paga em dinheiro), e só uma gravação que chegou responde `PurchaseGranted`.
 

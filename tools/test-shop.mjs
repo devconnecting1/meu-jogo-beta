@@ -46,9 +46,14 @@
  *                        with its PurchaseId landed (NotProcessedYet while the DataStore fails, granted on the retry); a
  *                        receipt for nobody here, an unknown product, junk: nothing; one already owned: acknowledged,
  *                        never coins; the admin cannot take it back; another server still has it; and the real wardrobe
- *                        shows both prices, the coin Buy first, "See Price" beside it, "Unlocked" when the receipt lands.
+ *                        shows both prices -- the Robux one what THIS player pays, none while unknown --, the coin Buy
+ *                        first, "See price" beside it, "Unlocked" when the receipt lands. The holds: a confirmed payment
+ *                        or a receipt answered "not yet" keeps the costume Pending (no coins, no second prompt) until it
+ *                        lands; a load slower than 30 s is waited for; a failed price read keeps what was verified; a
+ *                        grant's event goes out with the next write that lands; any PurchaseId up to 256 characters.
  *   9. REBIRTH AT 0      the daybreak came while the dead survivor waited in the lobby: the server says so
- *                        (`pz_rebirth_free`), the lobby shows the Rebirth at 0 and the server charges 0.
+ *                        (`pz_rebirth_free`), the lobby shows the Rebirth at 0 and the server charges 0; one asked for as
+ *                        free that is not free any more is refused ("price"), nothing charged.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs / tools/ui-shim.mjs, plus the small fake
  * Roblox of tools/test-analytics.mjs (copied: each suite carries its own).
@@ -248,8 +253,10 @@ function runUi(inPath, outPath) {
 
 /**
  * The child's Robux mode: the REAL wardrobe with the offer the server published (`input.offer`, the attribute's text on
- * ReplicatedStorage.Net), every costume's details panel; a click on See Price (what it sends), a refusal's toast, the
- * receipt's wallet ("Unlocked"); and the lobby's Rebirth before and after the server says the daybreak made it free.
+ * ReplicatedStorage.Net), every costume's details panel with the price Roblox gives THIS player (`input.playerPrices`,
+ * through a fake GetProductInfoAsync; a costume missing there fails the read); a click on See price (what it sends), a
+ * refusal's toast, the receipt's wallet ("Unlocked"), a payment on its way (pz_robux_pending); and the lobby's Rebirth
+ * before and after the server says the daybreak made it free.
  */
 function robuxUi(input, d) {
 	const { ctx, layer, deep, use, noop, saveClient, SRC, require, flush, COSTUMES, COS, EquipSlot } = d;
@@ -257,6 +264,15 @@ function robuxUi(input, d) {
 	const POP = require(join(SRC, "client/ui/popup.ts"));
 	const toasts = [];
 	POP.toast = (_ctx, text, kind) => toasts.push({ text, kind });
+	// what Roblox answers THIS player for each product (Roblox Plus: less than the tier's price); unknown: the read fails
+	const RP = require(join(SRC, "shared/data/robuxProducts.ts"));
+	game.GetService("MarketplaceService").GetProductInfoAsync = (productId, infoType) => {
+		const c = RP.costumeOfProduct(productId);
+		const price = input.playerPrices[c];
+		const kind = String(infoType?.Name ?? infoType);
+		if (!kind.endsWith("Product") || price === undefined) throw new Error("HTTP 429 (throttled)");
+		return { ProductId: productId, PriceInRobux: price, IsForSale: true };
+	};
 	const RS = game.GetService("ReplicatedStorage");
 	let netFolder = RS.FindFirstChild("Net");
 	if (netFolder === undefined) {
@@ -296,6 +312,7 @@ function robuxUi(input, d) {
 		ctx.phase = "shop";
 		const close = d.showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop });
 		flush();
+		flush();
 		const root = layer.FindFirstChild("Wardrobe");
 		const details = () => deep(root, "Details");
 		const pick = id => {
@@ -307,10 +324,16 @@ function robuxUi(input, d) {
 				flush();
 				deep(deep(root, `Page${pi}`), `Tile${j}`)?.Activated.Fire();
 				flush();
+				// the price Roblox answers comes back through its listener: one more pass for that repaint
+				flush();
 				const dt = details();
 				return {
 					id,
 					status: deep(deep(dt, "Status"), "Legend")?.Text,
+					note: dt
+						?.GetDescendants()
+						.filter(x => x.ClassName === "TextLabel" && /on its way/.test(x.Text ?? ""))
+						.map(x => x.Text)[0],
 					action: btn(dt, "Action"),
 					coin: btn(dt, "CoinBuy"),
 					robux: btn(dt, "RobuxBuy"),
@@ -359,6 +382,17 @@ function robuxUi(input, d) {
 	out.unlockToasts = toasts.slice(shown).map(t => t.text);
 	out.afterGrant = w.pick(input.target);
 	w.close();
+
+	// a Robux payment on its way (the server's pz_robux_pending on the Player): Pending, nothing to buy -- and back
+	const me0 = game.GetService("Players").LocalPlayer;
+	const held = open(input.fresh, 1e6, input.offer);
+	me0.SetAttribute("pz_robux_pending", `${input.target}`);
+	flush();
+	out.pending = held.pick(input.target);
+	me0.SetAttribute("pz_robux_pending", undefined);
+	flush();
+	out.unpending = held.pick(input.target);
+	held.close();
 
 	// the lobby's Rebirth, a dead survivor with 3 continues bought and no coins, before and after pz_rebirth_free
 	const me = game.GetService("Players").LocalPlayer;
@@ -627,8 +661,9 @@ function main() {
 	}
 
 	/**
-	 * MarketplaceService: GetProductInfo answers from `prices` (product id -> { price, forSale }), the prompts are
-	 * recorded, and ProcessReceipt is whatever the server set (the tests call it as Roblox would, receipt by receipt)
+	 * MarketplaceService: GetProductInfoAsync answers from `prices` (product id -> { price, forSale }) -- or throws for
+	 * a product in `failReads`, as a throttled read does --, the prompts are recorded, and ProcessReceipt is whatever the
+	 * server set (the tests call it as Roblox would, receipt by receipt)
 	 */
 	function makeMarket() {
 		const m = {
@@ -637,9 +672,17 @@ function main() {
 			infoCalls: 0,
 			ProcessReceipt: undefined,
 			PromptProductPurchaseFinished: new Signal(),
+			failReads: new Set(),
+			/** product id -> how many times its info was asked */
+			callsById: new Map(),
 			GetProductInfo(id, infoType) {
+				return m.GetProductInfoAsync(id, infoType);
+			},
+			GetProductInfoAsync(id, infoType) {
 				m.infoCalls += 1;
+				m.callsById.set(id, (m.callsById.get(id) ?? 0) + 1);
 				if (infoType !== "InfoType.Product") throw new Error(`GetProductInfo asked with ${infoType}`);
+				if (m.failReads.has(id)) throw new Error("HTTP 429 (throttled)");
 				const p = m.prices.get(id);
 				if (p === undefined) throw new Error("HTTP 400 (no such product)");
 				return { ProductId: id, Name: `product ${id}`, PriceInRobux: p.price, IsForSale: p.forSale !== false };
@@ -1925,9 +1968,9 @@ function main() {
 			);
 			check(
 				!LANG_TABLE.some(t => /R\$/.test(t)) &&
-					LANG_TABLE.includes("See Price") &&
+					LANG_TABLE.includes("See price") &&
 					LANG_TABLE.includes("Robux"),
-				'the game says "Robux" and "See Price" (BEM-02), never "R$" (MON-06: no real-money sign)',
+				'the game says "Robux" and "See price" (BEM-02), never "R$" (MON-06: no real-money sign)',
 			);
 			const RP = require(join(SRC, "shared/data/robuxProducts.ts"));
 			const names = Object.keys(RP.ROBUX_PRODUCT_IDS).sort();
@@ -1989,6 +2032,34 @@ function main() {
 			const carolina = costume("Carolina");
 			const doberman = costume("Doberman");
 			const white = costume("White pigeon");
+			const pigeon = costume("Pigeon");
+			const cowboy = costume("Cowboy");
+			const malamute = costume("Malamute");
+			/** the save v8 receipts: `{ c, p }` */
+			const hasReceipt = (list, c, p) => list.some(e => e.c === c.id && e.p === p);
+			const countP = (list, p) => list.filter(e => e.p === p).length;
+			/** the Robux module's warn lines, and the log lines that carry their detail, while `fn` runs */
+			const warnsOf = fn => {
+				const lines = [];
+				const realWarn = globalThis.warn;
+				const realPrint = globalThis.print;
+				globalThis.warn = (...a) => {
+					lines.push(a.join(" "));
+					realWarn(...a);
+				};
+				globalThis.print = (...a) => {
+					lines.push(a.join(" "));
+					realPrint(...a);
+				};
+				try {
+					fn();
+				} finally {
+					globalThis.warn = realWarn;
+					globalThis.print = realPrint;
+				}
+				return lines.filter(l => /robux/i.test(l));
+			};
+			const pendingOf = p => RP.decodeCostumeList(p.GetAttribute(RP.ROBUX_PENDING_ATTR));
 
 			// ---- no product configured (the ids blanked: a costume whose product is not created yet): no offer, no
 			// GetProductInfo, no prompt, coins as ever
@@ -2109,6 +2180,24 @@ function main() {
 			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(santa), true);
 			s.run(0.6);
 			check(bs.costumes[santa.id] === 0, "the prompt closing as purchased grants nothing (only a receipt does)");
+			// ...but the payment is on its way: Santa is held until its receipt lands, however late (no timer)
+			clockNow += ROBUX.PROMPT_HOLD_S + 60;
+			const lateCoins = s.shop(buyer, { kind: "buyCostume", costumeId: santa.id });
+			check(
+				lateCoins.reason === "pending" &&
+					bs.money === santa.price + 1 &&
+					pendingOf(buyer).has(santa.id) &&
+					ask(santa).reason === "pending",
+				`a prompt closed PURCHASED holds Santa past ${ROBUX.PROMPT_HOLD_S} s: no coins, no second prompt, and pz_robux_pending says so`,
+				`${lateCoins.reason}, ${[...pendingOf(buyer)]}`,
+			);
+			// another costume may be prompted meanwhile, and confirmed too
+			const zPrompt = ask(zombie);
+			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(zombie), true);
+			check(
+				zPrompt.ok && pendingOf(buyer).has(zombie.id) && pendingOf(buyer).has(santa.id),
+				"another costume's prompt still opens, and its confirmed payment is held too",
+			);
 
 			// ---- the receipt: granted, and WRITTEN before the answer
 			const log0 = s.log.length;
@@ -2129,15 +2218,18 @@ function main() {
 				"Santa's receipt: PurchaseGranted, the costume is theirs, no coin moved",
 			);
 			check(
-				st1?.costumes[santa.id] === 1 && st1.robuxReceipts.includes(`${santa.id}:R-SANTA-1`),
+				!pendingOf(buyer).has(santa.id) && pendingOf(buyer).has(zombie.id),
+				"…it releases Santa's hold only: the Zombie's confirmed payment stays held",
+				[...pendingOf(buyer)].join(","),
+			);
+			check(
+				st1?.costumes[santa.id] === 1 && hasReceipt(st1.robuxReceipts, santa, "R-SANTA-1"),
 				"…and the DataStore already holds the costume and the PurchaseId when it answers (not at the cadence's next write)",
 				JSON.stringify(st1?.robuxReceipts),
 			);
 			const r1b = market.ProcessReceipt(receipt(buyerId, santa, "R-SANTA-1"));
 			check(
-				r1b === GRANTED &&
-					bs.robuxReceipts.filter(e => e.endsWith(":R-SANTA-1")).length === 1 &&
-					robuxEvents().length === 1,
+				r1b === GRANTED && countP(bs.robuxReceipts, "R-SANTA-1") === 1 && robuxEvents().length === 1,
 				"the same receipt again: PurchaseGranted, granted once, one PurchaseId kept, one event",
 			);
 			const ev = robuxEvents()[0];
@@ -2166,7 +2258,6 @@ function main() {
 			check(ask(santa).reason === "owned", "and See Price for it now: owned");
 
 			// ---- the DataStore failing: NotProcessedYet, and granted once when Roblox asks again after it
-			check(ask(zombie).ok === true, "(the Zombie's prompt)");
 			const zombieEvents = () => robuxEvents().filter(r => r.fields?.CustomField02 === "Tier - top");
 			s.saveStore().fail.update = 1e9;
 			const r2 = market.ProcessReceipt(receipt(buyerId, zombie, "R-ZOMBIE-1"));
@@ -2175,42 +2266,62 @@ function main() {
 				r2 === LATER &&
 					bs.costumes[zombie.id] === 1 &&
 					st2.costumes[zombie.id] === 0 &&
-					!st2.robuxReceipts.some(e => e.endsWith(":R-ZOMBIE-1")) &&
+					countP(st2.robuxReceipts, "R-ZOMBIE-1") === 0 &&
 					zombieEvents().length === 0,
 				"the DataStore failing: NotProcessedYet -- the costume stays in the session, the store has neither it nor the PurchaseId, no event",
 			);
 			s.saveStore().fail.update = 0;
+			// the cadence writes again on its own (the grant marked the session dirty): that write carries the grant, and
+			// the event goes out with it -- not only if Roblox asks again (review of the Robux work, L5)
+			const tEvent = s.runUntil(() => zombieEvents().length > 0, 120);
+			const stLanded = s.stored(buyerId);
+			check(
+				tEvent >= 0 &&
+					zombieEvents().length === 1 &&
+					zombieEvents()[0].name === "RobuxPurchase" &&
+					zombieEvents()[0].value === priceOf(zombie) &&
+					hasReceipt(stLanded.robuxReceipts, zombie, "R-ZOMBIE-1"),
+				"…the next write of the session that lands carries it, and its RobuxPurchase goes out then, once",
+				`after ${tEvent.toFixed(1)} s`,
+			);
 			const r2b = market.ProcessReceipt(receipt(buyerId, zombie, "R-ZOMBIE-1"));
 			const st3 = s.stored(buyerId);
 			check(
 				r2b === GRANTED &&
 					st3.costumes[zombie.id] === 1 &&
-					st3.robuxReceipts.includes(`${zombie.id}:R-ZOMBIE-1`) &&
-					bs.robuxReceipts.filter(e => e.endsWith(":R-ZOMBIE-1")).length === 1,
-				"…Roblox asks again after the outage: the write lands, PurchaseGranted, granted once",
-			);
-			check(
-				zombieEvents().length === 1 &&
-					zombieEvents()[0].name === "RobuxPurchase" &&
-					zombieEvents()[0].value === priceOf(zombie),
-				"…and its RobuxPurchase goes out once, with the write that landed",
+					hasReceipt(st3.robuxReceipts, zombie, "R-ZOMBIE-1") &&
+					countP(bs.robuxReceipts, "R-ZOMBIE-1") === 1 &&
+					zombieEvents().length === 1 &&
+					!pendingOf(buyer).has(zombie.id),
+				"…Roblox asks again: PurchaseGranted, granted once, no second event, and the Zombie's hold is gone",
 			);
 
 			// ---- nothing for a receipt that is nobody's here, of an unknown product, or junk
 			const kept = bs.robuxReceipts.length;
-			const decisions = [
-				market.ProcessReceipt(receipt(424242, eagle, "R-GONE")),
-				market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN"), ProductId: 9999 }),
-				market.ProcessReceipt({ ...receipt(buyerId, eagle, "x"), PurchaseId: undefined }),
-				market.ProcessReceipt(receipt(buyerId, eagle, "a:b")),
-				market.ProcessReceipt(receipt(buyerId, eagle, "x".repeat(65))),
-				market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-NOPLAYER"), PlayerId: "1" }),
-				market.ProcessReceipt("junk"),
-			];
+			let decisions;
+			const refusedWarns = warnsOf(() => {
+				decisions = [
+					market.ProcessReceipt(receipt(424242, eagle, "R-GONE")),
+					market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN"), ProductId: 9999 }),
+					market.ProcessReceipt({ ...receipt(buyerId, eagle, "x"), PurchaseId: undefined }),
+					market.ProcessReceipt(receipt(buyerId, eagle, "")),
+					market.ProcessReceipt(receipt(buyerId, eagle, "x".repeat(257))),
+					market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-NOPLAYER"), PlayerId: "1" }),
+					market.ProcessReceipt("junk"),
+				];
+			});
 			check(
-				decisions.every(d => d === LATER) && bs.costumes[eagle.id] === 0 && bs.robuxReceipts.length === kept,
-				"NotProcessedYet and nothing granted: a buyer not in this server, an unknown product, no PurchaseId, one we cannot keep, a PlayerId that is not a number, junk",
+				decisions.every(d => d === LATER) &&
+					bs.costumes[eagle.id] === 0 &&
+					bs.robuxReceipts.length === kept &&
+					!pendingOf(buyer).has(eagle.id),
+				"NotProcessedYet and nothing granted: a buyer not in this server, an unknown product, no PurchaseId, an empty one, one past 256 characters, a PlayerId that is not a number, junk",
 				decisions.join(","),
+			);
+			check(
+				refusedWarns.filter(l => l.includes("cannot be kept")).length === 4,
+				"each receipt refused for its PlayerId or PurchaseId is a real warn (the id's length, never the id)",
+				refusedWarns.join(" | "),
 			);
 			// the receipt's PlayerId picks the save, and nothing from a client does
 			const other = s.join(newUser(), "other");
@@ -2222,16 +2333,14 @@ function main() {
 			);
 			s.run(11);
 			s.report(buyer, {
-				robuxReceipts: [`${eagle.id}:FAKE`],
+				robuxReceipts: [{ c: eagle.id, p: "FAKE" }],
 				costumes: COSTUMES.map(() => 1),
 				runRev: bs.runRev,
 			});
 			s.run(0.6);
 			const ownedByReport = COSTUMES.filter(c => bs.costumes[c.id] === 1).map(c => c.name);
 			check(
-				bs.costumes[eagle.id] === 0 &&
-					!bs.robuxReceipts.some(e => e.includes("FAKE")) &&
-					ownedByReport.length === 3,
+				bs.costumes[eagle.id] === 0 && countP(bs.robuxReceipts, "FAKE") === 0 && ownedByReport.length === 3,
 				"a report claiming a receipt and every costume moves neither (Carolina, Santa, Zombie stay the only ones)",
 				ownedByReport.join(", "),
 			);
@@ -2244,11 +2353,50 @@ function main() {
 			check(
 				r3 === GRANTED &&
 					bs.money === moneyNow &&
-					bs.robuxReceipts.includes(`${carolina.id}:R-CAROLINA`) &&
+					hasReceipt(bs.robuxReceipts, carolina, "R-CAROLINA") &&
 					ownedEv.length === 1 &&
 					ownedEv[0].name === "RobuxOwned",
 				"a receipt for a costume already owned (bought with coins): PurchaseGranted, nothing new, no coins, one RobuxOwned",
 				JSON.stringify(ownedEv.map(r => r.name)),
+			);
+
+			// ---- a receipt answered "not yet" while the buyer is HERE (a read-only session: a load that failed and may be
+			// retried from the lobby, the lock lost): Roblox asks again only at their next join, so the Eagle is held for the
+			// rest of the session -- no coins, no prompt -- or they would pay twice (review of the Robux work, M1)
+			const shopReal = ROBUX.activeRobuxShop();
+			const realDeps = shopReal.deps;
+			shopReal.deps = {
+				...realDeps,
+				session: p =>
+					p === buyer ? { save: bs, state: () => "readonly", commit: () => false } : realDeps.session(p),
+			};
+			// a PurchaseId with ":" and 100+ characters is kept whole (save v8 `{ c, p }`)
+			const oddId = `R:EAGLE:${"y".repeat(100)}`;
+			const ro = market.ProcessReceipt(receipt(buyerId, eagle, oddId));
+			shopReal.deps = realDeps;
+			bs.money = eagle.price + 5;
+			s.run(0.6);
+			const roCoins = s.shop(buyer, { kind: "buyCostume", costumeId: eagle.id });
+			const roPrompts = market.prompts.length;
+			const roAsk = ask(eagle);
+			check(
+				ro === LATER &&
+					bs.costumes[eagle.id] === 0 &&
+					pendingOf(buyer).has(eagle.id) &&
+					roCoins.reason === "pending" &&
+					bs.money === eagle.price + 5 &&
+					roAsk.reason === "pending" &&
+					market.prompts.length === roPrompts,
+				"a receipt answered NotProcessedYet with the buyer here holds the Eagle for the session: Pending, no coins, no prompt",
+				`${ro}, ${roCoins.reason}, ${roAsk.reason}`,
+			);
+			const roAgain = market.ProcessReceipt(receipt(buyerId, eagle, oddId));
+			check(
+				roAgain === GRANTED &&
+					bs.costumes[eagle.id] === 1 &&
+					hasReceipt(bs.robuxReceipts, eagle, oddId) &&
+					!pendingOf(buyer).has(eagle.id),
+				"…granted when the session can record it (a PurchaseId with ':' and 108 characters kept whole), and the hold is gone",
 			);
 
 			// ---- the admin cannot take it back; a reset keeps it
@@ -2269,6 +2417,7 @@ function main() {
 				JSON.stringify(revoke),
 			);
 			clockNow += 0.3;
+			const receiptsBefore = bs.robuxReceipts.length;
 			const reset = RF?.OnServerInvoke(adm, { kind: "resetSave", userId: buyerId });
 			const paid = COSTUMES.filter(c => bs.costumes[c.id] === 1).map(c => c.name);
 			check(
@@ -2276,7 +2425,9 @@ function main() {
 					bs.money === ECONOMY.STARTING_COINS &&
 					bs.costumes[santa.id] === 1 &&
 					bs.costumes[zombie.id] === 1 &&
-					bs.robuxReceipts.length === kept + 1,
+					bs.costumes[eagle.id] === 1 &&
+					bs.robuxReceipts.length === receiptsBefore &&
+					receiptsBefore === kept + 2,
 				"an admin reset makes a new player's save -- and what was bought with Robux stays: receipts and costumes",
 				`${reset?.ok}, money ${bs.money}, ${paid.join(", ")}`,
 			);
@@ -2295,12 +2446,12 @@ function main() {
 				s2.loadAck(back)?.status === "ok" &&
 					bs2.costumes[santa.id] === 1 &&
 					bs2.costumes[zombie.id] === 1 &&
-					bs2.robuxReceipts.includes(`${santa.id}:R-SANTA-1`),
+					hasReceipt(bs2.robuxReceipts, santa, "R-SANTA-1"),
 				"another server: Santa and Zombie are still theirs, with their receipts",
 			);
 			const late = market.ProcessReceipt(receipt(buyerId, santa, "R-SANTA-1"));
 			check(
-				late === GRANTED && bs2.robuxReceipts.filter(e => e.endsWith(":R-SANTA-1")).length === 1,
+				late === GRANTED && countP(bs2.robuxReceipts, "R-SANTA-1") === 1,
 				"Roblox asking again for an old receipt on the next server: PurchaseGranted, nothing twice",
 			);
 			s2.run(0.6);
@@ -2308,16 +2459,60 @@ function main() {
 				s2.shop(back, { kind: "robuxCostume", costumeId: santa.id }).reason === "owned",
 				"See Price there: owned",
 			);
-			// a price changed in the Creator Hub later: caught by the next check, and no longer offered
-			market.prices.set(productOf(eagle), { price: 199, forSale: true });
-			ROBUX.activeRobuxShop().verify();
+			// the receipt can come BEFORE the prompt says purchased: the late close holds nothing
+			const mPrompt = s2.shop(back, { kind: "robuxCostume", costumeId: malamute.id });
+			const mGrant = market.ProcessReceipt(receipt(buyerId, malamute, "R-MALAMUTE"));
+			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(malamute), true);
+			check(
+				mPrompt.ok && mGrant === GRANTED && !pendingOf(back).has(malamute.id),
+				"a receipt granted before the prompt closes: the late 'purchased' holds nothing",
+			);
+			// a price changed in the Creator Hub later: caught by the next check, no longer offered -- and said once
+			const offered = () => RP.decodeRobuxOffer(net2.GetAttribute(RP.ROBUX_OFFER_ATTR));
+			market.prices.set(productOf(cowboy), { price: 199, forSale: true });
+			const priceWarns = warnsOf(() => {
+				ROBUX.activeRobuxShop().verify();
+				ROBUX.activeRobuxShop().verify();
+			});
 			s2.run(0.6);
-			const changed = s2.shop(back, { kind: "robuxCostume", costumeId: eagle.id });
+			const changed = s2.shop(back, { kind: "robuxCostume", costumeId: cowboy.id });
 			check(
 				changed.reason === "invalid" &&
-					!RP.decodeRobuxOffer(net2.GetAttribute(RP.ROBUX_OFFER_ATTR)).has(eagle.id),
-				"a price changed in the Creator Hub (the Eagle at 199): no longer offered, See Price refused",
-				changed.reason,
+					!offered().has(cowboy.id) &&
+					priceWarns.filter(l => l.includes(`product ${productOf(cowboy)}`)).length === 1,
+				"a price changed in the Creator Hub (the Cowboy at 199): no longer offered, See price refused, warned once",
+				`${changed.reason}; ${priceWarns.join(" | ")}`,
+			);
+			const backWarns = warnsOf(() => {
+				market.prices.set(productOf(cowboy), { price: priceOf(cowboy), forSale: true });
+				ROBUX.activeRobuxShop().verify();
+			});
+			check(
+				offered().get(cowboy.id) === priceOf(cowboy) &&
+					backWarns.filter(l => l.includes(`product ${productOf(cowboy)}`) && l.includes("offered"))
+						.length === 1,
+				"…its price set back: offered again, and that change is warned too (every change, not only the first)",
+				backWarns.join(" | "),
+			);
+			// a read that fails (throttled) keeps what was verified, and is tried again in about a minute
+			market.failReads.add(productOf(pigeon));
+			const readWarns = warnsOf(() => {
+				ROBUX.activeRobuxShop().verify();
+				ROBUX.activeRobuxShop().verify();
+			});
+			const stillOffered = offered().get(pigeon.id) === priceOf(pigeon);
+			const pigeonCalls = () => market.callsById.get(productOf(pigeon)) ?? 0;
+			const calls0 = pigeonCalls();
+			market.failReads.delete(productOf(pigeon));
+			clockNow += ROBUX.VERIFY_RETRY_S + 1;
+			s2.beat();
+			check(
+				stillOffered &&
+					readWarns.filter(l => l.includes(`product ${productOf(pigeon)}`)).length === 1 &&
+					pigeonCalls() >= calls0 + 1 &&
+					offered().get(pigeon.id) === priceOf(pigeon),
+				`a throttled read keeps the Pigeon offered (warned once for the streak), and it is read again ${ROBUX.VERIFY_RETRY_S} s later`,
+				`${readWarns.join(" | ")}; ${pigeonCalls() - calls0} retry`,
 			);
 
 			// ---- a receipt that comes before the save: waited for (never for one who left), then decided
@@ -2340,6 +2535,21 @@ function main() {
 					"a receipt before the save loaded: waited for the load, then granted",
 					`${d1}, ${calls} looks`,
 				);
+				// a join after a crash: the other server's lock (22 s), the same server's last write (20 s), the retries --
+				// a load of a minute is waited for, the player still here (review of the Robux work, M1)
+				const tSlow = clockNow;
+				const minute = {
+					save: SAVE.defaultSave(),
+					state: () => (clockNow - tSlow < 60 ? "loading" : "ok"),
+					commit: () => true,
+				};
+				const u0 = new ROBUX.RobuxShop(market, { net: undefined, session: () => minute });
+				const d0 = u0.processReceipt(receipt(buyerId, eagle, "R-MINUTE"));
+				check(
+					ROBUX.RECEIPT_LOAD_WAIT_S >= 60 && d0 === GRANTED && minute.save.costumes[eagle.id] === 1,
+					`a load that takes a minute is waited for (up to ${ROBUX.RECEIPT_LOAD_WAIT_S} s), then granted`,
+					`${d0} after ${(clockNow - tSlow).toFixed(1)} s`,
+				);
 				const never = { save: SAVE.defaultSave(), state: () => "loading", commit: () => true };
 				const u2 = new ROBUX.RobuxShop(market, { net: undefined, session: () => never });
 				const t0 = clockNow;
@@ -2348,8 +2558,9 @@ function main() {
 					d2 === LATER &&
 						u2.results.at(-1)?.outcome === "loading" &&
 						clockNow - t0 >= ROBUX.RECEIPT_LOAD_WAIT_S &&
-						never.save.costumes[eagle.id] === 0,
-					`…a load that never ends: NotProcessedYet after ${ROBUX.RECEIPT_LOAD_WAIT_S} s, nothing granted`,
+						never.save.costumes[eagle.id] === 0 &&
+						u2.holds(buyerId, eagle.id),
+					`…a load that never ends: NotProcessedYet after ${ROBUX.RECEIPT_LOAD_WAIT_S} s, nothing granted, the Eagle held`,
 				);
 				const leaving = {
 					save: SAVE.defaultSave(),
@@ -2363,28 +2574,41 @@ function main() {
 				const d3 = u3.processReceipt(receipt(buyerId, eagle, "R-LEFT"));
 				back._parent = s2.env.services.Players;
 				check(
-					d3 === LATER && u3.results.at(-1)?.outcome === "absent" && leaving.save.costumes[eagle.id] === 0,
-					"…the buyer leaving while it waits: NotProcessedYet at once (Roblox asks again at their next join)",
+					d3 === LATER &&
+						u3.results.at(-1)?.outcome === "absent" &&
+						leaving.save.costumes[eagle.id] === 0 &&
+						!u3.holds(buyerId, eagle.id),
+					"…the buyer leaving while it waits: NotProcessedYet at once (Roblox asks again at their next join), nothing held",
 				);
 				const readonly = { save: SAVE.defaultSave(), state: () => "readonly", commit: () => true };
 				const u4 = new ROBUX.RobuxShop(market, { net: undefined, session: () => readonly });
 				check(
 					u4.processReceipt(receipt(buyerId, eagle, "R-RO")) === LATER &&
-						readonly.save.costumes[eagle.id] === 0,
-					"…a session that cannot record a purchase (read-only, no DataStore, the lock lost): NotProcessedYet, nothing granted",
+						readonly.save.costumes[eagle.id] === 0 &&
+						u4.holds(buyerId, eagle.id) &&
+						u4.prompt(back, readonly.save, eagle.id, true) !== undefined,
+					"…a session that cannot record a purchase (read-only, no DataStore, the lock lost): NotProcessedYet, nothing granted, the Eagle held",
 				);
+				u4.forget(buyerId);
+				check(!u4.holds(buyerId, eagle.id), "…and the player leaving takes the hold with them");
 			} finally {
 				globalThis.task.wait = realWait;
+				back.SetAttribute(RP.ROBUX_PENDING_ATTR, undefined);
 			}
 
 			// ---- the real wardrobe with that offer
 			if (results.owned === undefined) throw new Error("section 4 did not leave the owned save");
+			// what Roblox answers THIS player: a Roblox Plus price (10% off) for each offered costume but the Zombie, whose
+			// read fails -- no number is shown for it until Roblox says one
+			const playerPrices = {};
+			for (const c of COSTUMES) if (c !== zombie) playerPrices[c.id] = Math.floor(priceOf(c) * 0.9);
 			const shown = uiRun({
 				mode: "robux",
 				fresh: results.robuxFresh,
 				owned: results.owned,
 				offer: offerText,
 				target: santa.id,
+				playerPrices,
 			});
 			results.robuxUi = shown;
 			const unequip = shown.owned.find(t => t.id === costume("Cowboy").id)?.action;
@@ -2402,8 +2626,9 @@ function main() {
 						!t.robux.visible
 					);
 				}
+				const theirs = playerPrices[c.id];
 				return !(
-					t.status === `${c.price} coins  ·  ${r} Robux` &&
+					t.status === (theirs !== undefined ? `${c.price} coins  ·  ${theirs} Robux` : `${c.price} coins`) &&
 					r === confirmed.get(c.id) &&
 					!t.action.visible &&
 					t.coin.visible &&
@@ -2411,7 +2636,7 @@ function main() {
 					!t.coin.disabled &&
 					t.coin.variant === plainBuy.variant &&
 					t.robux.visible &&
-					t.robux.text === "See Price" &&
+					t.robux.text === "See price" &&
 					!t.robux.disabled &&
 					t.robux.variant === unequip.variant &&
 					t.coin.x < t.robux.x &&
@@ -2420,7 +2645,7 @@ function main() {
 			});
 			check(
 				richBad.length === 0 && plainBuy?.variant !== unequip?.variant,
-				'the wardrobe shows both prices, the coins\' and the one Roblox confirmed ("250 coins  ·  149 Robux"); the coin Buy is the primary on the left, "See Price" the secondary at its right; a costume not offered is the coin panel alone',
+				'the wardrobe shows both prices, the Robux one what Roblox asks THIS player (Plus: "250 coins  ·  134 Robux"; none while its read fails); the coin Buy is the primary on the left, "See price" the secondary at its right; a costume not offered is the coin panel alone',
 				richBad.map(c => `${c.name}: ${JSON.stringify(shown.rich.find(x => x?.id === c.id))}`).join("; "),
 			);
 			const brokeBad = COSTUMES.filter(c => {
@@ -2449,11 +2674,11 @@ function main() {
 			);
 			check(
 				JSON.stringify(shown.clicked) === JSON.stringify([{ kind: "robuxCostume", costumeId: santa.id }]),
-				"See Price sends the costume id and nothing else",
+				"See price sends the costume id and nothing else",
 				JSON.stringify(shown.clicked),
 			);
 			check(
-				shown.pendingToast === "Finish the Robux purchase first",
+				shown.pendingToast === "Waiting for your Robux purchase",
 				"a refusal says why (pending)",
 				shown.pendingToast,
 			);
@@ -2465,6 +2690,19 @@ function main() {
 					shown.afterGrant.status === "Owned",
 				'the receipt\'s wallet: "Unlocked: Santa" once, and the panel offers Equip',
 				JSON.stringify({ toasts: shown.unlockToasts, after: shown.afterGrant }),
+			);
+			check(
+				shown.pending.status === "Pending" &&
+					shown.pending.action.visible &&
+					shown.pending.action.text === "Pending" &&
+					shown.pending.action.disabled &&
+					!shown.pending.coin.visible &&
+					!shown.pending.robux.visible &&
+					/on its way/.test(shown.pending.note ?? "") &&
+					shown.unpending.coin.visible &&
+					shown.unpending.robux.visible,
+				"a payment on its way (pz_robux_pending): the panel says Pending with nothing to buy, and goes back when it lands",
+				JSON.stringify({ pending: shown.pending, unpending: shown.unpending.status }),
 			);
 			globalThis.typeIs = baseTypeIs;
 		},
@@ -2489,6 +2727,19 @@ function main() {
 			s.kill(a);
 			s.exit(a);
 			const waiting = a.GetAttribute(SHOP.REBIRTH_FREE_ATTR);
+			// a Rebirth asked for as free (the screen said 0) while it is not: refused, nothing charged (review, L8)
+			save.money = 1000;
+			const early = s.shop(a, { kind: "rebirth", runRev: save.runRev, expectFree: true });
+			check(
+				early.ok === false &&
+					early.reason === "price" &&
+					save.money === 1000 &&
+					save.deathCount === 3 &&
+					s.host.isDead(a, save),
+				"a Rebirth asked for as free before its daybreak: refused (price), not a coin taken, still down",
+				JSON.stringify(early),
+			);
+			save.money = 0;
 			s.run(3);
 			const due = a.GetAttribute(SHOP.REBIRTH_FREE_ATTR);
 			check(
@@ -2496,10 +2747,10 @@ function main() {
 				"pz_rebirth_free: absent while the daybreak is still to come, true once it came in the lobby",
 				`${waiting} -> ${due}`,
 			);
-			const res = s.shop(a, { kind: "rebirth", runRev: save.runRev });
+			const res = s.shop(a, { kind: "rebirth", runRev: save.runRev, expectFree: true });
 			check(
 				res.ok && res.price === 0 && save.money === 0 && save.deathCount === 3,
-				"…and the Rebirth asked then is charged 0 (and is no continue)",
+				"…and the Rebirth asked then (as free) is charged 0 (and is no continue)",
 				JSON.stringify(res),
 			);
 			s.run(0.6);

@@ -16,11 +16,14 @@ import { langGet } from "shared/data/lang";
 import {
 	invokeShopAction,
 	onRobuxOfferChanged,
+	onRobuxPendingChanged,
 	onWalletChanged,
 	requestSave,
 	robuxOffer,
+	robuxPending,
 	sessionReady,
 } from "../systems/saveClient";
+import { askRobuxPrice, onRobuxPrice, robuxPriceShown } from "../systems/robuxPrices";
 import { PreviewSubject, SurvivorPreview } from "../view/cosmeticPreview";
 import { drawingBox } from "./drawingBox";
 import { actionErrorText, fundsErrorText } from "./shop";
@@ -77,10 +80,13 @@ import * as Kit from "./window";
  * - Robux (docs/SHOP.md "Robux: decisões e desenho", MON-04 as amended): a locked costume the server sells for Robux
  *   too shows both prices on its row ("600 coins · 349 Robux" -- the word, never "R$": MON-06 keeps real-money signs
  *   out) and splits the action: the coin Buy stays the primary, on the left where the pad arrives from the grid, and
- *   "See Price" sits at its right, secondary (BEM-02). It asks the SERVER to open Roblox's own prompt
- *   (server/save/robux.ts); the costume comes with the receipt, on the pushed wallet, and says "Unlocked". No offer
- *   (no product configured, or one whose price Roblox does not confirm): the panel is exactly the coin one. A pet
- *   that came in a pack keeps its two buttons (wear | keep for good, in coins). The tiles show coins only.
+ *   "See price" sits at its right, secondary (BEM-02). It asks the SERVER to open Roblox's own prompt
+ *   (server/save/robux.ts); the costume comes with the receipt, on the pushed wallet, and says "Unlocked". The Robux
+ *   number is what THIS player pays (client/systems/robuxPrices.ts: Roblox Plus and regional pricing change it), and
+ *   none is shown until Roblox says it. A payment on its way (the server's pz_robux_pending) shows as Pending, with
+ *   nothing to buy. No offer (no product configured, or one whose price Roblox does not confirm): the panel is exactly
+ *   the coin one. A pet that came in a pack keeps its two buttons (wear | keep for good, in coins). The tiles show
+ *   coins only.
  * - Nothing here pauses anything (UI-06): the wardrobe is a menu screen, reached from the lobby and the shop,
  *   never over a running world.
  * - Titles (MON-05), the third tab: ROWS, not tiles, in a scrolling groove -- "[None]" / "Unequip title" first, then
@@ -411,7 +417,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	};
 
 	/**
-	 * "See Price": asks the SERVER to open Roblox's prompt for `c` -- the id and nothing else (server/save/robux.ts
+	 * "See price": asks the SERVER to open Roblox's prompt for `c` -- the id and nothing else (server/save/robux.ts
 	 * decides whether it is sold, at what price, and that it is not yours). Nothing is granted here: the costume comes
 	 * with its receipt, on the pushed wallet (`noteUnlocks`).
 	 */
@@ -524,7 +530,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	setVisible(packAction, false);
 	setVisible(keep, false);
 	// the same costume for Robux (docs/SHOP.md): the coin Buy on the left -- the primary, where the pad lands coming
-	// from the grid -- and "See Price" on the right, secondary (BEM-02). Built now, shown only for a locked costume the
+	// from the grid -- and "See price" on the right, secondary (BEM-02). Built now, shown only for a locked costume the
 	// server sells for Robux
 	const coinBuy: TextButton = Button(details.frame, "CoinBuy", "", {
 		x: INSET,
@@ -538,7 +544,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			if (sel !== undefined) buy(sel[1], coinBuy);
 		},
 	});
-	const robuxBuy: TextButton = Button(details.frame, "RobuxBuy", tr("See Price"), {
+	const robuxBuy: TextButton = Button(details.frame, "RobuxBuy", tr("See price"), {
 		x: INSET + DETAIL_INNER_W - halfW,
 		y: actionY,
 		w: halfW,
@@ -885,17 +891,25 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		Kit.setValueKey(slotKey, tr(page.slot === EquipSlot.Pet ? "PET" : "OUTFIT"));
 		// owned through a pack, not bought: it lives in the run's inventory, which a New game starts over
 		const fromPack = !locked && !ownsCostume(save, c.id);
-		// the Robux price the server checked with Roblox, for a locked costume only (never offered for what is yours)
-		const robuxPrice = locked ? robuxOffer().get(c.id) : undefined;
-		const dual = robuxPrice !== undefined;
-		statusRow.label.Text = tr(locked ? "Price" : "Status");
+		// a Robux payment of theirs for it may be on its way (the server's pz_robux_pending): nothing is sold for it --
+		// coins or a second prompt -- until it lands (server/save/robux.ts holds)
+		const pending = !ownsCostume(save, c.id) && robuxPending().has(c.id);
+		// the server offers it for Robux (its check with Roblox), for a locked costume only (never for what is yours)
+		const dual = locked && !pending && robuxOffer().has(c.id);
+		// ...and the number is what THIS player pays (Roblox Plus, regional pricing), asked of Roblox: none while unknown
+		if (dual) askRobuxPrice(c.id);
+		const robuxPrice = dual ? robuxPriceShown(c.id) : undefined;
+		statusRow.label.Text = tr(locked && !pending ? "Price" : "Status");
 		let status = tr("Owned");
 		if (locked) status = `${fmtInt(c.price)} ${tr("coins")}`;
-		if (dual) status = `${status}  ·  ${fmtInt(robuxPrice)} ${tr("Robux")}`;
+		if (pending) status = tr("Pending");
+		else if (robuxPrice !== undefined) status = `${status}  ·  ${fmtInt(robuxPrice)} ${tr("Robux")}`;
 		else if (state === "equipped") status = tr("Equipped");
 		else if (fromPack) status = tr("From a pack");
 		Kit.setValueKey(statusKey, status);
-		if (locked && !affordable) {
+		if (pending) {
+			note.Text = tr("Your Robux purchase is on its way. It shows here as soon as Roblox confirms it.");
+		} else if (locked && !affordable) {
 			const have = `${tr("You have")} ${fmtInt(save.money)}`;
 			note.Text = `${tr("Not enough coins")}. ${have}. ${tr("Coins are earned by playing")}.`;
 		} else if (fromPack) {
@@ -907,7 +921,12 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		const buyText = affordable
 			? `${tr("Buy for")} ${fmtInt(c.price)} ${tr("coins")}`
 			: `${fmtInt(c.price - save.money)} ${tr("more needed")}`;
-		if (locked) {
+		if (locked && pending) {
+			// the quiet iron, disabled: nothing to buy until the payment on its way lands
+			action.Text = tr("Pending");
+			setButtonVariant(action, "secondary");
+			setButtonEnabled(action, false);
+		} else if (locked) {
 			action.Text = buyText;
 			setButtonVariant(action, "default");
 			setButtonEnabled(action, affordable);
@@ -934,9 +953,9 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		if (fromPack) {
 			packAction.Text = action.Text;
 			setButtonVariant(packAction, state === "equipped" ? "secondary" : "default");
-			keep.Text = buyText;
-			setButtonVariant(keep, "default");
-			setButtonEnabled(keep, affordable);
+			keep.Text = pending ? tr("Pending") : buyText;
+			setButtonVariant(keep, pending ? "secondary" : "default");
+			setButtonEnabled(keep, affordable && !pending);
 		}
 		// try it on: your current look with the selected item swapped in
 		preview.setOutfit(page.slot === EquipSlot.Outfit ? outfitLookOfEquip(c.equipId) : outfitLookOf(save));
@@ -1002,10 +1021,19 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	});
 	// the server's price check publishes the Robux offer at boot: a window opened before it repaints when it comes
 	const unsubscribeOffer = onRobuxOfferChanged(() => refresh());
+	// ...and so do a payment on its way (Pending) and this player's own Robux price, when Roblox answers
+	const unsubscribePending = onRobuxPendingChanged(() => {
+		if (!busy) refresh();
+	});
+	const unsubscribePrice = onRobuxPrice(() => {
+		if (!busy) refresh();
+	});
 
 	return (): void => {
 		unsubscribe();
 		unsubscribeOffer();
+		unsubscribePending();
+		unsubscribePrice();
 		conn.Disconnect();
 		for (const icon of icons) icon.destroy();
 		preview.destroy();

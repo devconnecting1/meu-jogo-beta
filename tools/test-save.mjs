@@ -2990,48 +2990,77 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 		"e nenhum outro campo muda na migracao v7 -> v8 (os contadores dos titulos inclusive)",
 	);
 
-	// the stored list, entry by entry: only "<costumeId>:<PurchaseId>" with a real costume and a sane id survives
+	// the stored list, entry by entry: only `{ c, p }` with a real costume and a sane PurchaseId survives, each
+	// PurchaseId once (the first), and a PurchaseId may hold any character (":" too) up to PURCHASE_ID_MAX
 	const N = COSTUMES.size();
 	const long = "x".repeat(SAVE.PURCHASE_ID_MAX + 1);
+	const colon = `A:${"z".repeat(120)}`;
 	const stored = JSON.parse(JSON.stringify(up));
 	stored.robuxReceipts = [
+		{ c: 3, p: "A1" },
+		{ c: 3, p: "A1" },
+		{ c: 5, p: "A1" },
 		"3:A1",
-		"3:A1",
-		"x",
-		"3",
-		"3:",
-		":A2",
-		`${N}:A3`,
-		"-1:A4",
-		"1.5:A5",
-		"01:A6",
-		"2:a:b",
+		{ c: 3 },
+		{ p: "A2" },
+		{ c: N, p: "A3" },
+		{ c: -1, p: "A4" },
+		{ c: 1.5, p: "A5" },
+		{ c: "1", p: "A6" },
+		{ c: 2, p: "" },
+		{ c: 2, p: long },
+		{ c: 2, p: 7 },
 		5,
-		`2:${long}`,
-		"4:B7",
+		null,
+		{ c: 2, p: colon },
+		{ c: 4, p: "B7" },
 	];
 	stored.costumes = stored.costumes.map(() => 0);
 	const read = SAVE.sanitizeStoredSave(stored);
-	checkArrayEq(read.robuxReceipts, ["3:A1", "4:B7"], "so as entradas bem formadas, sem PurchaseId repetido");
 	check(
-		read.costumes[3] === 1 && read.costumes[4] === 1 && read.costumes.filter(v => v > 0).length === 2,
+		canon(read.robuxReceipts) ===
+			canon([
+				{ c: 3, p: "A1" },
+				{ c: 2, p: colon },
+				{ c: 4, p: "B7" },
+			]),
+		"so as entradas bem formadas, cada PurchaseId uma vez (a primeira), e um id com ':' e 122 caracteres inteiro",
+		JSON.stringify(read.robuxReceipts),
+	);
+	check(
+		read.costumes[3] === 1 &&
+			read.costumes[2] === 1 &&
+			read.costumes[4] === 1 &&
+			read.costumes.filter(v => v > 0).length === 3,
 		"e o traje de cada recibo e do jogador, mesmo com costumes zerado no documento (invariante)",
 		JSON.stringify(read.costumes),
 	);
+	// past the cap: the oldest go first -- but never a costume's ONLY receipt (the one that keeps it the player's)
 	const many = JSON.parse(JSON.stringify(up));
-	many.robuxReceipts = filled(SAVE.ROBUX_RECEIPTS_MAX + 5, i => `${i % N}:P${i}`);
+	const cap = SAVE.ROBUX_RECEIPTS_MAX;
+	// the first entry is costume 8's only receipt; every other is costume 1's
+	many.robuxReceipts = [{ c: 8, p: "ONLY" }, ...filled(cap + 5, i => ({ c: 1, p: `P${i}` }))];
 	const trimmed = SAVE.sanitizeStoredSave(many).robuxReceipts;
 	check(
-		trimmed.length === SAVE.ROBUX_RECEIPTS_MAX &&
-			trimmed[0] === "5:P5" &&
-			trimmed.at(-1) === `${(SAVE.ROBUX_RECEIPTS_MAX + 4) % N}:P${SAVE.ROBUX_RECEIPTS_MAX + 4}`,
-		`no maximo ${SAVE.ROBUX_RECEIPTS_MAX}, os mais novos`,
-		`${trimmed.length}: ${trimmed[0]} .. ${trimmed.at(-1)}`,
+		trimmed.length === cap &&
+			trimmed[0].p === "ONLY" &&
+			trimmed[1].p === "P6" &&
+			trimmed.at(-1).p === `P${cap + 4}`,
+		`no maximo ${cap}: os mais velhos saem primeiro, mas o unico recibo de um traje fica`,
+		`${trimmed.length}: ${trimmed[0].p}, ${trimmed[1].p} .. ${trimmed.at(-1).p}`,
+	);
+	const g2 = SAVE.defaultSave();
+	for (let i = 0; i < cap + 3; i++) ROBUX.grantRobuxCostume(g2, i === 1 ? 6 : 0, `Q${i}`);
+	check(
+		g2.robuxReceipts.length === cap && g2.robuxReceipts.some(e => e.c === 6 && e.p === "Q1"),
+		"e a concessao corta do mesmo jeito (grantRobuxCostume: o unico recibo do traje 6 fica)",
 	);
 	for (const [v, want] of [
 		["abc-123", true],
 		["", false],
-		["a:b", false],
+		["a:b", true],
+		[colon, true],
+		["x".repeat(SAVE.PURCHASE_ID_MAX), true],
 		[long, false],
 		[12345, false],
 		[undefined, false],
@@ -3042,16 +3071,22 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 	// the server's alone: a report never moves the list, nor a costume with it
 	const server = SAVE.sanitizeStoredSave(read);
 	const report = JSON.parse(JSON.stringify(server));
-	report.robuxReceipts = ["0:FAKE", "1:FAKE2", "3:A1"];
+	report.robuxReceipts = [
+		{ c: 0, p: "FAKE" },
+		{ c: 1, p: "FAKE2" },
+		{ c: 3, p: "A1" },
+	];
 	report.costumes = report.costumes.map(() => 1);
 	const upd = SAVE.sanitizeClientReport(report, server);
-	checkArrayEq(upd.robuxReceipts, server.robuxReceipts, "um relatorio que traz recibos: o servidor fica com os seus");
+	check(
+		canon(upd.robuxReceipts) === canon(server.robuxReceipts),
+		"um relatorio que traz recibos: o servidor fica com os seus",
+	);
 	checkArrayEq(upd.costumes, server.costumes, "e nenhum traje entra por ele");
 	const empty = JSON.parse(JSON.stringify(server));
 	delete empty.robuxReceipts;
-	checkArrayEq(
-		SAVE.sanitizeClientReport(empty, server).robuxReceipts,
-		server.robuxReceipts,
+	check(
+		canon(SAVE.sanitizeClientReport(empty, server).robuxReceipts) === canon(server.robuxReceipts),
 		"um relatorio sem o campo (o cliente nao o envia: saveClient `reportJson`) nao apaga nada",
 	);
 
@@ -3063,12 +3098,17 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 		live.robuxReceipts === liveList && canon(live.robuxReceipts) === canon(server.robuxReceipts),
 		"copySaveInto copia os recibos na MESMA tabela viva",
 	);
-	server.robuxReceipts.push("5:LATER");
-	check(!live.robuxReceipts.includes("5:LATER"), "e nao a divide com a origem");
+	server.robuxReceipts.push({ c: 5, p: "LATER" });
+	server.robuxReceipts[0].p = "CHANGED";
+	check(
+		!live.robuxReceipts.some(e => e.p === "LATER" || e.p === "CHANGED"),
+		"e nao a divide com a origem (nem a lista nem as entradas)",
+	);
 	server.robuxReceipts.pop();
+	server.robuxReceipts[0].p = "A1";
 
 	// lookups
-	checkEq(SAVE.robuxReceiptOf(read, "A1"), "3:A1", "robuxReceiptOf acha o recibo pelo PurchaseId");
+	checkEq(SAVE.robuxReceiptOf(read, "A1")?.c, 3, "robuxReceiptOf acha o recibo pelo PurchaseId");
 	checkEq(SAVE.robuxReceiptOf(read, "3"), undefined, "e nao pelo id do traje");
 	check(SAVE.robuxPaid(read, 3) && !SAVE.robuxPaid(read, 0), "robuxPaid: so o traje de um recibo");
 
@@ -3096,7 +3136,10 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 	// the server's pure grant and prompt rules (server/save/robux.ts)
 	const g = SAVE.defaultSave();
 	checkEq(ROBUX.grantRobuxCostume(g, 2, "G1"), "granted", "conceder um traje novo: granted");
-	check(g.costumes[2] === 1 && g.robuxReceipts.includes("2:G1"), "o traje e o recibo entram juntos no save");
+	check(
+		g.costumes[2] === 1 && g.robuxReceipts.some(e => e.c === 2 && e.p === "G1"),
+		"o traje e o recibo entram juntos no save",
+	);
 	checkEq(ROBUX.grantRobuxCostume(g, 2, "G2"), "owned", "um segundo recibo do mesmo traje: owned (nada novo)");
 	checkEq(g.robuxReceipts.length, 2, "e o PurchaseId dele fica guardado (o recibo repetido nao concede de novo)");
 	const r0 = SAVE.defaultSave();
@@ -3113,7 +3156,11 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 		"prompt: sessao que nao grava -> readonly",
 	);
 	checkEq(ROBUX.robuxPromptRefusal(g, 2, true, true, false), "owned", "prompt: traje ja seu -> owned");
-	checkEq(ROBUX.robuxPromptRefusal(r0, 2, true, true, true), "pending", "prompt: outro prompt aberto -> pending");
+	checkEq(
+		ROBUX.robuxPromptRefusal(r0, 2, true, true, true),
+		"pending",
+		"prompt: outro prompt aberto, ou o traje retido (um pagamento a caminho) -> pending",
+	);
 	checkEq(ROBUX.robuxPromptRefusal(r0, 2, true, true, false), undefined, "prompt: o resto abre");
 }
 

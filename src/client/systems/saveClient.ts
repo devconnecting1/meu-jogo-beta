@@ -15,7 +15,7 @@ import {
 } from "shared/net/net";
 import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
 import { REBIRTH_FREE_ATTR, rebirthCharge } from "shared/data/shop";
-import { decodeRobuxOffer, ROBUX_OFFER_ATTR } from "shared/data/robuxProducts";
+import { decodeCostumeList, decodeRobuxOffer, ROBUX_OFFER_ATTR, ROBUX_PENDING_ATTR } from "shared/data/robuxProducts";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -331,8 +331,30 @@ export function requestSave(reason: SaveReason): boolean {
  * waited in the lobby (the server says so on the Player, REBIRTH_FREE_ATTR), else the continue's price.
  */
 export function rebirthPriceNow(deathCount: number): number {
+	return rebirthCharge(deathCount, rebirthShownFree());
+}
+
+/** does the server say this survivor's Rebirth is free right now (what the lobby shows, and the request says it expects) */
+export function rebirthShownFree(): boolean {
 	const me = game.GetService("Players").LocalPlayer as Player | undefined;
-	return rebirthCharge(deathCount, me !== undefined && me.GetAttribute(REBIRTH_FREE_ATTR) === true);
+	return me !== undefined && me.GetAttribute(REBIRTH_FREE_ATTR) === true;
+}
+
+/**
+ * The costumes a Robux payment of this player's may be on its way for (the server's ROBUX_PENDING_ATTR on the Player):
+ * the wardrobe shows them as Pending, and the server sells them neither for coins nor in a second prompt meanwhile.
+ */
+export function robuxPending(): Set<number> {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return decodeCostumeList(me?.GetAttribute(ROBUX_PENDING_ATTR));
+}
+
+/** `fn` runs when that list changes */
+export function onRobuxPendingChanged(fn: () => void): () => void {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	if (me === undefined) return () => {};
+	const conn = me.GetAttributeChangedSignal(ROBUX_PENDING_ATTR).Connect(fn);
+	return () => conn.Disconnect();
 }
 
 /**
@@ -363,6 +385,7 @@ const ACTION_REASONS = new Set<string>([
 	"outdated",
 	"network",
 	"pending",
+	"price",
 ]);
 
 /**

@@ -692,6 +692,9 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 		s.lastWrite = os.clock();
 		const wasFailing = c.failingShown;
 		Cadence.writeLanded(c, json);
+		// a Robux grant whose own write failed is in this one: its analytics event goes out now (server/save/robux.ts)
+		const shop = robux;
+		if (shop !== undefined) guarded("Robux analytics", () => shop.landed(s.player), s.key);
 		if (release) s.released = true;
 		if (told || wasFailing || asked) notifyStore(s, "saved", answer);
 		return true;
@@ -1293,9 +1296,9 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
 		if (nonce !== undefined) keepReceipt(s.receipts, { nonce, packId: id, price });
 	} else if (req.kind === "buyCostume") {
-		// a Robux prompt for this very costume is open (or its receipt is on the way): no coins for it meanwhile, so no
-		// race makes anybody pay twice for one costume (server/save/robux.ts PROMPT_HOLD_S)
-		if (robux !== undefined && robux.pendingFor(player.UserId) === req.costumeId) return fail("pending", s);
+		// a Robux payment for this very costume may be on its way -- its prompt open, confirmed, or its receipt answered
+		// "not yet" this session: no coins for it meanwhile, so nobody pays twice for one costume (server/save/robux.ts)
+		if (robux !== undefined && robux.holds(player.UserId, req.costumeId)) return fail("pending", s);
 		// the wardrobe (MON-04): id, price, ownership and coins are all decided in server/save/costumes.ts -- the
 		// request carries nothing but the id, and a `price` field in it is never read
 		const bought = buyCostume(save, req.costumeId);
@@ -1334,6 +1337,10 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
 		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
 		if (refusal !== undefined) return fail(refusal, s);
+		// the lobby showed this Rebirth free (pz_rebirth_free) and asked for it so: if it is not free any more (a world
+		// that moved on, a new death), it is not sold at a price the player never saw -- "price", nothing charged, and the
+		// screen shows the real one (review of the Robux work, L8)
+		if (req.kind === "rebirth" && req.expectFree === true && !due) return fail("price", s);
 		// a world is ending (MP-22, or a keeper's restart, MP-26): the life this would buy is about to be replaced by
 		// the new town's, so nothing is sold meanwhile -- "invalid" is what the client already reads as "a new life is
 		// on its way" (review of f851ad2, L1/L2; review of 0b44458, L1: no coins for a life that then ends)

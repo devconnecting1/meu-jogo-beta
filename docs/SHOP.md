@@ -64,7 +64,7 @@ A coluna **Preço** é conferida linha a linha contra os dados pelo `test:shop` 
 | Títulos               | Guarda-roupa › Titles                                          | —         | nunca vendido                 | —      | ganhos jogando (MON-05)                                                                          | —                  | nada                                                  |
 | Conquistas            | Conquistas                                                     | —         | não pagam                     | —      | nada: "No coins or items: a record of what you did." (UI-14)                                     | —                  | nada                                                  |
 | Vender itens          | —                                                              | —         | não existe                    | —      | não há venda; o ouro do banco é material de fabricação, não moeda                                | —                  | nada                                                  |
-| Robux                 | Guarda-roupa: o painel do traje bloqueado ("See Price")        | cosmético | 49 / 149 / 349                | Robux  | o mesmo traje ou pet das moedas, para sempre; nunca pacote, moeda, Rebirth ou XP (seção abaixo)  | —                  | 9 produtos de desenvolvedor; servidor privado: grátis |
+| Robux                 | Guarda-roupa: o painel do traje bloqueado ("See price")        | cosmético | 49 / 149 / 349                | Robux  | o mesmo traje ou pet das moedas, para sempre; nunca pacote, moeda, Rebirth ou XP (seção abaixo)  | —                  | 9 produtos de desenvolvedor; servidor privado: grátis |
 
 ## O modelo
 
@@ -201,20 +201,22 @@ ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `
    nenhum prompt de Robux aberto para o jogador, o balde de taxa) e só então chama
    `MarketplaceService:PromptProductPurchase(player, productId)`. A posse é do servidor (MON-04: o cliente nunca declara
    o que tem), então "não oferecer o que já é seu" é decidido onde a verdade mora. Enquanto um prompt de Robux do traje X
-   está aberto (até `PromptProductPurchaseFinished` com `isPurchased = false`, o recibo, ou 120 s), a compra **em
+   está aberto (até `PromptProductPurchaseFinished` com `isPurchased = false`, o recibo, ou 120 s — e, se ele fechou
+   **comprado**, até o recibo chegar ou o jogador sair, sem prazo), a compra **em
    moedas** de X é recusada (`pending`): nenhuma corrida faz alguém pagar duas vezes pelo mesmo traje.
 3. **`ProcessReceipt`** (lógica pura em `server/save/robux.ts`, ligação em `main.server.ts`; a receita do Roblox para
    sessão travada, "player-data-purchasing"):
     1. `PlayerId` → o `Player` neste servidor; não está → `NotProcessedYet` (o Roblox tenta de novo no próximo login). Um
        recibo de **outro** jogador nunca toca um save que não é o dele: o `PlayerId` escolhe o save, e nada vem do
        cliente.
-    2. A sessão: espera o carregamento (até 30 s; desiste se o jogador sair); não carregada, só-leitura (`error`), sem
+    2. A sessão: espera o carregamento (até 90 s, o pior caso real do carregamento; desiste se o jogador sair); não
+       carregada, só-leitura (`error`), sem
        DataStore (`unavailable`, o Studio sem acesso à API) ou trava perdida → `NotProcessedYet`.
     3. `ProductId` → traje pela configuração; desconhecido (produto que não vendemos, ou tirado) → `NotProcessedYet` e um
        aviso, nunca uma concessão às cegas.
     4. `PurchaseId` já no save (`robuxReceipts`): se uma gravação que o contém já chegou ao DataStore →
        `PurchaseGranted`; se não, grava agora e só responde `PurchaseGranted` se a gravação chegar.
-    5. Concede: `costumes[id] = 1` e guarda `"<costumeId>:<PurchaseId>"` em `robuxReceipts` (os 64 mais novos).
+    5. Concede: `costumes[id] = 1` e guarda `{ c: costumeId, p: PurchaseId }` em `robuxReceipts` (no máximo 64).
     6. **Grava agora** (`UpdateAsync` sob a trava da sessão, fora do coalescimento: a exceção já escrita na SAV-01),
        esperando uma gravação que já estiver no ar; chegou → `PurchaseGranted`; falhou, sem orçamento ou trava perdida →
        `NotProcessedYet`. A concessão fica na sessão (o custo que o próprio Roblox documenta: "free for the duration of
@@ -228,9 +230,9 @@ ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `
    `RobuxOwned` + a linha `[PZ-ROBUX]` (o `PurchaseId`, sem nome nem PII) avisam o dono, que compensa à mão pelo painel
    de admin (outro traje da mesma faixa). **Nunca moedas**: seria vender moeda por Robux (MON-01) — e, com a aba Store
    ligada, um jeito de comprar 600 moedas por 349 R$.
-5. **Save v8 (aditivo;** o v7 é o dos contadores dos títulos, MON-05**):** `robuxReceipts: Array<string>` (`"<costumeId>:<PurchaseId>"`, os 64 mais novos). Do servidor:
-   o relatório do cliente nunca o move (`sanitizeClientReport` copia) e ele não vai na carteira. Um servidor de volta ao
-   v6 o descarta ao gravar — inofensivo, porque a concessão é idempotente (`costumes[id] = 1`). Apagar o jogador (RTBF) o
+5. **Save v8 (aditivo;** o v7 é o dos contadores dos títulos, MON-05**):** `robuxReceipts` (`{ c: costumeId, p: PurchaseId }`, no máximo 64, nunca cortando o único recibo de um traje). Do
+   servidor: o relatório do cliente nunca o move (`sanitizeClientReport` copia) e ele não vai na carteira. Um servidor de
+   volta ao v7 o descarta ao gravar — inofensivo, porque a concessão é idempotente (`costumes[id] = 1`). Apagar o jogador (RTBF) o
    leva junto (a mesma chave). O painel de admin **não** tira um traje pago em Robux (a operação `costume` com
    `owned: false` recusa quando `robuxReceipts` tem aquele traje).
 6. **Configuração** (`src/shared/data/robuxProducts.ts`): o preço por faixa (`ROBUX_TIER_PRICE`: 49 / 149 / 349) e o id
@@ -247,8 +249,8 @@ ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `
    **uma vez por `PurchaseId`**, na concessão — nunca no prompt, nunca num recibo repetido. `RobuxOwned` para o item 4.
 8. **Tela:** no guarda-roupa, o painel do traje bloqueado mostra os dois preços ("600 coins · 349 R$", tokens do tema,
    textos na `lang.ts`); as ações: "Buy for 600 coins" (a principal, onde o foco do controle cai — BEM-02: a opção que se
-   ganha jogando vem primeiro) e, ao lado, sem destaque (variante secundária), "See Price", que abre o prompt do Roblox
-   (BEM-02: "See Price", nunca "GET IT NOW"). Sem moedas, o botão de moedas diz quanto falta, desabilitado, e o foco fica
+   ganha jogando vem primeiro) e, ao lado, sem destaque (variante secundária), "See price", que abre o prompt do Roblox
+   (BEM-02: "See price", nunca "GET IT NOW"). Sem moedas, o botão de moedas diz quanto falta, desabilitado, e o foco fica
    na grade — nunca pula sozinho para o de Robux. Os ladrilhos continuam só com o preço em moedas (Robux em cada ladrilho
    seria vitrine, não informação). **Nunca** na tela de morte, no menu da partida, na Loja de pacotes ou durante uma
    noite (BEM-02, UI-13).
@@ -291,20 +293,42 @@ ora, um print do guarda-roupa com o item selecionado serve.
 - **Pet de pacote** (o estado "From a pack", com Wear | Keep for good): **sem** botão de Robux — três botões numa
   linha é demais, e o Keep em moedas já é o caminho do que fica. Some quando o pacote deixa de ser a única posse.
 - **O relatório do cliente não leva os recibos** (`client/systems/saveClient.ts` `reportJson`): são do servidor, e 64
-  recibos com `PurchaseId` de 64 caracteres passariam do `MAX_SAVE_PAYLOAD` (8 KB) — o relatório seria recusado.
+  recibos com `PurchaseId` longo passariam do `MAX_SAVE_PAYLOAD` (8 KB) — o relatório seria recusado.
+- **O recibo guardado é `{ c, p }`** (revisão do Robux, L6–L7): o `PurchaseId` inteiro, com qualquer caractere, até 256
+  (`PURCHASE_ID_MAX`, muito acima de um id real); um id recusado (vazio, longo demais) é um `warn` de verdade, com o
+  tamanho (nunca o id). Na leitura, cada `PurchaseId` uma vez (o primeiro); passando de 64, saem os mais velhos, mas
+  **nunca o único recibo de um traje** (`trimReceipts`) — é ele que mantém o traje pago do jogador.
 - **Admin:** a edição que tiraria um traje pago em Robux é **recusada inteira** (nem o save do servidor nem o cliente,
   que aplica as mesmas operações, se movem), e `applyAdminOps` e `enforceSaveInvariants` o mantêm de novo, por
   garantia; o **reset** do admin leva os recibos e os trajes pagos para o save novo (`carryRobuxPurchases`).
-- **A espera do carregamento:** um recibo que chega antes do save espera em passos de 0,25 s até 30 s
-  (`RECEIPT_LOAD_WAIT_S`) e desiste na hora se o jogador sai; o `ProcessReceipt` é ligado antes de qualquer jogador ser
-  admitido.
-- **O prompt aberto** segura o traje por 120 s (`PROMPT_HOLD_S`) desde o prompt ou a confirmação; o fechamento sem
-  compra o solta. Recusas: `invalid` (sem produto verificado, id quebrado), `readonly`, `owned`, `pending`.
-- **A verificação** roda na partida e a cada 10 min (`VERIFY_EVERY_S`): um preço mudado no Creator Hub tira o produto
-  da oferta em até 10 min. Sem nenhum verificado, **nenhum** atributo é publicado.
+- **A espera do carregamento** (revisão do Robux, M1): um recibo que chega antes do save espera em passos de 0,25 s
+  enquanto o jogador está aqui, até 90 s (`RECEIPT_LOAD_WAIT_S`: o pior caso real do carregamento — a última gravação
+  do mesmo servidor, 20 s; a trava do outro, 22 s; as tentativas e o store antigo, 1 + 2 + 4 s cada; a latência de cada
+  chamada), e desiste na hora se ele sai; o `ProcessReceipt` é ligado antes de qualquer jogador ser admitido.
+- **Recibo respondido `NotProcessedYet` com o jogador aqui** (carregamento lento demais, sessão só-leitura, gravação
+  falhando): o Roblox só pergunta de novo no próximo login, e um carregamento refeito pelo lobby mostraria o traje sem
+  dono e vendável — o jogador pagaria duas vezes. Então **aquele traje fica retido pelo resto da sessão**: nem moedas nem
+  outro prompt (`pending`), e o guarda-roupa mostra **Pending** (o servidor diz quais no atributo `pz_robux_pending` do
+  `Player`). A retenção sai quando aquele recibo é concedido, ou com o jogador.
+- **O prompt aberto** segura o traje por até 120 s (`PROMPT_HOLD_S`); o fechamento sem compra o solta. Fechado
+  **comprado**, o traje fica retido **até o recibo dele ser concedido ou o jogador sair**, sem prazo (revisão do Robux,
+  M2: um recibo pode demorar), e a concessão solta só a retenção daquele traje. Recusas: `invalid` (sem produto
+  verificado, id quebrado), `readonly`, `owned`, `pending`.
+- **A verificação** (`GetProductInfoAsync`) roda na partida e a cada 10 min (`VERIFY_EVERY_S`): um preço mudado no
+  Creator Hub tira o produto da oferta em até 10 min. Uma leitura que falha (limite de taxa, rede) **mantém o que o
+  produto era** e o lê de novo em 60 s (`VERIFY_RETRY_S`); toda mudança de estado de um produto é avisada (não só a
+  primeira). Sem nenhum verificado, **nenhum** atributo é publicado.
+- **O preço em Robux mostrado é o deste jogador** (revisão do Robux, L3): assinantes do Roblox Plus pagam 10–20% menos
+  e o preço regional muda o número, então o guarda-roupa pergunta ao Roblox pelo cliente (`GetProductInfoAsync`,
+  `client/systems/robuxPrices.ts`) e mostra esse número — ou **nenhum**, enquanto não sabe. Só exibição: o servidor
+  confere a faixa e o prompt do Roblox é o que cobra.
 - **Analytics:** o campo de canal é `Channel - In game` (`InExperience`) ou `Channel - Other` (nunca esperado: os
   produtos são Unlisted e sem compra externa). Um recibo concedido numa sessão cuja gravação falhou manda o evento
-  quando a gravação chega; se o servidor cair antes, o evento daquela compra se perde (a compra não).
+  com a **próxima gravação daquela sessão que chegar** (qualquer uma: ela leva a concessão), uma vez; só se o jogador
+  sair antes de qualquer gravação chegar, ou o servidor cair, o evento daquela compra se perde (a compra não).
+- **O Rebirth mostrado grátis** (revisão do Robux, L8): o pedido diz `expectFree`; se o amanhecer já não o paga (o
+  mundo andou, uma morte nova), o servidor recusa com `price` e não cobra nada — nunca um preço que o jogador não viu.
+- **"See price"**, como a página Supporter (um texto só na `lang.ts`).
 - **O aviso "Unlocked: Santa"** aparece no guarda-roupa aberto quando a carteira empurrada traz o traje; fechado, o
   traje só aparece como seu na próxima vez.
 
@@ -330,19 +354,20 @@ ora, um print do guarda-roupa com o item selecionado serve.
 
 ## Achados desta auditoria (2026-09-24)
 
-| #   | O que estava errado                                                                                                                                                                                                                | O que foi feito                                                                                                                                                              | Onde / teste                                                                  |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 1   | O servidor **cobrava** um pacote de pet cujo pet já era seu (para sempre ou na mochila): só o cartão dizia "Owned", e um pedido que passasse por fora pagava por nada. Um segundo pacote de pet ainda pendente também era vendido. | `packPetOwned` (`shared/game/save.ts`): o servidor recusa `owned` e o cartão usa a mesma regra ("Owned" / "Pending").                                                        | `server/main.server.ts`, `client/ui/shop.ts`; `test:shop` §3, `test:items` G1 |
-| 2   | As moedas da meia-noite e do chefe **nunca eram avisadas**: desde que o servidor passou a pagar (F2/F3) o `earned` do relatório era sempre 0 e o empurrão da carteira não dizia nada — o aviso "+3 coins" da MON-06 não aparecia.  | `onIncome` (`server/sim/progress.ts`) soma o que foi pago na sessão; o próximo empurrão leva `earned`/`earnedDays`/`earnedRecords`/`earnedBosses`, uma vez; o cliente avisa. | `test:shop` §5–§6                                                             |
-| 3   | O aviso de boas-vindas dizia "Here are **20** coins" num texto fixo; o Earn coins dizia "every **5** days" e "multiple of **5**": mudar `ECONOMY` deixaria os três mentindo.                                                       | O número vem de `ECONOMY` no código (`welcomeText`, a linha do recorde); nenhum texto da `lang.ts` carrega valor de moeda.                                                   | `client/ui/shop.ts`, `lang.ts`; `test:shop` §1                                |
-| 4   | O conteúdo de cada pacote estava escrito duas vezes (`contents` à mão e `items`).                                                                                                                                                  | `contents` é escrito a partir de `items`.                                                                                                                                    | `shared/data/shop.ts`; `test:shop` §1, `test:items` G1                        |
-| 5   | Com o saldo no teto (`MONEY_MAX`), o analytics registrava a fonte cheia, e a soma não fechava com o saldo (inalcançável na prática: 100 milhões).                                                                                  | Dia e chefe registram e avisam o que de fato entrou.                                                                                                                         | `server/sim/progress.ts`                                                      |
-| 6   | Os preços eram fáceis demais para o pedido do dono: um pet em 1,6 h de jogo médio, a águia em 2,7 h, o guarda-roupa inteiro em 16 h.                                                                                               | Rebalanceados pelo modelo: 3,8–4,9 h o comum, 11,9–13,5 h o raro, 32,4 h o topo; pacotes de 0,8 a 3,2 h; o presente ainda compra o primeiro pacote.                          | `shared/data/shop.ts`; `test:shop` §2                                         |
-| 7   | O comentário do balde de moedas do analytics dizia "packs cost 20-60" (eram 10–30).                                                                                                                                                | Comentário corrigido; os rótulos do balde ficam (são valores de painel).                                                                                                     | `server/analytics/events.ts`                                                  |
-| 8   | Rebirth grátis no lobby (o amanhecer já veio): o servidor não cobrava, mas as telas mostravam o preço — e o cliente recusava sozinho quem não tinha as moedas.                                                                     | O servidor diz `pz_rebirth_free` no `Player` (`LifeKeeper.daybreakDuePeek`, a cada empurrão da carteira); o lobby mostra 0 e o cliente não recusa.                           | `server/main.server.ts`, `client/ui/survivor.ts`, `lobby.ts`; `test:shop` §9  |
-| 9   | Revisão de `de31f47`, L1–L5: o aviso contava o recorde inteiro quando o teto cortava parte dele; moedas pagas logo após o carregamento esperavam um empurrão que não vinha; `onIncome` aceitava um ouvinte só; dois comentários.   | O aviso conta o que entrou; o primeiro empurrão leva a renda pendente (fechar a sessão perde só o aviso, documentado); `onIncome` é uma lista com cancelamento; comentários. | `server/sim/progress.ts`, `main.server.ts`, `saveClient.ts`                   |
-| 10  | L6: "o pet do pacote fica até o New game" estava incompleto: o fim da cidade (MP-22) também o leva.                                                                                                                                | O texto diz "for this life"; o modelo preça o aluguel contra a vida (`lifeHours`), e os 35% foram reconferidos contra ela.                                                   | `shared/data/shop.ts`, `lang.ts`; `test:shop` §2                              |
-| 11  | Robux: decidido, não implementado.                                                                                                                                                                                                 | Implementado (seção "Robux"): save v8, `ProcessReceipt` idempotente, prompt do servidor, verificação de preço, tela com os dois preços.                                      | `server/save/robux.ts`; `test:shop` §7–§8, `test:save` §35                    |
+| #   | O que estava errado                                                                                                                                                                                                                | O que foi feito                                                                                                                                                                                                                 | Onde / teste                                                                  |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 1   | O servidor **cobrava** um pacote de pet cujo pet já era seu (para sempre ou na mochila): só o cartão dizia "Owned", e um pedido que passasse por fora pagava por nada. Um segundo pacote de pet ainda pendente também era vendido. | `packPetOwned` (`shared/game/save.ts`): o servidor recusa `owned` e o cartão usa a mesma regra ("Owned" / "Pending").                                                                                                           | `server/main.server.ts`, `client/ui/shop.ts`; `test:shop` §3, `test:items` G1 |
+| 2   | As moedas da meia-noite e do chefe **nunca eram avisadas**: desde que o servidor passou a pagar (F2/F3) o `earned` do relatório era sempre 0 e o empurrão da carteira não dizia nada — o aviso "+3 coins" da MON-06 não aparecia.  | `onIncome` (`server/sim/progress.ts`) soma o que foi pago na sessão; o próximo empurrão leva `earned`/`earnedDays`/`earnedRecords`/`earnedBosses`, uma vez; o cliente avisa.                                                    | `test:shop` §5–§6                                                             |
+| 3   | O aviso de boas-vindas dizia "Here are **20** coins" num texto fixo; o Earn coins dizia "every **5** days" e "multiple of **5**": mudar `ECONOMY` deixaria os três mentindo.                                                       | O número vem de `ECONOMY` no código (`welcomeText`, a linha do recorde); nenhum texto da `lang.ts` carrega valor de moeda.                                                                                                      | `client/ui/shop.ts`, `lang.ts`; `test:shop` §1                                |
+| 4   | O conteúdo de cada pacote estava escrito duas vezes (`contents` à mão e `items`).                                                                                                                                                  | `contents` é escrito a partir de `items`.                                                                                                                                                                                       | `shared/data/shop.ts`; `test:shop` §1, `test:items` G1                        |
+| 5   | Com o saldo no teto (`MONEY_MAX`), o analytics registrava a fonte cheia, e a soma não fechava com o saldo (inalcançável na prática: 100 milhões).                                                                                  | Dia e chefe registram e avisam o que de fato entrou.                                                                                                                                                                            | `server/sim/progress.ts`                                                      |
+| 6   | Os preços eram fáceis demais para o pedido do dono: um pet em 1,6 h de jogo médio, a águia em 2,7 h, o guarda-roupa inteiro em 16 h.                                                                                               | Rebalanceados pelo modelo: 3,8–4,9 h o comum, 11,9–13,5 h o raro, 32,4 h o topo; pacotes de 0,8 a 3,2 h; o presente ainda compra o primeiro pacote.                                                                             | `shared/data/shop.ts`; `test:shop` §2                                         |
+| 7   | O comentário do balde de moedas do analytics dizia "packs cost 20-60" (eram 10–30).                                                                                                                                                | Comentário corrigido; os rótulos do balde ficam (são valores de painel).                                                                                                                                                        | `server/analytics/events.ts`                                                  |
+| 8   | Rebirth grátis no lobby (o amanhecer já veio): o servidor não cobrava, mas as telas mostravam o preço — e o cliente recusava sozinho quem não tinha as moedas.                                                                     | O servidor diz `pz_rebirth_free` no `Player` (`LifeKeeper.daybreakDuePeek`, a cada empurrão da carteira); o lobby mostra 0 e o cliente não recusa.                                                                              | `server/main.server.ts`, `client/ui/survivor.ts`, `lobby.ts`; `test:shop` §9  |
+| 9   | Revisão de `de31f47`, L1–L5: o aviso contava o recorde inteiro quando o teto cortava parte dele; moedas pagas logo após o carregamento esperavam um empurrão que não vinha; `onIncome` aceitava um ouvinte só; dois comentários.   | O aviso conta o que entrou; o primeiro empurrão leva a renda pendente (fechar a sessão perde só o aviso, documentado); `onIncome` é uma lista com cancelamento; comentários.                                                    | `server/sim/progress.ts`, `main.server.ts`, `saveClient.ts`                   |
+| 10  | L6: "o pet do pacote fica até o New game" estava incompleto: o fim da cidade (MP-22) também o leva.                                                                                                                                | O texto diz "for this life"; o modelo preça o aluguel contra a vida (`lifeHours`), e os 35% foram reconferidos contra ela.                                                                                                      | `shared/data/shop.ts`, `lang.ts`; `test:shop` §2                              |
+| 11  | Robux: decidido, não implementado.                                                                                                                                                                                                 | Implementado (seção "Robux"): save v8, `ProcessReceipt` idempotente, prompt do servidor, verificação de preço, tela com os dois preços.                                                                                         | `server/save/robux.ts`; `test:shop` §7–§8, `test:save` §35                    |
+| 12  | Revisão do Robux: um carregamento lento (> 30 s) ou refeito pelo lobby deixava pagar duas vezes; a retenção do prompt vencia antes do recibo; preço fixo na tela; uma leitura falha escondia o produto; evento perdido; ids.       | Espera de 90 s e retenção do traje pela sessão (`pending`, "Pending"); retenção sem prazo depois da compra; o preço do jogador; estado mantido e nova leitura em 60 s; evento com a próxima gravação; `{ c, p }`; `expectFree`. | `server/save/robux.ts`, `wardrobe.ts`; `test:shop` §8–§9, `test:save` §35     |
 
 **Conhecidos, não corrigidos aqui:**
 
@@ -363,21 +388,25 @@ ora, um print do guarda-roupa com o item selecionado serve.
 ### Robux (segunda revisão)
 
 - **`ProcessReceipt`** (`server/save/robux.ts` `decide`): o `PlayerId` escolhe o save (nada vem do cliente); espera o
-  carregamento até 30 s com `task.wait` dentro do callback (permitido pelo Roblox); `PurchaseGranted` só com
+  carregamento até 90 s com `task.wait` dentro do callback (permitido pelo Roblox), só com o jogador aqui;
+  `PurchaseGranted` só com
   `commit()` verdadeiro — `flush(s, false)` sob a trava, e a sessão ainda aberta, sem `released` e persistente depois
   dele (uma saída que gravou no meio pode ter codificado o save **antes** da concessão). Toda outra saída é
   `NotProcessedYet`; a concessão fica na sessão até lá (o custo que o Roblox documenta).
-- **Idempotência:** `robuxReceipts` (save v8, "<costumeId>:<PurchaseId>", os 64 mais novos, validados entrada a entrada
-  na leitura); o recibo repetido acha o `PurchaseId` e só confirma a gravação. Recibo de traje já possuído: guarda o
+- **Idempotência:** `robuxReceipts` (save v8, `{ c, p }`, no máximo 64 sem cortar o único recibo de um traje,
+  validados entrada a entrada e sem `PurchaseId` repetido na leitura); o recibo repetido acha o `PurchaseId` e só
+  confirma a gravação. Recibo de traje já possuído: guarda o
   `PurchaseId`, `PurchaseGranted`, nunca moedas.
 - **O prompt é do servidor** (`handleAction` `robuxCostume`, na ficha do balde do `ShopAction` e na linha de flood): só
   o `costumeId` do pedido é lido; produto verificado, sessão gravável, não possuído, nenhum prompt aberto. O
-  `isPurchased` do `PromptProductPurchaseFinished` nunca concede. Com o prompt aberto, a compra em moedas do mesmo traje
-  é recusada (`pending`).
-- **A oferta** (`pz_robux_products` na pasta `Net`) é só o que o `GetProductInfo` confirmou (à venda, preço = faixa); o
-  cliente a lê para desenhar e nada mais — o servidor decide de novo no prompt.
+  `isPurchased` do `PromptProductPurchaseFinished` nunca concede. As retenções (`holds`): o prompt aberto, a compra
+  confirmada (até o recibo ou a saída) e o recibo respondido `NotProcessedYet` com o jogador aqui (pela sessão) recusam
+  a compra em moedas e outro prompt daquele traje (`pending`); só a concessão do próprio traje as solta.
+- **A oferta** (`pz_robux_products` na pasta `Net`) é só o que o `GetProductInfoAsync` confirmou (à venda, preço =
+  faixa; uma leitura falha mantém o último estado); o cliente a lê para desenhar e nada mais — o servidor decide de novo
+  no prompt. `pz_robux_pending` (no `Player`) é só exibição, como o preço do jogador que o cliente pergunta.
 - **O cliente não move recibos**: `readProgress` copia os do servidor; o relatório nem os envia (`reportJson`).
 - **Admin:** a edição que tiraria um traje pago é recusada inteira; o reset leva os recibos (`carryRobuxPurchases`);
   `enforceSaveInvariants` devolve o traje de todo recibo lido.
 - **`pz_rebirth_free`** (servidor → cliente, só exibição): o preço cobrado continua decidido por `daybreakDue` no
-  pedido.
+  pedido, e um pedido `expectFree` que não é mais grátis é recusado (`price`) sem cobrar.

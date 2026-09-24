@@ -117,7 +117,11 @@ export type ShopActionRequest =
 	| { kind: "robuxCostume"; costumeId: number }
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
-	| { kind: "rebirth"; runRev: number }
+	/**
+	 * `expectFree`: the lobby showed this Rebirth at 0 (the daybreak came while they waited: pz_rebirth_free). The server
+	 * refuses it ("price") rather than charge a price the player never saw, if it is not free any more.
+	 */
+	| { kind: "rebirth"; runRev: number; expectFree?: boolean }
 	| { kind: "newRun"; runRev: number }
 	/**
 	 * The shop (screen 0) or the wardrobe (1) just opened: no decision, nothing charged -- only the first step of the
@@ -126,11 +130,22 @@ export type ShopActionRequest =
 	| { kind: "viewShop"; screen: number };
 
 /**
- * "pending": a Robux prompt for this costume is open (or its receipt is on the way), so it is not sold for coins
- * meanwhile, and a second Robux prompt does not open over it (server/save/robux.ts PROMPT_HOLD_S)
+ * "pending": a Robux payment for this costume may be on its way (its prompt open or confirmed, or its receipt answered
+ * "not yet" this session), so it is not sold for coins meanwhile, nor in a second prompt (server/save/robux.ts holds).
+ * "price": a Rebirth asked for as free (`expectFree`) is not free any more: nothing charged, the screen shows the price.
  */
 export type ShopActionReason =
-	"funds" | "owned" | "limit" | "invalid" | "rate" | "loading" | "readonly" | "outdated" | "network" | "pending";
+	| "funds"
+	| "owned"
+	| "limit"
+	| "invalid"
+	| "rate"
+	| "loading"
+	| "readonly"
+	| "outdated"
+	| "network"
+	| "pending"
+	| "price";
 
 export interface ShopActionResult {
 	ok: boolean;

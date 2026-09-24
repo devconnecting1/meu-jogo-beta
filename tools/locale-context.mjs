@@ -234,7 +234,6 @@ export const CONTEXT = {
 	Equipped: "wardrobe status: this outfit or pet is worn now",
 	coins: "the game's currency, earned by playing (not literal coins)",
 	Robux: "Roblox's own currency name: keep it as is (never a real-money sign)",
-	"See Price": "wardrobe button: opens Roblox's purchase prompt for this item",
 	Title: "loadout label: the earned title (singular of the Titles tab)",
 	None: "value: no title equipped",
 	Locked: "status: not yet earned or bought",
