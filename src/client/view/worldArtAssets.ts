@@ -349,8 +349,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
-	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */

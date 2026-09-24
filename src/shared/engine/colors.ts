@@ -118,35 +118,62 @@ export const COLORS = {
  * is red whatever the theme says, so these never go through the tweakcn theme (DESIGN_RULES UI-01 is about the
  * interface's own colours; UI-11 about the icons). Keyed by the one character an icon's rows use for the colour.
  *
- * Every icon has a 1-pixel `k` outline, so it reads on any tile face (dark iron, the iron of an equipped item, the
- * blue of the selection) and at 32 px (MON-02's floor): a silhouette first, 2-4 colours and a highlight inside.
+ * The style (DESIGN_RULES ART-13): one light from the top left; a 1-pixel outline all around in a DARKER HUE of the
+ * material (the digits below: steel's is blue-black, wood's brown-black...), every one of them darker than the
+ * darkest tile face an icon sits on, so the silhouette reads on the dark iron of an owned item, the iron of an
+ * equipped one and the blue of the selection (on the near-black bed of the details panel the lit fills carry it);
+ * inside, each material in three tones (highlight, base, shadow) and metal and glass with a one-pixel shine.
  */
 export const ICON_ART: Record<string, Color3> = {
-	// the outline and the darkest neutrals
+	// ---- the outlines: a darker hue of what they surround, all under 2% luminance (npm run test:icons 7)
+	/** neutral near-black: black things (a grip, rubber, a tyre), holes, and where no hue fits */
 	k: Color3.fromRGB(22, 20, 24),
-	X: Color3.fromRGB(44, 44, 50),
-	g: Color3.fromRGB(62, 64, 72),
-	G: Color3.fromRGB(98, 102, 112),
-	// steel: dark, mid, the shine of an edge
-	S: Color3.fromRGB(106, 114, 126),
-	s: Color3.fromRGB(158, 166, 178),
-	w: Color3.fromRGB(222, 228, 236),
+	/** metal: steel, gunmetal, tin */
+	"1": Color3.fromRGB(26, 30, 42),
+	/** wood, leather, anything cooked brown */
+	"2": Color3.fromRGB(42, 24, 14),
+	/** red: meat, a red case, a shell */
+	"3": Color3.fromRGB(58, 12, 18),
+	/** green: a leaf, rot, a circuit */
+	"4": Color3.fromRGB(16, 38, 20),
+	/** gold and brass */
+	"5": Color3.fromRGB(54, 34, 6),
+	/** canvas, paper, bread, bone */
+	"6": Color3.fromRGB(46, 36, 24),
+	/** blue: cloth, glass, a screen */
+	"7": Color3.fromRGB(14, 26, 58),
+	/** purple */
+	"8": Color3.fromRGB(40, 18, 58),
+	/** fire and orange */
+	"9": Color3.fromRGB(74, 20, 6),
+	/** stone, white, light grey */
+	"0": Color3.fromRGB(36, 36, 42),
+	// ---- black and gunmetal: black parts (X), then a gun's blued steel in three tones
+	X: Color3.fromRGB(42, 44, 54),
+	g: Color3.fromRGB(64, 70, 88),
+	G: Color3.fromRGB(96, 106, 128),
+	H: Color3.fromRGB(144, 156, 178),
+	// steel: shadow, base, the lit edge (W is the shine)
+	S: Color3.fromRGB(106, 114, 130),
+	s: Color3.fromRGB(160, 168, 184),
+	w: Color3.fromRGB(222, 228, 238),
 	// stone and concrete
-	N: Color3.fromRGB(84, 84, 90),
-	q: Color3.fromRGB(128, 128, 134),
-	Q: Color3.fromRGB(174, 174, 178),
+	N: Color3.fromRGB(84, 84, 92),
+	q: Color3.fromRGB(128, 128, 136),
+	Q: Color3.fromRGB(174, 174, 180),
 	// wood
 	B: Color3.fromRGB(94, 60, 34),
 	b: Color3.fromRGB(146, 98, 58),
 	y: Color3.fromRGB(194, 144, 90),
 	// leather
-	L: Color3.fromRGB(86, 54, 34),
-	l: Color3.fromRGB(134, 86, 52),
-	// red (meat, blood, a first-aid cross, a fuel can)
+	L: Color3.fromRGB(90, 50, 34),
+	l: Color3.fromRGB(140, 82, 52),
+	d: Color3.fromRGB(186, 122, 80),
+	// red (meat, blood, a first-aid case, a fuel can, a shotgun shell)
 	R: Color3.fromRGB(122, 22, 28),
 	r: Color3.fromRGB(200, 46, 50),
 	p: Color3.fromRGB(238, 120, 114),
-	// cooked brown (roast meat, bread crust, baked potato)
+	// cooked brown (roast meat, bread crust, baked potato) and copper
 	M: Color3.fromRGB(98, 54, 28),
 	m: Color3.fromRGB(162, 98, 50),
 	n: Color3.fromRGB(206, 140, 80),
@@ -173,23 +200,28 @@ export const ICON_ART: Record<string, Color3> = {
 	T: Color3.fromRGB(148, 122, 86),
 	t: Color3.fromRGB(206, 182, 136),
 	h: Color3.fromRGB(236, 220, 184),
-	// white and light grey (a bandage, a label, a bulb)
-	i: Color3.fromRGB(200, 202, 206),
+	// white and light grey (a bandage, a label, a bulb): shadow, base, lit
+	I: Color3.fromRGB(150, 156, 170),
+	i: Color3.fromRGB(200, 204, 212),
 	W: Color3.fromRGB(248, 248, 244),
 	// purple (a sedative, a berry)
 	P: Color3.fromRGB(80, 42, 108),
 	j: Color3.fromRGB(142, 88, 178),
+	J: Color3.fromRGB(196, 150, 226),
 	// the light of a torch or a bulb
 	Y: Color3.fromRGB(255, 244, 164),
 };
 
+/** the outline colours of ICON_ART (DESIGN_RULES ART-13): every pixel of an icon that touches empty space is one */
+export const ICON_OUTLINES = "k1234567890";
+
 /**
  * The order the colours of an icon are painted in, first to last. The drawer covers each colour's pixels with as few
- * Frames as it can, and a Frame may spill over pixels a LATER colour paints anyway -- so the outline, painted first,
- * is a handful of big rectangles under the whole silhouette, and each colour after it is its own few rectangles.
+ * Frames as it can, and a Frame may spill over pixels a LATER colour paints anyway -- so the outlines, painted first,
+ * are a handful of big rectangles under the whole silhouette, and each colour after them is its own few rectangles.
  * The order only changes how many Frames an icon costs, never what it looks like.
  */
-export const ICON_ART_ORDER = "kXgNBLRMEPACOFGSqblmTerajxoytQsnhifpvcuzwWY";
+export const ICON_ART_ORDER = "k1234567890XgNBLRMEPACOFGISHqblmTerajJxoytQsndhifpvcuzwWY";
 
 /**
  * Draw layers of the world (ZIndex inside the sprite layer; the HUD/dark overlay are separate
