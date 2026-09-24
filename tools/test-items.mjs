@@ -4450,6 +4450,8 @@ section(
 			);
 			press(pl, 0, P2.packEdges(1, 0, 0, 0));
 			untilConsumed(sp, seq);
+			// the World batch goes out on the snapshot's cadence (audit M3)
+			for (let i = 0; i < (CFG2.WORLD_FLUSH_EVERY_TICKS ?? 1); i++) s.beat();
 			const built = world.solids.find(q => q.placeable === recipe.resultIndex && q.owner === sp.slot);
 			check(
 				built !== undefined && built.id >= CFG2.DYNAMIC_ID_BASE && s.sim.build.pendingOf(sp.slot) === -1,

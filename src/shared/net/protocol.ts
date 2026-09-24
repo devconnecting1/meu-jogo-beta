@@ -1088,6 +1088,12 @@ export interface FxSolidShake {
 	angle: number;
 	/** 0..1 */
 	strength: number;
+	/**
+	 * SERVER ONLY, never on the wire: the centre of the solid, so the interest filter can place the effect (§4.3). A
+	 * shake without it went to every client in the world, near or not (audit L2).
+	 */
+	x?: number;
+	y?: number;
 }
 
 export interface FxExplosion {

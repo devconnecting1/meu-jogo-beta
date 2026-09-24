@@ -53,6 +53,7 @@ import {
 	DESPAWN_MID_S,
 	DESPAWN_NEAR_S,
 	EXTRAPOLATE_MAX_S,
+	FX_HOLD_MAX_S,
 	INTERP_DEFAULT_S,
 	INTERP_MAX_S,
 	INTERP_MIN_S,
@@ -468,6 +469,18 @@ export class SnapshotBuffer {
 	 */
 	private readonly tombs = new Map<number, number>();
 	private ghosts = 0;
+	/**
+	 * Deaths waiting for the drawing to reach them (audit M3): netId -> the wire tick of its `ZombieDied` and when it
+	 * arrived. The body is drawn `delay` behind the clock, so a death acted on the moment it lands took the body away
+	 * while it was still walking to the spot it fell on -- and, once the effects wait for the render time
+	 * (client/net/fxTimeline.ts), ahead of its own blood. It goes when the render time reaches the death's tick
+	 * (`releaseDeaths`), never later than FX_HOLD_MAX_S: the rule the effects follow, so the kill's blood (the same
+	 * tick, the same flush) plays on the very frame the body goes -- which is what lets client/view/fxView.ts pour one
+	 * pool for the two. A mid-ring body, drawn one near interval further back, goes that 50 ms early, at 800 u and more.
+	 */
+	private readonly dying = new Map<number, { tick: number; at: number }>();
+	/** the netIds whose death the last `advance` released (`takeDied`) */
+	private readonly died = new Array<number>();
 	private simHz = SIM_HZ;
 	private delayS = INTERP_DEFAULT_S;
 	private targetS = INTERP_DEFAULT_S;
@@ -505,6 +518,8 @@ export class SnapshotBuffer {
 		this.zOrder.clear();
 		this.bosses.clear();
 		this.tombs.clear();
+		this.dying.clear();
+		this.died.clear();
 		this.out.clear();
 		this.zOut.clear();
 		this.bOut.clear();
@@ -542,9 +557,9 @@ export class SnapshotBuffer {
 	}
 
 	/**
-	 * `ZombieDied` (§4.4): the body is gone NOW, at the position the reliable event carries, and the view
-	 * draws the blood and the corpse there. Letting the despawn timeout retire it instead would leave it
-	 * standing for another 300 ms and then fade it out somewhere else entirely.
+	 * A zombie's body goes NOW (the client takes a `ZombieDied` through `zombieDied`, which waits for the drawing to
+	 * reach it, audit M3; this is the immediate form, for a test or a tool). Letting the despawn timeout retire it
+	 * instead would leave it standing for another 300 ms and then fade it out somewhere else entirely.
 	 *
 	 * `deathTick` is the wire tick (u16) of the World batch that carried the death: from here on a sample of this
 	 * netId at or before it is from the dead body, and is refused (`tombs`, audit M1).
@@ -577,11 +592,31 @@ export class SnapshotBuffer {
 		last.ix = ix;
 	}
 
+	/**
+	 * `ZombieDied` (§4.4), played when the drawing reaches it (audit M3): the body stays drawn until the render time
+	 * reaches `deathTick` (the wire tick of the World batch that carried it), then goes with the corpse and the blood
+	 * of the same tick (`takeDied`). From now on no part from before the death can bring the body back once it went
+	 * (`tombs`, audit M1); until then its own late samples still land in its track, which is still drawn.
+	 */
+	zombieDied(netId: number, deathTick: number, now: number): void {
+		const tick = wrapU16(deathTick);
+		this.tombs.set(netId, tick);
+		this.dying.set(netId, { tick, at: now });
+	}
+
+	/** the netIds whose death `advance` released since the last call, appended to `out` and cleared here */
+	takeDied(out: Array<number>): Array<number> {
+		for (const netId of this.died) out.push(netId);
+		this.died.clear();
+		return out;
+	}
+
 	/** is this sample of `netId`, at wire tick `tick16`, from a body the reliable channel already buried? */
 	private buried(netId: number, tick16: number): boolean {
 		const tomb = this.tombs.get(netId);
 		if (tomb === undefined) return false;
-		if (seqDiff(tick16, tomb) <= 0) return true;
+		// a death still waiting for the drawing: the body is on screen, and its own late samples keep it smooth
+		if (seqDiff(tick16, tomb) <= 0) return !(this.dying.has(netId) && this.zombies.has(netId));
 		// newer than the death: the server gave the netId to a new zombie (never before NET_ID_REUSE_DELAY_S)
 		this.tombs.delete(netId);
 		return false;
@@ -798,8 +833,8 @@ export class SnapshotBuffer {
 	 *        and all three are covered by easing the alpha up instead of popping a body into frame.
 	 *   out  a body that stops arriving for its ring's timeout (300 ms near, 600 ms mid) is retired over
 	 *        DESPAWN_FADE_S. A body that DIED never comes through here: `ZombieDied` is reliable and takes
-	 *        it away at once, at the place it fell -- and a late part from before the death cannot stand it
-	 *        up again (`tombs`).
+	 *        it away when the drawing reaches the death, at the place it fell (`releaseDeaths`, audit M3) -- and
+	 *        a late part from before the death cannot stand it up again (`tombs`).
 	 */
 	private advanceActors(
 		render: number,
@@ -815,6 +850,7 @@ export class SnapshotBuffer {
 		retire.clear();
 		// the retirements first, then the drawing: a body that goes is replaced by the last one (`dropZombie`), and
 		// the frame that retires it already draws the order the next frames will
+		this.releaseDeaths(render, now);
 		const order = this.zOrder;
 		for (const track of order) {
 			if (track.samples.size() === 0) {
@@ -847,6 +883,25 @@ export class SnapshotBuffer {
 			this.bOut.push(this.bossStateOf(netId, track, render, world));
 		}
 		for (const netId of retire) this.bosses.delete(netId);
+	}
+
+	/** the deaths the drawing has reached (the render time is at the death's tick), or that waited FX_HOLD_MAX_S */
+	private releaseDeaths(render: number, now: number): void {
+		if (this.dying.size() === 0) return;
+		const due = this.retire;
+		due.clear();
+		const at = math.floor(render);
+		for (const [netId, d] of this.dying) {
+			// no body drawn (retired, never carried): nothing to wait for
+			const drawn = this.zombies.has(netId);
+			if (!drawn || unwrapTick(d.tick, at) <= render || now - d.at >= FX_HOLD_MAX_S) due.push(netId);
+		}
+		for (const netId of due) {
+			this.dying.delete(netId);
+			this.dropZombie(netId);
+			this.died.push(netId);
+		}
+		due.clear();
 	}
 
 	/**

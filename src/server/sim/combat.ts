@@ -1084,7 +1084,7 @@ export class ServerCombat {
 			if (rel + pad < fromDeg || rel - pad > toDeg) continue;
 			if (!continuous) st.swing.solidIds.add(s.id);
 			if (this.hooks.chop(s, Wp.isChoppingTool(w))) {
-				this.hooks.fx?.({ t: Net.FxType.SolidShake, solidId: s.id, angle: aim, strength: 1 });
+				this.hooks.fx?.({ t: Net.FxType.SolidShake, solidId: s.id, angle: aim, strength: 1, x: cx, y: cy });
 			}
 		}
 	}

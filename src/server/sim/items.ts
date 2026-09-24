@@ -32,6 +32,10 @@
  * the E press. A chainsaw at one car used to make 73 items a minute that nothing took away, and each of those
  * three walked all of them.
  *
+ * And an item that just fell is news (§4.3, audit L2): for ITEM_NEWS_S it is told only to a client that could see
+ * the spot (`sees`) -- a zombie's drop lies where the zombie died, and telling it into the dark handed out the death
+ * the snapshot had withheld. After that it is litter, told in range like any other.
+ *
  * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original, and the
  * items' own clock is the simulation's dt.
  */
@@ -40,7 +44,7 @@ import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
 import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
 import { edgeDist, isMapItem } from "shared/sim/interactQuery";
-import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST } from "shared/net/mpConfig";
+import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
 	GroundItem,
@@ -89,11 +93,19 @@ export type PickupResult =
 export interface ServerItemsOptions {
 	world: WorldData;
 	out: WorldOut;
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see (x, y) -- the roof and the dark rules the horde is sent by? An
+	 * item younger than ITEM_NEWS_S is only told to a client that could see where it lies (`sees`): a zombie's drop
+	 * fell where the zombie died, and telling it into the dark handed out the death the snapshot had withheld. Left
+	 * undefined, every item in range is seen (a test without a replication layer).
+	 */
+	visible?: (slot: number, x: number, y: number) => boolean;
 }
 
 export class ServerItems {
 	readonly world: WorldData;
 	private readonly out: WorldOut;
+	private readonly visible?: (slot: number, x: number, y: number) => boolean;
 	/** seconds of cooldown left per tree/car/bin, keyed by the solid (the original's `hitCooldowns`) */
 	private readonly cooldowns = new Map<Solid, number>();
 	private sweep = 0;
@@ -124,6 +136,7 @@ export class ServerItems {
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
+		this.visible = options.visible;
 		enableItemGrid(this.world);
 		// whatever lies there already (a world adopted with items in it) starts its lifetime now
 		for (const item of this.world.items) {
@@ -168,9 +181,20 @@ export class ServerItems {
 		for (const item of this.near(x, y, ITEM_INTEREST)) {
 			const dx = item.x - x;
 			const dy = item.y - y;
-			if (dx * dx + dy * dy <= r2) set.add(item.id);
+			if (dx * dx + dy * dy <= r2 && this.sees(slot, item)) set.add(item.id);
 		}
 		this.told.set(slot, set);
+	}
+
+	/**
+	 * May the client in `slot` be told about this item? Litter (older than ITEM_NEWS_S) always; news only if they could
+	 * see where it lies (§4.3, `ServerItemsOptions.visible`). The age goes first: the light test is asked of the few
+	 * items that just fell, not of every item in range on every sweep.
+	 */
+	private sees(slot: number, item: GroundItem): boolean {
+		if (this.visible === undefined) return true;
+		if (this.clock - (item.born ?? this.clock) >= ITEM_NEWS_S) return true;
+		return this.visible(slot, item.x, item.y);
 	}
 
 	/** the items in the square of half-side `r` around (x, y), from the grid (a scratch array: read it at once) */
@@ -223,7 +247,8 @@ export class ServerItems {
 				if (set.has(item.id)) continue;
 				const dx = item.x - v.x;
 				const dy = item.y - v.y;
-				if (dx * dx + dy * dy > inR2) continue;
+				// news in range but out of sight (the dark, a building): the next sweep asks again
+				if (dx * dx + dy * dy > inR2 || !this.sees(slot, item)) continue;
 				set.add(item.id);
 				this.out.queueFor(slot, itemAddOf(item));
 			}
@@ -262,6 +287,9 @@ export class ServerItems {
 			const dy = item.y - v.y;
 			if (dx * dx + dy * dy > r2) continue;
 			const slot = this.viewerSlots[i] ?? i;
+			// out of sight: the sweep tells them once they can see the spot, or once it is litter (a drop where a zombie
+			// died in the dark)
+			if (!this.sees(slot, item)) continue;
 			ev = ev ?? itemAddOf(item);
 			this.toldOf(slot).add(item.id);
 			this.out.queueFor(slot, ev);
@@ -442,13 +470,16 @@ export class ServerItems {
 
 	// ---------------------------------------------------------------- WorldInit (§4.5)
 
-	/** every ground item a joining survivor at (x, y) can see, as ItemAdd deltas */
-	initFor(x: number, y: number, out: Array<WItemAdd>): Array<WItemAdd> {
-		const r2 = ITEM_INTEREST * ITEM_INTEREST;
-		for (const item of this.near(x, y, ITEM_INTEREST)) {
-			const dx = item.x - x;
-			const dy = item.y - y;
-			if (dx * dx + dy * dy <= r2) out.push(itemAddOf(item));
+	/**
+	 * Every ground item a joining survivor is shown, as ItemAdd deltas: exactly the ones `welcomed` marked told for
+	 * their slot (in range and in sight), so the WorldInit and the sweep can never disagree about what was sent.
+	 */
+	initFor(slot: number, out: Array<WItemAdd>): Array<WItemAdd> {
+		const told = this.told.get(slot);
+		if (told === undefined) return out;
+		for (const id of told) {
+			const item = this.byId.get(id);
+			if (item !== undefined) out.push(itemAddOf(item));
 		}
 		return out;
 	}

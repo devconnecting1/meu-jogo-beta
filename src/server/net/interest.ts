@@ -328,6 +328,18 @@ export class ActorInterest {
 		return easedExtra(pair.extraFrom, pair.extraTo, viewTick + ARRIVAL_BUFFER_S * simHz - pair.extraAt);
 	}
 
+	/**
+	 * Does this viewer's client still have a track for the body -- a snapshot carried it, and not so long ago that the
+	 * client retired it? Its `ZombieDied` goes to exactly those (audit L2): a death is news only where the body is
+	 * drawn. The ring alone said "in range", and a zombie in range but in the dark, or in a building, was never sent:
+	 * its death handed its position to a client that had never been allowed to see it.
+	 */
+	hasTrack(viewer: number, netId: number, tick: number, simHz: number): boolean {
+		const pair = this.rings.get(ActorInterest.key(viewer, netId));
+		if (pair === undefined || !pair.sent) return false;
+		return tick - pair.sentAt <= retiredAfterTicks(pair.wireMid, simHz);
+	}
+
 	/** that entity is gone (§4.4 death or despawn): every viewer forgets it */
 	forgetTarget(netId: number): void {
 		for (let viewer = 0; viewer < MAX_PLAYERS; viewer++) {

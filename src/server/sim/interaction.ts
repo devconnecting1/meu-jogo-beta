@@ -250,6 +250,9 @@ export class ServerInteraction {
 				solidId: s.id,
 				angle: math.atan2(s.y + s.h / 2 - ctx.state.y, s.x + s.w / 2 - ctx.state.x),
 				strength: 1,
+				// server only: where it is, for the interest filter (§4.3)
+				x: s.x + s.w / 2,
+				y: s.y + s.h / 2,
 			});
 		}
 		return { kind: "mapItem", solid: s, dropped };

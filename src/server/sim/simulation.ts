@@ -170,6 +170,13 @@ export class ServerSimulation {
 	 * sets it (server/net/replication.ts); unset, every body is near.
 	 */
 	zombieViewLag?: (slot: number, z: ZombieState, viewTick: number) => number;
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see the spot (x, y) -- not inside a building they are not in, and in
+	 * the dark only if it is lit or within earshot? A ground item that just fell there (ITEM_NEWS_S) is told to them
+	 * only then (a zombie's drop at the place it died in the dark handed a client the death it was never shown). Set by
+	 * the replication layer, which owns the rules (server/net/replication.ts); unset, everything in range is seen.
+	 */
+	itemVisible?: (slot: number, x: number, y: number) => boolean;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -400,7 +407,11 @@ export class ServerSimulation {
 			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
 			// tell "the server made this" from "we both generated this from the seed"
 			serverWorld(world);
-			const items = new ServerItems({ world, out: this.worldOut });
+			const items = new ServerItems({
+				world,
+				out: this.worldOut,
+				visible: (slot, x, y) => this.itemVisible?.(slot, x, y) ?? true,
+			});
 			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
 			items.watch(this.bodies, this.bodySlots);
 			out.items = items;

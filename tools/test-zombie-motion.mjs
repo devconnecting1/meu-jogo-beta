@@ -429,9 +429,13 @@ function run(scn, profileName) {
 		for (const packet of rel.poll(now)) {
 			const batch = P.decodeWorld(packet);
 			if (batch === undefined) continue;
-			// as client/net/netClient.ts: the batch's tick buries the netId against older parts still in flight (M1)
-			for (const e of batch.events)
-				if (e.t === P.WorldEv.ZombieDied) cl.snapshots.forgetZombie(e.netId, batch.tick);
+			// as client/net/netClient.ts: the batch's tick buries the netId against older parts still in flight (M1),
+			// and the body goes when the drawing reaches that tick (M3); an older src (PZ_SRC) took it away at once
+			for (const e of batch.events) {
+				if (e.t !== P.WorldEv.ZombieDied) continue;
+				if (cl.snapshots.zombieDied !== undefined) cl.snapshots.zombieDied(e.netId, batch.tick, now);
+				else cl.snapshots.forgetZombie(e.netId, batch.tick);
+			}
 		}
 		for (const payload of down.poll(now)) {
 			const part = P.decodeSnapshotPart(payload);

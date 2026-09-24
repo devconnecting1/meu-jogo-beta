@@ -3,8 +3,10 @@
  *
  *   Snap   unreliable, every SNAP_NEAR_EVERY_TICKS ticks (20 Hz): the own block, the other survivors, the
  *          bosses and the horde — each entity filtered by the interest rings and the visibility rules of §4.3
- *   Fx     unreliable, one batch per tick when something happened: blood, debris, shakes, tracers, shots
- *   World  reliable, batched per tick: InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
+ *   Fx     unreliable, one batch on the snapshot's cadence when something happened: blood, debris, shakes, tracers,
+ *          shots -- each to the viewers that could SEE where it happened (§4.3's roof and dark rules, audit L2),
+ *          stamped with the tick the client plays it at (client/net/fxTimeline.ts, audit M3)
+ *   World  reliable, batched on the snapshot's cadence (at once for InitBegin, WorldReset, PlayerLife): InitBegin, the roster (PlayerJoined, and PlayerProfile when a level, an
  *          outfit, a pet or the title shown changes in session — MON-04, MON-05), PlayerLife, ZombieDied, Clock,
  *          Announce (§4.5; a title earned is one, sent to its owner only), WorldReset when every survivor died
  *          and a new town replaced the old one (MP-22), and PlayerTally, the scoreboard's two numbers (MP-23)
@@ -29,19 +31,27 @@ import {
 	SNAP_MAX_BYTES,
 	SNAP_ZOMBIE_CAP,
 	UNRELIABLE_PAYLOAD_LIMIT,
+	FX_FLUSH_EVERY_TICKS,
+	FX_MAX_BYTES,
 	WORLD_FLUSH_EVERY_TICKS,
 	midViewExtraTicks,
 } from "shared/net/mpConfig";
 import {
 	AnnounceKind,
+	BloodKind,
 	BossSnap,
 	DeathCause,
 	FxEvent,
+	FxShot,
+	FxType,
+	HitKind,
 	LifeState,
 	ModFlag,
 	PlayerFlag,
 	PlayerSnap,
+	ProjKind,
 	SelfFlag,
+	ShotHit,
 	SelfSnap,
 	Snapshot,
 	SolidState,
@@ -55,7 +65,8 @@ import {
 	encodeSnapshot,
 	encodeWorld,
 } from "shared/net/protocol";
-import { fxPosition, fxSlot, toWireFx } from "shared/net/fxWire";
+import { debrisMaterialId, toWireFx } from "shared/net/fxWire";
+import { positionLit } from "shared/sim/ai/zombieBrain";
 import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
@@ -361,6 +372,42 @@ interface HordeEntry {
 	building: number;
 }
 
+/**
+ * One effect of the batch being flushed, placed ONCE for every viewer (audit M3/L2): its position used to be
+ * rebuilt per (viewer, event), a table each time, and a Shake-less effect with no position went to everybody.
+ */
+interface FxEntry {
+	e: FxEvent;
+	/** where it happens; false: nowhere a viewer can be near (a Shake goes by slot; anything else then goes to all) */
+	placed: boolean;
+	x: number;
+	y: number;
+	/** it shows something the roof or the dark hides (a zombie's blood, a spit): §4.3's rules apply at (x, y) */
+	sight: boolean;
+	/** the building (x, y) is inside, 0 outdoors, and whether it is lit (true by day): read only when `sight` */
+	building: number;
+	lit: boolean;
+	/** a Shot: per hit, the same three -- only a hit ON A ZOMBIE shows something the dark hides */
+	hitSight: Array<boolean> | undefined;
+	hitBuilding: Array<number> | undefined;
+	hitLit: Array<boolean> | undefined;
+}
+
+/** the World events that cannot wait for the cadence: a join's anchor, a new town, a death or a stand-up (§7.3) */
+function urgentEvent(e: WorldEvent): boolean {
+	return e.t === WorldEv.InitBegin || e.t === WorldEv.WorldReset || e.t === WorldEv.PlayerLife;
+}
+
+/** a set of player slots (0..MAX_PLAYERS-1) in one number */
+function maskHas(mask: number, slot: number): boolean {
+	return math.floor(mask / 2 ** slot) % 2 === 1;
+}
+
+/** the debris a boss throws: a boss is sent in range whatever the light, so is its debris */
+const BOSS_DEBRIS = debrisMaterialId("boss");
+/** projectiles whose spawn is still waiting for its end, at most (the map is a safety net, not a store) */
+const PROJ_SEEN_MAX = 1024;
+
 /** one candidate for one viewer's snapshot, before the distance sort and the SNAP_ZOMBIE_CAP cut */
 interface ZombiePick {
 	entry: HordeEntry;
@@ -413,6 +460,17 @@ export class Replicator {
 	private readonly initSolids = new Array<Solid>();
 	private readonly initItems = new Array<WItemAdd>();
 	private readonly initMachines = new Array<MachineState>();
+	/** effects of the batch being flushed, placed once (`prepareFx`), and their pool */
+	private readonly fxEntries = new Array<FxEntry>();
+	private readonly fxEntryPool = new Array<FxEntry>();
+	/**
+	 * projId -> the viewers (a slot mask) its ProjSpawn was sent to: its ProjEnd goes to exactly them (audit L2). A
+	 * projectile's end is where it hit, and shown to a viewer who never saw it fly it is a position given away; not
+	 * shown to one who did, the arrow flies on to its full range on their screen.
+	 */
+	private readonly projSeen = new Map<number, number>();
+	/** a World event that cannot wait for the cadence was queued (`urgentEvent`) */
+	private urgent = false;
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
@@ -428,6 +486,37 @@ export class Replicator {
 		this.seed = options.seed ?? DESIGN.TOWN_SEED;
 		// the shot's rewind needs what only this layer knows: which ring a zombie is in for which viewer (§2.3)
 		sim.zombieViewLag = (slot, z, viewTick) => this.viewLagOf(slot, z, viewTick);
+		// ...and the ground items are shown by the same sight rules the horde is (audit L2)
+		sim.itemVisible = (slot, x, y) => this.canSeeAt(slot, x, y);
+	}
+
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see (x, y)? Not inside a building they are not in (the roof, EDI-04),
+	 * and in the dark only if something lights the spot or it is within DARK_SENSE_RANGE of them -- the rules a zombie
+	 * standing there is sent by. The range is the caller's.
+	 */
+	canSeeAt(slot: number, x: number, y: number): boolean {
+		const viewer = this.sim.get(slot);
+		if (viewer === undefined) return true;
+		const vx = viewer.state.x;
+		const vy = viewer.state.y;
+		if (!visibleThroughWalls(this.buildingIdAt(vx, vy), this.buildingIdAt(x, y))) return false;
+		if (!worldIsDark(this.sim.clock.darkAlpha)) return true;
+		const dx = x - vx;
+		const dy = y - vy;
+		return visibleInDark(true, this.litAt(x, y) ? 1 : 0, dx * dx + dy * dy);
+	}
+
+	/** the id of the building (x, y) is inside, 0 outdoors (§4.3 rule 1) */
+	private buildingIdAt(x: number, y: number): number {
+		const b = buildingAt(this.sim.world, x, y);
+		return b !== undefined ? b.id : 0;
+	}
+
+	/** is (x, y) inside some light this tick (the horde's own test, §4.3 rule 2)? With no horde there is no dark rule */
+	private litAt(x: number, y: number): boolean {
+		const horde = this.sim.horde;
+		return horde === undefined || positionLit(horde.refs, x, y);
 	}
 
 	/**
@@ -448,11 +537,13 @@ export class Replicator {
 
 	/** queue a World event for everyone in the world */
 	queue(event: WorldEvent): void {
+		if (urgentEvent(event)) this.urgent = true;
 		this.broadcast.push(event);
 	}
 
 	/** queue a World event for one client only (roster on join, loot flags in F3…) */
 	queueFor(slot: number, event: WorldEvent): void {
+		if (urgentEvent(event)) this.urgent = true;
 		let list = this.directed.get(slot);
 		if (list === undefined) {
 			list = new Array<WorldEvent>();
@@ -554,7 +645,7 @@ export class Replicator {
 		const items = this.sim.items;
 		if (items === undefined) return;
 		this.initItems.clear();
-		for (const add of items.initFor(sp.state.x, sp.state.y, this.initItems)) this.queueFor(sp.slot, add);
+		for (const add of items.initFor(sp.slot, this.initItems)) this.queueFor(sp.slot, add);
 		this.initItems.clear();
 	}
 
@@ -651,8 +742,9 @@ export class Replicator {
 		} else if (this.tallyRound === undefined && tick % TALLY_EVERY_TICKS === 0) {
 			this.collectTallies(false);
 		}
-		if (tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
-		this.flushFx(tick);
+		// on the snapshot's cadence (audit M3), or at once for what cannot wait (`urgentEvent`)
+		if (this.urgent || tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
+		if (tick % FX_FLUSH_EVERY_TICKS === 0) this.flushFx(tick);
 		if (tick % SNAP_NEAR_EVERY_TICKS === 0) this.sendSnapshots();
 	}
 
@@ -745,10 +837,14 @@ export class Replicator {
 		}
 	}
 
-	/** one ZombieDied, to each client that could see that zombie in the last rounds (§4.3, §4.4) */
+	/**
+	 * One ZombieDied, to each client that is DRAWING that zombie (§4.3, §4.4): a snapshot carried it to them and not so
+	 * long ago that their track retired. In range was not enough (audit L2): a zombie in the dark or in a building is in
+	 * range and never sent, and its death told them where it had been.
+	 */
 	private announceZombieDeath(d: ZombieDeath): void {
 		for (const viewer of this.sim.players()) {
-			if (this.hordeRings.ring(viewer.slot, d.netId) === Ring.Out) continue;
+			if (!this.hordeRings.hasTrack(viewer.slot, d.netId, this.sim.tick, this.sim.simHz)) continue;
 			this.queueFor(viewer.slot, {
 				t: WorldEv.ZombieDied,
 				netId: d.netId,
@@ -774,6 +870,7 @@ export class Replicator {
 	}
 
 	private flushWorld(tick: number): void {
+		this.urgent = false;
 		if (this.broadcast.size() > 0) {
 			const res = encodeWorld({ tick, events: this.broadcast });
 			this.stats.droppedEvents += res.dropped;
@@ -803,31 +900,62 @@ export class Replicator {
 	}
 
 	/**
-	 * The effects of this tick, one batch per client, filtered by §4.3: an effect is sent to a viewer when it
-	 * happened inside their interest radius (the same INTEREST_EXIT band the entities use, so a tracer and the
-	 * zombie it hits arrive together), and a `Shake` only to the survivor it belongs to.
+	 * The effects since the last flush, one batch per client (audit M3: on the snapshot's cadence, stamped with this
+	 * tick, which is when the client plays them), each to the viewers it may reach (§4.3):
+	 *   - a `Shake` to the survivor it belongs to, and nobody else;
+	 *   - anything else inside the viewer's outermost interest ring (INTEREST_EXIT, so a tracer and the zombie it hits
+	 *     arrive together), and -- when it shows something the roof or the dark hides: a zombie's blood or debris, a
+	 *     spit, a sound, a shot's hit on a zombie -- only where the viewer could see it (`seesAt`, audit L2): a zombie
+	 *     the snapshot withholds in the dark used to be given away by its own blood;
+	 *   - a `ProjEnd` to the viewers its `ProjSpawn` went to.
+	 * The shooter always gets their own shot whole: it is their feedback, and their client drew the line already.
 	 */
 	private flushFx(tick: number): void {
 		if (this.fxQueue.size() === 0) return;
+		const dark = worldIsDark(this.sim.clock.darkAlpha);
+		this.prepareFx(dark);
 		for (const viewer of this.sim.players()) {
 			const list = this.fxForViewer;
 			list.clear();
-			for (const e of this.fxQueue) {
-				const slot = fxSlot(e);
-				if (slot !== SLOT_NONE) {
-					if (slot === viewer.slot) list.push(e);
+			const vx = viewer.state.x;
+			const vy = viewer.state.y;
+			const vb = this.buildingIdAt(vx, vy);
+			for (const en of this.fxEntries) {
+				const e = en.e;
+				if (e.t === FxType.Shake) {
+					if (e.slot === viewer.slot) list.push(e);
 					continue;
 				}
-				const at = fxPosition(e);
-				if (at !== undefined && !this.inFxRange(viewer, at.x, at.y)) continue;
+				if (e.t === FxType.ProjEnd) {
+					const seen = this.projSeen.get(e.projId);
+					if (seen !== undefined) {
+						if (maskHas(seen, viewer.slot)) list.push(e);
+						continue;
+					}
+				}
+				if (!en.placed) {
+					list.push(e);
+					continue;
+				}
+				const dx = en.x - vx;
+				const dy = en.y - vy;
+				const d2 = dx * dx + dy * dy;
+				if (d2 > FX_RANGE2) continue;
+				if (e.t === FxType.Shot) {
+					const shown = this.shotFor(en, e, viewer.slot, vb, vx, vy);
+					if (shown !== undefined) list.push(shown);
+					continue;
+				}
+				if (en.sight && !this.seesAt(vb, en.building, en.lit, d2)) continue;
 				list.push(e);
+				if (e.t === FxType.ProjSpawn) this.noteProj(e.projId, viewer.slot);
 			}
 			if (list.size() === 0) continue;
 			const res = encodeFx({ tick, events: list });
 			this.stats.droppedEvents += res.dropped;
 			for (const packet of res.packets) {
 				const len = buffer.len(packet);
-				if (len > UNRELIABLE_PAYLOAD_LIMIT) {
+				if (len > UNRELIABLE_PAYLOAD_LIMIT || len > FX_MAX_BYTES) {
 					this.stats.droppedEvents += 1;
 					continue;
 				}
@@ -837,14 +965,150 @@ export class Replicator {
 				this.addBytes(viewer.slot, len + REMOTE_OVERHEAD_BYTES);
 			}
 		}
+		// every end of this batch has gone to whoever saw its spawn: the projectile is over
+		for (const en of this.fxEntries) {
+			const e = en.e;
+			if (e.t === FxType.ProjEnd) this.projSeen.delete(e.projId);
+		}
 		this.fxQueue.clear();
 	}
 
-	/** an effect is worth sending while it happens inside the viewer's outermost interest ring (§4.3) */
-	private inFxRange(viewer: ServerPlayer, x: number, y: number): boolean {
-		const dx = x - viewer.state.x;
-		const dy = y - viewer.state.y;
-		return dx * dx + dy * dy <= FX_RANGE2;
+	/** places every effect of the batch once (`FxEntry`): where it is, and what of it the dark or a roof may hide */
+	private prepareFx(dark: boolean): void {
+		const entries = this.fxEntries;
+		entries.clear();
+		for (const e of this.fxQueue) {
+			let en = this.fxEntryPool[entries.size()];
+			if (en === undefined) {
+				en = {
+					e,
+					placed: false,
+					x: 0,
+					y: 0,
+					sight: false,
+					building: 0,
+					lit: true,
+					hitSight: undefined,
+					hitBuilding: undefined,
+					hitLit: undefined,
+				};
+				this.fxEntryPool.push(en);
+			}
+			en.e = e;
+			en.placed = false;
+			en.sight = false;
+			en.building = 0;
+			en.lit = true;
+			en.hitSight = undefined;
+			en.hitBuilding = undefined;
+			en.hitLit = undefined;
+			entries.push(en);
+			if (e.t === FxType.Shake) continue;
+			if (e.t === FxType.Shot) {
+				this.prepareShot(en, e, dark);
+				continue;
+			}
+			if (e.t === FxType.Tracer) {
+				this.place(en, e.x1, e.y1);
+			} else if (e.t === FxType.SolidShake) {
+				if (e.x !== undefined && e.y !== undefined) this.place(en, e.x, e.y);
+			} else {
+				this.place(en, e.x, e.y);
+				// what shows a zombie: its green blood, its debris (a chewed wall, an exploder), a spit, a sound. A survivor's
+				// red blood, an explosion (its own light), a boss's needle, a survivor's arrow: sent in range, as a survivor
+				// or a boss is
+				if (e.t === FxType.Blood) {
+					en.sight = e.kind === BloodKind.Green;
+				} else if (e.t === FxType.Debris) {
+					en.sight = e.material !== BOSS_DEBRIS;
+				} else if (e.t === FxType.Sound) {
+					en.sight = true;
+				} else if (e.t === FxType.ProjSpawn) {
+					en.sight = e.kind === ProjKind.Spit;
+					this.openProj(e.projId);
+				}
+			}
+			if (en.sight) {
+				en.building = this.buildingIdAt(en.x, en.y);
+				en.lit = !dark || this.litAt(en.x, en.y);
+			}
+		}
+	}
+
+	private place(en: FxEntry, x: number, y: number): void {
+		en.placed = true;
+		en.x = x;
+		en.y = y;
+	}
+
+	/** a shot is placed at its shooter (or its first hit); each hit on a zombie carries its own sight */
+	private prepareShot(en: FxEntry, e: FxShot, dark: boolean): void {
+		const shooter = e.slot !== SLOT_NONE ? this.sim.get(e.slot) : undefined;
+		if (shooter !== undefined) this.place(en, shooter.state.x, shooter.state.y);
+		else if (e.hits.size() > 0) this.place(en, e.hits[0].x, e.hits[0].y);
+		let any = false;
+		for (const h of e.hits) if (h.hit === HitKind.Zombie) any = true;
+		if (!any) return;
+		const sight = new Array<boolean>();
+		const building = new Array<number>();
+		const lit = new Array<boolean>();
+		for (const h of e.hits) {
+			const zombie = h.hit === HitKind.Zombie;
+			sight.push(zombie);
+			building.push(zombie ? this.buildingIdAt(h.x, h.y) : 0);
+			lit.push(!zombie || !dark || this.litAt(h.x, h.y));
+		}
+		en.hitSight = sight;
+		en.hitBuilding = building;
+		en.hitLit = lit;
+	}
+
+	/** §4.3 at a point the caller already placed: not behind a roof the viewer is not under, and seen in the dark */
+	private seesAt(viewerBuilding: number, building: number, lit: boolean, dist2: number): boolean {
+		return visibleThroughWalls(viewerBuilding, building) && visibleInDark(true, lit ? 1 : 0, dist2);
+	}
+
+	/**
+	 * The shot as `slot` may see it: whole for its shooter and for a shot that hit no zombie; otherwise without the
+	 * hits on zombies the viewer could not see (a copy, only then), and not at all when none is left.
+	 */
+	private shotFor(en: FxEntry, e: FxShot, slot: number, vb: number, vx: number, vy: number): FxShot | undefined {
+		const sight = en.hitSight;
+		const building = en.hitBuilding;
+		const lit = en.hitLit;
+		if (e.slot === slot || sight === undefined || building === undefined || lit === undefined) return e;
+		let kept = 0;
+		const n = e.hits.size();
+		const shown = new Array<boolean>();
+		for (let i = 0; i < n; i++) {
+			const h = e.hits[i];
+			const dx = h.x - vx;
+			const dy = h.y - vy;
+			const ok = !sight[i] || this.seesAt(vb, building[i], lit[i], dx * dx + dy * dy);
+			shown.push(ok);
+			if (ok) kept += 1;
+		}
+		if (kept === n) return e;
+		if (kept === 0) return undefined;
+		const hits = new Array<ShotHit>();
+		for (let i = 0; i < n; i++) if (shown[i]) hits.push(e.hits[i]);
+		return { t: FxType.Shot, slot: e.slot, weapon: e.weapon, hits };
+	}
+
+	/**
+	 * A projectile starts, seen by nobody yet (`noteProj` adds each viewer its ProjSpawn goes to): a spit nobody could
+	 * see ends for nobody, instead of falling back to "everybody in range" at its end.
+	 */
+	private openProj(projId: number): void {
+		if (!this.projSeen.has(projId) && this.projSeen.size() >= PROJ_SEEN_MAX) this.projSeen.clear();
+		this.projSeen.set(projId, 0);
+	}
+
+	/** the ProjSpawn of `projId` went to `slot`: its ProjEnd will too */
+	private noteProj(projId: number, slot: number): void {
+		const mask = this.projSeen.get(projId) ?? 0;
+		if (maskHas(mask, slot)) return;
+		this.projSeen.set(projId, mask + 2 ** slot);
 	}
 
 	private sendSnapshots(): void {

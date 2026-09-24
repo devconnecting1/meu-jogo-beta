@@ -137,7 +137,7 @@ export function fromWireFx(e: WireFx): SimFx | undefined {
  */
 export function fxPosition(e: WireFx): { x: number; y: number } | undefined {
 	if (e.t === FxType.Shake) return undefined;
-	if (e.t === FxType.SolidShake) return undefined;
+	if (e.t === FxType.SolidShake) return e.x !== undefined && e.y !== undefined ? { x: e.x, y: e.y } : undefined;
 	if (e.t === FxType.Shot) {
 		const hits = e.hits;
 		return hits.size() > 0 ? { x: hits[0].x, y: hits[0].y } : undefined;
