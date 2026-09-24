@@ -1284,10 +1284,13 @@ const SQUARE_NEEDS = {
 	kiosk: q => q.tags.kiosk >= 1,
 	cleared: q => q.pattern.waste >= 1 && q.tags.rubble >= 1,
 };
+/** a program that holds its own pieces and nothing else: no planter, lamp post or bench on a cleared lot's bare earth */
+const SQUARE_ONLY = { cleared: ["rubble", "barrier", "dumpster"] };
 
 /**
  * MOB-07: every downtown square has a program (a known one, under its cap in the town, never twice with the same look)
- * and holds what that program says (a fountain, the memorial and its vigil, a bed and its trees...), at least
+ * and holds what that program says (a fountain, the memorial and its vigil, a bed and its trees...; a cleared lot its
+ * rubble, barriers and skip and nothing else), at least
  * SQUARE_PIECES_MIN standing pieces, every one inside it and SQUARE_CLEAR from every building; its floor has its
  * pattern (the mosaic, a bed, a deck, bare earth or the grates of its trees) and at least three things lying on it,
  * none under a solid. And no downtown block is left with a stretch of empty paving a square would have taken (the
@@ -1364,6 +1367,15 @@ function squareChecks(w, buildings, standing, reach, fail) {
 				cx(q),
 				cy(q),
 			);
+		const only = SQUARE_ONLY[q.program];
+		const stray = only === undefined ? [] : pieces.filter(p => !only.includes(p.tags));
+		if (stray.length > 0)
+			fail(
+				"MOB-07",
+				`${where}: ${stray.map(p => p.tags).join(",")} on it (it holds ${only.join(", ")} and nothing else)`,
+				cx(q),
+				cy(q),
+			);
 		// on foot: a point just round some piece of it (CID-05 samples every lot; this is the square's own)
 		const round = pieces.flatMap(p =>
 			Object.values(NORMAL).map(n => [cx(p) + n[0] * (p.w / 2 + 26), cy(p) + n[1] * (p.h / 2 + 26)]),
@@ -1371,10 +1383,38 @@ function squareChecks(w, buildings, standing, reach, fail) {
 		if (!round.some(([x, y]) => reach.at(x, y).reached))
 			fail("MOB-07", `${where} cannot be reached on foot`, cx(q), cy(q));
 	}
+	// a grove past its cap (a look past its six): only on a square too small for every other program still under its
+	// cap -- a downtown with more small squares than the deck holds (townSquares.ts `deal`)
+	const sixth = TSQ.SQUARE_LOOKS?.grove;
+	let past = 0;
+	for (const { q } of all) {
+		if (q.program !== "grove" || sixth === undefined || q.look < sixth) continue;
+		past++;
+		const short = Math.min(q.w, q.h);
+		const fits = Object.keys(TSQ.SQUARE_CAP).filter(
+			p =>
+				p !== "grove" &&
+				p !== "cleared" &&
+				TSQ.SQUARE_MIN_SIDE[p] <= short &&
+				(out.programs[p] ?? 0) < TSQ.SQUARE_CAP[p],
+		);
+		if (fits.length > 0)
+			fail(
+				"MOB-07",
+				`a grove square at (${fmt(q.x)},${fmt(q.y)}) past the town's groves where a ${fits.join(" or ")} fits`,
+				cx(q),
+				cy(q),
+			);
+	}
 	for (const [p, n] of Object.entries(out.programs)) {
 		const cap = TSQ.SQUARE_CAP?.[p];
-		if (cap !== undefined && n > cap) fail("MOB-07", `${n} ${p} squares in one town (${cap} at most)`, 0, 0);
+		if (cap === undefined) continue;
+		const over = p === "grove" ? past : 0;
+		if (n - over > cap) fail("MOB-07", `${n} ${p} squares in one town (${cap} at most)`, 0, 0);
+		if (over > 0 && n - over < cap)
+			fail("MOB-07", `${over} groves past the town's own while it has ${n - over} of ${cap}`, 0, 0);
 	}
+	out.past = past;
 	// the leftover: no stretch of empty paving a square would have taken
 	for (const lot of w.lots) {
 		if (lot.kind !== "block" || lot.zone !== "commercial" || lot.program !== undefined) continue;
@@ -3001,7 +3041,7 @@ function validate(seed) {
 /** EDI-17 over the run: towns with a campus */
 const CAMPUS_RUN = { towns: 0, campus: 0 };
 /** the downtown squares over the run (MOB-07): how many a town, of each program, and their pieces */
-const SQUARE_RUN = { towns: 0, counts: [], pieces: 0, programs: {}, towns_with: {} };
+const SQUARE_RUN = { towns: 0, counts: [], pieces: 0, programs: {}, towns_with: {}, past: 0 };
 let seedState = 12345;
 Math.random = () => (seedState = (seedState * 48271) % 2147483647) / 2147483647;
 const all = [];
@@ -3046,8 +3086,11 @@ for (const seed of seeds) {
 			const progs = Object.entries(sq.programs)
 				.map(([k, n]) => `${k} ${n}`)
 				.join(", ");
-			console.log(`  squares (MOB-07): ${sq.count} (${progs}) | ${sq.pieces} pieces standing in them`);
+			const past =
+				sq.past > 0 ? `; ${sq.past} of the groves past the deck's six: too small for anything else` : "";
+			console.log(`  squares (MOB-07): ${sq.count} (${progs}${past}) | ${sq.pieces} pieces standing in them`);
 			SQUARE_RUN.towns++;
+			if (sq.past > 0) SQUARE_RUN.past++;
 			SQUARE_RUN.counts.push(sq.count);
 			SQUARE_RUN.pieces += sq.pieces;
 			for (const [k, n] of Object.entries(sq.programs)) {
@@ -3126,7 +3169,7 @@ if (SQUARE_RUN.towns > 0) {
 		.map(([k, m]) => `${k} ${(m / n).toFixed(2)} (in ${SQUARE_RUN.towns_with[k]} towns)`)
 		.join(", ");
 	console.log(
-		`  squares over the run (MOB-07): ${Math.min(...c)}-${Math.max(...c)} a town, mean ${(total / n).toFixed(1)}; per town ${per}; ${(SQUARE_RUN.pieces / Math.max(1, total)).toFixed(1)} pieces a square`,
+		`  squares over the run (MOB-07): ${Math.min(...c)}-${Math.max(...c)} a town, mean ${(total / n).toFixed(1)}; per town ${per}; ${(SQUARE_RUN.pieces / Math.max(1, total)).toFixed(1)} pieces a square; groves past the deck's six in ${SQUARE_RUN.past} towns`,
 	);
 }
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));

@@ -81,7 +81,8 @@ export const SQUARE_MIN_SIDE: Record<SquareProgram, number> = {
 };
 /**
  * How many of each a town holds at most (P1: one memorial -- the town's --, a fountain or two, a cleared lot): a
- * program at its cap stays out of the deck; the grove, the plainest, takes what the others cannot
+ * program at its cap stays out of the deck; the grove, the plainest, takes what the others cannot -- past its cap too,
+ * a square too small for anything else under its cap, each on a look past its six (`laySquare`)
  */
 export const SQUARE_CAP: Record<SquareProgram, number> = {
 	fountain: 2,
@@ -348,7 +349,8 @@ function newDeck(town: number): Deck {
 
 /**
  * The next program the deck holds that fits a square this short and is not at its cap; a spent deck is shuffled again
- * (no cleared lot); the grove when nothing else can
+ * (no cleared lot); the grove when nothing else can (past its cap: a downtown with more small squares than the deck
+ * holds -- its look past the six, `laySquare`)
  */
 function deal(d: Deck, short: number): SquareProgram {
 	for (let pass = 0; pass < 2; pass++) {
@@ -688,8 +690,9 @@ function groveSquare(sq: Sq, cx: number, cy: number): void {
 	const short = ax ? s.h : s.w;
 	const a0 = ax ? s.x : s.y;
 	const P = GROVE_PITCH;
-	// what grows in the grates: a street's narrow kinds, or (the other three looks) a planter's mix with young trees
-	const site: TreeSite = sq.look >= 3 ? "shop" : "pit";
+	// what grows in the grates: a street's narrow kinds, or (the other three looks) a planter's mix with young trees; in
+	// a grove past the deck's six (`deal`), a lawn's, shrubs and all
+	const site: TreeSite = sq.look >= SQUARE_LOOKS.grove ? "plaza" : sq.look >= 3 ? "shop" : "pit";
 	const rows: Array<number> = short >= 416 ? [-(short / 2 - 104), short / 2 - 104] : [0];
 	const n = math.max(1, math.floor((long - 176) / P) + 1);
 	if (n === 1 && rows.size() === 1) {
@@ -895,12 +898,68 @@ function clearedSquare(sq: Sq): void {
 		const y = snap8(s.y + 40 + sq.rng.next() * math.max(0, s.h - 80 - h));
 		if (stand(sq, "rubble", { x, y, w, h }, true, { variant: sq.rng.int(0, 2) }) !== undefined) got++;
 	}
-	if (sq.pieces < SQUARE_PIECES_MIN) cornerPlanters(sq, 24);
+	// a narrow lot the throws missed still has its heap: the one spot the skip and the barriers leave it
+	if (got === 0) rubbleSomewhere(sq);
+	// and one its pieces leave short gets more of its own -- never a planter, a lamp post or a bench (`fill`)
+	const flanks: ReadonlyArray<DoorSide> = ax ? ["left", "right", back] : ["top", "bottom", back];
+	for (let i = 0; i < 2 && sq.pieces < SQUARE_PIECES_MIN; i++) if (!rubbleSomewhere(sq)) break;
+	for (const f of flanks) {
+		const along = alongX(f);
+		const b0 = along ? s.x : s.y;
+		const b1 = along ? s.x + s.w : s.y + s.h;
+		for (const u of [b0 + 40 + BARRIER_L / 2, b1 - 40 - BARRIER_L / 2]) {
+			if (sq.pieces >= SQUARE_PIECES_MIN) return;
+			stand(sq, "barrier", alongSide(s, f, u, BARRIER_L, BARRIER_D, 16), true, { face: f });
+		}
+	}
+	// a lot crowded to its edges: the spare barriers stacked wherever one fits
+	for (let i = 0; i < 4 && sq.pieces < SQUARE_PIECES_MIN; i++) if (!barrierSomewhere(sq)) break;
+}
+
+/**
+ * A heap of rubble wherever it fits in the square (`somewhere`). What the throws of `clearedSquare` miss in a narrow
+ * lot, where the skip at the back and the barriers along the sidewalk leave a strip EDI-11 closes to all but a spot or two.
+ */
+function rubbleSomewhere(sq: Sq): boolean {
+	const variant = sq.rng.int(0, 2);
+	return somewhere(sq, "rubble", RUBBLE_L, RUBBLE_D, () => ({ variant }));
+}
+
+/** a spare road barrier wherever it fits in the square (`somewhere`), its face by the way it lies */
+function barrierSomewhere(sq: Sq): boolean {
+	return somewhere(sq, "barrier", BARRIER_L, BARRIER_D, turn => ({ face: turn ? "left" : "top" }));
+}
+
+/**
+ * A piece `l` by `d` wherever it fits in the square (`stand`): every spot on an 8 u grid 16 u in from its edges, lying
+ * along x and turned, from a spot the square's stream picks. False when there is none.
+ */
+function somewhere(sq: Sq, tags: string, l: number, d: number, extra: (turn: boolean) => Partial<Solid>): boolean {
+	const s = sq.s;
+	const first = sq.rng.chance(0.5);
+	const start = sq.rng.next();
+	for (const turn of [first, !first]) {
+		const w = turn ? d : l;
+		const h = turn ? l : d;
+		const nx = math.floor((s.w - 32 - w) / 8) + 1;
+		const ny = math.floor((s.h - 32 - h) / 8) + 1;
+		if (nx <= 0 || ny <= 0) continue;
+		const n = nx * ny;
+		const k0 = math.min(n - 1, math.floor(start * n));
+		for (let i = 0; i < n; i++) {
+			const k = (k0 + i) % n;
+			const x = snap8(s.x + 16) + (k % nx) * 8;
+			const y = snap8(s.y + 16) + math.floor(k / nx) * 8;
+			if (stand(sq, tags, { x, y, w, h }, true, extra(turn)) !== undefined) return true;
+		}
+	}
+	return false;
 }
 
 /**
  * A square its program left with too few pieces (a narrow one: what stands round its middle did not fit) gets planters in
- * its corners, lamp posts at the middle of its sides and benches along them, facing in, until it holds enough
+ * its corners, lamp posts at the middle of its sides and benches along them, facing in, until it holds enough (not a
+ * cleared lot: it tops itself up with its own rubble and barriers, `clearedSquare`)
  */
 function fill(sq: Sq): void {
 	const s = sq.s;
@@ -1012,7 +1071,9 @@ function ensurePattern(sq: Sq, cx: number, cy: number): void {
 function laySquare(kit: TownKit, lot: Lot, s: Rect, town: number, deck: Deck): TownSquare {
 	const short = math.min(s.w, s.h);
 	const program = deal(deck, short);
-	const look = (deck.start[program] + deck.made[program]) % SQUARE_LOOKS[program];
+	// its look, from where the program's start; a grove past the deck's (`deal`: nothing else fits) the next look past them
+	const made = deck.made[program];
+	const look = made < SQUARE_LOOKS[program] ? (deck.start[program] + made) % SQUARE_LOOKS[program] : made;
 	deck.made[program] += 1;
 	const sq: Sq = {
 		kit,
@@ -1037,7 +1098,8 @@ function laySquare(kit: TownKit, lot: Lot, s: Rect, town: number, deck: Deck): T
 	else if (program === "cafe") cafeSquare(sq, cx, cy);
 	else if (program === "kiosk") kioskSquare(sq, cx, cy);
 	else clearedSquare(sq);
-	fill(sq);
+	// a cleared lot tops itself up with its own rubble and barriers (clearedSquare): no park furniture on bare earth
+	if (program !== "cleared") fill(sq);
 	ensurePattern(sq, cx, cy);
 	dressFloor(sq, program);
 	return { x: s.x, y: s.y, w: s.w, h: s.h, program, look };
