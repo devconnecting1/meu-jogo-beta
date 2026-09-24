@@ -29,11 +29,11 @@ import { isFiniteNumber } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
-import { currentWeapon, PlayerState } from "shared/game/player";
+import { applyPlayerDamage, currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { gameHours } from "shared/sim/clock";
 import { InputCommand } from "shared/net/protocol";
-import { stepPlayer } from "shared/sim/playerMove";
+import { stepPlayer, WALK_EPSILON } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
 import * as Noise from "shared/sim/ai/noise";
 import type { WeaponDef } from "shared/data/weapons";
@@ -50,6 +50,9 @@ import { TitleId } from "shared/data/titles";
 import { creditLifeNight, grantTitle } from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
+import { powerSet, ServerPower } from "./power";
+import { ServerTurrets } from "./turrets";
+import { RideEvent, ServerVehicles, VehicleNoise } from "./vehicles";
 import { WorldClock } from "./waves";
 import { WorldOut } from "./worldOut";
 import { ZombieWorld } from "./zombies";
@@ -108,10 +111,13 @@ interface TownSystems {
 	build?: ServerBuild;
 	craft?: ServerCraft;
 	interaction?: ServerInteraction;
+	vehicles?: ServerVehicles;
 	horde?: ZombieWorld;
 	progress?: Progress;
 	projectiles?: ServerProjectiles;
 	combat?: ServerCombat;
+	power?: ServerPower;
+	turrets?: ServerTurrets;
 }
 
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
@@ -215,6 +221,26 @@ export class ServerSimulation {
 	interaction?: ServerInteraction;
 	build?: ServerBuild;
 	craft?: ServerCraft;
+	/**
+	 * The bicycles and motorcycles being ridden (DESIGN_RULES VEI-05). Built with the constructions, because a vehicle
+	 * IS one: it exists wherever the server owns the placed builds, and nowhere else.
+	 */
+	vehicles?: ServerVehicles;
+	/**
+	 * (VEI-05) Everything that happens to a ride: on, off (and why), a crash, the horn, and every second the distance
+	 * ridden -- the odometer the "Rider" achievement counts. Undefined drops them.
+	 */
+	onRide?: (sp: ServerPlayer, e: RideEvent) => void;
+	/**
+	 * (VEI-05) A vehicle made a noise: the engine every half second, the horn or the bell, a crash. It has already
+	 * reached the horde through `emitSound` (their hearing today) when this is called; this is the same event for
+	 * anything else that listens.
+	 */
+	onVehicleNoise?: (noise: VehicleNoise) => void;
+	/** the electric grid (ELE-01..08): boxes, generators, switched machines, drones — with the interactive world */
+	power?: ServerPower;
+	/** the machines that shoot (ELE-04, ELE-05) — with the grid AND the horde they shoot at */
+	turrets?: ServerTurrets;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
 	/** the result of a survivor's action press, for the caller's sounds and toasts */
@@ -322,6 +348,8 @@ export class ServerSimulation {
 		}
 		// from here on nothing is built, only swapped
 		for (const sp of this.roster) this.build?.remove(sp.slot, sp.save);
+		// a vehicle under somebody belonged to the old streets, like the rest of what they built (VEI-05)
+		for (const sp of this.roster) sp.state.ride = undefined;
 		// the old town stops feeding the outbox: nothing that happens to it is news any more
 		this.items?.detach();
 		this.build?.detach();
@@ -349,10 +377,13 @@ export class ServerSimulation {
 		this.build = systems.build;
 		this.craft = systems.craft;
 		this.interaction = systems.interaction;
+		this.vehicles = systems.vehicles;
 		this.horde = systems.horde;
 		this.progress = systems.progress;
 		this.projectiles = systems.projectiles;
 		this.combat = systems.combat;
+		this.power = systems.power;
+		this.turrets = systems.turrets;
 	}
 
 	/**
@@ -373,12 +404,34 @@ export class ServerSimulation {
 			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
 			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
+			// the grid keeps its machines by the build's world hooks, so it exists first (ELE-01)
+			const power = new ServerPower({
+				world,
+				clock: this.clock,
+				simHz: this.simHz,
+				// the maker's Robotics / Engineering, while they are in the world
+				saveOf: slot => this.bySlot.get(slot)?.save,
+				// a drone escorts a survivor who is in the world and alive
+				bodyOf: slot => {
+					const sp = this.bySlot.get(slot);
+					return sp !== undefined && !sp.state.dead ? sp.state : undefined;
+				},
+				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
+				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
+				// §9.3: an assisted run earns no achievement (Thomas Edison), as it earns no coins
+				paysRewards: slot => {
+					const sp = this.bySlot.get(slot);
+					return sp === undefined || this.pays(sp);
+				},
+			});
+			out.power = power;
 			const build = new ServerBuild({
 				world,
 				out: this.worldOut,
 				// the horde is built below; the closure defers the lookup so a wall dirties the flow field
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+				onSolid: (s, added) => power.note(s, added),
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({
@@ -386,6 +439,28 @@ export class ServerSimulation {
 				items,
 				out: this.worldOut,
 				fx: event => this.onFx?.(event),
+				machines: power,
+			});
+			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
+			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
+			out.vehicles = new ServerVehicles({
+				world,
+				noise: n => this.vehicleNoise(n),
+				fx: event => this.onFx?.(event),
+				event: (sp, e) => this.onRide?.(sp, e),
+				hooks: {
+					hurt: (sp, raw, dir) => {
+						if (this.combat !== undefined) this.combat.damagePlayer(sp, raw, dir, true);
+						else if (applyPlayerDamage(sp.state, sp.save, raw, true)) sp.state.reactionDir = dir;
+					},
+					ram: (sp, z, damage, knock, stun, away) => {
+						// weapon kind -1: a kill by the vehicle is nobody's weapon (not the holstered one), so it counts for
+						// the kill credit and Street Sweeper, never for Quiet Archer or Long Shot (review of 5874cfa, V3)
+						if (this.combat !== undefined) this.combat.hitZombieWith(sp, z, damage, knock, stun, away, -1);
+						else reactToHit(z, away, knock, stun);
+					},
+					shove: (z, dir, knock, stun) => reactToHit(z, dir, knock, stun),
+				},
 			});
 		}
 		// the backpack verbs work with or without the interactive world (server/sim/backpack.ts): only a build recipe
@@ -448,6 +523,21 @@ export class ServerSimulation {
 		});
 		out.combat = combat;
 		projectiles.combat = combat;
+		// the machines that shoot (ELE-04, ELE-05): they need the grid (F3) AND the horde; a lamp drone's light is
+		// one the horde sees by
+		const power = out.power;
+		if (power !== undefined) {
+			horde.refs.carriedLights = power.lights;
+			out.turrets = new ServerTurrets({
+				world,
+				power,
+				zombiesNear: (x, y, r, tick, found) => horde.zombiesNear(x, y, r, tick, found),
+				bosses: () => horde.bossRoster.list,
+				damage: combat,
+				fx: event => this.onFx?.(event),
+				noise: (x, y, radius) => emitSound(horde.refs, x, y, radius, true),
+			});
+		}
 		// §2.3/MP-00: from here on a survivor only ever loses hp through the server's combat. The brains still
 		// call `damageToPlayer`, which is inert at MP_PHASE ≥ 2 — this sink is what makes the bite land.
 		horde.refs.damagePlayer = combat.damageSink(p => this.slotOfState(p));
@@ -456,6 +546,12 @@ export class ServerSimulation {
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
 		return out;
+	}
+
+	/** VEI-05: a vehicle's noise reaches the horde's hearing first, then whoever else listens (`onVehicleNoise`) */
+	private vehicleNoise(n: VehicleNoise): void {
+		if (this.horde !== undefined) emitSound(this.horde.refs, n.x, n.y, n.radius, false);
+		this.onVehicleNoise?.(n);
 	}
 
 	/**
@@ -606,10 +702,14 @@ export class ServerSimulation {
 		// inherited by whoever takes it next (§4.4: a slot is stable for a session, not beyond it)
 		this.combat?.remove(slot);
 		this.progress?.remove(slot);
+		// a vehicle under them stays in the town, where they were (VEI-05) -- before the builds forget the slot
+		this.vehicles?.remove(sp);
 		// a construction still on the cursor is refunded, not forfeited: they paid for it
 		this.build?.remove(slot, sp.save);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
+		// the drones escorting them fly home
+		this.power?.remove(slot);
 		this.items?.forget(slot);
 		this.backpack.remove(slot);
 		this.bySlot.delete(slot);
@@ -760,21 +860,25 @@ export class ServerSimulation {
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,
 			// a skill) and its weapon machine (a switch) already see them, exactly as the client predicted them
 			this.backpack.beforeCommand(sp, cmd, this.tick);
+			const rode = sp.state.ride !== undefined;
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
+			// VEI-05: what the ride cost or caused this step (a crash, a zombie ahead, fuel, noise), on the same command
+			this.vehicles?.afterStep(sp, res, this.horde?.zombies ?? EMPTY_ZOMBIES, this.tickDt);
 			noteStep(sp, cmd, res.walking);
 			// a filled tick consumes nothing (players.ts), so only a command the client really sent can count — and
-			// only a step that actually walked, or an edge: a stick held against a wall repeats itself for free
-			this.notePresence(
-				sp,
-				sp.counters.consumed > consumed && ((cmd.moveMag > 0 && res.walking) || cmd.edges !== 0),
-			);
+			// only a step that actually walked, or an edge: a stick held against a wall repeats itself for free. A
+			// rider's step never "walks" (no feet, no footsteps: VEI-05), so for them the stick moving the vehicle is the
+			// presence -- else three minutes on a motorcycle read as AFK and lost the day's credit (review V1)
+			const went = res.walking || (rode && res.moved > WALK_EPSILON);
+			this.notePresence(sp, sp.counters.consumed > consumed && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
-			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção")
+			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção"). On a
+			// vehicle both hands are on the bars (VEI-05): holstered too, and the attack button is the bell or horn
 			this.swinger = sp;
-			const armed = this.build?.placing(sp.slot) === true ? holstered(cmd) : cmd;
-			this.combat?.stepPlayer(sp, armed, this.tick, this.tickDt);
+			const holster = this.build?.placing(sp.slot) === true || this.vehicles?.riding(sp.slot) === true;
+			this.combat?.stepPlayer(sp, holster ? holstered(cmd) : cmd, this.tick, this.tickDt);
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
@@ -787,6 +891,8 @@ export class ServerSimulation {
 				this.horde.step(this.roster, this.tickDt, this.tick);
 				// after the bodies moved, so a flame burns what is in front of it NOW and not a tick ago
 				this.projectiles?.step(this.horde.refs, this.tickDt);
+				// §3.1 "torretas e armadilhas": after the projectiles, at the zombies where they stand now
+				this.turrets?.step(this.tick, this.tickDt);
 			} else {
 				// nobody is in the world: there is no source for the flow field, no light, nothing to hunt
 				// and nobody to see it. The clock keeps running (a server that empties at dusk must still be
@@ -841,6 +947,13 @@ export class ServerSimulation {
 		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
 		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);
 		const reload = edgeCount(cmd.edges, EdgeShift.Reload);
+		const vehicles = this.vehicles;
+		if (vehicles !== undefined && vehicles.riding(sp.slot)) {
+			// VEI-05: on a vehicle E gets off and the attack button is the bell or the horn; nothing else is in reach
+			if (action > 0) vehicles.getOff(sp);
+			if (attack > 0) vehicles.horn(sp);
+			return;
+		}
 		if (build.placing(sp.slot)) {
 			// keep the sticky ghost tracking this tick's position before any edge consumes it
 			build.ghost(sp.slot, sp.state);
@@ -858,6 +971,8 @@ export class ServerSimulation {
 			return;
 		}
 		if (action <= 0) return;
+		// a rideable vehicle in reach takes the press (a broken one falls through: the interaction repairs it)
+		if (vehicles !== undefined && vehicles.tryMount(sp)) return;
 		const outcome = interaction.act({
 			slot: sp.slot,
 			state: sp.state,
@@ -878,6 +993,9 @@ export class ServerSimulation {
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
+		this.vehicles?.step(this.tickDt);
+		// the grid keeps running with nobody in town: the sun still charges the boxes (ELE-02)
+		this.power?.step(this.tickDt, this.tick);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
 		items.sweepInterest(this.tickDt);

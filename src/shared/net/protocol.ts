@@ -87,6 +87,28 @@
  *     server → client only and purely drawn (the marks over the heads, client/view/zombieAwareness.ts): no client
  *     ever sends a state, and nothing on the client acts on it. The Detect flag keeps its meaning (the moment a chase
  *     starts, the groan the audio plays).
+ * 18. (ELE-01..08, the electric grid) `PowerSet{id u32, state u8, pilot u8}`, 7 B with the tag: an electric build's
+ *     state as server/sim/power.ts publishes it — bit 0 working (a consumer fed and switched on, a generator
+ *     running, a box holding charge), bits 1-2 the level of its store (box charge, drone battery, oil tank: 0..3),
+ *     bit 3 a drone in the air, bit 4 a switched machine's switch (a lamp can be on and dark: no power; the HUD's
+ *     "E: Turn off" needs to know) — and the slot that drone escorts. GLOBAL, sent only on a change (a store crossing a
+ *     third with 3 % of hysteresis, a switch, a launch), at most POWER_PUBLISH_MAX per settle of the grid (4 Hz),
+ *     and once per machine in a newcomer's WorldInit, after the SolidAdds. The decoder refuses a non-dynamic id,
+ *     a reserved bit, an invalid slot, a drone in the air with nobody to escort and a pilot for anything else. What
+ *     it cannot carry it does not need: the turrets' shots are the existing `Tracer` Fx (interest-filtered, from the
+ *     muzzle), and a flying drone's position is `droneOffset(id, clock)` beside its survivor, computed alike on
+ *     both sides (shared/data/power.ts).
+ * 19. (VEI-05, riding) No new message and no byte more: two S→C fields in space the layouts already had. The C→S side
+ *     does not change at all -- getting on and off is the E edge every command already carries, resolved by the server
+ *     at its own position (server/sim/vehicles.ts), and the speed is never on the wire.
+ *       - Self block: its three reserved bytes carry the rider's own vehicle as the 24-bit `ride` key of
+ *         shared/sim/vehicle.ts `packRide` -- u16 (kind · 16384 + heading in 1/16384 turns) then u8 speed (2 u/s
+ *         steps), all zero on foot. The simulation keeps that state on exactly this grid, so the prediction replays
+ *         from the server's own numbers (§2.2). Decoded only if `rideKeyValid`: kind 0..2, on foot exactly zero, the
+ *         speed within that kind's top speed; anything else drops the part, like a bad modFlags.
+ *       - Other survivors: the vehicle KIND in bits 4-5 of the slot byte (slot + kind · 16, slot still 0..5), and
+ *         while riding `moveAng` (the feet direction, meaningless on a saddle) is the vehicle's heading. Kind 3 or a
+ *         slot byte ≥ 48 drops the part.
  */
 import {
 	NetReader,
@@ -124,8 +146,10 @@ import {
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
+import { POWER_STATE_MASK, powerFlying } from "shared/data/power";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
 import { SAVE_LIMITS } from "shared/game/save";
+import { rideKeyValid } from "shared/sim/rideKey";
 
 // ================================================================ remotes (§4.1)
 
@@ -452,7 +476,17 @@ export interface SelfSnap {
 	modFlags: number;
 	/** equipped weapon id (0..255) */
 	weapon: number;
+	/**
+	 * (VEI-05) the vehicle this survivor rides, as shared/sim/vehicle.ts `packRide` (24 bits; 0 or absent = on foot):
+	 * what the prediction replays from. Validated with `rideKeyValid` on decode.
+	 */
+	ride?: number;
 }
+
+/** (VEI-05) slot byte of another survivor: the slot below RIDE_SLOT_SCALE, the vehicle kind times it above */
+const RIDE_SLOT_SCALE = 16;
+/** VehicleKind 0..2 (shared/data/buildings.ts) */
+export const RIDE_KIND_MAX = 2;
 
 export interface PlayerSnap {
 	/** 0..MAX_PLAYERS-1 */
@@ -470,8 +504,10 @@ export interface PlayerSnap {
 	hp: number;
 	/** revive progress 0..1 */
 	revive: number;
-	/** feet direction, radians (u8) */
+	/** feet direction, radians (u8); while riding, the vehicle's heading */
 	moveAng: number;
+	/** (VEI-05) VehicleKind they ride, 0..RIDE_KIND_MAX; 0 or absent = on foot */
+	ride?: number;
 }
 
 export interface ZombieSnap {
@@ -587,9 +623,10 @@ function writeSelf(w: NetWriter, s: SelfSnap): void {
 	w.frac8(s.bleed);
 	w.u8(clampInt(s.modFlags, 0, 255) & MOD_FLAGS_MASK);
 	w.u8(s.weapon);
-	w.u8(0);
-	w.u8(0);
-	w.u8(0);
+	// VEI-05: the bytes that were reserved. A key the decoder would refuse is sent as "on foot" instead
+	const ride = s.ride !== undefined && rideKeyValid(s.ride) ? s.ride : 0;
+	w.u16(math.floor(ride / 256));
+	w.u8(ride % 256);
 }
 
 function readSelf(r: NetReader): SelfSnap | undefined {
@@ -610,8 +647,8 @@ function readSelf(r: NetReader): SelfSnap | undefined {
 	const bleed = r.frac8();
 	const modFlags = r.u8();
 	const weapon = r.u8();
-	r.skip(3);
-	if (modFlags > MOD_FLAGS_MASK) return undefined;
+	const ride = r.u16() * 256 + r.u8();
+	if (modFlags > MOD_FLAGS_MASK || !rideKeyValid(ride)) return undefined;
 	return {
 		x,
 		y,
@@ -630,11 +667,12 @@ function readSelf(r: NetReader): SelfSnap | undefined {
 		bleed,
 		modFlags,
 		weapon,
+		ride,
 	};
 }
 
 function writePlayer(w: NetWriter, p: PlayerSnap): void {
-	w.u8(clampInt(p.slot, 0, MAX_PLAYERS - 1));
+	w.u8(clampInt(p.slot, 0, MAX_PLAYERS - 1) + clampInt(p.ride ?? 0, 0, RIDE_KIND_MAX) * RIDE_SLOT_SCALE);
 	w.pos(p.x);
 	w.pos(p.y);
 	w.angle8(p.aim);
@@ -647,7 +685,9 @@ function writePlayer(w: NetWriter, p: PlayerSnap): void {
 }
 
 function readPlayer(r: NetReader): PlayerSnap | undefined {
-	const slot = r.u8();
+	const slotByte = r.u8();
+	const slot = slotByte % RIDE_SLOT_SCALE;
+	const ride = math.floor(slotByte / RIDE_SLOT_SCALE);
 	const x = r.pos();
 	const y = r.pos();
 	const aim = r.angle8();
@@ -657,8 +697,8 @@ function readPlayer(r: NetReader): PlayerSnap | undefined {
 	const hp = r.frac8();
 	const revive = r.frac8();
 	const moveAng = r.angle8();
-	if (!validSlot(slot)) return undefined;
-	return { slot, x, y, aim, flags, weapon, swing, hp, revive, moveAng };
+	if (!validSlot(slot) || ride > RIDE_KIND_MAX) return undefined;
+	return { slot, x, y, aim, flags, weapon, swing, hp, revive, moveAng, ride };
 }
 
 function writeZombie(w: NetWriter, z: ZombieSnap): void {
@@ -1332,6 +1372,8 @@ export const WorldEv = {
 	WorldReset: 17,
 	/** (MP-23) the scoreboard's two numbers of a survivor: the day of this life and the zombies put down */
 	PlayerTally: 18,
+	/** (ELE-01..08) an electric build's state: working, the level of its store, a drone in the air and its survivor */
+	PowerSet: 19,
 } as const;
 
 /** SolidAdd.state / DoorSet.state */
@@ -1447,6 +1489,21 @@ export interface WLightSet {
 	t: typeof WorldEv.LightSet;
 	id: number;
 	powered: boolean;
+}
+
+/**
+ * (ELE-01..08) One electric build's state, as server/sim/power.ts publishes it. GLOBAL like `SolidAdd`: a drone in the
+ * air flies with its survivor far from the pad, so a client near the survivor but not the pad must hear it too, and
+ * the grid only publishes on a change (a box crossing a third, a lamp switched, a drone launched).
+ */
+export interface WPowerSet {
+	t: typeof WorldEv.PowerSet;
+	/** the construction's dynamic id (≥ 1 000 000) */
+	id: number;
+	/** shared/data/power.ts `PowerBit`: bit 0 working, bits 1-2 the store's level 0..3, bit 3 a drone in the air, bit 4 on */
+	state: number;
+	/** the slot a drone in the air escorts; SLOT_NONE for everything else (and required iff the Flying bit is set) */
+	pilot: number;
 }
 
 export interface WItemAdd {
@@ -1615,7 +1672,8 @@ export type WorldEvent =
 	| WInitBegin
 	| WPlayerProfile
 	| WWorldReset
-	| WPlayerTally;
+	| WPlayerTally
+	| WPowerSet;
 
 export interface WorldBatch {
 	tick: number;
@@ -1655,6 +1713,14 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u32(e.id);
 			w.bool(e.powered);
 			break;
+		case WorldEv.PowerSet: {
+			const state = clampInt(e.state, 0, 255) % (POWER_STATE_MASK + 1);
+			w.u32(e.id);
+			w.u8(state);
+			// a pilot only with the Flying bit, and never without one: the decoder refuses either mismatch
+			w.u8(powerFlying(state) ? slotOrNone(e.pilot) : SLOT_NONE);
+			break;
+		}
 		case WorldEv.ItemAdd:
 			w.u32(e.id);
 			w.u8(clampInt(e.kind, 1, ITEM_KIND_MAX));
@@ -1779,6 +1845,14 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const powered = r.bool();
 		if (id < 1) return undefined;
 		return { t: WorldEv.LightSet, id, powered };
+	} else if (t === WorldEv.PowerSet) {
+		const id = r.u32();
+		const state = r.u8();
+		const pilot = r.u8();
+		// only constructions have power; the reserved bits are 0; a flying drone names its survivor, nothing else does
+		if (id < DYNAMIC_ID_BASE || state > POWER_STATE_MASK || !validSlotOrNone(pilot)) return undefined;
+		if (powerFlying(state) !== (pilot !== SLOT_NONE)) return undefined;
+		return { t: WorldEv.PowerSet, id, state, pilot };
 	} else if (t === WorldEv.ItemAdd) {
 		const id = r.u32();
 		const kind = r.u8();

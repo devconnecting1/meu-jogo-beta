@@ -887,7 +887,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	const done = visible.filter(a => (save.achievements[a.id] ?? 0) >= a.max).length;
 	check(
 		"lobby: 'Achievements' conta as feitas sobre as visiveis (as escondidas fora: CON-03 / CON-04)",
-		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 15,
+		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 18,
 		sub,
 	);
 	nav(2).Activated.Fire();
@@ -1073,17 +1073,18 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 
 	// ACH-3 / CON-03 (as rewritten by the owner, 2026-09-23: everything in the data works): an achievement is on view
 	// exactly when the game can give it today. The bow and the sniper are weapons that work; the bosses SPAWN (the town's
-	// anchors, shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies. Off: what is still `BUG` in
-	// test:items (energy: Thomas Edison, Turret; vehicles: Rider), what has no trigger (Collector, Ninja) and the
-	// original's store and ads (Thanks, Ads addict)
-	const OFF = [1, 4, 16, 18, 19, 20, 21];
+	// anchors, shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies; the energy works (ELE-01..09:
+	// Thomas Edison and Turret are on, with their server triggers) and so do the vehicles (VEI-05: Rider, credited by
+	// server/sim/vehicles.ts). Off: what has no trigger (Collector, Ninja) and the original's store and ads (Thanks,
+	// Ads addict)
+	const OFF = [4, 18, 19, 20];
 	const offNow = ACHIEVEMENTS.filter(a => a.hidden === true).map(a => a.id);
 	const population = readFileSync(join(SRC, "shared/sim/ai/population.ts"), "utf8");
 	const world = readFileSync(join(SRC, "shared/game/world.ts"), "utf8");
 	const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 	const { WeaponKind } = require(join(SRC, "shared/data/kinds.ts"));
 	check(
-		"ACH-3: a vista exatamente o que o jogo de hoje da: desligadas so energia, veiculo, sem gatilho e loja/anuncios do original",
+		"ACH-3: a vista exatamente o que o jogo de hoje da: desligadas so sem gatilho e loja/anuncios do original",
 		JSON.stringify(offNow) === JSON.stringify(OFF) &&
 			visible.length === ACHIEVEMENTS.length - OFF.length &&
 			WEAPONS.some(w => w.kind === WeaponKind.Bow) &&

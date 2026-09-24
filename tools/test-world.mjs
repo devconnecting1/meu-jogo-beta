@@ -1261,11 +1261,16 @@ section("r) revisao de 5967a18: o E tem ritmo, porta e luz tem recarga, parede p
 	drain(sim3);
 	send(builder, 1, 0, PRESS_E);
 	run(sim3, 1);
-	const lights = drain(sim3).filter(d => d.ev.t === P.WorldEv.LightSet);
+	// the lamp is electric (DESIGN_RULES ELE-03): its switch is the grid's, and it travels as the lamp's PowerSet --
+	// working, level, the switch -- which sets `powered` on every client (client/systems/powerMirror.ts); a fire's
+	// switch is still a LightSet. Either way, one delta, to everybody
+	const lights = drain(sim3).filter(
+		d => d.ev.t === P.WorldEv.LightSet || (d.ev.t === P.WorldEv.PowerSet && d.ev.id === lamp.id),
+	);
 	check(
 		lamp.powered !== undefined && lights.length === 1 && lights[0].slot === CFG.SLOT_NONE,
-		"o LightSet de um lampiao vai para TODO MUNDO (quem estava longe volta e ve a luz certa)",
-		JSON.stringify(lights.map(d => d.slot)),
+		"o interruptor de um lampiao (o PowerSet dele, ELE-03) vai para TODO MUNDO (quem estava longe volta e ve a luz certa)",
+		JSON.stringify(lights.map(d => [d.ev.t, d.slot])),
 	);
 	run(sim3, 40);
 	builder.state.x = 3000;

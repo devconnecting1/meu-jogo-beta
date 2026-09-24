@@ -22,7 +22,7 @@ import { SAVE_LIMITS, expMaxInit, PlayerSaveData, PROGRESS_SERVER_PHASE } from "
 import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
-import { creditBossAchievement, creditKillAchievements } from "../save/achievements";
+import { creditBossAchievement, creditKillAchievements, creditTurretKill } from "../save/achievements";
 import { creditZombieKill } from "../save/titles";
 import * as Analytics from "../analytics/events";
 
@@ -379,6 +379,7 @@ export class Progress {
 		now: number,
 		zombieType = -1,
 		weaponKind = -1,
+		byMachine = false,
 	): Array<ExpAward> {
 		const l = this.zombies.get(zombieId);
 		this.zombies.delete(zombieId);
@@ -386,8 +387,15 @@ export class Progress {
 		const base = isFiniteNumber(exp) && exp > 0 ? exp : 0;
 		if (killerSlot >= 0) {
 			out.push(this.pay(killerSlot, base, true));
-			this.bump(killerSlot).kills += 1;
-			this.creditKill(killerSlot, zombieType, weaponKind);
+			if (byMachine) {
+				// a turret's or a drone's kill pays its survivor the XP (§3.6) but is not a zombie THEY put down: the
+				// session's kill count, the lifetime count, Horde Breaker (MON-05) and the kill achievements stay theirs
+				// alone -- the machine's own achievement (Turret, CON-04) is the one it earns them
+				this.creditMachineKill(killerSlot);
+			} else {
+				this.bump(killerSlot).kills += 1;
+				this.creditKill(killerSlot, zombieType, weaponKind);
+			}
 		}
 		if (l !== undefined) {
 			for (const c of l.by) {
@@ -435,8 +443,19 @@ export class Progress {
 	 * The boss went down: EVERY participant gets the full XP, +1 boss kill and the boss coins (§3.6 — the coins
 	 * themselves are server/main.server.ts's, paid from `bossKills`). A participant either did ≥ 3 % of `hpMax`
 	 * or stayed ≥ 20 s nearby while it lived.
+	 *
+	 * `byMachine`: the final blow was a turret's or a turret drone's (server/sim/turrets.ts). Its builder or pilot is
+	 * paid the XP (§3.6, as for a zombie) and nothing else unless they took part themselves: no coins, no boss kill, no
+	 * achievement -- the machine was in the fight, they may be anywhere.
 	 */
-	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number, bossType = -1): Array<ExpAward> {
+	bossKilled(
+		bossId: number,
+		exp: number,
+		hpMax: number,
+		killerSlot: number,
+		bossType = -1,
+		byMachine = false,
+	): Array<ExpAward> {
 		const l = this.bosses.get(bossId);
 		this.bosses.delete(bossId);
 		const out = new Array<ExpAward>();
@@ -452,10 +471,11 @@ export class Progress {
 				this.creditBoss(c.slot, bossType);
 			}
 		}
-		// the killing blow always counts, even from someone who only just arrived: they finished it
+		// the killing blow always counts, even from someone who only just arrived: they finished it -- a machine's pays
+		// its survivor the XP only
 		if (killerSlot >= 0 && !killerPaid) {
 			out.push(this.pay(killerSlot, base, true));
-			this.creditBoss(killerSlot, bossType);
+			if (!byMachine) this.creditBoss(killerSlot, bossType);
 		}
 		return out;
 	}
@@ -509,6 +529,13 @@ export class Progress {
 		creditKillAchievements(save, zombieType, weaponKind);
 		const unlocked = creditZombieKill(save);
 		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
+	}
+
+	/** CON-04 "Turret": a zombie a machine this survivor built (or a drone they fly) brought down; not when assisted */
+	private creditMachineKill(slot: number): void {
+		const save = this.saveOf(slot);
+		if (save === undefined || !this.paysRewards(slot)) return;
+		creditTurretKill(save);
 	}
 
 	private creditBoss(slot: number, bossType: number): void {

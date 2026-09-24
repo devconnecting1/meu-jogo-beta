@@ -86,7 +86,17 @@ export interface SurvivorLook {
 	clock: number;
 	/** what they wear (OutfitLook, MON-04); 0 = the plain survivor */
 	outfit: number;
+	/**
+	 * (VEI-05) On a bicycle or a motorcycle: both hands on the bars and no weapon in them, the feet on the pedals
+	 * (the caller passes feetAmp 0), and no body shadow -- the vehicle drawn under them casts it
+	 * (client/view/vehicleView.ts). The body, the outfit and the layers are the standing survivor's, untouched.
+	 */
+	riding: boolean;
 }
+
+/** where a rider's hands hold the bars, in the body's frame (both vehicles put their bars there) */
+export const RIDE_GRIP_F = 17;
+export const RIDE_GRIP_L = 13;
 
 export function createLook(): SurvivorLook {
 	return {
@@ -107,6 +117,7 @@ export function createLook(): SurvivorLook {
 		z: Z.player,
 		clock: 0,
 		outfit: OutfitLook.None,
+		riding: false,
 	};
 }
 
@@ -159,11 +170,13 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 		return;
 	}
 	const a = look.angle;
-	r.drawCircle(cam, look.x + look.shadowX, look.y + look.shadowY, 38, {
-		color: BLACK,
-		alpha: 0.3,
-		zIndex: Z.actorShadow,
-	});
+	if (!look.riding) {
+		r.drawCircle(cam, look.x + look.shadowX, look.y + look.shadowY, 38, {
+			color: BLACK,
+			alpha: 0.3,
+			zIndex: Z.actorShadow,
+		});
+	}
 	const flash = clamp(look.flash, 0, 1);
 	const pal = outfitPalette(look.outfit);
 	if (!art) {
@@ -183,8 +196,12 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	const w = look.weapon;
 	handCount = 0;
 	const wasSwinging = trail.drawn;
-	trail.drawn = w.kind === WeaponKind.Melee && look.swinging;
-	if (w.kind === WeaponKind.Melee) {
+	trail.drawn = !look.riding && w.kind === WeaponKind.Melee && look.swinging;
+	if (look.riding) {
+		// VEI-05: both hands on the bars, nothing in them
+		hand(RIDE_GRIP_F, -RIDE_GRIP_L);
+		hand(RIDE_GRIP_F, RIDE_GRIP_L);
+	} else if (w.kind === WeaponKind.Melee) {
 		const reach = look.swingReach;
 		if (look.swinging) {
 			// Combat sweeps the hit test over [-cone, +cone] around the aim, and its first update

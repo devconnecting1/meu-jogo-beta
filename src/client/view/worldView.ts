@@ -41,6 +41,7 @@ import {
 	WorldData,
 } from "shared/game/world";
 import { drawBuildingSign } from "./buildingSigns";
+import { drawParkedVehicle } from "./vehicleView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
@@ -219,9 +220,16 @@ function drawClipped(
 /** where the shadow of something at (x, y) falls, for a shadow `len` long (LUZ-01) */
 export type ShadowFn = (x: number, y: number, len: number) => { x: number; y: number };
 
+/** draws an electric build where it stands, or answers false (client/view/machinesView.ts, ELE-01..08) */
+export interface MachineDrawer {
+	draw(r: Renderer, cam: Camera, s: Solid): boolean;
+}
+
 export class WorldView {
 	/** the owner's animation clock (seconds): a struck solid's shake, a lamp's flicker */
 	clock = 0;
+	/** the electric builds' own drawing (the match's view sets it; the lobby's town has no builds) */
+	machines?: MachineDrawer;
 	private readonly queryBuf: Array<Solid> = [];
 	private readonly shadow: ShadowFn;
 	/** a pitched roof's colour in full sun, half light and shade (built once per building, not per frame) */
@@ -544,7 +552,11 @@ export class WorldView {
 					if (!this.drawTrashArt(r, cam, s)) this.drawTrash(r, cam, s);
 				} else if (s.kind === "car") {
 					if (!this.drawCarArt(r, cam, s)) this.drawCar(r, cam, s);
-				} else {
+				} else if (s.tags === "vehicle") {
+					// a parked bicycle or motorcycle (VEI-05): drawn by the same code as a ridden one
+					const so = this.shadow(s.x + s.w / 2, s.y + s.h / 2, 6);
+					drawParkedVehicle(r, cam, s, so.x, so.y);
+				} else if (this.machines === undefined || !this.machines.draw(r, cam, s)) {
 					this.drawStructure(r, cam, s);
 				}
 			}
@@ -1005,7 +1017,9 @@ export class WorldView {
 		if (s.tags === "trap" || s.tags === "trap_electric") return COLORS.trap;
 		if (s.tags === "lamp") return COLORS.lamp;
 		if (s.tags === "campfire" || s.tags === "brazier") return COLORS.campfire;
-		if (s.tags === "generator" || s.tags === "battery") return COLORS.uiBlue;
+		if (s.tags === "solar" || s.tags === "reactor" || s.tags === "oil_generator" || s.tags === "battery") {
+			return COLORS.uiBlue;
+		}
 		return COLORS.uiPanelLight;
 	}
 

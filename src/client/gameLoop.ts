@@ -39,6 +39,7 @@ import { Interaction } from "./systems/interaction";
 import { BuildSystem } from "./systems/build";
 import { GameRefs } from "./systems/types";
 import { stepPlayer } from "shared/sim/playerMove";
+import { rideHeading } from "shared/sim/rideKey";
 import * as SurvivorLight from "shared/sim/survivorLight";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
@@ -46,6 +47,7 @@ import {
 	netActive,
 	netBindAdmin,
 	netReset,
+	netServerSeconds,
 	netStats,
 	netTownSeed,
 	netUpdate,
@@ -62,11 +64,13 @@ import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
 import { PlayersView } from "./view/playersView";
 import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
+import { drawVehicle } from "./view/vehicleView";
 import { drawPet } from "./view/cosmeticsView";
 import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
 import { circleInView, part } from "./view/drawKit";
 import { WorldView } from "./view/worldView";
+import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import { reducedMotion } from "./ui/skin";
@@ -422,6 +426,11 @@ export class GameLoop {
 	private readonly wireOpts: WireFxOpts = { localSlot: -1, shooterAt: this.shooterAt };
 	/** a reliable `ZombieDied` (§4.4): the mirror hands it over, the effect view decides what it still owes */
 	private readonly onZombieDeath = (d: ZombieDeathEvent): void => this.fxView.noteDeath(d);
+	/** the electric builds: turrets turning, drones in the air, cables, the beacon's arrow (ELE-01..08) */
+	private readonly machines = new MachinesView(this.shadowFor);
+	/** where the survivor in `slot` is DRAWN this frame: a drone in the air escorts that body (ELE-05) */
+	private readonly pilotAt = (slot: number): { x: number; y: number } | undefined =>
+		slot === this.wireOpts.localSlot ? (this.player.dead ? undefined : this.player) : this.shooterAt(slot);
 
 	constructor() {
 		const save = getCtx().save;
@@ -444,6 +453,7 @@ export class GameLoop {
 			onMessage: () => {},
 			onExp: () => {},
 		};
+		this.worldView.machines = this.machines;
 	}
 
 	init(save: PlayerSaveData): void {
@@ -463,6 +473,7 @@ export class GameLoop {
 		// a new world has none of the old one's bodies, shot lines, blasts or server-flown projectiles
 		this.actors.reset();
 		this.fxView.clear(this.refs);
+		this.machines.clear();
 		this.netFx.clear();
 		this.wireOpts.localSlot = -1;
 		this.particles.clear();
@@ -582,7 +593,9 @@ export class GameLoop {
 		const moved = math.sqrt(dx * dx + dy * dy);
 		this.walkPhase += moved * FEET_CYCLE_PER_UNIT;
 		const speed = dt > 0 ? moved / dt : 0;
-		this.walkAmp = lerp(this.walkAmp, speed > NET_WALK_SPEED ? 1 : 0, ease(0.25, dt));
+		// a rider's feet are on the pedals: no walk cycle, no footsteps (VEI-05)
+		const walking = speed > NET_WALK_SPEED && p.ride === undefined;
+		this.walkAmp = lerp(this.walkAmp, walking ? 1 : 0, ease(0.25, dt));
 		if (p.dead) ctx.phase = "dead";
 	}
 
@@ -880,6 +893,14 @@ export class GameLoop {
 		const save = getCtx().save;
 		look.outfit = outfitLookOf(save);
 		this.drawOwnPet(r, cam, petLookOf(save), p.x, p.y, p.angle);
+		// VEI-05: on a vehicle the rider faces where it points, feet on the pedals, over the vehicle
+		const ride = p.ride;
+		look.riding = ride !== undefined;
+		if (ride !== undefined) {
+			look.angle = rideHeading(ride);
+			look.feetAmp = 0;
+			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, so.x, so.y, Z.player - 2);
+		}
 		drawSurvivor(r, cam, look, this.swing);
 	}
 
@@ -925,7 +946,16 @@ export class GameLoop {
 		town.drawGround(renderer, cam, view, this.world);
 		this.drawDecals(renderer, cam, view);
 		this.drawItems(renderer, cam, view);
+		this.machines.learn(this.world, this.fxView.shotLines(), this.clock, netServerSeconds(), this.lastDt);
 		town.drawSolids(renderer, cam, view, this.world);
+		this.machines.drawAir(
+			renderer,
+			cam,
+			view,
+			this.lastDt,
+			this.pilotAt,
+			this.player.dead ? undefined : this.player,
+		);
 		this.actors.drawZombies(renderer, cam, view, this.refs, opts);
 		// allies first, then you: at the same ZIndex the one who has to read cleanly is the one you steer
 		this.playersView.draw(renderer, cam, view, allies, this.lastDt, this.clock, this.shadowFor);
@@ -1076,6 +1106,7 @@ export class GameLoop {
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
 			lights.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: r * flicker, inner: 0.5 });
 		}
+		this.machines.collectLights(lights);
 		for (const t of this.fxView.shotLines()) {
 			const k = clamp(t.life * 5, 0, 1);
 			if (k > 0.05) lights.push({ x: t.x1, y: t.y1, r: 150, k: 0.85 * k, inner: 0.2 });

@@ -51,6 +51,8 @@
 		"test:pool": "node tools/test-pool.mjs",
 		"test:icons": "node tools/test-icons.mjs",
 		"test:items": "node tools/test-items.mjs",
+		"test:vehicles": "node tools/test-vehicles.mjs",
+		"test:power": "node tools/test-power.mjs",
 		"test:cache": "node tools/test-cache.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",

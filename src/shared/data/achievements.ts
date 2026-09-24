@@ -3,12 +3,11 @@
  * and with its ids: the save stores one counter per row (`PlayerSaveData.achievements`), so a row is never removed
  * or renumbered -- CON-03: content that is not in the game is switched off, never deleted.
  *
- * `hidden` is that switch. A hidden row is not listed, not counted in the lobby's "3 / 15" and not credited, and its
+ * `hidden` is that switch. A hidden row is not listed, not counted in the lobby's "3 / 18" and not credited, and its
  * stored counter is kept untouched for the day its content works. A row is on view exactly when the game of today can
  * give it (CON-03: everything in the data works -- the bow and the sniper are weapons, the bosses spawn at the town's
  * anchors), and hidden when nothing could ever raise it:
- *   - its content does not work yet (the energy and the vehicles, still `BUG` in test:items: Lights On, Sentry
- *     Builder, Road Trip);
+ *   - its content does not work yet (none today: the energy, ELE-01..08, and the vehicles, VEI-05, both work);
  *   - it has no trigger at all, and nothing in the original tells us what it counted (Scavenger, Unseen);
  *   - it belonged to the original's store and ads (Thanks, Retired).
  * The titles are in our own words (CON-05); the ids, the keys and the counters are the original's, so saves carry over.
@@ -54,8 +53,8 @@ export const AchievementId = {
 
 export const ACHIEVEMENTS: Array<AchievementDef> = [
 	{ id: 0, max: 1, key: "first_installation", title: "Arrival", androidId: "CgkIg6_npp8FEAIQAg" },
-	// electricity (generator, battery, lamp) does not work yet (test:items BUG: the energy stage)
-	{ id: 1, max: 1, key: "thomas_edison", title: "Lights On", hidden: true, androidId: "CgkIg6_npp8FEAIQAw" },
+	// an electric lamp switched on and lit by the grid (server/save/achievements.ts creditLitLamp, ELE-03)
+	{ id: 1, max: 1, key: "thomas_edison", title: "Lights On", androidId: "CgkIg6_npp8FEAIQAw" },
 	{ id: 2, max: 1000, key: "melee_weapons_expert", title: "Close Quarters", androidId: "CgkIg6_npp8FEAIQBA" },
 	{ id: 3, max: 200, key: "bow_expert", title: "Quiet Archer", androidId: "CgkIg6_npp8FEAIQBQ" },
 	// no trigger, and nothing says what the original collected
@@ -79,16 +78,16 @@ export const ACHIEVEMENTS: Array<AchievementDef> = [
 	},
 	{ id: 14, max: 100, key: "woods_collector", title: "Woodpile", androidId: "CgkIg6_npp8FEAIQEA" },
 	{ id: 15, max: 1, key: "good_day", title: "First Sunrise", androidId: "CgkIg6_npp8FEAIQEQ" },
-	// the bicycle and the motorbike do not work yet (test:items BUG)
-	{ id: 16, max: 5000, key: "rider", title: "Road Trip", hidden: true, androidId: "CgkIg6_npp8FEAIQEg" },
+	// a point per 10 u the server moved a rider, bicycle or motorcycle (VEI-05, server/sim/vehicles.ts)
+	{ id: 16, max: 5000, key: "rider", title: "Road Trip", androidId: "CgkIg6_npp8FEAIQEg" },
 	{ id: 17, max: 50, key: "never_die", title: "Deathless", androidId: "CgkIg6_npp8FEAIQEw" },
 	// no trigger, and nothing says what the original counted
 	{ id: 18, max: 1, key: "ninja", title: "Unseen", hidden: true, androidId: "CgkIg6_npp8FEAIQFA" },
 	// the original's store rating and rewarded ads: this game has neither
 	{ id: 19, max: 1, key: "thanks", title: "Thanks", hidden: true, androidId: "CgkIg6_npp8FEAIQFQ" },
 	{ id: 20, max: 50, key: "ads_addict", title: "Retired", hidden: true, androidId: "CgkIg6_npp8FEAIQFg" },
-	// the turrets need the energy stage (test:items BUG)
-	{ id: 21, max: 1, key: "turret", title: "Sentry Builder", hidden: true, androidId: "CgkIg6_npp8FEAIQFw" },
+	// a zombie brought down by a machine you built or a turret drone you fly (creditTurretKill, ELE-04)
+	{ id: 21, max: 1, key: "turret", title: "Sentry Builder", androidId: "CgkIg6_npp8FEAIQFw" },
 ];
 
 /** is this row on in this game (listed, counted, credited)? */
