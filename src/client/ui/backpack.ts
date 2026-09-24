@@ -18,6 +18,8 @@
  * - Build (DESIGN_RULES ITM-09): the construction kits the backpack holds -- turrets, drones, lamps, the power, the
  *   barricades and doors, the fires, the stations, the trap, the vehicles -- with how many, and Place: the kit goes onto
  *   the build cursor (the server's Place verb) and the Bag steps aside for the ghost; placing spends one, E puts it back.
+ *   A craft of a construction makes such a kit (it goes straight onto the cursor; cancelled, it waits here), and the
+ *   basic ones turn up in town (shared/data/spawns.ts BASIC_KITS).
  *   Everything the save can hold is on some tab: Materials lists the ammunition and the Oil too (their counts live in
  *   the save's ammo fields, shared/sim/inventory.ts, which is why they never showed before).
  * - Left: a grid of tiles (client/ui/bagGrid.ts) -- the item's icon, how many, EQUIPPED as the iron face and a check,
@@ -152,8 +154,13 @@ const EMPTY: Array<[string, string, string, boolean]> = [
 		"wood",
 		false,
 	],
-	// ITM-09: a construction crafted goes straight onto the cursor; this tab holds the kits the backpack carries
-	["Nothing to build yet", "Craft turrets, barricades and more in the Craft tab.", "cat_turret", true],
+	// ITM-09: every kit carried -- crafted (and then cancelled or not yet placed) or found: the basic ones are in town
+	[
+		"Nothing to build yet",
+		"Craft turrets, barricades and more in the Craft tab, or find basic kits in town.",
+		"cat_turret",
+		true,
+	],
 ];
 
 // ---------------------------------------------------------------- data helpers

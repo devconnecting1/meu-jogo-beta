@@ -1487,7 +1487,8 @@ console.log("\n8c) a aba Build (ITM-09): os kits de construcao da mochila, cada 
 		"vazia: diz de onde vem uma construcao e oferece Open Craft (a chapa de ferro)",
 		tilesOf(T_BUILD).length === 0 &&
 			panelTitle() === "Nothing to build yet" &&
-			deep(details(), "Body")?.Text === "Craft turrets, barricades and more in the Craft tab." &&
+			deep(details(), "Body")?.Text ===
+				"Craft turrets, barricades and more in the Craft tab, or find basic kits in town." &&
 			action()?.Text === "Open Craft" &&
 			action()?.GetAttribute("Variant") === "secondary",
 		`${panelTitle()} / ${action()?.Text}`,

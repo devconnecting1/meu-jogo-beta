@@ -317,14 +317,10 @@ export function placedSolid(def: PlaceableDef, r: PlaceRect, rot: number): Omit<
 }
 
 /**
- * The craftKind-1 recipe that produced placeable `resultIndex` (cancelling refunds its ingredients), preferring
- * the one recorded at craft time (`preferred`, a CRAFT_RECIPES id).
+ * The craftKind-1 recipe that makes placeable `resultIndex` (the onboarding's campfire lesson reads its cost). A
+ * cancel never gives a recipe's ingredients back: what a craft makes is a kit the backpack keeps (ITM-09).
  */
-export function placeRecipe(resultIndex: number, preferred?: number): CraftRecipe | undefined {
-	if (preferred !== undefined) {
-		const r = CRAFT_RECIPES[preferred];
-		if (r !== undefined && r.craftKind === 1 && r.resultIndex === resultIndex) return r;
-	}
+export function placeRecipe(resultIndex: number): CraftRecipe | undefined {
 	for (const r of CRAFT_RECIPES) {
 		if (r.craftKind === 1 && r.resultIndex === resultIndex) return r;
 	}

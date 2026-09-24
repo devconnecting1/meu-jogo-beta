@@ -55,11 +55,9 @@ export interface GameRefs {
 	bullets: Array<Bullet>;
 	daynight: DayNight;
 	pendingPlace: number;
-	/** CRAFT_RECIPES id that produced pendingPlace (so cancelling refunds the right ingredients) */
-	pendingRecipe?: number;
 	/**
-	 * pendingPlace came out of the backpack (the Bag's Build tab, DESIGN_RULES ITM-09), not out of a craft: placing it
-	 * spends one, cancelling gives nothing back because nothing was taken. Only this client's own world reads it (the
+	 * pendingPlace is a kit of the backpack's (DESIGN_RULES ITM-09: a craft just made it, or the Bag's Build tab placed
+	 * it): placing it spends one, cancelling leaves it in the backpack. Only this client's own world reads it (the
 	 * server's cursor keeps its own, server/sim/build.ts)
 	 */
 	pendingKit?: boolean;

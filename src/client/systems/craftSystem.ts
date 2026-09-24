@@ -77,7 +77,8 @@ export function canCraft(refs: GameRefs, r: CraftRecipe): boolean {
 
 /**
  * Craft a recipe. On failure tells the player why (refs.onMessage) instead of failing silently.
- * Placeables go to build mode (pendingPlace + pendingRecipe so cancelling refunds them).
+ * A construction is a kit the survivor now owns (the Bag's Build tab, DESIGN_RULES ITM-09) and goes straight to build
+ * mode as one (pendingPlace + pendingKit): placing spends it, cancelling leaves it in the backpack.
  * Cooking honours "Chef" (skill 11) and smelting "Dwarf" (skill 12): 15% / 30% chance of double, like item_cook /
  * item_fire (shared/sim/craftRule.ts craftYield, the server's rule too).
  */
@@ -98,9 +99,9 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 	// in HAND is swapped for the blade by the caller (main.client pack.onCraft), which owns the weapon switch
 	unequipGone(refs.save);
 	if (r.craftKind === 1) {
+		addItem(refs.save, r.resultKind, r.resultIndex, r.resultCount);
 		refs.pendingPlace = r.resultIndex;
-		refs.pendingRecipe = r.id;
-		refs.pendingKit = undefined;
+		refs.pendingKit = true;
 	} else {
 		addItem(refs.save, r.resultKind, r.resultIndex, Rule.craftYield(r, refs.save));
 	}
@@ -140,7 +141,6 @@ export function placeKit(refs: GameRefs, etcId: number): boolean {
 	}
 	if (serverOwnsWorld()) return sendBagVerb(IntentKind.Place, etcId);
 	refs.pendingPlace = etcId;
-	refs.pendingRecipe = undefined;
 	refs.pendingKit = true;
 	return true;
 }

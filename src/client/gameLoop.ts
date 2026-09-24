@@ -341,7 +341,6 @@ export class GameLoop {
 		refs.bullets = this.bullets;
 		refs.daynight = this.daynight;
 		refs.pendingPlace = -1;
-		refs.pendingRecipe = undefined;
 		refs.pendingKit = undefined;
 		refs.fx = this.fx;
 		refs.onMessage = msg => {

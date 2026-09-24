@@ -16,6 +16,8 @@
  *   placeKit(id)     (ITM-09) a construction kit the backpack holds goes onto the build cursor: the shared rule
  *                    (shared/sim/placement.ts `kitRefusal`: a kit, owned, alive, on foot, nothing on the cursor), on
  *                    the craft's own clock. Nothing is spent here: the placement spends it (server/sim/build.ts).
+ *                    A craft of a construction does the same with the kit it just made: into the backpack, then onto
+ *                    the cursor -- cancelling leaves it in the Build tab, never gives the ingredients back.
  *
  * The ingredient consumption is one transaction: everything is CHECKED first, then taken, with no yield in
  * between (§8.3). The client's version took the ingredients one by one and had no rollback, so a recipe that
@@ -96,7 +98,7 @@ interface Limits {
 export interface ServerCraftOptions {
 	world: WorldData;
 	/**
-	 * Where a craftKind-1 recipe's result goes: onto the cursor, not into the backpack. Undefined while the server
+	 * Where a craftKind-1 recipe's kit goes after the backpack: onto the cursor (ITM-09). Undefined while the server
 	 * does not own the interactive world (there is no world to place it in): the backpack verbs still work then
 	 * (server/sim/backpack.ts), and a build recipe is refused before anything is spent.
 	 */
@@ -160,8 +162,10 @@ export class ServerCraft {
 		unequipGone(save);
 		l.craft = 1 / CRAFT_RATE;
 		if (r.craftKind === 1 && this.build !== undefined) {
-			// a placeable goes on the cursor; server/sim/build.ts places it and refunds a cancel
-			this.build.hold(slot, r.resultIndex, r.id);
+			// ITM-09: a construction is a KIT the survivor now owns (the Bag's Build tab), and it goes straight onto the
+			// cursor as one: server/sim/build.ts spends it where it is placed, and a cancel leaves it in the backpack
+			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
+			this.build.hold(slot, r.resultIndex, true);
 			return { kind: "holding", placeable: r.resultIndex };
 		}
 		// Chef now and then doubles a cooking, Dwarf a smelting: the shared rule, the client's prediction's too
@@ -217,7 +221,7 @@ export class ServerCraft {
 		const why = kitRefusal(save, id, build.placing(slot), state);
 		if (why !== undefined) return { kind: "refused", why };
 		l.craft = 1 / CRAFT_RATE;
-		build.hold(slot, id, undefined, true);
+		build.hold(slot, id, true);
 		return { kind: "holding", placeable: id };
 	}
 

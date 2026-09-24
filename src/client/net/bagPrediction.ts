@@ -29,14 +29,12 @@ import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventor
 import { kitRefusal } from "shared/sim/placement";
 
 /**
- * What the prediction writes besides the save: GameRefs' build cursor (`pendingPlace` / `pendingRecipe` /
- * `pendingKit`) and its survivor's hands (`player.holstered`, ITM-06). The lobby's cursor has no body: nothing there
- * has hands.
+ * What the prediction writes besides the save: GameRefs' build cursor (`pendingPlace` / `pendingKit`) and its
+ * survivor's hands (`player.holstered`, ITM-06). The lobby's cursor has no body: nothing there has hands.
  */
 export interface BagCursor {
 	pendingPlace: number;
-	pendingRecipe?: number;
-	/** the construction on the cursor is a kit from the backpack (the Place verb, ITM-09) */
+	/** the construction on the cursor is a kit of the backpack's (a craft, or the Place verb: ITM-09) */
 	pendingKit?: boolean;
 	player?: PlayerState;
 }
@@ -133,9 +131,10 @@ export function predictVerb(
 		for (const ing of r.ingredients) removeItem(save, ing.kind, ing.index, ing.count);
 		unequipGone(save);
 		if (r.craftKind === 1) {
+			// ITM-09: the kit is the survivor's (the Build tab) and goes onto the cursor as one
+			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
 			cursor.pendingPlace = r.resultIndex;
-			cursor.pendingRecipe = r.id;
-			cursor.pendingKit = undefined;
+			cursor.pendingKit = true;
 		} else {
 			// (the Dwarf's double smelt is the server's dice: the bag brings it)
 			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
@@ -154,7 +153,6 @@ export function predictVerb(
 		if (why !== undefined) return false;
 		// nothing leaves the backpack: the placement spends it (the server's bag brings the count down)
 		cursor.pendingPlace = arg;
-		cursor.pendingRecipe = undefined;
 		cursor.pendingKit = true;
 		return true;
 	}
@@ -180,7 +178,6 @@ export function rebase(
 ): void {
 	applyBag(save, bag);
 	cursor.pendingPlace = bag.place;
-	cursor.pendingRecipe = undefined;
 	cursor.pendingKit = undefined;
 	// ITM-06: the server's hands, under whatever Holster / SwitchWeapon it has not answered yet (replayed below)
 	if (cursor.player !== undefined) cursor.player.holstered = bag.holster === 1 ? true : undefined;
@@ -191,7 +188,6 @@ export function rebase(
 	for (const e of entries) {
 		if (e.kind === EDGE_ENTRY) {
 			cursor.pendingPlace = -1;
-			cursor.pendingRecipe = undefined;
 			cursor.pendingKit = undefined;
 		} else {
 			predictVerb(save, cursor, e.kind, e.arg, undefined, true);

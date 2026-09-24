@@ -10,16 +10,17 @@
  * ghost and the placed wall cannot disagree. The three build actions ride the input command's edges, the way
  * `BuildSystem.handleInput` swallows a frame on the client:
  *
- *      attack → place        action → cancel (and refund)        reload → rotate
+ *      attack → place        action → cancel (the kit stays)        reload → rotate
  *
  * which means no new message, no id from the client, and the placement is ordered with the movement it
  * happened during for free (§2.4). A client cannot ask for a wall somewhere it is not.
  *
- * What goes ON the cursor comes two ways: a craft of a construction (server/sim/craft.ts: the ingredients are spent,
- * a cancel refunds them), or a kit the backpack already holds -- the Bag's Build tab, the `Place` verb (DESIGN_RULES
- * ITM-09, protocol.ts note 26; craft.ts `placeKit`). A kit is spent where it is PLACED, not where it is held: the
- * attack edge checks the backpack still has it and takes it in the same step as the wall goes up, so a cancel, a
- * death or a trip out of the world with it on the cursor gives nothing back because nothing was taken.
+ * What goes ON the cursor is always a KIT the backpack holds (DESIGN_RULES ITM-09): one just crafted (server/sim/
+ * craft.ts: the ingredients are spent and the kit is the survivor's, in the Bag's Build tab, before it goes on the
+ * cursor), or one carried from before -- the Build tab's `Place` verb (protocol.ts note 26; craft.ts `placeKit`). A kit
+ * is spent where it is PLACED, not where it is held: the attack edge checks the backpack still has it and takes it in
+ * the same step as the wall goes up, so a cancel, a death or a trip out of the world with it on the cursor leaves it
+ * in the backpack -- nothing is refunded because nothing was taken (a crafted one's ingredients were turned INTO it).
  *
  * Rules the client never enforced and could not have:
  *   - the CAPS of §8.1, 150 constructions per player and 600 per server. They are counted from the
@@ -39,13 +40,12 @@
  * Pure module: no Instances, no services, no os.clock.
  */
 import { ItemKind } from "shared/data/kinds";
-import { addItem, countItem, removeItem } from "shared/sim/inventory";
+import { countItem, removeItem } from "shared/sim/inventory";
 import {
 	ghostRectSticky,
 	PLACEABLES,
 	PlaceableDef,
 	PlaceRect,
-	placeRecipe,
 	placedSolid,
 	placementValid,
 	snapToOpening,
@@ -83,15 +83,15 @@ const ROT_STEPS = 4;
 
 /** why a placement was refused, or what it produced */
 export type PlaceOutcome =
-	/** `kit`: it came from the backpack (the Place verb) and one was spent from it just now */
+	/** `kit`: one was spent from the backpack just now */
 	| { kind: "placed"; solid: Solid; kit?: boolean }
-	| { kind: "cancelled"; refunded: boolean }
+	| { kind: "cancelled" }
 	| { kind: "rotated"; rot: number }
 	| { kind: "none" }
-	/** `owned`: a kit from the backpack that the backpack no longer holds (it comes off the cursor) */
+	/** `owned`: a kit the backpack no longer holds (it comes off the cursor) */
 	| { kind: "refused"; why: "invalid" | "rate" | "capPlayer" | "capServer" | "sealed" | "unknown" | "owned" };
 
-/** one survivor's pending construction — the client's `refs.pendingPlace` / `pendingRecipe`, server side */
+/** one survivor's pending construction — the client's `refs.pendingPlace` / `pendingKit`, server side */
 interface Pending {
 	/**
 	 * Build edges this cursor has answered (a placement tried, placed or refused; a cancel; a drop). The wallet's bag
@@ -102,11 +102,9 @@ interface Pending {
 	turns: number;
 	/** PLACEABLES id, or -1 for "nothing on the cursor" */
 	placeable: number;
-	/** the CRAFT_RECIPES id that produced it, so a cancel refunds exactly what was spent */
-	recipe: number | undefined;
 	/**
-	 * It came out of the backpack (the Place verb, ITM-09), not out of a craft: nothing was spent to hold it, the
-	 * placement spends one from the backpack, and a cancel refunds nothing (never a recipe's ingredients)
+	 * It is a kit of the backpack's (ITM-09: every craft and every Place): the placement spends one from the backpack,
+	 * and a cancel leaves it there. False only for a construction held for free (a test's harness): nothing is spent
 	 */
 	kit: boolean;
 	rot: number;
@@ -210,13 +208,13 @@ export class ServerBuild {
 	}
 
 	/**
-	 * A craft produced a placeable: it goes on the cursor instead of into the backpack (craftKind 1). Or (`kit`) a kit the
-	 * backpack holds goes on it -- the Place verb (craft.ts `placeKit`, which checked it is owned): nothing is taken here
+	 * Construction `placeable` goes on this survivor's cursor. `kit`: it is one the backpack holds -- a craft that just
+	 * made it, or the Build tab's Place (craft.ts, which checked it is owned); nothing is taken here, the placement takes
+	 * it. Without `kit` it is held for free (a harness): placed without spending anything, cancelled without a trace
 	 */
-	hold(slot: number, placeable: number, recipe: number | undefined, kit = false): void {
+	hold(slot: number, placeable: number, kit = false): void {
 		const p = this.stateOf(slot);
 		p.placeable = placeable;
-		p.recipe = kit ? undefined : recipe;
 		p.kit = kit;
 		p.rot = 0;
 		p.prevX = undefined;
@@ -363,26 +361,22 @@ export class ServerBuild {
 	}
 
 	/**
-	 * §8.1 `cancelPlace`: the construction leaves the cursor and its ingredients come back. A kit from the backpack
-	 * (ITM-09) never left it: nothing comes back, and never the ingredients of a recipe that makes one
+	 * §8.1 `cancelPlace`: the construction leaves the cursor. It is a kit the backpack still holds (ITM-09), so nothing
+	 * comes back and nothing is lost: it waits in the Bag's Build tab. Never a recipe's ingredients -- they are the kit
 	 */
-	cancel(slot: number, save: PlayerSaveData): PlaceOutcome {
+	cancel(slot: number): PlaceOutcome {
 		const p = this.pending.get(slot);
 		if (p === undefined || p.placeable < 0) return { kind: "none" };
 		p.turns += 1;
-		const kit = p.kit;
-		const recipe = kit ? undefined : placeRecipe(p.placeable, p.recipe);
 		this.clear(p);
-		if (recipe === undefined) return { kind: "cancelled", refunded: false };
-		for (const ing of recipe.ingredients) addItem(save, ing.kind, ing.index, ing.count);
-		return { kind: "cancelled", refunded: true };
+		return { kind: "cancelled" };
 	}
 
 	/**
-	 * The construction leaves the cursor with NOTHING back, because the life that paid for it is over: a New game
-	 * (server/sim/life.ts `newLife`) or the new life a world's end gives (`grantNewLife`). Their `resetRun` already
-	 * wiped that life's backpack; a refund after it would land the old run's materials in the new one (security
-	 * review of 5967a18, R1). A death does not come here: it refunds into the dying run (`LifeKeeper.died`).
+	 * The construction leaves the cursor because the life that owned it is over: a New game (server/sim/life.ts
+	 * `newLife`) or the new life a world's end gives (`grantNewLife`). Their `resetRun` already wiped that life's
+	 * backpack, the kit with it (security review of 5967a18, R1: the old run's material never lands in the new one).
+	 * A death only cancels (`LifeKeeper.died`): the kit stays in the dying run's backpack.
 	 */
 	drop(slot: number): void {
 		const p = this.pending.get(slot);
@@ -392,12 +386,12 @@ export class ServerBuild {
 	}
 
 	/**
-	 * The survivor left the world with something still on the cursor. The ingredients are theirs — they paid
-	 * for them — so this is a cancel, not a forfeit, and it also stops the slot inheriting a pending
-	 * construction when somebody else takes it (§4.4: a slot is stable for a session, not beyond one).
+	 * The survivor left the world with something still on the cursor. The kit is theirs and stays in their backpack,
+	 * so this is a cancel, not a forfeit, and it also stops the slot inheriting a pending construction when somebody
+	 * else takes it (§4.4: a slot is stable for a session, not beyond one).
 	 */
-	remove(slot: number, save?: PlayerSaveData): void {
-		if (save !== undefined) this.cancel(slot, save);
+	remove(slot: number): void {
+		this.cancel(slot);
 		this.pending.delete(slot);
 		/*
 		 * Their walls stay standing -- the base belongs to the server session (§6.1), not to whoever is
@@ -613,7 +607,6 @@ export class ServerBuild {
 			p = {
 				turns: 0,
 				placeable: -1,
-				recipe: undefined,
 				kit: false,
 				rot: 0,
 				prevX: undefined,
@@ -639,7 +632,6 @@ export class ServerBuild {
 
 	private clear(p: Pending): void {
 		p.placeable = -1;
-		p.recipe = undefined;
 		p.kit = false;
 		p.rot = 0;
 		p.prevX = undefined;

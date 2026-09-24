@@ -849,7 +849,7 @@ export const LANG_TABLE: Array<string> = [
 	"Turn",
 	"Can't place",
 	"Nothing to build yet",
-	"Craft turrets, barricades and more in the Craft tab.",
+	"Craft turrets, barricades and more in the Craft tab, or find basic kits in town.",
 	"Placing it uses one. Cancelling keeps it.",
 	"That can't be placed",
 	"You don't have one",

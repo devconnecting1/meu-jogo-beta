@@ -3041,7 +3041,7 @@ section(
 			return true;
 		});
 		checkRows(
-			"with them: every ingredient goes exactly, and MAKES ×N comes out (a build goes on the cursor)",
+			"with them: every ingredient goes exactly, and MAKES ×N comes out (a build: the kit is owned, and on the cursor)",
 			CRAFT_RECIPES,
 			r => {
 				const save = stocked(r);
@@ -3050,12 +3050,10 @@ section(
 				if (!CCraft.craft(refs, r.id)) return `refused: ${CCraft.craftBlocker(refs, r)}`;
 				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
 					return `left over ${ingredientsLeft(save, r)}`;
-				if (r.craftKind === 1)
-					return (
-						(refs.pendingPlace === r.resultIndex && refs.pendingRecipe === r.id) ||
-						`cursor ${refs.pendingPlace}`
-					);
 				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				// ITM-09: a construction is a kit the survivor owns (the Build tab), held on the cursor as one
+				if (r.craftKind === 1 && (refs.pendingPlace !== r.resultIndex || refs.pendingKit !== true))
+					return `cursor ${refs.pendingPlace} kit ${refs.pendingKit}`;
 				return got === r.resultCount || `made ${got}, MAKES ×${r.resultCount}`;
 			},
 		);
@@ -3066,11 +3064,7 @@ section(
 			const first = CCraft.craft(refs, r.id);
 			const second = CCraft.craft(refs, r.id);
 			if (!first || second) return `first ${first}, second ${second}`;
-			return (
-				r.craftKind === 1 ||
-				INV.countItem(save, r.resultKind, r.resultIndex) - had === r.resultCount ||
-				"made twice"
-			);
+			return INV.countItem(save, r.resultKind, r.resultIndex) - had === r.resultCount || "made twice";
 		});
 		checkRows(
 			"a desk recipe also works at a pro desk, and smelting at the electric furnace",
@@ -3142,7 +3136,7 @@ section(
 			);
 		});
 		checkRows(
-			"with them: exact ingredients out, MAKES ×N in (a build is held for the cursor)",
+			"with them: exact ingredients out, MAKES ×N in (a build: the kit is owned, and held for the cursor)",
 			CRAFT_RECIPES,
 			r => {
 				const save = stocked(r);
@@ -3151,9 +3145,12 @@ section(
 				const out = c.craft(0, p, save, r.id);
 				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
 					return `left over ${ingredientsLeft(save, r)}`;
-				if (r.craftKind === 1)
-					return (out.kind === "holding" && out.placeable === r.resultIndex) || JSON.stringify(out);
 				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				if (r.craftKind === 1)
+					return (
+						(out.kind === "holding" && out.placeable === r.resultIndex && got === r.resultCount) ||
+						`${JSON.stringify(out)}, kit ${got}`
+					);
 				return (
 					(out.kind === "crafted" && got === r.resultCount && out.count === r.resultCount) ||
 					`${JSON.stringify(out)}, made ${got}`
@@ -3270,7 +3267,7 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 	const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
 	const PRESS_E = P.packEdges(0, 0, 1, 0);
 	checkRows(
-		"craft → cursor → the attack places it, with the placeable's tag, owner and hp; E cancels and refunds",
+		"craft → the kit owned and on the cursor → the attack places it (tag, owner, hp) and spends it; E keeps the kit, no refund (ITM-09)",
 		CRAFT_RECIPES.filter(r => r.craftKind === 1),
 		r => {
 			const world = W.serverWorld(W.createWorld(8000, 8000));
@@ -3301,8 +3298,10 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 					P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, 0, 0, edges)] }),
 					0,
 				);
+			const kits = () => INV.countItem(save, ItemKind.Etc, r.resultIndex);
 			const held = sim.craft.craft(0, sp.state, save, r.id);
 			if (held.kind !== "holding") return `craft: ${JSON.stringify(held)}`;
+			if (kits() !== 1) return `the craft left ${kits()} kits in the backpack`;
 			const solids = world.solids.length;
 			send(PRESS_ATTACK);
 			sim.step();
@@ -3311,15 +3310,17 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 			const def = PLACEABLES[r.resultIndex];
 			if (built.tags !== def.tag || built.hp !== def.hp || built.owner !== 0)
 				return `placed ${built.tags} hp ${built.hp} owner ${built.owner}`;
-			// the second one: on the cursor, then cancelled -- the ingredients come back
+			if (kits() !== 0) return "placing did not spend the kit";
+			// the second one: on the cursor, then cancelled -- the kit stays in the Build tab, the ingredients stay spent
 			sim.craft.step(1);
 			sim.craft.craft(0, sp.state, save, r.id);
 			const spent = ingredientsLeft(save, r);
 			send(PRESS_E);
 			sim.step();
 			if (sim.build.placing(0)) return "E did not cancel";
-			const back = ingredientsLeft(save, r);
-			return back === r.ingredients.map(i => i.count).join(",") || `after the cancel: ${spent} -> ${back}`;
+			const after = ingredientsLeft(save, r);
+			if (after !== spent) return `the cancel refunded ingredients: ${spent} -> ${after}`;
+			return kits() === 1 || `after the cancel: ${kits()} kits`;
 		},
 	);
 	{
@@ -3852,6 +3853,77 @@ section(
 				return hint === `E: Pick up ${k.name}` || hint;
 			},
 		);
+		{
+			// where a kit comes from besides the craft: only the BASIC ones, a small chance in the containers that would
+			// have had them; the rest (turrets, drones, generators, reactor, vehicles, desks...) is the craft's progression
+			const tables = [
+				...BUILDING_SPAWNS.map((rows, i) => [`BUILDING_SPAWNS[${i}]`, rows]),
+				...Object.entries(SPAWNS.TOWN_SPAWNS).map(([k, rows]) => [`TOWN_SPAWNS[${k}]`, rows]),
+				...Object.entries(SPAWNS.YARD_LOOT).map(([k, rows]) => [`YARD_LOOT.${k}`, rows]),
+				["VAULT_LOOT", SPAWNS.VAULT_LOOT],
+				["PUMP_LOOT", SPAWNS.PUMP_LOOT],
+				...Object.entries(SPAWNS.MAP_ITEM_LOOT).map(([k, rows]) => [`MAP_ITEM_LOOT.${k}`, rows]),
+				...Object.entries(SPAWNS.BOSS_TROPHIES).map(([k, rows]) => [`BOSS_TROPHIES[${k}]`, rows]),
+			];
+			const lines = [];
+			for (const [where, rows] of tables) {
+				for (const e of rows) {
+					if (e.kind === ItemKind.Etc && PLACEABLES[e.index] !== undefined) lines.push({ where, e });
+				}
+			}
+			const BASIC = SPAWNS.BASIC_KITS;
+			const at = (where, id) => lines.some(l => l.where === where && l.e.index === id);
+			const names = BASIC.map(id => ETC_ITEMS[id].name).join(", ");
+			check(
+				names === "Wooden barricade, Wooden door, Campfire, Lamp, Trap",
+				`the basic kits are the five of the decision: ${names}`,
+			);
+			check(
+				lines.every(l => BASIC.includes(l.e.index)),
+				"no loot table holds a kit that is not basic: turrets, drones, generators, reactor, vehicles and desks are only crafted",
+				lines
+					.filter(l => !BASIC.includes(l.e.index))
+					.map(l => `${l.where}: ${ETC_ITEMS[l.e.index].name}`)
+					.join("; "),
+			);
+			check(
+				lines.every(l => l.e.min === l.e.max && l.e.max < 1),
+				"every kit line is a small chance of exactly one (bounded: never a stack)",
+				lines.map(l => `${l.where} ${ETC_ITEMS[l.e.index].name} ${l.e.min}-${l.e.max}`).join("; "),
+			);
+			check(
+				at("TOWN_SPAWNS[16]", 10) &&
+					at("TOWN_SPAWNS[16]", 11) &&
+					at("TOWN_SPAWNS[16]", 17) &&
+					at("TOWN_SPAWNS[25]", 10) &&
+					at("YARD_LOOT.pile0", 10) &&
+					at("YARD_LOOT.shed", 14) &&
+					at("YARD_LOOT.shed", 4),
+				"where they are: the hardware store (barricade, door, trap), the police station's lockers (barricade), the construction site's lumber (barricade), the garden sheds (campfire, lamp)",
+				lines.map(l => `${l.where}: ${ETC_ITEMS[l.e.index].name}`).join("; "),
+			);
+			// and one found is one owned: the shared roll (shared/sim/loot.ts, both sides') turns one up now and then, and
+			// in the backpack it is on the Build tab with Place (the rows above)
+			const { rollBuildingLoot } = require(join(SRC, "shared/sim/loot.ts"));
+			let found;
+			for (let seed = 1; seed < 400 && found === undefined; seed++) {
+				setSeed(seed);
+				found = rollBuildingLoot(BuildingType.Hardware, 3).find(
+					d => d.kind === ItemKind.Etc && BASIC.includes(d.id),
+				);
+			}
+			const save = bareSave();
+			if (found !== undefined) INV.addItem(save, found.kind, found.id, found.count);
+			check(
+				found !== undefined &&
+					found.count === 1 &&
+					bagFor(save)
+						.models(4)
+						.some(m => m.key === `4:${found.id}`),
+				"a hardware store search turns up a basic kit now and then (one), and it is on the Build tab",
+				found === undefined ? "none in 400 searches" : ETC_ITEMS[found.id].name,
+			);
+		}
 		{
 			// build mode says how to get out of it -- the pill's "E:" is also the touch USE button (hud.ts)
 			const save = holding(10);
@@ -6304,7 +6376,13 @@ section(
 			// R1 (security review): a construction held through a death and a New game
 			const pl = s.join(newUser(), "carrier");
 			const save = s.save(pl);
-			const cnt = () => recipe.ingredients.map(i => INV2.countItem(save, i.kind, i.index)).join(",");
+			// ITM-09: what the craft made is a kit the survivor owns -- the backpack holds it the whole time
+			const of = sv =>
+				[
+					...recipe.ingredients.map(i => INV2.countItem(sv, i.kind, i.index)),
+					INV2.countItem(sv, ItemKind.Etc, recipe.resultIndex),
+				].join(",");
+			const cnt = () => of(save);
 			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
 			s.immortal.add(pl);
 			const sp = s.enter(pl);
@@ -6313,24 +6391,26 @@ section(
 			s.run(0.2);
 			const held = s.sim.build.pendingOf(sp.slot) === recipe.resultIndex;
 			const spent = cnt();
+			const kitOwned = INV2.countItem(save, ItemKind.Etc, recipe.resultIndex) === 1;
 			s.immortal.delete(pl);
 			s.kill(pl);
 			check(
-				held && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === paid,
-				"[R1] a death with a construction on the cursor refunds it into the DYING run (the body keeps its backpack through a Rebirth)",
-				`held ${held}; ingredients ${paid} -> ${spent} -> ${cnt()}`,
+				held && kitOwned && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === spent,
+				"[R1] a death with a construction on the cursor takes it off; the kit stays in the DYING run's backpack (the body keeps it through a Rebirth), nothing refunded",
+				`held ${held}; ingredients + kit ${paid} -> ${spent} -> ${cnt()}`,
 			);
 			s.run(0.6);
 			const fresh = s.shop(pl, { kind: "newRun", runRev: save.runRev });
 			const newLife = cnt();
-			s.exit(pl); // Home: sim.remove -> build.remove(slot, save), which used to refund into the NEW life
+			s.exit(pl); // Home: sim.remove -> build.remove(slot), which used to refund into the NEW life
 			s.run(1);
 			s.quit(pl);
 			const stored = s.stored(pl.UserId);
-			const persisted = recipe.ingredients.map(i => INV2.countItem(stored, i.kind, i.index)).join(",");
+			const persisted = of(stored);
+			const none = recipe.ingredients.map(() => 0).join(",") + ",0";
 			check(
-				fresh.ok === true && cnt() === newLife && persisted === newLife,
-				"[R1] ...and New game + Home refund nothing into the new life (nor into the DataStore)",
+				fresh.ok === true && newLife === none && cnt() === newLife && persisted === newLife,
+				"[R1] ...and New game + Home: the kit went with the old run, nothing lands in the new life (nor in the DataStore)",
 				`new life ${newLife}, after Home ${cnt()}, stored ${persisted}`,
 			);
 		}

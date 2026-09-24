@@ -39,6 +39,8 @@ function categoryOf(e) {
 	if (e.index >= 44 && e.index <= 47) return "ammo";
 	if (e.index === 33) return "ammo";
 	if (e.index === 48) return "oil";
+	// the construction kits (ITM-09): ETC 0-22 and the two night desks
+	if (e.index <= 22 || e.index === 39 || e.index === 40) return "kits";
 	if ([23, 24, 25, 26, 27, 28, 34, 41].includes(e.index)) return "materials";
 	return "parts";
 }

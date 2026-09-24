@@ -1684,9 +1684,9 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 
 section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods collector: revisao de seguranca)");
 {
-	// the build-cancel refund (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the ingredients
-	// come back through addItem, never through creditTaken -- a credited refund would farm Woods collector (craft a
-	// wooden placeable, cancel, repeat), and a refunded cooking would farm Chef the same way
+	// a construction crafted and cancelled (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the
+	// kit goes into the backpack through addItem (ITM-09) and a cancel refunds nothing -- never through creditTaken,
+	// which would farm Woods collector (craft a wooden placeable, cancel, repeat); a refunded cooking would farm Chef
 	const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
 	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
 	const world = createWorld(4000, 4000);
@@ -1703,32 +1703,35 @@ section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods
 			r.ingredients.some(i => i.kind === ItemKind.Etc && i.index === wood),
 	);
 	const s = SAVE.defaultSave();
+	const ROUNDS = 6;
 	for (const ing of recipe.ingredients) {
-		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count * ROUNDS;
 	}
 	const woodBefore = s.invenEtc[wood];
+	const woodPer = recipe.ingredients.find(i => i.kind === ItemKind.Etc && i.index === wood).count;
 	const state = PLAYER.createPlayer(s, 1000, 1000);
 	let rounds = 0;
-	for (let i = 0; i < 5; i++) {
+	for (let i = 0; i < ROUNDS - 1; i++) {
 		craft.step(1);
 		build.step(1);
 		const made = craft.craft(0, state, s, recipe.id);
-		const back = build.cancel(0, s);
-		if (made.kind === "holding" && back.kind === "cancelled" && back.refunded === true) rounds += 1;
+		const back = build.cancel(0);
+		if (made.kind === "holding" && back.kind === "cancelled") rounds += 1;
 	}
 	craft.step(1);
 	const last = craft.craft(0, state, s, recipe.id);
-	build.remove(0, s); // leaving the world with it still on the cursor: the same refund
+	build.remove(0); // leaving the world with it still on the cursor: the same, the kit stays
 	check(
-		rounds === 5 &&
+		rounds === ROUNDS - 1 &&
 			last.kind === "holding" &&
-			s.invenEtc[wood] === woodBefore &&
+			s.invenEtc[recipe.resultIndex] === ROUNDS &&
+			s.invenEtc[wood] === woodBefore - woodPer * ROUNDS &&
 			s.achievements.every(v => v === 0),
-		`receita ${recipe.id} (madeira): seis vezes fazer e devolver (cancelar, sair do mundo) -- a madeira volta toda e nenhuma conquista anda`,
-		`${rounds} cancelamentos, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
+		`receita ${recipe.id} (madeira): seis vezes fazer e tirar do cursor (cancelar, sair do mundo) -- seis kits na mochila, a madeira gasta, nada devolvido e nenhuma conquista anda`,
+		`${rounds} cancelamentos, kits ${s.invenEtc[recipe.resultIndex]}, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
 	);
 
 	// who may call the two "what came into the backpack" credits at all -- an allowlist, so a new road that fills the

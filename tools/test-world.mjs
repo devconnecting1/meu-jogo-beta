@@ -24,9 +24,9 @@
  *      hundreds of ticks, at an item and at a looted house, ends with exactly what one press earns;
  *   e. DISTANCE IS THE SERVER'S: a client pressing E from across the street picks up nothing, whatever it
  *      believes about its own position (§8.3 — and there is no position field to lie in);
- *   f. CONSTRUCTION: a craft puts a placeable on the cursor, the attack edge places it where the SERVER says
- *      the survivor is aiming, the flow field is told which tiles changed (§3.3), the §8.1 caps hold, and a
- *      cancel gives the ingredients back;
+ *   f. CONSTRUCTION: a craft makes a kit the survivor owns and puts it on the cursor (ITM-09), the attack edge
+ *      places it where the SERVER says the survivor is aiming and spends the kit, the flow field is told which tiles
+ *      changed (§3.3), the §8.1 caps hold, and a cancel leaves the kit in the backpack (no ingredient refund);
  *   g. CRAFTING: a forged recipe id, a missing ingredient and a missing station are all refused, and a
  *      refused craft costs nothing (the client's version consumed before it checked);
  *   h. THE DELTAS REACH THE WIRE: everything the tick produced encodes through `encodeWorld` and decodes
@@ -420,7 +420,9 @@ section("e) a distancia e medida na posicao do SERVIDOR (§8.3)");
 
 // ================================================================ f. construction
 
-section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.5, §8.1)");
+section(
+	"f) construcao: o servidor coloca e conta; o kit craftado e do sobrevivente e cancelar o guarda (§4.5, §8.1, ITM-09)",
+);
 {
 	const world = emptyWorld();
 	const sim = newSim(world);
@@ -436,6 +438,11 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 
 	checkEq(sim.craft.craft(0, p.state, p.save, recipe.id).kind, "holding", "craftar um placeavel poe no cursor");
 	checkEq(sim.build.placing(0), true, "e o servidor sabe que ele esta posicionando");
+	checkEq(
+		countItem(p.save, 4, recipe.resultIndex),
+		1,
+		"o kit craftado e do sobrevivente: esta na mochila (aba Build)",
+	);
 	for (let i = 0; i < recipe.ingredients.size(); i++) {
 		const ing = recipe.ingredients[i];
 		checkEq(countItem(p.save, ing.kind, ing.index), spent[i] - ing.count, `o ingrediente ${ing.index} foi gasto`);
@@ -450,6 +457,7 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 	checkEq(built.owner, 0, "e com dono");
 	checkEq(sim.build.countOf(0), 1, "que conta para o teto por jogador");
 	checkEq(sim.build.placing(0), false, "o cursor ficou livre");
+	checkEq(countItem(p.save, 4, recipe.resultIndex), 0, "e colocar gastou o kit");
 	const pending = drain(sim);
 	const adds = pending.filter(d => d.ev.t === P.WorldEv.SolidAdd);
 	checkEq(adds.length, 1, "um SolidAdd foi enfileirado");
@@ -464,15 +472,21 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 		`(${built.x}, ${built.y}) vs (${p.state.x}, ${p.state.y})`,
 	);
 
-	// a cancel gives the ingredients back
+	// ITM-09: a cancel leaves the kit in the backpack -- the ingredients ARE the kit, they do not come back
+	sim.craft.step(1);
 	const before = recipe.ingredients.map(ing => countItem(p.save, ing.kind, ing.index));
-	sim.craft.craft(0, p.state, p.save, recipe.id);
+	checkEq(sim.craft.craft(0, p.state, p.save, recipe.id).kind, "holding", "um segundo, no cursor");
 	send(p, 2, 0, P.packEdges(0, 0, 1, 0));
 	run(sim, 1);
 	checkEq(sim.build.placing(0), false, "cancelar tira do cursor");
+	checkEq(countItem(p.save, 4, recipe.resultIndex), 1, "e o kit fica na mochila (aba Build): nada se perde");
 	for (let i = 0; i < recipe.ingredients.size(); i++) {
 		const ing = recipe.ingredients[i];
-		checkEq(countItem(p.save, ing.kind, ing.index), before[i], `o ingrediente ${ing.index} voltou`);
+		checkEq(
+			countItem(p.save, ing.kind, ing.index),
+			before[i] - ing.count,
+			`o ingrediente ${ing.index} nao volta (virou o kit)`,
+		);
 	}
 
 	// a destroyed construction gives its cap slot back and announces itself
@@ -1741,9 +1755,10 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	const aim = Math.atan2(n[1], n[0]);
 	const builder = addPlayer(live, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
 	builder.state.angle = aim;
-	// on the cursor the way a craft puts it there (server/sim/craft.ts hands a placeable to ServerBuild.hold; the craft
-	// itself wants a work desk near, which is not what this is about)
-	live.build.hold(0, recipe.resultIndex, recipe.id);
+	// on the cursor the way a craft puts it there (server/sim/craft.ts: the kit into the backpack, then ServerBuild.hold
+	// as a kit, ITM-09; the craft itself wants a work desk near, which is not what this is about)
+	addItem(builder.save, 4, recipe.resultIndex, 1);
+	live.build.hold(0, recipe.resultIndex, true);
 	check(live.build.placing(0), "a barricada esta no cursor do SERVIDOR");
 	drain(live);
 	send(builder, 1, aim, P.packEdges(1, 0, 0, 0));

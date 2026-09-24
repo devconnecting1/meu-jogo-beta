@@ -194,10 +194,12 @@
  *     the cursor ("busy"). It only puts the kit on the build cursor (`ServerBuild.hold(..., kit)`); it names no spot,
  *     like the rest: the attack edge places it where the SERVER says the survivor aims, and only THEN is one taken from
  *     the backpack -- checked again in that step, so a kit gone meanwhile builds nothing and comes off the cursor. A
- *     cancel (the action edge), a death or a trip out of the world gives nothing back because nothing was taken, and
- *     never the ingredients of the recipe that makes the kit. S→C nothing new: the bag's `place` already carries the
- *     cursor and `invenEtc` the count. The client predicts the verb by the same rule (client/net/bagPrediction.ts) and
- *     its cursor keeps `pendingKit` for its own world offline (client/systems/build.ts spends it there).
+ *     cancel (the action edge), a death or a trip out of the world leaves the kit in the backpack, and never gives the
+ *     ingredients of its recipe back. `Craft` of a construction now does the same with the kit it makes: into the
+ *     backpack, then onto the cursor as a kit -- the server's cursor only ever holds kits. S→C nothing new: the bag's
+ *     `place` already carries the cursor and `invenEtc` the count. The client predicts both verbs by the same rules
+ *     (client/net/bagPrediction.ts) and its cursor keeps `pendingKit` for its own world offline (client/systems/build.ts
+ *     spends it there).
  */
 import {
 	NetReader,

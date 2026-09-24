@@ -293,10 +293,10 @@ export const PUMP_HINT = "E: Siphon Oil";
 export const WINDOW_HINT = "E: Break window";
 
 /**
- * The pill while a construction is on the build cursor (LEG-01, DESIGN_RULES ITM-09): E takes it off -- a crafted one
- * refunds its ingredients, a kit from the Bag's Build tab stays in the backpack (it was never taken). Said, because the
- * "E:" is also what gives a touch player the USE button (client/ui/hud.ts setInteractHint): without the pill a phone
- * had no way out of build mode but placing the thing.
+ * The pill while a construction is on the build cursor (LEG-01, DESIGN_RULES ITM-09): E takes it off, and the kit --
+ * just crafted or carried -- stays in the backpack's Build tab (it was never taken). Said, because the "E:" is also
+ * what gives a touch player the USE button (client/ui/hud.ts setInteractHint): without the pill a phone had no way out
+ * of build mode but placing the thing.
  */
 export const BUILD_HINT = "E: Cancel build";
 

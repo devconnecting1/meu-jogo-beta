@@ -1885,7 +1885,7 @@ if (MP_PHASE >= 1) {
 		if (ev !== undefined && s !== undefined) saveSoon(s, ev);
 	};
 	sim.onInteract = sp => markDirty(sp.userId);
-	// a kit from the Bag's Build tab placed (and spent), or a crafted construction cancelled (refunded): the save moved
+	// a construction kit placed, and so spent from the backpack (ITM-09): the save moved
 	sim.onBuild = sp => markDirty(sp.userId);
 	// VEI-05: a ride writes the save -- the motorcycle's oil, the Rider odometer -- and says so at least once a second
 	sim.onRide = sp => markDirty(sp.userId);

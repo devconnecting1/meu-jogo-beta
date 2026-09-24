@@ -3,16 +3,9 @@ import { Camera } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
 import { InputState } from "shared/engine/input";
 import { addSolid } from "shared/game/world";
-import {
-	ghostRectSticky,
-	PLACEABLES,
-	placedSolid,
-	placementValid,
-	placeRecipe,
-	snapToOpening,
-} from "shared/sim/placement";
+import { ghostRectSticky, PLACEABLES, placedSolid, placementValid, snapToOpening } from "shared/sim/placement";
 import { ItemKind } from "shared/data/kinds";
-import { addItem, removeItem } from "shared/sim/inventory";
+import { removeItem } from "shared/sim/inventory";
 import { noteBuildEdge, serverOwnsWorld } from "../net/authority";
 import { notePlaced, noteRefused } from "./buildCues";
 import { GameRefs } from "./types";
@@ -22,9 +15,10 @@ import { GameRefs } from "./types";
  * WHERE is pure and shared (shared/sim/placement.ts, docs/MULTIPLAYER.md §11.2); this is the client's input and view.
  *
  * From WORLD_SERVER_PHASE (client/net/authority.ts) the construction is the server's (server/sim/build.ts): the click,
- * the E and the R already ride the input command's edges, the server places or refunds from ITS position and aim,
- * and the wall comes back to every client as a SolidAdd (client/net/worldMirror.ts), the refund in the bag. Here the
- * construction only leaves the cursor at once (a build edge, so an older bag does not put it back).
+ * the E and the R already ride the input command's edges, the server places (and spends the kit, ITM-09) or takes it
+ * off from ITS position and aim, and the wall comes back to every client as a SolidAdd (client/net/worldMirror.ts), the
+ * kit's count in the bag. Here the construction only leaves the cursor at once (a build edge, so an older bag does not
+ * put it back).
  */
 
 export { PLACEABLES } from "shared/sim/placement";
@@ -128,8 +122,8 @@ export class BuildSystem {
 			this.leaveCursor(refs);
 			return;
 		}
-		// offline, a kit from the backpack (ITM-09) is spent here, as the server spends it where it places it; gone from
-		// the backpack meanwhile, it comes off the cursor and nothing is built
+		// offline, the kit (ITM-09) is spent here, as the server spends it where it places it; gone from the backpack
+		// meanwhile, it comes off the cursor and nothing is built
 		if (refs.pendingKit === true && !removeItem(refs.save, ItemKind.Etc, refs.pendingPlace, 1)) {
 			this.clearCursor(refs);
 			return;
@@ -141,31 +135,21 @@ export class BuildSystem {
 
 	private clearCursor(refs: GameRefs): void {
 		refs.pendingPlace = -1;
-		refs.pendingRecipe = undefined;
 		refs.pendingKit = undefined;
 		this.active = false;
 	}
 
-	/** F3: the server places it, or refunds it; the cursor frees at once and the bag says what really happened */
+	/** F3: the server places it or takes it off; the cursor frees at once and the bag says what really happened */
 	private leaveCursor(refs: GameRefs): void {
 		this.clearCursor(refs);
 		noteBuildEdge();
 	}
 
+	/** ITM-09: the kit never left the backpack -- nothing to give back, and never a recipe's ingredients */
 	private cancel(refs: GameRefs): void {
 		if (serverOwnsWorld()) {
 			this.leaveCursor(refs);
 			return;
-		}
-		const id = refs.pendingPlace;
-		// a kit from the backpack never left it: nothing to give back (and never a recipe's ingredients)
-		if (id >= 0 && refs.pendingKit !== true) {
-			const r = placeRecipe(id, refs.pendingRecipe);
-			if (r !== undefined) {
-				for (const ing of r.ingredients) {
-					addItem(refs.save, ing.kind, ing.index, ing.count);
-				}
-			}
 		}
 		this.clearCursor(refs);
 	}
