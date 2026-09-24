@@ -7,10 +7,11 @@
  * stored counter is kept untouched for the day its content works. A row is on view exactly when the game of today can
  * give it (CON-03: everything in the data works -- the bow and the sniper are weapons, the bosses spawn at the town's
  * anchors), and hidden when nothing could ever raise it:
- *   - its content does not work yet (the energy and the vehicles, still `BUG` in test:items: Thomas Edison, Turret,
- *     Rider);
- *   - it has no trigger at all, and nothing in the original tells us what it counted (Collector, Ninja);
- *   - it belonged to the original's store and ads (Thanks, Ads addict).
+ *   - its content does not work yet (the energy and the vehicles, still `BUG` in test:items: Lights On, Sentry
+ *     Builder, Road Trip);
+ *   - it has no trigger at all, and nothing in the original tells us what it counted (Scavenger, Unseen);
+ *   - it belonged to the original's store and ads (Thanks, Retired).
+ * The titles are in our own words (CON-05); the ids, the keys and the counters are the original's, so saves carry over.
  * Unhiding a row is part of adding its content, together with the server's trigger for it (server/save/
  * achievements.ts): `npm run test:nav` fails for a VISIBLE row nothing on the server can raise.
  */
@@ -52,42 +53,42 @@ export const AchievementId = {
 } as const;
 
 export const ACHIEVEMENTS: Array<AchievementDef> = [
-	{ id: 0, max: 1, key: "first_installation", title: "First steps", androidId: "CgkIg6_npp8FEAIQAg" },
+	{ id: 0, max: 1, key: "first_installation", title: "Arrival", androidId: "CgkIg6_npp8FEAIQAg" },
 	// electricity (generator, battery, lamp) does not work yet (test:items BUG: the energy stage)
-	{ id: 1, max: 1, key: "thomas_edison", title: "Thomas Edison", hidden: true, androidId: "CgkIg6_npp8FEAIQAw" },
-	{ id: 2, max: 1000, key: "melee_weapons_expert", title: "Melee weapons expert", androidId: "CgkIg6_npp8FEAIQBA" },
-	{ id: 3, max: 200, key: "bow_expert", title: "Bow expert", androidId: "CgkIg6_npp8FEAIQBQ" },
+	{ id: 1, max: 1, key: "thomas_edison", title: "Lights On", hidden: true, androidId: "CgkIg6_npp8FEAIQAw" },
+	{ id: 2, max: 1000, key: "melee_weapons_expert", title: "Close Quarters", androidId: "CgkIg6_npp8FEAIQBA" },
+	{ id: 3, max: 200, key: "bow_expert", title: "Quiet Archer", androidId: "CgkIg6_npp8FEAIQBQ" },
 	// no trigger, and nothing says what the original collected
-	{ id: 4, max: 100, key: "collector", title: "Collector", hidden: true, androidId: "CgkIg6_npp8FEAIQBg" },
-	{ id: 5, max: 200, key: "chef", title: "Chef", androidId: "CgkIg6_npp8FEAIQBw" },
-	{ id: 6, max: 100, key: "blacksmith", title: "Blacksmith", androidId: "CgkIg6_npp8FEAIQCA" },
-	{ id: 7, max: 100, key: "sniper", title: "Sniper", androidId: "CgkIg6_npp8FEAIQCQ" },
+	{ id: 4, max: 100, key: "collector", title: "Scavenger", hidden: true, androidId: "CgkIg6_npp8FEAIQBg" },
+	{ id: 5, max: 200, key: "chef", title: "Camp Cook", androidId: "CgkIg6_npp8FEAIQBw" },
+	{ id: 6, max: 100, key: "blacksmith", title: "Metalworker", androidId: "CgkIg6_npp8FEAIQCA" },
+	{ id: 7, max: 100, key: "sniper", title: "Long Shot", androidId: "CgkIg6_npp8FEAIQCQ" },
 	// the bosses spawn at the town's anchors (shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies; if
 	// they are ever switched off (CON-03's "sem chefe"), these four go back to hidden in the same step
-	{ id: 8, max: 1, key: "centipede_slayer", title: "Centipede slayer", androidId: "CgkIg6_npp8FEAIQCg" },
-	{ id: 9, max: 1, key: "rafflesia_slayer", title: "Rafflesia slayer", androidId: "CgkIg6_npp8FEAIQCw" },
-	{ id: 10, max: 1, key: "giant_slayer", title: "Giant slayer", androidId: "CgkIg6_npp8FEAIQDA" },
-	{ id: 11, max: 1, key: "hedgehog_slayer", title: "Hedgehog slayer", androidId: "CgkIg6_npp8FEAIQDQ" },
-	{ id: 12, max: 500, key: "zombie_slayer", title: "Zombie slayer", androidId: "CgkIg6_npp8FEAIQDg" },
+	{ id: 8, max: 1, key: "centipede_slayer", title: "Centipede Down", androidId: "CgkIg6_npp8FEAIQCg" },
+	{ id: 9, max: 1, key: "rafflesia_slayer", title: "Rafflesia Down", androidId: "CgkIg6_npp8FEAIQCw" },
+	{ id: 10, max: 1, key: "giant_slayer", title: "Giant Down", androidId: "CgkIg6_npp8FEAIQDA" },
+	{ id: 11, max: 1, key: "hedgehog_slayer", title: "Hedgehog Down", androidId: "CgkIg6_npp8FEAIQDQ" },
+	{ id: 12, max: 500, key: "zombie_slayer", title: "Street Sweeper", androidId: "CgkIg6_npp8FEAIQDg" },
 	{
 		id: 13,
 		max: 100,
 		key: "special_zombie_slayer",
-		title: "Special zombie slayer",
+		title: "Odd Ones Out",
 		androidId: "CgkIg6_npp8FEAIQDw",
 	},
-	{ id: 14, max: 100, key: "woods_collector", title: "Woods collector", androidId: "CgkIg6_npp8FEAIQEA" },
-	{ id: 15, max: 1, key: "good_day", title: "Good day", androidId: "CgkIg6_npp8FEAIQEQ" },
+	{ id: 14, max: 100, key: "woods_collector", title: "Woodpile", androidId: "CgkIg6_npp8FEAIQEA" },
+	{ id: 15, max: 1, key: "good_day", title: "First Sunrise", androidId: "CgkIg6_npp8FEAIQEQ" },
 	// the bicycle and the motorbike do not work yet (test:items BUG)
-	{ id: 16, max: 5000, key: "rider", title: "Rider", hidden: true, androidId: "CgkIg6_npp8FEAIQEg" },
-	{ id: 17, max: 50, key: "never_die", title: "Never die", androidId: "CgkIg6_npp8FEAIQEw" },
+	{ id: 16, max: 5000, key: "rider", title: "Road Trip", hidden: true, androidId: "CgkIg6_npp8FEAIQEg" },
+	{ id: 17, max: 50, key: "never_die", title: "Deathless", androidId: "CgkIg6_npp8FEAIQEw" },
 	// no trigger, and nothing says what the original counted
-	{ id: 18, max: 1, key: "ninja", title: "Ninja", hidden: true, androidId: "CgkIg6_npp8FEAIQFA" },
+	{ id: 18, max: 1, key: "ninja", title: "Unseen", hidden: true, androidId: "CgkIg6_npp8FEAIQFA" },
 	// the original's store rating and rewarded ads: this game has neither
 	{ id: 19, max: 1, key: "thanks", title: "Thanks", hidden: true, androidId: "CgkIg6_npp8FEAIQFQ" },
-	{ id: 20, max: 50, key: "ads_addict", title: "Ads addict", hidden: true, androidId: "CgkIg6_npp8FEAIQFg" },
+	{ id: 20, max: 50, key: "ads_addict", title: "Retired", hidden: true, androidId: "CgkIg6_npp8FEAIQFg" },
 	// the turrets need the energy stage (test:items BUG)
-	{ id: 21, max: 1, key: "turret", title: "Turret", hidden: true, androidId: "CgkIg6_npp8FEAIQFw" },
+	{ id: 21, max: 1, key: "turret", title: "Sentry Builder", hidden: true, androidId: "CgkIg6_npp8FEAIQFw" },
 ];
 
 /** is this row on in this game (listed, counted, credited)? */

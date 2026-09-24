@@ -33,6 +33,12 @@
 				}
 			}
 		},
+		"Players": {
+			"$className": "Players",
+			"$properties": {
+				"BanningEnabled": true
+			}
+		},
 		"Workspace": {
 			"$className": "Workspace",
 			"$properties": {

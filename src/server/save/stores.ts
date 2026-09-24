@@ -37,6 +37,15 @@ export function storeName(base: string): string {
 }
 
 /**
+ * The UserIds a player's own document is tagged with: the second value an UpdateAsync transform returns ("for GDPR
+ * tracking", GlobalDataStore docs), so right-to-erasure tooling can read from the key itself whose data it holds.
+ * Studio's Local Server test players have negative ids, which are nobody's: those documents go untagged.
+ */
+export function ownerTag(userId: number): Array<number> | undefined {
+	return userId > 0 ? [userId] : undefined;
+}
+
+/**
  * v2/v3 documents (`{ data, lock }`). A server still running the v1 code expects a raw string here and would
  * overwrite anything else with a blank save, which is why v2 got its own store and v3 does not need another
  * one: `sanitizeStoredSave` drops unknown keys, so v2 code reading a v3 document only loses the new fields.

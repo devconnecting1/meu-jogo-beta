@@ -190,7 +190,7 @@ export type AdminEvent =
 			ops: Array<AdminOp>;
 			/** full save after a reset (ops is empty then) */
 			reset?: unknown;
-			by: string;
+			// (no admin name: the player is told "an administrator", client/admin/patches.ts)
 	  }
 	| { kind: "announce"; text: string; from: string }
 	| { kind: "watch"; row: PlayerRow };
