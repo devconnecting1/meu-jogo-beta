@@ -254,7 +254,7 @@ net.onSaveAck(ack => {
 			const parts: Array<string> = [];
 			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
 			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} $   ${parts.join("  ·  ")}`, "coin");
+			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
 		}
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");

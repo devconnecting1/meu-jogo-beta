@@ -4,6 +4,7 @@ import { rebirthPrice } from "shared/data/shop";
 import { NIGHT_REAL_SECONDS } from "shared/sim/clock";
 import { inputDevice } from "../ui/device";
 import { PixelIcon, PixelIconKind } from "../ui/pixelIcon";
+import { paintPlate } from "../ui/plate";
 import { popup } from "../ui/popup";
 import { GAME, STAT, SURFACE, TEXT, THEME, TRANSPARENCY, fontOf, space } from "../ui/theme";
 import { Groove, Section, Window } from "../ui/window";
@@ -420,6 +421,7 @@ function buildDeathScreen(
 	const price = rebirthPrice(ctx.save.deathCount);
 	let rebirth: TextButton | undefined;
 	let rebirthIcon: PixelIcon | undefined;
+	let priceLabel: TextLabel | undefined;
 	if (onRebirth !== undefined) {
 		const x = PAD + HOME_W + GAP + (withNew ? NEW_W + GAP : 0);
 		const w = W - PAD - x;
@@ -433,13 +435,31 @@ function buildDeathScreen(
 			onClick: (): void => onRebirth(),
 		});
 		rebirthIcon = dress(rebirth, "heart", tr("Rebirth now"), w - PRICE_W - COIN - space(6), actionH, "default");
-		// the price, in what it is paid with: the coin, then the number
+		// the price, in what it is paid with: the round pixel coin (MON-06), then the number -- on the dark price chip
+		// every coin amount sits on (the Shop's Earn coins, the wardrobe's tiles): orange straight on the steel-blue
+		// plate would all but vanish (1.4:1)
 		const px = w - space(4) - PRICE_W;
-		CoinIcon(rebirth, "Coin", px - space(1.5) - COIN, (actionH - COIN) / 2, COIN, rebirth.ZIndex + 1);
-		makeLabel(rebirth, "Price", fmtInt(price), px, 0, PRICE_W, actionH, TEXT.lg, buttonForeground("default"), {
+		const chipX = px - space(1.5) - COIN - space(2);
+		const chipH = COIN + space(3);
+		const chip = makeFrame(
+			rebirth,
+			"PriceChip",
+			chipX,
+			(actionH - chipH) / 2,
+			w - space(2) - chipX,
+			chipH,
+			THEME.background,
+			{
+				transparency: 1,
+				zIndex: rebirth.ZIndex + 1,
+			},
+		);
+		paintPlate(chip, SURFACE.well, "flat", 2);
+		CoinIcon(rebirth, "Coin", px - space(1.5) - COIN, (actionH - COIN) / 2, COIN, rebirth.ZIndex + 2);
+		priceLabel = makeLabel(rebirth, "Price", fmtInt(price), px, 0, PRICE_W, actionH, TEXT.lg, THEME.foreground, {
 			font: "numeric",
 			align: "left",
-			zIndex: rebirth.ZIndex + 1,
+			zIndex: rebirth.ZIndex + 2,
 		});
 	}
 
@@ -574,6 +594,7 @@ function buildDeathScreen(
 			affordable = can;
 			setButtonEnabled(rebirth, can);
 			rebirthIcon?.setColor(can ? buttonForeground("default") : THEME.mutedForeground);
+			if (priceLabel !== undefined) priceLabel.TextColor3 = can ? THEME.foreground : THEME.mutedForeground;
 		}
 		let text = "";
 		if (rebirth !== undefined) {
