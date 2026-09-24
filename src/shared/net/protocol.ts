@@ -196,10 +196,13 @@
  *     the backpack -- checked again in that step, so a kit gone meanwhile builds nothing and comes off the cursor. A
  *     cancel (the action edge), a death or a trip out of the world leaves the kit in the backpack, and never gives the
  *     ingredients of its recipe back. `Craft` of a construction now does the same with the kit it makes: into the
- *     backpack, then onto the cursor as a kit -- the server's cursor only ever holds kits. S→C nothing new: the bag's
- *     `place` already carries the cursor and `invenEtc` the count. The client predicts both verbs by the same rules
- *     (client/net/bagPrediction.ts) and its cursor keeps `pendingKit` for its own world offline (client/systems/build.ts
- *     spends it there).
+ *     backpack, then onto the cursor as a kit -- the server's cursor only ever holds kits -- and, like Place, only on
+ *     foot ("busy" on a vehicle). S→C nothing new: the bag's `place` already carries the cursor and `invenEtc` the
+ *     count. The client predicts both verbs by the same rules (client/net/bagPrediction.ts) and its cursor keeps
+ *     `pendingKit` for its own world offline (client/systems/build.ts spends it there). Until the bag has ANSWERED the
+ *     verb (`bag.ack`), the client's cursor is a guess the server may have refused, and there the attack edge would be
+ *     a shot and the action edge an interaction: the client sends neither for that cursor meanwhile (client/net/
+ *     authority.ts `buildUnconfirmed`; the security review of 0a7561e, 6) -- nothing on the wire changes.
  */
 import {
 	NetReader,

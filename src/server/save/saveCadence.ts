@@ -217,21 +217,29 @@ export function noteMilestones(c: Cadence, save: PlayerSaveData): SaveEvent | un
 }
 
 /**
- * A craft worth a write of its own: a weapon or an equipment piece made at a workbench (the desk or the pro desk) --
- * the recipes that eat steel, machine parts, blueprints, gold or another weapon. Not what the hands make from wood and
- * stone (the stick, the stone axe), nor ammunition, smelting, a bandage, a meal or a construction (which goes on the
- * cursor, not into the save): those are cheap, frequent, and ride with the autosave.
+ * A craft worth a write of its own: a weapon, an equipment piece or a construction kit made at a workbench (the desk or
+ * the pro desk) -- the recipes that eat steel, machine parts, blueprints, gold or another weapon (a turret eats a
+ * pistol). A construction is a kit the backpack KEEPS since ITM-09 (the Bag's Build tab): a pro desk's turret is as
+ * much the save's as the gun it was made from. Not what the hands make from wood and stone (the stick, the stone axe,
+ * the craft desk, the campfire), nor ammunition, smelting, a bandage or a meal: those are cheap, frequent, and ride with
+ * the autosave.
  */
 export function isRareCraft(recipeId: number): boolean {
 	const recipe = recipeById(recipeId);
-	if (recipe === undefined || recipe.craftKind === 1) return false;
-	if (recipe.resultKind !== ItemKind.Weapon && recipe.resultKind !== ItemKind.Equip) return false;
+	if (recipe === undefined) return false;
+	if (recipe.craftKind !== 1 && recipe.resultKind !== ItemKind.Weapon && recipe.resultKind !== ItemKind.Equip) {
+		return false;
+	}
 	return recipe.needsDesk || recipe.needsPro;
 }
 
-/** the event a backpack outcome of the server is, if any: a skill learned, a rare craft */
+/**
+ * The event a backpack outcome of the server is, if any: a skill learned, a rare craft -- a construction's craft
+ * included (`holding` with its `recipe`); a kit the Build tab's Place put on the cursor moved nothing, so it asks none.
+ */
 export function backpackEvent(outcome: BackpackOutcome): SaveEvent | undefined {
 	if (outcome.kind === "learned") return "skill";
-	if (outcome.kind === "crafted" && isRareCraft(outcome.recipe)) return "craft";
+	const recipe = outcome.kind === "crafted" || outcome.kind === "holding" ? outcome.recipe : undefined;
+	if (recipe !== undefined && isRareCraft(recipe)) return "craft";
 	return undefined;
 }

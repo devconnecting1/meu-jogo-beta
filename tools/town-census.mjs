@@ -118,6 +118,15 @@ function census(seed) {
 		if (rows === undefined || slots <= 0) continue;
 		const per = perSlot(rows);
 		for (const [c, n] of Object.entries(per)) bump(out.loot, c, n * slots);
+		// ITM-09: the basic kits ON TOP of the slots, each line its own chance once per fill (spawns.ts BUILDING_KITS /
+		// YARD_KITS, shared/sim/loot.ts `rollKits`)
+		const kits =
+			s.kind === "building"
+				? SP.BUILDING_KITS?.[s.buildingType ?? 0]
+				: s.tags === "pump"
+					? undefined
+					: SP.YARD_KITS?.[SP.yardLootKey !== undefined ? SP.yardLootKey(s.tags, s.variant) : s.tags];
+		for (const e of kits ?? []) bump(out.loot, categoryOf(e), e.max);
 	}
 	// the lot grid (column / row of every lot: Chebyshev "blocks" between two buildings)
 	const xs = [...new Set(w.lots.map(l => l.x))].sort((a, b) => a - b);

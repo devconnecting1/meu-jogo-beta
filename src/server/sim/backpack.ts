@@ -19,8 +19,8 @@
  *       Unequip       alive, a real slot 1..5
  *       LearnSkill    alive, a point to spend, below the skill's maximum
  *       Craft         alive, the recipe exists, the station is near the SERVER's position, every ingredient is
- *                     there (checked for all before any is taken), no construction already on the cursor, 4 a
- *                     second (held while it runs)
+ *                     there (checked for all before any is taken), no construction already on the cursor, a
+ *                     construction only on foot (ITM-09, like Place), 4 a second (held while it runs)
  *       Place         (ITM-09, protocol.ts note 26) alive, on foot, a construction kit (PLACEABLES), the backpack
  *                     holds one, no construction already on the cursor; on the craft's clock (held while it runs).
  *                     It only goes onto the cursor: the attack edge places it and spends it (server/sim/build.ts)
@@ -56,7 +56,7 @@ const PACK_CHECK_TICKS = 30;
 
 /**
  * Does the SERVER own the backpack? From WORLD_SERVER_PHASE on it does (shared/net/mpConfig.ts): every road that
- * fills it — a pickup, a search, a craft, a refunded build, a pack — runs here, so a report has nothing left to say
+ * fills it — a pickup, a search, a craft, a construction kit, a pack — runs here, so a report has nothing left to say
  * about it. Below that phase the client still loots on its own copy and the report is how that reaches the server.
  */
 export function serverOwnsBackpack(): boolean {

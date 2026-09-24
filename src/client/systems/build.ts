@@ -5,8 +5,8 @@ import { InputState } from "shared/engine/input";
 import { addSolid } from "shared/game/world";
 import { ghostRectSticky, PLACEABLES, placedSolid, placementValid, snapToOpening } from "shared/sim/placement";
 import { ItemKind } from "shared/data/kinds";
-import { removeItem } from "shared/sim/inventory";
-import { noteBuildEdge, serverOwnsWorld } from "../net/authority";
+import { countItem, removeItem } from "shared/sim/inventory";
+import { buildUnconfirmed, noteBuildEdge, serverOwnsWorld } from "../net/authority";
 import { notePlaced, noteRefused } from "./buildCues";
 import { GameRefs } from "./types";
 
@@ -18,7 +18,9 @@ import { GameRefs } from "./types";
  * the E and the R already ride the input command's edges, the server places (and spends the kit, ITM-09) or takes it
  * off from ITS position and aim, and the wall comes back to every client as a SolidAdd (client/net/worldMirror.ts), the
  * kit's count in the bag. Here the construction only leaves the cursor at once (a build edge, so an older bag does not
- * put it back).
+ * put it back). A cursor the server has not confirmed yet (the Place or the craft still unanswered) takes no click and no
+ * E at all: one the server refused would have turned them into a shot and a pickup (client/net/authority.ts
+ * `buildUnconfirmed`).
  */
 
 export { PLACEABLES } from "shared/sim/placement";
@@ -61,6 +63,16 @@ export class BuildSystem {
 		}
 		if (input.reloadPressed) {
 			this.rotate();
+		}
+		// (the security review of 0a7561e, 6) a construction the SERVER has not confirmed yet -- the Place or the craft
+		// that put it on this cursor is still unanswered -- may be one it refused: there it has no cursor, and the click
+		// would be a shot, E a pickup. Until the bag answers, the click and E do nothing, here or on the wire (client/net/
+		// netClient.ts reads these very flags after this frame's systems); the first press after the answer is the build's
+		if ((input.attackPressed || input.actionPressed) && buildUnconfirmed()) {
+			if (input.attackPressed) input.attackBlocked = true;
+			input.attackPressed = false;
+			input.actionPressed = false;
+			return true;
 		}
 		if (input.actionPressed) {
 			this.cancel(refs);
@@ -122,14 +134,16 @@ export class BuildSystem {
 			this.leaveCursor(refs);
 			return;
 		}
-		// offline, the kit (ITM-09) is spent here, as the server spends it where it places it; gone from the backpack
-		// meanwhile, it comes off the cursor and nothing is built
-		if (refs.pendingKit === true && !removeItem(refs.save, ItemKind.Etc, refs.pendingPlace, 1)) {
+		// offline, the kit (ITM-09) is spent here, as the server spends it where it places it -- right after the wall
+		// goes up, like the server; gone from the backpack meanwhile, it comes off the cursor and nothing is built
+		const kit = refs.pendingKit === true;
+		if (kit && countItem(refs.save, ItemKind.Etc, refs.pendingPlace) < 1) {
 			this.clearCursor(refs);
 			return;
 		}
 		const r = { x: this.ghostX, y: this.ghostY, w: this.ghostW, h: this.ghostH };
 		addSolid(refs.world, placedSolid(def, r, this.rot));
+		if (kit) removeItem(refs.save, ItemKind.Etc, refs.pendingPlace, 1);
 		this.clearCursor(refs);
 	}
 

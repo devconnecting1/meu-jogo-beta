@@ -1875,11 +1875,16 @@ if (MP_PHASE >= 1) {
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = (sp, outcome) => {
-		// a refused verb changed nothing, and the weapon put away (ITM-06) is the body's, never the save's: no write
-		if (outcome.kind !== "refused" && outcome.kind !== "holstered") markDirty(sp.userId);
+		// a refused verb changed nothing, the weapon put away (ITM-06) is the body's, never the save's, and a kit the Build
+		// tab's Place put on the cursor (ITM-09: `holding` with no `recipe`) is still in the backpack: no write for them
+		const moved =
+			outcome.kind !== "refused" &&
+			outcome.kind !== "holstered" &&
+			(outcome.kind !== "holding" || outcome.recipe !== undefined);
+		if (moved) markDirty(sp.userId);
 		Analytics.backpack(sp.save, outcome);
-		// SAV-01: a skill learned or a rare craft (a weapon or an armour made at a workbench) is on the DataStore within
-		// an event save (saveCadence.ts `backpackEvent`)
+		// SAV-01: a skill learned or a rare craft (a weapon, an armour or a construction kit made at a workbench) is on
+		// the DataStore within an event save (saveCadence.ts `backpackEvent`)
 		const ev = Cadence.backpackEvent(outcome);
 		const s = ev !== undefined ? sessionOfUserId(sp.userId) : undefined;
 		if (ev !== undefined && s !== undefined) saveSoon(s, ev);

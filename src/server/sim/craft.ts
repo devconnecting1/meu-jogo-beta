@@ -52,10 +52,14 @@ export type CraftStation = Rule.CraftStation;
  * A `crafted` outcome carries `heat`: "cook" for a cooking recipe (item_cook), "smelt" for a smelting one
  * (item_fire), undefined otherwise. It is the server-side event the Chef and Blacksmith achievements count
  * (`count` is what came out, Chef's or Dwarf's double included).
+ *
+ * A `holding` outcome (ITM-09: a construction kit went onto the cursor) carries `recipe` when a CRAFT made that kit just
+ * now -- the save moved, ingredients out and the kit in -- and none when the Build tab's Place put on the cursor a kit
+ * the backpack already held: then the save did not move (server/main.server.ts writes accordingly).
  */
 export type BackpackOutcome =
 	| { kind: "crafted"; recipe: number; count: number; heat: CraftHeat }
-	| { kind: "holding"; placeable: number }
+	| { kind: "holding"; placeable: number; recipe?: number }
 	| { kind: "used"; item: number }
 	| { kind: "equipped"; equip: number; slot: number }
 	| { kind: "unequipped"; slot: number }
@@ -166,7 +170,7 @@ export class ServerCraft {
 			// cursor as one: server/sim/build.ts spends it where it is placed, and a cancel leaves it in the backpack
 			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
 			this.build.hold(slot, r.resultIndex, true);
-			return { kind: "holding", placeable: r.resultIndex };
+			return { kind: "holding", placeable: r.resultIndex, recipe: r.id };
 		}
 		// Chef now and then doubles a cooking, Dwarf a smelting: the shared rule, the client's prediction's too
 		const count = Rule.craftYield(r, save);
@@ -259,6 +263,9 @@ export class ServerCraft {
 		if (r.craftKind === 1 && this.build === undefined) return "station";
 		// one construction at a time, exactly like the client's `craftBlocker`
 		if (this.build?.placing(slot) === true) return "busy";
+		// ITM-09: and never from a vehicle, as the Place verb (shared/sim/placement.ts `kitRefusal`): on one the attack and
+		// E edges are the bell and the dismount (VEI-05), so a kit on the cursor could not be placed nor put back
+		if (r.craftKind === 1 && state.ride !== undefined) return "busy";
 		if (!this.stationOk(state, r)) return "station";
 		for (const ing of r.ingredients) {
 			if (countItem(save, ing.kind, ing.index) < ing.count) return "ingredients";

@@ -20,7 +20,7 @@ import { IntentKind } from "shared/net/protocol";
 import { BagMirror, PlayerSaveData, readBag, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
 import { setWorldAuthority } from "./authority";
-import { BagCursor, BagEntry, EDGE_ENTRY, predictVerb, rebase } from "./bagPrediction";
+import { BagCursor, BagEntry, EDGE_ENTRY, holdsCursor, predictVerb, rebase } from "./bagPrediction";
 import { netHosted, netNextSeq, netRefs, netSendBackpackIntent } from "./netClient";
 import { currentSave, setBagHook } from "../systems/saveClient";
 import { bagGrew } from "../systems/pickups";
@@ -78,6 +78,12 @@ function inFlight(): number {
 	let n = 0;
 	for (const e of entries) if (e.kind !== EDGE_ENTRY) n += 1;
 	return n;
+}
+
+/** a Place or a construction's craft the server has not answered yet: the cursor is still this client's guess */
+function cursorInFlight(): boolean {
+	for (const e of entries) if (holdsCursor(e)) return true;
+	return false;
 }
 
 /** one verb on the wire, remembered until the server answers it (the caller predicted it by the same rule) */
@@ -172,6 +178,7 @@ export function start(): void {
 		reserveSpent: () => {
 			reserveHoldUntil = os.clock() + RESERVE_HOLD_S;
 		},
+		cursorPending: cursorInFlight,
 	});
 	setBagHook((save, raw) => {
 		if (!owned()) return;

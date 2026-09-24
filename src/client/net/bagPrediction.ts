@@ -124,7 +124,9 @@ export function predictVerb(
 	if (kind === IntentKind.Craft) {
 		const r = recipeById(arg);
 		if (r === undefined) return false;
-		if (!replay && r.craftKind === 1 && cursor.pendingPlace >= 0) return false;
+		// a construction waits for a free cursor and a survivor on foot (server/sim/craft.ts `blocker`, ITM-09)
+		const rider = body ?? cursor.player;
+		if (!replay && r.craftKind === 1 && (cursor.pendingPlace >= 0 || rider?.ride !== undefined)) return false;
 		for (const ing of r.ingredients) {
 			if (countItem(save, ing.kind, ing.index) < ing.count) return false;
 		}
@@ -157,6 +159,16 @@ export function predictVerb(
 		return true;
 	}
 	return false;
+}
+
+/**
+ * Does this prediction put a construction on the cursor -- the Build tab's Place, a construction's craft (ITM-09)? While
+ * one is unanswered the cursor is the client's guess, and client/systems/build.ts holds the click (client/net/
+ * authority.ts `buildUnconfirmed`).
+ */
+export function holdsCursor(e: BagEntry): boolean {
+	if (e.kind === IntentKind.Place) return true;
+	return e.kind === IntentKind.Craft && recipeById(e.arg)?.craftKind === 1;
 }
 
 /** has the server answered this entry in `bag`? A verb by its nonce, an edge by the command it rode on */

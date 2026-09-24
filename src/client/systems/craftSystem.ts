@@ -60,6 +60,9 @@ const STATION_MISSING: Record<CraftStation, string> = {
  */
 export function craftBlocker(refs: GameRefs, r: CraftRecipe): string | undefined {
 	if (refs.pendingPlace >= 0) return "Finish the current build first";
+	// ITM-09: a construction goes onto the cursor, and on a vehicle the attack and E are the bell and the dismount -- the
+	// server refuses it there (server/sim/craft.ts `blocker`), as it refuses the Build tab's Place
+	if (r.craftKind === 1 && refs.player.ride !== undefined) return "Get off the vehicle first";
 	const station = Rule.recipeStation(r);
 	if (station !== undefined && stationNear(refs, station) === undefined) return STATION_MISSING[station];
 	const missing: Array<string> = [];

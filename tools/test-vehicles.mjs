@@ -404,7 +404,7 @@ section(
 	"B0. the vehicle is a server construction: crafted, held on the server's cursor, placed by the attack edge",
 	() => {
 		const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
-		const { addItem } = require(join(SRC, "shared/sim/inventory.ts"));
+		const { addItem, countItem } = require(join(SRC, "shared/sim/inventory.ts"));
 		const { world, sim } = serverWith();
 		const sp = addPlayer(sim, 0, 2000, 2000);
 		const d = driver(sim, sp);
@@ -441,6 +441,19 @@ section(
 			check(
 				sim.vehicles.riding(0) && sp.state.ride?.kind === vehicleKindOfItem(item),
 				`E: riding the ${ETC_NAME[item]} that was built`,
+			);
+			// ITM-09 (the security review of 0a7561e, 1): no construction crafted from the saddle -- on it the attack is the
+			// bell and E gets off, so the kit could be neither placed nor put back; nothing spent
+			for (const ing of recipe.ingredients) addItem(sp.save, ing.kind, ing.index, ing.count);
+			const had = recipe.ingredients.map(ing => countItem(sp.save, ing.kind, ing.index));
+			const onIt = sim.craft.craft(0, sp.state, sp.save, recipe.id);
+			check(
+				onIt.kind === "refused" &&
+					onIt.why === "busy" &&
+					!sim.build.placing(0) &&
+					recipe.ingredients.every((ing, i) => countItem(sp.save, ing.kind, ing.index) === had[i]),
+				`${ETC_NAME[item]}: riding, the craft of a construction is refused ("busy") and spends nothing`,
+				JSON.stringify(onIt),
 			);
 			d.ticks(40);
 			d.tick(0, 0, PRESS_E);

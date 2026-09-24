@@ -308,9 +308,6 @@ export class ServerBuild {
 		const placeable = p.placeable;
 		this.clear(p);
 		p.cooldown = 1 / PLACE_RATE;
-		// the kit leaves the backpack in the very step the construction enters the world (checked above: no yield
-		// between the two, so there is no moment where it is both, or neither)
-		if (kit && save !== undefined) removeItem(save, ItemKind.Etc, placeable, 1);
 		// `addSolid` fires `onSolidAdd`, which is what queues the delta and bumps the caps
 		const solid = addSolid(this.world, {
 			...shape,
@@ -318,6 +315,10 @@ export class ServerBuild {
 			owner: slot,
 			builder: this.userOf?.(slot),
 		});
+		// the kit leaves the backpack in the very step the construction entered the world (checked above; no yield
+		// between the two) -- AFTER it, so a hook that throws inside `addSolid` leaves the kit where it was, never spent
+		// on a wall that is not there
+		if (kit && save !== undefined) removeItem(save, ItemKind.Etc, placeable, 1);
 		return kit ? { kind: "placed", solid, kit: true } : { kind: "placed", solid };
 	}
 

@@ -3756,6 +3756,49 @@ section(
 	checkEq(craft.placeKit(3, { ...body, dead: true }, save, BARRICADE).why, "dead", "morto: 'dead'");
 	checkEq(craft.placeKit(4, { ...body, ride: { kind: 1 } }, save, BARRICADE).why, "busy", "montado: 'busy'");
 	checkEq(craft.placeKit(5, body, save, BARRICADE).kind, "holding", "vivo e a pe: vai");
+
+	// ...and the craft of a construction too (the security review of 0a7561e, 1): on a vehicle the attack and E are the
+	// bell and the dismount, so the kit could be neither placed nor put back -- refused before anything is spent
+	{
+		const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === BARRICADE);
+		const s6 = SAVE.defaultSave();
+		for (const ing of recipe.ingredients) addItem(s6, ing.kind, ing.index, ing.count);
+		const had = recipe.ingredients.map(ing => countItem(s6, ing.kind, ing.index));
+		const out = craft.craft(6, { ...body, ride: { kind: 1 } }, s6, recipe.id);
+		checkEq(`${out.kind}/${out.why}`, "refused/busy", "craftar uma construcao montado: recusado por 'busy'");
+		check(
+			recipe.ingredients.every((ing, i) => countItem(s6, ing.kind, ing.index) === had[i]) &&
+				countItem(s6, 4, BARRICADE) === 0 &&
+				!sim.build.placing(6),
+			"e nada foi gasto, nenhum kit feito, nada no cursor",
+		);
+	}
+
+	// the kit leaves the backpack AFTER the construction entered the world (the review of 0a7561e, 4): a hook that throws
+	// inside `addSolid` leaves the kit where it was, never spent on a wall that is not there
+	{
+		const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
+		const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+		const w7 = emptyWorld();
+		const b7 = new ServerBuild({
+			world: w7,
+			out: new WorldOut(),
+			onSolid: (s, added) => {
+				if (added && s.placeable !== undefined) throw new Error("a hook that fails");
+			},
+		});
+		const s7 = SAVE.defaultSave();
+		s7.invenEtc[BARRICADE] = 1;
+		const body7 = { ...p.state, x: 2000, y: 2000, angle: 0 };
+		b7.hold(0, BARRICADE, true);
+		let threw = false;
+		try {
+			b7.place(0, body7, [body7], [], s7);
+		} catch {
+			threw = true;
+		}
+		check(threw && s7.invenEtc[BARRICADE] === 1, "um gancho que falha no addSolid: o kit continua na mochila");
+	}
 }
 
 section("y2) ITM-09: a bicicleta da mochila e colocada e se monta (VEI-05: o veiculo que se tem, se usa)");
