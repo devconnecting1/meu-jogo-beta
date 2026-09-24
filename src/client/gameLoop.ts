@@ -42,6 +42,7 @@ import { FLASH_LIFT, Weather } from "shared/sim/weather";
 import { STRUCTURE_LIGHT_R } from "shared/sim/ai/zombieTuning";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
+import { localIsSupporter } from "./systems/supporterClient";
 import {
 	netActive,
 	netBindAdmin,
@@ -751,6 +752,8 @@ export class GameLoop {
 		// (`outfitLookOf` / `petLookOf`), so your screen and everybody else's agree
 		const save = getCtx().save;
 		look.outfit = outfitLookOf(save);
+		// MON-07: your swing trail in the Supporter rose while the server says you subscribe
+		look.supporter = localIsSupporter();
 		this.drawOwnPet(r, cam, petLookOf(save), p.x, p.y, p.angle);
 		// VEI-05: on a vehicle the rider faces where it points, feet on the pedals, over the vehicle
 		const ride = p.ride;
@@ -943,7 +946,8 @@ export class GameLoop {
 		// MON-05: your title by the rule the server replicates it with (`titleWireOf`: shown only if earned, and
 		// `titles` is the server's word -- LoadAck, wallet, its own unlock notice), so every screen agrees
 		const shown = ctx.phase === "playing" && !p.dead;
-		this.nameplate.update(at.x, at.y, ctx.save.level, shown, titleWireOf(ctx.save));
+		// MON-07: your Supporter heart, by the server's word on your own Player (client/systems/supporterClient.ts)
+		this.nameplate.update(at.x, at.y, ctx.save.level, shown, titleWireOf(ctx.save), localIsSupporter());
 	}
 
 	/**

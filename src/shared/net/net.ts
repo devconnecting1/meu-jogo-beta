@@ -62,17 +62,22 @@ export type SaveRejectReason = "readonly" | "stale" | "outdated" | "invalid" | "
 export interface SaveAckPayload {
 	ok: boolean;
 	reason?: SaveRejectReason;
-	/** coins granted by this report (days survived, milestones, bosses) */
+	/**
+	 * coins granted by this report (days survived, milestones, bosses) -- or, on a `push`, the coins the simulation paid
+	 * since the last push (a midnight, a boss: server/sim/progress.ts `onIncome`), told once
+	 */
 	earned: number;
 	earnedDays: number;
 	earnedBosses: number;
+	/** of `earned`, the record milestones paid (a new best day that is a multiple of ECONOMY.MILESTONE_EVERY) */
+	earnedRecords?: number;
 	/** part of the progress was held back by the server's time limits: report again later */
 	clamped: boolean;
 	wallet?: Wallet;
 	/**
 	 * Not an answer to a report: the server pushed the wallet because the simulation changed it (XP, a level,
 	 * midnight's coins), or tells what happened to a write of the save (`store`). The client applies the wallet and
-	 * nothing else -- no retry, no toast.
+	 * nothing else -- no retry -- except the coin toast when it says coins were `earned` (MON-06).
 	 */
 	push?: boolean;
 	/** SAV-01: a push about the DataStore write of this player's save (client/ui/saveIndicator.ts) */
@@ -104,9 +109,19 @@ export type ShopActionRequest =
 	 */
 	| { kind: "buyPack"; packId: number; nonce?: number }
 	| { kind: "buyCostume"; costumeId: number }
+	/**
+	 * The same costume for Robux (docs/SHOP.md "Robux: decisões e desenho"): the SERVER opens Roblox's prompt, and only
+	 * for a costume it verified, not owned (server/save/robux.ts). The answer says the prompt opened, or why not; the
+	 * costume itself arrives with ProcessReceipt, on the pushed wallet -- never with this answer.
+	 */
+	| { kind: "robuxCostume"; costumeId: number }
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
-	| { kind: "rebirth"; runRev: number }
+	/**
+	 * `expectFree`: the lobby showed this Rebirth at 0 (the daybreak came while they waited: pz_rebirth_free). The server
+	 * refuses it ("price") rather than charge a price the player never saw, if it is not free any more.
+	 */
+	| { kind: "rebirth"; runRev: number; expectFree?: boolean }
 	| { kind: "newRun"; runRev: number }
 	/**
 	 * The shop (screen 0) or the wardrobe (1) just opened: no decision, nothing charged -- only the first step of the
@@ -114,8 +129,23 @@ export type ShopActionRequest =
 	 */
 	| { kind: "viewShop"; screen: number };
 
+/**
+ * "pending": a Robux payment for this costume may be on its way (its prompt open or confirmed, or its receipt answered
+ * "not yet" this session), so it is not sold for coins meanwhile, nor in a second prompt (server/save/robux.ts holds).
+ * "price": a Rebirth asked for as free (`expectFree`) is not free any more: nothing charged, the screen shows the price.
+ */
 export type ShopActionReason =
-	"funds" | "owned" | "limit" | "invalid" | "rate" | "loading" | "readonly" | "outdated" | "network";
+	| "funds"
+	| "owned"
+	| "limit"
+	| "invalid"
+	| "rate"
+	| "loading"
+	| "readonly"
+	| "outdated"
+	| "network"
+	| "pending"
+	| "price";
 
 export interface ShopActionResult {
 	ok: boolean;

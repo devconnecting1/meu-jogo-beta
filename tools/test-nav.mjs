@@ -697,7 +697,7 @@ for (const sc of SCREENS) {
 
 	// MON-06: a pack you cannot afford has its Buy disabled (it says how many coins are missing), so the pad skips it:
 	// every link of the shop's grid lands on a card it CAN buy, left / right stay in the row, up / down reach the
-	// nearest row with one, and a disabled card has no link at all -- the owner's 20 coins, the Medic Bag at 30
+	// nearest row with one, and a disabled card has no link at all -- the owner's 20 coins, against docs/SHOP.md's prices
 	{
 		ctx.phase = "shop";
 		const before = ctx.save.money;
@@ -728,17 +728,57 @@ for (const sc of SCREENS) {
 					issues.push(`${b.Parent.Name} ${k} sai da fileira`);
 			}
 		}
-		// Pantry Crate (1) -> Right skips the Medic Bag (2): the row has nothing more to buy; Down from the Medic Bag's
-		// column lands on the Electronics Box (5)
-		const pantry = cells[1];
-		const medic = cells[2];
+		// every link, against a reference walk of the same rule (whatever the prices are: docs/SHOP.md moves them): left /
+		// right the nearest stop in the row, up / down the nearest row with a stop and in it the stop closest in column
+		// (a tie goes to the left one, as linkSparseGrid scans)
+		const { SHOP_PACKS: PACKS } = require(join(SRC, "shared/data/shop.ts"));
+		const { packPetOwned } = require(join(SRC, "shared/game/save.ts"));
+		const affordable = PACKS.map((p, i) => p.price <= 20 && !packPetOwned(ctx.save, i));
+		const isStop = i => i >= 0 && i < cells.length && affordable[i] && cells[i]?.Selectable === true;
+		const rowsN = Math.ceil(cells.length / 3);
+		const nearestIn = (r, c) => {
+			let best;
+			let bestD = Infinity;
+			for (let k = 0; k < 3; k++) {
+				const i = r * 3 + k;
+				if (!isStop(i)) continue;
+				if (Math.abs(k - c) < bestD) {
+					best = cells[i];
+					bestD = Math.abs(k - c);
+				}
+			}
+			return best;
+		};
+		for (let i = 0; i < cells.length; i++) {
+			if (!isStop(i)) continue;
+			const r = Math.floor(i / 3);
+			const c = i % 3;
+			let left;
+			for (let k = c - 1; k >= 0 && left === undefined; k--) if (isStop(r * 3 + k)) left = cells[r * 3 + k];
+			let right;
+			for (let k = c + 1; k < 3 && right === undefined; k++) if (isStop(r * 3 + k)) right = cells[r * 3 + k];
+			let up;
+			for (let rr = r - 1; rr >= 0 && up === undefined; rr--) up = nearestIn(rr, c);
+			let down;
+			for (let rr = r + 1; rr < rowsN && down === undefined; rr++) down = nearestIn(rr, c);
+			const want = {
+				NextSelectionLeft: left,
+				NextSelectionRight: right,
+				NextSelectionUp: up,
+				NextSelectionDown: down,
+			};
+			for (const [k, t] of Object.entries(want)) {
+				if (cells[i][k] !== t)
+					issues.push(`${cells[i].Parent.Name} ${k}: ${cells[i][k]?.Parent?.Name} != ${t?.Parent?.Name}`);
+			}
+		}
+		const tooDear = PACKS.map((p, i) => i).filter(i => !affordable[i]);
 		check(
-			"loja com 20 moedas: o Medic Bag (30) fica fora do caminho do controle e os links so pousam no que da para comprar",
-			medic?.Selectable === false &&
-				issues.length === 0 &&
-				pantry?.NextSelectionRight === undefined &&
-				pantry?.NextSelectionDown === cells[4] &&
-				cells[5]?.NextSelectionUp === pantry,
+			"loja com 20 moedas: cada pacote caro demais fica fora do caminho do controle e os links so pousam no que da para comprar",
+			tooDear.length > 0 &&
+				tooDear.every(i => cells[i]?.Selectable === false) &&
+				stops.length === affordable.filter(Boolean).length &&
+				issues.length === 0,
 			issues.slice(0, 4).join("; ") || `${stops.length} paradas, ${off.length} fora`,
 		);
 		close();
@@ -1781,7 +1821,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		const medicBuy = buyOf(medic);
 		const needed = SHOP_PACKS[medic].price - 20;
 		check(
-			"loja: sem moedas para o Medic Bag, o Buy desabilita e diz quanto falta ('10 more needed'); nada de contorno",
+			"loja: sem moedas para o Medic Bag, o Buy desabilita e diz quanto falta ('N more needed'); nada de contorno",
 			medicBuy.GetAttribute("Disabled") === true &&
 				medicBuy.Text === `${needed} more needed` &&
 				medicBuy.GetAttribute("Variant") === buyOf(0).GetAttribute("Variant") &&
@@ -1812,7 +1852,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		// what is inside: the Bag's icons, one tile per item, with the count; a pet pack draws the pet itself
 		const iconsOk = SHOP_PACKS.every((p, i) => {
 			const c = card(i);
-			if (p.name.startsWith("Pet ")) return findIn(c, "Pet") !== undefined && /New game/.test(allText(c));
+			if (p.name.startsWith("Pet ")) return findIn(c, "Pet") !== undefined && /this life/.test(allText(c));
 			return p.items.every(
 				(it, k) =>
 					findIn(findIn(c, `Item${k}`), "Icon")?.GetAttribute("Icon") !== "" &&

@@ -432,6 +432,17 @@ export class LifeKeeper {
 		return this.inWorld(rec) === undefined && rec.dead && rec.downFor !== undefined && rec.downFor <= 0;
 	}
 
+	/**
+	 * `daybreakDue` as a look only -- no record made, nothing reconciled -- for what the lobby is TOLD
+	 * (shared/data/shop.ts REBIRTH_FREE_ATTR, set by server/main.server.ts every wallet push). The charge itself is
+	 * still decided by `daybreakDue` when the Rebirth is asked.
+	 */
+	daybreakDuePeek(userId: number): boolean {
+		const rec = this.records.get(userId);
+		if (rec === undefined) return false;
+		return this.inWorld(rec) === undefined && rec.dead && rec.downFor !== undefined && rec.downFor <= 0;
+	}
+
 	/** is the rule-6 decision window open right now (tests, admin) */
 	wipeWindowOpen(): boolean {
 		return this.wipeIn !== undefined;

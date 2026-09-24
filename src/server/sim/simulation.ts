@@ -48,8 +48,16 @@ import { InteractOutcome, ServerInteraction } from "./interaction";
 import { PickupResult, ServerItems, WalkingSurvivor } from "./items";
 import { KEEP_AFTER_LEAVE_S } from "./life";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
-import { TitleId } from "shared/data/titles";
-import { creditLifeNight, grantTitle } from "../save/titles";
+import { WeaponKind } from "shared/data/kinds";
+import {
+	NightLived,
+	Unlocks,
+	creditBuilt,
+	creditCrafted,
+	creditLifeNight,
+	creditNightLived,
+	creditVault,
+} from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
 import { powerSet, ServerPower } from "./power";
@@ -145,6 +153,28 @@ interface Presence {
 	 * them a Survivor. Cleared at every daybreak, and by a new world.
 	 */
 	nightCredited?: boolean;
+	/**
+	 * MON-05, the night's tally since the last midnight (reset there, and with a new world): what the server saw of this
+	 * survivor's night, read at 06:00 by `creditDawn` for the titles a whole night lived can bring. Only the server's
+	 * own events move it -- the kill credit (`killCredited`), and the body's hp as the tick left it.
+	 */
+	nightKills: number;
+	/** of `nightKills`, the killing blows NOT dealt with a melee weapon */
+	nightOtherKills: number;
+	/** the body lost hp at some tick since midnight */
+	nightHurt: boolean;
+	/** the lowest hp since midnight, as a share of hpMax (1 = never scratched) */
+	nightLowest: number;
+	/** the hp the last tick left the body with (a drop from it is a hurt), or -1 before the first tick of a body */
+	lastHp: number;
+}
+
+/** the night's tally of a presence, back to "nothing happened yet" (a midnight, a new world) */
+function resetNight(p: Presence): void {
+	p.nightKills = 0;
+	p.nightOtherKills = 0;
+	p.nightHurt = false;
+	p.nightLowest = 1;
 }
 
 /** one survivor's filtered ping (server/sim/combat.ts `setPing`), kept across a leave/enter by `setPing` */
@@ -353,6 +383,18 @@ export class ServerSimulation {
 	private readonly ownsInteractive: boolean;
 	/** the survivor whose weapon machine is running this instant (the `chop` hook spills toward them) */
 	private swinger?: ServerPlayer;
+	/** MON-05, `creditDawn`'s scratch: who lived the night whole, and what the server saw of it (no garbage a dawn) */
+	private readonly livedScratch = new Array<ServerPlayer>();
+	private readonly nightScratch: NightLived = {
+		kills: 0,
+		otherKills: 0,
+		hurt: false,
+		lowestShare: 1,
+		weather: 0,
+		rolledWeather: 0,
+		worldDay: 1,
+		livedTogether: 0,
+	};
 
 	constructor(options: SimulationOptions) {
 		this.world = options.world;
@@ -390,6 +432,9 @@ export class ServerSimulation {
 				const sound = wireSoundId(useSoundOf(outcome.item));
 				this.onFx?.({ t: FxType.Sound, sound, x: sp.state.x, y: sp.state.y, volume: 1 });
 			}
+			// MON-05 "Tinkerer": what the server crafted (a construction counts when it is placed, as a Builder's); never
+			// in an assisted run (§9.3)
+			if (outcome.kind === "crafted" && this.pays(sp)) this.announce(sp, creditCrafted(sp.save, outcome.count));
 			this.onBackpack?.(sp, outcome);
 		};
 		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
@@ -436,6 +481,7 @@ export class ServerSimulation {
 		for (const [, p] of this.presence) {
 			p.aliveTicks = 0;
 			p.nightCredited = false;
+			resetNight(p);
 		}
 		this.dayTicks = 0;
 		this.world = world;
@@ -604,6 +650,8 @@ export class ServerSimulation {
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
 				paysRewards: slot => this.paysSlot(slot),
+				// MON-05 "Safecracker": the survivor whose work made a vault give way (EDI-24), in a run that pays
+				onVaultCracked: (_door, slot) => this.creditVaultCracked(slot),
 				windows,
 				// IA-02: a door turning is heard by the next zombie over; EDI-24: the bank vault's work, its door giving
 				// way and its alarm
@@ -647,11 +695,14 @@ export class ServerSimulation {
 		const progress = new Progress({
 			saveOf: slot => this.bySlot.get(slot)?.save,
 			paysRewards: slot => this.paysSlot(slot),
-			// MON-05: the killing blow that made a Horde Breaker
+			// MON-05: the killing blow that made a Horde Breaker (a Tracker, a Sharpshooter), a turret's Sentry, a boss's
+			// Boss Hunter
 			titleUnlocked: (slot, titleId) => {
 				const sp = this.bySlot.get(slot);
 				if (sp !== undefined) this.onTitleUnlocked?.(sp, titleId);
 			},
+			// ...and the night's tally a whole night lived is judged by at 06:00 (`creditDawn`)
+			killCredited: (slot, _zombieType, weaponKind) => this.noteNightKill(slot, weaponKind),
 		});
 		out.progress = progress;
 		const projectiles = new ServerProjectiles({
@@ -790,16 +841,21 @@ export class ServerSimulation {
 			if (!paid) continue;
 			if (p !== undefined) p.nightCredited = true;
 			if (!credit.advanced) continue;
-			const unlocked = creditLifeNight(sp.save);
-			if (unlocked >= 0 && this.onTitleUnlocked !== undefined) this.onTitleUnlocked(sp, unlocked);
+			// Week One, Seasoned, Old Guard, Centurion, Unbroken (server/save/titles.ts)
+			this.announce(sp, creditLifeNight(sp.save));
 		}
 		// a new day for everybody: the survivors in the world start it at 0, anybody else is forgotten (they start
-		// at 0 too whenever they come back); the last real input is kept, it is about minutes, not days
+		// at 0 too whenever they come back); the last real input is kept, it is about minutes, not days. The night's
+		// tally (MON-05) starts here too: what happens from this midnight to 06:00 is the night a Survivor lives
 		const inWorld = new Set<number>();
 		for (const sp of this.roster) inWorld.add(sp.userId);
 		for (const [userId, p] of this.presence) {
-			if (inWorld.has(userId)) p.aliveTicks = 0;
-			else this.presence.delete(userId);
+			if (inWorld.has(userId)) {
+				p.aliveTicks = 0;
+				resetNight(p);
+			} else {
+				this.presence.delete(userId);
+			}
 		}
 		this.dayTicks = 0;
 	}
@@ -810,10 +866,13 @@ export class ServerSimulation {
 	 * it is exactly the ticks of the night since. Nobody keeps the mark past this: the next night starts from zero.
 	 */
 	private creditDawn(): void {
+		// who lived it whole, first (Safety in Numbers counts them), then what each of them earned by it
+		const lived = this.livedScratch;
+		lived.clear();
 		for (const sp of this.roster) {
 			const p = this.presence.get(sp.userId);
 			if (p === undefined) continue;
-			const lived = survivedNight(
+			const whole = survivedNight(
 				p.nightCredited === true,
 				sp.state.dead,
 				p.aliveTicks,
@@ -823,8 +882,24 @@ export class ServerSimulation {
 				this.simHz,
 			);
 			// …and a run an admin helped along since midnight (§9.3) earns nothing, as at midnight itself
-			if (lived && this.pays(sp)) this.unlockTitle(sp, TitleId.Survivor);
+			if (whole && this.pays(sp)) lived.push(sp);
 		}
+		const night = this.nightScratch;
+		night.weather = this.clock.weather;
+		night.rolledWeather = this.clock.dayRoll;
+		night.worldDay = this.clock.day;
+		night.livedTogether = lived.size();
+		for (const sp of lived) {
+			const p = this.presence.get(sp.userId);
+			if (p === undefined) continue;
+			night.kills = p.nightKills;
+			night.otherKills = p.nightOtherKills;
+			night.hurt = p.nightHurt;
+			night.lowestShare = p.nightLowest;
+			// Survivor, Nightwatch, and the nights with something to tell (server/save/titles.ts `creditNightLived`)
+			this.announce(sp, creditNightLived(sp.save, night));
+		}
+		lived.clear();
 		for (const [, p] of this.presence) p.nightCredited = false;
 		// BEM-04: the night is over for everybody standing -- the moment the dawn card reports on, so the save goes soon --
 		// and whether they lived it: alive in the world every tick since midnight (the count the Survivor title reads,
@@ -838,19 +913,52 @@ export class ServerSimulation {
 		}
 	}
 
-	/** `titleId` is this survivor's now: into the save once, and announced once (server/save/titles.ts) */
-	private unlockTitle(sp: ServerPlayer, titleId: number): void {
-		if (grantTitle(sp.save, titleId) && this.onTitleUnlocked !== undefined) this.onTitleUnlocked(sp, titleId);
+	/** MON-05: every title one event unlocked for this survivor -- already in the save -- told once each */
+	private announce(sp: ServerPlayer, unlocked: Unlocks): void {
+		if (this.onTitleUnlocked === undefined) return;
+		for (const titleId of unlocked) this.onTitleUnlocked(sp, titleId);
+	}
+
+	/** MON-05: the kill credit gave `slot` a killing blow (a run that pays): the night's tally counts it */
+	private noteNightKill(slot: number, weaponKind: number): void {
+		const sp = this.bySlot.get(slot);
+		const p = sp !== undefined ? this.presence.get(sp.userId) : undefined;
+		if (p === undefined) return;
+		p.nightKills += 1;
+		if (weaponKind !== WeaponKind.Melee) p.nightOtherKills += 1;
+	}
+
+	/** MON-05 "Builder": the server placed a construction for this survivor, in a run that pays */
+	private creditPlaced(sp: ServerPlayer): void {
+		if (this.pays(sp)) this.announce(sp, creditBuilt(sp.save));
+	}
+
+	/** MON-05 "Safecracker": the survivor in `slot` cracked a vault (EDI-24), in a run that pays */
+	private creditVaultCracked(slot: number): void {
+		const sp = this.bySlot.get(slot);
+		if (sp !== undefined && this.pays(sp)) this.announce(sp, creditVault(sp.save));
 	}
 
 	/** one tick of §3.6 bookkeeping; `acted` = a REAL command with movement or an edge was consumed this tick */
 	private notePresence(sp: ServerPlayer, acted: boolean): void {
 		let p = this.presence.get(sp.userId);
 		if (p === undefined) {
-			p = { aliveTicks: 0 };
+			p = { aliveTicks: 0, nightKills: 0, nightOtherKills: 0, nightHurt: false, nightLowest: 1, lastHp: -1 };
 			this.presence.set(sp.userId, p);
 		}
-		if (!sp.state.dead) p.aliveTicks += 1;
+		const body = sp.state;
+		if (!body.dead) {
+			p.aliveTicks += 1;
+			// MON-05, the night's tally: a drop from the hp the last tick left is a hurt (a bite, a spit, hunger,
+			// poison), wherever in the tick it came from; the lowest share is Close Call's. A body that was not here
+			// last tick (a new body, a stand-up) starts from what it has
+			const hp = body.hp;
+			if (p.lastHp >= 0 && hp < p.lastHp) p.nightHurt = true;
+			if (body.hpMax > 0) p.nightLowest = math.min(p.nightLowest, math.max(0, hp) / body.hpMax);
+			p.lastHp = hp;
+		} else {
+			p.lastHp = -1;
+		}
 		if (acted) p.activeTick = this.tick;
 	}
 
@@ -1244,6 +1352,7 @@ export class ServerSimulation {
 					const s = placed.solid;
 					emitSound(horde.refs, s.x + s.w / 2, s.y + s.h / 2, Noise.BUILD, true);
 				}
+				if (placed.kind === "placed") this.creditPlaced(sp);
 			}
 			return;
 		}

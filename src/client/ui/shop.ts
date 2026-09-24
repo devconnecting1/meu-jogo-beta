@@ -1,6 +1,6 @@
 import { GameContext } from "shared/game/context";
-import { ownsEquip, pendingPacks } from "shared/game/save";
-import { ECONOMY, SHOP_PACKS, ShopPack } from "shared/data/shop";
+import { ownsEquip, packPetOwned, pendingPacks } from "shared/game/save";
+import { ECONOMY, SHOP_PACKS, ShopPack, petOfPack } from "shared/data/shop";
 import { ItemKind } from "shared/data/kinds";
 import { petLookOfEquip } from "shared/data/cosmetics";
 import { DESIGN } from "shared/engine/constants";
@@ -46,12 +46,12 @@ import * as Kit from "./window";
  * the X, back where the shop was opened from) -- with two tabs, the coins and the door to the Wardrobe on one line.
  *
  *   ┌ ? ──────────────────────────────── Shop ─────────────────────────────────── X ┐
- *   │ [Packs] [Earn coins]                           [👕 Wardrobe]  (● 20)          │
+ *   │ [Packs] [Earn coins]                           [👕 Wardrobe]  (● 30)          │
  *   │ [bag] Fixed contents, shown in full. A pack goes into your backpack when you   │
  *   │       enter the city.                                                          │
  *   │ ┌ First Night Kit ─────┐ ┌ Pantry Crate ──────────┐ ┌ Medic Bag ───────────┐ │
  *   │ │ [ic][ic][ic] Cotton… │ │ [ic][ic][ic] Cooked…   │ │ [ic][ic][ic] First…  │ │
- *   │ │ ● 20         [ Buy ] │ │ ● 20          [ Buy ]  │ │ ● 30 [10 more needed]│ │
+ *   │ │ ● 20         [ Buy ] │ │ ● 30          [ Buy ]  │ │ ● 45 [15 more needed]│ │
  *   │ └──────────────────────┘ └────────────────────────┘ └──────────────────────┘ │  3 x 3
  *   └───────────────────────────────────────────────────────────────────────────────┘
  *
@@ -59,7 +59,8 @@ import * as Kit from "./window";
  *   as the Bag's own item icons (UI-11) on tiles with the count on each, the names beside them in the same order, and
  *   the price with Buy on one line. A pet pack shows the pet itself, drawn by the wardrobe's SurvivorPreview (a bird
  *   in flight, wings spread: landed and seen from above, a pigeon is a grey oval), and says the truth about it: it
- *   stays until a New game (MON-04; the Wardrobe sells the one that stays). Already owned for good: "Owned".
+ *   stays for this life -- a New game or the town's end takes it (MON-04; the Wardrobe sells the one that stays).
+ *   Already owned for good: "Owned".
  * - Can't afford it: Buy is disabled and says how much is missing ("10 more needed"), on every card alike. It used to
  *   turn into a hollow outline -- a style of its own that read as focus or as another kind of button.
  * - No "popular" or "best value" tag: nothing in the data says which pack is either, and a tag that invents urgency is
@@ -81,6 +82,10 @@ export function actionErrorText(reason: ShopActionReason | undefined, langType: 
 	if (reason === "rate") return tr("Please wait a moment");
 	if (reason === "loading") return tr("Still loading your progress");
 	if (reason === "readonly") return tr("Progress not loaded");
+	// a Robux prompt for this costume is open (server/save/robux.ts): neither the coins nor a second prompt meanwhile
+	if (reason === "pending") return tr("Waiting for your Robux purchase");
+	// a Rebirth shown free is not free any more (server/main.server.ts `expectFree`): nothing was charged
+	if (reason === "price") return tr("The price changed, try again");
 	// "outdated" = the request named a run the session has already moved past. client/main.client.ts retries
 	// it once with the corrected runRev, so reaching this text means the two really do disagree -- say that,
 	// instead of "Please try again", which told a player to repeat the click that had just failed.
@@ -97,6 +102,37 @@ export function fundsErrorText(reason: ShopActionReason | undefined, short: numb
 		return `${langGet("Not enough coins", langType)}: ${fmtInt(short)} ${langGet("more needed", langType)}`;
 	}
 	return actionErrorText(reason, langType);
+}
+
+/** what the server said a report or a pushed wallet paid (shared/net/net.ts SaveAckPayload) */
+export interface Earned {
+	earned: number;
+	earnedDays: number;
+	earnedBosses: number;
+	earnedRecords?: number;
+}
+
+/**
+ * MON-06's coin toast, from the server's own numbers: "+13 coins   Day survived ×1  ·  Record day ×1". The coins a
+ * midnight or a boss paid reach the client in a pushed wallet (server/sim/progress.ts `onIncome`); nothing here counts
+ * or guesses them. Empty when nothing was earned.
+ */
+export function earnedText(ack: Earned, langType: number): string {
+	if (!(ack.earned > 0)) return "";
+	const tr = (k: string): string => langGet(k, langType);
+	const parts: Array<string> = [];
+	if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
+	const records = ack.earnedRecords ?? 0;
+	if (records > 0) parts.push(`${tr("Record day")} ×${records}`);
+	if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
+	const head = `+${fmtInt(ack.earned)} ${tr("coins")}`;
+	return parts.size() > 0 ? `${head}   ${parts.join("  ·  ")}` : head;
+}
+
+/** a brand-new save's greeting, with the gift the server gave it (ECONOMY.STARTING_COINS: one number, one place) */
+export function welcomeText(langType: number): string {
+	const tr = (k: string): string => langGet(k, langType);
+	return `${tr("Welcome, survivor! A gift to start")}: +${fmtInt(ECONOMY.STARTING_COINS)} ${tr("coins")}`;
 }
 
 /** the two pages; the Wardrobe is a door beside them (client/ui/wardrobe.ts, MON-04), not a page of this window */
@@ -165,7 +201,7 @@ const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 const HELP_TEXT = [
 	"Every pack has fixed contents, shown in full on its card: what you see is what you get.",
 	"Packs go into your backpack the next time you enter the city.",
-	"A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.",
+	"A pet from a pack stays for this life, until a New game or the town ends. The Wardrobe sells outfits and pets you keep for good.",
 	"Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
 ].join("#");
 
@@ -402,17 +438,14 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		});
 		setVisible(pending, false);
 		// what is inside: the Bag's icons on tiles with the count, their names beside them in the same order
-		let petEquip = -1;
-		for (const it of pack.items) {
-			if (it.kind === ItemKind.Equip && petLookOfEquip(it.index) !== 0) petEquip = it.index;
-		}
+		const petEquip = petOfPack(pack);
 		const namesX = CARD_PAD + (petEquip >= 0 ? PET_W : pack.items.size() * (TILE + TILE_GAP) - TILE_GAP) + space(2);
 		const lines: Array<string> = [];
 		// where the price starts: at the card's left edge, or right of a pet's picture
 		let priceX = CARD_PAD;
 		if (petEquip >= 0) {
 			// a pet pack: the pet itself, drawn as the wardrobe draws it, in a bed down to the price line, and what it
-			// is -- it stays until a New game (MON-04: the Wardrobe sells the one that stays)
+			// is -- it stays for this life, until a New game or the town ends (MON-04: the Wardrobe sells the one that stays)
 			const bedH = footY + FOOT_H - TILES_Y;
 			const bed = makeFrame(card, "PetBed", CARD_PAD, TILES_Y, PET_W, bedH, THEME.background, {
 				transparency: 1,
@@ -434,7 +467,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			pet.draw(0);
 			previews.push(pet);
 			lines.push(tr(nameOf(ItemKind.Equip, petEquip)));
-			lines.push(tr("Stays until a New game"));
+			lines.push(tr("Stays for this life"));
 			priceX = namesX;
 		} else {
 			for (let k = 0; k < pack.items.size(); k++) {
@@ -637,8 +670,8 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		row(
 			1,
 			"badge_trophy",
-			tr("Record day (every 5 days)"),
-			tr("Paid the first time a life reaches a new best day that is a multiple of 5."),
+			tr("Record day"),
+			`${tr("Paid the first time a life reaches a new best day that is a multiple of")} ${ECONOMY.MILESTONE_EVERY}.`,
 			ECONOMY.MILESTONE_BONUS,
 			(h, z) => {
 				const meter = Kit.Meter(h, "Meter", {
@@ -666,7 +699,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 				);
 				return () => {
 					const every = ECONOMY.MILESTONE_EVERY;
-					// the next multiple of 5 past the best day: the one that pays; this life has to get there
+					// the next multiple of MILESTONE_EVERY past the best day: the one that pays; this life has to get there
 					const goal = (math.floor(save.bestDay / every) + 1) * every;
 					meter.set(save.day / goal, `${tr("Day")} ${save.day} / ${goal}`);
 					const left = math.max(goal - save.day, 0);
@@ -758,12 +791,13 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			// bought, not delivered yet: it goes into the backpack at the next entry into the city
 			if (waiting > 0) setBadge(c.pending, `${tr("Pending")} ×${waiting}`);
 			const short = c.pack.price - save.money;
-			// a pet pack whose pet is already yours (bought for good in the Wardrobe, or in this life's backpack): a
-			// second one would do nothing, so the card says so instead of selling it
-			const owned = c.pet >= 0 && ownsEquip(save, c.pet);
+			// a pet pack whose pet is already yours (bought for good in the Wardrobe, in this life's backpack, or on its
+			// way in a pack still pending): a second one would do nothing, so the card says so instead of selling it --
+			// the same rule the server refuses it by (shared/game/save.ts `packPetOwned`)
+			const owned = c.pet >= 0 && packPetOwned(save, c.pack.id);
 			const can = short <= 0 && !owned && !busy;
 			let text = tr("Buy");
-			if (owned) text = tr("Owned");
+			if (owned) text = ownsEquip(save, c.pet) ? tr("Owned") : tr("Pending");
 			else if (short > 0) text = `${fmtInt(short)} ${tr("more needed")}`;
 			if (c.buy.Text !== text) c.buy.Text = text;
 			if ((c.buy.GetAttribute("Disabled") === true) === can) setButtonEnabled(c.buy, can);

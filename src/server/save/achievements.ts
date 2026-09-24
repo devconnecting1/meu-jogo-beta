@@ -117,9 +117,9 @@ export function creditNightAchievements(save: PlayerSaveData): void {
  * The report's pin (server/main.server.ts `processReport`, beside `stripClientProgress` and `stripClientLife`): a
  * client report may mirror the achievements, never set or raise them. `sanitizeClientReport` already copies
  * `achievements` and `lifeDeaths` from the trusted save (v6); they are pinned again here, where the report is merged,
- * so the rule has a guard of its own that does not hang on how the sanitizer reads a report. `titles` goes with them:
- * nothing an achievement could stand for may be granted by a report either (MON-05: only `grantTitle` writes a
- * title).
+ * so the rule has a guard of its own that does not hang on how the sanitizer reads a report. `titles` and the counters
+ * titles are earned by (`titleStats`, v7) go with them: nothing an achievement could stand for may be granted by a
+ * report either (MON-05: only server/save/titles.ts writes a title or its counters).
  *
  * Answers whether the report had tried (a staleness signal for the admin panel, §9.3): `claimed` is the report as it
  * was decoded, BEFORE the sanitizer copied the trusted values over it -- the only place a claim is still visible. A
@@ -132,6 +132,7 @@ export function stripClientAchievements(prev: PlayerSaveData, upd: PlayerSaveDat
 		tried =
 			claimDiffers(prev.achievements, raw.achievements) ||
 			claimDiffers(prev.titles, raw.titles) ||
+			claimDiffers(prev.titleStats, raw.titleStats) ||
 			(raw.lifeDeaths !== undefined && raw.lifeDeaths !== prev.lifeDeaths);
 	}
 	// and whatever reached `upd` anyway (the sanitizer copies these from `prev`: only a regression there leaves a trace)
@@ -139,9 +140,12 @@ export function stripClientAchievements(prev: PlayerSaveData, upd: PlayerSaveDat
 		tried ||
 		claimDiffers(prev.achievements, upd.achievements) ||
 		claimDiffers(prev.titles, upd.titles) ||
+		claimDiffers(prev.titleStats, upd.titleStats) ||
 		upd.lifeDeaths !== prev.lifeDeaths;
 	upd.achievements = [...prev.achievements];
 	upd.titles = [...prev.titles];
+	// v7 (MON-05): the counters titles are earned by are the server's as much as the titles are
+	upd.titleStats = [...prev.titleStats];
 	upd.lifeDeaths = prev.lifeDeaths;
 	return tried;
 }

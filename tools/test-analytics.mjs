@@ -693,7 +693,21 @@ section("2) the onboarding funnel: each step once, in the game's order; veterans
 	// a veteran: an old save (before analytics: titleEpoch 0), level 12, day 4 of a life, a record of day 4
 	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 	const vet = defaultSave();
-	Object.assign(vet, { level: 12, exp: 5, day: 4, bestDay: 4, money: 50, tutorialDone: true, firstInstall: false });
+	// enough for section 4's Eagle and two Builder's Basics, whatever docs/SHOP.md prices them at
+	const SHOPDATA = require(join(SRC, "shared/data/shop.ts"));
+	const VET_START =
+		SHOPDATA.COSTUMES.find(c => c.name === "Eagle").price +
+		2 * SHOPDATA.SHOP_PACKS.find(x => x.name === "Builder's Basics").price +
+		50;
+	Object.assign(vet, {
+		level: 12,
+		exp: 5,
+		day: 4,
+		bestDay: 4,
+		money: VET_START,
+		tutorialDone: true,
+		firstInstall: false,
+	});
 	vet.titleEpoch = 0;
 	s.storeSave(veteran, vet);
 	// a new player's second session: born after analytics, answered, entered and killed before; no Survivor yet
@@ -848,7 +862,7 @@ section("2) the onboarding funnel: each step once, in the game's order; veterans
 		s,
 		p: { decliner: pD, late: pL, lobby: pO, veteran: pV, returning: pR, killer: pK },
 		/** the coins each had before this server moved any (a new save: 0, and the gift is its first source) */
-		start: { [decliner]: 0, [late]: 0, [lobby]: 0, [killer]: 0, [veteran]: 50, [returning]: 26 },
+		start: { [decliner]: 0, [late]: 0, [lobby]: 0, [killer]: 0, [veteran]: VET_START, [returning]: 26 },
 	};
 });
 
@@ -896,16 +910,16 @@ section("4) every coin the server moved is one economy event, and they add up to
 	// logged once, or the sinks would add up to more than the coins that left
 	s.run(1.2);
 	const nr = s.log.length;
-	const moneyBefore = s.live(p.lobby).money;
-	const once = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const moneyBefore = s.live(p.veteran).money;
+	const once = s.shop(p.veteran, { kind: "buyPack", packId: craftKit, nonce: 41 });
 	s.run(1.2);
-	const replay = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const replay = s.shop(p.veteran, { kind: "buyPack", packId: craftKit, nonce: 41 });
 	const replaySinks = s.log.slice(nr).filter(r => r.kind === "economy");
 	check(
 		once.ok &&
 			replay.ok &&
 			replay.price === once.price &&
-			s.live(p.lobby).money === moneyBefore - SHOP_PACKS[craftKit].price &&
+			s.live(p.veteran).money === moneyBefore - SHOP_PACKS[craftKit].price &&
 			replaySinks.length === 1 &&
 			replaySinks[0].amount === SHOP_PACKS[craftKit].price,
 		"a replayed purchase (the same nonce): answered ok, charged once, one Sink",
@@ -2390,6 +2404,38 @@ section(
 	},
 );
 
+section("12e) MON-07: the Supporter subscription seen starting or ending in a session, one event per flip", () => {
+	const h = makeCore();
+	const pl = fakePlayer(631, "supporter");
+	const save = blankSave();
+	// before the session is here there is no entry: nothing
+	h.core.supporterChanged(pl, true);
+	check(h.rows.filter(r => r.name === "Supporter").length === 0, "no session yet: no Supporter event");
+	h.core.sessionLoaded(pl, "ok", save);
+	h.core.supporterChanged(pl, true);
+	h.core.enteredWorld(pl);
+	h.core.poll();
+	h.core.supporterChanged(pl, false);
+	const rows = h.rows.filter(r => r.name === "Supporter");
+	check(
+		rows.length === 2 &&
+			rows.every(r => r.kind === "custom" && r.value === undefined) &&
+			rows[0].fields?.CustomField01 === "Status - Started" &&
+			rows[0].fields?.CustomField02 === "Where - Lobby" &&
+			rows[1].fields?.CustomField01 === "Status - Ended" &&
+			rows[1].fields?.CustomField02 === "Where - City",
+		"a subscription started in the lobby and ended in the city: two events, no value, the status and where",
+		JSON.stringify(rows.map(r => [r.kind, r.value, r.fields])),
+	);
+	check(
+		h.rows.filter(r => r.kind === "economy").length === 0,
+		"and no economy event: a subscription moves no coin (MON-07; its revenue is the platform's dashboard)",
+	);
+	h.core.playerLeft(pl);
+	h.core.supporterChanged(pl, true);
+	check(h.rows.filter(r => r.name === "Supporter").length === 2, "after leaving: nothing more");
+});
+
 section("13) every row of this run: within the documented limits, low cardinality, no PII", () => {
 	const A = require(join(SRC, "server/analytics/events.ts"));
 	const rows = EVERY_ROW;
@@ -2456,6 +2502,8 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		"Visit - (First|Returning)",
 		`Weapon - (${A.WEAPON_KIND_NAMES.join("|")}|Machine|Other)`,
 		"Title - .+",
+		// MON-07: the Supporter subscription's flips (docs/ANALYTICS.md §5)
+		"Status - (Started|Ended)",
 		"Welcome pack - .+",
 		// where a survivor plays (server/match/*, tools/test-match.mjs): the NewTown funnel, TownOffered, TripFailed
 		"Route - (Play solo|Offer)",
@@ -2488,6 +2536,7 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		2 * B * 4 + // LifeEnded
 		3 * 4 * B + // WorldEnded: reason (MP-26: Restarted too) x fallen (0 to 3+) x days
 		TITLES.length + // TitleEarned
+		2 * 2 + // Supporter (MON-07): started / ended x lobby / city
 		5 + // SessionKills
 		3 + // Crafted
 		3 * 3 * 2 + // SessionEnded: where x time (night, dawn, day) x visit (+ its combos without the hour)

@@ -1316,22 +1316,24 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 		"…and the refusal carries the wallet back",
 	);
 
-	// a request that names its own price is charged the catalogue's anyway
-	save.money = 100;
+	// a request that names its own price is charged the catalogue's anyway (the price plus some change: docs/SHOP.md
+	// sets the price, the test only knows it is the catalogue's)
+	const FUNDS = santa.price + 50;
+	save.money = FUNDS;
 	const ok = s.shop(p, { kind: "buyCostume", costumeId: santa.id, price: 0 });
 	check(
 		ok.ok === true && ok.price === santa.price,
 		"a request carrying `price: 0` pays the catalogue price",
 		JSON.stringify({ ok: ok.ok, price: ok.price }),
 	);
-	check(save.money === 100 - santa.price, "exactly that is taken from the live save", `${save.money}`);
+	check(save.money === FUNDS - santa.price, "exactly that is taken from the live save", `${save.money}`);
 	check(
 		save.costumes[santa.id] === 1 && ok.wallet?.costumes[santa.id] === 1,
 		"the costume is theirs, and the wallet says so",
 	);
 	const twice = s.shop(p, { kind: "buyCostume", costumeId: santa.id });
 	check(twice.ok === false && twice.reason === "owned", "buying it again is refused as owned");
-	check(save.money === 100 - santa.price, "…and charges nothing");
+	check(save.money === FUNDS - santa.price, "…and charges nothing");
 
 	// wearing (F3, §4.8): the wardrobe's Equip is a verb the server applies out of the world, cosmetics only; a report
 	// no longer moves the slots at all, so neither a bought outfit nor a pet nobody paid for comes from one
@@ -1347,7 +1349,7 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	s.quit(p);
 	const stored = s.stored(p.UserId);
 	check(
-		stored?.money === 100 - santa.price &&
+		stored?.money === FUNDS - santa.price &&
 			stored?.costumes[santa.id] === 1 &&
 			stored?.equipOutfit === equipOf("Santa"),
 		"the save written on leaving has the costume, the coins it cost and the outfit worn",

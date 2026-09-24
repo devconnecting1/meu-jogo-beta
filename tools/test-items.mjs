@@ -5580,8 +5580,11 @@ section("G1. every pack: its declared contents, its price charged by the server,
 			if (save.money !== 7 || save.packsBought[p.id] !== 1)
 				return `money ${save.money}, bought ${save.packsBought[p.id]}`;
 			s.run(0.6);
+			// a second pet pack while the first is pending is refused as "owned" before the coins are looked at: its pet
+			// is on its way (shared/game/save.ts `packPetOwned`, docs/SHOP.md); any other pack is refused for the coins
+			const second = SHOP2.petOfPack(p) >= 0 ? "owned" : "funds";
 			const poor = s.shop(pl, { kind: "buyPack", packId: p.id });
-			if (poor.ok || poor.reason !== "funds" || save.money !== 7 || save.packsBought[p.id] !== 1)
+			if (poor.ok || poor.reason !== second || save.money !== 7 || save.packsBought[p.id] !== 1)
 				return `short: ${poor.reason}`;
 			s.run(0.6);
 			save.money = 10000;

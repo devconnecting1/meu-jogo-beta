@@ -356,6 +356,11 @@ jobs:
       - name: Every item row by row (weapons, equipment, usables, recipes, skills, loot, shop; known bugs listed)
         run: npm run test:items
 
+      # MON-07 / docs/SHOP.md: the price a screen shows is the price the server takes, what is bought is unlocked (and
+      # still there on another server), and every price sits in its tier's band of hours of play
+      - name: The shop end to end (shown = charged, bought = unlocked, the economy model's price bands)
+        run: npm run test:shop
+
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 

@@ -30,6 +30,11 @@
  *    never undoes a reset or a deletion made on purpose: `titleEpoch` says which title history a save is, and a
  *    record of an older one is never merged back.
  *
+ *    v7 (MON-05, section 34) adds `titleStats`, the counters only titles read: a v6 document becomes v7 with every
+ *    counter at 0 and nothing else changed, junk is read defensively (a set of bits never past its own bits), a report
+ *    can never move them, a wallet only raises them, and the documented cost of a rollback to v6 (the titles past the
+ *    first three) is pinned -- with the kill titles coming back at the next kill.
+ *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
  *    unreachable, and a day survived silently paid nothing. The fix moves the payment next to the event, so
@@ -229,7 +234,11 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
 	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
-	checkEq(SAVE.SAVE_VERSION, 6, "SAVE_VERSION e 6 (conquistas do servidor e lifeDeaths, CON-04)");
+	checkEq(
+		SAVE.SAVE_VERSION,
+		8,
+		"SAVE_VERSION e 8 (os recibos de Robux, docs/SHOP.md; v7: os contadores dos titulos)",
+	);
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
 	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
 	checkEq(save.equipPet, -1, "e nenhum pet");
@@ -790,7 +799,9 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 
 	// a successful purchase: the catalogue price, exactly, and the costume is theirs
 	const buyer = SAVE.defaultSave();
-	buyer.money = 100;
+	// the price plus some change: the test is about the price, whatever docs/SHOP.md sets it to
+	const FUNDS = PRICE + 50;
+	buyer.money = FUNDS;
 	checkEq(
 		new ServerCraft({ world: undefined, build: undefined }).equip(buyer, SANTA).kind,
 		"refused",
@@ -798,7 +809,7 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	);
 	const bought = buyCostume(buyer, santa);
 	check(bought.ok === true && bought.price === PRICE, "compra aceita, ao preco do catalogo", JSON.stringify(bought));
-	checkEq(buyer.money, 100 - PRICE, "desconta exatamente o preco");
+	checkEq(buyer.money, FUNDS - PRICE, "desconta exatamente o preco");
 	checkEq(buyer.costumes[santa], 1, "e o traje passa a ser dele (costumes)");
 	check(SAVE.ownsCostume(buyer, santa) && SAVE.ownsEquip(buyer, SANTA), "ownsCostume / ownsEquip dizem que e dele");
 	checkEq(buyer.costumes[eagle], 0, "so aquele traje: os outros continuam bloqueados");
@@ -806,7 +817,7 @@ section("17) o guarda-roupa: so o servidor transforma moedas em traje (server/sa
 	// already owned: a double click or a replayed request never charges twice
 	const again = buyCostume(buyer, santa);
 	checkEq(again.ok === false ? again.reason : "ok", "owned", "comprar de novo -> owned");
-	checkEq(buyer.money, 100 - PRICE, "e nada e cobrado de novo");
+	checkEq(buyer.money, FUNDS - PRICE, "e nada e cobrado de novo");
 
 	// the exact amount is enough, and the balance can reach zero, never below
 	const exact = SAVE.defaultSave();
@@ -941,11 +952,12 @@ section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 
 	// a document with junk in the new fields is read defensively
 	const junk = JSON.parse(JSON.stringify(save));
-	junk.titles = [5, "x", -1, 1, 1, 1];
+	// (one entry per title, and two past the end of the table: the excess falls)
+	junk.titles = [5, "x", -1, ...new Array(TITLES_N - 3).fill(1), 1, 1];
 	junk.zombieKills = -40;
 	junk.equipTitle = TIT.TitleId.HordeBreaker;
 	const read = SAVE.sanitizeStoredSave(junk);
-	checkArrayEq(read.titles, [1, 0, 0].slice(0, TITLES_N), "titulos lixo viram 0/1 e o excesso cai");
+	checkArrayEq(read.titles, [1, 0, 0, ...new Array(TITLES_N - 3).fill(1)], "titulos lixo viram 0/1 e o excesso cai");
 	checkEq(read.zombieKills, 0, "abates negativos viram 0");
 	checkEq(read.equipTitle, -1, "e um titulo mostrado que nao foi ganho e tirado");
 }
@@ -1085,31 +1097,26 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	checkEq(SAVE.titleWireOf(save), 0, "e o fio leva nenhum");
 
 	// the kill count: only `creditZombieKill` moves it, and Horde Breaker comes at the 100th
+	// (v7: every credit answers the LIST of titles it unlocked -- one event may unlock two -- and an empty one otherwise)
 	const killer = SAVE.defaultSave();
 	let unlocked = [];
-	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 1; i++) {
-		const t = creditZombieKill(killer);
-		if (t >= 0) unlocked.push(t);
-	}
+	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 1; i++) unlocked.push(...creditZombieKill(killer));
 	check(unlocked.length === 0 && !SAVE.ownsTitle(killer, TIT.TitleId.HordeBreaker), "99 abates: ainda nao");
-	checkEq(creditZombieKill(killer), TIT.TitleId.HordeBreaker, "o 100o abate desbloqueia Horde Breaker");
-	checkEq(creditZombieKill(killer), -1, "o 101o nao desbloqueia de novo");
+	checkArrayEq([...creditZombieKill(killer)], [TIT.TitleId.HordeBreaker], "o 100o abate desbloqueia Horde Breaker");
+	checkArrayEq([...creditZombieKill(killer)], [], "o 101o nao desbloqueia de novo");
 	checkEq(killer.zombieKills, 101, "e a contagem segue");
 
 	// Week One: the nights the server credited to the life, never the day the save says
 	const life = SAVE.defaultSave();
 	life.day = 30;
 	unlocked = [];
-	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) {
-		const t = creditLifeNight(life);
-		if (t >= 0) unlocked.push(t);
-	}
+	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) unlocked.push(...creditLifeNight(life));
 	check(
 		unlocked.length === 0 && !SAVE.ownsTitle(life, TIT.TitleId.WeekOne),
 		"dia 30 no save e 6 noites creditadas: ainda nao",
 	);
-	checkEq(creditLifeNight(life), TIT.TitleId.WeekOne, "a 7a noite creditada desbloqueia Week One");
-	checkEq(creditLifeNight(life), -1, "a 8a nao desbloqueia de novo");
+	checkArrayEq([...creditLifeNight(life)], [TIT.TitleId.WeekOne], "a 7a noite creditada desbloqueia Week One");
+	checkArrayEq([...creditLifeNight(life)], [], "a 8a nao desbloqueia de novo");
 
 	// the wallet carries both halves to the client, and no copy shows a title its save does not hold
 	killer.equipTitle = TIT.TitleId.HordeBreaker;
@@ -2819,6 +2826,368 @@ section(
 		"uma run assistida: a comida, o lingote e a madeira entram na mochila, e nenhuma dessas conquistas anda",
 		`${helped.detail}; Chef ${helped.chef}, Blacksmith ${helped.smith}, Woods ${helped.woods}`,
 	);
+}
+
+section(
+	"34) v7 (MON-05): os contadores dos titulos -- migracao v6 -> v7, so o servidor os move, a carteira so os aumenta",
+);
+{
+	const TS = TIT.TitleStat;
+	const N = TIT.TITLE_STAT_COUNT;
+	// a v6 document with every field that matters populated (the production shape through v4, then v5 and v6's)
+	const v6 = SAVE.sanitizeStoredSave(productionV4());
+	v6.titles[TIT.TitleId.Survivor] = 1;
+	v6.titles[TIT.TitleId.HordeBreaker] = 1;
+	v6.zombieKills = 1234;
+	v6.lifeNights = 9;
+	v6.lifeDeaths = 1;
+	v6.equipTitle = TIT.TitleId.HordeBreaker;
+	v6.titleEpoch = 1790000000;
+	const doc = JSON.parse(JSON.stringify(v6));
+	doc.version = 6;
+	delete doc.titleStats;
+	doc.titles = doc.titles.slice(0, 3);
+	const migrated = SAVE.sanitizeStoredSave(doc);
+	checkEq(SAVE.storedVersion(doc), 6, "o documento se declara v6");
+	checkEq(migrated.version, SAVE.SAVE_VERSION, "e sai na versao atual (v7 em diante)");
+	checkArrayEq(migrated.titleStats, new Array(N).fill(0), "titleStats ausente no v6: tudo 0 (ninguem contou antes)");
+	checkEq(migrated.titles.length, TIT.TITLES.length, "a lista de titulos cresce ate a tabela (os novos em 0)");
+	const strip = s => {
+		const o = JSON.parse(JSON.stringify(s));
+		delete o.titleStats;
+		delete o.version;
+		o.titles = o.titles.slice(0, 3);
+		return JSON.stringify(o);
+	};
+	check(
+		strip(migrated) === strip(v6),
+		"e nenhum campo do v6 muda de valor (titulos, abates, noites, epoca, escolha)",
+	);
+
+	// the v7 document round trip, and junk read defensively
+	migrated.titleStats[TS.NightsSurvived] = 12;
+	migrated.titleStats[TS.ZombieKinds] = 0b10101;
+	migrated.titleStats[TS.GunKills] = 77;
+	const again = SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(migrated)));
+	checkArrayEq(again.titleStats, migrated.titleStats, "o v7 gravado (JSON) volta com os contadores");
+	const junk = JSON.parse(JSON.stringify(migrated));
+	junk.titleStats = [-5, 999, 99, 1.7, "x", 1e12, null, 4, 4];
+	const read = SAVE.sanitizeStoredSave(junk);
+	checkArrayEq(
+		read.titleStats,
+		[0, 31, 15, 1, 0, SAVE.SAVE_LIMITS.COUNTER_MAX, 0],
+		"lixo: negativo 0, bits no maximo deles (5 tipos de zumbi, 4 chefes), fracao para baixo, texto 0, teto e excesso cai",
+	);
+	junk.titleStats = "nope";
+	checkArrayEq(SAVE.sanitizeStoredSave(junk).titleStats, new Array(N).fill(0), "e uma lista que nao e lista vira 0");
+
+	// a report cannot write them: the sanitizer copies the trusted ones, and the report's pin flags the try
+	const base = SAVE.defaultSave();
+	base.titleStats[TS.Builds] = 3;
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.titleStats = [25, 31, 15, 500, 100, 25, 50];
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	checkArrayEq(upd.titleStats, base.titleStats, "um relatorio com titleStats forjado nao move nada");
+	const ACH = require(join(SRC, "server/save/achievements.ts"));
+	const upd2 = SAVE.sanitizeClientReport(forged, base);
+	upd2.titleStats[TS.Builds] = 24; // a regression in the sanitizer, simulated: the pin still holds
+	const tried = ACH.stripClientAchievements(base, upd2, forged);
+	check(
+		tried && upd2.titleStats[TS.Builds] === 3 && upd2.titleStats !== base.titleStats,
+		"o pin do relatorio (stripClientAchievements) ve a tentativa e fixa os contadores do servidor (copia, nao alias)",
+	);
+
+	// lifetime: a New game, a copy in place and the end of a world keep them
+	const life = SAVE.defaultSave();
+	life.titleStats[TS.Crafts] = 40;
+	SAVE.resetRun(life);
+	checkEq(life.titleStats[TS.Crafts], 40, "o New game guarda os contadores (sao da pessoa, nao da vida)");
+	const live = SAVE.defaultSave();
+	const liveStats = live.titleStats;
+	SAVE.copySaveInto(live, life);
+	check(
+		live.titleStats === liveStats && live.titleStats[TS.Crafts] === 40,
+		"copySaveInto copia no lugar (a identidade fica)",
+	);
+
+	// the wallet: carried, and only ever raised on the client (a count the larger, a set of bits the union)
+	const server = SAVE.defaultSave();
+	server.titleStats[TS.GunKills] = 120;
+	server.titleStats[TS.ZombieKinds] = 0b00011;
+	const w = SAVE.walletOf(server);
+	checkArrayEq(w.titleStats, server.titleStats, "a carteira leva os contadores");
+	const client = SAVE.defaultSave();
+	client.titleStats[TS.GunKills] = 130; // a newer wallet already landed
+	client.titleStats[TS.ZombieKinds] = 0b01100;
+	SAVE.applyWallet(client, JSON.parse(JSON.stringify(w)));
+	check(
+		client.titleStats[TS.GunKills] === 130 && client.titleStats[TS.ZombieKinds] === 0b01111,
+		"uma carteira atrasada nao baixa a contagem, e os tipos se unem (nenhum bit volta atras)",
+		JSON.stringify(client.titleStats),
+	);
+	const older = SAVE.defaultSave();
+	SAVE.applyWallet(older, { money: 0, titles: [] });
+	checkArrayEq(
+		older.titleStats,
+		new Array(N).fill(0),
+		"uma carteira de um servidor antigo (sem titleStats) nao muda nada",
+	);
+
+	// ROLLBACK v7 -> v6 -> v7, documented (DESIGN_RULES MON-05 "Save v7"): v6 code keeps the first three titles and the
+	// kill count (and the record holds them), and drops the rest; the kill titles come back at the next kill by
+	// themselves, since their goal is `zombieKills`
+	const vet = SAVE.defaultSave();
+	for (let i = 0; i < TIT.EXTERMINATOR_KILLS; i++) creditZombieKill(vet);
+	check(SAVE.ownsTitle(vet, TIT.TitleId.Exterminator), "(1.000 abates: Exterminator)");
+	const v6doc = JSON.parse(JSON.stringify(vet));
+	delete v6doc.titleStats;
+	v6doc.titles = v6doc.titles.slice(0, 3);
+	const back = SAVE.sanitizeStoredSave(v6doc);
+	check(
+		SAVE.ownsTitle(back, TIT.TitleId.HordeBreaker) && !SAVE.ownsTitle(back, TIT.TitleId.Exterminator),
+		"depois de um rollback para v6: Horde Breaker e os abates ficam, o Exterminator se perdeu",
+	);
+	checkArrayEq(
+		[...creditZombieKill(back)],
+		[TIT.TitleId.Exterminator],
+		"e o proximo abate o devolve (o objetivo dele e a contagem, que sobreviveu)",
+	);
+}
+
+// ---------------------------------------------------------------- v8: Robux receipts (docs/SHOP.md "Robux")
+
+section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traje pago nunca volta atras");
+{
+	// shared/admin/ops.ts builds a byte class with Luau's string.char when it loads
+	globalThis.string ??= {};
+	globalThis.string.char ??= (...codes) => String.fromCharCode(...codes);
+	const OPS = require(join(SRC, "shared/admin/ops.ts"));
+	const ROBUX = require(join(SRC, "server/save/robux.ts"));
+	/** the same JSON whatever the key order */
+	const canon = v =>
+		JSON.stringify(v, (k, x) =>
+			x !== null && typeof x === "object" && !Array.isArray(x)
+				? Object.fromEntries(
+						Object.keys(x)
+							.sort()
+							.map(key => [key, x[key]]),
+					)
+				: x,
+		);
+	// a v7 document: everything but the receipts, which v7 never had (its title counters included)
+	const v7 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV4())));
+	v7.version = 7;
+	v7.titleStats = v7.titleStats.map((_, i) => (i === 0 ? 12 : 0));
+	delete v7.robuxReceipts;
+	const up = SAVE.sanitizeStoredSave(v7);
+	checkEq(up.version, 8, "um documento v7 sobe para v8");
+	checkArrayEq(up.robuxReceipts, [], "sem recibo nenhum (nada foi vendido em Robux antes do v8)");
+	const back = JSON.parse(JSON.stringify(up));
+	delete back.robuxReceipts;
+	back.version = 7;
+	check(
+		canon(back) === canon(v7),
+		"e nenhum outro campo muda na migracao v7 -> v8 (os contadores dos titulos inclusive)",
+	);
+
+	// the stored list, entry by entry: only `{ c, p }` with a real costume and a sane PurchaseId survives, each
+	// PurchaseId once (the first), and a PurchaseId may hold any character (":" too) up to PURCHASE_ID_MAX
+	const N = COSTUMES.size();
+	const long = "x".repeat(SAVE.PURCHASE_ID_MAX + 1);
+	const colon = `A:${"z".repeat(120)}`;
+	const stored = JSON.parse(JSON.stringify(up));
+	stored.robuxReceipts = [
+		{ c: 3, p: "A1" },
+		{ c: 3, p: "A1" },
+		{ c: 5, p: "A1" },
+		"3:A1",
+		{ c: 3 },
+		{ p: "A2" },
+		{ c: N, p: "A3" },
+		{ c: -1, p: "A4" },
+		{ c: 1.5, p: "A5" },
+		{ c: "1", p: "A6" },
+		{ c: 2, p: "" },
+		{ c: 2, p: long },
+		{ c: 2, p: 7 },
+		5,
+		null,
+		{ c: 2, p: colon },
+		{ c: 4, p: "B7" },
+	];
+	stored.costumes = stored.costumes.map(() => 0);
+	const read = SAVE.sanitizeStoredSave(stored);
+	check(
+		canon(read.robuxReceipts) ===
+			canon([
+				{ c: 3, p: "A1" },
+				{ c: 2, p: colon },
+				{ c: 4, p: "B7" },
+			]),
+		"so as entradas bem formadas, cada PurchaseId uma vez (a primeira), e um id com ':' e 122 caracteres inteiro",
+		JSON.stringify(read.robuxReceipts),
+	);
+	check(
+		read.costumes[3] === 1 &&
+			read.costumes[2] === 1 &&
+			read.costumes[4] === 1 &&
+			read.costumes.filter(v => v > 0).length === 3,
+		"e o traje de cada recibo e do jogador, mesmo com costumes zerado no documento (invariante)",
+		JSON.stringify(read.costumes),
+	);
+	// past the cap: the oldest go first -- but never a costume's ONLY receipt (the one that keeps it the player's)
+	const many = JSON.parse(JSON.stringify(up));
+	const cap = SAVE.ROBUX_RECEIPTS_MAX;
+	// the first entry is costume 8's only receipt; every other is costume 1's
+	many.robuxReceipts = [{ c: 8, p: "ONLY" }, ...filled(cap + 5, i => ({ c: 1, p: `P${i}` }))];
+	const trimmed = SAVE.sanitizeStoredSave(many).robuxReceipts;
+	check(
+		trimmed.length === cap &&
+			trimmed[0].p === "ONLY" &&
+			trimmed[1].p === "P6" &&
+			trimmed.at(-1).p === `P${cap + 4}`,
+		`no maximo ${cap}: os mais velhos saem primeiro, mas o unico recibo de um traje fica`,
+		`${trimmed.length}: ${trimmed[0].p}, ${trimmed[1].p} .. ${trimmed.at(-1).p}`,
+	);
+	// a hostile oversized list (review of dbbb73c, L1: the old trim was quadratic, and 200k entries stalled a load for
+	// minutes): at most ROBUX_RECEIPTS_READ_MAX raw entries are read, and the trim is one pass
+	const huge = JSON.parse(JSON.stringify(up));
+	huge.robuxReceipts = filled(200000, i => ({ c: i % N, p: `H${i}` }));
+	const tHuge = performance.now();
+	const hugeRead = SAVE.sanitizeStoredSave(huge).robuxReceipts;
+	const msHuge = performance.now() - tHuge;
+	check(
+		msHuge < 250 && hugeRead.length === cap && hugeRead.at(-1).p === `H${SAVE.ROBUX_RECEIPTS_READ_MAX - 1}`,
+		`200.000 entradas num documento: lidas em ${msHuge.toFixed(1)} ms, so as primeiras ${SAVE.ROBUX_RECEIPTS_READ_MAX}, ${cap} guardadas`,
+	);
+	const past = JSON.parse(JSON.stringify(up));
+	past.robuxReceipts = [...filled(SAVE.ROBUX_RECEIPTS_READ_MAX, () => "junk"), { c: 5, p: "PAST" }];
+	checkEq(
+		SAVE.sanitizeStoredSave(past).robuxReceipts.length,
+		0,
+		"o que vem depois do limite de leitura nem e lido (so um documento hostil tem mais de 64)",
+	);
+	const bigList = filled(200000, i => ({ c: i % N, p: `B${i}` }));
+	const tTrim = performance.now();
+	SAVE.trimReceipts(bigList);
+	const msTrim = performance.now() - tTrim;
+	check(
+		msTrim < 250 && bigList.length === cap && bigList[0].p === `B${200000 - cap}` && bigList.at(-1).p === "B199999",
+		`e o corte e uma passada so: 200.000 recibos em ${msTrim.toFixed(1)} ms, os ${cap} mais novos`,
+	);
+	const g2 = SAVE.defaultSave();
+	for (let i = 0; i < cap + 3; i++) ROBUX.grantRobuxCostume(g2, i === 1 ? 6 : 0, `Q${i}`);
+	check(
+		g2.robuxReceipts.length === cap && g2.robuxReceipts.some(e => e.c === 6 && e.p === "Q1"),
+		"e a concessao corta do mesmo jeito (grantRobuxCostume: o unico recibo do traje 6 fica)",
+	);
+	for (const [v, want] of [
+		["abc-123", true],
+		["", false],
+		["a:b", true],
+		[colon, true],
+		["x".repeat(SAVE.PURCHASE_ID_MAX), true],
+		[long, false],
+		[12345, false],
+		[undefined, false],
+	]) {
+		checkEq(SAVE.isPurchaseId(v), want, `isPurchaseId(${JSON.stringify(v)}) = ${want}`);
+	}
+
+	// the server's alone: a report never moves the list, nor a costume with it
+	const server = SAVE.sanitizeStoredSave(read);
+	const report = JSON.parse(JSON.stringify(server));
+	report.robuxReceipts = [
+		{ c: 0, p: "FAKE" },
+		{ c: 1, p: "FAKE2" },
+		{ c: 3, p: "A1" },
+	];
+	report.costumes = report.costumes.map(() => 1);
+	const upd = SAVE.sanitizeClientReport(report, server);
+	check(
+		canon(upd.robuxReceipts) === canon(server.robuxReceipts),
+		"um relatorio que traz recibos: o servidor fica com os seus",
+	);
+	checkArrayEq(upd.costumes, server.costumes, "e nenhum traje entra por ele");
+	const empty = JSON.parse(JSON.stringify(server));
+	delete empty.robuxReceipts;
+	check(
+		canon(SAVE.sanitizeClientReport(empty, server).robuxReceipts) === canon(server.robuxReceipts),
+		"um relatorio sem o campo (o cliente nao o envia: saveClient `reportJson`) nao apaga nada",
+	);
+
+	// copySaveInto: the live table keeps its identity, the list is copied (not shared)
+	const live = SAVE.defaultSave();
+	const liveList = live.robuxReceipts;
+	SAVE.copySaveInto(live, server);
+	check(
+		live.robuxReceipts === liveList && canon(live.robuxReceipts) === canon(server.robuxReceipts),
+		"copySaveInto copia os recibos na MESMA tabela viva",
+	);
+	server.robuxReceipts.push({ c: 5, p: "LATER" });
+	server.robuxReceipts[0].p = "CHANGED";
+	check(
+		!live.robuxReceipts.some(e => e.p === "LATER" || e.p === "CHANGED"),
+		"e nao a divide com a origem (nem a lista nem as entradas)",
+	);
+	server.robuxReceipts.pop();
+	server.robuxReceipts[0].p = "A1";
+
+	// lookups
+	checkEq(SAVE.robuxReceiptOf(read, "A1")?.c, 3, "robuxReceiptOf acha o recibo pelo PurchaseId");
+	checkEq(SAVE.robuxReceiptOf(read, "3"), undefined, "e nao pelo id do traje");
+	check(SAVE.robuxPaid(read, 3) && !SAVE.robuxPaid(read, 0), "robuxPaid: so o traje de um recibo");
+
+	// the admin: an edit never takes a Robux costume back (the server refuses the whole edit; the ops keep it too)
+	const edited = SAVE.sanitizeStoredSave(read);
+	OPS.applyAdminOps(edited, [
+		{ op: "costume", id: 3, owned: false },
+		{ op: "costume", id: 0, owned: true },
+	]);
+	check(
+		edited.costumes[3] === 1 && edited.costumes[0] === 1,
+		"applyAdminOps: tirar um traje pago em Robux nao tira; dar outro da",
+		JSON.stringify(edited.costumes),
+	);
+	OPS.applyAdminOps(edited, [{ op: "costume", id: 0, owned: false }]);
+	checkEq(edited.costumes[0], 0, "(um traje que nao foi pago em Robux o admin ainda tira)");
+	// an admin reset: a new player's save, with what was paid for in Robux still theirs
+	const fresh = SAVE.defaultSave();
+	SAVE.carryRobuxPurchases(read, fresh);
+	check(
+		canon(fresh.robuxReceipts) === canon(read.robuxReceipts) && fresh.costumes[3] === 1 && fresh.costumes[4] === 1,
+		"carryRobuxPurchases: o reset leva os recibos e os trajes pagos",
+	);
+
+	// the server's pure grant and prompt rules (server/save/robux.ts)
+	const g = SAVE.defaultSave();
+	checkEq(ROBUX.grantRobuxCostume(g, 2, "G1"), "granted", "conceder um traje novo: granted");
+	check(
+		g.costumes[2] === 1 && g.robuxReceipts.some(e => e.c === 2 && e.p === "G1"),
+		"o traje e o recibo entram juntos no save",
+	);
+	checkEq(ROBUX.grantRobuxCostume(g, 2, "G2"), "owned", "um segundo recibo do mesmo traje: owned (nada novo)");
+	checkEq(g.robuxReceipts.length, 2, "e o PurchaseId dele fica guardado (o recibo repetido nao concede de novo)");
+	const r0 = SAVE.defaultSave();
+	checkEq(ROBUX.robuxPromptRefusal(r0, 2.5, true, true, false), "invalid", "prompt: id quebrado -> invalid");
+	checkEq(ROBUX.robuxPromptRefusal(r0, N, true, true, false), "invalid", "prompt: id fora do catalogo -> invalid");
+	checkEq(
+		ROBUX.robuxPromptRefusal(r0, 2, false, true, false),
+		"invalid",
+		"prompt: produto nao verificado -> invalid",
+	);
+	checkEq(
+		ROBUX.robuxPromptRefusal(r0, 2, true, false, false),
+		"readonly",
+		"prompt: sessao que nao grava -> readonly",
+	);
+	checkEq(ROBUX.robuxPromptRefusal(g, 2, true, true, false), "owned", "prompt: traje ja seu -> owned");
+	checkEq(
+		ROBUX.robuxPromptRefusal(r0, 2, true, true, true),
+		"pending",
+		"prompt: outro prompt aberto, ou o traje retido (um pagamento a caminho) -> pending",
+	);
+	checkEq(ROBUX.robuxPromptRefusal(r0, 2, true, true, false), undefined, "prompt: o resto abre");
 }
 
 // ---------------------------------------------------------------- verdict
