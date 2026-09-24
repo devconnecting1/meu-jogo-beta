@@ -50,7 +50,7 @@ O que Node não pega (limite de registradores, asset que não carrega, remote) s
 ## Loja / página do jogo
 
 - **Nome oficial: Last Town**; título na loja: **"Last Town: Zombie Survival"**. No jogo o nome vem de `GAME_NAME` (`src/shared/module.ts`), o título do lobby e o splash de `client/ui/logo.ts`: a pixel art `wordmark` (gerada pelo `npm run art:world` com a mesma fonte da arte da loja e subida pela CI com a cidade) e, sem id ou até a imagem chegar, o texto liso em tokens do tema (UI-04: sem contorno).
-- **Arte da página** em `docs/promo/` (5 thumbnails 1920 × 1080, o ícone 512 × 512, os logos; como subir: `docs/promo/README.md`), gerada pelo `npm run promo` com o código real do jogo. **Quando o visual do jogo mudar, gere de novo e suba de novo** as thumbnails (e o ícone, se mudou) — por exemplo, quando o banco entrar no jogo, a thumbnail 3 vira "CRACK THE VAULT".
+- **Arte da página** em `docs/promo/` (5 thumbnails 1920 × 1080, o ícone 512 × 512, os logos; como subir: `docs/promo/README.md`), gerada pelo `npm run promo` com o código real do jogo. **Quando o visual do jogo mudar, gere de novo e suba de novo** as thumbnails (e o ícone, se mudou) (a thumbnail 3, "CRACK THE VAULT", já mostra o banco).
 - **Texto da página** (descrição em inglês, as regras e o recurso que a mensagem de ban aponta, e a sugestão de descrição e tópicos do repositório no GitHub) em `docs/promo/DESCRIPTION.md`; mantenha-o fiel ao que o jogo faz hoje.
 
 ## Como trabalhamos (nuvem + PC)
