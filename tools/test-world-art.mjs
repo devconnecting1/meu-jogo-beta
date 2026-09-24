@@ -861,7 +861,7 @@ const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
 const { LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
 const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
 const SIGN_TYPES = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-/** the college campus's four buildings (DESIGN_RULES EDI-16): one institution, one plate colour and one roof */
+/** the college campus's four buildings (DESIGN_RULES EDI-17): one institution, one plate colour and one roof */
 const CAMPUS_SIGNS = [12, 13, 14, 15];
 const sameFamily = (a, b) => CAMPUS_SIGNS.includes(a) && CAMPUS_SIGNS.includes(b);
 const TX = SD.SIGN_TEXEL;

@@ -68,7 +68,7 @@ const GROUND = {
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
 };
 
-/** the campus quad's fountain, statue and benches (EDI-16): stone, water, weathered bronze, iron */
+/** the campus quad's fountain, statue and benches (EDI-17): stone, water, weathered bronze, iron */
 const PROP = {
 	stone: COLORS.sidewalk.Lerp(WHITE, 0.28),
 	water: COLORS.glassCold.Lerp(COLORS.roofBlue, 0.45),
@@ -982,7 +982,7 @@ export class WorldView {
 	}
 
 	/**
-	 * What stands on the campus quad (EDI-16), lit from the top left like the town and with its shadow on the sun's
+	 * What stands on the campus quad (EDI-17), lit from the top left like the town and with its shadow on the sun's
 	 * side (LUZ-01): the fountain's stone basin and its water, the founder in weathered bronze on a stone plinth, a
 	 * bench of wooden slats on iron ends with its back away from the plaza. Frames only, the same with or without the
 	 * town's textures, like a building's furniture (ART-12).

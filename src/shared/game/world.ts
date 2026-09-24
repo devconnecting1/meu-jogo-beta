@@ -30,7 +30,7 @@ export type SolidKind =
 	| "window"
 	/**
 	 * a fixture of the town that belongs to no building (tags: what it is -- the campus quad's fountain, statue and
-	 * benches, EDI-16): blocks bodies; a `low` one lets bullets by; it never hides anyone from a zombie's eyes
+	 * benches, EDI-17): blocks bodies; a `low` one lets bullets by; it never hides anyone from a zombie's eyes
 	 */
 	| "prop";
 
@@ -1546,7 +1546,7 @@ function parkCars(g: Gen): void {
 }
 
 // ---------------------------------------------------------------------------
-// the college campus (docs/DESIGN_RULES.md EDI-16, shared/game/campus.ts)
+// the college campus (docs/DESIGN_RULES.md EDI-17, shared/game/campus.ts)
 
 /** the campus's buildings, by type (the footprint comes from the campus plan; w / h are only its bounds) */
 const CAMPUS_DEFS: Record<number, BuildingDef> = {
@@ -1616,7 +1616,7 @@ function sideTowardsTown(w: WorldData, lot: Lot): DoorSide {
 }
 
 /**
- * The college campus (EDI-16): at most one a town, on a whole residential block of its outskirts (four streets
+ * The college campus (EDI-17): at most one a town, on a whole residential block of its outskirts (four streets
  * round it, none of them an avenue, only houses on it, two blocks from any school or hospital) big enough for four
  * buildings and a quad (shared/game/campus.ts). A town without such a block has no campus.
  *

@@ -450,7 +450,7 @@ function findSchool(world) {
 }
 
 /**
- * The college campus (DESIGN_RULES EDI-16): its whole block (the four buildings round the quad and the four streets
+ * The college campus (DESIGN_RULES EDI-17): its whole block (the four buildings round the quad and the four streets
  * round the block) and a closer frame on the quad, centred on its fountain or statue. Undefined in a town without one.
  */
 function findCampus(world) {

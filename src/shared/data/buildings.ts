@@ -11,7 +11,7 @@ export const BuildingType = {
 	GunShop: 9,
 	ClothShop: 10,
 	Restaurant: 11,
-	// the college campus (docs/DESIGN_RULES.md EDI-16): four buildings round a quad on one block, at most one a town
+	// the college campus (docs/DESIGN_RULES.md EDI-17): four buildings round a quad on one block, at most one a town
 	CampusHall: 12,
 	CampusLibrary: 13,
 	CampusLab: 14,
@@ -19,7 +19,7 @@ export const BuildingType = {
 } as const;
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
 
-/** the campus's building types, the main hall first (EDI-16) */
+/** the campus's building types, the main hall first (EDI-17) */
 export const CAMPUS_TYPES: ReadonlyArray<number> = [
 	BuildingType.CampusHall,
 	BuildingType.CampusLibrary,
@@ -27,7 +27,7 @@ export const CAMPUS_TYPES: ReadonlyArray<number> = [
 	BuildingType.CampusDorm,
 ];
 
-/** is this building type one of the campus's (EDI-16)? */
+/** is this building type one of the campus's (EDI-17)? */
 export function isCampusType(bt: number): boolean {
 	return bt >= BuildingType.CampusHall && bt <= BuildingType.CampusDorm;
 }

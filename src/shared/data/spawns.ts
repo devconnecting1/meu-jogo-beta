@@ -287,7 +287,7 @@ export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 		{ building: 11, kind: 3, index: 16, min: 1, max: 2 },
 		{ building: 11, kind: 3, index: 1, min: 1, max: 2 },
 	],
-	// --- the college campus (docs/DESIGN_RULES.md EDI-16): what each building held the week before (EDI-03), never a
+	// --- the college campus (docs/DESIGN_RULES.md EDI-17): what each building held the week before (EDI-03), never a
 	// gun or a round. Nine slots over four buildings (3 + 2 + 2 + 2) come to about six items in all, one school's
 	// worth (a school search gives 6.2), where the two or three houses of the block gave some fifteen, mostly raw
 	// materials: a good run spread over four searches, never a jackpot. What the campus has instead is aim -- the

@@ -43,7 +43,7 @@ const GLASS_DARK = COLORS.carGlass;
 const BLOOD_DRY = COLORS.blood.Lerp(BLACK, 0.35);
 const MAT = COLORS.doormat;
 const RUG_BORDER = COLORS.rug.Lerp(COLORS.goodsC, 0.35);
-/** a notice board's cork, and the reagent bottles on a lab's shelves (EDI-16) */
+/** a notice board's cork, and the reagent bottles on a lab's shelves (EDI-17) */
 const CORK = COLORS.furnWood.Lerp(COLORS.goodsC, 0.35);
 const BOTTLES: Array<Color3> = [COLORS.furnWood, COLORS.acid, COLORS.goodsB];
 
@@ -313,7 +313,7 @@ export class InteriorView {
 	}
 
 	/**
-	 * The campus's furniture (EDI-16), in the same palette and light as the rest: tiered seats, a lectern, lab
+	 * The campus's furniture (EDI-17), in the same palette and light as the rest: tiered seats, a lectern, lab
 	 * benches with their black epoxy tops, a fume hood behind its glass sash, the reagents' shelves, bunk beds with
 	 * their ladder, a vending machine. Answers false for anything else.
 	 */
@@ -468,7 +468,7 @@ export class InteriorView {
 		} else if (k === "board") {
 			r.drawRect(cam, cx, cy, edged(flat(d.w, d.h, COLORS.chalkboard, Z.floorDetail), COLORS.furnWood, 1, 2));
 		} else if (k === "notice") {
-			// a cork board on the wall with the last flyers pinned to it (the campus's halls, EDI-16)
+			// a cork board on the wall with the last flyers pinned to it (the campus's halls, EDI-17)
 			r.drawRect(cam, cx, cy, edged(flat(d.w, d.h, CORK, Z.floorDetail), COLORS.furnWood, 1, 1));
 			const along = d.w >= d.h;
 			for (let q = 0; q < 3; q++) {

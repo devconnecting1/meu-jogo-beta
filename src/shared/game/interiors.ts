@@ -53,7 +53,7 @@ export type RoomKind =
 	| "treatment"
 	| "diner"
 	| "galley"
-	// the college campus (EDI-16)
+	// the college campus (EDI-17)
 	| "foyer"
 	| "lecture"
 	| "stacks"
@@ -100,7 +100,7 @@ export type FurnitureKind =
 	| "booth"
 	| "safe"
 	| "bench"
-	// the college campus (EDI-16)
+	// the college campus (EDI-17)
 	| "lectern"
 	| "seats"
 	| "labbench"
@@ -864,7 +864,7 @@ const HOSPITAL: Array<Template> = [
 	},
 ];
 
-// ---------------------------------------------------------------------------------------------- the campus (EDI-16)
+// ---------------------------------------------------------------------------------------------- the campus (EDI-17)
 //
 // Four buildings of 600-760 along their street round a quad (shared/game/campus.ts): the main hall 400 deep, the
 // others 352. Each faces its own street (the main door, EDI-01) and has its back on the quad or on a lane, where the
@@ -1179,7 +1179,7 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	treatment: { floor: "tile", win: 0, early: false },
 	diner: { floor: "wood", win: 1, early: true },
 	galley: { floor: "kitchen", win: 0, early: false },
-	// the campus (EDI-16): the reading room, a lab and a bunk room are furnished round their window (a dorm room's
+	// the campus (EDI-17): the reading room, a lab and a bunk room are furnished round their window (a dorm room's
 	// window is the one thing it is sure of); a lecture room, the stacks and the common room get theirs where the
 	// seats, the shelves and the sofa leave wall (a lecture room's seats need its back wall, and on the quad side of
 	// the hall that wall is outside); the chemicals store has none (a real one is a locked, windowless room)
@@ -1861,7 +1861,7 @@ class Planner {
 
 	/**
 	 * The outside wall of cell (i, j) on side s run on through the cells of the same room whose same side is outside
-	 * too: a campus lecture room's side wall is one wall however many rows cut it (the window pass, EDI-16).
+	 * too: a campus lecture room's side wall is one wall however many rows cut it (the window pass, EDI-17).
 	 */
 	sideRun(i: number, j: number, s: LSide): Edge {
 		const e = this.edgeOf(i, j, s);
@@ -1905,7 +1905,7 @@ class Planner {
 	 */
 	cutWindows(): void {
 		const isHouse = this.inp.type === 1 || this.inp.type === 2;
-		// the campus's rooms span the rows its notches cut (EDI-16): each of their outside walls is taken whole
+		// the campus's rooms span the rows its notches cut (EDI-17): each of their outside walls is taken whole
 		const campus = this.inp.type >= 12 && this.inp.type <= 15;
 		const runs: Array<string> = [];
 		// the windows the rooms took while being furnished are cut out of the walls with these
@@ -3028,7 +3028,7 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	booth: { low: true, loot: false },
 	safe: { low: false, loot: true },
 	bench: { low: true, loot: false },
-	// the campus (EDI-16): the loot is where it was kept -- the chemicals shelf, the vending machine (and the stacks'
+	// the campus (EDI-17): the loot is where it was kept -- the chemicals shelf, the vending machine (and the stacks'
 	// bookcases, the dorm's wardrobes, above); a bunk bed is two beds high and stops a bullet, a lab bench does not
 	lectern: { low: true, loot: false },
 	seats: { low: true, loot: false },
@@ -3219,7 +3219,7 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 }
 
 /**
- * The campus's rooms (EDI-16), each with the piece that says what it is (EDI-08): tiered seats and a lectern in a
+ * The campus's rooms (EDI-17), each with the piece that says what it is (EDI-08): tiered seats and a lectern in a
  * lecture room, the stacks' shelves, the front desk and reading tables, the lab benches and a fume hood, the chemicals
  * shelves, the bunk beds, the common room's sofa. Every rule of `fits` holds (paths two bodies wide, nothing in front
  * of an opening), so a room too small for a piece simply goes without it (the validator names such a room).
@@ -3331,7 +3331,7 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			}
 		}
 	}
-	// the campus's notice boards: flyers for the last classes, on a wall of the halls and the lobby (EDI-16)
+	// the campus's notice boards: flyers for the last classes, on a wall of the halls and the lobby (EDI-17)
 	const bt = pl.inp.type;
 	if (bt >= 12 && bt <= 15 && (k === "foyer" || k === "corridor" || k === "common")) {
 		noticeBoard(pl, ctx);

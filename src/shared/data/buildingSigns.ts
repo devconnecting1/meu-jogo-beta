@@ -80,7 +80,7 @@ export const SIGN_ART: Record<string, Color3> = {
 	i: Color3.fromRGB(226, 200, 150),
 	f: Color3.fromRGB(204, 168, 112),
 	F: Color3.fromRGB(158, 122, 76),
-	// the college's maroon (EDI-16): the four campus buildings' one plate, lit top row and grimy bottom row
+	// the college's maroon (EDI-17): the four campus buildings' one plate, lit top row and grimy bottom row
 	M: Color3.fromRGB(170, 72, 96),
 	N: Color3.fromRGB(128, 36, 60),
 	D: Color3.fromRGB(86, 22, 40),
@@ -106,7 +106,7 @@ export interface BuildingSign {
  * on its own board colour: no two alike. The market (7) and the small market (8) both sell food, so they share the
  * roof colour (EDI-03) and not the sign: the supermarket's cart, the corner grocery's paper bag.
  *
- * The campus (12-15, EDI-16) is one institution: its four buildings share the college's maroon plate (a campus's
+ * The campus (12-15, EDI-17) is one institution: its four buildings share the college's maroon plate (a campus's
  * wayfinding signs all look alike) and the slate roof, and the pictogram says which one it is -- the mortarboard
  * on the main hall, books on a shelf at the library, a flask at the science lab, a bunk bed at the dorm. The
  * maroon is no other type's (not the market's red, not the diner's mustard), and the mortarboard is not the

@@ -186,7 +186,7 @@ const BUILDING_NAMES: Record<string, string> = {
 	restaurant: "restaurant",
 	school: "school",
 	hospital: "hospital",
-	// the campus (EDI-16)
+	// the campus (EDI-17)
 	college: "college hall",
 	library: "library",
 	lab: "science lab",

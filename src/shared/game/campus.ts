@@ -1,5 +1,5 @@
 /*
- * The college campus (docs/DESIGN_RULES.md EDI-16): where its four buildings, its quad and what stands on the quad go,
+ * The college campus (docs/DESIGN_RULES.md EDI-17): where its four buildings, its quad and what stands on the quad go,
  * on one whole city block. The town generator (world.ts `placeCampus`) picks the block, clears it and applies this plan
  * once the rest of the town stands.
  *
