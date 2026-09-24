@@ -158,7 +158,7 @@ export interface RemoteZombie {
 	/** 1..ZOMBIE_TYPE_MAX */
 	type: number;
 	big: boolean;
-	/** what the server decided it is doing (0 idle … 3 chasing, protocol decision 16), of the same sample as `flags` */
+	/** what the server decided it is doing (0 idle … 3 chasing, protocol decision 17), of the same sample as `flags` */
 	aware: number;
 	/** jump height, or the spitter's head recoil — which one is told by the flags */
 	extra: number;

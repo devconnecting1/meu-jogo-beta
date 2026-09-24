@@ -15,6 +15,7 @@ import {
 	repairMaterial,
 } from "shared/sim/interactQuery";
 import { flinch } from "../view/solidFlinch";
+import { serverOwnsWorld } from "../net/authority";
 import { itemName } from "./craftSystem";
 import { fxMessage, GameRefs } from "./types";
 
@@ -22,6 +23,10 @@ import { fxMessage, GameRefs } from "./types";
  * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, repair, loot a building.
  * WHAT is in reach is a pure query (shared/sim/interactQuery.ts); this file applies the effect on the world and the
  * backpack of the survivor that pressed E (docs/MULTIPLAYER.md §11.2 → server/sim/interaction.ts in F3).
+ *
+ * From WORLD_SERVER_PHASE (client/net/authority.ts) none of it runs here: the E press rides the input command and
+ * server/sim/interaction.ts applies it; the doors, the items, the loot flags and the fires come back as world deltas
+ * (client/net/worldMirror.ts) and the backpack as the wallet's bag. Only the hint is still this client's.
  */
 
 /** cooldown (seconds left) per map item (tree/car/trash) since its last hit */
@@ -233,7 +238,8 @@ export class Interaction {
 	private readonly lootBuf: Array<Solid> = [];
 
 	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
-		if (refs.pendingPlace >= 0) return;
+		// F3: the press is already on its way in the command's action edge, and the server picks the target itself
+		if (refs.pendingPlace >= 0 || serverOwnsWorld()) return;
 		const target = interactTarget(refs.world, by.x, by.y);
 		if (target === undefined) return;
 		if (target.kind === "item") {
@@ -275,6 +281,8 @@ export class Interaction {
 	}
 
 	update(refs: GameRefs, dt: number): void {
+		// F3: the fires burn on the server (LightSet), and the loot is rolled there (LootFlag)
+		if (serverOwnsWorld()) return;
 		burnFires(refs, dt);
 		for (const [solid, t] of hitCooldowns) {
 			if (solid.removed === true) {

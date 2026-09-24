@@ -1307,6 +1307,7 @@ export class ServerCombat {
 		knock: number,
 		stun: number,
 		away?: number,
+		weaponKind?: number,
 	): void {
 		if (damage <= 0 || z.hp <= 0) return;
 		const dir = away ?? math.atan2(z.y - sp.state.y, z.x - sp.state.x);
@@ -1319,7 +1320,10 @@ export class ServerCombat {
 		else this.defaultReaction(z, dir, knock, stun);
 		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
 		if (z.hp <= 0) {
-			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS);
+			// the credit says what did it too (CON-04): the zombie's kind, and the kind of the weapon -- the one that
+			// launched the projectile, or the one the server says is in hand
+			const kind = weaponKind ?? Wp.WEAPONS[st.weaponId]?.kind ?? -1;
+			this.progress?.zombieKilled(z.id, z.exp, sp.slot, this.nowS, z.type, kind);
 			this.history.forget(z.id);
 			this.hooks.zombieKilled?.(z, sp.slot);
 		}
@@ -1336,7 +1340,7 @@ export class ServerCombat {
 		this.hooks.hitBoss?.(b, damage, x, y);
 		this.emitBlood(x, y, math.atan2(y - sp.state.y, x - sp.state.x), 3, Net.BloodKind.Green);
 		if (b.hp <= 0) {
-			this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot);
+			this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot, b.type);
 			this.history.forget(b.id);
 			this.hooks.bossKilled?.(b, sp.slot);
 		}
@@ -1346,7 +1350,8 @@ export class ServerCombat {
 	 * A projectile in flight reached this zombie (server/sim/projectiles.ts). The flight belongs to the world
 	 * half of the tick (§3.1 step 2); the DAMAGE belongs here, and going through the same private path as a
 	 * bullet is what stops an arrow ever paying different XP, or leaving a different assist trail, from a
-	 * rifle round that did the same harm.
+	 * rifle round that did the same harm. `weaponKind` is the kind of the weapon that launched it (the survivor may
+	 * hold another by the time it lands): what a kill by it is credited as (CON-04).
 	 */
 	hitZombieWith(
 		sp: ServerPlayer,
@@ -1355,8 +1360,9 @@ export class ServerCombat {
 		knock: number,
 		stun: number,
 		away?: number,
+		weaponKind?: number,
 	): void {
-		this.damageZombie(sp, this.slotOf(sp.slot), z, damage, knock, stun, away);
+		this.damageZombie(sp, this.slotOf(sp.slot), z, damage, knock, stun, away, weaponKind);
 	}
 
 	/** the same for a boss (`x`, `y` are where the projectile touched it, for the blood) */

@@ -35,7 +35,6 @@ import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
-import { ITEM_INTEREST } from "shared/net/mpConfig";
 import { ServerItems } from "./items";
 import { WorldOut } from "./worldOut";
 
@@ -56,6 +55,14 @@ const REPAIR_RATE = 0.25;
 const REPAIR_RATE_SKILLED = 0.5;
 /** skill index of "handy" (the one that doubles a repair) */
 const SKILL_HANDY = 17;
+/**
+ * §8.1 / §8.2: the E press is an edge on EVERY command, so without a rate a modified client flipped a door 60 times
+ * a second, each flip a reliable DoorSet to every client (security review of 5967a18, R3). One press per survivor
+ * per PRESS_COOLDOWN_S -- faster than a finger -- and one change per door or lamp per TOGGLE_COOLDOWN_S, whoever
+ * presses: at most 4 DoorSet a second per door, however many survivors crowd it.
+ */
+export const PRESS_COOLDOWN_S = 0.2;
+export const TOGGLE_COOLDOWN_S = 0.25;
 
 /** what the press did, for the caller's Fx and for the tests */
 export type InteractOutcome =
@@ -99,6 +106,10 @@ export class ServerInteraction {
 	private readonly scratch = new Array<Solid>();
 	/** the building whose loot flag each slot was last told about, or 0 for "nothing here" */
 	private readonly lootSeen = new Map<number, number>();
+	/** seconds until this slot's next E press is heard (PRESS_COOLDOWN_S) */
+	private readonly pressCd = new Map<number, number>();
+	/** seconds until this door or lamp can change again (TOGGLE_COOLDOWN_S) */
+	private readonly toggleCd = new Map<Solid, number>();
 
 	constructor(options: ServerInteractionOptions) {
 		this.world = options.world;
@@ -117,13 +128,18 @@ export class ServerInteraction {
 	act(ctx: InteractContext): InteractOutcome {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
+		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
 		const target = interactTarget(this.world, p.x, p.y);
 		if (target === undefined) return { kind: "none" };
+		// only a press that reaches something spends the cooldown: an empty press used to eat it, so a door flipped every
+		// 0.4 s and a press right after an input hitch was dropped (re-review of f8ccaf0)
+		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 
 		if (target.kind === "item") {
 			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
 			if (got.ok) return { kind: "item", count: got.count };
-			return { kind: "refused", why: got.why === "range" ? "range" : "taken" };
+			if (got.why === "range" || got.why === "blocked") return { kind: "refused", why: got.why };
+			return { kind: "refused", why: "taken" };
 		}
 
 		if (target.kind === "door") return this.door(ctx, target.solid);
@@ -137,10 +153,12 @@ export class ServerInteraction {
 
 	private door(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, DOOR_REACH)) return { kind: "refused", why: "range" };
+		if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
 		const willOpen = !(s.open ?? false);
 		// §8.1: closing a door on a body is refused — otherwise a door is a weapon, and a griefing tool
 		if (!willOpen && bodiesOverlapRect(s, ctx.players, ctx.zombies)) return { kind: "refused", why: "blocked" };
 		s.open = willOpen;
+		this.toggleCd.set(s, TOGGLE_COOLDOWN_S);
 		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
 		// client predicts its own movement against it. A door somebody was not told about is a wall.
 		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });
@@ -151,6 +169,13 @@ export class ServerInteraction {
 
 	private light(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
+		const outcome = this.switchLight(ctx, s);
+		if (outcome.kind === "light") this.toggleCd.set(s, TOGGLE_COOLDOWN_S);
+		return outcome;
+	}
+
+	private switchLight(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!isFire(s)) {
 			const powered = !(s.powered ?? false);
 			s.powered = powered;
@@ -206,12 +231,9 @@ export class ServerInteraction {
 		if (!removeItem(ctx.save, mat.kind, mat.index, 1)) return { kind: "refused", why: "material" };
 		const rate = (ctx.save.skillLevels[SKILL_HANDY] ?? 0) > 0 ? REPAIR_RATE_SKILLED : REPAIR_RATE;
 		s.hp = math.min(s.hpMax, s.hp + s.hpMax * rate);
-		this.out.queueNear(
-			{ t: WorldEv.SolidHp, entries: [{ id: s.id, hp: s.hpMax > 0 ? s.hp / s.hpMax : 1 }] },
-			s.x + s.w / 2,
-			s.y + s.h / 2,
-			ITEM_INTEREST,
-		);
+		// to everybody: a repair is rare, and one told only to who was near would be a wall that looks broken to
+		// whoever comes back later (correctness review of 5967a18, B)
+		this.out.queue({ t: WorldEv.SolidHp, entries: [{ id: s.id, hp: s.hpMax > 0 ? s.hp / s.hpMax : 1 }] });
 		return { kind: "repair", solid: s };
 	}
 
@@ -235,6 +257,8 @@ export class ServerInteraction {
 	 */
 	step(players: ReadonlyArray<PlayerState>, slots: ReadonlyArray<number>, dt: number): void {
 		this.items.step(dt);
+		decay(this.pressCd, dt);
+		decay(this.toggleCd, dt);
 		this.publishLootFlags(players, slots);
 		this.fireTick += dt;
 		if (this.fireTick < FIRE_STEP_S) return;
@@ -295,6 +319,7 @@ export class ServerInteraction {
 	/** the survivor left: forget which building they were told about (§4.4, a slot is per session) */
 	remove(slot: number): void {
 		this.lootSeen.delete(slot);
+		this.pressCd.delete(slot);
 	}
 
 	// ---------------------------------------------------------------- internals
@@ -310,10 +335,16 @@ export class ServerInteraction {
 		return segmentClear(this.world, p.x, p.y, cx, cy, other => other !== s && isBlocking(other));
 	}
 
+	/** is this door or lamp inside its TOGGLE_COOLDOWN_S? */
+	private toggling(s: Solid): boolean {
+		return (this.toggleCd.get(s) ?? 0) > 0;
+	}
+
 	private emitLight(s: Solid, powered: boolean): void {
-		// §4.5 filters LightSet by interest: a lamp you cannot see does not change your screen. The radius is
-		// the item one (1800 u), comfortably past the 1650 u at which an entity leaves interest at all.
-		this.out.queueNear({ t: WorldEv.LightSet, id: s.id, powered }, s.x + s.w / 2, s.y + s.h / 2, ITEM_INTEREST);
+		// To EVERYBODY, not by interest: nothing ever resent a LightSet, so a fire that burnt out while a survivor was
+		// far away still looked lit when they came back -- its light at night, and a cook there predicted and undone
+		// (correctness review of 5967a18, B). A light changes a few times a minute, not per tick.
+		this.out.queue({ t: WorldEv.LightSet, id: s.id, powered });
 	}
 
 	/** drops the fuel entries of fires that were destroyed (the map keys them by object identity) */
@@ -324,4 +355,14 @@ export class ServerInteraction {
 		}
 		for (const s of gone) this.fuel.delete(s);
 	}
+}
+
+/** counts every cooldown in `m` down by `dt`, and drops the ones that ran out */
+function decay<K extends defined>(m: Map<K, number>, dt: number): void {
+	const done = new Array<K>();
+	for (const [k, left] of m) {
+		if (left - dt <= 0) done.push(k);
+		else m.set(k, left - dt);
+	}
+	for (const k of done) m.delete(k);
 }

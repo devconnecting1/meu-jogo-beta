@@ -20,6 +20,7 @@
  *
  * The numbers are the ones the single-player loop used (client/systems/combat.ts), unchanged.
  */
+import { WeaponKind } from "shared/data/kinds";
 import { damageCal } from "shared/engine/rng";
 import { Bullet } from "shared/game/bullets";
 import { BOSS1_SEGMENT_RADIUS, BossState, bossHitRadius, ZombieState, zombieRadius } from "shared/game/entities";
@@ -217,7 +218,8 @@ export class ServerProjectiles {
 		if (z !== undefined) {
 			const damage = damageCal(b.damage);
 			const away = math.atan2(z.y - b.y, z.x - b.x);
-			if (sp !== undefined) this.combat?.hitZombieWith(sp, z, damage, KNOCK_ARROW, 0, away);
+			// an arrow is a bow's kill whatever is in hand when it lands (CON-04, Bow expert)
+			if (sp !== undefined) this.combat?.hitZombieWith(sp, z, damage, KNOCK_ARROW, 0, away, WeaponKind.Bow);
 			else this.hitWithoutOwner(z, damage, away, KNOCK_ARROW);
 			b.stuckTo = z.id;
 			b.stuckDX = (nx - z.x) * 0.5;
@@ -264,8 +266,11 @@ export class ServerProjectiles {
 			if (dx * dx + dy * dy > rr * rr) continue;
 			const damage = damageCal(b.damage) * tick;
 			const away = math.atan2(z.y - b.y, z.x - b.x);
-			if (sp !== undefined) this.combat?.hitZombieWith(sp, z, damage, KNOCK_FIRE * tick, 0, away);
-			else this.hitWithoutOwner(z, damage, away, KNOCK_FIRE * tick);
+			if (sp !== undefined) {
+				this.combat?.hitZombieWith(sp, z, damage, KNOCK_FIRE * tick, 0, away, WeaponKind.Special);
+			} else {
+				this.hitWithoutOwner(z, damage, away, KNOCK_FIRE * tick);
+			}
 		}
 		const boss = this.bossAt(refs, b.x, b.y, FIRE_RADIUS);
 		if (boss !== undefined && sp !== undefined) {

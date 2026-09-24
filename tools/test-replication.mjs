@@ -30,7 +30,7 @@
  *      save, and a client report can no longer move any of those fields.
  *   f. TICK COST (§3.2). 150 zombies and 6 survivors, measured per tick. In Node this is a comparison and a
  *      regression guard, never the verdict — Luau on a Roblox server is slower.
- *  ia. THE AWARENESS (IA-03 / IA-05, protocol decision 16). The state the server decided for each zombie (idle,
+ *  ia. THE AWARENESS (IA-03 / IA-05, protocol decision 17). The state the server decided for each zombie (idle,
  *      suspicious, searching, chasing) reaches every screen in 2 bits of the record, and a screen only ever draws a
  *      state the server really had for that zombie within the interpolation window; the record stays 9 bytes.
  *
@@ -1583,7 +1583,7 @@ section(
 
 // ================================================================ the zombies' awareness (IA-03 / IA-05)
 
-section("(ia) every client draws the awareness state the SERVER decided (2 bits of the record, protocol decision 16)");
+section("(ia) every client draws the awareness state the SERVER decided (2 bits of the record, protocol decision 17)");
 {
 	const server = newWorldServer();
 	const cx = world.width / 2;

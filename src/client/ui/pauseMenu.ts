@@ -2,6 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
 import { TEXT, THEME, TRANSPARENCY, space } from "./theme";
+import { registerBack } from "./backStack";
 import { SCHEMES, SCHEME_TOUCH, currentScheme } from "./tutorial";
 import {
 	Badge,
@@ -199,6 +200,9 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 			});
 			if (i === 0) first = b;
 		}
+		// B / Backspace is "Back to game" (backStack.ts); the death variant above registers nothing: it asks for a choice
+		const resume = handlers.onResume;
+		if (first !== undefined && resume !== undefined) registerBack(first, resume);
 		if (info?.note !== undefined) {
 			makeLabel(panel, "Note", info.note, pad, PAUSE_H - pad - 32, innerW, 32, TEXT.xs, THEME.mutedForeground);
 		}

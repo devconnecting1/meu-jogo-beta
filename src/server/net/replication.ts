@@ -290,7 +290,7 @@ export function fillZombieBlock(out: ZombieSnap, z: ZombieState, netId: number, 
 	out.type = z.type;
 	out.big = (z.scale ?? 1) > 1.2;
 	out.mid = mid;
-	// what the brain decided it is doing (IA-03), drawn over its head by every client (IA-05, protocol decision 16)
+	// what the brain decided it is doing (IA-03), drawn over its head by every client (IA-05, protocol decision 17)
 	out.aware = z.aware ?? 0;
 	out.extra = extra;
 }

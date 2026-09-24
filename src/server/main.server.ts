@@ -1,5 +1,7 @@
 import { GAME_NAME } from "shared/module";
 import {
+	bagOf,
+	bagSignature,
 	copySaveInto,
 	defaultSave,
 	enforceSaveInvariants,
@@ -24,9 +26,8 @@ import {
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
-import { INTENT_BURST, INTENT_RATE, MP_PHASE } from "shared/net/mpConfig";
-import { decodeIntentMessage, IntentKind } from "shared/net/protocol";
-import { onIntent } from "./net/remotes";
+import { MP_PHASE } from "shared/net/mpConfig";
+import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, SAVE_STORE } from "./save/stores";
@@ -34,9 +35,12 @@ import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
+import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
+import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
+import * as Analytics from "./analytics/events";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -192,6 +196,8 @@ interface StoredDoc {
 }
 
 const remotes = createRemotes();
+// before any session loads: the Economy / Funnel / Custom dashboards (docs/ANALYTICS.md); off when there is no service
+Analytics.start();
 const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(DATA_STORE_NAME));
 const dataStore = storeOk ? (storeValue as DataStore) : undefined;
 if (dataStore === undefined) {
@@ -234,43 +240,6 @@ function markDirty(userId: number): void {
 	if (s !== undefined && !s.closed) s.dirty = true;
 }
 
-/**
- * The F3 backpack verbs (craft, use, equip, unequip, learn) on the `Intent` channel (§4.1, §8.1).
- *
- * This is a SECOND listener on the same remote, beside the one server/net/mpHost.ts installs for EnterWorld
- * and LeaveWorld. Roblox fires every connection, and the two decoders are disjoint by packet length, so each
- * handler sees only its own verbs and drops the other's as malformed. It lives here rather than in mpHost
- * because the session layer is what owns "this player's save is now dirty"; when F3's front 3B folds the
- * `Self` channel in, the natural home for both halves is one dispatcher inside mpHost.
- *
- * §8.2's token bucket is enforced here too: mpHost rate-limits presence, not this.
- */
-function startIntentListener(host: MpHost): void {
-	const tokens = new Map<Player, number>();
-	const at = new Map<Player, number>();
-	onIntent(host.remotes, (player, payload) => {
-		const sp = host.playerOf(player);
-		if (sp === undefined) return;
-		const msg = decodeIntentMessage(payload);
-		// EnterWorld / LeaveWorld belong to mpHost's handler; anything malformed belongs to nobody
-		if (msg === undefined || msg.kind === IntentKind.EnterWorld || msg.kind === IntentKind.LeaveWorld) return;
-		const now = os.clock();
-		const last = at.get(player) ?? now;
-		const left = math.min(INTENT_BURST, (tokens.get(player) ?? INTENT_BURST) + (now - last) * INTENT_RATE);
-		at.set(player, now);
-		if (left < 1) {
-			tokens.set(player, left);
-			return;
-		}
-		tokens.set(player, left - 1);
-		host.simulation.queueIntent(sp.slot, msg);
-	});
-	Players.PlayerRemoving.Connect(player => {
-		tokens.delete(player);
-		at.delete(player);
-	});
-}
-
 function resetCredits(s: Session): void {
 	s.credits = { day: 0, boss: BOSS_CREDIT_START, level: LEVEL_CREDIT_START, at: os.clock() };
 }
@@ -291,6 +260,22 @@ function waitUntil(check: () => boolean, timeout: number): boolean {
 		task.wait(0.1);
 	}
 	return true;
+}
+
+/** xpcall's handler: the error with the stack it was raised on, for the log and the Error Report (F6) */
+function traceback(err: unknown): string {
+	return debug.traceback(tostring(err), 2);
+}
+
+/**
+ * Runs `fn`, reporting a throw (with its traceback) instead of passing it on, so whatever follows still runs: a
+ * leave's final write, the cleanup after it, the autosave of everybody else (F5). undefined when it threw.
+ */
+function guarded<T>(what: string, fn: () => T): T | undefined {
+	const [ok, value] = xpcall(fn, traceback);
+	if (ok) return value as T;
+	warn(`[${GAME_NAME}] ${what} failed: ${tostring(value)}`);
+	return undefined;
 }
 
 // ---------------------------------------------------------------- DataStore documents
@@ -368,14 +353,16 @@ function loadWithLock(s: Session): LoadOutcome {
 
 type WriteOutcome = "ok" | "lost" | "failed";
 
-function writeWithLock(s: Session, json: string, release: boolean, delays: Array<number>): WriteOutcome {
+/** `json` undefined: only the lock changes, the stored data stays (a leave whose own write could not be made, F5) */
+function writeWithLock(s: Session, json: string | undefined, release: boolean, delays: Array<number>): WriteOutcome {
 	const store = dataStore;
 	if (store === undefined) return "failed";
 	for (let attempt = 0; ; attempt++) {
 		let lost = false as boolean;
 		const [ok, err] = pcall(() => {
 			store.UpdateAsync<unknown, unknown>(s.key, old => {
-				const lock = readDoc(old)?.lock;
+				const doc = readDoc(old);
+				const lock = doc?.lock;
 				if (lock === undefined || lock.job !== JOB_ID || lock.sid !== s.sid) {
 					// lock released or owned by another session (here or on another server): this copy is stale
 					lost = true;
@@ -383,7 +370,7 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 				}
 				lost = false;
 				const nextLock = release ? undefined : { job: JOB_ID, sid: s.sid, t: os.time() };
-				return $tuple({ data: json, lock: nextLock });
+				return $tuple({ data: json ?? doc?.data, lock: nextLock });
 			});
 		});
 		if (ok) return lost ? "lost" : "ok";
@@ -396,10 +383,25 @@ function writeWithLock(s: Session, json: string, release: boolean, delays: Array
 }
 
 /**
+ * A session on its way out whose own write cannot be made (it threw, it is too large, the session is read-only): its
+ * lock at least goes back -- only while it is still this session's, the stored data untouched -- so the player's next
+ * server loads the last save that landed without waiting LOCK_WAIT for this one (F5)
+ */
+function handBackLock(s: Session, delays: Array<number>): void {
+	if (writeWithLock(s, undefined, true, delays) !== "failed") s.released = true;
+}
+
+/**
  * The title record (server/save/titleRecord.ts) brought up to date with the save when it is due (`titleRecordDue`:
  * a title, a new history, a step of kills -- or, `final`, anything at all on leaving).
  */
 function syncTitleRecord(s: Session, final: boolean): void {
+	// never in the way of the save it rides with (F5): a throw is reported and the save is written without the record,
+	// which the next save (or the player's next session) brings up to date from it (`titleRecordDue`)
+	guarded(`${s.key}: title record`, () => writeTitleRecord(s, final));
+}
+
+function writeTitleRecord(s: Session, final: boolean): void {
 	if (!TitleRecord.titleRecordDue(s.save, s.titleMark, s.titleStep, s.titleReplace, final)) return;
 	// start a new history over whatever is there (a missing save, an admin reset); replace a record this session
 	// has read; merge into one it never saw
@@ -438,12 +440,32 @@ function recordBeforeRelease(): boolean {
  */
 function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAYS): boolean {
 	if (!s.loaded || s.released) return true;
-	if (!persists(s)) return false;
+	if (!persists(s)) {
+		// a read-only session may still hold the lock its load took (a load that threw after it, a stored save that is
+		// not JSON): on the way out it goes back all the same
+		if (release && s.status === "error" && !s.lockLost && dataStore !== undefined) handBackLock(s, delays);
+		return false;
+	}
 	if (!waitUntil(() => !s.writing, 30)) return false;
 	if (s.released) return true;
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
 	if (!release && !s.dirty && !refreshDue) return true;
 	s.writing = true;
+	// the window runs protected, so `writing` always comes back down: a throw in it (the encode, say) used to leave it
+	// up for good, and every later flush of the session then waited 30 s and gave up -- never saved again (F5)
+	const [ran, written] = xpcall(() => writeSession(s, release, delays), traceback);
+	if (!ran) {
+		warn(`[${GAME_NAME}] save ${s.key} failed: ${tostring(written)}`);
+		s.dirty = true;
+		// a session on its way out gets no other try
+		if (release && !s.released) handBackLock(s, delays);
+	}
+	s.writing = false;
+	return ran && written === true;
+}
+
+/** the writing window of `flush`, which holds `s.writing` around it */
+function writeSession(s: Session, release: boolean, delays: Array<number>): boolean {
 	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, by the session that
 	// believes it holds the lock and inside the same writing window. On release it goes FIRST: the save write below
 	// drops the lock, and from then on another server may load this player and own both documents -- a record
@@ -453,8 +475,8 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
 	if (json.size() > MAX_STORED_LENGTH) {
-		s.writing = false;
 		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
+		if (release) handBackLock(s, delays);
 		return false;
 	}
 	const wasDirty = s.dirty;
@@ -462,7 +484,6 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	const outcome = writeWithLock(s, json, release, delays);
 	// every other write: right after the save, which just proved this session still holds the lock
 	if (outcome === "ok" && !release) syncTitleRecord(s, false);
-	s.writing = false;
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
 		if (release) s.released = true;
@@ -513,6 +534,26 @@ function readLegacy(key: string): LoadOutcome {
 function loadSession(s: Session): void {
 	if (s.loading) return;
 	s.loading = true;
+	// protected like flush's window (F5): a throw in the load used to leave `loading` up and `loaded` down for good --
+	// no LoadAck, every Retry refused, and a leave that waited a minute for a load that never came
+	const [ran, err] = xpcall(() => readSession(s), traceback);
+	s.loading = false;
+	if (ran) return;
+	warn(`[${GAME_NAME}] ${s.key}: load failed: ${tostring(err)}`);
+	if (s.loaded) return; // it threw after the load was done (the ack): what was loaded stands
+	// what a read that failed gives: a read-only session on a blank save, never written, that the client may retry
+	s.status = "error";
+	s.save = defaultSave();
+	s.lockLost = false;
+	s.token = HttpService.GenerateGUID(false);
+	s.pending = undefined;
+	s.pendingToken = undefined;
+	s.lastLoadAttempt = os.clock();
+	s.loaded = true;
+	if (s.ackRequested) sendLoadAck(s);
+}
+
+function readSession(s: Session): void {
 	// a second load in one session is always the retry of a failed one: until now the player had the blank,
 	// read-only table below, and "Play without saving" may have played a life on it
 	const retried = s.lastLoadAttempt !== -math.huge;
@@ -607,8 +648,12 @@ function loadSession(s: Session): void {
 	if (retried && status !== "error") mpHost?.forgetUnsaved(s.player, blank);
 	// a stored save meets the body this server kept, BEFORE the LoadAck shows it to the client: a reconnect is
 	// reconciled, and a new life that a world which ended while they were away owes them is granted now (MP-22,
-	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth
-	if (status === "ok" && mpHost?.adopt(s.player, save) === true) s.dirty = true;
+	// server/sim/life.ts `adopt`). Only a real stored save: a read-only session's blank one is nobody's truth.
+	// Guarded (F5): what the keeper already did with this save -- an owed new life granted on it, which it will not
+	// grant twice -- stays with the session that keeps the save, instead of going down with a load thrown away
+	const adopted = status === "ok" && guarded(`${s.key}: meeting the kept body`, () => mpHost?.adopt(s.player, save));
+	if (adopted === true) s.dirty = true;
+	Analytics.sessionLoaded(s.player, status, save);
 	s.loaded = true;
 	s.loading = false;
 	if (s.closed) {
@@ -848,8 +893,13 @@ function processReport(s: Session, json: string): void {
 	// it is simply stale — pinned to the trusted copy in silence (§9.2 level 0). With those fields frozen
 	// the credit windows below have nothing left to clamp and the coins follow the server's own events.
 	if (stripClientProgress(prev, upd)) s.staleProgressReports += 1;
+	// NET-5: ...and from WORLD_SERVER_PHASE the backpack too (server/sim/backpack.ts): a report can no longer add an
+	// item, a round, a skill or a pack. The server wrote those itself -- a pickup, a craft, a reload, a delivery
+	if (stripClientBackpack(prev, upd)) s.staleProgressReports += 1;
 	// …and the death is the server's too: `runOver: false` in a report was a one-line revive (server/sim/life.ts)
 	if (stripClientLife(prev, upd)) s.staleProgressReports += 1;
+	// …and so are the achievements and what they could stand for (CON-04, MON-05): counted on its own events only
+	if (stripClientAchievements(prev, upd, decoded)) s.staleProgressReports += 1;
 	const assisted = s.assistedRunRev !== undefined && s.assistedRunRev === prev.runRev;
 	const reward = applyProgressLimits(s, prev, upd, isAdminUserId(s.player.UserId), assisted);
 	// IN PLACE, never `s.save = upd` (§6.3). From F2 on the simulation writes into this very table —
@@ -987,7 +1037,17 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
 		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
 		if (refusal !== undefined) return fail(refusal, s);
+		const host = mpHost;
 		if (req.kind === "rebirth") {
+			// what the sale changes, to take back if the body does not stand (F5). Nothing yields in here, so nobody
+			// (a report, a wallet push) can have seen the new runRev before it goes back
+			const before = {
+				money: save.money,
+				deathCount: save.deathCount,
+				runOver: save.runOver,
+				runRev: save.runRev,
+				assisted: s.assistedRunRev,
+			};
 			price = due ? 0 : rebirthPrice(save.deathCount);
 			save.money -= price;
 			if (!due) save.deathCount += 1;
@@ -997,17 +1057,49 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 			save.runRev += 1;
 			// the SAVE says the run continues; this is what makes the simulated survivor agree (§7.1). Without
 			// it the coins were gone and the body stayed dead, so the button looked like it did nothing.
-			mpHost?.rebirth(player, save);
+			const stood =
+				host === undefined ||
+				guarded(`${s.key}: rebirth`, () => {
+					host.rebirth(player, save);
+					return true;
+				}) === true ||
+				// it threw: sold only if the body stood up all the same (a throw after that point keeps the Rebirth)
+				guarded(`${s.key}: rebirth check`, () => host.isDead(player, save)) === false;
+			if (!stood) {
+				// nothing was sold: the charge, the continue and the run go back, so the client's next Rebirth pays once
+				// (whatever the keeper moved before it threw, the corpse's rounds into the reserve, goes with the save)
+				save.money = before.money;
+				save.deathCount = before.deathCount;
+				save.runOver = before.runOver;
+				save.runRev = before.runRev;
+				s.assistedRunRev = before.assisted;
+				s.dirty = true;
+				return fail("network", s);
+			}
 		} else {
 			price = 0;
 			resetRun(save);
 			save.runRev += 1;
 			s.assistedRunRev = undefined;
-			mpHost?.newLife(player, save);
+			const renewed =
+				host === undefined ||
+				guarded(`${s.key}: new life`, () => {
+					host.newLife(player, save);
+					return true;
+				}) === true;
+			if (!renewed) {
+				// the new life stands, and so does the death (F5): resetRun cleared what newLife writes back. A save
+				// saying "alive" under a body the keeper holds dead is the free revive rule 5 forbids (a crash would
+				// hand it out on the next join)
+				save.runOver = true;
+				save.runHp = 0;
+				save.runHunger = 0;
+			}
 		}
 	} else {
 		return fail("invalid", s);
 	}
+	Analytics.shopAction(player, req, price);
 	s.dirty = true;
 	return { ok: true, price, wallet: walletOf(save) };
 }
@@ -1028,12 +1120,18 @@ Players.PlayerRemoving.Connect(player => {
 	const userId = player.UserId;
 	releasing.add(userId);
 	waitUntil(() => s.loaded, 60);
-	if (s.pending !== undefined) processPending(s);
+	// every step is guarded (F5): none may cost the session its last write, nor skip the cleanup below
+	if (s.pending !== undefined) guarded(`${s.key}: last report`, () => processPending(s));
 	// §7.2 "Desconectar": the body goes into the save — runHp, runHunger, runOver, the magazine back into the
 	// reserve — BEFORE the final write. mpHost's own PlayerRemoving handler does the same, but the two handlers
 	// run in no guaranteed order, and this write is the last one the session gets.
-	if (s.loaded) mpHost?.release(player, s.save);
-	flush(s, true);
+	if (s.loaded) guarded(`${s.key}: banking the body`, () => mpHost?.release(player, s.save));
+	guarded(`${s.key}: final save`, () => flush(s, true));
+	// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
+	// it, and the mark below stays until then
+	if (s.writing && waitUntil(() => !s.writing, 60)) guarded(`${s.key}: final save`, () => flush(s, true));
+	// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps this
+	// user's next session here from taking the lock under that write. Left behind, it held every later join 20-35 s
 	sessions.delete(player);
 	releasing.delete(userId);
 });
@@ -1041,18 +1139,20 @@ Players.PlayerRemoving.Connect(player => {
 game.BindToClose(() => {
 	shuttingDown = true;
 	// §7.2 "Servidor desligando": stop the simulation and bank every body into its save before the writes below
-	// capture them (a second BindToClose would race this one, so the host is stopped here, first)
-	mpHost?.stop();
+	// capture them (a second BindToClose would race this one, so the host is stopped here, first). Guarded (F5): a
+	// simulation that cannot stop must not keep a single save from being written
+	guarded("stopping the simulation", () => mpHost?.stop());
 	const all: Array<Session> = [];
 	for (const [, s] of sessions) all.push(s);
 	let remaining = all.size();
 	for (const s of all) {
 		task.spawn(() => {
 			waitUntil(() => s.loaded, 10);
-			if (s.pending !== undefined) processPending(s);
+			if (s.pending !== undefined) guarded(`${s.key}: last report`, () => processPending(s));
 			// no report may land after the final state is captured
 			s.closed = true;
-			flush(s, true, SHUTDOWN_RETRY_DELAYS);
+			guarded(`${s.key}: final save`, () => flush(s, true, SHUTDOWN_RETRY_DELAYS));
+			// counted whatever happened above: a save that threw held the shutdown for the whole budget
 			remaining -= 1;
 		});
 	}
@@ -1071,8 +1171,9 @@ task.spawn(() => {
 			if (shuttingDown || s.closed) continue;
 			const budget = DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync);
 			if (budget < AUTOSAVE_MIN_BUDGET) break; // keep the budget for joins/leaves; retry next round
-			// the body's hp and hunger as they are now (§6.1), so a crash does not hand out a heal on the next join
-			if (mpHost?.settle(s.player, s.save) === true) s.dirty = true;
+			// the body's hp and hunger as they are now (§6.1), so a crash does not hand out a heal on the next join.
+			// Guarded (F5): a throw here ended this loop, and every autosave on the server with it
+			if (guarded(`${s.key}: settling the body`, () => mpHost?.settle(s.player, s.save)) === true) s.dirty = true;
 			task.spawn(() => flush(s, false));
 			task.wait(0.2);
 		}
@@ -1088,25 +1189,66 @@ task.spawn(() => {
  */
 const WALLET_PUSH_S = 0.25;
 const pushedWallet = new Map<Player, string>();
+/** the bag each player was last sent (server/sim/backpack.ts owns the backpack from WORLD_SERVER_PHASE) */
+const pushedBag = new Map<Player, string>();
 
-/** everything in the wallet the simulation can move on its own: a change in any of them is pushed */
+interface BagNow {
+	sig: string;
+	seq: number;
+	place: number;
+	ack: number;
+}
+
+/**
+ * F3 (§4.8): the backpack as the server holds it, with the construction on its cursor, the nonce of the last verb it
+ * answered and the last command it consumed -- or undefined below WORLD_SERVER_PHASE, where the client still owns it.
+ * `sig` is what the push compares: it leaves `seq` out, which moves every tick.
+ */
+function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
+	if (!serverOwnsBackpack() || mpHost === undefined) return undefined;
+	const sp = mpHost.playerOf(player);
+	const sim = mpHost.simulation;
+	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
+	const ack = sim.backpack.ackOf(player.UserId);
+	// every build edge the cursor answered moves the signature, so a REFUSED placement is answered by a bag too
+	const turns = sp !== undefined ? (sim.build?.turnsOf(sp.slot) ?? 0) : 0;
+	const sig = `${bagSignature(save, place, ack)}|${turns}`;
+	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+}
+
+/**
+ * Everything in the wallet the simulation can move on its own: a change in any of them is pushed. The achievement
+ * counters (CON-04) ride here too: this push is how they -- and the "Achievement unlocked" toast -- reach the client.
+ */
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}`;
+	const achievements = save.achievements.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}`;
 }
 
 function pushWallets(): void {
 	for (const [player] of pushedWallet) {
-		if (!sessions.has(player)) pushedWallet.delete(player);
+		if (!sessions.has(player)) {
+			pushedWallet.delete(player);
+			pushedBag.delete(player);
+		}
 	}
 	for (const [player, s] of sessions) {
 		if (s.closed || !s.loaded) continue;
 		const sig = walletSignature(s.save);
 		const last = pushedWallet.get(player);
 		pushedWallet.set(player, sig);
+		const bag = bagFor(player, s.save);
+		const lastBag = pushedBag.get(player);
+		if (bag !== undefined) pushedBag.set(player, bag.sig);
 		// the first look only takes note: the LoadAck already carried the whole save
-		if (last === undefined || last === sig) continue;
+		const walletMoved = last !== undefined && last !== sig;
+		const bagMoved = bag !== undefined && lastBag !== undefined && lastBag !== bag.sig;
+		if (!walletMoved && !bagMoved) continue;
+		const wallet = walletOf(s.save);
+		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
+		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq);
 		sendSaveAck(s, {
 			ok: true,
 			push: true,
@@ -1114,7 +1256,7 @@ function pushWallets(): void {
 			earnedDays: 0,
 			earnedBosses: 0,
 			clamped: false,
-			wallet: walletOf(s.save),
+			wallet,
 		});
 	}
 }
@@ -1164,6 +1306,7 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	const dayMoved = ops !== undefined && edited.day !== before.day;
 	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
 	s.assistedRunRev = assisted ? edited.runRev : undefined;
+	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
 	s.dirty = true;
@@ -1293,9 +1436,27 @@ if (MP_PHASE >= 1) {
 	};
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
-	sim.onBackpack = sp => markDirty(sp.userId);
+	sim.onBackpack = (sp, outcome) => {
+		markDirty(sp.userId);
+		Analytics.backpack(sp.save, outcome);
+	};
 	sim.onInteract = sp => markDirty(sp.userId);
-	startIntentListener(mpHost);
+	// the backpack verbs (§4.8, §8.4): rate-limited and flood-counted here, validated and applied by the simulation
+	// (server/sim/backpack.ts); out of the world only a cosmetic slot, on the session's save (the lobby's wardrobe)
+	startBackpackIntents({
+		intent: mpHost.remotes.intent,
+		backpack: sim.backpack,
+		playerOf: player => mpHost?.playerOf(player),
+		queue: (slot, msg) => sim.queueIntent(slot, msg),
+		saveOf: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded && !s.closed ? s.save : undefined;
+		},
+		changed: player => {
+			const s = sessions.get(player);
+			if (s !== undefined && !s.closed) s.dirty = true;
+		},
+	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
 

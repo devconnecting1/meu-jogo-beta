@@ -213,7 +213,7 @@ export class ActorsView {
 		// the wire has a bit, not a countdown: the "!" is up exactly while the server says it is up
 		z.detectShow = z.detect ? 1 : 0;
 		// what the awareness marks draw (client/view/zombieAwareness.ts): the state the server decided, 2 bits of
-		// the record (protocol decision 16)
+		// the record (protocol decision 17)
 		z.aware = rz.aware;
 		z.stunned = (flags & ZombieFlag.Stunned) !== 0 ? 1 : 0;
 		z.hitFlash = (flags & ZombieFlag.HitFlash) !== 0 ? 1 : 0;
