@@ -1970,16 +1970,32 @@ function parkSeed(town: number, lot: Lot): number {
 interface Grove {
 	x: number;
 	y: number;
-	/** how far its trees stand from its middle */
+	/** its size: how far its first trees stand from its middle (its edge is past 0.55 of it) */
 	rad: number;
 	/** its kind of tree */
 	sp: number;
 	/** the walkable space kept round each trunk in it: trees closer in one grove than in another (40 lets a body by) */
 	pad: number;
+	/** how far its tries reach now: `rad`, wider each time its middle is packed (GROVE_MISSES), up to GROVE_SPREAD × */
+	reach: number;
+	/** its tries in a row that found no room */
+	misses: number;
 }
 
 /** trees standing closer than this to a park tree make it a dense spot: its green darker */
 const PARK_DENSE_R = 240;
+/** the grid a park's open lawn is read on (`parkTrees`): on the 8 u grid, a little wider than a trunk */
+const PARK_LAWN_STEP = 32;
+/** a grove's middle is the best of this many spots of the open lawn: the one with the most lawn round it no grove has */
+const GROVE_SEATS = 8;
+/**
+ * a grove whose tries miss this many times in a row has its middle packed: it spreads (its reach × 1.25) and, past
+ * GROVE_SPREAD × its size, is full -- the tries go to the other groves
+ */
+const GROVE_MISSES = 10;
+const GROVE_SPREAD = 2;
+/** a loner stands between the groves: never within this share of a grove's size of its middle */
+const GROVE_CORE = 0.6;
 
 /**
  * A park's trees (VEG-03, VEG-06): as many as the uniform scatter would have planted (`scatterDry`), laid out as a
@@ -1987,7 +2003,14 @@ const PARK_DENSE_R = 240;
  * its trees thicker towards its middle, a companion of another kind here and there, a shrub or two at its edge, rarely
  * a dead one -- and a fifth of them loners on the open lawn between the groves. The greens are darker where the trees
  * stand thick. All from the park's own stream (`parkSeed`) and exact arithmetic (a grove's spread is a sum of
- * uniforms, not an angle): the server and every client lay the same park (MP-26).
+ * uniforms, not an angle; the lawn a grid of integers): the server and every client lay the same park (MP-26).
+ *
+ * The paths, the playground, the court, the benches and the picnic table (MOB-05) take much of a park and are
+ * reserved, so a grove seated anywhere would mostly miss (it did: most parks were half loners). Each grove is seated
+ * on the OPEN lawn, where the most of it round the spot is no other grove's yet, and is of a kind the others are not;
+ * a grove whose middle is packed spreads, and past twice its size is full, its tries going to the others; the trees
+ * the groves still had no room for grow as the kind of the grove nearest them -- the stands grow outwards, never a
+ * random mix. The loners are only ever the fifth.
  */
 function parkTrees(g: Gen, lot: Lot, n: number, pad: number): void {
 	const count = scatterDry(g, lot, n, pad);
@@ -1995,71 +2018,184 @@ function parkTrees(g: Gen, lot: Lot, n: number, pad: number): void {
 	const r = new TownRng(parkSeed(g.townSeed, lot));
 	r.next();
 	r.next();
+	const t = TOWN.TREE_TRUNK;
+	const step = PARK_LAWN_STEP;
+	// the open lawn: the spots of a grid over the yard (56 u in from its edges) where a trunk fits, a body's width clear
+	// of anything standing, before any of the park's trees -- never on a reserve (the paths, the playground...)
+	const x0 = math.ceil((yard.x + 56) / 8) * 8;
+	const y0 = math.ceil((yard.y + 56) / 8) * 8;
+	const nx = math.max(0, math.floor((yard.x + yard.w - 56 - x0) / step) + 1);
+	const ny = math.max(0, math.floor((yard.y + yard.h - 56 - y0) / step) + 1);
+	const open: Array<boolean> = [];
+	const lawn: Array<number> = [];
+	for (let j = 0; j < ny; j++) {
+		for (let i = 0; i < nx; i++) {
+			const ok = g.placer.canPlace(x0 + i * step - t / 2, y0 + j * step - t / 2, t, t, 40);
+			open.push(ok);
+			if (ok) lawn.push(j * nx + i);
+		}
+	}
 	const groves: Array<Grove> = [];
+	// the open lawn within `rad` of the lawn's spot (i0, j0) that no grove seated before reaches
+	const roomAt = (i0: number, j0: number, rad: number): number => {
+		const s = math.floor(rad / step);
+		let room = 0;
+		for (let j = math.max(0, j0 - s); j <= math.min(ny - 1, j0 + s); j++) {
+			for (let i = math.max(0, i0 - s); i <= math.min(nx - 1, i0 + s); i++) {
+				const di = (i - i0) * step;
+				const dj = (j - j0) * step;
+				if (!open[j * nx + i] || di * di + dj * dj > rad * rad) continue;
+				let free = true;
+				for (const o of groves) {
+					const ox = x0 + i * step - o.x;
+					const oy = y0 + j * step - o.y;
+					if (ox * ox + oy * oy < o.rad * o.rad) free = false;
+				}
+				if (free) room++;
+			}
+		}
+		return room;
+	};
+	// three to five groves, each of a kind the park's other groves are not (while its kinds last): stands that read
+	// apart, not two of one kind side by side that read as one
+	const kinds = [...TREE_SITE_MIX.park];
 	const k = r.int(3, 5);
-	for (let i = 0; i < k; i++) {
-		groves.push({
-			x: yard.x + 150 + r.next() * math.max(1, yard.w - 300),
-			y: yard.y + 150 + r.next() * math.max(1, yard.h - 300),
-			rad: r.range(130, 240),
-			sp: pickSpecies(TREE_SITE_MIX.park, r.next()),
-			pad: r.int(40, 56),
-		});
+	for (let gi = 0; gi < k; gi++) {
+		const rad = r.range(130, 240);
+		let left = 0;
+		for (const x of kinds) left += x;
+		const sp = pickSpecies(left > 0 ? kinds : TREE_SITE_MIX.park, r.next());
+		kinds[sp] = 0;
+		const keep = r.int(40, 56);
+		let gx = x0;
+		let gy = y0;
+		let most = -1;
+		for (let s = 0; s < GROVE_SEATS && lawn.size() > 0; s++) {
+			const c = lawn[r.int(0, lawn.size() - 1)];
+			const i0 = c % nx;
+			const j0 = (c - i0) / nx;
+			const room = roomAt(i0, j0, rad);
+			if (room > most) {
+				most = room;
+				gx = x0 + i0 * step;
+				gy = y0 + j0 * step;
+			}
+		}
+		groves.push({ x: gx, y: gy, rad, sp, pad: keep, reach: rad, misses: 0 });
 	}
 	const loners = math.floor(count * 0.2);
-	const t = TOWN.TREE_TRUNK;
 	const inYard = (cx: number, cy: number) =>
 		cx >= yard.x + 56 && cx <= yard.x + yard.w - 56 && cy >= yard.y + 56 && cy <= yard.y + yard.h - 56;
+	const fits = (cx: number, cy: number, keep: number) =>
+		inYard(cx, cy) && g.placer.canPlace(cx - t / 2, cy - t / 2, t, t, keep);
+	/** the grove whose middle is nearest (cx, cy) */
+	const nearest = (cx: number, cy: number): Grove => {
+		let home = groves[0];
+		let best = math.huge;
+		for (const o of groves) {
+			const d2 = (cx - o.x) * (cx - o.x) + (cy - o.y) * (cy - o.y);
+			if (d2 < best) {
+				best = d2;
+				home = o;
+			}
+		}
+		return home;
+	};
 	const planted: Array<Solid> = [];
 	// one dead tree a park at most (APO-01: a few in the whole town)
 	let dead = false;
-	for (let attempt = 0; attempt < count * 40 && planted.size() < count; attempt++) {
-		const lone = planted.size() >= count - loners || attempt >= count * 30;
-		let cx: number;
-		let cy: number;
-		let keep = 72;
-		let sp: number;
-		if (lone) {
-			cx = snap8(yard.x + 56 + r.next() * math.max(1, yard.w - 112));
-			cy = snap8(yard.y + 56 + r.next() * math.max(1, yard.h - 112));
-			sp = pickSpecies(TREE_SITE_MIX.park, r.next());
-		} else {
-			const gr = groves[r.int(0, k - 1)];
-			// thicker towards the middle: the sum of two uniforms
-			const dx = (r.next() + r.next() - 1) * gr.rad;
-			const dy = (r.next() + r.next() - 1) * gr.rad;
-			cx = snap8(gr.x + dx);
-			cy = snap8(gr.y + dy);
-			keep = gr.pad;
-			// where two groves meet, a tree is the kind of the one whose middle is nearer: stands of one kind, not a mix
-			let home = gr;
-			let best = dx * dx + dy * dy;
-			for (const o of groves) {
-				const ox = gr.x + dx - o.x;
-				const oy = gr.y + dy - o.y;
-				if (ox * ox + oy * oy < best) {
-					best = ox * ox + oy * oy;
-					home = o;
-				}
-			}
-			const roll = r.next();
-			const edge = best > home.rad * home.rad * 0.3;
-			if (roll < GROVE_DEAD && !dead) sp = TREE_DEAD;
-			else if (edge && roll < GROVE_DEAD + GROVE_EDGE_SHRUB) sp = TREE_SHRUB;
-			else if (roll > 1 - GROVE_COMPANION) sp = pickSpecies(TREE_SITE_MIX.park, r.next());
-			else sp = home.sp;
-		}
-		if (!inYard(cx, cy)) continue;
-		if (!g.placer.canPlace(cx - t / 2, cy - t / 2, t, t, keep)) continue;
+	// a grove's tree: the kind of the grove whose middle is nearest (where two groves meet, stands of one kind, not a
+	// mix), but for a companion of another kind here and there, a shrub at its edge, rarely a dead one
+	const groveTree = (cx: number, cy: number): void => {
+		const home = nearest(cx, cy);
+		const d2 = (cx - home.x) * (cx - home.x) + (cy - home.y) * (cy - home.y);
+		const roll = r.next();
+		let sp = home.sp;
+		if (roll < GROVE_DEAD && !dead) sp = TREE_DEAD;
+		else if (d2 > home.rad * home.rad * 0.3 && roll < GROVE_DEAD + GROVE_EDGE_SHRUB) sp = TREE_SHRUB;
+		else if (roll > 1 - GROVE_COMPANION) sp = pickSpecies(TREE_SITE_MIX.park, r.next());
 		if (sp === TREE_DEAD) dead = true;
 		planted.push(addTree(g.w, cx, cy, "park", sp));
+	};
+	/** a spot of the open lawn, anywhere in its cell (on the 8 u grid) */
+	const lawnSpot = (): [number, number] => {
+		const c = lawn[r.int(0, lawn.size() - 1)];
+		const i = c % nx;
+		return [x0 + i * step + r.int(-2, 1) * 8, y0 + ((c - i) / nx) * step + r.int(-2, 1) * 8];
+	};
+	// the groves: a try at one with room left, its trees thicker towards its middle (the sum of two uniforms); a grove
+	// whose middle is packed spreads, and past twice its size is full
+	const full = (o: Grove) => o.reach > o.rad * GROVE_SPREAD;
+	for (let attempt = 0; attempt < count * 30 && planted.size() < count - loners; attempt++) {
+		let live = 0;
+		for (const o of groves) {
+			if (!full(o)) live++;
+		}
+		if (live === 0) break;
+		let pick = r.int(1, live);
+		let gr = groves[0];
+		for (const o of groves) {
+			if (full(o)) continue;
+			pick--;
+			if (pick === 0) {
+				gr = o;
+				break;
+			}
+		}
+		const cx = snap8(gr.x + (r.next() + r.next() - 1) * gr.reach);
+		const cy = snap8(gr.y + (r.next() + r.next() - 1) * gr.reach);
+		if (!fits(cx, cy, gr.pad)) {
+			gr.misses++;
+			if (gr.misses >= GROVE_MISSES) {
+				gr.misses = 0;
+				gr.reach *= 1.25;
+			}
+			continue;
+		}
+		gr.misses = 0;
+		groveTree(cx, cy);
 	}
-	// Rarely the groves and the lawn run out of tries before the scatter's count (a park whose playground and court
-	// take the open quarters): the rest go on the first free spots of the lawn, row by row, still a body's width apart
-	// -- so the park always plants exactly the scatter's count and every id after it stays where it was
+	// the groves full before their share of the park: the rest of it on the open lawn, the nearest to a grove of a few
+	// spots drawn, each tree the kind of the grove nearest it (and as far from its neighbours as that grove keeps
+	// them) -- the stands grow outwards, the lawn never a random mix
+	for (let tries = 0; tries < count * 20 && planted.size() < count - loners && lawn.size() > 0; tries++) {
+		let bx = 0;
+		let by = 0;
+		let bd = math.huge;
+		for (let s = 0; s < 3; s++) {
+			const [cx, cy] = lawnSpot();
+			const o = nearest(cx, cy);
+			const d = ((cx - o.x) * (cx - o.x) + (cy - o.y) * (cy - o.y)) / (o.rad * o.rad);
+			if (d < bd) {
+				bd = d;
+				bx = cx;
+				by = cy;
+			}
+		}
+		if (fits(bx, by, nearest(bx, by).pad)) groveTree(bx, by);
+	}
+	// the loners, a fifth of the park's trees: any of its kinds, alone on the open lawn between the groves -- outside
+	// every grove's middle and 72 u clear -- or, if the lawn has no such room left, anywhere on it a body's width clear
+	const lonersFrom = planted.size();
+	for (let tries = 0; tries < count * 20 && planted.size() < count && lawn.size() > 0; tries++) {
+		if (planted.size() - lonersFrom >= loners) break;
+		const [cx, cy] = lawnSpot();
+		const sp = pickSpecies(TREE_SITE_MIX.park, r.next());
+		const apart = tries < count * 10;
+		let inCore = false;
+		for (const o of groves) {
+			const d2 = (cx - o.x) * (cx - o.x) + (cy - o.y) * (cy - o.y);
+			if (d2 < o.rad * o.rad * GROVE_CORE * GROVE_CORE) inCore = true;
+		}
+		if ((apart && inCore) || !fits(cx, cy, apart ? 72 : 40)) continue;
+		planted.push(addTree(g.w, cx, cy, "park", sp));
+	}
+	// Rarely the lawn runs out of tries before the scatter's count (a park whose playground and court take the open
+	// quarters): the rest go on the first free spots of the lawn, row by row, still a body's width apart, each the kind
+	// of the grove nearest -- so the park always plants exactly the scatter's count and every id after it stays put
 	for (let y = yard.y + 56; planted.size() < count && y <= yard.y + yard.h - 56; y += 8) {
 		for (let x = yard.x + 56; planted.size() < count && x <= yard.x + yard.w - 56; x += 8) {
-			if (g.placer.canPlace(x - t / 2, y - t / 2, t, t, 40)) planted.push(addTree(g.w, x, y, "park"));
+			if (g.placer.canPlace(x - t / 2, y - t / 2, t, t, 40)) groveTree(x, y);
 		}
 	}
 	// the dense spots darker: each crown's green towards the dark by how many trees stand round it

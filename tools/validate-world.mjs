@@ -208,9 +208,11 @@ const VEG06_DEAD_MAX = 0.05;
 const VEG06_STREET_MAIN = 0.6;
 /**
  * VEG-06: a park's trees stand in groves when a tree's nearest neighbour is of its own kind at least this many times as
- * often as a random mix of the same trees would make it (the groves measured 1.27-2.2x chance over 90 towns)
+ * often as a random mix of the same trees would make it. The groves seated on the open lawn, each of its own kind
+ * (world.ts `parkTrees`), measured 1.83-4.12x chance over 3305 towns (median 2.8, none under 1.8); the groves before
+ * them, seated anywhere, 1.04-2.66x (median 1.75, one town in seven under 1.5) -- so a sweep catches that layout back
  */
-const VEG06_GROVES = 1.2;
+const VEG06_GROVES = 1.5;
 const TYPE_TAG = {
 	1: "house",
 	2: "house",
