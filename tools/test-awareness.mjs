@@ -8,9 +8,10 @@
  *
  *   1. SHAPES     dot / "?" / "!" are different silhouettes, not only different colours, and each costs a few Frames;
  *   2. LEG-03     every mark reads on light pavers, asphalt, grass, every room floor (its flat colour, the darkest and
- *                 the lightest texel of its texture, the shadow at a wall's foot), every rug of the interiors' art,
- *                 under the thickest fog (LUZ-05: the marks sit above it) and in the dark: some part of its edge is ≥ 3:1 against the ground (WCAG 1.4.11), and the fill is ≥ 3:1
- *                 against its own outline;
+ *                 the lightest texel of its texture, the shadow at a wall's foot), every rug of the interiors' art, a
+ *                 fight's blood (ART-15: wet, drying and a day old, on wood and asphalt), under the thickest fog (LUZ-05:
+ *                 the marks sit above it) and in the dark: some part of its edge is ≥ 3:1 against the ground (WCAG
+ *                 1.4.11), and the fill is ≥ 3:1 against its own outline;
  *   3. PLACEMENT  above the head, and never over a survivor: a zombie right under you slides its mark aside;
  *   4. WHO        the idle dot only near you; nothing for a zombie the dark hides; nothing under a closed roof;
  *   5. MOTION     a change pops in (a bigger first frame and a white rim); Reduce Motion never moves (no pop, no
@@ -202,6 +203,47 @@ const GROUNDS = {
 		for (let n = 0; n < RUG_COLOURS; n++) {
 			const [x0, y0, w, h] = FURNITURE_CELLS[`rug:${n}:h`];
 			extremes(`rug ${n}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
+		}
+	}
+}
+{
+	// a fight's blood (ART-15): a mark over a zombie standing in a stain, wet (a survivor's red, the horde's dark red)
+	// or a game day old, on a wood floor and on the asphalt -- the atlas's darkest and lightest texel, blended as drawn
+	const BV_MODULE = join(SRC, "client/view/bloodView.ts");
+	const atlas = join(ART_DIR, "blood.png");
+	if (existsSync(BV_MODULE) && existsSync(atlas)) {
+		const BA = require(join(SRC, "client/view/bloodAtlas.ts"));
+		const img = decodePNG(readFileSync(atlas));
+		const stains = [
+			["a survivor's wet blood", 1, [255, 255, 255]],
+			["the horde's wet blood", 2, [255, 255, 255]],
+			["dried blood", 0, rgb(COLORS.bloodDry)],
+			["the horde's blood drying", 0, mix(rgb(COLORS.bloodHorde), rgb(COLORS.bloodDry), 0.4)],
+		];
+		for (const [what, band, tint] of stains) {
+			for (const [floor, g] of [
+				["wood floor", rgb(COLORS.floorWood)],
+				["asphalt", rgb(COLORS.road)],
+			]) {
+				let lo;
+				let hi;
+				for (const [x0, y0, w, h] of BA.BLOOD_CELLS) {
+					for (let y = 0; y < h; y++) {
+						for (let x = 0; x < w; x++) {
+							const i = ((band * BA.BLOOD_BAND_H + y0 + y) * img.w + x0 + x) * 4;
+							const a = img.data[i + 3] / 255;
+							if (a <= 0) continue;
+							const c = [0, 1, 2].map(k =>
+								Math.round(((img.data[i + k] * tint[k]) / 255) * a + g[k] * (1 - a)),
+							);
+							if (lo === undefined || lum(c) < lum(lo)) lo = c;
+							if (hi === undefined || lum(c) > lum(hi)) hi = c;
+						}
+					}
+				}
+				GROUNDS[`${what} on ${floor} (darkest)`] = lo;
+				GROUNDS[`${what} on ${floor} (lightest)`] = hi;
+			}
 		}
 	}
 }

@@ -985,7 +985,8 @@ export class Combat {
 			if (damageToPlayer(p, refs.save, b.damage)) {
 				// pushed along the needle's flight (the old code threw the player back at the boss)
 				p.reactionDir = b.angle;
-				fxBlood(refs, p.x, p.y, 3, "player");
+				// thrown along the needle, as the server's (server/sim/projectiles.ts; ART-15)
+				fxBlood(refs, p.x, p.y, 3, "player", b.angle);
 			}
 			return true;
 		}

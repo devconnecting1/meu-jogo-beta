@@ -46,7 +46,7 @@ const SPIT_MARK: SpriteOpts = { color: COLORS.acid, stroke: COLORS.acid, strokeT
 const SPIT_SHADOW: SpriteOpts = { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow };
 const SPIT_BLOB: SpriteOpts = {
 	color: COLORS.acid,
-	stroke: COLORS.bloodZombie,
+	stroke: COLORS.acidRim,
 	strokeThickness: 2,
 	zIndex: Z.projectile,
 };

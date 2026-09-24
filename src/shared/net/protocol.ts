@@ -38,7 +38,7 @@
  *     is split into several packets (never truncated); an event that cannot fit alone is dropped and counted.
  *  8. WorldInit = World batches whose first event is InitBegin{mapHash, seed, tick0Time, simHz, chunk, chunks},
  *     followed by the ordinary SolidAdd/DoorSet/LightSet/ItemAdd/Clock deltas. Clock dayTime is hours × 2048
- *     (u16, < 24 h); the weather is a u8 (note 24). Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids
+ *     (u16, < 24 h); the weather is a u8 (note 25). Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids
  *     must be dynamic (≥ 1 000 000). Item velocity is i16 in 1/8 u/s. User ids are f64 (Roblox ids exceed 2^32 and
  *     Studio test players are negative). Display names: u8 length, ≤ 80 bytes, cut on a UTF-8 boundary.
  *  9. Clock sync follows §4.6: the source of truth is workspace:GetServerTimeNow() with tick0Time from
@@ -130,7 +130,11 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
- * 24. (LUZ-05, the weather) No new message and no byte more: the Clock delta's rain boolean becomes the day's WEATHER,
+ * 22. (ART-15, the blood's direction) `Blood`'s kind byte carries BLOOD_UNDIRECTED (0x80) when the blood has no
+ *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
+ *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
+ *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
+ * 25. (LUZ-05, the weather) No new message and no byte more: the Clock delta's rain boolean becomes the day's WEATHER,
  *     a u8 in the same place -- 0 clear and 1 rain as before, 2 storm, 3 fog at dawn, 4 fog all day (shared/sim/weather.ts
  *     `Weather`). The decoder refuses anything above WEATHER_MAX (a malformed delta, like a bool of 2 was), and derives
  *     `rain` (rain or storm) for every reader of the old field. Everything the hour does with the weather -- the fog's
@@ -1037,11 +1041,19 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
+/** whose blood: a survivor's bright red, or the horde's dark red (it was `Green`, the colour before ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
-	Green: 1,
+	Horde: 1,
 } as const;
+/** must stay below BLOOD_UNDIRECTED: that bit of the same byte is the "no direction" flag (test:net checks it) */
 const BLOOD_KIND_MAX = 1;
+/**
+ * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle
+ * byte is then 0 and means nothing, and the client sprays it all round. Without it a kill's spray and its stain were
+ * thrown to +x on every client (the angle 0 of "no angle").
+ */
+const BLOOD_UNDIRECTED = 0x80;
 
 /** pellets per ShotResult (shotgun: 5) */
 export const FX_SHOT_MAX_HITS = 16;
@@ -1099,7 +1111,8 @@ export interface FxBlood {
 	t: typeof FxType.Blood;
 	x: number;
 	y: number;
-	angle: number;
+	/** the way the blood was thrown (attacker -> target); undefined: no way, all round */
+	angle?: number;
 	/** particles, 0..255 */
 	amount: number;
 	/** BloodKind */
@@ -1222,9 +1235,9 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 		case FxType.Blood:
 			w.pos(e.x);
 			w.pos(e.y);
-			w.angle8(e.angle);
+			w.angle8(e.angle ?? 0);
 			w.u8(e.amount);
-			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX));
+			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX) + (e.angle === undefined ? BLOOD_UNDIRECTED : 0));
 			break;
 		case FxType.Debris:
 			w.pos(e.x);
@@ -1305,9 +1318,11 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const amount = r.u8();
-		const kind = r.u8();
+		const flags = r.u8();
+		const undirected = flags >= BLOOD_UNDIRECTED;
+		const kind = undirected ? flags - BLOOD_UNDIRECTED : flags;
 		if (kind > BLOOD_KIND_MAX) return undefined;
-		return { t: FxType.Blood, x, y, angle, amount, kind };
+		return { t: FxType.Blood, x, y, angle: undirected ? undefined : angle, amount, kind };
 	} else if (t === FxType.Debris) {
 		const x = r.pos();
 		const y = r.pos();
@@ -1441,7 +1456,7 @@ export const ITEM_VEL_SCALE = 8;
 /** Clock.dayTime: hours × 2048 */
 export const CLOCK_HOUR_SCALE = 2048;
 
-/** the Clock delta's weather byte (note 24): the weather, or for a caller that only knows the rain, 1 / 0 */
+/** the Clock delta's weather byte (note 25): the weather, or for a caller that only knows the rain, 1 / 0 */
 function clockWeatherByte(e: WClock): number {
 	const w = e.weather;
 	if (w !== undefined && isWeather(w)) return w;
@@ -1605,7 +1620,7 @@ export interface WClock {
 	rain: boolean;
 	/**
 	 * The day's weather (shared/sim/weather.ts `Weather`, 0..WEATHER_MAX), in the byte that was the rain boolean
-	 * (note 24). The decoder always fills it; an encoder handed only `rain` writes 1 or 0 for it.
+	 * (note 25). The decoder always fills it; an encoder handed only `rain` writes 1 or 0 for it.
 	 */
 	weather?: number;
 	/** raw wave bits (F2) */
