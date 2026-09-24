@@ -346,7 +346,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (link.kicked) return;
 		link.kicked = true;
 		const player = link.player;
-		warn(`[${GAME_NAME}] kicking ${player.Name} (${player.UserId}): network flood — ${reason}`);
+		// one Error Report row for every flood kick (docs/ANALYTICS.md §10): who, and the counts, go to the log line
+		warn(`[${GAME_NAME}] kicking a player: network flood`);
+		print(`[${GAME_NAME}] flood kick: ${player.Name} (${player.UserId}), ${reason}`);
 		// what the player reads, in their account's language (lang.ts, shared/data/rules.ts)
 		const message = floodKickMessage(langTypeOfLocale(player.LocaleId));
 		pcall(() => player.Kick(message));
@@ -556,7 +558,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			link.reportedOverflow = c.inputOverflow;
 			link.reportedMalformed = c.malformed;
 			link.reportedClamped = clamped;
-			warn(
+			// the Error Report counts how often; the counts themselves are the log line after it (docs/ANALYTICS.md §10)
+			warn(`[${GAME_NAME}] input anomaly: overflow, malformed or clamped input`);
+			print(
 				`[${GAME_NAME}] input anomaly ${player.Name} (${player.UserId}): ` +
 					`+${newOverflow} overflow, +${newMalformed} malformed, ` +
 					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}, ` +
@@ -685,7 +689,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const message = tostring(err);
 			if (message !== lastError) {
 				lastError = message;
-				warn(`[${GAME_NAME}] simulation tick failed (${tickErrors} so far): ${message}`);
+				// the running count is `pz_tick_errors` and the admin's metrics, never the message (one row per failure)
+				warn(`[${GAME_NAME}] simulation tick failed: ${message}`);
 			}
 			// a tick that fails every time never reaches `publishTick`: the count goes out from here, once a second
 			if (options.metrics !== false && now - tickErrorsAt >= METRIC_INTERVAL) {
@@ -778,14 +783,35 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			for (const player of everyone) {
 				// one body that cannot be banked leaves the others to be (F5)
 				const [ok, err] = xpcall(() => release(player), tickTrace);
-				if (!ok) warn(`[${GAME_NAME}] banking ${player.Name} at shutdown failed: ${tostring(err)}`);
+				if (!ok) warn(`[${GAME_NAME}] banking a body at shutdown failed: ${tostring(err)}`);
 			}
 			links.clear();
 			bySlot.clear();
 			destroyMpRemotes(remotes);
-			if (active === host) active = undefined;
+			if (active === host) {
+				active = undefined;
+				Analytics.bindWorld(undefined);
+			}
 		},
 	};
+	// the clock the Night funnel follows and where each player stands (docs/ANALYTICS.md): read once a second, inside
+	// analytics' own guard -- nothing here is asked for on the tick
+	Analytics.bindWorld({
+		dayTime() {
+			return sim.clock.dayTime;
+		},
+		day() {
+			return sim.clock.day;
+		},
+		bodyOf(player) {
+			return host.playerOf(player)?.state;
+		},
+		standing() {
+			let n = 0;
+			for (const sp of sim.players()) if (!sp.state.dead) n += 1;
+			return n;
+		},
+	});
 
 	/**
 	 * The live, LOADED save of a connected player by UserId (the session's), or undefined. A user can have two links
@@ -806,7 +832,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	function worldWiped(report: WipeReport): void {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
 		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell
-		warn(
+		// a world ending is the game (MP-22), not a fault: the log, not the Error Report
+		print(
 			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
 				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
 		);
@@ -847,10 +874,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			// endWorld builds everything before it changes anything (review of f851ad2, M2): the old world is intact,
 			// and it goes on under the rule that held before MP-22 — the dead stand up at daybreak, a Rebirth still
 			// works, and the next fall of the last survivor tries again
-			warn(
-				`[${GAME_NAME}] the new town could not be made (${returned ? "no new town" : tostring(result)}): ` +
-					`this world goes on until daybreak`,
-			);
+			const why = returned ? "no new town" : tostring(result);
+			warn(`[${GAME_NAME}] the new town could not be made (${why}): this world goes on until daybreak`);
 			return;
 		}
 		if (!returned) {

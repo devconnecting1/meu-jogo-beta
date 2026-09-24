@@ -529,6 +529,8 @@ export class Progress {
 		creditKillAchievements(save, zombieType, weaponKind);
 		const unlocked = creditZombieKill(save);
 		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
+		// counted for the session's WeaponKills, sent on leaving (docs/ANALYTICS.md: never an event per kill)
+		Analytics.kill(save, weaponKind);
 	}
 
 	/** CON-04 "Turret": a zombie a machine this survivor built (or a drone they fly) brought down; not when assisted */
@@ -536,6 +538,7 @@ export class Progress {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
 		creditTurretKill(save);
+		Analytics.kill(save, Analytics.MACHINE_KILL);
 	}
 
 	private creditBoss(slot: number, bossType: number): void {

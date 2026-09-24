@@ -832,7 +832,10 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		if (!typeIs(req.kind, "string")) return fail("invalid request");
 		const [ok, res] = pcall(() => handle(player, req));
 		if (!ok) {
-			warn(`${LOG_PREFIX} request "${req.kind}" from ${player.Name} errored: ${tostring(res)}`);
+			// the request's kind is the admin's own text and the name is a person: both go to the log line, never the
+			// Error Report's message (docs/ANALYTICS.md §10)
+			warn(`${LOG_PREFIX} an admin request errored: ${tostring(res)}`);
+			print(`${LOG_PREFIX} request "${req.kind}" from ${player.Name} errored`);
 			return fail("server error (see the server log)");
 		}
 		return res as AdminResponse;
