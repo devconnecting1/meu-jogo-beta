@@ -36,7 +36,7 @@ import { ZombieState, zombieRadius } from "shared/game/entities";
 import { Solid, WorldData, addSolid, isBlocking, removeSolid } from "shared/game/world";
 import { SLOT_NONE } from "shared/net/mpConfig";
 import { FxEvent, FxType } from "shared/net/protocol";
-import { debrisMaterialId } from "shared/net/fxWire";
+import { debrisMaterialId, wireSoundId } from "shared/net/fxWire";
 import { interactTarget } from "shared/sim/interactQuery";
 import { PLACEABLES, placedSolid } from "shared/sim/placement";
 import { StepResult, WORLD_MARGIN } from "shared/sim/playerMove";
@@ -238,6 +238,9 @@ export class ServerVehicles {
 		if (rec === undefined || rec.hornCd > 0) return;
 		rec.hornCd = HORN_COOLDOWN_S;
 		this.emitNoise(sp, rec, rec.def.hornRadius, "horn");
+		// what the horde hears, the survivors hear too (P0-4): the motorcycle's horn, the bicycle's bell
+		const sound = rec.def.kind === VehicleKind.Motorcycle ? "hornMoto" : "bellBike";
+		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: sp.state.x, y: sp.state.y, volume: 1 });
 		this.tell(sp, { kind: "horn", vehicle: rec.def.kind });
 	}
 

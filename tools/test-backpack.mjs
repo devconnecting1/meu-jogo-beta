@@ -609,8 +609,8 @@ function setIconAtlas(id) {
 	ids.itemIcons = id;
 	WA.overrideWorldArt(ids);
 }
-/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
-const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds, bosses) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds|boss)/.test(name);
 /**
  * setIconAtlas("") with the characters' sheets on -- their uploaded ids, a stand-in for one not uploaded yet -- or
  * off: the survivor and the pets drawn flat, as before the art (ART-01)

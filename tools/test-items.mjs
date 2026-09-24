@@ -1812,19 +1812,29 @@ section(
 			const draw = source("client/gameLoop.ts");
 			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
 			const shape = source("client/view/lightList.ts");
+			// the beam (P0-4): the flashlight's cone along the aim, or a motorcycle's headlight along the ride -- ONE
+			// rule, survivorLight.ts survivorBeamReach / survivorBeamAngle, whose flashlight IS survivorCone
+			const rule = source("shared/sim/survivorLight.ts");
+			const beamRule =
+				/return survivorCone\(save\)\?\.radius \?\? 0/.test(rule) &&
+				/rideHeading\(ride\) : p\.angle/.test(rule);
 			check(
 				/SurvivorLight\.survivorLightRadius\(save\)/.test(body) &&
-					/SurvivorLight\.survivorCone\(save\)/.test(body) &&
-					/addSurvivorLight\(lights, p\.x, p\.y, p\.angle, radius, cone\?\.radius\)/.test(body) &&
+					/SurvivorLight\.survivorBeamReach\(p, save\)/.test(body) &&
+					/SurvivorLight\.survivorBeamAngle\(p\)/.test(body) &&
+					/addSurvivorLight\(lights, p\.x, p\.y, beamAt, radius, beam > 0 \? beam : undefined\)/.test(body) &&
 					/lights\.cone\(x, y, cone, FLASHLIGHT_INNER, aim, SurvivorLight\.CONE_HALF_ANGLE\)/.test(shape) &&
+					beamRule &&
 					!/PLAYER_LIGHT_R/.test(draw),
 				"the client's light map draws the survivor's light by the shared rule: the circle, and the flashlight's cone along the aim",
 			);
 			const LL = require(join(SRC, "client/view/lightList.ts"));
 			check(
 				/Light\.survivorLightRadius\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/Light\.survivorCone\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")),
+					/Light\.survivorBeamReach\(p, save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/Light\.survivorBeamAngle\(p\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					beamRule,
 				"and the server's horde visibility by the same rule, cone angle included",
 			);
 			/** the lights the client draws for a survivor at (px, py) aiming at `aim` (gameLoop drawLight, the real shape) */

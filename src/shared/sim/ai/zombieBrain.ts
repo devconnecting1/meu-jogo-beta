@@ -497,10 +497,11 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 		if (!Light.carriesLight(p)) continue;
 		const save = refs.saveOf(p);
 		// the survivor's own light, by the ONE rule the client's light map draws too (shared/sim/survivorLight.ts,
-		// LUZ-04): Nocturnal, the torch and night vision widen the circle; the flashlight adds its cone
+		// LUZ-04): Nocturnal, the torch and night vision widen the circle; the flashlight adds its cone along the aim,
+		// or, riding a motorcycle, the headlight along the ride (VEI-05)
 		addLight(p.x, p.y, Light.survivorLightRadius(save), 1, 0);
-		const cone = Light.survivorCone(save);
-		if (cone !== undefined) addLight(p.x, p.y, cone.radius, 2, p.angle);
+		const beam = Light.survivorBeamReach(p, save);
+		if (beam > 0) addLight(p.x, p.y, beam, 2, Light.survivorBeamAngle(p));
 	}
 	if (refs.clock.darkAlpha <= 0.05) return;
 	for (const l of structureLights) addLight(l.x, l.y, l.r, l.kind, l.angle);
@@ -934,10 +935,10 @@ function updateSenses(refs: Ctx.AiRefs): void {
 			beacons[i] = b;
 		}
 		// the light they give off, by the ONE rule the light map and `isLit` read (shared/sim/survivorLight.ts,
-		// LUZ-04): the glow or a torch all round, and a flashlight's cone along the aim
-		const cone = Light.survivorCone(save);
-		b.beam = cone !== undefined ? cone.radius : 0;
-		b.beamAngle = p.angle;
+		// LUZ-04): the glow or a torch all round, and a flashlight's cone along the aim -- or a motorcycle's headlight
+		// along the ride: the light that lets a rider see the road is the light that gives them away (IA-01)
+		b.beam = Light.survivorBeamReach(p, save);
+		b.beamAngle = Light.survivorBeamAngle(p);
 		b.range = Sense.beaconSight(math.max(Light.survivorGlowRadius(save), b.beam));
 		if (b.range < Sense.LAMP_SIGHT) {
 			for (const l of structureLights) {
@@ -1357,6 +1358,8 @@ function bite(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, pi: number): voi
 		if (rushing) p.reactionSpeed = math.max(p.reactionSpeed, DESIGN.REACTION_MAX + 4);
 		Ctx.fxBlood(refs, p.x, p.y, 4, "player");
 		Ctx.fxShake(refs, pi, p.buffs.pain > 0 ? 3 : 5, 0.18);
+		// the bite is heard where it landed, by everyone near (P0-4): only a bite that drew blood, never the lean
+		Ctx.fxSound(refs, "bite", p.x, p.y);
 		// obj_player_body: the zombie that landed the hit is stunned for stunned_time
 		z.stunned = T.STUN_TIME;
 	}

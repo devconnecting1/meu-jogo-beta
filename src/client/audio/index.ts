@@ -12,6 +12,14 @@ export type { PlayOptions } from "./audio";
 export { gameAudio, GameAudio } from "./gameAudio";
 export { GameMusic } from "./music";
 export { previewBgm, previewSfx, startUiAudio } from "./uiAudio";
-export { drainFxAudio, fxAudioMode, playFxEvent, setFxAudioLocalSlot, setFxAudioMode } from "./fxAudio";
+export {
+	drainFxAudio,
+	fxAudioMode,
+	playFxEvent,
+	remoteProjectileSound,
+	remoteShotSound,
+	setFxAudioLocalSlot,
+	setFxAudioMode,
+} from "./fxAudio";
 export type { FxAudioMode } from "./fxAudio";
 export { playFootstep } from "./footstepAudio";

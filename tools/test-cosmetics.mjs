@@ -146,8 +146,8 @@ const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
 const WA = require(join(SRC, "client/view/worldArt.ts"));
 const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
 
-/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
-const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds, bosses) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds|boss)/.test(name);
 /**
  * Sections 2-6 measure the FLAT drawing (ART-01: without the sheets' ids, the survivor and the pets are drawn exactly
  * as before), whatever has been uploaded: the uploads as they are, with every character sheet's id taken out.

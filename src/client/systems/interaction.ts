@@ -313,6 +313,10 @@ export class Interaction {
 			const willOpen = !(s.open ?? false);
 			if (!willOpen && bodiesOverlapRect(s, refs.players, refs.zombies)) return;
 			s.open = willOpen;
+			// the sound the server's own door plays (server/sim/interaction.ts), on this client's own world
+			const iron = s.kind === "iron_door";
+			const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
+			refs.fx.push({ kind: "sound", sound, x: s.x + s.w / 2, y: s.y + s.h / 2 });
 			return;
 		}
 		if (target.kind === "light") {
