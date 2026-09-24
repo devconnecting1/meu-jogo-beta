@@ -3219,6 +3219,27 @@ section(
 			"400 stains in a long night: the ring holds 160 (80 on Low), the 240 shed longest ago gave their records up",
 			`${xs.length} records, the oldest at #${Math.min(...xs) / 60}`,
 		);
+		// the quality drops to Low with 160 fresh stains: the 80 past the Low ring fade out within the fade's 300 s
+		// (not the day and a half a stain lives), a droplet on one of them does not revive it, the first 80 stay
+		const low = new ParticleSystem();
+		low.pixelArt = true;
+		for (let i = 0; i < 160; i++) {
+			low.addDecal(i * 60, 0, 30, COLORS.bloodHorde, PS.DECAL_SPLAT, PS.BLOOD_HORDE);
+			low.update(0.1);
+		}
+		low.lowDetail = true;
+		low.update(0.1);
+		const past = low.decalRecords().slice(80);
+		const fading = past.every(d => d.age >= PS.BLOOD_DRY_S);
+		low.addDecal(120 * 60 + 2, 0, 10, COLORS.bloodHorde, PS.DECAL_DROP, PS.BLOOD_HORDE);
+		const revived = low.decalRecords().some((d, i) => i >= 80 && d.age < PS.BLOOD_DRY_S);
+		for (let t = 0; t < PS.BLOOD_LIFE_S - PS.BLOOD_DRY_S + 1; t += 1) low.update(1);
+		const alive = low.decalRecords().filter(d => d.age < PS.BLOOD_LIFE_S).length;
+		check(
+			fading && !revived && alive === 80,
+			"160 stains, then the Low tier: the 80 past its ring go straight to their fade (none revived by a drop on it); 300 s on, 80 are left",
+			`fading ${fading}, revived ${revived}, ${alive} alive`,
+		);
 	}
 
 	// h. what a stain lies on

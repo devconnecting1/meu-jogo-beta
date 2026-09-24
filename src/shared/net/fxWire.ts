@@ -80,9 +80,9 @@ export function tracerKindOf(id: number): TracerKind {
 	return TRACER_IDS[math.clamp(id, 1, TRACER_KIND_MAX) - 1] ?? "bullet";
 }
 
-/** survivors bleed a bright red, everything else the horde's dark red (LEG-02; `BloodKind.Green` is its old name) */
+/** survivors bleed a bright red, everything else the horde's dark red (LEG-02, ART-15) */
 export function bloodKindId(source: BloodSource): number {
-	return source === "player" ? BloodKind.Red : BloodKind.Green;
+	return source === "player" ? BloodKind.Red : BloodKind.Horde;
 }
 
 export function bloodSourceOf(kind: number): BloodSource {

@@ -67,10 +67,10 @@ export const COLORS = {
 	/** a survivor's blood: the bright red of damage (LEG-02) */
 	blood: Color3.fromRGB(160, 20, 30),
 	/**
-	 * The spitter's acid rim (its blob, its winding head, the puddle's edge). The name is history: it was the horde's
-	 * blood until ART-15 made that `bloodHorde`, so that nothing green on the floor but acid is left (LEG-02).
+	 * The spitter's acid rim (its blob, its winding head, the puddle's edge). It was `bloodZombie`, the horde's blood,
+	 * until ART-15 made that `bloodHorde`: nothing green on the floor but acid is left (LEG-02).
 	 */
-	bloodZombie: Color3.fromRGB(92, 132, 48),
+	acidRim: Color3.fromRGB(92, 132, 48),
 	/** the horde's blood: dark, brownish red, darker than a survivor's so a hit on you reads apart (LEG-02, ART-15) */
 	bloodHorde: Color3.fromRGB(108, 38, 28),
 	/** any blood a game day old: dark brown (ART-15; the town's dried stains, ART-04, are this family too) */

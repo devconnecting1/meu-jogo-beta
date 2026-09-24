@@ -188,9 +188,9 @@ function stainAt(x, y, d) {
 
 /**
  * A night fight drawn in GameLoop.render's order: the town's ground, blood decals and acid puddles, the town's solids,
- * the horde (a shadow + drawZombie each), 4 survivors, 60 sparks of blood, 12 tracers. `state.town` false leaves the
- * town out. The blood goes through the real client/view/bloodView.ts: flat circles, or with its atlas live (ART-15)
- * one image per stain and square droplets under the bodies.
+ * the horde (a shadow + drawZombie each), 4 survivors, 60 sparks of blood and 40 chips of debris, 12 tracers.
+ * `state.town` false leaves the town out. The blood goes through the real client/view/bloodView.ts: flat circles, or
+ * with its atlas live (ART-15) one image per stain, square droplets under the bodies and square chips over them.
  */
 function makeFight(vw, vh, n = 40) {
 	const root = gui.make("Frame");
@@ -229,6 +229,21 @@ function makeFight(vw, vh, n = 40) {
 			tone: i % 3,
 		});
 	}
+	// and the debris of the same fight: chips off a chewed barricade, sparks off a car (over the bodies, as squares
+	// with the blood's art)
+	const chips = [];
+	for (let i = 0; i < 40; i++) {
+		chips.push({
+			x: AT.x + i * 9 - 180,
+			y: AT.y + 60 + (i % 5) * 7,
+			size: 5,
+			color: COLORS.fence,
+			life: 0.3,
+			maxLife: 0.6,
+			src: PS.BLOOD_NONE,
+			tone: i % 3,
+		});
+	}
 	const puddles = [];
 	for (let i = 0; i < 4; i++) puddles.push({ x: AT.x - 300 + i * 150, y: AT.y + 200 });
 	const looks = [];
@@ -253,7 +268,7 @@ function makeFight(vw, vh, n = 40) {
 			r.drawCircle(cam, p.x, p.y, 40, {
 				color: COLORS.acid,
 				alpha: 0.45,
-				stroke: COLORS.bloodZombie,
+				stroke: COLORS.acidRim,
 				strokeAlpha: 0.6,
 				zIndex: Z.decal + 1,
 			});
@@ -265,6 +280,7 @@ function makeFight(vw, vh, n = 40) {
 		}
 		for (const l of looks) SV.drawSurvivor(r, cam, l, trail);
 		for (const p of sparks) blood.drawParticle(r, cam, v, p, art !== undefined);
+		for (const p of chips) blood.drawParticle(r, cam, v, p, art !== undefined);
 		for (let i = 0; i < 12; i++) {
 			r.drawSegment(cam, AT.x, AT.y, AT.x + 300, AT.y + i * 20 - 120, {
 				h: 2,
@@ -1458,6 +1474,37 @@ section("14) the blood's pixel art (ART-15): a stain born costs one sprite, dryi
 	// the warm-up the lobby does, then a fight: shots with a direction, kills, bites, chips
 	PW.reserveFightPool(r, 1920, 1080, true, true, BV.bloodArtLive());
 	while (r.warm(PW.WARM_PER_FRAME) > 0);
+	// the first frame of a fight on the warmed pool: 34 stains and 6 kills (40 stains, 60 droplets) and a car's 40
+	// sparks at once create nothing
+	{
+		const first = new PS.ParticleSystem();
+		first.pixelArt = true;
+		for (let i = 0; i < 34; i++) {
+			first.addDecal(
+				AT.x - 800 + i * 40,
+				AT.y + ((i * 37) % 400) - 200,
+				30,
+				COLORS.bloodHorde,
+				PS.DECAL_SPLAT,
+				PS.BLOOD_HORDE,
+			);
+		}
+		for (let i = 0; i < 6; i++) first.bloodBurst(AT.x - 300 + i * 120, AT.y, 10, "zombie");
+		for (let i = 0; i < 8; i++) first.debrisBurst(AT.x + 200, AT.y + 100, 5, COLORS.car);
+		const v = cam.viewRect(32);
+		const w0 = watch(() => {
+			r.beginFrame();
+			blood.drawDecals(r, cam, v, first, world);
+			blood.drawParticles(r, cam, v, first);
+			r.endFrame();
+		});
+		const chipsDrawn = r.layer.GetChildren().filter(f => f.Visible !== false && f.ZIndex === Z.particle).length;
+		check(
+			w0.created === 0 && chipsDrawn === 40,
+			"the warm-up covers a fight's first frame: 40 stains, 60 droplets and 40 chips of debris (their own layer) create nothing",
+			`${w0.created} created, ${chipsDrawn} chips shown`,
+		);
+	}
 	const fight = f => {
 		if (f % 8 === 0)
 			ps.bloodBurst(AT.x + ((f * 37) % 900) - 450, AT.y + ((f * 53) % 500) - 250, 3, "zombie", f * 0.4);

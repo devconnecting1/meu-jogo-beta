@@ -130,6 +130,10 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
+ * 22. (ART-15, the blood's direction) `Blood`'s kind byte carries BLOOD_UNDIRECTED (0x80) when the blood has no
+ *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
+ *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
+ *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
  */
 import {
 	NetReader,
@@ -1029,11 +1033,12 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
-/** whose blood: a survivor's (Red) or the horde's (`Green`, its old name: a dark red since ART-15, LEG-02) */
+/** whose blood: a survivor's bright red, or the horde's dark red (it was `Green`, the colour before ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
-	Green: 1,
+	Horde: 1,
 } as const;
+/** must stay below BLOOD_UNDIRECTED: that bit of the same byte is the "no direction" flag (test:net checks it) */
 const BLOOD_KIND_MAX = 1;
 /**
  * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle

@@ -70,7 +70,11 @@ function touchDamage(refs: Ctx.AiRefs, b: BossState, reach: number): void {
 	for (const p of refs.players) {
 		if (Ctx.actorDist(p.x, p.y, b.x, b.y) >= reach) continue;
 		const ang = math.atan2(p.y - b.y, p.x - b.x);
-		if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) p.reactionDir = ang;
+		if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) {
+			p.reactionDir = ang;
+			// from the boss through the survivor it touched (ART-15): the one blood of this hit
+			Ctx.fxBlood(refs, p.x, p.y, 3, "player", ang);
+		}
 	}
 }
 

@@ -394,6 +394,7 @@ function newFixture(options = {}) {
 	const zombies = [];
 	const bosses = [];
 	const shots = [];
+	const blood = [];
 	const saves = new Map();
 	const history = new PositionHistory();
 	const progress = new PROG.Progress({ saveOf: slot => saves.get(slot) });
@@ -406,10 +407,11 @@ function newFixture(options = {}) {
 		hooks: {
 			fx: e => {
 				if (e.t === P.FxType.Shot) shots.push(e);
+				if (e.t === P.FxType.Blood) blood.push(e);
 			},
 		},
 	});
-	return { world, zombies, bosses, shots, saves, history, progress, combat };
+	return { world, zombies, bosses, shots, blood, saves, history, progress, combat };
 }
 
 function makePlayer(fx, slot, x, y, weaponId, tune = {}) {
@@ -1445,6 +1447,36 @@ const PHASE_BEFORE = CFG.MP_PHASE;
 	const stranger = Ply.createPlayer(defaultSave(), 0, 0);
 	checkEq(sink(stranger, defaultSave(), 30), false, "a survivor this server does not know takes nothing");
 	checkEq(stranger.hp, 100, "and their hp is untouched");
+}
+
+{
+	// ART-15: one blood per hit, thrown the way the hit came. The horde's brains throw their own (Ctx.fxBlood, with
+	// the direction) right after the sink; a second one from the sink pointed at the survivor's LAST reactionDir --
+	// the previous hit's, and on a life's first bite 0, to +x
+	CFG.MP_PHASE = PROG.PROGRESS_SERVER_PHASE;
+	const fx = newFixture();
+	const sp = makePlayer(fx, 0, 1000, 1000, 10);
+	sp.state.reactionDir = 0;
+	const sink = fx.combat.damageSink(p => (p === sp.state ? 0 : -1));
+	check(sink(sp.state, sp.save, 10), "a bite through the horde's sink lands");
+	checkEq(fx.blood.length, 0, "and the sink throws no blood of its own (the brain throws it, directed)");
+	// (through the i-frames: bypassDef, like a blast or a crash)
+	const landed = fx.combat.damagePlayer(sp, 10, 2, true);
+	check(
+		landed &&
+			fx.blood.length === 1 &&
+			Math.abs(fx.blood[0].angle - 2) < 1e-9 &&
+			fx.blood[0].kind === P.BloodKind.Red,
+		"a hit with a direction (a crash) bleeds once, thrown along it",
+		`${fx.blood.length} blood, angle ${fx.blood[0]?.angle}`,
+	);
+	fx.blood.length = 0;
+	fx.combat.damageActor(0, sp.state, sp.save, 10, true);
+	check(
+		fx.blood.length === 1 && fx.blood[0].angle === undefined,
+		"a hit from nowhere in particular bleeds all round (no direction), never along the previous hit's",
+		`${fx.blood.length} blood, angle ${fx.blood[0]?.angle}`,
+	);
 }
 
 {

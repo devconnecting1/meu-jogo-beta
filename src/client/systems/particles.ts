@@ -208,7 +208,7 @@ export class ParticleSystem {
 		// a ring over the first `cap` slots; after a drop to the low tier the slots past it just run out their life
 		const cap = this.lowDetail ? LOW_DECALS : MAX_DECALS;
 		if (this.pixelArt) {
-			const on = this.stainUnder(x, y, kind, src, sector);
+			const on = this.stainUnder(x, y, kind, src, sector, cap);
 			if (on !== undefined) {
 				// fresh blood on an old stain: it is wet again, and nothing new is drawn
 				on.age = 0;
@@ -268,9 +268,21 @@ export class ParticleSystem {
 		d.pick = -1;
 	}
 
-	/** the live stain of the same blood a new one at (x, y) joins (pixel art only), if any */
-	private stainUnder(x: number, y: number, kind: number, src: number, sector: number): Decal | undefined {
-		for (const d of this.decals) {
+	/**
+	 * The live stain of the same blood a new one at (x, y) joins (pixel art only), if any: among the ring's first `cap`
+	 * records only -- one past a lowered cap is running out (`update`), and a join must not bring it back.
+	 */
+	private stainUnder(
+		x: number,
+		y: number,
+		kind: number,
+		src: number,
+		sector: number,
+		cap: number,
+	): Decal | undefined {
+		const n = math.min(cap, this.decals.size());
+		for (let i = 0; i < n; i++) {
+			const d = this.decals[i];
 			if (d.src !== src || d.age >= BLOOD_LIFE_S) continue;
 			let reach: number;
 			if (kind === DECAL_DROP) {
@@ -349,6 +361,14 @@ export class ParticleSystem {
 		for (const d of this.decals) {
 			if (d.life > 0) d.life -= dt;
 			if (d.age < BLOOD_LIFE_S) d.age += dt;
+		}
+		// after a drop to the low tier the ring is shorter: a flat splat past it runs out its 10 s, and a pixel-art
+		// stain past it goes straight to its fade (dry to gone, 300 s), so the Low budget holds within minutes, not in
+		// the day and a half a stain lives (and a join never picks one of these back up: `stainUnder`)
+		const cap = this.lowDetail ? LOW_DECALS : MAX_DECALS;
+		for (let i = cap; i < this.decals.size(); i++) {
+			const d = this.decals[i];
+			if (d.age < BLOOD_DRY_S) d.age = BLOOD_DRY_S;
 		}
 	}
 

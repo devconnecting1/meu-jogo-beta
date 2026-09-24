@@ -134,7 +134,7 @@ function ease(perFrame: number, dt: number): number {
  * sprite per frame. The keys that never change are written here; each draw writes the rest. (The blood's are
  * client/view/bloodView.ts's.)
  */
-const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.bloodZombie, zIndex: Z.decal + 1 };
+const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.acidRim, zIndex: Z.decal + 1 };
 
 export class GameLoop {
 	/** empty placeholder; the town is generated once, in init() */

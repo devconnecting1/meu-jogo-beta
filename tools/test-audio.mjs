@@ -261,7 +261,7 @@ const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
 const { WorldClock } = require(join(SRC, "server/sim/waves.ts"));
 const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
-const { createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
+const { createBoss, createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
 const V = require(join(SRC, "shared/sim/vehicle.ts"));
 const { VehicleKind, vehicleDef, vehicleKindOfItem } = require(join(SRC, "shared/data/buildings.ts"));
 const { USABLES, useSoundOf } = require(join(SRC, "shared/data/usables.ts"));
@@ -307,7 +307,7 @@ const soundsIn = list => list.filter(e => e.t === P.FxType.Sound).map(e => ({ ..
 section("C. o servidor decide: mordida, porta, item usado, buzina e campainha viram Fx Sound onde aconteceram", () => {
 	// the bite: a walker beside a survivor; the horde's own Fx (what replication sends) carries it
 	{
-		const { sim } = server({ zombies: true });
+		const { sim, fx } = server({ zombies: true });
 		const sp = addPlayer(sim, 0, 3000, 3000);
 		const d = driver(sim, sp);
 		d.ticks(5);
@@ -353,6 +353,46 @@ section("C. o servidor decide: mordida, porta, item usado, buzina e campainha vi
 		check(
 			FW.fromWireFx(P.decodeFx(killPkt).events[0]).dir === undefined,
 			"e o de uma morte, sem direcao, chega sem direcao (antes chegava com 0: tudo para +x)",
+		);
+		// everything the clients get about that bite: the server's own Fx (sim.onFx) and the horde's: ONE blood
+		// (the sink used to add a second, thrown along the survivor's last reactionDir -- 0 on a life's first bite)
+		const red = [
+			...fx.filter(e => e.t === P.FxType.Blood && e.kind === P.BloodKind.Red).map(e => e.angle),
+			...blood.map(e => e.dir),
+		];
+		check(
+			red.length === 1 && red[0] !== undefined && Math.cos(red[0]) < -0.9,
+			"uma mordida, um sangue no fio (o do servidor + o da horda), do zumbi para o sobrevivente",
+			`${red.length} sangue(s): ${red.map(a => (a === undefined ? "none" : `${((a * 180) / Math.PI).toFixed(0)}°`)).join(", ")}`,
+		);
+	}
+	// a boss that only TOUCHES (the charger: touchDamage): its hit had no blood but the sink's stale one; now one,
+	// from the boss through the survivor
+	{
+		const { sim, fx } = server({ zombies: true });
+		const sp = addPlayer(sim, 0, 3000, 3000);
+		const d = driver(sim, sp);
+		d.ticks(5);
+		const b = createBoss(3, 3060, 3000);
+		sim.horde.bossRoster.list.push(b);
+		const hp0 = sp.state.hp;
+		const horde = [];
+		for (let i = 0; i < 240 && sp.state.hp >= hp0; i++) {
+			d.tick();
+			sim.horde.takeFx(horde);
+		}
+		for (let i = 0; i < 3; i++) {
+			d.tick();
+			sim.horde.takeFx(horde);
+		}
+		const red = [
+			...fx.filter(e => e.t === P.FxType.Blood && e.kind === P.BloodKind.Red).map(e => e.angle),
+			...horde.filter(e => e.kind === "blood" && e.source === "player").map(e => e.dir),
+		];
+		check(
+			sp.state.hp < hp0 && red.length === 1 && red[0] !== undefined && Math.cos(red[0]) < -0.9,
+			"o toque de um chefe: um sangue, do chefe para o sobrevivente (ART-15)",
+			`${(hp0 - sp.state.hp).toFixed(0)} hp, ${red.length} sangue(s): ${red.map(a => (a === undefined ? "none" : `${((a * 180) / Math.PI).toFixed(0)}°`)).join(", ")}`,
 		);
 	}
 	// the doors: a built wooden door and an iron one, opened and closed by E

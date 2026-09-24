@@ -1243,8 +1243,8 @@ test("Fx: round trip, batching and sizes", () => {
 
 test("Fx: blood with no direction stays with none (a kill sprays all round, not to +x)", () => {
 	const events = [
-		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 10, kind: P.BloodKind.Green },
-		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 0, amount: 3, kind: P.BloodKind.Green },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 10, kind: P.BloodKind.Horde },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 0, amount: 3, kind: P.BloodKind.Horde },
 		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 2, amount: 4, kind: P.BloodKind.Red },
 		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 4, kind: P.BloodKind.Red },
 	];
@@ -1255,7 +1255,7 @@ test("Fx: blood with no direction stays with none (a kill sprays all round, not 
 	angNear("a hit to +x keeps its direction", got[1].angle, 0, ANG8_TOL);
 	angNear("a bite keeps its direction", got[2].angle, 2, ANG8_TOL);
 	eq("a bite with none: none", got[3].angle, undefined);
-	eq("the horde's kind survives the flag", got[0].kind, P.BloodKind.Green);
+	eq("the horde's kind survives the flag", got[0].kind, P.BloodKind.Horde);
 	eq("a survivor's too", got[3].kind, P.BloodKind.Red);
 	const one = P.encodeFx({ tick: 1, events: [events[0]] });
 	const two = P.encodeFx({ tick: 1, events: [events[1]] });
@@ -1263,6 +1263,17 @@ test("Fx: blood with no direction stays with none (a kill sprays all round, not 
 	const bytes = bytesOf(one.packets[0]);
 	bytes[bytes.length - 1] = 0x82;
 	eq("an undirected kind past the last is refused", P.decodeFx(bufOf(bytes)), undefined);
+	// the flag is the kind byte's top bit: every kind must stay below it, or a kind would read as "no direction"
+	ok(
+		Object.values(P.BloodKind).every(k => Number.isInteger(k) && k >= 0 && k < 0x80),
+		`every BloodKind stays below the 0x80 flag (${JSON.stringify(P.BloodKind)})`,
+	);
+	for (const kind of Object.values(P.BloodKind)) {
+		const back = P.decodeFx(
+			P.encodeFx({ tick: 2, events: [{ t: P.FxType.Blood, x: 5, y: 5, amount: 1, kind }] }).packets[0],
+		);
+		eq(`kind ${kind} with no direction comes back the same kind`, back.events[0].kind, kind);
+	}
 });
 
 test("Fx: malformed packets are refused", () => {
