@@ -125,6 +125,31 @@ const SCREENS = [
 	{ name: "phone-844x390", w: 844, h: 390, bar: 36, buttons: 104, touch: true },
 ];
 
+/**
+ * The raster draws a text on one line; the engine wraps a TextWrapped label that does not fit its box. So a wrapped
+ * label's text is broken at its words, as the raster's own font would need (6 px a glyph at its smallest step), before
+ * it is painted -- the break line of the dawn card on a phone, as the engine shows it (in two rows). The .json keeps the
+ * text as the label holds it.
+ */
+function wrapForRaster(list) {
+	return list.map(e => {
+		if (e.kind !== "text" || !e.wrapped || String(e.text).includes("\n")) return e;
+		const fits = Math.max(1, Math.floor((e.w + 1) / 6));
+		if (String(e.text).length <= fits) return e;
+		const lines = [];
+		let line = "";
+		for (const word of String(e.text).split(" ")) {
+			const next = line === "" ? word : `${line} ${word}`;
+			if (next.length > fits && line !== "") {
+				lines.push(line);
+				line = word;
+			} else line = next;
+		}
+		if (line !== "") lines.push(line);
+		return { ...e, text: lines.join("\n") };
+	});
+}
+
 /** the moments: each opens on a freshly mounted HUD; an older checkout gets what it had then */
 const MOMENTS = [
 	{
@@ -166,7 +191,7 @@ for (const m of MOMENTS) {
 		}
 		const list = paintList(ctx.hudGui ?? ctx.hudLayer);
 		const view = { x: 0, y: 0, w: s.w, h: s.h };
-		const img = composite(backdrop(s.w, s.h), rasterPaint(list, view, undefined, resolve));
+		const img = composite(backdrop(s.w, s.h), rasterPaint(wrapForRaster(list), view, undefined, resolve));
 		const file = join(OUT, `${m.name}-${s.name}.png`);
 		writeFileSync(file, encodePNG(img, true));
 		const texts = list
