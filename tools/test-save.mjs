@@ -1653,7 +1653,8 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 	// the source of the other callers: one line each, where the server decides
 	const src = f => readFileSync(join(SRC, f), "utf8");
 	check(
-		/creditTaken\(save, item\.kind, item\.itemId, item\.count\)/.test(src("server/sim/items.ts")) &&
+		// a pickup credits what went INTO the backpack: all of it, or what fitted under the save's ceiling (ITM-07)
+		/creditTaken\(save, item\.kind, item\.itemId, take\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, drop\.kind, drop\.id, drop\.count\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, extra\.kind, extra\.id, extra\.count\)/.test(src("server/sim/items.ts")),
 		"ServerItems: o que o servidor poe na mochila (pegar, revistar, o achado do Thief) passa pelo creditTaken",

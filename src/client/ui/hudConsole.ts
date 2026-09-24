@@ -66,6 +66,7 @@ import { WEAPON_KEY_COUNT, weaponKeyOrder } from "shared/game/weaponSlots";
 import { iconKeys, iconOf } from "shared/data/itemIcons";
 import { IconView, drawItemIcon, drawnRects, maxFrameCount } from "./itemIcon";
 import { weaponKindName } from "./itemInfo";
+import { pickupFlashTransparency } from "./pickupToast";
 import { PlateState, paintPlate, reliefPx } from "./plate";
 import { BAR, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
 import { HudSky, Px, SKY_STACK_H, SKY_STACK_W, pixelIcon, skySection } from "./hudSky";
@@ -743,6 +744,9 @@ export class HudConsole {
 	 * its survivors chip (scoreboard.ts, MP-23). undefined on touch (hud.ts places the chip with Menu and Bag)
 	 */
 	readonly chipSlot: Frame | undefined;
+	/** desktop: the light over the Bag plate when something goes into the backpack (ITM-07), and its transparency now */
+	private bagFlash: Frame | undefined;
+	private bagFlashT = 1;
 
 	constructor(root: Frame, tr: (key: string) => string, compact: boolean, k: number, cb: ConsoleCallbacks) {
 		const L = compact ? COMPACT_LAYOUT : DESKTOP_LAYOUT;
@@ -1124,6 +1128,13 @@ export class HudConsole {
 			onClick,
 		});
 		b.Selectable = false;
+		if (name === "Bag") {
+			// ITM-07: the light that flashes over the Bag when something goes into it (client/ui/pickupToast.ts)
+			this.bagFlash = W.makeFrame(b, "PickupFlash", 0, 0, ICON_W, ICON_H, THEME.foreground, {
+				transparency: 1,
+				zIndex: b.ZIndex + 3,
+			});
+		}
 		const iconS = 12;
 		const host = W.makeFrame(b, "Icon", 10, (ICON_H - iconS) / 2, iconS, iconS, THEME.background, {
 			transparency: 1,
@@ -1137,6 +1148,16 @@ export class HudConsole {
 		});
 		this.legends.push(legend);
 		this.legendKeys.push(action);
+	}
+
+	/** the Bag plate's pickup flash, 0..1 (hud.ts, every frame): written only when its step changes */
+	setBagFlash(glow: number): void {
+		const f = this.bagFlash;
+		if (f === undefined) return;
+		const t = pickupFlashTransparency(glow);
+		if (t === this.bagFlashT) return;
+		this.bagFlashT = t;
+		f.BackgroundTransparency = t;
 	}
 
 	/**

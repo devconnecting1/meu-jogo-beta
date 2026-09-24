@@ -1557,13 +1557,27 @@ check(
 // warm-up: two whole loops over every landmark (each shot shows another street)
 let jumps = 0;
 let prev = fly.cameraAt();
+// every shot opens on its landmark, whichever way its street runs (a glide centred on it started 650 u away, off a
+// 1080-high frame on a vertical street: the first check above passed or failed with the shuffle)
+const blindCuts = [];
 for (let i = 0; i < 20000 && jumps < landmarks.length * 2; i++) {
 	frame(1);
 	const now = fly.cameraAt();
-	if (Math.hypot(now[0] - prev[0], now[1] - prev[1]) > 200) jumps++;
+	if (Math.hypot(now[0] - prev[0], now[1] - prev[1]) > 200) {
+		jumps++;
+		const seen = landmarks.some(
+			s => Math.abs((s.doorX ?? s.x) - now[0]) < 960 && Math.abs((s.doorY ?? s.y) - now[1]) < 540,
+		);
+		if (!seen) blindCuts.push(`(${Math.round(now[0])}, ${Math.round(now[1])})`);
+	}
 	prev = now;
 }
 check("aquecimento: duas voltas por todos os pontos de referencia", jumps >= landmarks.length * 2, `${jumps} cortes`);
+check(
+	"...e todo plano abre com o seu ponto de referencia no quadro (rua vertical tambem)",
+	blindCuts.length === 0,
+	blindCuts.slice(0, 3).join(", ") || `${jumps} cortes`,
+);
 r = measure(() => {
 	for (let i = 0; i < 600; i++) frame(1 / 60);
 });

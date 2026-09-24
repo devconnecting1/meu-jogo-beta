@@ -1,5 +1,5 @@
 import { DESIGN } from "shared/engine/constants";
-import { ItemKind, WeaponKind } from "shared/data/kinds";
+import { WeaponKind } from "shared/data/kinds";
 import { isChoppingTool, meleeReach, usesMagazine, WeaponDef, WEAPONS } from "shared/data/weapons";
 import { angleDiff } from "shared/engine/vec2";
 import { choose, damageCal, rndRange } from "shared/engine/rng";
@@ -59,8 +59,6 @@ const ARROW_SPEED_SKILL = 40 * SPEED_SCALE;
 const ARROW_FRICTION = 0.2 * SPEED_SCALE * SPEED_SCALE;
 const ARROW_GROUND_LIFE = 20;
 const ARROW_PICKUP_DELAY = 1;
-/** the arrow's ETC item id (shared/sim/inventory.ts: 44..48 are the ammo pools, 47 the arrows) */
-const ARROW_ETC_ID = 47;
 
 /** obj_bullet_fire: 20 px/frame, burns every body it overlaps */
 const FIRE_SPEED = 20 * SPEED_SCALE;
@@ -888,9 +886,8 @@ export class Combat {
 				// with admin infinite ammo the shot cost nothing: picking it up must not create an arrow
 				if (p.infiniteAmmo !== true) {
 					refs.save.ammoArrow += 1;
-					// heard (as ammo: an arrow is ETC 47), and counted by the "Pick something up" lesson, as any pickup
-					// (./pickups.ts)
-					took(ItemKind.Etc, ARROW_ETC_ID);
+					// heard, and counted by the "Pick something up" lesson, as any pickup (./pickups.ts)
+					took(4, 47, 1);
 				}
 				return true;
 			}

@@ -37,7 +37,7 @@ import {
 } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { chooseWeapon } from "./systems/combat";
-import { interactHint } from "./systems/interaction";
+import { hintedItem, interactHint } from "./systems/interaction";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
 import { showLogo } from "./ui/logo";
@@ -547,6 +547,8 @@ function pushHud(): void {
 	// now run behind the MP-21 wait for daybreak too)
 	const held = pack.isOpen() || pauseCleanup !== undefined || dawnWait !== undefined || p.dead;
 	hud.setInteractHint(held ? undefined : interactHint(refs));
+	// the item the prompt names wears the brackets on the ground, and only while the prompt is up (ITM-07)
+	loop.setItemTarget(held ? -1 : hintedItem());
 }
 
 function warnNoAmmo(): void {

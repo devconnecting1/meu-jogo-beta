@@ -135,11 +135,15 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 	if (e.t === WorldEv.ItemAdd) {
 		const known = ix.items.get(e.id);
 		if (known !== undefined) {
+			// fewer than before: somebody took what their backpack had room for and left the rest (ITM-07, the save's
+			// ceiling) -- for the pickup feedback that is a take like any other (client/systems/pickups.ts)
+			const taken = known.count - e.count;
 			known.x = e.x;
 			known.y = e.y;
 			known.vx = e.vx;
 			known.vy = e.vy;
 			known.count = e.count;
+			if (taken > 0) itemGone(known.x, known.y, known.kind, known.itemId, taken);
 			return;
 		}
 		const it = spawnGroundItem(world, e.kind, e.itemId, e.count, e.x, e.y, e.vx, e.vy);
@@ -152,9 +156,8 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		if (it === undefined) return;
 		ix.items.delete(e.id);
 		removeGroundItem(world, it);
-		// half of what tells this survivor's pickup from a bag that grew for another reason (client/systems/pickups.ts),
-		// and what it was, for the pickup's sound
-		itemGone(it.x, it.y, it.kind, it.itemId);
+		// half of what tells this survivor's pickup from a bag that grew for another reason (client/systems/pickups.ts)
+		itemGone(it.x, it.y, it.kind, it.itemId, it.count);
 		return;
 	}
 	if (e.t === WorldEv.LootFlag) {

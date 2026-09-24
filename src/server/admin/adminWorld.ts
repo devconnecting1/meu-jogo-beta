@@ -137,14 +137,13 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (player !== undefined) deps.markAssisted(player);
 	}
 
-	/** who picked up an admin's drop (`GroundItem.unpaid`): one server-written audit line */
-	function taken(sim: ServerSimulation, slot: number, item: GroundItem): void {
+	/**
+	 * who picked up an admin's drop (`GroundItem.unpaid`): one server-written audit line, with what they took (the
+	 * save's ceiling can leave part of it on the ground, ITM-07)
+	 */
+	function taken(sim: ServerSimulation, slot: number, item: GroundItem, count: number): void {
 		const sp = sim.get(slot);
-		deps.note(
-			"world:taken",
-			sp?.userId ?? 0,
-			`kind ${item.kind} item ${item.itemId} ×${item.count} an admin dropped`,
-		);
+		deps.note("world:taken", sp?.userId ?? 0, `kind ${item.kind} item ${item.itemId} ×${count} an admin dropped`);
 	}
 
 	/**
@@ -154,7 +153,7 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 	function hook(sim: ServerSimulation): void {
 		const items = sim.items;
 		if (items !== undefined && items.onUnpaidTaken === undefined) {
-			items.onUnpaidTaken = (slot, item) => taken(sim, slot, item);
+			items.onUnpaidTaken = (slot, item, count) => taken(sim, slot, item, count);
 		}
 		if (hooked === sim && sim.adminMods !== undefined) return;
 		hooked = sim;

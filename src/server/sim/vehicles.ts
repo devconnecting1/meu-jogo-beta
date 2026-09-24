@@ -38,6 +38,7 @@ import { SLOT_NONE } from "shared/net/mpConfig";
 import { FxEvent, FxType } from "shared/net/protocol";
 import { debrisMaterialId, wireSoundId } from "shared/net/fxWire";
 import { interactTarget } from "shared/sim/interactQuery";
+import { noRoomIn } from "shared/sim/pickupRule";
 import { PLACEABLES, placedSolid } from "shared/sim/placement";
 import { StepResult, WORLD_MARGIN } from "shared/sim/playerMove";
 import {
@@ -209,7 +210,9 @@ export class ServerVehicles {
 	tryMount(sp: ServerPlayer): boolean {
 		const p = sp.state;
 		if (p.dead || this.riders.has(sp.slot)) return false;
-		const target = interactTarget(this.world, p.x, p.y);
+		// the query the interaction and the hint ask, full stacks passed over included (ITM-07): a full stack beside the
+		// bike must not make the HUD say "Ride" while the press goes to a repair
+		const target = interactTarget(this.world, p.x, p.y, noRoomIn(sp.save));
 		if (target === undefined || target.kind !== "vehicle") return false;
 		const s = target.solid;
 		if (!isRideable(s) || vehicleBroken(s)) return false;

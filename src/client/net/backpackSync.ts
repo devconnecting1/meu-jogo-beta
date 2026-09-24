@@ -170,7 +170,7 @@ export function start(): void {
 			save.runRev === bagRunRev &&
 			bagTotal(bag) > bagTotal(lastBag)
 		) {
-			bagGrew();
+			bagGrew(lastBag, bag);
 		}
 		lastBag = bag;
 		bagSave = save;

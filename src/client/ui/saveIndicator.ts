@@ -22,7 +22,7 @@
  * The chip is a sunk `well` of the kit with the light text on it (UI-05, measured by test:contrast), colours from the
  * theme only (UI-01), no contour (UI-04). Built once, on the first notice; afterwards a notice rewrites a colour, a
  * text, a size or Visible, and the fade rewrites transparencies -- no Instance is ever created again (UI-09's rule,
- * checked by test:hud section 8), and no Tween either: the fade is stepped here, on Heartbeat, only while it runs.
+ * checked by test:hud section 9), and no Tween either: the fade is stepped here, on Heartbeat, only while it runs.
  */
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";

@@ -26,11 +26,13 @@ import {
 	edgeDist,
 	interactTarget,
 	isFire,
+	nearestGroundItem,
 	nearestPump,
 	pumpsOf,
 	repairMaterial,
 	SOLID_REACH,
 } from "shared/sim/interactQuery";
+import { noRoomIn } from "shared/sim/pickupRule";
 import { segmentClear } from "shared/game/physics";
 import { buildingAt, isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
@@ -89,7 +91,7 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
 export interface MachineActions {
@@ -176,8 +178,14 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
-		const target = interactTarget(this.world, p.x, p.y);
-		if (target === undefined) return { kind: "none" };
+		// ITM-07: an item this save has no room for is passed over, so a full stack does not hide the door, the search
+		// or the repair behind it (review of 1186a83, M1); the client's hint passes the same check
+		const target = interactTarget(this.world, p.x, p.y, noRoomIn(ctx.save));
+		if (target === undefined) {
+			// nothing else in reach: say why the item did not come (spends no cooldown, changes nothing)
+			const full = nearestGroundItem(this.world, p.x, p.y);
+			return full !== undefined ? { kind: "refused", why: "full" } : { kind: "none" };
+		}
 		// only a press that reaches something spends the cooldown: an empty press used to eat it, so a door flipped every
 		// 0.4 s and a press right after an input hitch was dropped (re-review of f8ccaf0)
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
@@ -185,7 +193,9 @@ export class ServerInteraction {
 		if (target.kind === "item") {
 			const got = this.items.pickup(ctx.save, p.x, p.y, target.item, ctx.slot, this.pays(ctx.slot));
 			if (got.ok) return { kind: "item", count: got.count };
-			if (got.why === "range" || got.why === "blocked") return { kind: "refused", why: got.why };
+			if (got.why === "range" || got.why === "blocked" || got.why === "full") {
+				return { kind: "refused", why: got.why };
+			}
 			return { kind: "refused", why: "taken" };
 		}
 
