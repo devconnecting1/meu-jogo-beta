@@ -65,6 +65,10 @@
  *                           throws is not sold (refunded, then paid once) unless the body stood; a New game whose new
  *                           life throws keeps the death in the save; one body that cannot be banked at shutdown leaves
  *                           the others banked.
+ *  30. EVERY REMOTE COUNTS   (audit M2, L4) SaveRequest, LoadRequest, ShopAction and the admin remotes count toward the
+ *                           §8.2 flood kick, in the world and out of it; 30 s of an honest client is never kicked; a
+ *                           storm of rejected reports is answered once a second; every automatic kick is in the stored
+ *                           admin audit log by UserId.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -2978,6 +2982,107 @@ section("29) the admin audit log: UserIds and filtered text only, one key per se
 		delete String.prototype.gsub;
 	}
 });
+
+// ================================================================ 30: every remote counts toward the flood kick
+
+section(
+	"30) every remote a client can fire counts toward the §8.2 flood kick, and the kick is audited (M2, L4)",
+	() => {
+		const s = bootServer();
+		const { ADMIN_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const LOG = require(join(SRC, "server/admin/auditLog.ts"));
+		const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+		const { ReplicatedStorage } = s.env.services;
+		const net = ReplicatedStorage.FindFirstChild("Net");
+		const fire = (name, p, ...args) => net.FindFirstChild(name).OnServerEvent.Fire(p, ...args);
+		const admin = ReplicatedStorage.FindFirstChild("PZAdminNet");
+		const saveAcks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p).length;
+
+		// junk SaveRequests from the lobby (a player not in the world has no ServerPlayer: the link counts them)
+		const junk = s.join(newUser(), "junkSaver");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++) fire("SaveRequest", junk, 7, { huge: true });
+		check(junk.kicked, `${CFG.FLOOD_MALFORMED + 1} malformed SaveRequests in the lobby are a flood kick`);
+
+		// a LoadRequest storm from a survivor in the world
+		const loader = s.join(newUser(), "loadStorm");
+		s.immortal.add(loader);
+		s.enter(loader);
+		for (let i = 0; i <= CFG.FLOOD_MESSAGES; i++) fire("LoadRequest", loader);
+		check(loader.kicked, `${CFG.FLOOD_MESSAGES + 1} LoadRequests in an instant, in the world, are a flood kick`);
+
+		// ShopAction: the token bucket refuses, and past the flood line the link kicks
+		const shopper = s.join(newUser(), "shopStorm");
+		let rate = 0;
+		for (let i = 0; i <= CFG.FLOOD_MESSAGES; i++)
+			if (s.shop(shopper, { kind: "buyPack", packId: 0 })?.reason === "rate") rate++;
+		check(
+			rate > 0 && shopper.kicked,
+			"a ShopAction storm is refused by its bucket and then kicked",
+			`${rate} "rate"`,
+		);
+
+		// the admin remote, from somebody who is not an admin: every call is a malformed one
+		const intruder = s.join(newUser(), "notAnAdmin");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++)
+			admin.FindFirstChild("AdminRequest").OnServerInvoke(intruder, { kind: "kick" });
+		check(intruder.kicked, `${CFG.FLOOD_MALFORMED + 1} admin requests from a non-admin are a flood kick`);
+		const acker = s.join(newUser(), "ackStorm");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++)
+			admin.FindFirstChild("AdminPatchAck").OnServerEvent.Fire(acker, "x");
+		check(acker.kicked, "and malformed AdminPatchAcks too");
+
+		// a rejected report is answered at most once a second: a stale-token storm is not reflected one for one
+		const stale = s.join(newUser(), "staleSaver");
+		const before = saveAcks(stale);
+		for (let i = 0; i < 100; i++) fire("SaveRequest", stale, "not-the-token", "{}");
+		const within = saveAcks(stale) - before;
+		s.run(1.1);
+		fire("SaveRequest", stale, "not-the-token", "{}");
+		const after = saveAcks(stale) - before;
+		check(
+			within === 1 && after === 2,
+			"100 rejected reports in an instant: one SaveAck, and one more a second later",
+			`${within}, then ${after}`,
+		);
+		check(!stale.kicked, "(100 messages is under the flood line: no kick)");
+
+		// an honest client: 30 s of Input, time probes, a report every 10 s, a load, a few purchases -- never kicked
+		const honest = s.join(newUser(), "honest");
+		s.immortal.add(honest);
+		s.enter(honest);
+		const P = s.P;
+		for (let t = 0; t < 30 * 60; t++) {
+			s.walk(honest, (t / 60) % (2 * Math.PI));
+			if (t % 30 === 0) fire("TimeSync", honest, P.encodeTimePing({ seq: t % 65536, clientTime: 0 }));
+			if (t % 600 === 0) s.report(honest, {});
+			if (t % 900 === 0) fire("LoadRequest", honest);
+			if (t % 400 === 0) s.shop(honest, { kind: "buyPack", packId: 0 });
+			s.beat();
+		}
+		check(
+			!honest.kicked,
+			"an honest client over 30 s (Input 60/s, probes, reports, a load, purchases) is never kicked",
+		);
+
+		// L4: each automatic kick is in the admin audit log, by UserId only, with the reason the server wrote
+		s.shutdown();
+		const doc = fakeStore(ADMIN_LOG_STORE).data.get(LOG.auditKey(os.time(), globalThis.game.JobId)) ?? [];
+		const kicks = doc.filter(e => e.action === "auto:flood");
+		const kicked = [junk, loader, shopper, intruder, acker];
+		check(
+			kicked.every(p => kicks.some(e => e.targetId === p.UserId && e.adminId === 0 && e.ok === true)),
+			"every flood kick is in the stored audit log (adminId 0 = the server), once per player",
+			JSON.stringify(kicks.map(e => [e.targetId, e.details])),
+		);
+		check(kicks.length === kicked.length, "one entry per kick", `${kicks.length}`);
+		const json = JSON.stringify(kicks);
+		check(
+			!/junkSaver|loadStorm|shopStorm|notAnAdmin|ackStorm/.test(json),
+			"with UserIds only: no name is stored",
+			json,
+		);
+	},
+);
 
 // ================================================================
 
