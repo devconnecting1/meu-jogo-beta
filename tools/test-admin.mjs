@@ -1278,7 +1278,8 @@ section(
 			res.ok && a.noclip === true && (snap.self.modFlags & t.s.P.ModFlag.Noclip) !== 0,
 		);
 		// stand the body inside a building's wall, then noclip off: out to free ground
-		const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
+		// a building wall itself (its middle is a solid: a building's centre may be open floor, in a hall)
+		const wall = t.s.sim.world.solids.find(s => s.tags === "bwall" && s.inner !== true && Math.max(s.w, s.h) > 200);
 		a.x = wall.x + wall.w / 2;
 		a.y = wall.y + wall.h / 2;
 		const inside = circleBlocked(t.s.sim.world, a.x, a.y, PLAYER_RADIUS) !== undefined;
@@ -1378,7 +1379,8 @@ section("8) teleport moves the admin's SERVER body to a walkable point", () => {
 		`${res.message} ${Math.round(a.x)},${Math.round(a.y)}`,
 	);
 	verify("...the admin's run is assisted", !t.pays(t.admin) && t.pays(t.bob));
-	const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
+	// a building wall itself (its middle is a solid: a building's centre may be open floor, in a hall)
+	const wall = t.s.sim.world.solids.find(s => s.tags === "bwall" && s.inner !== true && Math.max(s.w, s.h) > 200);
 	res = t.tool(t.admin, { op: "teleport", x: wall.x + wall.w / 2, y: wall.y + wall.h / 2 });
 	a = t.s.body(t.admin).state;
 	verify(
@@ -2333,7 +2335,8 @@ section(
 			`x ${x.toFixed(0)} border ${TOWN.BORDER}`,
 		);
 		// no free ground within UNSTICK_SEARCH (a very big building): the body goes to a spawn point, never stays stuck
-		const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
+		// a building wall itself (its middle is a solid: a building's centre may be open floor, in a hall)
+		const wall = t.s.sim.world.solids.find(s => s.tags === "bwall" && s.inner !== true && Math.max(s.w, s.h) > 200);
 		const a = t.s.body(t.admin).state;
 		a.x = wall.x + wall.w / 2;
 		a.y = wall.y + wall.h / 2;

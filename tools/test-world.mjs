@@ -1513,14 +1513,30 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	// the generated town: its buildings have doorways and windows (shared/game/interiors.ts)
 	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
 	const sim = newSim(world);
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	/**
+	 * does a window give onto open ground (a body climbing out of it gets 100 u clear)? The town's first building with a
+	 * window may stand by the map's border wall, 56 u off -- a window onto that alley is not the way out this checks
+	 */
+	const opensOut = o => {
+		const n = NORMAL[o.side];
+		let x = o.x + o.w / 2 - n[0] * 40;
+		let y = o.y + o.h / 2 - n[1] * 40;
+		for (let i = 0; i < 60; i++) {
+			const r = PH.moveActor(world, x, y, 16, n[0] * 4, n[1] * 4);
+			x = r.x;
+			y = r.y;
+		}
+		return (x - (o.x + o.w / 2)) * n[0] + (y - (o.y + o.h / 2)) * n[1] > 100;
+	};
 	const house = world.solids.find(
 		s =>
 			s.kind === "building" &&
 			(s.openings ?? []).some(o => o.kind === "window") &&
-			(s.openings ?? []).some(o => o.kind === "door" && !o.main),
+			(s.openings ?? []).some(o => o.kind === "door" && !o.main) &&
+			opensOut(s.openings.find(o => o.kind === "window")),
 	);
 	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
-	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
 	/**
 	 * The CLIENT's ghost (client/systems/build.ts BuildSystem, the drawing the survivor aims with) for a survivor
 	 * standing where `fortify` puts one: builds become the server's (ServerBuild.hold / place) while the client keeps
