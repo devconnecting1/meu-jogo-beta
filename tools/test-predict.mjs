@@ -34,7 +34,9 @@
  *      the wait before healing on nobody's wire, the HP the client draws is the server's: through a fight it never
  *      rises between hits, once healing it never falls back, per command it is never above the server's (but for
  *      one step of healing per command the server skipped, until the next ack), at a walker's rhythm, into the food
- *      gate, with Recovery 3 and on a link past the server's input queue.
+ *      gate, with Recovery 3, under a crowd that bites the tick each guard ends, and on a link past the server's
+ *      input queue; and the hit flash, which only the server's damage lights from MP_PHASE 2, lights once for every
+ *      bite (the crowd's too, whose Hit flag never drops) and never for poison.
  *
  * Exit code 1 on any failure. Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the
  * fly, with the Luau / roblox-ts shims of tools/test-sim.mjs and the strict `buffer` of tools/test-net.mjs.
@@ -701,6 +703,7 @@ function run(opts) {
 		clientHp: [],
 		hungerGap: 0,
 		bites: [],
+		flashes: [],
 		skipped: [],
 		up,
 		down,
@@ -759,13 +762,13 @@ function run(opts) {
 			if (vit !== undefined) {
 				// the horde's half of the tick (server/sim/simulation.ts): a bite through the server's damage entry point
 				const t = serverTick / SIM_HZ;
-				if (vit.biteAt?.some(b => Math.abs(b - t) < TICK / 2)) {
+				// a crowd (LEG-04) tries every tick and lands the tick the guard ends: the Hit flag never drops
+				const crowd = vit.crowd !== undefined && t >= vit.crowd[0] && t < vit.crowd[1];
+				if (crowd || vit.biteAt?.some(b => Math.abs(b - t) < TICK / 2)) {
 					if (Ply.applyPlayerDamage(me.state, me.save, vit.bite ?? 10)) report.bites.push(T0 + t);
 				}
-				if (vit.poisonAt !== undefined && Math.abs(vit.poisonAt - t) < TICK / 2) {
+				if (vit.poisonAt !== undefined && Math.abs(vit.poisonAt - t) < TICK / 2)
 					me.state.buffs.poison = vit.poisonS;
-					report.bites.push(T0 + t);
-				}
 				report.serverHp.push([T0 + t, me.state.hp]);
 				// the tick that CONSUMED a command (a filled tick repeats the ack: the first one is that command's)
 				if (!serverBySeq.has(me.ackSeq)) serverBySeq.set(me.ackSeq, { hp: me.state.hp, t: T0 + t });
@@ -798,6 +801,10 @@ function run(opts) {
 		clientFrame(client, frameDt, now, down, up, serverNow);
 		if (vit !== undefined) {
 			report.clientHp.push([now, client.state.hp]);
+			// the hit flash only the self block lights now (prediction.ts HIT_FLASH_DROP); client/systems/combat.ts fades
+			// it in the game, so here each one is counted and put out
+			if ((client.state.hitFlash ?? 0) >= 1) report.flashes.push(now);
+			client.state.hitFlash = 0;
 			if (now - T0 > 2)
 				report.hungerGap = Math.max(report.hungerGap, Math.abs(client.state.hungry - me.state.hungry));
 		}
@@ -1075,7 +1082,8 @@ console.log(`\n[dead] a dead survivor's prediction stands still, like the server
 // ---- VIT-01: the HP bar the client draws is the server's -- no healing it has to take back, none held back
 //
 // The server bites (through `applyPlayerDamage`, as the horde does) and poisons; the wait before healing is on nobody's
-// wire: the client derives it from the self block's hp (client/net/prediction.ts). What must hold, per COMMAND, is that
+// wire: the client derives it from the self block (client/net/prediction.ts), and so is the hit flash, which from
+// MP_PHASE 2 only the server's damage lights -- one per bite, a crowd's included, none for poison. What must hold, per COMMAND, is that
 // the hp the client drew first for it is never above what the server then computed for it -- a drawn hp above the
 // server's is one the next snapshot takes back -- except for a bite it could not know about yet. On the screen: the bar
 // never rises in a fight, and never falls while it heals.
@@ -1091,9 +1099,14 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 			vitals: { hp: 70, hunger: 90, biteAt: [2, 3.4, 4.8], poisonAt: 5.5, poisonS: 1.5 },
 		},
 		{
-			label: "healing into the food gate (FOOD 25 -> 24), 150 ms RTT",
+			label: `healing into the food gate (FOOD ${VIT.REGEN_FOOD_MIN} -> ${VIT.REGEN_FOOD_MIN - 1}), 150 ms RTT`,
 			rtt: 0.15,
-			vitals: { hp: 40, hunger: 25.4 },
+			vitals: { hp: 40, hunger: VIT.REGEN_FOOD_MIN + 0.4 },
+		},
+		{
+			label: "a crowd biting the tick each guard ends (the Hit flag never drops), 100 ms RTT",
+			rtt: 0.1,
+			vitals: { hp: 100, hunger: 90, crowd: [2, 5.2] },
 		},
 		{
 			label: "Recovery 3 (6 hp/s) after bites, 150 ms RTT",
@@ -1114,6 +1127,13 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 				`commands the server skipped ${r.skipped.reduce((a, [, n]) => a + n, 0)}`,
 		);
 		const poisonEnd = vit.poisonAt !== undefined ? T0 + vit.poisonAt + vit.poisonS : -Infinity;
+		if (vit.crowd !== undefined) {
+			const gaps = r.bites.slice(1).map((b, i) => b - r.bites[i]);
+			const tight = gaps.every(g => g <= DESIGN.IFRAMES + 1.5 * TICK);
+			if (r.bites.length >= 5 && tight) {
+				ok(`the crowd landed ${r.bites.length} bites, each the tick the last one's guard ended`);
+			} else fail(`the crowd landed ${r.bites.length} bites, gaps ${gaps.map(g => g.toFixed(3)).join(", ")} s`);
+		}
 		const hurtUntil = Math.max(r.bites.length > 0 ? r.bites[r.bites.length - 1] : -Infinity, poisonEnd);
 		// a hit the client could not know about yet: for about a round trip it drew the hp from before it
 		const unforeseen = t =>
@@ -1182,6 +1202,23 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 			ok(`once healing, the bar only went up: not one frame pulled back${after}`);
 		} else fail(`while healing the bar fell back on ${healDrops} frames (worst ${worstDrop.toFixed(4)} hp)`);
 
+		// (2b) the hit flash: one for every bite the server landed, about a round trip later -- none for poison, none
+		// for the wait, none missed for a crowd's bites that never let the Hit flag drop
+		const window = v.rtt + 0.25;
+		let unmatched = 0;
+		const perBite = r.bites.map(b => r.flashes.filter(f => f >= b && f <= b + window).length);
+		for (const f of r.flashes) if (!r.bites.some(b => f >= b && f <= b + window)) unmatched += 1;
+		const lags = r.bites.map(b => (r.flashes.find(f => f >= b && f <= b + window) ?? NaN) - b);
+		if (r.bites.length === 0 && r.flashes.length === 0) {
+			ok(`no bite, no hit flash${vit.poisonAt !== undefined ? " (poison is not a hit)" : ""}`);
+		} else if (perBite.every(n => n === 1) && unmatched === 0) {
+			ok(
+				`the hit flash lit once for each of the ${r.bites.length} bites, ` +
+					`${Math.round(Math.min(...lags) * 1000)}-${Math.round(Math.max(...lags) * 1000)} ms after it, and never otherwise`,
+			);
+		} else
+			fail(`hit flashes per bite ${perBite.join(",")}, ${unmatched} with no bite (${r.flashes.length} in all)`);
+
 		// (3) and it ends where the server is: at the last command both simulated, and the stomach with it
 		if (Math.abs(lastGap) <= 0.2)
 			ok(`the last command: client ${lastGap >= 0 ? "+" : ""}${lastGap.toFixed(3)} hp from the server`);
@@ -1204,8 +1241,9 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 		ok("the self block's hunger: nudged into its rounding, a meal shifted by whole numbers (the fraction kept)");
 	} else
 		fail(`hungerAtAck: ${bad.map(([p, w, m, want]) => `${p}/${w} -> ${PR.hungerAtAck(p, w, m)} (want ${want})`)}`);
-	if (VIT.fedEnough(24.5) && !VIT.fedEnough(24.499))
-		ok("the food gate is the rounding the bar and the wire use: 24.5 reads 25");
+	const gate = VIT.REGEN_FOOD_MIN - 0.5;
+	if (VIT.fedEnough(gate) && !VIT.fedEnough(gate - 0.001))
+		ok(`the food gate is the rounding the bar and the wire use: ${gate} reads ${VIT.REGEN_FOOD_MIN}`);
 	else fail("the food gate is not the FOOD bar's rounding");
 }
 

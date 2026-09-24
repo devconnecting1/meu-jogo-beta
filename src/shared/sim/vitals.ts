@@ -12,8 +12,9 @@
  *     (shared/game/player.ts `applyPlayerDamage`; one the armour stops whole took nothing and restarts nothing), and
  *     every step of poison, of starvation or of rotten meat (`itemUseEffect`);
  *   - REGEN_DELAY_S after the last one the body starts to heal, from nothing up to the full rate over REGEN_RAMP_S;
- *   - it heals only while the FOOD bar reads REGEN_FOOD_MIN or more, and every HP it heals costs REGEN_FOOD_PER_HP
- *     of food: a full stomach buys a full heal and then some, an empty one buys nothing;
+ *   - it heals only while the FOOD bar reads REGEN_FOOD_MIN or more (15: where the bar blinks red), and every HP it
+ *     heals costs REGEN_FOOD_PER_HP of food: a full stomach buys a full heal and then some, an empty one buys nothing,
+ *     and one meal eaten on an empty one is enough to start again;
  *   - Recovery (skill 1) multiplies the RATE, (1 + level) as in the original; nothing shortens the wait, which is the
  *     rule of the fight ("no healing while something is biting you") and reads the same for everybody;
  *   - what heals from the backpack (a first-aid kit, a bandage, food with hp) heals AT ONCE, wait or no wait.
@@ -37,10 +38,15 @@ export const REGEN_RESTED_S = REGEN_DELAY_S + REGEN_RAMP_S;
 /** hp a second at the full rate, before Recovery (the original's 1,2, a quarter faster: see the header) */
 export const REGEN_HP_PER_S = 1.5;
 /**
- * The body heals while the FOOD bar reads this or more. The bar rounds (hudConsole.ts), and so does the u8 the self
- * block carries (§4.2): the test is on that same rounding, so the bar, the server and the prediction agree on it.
+ * The body heals while the FOOD bar reads this or more. 15 is where that bar already blinks red (hudConsole.ts
+ * LOW_FOOD, UI-09): the warning a hungry survivor sees and the stomach that cannot heal are the same number, and no
+ * new threshold is added. It is also low enough that ONE meal ends it: eaten on an empty stomach, any meal of 20 food
+ * or more is still above 15 once the wait and the ramp have run their REGEN_RESTED_S (0,3 × 9 = 2,7 food of the
+ * stomach at rest) -- a can of food (25) leaves 22,3, and heals ~18 hp out of it (DESIGN_RULES VIT-01).
+ * The bar rounds (hudConsole.ts), and so does the u8 the self block carries (§4.2): the test is on that same rounding,
+ * so the bar, the server and the prediction agree on it.
  */
-export const REGEN_FOOD_MIN = 25;
+export const REGEN_FOOD_MIN = 15;
 /** food each healed hp costs: a full heal of 100 hp is 25 food, one can of food */
 export const REGEN_FOOD_PER_HP = 0.25;
 /** the stomach at rest, per second (the original's 0,01 a frame), before Patience */

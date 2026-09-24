@@ -702,6 +702,27 @@ console.log("\n4c) VIT-01: o HP brilha enquanto cura; um garfo na FOOD quando so
 	hud.update(state({ ...healing, hunger: 0 }));
 	check("e passando fome (FOOD 0)", eat());
 	{
+		// one number for the hungry survivor: the fork (no healing) and the FOOD bar's red (hudConsole LOW_FOOD) start
+		// together, at REGEN_FOOD_MIN -- Reduce Motion holds the red, so one frame reads it
+		const gs2 = service("GuiService");
+		gs2.ReducedMotionEnabled = true;
+		flush();
+		const at = food => {
+			hud.update(state({ ...healing, hunger: food }));
+			return { fork: eat(), red: sameColor(face(barFill("Food")), BAR.hp) };
+		};
+		const under = at(VIT.REGEN_FOOD_MIN - 1);
+		const over = at(VIT.REGEN_FOOD_MIN + 1);
+		gs2.ReducedMotionEnabled = false;
+		flush();
+		hud.update(state(healing));
+		check(
+			`o garfo e o vermelho da FOOD comecam no mesmo numero (${VIT.REGEN_FOOD_MIN}): um aviso so para a fome`,
+			under.fork && under.red && !over.fork && !over.red,
+			`${VIT.REGEN_FOOD_MIN - 1}: ${JSON.stringify(under)} / ${VIT.REGEN_FOOD_MIN + 1}: ${JSON.stringify(over)}`,
+		);
+	}
+	{
 		const lum = c => {
 			const f = v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
 			return 0.2126 * f(c.R) + 0.7152 * f(c.G) + 0.0722 * f(c.B);

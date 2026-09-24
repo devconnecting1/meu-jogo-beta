@@ -14,7 +14,7 @@
  * The body (hp, hunger, the wait before healing of DESIGN_RULES VIT-01) is the server's at the ack and predicted from
  * there, like the position: every snapshot restarts it from the self block and steps it through the unacked commands
  * with the server's own `stepVitals`. The wait is derived, never sent: from the Hit flag, the poison flag, an empty
- * stomach, and hp below the prediction (`applyVitals`).
+ * stomach, and hp below the prediction (`applyVitals`). So is the hit flash, which only the server's damage lights.
  *
  * Pure: no Roblox service and no Instance, so tools/test-predict.mjs runs it against a simulated server.
  */
@@ -103,6 +103,15 @@ export const HURT_EPS = 0.5;
 export const WAIT_MARGIN_S = 0.25;
 /** half the step the self block carries hp in (u16 of 1/100) */
 const HP_WIRE_HALF = 0.005;
+/**
+ * The hit flash (`PlayerState.hitFlash`: the damage vignette, the HP bar's lit relief, the sprite's flash). From
+ * MP_PHASE 2 the server lands every hit, and `applyPlayerDamage`, which lights it, never runs on the client; so the
+ * self block lights it: the Hit flag rising, or hp at the ack this much below the prediction -- a bite that lands the
+ * very tick the last one's guard ends keeps the flag up (a crowd, LEG-04), and a blast goes through the guard. The
+ * same "a hit is HP falling by 1 or more" as the menus' flash (client/ui/hitAlarm.ts): a skipped command's missing
+ * healing or a few ticks of poison the prediction did not replay stay far under it.
+ */
+export const HIT_FLASH_DROP = 1;
 
 /**
  * The self block's hunger is a rounded u8. The predicted value at the ack is moved as little as that allows: by a
@@ -162,6 +171,8 @@ export class Prediction {
 	 * wait is held until one says it is not
 	 */
 	private holding = false;
+	/** the Hit flag of the last self block reconciled (its rising edge lights the hit flash) */
+	private hitFlag = false;
 
 	/** bind to the world and survivor the game loop owns; call again after a respawn or a world rebuild */
 	attach(world: WorldData, player: PlayerState, save: PlayerSaveData): void {
@@ -175,6 +186,7 @@ export class Prediction {
 		this.leadX = 0;
 		this.leadY = 0;
 		this.holding = false;
+		this.hitFlag = false;
 		this.history.clear();
 	}
 
@@ -374,7 +386,12 @@ export class Prediction {
 				? mine.sinceHurt
 				: math.max(-WAIT_MARGIN_S, (p.sinceHurt ?? REGEN_RESTED_S) - pending * TICK_DT);
 		// a hit landed less than the i-frames ago (the Hit flag), or hp went missing that nothing predicted
-		const hurt = hasBits(snap.flags, SelfFlag.Hit) || (mine !== undefined && snap.hp < mine.hp - HURT_EPS);
+		const hitFlag = hasBits(snap.flags, SelfFlag.Hit);
+		const hurt = hitFlag || (mine !== undefined && snap.hp < mine.hp - HURT_EPS);
+		// the hit flash (HIT_FLASH_DROP): a hit that is new in THIS snapshot, which combat.ts then fades over a second
+		const fresh = (hitFlag && !this.hitFlag) || (mine !== undefined && snap.hp <= mine.hp - HIT_FLASH_DROP);
+		this.hitFlag = hitFlag;
+		if (fresh) p.hitFlash = 1;
 		// poison and an empty stomach: only a flag and a rounded 0 travel, so when they end on the server is unknown
 		// until a snapshot says so. Until then every step is held as hurt for the wait (`holdWait`)
 		this.holding = hasBits(snap.flags, SelfFlag.Poison) || snap.hunger <= 0;

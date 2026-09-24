@@ -18,7 +18,7 @@
  *      whole run, and not at all (< 1e-6 u) for the 8 keyboard directions;
  *   4. generateTown(seed) builds the same map twice (the §4.5 map hash), which is what lets client and server
  *      generate the world locally and only exchange deltas;
- *   5. VIT-01 itself: the wait before healing restarts on every hp lost, ramps in, needs a FOOD bar of 25 and pays
+ *   5. VIT-01 itself: the wait before healing restarts on every hp lost, ramps in, needs a FOOD bar of 15 and pays
  *      food for every hp; items heal at once; Recovery sets the rate, not the wait; nobody out-heals a walker's bites;
  *      and a rest between two fights takes 60-90 s from 1 hp to full.
  *
@@ -284,7 +284,7 @@ function referenceUpdatePlayer(world, p, save, dir, aimAngle, dt) {
  *   the stomach   runs down 0,3/s × (1 − Patience / 3)
  *   HP lost       starving (0,6 hp/s at 0) and poison (1,8 hp/s, halved by Poison immunity) restart the wait
  *   the wait      7 s since the last HP lost, then the rate ramps in over 2 s; `sinceHurt` stops counting at 9
- *   healing       1,5 hp/s × (1 + Recovery), only while the FOOD bar reads 25 or more (it rounds: ≥ 24,5), and each
+ *   healing       1,5 hp/s × (1 + Recovery), only while the FOOD bar reads 15 or more (it rounds: ≥ 14,5), and each
  *                 healed hp costs 0,25 food; god mode never starts the wait
  */
 function referenceBody(p, save, dt) {
@@ -300,7 +300,7 @@ function referenceBody(p, save, dt) {
 		hurt = true;
 	}
 	p.sinceHurt = hurt && p.godMode !== true ? 0 : Math.min(9, (p.sinceHurt ?? 9) + dt);
-	if (p.hp >= p.hpMax || p.hungry < 24.5) return;
+	if (p.hp >= p.hpMax || p.hungry < 14.5) return;
 	const k = Math.min(1, Math.max(0, (p.sinceHurt - 7) / 2));
 	if (k <= 0) return;
 	const healed = Math.min(p.hpMax - p.hp, 1.5 * (1 + save.skillLevels[1]) * k * dt);
@@ -406,10 +406,10 @@ function plan(scene, step, steps) {
 function applyEvents(scene, p, save, step, steps) {
 	const at = f => step === Math.floor(steps * f);
 	if (step === 0) {
-		// hurt, rested and just fed enough: it heals at once, paying food, until the FOOD bar drops under 25 (VIT-01)
-		// and the speed penalty of a hungry stomach sets in
+		// hurt, rested, hungry (slowed under 25) and just fed enough: it heals at once, paying food, until the FOOD bar
+		// drops under 15 (VIT-01)
 		p.hp = 70;
-		p.hungry = 26;
+		p.hungry = 16;
 		save.skillLevels[7] = 1; // a movement skill, so the speed is not the bare default
 	}
 	// then the stomach is nearly empty: starving in a moment, and the hp drain with it
@@ -719,7 +719,7 @@ console.log(`\n[vitals] VIT-01: no healing for a while after a hit, and only on 
 					`${V.REGEN_FOOD_MIN}: it heals (${(at.p.hp - 50).toFixed(2)} hp) until the bar drops to ${V.REGEN_FOOD_MIN - 1}`,
 			);
 		} else fail(`the food gate: ${low.p.hp} hp under it, ${at.p.hp} hp over it`);
-		// the step that heals last starts at 24.5 or more and pays at most one step's price out of it
+		// the step that heals last starts at the gate (14.5) or more and pays at most one step's price out of it
 		const step = (0.3 + V.REGEN_HP_PER_S * V.REGEN_FOOD_PER_HP) * DT;
 		if (lastHeal !== undefined && lastHeal < gate + step && lastHeal > gate - step) {
 			ok(
@@ -825,24 +825,43 @@ console.log(`\n[vitals] VIT-01: no healing for a while after a hit, and only on 
 		const god = poisoned(false, true);
 		if (god.since >= V.REGEN_RESTED_S - 1e-9) ok("admin god mode: poison never starts the wait");
 		else fail(`god mode: poison started the wait (sinceHurt ${god.since})`);
-		// starving, then one can of food: the wait first, and by then the bar is under 25 again -- eat enough
-		const starved = body({ hp: 60, food: 0 });
-		stand(starved, 2);
+		// starving, then ONE meal: the wait, and then the body heals out of that meal alone (a second one is not needed)
+		const fromEmpty = u => {
+			const b = body({ hp: 50, food: 0 });
+			stand(b, 2);
+			const starvedHp = b.p.hp;
+			b.save.invenUse[u.id] = 1;
+			Ply.itemUseEffect(b.p, b.save, u.id);
+			const h = b.p.hp;
+			let first;
+			stand(b, 30, (t, i) => {
+				if (first === undefined && b.p.hp > h + 1e-12) first = i * DT;
+			});
+			return { starvedHp, first, healed: b.p.hp - h };
+		};
 		const can = usable("Canned food");
-		starved.save.invenUse[can.id] = 2;
-		Ply.itemUseEffect(starved.p, starved.save, can.id);
-		const h1 = starved.p.hp;
-		stand(starved, V.REGEN_RESTED_S + 3);
-		const oneCan = starved.p.hp - h1;
-		Ply.itemUseEffect(starved.p, starved.save, can.id);
-		const h2 = starved.p.hp;
-		stand(starved, V.REGEN_RESTED_S + 3);
-		if (near(60 - 1.2, h1 - can.hp, 0.05) && oneCan === 0 && starved.p.hp > h2) {
+		const one = fromEmpty(can);
+		if (near(one.starvedHp, 50 - 1.2, 0.02) && near(one.first ?? -1, V.REGEN_DELAY_S, 2 * DT) && one.healed >= 10) {
 			ok(
-				`starving costs ${(0.6).toFixed(1)} hp/s and is hp lost; one can after it (FOOD ${can.hunger}) is ` +
-					`under 25 by the end of the wait -- a second one heals`,
+				`starving costs 0.6 hp/s and is hp lost; ONE can (FOOD ${can.hunger}) eaten on the empty stomach: the ` +
+					`body heals ${one.first.toFixed(3)} s later, ${one.healed.toFixed(1)} hp out of it (+${can.hp} from the can)`,
 			);
-		} else fail(`starving then eating: ${h1} -> +${oneCan}, then ${h2} -> ${starved.p.hp}`);
+		} else fail(`starving then one can: ${JSON.stringify(one)}`);
+		const meals = USABLES.filter(u => u.hunger >= 20);
+		const snacks = USABLES.filter(u => u.hunger > 0 && u.hunger < 20);
+		const mealsHeal = meals.filter(u => near(fromEmpty(u).first ?? -1, V.REGEN_DELAY_S, 2 * DT));
+		const snacksHeal = snacks.filter(u => fromEmpty(u).first !== undefined);
+		if (mealsHeal.length === meals.length && snacksHeal.length === 0) {
+			ok(
+				`every meal of 20 food or more (${meals.length}) does the same on its own; a snack under 20 ` +
+					`(${snacks.map(u => u.name).join(", ")}) is not enough by itself`,
+			);
+		} else {
+			fail(
+				`meals that heal from empty ${mealsHeal.length}/${meals.length}; snacks that do ` +
+					`${snacksHeal.map(u => u.name).join(", ") || "none"}`,
+			);
+		}
 	}
 
 	// (f) between two fights: 0 -> full in a sensible time, on a full stomach
