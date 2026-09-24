@@ -4,7 +4,7 @@
  * it (docs/ANALYTICS.md §15). Pure data.
  *
  * The break line is ONE decision, the server's (the review of ca9494a, L7): at 06:00 server/main.server.ts asks
- * `breakNudgeEarned`, tells that survivor (`Announce{BreakNudge}`, shared/net/protocol.ts note 23) and logs the analytics
+ * `breakNudgeEarned`, tells that survivor (`Announce{BreakNudge}`, shared/net/protocol.ts note 24) and logs the analytics
  * `BreakNudge` in the same step; the client shows the line because it was told, never from a clock of its own -- so a
  * line shown and an event counted can never disagree.
  */

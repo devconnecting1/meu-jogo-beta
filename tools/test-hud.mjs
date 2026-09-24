@@ -2950,12 +2950,20 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 	);
 	hud.dawnStoreNotice("saving");
 	const saving = [txt("Store"), deep(card(), "Store").Visible, deep(card(), "Store").TextColor3];
-	hud.dawnStoreNotice("saved");
+	// an older write's "saved" (in flight when the dawn came: no `answersDawn`) is not this night's answer
+	hud.dawnStoreNotice("saved", false);
+	const older = txt("Store");
+	hud.dawnStoreNotice("saved", true);
 	const diskPx = deep(card(), "Disk")
 		.GetChildren()
 		.filter(f => f.ClassName === "Frame");
 	check(
-		'"Saving..." em cinza enquanto a gravacao voa; "Progress saved" com o disquete verde quando o servidor diz que gravou',
+		'a "saved" sem answersDawn (uma gravacao de antes da pergunta do amanhecer) nao vira "Progress saved": o cartao segue em "Saving..."',
+		older === "Saving...",
+		older,
+	);
+	check(
+		'"Saving..." em cinza enquanto a gravacao voa; "Progress saved" com o disquete verde quando o servidor RESPONDE a pergunta do amanhecer',
 		saving[0] === "Saving..." &&
 			saving[1] === true &&
 			sameColor(saving[2], THEME.mutedForeground) &&
@@ -2970,6 +2978,35 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 		'uma gravacao que falhou e dita em vermelho: "Progress not saved — retrying"',
 		txt("Store") === "Progress not saved — retrying" && sameColor(deep(card(), "Store").TextColor3, STAT.penalty),
 	);
+	// L2 of the review of 440af66: a card that opens during an outage the corner indicator already shows starts from it;
+	// an older write that lands ends the outage ("Saving...": the dawn's own write is still to come); only the answer
+	// says "Progress saved"
+	{
+		hud.dawnCard().hide();
+		hud.showDawnReport({ zombies: 2, damage: 5, items: 1 });
+		const opened = [deep(card(), "Store").Visible, txt("Store")];
+		hud.dawnStoreNotice("saved", false);
+		const outageOver = txt("Store");
+		hud.dawnStoreNotice("saved", true);
+		const answered = txt("Store");
+		hud.dawnCard().hide();
+		hud.showDawnReport({ zombies: 2, damage: 5, items: 1 });
+		const clean = deep(card(), "Store").Visible === false;
+		hud.dawnStoreNotice("saved", false);
+		const stillQuiet = deep(card(), "Store").Visible === false;
+		check(
+			'aberto numa queda ja conhecida: comeca em "Progress not saved — retrying"; a gravacao velha que chega o leva a "Saving...", a resposta a "Progress saved"; sem queda, um "saved" velho nao diz nada',
+			opened[0] === true &&
+				opened[1] === "Progress not saved — retrying" &&
+				outageOver === "Saving..." &&
+				answered === "Progress saved" &&
+				clean &&
+				stillQuiet,
+			JSON.stringify({ opened, outageOver, answered, clean, stillQuiet }),
+		);
+		// the card up again for what follows (the last push was a "saved": no outage carries over)
+		hud.showDawnReport({ zombies: 12, damage: 85, items: 7 });
+	}
 	// where: the banner's own box at the top centre, never over the console
 	const cr = rectOf(card());
 	const [bannerW, feedW] = hud.messageWidths();
@@ -3007,7 +3044,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 		txt("Key1") === "zombie" && txt("Key3") === "item found" && txt("Value2") === "0",
 	);
 	at(1);
-	hud.dawnStoreNotice("saved");
+	hud.dawnStoreNotice("saved", true);
 	at(DCard.DAWN_SHOW_S - 0.1);
 	const stillUp = up();
 	at(DCard.DAWN_SHOW_S + 0.1);
@@ -3016,7 +3053,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 		stillUp && !up(),
 	);
 	// L2 of the review of ca9494a: the dawn's write comes after SAV-01's delay and gap (up to ~18 s), and an unchanged
-	// save is answered "saved" without a write (server/main.server.ts confirmSave): the card waits for that word
+	// save is answered "saved" without a write (server/main.server.ts `dawnAsks`): the card waits for that word
 	{
 		const tw = getClock();
 		hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
@@ -3024,7 +3061,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 		hud.update(state());
 		const waiting = up() && deep(card(), "Store").Visible === false;
 		setClock(tw + 18);
-		hud.dawnStoreNotice("saved");
+		hud.dawnStoreNotice("saved", true);
 		hud.update(state());
 		const late = up() && txt("Store") === "Progress saved";
 		setClock(tw + 18 + DCard.DAWN_SAVED_HOLD_S - 0.1);
@@ -3057,7 +3094,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 	hud.update(state());
 	const waited = up();
 	setClock(t1 + DCard.DAWN_SHOW_S + 3);
-	hud.dawnStoreNotice("saved");
+	hud.dawnStoreNotice("saved", true);
 	setClock(t1 + DCard.DAWN_SHOW_S + 3 + DCard.DAWN_SAVED_HOLD_S - 0.1);
 	hud.update(state());
 	const held = up() && txt("Store") === "Progress saved";
@@ -3127,15 +3164,21 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 			`${fired.join(",")}; no cartao, prende: ${sinks.map(d => d.Name).join(", ")}`,
 		);
 		check(
-			"so o ╳ e botao: um TextButton sobre a cruz, nao Selectable, de pelo menos MIN_TOUCH_PX (44 px) de lado",
+			"so o ╳ e botao: um TextButton no canto do cartao, sobre a cruz e dentro do cartao, nao Selectable, de pelo menos MIN_TOUCH_PX (44 px) de lado",
 			sinks.length === 1 &&
 				sinks[0] === target &&
 				target.ClassName === "TextButton" &&
 				target.Selectable === false &&
 				hit.w >= MIN_TOUCH_PX - 0.5 &&
 				hit.h >= MIN_TOUCH_PX - 0.5 &&
-				Math.abs(hit.x + hit.w / 2 - (cross.x + cross.w / 2)) <= 1 &&
-				Math.abs(hit.y + hit.h / 2 - (cross.y + cross.h / 2)) <= 1 &&
+				hit.x <= cross.x + cross.w / 2 &&
+				cross.x + cross.w / 2 <= hit.x + hit.w &&
+				hit.y <= cross.y + cross.h / 2 &&
+				cross.y + cross.h / 2 <= hit.y + hit.h &&
+				hit.x >= cr.x - 0.5 &&
+				hit.y >= cr.y - 0.5 &&
+				hit.x + hit.w <= cr.x + cr.w + 0.5 &&
+				hit.y + hit.h <= cr.y + cr.h + 0.5 &&
 				hit.w * hit.h < (cr.w * cr.h) / 4,
 			`hit ${Math.round(hit.w)}x${Math.round(hit.h)} no cartao ${Math.round(cr.w)}x${Math.round(cr.h)}`,
 		);
@@ -3150,7 +3193,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 			!onCross && tapped && !up(),
 		);
 	}
-	// the break line: the server's (protocol note 23), never the client's -- on the card if it is up, else nowhere here
+	// the break line: the server's (protocol note 24), never the client's -- on the card if it is up, else nowhere here
 	const noCard = hud.dawnBreakLine();
 	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
 	const short = hud.dawnCard().size();
@@ -3180,7 +3223,7 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 		for (let i = 0; i < 20; i++) {
 			hud.showDawnReport({ zombies: i, damage: i * 7, items: i % 3 });
 			if (i % 4 === 0) hud.dawnBreakLine();
-			hud.dawnStoreNotice(i % 2 === 0 ? "saving" : "saved");
+			hud.dawnStoreNotice(i % 2 === 0 ? "saving" : "saved", i % 2 === 1);
 			for (let f = 0; f < 30; f++) {
 				setClock(getClock() + 1 / 60);
 				hud.update(state());
@@ -3225,10 +3268,12 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 	check(
 		"main.client.ts: a noite contada a cada quadro (fora do `if (alive)`), o aviso de gravacao do servidor no cartao, o level-up novo",
 		/\n\t\tstepNight\(!refs\.player\.dead\);/.test(mainSrc) &&
-			/net\.onStoreState\(state => hud\.dawnStoreNotice\(state\)\);/.test(mainSrc) &&
+			/net\.onStoreState\(\(state, answersDawn\) => hud\.dawnStoreNotice\(state, answersDawn\)\);/.test(
+				mainSrc,
+			) &&
 			/hud\.showLevelUp\(save\.level, save\.level - lastLevel\);/.test(mainSrc) &&
 			!/hud\.showMessage\("Level UP"\)/.test(mainSrc) &&
-			/nightTally\.reset\(\);/.test(mainSrc),
+			/nightTally\.reset\(\);\n\tbreakNudgeAt = undefined;/.test(mainSrc),
 	);
 	// L6 / L7 of the review of ca9494a: the damage is the server's hp (the self block), and the break line is only ever
 	// what the server said -- on the card, or the feed after BREAK_CARD_WAIT_S -- with no clock of the client's own
@@ -3278,6 +3323,24 @@ console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu
 				brk.y + brk.h <= cr.y + cr.h + 0.5 &&
 				brk.h >= rows * 9 - 0.5,
 			`cartao y ${Math.round(cr.y)}..${Math.round(cr.y + cr.h)}, feed a partir de ${Math.round(feedBox.y)}; linha da pausa ${Math.round(brk.h)} px`,
+		);
+		// the ╳'s 44 px hit on a phone: inside the card, and clear of the corner's controls (the chip, the clock plate)
+		const hit = rectOf(deep(card(), "Dismiss"));
+		const corner = ["ChipSlot", "SkyPlate", "BagBtn", "MenuBtn"]
+			.map(n => [n, deep(hudRoot(), n)])
+			.filter(([, f]) => f !== undefined && shown(f))
+			.map(([n, f]) => [n, rectOf(f)]);
+		check(
+			"844x390 toque: o alvo do ╳ (>= 44 px) fica dentro do cartao, longe do chip do placar, do relogio, do Bag e do Menu",
+			hit.w >= MIN_TOUCH_PX - 0.5 &&
+				hit.h >= MIN_TOUCH_PX - 0.5 &&
+				hit.x >= cr.x - 0.5 &&
+				hit.y >= cr.y - 0.5 &&
+				hit.x + hit.w <= cr.x + cr.w + 0.5 &&
+				hit.y + hit.h <= cr.y + cr.h + 0.5 &&
+				corner.length >= 2 &&
+				corner.every(([, r]) => !overlapR(hit, r)),
+			`hit ${Math.round(hit.x)},${Math.round(hit.y)} ${Math.round(hit.w)}x${Math.round(hit.h)}; ${corner.map(([n]) => n).join(", ")}`,
 		);
 		const gsv = service("GuiService");
 		const none = gsv.GetInsetArea(Enum.ScreenInsets.None);

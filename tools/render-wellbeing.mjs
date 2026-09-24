@@ -158,10 +158,10 @@ const MOMENTS = [
 			hud.showMessage("Good morning");
 			if (typeof hud.showDawnReport !== "function") return;
 			hud.showDawnReport({ zombies: 23, damage: 64, items: 9 }, true);
-			// the server's break line (protocol note 23); ca9494a took it as showDawnReport's second argument instead
+			// the server's break line (protocol note 24); ca9494a took it as showDawnReport's second argument instead
 			if (typeof hud.dawnBreakLine === "function") hud.dawnBreakLine();
 			hud.dawnStoreNotice("saving");
-			hud.dawnStoreNotice("saved");
+			hud.dawnStoreNotice("saved", true);
 			// a feed line under it: the card never covers the feed (the review of ca9494a, L1)
 			if (typeof hud.showLevelUp === "function") hud.showLevelUp(6, 1);
 		},

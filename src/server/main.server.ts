@@ -198,11 +198,15 @@ interface Session {
 	/** BEM-04: this session was given the dawn card's break line (`sim.onDawn`): once a session, never again */
 	breakNudged: boolean;
 	/**
-	 * BEM-04 / SAV-01: the dawn asked to hear how its save went. The next outcome is told even if the write carries
-	 * nothing new -- "saved" when the DataStore already holds the live save, which is true -- so the dawn card's
-	 * "Progress saved" is always the server's word, never a guess. Cleared once told.
+	 * BEM-04 / SAV-01: the dawns that asked to hear how their save went (`sim.onDawn` counts one up), and the last of them
+	 * answered. Only a write whose save was encoded AFTER an ask can answer it (`writeSession` reads `dawnAsks` before it
+	 * encodes: a write already in flight at 06:00 does not, and neither does one in flight when a later ask comes), and
+	 * its outcome is told even when it carries nothing new -- "saved" when the DataStore already holds the live save,
+	 * which is true -- with `answersDawn` on the push, so the dawn card's "Progress saved" is always that answer, never a
+	 * guess nor an older write's news. A failure is told as always; the retry answers.
 	 */
-	confirmSave: boolean;
+	dawnAsks: number;
+	dawnAnswered: number;
 	/** admin patch waiting for the client's AdminPatchAck (undefined = none) */
 	patchRev: number | undefined;
 	patchDeadline: number;
@@ -323,13 +327,14 @@ function saveSoon(s: Session, reason: Cadence.SaveEvent): void {
  * SAV-01: what happened to a write of this player's save, pushed on SaveAck like the wallet (client/ui/saveIndicator.ts
  * draws it: "Saving..." / "Saved", or "Progress not saved — retrying"). Never to a session on its way out, and never
  * in the way of the write it tells about: a push that throws (a Player being torn down) is dropped, so it can neither
- * leave `writing` up nor turn a write that landed into a failure.
+ * leave `writing` up nor turn a write that landed into a failure. `ask` (BEM-04): this "saved" or "stopped" answers
+ * the dawn asks up to that one (`dawnAsks` as the write read it before encoding), and the push says so.
  */
-function notifyStore(s: Session, state: StoreState): void {
+function notifyStore(s: Session, state: StoreState, ask?: number): void {
 	if (s.closed) return;
 	s.cadence.failingShown = state === "failing";
-	// BEM-04: an outcome told answers the dawn's question ("Saving..." is not an outcome)
-	if (state !== "saving") s.confirmSave = false;
+	const answersDawn = ask !== undefined && ask > s.dawnAnswered && (state === "saved" || state === "stopped");
+	if (answersDawn) s.dawnAnswered = ask;
 	const push: SaveAckPayload = {
 		ok: true,
 		push: true,
@@ -339,6 +344,7 @@ function notifyStore(s: Session, state: StoreState): void {
 		clamped: false,
 		store: state,
 	};
+	if (answersDawn) push.answersDawn = true;
 	pcall(() => remotes.saveAck.FireClient(s.player, push));
 }
 
@@ -350,8 +356,7 @@ function notifyStore(s: Session, state: StoreState): void {
  */
 function writeFailedFor(s: Session, told: boolean): void {
 	Cadence.writeFailed(s.cadence);
-	// (the dawn asked: its answer is this failure, whatever the attempt carried)
-	if ((told || s.confirmSave) && !s.cadence.failingShown) notifyStore(s, "failing");
+	if (told && !s.cadence.failingShown) notifyStore(s, "failing");
 	Cadence.scheduleSave(s.cadence, os.clock(), "retry");
 }
 
@@ -617,6 +622,10 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 	// A server that already lost the lock without knowing it still gets here; `nextTitleRecord` never lets its write
 	// land over a later history (a reset made where the lock went).
 	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
+	// BEM-04: the dawn's asks are read BEFORE the save is encoded, so only a write of the save as it stood after an ask
+	// answers it -- never one already in flight when the ask came (its push goes out without `answersDawn`)
+	const answer = !release && s.dawnAsks > s.dawnAnswered ? s.dawnAsks : undefined;
+	const asked = answer !== undefined;
 	const json = HttpService.JSONEncode(s.save);
 	const c = s.cadence;
 	if (json.size() > MAX_STORED_LENGTH) {
@@ -640,7 +649,7 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 		Cadence.settled(c);
 		// the DataStore holds exactly the live save: a failure still on the player's screen is over (review L2), and the
 		// dawn that asked (BEM-04) is told so -- true, and nothing written
-		if (c.failingShown || s.confirmSave) notifyStore(s, "saved");
+		if (c.failingShown || asked) notifyStore(s, "saved", answer);
 		return true;
 	}
 	Cadence.writeStarted(c, os.clock());
@@ -657,20 +666,23 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 		const wasFailing = c.failingShown;
 		Cadence.writeLanded(c, json);
 		if (release) s.released = true;
-		if (told || wasFailing || s.confirmSave) notifyStore(s, "saved");
+		if (told || wasFailing || asked) notifyStore(s, "saved", answer);
 		return true;
 	}
 	if (outcome === "lost") {
 		s.lockLost = true;
 		warn(`[${GAME_NAME}] session lock taken by another session; this copy is now read-only`);
 		print(`[${GAME_NAME}] session lock of ${s.key} lost`);
-		notifyStore(s, "stopped");
+		notifyStore(s, "stopped", answer);
 		return false;
 	}
 	s.dirty = s.dirty || wasDirty;
 	// SAV-01: the DataStore is failing: the player is told the truth (once), and the write is tried again when the
-	// back-off allows -- 15, 30, then 60 s -- not sooner, the service is struggling already
-	if (!release) writeFailedFor(s, told);
+	// back-off allows -- 15, 30, then 60 s -- not sooner, the service is struggling already. The dawn's ask hears it
+	// too when its write carried something new; a failed lock refresh of an unchanged save lost nothing (the DataStore
+	// holds the live save), so that ask is answered "saved" -- the truth (BEM-04)
+	if (!release) writeFailedFor(s, told || (asked && changed));
+	if (asked && !changed) notifyStore(s, "saved", answer);
 	return false;
 }
 
@@ -885,7 +897,8 @@ function newSession(player: Player): Session {
 		closed: false,
 		joinedAt: os.clock(),
 		breakNudged: false,
-		confirmSave: false,
+		dawnAsks: 0,
+		dawnAnswered: 0,
 		patchRev: undefined,
 		patchDeadline: 0,
 		patchResend: undefined,
@@ -1793,12 +1806,12 @@ if (MP_PHASE >= 1) {
 	};
 	// BEM-04 / SAV-01: a night lived through to daybreak is a moment that matters -- the dawn card tells the survivor what
 	// is saved only once the server says so, so the write goes soon (coalesced like every event save; an unchanged save
-	// is still not rewritten, only confirmed: `confirmSave`). And the break line is decided HERE, once: the survivor is
-	// told (protocol note 23) and analytics counts it in the same step, so a line counted is a line sent
+	// is still not rewritten, only confirmed: `dawnAsks`). And the break line is decided HERE, once: the survivor is
+	// told (protocol note 24) and analytics counts it in the same step, so a line counted is a line sent
 	sim.onDawn = (sp, livedNight) => {
 		const s = sessionOfUserId(sp.userId);
 		if (s === undefined || s.closed) return;
-		if (s.loaded && persists(s)) s.confirmSave = true;
+		if (s.loaded && persists(s)) s.dawnAsks += 1;
 		saveSoon(s, "dawn");
 		if (!breakNudgeEarned(os.clock() - s.joinedAt, livedNight, s.breakNudged)) return;
 		s.breakNudged = true;

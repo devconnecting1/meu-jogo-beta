@@ -314,6 +314,11 @@ export class Hud {
 	private toast: PickupToast | undefined;
 	/** the night in numbers at dawn, in the banner's box (BEM-04, client/ui/dawnCard.ts) */
 	private dawn: DawnCard | undefined;
+	/**
+	 * the last save state the server pushed (SAV-01, what the corner indicator shows): a dawn card that opens during an
+	 * outage starts from "Progress not saved — retrying" (BEM-04), not from silence
+	 */
+	private storeNow: StoreState | undefined;
 	private readonly notes = new Array<PickupNote>();
 	/** touch: the light laid over the Bag button when something went into the backpack, and how bright it is now */
 	private bagFlash: Frame | undefined;
@@ -1242,11 +1247,15 @@ export class Hud {
 		// px per design unit of the box: messageReach's recipe (the HUD size scales it)
 		const v = viewportSize();
 		const px = math.min(v.X / DESIGN_W, v.Y / DESIGN_H) * this.uiK;
-		dawn.show(report, math.min(this.bannerMaxW, DAWN_W), px, os.clock());
+		const now = os.clock();
+		dawn.show(report, math.min(this.bannerMaxW, DAWN_W), px, now);
+		// an outage already on the corner indicator is the card's first word: its write is the one still failing
+		const store = this.storeNow;
+		if (store === "failing" || store === "stopped") dawn.storeNotice(store, now, false);
 	}
 
 	/**
-	 * BEM-04: the server gave this survivor the break line (protocol note 23): on the dawn card, if it is up. False when
+	 * BEM-04: the server gave this survivor the break line (protocol note 24): on the dawn card, if it is up. False when
 	 * it is not (client/main.client.ts then asks for `breakLineOnFeed`).
 	 */
 	dawnBreakLine(): boolean {
@@ -1260,9 +1269,13 @@ export class Hud {
 		this.pushFeed(dawn.breakText(), THEME.foreground);
 	}
 
-	/** what the server said about a write of this player's save (saveClient.ts `onStoreState`): the dawn card's line */
-	dawnStoreNotice(state: StoreState): void {
-		this.dawn?.storeNotice(state, os.clock());
+	/**
+	 * What the server said about a write of this player's save (saveClient.ts `onStoreState`): the dawn card's line.
+	 * `answersDawn`: the push answers the dawn's ask (the only "saved" the card takes). Remembered, card up or not.
+	 */
+	dawnStoreNotice(state: StoreState, answersDawn = false): void {
+		this.storeNow = state;
+		this.dawn?.storeNotice(state, os.clock(), answersDawn);
 	}
 
 	/** the dawn card of this mount (BEM-04), for tests */

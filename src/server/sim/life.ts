@@ -270,7 +270,7 @@ export interface LifeWire {
 	/** a reliable PlayerLife delta (§4.5) */
 	life(slot: number, state: number): void;
 	/**
-	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 23; `arg` is
+	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 24; `arg` is
 	 * shared/data/deathCause.ts `deathWireOf`). Optional: a keeper wired to no client (a test) has nobody to tell.
 	 */
 	died?(slot: number, arg: number): void;

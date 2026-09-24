@@ -1658,7 +1658,7 @@ test("World: the roster carries the title under the name, and nothing but a real
 		undefined,
 	);
 
-	// UI-13 (protocol note 23): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
+	// UI-13 (protocol note 24): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
 	const DC = require(join(SRC, "shared/data/deathCause.ts"));
 	for (const kind of [DC.DeathKind.Horde, DC.DeathKind.Hunger, DC.DeathKind.Poison, DC.DeathKind.Boss]) {
 		for (const night of [false, true]) {
@@ -1682,7 +1682,7 @@ test("World: the roster carries the title under the name, and nothing but a real
 		b[8] = (bad >> 8) & 255;
 		eq(`Died with a cause the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
 	}
-	// BEM-04 (protocol note 23): Announce{BreakNudge} carries arg 0 and nothing else
+	// BEM-04 (protocol note 24): Announce{BreakNudge} carries arg 0 and nothing else
 	const nudge = P.encodeWorld({
 		tick: 3,
 		events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.BreakNudge, arg: 0 }],

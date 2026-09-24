@@ -330,12 +330,12 @@ let lastSelfTick = -math.huge;
 let localLife = LifeState.Up as number;
 let localLifeDirty = false;
 /**
- * UI-13: why the local survivor last died, as the server told them alone (`Announce{Died}`, protocol note 23) -- the
+ * UI-13: why the local survivor last died, as the server told them alone (`Announce{Died}`, protocol note 24) -- the
  * death screen's cause line and tip. Forgotten when they stand up again and on a new session.
  */
 let deathNote: DeathNote | undefined;
 /**
- * BEM-04: the server gave this survivor the dawn card's break line (`Announce{BreakNudge}`, protocol note 23), not yet
+ * BEM-04: the server gave this survivor the dawn card's break line (`Announce{BreakNudge}`, protocol note 24), not yet
  * taken by client/main.client.ts. The client never decides it: it shows what it was told, once.
  */
 let breakNudge = false;

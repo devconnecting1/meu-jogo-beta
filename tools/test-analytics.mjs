@@ -1927,9 +1927,8 @@ section("12c) the wellbeing guards (DESIGN_RULES BEM-07, docs/ANALYTICS.md §15)
 	check(
 		nudges(1501).length === 1 &&
 			nudges(1501)[0].fields.CustomField01 === "Left - Yes" &&
-			nudges(1501)[0].t - leftAt >= 5 &&
-			nudges(1501)[0].t - leftAt <= 6,
-		"told the line and left 30 s after it: one BreakNudge, Left - Yes -- a few seconds after the leave (a close in them would make it Unknown)",
+			nudges(1501)[0].t === leftAt,
+		"told the line and left 30 s after it: one BreakNudge, Left - Yes -- logged AT the leave, while the Player is still there",
 		JSON.stringify(nudges(1501).map(r => [r.fields, r.t - leftAt])),
 	);
 	check(
@@ -1982,56 +1981,83 @@ section("12c) the wellbeing guards (DESIGN_RULES BEM-07, docs/ANALYTICS.md §15)
 		"the line the player reads says the number the rule uses (BREAK_NUDGE_MIN = 90)",
 	);
 
-	// a server that closes is not a player who chose to go (L7 of the review of ca9494a): `Left - Unknown`
+	// how they left (L7 of the reviews of ca9494a and 440af66): the verdict is logged AT the leave (PlayerRemoving: the
+	// Player is still there), and only a leave of their own is a Yes -- a kick, a teleport to another server of this
+	// game, a close or a restart under way, a leave noticed late: `Left - Unknown`
 	{
 		const c = makeCore();
-		const told = [2101, 2102, 2103, 2104].map(id => {
-			const pl = fakePlayer(id, `close${id}`);
-			c.core.sessionLoaded(pl, "ok", blankSave());
-			c.core.enteredWorld(pl);
-			return pl;
-		});
+		const ids = [2101, 2102, 2103, 2104, 2105, 2106, 2107];
+		const pl = new Map(
+			ids.map(id => {
+				const p = fakePlayer(id, `leave${id}`);
+				c.core.sessionLoaded(p, "ok", blankSave());
+				c.core.enteredWorld(p);
+				return [id, p];
+			}),
+		);
 		c.core.poll();
-		for (const pl of told) c.core.breakNudge(pl);
-		c.advance(20);
+		for (const p of pl.values()) c.core.breakNudge(p);
+		c.advance(10);
+		// 2104 asked for a teleport (Play solo, the Servers list) that went through; 2105 asked for one that failed, and
+		// only left 90 s later -- a leave of its own
+		c.core.teleporting(pl.get(2104));
+		c.core.teleporting(pl.get(2105));
+		c.advance(5);
+		const leave = (id, how) => {
+			pl.get(id).Parent = undefined;
+			c.core.playerLeft(pl.get(id), how);
+		};
+		leave(2101, "left");
+		leave(2103, "kicked");
+		leave(2104, "left");
+		c.advance(85);
+		leave(2105, "left");
+		// 2106 is gone without a PlayerRemoving this module saw: the poll notices it, late
+		pl.get(2106).Parent = undefined;
 		c.core.poll();
-		// 2101 leaves (a choice), and the verdict waits its few seconds; 2102 stays; then the server closes -- an update
-		told[0].Parent = undefined;
-		c.core.playerLeft(told[0]);
-		c.advance(2);
-		c.core.shutdown(false);
 		const left = id =>
 			c.rows.filter(r => r.userId === id && r.name === AN.EVENT.BreakNudge).map(r => r.fields.CustomField01);
+		const got = Object.fromEntries(ids.map(id => [id, left(id).join()]));
 		check(
-			JSON.stringify(left(2101)) === '["Left - Unknown"]' && JSON.stringify(left(2102)) === '["Left - Unknown"]',
-			"a close (an update, a shutdown) inside the break line's 2 minutes: Left - Unknown, never Yes -- whoever left seconds before it too (the close's kicks can reach PlayerRemoving first)",
-			JSON.stringify([left(2101), left(2102)]),
+			got[2101] === "Left - Yes" &&
+				got[2103] === "Left - Unknown" &&
+				got[2104] === "Left - Unknown" &&
+				got[2105] === "Left - Yes" &&
+				got[2106] === "Left - Unknown" &&
+				got[2102] === "" &&
+				got[2107] === "",
+			"a leave of their own is Yes; a kick (admin, flood), a teleport's leave, a leave the poll found late: Unknown; a teleport that failed long before is not",
+			JSON.stringify(got),
 		);
-		// the last player leaving closes an empty server (CloseReason.ServerEmpty): that leave was theirs
-		told[2].Parent = undefined;
-		told[3].Parent = undefined;
-		const e = makeCore();
-		const solo = fakePlayer(2105, "solo");
-		e.core.sessionLoaded(solo, "ok", blankSave());
-		e.core.enteredWorld(solo);
-		e.core.breakNudge(solo);
-		e.advance(40);
-		solo.Parent = undefined;
-		e.core.playerLeft(solo);
-		e.advance(1);
-		e.core.shutdown(true);
-		const soloLeft = e.rows.filter(r => r.name === AN.EVENT.BreakNudge).map(r => r.fields.CustomField01);
+		// then the platform schedules a restart: 2107 leaves after it -- the restart's; 2102 is still here at the close
+		c.core.restartScheduled();
+		leave(2107, "left");
+		c.core.shutdown();
 		check(
-			JSON.stringify(soloLeft) === '["Left - Yes"]',
-			"the last player leaves 40 s after the line and the empty server closes: Left - Yes (their choice), once",
-			JSON.stringify(soloLeft),
+			left(2107).join() === "Left - Unknown" && left(2102).join() === "Left - Unknown" && left(2101).length === 1,
+			"a leave once a restart is scheduled, and a player the close finds here: Unknown -- nothing logged twice",
+			JSON.stringify([left(2107), left(2102), left(2101)]),
+		);
+		check(
+			AN.exitHow(Enum.PlayerExitReason.CreatorKick) === "kicked" &&
+				AN.exitHow(Enum.PlayerExitReason.PlatformKick) === "kicked" &&
+				AN.exitHow(Enum.PlayerExitReason.Unknown) === "left" &&
+				AN.exitHow(undefined) === "left",
+			"PlayerExitReason: CreatorKick (Player:Kick -- the admin's and the flood kick) and PlatformKick are kicks; Unknown, the catch-all, is a leave",
 		);
 		const src = readFileSync(join(SRC, "server/analytics/events.ts"), "utf8");
+		const hosts = ["server/match/matchHost.ts", "server/match/serverList.ts"].map(f =>
+			readFileSync(join(SRC, f), "utf8"),
+		);
 		check(
-			/game\.BindToClose\(reason => guard\(c => c\.shutdown\(reason === Enum\.CloseReason\.ServerEmpty\)\)\);/.test(
+			/Players\.PlayerRemoving\.Connect\(\(player, reason\) =>\s*guard\(c => c\.playerLeft\(player, exitHow\(reason\)\)\),?\s*\);/.test(
 				src,
-			),
-			"the BindToClose hook hands the close's reason in: only CloseReason.ServerEmpty keeps a leave's Yes / No",
+			) &&
+				/game\.ServerRestartScheduled\.Connect\(\(\) => guard\(c => c\.restartScheduled\(\)\)\)/.test(src) &&
+				hosts.every(h =>
+					/Analytics\.teleporting\(player\);[^]{0,400}TeleportAsync\(game\.PlaceId, \[player\]/.test(h),
+				),
+			"wired: PlayerRemoving hands its exit reason in, a scheduled restart is heard, and both teleports (Play solo, the Servers list) are marked BEFORE TeleportAsync",
 		);
 	}
 });
@@ -2085,7 +2111,8 @@ section("12d) the break line is ONE decision, the server's: the line a player ge
 	s.sim.clock.setClock(12);
 	const long = s.join(newUser(), "long");
 	const away = s.join(newUser(), "away");
-	for (const p of [long, away]) {
+	const kicked = s.join(newUser(), "kicked");
+	for (const p of [long, away, kicked]) {
 		s.immortal.add(p);
 		s.enter(p);
 	}
@@ -2107,18 +2134,38 @@ section("12d) the break line is ONE decision, the server's: the line a player ge
 	});
 	s.run(0.5);
 	check(
-		first >= 0 && backIn && told(long) === 1 && told(short) === 0 && told(away) === 0 && broadcast === 0,
-		`at 06:00 the line goes to the ${W.BREAK_NUDGE_MIN}-minute session that lived the night standing, to it alone (Announce{BreakNudge}, directed)`,
-		JSON.stringify({ first, long: told(long), short: told(short), away: told(away) }),
+		first >= 0 &&
+			backIn &&
+			told(long) === 1 &&
+			told(kicked) === 1 &&
+			told(short) === 0 &&
+			told(away) === 0 &&
+			broadcast === 0,
+		`at 06:00 the line goes to each ${W.BREAK_NUDGE_MIN}-minute session that lived the night standing, to it alone (Announce{BreakNudge}, directed)`,
+		JSON.stringify({ first, long: told(long), kicked: told(kicked), short: told(short), away: told(away) }),
 	);
-	// the long one reads it and goes, 30 s later
-	s.run(30, 0.25);
+	// `kicked` is kicked 10 s later (an admin's kick, the flood kick: Player:Kick is PlayerExitReason.CreatorKick),
+	// through the module's own PlayerRemoving handler
+	s.run(10, 0.25);
+	{
+		const { Players } = s.env.services;
+		Players.list = Players.list.filter(x => x !== kicked);
+		Players.PlayerRemoving.Fire(kicked, Enum.PlayerExitReason.CreatorKick);
+		kicked._parent = undefined;
+	}
+	// the long one reads it and goes, 30 s after it
+	s.run(20, 0.25);
 	s.quit(long);
+	const longAt = counted(long);
 	s.run(7, 0.25);
 	check(
-		JSON.stringify(counted(long)) === '["Left - Yes"]' && counted(short).length === 0 && counted(away).length === 0,
-		"...and the event counts exactly those told: one BreakNudge (Left - Yes, it left 30 s after), none for the others",
-		JSON.stringify({ long: counted(long), short: counted(short), away: counted(away) }),
+		JSON.stringify(longAt) === '["Left - Yes"]' &&
+			JSON.stringify(counted(long)) === '["Left - Yes"]' &&
+			JSON.stringify(counted(kicked)) === '["Left - Unknown"]' &&
+			counted(short).length === 0 &&
+			counted(away).length === 0,
+		"...and the event counts exactly those told: Left - Yes logged at the leave itself; the kicked one's Unknown; none for the others",
+		JSON.stringify({ long: counted(long), kicked: counted(kicked), short: counted(short), away: counted(away) }),
 	);
 	// the next night `away` lives standing: its line then -- and it stays past the 2 minutes (Left - No)
 	const second = toDawn(23.9);
@@ -2147,14 +2194,14 @@ section("12d) the break line is ONE decision, the server's: the line a player ge
 		}),
 	);
 	// the server closes (an update) inside the 2 minutes after `short`'s line: nobody can say it chose to go
-	const sent = new Map([long, away, short].map(p => [p, told(p)]));
+	const sent = new Map([long, away, short, kicked].map(p => [p, told(p)]));
 	s.shutdown();
 	check(
 		JSON.stringify(counted(short)) === '["Left - Unknown"]' && JSON.stringify(counted(away)) === '["Left - No"]',
 		"a close inside the 2 minutes: Left - Unknown, never Yes",
 		JSON.stringify({ away: counted(away), short: counted(short) }),
 	);
-	const disagree = [long, away, short].filter(p => sent.get(p) !== counted(p).length);
+	const disagree = [long, away, short, kicked].filter(p => sent.get(p) !== counted(p).length);
 	check(
 		disagree.length === 0,
 		"every line counted is a line sent, and every line sent is counted (told = BreakNudge rows, per player)",

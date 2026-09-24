@@ -259,9 +259,10 @@ net.onLoad(info => {
 	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
-// BEM-04: the dawn card says "Progress saved" only when the server says a write landed -- the same push the corner
-// indicator draws (SAV-01); the card ignores what arrives while it is not up
-net.onStoreState(state => hud.dawnStoreNotice(state));
+// BEM-04: the dawn card says "Progress saved" only on the server's answer to the dawn's ask (`answersDawn`) -- the same
+// push the corner indicator draws (SAV-01); the HUD remembers the last state, so a card that opens during an outage
+// starts from it
+net.onStoreState((state, answersDawn) => hud.dawnStoreNotice(state, answersDawn));
 
 net.onSaveAck(ack => {
 	if (ack.ok) {
@@ -308,7 +309,7 @@ function trackAfter(): void {
 
 /**
  * BEM-04: one frame of the night's numbers (client/systems/nightReport.ts); at the first light after a night this
- * survivor lived through standing, the dawn card. The break line is the server's word (protocol note 23): on the card
+ * survivor lived through standing, the dawn card. The break line is the server's word (protocol note 24): on the card
  * when it is up, else on the feed -- shown whenever it was told, never decided here. Runs every frame of a run, the
  * dead included (a death drops the night).
  */
@@ -800,8 +801,10 @@ function mountRun(enterWorld = true): void {
 	// ITM-08: a new body carries no use cooldown and no pending heal of the last one
 	Bag.quickUse.reset();
 	deathShown = false;
-	// a night is counted from inside the city: whatever was being counted before the menus is not this night
+	// a night is counted from inside the city: whatever was being counted before the menus is not this night -- nor is a
+	// break line told to the run before this one
 	nightTally.reset();
+	breakNudgeAt = undefined;
 	saveTimer = 0;
 	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
 	if (enterWorld) netEnterWorld();

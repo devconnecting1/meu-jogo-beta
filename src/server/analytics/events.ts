@@ -65,10 +65,18 @@ export const POLL_S = 1;
 /** a player who left is forgotten this long after, so a hook that runs late in the leave (a death) still finds them */
 const LEAVE_GRACE_S = 15;
 /**
- * BEM-04: a leave's `BreakNudge` verdict waits this long (seconds, < LEAVE_GRACE_S), so a server that is closing -- whose
- * kicks may reach PlayerRemoving before BindToClose -- is told apart from a player who chose to go (`Left - Unknown`)
+ * BEM-04: a player who leaves this soon (seconds) after a teleport was asked for them (the Play solo trip, the Servers
+ * list's join: `teleporting`) went to another server of this game, not on a break (`Left - Unknown`)
  */
-const NUDGE_HOLD_S = 5;
+const TELEPORT_LEAVE_S = 60;
+
+/**
+ * How a player left the server (`playerLeft`): of their own accord as far as the engine says (`left`: the exit reason
+ * is the catch-all Unknown -- the close button, a lost connection, a teleport), `kicked` (PlayerExitReason CreatorKick
+ * or PlatformKick: an admin's kick, the flood kick, the platform's), or `missed` (the Player was already gone when a
+ * poll noticed it: when and why are not known).
+ */
+export type LeaveHow = "left" | "kicked" | "missed";
 /** a fault is warned at most this often (seconds): a bug here must be visible, never a flood */
 const FAULT_LOG_S = 60;
 
@@ -440,6 +448,8 @@ interface Entry {
 	 */
 	nudgedAt?: number;
 	nudgeLogged: boolean;
+	/** clock() a teleport to another server of this game was last asked for them (`teleporting`) */
+	teleportAt?: number;
 	/** tonight's Night funnel session, while it is open */
 	night?: { id: string; step: number };
 	/** the shop visit that is open, and the rate guard on opening one */
@@ -506,6 +516,11 @@ export class ServerAnalytics {
 	/** the world clock at the last read, to find the hours crossed since (the Night funnel) */
 	private lastHour?: number;
 	private lastDay?: number;
+	/**
+	 * BEM-04: the server is closing (BindToClose began) or a restart is scheduled (DataModel.ServerRestartScheduled): a
+	 * leave from now on is the close's, not a choice (`Left - Unknown`)
+	 */
+	private closing = false;
 
 	constructor(sink: AnalyticsSink, options: AnalyticsOptions) {
 		this.sink = sink;
@@ -780,13 +795,41 @@ export class ServerAnalytics {
 		if (e.onboarding) this.advanceOnboarding(e);
 	}
 
-	/** the player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose) */
-	playerLeft(player: Player): void {
+	/**
+	 * The player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose), and the break
+	 * line's verdict (BEM-04) -- logged HERE, while the Player is still there: the engine reference types
+	 * LogCustomEvent's player as a Player and fires PlayerRemoving "right before" that Player is destroyed, and nothing
+	 * documents an event for a Player already gone. `how`: see LeaveHow.
+	 */
+	playerLeft(player: Player, how: LeaveHow = "left"): void {
 		this.arrivals.delete(player);
 		const e = this.entries.get(player);
 		if (e === undefined) return;
-		if (e.leftAt === undefined) e.leftAt = this.clock();
+		const first = e.leftAt === undefined;
+		if (first) e.leftAt = this.clock();
 		this.summarize(e);
+		if (!first) return;
+		// a kick, a teleport to another server of this game, a close under way, a leave noticed late: not a break taken
+		const teleport = e.teleportAt;
+		const teleported = teleport !== undefined && (e.leftAt ?? 0) - teleport <= TELEPORT_LEAVE_S;
+		this.nudgeVerdict(e, this.closing || how !== "left" || teleported);
+	}
+
+	/**
+	 * BEM-04: a teleport to another server of this game was asked for this player (server/match/matchHost.ts's Play solo
+	 * trip, server/match/serverList.ts's join), right before TeleportAsync: a leave soon after it is that teleport's.
+	 */
+	teleporting(player: Player): void {
+		const e = this.entries.get(player);
+		if (e !== undefined) e.teleportAt = this.clock();
+	}
+
+	/**
+	 * BEM-04: the platform scheduled a restart of this server (DataModel.ServerRestartScheduled: an update, maintenance):
+	 * every leave from now on may be the restart's -- `Left - Unknown`, never a choice read into it.
+	 */
+	restartScheduled(): void {
+		this.closing = true;
 	}
 
 	private summarize(e: Entry): void {
@@ -827,7 +870,8 @@ export class ServerAnalytics {
 
 	/**
 	 * BEM-04: the server told this player the dawn card's break line (server/main.server.ts, the same step that sends
-	 * `Announce{BreakNudge}`). Once per session; its `BreakNudge` goes out when they leave, or BREAK_NUDGE_LEFT_S later.
+	 * `Announce{BreakNudge}`). Once per session; its `BreakNudge` goes out when they leave (`playerLeft`), or
+	 * BREAK_NUDGE_LEFT_S later with them still here.
 	 */
 	breakNudge(player: Player): void {
 		const e = this.entries.get(player);
@@ -837,7 +881,7 @@ export class ServerAnalytics {
 
 	/**
 	 * BEM-04: the verdict on a break line told and not yet logged -- did they leave within BREAK_NUDGE_LEFT_S of it?
-	 * `unknown`: the server closed around it, so nobody can say whether they chose to go (docs/ANALYTICS.md §15).
+	 * `unknown`: a close, a kick or a teleport took them, so nobody can say they chose to go (docs/ANALYTICS.md §15).
 	 */
 	private nudgeVerdict(e: Entry, unknown: boolean): void {
 		const at = e.nudgedAt;
@@ -850,15 +894,14 @@ export class ServerAnalytics {
 	}
 
 	/**
-	 * BindToClose: every session still here is summarized, and the queue gets what the window still allows. `emptied`:
-	 * the server closes because the last player left (CloseReason.ServerEmpty) -- every leave before it was a choice;
-	 * any other close (an update, a shutdown, maintenance) makes a break line still waiting for its verdict unknowable,
-	 * and so does a player the close found still here.
+	 * BindToClose: every session still here is summarized, and the queue gets what the window still allows. A break line
+	 * still waiting for its verdict is the close's (`Left - Unknown`), and so is every leave after this.
 	 */
-	shutdown(emptied = false): void {
+	shutdown(): void {
+		this.closing = true;
 		for (const [, e] of this.entries) {
 			this.summarize(e);
-			this.nudgeVerdict(e, !emptied || e.leftAt === undefined);
+			this.nudgeVerdict(e, true);
 		}
 		this.drain();
 	}
@@ -871,10 +914,8 @@ export class ServerAnalytics {
 		const hours = this.hoursCrossed();
 		for (const [player, e] of this.entries) {
 			// a removal this module missed (a Player already parented to nil) is a leave too
-			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player);
+			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player, "missed");
 			if (e.leftAt !== undefined) {
-				// BEM-04: a leave's verdict, once NUDGE_HOLD_S passed without a close
-				if (now - e.leftAt >= NUDGE_HOLD_S) this.nudgeVerdict(e, false);
 				if (now - e.leftAt >= LEAVE_GRACE_S) gone.push(player);
 				continue;
 			}
@@ -1438,10 +1479,21 @@ function boot(): ServerAnalytics | undefined {
 			Workspace.SetAttribute("pz_analytics_dropped", s.dropped);
 		});
 	});
-	Players.PlayerRemoving.Connect(player => guard(c => c.playerLeft(player)));
-	game.BindToClose(reason => guard(c => c.shutdown(reason === Enum.CloseReason.ServerEmpty)));
+	// the exit reason tells a kick (an admin's, the flood kick, the platform's) from a leave; Unknown is the catch-all
+	Players.PlayerRemoving.Connect((player, reason) => guard(c => c.playerLeft(player, exitHow(reason))));
+	game.BindToClose(() => guard(c => c.shutdown()));
+	// a restart the platform scheduled (an update, maintenance) is a close that comes with warning: leaves from then on
+	// are its (absent in an old engine or a test's fake: then only BindToClose says so)
+	pcall(() => game.ServerRestartScheduled.Connect(() => guard(c => c.restartScheduled())));
 	print(`[${GAME_NAME}] analytics on${inStudio ? " (Studio: counted, never sent)" : ""}`);
 	return core;
+}
+
+/** PlayerRemoving's exit reason as the break line's verdict reads it: a kick of any kind is not a leave */
+export function exitHow(reason: Enum.PlayerExitReason | undefined): LeaveHow {
+	return reason === Enum.PlayerExitReason.CreatorKick || reason === Enum.PlayerExitReason.PlatformKick
+		? "kicked"
+		: "left";
 }
 
 /** the running instance, for the admin panel and the tests */
@@ -1467,6 +1519,11 @@ export function sessionLoaded(player: Player, status: string, save: PlayerSaveDa
 /** server/main.server.ts `sim.onDawn`: this player was just told the dawn card's break line (BEM-04) */
 export function breakNudge(player: Player): void {
 	guard(c => c.breakNudge(player));
+}
+
+/** server/match/*: a teleport of this player to another server of this game is about to be asked (BEM-04) */
+export function teleporting(player: Player): void {
+	guard(c => c.teleporting(player));
 }
 
 /** server/net/mpHost.ts: the town the Night funnel follows (undefined when the host stops) */

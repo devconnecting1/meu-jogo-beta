@@ -274,14 +274,22 @@ Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificul
   servidor**. Às 06:00, `server/main.server.ts` (`sim.onDawn`) pergunta `breakNudgeEarned` (`shared/data/wellbeing.ts`:
   sessão de 90 min ou mais no servidor, `BREAK_NUDGE_MIN`, desde a entrada; a noite vivida de pé desde a meia-noite, a
   mesma presença que o título Survivor conta; uma vez por sessão) e, no mesmo passo, avisa aquele sobrevivente
-  (`Announce{BreakNudge}`, nota 23 do protocolo) e chama `Analytics.breakNudge`. O cliente não tem relógio próprio
+  (`Announce{BreakNudge}`, nota 24 do protocolo) e chama `Analytics.breakNudge`. O cliente não tem relógio próprio
   para isso: mostra o que ouviu, no cartão do amanhecer ou, sem cartão, no feed. Então **linha contada é linha
   enviada**, e linha enviada é linha vista (o `test:analytics` §12d confere, por jogador, avisos = eventos). O campo:
-  `Left - Yes` se o jogador saiu em até 2 min (`BREAK_NUDGE_LEFT_S`), `Left - No` quando os 2 min passam com ele
-  ainda aqui, e **`Left - Unknown`** quando o servidor fecha nesse meio-tempo (atualização, desligamento, manutenção:
-  ninguém sabe se ele escolheu sair). Para isso o veredito de uma saída espera 5 s (`NUDGE_HOLD_S`): os kicks de um
-  fechamento podem chegar ao `PlayerRemoving` antes do `BindToClose`. Só o fechamento de um servidor que esvaziou
-  (`Enum.CloseReason.ServerEmpty`, o último jogador saiu) mantém o `Yes` / `No` de quem saiu antes dele.
+  `Left - Yes` se o jogador **saiu por conta própria** em até 2 min (`BREAK_NUDGE_LEFT_S`), `Left - No` quando os 2
+  min passam com ele ainda aqui, e **`Left - Unknown`** quando ninguém pode dizer que ele escolheu sair: um **kick**
+  (o `PlayerRemoving` traz `Enum.PlayerExitReason.CreatorKick` — `Player:Kick`, o do admin e o kick por flood — ou
+  `PlatformKick`), um **teleporte** para outro servidor deste jogo (o Play solo e a entrada pela lista Servers marcam o
+  jogador com `teleporting` logo antes do `TeleportAsync`; a saída em até 60 s depois é do teleporte), um
+  **fechamento** (o `BindToClose` começou) ou um **reinício agendado** (`DataModel.ServerRestartScheduled`: atualização,
+  manutenção), e uma saída que só a leitura por segundo percebeu (não se sabe quando nem por quê). **O veredito sai no
+  próprio `PlayerRemoving`**, com o jogador ainda lá. O que a documentação diz (Context7, 2026-09-24): o
+  `LogCustomEvent` pede o `Player` "who triggered the event" (tipado `Player`), o `PlayerRemoving` dispara "right
+  before" o jogador sair e o `Player` é destruído logo depois; nada documenta um evento para um `Player` que já se foi,
+  então não é seguro adiar o veredito. O limite que fica: o `PlayerExitReason` de um desligamento sem aviso ("Shut down
+  all servers") é o genérico `Unknown`, e se esses kicks chegarem ao `PlayerRemoving` antes do `BindToClose` a saída
+  conta como do jogador — o reinício agendado e o `BindToClose` cobrem o resto.
 - **WeaponKills**: a contagem é por abate (`progress.ts` `creditKill` / `creditMachineKill`, depois da trava de run
   assistida, igual a `zombieKills`), mas só vira evento na saída: 1 a 3 por sessão na prática, nunca um por abate. A
   soma por `Weapon` é o total de abates com cada tipo; "usuários únicos" diz quantos usam cada um.

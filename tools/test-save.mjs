@@ -2601,9 +2601,9 @@ section(
 		"uma gravacao que nao e a ultima desiste antes de dormir se o jogador sai ou o servidor fecha -- L4",
 	);
 	check(
-		/if \(c\.failingShown \|\| s\.confirmSave\) notifyStore\(s, "saved"\);/.test(writeFn) &&
+		/if \(c\.failingShown \|\| asked\) notifyStore\(s, "saved", answer\);/.test(writeFn) &&
 			/const told = !release && changed && wasDirty;/.test(writeFn),
-		'"Progress not saved" sai quando o save volta ao que o DataStore tem (L2) -- e o amanhecer que perguntou ouve "saved" (BEM-04, confirmSave); o refresh da trava nao e anunciado (L6)',
+		'"Progress not saved" sai quando o save volta ao que o DataStore tem (L2) -- e o amanhecer que perguntou ouve "saved" (BEM-04, dawnAsks); o refresh da trava nao e anunciado (L6)',
 	);
 	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 32)
 	check(
@@ -2673,8 +2673,11 @@ section(
 			/for \(const sp of this\.roster\) \{\s*if \(sp\.state\.dead\) continue;[^}]*this\.onDawn\(sp, /.test(
 				simSrc,
 			) &&
-			/sim\.onDawn = \(sp, livedNight\) => \{[^}]*s\.confirmSave = true;\s*saveSoon\(s, "dawn"\);/.test(mainSrc),
-		'o amanhecer vivo e um save por evento ("dawn"): a simulacao avisa quem esta de pe, o main.server pede o saveSoon e a resposta dele (confirmSave)',
+			/sim\.onDawn = \(sp, livedNight\) => \{[^}]*s\.dawnAsks \+= 1;\s*saveSoon\(s, "dawn"\);/.test(mainSrc) &&
+			/const answer = !release && s\.dawnAsks > s\.dawnAnswered \? s\.dawnAsks : undefined;[^]*?const json = HttpService\.JSONEncode\(s\.save\);/.test(
+				src("server/main.server.ts"),
+			),
+		'o amanhecer vivo e um save por evento ("dawn"): a simulacao avisa quem esta de pe, o main.server pede o saveSoon e a resposta dele (dawnAsks), lida ANTES de codificar o save',
 	);
 }
 

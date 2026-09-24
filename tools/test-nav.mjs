@@ -1383,7 +1383,7 @@ console.log(
 	};
 	const without = presses();
 	hud.showDawnReport({ zombies: 4, damage: 30, items: 2 });
-	// the server's break line on it too (protocol note 23), so every text the card can hold is checked below
+	// the server's break line on it too (protocol note 24), so every text the card can hold is checked below
 	hud.dawnBreakLine();
 	flush();
 	const card = findIn(ctx.hudLayer, "DawnCard");

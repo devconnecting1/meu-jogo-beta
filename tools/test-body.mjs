@@ -3845,6 +3845,13 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 		worldTo(srv, p)
 			.filter(e => e.t === srv.P.WorldEv.Announce && e.msg === srv.P.AnnounceKind.Died)
 			.map(e => DC.deathFromWire(e.arg));
+	const { readFileSync } = require("node:fs");
+	/** every SAV-01 store push this player got, in order; `*` marks one that answers the dawn's ask (`answersDawn`) */
+	const storePushes = (srv, p) =>
+		srv.env.services.ReplicatedStorage.FindFirstChild("Net")
+			.FindFirstChild("SaveAck")
+			.sent.filter(e => e.to === p && e.args[0]?.store !== undefined)
+			.map(e => e.args[0].store + (e.args[0].answersDawn === true ? "*" : ""));
 
 	// (a) the cause is the LETHAL damage's source (L8 of the review of ca9494a): the empty stomach at night, poison by day
 	// -- each death told once, to the one who died -- and a starving body a blow finishes is the blow's
@@ -4006,11 +4013,7 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 			if (k === String(u)) writes += 1;
 			return original(k, transform);
 		};
-		const ackOf = () =>
-			s.env.services.ReplicatedStorage.FindFirstChild("Net")
-				.FindFirstChild("SaveAck")
-				.sent.filter(e => e.to === p && e.args[0]?.store !== undefined)
-				.map(e => e.args[0].store);
+		const ackOf = () => storePushes(s, p);
 		try {
 			// one write of this session first (the load's copy is encoded apart), then the gap since it gone by
 			s.sim.onDawn({ userId: u, slot: 0 }, false);
@@ -4024,8 +4027,8 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 			s.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
 			const told = ackOf().slice(before);
 			check(
-				writes === w0 && JSON.stringify(told) === '["saved"]',
-				'a dawn with nothing new to write: no write, and "saved" told once (true: the DataStore already holds it)',
+				writes === w0 && JSON.stringify(told) === '["saved*"]',
+				'a dawn with nothing new to write: no write, and "saved" told once, as the dawn\'s answer (answersDawn: true, the DataStore already holds it)',
 				`${writes - w0} write(s); told ${JSON.stringify(told)}`,
 			);
 			// ...and only a dawn asks: the next unchanged autosave tells nothing
@@ -4034,6 +4037,91 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 				ackOf().slice(before).length === 1,
 				"…once: the next unchanged pass tells nothing (the dawn's question was answered)",
 				JSON.stringify(ackOf().slice(before)),
+			);
+		} finally {
+			store.UpdateAsync = original;
+		}
+	}
+
+	// (d) L1 of the review of 440af66: a write already in flight when a dawn asks -- its save encoded BEFORE the ask --
+	// does not answer it. Here the ask comes inside the UpdateAsync of the write answering the dawn before: that write
+	// answers only the first ask, and the second is answered by the next write, of the save as it stood after it
+	const lockRefresh = Number(
+		/const LOCK_REFRESH = (\d+);/.exec(readFileSync(join(SRC, "server/main.server.ts"), "utf8"))?.[1] ?? NaN,
+	);
+	{
+		const s = bootServer();
+		const u = newUser();
+		const p = s.join(u, "inflight");
+		s.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		// one write of this session first, so the next ones are measured against it
+		s.sim.onDawn({ userId: u, slot: 0 }, false);
+		s.run(Cad.EVENT_SAVE_DELAY + 1, 0.25);
+		const store = fakeStore(SAVE_STORE);
+		const original = store.UpdateAsync;
+		const writes = [];
+		let askInside = false;
+		store.UpdateAsync = (k, transform) => {
+			if (k === String(u)) {
+				writes.push(clockNow);
+				// the next dawn's ask lands while this write is in flight (after its encode, before it lands)
+				if (askInside) {
+					askInside = false;
+					s.sim.onDawn({ userId: u, slot: 0 }, false);
+				}
+			}
+			return original(k, transform);
+		};
+		try {
+			// the lock's refresh is due, so the first ask's write reaches UpdateAsync (an unchanged save is written only then)
+			clockNow += lockRefresh + 1;
+			askInside = true;
+			const before = storePushes(s, p).length;
+			s.sim.onDawn({ userId: u, slot: 0 }, false);
+			s.run(Cad.EVENT_SAVE_DELAY + 1, 0.25);
+			const afterFirst = storePushes(s, p).slice(before);
+			s.run(Cad.EVENT_SAVE_GAP + Cad.EVENT_SAVE_DELAY + 2, 0.25);
+			const all = storePushes(s, p).slice(before);
+			check(
+				JSON.stringify(afterFirst.filter(x => x.endsWith("*"))) === '["saved*"]' &&
+					JSON.stringify(all.filter(x => x.endsWith("*"))) === '["saved*","saved*"]' &&
+					!askInside,
+				"the ask that came while a write was in flight is NOT answered by it: a second answer comes, from the next write",
+				`${JSON.stringify(afterFirst)} -> ${JSON.stringify(all)}; ${writes.length} write(s)`,
+			);
+		} finally {
+			store.UpdateAsync = original;
+		}
+	}
+
+	// (e) L3 of the review of 440af66: nothing changed, the lock's refresh fails -- the DataStore still holds the live
+	// save, so the dawn's ask is answered "saved" (and no "failing": nothing is lost)
+	{
+		const s = bootServer();
+		const u = newUser();
+		const p = s.join(u, "refresh");
+		s.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		// one write of this session, so "unchanged" is measured against what it wrote
+		s.sim.onDawn({ userId: u, slot: 0 }, false);
+		s.run(Cad.EVENT_SAVE_DELAY + 1, 0.25);
+		const store = fakeStore(SAVE_STORE);
+		const original = store.UpdateAsync;
+		let attempts = 0;
+		try {
+			// the lock's refresh is due (LOCK_REFRESH since the last write), and the DataStore is down
+			clockNow += lockRefresh + 1;
+			store.UpdateAsync = k => {
+				if (k === String(u)) attempts += 1;
+				throw new Error("DataStore is down");
+			};
+			const before = storePushes(s, p).length;
+			s.sim.onDawn({ userId: u, slot: 0 }, false);
+			s.run(Cad.EVENT_SAVE_DELAY + 1, 0.25);
+			const told = storePushes(s, p).slice(before);
+			check(
+				Number.isFinite(lockRefresh) && attempts >= 1 && JSON.stringify(told) === '["saved*"]',
+				'an unchanged save whose lock refresh fails: the dawn hears "saved" (the DataStore holds it), never "failing"',
+				`${attempts} attempt(s); told ${JSON.stringify(told)}`,
 			);
 		} finally {
 			store.UpdateAsync = original;

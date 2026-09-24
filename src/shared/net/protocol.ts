@@ -130,7 +130,7 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
- * 23. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
+ * 24. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
  *     per event: two more AnnounceKinds, both S→C only, reliable and DIRECTED (`queueFor(slot)`, like TitleUnlocked):
  *       - `Died` (7), whose `arg` is the cause of this survivor's death, read by the server off the lethal damage
  *         (shared/data/deathCause.ts `deathKindOf`, the same rule as the analytics `Died` event): the kind in bits 0-2
@@ -1505,12 +1505,12 @@ export const AnnounceKind = {
 	/** (MON-05) arg = the title byte (`titleToWire`, 1..TITLE_WIRE_MAX); sent only to the survivor who earned it */
 	TitleUnlocked: 6,
 	/**
-	 * (UI-13, note 23) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
+	 * (UI-13, note 24) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
 	 * night); sent only to the survivor who died
 	 */
 	Died: 7,
 	/**
-	 * (BEM-04, note 23) arg = 0: the server's rule gave this survivor the dawn card's break line (a long session, a night
+	 * (BEM-04, note 24) arg = 0: the server's rule gave this survivor the dawn card's break line (a long session, a night
 	 * lived standing); sent only to them, once per session. The client shows the line because the server said so
 	 */
 	BreakNudge: 8,
@@ -1962,7 +1962,7 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		if (msg < 1 || msg > ANNOUNCE_KIND_MAX) return undefined;
 		// MON-05: a title that does not exist is not something to announce
 		if (msg === AnnounceKind.TitleUnlocked && (arg < 1 || arg > TITLE_WIRE_MAX)) return undefined;
-		// note 23: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
+		// note 24: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
 		if (msg === AnnounceKind.Died && deathFromWire(arg) === undefined) return undefined;
 		// ...and the break line carries nothing: any other arg is malformed
 		if (msg === AnnounceKind.BreakNudge && arg !== 0) return undefined;

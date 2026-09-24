@@ -6,7 +6,7 @@
  *   │ ☀ Night survived                                  ╳ │   the state, and the ╳ -- the card's one button
  *   │ 12 zombies     85 damage taken     7 items found    │   the night's numbers, in the numbers' yellow (UI-08)
  *   │ ▣ Progress saved                                    │   ONLY after the server said a write landed (SAV-01)
- *   │ You've played for over 90 minutes. Dawn is a good…  │   only when the SERVER gave the line (protocol note 23)
+ *   │ You've played for over 90 minutes. Dawn is a good…  │   only when the SERVER gave the line (protocol note 24)
  *   └─────────────────────────────────────────────────────┘
  *
  * The rules it keeps:
@@ -49,8 +49,11 @@ const PAD = 14;
 const SUN = 18;
 const DISK = 14;
 const CROSS = 14;
-/** the ╳'s hit, design units (and never under MIN_TOUCH_PX screen px) */
-const CROSS_HIT = 30;
+/**
+ * the ╳'s hit, design units (and never under MIN_TOUCH_PX screen px), from the card's top right corner: it holds the
+ * cross (PAD + CROSS from the right edge) and stays inside a card as short as DAWN_H_SHORT on a phone
+ */
+const CROSS_HIT = 34;
 const TITLE_Y = 6;
 const TITLE_H = 24;
 const STATS_Y = 31;
@@ -157,7 +160,7 @@ export class DawnCard {
 	}
 
 	/**
-	 * BEM-04: the server gave this survivor the break line (protocol note 23): it goes on the card if the card is up.
+	 * BEM-04: the server gave this survivor the break line (protocol note 24): it goes on the card if the card is up.
 	 * False when it is not (client/main.client.ts then puts the line on the feed). The card grows for it, never past
 	 * DAWN_H: one row, or two where one would not fit (a card narrowed off the touch corner, a phone's text floor).
 	 */
@@ -182,12 +185,18 @@ export class DawnCard {
 
 	/**
 	 * What the server said about a write of this player's save (saveClient.ts `onStoreState`). Only what arrives while
-	 * the card is up counts: a "saved" from before dawn is not this night's.
+	 * the card is up counts (hud.ts hands it an outage already on, as its first word). "Progress saved" is said only on
+	 * the ANSWER to the dawn's ask (`answersDawn`: a write of the save as it stood after 06:00, server/main.server.ts
+	 * `dawnAsks`); an older write's "saved" -- in flight when the dawn came -- ends an outage on the card (the dawn's
+	 * own write is still to come: "Saving..."), and is otherwise not this night's news.
 	 */
-	storeNotice(state: StoreState, now: number): void {
+	storeNotice(state: StoreState, now: number, answersDawn: boolean): void {
 		if (this.shownAt === undefined) return;
-		this.storeState = state;
-		if (state === "saved") this.savedAt = now;
+		const older = state === "saved" && !answersDawn;
+		if (older && this.storeState !== "failing") return;
+		const shown: StoreState = older ? "saving" : state;
+		this.storeState = shown;
+		if (shown === "saved") this.savedAt = now;
 		this.writeStore();
 	}
 
@@ -282,7 +291,7 @@ export class DawnCard {
 		dismiss.BorderSizePixel = 0;
 		dismiss.AutoButtonColor = false;
 		dismiss.Selectable = false;
-		dismiss.AnchorPoint = new Vector2(0.5, 0.5);
+		dismiss.AnchorPoint = new Vector2(1, 0);
 		dismiss.ZIndex = z + 1;
 		const min = new Instance("UISizeConstraint");
 		min.MinSize = new Vector2(MIN_TOUCH_PX, MIN_TOUCH_PX);
@@ -335,7 +344,9 @@ export class DawnCard {
 		const crossX = w - PAD - CROSS / 2;
 		const crossY = TITLE_Y + TITLE_H / 2;
 		centre(p.cross.frame, crossX, crossY);
-		centre(p.dismiss, crossX, crossY);
+		// the hit fills the card's top right corner, over the cross and never past the card's edge (a phone's corner is
+		// the scoreboard chip's and the clock's: nothing of the card reaches them)
+		p.dismiss.Position = UDim2.fromScale(1, 0);
 		p.dismiss.Size = UDim2.fromScale(CROSS_HIT / w, CROSS_HIT / h);
 		// three cells across the card: each the number, then its words, as wide as the number needs
 		const cellW = (w - PAD * 2) / STATS.size();

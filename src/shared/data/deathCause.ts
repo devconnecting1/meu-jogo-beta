@@ -9,7 +9,7 @@
  * was killed by the bite (the review of ca9494a, L8). A blow is a boss's when a living boss stood within a needle's
  * reach, the horde's otherwise; rotten meat is not a cause anybody is told (Unknown). The same rule feeds the analytics
  * `Died` event (server/analytics/events.ts `causeOfDeath`, whose strings are the dashboard's) and the one byte the dead
- * survivor is told (`Announce{Died}`, shared/net/protocol.ts note 23), read by the server at the death
+ * survivor is told (`Announce{Died}`, shared/net/protocol.ts note 24), read by the server at the death
  * (server/sim/life.ts `died`), so the screen and the dashboard never disagree about what killed somebody.
  *
  * The night flag is the world's night, 19:00-06:00 (shared/sim/clock.ts `isNightAt`, the analytics `Time - Night`): a
