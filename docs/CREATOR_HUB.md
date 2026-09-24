@@ -112,9 +112,10 @@ Nada que o jogo use hoje.
 
 ## Analytics
 
-**Ligue tudo, mas saiba que a maior parte depende de instrumentação no código que ainda não existe.**
-Retention, Engagement, Acquisition e Demographics funcionam sozinhos. Economy e Funnels exigem chamadas de
-`AnalyticsService` que precisam ser escritas.
+**Ligue tudo.** Retention, Engagement, Acquisition e Demographics funcionam sozinhos. Economy, Funnels e Custom
+events vêm das chamadas de `AnalyticsService` do servidor (`src/server/analytics/events.ts`): o catálogo, o
+orçamento de taxa e o que aparece em cada página estão em `docs/ANALYTICS.md`. Só um jogo **publicado** manda
+eventos (o Studio não); os gráficos levam ~24 h, e **View Events** mostra os eventos em minutos.
 
 Os funis que valem, para este jogo especificamente:
 
