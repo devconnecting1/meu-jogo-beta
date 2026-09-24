@@ -6,12 +6,14 @@
  * the old one on the server (NET-1), the ammunition refilled itself (NET-3), armour and skills arrived a minute late
  * (NET-4), and a report could write any backpack at all (NET-5). This module is the server half of the fix:
  *
- *   - the VERBS (shared/net/intentWire.ts): SwitchWeapon, UseItem, Equip, Unequip, LearnSkill and Craft, queued per
- *     survivor and applied in the tick, right BEFORE the command they were made during is simulated (§2.4 `atSeq`):
- *     its movement, its weapon machine and its edges all see the change, as the client's prediction did;
+ *   - the VERBS (shared/net/intentWire.ts): SwitchWeapon, Holster, UseItem, Equip, Unequip, LearnSkill and Craft,
+ *     queued per survivor and applied in the tick, right BEFORE the command they were made during is simulated
+ *     (§2.4 `atSeq`): its movement, its weapon machine and its edges all see the change, as the client's prediction did;
  *   - the RULES of §8.1, each checked against the server's own save and body, never a number from the client:
  *       SwitchWeapon  alive, the weapon is owned (`ownsWeapon`), no construction on the cursor, ≥ 0.1 s since the
- *                     last switch (held, not refused, while it runs)
+ *                     last switch (held, not refused, while it runs); it also draws the weapon (ITM-06)
+ *       Holster       alive, arg 0 (draw) or 1 (put away), on the switch's own 0.1 s clock (ITM-06): the body's
+ *                     hands, never the save
  *       UseItem       alive, owned, would do something (`itemUseEffect`), one every 0.25 s (held while it runs)
  *       Equip         alive, owned (`ownsEquip`, costumes included), fits the slot (`equipSlotOf`)
  *       Unequip       alive, a real slot 1..5
@@ -38,7 +40,7 @@ import {
 	MP_PHASE,
 	WORLD_SERVER_PHASE,
 } from "shared/net/mpConfig";
-import { InputCommand, IntentKind, IntentMessage } from "shared/net/protocol";
+import { HOLSTER_AWAY, HOLSTER_DRAW, InputCommand, IntentKind, IntentMessage } from "shared/net/protocol";
 import { addItem } from "shared/sim/inventory";
 import { ownsEquip, ownsWeapon, pendingPacks, PlayerSaveData } from "shared/game/save";
 import { BackpackOutcome, ServerCraft } from "./craft";
@@ -330,7 +332,9 @@ export class ServerBackpack {
 
 	/** a limit of §8.1 is still running: the verb waits for it rather than being refused (the queue caps the wait) */
 	private cooling(sp: ServerPlayer, msg: IntentMessage, tick: number): boolean {
-		if (msg.kind === IntentKind.SwitchWeapon) {
+		// ITM-06: putting the weapon away and drawing it are the hands' too -- one clock with the switch, so a flood of
+		// either never beats the 0.1 s a switch waits
+		if (msg.kind === IntentKind.SwitchWeapon || msg.kind === IntentKind.Holster) {
 			const last = this.switchedAt.get(sp.slot);
 			return last !== undefined && tick - last < SWITCH_COOLDOWN_S * this.options.simHz;
 		}
@@ -344,6 +348,7 @@ export class ServerBackpack {
 	private apply(sp: ServerPlayer, msg: IntentMessage, tick: number): BackpackOutcome {
 		const save = sp.save;
 		if (msg.kind === IntentKind.SwitchWeapon) return this.switchWeapon(sp, msg.arg, tick);
+		if (msg.kind === IntentKind.Holster) return this.holster(sp, msg.arg, tick);
 		if (msg.kind === IntentKind.Unequip && (msg.arg < 1 || msg.arg > EQUIP_SLOT_MAX)) {
 			return { kind: "refused", why: "unknown" };
 		}
@@ -368,6 +373,23 @@ export class ServerBackpack {
 		if (!ownsWeapon(sp.save, weaponId)) return { kind: "refused", why: "owned" };
 		this.switchedAt.set(sp.slot, tick);
 		sp.save.equipWeapon = weaponId;
+		// ITM-06: choosing a weapon takes it out of the holster
+		sp.state.holstered = undefined;
 		return { kind: "switched", weapon: weaponId };
+	}
+
+	/**
+	 * ITM-06: the weapon in hand put away (HOLSTER_AWAY) or drawn again (HOLSTER_DRAW). Only the BODY changes
+	 * (`PlayerState.holstered`, never saved): server/sim/simulation.ts then hands the combat a holstered command and
+	 * server/sim/combat.ts stops the sweep, the draw and the reload -- no attack at all -- while walking, E, building and
+	 * the vehicles go on. The wire already range-checked the arg; it is checked again, as every table index is here.
+	 */
+	private holster(sp: ServerPlayer, arg: number, tick: number): BackpackOutcome {
+		if (arg !== HOLSTER_AWAY && arg !== HOLSTER_DRAW) return { kind: "refused", why: "unknown" };
+		const away = arg === HOLSTER_AWAY;
+		if ((sp.state.holstered === true) === away) return { kind: "refused", why: "noop" };
+		this.switchedAt.set(sp.slot, tick);
+		sp.state.holstered = away ? true : undefined;
+		return { kind: "holstered", away };
 	}
 }

@@ -11,6 +11,9 @@
  * The build edges get the same treatment keyed by COMMAND seq: placing or cancelling takes the construction off the
  * local cursor at once, and a bag written before the server consumed that command (`bag.seq`) does not put it back.
  *
+ * The hands too (DESIGN_RULES ITM-06): putting the weapon away (the Holster verb) and drawing it (Holster, or any
+ * SwitchWeapon) are predicted on the survivor's body, and the bag's `holster` is laid over them like `equip[0]`.
+ *
  * Vitals are NOT predicted: eating predicts one fewer can, and the hp and hunger come from the snapshot's self block,
  * which is the server's every 50 ms — a predicted heal would only flicker between the two.
  *
@@ -19,15 +22,19 @@
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import { SKILLS } from "shared/data/skills";
 import { seqDiff } from "shared/net/codec";
-import { IntentKind } from "shared/net/intentWire";
+import { HOLSTER_AWAY, HOLSTER_DRAW, IntentKind } from "shared/net/intentWire";
 import { applyBag, BagMirror, equipSlotOf, ownsEquip, ownsWeapon, PlayerSaveData, setEquipped } from "shared/game/save";
 import { itemUseWouldWork, PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
 
-/** the build cursor the prediction writes: GameRefs' `pendingPlace` / `pendingRecipe` */
+/**
+ * What the prediction writes besides the save: GameRefs' build cursor (`pendingPlace` / `pendingRecipe`) and its
+ * survivor's hands (`player.holstered`, ITM-06). The lobby's cursor has no body: nothing there has hands.
+ */
 export interface BagCursor {
 	pendingPlace: number;
 	pendingRecipe?: number;
+	player?: PlayerState;
 }
 
 /** an entry that is not a verb: a build edge took the construction off the local cursor */
@@ -78,6 +85,18 @@ export function predictVerb(
 		// empty magazine (correctness review of 5967a18, E)
 		if (!replay && (cursor.pendingPlace >= 0 || (body !== undefined && (body.dead || body.hp <= 0)))) return false;
 		save.equipWeapon = arg;
+		// ITM-06: choosing a weapon draws it (server/sim/backpack.ts `switchWeapon`)
+		if (cursor.player !== undefined) cursor.player.holstered = undefined;
+		return true;
+	}
+	if (kind === IntentKind.Holster) {
+		// ITM-06: the body's hands, as the server's `holster` decides them -- a state, so a replay lands the same
+		const hands = cursor.player;
+		if (hands === undefined || (arg !== HOLSTER_AWAY && arg !== HOLSTER_DRAW)) return false;
+		if (!replay && (hands.dead || hands.hp <= 0)) return false;
+		const away = arg === HOLSTER_AWAY;
+		if (!replay && (hands.holstered === true) === away) return false;
+		hands.holstered = away ? true : undefined;
 		return true;
 	}
 	if (kind === IntentKind.UseItem) {
@@ -141,6 +160,8 @@ export function rebase(
 	applyBag(save, bag);
 	cursor.pendingPlace = bag.place;
 	cursor.pendingRecipe = undefined;
+	// ITM-06: the server's hands, under whatever Holster / SwitchWeapon it has not answered yet (replayed below)
+	if (cursor.player !== undefined) cursor.player.holstered = bag.holster === 1 ? true : undefined;
 	for (let i = entries.size() - 1; i >= 0; i--) {
 		const e = entries[i];
 		if (answered(e, bag) || now - e.at > PENDING_TTL_S) entries.remove(i);

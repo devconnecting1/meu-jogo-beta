@@ -45,6 +45,11 @@ export class InputState {
 	keyScoreboard = false;
 	/** 0-based weapon hotkey (keys 1–5) pressed this frame, -1 = none; combat switches weapon */
 	weaponSlotPressed = -1;
+	/**
+	 * The pad's D-pad this frame: -1 (left) the previous weapon, +1 (right) the next, 0 = none -- of the list keys 1–5
+	 * pick from, drawn (client/systems/combat.ts `cycleWeapon`). The pad has no number keys.
+	 */
+	weaponCycle = 0;
 
 	/**
 	 * DESIGN_RULES UI-06: the SURVIVOR is out of play this frame -- a screen is open over the run (Bag, menu,
@@ -96,6 +101,7 @@ export class InputState {
 		this.pausePressed = false;
 		this.scoreboardPressed = false;
 		this.weaponSlotPressed = -1;
+		this.weaponCycle = 0;
 	}
 
 	/**
@@ -116,6 +122,7 @@ export class InputState {
 		this.actionPressed = false;
 		this.reloadPressed = false;
 		this.weaponSlotPressed = -1;
+		this.weaponCycle = 0;
 		if (this.attackHeld) this.attackBlocked = true;
 	}
 

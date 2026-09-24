@@ -704,7 +704,8 @@ const handlers = {
 	onWaitDawn: () => calls.wait++,
 	onNewRun: () => calls.newRun++,
 	onShop: () => calls.shop++,
-	onWardrobe: from => calls.wardrobe.push(from),
+	// the page it came from, and (the Survivor screen's OUTFIT / PET tile) the tab it opens on
+	onWardrobe: (from, slot) => calls.wardrobe.push(slot === undefined ? from : `${from}:${slot}`),
 	onSettings: () => calls.settings++,
 	onCredits: () => calls.credits++,
 	onTutorial: thenPlay => calls.tutorial.push(thenPlay === true),
@@ -1041,6 +1042,39 @@ save.tutorialDone = true;
 closePopups();
 click(deep(window_(), "Wardrobe"), "Wardrobe");
 check("o atalho do Wardrobe abre o guarda-roupa e volta para esta tela", calls.wardrobe.at(-1) === "survivor");
+{
+	// the loadout's tiles are buttons: OUTFIT and PET open the wardrobe on their own tab (EquipSlot 4 / 5); the four a
+	// lobby cannot change say where they are changed -- the Bag, during a match -- in a short toast
+	const { EquipSlot } = require(join(SRC, "shared/data/equips.ts"));
+	const slotTile = i => deep(deep(window_(), "Slots"), `Slot${i}`);
+	check(
+		"os seis ladrilhos do loadout sao botoes que o controle alcanca",
+		[0, 1, 2, 3, 4, 5].every(i => slotTile(i)?.ClassName === "TextButton" && slotTile(i)?.Selectable === true),
+	);
+	click(slotTile(EquipSlot.Outfit), "OUTFIT");
+	const outfit = calls.wardrobe.at(-1);
+	click(slotTile(EquipSlot.Pet), "PET");
+	check(
+		"OUTFIT abre o guarda-roupa na aba de trajes, PET na de pets (e o X volta para esta tela)",
+		outfit === `survivor:${EquipSlot.Outfit}` && calls.wardrobe.at(-1) === `survivor:${EquipSlot.Pet}`,
+		`${outfit} / ${calls.wardrobe.at(-1)}`,
+	);
+	const opened = calls.wardrobe.length;
+	const hint = "Change in the Bag during a match";
+	const toastStackBefore = ctx.uiLayer.FindFirstChild("ToastStack") !== undefined;
+	const toasts = () => ctx.uiLayer.GetDescendants().filter(d => d.Text === hint && shown(d)).length;
+	const before = toasts();
+	for (const i of [0, 1, 2, 3]) click(slotTile(i), `slot ${i}`);
+	check(
+		'WEAPON, CLOTHES, HAND e GUN dizem onde se trocam ("Change in the Bag during a match") e nao abrem nada',
+		toasts() > before && calls.wardrobe.length === opened && calls.play === 2,
+		`${toasts() - before} avisos`,
+	);
+	// the toasts' lifetime loop is a coroutine this fake engine never runs: take them down as their timer would
+	const stack = ctx.uiLayer.FindFirstChild("ToastStack");
+	if (!toastStackBefore) stack?.Destroy();
+	else for (const t of stack?.GetChildren() ?? []) if (t.GetDescendants().some(d => d.Text === hint)) t.Destroy();
+}
 
 console.log("\n3) os estados da partida: em memoria, o dia do mundo, fim de partida, vida nova, cidade caida\n");
 

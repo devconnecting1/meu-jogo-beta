@@ -1198,6 +1198,8 @@ interface BagNow {
 	seq: number;
 	place: number;
 	ack: number;
+	/** ITM-06: the body's hands (the weapon put away), carried beside the ack; never the save's */
+	holster: boolean;
 }
 
 /**
@@ -1211,10 +1213,11 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 	const sim = mpHost.simulation;
 	const place = sp !== undefined ? (sim.build?.pendingOf(sp.slot) ?? -1) : -1;
 	const ack = sim.backpack.ackOf(player.UserId);
+	const holster = sp !== undefined && sp.state.holstered === true;
 	// every build edge the cursor answered moves the signature, so a REFUSED placement is answered by a bag too
 	const turns = sp !== undefined ? (sim.build?.turnsOf(sp.slot) ?? 0) : 0;
-	const sig = `${bagSignature(save, place, ack)}|${turns}`;
-	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack };
+	const sig = `${bagSignature(save, place, ack, holster)}|${turns}`;
+	return { sig, seq: sp !== undefined ? sp.ackSeq : -1, place, ack, holster };
 }
 
 /**
@@ -1249,7 +1252,7 @@ function pushWallets(): void {
 		if (!walletMoved && !bagMoved) continue;
 		const wallet = walletOf(s.save);
 		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
-		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq);
+		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq, bag.holster);
 		sendSaveAck(s, {
 			ok: true,
 			push: true,
@@ -1438,7 +1441,8 @@ if (MP_PHASE >= 1) {
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = (sp, outcome) => {
-		markDirty(sp.userId);
+		// a refused verb changed nothing, and the weapon put away (ITM-06) is the body's, never the save's: no write
+		if (outcome.kind !== "refused" && outcome.kind !== "holstered") markDirty(sp.userId);
 		Analytics.backpack(sp.save, outcome);
 	};
 	sim.onInteract = sp => markDirty(sp.userId);

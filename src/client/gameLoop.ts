@@ -912,6 +912,8 @@ export class GameLoop {
 		look.y = p.y;
 		look.angle = p.angle;
 		look.weapon = currentWeapon(p);
+		// ITM-06: the weapon put away is drawn as empty hands, as everyone else sees it
+		look.holstered = p.holstered === true;
 		look.feetPhase = this.walkPhase;
 		look.feetAmp = this.walkAmp;
 		look.flash = clamp(p.hitFlash ?? 0, 0, 1);

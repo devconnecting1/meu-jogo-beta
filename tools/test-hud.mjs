@@ -361,6 +361,41 @@ check(
 );
 hud.update(state());
 
+// DESIGN_RULES ITM-06: the weapon PUT AWAY -- empty hands. The same tiles (the list keys 1-5 pick from does not move),
+// none of them blue, and the weapon column says why nothing fires
+{
+	const weaponType = () => deep(consoleFrame(), "WeaponType")?.Text;
+	const typeBefore = weaponType();
+	const away = phase("guarda a Pistol (ITM-06: maos vazias)", () => {
+		for (let i = 0; i < 30; i++) hud.update(state({ holstered: true }));
+	});
+	check(
+		"arma guardada: NENHUM ladrilho azul, a mesma hotbar (as teclas 1-5 nao mudam)",
+		[0, 1, 2, 3, 4].every(k => !sameColor(face(tile(k)), THEME.tabActive)) && hotbar() === expected(PISTOL),
+		hotbar(),
+	);
+	check(
+		"a Pistol guardada e ferro escuro liso como as outras, com a tecla 3 e so a reserva no chip",
+		sameColor(face(tile(2)), SURFACE.section) &&
+			!raised(tile(2)) &&
+			keyLegend(2) === "3" &&
+			ammo(2)?.Text === String(pistolPool()),
+		`${keyLegend(2)} / ${ammo(2)?.Text}`,
+	);
+	check(
+		'a coluna da arma diz "Put away" no lugar do tipo',
+		weaponType() === "Put away" && deep(consoleFrame(), "WeaponName")?.Text === "Pistol",
+		weaponType(),
+	);
+	check("guardar a arma nao cria nem destroi Instance, em 30 quadros", zero(away), cost(away));
+	const drawn = phase("saca a Pistol de novo", () => hud.update(state()));
+	check(
+		"sacada: o azul volta a Pistol (tecla 3) e a coluna diz o tipo de novo",
+		sameColor(face(tile(2)), THEME.tabActive) && raised(tile(2)) && weaponType() === typeBefore && zero(drawn),
+		`${weaponType()} / ${cost(drawn)}`,
+	);
+}
+
 const TILE_COST = tile(0).GetDescendants().length + 1;
 save.invenWeapon[BAT] = 1;
 const pickup = phase("pega o Baseball bat (a lista ganha um item no meio)", () => {

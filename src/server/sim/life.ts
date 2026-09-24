@@ -411,6 +411,9 @@ export class LifeKeeper {
 		}
 		rec.body = undefined;
 		rec.unloaded = false;
+		// ITM-06: the hands are the session's and never kept: a survivor back in the world, kept body or not, stands with
+		// the weapon drawn
+		state.holstered = undefined;
 		const sp = createServerPlayer(
 			{ slot, userId: info.userId, name: info.name },
 			save,
@@ -873,6 +876,8 @@ export class LifeKeeper {
 		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
 		sp.state.x = spawn.x;
 		sp.state.y = spawn.y;
+		// ITM-06: a new town is a new arrival -- the hands are the session's, and it stands with the weapon drawn
+		sp.state.holstered = undefined;
 		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
 		if (serverOwnsLife() && rec.save !== undefined && writeRunBody(rec.save, sp.state)) {
 			this.onSaveChanged?.(rec.userId);
