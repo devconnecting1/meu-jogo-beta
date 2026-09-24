@@ -4,12 +4,134 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # Actions -> CI -> Run workflow (branch main): uploads whatever is still missing and builds the place again
+  workflow_dispatch:
+
+# least privilege: every job only reads, except `assets`, which commits the new asset ids to main
+permissions:
+  contents: read
 
 jobs:
+  # The Roblox assets (docs/CREATOR_HUB.md, "Open Cloud na CI"), BEFORE the place is built, so the place of this same
+  # run already has every id it uploaded. Only on main (a push or Run workflow), never on a pull request: a fork or a
+  # PR never reaches the secret. Without the secrets it only says so and the CI goes on (no id = the flat surface).
+  assets:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    # one upload at a time; a push that lands meanwhile waits (never cancelled mid-upload: that would orphan assets)
+    concurrency:
+      group: roblox-assets
+      cancel-in-progress: false
+    outputs:
+      # what `build` builds: the bot commit with the new ids, or the tip of main when there was nothing to commit
+      sha: ${{ steps.commit.outputs.sha || steps.head.outputs.sha }}
+    steps:
+      # the TIP of main, not this event's commit: a run that waited in the queue sees the ids the previous one pushed
+      # (so nothing is uploaded twice); no token left on disk (only the commit step gets one)
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Commit to build
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # no dependency install script runs in a job that can write to main and holds the Roblox key
+      - name: Install dependencies (without install scripts)
+        run: npm ci --ignore-scripts
+
+      # someone changed the generator and did not run it: fail here, never upload stale art
+      - name: The generated art is the committed art (npm run art:world)
+        id: drift
+        run: |
+          npm run art:world -- --no-sheet
+          node tools/assets-ci.mjs drift
+
+      # the key only ever meets the committed tools/cloud.mjs, not something a dependency rewrote meanwhile
+      - name: The upload tools are the committed ones
+        run: node tools/assets-ci.mjs untouched tools package.json package-lock.json
+
+      # new or changed textures only (by sha1); waits for moderation; only APPROVED ids are written; a rejected
+      # file fails the job and is not sent again; still in review after the wait = `pending`, looked at next run
+      - name: Upload new or changed world art (npm run cloud -- upload-art --ci)
+        id: art
+        continue-on-error: true
+        env:
+          ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
+          ROBLOX_CREATOR_USER_ID: ${{ secrets.ROBLOX_CREATOR_USER_ID }}
+          ROBLOX_CREATOR_GROUP_ID: ${{ secrets.ROBLOX_CREATOR_GROUP_ID }}
+          PZ_MODERATION_WAIT_S: "600"
+        run: npm run cloud -- upload-art --ci
+
+      - name: Upload new or changed audio (once tools/cloud.mjs has upload-audio)
+        id: audio
+        continue-on-error: true
+        env:
+          ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
+          ROBLOX_CREATOR_USER_ID: ${{ secrets.ROBLOX_CREATOR_USER_ID }}
+          ROBLOX_CREATOR_GROUP_ID: ${{ secrets.ROBLOX_CREATOR_GROUP_ID }}
+          PZ_MODERATION_WAIT_S: "600"
+        run: |
+          if node tools/cloud.mjs has upload-audio; then
+            npm run cloud -- upload-audio --ci
+          else
+            echo "tools/cloud.mjs has no upload-audio yet: nothing to upload"
+          fi
+
+      # the approved ids are kept even when another file failed: the next run must not upload them again
+      - name: New ids to commit?
+        id: dirty
+        if: ${{ !cancelled() && steps.drift.outcome == 'success' }}
+        run: |
+          git status --short
+          if [ -n "$(git status --porcelain)" ]; then echo "dirty=true" >> "$GITHUB_OUTPUT"; else echo "dirty=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Typecheck with the new ids (roblox-ts)
+        id: build
+        if: ${{ !cancelled() && steps.dirty.outputs.dirty == 'true' }}
+        run: npm run build
+
+      # only design/*/assets.json and generated src/ modules may be committed (anything else refuses the commit);
+      # [skip ci], and a GITHUB_TOKEN push starts no workflow anyway: the place of that commit is built by `build`
+      # below, in this same run. If main moved during the upload: git pull --rebase, regenerate, push once more.
+      - name: Commit the ids to main as github-actions[bot]
+        id: commit
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+          node tools/assets-ci.mjs commit --branch main --message "art: asset ids uploaded by CI run ${GITHUB_RUN_ID} [skip ci]"
+
+      - name: Fail when a file was rejected or did not upload
+        if: ${{ !cancelled() && (steps.art.outcome == 'failure' || steps.audio.outcome == 'failure') }}
+        run: |
+          echo "::error title=Roblox assets::an upload failed or moderation rejected a file (see this job's summary). The approved ids were committed; this run publishes no place."
+          exit 1
+
   build:
+    # pull requests: `assets` is skipped and this builds the PR exactly as before. main: after `assets`, from the
+    # commit it left, so the place of this run carries the ids it uploaded. The tests run either way; the place is
+    # only published when `assets` succeeded (or did not apply), never with half the assets.
+    needs: assets
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.assets.outputs.sha }}
 
       - uses: actions/setup-node@v5
         with:
@@ -21,12 +143,13 @@ jobs:
 
       # Settings > About shows the version: src/shared/version.ts is generated from package.json (`npm run stamp`) and
       # committed with GAME_BUILD "dev"; the CI checks that copy, then stamps its own with the commit it builds (never
-      # committed back), so the place from Actions says which commit it is
+      # committed back), so the place from Actions says which commit it is (on main that can be the bot commit with
+      # the new asset ids, not the pushed one: HEAD, not GITHUB_SHA)
       - name: Version stamp (version.ts matches package.json; this build carries its commit)
         run: |
           npm run stamp
           git diff --exit-code -- src/shared/version.ts
-          node tools/gen-version.mjs --build "${GITHUB_SHA::7}"
+          node tools/gen-version.mjs --build "$(git rev-parse HEAD | cut -c1-7)"
 
       - name: Typecheck (roblox-ts)
         run: npm run build
@@ -101,12 +224,19 @@ jobs:
       - name: Tables and forms (row pools without churn, nothing sent while a field is wrong, the scoreboard)
         run: npm run test:tables
 
-      # ART-01..06: worldArtAssets.ts is the generated file, and the town's art only ever adds to the flat town
-      - name: Town art (no id = the flat town unchanged, textures, no churn, LEG-03 legibility, render tool)
+      # ART-01..06: the generated art (PNGs, manifest, worldArtAssets.ts, itemIconAtlas.ts) is what the generator
+      # writes -- a pull request catches a forgotten `npm run art:world` before main does -- and the town's art only
+      # ever adds to the flat town
+      - name: Town art (generated = committed; no id = the flat town unchanged, textures, no churn, LEG-03, render tool)
         run: |
           npm run art:world -- --no-sheet
-          git diff --exit-code -- src/client/view/worldArtAssets.ts design/world-art/manifest.json
+          node tools/assets-ci.mjs drift
           npm run test:world-art
+
+      # the `assets` job's logic offline, against the fake Open Cloud and throwaway git repos: missing secrets skip,
+      # moderation waits, a rejection fails and is never re-sent, only approved ids are written, main moving mid-run
+      - name: CI asset uploads (skip without secrets, moderation, rejection, partial success, rebase, the workflow)
+        run: npm run test:assets-ci
 
       # the world renderer's pool: one sub-pool per ZIndex, no ZIndex write in steady state, the lobby warm-up
       - name: Renderer pool (same draw order, a birth or death costs O(1), no ZIndex writes, warm-up without churn)
@@ -197,16 +327,20 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Rojo build
-        run: $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxl
+        run: |
+          "$HOME/.local/bin/rojo" build -o ProjectZ-ci.rbxl
 
       # place properties a script cannot set (Players.BanningEnabled for the admin's Ban API): a fresh build must carry
       # them, or every publish silently resets them to the engine default
       - name: Place properties survive a fresh build (bans enabled, TextChatService)
         run: |
-          $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxlx
+          "$HOME/.local/bin/rojo" build -o ProjectZ-ci.rbxlx
           node tools/check-place.mjs ProjectZ-ci.rbxlx
 
+      # the place the owner downloads: only when `assets` succeeded (every id of this commit is in it) or did not
+      # apply (a pull request, another branch)
       - name: Upload place file
+        if: needs.assets.result == 'success' || needs.assets.result == 'skipped'
         uses: actions/upload-artifact@v6
         with:
           name: place

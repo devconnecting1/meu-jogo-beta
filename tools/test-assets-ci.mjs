@@ -1,0 +1,1097 @@
+#!/usr/bin/env node
+/*
+ * The CI asset pipeline, offline: the job `assets` of .github/workflows/ci.yml, `npm run cloud -- upload-art --ci`
+ * (tools/cloud.mjs) and tools/assets-ci.mjs, against the fake Open Cloud (tools/fake-open-cloud.mjs) and throwaway
+ * git repositories. Nothing here reaches apis.roblox.com or github.com, and no real key is ever read: every run
+ * points PZ_CLOUD_ENV at a missing file, drops the ROBLOX_* / GITHUB_* of the environment and gets fake ones.
+ *
+ *   npm run test:assets-ci
+ *
+ * What this proves:
+ *   1. MISSING SECRETS SKIP. `upload-art --ci` without the key (or without a creator) exits 0 with a ::notice and a
+ *      summary that names what to set up, sends nothing and leaves assets.json alone; the owner's run (no --ci)
+ *      still stops with the .env message, as before.
+ *   2. ONLY APPROVED IDS. Every new or changed texture is uploaded once, as the multipart form the API documents,
+ *      its id written with its sha1 and the module regenerated; a second run uploads nothing. The key goes out
+ *      only in the x-api-key header: on a runner the one line that carries it is `::add-mask::`; it is in no
+ *      other output, no summary, no file.
+ *   3. MODERATION PENDING -> WAIT. A texture in review is read again until it is approved (and only then written).
+ *      Past the wait it stays in `pending` (no id, a ::warning, exit 0); the next run reads it again, never
+ *      uploads it twice, and writes it once approved. An operation that never finishes is kept the same way.
+ *   4. REJECTED -> FAIL. A rejection (at once, or after a review) exits 1 with a ::error and writes no id, while the
+ *      approved ones of the same run ARE written (partial success). CI never sends the same bytes again (each
+ *      rejection counts against the account); new bytes go up; the owner's own run may still retry (as before).
+ *   5. THE TRANSPORT. 429 and 500 are retried with backoff; "Decal" is tried when "Image" answers 400; a key
+ *      without the scope (403) stops at once; the moderation state is read in both spellings (MODERATION_STATE_*
+ *      and the reference's "Approved"), and from the asset's version when the asset omits it; a manifest cannot
+ *      point the upload at another file; `has` answers which commands exist.
+ *   6. END TO END. A copy of the repository with the REAL generator: after `upload-art --ci`, worldArtAssets.ts has
+ *      an id for every texture, the new ones being exactly the approved uploads -- what the place is built from.
+ *   7. GIT. `assets-ci.mjs drift` passes a PNG whose bytes changed but not its pixels (put back as committed) and
+ *      catches real drift; `untouched` catches a changed tool; `commit` commits only assets.json and generated
+ *      modules (anything else refuses it), with [skip ci] as github-actions[bot]; when main moved it rebases,
+ *      rebuilds the generated modules from the merged assets.json (a conflict only there is resolved that way)
+ *      and pushes; a conflict in assets.json itself, or a remote that refuses twice, fails and pushes nothing.
+ *   8. THE WORKFLOW. ci.yml parses (an internal parser, cross-checked with PyYAML and actionlint when present) and
+ *      keeps its promises: no pull_request_target; `assets` only on main, never on a pull request, the only job
+ *      that may write, one at a time; the secrets only in the env of the upload steps; `build` needs `assets`,
+ *      builds its commit and publishes the place only when `assets` succeeded or did not apply.
+ */
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { encodePNG } from "./png-lite.mjs";
+import { classifyChanges, commitAndPush, drift, samePixels, untouched } from "./assets-ci.mjs";
+
+const TOOLS = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(TOOLS, "..");
+const FAKE = join(TOOLS, "fake-open-cloud.mjs");
+const TMP = mkdtempSync(join(tmpdir(), "pz-assets-ci-"));
+
+let failures = 0;
+function check(ok, what, detail) {
+	console.log(`  ${ok ? "ok  " : "FAIL"} ${what}${detail !== undefined ? `  (${detail})` : ""}`);
+	if (!ok) failures++;
+	return ok;
+}
+function section(title) {
+	console.log(`\n${title}`);
+}
+
+const sha1 = bytes => createHash("sha1").update(bytes).digest("hex");
+const keyHash = k => createHash("sha256").update(k).digest("hex").slice(0, 12);
+const KEY = "sk-test-ASSETS-CI-never-print-0123456789";
+const USER = "4815162342";
+
+/** the parent's environment without anything that could carry a real credential or steer the child */
+const baseEnv = Object.fromEntries(
+	Object.entries(process.env).filter(([k]) => !/^(ROBLOX_|GITHUB_|PZ_|RUNNER_)/.test(k) && k !== "CI"),
+);
+
+/** a tiny opaque PNG whose pixels depend on `seed` */
+function png(seed, w = 3, h = 2) {
+	const data = Buffer.alloc(w * h * 4);
+	for (let i = 0; i < w * h; i++) {
+		data[i * 4] = (seed * 37 + i * 11) & 255;
+		data[i * 4 + 1] = (seed * 91 + i * 5) & 255;
+		data[i * 4 + 2] = (seed * 13 + i * 29) & 255;
+		data[i * 4 + 3] = 255;
+	}
+	return encodePNG({ w, h, data });
+}
+
+// ---------------------------------------------------------------- a small repository for cloud.mjs
+
+const MINI = join(TMP, "mini");
+const MINI_ART = join(MINI, "design", "world-art");
+const REGEN_LOG = join(MINI, "regen.log");
+const NAMES = ["lawn", "road", "roof", "sign", "car"];
+
+/** the mini repo as it starts every scenario: lawn up to date, road uploaded but its PNG changed since, 3 new */
+function resetMini() {
+	rmSync(MINI, { recursive: true, force: true });
+	mkdirSync(join(MINI, "tools"), { recursive: true });
+	mkdirSync(MINI_ART, { recursive: true });
+	cpSync(join(TOOLS, "cloud.mjs"), join(MINI, "tools", "cloud.mjs"));
+	cpSync(join(TOOLS, "rtbf.mjs"), join(MINI, "tools", "rtbf.mjs"));
+	// the generator's `--assets` pass, stubbed: it records each call and the ids it would write
+	writeFileSync(
+		join(MINI, "tools", "gen-world-art.mjs"),
+		[
+			'import { appendFileSync, readFileSync } from "node:fs";',
+			'import { join } from "node:path";',
+			'const root = join(import.meta.dirname, "..");',
+			'const a = JSON.parse(readFileSync(join(root, "design/world-art/assets.json"), "utf8"));',
+			'appendFileSync(join(root, "regen.log"), JSON.stringify({ args: process.argv.slice(2), ids: a.ids }) + "\\n");',
+			"",
+		].join("\n"),
+	);
+	const textures = NAMES.map((name, i) => {
+		writeFileSync(join(MINI_ART, `${name}.png`), png(i + 1));
+		return { name, file: `${name}.png`, kind: "tile", w: 3, h: 2, description: `test ${name}` };
+	});
+	writeFileSync(join(MINI_ART, "manifest.json"), JSON.stringify({ textures }, undefined, "\t"));
+	writeFileSync(
+		join(MINI_ART, "assets.json"),
+		`${JSON.stringify(
+			{
+				uploadedAt: "2026-01-01",
+				source: "tools/gen-world-art.mjs + npm run cloud -- upload-art (Open Cloud Assets API)",
+				ids: { lawn: "rbxassetid://111", road: "rbxassetid://222" },
+				sha1: { lawn: sha1(png(1)), road: "0000000000000000000000000000000000000000" },
+			},
+			undefined,
+			"\t",
+		)}\n`,
+	);
+}
+
+const book = () => JSON.parse(readFileSync(join(MINI_ART, "assets.json"), "utf8"));
+const regenCalls = () =>
+	existsSync(REGEN_LOG)
+		? readFileSync(REGEN_LOG, "utf8")
+				.split("\n")
+				.filter(l => l !== "")
+				.map(l => JSON.parse(l))
+		: [];
+const fakeAssetsPath = join(TMP, "fake-assets.json");
+const fakeCloudPath = join(TMP, "fake-cloud.json");
+const summaryPath = join(TMP, "summary.md");
+const fakeAssets = () => JSON.parse(readFileSync(fakeAssetsPath, "utf8"));
+const editFakeAssets = fn => {
+	const s = fakeAssets();
+	fn(s);
+	writeFileSync(fakeAssetsPath, JSON.stringify(s));
+};
+const assetOf = name => Object.values(fakeAssets().byId).filter(a => a.name === name);
+
+/**
+ * One run of the mini repo's cloud.mjs with the fake preloaded. `fresh` starts a new fake Roblox; `secrets` false
+ * sends no key; `creator` false no creator id; `actions` sets GITHUB_ACTIONS=true (then ::add-mask:: is printed).
+ */
+function cloud(args, { plans = {}, fresh = false, secrets = true, creator = true, actions = true, wait, style } = {}) {
+	if (fresh && existsSync(fakeAssetsPath)) rmSync(fakeAssetsPath);
+	writeFileSync(fakeCloudPath, "{}");
+	writeFileSync(summaryPath, "");
+	const env = {
+		...baseEnv,
+		PZ_CLOUD_ENV: join(TMP, "missing.env"),
+		PZ_FAKE_CLOUD_STATE: fakeCloudPath,
+		PZ_FAKE_ASSETS_STATE: fakeAssetsPath,
+		PZ_FAKE_ASSETS: JSON.stringify(plans),
+		GITHUB_STEP_SUMMARY: summaryPath,
+		...(secrets ? { ROBLOX_API_KEY: KEY } : {}),
+		...(creator ? { ROBLOX_CREATOR_USER_ID: USER } : {}),
+		...(actions ? { GITHUB_ACTIONS: "true" } : {}),
+		...(wait !== undefined ? { PZ_MODERATION_WAIT_S: String(wait) } : {}),
+		...(style !== undefined ? { PZ_FAKE_ASSETS_STYLE: style } : {}),
+	};
+	const r = spawnSync(process.execPath, ["--import", FAKE, join(MINI, "tools", "cloud.mjs"), ...args], {
+		encoding: "utf8",
+		env,
+		timeout: 60_000,
+	});
+	const requests = JSON.parse(readFileSync(fakeCloudPath, "utf8")).requests ?? [];
+	return {
+		status: r.status,
+		stdout: r.stdout ?? "",
+		stderr: r.stderr ?? "",
+		out: `${r.stdout}\n${r.stderr}`,
+		requests,
+		posts: requests.filter(q => q.method === "POST" && q.path === "/assets/v1/assets"),
+		summary: readFileSync(summaryPath, "utf8"),
+	};
+}
+
+/** the key only in the ::add-mask:: line of stdout, nowhere else (stderr, summary, assets.json) */
+function keyContained(r) {
+	const lines = r.stdout.split("\n");
+	const carrying = lines.filter(l => l.includes(KEY));
+	return (
+		carrying.every(l => l === `::add-mask::${KEY}`) &&
+		!r.stderr.includes(KEY) &&
+		!r.summary.includes(KEY) &&
+		!readFileSync(join(MINI_ART, "assets.json"), "utf8").includes(KEY)
+	);
+}
+
+try {
+	// ================================================================ 1. missing secrets
+	section("1) missing secrets: --ci skips with a notice and never fails; the owner's run still asks for the .env");
+	{
+		resetMini();
+		const before = readFileSync(join(MINI_ART, "assets.json"), "utf8");
+		const r = cloud(["upload-art", "--ci"], { fresh: true, secrets: false });
+		check(
+			r.status === 0 && /^::notice title=.*::.*ROBLOX_API_KEY/m.test(r.stdout),
+			"no ROBLOX_API_KEY: exit 0 and a ::notice naming it",
+			`exit ${r.status}`,
+		);
+		check(r.requests.length === 0, "nothing is sent", `${r.requests.length} requests`);
+		check(
+			readFileSync(join(MINI_ART, "assets.json"), "utf8") === before && regenCalls().length === 0,
+			"assets.json untouched, nothing regenerated",
+		);
+		check(
+			/Upload pulado/.test(r.summary) && /CREATOR_HUB/.test(r.summary) && /esperando os secrets/.test(r.summary),
+			"the step summary says the upload was skipped, lists what waits and where the setup is",
+		);
+		const noCreator = cloud(["upload-art", "--ci"], { fresh: true, creator: false });
+		check(
+			noCreator.status === 0 &&
+				/ROBLOX_CREATOR_USER_ID/.test(noCreator.stdout) &&
+				noCreator.requests.length === 0,
+			"a key but no creator id: the same skip (exit 0, nothing sent)",
+		);
+		const local = cloud(["upload-art"], { fresh: true, secrets: false, actions: false });
+		check(
+			local.status === 1 && /não achei o \.env/.test(local.stderr) && local.requests.length === 0,
+			"without --ci (the owner's PC) a missing key still stops with the .env message, as before",
+		);
+		const dry = cloud(["upload-art", "--dry-run", "--ci"], { fresh: true, secrets: false });
+		check(
+			dry.status === 0 && /dry run/.test(dry.stdout) && /5 texturas; 4 a enviar/.test(dry.stdout),
+			"--dry-run lists the 4 to send with no key at all",
+			dry.stdout.split("\n")[0],
+		);
+	}
+
+	// ================================================================ 2. approved ids only
+	section("2) every approved upload is written once with its sha1; a second run sends nothing; the key stays hidden");
+	{
+		resetMini();
+		const r = cloud(["upload-art", "--ci"], { fresh: true });
+		const b = book();
+		check(r.status === 0, "exit 0", r.status === 0 ? undefined : r.out.trim().slice(-300));
+		check(
+			r.posts.length === 4 && ["road", "roof", "sign", "car"].every(n => assetOf(n).length === 1),
+			"4 uploads (road changed, roof / sign / car new), each once; lawn (up to date) not sent",
+			`${r.posts.length} POST`,
+		);
+		check(
+			NAMES.every(n => b.sha1[n] === sha1(readFileSync(join(MINI_ART, `${n}.png`)))) &&
+				b.ids.lawn === "rbxassetid://111" &&
+				["road", "roof", "sign", "car"].every(n => b.ids[n] === `rbxassetid://${assetOf(n)[0].id}`),
+			"assets.json: the new ids and the sha1 of each PNG on disk; lawn's id kept",
+		);
+		check(b.pending === undefined && b.rejected === undefined, "nothing pending, nothing rejected");
+		const calls = regenCalls();
+		check(
+			calls.length === 1 && calls[0].args.includes("--assets") && calls[0].ids.roof === b.ids.roof,
+			"the module is regenerated once, from the assets.json that has the new ids",
+		);
+		check(
+			r.requests.every(q => q.host === "apis.roblox.com" && q.keyed && q.keyHash === keyHash(KEY)),
+			"every request goes to apis.roblox.com with the key in the x-api-key header",
+		);
+		check(
+			assetOf("roof")[0].creator.userId === USER &&
+				assetOf("roof")[0].assetType === "Image" &&
+				assetOf("roof")[0].displayName === "ProjectZ world roof",
+			"the form carries the creator, the type and the name the fake validates",
+		);
+		check(
+			r.stdout.split("\n").filter(l => l === `::add-mask::${KEY}`).length === 1 && keyContained(r),
+			"on a runner the key is masked first (::add-mask::) and appears in no other output, summary or file",
+		);
+		check(
+			/\| roof \| aprovado \(enviado agora\) \| rbxassetid:\/\/\d+ \|/.test(r.summary) &&
+				/5 texturas: 1 já no ar · 4 aprovada\(s\) agora\./.test(r.summary),
+			"the step summary: one row per upload and the totals",
+		);
+		const again = cloud(["upload-art", "--ci"]);
+		check(
+			again.status === 0 &&
+				again.posts.length === 0 &&
+				/0 a enviar/.test(again.stdout) &&
+				/nada a enviar/.test(again.summary),
+			"a second run: nothing to send, exit 0",
+		);
+		resetMini();
+		const quiet = cloud(["upload-art", "--ci"], { fresh: true, actions: false });
+		check(
+			quiet.status === 0 &&
+				quiet.posts.length === 4 &&
+				!quiet.stdout.includes("::add-mask::") &&
+				!quiet.out.includes(KEY),
+			"off a runner (the same 4 uploads) no ::add-mask:: line is printed -- it would print the key -- and the key appears nowhere",
+		);
+	}
+
+	// ================================================================ 3. moderation pending -> wait
+	section("3) moderation pending: wait and write once approved; past the wait `pending`, read again next run");
+	{
+		resetMini();
+		const r = cloud(["upload-art", "--ci"], { fresh: true, plans: { roof: "review:3" }, wait: 30 });
+		const roof = assetOf("roof")[0];
+		check(
+			r.status === 0 && book().ids.roof === `rbxassetid://${roof.id}` && roof.reads >= 4,
+			"in review for 3 reads: read again until approved, then written",
+			`${roof.reads} reads`,
+		);
+		check(assetOf("roof").length === 1, "and uploaded only once");
+
+		resetMini();
+		const slow = cloud(["upload-art", "--ci"], { fresh: true, plans: { roof: "review" }, wait: 0.05 });
+		const b = book();
+		const id = assetOf("roof")[0].id;
+		check(
+			slow.status === 0 && /^::warning title=.*::/m.test(slow.stdout),
+			"still in review after the wait: exit 0 with a ::warning (the place is built without it)",
+		);
+		check(
+			b.ids.roof === undefined && b.pending?.roof?.id === String(id) && b.pending.roof.sha1 === sha1(png(3)),
+			"no id written; `pending` keeps its id and sha1",
+			JSON.stringify(b.pending),
+		);
+		check(
+			["road", "sign", "car"].every(n => b.ids[n] !== undefined),
+			"the approved ones of the same run are written",
+		);
+		check(/\| roof \| em análise/.test(slow.summary), "the summary shows it in review");
+		// overnight, Roblox approves it
+		editFakeAssets(s => {
+			s.byId[id].reviews = 0;
+		});
+		const next = cloud(["upload-art", "--ci"], { wait: 0 });
+		check(
+			next.status === 0 && next.posts.length === 0 && book().ids.roof === `rbxassetid://${id}` && !book().pending,
+			"the next run reads it again (no new upload), writes the id and clears `pending`",
+			`${next.posts.length} POST`,
+		);
+		check(/aprovado \(estava em análise\)/.test(next.summary), "summary: approved (was in review)");
+
+		resetMini();
+		const opSlow = cloud(["upload-art", "--ci"], { fresh: true, plans: { car: "op:1000" }, wait: 0 });
+		const pend = book().pending?.car;
+		check(
+			opSlow.status === 0 && pend !== undefined && pend.operation !== undefined && book().ids.car === undefined,
+			"an operation that never finishes: kept in `pending` by its operation, no id (was: uploaded up to 4 times)",
+		);
+		check(assetOf("car").length === 1, "uploaded once");
+		editFakeAssets(s => {
+			s.ops[pend.operation].opPolls = 0;
+		});
+		const opNext = cloud(["upload-art", "--ci"], { wait: 0 });
+		check(
+			opNext.status === 0 &&
+				opNext.posts.length === 0 &&
+				book().ids.car === `rbxassetid://${assetOf("car")[0].id}` &&
+				!book().pending,
+			"next run: the operation is read again, the id written, nothing uploaded again",
+		);
+	}
+
+	// ================================================================ 4. rejected -> fail
+	section(
+		"4) rejected: exit 1, no id, the approved ones of the run still written; the same bytes never re-sent by CI",
+	);
+	{
+		resetMini();
+		const r = cloud(["upload-art", "--ci"], { fresh: true, plans: { sign: "reject" } });
+		const b = book();
+		check(
+			r.status === 1 && /^::error title=.*sign.*::/m.test(r.stdout),
+			"exit 1 with a ::error naming the file",
+			`exit ${r.status}`,
+		);
+		check(
+			b.ids.sign === undefined && b.rejected?.sign?.sha1 === sha1(png(4)),
+			"its id is NOT written; `rejected` keeps its sha1",
+		);
+		check(
+			["road", "roof", "car"].every(n => b.ids[n] === `rbxassetid://${assetOf(n)[0].id}`),
+			"partial success: the approved ids of the same run are written (the next run must not upload them again)",
+		);
+		check(/\| sign \| RECUSADO/.test(r.summary), "the summary row says RECUSADO");
+		const again = cloud(["upload-art", "--ci"]);
+		check(
+			again.status === 1 && again.posts.length === 0 && assetOf("sign").length === 1,
+			"CI again: the same bytes are not sent again, and it still fails until the file changes",
+			`${again.posts.length} POST`,
+		);
+		const owner = cloud(["upload-art"], { actions: false });
+		check(
+			owner.status === 0 && owner.posts.length === 1 && book().ids.sign !== undefined && !book().rejected,
+			"the owner's own run may still retry it (as before); approved, its id is written and `rejected` cleared",
+		);
+
+		resetMini();
+		cloud(["upload-art", "--ci"], { fresh: true, plans: { sign: "reject" } });
+		writeFileSync(join(MINI_ART, "sign.png"), png(44));
+		const fixed = cloud(["upload-art", "--ci"]);
+		check(
+			fixed.status === 0 && fixed.posts.length === 1 && book().ids.sign !== undefined && !book().rejected,
+			"a new PNG for it: uploaded, approved, written",
+		);
+
+		resetMini();
+		const late = cloud(["upload-art", "--ci"], { fresh: true, plans: { car: "review:2:reject" }, wait: 30 });
+		check(
+			late.status === 1 && book().ids.car === undefined && book().rejected?.car !== undefined && !book().pending,
+			"rejected after a review: the wait sees it, exit 1, no id",
+		);
+	}
+
+	// ================================================================ 5. transport and guards
+	section("5) the transport: retries, Decal, 403, both spellings, the version fallback, the manifest guard, `has`");
+	{
+		resetMini();
+		const flaky = cloud(["upload-art", "--ci"], { fresh: true, plans: { "*": "429:2,500:1" } });
+		check(
+			flaky.status === 0 &&
+				flaky.posts.length === 16 &&
+				["road", "roof", "sign", "car"].every(n => book().ids[n] !== undefined),
+			"429, 429, 500, then 201 for each: retried with backoff, every id written",
+			`${flaky.posts.length} POST`,
+		);
+		resetMini();
+		const decal = cloud(["upload-art", "--ci"], { fresh: true, plans: { "*": "imageBad" } });
+		check(
+			decal.status === 0 && Object.values(fakeAssets().byId).every(a => a.assetType === "Decal"),
+			'"Image" refused with 400 (an older API): "Decal" is used for the rest of the run',
+		);
+		resetMini();
+		const denied = cloud(["upload-art", "--ci"], { fresh: true, plans: { "*": "denied" } });
+		check(
+			denied.status === 1 && denied.posts.length === 1 && /escopo/.test(denied.stderr),
+			"a key without asset:write (403): stops at the first upload with the reason",
+		);
+		resetMini();
+		const doc = cloud(["upload-art", "--ci"], { fresh: true, style: "doc", plans: { roof: "review:1" }, wait: 30 });
+		check(
+			doc.status === 0 && book().ids.roof !== undefined,
+			'moderation spelled as the reference describes it ("Reviewing" / "Approved") is understood too',
+		);
+		resetMini();
+		const nomod = cloud(["upload-art", "--ci"], { fresh: true, plans: { roof: "nomod" } });
+		check(
+			nomod.status === 0 &&
+				book().ids.roof !== undefined &&
+				nomod.requests.some(q => /^\/assets\/v1\/assets\/\d+\/versions\/1$/.test(q.path)),
+			"no moderationResult on the asset: it is read from the asset's version",
+		);
+		resetMini();
+		const lenient = cloud(["upload-art"], { fresh: true, actions: false, plans: { roof: "review" } });
+		check(
+			lenient.status === 0 && book().ids.roof !== undefined && !book().pending,
+			"the owner's run (no --ci) writes an id still in review at once, exactly as before",
+		);
+		resetMini();
+		const m = JSON.parse(readFileSync(join(MINI_ART, "manifest.json"), "utf8"));
+		m.textures[1].file = "../../regen.log";
+		writeFileSync(join(MINI_ART, "manifest.json"), JSON.stringify(m));
+		const evil = cloud(["upload-art", "--ci"], { fresh: true });
+		check(
+			evil.status === 1 && evil.requests.length === 0,
+			"a manifest entry pointing outside design/world-art/<name>.png is refused before anything is read or sent",
+		);
+		resetMini();
+		const has = name => cloud(["has", name]).status;
+		check(
+			has("upload-art") === 0 && has("upload-audio") === 1 && has("toString") === 1 && has("") === 1,
+			"`has <command>`: 0 for upload-art, 1 for one that does not exist (yet: upload-audio) or a prototype name",
+		);
+	}
+
+	// ================================================================ 6. end to end with the real generator
+	section("6) end to end: the real generator writes every approved id into worldArtAssets.ts");
+	{
+		const FULL = join(TMP, "full");
+		for (const dir of ["tools", "src", "design"]) cpSync(join(ROOT, dir), join(FULL, dir), { recursive: true });
+		const assetsPath = join(FULL, "design", "world-art", "assets.json");
+		const manifest = JSON.parse(readFileSync(join(FULL, "design", "world-art", "manifest.json"), "utf8"));
+		const a = JSON.parse(readFileSync(assetsPath, "utf8"));
+		// two textures lose their upload, whatever the real assets.json holds today
+		for (const name of ["grass", "itemIcons"]) {
+			delete a.ids[name];
+			delete a.sha1[name];
+		}
+		writeFileSync(assetsPath, JSON.stringify(a));
+		const upToDate = manifest.textures.filter(t => {
+			const bytes = readFileSync(join(FULL, "design", "world-art", t.file));
+			return a.ids[t.name] && a.sha1[t.name] === sha1(bytes);
+		});
+		if (existsSync(fakeAssetsPath)) rmSync(fakeAssetsPath);
+		writeFileSync(fakeCloudPath, "{}");
+		const r = spawnSync(
+			process.execPath,
+			["--import", FAKE, join(FULL, "tools", "cloud.mjs"), "upload-art", "--ci"],
+			{
+				encoding: "utf8",
+				timeout: 180_000,
+				env: {
+					...baseEnv,
+					NODE_PATH: join(ROOT, "node_modules"),
+					PZ_CLOUD_ENV: join(TMP, "missing.env"),
+					PZ_FAKE_CLOUD_STATE: fakeCloudPath,
+					PZ_FAKE_ASSETS_STATE: fakeAssetsPath,
+					ROBLOX_API_KEY: KEY,
+					ROBLOX_CREATOR_USER_ID: USER,
+					GITHUB_STEP_SUMMARY: summaryPath,
+				},
+			},
+		);
+		const ts = readFileSync(join(FULL, "src", "client", "view", "worldArtAssets.ts"), "utf8");
+		const idIn = name => new RegExp(`\\t${name}: \\{ id: "(rbxassetid://\\d+)"`).exec(ts)?.[1];
+		const uploaded = Object.values(fakeAssets().byId);
+		check(
+			r.status === 0,
+			"upload-art --ci over the whole manifest: exit 0",
+			r.status === 0 ? undefined : r.stderr.slice(-300),
+		);
+		check(
+			uploaded.length === manifest.textures.length - upToDate.length,
+			"exactly the textures without an up-to-date id were uploaded",
+			`${uploaded.length} of ${manifest.textures.length}`,
+		);
+		check(
+			manifest.textures.every(t => idIn(t.name) !== undefined),
+			"worldArtAssets.ts (the real generator): every texture has an id -- the place of that run is complete",
+		);
+		check(
+			uploaded.every(u => idIn(u.name) === `rbxassetid://${u.id}`) &&
+				upToDate.every(t => idIn(t.name) === a.ids[t.name]),
+			"the new ids are the approved uploads (the atlas too: its sha1 is its PNG's); the others are unchanged",
+		);
+	}
+
+	// ================================================================ 7. git: drift, untouched, commit
+	section("7) git: drift (zlib-only changes pass), untouched, and the bot commit with its rebase");
+	{
+		const G = join(TMP, "git");
+		// no config of this machine (a global commit.gpgsign, a hook path...) reaches the fixtures, ours or the tool's
+		writeFileSync(join(TMP, "gitconfig"), "");
+		process.env.GIT_CONFIG_GLOBAL = join(TMP, "gitconfig");
+		process.env.GIT_CONFIG_NOSYSTEM = "1";
+		const gitEnv = {
+			...baseEnv,
+			GIT_AUTHOR_NAME: "Someone",
+			GIT_AUTHOR_EMAIL: "someone@example.com",
+			GIT_COMMITTER_NAME: "Someone",
+			GIT_COMMITTER_EMAIL: "someone@example.com",
+			GIT_CONFIG_GLOBAL: join(TMP, "gitconfig"),
+			GIT_CONFIG_NOSYSTEM: "1",
+		};
+		const git = (cwd, ...args) => {
+			const r = spawnSync("git", args, { cwd, encoding: "utf8", env: gitEnv });
+			if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+			return r.stdout.trim();
+		};
+		const write = (root, path, text) => {
+			mkdirSync(dirname(join(root, path)), { recursive: true });
+			writeFileSync(join(root, path), text);
+		};
+		// the same generated module the stub regenerator writes: one line per texture of the manifest
+		const genModule = root => {
+			const m = JSON.parse(readFileSync(join(root, "design/world-art/manifest.json"), "utf8"));
+			const ids = JSON.parse(readFileSync(join(root, "design/world-art/assets.json"), "utf8")).ids;
+			return `// generated by tools/gen-world-art.mjs\n${m.names.map(n => `${n}=${ids[n] ?? ""}`).join("\n")}\n`;
+		};
+		const regen = root => () => write(root, "src/client/view/worldArtAssets.ts", genModule(root));
+
+		const REMOTE = join(G, "remote.git");
+		const SEED = join(G, "seed");
+		mkdirSync(G, { recursive: true });
+		git(G, "init", "--quiet", "--bare", "--initial-branch=main", REMOTE);
+		git(G, "init", "--quiet", "--initial-branch=main", SEED);
+		write(SEED, "design/world-art/a.png", png(9, 8, 8));
+		write(SEED, "design/world-art/manifest.json", JSON.stringify({ names: ["a", "b"] }));
+		write(
+			SEED,
+			"design/world-art/assets.json",
+			`${JSON.stringify({ ids: { a: "rbxassetid://1" } }, undefined, "\t")}\n`,
+		);
+		write(SEED, "src/other.ts", "export const x = 1;\n");
+		write(SEED, "tools/cloud.mjs", "// the tool\n");
+		regen(SEED)();
+		git(SEED, "add", "-A");
+		git(SEED, "commit", "--quiet", "-m", "seed");
+		git(SEED, "remote", "add", "origin", REMOTE);
+		git(SEED, "push", "--quiet", "origin", "main");
+		const clone = name => {
+			const dir = join(G, name);
+			rmSync(dir, { recursive: true, force: true });
+			git(G, "clone", "--quiet", REMOTE, dir);
+			return dir;
+		};
+
+		// drift
+		const W = clone("drift");
+		check(drift(W).drifted.length === 0, "drift: a clean checkout has none");
+		// the same pixels in other bytes: the IDAT split in two chunks (what another zlib or optimiser could write)
+		const orig = readFileSync(join(W, "design/world-art/a.png"));
+		const other = splitIdat(orig);
+		check(!other.equals(orig) && samePixels(orig, other), "(fixture: other bytes, same pixels)");
+		writeFileSync(join(W, "design/world-art/a.png"), other);
+		let regens = 0;
+		const d1 = drift(W, { regen: () => regens++ });
+		check(
+			d1.drifted.length === 0 &&
+				d1.restored.includes("design/world-art/a.png") &&
+				readFileSync(join(W, "design/world-art/a.png")).equals(orig) &&
+				regens === 1,
+			"a PNG with other bytes but the same pixels is put back as committed (the upload dedupes by its sha1) and the module regenerated",
+		);
+		writeFileSync(join(W, "design/world-art/a.png"), png(10, 8, 8));
+		write(W, "design/world-art/new.png", png(11));
+		write(W, "src/client/view/worldArtAssets.ts", "// generated by tools/gen-world-art.mjs\nstale\n");
+		const d2 = drift(W).drifted.map(r => r.path);
+		check(
+			["design/world-art/a.png", "design/world-art/new.png", "src/client/view/worldArtAssets.ts"].every(p =>
+				d2.includes(p),
+			),
+			"real drift is caught: a changed pixel, a new PNG, a stale generated module",
+			d2.join(", "),
+		);
+		const U = clone("untouched");
+		check(untouched(U, ["tools", "package.json"]).length === 0, "untouched: nothing changed since the checkout");
+		write(U, "tools/cloud.mjs", "// rewritten by a dependency\n");
+		check(
+			untouched(U, ["tools", "package.json"])
+				.map(r => r.path)
+				.join() === "tools/cloud.mjs",
+			"untouched: a rewritten tool is caught before the key is handed over",
+		);
+
+		// what an upload may commit
+		const C = clone("classify");
+		write(C, "design/world-art/assets.json", "{}\n");
+		write(C, "design/audio/assets.json", "{}\n");
+		write(C, "src/client/view/worldArtAssets.ts", "// generated by tools/gen-world-art.mjs\nx\n");
+		write(C, "src/shared/data/audioAssets.ts", "// generated by tools/cloud.mjs upload-audio\nx\n");
+		let cl = classifyChanges(C);
+		check(
+			cl.refused.length === 0 && cl.allowed.length === 4,
+			"allowed: design/*/assets.json (world art and audio) and src/ modules that say they are generated",
+			cl.allowed.join(", "),
+		);
+		write(C, "src/other.ts", "export const x = 2;\n");
+		rmSync(join(C, "tools/cloud.mjs"));
+		cl = classifyChanges(C);
+		check(
+			cl.refused.includes("src/other.ts") && cl.refused.includes("tools/cloud.mjs"),
+			"refused: a hand-written source, a deleted file",
+			cl.refused.join(", "),
+		);
+
+		// commit and push
+		const bumpIds = (root, extra) => {
+			const p = join(root, "design/world-art/assets.json");
+			const a = JSON.parse(readFileSync(p, "utf8"));
+			Object.assign(a.ids, extra);
+			writeFileSync(p, `${JSON.stringify(a, undefined, "\t")}\n`);
+			regen(root)();
+		};
+		const remoteLog = () => git(REMOTE, "log", "--format=%an|%s", "main").split("\n");
+		const quiet = () => {};
+
+		const N = clone("nothing");
+		const n = commitAndPush(N, { branch: "main", message: "x [skip ci]", regen: regen(N), log: quiet });
+		check(
+			n.pushed === false && n.error === undefined && n.sha === git(N, "rev-parse", "HEAD"),
+			"nothing new: no commit, `sha` = the checkout",
+		);
+
+		const P = clone("push");
+		bumpIds(P, { b: "rbxassetid://2" });
+		const p = commitAndPush(P, { branch: "main", message: "art: ids [skip ci]", regen: regen(P), log: quiet });
+		const files = git(REMOTE, "show", "--name-only", "--format=", "main").split("\n").sort();
+		check(
+			p.pushed && p.error === undefined && p.sha === git(REMOTE, "rev-parse", "main"),
+			"new ids: committed and pushed; `sha` is what main now points at",
+		);
+		check(
+			remoteLog()[0] === "github-actions[bot]|art: ids [skip ci]" &&
+				files.join() === "design/world-art/assets.json,src/client/view/worldArtAssets.ts",
+			"as github-actions[bot], [skip ci], only assets.json and the generated module",
+			`${remoteLog()[0]}; ${files.join(", ")}`,
+		);
+
+		// main moves while the upload runs: someone adds texture "c" (manifest + the generated module) while the
+		// upload re-sent "b" and uploaded "c" -- both sides rewrote neighbouring lines of the generated module
+		const M = clone("moved");
+		const O = clone("other");
+		bumpIds(M, { b: "rbxassetid://22", c: "rbxassetid://3" });
+		const om = JSON.parse(readFileSync(join(O, "design/world-art/manifest.json"), "utf8"));
+		om.names.push("c");
+		write(O, "design/world-art/manifest.json", JSON.stringify(om));
+		regen(O)();
+		git(O, "commit", "--quiet", "-am", "art: texture c");
+		git(O, "push", "--quiet", "origin", "main");
+		const logs = [];
+		const mv = commitAndPush(M, {
+			branch: "main",
+			message: "art: ids [skip ci]",
+			regen: regen(M),
+			log: l => logs.push(l),
+		});
+		const final = git(REMOTE, "show", "main:src/client/view/worldArtAssets.ts");
+		check(
+			mv.pushed && mv.rebased && mv.error === undefined,
+			"main moved during the upload: git pull --rebase, pushed on the second try",
+			mv.error,
+		);
+		check(
+			logs.some(l => /conflito só nos módulos gerados/.test(l)),
+			"the conflict in the generated module is no conflict: it is rebuilt from the merged assets.json",
+		);
+		check(
+			remoteLog().slice(0, 2).join(" / ") === "github-actions[bot]|art: ids [skip ci] / Someone|art: texture c" &&
+				final ===
+					"// generated by tools/gen-world-art.mjs\na=rbxassetid://1\nb=rbxassetid://22\nc=rbxassetid://3",
+			"the bot commit sits on top, and the module has both: the new manifest's texture c and the new ids",
+			final.split("\n").slice(1).join(" "),
+		);
+
+		// a real conflict: someone uploaded by hand meanwhile (assets.json on both sides)
+		const X = clone("conflict");
+		const Y = clone("hand");
+		bumpIds(X, { d: "rbxassetid://40" });
+		bumpIds(Y, { d: "rbxassetid://41" });
+		git(Y, "commit", "--quiet", "-am", "art: by hand");
+		git(Y, "push", "--quiet", "origin", "main");
+		const before = git(REMOTE, "rev-parse", "main");
+		const cf = commitAndPush(X, { branch: "main", message: "art: ids [skip ci]", regen: regen(X), log: quiet });
+		check(
+			!cf.pushed && /conflito/.test(cf.error ?? "") && git(REMOTE, "rev-parse", "main") === before,
+			"a conflict in assets.json itself (someone uploaded by hand meanwhile): fails, pushes nothing",
+			cf.error?.split(":")[0],
+		);
+
+		const R = clone("refused");
+		bumpIds(R, { e: "rbxassetid://5" });
+		write(R, "src/other.ts", "export const x = 3;\n");
+		const rf = commitAndPush(R, { branch: "main", message: "x [skip ci]", regen: regen(R), log: quiet });
+		check(
+			!rf.pushed && /src\/other\.ts/.test(rf.error ?? "") && git(REMOTE, "rev-parse", "main") === before,
+			"a hand-written file changed too: the whole commit is refused, nothing pushed",
+		);
+
+		const H = clone("hook");
+		writeFileSync(join(REMOTE, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		bumpIds(H, { f: "rbxassetid://6" });
+		const hk = commitAndPush(H, { branch: "main", message: "x [skip ci]", regen: regen(H), log: quiet });
+		rmSync(join(REMOTE, "hooks", "pre-receive"));
+		check(
+			!hk.pushed && /duas vezes/.test(hk.error ?? "") && git(REMOTE, "rev-parse", "main") === before,
+			"a remote that refuses the push (a protected branch): one retry, then it fails",
+		);
+
+		const cli = spawnSync(
+			process.execPath,
+			[join(TOOLS, "assets-ci.mjs"), "commit", "--branch", "main", "--message", "no skip"],
+			{
+				encoding: "utf8",
+				env: baseEnv,
+			},
+		);
+		check(cli.status === 1 && /skip ci/.test(cli.stderr), "the command refuses a message without [skip ci]");
+	}
+
+	// ================================================================ 8. the workflow
+	section("8) .github/workflows/ci.yml: parses, and keeps its promises");
+	{
+		const text = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+		let wf;
+		try {
+			wf = parseYaml(text);
+			check(true, "parses (internal YAML parser)");
+		} catch (e) {
+			check(false, "parses (internal YAML parser)", e.message);
+		}
+		const py = spawnSync(
+			"python3",
+			[
+				"-c",
+				"import sys, json, yaml\nd = yaml.safe_load(sys.stdin)\nd = {('on' if k is True else k): v for k, v in d.items()}\nprint(json.dumps(d))",
+			],
+			{ input: text, encoding: "utf8" },
+		);
+		if (py.status === 0) {
+			check(
+				JSON.stringify(sortKeys(JSON.parse(py.stdout))) === JSON.stringify(sortKeys(wf)),
+				"PyYAML reads the same document",
+			);
+		} else console.log("  (python3 + PyYAML not here: only the internal parser)");
+		const al = spawnSync("actionlint", ["-no-color", join(ROOT, ".github", "workflows", "ci.yml")], {
+			encoding: "utf8",
+		});
+		if (al.error === undefined) check(al.status === 0, "actionlint: no findings", al.stdout.trim().split("\n")[0]);
+		else console.log("  (actionlint not on PATH: skipped)");
+
+		if (wf !== undefined) {
+			const { assets, build } = wf.jobs;
+			const steps = assets.steps;
+			const at = pred => steps.findIndex(pred);
+			const art = at(s => /upload-art --ci/.test(s.run ?? ""));
+			const audio = at(s => /upload-audio/.test(s.run ?? ""));
+			const commit = at(s => /assets-ci\.mjs commit/.test(s.run ?? ""));
+			check(
+				wf.on.push.branches.includes("main") && "pull_request" in wf.on && "workflow_dispatch" in wf.on,
+				"triggers: push to main, pull_request (build only), workflow_dispatch (force a run)",
+			);
+			check(
+				!/pull_request_target/.test(text),
+				"no pull_request_target anywhere (a fork's code never meets a secret)",
+			);
+			check(
+				/github\.event_name != 'pull_request'/.test(assets.if) &&
+					/github\.ref == 'refs\/heads\/main'/.test(assets.if),
+				"`assets` runs only on main and never for a pull request",
+			);
+			check(
+				wf.permissions.contents === "read" &&
+					assets.permissions.contents === "write" &&
+					Object.entries(wf.jobs).every(([name, j]) => name === "assets" || j.permissions === undefined),
+				"contents: write only for `assets`; the workflow default is read",
+			);
+			check(
+				typeof assets.concurrency.group === "string" && assets.concurrency["cancel-in-progress"] === false,
+				"`assets` has a concurrency group and is never cancelled mid-upload",
+			);
+			const secretSteps = steps.filter(s => JSON.stringify(s).includes("secrets."));
+			check(
+				secretSteps.length === 2 &&
+					secretSteps.every(
+						s => !/secrets\./.test(s.run ?? "") && /secrets\.ROBLOX_API_KEY/.test(s.env.ROBLOX_API_KEY),
+					) &&
+					!JSON.stringify(build).includes("secrets.") &&
+					assets.env === undefined &&
+					wf.env === undefined,
+				"the secrets only in the env of the two upload steps (never in a script, the job, the workflow or `build`)",
+			);
+			check(
+				steps[0].uses.startsWith("actions/checkout") &&
+					steps[0].with["persist-credentials"] === false &&
+					steps[0].with.ref === "main",
+				"`assets` checks out the tip of main and leaves no token on disk",
+			);
+			check(
+				steps.some(s => s.run === "npm ci --ignore-scripts"),
+				"`assets` installs without dependency install scripts",
+			);
+			check(
+				at(s => /assets-ci\.mjs drift/.test(s.run ?? "")) < art &&
+					at(s => /assets-ci\.mjs untouched tools/.test(s.run ?? "")) < art &&
+					at(s => s.id === "build") > audio &&
+					at(s => s.id === "build") < commit &&
+					audio > art,
+				"order: drift -> untouched -> upload art -> audio -> build -> commit",
+			);
+			check(
+				steps[art]["continue-on-error"] === true &&
+					steps[audio]["continue-on-error"] === true &&
+					/node tools\/cloud\.mjs has upload-audio/.test(steps[audio].run),
+				"the uploads never skip the commit of what was approved; audio only runs once cloud.mjs has upload-audio",
+			);
+			check(
+				/\[skip ci\]/.test(steps[commit].run) && /::add-mask::/.test(steps[commit].run),
+				"the commit carries [skip ci]; the push credential is masked",
+			);
+			const last = steps[steps.length - 1];
+			check(
+				/steps\.art\.outcome == 'failure'/.test(last.if) && /exit 1/.test(last.run),
+				"a rejected or failed upload still fails the job at the end",
+			);
+			check(
+				/steps\.commit\.outputs\.sha/.test(assets.outputs.sha) &&
+					/steps\.head\.outputs\.sha/.test(assets.outputs.sha),
+				"`assets` hands `build` the bot commit, or the checkout when there was nothing to commit",
+			);
+			const place = build.steps.find(s => s.with?.name === "place");
+			check(
+				build.needs === "assets" &&
+					/!cancelled\(\)/.test(build.if) &&
+					build.steps[0].with.ref === "${{ needs.assets.outputs.sha }}" &&
+					/needs\.assets\.result == 'success'/.test(place.if) &&
+					/needs\.assets\.result == 'skipped'/.test(place.if),
+				"`build` runs after `assets`, from its commit; the place is published only if `assets` succeeded or did not apply",
+			);
+			check(
+				build.steps.some(s => /gen-version\.mjs --build "\$\(git rev-parse HEAD/.test(s.run ?? "")) &&
+					!text.includes("GITHUB_SHA::7"),
+				"the version stamp names the commit actually built (HEAD), not the pushed one",
+			);
+			check(
+				build.steps.some(s => /assets-ci\.mjs drift/.test(s.run ?? "")) &&
+					build.steps.some(s => s.run === "npm run test:assets-ci"),
+				"`build` checks drift on every PR and runs this suite",
+			);
+		}
+	}
+} finally {
+	rmSync(TMP, { recursive: true, force: true });
+}
+
+console.log(failures === 0 ? "\nassets-ci: all checks passed" : `\nassets-ci: ${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);
+
+// ---------------------------------------------------------------- helpers
+
+/** the same PNG with its IDAT split in two chunks: other bytes, the same image */
+function splitIdat(buf) {
+	const chunks = [];
+	let pos = 8;
+	while (pos < buf.length) {
+		const len = buf.readUInt32BE(pos);
+		chunks.push({ type: buf.toString("latin1", pos + 4, pos + 8), data: buf.subarray(pos + 8, pos + 8 + len) });
+		pos += 12 + len;
+	}
+	const out = [buf.subarray(0, 8)];
+	for (const c of chunks) {
+		if (c.type !== "IDAT" || c.data.length < 2) out.push(chunk(c.type, c.data));
+		else {
+			const half = c.data.length >> 1;
+			out.push(chunk("IDAT", c.data.subarray(0, half)), chunk("IDAT", c.data.subarray(half)));
+		}
+	}
+	return Buffer.concat(out);
+}
+
+function chunk(type, data) {
+	const len = Buffer.alloc(4);
+	len.writeUInt32BE(data.length);
+	const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+	const crc = Buffer.alloc(4);
+	crc.writeUInt32BE(crc32(body));
+	return Buffer.concat([len, body, crc]);
+}
+
+function crc32(buf) {
+	let c = 0xffffffff;
+	for (const b of buf) {
+		c ^= b;
+		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+	}
+	return (c ^ 0xffffffff) >>> 0;
+}
+
+function sortKeys(v) {
+	if (Array.isArray(v)) return v.map(sortKeys);
+	if (v !== null && typeof v === "object") {
+		return Object.fromEntries(
+			Object.keys(v)
+				.sort()
+				.map(k => [k, sortKeys(v[k])]),
+		);
+	}
+	return v;
+}
+
+/**
+ * The block-style YAML a GitHub workflow is written in: maps, sequences (with maps as items), `|` block scalars,
+ * flow sequences of plain words, quoted and plain scalars, comments. Anything else throws: a workflow that needs
+ * more than this should say so here first. Duplicate keys throw too (YAML parsers keep the last one silently).
+ */
+function parseYaml(src) {
+	const lines = src.split(/\r?\n/);
+	let i = 0;
+	const indentOf = s => s.length - s.trimStart().length;
+	const blank = s => s.trim() === "" || s.trim().startsWith("#");
+	const skip = () => {
+		while (i < lines.length && blank(lines[i])) i++;
+	};
+	const KEY = /^([\w.-]+(?: [\w.-]+)*):(?: +(.*))?$/;
+	const fail = msg => {
+		throw new Error(`ci.yml line ${i + 1}: ${msg}`);
+	};
+
+	function stripComment(s) {
+		let quote;
+		for (let k = 0; k < s.length; k++) {
+			const c = s[k];
+			if (quote !== undefined) {
+				if (c === quote) quote = undefined;
+			} else if (c === '"' || c === "'") quote = c;
+			else if (c === "#" && (k === 0 || s[k - 1] === " ")) return s.slice(0, k).trimEnd();
+		}
+		return s.trimEnd();
+	}
+	function scalar(s) {
+		s = s.trim();
+		if (s.startsWith('"')) {
+			if (!s.endsWith('"') || s.length < 2) fail(`unterminated string ${s}`);
+			return JSON.parse(s);
+		}
+		if (s.startsWith("'")) {
+			if (!s.endsWith("'") || s.length < 2) fail(`unterminated string ${s}`);
+			return s.slice(1, -1).replace(/''/g, "'");
+		}
+		if (s.startsWith("[")) {
+			if (!s.endsWith("]")) fail(`unterminated flow sequence ${s}`);
+			const inner = s.slice(1, -1).trim();
+			return inner === "" ? [] : inner.split(",").map(x => scalar(x));
+		}
+		if (s.startsWith("{") || s.startsWith("&") || s.startsWith("*") || s.startsWith("!")) fail(`unsupported ${s}`);
+		if (s === "true" || s === "false") return s === "true";
+		if (s === "" || s === "null" || s === "~") return null;
+		if (/^-?\d+$/.test(s)) return Number(s);
+		if (/: |\s#/.test(s)) fail(`ambiguous plain scalar ${s}`);
+		return s;
+	}
+	function block(parentIndent, header) {
+		if (header !== "|" && header !== "|-") fail(`unsupported block scalar ${header}`);
+		const out = [];
+		let at = -1;
+		while (i < lines.length) {
+			const line = lines[i];
+			if (line.trim() === "") {
+				out.push("");
+				i++;
+				continue;
+			}
+			const ind = indentOf(line);
+			if (ind <= parentIndent) break;
+			if (at < 0) at = ind;
+			if (ind < at) fail("block scalar dedent");
+			out.push(line.slice(at));
+			i++;
+		}
+		while (out.length > 0 && out[out.length - 1] === "") out.pop();
+		return header === "|-" ? out.join("\n") : `${out.join("\n")}\n`;
+	}
+	function value(rest, indent) {
+		if (rest.startsWith("|")) return block(indent, rest);
+		if (rest !== "") return scalar(rest);
+		skip();
+		if (i >= lines.length) return null;
+		const ind = indentOf(lines[i]);
+		if (ind > indent) return node(ind);
+		if (ind === indent && /^- /.test(lines[i].trim())) return seq(ind);
+		return null;
+	}
+	function node(indent) {
+		skip();
+		return /^-( |$)/.test(lines[i].trim()) ? seq(indent) : map(indent);
+	}
+	function map(indent) {
+		const obj = {};
+		for (;;) {
+			skip();
+			if (i >= lines.length) return obj;
+			const ind = indentOf(lines[i]);
+			if (ind < indent) return obj;
+			if (ind > indent) fail("unexpected indentation");
+			const t = lines[i].trim();
+			if (/^-( |$)/.test(t)) return obj;
+			const m = KEY.exec(t);
+			if (!m) fail(`expected "key: value": ${t}`);
+			if (Object.hasOwn(obj, m[1])) fail(`duplicate key ${m[1]}`);
+			i++;
+			obj[m[1]] = value(m[2] === undefined ? "" : stripComment(m[2]), indent);
+		}
+	}
+	function seq(indent) {
+		const arr = [];
+		for (;;) {
+			skip();
+			if (i >= lines.length) return arr;
+			const line = lines[i];
+			const ind = indentOf(line);
+			if (ind < indent) return arr;
+			if (ind > indent) fail("unexpected indentation in a sequence");
+			const t = line.trim();
+			if (!/^-( |$)/.test(t)) return arr;
+			const after = t.slice(1).trimStart();
+			const col = ind + (t.length - after.length);
+			if (after === "") {
+				i++;
+				arr.push(node(indent + 1));
+			} else if (KEY.test(after)) {
+				lines[i] = " ".repeat(col) + after;
+				arr.push(map(col));
+			} else {
+				i++;
+				arr.push(scalar(stripComment(after)));
+			}
+		}
+	}
+	const doc = map(0);
+	skip();
+	if (i < lines.length) fail("trailing content");
+	return doc;
+}
