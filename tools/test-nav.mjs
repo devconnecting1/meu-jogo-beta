@@ -764,14 +764,10 @@ console.log(
 		check("no Studio o servidor recusa e a tela explica (Close em foco), e o B fecha", studio && !popupUp());
 
 		sent.length = 0;
-		ctx.phase = "playing";
-		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
-		beat();
-		flush();
-		const notInRun = !popupUp();
 		ctx.phase = "lobby";
 		Match.askPlaySolo();
 		flush();
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
 		beat();
 		flush();
 		const onlyOne = layer.GetChildren().filter(c => c.Name === "PopupOverlay").length === 1;
@@ -790,9 +786,53 @@ console.log(
 		flush();
 		const unanswered = !popupUp() && sent.length === 0;
 		check(
-			'a oferta espera o lobby livre (nada numa partida, nada sobre outra pergunta); "Town · Day 23" com o foco no New town; B fecha sem resposta e ela nao volta',
-			notInRun && onlyOne && title && cardFocus && unanswered,
-			JSON.stringify({ notInRun, onlyOne, title, cardFocus, unanswered }),
+			'a oferta espera o lobby livre (nada sobre outra pergunta); "Town · Day 23" com o foco no New town; B fecha sem resposta e ela nao volta',
+			onlyOne && title && cardFocus && unanswered,
+			JSON.stringify({ onlyOne, title, cardFocus, unanswered }),
+		);
+
+		// LOW 3 (the review of f25727a): an offer that did not get its free lobby is dropped for good -- a run that
+		// started (the player chose to play here), or the server's lapse (600 s) -- never a card popping up later
+		ctx.phase = "playing";
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		ctx.phase = "lobby";
+		beat();
+		flush();
+		const droppedInRun = !popupUp();
+		Match.askPlaySolo();
+		flush();
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		ui.setClock(ui.getClock() + 601);
+		tap(B(), true);
+		flush();
+		beat();
+		flush();
+		const droppedLate = !popupUp() && sent.length === 0;
+		check(
+			"uma oferta que nao achou o lobby livre some de vez: uma partida comecou, ou passaram os 600 s do servidor (nenhum cartao depois)",
+			droppedInRun && droppedLate,
+			JSON.stringify({ droppedInRun, droppedLate }),
+		);
+
+		// H1: the kept body is in danger -- a question with its reason, Close in focus, B closes it
+		remote.OnClientEvent.Fire({ k: "refused", why: "danger" });
+		flush();
+		const danger =
+			popupUp() &&
+			focused() === "Close" &&
+			layer
+				.FindFirstChild("PopupOverlay")
+				?.GetDescendants()
+				.some(d => d.ClassName === "TextLabel" && String(d.Text).includes("still in danger"));
+		tap(B(), true);
+		flush();
+		check(
+			"Play solo recusado com o corpo em perigo: a tela diz por que (Close em foco), e o B fecha",
+			danger && !popupUp(),
 		);
 
 		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });

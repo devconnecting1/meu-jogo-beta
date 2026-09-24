@@ -1,5 +1,5 @@
 /*
- * The server attributes of custom matchmaking (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24). Pure: the
+ * The server attributes of custom matchmaking (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25). Pure: the
  * MatchmakingService calls are the `MatchmakingPort` server/match/matchHost.ts plugs in.
  *
  * What the platform offers (engine reference `MatchmakingService`, the guide "Attributes and signals" -- Context7
@@ -10,9 +10,11 @@
  * the target being a player attribute (read from a data store) or a constant.
  *
  * So the game publishes two numbers, and the owner decides in the Creator Hub how much they weigh:
- *   WorldDay   the world's day (MP-20): a signal "close to 1" (constant 1) sends joining players toward young towns --
- *              the automatic half of P0-1. Friends still weigh 15 by default, more than every other signal together,
- *              so a veteran still lands with their friends.
+ *   WorldDay   the world's day (MP-20). NOT for a signal "close to 1" (constant 1): that sends EVERY joining player
+ *              toward young towns, the veteran of day 30 too, to farm easy nights (review of f25727a, M3). The right
+ *              one is the "server x joining player" signal, |WorldDay - the player's life day|, which needs a player
+ *              attribute of our own in a data store (docs/CREATOR_HUB.md): until then the offer (server/match/rules.ts,
+ *              new players only) is what keeps a new player out of a day-23 town.
  *   Survivors  bodies standing in the town now: a town where everybody is dead is about to end (MP-22), and a new
  *              player should rather not arrive in it.
  * Only a PUBLIC server publishes: the matchmaking's filter step never puts anyone in a reserved or private server.

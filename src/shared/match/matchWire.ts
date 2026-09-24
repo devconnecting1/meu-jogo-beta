@@ -1,5 +1,5 @@
 /*
- * Where a survivor plays (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24): the server kind, and the one remote
+ * Where a survivor plays (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25): the server kind, and the one remote
  * that moves a survivor to a town of their own. Shared by server/match/* and client/net/matchClient.ts; pure.
  *
  *   Match  RemoteEvent in ReplicatedStorage/Net
@@ -80,15 +80,20 @@ export const TRIP_FAILURES: ReadonlyArray<TripFailure> = [
 	"cancelled",
 ];
 
-/** why a request was not started at all */
+/**
+ * Why a request was not started at all. `danger`: this server keeps the survivor's LIVING body where they left the
+ * city, and that spot is not safe -- a zombie within the safe-spawn radius, or a hit taken moments before leaving
+ * (server/net/mpHost.ts `keptInDanger`). A trip then would be a free, instant escape from a fight (review H1).
+ */
 export type TripRefusal =
-	"studio" | "unavailable" | "rate" | "busy" | "dead" | "inWorld" | "solo" | "loading" | "noOffer";
+	"studio" | "unavailable" | "rate" | "busy" | "dead" | "danger" | "inWorld" | "solo" | "loading" | "noOffer";
 export const TRIP_REFUSALS: ReadonlyArray<TripRefusal> = [
 	"studio",
 	"unavailable",
 	"rate",
 	"busy",
 	"dead",
+	"danger",
 	"inWorld",
 	"solo",
 	"loading",

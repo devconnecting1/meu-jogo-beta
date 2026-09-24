@@ -575,7 +575,7 @@ class MenuPage {
 			this.write(peopleCell.value, inTown !== undefined ? `${math.floor(inTown)} / ${MAX_PLAYERS}` : "…");
 			this.write(peopleCell.caption, tr("in town"));
 		} else {
-			// offline, or a reserved town of one's own (Play solo, MP-24): the town is the player's alone
+			// offline, or a reserved town of one's own (Play solo, MP-25): the town is the player's alone
 			this.write(peopleCell.value, tr("Solo"));
 			this.write(peopleCell.caption, tr("your own town"));
 		}

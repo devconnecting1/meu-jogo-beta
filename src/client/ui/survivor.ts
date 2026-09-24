@@ -159,7 +159,7 @@ const SLOT_KEYS = ["WEAPON", "CLOTHES", "HAND", "GUN", "OUTFIT", "PET"];
 const HELP_TEXT = [
 	"Your survivor as everyone sees them, how long this life has lasted and what you carry.",
 	"Enter the city to play. The town keeps its own day, shared by everyone on this server.",
-	"Play solo takes you to a town of your own, on day 1: nobody else can join it.",
+	"Play solo takes you to a town of your own, on the day this life has reached: nobody else can join it.",
 	"When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.",
 	"Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
 ].join("#");

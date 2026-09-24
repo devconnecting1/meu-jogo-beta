@@ -1,11 +1,13 @@
 /*
- * The rules of moving a survivor to a town of their own (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24). Pure:
+ * The rules of moving a survivor to a town of their own (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25). Pure:
  * no Instance, no service, no clock of its own -- server/match/travel.ts and server/match/matchHost.ts feed it, and
  * tools/test-match.mjs drives it directly.
  *
  *   1. THE OFFER (P0-1). Difficulty follows the WORLD's day (server/sim/waves.ts `refreshPopulation`, MP-20), so a new
  *      player dropped by matchmaking into a public town on day 23 meets day 23's horde with a starter knife. The server
- *      offers them, once, a town of their own on day 1 -- never moves them without the answer (`freshTownOffer`).
+ *      offers them, once, a town of their own -- on their own life's day, which for a new player is day 1 (MP-13) --
+ *      and never moves them without the answer (`freshTownOffer`). NEW players only (a record of at most
+ *      NEW_PLAYER_MAX_BEST days): a veteran knows what a day-23 town is, and has Play solo for a town of their own.
  *   2. THE TICKET. What travels with the teleport (TeleportOptions:SetTeleportData) is read back by the destination
  *      through Player:GetJoinData(), which the docs warn comes THROUGH THE CLIENT: nothing in it may decide anything
  *      of value. It carries only the route and the analytics funnel's id; the destination checks the source place and
@@ -26,6 +28,11 @@ export const OFFER_MIN_DAY = 5;
 export const OFFER_MARGIN = 4;
 /** an offer is answered within this long, or it lapses (seconds) */
 export const OFFER_TTL_S = 600;
+/**
+ * The offer is for a NEW player: one whose record (`bestDay`, days of one life) is at most this. Past it they have
+ * lived through the early nights and know the game; they are never nudged anywhere, and Play solo is always there.
+ */
+export const NEW_PLAYER_MAX_BEST = 5;
 
 export interface OfferInput {
 	kind: ServerKind;
@@ -50,15 +57,17 @@ export function offerThreshold(bestDay: number): number {
 }
 
 /**
- * Should this player be offered a fresh town of their own, as they join (P0-1)? Only on a public server (a solo town
- * is theirs already; a private server is somebody's chosen company; Studio counts as public so a playtest can show
- * the card), only for a save the server really read (a read-only session's blank save would ask a veteran), never to
- * a dead survivor (MP-21's choice is made where the death is) nor to one who followed a friend in.
+ * Should this player be offered a fresh town of their own, as they join (P0-1)? Only a NEW player (a record of at
+ * most NEW_PLAYER_MAX_BEST), only on a public server (a solo town is theirs already; a private server is somebody's
+ * chosen company; Studio counts as public so a playtest can show the card), only for a save the server really read (a
+ * read-only session's blank save would ask a veteran), never to a dead survivor (MP-21's choice is made where the
+ * death is) nor to one who followed a friend in.
  */
 export function freshTownOffer(input: OfferInput): boolean {
 	if (input.kind !== "public" && input.kind !== "studio") return false;
 	if (input.status === "error") return false;
 	if (input.runOver || input.followed) return false;
+	if (input.bestDay > NEW_PLAYER_MAX_BEST) return false;
 	const day = input.worldDay;
 	if (day === undefined || !(day > 0)) return false;
 	return day > offerThreshold(input.bestDay);
@@ -227,6 +236,8 @@ export interface TripAuditRow {
 	what: string;
 	/** a refusal, a failure, a TeleportResult's name or a ticket's reading */
 	detail: string;
+	/** how many times this very row happened in a row (a repeated refusal is counted here, not logged again) */
+	count?: number;
 }
 
 export const AUDIT_ROWS = 100;
@@ -241,15 +252,30 @@ export class TripAudit {
 	}
 
 	add(row: TripAuditRow): void {
+		// the same refusal again (a client pressing on): one row, counted -- never a log line per press (review LOW 4)
+		const last = this.rows.size() > 0 ? this.rows[this.rows.size() - 1] : undefined;
+		if (
+			row.what === "refused" &&
+			last !== undefined &&
+			last.what === row.what &&
+			last.userId === row.userId &&
+			last.route === row.route &&
+			last.detail === row.detail
+		) {
+			last.count = (last.count ?? 1) + 1;
+			last.t = row.t;
+			return;
+		}
 		this.rows.push(row);
 		while (this.rows.size() > AUDIT_ROWS) this.rows.remove(0);
 		const detail = row.detail !== "" ? ` ${row.detail}` : "";
 		this.log(`[PZ-MATCH] ${row.userId} ${row.route} ${row.what}${detail}`);
 	}
 
+	/** how many times `what` happened (a counted row counts for its repeats) */
 	count(what: string): number {
 		let n = 0;
-		for (const r of this.rows) if (r.what === what) n += 1;
+		for (const r of this.rows) if (r.what === what) n += r.count ?? 1;
 		return n;
 	}
 }

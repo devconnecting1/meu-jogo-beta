@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Where a survivor plays (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24): the fresh-town offer (P0-1), Play solo
+ * Where a survivor plays (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25): the fresh-town offer (P0-1), Play solo
  * (P0-2), the server's kind and the matchmaking attributes.
  *
  *   npm run test:match                   # everything (exit code 1 on any failure)
@@ -29,8 +29,14 @@
  *                       NewTown funnel, TownOffered and TripFailed with their closed fields.
  *   4. THE SOLO TOWN    a reserved server: the kind "solo", no matchmaking, no offer, no Play solo; the owner's ticket
  *                       logs the funnel's arrival with the SAME id, a forged or foreign one logs nothing; the town
- *                       starts on day 1 whatever the owner's life says, with the same rules (the MP-13 / MP-20
- *                       resolution); a private (VIP) server plays like a public one without the offer.
+ *                       opens on the OWNER's life day (MP-13; a fresh save: day 1), and a world that ends there is
+ *                       followed by a new town on day 1 whose record counts the days it lasted; a private (VIP) server
+ *                       opens on its owner's day when the owner loads first, on day 1 when a guest does.
+ *   6. THE REVIEW       of f25727a: a living body kept in danger (a zombie near, a hit a moment ago) cannot buy a trip
+ *                       (H1); a trip the player called off keeps its place in the gate (M1); nobody is admitted into
+ *                       the city while their trip is in flight (M2); no second offer on a rejoin, a read-only load is
+ *                       looked at again after its retry, a repeated refusal is one counted row, a solo town writes
+ *                       the shared world log at most once per gap (LOW 1, 2, 4, 5).
  *
  * Pure Node (>= 18) plus the project's TypeScript through tools/luau-shim.mjs, with the fake Roblox of
  * tools/test-analytics.mjs (copied: each suite carries its own) plus the two services this needs.
@@ -501,6 +507,23 @@ function bootServer(opts = {}) {
 		rows(userId, kind) {
 			return env.log.filter(r => r.userId === userId && (kind === undefined || r.kind === kind));
 		},
+		shop(p, req) {
+			return remote("ShopAction").OnServerInvoke(p, req);
+		},
+		/** a death through the server's own damage path, then the ticks that notice it */
+		kill(p) {
+			const sp = host.playerOf(p);
+			sp.state.godMode = false;
+			server.sim.combat.damageActor(sp.slot, sp.state, sp.save, sp.state.hpMax * 10, true);
+			server.beat();
+			server.beat();
+			return sp;
+		},
+		/** the world-log store's document (ProjectZ_Worlds, key "ended") */
+		worldLog() {
+			const { WORLD_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
+			return fakeStore(WORLD_LOG_STORE).data.get("ended");
+		},
 	};
 	return server;
 }
@@ -552,9 +575,14 @@ section("1) the rules: the server kind, the offer, the ticket, the gates, the pl
 		"a new player (record day 1) is offered a fresh town past day 5 (the task's max(5, best + 4)), never on 1-5",
 	);
 	check(
-		!offer({ status: "ok", bestDay: 30, worldDay: 34 }) && offer({ status: "ok", bestDay: 30, worldDay: 35 }),
-		"a record of day 30: not in a day-34 town, yes in a day-35 one",
-		`threshold ${R.offerThreshold(30)}`,
+		!offer({ status: "ok", bestDay: 5, worldDay: 9 }) && offer({ status: "ok", bestDay: 5, worldDay: 10 }),
+		"a record of day 5 (still a new player): not in a day-9 town, yes in a day-10 one (max(5, best + 4))",
+		`threshold ${R.offerThreshold(5)}`,
+	);
+	check(
+		!offer({ status: "ok", bestDay: R.NEW_PLAYER_MAX_BEST + 1, worldDay: 40 }) &&
+			!offer({ status: "ok", bestDay: 30, worldDay: 60 }),
+		"NEW players only: a record past day 5 is never offered anything, however far the town is (M3)",
 	);
 	check(
 		!offer({ kind: "solo", worldDay: 40 }) &&
@@ -1100,6 +1128,8 @@ section("3) the real server: attributes, the offer, New town and Play solo, refu
 	s.enter(pR);
 	// out of the city, and back in less than a second: the intent's cooldown defers the admission to the host's next pass
 	s.intent(pR, s.P.IntentKind.LeaveWorld);
+	// the body it keeps stands where no zombie is (a kept body in danger is section 6's: H1)
+	s.sim.horde.zombies.length = 0;
 	s.ask(pR, { k: "solo" });
 	const acceptedR = s.lastNotice(pR)?.s === "start";
 	s.intent(pR, s.P.IntentKind.EnterWorld);
@@ -1158,6 +1188,7 @@ section("3) the real server: attributes, the offer, New town and Play solo, refu
 		"the session plays on: the player enters the city as if nothing happened",
 	);
 	s.leave(pU);
+	s.sim.horde.zombies.length = 0; // no zombie by the body it left (H1 is section 6's)
 	s.ask(pU, { k: "solo" });
 	s.run(0.2);
 	check(
@@ -1173,6 +1204,7 @@ section("3) the real server: attributes, the offer, New town and Play solo, refu
 	check(
 		again.length === calls + 1 && again[again.length - 1].code === again[0].code,
 		"...15 s later, the same town again",
+		JSON.stringify({ calls, again: again.map(c => c.code), notices: s.notices(pU).slice(-4) }),
 	);
 
 	// a flood of junk
@@ -1289,7 +1321,7 @@ section(
 			s.host !== undefined ? prints.filter(l => l.includes("[PZ-MATCH]") && l.includes(" ticket ")) : [];
 		check(tickets.length >= 4, "each one is an audit line ('ticket <why>')", tickets.slice(-4).join(" | "));
 
-		// day 1, the same rules
+		// the owner's life day (MP-13), the same rules
 		s = bootServer({ privateServerId: "psid-9", ownerId: 0 });
 		const o2 = newUser();
 		const save = defaultSave();
@@ -1301,19 +1333,69 @@ section(
 				TeleportData: { pz: 1, route: "offer", trip: "{00000eee-feed-beef}", owner: o2 },
 			},
 		});
-		s.run(1);
+		s.run(1.2);
 		const sp = s.enter(p2);
 		check(
-			s.sim.clock.day === 1 && s.save(p2)?.day === 23 && sp !== undefined && !sp.state.dead,
-			"the solo town opens on day 1 (the world's day is the town's, MP-20), and the owner's LIFE goes on at day 23",
-			`world ${s.sim.clock.day}, life ${s.save(p2)?.day}`,
+			s.sim.clock.day === 23 && s.save(p2)?.day === 23 && sp !== undefined && !sp.state.dead,
+			"the solo town opens on the OWNER's life day (MP-13): world day 23 for a life on day 23, 07:00",
+			`world ${s.sim.clock.day} at ${s.sim.clock.dayTime.toFixed(2)}, life ${s.save(p2)?.day}`,
 		);
-		check(s.Workspace.GetAttribute("pz_world_day") === 1, "...and says so to the lobby (pz_world_day 1)");
+		check(
+			s.Workspace.GetAttribute("pz_world_day") === 23 &&
+				prints.some(l => l.includes("[PZ-MATCH]") && l.includes("town day 23")),
+			"...says so to the lobby (pz_world_day 23), and the audit says why ('the owner's life day')",
+		);
+		check(
+			s.host.startTownOn(5) === false && s.sim.clock.day === 23,
+			"once a body stood in the town its day is settled: nothing restarts it",
+		);
+		// a world that ends here: a new town on day 1 (MP-22), and the record counts the days it LASTED
+		s.sim.clock.setClock(7, 24);
+		s.kill(p2);
+		s.shop(p2, { kind: "newRun", runRev: s.save(p2)?.runRev ?? s.host.playerOf(p2)?.save.runRev });
+		s.run(3);
+		const ended = s.worldLog();
+		const last = Array.isArray(ended) ? ended[ended.length - 1] : undefined;
+		check(
+			s.sim.clock.day === 1 && last !== undefined && last.days === 2,
+			"New game in the solo town ends it (MP-22): the next town is on day 1, and the record says it lasted 2 days (23 -> 24), not 24",
+			JSON.stringify({ day: s.sim.clock.day, record: last && { days: last.days, reason: last.reason } }),
+		);
 
-		// a private (VIP) server
+		// a fresh save's owner: day 1
+		s = bootServer({ privateServerId: "psid-10", ownerId: 0 });
+		const o3 = newUser();
+		s.join(o3, "fresh-owner", {
+			_join: {
+				SourcePlaceId: 4242,
+				TeleportData: { pz: 1, route: "offer", trip: "{00000ddd-feed-beef}", owner: o3 },
+			},
+		});
+		s.run(1.2);
+		check(s.sim.clock.day === 1, "a fresh save's town opens on day 1 (a new player's life day)");
+
+		// a private (VIP) server: the owner first -> the owner's day
+		const vipOwner = newUser();
+		s = bootServer({ privateServerId: "vip-0", ownerId: vipOwner });
+		const vs = defaultSave();
+		Object.assign(vs, { day: 12, bestDay: 14, tutorialDone: true, firstInstall: false });
+		s.storeSave(vipOwner, vs);
+		s.join(vipOwner, "vip-owner");
+		s.run(1.2);
+		check(s.sim.clock.day === 12, "a private server whose owner loads first opens on the owner's life day (12)");
+		// ...a guest first -> day 1
 		s = bootServer({ privateServerId: "vip-1", ownerId: 555 });
 		check(s.Workspace.GetAttribute("pz_server_kind") === "private", "a private (VIP) server says 'private'");
+		const early = newUser();
+		const es = defaultSave();
+		Object.assign(es, { day: 30, bestDay: 30, tutorialDone: true, firstInstall: false });
+		s.storeSave(early, es);
+		s.join(early, "early-guest");
 		s.run(1.5);
+		check(
+			s.sim.clock.day === 1,
+			"...a guest who loads first (not the owner) opens it on day 1, never on the guest's day",
+		);
 		check(s.mm.sets.length === 0, "...publishes no matchmaking attribute");
 		s.sim.clock.setClock(7, 40);
 		const guest = newUser();
@@ -1331,6 +1413,232 @@ section(
 		);
 	},
 );
+
+// ================================================================ 6: the review of f25727a
+
+section("6) the review: danger (H1), the cancel loop (M1), admission in flight (M2), LOW 1, 2, 4, 5", () => {
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	const KEPT_HURT_S = require(join(SRC, "server/net/mpHost.ts")).KEPT_HURT_S;
+
+	// H1: a living body kept where the horde is
+	let s = bootServer();
+	s.run(12);
+	const u1 = newUser();
+	const p1 = s.join(u1, "escaper");
+	s.run(1.5);
+	const sp1 = s.enter(p1);
+	const z = createZombie(990001, sp1.state.x + 300, sp1.state.y, 1);
+	s.sim.horde.zombies.push(z);
+	s.intent(p1, s.P.IntentKind.LeaveWorld); // instant: the body is kept, frozen where it stood
+	s.ask(p1, { k: "solo" });
+	check(
+		s.lastNotice(p1)?.why === "danger" && s.tp.calls.length === 0,
+		"a kept LIVING body with a zombie 300 u away (the safe-spawn radius is 900): Play solo refused 'danger', nothing reserved",
+		JSON.stringify(s.lastNotice(p1)),
+	);
+	z.x += 5000;
+	z.y += 5000;
+	s.run(12);
+	s.ask(p1, { k: "solo" });
+	s.run(0.2);
+	check(
+		s.tp.calls.some(c => c.players[0] === p1),
+		"...the zombie gone and the body untouched for a while: the trip is allowed",
+	);
+
+	// H1: a hit a moment ago
+	s = bootServer();
+	s.run(12);
+	const u2 = newUser();
+	const p2 = s.join(u2, "hurt");
+	s.run(1.5);
+	const sp2 = s.enter(p2);
+	s.sim.combat.damageActor(sp2.slot, sp2.state, sp2.save, 5, true);
+	s.run(0.1);
+	s.intent(p2, s.P.IntentKind.LeaveWorld);
+	s.run(3);
+	s.ask(p2, { k: "solo" });
+	check(
+		s.lastNotice(p2)?.why === "danger",
+		`hit, left, asked 3 s later: 'danger' (a hit less than ${KEPT_HURT_S} s ago)`,
+	);
+	s.run(KEPT_HURT_S);
+	s.ask(p2, { k: "solo" });
+	s.run(0.2);
+	check(
+		s.tp.calls.some(c => c.players[0] === p2),
+		`...${KEPT_HURT_S} s later, with nothing near: allowed`,
+	);
+	// ...judged at the request: a zombie wandering by the frozen body during a Flooded wait does not call the trip off
+	const tries2 = s.tp.calls.filter(c => c.players[0] === p2).length;
+	s.tp.TeleportInitFailed.Fire(p2, "TeleportResult.Flooded", "too many teleports", 4242, undefined);
+	const kept2 = s.host.lives.keptBody(u2);
+	s.sim.horde.zombies.push(createZombie(990002, kept2.x + 200, kept2.y, 1));
+	check(s.host.keptInDanger(p2), "(a zombie now stands 200 u from the frozen body)");
+	s.run(16);
+	check(
+		s.tp.calls.filter(c => c.players[0] === p2).length === tries2 + 1,
+		"a trip asked in the clear goes on after its Flooded wait even if a zombie wandered by the frozen body meanwhile",
+		JSON.stringify(s.notices(p2).slice(-3)),
+	);
+
+	// M1: the cancel loop (Leave, Play solo, Enter while the reservation yields) keeps the gate's count
+	s = bootServer();
+	s.run(12);
+	const u3 = newUser();
+	const p3 = s.join(u3, "looper");
+	s.run(1.5);
+	const origReserve = s.tp.ReserveServerAsync.bind(s.tp);
+	s.tp.ReserveServerAsync = placeId => {
+		s.intent(p3, s.P.IntentKind.EnterWorld);
+		return origReserve(placeId);
+	};
+	let accepted = 0;
+	let rate = 0;
+	for (let i = 0; i < 12; i++) {
+		s.ask(p3, { k: "solo" });
+		const n = s.lastNotice(p3);
+		if (n?.s === "start") accepted++;
+		else if (n?.why === "rate") rate++;
+		s.run(0.3);
+		s.intent(p3, s.P.IntentKind.LeaveWorld);
+		s.run(11); // past the 10 s gap each round
+	}
+	s.tp.ReserveServerAsync = origReserve;
+	check(
+		accepted === 4 && rate === 8 && s.tp.calls.length === 0,
+		"12 rounds of Leave / Play solo / Enter-during-the-reservation: 4 accepted (the window's 4), 8 'rate', no teleport",
+		JSON.stringify({ accepted, rate, reserves: s.tp.reserves }),
+	);
+	const pB = s.join(newUser(), "bystander");
+	s.run(1.5);
+	s.ask(pB, { k: "solo" });
+	s.run(0.2);
+	check(
+		s.tp.calls.some(c => c.players[0] === pB),
+		"...and a bystander still gets their trip (the server's reservations were not drained by one client)",
+	);
+
+	// M2: nobody is admitted while their trip is in flight
+	s = bootServer();
+	s.run(12);
+	const u4 = newUser();
+	const p4 = s.join(u4, "yanked");
+	s.run(1.5);
+	s.tp.failTeleport = 99; // every TeleportAsync fails: the trip lives through its three tries
+	const origTp = s.tp.TeleportAsync.bind(s.tp);
+	let entered = false;
+	s.tp.TeleportAsync = (placeId, players, options) => {
+		if (!entered) {
+			entered = true;
+			s.intent(p4, s.P.IntentKind.EnterWorld); // Enter pressed while TeleportAsync yields
+		}
+		return origTp(placeId, players, options);
+	};
+	s.ask(p4, { k: "solo" });
+	s.run(0.2);
+	check(
+		s.host.playerOf(p4) === undefined,
+		"EnterWorld while TeleportAsync yields: not admitted while the trip is in flight",
+	);
+	s.run(4);
+	check(
+		s.lastNotice(p4)?.why === "cancelled" || s.lastNotice(p4)?.why === "teleport",
+		"...the trip ends (the retry sees the wish to enter and calls it off, or the tries run out)",
+		JSON.stringify(s.lastNotice(p4)),
+	);
+	s.run(1);
+	check(s.host.playerOf(p4) !== undefined, "...and only then the body is admitted");
+
+	// LOW 1: no second offer on a rejoin
+	s = bootServer();
+	s.sim.clock.setClock(7, 23);
+	s.run(1.2);
+	const u5 = newUser();
+	let p5 = s.join(u5, "rejoiner");
+	s.run(1);
+	s.ask(p5, { k: "offer", yes: false });
+	s.quit(p5);
+	s.run(1);
+	p5 = s.join(u5, "rejoiner");
+	s.run(1);
+	check(
+		s.notices(p5).filter(n => n.k === "offer").length === 0,
+		"Stay, leave and rejoin the same server: not asked again",
+	);
+
+	// LOW 2: a read-only first load is looked at again once its retry reads the real save
+	s = bootServer();
+	s.sim.clock.setClock(7, 23);
+	s.run(1.2);
+	const u6 = newUser();
+	const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	fakeStore(SAVE_STORE).data.set(String(u6), { data: "{not json", lock: undefined });
+	const p6 = s.join(u6, "unreadable");
+	s.run(1);
+	const before = s.notices(p6).filter(n => n.k === "offer").length;
+	const fresh = defaultSave();
+	fakeStore(SAVE_STORE).data.set(String(u6), { data: JSON.stringify(fresh), lock: undefined });
+	s.run(10);
+	s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("LoadRequest").OnServerEvent.Fire(p6);
+	s.run(1.5);
+	const after = s.notices(p6).filter(n => n.k === "offer").length;
+	check(
+		before === 0 && after === 1,
+		"a read-only load (the save unreadable) is not offered; after the retry reads the real save, it is",
+		JSON.stringify({ before, after }),
+	);
+
+	// LOW 4: the same refusal again and again is one counted row
+	s = bootServer();
+	s.run(1.2);
+	const u7 = newUser();
+	const p7 = s.join(u7, "presser");
+	s.run(1);
+	s.enter(p7);
+	const lines0 = prints.filter(l => l.includes(`[PZ-MATCH] ${u7} solo refused inWorld`)).length;
+	for (let i = 0; i < 6; i++) s.ask(p7, { k: "solo" });
+	const lines = prints.filter(l => l.includes(`[PZ-MATCH] ${u7} solo refused inWorld`)).length - lines0;
+	check(lines === 1, "six identical refusals: one log line (the audit row counts the rest)", `${lines} lines`);
+
+	// LOW 5: a solo town writes the shared world log at most once per gap, the town that lasted longest
+	const G = require(join(SRC, "server/match/soloWorldLog.ts"));
+	let now = 0;
+	const written = [];
+	const timersG = [];
+	let closer;
+	const inner = { record: e => written.push(e.days), recent: () => [], status: () => "ok" };
+	const log = G.soloWorldLog(inner, {
+		clock: () => now,
+		delay: (sec, fn) => timersG.push({ at: now + sec, fn }),
+		onClose: fn => (closer = fn),
+	});
+	const world = days => ({ seed: 1, days, startedAt: 0, endedAt: 0, reason: "declined", fallen: 1, job: "" });
+	log.record(world(3));
+	now = 10;
+	log.record(world(1));
+	now = 20;
+	log.record(world(5));
+	now = 30;
+	log.record(world(2));
+	check(
+		written.join() === "3" && log.dropped() === 2,
+		"the first world goes at once; three more inside the gap: only the longest (5) is kept, 2 dropped",
+		JSON.stringify({ written, dropped: log.dropped() }),
+	);
+	now = G.SOLO_WORLD_LOG_GAP_S;
+	for (const t of timersG.splice(0)) if (t.at <= now) t.fn();
+	check(written.join() === "3,5", "...and it goes out when the gap is over");
+	now += 5;
+	log.record(world(7));
+	closer();
+	check(written.join() === "3,5,7", "a world kept at shutdown still goes out (BindToClose)");
+	const main = require("node:fs").readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	check(
+		/readKind\(\) === "solo"\s*\?\s*soloWorldLog\(startWorldLog\(\)/.test(main),
+		"the server wraps its world log this way on a solo server only (source guard)",
+	);
+});
 
 // ================================================================ 5: what reached analytics
 

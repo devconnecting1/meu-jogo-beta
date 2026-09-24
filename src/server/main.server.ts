@@ -42,7 +42,8 @@ import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 import * as Analytics from "./analytics/events";
 import { grantWelcomePack } from "./config/experiments";
-import { startMatch } from "./match/matchHost";
+import { MatchHost, readKind, startMatch } from "./match/matchHost";
+import { soloWorldLog } from "./match/soloWorldLog";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -233,6 +234,8 @@ let admin: AdminServer | undefined;
 let adminPatchSerial = 0;
 /** authoritative simulation (server/net/mpHost.ts); undefined while MP_PHASE = 0 (docs/MULTIPLAYER.md §11.1) */
 let mpHost: MpHost | undefined;
+/** where a survivor plays (server/match/matchHost.ts, §7.4): started after the host, read lazily by its closures */
+let match: MatchHost | undefined;
 
 // ---------------------------------------------------------------- session state helpers
 
@@ -1509,7 +1512,17 @@ admin = startAdminServer({
  */
 if (MP_PHASE >= 1) {
 	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
-	const worldLog = startWorldLog();
+	// a solo town writes the shared world log at most once per gap, the longest-lasting town of it (§7.4, LOW 5)
+	const worldLog =
+		readKind() === "solo"
+			? soloWorldLog(startWorldLog(), {
+					clock: () => os.clock(),
+					delay: (seconds, fn) => {
+						task.delay(seconds, fn);
+					},
+					onClose: fn => game.BindToClose(fn),
+				})
+			: startWorldLog();
 	mpHost = startMpHost({
 		saveOf: player => {
 			const s = sessions.get(player);
@@ -1517,6 +1530,9 @@ if (MP_PHASE >= 1) {
 			// in single player. A session that is still loading, or already closing, is not admitted yet — nor one
 			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b)
 			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
+			// ...nor a player whose trip to a town of their own is in flight (review M2: the teleport would yank the new
+			// body out of a run), nor anybody before a solo / private town knows the day it opens on (MP-13)
+			if (match !== undefined && !match.admits(player)) return undefined;
 			return s.save;
 		},
 		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
@@ -1574,7 +1590,7 @@ if (MP_PHASE >= 1) {
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
 
-// ---------------------------------------------------------------- where a survivor plays (§7.4, MP-24)
+// ---------------------------------------------------------------- where a survivor plays (§7.4, MP-25)
 
 /*
  * Play solo and the fresh-town offer (P0-1, P0-2), the server's kind and the matchmaking attributes
@@ -1583,7 +1599,7 @@ if (MP_PHASE >= 1) {
  * that succeeds is a leave like any other, whose final write (PlayerRemoving above) releases the lock the
  * destination's load is waiting for (LOCK_WAIT).
  */
-startMatch({
+match = startMatch({
 	sessionOf: player => {
 		const s = sessions.get(player);
 		if (s === undefined || s.closed) return undefined;
@@ -1598,6 +1614,10 @@ startMatch({
 	// in the city, or asked to be (EnterWorld, admitted on the host's next pass): a trip starts from the lobby only
 	inWorld: player => mpHost !== undefined && mpHost.wantsWorld(player),
 	isDead: (player, save) => (mpHost !== undefined ? mpHost.isDead(player, save) : save.runOver),
+	// H1: a living body this server keeps where a fight is going on cannot be traded for a fresh spawn elsewhere
+	keptInDanger: player => mpHost !== undefined && mpHost.keptInDanger(player),
+	// MP-13: a solo or private town opens on its owner's life day (without a host there is no town to start)
+	startTown: day => mpHost !== undefined && mpHost.startTownOn(day),
 	prepare: player => {
 		const s = sessions.get(player);
 		if (s === undefined || s.closed || !s.loaded) return;

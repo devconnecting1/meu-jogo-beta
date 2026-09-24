@@ -81,7 +81,7 @@ export interface TravelHost {
 	delay: (seconds: number, fn: () => void) => void;
 	/** a funnel id (HttpService:GenerateGUID) */
 	newId: () => string;
-	/** why this player may not leave right now: still loading, in the city, dead -- or undefined */
+	/** why this player may not leave right now: still loading, in the city, dead, a kept body in danger -- or undefined */
 	blocker: (player: Player) => TripRefusal | undefined;
 	/** the player is still connected to this server */
 	connected: (player: Player) => boolean;
@@ -209,11 +209,16 @@ export class TownTravel {
 		return this.trips.get(trip.player) === trip && trip.serial === serial;
 	}
 
-	/** the player walked into the city (or left) since the request: nobody is teleported out of a run */
+	/**
+	 * The player walked into the city (or left) since the request: nobody is teleported out of a run. `danger` is judged
+	 * once, at the request (H1): the body it looked at is out of the world, frozen, and no admission happens while the
+	 * trip is in flight (review M2), so only a zombie wandering by that frozen spot could change it -- no reason to
+	 * call off a trip asked in the clear (a Flooded retry waits 15 s).
+	 */
 	private stillHere(trip: Trip): boolean {
 		if (!this.host.connected(trip.player)) return false;
 		const blocker = this.host.blocker(trip.player);
-		return blocker === undefined;
+		return blocker === undefined || blocker === "danger";
 	}
 
 	private begin(trip: Trip, serial: number): void {
@@ -378,8 +383,10 @@ export class TownTravel {
 		if (this.trips.get(trip.player) !== trip) return;
 		this.trips.delete(trip.player);
 		trip.serial += 1;
-		// a trip the platform never sent anywhere does not count against the player's gap (they may try again at once)
-		if (!trip.everSent) this.gate.release(trip.userId, trip.gateAt);
+		// a trip the PLATFORM refused before it ever left does not count against the player's gap (they may try again at
+		// once). One the player called off by walking into the city does (review M1): otherwise Leave, Play solo, Enter,
+		// in a loop, was a save write and a reservation per round, with the whole server's budget drained by one client
+		if (!trip.everSent && why !== "cancelled") this.gate.release(trip.userId, trip.gateAt);
 		this.row(trip, "failed", why);
 		if (why !== "cancelled") {
 			this.host.warn("a trip to a town of one's own failed", `${why} at ${stage}: ${detail}`);

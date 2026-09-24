@@ -210,16 +210,16 @@ por admin não é mandado. **Pergunta:** quantos jogadores chegam a cada nível?
 
 ### 4.6 NewTown — um funil por **viagem a uma cidade própria**
 
-O Play solo e o New town da oferta de cidade nova (`docs/MULTIPLAYER.md` §7.4, MP-24; `server/match/*`).
+O Play solo e o New town da oferta de cidade nova (`docs/MULTIPLAYER.md` §7.4, MP-25; `server/match/*`).
 `funnelSessionId` = um GUID sorteado pelo servidor de origem quando aceita o pedido, levado no bilhete do teleporte
 (o TeleportData): o **mesmo** id fecha o funil no servidor de destino, como a chave natural do Rebirth vale em qualquer
 servidor.
 
-| Passo | Nome       | Quando                                                                                          | Onde                        |
-| ----- | ---------- | ----------------------------------------------------------------------------------------------- | --------------------------- |
-| 1     | Asked      | o servidor **aceitou** o pedido (passou pelos limites e recusas: lobby, vivo, sem outra viagem) | `server/match/travel.ts`    |
-| 2     | Teleported | `TeleportAsync` voltou sem erro (a viagem saiu; `TeleportInitFailed` ainda pode derrubá-la)     | `server/match/travel.ts`    |
-| 3     | Arrived    | o **destino** leu o bilhete: deste place, da nossa forma, emitido para este jogador             | `server/match/matchHost.ts` |
+| Passo | Nome       | Quando                                                                                         | Onde                        |
+| ----- | ---------- | ---------------------------------------------------------------------------------------------- | --------------------------- |
+| 1     | Asked      | o servidor **aceitou** o pedido (limites e recusas: lobby, vivo, sem perigo, sem outra viagem) | `server/match/travel.ts`    |
+| 2     | Teleported | `TeleportAsync` voltou sem erro (a viagem saiu; `TeleportInitFailed` ainda pode derrubá-la)    | `server/match/travel.ts`    |
+| 3     | Arrived    | o **destino** leu o bilhete: deste place, da nossa forma, emitido para este jogador            | `server/match/matchHost.ts` |
 
 - **Campos do passo 1**, todos do servidor: `Route - Play solo` / `Offer`, `World day - …` (o dia do mundo que ele
   deixa) e `Life day - …`.
@@ -246,7 +246,7 @@ servidor.
 | WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`                                                     | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
 | Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                                                                       | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
 | ItemsUsed      | itens usados na sessão    | —                                                                                                                             | ao sair, se > 0                                                                                                   | consumo por sessão                                      |
-| TownOffered    | dia do mundo              | `World day - …`; `Best day - …` (o recorde); `Visit - First` / `Returning`                                                    | um jogador que carregou num servidor público de dia bem além do recorde recebeu a oferta de cidade nova (MP-24)   | quantos novatos caem em mundos de dia alto (P0-1)?      |
+| TownOffered    | dia do mundo              | `World day - …`; `Best day - …` (o recorde); `Visit - First` / `Returning`                                                    | um jogador **novo** (recorde ≤ 5) num servidor público de dia bem além do recorde recebeu a oferta (MP-25)        | quantos novatos caem em mundos de dia alto (P0-1)?      |
 | TripFailed     | teleportes tentados       | `Stage - Reserve/Teleport/Init`; `Result - reserve/teleport/full/flooded/denied/timeout/cancelled`; `Route - Play solo/Offer` | uma viagem a uma cidade própria acabou com o jogador ainda aqui (`cancelled` = ele entrou na cidade)              | o teleporte falha onde e por quê?                       |
 
 Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificuldade, não um valor por dia).

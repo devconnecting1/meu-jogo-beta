@@ -66,6 +66,7 @@ import {
 	ingestInput,
 	noteMalformed,
 	noteMessage,
+	SPAWN_MIN_ZOMBIE,
 } from "../sim/players";
 import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
@@ -78,6 +79,8 @@ const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
 const Workspace = game.GetService("Workspace");
 
+/** a survivor hit this recently (os.clock seconds) is still in the fight: no trip to another town (`keptInDanger`) */
+export const KEPT_HURT_S = 10;
 /** how often the host looks for players whose save has just finished loading (seconds) */
 const ADMIT_INTERVAL = 0.5;
 /** how often the §12.2 metrics are published (seconds) */
@@ -165,6 +168,20 @@ export interface MpHost {
 	 * intent and the admission.
 	 */
 	wantsWorld(player: Player): boolean;
+	/**
+	 * This server keeps the player's LIVING body where they left the city (§7.2: frozen, exactly as it was), and that
+	 * spot is not safe: a zombie or a boss within the safe-spawn radius of it (SPAWN_MIN_ZOMBIE, MP-04), or a hit taken
+	 * less than KEPT_HURT_S ago. A trip to a town of one's own is refused then (server/match/travel.ts `danger`,
+	 * review H1): Leave + Play solo was a free, instant escape from a fight, with a fresh spawn and its shield.
+	 */
+	keptInDanger(player: Player): boolean;
+	/**
+	 * A solo or private town opens on its owner's LIFE day (MP-13): the clock restarts on `day` at 07:00, before anybody
+	 * has stood in this town. False (and nothing changes) once a body has entered it. The world's record (MP-22) counts
+	 * the days it lasted from this day on (server/sim/worldReset.ts `startDay`); a world that ends here is followed by a
+	 * new town on day 1, as everywhere.
+	 */
+	startTownOn(day: number): boolean;
 	/** dead as far as the SERVER knows (in the world, in the lobby, or — never seen here — as the save says) */
 	isDead(player: Player, save: PlayerSaveData): boolean;
 	/**
@@ -260,6 +277,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	/** the world running now: its seed and when it began (MP-22 records it when it ends) */
 	let town: TownState = { seed: options.seed ?? DESIGN.TOWN_SEED, startedAt: os.time() };
 	const world = options.world ?? generateTown(town.seed);
+	/** a body has stood in this town (the start day of a solo / private town is settled then, MP-13) */
+	let townEntered = false;
+	/** os.clock() of the last hit each survivor took in the city, by UserId (`keptInDanger`; a rejoin keeps it) */
+	const hurtAt = new Map<number, number>();
 	const remotes = createMpRemotes();
 	const sim = new ServerSimulation({ world });
 	const links = new Map<Player, Link>();
@@ -407,6 +428,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (save === undefined) return;
 		const sp = lives.enter({ userId: player.UserId, name: player.DisplayName }, save);
 		if (sp === undefined) return; // server full: try again next pass
+		townEntered = true;
 		link.slot = sp.slot;
 		bySlot.set(sp.slot, player);
 		// CON-04 First steps: the server stood a body of this survivor in the town (once; the wallet push carries it)
@@ -721,6 +743,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
 		const ran = sim.advance(dt);
 		if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
+		// who is being hit right now (the server's hit flash lasts a second after every hit): `keptInDanger`
+		for (const [player, link] of links) {
+			if (link.slot === undefined) continue;
+			const hit = sim.get(link.slot);
+			if (hit !== undefined && (hit.state.hitFlash ?? 0) > 0) hurtAt.set(player.UserId, now);
+		}
 		// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
 		lives.step(dt);
 		if (now - metricAt >= METRIC_INTERVAL) {
@@ -790,6 +818,35 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		wantsWorld(player) {
 			const link = links.get(player);
 			return link !== undefined && (link.wantsWorld || link.slot !== undefined);
+		},
+		keptInDanger(player) {
+			const body = lives.keptBody(player.UserId);
+			if (body === undefined || body.dead) return false;
+			const hit = hurtAt.get(player.UserId);
+			if (hit !== undefined && os.clock() - hit < KEPT_HURT_S) return true;
+			const r2 = SPAWN_MIN_ZOMBIE * SPAWN_MIN_ZOMBIE;
+			const horde = sim.horde;
+			if (horde === undefined) return false;
+			for (const z of horde.zombies) {
+				if (z.hp <= 0) continue;
+				const dx = z.x - body.x;
+				const dy = z.y - body.y;
+				if (dx * dx + dy * dy < r2) return true;
+			}
+			for (const b of horde.bossRoster.list) {
+				if (b.dead) continue;
+				const dx = b.x - body.x;
+				const dy = b.y - body.y;
+				if (dx * dx + dy * dy < r2) return true;
+			}
+			return false;
+		},
+		startTownOn(day) {
+			if (townEntered) return false;
+			const d = math.max(1, math.floor(day));
+			if (d !== sim.clock.day) sim.clock.restart(d);
+			town.startDay = d;
+			return true;
 		},
 		isDead(player, save) {
 			return lives.isDead(player.UserId, save);
@@ -933,6 +990,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				// after it
 				onSwitched: newTown => {
 					town = { seed: newTown.seed, startedAt: now };
+					townEntered = true;
 					host.world = newTown.world;
 					host.seed = newTown.seed;
 					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));

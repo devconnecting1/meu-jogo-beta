@@ -1,5 +1,5 @@
 /*
- * Where a survivor plays, the client's side (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24): the Survivor
+ * Where a survivor plays, the client's side (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25): the Survivor
  * screen's Play solo (P0-2), the lobby card of the fresh-town offer (P0-1) and what a trip says while it travels.
  *
  * The client asks and shows; the SERVER decides everything (server/match/*): it reserves the town, keeps the access
@@ -7,9 +7,10 @@
  * says only "solo" or yes / no to an offer the server made (shared/match/matchWire.ts): no day, no seed, no target.
  *
  * NEVER WITHOUT CONSENT: nothing here sends a request the player did not press -- Play solo asks first ("A town of
- * your own, on day 1"), the offer is a card with Stay and New town, and B / Backspace closes either WITHOUT answering
- * (client/ui/backStack.ts via popup.ts). The offer waits for the lobby: it never covers a run, a menu or another
- * question (it is shown when the lobby is on screen with no popup open), and it is shown once.
+ * your own, on the day this life has reached"), the offer is a card with Stay and New town, and B / Backspace closes
+ * either WITHOUT answering (client/ui/backStack.ts via popup.ts). The offer waits for the lobby: it never covers a run,
+ * a menu or another question (it is shown when the lobby is on screen with no popup open), it is shown once, and it is
+ * dropped for good if a run starts first or it waited past the server's lapse (review LOW 3).
  *
  * No churn: the watch that waits for the lobby runs only while an offer waits to be shown, and a card or a question
  * is a popup, built when it opens and gone when it closes, like every question of the game.
@@ -30,6 +31,8 @@ import { nl } from "../ui/widgets";
 
 /** how long the client waits for the server's Match remote before it decides there is none (s) */
 const REMOTE_WAIT_S = 30;
+/** an offer not shown within this long is dropped: the server's own lapses then (server/match/rules.ts OFFER_TTL_S) */
+const OFFER_WAIT_S = 600;
 /**
  * A trip the server never answered (no failure, no refusal, and the player still here) stops blocking a new request
  * after this long (s): past the server's own give-up (server/match/travel.ts ARRIVE_TIMEOUT_S, 45 s) and its retries.
@@ -40,8 +43,8 @@ const PENDING_S = 90;
 const state: {
 	ctx?: GameContext;
 	remote?: RemoteEvent;
-	/** an offer the server made that has not been shown yet */
-	offer?: { worldDay: number; bestDay: number };
+	/** an offer the server made that has not been shown yet, and when it came (os.clock) */
+	offer?: { worldDay: number; bestDay: number; at: number };
 	/** the watch that shows it once the lobby is on screen (only while `offer` waits) */
 	watch?: RBXScriptConnection;
 	/** a request sent and not yet answered by a failure or a refusal */
@@ -87,7 +90,7 @@ export function askPlaySolo(): void {
 		return;
 	}
 	const text = tr(
-		"A town of your own, on day 1: nobody else can join it.#This life, your items and your coins come with you.",
+		"A town of your own, on the day this life has reached: nobody else can join it.#This life, your items and your coins come with you.",
 	);
 	popup(ctx, tr("Play solo"), nl(text), [
 		{ text: tr("Cancel"), variant: "secondary" },
@@ -106,7 +109,7 @@ export function showOfferCard(worldDay: number): void {
 	const ctx = state.ctx;
 	if (ctx === undefined) return;
 	const text = tr(
-		"Its nights are far harder than anything you have survived yet.#Start fresh in a town of your own, on day 1? Nobody else can join it.#This life, your items and your coins come with you.",
+		"Its nights are far harder than anything you have survived yet.#Play on in a town of your own, on the day this life has reached? Nobody else can join it.#This life, your items and your coins come with you.",
 	);
 	popup(ctx, `${tr("Town")}  ·  ${tr("Day")} ${worldDay}`, nl(text), [
 		{
@@ -136,7 +139,13 @@ function armOfferWatch(): void {
 	state.watch = game.GetService("RunService").Heartbeat.Connect(() => {
 		const ctx = state.ctx;
 		const offer = state.offer;
-		if (ctx === undefined || offer === undefined) {
+		// a run started (the player chose to play here), or it waited past the server's lapse: the offer is gone for
+		// good, never a card popping up later over something else (review LOW 3)
+		const gone =
+			offer !== undefined &&
+			(ctx?.phase === "playing" || ctx?.phase === "dead" || os.clock() - offer.at > OFFER_WAIT_S);
+		if (ctx === undefined || offer === undefined || gone) {
+			state.offer = undefined;
 			state.watch?.Disconnect();
 			state.watch = undefined;
 			return;
@@ -157,6 +166,20 @@ function refused(ctx: GameContext, why: TripRefusal): void {
 			nl(
 				tr(
 					"Studio cannot teleport: Play solo works in the published game.#You stay on this local test server.",
+				),
+			),
+			[{ text: tr("Close"), variant: "secondary" }],
+		);
+		return;
+	}
+	if (why === "danger") {
+		// H1: the body this server keeps is where the fight is -- said plainly, with what to do about it
+		popup(
+			ctx,
+			tr("Play solo"),
+			nl(
+				tr(
+					"Your survivor is still in danger where you left the city: zombies close by, or a hit a moment ago.#Get clear of them in the city first, or wait a little.",
 				),
 			),
 			[{ text: tr("Close"), variant: "secondary" }],
@@ -203,7 +226,7 @@ export function onMatchNotice(notice: MatchNotice | undefined): void {
 	const ctx = state.ctx;
 	if (ctx === undefined || notice === undefined) return;
 	if (notice.k === "offer") {
-		state.offer = { worldDay: notice.worldDay, bestDay: notice.bestDay };
+		state.offer = { worldDay: notice.worldDay, bestDay: notice.bestDay, at: os.clock() };
 		armOfferWatch();
 		return;
 	}

@@ -1,6 +1,6 @@
 /*
  * Where a survivor plays: the server's kind, the fresh-town offer (P0-1), Play solo (P0-2) and the matchmaking
- * attributes (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-24). SERVER ONLY: the one file of server/match/ that
+ * attributes (docs/MULTIPLAYER.md §7.4, docs/DESIGN_RULES.md MP-25). SERVER ONLY: the one file of server/match/ that
  * touches Roblox -- TeleportService, MatchmakingService, the Match remote, Player:GetJoinData -- and hands every
  * decision to the pure modules beside it (rules.ts, travel.ts, matchmaking.ts).
  *
@@ -59,12 +59,25 @@ export interface MatchHostOptions {
 	inWorld: (player: Player) => boolean;
 	/** dead as far as the server knows (MP-21: the choice is made here, before any trip) */
 	isDead: (player: Player, save: PlayerSaveData) => boolean;
+	/** this server keeps the player's living body in danger where they left the city (server/net/mpHost.ts, H1) */
+	keptInDanger: (player: Player) => boolean;
 	/** banks the body and writes the save now, KEEPING the session lock (it yields) */
 	prepare: (player: Player) => void;
+	/**
+	 * A solo or private town opens on its owner's life day (MP-13): restart the world's clock on `day`, before anybody
+	 * has entered (server/net/mpHost.ts `startTownOn`). False when it is too late (a body already stood in the town).
+	 */
+	startTown: (day: number) => boolean;
 }
 
 export interface MatchHost {
 	kind: ServerKind;
+	/**
+	 * May this player's body be admitted into the city now? Not while a trip of theirs is in flight (review M2: a body
+	 * admitted under a TeleportAsync that goes through would be yanked out of a run), and not before a solo or private
+	 * town knows the day it opens on (MP-13: the first player to load settles it, within a scan).
+	 */
+	admits(player: Player): boolean;
 	/** the trips' audit ring (oldest first) and the remote's counters */
 	audit(): ReadonlyArray<TripAuditRow>;
 	counters(): { dropped: number; malformed: number; mmSent: number; mmRefused: number };
@@ -106,7 +119,7 @@ function matchRemote(): RemoteEvent {
 }
 
 /** the server's kind, read once (a read that fails reads as public: the conservative answer for every rule here) */
-function readKind(): ServerKind {
+export function readKind(): ServerKind {
 	const [studioOk, studio] = pcall(() => RunService.IsStudio());
 	const [idOk, id] = pcall(() => game.PrivateServerId);
 	const [ownerOk, owner] = pcall(() => game.PrivateServerOwnerId);
@@ -161,12 +174,16 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 		pcall(() => remote.FireClient(player, notice));
 	};
 
-	/** why this player may not leave now: the save still loading, a body in the city, a death to answer first */
+	/**
+	 * Why this player may not leave now: the save still loading, a body in the city, a death to answer first (MP-21),
+	 * or a living body this server keeps where a fight is going on (H1: no free escape from the horde).
+	 */
 	const blocker = (player: Player): TripRefusal | undefined => {
 		const s = options.sessionOf(player);
 		if (s === undefined || !s.loaded) return "loading";
 		if (options.inWorld(player)) return "inWorld";
 		if (options.isDead(player, s.save)) return "dead";
+		if (options.keptInDanger(player)) return "danger";
 		return undefined;
 	};
 
@@ -216,16 +233,46 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 	/** the players already looked at, and the offers standing (answered by the Match remote) */
 	const examined = new Set<Player>();
 	const offers = new Map<Player, { at: number; worldDay: number }>();
+	/** who was offered a town on this server: once per ACCOUNT, a rejoin is not asked again (review LOW 1) */
+	const offeredUsers = new Set<number>();
+	/** the day this town opens on is settled: at once on a public server, by the first to load on a solo / private one */
+	let townSettled = kind !== "solo" && kind !== "private";
+
+	/**
+	 * MP-13: a solo or private town opens on its OWNER's life day -- the run's `save.day`, which is day 1 for a fresh
+	 * save. The owner is the ticket's in a reserved town (server/match/rules.ts `readTicket`, checked against the
+	 * player) and PrivateServerOwnerId in a private one. The first player to load settles it: the owner, on their day;
+	 * anybody else (a private server's guest who came first), or a save that could not be read, on day 1. Only the
+	 * DataStore's save says the day: nothing the client sends does.
+	 */
+	const settleTown = (player: Player, save: PlayerSaveData, owner: boolean, readable: boolean): void => {
+		if (townSettled) return;
+		townSettled = true;
+		const day = owner && readable ? math.max(1, math.floor(save.day)) : 1;
+		const applied = options.startTown(day);
+		const why = !readable ? "save not read" : owner ? "the owner's life day" : "not the owner";
+		audit.add({
+			t: os.clock(),
+			userId: player.UserId,
+			route: "-",
+			what: "town",
+			detail: `day ${day} (${why})${applied ? "" : ", too late"}`,
+		});
+	};
 
 	const examine = (player: Player): void => {
 		const s = options.sessionOf(player);
 		if (s === undefined || !s.loaded) return;
-		examined.add(player);
 		const now = os.clock();
+		const readable = s.status !== "error";
 		if (kind === "solo") {
 			// P0-2: a survivor arriving in a town of their own -- the funnel's last step, for the ticket's own player
 			const [ok, join] = pcall(() => player.GetJoinData());
 			const reading = readTicket(ok ? join : undefined, game.PlaceId, player.UserId, kind);
+			settleTown(player, s.save, reading.ok, readable);
+			// a read-only load is looked at again once a retry has read the real save (review LOW 2)
+			if (!readable) return;
+			examined.add(player);
 			if (reading.ok) {
 				audit.add({ t: now, userId: player.UserId, route: reading.route, what: "arrived", detail: "" });
 				Analytics.townTrip(player, 3, reading.trip, reading.route);
@@ -234,6 +281,13 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 			}
 			return;
 		}
+		if (kind === "private") {
+			const [ownerOk, ownerId] = pcall(() => game.PrivateServerOwnerId);
+			settleTown(player, s.save, ownerOk && ownerId === player.UserId, readable);
+		}
+		if (!readable) return;
+		examined.add(player);
+		if (offeredUsers.has(player.UserId)) return;
 		const [followOk, follow] = pcall(() => player.FollowUserId);
 		const worldDay = options.worldDay();
 		const offered = freshTownOffer({
@@ -246,6 +300,7 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 		});
 		if (!offered || worldDay === undefined) return;
 		const day = math.floor(worldDay);
+		offeredUsers.add(player.UserId);
 		offers.set(player, { at: now, worldDay: day });
 		audit.add({ t: now, userId: player.UserId, route: "offer", what: "offered", detail: `day ${day}` });
 		Analytics.townOffered(player, day, s.save, s.status === "new");
@@ -359,6 +414,9 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 	return {
 		kind,
 		travel,
+		admits(player) {
+			return townSettled && !travel.inFlight(player);
+		},
 		audit() {
 			return audit.rows;
 		},

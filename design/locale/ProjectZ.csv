@@ -601,17 +601,17 @@ Pick an item to try it on in the preview, then buy or wear it."
 ,,,The town keeps its own day. This life and your record count yours.
 ,,,"Your survivor as everyone sees them, how long this life has lasted and what you carry.
 Enter the city to play. The town keeps its own day, shared by everyone on this server.
-Play solo takes you to a town of your own, on day 1: nobody else can join it.
+Play solo takes you to a town of your own, on the day this life has reached: nobody else can join it.
 When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.
 Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else."
 ,,,Wait for daybreak
 ,,,"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.
 New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept."
 ,,,Play solo
-,,,"A town of your own, on day 1: nobody else can join it.
+,,,"A town of your own, on the day this life has reached: nobody else can join it.
 This life, your items and your coins come with you."
 ,,,"Its nights are far harder than anything you have survived yet.
-Start fresh in a town of your own, on day 1? Nobody else can join it.
+Play on in a town of your own, on the day this life has reached? Nobody else can join it.
 This life, your items and your coins come with you."
 ,,,Stay
 ,,,New town
@@ -622,6 +622,8 @@ You stay on this local test server."
 ,,,Wait a moment before trying again.
 ,,,Already on the way to your town...
 ,,,"Choose Rebirth, the wait or New game first."
+,,,"Your survivor is still in danger where you left the city: zombies close by, or a hit a moment ago.
+Get clear of them in the city first, or wait a little."
 ,,,Go back to the lobby first.
 ,,,This is already a town of your own.
 ,,,That offer has lapsed.
