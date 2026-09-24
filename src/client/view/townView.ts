@@ -3,10 +3,12 @@
  * the ground it adds -- the bank's steps, a court, a sand pit, a poured slab, a vegetable bed -- the bank's portico,
  * columns, vault door, deposit boxes and roof, and the fixtures of the streets, the parks and the backyards.
  *
- * Frames only, the same with or without the town's textures (ART-12, like a building's furniture and the campus's
- * quad): lit from the top left like the rest of the town (LUZ-01), a dark outline, three tones, a shadow on the sun's
- * side. Every colour is a module constant (the renderer's write cache keys on the Color3's identity), and what is
- * inside a building (the vault door, the boxes) is drawn only while its roof is lifted.
+ * With the town's fixtures' atlas (ART-16, ./townPropArt.ts) every fixture, the market's tents, the shelter's roof
+ * and the ground here are its pixel art; without it (ART-01), and for what stays out of it -- the bank's portico,
+ * roof, vault door and boxes -- Frames: lit from the top left like the rest of the town (LUZ-01), a dark outline,
+ * three tones, a shadow on the sun's side. Every colour is a module constant (the renderer's write cache keys on the
+ * Color3's identity), and what is inside a building (the vault door, the boxes) is drawn only while its roof is
+ * lifted.
  *
  * worldView.ts hands over: `drawTownGround` first for every ground rect, `drawTownProp` for a "prop" solid before the
  * campus's, `drawPortico` for the bank's canopy, `drawVaultDoor` for its door, `drawBankRoof` with the signage.
@@ -18,9 +20,7 @@ import { CRATE_STACKED, CRATE_TIPPED, TENT_DOWN, TENT_SAGGING, TENT_TORN } from 
 import type { GroundRect, Rect, Solid, WorldData } from "shared/game/world";
 import { isPortico, isVaultBox, isVaultDoor } from "shared/sim/vault";
 import { overlaps } from "./drawKit";
-
-/** where the shadow of something at (x, y) falls, for a shadow `len` long (worldView.ts ShadowFn, LUZ-01) */
-type ShadowFn = (x: number, y: number, len: number) => { x: number; y: number };
+import { drawCanopyArt, drawGroundArt, drawPropArt, ShadowFn } from "./townPropArt";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
@@ -145,13 +145,13 @@ const STEP = 24;
 export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): boolean {
 	const k = g.kind;
 	if (k === "spill" || k === "paper" || k === "bag") {
-		if (overlaps(g.x, g.y, g.w, g.h, v)) drawLitter(r, cam, g);
+		if (overlaps(g.x, g.y, g.w, g.h, v) && !drawGroundArt(r, cam, g)) drawLitter(r, cam, g);
 		return true;
 	}
 	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site") {
 		return false;
 	}
-	if (!overlaps(g.x, g.y, g.w, g.h, v)) return true;
+	if (!overlaps(g.x, g.y, g.w, g.h, v) || drawGroundArt(r, cam, g)) return true;
 	const cx = g.x + g.w / 2;
 	const cy = g.y + g.h / 2;
 	const z = Z.ground + 3;
@@ -920,18 +920,21 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	const cy = s.y + s.h / 2;
 	const wide = s.w >= s.h;
 	const k = s.variant ?? 0;
-	if (t === "column") {
-		drawColumn(r, cam, s, shadow);
-		return true;
-	}
 	if (isVaultBox(s)) {
 		drawDepositBoxes(r, cam, s, world, shadow);
 		return true;
 	}
+	// under a standing market tent nobody is under, nothing shows; under a tent that came down, all of it does
+	const market = t === "stall" || t === "crates" || t === "trestle";
+	if (market && tentHides(tentOver(world, s))) return true;
+	// the town's pixel art (ART-16), the bench included; the flat drawing below without it (ART-01)
+	if (drawPropArt(r, cam, s, world, shadow)) return true;
+	if (t === "column") {
+		drawColumn(r, cam, s, shadow);
+		return true;
+	}
 	// ---- the street market (EDI-20)
-	if (t === "stall" || t === "crates" || t === "trestle") {
-		// under a standing tent nobody is under, nothing shows; under a tent that came down, all of it does
-		if (tentHides(tentOver(world, s))) return true;
+	if (market) {
 		if (t === "crates") {
 			drawCrates(r, cam, s, shadow);
 			return true;
@@ -1273,7 +1276,7 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, shadow: ShadowFn): boolean {
 	const t = s.tags;
 	if (t !== "tent" && t !== "shelter") return false;
-	if (!overlaps(s.x - 40, s.y - 40, s.w + 80, s.h + 80, v)) return true;
+	if (!overlaps(s.x - 40, s.y - 40, s.w + 80, s.h + 80, v) || drawCanopyArt(r, cam, s, shadow)) return true;
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
 	if (t === "tent") {

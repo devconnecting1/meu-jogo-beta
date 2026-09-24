@@ -49,12 +49,12 @@ const FACES = ["top", "bottom", "left", "right"];
 
 // ---------------------------------------------------------------- colour helpers
 
-const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+export const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const BLACK = [0, 0, 0];
 const WHITE = [255, 255, 255];
 const INK = [22, 18, 20];
 
-function rng(seed) {
+export function rng(seed) {
 	let a = seed >>> 0;
 	return () => {
 		a = (a + 0x6d2b79f5) >>> 0;
@@ -65,7 +65,7 @@ function rng(seed) {
 	};
 }
 
-function hashStr(s) {
+export function hashStr(s) {
 	let h = 2166136261;
 	for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
 	return h >>> 0;
@@ -78,7 +78,7 @@ function hashStr(s) {
  * two lights. `soft` materials (cloth, paper) keep a gentler ramp; `shine` ones (glass, porcelain, steel) a sharper
  * highlight.
  */
-function ramp(base, { shine = false, soft = false, outline } = {}) {
+export function ramp(base, { shine = false, soft = false, outline } = {}) {
 	return {
 		o: outline ?? mix(base, INK, 0.74),
 		dd: mix(base, BLACK, soft ? 0.3 : 0.38),
@@ -89,7 +89,7 @@ function ramp(base, { shine = false, soft = false, outline } = {}) {
 	};
 }
 
-function materials(C) {
+export function materials(C) {
 	const m = {};
 	const add = (name, base, opts) => (m[name] = ramp(base, opts));
 	add("wood", C.furnWood);
@@ -149,7 +149,7 @@ function materials(C) {
 }
 
 /** dried blood (LEG-02: red is blood) and the chalk, the loose ink colours drawn over a material */
-function inks(C) {
+export function inks(C) {
 	return {
 		blood: mix(C.blood, BLACK, 0.4),
 		bloodDark: mix(C.blood, BLACK, 0.58),
@@ -167,7 +167,7 @@ function inks(C) {
 
 // ---------------------------------------------------------------- the canvas: material + height per texel
 
-class Canvas {
+export class Canvas {
 	constructor(L, D) {
 		this.L = L;
 		this.D = D;
@@ -297,7 +297,7 @@ class Canvas {
 }
 
 /** the canonical canvas (front at the bottom) turned to face `face` in the world */
-function orient(cv, face) {
+export function orient(cv, face) {
 	const { L, D } = cv;
 	const across = face === "left" || face === "right";
 	const out = new Canvas(across ? D : L, across ? L : D);
@@ -333,7 +333,7 @@ function orient(cv, face) {
  * The world-facing map shaded into RGBA (see the header), with `shadow` texels of baked shadow to the bottom right
  * and `outline` off for flat decoration that sits in the floor (a rug's own border is its outline).
  */
-function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
+export function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
 	const W = cv.L;
 	const H = cv.D;
 	const out = { w: W + shadow, h: H + shadow, d: new Float32Array((W + shadow) * (H + shadow) * 4) };
@@ -1882,7 +1882,7 @@ export function readPlanner(ROOT) {
  * Every cell painted, deduplicated (the same pixels are stored once), and shelf-packed into one image of at most
  * MAX_SIDE x MAX_SIDE. Answers the RGBA image and, per key, [x, y, w, h, shadow] in texels.
  */
-function pack(entries) {
+export function pack(entries) {
 	const unique = [];
 	const byHash = new Map();
 	for (const e of entries) {

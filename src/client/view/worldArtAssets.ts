@@ -161,7 +161,8 @@ export type WorldArtName =
 	| "bossRafflesiaRim"
 	| "itemIcons"
 	| "furniture"
-	| "blood";
+	| "blood"
+	| "townProps";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -400,7 +401,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://118399822667752", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://106965413738558", w: 16, h: 16 },
-	/** slice: the shadow at the foot of an interior wall (round every wall) */
+	/** slice: an interior wall's outline (its centre, tinted) and the shadow at its foot */
 	wallShade: { id: "rbxassetid://120729739933297", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
@@ -456,6 +457,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	furniture: { id: "", w: 1024, h: 922 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
 	blood: { id: "", w: 96, h: 264 },
+	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
+	townProps: { id: "", w: 1024, h: 662 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -606,4 +609,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"itemIcons",
 	"furniture",
 	"blood",
+	"townProps",
 ];

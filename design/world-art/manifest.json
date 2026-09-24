@@ -977,7 +977,7 @@
 				4,
 				4
 			],
-			"description": "the shadow at the foot of an interior wall (round every wall)"
+			"description": "an interior wall's outline (its centre, tinted) and the shadow at its foot"
 		},
 		{
 			"name": "survivorsA",
@@ -1407,6 +1407,14 @@
 			"w": 96,
 			"h": 264,
 			"description": "combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)"
+		},
+		{
+			"name": "townProps",
+			"file": "townProps.png",
+			"kind": "atlas",
+			"w": 1024,
+			"h": 662,
+			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
 		}
 	]
 }

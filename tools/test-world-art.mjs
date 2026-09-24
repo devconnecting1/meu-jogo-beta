@@ -2759,6 +2759,124 @@ section("11b) the interiors' pixel art: no id no change, every piece in the atla
 	}
 }
 
+// ================================================================ 11c. the town's fixtures (ART-16)
+
+section("11c) the town's fixtures' pixel art (ART-16): every fixture and its ground in the atlas, on its own rect");
+{
+	const TPA_MODULE = join(SRC, "client/view/townPropArt.ts");
+	if (existsSync(TPA_MODULE)) {
+		const TPA = require(TPA_MODULE);
+		const { TOWN_PROP_STRIPS } = require(join(SRC, "client/view/townPropAtlas.ts"));
+		const cam = new Camera();
+		const noShadow = () => ({ x: 0, y: 0 });
+		const calls = [];
+		const rec = { drawRect: (c, x, y, o) => calls.push({ x, y, w: o.w, h: o.h, image: o.image, z: o.zIndex }) };
+		// without the atlas every call answers false and draws nothing: townView's Frames, as before (ART-01; §1)
+		setArt({});
+		let silent = true;
+		for (const s of world.solids) {
+			if (s.kind === "prop" && TPA.drawPropArt(rec, cam, s, world, noShadow)) silent = false;
+			if (s.kind === "canopy" && s.tags !== "portico" && TPA.drawCanopyArt(rec, cam, s, noShadow)) silent = false;
+		}
+		check(silent && calls.length === 0, "no id: no fixture is drawn from the atlas (townView draws them flat)");
+		setArt(ALL.ids);
+		const id = ALL.ids.townProps;
+		const TOWN = new Set([
+			...["stall", "trestle", "crates", "handcart", "foodtruck", "bench", "streetlight", "hydrant", "mailbox"],
+			...["postbox", "busstop", "swings", "slide", "climber", "springer", "hoop", "picnic", "shed", "pool"],
+			...[
+				"trampoline",
+				"grill",
+				"pile",
+				"portapotty",
+				"mixer",
+				"dumpster",
+				"scaffold",
+				"column",
+				"fence",
+				"studs",
+			],
+		]);
+		const GROUND = new Set(["court", "sandbox", "garden", "steps", "site", "pad", "spill", "paper", "bag"]);
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
+		const stat = { fixtures: 0, roofs: 0, ground: 0, missing: [], off: [] };
+		const tags = new Set();
+		/** the atlas sprites drawn for one thing: the fixture's own (not its sun shadow), their union */
+		const span = () => {
+			let x0 = Infinity;
+			let y0 = Infinity;
+			let x1 = -Infinity;
+			let y1 = -Infinity;
+			let n = 0;
+			for (const c of calls) {
+				if (c.image !== id || c.z === Z.roof - 1) continue;
+				n++;
+				x0 = Math.min(x0, c.x - c.w / 2);
+				y0 = Math.min(y0, c.y - c.h / 2);
+				x1 = Math.max(x1, c.x + c.w / 2);
+				y1 = Math.max(y1, c.y + c.h / 2);
+			}
+			return { x0, y0, x1, y1, n };
+		};
+		const T = 4;
+		for (const seed of seeds) {
+			const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+			const things = [];
+			for (const s of w.solids) {
+				if (s.kind === "prop" && TOWN.has(s.tags)) things.push(["prop", s]);
+				else if (s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter")) things.push(["roof", s]);
+			}
+			for (const l of w.lots) for (const g of l.ground) if (GROUND.has(g.kind)) things.push(["ground", g]);
+			for (const [kind, s] of things) {
+				calls.length = 0;
+				const tag = kind === "ground" ? s.kind : s.tags;
+				tags.add(tag);
+				const ok =
+					kind === "prop"
+						? TPA.drawPropArt(rec, cam, s, w, noShadow)
+						: kind === "roof"
+							? TPA.drawCanopyArt(rec, cam, s, noShadow)
+							: TPA.drawGroundArt(rec, cam, s);
+				if (kind === "prop") stat.fixtures++;
+				else if (kind === "roof") stat.roofs++;
+				else stat.ground++;
+				if (!ok) {
+					if (stat.missing.length < 6)
+						stat.missing.push(`${tag} ${s.w}x${s.h} ${s.face ?? "-"} v${s.variant ?? "-"}`);
+					continue;
+				}
+				// the art starts on the thing's own rect and covers it; past it only its baked contact shadow (one
+				// texel) and a hoop's rim over the court; a strip is its rect exactly
+				const b = span();
+				const hang = s.tags === "hoop" ? 6 * T : 0;
+				const past = TOWN_PROP_STRIPS[tag] === true ? 0 : T + hang;
+				const good =
+					b.n >= 1 &&
+					b.x0 >= s.x - hang - 0.01 &&
+					b.y0 >= s.y - hang - 0.01 &&
+					b.x0 <= s.x + 0.01 &&
+					b.y0 <= s.y + 0.01 &&
+					b.x1 >= s.x + s.w - 0.01 &&
+					b.y1 >= s.y + s.h - 0.01 &&
+					b.x1 <= s.x + s.w + past + 0.01 &&
+					b.y1 <= s.y + s.h + past + 0.01;
+				if (!good && stat.off.length < 6) stat.off.push(`${tag} ${s.w}x${s.h}: ${JSON.stringify(b)}`);
+			}
+		}
+		check(
+			stat.missing.length === 0,
+			`every fixture, roof and ground of the everyday town in ${seeds.length} towns is drawn from the atlas (${stat.fixtures} fixtures, ${stat.roofs} tents and shelters, ${stat.ground} grounds; ${[...tags].length} kinds)`,
+			stat.missing.join("; "),
+		);
+		check(
+			stat.off.length === 0,
+			"each one's art stands on its own rect (the collision box): at most a texel of baked shadow past it",
+			stat.off.join("; "),
+		);
+		setArt({});
+	}
+}
+
 section("12) ground items (ITM-07): every item on every ground, by day, in the survivor's light and in the dark");
 {
 	const { GroundItemsView } = require(join(SRC, "client/view/groundItemsView.ts"));
