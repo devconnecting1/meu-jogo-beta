@@ -300,6 +300,10 @@ Play solo, não pausar o mundo).
 | I4  | MULTIPLAYER D11, §7.3, §7.4      | Espectar e Play solo                                                                                  | Nenhum dos dois existe                                                                                                                        |
 | I5  | MONETIZATION.md × CREATOR_HUB.md | "Assinatura — ainda não" × "Subscriptions: Não"                                                       | Sem código; só as duas frases divergem no tom (uma espera cadência, a outra recusa)                                                           |
 
+_Estado em 2026-09-24:_ **I2** resolvida (MP-13 / MP-20: todo servidor começa no dia 1 e o tipo do servidor é lido e
+publicado, `shared/match/matchWire.ts`); **I3** resolvida (o cabeçalho da `MULTIPLAYER.md`); **I4** resolvida na metade
+do Play solo (MP-24, `server/match/*`) — Espectar continua não existindo (P1-7).
+
 ---
 
 ## 5. Recomendações priorizadas
@@ -347,6 +351,8 @@ Play solo, não pausar o mundo).
   paga. O CREATOR_HUB diz "Custom matchmaking — não agora": este sinal é a exceção, porque não é fila, é um atributo.
 - **Esforço:** S (atributo + sinal) a M (regra do primeiro save). Confirmar a API no Context7 antes (regra da casa).
 - **Regras:** MP-09, MP-13, MP-20.
+- **Feito (2026-09-24, MP-24):** os atributos `WorldDay` e `Survivors` (o sinal é passo do dono no Creator Hub) e a
+  oferta de cidade própria ao carregar, com consentimento, em `max(5, recorde + 4)` (`docs/MULTIPLAYER.md` §7.4).
 
 ### P0-2 — Construir o Play solo
 
@@ -357,6 +363,8 @@ Play solo, não pausar o mundo).
   estranhos. Também é a resposta certa para quem sente falta da pausa (UI-06 fica como está).
 - **Esforço:** M. No Studio o teleporte não roda; testar numa experiência de teste separada (servidores-e-dados §4).
 - **Regras:** MP-14, MP-20, MP-13 (definir de novo o que é "solo/privado"), UI-10.
+- **Feito (2026-09-24, MP-24):** `ReserveServerAsync` + `TeleportAsync` com o código, o botão na tela Survivor, falhas
+  com retentativa e mensagem, TeleportData validado no destino, funil NewTown (`docs/MULTIPLAYER.md` §7.4). Amigos: P1-8.
 
 ### P0-3 — Decidir os chefes e alinhar tudo
 

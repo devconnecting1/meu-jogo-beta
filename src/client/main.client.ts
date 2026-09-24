@@ -49,6 +49,7 @@ import { interactHint } from "./systems/interaction";
 import { addItem } from "./systems/items";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
+import * as Match from "./net/matchClient";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
@@ -461,6 +462,8 @@ function goLobby(page: LobbyPage = "menu"): void {
 			onPage: (p: LobbyPage) => {
 				lobbyNav.page = p;
 			},
+			// P0-2: a town of one's own (docs/MULTIPLAYER.md §7.4): a question, then the server (client/net/matchClient.ts)
+			onPlaySolo: Match.askPlaySolo,
 		},
 		lobbyStatus(),
 		page,
@@ -921,6 +924,8 @@ netOnTown(onTown);
 // the server's counter reaches its goal
 startTitleNotices(ctx);
 startAchievementNotices(ctx);
+// Play solo and the fresh-town offer (P0-1, P0-2): the Match remote, the lobby card
+Match.startMatchClient(ctx);
 
 function resumeRun(): void {
 	clearScreen();

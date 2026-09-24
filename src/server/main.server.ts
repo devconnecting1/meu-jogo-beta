@@ -42,6 +42,7 @@ import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 import * as Analytics from "./analytics/events";
 import { grantWelcomePack } from "./config/experiments";
+import { startMatch } from "./match/matchHost";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -1504,6 +1505,40 @@ if (MP_PHASE >= 1) {
 	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
+
+// ---------------------------------------------------------------- where a survivor plays (§7.4, MP-24)
+
+/*
+ * Play solo and the fresh-town offer (P0-1, P0-2), the server's kind and the matchmaking attributes
+ * (server/match/matchHost.ts). It decides nothing about a save: it asks this file for the session and, before a
+ * teleport, for a write that KEEPS the lock -- a teleport that fails leaves a session that still owns its save; one
+ * that succeeds is a leave like any other, whose final write (PlayerRemoving above) releases the lock the
+ * destination's load is waiting for (LOCK_WAIT).
+ */
+startMatch({
+	sessionOf: player => {
+		const s = sessions.get(player);
+		if (s === undefined || s.closed) return undefined;
+		return { loaded: s.loaded && !s.loading && !s.retryQueued, status: s.status, save: s.save };
+	},
+	worldDay: () => mpHost?.simulation.clock.day,
+	survivors: () => {
+		let n = 0;
+		if (mpHost !== undefined) for (const sp of mpHost.simulation.players()) if (!sp.state.dead) n += 1;
+		return n;
+	},
+	// in the city, or asked to be (EnterWorld, admitted on the host's next pass): a trip starts from the lobby only
+	inWorld: player => mpHost !== undefined && mpHost.wantsWorld(player),
+	isDead: (player, save) => (mpHost !== undefined ? mpHost.isDead(player, save) : save.runOver),
+	prepare: player => {
+		const s = sessions.get(player);
+		if (s === undefined || s.closed || !s.loaded) return;
+		guarded("settling the body", () => mpHost?.settle(player, s.save), s.key);
+		// written now, whatever the autosave last did: the destination loads what this write (or the leave's) left
+		s.dirty = true;
+		guarded("save before a teleport", () => flush(s, false), s.key);
+	},
+});
 
 // ---------------------------------------------------------------- proximity chat (§4.3, §9.1)
 

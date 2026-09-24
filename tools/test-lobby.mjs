@@ -688,6 +688,7 @@ const ctx = { phase: "lobby", save, uiLayer: undefined };
 
 const calls = {
 	play: 0,
+	solo: 0,
 	rebirth: 0,
 	wait: 0,
 	newRun: 0,
@@ -710,6 +711,8 @@ const handlers = {
 	onCredits: () => calls.credits++,
 	onTutorial: thenPlay => calls.tutorial.push(thenPlay === true),
 	onPage: p => calls.pages.push(p),
+	// P0-2 (client/net/matchClient.ts in the game): the Survivor screen's Play solo
+	onPlaySolo: () => calls.solo++,
 };
 const status = (over = {}) => ({ loading: false, run: "fresh", hosted: false, seed: DESIGN.TOWN_SEED, ...over });
 
@@ -1239,6 +1242,61 @@ check("...sem criar Instance", zero(r), cost(r));
 save.runOver = false;
 save.money = 40;
 
+// P0-2: Play solo (docs/MULTIPLAYER.md §7.4), beside Home -- the server's kind decides where it is offered
+const soloBtn = () => actionBtn("Solo");
+lobby.refresh(status({ hosted: true }));
+check(
+	"Play solo: sem o tipo do servidor publicado (um servidor antigo), nenhum botao",
+	soloBtn() !== undefined && !shown(soloBtn()),
+);
+r = measure(() => {
+	Workspace.SetAttribute("pz_server_kind", "public");
+	flush();
+	lobby.refresh(status({ hosted: true }));
+});
+check(
+	'num servidor publico: "Play solo" em ferro, entre o Home e o Enter',
+	shown(soloBtn()) &&
+		soloBtn().Text === "Play solo" &&
+		variantOf(soloBtn()) === "secondary" &&
+		soloBtn().Position.X.Scale > actionBtn("Home").Position.X.Scale &&
+		soloBtn().Position.X.Scale < actionBtn("Enter").Position.X.Scale,
+	`${soloBtn().Text} / ${variantOf(soloBtn())}`,
+);
+check("...mostrado sem criar Instance (o botao ja existia)", zero(r), cost(r));
+click(soloBtn(), "Play solo");
+check("...e aperta-lo chama o handler (a pergunta e o servidor sao do matchClient)", calls.solo === 1);
+lobby.refresh(status({ hosted: true, run: "suspended" }));
+check("com a partida em memoria tambem", shown(soloBtn()));
+lobby.refresh(status({ hosted: false }));
+check("offline (sem servidor): nenhum botao", !shown(soloBtn()));
+save.runOver = true;
+lobby.refresh(status({ hosted: true, run: "over", clockDriven: true }));
+check("partida acabada: nenhum botao (a morte se responde onde aconteceu, MP-21)", !shown(soloBtn()));
+lobby.refresh(status({ hosted: true, run: "newLife" }));
+check("vida nova esperando a primeira luz: nenhum botao", !shown(soloBtn()));
+save.runOver = false;
+Workspace.SetAttribute("pz_server_kind", "solo");
+flush();
+lobby.refresh(status({ hosted: true }));
+check("numa cidade so sua (servidor reservado): nenhum botao", !shown(soloBtn()));
+check(
+	'...e o painel da cidade no menu diz "Solo · your own town"',
+	townCell(1).FindFirstChild("Value").Text === "Solo" &&
+		townCell(1).FindFirstChild("Caption").Text === "your own town",
+	`${townCell(1).FindFirstChild("Value").Text} ${townCell(1).FindFirstChild("Caption").Text}`,
+);
+for (const kind of ["private", "studio"]) {
+	Workspace.SetAttribute("pz_server_kind", kind);
+	flush();
+	lobby.refresh(status({ hosted: true }));
+	check(`num servidor ${kind}: o botao volta (no Studio ele explica que nao ha teleporte)`, shown(soloBtn()));
+}
+// the rest of the suite (layout at three screens, focus) runs with the button on screen
+Workspace.SetAttribute("pz_server_kind", "public");
+flush();
+lobby.refresh(status());
+
 // X and Home go back to the menu
 click(window_().FindFirstChild("Close"), "X");
 check("o X volta para o menu", shown(menuPage()) && !shown(survivorPage()) && calls.pages.at(-1) === "menu");
@@ -1265,8 +1323,13 @@ console.log("\n5) controle: foco inicial e chapas selecionaveis\n");
 UserInputService.GetLastInputType = () => Enum.UserInputType.Gamepad1;
 lobby.show("menu");
 check("no menu, o foco comeca no START", GuiService.SelectedObject === start);
+lobby.refresh(status({ hosted: true }));
 lobby.show("survivor");
-check("na tela Survivor, na acao principal (Enter)", GuiService.SelectedObject === actionBtn("Enter"));
+check(
+	"na tela Survivor, na acao principal (Enter) -- nunca no Play solo, que so e um caminho",
+	GuiService.SelectedObject === actionBtn("Enter") && shown(actionBtn("Solo")),
+);
+lobby.refresh(status());
 save.runOver = true;
 save.money = 0;
 lobby.refresh(status({ run: "over" }));

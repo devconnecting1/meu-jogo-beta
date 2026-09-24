@@ -63,16 +63,32 @@ desktop/mobile/tablet/console habilitados.
 `serverSize` = 6. Não mexa para cima sem mudar `MAX_PLAYERS` no código junto: os dois números **são o mesmo
 número**, e se divergirem o sintoma é um jogador fantasma no lobby.
 
-### Custom matchmaking — **não agora**
+### Custom matchmaking — **só dois atributos, sem fila** (MP-24)
 
-Só faz sentido com fila e volume de jogadores. Antes disso é complexidade sem uso. Reavaliar quando houver
-gente suficiente para uma fila existir.
+Fila continua fora: não há partida para enfileirar. Mas um jogador novo não pode cair num mundo público no dia 23
+(`docs/MULTIPLAYER.md` §7.4), e o servidor público já publica dois números para isso (`server/match/matchmaking.ts`,
+`MatchmakingService:SetServerAttribute`, só quando mudam). Sem os passos abaixo o jogo funciona igual (a oferta de
+cidade nova no lobby continua valendo) e o log avisa uma vez "the matchmaking attributes were refused".
 
-### Server management — **decida antes de publicar**
+1. **Matchmaking → atributos de servidor** (a página "Customize your matchmaking configuration"): crie
+   `WorldDay` (número, padrão 1) e `Survivors` (número, padrão 0). Os nomes são os do código: não traduza.
+2. **Uma configuração de pontuação** a partir da padrão (mantenha _Friends_ 15, _Occupancy_ 2 etc.) com um **sinal
+   customizado numérico de servidor**: atributo `WorldDay`, comparado a uma **constante** 1, `maxRelevantDifference`
+   10 (dia 11 em diante já pontua 0), peso 3. Quem entra passa a preferir cidades jovens; amigos continuam juntos.
+3. Opcional: um segundo sinal numérico de servidor com `Survivors` contra a constante 6, `maxRelevantDifference` 6,
+   peso 1: a pontuação cresce com quem está de pé, e uma cidade onde todos estão mortos (que vai acabar, MP-22) pontua
+   0. Ligue só se o painel mostrar gente chegando em cidades à beira do fim.
+4. **Prévia com servidores de mentira** (a própria página oferece) antes de ativar. Um atributo **de jogador** (o
+   recorde) não é usado: ele seria lido de um data store por um caminho JSON, e o save guarda o `data` como texto.
 
-É aqui que mora o "jogar sozinho" que você pediu. As opções são servidor privado (VIP) ou reserva por
-`TeleportService`. Está sob análise numa frente de pesquisa (`docs/research/servidores-e-dados.md`); o que
-**não** pode acontecer é o solo virar um modo pior que o co-op — é a regra MP-14.
+### Server management — **Play solo feito; VIP é decisão sua**
+
+O "jogar sozinho" que você pediu é o **Play solo** da tela Survivor: um servidor **reservado** pelo próprio jogo
+(`TeleportService:ReserveServerAsync` + `TeleportAsync`), com as mesmas regras do público e a cidade no dia 1
+(`docs/MULTIPLAYER.md` §7.4, MP-24). Não precisa de configuração nenhuma aqui, e **só funciona no jogo publicado**: no
+Studio a tela explica que não há teleporte. Teste numa experiência de teste separada (o roteiro está na §7.4). O
+servidor privado (VIP) é independente: ligue se quiser vendê-lo ou dá-lo; o jogo o reconhece sozinho
+(`pz_server_kind = private`). O que **não** pode acontecer continua sendo o solo virar um modo pior que o co-op — MP-14.
 
 ### Permissions / Collaborators — **só você, por enquanto**
 

@@ -151,6 +151,12 @@ export interface MpHost {
 	lives: LifeKeeper;
 	/** the server entity of a connected player, or undefined when they are not in the world */
 	playerOf(player: Player): ServerPlayer | undefined;
+	/**
+	 * The client asked to be in the world (EnterWorld) and has not asked to leave -- admitted or about to be. A trip to a
+	 * town of one's own starts only from the lobby (server/match/travel.ts): this closes the half second between the
+	 * intent and the admission.
+	 */
+	wantsWorld(player: Player): boolean;
 	/** dead as far as the SERVER knows (in the world, in the lobby, or — never seen here — as the save says) */
 	isDead(player: Player, save: PlayerSaveData): boolean;
 	/**
@@ -724,6 +730,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		playerOf(player) {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;
+		},
+		wantsWorld(player) {
+			const link = links.get(player);
+			return link !== undefined && (link.wantsWorld || link.slot !== undefined);
 		},
 		isDead(player, save) {
 			return lives.isDead(player.UserId, save);
