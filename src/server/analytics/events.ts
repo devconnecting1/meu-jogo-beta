@@ -149,6 +149,23 @@ export const SHOP_VISIT_S = 600;
 export const SHOP_OPEN_MIN_S = 1;
 export const SHOP_VISITS_MAX = 30;
 
+/**
+ * The recurring funnel of ONE TRIP to a town of one's own (docs/MULTIPLAYER.md §7.4: Play solo, and the fresh-town
+ * offer's New town, P0-1): asked (a request the server accepted), teleported (TeleportAsync went through), arrived (the
+ * destination read the ticket). funnelSessionId: the GUID the origin drew, carried in the teleport's ticket
+ * (server/match/rules.ts) -- one session on both servers, like the Rebirth funnel's natural key. Step 1's fields say
+ * which way the player came, from what world day and on what day of their life.
+ */
+export const TOWN_FUNNEL = "NewTown";
+export const TOWN_STEPS = ["Asked", "Teleported", "Arrived"];
+/** a trip's route (server/match/rules.ts TripRoute) as its field says it */
+export function routeName(route: string): string {
+	return route === "offer" ? "Offer" : "Play solo";
+}
+/** where a failed trip stopped (server/match/travel.ts), and why (shared/match/matchWire.ts TripFailure) */
+export const TRIP_STAGES = ["Reserve", "Teleport", "Init"];
+export const TRIP_RESULTS = ["reserve", "teleport", "full", "flooded", "denied", "timeout", "cancelled"];
+
 /** a living boss this close to a body at its death is what killed it: a needle's reach (shared/sim/ai/bossBrain.ts) */
 export const BOSS_REACH = 900;
 
@@ -175,6 +192,10 @@ export const EVENT = {
 	WeaponKills: "WeaponKills",
 	/** MP-26: a player ARRIVED from another public server's Servers list (server/match/townServices.ts) */
 	JoinedFromList: "JoinedFromList",
+	/** P0-1: a joining player was offered a town of their own (the public town was far past their record) */
+	TownOffered: "TownOffered",
+	/** a trip to a town of one's own ended with the player still here */
+	TripFailed: "TripFailed",
 } as const;
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
@@ -1192,6 +1213,55 @@ export class ServerAnalytics {
 		});
 	}
 
+	/**
+	 * P0-1: the server offered this player, as they joined, a town of their own (server/match/matchHost.ts): the public
+	 * town's day was far past their record. The value is that day; the fields are the server's (the world day, the
+	 * record, a first visit or not). How many of them said yes is the NewTown funnel's `Route - Offer`.
+	 */
+	townOffered(player: Player, worldDay: number, save: PlayerSaveData, first: boolean): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.leftAt !== undefined) return;
+		this.custom(e, EVENT.TownOffered, worldDay, {
+			CustomField01: `World day - ${dayBucket(worldDay)}`,
+			CustomField02: `Best day - ${dayBucket(save.bestDay)}`,
+			CustomField03: first ? "Visit - First" : "Visit - Returning",
+		});
+	}
+
+	/**
+	 * The NewTown funnel (server/match/*): step 1 when the server accepted the request (with its fields: the route, the
+	 * world day it leaves, the life's day), 2 when TeleportAsync went through, 3 on the DESTINATION when the ticket was
+	 * read. `id` is the trip's GUID, which the ticket carried from one server to the other.
+	 */
+	townTrip(player: Player, step: number, id: string, route: string, worldDay?: number, save?: PlayerSaveData): void {
+		const e = this.entries.get(player);
+		const name = TOWN_STEPS[step - 1];
+		if (e === undefined || name === undefined) return;
+		if (step === 1) {
+			const life = save ?? e.save;
+			this.funnel(e, TOWN_FUNNEL, id, 1, name, {
+				CustomField01: `Route - ${routeName(route)}`,
+				CustomField02: `World day - ${dayBucket(worldDay ?? 1)}`,
+				CustomField03: `Life day - ${dayBucket(life.day)}`,
+			});
+			return;
+		}
+		this.funnel(e, TOWN_FUNNEL, id, step, name);
+	}
+
+	/** a trip that ended with the player still here: where it stopped and why; the value is the teleports it tried */
+	tripFailed(player: Player, stage: string, why: string, route: string, attempts: number): void {
+		const e = this.entries.get(player);
+		if (e === undefined) return;
+		const where = TRIP_STAGES.includes(stage) ? stage : "Init";
+		const result = TRIP_RESULTS.includes(why) ? why : "teleport";
+		this.custom(e, EVENT.TripFailed, attempts, {
+			CustomField01: `Stage - ${where}`,
+			CustomField02: `Result - ${result}`,
+			CustomField03: `Route - ${routeName(route)}`,
+		});
+	}
+
 	/** a backpack verb the server APPLIED (server/sim/simulation.ts `onBackpack`): counted, summarized on leaving */
 	backpack(save: PlayerSaveData, outcome: BackpackOutcome): void {
 		const e = this.entryOfSave(save);
@@ -1408,4 +1478,26 @@ export function arrivedFromList(player: Player, day: number, players: number): v
 /** server/main.server.ts `sim.onBackpack`: a craft, a use, an equip the server applied */
 export function backpack(save: PlayerSaveData, outcome: BackpackOutcome): void {
 	guard(c => c.backpack(save, outcome));
+}
+
+/** server/match/matchHost.ts: a joining player was offered a town of their own (P0-1) */
+export function townOffered(player: Player, worldDay: number, save: PlayerSaveData, first: boolean): void {
+	guard(c => c.townOffered(player, worldDay, save, first));
+}
+
+/** server/match/*: the NewTown funnel's step (1 asked, 2 teleported, 3 arrived on the destination) */
+export function townTrip(
+	player: Player,
+	step: number,
+	id: string,
+	route: string,
+	worldDay?: number,
+	save?: PlayerSaveData,
+): void {
+	guard(c => c.townTrip(player, step, id, route, worldDay, save));
+}
+
+/** server/match/travel.ts: a trip ended with the player still here */
+export function tripFailed(player: Player, stage: string, why: string, route: string, attempts: number): void {
+	guard(c => c.tripFailed(player, stage, why, route, attempts));
 }

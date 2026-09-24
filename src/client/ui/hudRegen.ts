@@ -45,6 +45,15 @@ const FORK_INSET = 4;
 const POP_S = 0.3;
 const POP_SCALE = 1.6;
 
+/**
+ * The FOOD bar's right end the fork takes at its biggest (the pop), plus a hair, in design units: on a bar shortened for
+ * the HEAL / EAT plates (DESIGN_RULES ITM-08) the centred label leaves it free, so the fork never touches the numbers
+ */
+export function forkRoom(barH: number): number {
+	const side = barH * FORK_SIDE;
+	return FORK_INSET + side / 2 + (side * POP_SCALE) / 2 + 2;
+}
+
 /** what the console knows of its vitals bars (hudConsole.ts Layout), in the vitals section's design units */
 export interface RegenBars {
 	/** the HP groove's place in the section */

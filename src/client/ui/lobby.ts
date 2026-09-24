@@ -6,6 +6,7 @@ import { langGet } from "shared/data/lang";
 import { townNameOf } from "shared/data/townNames";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { TOWN_KEEPER_ATTR } from "shared/net/townNet";
+import { SERVER_KIND_ATTRIBUTE, ServerKind, playSoloFrom, readServerKind } from "shared/match/matchWire";
 import { onWalletChanged } from "../systems/saveClient";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { pinFlyover, TownFlyover } from "../view/townFlyover";
@@ -87,6 +88,8 @@ export interface LobbyHandlers {
 	onTutorial: (thenPlay?: boolean) => void;
 	/** the page on screen changed (main.client rebuilds a lobby on the page the player was on) */
 	onPage?: (page: LobbyPage) => void;
+	/** P0-2, the Survivor screen's Play solo (client/net/matchClient.ts); none = no button */
+	onPlaySolo?: () => void;
 }
 
 export interface LobbyStatus {
@@ -141,6 +144,11 @@ export const IN_WORLD_ATTR = "pz_sim_players";
 function numberAttr(name: string): number | undefined {
 	const v = game.GetService("Workspace").GetAttribute(name);
 	return typeIs(v, "number") ? v : undefined;
+}
+
+/** the server's kind (server/match/matchHost.ts publishes it at boot): a solo town, a public one... or unknown */
+function serverKind(): ServerKind | undefined {
+	return readServerKind(game.GetService("Workspace").GetAttribute(SERVER_KIND_ATTRIBUTE));
 }
 
 // ---------------------------------------------------------------- the menu page (1120 x 630 design units)
@@ -551,10 +559,11 @@ class MenuPage {
 		const [dayCell, peopleCell, fellCell] = this.cells;
 		this.write(dayCell.value, day !== undefined ? `${tr("Day")} ${math.floor(day)}` : `${tr("Day")} …`);
 		this.write(dayCell.caption, hour !== undefined ? tr(phaseOf(hour)) : tr("Town"));
-		if (status.hosted) {
+		if (status.hosted && serverKind() !== "solo") {
 			this.write(peopleCell.value, inTown !== undefined ? `${math.floor(inTown)} / ${MAX_PLAYERS}` : "…");
 			this.write(peopleCell.caption, tr("in town"));
 		} else {
+			// offline, or a reserved town of one's own (Play solo, MP-25): the town is the player's alone
 			this.write(peopleCell.value, tr("Solo"));
 			this.write(peopleCell.caption, tr("your own town"));
 		}
@@ -611,6 +620,8 @@ export function showLobby(
 			// MP-21's free way out, only where the server revives at daybreak (it owns the death and runs the clock)
 			canWait: status.run === "over" && status.hosted && (status.clockDriven === true || hour !== undefined),
 			hour,
+			// P0-2: from any server that can send the survivor to a town of their own (not from one already)
+			playSolo: handlers.onPlaySolo !== undefined && status.hosted && playSoloFrom(serverKind()),
 		};
 	};
 	let handle: LobbyHandle;
@@ -625,6 +636,7 @@ export function showLobby(
 			onNewRun: handlers.onNewRun,
 			onWardrobe: (slot?: number): void => handlers.onWardrobe("survivor", slot),
 			onTutorial: handlers.onTutorial,
+			onPlaySolo: handlers.onPlaySolo,
 		});
 		survivor = s;
 		return s;
@@ -697,6 +709,7 @@ export function showLobby(
 		Workspace.GetAttributeChangedSignal(WORLD_DAY_ATTR).Connect(onWorld),
 		Workspace.GetAttributeChangedSignal(DAY_TIME_ATTR).Connect(onWorld),
 		Workspace.GetAttributeChangedSignal(IN_WORLD_ATTR).Connect(onWorld),
+		Workspace.GetAttributeChangedSignal(SERVER_KIND_ATTRIBUTE).Connect(onWorld),
 	];
 	// the server marks the town's keeper (MP-26): Restart town shows the moment it does
 	const localPlayer = game.GetService("Players").LocalPlayer as Player | undefined;

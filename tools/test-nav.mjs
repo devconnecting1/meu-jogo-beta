@@ -53,6 +53,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CONTEXT } from "./locale-context.mjs";
 import { installUiShims } from "./ui-shim.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
@@ -965,6 +966,157 @@ console.log(
 			asked && dismissed && unanswered && survivorStays,
 			JSON.stringify({ asked, dismissed, unanswered, survivorStays }),
 		);
+	}
+
+	// P0-1 / P0-2 (client/net/matchClient.ts): the fresh-town card and the Play solo question are questions like the
+	// tutorial's -- the pad lands on the answer that moves (New town, Play solo), B closes them UNANSWERED (nothing is
+	// sent), each answer sends exactly its request, the card waits for a free lobby, and nothing is left behind
+	{
+		const Match = require(join(SRC, "client/net/matchClient.ts"));
+		const sent = [];
+		const remote = { OnClientEvent: new Signal(), FireServer: req => sent.push(JSON.stringify(req)) };
+		const beats = connCount();
+		Match.startMatchClient(ctx);
+		const conn = Match.useMatchRemote(remote);
+		const popupUp = () => layer.FindFirstChild("PopupOverlay") !== undefined;
+		const focused = () => GuiService.SelectedObject?.Text;
+		const beat = () => RunService.Heartbeat.Fire(1 / 60);
+		ctx.phase = "lobby";
+		lastInput.type = Enum.UserInputType.Gamepad1;
+
+		Match.askPlaySolo();
+		flush();
+		const q1 = popupUp() && focused() === "Play solo";
+		tap(B(), true);
+		flush();
+		const q1Dismissed = !popupUp() && sent.length === 0;
+		Match.askPlaySolo();
+		flush();
+		GuiService.SelectedObject?.Activated.Fire();
+		flush();
+		const q1Answered = !popupUp() && sent.join() === '{"k":"solo"}';
+		check(
+			"Play solo: a pergunta com o controle no Play solo; B fecha sem mandar nada; A manda so {k: solo}",
+			q1 && q1Dismissed && q1Answered,
+			JSON.stringify({ q1, q1Dismissed, q1Answered, sent }),
+		);
+
+		remote.OnClientEvent.Fire({ k: "refused", why: "studio" });
+		flush();
+		const studio = popupUp() && focused() === "Close";
+		tap(B(), true);
+		flush();
+		check("no Studio o servidor recusa e a tela explica (Close em foco), e o B fecha", studio && !popupUp());
+
+		sent.length = 0;
+		ctx.phase = "lobby";
+		Match.askPlaySolo();
+		flush();
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		const onlyOne = layer.GetChildren().filter(c => c.Name === "PopupOverlay").length === 1;
+		tap(B(), true);
+		flush();
+		beat();
+		flush();
+		const card = layer.FindFirstChild("PopupOverlay");
+		const title = card
+			?.GetDescendants()
+			.some(d => d.ClassName === "TextLabel" && String(d.Text).includes("Day 23"));
+		const cardFocus = focused() === "New town";
+		tap(B(), true);
+		flush();
+		beat();
+		flush();
+		const unanswered = !popupUp() && sent.length === 0;
+		check(
+			'a oferta espera o lobby livre (nada sobre outra pergunta); "Town · Day 23" com o foco no New town; B fecha sem resposta e ela nao volta',
+			onlyOne && title && cardFocus && unanswered,
+			JSON.stringify({ onlyOne, title, cardFocus, unanswered }),
+		);
+
+		// LOW 3 (the review of f25727a): an offer that did not get its free lobby is dropped for good -- a run that
+		// started (the player chose to play here), or the server's lapse (600 s) -- never a card popping up later
+		ctx.phase = "playing";
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		ctx.phase = "lobby";
+		beat();
+		flush();
+		const droppedInRun = !popupUp();
+		Match.askPlaySolo();
+		flush();
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		ui.setClock(ui.getClock() + 601);
+		tap(B(), true);
+		flush();
+		beat();
+		flush();
+		const droppedLate = !popupUp() && sent.length === 0;
+		check(
+			"uma oferta que nao achou o lobby livre some de vez: uma partida comecou, ou passaram os 600 s do servidor (nenhum cartao depois)",
+			droppedInRun && droppedLate,
+			JSON.stringify({ droppedInRun, droppedLate }),
+		);
+
+		// H1: the kept body is in danger -- a question with its reason, Close in focus, B closes it
+		remote.OnClientEvent.Fire({ k: "refused", why: "danger" });
+		flush();
+		const danger =
+			popupUp() &&
+			focused() === "Close" &&
+			layer
+				.FindFirstChild("PopupOverlay")
+				?.GetDescendants()
+				.some(d => d.ClassName === "TextLabel" && String(d.Text).includes("still in danger"));
+		tap(B(), true);
+		flush();
+		check(
+			"Play solo recusado com o corpo em perigo: a tela diz por que (Close em foco), e o B fecha",
+			danger && !popupUp(),
+		);
+
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		findIn(layer.FindFirstChild("PopupOverlay"), "PopupBtn0")?.Activated.Fire();
+		flush();
+		const stay = sent.join() === '{"k":"offer","yes":false}';
+		remote.OnClientEvent.Fire({ k: "offer", worldDay: 23, bestDay: 1 });
+		beat();
+		flush();
+		GuiService.SelectedObject?.Activated.Fire();
+		flush();
+		const yes = sent[sent.length - 1] === '{"k":"offer","yes":true}';
+		remote.OnClientEvent.Fire({ k: "trip", s: "failed", why: "teleport" });
+		flush();
+		const retryFocus = focused() === "Try again";
+		GuiService.SelectedObject?.Activated.Fire();
+		flush();
+		const retried = sent[sent.length - 1] === '{"k":"offer","yes":true}' && !popupUp();
+		check(
+			"Stay manda {yes: false}; New town manda {yes: true}; uma falha abre Try again em foco, que repete o mesmo pedido",
+			stay && yes && retryFocus && retried,
+			JSON.stringify({ stay, yes, retryFocus, retried, sent }),
+		);
+		conn.Disconnect();
+		ctx.phase = "lobby";
+		GuiService.SelectedObject = undefined;
+		lastInput.type = Enum.UserInputType.MouseMovement;
+		flush();
+		check(
+			"...e nada fica para tras: nenhum popup, nenhuma conexao (a espera do lobby so existe enquanto a oferta espera)",
+			!popupUp() && connCount() === beats,
+			`${connCount() - beats} conexoes`,
+		);
+		// a refusal that needs no answer is a toast (it expires on its own), never a question over the lobby
+		Match.onMatchNotice({ k: "refused", why: "rate" });
+		flush();
+		check("uma recusa sem pergunta (espere um pouco) e um toast, nunca um popup", !popupUp());
 	}
 
 	// what B must never close: the lobby's own menu, the end-of-run choice, the daybreak wait, the HUD's scoreboard
@@ -2261,6 +2413,7 @@ function textsIn(root, where) {
 		mkdirSync(join(tmp, "tools"), { recursive: true });
 		mkdirSync(join(tmp, "src/shared/data"), { recursive: true });
 		writeFileSync(join(tmp, "tools/gen-locale.mjs"), readFileSync(join(ROOT, "tools/gen-locale.mjs")));
+		writeFileSync(join(tmp, "tools/locale-context.mjs"), readFileSync(join(ROOT, "tools/locale-context.mjs")));
 		writeFileSync(join(tmp, "src/shared/data/lang.ts"), readFileSync(join(SRC, "shared/data/lang.ts")));
 		execFileSync(process.execPath, [join(tmp, "tools/gen-locale.mjs")], { stdio: "pipe" });
 		const fresh = readFileSync(join(tmp, "design/locale/ProjectZ.csv"), "utf8");
@@ -2312,6 +2465,22 @@ function textsIn(root, where) {
 			`LOC-NL: as ${multi.length} entradas de varias linhas vao ao CSV como a tela as mostra (quebra de linha real, sem "#")`,
 			multi.length > 0 && unmatched.length === 0 && !body.some(r => r[3].includes("#")),
 			unmatched.map(e => `"${e.slice(0, 40)}"`).join("; ") || `${multi.length} entradas`,
+		);
+		// the Context column is tools/locale-context.mjs, written verbatim (its own Source keys were already
+		// checked against LANG_TABLE by gen-locale.mjs above -- a stale one there makes this whole block throw);
+		// every other row's Context is blank, and none goes over the 80-char budget the map is kept under
+		const byContext = new Map(body.map(r => [r[3], r[1]]));
+		const contextKeys = Object.keys(CONTEXT);
+		const wrong = contextKeys.filter(k => byContext.get(k) !== CONTEXT[k]);
+		const shouldBeBlank = body.filter(r => CONTEXT[r[3]] === undefined && r[1] !== "");
+		const tooLong = contextKeys.filter(k => CONTEXT[k].length > 80);
+		check(
+			`LOC-CTX: as ${contextKeys.length} entradas de tools/locale-context.mjs estao na coluna Context, e mais nenhuma`,
+			wrong.length === 0 && shouldBeBlank.length === 0 && tooLong.length === 0,
+			wrong.map(k => `"${k}"`).join("; ") ||
+				shouldBeBlank.map(r => `"${r[3].slice(0, 40)}"`).join("; ") ||
+				tooLong.map(k => `"${k}" (${CONTEXT[k].length})`).join("; ") ||
+				`${contextKeys.length} com Context`,
 		);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });

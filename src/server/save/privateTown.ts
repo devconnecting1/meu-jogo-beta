@@ -3,24 +3,25 @@
  * SERVER ONLY.
  *
  * A private (VIP) server closes when its last player leaves, and the next time its owner and friends join it, Roblox
- * starts a new instance. Without this, every session of "the server of my clan" was a new town on day 1. The server
- * is still the one authority on its town (MP-26); this only lets the NEXT instance of the SAME private server pick up
- * where the last one stopped: the same seed (the same streets), the same world day. What stood on those streets --
- * constructions, doors, ground items -- was never kept across instances on any server (§6.1) and is not kept now.
+ * starts a new instance. Without this, every session of "the server of my clan" was a new town. The server is still
+ * the one authority on its town (MP-26); this only lets the NEXT instance of the SAME private server open on the same
+ * seed (the same streets). Never the day: a private town opens on its owner's LIFE day, whatever day the last session
+ * closed on (DESIGN_RULES MP-13, settled by server/match/matchHost.ts before anybody enters). What stood on those
+ * streets -- constructions, doors, ground items -- was never kept across instances on any server (§6.1) and is not
+ * kept now.
  *
  *   - Only a private server with an owner (`PrivateServerId` ≠ "" and `PrivateServerOwnerId` ≠ 0). A public server
  *     never reads or writes this store: a public town lives and dies with its instance (MP-26). A reserved server
  *     (Play solo, owner 0) is one-off, and is not kept either.
- *   - One key per private server (its PrivateServerId, `ProjectZ_PrivateTowns`, suffixed in Studio): the seed, the
- *     world day and when that world began. No UserId, no name: nothing here is anybody's personal data.
+ *   - One key per private server (its PrivateServerId, `ProjectZ_PrivateTowns`, suffixed in Studio): the seed and
+ *     when that world began. No UserId, no name: nothing here is anybody's personal data.
  *   - Read ONCE, at boot, before the town is generated, with a bounded wait (`LOAD_WAIT_S`): the town must never swap
  *     under the players, so a read that has not answered in time (or failed) means a fresh town for this session --
  *     and this session then never writes, so it cannot overwrite a town it did not manage to read.
- *   - Written off the game's threads: when the town or the day changes (checked every `CHECK_EVERY_S`; MP-22's new
- *     town at once, through `note`) and at shutdown (BindToClose). A day restored starts at 07:00: the instance that
- *     closed mid-night took its horde with it, and a night without its waves is not a night.
- *   - MP-22 still ends it: everybody in the world dead and nobody paying, the town is replaced by a new one on day 1
- *     -- and that is what the next session gets.
+ *   - Written off the game's threads: when the town changes (checked every `CHECK_EVERY_S`; MP-22's new town and a
+ *     keeper's restart at once, through `note`) and at shutdown (BindToClose) -- a write per new town, not per day.
+ *   - MP-22 still ends it: everybody in the world dead and nobody paying, the town is replaced by a new one -- and that
+ *     is the town the next session gets.
  */
 import { GAME_NAME } from "shared/module";
 import { TOWN_SEED_MAX } from "shared/net/mpConfig";
@@ -43,8 +44,6 @@ const SHUTDOWN_DELAYS = [0.5];
 /** what is kept of a private server's town */
 export interface PrivateTown {
 	seed: number;
-	/** the world day it was on (≥ 1) */
-	day: number;
 	/** os.time() when this world began (the record of MP-22 says how long it lasted) */
 	startedAt: number;
 }
@@ -69,14 +68,12 @@ export function privateTownKey(privateServerId: unknown, ownerId: unknown): stri
 export function readPrivateTown(v: unknown): PrivateTown | undefined {
 	if (!typeIs(v, "table")) return undefined;
 	const r = v as Record<string, unknown>;
-	if (!wholeIn(r.seed, 1, TOWN_SEED_MAX) || !wholeIn(r.day, 1, 1e6) || !wholeIn(r.startedAt, 0, 1e12)) {
-		return undefined;
-	}
-	return { seed: r.seed, day: r.day, startedAt: r.startedAt };
+	if (!wholeIn(r.seed, 1, TOWN_SEED_MAX) || !wholeIn(r.startedAt, 0, 1e12)) return undefined;
+	return { seed: r.seed, startedAt: r.startedAt };
 }
 
 function sameTown(a: PrivateTown | undefined, b: PrivateTown | undefined): boolean {
-	return a !== undefined && b !== undefined && a.seed === b.seed && a.day === b.day && a.startedAt === b.startedAt;
+	return a !== undefined && b !== undefined && a.seed === b.seed && a.startedAt === b.startedAt;
 }
 
 export interface PrivateTownKeeper {
@@ -131,7 +128,7 @@ export function keepPrivateTown(current: () => PrivateTown | undefined): Private
 		// a fixed sentence (docs/ANALYTICS.md §10): the error text is the only thing in it
 		warn(`[${GAME_NAME}] private town could not be read (${why}); this session opens a fresh town`);
 	} else if (initial !== undefined) {
-		print(`[${GAME_NAME}] private server: its town is back (seed ${initial.seed}, day ${initial.day})`);
+		print(`[${GAME_NAME}] private server: its town is back (seed ${initial.seed})`);
 	}
 
 	// ---- the writes: the latest town wins; one write at a time, off the caller's thread
@@ -153,7 +150,6 @@ export function keepPrivateTown(current: () => PrivateTown | undefined): Private
 						$tuple({
 							v: PRIVATE_TOWN_VERSION,
 							seed: town.seed,
-							day: town.day,
 							startedAt: town.startedAt,
 							savedAt: os.time(),
 						}),
@@ -183,7 +179,7 @@ export function keepPrivateTown(current: () => PrivateTown | undefined): Private
 
 	if (persists) {
 		let closing = false;
-		// the day the instance closes on is the one the next session opens on (a write in flight picks it up)
+		// the town the instance closes on is the one the next session opens on (a write in flight picks it up)
 		game.BindToClose(() => {
 			closing = true;
 			const town = current();

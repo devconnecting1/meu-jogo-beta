@@ -116,6 +116,15 @@ export interface ServerListHost {
 	inWorld: (player: Player) => boolean;
 	/** the player's save is still being read */
 	loading: (player: Player) => boolean;
+	/** dead as far as the server knows: a death is answered where it happened (MP-21), as Play solo's trip asks */
+	isDead: (player: Player) => boolean;
+	/**
+	 * This server keeps the player's LIVING body where a fight is going on (server/net/mpHost.ts `keptInDanger`): a
+	 * join then would be a free, instant escape from the horde, the hole Play solo's trip closed (MP-25, review H1)
+	 */
+	keptInDanger: (player: Player) => boolean;
+	/** a Play solo trip of this player is in flight (server/match/travel.ts `inFlight`): one teleport at a time */
+	travelling: (player: Player) => boolean;
 	/** the player is still connected to this server */
 	connected: (player: Player) => boolean;
 	/** the player's best day (the list sorts by the day closest to it); undefined while unknown */
@@ -352,6 +361,9 @@ export class ServerList {
 		if (jobId === h.jobId) return "same";
 		if (h.loading(player)) return "loading";
 		if (h.inWorld(player)) return "inWorld";
+		if (h.isDead(player)) return "dead";
+		if (h.keptInDanger(player)) return "danger";
+		if (h.travelling(player)) return "trip";
 		const pending = this.joins.get(player);
 		if (pending !== undefined) {
 			if (h.clock() - pending.at < JOIN_TIMEOUT_S) return "busy";

@@ -54,6 +54,11 @@ export function refusalText(reason: TownRefusal | undefined): string {
 	if (reason === "inWorld") return "Leave the city before joining another town";
 	if (reason === "busy") return "A join is already under way";
 	if (reason === "loading") return "Your progress is still loading";
+	if (reason === "dead") return "Choose Rebirth, the wait or New game first.";
+	if (reason === "danger") {
+		return "Your survivor is still in danger where you left the city. Get clear of the zombies first, or wait a little";
+	}
+	if (reason === "trip") return "Already on the way to your town...";
 	if (reason === "forbidden") return "Only this server's owner can restart the town";
 	return "Something went wrong. Try again";
 }

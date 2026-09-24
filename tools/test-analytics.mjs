@@ -1924,6 +1924,11 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		`Weapon - (${A.WEAPON_KIND_NAMES.join("|")}|Machine|Other)`,
 		"Title - .+",
 		"Welcome pack - .+",
+		// where a survivor plays (server/match/*, tools/test-match.mjs): the NewTown funnel, TownOffered, TripFailed
+		"Route - (Play solo|Offer)",
+		`Best day - ${bucket}`,
+		`Stage - (${A.TRIP_STAGES.join("|")})`,
+		`Result - (${A.TRIP_RESULTS.join("|")})`,
 	].map(p => new RegExp(`^${p}$`));
 	const values = [];
 	const combos = [];
@@ -1948,7 +1953,7 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		2 + // TutorialChoice
 		B * 2 * 5 + // Died: life day x time x cause
 		2 * B * 4 + // LifeEnded
-		2 * 3 * B + // WorldEnded
+		3 * 4 * B + // WorldEnded: reason (MP-26: Restarted too) x fallen (0 to 3+) x days
 		TITLES.length + // TitleEarned
 		5 + // SessionKills
 		3 + // Crafted
@@ -1960,7 +1965,11 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		(SHOP_PACKS.length + 1) + // onboarding: Welcome pack
 		B * B * 2 + // Night step 1
 		4 * 2 * B + // Rebirth step 1
-		2 * 4 * 2; // Shop step 1
+		2 * 4 * 2 + // Shop step 1
+		B * B * 2 + // TownOffered: world day x record x visit
+		A.TRIP_STAGES.length * A.TRIP_RESULTS.length * 2 + // TripFailed: stage x result x route
+		2 * B * B + // NewTown step 1: route x world day x life day
+		3 * B * B; // JoinedFromList (MP-26): players x world day x record
 	check(
 		ceiling < 8000 && distinctOf(combos).length <= ceiling,
 		"unique combinations of the three fields: bounded by the catalogue far below 8,000 (the experience's limit)",

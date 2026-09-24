@@ -55,6 +55,9 @@ export type TownRefusal =
 	| "busy"
 	| "inWorld"
 	| "loading"
+	| "dead"
+	| "danger"
+	| "trip"
 	| "same"
 	| "gone"
 	| "full"
@@ -69,6 +72,9 @@ const REFUSALS: ReadonlyArray<TownRefusal> = [
 	"busy",
 	"inWorld",
 	"loading",
+	"dead",
+	"danger",
+	"trip",
 	"same",
 	"gone",
 	"full",

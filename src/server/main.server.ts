@@ -56,6 +56,8 @@ import { keepPrivateTown } from "./save/privateTown";
 import { TownServices, startTownServices } from "./match/townServices";
 import * as Analytics from "./analytics/events";
 import { grantWelcomePack } from "./config/experiments";
+import { MatchHost, readKind, startMatch } from "./match/matchHost";
+import { soloWorldLog } from "./match/soloWorldLog";
 
 /*
  * Server = source of truth for the economy and for what reaches the DataStore.
@@ -257,6 +259,8 @@ let admin: AdminServer | undefined;
 let adminPatchSerial = 0;
 /** authoritative simulation (server/net/mpHost.ts); undefined while MP_PHASE = 0 (docs/MULTIPLAYER.md §11.1) */
 let mpHost: MpHost | undefined;
+/** where a survivor plays (server/match/matchHost.ts, §7.4): started after the host, read lazily by its closures */
+let match: MatchHost | undefined;
 
 // ---------------------------------------------------------------- session state helpers
 
@@ -1700,19 +1704,28 @@ admin = startAdminServer({
 let townServices: TownServices | undefined;
 if (MP_PHASE >= 1) {
 	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
-	const worldLog = startWorldLog();
+	// a solo town writes the shared world log at most once per gap, the longest-lasting town of it (§7.4, LOW 5)
+	const worldLog =
+		readKind() === "solo"
+			? soloWorldLog(startWorldLog(), {
+					clock: () => os.clock(),
+					delay: (seconds, fn) => {
+						task.delay(seconds, fn);
+					},
+					onClose: fn => game.BindToClose(fn),
+				})
+			: startWorldLog();
 	// MP-26: the server picks its town and owns it (server/net/mpHost.ts); a PRIVATE server with an owner also keeps it
 	// across its sessions -- read here, before the town is generated, so it never swaps (server/save/privateTown.ts).
-	// A public server keeps nothing: undefined, and the host picks a fresh seed
+	// A public server keeps nothing: undefined, and the host picks a fresh seed. What comes back is the town (its seed,
+	// the same streets) and when it began, never its day: a private town opens on its owner's LIFE day (MP-13, settled
+	// by server/match/matchHost.ts before anybody enters)
 	const keptTown = keepPrivateTown(() =>
-		mpHost !== undefined
-			? { seed: mpHost.seed, day: mpHost.simulation.clock.day, startedAt: mpHost.startedAt }
-			: undefined,
+		mpHost !== undefined ? { seed: mpHost.seed, startedAt: mpHost.startedAt } : undefined,
 	);
 	const kept = keptTown?.initial;
 	mpHost = startMpHost({
 		seed: kept?.seed,
-		day: kept?.day,
 		startedAt: kept?.startedAt,
 		saveOf: player => {
 			const s = sessions.get(player);
@@ -1722,6 +1735,12 @@ if (MP_PHASE >= 1) {
 			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
 			return s.save;
 		},
+		// nobody enters the city while their trip to a town of their own is in flight (review M2: the teleport would yank
+		// the new body out of a run), nor before a solo / private town knows the day it opens on (MP-13). Asked only
+		// at the admission: the save stays visible to rule 6 and the kept body meanwhile (second review, LOW 2). MP-26:
+		// nor while a join from the Servers list is taking them to another public server
+		mayEnter: player =>
+			(match === undefined || match.admits(player)) && townServices?.list.joining(player) !== true,
 		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
 		// world that ended gave its fallen a new life (MP-22): `resetRun` and a new `runRev` in the live save
 		saveChanged: userId => markDirty(userId),
@@ -1733,13 +1752,11 @@ if (MP_PHASE >= 1) {
 			// its memory -- it must never push MP-22's records out of the shared list (review of 0b44458, M4)
 			if (report.reason === "restart") worldLog.remember(outcome.ended);
 			else worldLog.record(outcome.ended);
-			// the next session of a private server opens on the NEW town, day 1
-			keptTown?.note({ seed: outcome.seed, day: 1, startedAt: outcome.startedAt });
+			// the next session of a private server opens on the NEW town (on its owner's life day, MP-13)
+			keptTown?.note({ seed: outcome.seed, startedAt: outcome.startedAt });
 		},
 		// §8.2 "registrado" (audit L4): every automatic kick into the admin audit log, by UserId
 		onFloodKick: (player, reason) => admin?.floodKick(player, reason),
-		// MP-26: never stood in the city while a join from the Servers list is taking them elsewhere
-		mayEnter: player => townServices?.list.joining(player) !== true,
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an
@@ -1803,6 +1820,14 @@ if (MP_PHASE >= 1) {
 			return s === undefined || !s.loaded || s.closed;
 		},
 		connected: player => sessions.has(player),
+		// the same gates as Play solo's trip (server/match/matchHost.ts): a death answered where it happened (MP-21),
+		// no escape from a fight (H1), one teleport at a time
+		isDead: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded && host.isDead(player, s.save);
+		},
+		keptInDanger: player => host.keptInDanger(player),
+		travelling: player => match?.travel.inFlight(player) === true,
 		bestDay: player => {
 			const s = sessions.get(player);
 			return s !== undefined && s.loaded ? s.save.bestDay : undefined;
@@ -1824,6 +1849,64 @@ if (MP_PHASE >= 1) {
 	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }
+
+// ---------------------------------------------------------------- where a survivor plays (§7.4, MP-25)
+
+/*
+ * Play solo and the fresh-town offer (P0-1, P0-2), the server's kind and the matchmaking attributes
+ * (server/match/matchHost.ts). It decides nothing about a save: it asks this file for the session and, before a
+ * teleport, for a write that KEEPS the lock -- a teleport that fails leaves a session that still owns its save; one
+ * that succeeds is a leave like any other, whose final write (PlayerRemoving above) releases the lock the
+ * destination's load is waiting for (LOCK_WAIT).
+ */
+match = startMatch({
+	sessionOf: player => {
+		const s = sessions.get(player);
+		if (s === undefined || s.closed) return undefined;
+		return { loaded: s.loaded && !s.loading && !s.retryQueued, status: s.status, save: s.save };
+	},
+	worldDay: () => mpHost?.simulation.clock.day,
+	survivors: () => {
+		let n = 0;
+		if (mpHost !== undefined) for (const sp of mpHost.simulation.players()) if (!sp.state.dead) n += 1;
+		return n;
+	},
+	// in the city, or asked to be (EnterWorld, admitted on the host's next pass): a trip starts from the lobby only
+	inWorld: player => mpHost !== undefined && mpHost.wantsWorld(player),
+	isDead: (player, save) => (mpHost !== undefined ? mpHost.isDead(player, save) : save.runOver),
+	// H1: a living body this server keeps where a fight is going on cannot be traded for a fresh spawn elsewhere
+	keptInDanger: player => mpHost !== undefined && mpHost.keptInDanger(player),
+	// MP-13: a solo or private town opens on its owner's life day (without a host there is no town to start)
+	startTown: day => mpHost !== undefined && mpHost.startTownOn(day),
+	// ...and a private server reads its owner's life day at boot, whoever loads first (second review, LOW 4): one
+	// GetAsync, WITHOUT the session lock (the owner may be playing elsewhere; this reads, it never writes). A failed
+	// read, no save, or data that is not a save: undefined, and the first readable load settles the day instead
+	ownerLifeDay: userId => {
+		const store = dataStore;
+		if (store === undefined) return undefined;
+		const [ok, value] = pcall((): unknown => store.GetAsync<unknown>(tostring(userId))[0]);
+		if (!ok) {
+			print(`[${GAME_NAME}] the private server owner's save could not be read at boot: ${tostring(value)}`);
+			return undefined;
+		}
+		const data = readDoc(value)?.data;
+		if (data === undefined) return undefined;
+		const [decoded, decodedValue] = decodeData(data);
+		return decoded ? sanitizeStoredSave(decodedValue).day : undefined;
+	},
+	// §8.2: the Match remote counts toward the connection's flood limits, like every remote this file owns
+	floodDrop: (player, malformed) => floodDrop(player, malformed),
+	// MP-26: never while a join from the lobby's Servers list is taking the player to another public server
+	joining: player => townServices?.list.joining(player) === true,
+	prepare: player => {
+		const s = sessions.get(player);
+		if (s === undefined || s.closed || !s.loaded) return;
+		guarded("settling the body", () => mpHost?.settle(player, s.save), s.key);
+		// written now, whatever the autosave last did: the destination loads what this write (or the leave's) left
+		s.dirty = true;
+		guarded("save before a teleport", () => flush(s, false), s.key);
+	},
+});
 
 // ---------------------------------------------------------------- proximity chat (§4.3, §9.1)
 

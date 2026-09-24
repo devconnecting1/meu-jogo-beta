@@ -2368,44 +2368,51 @@ section("20) a private server keeps its town across its sessions; a public one n
 	reserved.shutdown();
 	check(!opened(), "a public server and a reserved one (Play solo) never open the private towns' store");
 
-	// ---- a private server, first session: a fresh town, written when the instance closes
-	const vip = { privateId: "vip-A", privateOwner: 7 };
+	// ---- a private server, first session: a fresh town on its OWNER's life day (MP-13), written when it closes
+	const OWNER = 7;
+	const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	/** the owner's stored save: a life on day `day` (read at boot, without the lock: server/match/matchHost.ts) */
+	const ownerLife = day => {
+		const v = SAVE().defaultSave();
+		Object.assign(v, { level: 9, day, bestDay: day, tutorialDone: true, firstInstall: false });
+		fakeStore(SAVE_STORE).data.set(String(OWNER), { data: JSON.stringify(v) });
+	};
+	ownerLife(6);
+	const vip = { privateId: "vip-A", privateOwner: OWNER };
 	const a1 = bootServer(vip);
 	const seedA = a1.host.seed;
 	check(
-		a1.sim.clock.day === 1 && record("vip-A") === undefined,
-		"a private server's first session: a fresh town on day 1 (nothing kept yet)",
-		`seed ${seedA}`,
+		a1.sim.clock.day === 6 && record("vip-A") === undefined,
+		"a private server's first session: a fresh town, on its owner's life day (MP-13: day 6), nothing kept yet",
+		`seed ${seedA}, day ${a1.sim.clock.day}`,
 	);
-	const p = a1.join(newUser(), "owner");
+	const p = a1.join(newUser(), "friend");
+	a1.run(1);
 	a1.enter(p);
 	a1.immortal.add(p);
-	a1.sim.clock.setClock(12, 4);
+	a1.sim.clock.setClock(12, 9);
 	a1.run(1);
 	a1.shutdown();
 	const r1 = record("vip-A");
 	check(
-		r1?.seed === seedA &&
-			r1?.day === 4 &&
-			r1?.v === 1 &&
-			Object.keys(r1).sort().join(",") === "day,savedAt,seed,startedAt,v",
-		"the instance closes on day 4: the store keeps the seed, the day and when that world began -- nobody's data",
+		r1?.seed === seedA && r1?.v === 1 && Object.keys(r1).sort().join(",") === "savedAt,seed,startedAt,v",
+		"the store keeps the seed and when that world began -- never the day, and nobody's data",
 		JSON.stringify(r1),
 	);
 
-	// ---- the next session of the SAME private server: the same town, the same day, from 07:00
+	// ---- the next session of the SAME private server: the same town, on the owner's life day (not the one it closed on)
 	const a2 = bootServer(vip);
 	check(
 		a2.host.seed === seedA &&
 			a2.Workspace.GetAttribute("pz_world_seed") === seedA &&
-			a2.sim.clock.day === 4 &&
+			a2.sim.clock.day === 6 &&
 			a2.sim.clock.dayTime === 7 &&
 			R().mapHashOf(a2.sim.world) === R().mapHashOf(W().generateTown(seedA)),
-		"its next session opens on the SAME town (its lobby shows it), on day 4 at 07:00",
+		"its next session opens on the SAME town (its lobby shows it) -- on the owner's life day 6 at 07:00, never the 9 it closed on",
 		`seed ${a2.host.seed}, day ${a2.sim.clock.day} ${a2.sim.clock.dayTime} h`,
 	);
 	check(
-		a2.printed.some(l => l.includes(`private server: its town is back (seed ${seedA}, day 4)`)),
+		a2.printed.some(l => l.includes(`private server: its town is back (seed ${seedA})`)),
 		"…and the log says the town is back",
 	);
 	check(
@@ -2413,21 +2420,26 @@ section("20) a private server keeps its town across its sessions; a public one n
 		"…and the world keeps the moment it began (MP-22's record says how long it really lasted)",
 	);
 
-	// ---- MP-22 on the private server: the new town replaces the kept one at once, day 1
+	// ---- MP-22 on the private server: the new town replaces the kept one at once
 	const wipes = a2.wipes();
 	const q = a2.join(newUser(), "friend");
+	a2.run(1);
 	a2.enter(q);
 	a2.kill(q);
 	a2.run(WIPE_DECISION_S + 1.5);
 	const r2 = record("vip-A");
 	check(
-		wipes.length === 1 && a2.host.seed !== seedA && r2?.seed === a2.host.seed && r2?.day === 1,
-		"everybody dies there (MP-22): the NEW town is kept at once, on day 1 -- that is what the next session gets",
+		wipes.length === 1 && a2.host.seed !== seedA && r2?.seed === a2.host.seed && a2.sim.clock.day === 1,
+		"everybody dies there (MP-22): a new town on day 1, kept at once -- that is the town the next session gets",
 		`${seedA} → ${a2.host.seed}; stored ${JSON.stringify(r2)}`,
 	);
 	a2.shutdown();
 	const a3 = bootServer(vip);
-	check(a3.host.seed === r2.seed && a3.sim.clock.day === 1, "…and the next session opens on it");
+	check(
+		a3.host.seed === r2.seed && a3.sim.clock.day === 6,
+		"…and the next session opens on it, on the owner's life day (the owner was not in it: their life goes on)",
+		`day ${a3.sim.clock.day}`,
+	);
 	a3.shutdown();
 
 	// ---- another private server: a key and a town of its own
@@ -2452,7 +2464,7 @@ section("20) a private server keeps its town across its sessions; a public one n
 	const c1 = bootServer({ privateId: "vip-C", privateOwner: 3 });
 	check(
 		c1.sim.clock.day === 1 && Number.isInteger(c1.host.seed) && c1.host.seed !== 7331,
-		"a stored record that is not a town (a seed in text, day 0) is no town: a fresh one on day 1",
+		"a stored record that is not a town (a seed in text, a start before 1970) is no town: a fresh one",
 	);
 	c1.shutdown();
 	check(record("vip-C")?.seed === c1.host.seed, "…which that session then keeps");
@@ -2517,8 +2529,16 @@ section(
 		// ---- a private server: the owner standing, a friend down in the street, a friend who left for the lobby, and one
 		// who never set foot in the town
 		const OWNER = newUser();
+		// the owner's life is on day 4: the town opens on it (MP-13), and what it LASTED is counted from there
+		{
+			const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+			const v = SAVE().defaultSave();
+			Object.assign(v, { level: 9, day: 4, bestDay: 4, tutorialDone: true, firstInstall: false });
+			fakeStore(SAVE_STORE).data.set(String(OWNER), { data: JSON.stringify(v) });
+		}
 		const vip = { privateId: "vip-R", privateOwner: OWNER };
 		const s = bootServer(vip);
+		check(s.sim.clock.day === 4, "(the town opens on the owner's life day, 4)", `day ${s.sim.clock.day}`);
 		const owner = s.join(OWNER, "owner");
 		const down = s.join(newUser(), "down");
 		const rested = s.join(newUser(), "rested");
@@ -2611,6 +2631,11 @@ section(
 			"ONE WorldReset to every client, cause Restarted, naming EVERY survivor of the town: the owner standing, the friend down, the one in the lobby",
 			JSON.stringify({ lives, expected, cause: resets[0]?.e.cause }),
 		);
+		check(
+			resets[0]?.e.endedDay === 3,
+			"...and the town it ended LASTED 3 days: opened on the owner's day 4, restarted on day 6 (counted from startDay)",
+			`endedDay ${resets[0]?.e.endedDay}`,
+		);
 		const ownerBody = s.body(owner);
 		check(
 			ownerBody !== undefined &&
@@ -2632,8 +2657,8 @@ section(
 		);
 		const kept = record("vip-R");
 		check(
-			kept?.seed === newSeed && kept?.day === 1,
-			"the private-town store has the NEW town on day 1 at once: the next session opens on it",
+			kept?.seed === newSeed && kept?.day === undefined,
+			"the private-town store has the NEW town at once (its seed, never a day): the next session opens on it",
 			JSON.stringify(kept),
 		);
 		check(

@@ -227,6 +227,9 @@ function makeServer(map, opts = {}) {
 		players: new Set(),
 		inCity: new Set(),
 		loadingSet: new Set(),
+		deadSet: new Set(),
+		dangerSet: new Set(),
+		tripSet: new Set(),
 		gone: new Set(),
 		best: new Map(),
 		seed: opts.seed ?? 1234,
@@ -262,6 +265,9 @@ function makeServer(map, opts = {}) {
 		capacity: () => server.capacity,
 		inWorld: p => server.inCity.has(p),
 		loading: p => server.loadingSet.has(p),
+		isDead: p => server.deadSet.has(p),
+		keptInDanger: p => server.dangerSet.has(p),
+		travelling: p => server.tripSet.has(p),
 		connected: p => server.players.has(p) && !server.gone.has(p),
 		bestDay: p => server.best.get(p),
 		log: () => {},
@@ -560,6 +566,25 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 		"inWorld",
 	]);
 	here.inCity.delete(me);
+	// the same gates as Play solo's trip (server/match/matchHost.ts `blocker`, merged with MP-25): refused before the
+	// store is read, so no gap is spent (the clock stays where it is: `there` must not go stale)
+	here.deadSet.add(me);
+	cases.push(["morto (a morte se responde onde aconteceu, MP-21)", reason(here.list.join(me, there.jobId)), "dead"]);
+	here.deadSet.delete(me);
+	here.dangerSet.add(me);
+	cases.push([
+		"o corpo vivo guardado no meio da luta (nenhuma fuga gratis da horda, H1)",
+		reason(here.list.join(me, there.jobId)),
+		"danger",
+	]);
+	here.dangerSet.delete(me);
+	here.tripSet.add(me);
+	cases.push([
+		"uma viagem do Play solo a caminho (um teleporte por vez)",
+		reason(here.list.join(me, there.jobId)),
+		"trip",
+	]);
+	here.tripSet.delete(me);
 	// an entry that is still in the map but stale (its server stopped writing and the clock moved on)
 	map.SetAsync(
 		"job-old",
@@ -867,6 +892,9 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 		capacity: () => 6,
 		inWorld: () => false,
 		loading: () => false,
+		isDead: () => false,
+		keptInDanger: () => false,
+		travelling: () => false,
 		connected: p => players.has(p),
 		bestDay: () => 4,
 		log: () => {},
@@ -978,19 +1006,28 @@ section("8) a fiacao (o que o Node nao roda): nenhum teleporte tira alguem de um
 	const host = readFileSync(join(SRC, "server/net/mpHost.ts"), "utf8");
 	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
 	check(
-		/function admit\(player: Player\)[\s\S]*?options\.mayEnter\?\.\(player\) === false\) return;/.test(host),
 		"mpHost admit: quem tem uma entrada a caminho nao e posto na cidade (mayEnter)",
+		/function admit\(player: Player\)[\s\S]*?const mayEnter = options\.mayEnter;\s*if \(mayEnter !== undefined && !mayEnter\(player\)\) return;\s*const sp = lives\.enter/.test(
+			host,
+		),
 	);
 	check(
-		/mayEnter: player => townServices\?\.list\.joining\(player\) !== true/.test(main),
-		"main.server liga o mayEnter do host a lista (joining)",
+		"main.server liga o mayEnter do host a lista (joining), junto com o do Play solo (match.admits)",
+		/mayEnter: player =>\s*\(match === undefined \|\| match\.admits\(player\)\) && townServices\?\.list\.joining\(player\) !== true/.test(
+			main,
+		),
+	);
+	check(
+		"...e os dois teleportes se excluem: a lista pergunta pela viagem do Play solo, o Play solo pela entrada da lista",
+		/travelling: player => match\?\.travel\.inFlight\(player\) === true/.test(main) &&
+			/joining: player => townServices\?\.list\.joining\(player\) === true/.test(main),
 	);
 	const services = readFileSync(join(SRC, "server/match/townServices.ts"), "utf8");
 	check(
-		/OnServerInvoke = \(player: Player, raw: unknown\)[\s\S]*?host\.noteRemote\(player[\s\S]*?take\(player\)[\s\S]*?readTownRequest\(raw\)/.test(
+		"o remote le o pedido (uma olhada pura), conta o flood com ele (malformado de qualquer forma, L6), depois o balde",
+		/OnServerInvoke = \(player: Player, raw: unknown\)[\s\S]*?readTownRequest\(raw\)[\s\S]*?host\.noteRemote\(player, req === undefined\)[\s\S]*?take\(player\)/.test(
 			services,
 		),
-		"o remote conta o flood primeiro, depois o balde por jogador, e so entao le o pedido",
 	);
 });
 

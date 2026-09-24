@@ -79,6 +79,11 @@ export interface TownState {
 	seed: number;
 	/** os.time() when this world began */
 	startedAt: number;
+	/**
+	 * The world day it opened on: 1 (every public town, and every town after a world end), or the owner's LIFE day in a
+	 * solo or private town (MP-13, server/net/mpHost.ts `startTownOn`). Absent = 1. The record counts from it.
+	 */
+	startDay?: number;
 }
 
 /** what the end of a world touches, all of it pure (server/net/mpHost.ts hands its own) */
@@ -178,9 +183,13 @@ export function endWorld(
 	current: TownState,
 	options: EndWorldOptions,
 ): WorldEnd {
+	// how many days it LASTED, its first one counted: a town that opened on the owner's day 23 (MP-13) and fell on day
+	// 24 lasted 2
+	const lasted = (day: number): number =>
+		math.max(1, math.floor(day) - math.max(0, math.floor(current.startDay ?? 1) - 1));
 	const ended: EndedWorld = {
 		seed: current.seed,
-		days: math.max(1, math.floor(report.day)),
+		days: lasted(report.day),
 		startedAt: current.startedAt,
 		endedAt: options.now,
 		reason: report.reason,
@@ -199,7 +208,7 @@ export function endWorld(
 	// MP-26: a keeper's restart ends EVERY life of the town -- read at the commit, not when it was asked: the new town
 	// takes frames to generate, and whoever entered, left or paid a Rebirth meanwhile is judged as the town ends
 	// (review of 0b44458, L1; a Rebirth is refused while a world is ending, server/main.server.ts)
-	if (restart) ended.days = math.max(1, math.floor(parts.sim.clock.day));
+	if (restart) ended.days = lasted(parts.sim.clock.day);
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
 	// here out leaves the old world exactly as it was
 	parts.sim.restartWorld(world);
