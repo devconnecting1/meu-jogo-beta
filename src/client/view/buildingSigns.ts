@@ -4,6 +4,7 @@
  * pixel art is data (shared/data/buildingSigns.ts); this module places it and draws it through the town's Renderer.
  *
  *   drawBuildingSign(r, cam, view, type, doorX, doorY, doorSide, roof, roofAlpha, shadow)
+ *   drawPriceSign(r, cam, view, footing, alpha, shadow)     a gas station's price pylon (EDI-16), the same pixel art
  *
  * It is the ONE hook client/view/worldView.ts calls (`drawSignage`), from the flat drawing and from the art drawing
  * alike, with only what a sign needs to know: the building's type, where its main entrance is and in which wall,
@@ -33,7 +34,15 @@ import { Camera, ViewRect } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
 import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
-import { BUILDING_SIGNS, BuildingSign, HELIPAD, SIGN_ART, SIGN_TEXEL } from "shared/data/buildingSigns";
+import {
+	BUILDING_SIGNS,
+	BuildingSign,
+	HELIPAD,
+	PRICE_SIGN,
+	PRICE_SIGN_POST_ROWS,
+	SIGN_ART,
+	SIGN_TEXEL,
+} from "shared/data/buildingSigns";
 import { DoorSide, hash01, Rect } from "shared/game/world";
 import { artId } from "./worldArt";
 import { WORLD_ART, WorldArtName } from "./worldArtAssets";
@@ -418,4 +427,89 @@ export function drawBuildingSign(
 		}
 	}
 	drawWear(r, cam, q.x, q.y, colsOf(sign), rowsOf(sign), roof, alpha);
+}
+
+// ------------------------------------------------------------------ a gas station's price sign (EDI-16)
+
+let priceRuns: Array<SignRun> | undefined;
+/** the pylon's shadow: its length per unit of height (a canopy's is ~0.5 of its height), and how far it reaches */
+const PYLON_SHADOW_K = 0.55;
+const PYLON_SHADOW_REACH = 120;
+
+/** tests: the price sign's runs as plain data [x, y, w, h, r, g, b, layer] in texels */
+export function priceSignRuns(): Array<[number, number, number, number, number, number, number, number]> {
+	if (priceRuns === undefined) priceRuns = decompose(PRICE_SIGN.rows, PRICE_SIGN.order);
+	const out: Array<[number, number, number, number, number, number, number, number]> = [];
+	for (const q of priceRuns) out.push([q.x, q.y, q.w, q.h, q.color.R, q.color.G, q.color.B, q.z]);
+	return out;
+}
+
+/**
+ * Where the price pylon standing on `footing` (the solid tagged "gas_sign", world.ts `placeGas`) is drawn, written
+ * into `out` (world units): upright on screen, like every sign, its post's foot on the footing's middle. It is also
+ * the rect the loop fades while a body is under it (gameLoop `updateCanopy`: the tree crown's fade, LEG-03).
+ */
+export function priceSignRect(footing: Rect, out: Rect): Rect {
+	const w = colsOf(PRICE_SIGN) * SIGN_TEXEL;
+	const h = rowsOf(PRICE_SIGN) * SIGN_TEXEL;
+	out.w = w;
+	out.h = h;
+	out.x = math.floor(footing.x + footing.w / 2 - w / 2 + 0.5);
+	out.y = math.floor(footing.y + footing.h / 2 - h + 0.5);
+	return out;
+}
+
+/**
+ * The price pylon on `footing`, at opacity `alpha` (its `canopyAlpha`: see-through while a body is under it), with
+ * its long thin shadow on the forecourt (LUZ-01). Flat: its runs; art: one ImageLabel once `signPrice` has an id.
+ * Dark at night like every sign (no power, ART-07). At most runs + 1 sprites, none allocated per frame.
+ */
+export function drawPriceSign(
+	r: Renderer,
+	cam: Camera,
+	v: ViewRect,
+	footing: Rect,
+	alpha: number,
+	shadow: (x: number, y: number, len: number) => { x: number; y: number },
+): void {
+	const q = priceSignRect(footing, SPOT);
+	// its shadow on the forecourt, from the foot away from the light (LUZ-01): the post's, thin, then the board's at
+	// the end of it -- as wide as the board seen from the light (the board faces the camera's south, like every sign)
+	const fx = footing.x + footing.w / 2;
+	const fy = footing.y + footing.h / 2;
+	const so = shadow(fx, fy, 1);
+	const d = math.max(1e-3, math.sqrt(so.x * so.x + so.y * so.y));
+	const dx = so.x / d;
+	const dy = so.y / d;
+	if (
+		fx + PYLON_SHADOW_REACH >= v.minX &&
+		fx - PYLON_SHADOW_REACH <= v.maxX &&
+		fy + PYLON_SHADOW_REACH >= v.minY &&
+		fy - PYLON_SHADOW_REACH <= v.maxY
+	) {
+		const rot = math.atan2(dy, dx);
+		const post = PRICE_SIGN_POST_ROWS * SIGN_TEXEL * PYLON_SHADOW_K;
+		const board = (q.h - PRICE_SIGN_POST_ROWS * SIGN_TEXEL) * PYLON_SHADOW_K;
+		const o = fresh(post, 6, Z.shadow, BLACK, 0.26);
+		o.rotation = rot;
+		r.drawRect(cam, fx + (dx * post) / 2, fy + (dy * post) / 2, o);
+		const across = math.max(8, q.w * math.abs(dy));
+		const b = fresh(board, across, Z.shadow, BLACK, 0.24);
+		b.rotation = rot;
+		r.drawRect(cam, fx + dx * (post + board / 2), fy + dy * (post + board / 2), b);
+	}
+	if (q.x > v.maxX || q.x + q.w < v.minX || q.y > v.maxY || q.y + q.h < v.minY) return;
+	const name = textureOf(PRICE_SIGN);
+	const tex = name !== undefined ? artId(name) : undefined;
+	if (tex !== undefined) {
+		const o = fresh(q.w, q.h, Z_BOARD, BLACK, alpha);
+		o.color = undefined;
+		o.image = tex;
+		r.drawRect(cam, q.x + q.w / 2, q.y + q.h / 2, o);
+		return;
+	}
+	if (priceRuns === undefined) priceRuns = decompose(PRICE_SIGN.rows, PRICE_SIGN.order);
+	for (const run of priceRuns) {
+		texels(r, cam, q.x, q.y, run.x, run.y, run.w, run.h, Z_BOARD + run.z, run.color, alpha);
+	}
 }

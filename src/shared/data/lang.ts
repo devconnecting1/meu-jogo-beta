@@ -421,7 +421,7 @@ export const LANG_TABLE: Array<string> = [
 	"Save",
 	"Home",
 	"Game over",
-	// the end-of-run screen's epitaph (client/onboarding/gameOver.ts closingLine), one of four
+	// the death screen's epitaph (client/onboarding/gameOver.ts `epitaph`), one of four: the first is the first death's
 	"A new record. The town remembers.",
 	"Five days is more than most.",
 	"Everyone's first night ends this way. The second one goes better.",
@@ -467,7 +467,6 @@ export const LANG_TABLE: Array<string> = [
 	"Bosses",
 	"Continue this run",
 	"Daybreak in",
-	"Days survived",
 	"Everything the game listens to, on every device",
 	"Fire lights the night and cooks what you find. Build one when you can.",
 	"Getting started",
@@ -484,17 +483,43 @@ export const LANG_TABLE: Array<string> = [
 	"Reload",
 	"Skip",
 	"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it.",
-	// the wait for daybreak says what really happens (MP-21, MP-22): first light, or a new town if nobody is left
-	"You wake at first light.#If nobody is left standing, a new town begins at day 1.",
+	// the lobby's new life waiting for daybreak (client/ui/survivor.ts): first light, or a new town if nobody is left
 	"Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1.",
 	"You have",
-	"You survived",
-	"You survived a day",
 	"You're already full",
-	"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1.",
 	"Your progress changed, try again",
 	"Zombies killed",
-	"days",
+	// the death screen (client/onboarding/gameOver.ts, DESIGN_RULES UI-13). The title is the state: nobody wakes you
+	// (offline), dead until dawn (somebody is still standing, MP-21), nobody is left standing (the town falls unless
+	// somebody pays, MP-22), a New game's life waiting for first light
+	"You died",
+	"Dead until dawn",
+	"Nobody is left standing",
+	"New life at first light",
+	// the count, the hero of the screen ("Daybreak in" is above): a death in daylight waits one whole night
+	"You wake in",
+	"Town falls in",
+	"Any moment now",
+	"This life ended on",
+	// what the count ends in ("2 survivors still standing. You wake at first light.")
+	"survivor still standing.",
+	"survivors still standing.",
+	"You wake at first light.",
+	"Your new life starts at day 1.",
+	"No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell.",
+	"Nobody wakes you here. Rebirth continues this life; New game starts a new one at day 1.",
+	"Nobody wakes you here. Rebirth continues this life.",
+	// the choice: what Rebirth does and what it costs ("You have 23 coins. Each Rebirth costs more than the last.")
+	"Rebirth now",
+	"Rebirth wakes you now, at full health, with your backpack.",
+	"Each Rebirth costs more than the last.",
+	// New game asks first (UI-12): a new life is not undone
+	"Start a new life?",
+	"Day 1 and the starter kit. Level, skills, coins and packs stay; this life's backpack does not.",
+	"It wakes at first light.",
+	"Nobody else is standing: this town ends now and a new one begins.",
+	// the life's strip: "Best day" is highlighted only for a record
+	"New best!",
 	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it)
 	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
 	// the item card (client/ui/itemCard.ts + itemInfo.ts, DESIGN_RULES UI-08): types, stat labels, notes and the
@@ -724,6 +749,9 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
+	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
+	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
+	"Siphon Oil",
 ];
 
 /**
