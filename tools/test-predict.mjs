@@ -30,13 +30,17 @@
  *      duplicates packets (§4.4: duplicates and stale packets are dropped, §5.1: the render time is monotonic);
  *   4. the unacked command queue stays bounded: it sits at about one RTT of commands, never reaches the
  *      MAX_PENDING ceiling even through a total upstream blackout, and comes back down afterwards (§2.2);
- *   5. [vitals] DESIGN_RULES VIT-01: with the server biting and poisoning through its own damage entry point, and
+ *   5. a hit the SERVER lands lights the local survivor's hit flash (the HUD vignette, the HP bar's relief, the
+ *      sprite): a bite, a bite the armour absorbed whole, an explosion inside the i-frames, a bite the tick the
+ *      i-frames ran out; contact damage re-lights it at most every HIT_ALARM.GAP_S (2,5/s); poison and hunger
+ *      never light it, not even across a 4 s blackout; nothing else does either. The self block is the server's
+ *      own (`server/net/replication.ts` selfBlockOf), not a copy;
+ *   6. [vitals] DESIGN_RULES VIT-01: with the server biting and poisoning through its own damage entry point, and
  *      the wait before healing on nobody's wire, the HP the client draws is the server's: through a fight it never
  *      rises between hits, once healing it never falls back, per command it is never above the server's (but for
  *      one step of healing per command the server skipped, until the next ack), at a walker's rhythm, into the food
  *      gate, with Recovery 3, under a crowd that bites the tick each guard ends, and on a link past the server's
- *      input queue; and the hit flash, which only the server's damage lights from MP_PHASE 2, lights once for every
- *      bite (the crowd's too, whose Hit flag never drops) and never for poison.
+ *      input queue.
  *
  * Exit code 1 on any failure. Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the
  * fly, with the Luau / roblox-ts shims of tools/test-sim.mjs and the strict `buffer` of tools/test-net.mjs.
@@ -285,7 +289,7 @@ const W = require(join(SRC, "shared/game/world.ts"));
 const physics = require(join(SRC, "shared/game/physics.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const Ply = require(join(SRC, "shared/game/player.ts"));
-const { createPlayer } = Ply;
+const { applyPlayerDamage, createPlayer } = Ply;
 const VIT = require(join(SRC, "shared/sim/vitals.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
@@ -294,6 +298,8 @@ const codec = require(join(SRC, "shared/net/codec.ts"));
 const P = require(join(SRC, "shared/net/protocol.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
+const REP = require(join(SRC, "server/net/replication.ts"));
+const { HIT_ALARM } = require(join(SRC, "client/ui/hitAlarm.ts"));
 const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
 const { CommandStream, MAX_PENDING } = require(join(SRC, "client/net/commands.ts"));
 const PR = require(join(SRC, "client/net/prediction.ts"));
@@ -502,31 +508,12 @@ function serverStep(world, sp, cmd) {
 	PL.noteStep(sp, cmd, res.walking);
 }
 
+/** the only thing the self block asks the simulation (the spawn shield): nobody here just spawned */
+const NO_SHIELD = { spawnShielded: () => false };
+
+/** the server's own self block (server/net/replication.ts), not a copy of it: hp, the i-frames and the flags included */
 function selfBlockOf(sp) {
-	const p = sp.state;
-	// the flags the vitals read, as server/net/replication.ts sets them
-	let flags = 0;
-	if (p.attacked) flags += P.SelfFlag.Hit;
-	if (p.buffs.poison > 0) flags += P.SelfFlag.Poison;
-	return {
-		x: p.x,
-		y: p.y,
-		ackSeq: sp.ackSeq,
-		bufDepth: PL.bufferDepth(sp),
-		reactionSpeed: Math.max(0, p.reactionSpeed),
-		reactionDir: p.reactionDir,
-		hp: Math.max(0, p.hp),
-		hunger: Math.max(0, p.hungry),
-		flags,
-		iframe: Math.max(0, p.iframe),
-		mag: 0,
-		reload: 0,
-		spread: 0,
-		draw: 0,
-		bleed: 0,
-		modFlags: 0,
-		weapon: 0,
-	};
+	return REP.selfBlockOf(NO_SHIELD, sp);
 }
 
 function playerBlockOf(sp) {
@@ -629,7 +616,7 @@ function clientFrame(cl, dt, now, down, up, serverNow) {
 // ---------------------------------------------------------------- one scenario
 
 /**
- * Runs `SECONDS` of a two-player session: the local survivor (predicted, reconciled) and one ally walking down a
+ * Runs `SECONDS` (or `opts.seconds`) of a two-player session: the local survivor (predicted, reconciled) and one ally walking down a
  * clear lane (interpolated). Returns everything the assertions need.
  */
 function run(opts) {
@@ -702,9 +689,12 @@ function run(opts) {
 		serverHp: [],
 		clientHp: [],
 		hungerGap: 0,
-		bites: [],
-		flashes: [],
+		/** VIT-01: [server time, commands] the server's queue jumped over (every copy of them came too late) */
 		skipped: [],
+		/** client time of every hit flash the reconciliation started */
+		flashAt: [],
+		/** the scenario's own bookkeeping (`hurt`) */
+		hits: [],
 		up,
 		down,
 		me,
@@ -718,7 +708,7 @@ function run(opts) {
 	let lastAllyX = -Infinity;
 	let waypointAt = 0;
 	let heading = 0;
-	const frames = Math.round(SECONDS / TICK);
+	const frames = Math.round((opts.seconds ?? SECONDS) / TICK);
 	// the last tenth of the run is quiet, so "did the client converge back" is a question about the
 	// reconciliation and not about whichever bite happened to land on the final snapshot
 	const quietFrom = Math.floor(frames * 0.9);
@@ -752,6 +742,9 @@ function run(opts) {
 			const jump = (me.ackSeq - ackBefore + 65536) % 65536;
 			if (me.counters.consumed > 1 && jump > 1 && jump < 1000)
 				report.skipped.push([T0 + serverTick / SIM_HZ, jump - 1]);
+			// the horde's half of the tick (§3.1): whatever the scenario lands on the survivor, through the server's
+			// own entry point (`applyPlayerDamage`, what ServerCombat.damageActor calls)
+			opts.hurt?.(me, serverTick, report);
 			const biting = opts.knockbackEvery !== undefined && serverTick > 0 && serverTick < quietFrom;
 			if (biting && serverTick % opts.knockbackEvery === 0) {
 				// a bite the client cannot possibly have predicted: it only learns about it from the snapshot
@@ -760,15 +753,8 @@ function run(opts) {
 				report.knockbacks += 1;
 			}
 			if (vit !== undefined) {
-				// the horde's half of the tick (server/sim/simulation.ts): a bite through the server's damage entry point
+				// the body after the whole tick (the scenario's `hurt` included)
 				const t = serverTick / SIM_HZ;
-				// a crowd (LEG-04) tries every tick and lands the tick the guard ends: the Hit flag never drops
-				const crowd = vit.crowd !== undefined && t >= vit.crowd[0] && t < vit.crowd[1];
-				if (crowd || vit.biteAt?.some(b => Math.abs(b - t) < TICK / 2)) {
-					if (Ply.applyPlayerDamage(me.state, me.save, vit.bite ?? 10)) report.bites.push(T0 + t);
-				}
-				if (vit.poisonAt !== undefined && Math.abs(vit.poisonAt - t) < TICK / 2)
-					me.state.buffs.poison = vit.poisonS;
 				report.serverHp.push([T0 + t, me.state.hp]);
 				// the tick that CONSUMED a command (a filled tick repeats the ack: the first one is that command's)
 				if (!serverBySeq.has(me.ackSeq)) serverBySeq.set(me.ackSeq, { hp: me.state.hp, t: T0 + t });
@@ -782,6 +768,7 @@ function run(opts) {
 					zombies: [],
 					bosses: [],
 				};
+				opts.onSnap?.(snap.self, serverTick, report);
 				const res = P.encodeSnapshot(snap);
 				for (const part of res.parts) down.send(now, part);
 			}
@@ -798,13 +785,14 @@ function run(opts) {
 		client.raw.magnitude = moving ? 1 : 0;
 		client.raw.aim = heading + 0.3;
 		const serverNow = now + (noise() - 0.5) * 2 * CLOCK_NOISE_S;
+		const flashBefore = client.state.hitFlash ?? 0;
 		clientFrame(client, frameDt, now, down, up, serverNow);
+		// the hit flash went UP this frame: the reconciliation lit it (nothing else on this client can); then it fades
+		// the way client/systems/combat.ts fades it, once a frame, after netUpdate
+		if ((client.state.hitFlash ?? 0) > flashBefore) report.flashAt.push(now);
+		client.state.hitFlash = Math.max(0, (client.state.hitFlash ?? 0) - frameDt);
 		if (vit !== undefined) {
 			report.clientHp.push([now, client.state.hp]);
-			// the hit flash only the self block lights now (prediction.ts HIT_FLASH_DROP); client/systems/combat.ts fades
-			// it in the game, so here each one is counted and put out
-			if ((client.state.hitFlash ?? 0) >= 1) report.flashes.push(now);
-			client.state.hitFlash = 0;
 			if (now - T0 > 2)
 				report.hungerGap = Math.max(report.hungerGap, Math.abs(client.state.hungry - me.state.hungry));
 		}
@@ -898,6 +886,10 @@ for (const rtt of [0.05, 0.1, 0.2]) {
 	} else {
 		fail(`ally interpolation stepped back ${r.backwardSteps}× (worst ${r.worstBackward.toFixed(3)} u)`);
 	}
+
+	// nothing hurt the survivor, so nothing may light the hit flash (regeneration, a replay, the hunger's u8)
+	if (r.flashAt.length === 0 && p.flashes === 0) ok(`no hit, no hit flash`);
+	else fail(`${r.flashAt.length} hit flash(es) without a hit (the prediction counted ${p.flashes})`);
 }
 
 // ---- (3) the adversarial link: heavy reordering and duplicates on top of the loss
@@ -1079,16 +1071,286 @@ console.log(`\n[dead] a dead survivor's prediction stands still, like the server
 	else fail(`the render lead draws the corpse ${drawn.toFixed(2)} u ahead of where it lies`);
 }
 
+// ---- the hit flash: from F2 the server lands every hit, and the client reads it back from the self block
+//
+// `applyPlayerDamage` is what sets `hitFlash` -- the HUD's damage vignette, the HP bar's relief and the survivor's
+// sprite all read it -- and from MP_PHASE 2 it runs on the server alone. Before the fix the local survivor's flash
+// never fired in a server session. The block already says a hit landed, twice: the i-frame timer restarts, and HP
+// falls faster than the slow drains can take it. At most one new flash every HIT_ALARM.GAP_S (< 3/s, WCAG 2.3.1).
+
+/** the last server tick of a snapshot interval, near `s` seconds in: whatever lands on it is in the very next block */
+const tickBefore = s => Math.floor((s * SIM_HZ) / SNAP_EVERY) * SNAP_EVERY + SNAP_EVERY - 1;
+/** the steel armour (shared/data/equips.ts): def 6, so a 5-point bite is absorbed whole */
+const STEEL = 4;
+/** one render frame, at the skewed clock the harness runs */
+const FRAME_S = TICK * CLIENT_CLOCK_SKEW;
+const flashesIn = (r, from, to) => r.flashAt.filter(t => t >= from && t <= to);
+/** the shortest time between two flashes the reconciliation started */
+function minFlashGap(r) {
+	let gap = Infinity;
+	for (let i = 1; i < r.flashAt.length; i++) gap = Math.min(gap, r.flashAt[i] - r.flashAt[i - 1]);
+	return gap;
+}
+/** the most flashes started inside any one second */
+function flashesPerSecond(r) {
+	let most = 0;
+	for (const t of r.flashAt) most = Math.max(most, flashesIn(r, t, t + 1 - 1e-9).length);
+	return most;
+}
+
+console.log(
+	`\n[hit flash] 100 ms RTT, a clean link: every kind of hit the server lands lights the local survivor's flash`,
+);
+{
+	const RTT = 0.1;
+	/** a block leaves on the tick after the hit, flies RTT/2 and waits for the next client frame */
+	const LATENCY = RTT / 2 + SNAP_EVERY / SIM_HZ + 2 * FRAME_S;
+	const plan = {
+		// a bite: the i-frames start
+		bite: tickBefore(2),
+		// an explosion 0,45 s later, INSIDE those i-frames (bypassDef): they do not restart, only HP says it
+		blast: tickBefore(2) + 27,
+		// a bite the steel armour absorbs whole: HP does not move, the i-frames do (the local path flashed for it too)
+		armour: tickBefore(4),
+		// a bite, and another the very tick its i-frames run out: no block ever sees the Hit bit clear in between
+		first: tickBefore(6),
+		// a body that keeps touching (bypassDef, 2 HP every snapshot interval) for a whole second
+		burstFrom: tickBefore(12),
+		burstTo: tickBefore(13),
+	};
+	let rebite = false;
+	let firstAt = -1;
+	let hitClearBetween = 0;
+	const r = run({
+		// the plan above runs to 13 s, and the last tenth of a run is quiet
+		seconds: Math.max(SECONDS, 16),
+		rtt: RTT,
+		jitter: 0,
+		loss: 0,
+		seed: SEED + 61,
+		hurt(me, t, report) {
+			const hit = (kind, raw, bypass) => {
+				const before = me.state.hp;
+				const during = me.state.attacked;
+				const landed = applyPlayerDamage(me.state, me.save, raw, bypass);
+				report.hits.push({
+					kind,
+					tick: t,
+					at: T0 + (t + 1) / SIM_HZ,
+					landed,
+					during,
+					lost: before - me.state.hp,
+				});
+			};
+			if (t === plan.bite) hit("bite", 10, false);
+			else if (t === plan.blast) hit("blast", 15, true);
+			else if (t === plan.armour) {
+				// worn for the bite alone, so the walk the client predicts (armour slows it) stays the server's
+				me.save.equipCloth = STEEL;
+				hit("armour", 5, false);
+				me.save.equipCloth = -1;
+			} else if (t === plan.first) {
+				hit("first", 10, false);
+				rebite = true;
+				firstAt = t;
+			} else if (rebite && !me.state.attacked) {
+				hit("rebite", 10, false);
+				rebite = false;
+			} else if (t >= plan.burstFrom && t < plan.burstTo && (t - plan.burstFrom) % SNAP_EVERY === 0) {
+				hit("burst", 2, true);
+			}
+		},
+		onSnap(self, t) {
+			if (firstAt >= 0 && t > firstAt && rebite && (self.flags & P.SelfFlag.Hit) === 0) hitClearBetween += 1;
+		},
+	});
+	const hits = r.hits;
+	const singles = hits.filter(h => h.kind !== "burst");
+	const burst = hits.filter(h => h.kind === "burst");
+	const one = kind => singles.find(h => h.kind === kind);
+	console.log(
+		`  ${hits.length} hits landed on the server (${singles.map(h => h.kind).join(", ")}, ${burst.length} burst) · ` +
+			`${r.flashAt.length} flashes on the client · HP ${r.me.state.hp.toFixed(1)} at the end`,
+	);
+	const shaped =
+		singles.length === 5 &&
+		singles.every(h => h.landed) &&
+		one("blast")?.during === true &&
+		one("armour")?.lost === 0 &&
+		one("rebite") !== undefined &&
+		one("rebite").tick - one("first").tick <= Math.ceil(DESIGN.IFRAMES * SIM_HZ) + 1 &&
+		burst.length >= 15 &&
+		r.me.state.hp > 0;
+	if (shaped) ok(`the scenario bit: a blast inside the i-frames, a bite absorbed whole, a bite as they ran out`);
+	else fail(`the scenario did not happen as planned: ${JSON.stringify(singles)}`);
+
+	for (const h of singles) {
+		const lit = flashesIn(r, h.at, h.at + LATENCY);
+		const what = {
+			bite: "a bite (the i-frames restart)",
+			blast: "an explosion inside the i-frames (HP alone says it)",
+			armour: "a bite the armour absorbed whole (HP unchanged)",
+			first: "a bite",
+			rebite: "the bite the tick its i-frames ran out",
+		}[h.kind];
+		if (lit.length === 1) ok(`${what}: one flash, ${((lit[0] - h.at) * 1000).toFixed(0)} ms after the server tick`);
+		else fail(`${what}: ${lit.length} flashes within ${(LATENCY * 1000).toFixed(0)} ms (expected 1)`);
+	}
+	if (hitClearBetween === 0)
+		ok(`no block between those two bites had the Hit bit clear: the bit alone would miss one`);
+	else fail(`${hitClearBetween} block(s) saw the Hit bit clear between the two bites: the case never happened`);
+
+	const inBurst = flashesIn(r, burst[0]?.at ?? Infinity, (burst.at(-1)?.at ?? -Infinity) + LATENCY).length;
+	const burstS = burst.length > 0 ? burst.at(-1).at - burst[0].at : 0;
+	const most = Math.ceil(burstS / HIT_ALARM.GAP_S) + 1;
+	if (inBurst >= 2 && inBurst <= most) {
+		ok(`a second of contact damage re-lights it ${inBurst}× (≤ ${most}), not once per block`);
+	} else fail(`a second of contact damage lit it ${inBurst}× (expected 2..${most})`);
+
+	const stray = r.flashAt.filter(t => !hits.some(h => t >= h.at && t <= h.at + LATENCY));
+	if (stray.length === 0) ok(`every flash answers a hit (${r.flashAt.length} flashes, none without one)`);
+	else
+		fail(
+			`${stray.length} flash(es) with no hit behind them, at ${stray.map(t => (t - T0).toFixed(2)).join(", ")} s`,
+		);
+
+	// WCAG 2.3.1 fails MORE than three flashes in any one second; one every 0,4 s is 2,5/s, and fits three into the
+	// window that opens on one of them (0, 0,4, 0,8 s) -- never four
+	const gap = minFlashGap(r);
+	const perS = flashesPerSecond(r);
+	if (gap >= HIT_ALARM.GAP_S - 1e-9 && perS <= 3) {
+		ok(`never two flashes closer than ${gap.toFixed(3)} s, at most ${perS} in any second (WCAG 2.3.1: ≤ 3)`);
+	} else
+		fail(`two flashes ${gap.toFixed(3)} s apart, ${perS} in one second (the cap is ${HIT_ALARM.GAP_S} s, ≤ 3/s)`);
+
+	if (r.predictionStats.flashes === r.flashAt.length) ok(`the prediction's stats count the same ${r.flashAt.length}`);
+	else
+		fail(
+			`the prediction's stats count ${r.predictionStats.flashes} flashes, the survivor showed ${r.flashAt.length}`,
+		);
+}
+
+console.log(`\n[slow drains] poisoned and starving for the whole run, through a 4 s snapshot blackout`);
+{
+	// room for the blackout and for the blocks after it
+	const seconds = Math.max(SECONDS, 12);
+	const from = T0 + Math.max(2, seconds * 0.3);
+	const r = run({
+		seconds,
+		rtt: 0.1,
+		jitter: 0.01,
+		loss: LOSS,
+		seed: SEED + 67,
+		downBlackout: { from, to: from + OUTAGE_S },
+		hurt(me, t) {
+			if (t !== 0) return;
+			me.state.buffs.poison = 1e9;
+			me.state.hungry = 0;
+		},
+	});
+	const lost = 100 - r.me.state.hp;
+	console.log(
+		`  HP ${r.me.state.hp.toFixed(1)} at the end (${lost.toFixed(1)} drained) · ${r.down.dropped} parts lost`,
+	);
+	// 2,4 HP/s for the whole run: at least half of it
+	if (lost < seconds) fail(`only ${lost.toFixed(1)} HP drained: the drains never bit`);
+	else if (r.flashAt.length === 0)
+		ok(`${lost.toFixed(1)} HP of poison and hunger, not one flash (a drain is not a hit)`);
+	else
+		fail(
+			`${r.flashAt.length} flash(es) from the slow drains, at ${r.flashAt.map(t => (t - T0).toFixed(2)).join(", ")} s`,
+		);
+}
+
+console.log(`\n[hit flash, lossy] 200 ms RTT, ±30 ms jitter, ${pct(LOSS, 1)} loss: a bite every 2 s`);
+{
+	const EVERY = 2 * SIM_HZ;
+	/** a lost block costs one snapshot interval; allow a few of them in a row */
+	const LATENCY = 0.1 + 0.03 + 4 * (SNAP_EVERY / SIM_HZ) + 2 * FRAME_S;
+	// enough bites to mean something (one every 2 s, the last tenth quiet)
+	const seconds = Math.max(SECONDS, 14);
+	const quiet = Math.floor(seconds * SIM_HZ * 0.9);
+	const r = run({
+		seconds,
+		rtt: 0.2,
+		jitter: 0.03,
+		loss: LOSS,
+		seed: SEED + 71,
+		hurt(me, t, report) {
+			if (t === 0 || t % EVERY !== 0 || t >= quiet || me.state.hp < 20) return;
+			if (applyPlayerDamage(me.state, me.save, 6, false))
+				report.hits.push({ tick: t, at: T0 + (t + 1) / SIM_HZ });
+		},
+	});
+	const late = [];
+	for (const h of r.hits) {
+		const lit = flashesIn(r, h.at, h.at + LATENCY);
+		if (lit.length !== 1) late.push(`${(h.at - T0).toFixed(2)} s: ${lit.length}`);
+	}
+	const worst = r.hits.reduce((w, h) => {
+		const f = r.flashAt.find(t => t >= h.at);
+		return f === undefined ? w : Math.max(w, f - h.at);
+	}, 0);
+	console.log(
+		`  ${r.hits.length} bites · ${r.flashAt.length} flashes · ${r.down.dropped} parts lost, ${r.down.reordered} ` +
+			`out of order · slowest flash ${(worst * 1000).toFixed(0)} ms after its bite`,
+	);
+	if (r.hits.length < 5) fail(`only ${r.hits.length} bites: the scenario never bit`);
+	else if (late.length === 0 && r.flashAt.length === r.hits.length) {
+		ok(`each of the ${r.hits.length} bites lit exactly one flash, within ${(LATENCY * 1000).toFixed(0)} ms`);
+	} else fail(`bites without exactly one flash in time: ${late.join("; ")} (${r.flashAt.length} flashes in all)`);
+}
+
+// ---- a new survivor is compared with nothing: attach() forgets the last block, so a lower HP is no hit
+console.log(`\n[hit flash, attach] a new body's first block is no hit, whatever the last body's HP was`);
+{
+	const scene = buildScene(SEED);
+	const save = defaultSave();
+	const p = createPlayer(save, scene.lane.x, scene.lane.y);
+	const prediction = new Prediction();
+	prediction.attach(scene.world, p, save);
+	const sp = makeServerPlayer(0, scene.lane.x, scene.lane.y);
+	const block = () =>
+		P.decodeSnapshotPart(
+			P.encodeSnapshot({ tick: 3, self: selfBlockOf(sp), players: [], zombies: [], bosses: [] }).parts[0],
+		).self;
+	prediction.reconcile(block(), [], 1);
+	// the next life: another body, much lower (a corpse carried over at 30, MP-21), the next frame
+	const p2 = createPlayer(save, scene.lane.x, scene.lane.y);
+	prediction.attach(scene.world, p2, save);
+	sp.state.hp = 30;
+	prediction.reconcile(block(), [], 1.02);
+	if ((p2.hitFlash ?? 0) === 0 && prediction.stats().flashes === 0) ok(`100 HP, then a new body at 30: no flash`);
+	else fail(`the new body's first block lit the flash (${p2.hitFlash}): it was compared with the old body`);
+	// and from there on it is compared as usual
+	applyPlayerDamage(sp.state, sp.save, 10, false);
+	prediction.reconcile(block(), [], 1.07);
+	if (p2.hitFlash === 1) ok(`…and its first bite lights it`);
+	else fail(`the new body's first bite did not light the flash (${p2.hitFlash})`);
+}
+
 // ---- VIT-01: the HP bar the client draws is the server's -- no healing it has to take back, none held back
 //
-// The server bites (through `applyPlayerDamage`, as the horde does) and poisons; the wait before healing is on nobody's
-// wire: the client derives it from the self block (client/net/prediction.ts), and so is the hit flash, which from
-// MP_PHASE 2 only the server's damage lights -- one per bite, a crowd's included, none for poison. What must hold, per COMMAND, is that
-// the hp the client drew first for it is never above what the server then computed for it -- a drawn hp above the
-// server's is one the next snapshot takes back -- except for a bite it could not know about yet. On the screen: the bar
-// never rises in a fight, and never falls while it heals.
+// The server bites (through `applyPlayerDamage`, as the horde does, in the scenario's `hurt`) and poisons; the wait
+// before healing is on nobody's wire: the client derives it from the self block (client/net/prediction.ts). What must
+// hold, per COMMAND, is that the hp the client drew first for it is never above what the server then computed for it --
+// a drawn hp above the server's is one the next snapshot takes back -- except for a bite it could not know about yet.
+// On the screen: the bar never rises in a fight, and never falls while it heals. (The flash those bites light is the
+// [hit flash] sections' above.)
 console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing to take back, none held back`);
 {
+	/**
+	 * The scenario's hits, on the server's tick (`run`'s `hurt`): bites at `biteAt` seconds, a crowd (LEG-04) that
+	 * tries every tick of `crowd` and so lands the tick each guard ends, and poison from `poisonAt` for `poisonS`
+	 */
+	const vitalsHurt = vit => (me, tick, report) => {
+		const t = tick / SIM_HZ;
+		const crowd = vit.crowd !== undefined && t >= vit.crowd[0] && t < vit.crowd[1];
+		if (crowd || vit.biteAt?.some(b => Math.abs(b - t) < TICK / 2)) {
+			if (applyPlayerDamage(me.state, me.save, vit.bite ?? 10, false)) report.hits.push({ tick, at: T0 + t });
+		}
+		if (vit.poisonAt !== undefined && Math.abs(vit.poisonAt - t) < TICK / 2) me.state.buffs.poison = vit.poisonS;
+	};
 	const OVER_EPS = 0.02;
 	const runs = [
 		{ label: "a walker's bites, 100 ms RTT", rtt: 0.1, vitals: { hp: 70, hunger: 90, biteAt: [2, 3.4, 4.8, 6.2] } },
@@ -1116,28 +1378,29 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 	];
 	for (const v of runs) {
 		const jitter = v.jitter ?? Math.min(v.rtt * JITTER_FRACTION, JITTER_CAP_S);
-		const r = run({ rtt: v.rtt, jitter, loss: LOSS, seed: SEED + 71, vitals: v.vitals });
 		const vit = v.vitals;
+		const r = run({ rtt: v.rtt, jitter, loss: LOSS, seed: SEED + 71, vitals: vit, hurt: vitalsHurt(vit) });
+		const bites = r.hits.map(h => h.at);
 		// a command the server jumped over (every copy of it came too late) is one step of healing its body never did
 		// for that seq: until the next ack the client, which did it, is that far ahead. The only excuse accepted
 		const skipStep = VIT.regenRate(r.client.save) * TICK;
 		const skippedNear = t => r.skipped.some(([ts]) => t >= ts - TICK && t <= ts + 0.6);
 		console.log(
-			`  [${v.label}] ${r.bites.length} hits · filled ticks ${r.me.counters.filled} · ` +
+			`  [${v.label}] ${bites.length} hits · filled ticks ${r.me.counters.filled} · ` +
 				`commands the server skipped ${r.skipped.reduce((a, [, n]) => a + n, 0)}`,
 		);
 		const poisonEnd = vit.poisonAt !== undefined ? T0 + vit.poisonAt + vit.poisonS : -Infinity;
 		if (vit.crowd !== undefined) {
-			const gaps = r.bites.slice(1).map((b, i) => b - r.bites[i]);
+			const gaps = bites.slice(1).map((b, i) => b - bites[i]);
 			const tight = gaps.every(g => g <= DESIGN.IFRAMES + 1.5 * TICK);
-			if (r.bites.length >= 5 && tight) {
-				ok(`the crowd landed ${r.bites.length} bites, each the tick the last one's guard ended`);
-			} else fail(`the crowd landed ${r.bites.length} bites, gaps ${gaps.map(g => g.toFixed(3)).join(", ")} s`);
+			if (bites.length >= 5 && tight) {
+				ok(`the crowd landed ${bites.length} bites, each the tick the last one's guard ended`);
+			} else fail(`the crowd landed ${bites.length} bites, gaps ${gaps.map(g => g.toFixed(3)).join(", ")} s`);
 		}
-		const hurtUntil = Math.max(r.bites.length > 0 ? r.bites[r.bites.length - 1] : -Infinity, poisonEnd);
+		const hurtUntil = Math.max(bites.length > 0 ? bites[bites.length - 1] : -Infinity, poisonEnd);
 		// a hit the client could not know about yet: for about a round trip it drew the hp from before it
 		const unforeseen = t =>
-			r.bites.some(b => t >= b - TICK && t <= b + 0.6) ||
+			bites.some(b => t >= b - TICK && t <= b + 0.6) ||
 			(vit.poisonAt !== undefined && t >= T0 + vit.poisonAt - TICK && t <= poisonEnd + 0.6);
 
 		// (1) per command: never above the server, outside the hits it could not foresee
@@ -1179,7 +1442,7 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 		let healDrops = 0;
 		let worstDrop = 0;
 		let firstRise;
-		let learned = r.bites.length === 0;
+		let learned = bites.length === 0;
 		for (let i = 1; i < r.clientHp.length; i++) {
 			const [t, hp] = r.clientHp[i];
 			const d = hp - r.clientHp[i - 1][1];
@@ -1191,33 +1454,16 @@ console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing t
 				worstDrop = Math.max(worstDrop, -d);
 			}
 		}
-		if (r.bites.length > 0) {
+		if (bites.length > 0) {
 			if (fightRises === 0)
 				ok("through the fight the bar never rose between hits (the wait, derived client-side)");
 			else fail(`the bar rose on ${fightRises} frames in the middle of the fight`);
 		}
 		if (firstRise === undefined) fail("the client never drew the body healing");
 		else if (healDrops === 0) {
-			const after = r.bites.length > 0 ? `, ${(firstRise - hurtUntil).toFixed(2)} s after the last hp lost` : "";
+			const after = bites.length > 0 ? `, ${(firstRise - hurtUntil).toFixed(2)} s after the last hp lost` : "";
 			ok(`once healing, the bar only went up: not one frame pulled back${after}`);
 		} else fail(`while healing the bar fell back on ${healDrops} frames (worst ${worstDrop.toFixed(4)} hp)`);
-
-		// (2b) the hit flash: one for every bite the server landed, about a round trip later -- none for poison, none
-		// for the wait, none missed for a crowd's bites that never let the Hit flag drop
-		const window = v.rtt + 0.25;
-		let unmatched = 0;
-		const perBite = r.bites.map(b => r.flashes.filter(f => f >= b && f <= b + window).length);
-		for (const f of r.flashes) if (!r.bites.some(b => f >= b && f <= b + window)) unmatched += 1;
-		const lags = r.bites.map(b => (r.flashes.find(f => f >= b && f <= b + window) ?? NaN) - b);
-		if (r.bites.length === 0 && r.flashes.length === 0) {
-			ok(`no bite, no hit flash${vit.poisonAt !== undefined ? " (poison is not a hit)" : ""}`);
-		} else if (perBite.every(n => n === 1) && unmatched === 0) {
-			ok(
-				`the hit flash lit once for each of the ${r.bites.length} bites, ` +
-					`${Math.round(Math.min(...lags) * 1000)}-${Math.round(Math.max(...lags) * 1000)} ms after it, and never otherwise`,
-			);
-		} else
-			fail(`hit flashes per bite ${perBite.join(",")}, ${unmatched} with no bite (${r.flashes.length} in all)`);
 
 		// (3) and it ends where the server is: at the last command both simulated, and the stomach with it
 		if (Math.abs(lastGap) <= 0.2)
