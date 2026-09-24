@@ -3286,17 +3286,33 @@ section(
 		const sim = newSim(world);
 		let win;
 		let house;
+		const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+		// a pane onto open ground, with room for a body 64 u inside it: the town's first one may look onto the 56 u
+		// alley by the map's border wall, where no fortification goes (the everyday town moved the buildings round; §t
+		// picks its window the same way)
+		const roomBefore = o => {
+			const n = NORMAL[o.side];
+			if (PH.circleBlocked(world, o.x + o.w / 2 - n[0] * 64, o.y + o.h / 2 - n[1] * 64, 16) !== undefined)
+				return false;
+			let x = o.x + o.w / 2 + n[0] * 40;
+			let y = o.y + o.h / 2 + n[1] * 40;
+			for (let i = 0; i < 30; i++) {
+				const r = PH.moveActor(world, x, y, 16, n[0] * 4, n[1] * 4);
+				x = r.x;
+				y = r.y;
+			}
+			return (x - (o.x + o.w / 2)) * n[0] + (y - (o.y + o.h / 2)) * n[1] > 100;
+		};
 		for (const b of world.solids) {
 			if (win !== undefined || b.kind !== "building") continue;
 			for (const o of b.openings ?? []) {
-				if (o.kind === "window" && o.broken !== true && win === undefined) {
+				if (o.kind === "window" && o.broken !== true && win === undefined && roomBefore(o)) {
 					win = o;
 					house = b;
 				}
 			}
 		}
 		check(win !== undefined && WIN.windowIntact(win.glass), "a cidade tem janelas com vidro", house?.tags);
-		const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
 		const n = NORMAL[win.side];
 		const q = addPlayer(sim, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
 		q.state.angle = Math.atan2(n[1], n[0]);
