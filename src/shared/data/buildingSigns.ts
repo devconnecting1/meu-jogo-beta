@@ -115,7 +115,7 @@ export const SIGN_ART: Record<string, Color3> = {
 	"0": Color3.fromRGB(190, 156, 86),
 	I: Color3.fromRGB(150, 118, 52),
 	"#": Color3.fromRGB(104, 80, 34),
-	// the church's lavender
+	// the town hall's lavender
 	"^": Color3.fromRGB(204, 190, 230),
 	"~": Color3.fromRGB(170, 150, 200),
 	"=": Color3.fromRGB(120, 100, 156),
@@ -475,7 +475,7 @@ export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 			"kkkkkkkkkkkkkkkkkkkkkkkk",
 		],
 	},
-	// the everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's shops and offices, the church, the fire and police
+	// the everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's shops and offices, the town hall, the fire and police
 	// stations -- one pictogram each on its own board colour, read by shape and colour, no letter, no brand (CON-02)
 	16: {
 		texture: "signHardware",
@@ -639,24 +639,24 @@ export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 		],
 	},
 	23: {
-		texture: "signChurch",
-		shows: "a church bell hanging from its yoke, on lavender",
-		order: "k^~=FYyQ",
+		texture: "signTownHall",
+		shows: "the town hall: a clock tower over its two wings and the front door, on lavender",
+		order: "k^~=cdW",
 		rows: [
 			"kkkkkkkkkkkkkkkkkkkkkkkk",
 			"k^^^^^^^^^^^^^^^^^^^^^^k",
-			"k~~~~~~~~~~~~~~~~~~~~~~k",
-			"k~~~~~~FFFFFFFFFF~~~~~~k",
-			"k~~~~~~~~~~FF~~~~~~~~~~k",
-			"k~~~~~~~~~kkkk~~~~~~~~~k",
-			"k~~~~~~~~kYYyyk~~~~~~~~k",
-			"k~~~~~~~kYyyyyQk~~~~~~~k",
-			"k~~~~~~~kYyyyyQk~~~~~~~k",
-			"k~~~~~~~kYyyyyQk~~~~~~~k",
-			"k~~~~~~kYyyyyyyQk~~~~~~k",
-			"k~~~~~kYyyyyyyyyQk~~~~~k",
-			"k~~~~~kkkkkkkkkkkk~~~~~k",
 			"k~~~~~~~~~~kk~~~~~~~~~~k",
+			"k~~~~~~~~~kddk~~~~~~~~~k",
+			"k~~~~~~~~kddddk~~~~~~~~k",
+			"k~~~~~~~kkkkkkkk~~~~~~~k",
+			"k~~~~~~~kcWWWWck~~~~~~~k",
+			"k~~~~~~~kWWkWWWk~~~~~~~k",
+			"k~~~~~~~kWWkkkWk~~~~~~~k",
+			"k~kkkkkkkWWWWWWkkkkkkk~k",
+			"k~kccccckcWWWWckccccck~k",
+			"k~kcdcdccckkkkcccdcdck~k",
+			"k~kcdcdccckddkcccdcdck~k",
+			"k~kkkkkkkkkddkkkkkkkkk~k",
 			"k======================k",
 			"kkkkkkkkkkkkkkkkkkkkkkkk",
 		],

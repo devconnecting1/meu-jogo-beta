@@ -14,6 +14,7 @@
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
+import { CRATE_STACKED, CRATE_TIPPED, TENT_DOWN, TENT_SAGGING, TENT_TORN } from "shared/game/townLots";
 import type { GroundRect, Rect, Solid, WorldData } from "shared/game/world";
 import { isPortico, isVaultBox, isVaultDoor } from "shared/sim/vault";
 import { overlaps } from "./drawKit";
@@ -57,6 +58,77 @@ const SOIL_ROW = Color3.fromRGB(88, 134, 64);
 const COURT_KEY = Color3.fromRGB(150, 84, 64);
 const KEY_WIDE = 96;
 const KEY_DEEP = 112;
+/**
+ * The street market's litter (EDI-20, APO-01): produce a shade darker and a size smaller than any item's icon on the
+ * ground (LEG-03: nothing here reads as something to pick up), paper, a kraft shopping bag
+ */
+const APPLE = Color3.fromRGB(138, 40, 34);
+const ORANGE = Color3.fromRGB(176, 102, 34);
+const CABBAGE = Color3.fromRGB(84, 116, 56);
+const PRODUCE: ReadonlyArray<Color3> = [APPLE, ORANGE, CABBAGE];
+const LITTER_PAPER = Color3.fromRGB(198, 192, 174);
+const KRAFT = Color3.fromRGB(162, 124, 80);
+const KRAFT_SHADE = Color3.fromRGB(120, 88, 56);
+/** a spill's three pieces of produce: where (shares of the rect) and how big */
+const SPILL_AT: ReadonlyArray<[number, number, number]> = [
+	[-0.3, -0.2, 10],
+	[0.05, 0.25, 12],
+	[0.32, -0.12, 10],
+];
+
+/** a litter rect's own pick of `n` (from its corner: the same every frame and on every client) */
+function litterPick(g: Rect, n: number): number {
+	return math.floor(math.abs(g.x * 0.37 + g.y * 0.61) / 8) % n;
+}
+
+/** what the market's crowd dropped: a spill of produce, two sheets of paper, a shopping bag on its side */
+function drawLitter(r: Renderer, cam: Camera, g: GroundRect): void {
+	const cx = g.x + g.w / 2;
+	const cy = g.y + g.h / 2;
+	const z = Z.ground + 4;
+	const p = litterPick(g, 3);
+	if (g.kind === "paper") {
+		r.drawRect(cam, cx - g.w * 0.2, cy - g.h * 0.15, {
+			w: 16,
+			h: 12,
+			rotation: 0.35 + p * 0.3,
+			color: LITTER_PAPER,
+			alpha: 0.9,
+			zIndex: z,
+		});
+		r.drawRect(cam, cx + g.w * 0.22, cy + g.h * 0.18, {
+			w: 14,
+			h: 11,
+			rotation: -0.5 - p * 0.2,
+			color: LITTER_PAPER,
+			alpha: 0.85,
+			zIndex: z,
+		});
+		return;
+	}
+	if (g.kind === "bag") {
+		const rot = 0.3 + p * 0.4;
+		r.drawRect(cam, cx, cy, { w: 24, h: 16, rotation: rot, color: KRAFT, zIndex: z });
+		r.drawRect(cam, cx + math.cos(rot) * 10, cy + math.sin(rot) * 10, {
+			w: 5,
+			h: 16,
+			rotation: rot,
+			color: KRAFT_SHADE,
+			zIndex: z + 1,
+		});
+		r.drawCircle(cam, cx + math.cos(rot) * 20, cy + math.sin(rot) * 20 + 4, 10, {
+			color: PRODUCE[p],
+			zIndex: z,
+		});
+		return;
+	}
+	for (let i = 0; i < SPILL_AT.size(); i++) {
+		const [fx, fy, d] = SPILL_AT[i];
+		const c = PRODUCE[(p + i) % 3];
+		r.drawCircle(cam, cx + g.w * fx, cy + g.h * fy, c === CABBAGE ? d + 3 : d, { color: c, zIndex: z });
+	}
+}
+
 /** a building site's bare earth, and the ruts the trucks left */
 const EARTH = Color3.fromRGB(128, 100, 72);
 const EARTH_RUT = Color3.fromRGB(104, 80, 58);
@@ -72,6 +144,10 @@ const STEP = 24;
  */
 export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): boolean {
 	const k = g.kind;
+	if (k === "spill" || k === "paper" || k === "bag") {
+		if (overlaps(g.x, g.y, g.w, g.h, v)) drawLitter(r, cam, g);
+		return true;
+	}
 	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site") {
 		return false;
 	}
@@ -86,14 +162,20 @@ export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewR
 		return true;
 	}
 	if (k === "steps") {
-		// the stone, its joint round it, and the risers: a shade line at each step's edge
+		// the stone, its joint round it, and each step's edge: the lit nosing, the riser's shadow under it
 		r.drawRect(cam, cx, cy, { w: g.w, h: g.h, color: STONE, stroke: STONE_JOINT, strokeThickness: 2, zIndex: z });
 		const across = alongX ? g.h : g.w;
 		for (let t = STEP; t < across; t += STEP) {
+			r.drawRect(cam, alongX ? cx : g.x + t - 4, alongX ? g.y + t - 4 : cy, {
+				w: alongX ? g.w - 4 : 3,
+				h: alongX ? 3 : g.h - 4,
+				color: STONE_LIT,
+				zIndex: z + 1,
+			});
 			r.drawRect(cam, alongX ? cx : g.x + t, alongX ? g.y + t : cy, {
-				w: alongX ? g.w : 4,
-				h: alongX ? 4 : g.h,
-				color: STONE_SHADE,
+				w: alongX ? g.w - 4 : 5,
+				h: alongX ? 5 : g.h - 4,
+				color: STONE_JOINT,
 				zIndex: z + 1,
 			});
 		}
@@ -215,14 +297,16 @@ const BELL_HZ = 4;
  * in the middle of it. While the bell rings (`powered`, the server's LightSet) its lamp flashes. See-through with a body
  * under it (`canopyAlpha`, the canopy's fade).
  */
-export function drawPortico(r: Renderer, cam: Camera, s: Solid, v: ViewRect, shadow: ShadowFn, clock: number): void {
-	if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return;
+export function drawPortico(r: Renderer, cam: Camera, s0: Solid, v: ViewRect, shadow: ShadowFn, clock: number): void {
+	if (!overlaps(s0.x - 60, s0.y - 60, s0.w + 120, s0.h + 120, v)) return;
+	const face = s0.face ?? "top";
+	// drawn PORTICO_TRIM short of its street edge: the colonnade shows under the cornice (aerial: nothing collides)
+	const s = trimmed(s0, face, PORTICO_TRIM);
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
-	const a = s.canopyAlpha ?? 1;
+	const a = s0.canopyAlpha ?? 1;
 	const so = shadow(cx, cy, PORTICO_LIFT);
 	r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.26, zIndex: Z.shadow });
-	const face = s.face ?? "top";
 	// the ridge runs across the facade's line: along y for a portico on a top / bottom street, along x otherwise
 	const ridgeY = face === "top" || face === "bottom";
 	r.drawRect(cam, cx, cy, {
@@ -263,6 +347,15 @@ export function drawPortico(r: Renderer, cam: Camera, s: Solid, v: ViewRect, sha
 		strokeAlpha: a,
 		zIndex: Z.roof + 2,
 	});
+	// the frieze just behind the cornice: its line of shadow, where a real one's dentils would be
+	const frieze = streetEdge(trimmed(s, face, CORNICE), face, 4);
+	r.drawRect(cam, frieze.x + frieze.w / 2, frieze.y + frieze.h / 2, {
+		w: frieze.w,
+		h: frieze.h,
+		color: STONE_JOINT,
+		alpha: a,
+		zIndex: Z.roof + 2,
+	});
 	// the alarm bell's box, in the middle of the cornice
 	const bx = street.x + street.w / 2;
 	const by = street.y + street.h / 2;
@@ -277,7 +370,7 @@ export function drawPortico(r: Renderer, cam: Camera, s: Solid, v: ViewRect, sha
 		cornerRadius: 3,
 		zIndex: Z.roof + 3,
 	});
-	if (s.powered === true) {
+	if (s0.powered === true) {
 		const on = math.floor(clock * BELL_HZ * 2) % 2 === 0;
 		r.drawCircle(cam, bx, by, on ? 64 : 40, { color: BELL_LIT, alpha: on ? 0.55 : 0.3, zIndex: Z.roof + 4 });
 		r.drawRect(cam, bx, by, {
@@ -287,6 +380,20 @@ export function drawPortico(r: Renderer, cam: Camera, s: Solid, v: ViewRect, sha
 			zIndex: Z.roof + 5,
 		});
 	}
+}
+
+/**
+ * How much of the portico's roof is left out on its street side when drawn: with it, the colonnade's front half shows
+ * under the cornice (EDI-23: from the street, with the roof on, the bank reads by its columns and its steps)
+ */
+const PORTICO_TRIM = 10;
+
+/** `s` without the strip `d` deep on its street side (`face`) */
+function trimmed(s: Rect, face: string, d: number): Rect {
+	if (face === "top") return { x: s.x, y: s.y + d, w: s.w, h: s.h - d };
+	if (face === "bottom") return { x: s.x, y: s.y, w: s.w, h: s.h - d };
+	if (face === "left") return { x: s.x + d, y: s.y, w: s.w - d, h: s.h };
+	return { x: s.x, y: s.y, w: s.w - d, h: s.h };
 }
 
 /** the strip `d` deep along the street edge of a rect whose street is on `face` */
@@ -507,6 +614,8 @@ const SHADOW_A = 0.28;
 const WOOD_LIT = Color3.fromRGB(196, 158, 108);
 const WOOD = Color3.fromRGB(158, 118, 76);
 const WOOD_SHADE = Color3.fromRGB(112, 80, 50);
+/** the lit edge of a crate stacked on another (the light reaches it first) */
+const WOOD_TOP = WOOD_LIT.Lerp(WHITE, 0.2);
 /** painted and galvanised metal */
 const GALV = Color3.fromRGB(150, 156, 160);
 const GALV_LIT = Color3.fromRGB(196, 200, 204);
@@ -579,7 +688,7 @@ function tentOver(world: WorldData, s: Solid): Solid | undefined {
 		const tents: Array<Solid> = [];
 		for (const q of world.solids) if (q.kind === "canopy" && q.tags === "tent") tents.push(q);
 		for (const q of world.solids) {
-			if (q.kind !== "prop" || (q.tags !== "stall" && q.tags !== "crates")) continue;
+			if (q.kind !== "prop" || (q.tags !== "stall" && q.tags !== "crates" && q.tags !== "trestle")) continue;
 			const cx = q.x + q.w / 2;
 			const cy = q.y + q.h / 2;
 			for (const t of tents) {
@@ -591,6 +700,160 @@ function tentOver(world: WorldData, s: Solid): Solid | undefined {
 		}
 	}
 	return coveredBy.get(s);
+}
+
+/** a market tent's state (townLots.ts TENT_STANDING .. TENT_DOWN): `variant` is its stripe colour + 3 × state */
+function tentState(s: Solid): number {
+	return math.floor((s.variant ?? 0) / 3);
+}
+
+/** does this tent hide what stands under it (it stands, and nobody is under it)? */
+function tentHides(tent: Solid | undefined): boolean {
+	return tent !== undefined && tentState(tent) !== TENT_DOWN && (tent.canopyAlpha ?? 1) >= 0.99;
+}
+
+/** a tipped crate's turn on its side (radians), and the way its open top faces */
+const TIP = 0.35;
+const TIP_NX = -math.sin(TIP);
+const TIP_NY = math.cos(TIP);
+
+/** a crate, two stacked, or one tipped over with its produce rolling out (townLots.ts CRATE_ONE .. CRATE_TIPPED) */
+function drawCrates(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+	const cx = s.x + s.w / 2;
+	const cy = s.y + s.h / 2;
+	const v = s.variant ?? 0;
+	if (v === CRATE_TIPPED) {
+		const so = shadow(cx, cy, 4);
+		r.drawRect(cam, cx + so.x, cy + so.y, {
+			w: s.w - 6,
+			h: s.h - 12,
+			rotation: TIP,
+			color: BLACK,
+			alpha: SHADOW_A,
+			zIndex: Z.shadow,
+		});
+		r.drawRect(cam, cx, cy, {
+			w: s.w - 6,
+			h: s.h - 12,
+			rotation: TIP,
+			color: WOOD,
+			stroke: INK,
+			strokeThickness: 2,
+			strokeAlpha: 0.8,
+			zIndex: Z.structure,
+		});
+		// its open top, dark inside, and an apple and a cabbage that rolled out of it
+		const o = (s.h - 12) / 2 - 4;
+		r.drawRect(cam, cx + TIP_NX * o, cy + TIP_NY * o, {
+			w: s.w - 12,
+			h: 6,
+			rotation: TIP,
+			color: WOOD_SHADE,
+			zIndex: Z.structure + 1,
+		});
+		r.drawCircle(cam, cx + TIP_NX * (o + 10) - 8, cy + TIP_NY * (o + 10), 10, {
+			color: APPLE,
+			zIndex: Z.structure + 1,
+		});
+		r.drawCircle(cam, cx + TIP_NX * (o + 14) + 10, cy + TIP_NY * (o + 12), 13, {
+			color: CABBAGE,
+			zIndex: Z.structure + 1,
+		});
+		return;
+	}
+	const wide = s.w >= s.h;
+	box(r, cam, s, WOOD, WOOD_LIT, v === CRATE_STACKED ? 10 : 0, shadow);
+	r.drawRect(cam, cx, cy, {
+		w: wide ? 4 : s.w - 8,
+		h: wide ? s.h - 8 : 4,
+		color: WOOD_SHADE,
+		zIndex: Z.structure + 2,
+	});
+	if (v === CRATE_STACKED) {
+		// a second one on top, a size smaller and off-square: the lit one
+		box(
+			r,
+			cam,
+			{ x: s.x + 3, y: s.y + 2, w: s.w - 12, h: s.h - 12 },
+			WOOD_LIT,
+			WOOD_TOP,
+			0,
+			shadow,
+			0,
+			Z.structure + 3,
+		);
+		r.drawRect(cam, cx - 3, cy - 4, {
+			w: wide ? 4 : s.w - 20,
+			h: wide ? s.h - 20 : 4,
+			color: WOOD,
+			zIndex: Z.structure + 5,
+		});
+	}
+}
+
+/**
+ * A trestle table knocked over in the rush (EDI-20): its top's underside, the two trestles sticking up at its ends,
+ * the cloth half off it on the aisle side (its wares are the spill in front of it: townLots.ts).
+ */
+function drawTrestle(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+	const cx = s.x + s.w / 2;
+	const cy = s.y + s.h / 2;
+	const wide = s.w >= s.h;
+	box(r, cam, s, WOOD_SHADE, undefined, 2, shadow);
+	for (const f of [-0.33, 0.33]) {
+		r.drawRect(cam, wide ? cx + s.w * f : cx, wide ? cy : cy + s.h * f, {
+			w: wide ? 6 : s.w - 8,
+			h: wide ? s.h - 8 : 6,
+			color: WOOD_LIT,
+			stroke: INK,
+			strokeThickness: 1,
+			zIndex: Z.structure + 2,
+		});
+	}
+	const n = sideN(s.face);
+	r.drawRect(cam, cx + n.x * 16 + (wide ? s.w * 0.12 : 0), cy + n.y * 16 + (wide ? 0 : s.h * 0.12), {
+		w: wide ? s.w * 0.55 : s.w - 4,
+		h: wide ? s.h - 4 : s.h * 0.55,
+		rotation: (s.variant ?? 0) === 1 ? -0.22 : 0.18,
+		color: CANVAS_SHADE,
+		stroke: INK,
+		strokeThickness: 1,
+		strokeAlpha: 0.6,
+		zIndex: Z.structure + 1,
+	});
+}
+
+/** the hand cart a vendor left in an aisle: its bed, the wheels at its sides, the handle at its `face` end */
+function drawCart(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): void {
+	const cx = s.x + s.w / 2;
+	const cy = s.y + s.h / 2;
+	const wide = s.w >= s.h;
+	const n = sideN(s.face);
+	const len = wide ? s.w : s.h;
+	const bed = len - 24;
+	const bx = cx - n.x * 12;
+	const by = cy - n.y * 12;
+	const bedRect: Rect = wide
+		? { x: bx - bed / 2, y: s.y + 4, w: bed, h: s.h - 8 }
+		: { x: s.x + 4, y: by - bed / 2, w: s.w - 8, h: bed };
+	for (const sgn of [-1, 1]) {
+		r.drawRect(cam, wide ? bx : cx + sgn * (s.w / 2 - 3), wide ? cy + sgn * (s.h / 2 - 3) : by, {
+			w: wide ? 18 : 6,
+			h: wide ? 6 : 18,
+			color: RUBBER,
+			zIndex: Z.structure,
+		});
+	}
+	box(r, cam, bedRect, WOOD, WOOD_LIT, 6, shadow, 0, Z.structure + 1);
+	r.drawRect(cam, cx + n.x * (len / 2 - 6), cy + n.y * (len / 2 - 6), {
+		w: wide ? 4 : s.w - 10,
+		h: wide ? s.h - 10 : 4,
+		color: IRON,
+		zIndex: Z.structure + 1,
+	});
+	if ((s.variant ?? 0) === 1) {
+		box(r, cam, { x: bx - 14, y: by - 14, w: 28, h: 28 }, WOOD_LIT, undefined, 0, shadow, 0, Z.structure + 3);
+	}
 }
 
 /** a box of the town: its shadow on the sun's side (`lift` long), the body with its outline, a lit top edge */
@@ -666,17 +929,15 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		return true;
 	}
 	// ---- the street market (EDI-20)
-	if (t === "stall" || t === "crates") {
-		const tent = tentOver(world, s);
-		if (tent !== undefined && (tent.canopyAlpha ?? 1) >= 0.99) return true;
+	if (t === "stall" || t === "crates" || t === "trestle") {
+		// under a standing tent nobody is under, nothing shows; under a tent that came down, all of it does
+		if (tentHides(tentOver(world, s))) return true;
 		if (t === "crates") {
-			box(r, cam, s, WOOD, WOOD_LIT, 0, shadow);
-			r.drawRect(cam, cx, cy, {
-				w: wide ? 4 : s.w - 8,
-				h: wide ? s.h - 8 : 4,
-				color: WOOD_SHADE,
-				zIndex: Z.structure + 2,
-			});
+			drawCrates(r, cam, s, shadow);
+			return true;
+		}
+		if (t === "trestle") {
+			drawTrestle(r, cam, s, shadow);
 			return true;
 		}
 		// the table, its cloth, and what is still on it
@@ -697,6 +958,10 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 			cornerRadius: 4,
 			zIndex: Z.structure + 2,
 		});
+		return true;
+	}
+	if (t === "handcart") {
+		drawCart(r, cam, s, shadow);
 		return true;
 	}
 	if (t === "foodtruck") {
@@ -1011,8 +1276,12 @@ export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, 
 	if (!overlaps(s.x - 40, s.y - 40, s.w + 80, s.h + 80, v)) return true;
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
+	if (t === "tent") {
+		drawTent(r, cam, s, cx, cy, shadow);
+		return true;
+	}
 	const a = s.canopyAlpha ?? 1;
-	const so = shadow(cx, cy, t === "tent" ? 26 : 20);
+	const so = shadow(cx, cy, 20);
 	r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.22 * a + 0.04, zIndex: Z.shadow });
 	if (t === "shelter") {
 		r.drawRect(cam, cx, cy, {
@@ -1027,10 +1296,105 @@ export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, 
 		});
 		return true;
 	}
+	return true;
+}
+
+/** a tear's dark edge, and a sagging canvas's puddle of old rain */
+const TEAR = Color3.fromRGB(58, 54, 48);
+const PUDDLE = Color3.fromRGB(84, 106, 118);
+
+/**
+ * A market stall's tent (EDI-20): its canvas, three stripes across the ridge and the shaded slope (the bottom / right
+ * half: light from the top left), turned by its `heading` (a few degrees: nobody set them square). Torn: a dark rent
+ * and a flap hanging off its edge; sagging: the belly between the poles darker, old rain in it. Standing, it is
+ * aerial and see-through with a body under it (`canopyAlpha`). Down, it lies on its tables under the actors: crumpled,
+ * two stripes skewed by the fold, a pole sticking out -- and whatever is under it shows round it.
+ */
+function drawTent(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, shadow: ShadowFn): void {
+	const st = tentState(s);
+	const th = s.heading ?? 0;
+	const c = math.cos(th);
+	const sn = math.sin(th);
 	const wide = s.w >= s.h;
+	const stripe = TENT_STRIPES[(s.variant ?? 0) % 3];
+	if (st === TENT_DOWN) {
+		// over the stacked crates' lids (Z.structure + 5), under every actor
+		const z = Z.structure + 6;
+		// the sheet, and the part of it that slumped off the tables in a heap, in shade
+		const mx = wide ? -s.w * 0.06 : -s.w * 0.05;
+		const my = wide ? -s.h * 0.05 : -s.h * 0.06;
+		r.drawRect(cam, cx + mx * c - my * sn, cy + mx * sn + my * c, {
+			w: s.w * (wide ? 0.8 : 0.7),
+			h: s.h * (wide ? 0.7 : 0.8),
+			rotation: th,
+			color: CANVAS,
+			stroke: INK,
+			strokeThickness: 2,
+			strokeAlpha: 0.8,
+			zIndex: z,
+		});
+		const hx = wide ? s.w * 0.22 : s.w * 0.15;
+		const hy = wide ? s.h * 0.15 : s.h * 0.22;
+		r.drawRect(cam, cx + hx * c - hy * sn, cy + hx * sn + hy * c, {
+			w: s.w * (wide ? 0.46 : 0.55),
+			h: s.h * (wide ? 0.55 : 0.46),
+			rotation: th + 0.35,
+			color: CANVAS_SHADE,
+			stroke: INK,
+			strokeThickness: 2,
+			strokeAlpha: 0.7,
+			zIndex: z + 1,
+		});
+		const across = wide ? s.w : s.h;
+		for (const f of [-0.26, 0.08]) {
+			const d = across * f;
+			r.drawRect(cam, cx + (wide ? d * c : -d * sn) + mx, cy + (wide ? d * sn : d * c) + my, {
+				w: wide ? across / 9 : s.w * 0.6,
+				h: wide ? s.h * 0.6 : across / 9,
+				rotation: th + 0.1,
+				color: stripe,
+				zIndex: z + 2,
+			});
+		}
+		// the folds it came down in, and a pole that fell with it
+		for (const [len, turn] of [
+			[0.7, -0.15],
+			[0.4, 0.55],
+		] as Array<[number, number]>) {
+			r.drawRect(cam, cx + mx, cy + my, {
+				w: wide ? s.w * len : 8,
+				h: wide ? 8 : s.h * len,
+				rotation: th + turn,
+				color: BLACK,
+				alpha: 0.22,
+				zIndex: z + 3,
+			});
+		}
+		const px = wide ? s.w * 0.44 : 0;
+		const py = wide ? 0 : s.h * 0.44;
+		r.drawRect(cam, cx + px * c - py * sn, cy + px * sn + py * c, {
+			w: 4,
+			h: (wide ? s.h : s.w) * 0.9,
+			rotation: th + (wide ? 0.6 : 0.6 + math.pi / 2),
+			color: IRON,
+			zIndex: z + 3,
+		});
+		return;
+	}
+	const a = s.canopyAlpha ?? 1;
+	const so = shadow(cx, cy, st === TENT_SAGGING ? 20 : 26);
+	r.drawRect(cam, cx + so.x, cy + so.y, {
+		w: s.w,
+		h: s.h,
+		rotation: th,
+		color: BLACK,
+		alpha: 0.22 * a + 0.04,
+		zIndex: Z.shadow,
+	});
 	r.drawRect(cam, cx, cy, {
 		w: s.w,
 		h: s.h,
+		rotation: th,
 		color: CANVAS,
 		alpha: a,
 		stroke: INK,
@@ -1038,26 +1402,75 @@ export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, 
 		strokeAlpha: 0.8 * a,
 		zIndex: Z.roof,
 	});
-	// three stripes across the ridge, and the shaded slope (the bottom / right half: light from the top left)
-	const stripe = TENT_STRIPES[(s.variant ?? 0) % 3];
 	const across = wide ? s.w : s.h;
 	for (const f of [-0.33, 0, 0.33]) {
-		r.drawRect(cam, wide ? cx + across * f : cx, wide ? cy : cy + across * f, {
+		const d = across * f;
+		r.drawRect(cam, cx + (wide ? d * c : -d * sn), cy + (wide ? d * sn : d * c), {
 			w: wide ? across / 7 : s.w,
 			h: wide ? s.h : across / 7,
+			rotation: th,
 			color: stripe,
 			alpha: a,
 			zIndex: Z.roof + 1,
 		});
 	}
-	r.drawRect(cam, wide ? cx : cx + s.w / 4, wide ? cy + s.h / 4 : cy, {
+	// the shaded slope
+	const hx = wide ? 0 : s.w / 4;
+	const hy = wide ? s.h / 4 : 0;
+	r.drawRect(cam, cx + hx * c - hy * sn, cy + hx * sn + hy * c, {
 		w: wide ? s.w : s.w / 2,
 		h: wide ? s.h / 2 : s.h,
+		rotation: th,
 		color: BLACK,
 		alpha: 0.14 * a,
 		zIndex: Z.roof + 2,
 	});
-	return true;
+	if (st === TENT_TORN) {
+		// the rent, off the middle, and the flap hanging over the edge on the shaded side
+		const tx = wide ? s.w * 0.18 : -s.w * 0.1;
+		const ty = wide ? -s.h * 0.1 : s.h * 0.18;
+		r.drawRect(cam, cx + tx * c - ty * sn, cy + tx * sn + ty * c, {
+			w: wide ? 10 : s.w * 0.42,
+			h: wide ? s.h * 0.42 : 10,
+			rotation: th + 0.3,
+			color: TEAR,
+			alpha: 0.85 * a,
+			zIndex: Z.roof + 3,
+		});
+		const fx = wide ? s.w * 0.28 : s.w / 2 + 8;
+		const fy = wide ? s.h / 2 + 8 : s.h * 0.28;
+		r.drawRect(cam, cx + fx * c - fy * sn, cy + fx * sn + fy * c, {
+			w: 34,
+			h: 20,
+			rotation: th + 0.5,
+			color: stripe,
+			alpha: a,
+			stroke: INK,
+			strokeThickness: 1,
+			strokeAlpha: 0.7 * a,
+			zIndex: Z.roof + 3,
+		});
+	} else if (st === TENT_SAGGING) {
+		// the belly between the poles, and the old rain lying in it
+		r.drawRect(cam, cx, cy, {
+			w: s.w * 0.62,
+			h: s.h * 0.5,
+			rotation: th,
+			color: BLACK,
+			alpha: 0.16 * a,
+			cornerRadius: 12,
+			zIndex: Z.roof + 3,
+		});
+		r.drawRect(cam, cx - 6 * sn, cy + 6 * c, {
+			w: wide ? s.w * 0.28 : s.w * 0.22,
+			h: wide ? s.h * 0.2 : s.h * 0.28,
+			rotation: th,
+			color: PUDDLE,
+			alpha: 0.55 * a,
+			cornerRadius: 8,
+			zIndex: Z.roof + 4,
+		});
+	}
 }
 
 /** is this solid the bank's vault door (worldView draws it here instead of as a built door)? */

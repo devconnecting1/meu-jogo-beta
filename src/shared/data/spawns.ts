@@ -302,14 +302,15 @@ export const TOWN_SPAWNS: Record<number, Array<SpawnEntry>> = {
 		{ building: 22, kind: 3, index: 5, min: 0.1, max: 0.1 },
 		{ building: 22, kind: 4, index: 34, min: 1, max: 1 },
 	],
-	// church: the food pantry's shelves, blankets, the parish first aid box
+	// town hall: the emergency supplies it handed out when the town fell -- canned food, blankets, flashlight batteries --
+	// and the first-aid cabinet in the lobby, whose bandages keep a town's medicine where it was with the two hospitals
+	// and the fewer pharmacies (EDI-18)
 	23: [
-		{ building: 23, kind: 3, index: 9, min: 1, max: 2 },
-		{ building: 23, kind: 3, index: 4, min: 1, max: 2 },
-		// the parish box's bandages: with the two hospitals and the fewer pharmacies, medicine per town stays where it was
-		{ building: 23, kind: 3, index: 12, min: 1, max: 1 },
-		{ building: 23, kind: 3, index: 5, min: 0.1, max: 0.1 },
+		{ building: 23, kind: 3, index: 9, min: 2, max: 4 },
+		{ building: 23, kind: 3, index: 12, min: 1, max: 2 },
+		{ building: 23, kind: 3, index: 5, min: 0.05, max: 0.05 },
 		{ building: 23, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: 23, kind: 4, index: 31, min: 0.4, max: 0.4 },
 	],
 	// fire station: the EMS bag, the axe on the truck, turnout leather, the generator's fuel
 	24: [

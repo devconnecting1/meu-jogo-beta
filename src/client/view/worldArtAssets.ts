@@ -104,7 +104,7 @@ export type WorldArtName =
 	| "signPawn"
 	| "signPost"
 	| "signBank"
-	| "signChurch"
+	| "signTownHall"
 	| "signFire"
 	| "signPolice"
 	| "signOffice"
@@ -339,8 +339,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signPost: { id: "", w: 24, h: 16 },
 	/** sprite: storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze */
 	signBank: { id: "", w: 24, h: 16 },
-	/** sprite: storefront sign (type 23): a church bell hanging from its yoke, on lavender */
-	signChurch: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 23): the town hall: a clock tower over its two wings and the front door, on lavender */
+	signTownHall: { id: "", w: 24, h: 16 },
 	/** sprite: storefront sign (type 24): a yellow flame, its white-hot heart, on fire-engine red */
 	signFire: { id: "", w: 24, h: 16 },
 	/** sprite: storefront sign (type 25): a navy shield with a gold star, on pale blue */
@@ -451,8 +451,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaRim: { id: "rbxassetid://88546042032232", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
 	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
-	/** atlas: interiors: 1635 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "", w: 1024, h: 872 },
+	/** atlas: interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 922 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -545,7 +545,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signPawn",
 	"signPost",
 	"signBank",
-	"signChurch",
+	"signTownHall",
 	"signFire",
 	"signPolice",
 	"signOffice",

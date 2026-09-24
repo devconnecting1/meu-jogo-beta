@@ -311,7 +311,7 @@ const BUILDING_NAMES: Record<string, string> = {
 	pawn: "pawn shop",
 	postoffice: "post office",
 	bank: "bank",
-	church: "church",
+	townhall: "town hall",
 	firestation: "fire station",
 	police: "police station",
 	office: "offices",

@@ -1,6 +1,6 @@
 /*
  * The everyday town (docs/DESIGN_RULES.md EDI-18..EDI-23, MOB-04..MOB-06): what a small North American town holds
- * besides its houses and its shops -- the fire station on the avenue, the neighbourhood church, the bank on Main
+ * besides its houses and its shops -- the fire station on the avenue, the town hall, the bank on Main
  * Street, the street market, a public parking lot, a house going up, the parks' playgrounds and courts, the backyards'
  * sheds and pools, and the street furniture on the sidewalks' service strip.
  *
@@ -272,14 +272,14 @@ export function placeBank(kit: TownKit, lot: Lot, e: LotEdge, towardA: boolean):
 	return bank;
 }
 
-// ---------------------------------------------------------------------------------------------- the church (EDI-18)
+// ---------------------------------------------------------------------------------------------- the town hall (EDI-18)
 
 /**
- * The neighbourhood church (EDI-18): on a residential street, set back behind a front lawn like the houses beside it
- * (EDI-02: a civic building with its yard), at one end of the block's face so the houses fill the rest. False when
- * it does not fit on this face.
+ * The town hall (EDI-18): on a residential street, set back behind a front lawn like the houses beside it (EDI-02: a
+ * civic building with its yard), at one end of the block's face so the houses fill the rest. False when it does not
+ * fit on this face.
  */
-export function placeChurch(kit: TownKit, lot: Lot, e: LotEdge): boolean {
+export function placeTownHall(kit: TownKit, lot: Lot, e: LotEdge): boolean {
 	const span = yardSpan(lot, e);
 	if (yardDepth(lot, e) < 684 + TOWN.SETBACK_HOUSE_MIN + TOWN.SIDE_YARD * 2) return false;
 	const atA = kit.rng.chance(0.5);
@@ -577,8 +577,8 @@ function halfCourt(kit: TownKit, lot: Lot, c: Rect, wide: boolean): void {
 export const STALL_W = 128;
 export const STALL_D = 44;
 export const CRATE = 44;
-/** the stalls along a row, table to table: two bodies between two tables */
-export const STALL_PITCH = 224;
+/** the stalls along a row, table to table: more than two bodies between two tables, jitter and all */
+export const STALL_PITCH = 240;
 /** the aisles between two rows of stalls, and the cross aisle through the middle of every row */
 export const MARKET_AISLE = 240;
 const MARKET_CROSS = 160;
@@ -590,13 +590,48 @@ const STALL_STOCKED = 0.35;
 /** and never more than this many of them (a market is a street of stalls, not a supermarket: EDI-20) */
 export const MARKET_STOCKED_MAX = 8;
 
+// the market a few days after the town fell (APO-01): nobody set it up on a grid, and nobody packed it away
+/** how far a pair of stalls sits off its line, along the row and across it (in 8 u steps: the vendors' own spots) */
+const STALL_JITTER = 8;
+/** the share of the tables knocked over in the rush: a trestle on its back, nothing left on it (tags "trestle") */
+const TABLE_DOWN = 0.18;
+/** the share of the pairs with one table only (a vendor who never set up, or packed up early) */
+const HALF_PAIR = 0.12;
+/** a tent's overhang past its tables, picked per tent: the vendors' tents were never one size */
+const TENT_OVER: ReadonlyArray<number> = [8, 16, 24, 40];
+/** how far a tent sits askew (radians, either way): drawn only, it is aerial (COL-02) */
+const TENT_SKEW = 0.05;
+/**
+ * A tent's state, three to a stripe colour (`variant` = stripe + 3 × state): standing, its canvas torn, its canvas
+ * sagging between the poles, or down on its tables (at most TENTS_DOWN a market, never fewer than two with six pairs)
+ */
+export const TENT_STANDING = 0;
+export const TENT_TORN = 1;
+export const TENT_SAGGING = 2;
+export const TENT_DOWN = 3;
+const TENTS_DOWN = 3;
+const TORN_SHARE = 0.2;
+const SAG_SHARE = 0.2;
+/** a stack of crates (`variant`): one, two stacked, one tipped over with what it held rolling out */
+export const CRATE_ONE = 0;
+export const CRATE_STACKED = 1;
+export const CRATE_TIPPED = 2;
+/** the hand cart a vendor left in an aisle (along × across) */
+const CART_L = 88;
+const CART_W = 44;
+/** what lies on the aisles: dropped produce, paper, a shopping bag (ground: `spill`, `paper`, `bag`) */
+const LITTER_PER_AISLE = 4;
+
 /**
  * The street market (EDI-20): a downtown block given to the weekly market, abandoned mid-day when the town fell.
  * Rows of stalls back to back -- a table facing the aisle, the crates behind it, a striped tent over each pair --
  * with a wide aisle between two rows and a cross aisle through the middle, every aisle open onto a sidewalk; the
  * food truck parked at the end of an aisle. About a third of the tables still hold what they sold (produce, bread and
- * preserves, cloth and leather: spawns.ts YARD_LOOT), the truck its food. Answers false when the block cannot hold
- * one row.
+ * preserves, cloth and leather: spawns.ts YARD_LOOT), the truck its food. And it was left as the crowd ran (APO-01):
+ * each pair a step off its line, tents of several sizes and askew, two or three of them down on their tables and
+ * others torn or sagging, tables knocked over with their wares spilled in front, crates stacked and tipped, a hand
+ * cart in an aisle, produce, paper and a dropped bag on the ground -- every aisle still two bodies wide (EDI-11).
+ * Answers false when the block cannot hold one row.
  */
 export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	const y = lot.yard;
@@ -621,19 +656,41 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	const sideLow: DoorSide = ax ? "top" : "left";
 	const sideHigh: DoorSide = ax ? "bottom" : "right";
 	let stockedLeft = MARKET_STOCKED_MAX;
+	const pairCount = n * starts.size();
+	let pairsLeft = pairCount;
+	let downLeft = pairCount >= 6 ? 2 + kit.rng.int(0, TENTS_DOWN - 2) : 1;
 	for (let b = 0; b < n; b++) {
-		const cb = c0 + b * (block + MARKET_AISLE);
-		for (const a of starts) {
+		const line = c0 + b * (block + MARKET_AISLE);
+		for (const start of starts) {
+			const a = start + kit.rng.int(-1, 1) * STALL_JITTER;
+			const cb = line + kit.rng.int(-1, 1) * STALL_JITTER;
+			// a tent that came down: two or three a market, spread over its pairs
+			const down = downLeft > 0 && kit.rng.chance(downLeft / pairsLeft);
+			pairsLeft -= 1;
 			const pair = frameRect(ax, a, a + STALL_W, cb, cb + block);
 			if (!kit.canPlace(pair.x, pair.y, pair.w, pair.h, 0)) continue;
+			if (down) downLeft -= 1;
 			const tableLow = frameRect(ax, a, a + STALL_W, cb, cb + STALL_D);
 			const tableHigh = frameRect(ax, a, a + STALL_W, cb + block - STALL_D, cb + block);
 			const cm = a + (STALL_W - CRATE) / 2;
-			// the low row's table faces the low aisle, the high row's the high one; what each sells, from the rng
+			// one table only now and then; the low row's table faces the low aisle, the high row's the high one
+			// (never on the first row's side the food truck parks along: that side stays one straight edge, EDI-11)
+			const half = kit.rng.chance(HALF_PAIR);
+			const either = kit.rng.chance(0.5) ? sideHigh : sideLow;
+			const lone = !half ? undefined : b > 0 ? either : n > 1 ? sideLow : sideHigh;
 			for (const [r, face] of [
 				[tableLow, sideLow],
 				[tableHigh, sideHigh],
 			] as Array<[Rect, DoorSide]>) {
+				if (face === lone) continue;
+				if (kit.rng.chance(TABLE_DOWN)) {
+					// knocked over: the trestle on its back, its cloth and wares spilled on the aisle before it
+					prop(kit, "trestle", r, true, { face, variant: kit.rng.int(0, 2) });
+					const fromLow = face === sideLow;
+					const c = fromLow ? cb - 48 : cb + block + 8;
+					lot.ground.push({ ...frameRect(ax, a + 16, a + STALL_W - 16, c, c + 40), kind: "spill" });
+					continue;
+				}
 				const stocked = kit.rng.chance(STALL_STOCKED) && stockedLeft > 0;
 				if (stocked) stockedLeft -= 1;
 				prop(kit, "stall", r, true, {
@@ -642,13 +699,26 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 					...(stocked ? holds() : {}),
 				});
 			}
-			prop(kit, "crates", frameRect(ax, cm, cm + CRATE, cb + STALL_D, cb + STALL_D + CRATE), true, {
-				variant: kit.rng.int(0, 2),
-			});
-			prop(kit, "crates", frameRect(ax, cm, cm + CRATE, cb + STALL_D + CRATE, cb + block - STALL_D), true, {
-				variant: kit.rng.int(0, 2),
-			});
-			const tent = frameRect(ax, a - 16, a + STALL_W + 16, cb - 16, cb + block + 16);
+			// the crates between the tables: one, two stacked, or one tipped over
+			for (const k of [0, 1]) {
+				const c = cb + STALL_D + k * CRATE;
+				const roll = kit.rng.next();
+				const variant = roll < 0.45 ? CRATE_ONE : roll < 0.8 ? CRATE_STACKED : CRATE_TIPPED;
+				prop(kit, "crates", frameRect(ax, cm, cm + CRATE, c, c + CRATE), true, { variant });
+			}
+			// the tent: its own size and a little askew; torn, sagging, or down on its tables
+			const over = TENT_OVER[kit.rng.int(0, TENT_OVER.size() - 1)];
+			const overC = kit.rng.chance(0.5) ? 16 : 24;
+			const state = down
+				? TENT_DOWN
+				: kit.rng.chance(TORN_SHARE)
+					? TENT_TORN
+					: kit.rng.chance(SAG_SHARE)
+						? TENT_SAGGING
+						: TENT_STANDING;
+			const tent = down
+				? frameRect(ax, a - 8, a + STALL_W + 8, cb - 8, cb + block + 8)
+				: frameRect(ax, a - over, a + STALL_W + over, cb - overC, cb + block + overC);
 			kit.add({
 				kind: "canopy",
 				x: tent.x,
@@ -662,14 +732,53 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 				passable: true,
 				canopyAlpha: 1,
 				face: sideLow,
-				variant: kit.rng.int(0, 2),
+				variant: kit.rng.int(0, 2) + 3 * state,
+				heading: kit.rng.range(-1, 1) * (down ? TENT_SKEW * 3 : TENT_SKEW),
 			});
 		}
 	}
 	// the food truck at the far end of the first aisle (or of the margin, with one row), against the row's side
+	// (the stalls stand a step off their lines: the first spot that pinches nothing, EDI-11)
 	const aisle0 = n > 1 ? c0 + block : c0 - margin;
-	const truck = frameRect(ax, A1 - ends - TRUCK_L, A1 - ends, aisle0 + 24, aisle0 + 24 + TRUCK_W);
-	fixture(kit, "foodtruck", truck, false, { face: ax ? "right" : "bottom", ...holds() }, 0);
+	let truckAt = false;
+	for (const far of [true, false]) {
+		for (let back = 0; back <= 192; back += 24) {
+			for (const off of [24, 16, 32, 8, 40, 48]) {
+				if (truckAt) continue;
+				const a1 = far ? A1 - ends - back : A0 + ends + back + TRUCK_L;
+				const truck = frameRect(ax, a1 - TRUCK_L, a1, aisle0 + off, aisle0 + off + TRUCK_W);
+				// its cab towards the end of the aisle it stands at
+				const face: DoorSide = ax ? (far ? "right" : "left") : far ? "bottom" : "top";
+				truckAt = fixture(kit, "foodtruck", truck, false, { face, ...holds() }, 0) !== undefined;
+			}
+		}
+	}
+	// the aisles between the rows (the middle of each, and how far from it the litter lies), then the margins along
+	// the outer rows: where a hand cart was left and the litter lies
+	const aisles: Array<[number, number]> = [];
+	for (let b = 0; b + 1 < n; b++) aisles.push([c0 + b * (block + MARKET_AISLE) + block + MARKET_AISLE / 2, 72]);
+	const inner = aisles.size();
+	aisles.push([c0 - margin / 2, 24]);
+	aisles.push([c0 + used + margin / 2, 24]);
+	let carts = 0;
+	for (let tries = 0; tries < 12 && carts < 2; tries++) {
+		const [cm] = aisles[kit.rng.int(0, math.max(1, inner) - 1)];
+		const u = snap8(kit.rng.range(A0 + ends, A1 - ends - CART_L));
+		const cart = frameRect(ax, u, u + CART_L, cm - CART_W / 2, cm + CART_W / 2);
+		const extra: Partial<Solid> = { face: ax ? "right" : "bottom", variant: kit.rng.int(0, 1) };
+		if (fixture(kit, "handcart", cart, true, extra) !== undefined) carts += 1;
+	}
+	for (const [cm, spread] of aisles) {
+		for (let i = 0; i < LITTER_PER_AISLE; i++) {
+			const roll = kit.rng.next();
+			const kind: GroundKind = roll < 0.5 ? "spill" : roll < 0.85 ? "paper" : "bag";
+			const along = kind === "spill" ? 56 : kind === "paper" ? 40 : 36;
+			const across = kind === "spill" ? 40 : kind === "paper" ? 32 : 28;
+			const u = snap8(kit.rng.range(A0 + ends, A1 - ends - along));
+			const c = snap8(cm + kit.rng.range(-spread, spread) - across / 2);
+			lot.ground.push({ ...frameRect(ax, u, u + along, c, c + across), kind });
+		}
+	}
 	// the rows' ground is the market's: no tree grows in an aisle
 	kit.reserve(grown(frameRect(ax, A0 + ends, A1 - ends, c0, c0 + used), PATH));
 	return true;

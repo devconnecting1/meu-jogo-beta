@@ -726,12 +726,12 @@
 			"description": "storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze"
 		},
 		{
-			"name": "signChurch",
-			"file": "signChurch.png",
+			"name": "signTownHall",
+			"file": "signTownHall.png",
 			"kind": "sprite",
 			"w": 24,
 			"h": 16,
-			"description": "storefront sign (type 23): a church bell hanging from its yoke, on lavender"
+			"description": "storefront sign (type 23): the town hall: a clock tower over its two wings and the front door, on lavender"
 		},
 		{
 			"name": "signFire",
@@ -1397,8 +1397,8 @@
 			"file": "furniture.png",
 			"kind": "atlas",
 			"w": 1024,
-			"h": 872,
-			"description": "interiors: 1635 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
+			"h": 922,
+			"description": "interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
 		}
 	]
 }

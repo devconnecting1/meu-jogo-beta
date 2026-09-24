@@ -1558,6 +1558,34 @@ function deposit(c, L, D, look, r, K) {
 	for (let x = 1; x < L - 1; x += 3) c.inkAt(x + 1, D - 2, K.coin);
 }
 
+/**
+ * A row of folding chairs (the town hall's meeting hall, DESIGN_RULES EDI-18), from above: a grey steel seat per
+ * chair with a gap between them, the back rest a darker bar away from the front (the council table they face), and
+ * a chair or two folded flat or pushed askew when the meeting broke up.
+ */
+function foldchairs(c, L, D, look, r) {
+	const pitch = 7;
+	const n = Math.max(2, Math.floor((L - 1) / pitch));
+	const x0 = Math.floor((L - n * pitch) / 2) + 1;
+	// a row every 8 texels of depth (a block of two rows is 16): the front row at the bottom
+	const rows = Math.max(1, Math.floor(D / 8));
+	const band = Math.floor(D / rows);
+	for (let q = 0; q < rows; q++) {
+		const y0 = q * band;
+		for (let i = 0; i < n; i++) {
+			const folded = r() < 0.15;
+			const dx = !folded && r() < 0.2 ? (r() < 0.5 ? -1 : 1) : 0;
+			const sx = x0 + i * pitch + dx;
+			if (folded) {
+				c.box(sx, y0 + 1, 5, 2, "steelDark", 2);
+				continue;
+			}
+			c.box(sx, y0 + 1, 5, 2, "steelDark", 3);
+			c.box(sx, y0 + 3, 5, Math.max(2, band - 4), look === 1 ? "fabricGrey" : "steel", 2);
+		}
+	}
+}
+
 function bench(c, L, D, look, r) {
 	// three slats on steel frames
 	for (let s = 0; s < 3; s++) {
@@ -1641,6 +1669,7 @@ const KINDS = {
 	prep: { draw: prep, looks: 2 },
 	safe: { draw: safe, looks: 2, tall: true },
 	deposit: { draw: deposit, looks: 1, tall: true },
+	foldchairs: { draw: foldchairs, looks: 2 },
 	bench: { draw: bench, looks: 1 },
 	benchSeats: { draw: benchSeats, looks: 1, from: "bench" },
 	// the campus (EDI-17)
@@ -1663,7 +1692,8 @@ const KINDS = {
 export const ART_KIND_BY_TYPE = {
 	shelf: { 6: "shelfMeds", 10: "shelfClothes" },
 	display: { 9: "displayGuns" },
-	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed" },
+	// the town hall's one cabinet is its first-aid cabinet (EDI-18: the bandages it handed out)
+	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed", 23: "cabinetMed" },
 	bench: { 4: "benchSeats" },
 	counter: { 11: "counterSteel" },
 	table: { 11: "tableDiner", 13: "tableLibrary" },

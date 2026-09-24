@@ -1,69 +1,69 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the everyday town (2026-09-24, EDI-18..EDI-23 and MOB-04..MOB-06: Main Street's new shops and their signs, the church, the fire station, the bank and its portico, the street market, the house going up, the public parking lot, the parks' playgrounds and courts, the backyards, the street furniture) -- the flat drawing changes on purpose: the town itself moved, and the scenes are framed on what they are named for; noSigns = the same without the signage hook",
+	"recordedFrom": "the everyday town (2026-09-24, EDI-18..EDI-23 and MOB-04..MOB-06), re-recorded on purpose again the same day: the town hall in place of the church (CON-06), the street market left as the crowd ran (EDI-20: tents askew, down, torn or sagging, tables over, crates stacked and tipped, a hand cart, litter), the bank's columns and steps drawn to read from the street (EDI-23); two gun shops at least (EDI-18) moved Main Street round; scenes framed on what they are named for; noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
-			"count": 1055,
-			"sha1": "d89e1e543af35d7868dd3511d37dd37193df909b",
+			"count": 1156,
+			"sha1": "fc6f0165475bb54911c006fde8710dc5a8657a80",
 			"noSigns": {
-				"count": 1055,
-				"sha1": "d89e1e543af35d7868dd3511d37dd37193df909b"
+				"count": 1156,
+				"sha1": "fc6f0165475bb54911c006fde8710dc5a8657a80"
 			}
 		},
 		"downtown": {
-			"count": 1555,
-			"sha1": "8ef54cd6accb6cdc65090a8aa27e50247d0d5250",
+			"count": 1674,
+			"sha1": "60a0e20a87c3db737eee8feddeb632ba6328f93e",
 			"noSigns": {
-				"count": 1360,
-				"sha1": "1b4e16032a8e2bac04b4aa114b0f5078b32cd3e7"
+				"count": 1323,
+				"sha1": "41f9c37aa2a4790068afbeda718a06f2806adfed"
 			}
 		},
 		"park": {
-			"count": 1528,
-			"sha1": "3da27b1140b8941aebcb9a8eb9fc419d5d15d3fd",
+			"count": 1779,
+			"sha1": "30fcaa20815f56d2927a91450b9150815021055d",
 			"noSigns": {
-				"count": 1528,
-				"sha1": "3da27b1140b8941aebcb9a8eb9fc419d5d15d3fd"
+				"count": 1779,
+				"sha1": "30fcaa20815f56d2927a91450b9150815021055d"
 			}
 		},
 		"school": {
-			"count": 1208,
-			"sha1": "43b322c6f6577cdd02d641fb642ee6bb7ce7f2da",
+			"count": 1002,
+			"sha1": "fd6e2e78da8a840b5d706c45ccac70c0ee1a04ee",
 			"noSigns": {
-				"count": 935,
-				"sha1": "e84602c5f76b451fa67aab998b94655871480488"
+				"count": 690,
+				"sha1": "56689bd4eab940243401ce32624d5069747d85d7"
 			}
 		},
 		"gas": {
-			"count": 2454,
-			"sha1": "020a5921b884e299871f1108e4289217393cd0f1",
+			"count": 2447,
+			"sha1": "de2395e43bf50228983235d33a3489a113280fb9",
 			"noSigns": {
-				"count": 2207,
-				"sha1": "c646ec1312fc938a0460d265b5b4dc56a3b3c04d"
+				"count": 2200,
+				"sha1": "d80d14acddd88c1573e00269a192e405baf29ce4"
 			}
 		},
 		"street-night": {
-			"count": 1053,
-			"sha1": "c2cff63088debea3304dc6537f3825dedddb7a92",
+			"count": 1151,
+			"sha1": "472dbb8104857e8df649c573b00d4fc3fe5c591e",
 			"noSigns": {
-				"count": 1053,
-				"sha1": "c2cff63088debea3304dc6537f3825dedddb7a92"
+				"count": 1151,
+				"sha1": "472dbb8104857e8df649c573b00d4fc3fe5c591e"
 			}
 		},
 		"overview": {
-			"count": 5925,
-			"sha1": "8f6846d6478f10b070e00864325dbf0cb1ecd322",
+			"count": 5056,
+			"sha1": "19b2c6e445358d0d1ea6c70cab769076e227435e",
 			"noSigns": {
-				"count": 5574,
-				"sha1": "337128a355a5d1ebdfa5798b1da7e9cac0b04a37"
+				"count": 4874,
+				"sha1": "138668d16cbbe5b365d7fcd5b436400f004b7d41"
 			}
 		},
 		"border": {
-			"count": 986,
-			"sha1": "0127e006e576a64da82d19de930eb71192848223",
+			"count": 739,
+			"sha1": "3c91319cce3c28778c5fa045eafe7c272c30acdf",
 			"noSigns": {
-				"count": 986,
-				"sha1": "0127e006e576a64da82d19de930eb71192848223"
+				"count": 739,
+				"sha1": "3c91319cce3c28778c5fa045eafe7c272c30acdf"
 			}
 		}
 	}

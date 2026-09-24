@@ -17,7 +17,7 @@ export const BuildingType = {
 	CampusLab: 14,
 	CampusDorm: 15,
 	// the everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's small shops, offices, bank and police station, the
-	// neighbourhood church and the fire station on the avenue
+	// town hall and the fire station on the avenue
 	Hardware: 16,
 	AutoRepair: 17,
 	Electronics: 18,
@@ -25,7 +25,7 @@ export const BuildingType = {
 	PawnShop: 20,
 	PostOffice: 21,
 	Bank: 22,
-	Church: 23,
+	TownHall: 23,
 	FireStation: 24,
 	PoliceStation: 25,
 	Office: 26,

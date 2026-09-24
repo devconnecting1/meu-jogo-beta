@@ -224,7 +224,7 @@ const TYPE_TAG = {
 	20: "pawn",
 	21: "postoffice",
 	22: "bank",
-	23: "church",
+	23: "townhall",
 	24: "firestation",
 	25: "police",
 	26: "office",
@@ -387,7 +387,7 @@ const DOOR_TARGET = {
 	13: 2,
 	14: 2,
 	15: 2,
-	// the everyday town (EDI-18): the front and a back or side door; the church a side door each way
+	// the everyday town (EDI-18): the front and a back or side door; the town hall a side door and one at the back
 	16: 2,
 	17: 2,
 	18: 2,
@@ -462,8 +462,9 @@ const DEFINING = {
 	chemstore: ["chemshelf"],
 	dormroom: ["bunk"],
 	common: ["sofa", "table", "tv"],
-	// the everyday town (EDI-18): a nave its pews, a workshop or engine bay its racks, lockers or bench, a cell its bench
-	nave: ["bench"],
+	// the everyday town (EDI-18): a meeting hall its folding chairs, a workshop or engine bay its racks, lockers or bench,
+	// a cell its bench
+	meeting: ["foldchairs"],
 	garage: ["rack", "lockers", "counter"],
 	cell: ["bench", "toilet"],
 	// the bank's vault (EDI-23): its deposit boxes are a container of their own, not a piece (checked by bankChecks)
@@ -915,7 +916,10 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 
 // ---------------------------------------------------------------- the everyday town's mix (EDI-18, EDI-19)
 
-/** the kinds every town has at least one of (EDI-18): medicine, food, ammunition, tools, the law, the fire engine */
+/**
+ * the kinds every town has at least one of (EDI-18): medicine, food, ammunition, tools, the law, the fire engine, the
+ * town hall
+ */
 const ESSENTIAL = [
 	["pharmacy", [6]],
 	["a food store", [7, 8]],
@@ -923,15 +927,19 @@ const ESSENTIAL = [
 	["hardware store", [16]],
 	["police station", [25]],
 	["fire station", [24]],
+	["town hall", [23]],
 	["hospital", [4]],
 	["school", [3]],
 ];
+
+/** CON-06: what no building, room or piece of the town is (a mixed audience, the platform's moderation) */
+const RELIGIOUS = /church|chapel|temple|mosque|synagogue|shrine|nave|altar|pew/i;
 
 /** the everyday town's fixtures (shared/game/townLots.ts), by where they belong */
 const STREET_TAGS = ["streetlight", "hydrant", "mailbox", "postbox", "busstop"];
 const PLAY_TAGS = ["swings", "slide", "climber", "springer"];
 const YARD_THING_TAGS = ["shed", "pool", "trampoline", "grill"];
-const MARKET_TAGS = ["stall", "crates", "foodtruck"];
+const MARKET_TAGS = ["stall", "crates", "foodtruck", "trestle", "handcart"];
 const SITE_TAGS = ["fence", "studs", "scaffold", "pile", "portapotty", "mixer", "dumpster"];
 
 /**
@@ -944,7 +952,18 @@ const SITE_TAGS = ["fence", "studs", "scaffold", "pile", "portapotty", "mixer", 
 function everydayChecks(w, buildings, reach, fail) {
 	if (TL === undefined || TL.pinches === undefined) return undefined;
 	const S = w.solids;
-	const stats = { markets: 0, stalls: 0, stocked: 0, sites: 0, piles: 0, street: 0, playgrounds: 0, courts: 0 };
+	const stats = {
+		markets: 0,
+		stalls: 0,
+		stocked: 0,
+		tentsDown: 0,
+		trestles: 0,
+		sites: 0,
+		piles: 0,
+		street: 0,
+		playgrounds: 0,
+		courts: 0,
+	};
 	stats.parking = 0;
 	stats.yard = 0;
 	stats.sheds = 0;
@@ -1047,6 +1066,19 @@ function everydayChecks(w, buildings, reach, fail) {
 		if (trucks.length !== 1) fail("EDI-20", `${trucks.length} food trucks at the market (one)`, cx(lot), cy(lot));
 		for (const c of [...stocked, ...trucks]) {
 			if (!reachable(c)) fail("EDI-20", `${c.tags} #${c.id} cannot be reached on foot`, cx(c), cy(c));
+		}
+		// left as the crowd ran (APO-01): some tents down on their tables -- one to three -- and the litter flat on the
+		// ground, never a solid (a spill, paper or a bag stops nobody)
+		const DOWN = TL.TENT_DOWN ?? 3;
+		const down = tents.filter(t => Math.floor((t.variant ?? 0) / 3) === DOWN);
+		stats.tentsDown += down.length;
+		stats.trestles += mine.filter(s => s.tags === "trestle" && inLot(s)).length;
+		if (TL.TENT_DOWN !== undefined && (down.length < 1 || down.length > 3)) {
+			fail("EDI-20", `${down.length} tents down at the market (1 to 3)`, cx(lot), cy(lot));
+		}
+		for (const s of S) {
+			if (s.kind === "prop" && ["spill", "paper", "bag"].includes(s.tags))
+				fail("EDI-20", `litter #${s.id} is a solid`, cx(s), cy(s));
 		}
 	}
 	// --- EDI-21: a house going up
@@ -1318,7 +1350,7 @@ function bankChecks(w, buildings, fail) {
 }
 
 /**
- * EDI-18: no kind past its quota (world.ts SHOP_QUOTA, SCHOOLS, HOSPITALS, GAS_STATIONS; two churches, one fire
+ * EDI-18: no kind past its quota (world.ts SHOP_QUOTA, SCHOOLS, HOSPITALS, GAS_STATIONS, TOWN_HALLS; one fire
  * station) and none of the essentials missing. EDI-19: two of a kind at least their `apart` blocks apart (Chebyshev,
  * on the grid of lots), never two on one block or facing each other across a street, never more than GAS_PER_AVENUE
  * gas stations on one avenue. Answers a summary for the seed's line.
@@ -1326,7 +1358,14 @@ function bankChecks(w, buildings, fail) {
 function mixChecks(w, buildings, fail) {
 	const quota = W.SHOP_QUOTA;
 	if (quota === undefined) return { shops: 0 };
-	const cap = { 3: W.SCHOOLS ?? 2, 4: W.HOSPITALS ?? 2, 5: W.GAS_STATIONS ?? 4, 22: W.BANKS ?? 1, 23: 2, 24: 1 };
+	const cap = {
+		3: W.SCHOOLS ?? 2,
+		4: W.HOSPITALS ?? 2,
+		5: W.GAS_STATIONS ?? 4,
+		22: W.BANKS ?? 1,
+		23: W.TOWN_HALLS ?? 1,
+		24: 1,
+	};
 	const apart = { 3: 3, 4: 3, 5: 2, 22: 1, 23: 3, 24: 1 };
 	for (const q of quota) {
 		cap[q.type] = q.cap;
@@ -1476,7 +1515,7 @@ const REQUIRED = {
 	20: "gold",
 	21: "cloth",
 	22: "gold",
-	23: "food",
+	23: ["medical", "food"],
 	24: "medical",
 	25: "ammo",
 	26: "parts",
@@ -1961,9 +2000,9 @@ function validate(seed) {
 				b.doorY,
 			);
 		}
-		// the church keeps a front lawn like the houses beside it (EDI-18)
+		// the town hall keeps a front lawn like the houses beside it (EDI-18)
 		if (t === 23 && (front < TOWN.SETBACK_HOUSE_MIN - 8 || front > TOWN.SETBACK_HOUSE_MAX + 8)) {
-			fail("EDI-02", `church #${b.id}: front lawn ${fmt(front)} u`, b.doorX, b.doorY);
+			fail("EDI-02", `townhall #${b.id}: front lawn ${fmt(front)} u`, b.doorX, b.doorY);
 		}
 		// the fire station stands behind its apron, clear of everything (EDI-22)
 		if (t === 24) {
@@ -2206,6 +2245,14 @@ function validate(seed) {
 
 	// --- EDI-18 / EDI-19: the everyday town's mix, and no kind repeated on every corner
 	const mix = mixChecks(w, buildings, fail);
+
+	// --- CON-06: no religious building, room or piece anywhere in the town
+	for (const s of S) {
+		if (RELIGIOUS.test(s.tags ?? "")) fail("CON-06", `${s.kind} #${s.id} is a "${s.tags}"`, cx(s), cy(s));
+		for (const q of s.rooms ?? []) {
+			if (RELIGIOUS.test(q.kind)) fail("CON-06", `${s.tags} #${s.id} has a "${q.kind}"`, cx(s), cy(s));
+		}
+	}
 
 	// --- EDI-05: buildings off sidewalks and roads, alleys of at least BUILDING_GAP
 	for (const b of buildings) {
@@ -2595,7 +2642,7 @@ for (const seed of seeds) {
 	const ev = stats.everyday;
 	if (ev !== undefined) {
 		console.log(
-			`  everyday: bank ${stats.bank ?? 0} | market ${ev.markets} (${ev.stalls} stalls, ${ev.stocked} stocked) | ` +
+			`  everyday: bank ${stats.bank ?? 0} | market ${ev.markets} (${ev.stalls} stalls, ${ev.stocked} stocked, ${ev.tentsDown} tents down, ${ev.trestles} tables over) | ` +
 				`site ${ev.sites} (${ev.piles} piles) | public parking ${ev.parking} | playgrounds ${ev.playgrounds}, courts ${ev.courts} | ` +
 				`street furniture ${ev.street} | backyard things ${ev.yard} (${ev.sheds} sheds)`,
 		);

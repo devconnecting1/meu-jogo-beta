@@ -241,7 +241,14 @@ export type GroundKind =
 	/** a backyard vegetable bed */
 	| "garden"
 	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-23) */
-	| "steps";
+	| "steps"
+	/**
+	 * what the street market's crowd dropped as it ran (EDI-20, APO-01): produce rolled out of a crate or off a table,
+	 * paper, a shopping bag -- flat on the ground, smaller and darker than anything a survivor picks up (LEG-03)
+	 */
+	| "spill"
+	| "paper"
+	| "bag";
 
 /**
  * What a lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
@@ -560,7 +567,7 @@ const SHOP_DEFS: Record<number, BuildingDef> = {
 
 /**
  * The everyday town (docs/DESIGN_RULES.md EDI-18): Main Street's small shops, offices and police station on the small
- * shop's footprint, the neighbourhood church and the fire station on the avenue (placed by shared/game/townLots.ts).
+ * shop's footprint, the town hall and the fire station on the avenue (placed by shared/game/townLots.ts).
  */
 const TOWN_DEFS: Record<number, BuildingDef> = {
 	16: { type: 16, w: 684, h: 556, slots: 2, name: "hardware", weight: 1 },
@@ -571,7 +578,8 @@ const TOWN_DEFS: Record<number, BuildingDef> = {
 	21: { type: 21, w: 684, h: 556, slots: 2, name: "postoffice", weight: 1 },
 	// the bank (EDI-23): not from the stock -- one a town, on the avenue by the crossing (townLots.ts placeBank)
 	22: { type: 22, w: 808, h: 620, slots: 3, name: "bank", weight: 1 },
-	23: { type: 23, w: 808, h: 684, slots: 2, name: "church", weight: 1 },
+	// the town hall (TOWN_HALLS): one a town, placed by townLots.ts placeTownHall
+	23: { type: 23, w: 808, h: 684, slots: 3, name: "townhall", weight: 1 },
 	24: { type: 24, w: 808, h: 684, slots: 3, name: "firestation", weight: 1 },
 	25: { type: 25, w: 684, h: 556, slots: 3, name: "police", weight: 1 },
 	26: { type: 26, w: 684, h: 556, slots: 2, name: "office", weight: 1 },
@@ -644,6 +652,12 @@ const GAS_SPARE = 4;
  */
 export const BANKS = 1;
 const BANK_LOTS = 4;
+/**
+ * The town hall (EDI-18): one a town, on a residential street behind a front lawn -- the records office, the clerk,
+ * the meeting hall where the town met, and the emergency supplies it handed out when the town fell. A civic
+ * building, never a religious one (docs/DESIGN_RULES.md CON-06).
+ */
+export const TOWN_HALLS = 1;
 
 // ---- the forecourt of a gas station (placeGas), along its street edge e1: `u` from the street corner, `v` from the
 // curb (the sidewalk is v 0..SIDEWALK, the shop's front wall at SIDEWALK + FORECOURT)
@@ -1169,21 +1183,22 @@ function kindFits(g: Gen, t: number, lot: Lot): boolean {
 }
 
 /**
- * What every town has at least one of (EDI-18): the medicine, the food, the ammunition, the tools and the law. Their
- * first card leads the stock, so none is left out by a town whose Main Street filled up first.
+ * What every town has at least one of (EDI-18): the medicine, the food, the ammunition, the tools and the law -- and
+ * two gun shops, the town's ammunition (one alone left a town with half the rounds of the others). Their first cards
+ * lead the stock, so none is left out by a town whose Main Street filled up first.
  */
-const SHOP_ESSENTIAL: Array<number> = [6, 7, 8, 9, 16, 25];
+const SHOP_ESSENTIAL: Record<number, number> = { 6: 1, 7: 1, 8: 1, 9: 2, 16: 1, 25: 1 };
 
 /**
- * Main Street's stock, shuffled once before the buildings go up (SHOP_QUOTA: `cap` cards of each kind): one card of
- * each essential kind first, in a shuffled order, then every other card shuffled.
+ * Main Street's stock, shuffled once before the buildings go up (SHOP_QUOTA: `cap` cards of each kind): the essential
+ * kinds' first cards first, in a shuffled order, then every other card shuffled.
  */
 function stockShops(g: Gen): void {
 	const first: Array<number> = [];
 	const rest: Array<number> = [];
 	for (const q of SHOP_QUOTA) {
 		for (let i = 0; i < q.cap; i++) {
-			if (i === 0 && SHOP_ESSENTIAL.includes(q.type)) first.push(q.type);
+			if (i < (SHOP_ESSENTIAL[q.type] ?? 0)) first.push(q.type);
 			else rest.push(q.type);
 		}
 	}
@@ -2665,8 +2680,10 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	for (const l of hospitals) l.zone = "civic";
 	// the fire station (EDI-22): on a residential block of an avenue, away from the hospitals
 	const fireLots = pickLots(1, l => residentialFree(l) && onAvenue(l), 3, hospitals);
-	// the neighbourhood churches (EDI-18): on residential streets, three blocks apart or more
-	const churches = pickLots(2, l => residentialFree(l) && !onAvenue(l), 3, []);
+	// the town hall (EDI-18): on a residential street, behind its front lawn -- a few candidate blocks, the first whose
+	// face takes it builds it (the others stay ordinary blocks)
+	const hallLots = pickLots(TOWN_HALLS + 2, l => residentialFree(l) && !onAvenue(l), 2, []);
+	let halls = 0;
 	// the stations, then GAS_SPARE more lots from the same shuffle (the shuffle's draws do not depend on how many are
 	// taken): the rest stand by for GAS_MIN (EDI-16)
 	const gasPick = pickLots(
@@ -2729,7 +2746,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	for (const l of pickLots(1, l => specialOk(l) && l.program === undefined, 2, marketLots)) l.program = "parking";
 	const siteLots = pickLots(
 		1,
-		l => residentialFree(l) && !onAvenue(l) && !churches.includes(l) && !fireLots.includes(l),
+		l => residentialFree(l) && !onAvenue(l) && !hallLots.includes(l) && !fireLots.includes(l),
 		1,
 		[],
 	);
@@ -2847,7 +2864,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			const park = bestFrontRect(lot, yardGrid(g, lot), 360, 424);
 			if (park !== undefined) addParking(g, lot, park.e, park.r);
 		} else if (lot.zone === "residential") {
-			// the fire station takes one end of the avenue's face (EDI-22), the church one end of a residential
+			// the fire station takes one end of the avenue's face (EDI-22), the town hall one end of a residential
 			// street's (EDI-18); the houses fill the rest
 			if (fireLots.includes(lot)) {
 				for (const e of edges) {
@@ -2855,10 +2872,13 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 					if (TL.placeFireStation(kit, lot, e)) break;
 				}
 			}
-			if (churches.includes(lot)) {
+			if (hallLots.includes(lot) && halls < TOWN_HALLS) {
 				for (const e of edges) {
 					if (w.roads[e.road].avenue) continue;
-					if (TL.placeChurch(kit, lot, e)) break;
+					if (TL.placeTownHall(kit, lot, e)) {
+						halls += 1;
+						break;
+					}
 				}
 			}
 			// a house going up in the middle of a residential street's face (EDI-21)
