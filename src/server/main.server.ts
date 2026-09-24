@@ -1452,12 +1452,22 @@ game.BindToClose(reason => {
 	// until the guard has let every body go, as it would have on a server that stayed up, at most LINGER_S + 0.5 s --
 	// taken out of the writes' budget below, so the whole callback stays under the platform's 30 s. Any other reason
 	// (an update, maintenance, a developer's shutdown) is the server's doing: the bodies are banked as they stand
-	if (reason === Enum.CloseReason.ServerEmpty) {
-		const host = mpHost;
-		if (host !== undefined) {
-			waitUntil(() => guarded("the combat-log guard", () => host.guarding()) !== true, LINGER_S + 0.5);
-		}
+	const host = mpHost;
+	const held = host !== undefined && guarded("the combat-log guard", () => host.guarding()) === true;
+	let guardOutcome = held ? "bodies in the guard banked as they stand" : "no body in the guard";
+	if (held && host !== undefined && reason === Enum.CloseReason.ServerEmpty) {
+		const emptied = waitUntil(
+			() => guarded("the combat-log guard", () => host.guarding()) !== true,
+			LINGER_S + 0.5,
+		);
+		guardOutcome = emptied ? "the guard emptied" : "the guard timed out";
 	}
+	// one line per close, for the owner reading a server's last minute (the log, never the Error Report): why it
+	// closed, what the guard did and how long it held the close
+	print(
+		`[${GAME_NAME}] closing (${tostring(reason)}): ${guardOutcome} after ` +
+			`${string.format("%.1f", os.clock() - closing)} s`,
+	);
 	// §7.2 "Servidor desligando": stop the simulation and bank every body into its save before the writes below
 	// capture them (a second BindToClose would race this one, so the host is stopped here, first). Guarded (F5): a
 	// simulation that cannot stop must not keep a single save from being written

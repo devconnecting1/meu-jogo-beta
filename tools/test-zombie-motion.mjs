@@ -1615,14 +1615,15 @@ for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 	if (scn.bridgeCap === true) {
 		check(
 			`${tag}: nenhuma ponte deve mais que ${BRIDGE_MAX_U} u; quem deveria recomeca onde esta, aparecendo aos poucos`,
-			res.bridgeMax <= BRIDGE_MAX_U && res.bridgeCapped > 0 && res.restarts >= res.bridgeCapped,
+			// each counted once, as what it is: a capped bridge is neither a kept one (`bridged`) nor a restart
+			res.bridgeMax <= BRIDGE_MAX_U && res.bridgeCapped > 0 && res.restarts === 0,
 			`a maior mantida ${res.bridgeMax.toFixed(1)} u, ${res.bridgeCapped} recomecadas no teto, ` +
-				`${res.bridged} pontes ao todo, ${res.restarts} recomecos`,
+				`${res.bridged} mantidas, ${res.restarts} recomecos (reentrada ou salto)`,
 		);
 		check(
 			`${tag}: a rajada curta antes dela continua uma caminhada (pontes mantidas)`,
-			res.bridged > res.bridgeCapped && res.bridgeMax > 0,
-			`${res.bridged - res.bridgeCapped} mantidas, a maior ${res.bridgeMax.toFixed(1)} u`,
+			res.bridged > 0 && res.bridgeMax > 0,
+			`${res.bridged} mantidas, a maior ${res.bridgeMax.toFixed(1)} u`,
 		);
 	}
 	if (scn.restartExpected !== undefined) {

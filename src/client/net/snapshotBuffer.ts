@@ -446,7 +446,10 @@ export interface SnapshotStats {
 	restarts: number;
 	/** zombie tracks that came back after a silence of the whole stream and were kept, at their alpha (`discontinuity`) */
 	bridged: number;
-	/** ...of those, the ones whose catch-up would have owed more than BRIDGE_MAX_U, started again instead (`bridge`) */
+	/**
+	 * Tracks that came back from such a silence owing more than BRIDGE_MAX_U, started again instead (`bridge`): counted
+	 * here only, neither in `bridged` (not kept) nor in `restarts` (not a re-entry or a teleport)
+	 */
 	bridgeCapped: number;
 	/** the most any kept bridge owed, in units (never above BRIDGE_MAX_U) */
 	bridgeMax: number;
@@ -749,9 +752,10 @@ export class SnapshotBuffer {
 	 * the next frame on, never interpolated from the old one; it fades in from nothing there, like a body seen for the
 	 * first time; and nothing from before `tick` may join it again (`floor`). Its place in the draw order and its extra
 	 * delay stay: the server mirrors that delay per (viewer, netId) until the client would have retired the track, so it
-	 * must go on easing as it was (server/net/interest.ts `noteSent`).
+	 * must go on easing as it was (server/net/interest.ts `noteSent`). `counted` false: a bridge past its ceiling, which
+	 * is counted as that (`bridgeCapped`), not as a restart.
 	 */
-	private restartTrack(track: ActorTrack, tick: number): void {
+	private restartTrack(track: ActorTrack, tick: number, counted = true): void {
 		track.samples.clear();
 		track.floor = tick;
 		track.alpha = 0;
@@ -759,7 +763,7 @@ export class SnapshotBuffer {
 		track.bridge = false;
 		track.offX = 0;
 		track.offY = 0;
-		this.restarts += 1;
+		if (counted) this.restarts += 1;
 	}
 
 	/** a zombie track goes: the last one of the draw order takes its place, so nobody else moves (`zOrder`) */
@@ -1259,8 +1263,10 @@ export class SnapshotBuffer {
 			const from = track.bridgeTick;
 			const kept = new Array<ActorSample>();
 			for (const s of track.samples) if (s.tick >= from) kept.push(s);
-			this.restartTrack(track, from);
+			this.restartTrack(track, from, false);
 			for (const s of kept) track.samples.push(s);
+			// counted once, as what it is: not kept (`bridged`, counted when the silence was seen), not a restart
+			this.bridged -= 1;
 			this.bridgeCapped += 1;
 			return;
 		}

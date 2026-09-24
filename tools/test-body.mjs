@@ -4766,6 +4766,24 @@ section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs
 		s.sim.horde.zombies.length = 0;
 	};
 
+	/** the BindToClose callbacks run with the engine going (`shutdown`), and the one close line they print */
+	const close = (s, reason) => {
+		const lines = [];
+		const realPrint = globalThis.print;
+		globalThis.print = (...a) => {
+			const line = a.join(" ");
+			if (line.includes("closing (")) lines.push(line);
+			realPrint(...a);
+		};
+		let waited;
+		try {
+			waited = s.shutdown(reason, true);
+		} finally {
+			globalThis.print = realPrint;
+		}
+		return { waited, lines };
+	};
+
 	// (a) the last player quits mid-bite; the empty server closes 1 s later
 	for (const reason of [Enum.CloseReason.ServerEmpty, Enum.CloseReason.DeveloperShutdown]) {
 		const s = bootServer();
@@ -4780,7 +4798,7 @@ section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs
 		s.quit(p);
 		s.run(1);
 		const hpAtClose = sp.state.hp;
-		const waited = s.shutdown(reason, true);
+		const { waited, lines } = close(s, reason);
 		const stored = s.stored(uid);
 		if (reason === Enum.CloseReason.ServerEmpty) {
 			check(
@@ -4792,6 +4810,12 @@ section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs
 					"lets the body go -- it dies of the bites, and that is what is written (not an escape)",
 				`dead ${sp.state.dead}, stored runOver ${stored?.runOver}, the close waited ${f1(waited)} s (at most ${LINGER_S + 0.5})`,
 			);
+			check(
+				lines.length === 1 &&
+					/closing \(CloseReason\.ServerEmpty\): the guard emptied after \d+\.\d s$/.test(lines[0]),
+				"(a) ...and the close says so in one log line: why, what the guard did, how long it held the close",
+				JSON.stringify(lines),
+			);
 		} else {
 			check(
 				!sp.state.dead &&
@@ -4801,7 +4825,38 @@ section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs
 				"(a) any other close (an update, a developer's shutdown) is the server's doing: banked alive as it stands, no wait",
 				`stored runHp ${stored?.runHp} (hp at the close ${f1(hpAtClose)}), runOver ${stored?.runOver}, waited ${waited} s`,
 			);
+			check(
+				lines.length === 1 &&
+					/closing \(CloseReason\.DeveloperShutdown\): bodies in the guard banked as they stand after 0\.0 s$/.test(
+						lines[0],
+					),
+				"(a) ...its one log line: the bodies in the guard banked as they stand, nothing waited",
+				JSON.stringify(lines),
+			);
 		}
+	}
+	// (a) a guard that never empties (a Heartbeat that stopped): the close waits LINGER_S + 0.5 s, no more, and says so
+	{
+		const s = bootServer();
+		const uid = newUser();
+		const p = s.join(uid, "stuck");
+		const sp = s.enter(p);
+		clearHorde(s);
+		biters(s, sp, 2);
+		s.run(0.3);
+		s.quit(p);
+		s.host.guarding = () => true;
+		const { waited, lines } = close(s, Enum.CloseReason.ServerEmpty);
+		check(
+			waited >= LINGER_S + 0.4 &&
+				waited <= LINGER_S + 0.7 &&
+				lines.length === 1 &&
+				/: the guard timed out after 5\.\d s$/.test(lines[0]) &&
+				lockOf(uid) === undefined,
+			"(a) a guard that never empties holds the close LINGER_S + 0.5 s at most, the log line says it timed out, and " +
+				"the save is still written",
+			`waited ${f1(waited)} s; ${JSON.stringify(lines)}`,
+		);
 	}
 	// (a) an empty server with nobody in the guard closes without waiting
 	{
@@ -4812,11 +4867,11 @@ section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs
 		clearHorde(s);
 		s.run(0.3);
 		s.quit(p);
-		const waited = s.shutdown(Enum.CloseReason.ServerEmpty, true);
+		const { waited, lines } = close(s, Enum.CloseReason.ServerEmpty);
 		check(
-			waited === 0 && lockOf(uid) === undefined,
-			"(a) ...and with nobody in the guard it closes at once",
-			`${waited} s`,
+			waited === 0 && lockOf(uid) === undefined && /: no body in the guard after 0\.0 s$/.test(lines[0] ?? ""),
+			'(a) ...and with nobody in the guard it closes at once ("no body in the guard")',
+			`${waited} s; ${JSON.stringify(lines)}`,
 		);
 	}
 
