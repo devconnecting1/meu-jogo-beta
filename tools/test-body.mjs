@@ -65,7 +65,13 @@
  *                           throws is not sold (refunded, then paid once) unless the body stood; a New game whose new
  *                           life throws keeps the death in the save; one body that cannot be banked at shutdown leaves
  *                           the others banked.
- *  30. SAV-01               saving is automatic: a minute of progress reports writes nothing (only the autosave carries
+ *  30. EVERY REMOTE COUNTS   (audit M2, L4) SaveRequest, LoadRequest, ShopAction and the admin remotes count toward the
+ *                           §8.2 flood kick, in the world and out of it; 30 s of an honest client is never kicked; a
+ *                           storm of rejected reports is answered once a second; every automatic kick is in the stored
+ *                           admin audit log by UserId.
+ *  31. THE LOBBY'S PING      (S3 NIT 3) the filtered ping the rewind ceiling uses survives five minutes in the lobby
+ *                           (a throttled re-entry is filtered, not taken raw), and goes when life.ts lets the body go.
+ *  32. SAV-01               saving is automatic: a minute of progress reports writes nothing (only the autosave carries
  *                           them); ten levels in five seconds are one write in the burst and one a gap (15 s) later; a
  *                           purchase and a death are written within the delay; a leave never waits for the gap; an
  *                           unchanged save is not rewritten (only the lock refresh); an event save waits under the budget
@@ -1318,7 +1324,7 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	const { applyWallet, defaultSave, expMaxInit } = require(join(SRC, "shared/game/save.ts"));
 	const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
 	const acks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p);
-	// the WALLET pushes: SAV-01's news about a write of the save rides SaveAck too (`store`), and is section 30's
+	// the WALLET pushes: SAV-01's news about a write of the save rides SaveAck too (`store`), and is section 32's
 	const pushes = p => acks(p).filter(e => e.args[0]?.push === true && e.args[0]?.store === undefined);
 	const p = s.join(newUser(), "hunter");
 	const sp = s.enter(p);
@@ -3073,9 +3079,184 @@ section("29) the admin audit log: UserIds and filtered text only, one key per se
 	}
 });
 
-// ================================================================ 30: SAV-01, saving is automatic
+// ================================================================ 30: every remote counts toward the flood kick
 
-section("30) SAV-01: no client-chosen write, coalesced event saves, the budget floor, and the player told", () => {
+section(
+	"30) every remote a client can fire counts toward the §8.2 flood kick, and the kick is audited (M2, L4)",
+	() => {
+		const s = bootServer();
+		const { ADMIN_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const LOG = require(join(SRC, "server/admin/auditLog.ts"));
+		const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
+		const { ReplicatedStorage } = s.env.services;
+		const net = ReplicatedStorage.FindFirstChild("Net");
+		const fire = (name, p, ...args) => net.FindFirstChild(name).OnServerEvent.Fire(p, ...args);
+		const admin = ReplicatedStorage.FindFirstChild("PZAdminNet");
+		const saveAcks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p).length;
+
+		// junk SaveRequests from the lobby (a player not in the world has no ServerPlayer: the link counts them)
+		const junk = s.join(newUser(), "junkSaver");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++) fire("SaveRequest", junk, 7, { huge: true });
+		check(junk.kicked, `${CFG.FLOOD_MALFORMED + 1} malformed SaveRequests in the lobby are a flood kick`);
+
+		// a LoadRequest storm from a survivor in the world
+		const loader = s.join(newUser(), "loadStorm");
+		s.immortal.add(loader);
+		s.enter(loader);
+		for (let i = 0; i <= CFG.FLOOD_MESSAGES; i++) fire("LoadRequest", loader);
+		check(loader.kicked, `${CFG.FLOOD_MESSAGES + 1} LoadRequests in an instant, in the world, are a flood kick`);
+
+		// ShopAction: the token bucket refuses, and past the flood line the link kicks
+		const shopper = s.join(newUser(), "shopStorm");
+		let rate = 0;
+		for (let i = 0; i <= CFG.FLOOD_MESSAGES; i++)
+			if (s.shop(shopper, { kind: "buyPack", packId: 0 })?.reason === "rate") rate++;
+		check(
+			rate > 0 && shopper.kicked,
+			"a ShopAction storm is refused by its bucket and then kicked",
+			`${rate} "rate"`,
+		);
+
+		// the admin remote, from somebody who is not an admin: every call is a malformed one
+		const intruder = s.join(newUser(), "notAnAdmin");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++)
+			admin.FindFirstChild("AdminRequest").OnServerInvoke(intruder, { kind: "kick" });
+		check(intruder.kicked, `${CFG.FLOOD_MALFORMED + 1} admin requests from a non-admin are a flood kick`);
+		const acker = s.join(newUser(), "ackStorm");
+		for (let i = 0; i <= CFG.FLOOD_MALFORMED; i++)
+			admin.FindFirstChild("AdminPatchAck").OnServerEvent.Fire(acker, "x");
+		check(acker.kicked, "and malformed AdminPatchAcks too");
+
+		// a rejected report is answered at most once a second: a stale-token storm is not reflected one for one. The
+		// newest one inside the second is not dropped either: it is answered when the second ends (the security review of
+		// the net hardening, L5), so a client whose last report was refused always hears why
+		const stale = s.join(newUser(), "staleSaver");
+		const before = saveAcks(stale);
+		for (let i = 0; i < 100; i++) fire("SaveRequest", stale, "not-the-token", "{}");
+		const within = saveAcks(stale) - before;
+		s.run(1.1);
+		const held = saveAcks(stale) - before;
+		s.run(3);
+		const later = saveAcks(stale) - before;
+		check(
+			within === 1 && held === 2 && later === 2,
+			"100 rejected reports in an instant: one SaveAck at once, and the newest when the second ends (once)",
+			`${within}, then ${held}, then ${later}`,
+		);
+		check(!stale.kicked, "(100 messages is under the flood line: no kick)");
+
+		// an honest client: 30 s of Input, time probes, a report every 10 s, a load, a few purchases -- never kicked
+		const honest = s.join(newUser(), "honest");
+		s.immortal.add(honest);
+		s.enter(honest);
+		const P = s.P;
+		for (let t = 0; t < 30 * 60; t++) {
+			s.walk(honest, (t / 60) % (2 * Math.PI));
+			if (t % 30 === 0) fire("TimeSync", honest, P.encodeTimePing({ seq: t % 65536, clientTime: 0 }));
+			if (t % 600 === 0) s.report(honest, {});
+			if (t % 900 === 0) fire("LoadRequest", honest);
+			if (t % 400 === 0) s.shop(honest, { kind: "buyPack", packId: 0 });
+			s.beat();
+		}
+		check(
+			!honest.kicked,
+			"an honest client over 30 s (Input 60/s, probes, reports, a load, purchases) is never kicked",
+		);
+
+		// L4: each automatic kick is in the admin audit log, by UserId only, with the reason the server wrote
+		s.shutdown();
+		const doc = fakeStore(ADMIN_LOG_STORE).data.get(LOG.auditKey(os.time(), globalThis.game.JobId)) ?? [];
+		const kicks = doc.filter(e => e.action === "auto:flood");
+		const kicked = [junk, loader, shopper, intruder, acker];
+		check(
+			kicked.every(p => kicks.some(e => e.targetId === p.UserId && e.adminId === 0 && e.ok === true)),
+			"every flood kick is in the stored audit log (adminId 0 = the server), once per player",
+			JSON.stringify(kicks.map(e => [e.targetId, e.details])),
+		);
+		check(kicks.length === kicked.length, "one entry per kick", `${kicks.length}`);
+		const json = JSON.stringify(kicks);
+		check(
+			!/junkSaver|loadStorm|shopStorm|notAnAdmin|ackStorm/.test(json),
+			"with UserIds only: no name is stored",
+			json,
+		);
+
+		// L6 (the security review of the net hardening): an automatic entry is cheap to cause, so it trims like a tool
+		// entry and repeats collapse per UserId -- a flood of kicks never pushes an admin's action out of the key
+		const entry = (action, targetId, t) => ({
+			t,
+			adminId: action.startsWith("auto:") ? 0 : 42,
+			action,
+			targetId,
+			target: "",
+			details: "",
+			ok: true,
+		});
+		const actions = [];
+		for (let i = 0; i < LOG.AUDIT_PER_KEY; i++) actions.push(entry("kick", 9000 + i, i));
+		const storm = [];
+		for (let i = 0; i < 400; i++) storm.push(entry("auto:flood", 1 + (i % 3), 1000 + i));
+		const after = LOG.appendAudit(actions, storm);
+		check(
+			after.filter(e => e.action === "kick").length === LOG.AUDIT_PER_KEY,
+			`${storm.length} automatic kicks on a full key push out no admin's kick`,
+			`${after.filter(e => e.action === "kick").length} kicks left`,
+		);
+		const repeats = LOG.appendAudit([], storm);
+		check(
+			repeats.length === 3 && repeats.every(e => e.t >= 1000 + 400 - 3),
+			"and the same UserId kicked again and again is one line: the newest",
+			`${repeats.length} lines`,
+		);
+	},
+);
+
+// ================================================================ 31: the ping of a survivor waiting in the lobby
+
+section(
+	"31) the rewind ceiling's ping stays while its survivor waits in the lobby, and goes with the body (S3 NIT 3)",
+	() => {
+		/*
+		 * The simulation keeps each survivor's filtered ping across a leave/enter (ServerSimulation.setPing), so a link
+		 * throttled at the moment of re-entry does not set the rewind ceiling at once (the review of dee095a, N4). It went
+		 * KEEP_AFTER_LEAVE_S after its last SAMPLE -- and nothing samples a survivor in the lobby, whose body life.ts keeps
+		 * for as long as they are connected: five minutes there, and the first sample of the next entry was taken raw.
+		 */
+		const { KEEP_AFTER_LEAVE_S } = require(join(SRC, "server/sim/life.ts"));
+		const s = bootServer();
+		const p = s.join(newUser(), "waiter");
+		s.immortal.add(p);
+		p.GetNetworkPing = () => 0.05;
+		s.enter(p);
+		s.run(5);
+		s.exit(p);
+		// six minutes in the lobby, connected the whole time. A heartbeat at 30 Hz owes 2 ticks and pays both (§3.1):
+		// a slower one drops the surplus, and six real minutes would be two of ticks -- inside the old sample window
+		s.run(KEEP_AFTER_LEAVE_S + 60, 1 / 30);
+		check(s.sim.pings.has(p.UserId), "after six minutes in the lobby the server still has the survivor's ping");
+		// back in, on a link throttled for the occasion
+		p.GetNetworkPing = () => 0.3;
+		const sp = s.enter(p);
+		s.run(1.1);
+		const ping = sp === undefined ? -1 : s.sim.combat.pingOf(sp.slot);
+		check(
+			ping > 0 && ping < 0.15,
+			"the re-entry's 300 ms sample moves the rewind ceiling a tenth of the way, not all of it",
+			`${(ping * 1000).toFixed(0)} ms`,
+		);
+		// the body's memory is the ping's: gone from the server for KEEP_AFTER_LEAVE_S, both go
+		s.quit(p);
+		s.run(KEEP_AFTER_LEAVE_S + 5, 1 / 10);
+		check(
+			!s.sim.pings.has(p.UserId),
+			"KEEP_AFTER_LEAVE_S after they left the server, the body and its ping are gone",
+		);
+	},
+);
+
+// ================================================================ 32: SAV-01, saving is automatic
+
+section("32) SAV-01: no client-chosen write, coalesced event saves, the budget floor, and the player told", () => {
 	const Cad = require(join(SRC, "server/save/saveCadence.ts"));
 	const { expMaxInit } = require(join(SRC, "shared/game/save.ts"));
 	/** the save store (stores.ts reads the fake game, so only once a server has booted) */

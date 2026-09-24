@@ -138,7 +138,13 @@ export function fromWireFx(e: WireFx): SimFx | undefined {
  */
 export function fxPosition(e: WireFx, out: { x: number; y: number }): boolean {
 	if (e.t === FxType.Shake) return false;
-	if (e.t === FxType.SolidShake) return false;
+	if (e.t === FxType.SolidShake) {
+		// the server-only centre of the solid (protocol.ts FxSolidShake); a decoded one has none
+		if (e.x === undefined || e.y === undefined) return false;
+		out.x = e.x;
+		out.y = e.y;
+		return true;
+	}
 	if (e.t === FxType.Shot) {
 		const hits = e.hits;
 		if (hits.size() === 0) return false;

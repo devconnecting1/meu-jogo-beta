@@ -92,6 +92,11 @@ export interface SurvivorLook {
 	 * (client/view/vehicleView.ts). The body, the outfit and the layers are the standing survivor's, untouched.
 	 */
 	riding: boolean;
+	/**
+	 * (DESIGN_RULES ITM-06) The weapon is put away: nothing in the hands, both at rest beside the body -- the local
+	 * survivor from `PlayerState.holstered`, an ally from the WEAPON_HOLSTERED byte of the wire (protocol.ts note 20).
+	 */
+	holstered: boolean;
 }
 
 /** where a rider's hands hold the bars, in the body's frame (both vehicles put their bars there) */
@@ -118,6 +123,7 @@ export function createLook(): SurvivorLook {
 		clock: 0,
 		outfit: OutfitLook.None,
 		riding: false,
+		holstered: false,
 	};
 }
 
@@ -144,7 +150,7 @@ function hand(f: number, l: number): void {
  * picked by (the hands are baked into it, charSheets.GRIP_HANDS / SWINGS).
  */
 const WEAPON = { row: 0, f: 0, l: 0, rel: 0, grip: 0, swinging: false };
-/** WEAPON.row of empty hands: no weapon cell is drawn (a rider, VEI-05) */
+/** WEAPON.row of empty hands: no weapon cell is drawn (a rider, VEI-05; a weapon put away, ITM-06) */
 const NO_WEAPON = -1;
 
 function holdWeapon(row: number, f: number, l: number, rel: number, grip: number, swinging: boolean): void {
@@ -198,7 +204,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 	const w = look.weapon;
 	handCount = 0;
 	const wasSwinging = trail.drawn;
-	trail.drawn = !look.riding && w.kind === WeaponKind.Melee && look.swinging;
+	trail.drawn = !look.riding && !look.holstered && w.kind === WeaponKind.Melee && look.swinging;
 	if (look.riding) {
 		// VEI-05: both hands on the bars, nothing in them
 		hand(RIDE_GRIP_F, -RIDE_GRIP_L);
@@ -206,6 +212,12 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 		// the pixel art: no weapon cell (WEAPON is a scratch: left alone it would hold the last survivor's weapon),
 		// and the sheets bake no riding pose, so the idle grip: both hands out at the bars' width (±14 u, the bars ±13)
 		if (art) holdWeapon(NO_WEAPON, 0, 0, 0, Grip.Idle, false);
+	} else if (look.holstered) {
+		// ITM-06: the weapon put away -- empty hands at rest, where the blade's idle hold keeps them, and (the pixel
+		// art) no weapon cell
+		if (art) holdWeapon(NO_WEAPON, 0, 0, 0, Grip.Idle, false);
+		hand(IDLE_HAND_F, IDLE_HAND_L);
+		hand(10, -14);
 	} else if (w.kind === WeaponKind.Melee) {
 		const reach = look.swingReach;
 		if (look.swinging) {

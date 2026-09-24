@@ -467,6 +467,37 @@ const PAIRS = [
 	["GAME.success", "SURFACE.well", MIN_UI, "indicador de save: o disquete verde de gravado"],
 	["THEME.destructive", "SURFACE.well", MIN_UI, "indicador de save: o disquete vermelho da falha"],
 	["SURFACE.line", "SURFACE.well", MIN_UI, "indicador de save: a borda do chip"],
+
+	// --- the death screen (UI-13, client/onboarding/gameOver.ts): a UI-07 window over the run. The hero and the life's
+	// strip are grooves in section plates (body -> section -> groove, the HUD sky's vocabulary); the choice is the kit's
+	// plates. Numbers speak in the card's voices (UI-08): the count and the stats in the numbers' yellow, the town's fall
+	// in the penalty red, a record in the bonus green -- no game colour (GAME.success / GAME.xp) as a stat value
+	["THEME.foreground", "SURFACE.header", MIN_TEXT, "morte: o titulo (o estado: Dead until dawn, You died...)"],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "morte: o epitafio e a nota do Rebirth sobre o corpo"],
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "morte: as secoes (o ceu, a vida) sobre o corpo da janela"],
+	["SURFACE.groove", "SURFACE.section", MIN_RELIEF, "morte: o sulco do ceu e da faixa dentro da secao"],
+	["THEME.foreground", "SURFACE.groove", MIN_TEXT, 'morte: "Daybreak in" / "Town falls in" sobre o ceu'],
+	["STAT.value", "SURFACE.groove", MIN_TEXT, "morte: a contagem ate o amanhecer e os numeros da vida (amarelo)"],
+	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "morte: a contagem ate a queda da cidade (vermelho, MP-22)"],
+	["STAT.bonus", "SURFACE.groove", MIN_TEXT, "morte: o melhor dia quando e recorde (verde, com o New best!)"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "morte: a legenda do ceu e os rotulos da faixa da vida"],
+	["SURFACE.line", "SURFACE.groove", MIN_UI, "morte: o horizonte e os pontos da noite que falta"],
+	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "morte: os pontos da noite ja passada"],
+	["GAME.moon", "SURFACE.groove", MIN_UI, "morte: a lua de pixel no arco"],
+	["GAME.sun", "SURFACE.groove", MIN_UI, "morte: o sol da primeira luz na ponta do horizonte"],
+	["THEME.mutedForeground", "SURFACE.groove", MIN_UI, "morte: a lapide cinza (ninguem te levanta aqui)"],
+	["STAT.penalty", "SURFACE.groove", MIN_UI, "morte: a lapide vermelha (a cidade cai)"],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'morte: o badge "New best!" (leito escuro)'],
+	["STAT.bonus", "SURFACE.groove", MIN_UI, 'morte: a borda verde do badge "New best!" sobre a faixa'],
+	["THEME.primaryForeground", "THEME.primary", MIN_LARGE, "morte: Rebirth now (a acao principal, aco-azul)"],
+	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "morte: o preco do Rebirth e o coracao sobre o azul"],
+	["THEME.foreground", "GAME.coin", MIN_LARGE, 'morte: o "$" da moeda do preco'],
+	["THEME.destructiveForeground", "THEME.destructive", MIN_LARGE, "morte: New game (vermelho, pergunta antes)"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "morte: Home (ferro) e o seu icone"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "morte: Rebirth sem moedas (o soquete escuro desabilitado)"],
+	["THEME.primary", "SURFACE.window", MIN_UI, "morte: a chapa azul sobre o corpo da janela"],
+	["THEME.destructive", "SURFACE.window", MIN_UI, "morte: a chapa vermelha sobre o corpo da janela"],
+	["THEME.secondary", "SURFACE.window", MIN_UI, "morte: a chapa de ferro sobre o corpo da janela"],
 ];
 
 /**
@@ -912,6 +943,21 @@ for (const rel of OVER_RUN) {
 		/TRANSPARENCY\.overWorld/.test(src) && !/TRANSPARENCY\.overlay\b/.test(src),
 	);
 	for (const m of src.matchAll(/makeScreen\([^;]*?zIndex:\s*(\d+)/g)) overRunZ.push(+m[1]);
+}
+{
+	// UI-13: the death screen's numbers speak in the card's voices, and only through the theme. The screen it replaced
+	// painted "Best day" green whenever the run tied its record (a first death on day 1 was a green "1") and the level
+	// in the XP blue: colours that meant nothing there
+	const src = codeAt(join(SRC, "client/onboarding/gameOver.ts"));
+	check(
+		"UI-13: a tela de morte usa STAT.value nos numeros, STAT.bonus so no recorde, STAT.penalty na queda da cidade; " +
+			"nenhum GAME.success / GAME.xp / GAME.rare como valor, nenhuma cor literal",
+		/STAT\.value/.test(src) &&
+			/best \? STAT\.bonus : STAT\.value/.test(src) &&
+			/STAT\.penalty/.test(src) &&
+			!/GAME\.(success|xp|rare|info)\b/.test(src) &&
+			!/Color3\.(fromRGB|new|fromHex)|new Color3/.test(src),
+	);
 }
 const popupZ = [...codeAt(join(UI, "popup.ts")).matchAll(/Dialog\([^;]*?zIndex:\s*(\d+)/g)].map(m => +m[1]);
 const flashSrc = codeAt(join(UI, "dangerFlash.ts"));

@@ -12,7 +12,7 @@
  *   3. the leave and BindToClose, as before (the final write, which releases the session lock).
  *
  * What keeps it cheap and safe, all of it enforced here and tested by tools/test-save.mjs (section 32) and, through the
- * real server, tools/test-body.mjs (section 30):
+ * real server, tools/test-body.mjs (section 32):
  *   - coalescing: an event save waits EVENT_SAVE_DELAY s (a burst -- a death, the body banked, a title -- is one write)
  *     and never starts less than EVENT_SAVE_GAP s after the player's last write ATTEMPT, whatever asked for it: at most
  *     one write per player per EVENT_SAVE_GAP s outside the leave and the shutdown. The autosave obeys the same gap;

@@ -256,7 +256,8 @@ function sendNow(): void {
 	// nothing new since the last report: the server already has it
 	if (json === lastSentJson) return;
 	if (json.size() > MAX_SAVE_PAYLOAD) {
-		warn(`[saveClient] save too large to report (${json.size()} chars, last asked for: ${lastReason})`);
+		warn("[saveClient] save too large to report");
+		print(`[saveClient] the report is ${json.size()} chars (last asked for: ${lastReason})`);
 		return;
 	}
 	lastSentJson = json;

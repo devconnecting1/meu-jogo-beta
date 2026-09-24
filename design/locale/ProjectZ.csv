@@ -351,8 +351,7 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Interact (appears when you can)
 ,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
 ,,,Interact
-,,,Menus
-,,,"Menus: the stick moves the focus ring, B goes back."
+,,,"Menus: the stick or D-pad moves the focus ring, B goes back."
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival
@@ -449,7 +448,6 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Bosses
 ,,,Continue this run
 ,,,Daybreak in
-,,,Days survived
 ,,,"Everything the game listens to, on every device"
 ,,,Fire lights the night and cooks what you find. Build one when you can.
 ,,,Getting started
@@ -467,19 +465,35 @@ which wakes at first light. Level, skills, coins and packs are kept."
 ,,,"Start a new life from day 1.
 Level, skills, coins and packs are kept.
 The town keeps its own day: nothing you do resets it."
-,,,"You wake at first light.
-If nobody is left standing, a new town begins at day 1."
 ,,,"Your new life wakes at first light.
 If nobody is left standing, a new town begins at day 1."
 ,,,You have
-,,,You survived
-,,,You survived a day
 ,,,You're already full
-,,,"Your level, skills, coins and packs stay with you.
-Only this run's day counter goes back to 1."
 ,,,"Your progress changed, try again"
 ,,,Zombies killed
-,,,days
+,,,You died
+,,,Dead until dawn
+,,,Nobody is left standing
+,,,New life at first light
+,,,You wake in
+,,,Town falls in
+,,,Any moment now
+,,,This life ended on
+,,,survivor still standing.
+,,,survivors still standing.
+,,,You wake at first light.
+,,,Your new life starts at day 1.
+,,,"No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell."
+,,,Nobody wakes you here. Rebirth continues this life; New game starts a new one at day 1.
+,,,Nobody wakes you here. Rebirth continues this life.
+,,,Rebirth now
+,,,"Rebirth wakes you now, at full health, with your backpack."
+,,,Each Rebirth costs more than the last.
+,,,Start a new life?
+,,,"Day 1 and the starter kit. Level, skills, coins and packs stay; this life's backpack does not."
+,,,It wakes at first light.
+,,,Nobody else is standing: this town ends now and a new one begins.
+,,,New best!
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.
 Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.
 Houses are looted once with E; their shelves refill after half a day.
@@ -530,6 +544,8 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,Click
 ,,,Tap
 ,,,Unequip
+,,,Put away
+,,,Your hands are empty. Equip draws it again.
 ,,,Open Craft
 ,,,Wardrobe
 ,,,Outfits
@@ -610,6 +626,7 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,TITLE
 ,,,USE
 ,,,RELOAD
+,,,Change in the Bag during a match
 ,,,Not owned
 ,,,Currently equipped.
 ,,,Nothing is worn in this slot now.
@@ -690,3 +707,4 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Launch drone
 ,,,Call back drone
 ,,,Drone charging
+,,,Siphon Oil

@@ -871,12 +871,14 @@ export function preloadSkin(): { total: number; missing: number } {
 
 	if (missing.size() >= ids.size()) {
 		// none of them arrived twice over: the uploads themselves are unavailable
-		warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
+		// fixed messages: the Error Report groups by message (docs/ANALYTICS.md §10), the counts are the log line
+		warn("[ui] skin textures unavailable: falling back to the flat UI");
 		disableSkin();
 	} else {
 		// some arrived: keep the skin, the rest draw as soon as the engine gets them
-		warn(`[ui] ${missing.size()}/${ids.size()} skin textures are slow; keeping the skin`);
+		warn("[ui] some skin textures are slow; keeping the skin");
 	}
+	print(`[ui] skin textures missing: ${missing.size()}/${ids.size()}`);
 	return { total: ids.size(), missing: missing.size() };
 }
 

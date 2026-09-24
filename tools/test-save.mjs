@@ -2309,7 +2309,7 @@ section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para 
 		[0, 1, 2, 3, 0, 0],
 		"a lingua do jogador sai do LocaleId da conta",
 	);
-	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts"].map(f =>
+	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts", "server/net/backpackIntents.ts"].map(f =>
 		readFileSync(join(SRC, f), "utf8"),
 	);
 	check(
@@ -2598,7 +2598,7 @@ section(
 			/const told = !release && changed && wasDirty;/.test(writeFn),
 		'"Progress not saved" sai quando o save volta ao que o DataStore tem (L2); o refresh da trava nao e anunciado (L6)',
 	);
-	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 30)
+	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 32)
 	check(
 		/Cadence\.backpackEvent\(outcome\)[^]*?saveSoon\(s, ev\)/.test(main) &&
 			/sim\.onDayCredit = [^]*?saveSoon\(s, "day"\)/.test(main) &&
