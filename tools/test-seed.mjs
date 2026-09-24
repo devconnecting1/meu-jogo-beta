@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * One seed, one town, on every machine (docs/DESIGN_RULES.md MP-24, docs/MULTIPLAYER.md §4.9).
+ * One seed, one town, on every machine (docs/DESIGN_RULES.md MP-26, docs/MULTIPLAYER.md §4.9).
  *
  *   npm run test:seed                       # 24 seeds (exit code 1 on any failure)
  *   node tools/test-seed.mjs --seeds 60     # more seeds
@@ -25,10 +25,13 @@
  *   3. ONLY THE SEED       during generateTown(seed) the engine's clocks, random numbers and services are poisoned
  *                          (a read throws): none is read. Map and Set iterate in reverse and every sort breaks ties the
  *                          other way (Luau's pairs() order is the VM's, and its table.sort is not stable): the same town.
- *   4. ANY LIBM            sin, cos, atan2, tan, exp, log and pow return other numbers (1e-3 off: another platform's
- *                          libm, exaggerated): the SOLIDS stay the same to the bit -- only what each client draws may
- *                          read them (a car's paint and heading, a roof's colour, a canopy's radius). The abandoned
- *                          cars' collision rects used to be floored from math.cos/sin (world.ts smallSin/smallCos).
+ *   4. ANY LIBM            sin, cos, atan2, tan, exp, log and pow one ulp above or below (another platform's libm),
+ *                          and 1e-3 off for every angle-sized argument: the SOLIDS stay the same to the bit -- only
+ *                          what each client draws reads them (a car's paint and heading, a roof's colour, a canopy's
+ *                          radius). The abandoned cars' collision rects used to be floored from math.cos/sin
+ *                          (world.ts smallSin/smallCos now). The one solid decision left on math.sin -- a car at a gas
+ *                          pump (EDI-16), through hash01 -- is measured: its nearest hash to the threshold, against
+ *                          what a one-ulp libm difference can move it by.
  *
  * Pure Node (>= 18) plus the project's TypeScript, on the shims of tools/ui-shim.mjs.
  */
@@ -443,52 +446,80 @@ section(
 	"4) qualquer libm: seno, cosseno & cia. de outra plataforma so mudam o que cada cliente desenha, nunca um solido",
 );
 {
-	const off = f => x => {
-		const r = f(x);
-		return r + r * 1e-3 + 1e-9;
+	/** the next / previous double: one ulp, the most two IEEE-754 libms of the same function honestly disagree by */
+	const f64 = new Float64Array(1);
+	const i64 = new BigInt64Array(f64.buffer);
+	const ulp = (x, dir) => {
+		if (!Number.isFinite(x) || x === 0) return x + dir * Number.MIN_VALUE;
+		f64[0] = x;
+		i64[0] += x > 0 === dir > 0 ? 1n : -1n;
+		return f64[0];
 	};
-	const off2 = f => (a, b) => {
-		const r = f(a, b);
-		return r + r * 1e-3 + 1e-9;
-	};
-	const libm = [
-		[globalThis.math, "sin", off(Math.sin)],
-		[globalThis.math, "cos", off(Math.cos)],
-		[globalThis.math, "tan", off(Math.tan)],
-		[globalThis.math, "atan2", off2(Math.atan2)],
-		[globalThis.math, "exp", off(Math.exp)],
-		[globalThis.math, "log", off2((x, b) => (b === undefined ? Math.log(x) : Math.log(x) / Math.log(b)))],
-		[globalThis.math, "pow", off2(Math.pow)],
+	const oneUlp =
+		dir =>
+		f =>
+		(...args) =>
+			ulp(f(...args), dir);
+	/**
+	 * Far off (1e-3) -- but only for an ANGLE-sized argument (|x| ≤ 8 rad): what a rect could be floored from. hash01's
+	 * arguments are thousands of radians (a position times 12.9898 + 78.233): those take the one-ulp error of item (a).
+	 */
+	const farOnAngles =
+		f =>
+		(...args) => {
+			const r = f(...args);
+			return Math.abs(args[0]) <= 8 ? r + r * 1e-3 + 1e-9 : ulp(r, 1);
+		};
+	const log = (x, b) => (b === undefined ? Math.log(x) : Math.log(x) / Math.log(b));
+	const libmWith = wrap => [
+		[globalThis.math, "sin", wrap(Math.sin)],
+		[globalThis.math, "cos", wrap(Math.cos)],
+		[globalThis.math, "tan", wrap(Math.tan)],
+		[globalThis.math, "atan2", wrap(Math.atan2)],
+		[globalThis.math, "exp", wrap(Math.exp)],
+		[globalThis.math, "log", wrap(log)],
+		[globalThis.math, "pow", wrap(Math.pow)],
 	];
-	let solidSame = 0;
-	let visualMoved = 0;
+	const variants = [
+		["(a) outra plataforma: toda funcao da libm um ulp acima", libmWith(oneUlp(1))],
+		["(a') ...e um ulp abaixo", libmWith(oneUlp(-1))],
+		["(b) angulos 1e-3 fora (o que um retangulo poderia ler)", libmWith(farOnAngles)],
+	];
 	let abandoned = 0;
-	const bad = [];
-	for (const seed of SEEDS) {
-		const ref = W.generateTown(seed);
-		const other = withGlobals(libm, () => W.generateTown(seed));
-		const a = canon(ref, { visual: false });
-		const b = canon(other, { visual: false });
-		if (a === b) solidSame += 1;
-		else bad.push(`${seed}: ${firstDiff(a, b)}`);
-		if (canon(ref) !== canon(other)) visualMoved += 1;
-		// the cars askew in a lane: the ones whose collision rect is computed from an angle
-		abandoned += ref.solids.filter(s => {
-			if (s.kind !== "car" || s.tags !== "car") return false;
-			const k = s.heading / (Math.PI / 2);
-			return Math.abs(k - Math.round(k)) * (Math.PI / 2) > 0.05;
-		}).length;
+	for (const [name, libm] of variants) {
+		let solidSame = 0;
+		let visualMoved = 0;
+		const bad = [];
+		for (const seed of SEEDS) {
+			const ref = W.generateTown(seed);
+			const other = withGlobals(libm, () => W.generateTown(seed));
+			const a = canon(ref, { visual: false });
+			const b = canon(other, { visual: false });
+			if (a === b) solidSame += 1;
+			else bad.push(`${seed}: ${firstDiff(a, b)}`);
+			if (canon(ref) !== canon(other)) visualMoved += 1;
+			if (name.startsWith("(b)")) {
+				// the cars askew in a lane: the ones whose collision rect is computed from an angle
+				abandoned += ref.solids.filter(s => {
+					if (s.kind !== "car" || s.tags !== "car") return false;
+					const k = s.heading / (Math.PI / 2);
+					return Math.abs(k - Math.round(k)) * (Math.PI / 2) > 0.05;
+				}).length;
+			}
+		}
+		check(
+			`${name}: TODO solido, lote, rua e celula de grade identicos, bit a bit`,
+			solidSame === SEEDS.length,
+			`${solidSame}/${SEEDS.length}${bad.length > 0 ? `; ${bad[0]}` : ""}`,
+		);
+		if (name.startsWith("(b)")) {
+			check(
+				"...e a troca valeu mesmo (o rumo dos carros, desenhado, mudou)",
+				visualMoved === SEEDS.length,
+				`${visualMoved}/${SEEDS.length}`,
+			);
+		}
 	}
-	check(
-		"com a libm 1e-3 fora: TODO solido, lote, rua e celula de grade identicos, bit a bit",
-		solidSame === SEEDS.length,
-		`${solidSame}/${SEEDS.length}${bad.length > 0 ? `; ${bad[0]}` : ""}`,
-	);
-	check(
-		"...e a troca de libm valeu mesmo (a pintura, o rumo dos carros, a cor dos telhados e a copa mudaram)",
-		visualMoved === SEEDS.length,
-		`${visualMoved}/${SEEDS.length}`,
-	);
 	check(
 		"...inclusive os carros abandonados de lado, cujo retangulo de colisao vem do angulo (smallSin/smallCos)",
 		abandoned > SEEDS.length,
@@ -505,6 +536,38 @@ section(
 		"...e smallSin/smallCos sao o seno e o cosseno de verdade em 0-0,5 rad (a 1e-15)",
 		worst < 1e-15,
 		`${worst.toExponential(2)}`,
+	);
+
+	/*
+	 * The one place a SOLID still reads math.sin (EDI-16, main's gas station, kept byte for byte): hash01 of a pump
+	 * island decides whether a car stands at it (PUMP_CAR_SHARE) and whether it is filling (PUMP_FILLING_SHARE). A
+	 * libm one ulp apart moves sin by at most 2^-53, so hash01 by at most 43758.5453 x 2^-52 ~ 1e-11 (the argument is
+	 * exact: IEEE-754 products and sums); the decision flips only if the hash lies closer than that to its threshold. Measured here on every island of every seed: the
+	 * nearest one, and how many of those errors would fit in the gap (accepted limit, docs/MULTIPLAYER.md §4.9).
+	 */
+	const src = require("node:fs").readFileSync(join(SRC, "shared/game/world.ts"), "utf8");
+	const share = name => Number(new RegExp(`const ${name} = ([0-9.]+);`).exec(src)?.[1]);
+	const carShare = share("PUMP_CAR_SHARE");
+	const fillShare = share("PUMP_FILLING_SHARE");
+	let islands = 0;
+	let nearest = 1;
+	for (const seed of SEEDS) {
+		for (const s of W.generateTown(seed).solids) {
+			if (s.tags !== "pump") continue;
+			islands += 1;
+			nearest = Math.min(
+				nearest,
+				Math.abs(W.hash01(s.x, s.y, 83) - carShare),
+				Math.abs(W.hash01(s.x, s.y, 84) - fillShare),
+			);
+		}
+	}
+	const oneUlpShift = 43758.5453 * 2 ** -52;
+	check(
+		"o posto (EDI-16): as decisoes do carro na bomba passam pelo hash01, e nenhuma fica a menos de 1e-6 do limiar",
+		Number.isFinite(carShare) && Number.isFinite(fillShare) && islands > SEEDS.length && nearest > 1e-6,
+		`${islands} ilhas; a mais perto a ${nearest.toExponential(2)} do limiar, ${(nearest / oneUlpShift).toExponential(1)}` +
+			" vezes o que um ulp move o hash (limite aceito, MULTIPLAYER.md §4.9)",
 	);
 }
 

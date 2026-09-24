@@ -1,5 +1,5 @@
 /*
- * The town's data, from the lobby to the match (docs/DESIGN_RULES.md UI-10, MP-22, MP-24).
+ * The town's data, from the lobby to the match (docs/DESIGN_RULES.md UI-10, MP-22, MP-26).
  *
  * The flyover behind the menus (client/view/townFlyover.ts) draws the REAL town the player is about to enter:
  * `generateTown` of the SERVER's seed (client/boot/serverTown.ts: the Workspace attribute the server writes, heard the
@@ -167,7 +167,9 @@ function resume(j: Job): boolean {
 	if (!ok) {
 		// the generator threw: nothing to keep. The menus stay on what they show (the page colour, or the last town);
 		// the match, if it asks, generates the town itself and meets the same error where it can be seen
-		warn(`[PZ-LOAD] town ${j.seed}: generation failed: ${tostring(err)}`);
+		// a fixed sentence (docs/ANALYTICS.md §10): the seed goes to the log line
+		warn(`[PZ-LOAD] the lobby's town could not be generated: ${tostring(err)}`);
+		print(`[PZ-LOAD] town ${j.seed}: generation failed`);
 		failedSeed = j.seed;
 		if (job === j) abandon();
 		return false;
@@ -290,7 +292,9 @@ export function takeTown(seed: number): WorldData {
 	if (hit && world !== undefined && townFingerprint(world) !== cachedPrint) {
 		hit = false;
 		stats.refused += 1;
-		warn(`[PZ-LOAD] town ${seed}: the lobby's copy changed since it was generated; the match generates its own`);
+		// the seed differs per town: the log line, not the Error Report's message (docs/ANALYTICS.md §10)
+		warn("[PZ-LOAD] the lobby's copy of the town changed since it was generated; the match generates its own");
+		print(`[PZ-LOAD] town ${seed}: the lobby's copy was refused`);
 	}
 	cached = undefined;
 	cachedSeed = 0;

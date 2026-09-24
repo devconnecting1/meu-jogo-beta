@@ -36,7 +36,7 @@
  *                      town swaps behind it, the new one fades in; called off halfway, the page lifts again; Reduce
  *                      Motion swaps at once); with no seed known, the page colour and no town; the run releases every
  *                      Frame and never touches its own renderer.
- *   6b. THE SERVER'S   (MP-24) the lobby draws the seed the server publishes (the Workspace attribute) and only it:
+ *   6b. THE SERVER'S   (MP-26) the lobby draws the seed the server publishes (the Workspace attribute) and only it:
  *       TOWN           the page colour before it, the town asked for and faded in when it arrives, the same solids the
  *                      server builds, a WorldReset that overtakes the attribute moving nothing until it does, and an
  *                      attribute that is not a seed ignored.
@@ -711,7 +711,8 @@ const handlers = {
 	onWaitDawn: () => calls.wait++,
 	onNewRun: () => calls.newRun++,
 	onShop: () => calls.shop++,
-	onWardrobe: from => calls.wardrobe.push(from),
+	// the page it came from, and (the Survivor screen's OUTFIT / PET tile) the tab it opens on
+	onWardrobe: (from, slot) => calls.wardrobe.push(slot === undefined ? from : `${from}:${slot}`),
 	onSettings: () => calls.settings++,
 	onCredits: () => calls.credits++,
 	onTutorial: thenPlay => calls.tutorial.push(thenPlay === true),
@@ -1054,6 +1055,39 @@ save.tutorialDone = true;
 closePopups();
 click(deep(window_(), "Wardrobe"), "Wardrobe");
 check("o atalho do Wardrobe abre o guarda-roupa e volta para esta tela", calls.wardrobe.at(-1) === "survivor");
+{
+	// the loadout's tiles are buttons: OUTFIT and PET open the wardrobe on their own tab (EquipSlot 4 / 5); the four a
+	// lobby cannot change say where they are changed -- the Bag, during a match -- in a short toast
+	const { EquipSlot } = require(join(SRC, "shared/data/equips.ts"));
+	const slotTile = i => deep(deep(window_(), "Slots"), `Slot${i}`);
+	check(
+		"os seis ladrilhos do loadout sao botoes que o controle alcanca",
+		[0, 1, 2, 3, 4, 5].every(i => slotTile(i)?.ClassName === "TextButton" && slotTile(i)?.Selectable === true),
+	);
+	click(slotTile(EquipSlot.Outfit), "OUTFIT");
+	const outfit = calls.wardrobe.at(-1);
+	click(slotTile(EquipSlot.Pet), "PET");
+	check(
+		"OUTFIT abre o guarda-roupa na aba de trajes, PET na de pets (e o X volta para esta tela)",
+		outfit === `survivor:${EquipSlot.Outfit}` && calls.wardrobe.at(-1) === `survivor:${EquipSlot.Pet}`,
+		`${outfit} / ${calls.wardrobe.at(-1)}`,
+	);
+	const opened = calls.wardrobe.length;
+	const hint = "Change in the Bag during a match";
+	const toastStackBefore = ctx.uiLayer.FindFirstChild("ToastStack") !== undefined;
+	const toasts = () => ctx.uiLayer.GetDescendants().filter(d => d.Text === hint && shown(d)).length;
+	const before = toasts();
+	for (const i of [0, 1, 2, 3]) click(slotTile(i), `slot ${i}`);
+	check(
+		'WEAPON, CLOTHES, HAND e GUN dizem onde se trocam ("Change in the Bag during a match") e nao abrem nada',
+		toasts() > before && calls.wardrobe.length === opened && calls.play === 2,
+		`${toasts() - before} avisos`,
+	);
+	// the toasts' lifetime loop is a coroutine this fake engine never runs: take them down as their timer would
+	const stack = ctx.uiLayer.FindFirstChild("ToastStack");
+	if (!toastStackBefore) stack?.Destroy();
+	else for (const t of stack?.GetChildren() ?? []) if (t.GetDescendants().some(d => d.Text === hint)) t.Destroy();
+}
 
 console.log("\n3) os estados da partida: em memoria, o dia do mundo, fim de partida, vida nova, cidade caida\n");
 
@@ -1667,7 +1701,7 @@ frame();
 	);
 }
 
-// ---- a new town (MP-22) under the menus: the SAME flyover cross-fades to it, in its own pool (MP-24)
+// ---- a new town (MP-22) under the menus: the SAME flyover cross-fades to it, in its own pool (MP-26)
 setScreen(1920, 1080);
 {
 	const A = DESIGN.TOWN_SEED;
@@ -1732,7 +1766,12 @@ setScreen(1920, 1080);
 			if (Math.hypot(now[0] - p[0], now[1] - p[1]) > 200) cuts++;
 			p = now;
 		}
-		for (let i = 0; i < 600; i++) frame(0.25);
+		// the cuts' own warm-up, twice: a sprite slot makes its UIStroke the first time a stroked rect lands in it
+		// (renderer.ts), and the gas station's canopy and dispensers (EDI-16) add stroked parts only some shots meet
+		for (let round = 0; round < 2; round++) {
+			for (let i = 0; i < 600; i++) frame(1 / 60);
+			for (let i = 0; i < 600; i++) frame(0.25);
+		}
 	}
 	r = measure(() => {
 		for (let i = 0; i < 600; i++) frame(1 / 60);
@@ -1826,9 +1865,9 @@ check(
 );
 setScreen(1120, 630);
 
-// ================================================================ 8b. the SERVER's town (MP-24)
+// ================================================================ 8b. the SERVER's town (MP-26)
 
-console.log("\n8b) a cidade do servidor: o lobby desenha a semente que o servidor publica, e so ela (MP-24)\n");
+console.log("\n8b) a cidade do servidor: o lobby desenha a semente que o servidor publica, e so ela (MP-26)\n");
 {
 	// client/boot/serverTown.ts listens to the Workspace attribute the server writes and to the InitBegin / WorldReset
 	// notices of client/net/netClient.ts -- which talks to remotes Node does not have: a stand-in with its one hook

@@ -2315,7 +2315,7 @@ section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para 
 		[0, 1, 2, 3, 0, 0],
 		"a lingua do jogador sai do LocaleId da conta",
 	);
-	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts"].map(f =>
+	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts", "server/net/backpackIntents.ts"].map(f =>
 		readFileSync(join(SRC, f), "utf8"),
 	);
 	check(

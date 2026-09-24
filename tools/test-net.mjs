@@ -977,6 +977,18 @@ test("Snap: the ride fields (VEI-05) round-trip exactly and refuse what no vehic
 	eq("an absent field is on foot", back?.self?.ride, 0);
 });
 
+test("Snap: a weapon put away is the reserved weapon byte of another survivor (ITM-06, note 20)", () => {
+	eq("WEAPON_HOLSTERED is 255", P.WEAPON_HOLSTERED, 255);
+	ok(P.WEAPON_HOLSTERED >= WEAPONS.length, "no weapon id can be mistaken for it");
+	const away = { ...randPlayer(3), weapon: P.WEAPON_HOLSTERED };
+	const snap = { tick: 11, self: randSelf(), players: [away, randPlayer(4)], zombies: [], bosses: [] };
+	const bytes = bytesOf(P.encodeSnapshot(snap).parts[0]);
+	eq("no byte more per survivor", bytes.length, P.SNAP_HEADER_BYTES + P.SNAP_SELF_BYTES + 2 * P.SNAP_PLAYER_BYTES);
+	const d = P.decodeSnapshotPart(bufOf(bytes));
+	eq("the empty hands come back", d?.players[0]?.weapon, P.WEAPON_HOLSTERED);
+	eq("...and the other survivor keeps their weapon", d?.players[1]?.weapon, snap.players[1].weapon);
+});
+
 test("Snap: malformed parts are refused", () => {
 	const res = P.encodeSnapshot(randSnapshot(3, 20, 1, true));
 	const good = bytesOf(res.parts[0]);
@@ -1845,6 +1857,7 @@ const BACKPACK_VERBS = [
 	P.IntentKind.Unequip,
 	P.IntentKind.LearnSkill,
 	P.IntentKind.SwitchWeapon,
+	P.IntentKind.Holster,
 ];
 const PRESENCE_VERBS = [P.IntentKind.EnterWorld, P.IntentKind.LeaveWorld];
 /** a valid backpack intent with random fields, for the fuzz below */
@@ -1903,6 +1916,27 @@ test("Intent: presence (2 B) and backpack verbs (8 B), round trip and exact size
 	// the ranges are the data tables' (§8.1: the argument is an index the server looks up)
 	eq("SwitchWeapon range", P.intentArgRange(P.IntentKind.SwitchWeapon).join(","), `0,${WEAPONS.length - 1}`);
 	eq("Unequip range: the equipment slots", P.intentArgRange(P.IntentKind.Unequip).join(","), "1,5");
+	// ITM-06 (note 20): Holster is a state, draw (0) or put away (1) -- nothing else is one
+	eq("Holster range: draw or put away", P.intentArgRange(P.IntentKind.Holster).join(","), "0,1");
+	eq("HOLSTER_DRAW / HOLSTER_AWAY", `${P.HOLSTER_DRAW},${P.HOLSTER_AWAY}`, "0,1");
+	for (const bad of [2, 3, 255, 256, 65535]) {
+		eq(`Holster arg ${bad}: never encoded`, P.encodeIntentArgs(P.IntentKind.Holster, 1, bad, 1), undefined);
+		eq(
+			`Holster arg ${bad}: a hand-built one is malformed`,
+			P.decodeIntentMessage(bufOf([96, P.IntentKind.Holster, 1, 0, bad & 255, bad >> 8, 1, 0])),
+			undefined,
+		);
+	}
+	eq("Holster has no 2-byte form", P.decodeIntentMessage(bufOf([96, P.IntentKind.Holster])), undefined);
+	eq("a verb above Holster (10) is malformed", P.decodeIntentMessage(bufOf([96, 10, 1, 0, 0, 0, 1, 0])), undefined);
+	{
+		const away = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Holster, 300, P.HOLSTER_AWAY, 41));
+		eq(
+			"Holster round trip: 8 bytes, kind 9, atSeq, arg and nonce as sent",
+			JSON.stringify(away),
+			JSON.stringify({ kind: 9, atSeq: 300, arg: 1, nonce: 41 }),
+		);
+	}
 	eq("no range for a presence verb", P.intentArgRange(P.IntentKind.EnterWorld), undefined);
 	// seq and nonce are u16 and wrap like every sequence number on the wire
 	const w = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.SwitchWeapon, 65536 + 5, 0, -1));
@@ -1927,14 +1961,14 @@ test("Intent: hostile payloads are refused (§8.1)", () => {
 		if (len > 1) buffer.writeu8(b, 1, P.IntentKind.UseItem);
 		eq(`length ${len}`, P.decodeIntentMessage(b), undefined);
 	}
-	// every header but Intent's, every kind outside 1..8, and each form with the other form's verbs
+	// every header but Intent's, every kind outside 1..9, and each form with the other form's verbs
 	let accepted = 0;
 	for (let head = 0; head < 256; head++) {
 		for (let kind = 0; kind < 256; kind++) {
 			const short = P.decodeIntentMessage(bufOf([head, kind]));
 			const long = P.decodeIntentMessage(bufOf([head, kind, 7, 0, 1, 0, 9, 0]));
 			const shortOk = head === 96 && (kind === 1 || kind === 2);
-			const longOk = head === 96 && kind >= 3 && kind <= 8;
+			const longOk = head === 96 && kind >= 3 && kind <= 9;
 			if ((short !== undefined) !== shortOk)
 				fail(`short form head ${head} kind ${kind}: ${JSON.stringify(short)}`);
 			// arg = 1 is inside every backpack verb's range
@@ -1944,7 +1978,7 @@ test("Intent: hostile payloads are refused (§8.1)", () => {
 			checks += 2;
 		}
 	}
-	eq("exactly the 2 presence and 6 backpack verbs decode", accepted, 8);
+	eq("exactly the 2 presence and 7 backpack verbs decode", accepted, 9);
 });
 
 test("Intent gate: the §8.2 bucket, the malformed window, and presence left to mpHost", () => {
@@ -2062,7 +2096,14 @@ test("Intent gate: out of the world only a cosmetic slot moves, and only to some
 		G.applyOutOfWorld(save, msg(P.IntentKind.Unequip, EquipSlot.Cloth)),
 		false,
 	);
-	for (const kind of [P.IntentKind.UseItem, P.IntentKind.LearnSkill, P.IntentKind.Craft, P.IntentKind.SwitchWeapon]) {
+	// ...and ITM-06's Holster: the lobby has no hands to put a weapon away with
+	for (const kind of [
+		P.IntentKind.UseItem,
+		P.IntentKind.LearnSkill,
+		P.IntentKind.Craft,
+		P.IntentKind.SwitchWeapon,
+		P.IntentKind.Holster,
+	]) {
 		eq(`verb ${kind} out of the world is refused`, G.applyOutOfWorld(save, msg(kind, 1)), false);
 	}
 	eq(
@@ -2099,9 +2140,35 @@ test("Wallet bag: the server's backpack round trips into the client's copy, and 
 	eq("bag place", read.place, 10);
 	eq("bag ack", read.ack, 777);
 	eq("bag seq", read.seq, 65000);
+	// ITM-06 (note 20): the body's hands ride beside the ack -- drawn by default, put away when the server says so
+	eq("bag holster: drawn unless said", read.holster, 0);
+	eq(
+		"bag holster: put away",
+		SAVE.readBag(JSON.parse(JSON.stringify(SAVE.bagOf(server, 10, 777, 1, true)))).holster,
+		1,
+	);
+	const noHands = JSON.parse(JSON.stringify(bag));
+	delete noHands.holster;
+	eq("a bag from a server without it reads drawn", SAVE.readBag(noHands)?.holster, 0);
+	for (const [junkHands, want] of [
+		[7, 1],
+		[-3, 0],
+		[0.5, 0],
+		["x", 0],
+	]) {
+		eq(
+			`bag holster ${JSON.stringify(junkHands)} clamps to ${want}`,
+			SAVE.readBag({ ...noHands, holster: junkHands })?.holster,
+			want,
+		);
+	}
+	const kept = SAVE.defaultSave();
+	SAVE.applyBag(kept, SAVE.readBag(SAVE.bagOf(server, 10, 777, 1, true)));
+	ok(!("holster" in kept) && !("holstered" in kept), "the hands never land in the save (ITM-06: never saved)");
 	// the signature moves with every field that can change, and not with seq
 	const sig = SAVE.bagSignature(server, 10, 777);
 	eq("same bag, same signature", SAVE.bagSignature(server, 10, 777), sig);
+	ok(SAVE.bagSignature(server, 10, 777, true) !== sig, "putting the weapon away moves it (ITM-06)");
 	server.ammoArrow += 1;
 	ok(SAVE.bagSignature(server, 10, 777) !== sig, "ammo moves the signature");
 	ok(SAVE.bagSignature(server, 11, 777) !== SAVE.bagSignature(server, 10, 777), "place moves it");
@@ -2145,7 +2212,7 @@ const DECODERS = [
 	["decodeIntentMessage", P.decodeIntentMessage],
 ];
 
-test("the town's seed (MP-24): only the server says it, S→C; no client message can carry or move one", () => {
+test("the town's seed (MP-26): only the server says it, S→C; no client message can carry or move one", () => {
 	// 1. on the wire it exists only in two World events, which the SERVER encodes and every client decodes
 	const init = {
 		t: P.WorldEv.InitBegin,

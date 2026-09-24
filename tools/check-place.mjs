@@ -41,11 +41,11 @@ for (const [service, prop, value] of PINS) {
 	);
 }
 
-// MP-24: every server picks its own town. A developer may pin one on ServerStorage (pz_town_seed) to reproduce it in
+// MP-26: every server picks its own town. A developer may pin one on ServerStorage (pz_town_seed) to reproduce it in
 // Studio; a pin in the project file would ship, and every live server would open on the same streets
 check(
 	!JSON.stringify(project).includes("pz_town_seed"),
-	"default.project.json does not pin the town's seed (ServerStorage pz_town_seed is for Studio only, MP-24)",
+	"default.project.json does not pin the town's seed (ServerStorage pz_town_seed is for Studio only, MP-26)",
 );
 
 const placePath = process.argv[2];

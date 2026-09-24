@@ -83,15 +83,20 @@ motivo, e prefira o papel mais fraco que resolva.
 
 Permite mudar número de balanceamento sem republicar. Os nossos candidatos naturais são os que já sabemos
 que vão pedir ajuste: `SIM_HZ`, o alcance de visão dos zumbis, o teto da horda e o raio do chat. Fazer antes
-da F2 fechar é ajustar um alvo em movimento.
+da F2 fechar é ajustar um alvo em movimento. O gancho de código já existe (`src/server/config/experiments.ts`, a
+chave `pz_welcome_pack`): uma config só faz algo quando o código a lê (`docs/ANALYTICS.md` §12).
 
 ### Experiments — **depois de ter jogadores**
 
-Teste A/B sem base de jogadores não mede nada.
+Teste A/B sem base de jogadores não mede nada: a própria página avisa que com menos de 1.000 DAU é difícil ter dado
+útil (MDE). O código já lê o knob por jogador e a inscrição acontece só quando o valor é usado; passo a passo e as três
+propostas (pacote de boas-vindas, primeira noite mais leve, preço do Rebirth) em `docs/ANALYTICS.md` §12.
 
-### Alerts — **ligue antes de publicar**
+### Alerts — **ligue assim que tiver 100+ DAU**
 
-Alerta de taxa de erro e de crash. É o que avisa que algo quebrou sem depender de alguém reclamar.
+Crash, memória, FPS, CCU e data store — é o que avisa que algo quebrou sem depender de alguém reclamar. A página não
+oferece alerta de **taxa de erro** (só métricas de performance e de data store): erros se olham no Error Report depois
+de cada publish. Precisa de um webhook (Configure → Webhooks). Lista com limites em `docs/ANALYTICS.md` §13.
 
 ### Secrets — **não precisamos**
 
@@ -132,7 +137,7 @@ de exclusão**: com eles, o Roblox apaga sozinho as chaves de quem pediu.
       que cite alguém pelo nome, em palavras, continua lá: se um pedido citar isso, procure o nome no painel de
       admin (Server › Audit log) e apague a entrada à mão pelo Data Stores Manager.
 - [ ] `ProjectZ_Worlds` não tem dado de jogador (semente, dias, JobId, uma contagem): fica de fora.
-- [ ] `ProjectZ_PrivateTowns` também não (MP-24: a semente, o dia do mundo e o início da cidade de um servidor privado,
+- [ ] `ProjectZ_PrivateTowns` também não (MP-26: a semente, o dia do mundo e o início da cidade de um servidor privado,
       com a chave = o `PrivateServerId`, sem UserId nem nome do dono): fica de fora.
 - [ ] **Uma chave de Open Cloud só para isto:** crie uma chave com **apenas** as permissões de data store —
       ler, listar, atualizar e apagar **entradas** — para o universo do jogo, restrita ao seu IP, e ponha no `.env`
@@ -198,9 +203,14 @@ eventos (o Studio não); os gráficos levam ~24 h, e **View Events** mostra os e
 
 Os funis que valem, para este jogo especificamente:
 
-1. **Entrou → apertou PLAY → sobreviveu à primeira noite.** É a curva que diz se o onboarding funciona.
-2. **Primeira morte → jogou de novo.** Diz se morrer é frustrante ou convidativo.
-3. **Jogou sozinho → jogou acompanhado.** Diz se o co-op está sendo descoberto.
+1. **Entrou → apertou PLAY → sobreviveu à primeira noite.** É a curva que diz se o onboarding funciona (funil
+   Onboarding).
+2. **Primeira morte → jogou de novo.** Diz se morrer é frustrante ou convidativo (funil Rebirth e `SessionEnded`
+   com `Where - Dead`).
+3. **Jogou sozinho → jogou acompanhado.** Diz se o co-op está sendo descoberto (funil Night, breakdown `Survivors`).
+
+O que configurar em cada página (funis, dashboard custom, regras do Error Report, alertas, experimentos) está na
+checklist da §14 de `docs/ANALYTICS.md`.
 
 ---
 
@@ -225,7 +235,9 @@ A regra prática para qualquer item futuro: **se dá vantagem numa noite, não s
 Performance, Error report, Crashes, Memory Stores, Data Stores, HTTP e Messaging Service. Isto responde em
 produção parte do que hoje só o Studio responde — especialmente **Error report** e **Crashes**, que capturam
 exatamente a classe de erro que os testes em Node não veem (limite de registradores do Luau, asset que não
-carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**.
+carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**. O Error Report agrupa por
+mensagem: os avisos do jogo são frases fixas (ids e contagens vão para o log), e as regras sugeridas estão na §14 de
+`docs/ANALYTICS.md`.
 
 ---
 
@@ -285,6 +297,6 @@ carrega, remote que estoura). Vale conferir aqui **depois de cada publicação**
    o `erase` uma vez com uma alt; para cada pedido da mensagem diária, jogador fora do jogo e `npm run cloud --
    erase <userId> --yes`.
 4. **Server management**: decidir como será o "jogar sozinho".
-5. **Alerts**: ligar antes de publicar.
+5. **Alerts**: ligar assim que tiver 100+ DAU (lista na §13 de `docs/ANALYTICS.md`).
 6. **Access settings**: manter privado até a F2 fechar.
 7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).

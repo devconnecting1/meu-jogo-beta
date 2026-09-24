@@ -341,7 +341,7 @@ function lobbyStatus(): LobbyStatus {
 		run,
 		hosted,
 		clockDriven: loop.getRefs().daynight.serverDriven(),
-		// the SERVER's town (MP-24), or undefined until heard: the page colour behind the menus, never a guessed town
+		// the SERVER's town (MP-26), or undefined until heard: the page colour behind the menus, never a guessed town
 		seed: Boot.knownTownSeed(),
 		fellOn: lobbyNav.fellOn,
 		offlineNote: offlineNote(),
@@ -366,9 +366,9 @@ function openShop(back: () => void = goLobby): void {
 }
 
 /** MON-04: outfits and pets, tried on, bought (by the server) and worn -- from the lobby or from the shop */
-function openWardrobe(back: () => void): void {
+function openWardrobe(back: () => void, slot?: number): void {
 	menuScreen("shop");
-	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot });
+	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot, slot });
 }
 
 function openSettings(): void {
@@ -444,8 +444,9 @@ function goLobby(page: LobbyPage = "menu"): void {
 			},
 			onNewRun: doNewRun,
 			onShop: () => openShop(),
-			// the wardrobe's X comes back to the page it was opened from
-			onWardrobe: (from: LobbyPage) => openWardrobe(() => goLobby(from)),
+			// the wardrobe's X comes back to the page it was opened from; the Survivor screen's OUTFIT / PET tile opens it
+			// on that slot's tab
+			onWardrobe: (from: LobbyPage, slot?: number) => openWardrobe(() => goLobby(from), slot),
 			onSettings: openSettings,
 			onCredits: openCredits,
 			onTutorial: (thenPlay?: boolean) => openTutorial(thenPlay === true),
@@ -552,8 +553,10 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
-		// the hotbar's blue tile; the tiles themselves are the list keys 1-5 pick from (shared/game/weaponSlots.ts)
-		weaponId: rt.pointer,
+		// the hotbar's blue tile (the blade for a hand that chose nothing, -1); the tiles themselves are the list keys 1-5
+		// pick from (shared/game/weaponSlots.ts) -- and none while the weapon is put away (ITM-06)
+		weaponId: w.id,
+		holstered: p.holstered === true,
 		weaponName: tr(w.name),
 		mag: rt.ammoCount,
 		magSize: w.mag,
@@ -575,7 +578,8 @@ function warnNoAmmo(): void {
 	const p = refs.player;
 	const w = currentWeapon(p);
 	const input = ctx.input;
-	if (w.mag <= 0 || p.weapon.reloading) return;
+	// (ITM-06) a weapon put away fires nothing, so it has nothing to be out of
+	if (w.mag <= 0 || p.weapon.reloading || p.holstered === true) return;
 	if (!input.reloadPressed && !(input.attackPressed && p.weapon.ammoCount <= 0)) return;
 	if (weaponReserve(ctx.save, w) > 0) return;
 	if (input.reloadPressed && p.weapon.ammoCount >= w.mag) return;
@@ -623,7 +627,7 @@ function openDeath(): void {
 	closeDawnWait();
 	ctx.save.runOver = true;
 	net.requestSave("death");
-	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx, ctx.save.deathCount <= 1);
+	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx);
 	// `serverDriven` is the one honest test for "somebody out there will stand me back up": the hour on this
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
@@ -646,7 +650,7 @@ function openDeath(): void {
 		);
 		return;
 	}
-	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
+	// nobody to stand this survivor up: the death screen's "over" state (client/onboarding/gameOver.ts, UI-13)
 	pauseCleanup = showRunSummary(ctx, summary, {
 		onRebirth: doRebirth,
 		onNewRun: doNewRun,
@@ -702,7 +706,8 @@ function updateDawnWait(dt: number): void {
 	// is the same capped wait the server armed, and it is what answers a death in broad daylight.
 	dawnBudget = math.max(0, dawnBudget - math.max(0, dt));
 	const left = math.min(refs.daynight.secondsUntilDayBreak(), dawnBudget);
-	wait.setRemaining(left);
+	// by night the wait ends at daybreak; a death in daylight waits one whole night and wakes in daylight (UI-13)
+	wait.setRemaining(left, refs.daynight.isNight);
 	if (left > 0) {
 		dawnOverdue = 0;
 		return;
@@ -713,7 +718,7 @@ function updateDawnWait(dt: number): void {
 	if (netActive()) return;
 	closeDawnWait();
 	warn("[PZ] daybreak passed without a revive and the session is gone; falling back to the end-of-run choice");
-	pauseCleanup = showRunSummary(ctx, runSummary(ctx, ctx.save.deathCount <= 1), {
+	pauseCleanup = showRunSummary(ctx, runSummary(ctx), {
 		onRebirth: doRebirth,
 		onNewRun: newLifeWaiting ? undefined : doNewRun,
 		onHome: goLobby,
@@ -749,8 +754,10 @@ function mountRun(enterWorld = true): void {
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
-		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own)
+		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own). While it is
+		// up the D-pad sorts it (scoreboard.ts), so it switches no weapon (ITM-06: the D-pad cycles them otherwise)
 		if (input.scoreboardPressed) hud.toggleScoreboard();
+		if (hud.scoreboard()?.isOpen() === true) input.weaponCycle = 0;
 		if (input.pausePressed && ctx.phase === "playing") {
 			if (pauseCleanup === undefined) openPause();
 			else closePause();
@@ -1053,7 +1060,7 @@ function doNewRun(): void {
 			return;
 		}
 	}
-	if (hosted) endedLife = runSummary(ctx, ctx.save.deathCount <= 1);
+	if (hosted) endedLife = runSummary(ctx);
 	// same reset as the server (offline: local only, nothing is saved anyway)
 	resetRun(ctx.save);
 	if (hosted) {
@@ -1129,8 +1136,10 @@ pack.craftCheck = id => {
 
 pack.onEquipWeapon = id => {
 	if (!ownsWeapon(ctx.save, id)) return;
+	// ITM-06: the weapon in hand, chosen again, is put away or drawn back (combat.ts `chooseWeapon`)
 	chooseWeapon(loop.getRefs(), id);
 };
+pack.weaponAway = () => loop.getRefs().player.holstered === true;
 
 // 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet (EquipSlot). An outfit or a pet is what OTHER people see (MON-04), so
 // changing one asks for a report now: the server re-checks ownership and replicates the look (PlayerProfile)
@@ -1190,7 +1199,7 @@ Bag.start();
 // F1: assina os remotes do host agora, nao no primeiro quadro da partida -- o servidor admite o jogador
 // assim que ele entra e ja comeca a mandar snapshot (client/net/netClient.ts: netPrewarm)
 netPrewarm();
-// MP-24: the town the SERVER runs, heard the moment this client joins -- generated a slice per frame behind the logo
+// MP-26: the town the SERVER runs, heard the moment this client joins -- generated a slice per frame behind the logo
 // (the lobby draws it; the match takes that very copy) and followed by the menus' flyover when a world ends
 Boot.startServerTown();
 task.delay(LOAD_FALLBACK_SEC, begin);

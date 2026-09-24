@@ -1,5 +1,5 @@
 /*
- * The town the SERVER runs, as this client knows it (docs/DESIGN_RULES.md MP-24, UI-10; docs/MULTIPLAYER.md §4.9).
+ * The town the SERVER runs, as this client knows it (docs/DESIGN_RULES.md MP-26, UI-10; docs/MULTIPLAYER.md §4.9).
  *
  * The owner, 2026-09-24: "the map must be made when the player enters the match (if they entered alone/first), and
  * that map must show on the home screen, so the map generation doesn't keep changing all the time … if the player

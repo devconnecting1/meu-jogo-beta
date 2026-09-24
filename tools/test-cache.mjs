@@ -17,7 +17,7 @@
  *                                 the match changed; a new seed (MP-22's new town) or a seed of 0 never reuses it; a
  *                                 town the flyover drew is field for field the one generateTown returns, and a copy that
  *                                 changed anyway (its fingerprint) is refused. Reports the generation time saved.
- *                                 The menus' town is generated a slice per frame (`requestTown`, MP-24): a slice is
+ *                                 The menus' town is generated a slice per frame (`requestTown`, MP-26): a slice is
  *                                 TOWN_SLICE_S of work; asked for, it is ready a frame later; a match that wants it
  *                                 before its last slice FINISHES it in place (one generation, never two); another
  *                                 seed abandons it; a generator that throws is not asked for again every frame.
@@ -330,7 +330,7 @@ check("semente 0 (cidade aleatoria) nunca vai para o cache", r1 !== r2 && r3 !==
 	);
 }
 
-// ================================================================ 1b. a slice per frame (MP-24, UI-10)
+// ================================================================ 1b. a slice per frame (MP-26, UI-10)
 
 section("1b) a cidade do lobby e gerada em fatias, um pedaco por quadro, e a partida a pega sem gerar de novo");
 {
@@ -473,7 +473,8 @@ section("1b) a cidade do lobby e gerada em fatias, um pedaco por quadro, e a par
 		globalThis.warn = realWarn;
 		check(
 			"um gerador que lanca erro: uma linha [PZ-LOAD], nada no cache, e nenhum pedido de novo a cada quadro",
-			warned.filter(w => w.includes("town 99: generation failed")).length === 1 &&
+			warned.filter(w => w.includes("the lobby's town could not be generated")).length === 1 &&
+				logged.some(l => l.includes("town 99: generation failed")) &&
 				Cache.readyTown(99) === undefined &&
 				again === undefined &&
 				renderConns() === conns0,

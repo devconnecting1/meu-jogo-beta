@@ -2,7 +2,7 @@
  * The town behind the menus (docs/DESIGN_RULES.md UI-10): the lobby and the Survivor screen stand on the REAL town
  * of the world the player is about to enter, seen from the air while a slow camera drifts past its landmarks.
  *
- *   - The town is `generateTown(seed)` with the SERVER's seed (MP-24: the server picks it and owns it; the client
+ *   - The town is `generateTown(seed)` with the SERVER's seed (MP-26: the server picks it and owns it; the client
  *     hears it the moment it joins, client/boot/serverTown.ts), drawn by client/view/worldView.ts -- the very code the
  *     run draws with -- through a Renderer (pooled Frames) and a Camera of its own. It never touches the run's
  *     renderer, camera or night layer.

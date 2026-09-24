@@ -86,12 +86,12 @@
 		"hour": 10,
 		"scale": 1,
 		"counts": {
-			"sprites": 108,
-			"images": 58,
-			"flat": 50,
-			"strokes": 29,
-			"corners": 43,
-			"instances": 241
+			"sprites": 142,
+			"images": 73,
+			"flat": 69,
+			"strokes": 24,
+			"corners": 42,
+			"instances": 284
 		}
 	},
 	"wreck": {
@@ -149,6 +149,25 @@
 			"strokes": 53,
 			"corners": 35,
 			"instances": 724
+		}
+	},
+	"gas-night": {
+		"title": "Gas station, 22:00",
+		"rect": {
+			"x": 941,
+			"y": 8801,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"counts": {
+			"sprites": 143,
+			"images": 73,
+			"flat": 70,
+			"strokes": 24,
+			"corners": 42,
+			"instances": 554
 		}
 	}
 }

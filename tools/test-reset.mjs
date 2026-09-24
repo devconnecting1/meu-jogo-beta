@@ -70,7 +70,7 @@
  *  18. OWED, THEN A THROW      the load step that meets the kept body (lives.adopt) grants the owed new life and then
  *                              throws: the new life stays on the save the session keeps (it is granted only once).
  *
- * MP-24, the town is the server's (the owner, 2026-09-24):
+ * MP-26, the town is the server's (the owner, 2026-09-24):
  *
  *  19. ONE AUTHORITY           every server picks a town of its own at boot and publishes it before anybody joins;
  *                              every joiner gets that town, nothing a client sends or does moves it, only MP-22 does
@@ -306,7 +306,7 @@ function fakeStore(name) {
 
 let guid = 0;
 /**
- * `pin`: a ServerStorage attribute pz_town_seed on this server (MP-24: a developer pinning the first town); left out,
+ * `pin`: a ServerStorage attribute pz_town_seed on this server (MP-26: a developer pinning the first town); left out,
  * the fake Roblox has no ServerStorage at all -- GetService throws, as it did before the pin existed, and the server
  * picks its own seed. `studio`: RunService:IsStudio(). `privateId` / `privateOwner`: game.PrivateServerId and
  * PrivateServerOwnerId (a private server with an owner keeps its town across sessions, server/save/privateTown.ts).
@@ -696,7 +696,7 @@ section("1) everybody dies: after the 30 s window the world ends ONCE and a new 
 	const revA = s.save(a).runRev;
 	check(
 		Number.isInteger(oldSeed) && oldSeed >= 1 && oldSeed <= 2147483646,
-		"a server opens on a town of its own, the seed it picked at boot (MP-24; section 19 goes through it)",
+		"a server opens on a town of its own, the seed it picked at boot (MP-26; section 19 goes through it)",
 		`${oldSeed}`,
 	);
 	check(
@@ -1422,15 +1422,35 @@ section("8) New game never draws a living survivor the server holds dead (the ow
 		`netActive() check at ${liveAt}, fallback at ${fallAt}`,
 	);
 	const lang = readFileSync(join(SRC, "shared/data/lang.ts"), "utf8");
+	const gameOver = readFileSync(join(SRC, "client/onboarding/gameOver.ts"), "utf8");
+	// the death screen (UI-13) tells the two endings apart instead of hedging between them: somebody standing -> you
+	// wake at first light; nobody -> the town falls unless somebody pays, and a new town begins at day 1
 	check(
 		/"Rebirth wakes you now\. New game starts a new life at day 1,#which wakes at first light\./.test(lang) &&
-			/"You wake at first light\.#If nobody is left standing, a new town begins at day 1\."/.test(lang),
-		"the texts say what really happens: the new life wakes at first light, a new town if nobody is left (lang.ts)",
+			/"You wake at first light\."/.test(lang) &&
+			/"No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell\."/.test(lang) &&
+			/tr\("You wake at first light\."\)/.test(gameOver) &&
+			/tr\("No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell\."\)/.test(
+				gameOver,
+			),
+		"the texts say what really happens: first light while somebody stands, a new town at day 1 when nobody does " +
+			"(lang.ts, gameOver.ts)",
 	);
 	check(
-		!/The town is not yours to restart/.test(readFileSync(join(SRC, "client/onboarding/gameOver.ts"), "utf8")),
+		!/The town is not yours to restart/.test(gameOver),
 		"…and the wait no longer says the town cannot be restarted (it can: MP-22)",
 	);
+	{
+		// the death screen counts the town's fall itself (the server does not publish its window): the same 30 s. Read
+		// from the source: the client module needs the UI shims this suite does not load
+		const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+		const WORLD_WIPE_S = Number(gameOver.match(/export const WORLD_WIPE_S = (\d+(?:\.\d+)?);/)?.[1]);
+		check(
+			WORLD_WIPE_S === WIPE_DECISION_S,
+			"the death screen's count to the town's fall (gameOver.ts WORLD_WIPE_S) is the server's window (life.ts)",
+			`${WORLD_WIPE_S} s / ${WIPE_DECISION_S} s`,
+		);
+	}
 });
 
 // ================================================================ 9: once per wipe
@@ -2164,7 +2184,7 @@ section("18) an owed new life is not lost when the load step that grants it thro
 	);
 });
 
-// ================================================================ 19: one authority on the town (MP-24)
+// ================================================================ 19: one authority on the town (MP-26)
 
 section(
 	"19) the server picks its town and owns it: every joiner gets it, only the end of the world replaces it",
@@ -2317,7 +2337,7 @@ section(
 	},
 );
 
-// ================================================================ 20: a private server keeps its town (MP-24)
+// ================================================================ 20: a private server keeps its town (MP-26)
 
 section("20) a private server keeps its town across its sessions; a public one never does", () => {
 	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));

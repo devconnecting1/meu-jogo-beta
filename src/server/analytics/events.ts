@@ -7,10 +7,11 @@
  *
  *   1. THE SERVER'S OWN NUMBERS. Every event reads the live save the server writes itself (coins, the life's day,
  *      `lifeNights`, `zombieKills`, `titles`, the level) at the instant the server changes it, or once a second
- *      (`poll`). Nothing a client reports is ever an event. The one exception is a UX flag with no value in it --
- *      `tutorialDone` / `firstInstall`, the answer to "Do you want to watch the tutorial?" -- which only the client
- *      can know; it is read from the server's copy of the save, never from the report, and it can only ever move
- *      that player's own onboarding funnel.
+ *      (`poll`). Nothing a client reports is ever an event. The two exceptions are UX facts with no value in them
+ *      that only the client can know: the answer to "Do you want to watch the tutorial?" (`tutorialDone` /
+ *      `firstInstall`, read from the server's copy of the save, never from the report) and "the shop is open"
+ *      (the `viewShop` ShopAction, rate-limited here, its fields all the server's). Either can only ever move that
+ *      player's own funnel -- the docs' own pattern (funnel-events.md "Protect your funnels from exploiters").
  *   2. AGGREGATES, NEVER PER KILL. A horde fight makes several kills a second across six survivors; one event each
  *      would eat the whole budget in one fight. Kills are only ever a count at a natural checkpoint (the first one
  *      of a new player, a session summary), crafts and items used likewise.
@@ -32,15 +33,17 @@
  *      `pz_analytics_*` -- and prints it when the Workspace attribute `pz_analytics_echo` is true. A published TEST
  *      experience is its own universe with its own dashboards, which keeps test play out of the real ones.
  *
- * Why no LogProgressionEvent: the engine reference says it "does not currently display in any Roblox-provided
- * charts". The level curve is a one-time FUNNEL instead ("Levels"), which the Funnel page does chart.
+ * Why no LogProgressionEvent (nor its Start/Complete/Fail shortcuts): the engine reference still says it "does not
+ * currently display in any Roblox-provided charts" (checked 2026-09-24), and no page lists it. The level curve is a
+ * one-time FUNNEL instead ("Levels"), the nights are two ("NightSurvival" per life, "Night" per night), all of which
+ * the Funnel page charts.
  */
 import { GAME_NAME } from "shared/module";
-import { COSTUMES, SHOP_PACKS } from "shared/data/shop";
+import { COSTUMES, SHOP_PACKS, rebirthPrice } from "shared/data/shop";
 import { TITLES, TitleId } from "shared/data/titles";
 import { PlayerSaveData, ownsTitle } from "shared/game/save";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
-import { isNightAt } from "shared/sim/clock";
+import { crossed, isNightAt } from "shared/sim/clock";
 import type { BackpackOutcome } from "../sim/craft";
 import type { WipeReport } from "../sim/life";
 import type { WorldEnd } from "../sim/worldReset";
@@ -103,6 +106,59 @@ export const NIGHT_STEP_NAMES = [
 export const LEVEL_FUNNEL = "Levels";
 export const LEVEL_STEPS = [1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
 
+/**
+ * The recurring funnel of ONE NIGHT lived in the city (funnelSessionId: a GUID drawn at 19:00, as the docs advise for
+ * a funnel with no natural key). Only a survivor standing in the city at nightfall enters it -- one who walks in at
+ * 23:00 would otherwise count as having lived 19:00 and 22:00 (funnel-events.md "Skipped steps") -- and the night
+ * closes at their death or at a step they were not standing in the city for. The hours are the waves of the
+ * original's table (19:00, 22:00, 01:00, shared/sim/clock.ts), the midnight that pays the day, and the dawn.
+ */
+export const NIGHT_PHASE_FUNNEL = "Night";
+export const NIGHT_PHASE_HOURS = [19, 22, 0, 1, 6];
+export const NIGHT_PHASE_NAMES = [
+	"Wave 1 (19:00)",
+	"Wave 2 (22:00)",
+	"Midnight (00:00)",
+	"Wave 3 (01:00)",
+	"Dawn (06:00)",
+];
+/** a clock that moved more than this between two reads jumped (an admin's clock, a new town): nothing was lived */
+const CLOCK_JUMP_H = 2;
+
+/**
+ * The recurring funnel of ONE DEATH: did it end in a paid Rebirth? funnelSessionId `death-<life>-<nth death of the
+ * life>`, a natural key (funnel-events.md "Item upgrades"): the same on every server, so a Rebirth bought from the
+ * lobby of another server still closes the death it answers. `lifeDeaths` counts every death of the life, the
+ * life's key (`lifeKeyOf`) survives a Rebirth -- so each death is its own session and never reuses one.
+ */
+export const REBIRTH_FUNNEL = "Rebirth";
+export const REBIRTH_STEPS = ["Died", "Rebirth bought"];
+
+/**
+ * The recurring funnel of ONE VISIT to the shop (funnelSessionId: a GUID drawn when it opens): opened (the client's
+ * `viewShop`, the one UX fact of rule 1), a buy asked for (a well-formed request, before the server decides), bought
+ * (the server accepted it). A purchase with no open visit starts no funnel: it would count "Opened" as done.
+ */
+export const SHOP_FUNNEL = "Shop";
+export const SHOP_STEPS = ["Opened", "Tried to buy", "Bought"];
+/** the screens a visit can open on (the ShopAction's `screen`): the packs of client/ui/shop.ts, the wardrobe (MON-04) */
+export const SHOP_SCREENS = ["Packs", "Wardrobe"];
+/** a visit is over this long after it opened (s) */
+export const SHOP_VISIT_S = 600;
+/** a new visit opens at most this often per player (s), and at most SHOP_VISITS_MAX times in a session */
+export const SHOP_OPEN_MIN_S = 1;
+export const SHOP_VISITS_MAX = 30;
+
+/** a living boss this close to a body at its death is what killed it: a needle's reach (shared/sim/ai/bossBrain.ts) */
+export const BOSS_REACH = 900;
+
+/**
+ * The weapon kinds of the kill credit (shared/data/kinds.ts WeaponKind, 1-8), by name, for WeaponKills. A machine's
+ * kill (a turret, a drone: MACHINE_KILL) and a kill whose weapon the credit could not name (-1) have their own.
+ */
+export const WEAPON_KIND_NAMES = ["Rifle", "Pistol", "MG", "Shotgun", "Sniper", "Bow", "Melee", "Special"];
+export const MACHINE_KILL = 0;
+
 /** LogCustomEvent names (100 allowed) */
 export const EVENT = {
 	TutorialChoice: "TutorialChoice",
@@ -113,6 +169,10 @@ export const EVENT = {
 	SessionKills: "SessionKills",
 	Crafted: "Crafted",
 	ItemsUsed: "ItemsUsed",
+	/** a session ended: where the player quit from, and when (the quit point) */
+	SessionEnded: "SessionEnded",
+	/** a session's killing blows with one kind of weapon (one per kind used, on leaving) */
+	WeaponKills: "WeaponKills",
 } as const;
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
@@ -145,8 +205,13 @@ export interface CustomFields {
 	CustomField03?: string;
 }
 
+/**
+ * A funnel's breakdowns only read the fields of its FIRST step (the engine reference, LogFunnelStepEvent: "Funnel
+ * breakdowns only consider the user and event values from the first step in a funnel session"), so only step 1 of a
+ * funnel carries any.
+ */
 export type AnalyticsEvent =
-	| { kind: "onboarding"; player: Player; step: number; name: string }
+	| { kind: "onboarding"; player: Player; step: number; name: string; fields?: CustomFields }
 	| {
 			kind: "funnel";
 			player: Player;
@@ -155,6 +220,7 @@ export type AnalyticsEvent =
 			session: string | undefined;
 			step: number;
 			name: string;
+			fields?: CustomFields;
 	  }
 	| {
 			kind: "economy";
@@ -211,10 +277,68 @@ function killBucket(kills: number): string {
 	return "200+";
 }
 
+/** the coins a player holds, in the steps of the catalogue's prices (packs cost 20-60, a costume more) */
+export function coinBucket(coins: number): string {
+	if (coins < 10) return "0-9";
+	if (coins < 50) return "10-49";
+	if (coins < 200) return "50-199";
+	return "200+";
+}
+
+/** "1", "2", "3", "4+": which continue of the life a Rebirth is (its price climbs with each, shared/data/shop.ts) */
+function continueOf(nth: number): string {
+	return nth >= 4 ? "4+" : tostring(math.max(1, nth));
+}
+
+/** WeaponKills' field: the kind's name, "Machine" for a turret's or a drone's kill, "Other" when not known */
+export function weaponName(kind: number): string {
+	if (kind === MACHINE_KILL) return "Machine";
+	return WEAPON_KIND_NAMES[kind - 1] ?? "Other";
+}
+
+/** what a body carries into its death, as far as the cause goes (a PlayerState is one) */
+export interface DeathBody {
+	x: number;
+	y: number;
+	/** 0 = starving: the hunger drain is taking hp (shared/sim/playerMove.ts) */
+	hungry: number;
+	buffs: { poison: number };
+}
+
+/** a boss as far as the cause goes (a BossState is one) */
+export interface DeathBoss {
+	x: number;
+	y: number;
+	hp: number;
+}
+
+/**
+ * Why a survivor died, from what the server holds at that instant (the damage itself carries no source): starving,
+ * poisoned, a living boss within a needle's reach, or else the horde. Low cardinality by construction: four values.
+ */
+export function causeOfDeath(body: DeathBody | undefined, bosses: ReadonlyArray<DeathBoss> | undefined): string {
+	if (body === undefined) return "Cause - Unknown";
+	if (body.hungry <= 0) return "Cause - Hunger";
+	if (body.buffs.poison > 0) return "Cause - Poison";
+	if (bosses !== undefined) {
+		for (const b of bosses) {
+			const dx = b.x - body.x;
+			const dy = b.y - body.y;
+			if (b.hp > 0 && dx * dx + dy * dy <= BOSS_REACH * BOSS_REACH) return "Cause - Boss";
+		}
+	}
+	return "Cause - Horde";
+}
+
 /** a life's funnel session: `runRev` less the continues bought in it -- a paid Rebirth moves both, a new life resets
  * `deathCount` and moves `runRev`, so the key holds through a life and every later life gets a larger one */
 export function lifeKeyOf(save: PlayerSaveData): number {
 	return save.runRev - save.deathCount;
+}
+
+/** the key of one death's Rebirth funnel: the same for the death and for the Rebirth that answers it */
+export function deathKeyOf(save: PlayerSaveData): string {
+	return `death-${lifeKeyOf(save)}-${save.lifeDeaths}`;
 }
 
 /** the highest step of `steps` that `value` reached (1-based), or 0 */
@@ -270,9 +394,39 @@ interface Entry {
 	cooked: number;
 	smelted: number;
 	used: number;
+	/** killing blows of this session by weapon kind (`weaponName`), counted per kill, sent once on leaving */
+	weaponKills: Map<number, number>;
 	/** clock() when the player left, or undefined */
 	leftAt?: number;
 	summarized: boolean;
+	/** a first visit (the save was created this session) */
+	fresh: boolean;
+	/** clock() when the save loaded: the session's length on leaving */
+	loadedAt: number;
+	/** where the last read found them (`poll`): a body in the city, and the world's hour a night one */
+	inWorld: boolean;
+	atNight: boolean | undefined;
+	/** tonight's Night funnel session, while it is open */
+	night?: { id: string; step: number };
+	/** the shop visit that is open, and the rate guard on opening one */
+	shop?: { id: string; at: number; step: number };
+	shopOpenedAt: number;
+	shopVisits: number;
+}
+
+/**
+ * The world as analytics reads it, bound by server/net/mpHost.ts once the town stands (`bindWorld`): the clock the
+ * Night funnel follows and where each player is. Absent (MP_PHASE 0, the pure tests) the funnel that needs it is off.
+ */
+export interface WorldView {
+	/** the world clock's hour, 0-24 */
+	dayTime(): number;
+	/** the world's day (it turns at midnight) */
+	day(): number;
+	/** this player's body in the city, or undefined in the lobby */
+	bodyOf(player: Player): { dead: boolean } | undefined;
+	/** survivors standing in the city (alive) */
+	standing(): number;
 }
 
 export interface AnalyticsOptions {
@@ -280,6 +434,8 @@ export interface AnalyticsOptions {
 	clock: () => number;
 	/** the CCU the cap is computed for; defaults to the players this module tracks */
 	players?: () => number;
+	/** a new funnelSessionId (HttpService:GenerateGUID in the game, a counter in a test) */
+	newId?: () => string;
 }
 
 /**
@@ -308,11 +464,30 @@ export class ServerAnalytics {
 	private ringCount = 0;
 	private readonly deferred = new Array<AnalyticsEvent>();
 	private lastFault = -math.huge;
+	private readonly newId: () => string;
+	private idSerial = 0;
+	private world?: WorldView;
+	/** the world clock at the last read, to find the hours crossed since (the Night funnel) */
+	private lastHour?: number;
+	private lastDay?: number;
 
 	constructor(sink: AnalyticsSink, options: AnalyticsOptions) {
 		this.sink = sink;
 		this.clock = options.clock;
 		this.playerCount = options.players;
+		this.newId =
+			options.newId ??
+			(() => {
+				this.idSerial += 1;
+				return `s${this.idSerial}`;
+			});
+	}
+
+	/** the town the Night funnel follows (server/net/mpHost.ts); undefined when it stops */
+	bindWorld(world: WorldView | undefined): void {
+		this.world = world;
+		this.lastHour = undefined;
+		this.lastDay = undefined;
 	}
 
 	// ------------------------------------------------------------ the rate guard
@@ -433,7 +608,10 @@ export class ServerAnalytics {
 		const now = this.clock();
 		if (now - this.lastFault < FAULT_LOG_S) return;
 		this.lastFault = now;
-		warn(`[${GAME_NAME}] analytics: ${where} failed (${this.stats.faults} so far): ${tostring(err)}`);
+		// the Error Report groups by message (error-report.md): the running count would make every warning a new row,
+		// so it goes to the log line after it (and to `stats.faults`, which the admin panel reads)
+		warn(`[${GAME_NAME}] analytics: ${where} failed: ${tostring(err)}`);
+		print(`[${GAME_NAME}] analytics: ${this.stats.faults} failure(s) so far`);
 	}
 
 	// ------------------------------------------------------------ the emitters
@@ -456,9 +634,20 @@ export class ServerAnalytics {
 		this.send({ kind: "economy", player: e.player, flow, amount, balance: math.max(0, balance), tx, sku, fields });
 	}
 
-	private onboardingStep(e: Entry, step: number): void {
+	private onboardingStep(e: Entry, step: number, fields?: CustomFields): void {
 		e.onboardStep = step;
-		this.send({ kind: "onboarding", player: e.player, step, name: ONBOARDING_STEPS[step - 1] });
+		this.send({ kind: "onboarding", player: e.player, step, name: ONBOARDING_STEPS[step - 1], fields });
+	}
+
+	private funnel(
+		e: Entry,
+		funnel: string,
+		session: string | undefined,
+		step: number,
+		name: string,
+		fields?: CustomFields,
+	): void {
+		this.send({ kind: "funnel", player: e.player, funnel, session, step, name, fields });
 	}
 
 	// ------------------------------------------------------------ sessions
@@ -482,9 +671,11 @@ export class ServerAnalytics {
 	/**
 	 * A session's save finished loading (server/main.server.ts `loadSession`, also on a retry). `status` "new" is a
 	 * first visit: the funnel's first step and the welcome gift. The save table is the session's LIVE one, which the
-	 * server writes in place for the whole session.
+	 * server writes in place for the whole session. `arm` is what an experiment decided for this new save
+	 * (server/config/experiments.ts, e.g. "Welcome pack - None"): the first step carries it, which is the only step a
+	 * funnel's breakdown reads -- the onboarding funnel of each arm, side by side.
 	 */
-	sessionLoaded(player: Player, status: string, save: PlayerSaveData): void {
+	sessionLoaded(player: Player, status: string, save: PlayerSaveData, arm?: string): void {
 		const old = this.entries.get(player);
 		if (old !== undefined) this.bySave.delete(old.save);
 		const ephemeral = status !== "ok" && status !== "new";
@@ -510,12 +701,19 @@ export class ServerAnalytics {
 			cooked: old?.cooked ?? 0,
 			smelted: old?.smelted ?? 0,
 			used: old?.used ?? 0,
+			weaponKills: old?.weaponKills ?? new Map<number, number>(),
 			summarized: false,
+			fresh: fresh || (old !== undefined && old.fresh),
+			loadedAt: old?.loadedAt ?? this.clock(),
+			inWorld: old !== undefined && old.inWorld,
+			atNight: old?.atNight,
+			shopOpenedAt: old?.shopOpenedAt ?? -math.huge,
+			shopVisits: old?.shopVisits ?? 0,
 		};
 		this.entries.set(player, e);
 		this.bySave.set(save, e);
 		if (fresh) {
-			this.onboardingStep(e, 1);
+			this.onboardingStep(e, 1, arm !== undefined ? { CustomField01: arm } : undefined);
 			// freshSave's gift: a brand-new save holds nothing else yet
 			this.economy(e, "Source", save.money, save.money, TX_ONBOARDING, SKU.WelcomeGift);
 		} else if (e.onboarding) {
@@ -533,6 +731,7 @@ export class ServerAnalytics {
 		const e = this.entries.get(player);
 		if (e === undefined) return;
 		e.entered = true;
+		e.inWorld = true;
 		if (e.onboarding) this.advanceOnboarding(e);
 	}
 
@@ -547,9 +746,26 @@ export class ServerAnalytics {
 	private summarize(e: Entry): void {
 		if (e.summarized) return;
 		e.summarized = true;
-		if (!e.entered || e.ephemeral) return;
+		if (e.ephemeral) return;
+		// the quit point, lobby sessions included (a new player who never walks in is the drop-off that matters most).
+		// Where and when come from the last once-a-second read, never from now: the host's own PlayerRemoving may
+		// already have taken the body out of the city (the two handlers run in no set order)
+		const minutes = math.max(0, (e.leftAt ?? this.clock()) - e.loadedAt) / 60;
+		const where = e.save.runOver ? "Dead" : e.inWorld ? "City" : "Lobby";
+		const fields: CustomFields = {
+			CustomField01: `Where - ${where}`,
+			CustomField03: e.fresh ? "Visit - First" : "Visit - Returning",
+		};
+		if (e.atNight !== undefined) fields.CustomField02 = e.atNight ? "Time - Night" : "Time - Day";
+		this.custom(e, EVENT.SessionEnded, math.floor(minutes * 10 + 0.5) / 10, fields);
+		if (!e.entered) return;
 		const kills = math.max(0, e.save.zombieKills - e.killsAtLoad);
 		this.custom(e, EVENT.SessionKills, kills, { CustomField01: `Kills - ${killBucket(kills)}` });
+		// one per kind actually used, in the kinds' order: a session is 1-3 of them, never one per kill
+		for (let kind = -1; kind <= WEAPON_KIND_NAMES.size(); kind++) {
+			const n = e.weaponKills.get(kind) ?? 0;
+			if (n > 0) this.custom(e, EVENT.WeaponKills, n, { CustomField01: `Weapon - ${weaponName(kind)}` });
+		}
 		if (e.crafted > 0) this.custom(e, EVENT.Crafted, e.crafted, { CustomField01: "Kind - Crafted" });
 		if (e.cooked > 0) this.custom(e, EVENT.Crafted, e.cooked, { CustomField01: "Kind - Cooked" });
 		if (e.smelted > 0) this.custom(e, EVENT.Crafted, e.smelted, { CustomField01: "Kind - Smelted" });
@@ -567,6 +783,7 @@ export class ServerAnalytics {
 	poll(): void {
 		const now = this.clock();
 		const gone = new Array<Player>();
+		const hours = this.hoursCrossed();
 		for (const [player, e] of this.entries) {
 			// a removal this module missed (a Player already parented to nil) is a leave too
 			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player);
@@ -575,6 +792,7 @@ export class ServerAnalytics {
 				continue;
 			}
 			this.pollEntry(e);
+			for (const step of hours) this.nightPhase(e, step);
 		}
 		for (const player of gone) {
 			const e = this.entries.get(player);
@@ -584,8 +802,69 @@ export class ServerAnalytics {
 		this.drain();
 	}
 
+	/**
+	 * The Night funnel's steps whose hour the world clock crossed since the last read, in the night's order (one at a
+	 * time at 1 Hz; several after a hitch). None on the first read, nor across a jump -- an admin's clock or a new town
+	 * lived through nothing.
+	 */
+	private hoursCrossed(): Array<number> {
+		const out = new Array<number>();
+		const w = this.world;
+		if (w === undefined) return out;
+		const hour = w.dayTime();
+		const day = w.day();
+		const prevHour = this.lastHour;
+		const prevDay = this.lastDay;
+		this.lastHour = hour;
+		this.lastDay = day;
+		if (prevHour === undefined || prevDay === undefined) return out;
+		let elapsed = -1;
+		if (day === prevDay) elapsed = hour - prevHour;
+		else if (day === prevDay + 1) elapsed = hour + 24 - prevHour;
+		if (elapsed <= 0 || elapsed > CLOCK_JUMP_H) return out;
+		for (let i = 0; i < NIGHT_PHASE_HOURS.size(); i++) {
+			if (crossed(prevHour, hour, NIGHT_PHASE_HOURS[i])) out.push(i + 1);
+		}
+		return out;
+	}
+
+	/** one hour of the Night funnel for one player: nightfall opens tonight's session, each later hour moves it on */
+	private nightPhase(e: Entry, step: number): void {
+		const w = this.world;
+		if (w === undefined || e.ephemeral) return;
+		const body = w.bodyOf(e.player);
+		const standing = body !== undefined && !body.dead;
+		if (step === 1) {
+			e.night = undefined;
+			if (!standing) return;
+			e.night = { id: this.newId(), step: 1 };
+			const world = w.day();
+			this.funnel(e, NIGHT_PHASE_FUNNEL, e.night.id, 1, NIGHT_PHASE_NAMES[0], {
+				CustomField01: `World day - ${dayBucket(world)}`,
+				CustomField02: `Life day - ${dayBucket(e.save.day)}`,
+				CustomField03: w.standing() <= 1 ? "Survivors - Solo" : "Survivors - Group",
+			});
+			return;
+		}
+		const night = e.night;
+		if (night === undefined) return;
+		// not standing in the city for this hour (dead, in the lobby), or an hour missed: tonight is over for them
+		if (!standing || step !== night.step + 1) {
+			e.night = undefined;
+			return;
+		}
+		night.step = step;
+		this.funnel(e, NIGHT_PHASE_FUNNEL, night.id, step, NIGHT_PHASE_NAMES[step - 1]);
+		if (step >= NIGHT_PHASE_HOURS.size()) e.night = undefined;
+	}
+
 	private pollEntry(e: Entry): void {
 		const save = e.save;
+		const w = this.world;
+		if (w !== undefined) {
+			e.inWorld = w.bodyOf(e.player) !== undefined;
+			e.atNight = isNightAt(w.dayTime());
+		}
 		const key = lifeKeyOf(save);
 		if (key !== e.lifeKey) {
 			// a new life (New game, a world's end) -- or, rarely, a free Rebirth or an admin edit moving the key
@@ -679,15 +958,22 @@ export class ServerAnalytics {
 		const save = e.save;
 		if (req.kind === "buyPack" && typeIs(req.packId, "number")) {
 			const pack = SHOP_PACKS[req.packId];
-			if (pack !== undefined) this.economy(e, "Sink", price, save.money, TX_SHOP, pack.name);
+			if (pack === undefined) return;
+			// the category is the one breakdown that puts every pack against every costume in the same chart
+			this.economy(e, "Sink", price, save.money, TX_SHOP, pack.name, { CustomField01: "Category - Pack" });
+			this.shopStep(e, 3);
 		} else if (req.kind === "buyCostume" && typeIs(req.costumeId, "number")) {
 			const costume = COSTUMES[req.costumeId];
-			if (costume !== undefined) this.economy(e, "Sink", price, save.money, TX_SHOP, costume.name);
+			if (costume === undefined) return;
+			this.economy(e, "Sink", price, save.money, TX_SHOP, costume.name, { CustomField01: "Category - Costume" });
+			this.shopStep(e, 3);
 		} else if (req.kind === "rebirth") {
-			const nth = save.deathCount >= 4 ? "4+" : tostring(math.max(1, save.deathCount));
 			this.economy(e, "Sink", price, save.money, TX_CONTEXTUAL, SKU.Rebirth, {
-				CustomField01: `Continue - ${nth}`,
+				CustomField01: `Continue - ${continueOf(save.deathCount)}`,
 			});
+			// a PAID Rebirth answers the death it closes (the key survives the sale: `deathKeyOf`). One the daybreak
+			// already paid for (price 0, not a continue) is a free stand-up, not a conversion
+			if (price > 0 && !e.ephemeral) this.funnel(e, REBIRTH_FUNNEL, deathKeyOf(save), 2, REBIRTH_STEPS[1]);
 		} else if (req.kind === "newRun") {
 			this.lifeEnded(e, "New game");
 			// the new life waits for daybreak: it has not been lived until it stands
@@ -724,17 +1010,100 @@ export class ServerAnalytics {
 		e.lastDeaths = edited.deathCount;
 	}
 
-	/** the server killed this survivor (server/sim/life.ts `died`); `survivors` is who is in the world with them */
-	death(save: PlayerSaveData, dayTime: number, survivors: number): void {
+	/**
+	 * The server killed this survivor (server/sim/life.ts `died`, after `lifeDeaths` counted it). `survivors` is who
+	 * is in the world with them (kept for the callers; the group question moved to the Night funnel's first step);
+	 * `body` and `bosses` are what the cause is read from (`causeOfDeath`).
+	 */
+	death(
+		save: PlayerSaveData,
+		dayTime: number,
+		survivors: number,
+		body?: DeathBody,
+		bosses?: ReadonlyArray<DeathBoss>,
+	): void {
 		const e = this.entryOfSave(save);
 		if (e === undefined) return;
 		e.lastDay = save.day;
 		e.lastDeaths = save.deathCount;
+		// tonight is over for them: a Rebirth before the next hour is a new body, not a night lived through
+		e.night = undefined;
 		this.custom(e, EVENT.Died, save.day, {
 			CustomField01: `Life day - ${dayBucket(save.day)}`,
 			CustomField02: isNightAt(dayTime) ? "Time - Night" : "Time - Day",
-			CustomField03: survivors <= 1 ? "Survivors - Solo" : "Survivors - Group",
+			CustomField03: causeOfDeath(body, bosses),
 		});
+		if (e.ephemeral) return;
+		// the Rebirth funnel of this death: which continue it would be, whether the coins are there for it, how long
+		// the life it would save has lasted -- the three things the price of a Rebirth is weighed against
+		const price = rebirthPrice(save.deathCount);
+		this.funnel(e, REBIRTH_FUNNEL, deathKeyOf(save), 1, REBIRTH_STEPS[0], {
+			CustomField01: `Continue - ${continueOf(save.deathCount + 1)}`,
+			CustomField02: save.money >= price ? "Afford - Yes" : "Afford - No",
+			CustomField03: `Life day - ${dayBucket(save.day)}`,
+		});
+	}
+
+	/**
+	 * A killing blow the server credited to this survivor (server/sim/progress.ts `creditKill` / `creditMachineKill`,
+	 * past the assisted-run gate that `zombieKills` has too). Counted only -- the session's WeaponKills go out on
+	 * leaving (rule 2).
+	 */
+	kill(save: PlayerSaveData, weaponKind: number): void {
+		const e = this.entryOfSave(save);
+		if (e === undefined) return;
+		const kind = weaponKind === MACHINE_KILL || WEAPON_KIND_NAMES[weaponKind - 1] !== undefined ? weaponKind : -1;
+		e.weaponKills.set(kind, (e.weaponKills.get(kind) ?? 0) + 1);
+	}
+
+	/**
+	 * The client says the shop (screen 0, packs) or the wardrobe (1) just opened (server/main.server.ts `viewShop`):
+	 * a new visit, and the Shop funnel's first step. Everything the step carries is the server's -- the coins in the
+	 * save, whether a body is in the city -- and the guard below is what the docs ask of a client-fired step
+	 * (funnel-events.md "Protect your funnels from exploiters"): a known screen, one visit per SHOP_OPEN_MIN_S, at
+	 * most SHOP_VISITS_MAX a session. A client that lies moves its own funnel and nothing else.
+	 */
+	shopViewed(player: Player, screen: unknown): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.ephemeral || e.leftAt !== undefined) return;
+		if (!typeIs(screen, "number") || screen % 1 !== 0 || SHOP_SCREENS[screen] === undefined) return;
+		const now = this.clock();
+		if (now - e.shopOpenedAt < SHOP_OPEN_MIN_S || e.shopVisits >= SHOP_VISITS_MAX) return;
+		e.shopOpenedAt = now;
+		e.shopVisits += 1;
+		e.shop = { id: this.newId(), at: now, step: 1 };
+		const inCity = this.world !== undefined ? this.world.bodyOf(player) !== undefined : e.inWorld;
+		this.funnel(e, SHOP_FUNNEL, e.shop.id, 1, SHOP_STEPS[0], {
+			CustomField01: `Screen - ${SHOP_SCREENS[screen]}`,
+			CustomField02: `Coins - ${coinBucket(e.save.money)}`,
+			CustomField03: inCity ? "Where - City" : "Where - Lobby",
+		});
+	}
+
+	/** the open visit's next step (2 a buy asked for, 3 bought), once each; nothing without an open visit */
+	private shopStep(e: Entry, step: number): void {
+		const visit = e.shop;
+		if (visit === undefined) return;
+		if (this.clock() - visit.at > SHOP_VISIT_S) {
+			e.shop = undefined;
+			return;
+		}
+		if (visit.step >= step) return;
+		visit.step = step;
+		this.funnel(e, SHOP_FUNNEL, visit.id, step, SHOP_STEPS[step - 1]);
+	}
+
+	/**
+	 * A ShopAction arrived (server/main.server.ts `handleAction`, before it is decided): a well-formed purchase is the
+	 * visit's "Tried to buy" -- refused or not, which is what the step after it measures.
+	 */
+	shopRequest(player: Player, req: Record<string, unknown>): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.shop === undefined) return;
+		const pack = req.kind === "buyPack" && typeIs(req.packId, "number") && SHOP_PACKS[req.packId] !== undefined;
+		const costume =
+			req.kind === "buyCostume" && typeIs(req.costumeId, "number") && COSTUMES[req.costumeId] !== undefined;
+		if (pack || costume) this.shopStep(e, 2);
 	}
 
 	/** MON-05: the server granted a title (server/net/mpHost.ts `onTitleUnlocked`), once per title per save */
@@ -800,9 +1169,9 @@ function serviceSink(svc: AnalyticsService): AnalyticsSink {
 	return {
 		deliver(ev: AnalyticsEvent): void {
 			if (ev.kind === "onboarding") {
-				svc.LogOnboardingFunnelStepEvent(ev.player, ev.step, ev.name);
+				svc.LogOnboardingFunnelStepEvent(ev.player, ev.step, ev.name, ev.fields);
 			} else if (ev.kind === "funnel") {
-				svc.LogFunnelStepEvent(ev.player, ev.funnel, ev.session, ev.step, ev.name);
+				svc.LogFunnelStepEvent(ev.player, ev.funnel, ev.session, ev.step, ev.name, ev.fields);
 			} else if (ev.kind === "economy") {
 				const flow =
 					ev.flow === "Source" ? Enum.AnalyticsEconomyFlowType.Source : Enum.AnalyticsEconomyFlowType.Sink;
@@ -853,6 +1222,7 @@ function boot(): ServerAnalytics | undefined {
 	const RunService = game.GetService("RunService");
 	const Players = game.GetService("Players");
 	const Workspace = game.GetService("Workspace");
+	const HttpService = game.GetService("HttpService");
 	const [studioOk, studio] = pcall(() => RunService.IsStudio());
 	const inStudio = studioOk && studio === true;
 	let sink: AnalyticsSink;
@@ -863,7 +1233,11 @@ function boot(): ServerAnalytics | undefined {
 		if (!ok || svc === undefined) return undefined;
 		sink = serviceSink(svc as AnalyticsService);
 	}
-	const core = new ServerAnalytics(sink, { clock: () => os.clock() });
+	// funnelSessionIds with no natural key are GUIDs, as the engine reference recommends (LogFunnelStepEvent)
+	const core = new ServerAnalytics(sink, {
+		clock: () => os.clock(),
+		newId: () => HttpService.GenerateGUID(false),
+	});
 	active = core;
 	let acc = 0;
 	let shown = "";
@@ -871,7 +1245,10 @@ function boot(): ServerAnalytics | undefined {
 		acc += dt;
 		if (acc < POLL_S) return;
 		acc = 0;
+		// its own bar in a server dump (MicroProfiler, Timers mode), beside the simulation's PZ.* phases
+		debug.profilebegin("PZ.analytics");
 		const [ok, err] = pcall(() => core.poll());
+		debug.profileend();
 		if (!ok) core.fault("poll", err);
 		const s = core.stats;
 		const line = `${s.sent}|${s.deferred}|${s.dropped}`;
@@ -904,9 +1281,14 @@ function guard(fn: (core: ServerAnalytics) => void): void {
 
 // ---------------------------------------------------------------- the one-line hooks
 
-/** server/main.server.ts `loadSession`: the save loaded (`status` "new" = a first visit) */
-export function sessionLoaded(player: Player, status: string, save: PlayerSaveData): void {
-	guard(c => c.sessionLoaded(player, status, save));
+/** server/main.server.ts `loadSession`: the save loaded (`status` "new" = a first visit; `arm`, its experiment) */
+export function sessionLoaded(player: Player, status: string, save: PlayerSaveData, arm?: string): void {
+	guard(c => c.sessionLoaded(player, status, save, arm));
+}
+
+/** server/net/mpHost.ts: the town the Night funnel follows (undefined when the host stops) */
+export function bindWorld(world: WorldView | undefined): void {
+	guard(c => c.bindWorld(world));
 }
 
 /** server/net/mpHost.ts `admit`: a body in the city */
@@ -934,9 +1316,30 @@ export function adminEdit(save: PlayerSaveData, edited: PlayerSaveData): void {
 	guard(c => c.adminEdit(save, edited));
 }
 
-/** server/sim/life.ts `died` */
-export function death(save: PlayerSaveData, dayTime: number, survivors: number): void {
-	guard(c => c.death(save, dayTime, survivors));
+/** server/sim/life.ts `died`: the body and the bosses are read for the cause, inside the guard */
+export function death(
+	save: PlayerSaveData,
+	dayTime: number,
+	survivors: number,
+	body?: DeathBody,
+	bosses?: ReadonlyArray<DeathBoss>,
+): void {
+	guard(c => c.death(save, dayTime, survivors, body, bosses));
+}
+
+/** server/sim/progress.ts `creditKill` / `creditMachineKill`: counted, never an event of its own */
+export function kill(save: PlayerSaveData, weaponKind: number): void {
+	guard(c => c.kill(save, weaponKind));
+}
+
+/** server/main.server.ts `handleAction`, `viewShop`: the client opened the shop (0) or the wardrobe (1) */
+export function shopViewed(player: Player, screen: unknown): void {
+	guard(c => c.shopViewed(player, screen));
+}
+
+/** server/main.server.ts `handleAction`, before the request is decided */
+export function shopRequest(player: Player, req: Record<string, unknown>): void {
+	guard(c => c.shopRequest(player, req));
 }
 
 /** server/net/mpHost.ts `onTitleUnlocked` */

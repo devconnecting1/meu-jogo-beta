@@ -1,15 +1,15 @@
 /*
- * A private server's town, kept across its sessions (docs/DESIGN_RULES.md MP-24; docs/MULTIPLAYER.md §4.9, §7.5).
+ * A private server's town, kept across its sessions (docs/DESIGN_RULES.md MP-26; docs/MULTIPLAYER.md §4.9, §7.5).
  * SERVER ONLY.
  *
  * A private (VIP) server closes when its last player leaves, and the next time its owner and friends join it, Roblox
  * starts a new instance. Without this, every session of "the server of my clan" was a new town on day 1. The server
- * is still the one authority on its town (MP-24); this only lets the NEXT instance of the SAME private server pick up
+ * is still the one authority on its town (MP-26); this only lets the NEXT instance of the SAME private server pick up
  * where the last one stopped: the same seed (the same streets), the same world day. What stood on those streets --
  * constructions, doors, ground items -- was never kept across instances on any server (§6.1) and is not kept now.
  *
  *   - Only a private server with an owner (`PrivateServerId` ≠ "" and `PrivateServerOwnerId` ≠ 0). A public server
- *     never reads or writes this store: a public town lives and dies with its instance (MP-24). A reserved server
+ *     never reads or writes this store: a public town lives and dies with its instance (MP-26). A reserved server
  *     (Play solo, owner 0) is one-off, and is not kept either.
  *   - One key per private server (its PrivateServerId, `ProjectZ_PrivateTowns`, suffixed in Studio): the seed, the
  *     world day and when that world began. No UserId, no name: nothing here is anybody's personal data.
@@ -125,9 +125,11 @@ export function keepPrivateTown(current: () => PrivateTown | undefined): Private
 	while (!answered && os.clock() - t0 < LOAD_WAIT_S) task.wait(0.05);
 	// a late answer is ignored from here on: this session already opened its own town
 	const persists = answered && readOk;
-	let status = persists ? "ok" : `not kept (${answered ? tostring(readErr) : "the read did not answer in time"})`;
+	const why = answered ? tostring(readErr) : "the read did not answer in time";
+	let status = persists ? "ok" : `not kept (${why})`;
 	if (!persists) {
-		warn(`[${GAME_NAME}] private town could not be read: ${status}; this session opens a fresh town`);
+		// a fixed sentence (docs/ANALYTICS.md §10): the error text is the only thing in it
+		warn(`[${GAME_NAME}] private town could not be read (${why}); this session opens a fresh town`);
 	} else if (initial !== undefined) {
 		print(`[${GAME_NAME}] private server: its town is back (seed ${initial.seed}, day ${initial.day})`);
 	}

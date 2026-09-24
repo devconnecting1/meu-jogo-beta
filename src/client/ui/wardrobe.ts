@@ -74,6 +74,8 @@ export interface WardrobeHandlers {
 	onEquip: (equipId: number) => void;
 	/** take off what is worn in a slot (EquipSlot) */
 	onUnequip: (slot: number) => void;
+	/** the tab to open on: EquipSlot.Outfit or Pet (the Survivor screen's loadout tile of that slot); none = the first */
+	slot?: number;
 }
 
 // ---------------------------------------------------------------- layout (1120 x 630 design units)
@@ -226,6 +228,8 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	// a menu screen: see-through, over the town flyover behind the menus (UI-10), its window centred on the screen
 	const { root, body } = makeScreen(ctx.uiLayer, "Wardrobe", { transparency: 1, content: centredRect(WIN_W, WIN_H) });
 	const RunService = game.GetService("RunService");
+	// the Shop funnel's first step, on the wardrobe's screen (docs/ANALYTICS.md): fired and forgotten, as in shop.ts
+	task.spawn(() => invokeShopAction({ kind: "viewShop", screen: 1 }));
 
 	const win = Kit.Window(body, "Window", {
 		...centredRect(WIN_W, WIN_H),
@@ -519,6 +523,11 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			COLS,
 		);
 		pages.push(page);
+	}
+
+	// the Survivor screen's OUTFIT / PET tile asked for its slot's page
+	if (handlers.slot !== undefined) {
+		for (let i = 0; i < pages.size(); i++) if (pages[i].slot === handlers.slot) tab = i;
 	}
 
 	// ---- MON-05: the Titles page -- ROWS on the groove, "[None]" first, then every title in the data table's order
