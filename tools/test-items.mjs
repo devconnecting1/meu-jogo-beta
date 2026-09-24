@@ -803,18 +803,40 @@ section("A7. every weapon can be fed in play: its ammo, oil or charge comes from
 		INV.addItem(save, s.kind, s.index, 1);
 		for (const f of ALL_POOLS) if (save[f] !== before[f]) raised.add(f);
 	}
+	// the stun gun's charge has no item: it is poured in at a battery box with E (server/sim/power.ts, ELE-07)
+	{
+		const { ServerPower } = require(join(SRC, "server/sim/power.ts"));
+		const w = W.serverWorld(W.createWorld(2000, 2000));
+		const save = bareSave();
+		save.invenWeapon[STUN_GUN] = 1;
+		const body = Ply.createPlayer(save, 1000, 1060);
+		const power = new ServerPower({ world: w, clock: { dayTime: 12, isRaining: false, darkAlpha: 0 } });
+		const box = W.addSolid(w, {
+			kind: "structure",
+			x: 1000,
+			y: 1000,
+			w: 40,
+			h: 40,
+			hp: 300,
+			hpMax: 300,
+			destructible: true,
+			tags: "battery",
+			placeable: 6,
+		});
+		power.note(box, true);
+		const out = power.act(0, body, save, box);
+		if (save.electric > 0) raised.add("electric");
+		check(
+			out?.kind === "charged" && save.electric === 100,
+			"a battery box charges the stun gun with E: 100 a press (ELE-07; was W2)",
+			JSON.stringify(out?.kind),
+		);
+	}
 	const fed = GUNS.concat([WEAPONS[CHAINSAW]]);
-	const starved = fed.filter(w => !raised.has(fuelField(w)));
 	checkRows(
-		"every gun but the stun gun has a source for its feed",
-		fed.filter(w => w.id !== STUN_GUN),
+		"every gun has a source for its feed (ammo and oil in loot, the stun gun's charge at a battery box)",
+		fed,
 		w => raised.has(fuelField(w)) || `nothing in play gives ${fuelField(w)}`,
-	);
-	knownBug(
-		"W2",
-		starved.length === 1 && starved[0].id === STUN_GUN,
-		"the Stun gun can be crafted but never fired: nothing in play ever adds `save.electric` (its charge)",
-		`starved: ${starved.map(w => w.name).join(", ") || "none"}`,
 	);
 });
 
@@ -2206,7 +2228,8 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 		},
 	);
 	{
-		// a placed lamp starts dark; E switches it on, and then it lights the night for the horde's visibility
+		// a placed lamp starts dark; E switches it on, and then -- fed by a battery box in reach of its cable (ELE-03, an
+		// electric lamp) -- it lights the night for the horde's visibility
 		const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
 		const world = W.serverWorld(W.createWorld(8000, 8000));
 		const sim = new ServerSimulation({
@@ -2230,6 +2253,20 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 			tags: "lamp",
 			powered: false,
 			placeable: 4,
+			owner: 0,
+		});
+		// its battery box, 100 u away (out of E's reach, inside the 300 u of the cable)
+		W.addSolid(world, {
+			kind: "structure",
+			x: 3130,
+			y: 2980,
+			w: 40,
+			h: 40,
+			hp: 300,
+			hpMax: 300,
+			destructible: true,
+			tags: "battery",
+			placeable: 6,
 			owner: 0,
 		});
 		const spot = () => {
@@ -2368,9 +2405,78 @@ section("D7. what each build does once it stands, and whether the content stage 
 	]
 		.map(source)
 		.join("\n");
+	const POW = require(join(SRC, "shared/data/power.ts"));
+	const { ServerPower } = require(join(SRC, "server/sim/power.ts"));
+	const { ServerTurrets } = require(join(SRC, "server/sim/turrets.ts"));
+	/**
+	 * What an electric build does, MEASURED through the server's grid and turrets (server/sim/power.ts, turrets.ts;
+	 * DESIGN_RULES ELE-01..08): placed next to a half-charged battery box at noon, with its survivor beside it.
+	 * Undefined when it is not a machine, or when it did nothing.
+	 */
+	const machineDoes = id => {
+		const def = PLACEABLES[id];
+		const m = POW.MACHINES[def.tag];
+		if (m === undefined) return undefined;
+		const w = W.serverWorld(W.createWorld(3000, 3000));
+		const save = bareSave();
+		save.invenWeapon[POW.STUN_GUN_ID] = 1;
+		const body = Ply.createPlayer(save, 1000, 1300);
+		const power = new ServerPower({
+			world: w,
+			clock: { dayTime: 12, isRaining: false, darkAlpha: 0 },
+			saveOf: () => save,
+			bodyOf: () => body,
+		});
+		w.onSolidAdd = (_, s) => power.note(s, true);
+		const put = (pid, x, y) => {
+			const d = PLACEABLES[pid];
+			return W.addSolid(w, { ...placedSolid(d, { x, y, w: d.w, h: d.h }, 0), placeable: pid, owner: 0 });
+		};
+		const s = put(id, 1000, 1000);
+		const box = m.role === "battery" ? s : put(6, 1150, 1000);
+		const bs = power.stateOf(box);
+		if (m.role !== "battery") bs.store /= 2;
+		const before = bs.store;
+		power.settle(1);
+		if (m.role === "battery") {
+			const e0 = save.electric;
+			power.act(0, body, save, s);
+			return save.electric > e0 ? "stores power, charges the stun gun" : undefined;
+		}
+		if (m.role === "generator") return bs.store > before ? "charges its battery box" : undefined;
+		if (m.role === "drone") {
+			power.act(0, body, save, s);
+			power.step(1 / 60, 1);
+			if (power.stateOf(s).pilot !== 0) return undefined;
+			return m.light ? "flies with its survivor, lighting the night" : "flies with its survivor, armed";
+		}
+		if (m.weapon !== undefined) {
+			const z = createZombie(1, 1032 + 150, 1032, 1);
+			z.hp = z.hpMax = 1e6;
+			const combat = new ServerCombat({ world: w, targets: { zombies: () => [z], bosses: () => [] } });
+			const turrets = new ServerTurrets({
+				world: w,
+				power,
+				zombiesNear: (x, y, r, t, out) => (Math.hypot(z.x - x, z.y - y) <= r ? out.push(z) : 0, out),
+				bosses: () => [],
+				damage: combat,
+			});
+			for (let t = 0; t < 60 && z.hp === 1e6; t++) turrets.step(t, TICK_DT);
+			return z.hp < 1e6 ? "shoots zombies on the server" : undefined;
+		}
+		if (!m.switched) return undefined;
+		power.act(0, body, save, s);
+		power.settle(0.25);
+		// the one craft rule (shared/sim/craftRule.ts): the cooker is the "cook" station beside it once the grid feeds it
+		if (def.tag === "cooker")
+			return SCRAFT.stationNear(w, s.x + s.w / 2, s.y + s.h + 60, "cook") === s ? "cooking heat" : undefined;
+		return s.powered === true ? (def.tag === "gps" ? "a beacon home" : "lights, on the grid") : undefined;
+	};
 	/** what a standing build of ETC index `id` does in the shipped game, or undefined */
 	const does = id => {
 		const def = PLACEABLES[id];
+		const machine = machineDoes(id);
+		if (machine !== undefined) return machine;
 		const solid = placedSolid(def, { x: 1000, y: 1000, w: def.w, h: def.h }, 0);
 		if (IQ.isLight(solid)) return "E lights it";
 		// VEI-05, measured and not grepped: E at it on the SERVER's world puts the survivor on it (D8 rides it)
@@ -2385,14 +2491,20 @@ section("D7. what each build does once it stands, and whether the content stage 
 	};
 	const builds = Object.keys(PLACEABLES).map(Number);
 	for (const id of builds) info(`${ETC_ITEMS[id].name}: ${does(id) ?? "nothing"}`);
-	const idle = builds.filter(id => does(id) === undefined);
-	// the powered and placed builds (turrets, drones, battery, generators, signal generator, cooker, vehicles) are the
-	// power stage's front: reported here until it lands. The cooker's hook is in place (craftRule isWorkingCooker)
-	knownBug(
-		"P1",
-		idle.length > 0,
-		"builds that cost a recipe and do nothing once placed (the turrets fire only in the pre-F2 client path; nothing reads generators, the cooker or the signal generator; a lamp drone cannot be switched on)",
-		idle.map(id => ETC_ITEMS[id].name).join(", "),
+	// fixed (ELE-01..08): the turrets, drones, battery box, generators, signal generator and cooker all have a job now,
+	// measured above through the server's grid and turrets -- the lamp and the lamp drone included
+	const machines = builds.filter(id => POW.MACHINES[PLACEABLES[id].tag] !== undefined);
+	checkRows(
+		"every electric build does its job once placed, on the server (ELE-01..08; was P1)",
+		machines.map(id => ({ id, name: ETC_ITEMS[id].name })),
+		row => machineDoes(row.id) !== undefined || "nothing",
+	);
+	// and the rest: stations, walls and doors, lights, and the vehicles (VEI-05, D8 rides them) -- P1 is fixed, and a build
+	// that stops doing anything fails here instead of reappearing as a known bug
+	checkRows(
+		"every build does something once placed (was BUG [P1]: the machines and the vehicles did nothing)",
+		builds.map(id => ({ id, name: ETC_ITEMS[id].name })),
+		row => does(row.id) !== undefined || "nothing",
 	);
 	// CON-03, as the owner decided it on 2026-09-23 ("Faz todos os itens, equipamentos, consumíveis, receitas e skills
 	// funcionarem"): no content lock hides anything -- every recipe of the data is live on both sides
@@ -2861,6 +2973,82 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 		const b = poisoned(withSkill(20, lv), true) - starving;
 		return (a > 0 && near(b, a / 2, 0.01)) || `poison ${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
 	};
+	// 13 Robotics and 14 Engineering: the machines their maker builds (server/sim/power.ts, turrets.ts; ELE-08)
+	{
+		const POW = require(join(SRC, "shared/data/power.ts"));
+		const { ServerPower } = require(join(SRC, "server/sim/power.ts"));
+		const { ServerTurrets } = require(join(SRC, "server/sim/turrets.ts"));
+		const { placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+		/** a grid of one maker (slot 0), with `ids` placed in a row; returns the states */
+		const grid = (s, ids) => {
+			const w = W.serverWorld(W.createWorld(3000, 3000));
+			const power = new ServerPower({
+				world: w,
+				clock: { dayTime: 12, isRaining: false, darkAlpha: 0 },
+				saveOf: slot => (slot === 0 ? s : undefined),
+			});
+			w.onSolidAdd = (_, solid) => power.note(solid, true);
+			const placed = ids.map((pid, i) => {
+				const d = PLACEABLES[pid];
+				return W.addSolid(w, {
+					...placedSolid(d, { x: 1000 + i * 110, y: 1000, w: d.w, h: d.h }, 0),
+					placeable: pid,
+					owner: 0,
+				});
+			});
+			return { w, power, placed, st: placed.map(solid => power.stateOf(solid)) };
+		};
+		/** one turret shot at its mean roll (random 0.5): the damage it deals */
+		const turretShot = s => {
+			const g = grid(s, [2, 6]);
+			g.power.settle(0.25);
+			const z = createZombie(1, 1032 + 150, 1032, 1);
+			z.hp = z.hpMax = 1e6;
+			const combat = new ServerCombat({
+				world: g.w,
+				targets: { zombies: () => [z], bosses: () => [] },
+				random: () => 0.5,
+			});
+			const turrets = new ServerTurrets({
+				world: g.w,
+				power: g.power,
+				zombiesNear: (x, y, r, t, out) => (Math.hypot(z.x - x, z.y - y) <= r ? out.push(z) : 0, out),
+				bosses: () => [],
+				damage: combat,
+				random: () => 0.5,
+			});
+			for (let t = 0; t < 12 && z.hp === 1e6; t++) turrets.step(t, TICK_DT);
+			return 1e6 - z.hp;
+		};
+		effect[13] = lv => {
+			const a = turretShot(bareSave());
+			const b = turretShot(withSkill(13, lv));
+			const dA = grid(bareSave(), [3]).st[0].store;
+			const dB = grid(withSkill(13, lv), [3]).st[0].store;
+			return (
+				(a === POW.TURRET_DAMAGE &&
+					b === Math.floor(POW.TURRET_DAMAGE * POW.ROBOTICS_DAMAGE) &&
+					dB === dA * 1.5) ||
+				`turret shot ${a} -> ${b}, drone battery ${dA} -> ${dB}`
+			);
+		};
+		/** a reactor's output a second into an empty box, and the box's capacity */
+		const reactor = s => {
+			const g = grid(s, [6, 8]);
+			const cap = g.st[0].store;
+			g.st[0].store = 0;
+			g.power.settle(1);
+			return { out: g.st[0].store, cap };
+		};
+		effect[14] = lv => {
+			const a = reactor(bareSave());
+			const b = reactor(withSkill(14, lv));
+			return (
+				(a.out === 6 && b.out === 9 && a.cap === 1000 && b.cap === 1200) ||
+				`generator ${a.out}/s -> ${b.out}/s, battery ${a.cap} -> ${b.cap}`
+			);
+		};
+	}
 	const measured = SKILLS.filter(k => effect[k.id] !== undefined);
 	checkRows("each measurable skill does what it says at every level", measured, k => {
 		for (let lv = 1; lv <= k.maxLevel; lv++) {
@@ -2892,18 +3080,26 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			"client/systems/craftSystem.ts",
 			"client/systems/interaction.ts",
 			"client/systems/daynight.ts",
+			// the electric grid and its turrets (Robotics, Engineering: ELE-08)
+			"shared/data/power.ts",
+			"server/sim/power.ts",
+			"server/sim/turrets.ts",
 		].map(rel => source(rel));
 		const reads = id => running.some(src => new RegExp(`skillLevels\\[${id}\\]|SKILL_[A-Z_]+ = ${id};`).test(src));
 		check(
 			reads(10) && reads(11),
 			"Thief and Chef are read by the code that runs (shared/sim/loot.ts SKILL_THIEF, shared/sim/craftRule.ts SKILL_CHEF; fixed 2026-09-23)",
 		);
+		// fixed: Robotics and Engineering are the grid's and the turrets' (their effect is measured above)
+		check(
+			reads(13) && reads(14),
+			"Robotics (13) and Engineering (14) are read by the running server: the grid and its turrets (ELE-08; was K1)",
+		);
 		const dead = SKILLS.filter(k => !reads(k.id));
-		// what is left is the power stage's (turrets and generators): owned by that front, hooks kept
-		knownBug(
-			"K1",
-			dead.length > 0 && dead.every(k => k.id === 13 || k.id === 14),
-			"skills that cost a point and do nothing in the shipped game (read by no running code): the turrets' and the generators' (the power stage)",
+		// fixed K1 (the power stage, 2026-09-23): every skill that costs a point is read by code that runs
+		check(
+			dead.length === 0,
+			"[K1] every skill that costs a point is read by the code the shipped game runs",
 			dead.map(k => `${k.name} (${k.detail})`).join("; "),
 		);
 	}

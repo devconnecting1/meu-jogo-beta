@@ -179,6 +179,11 @@ export interface AiRefs {
 	puddles?: Array<Puddle>;
 	sounds?: Array<SoundRing>;
 	explosions?: Array<Explosion>;
+	/**
+	 * Lights that MOVE, lit at night like a lamp: a lamp drone escorting a survivor (server/sim/power.ts `lights`,
+	 * ELE-05). A lamp on the ground is a solid and is found by the structure sweep; this is what is not a solid.
+	 */
+	carriedLights?: ReadonlyArray<{ x: number; y: number; r: number }>;
 }
 
 /**

@@ -662,6 +662,126 @@
 			"description": "a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp"
 		},
 		{
+			"name": "machineTurret",
+			"file": "machineTurret.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 16,
+			"description": "the turret's mount: an octagonal steel plate, the ring the head turns on, four bolts"
+		},
+		{
+			"name": "machineTurretHead",
+			"file": "machineTurretHead.png",
+			"kind": "sprite",
+			"w": 13,
+			"h": 8,
+			"description": "the turret's head: a blue dome and the barrel, pointing +x (it turns)"
+		},
+		{
+			"name": "machineShock",
+			"file": "machineShock.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 16,
+			"description": "the electric turret: copper coil rings round a steel terminal"
+		},
+		{
+			"name": "machineBattery",
+			"file": "machineBattery.png",
+			"kind": "sprite",
+			"w": 10,
+			"h": 10,
+			"description": "the battery box: blue case, the gauge window, the two posts"
+		},
+		{
+			"name": "machineSolar",
+			"file": "machineSolar.png",
+			"kind": "sprite",
+			"w": 18,
+			"h": 18,
+			"description": "the solar generator: nine blue cells in a steel frame"
+		},
+		{
+			"name": "machineReactor",
+			"file": "machineReactor.png",
+			"kind": "sprite",
+			"w": 20,
+			"h": 20,
+			"description": "the nuclear reactor: the vessel, its hazard band, the dome and the core"
+		},
+		{
+			"name": "machineOil",
+			"file": "machineOil.png",
+			"kind": "sprite",
+			"w": 18,
+			"h": 18,
+			"description": "the oil generator: the radiator grille, the red tank and its cap, the exhaust"
+		},
+		{
+			"name": "machineLamp",
+			"file": "machineLamp.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "the lamp: a floodlight head on its plate"
+		},
+		{
+			"name": "machinePadTurret",
+			"file": "machinePadTurret.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "the turret drone's pad: the charging ring and its contacts"
+		},
+		{
+			"name": "machinePadLamp",
+			"file": "machinePadLamp.png",
+			"kind": "sprite",
+			"w": 10,
+			"h": 10,
+			"description": "the lamp drone's pad"
+		},
+		{
+			"name": "machineDroneTurret",
+			"file": "machineDroneTurret.png",
+			"kind": "sprite",
+			"w": 11,
+			"h": 11,
+			"description": "the turret drone: four rotors, the body and its gun, pointing +x (it turns)"
+		},
+		{
+			"name": "machineDroneLamp",
+			"file": "machineDroneLamp.png",
+			"kind": "sprite",
+			"w": 11,
+			"h": 11,
+			"description": "the lamp drone: four rotors and the lamp"
+		},
+		{
+			"name": "machineBeacon",
+			"file": "machineBeacon.png",
+			"kind": "sprite",
+			"w": 12,
+			"h": 12,
+			"description": "the signal generator's base: the plate and the mast"
+		},
+		{
+			"name": "machineBeaconDish",
+			"file": "machineBeaconDish.png",
+			"kind": "sprite",
+			"w": 6,
+			"h": 7,
+			"description": "the signal generator's dish, facing +x (it turns)"
+		},
+		{
+			"name": "machineCooker",
+			"file": "machineCooker.png",
+			"kind": "sprite",
+			"w": 14,
+			"h": 12,
+			"description": "the cooker: a steel top with two plates and the knobs"
+		},
+		{
 			"name": "survivorsA",
 			"file": "survivorsA.png",
 			"kind": "sheet",

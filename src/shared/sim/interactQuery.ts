@@ -17,7 +17,10 @@ export const INTERACT_RADIUS = 80;
 export const SOLID_REACH = 40;
 export const DOOR_REACH = 30;
 
-/** tags that can be repaired with wood or steel */
+/**
+ * Tags that can be repaired with wood or steel. The machines (ELE-08) are the original's repair list
+ * (obj_player: turret, battery box, the three generators, the electric trap): steel, as the turret always was.
+ */
 export const REPAIRABLE: ReadonlyArray<string> = [
 	"craftdesk",
 	"craftdesk_pro",
@@ -26,8 +29,24 @@ export const REPAIRABLE: ReadonlyArray<string> = [
 	"iron_barricade",
 	"door",
 	"iron_door",
+	"electric_turret",
+	"battery",
+	"solar",
+	"reactor",
+	"oil_generator",
 	// only once it is broken (VEI-05): before that E rides it (`interactTarget`)
 	"vehicle",
+];
+
+/** machines mended with steel rather than wood */
+const STEEL_REPAIRED: ReadonlyArray<string> = [
+	"iron_barricade",
+	"turret",
+	"electric_turret",
+	"battery",
+	"solar",
+	"reactor",
+	"oil_generator",
 ];
 
 /** distance from (x, y) to the solid's rect (negative inside) */
@@ -41,9 +60,13 @@ export function isDoor(s: Solid): boolean {
 	return s.kind === "door" || s.kind === "iron_door";
 }
 
-/** a campfire, brazier or lamp: E switches it */
+/**
+ * A campfire, brazier, lamp or lamp drone: E switches it. The lamp drone is a lamp that flies (ELE-05): where the
+ * server owns the grid, E launches it to escort you and calls it back (server/sim/power.ts); a client that still
+ * owns its own world (MP_PHASE < F3) just switches it on its pad.
+ */
 export function isLight(s: Solid): boolean {
-	return s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier";
+	return s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier" || s.tags === "lamp_drone";
 }
 
 /** burns wood (a lamp does not) */
@@ -61,9 +84,9 @@ export function isVehicle(s: Solid): boolean {
 	return s.tags === "vehicle";
 }
 
-/** wood repairs everything but iron doors, iron barricades, turrets and vehicles (steel) */
+/** wood repairs everything but iron doors, iron barricades, turrets, the other machines and vehicles (steel) */
 export function repairMaterial(s: Solid): { kind: number; index: number } {
-	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret" || isVehicle(s)) {
+	if (s.kind === "iron_door" || STEEL_REPAIRED.includes(s.tags) || isVehicle(s)) {
 		return { kind: 4, index: 26 };
 	}
 	return { kind: 4, index: 23 };

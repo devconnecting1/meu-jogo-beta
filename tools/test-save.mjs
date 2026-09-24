@@ -1537,8 +1537,8 @@ section("26) quem move cada conquista: so os eventos do servidor (server/save/ac
 			s.achievements[AID.HedgehogSlayer] === 0,
 		"o chefe do tipo 3 e o Giant slayer; um tipo fora de 1..4 nao move nada",
 	);
-	check(!ACHV.raiseAchievement(s, AID.Turret, 1), "e nenhuma linha desligada e creditada");
-	checkEq(s.achievements[AID.Turret], 0, "(o contador salvo dela fica como estava)");
+	check(!ACHV.raiseAchievement(s, AID.Collector, 1), "e nenhuma linha desligada e creditada");
+	checkEq(s.achievements[AID.Collector], 0, "(o contador salvo dela fica como estava)");
 	s.achievements[AID.ZombieSlayer] = ACHIEVEMENTS[AID.ZombieSlayer].max - 1;
 	check(ACHV.addAchievement(s, AID.ZombieSlayer, 1), "o abate que chega a meta completa a conquista");
 	check(!ACHV.addAchievement(s, AID.ZombieSlayer, 1), "e o seguinte nao completa de novo");

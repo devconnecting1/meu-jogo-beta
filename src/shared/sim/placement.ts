@@ -47,9 +47,10 @@ export const PLACEABLES: Record<number, PlaceableDef> = {
 	4: p("lamp", "structure", 48, 48, 400, true, false, false),
 	5: p("lamp_drone", "structure", 40, 40, 300, true, false, false),
 	6: p("battery", "structure", 40, 40, 300),
-	7: p("generator", "structure", 72, 72, 500),
-	8: p("generator", "structure", 80, 80, 500),
-	9: p("generator", "structure", 72, 72, 500),
+	// the three generators differ in what they burn (shared/data/power.ts MACHINES), so each has its own tag
+	7: p("solar", "structure", 72, 72, 500),
+	8: p("reactor", "structure", 80, 80, 500),
+	9: p("oil_generator", "structure", 72, 72, 500),
 	10: p("barricade", "barricade", 128, 32, 700, true, true),
 	11: p("door", "door", 96, 24, 500, true, true),
 	12: p("iron_barricade", "iron_barricade", 128, 32, 1700, true, true),

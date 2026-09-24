@@ -1372,6 +1372,60 @@ export class ServerCombat {
 		return this.damageRoll(n);
 	}
 
+	/**
+	 * A machine hit this zombie — a turret's bullet, a turret drone's, an electric turret's shock (server/sim/turrets.ts).
+	 * The same path a survivor's bullet takes (the reaction, the blood, the assist ledger), from a POINT instead of a
+	 * body, and paying `creditSlot` (§3.6: the builder while in the world, a drone's survivor; -1 = nobody). A kill
+	 * pays the XP but is not a zombie that survivor put down (MON-05's count and the scoreboard's are theirs alone).
+	 */
+	machineHitZombie(
+		creditSlot: number,
+		fromX: number,
+		fromY: number,
+		z: Ent.ZombieState,
+		damage: number,
+		knock: number,
+		stun: number,
+	): void {
+		if (damage <= 0 || z.hp <= 0) return;
+		const dir = math.atan2(z.y - fromY, z.x - fromX);
+		const dealt = math.min(damage, z.hp);
+		z.hp -= damage;
+		if (creditSlot >= 0) this.progress?.noteZombieDamage(z.id, creditSlot, dealt, this.nowS);
+		if (this.hooks.hitZombie !== undefined) this.hooks.hitZombie(z, damage, dir, knock, stun);
+		else this.defaultReaction(z, dir, knock, stun);
+		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
+		if (z.hp <= 0) {
+			this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, z.type, -1, true);
+			this.history.forget(z.id);
+			this.hooks.zombieKilled?.(z, creditSlot);
+		}
+	}
+
+	/** the same for a boss (`x`, `y` are where the shot touched it, for the blood) */
+	machineHitBoss(
+		creditSlot: number,
+		fromX: number,
+		fromY: number,
+		b: Ent.BossState,
+		damage: number,
+		x: number,
+		y: number,
+	): void {
+		if (damage <= 0 || b.hp <= 0) return;
+		b.hp -= damage;
+		b.hitFlash = 1;
+		// a machine's damage makes nobody a participant (§3.6, MP-15): a builder anywhere in town is not in the fight.
+		// Only its final blow is credited, and only as XP (`bossKilled` byMachine)
+		this.hooks.hitBoss?.(b, damage, x, y);
+		this.emitBlood(x, y, math.atan2(y - fromY, x - fromX), 3, Net.BloodKind.Green);
+		if (b.hp <= 0) {
+			this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot, b.type, true);
+			this.history.forget(b.id);
+			this.hooks.bossKilled?.(b, creditSlot);
+		}
+	}
+
 	/** what 2A's reactToHit does, in the plain form, so this module works (and is tested) on its own */
 	private defaultReaction(z: Ent.ZombieState, dir: number, knock: number, stun: number): void {
 		z.hitFlash = 1;

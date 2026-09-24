@@ -27,6 +27,10 @@
  *       creditTaken             what the server put into the backpack (server/sim/items.ts: pickup, search, a
  *                               Thief's find): wood is Woods collector's
  *       creditRide              the distance the server moved a rider (server/sim/vehicles.ts, VEI-05): Rider
+ *       creditLitLamp           an electric lamp this survivor switched on lit up on the grid (server/sim/power.ts
+ *                               `act`, ELE-03): Thomas Edison
+ *       creditTurretKill        a zombie a machine this survivor built -- or a turret drone they fly -- brought down
+ *                               (server/sim/progress.ts `zombieKilled` by a machine, ELE-04): Turret
  *   - a client report cannot move them: `sanitizeClientReport` copies `achievements` and `lifeDeaths` from the trusted
  *     save (shared/game/save.ts, v6), and `stripClientAchievements` pins them again (with `titles`) where the server
  *     merges the report. The counters reach the client in its wallet (`walletOf`), which the client only ever raises
@@ -169,6 +173,24 @@ export function creditFirstSteps(save: PlayerSaveData): void {
 export function creditCraft(save: PlayerSaveData, heat: CraftHeat, count: number): void {
 	if (heat === "cook") addAchievement(save, AchievementId.Chef, count);
 	else if (heat === "smelt") addAchievement(save, AchievementId.Blacksmith, count);
+}
+
+/**
+ * Thomas Edison: E switched on an electric lamp and it LIT, fed by a battery box (server/sim/power.ts `act`, ELE-03)
+ * -- light made from electricity, which is the name. A fire is not it, and neither is a lamp switched on with no power
+ * (it stays dark: nothing was lit).
+ */
+export function creditLitLamp(save: PlayerSaveData): void {
+	raiseAchievement(save, AchievementId.ThomasEdison, 1);
+}
+
+/**
+ * Turret: a zombie brought down by a machine this survivor built (a turret, an electric turret) or by a turret drone
+ * they fly (server/sim/progress.ts `zombieKilled` with `byMachine`, ELE-04). It is the machine's kill, so it moves no
+ * kill counter (MON-05) -- this is the one achievement it earns.
+ */
+export function creditTurretKill(save: PlayerSaveData): void {
+	raiseAchievement(save, AchievementId.Turret, 1);
 }
 
 /**

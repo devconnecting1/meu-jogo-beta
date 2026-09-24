@@ -43,6 +43,7 @@
  *   7. present     bleed the visual offset off and write the drawn position onto the survivor
  */
 import { GameRefs } from "../systems/types";
+import { applyPowerSet, resetPowerMirror } from "../systems/powerMirror";
 import { RemotePlayerView } from "./netTypes";
 import { ClockSync } from "./clockSync";
 import { CommandStream, RawInput } from "./commands";
@@ -536,21 +537,27 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		pendingAnnounce.push(announceText(e.msg, e.arg));
 		return;
 	}
-	// F3: constructions, doors, lights, items and loot flags, laid over the loop's town in `netUpdate`
-	if (MIRRORS_WORLD && mirrorArmed && isMirrorEvent(e)) {
+	// F3: constructions, doors, lights, items and loot flags, laid over the loop's town in `netUpdate` -- and the grid's
+	// machine states (ELE-01..08), which name constructions and so go in the same queue, after the SolidAdd they follow
+	if (MIRRORS_WORLD && mirrorArmed && (isMirrorEvent(e) || e.t === WorldEv.PowerSet)) {
 		if (mirrorQueue.size() >= MAX_MIRROR_QUEUE) mirrorQueue.remove(0);
 		mirrorQueue.push(e);
 	}
 }
 
-/** the queued world deltas, onto the town the loop draws (client/net/worldMirror.ts) */
+/** the queued world deltas, onto the town the loop draws (client/net/worldMirror.ts, client/systems/powerMirror.ts) */
 function drainMirror(world: WorldData): void {
 	if (mirrorReset) {
 		mirrorReset = false;
 		resetMirror(world);
+		// the grid's states belong to the constructions just wiped (ids restart with a new town, MP-22)
+		resetPowerMirror();
 	}
 	if (mirrorQueue.size() === 0) return;
-	for (const e of mirrorQueue) applyMirrorEvent(world, e);
+	for (const e of mirrorQueue) {
+		if (e.t === WorldEv.PowerSet) applyPowerSet(world, e);
+		else applyMirrorEvent(world, e);
+	}
 	mirrorQueue.clear();
 }
 
@@ -923,6 +930,7 @@ export function netReset(): void {
 	boundWorld = undefined;
 	boundPlayer = undefined;
 	boundSave = undefined;
+	resetPowerMirror();
 	boundRefs = undefined;
 	mirrorQueue.clear();
 	mirrorReset = false;
@@ -931,6 +939,11 @@ export function netReset(): void {
 	// a guard armed in the lobby would unwrap against a tick minutes later (see `townResetTick`)
 	townResetTick = undefined;
 	townGuardUntil = 0;
+}
+
+/** the server's clock this frame, in seconds (tick / SIM_HZ): a flying drone's orbit is a function of it (ELE-05) */
+export function netServerSeconds(): number {
+	return clock.tickNow() / clock.rate();
 }
 
 /** debug overlay / admin panel: the §12.2 numbers, cheap enough to read every frame */

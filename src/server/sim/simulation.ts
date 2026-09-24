@@ -48,6 +48,8 @@ import { TitleId } from "shared/data/titles";
 import { creditLifeNight, grantTitle } from "../save/titles";
 import { ServerProjectiles } from "./projectiles";
 import { ServerPlayer, noteStep, takeCommand } from "./players";
+import { powerSet, ServerPower } from "./power";
+import { ServerTurrets } from "./turrets";
 import { RideEvent, ServerVehicles, VehicleNoise } from "./vehicles";
 import { WorldClock } from "./waves";
 import { WorldOut } from "./worldOut";
@@ -112,6 +114,8 @@ interface TownSystems {
 	progress?: Progress;
 	projectiles?: ServerProjectiles;
 	combat?: ServerCombat;
+	power?: ServerPower;
+	turrets?: ServerTurrets;
 }
 
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
@@ -231,6 +235,10 @@ export class ServerSimulation {
 	 * anything else that listens.
 	 */
 	onVehicleNoise?: (noise: VehicleNoise) => void;
+	/** the electric grid (ELE-01..08): boxes, generators, switched machines, drones — with the interactive world */
+	power?: ServerPower;
+	/** the machines that shoot (ELE-04, ELE-05) — with the grid AND the horde they shoot at */
+	turrets?: ServerTurrets;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
 	/** the result of a survivor's action press, for the caller's sounds and toasts */
@@ -372,6 +380,8 @@ export class ServerSimulation {
 		this.progress = systems.progress;
 		this.projectiles = systems.projectiles;
 		this.combat = systems.combat;
+		this.power = systems.power;
+		this.turrets = systems.turrets;
 	}
 
 	/**
@@ -392,12 +402,34 @@ export class ServerSimulation {
 			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
 			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
+			// the grid keeps its machines by the build's world hooks, so it exists first (ELE-01)
+			const power = new ServerPower({
+				world,
+				clock: this.clock,
+				simHz: this.simHz,
+				// the maker's Robotics / Engineering, while they are in the world
+				saveOf: slot => this.bySlot.get(slot)?.save,
+				// a drone escorts a survivor who is in the world and alive
+				bodyOf: slot => {
+					const sp = this.bySlot.get(slot);
+					return sp !== undefined && !sp.state.dead ? sp.state : undefined;
+				},
+				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
+				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
+				// §9.3: an assisted run earns no achievement (Thomas Edison), as it earns no coins
+				paysRewards: slot => {
+					const sp = this.bySlot.get(slot);
+					return sp === undefined || this.pays(sp);
+				},
+			});
+			out.power = power;
 			const build = new ServerBuild({
 				world,
 				out: this.worldOut,
 				// the horde is built below; the closure defers the lookup so a wall dirties the flow field
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+				onSolid: (s, added) => power.note(s, added),
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({
@@ -405,6 +437,7 @@ export class ServerSimulation {
 				items,
 				out: this.worldOut,
 				fx: event => this.onFx?.(event),
+				machines: power,
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -484,6 +517,21 @@ export class ServerSimulation {
 		});
 		out.combat = combat;
 		projectiles.combat = combat;
+		// the machines that shoot (ELE-04, ELE-05): they need the grid (F3) AND the horde; a lamp drone's light is
+		// one the horde sees by
+		const power = out.power;
+		if (power !== undefined) {
+			horde.refs.carriedLights = power.lights;
+			out.turrets = new ServerTurrets({
+				world,
+				power,
+				zombiesNear: (x, y, r, tick, found) => horde.zombiesNear(x, y, r, tick, found),
+				bosses: () => horde.bossRoster.list,
+				damage: combat,
+				fx: event => this.onFx?.(event),
+				noise: (x, y, radius) => emitSound(horde.refs, x, y, radius, true),
+			});
+		}
 		// §2.3/MP-00: from here on a survivor only ever loses hp through the server's combat. The brains still
 		// call `damageToPlayer`, which is inert at MP_PHASE ≥ 2 — this sink is what makes the bite land.
 		horde.refs.damagePlayer = combat.damageSink(p => this.slotOfState(p));
@@ -637,6 +685,8 @@ export class ServerSimulation {
 		this.build?.remove(slot, sp.save);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
+		// the drones escorting them fly home
+		this.power?.remove(slot);
 		this.items?.forget(slot);
 		this.backpack.remove(slot);
 		this.bySlot.delete(slot);
@@ -818,6 +868,8 @@ export class ServerSimulation {
 				this.horde.step(this.roster, this.tickDt, this.tick);
 				// after the bodies moved, so a flame burns what is in front of it NOW and not a tick ago
 				this.projectiles?.step(this.horde.refs, this.tickDt);
+				// §3.1 "torretas e armadilhas": after the projectiles, at the zombies where they stand now
+				this.turrets?.step(this.tick, this.tickDt);
 			} else {
 				// nobody is in the world: there is no source for the flow field, no light, nothing to hunt
 				// and nobody to see it. The clock keeps running (a server that empties at dusk must still be
@@ -913,6 +965,8 @@ export class ServerSimulation {
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
 		this.vehicles?.step(this.tickDt);
+		// the grid keeps running with nobody in town: the sun still charges the boxes (ELE-02)
+		this.power?.step(this.tickDt, this.tick);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
 		items.sweepInterest(this.tickDt);
