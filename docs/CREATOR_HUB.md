@@ -347,12 +347,70 @@ Com isto, cada push na `main` sobe as texturas novas ou alteradas, espera a mode
    workflow** → branch `main` → **Run workflow**. No run, o job `assets` mostra no **Summary** a tabela de cada
    arquivo (aprovado / em análise / recusado / falhou); o `LastTown-ci.rbxl` está no artefato **place** do mesmo run.
    Um commit `art: asset ids uploaded by CI run … [skip ci]` de `github-actions[bot]` aparece na `main`: é
-   esperado (`git pull` no PC antes de mexer).
+   esperado (`git pull` no PC antes de mexer). A caixa **`reupload_all`** do mesmo botão (desligada por padrão)
+   reenvia **tudo** como o criador dos secrets, mesmo o que já é dele; para uma troca de conta ela **não** é
+   necessária (abaixo).
 4. **Trocar a chave** (a cada 90 dias, ou na hora se ela vazar): crie outra igual ao item 1, cole por cima do secret
    `ROBLOX_API_KEY` (**Update secret**) e revogue a antiga em Credentials.
 
 Se um dia a `main` ganhar proteção de branch (ou um ruleset), libere o `github-actions[bot]` para dar push nela; sem
 isso o commit dos ids é recusado e o job `assets` falha dizendo isso.
+
+### Mudou de conta: o que acontece
+
+Cada id em `design/world-art/assets.json` e `design/audio/assets.json` guarda **quem o subiu** (`creator`:
+`"user:<id>"` ou `"group:<id>"`; é o número público do perfil ou do grupo, não é segredo). Os ids de antes de
+2026-09-24 não têm `creator`: foram subidos pela conta antiga.
+
+1. Troque os secrets `ROBLOX_API_KEY` (a chave da conta **nova**, como no item 1 acima) e `ROBLOX_CREATOR_USER_ID`
+   (o UserId novo); se a experiência for de um grupo, `ROBLOX_CREATOR_GROUP_ID` (ele vence o de usuário). A chave
+   tem de ser de quem é o criador: a de um usuário só sobe como ele, ou como um grupo em que ele pode criar assets.
+2. **A experiência tem de ser da conta nova (ou do grupo novo).** O áudio subido pela conta nova é privado dela:
+   uma experiência que ainda é da conta antiga não o toca (é a mesma regra, ao contrário).
+3. Faça push na `main` ou **Actions → CI → Run workflow** na `main` (sem marcar nada). O job `assets` compara o
+   criador dos secrets com o de cada id e **reenvia como a conta nova todo id de outro criador** (ou sem criador):
+   hoje, as 135 texturas e os 5 bancos de som. Valem as regras de sempre: só id **aprovado** entra; em análise
+   depois da espera → `pending` (consultado no próximo run, nunca reenviado); recusado → `rejected` (não reenvia os
+   mesmos bytes; o run fica vermelho); falhou → o próximo run tenta de novo.
+4. **Até o novo ser aprovado.** Um arquivo que falhou, foi recusado ou segue em análise continua com o id da conta
+   antiga no `assets.json`. No jogo: a **textura** fica com o id antigo (uma imagem pode ser Open Use, então pode
+   seguir aparecendo); o **banco de som** fica **sem id** no `audioAssets.ts` — o `assets.json` grava `owner` (a
+   conta dos secrets) e o `tools/gen-sfx.mjs` deixa de fora todo banco de outro criador, porque o id antigo tocaria
+   silêncio numa experiência da conta nova e sem id cada som toca a biblioteca (SND-01). O Summary conta "N ainda
+   com o id de outro criador" e o run avisa (`::warning`) até o último ser trocado. Aprovado, o id novo entra no
+   mesmo commit do bot.
+5. O job tem 60 minutos: ~140 uploads (700 ms entre um e outro, abaixo do limite de 120 por minuto) e até
+   10 minutos de moderação na arte e mais 10 no áudio. O que passar disso fica `pending` para o próximo run.
+6. No PC, `npm run cloud -- upload-art` / `upload-audio` **não** troca ids de conta sozinho nem muda o `owner`: só
+   avisa quando o `.env` é de outro criador que os ids (ou que o `owner`: um banco subido daqui não entraria no
+   `audioAssets.ts`). Com o `.env` da conta nova, `-- upload-art --reupload-all` (e
+   `upload-audio --reupload-all`) reenvia tudo como ela; depois `npm run build` e commit dos mesmos arquivos. Se o
+   `.env` do PC ainda for da conta antiga, troque a chave e o `ROBLOX_CREATOR_USER_ID` lá também.
+
+A alternativa sem reenvio (não usada: o dono decidiu subir tudo na conta nova em 2026-09-24): a conta **antiga**
+dá à experiência nova a permissão de uso de cada asset (Creator Hub → o asset → **Permissions** → o Universe ID da
+experiência; ou `PATCH /asset-permissions-api/v1/assets/permissions` com uma chave da conta antiga). Funciona, mas
+deixa o jogo dependendo de uma conta que não se usa mais, e uma permissão dada a um jogo não se revoga depois.
+
+O que a documentação do Roblox diz (Context7 `/websites/create_roblox` e as próprias páginas, lidas em 2026-09-24):
+
+- **Áudio é privado de quem sobe.** `create.roblox.com/docs/audio/assets` ("Import audio"): "Although you are
+  initially the only one who can view and use private audio assets, the asset privacy system lets you grant usage
+  permissions to specific friends and experiences." Um áudio da conta antiga só toca numa experiência da conta
+  nova se a antiga der a permissão: por isso os bancos de som **precisam** subir de novo.
+- **Imagens, decals e meshes nascem "Open Use", salvo o Asset Privacy.** `create.roblox.com/docs/projects/assets/privacy`:
+  "By default, Images, Decals, and Meshes are created as Open Use" (qualquer criador ou jogo usa), mas se a conta
+  ligou **Settings → Advanced → Asset Privacy**, as novas nascem **Restricted**, e "If a creator or game doesn't have
+  permission to use an asset, it cannot load". Audio, Video, Models, Animations e Packages "have their own creation
+  defaults and are not changed by the Asset Privacy setting". Não dá para saber daqui se a conta antiga ligou essa
+  opção, e uma conta abandonada (ou moderada) leva os assets dela junto: por isso as texturas sobem de novo também.
+- **Permissões** (mesma página): dar uso a outro criador exige amizade na plataforma (usuário) ou o direito "Edit
+  all group experiences" (grupo); a um jogo, pelo Universe ID; "Once a game has permission to use a restricted
+  asset, you cannot revoke access". Na API: `creationContext.assetPrivacy` (`default` / `restricted` / `openUse`)
+  no upload, e `PATCH /asset-permissions-api/v1/assets/permissions` (ação `Use`, válida para áudio e animação) para
+  dar uso a um usuário, grupo ou universo.
+- **Cota de áudio** (`audio/assets`): 100 áudios grátis por 30 dias sem verificação de ID, 2.000 com ela, por
+  conta: os 5 bancos cabem com folga.
 
 **O risco do `0.0.0.0/0`, e por que é aceitável aqui.** Quem tiver o texto da chave consegue usá-la de qualquer
 lugar. O estrago possível é o do escopo: **criar e atualizar assets em seu nome** (subir imagens ou áudio, ou uma
@@ -398,4 +456,6 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
 6. **Access settings**: manter privado até a F2 fechar.
 7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
 8. **Open Cloud na CI**: a chave só de Assets (IP `0.0.0.0/0`, 90 dias) e os secrets `ROBLOX_API_KEY` +
-   `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima).
+   `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
+   a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova
+   ("Mudou de conta").
