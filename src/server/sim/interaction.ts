@@ -26,9 +26,11 @@ import {
 	edgeDist,
 	interactTarget,
 	isFire,
+	nearestGroundItem,
 	repairMaterial,
 	SOLID_REACH,
 } from "shared/sim/interactQuery";
+import { noRoomIn } from "shared/sim/pickupRule";
 import { segmentClear } from "shared/game/physics";
 import { buildingAt, isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
@@ -150,8 +152,14 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
-		const target = interactTarget(this.world, p.x, p.y);
-		if (target === undefined) return { kind: "none" };
+		// ITM-07: an item this save has no room for is passed over, so a full stack does not hide the door, the search
+		// or the repair behind it (review of 1186a83, M1); the client's hint passes the same check
+		const target = interactTarget(this.world, p.x, p.y, noRoomIn(ctx.save));
+		if (target === undefined) {
+			// nothing else in reach: say why the item did not come (spends no cooldown, changes nothing)
+			const full = nearestGroundItem(this.world, p.x, p.y);
+			return full !== undefined ? { kind: "refused", why: "full" } : { kind: "none" };
+		}
 		// only a press that reaches something spends the cooldown: an empty press used to eat it, so a door flipped every
 		// 0.4 s and a press right after an input hitch was dropped (re-review of f8ccaf0)
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);

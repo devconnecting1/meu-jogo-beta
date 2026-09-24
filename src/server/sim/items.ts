@@ -16,7 +16,8 @@
  *     it, by `walkOver`, the server's own sweep: no message asks for it, so none can be forged. It is the E press's
  *     `pickup` below with every one of its checks (reach from the server's position, a clear line, the atomic removal,
  *     the save's ceiling), for the item the shared rule names (shared/sim/pickupRule.ts), once it has lain
- *     WALK_PICKUP_DELAY_S and at most one per survivor every WALK_PICKUP_RATE_S. Weapons and equipment still take E.
+ *     WALK_PICKUP_DELAY_S and at most one per survivor every WALK_PICKUP_RATE_S; one behind a wall is looked past for
+ *     the next nearest. Weapons, equipment and a boss's trophies still take E.
  *   - PICKUP is a request, resolved at the server's position of the survivor, and it is atomic: the world's
  *     `removeGroundItem` is the arbiter, so of two survivors reaching for the same can in the same tick, one
  *     gets a can and the other gets nothing (§8.3 "checar + mutar sem yield no meio"). That is the §11.3 F3
@@ -86,6 +87,8 @@ const CAP_AREA = ITEM_GRID_CELL;
 export const ITEM_SWEEP_S = 0.5;
 /** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
 export const ITEM_INTEREST_EXIT = ITEM_INTEREST + 300;
+/** the walk-over looks past at most this many supplies behind a wall per survivor per sweep (ITM-07) */
+export const WALK_BLOCKED_TRIES = 4;
 const NO_VIEWERS: ReadonlyArray<{ x: number; y: number }> = [];
 const NO_SLOTS: ReadonlyArray<number> = [];
 
@@ -160,7 +163,21 @@ export class ServerItems {
 	 * garbage). `born` is stamped by `announce`; an item without it lay there before this object did
 	 */
 	private readonly walkReady = (item: GroundItem): boolean =>
-		this.clock - (item.born ?? -math.huge) >= WALK_PICKUP_DELAY_S;
+		this.clock - (item.born ?? -math.huge) >= WALK_PICKUP_DELAY_S &&
+		(this.walkPast.size() === 0 || !this.walkPast.includes(item));
+	/** the supplies one survivor's walk-over looked past this sweep: behind a wall (at most WALK_BLOCKED_TRIES) */
+	private readonly walkPast = new Array<GroundItem>();
+	/** where the item `lineClear` is measuring to lies (one bound predicate, no closure per check) */
+	private lineX = 0;
+	private lineY = 0;
+	/**
+	 * What stops a reach (§8.1): a blocking solid, but not the one the item rests INSIDE. A drop slides with no wall
+	 * collision, and ~28 % of a zombie's drops at a base wall end up inside it -- blocked by its own wall it could never
+	 * be picked up, and as E's first target it hid the door beside it for good (re-review of f8ccaf0)
+	 */
+	private readonly lineBlocks = (o: Solid): boolean =>
+		isBlocking(o) &&
+		!(this.lineX >= o.x && this.lineX <= o.x + o.w && this.lineY >= o.y && this.lineY <= o.y + o.h);
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
@@ -410,13 +427,16 @@ export class ServerItems {
 		const dx = item.x - x;
 		const dy = item.y - y;
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
-		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall. Not the
-		// solid the item rests INSIDE: a drop slides with no wall collision, and ~28 % of a zombie's drops at a base wall
-		// end up inside it -- blocked by its own wall it could never be picked up, and as E's first target it hid the
-		// door beside it for good (re-review of f8ccaf0)
-		const blocks = (o: Solid): boolean =>
-			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
-		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
+		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall
+		if (!this.lineClear(x, y, item)) return { ok: false, why: "blocked" };
+		return this.take(save, item);
+	}
+
+	/**
+	 * The rest of `pickup`, once the reach and the clear line are checked (the walk-over checks them on its own way to
+	 * the item): the ceiling, first come, remove, credit.
+	 */
+	private take(save: PlayerSaveData, item: GroundItem): PickupResult {
 		// ITM-07: the save keeps at most its ceiling of an item (shared/game/save.ts SAVE_LIMITS); past it, what went in
 		// was clamped away at the next load. Take what fits, leave the rest lying where it is
 		const room = pickupRoom(save, item.kind, item.itemId);
@@ -436,12 +456,20 @@ export class ServerItems {
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: take };
 	}
 
+	/** a clear line from (x, y) to the item: the reach rule of `pickup` (`lineBlocks`) */
+	private lineClear(x: number, y: number, item: GroundItem): boolean {
+		this.lineX = item.x;
+		this.lineY = item.y;
+		return segmentClear(this.world, x, y, item.x, item.y, this.lineBlocks);
+	}
+
 	/**
 	 * The walk-over (ITM-07): each survivor on foot takes the supply under their body, if any -- the one the shared
 	 * rule names (shared/sim/pickupRule.ts `walkPickupTarget`: within WALK_PICKUP_RANGE of the SERVER's position, lying
-	 * for WALK_PICKUP_DELAY_S, room in the save) -- through `pickup`, so the reach, the clear line, the first-come
-	 * removal and the ceiling are the E press's own. Each survivor is looked at once every WALK_PICKUP_RATE_S, which
-	 * is also the rate: ten items a second at most; the lookup reads the grid cells under the body, at 10 Hz a survivor.
+	 * for WALK_PICKUP_DELAY_S, room in the save) -- with the E press's own checks: WALK_PICKUP_RANGE is inside its
+	 * reach, the clear line is `pickup`'s (`lineClear`), and the first-come removal and the ceiling are its `take`.
+	 * Each survivor is looked at once every WALK_PICKUP_RATE_S, which is also the rate: ten items a second at most; the
+	 * lookup reads the grid cells under the body, at 10 Hz a survivor.
 	 *
 	 * `onTaken` hears each pickup (the caller marks the save dirty, as for an E press). Riding (VEI-05: the hands are
 	 * on the bars) and dead survivors take nothing.
@@ -457,9 +485,22 @@ export class ServerItems {
 			if (now < (this.walkNext.get(sp.slot) ?? -math.huge)) continue;
 			this.walkNext.set(sp.slot, now + WALK_PICKUP_RATE_S);
 			// the grid's cells under the body (shared/game/world.ts queryGroundItems), never the town's list
-			const item = walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady);
+			let item = walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady);
+			// the nearest one behind a wall is looked past, and the next nearest asked for: it used to be retried every
+			// sweep for as long as the survivor stood there, and the clear one beside it was never taken (review of
+			// 1186a83, L1). At most WALK_BLOCKED_TRIES lines a sweep, so a heap behind a wall costs a bounded few
+			const past = this.walkPast;
+			while (item !== undefined && !this.lineClear(p.x, p.y, item)) {
+				past.push(item);
+				item =
+					past.size() < WALK_BLOCKED_TRIES
+						? walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady)
+						: undefined;
+			}
+			past.clear();
 			if (item === undefined) continue;
-			const got = this.pickup(sp.save, p.x, p.y, item);
+			// within WALK_PICKUP_RANGE (inside PICKUP_RANGE) and in plain sight: the rest is the E press's
+			const got = this.take(sp.save, item);
 			if (got.ok && onTaken !== undefined) onTaken(sp, got);
 		}
 	}

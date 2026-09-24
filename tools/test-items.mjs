@@ -5941,6 +5941,7 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
 	const CInter = require(join(SRC, "client/systems/interaction.ts"));
 	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const { BOSS_TROPHIES } = require(join(SRC, "shared/data/spawns.ts"));
 	const WALK = RULE.WALK_PICKUP_RANGE;
 	const DELAY = RULE.WALK_PICKUP_DELAY_S;
 	const RATE = RULE.WALK_PICKUP_RATE_S;
@@ -5950,11 +5951,20 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 	);
 	// the rule by kind: the Bag's Usables and Materials are walked up, its Weapons and Gear take E
 	check(
-		RULE.walkPickup(ItemKind.Use) &&
-			RULE.walkPickup(ItemKind.Etc) &&
-			!RULE.walkPickup(ItemKind.Weapon) &&
-			!RULE.walkPickup(ItemKind.Equip),
+		RULE.walkPickup(ItemKind.Use, 0) &&
+			RULE.walkPickup(ItemKind.Etc, 23) &&
+			RULE.walkPickup(ItemKind.Etc, 44) &&
+			!RULE.walkPickup(ItemKind.Weapon, 10) &&
+			!RULE.walkPickup(ItemKind.Equip, 4),
 		"supplies (usables, materials, ammunition) are walked up; weapons and equipment are not",
+	);
+	// ...and a rare item never is, supply or not: it wears the gold ring, and the ring means E (review of 1186a83, M2)
+	const trophies = [1, 2, 3, 4].flatMap(b => BOSS_TROPHIES[b] ?? []);
+	check(
+		trophies.length >= 5 &&
+			trophies.some(t => t.kind === ItemKind.Etc) &&
+			trophies.every(t => !RULE.walkPickup(t.kind, t.index) && RULE.groundTier(t.kind, t.index) === "rare"),
+		`every boss trophy (${trophies.map(t => nameOf(t.kind, t.index)).join(", ")}) is rare and taken with E only`,
 	);
 
 	/** a server with the interactive world and one survivor at (1000, 1000); `n` ticks of nothing pressed */
@@ -5972,7 +5982,11 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 		sp.state.x = 1000;
 		sp.state.y = 1000;
 		let dirty = 0;
-		sim.onInteract = () => (dirty += 1);
+		const outcomes = [];
+		sim.onInteract = (_, o) => {
+			dirty += 1;
+			outcomes.push(o);
+		};
 		const run = seconds => {
 			for (let i = 0; i < Math.round(seconds * CFG.SIM_HZ); i++) sim.step();
 		};
@@ -5982,14 +5996,14 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
 			sim.step();
 		};
-		return { world, sim, save, sp, run, pressE, dirty: () => dirty };
+		return { world, sim, save, sp, run, pressE, dirty: () => dirty, outcomes };
 	};
 
 	// 1. every supply a table, a zombie or a boss drops: under the body it is taken, after the delay and not before
 	const supplies = [];
 	const seen = new Set();
 	for (const s of itemSources()) {
-		if (!RULE.walkPickup(s.kind) || s.from.startsWith("recipe") || s.from.startsWith("costume")) continue;
+		if (!RULE.walkPickup(s.kind, s.index) || s.from.startsWith("recipe") || s.from.startsWith("costume")) continue;
 		const key = `${s.kind}:${s.index}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
@@ -6026,6 +6040,28 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 		t.pressE();
 		return (t.world.items.length === 0 && INV.countItem(t.save, s.kind, s.index) === 1) || "E did not take it";
 	});
+	// 2b. a boss's trophies are rare (the gold ring) even when they are materials: boss 4's are, and they take E too, or
+	// whoever stepped on the spot first had them (review of 1186a83, M2)
+	{
+		const t = server();
+		const drop = BOSS_TROPHIES[4];
+		for (const tr of drop) W.spawnGroundItem(t.world, tr.kind, tr.index, tr.count, 1000, 1000);
+		t.run(1.5);
+		const walked = drop.map(tr => INV.countItem(t.save, tr.kind, tr.index));
+		for (let i = 0; i < drop.length; i++) {
+			t.pressE();
+			t.run(0.3);
+		}
+		const got = drop.map(tr => INV.countItem(t.save, tr.kind, tr.index));
+		check(
+			drop.some(tr => tr.kind === ItemKind.Etc) &&
+				walked.every(n => n === 0) &&
+				got.every((n, i) => n === drop[i].count) &&
+				t.world.items.length === 0,
+			`boss 4's trophies (${drop.map(tr => `${nameOf(tr.kind, tr.index)} ×${tr.count}`).join(", ")}) under the body stay 1.5 s; E takes each`,
+			`walked ${JSON.stringify(walked)}, E ${JSON.stringify(got)}, left ${t.world.items.length}`,
+		);
+	}
 	// 3. E still takes a supply in its reach but out of the body's
 	{
 		const t = server();
@@ -6336,7 +6372,174 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 			PK.bagGrew(b0, bag(3, 0));
 		});
 		check(far === 0, "a supply that left the world 600 u from me is not mine, whatever my bag did");
+		t += 5;
+		const trophy = heard(() => {
+			add(76, ItemKind.Etc, 36, 3, 2004, 2000);
+			remove(76);
+			PK.bagGrew();
+		});
+		check(trophy === 0, "a boss's trophy that leaves the world by me without my E press is not mine (E only, M2)");
 		globalThis.os = hadOs;
+	}
+	// 12. a full stack never hides what is behind it: E opens the door, and the hint says so (review of 1186a83, M1)
+	{
+		const WOOD = 23;
+		const door = t =>
+			W.addSolid(t.world, {
+				kind: "door",
+				x: 1000,
+				y: 1000,
+				w: 128,
+				h: 32,
+				hp: 200,
+				hpMax: 200,
+				destructible: true,
+				tags: "door",
+				rot: 0,
+				open: false,
+				placeable: 11,
+				owner: 0,
+			});
+		// the survivor 20 u above the door's middle; the wood 30 u to the side (outside the body's 26 u, inside E's 40)
+		const t = server();
+		t.sp.state.x = 1064;
+		t.sp.state.y = 980;
+		const d = door(t);
+		t.save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		W.spawnGroundItem(t.world, ItemKind.Etc, WOOD, 5, 1094, 980);
+		t.run(1);
+		t.pressE();
+		t.run(0.3);
+		check(
+			d.open === true && t.world.items.length === 1 && t.outcomes.some(o => o.kind === "door" && o.open),
+			"at the wood's ceiling, E by a full stack of wood opens the door beside it (the stack is passed over)",
+			`door.open=${d.open}, outcomes ${t.outcomes.map(o => o.kind + (o.why ? ":" + o.why : "")).join(" ")}`,
+		);
+		// the client's hint asks the same query: the door, not the full wood
+		const refs = {
+			world: t.world,
+			players: [t.sp.state],
+			player: t.sp.state,
+			save: t.save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12 },
+		};
+		const hint = CInter.interactHint(refs);
+		check(
+			hint === "E: Close door" && CInter.hintedItem() === -1,
+			`...and the prompt names the door, not the wood (${hint})`,
+		);
+		// with room, the wood comes first again (E: an item in reach is the first thing E does)
+		t.save.invenEtc[WOOD] = 0;
+		check(
+			CInter.interactHint(refs) === "E: Pick up Wood ×5",
+			"with room, the prompt is the wood again (items first)",
+		);
+		// nothing else in reach: the full line, said and not promised; the server refuses with 'full' and spends nothing
+		const u = server();
+		u.save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		W.spawnGroundItem(u.world, ItemKind.Etc, WOOD, 5, 1030, 1000);
+		u.run(1);
+		u.pressE();
+		const last = u.outcomes.at(-1);
+		const uRefs = { ...refs, world: u.world, players: [u.sp.state], player: u.sp.state, save: u.save };
+		check(
+			last?.kind === "refused" &&
+				last.why === "full" &&
+				u.world.items.length === 1 &&
+				CInter.interactHint(uRefs) === `Wood full (${SAVE.SAVE_LIMITS.ITEM_MAX})`,
+			"only a full stack in reach: E is refused 'full' and the prompt says 'Wood full (9999)'",
+			`${JSON.stringify(last)}, ${CInter.interactHint(uRefs)}`,
+		);
+		// offline, the client's own E follows the same query: the door opens
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		const player = Ply.createPlayer(save, 1064, 980);
+		const od = door({ world });
+		W.spawnGroundItem(world, ItemKind.Etc, WOOD, 5, 1094, 980);
+		new CInter.Interaction().tryInteract({ ...refs, world, players: [player], player, save, fxQueue: [] });
+		check(od.open === true && world.items.length === 1, "offline, E by the full stack opens the door too");
+	}
+	// 13. the nearest supply is behind a wall: looked past, and the clear one beside it is walked up (review, L1)
+	{
+		const t = server();
+		W.addSolid(t.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		const blocked = W.spawnGroundItem(t.world, ItemKind.Etc, 23, 1, 1025, 1000);
+		const clear = W.spawnGroundItem(t.world, ItemKind.Etc, 24, 1, 1000, 1025.5);
+		t.run(3);
+		check(
+			t.world.items.includes(blocked) &&
+				!t.world.items.includes(clear) &&
+				INV.countItem(t.save, ItemKind.Etc, 24) === 1,
+			"a supply behind a wall 25 u away does not starve the clear one 25.5 u away: that one is walked up",
+		);
+		// and more heaped behind the wall than the sweep looks past: bounded work, the clear one waits for a step
+		const u = server();
+		W.addSolid(u.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		const { WALK_BLOCKED_TRIES } = require(join(SRC, "server/sim/items.ts"));
+		for (let i = 0; i < WALK_BLOCKED_TRIES + 3; i++)
+			W.spawnGroundItem(u.world, ItemKind.Etc, 23, 1, 1024 + i * 0.2, 1000);
+		const far = W.spawnGroundItem(u.world, ItemKind.Etc, 24, 1, 1000, 1025.8);
+		u.run(2);
+		const waited = u.world.items.includes(far);
+		u.sp.state.y = 1010;
+		u.run(1);
+		check(
+			WALK_BLOCKED_TRIES >= 2 &&
+				waited &&
+				!u.world.items.includes(far) &&
+				u.world.items.length === WALK_BLOCKED_TRIES + 3,
+			`${WALK_BLOCKED_TRIES + 3} supplies heaped behind a wall: at most ${WALK_BLOCKED_TRIES} looked past a sweep; a step closer, the clear one comes`,
+		);
+	}
+	// 14. the magazine goes back into the reserve up to the save's ceiling, never over it (review, L2)
+	{
+		const { unloadMagazine } = require(join(SRC, "server/sim/life.ts"));
+		const save = bareSave();
+		const PISTOL = 10;
+		save.invenWeapon[PISTOL] = 1;
+		save.equipWeapon = PISTOL;
+		save.ammoNormal = SAVE.SAVE_LIMITS.AMMO_MAX - 5;
+		const state = Ply.createPlayer(save, 1000, 1000);
+		state.weapon.pointer = PISTOL;
+		state.weapon.ammoCount = 12;
+		const back = unloadMagazine(state, save);
+		const at = save.ammoNormal;
+		save.ammoNormal = 100;
+		state.weapon.ammoCount = 12;
+		const all = unloadMagazine(state, save);
+		check(
+			WEAPONS[PISTOL].ammoPool === 1 &&
+				back === 5 &&
+				at === SAVE.SAVE_LIMITS.AMMO_MAX &&
+				all === 12 &&
+				save.ammoNormal === 112,
+			`a 12-round magazine banked into ${SAVE.SAVE_LIMITS.AMMO_MAX - 5} rounds: 5 go back, the reserve stops at the ceiling (below it, all 12)`,
+			`back ${back}, reserve ${at}; below: ${all}, ${save.ammoNormal}`,
+		);
 	}
 });
 

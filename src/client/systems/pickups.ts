@@ -144,7 +144,7 @@ function near(x: number, y: number, ax: number, ay: number, r: number): boolean 
 export function itemGone(x: number, y: number, kind = -1, itemId = -1, n = 1): void {
 	const now = os.clock();
 	const byPress = waiting === "item" && now - pressAt <= PICKUP_WINDOW_S && near(x, y, pressX, pressY, PICKUP_REACH);
-	const byFeet = kind >= 0 && walkPickup(kind) && near(x, y, meX, meY, WALK_REACH);
+	const byFeet = kind >= 0 && walkPickup(kind, itemId) && near(x, y, meX, meY, WALK_REACH);
 	if (!byPress && !byFeet) {
 		if (waiting !== "" && now - pressAt > PICKUP_WINDOW_S) waiting = "";
 		return;

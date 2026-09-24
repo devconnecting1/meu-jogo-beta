@@ -41,7 +41,14 @@
 import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
-import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
+import {
+	PlayerState,
+	createPlayer,
+	damageIsServerOwned,
+	weaponAmmoPool,
+	weaponReserve,
+	weaponSpendAmmo,
+} from "shared/game/player";
 import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
 import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
@@ -92,6 +99,10 @@ function equippedWeapon(save: PlayerSaveData): WeaponDef {
  * The rounds in the magazine go back to their pool (§6.1: "Pente atual: volta para a reserva ao sair", the same
  * rule as a weapon switch in combat.ts). Admin free ammo never turns into real ammo; a fuel weapon's "magazine" is
  * only a gate (each shot burns fuel), so it has nothing to give back. Returns the rounds returned.
+ *
+ * Up to the save's ceiling (SAVE_LIMITS.AMMO_MAX, DESIGN_RULES ITM-07): a reserve at the ceiling takes back only what
+ * fits. Past it the rounds used to be banked anyway and clamped away silently at the next load; now what is banked
+ * is what the save can hold (review of 1186a83, L2).
  */
 export function unloadMagazine(state: PlayerState, save: PlayerSaveData): number {
 	const rt = state.weapon;
@@ -101,8 +112,9 @@ export function unloadMagazine(state: PlayerState, save: PlayerSaveData): number
 	rt.reloading = false;
 	rt.reloadCount = 0;
 	if (w === undefined || !usesMagazine(w) || isFuelWeapon(w) || rounds <= 0 || state.infiniteAmmo === true) return 0;
-	weaponSpendAmmo(save, w.ammoPool, -rounds);
-	return rounds;
+	const back = math.min(rounds, math.max(0, SAVE_LIMITS.AMMO_MAX - weaponAmmoPool(save, w.ammoPool)));
+	if (back > 0) weaponSpendAmmo(save, w.ammoPool, -back);
+	return back;
 }
 
 /**

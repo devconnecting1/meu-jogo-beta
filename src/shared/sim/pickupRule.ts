@@ -7,14 +7,16 @@
  *     Usables and Materials tabs. The body over the item takes it (WALK_PICKUP_RANGE), once it has been on the ground
  *     WALK_PICKUP_DELAY_S (a drop is seen landing before it is gone), at most one item per survivor every
  *     WALK_PICKUP_RATE_S. The server decides, with the E press's own checks (reach, a clear line, first come).
- *   - Weapons and equipment take E -- the Bag's Weapons and Gear tabs. A weapon is a choice: it takes a place on keys
- *     1-5 (shared/game/weaponSlots.ts orders them by id, so a new pistol moves the axe from 3 to 4), the game has no
- *     drop verb to give it back, and in co-op the rifle on the floor is not whoever runs past first's by accident.
- *   - E still takes anything in reach, supplies included: one button never stops working.
+ *   - Weapons and equipment take E -- the Bag's Weapons and Gear tabs -- and so does anything rare (a boss's trophy, a
+ *     golden weapon: the gold ring), supply or not. A weapon is a choice: it takes a place on keys 1-5
+ *     (shared/game/weaponSlots.ts orders them by id, so a new pistol moves the axe from 3 to 4), the game has no drop
+ *     verb to give it back, and in co-op the rifle on the floor is not whoever runs past first's by accident.
+ *   - E still takes anything in reach that fits, supplies included: one button never stops working.
  *
  * And the ceiling: the save keeps at most SAVE_LIMITS.ITEM_MAX of an item (AMMO_MAX of the five counters the ammo
  * and the oil live in). Anything past it was lost at the next load, silently; a pickup now takes only what fits
- * (`pickupRoom`), leaves the rest on the ground, and the hint says the item is full.
+ * (`pickupRoom`) and leaves the rest on the ground. A full item is passed over by E's target query (`noRoomIn`), so
+ * it never hides what is behind it; with nothing else in reach the hint says the item is full.
  *
  * Pure: no Instances, no services, no clock.
  */
@@ -33,9 +35,25 @@ export const WALK_PICKUP_DELAY_S = 0.5;
 /** one walked-up item per survivor per this many seconds (10 a second: a pile of wood goes in a blink, not a frame) */
 export const WALK_PICKUP_RATE_S = 0.1;
 
-/** is an item of this kind walked up (supplies), rather than taken with E (weapons, equipment)? */
-export function walkPickup(kind: number): boolean {
-	return kind === ItemKind.Use || kind === ItemKind.Etc;
+/** kind and id as one number (ids stay far below 1000), so the per-frame lookup builds no string */
+const rareKey = (kind: number, id: number): number => kind * 1000 + id;
+/** a boss's trophies and the golden weapons: the gold ring on the ground, and never walked up */
+const RARE = new Set<number>();
+// the four bosses of shared/sim/ai/bossBrain.ts (1..4); a key the table does not have is skipped
+for (let boss = 1; boss <= 4; boss++) {
+	for (const t of BOSS_TROPHIES[boss] ?? []) RARE.add(rareKey(t.kind, t.index));
+}
+for (let i = 0; i < WEAPONS.size(); i++) {
+	if (WEAPONS[i].name.sub(1, 7) === "Golden ") RARE.add(rareKey(ItemKind.Weapon, i));
+}
+
+/**
+ * Is this item walked up (supplies), rather than taken with E (weapons, equipment)? A rare one never is, supply or
+ * not: boss 4's trophies are materials (a voltage circuit, radioactive material), and the gold ring they wear says
+ * "a prize, take it with E" -- a boss's reward is not whoever steps on the spot first's (review of 1186a83, M2).
+ */
+export function walkPickup(kind: number, id: number): boolean {
+	return (kind === ItemKind.Use || kind === ItemKind.Etc) && !RARE.has(rareKey(kind, id));
 }
 
 /** the save's ceiling for one item: ammunition, arrows and oil have their own counters (inventory.ts) */
@@ -47,6 +65,20 @@ export function itemCap(kind: number, id: number): number {
 /** how many more of this item the save can hold (0: full) */
 export function pickupRoom(save: PlayerSaveData, kind: number, id: number): number {
 	return math.max(0, itemCap(kind, id) - countItem(save, kind, id));
+}
+
+let roomSave: PlayerSaveData | undefined;
+const NO_ROOM = (it: GroundItem): boolean => roomSave !== undefined && pickupRoom(roomSave, it.kind, it.itemId) <= 0;
+
+/**
+ * The `skip` E's target query takes (shared/sim/interactQuery.ts `interactTarget`): the ground items this save has
+ * no room for. A full stack is passed over, so it never hides the door, the search, the ride or the repair behind it
+ * (review of 1186a83, M1). The server's E, its vehicles and the client's hint all ask through this, so they agree.
+ * One function for every caller (no closure per press or per frame): valid until the next call.
+ */
+export function noRoomIn(save: PlayerSaveData): (it: GroundItem) => boolean {
+	roomSave = save;
+	return NO_ROOM;
 }
 
 /** reused by every `walkPickupTarget` (the server asks ten times a second per survivor): no table per answer */
@@ -78,7 +110,7 @@ export function walkPickupTarget(
 		if (dy > reach || dy < -reach) continue;
 		const d2 = dx * dx + dy * dy;
 		if (d2 > bestD2 || (d2 === bestD2 && best !== undefined && it.id > best.id)) continue;
-		if (!walkPickup(it.kind) || !ready(it) || pickupRoom(save, it.kind, it.itemId) <= 0) continue;
+		if (!walkPickup(it.kind, it.itemId) || !ready(it) || pickupRoom(save, it.kind, it.itemId) <= 0) continue;
 		bestD2 = d2;
 		best = it;
 	}
@@ -94,18 +126,7 @@ export function walkPickupTarget(
  */
 export type GroundTier = "rare" | "gear" | "supply";
 
-/** kind and id as one number (ids stay far below 1000), so the per-frame lookup builds no string */
-const rareKey = (kind: number, id: number): number => kind * 1000 + id;
-const RARE = new Set<number>();
-// the four bosses of shared/sim/ai/bossBrain.ts (1..4); a key the table does not have is skipped
-for (let boss = 1; boss <= 4; boss++) {
-	for (const t of BOSS_TROPHIES[boss] ?? []) RARE.add(rareKey(t.kind, t.index));
-}
-for (let i = 0; i < WEAPONS.size(); i++) {
-	if (WEAPONS[i].name.sub(1, 7) === "Golden ") RARE.add(rareKey(ItemKind.Weapon, i));
-}
-
 export function groundTier(kind: number, id: number): GroundTier {
 	if (RARE.has(rareKey(kind, id))) return "rare";
-	return walkPickup(kind) ? "supply" : "gear";
+	return walkPickup(kind, id) ? "supply" : "gear";
 }

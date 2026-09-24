@@ -12,10 +12,18 @@ import {
 	InteractTarget,
 	interactTarget,
 	isFire,
+	nearestGroundItem,
 	repairMaterial,
 } from "shared/sim/interactQuery";
 import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
-import { itemCap, pickupRoom, WALK_PICKUP_DELAY_S, WALK_PICKUP_RATE_S, walkPickupTarget } from "shared/sim/pickupRule";
+import {
+	itemCap,
+	noRoomIn,
+	pickupRoom,
+	WALK_PICKUP_DELAY_S,
+	WALK_PICKUP_RATE_S,
+	walkPickupTarget,
+} from "shared/sim/pickupRule";
 import { langGet } from "shared/data/lang";
 import { flinch } from "../view/solidFlinch";
 import { serverOwnsWorld } from "../net/authority";
@@ -234,10 +242,6 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		const it = target.item;
 		const lang = refs.save.settings.langType;
 		const n = langGet(itemName(it.kind, it.itemId), lang);
-		// the save's ceiling (ITM-07): a full item says so instead of promising a press that takes nothing
-		if (pickupRoom(refs.save, it.kind, it.itemId) <= 0) {
-			return `${n} ${langGet("full", lang)} (${itemCap(it.kind, it.itemId)})`;
-		}
 		hinted = it.id;
 		const verb = langGet("Pick up", lang);
 		return it.count > 1 ? `E: ${verb} ${n} ×${it.count}` : `E: ${verb} ${n}`;
@@ -296,9 +300,21 @@ export function interactHint(refs: GameRefs, by: PlayerState = refs.player): str
 	// on a vehicle E means one thing, whatever is in reach (server/sim/vehicles.ts takes the press first)
 	if (by.ride !== undefined) return rideHint(refs, by);
 	if (refs.pendingPlace >= 0) return undefined;
-	const target = interactTarget(refs.world, by.x, by.y);
-	if (target === undefined) return undefined;
+	// the server's query, full stacks passed over (ITM-07): a full stack never hides the door or the search behind it
+	const target = interactTarget(refs.world, by.x, by.y, noRoomIn(refs.save));
+	if (target === undefined) return fullHint(refs, by);
 	return hintFor(refs, target);
+}
+
+/**
+ * Nothing E can do is in reach, but an item is: every one in reach is full (the save's ceiling, ITM-07). Said, not
+ * promised: no "E:", and nothing marked.
+ */
+function fullHint(refs: GameRefs, by: PlayerState): string | undefined {
+	const it = nearestGroundItem(refs.world, by.x, by.y);
+	if (it === undefined) return undefined;
+	const lang = refs.save.settings.langType;
+	return `${langGet(itemName(it.kind, it.itemId), lang)} ${langGet("full", lang)} (${itemCap(it.kind, it.itemId)})`;
 }
 
 export class Interaction {
@@ -309,8 +325,16 @@ export class Interaction {
 	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
 		// mounted, E gets off -- and that, like getting on, is the server's (server/sim/vehicles.ts)
 		if (refs.pendingPlace >= 0 || by.ride !== undefined) return;
-		const target = interactTarget(refs.world, by.x, by.y);
-		if (target === undefined) return;
+		// what the hint named and what the server will pick: full stacks passed over (ITM-07)
+		const target = interactTarget(refs.world, by.x, by.y, noRoomIn(refs.save));
+		if (target === undefined) {
+			// only full items in reach: offline, say so where the survivor stands (online the HUD's line already does)
+			const it = serverOwnsWorld() ? undefined : nearestGroundItem(refs.world, by.x, by.y);
+			if (it !== undefined) {
+				fxMessage(refs, `${itemName(it.kind, it.itemId)} full (${itemCap(it.kind, it.itemId)})`, by);
+			}
+			return;
+		}
 		if (serverOwnsWorld()) {
 			// F3: the press is already on its way in the command's action edge, and the server picks the target itself.
 			// What it reached here is remembered, so the server's answer can be told for a pickup (./pickups.ts)
