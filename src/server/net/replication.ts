@@ -61,6 +61,7 @@ import {
 	WItemAdd,
 	WorldEv,
 	WorldEvent,
+	WorldResetCause,
 	WorldResetLife,
 	ZombieFlag,
 	ZombieSnap,
@@ -163,7 +164,10 @@ export interface ReplicatorOptions {
 	tick0Time: number;
 	/** §4.5 map hash, so the client can check it generated the same town */
 	mapHash: number;
-	/** (MP-22) the seed the town was generated from; DESIGN.TOWN_SEED, the town every server opens with, if omitted */
+	/**
+	 * (MP-22, MP-26) the seed the town was generated from: the one the host picked (server/net/mpHost.ts always names
+	 * it). DESIGN.TOWN_SEED if omitted -- a harness's default only
+	 */
 	seed?: number;
 	/**
 	 * The server's real clock in seconds (the host passes os.clock): when the interest decides whether a client still
@@ -180,6 +184,8 @@ export interface TownChange {
 	mapHash: number;
 	/** the world day the old town fell on */
 	endedDay: number;
+	/** WorldResetCause (protocol note 21): it fell (MP-22, the default) or its keeper restarted it (MP-26) */
+	cause?: number;
 	/** the survivors whose life the server reset to day 1, with the runRev that left in their saves */
 	lives: ReadonlyArray<WorldResetLife>;
 }
@@ -765,7 +771,13 @@ export class Replicator {
 		this.seed = change.seed;
 		const lives = new Array<WorldResetLife>();
 		for (const life of change.lives) lives.push({ userId: life.userId, runRev: life.runRev });
-		this.broadcast.unshift({ t: WorldEv.WorldReset, seed: change.seed, endedDay: change.endedDay, lives });
+		this.broadcast.unshift({
+			t: WorldEv.WorldReset,
+			seed: change.seed,
+			endedDay: change.endedDay,
+			cause: change.cause ?? WorldResetCause.Fell,
+			lives,
+		});
 		for (const sp of this.sim.players()) this.queueFor(sp.slot, this.initBegin());
 		this.flushWorld(this.sim.tick);
 	}
