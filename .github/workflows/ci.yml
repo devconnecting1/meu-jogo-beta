@@ -31,6 +31,11 @@ jobs:
       - name: Typecheck (roblox-ts)
         run: npm run build
 
+      # the pinned official Luau compiler (tools/luauRelease.mjs) against every out/**/*.luau: the real load-time
+      # limits (200 locals, registers, constants...), not the text heuristic check:registers falls back to
+      - name: Luau CLI check (real compiler; catches every load-time limit, not just locals)
+        run: npm run check:luau
+
       - name: Luau register budget (a module chunk may hold 200 locals)
         run: npm run check:registers
 

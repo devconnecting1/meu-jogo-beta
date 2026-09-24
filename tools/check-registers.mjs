@@ -12,10 +12,20 @@
  * module itself). A file that imports 24 names from four modules spends 28 registers before writing a line
  * of code. `import * as X from "..."` costs one, and is the usual fix.
  *
+ * This file is a fast, offline TEXT HEURISTIC (`tools/localsHeuristic.mjs`) -- it does not run the real
+ * Luau compiler and can be wrong in both directions; see that file's header for the two known gaps.
+ * `tools/check-luau.mjs` runs the actual pinned compiler (`tools/luauRelease.mjs`) over every file and is
+ * the source of truth. When that compiler is already cached on disk (because `check:luau` ran earlier, as
+ * it does in CI), this script uses it instead of the heuristic for the files close to the limit, so its
+ * numbers agree with the real one; otherwise it falls back to the heuristic alone.
+ *
  * Usage: node tools/check-registers.mjs  (after `npm run build`)
  */
 import fs from "node:fs";
 import path from "node:path";
+import { estimateChunkLocals } from "./localsHeuristic.mjs";
+import { cachedLuauCompile } from "./luauRelease.mjs";
+import { realHeadroom } from "./realRegisters.mjs";
 
 /** Luau's hard limit; loading a module with more locals in one chunk throws */
 const LIMIT = 200;
@@ -23,6 +33,8 @@ const LIMIT = 200;
 const FAIL = 190;
 /** print a heads-up here, so a file is flagged while the fix is still cheap */
 const WARN = 170;
+/** how many of the heaviest files (by the heuristic) get checked against the real compiler, when it's cached */
+const REAL_CHECK_CANDIDATES = 15;
 
 const OUT = "out";
 
@@ -36,41 +48,36 @@ function luauFiles(dir) {
 	return found;
 }
 
-/**
- * Locals declared in the module chunk itself (column 0). Nested scopes have their own budget, so only
- * top-level declarations count here -- and `local a, b, c = ...` declares three.
- */
-function topLevelLocals(source) {
-	let n = 0;
-	for (const line of source.split("\n")) {
-		if (!line.startsWith("local ")) continue;
-		if (line.startsWith("local function ")) {
-			n += 1;
-			continue;
-		}
-		const names = line.slice("local ".length).split("=")[0];
-		n += names.split(",").length;
-	}
-	return n;
-}
-
 if (!fs.existsSync(OUT)) {
 	console.error(`${OUT}/ nao existe: rode "npm run build" antes.`);
 	process.exit(1);
 }
 
 const rows = luauFiles(OUT)
-	.map(file => ({ file, locals: topLevelLocals(fs.readFileSync(file, "utf8")) }))
+	.map(file => ({ file, locals: estimateChunkLocals(fs.readFileSync(file, "utf8")), real: false }))
 	.sort((a, b) => b.locals - a.locals);
+
+const luauCompilePath = cachedLuauCompile();
+let realChecked = 0;
+if (luauCompilePath) {
+	for (const row of rows.slice(0, REAL_CHECK_CANDIDATES)) {
+		const free = realHeadroom(luauCompilePath, fs.readFileSync(row.file, "utf8"), { limit: LIMIT });
+		if (free === null) continue; // the file doesn't compile at all -- not this script's job; check:luau reports it
+		row.locals = LIMIT - free;
+		row.real = true;
+		realChecked += 1;
+	}
+	rows.sort((a, b) => b.locals - a.locals);
+}
 
 const failed = rows.filter(r => r.locals > FAIL);
 const warned = rows.filter(r => r.locals > WARN && r.locals <= FAIL);
 
 for (const r of warned) {
-	console.log(`aviso  ${String(r.locals).padStart(3)}/${LIMIT}  ${r.file}`);
+	console.log(`aviso  ${String(r.locals).padStart(3)}/${LIMIT}${r.real ? " (real)" : ""}  ${r.file}`);
 }
 for (const r of failed) {
-	console.error(`ERRO   ${String(r.locals).padStart(3)}/${LIMIT}  ${r.file}`);
+	console.error(`ERRO   ${String(r.locals).padStart(3)}/${LIMIT}${r.real ? " (real)" : ""}  ${r.file}`);
 }
 
 if (failed.length > 0) {
@@ -83,4 +90,9 @@ if (failed.length > 0) {
 }
 
 const top = rows[0];
-console.log(`OK: ${rows.length} modulos, pior caso ${top.locals}/${LIMIT} em ${top.file}`);
+const realNote = luauCompilePath
+	? ` (${realChecked} dos mais pesados conferidos no compilador real; rode "npm run check:luau" para o resto)`
+	: ` (heuristica de texto; rode "npm run check:luau" para o numero real)`;
+console.log(
+	`OK: ${rows.length} modulos, pior caso ${top.locals}/${LIMIT}${top.real ? " (real)" : ""} em ${top.file}${realNote}`,
+);
