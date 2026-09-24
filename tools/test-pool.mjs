@@ -862,13 +862,10 @@ section("9) no write without a change");
 	globalThis.CFrame = hadCFrame;
 	globalThis.Vector3 = hadVector3;
 	globalThis.pcall = hadPcall;
-	const items = loop.slice(
-		loop.indexOf("private drawItems("),
-		loop.indexOf("// ---", loop.indexOf("private drawItems(")),
-	);
+	const items = readFileSync(join(SRC, "client", "view", "groundItemsView.ts"), "utf8");
 	check(
-		/if \(t >= GLINT_LEN\) continue;/.test(items) && !/t < GLINT_LEN \?/.test(items),
-		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (drawItems)",
+		/if \(t >= GLINT_LEN\) return;/.test(items) && !/t < GLINT_LEN \?/.test(items),
+		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (groundItemsView)",
 	);
 	check(
 		first === 1 && still === 0 && moving === 60 && calls === 61,
@@ -1199,6 +1196,194 @@ section("12) the horde's draw order is the snapshot buffer's: a spawn or a death
 		"and the order still holds every body once, and not the dead one",
 		`${ids.length} drawn`,
 	);
+}
+
+// ================================================================ 13. the ground items (ITM-07)
+
+section("13) ground items (ITM-07): drops, a pile, the target and the glint -- no Instance after the warm-up");
+{
+	const { GroundItemsView, hopHeight, HOP_TIME, PILE_SPREAD } = require(join(SRC, "client/view/groundItemsView.ts"));
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	/** a street's worth of loot: every kind, a boss's pile of six on one spot, and a drop every half second */
+	const street = () => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(1280, 720);
+		const cam = new Camera();
+		cam.setView(1280, 720);
+		cam.x = 3000;
+		cam.y = 3000;
+		const shadow = { x: 0, y: 0 };
+		const view = new GroundItemsView((x, y, len) => {
+			shadow.x = 0.7 * len;
+			shadow.y = 0.7 * len;
+			return shadow;
+		});
+		const kinds = [
+			[1, 0],
+			[1, 10],
+			[1, 16],
+			[2, 4],
+			[2, 13],
+			[3, 12],
+			[3, 17],
+			[4, 23],
+			[4, 44],
+			[4, 45],
+			[4, 48],
+			[4, 30],
+		];
+		let id = 100;
+		const items = [];
+		const drop = (k, x, y, moving) => {
+			id += 1;
+			const [kind, itemId] = kinds[k % kinds.length];
+			items.push({ id, kind, itemId, count: 3, x, y, vx: moving ? 120 : 0, vy: moving ? -40 : 0 });
+		};
+		for (let i = 0; i < 36; i++) drop(i, 2500 + (i % 12) * 80, 2800 + Math.floor(i / 12) * 90, false);
+		for (let i = 0; i < 6; i++) drop(i * 3, 3300, 3100, false);
+		let clock = 0;
+		let f = 0;
+		const frame = () => {
+			f += 1;
+			clock += 1 / 60;
+			// a drop lands every 30 frames and the oldest drop is picked up: six in play, on seven spots in turn (a
+			// steady street, so the warm-up has seen its busiest frame)
+			if (f % 30 === 0) {
+				const n = f / 30;
+				drop(n, 2600 + (n % 7) * 90, 3200, true);
+				if (items.length > 42 + 6) items.splice(42, 1);
+			}
+			for (const it of items) {
+				if (it.vx === 0 && it.vy === 0) continue;
+				it.x += it.vx / 60;
+				it.y += it.vy / 60;
+				it.vx *= 0.9;
+				it.vy *= 0.9;
+				if (it.vx * it.vx + it.vy * it.vy < 1) {
+					it.vx = 0;
+					it.vy = 0;
+				}
+			}
+			view.target = items[(Math.floor(f / 45) * 7) % items.length].id;
+			view.reduceMotion = f % 600 >= 450;
+			r.beginFrame();
+			view.draw(r, cam, cam.viewRect(32), items, clock, 1 / 60);
+			r.endFrame();
+		};
+		return { r, view, items, frame };
+	};
+	for (const [label, ids] of [
+		["flat looks (no atlas id)", {}],
+		["the icons' atlas", { itemIcons: "rbxassetid://4242" }],
+	]) {
+		WA.overrideWorldArt(ids);
+		const S = street();
+		for (let i = 0; i < 4200; i++) S.frame();
+		const w = watch(() => {
+			for (let i = 0; i < 600; i++) S.frame();
+		});
+		check(
+			w.created === 0,
+			`${label}: 600 frames of drops, pickups, a pile, the target moving and the glint create no Instance`,
+			`${w.created} created`,
+		);
+		check(
+			w.zWrites === 0,
+			`${label}: ...and write no ZIndex (glint and brackets have buckets of their own)`,
+			`${w.zWrites} ZIndex writes`,
+		);
+		console.log(
+			`       ${label}: ${S.r.drawCount()} sprites for ${S.items.length} items, ${(w.writes / 600).toFixed(0)} writes/frame [${top(w.byProp, 600)}]; pool ${S.r.poolSize()}`,
+		);
+	}
+	WA.overrideWorldArt({ itemIcons: "rbxassetid://4242" });
+	// what one item costs with the atlas: the icon and its shadow; gear adds its ring (2); the target its brackets (8)
+	const one = (kind, itemId, target) => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(200, 200);
+		const cam = new Camera();
+		cam.setView(200, 200);
+		cam.x = 1000;
+		cam.y = 1000;
+		const view = new GroundItemsView(() => ({ x: 1, y: 1 }));
+		view.reduceMotion = true;
+		view.target = target ? 5 : -1;
+		r.beginFrame();
+		view.draw(
+			r,
+			cam,
+			cam.viewRect(32),
+			[{ id: 5, kind, itemId, count: 1, x: 1000, y: 1000, vx: 0, vy: 0 }],
+			1.3,
+			0,
+		);
+		r.endFrame();
+		return r.drawCount();
+	};
+	const supply = one(4, 23, false);
+	const gear = one(1, 10, false);
+	const targeted = one(1, 10, true);
+	check(
+		supply === 2 && gear === 4 && targeted === 12,
+		`with the atlas an item is 2 sprites (icon + shadow), gear 4 (its ring), the target 12 (its brackets)`,
+		`${supply} / ${gear} / ${targeted}`,
+	);
+	// the hop: two arcs that land, and nothing with Reduce Motion
+	check(
+		hopHeight(0) === 0 &&
+			hopHeight(HOP_TIME * 0.3) > 4 &&
+			hopHeight(HOP_TIME) === 0 &&
+			hopHeight(HOP_TIME + 1) === 0,
+		`a drop hops twice and lands (${HOP_TIME.toFixed(2)} s)`,
+	);
+	// a pile fans out, every item off the spot, apart from each other
+	{
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(300, 300);
+		const cam = new Camera();
+		cam.setView(300, 300);
+		cam.x = 1000;
+		cam.y = 1000;
+		const at = [];
+		const draw = r.drawRect.bind(r);
+		r.drawRect = (c, x, y, o) => {
+			if (o.zIndex === Z.item) at.push([x, y]);
+			return draw(c, x, y, o);
+		};
+		const view = new GroundItemsView(() => ({ x: 0, y: 0 }));
+		view.reduceMotion = true;
+		const pile = [];
+		for (let i = 0; i < 6; i++)
+			pile.push({ id: 300 + i, kind: 4, itemId: 23 + i, count: 1, x: 1000, y: 1000, vx: 0, vy: 0 });
+		r.beginFrame();
+		view.draw(r, cam, cam.viewRect(32), pile, 1.3, 0);
+		r.endFrame();
+		// the icon is drawn centred on its drawn box: compare the boxes' centres, the icon offset taken back out
+		let closest = Infinity;
+		for (let i = 0; i < at.length; i++)
+			for (let j = 0; j < i; j++)
+				closest = Math.min(closest, Math.hypot(at[i][0] - at[j][0], at[i][1] - at[j][1]));
+		check(
+			at.length === 6 && closest >= 12,
+			`six items on one spot fan out (at least ${PILE_SPREAD} u off it), no two icons closer than 12 u`,
+			`${at.length} icons, closest ${closest.toFixed(1)} u`,
+		);
+	}
+	// the tiers
+	check(
+		RULE.groundTier(1, 25) === "rare" &&
+			RULE.groundTier(2, 14) === "rare" &&
+			RULE.groundTier(1, 28) === "rare" &&
+			RULE.groundTier(1, 10) === "gear" &&
+			RULE.groundTier(2, 13) === "gear" &&
+			RULE.groundTier(4, 23) === "supply" &&
+			RULE.groundTier(3, 12) === "supply",
+		"tiers: a boss's trophy or a golden weapon is rare, a weapon or equipment gear, the rest supplies",
+	);
+	WA.overrideWorldArt(undefined);
 }
 
 WA.overrideWorldArt(undefined);

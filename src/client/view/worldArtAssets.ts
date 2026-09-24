@@ -93,6 +93,10 @@ export type WorldArtName =
 	| "signGuns"
 	| "signClothes"
 	| "signDiner"
+	| "signCollege"
+	| "signLibrary"
+	| "signLab"
+	| "signDorm"
 	| "helipad"
 	| "gasCanopyN"
 	| "gasCanopyS"
@@ -119,6 +123,7 @@ export type WorldArtName =
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath"
+	| "wallShade"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -131,7 +136,20 @@ export type WorldArtName =
 	| "zombiesRim"
 	| "dogs"
 	| "birds"
-	| "itemIcons";
+	| "bossGiant"
+	| "bossGiantFill"
+	| "bossGiantRim"
+	| "bossHedgehog"
+	| "bossHedgehogFill"
+	| "bossHedgehogRim"
+	| "bossCentipede"
+	| "bossCentipedeFill"
+	| "bossCentipedeRim"
+	| "bossRafflesia"
+	| "bossRafflesiaFill"
+	| "bossRafflesiaRim"
+	| "itemIcons"
+	| "furniture";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -288,6 +306,14 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signClothes: { id: "rbxassetid://99147626160535", w: 24, h: 16 },
 	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
+	/** sprite: storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon */
+	signCollege: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon */
+	signLibrary: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon */
+	signLab: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
+	signDorm: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
@@ -340,6 +366,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
+	/** slice: the shadow at the foot of an interior wall (round every wall) */
+	wallShade: { id: "", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -364,8 +392,34 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
-	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14) */
+	bossGiant: { id: "", w: 640, h: 320 },
+	/** mask: bossGiant: white silhouettes of the same cells (tint: hit flash) */
+	bossGiantFill: { id: "", w: 640, h: 320 },
+	/** mask: bossGiant: white outlines of the same cells (tint: the hit outline) */
+	bossGiantRim: { id: "", w: 640, h: 320 },
+	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14) */
+	bossHedgehog: { id: "", w: 640, h: 240 },
+	/** mask: bossHedgehog: white silhouettes of the same cells (tint: hit flash) */
+	bossHedgehogFill: { id: "", w: 640, h: 240 },
+	/** mask: bossHedgehog: white outlines of the same cells (tint: the hit outline) */
+	bossHedgehogRim: { id: "", w: 640, h: 240 },
+	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14) */
+	bossCentipede: { id: "", w: 640, h: 480 },
+	/** mask: bossCentipede: white silhouettes of the same cells (tint: hit flash) */
+	bossCentipedeFill: { id: "", w: 640, h: 480 },
+	/** mask: bossCentipede: white outlines of the same cells (tint: the hit outline) */
+	bossCentipedeRim: { id: "", w: 640, h: 480 },
+	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14) */
+	bossRafflesia: { id: "", w: 816, h: 68 },
+	/** mask: bossRafflesia: white silhouettes of the same cells (tint: hit flash) */
+	bossRafflesiaFill: { id: "", w: 816, h: 68 },
+	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
+	bossRafflesiaRim: { id: "", w: 816, h: 68 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
+	/** atlas: interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 718 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -447,6 +501,10 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signGuns",
 	"signClothes",
 	"signDiner",
+	"signCollege",
+	"signLibrary",
+	"signLab",
+	"signDorm",
 	"helipad",
 	"gasCanopyN",
 	"gasCanopyS",
@@ -473,6 +531,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
+	"wallShade",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",
@@ -485,5 +544,18 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"zombiesRim",
 	"dogs",
 	"birds",
+	"bossGiant",
+	"bossGiantFill",
+	"bossGiantRim",
+	"bossHedgehog",
+	"bossHedgehogFill",
+	"bossHedgehogRim",
+	"bossCentipede",
+	"bossCentipedeFill",
+	"bossCentipedeRim",
+	"bossRafflesia",
+	"bossRafflesiaFill",
+	"bossRafflesiaRim",
 	"itemIcons",
+	"furniture",
 ];

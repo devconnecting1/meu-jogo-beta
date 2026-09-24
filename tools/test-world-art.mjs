@@ -50,7 +50,18 @@
  *      sheets a survivor is two sprites, a zombie and a pet one. The cost of a night -- 60 zombies, 4 survivors and
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
- *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
+ *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
+ *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
+ *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
+ *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
+ *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
+ *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
+ *      every rug, §6 the floors' mean colours.
+ *  12. THE GROUND ITEMS (ITM-07, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
+ *      with the icons' atlas, rasterised: by day and in the survivor's light every icon steps 3:1 or 35 ΔE off its
+ *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out
+ *      of every light no item steps more than 1.5:1 off its ground (nothing glows), and every sprite of the view is
+ *      under the night. The pictures: node tools/render-ground-items.mjs --out <dir>.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -64,6 +75,7 @@ import { installFakeGui } from "./fake-gui.mjs";
 import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
 import { castDrawer, characterCast } from "./character-cast.mjs";
+import { bossCast, bossDrawer } from "./boss-cast.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
 // --golden-chars: rewrites tools/golden/characters-flat.json from the CURRENT src (run it on the commit before the
@@ -233,6 +245,39 @@ function charDigest() {
 	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
 	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
 }
+// the bosses' draw calls with no boss sheet (§10f, ART-14), and --golden-bosses: record them from this src (run it
+// on the commit before the bosses' art, with PZ_SRC, and PZ_GOLDEN_FROM naming it)
+const GOLDEN_BOSSES = join(ROOT, "tools", "golden", "bosses-flat.json");
+/** where member `i` of the boss cast is drawn (far apart: nothing of one lands on another) */
+const bossAt = i => [(i % 6) * 400, Math.floor(i / 6) * 1600];
+function bossDigest() {
+	const cast = bossCast();
+	const drawBoss = bossDrawer(require, SRC, shadowFn(false));
+	const st = stage(1400, 1400, 1);
+	st.cam.x = 600;
+	st.cam.y = 600;
+	calls.length = 0;
+	capturing = true;
+	st.r.beginFrame();
+	cast.forEach((m, i) => drawBoss(st, m, ...bossAt(i)));
+	st.r.endFrame();
+	capturing = false;
+	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
+	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
+}
+if (process.argv.includes("--golden-bosses")) {
+	setArt({});
+	const d = bossDigest();
+	const out = {
+		note: "draw-call digest of the flat bosses of tools/boss-cast.mjs (tools/test-world-art.mjs --golden-bosses)",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		count: d.count,
+		sha1: d.sha1,
+	};
+	writeFileSync(GOLDEN_BOSSES, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_BOSSES} (${d.count} calls)`);
+	process.exit(0);
+}
 if (process.argv.includes("--golden-chars")) {
 	setArt({});
 	const d = charDigest();
@@ -244,6 +289,53 @@ if (process.argv.includes("--golden-chars")) {
 	};
 	writeFileSync(GOLDEN_CHARS, `${JSON.stringify(out, undefined, "\t")}\n`);
 	console.log(`wrote ${GOLDEN_CHARS} (${d.count} calls)`);
+	process.exit(0);
+}
+
+/**
+ * ART-01 inside (ART-12): the first building of each type with its roof off, the camera on it and a short pan, with
+ * no world art -- the draw calls hashed. tools/golden/interiors-flat.json holds them as recorded from the flat
+ * interiors of the commit before their pixel art (`--golden-interiors`, with PZ_SRC on that commit).
+ */
+const GOLDEN_INTERIORS = join(ROOT, "tools", "golden", "interiors-flat.json");
+function interiorBuildings(w) {
+	const out = [];
+	for (let t = 1; t <= 15; t++) {
+		const list = w.solids.filter(s => s.kind === "building" && s.buildingType === t && s.rooms !== undefined);
+		list.sort((a, b) => a.id - b.id);
+		if (list[0] !== undefined) out.push(list[0]);
+	}
+	return out;
+}
+function interiorDigest(b) {
+	const st = stage(1920, 1080, 1);
+	const view = new WorldView(shadowFn(false));
+	b.roofAlpha = 0;
+	calls.length = 0;
+	capturing = true;
+	const cx = b.x + b.w / 2;
+	const cy = b.y + b.h / 2;
+	drawTown(st, view, cx, cy);
+	for (let f = 1; f <= 6; f++) drawTown(st, view, cx + f * 29, cy + f * 13);
+	capturing = false;
+	b.roofAlpha = undefined;
+	return { count: calls.length, sha1: createHash("sha1").update(JSON.stringify(calls)).digest("hex") };
+}
+if (process.argv.includes("--golden-interiors")) {
+	setArt({});
+	const scenes = {};
+	for (const b of interiorBuildings(world)) {
+		const d = interiorDigest(b);
+		scenes[`type${b.buildingType}`] = { building: b.id, x: b.x, y: b.y, count: d.count, sha1: d.sha1 };
+	}
+	const out = {
+		note: "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		scenes,
+	};
+	mkdirSync(join(ROOT, "tools", "golden"), { recursive: true });
+	writeFileSync(GOLDEN_INTERIORS, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_INTERIORS}`);
 	process.exit(0);
 }
 
@@ -559,7 +651,7 @@ const S = 160;
  */
 const CHAR_SHEETS = new Set(
 	ALL.manifest.textures
-		.filter(t => t.kind === "sheet" || /^(survivors[A-Z]|zombies)(Fill|Rim)$/.test(t.name))
+		.filter(t => t.kind === "sheet" || /^(survivors[A-Z]|zombies|boss[A-Z][a-z]+)(Fill|Rim)$/.test(t.name))
 		.map(t => t.name),
 );
 const TOWN_IDS = Object.fromEntries(Object.entries(ALL.ids).filter(([name]) => !CHAR_SHEETS.has(name)));
@@ -622,6 +714,8 @@ const REACH = 5;
  * within REACH px -- a dark rim, a bright body or both. Averaged along the whole outline.
  */
 function silhouette(ground, withBody) {
+	// square shots: S x S for a walker and the survivor, bigger for a boss (§10f)
+	const S = ground.w;
 	const n = S * S;
 	const mask = new Uint8Array(n);
 	const L = new Array(n);
@@ -751,6 +845,93 @@ function silhouette(ground, withBody) {
 			`walker ${f("zombie", "chars")}, survivor ${f("survivor", "chars")} ΔE`,
 		);
 	}
+}
+{
+	// ART-12: inside, the roof off, on every kind of room floor and on a rug -- the floors' textures, the shadow at
+	// the walls' foot and the furniture around keep both silhouettes, and the bars of the open ground hold
+	const buildings = world.solids
+		.filter(s => s.kind === "building" && s.rooms !== undefined)
+		.sort((a, b) => a.id - b.id);
+	const clear = (b, x, y, rugOk) => {
+		if (pointInSolid(world, x, y, 70) !== undefined) return false;
+		for (const d of b.decor ?? []) {
+			if (rugOk && d.kind === "rug") continue;
+			if (x > d.x - 60 && x < d.x + d.w + 60 && y > d.y - 60 && y < d.y + d.h + 60) return false;
+		}
+		return true;
+	};
+	// which of the rugs' colours a rug is (client/view/interiorArt.ts: by where it lies)
+	const FA = join(SRC, "client/view/furnitureAtlas.ts");
+	const RUGS = existsSync(FA) ? (require(FA).RUG_COLOURS ?? 1) : 1;
+	const rugColour = d => Math.floor(hash01(d.x, d.y, 37) * RUGS) % RUGS;
+	/** a point of `floor` (or on a rug of colour n: "rug<n>") with free floor round it, and its building */
+	const roomSpot = floor => {
+		for (const b of buildings) {
+			if (floor.startsWith("rug")) {
+				for (const d of b.decor ?? []) {
+					if (d.kind !== "rug" || d.w < 110 || d.h < 60 || `rug${rugColour(d)}` !== floor) continue;
+					const x = Math.round(d.x + d.w / 2);
+					const y = Math.round(d.y + d.h / 2);
+					if (clear(b, x, y, true)) return { b, x, y };
+				}
+				continue;
+			}
+			for (const q of b.rooms) {
+				if (q.floor !== floor || q.w < 220 || q.h < 220) continue;
+				for (let y = q.y + 90; y < q.y + q.h - 90; y += 24) {
+					for (let x = q.x + 90; x < q.x + q.w - 90; x += 24) if (clear(b, x, y, false)) return { b, x, y };
+				}
+			}
+		}
+		return undefined;
+	};
+	const worst = { zt: Infinity, st: Infinity, zc: Infinity, sc: Infinity };
+	const floors = ["wood", "carpet", "kitchen", "bath", "tile", "shop", "concrete"];
+	for (let n = 0; n < RUGS; n++) floors.push(`rug${n}`);
+	for (const floor of floors) {
+		const spot = roomSpot(floor);
+		if (spot === undefined) {
+			check(false, `a free spot of ${floor} floor inside a building`);
+			continue;
+		}
+		spot.b.roofAlpha = 0;
+		const res = {};
+		for (const actor of ["zombie", "survivor"]) {
+			for (const look of ["flat", "town", "chars"]) {
+				const base = shot(spot, actor === "zombie" ? "zombieShadow" : "none", look);
+				res[`${actor}.${look}`] = silhouette(base, shot(spot, actor, look));
+			}
+		}
+		spot.b.roofAlpha = undefined;
+		const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+		worst.zt = Math.min(worst.zt, res["zombie.town"]);
+		worst.st = Math.min(worst.st, res["survivor.town"]);
+		worst.zc = Math.min(worst.zc, res["zombie.chars"]);
+		worst.sc = Math.min(worst.sc, res["survivor.chars"]);
+		// a floor's texture keeps what its flat colour gave; a rug is a colour of its own with the art (the flat one is
+		// always the red), so each rug colour is held to the open ground's bars instead
+		const rug = floor.startsWith("rug");
+		check(
+			rug
+				? res["zombie.town"] >= 25 &&
+						res["survivor.town"] >= 30 &&
+						res["zombie.chars"] >= 40 &&
+						res["survivor.chars"] >= 35
+				: res["zombie.town"] >= res["zombie.flat"] * 0.9 && res["survivor.town"] >= res["survivor.flat"] * 0.9,
+			`inside, ${floor.padEnd(8)}: ${rug ? "a rug of this colour clears the open ground's bars" : "the interiors' art keeps both silhouettes"}`,
+			`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE`,
+		);
+	}
+	check(
+		worst.zt >= 25 && worst.st >= 30,
+		"inside, on the worst floor, a walker and the survivor clear the open ground's bars",
+		`walker ${worst.zt.toFixed(1)}, survivor ${worst.st.toFixed(1)} ΔE`,
+	);
+	check(
+		worst.zc >= 40 && worst.sc >= 35,
+		"and with the characters' art too",
+		`walker ${worst.zc.toFixed(1)}, survivor ${worst.sc.toFixed(1)} ΔE`,
+	);
 }
 setArt({});
 
@@ -916,7 +1097,10 @@ const SD = require(join(SRC, "shared/data/buildingSigns.ts"));
 const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
 const { LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
 const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
-const SIGN_TYPES = [3, 4, 5, 6, 7, 8, 9, 10, 11];
+const SIGN_TYPES = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+/** the college campus's four buildings (DESIGN_RULES EDI-17): one institution, one plate colour and one roof */
+const CAMPUS_SIGNS = [12, 13, 14, 15];
+const sameFamily = (a, b) => CAMPUS_SIGNS.includes(a) && CAMPUS_SIGNS.includes(b);
 const TX = SD.SIGN_TEXEL;
 const rgb255 = c => [c.R * 255, c.G * 255, c.B * 255];
 const dE = (p, q) => {
@@ -986,7 +1170,10 @@ function frameOf(sign) {
 			const b = SD.BUILDING_SIGNS[SIGN_TYPES[j]];
 			const fa = frameOf(a);
 			const fb = frameOf(b);
-			const face = dE(rgb255(SD.SIGN_ART[fa.face]), rgb255(SD.SIGN_ART[fb.face]));
+			// the campus's four plates are one maroon (its pictograms tell them apart, checked below)
+			const face = sameFamily(SIGN_TYPES[i], SIGN_TYPES[j])
+				? Infinity
+				: dE(rgb255(SD.SIGN_ART[fa.face]), rgb255(SD.SIGN_ART[fb.face]));
 			let picture = 1;
 			if (fa.w === fb.w && fa.h === fb.h) {
 				let diff = 0;
@@ -1009,7 +1196,11 @@ function frameOf(sign) {
 			}
 		}
 	}
-	check(minFace >= 10, "no two boards share a face colour", `closest faces ΔE ${minFace.toFixed(1)} (types ${pair})`);
+	check(
+		minFace >= 10,
+		"no two boards share a face colour (the campus's four share the college's)",
+		`closest faces ΔE ${minFace.toFixed(1)} (types ${pair})`,
+	);
 	check(
 		minPicture >= 0.1,
 		"no two pictograms share a shape",
@@ -1412,7 +1603,7 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		for (let j = i + 1; j < SIGN_TYPES.length; j++) {
 			const a = SIGN_TYPES[i];
 			const b = SIGN_TYPES[j];
-			if (a === 7 && b === 8) continue;
+			if ((a === 7 && b === 8) || sameFamily(a, b)) continue;
 			const d = dE(roofs[a], roofs[b]);
 			if (d < minRoof) {
 				minRoof = d;
@@ -1422,7 +1613,7 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 	}
 	check(
 		minRoof >= 10,
-		"the textured roofs keep their type colours apart (market and grocery share theirs)",
+		"the textured roofs keep their type colours apart (market and grocery share theirs, and the campus)",
 		`closest ΔE ${minRoof.toFixed(1)} (types ${roofPair})`,
 	);
 	setArt({});
@@ -1906,6 +2097,234 @@ section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost 
 		"and writes no more properties per frame",
 		`${art.writes.toFixed(0)} vs ${flat.writes.toFixed(0)}`,
 	);
+
+	// ---- 10f. the bosses (ART-14): their sheets, the flat fallback of before, each on its own, the cost of a fight
+	{
+		const BV = require(join(SRC, "client/view/bossView.ts"));
+		const { bossHitRadius, BOSS1_SEGMENT_RADIUS } = require(join(SRC, "shared/game/entities.ts"));
+		const bossSheets = [
+			["bossGiant", CS.GIANT_CELL, CS.BOSS_BAND, CS.GIANT_POSES * CS.BOSS_BANDS],
+			["bossHedgehog", CS.HEDGEHOG_CELL, CS.BOSS_BAND, CS.HEDGEHOG_POSES * CS.BOSS_BANDS],
+			["bossCentipede", CS.CENTIPEDE_CELL, CS.BOSS_BAND, CS.CENTIPEDE_POSES * CS.BOSS_BANDS],
+			["bossRafflesia", CS.RAFFLESIA_CELL, CS.RAFFLESIA_FRAMES, 1],
+		];
+		const bad = [];
+		const extent = {};
+		for (const [name, cell, cols, rows] of bossSheets) {
+			const t = byName[name];
+			if (t === undefined || byName[`${name}Fill`] === undefined || byName[`${name}Rim`] === undefined) {
+				bad.push(`${name} (or a mask) missing`);
+				continue;
+			}
+			if (t.w !== cols * cell || t.h !== rows * cell || t.w > 1024 || t.h > 1024)
+				bad.push(`${name} is ${t.w}x${t.h}`);
+			const colour = img(name);
+			const fill = img(`${name}Fill`);
+			const rim = img(`${name}Rim`);
+			let empty = 0;
+			let margin = 0;
+			let mismatch = 0;
+			let maxR = 0;
+			for (let r = 0; r < rows; r++) {
+				for (let c = 0; c < cols; c++) {
+					let any = false;
+					for (let y = 0; y < cell; y++) {
+						for (let x = 0; x < cell; x++) {
+							const i = ((r * cell + y) * colour.w + c * cell + x) * 4;
+							if (colour.data[i + 3] === 0) {
+								if (fill.data[i + 3] > 0 || rim.data[i + 3] > 0) mismatch++;
+								continue;
+							}
+							any = true;
+							if (x === 0 || y === 0 || x === cell - 1 || y === cell - 1) margin++;
+							if (fill.data[i + 3] > 0 === rim.data[i + 3] > 0) mismatch++;
+							maxR = Math.max(maxR, Math.hypot(x + 0.5 - cell / 2, y + 0.5 - cell / 2) * 4);
+						}
+					}
+					if (!any) empty++;
+				}
+			}
+			extent[name] = maxR;
+			if (empty > 0) bad.push(`${name}: ${empty} empty cells`);
+			if (margin > 0) bad.push(`${name}: ${margin} texels on a cell's border`);
+			if (mismatch > 0) bad.push(`${name}: ${mismatch} texels where Fill + Rim != the cell`);
+		}
+		check(
+			bad.length === 0,
+			"10f. every boss sheet has charSheets.ts's layout (32 headings in two bands; the rafflesia's vine beats), within 1024, no empty cell, a clear margin, Fill + Rim = the cell",
+			bad.slice(0, 4).join("; "),
+		);
+		// the size of what you hit, and a boss fits its plaza (TOWN.BOSS_CLEAR: the circle kept free round an anchor)
+		const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
+		const hit = { bossGiant: 45, bossHedgehog: 38, bossRafflesia: 65 };
+		const sized = Object.entries(hit).every(([n, r]) => extent[n] >= r * 1.05 && extent[n] <= r * 2.2);
+		check(
+			sized && bossHitRadius({ type: 3 }) === 45 && BOSS1_SEGMENT_RADIUS === 34,
+			"each is drawn round the body it is hit at (hit radius <= its reach <= 2.2x: fists, needles, vines past the body)",
+			Object.entries(extent)
+				.map(([n, r]) => `${n.slice(4)} ${r.toFixed(0)} u`)
+				.join(", "),
+		);
+		check(
+			Math.max(...Object.values(extent)) * 2 < TOWN.BOSS_CLEAR,
+			`and the biggest (the rafflesia with its vines) fits its plaza many times over (${TOWN.BOSS_CLEAR} u kept free)`,
+		);
+
+		// without their ids the bosses are drawn exactly as before (ART-01), with them each from its own cell
+		setArt(TOWN_IDS);
+		const d = bossDigest();
+		const g = JSON.parse(readFileSync(GOLDEN_BOSSES, "utf8"));
+		check(
+			d.count === g.count && d.sha1 === g.sha1 && d.images === 0,
+			`no boss id: the ${bossCast().length} bosses make the same ${d.count} draw calls as ${g.recordedFrom.split(" ")[0]}, no image`,
+			`${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}, ${g.count} calls`,
+		);
+		const drawBossList = bossDrawer(require, SRC, shadowFn(false));
+		const usedBy = ids => {
+			setArt(ids);
+			const st = stage(1400, 1400, 1);
+			st.cam.x = 600;
+			st.cam.y = 600;
+			st.r.beginFrame();
+			bossCast().forEach((m, i) => drawBossList(st, m, ...bossAt(i)));
+			st.r.endFrame();
+			const used = {};
+			for (const f of st.r.layer.GetChildren()) {
+				if (f.Visible === false) continue;
+				const im = f.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible !== false);
+				if (im !== undefined)
+					used[nameOf[im.Image] ?? im.Image] = (used[nameOf[im.Image] ?? im.Image] ?? 0) + 1;
+			}
+			return { used, counts: countSprites(st.r.layer) };
+		};
+		const giantOnly = usedBy(only(["bossGiant", "bossGiantFill", "bossGiantRim"]));
+		const cast = bossCast();
+		const giants = cast.filter(m => m.type === 3);
+		check(
+			giantOnly.used.bossGiant === giants.length &&
+				giantOnly.used.bossHedgehog === undefined &&
+				giantOnly.used.bossCentipede === undefined,
+			"each boss falls back on its own: only the giant uploaded, only the giant is its cells",
+			JSON.stringify(giantOnly.used),
+		);
+		check(
+			!BV.bossArtLive(3) || giantOnly.used.bossGiantFill === giants.filter(m => m.flash > 0).length,
+			"...and a hit giant wears its Fill and Rim masks",
+		);
+		const allBoss = usedBy(ALL.ids);
+		const segments = cast.filter(m => m.type === 1).length * 50;
+		const wantBoss = {
+			bossGiant: giants.length,
+			bossHedgehog: cast.filter(m => m.type === 4).length,
+			bossRafflesia: cast.filter(m => m.type === 2).length,
+			bossCentipede: segments,
+		};
+		check(
+			Object.entries(wantBoss).every(([n, k]) => allBoss.used[n] === k) && allBoss.counts.strokes === 0,
+			"with every sheet: the giant, the hedgehog and the rafflesia one cell each, the centipede one a segment, no UIStroke",
+			JSON.stringify(allBoss.used),
+		);
+		const flatBoss = usedBy(TOWN_IDS);
+		check(
+			allBoss.counts.sprites < flatBoss.counts.sprites,
+			"and fewer sprites than the flat bosses",
+			`${allBoss.counts.sprites} vs ${flatBoss.counts.sprites}`,
+		);
+
+		// a boss fight: the four of them moving, hit and flashing, 300 frames: no Instance after the warm-up
+		const fight = ids => {
+			setArt(ids);
+			const st = stage(1280, 800, 0.5);
+			st.cam.x = 0;
+			st.cam.y = 0;
+			const frame = f => {
+				st.r.beginFrame();
+				const list = [
+					{ type: 3, angle: f * 0.02, moveCycle: (f * 1) % 360, flash: f % 40 < 5 ? 1 : 0 },
+					{ type: 4, angle: -f * 0.03, flash: f % 55 < 4 ? 0.7 : 0 },
+					{ type: 2, angle: 0, clock: f / 60, flash: f % 70 < 5 ? 1 : 0 },
+					{ type: 1, angle: f * 0.01, clock: f / 60, flash: f % 90 < 6 ? 0.8 : 0 },
+				];
+				list.forEach((m, i) =>
+					drawBossList(st, m, (i - 1.5) * 600 + Math.sin(f * 0.02) * 40, (i % 2) * 300 - 150),
+				);
+				st.r.endFrame();
+			};
+			for (let f = 0; f < 90; f++) frame(f);
+			const created0 = gui.stats.created;
+			for (let f = 90; f < 390; f++) frame(f);
+			return { created: gui.stats.created - created0, counts: countSprites(st.r.layer) };
+		};
+		const fFlat = fight(TOWN_IDS);
+		const fArt = fight(ALL.ids);
+		console.log(
+			`       bosses: flat ${fFlat.counts.sprites} sprites (${fFlat.counts.strokes} strokes), art ${fArt.counts.sprites} sprites (${fArt.counts.images} images)`,
+		);
+		check(
+			fFlat.created === 0 && fArt.created === 0,
+			"a boss fight, 300 frames: no Instance created after the warm-up, flat or art",
+			`${fFlat.created}, ${fArt.created}`,
+		);
+
+		// LEG-03: each boss stands out on every ground (section 5's measure, on a shot big enough for the rafflesia);
+		// its round shadow is part of the ground in both pictures, so only the body is compared
+		const BS = 300;
+		const bossShot = (p, m, look, withBody) => {
+			setArt(look === "chars" ? ALL.ids : TOWN_IDS);
+			const st = stage(BS, BS, 1);
+			const sun = shadowFn(false);
+			const view = new WorldView(sun);
+			st.cam.x = p.x;
+			st.cam.y = p.y;
+			const v = st.cam.viewRect(32);
+			st.r.beginFrame();
+			view.drawGround(st.r, st.cam, v, world);
+			view.drawSolids(st.r, st.cam, v, world);
+			if (withBody) drawBossList(st, m, p.x, p.y);
+			else if (m.type !== 1) {
+				const so = sun(p.x, p.y, 14);
+				st.r.drawCircle(st.cam, p.x + so.x, p.y + so.y, bossHitRadius(m) * 2 * 1.05, {
+					color: COLORS.shadow,
+					alpha: 0.35,
+					zIndex: Z.actorShadow,
+				});
+			}
+			st.r.endFrame();
+			return rasterise({ layer: st.r.layer, vw: BS, vh: BS }, COLORS.bg, localImage);
+		};
+		const legible = [
+			["giant", { type: 3, angle: 0.7, moveCycle: 200 }],
+			["hedgehog", { type: 4, angle: 0.7, clock: 0.2 }],
+			["centipede", { type: 1, angle: 0.7, clock: 0.2 }],
+			["rafflesia", { type: 2, angle: 0, clock: 0.3 }],
+		];
+		const worst = {};
+		const rows = [];
+		for (const kind of ["grass", "park", "grassLong", "road", "plaza", "apron", "parking"]) {
+			const p = spotOn(kind);
+			if (p === undefined) continue;
+			const cells = [];
+			for (const [name, m] of legible) {
+				const res = {};
+				for (const look of ["flat", "chars"]) {
+					res[look] = silhouette(bossShot(p, m, look, false), bossShot(p, m, look, true));
+				}
+				worst[name] = Math.min(worst[name] ?? Infinity, res.chars);
+				cells.push(`${name} ${res.flat.toFixed(0)}->${res.chars.toFixed(0)}`);
+			}
+			rows.push(`${kind}: ${cells.join(", ")}`);
+		}
+		for (const r of rows) console.log(`       ${r}`);
+		// the bar the survivor's art clears in section 5; a boss is bigger than a survivor and must not read less
+		check(
+			Object.keys(worst).length === legible.length && Object.values(worst).every(w => w >= 35),
+			"LEG-03: with their art, every boss stands out on the worst ground (the survivor's bar, 35 ΔE)",
+			Object.entries(worst)
+				.map(([n, w]) => `${n} ${w.toFixed(1)}`)
+				.join(", "),
+		);
+		setArt(TOWN_IDS);
+	}
 }
 setArt({});
 
@@ -1935,6 +2354,15 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 	const reset = () => {
 		for (const k of Object.keys(drawn)) drawn[k] = 0;
 	};
+	// a wall of an open building in the pixel art (ART-12) goes through the interior's art: counted as a wall
+	if (IV !== undefined && "drawWallArt" in IV.InteriorView.prototype) {
+		const real = IV.InteriorView.prototype.drawWallArt;
+		IV.InteriorView.prototype.drawWallArt = function (...a) {
+			drawn.walls++;
+			return real.apply(this, a);
+		};
+	}
+	const insideCost = {};
 	// the town's largest building, and a camera on it
 	let big;
 	for (const s of world.solids) {
@@ -1992,8 +2420,402 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 			`       ${label.padEnd(4)} ${big.tags} #${big.id} (${big.w} x ${big.h}), 1920 x 1080: ${outside} sprites from outside, ` +
 				`${inside.sprites} inside (${inside.flat} flat, ${inside.images} images); ${writes.toFixed(0)} property writes a frame walking across it`,
 		);
+		insideCost[label] = inside.sprites;
 	}
 	setArt({});
+	// the pixel art of the rooms (ART-12) costs no more sprites than their Frames did
+	if (insideCost.art !== undefined) {
+		check(
+			insideCost.art <= insideCost.flat,
+			"art: the largest building seen from inside costs no more sprites than the flat drawing",
+			`${insideCost.art} vs ${insideCost.flat}`,
+		);
+	}
+}
+
+section("11b) the interiors' pixel art: no id no change, every piece in the atlas, the art on the solid's own rect");
+{
+	const IA_MODULE = join(SRC, "client/view/interiorArt.ts");
+	// ART-01 inside: with no id, each building type's rooms make the flat interiors' very draw calls
+	setArt({});
+	const golden = existsSync(GOLDEN_INTERIORS) ? JSON.parse(readFileSync(GOLDEN_INTERIORS, "utf8")) : undefined;
+	console.log(`  (golden: ${golden?.recordedFrom ?? "none"})`);
+	for (const b of interiorBuildings(world)) {
+		const g = golden?.scenes?.[`type${b.buildingType}`];
+		const d = interiorDigest(b);
+		check(
+			g !== undefined && g.building === b.id && d.count === g.count && d.sha1 === g.sha1,
+			`no id: ${b.tags} #${b.id} from inside is the flat interior of the golden, call for call`,
+			g === undefined ? "no golden" : `${d.count} calls, ${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}`,
+		);
+	}
+	if (existsSync(IA_MODULE)) {
+		const IA = require(IA_MODULE);
+		const { FURNITURE_CELLS } = require(join(SRC, "client/view/furnitureAtlas.ts"));
+		setArt(ALL.ids);
+		const nullR = { drawRect() {} };
+		const cam = new Camera();
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
+		const stat = { pieces: 0, exact: 0, cropped: 0, missing: [], off: [], decor: 0, decorMissing: [], frames: 0 };
+		const frameMissing = [];
+		let chairs = 0;
+		let seated = 0;
+		const SEATED = new Set(["table", "desk", "schooldesk", "teacherdesk", "labbench"]);
+		for (const seed of seeds) {
+			const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+			const art = new IA.InteriorArt();
+			art.useWorld(w);
+			const byId = new Map();
+			for (const s of w.solids) if (s.kind === "building") byId.set(s.id, s);
+			const pieces = new Map();
+			for (const s of w.solids) {
+				if (s.kind !== "furniture") continue;
+				const b = byId.get(s.parentId);
+				if (!pieces.has(b.id)) pieces.set(b.id, []);
+				pieces.get(b.id).push(s);
+				stat.pieces++;
+				if (!art.furniture(nullR, cam, s, b.buildingType)) {
+					if (stat.missing.length < 6)
+						stat.missing.push(`${s.tags} ${s.w}x${s.h} ${s.face} in type ${b.buildingType}`);
+					continue;
+				}
+				const plan = art.plans.get(s);
+				const n = plan.length / 8;
+				if (n === 1) stat.exact++;
+				else stat.cropped++;
+				// the art stands on the piece's own rect (collision unchanged), plus at most two texels of shadow
+				let x0 = Infinity;
+				let y0 = Infinity;
+				let x1 = -Infinity;
+				let y1 = -Infinity;
+				for (let i = 0; i < plan.length; i += 8) {
+					x0 = Math.min(x0, plan[i] - plan[i + 2] / 2);
+					y0 = Math.min(y0, plan[i + 1] - plan[i + 3] / 2);
+					x1 = Math.max(x1, plan[i] + plan[i + 2] / 2);
+					y1 = Math.max(y1, plan[i + 1] + plan[i + 3] / 2);
+				}
+				const good =
+					Math.abs(x0 - s.x) < 0.01 &&
+					Math.abs(y0 - s.y) < 0.01 &&
+					x1 >= s.x + s.w - 0.01 &&
+					y1 >= s.y + s.h - 0.01 &&
+					x1 <= s.x + s.w + 10 &&
+					y1 <= s.y + s.h + 10 &&
+					n <= 4;
+				if (!good && stat.off.length < 6) stat.off.push(`${s.tags} ${s.w}x${s.h} (${n} sprites)`);
+			}
+			for (const b of byId.values()) {
+				for (const d of b.decor ?? []) {
+					stat.decor++;
+					if (!art.decor(nullR, cam, b, d) && stat.decorMissing.length < 6)
+						stat.decorMissing.push(`${d.kind} ${Math.round(d.w)}x${Math.round(d.h)}`);
+					if (d.kind !== "chair" && d.kind !== "chairDown") continue;
+					chairs++;
+					const cx = d.x + d.w / 2;
+					const cy = d.y + d.h / 2;
+					const near = (pieces.get(b.id) ?? []).some(
+						p =>
+							SEATED.has(p.tags) &&
+							((cx >= p.x &&
+								cx <= p.x + p.w &&
+								(Math.abs(cy - p.y + 16) <= 4 || Math.abs(cy - p.y - p.h - 16) <= 4)) ||
+								(cy >= p.y &&
+									cy <= p.y + p.h &&
+									(Math.abs(cx - p.x + 16) <= 4 || Math.abs(cx - p.x - p.w - 16) <= 4))),
+					);
+					if (near) seated++;
+				}
+				for (const o of b.openings ?? []) {
+					stat.frames++;
+					if (!art.opening(nullR, cam, o) && frameMissing.length < 6)
+						frameMissing.push(`${o.kind} ${o.w}x${o.h}`);
+				}
+			}
+		}
+		check(
+			stat.missing.length === 0,
+			`every piece of furniture of ${seeds.length} towns is drawn from the atlas (${stat.pieces}: ${stat.exact} its own cell, ${stat.cropped} cropped from its kind's template)`,
+			stat.missing.join("; "),
+		);
+		check(
+			stat.off.length === 0,
+			"every piece's art stands exactly on its solid (the collision box), with at most its baked shadow past it",
+			stat.off.join("; "),
+		);
+		check(
+			stat.decorMissing.length === 0,
+			`every decoration (${stat.decor}) has its art: rugs, chairs, papers, glass, mats, curtains, boards, blood`,
+			stat.decorMissing.join("; "),
+		);
+		check(
+			frameMissing.length === 0,
+			`every doorway and window (${stat.frames}) has its frame`,
+			frameMissing.join("; "),
+		);
+		check(
+			chairs > 0 && seated / chairs >= 0.95,
+			"a chair faces the table it stands at (the art turns it by the table beside it)",
+			`${seated} of ${chairs}`,
+		);
+		const cells = Object.keys(FURNITURE_CELLS).length;
+		console.log(`       atlas: ${cells} cells; a piece is 1 sprite (its cell) or 2-4 (a template cropped)`);
+		setArt({});
+	}
+}
+
+section("12) ground items (ITM-07): every item on every ground, by day, in the survivor's light and in the dark");
+{
+	const { GroundItemsView } = require(join(SRC, "client/view/groundItemsView.ts"));
+	const WHITE = COLORS.white;
+	const rgb3 = (r, g, b) => Color3.fromRGB(r, g, b);
+	/** every ground an item lands on: client/view/worldView.ts's colour, texture and tint for it */
+	const GROUNDS = [
+		["grass", COLORS.grass, "grass"],
+		["long grass", COLORS.grass, "grassLong"],
+		["park grass", COLORS.parkGrass, "grass", rgb3(228, 246, 231)],
+		["asphalt", COLORS.road, "asphalt"],
+		["parking lot", COLORS.road.Lerp(COLORS.sidewalk, 0.14), "asphaltLot"],
+		["sidewalk", COLORS.sidewalk, "concrete"],
+		["plaza pavers", COLORS.sidewalk.Lerp(WHITE, 0.1), "plaza"],
+		["walk pavers", COLORS.sidewalk.Lerp(WHITE, 0.16), "pavers"],
+		["gas apron", COLORS.sidewalk.Lerp(COLORS.road, 0.3), "apron"],
+		["dirt path", COLORS.dirtPath, "dirt", rgb3(211, 198, 172)],
+		["playground", COLORS.dirtPath.Lerp(WHITE, 0.25), "dirt"],
+		["wood floor", COLORS.floorWood, "floorWood"],
+		["tile floor", COLORS.floorTile, "floorTile"],
+		["shop floor", COLORS.floorShop, "floorShop"],
+		["carpet", COLORS.floorCarpet, "floorCarpet"],
+		["kitchen", COLORS.floorKitchen, "floorKitchen"],
+		["bathroom", COLORS.floorBath, "floorBath"],
+		["back room", COLORS.floorConcrete, "concrete", rgb3(214, 214, 212)],
+	];
+	/** an item of every kind that lies on the ground: weapons, gear, ammunition, oil, food, medicine, materials, kits */
+	const ITEMS = [
+		[1, 0, "Dagger"],
+		[1, 2, "Axe"],
+		[1, 6, "Bat"],
+		[1, 10, "Pistol"],
+		[1, 14, "AK-40"],
+		[1, 16, "Shotgun"],
+		[1, 22, "Bow"],
+		[1, 25, "Flamethrower"],
+		[2, 4, "Steel armor"],
+		[2, 13, "Flashlight"],
+		[2, 14, "Robot suit"],
+		[4, 44, "Ammo"],
+		[4, 45, "Shells"],
+		[4, 47, "Arrows"],
+		[4, 48, "Oil"],
+		[3, 12, "Bandage"],
+		[3, 5, "First aid"],
+		[3, 17, "Apple"],
+		[3, 9, "Canned"],
+		[3, 0, "Raw meat"],
+		[3, 19, "Rotten meat"],
+		[4, 23, "Wood"],
+		[4, 24, "Stone"],
+		[4, 26, "Steel"],
+		[4, 34, "Cloth"],
+		[4, 41, "Leather"],
+		[4, 33, "Gunpowder"],
+		[4, 30, "Parts"],
+		[4, 14, "Campfire kit"],
+		[4, 36, "Voltage circuit"],
+	];
+	const lin = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+	const lum = ([r, g, b]) => 0.2126 * lin(r / 255) + 0.7152 * lin(g / 255) + 0.0722 * lin(b / 255);
+	const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+	const S = 64;
+	/** one item (or none) on one ground, rasterised: 64 x 64 px at zoom 1 */
+	const shot = (ground, art, night, lit, item) => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(S, S);
+		const dark = gui.make("Frame");
+		dark.Parent = root;
+		dark.BackgroundTransparency = 1;
+		const cam = new Camera();
+		cam.setView(S, S);
+		cam.x = 5000;
+		cam.y = 5000;
+		const view = new GroundItemsView(shadowFn(night, 5000, 4900));
+		view.reduceMotion = true;
+		r.beginFrame();
+		const id = art ? WA.artId(ground[2]) : undefined;
+		if (id !== undefined) {
+			const sz = WA.artSize(ground[2]);
+			r.drawRect(cam, 5000, 5000, {
+				w: 400,
+				h: 400,
+				zIndex: Z.ground,
+				image: id,
+				imageTint: ground[3],
+				scaleType: "tile",
+				tileW: sz.w * 4,
+				tileH: sz.h * 4,
+			});
+		} else r.drawRect(cam, 5000, 5000, { w: 400, h: 400, color: ground[1], zIndex: Z.ground });
+		if (item !== undefined) {
+			view.draw(
+				r,
+				cam,
+				cam.viewRect(32),
+				[{ id: 77, kind: item[0], itemId: item[1], count: 1, x: 5000, y: 5000, vx: 0, vy: 0 }],
+				1.3,
+				0,
+			);
+		}
+		r.endFrame();
+		if (night) {
+			const lm = new LightMap(dark, COLORS.overlayNight);
+			lm.update(cam, darkAlphaAt(22, false, false), lit ? [{ x: 5000, y: 5000, r: 250, inner: 0.4 }] : []);
+		}
+		return rasterise({ layer: r.layer, dark, vw: S, vh: S }, COLORS.bg, localImage);
+	};
+	/** the item's strongest step against the ground under it: WCAG ratio and ΔE, over the pixels the item changed */
+	const step = (a, b) => {
+		let best = 1;
+		let e = 0;
+		for (let i = 0; i < a.w * a.h; i++) {
+			const p = [a.data[i * 4], a.data[i * 4 + 1], a.data[i * 4 + 2]];
+			const q = [b.data[i * 4], b.data[i * 4 + 1], b.data[i * 4 + 2]];
+			if (p[0] === q[0] && p[1] === q[1] && p[2] === q[2]) continue;
+			best = Math.max(best, ratio(p, q));
+			e = Math.max(e, dE(p, q));
+		}
+		return { ratio: best, dE: e };
+	};
+	const results = {};
+	for (const art of [false, true]) {
+		setArt(art ? { ...ALL.ids } : {});
+		for (const [mode, night, lit] of [
+			["day", false, false],
+			["22:00 in the light", true, true],
+			["22:00 in the dark", true, false],
+		]) {
+			for (const g of GROUNDS) {
+				const base = shot(g, art, night, lit, undefined);
+				const row = ITEMS.map(it => ({ it, ...step(shot(g, art, night, lit, it), base) }));
+				results[`${art ? "art" : "flat"}|${mode}|${g[0]}`] = row;
+			}
+		}
+	}
+	setArt({});
+	const worst = (art, mode, key) => {
+		let w;
+		for (const g of GROUNDS) {
+			for (const x of results[`${art}|${mode}|${g[0]}`]) {
+				if (w === undefined || x[key] < w[key]) w = { ...x, ground: g[0] };
+			}
+		}
+		return w;
+	};
+	const name = w => `${w.it[2]} on ${w.ground}`;
+	// LEG-03 for loot: every item reads on every ground -- a step of 3:1 (WCAG 1.4.11, the awareness marks' bar) or,
+	// where a brown hide on grey asphalt is close in lightness, of 35 ΔE (the survivor's floor, LEG-03)
+	const readable = x => x.ratio >= 3 || x.dE >= 35;
+	for (const mode of ["day", "22:00 in the light"]) {
+		const bad = [];
+		for (const g of GROUNDS)
+			for (const x of results[`art|${mode}|${g[0]}`])
+				if (!readable(x)) bad.push(`${x.it[2]} on ${g[0]} ${x.ratio.toFixed(2)}:1 ${x.dE.toFixed(0)} ΔE`);
+		const wr = worst("art", mode, "ratio");
+		const we = worst("art", mode, "dE");
+		check(
+			bad.length === 0,
+			`with the icons, ${mode}: all ${ITEMS.length} items on all ${GROUNDS.length} grounds step ≥ 3:1 or ≥ 35 ΔE off the ground`,
+			bad.length > 0
+				? bad.slice(0, 4).join("; ")
+				: `weakest ${wr.ratio.toFixed(2)}:1 (${name(wr)}), ${we.dE.toFixed(1)} ΔE (${name(we)})`,
+		);
+	}
+	// better than the flat looks they replace: the weakest item of each ground reads at least as well
+	{
+		const worse = [];
+		for (const g of GROUNDS) {
+			const flat = Math.min(...results[`flat|day|${g[0]}`].map(x => x.dE));
+			const icon = Math.min(...results[`art|day|${g[0]}`].map(x => x.dE));
+			if (icon < flat) worse.push(`${g[0]} ${icon.toFixed(1)} < ${flat.toFixed(1)}`);
+		}
+		const f = worst("flat", "day", "dE");
+		const a = worst("art", "day", "dE");
+		const fr = worst("flat", "day", "ratio");
+		const ar = worst("art", "day", "ratio");
+		check(
+			worse.length === 0,
+			"on every ground the weakest icon reads at least as well as the weakest flat look (ΔE)",
+			worse.length > 0
+				? worse.join("; ")
+				: `weakest flat ${f.dE.toFixed(1)} ΔE / ${fr.ratio.toFixed(2)}:1 → icons ${a.dE.toFixed(1)} ΔE / ${ar.ratio.toFixed(2)}:1`,
+		);
+	}
+	// in the survivor's light an item reads as it does by day (the light's core is full light)
+	{
+		let off = 0;
+		for (const g of GROUNDS) {
+			const day = results[`art|day|${g[0]}`];
+			const lit = results[`art|22:00 in the light|${g[0]}`];
+			for (let i = 0; i < day.length; i++) off = Math.max(off, Math.abs(day[i].ratio - lit[i].ratio));
+		}
+		check(
+			off < 0.05,
+			"at 22:00 in the survivor's light every item reads as it does by day",
+			`largest difference ${off.toFixed(3)}`,
+		);
+	}
+	// out of every light, no item glows: it is as dark as the ground it lies on (LUZ-02)
+	for (const art of ["flat", "art"]) {
+		let most = { ratio: 0 };
+		for (const g of GROUNDS) {
+			for (const x of results[`${art}|22:00 in the dark|${g[0]}`])
+				if (x.ratio > most.ratio) most = { ...x, ground: g[0] };
+		}
+		check(
+			most.ratio < 1.5,
+			`${art === "art" ? "with the icons" : "flat"}, 22:00 out of every light: no item steps more than 1.5:1 off its ground (nothing glows)`,
+			`the most: ${most.ratio.toFixed(2)}:1 (${name(most)})`,
+		);
+	}
+	// every sprite of the view is under the night (the dark layer): what is not lit is not seen
+	{
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(200, 200);
+		const cam = new Camera();
+		cam.setView(200, 200);
+		cam.x = 1000;
+		cam.y = 1000;
+		const view = new GroundItemsView(shadowFn(false));
+		view.target = 1;
+		const zs = [];
+		const draw = r.drawRect.bind(r);
+		r.drawRect = (c, x, y, o) => {
+			zs.push(o.zIndex ?? 1);
+			return draw(c, x, y, o);
+		};
+		setArt({ ...ALL.ids });
+		for (const t of [0, 0.3, 1.3]) {
+			r.beginFrame();
+			view.draw(
+				r,
+				cam,
+				cam.viewRect(32),
+				[
+					{ id: 1, kind: 1, itemId: 25, count: 1, x: 1000, y: 1000, vx: 30, vy: 0 },
+					{ id: 2, kind: 4, itemId: 23, count: 1, x: 1040, y: 1000, vx: 0, vy: 0 },
+				],
+				t,
+				1 / 60,
+			);
+			r.endFrame();
+		}
+		setArt({});
+		check(
+			zs.length > 0 && Math.max(...zs) < Z.effect,
+			`every sprite of a ground item -- icon, shadow, ring, glint, the target's brackets -- is under the night (ZIndex < ${Z.effect})`,
+			`highest ${Math.max(...zs)}`,
+		);
+	}
 }
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);

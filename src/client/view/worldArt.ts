@@ -25,7 +25,7 @@ let fetched = true;
  * Character sheets (client/view/charArt.ts) that still failed to load after the retry. A town surface that is slow
  * to arrive is a blank patch for a moment; a zombie drawn from a sheet that never arrives would be an INVISIBLE
  * zombie (LEG-03, P3), so a character sheet that is still missing is given up on its own and its group -- the
- * survivors, the horde, the dogs or the birds -- goes back to the flat drawing for the session. So is the item icon
+ * survivors, the horde, a boss, the dogs or the birds -- goes back to the flat drawing for the session. So is the item icon
  * atlas: an icon that never arrives would be an empty tile, so client/ui/itemIcon.ts goes back to its Frames.
  */
 const lost = new Set<WorldArtName>();
@@ -79,7 +79,9 @@ function isCharacterSheet(name: WorldArtName): boolean {
 		name === "zombiesRim" ||
 		name === "dogs" ||
 		name === "birds" ||
-		name.sub(1, 9) === "survivors"
+		name.sub(1, 9) === "survivors" ||
+		// the bosses' sheets and masks (ART-14): a boss that never arrives would be an invisible boss
+		name.sub(1, 4) === "boss"
 	);
 }
 
@@ -150,6 +152,12 @@ export function preloadWorldArt(): void {
 		if (missing.includes(WORLD_ART.itemIcons.id)) {
 			lost.add("itemIcons");
 			warn("[world] the item icon atlas did not load: the icons are drawn with Frames");
+		}
+		// the interiors' atlas: furniture that never arrives would be an invisible shelf that still stops the body
+		// (P3, COL-01), so the rooms go back to their Frames
+		if (WORLD_ART.furniture.id !== "" && missing.includes(WORLD_ART.furniture.id)) {
+			lost.add("furniture");
+			warn("[world] the interiors' atlas did not load: the furniture is drawn with Frames");
 		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");

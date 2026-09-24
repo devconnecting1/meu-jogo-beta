@@ -6,12 +6,22 @@
  *   uiAudio      interface audio, wired by watching the HUD and menu layers
  *   fxAudio      FxEvent -> sound (ready for the one-line hook in GameLoop.playFx)
  *   footstepAudio the walk cycle sink: what a foot landing sounds like
+ *   boot         startAudio: the one call main.client.ts makes (the network is handed in, never imported)
  */
 export { audio, AUDIO_RANGE, AudioTrack } from "./audio";
 export type { PlayOptions } from "./audio";
-export { gameAudio, GameAudio } from "./gameAudio";
+export { gameAudio, GameAudio, setAudioNet } from "./gameAudio";
+export type { AudioNet } from "./gameAudio";
+export { startAudio } from "./boot";
 export { GameMusic } from "./music";
 export { previewBgm, previewSfx, startUiAudio } from "./uiAudio";
-export { drainFxAudio, fxAudioMode, playFxEvent, setFxAudioLocalSlot, setFxAudioMode } from "./fxAudio";
+export {
+	fxAudioMode,
+	playFxEvent,
+	remoteProjectileSound,
+	remoteShotSound,
+	setFxAudioLocalSlot,
+	setFxAudioMode,
+} from "./fxAudio";
 export type { FxAudioMode } from "./fxAudio";
 export { playFootstep } from "./footstepAudio";

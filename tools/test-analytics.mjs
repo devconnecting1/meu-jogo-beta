@@ -882,6 +882,25 @@ section("4) every coin the server moved is one economy event, and they add up to
 		buys[0]?.sku === SHOP_PACKS[craftKit].name && buys[0].amount === SHOP_PACKS[craftKit].price,
 		"…the SKU is the pack's catalogue name and the amount its catalogue price",
 	);
+	// a purchase replayed (the same client nonce, shared/net/shopGuard.ts): answered as the first, charged once -- and
+	// logged once, or the sinks would add up to more than the coins that left
+	s.run(1.2);
+	const nr = s.log.length;
+	const moneyBefore = s.live(p.lobby).money;
+	const once = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	s.run(1.2);
+	const replay = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const replaySinks = s.log.slice(nr).filter(r => r.kind === "economy");
+	check(
+		once.ok &&
+			replay.ok &&
+			replay.price === once.price &&
+			s.live(p.lobby).money === moneyBefore - SHOP_PACKS[craftKit].price &&
+			replaySinks.length === 1 &&
+			replaySinks[0].amount === SHOP_PACKS[craftKit].price,
+		"a replayed purchase (the same nonce): answered ok, charged once, one Sink",
+		JSON.stringify(replaySinks.map(r => [r.sku, r.amount, r.balance])),
+	);
 	// a costume: bought, refused for funds, refused as owned
 	const eagle = costumeId("Eagle");
 	const r3 = s.shop(p.veteran, { kind: "buyCostume", costumeId: eagle, price: 0 });
@@ -1862,6 +1881,11 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		`Weapon - (${A.WEAPON_KIND_NAMES.join("|")}|Machine|Other)`,
 		"Title - .+",
 		"Welcome pack - .+",
+		// where a survivor plays (server/match/*, tools/test-match.mjs): the NewTown funnel, TownOffered, TripFailed
+		"Route - (Play solo|Offer)",
+		`Best day - ${bucket}`,
+		`Stage - (${A.TRIP_STAGES.join("|")})`,
+		`Result - (${A.TRIP_RESULTS.join("|")})`,
 	].map(p => new RegExp(`^${p}$`));
 	const values = [];
 	const combos = [];
@@ -1898,7 +1922,10 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		(SHOP_PACKS.length + 1) + // onboarding: Welcome pack
 		B * B * 2 + // Night step 1
 		4 * 2 * B + // Rebirth step 1
-		2 * 4 * 2; // Shop step 1
+		2 * 4 * 2 + // Shop step 1
+		B * B * 2 + // TownOffered: world day x record x visit
+		A.TRIP_STAGES.length * A.TRIP_RESULTS.length * 2 + // TripFailed: stage x result x route
+		2 * B * B; // NewTown step 1: route x world day x life day
 	check(
 		ceiling < 8000 && distinctOf(combos).length <= ceiling,
 		"unique combinations of the three fields: bounded by the catalogue far below 8,000 (the experience's limit)",

@@ -170,6 +170,9 @@ const { InputState } = require(join(SRC, "shared/engine/input.ts"));
 const CCombat = require(join(SRC, "client/systems/combat.ts"));
 const CCraft = require(join(SRC, "client/systems/craftSystem.ts"));
 const Info = require(join(SRC, "client/ui/itemInfo.ts"));
+/** "Delivered" (client/ui/packNotice.ts) and the toast it goes through, for G7's client half of R6 */
+const PackNotice = require(join(SRC, "client/ui/packNotice.ts"));
+const Popup = require(join(SRC, "client/ui/popup.ts"));
 const VEH = require(join(SRC, "shared/sim/vehicle.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
@@ -1812,19 +1815,29 @@ section(
 			const draw = source("client/gameLoop.ts");
 			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
 			const shape = source("client/view/lightList.ts");
+			// the beam (P0-4): the flashlight's cone along the aim, or a motorcycle's headlight along the ride -- ONE
+			// rule, survivorLight.ts survivorBeamReach / survivorBeamAngle, whose flashlight IS survivorCone
+			const rule = source("shared/sim/survivorLight.ts");
+			const beamRule =
+				/return survivorCone\(save\)\?\.radius \?\? 0/.test(rule) &&
+				/rideHeading\(ride\) : p\.angle/.test(rule);
 			check(
 				/SurvivorLight\.survivorLightRadius\(save\)/.test(body) &&
-					/SurvivorLight\.survivorCone\(save\)/.test(body) &&
-					/addSurvivorLight\(lights, p\.x, p\.y, p\.angle, radius, cone\?\.radius\)/.test(body) &&
+					/SurvivorLight\.survivorBeamReach\(p, save\)/.test(body) &&
+					/SurvivorLight\.survivorBeamAngle\(p\)/.test(body) &&
+					/addSurvivorLight\(lights, p\.x, p\.y, beamAt, radius, beam > 0 \? beam : undefined\)/.test(body) &&
 					/lights\.cone\(x, y, cone, FLASHLIGHT_INNER, aim, SurvivorLight\.CONE_HALF_ANGLE\)/.test(shape) &&
+					beamRule &&
 					!/PLAYER_LIGHT_R/.test(draw),
 				"the client's light map draws the survivor's light by the shared rule: the circle, and the flashlight's cone along the aim",
 			);
 			const LL = require(join(SRC, "client/view/lightList.ts"));
 			check(
 				/Light\.survivorLightRadius\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/Light\.survivorCone\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")),
+					/Light\.survivorBeamReach\(p, save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/Light\.survivorBeamAngle\(p\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					beamRule,
 				"and the server's horde visibility by the same rule, cone angle included",
 			);
 			/** the lights the client draws for a survivor at (px, py) aiming at `aim` (gameLoop drawLight, the real shape) */
@@ -2284,6 +2297,72 @@ section(
 );
 
 section(
+	"C1b. VIT-01: what heals from the backpack heals AT ONCE, through the server's useItem, whatever the wait after a hit",
+	() => {
+		const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+		const craft = new SCRAFT.ServerCraft({ world: W.createWorld(2000, 2000), build: { placing: () => false } });
+		const bitten = u => {
+			const save = bareSave();
+			save.invenUse[u.id] = 1;
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = 40;
+			p.hungry = 40;
+			Ply.applyPlayerDamage(p, save, 10);
+			return { save, p };
+		};
+		checkRows(
+			"every usable that heals: its hp lands on the use a bite ago, and the body's own wait is left running",
+			USABLES.filter(u => u.hp > 0),
+			u => {
+				const { save, p } = bitten(u);
+				const hp = p.hp;
+				craft.remove(0);
+				const out = craft.useItem(0, p, save, u.id);
+				if (out.kind !== "used") return JSON.stringify(out);
+				if (!near(p.hp, Math.min(p.hpMax, hp + u.hp), 1e-9)) return `hp ${hp} -> ${p.hp}, data +${u.hp}`;
+				return p.sinceHurt === 0 || `the use changed the wait (sinceHurt ${p.sinceHurt})`;
+			},
+		);
+		checkRows(
+			"a usable that HURTS (rotten meat) is hp lost: the wait starts over, even on a rested body",
+			USABLES.filter(u => u.hp < 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				return (p.hp === 60 + u.hp && p.sinceHurt === 0) || `hp ${p.hp}, sinceHurt ${p.sinceHurt}`;
+			},
+		);
+		checkRows(
+			"food that only feeds does not heal by itself: past the wait it lets the BODY heal, and pays for it",
+			USABLES.filter(u => u.hp === 0 && u.hunger > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				p.hungry = VIT.REGEN_FOOD_MIN - 5;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				if (p.hp !== 60) return `hp ${p.hp} straight from the item`;
+				const fed = p.hungry;
+				stepPlayer(W.createWorld(2000, 2000), p, save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+				const healed = p.hp - 60;
+				const spent = fed - p.hungry - 0.3 * TICK_DT;
+				if (!VIT.fedEnough(fed)) return healed === 0 || `healed ${healed} under the food gate (FOOD ${fed})`;
+				return (
+					(healed > 0 && near(spent, healed * VIT.REGEN_FOOD_PER_HP, 1e-9)) ||
+					`healed ${healed}, food ${spent}`
+				);
+			},
+		);
+	},
+);
+
+section(
 	"C2. the three timed effects do what the card says, and wear off (shared/game/player.ts, server/sim/combat.ts)",
 	() => {
 		const world = W.createWorld(8000, 8000);
@@ -2530,6 +2609,289 @@ section("C4. cooking: every raw food at a fire, as the card and How to play prom
 		);
 	}
 });
+
+// ================================================================ C5 / C6. quick use (ITM-08)
+
+const QUICK = require(join(SRC, "shared/game/quickUse.ts"));
+const { QUICK_HEAL, QUICK_EAT, QUICK_ICON } = require(join(SRC, "shared/data/usables.ts"));
+const HEAL_KIND = QUICK.QUICK_HEAL_KIND;
+const EAT_KIND = QUICK.QUICK_EAT_KIND;
+const vitals = (hp, hunger, dead = false) => ({ hp, hpMax: 100, hunger, hungerMax: 100, dead });
+
+/**
+ * The rule written the slow way, straight from DESIGN_RULES ITM-08, to hold the real one to: the first tier holding
+ * anything the survivor can take (never an item that would end them), inside it the smallest value that covers the
+ * room, else the biggest, a tie to the first in the tier.
+ */
+function referencePick(kind, save, v) {
+	const tiers = kind === HEAL_KIND ? QUICK_HEAL : QUICK_EAT;
+	const value = id => (kind === HEAL_KIND ? USABLES[id].hp : USABLES[id].hunger);
+	const room = kind === HEAL_KIND ? v.hpMax - v.hp : v.hungerMax - v.hunger;
+	let count = 0;
+	for (const tier of tiers) for (const id of tier) count += Math.max(0, save.invenUse[id] ?? 0);
+	let id = -1;
+	let risky = -1;
+	for (const tier of tiers) {
+		const owned = tier.filter(i => (save.invenUse[i] ?? 0) > 0);
+		const safe = owned.filter(i => !(USABLES[i].hp < 0 && v.hp + USABLES[i].hp <= 0));
+		if (risky < 0) risky = owned.find(i => !safe.includes(i)) ?? -1;
+		if (safe.length === 0) continue;
+		const covering = safe.filter(i => value(i) >= room);
+		const pool = covering.length > 0 ? covering : safe;
+		const best = covering.length > 0 ? Math.min(...pool.map(value)) : Math.max(...pool.map(value));
+		id = pool.find(i => value(i) === best);
+		break;
+	}
+	let why;
+	if (count <= 0) why = "none";
+	else if (v.dead || v.hp <= 0) why = "dead";
+	else if (id < 0) why = "risky";
+	else if (room <= 0) why = "full";
+	else why = "ok";
+	const shown = id >= 0 ? id : risky >= 0 ? risky : QUICK_ICON[kind];
+	return { id: shown, count, why, gain: id >= 0 ? Math.max(0, Math.min(value(id), room)) : 0 };
+}
+
+section(
+	"C5. quick use: which item HEAL and EAT pick, one rule for every client (shared/game/quickUse.ts, ITM-08)",
+	() => {
+		const heal = QUICK_HEAL.flat();
+		const eat = QUICK_EAT.flat();
+		// ---- the lists are the data's own columns: nothing a plate could burn for no reason
+		checkRows(
+			"HEAL holds exactly the medicine that restores health without feeding (Bandage, First aid kit)",
+			USABLES,
+			u => {
+				const medicine = u.hp > 0 && u.hunger <= 0;
+				return (
+					heal.includes(u.id) === medicine || `${medicine ? "missing from" : "should not be in"} QUICK_HEAL`
+				);
+			},
+		);
+		checkRows(
+			"EAT holds every food exactly once: tier 1 ready, tier 2 raw (it cooks into more), tier 3 the one that hurts",
+			USABLES,
+			u => {
+				const tiers = QUICK_EAT.map((t, i) => (t.includes(u.id) ? i : -1)).filter(i => i >= 0);
+				if (u.hunger <= 0) return tiers.length === 0 || "not food, but in QUICK_EAT";
+				if (tiers.length !== 1) return `in ${tiers.length} tiers`;
+				const want = u.hp < 0 ? 2 : u.cook >= 0 ? 1 : 0;
+				return tiers[0] === want || `tier ${tiers[0] + 1}, should be ${want + 1}`;
+			},
+		);
+		const utility = USABLES.filter(u => u.hp <= 0 && u.hunger <= 0);
+		check(
+			utility.length === 3 && utility.every(u => !heal.includes(u.id) && !eat.includes(u.id)),
+			"the utility items (Pain killer, Adrenaline, Sedative: neither heal nor feed) are on no plate",
+			utility.map(u => u.name).join(", "),
+		);
+		check(
+			heal.includes(QUICK_ICON[HEAL_KIND]) && eat.includes(QUICK_ICON[EAT_KIND]),
+			"the icon of an empty plate is one of its own items (Bandage, Canned food)",
+		);
+
+		// ---- the rule, against the slow reference, on 4000 random backpacks and bars (both plates)
+		{
+			let seed = 12345;
+			const rnd = n => {
+				seed = (seed * 1103515245 + 12345) % 2147483648;
+				return seed % n;
+			};
+			const bad = [];
+			for (let i = 0; i < 4000; i++) {
+				const save = bareSave();
+				for (const id of [...heal, ...eat, ...utility.map(u => u.id)])
+					save.invenUse[id] = rnd(4) === 0 ? rnd(3) + 1 : 0;
+				const v = vitals(rnd(5) === 0 ? 100 : rnd(101), rnd(5) === 0 ? 100 : rnd(101), rnd(40) === 0);
+				for (const kind of [HEAL_KIND, EAT_KIND]) {
+					const got = QUICK.quickPick(kind, save, v);
+					const want = referencePick(kind, save, v);
+					if (
+						got.id !== want.id ||
+						got.count !== want.count ||
+						got.why !== want.why ||
+						got.gain !== want.gain
+					) {
+						bad.push(
+							`${kind ? "EAT" : "HEAL"} hp ${v.hp} food ${v.hunger}: ${JSON.stringify(got)} vs ${JSON.stringify(want)}`,
+						);
+					}
+				}
+			}
+			check(
+				bad.length === 0,
+				"4000 random backpacks and bars: quickPick is the rule, id, count, why and gain",
+				bad.slice(0, 3).join(" | "),
+			);
+		}
+
+		// ---- the cases a player meets, spelled out
+		const byName = n => USABLES.find(u => u.name === n).id;
+		const BANDAGE = byName("Bandage");
+		const KIT = byName("First aid kit");
+		const pick = (kind, stock, v) => {
+			const save = bareSave();
+			for (const [id, n] of Object.entries(stock)) save.invenUse[Number(id)] = n;
+			return QUICK.quickPick(kind, save, v);
+		};
+		const healStock = { [BANDAGE]: 2, [KIT]: 1 };
+		const at = hp => pick(HEAL_KIND, healStock, vitals(hp, 50));
+		check(
+			at(85).id === BANDAGE &&
+				at(80).id === BANDAGE &&
+				at(79).id === KIT &&
+				at(30).id === KIT &&
+				at(10).id === KIT,
+			"HEAL: 15 or 20 missing -> Bandage (it covers); 21 to 50 -> First aid kit (the smallest that covers); 90 -> the kit (none covers: the biggest)",
+			[85, 80, 79, 30, 10].map(h => `${h}: ${USABLES[at(h).id].name}`).join(", "),
+		);
+		check(
+			at(85).gain === 15 && at(30).gain === 50 && at(10).gain === 50 && at(85).count === 3,
+			"its gain is what the bar takes (+15 of a Bandage at 85), and the count is every heal item (3)",
+		);
+		check(
+			at(100).why === "full" && at(100).id === BANDAGE && pick(HEAL_KIND, {}, vitals(50, 50)).why === "none",
+			"full: the plate greys out showing the smallest; none: greyed with the Bandage's icon",
+		);
+		const RAW = byName("Raw meat");
+		const COOKED = byName("Cooked meat");
+		const ROTTEN = byName("Rotten meat");
+		const APPLE = byName("Apple");
+		const BERRY = byName("Berry");
+		const eatWith = (stock, hp = 80, hunger = 40) => pick(EAT_KIND, stock, vitals(hp, hunger));
+		check(
+			eatWith({ [RAW]: 3, [APPLE]: 1 }).id === APPLE &&
+				eatWith({ [RAW]: 3 }).id === RAW &&
+				eatWith({ [ROTTEN]: 2, [RAW]: 1 }).id === RAW &&
+				eatWith({ [ROTTEN]: 2 }).id === ROTTEN,
+			"EAT: ready food first (the Apple before 3 Raw meat, which a fire makes worth more); raw only without ready food; rotten last",
+		);
+		check(
+			eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 85).id === BERRY &&
+				eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 80).id === APPLE &&
+				eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 10).id === COOKED,
+			"EAT: 15 missing -> Berry (15), 20 -> Apple (20), 90 -> Cooked meat (30, the biggest): no waste when it can",
+		);
+		check(
+			eatWith({ [ROTTEN]: 2 }, 10).why === "risky" &&
+				eatWith({ [ROTTEN]: 2 }, 11).why === "ok" &&
+				eatWith({ [ROTTEN]: 2, [APPLE]: 1 }, 5).id === APPLE,
+			"rotten meat is never the pick when its 10 hp would end the survivor (hp 10: refused as risky; hp 11: eaten)",
+		);
+		check(
+			pick(HEAL_KIND, healStock, vitals(0, 50, true)).why === "dead" &&
+				pick(EAT_KIND, { [APPLE]: 1 }, vitals(50, 50, true)).why === "dead",
+			"a dead survivor's plates do nothing",
+		);
+		const pill = byName("Pain killer");
+		const rush = byName("Adrenaline");
+		check(
+			pick(HEAL_KIND, { [pill]: 3, [rush]: 3 }, vitals(20, 20)).why === "none" &&
+				pick(EAT_KIND, { [pill]: 3, [rush]: 3 }, vitals(20, 20)).why === "none",
+			"with only utility items in the bag, both plates say none: a rare item is never burnt to heal or eat",
+		);
+		// ---- and an "ok" pick is a use the server takes (itemUseWouldWork: the check of its useItem)
+		{
+			const bad = [];
+			for (let hp = 1; hp <= 100; hp += 3) {
+				for (let hunger = 0; hunger <= 100; hunger += 5) {
+					const save = bareSave();
+					for (const id of [...heal, ...eat]) save.invenUse[id] = 1;
+					const p = Ply.createPlayer(save, 0, 0);
+					p.hp = hp;
+					p.hungry = hunger;
+					for (const kind of [HEAL_KIND, EAT_KIND]) {
+						const r = QUICK.quickPick(kind, save, vitals(hp, hunger));
+						if (r.why === "ok" && !Ply.itemUseWouldWork(p, save, r.id))
+							bad.push(`${kind} ${hp}/${hunger}: ${r.id}`);
+					}
+				}
+			}
+			check(
+				bad.length === 0,
+				"every pick the plates would press is a use the server's useItem accepts",
+				bad.slice(0, 3).join(", "),
+			);
+		}
+	},
+);
+
+section(
+	"C6. quick use on the client: the cooldown, the bars read as they will be, the Bag's use (client/systems/quickUse.ts)",
+	() => {
+		const QU = require(join(SRC, "client/systems/quickUse.ts"));
+		const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
+		const save = bareSave();
+		save.invenUse[BANDAGE] = 3;
+		const body = Ply.createPlayer(save, 0, 0);
+		body.hp = 60;
+		const q = new QU.QuickUse();
+		const sent = [];
+		const send = id => (sent.push(id), true);
+		const a = q.press(HEAL_KIND, body, save, 10, send);
+		const b = q.press(HEAL_KIND, body, save, 10.1, send);
+		check(
+			a.used && a.id === BANDAGE && !b.used && b.why === "cooldown" && sent.length === 1,
+			`a second press inside the use cooldown (${Ply.USE_COOLDOWN_S} s, the server's) sends nothing`,
+			`${b.why}`,
+		);
+		const c = q.press(HEAL_KIND, body, save, 10.3, send);
+		const d = q.press(HEAL_KIND, body, save, 10.6, send);
+		check(
+			c.used && !d.used && d.why === "full" && sent.length === 2,
+			"60 hp and a snapshot behind: two Bandages (60 -> 80 -> 100 as the pick reads it), and the third press says full",
+			`${sent.length} sent, then ${d.why}`,
+		);
+		body.hp = 100;
+		const e = q.press(HEAL_KIND, body, save, 10.9, send);
+		body.hp = 70; // bitten after the heal arrived: the bar is the server's again
+		const f = q.press(HEAL_KIND, body, save, 11.2, send);
+		check(
+			!e.used && f.used && sent.length === 3,
+			"the snapshot shows the heal: from then on the body's own hp counts again (bitten to 70, it heals)",
+		);
+		body.hp = 40;
+		q.reset();
+		const g = q.press(HEAL_KIND, body, save, 20, () => false);
+		check(
+			!g.used && g.why === "busy",
+			"a verb the backpack does not take (its queue is full) is not counted as used",
+		);
+		// offline the Bag's verb heals the body at once: the plate must not read the heal twice
+		const off = new QU.QuickUse();
+		const local = bareSave();
+		local.invenUse[BANDAGE] = 2;
+		const me = Ply.createPlayer(local, 0, 0);
+		me.hp = 50;
+		const r = off.press(HEAL_KIND, me, local, 30, id => Ply.itemUseEffect(me, local, id));
+		const v = off.frame(me, local, 30.3)[HEAL_KIND];
+		check(
+			r.used && me.hp === 70 && v.why === "ok" && v.id === BANDAGE,
+			"offline (the Bag's verb heals at once): 70 hp after the Bandage, and the plate still offers the next one",
+			`${me.hp} hp, ${v.why}`,
+		);
+		// the Bag's Use starts the same cooldown (server/sim/craft.ts holds one use every 0.25 s, whoever asked)
+		const bagQ = new QU.QuickUse();
+		bagQ.noteUse(BANDAGE, me, 40);
+		check(
+			bagQ.frame(me, local, 40.1)[HEAL_KIND].cooldown > 0,
+			"a use from the Bag sweeps the plates too (one cooldown)",
+		);
+		check(
+			QU.quickGainText({ hpGain: 20, foodGain: 0 }, t => t) === "+20 HP" &&
+				QU.quickGainText({ hpGain: 5, foodGain: 25 }, t => t) === "+25 FOOD · +5 HP" &&
+				QU.quickGainText({ hpGain: -10, foodGain: 20 }, t => t) === "+20 FOOD · -10 HP",
+			'the feed line says what the bars get: "+20 HP", "+25 FOOD · +5 HP", rotten meat\'s "-10 HP"',
+		);
+		check(
+			inLang("No healing items") &&
+				inLang("No food") &&
+				inLang("Eating that would kill you") &&
+				inLang("Quick heal / eat"),
+			"every reason a plate gives is in lang.ts",
+		);
+	},
+);
 
 // ================================================================ D. crafting
 
@@ -3417,7 +3779,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 	effect[0] = lv =>
 		Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax === 100 + 10 * lv ||
 		`hpMax ${Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax}`;
-	// 1 Recovery: regeneration × (1 + level) (stepPlayer)
+	// 1 Recovery: regeneration × (1 + level) (stepPlayer) -- the RATE only: the wait after a hit is the same at every
+	// level (DESIGN_RULES VIT-01)
 	effect[1] = lv => {
 		const regen = s => {
 			const p = Ply.createPlayer(s, 1000, 1000);
@@ -3427,7 +3790,20 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 		};
 		const a = regen(bareSave());
 		const b = regen(withSkill(1, lv));
-		return near(b / a, 1 + lv, 0.01) || `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		if (!near(b / a, 1 + lv, 0.01)) return `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		const s = withSkill(1, lv);
+		const p = Ply.createPlayer(s, 1000, 1000);
+		p.hp = 50;
+		Ply.applyPlayerDamage(p, s, 10);
+		let t = 0;
+		while (p.hp <= 40 && t < 20 * CFG.SIM_HZ) {
+			stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			t += 1;
+		}
+		return (
+			near(t / CFG.SIM_HZ, 7, 2 / CFG.SIM_HZ) ||
+			`heals ${(t / CFG.SIM_HZ).toFixed(2)} s after a bite (the wait: 7 s)`
+		);
 	};
 	/** one blade hit on a zombie through the server's weapon machine: its damage and its knockback */
 	const bladeHit = s => {
@@ -3791,6 +4167,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			"server/sim/interaction.ts",
 			"server/sim/items.ts",
 			"shared/sim/playerMove.ts",
+			// the body's step (Recovery, Patience, Poison immunity: DESIGN_RULES VIT-01), called by playerMove.ts
+			"shared/sim/vitals.ts",
 			"shared/sim/ai/zombieBrain.ts",
 			"shared/sim/craftRule.ts",
 			"shared/sim/loot.ts",
@@ -4657,7 +5035,10 @@ function fakeRoblox() {
 const Roblox = fakeRoblox();
 let nextUser = 7000;
 const newUser = () => ++nextUser;
-/** what client/main.client.ts deliverPacks does to the client's copy: every pending pack's items, × how many */
+/**
+ * what a client that opens its own packs does to its copy (client/ui/packNotice.ts `deliverPacks` below
+ * WORLD_SERVER_PHASE, and every client before F3): every pending pack's items, × how many
+ */
 function deliverPacksLikeTheClient(save, addItem) {
 	for (const p of SHOP_PACKS) {
 		const n = Math.max(0, (save.packsBought[p.id] ?? 0) - (save.packsOpened[p.id] ?? 0));
@@ -4707,11 +5088,35 @@ section("G1. every pack: its declared contents, its price charged by the server,
 		}
 		return true;
 	});
-	checkRows("MON-03 / MON-01: a pack is fixed, and sells no weapon or ammunition", SHOP_PACKS, p =>
-		p.items.every(it => it.count > 0) &&
-		!p.items.some(it => it.kind === ItemKind.Etc && it.index >= 44 && it.index <= 48)
-			? true
-			: "sells ammunition",
+	// MON-03 (DESIGN_RULES, "A loja de moedas e a MON-01"): coins are only ever earned by playing, and still a pack gives
+	// no more than a first day does -- no gun and no ammunition (what decides a night at range), and a melee weapon only
+	// when the common workbench already makes it and it does no more damage a second than the starter Dagger. The title
+	// used to promise "no weapon" while the check looked at the ammunition alone, and the First Night Kit sells an Axe:
+	// the Axe is the chopping tool (2-3 wood a hit), 10 wood + 5 steel at the desk, 125 damage a second to the Dagger's 171
+	const starter = WEAPONS[SAVE.defaultSave().equipWeapon];
+	const dps = w => w.dmg / w.cooldown;
+	checkRows(
+		`MON-03 / MON-01: a pack is fixed, sells no gun nor ammunition, and no melee weapon the workbench does not make or that out-hits the starter ${starter.name} (the First Night Kit's Axe is the chopping tool)`,
+		SHOP_PACKS,
+		p => {
+			if (!p.items.every(it => it.count > 0)) return "a line with no count";
+			if (p.items.some(it => it.kind === ItemKind.Etc && it.index >= 44 && it.index <= 48))
+				return "sells ammunition";
+			for (const it of p.items.filter(i => i.kind === ItemKind.Weapon)) {
+				const w = WEAPONS[it.index];
+				if (w === undefined || w.kind !== WeaponKind.Melee) return `sells a gun (${w?.name ?? it.index})`;
+				const recipe = CRAFT_RECIPES.find(r => r.resultKind === ItemKind.Weapon && r.resultIndex === w.id);
+				if (recipe === undefined || recipe.needsPro) return `${w.name}: the common workbench does not make it`;
+				if (dps(w) > dps(starter))
+					return `${w.name}: ${dps(w).toFixed(0)} damage a second, past the ${starter.name}'s ${dps(starter).toFixed(0)}`;
+			}
+			return true;
+		},
+	);
+	check(
+		SHOP_PACKS.some(p => p.items.some(it => it.kind === ItemKind.Weapon && WEAPONS[it.index].name === "Axe")) &&
+			dps(WEAPONS.find(w => w.name === "Axe")) < dps(starter),
+		`(the rule is live: the First Night Kit's Axe is sold, and does ${dps(WEAPONS.find(w => w.name === "Axe")).toFixed(0)} damage a second to the ${starter.name}'s ${dps(starter).toFixed(0)})`,
 	);
 	const s = Roblox.bootServer();
 	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
@@ -4759,6 +5164,79 @@ section("G1. every pack: its declared contents, its price charged by the server,
 			return save.packsOpened[p.id] === 1 || `opened ${save.packsOpened[p.id]}`;
 		},
 	);
+	{
+		// docs/MULTIPLAYER.md §9.1 "repetir compra" (the verification of 2026-09-24): a replayed request was a second
+		// purchase, stacking packs up to the pending cap. A pack purchase now names itself (`nonce`, shared/net/shopGuard.ts):
+		// the same nonce again is answered as the first and charged once
+		const G = require(join(SRC, "shared/net/shopGuard.ts"));
+		const pl = s.join(newUser(), "replayer");
+		const save = s.save(pl);
+		const pack = SHOP_PACKS[1];
+		const other = SHOP_PACKS[3];
+		save.money = pack.price * 40;
+		const start = save.money;
+		const buy = req => {
+			s.run(0.6);
+			return s.shop(pl, req);
+		};
+		const first = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		const again = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		const thrice = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		check(
+			first.ok &&
+				again.ok &&
+				thrice.ok &&
+				again.price === first.price &&
+				again.wallet?.money === save.money &&
+				save.money === start - pack.price &&
+				save.packsBought[pack.id] === 1,
+			"a purchase replayed twice (the same nonce): answered ok as the first, charged once, one pack",
+			`money ${start} -> ${save.money}, bought ${save.packsBought[pack.id]}`,
+		);
+		const swapped = buy({ kind: "buyPack", packId: other.id, nonce: 7 });
+		check(
+			swapped.ok === false &&
+				swapped.reason === "invalid" &&
+				save.packsBought[other.id] === 0 &&
+				save.money === start - pack.price,
+			"the same nonce for another pack is no replay: refused, nothing charged",
+			swapped.reason,
+		);
+		const bad = [0, -1, 1.5, Number.NaN, Infinity, "7", true, {}, G.SHOP_NONCE_MAX + 1, 1e300];
+		const answers = bad.map(n => buy({ kind: "buyPack", packId: pack.id, nonce: n }).reason);
+		check(
+			answers.every(r => r === "invalid") && save.money === start - pack.price && save.packsBought[pack.id] === 1,
+			`a nonce that is not a whole number in 1..${G.SHOP_NONCE_MAX} is refused as invalid, nothing charged`,
+			answers.join(","),
+		);
+		// the memory is the last SHOP_RECEIPTS purchases: an honest client has one in flight at a time
+		for (let i = 0; i < G.SHOP_RECEIPTS; i++) buy({ kind: "buyPack", packId: pack.id, nonce: 100 + i });
+		const kept = buy({ kind: "buyPack", packId: pack.id, nonce: 100 + G.SHOP_RECEIPTS - 1 });
+		const boughtNow = save.packsBought[pack.id];
+		const forgotten = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		check(
+			boughtNow === 1 + G.SHOP_RECEIPTS &&
+				kept.ok &&
+				forgotten.ok &&
+				save.packsBought[pack.id] === boughtNow + 1 &&
+				save.money === start - pack.price * (boughtNow + 1),
+			`the last ${G.SHOP_RECEIPTS} purchases are remembered; one older than that is a new purchase (the documented limit)`,
+			`bought ${boughtNow} then ${save.packsBought[pack.id]}`,
+		);
+		const plainA = buy({ kind: "buyPack", packId: other.id });
+		const plainB = buy({ kind: "buyPack", packId: other.id });
+		check(
+			plainA.ok && plainB.ok && save.packsBought[other.id] === 2,
+			"a request with no nonce is a purchase of its own each time (the client numbers every one it sends)",
+		);
+		check(
+			/request\.kind === "buyPack" && request\.nonce === undefined\) \{\s*buyNonce = /.test(
+				source("client/systems/saveClient.ts"),
+			),
+			"client/systems/saveClient.ts numbers every pack purchase it sends",
+		);
+		s.quit(pl);
+	}
 	checkRows(
 		"a report cannot open a pack it did not buy, nor take a pack pet twice",
 		SHOP_PACKS.filter(p => p.items.some(it => it.kind === ItemKind.Equip && COSMETIC(EQUIPS[it.index]))),
@@ -5648,6 +6126,136 @@ section(
 			s.quit(pl);
 		}
 		{
+			// the client's half of R6 (client/ui/packNotice.ts; the verification of 2026-09-24): die, buy a pack, then New
+			// game -- or wait for daybreak. The client said "Delivered: First Night Kit" as it built the run and wrote
+			// `packsOpened` into its copy (so the shop hid the pending pack), while the server delivers only into a
+			// LIVING body, at daybreak. Now the entry changes and says nothing, and "Delivered" comes with the server's
+			// wallet that raises `packsOpened` -- once
+			// the client modules as the top of this file loaded them, on the UI shims (the fake server has no GuiService)
+			const PN = PackNotice;
+			const popupMod = Popup;
+			const SAVE_C = SAVE;
+			const { SHOP_PACKS: PACKS } = require(join(SRC, "shared/data/shop.ts"));
+			const pack = PACKS[0];
+			const said = [];
+			const realToast = popupMod.toast;
+			popupMod.toast = (_ctx, text) => said.push(text);
+			// somebody stays standing, so the death is a wait for daybreak and not the end of the world (MP-22)
+			const mate = s.join(newUser(), "standing");
+			s.immortal.add(mate);
+			s.enter(mate);
+			try {
+				for (const how of ["New game", "the wait for daybreak"]) {
+					said.length = 0;
+					const pl = s.join(newUser(), how === "New game" ? "deadNewGame" : "deadWaiter");
+					const save = s.save(pl);
+					save.money = 100000;
+					const ctx = { save: clone(save) };
+					const client = ctx.save;
+					// saveClient.ts: every wallet the server sends is applied to the client's copy, then the listeners look
+					// (startPackNotices: the tracker, then the toast)
+					const tracker = PN.packTracker(() => ctx.save);
+					let seen = 0;
+					const acks = () => s.remote("SaveAck").sent.filter(e => e.to === pl);
+					const listen = () => {
+						const all = acks();
+						for (; seen < all.length; seen++) {
+							const w = all[seen].args[0]?.wallet;
+							if (w === undefined) continue;
+							SAVE_C.applyWallet(client, w);
+							const opened = tracker.newlyOpened();
+							if (opened.length > 0) said.push(PN.deliveredText(opened, 0));
+						}
+					};
+					const shop = req => {
+						const res = s.shop(pl, req);
+						if (res?.wallet !== undefined) SAVE_C.applyWallet(client, res.wallet);
+						listen();
+						return res;
+					};
+					s.enter(pl);
+					// the death is 8 s before daybreak: the wait it starts ends at 06:00 (life.ts `daybreakWaitSeconds`)
+					s.nightLeft(8);
+					s.kill(pl);
+					s.run(0.6);
+					listen();
+					const bought = shop({ kind: "buyPack", packId: pack.id });
+					s.run(0.6);
+					if (how === "New game") shop({ kind: "newRun", runRev: save.runRev });
+					// client/main.client.ts: the dead entry (enterToWait -> newWorld) builds the run, and the packs with it
+					PN.deliverPacks(ctx, true);
+					s.run(3);
+					listen();
+					const quiet =
+						said.length === 0 &&
+						SAVE_C.pendingPacks(client, pack.id) === 1 &&
+						client.packsOpened[pack.id] === 0 &&
+						save.packsOpened[pack.id] === 0;
+					check(
+						bought.ok === true && quiet,
+						`dead entry after ${how}: no "Delivered", and the pack stays pending on both sides`,
+						`said ${JSON.stringify(said)}; client pending ${SAVE_C.pendingPacks(client, pack.id)}, server opened ${save.packsOpened[pack.id]}`,
+					);
+					// daybreak: the server stands the survivor up, opens the pack into the living body, and its wallet says so
+					s.immortal.add(pl);
+					const t = s.runUntil(() => save.packsOpened[pack.id] === 1, 30);
+					s.run(1);
+					listen();
+					const body = s.body(pl);
+					check(
+						t >= 0 &&
+							body !== undefined &&
+							!body.state.dead &&
+							JSON.stringify(said) === JSON.stringify([`Delivered: ${pack.name}`]) &&
+							client.packsOpened[pack.id] === 1 &&
+							SAVE_C.pendingPacks(client, pack.id) === 0,
+						`...daybreak after ${how}: the server opens it into the body it stood up, and the wallet says "Delivered" once`,
+						`${t >= 0 ? `${t.toFixed(1)} s` : "never"}, alive ${body !== undefined && !body.state.dead}, said ${JSON.stringify(said)}`,
+					);
+					s.run(2);
+					listen();
+					PN.deliverPacks(ctx, true);
+					check(said.length === 1, "...and nothing says it again (a later wallet, the next run built)");
+					s.immortal.delete(pl);
+					s.quit(pl);
+				}
+				// with no server owning the backpack (below WORLD_SERVER_PHASE, or offline) the client still opens them itself
+				said.length = 0;
+				const local = SAVE.defaultSave();
+				local.packsBought[pack.id] = 2;
+				const lctx = { save: local };
+				PN.deliverPacks(lctx, false);
+				PN.deliverPacks(lctx, false);
+				check(
+					local.packsOpened[pack.id] === 2 &&
+						pack.items.every(it => INV.countItem(local, it.kind, it.index) >= it.count * 2) &&
+						JSON.stringify(said) === JSON.stringify([`Delivered: ${pack.name} ×2`]),
+					'offline: the client opens both into its own copy and says "Delivered: ... ×2" once',
+					JSON.stringify(said),
+				);
+			} finally {
+				popupMod.toast = realToast;
+				s.immortal.delete(mate);
+				s.quit(mate);
+			}
+			const main = source("client/main.client.ts");
+			const notice = source("client/ui/packNotice.ts");
+			// the wallet's listener starts with the other server notices (client/ui/serverNotices.ts, one import in main)
+			const notices = source("client/ui/serverNotices.ts");
+			check(
+				!/packsOpened/.test(main) &&
+					(main.match(/PackNotice\.deliverPacks\(ctx, Bag\.owned\(\)\)/g) ?? []).length === 3 &&
+					/startServerNotices\(ctx\)/.test(main) &&
+					/startPackNotices\(ctx\);/.test(notices) &&
+					/if \(serverDelivers\) return;/.test(notice) &&
+					/onWalletChanged\(\(\) => \{\s*const opened = tracker\.newlyOpened\(\);\s*if \(opened\.size\(\) > 0\) toast\(ctx, deliveredText\(/.test(
+						notice,
+					) &&
+					/onActivate\(\(\) => tracker\.rebase\(\)\)/.test(notice),
+				"main.client builds every run through packNotice (server-owned: nothing written, nothing said) and the wallet announces",
+			);
+		}
+		{
 			// R5 (security review): the presence verbs of a survivor in the world count toward the flood kick too
 			const pl = s.join(newUser(), "presenceSpam");
 			s.immortal.add(pl);
@@ -5688,9 +6296,14 @@ section(
 					/if \(owned\(\)\) return predictAndSend\(IntentKind\.UseItem/.test(sync),
 				"[L] the Bag's Use goes through backpackSync (a server verb when owned), never the local itemUseEffect",
 			);
+			// (F6-6B: they used to refuse, "SERVER_WORLD"; now the server makes them -- tools/test-admin.mjs section 10)
+			const adminWorld = source("client/admin/serverWorld.ts");
 			check(
-				/SERVER_WORLD/.test(source("client/admin/world.ts")),
-				"[K] the admin's item and structure spawns refuse while the server owns the world",
+				/serverWorld\(\)\) return super\.spawnItem/.test(adminWorld) &&
+					/op: "spawnItem"/.test(adminWorld) &&
+					/serverWorld\(\)\) return super\.spawnStructure/.test(adminWorld) &&
+					/op: "spawnStructure"/.test(adminWorld),
+				"[K] while the server owns the world the admin's item and structure spawns are server requests, never local copies",
 			);
 		}
 		s.quit(friend);
@@ -5841,7 +6454,8 @@ section('G8. the pickup sound and the "Pick something up" lesson hear pickups, n
 	const inter = source("client/systems/interaction.ts");
 	const sync = source("client/net/backpackSync.ts");
 	check(
-		/if \(pickups > this\.prevPickups\) audio\.play\("pickupItem"\)/.test(audioSrc) &&
+		// the sound of what was picked up (DESIGN_RULES SND-02: ammo, food, material, item), still off the count
+		/if \(pickups > this\.prevPickups\) audio\.play\(PICKUP_SOUND\[lastPickupKind\(\)\]\)/.test(audioSrc) &&
 			!/inventoryCount/.test(audioSrc) &&
 			/return pickupCount\(\) > mem\.items;/.test(lesson) &&
 			!/totalItems/.test(lesson),
@@ -5849,9 +6463,12 @@ section('G8. the pickup sound and the "Pick something up" lesson hear pickups, n
 	);
 	check(
 		/if \(target\.kind === "item"\) pressed\("item", by\.x, by\.y\)/.test(inter) &&
-			/takeItem\(refs, target\.item\);\s*took\(\);/.test(inter) &&
-			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync),
-		"fed by the E press, the offline pickup and the server's bag against its last one (never the predicted copy)",
+			/const got = takeItem\(refs, it\);\s*if \(got > 0\) took\(it\.kind, it\.itemId, got\);/.test(inter) &&
+			/survivorAt\(refs\.player\.x, refs\.player\.y\)/.test(inter) &&
+			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync) &&
+			/bagGrew\(lastBag, bag\)/.test(sync),
+		"fed by the E press, the survivor's feet (ITM-07), the offline pickup and the server's bag against its last one " +
+			"(never the predicted copy)",
 	);
 });
 
@@ -5927,12 +6544,883 @@ section(
 	},
 );
 
+section(
+	"G11. quick HEAL / EAT on the real server: the Bag's own UseItem verb, the server's rule, refused dead / full / none (ITM-08)",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const Ply2 = require(join(SRC, "shared/game/player.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const QU = require(join(SRC, "client/systems/quickUse.ts"));
+		const Q2 = require(join(SRC, "shared/game/quickUse.ts"));
+		const HEAL = Q2.QUICK_HEAL_KIND;
+		const EAT = Q2.QUICK_EAT_KIND;
+		const byName = n => USABLES.find(u => u.name === n).id;
+		const BANDAGE = byName("Bandage");
+		const KIT = byName("First aid kit");
+		const CAN = byName("Canned food");
+		const APPLE = byName("Apple");
+		// no new protocol: the plates' press is the Bag's verb -- the intent kinds are the ones F3 shipped
+		check(
+			!Object.keys(IK).some(k => /quick/i.test(k)) &&
+				/send: id => Bag\.useItem\(p, ctx\.save, id\)/.test(source("client/main.client.ts")) &&
+				!/netSend|IntentKind/.test(source("client/systems/quickUse.ts")),
+			"no new protocol: no quick intent kind, and main.client.ts presses through backpackSync.useItem (the Bag's UseItem)",
+		);
+		const pl = s.join(newUser(), "medic");
+		s.immortal.add(pl); // no bites: every hp point below is an item's
+		const save = s.save(pl);
+		for (let i = 0; i < save.invenUse.length; i++) save.invenUse[i] = 0;
+		save.invenUse[BANDAGE] = 2;
+		save.invenUse[KIT] = 1;
+		save.invenUse[CAN] = 2;
+		save.invenUse[APPLE] = 1;
+		const sp = s.enter(pl);
+		sp.state.hp = 40;
+		sp.state.hungry = 30;
+		// what the server did with each verb (the session layer's hook, chained)
+		const outcomes = [];
+		const prevOutcome = s.sim.backpack.onOutcome;
+		s.sim.backpack.onOutcome = (who, msg, outcome) => {
+			outcomes.push({ kind: msg.kind, arg: msg.arg, outcome });
+			prevOutcome?.(who, msg, outcome);
+		};
+		// the client: its copy of the backpack, its survivor, and the prediction that adopts every self block (as G6)
+		const client = clone(save);
+		const body = Ply2.createPlayer(client, sp.state.x, sp.state.y);
+		const pred = new Prediction();
+		pred.attach(W2.createWorld(s.sim.world.width, s.sim.world.height), body, client);
+		const cursor = { pendingPlace: -1 };
+		const entries = [];
+		const snapRemote = s.remote("Snap");
+		let nonce = 0;
+		let now = 0;
+		const drain = () => {
+			for (const e of snapRemote.sent) {
+				if (e.to !== pl) continue;
+				const part = P2.decodeSnapshotPart(e.args[0]);
+				if (part?.self === undefined) continue;
+				now += 0.05;
+				pred.reconcile(part.self, [], now);
+			}
+			snapRemote.sent.length = 0;
+		};
+		const play = seconds => {
+			for (let t = 0; t < seconds; t += 0.05) {
+				s.run(0.05);
+				drain();
+			}
+			const bag = SAVE2.readBag(s.lastBag(pl));
+			if (bag !== undefined) BP.rebase(client, cursor, bag, entries, now);
+		};
+		/** client/net/backpackSync.ts useItem, owned: predicted on the client's copy, then the UseItem verb with a nonce */
+		const send = id => {
+			if (!BP.predictVerb(client, cursor, IK.UseItem, id, body)) return false;
+			nonce += 1;
+			entries.push({ kind: IK.UseItem, arg: id, nonce, seq: 0, at: now });
+			s.verb(pl, IK.UseItem, id, 0, nonce);
+			return true;
+		};
+		const q = new QU.QuickUse();
+		const said = [];
+		let heard = 0;
+		const quick = kind => {
+			const r = QU.pressQuick(
+				kind,
+				body,
+				client,
+				now,
+				{ send, say: t => said.push(t), heard: () => heard++, tr: t => t },
+				q,
+			);
+			return r;
+		};
+		play(0.4);
+
+		// 1. HEAL at 40 hp: 60 missing, nothing covers -> the biggest, the First aid kit; the server heals it
+		const hp0 = body.hp;
+		const server0 = sp.state.hp;
+		const r1 = quick(HEAL);
+		check(
+			r1.used &&
+				r1.id === KIT &&
+				client.invenUse[KIT] === 0 &&
+				body.hp === hp0 &&
+				said.at(-1) === "+50 HP" &&
+				heard === 1,
+			'H at 40 hp: the First aid kit (60 missing, none covers: the biggest), predicted as one fewer, "+50 HP" and the use sound',
+			`${USABLES[r1.id]?.name}, "${said.at(-1)}"`,
+		);
+		play(1);
+		// (the second of play also regenerates a little: the heal is the jump of 50, the rest is the regen's)
+		check(
+			sp.state.hp >= server0 + 50 - 0.01 &&
+				sp.state.hp <= server0 + 50 + 3 &&
+				Math.abs(body.hp - sp.state.hp) <= 1 &&
+				save.invenUse[KIT] === 0 &&
+				client.invenUse[KIT] === 0 &&
+				entries.length === 0 &&
+				outcomes.some(o => o.kind === IK.UseItem && o.arg === KIT && o.outcome.kind === "used"),
+			"the SERVER's body healed 50 through its useItem (the UseItem verb), the self block brought it, the bag retired the prediction",
+			`server ${sp.state.hp.toFixed(1)}, client ${body.hp.toFixed(1)}`,
+		);
+		// 2. 10 missing: the Bandage, the smallest that covers (no waste of a second kit -- there is none, but also no
+		// bandage burnt twice: see C6)
+		const r2 = quick(HEAL);
+		play(1);
+		check(
+			r2.used && r2.id === BANDAGE && sp.state.hp === sp.state.hpMax && save.invenUse[BANDAGE] === 1,
+			"H at 90 hp: a Bandage, and the server's bar is full",
+			`${sp.state.hp}`,
+		);
+		// 3. full: refused on the client, nothing predicted, nothing sent
+		const sentBefore = nonce;
+		const r3 = quick(HEAL);
+		check(
+			!r3.used &&
+				r3.why === "full" &&
+				nonce === sentBefore &&
+				client.invenUse[BANDAGE] === 1 &&
+				said.at(-1) === "Already at full health",
+			"H at full health: refused on the client with the reason, nothing sent",
+		);
+		// 4. EAT at 30 food: 70 missing -> the Canned food (25, the biggest), the server feeds it
+		const food0 = sp.state.hungry;
+		const r4 = quick(EAT);
+		play(1);
+		check(
+			r4.used &&
+				r4.id === CAN &&
+				sp.state.hungry >= food0 + 24 &&
+				save.invenUse[CAN] === 1 &&
+				client.invenUse[CAN] === 1,
+			"F at 30 food: the Canned food, fed on the server, one fewer on both sides",
+			`${food0.toFixed(1)} -> ${sp.state.hungry.toFixed(1)}`,
+		);
+		// 5. none: the last Bandage, then nothing to heal with
+		sp.state.hp = 50;
+		play(0.4);
+		const r5 = quick(HEAL);
+		play(1);
+		const sentNone = nonce;
+		sp.state.hp = 50;
+		play(0.4);
+		const r6 = quick(HEAL);
+		check(
+			r5.used &&
+				save.invenUse[BANDAGE] === 0 &&
+				!r6.used &&
+				r6.why === "none" &&
+				nonce === sentNone &&
+				said.at(-1) === "No healing items",
+			'the last Bandage used, then H says "No healing items" and sends nothing',
+			`${r5.used}/${r5.why} ${USABLES[r5.id]?.name}, server ${save.invenUse[BANDAGE]}, then ${r6.why}, "${said.at(-1)}"`,
+		);
+		// 6. a client a bag behind believes in an apple the server no longer has: the verb is refused there, rolled back here
+		save.invenUse[APPLE] = 0;
+		sp.state.hungry = 40;
+		play(0.3);
+		client.invenUse[APPLE] = 1;
+		client.invenUse[CAN] = 0;
+		const apples = client.invenUse[APPLE];
+		const food1 = sp.state.hungry;
+		const r7 = quick(EAT);
+		play(1);
+		check(
+			r7.used &&
+				apples === 1 &&
+				client.invenUse[APPLE] === 0 &&
+				entries.length === 0 &&
+				sp.state.hungry <= food1 + 0.01,
+			"none on the server (a client a bag behind): the verb is refused there, nothing eaten, and its bag rolls the client back",
+			`server food ${food1.toFixed(1)} -> ${sp.state.hungry.toFixed(1)}`,
+		);
+		// 7. dead: the body dies on the server while the client is a snapshot behind -- the press goes out, the server
+		// refuses it (`dead`) and eats nothing; once the client knows, its plates do nothing and send nothing
+		save.invenUse[CAN] = 1;
+		play(0.3);
+		client.invenUse[CAN] = 1;
+		s.immortal.delete(pl);
+		s.kill(pl);
+		const cans = save.invenUse[CAN];
+		body.dead = false;
+		body.hp = 50;
+		const r8 = quick(EAT);
+		s.run(0.2);
+		const refusedDead = outcomes.some(
+			o => o.kind === IK.UseItem && o.arg === CAN && o.outcome.kind === "refused" && o.outcome.why === "dead",
+		);
+		check(
+			r8.used && refusedDead && save.invenUse[CAN] === cans,
+			"a press already on its way when the server's body died: refused as dead, the can stays in the server's backpack",
+		);
+		play(0.5);
+		const sentDead = nonce;
+		const r9 = quick(EAT);
+		check(
+			(body.dead || body.hp <= 0) && !r9.used && r9.why === "dead" && nonce === sentDead,
+			"and once the client's body is dead too (the self block's 0 hp): the plate does nothing and sends nothing",
+			`${r9.why}, ${body.hp} hp`,
+		);
+		s.quit(pl);
+	},
+);
+
 /** a hand-built Intent payload on the remote, as a hostile client would send it */
 function remoteIntentRaw(s, p, bytes) {
 	const b = buffer.create(bytes.length);
 	bytes.forEach((v, i) => buffer.writeu8(b, i, v));
 	s.remote("Intent").OnServerEvent.Fire(p, b);
 }
+
+section("G10. supplies are walked up, weapons and gear take E: one rule on the server and offline (ITM-07)", () => {
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	const { ServerItems } = require(join(SRC, "server/sim/items.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const { BOSS_TROPHIES } = require(join(SRC, "shared/data/spawns.ts"));
+	const WALK = RULE.WALK_PICKUP_RANGE;
+	const DELAY = RULE.WALK_PICKUP_DELAY_S;
+	const RATE = RULE.WALK_PICKUP_RATE_S;
+	check(
+		WALK < DESIGN.ITEM_GET_DISTANCE && WALK >= 18 && DELAY > 0 && RATE > 0,
+		`the walk-over reach (${WALK} u) is inside E's (${DESIGN.ITEM_GET_DISTANCE} u) and covers the body (18 u)`,
+	);
+	// the rule by kind: the Bag's Usables and Materials are walked up, its Weapons and Gear take E
+	check(
+		RULE.walkPickup(ItemKind.Use, 0) &&
+			RULE.walkPickup(ItemKind.Etc, 23) &&
+			RULE.walkPickup(ItemKind.Etc, 44) &&
+			!RULE.walkPickup(ItemKind.Weapon, 10) &&
+			!RULE.walkPickup(ItemKind.Equip, 4),
+		"supplies (usables, materials, ammunition) are walked up; weapons and equipment are not",
+	);
+	// ...and a rare item never is, supply or not: it wears the gold ring, and the ring means E (review of 1186a83, M2)
+	const trophies = [1, 2, 3, 4].flatMap(b => BOSS_TROPHIES[b] ?? []);
+	check(
+		trophies.length >= 5 &&
+			trophies.some(t => t.kind === ItemKind.Etc) &&
+			trophies.every(t => !RULE.walkPickup(t.kind, t.index) && RULE.groundTier(t.kind, t.index) === "rare"),
+		`every boss trophy (${trophies.map(t => nameOf(t.kind, t.index)).join(", ")}) is rare and taken with E only`,
+	);
+
+	/** a server with the interactive world and one survivor at (1000, 1000); `n` ticks of nothing pressed */
+	const server = () => {
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: false,
+			interactive: true,
+		});
+		const save = bareSave();
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "walker" }, save, 1000, 1000, sim.tick, sim.simHz);
+		sim.add(sp);
+		sp.state.x = 1000;
+		sp.state.y = 1000;
+		let dirty = 0;
+		const outcomes = [];
+		sim.onInteract = (_, o) => {
+			dirty += 1;
+			outcomes.push(o);
+		};
+		const run = seconds => {
+			for (let i = 0; i < Math.round(seconds * CFG.SIM_HZ); i++) sim.step();
+		};
+		let seq = 1;
+		const pressE = () => {
+			const cmd = P.makeCommand(seq++, 0, 0, 0, 0, P.packEdges(0, 0, 1, 0));
+			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
+			sim.step();
+		};
+		return { world, sim, save, sp, run, pressE, dirty: () => dirty, outcomes };
+	};
+
+	// 1. every supply a table, a zombie or a boss drops: under the body it is taken, after the delay and not before
+	const supplies = [];
+	const seen = new Set();
+	for (const s of itemSources()) {
+		if (!RULE.walkPickup(s.kind, s.index) || s.from.startsWith("recipe") || s.from.startsWith("costume")) continue;
+		const key = `${s.kind}:${s.index}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		supplies.push({ name: `${nameOf(s.kind, s.index)} (${s.from})`, kind: s.kind, index: s.index });
+	}
+	checkRows(
+		"every supply that can lie on the ground is walked up by the SERVER, into its counter, after the delay",
+		supplies,
+		s => {
+			const t = server();
+			const had = INV.countItem(t.save, s.kind, s.index);
+			W.spawnGroundItem(t.world, s.kind, s.index, 3, 1008, 1004);
+			t.run(DELAY * 0.6);
+			if (t.world.items.length !== 1) return "taken before the delay";
+			t.run(DELAY);
+			const got = INV.countItem(t.save, s.kind, s.index) - had;
+			if (got !== 3 || t.world.items.length !== 0) return `+${got}, ${t.world.items.length} on the ground`;
+			return t.dirty() === 1 || `the save was marked dirty ${t.dirty()} times`;
+		},
+	);
+	// 2. weapons and gear: walked over, they stay; E takes them
+	const gear = [
+		{ name: "Pistol", kind: ItemKind.Weapon, index: 10 },
+		{ name: "Pump action shotgun", kind: ItemKind.Weapon, index: 16 },
+		{ name: "Flamethrower (a trophy)", kind: ItemKind.Weapon, index: 25 },
+		{ name: "Steel armor", kind: ItemKind.Equip, index: 4 },
+		{ name: "Flashlight", kind: ItemKind.Equip, index: 13 },
+	];
+	checkRows("weapons and equipment under the body stay on the ground; E takes them", gear, s => {
+		const t = server();
+		W.spawnGroundItem(t.world, s.kind, s.index, 1, 1006, 1000);
+		t.run(2);
+		if (t.world.items.length !== 1 || INV.countItem(t.save, s.kind, s.index) !== 0) return "walked up";
+		t.pressE();
+		return (t.world.items.length === 0 && INV.countItem(t.save, s.kind, s.index) === 1) || "E did not take it";
+	});
+	// 2b. a boss's trophies are rare (the gold ring) even when they are materials: boss 4's are, and they take E too, or
+	// whoever stepped on the spot first had them (review of 1186a83, M2)
+	{
+		const t = server();
+		const drop = BOSS_TROPHIES[4];
+		for (const tr of drop) W.spawnGroundItem(t.world, tr.kind, tr.index, tr.count, 1000, 1000);
+		t.run(1.5);
+		const walked = drop.map(tr => INV.countItem(t.save, tr.kind, tr.index));
+		for (let i = 0; i < drop.length; i++) {
+			t.pressE();
+			t.run(0.3);
+		}
+		const got = drop.map(tr => INV.countItem(t.save, tr.kind, tr.index));
+		check(
+			drop.some(tr => tr.kind === ItemKind.Etc) &&
+				walked.every(n => n === 0) &&
+				got.every((n, i) => n === drop[i].count) &&
+				t.world.items.length === 0,
+			`boss 4's trophies (${drop.map(tr => `${nameOf(tr.kind, tr.index)} ×${tr.count}`).join(", ")}) under the body stay 1.5 s; E takes each`,
+			`walked ${JSON.stringify(walked)}, E ${JSON.stringify(got)}, left ${t.world.items.length}`,
+		);
+	}
+	// 3. E still takes a supply in its reach but out of the body's
+	{
+		const t = server();
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 5, 1000 + WALK + 8, 1000);
+		t.run(1);
+		const stayed = t.world.items.length === 1;
+		t.pressE();
+		check(
+			stayed && INV.countItem(t.save, ItemKind.Etc, 23) === 5 && t.world.items.length === 0,
+			`a supply ${WALK + 8} u away is not walked up (out of the body's reach), and E takes it (E takes anything)`,
+		);
+	}
+	// 4. a wall between: the E press's own clear line
+	{
+		const t = server();
+		W.addSolid(t.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 2, 1024, 1000);
+		t.run(2);
+		check(
+			t.world.items.length === 1 && INV.countItem(t.save, ItemKind.Etc, 23) === 0,
+			"a supply 24 u away behind a wall is not walked up through it (the clear line of the E press)",
+		);
+	}
+	// 5. the rate: a pile goes in at WALK_PICKUP_RATE_S an item, never a pile a tick
+	{
+		const t = server();
+		for (let i = 0; i < 30; i++) W.spawnGroundItem(t.world, ItemKind.Etc, 23, 1, 1004, 1000);
+		t.run(DELAY);
+		const before = INV.countItem(t.save, ItemKind.Etc, 23);
+		t.run(1);
+		const inASecond = INV.countItem(t.save, ItemKind.Etc, 23) - before;
+		t.run(3);
+		check(
+			inASecond <= Math.ceil(1 / RATE) + 1 && inASecond >= Math.floor(1 / RATE) - 1,
+			`30 items on one spot: ${inASecond} walked up in one second (one per ${RATE} s)`,
+		);
+		check(
+			INV.countItem(t.save, ItemKind.Etc, 23) === 30 && t.world.items.length === 0,
+			"...and all 30 once the survivor has stood there long enough",
+		);
+	}
+	// 6. two survivors on the same item: one gets it, whole (the atomic removal)
+	{
+		const t = server();
+		const other = PL.createServerPlayer({ slot: 1, userId: 2, name: "b" }, bareSave(), 1010, 1000, t.sim.tick, 60);
+		t.sim.add(other);
+		other.state.x = 1010;
+		other.state.y = 1000;
+		W.spawnGroundItem(t.world, ItemKind.Etc, 44, 12, 1005, 1000);
+		t.run(1);
+		const a = t.save.ammoNormal - bareSave().ammoNormal;
+		const b = other.save.ammoNormal - bareSave().ammoNormal;
+		check(a + b === 12 && (a === 0 || b === 0), `two survivors on 12 rounds: ${a} + ${b} (one gets them all)`);
+	}
+	// 6b. on the server the walk-over reads the item grid's cells under the body, never the town's list: an item that is
+	// in the list but not filed in the grid is invisible to it there, and found on a client (no grid: its short list)
+	{
+		const probe = (grid, n) => {
+			const world = grid ? W.serverWorld(W.createWorld(8000, 8000)) : W.createWorld(8000, 8000);
+			if (grid) W.enableItemGrid(world);
+			for (let i = 0; i < n; i++) W.spawnGroundItem(world, ItemKind.Etc, 23, 1, 4000 + (i % 60) * 50, 6000);
+			const stray = { id: 99999, kind: ItemKind.Etc, itemId: 24, count: 1, x: 1004, y: 1000, vx: 0, vy: 0 };
+			world.items.push(stray);
+			return RULE.walkPickupTarget(world, 1000, 1000, bareSave(), () => true) === stray;
+		};
+		check(
+			!probe(true, 3000) && probe(false, 30),
+			"the server's walk-over asks the item grid for the cells under the body (a list-only item is not found there)",
+		);
+	}
+	// 7. dead or riding: nothing (ServerItems.walkOver on its own)
+	{
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const items = new ServerItems({ world, out: new WorldOut() });
+		const save = bareSave();
+		const state = Ply.createPlayer(save, 1000, 1000);
+		W.spawnGroundItem(world, ItemKind.Etc, 23, 1, 1004, 1000);
+		const who = [{ slot: 0, state, save }];
+		// the items' clock is `upkeep`'s (the simulation runs it every tick before the walk-over)
+		const tick = dt => {
+			items.upkeep(dt);
+			items.walkOver(who);
+		};
+		state.dead = true;
+		tick(2);
+		tick(0.2);
+		const deadKept = world.items.length === 1;
+		state.dead = false;
+		state.ride = { kind: 0 };
+		tick(0.2);
+		const rideKept = world.items.length === 1;
+		state.ride = undefined;
+		tick(0.2);
+		check(
+			deadKept && rideKept && world.items.length === 0,
+			"a dead survivor and one on a bike take nothing (the hands are on the bars, VEI-05); on foot, the item goes",
+		);
+	}
+	// 8. the save's ceiling: what fits goes in, the rest stays, and the prompt says the item is full
+	{
+		const t = server();
+		const LIM = SAVE.SAVE_LIMITS;
+		t.save.invenEtc[23] = LIM.ITEM_MAX - 4;
+		const it = W.spawnGroundItem(t.world, ItemKind.Etc, 23, 12, 1004, 1000);
+		t.run(1);
+		check(
+			t.save.invenEtc[23] === LIM.ITEM_MAX && t.world.items.length === 1 && it.count === 8,
+			`at ${LIM.ITEM_MAX - 4} wood, 12 walked over: 4 go in, 8 stay on the ground (the same item, count 8)`,
+			`${t.save.invenEtc[23]}, ${t.world.items.length} item(s), count ${it.count}`,
+		);
+		const got = t.sim.items.pickup(t.save, 1000, 1000, it);
+		check(!got.ok && got.why === "full", "a pickup of a full item is refused with why 'full' (E answers the same)");
+		t.run(1);
+		check(it.count === 8 && t.world.items.length === 1, "and the walk-over leaves it alone (no retry loop)");
+		// the ammunition's own ceiling
+		const u = server();
+		u.save.ammoShotgun = LIM.AMMO_MAX - 3;
+		W.spawnGroundItem(u.world, ItemKind.Etc, 45, 8, 1004, 1000);
+		u.run(1);
+		check(
+			u.save.ammoShotgun === LIM.AMMO_MAX && u.world.items[0]?.count === 5,
+			`shells: the ammunition's ceiling (${LIM.AMMO_MAX}), 3 of 8 in, 5 stay`,
+		);
+		// a partial take is a count on the same id, told to every client that saw the item (no new message)
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const out = new WorldOut();
+		const items = new ServerItems({ world, out });
+		items.watch([{ x: 1000, y: 1000 }], [0]);
+		const pile = W.spawnGroundItem(world, ItemKind.Etc, 23, 10, 1004, 1000);
+		const s2 = bareSave();
+		s2.invenEtc[23] = LIM.ITEM_MAX - 6;
+		const pending = [];
+		out.take(pending);
+		items.pickup(s2, 1000, 1000, pile);
+		out.take(pending);
+		const re = pending.filter(p => p.ev.t === P.WorldEv.ItemAdd && p.ev.id === pile.id);
+		check(
+			re.length === 1 && re[0].ev.count === 4 && re[0].slot === 0,
+			"the rest of a partial take is re-announced as an ItemAdd of the same id with the new count",
+		);
+	}
+	// 9. the prompt names the item and the count, marks the one E takes, and says full at the ceiling
+	{
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		const player = Ply.createPlayer(save, 1000, 1000);
+		const refs = {
+			world,
+			players: [player],
+			player,
+			save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12 },
+		};
+		const shells = W.spawnGroundItem(world, ItemKind.Etc, 45, 8, 1030, 1000);
+		const hint = CInter.interactHint(refs);
+		check(
+			hint === "E: Pick up Shotgun ammo ×8" && CInter.hintedItem() === shells.id,
+			`the prompt names the item and the count, and the item it names is the one marked (${hint})`,
+		);
+		save.ammoShotgun = SAVE.SAVE_LIMITS.AMMO_MAX;
+		const full = CInter.interactHint(refs);
+		check(
+			full === `Shotgun ammo full (${SAVE.SAVE_LIMITS.AMMO_MAX})` && CInter.hintedItem() === -1,
+			`at the ceiling the prompt says so, is not an "E:" action, and marks nothing (${full})`,
+		);
+		check(
+			inLang("Pick up") &&
+				inLang("full") &&
+				inLang("Pick something up") &&
+				inLang("Walk over food, ammo and materials. For weapons and gear, press use."),
+			"the prompt's words and the lesson are in lang.ts (UI-03)",
+		);
+		const lesson = source("client/onboarding/objectives.ts");
+		check(
+			/hint: "Walk over food, ammo and materials\. For weapons and gear, press use\."/.test(lesson) &&
+				!/Walk over loot on the ground/.test(lesson),
+			"the lesson says what the game does: supplies are walked over, weapons and gear take use (was 'Walk over loot')",
+		);
+	}
+	// 10. offline, the client's own world walks up by the same rule
+	{
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		const player = Ply.createPlayer(save, 1000, 1000);
+		const refs = {
+			world,
+			players: [player],
+			player,
+			save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12, isNight: false },
+			fxQueue: [],
+		};
+		const inter = new CInter.Interaction();
+		const notes = [];
+		PK.takePickupNotes(notes);
+		notes.length = 0;
+		W.spawnGroundItem(world, ItemKind.Etc, 44, 12, 1006, 1000);
+		W.spawnGroundItem(world, ItemKind.Weapon, 10, 1, 1004, 1004);
+		const before = PK.pickupCount();
+		for (let i = 0; i < 8; i++) inter.update(refs, DELAY / 10);
+		const early = save.ammoNormal;
+		for (let i = 0; i < 30; i++) inter.update(refs, 1 / 30);
+		PK.takePickupNotes(notes);
+		check(
+			early === bareSave().ammoNormal &&
+				save.ammoNormal === bareSave().ammoNormal + 12 &&
+				world.items.length === 1 &&
+				world.items[0].kind === ItemKind.Weapon,
+			"offline: the rounds under the body are walked up after the delay, the pistol stays for E",
+		);
+		check(
+			PK.pickupCount() === before + 1 && notes.length === 1 && notes[0].count === 12 && notes[0].itemId === 44,
+			"...one pickup heard (the sound, the lesson) and one feedback line: +12 of the rounds",
+			JSON.stringify(notes),
+		);
+	}
+	// 11. with a server: whose pickup it was, and how many went in -- by the two bags, not by what lay there
+	{
+		const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+		const world = W.createWorld(4000, 4000);
+		Mirror.forgetMirrorIndex();
+		const hadOs = globalThis.os;
+		let t = 9000;
+		globalThis.os = { ...hadOs, clock: () => t };
+		const add = (id, kind, itemId, count, x, y) =>
+			Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemAdd, id, kind, itemId, count, x, y, vx: 0, vy: 0 });
+		const remove = id => Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemRemove, id });
+		const bag = (etc23, ammo0) => {
+			const s = bareSave();
+			s.invenEtc[23] = etc23;
+			s.ammoNormal = ammo0;
+			return SAVE.bagOf(s, -1, 0, 0);
+		};
+		const notes = [];
+		PK.takePickupNotes(notes);
+		const heard = fn => {
+			notes.length = 0;
+			const n0 = PK.pickupCount();
+			fn();
+			PK.takePickupNotes(notes);
+			return PK.pickupCount() - n0;
+		};
+		PK.survivorAt(2000, 2000);
+		const b0 = bag(0, 0);
+		const walked = heard(() => {
+			add(71, ItemKind.Etc, 23, 3, 2006, 2000);
+			t += 0.6;
+			remove(71);
+			t += 0.1;
+			PK.bagGrew(b0, bag(3, 0));
+		});
+		check(
+			walked === 1 && notes.length === 1 && notes[0].count === 3 && notes[0].itemId === 23,
+			"a supply under my feet leaves the world and my bag grows by it: one pickup, '+3 Wood'",
+			JSON.stringify(notes),
+		);
+		t += 5;
+		const allys = heard(() => {
+			add(72, ItemKind.Etc, 23, 3, 2006, 2000);
+			remove(72);
+			PK.bagGrew(b0, bag(0, 12));
+		});
+		check(
+			allys === 0 && notes.length === 0,
+			"an ally walks up the wood by me while my bag grows in rounds: not mine",
+		);
+		t += 5;
+		const weapon = heard(() => {
+			add(73, ItemKind.Weapon, 10, 1, 2004, 2000);
+			remove(73);
+			PK.bagGrew();
+		});
+		check(
+			weapon === 0,
+			"a weapon that leaves the world by me without my E press is somebody else's (no walk-over)",
+		);
+		t += 5;
+		const partial = heard(() => {
+			add(74, ItemKind.Etc, 23, 10, 2006, 2000);
+			add(74, ItemKind.Etc, 23, 6, 2006, 2000);
+			PK.bagGrew(b0, bag(4, 0));
+		});
+		check(
+			partial === 1 && notes[0]?.count === 4,
+			"a partial take (the ceiling: the count drops on the same id) is heard with what went in, '+4'",
+			JSON.stringify(notes),
+		);
+		t += 5;
+		const far = heard(() => {
+			add(75, ItemKind.Etc, 23, 3, 2600, 2000);
+			remove(75);
+			PK.bagGrew(b0, bag(3, 0));
+		});
+		check(far === 0, "a supply that left the world 600 u from me is not mine, whatever my bag did");
+		t += 5;
+		const trophy = heard(() => {
+			add(76, ItemKind.Etc, 36, 3, 2004, 2000);
+			remove(76);
+			PK.bagGrew();
+		});
+		check(trophy === 0, "a boss's trophy that leaves the world by me without my E press is not mine (E only, M2)");
+		globalThis.os = hadOs;
+	}
+	// 12. a full stack never hides what is behind it: E opens the door, and the hint says so (review of 1186a83, M1)
+	{
+		const WOOD = 23;
+		const door = t =>
+			W.addSolid(t.world, {
+				kind: "door",
+				x: 1000,
+				y: 1000,
+				w: 128,
+				h: 32,
+				hp: 200,
+				hpMax: 200,
+				destructible: true,
+				tags: "door",
+				rot: 0,
+				open: false,
+				placeable: 11,
+				owner: 0,
+			});
+		// the survivor 20 u above the door's middle; the wood 30 u to the side (outside the body's 26 u, inside E's 40)
+		const t = server();
+		t.sp.state.x = 1064;
+		t.sp.state.y = 980;
+		const d = door(t);
+		t.save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		W.spawnGroundItem(t.world, ItemKind.Etc, WOOD, 5, 1094, 980);
+		t.run(1);
+		t.pressE();
+		t.run(0.3);
+		check(
+			d.open === true && t.world.items.length === 1 && t.outcomes.some(o => o.kind === "door" && o.open),
+			"at the wood's ceiling, E by a full stack of wood opens the door beside it (the stack is passed over)",
+			`door.open=${d.open}, outcomes ${t.outcomes.map(o => o.kind + (o.why ? ":" + o.why : "")).join(" ")}`,
+		);
+		// the client's hint asks the same query: the door, not the full wood
+		const refs = {
+			world: t.world,
+			players: [t.sp.state],
+			player: t.sp.state,
+			save: t.save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12 },
+		};
+		const hint = CInter.interactHint(refs);
+		check(
+			hint === "E: Close door" && CInter.hintedItem() === -1,
+			`...and the prompt names the door, not the wood (${hint})`,
+		);
+		// with room, the wood comes first again (E: an item in reach is the first thing E does)
+		t.save.invenEtc[WOOD] = 0;
+		check(
+			CInter.interactHint(refs) === "E: Pick up Wood ×5",
+			"with room, the prompt is the wood again (items first)",
+		);
+		// nothing else in reach: the full line, said and not promised; the server refuses with 'full' and spends nothing
+		const u = server();
+		u.save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		W.spawnGroundItem(u.world, ItemKind.Etc, WOOD, 5, 1030, 1000);
+		u.run(1);
+		u.pressE();
+		const last = u.outcomes.at(-1);
+		const uRefs = { ...refs, world: u.world, players: [u.sp.state], player: u.sp.state, save: u.save };
+		check(
+			last?.kind === "refused" &&
+				last.why === "full" &&
+				u.world.items.length === 1 &&
+				CInter.interactHint(uRefs) === `Wood full (${SAVE.SAVE_LIMITS.ITEM_MAX})`,
+			"only a full stack in reach: E is refused 'full' and the prompt says 'Wood full (9999)'",
+			`${JSON.stringify(last)}, ${CInter.interactHint(uRefs)}`,
+		);
+		// offline, the client's own E follows the same query: the door opens
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		save.invenEtc[WOOD] = SAVE.SAVE_LIMITS.ITEM_MAX;
+		const player = Ply.createPlayer(save, 1064, 980);
+		const od = door({ world });
+		W.spawnGroundItem(world, ItemKind.Etc, WOOD, 5, 1094, 980);
+		new CInter.Interaction().tryInteract({ ...refs, world, players: [player], player, save, fxQueue: [] });
+		check(od.open === true && world.items.length === 1, "offline, E by the full stack opens the door too");
+	}
+	// 13. the nearest supply is behind a wall: looked past, and the clear one beside it is walked up (review, L1)
+	{
+		const t = server();
+		W.addSolid(t.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		const blocked = W.spawnGroundItem(t.world, ItemKind.Etc, 23, 1, 1025, 1000);
+		const clear = W.spawnGroundItem(t.world, ItemKind.Etc, 24, 1, 1000, 1025.5);
+		t.run(3);
+		check(
+			t.world.items.includes(blocked) &&
+				!t.world.items.includes(clear) &&
+				INV.countItem(t.save, ItemKind.Etc, 24) === 1,
+			"a supply behind a wall 25 u away does not starve the clear one 25.5 u away: that one is walked up",
+		);
+		// and more heaped behind the wall than the sweep looks past: bounded work, the clear one waits for a step
+		const u = server();
+		W.addSolid(u.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		const { WALK_BLOCKED_TRIES } = require(join(SRC, "server/sim/items.ts"));
+		for (let i = 0; i < WALK_BLOCKED_TRIES + 3; i++)
+			W.spawnGroundItem(u.world, ItemKind.Etc, 23, 1, 1024 + i * 0.2, 1000);
+		const far = W.spawnGroundItem(u.world, ItemKind.Etc, 24, 1, 1000, 1025.8);
+		u.run(2);
+		const waited = u.world.items.includes(far);
+		u.sp.state.y = 1010;
+		u.run(1);
+		check(
+			WALK_BLOCKED_TRIES >= 2 &&
+				waited &&
+				!u.world.items.includes(far) &&
+				u.world.items.length === WALK_BLOCKED_TRIES + 3,
+			`${WALK_BLOCKED_TRIES + 3} supplies heaped behind a wall: at most ${WALK_BLOCKED_TRIES} looked past a sweep; a step closer, the clear one comes`,
+		);
+	}
+	// 14. what a walk-over credits: the collector (Woods collector, CON-04) only for a found item in a run that pays
+	// (§9.3), never for an admin's drop, whose audit hears who took how many -- the E press's rules, part takes included
+	{
+		const WOODS = require(join(SRC, "shared/data/achievements.ts")).AchievementId.WoodsCollector;
+		const woods = s => s.achievements[WOODS] ?? 0;
+		// through the simulation: a run that pays, then one that does not (paysRewards, the admin's assisted run)
+		const t = server();
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 4, 1004, 1000);
+		t.run(1);
+		const paid = woods(t.save);
+		t.sim.paysRewards = () => false;
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 3, 1004, 1000);
+		t.run(1);
+		check(
+			paid === 4 && woods(t.save) === 4 && t.save.invenEtc[23] === 7,
+			"4 wood walked up in a run that pays credit the collector 4; 3 more in an assisted run: the wood, no credit",
+			`collector ${paid} -> ${woods(t.save)}, wood ${t.save.invenEtc[23]}`,
+		);
+		// an admin's drop (unpaid), partly taken at the ceiling: the audit hears the 3 that went in, the collector nothing
+		const u = server();
+		const heard = [];
+		u.sim.items.onUnpaidTaken = (slot, item, count) => heard.push({ slot, id: item.id, count });
+		u.save.invenEtc[23] = SAVE.SAVE_LIMITS.ITEM_MAX - 3;
+		const gift = W.spawnGroundItem(u.world, ItemKind.Etc, 23, 5, 1004, 1000);
+		gift.unpaid = true;
+		u.run(1);
+		check(
+			heard.length === 1 &&
+				heard[0].slot === 0 &&
+				heard[0].count === 3 &&
+				woods(u.save) === 0 &&
+				gift.count === 2 &&
+				u.world.items.length === 1,
+			"an admin's 5 wood walked over at 3 from the ceiling: 3 go in, the audit hears slot 0 took 3, no collector credit",
+			JSON.stringify(heard),
+		);
+	}
+	// 15. the magazine goes back into the reserve up to the save's ceiling, never over it (review, L2)
+	{
+		const { unloadMagazine } = require(join(SRC, "server/sim/life.ts"));
+		const save = bareSave();
+		const PISTOL = 10;
+		save.invenWeapon[PISTOL] = 1;
+		save.equipWeapon = PISTOL;
+		save.ammoNormal = SAVE.SAVE_LIMITS.AMMO_MAX - 5;
+		const state = Ply.createPlayer(save, 1000, 1000);
+		state.weapon.pointer = PISTOL;
+		state.weapon.ammoCount = 12;
+		const back = unloadMagazine(state, save);
+		const at = save.ammoNormal;
+		save.ammoNormal = 100;
+		state.weapon.ammoCount = 12;
+		const all = unloadMagazine(state, save);
+		check(
+			WEAPONS[PISTOL].ammoPool === 1 &&
+				back === 5 &&
+				at === SAVE.SAVE_LIMITS.AMMO_MAX &&
+				all === 12 &&
+				save.ammoNormal === 112,
+			`a 12-round magazine banked into ${SAVE.SAVE_LIMITS.AMMO_MAX - 5} rounds: 5 go back, the reserve stops at the ceiling (below it, all 12)`,
+			`back ${back}, reserve ${at}; below: ${all}, ${save.ammoNormal}`,
+		);
+	}
+});
 
 // ---------------------------------------------------------------- verdict
 

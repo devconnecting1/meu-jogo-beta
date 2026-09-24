@@ -3,11 +3,23 @@ import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
 import { inputDevice, onInputDeviceChanged, safeOrigin, screenSize } from "./device";
-import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
+import {
+	CONSOLE_MARGIN,
+	HudConsole,
+	HudState,
+	PxRect,
+	placeTouchChip,
+	placeTouchQuick,
+	placeTouchSky,
+} from "./hudConsole";
 import { HudNav } from "./hudNav";
+import { QuickDeck, quickViewsOf } from "./hudQuick";
+import { currentScheme } from "./tutorial";
 import type { PlayerSaveData } from "shared/game/save";
 import type { WorldData } from "shared/game/world";
 import { HudSky, SKY_PLATE_H, SKY_PLATE_W, skyPlate } from "./hudSky";
+import { PickupToast, TOAST_H, pickupFlashTransparency } from "./pickupToast";
+import { PickupNote, takePickupNotes } from "../systems/pickups";
 import { SCORE_CHIP_TOUCH_W, ScoreSource, Scoreboard, scoreSourceOf } from "./scoreboard";
 import { GAME, RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
@@ -117,6 +129,9 @@ export function messageReach(
 
 /** between the interaction prompt and the top of the console (design units of the console) */
 const HINT_GAP = 8;
+/** the interaction prompt's box (design units x the HUD size): buildHint draws it, placeConsole keeps it clear */
+const HINT_W = 440;
+const HINT_H = 46;
 
 /*
  * ---------------------------------------------------------------- touch layer (pixel space)
@@ -259,6 +274,11 @@ export class Hud {
 	/** touch only: the frame the scoreboard's chip fills, placed in screen pixels (hudConsole.ts placeTouchChip) */
 	private chipSlot: Frame | undefined;
 	/**
+	 * touch only (ITM-08): the quick HEAL and EAT tiles on their own plate over the console's bars (hudQuick.ts QuickDeck,
+	 * placed by placeConsole); on desktop they are in the console, at the end of the HP and FOOD bars
+	 */
+	private quickDeck: QuickDeck | undefined;
+	/**
 	 * the widest banner card and feed line (design units): the full width, or on touch as much of it as keeps them off
 	 * the sky's plate and the scoreboard's chip in the top corner (placeConsole)
 	 */
@@ -287,6 +307,12 @@ export class Hud {
 	private hintBox: Frame | undefined;
 	private hintKey: Frame | undefined;
 	private hintLabel: TextLabel | undefined;
+	/** "+12 Wood" over the prompt and the Bag's flash (ITM-07, client/ui/pickupToast.ts) */
+	private toast: PickupToast | undefined;
+	private readonly notes = new Array<PickupNote>();
+	/** touch: the light laid over the Bag button when something went into the backpack, and how bright it is now */
+	private bagFlash: Frame | undefined;
+	private bagFlashT = 1;
 	private mounted = false;
 	private last = new Map<string, string>();
 	// ---- touch layer (pixel space; see the helpers above)
@@ -358,7 +384,16 @@ export class Hud {
 			},
 			onBag: (): void => this.onBackpack?.(),
 			onMenu: (): void => this.onPause?.(),
+			// the field H / F and the D-pad's up / down write (ITM-08): one path to the quick use
+			onQuick: (kind: number): void => {
+				this.ctx.input.quickUsePressed = kind;
+			},
 		});
+		if (mobile) {
+			this.quickDeck = new QuickDeck(root, this.console.layout.tile, (kind: number): void => {
+				this.ctx.input.quickUsePressed = kind;
+			});
+		}
 		// who else is in the town (MP-23): hold Q, the pad's Back, or the survivors chip. Never pauses (UI-06), never
 		// covers the thumbs, never takes the pad. The chip goes where Bag and Menu go on this device: on desktop the
 		// console's button row (a third plate after them), on touch the corner row of Menu and Bag (placeConsole)
@@ -386,6 +421,10 @@ export class Hud {
 			});
 		}
 		this.buildHint(root, k);
+		this.toast = new PickupToast(root, tr, k);
+		// what was picked up before this HUD existed (another run, the lobby) is not news any more
+		takePickupNotes(this.notes);
+		this.notes.clear();
 		this.buildMessages(root, k);
 		// the save (and with it the player's control preferences) arrives long after bootstrap ran: recompute
 		// the geometry now, so the first run of a session already uses their own sizes and their own side
@@ -424,6 +463,8 @@ export class Hud {
 		if (!this.touch) {
 			const bottom = CONSOLE_MARGIN + deck.layout.h * this.uiK + HINT_GAP;
 			if (hint !== undefined) hint.Position = new UDim2(0.5, 0, 1 - bottom / DESIGN_H, 0);
+			// the pickup chips ride over the prompt: the same bottom, their column above its height
+			if (hint !== undefined) this.toast?.place(hint.Position);
 			// the sky is in the console: the top centre is the messages' whole
 			this.bannerMaxW = BANNER_W;
 			this.feedMaxW = FEED_W;
@@ -431,9 +472,8 @@ export class Hud {
 		}
 		const L = getTouchLayout();
 		const p = deck.placeTouch(L, this.uiK);
-		if (hint !== undefined) {
-			hint.Position = UDim2.fromOffset(math.round(p.x + p.w / 2), math.round(p.y - HINT_GAP * p.scale));
-		}
+		const deckRect: PxRect = [p.x, p.y, p.x + p.w, p.y + p.h];
+		const corner: Array<PxRect> = [];
 		// the clock: under the row of Menu and Bag, as tall as they are (hudConsole.ts placeTouchSky); the scoreboard's
 		// chip: in that row, left of Menu (placeTouchChip) -- the corner is one block, the buttons over the clock
 		const sky = this.skyFrame;
@@ -441,14 +481,13 @@ export class Hud {
 			// the banner and the feed keep at least their narrowest over the top centre: the sky never takes that
 			const v = viewportSize();
 			const least = messageReach(v.X, v.Y, topInset(), BANNER_MIN_W, FEED_LINE_MIN_W, this.uiK);
-			const deckRect: PxRect = [p.x, p.y, p.x + p.w, p.y + p.h];
 			const s = placeTouchSky(L, deckRect, SKY_PLATE_W, SKY_PLATE_H, least);
 			sky.Position = UDim2.fromOffset(math.round(s.x), math.round(s.y));
 			sky.Size = UDim2.fromOffset(math.ceil(s.w), math.ceil(s.h));
 			const textScale = math.clamp(s.scale / math.max(uiScale(), 0.05), 0.5, 4);
 			this.sky?.setTextScale(textScale);
 			const skyRect: PxRect = [s.x, s.y, s.x + s.w, s.y + s.h];
-			const corner: Array<PxRect> = [skyRect];
+			corner.push(skyRect);
 			const slot = this.chipSlot;
 			if (slot !== undefined) {
 				const c = placeTouchChip(L, deckRect, skyRect, SCORE_CHIP_TOUCH_W, SKY_PLATE_H, least);
@@ -462,6 +501,36 @@ export class Hud {
 			// the compass / GPS plate at the top left (hudNav.ts), which only a crowded layout sends them to
 			this.board?.avoid(corner);
 			this.nav?.avoid(corner);
+		}
+		// the prompt's box: centred over the console, HINT_W x HINT_H design units at the HUD size
+		const cx = p.x + p.w / 2;
+		const view = viewportSize();
+		const s = math.min(view.X / DESIGN_W, view.Y / DESIGN_H) * this.uiK;
+		// (2 px of slack: both land on whole pixels, and a hint rounded onto the deck's edge must count as meeting)
+		const half = (HINT_W * s) / 2 + 2;
+		// (ITM-08) the quick tiles: their own plate over the console's bars, at the console's scale (a thumb's tile),
+		// clear of the thumbs, the corner and the console (hudConsole.ts placeTouchQuick) -- and over the console only
+		// where the prompt and its pickup chips (TOAST_H, ITM-07), riding over the tiles, still end on the screen
+		let quick: PxRect | undefined;
+		const qd = this.quickDeck;
+		if (qd !== undefined) {
+			const prompt = { cx, half, need: HINT_GAP * p.scale + TOAST_H * s };
+			const q = placeTouchQuick(L, deckRect, p.scale, deck.layout.tile, qd.w, qd.h, corner, prompt);
+			qd.place(q.x, q.y, q.scale);
+			quick = [q.x, q.y, q.x + q.w, q.y + q.h];
+		}
+		// the prompt "E: ...": over the console's middle -- and over the quick tiles where the two would meet
+		if (hint !== undefined) {
+			let bottom = p.y - HINT_GAP * p.scale;
+			if (quick !== undefined) {
+				const top = bottom - HINT_H * s;
+				const meets = cx - half < quick[2] && quick[0] < cx + half && top < quick[3] && quick[1] < bottom;
+				if (meets) bottom = math.min(bottom, quick[1] - HINT_GAP * p.scale);
+			}
+			hint.Position = UDim2.fromOffset(math.round(cx), math.round(bottom));
+			// the pickup chips ride over the prompt (ITM-07): the same bottom, their column above its height -- so over the
+			// quick tiles too wherever the prompt went over them
+			this.toast?.place(hint.Position);
 		}
 	}
 
@@ -523,6 +592,7 @@ export class Hud {
 		this.actionBtn = undefined;
 		this.useLabel = undefined;
 		this.reloadBtn = undefined;
+		this.bagFlash = undefined;
 		if (!this.touch) return;
 
 		const L = getTouchLayout();
@@ -636,7 +706,15 @@ export class Hud {
 			this.ctx.input.reloadPressed = true;
 		});
 		this.touchCaption(layer, "ReloadCap", L.reload, this.tr("RELOAD"));
-		this.touchButton(layer, "BagBtn", L.bag, "bag", "secondary", () => this.onBackpack?.());
+		const bag = this.touchButton(layer, "BagBtn", L.bag, "bag", "secondary", () => this.onBackpack?.());
+		// ITM-07: the light that flashes over the Bag when something goes into it (hidden until then)
+		const size = math.max(L.bag.r * 2, MIN_TOUCH_PX);
+		this.bagFlash = makeFrame(bag, "PickupFlash", 0, 0, size, size, THEME.foreground, {
+			transparency: 1,
+			radius: RADIUS.full,
+			zIndex: bag.ZIndex + 5,
+		});
+		this.bagFlashT = 1;
 		this.touchButton(layer, "MenuBtn", L.pause, "menu", "secondary", () => this.onPause?.());
 	}
 
@@ -699,8 +777,8 @@ export class Hud {
 	 * placeConsole() -- not by makeAnchored, whose own layout handler would put it back under a touch console.
 	 */
 	private buildHint(root: Frame, k: number): void {
-		const w = 440;
-		const h = 46;
+		const w = HINT_W;
+		const h = HINT_H;
 		const hintBox = new Instance("Frame");
 		hintBox.Name = "HintBox";
 		hintBox.AnchorPoint = new Vector2(0.5, 1);
@@ -844,6 +922,7 @@ export class Hud {
 		this.board?.destroy();
 		this.board = undefined;
 		this.chipSlot = undefined;
+		this.quickDeck = undefined;
 		this.vignette = [];
 		this.vignetteT = 1;
 		this.feed = undefined;
@@ -869,6 +948,8 @@ export class Hud {
 		this.hintKey = undefined;
 		this.hintLabel = undefined;
 		this.hintGamepad = undefined;
+		this.toast = undefined;
+		this.bagFlash = undefined;
 		this.flash = 0;
 	}
 
@@ -891,6 +972,11 @@ export class Hud {
 		return this.nav;
 	}
 
+	/** the touch quick tiles of this mount (ITM-08), for tests; undefined on desktop, where they are in the console */
+	quickTiles(): QuickDeck | undefined {
+		return this.quickDeck;
+	}
+
 	/**
 	 * The compass / GPS in the hand (E2): which plate shows, where the needle points, the map. Every frame of a run;
 	 * writes only what changed and creates nothing (client/ui/hudNav.ts).
@@ -908,7 +994,14 @@ export class Hud {
 		// and create nothing
 		this.console?.update(state, this.ctx.save, now);
 		this.sky?.update(state, now);
+		// (ITM-08) the touch quick tiles, from the same views the desktop plates read
+		this.quickDeck?.update(
+			state.quick ?? quickViewsOf(this.ctx.save, state.hp, state.hpMax, state.hunger, state.hungerMax),
+			currentScheme(),
+			reducedMotion(),
+		);
 		this.board?.update(this.ctx.input.keyScoreboard, now);
+		this.updatePickups(now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
 		// a melee weapon has nothing to reload, nor a weapon put away (ITM-06): the touch button says so instead of doing
@@ -936,6 +1029,33 @@ export class Hud {
 		}
 
 		if (this.touchLayer !== undefined) this.updateTouch();
+	}
+
+	/**
+	 * What this survivor just picked up (client/systems/pickups.ts): a chip over the prompt, and the Bag -- the
+	 * console's plate, or the touch layer's button -- flashing. Every frame; writes only what changed, creates nothing.
+	 */
+	private updatePickups(now: number): void {
+		const toast = this.toast;
+		if (toast === undefined) return;
+		for (const n of takePickupNotes(this.notes)) toast.add(n);
+		this.notes.clear();
+		toast.update(now);
+		const glow = toast.bagFlash();
+		this.console?.setBagFlash(glow);
+		const f = this.bagFlash;
+		if (f !== undefined) {
+			const t = pickupFlashTransparency(glow);
+			if (t !== this.bagFlashT) {
+				this.bagFlashT = t;
+				f.BackgroundTransparency = t;
+			}
+		}
+	}
+
+	/** the pickup chips of this mount (ITM-07), for tests */
+	pickupToast(): PickupToast | undefined {
+		return this.toast;
 	}
 
 	/** drives the pixel touch layer from the live InputState (positions are already in screen pixels) */

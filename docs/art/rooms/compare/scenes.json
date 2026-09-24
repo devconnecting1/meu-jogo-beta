@@ -1,0 +1,1540 @@
+{
+	"house-living": {
+		"title": "House: living room",
+		"rect": {
+			"x": 284,
+			"y": 3260,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 924,
+				"y": 3660,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 792,
+					"y": 3774,
+					"type": 1,
+					"angle": -0.5438324563021223
+				},
+				{
+					"x": 1094,
+					"y": 3750,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 165,
+			"images": 118,
+			"flat": 47,
+			"strokes": 10,
+			"corners": 21,
+			"instances": 317
+		}
+	},
+	"house-living-night": {
+		"title": "House: living room, 22:00",
+		"rect": {
+			"x": 284,
+			"y": 3260,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 924,
+				"y": 3660,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 792,
+					"y": 3774,
+					"type": 1,
+					"angle": -0.5438324563021223
+				},
+				{
+					"x": 1094,
+					"y": 3750,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 165,
+			"images": 118,
+			"flat": 47,
+			"strokes": 10,
+			"corners": 21,
+			"instances": 586
+		}
+	},
+	"house-kitchen": {
+		"title": "House: kitchen",
+		"rect": {
+			"x": 152,
+			"y": 3036,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 744,
+				"y": 3440,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 666,
+					"y": 3448,
+					"type": 1,
+					"angle": 0.348771003583907
+				},
+				{
+					"x": 903,
+					"y": 3573,
+					"type": 1,
+					"angle": -2.4450013838375533
+				}
+			]
+		},
+		"counts": {
+			"sprites": 156,
+			"images": 108,
+			"flat": 48,
+			"strokes": 9,
+			"corners": 21,
+			"instances": 297
+		}
+	},
+	"house-bedroom": {
+		"title": "House: bedroom",
+		"rect": {
+			"x": 688,
+			"y": 3160,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 1284,
+				"y": 3388,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 1454,
+					"y": 3436,
+					"type": 1,
+					"angle": -3.0916342578678506
+				},
+				{
+					"x": 1456,
+					"y": 3453,
+					"type": 1,
+					"angle": -2.7802758398716074
+				}
+			]
+		},
+		"counts": {
+			"sprites": 165,
+			"images": 115,
+			"flat": 50,
+			"strokes": 11,
+			"corners": 23,
+			"instances": 317
+		}
+	},
+	"house-bath": {
+		"title": "House: bathroom",
+		"rect": {
+			"x": 688,
+			"y": 2818,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 1328,
+				"y": 3218,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 1454,
+					"y": 3436,
+					"type": 1,
+					"angle": -2.148355445806911
+				},
+				{
+					"x": 1158,
+					"y": 3308,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 144,
+			"images": 100,
+			"flat": 44,
+			"strokes": 11,
+			"corners": 23,
+			"instances": 281
+		}
+	},
+	"house-dining": {
+		"title": "House: dining room",
+		"rect": {
+			"x": 420,
+			"y": 2918,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 1060,
+			"y": 3442,
+			"box": {
+				"x": 656,
+				"y": 3100,
+				"w": 808,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 1108,
+				"y": 3164,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 938,
+					"y": 3218,
+					"type": 1,
+					"angle": -0.07762150873739349
+				},
+				{
+					"x": 1278,
+					"y": 3254,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 166,
+			"images": 113,
+			"flat": 53,
+			"strokes": 12,
+			"corners": 26,
+			"instances": 320
+		}
+	},
+	"market": {
+		"title": "Supermarket: sales floor",
+		"rect": {
+			"x": 4574,
+			"y": 8832,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 5214,
+			"y": 9436,
+			"box": {
+				"x": 4680,
+				"y": 8904,
+				"w": 1068,
+				"h": 1064
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 4788,
+				"y": 9380,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 5036,
+					"y": 8914,
+					"type": 1,
+					"angle": 1.9827658513132729
+				},
+				{
+					"x": 4958,
+					"y": 9470,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 137,
+			"images": 98,
+			"flat": 39,
+			"strokes": 12,
+			"corners": 19,
+			"instances": 269
+		}
+	},
+	"market-night": {
+		"title": "Supermarket: sales floor, 22:00",
+		"rect": {
+			"x": 4574,
+			"y": 8832,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"inside": {
+			"x": 5214,
+			"y": 9436,
+			"box": {
+				"x": 4680,
+				"y": 8904,
+				"w": 1068,
+				"h": 1064
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 4788,
+				"y": 9380,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 5036,
+					"y": 8914,
+					"type": 1,
+					"angle": 1.9827658513132729
+				},
+				{
+					"x": 4958,
+					"y": 9470,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 137,
+			"images": 98,
+			"flat": 39,
+			"strokes": 12,
+			"corners": 19,
+			"instances": 538
+		}
+	},
+	"market-back": {
+		"title": "Supermarket: cold room and stock",
+		"rect": {
+			"x": 4576,
+			"y": 9364,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 5214,
+			"y": 9436,
+			"box": {
+				"x": 4680,
+				"y": 8904,
+				"w": 1068,
+				"h": 1064
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 5050,
+				"y": 9860,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 4820,
+					"y": 9550,
+					"type": 1,
+					"angle": 0.8699419189104465
+				},
+				{
+					"x": 5222,
+					"y": 9925,
+					"type": 1,
+					"angle": -2.7802758398716074
+				}
+			]
+		},
+		"counts": {
+			"sprites": 128,
+			"images": 88,
+			"flat": 40,
+			"strokes": 16,
+			"corners": 23,
+			"instances": 258
+		}
+	},
+	"corner-market": {
+		"title": "Corner market",
+		"rect": {
+			"x": 7964,
+			"y": 2702,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 8710,
+			"y": 3102,
+			"box": {
+				"x": 8432,
+				"y": 2760,
+				"w": 556,
+				"h": 684
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 8552,
+				"y": 3336,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 8442,
+					"y": 3256,
+					"type": 1,
+					"angle": 0.7853981633974483
+				},
+				{
+					"x": 8724,
+					"y": 3401,
+					"type": 1,
+					"angle": -2.7802758398716074
+				}
+			]
+		},
+		"counts": {
+			"sprites": 134,
+			"images": 96,
+			"flat": 38,
+			"strokes": 9,
+			"corners": 18,
+			"instances": 260
+		}
+	},
+	"pharmacy": {
+		"title": "Pharmacy",
+		"rect": {
+			"x": 4326,
+			"y": 7272,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 4966,
+			"y": 7578,
+			"box": {
+				"x": 4624,
+				"y": 7300,
+				"w": 684,
+				"h": 556
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 5208,
+				"y": 7598,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 4812,
+					"y": 7846,
+					"type": 1,
+					"angle": -0.4996680584299954
+				},
+				{
+					"x": 5038,
+					"y": 7688,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 183,
+			"images": 139,
+			"flat": 44,
+			"strokes": 17,
+			"corners": 21,
+			"instances": 363
+		}
+	},
+	"gunshop": {
+		"title": "Gun shop and its vault",
+		"rect": {
+			"x": 8188,
+			"y": 8958,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 8830,
+			"y": 9174,
+			"box": {
+				"x": 8488,
+				"y": 8896,
+				"w": 684,
+				"h": 556
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 8956,
+				"y": 9332,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 8498,
+					"y": 9166,
+					"type": 1,
+					"angle": 0.41465007951005645
+				},
+				{
+					"x": 8788,
+					"y": 9397,
+					"type": 1,
+					"angle": -0.36916665700717544
+				}
+			]
+		},
+		"counts": {
+			"sprites": 147,
+			"images": 104,
+			"flat": 43,
+			"strokes": 12,
+			"corners": 19,
+			"instances": 285
+		}
+	},
+	"cloth": {
+		"title": "Clothing store",
+		"rect": {
+			"x": 6294,
+			"y": 7268,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 6934,
+			"y": 7578,
+			"box": {
+				"x": 6592,
+				"y": 7300,
+				"w": 684,
+				"h": 556
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 7096,
+				"y": 7580,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 7088,
+					"y": 7846,
+					"type": 1,
+					"angle": -1.3854483767992019
+				},
+				{
+					"x": 7266,
+					"y": 7670,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 173,
+			"images": 132,
+			"flat": 41,
+			"strokes": 20,
+			"corners": 23,
+			"instances": 351
+		}
+	},
+	"restaurant": {
+		"title": "Restaurant: dining room",
+		"rect": {
+			"x": 10372,
+			"y": 9094,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 11236,
+			"y": 9494,
+			"box": {
+				"x": 10704,
+				"y": 8960,
+				"w": 1064,
+				"h": 1068
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 11012,
+				"y": 9494,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 10714,
+					"y": 9346,
+					"type": 1,
+					"angle": 0.5480239164242775
+				},
+				{
+					"x": 11182,
+					"y": 9584,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 134,
+			"images": 101,
+			"flat": 33,
+			"strokes": 10,
+			"corners": 18,
+			"instances": 266
+		}
+	},
+	"restaurant-kitchen": {
+		"title": "Restaurant: kitchen",
+		"rect": {
+			"x": 10904,
+			"y": 8988,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 11236,
+			"y": 9494,
+			"box": {
+				"x": 10704,
+				"y": 8960,
+				"w": 1064,
+				"h": 1068
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 11660,
+				"y": 9328,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 11310,
+					"y": 9065,
+					"type": 1,
+					"angle": 0.6996361962135867
+				},
+				{
+					"x": 11490,
+					"y": 9418,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 122,
+			"images": 90,
+			"flat": 32,
+			"strokes": 11,
+			"corners": 18,
+			"instances": 244
+		}
+	},
+	"gas": {
+		"title": "Gas station shop",
+		"rect": {
+			"x": 6246,
+			"y": 8980,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 6886,
+			"y": 9486,
+			"box": {
+				"x": 6544,
+				"y": 9208,
+				"w": 684,
+				"h": 556
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 6652,
+				"y": 9432,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 6900,
+					"y": 9218,
+					"type": 1,
+					"angle": 2.3191743743184148
+				},
+				{
+					"x": 6822,
+					"y": 9522,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 180,
+			"images": 125,
+			"flat": 55,
+			"strokes": 18,
+			"corners": 25,
+			"instances": 351
+		}
+	},
+	"gas-office": {
+		"title": "Gas station: office",
+		"rect": {
+			"x": 6486,
+			"y": 9258,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 6886,
+			"y": 9486,
+			"box": {
+				"x": 6544,
+				"y": 9208,
+				"w": 684,
+				"h": 556
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 7180,
+				"y": 9664,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 7218,
+					"y": 9658,
+					"type": 1,
+					"angle": 2.117585167684144
+				},
+				{
+					"x": 7058,
+					"y": 9591,
+					"type": 1,
+					"angle": 0.539213228238052
+				}
+			]
+		},
+		"counts": {
+			"sprites": 152,
+			"images": 107,
+			"flat": 45,
+			"strokes": 16,
+			"corners": 23,
+			"instances": 301
+		}
+	},
+	"school": {
+		"title": "School: classroom",
+		"rect": {
+			"x": 4522,
+			"y": 2556,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 5402,
+			"y": 3332,
+			"box": {
+				"x": 4996,
+				"y": 2800,
+				"w": 812,
+				"h": 1064
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 5162,
+				"y": 2956,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 5162,
+					"y": 2810,
+					"type": 1,
+					"angle": 1.319793640151862
+				},
+				{
+					"x": 5366,
+					"y": 3024,
+					"type": 1,
+					"angle": -2.819842099193151
+				}
+			]
+		},
+		"counts": {
+			"sprites": 172,
+			"images": 129,
+			"flat": 43,
+			"strokes": 11,
+			"corners": 21,
+			"instances": 336
+		}
+	},
+	"school-corridor": {
+		"title": "School: corridor and lockers",
+		"rect": {
+			"x": 4772,
+			"y": 2932,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 5402,
+			"y": 3332,
+			"box": {
+				"x": 4996,
+				"y": 2800,
+				"w": 812,
+				"h": 1064
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 5400,
+				"y": 3176,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 5652,
+					"y": 3102,
+					"type": 1,
+					"angle": 2.764343593947434
+				},
+				{
+					"x": 5230,
+					"y": 3266,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 188,
+			"images": 144,
+			"flat": 44,
+			"strokes": 9,
+			"corners": 19,
+			"instances": 363
+		}
+	},
+	"hospital-ward": {
+		"title": "Hospital: ward",
+		"rect": {
+			"x": 16848,
+			"y": 7228,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 17148,
+			"y": 7394,
+			"box": {
+				"x": 16616,
+				"y": 6988,
+				"w": 1064,
+				"h": 812
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 17632,
+				"y": 7544,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 17488,
+					"y": 7790,
+					"type": 1,
+					"angle": -0.9085808255387245
+				},
+				{
+					"x": 17462,
+					"y": 7634,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 198,
+			"images": 151,
+			"flat": 47,
+			"strokes": 13,
+			"corners": 25,
+			"instances": 390
+		}
+	},
+	"hospital-ward-night": {
+		"title": "Hospital: ward, 22:00",
+		"rect": {
+			"x": 16848,
+			"y": 7228,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"inside": {
+			"x": 17148,
+			"y": 7394,
+			"box": {
+				"x": 16616,
+				"y": 6988,
+				"w": 1064,
+				"h": 812
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 17632,
+				"y": 7544,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 17488,
+					"y": 7790,
+					"type": 1,
+					"angle": -0.9085808255387245
+				},
+				{
+					"x": 17462,
+					"y": 7634,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 199,
+			"images": 151,
+			"flat": 48,
+			"strokes": 13,
+			"corners": 25,
+			"instances": 660
+		}
+	},
+	"hospital-treatment": {
+		"title": "Hospital: treatment room",
+		"rect": {
+			"x": 16848,
+			"y": 6734,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 17148,
+			"y": 7394,
+			"box": {
+				"x": 16616,
+				"y": 6988,
+				"w": 1064,
+				"h": 812
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 17512,
+				"y": 7082,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 17670,
+					"y": 7580,
+					"type": 1,
+					"angle": -1.8833487174801287
+				},
+				{
+					"x": 17342,
+					"y": 7172,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 154,
+			"images": 116,
+			"flat": 38,
+			"strokes": 10,
+			"corners": 19,
+			"instances": 302
+		}
+	},
+	"hospital-lobby": {
+		"title": "Hospital: reception",
+		"rect": {
+			"x": 16316,
+			"y": 7228,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 17148,
+			"y": 7394,
+			"box": {
+				"x": 16616,
+				"y": 6988,
+				"w": 1064,
+				"h": 812
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 17208,
+				"y": 7752,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 16808,
+					"y": 7790,
+					"type": 1,
+					"angle": -0.06355067142545728
+				},
+				{
+					"x": 17378,
+					"y": 7662,
+					"type": 1,
+					"angle": 2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 206,
+			"images": 156,
+			"flat": 50,
+			"strokes": 12,
+			"corners": 24,
+			"instances": 401
+		}
+	},
+	"college-lecture": {
+		"title": "College: lecture room",
+		"rect": {
+			"x": 17968,
+			"y": 2868,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 18688,
+			"y": 3052,
+			"box": {
+				"x": 18488,
+				"y": 2704,
+				"w": 400,
+				"h": 696
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 18608,
+				"y": 3268,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 18498,
+					"y": 3268,
+					"type": 1,
+					"angle": 0.3217505543966422
+				}
+			]
+		},
+		"counts": {
+			"sprites": 174,
+			"images": 119,
+			"flat": 55,
+			"strokes": 12,
+			"corners": 25,
+			"instances": 333
+		}
+	},
+	"college-corridor": {
+		"title": "College: foyer and corridor",
+		"rect": {
+			"x": 18168,
+			"y": 2520,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 18688,
+			"y": 3052,
+			"box": {
+				"x": 18488,
+				"y": 2704,
+				"w": 400,
+				"h": 696
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 18812,
+				"y": 2888,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 18498,
+					"y": 2828,
+					"type": 1,
+					"angle": 0.29936623405735197
+				},
+				{
+					"x": 18629,
+					"y": 2990,
+					"type": 1,
+					"angle": -0.5084893240796899
+				}
+			]
+		},
+		"counts": {
+			"sprites": 227,
+			"images": 162,
+			"flat": 65,
+			"strokes": 15,
+			"corners": 30,
+			"instances": 437
+		}
+	},
+	"library-reading": {
+		"title": "Library: reading room",
+		"rect": {
+			"x": 18580,
+			"y": 2432,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 19360,
+			"y": 2880,
+			"box": {
+				"x": 19000,
+				"y": 2704,
+				"w": 720,
+				"h": 352
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 19124,
+				"y": 2796,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 19220,
+					"y": 2714,
+					"type": 1,
+					"angle": 2.117585167684144
+				},
+				{
+					"x": 19294,
+					"y": 2886,
+					"type": 1,
+					"angle": -2.654693421778524
+				}
+			]
+		},
+		"counts": {
+			"sprites": 203,
+			"images": 138,
+			"flat": 65,
+			"strokes": 16,
+			"corners": 31,
+			"instances": 391
+		}
+	},
+	"library-stacks": {
+		"title": "Library: stacks",
+		"rect": {
+			"x": 18940,
+			"y": 2480,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 19360,
+			"y": 2880,
+			"box": {
+				"x": 19000,
+				"y": 2704,
+				"w": 720,
+				"h": 352
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 19580,
+				"y": 2780,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 19612,
+					"y": 2714,
+					"type": 1,
+					"angle": 1.4659193880646628
+				},
+				{
+					"x": 19410,
+					"y": 2870,
+					"type": 1,
+					"angle": -0.48689923181126904
+				}
+			]
+		},
+		"counts": {
+			"sprites": 196,
+			"images": 142,
+			"flat": 54,
+			"strokes": 13,
+			"corners": 28,
+			"instances": 382
+		}
+	},
+	"lab": {
+		"title": "Science lab",
+		"rect": {
+			"x": 17988,
+			"y": 3336,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 18868,
+			"y": 3688,
+			"box": {
+				"x": 18488,
+				"y": 3512,
+				"w": 760,
+				"h": 352
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 18588,
+				"y": 3704,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 18628,
+					"y": 3854,
+					"type": 1,
+					"angle": -1.5707963267948966
+				},
+				{
+					"x": 18760,
+					"y": 3769,
+					"type": 1,
+					"angle": -2.7802758398716074
+				}
+			]
+		},
+		"counts": {
+			"sprites": 192,
+			"images": 135,
+			"flat": 57,
+			"strokes": 13,
+			"corners": 28,
+			"instances": 371
+		}
+	},
+	"dorm-room": {
+		"title": "Dorm: bunk room",
+		"rect": {
+			"x": 18944,
+			"y": 2892,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 19544,
+			"y": 3516,
+			"box": {
+				"x": 19368,
+				"y": 3168,
+				"w": 352,
+				"h": 696
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 19552,
+				"y": 3372,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 19584,
+					"y": 3178,
+					"type": 1,
+					"angle": 1.5316007248678418
+				},
+				{
+					"x": 19401,
+					"y": 3487,
+					"type": 1,
+					"angle": -0.6508771604812539
+				}
+			]
+		},
+		"counts": {
+			"sprites": 204,
+			"images": 137,
+			"flat": 67,
+			"strokes": 14,
+			"corners": 32,
+			"instances": 390
+		}
+	},
+	"dorm-room-night": {
+		"title": "Dorm: bunk room, 22:00",
+		"rect": {
+			"x": 18944,
+			"y": 2892,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"inside": {
+			"x": 19544,
+			"y": 3516,
+			"box": {
+				"x": 19368,
+				"y": 3168,
+				"w": 352,
+				"h": 696
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 19552,
+				"y": 3372,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 19584,
+					"y": 3178,
+					"type": 1,
+					"angle": 1.5316007248678418
+				},
+				{
+					"x": 19401,
+					"y": 3487,
+					"type": 1,
+					"angle": -0.6508771604812539
+				}
+			]
+		},
+		"counts": {
+			"sprites": 205,
+			"images": 137,
+			"flat": 68,
+			"strokes": 14,
+			"corners": 32,
+			"instances": 660
+		}
+	},
+	"dorm-common": {
+		"title": "Dorm: common room",
+		"rect": {
+			"x": 18904,
+			"y": 3116,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"inside": {
+			"x": 19544,
+			"y": 3516,
+			"box": {
+				"x": 19368,
+				"y": 3168,
+				"w": 352,
+				"h": 696
+			}
+		},
+		"actors": {
+			"survivor": {
+				"x": 19544,
+				"y": 3516,
+				"angle": 0
+			},
+			"zombies": [
+				{
+					"x": 19584,
+					"y": 3178,
+					"type": 1,
+					"angle": 1.5707963267948966
+				}
+			]
+		},
+		"counts": {
+			"sprites": 217,
+			"images": 151,
+			"flat": 66,
+			"strokes": 11,
+			"corners": 25,
+			"instances": 407
+		}
+	}
+}

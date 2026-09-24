@@ -148,8 +148,16 @@ const ITEM_SCRATCH = new Array<GroundItem>();
  * reads one to four cells of it, shared/game/world.ts `queryGroundItems`; a client scans its own short list), then
  * SQUARED distances, since `a < b` and `a² < b²` agree for non-negative numbers. The answer is identical; the
  * arithmetic is not.
+ *
+ * `skip` leaves items out (ITM-07: the ones the survivor has no room for), so that a full stack does not hide the
+ * door, the search or the repair behind it. The server's E and the client's hint pass the same check.
  */
-export function nearestGroundItem(world: WorldData, x: number, y: number): GroundItem | undefined {
+export function nearestGroundItem(
+	world: WorldData,
+	x: number,
+	y: number,
+	skip?: (it: GroundItem) => boolean,
+): GroundItem | undefined {
 	const reach = DESIGN.ITEM_GET_DISTANCE;
 	let best: GroundItem | undefined;
 	let bestD2 = reach * reach;
@@ -157,6 +165,7 @@ export function nearestGroundItem(world: WorldData, x: number, y: number): Groun
 	found.clear();
 	queryGroundItems(world, x - reach, y - reach, x + reach, y + reach, found);
 	for (const it of found) {
+		if (skip !== undefined && skip(it)) continue;
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;
@@ -274,8 +283,14 @@ export type InteractTarget =
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
-export function interactTarget(world: WorldData, x: number, y: number): InteractTarget | undefined {
-	const item = nearestGroundItem(world, x, y);
+/** `skip`: ground items E passes over (see `nearestGroundItem`) */
+export function interactTarget(
+	world: WorldData,
+	x: number,
+	y: number,
+	skip?: (it: GroundItem) => boolean,
+): InteractTarget | undefined {
+	const item = nearestGroundItem(world, x, y, skip);
 	if (item !== undefined) return { kind: "item", item };
 	const s = nearestUsableSolid(world, x, y);
 	if (s !== undefined) {

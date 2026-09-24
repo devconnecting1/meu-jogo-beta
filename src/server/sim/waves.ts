@@ -128,9 +128,8 @@ export class WorldClock implements AiClock {
 	 * Survivor forgets the midnight that started it (server/sim/simulation.ts), so a skip to 05:59 followed by a real
 	 * 06:00 makes nobody a Survivor of hours they never lived.
 	 *
-	 * That is ALL it protects. Nothing on the server calls `setClock` today (the admin panel's clock only moves the
-	 * admin's own client, client/admin/world.ts); a server-side clock tool, when it comes, must also mark every run
-	 * in the world assisted (§9.3, server/main.server.ts `markAssisted`): a skip BACKWARD across midnight lets the
+	 * That is ALL it protects. The admin's clock tools (server/admin/adminWorld.ts, §10) therefore also mark every
+	 * run in the world assisted (§9.3, server/main.server.ts `markAssisted`): a skip BACKWARD across midnight lets the
 	 * clock cross it again, and that midnight would pay its coins and count a night toward Week One (`lifeNights`)
 	 * a second time.
 	 */
@@ -270,8 +269,8 @@ export class WorldClock implements AiClock {
 	 * It moves the clock and NOTHING else, the way client/admin/world.ts always did it: an admin skipping
 	 * into the dark calls `fillNight()` first, so the night it lands in has a horde. Doing it here instead
 	 * would re-promise a wave the survivors had already beaten whenever the clock was nudged after dusk.
-	 * (It does tell `onClockSet`, so the night being lived stops counting toward a Survivor. A server-side caller
-	 * must also mark the runs in the world assisted: see `onClockSet`.)
+	 * (It does tell `onClockSet`, so the night being lived stops counting toward a Survivor. Its caller, the admin's
+	 * clock tools, also marks the runs in the world assisted: see `onClockSet`.)
 	 */
 	setClock(dayTime: number, day?: number): void {
 		if (day !== undefined) this.day = math.max(1, math.floor(day));

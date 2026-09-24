@@ -1,35 +1,30 @@
 import { GameContext } from "shared/game/context";
 import { ownsEquip, outfitLookOf, petLookOf, totalPendingPacks } from "shared/game/save";
-import { ACHIEVEMENTS } from "shared/data/achievements";
 import { COSTUMES } from "shared/data/shop";
 import { cosmeticSlotOf, PetLook } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
+import { SERVER_KIND_ATTRIBUTE, ServerKind, playSoloFrom, readServerKind } from "shared/match/matchWire";
 import { onWalletChanged } from "../systems/saveClient";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { pinFlyover, TownFlyover } from "../view/townFlyover";
+import { achievementCounts, showAchievements } from "./achievements";
 import { Wordmark } from "./logo";
 import { paintPlate } from "./plate";
 import { PixelIcon, PixelIconKind } from "./pixelIcon";
 import { showRecords } from "./records";
 import { RunState, SURVIVOR_WINDOW, SurvivorScreen } from "./survivor";
-import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
+import { SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
 import {
 	Button,
-	Dialog,
 	Keycap,
-	Progress,
 	autoFocus,
 	buttonForeground,
-	fmtInt,
 	makeCoinPill,
 	makeFrame,
 	makeLabel,
-	makeListRow,
 	makeScreen,
-	makeScrollList,
-	makeSurface,
 	setVisible,
 } from "./widgets";
 import * as Kit from "./window";
@@ -41,7 +36,7 @@ export type { RunState } from "./survivor";
  * (client/ui/survivor.ts). Both stand on the town flyover (client/view/townFlyover.ts): the real town of the world
  * the player is about to enter, drifting past under a dark scrim.
  *
- *   PROJECT Z                                                    ($ 1,843)
+ *   PROJECT Z                                                    (● 1,843)
  *   Zombie survival                                     (loading / offline)
  *   ┌───────────────────────────┐   ┌ Fabricio ──────────────── LEVEL 7 ┐
  *   │ ▶  START                  │   │                                    │
@@ -49,7 +44,7 @@ export type { RunState } from "./survivor";
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
  *   [👕 Wardrobe             2 / 9]   ┌ Town ──────────────────────────────┐
- *   [🏆 Achievements        3 / 15]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
+ *   [🏆 Achievements        3 / 18]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
  *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell │
  *   [? How to play               ]   └────────────────────────────────────┘
  *   [⚙ Settings                  ]
@@ -86,6 +81,8 @@ export interface LobbyHandlers {
 	onTutorial: (thenPlay?: boolean) => void;
 	/** the page on screen changed (main.client rebuilds a lobby on the page the player was on) */
 	onPage?: (page: LobbyPage) => void;
+	/** P0-2, the Survivor screen's Play solo (client/net/matchClient.ts); none = no button */
+	onPlaySolo?: () => void;
 }
 
 export interface LobbyStatus {
@@ -139,81 +136,9 @@ function numberAttr(name: string): number | undefined {
 	return typeIs(v, "number") ? v : undefined;
 }
 
-// ---------------------------------------------------------------- the two dialogs of the menu
-
-const ACH_W = 660;
-const ACH_H = 530;
-const ACH_ROW_H = 60;
-
-function visibleAchievements(ctx: GameContext): [number, number] {
-	let done = 0;
-	let total = 0;
-	for (const a of ACHIEVEMENTS) {
-		if (a.hidden === true) continue;
-		total++;
-		if ((ctx.save.achievements[a.id] ?? 0) >= a.max) done++;
-	}
-	return [done, total];
-}
-
-function showAchievements(ctx: GameContext): void {
-	const lang = ctx.save.settings.langType;
-	const tr = (k: string): string => langGet(k, lang);
-	const visible = ACHIEVEMENTS.filter(a => a.hidden !== true);
-	const [done] = visibleAchievements(ctx);
-	const dialog = Dialog(ctx.uiLayer, "Achievements", {
-		w: ACH_W,
-		h: ACH_H,
-		title: tr("Achievements"),
-		description: `${done} / ${visible.size()}`,
-		zIndex: 300,
-		closeButton: true,
-	});
-	const pad = space(6);
-	const listW = ACH_W - pad * 2;
-	const list = makeScrollList(dialog.card, "List", pad, dialog.contentY, listW, ACH_H - dialog.contentY - pad);
-	// unfinished (closest to done first), then finished
-	const ordered = [...visible];
-	const ratio = (a: (typeof visible)[number]): number => (ctx.save.achievements[a.id] ?? 0) / math.max(a.max, 1);
-	ordered.sort((a, b) => {
-		const ra = ratio(a) >= 1 ? -1 : ratio(a);
-		const rb = ratio(b) >= 1 ? -1 : ratio(b);
-		return ra > rb;
-	});
-	for (let i = 0; i < ordered.size(); i++) {
-		const a = ordered[i];
-		const cur = math.min(ctx.save.achievements[a.id] ?? 0, a.max);
-		const complete = cur >= a.max;
-		const row = makeListRow(list, `Ach${a.id}`, i, ACH_ROW_H);
-		// pixel chip: filled in `success` when the achievement is done, an empty socket otherwise
-		const badge = makeSurface(row, "Badge", space(4), 16, 28, 28, "well", {
-			fill: complete ? GAME.success : THEME.background,
-			border: complete ? GAME.success : THEME.border,
-			zIndex: 2,
-		});
-		if (complete) {
-			makeLabel(badge, "Check", "✓", 0, 0, 28, 28, TEXT.base, THEME.background, {
-				weight: Enum.FontWeight.Bold,
-				zIndex: 3,
-			});
-		}
-		const textX = space(4) + 28 + space(3);
-		const nameColor = complete ? THEME.foreground : THEME.mutedForeground;
-		makeLabel(row, "Name", tr(a.title), textX, 8, 330, 24, TEXT.base, nameColor, { font: "label", align: "left" });
-		const bar = Progress(row, "Progress", {
-			x: textX,
-			y: 38,
-			w: 360,
-			h: 8,
-			color: complete ? GAME.success : THEME.primary,
-		});
-		bar.setRatio(cur / math.max(a.max, 1));
-		const value = `${fmtInt(cur)} / ${fmtInt(a.max)}`;
-		makeLabel(row, "Value", value, listW - 170, 14, 150, 32, TEXT.sm, THEME.mutedForeground, {
-			font: "numeric",
-			align: "right",
-		});
-	}
+/** the server's kind (server/match/matchHost.ts publishes it at boot): a solo town, a public one... or unknown */
+function serverKind(): ServerKind | undefined {
+	return readServerKind(game.GetService("Workspace").GetAttribute(SERVER_KIND_ATTRIBUTE));
 }
 
 // ---------------------------------------------------------------- the menu page (1120 x 630 design units)
@@ -352,9 +277,11 @@ class MenuPage {
 			{
 				key: "Achievements",
 				icon: "trophy",
-				onClick: (): void => showAchievements(ctx),
+				onClick: (): void => {
+					showAchievements(ctx);
+				},
 				sub: () => {
-					const [done, total] = visibleAchievements(ctx);
+					const [done, total] = achievementCounts(ctx.save);
 					return `${done} / ${total}`;
 				},
 			},
@@ -563,10 +490,11 @@ class MenuPage {
 		const [dayCell, peopleCell, fellCell] = this.cells;
 		this.write(dayCell.value, day !== undefined ? `${tr("Day")} ${math.floor(day)}` : `${tr("Day")} …`);
 		this.write(dayCell.caption, hour !== undefined ? tr(phaseOf(hour)) : tr("Town"));
-		if (status.hosted) {
+		if (status.hosted && serverKind() !== "solo") {
 			this.write(peopleCell.value, inTown !== undefined ? `${math.floor(inTown)} / ${MAX_PLAYERS}` : "…");
 			this.write(peopleCell.caption, tr("in town"));
 		} else {
+			// offline, or a reserved town of one's own (Play solo, MP-25): the town is the player's alone
 			this.write(peopleCell.value, tr("Solo"));
 			this.write(peopleCell.caption, tr("your own town"));
 		}
@@ -623,6 +551,8 @@ export function showLobby(
 			// MP-21's free way out, only where the server revives at daybreak (it owns the death and runs the clock)
 			canWait: status.run === "over" && status.hosted && (status.clockDriven === true || hour !== undefined),
 			hour,
+			// P0-2: from any server that can send the survivor to a town of their own (not from one already)
+			playSolo: handlers.onPlaySolo !== undefined && status.hosted && playSoloFrom(serverKind()),
 		};
 	};
 	let handle: LobbyHandle;
@@ -637,6 +567,7 @@ export function showLobby(
 			onNewRun: handlers.onNewRun,
 			onWardrobe: (slot?: number): void => handlers.onWardrobe("survivor", slot),
 			onTutorial: handlers.onTutorial,
+			onPlaySolo: handlers.onPlaySolo,
 		});
 		survivor = s;
 		return s;
@@ -709,6 +640,7 @@ export function showLobby(
 		Workspace.GetAttributeChangedSignal(WORLD_DAY_ATTR).Connect(onWorld),
 		Workspace.GetAttributeChangedSignal(DAY_TIME_ATTR).Connect(onWorld),
 		Workspace.GetAttributeChangedSignal(IN_WORLD_ATTR).Connect(onWorld),
+		Workspace.GetAttributeChangedSignal(SERVER_KIND_ATTRIBUTE).Connect(onWorld),
 	];
 	// the survivor previews breathe (a dog's tail); only the page on screen is drawn
 	const t0 = os.clock();

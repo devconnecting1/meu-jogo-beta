@@ -34,12 +34,14 @@ import {
 	FLOOD_MALFORMED_WINDOW_S,
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
+	FLOOD_RATE_WINDOW_S,
 	MAX_PLAYERS,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
 	WORLD_SEED_ATTRIBUTE,
 } from "shared/net/mpConfig";
 import { IntentKind, decodeIntentMessage, decodeTimePing, encodeTimePong, isBackpackIntent } from "shared/net/protocol";
+import { SHOP_FLOOD_CALLS } from "shared/net/shopGuard";
 import { PlayerSaveData } from "shared/game/save";
 import type { SimMetrics } from "shared/admin/protocol";
 import { WorldData, generateTown } from "shared/game/world";
@@ -66,6 +68,7 @@ import {
 	ingestInput,
 	noteMalformed,
 	noteMessage,
+	SPAWN_MIN_ZOMBIE,
 } from "../sim/players";
 import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
@@ -78,6 +81,8 @@ const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
 const Workspace = game.GetService("Workspace");
 
+/** a survivor hit this recently (os.clock seconds) is still in the fight: no trip to another town (`keptInDanger`) */
+export const KEPT_HURT_S = 10;
 /** how often the host looks for players whose save has just finished loading (seconds) */
 const ADMIT_INTERVAL = 0.5;
 /** how often the §12.2 metrics are published (seconds) */
@@ -104,6 +109,13 @@ export interface MpHostOptions {
 	 * server/main.server.ts owns the sessions; the host never reads the DataStore itself.
 	 */
 	saveOf: (player: Player) => PlayerSaveData | undefined;
+	/**
+	 * May this player's body enter the city now (asked right before `lives.enter`, only there)? server/main.server.ts
+	 * asks server/match/matchHost.ts: not while a trip of theirs is in flight, not before a solo / private town knows
+	 * the day it opens on. A hold here never hides the save: rule 6 and the kept body still see it (second review,
+	 * LOW 2 -- a hold inside `saveOf` let a world end without the traveller, whose kept body was lost). Omitted: yes.
+	 */
+	mayEnter?: (player: Player) => boolean;
 	/** the shared town; generated from `seed` when omitted (client and server build the same map, §4.5) */
 	world?: WorldData;
 	/** the seed of the first town (DESIGN.TOWN_SEED by default): InitBegin tells every client which it is (MP-22) */
@@ -159,6 +171,26 @@ export interface MpHost {
 	lives: LifeKeeper;
 	/** the server entity of a connected player, or undefined when they are not in the world */
 	playerOf(player: Player): ServerPlayer | undefined;
+	/**
+	 * The client asked to be in the world (EnterWorld) and has not asked to leave -- admitted or about to be. A trip to a
+	 * town of one's own starts only from the lobby (server/match/travel.ts): this closes the half second between the
+	 * intent and the admission.
+	 */
+	wantsWorld(player: Player): boolean;
+	/**
+	 * This server keeps the player's LIVING body where they left the city (§7.2: frozen, exactly as it was), and that
+	 * spot is not safe: a zombie or a boss within the safe-spawn radius of it (SPAWN_MIN_ZOMBIE, MP-04), or a hit taken
+	 * less than KEPT_HURT_S ago. A trip to a town of one's own is refused then (server/match/travel.ts `danger`,
+	 * review H1): Leave + Play solo was a free, instant escape from a fight, with a fresh spawn and its shield.
+	 */
+	keptInDanger(player: Player): boolean;
+	/**
+	 * A solo or private town opens on its owner's LIFE day (MP-13): the clock restarts on `day` at 07:00, before anybody
+	 * has stood in this town. False (and nothing changes) once a body has entered it. The world's record (MP-22) counts
+	 * the days it lasted from this day on (server/sim/worldReset.ts `startDay`); a world that ends here is followed by a
+	 * new town on day 1, as everywhere.
+	 */
+	startTownOn(day: number): boolean;
 	/** dead as far as the SERVER knows (in the world, in the lobby, or — never seen here — as the save says) */
 	isDead(player: Player, save: PlayerSaveData): boolean;
 	/**
@@ -197,9 +229,12 @@ export interface MpHost {
 	 * (§8.2, audit M2) One message from `player` on a remote this host does not own -- SaveRequest, LoadRequest,
 	 * ShopAction, the admin remotes -- counted against the same flood limits as its own (`malformed`: a payload that is
 	 * not what that remote takes). True when the message must be dropped: the player is being kicked, or has left.
-	 * Call it FIRST in every handler, before the payload is read.
+	 * Call it FIRST in every handler, before the payload is read. `channel` "shop": a ShopAction that takes a token,
+	 * also counted against that channel's own line (§8.2 "> 3× o limite por 5 s": SHOP_FLOOD_CALLS in
+	 * FLOOD_RATE_WINDOW_S, shared/net/shopGuard.ts) -- 300 purchases in a few seconds are far under the 500 messages of
+	 * the connection's line, and were never kicked.
 	 */
-	noteRemote(player: Player, malformed: boolean): boolean;
+	noteRemote(player: Player, malformed: boolean, channel?: "shop"): boolean;
 	/** the §12.2 numbers as last published (once a second): the admin panel's Server info shows them */
 	metrics(): SimMetrics;
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
@@ -229,6 +264,9 @@ interface Link {
 	/** ...and the malformed ones among them (§8.2's second limit; in the world the ServerPlayer counts both) */
 	strangerBadStart: number;
 	strangerBadCount: number;
+	/** token-taking ShopActions in the current FLOOD_RATE_WINDOW_S window, in the world or not (§8.2, `noteRemote`) */
+	shopStart: number;
+	shopCount: number;
 	/**
 	 * The client asked to be IN the world (IntentKind.EnterWorld) and has not asked to leave.
 	 *
@@ -254,6 +292,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	/** the world running now: its seed and when it began (MP-22 records it when it ends) */
 	let town: TownState = { seed: options.seed ?? DESIGN.TOWN_SEED, startedAt: os.time() };
 	const world = options.world ?? generateTown(town.seed);
+	/** a body has stood in this town (the start day of a solo / private town is settled then, MP-13) */
+	let townEntered = false;
+	/** os.clock() of the last hit each survivor took in the city, by UserId (`keptInDanger`; a rejoin keeps it) */
+	const hurtAt = new Map<number, number>();
 	const remotes = createMpRemotes();
 	const sim = new ServerSimulation({ world });
 	const links = new Map<Player, Link>();
@@ -331,6 +373,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				strangerCount: 0,
 				strangerBadStart: 0,
 				strangerBadCount: 0,
+				shopStart: 0,
+				shopCount: 0,
 				wantsWorld: false,
 				worldAt: 0,
 				kicked: false,
@@ -399,8 +443,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			return;
 		}
 		if (save === undefined) return;
+		// held by where the survivor plays (a trip in flight, a town whose day is not settled): the next pass tries again
+		const mayEnter = options.mayEnter;
+		if (mayEnter !== undefined && !mayEnter(player)) return;
 		const sp = lives.enter({ userId: player.UserId, name: player.DisplayName }, save);
 		if (sp === undefined) return; // server full: try again next pass
+		townEntered = true;
 		link.slot = sp.slot;
 		bySlot.set(sp.slot, player);
 		// CON-04 First steps: the server stood a body of this survivor in the town (once; the wallet push carries it)
@@ -464,6 +512,16 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		}
 		link.strangerBadCount += 1;
 		return link.strangerBadCount > FLOOD_MALFORMED;
+	}
+
+	/** one token-taking ShopAction (§8.2: more than SHOP_FLOOD_CALLS in FLOOD_RATE_WINDOW_S is a flood) */
+	function shopFlood(link: Link, now: number): boolean {
+		if (now - link.shopStart >= FLOOD_RATE_WINDOW_S || now < link.shopStart) {
+			link.shopStart = now;
+			link.shopCount = 0;
+		}
+		link.shopCount += 1;
+		return link.shopCount > SHOP_FLOOD_CALLS;
 	}
 
 	/**
@@ -715,6 +773,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
 		const ran = sim.advance(dt);
 		if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
+		// who is being hit right now (the server's hit flash lasts a second after every hit): `keptInDanger`
+		for (const [player, link] of links) {
+			if (link.slot === undefined) continue;
+			const hit = sim.get(link.slot);
+			if (hit !== undefined && (hit.state.hitFlash ?? 0) > 0) hurtAt.set(player.UserId, now);
+		}
 		// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
 		lives.step(dt);
 		if (now - metricAt >= METRIC_INTERVAL) {
@@ -781,6 +845,39 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;
 		},
+		wantsWorld(player) {
+			const link = links.get(player);
+			return link !== undefined && (link.wantsWorld || link.slot !== undefined);
+		},
+		keptInDanger(player) {
+			const body = lives.keptBody(player.UserId);
+			if (body === undefined || body.dead) return false;
+			const hit = hurtAt.get(player.UserId);
+			if (hit !== undefined && os.clock() - hit < KEPT_HURT_S) return true;
+			const r2 = SPAWN_MIN_ZOMBIE * SPAWN_MIN_ZOMBIE;
+			const horde = sim.horde;
+			if (horde === undefined) return false;
+			for (const z of horde.zombies) {
+				if (z.hp <= 0) continue;
+				const dx = z.x - body.x;
+				const dy = z.y - body.y;
+				if (dx * dx + dy * dy < r2) return true;
+			}
+			for (const b of horde.bossRoster.list) {
+				if (b.dead) continue;
+				const dx = b.x - body.x;
+				const dy = b.y - body.y;
+				if (dx * dx + dy * dy < r2) return true;
+			}
+			return false;
+		},
+		startTownOn(day) {
+			if (townEntered) return false;
+			const d = math.max(1, math.floor(day));
+			if (d !== sim.clock.day) sim.clock.restart(d);
+			town.startDay = d;
+			return true;
+		},
 		isDead(player, save) {
 			return lives.isDead(player.UserId, save);
 		},
@@ -802,9 +899,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		forgetUnsaved(player, blank) {
 			return lives.forgetUnsaved(player.UserId, blank);
 		},
-		noteRemote(player, malformed) {
+		noteRemote(player, malformed, channel) {
 			if (departed(player)) return true;
-			return noteMessageOf(linkOf(player), os.clock(), malformed);
+			const link = linkOf(player);
+			const now = os.clock();
+			if (noteMessageOf(link, now, malformed)) return true;
+			if (channel === "shop" && shopFlood(link, now)) {
+				kick(link, `${link.shopCount} ShopActions in ${FLOOD_RATE_WINDOW_S}s`);
+			}
+			return link.kicked;
 		},
 		metrics() {
 			// the counter moves between two publications (a tick that keeps failing never reaches `publishTick`)
@@ -923,6 +1026,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				// after it
 				onSwitched: newTown => {
 					town = { seed: newTown.seed, startedAt: now };
+					townEntered = true;
 					host.world = newTown.world;
 					host.seed = newTown.seed;
 					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));

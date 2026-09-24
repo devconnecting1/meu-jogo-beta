@@ -7,12 +7,18 @@
  *   npm run render:map -- --x 9000 --y 7000 --w 1280 --h 800 --hour 22 --out /tmp/night.png
  *   npm run render:map -- --compare docs/art/before docs/art/after --out docs/art/compare
  *   npm run render:map -- --preset signs --out docs/art/signs/after   # every building type's sign, night, overview
+ *   npm run render:map -- --preset rooms --out /tmp/rooms             # every kind of room at game zoom, day and 22:00
+ *   npm run render:map -- --compare <before> <after> --stack --out <dir>   # the before above the after, full size
  *   PZ_SRC=/path/to/other/src node tools/render-map.mjs ...           # render another checkout's code
  *
  * Options: --seed (town seed, default DESIGN.TOWN_SEED), --x --y --w --h (world rect, units), --scale (px per
  * unit, default 1), --hour (0-24, or day / dusk / night), --out (a .png, or a folder for presets), --preset
- * (street, downtown, park, school, gas, gas-night, wreck, street-night, overview, or all; signs: sign-<type> for every building
- * type, signs-night, signs-overview and downtown), --no-actors, --no-art, --art <dir>
+ * (street, downtown, park, school, gas, gas-night, wreck, campus, campus-quad, campus-night, street-night, overview, or
+ * all; signs: sign-<type> for every building type, signs-night, signs-overview and downtown; interiors; rooms: each
+ * kind of room of shared/game/interiors.ts at zoom 1, by day and at 22:00), --scenes <scenes.json> (replay the scenes
+ * of an earlier run: the "before" of the same shots), --only-uploaded (only the textures with an asset id, from their
+ * PNGs: what the owner's place shows), --stack (compare: the before above the after), --no-actors, --no-art,
+ * --art <dir>
  * (the local PNGs the "after" renders sample, default design/world-art), --src <dir> (same as PZ_SRC), --hand <id>
  * and --gun <id> (EQUIPS ids the survivor holds and wears at night: 13 flashlight, 15 torchlight, 6 night vision --
  * lit by the game's own rule, shared/sim/survivorLight.ts, LUZ-04), --aim <degrees> (where the survivor faces).
@@ -49,7 +55,8 @@ function parseArgs(argv) {
 		if (a.startsWith("--")) {
 			const key = a.slice(2);
 			const next = argv[i + 1];
-			if (["no-actors", "no-art", "quiet", "roof-off", "only-uploaded"].includes(key)) out.flags.add(key);
+			if (["no-actors", "no-art", "quiet", "roof-off", "only-uploaded", "stack"].includes(key))
+				out.flags.add(key);
 			else if (key === "compare") {
 				out.compare = [argv[i + 1], argv[i + 2]];
 				i += 2;
@@ -132,16 +139,18 @@ function compare(beforeDir, afterDir, outDir) {
 		let a = decodePNG(readFileSync(aPath));
 		const gap = 8;
 		const head = 40;
-		// each half fits (MAX_W - 3 gaps) / 2; never upscaled
-		const half = Math.min(a.w, Math.floor((MAX_W - gap * 3) / 2));
+		// --stack: the before above the after, each at full size (a game-zoom shot is read texel for texel);
+		// otherwise side by side, each half fitting (MAX_W - 3 gaps) / 2, never upscaled
+		const stack = args.flags.has("stack");
+		const half = stack ? a.w : Math.min(a.w, Math.floor((MAX_W - gap * 3) / 2));
 		const k = half / a.w;
 		const hh = Math.round(a.h * k);
 		if (k < 1) {
 			b = resample(b, half, hh);
 			a = resample(a, half, hh);
 		}
-		const W = half * 2 + gap * 3;
-		const H = hh + head + gap;
+		const W = stack ? half + gap * 2 : half * 2 + gap * 3;
+		const H = stack ? (hh + head) * 2 + gap : hh + head + gap;
 		const img = { w: W, h: H, data: Buffer.alloc(W * H * 4) };
 		fillRect(img, 0, 0, W, H, [24, 24, 28]);
 		const blit = (src, ox, oy) => {
@@ -149,11 +158,13 @@ function compare(beforeDir, afterDir, outDir) {
 				src.data.copy(img.data, ((oy + y) * W + ox) * 4, y * src.w * 4, (y + 1) * src.w * 4);
 			}
 		};
-		blit(b, gap, head);
-		blit(a, gap * 2 + half, head);
 		const title = meta[name]?.title ?? name;
+		const ax = stack ? gap : gap * 2 + half;
+		const ay = stack ? head * 2 + hh : head;
+		blit(b, gap, head);
+		blit(a, ax, ay);
 		drawText(img, `BEFORE - ${title}`, gap + 4, 12, 2, [235, 235, 235]);
-		drawText(img, `AFTER - ${title}`, gap * 2 + half + 4, 12, 2, [235, 235, 235]);
+		drawText(img, `AFTER - ${title}`, ax + 4, ay - 28, 2, [235, 235, 235]);
 		const out = join(outDir, `${name}.png`);
 		writeFileSync(out, encodePNG(img, true));
 		made.push(out);
@@ -452,6 +463,26 @@ function findSchool(world) {
 	return sceneAround(cx, cy, W, H);
 }
 
+/**
+ * The college campus (DESIGN_RULES EDI-17): its whole block (the four buildings round the quad and the four streets
+ * round the block) and a closer frame on the quad, centred on its fountain or statue. Undefined in a town without one.
+ */
+function findCampus(world) {
+	const hall = findBuilding(world, 12);
+	if (hall === undefined) return undefined;
+	const lot = lotAt(world, hall.x + hall.w / 2, hall.y + hall.h / 2);
+	if (lot === undefined) return undefined;
+	const centre = world.solids.find(
+		s => s.kind === "prop" && (s.tags === "fountain" || s.tags === "statue") && inRect(lot, s.x, s.y),
+	);
+	const qx = centre !== undefined ? centre.x + centre.w / 2 : lot.x + lot.w / 2;
+	const qy = centre !== undefined ? centre.y + centre.h / 2 : lot.y + lot.h / 2;
+	return {
+		block: sceneAround(lot.x + lot.w / 2, lot.y + lot.h / 2, 2080, 2080),
+		quad: sceneAround(qx, qy, W, H),
+	};
+}
+
 function findGas(world) {
 	const b = findBuilding(world, 5);
 	if (b === undefined) return undefined;
@@ -496,6 +527,10 @@ const SIGN_TYPES = [
 	[9, "guns", "Gun shop"],
 	[10, "clothes", "Clothing store"],
 	[11, "diner", "Restaurant"],
+	[12, "college", "Campus hall"],
+	[13, "library", "Campus library"],
+	[14, "lab", "Science lab"],
+	[15, "dorm", "Dorm"],
 ];
 
 /** the first building of `type`, preferring one that faces south (its sign reads the way the camera looks) */
@@ -596,6 +631,19 @@ function scenes(world) {
 	if (gas) out.push({ name: "gas-night", title: "Gas station, 22:00", rect: gas, hour: 22 });
 	const wreck = findWreck(world);
 	if (wreck) out.push({ name: "wreck", title: "Abandoned car", rect: wreck, hour: 10 });
+	const campus = findCampus(world);
+	if (campus) {
+		out.push({
+			name: "campus",
+			title: "College campus, its block",
+			rect: campus.block,
+			hour: 10,
+			scale: 0.5,
+			noActors: true,
+		});
+		out.push({ name: "campus-quad", title: "College campus, the quad", rect: campus.quad, hour: 10 });
+		out.push({ name: "campus-night", title: "College campus, the quad at 22:00", rect: campus.quad, hour: 22 });
+	}
 	if (street) out.push({ name: "street-night", title: "Residential street, 22:00", rect: street, hour: 22 });
 	const overview = findOverview(world);
 	if (overview) {
@@ -632,6 +680,10 @@ const INTERIOR_KINDS = [
 	{ name: "gas", title: "Gas station shop", pick: b => b.buildingType === 5 },
 	{ name: "school", title: "School", pick: b => b.buildingType === 3 },
 	{ name: "hospital", title: "Hospital", pick: b => b.buildingType === 4 },
+	{ name: "college", title: "Campus hall", pick: b => b.buildingType === 12 },
+	{ name: "library", title: "Campus library", pick: b => b.buildingType === 13 },
+	{ name: "lab", title: "Science lab", pick: b => b.buildingType === 14 },
+	{ name: "dorm", title: "Dorm", pick: b => b.buildingType === 15 },
 ];
 
 function sameBox(a, b) {
@@ -757,6 +809,133 @@ function interiorScenes(world, match) {
 			scale,
 			noActors: true,
 		});
+	}
+	return out;
+}
+
+// ---------------------------------------------------------------- the rooms set (docs/art/rooms): at game zoom
+
+/**
+ * Every kind of room the plans make (shared/game/interiors.ts, EDI-08), seen from inside at the game's own zoom (1:
+ * one texel of the art is 4 x 4 px), by day and at 22:00 in the survivor's light: `--preset rooms`. One house that
+ * has all four of a home's rooms gives the four house shots; every other shot is the richest building of its type
+ * that has the room, centred on it. The survivor stands in the room (at its loot spot when it has one), a walker
+ * climbs in through the building's window nearest the room and another stands a little way off, so the legibility
+ * of the bodies on the new floors is in every picture (LEG-03).
+ */
+const ROOM_SHOTS = [
+	{ name: "house-living", title: "House: living room", types: [1, 2], room: "living" },
+	{ name: "house-kitchen", title: "House: kitchen", types: [1, 2], room: "kitchen" },
+	{ name: "house-bedroom", title: "House: bedroom", types: [1, 2], room: "bedroom" },
+	{ name: "house-bath", title: "House: bathroom", types: [1, 2], room: "bath" },
+	{ name: "house-dining", title: "House: dining room", types: [1, 2], room: "dining" },
+	{ name: "market", title: "Supermarket: sales floor", types: [7], room: "sales" },
+	{ name: "market-back", title: "Supermarket: cold room and stock", types: [7], room: "cold" },
+	{ name: "corner-market", title: "Corner market", types: [8], room: "sales" },
+	{ name: "pharmacy", title: "Pharmacy", types: [6], room: "sales" },
+	{ name: "gunshop", title: "Gun shop and its vault", types: [9], room: "secure" },
+	{ name: "cloth", title: "Clothing store", types: [10], room: "sales" },
+	{ name: "restaurant", title: "Restaurant: dining room", types: [11], room: "diner" },
+	{ name: "restaurant-kitchen", title: "Restaurant: kitchen", types: [11], room: "galley" },
+	{ name: "gas", title: "Gas station shop", types: [5], room: "sales" },
+	{ name: "gas-office", title: "Gas station: office", types: [5], room: "office" },
+	{ name: "school", title: "School: classroom", types: [3], room: "classroom" },
+	{ name: "school-corridor", title: "School: corridor and lockers", types: [3], room: "corridor" },
+	{ name: "hospital-ward", title: "Hospital: ward", types: [4], room: "ward" },
+	{ name: "hospital-treatment", title: "Hospital: treatment room", types: [4], room: "treatment" },
+	{ name: "hospital-lobby", title: "Hospital: reception", types: [4], room: "lobby" },
+	// the college campus (EDI-17)
+	{ name: "college-lecture", title: "College: lecture room", types: [12], room: "lecture" },
+	{ name: "college-corridor", title: "College: foyer and corridor", types: [12], room: "corridor" },
+	{ name: "library-reading", title: "Library: reading room", types: [13], room: "reading" },
+	{ name: "library-stacks", title: "Library: stacks", types: [13], room: "stacks" },
+	{ name: "lab", title: "Science lab", types: [14], room: "lab" },
+	{ name: "lab-store", title: "Science lab: chemicals store", types: [14], room: "chemstore" },
+	{ name: "dorm-room", title: "Dorm: bunk room", types: [15], room: "dormroom" },
+	{ name: "dorm-common", title: "Dorm: common room", types: [15], room: "common" },
+];
+
+/** the house the four house shots share: the most of a home's rooms, then the most rooms, then the lowest id */
+function showHouse(buildings) {
+	const home = ["living", "kitchen", "bedroom", "bath", "dining"];
+	const score = b => {
+		const kinds = new Set((b.rooms ?? []).map(q => q.kind));
+		return home.filter(k => kinds.has(k)).length * 1000 + (b.rooms?.length ?? 0) * 10 - b.w * b.h * 1e-7;
+	};
+	const houses = buildings.filter(b => b.buildingType === 1 || b.buildingType === 2);
+	houses.sort((a, b) => score(b) - score(a) || a.id - b.id);
+	return houses[0];
+}
+
+/** the biggest rect of room kind `kind` in building `b` */
+function roomOf(b, kind) {
+	let best;
+	for (const q of b.rooms ?? []) {
+		if (q.kind !== kind) continue;
+		if (best === undefined || q.w * q.h > best.w * best.h) best = q;
+	}
+	return best;
+}
+
+function roomScenes(world) {
+	const out = [];
+	const buildings = world.solids.filter(s => s.kind === "building");
+	const house = showHouse(buildings);
+	for (const shot of ROOM_SHOTS) {
+		let b;
+		if (shot.types.includes(1)) b = house;
+		else {
+			const cands = buildings.filter(s => shot.types.includes(s.buildingType) && roomOf(s, shot.room));
+			const rich = s => (s.rooms?.length ?? 0) * 100 + (s.openings?.length ?? 0);
+			cands.sort((p, q) => rich(q) - rich(p) || p.id - q.id);
+			b = cands[0];
+		}
+		const q = b !== undefined ? roomOf(b, shot.room) : undefined;
+		if (q === undefined) continue;
+		const qx = q.x + q.w / 2;
+		const qy = q.y + q.h / 2;
+		// the survivor: at a loot spot in the room, else near its middle
+		const spot = (b.lootSpots ?? []).find(p => inRect(q, p.x, p.y)) ?? { x: qx, y: qy };
+		const survivor = freeNear(world, spot.x, spot.y) ?? spot;
+		const zombies = [];
+		let win;
+		for (const o of b.openings ?? []) {
+			if (o.kind !== "window") continue;
+			const d = Math.hypot(o.x + o.w / 2 - qx, o.y + o.h / 2 - qy);
+			if (d < 560 && (win === undefined || d < win.d)) win = { o, d };
+		}
+		if (win !== undefined) {
+			const o = win.o;
+			zombies.push({
+				x: o.x + o.w / 2,
+				y: o.y + o.h / 2,
+				type: 1,
+				angle: Math.atan2(survivor.y - o.y, survivor.x - o.x),
+			});
+		}
+		// a walker a little way off in the same room (or the next), on free floor
+		for (const [dx, dy] of [
+			[170, 90],
+			[-170, 90],
+			[170, -90],
+			[-170, -90],
+			[240, 0],
+			[-240, 0],
+		]) {
+			const p = freeNear(world, survivor.x + dx, survivor.y + dy);
+			if (p === undefined || buildingAt(world, p.x, p.y) !== b) continue;
+			if (Math.hypot(p.x - survivor.x, p.y - survivor.y) < 120) continue;
+			zombies.push({ ...p, type: 1, angle: Math.atan2(survivor.y - p.y, survivor.x - p.x) });
+			break;
+		}
+		const base = {
+			rect: sceneAround(qx, qy, W, H),
+			scale: 1,
+			inside: { x: b.x + b.w / 2, y: b.y + b.h / 2, box: { x: b.x, y: b.y, w: b.w, h: b.h } },
+			actors: { survivor: { ...survivor, angle: 0 }, zombies },
+		};
+		out.push({ name: shot.name, title: shot.title, hour: 10, ...base });
+		out.push({ name: `${shot.name}-night`, title: `${shot.title}, 22:00`, hour: 22, ...base });
 	}
 	return out;
 }
@@ -1028,6 +1207,8 @@ if (args.preset !== undefined || args.scenes !== undefined) {
 	} else if (args.preset === "interiors") {
 		const match = args.match !== undefined ? JSON.parse(readFileSync(resolve(args.match), "utf8")) : undefined;
 		wanted = interiorScenes(world, match);
+	} else if (args.preset === "rooms") {
+		wanted = roomScenes(world);
 	} else {
 		const all = scenes(world);
 		const signs = signScenes(world);

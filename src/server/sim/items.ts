@@ -12,6 +12,12 @@
  *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists. Who was told about
  *     which item is kept per slot: an item that comes into range later is sent then (`sweepInterest`), and a
  *     removal reaches every client that was told, however far away it is now (`retract`).
+ *   - WALK-OVER (DESIGN_RULES ITM-07): a supply -- food, medicine, materials, ammunition -- is taken by the body over
+ *     it, by `walkOver`, the server's own sweep: no message asks for it, so none can be forged. It is the E press's
+ *     `pickup` below with every one of its checks (reach from the server's position, a clear line, the atomic removal,
+ *     the save's ceiling), for the item the shared rule names (shared/sim/pickupRule.ts), once it has lain
+ *     WALK_PICKUP_DELAY_S and at most one per survivor every WALK_PICKUP_RATE_S; one behind a wall is looked past for
+ *     the next nearest. Weapons, equipment and a boss's trophies still take E.
  *   - PICKUP is a request, resolved at the server's position of the survivor, and it is atomic: the world's
  *     `removeGroundItem` is the arbiter, so of two survivors reaching for the same can in the same tick, one
  *     gets a can and the other gets nothing (§8.3 "checar + mutar sem yield no meio"). That is the §11.3 F3
@@ -62,6 +68,8 @@ import {
 import { PlayerSaveData } from "shared/game/save";
 import { creditTaken } from "../save/achievements";
 import { segmentClear } from "shared/game/physics";
+import type { PlayerState } from "shared/game/player";
+import { pickupRoom, WALK_PICKUP_DELAY_S, WALK_PICKUP_RATE_S, walkPickupTarget } from "shared/sim/pickupRule";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -79,6 +87,8 @@ const CAP_AREA = ITEM_GRID_CELL;
 export const ITEM_SWEEP_S = 0.5;
 /** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
 export const ITEM_INTEREST_EXIT = ITEM_INTEREST + 300;
+/** the walk-over looks past at most this many supplies behind a wall per survivor per sweep (ITM-07) */
+export const WALK_BLOCKED_TRIES = 4;
 const NO_VIEWERS: ReadonlyArray<{ x: number; y: number }> = [];
 const NO_SLOTS: ReadonlyArray<number> = [];
 
@@ -88,10 +98,20 @@ export interface SearchResult {
 	taken: Array<{ kind: number; id: number; count: number }>;
 }
 
-/** why a pickup did not happen; `ok` carries what went into the backpack */
+/**
+ * why a pickup did not happen; `ok` carries what went into the backpack (`count`: what fitted under the save's
+ * ceiling -- the rest stays on the ground); "full": the save holds as many of that item as it can keep
+ */
 export type PickupResult =
 	| { ok: true; kind: number; itemId: number; count: number }
-	| { ok: false; why: "none" | "range" | "blocked" | "taken" };
+	| { ok: false; why: "none" | "range" | "blocked" | "taken" | "full" };
+
+/** a survivor the walk-over sweep looks at: the simulation's own records (server/sim/players.ts ServerPlayer) */
+export interface WalkingSurvivor {
+	slot: number;
+	state: PlayerState;
+	save: PlayerSaveData;
+}
 
 export interface ServerItemsOptions {
 	world: WorldData;
@@ -127,6 +147,11 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/**
+	 * §10: somebody (the survivor in `slot`) picked up an item an admin dropped (`GroundItem.unpaid`). The pickup pays
+	 * nothing beyond the item itself; server/admin/adminWorld.ts sets this to log who took it.
+	 */
+	onUnpaidTaken?: (slot: number, item: GroundItem, count: number) => void;
 	/** every item in the world by id (the sweep turns a told id back into its item) */
 	private readonly byId = new Map<number, GroundItem>();
 	/** the items' own clock, seconds of simulation (`upkeep`): what `GroundItem.born` is measured on */
@@ -136,6 +161,28 @@ export class ServerItems {
 	private readonly found = new Array<GroundItem>();
 	private readonly capScratch = new Array<GroundItem>();
 	private readonly leaving = new Array<number>();
+	/** the walk-over (ITM-07): when, on the items' clock, each slot may walk the next supply up */
+	private readonly walkNext = new Map<number, number>();
+	/**
+	 * has this item lain WALK_PICKUP_DELAY_S on the items' clock? (one closure for the session: one per tick would be
+	 * garbage). `born` is stamped by `announce`; an item without it lay there before this object did
+	 */
+	private readonly walkReady = (item: GroundItem): boolean =>
+		this.clock - (item.born ?? -math.huge) >= WALK_PICKUP_DELAY_S &&
+		(this.walkPast.size() === 0 || !this.walkPast.includes(item));
+	/** the supplies one survivor's walk-over looked past this sweep: behind a wall (at most WALK_BLOCKED_TRIES) */
+	private readonly walkPast = new Array<GroundItem>();
+	/** where the item `lineClear` is measuring to lies (one bound predicate, no closure per check) */
+	private lineX = 0;
+	private lineY = 0;
+	/**
+	 * What stops a reach (§8.1): a blocking solid, but not the one the item rests INSIDE. A drop slides with no wall
+	 * collision, and ~28 % of a zombie's drops at a base wall end up inside it -- blocked by its own wall it could never
+	 * be picked up, and as E's first target it hid the door beside it for good (re-review of f8ccaf0)
+	 */
+	private readonly lineBlocks = (o: Solid): boolean =>
+		isBlocking(o) &&
+		!(this.lineX >= o.x && this.lineX <= o.x + o.w && this.lineY >= o.y && this.lineY <= o.y + o.h);
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
@@ -211,6 +258,7 @@ export class ServerItems {
 	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
 	forget(slot: number): void {
 		this.told.delete(slot);
+		this.walkNext.delete(slot);
 	}
 
 	/**
@@ -351,6 +399,21 @@ export class ServerItems {
 		this.world.onItemRemove = undefined;
 		this.told.clear();
 		this.byId.clear();
+		this.walkNext.clear();
+	}
+
+	/**
+	 * An item's count went down while it stays on the ground (a pickup took what the backpack had room for, ITM-07):
+	 * every client that was told about it is told again, and its mirror updates the count on the id it has (§4.5,
+	 * ItemAdd is idempotent). No new message.
+	 */
+	private recount(item: GroundItem): void {
+		let ev: WItemAdd | undefined;
+		for (const [slot, set] of this.told) {
+			if (!set.has(item.id)) continue;
+			ev = ev ?? itemAddOf(item);
+			this.out.queueFor(slot, ev);
+		}
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)
@@ -363,24 +426,106 @@ export class ServerItems {
 	 * is what makes two simultaneous requests resolve to one winner — `removeGroundItem` answers false for
 	 * the loser, who is credited nothing. Doing it the other way round would credit both and then remove
 	 * once, which is the duplication bug written out longhand.
+	 *
+	 * `slot` is the picker's (the audit of an admin's drop, §10); `pays` false: an assisted run (§9.3) -- the item is
+	 * theirs, the achievement (Woodpile) is not.
 	 */
-	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined): PickupResult {
+	pickup(
+		save: PlayerSaveData,
+		x: number,
+		y: number,
+		item: GroundItem | undefined,
+		slot = -1,
+		pays = true,
+	): PickupResult {
 		if (item === undefined) return { ok: false, why: "none" };
 		const dx = item.x - x;
 		const dy = item.y - y;
 		if (dx * dx + dy * dy > PICKUP_RANGE * PICKUP_RANGE) return { ok: false, why: "range" };
-		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall. Not the
-		// solid the item rests INSIDE: a drop slides with no wall collision, and ~28 % of a zombie's drops at a base wall
-		// end up inside it -- blocked by its own wall it could never be picked up, and as E's first target it hid the
-		// door beside it for good (re-review of f8ccaf0)
-		const blocks = (o: Solid): boolean =>
-			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
-		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
-		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
-		addItem(save, item.kind, item.itemId, item.count);
-		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
-		creditTaken(save, item.kind, item.itemId, item.count);
-		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
+		// §8.1, like every other reach: a clear line to it, so a wall between the survivor and the item is a wall
+		if (!this.lineClear(x, y, item)) return { ok: false, why: "blocked" };
+		return this.take(save, item, slot, pays);
+	}
+
+	/**
+	 * The rest of `pickup`, once the reach and the clear line are checked (the walk-over checks them on its own way to
+	 * the item): the ceiling, first come, remove, credit -- of what was TAKEN (a partial take credits its part).
+	 */
+	private take(save: PlayerSaveData, item: GroundItem, slot: number, pays: boolean): PickupResult {
+		// ITM-07: the save keeps at most its ceiling of an item (shared/game/save.ts SAVE_LIMITS); past it, what went in
+		// was clamped away at the next load. Take what fits, leave the rest lying where it is
+		const room = pickupRoom(save, item.kind, item.itemId);
+		if (room <= 0) return { ok: false, why: "full" };
+		// still on the ground? (the id index is the world's own list, kept by the hooks: no scan of the town)
+		if (this.byId.get(item.id) !== item) return { ok: false, why: "taken" };
+		const take = math.min(item.count, room);
+		if (take < item.count) {
+			item.count -= take;
+			this.recount(item);
+		} else if (!removeGroundItem(this.world, item)) {
+			return { ok: false, why: "taken" };
+		}
+		addItem(save, item.kind, item.itemId, take);
+		if (item.unpaid === true) {
+			// an admin's drop is a gift, not a find: no collector credit (CON-04), and the audit learns who took it and how
+			// many (§10)
+			this.onUnpaidTaken?.(slot, item, take);
+		} else if (pays) {
+			// CON-04: what the SERVER put into the backpack (wood is Woods collector's), in a run that still earns (§9.3)
+			creditTaken(save, item.kind, item.itemId, take);
+		}
+		return { ok: true, kind: item.kind, itemId: item.itemId, count: take };
+	}
+
+	/** a clear line from (x, y) to the item: the reach rule of `pickup` (`lineBlocks`) */
+	private lineClear(x: number, y: number, item: GroundItem): boolean {
+		this.lineX = item.x;
+		this.lineY = item.y;
+		return segmentClear(this.world, x, y, item.x, item.y, this.lineBlocks);
+	}
+
+	/**
+	 * The walk-over (ITM-07): each survivor on foot takes the supply under their body, if any -- the one the shared
+	 * rule names (shared/sim/pickupRule.ts `walkPickupTarget`: within WALK_PICKUP_RANGE of the SERVER's position, lying
+	 * for WALK_PICKUP_DELAY_S, room in the save) -- with the E press's own checks: WALK_PICKUP_RANGE is inside its
+	 * reach, the clear line is `pickup`'s (`lineClear`), and the first-come removal and the ceiling are its `take`.
+	 * Each survivor is looked at once every WALK_PICKUP_RATE_S, which is also the rate: ten items a second at most; the
+	 * lookup reads the grid cells under the body, at 10 Hz a survivor.
+	 *
+	 * `onTaken` hears each pickup (the caller marks the save dirty, as for an E press); `pays` says whether the
+	 * survivor in a slot is in a run that still earns (§9.3, the E press's `pays`; unset: every run does). Riding
+	 * (VEI-05: the hands are on the bars) and dead survivors take nothing.
+	 */
+	walkOver(
+		survivors: ReadonlyArray<WalkingSurvivor>,
+		onTaken?: (who: WalkingSurvivor, got: PickupResult) => void,
+		pays?: (slot: number) => boolean,
+	): void {
+		const now = this.clock;
+		for (const sp of survivors) {
+			const p = sp.state;
+			if (p.dead || p.ride !== undefined) continue;
+			if (now < (this.walkNext.get(sp.slot) ?? -math.huge)) continue;
+			this.walkNext.set(sp.slot, now + WALK_PICKUP_RATE_S);
+			// the grid's cells under the body (shared/game/world.ts queryGroundItems), never the town's list
+			let item = walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady);
+			// the nearest one behind a wall is looked past, and the next nearest asked for: it used to be retried every
+			// sweep for as long as the survivor stood there, and the clear one beside it was never taken (review of
+			// 1186a83, L1). At most WALK_BLOCKED_TRIES lines a sweep, so a heap behind a wall costs a bounded few
+			const past = this.walkPast;
+			while (item !== undefined && !this.lineClear(p.x, p.y, item)) {
+				past.push(item);
+				item =
+					past.size() < WALK_BLOCKED_TRIES
+						? walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady)
+						: undefined;
+			}
+			past.clear();
+			if (item === undefined) continue;
+			// within WALK_PICKUP_RANGE (inside PICKUP_RANGE) and in plain sight: the rest is the E press's
+			const got = this.take(sp.save, item, sp.slot, pays === undefined || pays(sp.slot));
+			if (got.ok && onTaken !== undefined) onTaken(sp, got);
+		}
 	}
 
 	// ---------------------------------------------------------------- building loot (§4.3, §8.1)
@@ -391,20 +536,22 @@ export class ServerItems {
 	 *
 	 * `hours` is the world clock in game hours (`gameHours(day, dayTime)`): the respawn timer is the
 	 * original's 12 in-game hours, so a town that has been picked clean refills overnight and not before.
+	 *
+	 * `pays` false: an assisted run (§9.3) -- the loot is theirs, the achievement (Woodpile) is not.
 	 */
-	search(save: PlayerSaveData, x: number, y: number, hours: number): SearchResult {
+	search(save: PlayerSaveData, x: number, y: number, hours: number, pays = true): SearchResult {
 		const b = buildingAt(this.world, x, y);
 		const taken = new Array<{ kind: number; id: number; count: number }>();
 		if (b === undefined) return { building: undefined, taken };
 		const loot = b.lootItems;
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
-		this.takeAll(save, b, hours, taken);
+		this.takeAll(save, b, hours, taken, pays);
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
 		// building's own loot, the shared part, is exactly what anyone else would have found
 		const extra = thiefFind(save, b.buildingType ?? 0);
 		if (extra !== undefined) {
 			addItem(save, extra.kind, extra.id, extra.count);
-			creditTaken(save, extra.kind, extra.id, extra.count);
+			if (pays) creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
 		return { building: b, taken };
@@ -415,31 +562,37 @@ export class ServerItems {
 	 * first E takes everything, for everybody, and the island is dry until ITEM_RESPAWN_HOURS of game time have passed
 	 * -- minus the Thief's extra: the skill finds one more thing when SEARCHING A BUILDING ("Searching a building finds
 	 * one more item"), and a pump has nothing more to find than the fuel in it. The reach is the caller's
-	 * (server/sim/interaction.ts, at the SERVER's position, with a clear line to the island).
+	 * (server/sim/interaction.ts, at the SERVER's position, with a clear line to the island). `pays` as for `search`.
 	 */
-	drain(save: PlayerSaveData, pump: Solid, hours: number): Array<{ kind: number; id: number; count: number }> {
+	drain(
+		save: PlayerSaveData,
+		pump: Solid,
+		hours: number,
+		pays = true,
+	): Array<{ kind: number; id: number; count: number }> {
 		const taken = new Array<{ kind: number; id: number; count: number }>();
 		if (!isPump(pump) || pump.removed === true) return taken;
 		const loot = pump.lootItems;
 		if (loot === undefined || loot.size() === 0) return taken;
-		this.takeAll(save, pump, hours, taken);
+		this.takeAll(save, pump, hours, taken, pays);
 		return taken;
 	}
 
 	/**
 	 * Everything in container `c` into `save`, and the container empty until `hours` + ITEM_RESPAWN_HOURS. Emptied
 	 * before anything can yield: a second searcher this tick finds it empty, which by then it is (§8.1 "o primeiro
-	 * pedido processado leva tudo").
+	 * pedido processado leva tudo"). `pays` false: an assisted run (§9.3) -- the loot is theirs, no achievement moves.
 	 */
 	private takeAll(
 		save: PlayerSaveData,
 		c: Solid,
 		hours: number,
 		taken: Array<{ kind: number; id: number; count: number }>,
+		pays: boolean,
 	): void {
 		for (const drop of c.lootItems ?? []) {
 			addItem(save, drop.kind, drop.id, drop.count);
-			creditTaken(save, drop.kind, drop.id, drop.count);
+			if (pays) creditTaken(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
 		c.lootItems = [];

@@ -8,9 +8,10 @@
  * code (docs/MULTIPLAYER.md §2.2, §11.2 "GameLoop.updatePlayer → shared/sim/playerMove.ts").
  *
  * Moved as-is from GameLoop.updatePlayer (HEAD 2f48f55); tools/test-sim.mjs replays 300 commands twice and against a
- * copy of that original code.
+ * copy of that original code -- whose body part (hunger, healing, starving, poison) now follows DESIGN_RULES VIT-01,
+ * the wait before healing after a hit (shared/sim/vitals.ts, `stepVitals`).
  */
-import { DESIGN } from "shared/engine/constants";
+import { DESIGN, TOWN } from "shared/engine/constants";
 import { clamp } from "shared/engine/vec2";
 import { moveActor, PLAYER_RADIUS } from "shared/game/physics";
 import { maxHpOf, PlayerState, recalcMoveSpeed } from "shared/game/player";
@@ -18,9 +19,22 @@ import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { aimOf, InputCommand, moveDirX, moveDirY, SPEED_SCALE } from "./types";
 import { stepRide } from "./vehicle";
+import { stepVitals } from "./vitals";
 
 /** the survivor never leaves [MARGIN, size − MARGIN] of the world */
 export const WORLD_MARGIN = 40;
+/**
+ * How close to the world's edge a survivor may stand. An admin's noclip (docs/MULTIPLAYER.md §10) goes through walls,
+ * never out of the town: the border forest is scenery nobody should stand in, and the clamp of everybody else
+ * (WORLD_MARGIN) let a noclip body walk into it (the review of 8f50bc5, L4). A world too small for the border (a
+ * test's) keeps the plain margin.
+ */
+function edgeOf(world: WorldData, p: PlayerState): number {
+	if (p.noclip !== true) return WORLD_MARGIN;
+	const edge = TOWN.BORDER + PLAYER_RADIUS;
+	return world.width > edge * 2 && world.height > edge * 2 ? edge : WORLD_MARGIN;
+}
+
 /** below this travelled distance the step does not count as walking (foot cycle, noise) */
 export const WALK_EPSILON = 0.05;
 
@@ -76,8 +90,9 @@ export function stepPlayer(
 		const x0 = p.x;
 		const y0 = p.y;
 		crash = stepRide(world, p, save, cmd, dt);
-		p.x = clamp(p.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
-		p.y = clamp(p.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
+		const edge = edgeOf(world, p);
+		p.x = clamp(p.x, edge, world.width - edge);
+		p.y = clamp(p.y, edge, world.height - edge);
 		moved = math.sqrt((p.x - x0) * (p.x - x0) + (p.y - y0) * (p.y - y0));
 		walking = false;
 	} else {
@@ -106,8 +121,9 @@ export function stepPlayer(
 				? { x: p.x + mvx * dt, y: p.y + mvy * dt }
 				: moveActor(world, p.x, p.y, PLAYER_RADIUS, mvx * dt, mvy * dt);
 		moved = math.sqrt((res.x - p.x) * (res.x - p.x) + (res.y - p.y) * (res.y - p.y));
-		p.x = clamp(res.x, WORLD_MARGIN, world.width - WORLD_MARGIN);
-		p.y = clamp(res.y, WORLD_MARGIN, world.height - WORLD_MARGIN);
+		const edge = edgeOf(world, p);
+		p.x = clamp(res.x, edge, world.width - edge);
+		p.y = clamp(res.y, edge, world.height - edge);
 		walking = moved > WALK_EPSILON && (wdx !== 0 || wdy !== 0);
 	}
 
@@ -119,17 +135,8 @@ export function stepPlayer(
 		if (p.hp > hpMax) p.hp = hpMax;
 	}
 
-	const hungerRate = 1 - save.skillLevels[8] / 3;
-	p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);
-	if (p.hungry <= 0) {
-		p.hp -= 0.02 * 30 * dt;
-	} else if (p.hp < p.hpMax) {
-		p.hp = math.min(p.hpMax, p.hp + 0.04 * 30 * (1 + save.skillLevels[1]) * dt);
-	}
-	if (p.buffs.poison > 0) {
-		p.buffs.poison -= dt;
-		p.hp -= 0.06 * 30 * (save.skillLevels[20] > 0 ? 0.5 : 1) * dt;
-	}
+	// the stomach, starving, poison and healing -- with the wait after a hit (DESIGN_RULES VIT-01)
+	stepVitals(p, save, dt);
 	if (p.buffs.speed > 0) p.buffs.speed -= dt;
 	if (p.buffs.calm > 0) p.buffs.calm -= dt;
 	if (p.buffs.pain > 0) p.buffs.pain -= dt;

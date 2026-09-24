@@ -29,6 +29,11 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
   mas a CON-03, o Records e a tela Survivor dizem que "o Núcleo 1 não tem chefe".
 - **Top 3:** (1) o jogador novo nunca pode cair num mundo público no dia 20; (2) o "Play solo" que a §7.4 do
   `MULTIPLAYER.md` desenhou e ninguém construiu; (3) decidir os chefes e alinhar regra, telas e arte. Lista completa na §5.
+- **Atualização (2026-09-24): P0-3 e P0-4 feitos.** Os chefes estão ligados na CON-03, aparecem no Records e na tela
+  Survivor e têm pixel art (ART-14, à espera do `upload-art` do dono); a mordida, as portas, o uso de item, o
+  lança-chamas, o motor, a buzina, a campainha e a voz da horda têm som, e a moto tem farol (VEI-05, LUZ-04). Com isso a
+  incoerência I1 fechou e dois dos nove pontos da §3 (moto, chefes) saíram. O que sobra dos dois está nas seções P0-3 e
+  P0-4 da §5.
 
 ---
 
@@ -87,7 +92,7 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 | Aspecto          | Original                                                                                             | Nosso                                                                                                                                                                                           | V   |
 | ---------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
 | Vida e fome      | HP 100, fome 100 (−0,3/s: ~5,5 min cheia → vazia); fome 0 tira 0,6 HP/s [repo `constants.ts`]        | Os mesmos números (`playerMove.ts`) [repo]                                                                                                                                                      | ✅  |
-| Regeneração      | 1,2 HP/s sempre que alimentado; a fome regula a cura [repo; web LevelWinner]                         | Igual, × (1 + Recovery) [repo `playerMove.ts:127`]                                                                                                                                              | ✅  |
+| Regeneração      | 1,2 HP/s sempre que alimentado; a fome regula a cura [repo; web LevelWinner]                         | Só 7 s depois do último dano e com FOOD ≥ 15; 1,5 HP/s × (1 + Recovery), 0,25 de comida por HP (VIT-01) [repo `vitals.ts`]                                                                      | ✅  |
 | Estômago         | **Estômago cheio deixava mais lento** (`move_speed -= hungry/hungry_max*0.5`) [repo `player.ts:151`] | Só a fome abaixo de 25% desacelera (P2) [repo]                                                                                                                                                  | ✅  |
 | Guarda pós-golpe | 1,5 s: dez zumbis mordiam como um [repo LEG-04]                                                      | 0,5 s; cercado é mais perigoso (LEG-04) [repo]                                                                                                                                                  | ✅  |
 | Stamina / sede   | Não há evidência de nenhuma das duas [inferência: nada em `constants.ts`]                            | Nenhuma                                                                                                                                                                                         | ✅  |
@@ -148,24 +153,24 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 
 ### 2.8 Zumbis: tipos, IA, horda
 
-| Aspecto        | Original                                                                                                                                                 | Nosso                                                                                                        | V   |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --- |
-| Tipos          | Walker, Spitter, Exploder, Charger, Jumper; 10% rápidos a partir do dia 2, 5% grandes a partir do dia 3 [repo `zombies.ts`, `entities.ts:220`]           | Os cinco nascem (`population.ts` `SPECIAL_TYPES`), com pixel art (ART-10) [repo]                             | ✅  |
-| Sentidos       | Sem olhos: nota a 50 px ou por anel de ruído de dia; **à noite e na chuva todo zumbi do mapa caça a posição ao vivo através de paredes** [repo IA intro] | Visão com cone, alcance e luz; ouvido por ação; memória; grito limitado (IA-01..03) [repo]                   | ✅  |
-| Caminho        | `mp_potential_step`, sem pathfinding; separação O(n²) [repo `flank.ts`, `spatialHash.ts`]                                                                | Flow field multi-fonte, flanco, hash espacial (MULTIPLAYER D6) [repo]                                        | ✅  |
-| Mordida        | Morde no quadro em que encosta: nada para ler nem desviar [repo `zombieBrain.ts:1359`]                                                                   | Inclinação telegrafada e mordida (LEG-04) [repo]                                                             | ✅  |
-| Estado visível | Um "!" [repo `zombieBrain.ts:132`]                                                                                                                       | Ponto azul, "?" dourado, "!" vermelho, com contraste medido (IA-05) [repo]                                   | ✅  |
-| Voz            | —                                                                                                                                                        | O rosnado é um "robô" da biblioteca oficial; não achamos voz de zumbi licenciada [repo `audio-credits.md` B] | ⚠️  |
+| Aspecto        | Original                                                                                                                                                 | Nosso                                                                                                                                                                                                | V   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| Tipos          | Walker, Spitter, Exploder, Charger, Jumper; 10% rápidos a partir do dia 2, 5% grandes a partir do dia 3 [repo `zombies.ts`, `entities.ts:220`]           | Os cinco nascem (`population.ts` `SPECIAL_TYPES`), com pixel art (ART-10) [repo]                                                                                                                     | ✅  |
+| Sentidos       | Sem olhos: nota a 50 px ou por anel de ruído de dia; **à noite e na chuva todo zumbi do mapa caça a posição ao vivo através de paredes** [repo IA intro] | Visão com cone, alcance e luz; ouvido por ação; memória; grito limitado (IA-01..03) [repo]                                                                                                           | ✅  |
+| Caminho        | `mp_potential_step`, sem pathfinding; separação O(n²) [repo `flank.ts`, `spatialHash.ts`]                                                                | Flow field multi-fonte, flanco, hash espacial (MULTIPLAYER D6) [repo]                                                                                                                                | ✅  |
+| Mordida        | Morde no quadro em que encosta: nada para ler nem desviar [repo `zombieBrain.ts:1359`]                                                                   | Inclinação telegrafada e mordida (LEG-04) [repo]                                                                                                                                                     | ✅  |
+| Estado visível | Um "!" [repo `zombieBrain.ts:132`]                                                                                                                       | Ponto azul, "?" dourado, "!" vermelho, com contraste medido (IA-05) [repo]                                                                                                                           | ✅  |
+| Voz            | —                                                                                                                                                        | Gemidos, rosnado ao te ver e o grito do grupo, de takes humanos e de criatura da biblioteca oficial, com orçamento para a horda não virar barulho (P0-4) [repo `audio-credits.md` B, `gameAudio.ts`] | ✅  |
 
 ### 2.9 Chefes
 
-| Aspecto     | Original                                                                                                                                                                     | Nosso                                                                                                                                      | V   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --- |
-| Quais       | Centopeia (dia 10), Rafflesia (dia 8), Gigante (dia 5), Ouriço (dia 10); voltam a cada 3 dias; 10 000 HP, regeneram 30/s (45 o Gigante) [repo `constants.ts`, `entities.ts`] | Os quatro nascem nas âncoras (`population.ts` `spawnBoss`), HP × S(k) (MP §3.5) [repo]                                                     | ✅  |
-| Recompensa  | XP do 3 e do 4 dava 10 por bug [repo `entities.ts:294`]                                                                                                                      | 1000/800/800/1000 XP a todo participante, 8 moedas, troféu, conquista (MP-15, ITM-05, CON-04) [repo]                                       | ✅  |
-| Arte        | Sprites próprios [inferência: o jogo era todo em sprites]                                                                                                                    | **Desenho liso**, fora da pixel art (ART-10: "os chefes seguem no desenho liso") [repo]                                                    | ⚠️  |
-| Na tela     | —                                                                                                                                                                            | Records e tela Survivor **escondem** "Bosses defeated" dizendo que o Núcleo 1 não tem chefe (UI-10, UI-12), embora eles nasçam (§4) [repo] | ⚠️  |
-| Como evento | Encontro no lugar fixo [repo]                                                                                                                                                | Nenhum aviso de que um chefe acordou além de encontrá-lo [inferência: nenhum anúncio no `population.ts`]                                   | 💡  |
+| Aspecto     | Original                                                                                                                                                                     | Nosso                                                                                                                                                  | V   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --- |
+| Quais       | Centopeia (dia 10), Rafflesia (dia 8), Gigante (dia 5), Ouriço (dia 10); voltam a cada 3 dias; 10 000 HP, regeneram 30/s (45 o Gigante) [repo `constants.ts`, `entities.ts`] | Os quatro nascem nas âncoras (`population.ts` `spawnBoss`), HP × S(k) (MP §3.5) [repo]                                                                 | ✅  |
+| Recompensa  | XP do 3 e do 4 dava 10 por bug [repo `entities.ts:294`]                                                                                                                      | 1000/800/800/1000 XP a todo participante, 8 moedas, troféu, conquista (MP-15, ITM-05, CON-04) [repo]                                                   | ✅  |
+| Arte        | Sprites próprios [inferência: o jogo era todo em sprites]                                                                                                                    | Pixel art dos quatro, do tamanho em que são acertados, com o desenho liso de reserva até o `upload-art` (ART-14, P0-3) [repo `bossView.ts`]            | ✅  |
+| Na tela     | —                                                                                                                                                                            | "Bosses defeated" no Records e nas Stats da tela Survivor (UI-10, UI-12, P0-3) [repo]                                                                  | ✅  |
+| Como evento | Encontro no lugar fixo [repo]                                                                                                                                                | Nenhum aviso de que um chefe acordou além de encontrá-lo, nem telegrafar dos ataques (o resto da P0-3) [inferência: nenhum anúncio no `population.ts`] | 💡  |
 
 ### 2.10 NPCs e companheiros
 
@@ -237,11 +242,11 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 
 ### 2.18 Áudio
 
-| Aspecto | Original                                                                                  | Nosso                                                                                                                                                      | V   |
-| ------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
-| Regra   | De dia sem música, música à noite, batimento em três níveis (35/22/10%) [repo `music.ts`] | A mesma regra + stingers das ondas e pássaros do amanhecer [repo]                                                                                          | ✅  |
-| Licença | —                                                                                         | Só bibliotecas oficiais, com registro por som (`design/audio-credits.md`) [repo]                                                                           | ✅  |
-| Buracos | Moto com som de motor [repo VEI-05]                                                       | Sem som: porta, uso de item, lança-chamas, mordida (não têm evento); motor e campainha; voz de zumbi é um robô; dor do jogador é o `uuhhh` do motor [repo] | ⚠️  |
+| Aspecto | Original                                                                                  | Nosso                                                                                                                                                                                                                                                                                                      | V   |
+| ------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| Regra   | De dia sem música, música à noite, batimento em três níveis (35/22/10%) [repo `music.ts`] | A mesma regra + stingers das ondas e pássaros do amanhecer [repo]                                                                                                                                                                                                                                          | ✅  |
+| Licença | —                                                                                         | Só bibliotecas oficiais, com registro por som (`design/audio-credits.md`) [repo]                                                                                                                                                                                                                           | ✅  |
+| Buracos | Moto com som de motor [repo VEI-05]                                                       | Fechados na P0-4: mordida, portas, uso de item (som de mundo do servidor), lança-chamas, motor pela velocidade, buzina, campainha, voz da horda [repo `audio-credits.md`]. Faltam: a injeção (slot vazio, silêncio), a dor e a morte do jogador (ainda o `uuhhh` do motor) e a passada de escuta no Studio | ⚠️  |
 
 ### 2.19 Multiplayer
 
@@ -273,17 +278,17 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 
 ## 3. Onde o original está MELHOR hoje
 
-| #   | O original                                             | O nosso hoje                                                                | Evidência                                                   |
-| --- | ------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 1   | Todo jogador começa no dia 1                           | Um novato pode cair num mundo público no dia 20+ e levar a dificuldade dele | [repo] `waves.ts:335`, `spawns.ts`; servidores-e-dados §2.3 |
-| 2   | Jogar sozinho, sem estranhos, quando quiser            | Só servidor público; o "Play solo" não existe                               | [repo] MULTIPLAYER §7.4; grep sem `TeleportService`         |
-| 3   | A base provavelmente persistia                         | A base some quando o servidor esvazia ou o mundo acaba                      | [inferência] × [repo] `PlayerSaveData`                      |
-| 4   | Conquistas no perfil da plataforma                     | Conquistas só dentro do jogo                                                | [repo] `achievements.ts` `androidId`; sem `BadgeService`    |
-| 5   | Tradução humana em coreano, chinês e japonês           | Tradução automática, sem revisão                                            | [repo] `lang.ts`                                            |
-| 6   | Moto com farol e som de motor                          | Farol e sons pendentes; outros eventos mudos                                | [repo] VEI-05, `audio-credits.md`                           |
-| 7   | Chefes com arte própria, sem contradição de regra      | Chefes em desenho liso e escondidos das telas de recorde                    | [repo] ART-10, UI-10, UI-12                                 |
-| 8   | Encomendas no mapa: um motivo a mais para sair da base | Nada cai no mapa                                                            | [repo] `constants.ts` `PARCEL_NUMBER`                       |
-| 9   | Mapa fixo que se aprende (trade-off, não defeito)      | Cidade nova a cada fim de mundo; bom para explorar, ruim para dominar rotas | [inferência]; MP-22                                         |
+| #   | O original                                             | O nosso hoje                                                                                                           | Evidência                                                   |
+| --- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1   | Todo jogador começa no dia 1                           | Um novato pode cair num mundo público no dia 20+ e levar a dificuldade dele                                            | [repo] `waves.ts:335`, `spawns.ts`; servidores-e-dados §2.3 |
+| 2   | Jogar sozinho, sem estranhos, quando quiser            | Só servidor público; o "Play solo" não existe                                                                          | [repo] MULTIPLAYER §7.4; grep sem `TeleportService`         |
+| 3   | A base provavelmente persistia                         | A base some quando o servidor esvazia ou o mundo acaba                                                                 | [inferência] × [repo] `PlayerSaveData`                      |
+| 4   | Conquistas no perfil da plataforma                     | Conquistas só dentro do jogo                                                                                           | [repo] `achievements.ts` `androidId`; sem `BadgeService`    |
+| 5   | Tradução humana em coreano, chinês e japonês           | Tradução automática, sem revisão                                                                                       | [repo] `lang.ts`                                            |
+| 6   | Moto com farol e som de motor                          | **Resolvido (P0-4, 2026-09-24):** farol pela regra da luz, motor, buzina e campainha                                   | [repo] VEI-05, LUZ-04, `audio-credits.md`                   |
+| 7   | Chefes com arte própria, sem contradição de regra      | **Resolvido (P0-3, 2026-09-24):** ligados na CON-03, nas telas de recorde, pixel art (ART-14) à espera do `upload-art` | [repo] CON-03, ART-14, UI-10, UI-12                         |
+| 8   | Encomendas no mapa: um motivo a mais para sair da base | Nada cai no mapa                                                                                                       | [repo] `constants.ts` `PARCEL_NUMBER`                       |
+| 9   | Mapa fixo que se aprende (trade-off, não defeito)      | Cidade nova a cada fim de mundo; bom para explorar, ruim para dominar rotas                                            | [inferência]; MP-22                                         |
 
 Fora da lista de propósito: jogar offline (limite da plataforma) e a pausa (UI-06 é decisão do dono; a resposta certa é o
 Play solo, não pausar o mundo).
@@ -292,13 +297,17 @@ Play solo, não pausar o mundo).
 
 ## 4. Incoerências internas encontradas (doc × código)
 
-| #   | Onde                             | O que diz                                                                                             | O que o código faz                                                                                                                            |
-| --- | -------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| I1  | CON-03, ART-10, UI-10, UI-12     | Zumbis do Núcleo 1 são Walker e Charger, **sem chefe**; Records e tela Survivor sem "Bosses defeated" | Os 5 tipos e os 4 chefes nascem (`population.ts`); CON-04 e ITM-05 contam com eles; a loja mostra "Bosses defeated" (`client/ui/shop.ts:299`) |
-| I2  | MP-13, MP-20                     | Servidor privado continua no dia do dono; "compartilhado" lido de `PrivateServerId`                   | Nenhum `PrivateServerId` no servidor; o comentário em `main.client.ts:153` diz que a divisão saiu                                             |
-| I3  | MULTIPLAYER.md cabeçalho         | "Status: proposta de arquitetura (nada implementado)"                                                 | F0–F3 e boa parte da F4 estão no jogo (`MP_PHASE` 2, `WORLD_SERVER_PHASE` 2)                                                                  |
-| I4  | MULTIPLAYER D11, §7.3, §7.4      | Espectar e Play solo                                                                                  | Nenhum dos dois existe                                                                                                                        |
-| I5  | MONETIZATION.md × CREATOR_HUB.md | "Assinatura — ainda não" × "Subscriptions: Não"                                                       | Sem código; só as duas frases divergem no tom (uma espera cadência, a outra recusa)                                                           |
+| #   | Onde                             | O que diz                                                                                             | O que o código faz                                                                                                                                                                                                                 |
+| --- | -------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I1  | CON-03, ART-10, UI-10, UI-12     | Zumbis do Núcleo 1 são Walker e Charger, **sem chefe**; Records e tela Survivor sem "Bosses defeated" | Os 5 tipos e os 4 chefes nascem (`population.ts`); CON-04 e ITM-05 contam com eles; a loja mostra "Bosses defeated" (`client/ui/shop.ts:299`). **Fechada (P0-3, 2026-09-24):** as regras e as telas agora dizem o que o código faz |
+| I2  | MP-13, MP-20                     | Servidor privado continua no dia do dono; "compartilhado" lido de `PrivateServerId`                   | Nenhum `PrivateServerId` no servidor; o comentário em `main.client.ts:153` diz que a divisão saiu                                                                                                                                  |
+| I3  | MULTIPLAYER.md cabeçalho         | "Status: proposta de arquitetura (nada implementado)"                                                 | F0–F3 e boa parte da F4 estão no jogo (`MP_PHASE` 2, `WORLD_SERVER_PHASE` 2)                                                                                                                                                       |
+| I4  | MULTIPLAYER D11, §7.3, §7.4      | Espectar e Play solo                                                                                  | Nenhum dos dois existe                                                                                                                                                                                                             |
+| I5  | MONETIZATION.md × CREATOR_HUB.md | "Assinatura — ainda não" × "Subscriptions: Não"                                                       | Sem código; só as duas frases divergem no tom (uma espera cadência, a outra recusa)                                                                                                                                                |
+
+_Estado em 2026-09-24:_ **I2** resolvida (MP-13 / MP-20: o público começa no dia 1, a cidade própria e o privado no
+dia da vida do dono, como a regra sempre disse; o tipo do servidor é lido e publicado, `shared/match/matchWire.ts`); **I3** resolvida (o cabeçalho da `MULTIPLAYER.md`); **I4** resolvida na metade
+do Play solo (MP-25, `server/match/*`) — Espectar continua não existindo (P1-7).
 
 ---
 
@@ -309,30 +318,30 @@ Play solo, não pausar o mundo).
 
 ### Tabela
 
-| ID   | O quê                                                         | Impacto | Esforço | Regras tocadas                               |
-| ---- | ------------------------------------------------------------- | ------- | ------- | -------------------------------------------- |
-| P0-1 | Novato nunca cai num mundo de dia alto                        | 5       | S–M     | MP-09, MP-13, MP-20                          |
-| P0-2 | Construir o Play solo (servidor reservado)                    | 4       | M       | MP-14, MP-20, MP-13, UI-10                   |
-| P0-3 | Decidir os chefes e alinhar regra, telas e arte               | 4       | S + M   | CON-03, CON-04, ITM-05, UI-10, UI-12, ART-10 |
-| P0-4 | Fechar os buracos de áudio dos eventos centrais               | 3       | S–M     | VEI-05, LEG-04, CON-02 (licença)             |
-| P1-1 | Cidade persistente em servidor privado                        | 5       | L–XL    | MP-13, MP-20, MP-22, MON-01, MON-03          |
-| P1-2 | Pings e falas rápidas de proximidade (toque e controle)       | 4       | M       | MP-17, MP-07, UI-04, UI-09, LEG-02           |
-| P1-3 | Uso rápido de cura e comida sem abrir o Bag                   | 4       | M       | UI-06, UI-09 (emenda), MON-01                |
-| P1-4 | Badges do Roblox para conquistas e títulos                    | 3       | S       | CON-04, MON-05, MP-00                        |
-| P1-5 | Encomendas de volta, como evento de mundo de dia              | 4       | M       | MP-05, MP-06, IA-02, LEG-01, APO-01, MON-01  |
-| P1-6 | Desafios diários do servidor                                  | 4       | M       | MON-01, MON-05, CON-03, MP-00                |
-| P1-7 | Espectar enquanto espera o amanhecer                          | 3       | M       | MP-21, MP-07, UI-06                          |
-| P1-8 | Convidar amigos                                               | 3       | S       | UI-07, UI-10                                 |
-| P1-9 | Ranking: melhor dia e a cidade que mais durou                 | 3       | M       | MON-05, MP-00, MP-22                         |
-| P2-1 | Eventos sazonais no tom do Dead Town                          | 3       | M cada  | MON-01, MON-03, APO-03, LUZ-02               |
-| P2-2 | Tradução revisada (PT-BR, ES, KO) pelos `OVERRIDES`           | 3       | S–M     | UI-03                                        |
-| P2-3 | Robux só cosmético e conveniência (VIP, paleta), nunca moedas | 3       | M       | MON-01..04                                   |
-| P2-4 | Papéis co-op legíveis a partir das skills                     | 2       | S       | MP-23, UI-12, MON-01                         |
-| P2-5 | Memorial das cidades caídas no lobby                          | 2       | S–M     | UI-10, MP-22                                 |
-| P2-6 | Afinar a curva e a economia com os painéis                    | 3       | S       | MP-09, ANALYTICS                             |
-| P2-7 | Fechar pendências registradas (farol, forno, raio do aliado)  | 2       | S–M     | LUZ-04, ELE-03, §10A                         |
-| P2-8 | Marcos fixos na cidade procedural                             | 2       | M       | EDI-02, EDI-06, INT-01                       |
-| P2-9 | Noite com um motivo para sair da base                         | 3       | M       | IA-03, LUZ-02, MP-09                         |
+| ID   | O quê                                                                                          | Impacto | Esforço | Regras tocadas                                       |
+| ---- | ---------------------------------------------------------------------------------------------- | ------- | ------- | ---------------------------------------------------- |
+| P0-1 | Novato nunca cai num mundo de dia alto                                                         | 5       | S–M     | MP-09, MP-13, MP-20                                  |
+| P0-2 | Construir o Play solo (servidor reservado)                                                     | 4       | M       | MP-14, MP-20, MP-13, UI-10                           |
+| P0-3 | ✅ **Feito** (2026-09-24): chefes ligados, nas telas, pixel art; sobram o telegrafar e o aviso | 4       | S + M   | CON-03, CON-04, ITM-05, UI-10, UI-12, ART-10, ART-14 |
+| P0-4 | ✅ **Feito** (2026-09-24): sons dos eventos centrais e farol; sobram injeção, dor e escuta     | 3       | S–M     | VEI-05, LEG-04, LUZ-04, CON-02 (licença)             |
+| P1-1 | Cidade persistente em servidor privado                                                         | 5       | L–XL    | MP-13, MP-20, MP-22, MON-01, MON-03                  |
+| P1-2 | Pings e falas rápidas de proximidade (toque e controle)                                        | 4       | M       | MP-17, MP-07, UI-04, UI-09, LEG-02                   |
+| P1-3 | Uso rápido de cura e comida sem abrir o Bag                                                    | 4       | M       | UI-06, UI-09 (emenda), MON-01                        |
+| P1-4 | Badges do Roblox para conquistas e títulos                                                     | 3       | S       | CON-04, MON-05, MP-00                                |
+| P1-5 | Encomendas de volta, como evento de mundo de dia                                               | 4       | M       | MP-05, MP-06, IA-02, LEG-01, APO-01, MON-01          |
+| P1-6 | Desafios diários do servidor                                                                   | 4       | M       | MON-01, MON-05, CON-03, MP-00                        |
+| P1-7 | Espectar enquanto espera o amanhecer                                                           | 3       | M       | MP-21, MP-07, UI-06                                  |
+| P1-8 | Convidar amigos                                                                                | 3       | S       | UI-07, UI-10                                         |
+| P1-9 | Ranking: melhor dia e a cidade que mais durou                                                  | 3       | M       | MON-05, MP-00, MP-22                                 |
+| P2-1 | Eventos sazonais no tom do Dead Town                                                           | 3       | M cada  | MON-01, MON-03, APO-03, LUZ-02                       |
+| P2-2 | Tradução revisada (PT-BR, ES, KO) pelos `OVERRIDES`                                            | 3       | S–M     | UI-03                                                |
+| P2-3 | Robux só cosmético e conveniência (VIP, paleta), nunca moedas                                  | 3       | M       | MON-01..04                                           |
+| P2-4 | Papéis co-op legíveis a partir das skills                                                      | 2       | S       | MP-23, UI-12, MON-01                                 |
+| P2-5 | Memorial das cidades caídas no lobby                                                           | 2       | S–M     | UI-10, MP-22                                         |
+| P2-6 | Afinar a curva e a economia com os painéis                                                     | 3       | S       | MP-09, ANALYTICS                                     |
+| P2-7 | Fechar pendências registradas (forno, raio do aliado; o farol saiu com a P0-4)                 | 2       | S–M     | LUZ-04, ELE-03, §10A                                 |
+| P2-8 | Marcos fixos na cidade procedural                                                              | 2       | M       | EDI-02, EDI-06, INT-01                               |
+| P2-9 | Noite com um motivo para sair da base                                                          | 3       | M       | IA-03, LUZ-02, MP-09                                 |
 
 ### P0-1 — O novato nunca cai num mundo de dia alto
 
@@ -347,6 +356,10 @@ Play solo, não pausar o mundo).
   paga. O CREATOR_HUB diz "Custom matchmaking — não agora": este sinal é a exceção, porque não é fila, é um atributo.
 - **Esforço:** S (atributo + sinal) a M (regra do primeiro save). Confirmar a API no Context7 antes (regra da casa).
 - **Regras:** MP-09, MP-13, MP-20.
+- **Feito (2026-09-24, MP-25):** os atributos `WorldDay` e `Survivors` e a oferta de cidade própria ao carregar,
+  com consentimento, só ao novato (recorde até o dia 5), em `max(5, recorde + 4)` (`docs/MULTIPLAYER.md` §7.4). O
+  sinal "WorldDay perto de 1" **não** foi adotado (ele mandaria também os veteranos às noites fáceis); o certo compara
+  o dia da cidade com o de quem entra e pede um atributo de jogador próprio (`docs/CREATOR_HUB.md`).
 
 ### P0-2 — Construir o Play solo
 
@@ -357,6 +370,9 @@ Play solo, não pausar o mundo).
   estranhos. Também é a resposta certa para quem sente falta da pausa (UI-06 fica como está).
 - **Esforço:** M. No Studio o teleporte não roda; testar numa experiência de teste separada (servidores-e-dados §4).
 - **Regras:** MP-14, MP-20, MP-13 (definir de novo o que é "solo/privado"), UI-10.
+- **Feito (2026-09-24, MP-25):** `ReserveServerAsync` + `TeleportAsync` com o código, o botão na tela Survivor, falhas
+  com retentativa e mensagem, TeleportData validado no destino, a cidade no dia da vida do dono (MP-13), nenhuma fuga
+  da horda (`danger`), funil NewTown (`docs/MULTIPLAYER.md` §7.4). Amigos: P1-8.
 
 ### P0-3 — Decidir os chefes e alinhar tudo
 
@@ -369,6 +385,15 @@ Play solo, não pausar o mundo).
   jogador achar que não existem.
 - **Esforço:** S (texto e telas) + M (arte e telegrafar).
 - **Regras:** CON-03, CON-04, ITM-05, UI-10, UI-12, ART-08, ART-10, LEG-03.
+- **Status (2026-09-24): feito.** A CON-03 diz que os chefes estão ligados e por quê (a CON-04, a ITM-05, a ART-10, a
+  UI-10 e a UI-12 foram alinhadas); "Bosses defeated" (o `bossKills` do servidor) está no Records e nas Stats da tela
+  Survivor; os quatro têm pixel art (ART-14: `tools/boss-model.mjs`, `client/view/bossView.ts`), com o desenho liso de
+  antes, chamada por chamada, até o dono rodar `npm run cloud -- upload-art` (12 texturas novas) — `test:world-art`
+  §10f, com a LEG-03 medida em sete chãos. **O que sobra:** (1) o **telegrafar dos ataques** — a centopeia moendo, o
+  leque do ouriço antes de sair, o açoite da rafflesia, a arrancada do gigante — legível antes do golpe, como a
+  inclinação do walker (LEG-04); (2) o **aviso de que um chefe acordou** ("Something big is awake near the school"), só
+  para quem está perto (o `spawnBoss` do `population.ts` não anuncia nada), com o texto na `lang.ts`; (3) ver a arte no
+  Studio depois do `upload-art`.
 
 ### P0-4 — Fechar os buracos de áudio
 
@@ -378,6 +403,16 @@ Play solo, não pausar o mundo).
   tinha motor [repo VEI-05]. Som é o canal que o jogador de celular usa quando o dedo cobre a tela [inferência].
 - **Esforço:** S–M.
 - **Regras:** VEI-05 (pendente), LEG-04, a política de licença de `design/audio-credits.md`.
+- **Status (2026-09-24): feito.** Mordida, portas de madeira e de ferro, comer, enfaixar, kit médico e comprimidos saem
+  do servidor como som de mundo (`Fx Sound`, a tabela `WIRE_SOUNDS`, MULTIPLAYER §4.2); o lança-chamas é um jato em
+  laço com ignição; o motor da moto é um laço que sobe de tom e de volume com a velocidade, para o piloto e para quem o
+  vê; buzina e campainha; a voz da horda (gemidos, rosnado ao te ver, o grito do grupo) com orçamento, posicionada; e o
+  **farol da moto** como luz, pela regra única da LUZ-04. Tudo da biblioteca oficial (ProSoundEffects, domínio
+  público), cada id conferido pelas APIs públicas da Roblox e listado em `design/audio-credits.md`; volumes pelos grupos
+  da Settings; nenhuma Instance nova por som (`test:audio`, `test:vehicles` §B12). **O que sobra:** (1) o **som da
+  injeção** (`useInject`: slot vazio, toca silêncio; o dono escolhe o id — pendência D do `audio-credits.md`); (2) a
+  **passada de escuta no Studio** — as janelas foram medidas pelo envelope do arquivo, não ouvidas (pendência F); (3) o
+  take humano para **dor e morte** do jogador, que continua o `uuhhh` do motor (pendência C).
 
 ### P1-1 — Cidade persistente em servidor privado
 
