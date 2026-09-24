@@ -1104,29 +1104,81 @@ section(
 // ================================================================ 5: clock
 
 section("5) the clock tools move the SERVER's clock for everybody, pay no skipped day, and assist every run", () => {
+	// ---- the sky (LUZ-05; M2 and L1 of the weather's review): any of the five weathers for everybody at once; it
+	// assists every run when it eases the night against the day's own roll, and changes at most every few seconds
+	const WX = require(join(SRC, "shared/sim/weather.ts"));
+	const COOL = WO.ADMIN_WORLD_LIMITS.WEATHER_COOLDOWN_S;
+	{
+		const t = town();
+		const c = t.s.sim.clock;
+		let res = t.tool(t.admin, { op: "weather", weather: 0 });
+		verify(
+			"a clear sky over the day's clear roll: done, and it assists nobody",
+			res.ok && c.dayRoll === 0 && c.weather === 0 && t.pays(t.admin) && t.pays(t.bob),
+			res.message,
+		);
+		res = t.tool(t.admin, { op: "rain", on: true });
+		verify(
+			`...the sky again at once: refused, it changes at most every ${COOL} s (a strobe of darkness on every screen)`,
+			!res.ok && /at most every/.test(res.error) && c.isRaining === false,
+			res.error,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "rain", on: true });
+		verify(
+			"rain over a clear roll: the server's clock rains, and EVERY run is assisted (the horde sees and hears less, §9.3)",
+			res.ok && c.isRaining === true && !t.pays(t.admin) && !t.pays(t.bob) && res.data?.assisted === true,
+			res.message,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 4 });
+		verify(
+			"weather fog: the server's clock has the day's fog",
+			res.ok && c.weather === 4 && !c.isRaining,
+			res.message,
+		);
+	}
+	{
+		const t = town();
+		const c = t.s.sim.clock;
+		// a day that rolled rain, the clock set there by hand (a set into another day brings its own sky: L2)
+		let rainy = 5;
+		while (rainy < 400 && WX.weatherOfDay(c.weatherSeed, rainy) !== WX.Weather.Rain) rainy += 1;
+		c.setClock(12, rainy);
+		let res = t.tool(t.admin, { op: "weather", weather: 0 });
+		verify(
+			"a clear sky over a day that rolled rain: done, and it assists nobody (the night only gets harder)",
+			c.dayRoll === WX.Weather.Rain && res.ok && c.weather === 0 && t.pays(t.admin) && t.pays(t.bob),
+			`day ${rainy}: ${res.message}`,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 4 });
+		verify(
+			"fog over the rain's roll: nobody either (the fog takes the horde's eyes only, the rain took eyes and ears)",
+			res.ok && c.weather === 4 && t.pays(t.admin) && t.pays(t.bob),
+			res.message,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 2 });
+		verify(
+			"a storm over the rain's roll: it rains, and every run is assisted (the thunder's deaf windows on top)",
+			res.ok && c.weather === 2 && c.isRaining === true && !t.pays(t.admin) && !t.pays(t.bob),
+			res.message,
+		);
+		const lines = t.audit().filter(e => e.action === "world:weather");
+		verify(
+			"...and its audit line says what the day rolled and whose runs it assisted",
+			lines.some(e => /rolled Rain/.test(e.details) && /assisted/.test(e.details)),
+			J(lines.map(e => e.details)),
+		);
+	}
 	let t = town();
 	const c = t.s.sim.clock;
 	const World = t.s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World");
 	const bobSave = t.s.save(t.bob);
 	const bobBefore = { day: bobSave.day, money: bobSave.money };
 	World.sent.length = 0;
-	let res = t.tool(t.admin, { op: "rain", on: true });
-	verify("rain on: the server's clock rains", res.ok && c.isRaining === true, res.message);
-	verify("...and rain assists nobody", t.pays(t.admin) && t.pays(t.bob));
-	res = t.tool(t.admin, { op: "rain", on: false });
-	verify("rain off", res.ok && c.isRaining === false);
-	// LUZ-05: any of the five weathers, for everyone at once (the next Clock delta), assisting nobody like the rain
-	res = t.tool(t.admin, { op: "weather", weather: 4 });
-	verify(
-		"weather fog: the server's clock has the day's fog, and it assists nobody",
-		res.ok && c.weather === 4 && c.isRaining === false && t.pays(t.admin) && t.pays(t.bob),
-		res.message,
-	);
-	res = t.tool(t.admin, { op: "weather", weather: 2 });
-	verify("weather storm: a storm rains", res.ok && c.weather === 2 && c.isRaining === true, res.message);
-	res = t.tool(t.admin, { op: "weather", weather: 0 });
-	verify("weather clear", res.ok && c.weather === 0 && c.isRaining === false);
-	res = t.tool(t.admin, { op: "clock", hour: 13.5 });
+	let res = t.tool(t.admin, { op: "clock", hour: 13.5 });
 	verify(
 		"clock 13:30: the server's clock is at 13:30",
 		res.ok && Math.abs(c.dayTime - 13.5) < 1e-6,
@@ -1536,8 +1588,9 @@ section("10) items and structures through the server world: announced to the cli
 		!res.ok && /blocked/.test(res.error),
 		res.error,
 	);
-	const house = t.s.sim.world.solids.find(s => s.kind === "building");
-	res = t.tool(t.admin, { op: "spawnStructure", structure: "lamp", x: house.x + house.w / 2, y: house.y + 4 });
+	// a spot the walls block, in whatever town this server drew (MP-26: the first building's top edge may be a door)
+	const wallSpot = insideBuilding(t.s.sim.world);
+	res = t.tool(t.admin, { op: "spawnStructure", structure: "lamp", x: wallSpot.x, y: wallSpot.y });
 	verify("on a building's wall: refused", !res.ok, res.error);
 });
 

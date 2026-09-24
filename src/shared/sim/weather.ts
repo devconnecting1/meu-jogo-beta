@@ -25,6 +25,7 @@
  * (server/admin/adminWorld.ts): what every client obeys is the byte the server sends, never its own roll.
  */
 import { DESIGN } from "shared/engine/constants";
+import { DESPAWN_FADE_S, INTERP_MAX_S } from "shared/net/mpConfig";
 import { clockSpeed, darkAlphaAt, rainPossible } from "shared/sim/clock";
 
 /** the day's weather (the Clock delta's byte: 0 and 1 kept the meaning of the old rain boolean) */
@@ -132,6 +133,31 @@ export function weatherRains(kind: number): boolean {
 	return kind === Weather.Rain || kind === Weather.Storm;
 }
 
+/**
+ * How much a weather eases the night for the survivors, by what it takes from the horde (0 none): a clear day takes
+ * nothing; fog at dawn blinds it for a morning; fog all day, all day (eyes only); rain takes eyes AND ears (55 % and 60 %,
+ * IA-01, IA-02); a storm is a rain with the thunder's deaf windows on top.
+ */
+export function hordeHandicap(kind: number): number {
+	if (kind === Weather.DawnFog) return 1;
+	if (kind === Weather.Fog) return 2;
+	if (kind === Weather.Rain) return 3;
+	if (kind === Weather.Storm) return 4;
+	return 0;
+}
+
+/**
+ * Does the admin's `chosen` weather help the survivors against what the day rolled (`rolled`)? Then every run in the
+ * world is assisted (§9.3): fog, rain or a storm over a clearer day is a weaker horde nobody earned. A clearer sky than
+ * the roll (a clear day over a rainy one) only makes the night harder, and assists nobody.
+ */
+export function weatherAssists(rolled: number, chosen: number): boolean {
+	return hordeHandicap(chosen) > hordeHandicap(rolled);
+}
+
+/** seconds a screen takes to go from one day's weather to the next (its darkness and fog: the horde's are instant) */
+export const WEATHER_EASE_S = 4;
+
 /** the name the admin panel and the audit use (the players read the HUD's icon and the announcement) */
 export function weatherName(kind: number): string {
 	if (kind === Weather.Rain) return "Rain";
@@ -225,12 +251,15 @@ export const FLASH_LIFT = 0.6;
 /** a close strike's flash: two flickers in its first 0.24 s, then a fade; everything is over after FLASH_S */
 export const FLASH_S = 0.9;
 /**
- * Reduce Motion (and photosensitivity): the flash becomes ONE slow swell of at most this share of the lift -- no
- * flicker at all, rising over FLASH_GENTLE_RISE_S and falling over FLASH_GENTLE_FALL_S.
+ * Reduce Motion (and photosensitivity): the flash becomes ONE slow swell -- no flicker at all, rising over
+ * FLASH_GENTLE_RISE_S and falling over FLASH_GENTLE_FALL_S -- that lifts the dark as far as the real flash does
+ * (FLASH_GENTLE_PEAK of it): the lightning shows the horde down the street to everyone, the gentle screen included;
+ * only the way it comes and goes is calmer.
  */
-export const FLASH_GENTLE_PEAK = 0.3;
-export const FLASH_GENTLE_RISE_S = 0.5;
-export const FLASH_GENTLE_FALL_S = 1.5;
+export const FLASH_GENTLE_PEAK = 1;
+/** a second up, a second down: at a full lift that is ≤ 0.04 of it a frame, even where the clock changes speed */
+export const FLASH_GENTLE_RISE_S = 1;
+export const FLASH_GENTLE_FALL_S = 1;
 /** the flash is quantised to this many levels: a light map rebuilt a few times per strike, not every frame */
 const FLASH_LEVELS = 16;
 /** seconds from the flash to the thunder: 0.3 s for a strike next door, 2.4 s for one ~800 m away */
@@ -241,7 +270,28 @@ export const THUNDER_MASK_S = 3;
 export const THUNDER_HEARING = 0.4;
 /** a storm is darker than a rain: the overlay never under this by day (still lit for the horde: 1 - 0.58 ≥ 0.4) */
 export const STORM_DARK = 0.58;
+/**
+ * The ambient light (1 − darkness) from which the world counts as lit: every zombie visible (the horde's alpha,
+ * shared/sim/ai/zombieBrain.ts `isLit`) and sent (the §4.3 interest, server/net/interest.ts `worldIsDark`). One number
+ * for all three, and for the lightning's reveal (`flashReveals`).
+ */
+export const LIT_AMBIENT = 0.4;
+/**
+ * A strike that lit the town keeps it "lit" on the wire this long after its flash is over (server/sim/waves.ts
+ * `revealing`): the client draws the horde up to INTERP_MAX_S behind the server, and a body that stops arriving fades
+ * out over DESPAWN_FADE_S -- without it the bodies the flash showed were withdrawn before the screen's own flash (drawn
+ * at the render time) had finished lighting them (LUZ-05, M1 of the weather's review).
+ */
+export const FLASH_REVEAL_HOLD_S = INTERP_MAX_S + DESPAWN_FADE_S;
+/**
+ * Two flashes on one screen never start closer than this (real seconds): the schedule keeps strikes ≥ 10 s apart, but a
+ * clock that snaps back (a resync, an admin) could replay one -- and a strike already shown is never shown again
+ * (client/systems/daynight.ts). Keeps the photosensitivity cap (≤ 2 a second) whatever the clock does.
+ */
+export const FLASH_MIN_GAP_S = 0.5;
 
+/** the slot of the strike the last `stormFlashAt` lit with (-1: none): `flashStrikeSlot` */
+let flashSlot = -1;
 /** the strike found by `strikeIn`: its hour, how close it fell (1 next door, 0.5 far) and the thunder's delay */
 let strikeHour = 0;
 let strikePower = 0;
@@ -291,6 +341,7 @@ function gentleShape(s: number, power: number): number {
  * horde lives by the real flash (the server's darkness).
  */
 export function stormFlashAt(kind: number, day: number, dayTime: number, gentle = false): number {
+	flashSlot = -1;
 	if (kind !== Weather.Storm) return 0;
 	const slot = math.floor(dayTime / STRIKE_SLOT_H);
 	let best = 0;
@@ -298,10 +349,33 @@ export function stormFlashAt(kind: number, day: number, dayTime: number, gentle 
 		if (!strikeIn(day, k)) continue;
 		const s = secondsAfterStrike(dayTime);
 		const v = gentle ? gentleShape(s, strikePower) : flashShape(s, strikePower);
-		if (v > best) best = v;
+		if (v > best) {
+			best = v;
+			flashSlot = k;
+		}
 	}
+	// the Reduce Motion swell stays smooth: a ramp, never steps (the night's map rebuilds only as far as it moved)
 	if (gentle) return best;
 	return math.floor(best * FLASH_LEVELS + 0.5) / FLASH_LEVELS;
+}
+
+/**
+ * The slot (of its day) of the strike the last `stormFlashAt` call found lighting the sky, -1 when it found none: what
+ * a screen remembers so it never shows the same strike twice (client/systems/daynight.ts).
+ */
+export function flashStrikeSlot(): number {
+	return flashSlot;
+}
+
+/**
+ * Does the lightning, at `flash`, light a town that is dark without it at `dayTime` -- the REVEAL: every zombie counts
+ * as lit (LIT_AMBIENT) while it lasts, for the horde's own alpha, for the §4.3 interest and for the screen. The plain
+ * darkness (nobody's Nocturnal skill), as the server lives it. By day, or a flash too faint, no reveal.
+ */
+export function flashReveals(kind: number, dayTime: number, flash: number): boolean {
+	if (!(flash > 0) || kind !== Weather.Storm) return false;
+	if (1 - weatherDark(kind, dayTime, false, 0) >= LIT_AMBIENT) return false;
+	return 1 - weatherDark(kind, dayTime, false, flash) >= LIT_AMBIENT;
 }
 
 /**

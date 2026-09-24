@@ -107,6 +107,11 @@ export const ADMIN_WORLD_LIMITS = {
 	UNSTICK_SEARCH: 800,
 	/** "Remove structure" takes the nearest construction whose footprint is this close to the click */
 	REMOVE_REACH: 96,
+	/**
+	 * The sky (the weather or the rain) changes at most this often, in the server's seconds (LUZ-05): a panel clicked
+	 * through the five weathers is a strobe of darkness and fog on every screen, and a flash replayed.
+	 */
+	WEATHER_COOLDOWN_S: 3,
 } as const;
 
 /**

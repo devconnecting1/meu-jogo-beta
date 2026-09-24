@@ -719,6 +719,30 @@ console.log("\n7) o clima (LUZ-05): a neblina e o relampago pelo mesmo LightMap,
 		`${hi.strips} / ${lo.strips}`,
 	);
 	{
+		// L3 da revisao: o mapa da neblina e montado ao carregar a cidade (warmFog), escondido; a primeira manha de
+		// neblina da partida nao cria nenhuma Instance (sem ele: o mapa inteiro no meio da partida)
+		const make = warm => {
+			const view = new WV.WeatherView();
+			const parent = gui.make("Frame");
+			const cam = new Camera();
+			cam.setView(1920, 1080);
+			cam.x = 1000;
+			cam.y = 1000;
+			if (warm) view.warmFog(parent, 1920, 1080, false);
+			const hidden = view.fogLayer() === undefined || view.fogLayer().layer.Visible === false;
+			const c0 = gui.stats.created;
+			view.drawFog(parent, cam, 1, 1000, 1000, false);
+			return { hidden, created: gui.stats.created - c0 };
+		};
+		const warmed = make(true);
+		const cold = make(false);
+		check(
+			"o mapa da neblina montado ao carregar a cidade (escondido): o primeiro quadro de neblina nao cria nada",
+			warmed.hidden && warmed.created === 0 && cold.created > 100,
+			`${warmed.created} Instances (sem o aquecimento: ${cold.created})`,
+		);
+	}
+	{
 		// a still survivor under a still camera: nothing at all
 		const w0 = gui.stats.writes;
 		keypoints = 0;
@@ -800,13 +824,19 @@ console.log("\n7) o clima (LUZ-05): a neblina e o relampago pelo mesmo LightMap,
 		const far = alphaField(lm, 1920, 1080)[10];
 		const w0 = gui.stats.writes;
 		for (let f = 0; f < 120; f++) lm.update(cam, base, lights);
-		// a strike (~every 30 s) costs less than a third of a second of walking at night (the 1080p High walk above)
+		// a strike (~every 30 s) costs less than a third of a second of walking at night (the 1080p High walk above); the
+		// Reduce Motion swell lifts as far (L4 of the review) but over 2 s, and costs less A FRAME than a third of walking
 		const budget = night.writes * 20;
 		check(
-			"um raio levanta a noite do proprio mapa (ate FLASH_LIFT) e custa menos que 1/3 s de noite andando; o de Reduzir Movimento tambem",
-			real.peak > 0.5 && real.grad <= budget && gentle.grad <= budget && real.alloc <= 2 * real.grad + 20,
+			"um raio levanta a noite do proprio mapa (ate FLASH_LIFT) e custa menos que 1/3 s de noite andando; o de Reduzir " +
+				"Movimento levanta o mesmo, devagar, a menos de 1/3 do custo por quadro de andar",
+			real.peak > 0.5 &&
+				real.grad <= budget &&
+				gentle.peak >= real.peak - 0.02 &&
+				gentle.grad / 120 <= night.writes / 3 &&
+				real.alloc <= 2 * real.grad + 20,
 			`real: ${real.grad} reescritas de gradiente, ${real.writes} escritas em 2 s; suave: ${gentle.grad} / ` +
-				`${gentle.writes}; teto ${budget.toFixed(0)}`,
+				`${gentle.writes} (${f1(gentle.grad / 120)}/q contra ${f1(night.writes)}/q andando); teto ${budget.toFixed(0)}`,
 		);
 		// what a strip shows stays within WRITE_EPS (2 steps) of the computed night, plus its own half step
 		check(

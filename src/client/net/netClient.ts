@@ -705,6 +705,10 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	applyClock(refs, tick);
 	reconcile(now);
 	predict(refs, dt);
+	// LUZ-05: the storm's flash is drawn at the render time -- where the horde is drawn -- and a strike that lights the
+	// town there shows the bodies it lights at once (client/systems/daynight.ts `renderLagS`, `reveal`)
+	refs.daynight.renderLagS = snapshots.delay();
+	snapshots.reveal = refs.daynight.reveal;
 	snapshots.advance(dt, tick, now, refs.world);
 	releaseDeaths();
 	rebuildViews();

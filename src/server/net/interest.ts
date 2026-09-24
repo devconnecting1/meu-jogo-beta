@@ -40,6 +40,7 @@ import {
 	SNAP_NEAR_EVERY_TICKS,
 	TRACK_FADE_IN_RATE,
 } from "shared/net/mpConfig";
+import { LIT_AMBIENT } from "shared/sim/weather";
 
 export const Ring = {
 	Out: 0,
@@ -156,7 +157,7 @@ export function inSnapshot(entry: InterestEntry, snapIndex: number): boolean {
  * `updateAlpha`) calls a world lit when `1 − darkAlpha ≥ 0.4`, and the interest has to agree with it to the
  * letter: a zombie the client would draw at full alpha but never receives is a zombie that pops in.
  */
-const DARK_LIT_AMBIENT = 0.4;
+const DARK_LIT_AMBIENT = LIT_AMBIENT;
 /**
  * A zombie counts as "inside some light" from this alpha up. `alpha` fades at 3/s (§4.3 "o fade de alpha que
  * já existe esconde o surgimento"), so anything above the fade's own noise floor means a light reached it —
@@ -212,6 +213,11 @@ interface ActorRing {
 	sentClock: number;
 	shownClock: number;
 	/**
+	 * The current track was carried while a strike lit the town (server/sim/waves.ts `revealing`): its client drew it at
+	 * full alpha at once (client/net/snapshotBuffer.ts `reveal`), so it fades out over the whole DESPAWN_FADE_S.
+	 */
+	revealed: boolean;
+	/**
 	 * The viewer's extra delay for it, in ticks, as its client eases it (`easeExtra`): `extraFrom` when the snapshot
 	 * of tick `extraAt` -- the first to carry the current flag -- arrived, moving towards `extraTo` at
 	 * RENDER_DELAY_RATE (see `viewExtra`).
@@ -243,9 +249,10 @@ function easedExtra(from: number, to: number, elapsed: number): number {
  * fade out, so a track shown once reaches (0 + timeout) × TRACK_FADE_IN_RATE of it, and goes that much sooner (the review
  * of the zombie-motion branch, S3 NIT 2: the longest fade was assumed for every track).
  */
-export function retiredAfterS(mid: boolean, shownFor: number): number {
+export function retiredAfterS(mid: boolean, shownFor: number, revealed = false): number {
 	const timeout = mid ? DESPAWN_MID_S : DESPAWN_NEAR_S;
-	const alpha = math.clamp((math.max(0, shownFor) + timeout) * TRACK_FADE_IN_RATE, 0, 1);
+	// a track the lightning showed (LUZ-05) was drawn at full alpha at once: its fade out is the whole of it
+	const alpha = revealed ? 1 : math.clamp((math.max(0, shownFor) + timeout) * TRACK_FADE_IN_RATE, 0, 1);
 	return timeout + alpha * DESPAWN_FADE_S;
 }
 
@@ -291,6 +298,7 @@ export class ActorInterest {
 				sentAt: 0,
 				sentClock: 0,
 				shownClock: 0,
+				revealed: false,
 				extraFrom: 0,
 				extraTo: 0,
 				extraAt: 0,
@@ -313,7 +321,15 @@ export class ActorInterest {
 	 * judged up to 3 ticks off the body on screen for most of a second (the second review of the zombie-motion branch,
 	 * S3; tools/test-replication.mjs a3: 14.7 u, and 9.8 u the other way round, where it is now 0.00 u).
 	 */
-	noteSent(viewer: number, netId: number, mid: boolean, tick: number, extra: number, now: number): void {
+	noteSent(
+		viewer: number,
+		netId: number,
+		mid: boolean,
+		tick: number,
+		extra: number,
+		now: number,
+		revealed = false,
+	): void {
 		const pair = this.rings.get(ActorInterest.key(viewer, netId));
 		if (pair === undefined) return;
 		const to = mid ? extra : 0;
@@ -323,6 +339,7 @@ export class ActorInterest {
 			pair.sentAt = tick;
 			pair.sentClock = now;
 			pair.shownClock = now;
+			pair.revealed = revealed;
 			pair.extraFrom = to;
 			pair.extraTo = to;
 			pair.extraAt = tick;
@@ -330,6 +347,7 @@ export class ActorInterest {
 		}
 		pair.sentAt = tick;
 		pair.sentClock = now;
+		if (revealed) pair.revealed = true;
 		if (pair.wireMid === mid) return;
 		pair.extraFrom = easedExtra(pair.extraFrom, pair.extraTo, tick - pair.extraAt);
 		pair.extraTo = to;
@@ -361,7 +379,7 @@ export class ActorInterest {
 
 	/** has the viewer's client retired this track by `now` (the server's clock, s)? Its own rule, in real time */
 	private static gone(pair: ActorRing, now: number): boolean {
-		return now - pair.sentClock > retiredAfterS(pair.wireMid, pair.sentClock - pair.shownClock);
+		return now - pair.sentClock > retiredAfterS(pair.wireMid, pair.sentClock - pair.shownClock, pair.revealed);
 	}
 
 	/** that entity is gone (§4.4 death or despawn): every viewer forgets it */

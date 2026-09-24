@@ -291,8 +291,14 @@ export class GameLoop {
 		this.actors.reset();
 		this.fxView.clear(this.refs);
 		this.machines.clear();
-		// a new town's streets are dry until its sky says otherwise (the first frame settles on the clock's weather)
+		// a new town's streets are dry until its sky says otherwise (the first frame settles on the clock's weather); its
+		// puddles are placed now and the fog's light map is built, not on the first frame it rains or fogs (LUZ-05)
 		this.weather.reset();
+		this.weather.prepare(this.world);
+		{
+			const ctx = getCtx();
+			this.weather.warmFog(ctx.darkLayer, ctx.viewW, ctx.viewH, Quality.lowDetail(save.settings.graphics));
+		}
 		this.netFx.clear();
 		this.wireOpts.localSlot = -1;
 		this.particles.clear();
@@ -891,11 +897,12 @@ export class GameLoop {
 		this.lightMap.setLowDetail(Quality.lowDetail(save.settings.graphics));
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
-		// the fog (LUZ-05) under the night: clear round the survivor, thickening with distance (weatherView)
+		// the fog (LUZ-05) under the night: clear round the survivor, thickening with distance (weatherView); the screen's
+		// fog, eased when the day's weather changes (the horde's is instant)
 		const dn = this.daynight;
 		const p = this.player;
 		const low = Quality.lowDetail(save.settings.graphics);
-		this.weather.drawFog(ctx.darkLayer, cam, dn.fog, p.dead ? cam.x : p.x, p.dead ? cam.y : p.y, low);
+		this.weather.drawFog(ctx.darkLayer, cam, dn.fogShown, p.dead ? cam.x : p.x, p.dead ? cam.y : p.y, low);
 		// the lightning lifts the night (LUZ-05): the real flash, or with Reduce Motion one slow swell -- the screen's
 		// choice; the horde lives by the server's real one
 		const flash = this.weatherFrame.reduceMotion ? dn.gentleFlash : dn.flash;

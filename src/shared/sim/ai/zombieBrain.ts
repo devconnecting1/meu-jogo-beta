@@ -22,6 +22,7 @@ import * as Sense from "shared/sim/ai/perception";
 import * as T from "shared/sim/ai/zombieTuning";
 import * as Light from "shared/sim/survivorLight";
 import { SpatialHash } from "shared/sim/ai/spatialHash";
+import { LIT_AMBIENT } from "shared/sim/weather";
 
 /*
  * Zombie AI and physics, for ONE world — the client's own (MP_PHASE < 2) or the server's authoritative one
@@ -521,7 +522,7 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
  * a zombie already alive (`updateAlpha`) never answer differently for the same spot.
  */
 function isLit(refs: Ctx.AiRefs, x: number, y: number): boolean {
-	if (1 - refs.clock.darkAlpha >= 0.4) return true;
+	if (1 - refs.clock.darkAlpha >= LIT_AMBIENT) return true;
 	for (let i = 0; i < lightCount; i++) {
 		const l = lights[i];
 		const dx = x - l.x;

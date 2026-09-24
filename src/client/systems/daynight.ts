@@ -20,11 +20,15 @@ import {
 	waveActiveInFlags,
 } from "shared/sim/clock";
 import {
+	FLASH_MIN_GAP_S,
+	flashReveals,
+	flashStrikeSlot,
 	fogDensityAt,
 	isWeather,
 	stormFlashAt,
 	thunderMaskAt,
 	Weather,
+	WEATHER_EASE_S,
 	weatherAnnouncement,
 	weatherDark,
 	weatherOfDay,
@@ -79,14 +83,37 @@ export class DayNight {
 	isRaining = false;
 	/** the day's weather (shared/sim/weather.ts `Weather`): the server's byte, or this client's own roll offline */
 	weather: number = Weather.Clear;
-	/** fog density now, 0..1: the screen's fog (client/view/weatherView.ts) and the local horde's eyes */
+	/** fog density now, 0..1: the local horde's eyes (instant, as the server's horde lives by it) */
 	fog = 0;
+	/**
+	 * The fog the SCREEN shows (client/view/weatherView.ts, the HUD's icon): `fog`, eased over WEATHER_EASE_S when the
+	 * day's weather changes (a midnight, the admin) so a fog never pops in or out -- the horde's eyes do not wait.
+	 */
+	fogShown = 0;
 	/** what a noise carries now besides the rain (< 1 while a thunderclap rolls) */
 	thunderMask = 1;
-	/** the lightning now, 0..1 (inside `darkAlpha`), and its Reduce Motion shape (for the screen only) */
+	/**
+	 * The lightning ON SCREEN, 0..1 (inside `darkAlpha`), and its Reduce Motion shape: the strike as it is at the RENDER
+	 * time (`renderLagS`), where the horde it lights is drawn; a strike this screen already showed is never shown again,
+	 * and no two start closer than FLASH_MIN_GAP_S (a clock that snaps back replays nothing).
+	 */
 	flash = 0;
 	gentleFlash = 0;
-	/** the darkness without the lightning: the screen applies the flash of its own choosing (Reduce Motion) */
+	/**
+	 * The lightning lights the town at the render time (shared/sim/weather.ts `flashReveals`): the horde drawn now is at
+	 * full alpha at once (client/net/snapshotBuffer.ts `reveal`, set from this by client/net/netClient.ts).
+	 */
+	reveal = false;
+	/**
+	 * Seconds the horde is drawn behind this clock (client/net/snapshotBuffer.ts `delay`, handed in every frame by
+	 * client/net/netClient.ts; 0 offline): the flash is drawn at `dayTime − renderLagS × clockSpeed`, the moment the
+	 * zombies on screen are at, so the screen and the bodies it lights agree (LUZ-05).
+	 */
+	renderLagS = 0;
+	/**
+	 * The darkness without the lightning, for the SCREEN (it applies the flash of its own choosing, Reduce Motion):
+	 * eased over WEATHER_EASE_S when the day's weather changes, like `fogShown`.
+	 */
 	darkBase = 0;
 	ambientTarget = 5;
 	ambientSpecialMax = 0;
@@ -112,6 +139,16 @@ export class DayNight {
 	/** the visible clock was just jumped: the hours it flew over announce nothing (§3.6 skipped hours) */
 	private snapped = false;
 	private elapsed = 0;
+	/** the weather being eased away from (-1: none) and how far the screen has come, 0..1 (`fogShown`, `darkBase`) */
+	private easeFrom = -1;
+	private ease = 1;
+	/** the strikes this screen showed on `flashDay` (slots), the one on screen now (-1) and whether it is shown */
+	private flashDay = -1;
+	private readonly shownStrikes = new Set<number>();
+	private strikeOn = -1;
+	private strikeShown = false;
+	/** `elapsed` when the last strike shown started */
+	private lastStrikeAt = -math.huge;
 	private lastAnnounce = "";
 	private lastAnnounceAt = -ANNOUNCE_DEDUPE_S - 1;
 
@@ -134,8 +171,17 @@ export class DayNight {
 	 */
 	forceWeather(kind: number): void {
 		if (!isWeather(kind)) return;
+		if (kind !== this.weather) this.easeWeatherFrom(this.weather);
 		this.setWeather(kind);
 		this.updateDark();
+	}
+
+	/**
+	 * The weather the town's day ROLLED (offline, and what the admin's weather is measured against: a weather that eases
+	 * the night against it assists the run, shared/sim/weather.ts `weatherAssists`).
+	 */
+	dayRoll(): number {
+		return weatherOfDay(this.seed, this.day);
 	}
 
 	/** the day's weather, and the rain that follows from it */
@@ -145,11 +191,22 @@ export class DayNight {
 	}
 
 	/**
+	 * A change the screen lives through: the darkness and the fog it shows go from `from`'s to the new weather's over
+	 * WEATHER_EASE_S instead of jumping (the first delta of a session and a clock taken over are not lived: they snap).
+	 */
+	private easeWeatherFrom(from: number): void {
+		this.easeFrom = from;
+		this.ease = 0;
+	}
+
+	/**
 	 * A new weather for the day (a midnight, the admin): told in the feed with what it does (LUZ-05). The first delta of
 	 * a session and a run taking the world over are not news -- only a change lived on this screen is.
 	 */
 	private changeWeather(kind: number, news: boolean): void {
 		if (kind === this.weather) return;
+		if (news) this.easeWeatherFrom(this.weather);
+		else this.ease = 1;
 		this.setWeather(kind);
 		if (!news) return;
 		const text = weatherAnnouncement(kind);
@@ -306,19 +363,70 @@ export class DayNight {
 		// the horde sees) is the plain one, with nobody's skill in it. The weather is the server's (LUZ-05): the
 		// fog, the thunder and the lightning are the same pure functions of (weather, day, hour) it evaluates.
 		const kind = this.weather;
+		const t = this.dayTime;
 		const nocturnal = this.save.skillLevels[16] > 0;
-		this.fog = fogDensityAt(kind, this.dayTime);
-		this.thunderMask = thunderMaskAt(kind, this.day, this.dayTime);
-		this.flash = stormFlashAt(kind, this.day, this.dayTime);
-		this.gentleFlash = kind === Weather.Storm ? stormFlashAt(kind, this.day, this.dayTime, true) : 0;
-		this.darkBase = weatherDark(kind, this.dayTime, nocturnal, 0);
-		this.darkAlpha = this.flash > 0 ? weatherDark(kind, this.dayTime, nocturnal, this.flash) : this.darkBase;
+		this.fog = fogDensityAt(kind, t);
+		this.thunderMask = thunderMaskAt(kind, this.day, t);
+		// the lightning where the horde is DRAWN: `renderLagS` behind the clock (never across midnight: no strike is)
+		const at = this.renderLagS > 0 ? math.max(0, t - this.renderLagS * clockSpeed(t)) : t;
+		let flash = stormFlashAt(kind, this.day, at);
+		let slot = flashStrikeSlot();
+		let gentle = 0;
+		if (kind === Weather.Storm) {
+			gentle = stormFlashAt(kind, this.day, at, true);
+			if (slot < 0) slot = flashStrikeSlot();
+		}
+		if ((flash > 0 || gentle > 0) && !this.showStrike(slot)) {
+			flash = 0;
+			gentle = 0;
+		} else if (flash <= 0 && gentle <= 0) {
+			this.strikeOn = -1;
+		}
+		this.flash = flash;
+		this.gentleFlash = gentle;
+		this.reveal = flashReveals(kind, at, flash);
+		const base = weatherDark(kind, t, nocturnal, 0);
+		this.darkAlpha = flash > 0 ? weatherDark(kind, t, nocturnal, flash) : base;
+		// the screen's darkness and fog ease from the weather it had to the new one (the horde's above do not)
+		if (this.ease < 1 && this.easeFrom >= 0) {
+			const k = this.ease * this.ease * (3 - 2 * this.ease);
+			const fromDark = weatherDark(this.easeFrom, t, nocturnal, 0);
+			const fromFog = fogDensityAt(this.easeFrom, t);
+			this.darkBase = fromDark + (base - fromDark) * k;
+			this.fogShown = fromFog + (this.fog - fromFog) * k;
+		} else {
+			this.darkBase = base;
+			this.fogShown = this.fog;
+		}
+	}
+
+	/**
+	 * Is strike `slot` of today to be shown? Asked on every frame it lights the sky; the answer is kept while it lasts. A
+	 * strike this screen already showed (the clock snapped back into it: a resync, an admin) is never shown twice, and a
+	 * strike that starts less than FLASH_MIN_GAP_S after the last one shown is not shown at all: the photosensitivity cap
+	 * (≤ 2 flashes a second) holds whatever the clock does.
+	 */
+	private showStrike(slot: number): boolean {
+		if (this.day !== this.flashDay) {
+			this.flashDay = this.day;
+			this.shownStrikes.clear();
+			this.strikeOn = -1;
+		}
+		if (slot === this.strikeOn) return this.strikeShown;
+		this.strikeOn = slot;
+		this.strikeShown = !this.shownStrikes.has(slot) && this.elapsed - this.lastStrikeAt >= FLASH_MIN_GAP_S;
+		if (this.strikeShown) {
+			this.shownStrikes.add(slot);
+			this.lastStrikeAt = this.elapsed;
+		}
+		return this.strikeShown;
 	}
 
 	// ---------------------------------------------------------------- the frame
 
 	update(dt: number): void {
 		this.elapsed += math.max(0, dt);
+		if (this.ease < 1) this.ease = math.min(1, this.ease + math.max(0, dt) / WEATHER_EASE_S);
 		if (this.driven) {
 			this.followServer(dt);
 			return;

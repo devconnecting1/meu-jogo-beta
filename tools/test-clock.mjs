@@ -1000,15 +1000,17 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 			let prev = 0;
 			let prevG = 0;
 			let rising = false;
-			let gRising = false;
+			// the swell's way (a flat frame of the quantised ramp is neither): a rise after a fall is a second swell
+			let gFalling = false;
 			const edges = [];
 			while (t < 24) {
 				const v = W.stormFlashAt(K.Storm, day, t);
 				const g = W.stormFlashAt(K.Storm, day, t, true);
 				if (v - prev >= 0.1 && !rising) edges.push(t);
 				rising = v > prev;
-				if (g > prevG && !gRising && prevG > 0) gentleBumps += 1;
-				gRising = g > prevG;
+				if (g > prevG && gFalling && prevG > 0) gentleBumps += 1;
+				if (g > prevG) gFalling = false;
+				else if (g < prevG) gFalling = true;
 				gentleSlope = Math.max(gentleSlope, Math.abs(g - prevG));
 				gentlePeak = Math.max(gentlePeak, g);
 				lift = Math.max(lift, v);
@@ -1049,9 +1051,13 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 			`${perSecondMax} a second at most; peak ${lift} × ${W.FLASH_LIFT}`,
 		);
 		check(
-			"Reduce Motion: one slow swell per strike, never a flicker, at most FLASH_GENTLE_PEAK, ≤ 0.04 a frame",
-			gentleBumps === 0 && gentlePeak <= W.FLASH_GENTLE_PEAK + 1e-9 && gentleSlope <= 0.04,
-			`peak ${gentlePeak.toFixed(3)}, steepest ${gentleSlope.toFixed(4)} a frame`,
+			"Reduce Motion: one slow swell per strike, never a flicker, ≤ 0.04 a frame -- and it lifts the dark as far as the " +
+				"real flash (the reveal is everybody's, L4 of the review)",
+			gentleBumps === 0 &&
+				gentlePeak <= W.FLASH_GENTLE_PEAK + 1e-9 &&
+				gentlePeak >= lift - 0.02 &&
+				gentleSlope <= 0.04,
+			`peak ${gentlePeak.toFixed(3)} (the real flash ${lift}), steepest ${gentleSlope.toFixed(4)} a frame`,
 		);
 		check(
 			"the thunder: 100 % before the clap, THUNDER_HEARING for THUNDER_MASK_S after it, 100 % again",
@@ -1126,6 +1132,203 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 		check(
 			"offline, the client rolls the very hash the server rolls, from the town's seed",
 			offline.weather === W.weatherOfDay(5150, offline.day),
+		);
+	}
+
+	// ---- g) the review of the weather (M1, M2, L1, L2, L4): the reveal, the admin's sky, the flicker guard, the ease
+	{
+		const at = (worldDay, dayTime, weather) => ({
+			worldDay,
+			dayTime,
+			rain: W.weatherRains(weather),
+			weather,
+			waveFlags: 0,
+		});
+		// a storm day with two night strikes in a row (the dark, where a strike reveals)
+		let day = W.STORM_FROM_DAY;
+		let A;
+		let B;
+		for (; day < W.STORM_FROM_DAY + 60; day++) {
+			const night = W.strikesOfDay(day).filter(s => s.hour > 21 || s.hour < 4);
+			const i = night.findIndex((s, k) => k + 2 < night.length && s.power > 0.8);
+			if (i >= 0) {
+				A = night[i];
+				B = night[i + 1];
+				break;
+			}
+		}
+		const speed = CLOCK.clockSpeed(A.hour);
+		const flashAt = h => W.stormFlashAt(K.Storm, day, h);
+
+		// M1: the flash on screen is the one at the RENDER time, where the horde is drawn
+		const lag = 0.15;
+		const client = new DayNight(defaultSave());
+		client.applyClock(at(day, A.hour - 0.5 * speed, K.Storm), 0);
+		client.renderLagS = lag;
+		let drawnOnset;
+		let clockOnset;
+		let mismatch = 0;
+		let reveals = 0;
+		let revealWrong = 0;
+		for (let i = 0; i < 180; i++) {
+			client.update(TICK_DT);
+			const t = client.dayTime;
+			const render = t - lag * CLOCK.clockSpeed(t);
+			if (clockOnset === undefined && flashAt(t) > 0) clockOnset = i;
+			if (drawnOnset === undefined && client.flash > 0) drawnOnset = i;
+			if (Math.abs(client.flash - flashAt(render)) > 1e-12) mismatch += 1;
+			const want = W.flashReveals(K.Storm, render, flashAt(render));
+			if (client.reveal) reveals += 1;
+			if (client.reveal !== want) revealWrong += 1;
+		}
+		check(
+			"M1: the screen's flash is the strike at the render time (the clock minus the horde's delay): the bodies it " +
+				"lights are drawn at that very moment",
+			mismatch === 0 && Math.abs(drawnOnset - clockOnset - Math.round(lag / TICK_DT)) <= 1,
+			`${mismatch} frames off; onset ${((drawnOnset - clockOnset) * TICK_DT).toFixed(3)} s after the clock's`,
+		);
+		check(
+			"...and the reveal (every body drawn at full alpha) is exactly the frames that flash lights the dark town",
+			reveals > 0 && revealWrong === 0,
+			`${reveals} frames of reveal, ${revealWrong} wrong`,
+		);
+
+		// L1: a clock that snaps back into a strike already shown shows nothing; a strike too soon after the last is not shown
+		client.applyClock(at(day, A.hour - 0.2 * speed, K.Storm), 0);
+		const snapped = Math.abs(client.dayTime - (A.hour - 0.2 * speed)) < 1e-9;
+		let replay = 0;
+		for (let i = 0; i < 90; i++) {
+			client.update(TICK_DT);
+			if (client.flash > 0 || client.gentleFlash > 0) replay += 1;
+		}
+		const replayed = new DayNight(defaultSave());
+		replayed.applyClock(at(day, A.hour - 0.1 * speed, K.Storm), 0);
+		let first = 0;
+		for (let i = 0; i < 20; i++) {
+			replayed.update(TICK_DT);
+			if (replayed.flash > 0) first += 1;
+		}
+		// 0.25 s after A started on this screen, the clock jumps to just before B: B would start 0.1 s later -- too soon
+		replayed.applyClock(at(day, B.hour - 0.1 * CLOCK.clockSpeed(B.hour), K.Storm), 0);
+		let tooSoon = 0;
+		for (let i = 0; i < 60; i++) {
+			replayed.update(TICK_DT);
+			if (replayed.flash > 0 || replayed.gentleFlash > 0) tooSoon += 1;
+		}
+		check(
+			"L1: a clock that snaps back into a strike this screen showed replays nothing (a strike is shown once, day and slot)",
+			snapped && replay === 0,
+			`${replay} frames of flash on the replay`,
+		);
+		check(
+			"...and a strike that would start < FLASH_MIN_GAP_S after the last one shown is not shown: ≤ 2 a second whatever " +
+				"the clock does",
+			first > 0 && tooSoon === 0,
+			`first strike ${first} frames, the next one ${tooSoon}`,
+		);
+
+		// L1: a new weather eases in on the screen (darkness, fog) over WEATHER_EASE_S; the horde's numbers are instant
+		const ease = new DayNight(defaultSave());
+		ease.applyClock(at(12, 12, K.Clear), 0);
+		ease.update(TICK_DT);
+		ease.applyClock(at(12, ease.dayTime, K.Fog), 0);
+		const fog0 = ease.fogShown;
+		const instant = ease.fog;
+		for (let i = 0; i < Math.round(W.WEATHER_EASE_S / 2 / TICK_DT); i++) ease.update(TICK_DT);
+		const half = ease.fogShown / ease.fog;
+		for (let i = 0; i < Math.round((W.WEATHER_EASE_S / 2 + 0.1) / TICK_DT); i++) ease.update(TICK_DT);
+		const done = ease.fogShown === ease.fog;
+		ease.applyClock(at(12, ease.dayTime, K.Rain), 0);
+		const dark0 = ease.darkBase;
+		const darkNow = ease.darkAlpha;
+		check(
+			`L1: fog over a clear noon eases in on the screen over ${W.WEATHER_EASE_S} s (the horde's fog is at once)`,
+			fog0 < 0.02 && instant > 0.69 && half > 0.3 && half < 0.7 && done,
+			`shown ${fog0.toFixed(3)} -> ${(half * 100).toFixed(0)} % at half time -> ${done ? "all" : "not all"}; horde ${instant.toFixed(2)}`,
+		);
+		check(
+			"...and the rain's darkness too: the screen starts from the old sky, the horde's darkness is the new one at once",
+			dark0 < 0.05 && Math.abs(darkNow - 0.5) < 1e-9,
+			`screen ${dark0.toFixed(3)}, horde ${darkNow}`,
+		);
+		const first2 = new DayNight(defaultSave());
+		first2.applyClock(at(12, 12, K.Fog), 0);
+		check("...but a session's first delta is not lived: it shows the fog at once", first2.fogShown === first2.fog);
+
+		// M1 (server): a night strike lights the town on the wire from its flash until FLASH_REVEAL_HOLD_S after it
+		const srv = new WorldClock({ day, dayTime: A.hour - 0.5 * speed, rollWeather: () => K.Storm });
+		let litFrom;
+		let flashEnd;
+		let revealEnd;
+		for (let i = 0; i < 150; i++) {
+			srv.step(TICK_DT);
+			const tick = (i + 1) * TICK_DT;
+			if (litFrom === undefined && srv.revealing()) litFrom = tick;
+			if (litFrom !== undefined && flashEnd === undefined && srv.flash === 0) flashEnd = tick;
+			if (litFrom !== undefined && revealEnd === undefined && !srv.revealing()) revealEnd = tick;
+		}
+		const strikeT = 0.5;
+		check(
+			"M1: on the server a night strike reveals the town at its flash and keeps it revealed FLASH_REVEAL_HOLD_S after " +
+				"the flash (the screens draw it up to INTERP_MAX_S later, and fade a body DESPAWN_FADE_S)",
+			litFrom !== undefined &&
+				Math.abs(litFrom - strikeT) <= 2 * TICK_DT &&
+				Math.abs(revealEnd - flashEnd - W.FLASH_REVEAL_HOLD_S) <= 2 * TICK_DT,
+			`from ${(litFrom - strikeT).toFixed(3)} s after the strike, the flash over at ${(flashEnd - strikeT).toFixed(2)} s, ` +
+				`revealed until ${(revealEnd - strikeT).toFixed(2)} s`,
+		);
+		const noon = W.strikesOfDay(day).find(s => s.hour > 10 && s.hour < 15);
+		const daySrv = new WorldClock({
+			day,
+			dayTime: noon.hour - 0.2 * CLOCK.clockSpeed(noon.hour),
+			rollWeather: () => K.Storm,
+		});
+		let dayReveal = 0;
+		let dayFlash = 0;
+		for (let i = 0; i < 90; i++) {
+			daySrv.step(TICK_DT);
+			if (daySrv.revealing()) dayReveal += 1;
+			if (daySrv.flash > 0) dayFlash += 1;
+		}
+		check(
+			"...by day there is nothing to reveal (a storm's day is lit for the horde already)",
+			dayFlash > 0 && dayReveal === 0,
+		);
+
+		// L2: a clock set into another day brings that day's own weather, and pays nobody
+		let d = 9;
+		while (d < 400 && !(W.weatherRains(W.weatherOfDay(4242, d + 1)) && !W.weatherRains(W.weatherOfDay(4242, d))))
+			d++;
+		const moved = new WorldClock({ day: d, dayTime: 23, seed: 4242 });
+		let paid = 0;
+		moved.onNewDay = () => (paid += 1);
+		const before = moved.weather;
+		moved.setClock(6.99, d + 1);
+		moved.setWeather(K.Fog);
+		moved.setClock(12);
+		check(
+			"L2: a clock set across midnight rolls the new day's weather (and pays nobody); a set inside the day keeps the admin's",
+			before === W.weatherOfDay(4242, d) &&
+				moved.dayRoll === W.weatherOfDay(4242, d + 1) &&
+				W.weatherRains(moved.dayRoll) &&
+				moved.weather === K.Fog &&
+				paid === 0,
+			`day ${d} ${W.weatherName(before)} -> day ${d + 1} ${W.weatherName(moved.dayRoll)}, then the admin's ${W.weatherName(moved.weather)}`,
+		);
+
+		// M2: the admin's weather assists every run when it eases the night against the day's roll
+		const assists = (r, c) => W.weatherAssists(r, c);
+		check(
+			"M2: fog, dawn fog, rain or a storm over a clear roll assist; a clear sky over a rainy roll does not; a storm over rain does",
+			assists(K.Clear, K.Rain) &&
+				assists(K.Clear, K.Storm) &&
+				assists(K.Clear, K.Fog) &&
+				assists(K.Clear, K.DawnFog) &&
+				!assists(K.Rain, K.Clear) &&
+				!assists(K.Rain, K.Fog) &&
+				assists(K.Rain, K.Storm) &&
+				!assists(K.Storm, K.Rain) &&
+				!assists(K.Fog, K.Fog),
 		);
 	}
 }

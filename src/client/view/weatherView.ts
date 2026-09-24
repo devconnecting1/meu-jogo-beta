@@ -115,6 +115,18 @@ const STREAK_ALPHA = 0.55;
 const STREAK_ALPHA_STORM = 0.62;
 const STREAK_W = 2;
 const REF_AREA = 1920 * 1080;
+/**
+ * Each streak's place in the view (0..1 across, 0..1 down) and its speed factor, hashed once for the most streaks a
+ * frame draws (a storm's): a frame reads three numbers per streak instead of hashing them again (L3 of the review).
+ */
+const STREAK_U = new Array<number>();
+const STREAK_V = new Array<number>();
+const STREAK_K = new Array<number>();
+for (let i = 0; i < STREAKS_STORM; i++) {
+	STREAK_U.push(weatherHash(i + 1, 1, 29));
+	STREAK_V.push(weatherHash(i + 1, 2, 29));
+	STREAK_K.push(0.8 + 0.4 * weatherHash(i + 1, 3, 29));
+}
 
 /** the flat puddle (no texture id): how dark the water and how bright the sheen at full wet */
 const PUDDLE_ALPHA = 0.5;
@@ -271,16 +283,36 @@ export class WeatherView {
 	}
 
 	/**
+	 * The town's puddles placed now, at the town's load (client/gameLoop.ts `init`), not on the first frame it rains --
+	 * a few hundred of them, hashed road by road, were a hitch in the middle of a run (L3 of the review).
+	 */
+	prepare(world: WorldData): void {
+		if (this.puddlesFor === world && this.puddles !== undefined) return;
+		this.puddles = puddlesOf(world);
+		this.puddlesFor = world;
+	}
+
+	/**
+	 * The fog's light map built now (hidden, its strips laid out for a `viewW` x `viewH` view), beside the night's: the
+	 * first foggy morning of a run creates no Instance (L3 of the review).
+	 */
+	warmFog(parent: GuiObject, viewW: number, viewH: number, low: boolean): void {
+		const map = this.fogMapIn(parent);
+		map.setLowDetail(low);
+		map.prepare(viewW, viewH);
+	}
+
+	/**
 	 * The puddles of the streets in view (Z.wet), as wet as the streets are: each its texture (or the flat drawing), and
 	 * while it rains its drops -- still, moving on a beat, not at all with Reduce Motion, none on the Low tier.
 	 */
 	drawPuddles(r: Renderer, cam: Camera, v: ViewRect, world: WorldData, f: WeatherFrame): void {
 		const wet = this.wet;
 		if (wet <= 0.02) return;
-		if (this.puddlesFor !== world || this.puddles === undefined) {
-			this.puddles = puddlesOf(world);
-			this.puddlesFor = world;
-		}
+		// placed at the town's load (`prepare`); a town that skipped it is placed here, once
+		this.prepare(world);
+		const puddles = this.puddles;
+		if (puddles === undefined) return;
 		// quantised: a street drying over minutes rewrites its puddles a few dozen times, not every frame
 		const k = math.floor(wet * 16 + 0.5) / 16;
 		const drops = this.rain > 0.2 && !f.low;
@@ -300,7 +332,7 @@ export class WeatherView {
 			drop.h = WORLD_TEXEL;
 		}
 		drop.alpha = dropAlpha;
-		for (const p of this.puddles) {
+		for (const p of puddles) {
 			const hw = p.w / 2;
 			const hh = p.h / 2;
 			if (p.x + hw < v.minX || p.x - hw > v.maxX || p.y + hh < v.minY || p.y - hh > v.maxY) continue;
@@ -391,11 +423,13 @@ export class WeatherView {
 		o.w = len;
 		o.h = STREAK_W;
 		o.rotation = math.atan2(dy, dx);
+		// never more than the hashed streaks (a storm's at full view)
+		if (n > STREAKS_STORM) n = STREAKS_STORM;
 		for (let i = 0; i < n; i++) {
-			const speed = fall * (0.8 + 0.4 * weatherHash(i + 1, 3, 29));
+			const speed = fall * STREAK_K[i];
 			// anchored in the world: a streak keeps its place as the camera pans, and wraps round the view's edges
-			const ax = weatherHash(i + 1, 1, 29) * W + dx * speed * f.clock;
-			const ay = weatherHash(i + 1, 2, 29) * H + dy * speed * f.clock;
+			const ax = STREAK_U[i] * W + dx * speed * f.clock;
+			const ay = STREAK_V[i] * H + dy * speed * f.clock;
 			const x = v.minX + ((((ax - v.minX) % W) + W) % W);
 			const y = v.minY + ((((ay - v.minY) % H) + H) % H);
 			r.drawRect(cam, x + dx * len * 0.5, y + dy * len * 0.5, o);
@@ -412,6 +446,16 @@ export class WeatherView {
 			this.fogMap?.hide();
 			return;
 		}
+		const map = this.fogMapIn(parent);
+		map.setLowDetail(low);
+		const clear = this.fogLights[0];
+		clear.x = x;
+		clear.y = y;
+		map.update(cam, opacity, this.fogLights);
+	}
+
+	/** the fog's light map, built the first time it is asked for (`warmFog`, or the first fog) */
+	private fogMapIn(parent: GuiObject): LightMap {
 		let map = this.fogMap;
 		if (map === undefined) {
 			map = new LightMap(parent, COLORS.overlayFog);
@@ -420,11 +464,7 @@ export class WeatherView {
 			map.layer.ZIndex = 0;
 			this.fogMap = map;
 		}
-		map.setLowDetail(low);
-		const clear = this.fogLights[0];
-		clear.x = x;
-		clear.y = y;
-		map.update(cam, opacity, this.fogLights);
+		return map;
 	}
 
 	/** the fog map's cost card (the admin panel, tools/test-light.mjs), undefined before any fog */

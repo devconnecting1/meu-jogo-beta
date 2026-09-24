@@ -10,7 +10,7 @@ import type { GameContext } from "shared/game/context";
 import type { ItemGroup } from "shared/admin/ops";
 import * as WO from "shared/admin/worldOps";
 import type { SpawnKind, StructureKind } from "shared/admin/worldOps";
-import { Weather, isWeather, weatherName } from "shared/sim/weather";
+import { Weather, isWeather, weatherAssists, weatherName } from "shared/sim/weather";
 import { PLACEABLES } from "../systems/build";
 import { debugFlowField } from "../systems/zombieAI";
 import type { GameRefs } from "../systems/types";
@@ -508,9 +508,11 @@ export class LocalAdminWorld implements AdminWorld {
 
 	setRain(on: boolean): ActionResult {
 		const dn = this.refs().daynight;
-		dn.forceWeather(on ? Weather.Rain : Weather.Clear);
+		const kind = on ? Weather.Rain : Weather.Clear;
+		dn.forceWeather(kind);
 		dn.update(0);
-		this.onAssist("weather");
+		// only a sky that eases the night against the day's own roll helps the run (shared/sim/weather.ts, §9.3)
+		if (weatherAssists(dn.dayRoll(), kind)) this.onAssist("weather");
 		return { ok: true, message: on ? "Rain on" : "Rain off" };
 	}
 
@@ -519,7 +521,7 @@ export class LocalAdminWorld implements AdminWorld {
 		const dn = this.refs().daynight;
 		dn.forceWeather(kind);
 		dn.update(0);
-		this.onAssist("weather");
+		if (weatherAssists(dn.dayRoll(), kind)) this.onAssist("weather");
 		return { ok: true, message: `Weather: ${weatherName(kind)}` };
 	}
 

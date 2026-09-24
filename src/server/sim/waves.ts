@@ -49,7 +49,9 @@ import {
 	waveFlagsAt,
 } from "shared/sim/clock";
 import {
+	FLASH_REVEAL_HOLD_S,
 	Weather,
+	flashReveals,
 	fogDensityAt,
 	isWeather,
 	stormFlashAt,
@@ -131,6 +133,11 @@ export class WorldClock implements AiClock {
 	thunderMask = 1;
 	/** the lightning now (0..1), already inside `darkAlpha` */
 	flash = 0;
+	/**
+	 * The weather the day ROLLED (the town's own, `rollDay`), whatever an admin set since: the admin's weather assists
+	 * every run when it eases the night against this one (shared/sim/weather.ts `weatherAssists`, §9.3).
+	 */
+	dayRoll: number = Weather.Clear;
 	/** the seed the day's weather is rolled from (the town's, MP-22: a new town, new skies) */
 	weatherSeed: number = DESIGN.TOWN_SEED;
 	ambientTarget = 5;
@@ -176,6 +183,11 @@ export class WorldClock implements AiClock {
 	private sentFlags = -1;
 	/** an admin moved something the change detection cannot see (the hour inside one segment) */
 	private forceSend = false;
+	/**
+	 * Seconds the wire still treats the town as lit by the last strike (`revealing`): FLASH_REVEAL_HOLD_S after its flash
+	 * is over, set again every tick the flash lasts once it lit the town.
+	 */
+	private revealLeft = 0;
 	private readonly pending = new Array<WorldAnnouncement>();
 
 	constructor(options: WorldClockOptions = {}) {
@@ -206,7 +218,8 @@ export class WorldClock implements AiClock {
 		this.fillDone = false;
 		this.pending.clear();
 		this.forceSend = true;
-		this.setDayWeather(this.rollDay(this.day));
+		this.revealLeft = 0;
+		this.startWeather(this.rollDay(this.day));
 		this.refresh();
 	}
 
@@ -216,7 +229,7 @@ export class WorldClock implements AiClock {
 	 */
 	reseedWeather(seed: number): void {
 		this.weatherSeed = seed;
-		this.setDayWeather(this.rollDay(this.day));
+		this.startWeather(this.rollDay(this.day));
 		this.forceSend = true;
 		this.updateDark();
 	}
@@ -249,6 +262,22 @@ export class WorldClock implements AiClock {
 		this.detectAnnounce(prev, this.dayTime);
 		this.updateWaves();
 		this.updateDark();
+		// the lightning's reveal on the wire: from the moment a strike lights the town, through the rest of its flash,
+		// and FLASH_REVEAL_HOLD_S after (the client draws the horde that far behind, and fades a body out that long)
+		if (flashReveals(this.weather, this.dayTime, this.flash) || (this.flash > 0 && this.revealLeft > 0)) {
+			this.revealLeft = FLASH_REVEAL_HOLD_S;
+		} else if (this.revealLeft > 0) {
+			this.revealLeft = math.max(0, this.revealLeft - dt);
+		}
+	}
+
+	/**
+	 * A strike lights the town for the §4.3 interest right now (LUZ-05): every body in a viewer's rings goes out as by
+	 * day, so the ones the flash shows reach the screens -- and keep reaching them until the screens, drawing the horde
+	 * behind the server, have shown the flash too (server/net/replication.ts `wireDark`).
+	 */
+	revealing(): boolean {
+		return this.revealLeft > 0;
 	}
 
 	/** daytime without rain: footsteps and shots are worth simulating (sys_sound_view) */
@@ -316,14 +345,23 @@ export class WorldClock implements AiClock {
 	 * announcing them. The next Clock delta goes out immediately, and a client whose error is now larger than
 	 * §4.6's threshold jumps instead of easing — which is what an admin asking for night expects to see.
 	 *
-	 * It moves the clock and NOTHING else, the way client/admin/world.ts always did it: an admin skipping
+	 * It moves the clock and NOTHING else (into another day it brings that day's own weather, as the local clock's
+	 * midnight does), the way client/admin/world.ts always did it: an admin skipping
 	 * into the dark calls `fillNight()` first, so the night it lands in has a horde. Doing it here instead
 	 * would re-promise a wave the survivors had already beaten whenever the clock was nudged after dusk.
 	 * (It does tell `onClockSet`, so the night being lived stops counting toward a Survivor. Its caller, the admin's
 	 * clock tools, also marks the runs in the world assisted: see `onClockSet`.)
 	 */
 	setClock(dayTime: number, day?: number): void {
-		if (day !== undefined) this.day = math.max(1, math.floor(day));
+		if (day !== undefined) {
+			const target = math.max(1, math.floor(day));
+			// a skip into another day brings that day's own sky (its roll): the midnight is not crossed, so nobody is
+			// paid for it and nothing is announced -- but the town does not keep yesterday's rain into a new day
+			if (target !== this.day) {
+				this.day = target;
+				this.startWeather(this.rollDay(target));
+			}
+		}
 		this.dayTime = math.clamp(dayTime, 0, HOURS_PER_DAY - 1e-6);
 		this.forceSend = true;
 		this.refresh();
@@ -378,7 +416,7 @@ export class WorldClock implements AiClock {
 
 	/** midnight: a new world day, new weather and a new quota (§3.6 pays the survivors through onNewDay) */
 	private startDay(): void {
-		this.setDayWeather(this.rollDay(this.day));
+		this.startWeather(this.rollDay(this.day));
 		this.refreshPopulation();
 		if (this.onNewDay !== undefined) this.onNewDay(this.day);
 	}
@@ -420,6 +458,12 @@ export class WorldClock implements AiClock {
 	private setDayWeather(kind: number): void {
 		this.weather = kind;
 		this.isRaining = weatherRains(kind);
+	}
+
+	/** a day's own weather, as it rolled: today's sky, and what the admin's is measured against (`dayRoll`) */
+	private startWeather(kind: number): void {
+		this.dayRoll = kind;
+		this.setDayWeather(kind);
 	}
 
 	/**
