@@ -16,7 +16,6 @@ import type { GameContext } from "shared/game/context";
 import {
 	buildingAt,
 	createWorld,
-	generateTown,
 	isOnRoad,
 	querySolids,
 	randomOpenPoint,
@@ -25,6 +24,7 @@ import {
 	WorldData,
 	Solid,
 } from "shared/game/world";
+import { takeTown } from "./boot/townCache";
 import { resetEntityIds, BossState, ZombieState } from "shared/game/entities";
 import { resetBullets, Bullet } from "shared/game/bullets";
 import { DayNight } from "./systems/daynight";
@@ -449,7 +449,9 @@ export class GameLoop {
 		// the server's town, not always the same one: when every survivor dies the world ends and the next is built
 		// from a new seed (MP-22). Offline this is DESIGN.TOWN_SEED, as it always was
 		this.townSeed = netTownSeed();
-		this.world = generateTown(this.townSeed);
+		// the lobby's flyover already generated this seed's town: the match TAKES that copy (it is the match's from now
+		// on; the next menu generates its own) instead of generating it again -- client/boot/townCache.ts
+		this.world = takeTown(this.townSeed);
 		this.fadingRoofs.clear();
 		resetEntityIds();
 		resetBullets();

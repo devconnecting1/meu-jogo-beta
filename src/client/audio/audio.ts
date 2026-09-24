@@ -41,7 +41,7 @@
  *  - If the Part cannot be created (it never should on a client), the mixer falls back to flat 2D voices
  *    with a manual distance curve: no panning, but the game still has sound.
  */
-import { SoundBus, SoundDef, SoundName, soundAssetIds, soundDef } from "shared/data/sounds";
+import { SoundBus, SoundDef, SoundName, soundDef } from "shared/data/sounds";
 import type { SettingsData } from "shared/game/save";
 
 const SoundService = game.GetService("SoundService");
@@ -268,7 +268,8 @@ class AudioEngine {
 		for (let i = 0; i < FLAT_VOICES; i++) this.voices.push(this.makeVoice(false, i));
 
 		this.heartbeat = RunService.Heartbeat.Connect(dt => this.update(dt));
-		this.preload();
+		// the sounds are fetched by the client's one preload plan, after the textures the lobby shows
+		// (client/boot/preloadPlan.ts calls preloadSounds)
 	}
 
 	private makeVoice(spatial: boolean, index: number): Voice {
@@ -291,25 +292,33 @@ class AudioEngine {
 		return { sound, attachment, started: 0, priority: 0, stopAt: math.huge, active: false };
 	}
 
-	/** warms the asset cache so the first shot of a run is not silent */
-	private preload(): void {
+	/**
+	 * Warms the asset cache with `ids` so the first shot of a run is not silent: the last step of the client's preload
+	 * plan (client/boot/preloadPlan.ts), which hands them over in the order they are needed. YIELDS until they are
+	 * fetched; answers how many did not arrive (a missing sound only plays silent, there is no fallback to switch).
+	 */
+	preloadSounds(ids: ReadonlyArray<string>): number {
 		const parent = this.flatRoot;
-		if (parent === undefined) return;
-		task.spawn(() => {
-			const holder = new Instance("Folder");
-			holder.Name = "Preload";
-			holder.Parent = parent;
-			const list: Array<Instance> = [];
-			for (const id of soundAssetIds()) {
-				const s = new Instance("Sound");
-				s.SoundId = id;
-				s.Volume = 0;
-				s.Parent = holder;
-				list.push(s);
-			}
-			if (list.size() > 0) pcall(() => ContentProvider.PreloadAsync(list));
-			holder.Destroy();
-		});
+		if (parent === undefined || ids.size() === 0) return 0;
+		const holder = new Instance("Folder");
+		holder.Name = "Preload";
+		holder.Parent = parent;
+		const list: Array<Instance> = [];
+		for (const id of ids) {
+			const s = new Instance("Sound");
+			s.SoundId = id;
+			s.Volume = 0;
+			s.Parent = holder;
+			list.push(s);
+		}
+		let missed = 0;
+		pcall(() =>
+			ContentProvider.PreloadAsync(list, (_id: string, status: Enum.AssetFetchStatus) => {
+				if (status !== Enum.AssetFetchStatus.Success) missed += 1;
+			}),
+		);
+		holder.Destroy();
+		return missed;
 	}
 
 	/** where the Settings sliders live; polled every frame so dragging a slider is heard at once */

@@ -112,6 +112,11 @@ export interface LobbyHandle {
 	refresh(status: LobbyStatus): void;
 	show(page: LobbyPage): void;
 	page(): LobbyPage;
+	/**
+	 * Lobby idle time (client/boot/warmup.ts): builds the Survivor page out of sight, so START only shows it. Answers
+	 * true when it built it now (false: already built, or the lobby is closed).
+	 */
+	prebuild(): boolean;
 	close(): void;
 }
 
@@ -667,6 +672,13 @@ export function showLobby(
 		},
 		page(): LobbyPage {
 			return current;
+		},
+		prebuild(): boolean {
+			if (closed || survivor !== undefined) return false;
+			const s = buildSurvivor();
+			s.refresh(survivorState());
+			setVisible(s.frame, false);
+			return true;
 		},
 		close(): void {
 			if (closed) return;

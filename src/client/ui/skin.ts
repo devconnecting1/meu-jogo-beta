@@ -798,53 +798,63 @@ function disableSkin(): void {
  *    a valid id draws as soon as the fetch lands, so a transient miss needs NO fallback -- it would only
  *    cost the player the skin for the rest of the session. We therefore retry once and give up on the skin
  *    only when EVERY texture is still missing, which is what a moderated or deleted upload looks like.
+ *
+ * The fetch is the FIRST step of the client's one preload plan (client/boot/preloadPlan.ts: the skin, then the town
+ * the lobby shows, then the signs and the characters, then the sounds), not a thread of its own started at import.
  */
-if (skinOn) {
-	task.spawn(() => {
-		const ids: Array<string> = [];
-		for (const name of SKIN_TEXTURE_NAMES) {
-			const id = SKIN_TEXTURES[name].id;
-			if (id !== "") ids.push(id);
-		}
-		if (ids.size() === 0) return;
+let skinPreloaded = false;
 
-		/** preloads `list` through real ImageLabels; returns the ids that did not arrive */
-		const fetchMissing = (list: Array<string>): Array<string> => {
-			const holder = new Instance("Folder");
-			holder.Parent = ContentProvider;
-			const probes: Array<ImageLabel> = [];
-			for (const id of list) {
-				const probe = new Instance("ImageLabel");
-				probe.Image = id;
-				probe.Parent = holder;
-				probes.push(probe);
-			}
-			const missing: Array<string> = [];
-			pcall(() =>
-				ContentProvider.PreloadAsync(probes, (id: string, status: Enum.AssetFetchStatus) => {
-					if (status !== Enum.AssetFetchStatus.Success) missing.push(id);
-				}),
-			);
-			holder.Destroy();
-			return missing;
-		};
+/**
+ * Fetches the skin's textures (one retry) and falls back to the flat UI when none of them can be. YIELDS until then;
+ * answers how many were asked for and how many did not arrive. Client only; the second call does nothing.
+ */
+export function preloadSkin(): { total: number; missing: number } {
+	if (skinPreloaded || !skinOn) return { total: 0, missing: 0 };
+	skinPreloaded = true;
+	const ids: Array<string> = [];
+	for (const name of SKIN_TEXTURE_NAMES) {
+		const id = SKIN_TEXTURES[name].id;
+		if (id !== "") ids.push(id);
+	}
+	if (ids.size() === 0) return { total: 0, missing: 0 };
 
-		let missing = fetchMissing(ids);
-		if (missing.size() > 0) {
-			task.wait(RETRY_DELAY);
-			missing = fetchMissing(missing);
+	/** preloads `list` through real ImageLabels; returns the ids that did not arrive */
+	const fetchMissing = (list: Array<string>): Array<string> => {
+		const holder = new Instance("Folder");
+		holder.Parent = ContentProvider;
+		const probes: Array<ImageLabel> = [];
+		for (const id of list) {
+			const probe = new Instance("ImageLabel");
+			probe.Image = id;
+			probe.Parent = holder;
+			probes.push(probe);
 		}
-		if (missing.size() === 0) return;
+		const missing: Array<string> = [];
+		pcall(() =>
+			ContentProvider.PreloadAsync(probes, (id: string, status: Enum.AssetFetchStatus) => {
+				if (status !== Enum.AssetFetchStatus.Success) missing.push(id);
+			}),
+		);
+		holder.Destroy();
+		return missing;
+	};
 
-		if (missing.size() >= ids.size()) {
-			// none of them arrived twice over: the uploads themselves are unavailable
-			warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
-			disableSkin();
-			return;
-		}
+	let missing = fetchMissing(ids);
+	if (missing.size() > 0) {
+		task.wait(RETRY_DELAY);
+		missing = fetchMissing(missing);
+	}
+	if (missing.size() === 0) return { total: ids.size(), missing: 0 };
+
+	if (missing.size() >= ids.size()) {
+		// none of them arrived twice over: the uploads themselves are unavailable
+		warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
+		disableSkin();
+	} else {
 		// some arrived: keep the skin, the rest draw as soon as the engine gets them
 		warn(`[ui] ${missing.size()}/${ids.size()} skin textures are slow; keeping the skin`);
-	});
+	}
+	return { total: ids.size(), missing: missing.size() };
 }
 
 // ---------------------------------------------------------------- surface recipes

@@ -107,6 +107,11 @@ export interface TileModel {
 	pipsOn: number;
 }
 
+/** the cells a grid of `n` items shows: the items, then empty cells to the end of the row and of the visible rows */
+export function gridCells(n: number): number {
+	return math.max(MIN_CELLS, math.ceil(n / COLS) * COLS);
+}
+
 function modelSig(m: TileModel): string {
 	return `${m.icon}|${m.dim}|${m.equipped}|${m.tag}|${m.count}|${m.short}|${m.ammo}|${m.corner}|${m.locked}|${m.pips}|${m.pipsOn}`;
 }
@@ -237,14 +242,18 @@ export class BagGrid {
 		return out;
 	}
 
-	/** shows `models` in order, then as many empty cells as fill the visible rows; writes only what changed */
-	render(models: Array<TileModel>): void {
-		let sig = "";
+	/**
+	 * Shows `models` in order, then as many empty cells as fill the visible rows; writes only what changed.
+	 * `cellLimit`: only the first cells (the Bag's idle-time warm-up grows a grid a few tiles at a time; the full
+	 * render afterwards finds every tile already there).
+	 */
+	render(models: Array<TileModel>, cellLimit = math.huge): void {
+		const n = models.size();
+		const cells = math.min(cellLimit, gridCells(n));
+		let sig = `${cells}|`;
 		for (const m of models) sig += `${m.key}=${modelSig(m)};`;
 		if (sig === this.sig) return;
 		this.sig = sig;
-		const n = models.size();
-		const cells = math.max(MIN_CELLS, math.ceil(n / COLS) * COLS);
 		const keys: Array<string> = [];
 		for (let i = 0; i < cells; i++) keys.push(i < n ? models[i].key : `#${i}`);
 		// every key keeps the tile it had; the rest are free for the new keys
