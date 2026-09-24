@@ -20,8 +20,13 @@
  *      client timeout (the dark, a building, the snapshot cap) is a new track when it is sent again, drawn at its
  *      ring's delay at once, and judged there; a shorter gap keeps easing on both sides.
  *  a5. A STALLED SERVER (the review of the zombie-motion branch, S3 NIT 1, 2). The client retires a track by real
- *      time; the server's idea of it now does too, so a body the client dropped during a 0.9 s stall is a new track on
- *      both sides, and a body shown for one snapshot is retired within a frame of each other on both sides.
+ *      time; the server's idea of it now does too. Since the review of 577c729 (M1) a stall is a silence of the WHOLE
+ *      stream, which the client keeps every track through: the server forgives the silence of its own rounds and agrees,
+ *      and a shot after it is judged where the body is drawn (in ticks: the scenario moves the body during the stall). A
+ *      body shown for one snapshot is retired within a frame of each other on both sides.
+ *  a7. A RE-ENTRY (N1). A body not sent for longer than its ring's timeout while the viewer got others restarts its
+ *      fade on the client; the server's model restarts it too (435 ms for a body shown once after it, as the client; the
+ *      old model said 450), and a silence of the whole stream keeps the fade it had.
  *  a6. A PART OVER THE LIMIT (S3 NIT 4). It never goes out, what it carried counts as dropped entity by entity, and the
  *      bodies of the parts after it are still the ones taken as drawn.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
@@ -1255,8 +1260,12 @@ section("(a5) a stalled server knows its client retired a body, by the client's 
 	 * The client retires a zombie track 0.3/0.6 s after the last part that carried it (then a 0.15 s fade), by its REAL
 	 * clock. The server counted that in ticks, and ticks are not real time on a server that stalls: past the
 	 * Heartbeat's debt ceiling the surplus is dropped (§3.1). Here the server stops for 0.9 s while its client keeps
-	 * drawing: the client retires the mid-ring body; the server, with no tick run, eased it on as the same track, and
-	 * a shot at the body running in the near ring after the stall was judged its old ring's 3 ticks off it.
+	 * drawing. Until the review of 577c729 (M1) the client retired the mid-ring body in the stall, and the server, with
+	 * no tick run, eased it on as the same track: a shot at the body running in the near ring after the stall was judged
+	 * its old ring's 3 ticks off it. Since M1 a stall is a silence of the WHOLE stream, and the client keeps every track
+	 * through it (client/net/snapshotBuffer.ts `notePart`): the server has to know that too, by its own clock -- a stall
+	 * of its rounds is forgiven to every body of that viewer (server/net/interest.ts `noteRound`) -- and the shot after
+	 * the stall is judged where the body is drawn either way.
 	 */
 	const server = newWorldServer();
 	const cx = world.width / 2;
@@ -1292,13 +1301,16 @@ section("(a5) a stalled server knows its client retired a body, by the client's 
 		server.now += TICK_DT;
 		drawClients(server);
 	}
+	const keepsIt = client.buffer.zombies.has(netId);
 	check(
-		drawnBefore && !client.buffer.zombies.has(netId),
-		"the client drew the mid-ring body, and retired it in the stall",
+		drawnBefore && keepsIt === (client.buffer.stats().bridged !== undefined),
+		"the client drew the mid-ring body, and keeps it through the stall: the whole stream was silent (M1)",
+		`drawn before ${drawnBefore}, still tracked ${keepsIt}`,
 	);
 	check(
-		!serverHasTrack(server, 0, netId),
-		"the server knows: no track, by the 0.9 s that passed, not the 0 ticks that ran",
+		serverHasTrack(server, 0, netId) === keepsIt,
+		"the server knows what the client did: the silence of its own rounds is forgiven, by the 0.9 s that passed",
+		`server ${serverHasTrack(server, 0, netId)}, client ${keepsIt}`,
 	);
 	let worst = 0;
 	let frames = 0;
@@ -1313,7 +1325,12 @@ section("(a5) a stalled server knows its client retired a body, by the client's 
 		const judged = serverAt(server, netId, view - server.replicator.viewLagOf(0, z, view));
 		if (truth === undefined || judged === undefined) continue;
 		frames += 1;
-		worst = Math.max(worst, Math.hypot(truth.x - judged.x, truth.y - judged.y));
+		// in ticks, at the body's running speed: the scenario moves it 300 u inward DURING the stall, so the server's own
+		// history jumps 300 u between two consecutive ticks, and a position difference there measures that jump, not the
+		// judging (since M1 the client keeps the track through the stall, and eases its ring's delay as the server does,
+		// to a hundredth of a tick -- 3 u of that jump)
+		const judgedTick = view - server.replicator.viewLagOf(0, z, view);
+		worst = Math.max(worst, Math.abs(b.tick - judgedTick) * SPEED);
 	}
 	info(
 		`after the stall, running in the near ring: ${frames} body-frames, judged vs drawn worst ${worst.toFixed(2)} u`,
@@ -1373,6 +1390,93 @@ section("(a5) a stalled server knows its client retired a body, by the client's 
 }
 
 // ================================================================ (a6) a part over the unreliable limit
+
+section("(a7) a re-entry restarts the fade on both sides: the server times the retirement from the new fade-in (N1)");
+{
+	/*
+	 * The review of 577c729, N1. The client starts a zombie track again at alpha 0 when the stream went on carrying others
+	 * but not it for longer than its ring's timeout (client/net/snapshotBuffer.ts `discontinuity`: it left the light, a
+	 * roof, the interest, and came back). The server's model of when that client retires the track (`retiredAfterS`,
+	 * which is who gets a ZombieDied, audit L2) has to start the fade over too: a body lit for a second, dark for 0.4 s
+	 * while the viewer's snapshots went on, lit for ONE snapshot and then dark again, is retired by the client after the
+	 * fade of a track shown once -- not after the fade of one shown for 1.4 s.
+	 */
+	const { ActorInterest, retiredAfterS } = require(join(SRC, "server/net/interest.ts"));
+	const rings = new ActorInterest();
+	const netId = 7;
+	const dist2 = 500 * 500;
+	let now = 0;
+	let round = 0;
+	const snapshot = carries => {
+		round += 1;
+		rings.update(0, netId, dist2, round);
+		rings.noteRound?.(0, now);
+		if (carries) rings.noteSent(0, netId, false, round * CFG.SNAP_NEAR_EVERY_TICKS, 3, now);
+		now += 1 / CFG.SNAP_NEAR_HZ;
+	};
+	for (let i = 0; i < CFG.SNAP_NEAR_HZ; i++) snapshot(true);
+	for (let i = 0; i < 7; i++) snapshot(false);
+	const t0 = now;
+	check(
+		rings.hasTrack(0, netId, t0),
+		"the 0.4 s gap is past the near ring's timeout and short of the retirement (the case being tested)",
+	);
+	snapshot(true);
+	// the viewer's snapshots go on, without the body: the first round at which the server takes the track as retired
+	const expect = retiredAfterS(false, 0);
+	let goneAt = -1;
+	for (let i = 0; i < 20 && goneAt < 0; i++) {
+		const at = now;
+		snapshot(false);
+		// between this round and the next, every 5 ms (the difference the fade makes is ~15 ms, under a round)
+		for (let k = 0; k < 10 && goneAt < 0; k++) {
+			const probe = at + k * 0.005;
+			if (!rings.hasTrack(0, netId, probe)) goneAt = probe - t0;
+		}
+	}
+	const step = 0.005 + 1e-9;
+	info(
+		`shown once after the re-entry: the client retires it ${(expect * 1000).toFixed(0)} ms after that snapshot, ` +
+			`the server ${(goneAt * 1000).toFixed(0)} ms`,
+	);
+	check(
+		goneAt >= expect && goneAt < expect + step,
+		"the server takes the track as retired within 5 ms of the client (the fade of a track shown once, from the re-entry)",
+		`${(goneAt * 1000).toFixed(0)} ms, the client ${(expect * 1000).toFixed(0)} ms`,
+	);
+	// a gap of the WHOLE stream (no round went to this viewer): the client keeps the track as one walk, alpha and all
+	const whole = new ActorInterest();
+	now = 0;
+	round = 0;
+	for (let i = 0; i < CFG.SNAP_NEAR_HZ; i++) {
+		round += 1;
+		whole.update(0, netId, dist2, round);
+		whole.noteRound?.(0, now);
+		whole.noteSent(0, netId, false, round * 3, 3, now);
+		now += 1 / CFG.SNAP_NEAR_HZ;
+	}
+	now += 0.35;
+	round += 1;
+	whole.update(0, netId, dist2, round);
+	whole.noteRound?.(0, now);
+	whole.noteSent(0, netId, false, round * 3, 3, now);
+	// ...and then the body is not carried any more: retired after the fade of a track shown for the whole second
+	const t1 = now;
+	let wholeGone = -1;
+	for (let i = 0; i < 20 && wholeGone < 0; i++) {
+		now += 1 / CFG.SNAP_NEAR_HZ;
+		round += 1;
+		whole.update(0, netId, dist2, round);
+		whole.noteRound?.(0, now);
+		if (!whole.hasTrack(0, netId, now)) wholeGone = now - t1;
+	}
+	const long = retiredAfterS(false, 1);
+	check(
+		wholeGone >= long - 1e-9,
+		"a silence of the whole stream (the server sent this viewer nothing) keeps the fade it had, as the client does",
+		`retired ${(wholeGone * 1000).toFixed(0)} ms after, the fade of a full track ${(long * 1000).toFixed(0)} ms`,
+	);
+}
 
 section("(a6) a Snap part over the limit never goes out, and what it carried is counted, entity by entity (S3 NIT 4)");
 {

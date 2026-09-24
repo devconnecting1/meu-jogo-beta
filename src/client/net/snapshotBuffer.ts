@@ -61,7 +61,11 @@ import {
 	RENDER_DELAY_RATE,
 	SIM_HZ,
 	SNAP_NEAR_HZ,
+	STREAM_QUIET_S,
+	SURVIVOR_TELEPORT_UPS,
 	TRACK_FADE_IN_RATE,
+	TRACK_SNAP_SLACK_U,
+	ZOMBIE_TELEPORT_UPS,
 	midViewExtraTicks,
 	ticksPer,
 } from "shared/net/mpConfig";
@@ -110,6 +114,36 @@ const RENDER_RESET_S = DELAY_SNAP_S;
  * has to know when a track that never fully appeared is gone (server/net/interest.ts `retiredAfterS`).
  */
 const ALPHA_RATE = TRACK_FADE_IN_RATE;
+/** the part ticks remembered to tell a gap in the whole stream from a gap in one track (`discontinuity`) */
+const PART_TICKS_KEPT = 64;
+/**
+ * A body that walked on through a silence of the stream is drawn catching up with its interpolation, not jumping onto
+ * it (`bridge`): the offset between where it was drawn and where the new data puts that same instant eases out with
+ * this time constant, never faster than BRIDGE_CATCHUP_UPS -- under the 1.25x + 4 u a frame tools/test-zombie-motion.mjs
+ * (l) allows any body, at any speed. A 400 ms burst leaves a walker ~28 u behind: gone in about half a second.
+ */
+const BRIDGE_TAU_S = 0.2;
+const BRIDGE_CATCHUP_UPS = 150;
+/** below this the bridge offset is dropped (under a tenth of a pixel) */
+const BRIDGE_EPS = 0.05;
+/**
+ * The most a bridge may owe (review of 6e6dfa0): past it the silence was too long for one walk -- a body drawn this far
+ * from where the server has it would slide on for most of a second, through what stands between, and a shot at it
+ * would be judged somewhere else. It starts again where it is, faded in, like a re-entry (`restartTrack`). A 400 ms
+ * burst leaves walkers ~28 u behind; a runner through a 1 s silence is past it.
+ */
+const BRIDGE_MAX_U = 64;
+
+/** how a newer sample follows a zombie track (`SnapshotBuffer.discontinuity`) */
+const Break = {
+	/** one walk: interpolated as always */
+	None: 0,
+	/** the track must start again where the sample is, faded in: a re-entry, or a jump no zombie can make */
+	Restart: 1,
+	/** the whole stream went quiet for longer than the track's timeout, and the body walked on meanwhile */
+	Stream: 2,
+} as const;
+type Break = (typeof Break)[keyof typeof Break];
 
 /** one survivor as the interpolation sees them right now */
 export interface RemoteState {
@@ -144,6 +178,8 @@ export interface RemoteState {
 	stale: boolean;
 	/** (VEI-05) the VehicleKind they ride at the sample at or before the render time, 0 on foot; `moveAng` is its heading */
 	ride: number;
+	/** 0..1: 1, except fading in where they appeared after a jump no survivor can walk (`allyJumped`, N3) */
+	alpha: number;
 }
 
 /**
@@ -268,9 +304,14 @@ class SlotTrack {
 	 */
 	gapA = 0;
 	gapB = 0;
+	/** 1, or fading in after a restart where the survivor appeared (`SnapshotBuffer.allyJumped`, N3) */
+	alpha = 1;
+	/** the tick the track restarted at: nothing from before it joins it again (the body before the jump) */
+	floor = -math.huge;
 
 	/** inserts in tick order; ignores duplicates and packets too old to matter */
 	insert(s: Sample): boolean {
+		if (s.tick < this.floor) return false;
 		const n = this.samples.size();
 		const newest = n > 0 ? this.samples[n - 1].tick : undefined;
 		const ok = insertSample(this.samples, s);
@@ -318,10 +359,24 @@ class ActorTrack {
 	extra = -1;
 	/** where it stands in the buffer's draw order (`SnapshotBuffer.zOrder`), or -1 */
 	ix = -1;
+	/**
+	 * The tick the track (re)started at (`SnapshotBuffer.restartTrack`): a sample from before it belongs to the body it
+	 * was before the break, and interpolated towards the new one it would draw the very slide the restart is for.
+	 */
+	floor = -math.huge;
+	/** the render tick this track was last drawn at, and a stream silence it just came back from (`bridge`) */
+	renderAt = -math.huge;
+	bridge = false;
+	/** the first tick after that silence: where the track starts again when the bridge would owe too much */
+	bridgeTick = -math.huge;
+	/** what the drawing still owes its interpolation after a stream silence, eased out (BRIDGE_TAU_S) */
+	offX = 0;
+	offY = 0;
 
 	constructor(readonly netId: number) {}
 
 	insert(s: ActorSample): boolean {
+		if (s.tick < this.floor) return false;
 		return insertSample(this.samples, s);
 	}
 }
@@ -387,6 +442,19 @@ export interface SnapshotStats {
 	relocks: number;
 	/** seconds of hitch frames the render time did not run through, because no tick had arrived for them */
 	absorbedS: number;
+	/** zombie tracks started again, faded in, instead of drawn gliding: a re-entry or a teleport (`discontinuity`) */
+	restarts: number;
+	/** zombie tracks that came back after a silence of the whole stream and were kept, at their alpha (`discontinuity`) */
+	bridged: number;
+	/**
+	 * Tracks that came back from such a silence owing more than BRIDGE_MAX_U, started again instead (`bridge`): counted
+	 * here only, neither in `bridged` (not kept) nor in `restarts` (not a re-entry or a teleport)
+	 */
+	bridgeCapped: number;
+	/** the most any kept bridge owed, in units (never above BRIDGE_MAX_U) */
+	bridgeMax: number;
+	/** survivor tracks restarted, faded in, where the survivor appeared (`allyJumped`, N3) */
+	allyJumps: number;
 }
 
 /** the median of a few values (LOCK_SAMPLES), without touching the caller's array */
@@ -486,9 +554,10 @@ export class SnapshotBuffer {
 	/**
 	 * A lightning strike lights the town at this frame's RENDER time (LUZ-05; the caller computes it from the storm's
 	 * pure schedule, client/systems/daynight.ts `reveal`): every body drawn is at full alpha at once instead of fading in
-	 * at ALPHA_RATE. A flash lasts a fraction of a second; a fade-in of a third of a second showed the street's horde
-	 * only once the flash was already over. The server keeps them on the wire until the drawing is past the flash
-	 * (server/sim/waves.ts `revealing`), and fades them out as usual afterwards.
+	 * at ALPHA_RATE -- a track started again (`restartTrack`) as well. A flash lasts a fraction of a second; a fade-in of
+	 * a third of a second showed the street's horde only once the flash was already over. The server keeps them on the
+	 * wire until the drawing is past the flash (server/sim/waves.ts `revealing`), and fades them out as usual afterwards;
+	 * a silence of the whole stream holds every alpha as it is, flash or not (`advanceActors`).
 	 */
 	reveal = false;
 	private simHz = SIM_HZ;
@@ -514,6 +583,20 @@ export class SnapshotBuffer {
 	private accepted = 0;
 	private dropped = 0;
 	private stalls = 0;
+	/** zombie tracks started again at a re-entry or a teleport (`restartTrack`) */
+	private restarts = 0;
+	/** zombie tracks that came back after a stream-wide silence and were kept as one walk (`discontinuity`) */
+	private bridged = 0;
+	/** bridges that would have owed more than BRIDGE_MAX_U, and the most a kept one owed (`bridge`) */
+	private bridgeCapped = 0;
+	private bridgeMax = 0;
+	/** survivor tracks restarted where the survivor appeared (`allyJumped`, N3) */
+	private allyJumps = 0;
+	/** arrival of the newest part accepted, any tick (`STREAM_QUIET_S`) */
+	private lastPartAt = -math.huge;
+	/** the last PART_TICKS_KEPT distinct ticks accepted parts carried, a ring (`partBetween`) */
+	private readonly partTicks = new Array<number>();
+	private partTickAt = 0;
 
 	/** the server's SIM_HZ, from InitBegin (§3.1: it may be the 30 Hz fallback) */
 	setRate(simHz: number): void {
@@ -544,6 +627,9 @@ export class SnapshotBuffer {
 		this.pending.clear();
 		this.newest = -math.huge;
 		this.lastRender = -math.huge;
+		this.lastPartAt = -math.huge;
+		this.partTicks.clear();
+		this.partTickAt = 0;
 	}
 
 	/**
@@ -586,6 +672,107 @@ export class SnapshotBuffer {
 		this.zOrder.push(track);
 		this.zombies.set(netId, track);
 		return track;
+	}
+
+	/**
+	 * Is a sample of this survivor, newer than all the track holds, further from the last one than any survivor can go
+	 * in the time between (SURVIVOR_TELEPORT_UPS)? A stand-up at daybreak or a Rebirth at a safe spot, an admin moving
+	 * the body: interpolated, the ally slid across the town for a snapshot interval as they appeared (review of 577c729,
+	 * N3). The body is put where it is, faded in, as a zombie's is (`restartTrack`).
+	 */
+	private allyJumped(track: SlotTrack, tick: number, x: number, y: number): boolean {
+		const n = track.samples.size();
+		if (n === 0) return false;
+		const last = track.samples[n - 1];
+		const gap = tick - last.tick;
+		if (gap <= 0) return false;
+		const dx = x - last.x;
+		const dy = y - last.y;
+		const reach = (SURVIVOR_TELEPORT_UPS * gap) / this.simHz + TRACK_SNAP_SLACK_U;
+		return dx * dx + dy * dy > reach * reach;
+	}
+
+	/**
+	 * How does a sample of `track`, newer than all it holds, follow it? (review of 577c729, M1)
+	 *
+	 *   teleport  further from its last sample than any zombie can go in that time (ZOMBIE_TELEPORT_UPS): a netId the
+	 *             server moved or handed to another body. The server gives a relocation a new netId, so this is the
+	 *             client's guard for whatever else could; drawn, it was a body racing across the screen. Restart.
+	 *   re-entry  nothing came for THIS track for longer than its ring's despawn timeout (§4.4) while the stream went on
+	 *             carrying others: it left the interest, the light or the roof rule, or the snapshot cap skipped it, and
+	 *             came back. Whatever it did meanwhile was not sent, and interpolating from where it was last seen showed
+	 *             a body held, fading, then jumping to wherever the interpolation stood between the two. Restart.
+	 *   silence   the same gap, but the WHOLE stream said nothing in it (no part at all between the two ticks: a loss
+	 *             burst, a stalled link or server). The body did walk from one sample to the other, and every other body
+	 *             went quiet with it: it is kept as one walk -- history and alpha -- exactly as a single lost snapshot
+	 *             is -- and it catches up with what its extrapolation missed over ~0.2 s (`bridge`), never in one frame.
+	 *             Measured in tools/test-zombie-motion.mjs (l), a 350 and a 400 ms burst: a restart faded every body
+	 *             out to 0.05 and back in; dropping only the history jumped 43 u in one frame to the newest sample; kept
+	 *             whole but snapped, 29.5 u in one frame; eased, 0 frames over the body's own speed.
+	 */
+	private discontinuity(track: ActorTrack, tick: number, x: number, y: number): Break {
+		const n = track.samples.size();
+		if (n === 0) return Break.None;
+		const last = track.samples[n - 1];
+		const gap = tick - last.tick;
+		if (gap <= 0) return Break.None;
+		const dx = x - last.x;
+		const dy = y - last.y;
+		const reach = (ZOMBIE_TELEPORT_UPS * gap) / this.simHz + TRACK_SNAP_SLACK_U;
+		if (dx * dx + dy * dy > reach * reach) return Break.Restart;
+		if (gap <= (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S) * this.simHz) return Break.None;
+		return this.partBetween(last.tick, tick) ? Break.Restart : Break.Stream;
+	}
+
+	/** did any accepted part carry a tick strictly between `from` and `to`? (the ring of `notePart`) */
+	private partBetween(from: number, to: number): boolean {
+		for (const t of this.partTicks) {
+			if (t > from && t < to) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * One part accepted: its tick joins the ring `partBetween` reads, and a silence of the whole stream before it is
+	 * forgiven to every track -- the despawn timeout counts the time the stream was talking, not the time it was quiet
+	 * (`STREAM_QUIET_S`). A body that really left is still retired: from here on the stream talks, and it is not in it.
+	 */
+	private notePart(tick: number, arrival: number): void {
+		const quiet = this.lastPartAt > -math.huge ? arrival - this.lastPartAt : 0;
+		if (quiet > STREAM_QUIET_S) {
+			const forgive = quiet - 1 / SNAP_NEAR_HZ;
+			for (const track of this.zOrder) track.lastSeen += forgive;
+			for (const [, track] of this.bosses) track.lastSeen += forgive;
+		}
+		if (arrival > this.lastPartAt) this.lastPartAt = arrival;
+		const n = this.partTicks.size();
+		const newest = n > 0 ? this.partTicks[(this.partTickAt + n - 1) % n] : undefined;
+		if (tick === newest) return;
+		if (n < PART_TICKS_KEPT) {
+			this.partTicks.push(tick);
+			return;
+		}
+		this.partTicks[this.partTickAt] = tick;
+		this.partTickAt = (this.partTickAt + 1) % PART_TICKS_KEPT;
+	}
+
+	/**
+	 * The track starts again at `tick` (see `discontinuity`): its history is dropped, so it is drawn at the new sample from
+	 * the next frame on, never interpolated from the old one; it fades in from nothing there, like a body seen for the
+	 * first time; and nothing from before `tick` may join it again (`floor`). Its place in the draw order and its extra
+	 * delay stay: the server mirrors that delay per (viewer, netId) until the client would have retired the track, so it
+	 * must go on easing as it was (server/net/interest.ts `noteSent`). `counted` false: a bridge past its ceiling, which
+	 * is counted as that (`bridgeCapped`), not as a restart.
+	 */
+	private restartTrack(track: ActorTrack, tick: number, counted = true): void {
+		track.samples.clear();
+		track.floor = tick;
+		track.alpha = 0;
+		track.hasDrawn = false;
+		track.bridge = false;
+		track.offX = 0;
+		track.offY = 0;
+		if (counted) this.restarts += 1;
 	}
 
 	/** a zombie track goes: the last one of the draw order takes its place, so nobody else moves (`zOrder`) */
@@ -665,11 +852,21 @@ export class SnapshotBuffer {
 			this.newest = tick;
 		}
 		this.accepted += 1;
+		this.notePart(tick, arrival);
 		for (const p of part.players) {
 			let track = this.tracks.get(p.slot);
 			if (track === undefined) {
 				track = new SlotTrack();
 				this.tracks.set(p.slot, track);
+			} else if (this.allyJumped(track, tick, p.x, p.y)) {
+				// put somewhere new (N3): drawn there from the next frame, faded in, never interpolated across the town
+				track.samples.clear();
+				track.floor = tick;
+				track.alpha = 0;
+				track.hasDrawn = false;
+				track.gapA = 0;
+				track.gapB = 0;
+				this.allyJumps += 1;
 			}
 			if (track.insert(sampleOf(tick, p))) track.lastSeen = arrival;
 		}
@@ -683,7 +880,18 @@ export class SnapshotBuffer {
 				continue;
 			}
 			let track = this.zombies.get(z.netId);
-			if (track === undefined) track = this.addZombie(z.netId);
+			if (track === undefined) {
+				track = this.addZombie(z.netId);
+			} else {
+				const kind = this.discontinuity(track, tick, z.x, z.y);
+				if (kind === Break.Restart) {
+					this.restartTrack(track, tick);
+				} else if (kind === Break.Stream) {
+					this.bridged += 1;
+					track.bridge = true;
+					track.bridgeTick = tick;
+				}
+			}
 			if (track.insert(zombieSample(tick, z))) {
 				track.lastSeen = arrival;
 				track.mid = z.mid;
@@ -861,12 +1069,16 @@ export class SnapshotBuffer {
 		// the retirements first, then the drawing: a body that goes is replaced by the last one (`dropZombie`), and
 		// the frame that retires it already draws the order the next frames will
 		this.releaseDeaths(render, now);
+		// the whole stream is silent (a loss burst, a stalled link): nobody is missing from it, and every fade holds
+		// where it is until it talks again (M1: the horde blinked out and back in at every burst of 300 ms and more)
+		const quiet = now - this.lastPartAt > STREAM_QUIET_S;
 		const order = this.zOrder;
 		for (const track of order) {
 			if (track.samples.size() === 0) {
 				retire.push(track.netId);
 				continue;
 			}
+			if (quiet) continue;
 			const missing = now - track.lastSeen > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S);
 			if (!missing && this.reveal) track.alpha = 1;
 			else track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
@@ -885,9 +1097,11 @@ export class SnapshotBuffer {
 				retire.push(netId);
 				continue;
 			}
-			const missing = now - track.lastSeen > DESPAWN_MID_S;
-			if (!missing && this.reveal) track.alpha = 1;
-			else track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+			const missing = !quiet && now - track.lastSeen > DESPAWN_MID_S;
+			if (!quiet) {
+				if (!missing && this.reveal) track.alpha = 1;
+				else track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
+			}
 			if (missing && track.alpha <= 0) {
 				retire.push(netId);
 				continue;
@@ -972,20 +1186,39 @@ export class SnapshotBuffer {
 		dt: number,
 		world?: WorldData,
 	): RemoteZombie {
+		if (track.bridge) this.bridge(track, world);
 		const at = this.sampleAt(track, render, ZOMBIE_BASE_RADIUS, world);
 		const stale = STALE;
+		// a stream silence still being caught up with (`bridge`): drawn that much behind its interpolation, less every frame
+		let x = at.x;
+		let y = at.y;
+		if (track.offX !== 0 || track.offY !== 0) {
+			const len = math.sqrt(track.offX * track.offX + track.offY * track.offY);
+			const shrink = math.min(len, (len * dt) / BRIDGE_TAU_S, BRIDGE_CATCHUP_UPS * dt);
+			const left = len - shrink;
+			if (left < BRIDGE_EPS) {
+				track.offX = 0;
+				track.offY = 0;
+			} else {
+				track.offX *= left / len;
+				track.offY *= left / len;
+			}
+			x += track.offX;
+			y += track.offY;
+		}
+		track.renderAt = render;
 		let speed = 0;
 		if (track.hasDrawn && dt > 0) {
-			const dx = at.x - track.drawnX;
-			const dy = at.y - track.drawnY;
+			const dx = x - track.drawnX;
+			const dy = y - track.drawnY;
 			const moved = math.sqrt(dx * dx + dy * dy);
 			// the feet are driven by the distance the body actually covered, the way an ally's are: the wire
 			// carries no walk cycle, and one derived from the drawn movement cannot desync from the drawing
 			track.feetCycle += moved * FEET_CYCLE_PER_UNIT;
 			speed = moved / dt;
 		}
-		track.drawnX = at.x;
-		track.drawnY = at.y;
+		track.drawnX = x;
+		track.drawnY = y;
 		track.hasDrawn = true;
 		let out = this.zPool[this.zOut.size()];
 		if (out === undefined) {
@@ -1008,8 +1241,8 @@ export class SnapshotBuffer {
 			this.zPool.push(out);
 		}
 		out.netId = netId;
-		out.x = at.x;
-		out.y = at.y;
+		out.x = x;
+		out.y = y;
 		out.angle = at.angle;
 		out.flags = at.flags;
 		out.type = at.type;
@@ -1022,6 +1255,35 @@ export class SnapshotBuffer {
 		out.stale = stale;
 		out.tick = render;
 		return out;
+	}
+
+	/**
+	 * The body came back from a silence of the whole stream as one walk (`discontinuity`): where it was drawn last frame
+	 * -- extrapolated, then held, through the silence -- against where the new samples put that same instant. The
+	 * difference is what the drawing owes, and it is paid back over BRIDGE_TAU_S instead of in one frame (M1).
+	 */
+	private bridge(track: ActorTrack, world?: WorldData): void {
+		track.bridge = false;
+		if (!track.hasDrawn || track.renderAt === -math.huge) return;
+		const past = this.sampleAt(track, track.renderAt, ZOMBIE_BASE_RADIUS, world);
+		const offX = track.drawnX - past.x;
+		const offY = track.drawnY - past.y;
+		const owed = math.sqrt(offX * offX + offY * offY);
+		if (owed > BRIDGE_MAX_U) {
+			// too much for one walk (BRIDGE_MAX_U): it starts again from the first sample after the silence, faded in
+			const from = track.bridgeTick;
+			const kept = new Array<ActorSample>();
+			for (const s of track.samples) if (s.tick >= from) kept.push(s);
+			this.restartTrack(track, from, false);
+			for (const s of kept) track.samples.push(s);
+			// counted once, as what it is: not kept (`bridged`, counted when the silence was seen), not a restart
+			this.bridged -= 1;
+			this.bridgeCapped += 1;
+			return;
+		}
+		if (owed > this.bridgeMax) this.bridgeMax = owed;
+		track.offX = offX;
+		track.offY = offY;
 	}
 
 	private bossStateOf(netId: number, track: ActorTrack, render: number, world?: WorldData): RemoteBoss {
@@ -1134,6 +1396,7 @@ export class SnapshotBuffer {
 		track.drawnX = x;
 		track.drawnY = y;
 		track.hasDrawn = true;
+		if (track.alpha < 1) track.alpha = math.min(1, track.alpha + dt * ALPHA_RATE);
 
 		return {
 			slot,
@@ -1150,6 +1413,7 @@ export class SnapshotBuffer {
 			speed,
 			stale,
 			ride: base.ride,
+			alpha: track.alpha,
 		};
 	}
 
@@ -1186,6 +1450,11 @@ export class SnapshotBuffer {
 			stalls: this.stalls,
 			relocks: this.relocks,
 			absorbedS: this.absorbedTicks / this.simHz,
+			restarts: this.restarts,
+			bridged: this.bridged,
+			bridgeCapped: this.bridgeCapped,
+			bridgeMax: this.bridgeMax,
+			allyJumps: this.allyJumps,
 		};
 	}
 }

@@ -1399,6 +1399,8 @@ export class Replicator {
 		for (const viewer of everyone) {
 			const snap = this.snapshotFor(viewer, index, points);
 			const res = encodeSnapshot(snap);
+			// the round itself, before what it carried: a body it skips has a gap its client restarts (N1)
+			this.hordeRings.noteRound(viewer.slot, now);
 			this.stats.droppedEntities += res.dropped;
 			/** index in `snap.zombies` of the first zombie the part at hand carries */
 			let first = 0;

@@ -725,6 +725,9 @@ export class ServerSimulation {
 		// `onExp` fires LATER, from the brain that removes the body, for that very same zombie: paying it
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
+		// a body the population moves across the map is a new body to every client (a new netId): the past a shot could
+		// be rewound into belongs to the one that left (review of 577c729, L4)
+		horde.onMoved = z => combat.history.forget(z.id);
 		return out;
 	}
 
