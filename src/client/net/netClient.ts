@@ -576,7 +576,9 @@ function checkMapHash(): void {
 	if (serverHash === undefined || mapHash === 0 || mapMismatch) return;
 	if (serverHash === mapHash) return;
 	mapMismatch = true;
-	warn(`[${GAME_NAME}] map hash mismatch: server ${serverHash}, client ${mapHash} — the worlds are not the same`);
+	// the hashes differ per town: one Error Report row only if they stay out of the message (docs/ANALYTICS.md §10)
+	warn(`[${GAME_NAME}] map hash mismatch: the worlds are not the same`);
+	print(`[${GAME_NAME}] map hash: server ${serverHash}, client ${mapHash}`);
 }
 
 /** tells every town listener, each on its own: one that fails must not cost the rest of the World batch */
@@ -664,9 +666,8 @@ export function netActive(): boolean {
 	const live = hasEpoch && mySlot >= 0;
 	if (!live && !warnedSlow && startedAt > 0 && os.clock() - startedAt > HANDSHAKE_WARN_S) {
 		warnedSlow = true;
-		warn(
-			`[${GAME_NAME}] MP handshake still pending after ${HANDSHAKE_WARN_S}s (epoch ${hasEpoch}, slot ${mySlot})`,
-		);
+		warn(`[${GAME_NAME}] MP handshake still pending after ${HANDSHAKE_WARN_S}s`);
+		print(`[${GAME_NAME}] MP handshake: epoch ${hasEpoch}, slot ${mySlot}`);
 	}
 	return live;
 }

@@ -507,7 +507,8 @@ export class LifeKeeper {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
-		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count());
+		// the body and the bosses standing are what the cause is read from (hunger, poison, a boss, the horde)
+		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count(), sp.state, this.sim.horde?.bossRoster.list);
 	}
 
 	/**
