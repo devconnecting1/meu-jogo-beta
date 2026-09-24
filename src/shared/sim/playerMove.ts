@@ -8,7 +8,8 @@
  * code (docs/MULTIPLAYER.md §2.2, §11.2 "GameLoop.updatePlayer → shared/sim/playerMove.ts").
  *
  * Moved as-is from GameLoop.updatePlayer (HEAD 2f48f55); tools/test-sim.mjs replays 300 commands twice and against a
- * copy of that original code.
+ * copy of that original code -- whose body part (hunger, healing, starving, poison) now follows DESIGN_RULES VIT-01,
+ * the wait before healing after a hit (shared/sim/vitals.ts, `stepVitals`).
  */
 import { DESIGN } from "shared/engine/constants";
 import { clamp } from "shared/engine/vec2";
@@ -18,6 +19,7 @@ import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { aimOf, InputCommand, moveDirX, moveDirY, SPEED_SCALE } from "./types";
 import { stepRide } from "./vehicle";
+import { stepVitals } from "./vitals";
 
 /** the survivor never leaves [MARGIN, size − MARGIN] of the world */
 export const WORLD_MARGIN = 40;
@@ -119,17 +121,8 @@ export function stepPlayer(
 		if (p.hp > hpMax) p.hp = hpMax;
 	}
 
-	const hungerRate = 1 - save.skillLevels[8] / 3;
-	p.hungry = math.max(0, p.hungry - 0.01 * 30 * hungerRate * dt);
-	if (p.hungry <= 0) {
-		p.hp -= 0.02 * 30 * dt;
-	} else if (p.hp < p.hpMax) {
-		p.hp = math.min(p.hpMax, p.hp + 0.04 * 30 * (1 + save.skillLevels[1]) * dt);
-	}
-	if (p.buffs.poison > 0) {
-		p.buffs.poison -= dt;
-		p.hp -= 0.06 * 30 * (save.skillLevels[20] > 0 ? 0.5 : 1) * dt;
-	}
+	// the stomach, starving, poison and healing -- with the wait after a hit (DESIGN_RULES VIT-01)
+	stepVitals(p, save, dt);
 	if (p.buffs.speed > 0) p.buffs.speed -= dt;
 	if (p.buffs.calm > 0) p.buffs.calm -= dt;
 	if (p.buffs.pain > 0) p.buffs.pain -= dt;

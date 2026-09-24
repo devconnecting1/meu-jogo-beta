@@ -572,6 +572,8 @@ function pushHud(): void {
 		reloadRatio,
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
+		// VIT-01: the wait before healing, for the vitals' cue (the HP glow, the fork on FOOD)
+		sinceHurt: p.sinceHurt,
 	});
 	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
 	hud.updateNav(refs.world, p.x, p.y, save);
