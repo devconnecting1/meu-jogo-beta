@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the gas station's forecourt (EDI-16, 2026-09-24: the canopy with its fascia, pinstripe, seams and drains, the upright dispensers, the price sign and its shadow, the cars at the pumps) -- only the gas scene differs from the golden before it (the interiors branch after the review of ea5cf71, the ART-07 signs on the main wing, the furnishing of 1d98ae5); noSigns = the same without the signage hook",
+	"recordedFrom": "the window glass (EDI-18, 2026-09-24): a window born broken is the dark empty frame with two stubs of glass on the roof's edge and its shards on the ground outside (in the ground's detail layer, under the blood), an intact one draws exactly as before -- with every window intact each scene is the golden before it, draw call for draw call (checked by forcing brokenShare to 0), so only downtown, gas, overview and border (a window born broken in view) change; the golden before it: the gas station's forecourt (EDI-16) over the interiors branch after the review of ea5cf71, the ART-07 signs and the furnishing of 1d98ae5; noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
 			"count": 1234,
@@ -11,11 +11,11 @@
 			}
 		},
 		"downtown": {
-			"count": 1354,
-			"sha1": "5fa8464d463fd91f916d0a338161f30579454589",
+			"count": 1592,
+			"sha1": "0e0f3093f717bca7e1583b63b4da134cc2fc27a5",
 			"noSigns": {
-				"count": 1159,
-				"sha1": "8d08c967790e721f8586c7ef0a4af898b0b124cb"
+				"count": 1397,
+				"sha1": "71a6215dc4095041fb85668394d9f15ebffe910a"
 			}
 		},
 		"park": {
@@ -35,11 +35,11 @@
 			}
 		},
 		"gas": {
-			"count": 2099,
-			"sha1": "342cc46b006f8fa618f2ace7a5aba784c727608e",
+			"count": 2229,
+			"sha1": "0db807d5727fe3dd309c46348492a5b16e8b93ad",
 			"noSigns": {
-				"count": 1839,
-				"sha1": "a9de3b5095353ddc720d404ed04672fd273debb8"
+				"count": 1969,
+				"sha1": "aaa0b9b680826d1344b32c09352dd66abc064587"
 			}
 		},
 		"street-night": {
@@ -51,19 +51,19 @@
 			}
 		},
 		"overview": {
-			"count": 4794,
-			"sha1": "d27915db440654fadeb6dc50e51648c24d774ee8",
+			"count": 5048,
+			"sha1": "a60b8926ec08e94e4055384057c4ca36f236f933",
 			"noSigns": {
-				"count": 4482,
-				"sha1": "487d4bb44a2e5a4f0416b17bcddd8b364708665c"
+				"count": 4736,
+				"sha1": "057cf581d2a4373b8ef392d39a0313f4b4f5b851"
 			}
 		},
 		"border": {
-			"count": 488,
-			"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb",
+			"count": 553,
+			"sha1": "2c837e29d47c2e1020ff22af50f47968b39da412",
 			"noSigns": {
-				"count": 488,
-				"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb"
+				"count": 553,
+				"sha1": "2c837e29d47c2e1020ff22af50f47968b39da412"
 			}
 		}
 	}

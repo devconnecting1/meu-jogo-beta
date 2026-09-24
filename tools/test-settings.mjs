@@ -267,7 +267,7 @@ console.log("\n2) SFX e BGM: o volume REAL dos grupos de som, os previews e a mu
 audio.start();
 audio.bindSettings(() => ctx.save.settings);
 frame();
-const group = bus => SoundService.FindFirstChild("ProjectZAudio")?.FindFirstChild(bus);
+const group = bus => SoundService.FindFirstChild("LastTownAudio")?.FindFirstChild(bus);
 /** audio.ts: gain = HEADROOM[bus] * slider^1.5 */
 const HEADROOM = { sfx: 1, ui: 0.8, bgm: 0.7 };
 const gainOf = (bus, v) => HEADROOM[bus] * Math.pow(v, 1.5);
@@ -333,7 +333,7 @@ openTab(0);
 	const music = new GameMusic();
 	music.update({ isNight: true, dayTime: 22, hpRatio: 1, dead: false });
 	for (let i = 0; i < 240; i++) frame();
-	const tracks = SoundService.FindFirstChild("ProjectZAudio")
+	const tracks = SoundService.FindFirstChild("LastTownAudio")
 		.GetChildren()
 		.filter(c => c.ClassName === "Sound" && c.Name.startsWith("Track") && c.SoundId === soundDef("bgmNight").id);
 	const night = tracks.find(t => t.IsPlaying);

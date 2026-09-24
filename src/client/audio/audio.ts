@@ -342,7 +342,7 @@ class AudioEngine {
 		this.started = true;
 
 		const root = new Instance("Folder");
-		root.Name = "ProjectZAudio";
+		root.Name = "LastTownAudio";
 		root.Parent = SoundService;
 		this.flatRoot = root;
 
@@ -358,7 +358,7 @@ class AudioEngine {
 		// one invisible anchored part carries every spatial voice; the listener sits at the origin
 		const [ok, made] = pcall(() => {
 			const p = new Instance("Part");
-			p.Name = "ProjectZAudioEmitters";
+			p.Name = "LastTownAudioEmitters";
 			p.Anchored = true;
 			p.CanCollide = false;
 			p.CanQuery = false;

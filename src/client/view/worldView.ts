@@ -828,9 +828,13 @@ export class WorldView {
 		}
 		// the inside, only while the roof is not on (a closed roof covers the whole footprint)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, false);
-		// doormats outside every door: the entrances read even with the roof closed
-		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, undefined);
-		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		// doormats outside every door, and the glass under every broken window (EDI-18): read with the roof closed
+		if (s.openings !== undefined) {
+			this.interior.drawDoormats(r, cam, s, v, undefined);
+			this.interior.drawWindowShards(r, cam, s, v);
+		} else {
+			this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		}
 		if (roofA <= 0.01) return;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const roofDark = roof.Lerp(BLACK, 0.3);
@@ -1804,9 +1808,14 @@ export class WorldView {
 		}
 		// the rooms' floors, the decoration and the frames (only while the roof is not on)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, true);
-		// the doorstep and the mat on it, at every door: the entrances read even with the roof closed
-		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, STEP);
-		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		// the doorstep and the mat on it, at every door, and the glass under every broken window (EDI-18): the entrances
+		// read even with the roof closed
+		if (s.openings !== undefined) {
+			this.interior.drawDoormats(r, cam, s, v, STEP);
+			this.interior.drawWindowShards(r, cam, s, v);
+		} else {
+			this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		}
 		if (roofA <= 0.01) return true;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const shades = this.roofShadesOf(s, roof);
@@ -1932,8 +1941,9 @@ export class WorldView {
 		} else {
 			this.drawRoofUnits(r, cam, wing, s.doorSide, wx, wy, roofA);
 		}
-		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
-		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v);
+		// darker eaves over the doorways and dark glass over the windows: the entrances read from above (with the art, the
+		// glass catches the light: EDI-18)
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v, true);
 		else this.drawPlainEntrance(r, cam, s, roofA, shades[3]);
 		return true;
 	}

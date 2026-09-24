@@ -49,6 +49,8 @@ const DEBRIS_COLOR: Record<DebrisMaterial, Color3> = {
 	structure: COLORS.barricade,
 	exploder: COLORS.zombie3,
 	boss: COLORS.boss,
+	// a window's pane giving way (EDI-18): the pale blue of the glass (the shards it leaves are the same colour)
+	glass: COLORS.glassCold,
 };
 /** shot lines (FxEvent "tracer") */
 const TRACER_COLOR: Record<TracerKind, Color3> = {

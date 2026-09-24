@@ -53,9 +53,10 @@
  *   8. THE WORKFLOW. ci.yml parses (an internal parser, cross-checked with PyYAML and actionlint when present) and
  *      keeps its promises: no pull_request_target; `assets` only on main, never on a pull request, the only job
  *      that may write, one at a time; the secrets only in the env of the upload steps; `build` needs `assets`,
- *      builds its commit and publishes the place only when `assets` succeeded or did not apply; Run workflow on main
- *      runs `assets` too, with a `reupload_all` checkbox (boolean, off by default) that reaches the scripts only
- *      through the env and adds --reupload-all to both uploads only when ticked.
+ *      builds its commit and publishes the place only when `assets` succeeded or did not apply -- as LastTown-ci.rbxl,
+ *      the file its Rojo step builds and the name the docs give the owner; Run workflow on main runs `assets` too,
+ *      with a `reupload_all` checkbox (boolean, off by default) that reaches the scripts only through the env and
+ *      adds --reupload-all to both uploads only when ticked.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -304,7 +305,7 @@ try {
 		check(
 			assetOf("roof")[0].creator.userId === USER &&
 				assetOf("roof")[0].assetType === "Image" &&
-				assetOf("roof")[0].displayName === "ProjectZ world roof",
+				assetOf("roof")[0].displayName === "LastTown world roof",
 			"the form carries the creator, the type and the name the fake validates",
 		);
 		check(
@@ -1450,6 +1451,16 @@ try {
 					/needs\.assets\.result == 'success'/.test(place.if) &&
 					/needs\.assets\.result == 'skipped'/.test(place.if),
 				"`build` runs after `assets`, from its commit; the place is published only if `assets` succeeded or did not apply",
+			);
+			// the file the owner downloads is named after the game (CLAUDE.md, docs/CREATOR_HUB.md): LastTown-ci.rbxl,
+			// the very file the Rojo step builds -- never an older name that would leave the artifact empty
+			const rojo = build.steps.find(s => /rojo" build -o \S+\.rbxl$/m.test(s.run ?? ""));
+			check(
+				place?.with.path === "LastTown-ci.rbxl" &&
+					rojo !== undefined &&
+					/build -o LastTown-ci\.rbxl$/m.test(rojo.run),
+				"the place artifact is LastTown-ci.rbxl, the file the Rojo step builds (the name the docs give the owner)",
+				`${place?.with.path} / ${rojo?.run?.trim()}`,
 			);
 			check(
 				build.steps.some(s => /gen-version\.mjs --build "\$\(git rev-parse HEAD/.test(s.run ?? "")) &&

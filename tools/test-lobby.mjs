@@ -17,7 +17,11 @@
  *   1. THE MENU        no ticker and no survivor column; START (steel blue, bigger) then Shop, Wardrobe,
  *                      Achievements, Records, How to play, Settings and Credits (iron), each with a pixel icon and a
  *                      subtitle only where it says something; the stage draws the survivor (from the uploaded
- *                      characters' sheets, and flat without them); the menu counts no bosses (the Survivor's Stats do).
+ *                      characters' sheets, and flat without them); the menu counts no bosses (the Survivor's Stats do);
+ *                      the game's name, LAST TOWN (client/ui/logo.ts): the flat text wordmark without the `wordmark`
+ *                      texture's id, the pixel wordmark (three theme-tinted layers, whole screen pixels per texel, in
+ *                      its box on every screen) once the id is there and its image is in, the text again when the art
+ *                      is given up -- nothing created going back and forth -- and the same name on the splash.
  *   2. THE SURVIVOR    START opens it; the texts of the three states the owner named -- a fresh save (Enter the city
  *      SCREEN          · Day 1), a run in memory (Continue · Day N), a run over (Rebirth · price + New game, in the
  *                      window, no popup) -- plus the new life waiting for first light; the first-run tutorial prompt;
@@ -650,7 +654,8 @@ const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
-const { THEME, SURFACE, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
+const { THEME, SURFACE, TRANSPARENCY, GAME, hex } = require(join(SRC, "client/ui/theme.ts"));
+const { WORDMARK_LAYERS, wordmarkTexels } = require(join(SRC, "client/ui/logo.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const TOWNS = require(join(SRC, "shared/data/townNames.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
@@ -973,6 +978,128 @@ check("nenhuma faixa opaca cortando a cidade no topo", lobbyRoot().FindFirstChil
 	);
 	lobby.refresh(status({ hosted: true }));
 	check("sem aviso, sem plaquinha", !shown(plate));
+}
+{
+	// the game's name (UI-10, client/ui/logo.ts): LAST TOWN. The pixel wordmark once its texture (the world art's
+	// `wordmark`, uploaded by CI) has an id and its image is in; the flat text wordmark before that, and without it
+	const title = menuPage().FindFirstChild("Title");
+	const text = title?.FindFirstChild("Text");
+	const art = () => title?.FindFirstChild("Art");
+	const withWordmark = id => {
+		const ids = {};
+		for (const [name, t] of Object.entries(WORLD_ART)) ids[name] = t.id;
+		ids.wordmark = id;
+		WA.overrideWorldArt(ids);
+		flush();
+	};
+	withWordmark("");
+	check(
+		'sem id, o nome e o texto liso: "LAST TOWN" em foreground com LAST na cor da marca, sem contorno (UI-04)',
+		text?.ClassName === "TextLabel" &&
+			shown(text) &&
+			text.RichText === true &&
+			text.Text === `<font color="${hex(GAME.brand)}">LAST</font> TOWN` &&
+			sameColor(text.TextColor3, THEME.foreground) &&
+			title.GetDescendants().every(d => d.ClassName !== "UIStroke") &&
+			(art() === undefined || !shown(art())),
+		text?.Text,
+	);
+	const ID = "rbxassetid://424242";
+	const built = measure(() => withWordmark(ID));
+	const layers = (art()?.GetChildren() ?? []).filter(c => c.ClassName === "ImageLabel");
+	const cell = wordmarkTexels();
+	check(
+		"com id, a pixel art do nome: tres ImageLabels da textura, uma celula cada, Pixelated, tingidas com tokens do tema",
+		layers.length === WORDMARK_LAYERS.length &&
+			layers.every(
+				(l, i) =>
+					l.Name === WORDMARK_LAYERS[i][0] &&
+					l.Image === ID &&
+					l.ResampleMode === Enum.ResamplerMode.Pixelated &&
+					l.ImageRectOffset.Y === cell.h * i &&
+					l.ImageRectSize.X === cell.w &&
+					l.ImageRectSize.Y === cell.h &&
+					sameColor(l.ImageColor3, WORDMARK_LAYERS[i][1]),
+			) &&
+			sameColor(layers[0].ImageColor3, THEME.background) &&
+			sameColor(layers[1].ImageColor3, GAME.brand) &&
+			sameColor(layers[2].ImageColor3, THEME.foreground) &&
+			layers[0].ZIndex < layers[1].ZIndex &&
+			layers[1].ZIndex === layers[2].ZIndex &&
+			cell.w === WORLD_ART.wordmark.w &&
+			cell.h * 3 === WORLD_ART.wordmark.h,
+		`${layers.map(l => l.Name).join(", ")}; celula ${cell.w} x ${cell.h}; ${cost(built)}`,
+	);
+	check(
+		"...enquanto a imagem nao chegou (IsLoaded), o texto continua: o nome nunca e uma caixa vazia",
+		shown(text) && shown(art()),
+	);
+	layers.forEach(l => (l.IsLoaded = true));
+	flush();
+	check(
+		"...e quando as tres chegam, a pixel art toma o lugar do texto",
+		!shown(text) && shown(art()) && layers.every(l => shown(l)),
+	);
+	const sizes = [];
+	// (section 6's `inside` is declared further down this file)
+	const within = (c, p) =>
+		c.x >= p.x - 0.75 && c.y >= p.y - 0.75 && c.x + c.w <= p.x + p.w + 0.75 && c.y + c.h <= p.y + p.h + 0.75;
+	for (const [w, h, inset] of [
+		[1120, 630, 0],
+		[1920, 1080, 0],
+		[1360, 435, 0],
+		[844, 390, 36],
+	]) {
+		setScreen(w, h, inset);
+		const box = rectOf(title);
+		const r = rectOf(art());
+		const unit = art().Size.Y.Offset / cell.h;
+		const ok =
+			Number.isInteger(unit) &&
+			unit >= 1 &&
+			art().Size.X.Offset === unit * cell.w &&
+			art().Size.X.Scale === 0 &&
+			art().Size.Y.Scale === 0 &&
+			within(r, box);
+		sizes.push({
+			unit,
+			ok,
+			px: `${w}x${h}: ${unit} px/texel, ${r.w}x${r.h} na caixa ${box.w.toFixed(0)}x${box.h.toFixed(0)}`,
+		});
+	}
+	setScreen(1120, 630);
+	check(
+		"...cada texel um numero inteiro de pixels de tela, dentro da caixa do titulo, em toda tela (4 no espaco de desenho, 7 a 1080p)",
+		sizes.every(s => s.ok) && sizes[0].unit === 4 && sizes[1].unit === 7,
+		sizes.map(s => s.px).join("; "),
+	);
+	const back = measure(() => {
+		withWordmark("");
+		withWordmark(ID);
+		withWordmark("");
+	});
+	check(
+		"a arte perdida (sem id, ou o worldArt desistiu dela) devolve o texto, e ir e voltar nao cria nem destroi nada",
+		shown(text) && !shown(art()) && zero(back),
+		cost(back),
+	);
+	WA.overrideWorldArt(undefined);
+	flush();
+	// the splash (client/ui/logo.ts showLogo) draws the same name, centred, and goes without a trace
+	const { showLogo, WORDMARK } = require(join(SRC, "client/ui/logo.ts"));
+	const before = alive();
+	showLogo(ctx.uiLayer, () => {});
+	flush();
+	const splash = ctx.uiLayer.FindFirstChild("Logo");
+	const splashText = deep(splash, "LogoTitle")?.FindFirstChild("Text");
+	check(
+		"o splash desenha o mesmo nome (o mesmo Wordmark), centrado, e sai sem deixar nada",
+		splashText?.Text === WORDMARK &&
+			splashText.Text === text.Text &&
+			splashText.TextXAlignment === Enum.TextXAlignment.Center &&
+			(splash.Destroy(), alive() === before),
+		splashText?.Text,
+	);
 }
 
 // ================================================================ 2. the Survivor screen
@@ -1532,8 +1659,9 @@ function textProblems(root, strict) {
  * white world (test:contrast, UI-10). Anything in another colour has to sit on a plate of its own.
  */
 function floatingText(page) {
-	return page
-		.GetChildren()
+	// the flat wordmark sits in the title's box (client/ui/logo.ts): as loose over the town as any label on the page
+	const title = page.FindFirstChild("Title")?.GetChildren() ?? [];
+	return [...page.GetChildren(), ...title]
 		.filter(c => c.ClassName === "TextLabel" && shown(c) && c.Text !== "")
 		.filter(c => !sameColor(c.TextColor3, THEME.foreground))
 		.map(c => c.Name);

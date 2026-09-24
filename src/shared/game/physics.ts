@@ -61,8 +61,12 @@ export function blocksShots(s: Solid): boolean {
 export const VAULT_SLOW = 0.4;
 export const VAULT_REACH = 14;
 
-/** is (x, y) in the vault zone of window `s` (a passable solid tagged "window")? */
+/**
+ * Is (x, y) in the vault zone of window `s` (a solid tagged "window")? Only a BROKEN one is climbed (EDI-18): with its
+ * glass in, the frame is a wall a body stands against, and walking along it is walking along a wall.
+ */
 export function inVaultZone(s: Solid, x: number, y: number): boolean {
+	if (s.passable !== true) return false;
 	if (s.w >= s.h) {
 		return x >= s.x && x <= s.x + s.w && y >= s.y - VAULT_REACH && y <= s.y + s.h + VAULT_REACH;
 	}
@@ -71,7 +75,7 @@ export function inVaultZone(s: Solid, x: number, y: number): boolean {
 
 const vaultScratch: Array<Solid> = [];
 
-/** the speed factor of a body at (x, y): VAULT_SLOW in a window, 1 elsewhere */
+/** the speed factor of a body at (x, y): VAULT_SLOW in a broken window, 1 elsewhere */
 export function vaultFactor(world: WorldData, x: number, y: number): number {
 	vaultScratch.clear();
 	querySolids(world, x - VAULT_REACH, y - VAULT_REACH, x + VAULT_REACH, y + VAULT_REACH, vaultScratch);
@@ -114,6 +118,7 @@ function resolveCircle(world: WorldData, x: number, y: number, r: number, fromX:
 	scratch.clear();
 	querySolids(world, x - pad, y - pad, x + pad, y + pad, scratch);
 	for (const s of scratch) {
+		// an intact pane is not climbed (inVaultZone): it is one more blocking solid of the passes below
 		if (s.kind !== "window") continue;
 		if (inVaultZone(s, x, y)) lastInVault = true;
 		if (inVaultZone(s, fromX, fromY)) startInVault = true;
@@ -358,10 +363,12 @@ export function rayCircle(
 // navigation: flow field around the player
 
 const FREE = 0;
-/** a window's sill: passable at WINDOW_COST (EDI-10) */
+/** a broken window's sill: passable at WINDOW_COST (EDI-10) */
 const VAULT = 1;
-const SOFT = 2;
-const HARD = 3;
+/** an intact window's sill: passable at WINDOW_COST + GLASS_COST -- the horde breaks the pane (EDI-18) */
+const GLASS = 2;
+const SOFT = 3;
+const HARD = 4;
 const INF = 1e9;
 const COST_ORTHO = 10;
 const COST_DIAG = 14;
@@ -374,6 +381,21 @@ const COST_SOFT = 60;
  * below COST_SOFT: the Dial rings are sized by the costliest edge.
  */
 export const WINDOW_COST = 50;
+/**
+ * What the glass adds to a window (EDI-18): an intact pane is a broken one plus a few blows, so the horde takes an
+ * open frame or a door before it breaks a pane -- and breaks a pane before it chews a barricade (COST_SOFT): the whole
+ * WINDOW_COST + GLASS_COST stays under COST_SOFT, the weakest point of a fortified house is its glass, and the Dial
+ * rings keep their size. A preference, not a clock: the blows themselves (GLASS_HITS, ~2 s) are the zombie's.
+ */
+export const GLASS_COST = 8;
+/** the field's cost of stepping onto sill `g` (VAULT or GLASS), in addition to the step */
+export function sillCost(g: number): number {
+	return g === GLASS ? WINDOW_COST + GLASS_COST : WINDOW_COST;
+}
+/** the flow fields' code for window `s`'s sill: the open frame, or the glass */
+export function sillCode(s: Solid): number {
+	return s.passable === true ? VAULT : GLASS;
+}
 const BUCKETS = COST_DIAG + COST_SOFT + 1;
 
 /**
@@ -489,8 +511,10 @@ export class FlowField {
 		const inflate = 4;
 		for (const s of buf) {
 			if (s.kind === "window") {
+				// the open frame or the glass (EDI-18): a pane the horde breaks, at a price, never a wall
+				const sill = sillCode(s);
 				stampWindow(s, ox, oy, cell, size, (gx, gy) => {
-					if (grid[gy * size + gx] < VAULT) grid[gy * size + gx] = VAULT;
+					if (grid[gy * size + gx] < sill) grid[gy * size + gx] = sill;
 				});
 				continue;
 			}
@@ -592,7 +616,7 @@ export class FlowField {
 					cost = COST_DIAG;
 				}
 				if (g === SOFT) cost += COST_SOFT;
-				else if (g === VAULT) cost += WINDOW_COST;
+				else if (g !== FREE) cost += sillCost(g);
 				const nd = d + cost;
 				if (nd < dist[ni]) {
 					dist[ni] = nd;

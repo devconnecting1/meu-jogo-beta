@@ -138,6 +138,9 @@ Module._extensions[".ts"] = function (m, filename) {
 const W = require(join(SRC, "shared/game/world.ts"));
 const { DESIGN, TOWN } = require(join(SRC, "shared/engine/constants.ts"));
 const physics = require(join(SRC, "shared/game/physics.ts"));
+const WINDOWS = require(join(SRC, "shared/game/windows.ts"));
+const PERCEPTION = require(join(SRC, "shared/sim/ai/perception.ts"));
+const TUNING = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
 const { BUILDING_SPAWNS, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
@@ -380,6 +383,21 @@ const WALKER_SPEED = 90;
  * than the walk across a yard.
  */
 const REACH_BOUND_S = 12;
+/**
+ * EDI-18: what an intact pane costs a walker on its way in, in walked units -- its GLASS_HITS blows, a stun of
+ * STUN_TIME between two (shared/sim/ai/zombieBrain.ts `bangWindow`), counted as walking time. The climb itself is the
+ * vault zone's slowness, as for an open frame.
+ */
+const GLASS_BREAK_U = (WINDOWS.GLASS_HITS - 1) * TUNING.STUN_TIME * WALKER_SPEED;
+/** EDI-18 over the run: each group's windows and how many were generated broken */
+const WINDOW_RUN = {};
+/** the owner's 20-35% of broken windows over a town (EDI-18), and each group's generated share within this of its rule */
+const WINDOW_SHARE_MIN = 0.2;
+const WINDOW_SHARE_MAX = 0.35;
+const WINDOW_SHARE_TOL = 0.08;
+/** a type's group for the broken-glass share (shared/game/windows.ts `brokenShare`) */
+const windowGroup = t =>
+	t === 1 || t === 2 ? "house" : t === 3 || t === 4 ? "civic" : isCampus(t) ? "campus" : "shop";
 
 /** the piece(s) that say what a room is (EDI-08): a room of that kind without any of them fails */
 const DEFINING = {
@@ -502,8 +520,19 @@ function fieldReach(w, b) {
 	};
 }
 
-/** raster of one building's surroundings: blocked for a body of radius r, window vault zones, the footprint */
-function buildingRaster(w, b, r, margin) {
+/** a window's vault zone whatever its glass (physics.ts `inVaultZone` is the open frame's alone, EDI-18) */
+function inWindowZone(s, px, py) {
+	const R = physics.VAULT_REACH;
+	if (s.w >= s.h) return px >= s.x && px <= s.x + s.w && py >= s.y - R && py <= s.y + s.h + R;
+	return py >= s.y && py <= s.y + s.h && px >= s.x - R && px <= s.x + s.w + R;
+}
+
+/**
+ * Raster of one building's surroundings: blocked for a body of radius r, window vault zones, the footprint. `horde`:
+ * the raster a ZOMBIE walks (EDI-11) -- an intact pane is a way in it breaks (`glass`: the climb and GLASS_BREAK_U,
+ * EDI-18); otherwise a survivor's, for whom the glass is a wall (it breaks it with E, and that is not walking).
+ */
+function buildingRaster(w, b, r, margin, horde = false) {
 	const C = 8;
 	const x0 = b.x - margin;
 	const y0 = b.y - margin;
@@ -511,6 +540,7 @@ function buildingRaster(w, b, r, margin) {
 	const rows = Math.ceil((b.h + margin * 2) / C);
 	const blocked = new Uint8Array(cols * rows);
 	const vault = new Uint8Array(cols * rows);
+	const glass = new Uint8Array(cols * rows);
 	const inside = new Uint8Array(cols * rows);
 	const parts = b.parts ?? [b];
 	for (let j = 0; j < rows; j++) {
@@ -521,7 +551,9 @@ function buildingRaster(w, b, r, margin) {
 		}
 	}
 	for (const s of W.querySolids(w, x0, y0, x0 + cols * C, y0 + rows * C)) {
-		const window = s.kind === "window";
+		const pane = WINDOWS.windowIntact(s);
+		// the open frame always, the glass only for the horde: for a survivor's walk an intact pane is a wall
+		const window = s.kind === "window" && (!pane || horde);
 		if (!window && !W.isBlocking(s)) continue;
 		const pad = window ? physics.VAULT_REACH + C : r;
 		const c0 = Math.max(0, Math.floor((s.x - pad - x0) / C));
@@ -534,7 +566,7 @@ function buildingRaster(w, b, r, margin) {
 			for (let i = c0; i <= c1; i++) {
 				const px = x0 + i * C + C / 2;
 				if (window) {
-					if (physics.inVaultZone(s, px, py)) vault[j * cols + i] = 1;
+					if (inWindowZone(s, px, py)) (pane ? glass : vault)[j * cols + i] = 1;
 					continue;
 				}
 				const dx = Math.max(s.x - px, 0, px - s.x - s.w);
@@ -547,15 +579,16 @@ function buildingRaster(w, b, r, margin) {
 		const j = Math.floor((y - y0) / C);
 		return i < 0 || j < 0 || i >= cols || j >= rows ? -1 : j * cols + i;
 	};
-	return { C, x0, y0, cols, rows, blocked, vault, inside, idx };
+	return { C, x0, y0, cols, rows, blocked, vault, glass, inside, idx };
 }
 
 /**
  * Cheapest path from `starts` over the free cells `allowed` lets through (8-neighbour, no corner cutting), in
- * world units; a step inside a window's vault zone costs 1 / VAULT_SLOW of its length (the climb, EDI-10).
+ * world units; a step inside a window's vault zone costs 1 / VAULT_SLOW of its length (the climb, EDI-10), and
+ * stepping onto an intact pane (a horde raster's `glass`) GLASS_BREAK_U more, once: the blows that break it (EDI-18).
  */
 function pathField(ras, starts, allowed) {
-	const { cols, rows, blocked, vault, C } = ras;
+	const { cols, rows, blocked, vault, glass, C } = ras;
 	const n = cols * rows;
 	const dist = new Float64Array(n).fill(Infinity);
 	const heap = [];
@@ -608,7 +641,10 @@ function pathField(ras, starts, allowed) {
 				const nk = nj * cols + ni;
 				if (blocked[nk] || !allowed(nk)) continue;
 				if (di !== 0 && dj !== 0 && (blocked[j * cols + ni] || blocked[nj * cols + i])) continue;
-				const step = (di !== 0 && dj !== 0 ? Math.SQRT2 : 1) * C * (vault[nk] || vault[k] ? slow : 1);
+				const climb = vault[nk] || vault[k] || glass[nk] || glass[k];
+				const step =
+					(di !== 0 && dj !== 0 ? Math.SQRT2 : 1) * C * (climb ? slow : 1) +
+					(glass[nk] && !glass[k] ? GLASS_BREAK_U : 0);
 				if (d + step < dist[nk]) {
 					dist[nk] = d + step;
 					push(nk, d + step);
@@ -670,6 +706,36 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 			}
 			if (Math.max(o.w, o.h) < physics.ZOMBIE_RADIUS * 1.4 * 2 + 8) {
 				fail("EDI-10", `${b.tags} #${b.id}: window too narrow for a big walker`, o.x, o.y);
+			}
+			// EDI-18: the opening keeps its solid, and the solid IS the state the plan decided -- glass (GLASS_HITS
+			// blows, stops a body and a bullet, never the eyes) or the open frame of EDI-10 (born broken: no glass)
+			const g = o.glass;
+			const run = (WINDOW_RUN[windowGroup(t)] ??= { n: 0, broken: 0, rule: WINDOWS.brokenShare(t) });
+			run.n++;
+			if (o.broken === true) run.broken++;
+			if (g === undefined || g.kind !== "window" || g.x !== o.x || g.y !== o.y || g.w !== o.w || g.h !== o.h) {
+				fail("EDI-18", `${b.tags} #${b.id}: a window whose opening lost its solid`, cx(o), cy(o));
+				continue;
+			}
+			if (o.broken === true) {
+				if (!WINDOWS.windowBroken(g) || W.isBlocking(g) || g.open !== true || g.hp !== 0 || g.hpMax !== 0) {
+					fail("EDI-18", `${b.tags} #${b.id}: a window born broken is not an open frame`, cx(o), cy(o));
+				}
+			} else if (
+				!WINDOWS.windowIntact(g) ||
+				!W.isBlocking(g) ||
+				g.hp !== WINDOWS.GLASS_HITS ||
+				g.hpMax !== WINDOWS.GLASS_HITS ||
+				!physics.blocksShots(g) ||
+				PERCEPTION.blocksSight(g) ||
+				physics.inVaultZone(g, cx(o), cy(o))
+			) {
+				fail(
+					"EDI-18",
+					`${b.tags} #${b.id}: an intact pane is not glass (body/bullet stopped, eyes not)`,
+					cx(o),
+					cy(o),
+				);
 			}
 		}
 		// EDI-12: nothing in front of a doorway (two bodies deep) or a window (one body deep)
@@ -762,7 +828,7 @@ function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
 		// EDI-11: no safe spot -- from the nearest reachable outside point, a walker (16) gets to every spot a survivor
 		// (18) can stand on, fast. The two rasters share their grid (same box, same margin), so a cell index is the
 		// same spot in both.
-		const zr = buildingRaster(w, b, physics.ZOMBIE_RADIUS, 160);
+		const zr = buildingRaster(w, b, physics.ZOMBIE_RADIUS, 160, true);
 		const starts = [];
 		for (let k = 0; k < zr.cols * zr.rows; k++) {
 			if (zr.inside[k] || zr.blocked[k]) continue;
@@ -1988,6 +2054,39 @@ for (const [t, run] of Object.entries(DOOR_RUN)) {
 	}
 }
 console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all their doors): ${shares.join(", ")}`);
+// EDI-18 over the run: the share of the windows generated broken, per group (within WINDOW_SHARE_TOL of its rule) and
+// over the whole town (the owner's 20-35%), and the storefronts before the houses (APO-01: looted first)
+{
+	const glassShares = [];
+	let n = 0;
+	let broken = 0;
+	for (const [group, run] of Object.entries(WINDOW_RUN)) {
+		const share = run.broken / run.n;
+		n += run.n;
+		broken += run.broken;
+		glassShares.push(`${group} ${(share * 100).toFixed(0)}% of ${run.n} (rule ${(run.rule * 100).toFixed(0)}%)`);
+		if (run.n >= 30 && Math.abs(share - run.rule) > WINDOW_SHARE_TOL) {
+			const msg = `${group}: ${(share * 100).toFixed(0)}% of ${run.n} windows generated broken, rule ${(run.rule * 100).toFixed(0)}%`;
+			all.push({ rule: "EDI-18", msg, x: 0, y: 0 });
+			total++;
+			console.log(`  EDI-18 (run) ${msg}`);
+		}
+	}
+	const town = n > 0 ? broken / n : 0;
+	const order =
+		WINDOW_RUN.house === undefined ||
+		WINDOW_RUN.shop === undefined ||
+		WINDOW_RUN.house.broken / WINDOW_RUN.house.n < WINDOW_RUN.shop.broken / WINDOW_RUN.shop.n;
+	if (n > 0 && (town < WINDOW_SHARE_MIN || town > WINDOW_SHARE_MAX || !order)) {
+		const msg = `${(town * 100).toFixed(0)}% of ${n} windows generated broken (want ${WINDOW_SHARE_MIN * 100}-${WINDOW_SHARE_MAX * 100}%, shops over houses)`;
+		all.push({ rule: "EDI-18", msg, x: 0, y: 0 });
+		total++;
+		console.log(`  EDI-18 (run) ${msg}`);
+	}
+	console.log(
+		`  windows over the run (EDI-18): ${(town * 100).toFixed(0)}% of ${n} generated broken -- ${glassShares.join(", ")}`,
+	);
+}
 if (CAMPUS !== undefined) console.log(`  campus (EDI-17): in ${CAMPUS_RUN.campus} of ${CAMPUS_RUN.towns} towns`);
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));
 console.log(

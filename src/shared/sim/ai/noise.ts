@@ -10,11 +10,26 @@ import { WeaponKind } from "shared/data/kinds";
  *
  * Here noise matters all day and all night, and it is graded by what made it:
  *   LOUD    a gunshot, by weapon class (a pistol is the original's 800, a sniper rifle carries almost twice as
- *           far); building something; a construction smashed; an exploder going off.
- *   MEDIUM  running — the survivor's normal gait.
- *   LOW     walking (a hurt, starving or slowed survivor drags their feet quieter), a blow landing on a body.
+ *           far); building something; a construction smashed; an exploder going off; glass breaking.
+ *   MEDIUM  running — the survivor's normal gait; a zombie pounding on glass or a barricade.
+ *   LOW     walking (a hurt, starving or slowed survivor drags their feet quieter), a blow landing on a body, a door.
  * That is the tactical trade-off the owner asked for: a blade is quiet and keeps a fight local, a gun ends it
  * faster and brings the street. The rain masks everything to RAIN_HEARING (shared/sim/ai/perception.ts).
+ *
+ * THE TABLE (u; ×0.6 in the rain; every ring says only where it came from). One place for every source, so a new one
+ * is weighed against the rest (DESIGN_RULES IA-02 prints the same table):
+ *
+ *   sniper 1400 · machine gun 1200 · rifle / shotgun 1120 · pistol 800 (silencer ÷3: 267) · flamethrower 360 ·
+ *   stun gun 280 · bow 0                                                                    GUNSHOT × gunClassScale
+ *   motorcycle horn 900 · engine 400 (idle) .. 900 (top speed) every 0.5 s · crash 400    shared/data/buildings.ts,
+ *   bicycle bell 250 (a bicycle's tyres: the rider's footsteps)                           server/sim/vehicles.ts
+ *   exploder going off 800 · construction smashed 650 · building 450                     EXPLOSION, STRUCT_BREAK, BUILD
+ *   GLASS BREAKING 420 (a zombie's shout reaches as far: IA-03) · turret shot 800 · shock 200
+ *   a zombie pounding on a barricade 300, or on glass 300 (every blow)                    STRUCT_HIT, GLASS_BANG
+ *   running 220 · walking 110 (Stealth ÷2) · a blow landing on a body 150 · a door 150     STEP_*, HIT, DOOR
+ *
+ * There is no bank and no car alarm in the town (EDI-03's buildings, VEI-*): an alarm, if one is ever added, goes in
+ * this table first. A melee swing that hits nothing, reloading and searching are silent.
  *
  * A noise tells a zombie WHERE IT CAME FROM, never where the survivor is now: it goes and looks (suspicious),
  * and only its eyes turn that into a chase. Walls do not stop a ring — a shot inside a house is heard outside,
@@ -45,6 +60,21 @@ export const STRUCT_HIT = 300;
 export const STRUCT_BREAK = 650;
 /** an exploder going off (the original's boom_power 800) */
 export const EXPLOSION = 800;
+/**
+ * A window's glass breaking (EDI-18), whoever broke it: a sharp crash the next houses hear -- as far as a zombie's
+ * shout carries (IA-03, 420), well under a pistol (800) and over a zombie pounding on something (300). That is the
+ * choice the owner asked for: through a door is quiet, through the glass is a shortcut the street hears. And it is
+ * heard AT THE WINDOW: a pane shot from across the street pulls the horde to the pane, not to the shooter -- a lure
+ * (a silenced pistol is 267 at the shooter).
+ */
+export const GLASS_BREAK = 420;
+/** a zombie pounding on a pane before it gives (EDI-18): every blow, as loud as one on a barricade */
+export const GLASS_BANG = STRUCT_HIT;
+/**
+ * A built door (EDI-13; the town's own doorways are open gaps, EDI-09) opened or closed with E, a creak or a slam: the
+ * next zombie over hears it, as a blow
+ */
+export const DOOR = 150;
 
 /**
  * How much further than a pistol each class of gun is heard. Handguns are the reference (the original's single

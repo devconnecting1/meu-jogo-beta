@@ -10,7 +10,8 @@ import { querySolids, Solid } from "shared/game/world";
 import { blocksShots, PLAYER_RADIUS, raycast, rayCircle, segmentClear } from "shared/game/physics";
 import { Bullet } from "shared/game/bullets";
 import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState, ZombieState, zombieRadius } from "shared/game/entities";
-import { addPuddle, emitSound, reactToHit } from "./zombieAI";
+import { addPuddle, emitSound, reactToHit, shatterWindow } from "./zombieAI";
+import { windowIntact } from "shared/game/windows";
 import { hitMapItem } from "./interaction";
 import { took } from "./pickups";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
@@ -159,6 +160,15 @@ interface ShotHit {
 	solid?: Solid;
 	x: number;
 	y: number;
+}
+
+/**
+ * A pane this client's own shot, arrow or blade reached breaks (EDI-18) -- offline only: where the server owns the
+ * world, ITS combat breaks the glass (server/sim/windows.ts) and the DoorSet comes back to the mirror.
+ */
+function localGlass(refs: GameRefs, s: Solid): void {
+	if (serverOwnsWorld() || !windowIntact(s)) return;
+	shatterWindow(refs, s);
 }
 
 /** first thing on the ray: wall/tree/car, zombie body (circle) or boss body/segment */
@@ -555,6 +565,7 @@ export class Combat {
 				} else if (hit.solid !== undefined) {
 					fxDebris(refs, hit.x, hit.y, 2, "impact");
 					if (hit.solid.kind === "car" && hit.solid.tags === "car") hitMapItem(refs, hit.solid, false);
+					else localGlass(refs, hit.solid);
 				}
 				fxTracer(refs, mx, my, hit.x, hit.y, "bullet", TRACER_LIFE);
 			}
@@ -788,7 +799,8 @@ export class Combat {
 		buf.clear();
 		querySolids(refs.world, p.x - reach - 8, p.y - reach - 8, p.x + reach + 8, p.y + reach + 8, buf);
 		for (const s of buf) {
-			if (s.kind !== "tree" && s.kind !== "car") continue;
+			const pane = windowIntact(s);
+			if (s.kind !== "tree" && s.kind !== "car" && !pane) continue;
 			if (!continuous && this.swing.solidIds.has(s.id)) continue;
 			const qx = math.clamp(p.x, s.x, s.x + s.w);
 			const qy = math.clamp(p.y, s.y, s.y + s.h);
@@ -802,6 +814,13 @@ export class Combat {
 			const pad = cd > half ? math.deg(math.asin(half / cd)) : 90;
 			if (rel + pad < fromDeg || rel - pad > toDeg) continue;
 			if (!continuous) this.swing.solidIds.add(s.id);
+			if (pane) {
+				// EDI-18: the blade breaks the glass it crosses (the server's rule, server/sim/combat.ts `glass`)
+				if (segmentClear(refs.world, p.x, p.y, qx, qy, other => other !== s && blocksShots(other))) {
+					localGlass(refs, s);
+				}
+				continue;
+			}
 			if (hitMapItem(refs, s, isChoppingTool(w))) {
 				fxDebris(refs, qx, qy, 3, s.kind === "tree" ? "tree" : "car");
 				if (!continuous) shake(refs, 1.5, 0.05);
@@ -917,6 +936,8 @@ export class Combat {
 		if (hit.solid !== undefined && hit.t <= step) {
 			b.x = hit.x - math.cos(b.angle) * 2;
 			b.y = hit.y - math.sin(b.angle) * 2;
+			// a pane shatters under the arrow (EDI-18), which drops at the frame
+			localGlass(refs, hit.solid);
 			this.groundArrow(b);
 			return false;
 		}

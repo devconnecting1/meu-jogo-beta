@@ -326,7 +326,7 @@ async function publish(live) {
 	// rojo build is what CI already does, so what goes up is exactly what CI verified
 	// place properties a script cannot set (Players.BanningEnabled) ride on the build: refuse to publish without them
 	execFileSync(process.execPath, [join(ROOT, "tools", "check-place.mjs")], { cwd: ROOT, stdio: "inherit" });
-	const out = join(ROOT, "ProjectZ-cloud.rbxl");
+	const out = join(ROOT, "LastTown-cloud.rbxl");
 	console.log("montando o lugar com o rojo...");
 	execFileSync("rojo", ["build", "-o", out], { cwd: ROOT, stdio: "inherit" });
 	const bytes = readFileSync(out);
@@ -896,8 +896,8 @@ async function uploadArt(flags) {
 			mime: "image/png",
 			// an image may be Open Use: the old account's id stays in the place until the new one is approved
 			meanwhile: "o id antigo fica no assets.json e no place até o novo ser aprovado",
-			displayName: it => `ProjectZ world ${it.name}`,
-			description: it => `Project Z town art: ${it.description} (tools/gen-world-art.mjs)`,
+			displayName: it => `LastTown world ${it.name}`,
+			description: it => `Last Town art: ${it.description} (tools/gen-world-art.mjs)`,
 			regenerate: regenerateArtModule,
 		},
 		flags,
@@ -964,9 +964,9 @@ async function uploadAudio(flags) {
 			meanwhile:
 				"o id antigo fica no assets.json, mas sai do audioAssets.ts (áudio é privado de quem sobe): " +
 				"cada som toca a biblioteca (SND-01) até o novo ser aprovado",
-			displayName: it => `ProjectZ sfx ${it.name}`,
+			displayName: it => `LastTown sfx ${it.name}`,
 			description: it =>
-				`Project Z sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,
+				`Last Town sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,
 			regenerate: regenerateAudioModule,
 		},
 		flags,

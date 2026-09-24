@@ -504,6 +504,58 @@ section("B1. getting on and off: E at the server's position, the solid out of th
 	);
 });
 
+section("B1b. E for a window's glass is for the glass only: the bicycle parked under it is not ridden (EDI-18)", () => {
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const { world, sim } = serverWith();
+	// a shop front along y = 1000 with a pane in it (1000..1080), a bicycle parked just inside, both in E's reach; the
+	// wall and the glass are a building's (parentId), as the town lays them
+	const wall = x =>
+		W.addSolid(world, {
+			kind: "wall_h",
+			x,
+			y: 1000,
+			w: 100,
+			h: 20,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "bwall",
+			parentId: 1,
+		});
+	wall(900);
+	const pane = W.addSolid(world, {
+		kind: "window",
+		x: 1000,
+		y: 1000,
+		w: 80,
+		h: 20,
+		hp: WIN.GLASS_HITS,
+		hpMax: WIN.GLASS_HITS,
+		destructible: false,
+		tags: "window",
+		parentId: 1,
+	});
+	wall(1080);
+	park(world, 21, 1040, 1080, 0);
+	const sp = addPlayer(sim, 0, 1040, 1040);
+	const d = driver(sim, sp);
+	checkEq(
+		interactTarget(world, sp.state.x, sp.state.y)?.kind,
+		"vehicle",
+		"a plain E there would take the bicycle (the HUD's query)",
+	);
+	// the press whose hint was the window (HeldBit.Glass, protocol.ts note 23)
+	d.tick(0, 0, PRESS_E, P.HeldBit.Glass);
+	check(
+		WIN.windowBroken(pane) && !sim.vehicles.riding(0) && sp.state.ride === undefined,
+		"the E for the glass breaks the pane and nobody gets on the bicycle (the review of b61425a)",
+		`pane ${WIN.windowBroken(pane) ? "broken" : "intact"}, riding ${sim.vehicles.riding(0)}`,
+	);
+	d.ticks(40);
+	d.tick(0, 0, PRESS_E);
+	check(sim.vehicles.riding(0), "and a plain E afterwards rides it, as ever");
+});
+
 section("B2. the speed is the server's: only a survivor the server mounted rides", () => {
 	const { world, sim } = serverWith({ width: 16000 });
 	// a walker holding the stick: 210 u/s, whatever the client believes
