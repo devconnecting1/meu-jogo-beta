@@ -6,9 +6,10 @@
 import { YARD_TAGS } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import type { ZombieState } from "shared/game/entities";
-import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
+import { PLAYER_RADIUS, segmentClear, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
-import { buildingAt, GroundItem, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
+import { buildingAt, GroundItem, isBlocking, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
+import { WINDOW_REACH, windowIntact } from "shared/game/windows";
 import { rectCircleOverlap } from "./placement";
 import { vehicleBroken } from "./vehicle";
 
@@ -288,6 +289,10 @@ export function bodiesOverlapRect(
  * a wall to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
  * after the loot: it can be ridden from anywhere around it, they cannot. A pump island is the target in reach whether
  * or not it holds oil (a dry one does nothing, and the hint says nothing).
+ *
+ * A window's glass (EDI-18) is never one of these: breaking it is its own intent (`nearestIntactWindow`), asked for
+ * only when nothing here is in reach and carried as `HeldBit.Glass` (protocol.ts note 23) -- so no press meant for
+ * something else can ever smash a pane, on this client's world or on the server's.
  */
 export type InteractTarget =
 	| { kind: "item"; item: GroundItem }
@@ -299,7 +304,57 @@ export type InteractTarget =
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
-/** `skip`: ground items E passes over (see `nearestGroundItem`) */
+/** reused by every `nearestIntactWindow` (the hint asks every frame) */
+const WINDOW_SCRATCH = new Array<Solid>();
+/** the pane `paneAtHand` looks at: its own glass is not in the way of the line to it */
+let paneLooked: Solid | undefined;
+const blocksPaneLine = (s: Solid): boolean => s !== paneLooked && isBlocking(s);
+
+/**
+ * Is intact pane `s` at hand from (x, y)? Within `reach` of its edge, and a clear line to it -- to a point 1.5 u INSIDE
+ * the pane, so the wall it sits in (touching its ends) is never "in the way" of a survivor standing at an angle, while a
+ * wall between them is. The ONE test of the client's hint and the server's check (server/sim/windows.ts `byHand`).
+ */
+export function paneAtHand(
+	world: WorldData,
+	s: Solid,
+	x: number,
+	y: number,
+	reach: number,
+): "ok" | "range" | "blocked" {
+	if (edgeDist(s, x, y) > reach) return "range";
+	const inset = 1.5;
+	const px = math.clamp(x, s.x + math.min(inset, s.w / 2), s.x + s.w - math.min(inset, s.w / 2));
+	const py = math.clamp(y, s.y + math.min(inset, s.h / 2), s.y + s.h - math.min(inset, s.h / 2));
+	paneLooked = s;
+	const clear = segmentClear(world, x, y, px, py, blocksPaneLine);
+	paneLooked = undefined;
+	return clear ? "ok" : "blocked";
+}
+
+/**
+ * The intact pane nearest (x, y) at hand (EDI-18, `paneAtHand`: within `reach` of its edge, WINDOW_REACH for the hint,
+ * with a clear line), or undefined. A small box: the pane has to be right there, at arm's length, from inside or from
+ * outside. The client asks it with its reach; the server with the latency slack every E gets.
+ */
+export function nearestIntactWindow(world: WorldData, x: number, y: number, reach = WINDOW_REACH): Solid | undefined {
+	let best: Solid | undefined;
+	let bestD = math.huge;
+	const found = WINDOW_SCRATCH;
+	found.clear();
+	querySolids(world, x - reach - 8, y - reach - 8, x + reach + 8, y + reach + 8, found);
+	for (const s of found) {
+		if (!windowIntact(s)) continue;
+		const d = edgeDist(s, x, y);
+		if (d >= bestD || paneAtHand(world, s, x, y, reach) !== "ok") continue;
+		bestD = d;
+		best = s;
+	}
+	found.clear();
+	return best;
+}
+
+/** `skip`: ground items E passes over (see `nearestGroundItem`). Never a window's glass (see InteractTarget). */
 export function interactTarget(
 	world: WorldData,
 	x: number,

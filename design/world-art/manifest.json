@@ -1397,8 +1397,8 @@
 			"file": "furniture.png",
 			"kind": "atlas",
 			"w": 1024,
-			"h": 922,
-			"description": "interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
+			"h": 923,
+			"description": "interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
 		},
 		{
 			"name": "blood",
@@ -1415,6 +1415,14 @@
 			"w": 1024,
 			"h": 662,
 			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
+		},
+		{
+			"name": "wordmark",
+			"file": "wordmark.png",
+			"kind": "ui",
+			"w": 86,
+			"h": 39,
+			"description": "the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts)"
 		}
 	]
 }

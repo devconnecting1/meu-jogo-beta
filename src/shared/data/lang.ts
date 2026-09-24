@@ -7,7 +7,7 @@
  * text, so that match is free and no call site had to change.
  *
  * What the table is FOR, then, is being the registry of what may be translated: `npm run locale` exports it
- * to the CSV that the Localization tab imports (design/locale/ProjectZ.csv). A string that is shown but not
+ * to the CSV that the Localization tab imports (design/locale/LastTown.csv). A string that is shown but not
  * listed here never reaches that table, so it is the one language nobody can fix -- which is exactly what
  * had happened to nineteen strings from the onboarding and the end-of-run screen before this pass.
  *
@@ -923,6 +923,9 @@ export const LANG_TABLE: Array<string> = [
 	"Search shed",
 	"Open deposit boxes",
 	"Crack vault (hold)",
+	// an intact window at hand: E breaks its glass, the loud way in or out (client/systems/interaction.ts WINDOW_HINT,
+	// DESIGN_RULES EDI-18; the HUD shows the text after "E: ")
+	"Break window",
 ];
 
 /**

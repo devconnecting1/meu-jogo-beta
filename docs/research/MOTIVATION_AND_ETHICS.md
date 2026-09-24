@@ -1,4 +1,4 @@
-# Motivação, dopamina e ética de design — o que a ciência sustenta, e o que muda no Project Z
+# Motivação, dopamina e ética de design — o que a ciência sustenta, e o que muda no Last Town
 
 Pedido do dono (2026-09-24): "Pesquise cientificamente sobre dopamina, vícios e afins, para tornar nosso jogo melhor, de
 um jeito que faça sentido." Base: `main` em `21aab2a`. Complementa `docs/research/DEAD_TOWN_GAP_ANALYSIS.md` (o que falta
@@ -33,7 +33,7 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 - **O dano se concentra em poucos mecanismos:** acaso pago (loot boxes) [misto a forte na associação; misto na causa],
   pressão (FOMO, sequência que pune, urgência falsa) [misto] e necessidades frustradas [misto]. O transtorno de jogo existe
   (CID-11, 6C51) [norma], mas atinge uma minoria pequena, perto de 2% ou menos [misto].
-- **O Project Z já evita a maior parte por regra** [repo]: moedas só jogando, pacotes de conteúdo fixo, nada por Robux,
+- **O Last Town já evita a maior parte por regra** [repo]: moedas só jogando, pacotes de conteúdo fixo, nada por Robux,
   sem anúncios, nenhum menu pausa e nada vende capacidade (MON-01..05, UI-06, `docs/CREATOR_HUB.md`).
 - **O que falta** [inferência]: (1) o novato pode cair num mundo no dia 20, o pior golpe na competência; (2) a noite acaba
   sem fechar o ciclo: não há um ponto de parada saudável ao amanhecer; (3) não há retenção nenhuma, e ela precisa nascer
@@ -158,7 +158,7 @@ O "não faremos" está na §5; as métricas na §6; a lista completa na §7.
   satisfação das necessidades ligada ao bem-estar de forma independente do tempo (Johannes, Vuorre & Przybylski, 2021)
   [misto: dois jogos].
 - Em 703 adultos, o **valor percebido** do jogo na vida previu bem-estar; horas, não (Ballou et al., 2025) [misto].
-- Consequência [inferência]: a meta do Project Z não é "mais minutos", é "jogador que volta porque vale a pena".
+- Consequência [inferência]: a meta do Last Town não é "mais minutos", é "jogador que volta porque vale a pena".
 
 ### 2.3 Fluxo e desafio
 
@@ -267,7 +267,7 @@ a cidade nova de cada mundo (MP-22) e o estado do zumbi que ainda não decidiu (
 - Em 45 mil jogadores e oito desenhos de tutorial, tutorial só compensou no jogo mais complexo; instrução **no contexto**
   (na hora em que se precisa) foi melhor que instrução antes do jogo (Andersen et al., 2012) [forte no estudo; misto a
   generalização].
-- Consequência [inferência]: o Project Z é complexo (fome, saque, craft, construção, noite); o modelo atual, objetivos que
+- Consequência [inferência]: o Last Town é complexo (fome, saque, craft, construção, noite); o modelo atual, objetivos que
   observam o mundo e nunca interrompem [repo `objectives.ts`], é o certo.
 
 ### 2.15 Tipos de jogador
@@ -406,7 +406,7 @@ Roblox, §3.7), mas elas são a régua externa mais clara de onde a linha está 
 
 ---
 
-## 4. O que isso vira no Project Z
+## 4. O que isso vira no Last Town
 
 ### 4.0 O norte e o teste de cinco perguntas
 

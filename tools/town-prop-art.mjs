@@ -1,5 +1,5 @@
 /*
- * Project Z: the pixel art of the everyday town's fixtures (docs/DESIGN_RULES.md ART-16; laid out by
+ * Last Town: the pixel art of the everyday town's fixtures (docs/DESIGN_RULES.md ART-16; laid out by
  * shared/game/townLots.ts, drawn flat by client/view/townView.ts) -- the street market's stalls, tents, crates, carts
  * and food truck, the street's lamps, hydrants, mailboxes, benches and bus stops, the parks' playgrounds and courts,
  * the backyards' sheds, pools, trampolines and grills, the building site's piles and plant, and the ground they stand

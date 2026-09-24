@@ -1,7 +1,7 @@
 //!native
 import { isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { TOWN } from "shared/engine/constants";
-import { isPlayerBuilt, stampWindow, WINDOW_COST } from "shared/game/physics";
+import { isPlayerBuilt, sillCode, sillCost, stampWindow } from "shared/game/physics";
 
 /*
  * Multi-source chase field (docs/MULTIPLAYER.md §3.3). SERVER ONLY — but a pure module: no Instances, no
@@ -31,10 +31,13 @@ import { isPlayerBuilt, stampWindow, WINDOW_COST } from "shared/game/physics";
  */
 
 const FREE = 0;
-/** a window's sill (docs/DESIGN_RULES.md EDI-10): passable at WINDOW_COST, so a door nearby wins */
-const VAULT = 1;
-const SOFT = 2;
-const HARD = 3;
+/*
+ * 1 and 2 are a window's sill, the codes of shared/game/physics.ts `sillCode` (the client's field uses the same): 1 the
+ * open frame of a broken window (EDI-10, WINDOW_COST, so a door nearby wins), 2 an intact pane the horde breaks
+ * (EDI-18, WINDOW_COST + GLASS_COST, still under a construction's COST_SOFT). `sillCost` prices both.
+ */
+const SOFT = 3;
+const HARD = 4;
 const INF = 1e9;
 /** the downhill memo (Tile.down): not asked yet this generation, and asked but a local minimum */
 const DOWN_UNKNOWN = -2;
@@ -210,12 +213,8 @@ export class MultiFlowField {
 		buf.clear();
 		querySolids(world, t.ox, t.oy, t.ox + span, t.oy + span, buf);
 		for (const s of buf) {
-			if (s.kind === "window") {
-				stampWindow(s, t.ox, t.oy, CELL, TILE, (gx, gy) => {
-					if (grid[gy * TILE + gx] < VAULT) grid[gy * TILE + gx] = VAULT;
-				});
-				continue;
-			}
+			// a window's glass breaks (EDI-18): its sill is the dynamic layer's, below
+			if (s.kind === "window") continue;
 			if (isPlayerBuilt(s)) continue;
 			if (!isBlocking(s)) continue;
 			this.stamp(grid, t, s, HARD);
@@ -223,7 +222,10 @@ export class MultiFlowField {
 		t.statGen = this.staticGen;
 	}
 
-	/** what the players put there: passable at a price (SOFT) so the horde chews through when it must */
+	/**
+	 * What changes: the players' constructions, passable at a price (SOFT) so the horde chews through when it must, and
+	 * every window's sill -- the open frame or the glass (EDI-18), whose break dirties this tile like a barricade does
+	 */
 	private rasterizeDynamic(world: WorldData, t: Tile): void {
 		const grid = t.grid;
 		const stat = t.stat;
@@ -233,6 +235,13 @@ export class MultiFlowField {
 		buf.clear();
 		querySolids(world, t.ox, t.oy, t.ox + span, t.oy + span, buf);
 		for (const s of buf) {
+			if (s.kind === "window") {
+				const sill = sillCode(s);
+				stampWindow(s, t.ox, t.oy, CELL, TILE, (gx, gy) => {
+					if (grid[gy * TILE + gx] < sill) grid[gy * TILE + gx] = sill;
+				});
+				continue;
+			}
 			if (!isPlayerBuilt(s) || !isBlocking(s)) continue;
 			this.stamp(grid, t, s, s.destructible ? SOFT : HARD);
 		}
@@ -500,7 +509,7 @@ export class MultiFlowField {
 						cost = COST_DIAG;
 					}
 					if (g === SOFT) cost += COST_SOFT;
-					else if (g === VAULT) cost += WINDOW_COST;
+					else if (g !== FREE) cost += sillCost(g);
 					const nd = d + cost;
 					if (nd < dist[nl]) {
 						dist[nl] = nd;
@@ -532,7 +541,7 @@ export class MultiFlowField {
 					cost = COST_DIAG;
 				}
 				if (g === SOFT) cost += COST_SOFT;
-				else if (g === VAULT) cost += WINDOW_COST;
+				else if (g !== FREE) cost += sillCost(g);
 				const nd = d + cost;
 				const ndist = nt.bDist as Array<number>;
 				if (nd < ndist[nl]) {

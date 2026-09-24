@@ -9,6 +9,7 @@ import { buildingSeed, planBuilding } from "./interiors";
 import type { BuildingPlan, Decor, Opening, RoomRect } from "./interiors";
 import * as TL from "./townLots";
 import { gridInsert, gridOf, gridRemove, newGrid, pointInSolid, querySolids, rectOverlap } from "./solidGrid";
+import { GLASS_HITS } from "./windows";
 
 // the spatial grid and its queries live in ./solidGrid (compiled natively, unlike the generator below); every caller
 // keeps importing them from here
@@ -27,7 +28,11 @@ export type SolidKind =
 	| "structure"
 	/** a building's furniture (tags: the piece, shared/game/interiors.ts): blocks bodies; `low` ones let bullets by */
 	| "furniture"
-	/** a window's gap (passable, tags "window"): bodies climb through slowly, the horde's field prices it (EDI-10) */
+	/**
+	 * A window's gap (tags "window", shared/game/windows.ts): with its glass INTACT it stops bodies and bullets but not
+	 * the eyes; BROKEN it is passable -- bodies climb through slowly and the horde's field prices the sill (EDI-10,
+	 * EDI-18)
+	 */
 	| "window"
 	/**
 	 * A gas station's canopy over its pump islands (tags "canopy", EDI-16): aerial like a tree's crown (COL-02),
@@ -369,6 +374,17 @@ export interface WorldData {
 	onItemRemove?: (w: WorldData, item: GroundItem) => void;
 	onSolidAdd?: (w: WorldData, solid: Solid) => void;
 	onSolidRemove?: (w: WorldData, solid: Solid) => void;
+	/**
+	 * Server only (EDI-18, §4.5): a window's glass just broke (shared/game/windows.ts `breakWindow`, the one place that
+	 * breaks one). The hook on the mutation, like the two above: a zombie's blow, a shot, a blade and an E press all
+	 * reach the outbox through it.
+	 */
+	onWindowBroken?: (w: WorldData, solid: Solid) => void;
+	/**
+	 * Server only (EDI-18): panes that may still break this tick (WINDOW_BREAKS_PER_TICK, reset at every tick's start);
+	 * undefined on every client, where nothing is budgeted.
+	 */
+	windowBudget?: number;
 	/** server only: the ground items by cell (`ItemGrid`, `enableItemGrid`); undefined on every client */
 	itemGrid?: ItemGrid;
 }
@@ -1018,9 +1034,16 @@ function noParking(g: Gen, e: LotEdge, u0: number, u1: number): void {
 }
 
 /** a static piece of a building (wall, window, furniture): indestructible, belongs to the record `parentId` */
-function addPart(w: WorldData, kind: SolidKind, q: Rect, parentId: number, tags: string, extra?: Partial<Solid>): void {
-	if (q.w < 2 || q.h < 2) return;
-	addSolid(w, {
+function addPart(
+	w: WorldData,
+	kind: SolidKind,
+	q: Rect,
+	parentId: number,
+	tags: string,
+	extra?: Partial<Solid>,
+): Solid | undefined {
+	if (q.w < 2 || q.h < 2) return undefined;
+	return addSolid(w, {
 		kind,
 		x: q.x,
 		y: q.y,
@@ -2422,7 +2445,16 @@ function planInteriors(g: Gen): void {
 				addPart(w, q.w >= q.h ? "wall_h" : "wall_v", q, id, "bwall", q.inner ? { inner: true } : undefined);
 			}
 			for (const o of plan.openings) {
-				if (o.kind === "window") addPart(w, "window", o, id, "window", { passable: true });
+				if (o.kind !== "window") continue;
+				// EDI-18: glass in most frames, a seeded share already broken (the plan decided which, `Opening.broken`);
+				// the drawing reads the state off the solid the opening keeps (`Opening.glass`)
+				const broken = o.broken === true;
+				o.glass = addPart(w, "window", o, id, "window", {
+					passable: broken ? true : undefined,
+					open: broken,
+					hp: broken ? 0 : GLASS_HITS,
+					hpMax: broken ? 0 : GLASS_HITS,
+				});
 			}
 			for (const f of plan.furniture) {
 				// the vault's deposit boxes are a container of their own, not a piece of the bank (`bankVault`)

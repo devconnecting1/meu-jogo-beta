@@ -151,6 +151,21 @@ export interface ZombieState {
 	jumpLength?: number;
 	jumpTravel?: number;
 	jumpAir?: number;
+	/** the current leap is a hunting one: it may cross a pane of glass, and breaks it on the way (EDI-18) */
+	jumpGlass?: boolean;
+	/** Jumper: hunting take-offs that found no leap in a row (stuck: then it looks all round for a hop) */
+	hopFails?: number;
+	/**
+	 * Charger: a wall is between it and the survivor it hunts (checked with its lane, ~10 Hz): it walks the field round
+	 * to a way in instead of sidestepping for a lane or keeping its distance (EDI-18)
+	 */
+	laneBlind?: boolean;
+	/** Charger: seconds it closes in to bite instead of keeping its distance (no room behind it: cornered) */
+	closeIn?: number;
+	/** Charger: how long the current back-off has run, and where it started (is it getting anywhere?) */
+	backT?: number;
+	backX?: number;
+	backY?: number;
 	special: boolean;
 	/**
 	 * An admin's spawn (docs/MULTIPLAYER.md §10): its death pays nobody -- no XP, no kill credit, no achievement, no

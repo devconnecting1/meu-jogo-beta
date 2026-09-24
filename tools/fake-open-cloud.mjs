@@ -13,7 +13,7 @@
  *   PZ_FAKE_ASSETS_STATE=<file.json>  the assets made so far (read at start when it exists, rewritten at exit): a
  *                                     second run sees the first one's uploads, as Roblox would
  *   PZ_FAKE_ASSETS='{"<name>": "<plan>", "*": "<plan>"}'   what happens to each upload, by the name in its
- *                                     displayName ("ProjectZ world <name>", "ProjectZ sfx <bank>"); a plan is
+ *                                     displayName ("LastTown world <name>", "LastTown sfx <bank>"); a plan is
  *                                     comma-separated tokens:
  *        approve (default) | reject | review:N (N moderation reads say "reviewing", then approved)
  *        | review:N:reject (then rejected) | review (in review forever)
@@ -144,7 +144,7 @@ async function assetsRoute(u, method, init) {
 			return json(400, { message: `content type ${file.type} is not accepted for ${request.assetType}` });
 		}
 		if (file.size > MAX_UPLOAD) return json(400, { message: "file over 20 MB" });
-		const name = request.displayName.replace(/^ProjectZ (?:world|sfx) /, "");
+		const name = request.displayName.replace(/^LastTown (?:world|sfx) /, "");
 		const plan = planOf(name);
 		const tries = (assets.posts[name] = (assets.posts[name] ?? 0) + 1);
 		if (plan.denied) return json(403, { message: "insufficient scope" });

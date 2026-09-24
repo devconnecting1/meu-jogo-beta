@@ -2141,7 +2141,7 @@ for (const p of TOWNS.TOWN_PREFIXES) {
 const PROPER = new Set([
 	GAME_NAME,
 	...TOWN_NAMES,
-	"PROJECT Z",
+	"LAST TOWN",
 	// the credits (credits.ts, Settings › About): who made it and what inspired it (shared/module.ts)
 	"Luvitlua",
 	"Dead Town",
@@ -2527,8 +2527,8 @@ function textsIn(root, where) {
 		writeFileSync(join(tmp, "tools/locale-context.mjs"), readFileSync(join(ROOT, "tools/locale-context.mjs")));
 		writeFileSync(join(tmp, "src/shared/data/lang.ts"), readFileSync(join(SRC, "shared/data/lang.ts")));
 		execFileSync(process.execPath, [join(tmp, "tools/gen-locale.mjs")], { stdio: "pipe" });
-		const fresh = readFileSync(join(tmp, "design/locale/ProjectZ.csv"), "utf8");
-		const committed = readFileSync(join(ROOT, "design/locale/ProjectZ.csv"), "utf8");
+		const fresh = readFileSync(join(tmp, "design/locale/LastTown.csv"), "utf8");
+		const committed = readFileSync(join(ROOT, "design/locale/LastTown.csv"), "utf8");
 		// RFC 4180 records: a quoted field may hold commas, doubled quotes and line breaks (LOC-NL)
 		const records = [];
 		{
@@ -2558,7 +2558,7 @@ function textsIn(root, where) {
 		const [header, ...body] = records;
 		const rows = body.length;
 		check(
-			"o CSV commitado (design/locale/ProjectZ.csv) e o que `npm run locale` gera hoje",
+			"o CSV commitado (design/locale/LastTown.csv) e o que `npm run locale` gera hoje",
 			fresh === committed,
 			fresh === committed ? `${rows} textos` : "rode `npm run locale` e commite o CSV",
 		);

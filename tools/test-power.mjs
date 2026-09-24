@@ -927,6 +927,121 @@ section("D6. Robotics (its maker's) makes a turret hit 1.5× harder (obj_turret:
 });
 
 section(
+	"D8. a gun turret shoots through a pane of glass at a zombie that hunts: the first bullet breaks it (EDI-18, " +
+		"reviews of ef98768 L3 and b61425a)",
+	() => {
+		const WIN = require(join(SRC, "shared/game/windows.ts"));
+		const { Aware } = require(join(SRC, "shared/sim/ai/memory.ts"));
+		/** the turret at (1032, 1032), a pane 100 u out across its line of fire, a zombie `aware` 100 u behind the glass */
+		const glassTurret = aware => {
+			const world = W.serverWorld(W.createWorld(4000, 4000));
+			const save = saveWith({});
+			const zombies = [];
+			const progress = new Progress({ saveOf: slot => (slot === 0 ? save : undefined) });
+			const combat = new ServerCombat({
+				world,
+				targets: { zombies: () => zombies, bosses: () => [] },
+				progress,
+				random: () => 0.5,
+			});
+			const power = new ServerPower({
+				world,
+				clock: { dayTime: 12, isRaining: false, darkAlpha: 0 },
+				saveOf: slot => (slot === 0 ? save : undefined),
+			});
+			world.onSolidAdd = (w, s) => power.note(s, true);
+			const def = PLACEABLES[ID.turret];
+			W.addSolid(world, {
+				...placedSolid(def, { x: 1000, y: 1000, w: def.w, h: def.h }, 0),
+				placeable: ID.turret,
+				owner: 0,
+			});
+			const bdef = PLACEABLES[ID.battery];
+			W.addSolid(world, {
+				...placedSolid(bdef, { x: 1000, y: 1150, w: bdef.w, h: bdef.h }, 0),
+				placeable: ID.battery,
+			});
+			power.settle(0.25);
+			const pane = W.addSolid(world, {
+				kind: "window",
+				x: 1120,
+				y: 992,
+				w: 20,
+				h: 80,
+				hp: WIN.GLASS_HITS,
+				hpMax: WIN.GLASS_HITS,
+				destructible: false,
+				tags: "window",
+			});
+			const z = createZombie(1, 1032 + 200, 1032, 1);
+			z.hp = 1e6;
+			z.aware = aware;
+			z.detect = aware !== Aware.Idle;
+			zombies.push(z);
+			const broken = [];
+			const turrets = new ServerTurrets({
+				world,
+				power,
+				zombiesNear: (x, y, r, tick, out) => {
+					for (const q of zombies) if (Math.hypot(q.x - x, q.y - y) <= r) out.push(q);
+					return out;
+				},
+				bosses: () => [],
+				damage: combat,
+				random: () => 0.5,
+				glass: s => {
+					broken.push(s);
+					return WIN.breakWindow(world, s);
+				},
+			});
+			return { pane, z, broken, turrets };
+		};
+
+		const hunt = glassTurret(Aware.Chasing);
+		let t = 0;
+		for (; t < SEARCH_EVERY * 4 && hunt.broken.length === 0; t++) hunt.turrets.step(t, TICK_DT);
+		check(
+			hunt.broken.length === 1 &&
+				hunt.broken[0] === hunt.pane &&
+				WIN.windowBroken(hunt.pane) &&
+				hunt.z.hp === 1e6,
+			"the turret sees a HUNTING zombie through the glass and fires: the bullet stops at the pane and breaks it",
+			`${hunt.broken.length} pane(s), zombie hp ${1e6 - hunt.z.hp} lost`,
+		);
+		for (let k = 0; k < 240 && hunt.z.hp === 1e6; k++, t++) hunt.turrets.step(t, TICK_DT);
+		check(
+			hunt.z.hp < 1e6,
+			"and the next shot goes through the open frame into the zombie",
+			`${1e6 - hunt.z.hp} damage`,
+		);
+
+		// a base's turret does not break its own windows to shoot a wanderer that would never have (the review of
+		// b61425a): through glass it only fires at one that hunts; in the open, at anything
+		for (const [aware, name] of [
+			[Aware.Idle, "a wandering zombie"],
+			[Aware.Suspicious, "a zombie walking to a noise"],
+			[Aware.Searching, "a searching zombie"],
+		]) {
+			const idle = glassTurret(aware);
+			for (let k = 0; k < 240; k++) idle.turrets.step(k, TICK_DT);
+			check(
+				idle.broken.length === 0 && WIN.windowIntact(idle.pane) && idle.turrets.stats.shots === 0,
+				`...never at ${name} behind its glass: no shot, the pane stays whole`,
+				`${idle.turrets.stats.shots} shot(s), ${idle.broken.length} pane(s)`,
+			);
+		}
+		const open = glassTurret(Aware.Idle);
+		WIN.setWindowGlass(open.pane, false);
+		for (let k = 0; k < 240 && open.z.hp === 1e6; k++) open.turrets.step(k, TICK_DT);
+		check(
+			open.z.hp < 1e6,
+			"...and a wanderer in the open (the frame empty) is shot as before",
+			`${1e6 - open.z.hp} damage`,
+		);
+	},
+);
+
+section(
 	"D7. a machine's final blow on a boss: the fighters keep their credit, its builder gets the XP only (§3.6)",
 	() => {
 		const { AchievementId } = require(join(SRC, "shared/data/achievements.ts"));

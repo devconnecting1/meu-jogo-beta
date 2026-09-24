@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Project Z world art: the pixel-art textures and sprites of the town, generated procedurally into
+ * Last Town world art: the pixel-art textures and sprites of the town, generated procedurally into
  * design/world-art/ (PNG + manifest.json), and the client's index of them (src/client/view/worldArtAssets.ts).
  *
  *   npm run art:world                       # writes design/world-art/*.png, manifest.json, the contact sheet
@@ -39,6 +39,11 @@
  *            And the everyday town's fixtures' (`townProps`, tools/town-prop-art.mjs, ART-16): the market's stalls,
  *            tents, crates and carts, the street's lamps, hydrants and benches, the parks' and the backyards' things,
  *            the building site's, and the ground they stand on, its cells in src/client/view/townPropAtlas.ts
+ *   ui       not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
+ *            the store art's wordmark uses, docs/promo) -- the lobby's title and the splash (client/ui/logo.ts).
+ *            GREYSCALE + alpha like the UI skin: three cells stacked top to bottom (the ink -- outline and hard
+ *            shadow --, the fill of LAST, the fill of TOWN), each drawn by its own ImageLabel tinted with a theme
+ *            token, so the colours stay the theme's (UI-01). Without an id the flat text wordmark draws instead.
  *
  * Light: the baked form shading (canopy highlights, car roofs, parapet rims) is lit from the top left, the
  * convention of top-down pixel art; what really moves with the sun (drop shadows, which roof slope is lit,
@@ -58,6 +63,7 @@ import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
 import { bloodArt, bloodAtlasModule, bloodSheet } from "./blood-art.mjs";
 import { townPropArt, townPropAtlasModule, townPropSheet } from "./town-prop-art.mjs";
+import { dilate, layoutText, TITLE_H } from "./title-font.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "design", "world-art");
@@ -1679,6 +1685,58 @@ function helipad(pad, palette) {
 	return t;
 }
 
+// ================================================================ the game's name (client/ui/logo.ts)
+
+/** the words of the wordmark, left to right; word i's fill is cell i + 1 (cell 0 is the ink) */
+const WORDMARK_WORDS = ["LAST", "TOWN"];
+/** the greys of a letter's fill, tinted by the client: its lit top edge, its upper half, its lower half */
+const WORDMARK_GREY = { light: 255, top: 232, bottom: 190 };
+/** the hard shadow under the outline: one font pixel down and right, 85% opaque (tools/title-font.mjs drawTitle) */
+const WORDMARK_SHADOW_A = 217;
+
+/**
+ * LAST TOWN in the bold pixel font of tools/title-font.mjs, the shape of the store art's wordmark
+ * (docs/promo/logo/last-town-wordmark.png: the same layoutText, the same one-pixel outline and hard shadow), one texel
+ * per font pixel, as three stacked cells of `w` x `cellH` texels:
+ *   cell 0  the ink: the outline ring (white, tinted THEME.background) and, under it, the hard shadow (black)
+ *   cell 1  the fill of LAST, cell 2 the fill of TOWN: the lit top edge at full strength, the upper half a little and
+ *           the lower half more darkened -- the relief of the promo's two-tone fill, in greys the client tints with
+ *           GAME.brand and THEME.foreground (a multiplying tint can only darken, so the edge is the token itself)
+ * Returns the texture and the height of one cell.
+ */
+function wordmark() {
+	const words = WORDMARK_WORDS.map(w => layoutText(w));
+	const gap = layoutText(" ").w;
+	const m = layoutText(WORDMARK_WORDS.join(" "));
+	const ring = dilate(m, 1);
+	// the ring is one pixel round the letters; the shadow falls one more pixel down and right
+	const w = ring.w + 1;
+	const cellH = ring.h + 1;
+	const t = new Tex(w, cellH * (1 + words.length));
+	const inRing = (x, y) => ring.bits[y * ring.w + x] === 1;
+	// the shadow first, the ring over it: what is left of the shadow is the part the ring does not cover
+	for (let y = 0; y < ring.h; y++) {
+		for (let x = 0; x < ring.w; x++) if (inRing(x, y)) t.set(x + 1, y + 1, BLACK, WORDMARK_SHADOW_A);
+	}
+	for (let y = 0; y < ring.h; y++) {
+		for (let x = 0; x < ring.w; x++) if (inRing(x, y)) t.set(x, y, WHITE);
+	}
+	let x0 = 0;
+	words.forEach((word, i) => {
+		const top = cellH * (i + 1);
+		for (let y = 0; y < TITLE_H; y++) {
+			for (let x = 0; x < word.w; x++) {
+				if (word.bits[y * word.w + x] === 0) continue;
+				const lit = y === 0 || word.bits[(y - 1) * word.w + x] === 0;
+				const g = lit ? WORDMARK_GREY.light : y < TITLE_H / 2 ? WORDMARK_GREY.top : WORDMARK_GREY.bottom;
+				t.set(x0 + x + 1, top + y + 1, [g, g, g]);
+			}
+		}
+		x0 += word.w + gap;
+	});
+	return { tex: t, cellH };
+}
+
 // ================================================================ the list
 
 function build() {
@@ -1878,6 +1936,15 @@ function build() {
 		townProps.atlas,
 		`the town's fixtures: ${townProps.report.cells} cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)`,
 		{ townProps },
+	);
+	// the game's name (UI-10): the lobby's title and the splash, not the town -- uploaded with it all the same
+	const mark = wordmark();
+	add_(
+		"wordmark",
+		"ui",
+		mark.tex,
+		`the LAST TOWN wordmark: three ${mark.tex.w} x ${mark.cellH} cells top to bottom, the ink (tint: background), ` +
+			"the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts)",
 	);
 }
 

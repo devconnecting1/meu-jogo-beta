@@ -162,7 +162,8 @@ export type WorldArtName =
 	| "itemIcons"
 	| "furniture"
 	| "blood"
-	| "townProps";
+	| "townProps"
+	| "wordmark";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -453,12 +454,14 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaRim: { id: "rbxassetid://88546042032232", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
 	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
-	/** atlas: interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "", w: 1024, h: 922 },
+	/** atlas: interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
 	blood: { id: "rbxassetid://115387837711444", w: 96, h: 264 },
 	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
 	townProps: { id: "", w: 1024, h: 662 },
+	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
+	wordmark: { id: "", w: 86, h: 39 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -610,4 +613,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"furniture",
 	"blood",
 	"townProps",
+	"wordmark",
 ];

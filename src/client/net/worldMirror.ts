@@ -6,7 +6,8 @@
  * client generated from the same seed:
  *
  *   SolidAdd / SolidRemove   a construction appears (rebuilt from its PLACEABLES row, with the SERVER's id) or goes
- *   DoorSet / LightSet       a door opens or closes, a lamp or a fire goes on or off (static or built)
+ *   DoorSet / LightSet       a door opens or closes, a window's glass breaks (EDI-18: its frame is "open"), a lamp or
+ *                            a fire goes on or off (static or built)
  *   SolidHp                  a construction's hp, as a fraction of its maximum
  *   ItemAdd / ItemRemove     a ground item appears (with the server's id and velocity) or is gone
  *   LootFlag                 the building this survivor stands in -- or the gas pump island they stand at (EDI-16) --
@@ -35,6 +36,7 @@ import {
 import { fortifies, openingAt, PLACEABLES, PlaceableDef, placedSolid, PlaceRect } from "shared/sim/placement";
 import { isDoor, isYardContainer } from "shared/sim/interactQuery";
 import { isPortico } from "shared/sim/vault";
+import { hadGlass, isWindow, setWindowGlass } from "shared/game/windows";
 import { itemGone, lootGone } from "../systems/pickups";
 
 /** is this one of the interactive-world deltas the mirror applies? */
@@ -118,7 +120,15 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 	}
 	if (e.t === WorldEv.DoorSet) {
 		const s = ix.solids.get(e.id);
-		if (s !== undefined) s.open = (e.state & SolidState.Open) !== 0;
+		if (s === undefined) return;
+		if (isWindow(s)) {
+			// EDI-18 (protocol.ts note 23): a window's frame "open" is its glass broken. Glass never comes back in a live
+			// town; a DoorSet without Open only ever means "as generated", and only a pane generated with glass has any
+			if ((e.state & SolidState.Open) !== 0) setWindowGlass(s, false);
+			else if (hadGlass(s)) setWindowGlass(s, true);
+			return;
+		}
+		s.open = (e.state & SolidState.Open) !== 0;
 		return;
 	}
 	if (e.t === WorldEv.SolidHp) {
@@ -185,6 +195,8 @@ export function resetMirror(world: WorldData): void {
 		else if (isDoor(s)) s.open = false;
 		// a bank's alarm bell (EDI-24): silent until the WorldInit says it rings
 		else if (isPortico(s)) s.powered = undefined;
+		// every pane back as the town was generated (EDI-18): the WorldInit names the ones broken since
+		else if (isWindow(s)) setWindowGlass(s, hadGlass(s));
 		else if ((s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined) s.lootItems = [];
 	}
 	for (const s of built) {

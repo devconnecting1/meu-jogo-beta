@@ -30,7 +30,8 @@
  * on the street), then mapped onto the world through the building's street side, optionally mirrored.
  */
 import { TOWN } from "shared/engine/constants";
-import type { DoorSide, Rect } from "./world";
+import type { DoorSide, Rect, Solid } from "./world";
+import { brokenShare } from "./windows";
 
 // ---------------------------------------------------------------------------------------------- public types
 
@@ -150,6 +151,13 @@ export interface Opening extends Rect {
 	side: DoorSide;
 	/** the main entrance (the one facing the street) */
 	main: boolean;
+	/** a window generated with its glass already broken (EDI-18: a seeded share, `brokenShare` of the type) */
+	broken?: boolean;
+	/**
+	 * A window's solid, set by the town (world.ts `planInteriors`): the pane's state lives there (shared/game/windows.ts),
+	 * and the drawing reads it through this without looking the solid up
+	 */
+	glass?: Solid;
 }
 
 export interface Piece extends Rect {
@@ -1602,6 +1610,8 @@ interface LOpening {
 	out?: LSide;
 	alongU: boolean;
 	main: boolean;
+	/** a window whose glass the generator broke (EDI-18) */
+	broken?: boolean;
 }
 
 interface LPiece extends LR {
@@ -3841,17 +3851,14 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	pl.cutWindows();
 	pl.removePockets();
 	for (let id = 0; id < pl.kinds.size(); id++) decorate(pl, pl.roomCtx(id));
-	// broken glass inside some windows (APO-01): the zombies came through here
+	// a few days after the outbreak (APO-01, EDI-18): a share of the windows is already broken -- the storefronts
+	// looted, the zombies come through -- and the rest still has its glass. One draw per window, as the glass decal it
+	// replaces took (the plan's stream, and so everything after it, is the one it always was); the shards are drawn
+	// from the window's state now, on both sides of the sill (client/view/interiorView.ts), for a pane broken later too
+	const share = brokenShare(inp.type);
 	for (const o of pl.openings) {
-		if (o.kind !== "window" || !rng.chance(0.35)) continue;
-		const b = o.band;
-		const cu = (b.u0 + b.u1) / 2;
-		const cv = (b.v0 + b.v1) / 2;
-		const off = 22;
-		if (o.out === "F") pl.decorAt("glass", cu, b.v1 + off, 60, 28, 0);
-		else if (o.out === "K") pl.decorAt("glass", cu, b.v0 - off, 60, 28, 0);
-		else if (o.out === "L") pl.decorAt("glass", b.u1 + off, cv, 28, 60, 0);
-		else pl.decorAt("glass", b.u0 - off, cv, 28, 60, 0);
+		if (o.kind !== "window") continue;
+		o.broken = rng.chance(share);
 	}
 	// loot spots: in front of the pieces that hold the loot, one per room at most, up to three
 	const taken: Array<number> = [];
@@ -3888,7 +3895,9 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	for (const w of pl.walls) out.walls.push({ ...f.rect(w.r), inner: w.inner });
 	for (const o of pl.openings) {
 		const side = o.out !== undefined ? f.world(o.out) : f.world(o.alongU ? "F" : "L");
-		out.openings.push({ ...f.rect(o.band), kind: o.kind, side, main: o.main });
+		const opening: Opening = { ...f.rect(o.band), kind: o.kind, side, main: o.main };
+		if (o.kind === "window") opening.broken = o.broken === true;
+		out.openings.push(opening);
 		if (o.main) {
 			const r = f.rect(o.band);
 			out.doorX = r.x + r.w / 2;

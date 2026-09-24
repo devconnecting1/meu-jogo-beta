@@ -1,5 +1,5 @@
 /*
- * Project Z interiors: the pixel art of every piece of furniture, of the floor decoration and of the doorways and
+ * Last Town interiors: the pixel art of every piece of furniture, of the floor decoration and of the doorways and
  * windows (docs/DESIGN_RULES.md ART-12, EDI-08..EDI-12), baked into ONE atlas (design/world-art/furniture.png) that
  * client/view/interiorArt.ts draws a cell of per piece (ImageRectOffset / ImageRectSize, Pixelated). Written by
  * tools/gen-world-art.mjs with the rest of the town (`npm run art:world`) and uploaded with it (`upload-art`); until
@@ -1824,9 +1824,10 @@ function doorway(c, L, D, outside) {
 }
 
 /**
- * A window seen from above, its glass broken (EDI-10): the painted frame capping the wall's ends, the inside sill
- * (oak) and the outside one (stone), and between them what is left of the pane -- translucent glass still in the
- * frame at both ends and along the edges, jagged, the middle gone: the horde climbs through there.
+ * A window seen from above, its glass broken (EDI-10; EDI-18: born broken or broken since): the painted frame capping
+ * the wall's ends, the inside sill (oak) and the outside one (stone), and between them what is left of the pane --
+ * translucent glass still in the frame at both ends and along the edges, jagged, the middle gone: the horde climbs
+ * through there.
  */
 function windowFrame(c, L, D, r, K) {
 	const jamb = 3;
@@ -1851,6 +1852,37 @@ function windowFrame(c, L, D, r, K) {
 		}
 	}
 	for (let k = 0; k < 3; k++) c.inkAt(jamb + 2 + Math.floor(r() * (w - 4)), D - 1, K.shard);
+}
+
+/**
+ * The same window with its glass in (EDI-18): the painted frame and the two sills, and between them the whole pane --
+ * the same translucent glass, the floor showing through -- split by the glazing bar, with the light on it (ART-02: from
+ * the top left) as a slanted streak a third of the way along each sash and a glint in its corner. Read from above, the
+ * difference from `windowFrame` is the middle: filled and lit here, open there.
+ */
+function windowGlass(c, L, D, r, K) {
+	const jamb = 3;
+	for (let y = 0; y < D; y++) {
+		c.dot(0, y, "trim", 4, -1);
+		c.dot(1, y, "trim", 4, 0);
+		c.dot(2, y, "trim", 4, 0);
+		c.dot(L - 3, y, "trim", 4, 0);
+		c.dot(L - 2, y, "trim", 4, 0);
+		c.dot(L - 1, y, "trim", 4, -1);
+	}
+	const w = L - 2 * jamb;
+	c.box(jamb, 0, w, 1, "woodLight", 3);
+	c.box(jamb, D - 1, w, 1, "counter", 3);
+	c.box(jamb, 1, w, D - 2, "pane", 2);
+	// the glazing bar between the two sashes
+	const bar = Math.floor(L / 2);
+	c.box(bar, 1, 1, D - 2, "trim", 3);
+	// the reflection on each sash: a streak slanting down to the left, a third of the way along it, and a glint
+	for (const x0 of [jamb + Math.floor((bar - jamb) / 3), bar + 1 + Math.floor((L - jamb - bar - 1) / 3)]) {
+		for (let y = 1; y < D - 1; y++) c.dot(x0 + (D - 2 - y), y, "pane", 2, 2);
+	}
+	c.inkAt(jamb, 1, K.shard);
+	c.inkAt(bar + 1, 1, K.shard);
 }
 
 // ---------------------------------------------------------------- what the planner makes
@@ -2039,6 +2071,12 @@ export function furnitureArt({ C, ROOT }) {
 	deco("inner:v", OL, 4, cv => doorway(cv, OL, 4, false), { face: "left", outline: false });
 	for (const side of FACES)
 		deco(`window:${side}`, 24, 5, (cv, L, D, r) => windowFrame(cv, L, D, r, K), { face: side, outline: false });
+	// ...and the same window with its glass in (EDI-18: a window is intact or broken; interiorArt draws it as it is now)
+	for (const side of FACES)
+		deco(`windowGlass:${side}`, 24, 5, (cv, L, D, r) => windowGlass(cv, L, D, r, K), {
+			face: side,
+			outline: false,
+		});
 	const packed = pack(entries);
 	report.cells = entries.length;
 	report.unique = packed.unique;
@@ -2171,7 +2209,8 @@ export function furnitureAtlasModule(art, name) {
 	L.push(
 		' * "chair:<side of its table>", "chairDown:<n>", "papers:<n>", "glass:h", "mat:v", "curtain:h", "board:h", "rug:<n>:h",',
 	);
-	L.push(' * "door:h", "inner:v" (cropped to the width), "window:<the side it looks out of>".');
+	L.push(' * "door:h", "inner:v" (cropped to the width), "window:<the side it looks out of>" (its glass broken) and');
+	L.push(' * "windowGlass:<side>" (its glass in, EDI-18).');
 	L.push(" */");
 	L.push("export const FURNITURE_CELLS: Record<string, readonly [number, number, number, number, number]> = {");
 	for (const [k, c] of Object.entries(art.cells)) L.push(`\t"${k}": [${c.join(", ")}],`);
