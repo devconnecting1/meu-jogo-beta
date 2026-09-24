@@ -160,7 +160,9 @@
 		"puddle2V": "rbxassetid://103817440914774",
 		"puddle3": "rbxassetid://130785761895865",
 		"puddle3V": "rbxassetid://78848680608666",
-		"puddleDrop": "rbxassetid://126451428508632"
+		"puddleDrop": "rbxassetid://126451428508632",
+		"trees": "rbxassetid://108973533068703",
+		"entrances": "rbxassetid://133379865386550"
 	},
 	"sha1": {
 		"asphalt": "1fdd11ece41556e020ccd9dce6df52694cf3fc1f",
@@ -320,7 +322,9 @@
 		"puddle2V": "dedc63a04688c15c81955980df9f4dc8d64c2bfd",
 		"puddle3": "1e12750929d562d9b5ac4786bfc170ee6105918f",
 		"puddle3V": "b6c5460fa72739eefbe2cf0964738657909fafc0",
-		"puddleDrop": "0b560069599ae0741b48819901fd44118d41e955"
+		"puddleDrop": "0b560069599ae0741b48819901fd44118d41e955",
+		"trees": "eec7a92a6211245cee376314e8da265128df412b",
+		"entrances": "70f276486d75cf3f9bedb4058c2bebf2d89873f9"
 	},
 	"creator": {
 		"asphalt": "user:8424325451",
@@ -479,6 +483,8 @@
 		"puddle2V": "user:8424325451",
 		"puddle3": "user:8424325451",
 		"puddle3V": "user:8424325451",
-		"puddleDrop": "user:8424325451"
+		"puddleDrop": "user:8424325451",
+		"trees": "user:8424325451",
+		"entrances": "user:8424325451"
 	}
 }

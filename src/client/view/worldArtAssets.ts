@@ -232,7 +232,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** slice: soft rectangular drop shadow */
 	shadowBox: { id: "rbxassetid://126704842880759", w: 16, h: 16, slice: [6, 6, 10, 10] },
 	/** atlas: trees: 41 crowns of 8 kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts) */
-	trees: { id: "", w: 512, h: 266 },
+	trees: { id: "rbxassetid://108973533068703", w: 512, h: 266 },
 	/** mask: sedan: body (tint: paint) */
 	car0: { id: "rbxassetid://127118296635301", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
@@ -474,7 +474,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
 	townProps: { id: "rbxassetid://112108955248177", w: 1024, h: 662 },
 	/** atlas: the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts) */
-	entrances: { id: "", w: 1024, h: 176 },
+	entrances: { id: "rbxassetid://133379865386550", w: 1024, h: 176 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
 	wordmark: { id: "rbxassetid://132745135799721", w: 86, h: 39 },
 };
