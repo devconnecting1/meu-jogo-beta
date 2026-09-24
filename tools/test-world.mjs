@@ -2535,7 +2535,13 @@ section(
 	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
 	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
 	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	// townCache.ts reads the client's RunService when it loads (the lobby's town, MP-24): a stand-in, only for the load
+	// -- this suite asks it nothing but `townFingerprint`
+	const hadGame = globalThis.game;
+	const signal = { Connect: () => ({ Connected: true, Disconnect() {} }) };
+	globalThis.game ??= { GetService: () => ({ RenderStepped: signal, Heartbeat: signal, Stepped: signal }) };
 	const { townFingerprint } = require(join(SRC, "client/boot/townCache.ts"));
+	globalThis.game = hadGame;
 	const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 	const { boxesIn } = require(join(SRC, "server/sim/enclosure.ts"));
 	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
