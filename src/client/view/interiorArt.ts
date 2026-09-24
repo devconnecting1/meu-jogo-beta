@@ -286,9 +286,12 @@ export class InteriorArt {
 		const along = d.w >= d.h ? "h" : "v";
 		const T = WORLD_TEXEL;
 		if (k === "chair") return this.centred(`chair:${this.tableSide(b, cx, cy)}`, cx, cy);
-		if (k === "chairDown")
+		if (k === "chairDown") {
 			return this.centred(`chairDown:${math.floor(hash01(d.x, d.y, 31) * FALLEN) % FALLEN}`, cx, cy);
-		if (k === "papers") return this.centred(`papers:${math.floor(hash01(d.x, d.y, 33) * PAPERS) % PAPERS}`, cx, cy);
+		}
+		if (k === "papers") {
+			return this.centred(`papers:${math.floor(hash01(d.x, d.y, 33) * PAPERS) % PAPERS}`, cx, cy);
+		}
 		if (k === "glass") return this.centred(`glass:${along}`, cx, cy);
 		if (k === "mat") return this.centred(`mat:${along}`, cx, cy);
 		if (k === "curtain") return this.centred(`curtain:${along}`, cx, cy);
@@ -380,8 +383,9 @@ export class InteriorArt {
 		const w = along ? o.w + 2 * JAMB : o.w;
 		const h = along ? o.h : o.h + 2 * JAMB;
 		const a = along ? "h" : "v";
-		if (o.kind === "door")
+		if (o.kind === "door") {
 			return len === DOOR_GAP && thick === OUTER_WALL ? planCell(`door:${a}`, undefined, x, y, w, h) : NONE;
+		}
 		if (o.kind === "window") {
 			return len === WINDOW_GAP && thick === OUTER_WALL
 				? planCell(`window:${o.side}`, undefined, x, y, w, h)

@@ -7,12 +7,17 @@
  *   npm run render:map -- --x 9000 --y 7000 --w 1280 --h 800 --hour 22 --out /tmp/night.png
  *   npm run render:map -- --compare docs/art/before docs/art/after --out docs/art/compare
  *   npm run render:map -- --preset signs --out docs/art/signs/after   # every building type's sign, night, overview
+ *   npm run render:map -- --preset rooms --out /tmp/rooms             # every kind of room at game zoom, day and 22:00
+ *   npm run render:map -- --compare <before> <after> --stack --out <dir>   # the before above the after, full size
  *   PZ_SRC=/path/to/other/src node tools/render-map.mjs ...           # render another checkout's code
  *
  * Options: --seed (town seed, default DESIGN.TOWN_SEED), --x --y --w --h (world rect, units), --scale (px per
  * unit, default 1), --hour (0-24, or day / dusk / night), --out (a .png, or a folder for presets), --preset
  * (street, downtown, park, school, gas, gas-night, wreck, campus, campus-quad, campus-night, street-night, overview, or
- * all; signs: sign-<type> for every building type, signs-night, signs-overview and downtown), --no-actors, --no-art,
+ * all; signs: sign-<type> for every building type, signs-night, signs-overview and downtown; interiors; rooms: each
+ * kind of room of shared/game/interiors.ts at zoom 1, by day and at 22:00), --scenes <scenes.json> (replay the scenes
+ * of an earlier run: the "before" of the same shots), --only-uploaded (only the textures with an asset id, from their
+ * PNGs: what the owner's place shows), --stack (compare: the before above the after), --no-actors, --no-art,
  * --art <dir>
  * (the local PNGs the "after" renders sample, default design/world-art), --src <dir> (same as PZ_SRC), --hand <id>
  * and --gun <id> (EQUIPS ids the survivor holds and wears at night: 13 flashlight, 15 torchlight, 6 night vision --

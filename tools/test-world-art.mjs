@@ -50,7 +50,13 @@
  *      sheets a survivor is two sprites, a zombie and a pet one. The cost of a night -- 60 zombies, 4 survivors and
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
- *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
+ *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
+ *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
+ *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
+ *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
+ *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
+ *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
+ *      every rug, §6 the floors' mean colours.
  *  12. THE GROUND ITEMS (ITM-07, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
  *      with the icons' atlas, rasterised: by day and in the survivor's light every icon steps 3:1 or 35 ΔE off its
  *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out

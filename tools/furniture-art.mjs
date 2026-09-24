@@ -1452,7 +1452,12 @@ function clothesrack(c, L, D, look, r) {
 		look === 1
 			? ["fabric", "fabricGreen", "bedding", "fabric"]
 			: ["fabricRed", "fabricMustard", "fabricBrown", "fabric"];
-	// the garments on their hangers across the rail, in runs of a colour; a gap where some were taken
+	// the rack's two feet, running across its depth, and the rail between them
+	c.box(0, 0, 2, D, "steelDark", 2);
+	c.box(L - 2, 0, 2, D, "steelDark", 2);
+	c.box(2, mid, L - 4, 1, "steel", 3);
+	// the garments on their hangers across the rail, the whole depth of the rack, in runs of a colour; a gap where
+	// some were taken, one pulled half off its hanger
 	let x = 2;
 	while (x < L - 2) {
 		const run = 2 + Math.floor(r() * 5);
@@ -1460,13 +1465,12 @@ function clothesrack(c, L, D, look, r) {
 		const gone = r() < 0.18;
 		for (let k = 0; k < run && x < L - 2; k++, x++) {
 			if (gone) continue;
-			c.box(x, 1, 1, D - 2, mat, 3, k % 2 === 0 ? 0 : -1);
-			c.dot(x, 1, mat, 3, 1);
+			const sag = r() < 0.08 ? 1 : 0;
+			// a garment's shoulders across the rail: its hanger's hook shows at the top of every other one
+			c.box(x, sag, 1, D - sag, mat, 4, k % 2 === 0 ? 0 : -1);
+			if (k % 2 === 0) c.dot(x, mid, mat, 5, 1);
 		}
 	}
-	c.box(0, mid, L, 1, "steel", 5);
-	c.box(0, mid - 1, 2, 3, "steelDark", 4);
-	c.box(L - 2, mid - 1, 2, 3, "steelDark", 4);
 }
 
 function optable(c, L, D, look, r, K) {
