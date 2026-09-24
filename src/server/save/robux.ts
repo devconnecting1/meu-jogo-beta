@@ -16,7 +16,7 @@
  *   THE RECEIPT   ProcessReceipt, the recipe of player-data-purchasing.md on our session lock: the player must be in this
  *                 server (else NotProcessedYet: Roblox tries again at their next join) with a save loaded and writable
  *                 (a load in progress is waited for, RECEIPT_LOAD_WAIT_S); the PurchaseId is looked up in the save
- *                 (`robuxReceipts`, save v7) -- already granted: PurchaseGranted once a write holding it has landed;
+ *                 (`robuxReceipts`, save v8) -- already granted: PurchaseGranted once a write holding it has landed;
  *                 new: the costume and the PurchaseId go into the save and the save is WRITTEN NOW (UpdateAsync under the
  *                 lock, outside the coalesced cadence: SAV-01's documented exception), and only a write that landed
  *                 answers PurchaseGranted. Any failure answers NotProcessedYet; the grant stays in the session (the

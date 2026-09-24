@@ -23,7 +23,7 @@ import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { creditBossAchievement, creditKillAchievements, creditTurretKill } from "../save/achievements";
-import { creditZombieKill } from "../save/titles";
+import { Unlocks, creditBossTitles, creditMachineTitles, creditZombieKill } from "../save/titles";
 import * as Analytics from "../analytics/events";
 
 // ---------------------------------------------------------------- constants (§3.6)
@@ -383,16 +383,23 @@ export interface ProgressOptions {
 	 */
 	paysRewards?: (slot: number) => boolean;
 	/**
-	 * MON-05: a killing blow just unlocked a title for this slot (Horde Breaker). The save ALREADY has it; this is
-	 * the simulation's cue to tell the survivor and have the session written.
+	 * MON-05: a killing blow, a machine's kill or a boss just unlocked a title for this slot (Horde Breaker, Tracker,
+	 * Sentry, Boss Hunter...). The save ALREADY has it; this is the simulation's cue to tell the survivor and have the
+	 * session written. Once per title per save.
 	 */
 	titleUnlocked?: (slot: number, titleId: number) => void;
+	/**
+	 * MON-05: the kill credit gave this slot a killing blow, in a run that pays (after `titleUnlocked`, if any). The
+	 * simulation keeps the night's tally from it (Untouched, Blade Dancer, Ghost: server/sim/simulation.ts `creditDawn`).
+	 */
+	killCredited?: (slot: number, zombieType: number, weaponKind: number) => void;
 }
 
 export class Progress {
 	private readonly saveOf: (slot: number) => PlayerSaveData | undefined;
 	private readonly paysRewards: (slot: number) => boolean;
 	private readonly titleUnlocked?: (slot: number, titleId: number) => void;
+	private readonly killCredited?: (slot: number, zombieType: number, weaponKind: number) => void;
 	private readonly zombies = new Map<number, Ledger>();
 	private readonly bosses = new Map<number, Ledger>();
 	private readonly stats = new Map<number, ProgressStats>();
@@ -401,6 +408,7 @@ export class Progress {
 		this.saveOf = options.saveOf;
 		this.paysRewards = options.paysRewards ?? (() => true);
 		this.titleUnlocked = options.titleUnlocked;
+		this.killCredited = options.killCredited;
 	}
 
 	// ---- zombies -----------------------------------------------------------------------------
@@ -583,17 +591,21 @@ export class Progress {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
 		creditKillAchievements(save, zombieType, weaponKind);
-		const unlocked = creditZombieKill(save);
-		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
+		this.announce(slot, creditZombieKill(save, zombieType, weaponKind));
+		this.killCredited?.(slot, zombieType, weaponKind);
 		// counted for the session's WeaponKills, sent on leaving (docs/ANALYTICS.md: never an event per kill)
 		Analytics.kill(save, weaponKind);
 	}
 
-	/** CON-04 "Turret": a zombie a machine this survivor built (or a drone they fly) brought down; not when assisted */
+	/**
+	 * CON-04 "Turret" and MON-05 "Sentry": a zombie a machine this survivor built (or a drone they fly) brought down;
+	 * not when assisted
+	 */
 	private creditMachineKill(slot: number): void {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
 		creditTurretKill(save);
+		this.announce(slot, creditMachineTitles(save));
 		Analytics.kill(save, Analytics.MACHINE_KILL);
 	}
 
@@ -602,9 +614,17 @@ export class Progress {
 		const stats = this.bump(slot);
 		const pays = this.paysRewards(slot);
 		if (save !== undefined) stats.coins += creditBossKill(save, pays);
-		// CON-04: every participant has brought it down (MP-15), not in an assisted run (§9.3)
-		if (save !== undefined && pays) creditBossAchievement(save, bossType);
+		// CON-04 / MON-05: every participant has brought it down (MP-15), not in an assisted run (§9.3)
+		if (save !== undefined && pays) {
+			creditBossAchievement(save, bossType);
+			this.announce(slot, creditBossTitles(save, bossType));
+		}
 		stats.bossKills += 1;
+	}
+
+	/** MON-05: every title one event unlocked, told once each (the save already has them) */
+	private announce(slot: number, unlocked: Unlocks): void {
+		for (const titleId of unlocked) this.titleUnlocked?.(slot, titleId);
 	}
 
 	private bump(slot: number): ProgressStats {

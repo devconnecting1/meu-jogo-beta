@@ -58,14 +58,26 @@ Compra única, em Robux, entregando **identidade visível**:
 
 Cada um é independente. Comece com a paleta, meça, e só então faça o segundo.
 
-### 3. Assinatura — **ainda não**
+### 3. Assinatura — **"Last Town Supporter", de apoio, com benefícios fixos** (2026-09-24, MON-07)
 
-A assinatura recorrente do Roblox é boa, mas ela promete **cadência**: quem assina espera algo novo todo mês.
-Hoje não existe produção de cosmético para honrar isso, e assinatura que entrega o mesmo dois meses seguidos
-gera reembolso e reclamação — sai mais caro que a receita.
+A assinatura recorrente do Roblox é boa, mas uma assinatura que promete **cadência** (algo novo todo mês) sem
+produção para honrá-la gera reembolso e reclamação. Por isso a nossa **não promete cadência**: é uma assinatura de
+**apoio**, com o que dá escrito inteiro na página e na descrição, igual no primeiro mês e no décimo (a emenda da
+MON-03).
 
-Quando existir um acervo suficiente para rotacionar, a assinatura certa é: rotação cosmética + acesso a
-servidor privado + brasão no nameplate. Nunca XP, nunca dano, nunca vida.
+- **O que dá, enquanto ativa:** um coração (♥) antes do nome, na placa de todo mundo, e o rastro do golpe corpo a
+  corpo na cor Supporter — os dois canais que se leem a 32 px (MON-02) e que já são replicados, sem arte nova.
+- **O que nunca dá:** moedas, XP, loot, dano, vida, velocidade, Rebirth, espera pulada, título ou conquista. Título
+  em particular **nunca** se vende (MON-05): a marca Supporter fica na linha do nome, separada e rotulada, e não
+  entra na lista de títulos.
+- **Vencida:** as marcas somem; nada é tirado porque nada foi gravado.
+- **Preço sugerido:** 99 Robux/mês (o mínimo do Roblox é 49). É um obrigado, não um pacote de poder: preço de apoio,
+  acessível a quem quer ajudar, sem dar vantagem a quem pode pagar mais.
+- **Quando houver acervo cosmético para rotacionar**, pode entrar um presente mensal (e o que for dado fica para
+  sempre) ou um traje exclusivo; até lá, não se promete.
+
+O código está pronto e escondido: `shared/data/supporter.ts` `SUPPORTER_SUBSCRIPTION_ID` vazio = nenhuma aba,
+nenhuma pergunta ao Roblox. O passo a passo do dono está em `docs/CREATOR_HUB.md` → "Assinatura Supporter".
 
 ## O que nunca se vende
 

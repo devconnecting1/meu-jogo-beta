@@ -1662,9 +1662,11 @@ function walletSignature(save: PlayerSaveData): string {
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
 	const achievements = save.achievements.join(",");
 	const packs = save.packsOpened.join(",");
+	// v7 (MON-05): the title counters, a locked title's progress in the wardrobe
+	const stats = save.titleStats.join(",");
 	// the costumes too: a Robux receipt grants one outside any ShopAction, and this push is how the wardrobe hears of it
 	const costumes = save.costumes.join(",");
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}|${costumes}`;
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}|${stats}|${costumes}`;
 }
 
 function pushWallets(): void {

@@ -164,7 +164,7 @@ costumeId}`, `{kind: "robuxCostume", costumeId}`, `{kind: "rebirth", runRev}`). 
 
 **Robux:** o caminho é outro (a seção seguinte). O `ShopAction` só pede o prompt; o traje chega com o recibo
 (`ProcessReceipt`), que só responde `PurchaseGranted` **depois** de a gravação com a compra chegar ao DataStore (a
-exceção ao coalescimento, SAV-01), e o `PurchaseId` fica no save (v7) para que um recibo entregue duas vezes conceda uma.
+exceção ao coalescimento, SAV-01), e o `PurchaseId` fica no save (v8) para que um recibo entregue duas vezes conceda uma.
 
 ## Robux: decisões e desenho (implementado)
 
@@ -182,7 +182,7 @@ escritas; a proposta foi levada ao dono, que **delegou a decisão ao orquestrado
 ### O desenho
 
 O código: `server/save/robux.ts` (o servidor: a verificação dos preços, o prompt, o `ProcessReceipt`),
-`shared/data/robuxProducts.ts` (os ids e a oferta publicada), `shared/game/save.ts` (v7), `server/main.server.ts` (a
+`shared/data/robuxProducts.ts` (os ids e a oferta publicada), `shared/game/save.ts` (v8), `server/main.server.ts` (a
 ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `roblox/creator-docs`, 2026-09-24): `production/monetization/developer-products.md`,
 `cloud-services/data-stores/player-data-purchasing.md`, `reference/engine/classes/MarketplaceService.yaml`,
 `production/monetization/shop.md`, `production/monetization/private-servers.md`, `production/analytics/economy-events.md`.
@@ -228,7 +228,7 @@ ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `
    `RobuxOwned` + a linha `[PZ-ROBUX]` (o `PurchaseId`, sem nome nem PII) avisam o dono, que compensa à mão pelo painel
    de admin (outro traje da mesma faixa). **Nunca moedas**: seria vender moeda por Robux (MON-01) — e, com a aba Store
    ligada, um jeito de comprar 600 moedas por 349 R$.
-5. **Save v7 (aditivo):** `robuxReceipts: Array<string>` (`"<costumeId>:<PurchaseId>"`, os 64 mais novos). Do servidor:
+5. **Save v8 (aditivo;** o v7 é o dos contadores dos títulos, MON-05**):** `robuxReceipts: Array<string>` (`"<costumeId>:<PurchaseId>"`, os 64 mais novos). Do servidor:
    o relatório do cliente nunca o move (`sanitizeClientReport` copia) e ele não vai na carteira. Um servidor de volta ao
    v6 o descarta ao gravar — inofensivo, porque a concessão é idempotente (`costumes[id] = 1`). Apagar o jogador (RTBF) o
    leva junto (a mesma chave). O painel de admin **não** tira um traje pago em Robux (a operação `costume` com
@@ -342,7 +342,7 @@ ora, um print do guarda-roupa com o item selecionado serve.
 | 8   | Rebirth grátis no lobby (o amanhecer já veio): o servidor não cobrava, mas as telas mostravam o preço — e o cliente recusava sozinho quem não tinha as moedas.                                                                     | O servidor diz `pz_rebirth_free` no `Player` (`LifeKeeper.daybreakDuePeek`, a cada empurrão da carteira); o lobby mostra 0 e o cliente não recusa.                           | `server/main.server.ts`, `client/ui/survivor.ts`, `lobby.ts`; `test:shop` §9  |
 | 9   | Revisão de `de31f47`, L1–L5: o aviso contava o recorde inteiro quando o teto cortava parte dele; moedas pagas logo após o carregamento esperavam um empurrão que não vinha; `onIncome` aceitava um ouvinte só; dois comentários.   | O aviso conta o que entrou; o primeiro empurrão leva a renda pendente (fechar a sessão perde só o aviso, documentado); `onIncome` é uma lista com cancelamento; comentários. | `server/sim/progress.ts`, `main.server.ts`, `saveClient.ts`                   |
 | 10  | L6: "o pet do pacote fica até o New game" estava incompleto: o fim da cidade (MP-22) também o leva.                                                                                                                                | O texto diz "for this life"; o modelo preça o aluguel contra a vida (`lifeHours`), e os 35% foram reconferidos contra ela.                                                   | `shared/data/shop.ts`, `lang.ts`; `test:shop` §2                              |
-| 11  | Robux: decidido, não implementado.                                                                                                                                                                                                 | Implementado (seção "Robux"): save v7, `ProcessReceipt` idempotente, prompt do servidor, verificação de preço, tela com os dois preços.                                      | `server/save/robux.ts`; `test:shop` §7–§8, `test:save` §34                    |
+| 11  | Robux: decidido, não implementado.                                                                                                                                                                                                 | Implementado (seção "Robux"): save v8, `ProcessReceipt` idempotente, prompt do servidor, verificação de preço, tela com os dois preços.                                      | `server/save/robux.ts`; `test:shop` §7–§8, `test:save` §35                    |
 
 **Conhecidos, não corrigidos aqui:**
 
@@ -367,7 +367,7 @@ ora, um print do guarda-roupa com o item selecionado serve.
   `commit()` verdadeiro — `flush(s, false)` sob a trava, e a sessão ainda aberta, sem `released` e persistente depois
   dele (uma saída que gravou no meio pode ter codificado o save **antes** da concessão). Toda outra saída é
   `NotProcessedYet`; a concessão fica na sessão até lá (o custo que o Roblox documenta).
-- **Idempotência:** `robuxReceipts` (save v7, "<costumeId>:<PurchaseId>", os 64 mais novos, validados entrada a entrada
+- **Idempotência:** `robuxReceipts` (save v8, "<costumeId>:<PurchaseId>", os 64 mais novos, validados entrada a entrada
   na leitura); o recibo repetido acha o `PurchaseId` e só confirma a gravação. Recibo de traje já possuído: guarda o
   `PurchaseId`, `PurchaseGranted`, nunca moedas.
 - **O prompt é do servidor** (`handleAction` `robuxCostume`, na ficha do balde do `ShopAction` e na linha de flood): só

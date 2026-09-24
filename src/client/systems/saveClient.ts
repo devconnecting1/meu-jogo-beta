@@ -266,7 +266,7 @@ export function savingPersistent(): boolean {
 }
 
 /**
- * A report's JSON: the whole save but its Robux receipts (save v7). Those are the server's alone -- no report moves them
+ * A report's JSON: the whole save but its Robux receipts (save v8). Those are the server's alone -- no report moves them
  * (shared/game/save.ts `readProgress` keeps the server's) -- so they are not sent, and never count against
  * MAX_SAVE_PAYLOAD. The live table lends its field for the encode and gets it back at once (nothing yields between).
  */

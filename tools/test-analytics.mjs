@@ -2404,6 +2404,38 @@ section(
 	},
 );
 
+section("12e) MON-07: the Supporter subscription seen starting or ending in a session, one event per flip", () => {
+	const h = makeCore();
+	const pl = fakePlayer(631, "supporter");
+	const save = blankSave();
+	// before the session is here there is no entry: nothing
+	h.core.supporterChanged(pl, true);
+	check(h.rows.filter(r => r.name === "Supporter").length === 0, "no session yet: no Supporter event");
+	h.core.sessionLoaded(pl, "ok", save);
+	h.core.supporterChanged(pl, true);
+	h.core.enteredWorld(pl);
+	h.core.poll();
+	h.core.supporterChanged(pl, false);
+	const rows = h.rows.filter(r => r.name === "Supporter");
+	check(
+		rows.length === 2 &&
+			rows.every(r => r.kind === "custom" && r.value === undefined) &&
+			rows[0].fields?.CustomField01 === "Status - Started" &&
+			rows[0].fields?.CustomField02 === "Where - Lobby" &&
+			rows[1].fields?.CustomField01 === "Status - Ended" &&
+			rows[1].fields?.CustomField02 === "Where - City",
+		"a subscription started in the lobby and ended in the city: two events, no value, the status and where",
+		JSON.stringify(rows.map(r => [r.kind, r.value, r.fields])),
+	);
+	check(
+		h.rows.filter(r => r.kind === "economy").length === 0,
+		"and no economy event: a subscription moves no coin (MON-07; its revenue is the platform's dashboard)",
+	);
+	h.core.playerLeft(pl);
+	h.core.supporterChanged(pl, true);
+	check(h.rows.filter(r => r.name === "Supporter").length === 2, "after leaving: nothing more");
+});
+
 section("13) every row of this run: within the documented limits, low cardinality, no PII", () => {
 	const A = require(join(SRC, "server/analytics/events.ts"));
 	const rows = EVERY_ROW;
@@ -2470,6 +2502,8 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		"Visit - (First|Returning)",
 		`Weapon - (${A.WEAPON_KIND_NAMES.join("|")}|Machine|Other)`,
 		"Title - .+",
+		// MON-07: the Supporter subscription's flips (docs/ANALYTICS.md §5)
+		"Status - (Started|Ended)",
 		"Welcome pack - .+",
 		// where a survivor plays (server/match/*, tools/test-match.mjs): the NewTown funnel, TownOffered, TripFailed
 		"Route - (Play solo|Offer)",
@@ -2502,6 +2536,7 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		2 * B * 4 + // LifeEnded
 		3 * 4 * B + // WorldEnded: reason (MP-26: Restarted too) x fallen (0 to 3+) x days
 		TITLES.length + // TitleEarned
+		2 * 2 + // Supporter (MON-07): started / ended x lobby / city
 		5 + // SessionKills
 		3 + // Crafted
 		3 * 3 * 2 + // SessionEnded: where x time (night, dawn, day) x visit (+ its combos without the hour)

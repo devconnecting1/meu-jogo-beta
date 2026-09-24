@@ -30,6 +30,11 @@
  *    never undoes a reset or a deletion made on purpose: `titleEpoch` says which title history a save is, and a
  *    record of an older one is never merged back.
  *
+ *    v7 (MON-05, section 34) adds `titleStats`, the counters only titles read: a v6 document becomes v7 with every
+ *    counter at 0 and nothing else changed, junk is read defensively (a set of bits never past its own bits), a report
+ *    can never move them, a wallet only raises them, and the documented cost of a rollback to v6 (the titles past the
+ *    first three) is pinned -- with the kill titles coming back at the next kill.
+ *
  * 2. THE COINS. Since F2 pinned `day` and `bossKills` in the client report (`stripClientProgress`), the
  *    payment in server/main.server.ts — which only fired when a report MOVED those fields — became
  *    unreachable, and a day survived silently paid nothing. The fix moves the payment next to the event, so
@@ -229,7 +234,11 @@ section("1) migracao v2 -> v3 de um save com a forma de producao");
 	const save = SAVE.sanitizeStoredSave(doc);
 	checkEq(SAVE.storedVersion(doc), 2, "o documento lido se declara v2");
 	checkEq(save.version, SAVE.SAVE_VERSION, "e sai na versao atual");
-	checkEq(SAVE.SAVE_VERSION, 7, "SAVE_VERSION e 7 (os recibos de Robux, docs/SHOP.md; v6: conquistas do servidor)");
+	checkEq(
+		SAVE.SAVE_VERSION,
+		8,
+		"SAVE_VERSION e 8 (os recibos de Robux, docs/SHOP.md; v7: os contadores dos titulos)",
+	);
 	assertSameAsV2(doc, save, "nenhum campo v2 mudou de valor");
 	checkEq(save.equipOutfit, -1, "equipDeco -1 do v2 -> nenhum traje");
 	checkEq(save.equipPet, -1, "e nenhum pet");
@@ -943,11 +952,12 @@ section("19) migracao v4 -> v5: nada ganho, nada mostrado, e nenhum outro campo 
 
 	// a document with junk in the new fields is read defensively
 	const junk = JSON.parse(JSON.stringify(save));
-	junk.titles = [5, "x", -1, 1, 1, 1];
+	// (one entry per title, and two past the end of the table: the excess falls)
+	junk.titles = [5, "x", -1, ...new Array(TITLES_N - 3).fill(1), 1, 1];
 	junk.zombieKills = -40;
 	junk.equipTitle = TIT.TitleId.HordeBreaker;
 	const read = SAVE.sanitizeStoredSave(junk);
-	checkArrayEq(read.titles, [1, 0, 0].slice(0, TITLES_N), "titulos lixo viram 0/1 e o excesso cai");
+	checkArrayEq(read.titles, [1, 0, 0, ...new Array(TITLES_N - 3).fill(1)], "titulos lixo viram 0/1 e o excesso cai");
 	checkEq(read.zombieKills, 0, "abates negativos viram 0");
 	checkEq(read.equipTitle, -1, "e um titulo mostrado que nao foi ganho e tirado");
 }
@@ -1087,31 +1097,26 @@ section("22) so o servidor concede: nem o relatorio nem o pedido de equipar (ser
 	checkEq(SAVE.titleWireOf(save), 0, "e o fio leva nenhum");
 
 	// the kill count: only `creditZombieKill` moves it, and Horde Breaker comes at the 100th
+	// (v7: every credit answers the LIST of titles it unlocked -- one event may unlock two -- and an empty one otherwise)
 	const killer = SAVE.defaultSave();
 	let unlocked = [];
-	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 1; i++) {
-		const t = creditZombieKill(killer);
-		if (t >= 0) unlocked.push(t);
-	}
+	for (let i = 0; i < TIT.HORDE_BREAKER_KILLS - 1; i++) unlocked.push(...creditZombieKill(killer));
 	check(unlocked.length === 0 && !SAVE.ownsTitle(killer, TIT.TitleId.HordeBreaker), "99 abates: ainda nao");
-	checkEq(creditZombieKill(killer), TIT.TitleId.HordeBreaker, "o 100o abate desbloqueia Horde Breaker");
-	checkEq(creditZombieKill(killer), -1, "o 101o nao desbloqueia de novo");
+	checkArrayEq([...creditZombieKill(killer)], [TIT.TitleId.HordeBreaker], "o 100o abate desbloqueia Horde Breaker");
+	checkArrayEq([...creditZombieKill(killer)], [], "o 101o nao desbloqueia de novo");
 	checkEq(killer.zombieKills, 101, "e a contagem segue");
 
 	// Week One: the nights the server credited to the life, never the day the save says
 	const life = SAVE.defaultSave();
 	life.day = 30;
 	unlocked = [];
-	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) {
-		const t = creditLifeNight(life);
-		if (t >= 0) unlocked.push(t);
-	}
+	for (let i = 0; i < TIT.WEEK_ONE_NIGHTS - 1; i++) unlocked.push(...creditLifeNight(life));
 	check(
 		unlocked.length === 0 && !SAVE.ownsTitle(life, TIT.TitleId.WeekOne),
 		"dia 30 no save e 6 noites creditadas: ainda nao",
 	);
-	checkEq(creditLifeNight(life), TIT.TitleId.WeekOne, "a 7a noite creditada desbloqueia Week One");
-	checkEq(creditLifeNight(life), -1, "a 8a nao desbloqueia de novo");
+	checkArrayEq([...creditLifeNight(life)], [TIT.TitleId.WeekOne], "a 7a noite creditada desbloqueia Week One");
+	checkArrayEq([...creditLifeNight(life)], [], "a 8a nao desbloqueia de novo");
 
 	// the wallet carries both halves to the client, and no copy shows a title its save does not hold
 	killer.equipTitle = TIT.TitleId.HordeBreaker;
@@ -2823,9 +2828,135 @@ section(
 	);
 }
 
-// ---------------------------------------------------------------- v7: Robux receipts (docs/SHOP.md "Robux")
+section(
+	"34) v7 (MON-05): os contadores dos titulos -- migracao v6 -> v7, so o servidor os move, a carteira so os aumenta",
+);
+{
+	const TS = TIT.TitleStat;
+	const N = TIT.TITLE_STAT_COUNT;
+	// a v6 document with every field that matters populated (the production shape through v4, then v5 and v6's)
+	const v6 = SAVE.sanitizeStoredSave(productionV4());
+	v6.titles[TIT.TitleId.Survivor] = 1;
+	v6.titles[TIT.TitleId.HordeBreaker] = 1;
+	v6.zombieKills = 1234;
+	v6.lifeNights = 9;
+	v6.lifeDeaths = 1;
+	v6.equipTitle = TIT.TitleId.HordeBreaker;
+	v6.titleEpoch = 1790000000;
+	const doc = JSON.parse(JSON.stringify(v6));
+	doc.version = 6;
+	delete doc.titleStats;
+	doc.titles = doc.titles.slice(0, 3);
+	const migrated = SAVE.sanitizeStoredSave(doc);
+	checkEq(SAVE.storedVersion(doc), 6, "o documento se declara v6");
+	checkEq(migrated.version, SAVE.SAVE_VERSION, "e sai na versao atual (v7 em diante)");
+	checkArrayEq(migrated.titleStats, new Array(N).fill(0), "titleStats ausente no v6: tudo 0 (ninguem contou antes)");
+	checkEq(migrated.titles.length, TIT.TITLES.length, "a lista de titulos cresce ate a tabela (os novos em 0)");
+	const strip = s => {
+		const o = JSON.parse(JSON.stringify(s));
+		delete o.titleStats;
+		delete o.version;
+		o.titles = o.titles.slice(0, 3);
+		return JSON.stringify(o);
+	};
+	check(
+		strip(migrated) === strip(v6),
+		"e nenhum campo do v6 muda de valor (titulos, abates, noites, epoca, escolha)",
+	);
 
-section("34) v7: os recibos de Robux -- do servidor, lidos com cuidado, e o traje pago nunca volta atras");
+	// the v7 document round trip, and junk read defensively
+	migrated.titleStats[TS.NightsSurvived] = 12;
+	migrated.titleStats[TS.ZombieKinds] = 0b10101;
+	migrated.titleStats[TS.GunKills] = 77;
+	const again = SAVE.sanitizeStoredSave(JSON.parse(JSON.stringify(migrated)));
+	checkArrayEq(again.titleStats, migrated.titleStats, "o v7 gravado (JSON) volta com os contadores");
+	const junk = JSON.parse(JSON.stringify(migrated));
+	junk.titleStats = [-5, 999, 99, 1.7, "x", 1e12, null, 4, 4];
+	const read = SAVE.sanitizeStoredSave(junk);
+	checkArrayEq(
+		read.titleStats,
+		[0, 31, 15, 1, 0, SAVE.SAVE_LIMITS.COUNTER_MAX, 0],
+		"lixo: negativo 0, bits no maximo deles (5 tipos de zumbi, 4 chefes), fracao para baixo, texto 0, teto e excesso cai",
+	);
+	junk.titleStats = "nope";
+	checkArrayEq(SAVE.sanitizeStoredSave(junk).titleStats, new Array(N).fill(0), "e uma lista que nao e lista vira 0");
+
+	// a report cannot write them: the sanitizer copies the trusted ones, and the report's pin flags the try
+	const base = SAVE.defaultSave();
+	base.titleStats[TS.Builds] = 3;
+	const forged = JSON.parse(JSON.stringify(base));
+	forged.titleStats = [25, 31, 15, 500, 100, 25, 50];
+	const upd = SAVE.sanitizeClientReport(forged, base);
+	checkArrayEq(upd.titleStats, base.titleStats, "um relatorio com titleStats forjado nao move nada");
+	const ACH = require(join(SRC, "server/save/achievements.ts"));
+	const upd2 = SAVE.sanitizeClientReport(forged, base);
+	upd2.titleStats[TS.Builds] = 24; // a regression in the sanitizer, simulated: the pin still holds
+	const tried = ACH.stripClientAchievements(base, upd2, forged);
+	check(
+		tried && upd2.titleStats[TS.Builds] === 3 && upd2.titleStats !== base.titleStats,
+		"o pin do relatorio (stripClientAchievements) ve a tentativa e fixa os contadores do servidor (copia, nao alias)",
+	);
+
+	// lifetime: a New game, a copy in place and the end of a world keep them
+	const life = SAVE.defaultSave();
+	life.titleStats[TS.Crafts] = 40;
+	SAVE.resetRun(life);
+	checkEq(life.titleStats[TS.Crafts], 40, "o New game guarda os contadores (sao da pessoa, nao da vida)");
+	const live = SAVE.defaultSave();
+	const liveStats = live.titleStats;
+	SAVE.copySaveInto(live, life);
+	check(
+		live.titleStats === liveStats && live.titleStats[TS.Crafts] === 40,
+		"copySaveInto copia no lugar (a identidade fica)",
+	);
+
+	// the wallet: carried, and only ever raised on the client (a count the larger, a set of bits the union)
+	const server = SAVE.defaultSave();
+	server.titleStats[TS.GunKills] = 120;
+	server.titleStats[TS.ZombieKinds] = 0b00011;
+	const w = SAVE.walletOf(server);
+	checkArrayEq(w.titleStats, server.titleStats, "a carteira leva os contadores");
+	const client = SAVE.defaultSave();
+	client.titleStats[TS.GunKills] = 130; // a newer wallet already landed
+	client.titleStats[TS.ZombieKinds] = 0b01100;
+	SAVE.applyWallet(client, JSON.parse(JSON.stringify(w)));
+	check(
+		client.titleStats[TS.GunKills] === 130 && client.titleStats[TS.ZombieKinds] === 0b01111,
+		"uma carteira atrasada nao baixa a contagem, e os tipos se unem (nenhum bit volta atras)",
+		JSON.stringify(client.titleStats),
+	);
+	const older = SAVE.defaultSave();
+	SAVE.applyWallet(older, { money: 0, titles: [] });
+	checkArrayEq(
+		older.titleStats,
+		new Array(N).fill(0),
+		"uma carteira de um servidor antigo (sem titleStats) nao muda nada",
+	);
+
+	// ROLLBACK v7 -> v6 -> v7, documented (DESIGN_RULES MON-05 "Save v7"): v6 code keeps the first three titles and the
+	// kill count (and the record holds them), and drops the rest; the kill titles come back at the next kill by
+	// themselves, since their goal is `zombieKills`
+	const vet = SAVE.defaultSave();
+	for (let i = 0; i < TIT.EXTERMINATOR_KILLS; i++) creditZombieKill(vet);
+	check(SAVE.ownsTitle(vet, TIT.TitleId.Exterminator), "(1.000 abates: Exterminator)");
+	const v6doc = JSON.parse(JSON.stringify(vet));
+	delete v6doc.titleStats;
+	v6doc.titles = v6doc.titles.slice(0, 3);
+	const back = SAVE.sanitizeStoredSave(v6doc);
+	check(
+		SAVE.ownsTitle(back, TIT.TitleId.HordeBreaker) && !SAVE.ownsTitle(back, TIT.TitleId.Exterminator),
+		"depois de um rollback para v6: Horde Breaker e os abates ficam, o Exterminator se perdeu",
+	);
+	checkArrayEq(
+		[...creditZombieKill(back)],
+		[TIT.TitleId.Exterminator],
+		"e o proximo abate o devolve (o objetivo dele e a contagem, que sobreviveu)",
+	);
+}
+
+// ---------------------------------------------------------------- v8: Robux receipts (docs/SHOP.md "Robux")
+
+section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traje pago nunca volta atras");
 {
 	// shared/admin/ops.ts builds a byte class with Luau's string.char when it loads
 	globalThis.string ??= {};
@@ -2843,17 +2974,21 @@ section("34) v7: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 					)
 				: x,
 		);
-	// a v6 document: everything but the receipts, which v6 never had
-	const v6 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV4())));
-	v6.version = 6;
-	delete v6.robuxReceipts;
-	const up = SAVE.sanitizeStoredSave(v6);
-	checkEq(up.version, 7, "um documento v6 sobe para v7");
-	checkArrayEq(up.robuxReceipts, [], "sem recibo nenhum (nada foi vendido em Robux antes do v7)");
+	// a v7 document: everything but the receipts, which v7 never had (its title counters included)
+	const v7 = JSON.parse(JSON.stringify(SAVE.sanitizeStoredSave(productionV4())));
+	v7.version = 7;
+	v7.titleStats = v7.titleStats.map((_, i) => (i === 0 ? 12 : 0));
+	delete v7.robuxReceipts;
+	const up = SAVE.sanitizeStoredSave(v7);
+	checkEq(up.version, 8, "um documento v7 sobe para v8");
+	checkArrayEq(up.robuxReceipts, [], "sem recibo nenhum (nada foi vendido em Robux antes do v8)");
 	const back = JSON.parse(JSON.stringify(up));
 	delete back.robuxReceipts;
-	back.version = 6;
-	check(canon(back) === canon(v6), "e nenhum outro campo muda na migracao v6 -> v7");
+	back.version = 7;
+	check(
+		canon(back) === canon(v7),
+		"e nenhum outro campo muda na migracao v7 -> v8 (os contadores dos titulos inclusive)",
+	);
 
 	// the stored list, entry by entry: only "<costumeId>:<PurchaseId>" with a real costume and a sane id survives
 	const N = COSTUMES.size();

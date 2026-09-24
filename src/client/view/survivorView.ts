@@ -26,6 +26,12 @@ import { drawOutfitHead, drawOutfitTorso, outfitPalette } from "./cosmeticsView"
 import { part, SIDES } from "./drawKit";
 import { columnOf, drawSurvivorCell, drawWeaponCell, survivorArtLive } from "./charArt";
 import { Grip, HANDLE, downedRow, gripOf, gunLength, survivorRow, swingRow, weaponRow } from "./charSheets";
+// the theme's TOKENS are the DARK palette (client/ui/theme.ts); read from the generated tokens so this drawing module
+// stays loadable without the UI kit's type scale (theme.ts reads Enum.FontWeight at load)
+import { DARK } from "../ui/themeTokens";
+
+/** (MON-07) the Supporter rose of a subscriber's swing trail: the `supporter` token, OVER_WORLD.supporter's */
+const SUPPORTER_TRAIL = DARK.supporter;
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
@@ -97,6 +103,11 @@ export interface SurvivorLook {
 	 * survivor from `PlayerState.holstered`, an ally from the WEAPON_HOLSTERED byte of the wire (protocol.ts note 20).
 	 */
 	holstered: boolean;
+	/**
+	 * (MON-07) The server says this survivor's Supporter subscription is active: the melee swing trail is drawn in the
+	 * Supporter rose instead of white (MON-02: a trail reads at 32 px). The blade, the hit and the rest are untouched.
+	 */
+	supporter: boolean;
 }
 
 /** where a rider's hands hold the bars, in the body's frame (both vehicles put their bars there) */
@@ -124,6 +135,7 @@ export function createLook(): SurvivorLook {
 		outfit: OutfitLook.None,
 		riding: false,
 		holstered: false,
+		supporter: false,
 	};
 }
 
@@ -235,7 +247,8 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 			if (w.id === CHAINSAW_ID) rel = math.sin(look.clock * 90) * 0.03;
 			const sa = a + rel;
 			const swept = clamp(rel + half, 0, SWING_TRAIL);
-			// motion trail over the swept part of the arc, then the blade itself
+			// motion trail over the swept part of the arc, then the blade itself (MON-07: a Supporter's in the rose)
+			const trailColor = look.supporter ? SUPPORTER_TRAIL : WHITE;
 			for (let i = 0; i < 2; i++) {
 				const o = i === 0 ? -swept : -swept * 0.5;
 				const al = i === 0 ? 0.15 : 0.3;
@@ -246,7 +259,7 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 					look.y + math.sin(ta) * 16,
 					look.x + math.cos(ta) * reach,
 					look.y + math.sin(ta) * reach,
-					{ h: 8, color: WHITE, alpha: al, zIndex: look.z },
+					{ h: 8, color: trailColor, alpha: al, zIndex: look.z },
 				);
 			}
 			if (art) {
