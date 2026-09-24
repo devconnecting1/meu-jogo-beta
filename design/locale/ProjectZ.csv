@@ -201,8 +201,8 @@ watch the tutorial?"
 ,,,Searching a building finds one more item.
 ,,,Cooking may give double.
 ,,,Smelting may give double.
-,,,Turrets are sturdier.
-,,,Generators are sturdier.
+,,,Your turrets hit harder and your drones fly longer.
+,,,Your generators make more power and your boxes hold more.
 ,,,Your footsteps are quieter.
 ,,,You see further at night.
 ,,,Repairs go faster.
@@ -674,3 +674,12 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Click a column to sort
 ,,,Waiting for the town's list...
 ,,,Survivors in town
+,,,Charge stun gun
+,,,Battery box empty
+,,,Stun gun full
+,,,Refuel (5 Oil)
+,,,Refuel: needs 5 Oil
+,,,Turn off (no power)
+,,,Launch drone
+,,,Call back drone
+,,,Drone charging

@@ -229,8 +229,8 @@ export const LANG_TABLE: Array<string> = [
 	"Searching a building finds one more item.",
 	"Cooking may give double.",
 	"Smelting may give double.",
-	"Turrets are sturdier.",
-	"Generators are sturdier.",
+	"Your turrets hit harder and your drones fly longer.",
+	"Your generators make more power and your boxes hold more.",
 	"Your footsteps are quieter.",
 	"You see further at night.",
 	"Repairs go faster.",
@@ -701,6 +701,17 @@ export const LANG_TABLE: Array<string> = [
 	"Click a column to sort",
 	"Waiting for the town's list...",
 	"Survivors in town",
+	// the electric builds: what E does on each (client/systems/machineHints.ts, DESIGN_RULES ELE-03..ELE-08; the HUD
+	// shows the text after "E: ")
+	"Charge stun gun",
+	"Battery box empty",
+	"Stun gun full",
+	"Refuel (5 Oil)",
+	"Refuel: needs 5 Oil",
+	"Turn off (no power)",
+	"Launch drone",
+	"Call back drone",
+	"Drone charging",
 ];
 
 /**

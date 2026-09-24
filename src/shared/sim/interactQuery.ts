@@ -9,6 +9,7 @@ import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import { buildingAt, GroundItem, querySolids, Solid, WorldData } from "shared/game/world";
 import { rectCircleOverlap } from "./placement";
+import { vehicleBroken } from "./vehicle";
 
 /** solids are looked up in a box of this half-size around the survivor */
 export const INTERACT_RADIUS = 80;
@@ -16,7 +17,10 @@ export const INTERACT_RADIUS = 80;
 export const SOLID_REACH = 40;
 export const DOOR_REACH = 30;
 
-/** tags that can be repaired with wood or steel */
+/**
+ * Tags that can be repaired with wood or steel. The machines (ELE-08) are the original's repair list
+ * (obj_player: turret, battery box, the three generators, the electric trap): steel, as the turret always was.
+ */
 export const REPAIRABLE: ReadonlyArray<string> = [
 	"craftdesk",
 	"craftdesk_pro",
@@ -25,6 +29,24 @@ export const REPAIRABLE: ReadonlyArray<string> = [
 	"iron_barricade",
 	"door",
 	"iron_door",
+	"electric_turret",
+	"battery",
+	"solar",
+	"reactor",
+	"oil_generator",
+	// only once it is broken (VEI-05): before that E rides it (`interactTarget`)
+	"vehicle",
+];
+
+/** machines mended with steel rather than wood */
+const STEEL_REPAIRED: ReadonlyArray<string> = [
+	"iron_barricade",
+	"turret",
+	"electric_turret",
+	"battery",
+	"solar",
+	"reactor",
+	"oil_generator",
 ];
 
 /** distance from (x, y) to the solid's rect (negative inside) */
@@ -38,9 +60,13 @@ export function isDoor(s: Solid): boolean {
 	return s.kind === "door" || s.kind === "iron_door";
 }
 
-/** a campfire, brazier or lamp: E switches it */
+/**
+ * A campfire, brazier, lamp or lamp drone: E switches it. The lamp drone is a lamp that flies (ELE-05): where the
+ * server owns the grid, E launches it to escort you and calls it back (server/sim/power.ts); a client that still
+ * owns its own world (MP_PHASE < F3) just switches it on its pad.
+ */
 export function isLight(s: Solid): boolean {
-	return s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier";
+	return s.tags === "campfire" || s.tags === "lamp" || s.tags === "brazier" || s.tags === "lamp_drone";
 }
 
 /** burns wood (a lamp does not) */
@@ -53,16 +79,22 @@ export function isMapItem(s: Solid): boolean {
 	return s.kind === "tree" || s.tags === "car" || s.tags === "trash";
 }
 
-/** wood repairs everything but iron doors, iron barricades and turrets (steel) */
+/** a parked bicycle or motorcycle (VEI-05): passable, but E still finds it */
+export function isVehicle(s: Solid): boolean {
+	return s.tags === "vehicle";
+}
+
+/** wood repairs everything but iron doors, iron barricades, turrets, the other machines and vehicles (steel) */
 export function repairMaterial(s: Solid): { kind: number; index: number } {
-	if (s.kind === "iron_door" || s.tags === "iron_barricade" || s.tags === "turret") {
+	if (s.kind === "iron_door" || STEEL_REPAIRED.includes(s.tags) || isVehicle(s)) {
 		return { kind: 4, index: 26 };
 	}
 	return { kind: 4, index: 23 };
 }
 
-/** damaged and repairable (the material still has to be in the backpack) */
+/** damaged and repairable (the material still has to be in the backpack); a vehicle only once it is broken */
 export function canRepair(s: Solid): boolean {
+	if (isVehicle(s)) return vehicleBroken(s);
 	return s.hp < s.hpMax && REPAIRABLE.includes(s.tags);
 }
 
@@ -93,10 +125,16 @@ export function nearestGroundItem(world: WorldData, x: number, y: number): Groun
 	return best;
 }
 
-/** nearest usable solid (doors, lights, trees/cars/bins, repairables); never a building record */
+/**
+ * Nearest usable solid (doors, lights, trees/cars/bins, vehicles, repairables); never a building record. A parked
+ * vehicle (VEI-05) yields to any door in reach: it is passable and can be ridden from anywhere around it, a door only
+ * from its threshold -- a bike left in a doorway must not take the door's E (review of 5874cfa).
+ */
 export function nearestUsableSolid(world: WorldData, x: number, y: number): Solid | undefined {
 	let best: Solid | undefined;
 	let bestD = SOLID_REACH;
+	let door: Solid | undefined;
+	let doorD = DOOR_REACH;
 	for (const s of querySolids(
 		world,
 		x - INTERACT_RADIUS,
@@ -104,17 +142,23 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		x + INTERACT_RADIUS,
 		y + INTERACT_RADIUS,
 	)) {
-		if (s.kind === "building" || s.passable === true) continue;
+		if (s.kind === "building" || (s.passable === true && !isVehicle(s))) continue;
 		// a building's own walls and furniture do nothing on E: standing by the pharmacy shelves must search the
 		// pharmacy, not "use" the shelf (a wall within reach used to swallow the search the same way)
 		if (s.parentId !== undefined) continue;
-		const limit = isDoor(s) ? DOOR_REACH : SOLID_REACH;
+		const isADoor = isDoor(s);
+		const limit = isADoor ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);
+		if (isADoor && d < doorD) {
+			doorD = d;
+			door = s;
+		}
 		if (d < limit && d < bestD) {
 			bestD = d;
 			best = s;
 		}
 	}
+	if (best !== undefined && door !== undefined && isVehicle(best)) return door;
 	return best;
 }
 
@@ -169,13 +213,15 @@ export function bodiesOverlapRect(
 /**
  * What E acts on, by priority: ground item → door / light / tree-car-bin / anything else in reach (repair) →
  * the loot of the building you stand in. A solid in reach always wins over the building: reaching through a wall
- * to loot is not a thing.
+ * to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
+ * after the loot: it can be ridden from anywhere around it, they cannot.
  */
 export type InteractTarget =
 	| { kind: "item"; item: GroundItem }
 	| { kind: "door"; solid: Solid }
 	| { kind: "light"; solid: Solid }
 	| { kind: "mapItem"; solid: Solid }
+	| { kind: "vehicle"; solid: Solid }
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
@@ -184,6 +230,13 @@ export function interactTarget(world: WorldData, x: number, y: number): Interact
 	if (item !== undefined) return { kind: "item", item };
 	const s = nearestUsableSolid(world, x, y);
 	if (s !== undefined) {
+		// ridden (server/sim/vehicles.ts), or repaired once broken (the "solid" path, VEI-05) -- after the loot of the
+		// building you stand in: a bike parked indoors must not hide the search
+		if (isVehicle(s)) {
+			const b = buildingToSearch(world, x, y);
+			if (b !== undefined) return { kind: "search", building: b };
+			return { kind: "vehicle", solid: s };
+		}
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };

@@ -60,6 +60,7 @@ import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
+import { packRide, rideHeading } from "shared/sim/rideKey";
 import {
 	ActorInterest,
 	InterestTable,
@@ -77,6 +78,7 @@ import { BossDeath } from "../sim/bosses";
 import { ServerPlayer, bufferDepth, refreshProfile, refreshTally } from "../sim/players";
 import { ServerSimulation } from "../sim/simulation";
 import { solidAdd } from "../sim/build";
+import { MachineState, powerSetOf } from "../sim/power";
 import { PendingWorld } from "../sim/worldOut";
 
 /** rough per-event framing the engine adds on top of the payload; only used for the §12.2 bandwidth attribute */
@@ -213,6 +215,8 @@ export function selfBlockOf(sim: ServerSimulation, sp: ServerPlayer): SelfSnap {
 		bleed: 0,
 		modFlags,
 		weapon: math.max(0, w.pointer),
+		// VEI-05: the vehicle under them, on the grid the simulation keeps it on (the prediction replays from it)
+		ride: packRide(p.ride),
 	};
 }
 
@@ -244,7 +248,9 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
 		swing: p.swingerActive ? angleDelta(p.swingerAngle, p.angle) : 0,
 		hp: p.hpMax > 0 ? math.clamp(p.hp / p.hpMax, 0, 1) : 0,
 		revive: 0,
-		moveAng: sp.moveAng,
+		// VEI-05: on a saddle the feet point nowhere; the angle is the vehicle's heading, and the kind tells which
+		moveAng: p.ride !== undefined ? rideHeading(p.ride) : sp.moveAng,
+		ride: p.ride?.kind ?? 0,
 	};
 }
 
@@ -406,6 +412,7 @@ export class Replicator {
 	private readonly interactive = new Array<PendingWorld>();
 	private readonly initSolids = new Array<Solid>();
 	private readonly initItems = new Array<WItemAdd>();
+	private readonly initMachines = new Array<MachineState>();
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
@@ -530,6 +537,13 @@ export class Replicator {
 			this.initSolids.clear();
 			for (const solid of build.initAll(this.initSolids)) this.queueFor(sp.slot, solidAdd(solid));
 			this.initSolids.clear();
+		}
+		// the grid's state of each machine, AFTER its SolidAdd (ELE-01..08: a box's charge, a drone in the air)
+		const power = this.sim.power;
+		if (power !== undefined) {
+			this.initMachines.clear();
+			for (const st of power.initAll(this.initMachines)) this.queueFor(sp.slot, powerSetOf(st));
+			this.initMachines.clear();
 		}
 		// a door of the generated map that somebody opened: the mirror generated it closed
 		for (const solid of this.sim.world.solids) {

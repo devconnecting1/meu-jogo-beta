@@ -18,6 +18,11 @@ export interface PlaceableDef {
 	destructible: boolean;
 	rotatable: boolean;
 	powered?: boolean;
+	/**
+	 * Bodies walk through it (Solid.passable). Only the parked vehicles (VEI-05): a low bike or motorcycle is stepped
+	 * round, never a wall -- so nobody can bar a door with somebody else's, and getting off always works.
+	 */
+	passable?: boolean;
 }
 
 function p(
@@ -29,8 +34,9 @@ function p(
 	destructible = true,
 	rotatable = false,
 	powered?: boolean,
+	passable?: boolean,
 ): PlaceableDef {
-	return { tag, kind, w, h, hp, destructible, rotatable, powered };
+	return { tag, kind, w, h, hp, destructible, rotatable, powered, passable };
 }
 
 /** by ETC item index (the kit a craftKind-1 recipe produces) */
@@ -42,9 +48,10 @@ export const PLACEABLES: Record<number, PlaceableDef> = {
 	4: p("lamp", "structure", 48, 48, 400, true, false, false),
 	5: p("lamp_drone", "structure", 40, 40, 300, true, false, false),
 	6: p("battery", "structure", 40, 40, 300),
-	7: p("generator", "structure", 72, 72, 500),
-	8: p("generator", "structure", 80, 80, 500),
-	9: p("generator", "structure", 72, 72, 500),
+	// the three generators differ in what they burn (shared/data/power.ts MACHINES), so each has its own tag
+	7: p("solar", "structure", 72, 72, 500),
+	8: p("reactor", "structure", 80, 80, 500),
+	9: p("oil_generator", "structure", 72, 72, 500),
 	10: p("barricade", "barricade", 128, 32, 700, true, true),
 	11: p("door", "door", 96, 24, 500, true, true),
 	12: p("iron_barricade", "iron_barricade", 128, 32, 1700, true, true),
@@ -56,8 +63,9 @@ export const PLACEABLES: Record<number, PlaceableDef> = {
 	18: p("gps", "structure", 48, 48, 100),
 	19: p("cooker", "structure", 56, 48, 300),
 	20: p("furnace", "structure", 56, 48, 300),
-	21: p("vehicle", "structure", 64, 40, 100),
-	22: p("vehicle", "structure", 72, 44, 120),
+	// the vehicles' footprint IS their drawing (VEHICLES length × width, shared/data/buildings.ts), nose along +x
+	21: p("vehicle", "structure", 72, 28, 100, true, true, undefined, true),
+	22: p("vehicle", "structure", 88, 32, 120, true, true, undefined, true),
 	39: p("craftdesk", "structure", 96, 72, 240),
 	40: p("craftdesk_pro", "structure", 112, 80, 480),
 };
@@ -229,7 +237,8 @@ export function placementValid(
 	const h = r.h;
 	if (!(gx >= 0 && gy >= 0 && gx + w < world.width && gy + h < world.height)) return false;
 	for (const s of querySolids(world, gx, gy, gx + w, gy + h)) {
-		if (s.passable === true) continue;
+		// a parked vehicle is walked through, not built over: a wall on top would hide it for good
+		if (s.passable === true && s.tags !== "vehicle") continue;
 		if (gx < s.x + s.w && gx + w > s.x && gy < s.y + s.h && gy + h > s.y) return false;
 	}
 	for (const pl of players) {
@@ -258,6 +267,7 @@ export function placedSolid(def: PlaceableDef, r: PlaceRect, rot: number): Omit<
 		rot,
 		open: def.kind === "door" || def.kind === "iron_door" ? false : undefined,
 		powered: def.powered,
+		passable: def.passable,
 	};
 }
 

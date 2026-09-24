@@ -26,6 +26,11 @@
  *                               cooking made is Chef's, what a smelting made Blacksmith's
  *       creditTaken             what the server put into the backpack (server/sim/items.ts: pickup, search, a
  *                               Thief's find): wood is Woods collector's
+ *       creditRide              the distance the server moved a rider (server/sim/vehicles.ts, VEI-05): Rider
+ *       creditLitLamp           an electric lamp this survivor switched on lit up on the grid (server/sim/power.ts
+ *                               `act`, ELE-03): Thomas Edison
+ *       creditTurretKill        a zombie a machine this survivor built -- or a turret drone they fly -- brought down
+ *                               (server/sim/progress.ts `zombieKilled` by a machine, ELE-04): Turret
  *   - a client report cannot move them: `sanitizeClientReport` copies `achievements` and `lifeDeaths` from the trusted
  *     save (shared/game/save.ts, v6), and `stripClientAchievements` pins them again (with `titles`) where the server
  *     merges the report. The counters reach the client in its wallet (`walletOf`), which the client only ever raises
@@ -171,9 +176,38 @@ export function creditCraft(save: PlayerSaveData, heat: CraftHeat, count: number
 }
 
 /**
+ * Thomas Edison: E switched on an electric lamp and it LIT, fed by a battery box (server/sim/power.ts `act`, ELE-03)
+ * -- light made from electricity, which is the name. A fire is not it, and neither is a lamp switched on with no power
+ * (it stays dark: nothing was lit).
+ */
+export function creditLitLamp(save: PlayerSaveData): void {
+	raiseAchievement(save, AchievementId.ThomasEdison, 1);
+}
+
+/**
+ * Turret: a zombie brought down by a machine this survivor built (a turret, an electric turret) or by a turret drone
+ * they fly (server/sim/progress.ts `zombieKilled` with `byMachine`, ELE-04). It is the machine's kill, so it moves no
+ * kill counter (MON-05) -- this is the one achievement it earns.
+ */
+export function creditTurretKill(save: PlayerSaveData): void {
+	raiseAchievement(save, AchievementId.Turret, 1);
+}
+
+/**
  * `count` of an item the SERVER put into this survivor's backpack (a pickup, a search, a Thief's find): wood is Woods
  * collector's.
  */
 export function creditTaken(save: PlayerSaveData, kind: number, id: number, count: number): void {
 	if (kind === ItemKind.Etc && id === WOOD && WOOD >= 0) addAchievement(save, AchievementId.WoodsCollector, count);
+}
+
+/** world units ridden per point of Rider: the original's 10 px (obj_player `move_count`), 1 px = 1 u here */
+export const RIDER_UNITS_PER_POINT = 10;
+
+/**
+ * `points` of Rider (a whole number, one per RIDER_UNITS_PER_POINT the SERVER moved a rider: server/sim/vehicles.ts
+ * turns its odometer into points and keeps the remainder). Bicycle and motorcycle alike (VEI-05).
+ */
+export function creditRide(save: PlayerSaveData, points: number): void {
+	addAchievement(save, AchievementId.Rider, points);
 }

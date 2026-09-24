@@ -36,6 +36,7 @@ import {
 import { meleeReach } from "shared/data/weapons";
 import { PetLook, petFlies } from "shared/data/cosmetics";
 import { drawPet } from "./cosmeticsView";
+import { drawVehicle } from "./vehicleView";
 import { PetFollower, createPetFollower, stepPetFollower } from "./petFollow";
 
 /** a plate whose ally has been out of the snapshot this long is destroyed (§4.4's despawn, with slack) */
@@ -126,6 +127,13 @@ export class PlayersView {
 			const so = shadow(rp.x, rp.y, 10);
 			look.shadowX = so.x;
 			look.shadowY = so.y;
+			// VEI-05: an ally on a bicycle or a motorcycle is drawn on it, facing where it points
+			look.riding = rp.ride > 0;
+			if (look.riding) {
+				look.angle = rp.rideHeading;
+				look.feetAmp = 0;
+				drawVehicle(r, cam, rp.ride, rp.x, rp.y, rp.rideHeading, so.x, so.y, look.z - 2);
+			}
 			drawSurvivor(r, cam, look, slot.trail);
 		}
 	}
@@ -241,8 +249,8 @@ export class PlayersView {
 		}
 		const speed = step > 0 ? moved / FEET_CYCLE_PER_UNIT / step : 0;
 		slot.amp += ((speed > WALK_SPEED ? 1 : 0) - slot.amp) * ease(AMP_EASE, step);
-		// a downed survivor drags themselves along: the crawl is not a footstep
-		if (rp.downed) slot.foot.reset();
+		// a downed survivor drags themselves along: the crawl is not a footstep; nor is a ride (VEI-05)
+		if (rp.downed || rp.ride > 0) slot.foot.reset();
 		else slot.foot.advance(rp.feetCycle, slot.amp, rp.x, rp.y, false);
 	}
 

@@ -86,12 +86,19 @@ export interface ServerBuildOptions {
 	 * `ZombieWorld.refs.onSolidChanged`, passed in rather than reached for, so the module stays pure.
 	 */
 	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	/**
+	 * Every solid that enters (`added`) or leaves the world, whoever put it there or took it away — a placement, a
+	 * wall the horde chewed through, an admin tool. The electric grid (server/sim/power.ts) keeps its machines by it:
+	 * this class owns the world's two hooks, so it passes them on rather than letting a second owner overwrite them.
+	 */
+	onSolid?: (s: Solid, added: boolean) => void;
 }
 
 export class ServerBuild {
 	private readonly world: WorldData;
 	private readonly out: WorldOut;
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	private readonly onSolid?: (s: Solid, added: boolean) => void;
 	private readonly pending = new Map<number, Pending>();
 	/** live constructions per owner slot, and in total (§8.1 caps) */
 	private readonly owned = new Map<number, number>();
@@ -109,6 +116,7 @@ export class ServerBuild {
 		this.world = options.world;
 		this.out = options.out;
 		this.onSolidChanged = options.onSolidChanged;
+		this.onSolid = options.onSolid;
 		// §4.5: a construction is GLOBAL — everybody collides with it, so everybody is told about it, in
 		// sight or not. The hooks also catch what the horde chews through, which is a `SolidRemove` nobody
 		// would otherwise remember to send.
@@ -317,6 +325,7 @@ export class ServerBuild {
 	}
 
 	private noteAdded(s: Solid): void {
+		this.onSolid?.(s, true);
 		if (s.placeable === undefined) return;
 		this.standing.set(s, quantFrac8(hpFraction(s)));
 		this.total += 1;
@@ -327,6 +336,7 @@ export class ServerBuild {
 	}
 
 	private noteRemoved(s: Solid): void {
+		this.onSolid?.(s, false);
 		if (this.onSolidChanged !== undefined) this.onSolidChanged(s.x, s.y, s.w, s.h);
 		if (s.placeable === undefined) return;
 		this.standing.delete(s);

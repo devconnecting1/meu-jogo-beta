@@ -94,6 +94,23 @@ export type WorldArtName =
 	| "signClothes"
 	| "signDiner"
 	| "helipad"
+	| "bicycle"
+	| "motorcycle"
+	| "machineTurret"
+	| "machineTurretHead"
+	| "machineShock"
+	| "machineBattery"
+	| "machineSolar"
+	| "machineReactor"
+	| "machineOil"
+	| "machineLamp"
+	| "machinePadTurret"
+	| "machinePadLamp"
+	| "machineDroneTurret"
+	| "machineDroneLamp"
+	| "machineBeacon"
+	| "machineBeaconDish"
+	| "machineCooker"
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath"
@@ -268,6 +285,40 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
+	bicycle: { id: "", w: 18, h: 7 },
+	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
+	motorcycle: { id: "", w: 22, h: 8 },
+	/** sprite: the turret's mount: an octagonal steel plate, the ring the head turns on, four bolts */
+	machineTurret: { id: "", w: 16, h: 16 },
+	/** sprite: the turret's head: a blue dome and the barrel, pointing +x (it turns) */
+	machineTurretHead: { id: "", w: 13, h: 8 },
+	/** sprite: the electric turret: copper coil rings round a steel terminal */
+	machineShock: { id: "", w: 16, h: 16 },
+	/** sprite: the battery box: blue case, the gauge window, the two posts */
+	machineBattery: { id: "", w: 10, h: 10 },
+	/** sprite: the solar generator: nine blue cells in a steel frame */
+	machineSolar: { id: "", w: 18, h: 18 },
+	/** sprite: the nuclear reactor: the vessel, its hazard band, the dome and the core */
+	machineReactor: { id: "", w: 20, h: 20 },
+	/** sprite: the oil generator: the radiator grille, the red tank and its cap, the exhaust */
+	machineOil: { id: "", w: 18, h: 18 },
+	/** sprite: the lamp: a floodlight head on its plate */
+	machineLamp: { id: "", w: 12, h: 12 },
+	/** sprite: the turret drone's pad: the charging ring and its contacts */
+	machinePadTurret: { id: "", w: 12, h: 12 },
+	/** sprite: the lamp drone's pad */
+	machinePadLamp: { id: "", w: 10, h: 10 },
+	/** sprite: the turret drone: four rotors, the body and its gun, pointing +x (it turns) */
+	machineDroneTurret: { id: "", w: 11, h: 11 },
+	/** sprite: the lamp drone: four rotors and the lamp */
+	machineDroneLamp: { id: "", w: 11, h: 11 },
+	/** sprite: the signal generator's base: the plate and the mast */
+	machineBeacon: { id: "", w: 12, h: 12 },
+	/** sprite: the signal generator's dish, facing +x (it turns) */
+	machineBeaconDish: { id: "", w: 6, h: 7 },
+	/** sprite: the cooker: a steel top with two plates and the knobs */
+	machineCooker: { id: "", w: 14, h: 12 },
 	/** tile: bedroom / office carpet: a low loop pile */
 	floorCarpet: { id: "", w: 16, h: 16 },
 	/** tile: kitchen floor: checker tiles */
@@ -382,6 +433,23 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signClothes",
 	"signDiner",
 	"helipad",
+	"bicycle",
+	"motorcycle",
+	"machineTurret",
+	"machineTurretHead",
+	"machineShock",
+	"machineBattery",
+	"machineSolar",
+	"machineReactor",
+	"machineOil",
+	"machineLamp",
+	"machinePadTurret",
+	"machinePadLamp",
+	"machineDroneTurret",
+	"machineDroneLamp",
+	"machineBeacon",
+	"machineBeaconDish",
+	"machineCooker",
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
