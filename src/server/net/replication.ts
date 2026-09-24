@@ -640,6 +640,9 @@ export class Replicator {
 
 	/** call once per simulation tick, after the step */
 	afterTick(tick: number): void {
+		// the MicroProfiler's view of this layer (§12.2, F6): what it gathered, what it flushed, the snapshots
+		const prof = this.sim.profile;
+		prof?.begin("PZ.repl.collect");
 		this.collectWorldDeltas(tick);
 		this.collectFx();
 		if (tick % PROFILE_EVERY_TICKS === 0) this.collectProfiles();
@@ -652,9 +655,16 @@ export class Replicator {
 		} else if (this.tallyRound === undefined && tick % TALLY_EVERY_TICKS === 0) {
 			this.collectTallies(false);
 		}
+		prof?.end();
+		prof?.begin("PZ.repl.flush");
 		if (tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
 		this.flushFx(tick);
-		if (tick % SNAP_NEAR_EVERY_TICKS === 0) this.sendSnapshots();
+		prof?.end();
+		if (tick % SNAP_NEAR_EVERY_TICKS === 0) {
+			prof?.begin("PZ.repl.snap");
+			this.sendSnapshots();
+			prof?.end();
+		}
 	}
 
 	/**

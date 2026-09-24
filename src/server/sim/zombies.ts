@@ -14,6 +14,7 @@ import { BossRoster } from "./bosses";
 import { ServerPopulation } from "./population";
 import { WorldClock } from "./waves";
 import { ServerPlayer } from "./players";
+import type { SimProfiler } from "./metrics";
 
 /*
  * The authoritative horde (docs/MULTIPLAYER.md §3.1 step 2, §3.3, §3.4, §11.3 F2-2A). SERVER ONLY, and pure:
@@ -97,6 +98,13 @@ export class ZombieWorld {
 	nowMs?: () => number;
 	/** milliseconds spent in each phase of the LAST tick (all zero while `nowMs` is undefined) */
 	readonly cost = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+	/**
+	 * MicroProfiler labels for the same phases (`PZ.horde.*`, server/sim/metrics.ts), injected like `nowMs`;
+	 * undefined labels nothing. ServerSimulation.instrument sets both.
+	 */
+	profile?: SimProfiler;
+	/** the clock reading the next `lap` measures from (a field: the step makes no closure per tick) */
+	private lapAt = 0;
 
 	private readonly players: Array<PlayerState> = [];
 	/** the slot of each entry of `players`, in the same order */
@@ -264,28 +272,44 @@ export class ZombieWorld {
 	 */
 	step(roster: ReadonlyArray<ServerPlayer>, dt: number, tick: number): void {
 		this.lastTick = tick;
+		const prof = this.profile;
 		const now = this.nowMs;
-		let t0 = now !== undefined ? now() : 0;
-		const lap = (into: "clock" | "population" | "field" | "zombies" | "bosses" | "book"): void => {
-			if (now === undefined) return;
-			const t1 = now();
-			this.cost[into] = t1 - t0;
-			t0 = t1;
-		};
+		this.lapAt = now !== undefined ? now() : 0;
+		prof?.begin("PZ.horde.clock");
 		this.syncPlayers(roster);
 		this.clock.step(dt);
-		lap("clock");
+		prof?.end();
+		this.lap("clock");
+		prof?.begin("PZ.horde.population");
 		this.population.update(this.refs, dt);
-		lap("population");
+		prof?.end();
+		this.lap("population");
+		prof?.begin("PZ.horde.field");
 		this.updateField();
-		lap("field");
+		prof?.end();
+		this.lap("field");
+		prof?.begin("PZ.horde.zombies");
 		Brain.updateZombies(this.refs, dt);
-		lap("zombies");
+		prof?.end();
+		this.lap("zombies");
+		prof?.begin("PZ.horde.bosses");
 		this.bossRoster.step(this.refs, dt, tick);
-		lap("bosses");
+		prof?.end();
+		this.lap("bosses");
+		prof?.begin("PZ.horde.book");
 		this.trackEntities(tick);
 		this.trim();
-		lap("book");
+		prof?.end();
+		this.lap("book");
+	}
+
+	/** the time since the previous lap goes to `into` (nothing at all while `nowMs` is undefined) */
+	private lap(into: "clock" | "population" | "field" | "zombies" | "bosses" | "book"): void {
+		const now = this.nowMs;
+		if (now === undefined) return;
+		const t1 = now();
+		this.cost[into] = t1 - this.lapAt;
+		this.lapAt = t1;
 	}
 
 	/**

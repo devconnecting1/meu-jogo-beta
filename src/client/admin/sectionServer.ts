@@ -1,4 +1,4 @@
-import { ADMIN_LIMITS, AuditEntry, ServerInfo } from "shared/admin/protocol";
+import { ADMIN_LIMITS, AuditEntry, ServerInfo, SimMetrics } from "shared/admin/protocol";
 import { TEXT, THEME, space } from "../ui/theme";
 import { Button, Tabs, clearChildren, makeLabel, makeListRow, makeScrollList, setButtonEnabled } from "../ui/widgets";
 import { TextInput } from "./controls";
@@ -13,6 +13,27 @@ const serverMemory = { tab: 0 };
 
 function timeText(t: number): string {
 	return os.date("!%Y-%m-%d %H:%M:%S", t);
+}
+
+/** milliseconds as the panel shows them: two decimals, or three below 0.1 ms */
+function msText(ms: number): string {
+	return string.format(ms < 0.1 ? "%.3f" : "%.2f", ms);
+}
+
+/**
+ * The simulation's §12.2 lines (server/net/mpHost.ts publishes them once a second): the tick against its 6 ms p95
+ * budget, then what each phase of it cost on average over the last second -- the zero ones left out.
+ */
+function simLines(m: SimMetrics): Array<string> {
+	const phases = new Array<string>();
+	for (const p of m.phases) {
+		if (p.ms >= 0.0005) phases.push(`${p.name} ${msText(p.ms)}`);
+	}
+	return [
+		`Tick: avg ${msText(m.tickAvgMs)} ms · p95 ${msText(m.tickP95Ms)} ms (budget 6) · ${m.zombies} zombies`,
+		`Backlog ${m.backlogMs} ms · dropped ticks ${m.droppedTicks} · tick errors ${m.tickErrors}`,
+		`Per tick (ms): ${phases.size() > 0 ? phases.join(" · ") : "nothing measured yet"}`,
+	];
 }
 
 export function buildServer(p: PanelCtx, content: Frame): SectionHandle {
@@ -73,7 +94,8 @@ export function buildServer(p: PanelCtx, content: Frame): SectionHandle {
 	};
 
 	const buildInfo = (): void => {
-		const text = makeLabel(body, "Info", "Loading…", 0, 0, CONTENT_W, 250, TEXT.sm, THEME.foreground, {
+		// as tall as the tab allows, the button at the bottom like the audit log's: the simulation's lines wrap
+		const text = makeLabel(body, "Info", "Loading…", 0, 0, CONTENT_W, bodyH - 46, TEXT.sm, THEME.foreground, {
 			align: "left",
 			valign: "top",
 		});
@@ -82,19 +104,21 @@ export function buildServer(p: PanelCtx, content: Frame): SectionHandle {
 				const res = p.request({ kind: "serverInfo" });
 				if (!res.ok || !typeIs(res.data, "table") || text.Parent === undefined) return;
 				const i = res.data as ServerInfo;
-				text.Text = [
+				const lines = [
 					`JobId: ${i.jobId}`,
 					`Place: ${i.placeId} · version ${i.placeVersion}${i.studio ? " · Studio" : ""}`,
 					`Uptime: ${durationText(i.uptime)}`,
 					`Players: ${i.players} / ${i.maxPlayers}`,
 					`Save DataStore: ${i.dataStore}`,
 					`Audit log DataStore: ${i.auditStore}`,
-				].join("\n");
+				];
+				if (i.sim !== undefined) for (const line of simLines(i.sim)) lines.push(line);
+				text.Text = lines.join("\n");
 			});
 		};
 		Button(body, "Refresh", "Refresh", {
 			x: 0,
-			y: 260,
+			y: bodyH - 38,
 			w: 140,
 			h: 36,
 			size: "sm",

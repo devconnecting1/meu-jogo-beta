@@ -18,7 +18,12 @@
  *   4. the bodies' own clock (`lives.step`): daybreak, the 5 min memory, the wipe window — and, when that window
  *      closes on a world with nobody alive, the end of that world and a new town on day 1 (MP-22, server/sim/
  *      worldReset.ts)
- *   5. once a second, publish the §12.2 metrics
+ *   5. once a second, publish the §12.2 metrics: the tick's average and p95, the backlog, the dropped ticks, the ticks
+ *      that threw (`pz_tick_errors`) and what each phase of the tick costs (`pz_cost_<phase>_ms`, server/sim/metrics.ts)
+ *      -- as Workspace attributes, and to the admin panel's Server info (`metrics()`)
+ *
+ * Every phase of the tick is also a named MicroProfiler bar (`PZ.*`, `debug.profilebegin`), and the simulation's memory
+ * is its own category (`PZ.sim`) in the Developer Console.
  */
 import { GAME_NAME } from "shared/module";
 import { DESIGN } from "shared/engine/constants";
@@ -34,6 +39,7 @@ import {
 } from "shared/net/mpConfig";
 import { IntentKind, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
+import type { SimMetrics } from "shared/admin/protocol";
 import { WorldData, generateTown } from "shared/game/world";
 import {
 	MpRemotes,
@@ -63,6 +69,7 @@ import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
 import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
+import { newPhaseCosts, SIM_PHASES, SimProfiler } from "../sim/metrics";
 import * as Analytics from "../analytics/events";
 
 const Players = game.GetService("Players");
@@ -81,6 +88,13 @@ const ANOMALY_LOG_INTERVAL = 10;
  * network go on meanwhile. Everyone in the world that ended is down, so the wait costs nobody a thing.
  */
 const RESET_SLICE_S = 0.008;
+/** the attribute each phase's cost is published under, in SIM_PHASES order (built once: no string per second) */
+const COST_ATTRIBUTES = SIM_PHASES.map(phase => `pz_cost_${phase}_ms`);
+
+/** milliseconds to three decimals: what an attribute and the admin panel show */
+function roundMs(ms: number): number {
+	return math.floor(ms * 1000 + 0.5) / 1000;
+}
 
 export interface MpHostOptions {
 	/**
@@ -171,6 +185,8 @@ export interface MpHost {
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
+	/** the §12.2 numbers as last published (once a second): the admin panel's Server info shows them */
+	metrics(): SimMetrics;
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
 	stop(): void;
 }
@@ -554,57 +570,130 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	let admitAt = 0;
 	let metricAt = 0;
 	let lastError = "";
+	/**
+	 * Heartbeats whose work threw, since boot (`pz_tick_errors`). A repeat of the last message is not logged again, so
+	 * this is the only place a steady failure shows how often it happens.
+	 */
+	let tickErrors = 0;
+	let tickErrorsAt = 0;
 	/** xpcall's handler for the tick: the error with the stack it was raised on, so the log says where (F6) */
 	const tickTrace = (err: unknown): string => debug.traceback(tostring(err), 2);
+
+	// ------------------------------------------------------------ what the tick costs (§12.2, F6)
+
+	/**
+	 * MicroProfiler labels open right now. Every `begin` of the simulation has its `end` on the same path, but a tick
+	 * that throws leaves the ones it was inside open: the heartbeat closes them, or every later frame would nest under
+	 * the bar of the tick that failed.
+	 */
+	let profileDepth = 0;
+	const profiler: SimProfiler = {
+		begin(label) {
+			debug.profilebegin(label);
+			profileDepth += 1;
+		},
+		end() {
+			if (profileDepth <= 0) return;
+			profileDepth -= 1;
+			debug.profileend();
+		},
+	};
+	// os.clock is the per-phase clock the pure modules were waiting for (`nowMs`): until now only the tests set it
+	sim.instrument(() => os.clock() * 1000, profiler);
+	const phaseMs = newPhaseCosts();
+	const published: SimMetrics = {
+		tickAvgMs: 0,
+		tickP95Ms: 0,
+		backlogMs: 0,
+		droppedTicks: 0,
+		tickErrors: 0,
+		zombies: 0,
+		phases: SIM_PHASES.map(name => ({ name, ms: 0 })),
+	};
+
+	/** once a second: the tick's numbers into `published`, and (unless the options say not to) the attributes */
+	function publishTick(): void {
+		sim.takeCosts(phaseMs);
+		published.tickAvgMs = roundMs(sim.avgMs());
+		published.tickP95Ms = roundMs(sim.p95Ms());
+		published.backlogMs = math.floor(sim.backlogS() * 1000 + 0.5);
+		published.droppedTicks = sim.stats.droppedTicks;
+		published.tickErrors = tickErrors;
+		published.zombies = sim.horde?.count() ?? 0;
+		for (let i = 0; i < SIM_PHASES.size(); i++) published.phases[i].ms = roundMs(phaseMs[SIM_PHASES[i]]);
+		if (options.metrics === false) return;
+		Workspace.SetAttribute("pz_tick_avg_ms", sim.avgMs());
+		Workspace.SetAttribute("pz_tick_p95_ms", sim.p95Ms());
+		Workspace.SetAttribute("pz_tick_errors", tickErrors);
+		Workspace.SetAttribute("pz_sim_players", sim.count());
+		Workspace.SetAttribute("pz_dropped_ticks", sim.stats.droppedTicks);
+		// the Heartbeat debt still being repaid right now (§3.1): next to the dropped ticks in [PZ-NET]
+		Workspace.SetAttribute("pz_backlog_ms", published.backlogMs);
+		// what a playtest reads off the server window to know the world is actually running
+		Workspace.SetAttribute("pz_zombies", published.zombies);
+		Workspace.SetAttribute("pz_world_day", sim.clock.day);
+		Workspace.SetAttribute("pz_day_time", sim.clock.dayTime);
+		// MP-21's stall counter (shared/sim/ai/population.ts PopulationStall), visible for a playtest
+		Workspace.SetAttribute("pz_stall_s", sim.horde?.population.stall().current ?? 0);
+		Workspace.SetAttribute("pz_stall_episodes", sim.horde?.population.stall().episodes ?? 0);
+		// what each phase of the tick cost on average over the last second (server/sim/metrics.ts SIM_PHASES)
+		for (let i = 0; i < SIM_PHASES.size(); i++) Workspace.SetAttribute(COST_ATTRIBUTES[i], published.phases[i].ms);
+	}
+
+	/** this heartbeat's clock reading and delta, for `beatBody` (hoisted: no closure is made per heartbeat) */
+	let beatNow = 0;
+	let beatDt = 0;
+	const beatBody = (): void => {
+		const now = beatNow;
+		const dt = beatDt;
+		if (now - admitAt >= ADMIT_INTERVAL) {
+			admitAt = now;
+			for (const player of Players.GetPlayers()) admit(player);
+		}
+		const started = os.clock();
+		// the heartbeat after a world reset runs one tick and forgets the rest of its delta: that was the new
+		// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
+		const ran = sim.advance(dt);
+		if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
+		// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
+		lives.step(dt);
+		if (now - metricAt >= METRIC_INTERVAL) {
+			metricAt = now;
+			publishTick();
+			for (const [player, link] of links) {
+				if (link.slot === undefined) continue;
+				const sp = sim.get(link.slot);
+				if (sp !== undefined) publishMetrics(player, sp, link, now);
+			}
+		}
+	};
 
 	const heartbeat = RunService.Heartbeat.Connect(dt => {
 		const now = os.clock();
 		// FIRST, outside the pcall: set after the admit loop, an admit that threw left it on the previous heartbeat, and
 		// the queues' grace counted a whole frame the debt never received (the review of dee095a, N7)
 		beatAt = now;
-		const [ok, err] = xpcall(() => {
-			if (now - admitAt >= ADMIT_INTERVAL) {
-				admitAt = now;
-				for (const player of Players.GetPlayers()) admit(player);
-			}
-			const started = os.clock();
-			// the heartbeat after a world reset runs one tick and forgets the rest of its delta: that was the new
-			// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
-			const ran = sim.advance(dt);
-			if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
-			// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
-			lives.step(dt);
-			if (now - metricAt >= METRIC_INTERVAL) {
-				metricAt = now;
-				if (options.metrics !== false) {
-					Workspace.SetAttribute("pz_tick_avg_ms", sim.avgMs());
-					Workspace.SetAttribute("pz_tick_p95_ms", sim.p95Ms());
-					Workspace.SetAttribute("pz_sim_players", sim.count());
-					Workspace.SetAttribute("pz_dropped_ticks", sim.stats.droppedTicks);
-					// the Heartbeat debt still being repaid right now (§3.1): next to the dropped ticks in [PZ-NET]
-					Workspace.SetAttribute("pz_backlog_ms", math.floor(sim.backlogS() * 1000 + 0.5));
-					// what a playtest reads off the server window to know the world is actually running
-					Workspace.SetAttribute("pz_zombies", sim.horde?.count() ?? 0);
-					Workspace.SetAttribute("pz_world_day", sim.clock.day);
-					Workspace.SetAttribute("pz_day_time", sim.clock.dayTime);
-					// MP-21's stall counter (shared/sim/ai/population.ts PopulationStall), visible for a playtest
-					Workspace.SetAttribute("pz_stall_s", sim.horde?.population.stall().current ?? 0);
-					Workspace.SetAttribute("pz_stall_episodes", sim.horde?.population.stall().episodes ?? 0);
-				}
-				for (const [player, link] of links) {
-					if (link.slot === undefined) continue;
-					const sp = sim.get(link.slot);
-					if (sp !== undefined) publishMetrics(player, sp, link, now);
-				}
-			}
-		}, tickTrace);
+		beatNow = now;
+		beatDt = dt;
+		// what the simulation allocates is its own line in the Developer Console's memory categories (F6)
+		debug.setmemorycategory("PZ.sim");
+		const [ok, err] = xpcall(beatBody, tickTrace);
+		// a tick that threw left the labels it was inside open (see `profiler`)
+		while (profileDepth > 0) profiler.end();
 		if (!ok) {
+			tickErrors += 1;
 			const message = tostring(err);
 			if (message !== lastError) {
 				lastError = message;
-				warn(`[${GAME_NAME}] simulation tick failed: ${message}`);
+				warn(`[${GAME_NAME}] simulation tick failed (${tickErrors} so far): ${message}`);
+			}
+			// a tick that fails every time never reaches `publishTick`: the count goes out from here, once a second
+			if (options.metrics !== false && now - tickErrorsAt >= METRIC_INTERVAL) {
+				tickErrorsAt = now;
+				pcall(() => Workspace.SetAttribute("pz_tick_errors", tickErrors));
 			}
 		}
+		debug.resetmemorycategory();
 	});
 
 	const addedConn = Players.PlayerAdded.Connect(player => linkOf(player));
@@ -651,6 +740,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		},
 		forgetUnsaved(player, blank) {
 			return lives.forgetUnsaved(player.UserId, blank);
+		},
+		metrics() {
+			// the counter moves between two publications (a tick that keeps failing never reaches `publishTick`)
+			published.tickErrors = tickErrors;
+			return published;
 		},
 		anomalies() {
 			const rows = new Array<MpAnomalyRow>();

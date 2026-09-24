@@ -1978,29 +1978,35 @@ function testTickCost() {
 				sp.queue.push({ seq, moveAng: Math.floor(turn * 256) % 256, moveMag: 255, aim: 0, held: 0, edges: 0 });
 			});
 		};
-		// §12.2 wants the cost per STEP, not only per tick: the same hook the live server gives os.clock
-		horde.nowMs = () => performance.now();
+		// §12.2 wants the cost per STEP, not only per tick: the same clock the live server gives the simulation
+		// (mpHost: `sim.instrument(os.clock)`), which measures every phase of the tick; an older src (PZ_SRC) only has
+		// the horde's own hook
+		const instrumented = typeof sim.instrument === "function";
+		if (instrumented) sim.instrument(() => performance.now());
+		else horde.nowMs = () => performance.now();
+		const cost = () => (instrumented ? sim.cost : horde.cost);
 		for (let t = 0; t < 120; t++) {
 			feed(t);
 			sim.step(); // warm-up: the first field and the JIT
 		}
 		const N = 1800;
 		const samples = new Float64Array(N);
-		const phases = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
-		const peaks = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+		const phases = {};
+		const peaks = {};
+		for (const k in cost()) {
+			phases[k] = 0;
+			peaks[k] = 0;
+		}
 		for (let t = 0; t < N; t++) {
 			feed(120 + t);
 			const t0 = performance.now();
 			sim.step();
 			samples[t] = performance.now() - t0;
-			const c = horde.cost;
-			phases.clock += c.clock;
-			phases.population += c.population;
-			phases.field += c.field;
-			phases.zombies += c.zombies;
-			phases.bosses += c.bosses;
-			phases.book += c.book;
-			for (const k in peaks) if (c[k] > peaks[k]) peaks[k] = c[k];
+			const c = cost();
+			for (const k in phases) {
+				phases[k] += c[k];
+				if (c[k] > peaks[k]) peaks[k] = c[k];
+			}
 		}
 		const sorted = Float64Array.from(samples).sort();
 		let total = 0;
