@@ -684,6 +684,31 @@ function freeNear(s, sp, offset, r = 24) {
 	return WO.freePointIn(w, sp.state.x + (dx / l) * offset, sp.state.y + (dy / l) * offset, r, 600);
 }
 
+/**
+ * A spot INSIDE a building, where a survivor's circle is blocked: the middle of the first big building whose middle
+ * is solid. MP-26: the harness's server draws its own town, like the published game, so "the middle of the first big
+ * building" can be an open room in one town and a wall in another -- the tests below need a spot that is blocked in
+ * whatever town the server drew.
+ */
+function insideBuilding(world) {
+	const b = world.solids.find(
+		s =>
+			s.kind === "building" &&
+			s.w > 200 &&
+			s.h > 200 &&
+			circleBlocked(world, s.x + s.w / 2, s.y + s.h / 2, PLAYER_RADIUS) !== undefined,
+	);
+	if (b !== undefined) return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+	// no big building with a solid middle: the middle of a wall of one
+	for (const s of world.solids) {
+		if (s.kind === "building" || s.w < PLAYER_RADIUS || s.h < PLAYER_RADIUS) continue;
+		const x = s.x + s.w / 2;
+		const y = s.y + s.h / 2;
+		if (circleBlocked(world, x, y, PLAYER_RADIUS) !== undefined) return { x, y };
+	}
+	return undefined;
+}
+
 /** the admin's last snapshot part 0 (the self block and the bosses), after a few ticks */
 function lastSnapOf(s, who) {
 	const snap = s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("Snap");
@@ -1278,9 +1303,9 @@ section(
 			res.ok && a.noclip === true && (snap.self.modFlags & t.s.P.ModFlag.Noclip) !== 0,
 		);
 		// stand the body inside a building's wall, then noclip off: out to free ground
-		const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
-		a.x = wall.x + wall.w / 2;
-		a.y = wall.y + wall.h / 2;
+		const wall = insideBuilding(t.s.sim.world);
+		a.x = wall.x;
+		a.y = wall.y;
 		const inside = circleBlocked(t.s.sim.world, a.x, a.y, PLAYER_RADIUS) !== undefined;
 		res = t.tool(t.admin, { op: "noclip", on: false });
 		a = t.s.body(t.admin).state;
@@ -2333,10 +2358,10 @@ section(
 			`x ${x.toFixed(0)} border ${TOWN.BORDER}`,
 		);
 		// no free ground within UNSTICK_SEARCH (a very big building): the body goes to a spawn point, never stays stuck
-		const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
+		const wall = insideBuilding(t.s.sim.world);
 		const a = t.s.body(t.admin).state;
-		a.x = wall.x + wall.w / 2;
-		a.y = wall.y + wall.h / 2;
+		a.x = wall.x;
+		a.y = wall.y;
 		const real = WO.freePointIn;
 		WO.freePointIn = () => undefined;
 		let res;
