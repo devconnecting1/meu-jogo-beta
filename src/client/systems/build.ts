@@ -12,11 +12,17 @@ import {
 	snapToOpening,
 } from "shared/sim/placement";
 import { addItem } from "shared/sim/inventory";
+import { noteBuildEdge, serverOwnsWorld } from "../net/authority";
 import { GameRefs } from "./types";
 
 /*
  * Build mode of the local survivor: the ghost, its rotation, confirm / cancel and drawing. WHAT can be placed and
  * WHERE is pure and shared (shared/sim/placement.ts, docs/MULTIPLAYER.md §11.2); this is the client's input and view.
+ *
+ * From WORLD_SERVER_PHASE (client/net/authority.ts) the construction is the server's (server/sim/build.ts): the click,
+ * the E and the R already ride the input command's edges, the server places or refunds from ITS position and aim,
+ * and the wall comes back to every client as a SolidAdd (client/net/worldMirror.ts), the refund in the bag. Here the
+ * construction only leaves the cursor at once (a build edge, so an older bag does not put it back).
  */
 
 export { PLACEABLES } from "shared/sim/placement";
@@ -112,6 +118,10 @@ export class BuildSystem {
 		if (!this.ghostValid) return;
 		const def = PLACEABLES[refs.pendingPlace];
 		if (def === undefined) return;
+		if (serverOwnsWorld()) {
+			this.leaveCursor(refs);
+			return;
+		}
 		const r = { x: this.ghostX, y: this.ghostY, w: this.ghostW, h: this.ghostH };
 		addSolid(refs.world, placedSolid(def, r, this.rot));
 		refs.pendingPlace = -1;
@@ -119,7 +129,19 @@ export class BuildSystem {
 		this.active = false;
 	}
 
+	/** F3: the server places it, or refunds it; the cursor frees at once and the bag says what really happened */
+	private leaveCursor(refs: GameRefs): void {
+		refs.pendingPlace = -1;
+		refs.pendingRecipe = undefined;
+		this.active = false;
+		noteBuildEdge();
+	}
+
 	private cancel(refs: GameRefs): void {
+		if (serverOwnsWorld()) {
+			this.leaveCursor(refs);
+			return;
+		}
 		const id = refs.pendingPlace;
 		if (id >= 0) {
 			const r = placeRecipe(id, refs.pendingRecipe);

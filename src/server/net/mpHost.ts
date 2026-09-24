@@ -58,9 +58,11 @@ import {
 	noteMalformed,
 	noteMessage,
 } from "../sim/players";
+import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
 import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
+import * as Analytics from "../analytics/events";
 
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
@@ -270,6 +272,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	sim.onTitleUnlocked = (sp, titleId) => {
 		replicator.titleUnlocked(sp.slot, titleId);
 		options.saveChanged?.(sp.userId);
+		Analytics.titleEarned(sp.save, titleId);
 		print(`[${GAME_NAME}] ${sp.name} earned the title ${TITLES[titleId]?.name ?? titleId}`);
 	};
 	lives.onStandUp = (sp, why) => {
@@ -355,6 +358,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (sp === undefined) return; // server full: try again next pass
 		link.slot = sp.slot;
 		bySlot.set(sp.slot, player);
+		// CON-04 First steps: the server stood a body of this survivor in the town (once; the wallet push carries it)
+		creditFirstSteps(save);
+		Analytics.enteredWorld(player);
 		print(
 			`[${GAME_NAME}] ${player.Name} joined the world in slot ${sp.slot} at ` +
 				`(${string.format("%.0f", sp.state.x)}, ${string.format("%.0f", sp.state.y)})` +
@@ -545,13 +551,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	let admitAt = 0;
 	let metricAt = 0;
 	let lastError = "";
+	/** xpcall's handler for the tick: the error with the stack it was raised on, so the log says where (F6) */
+	const tickTrace = (err: unknown): string => debug.traceback(tostring(err), 2);
 
 	const heartbeat = RunService.Heartbeat.Connect(dt => {
 		const now = os.clock();
 		// FIRST, outside the pcall: set after the admit loop, an admit that threw left it on the previous heartbeat, and
 		// the queues' grace counted a whole frame the debt never received (the review of dee095a, N7)
 		beatAt = now;
-		const [ok, err] = pcall(() => {
+		const [ok, err] = xpcall(() => {
 			if (now - admitAt >= ADMIT_INTERVAL) {
 				admitAt = now;
 				for (const player of Players.GetPlayers()) admit(player);
@@ -586,7 +594,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					if (sp !== undefined) publishMetrics(player, sp, link, now);
 				}
 			}
-		});
+		}, tickTrace);
 		if (!ok) {
 			const message = tostring(err);
 			if (message !== lastError) {
@@ -670,7 +678,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			// lobby — is banked into its save before server/main.server.ts writes them all
 			const everyone = new Array<Player>();
 			for (const [player] of links) everyone.push(player);
-			for (const player of everyone) release(player);
+			for (const player of everyone) {
+				// one body that cannot be banked leaves the others to be (F5)
+				const [ok, err] = xpcall(() => release(player), tickTrace);
+				if (!ok) warn(`[${GAME_NAME}] banking ${player.Name} at shutdown failed: ${tostring(err)}`);
+			}
 			links.clear();
 			bySlot.clear();
 			destroyMpRemotes(remotes);
@@ -759,6 +771,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms over ` +
 				`${frames} frame(s)) on day 1, and ${outcome.lives.size()} survivor(s) start a new life`,
 		);
+		Analytics.worldEnded(report, outcome);
 		options.onWorldWiped?.(report, outcome);
 	}
 

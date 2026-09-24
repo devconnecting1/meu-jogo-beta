@@ -19,6 +19,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Settings > About shows the version: src/shared/version.ts is generated from package.json (`npm run stamp`) and
+      # committed with GAME_BUILD "dev"; the CI checks that copy, then stamps its own with the commit it builds (never
+      # committed back), so the place from Actions says which commit it is
+      - name: Version stamp (version.ts matches package.json; this build carries its commit)
+        run: |
+          npm run stamp
+          git diff --exit-code -- src/shared/version.ts
+          node tools/gen-version.mjs --build "${GITHUB_SHA::7}"
+
       - name: Typecheck (roblox-ts)
         run: npm run build
 
@@ -48,6 +57,9 @@ jobs:
       - name: The Bag is built once (tab switches and actions create no Instances)
         run: npm run test:backpack
 
+      - name: The HUD console (600 frames without creating an Instance, hotbar = keys 1-5, click = key, touch uncovered)
+        run: npm run test:hud
+
       # UI-06: no menu pauses the world -- the client's own input with the Bag open, against the real server
       - name: No menu pauses the world (Bag open, the horde, the clock and the damage go on; the hit flash)
         run: npm run test:menus
@@ -55,9 +67,15 @@ jobs:
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
         run: npm run test:cosmetics
 
+      - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
+        run: npm run test:flinch
+
       # UI-07 / UI-10 / UI-06: windows centred on the full screen, the town behind every menu, the world behind a run's
       - name: Menu screens (centred clear of the Roblox buttons; the town flyover pinned behind every menu)
         run: npm run test:screens
+
+      - name: Lobby and Survivor screen (UI-10; the town behind them without creating Instances once warm)
+        run: npm run test:lobby
 
       # every Settings row followed to its real effect: the mixer, the HUD size, the touch geometry, the keys, the save
       - name: Settings do what they say (audio, HUD size, touch layout, every SCHEMES key, Defaults, persistence)
@@ -94,6 +112,9 @@ jobs:
       - name: Client prediction (divergence under latency, loss and reordering)
         run: npm run test:predict
 
+      - name: Input queue (how often the server's queue runs dry with the real sender over a jittery link)
+        run: npm run test:input
+
       - name: Replication (three clients, one horde; interest, bandwidth and tick cost)
         run: npm run test:replication
 
@@ -112,8 +133,14 @@ jobs:
       - name: The body is the server's (Leave/Enter, reconnect, Rebirth, New game, daybreak, the world wipe)
         run: npm run test:body
 
+      - name: The world ends when everyone is dead (MP-22 -- a new town on day 1, the world log; New game is a new life)
+        run: npm run test:reset
+
       - name: Night waves end to end (queue -> real spawner -> zombie, the sterile world, the daybreak revive)
         run: npm run test:waves
+
+      - name: Analytics (onboarding funnel once and in order, economy balances, no per-kill event, under the rate cap)
+        run: npm run test:analytics
 
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
@@ -129,6 +156,9 @@ jobs:
 
       - name: Remote smoothing (an ally is drawn continuously, not in snapshot steps)
         run: npm run test:smoothness
+
+      - name: The horde as drawn (server -> wire -> client -> camera -> pixel; clean link, WAN, Studio frames)
+        run: npm run test:zombie-motion
 
       - name: Proximity chat (earshot, presence and the bubble stack)
         run: npm run test:chat

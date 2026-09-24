@@ -22,6 +22,7 @@
 import { HORDE_BREAKER_KILLS, TITLES, TitleId, WEEK_ONE_NIGHTS } from "shared/data/titles";
 import { PlayerSaveData, SAVE_LIMITS, ownsTitle } from "shared/game/save";
 import { ShopActionReason } from "shared/net/net";
+import { creditNightAchievements } from "./achievements";
 
 export type TitleEquip = { ok: true; titleId: number } | { ok: false; reason: ShopActionReason };
 
@@ -50,9 +51,11 @@ export function creditZombieKill(save: PlayerSaveData): number {
  * One midnight the server credited to this life, in a run that pays (the MP-13 count: alive, present, not AFK).
  * Returns the title it unlocked (Week One, at WEEK_ONE_NIGHTS), or -1. The save's `day` is not read: a life's day
  * may have been counted by a client before the server counted days, or set by an admin -- neither is a night lived.
+ * The same night moves the achievements that count nights (CON-04: Good day, Never die).
  */
 export function creditLifeNight(save: PlayerSaveData): number {
 	save.lifeNights = math.min(SAVE_LIMITS.DAY_MAX, math.max(0, save.lifeNights) + 1);
+	creditNightAchievements(save);
 	if (save.lifeNights >= WEEK_ONE_NIGHTS && grantTitle(save, TitleId.WeekOne)) return TitleId.WeekOne;
 	return -1;
 }
