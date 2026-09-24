@@ -432,6 +432,9 @@ export class ServerSimulation {
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				onSolid: (s, added) => power.note(s, added),
+				// MP-24: the caps and the rot of abandoned constructions go by the account, read live off the roster
+				userOf: slot => this.bySlot.get(slot)?.userId,
+				present: userId => this.roster.some(sp => sp.userId === userId),
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({
@@ -684,6 +687,8 @@ export class ServerSimulation {
 		this.bySlot.set(sp.slot, sp);
 		// the welcome that follows (server/sim/life.ts) hands this client every item around the spawn point
 		this.items?.welcomed(sp.slot, sp.state.x, sp.state.y);
+		// MP-24: what this account built is theirs again, in this slot, and stops rotting
+		this.build?.enter(sp.slot);
 		this.order.push(sp.slot);
 		let i = this.order.size() - 1;
 		while (i > 0 && this.order[i - 1] > sp.slot) {
@@ -981,6 +986,8 @@ export class ServerSimulation {
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
 		});
+		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
+		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);
 		if (this.onInteract !== undefined) this.onInteract(sp, outcome);
 	}
 

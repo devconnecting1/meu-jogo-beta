@@ -102,6 +102,12 @@ export interface Solid {
 	 */
 	placeable?: number;
 	owner?: number;
+	/**
+	 * Server only (MP-24): the UserId of the account that built it. `owner` is a slot, and a slot is only somebody's
+	 * while they are in the world; the per-player cap and the rot of an abandoned construction go by the account.
+	 * Never on the wire.
+	 */
+	builder?: number;
 	/** set by removeSolid, so stale references (AI targets, UI) can notice */
 	removed?: boolean;
 	/** internal: spatial-grid query stamp used to de-duplicate multi-cell solids */

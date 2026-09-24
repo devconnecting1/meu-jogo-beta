@@ -132,9 +132,17 @@ export const NET_ID_REUSE_DELAY_S = 2;
 export const BOSS_NET_ID_MAX = 255;
 /** dynamic ids (constructions, ground items) are server-assigned from here up (§1, §4.5) */
 export const DYNAMIC_ID_BASE = 1000000;
-/** constructions per player / per server (§8.1) */
+/** constructions per player (counted by the builder's ACCOUNT, MP-24) / per server (§8.1) */
 export const MAX_BUILDS_PER_PLAYER = 150;
 export const MAX_BUILDS_PER_SERVER = 600;
+/**
+ * (MP-24) A builder out of the world this long -- a disconnect, the shop, the lobby all fit in it -- and their
+ * constructions start to rot; they lose their whole hp over BUILD_ABANDON_DECAY_S more and fall, unless the builder
+ * comes back or somebody in the world repairs them (and so takes them over). One account, or a handful, cannot hold
+ * the server's MAX_BUILDS_PER_SERVER for ever.
+ */
+export const BUILD_ABANDON_GRACE_S = 600;
+export const BUILD_ABANDON_DECAY_S = 300;
 /**
  * Largest town seed (MP-22). shared/game/world.ts `TownRng` is MINSTD: it reduces a seed modulo 2^31 − 1 and maps 0
  * to 1, so 1 … 2^31 − 2 are exactly the seeds that each build a town of their own. InitBegin and WorldReset carry

@@ -35,6 +35,9 @@
  *   w. THE GROUND IS NOT A WAREHOUSE (security review of 5967a18, #3): items rot after GROUND_ITEM_LIFE_S, the town
  *      holds GROUND_ITEM_CAP (the oldest go first, every client told), the sweep and the E press read the item grid
  *      and give the scan's answers, and the population's cleanup no longer leaves a ghost on a client.
+ *   x. CONSTRUCTIONS (MP-24): the per-player cap follows the account through a leave and a rejoin; an abandoned
+ *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
+ *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
@@ -1885,6 +1888,208 @@ section("w) itens no chao apodrecem, tem teto e sao achados pela grade (revisao 
 		check(
 			drain(sim).some(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === item.id && d.slot === 0),
 			"e o cliente que o via recebe o ItemRemove (antes: fantasma para sempre)",
+		);
+	}
+}
+
+// ================================================================ x. whose construction, for how long, and nobody penned in
+
+section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma prende um sobrevivente (MP-24)");
+{
+	const ENC = require(join(SRC, "server/sim/enclosure.ts"));
+	const GRACE = CFG.BUILD_ABANDON_GRACE_S;
+	const DECAY = CFG.BUILD_ABANDON_DECAY_S;
+	/** a survivor with an explicit UserId (addPlayer derives it from the slot) */
+	const join2 = (sim, slot, userId, x, y) => {
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: `u${userId}` },
+			SAVE.defaultSave(),
+			x,
+			y,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		sp.state.x = x;
+		sp.state.y = y;
+		return sp;
+	};
+	const wall = (world, x, y, owner) =>
+		W.addSolid(world, {
+			kind: "barricade",
+			x,
+			y,
+			w: 64,
+			h: 64,
+			hp: 700,
+			hpMax: 700,
+			destructible: true,
+			tags: "barricade",
+			placeable: 10,
+			owner,
+		});
+
+	// 1. the cap belongs to the account: leaving and coming back in another slot does not reset it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const a = join2(sim, 0, 7001, 4000, 4000);
+		for (let i = 0; i < CFG.MAX_BUILDS_PER_PLAYER; i++)
+			wall(world, 10 + (i % 50) * 130, 10 + Math.floor(i / 50) * 130, 0);
+		checkEq(sim.build.countOfUser(7001), CFG.MAX_BUILDS_PER_PLAYER, "o jogador 7001 ergueu o teto inteiro");
+		sim.remove(a.slot);
+		checkEq(sim.build.countOf(0), 0, "ele saiu: o slot 0 volta limpo para quem chegar");
+		const back = join2(sim, 2, 7001, 4000, 4000);
+		checkEq(sim.build.countOf(2), CFG.MAX_BUILDS_PER_PLAYER, "e de volta, noutro slot, o teto e o dele de novo");
+		sim.build.hold(2, 10, undefined);
+		const refused = sim.build.place(2, back.state, [back.state], []);
+		checkEq(refused.why, "capPlayer", "sair e voltar nao zera o teto por jogador");
+		const other = join2(sim, 0, 7002, 5000, 5050);
+		sim.build.hold(0, 10, undefined);
+		checkEq(sim.build.place(0, other.state, [other.state], []).kind, "placed", "e outra conta no slot 0 constroi");
+		check(
+			world.solids.filter(s => s.placeable !== undefined && s.builder === 7001 && s.owner === 2).length ===
+				CFG.MAX_BUILDS_PER_PLAYER,
+			"as obras dele voltam a ter o slot dele (a torreta credita quem a fez)",
+		);
+	}
+
+	// 2. an abandoned construction rots: the builder's absence past the grace, then the decay
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const a = join2(sim, 0, 7101, 3000, 3000);
+		const walls = [];
+		for (let i = 0; i < 4; i++) walls.push(wall(world, 3200 + i * 100, 3000, 0));
+		sim.remove(a.slot);
+		drain(sim);
+		sim.build.step(GRACE - 1);
+		check(
+			walls.every(w => w.hp === w.hpMax && world.solids.includes(w)),
+			`${GRACE - 1} s depois de o construtor sair, a base continua inteira`,
+		);
+		sim.build.step(2);
+		check(
+			walls.every(w => w.hp < w.hpMax),
+			"passado o prazo, ela comeca a apodrecer",
+		);
+		// the builder comes back: the rot stops where it was (the hp lost stays; E: Repair fixes it)
+		const back = join2(sim, 1, 7101, 3000, 3000);
+		const hp = walls[0].hp;
+		sim.build.step(30);
+		checkEq(walls[0].hp, hp, "o construtor voltou: a obra para de apodrecer");
+		sim.remove(back.slot);
+		sim.build.step(GRACE + DECAY + 1);
+		check(
+			walls.every(w => !world.solids.includes(w)),
+			`abandonada ${GRACE} s + ${DECAY} s, cai (e devolve as vagas dos tetos)`,
+		);
+		checkEq(sim.build.count(), 0, "o teto do servidor esta livre de novo");
+		checkEq(sim.build.countOfUser(7101), 0, "e o do construtor tambem");
+		checkEq(countDeltas(drain(sim), P.WorldEv.SolidRemove), 4, "e todo cliente recebe o SolidRemove");
+	}
+
+	// 3. whoever keeps it standing keeps it: a repair of a rotting construction adopts it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const gone = join2(sim, 0, 7201, 2000, 2000);
+		const w = wall(world, 2000, 2080, 0);
+		sim.remove(gone.slot);
+		sim.build.step(GRACE + 30);
+		check(w.hp < w.hpMax, "a obra de quem saiu esta apodrecendo");
+		const keeper = join2(sim, 1, 7202, 2032, 2050);
+		addItem(keeper.save, 4, 23, 5); // wood: what a barricade is repaired with
+		send(keeper, 1, Math.PI / 2, PRESS_E);
+		run(sim, 1);
+		checkEq(w.builder, 7202, "quem a conserta passa a ser o dono (MP-24)");
+		checkEq(sim.build.countOfUser(7202), 1, "e ela conta no teto dele");
+		const after = w.hp;
+		sim.build.step(DECAY);
+		checkEq(w.hp, after, "e com o novo dono no mundo ela nao apodrece mais");
+	}
+
+	// 4. nobody is penned in: the piece that would close a ring around a survivor is refused
+	{
+		const ring = world => {
+			// a closed box 1880..2280 x 1780..2088, with one 128 u gap in its top wall at x 2048..2176
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2176, 1780, 104, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 168, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+		};
+		const setup = (victimAt, builderAt) => {
+			const world = emptyWorld();
+			ring(world);
+			const sim = newSim(world);
+			const builder = join2(sim, 0, 7301, builderAt[0], builderAt[1]);
+			builder.state.angle = builderAt[2];
+			const victim = victimAt !== undefined ? join2(sim, 1, 7302, victimAt[0], victimAt[1]) : undefined;
+			return { world, sim, builder, victim, bodies: sim.players().map(sp => sp.state) };
+		};
+		const OUTSIDE = [2112, 1740, Math.PI / 2];
+		const INSIDE_V = [2048, 1936];
+
+		let t = setup(INSIDE_V, OUTSIDE);
+		check(ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "com a fresta aberta, quem esta dentro pode sair");
+		t.sim.build.hold(0, 10, undefined);
+		const shut = t.sim.build.place(0, t.builder.state, t.bodies, []);
+		checkEq(shut.why, "sealed", "a barricada que fecharia o anel com alguem dentro e recusada");
+		checkEq(t.sim.build.placing(0), true, "e continua no cursor");
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).why,
+			"rate",
+			"e a tentativa seguinte espera o ritmo",
+		);
+
+		t = setup(INSIDE_V, OUTSIDE);
+		t.sim.build.hold(0, 11, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"uma PORTA no mesmo vao: e base, nao cela",
+		);
+
+		t = setup(undefined, OUTSIDE);
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"o mesmo anel sem ninguem dentro fecha",
+		);
+
+		t = setup(undefined, [2112, 1900, -Math.PI / 2]);
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).why,
+			"sealed",
+			"e o construtor nao se tranca sem porta (nao ha como derrubar a propria parede)",
+		);
+
+		// a survivor penned in already (by the map) does not stop a piece that changes nothing for them: the gap is
+		// walled up, and the builder puts a barricade against the outside of the box
+		t = setup(INSIDE_V, [2368, 1740, Math.PI / 2]);
+		W.addSolid(t.world, {
+			kind: "wall_h",
+			x: 2048,
+			y: 1780,
+			w: 128,
+			h: 44,
+			hp: 9,
+			hpMax: 9,
+			destructible: false,
+			tags: "",
+		});
+		check(!ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "(o sobrevivente la dentro ja esta preso pelo mapa)");
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"quem ja estava preso pelo mapa nao impede uma peca que nao muda nada para ele",
 		);
 	}
 }
