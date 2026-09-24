@@ -23,6 +23,7 @@ import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
 import { SolidState, WorldEv, WorldEvent } from "shared/net/protocol";
 import {
 	addSolid,
+	clearGroundItems,
 	GroundItem,
 	removeGroundItem,
 	removeSolid,
@@ -174,7 +175,7 @@ export function resetMirror(world: WorldData): void {
 		ix.solids.delete(s.id);
 		removeSolid(world, s);
 	}
-	world.items.clear();
+	clearGroundItems(world);
 	ix.items.clear();
 }
 

@@ -993,6 +993,8 @@ export class ServerSimulation {
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
+		// litter rots whether or not anybody is here to see it (GROUND_ITEM_LIFE_S)
+		items.upkeep(this.tickDt);
 		this.vehicles?.step(this.tickDt);
 		// the grid keeps running with nobody in town: the sun still charges the boxes (ELE-02)
 		this.power?.step(this.tickDt, this.tick);

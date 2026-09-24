@@ -190,6 +190,15 @@ export const INTEREST_EXIT = 1650;
 export const DARK_SENSE_RANGE = 150;
 /** ground items interest radius (§4.5) */
 export const ITEM_INTEREST = 1800;
+/**
+ * The server's ground items (§4.5, §8.1; security review of 5967a18, #3): every one is world litter (a drop, a
+ * bin, a tree, the population's scatter, a trophy), and it rots GROUND_ITEM_LIFE_S after it appeared; and the town
+ * never holds more than GROUND_ITEM_CAP, the OLDEST going first. A chainsaw at one car made 73 a minute that
+ * nothing took away, and the sweep, the E press and every join read all of them. An honest night leaves a few
+ * hundred at most: the cap is for a farm, the lifetime for a town nobody tidies.
+ */
+export const GROUND_ITEM_LIFE_S = 600;
+export const GROUND_ITEM_CAP = 1000;
 /** admin free camera: interest radius cap (§10) */
 export const FREECAM_MAX_RANGE = 3000;
 /** client-side removal of an entity not seen for this long, by ring, and its fade-out (§4.4) */

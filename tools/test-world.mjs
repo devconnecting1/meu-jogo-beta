@@ -32,6 +32,9 @@
  *   h. THE DELTAS REACH THE WIRE: everything the tick produced encodes through `encodeWorld` and decodes
  *      back through `decodeWorld` with the same ids, and a late joiner's WorldInit carries the constructions
  *      and the open doors that were made before they arrived (§4.5).
+ *   w. THE GROUND IS NOT A WAREHOUSE (security review of 5967a18, #3): items rot after GROUND_ITEM_LIFE_S, the town
+ *      holds GROUND_ITEM_CAP (the oldest go first, every client told), the sweep and the E press read the item grid
+ *      and give the scan's answers, and the population's cleanup no longer leaves a ghost on a client.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
@@ -1733,6 +1736,157 @@ section("v) o objetivo 'Search a house' aponta para onde a busca responde (EDI-0
 		"e dentro de uma casa sem o sinal de loot (vazia), a seta aponta para a proxima",
 		next ? `${next.tags} #${next.id}` : "nada",
 	);
+}
+
+// ================================================================ w. the ground is not a warehouse
+
+section("w) itens no chao apodrecem, tem teto e sao achados pela grade (revisao de seguranca de 5967a18, #3)");
+{
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const LIFE = CFG.GROUND_ITEM_LIFE_S;
+	const CAP = CFG.GROUND_ITEM_CAP;
+
+	// 1. the lifetime, through the simulation's own tick
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		addPlayer(sim, 0, 1000, 1000);
+		const old = W.spawnGroundItem(world, 4, 23, 1, 1100, 1000);
+		const young = W.spawnGroundItem(world, 4, 23, 1, 1120, 1000);
+		drain(sim);
+		// the oldest was dropped a whole lifetime ago; the other a minute ago
+		old.born -= LIFE;
+		young.born -= 60;
+		run(sim, 1);
+		check(!world.items.includes(old), `um item com mais de ${LIFE} s apodrece no tick do servidor`);
+		check(world.items.includes(young), "e um de um minuto continua no chao");
+		const removes = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove);
+		check(
+			removes.length === 1 && removes[0].ev.id === old.id && removes[0].slot === 0,
+			"e quem o via recebe o ItemRemove (nenhum fantasma)",
+			`${removes.length} ItemRemove`,
+		);
+		checkEq(sim.items.expired.rotted, 1, "contado como apodrecido");
+	}
+
+	// 2. the cap, and 10 000 items from a farm: the oldest go first, and every client hears it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const farmer = addPlayer(sim, 0, 4000, 4000);
+		drain(sim);
+		const made = [];
+		for (let i = 0; i < 10000; i++) {
+			made.push(W.spawnGroundItem(world, 4, 23, 1, 3900 + (i % 200), 3900 + Math.floor(i / 200) * 4));
+		}
+		checkEq(world.items.size(), CAP, `10 000 itens de uma fazenda: o mundo guarda ${CAP}`);
+		check(
+			world.items[0] === made[10000 - CAP] && world.items[CAP - 1] === made[9999],
+			"os mais antigos sairam primeiro (ficam os ultimos que cairam)",
+		);
+		checkEq(sim.items.expired.capped, 10000 - CAP, "e o teto conta os que tirou");
+		const out = drain(sim);
+		const adds = out.filter(d => d.ev.t === P.WorldEv.ItemAdd && d.slot === farmer.slot).length;
+		const removes = out.filter(d => d.ev.t === P.WorldEv.ItemRemove && d.slot === farmer.slot).length;
+		checkEq(adds - removes, CAP, "o espelho do cliente termina com exatamente os que existem (adds - removes)");
+		// the grid holds what the world holds, and nothing more
+		const g = world.itemGrid;
+		let filed = 0;
+		for (const [, list] of g.cells) filed += list.length;
+		checkEq(filed, CAP, "e a grade tem os mesmos itens, nenhum a mais");
+		checkEq(g.at.size(), CAP, "cada um arquivado uma vez");
+	}
+
+	// 3. the sweep reads what is NEAR: 10 000 items spread over the town, six survivors
+	{
+		const time = (n, reps) => {
+			const world = emptyWorld();
+			const sim = newSim(world);
+			for (let s = 0; s < 6; s++) addPlayer(sim, s, 800 + s * 1300, 800 + ((s * 2900) % 6400));
+			let seed = 7;
+			const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+			for (let i = 0; i < n; i++) W.spawnGroundItem(world, 4, 23, 1, rnd() * 8000, rnd() * 8000);
+			sim.items.sweepInterest(1); // the first sweep tells everybody what is near them
+			drain(sim);
+			const t0 = process.hrtime.bigint();
+			for (let k = 0; k < reps; k++) sim.items.sweepInterest(1);
+			const ms = Number(process.hrtime.bigint() - t0) / 1e6 / reps;
+			return { ms, held: world.items.size() };
+		};
+		time(2000, 50); // warm the JIT
+		const small = time(100, 400);
+		const big = time(10000, 400);
+		console.log(
+			`        uma varredura de interesse (6 sobreviventes): ${small.ms.toFixed(3)} ms com ${small.held} itens, ` +
+				`${big.ms.toFixed(3)} ms depois de 10 000 (o mundo guarda ${big.held})`,
+		);
+		checkEq(big.held, CAP, "10 000 itens espalhados: o teto vale");
+		check(
+			big.ms < small.ms * 30,
+			"e a varredura cresce com o que esta perto, nao com a cidade (<30x a de 100 itens; o laco antigo: ~100x)",
+			`${(big.ms / small.ms).toFixed(1)}x`,
+		);
+	}
+
+	// 4. the grid answers what the scan answered: a moving item is re-filed, every E press finds the same item
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		addPlayer(sim, 0, 2000, 2000);
+		const flying = W.spawnGroundItem(world, 4, 23, 1, 2040, 2000, 900, 0);
+		for (let i = 0; i < 90; i++) W.updateGroundItems(world, 1 / 60);
+		check(
+			flying.x > W.ITEM_GRID_CELL * 8 + 60,
+			"o item deslizou para outra celula da grade",
+			`x ${flying.x.toFixed(0)}`,
+		);
+		checkEq(IQ.nearestGroundItem(world, flying.x + 5, flying.y), flying, "e o E o acha onde ele parou");
+		let seed = 3;
+		const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+		for (let i = 0; i < 400; i++) W.spawnGroundItem(world, 4, 23, 1, 1500 + rnd() * 1000, 1500 + rnd() * 1000);
+		let same = 0;
+		for (let k = 0; k < 500; k++) {
+			const x = 1500 + rnd() * 1000;
+			const y = 1500 + rnd() * 1000;
+			let best;
+			let bestD2 = DESIGN.ITEM_GET_DISTANCE * DESIGN.ITEM_GET_DISTANCE;
+			for (const it of world.items) {
+				const d2 = (it.x - x) ** 2 + (it.y - y) ** 2;
+				if (d2 < bestD2 || (d2 === bestD2 && best !== undefined && it.id < best.id)) {
+					bestD2 = d2;
+					best = it;
+				}
+			}
+			if (IQ.nearestGroundItem(world, x, y) === best) same += 1;
+		}
+		checkEq(same, 500, "500 pressoes de E: a grade escolhe o mesmo item que a lista inteira");
+	}
+
+	// 5. the population's cleanup tells the clients (it used to splice the list: a ghost on every screen)
+	{
+		const world = emptyWorld();
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
+		const p = addPlayer(sim, 0, 3000, 3000);
+		const item = W.spawnGroundItem(world, 4, 23, 1, 3100, 3000);
+		check(
+			drain(sim).some(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === item.id && d.slot === 0),
+			"o cliente foi avisado do item",
+		);
+		// now 1850 u away on one axis: past the population's square (ITEM_SPAWN_MAX, 1800) but inside the item
+		// interest's exit (ITEM_INTEREST_EXIT, 2100): the sweep keeps it on the screen, only the cleanup takes it away
+		p.state.x = 3100 - 1850;
+		run(sim, 2);
+		check(!world.items.includes(item), "a limpeza da populacao tira o item longe de todos (1800 u no eixo)");
+		check(
+			drain(sim).some(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === item.id && d.slot === 0),
+			"e o cliente que o via recebe o ItemRemove (antes: fantasma para sempre)",
+		);
+	}
 }
 
 // ---------------------------------------------------------------- verdict

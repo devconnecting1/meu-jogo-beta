@@ -25,23 +25,33 @@
  * "probability of exactly one" branch used raw `math.random()` while everything around it used the shared
  * rng. On a server that has to be replayable in Node (tools/) that is not a style question.
  *
- * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original.
+ * And the ground is not a warehouse (security review of 5967a18, #3): every item here is world litter, it rots
+ * GROUND_ITEM_LIFE_S after it appeared (`upkeep`), and the town never holds more than GROUND_ITEM_CAP -- the oldest
+ * goes the moment one more lands (`announce`). Whatever asks "what is near here" reads the world's item grid
+ * (shared/game/world.ts `queryGroundItems`) instead of every item in town: the interest sweep, a join's WorldInit,
+ * the E press. A chainsaw at one car used to make 73 items a minute that nothing took away, and each of those
+ * three walked all of them.
+ *
+ * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original, and the
+ * items' own clock is the simulation's dt.
  */
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
 import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
 import { edgeDist, isMapItem } from "shared/sim/interactQuery";
-import { ITEM_INTEREST } from "shared/net/mpConfig";
+import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
 	GroundItem,
+	queryGroundItems,
 	querySolids,
 	removeGroundItem,
 	Solid,
 	spawnGroundItem,
 	WorldData,
 	buildingAt,
+	enableItemGrid,
 	isBlocking,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
@@ -102,13 +112,44 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/** every item in the world by id (the sweep turns a told id back into its item) */
+	private readonly byId = new Map<number, GroundItem>();
+	/** the items' own clock, seconds of simulation (`upkeep`): what `GroundItem.born` is measured on */
+	private clock = 0;
+	/** items the lifetime and the cap took away since boot (the admin panel's, and the tests') */
+	readonly expired = { rotted: 0, capped: 0 };
+	private readonly found = new Array<GroundItem>();
+	private readonly leaving = new Array<number>();
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
+		enableItemGrid(this.world);
+		// whatever lies there already (a world adopted with items in it) starts its lifetime now
+		for (const item of this.world.items) {
+			item.born = this.clock;
+			this.byId.set(item.id, item);
+		}
 		// §4.5: every ground item that appears or disappears, whoever made it, becomes a delta here
 		this.world.onItemAdd = (w, item) => this.announce(item);
 		this.world.onItemRemove = (w, item) => this.retract(item);
+	}
+
+	/**
+	 * The ground's upkeep, every tick (server/sim/simulation.ts, right after `updateGroundItems`, with or without anybody
+	 * in the world): the items older than GROUND_ITEM_LIFE_S rot away, oldest first. `world.items` is in the order the
+	 * items appeared -- appended on spawn, and every removal keeps the others' order -- so the oldest is always the
+	 * first, and a tick that expires nothing costs one comparison.
+	 */
+	upkeep(dt: number): void {
+		if (dt > 0) this.clock += dt;
+		const items = this.world.items;
+		while (items.size() > 0) {
+			const oldest = items[0];
+			if (this.clock - (oldest.born ?? this.clock) <= GROUND_ITEM_LIFE_S) break;
+			this.expired.rotted += 1;
+			removeGroundItem(this.world, oldest);
+		}
 	}
 
 	/** the bodies (and their slots, in the same order) that see items; the simulation hands its own arrays over */
@@ -124,12 +165,19 @@ export class ServerItems {
 	welcomed(slot: number, x: number, y: number): void {
 		const set = new Set<number>();
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
-		for (const item of this.world.items) {
+		for (const item of this.near(x, y, ITEM_INTEREST)) {
 			const dx = item.x - x;
 			const dy = item.y - y;
 			if (dx * dx + dy * dy <= r2) set.add(item.id);
 		}
 		this.told.set(slot, set);
+	}
+
+	/** the items in the square of half-side `r` around (x, y), from the grid (a scratch array: read it at once) */
+	private near(x: number, y: number, r: number): Array<GroundItem> {
+		const found = this.found;
+		found.clear();
+		return queryGroundItems(this.world, x - r, y - r, x + r, y + r, found);
 	}
 
 	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
@@ -141,6 +189,9 @@ export class ServerItems {
 	 * §4.5 at walking pace: an item that came within ITEM_INTEREST of a survivor since they were last told is sent
 	 * now, and one they were told about that is now past ITEM_INTEREST_EXIT is taken off their screen (they will be
 	 * told again when they come back). Twice a second, like the loot sweep: nobody crosses 300 u in half a second.
+	 *
+	 * What it reads is bounded by what is NEAR, not by the town: the grid's cells around each survivor for the items
+	 * coming in, and the survivor's own told set (at most GROUND_ITEM_CAP) for the ones going out.
 	 */
 	sweepInterest(dt: number): void {
 		this.interestSweep -= dt;
@@ -148,23 +199,36 @@ export class ServerItems {
 		this.interestSweep = ITEM_SWEEP_S;
 		const inR2 = ITEM_INTEREST * ITEM_INTEREST;
 		const outR2 = ITEM_INTEREST_EXIT * ITEM_INTEREST_EXIT;
+		const leaving = this.leaving;
 		for (let i = 0; i < this.viewers.size(); i++) {
 			const v = this.viewers[i];
 			const slot = this.viewerSlots[i] ?? i;
 			const set = this.toldOf(slot);
-			for (const item of this.world.items) {
+			leaving.clear();
+			for (const id of set) {
+				const item = this.byId.get(id);
+				// gone already: `retract` told this client, and only a told id outlives its item for a moment
+				if (item === undefined) {
+					leaving.push(id);
+					continue;
+				}
 				const dx = item.x - v.x;
 				const dy = item.y - v.y;
-				const d2 = dx * dx + dy * dy;
-				if (d2 <= inR2 && !set.has(item.id)) {
-					set.add(item.id);
-					this.out.queueFor(slot, itemAddOf(item));
-				} else if (d2 > outR2 && set.has(item.id)) {
-					set.delete(item.id);
-					this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
-				}
+				if (dx * dx + dy * dy <= outR2) continue;
+				leaving.push(id);
+				this.out.queueFor(slot, { t: WorldEv.ItemRemove, id });
+			}
+			for (const id of leaving) set.delete(id);
+			for (const item of this.near(v.x, v.y, ITEM_INTEREST)) {
+				if (set.has(item.id)) continue;
+				const dx = item.x - v.x;
+				const dy = item.y - v.y;
+				if (dx * dx + dy * dy > inR2) continue;
+				set.add(item.id);
+				this.out.queueFor(slot, itemAddOf(item));
 			}
 		}
+		leaving.clear();
 	}
 
 	private toldOf(slot: number): Set<number> {
@@ -176,8 +240,20 @@ export class ServerItems {
 		return set;
 	}
 
-	/** a new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) */
+	/**
+	 * A new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) -- and
+	 * past GROUND_ITEM_CAP the OLDEST item leaves the world for it, so the town never holds more than the cap.
+	 */
 	private announce(item: GroundItem): void {
+		item.born = this.clock;
+		this.byId.set(item.id, item);
+		const items = this.world.items;
+		while (items.size() > GROUND_ITEM_CAP) {
+			const oldest = items[0];
+			if (oldest === item) break;
+			this.expired.capped += 1;
+			removeGroundItem(this.world, oldest);
+		}
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
 		let ev: WItemAdd | undefined;
 		for (let i = 0; i < this.viewers.size(); i++) {
@@ -194,6 +270,7 @@ export class ServerItems {
 
 	/** an item left the world: EVERY client that was told about it is told it is gone, near or not */
 	private retract(item: GroundItem): void {
+		this.byId.delete(item.id);
 		for (const [slot, set] of this.told) {
 			if (!set.has(item.id)) continue;
 			set.delete(item.id);
@@ -206,6 +283,7 @@ export class ServerItems {
 		this.world.onItemAdd = undefined;
 		this.world.onItemRemove = undefined;
 		this.told.clear();
+		this.byId.clear();
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)
@@ -367,7 +445,7 @@ export class ServerItems {
 	/** every ground item a joining survivor at (x, y) can see, as ItemAdd deltas */
 	initFor(x: number, y: number, out: Array<WItemAdd>): Array<WItemAdd> {
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
-		for (const item of this.world.items) {
+		for (const item of this.near(x, y, ITEM_INTEREST)) {
 			const dx = item.x - x;
 			const dy = item.y - y;
 			if (dx * dx + dy * dy <= r2) out.push(itemAddOf(item));
