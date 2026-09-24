@@ -84,6 +84,45 @@ export function isVehicle(s: Solid): boolean {
 	return s.tags === "vehicle";
 }
 
+/**
+ * A gas station's pump island (EDI-16): a container of oil, searched like a building (MP-05) -- rolled lazily by
+ * whoever comes near, shared, taken whole by the first E, back after ITEM_RESPAWN_HOURS.
+ */
+export function isPump(s: Solid): boolean {
+	return s.tags === "pump";
+}
+
+/** does this container (a building, a pump island) hold something, as far as this side knows? */
+export function holdsLoot(s: Solid): boolean {
+	const loot = s.lootItems;
+	return loot !== undefined && loot.size() > 0;
+}
+
+/**
+ * The pump island nearest (x, y) within `reach` of its edge, out of `pumps` (the town's islands, listed once by the
+ * caller: a town has ten). What the server's LootFlag tells a survivor standing outside (server/sim/interaction.ts).
+ */
+export function nearestPump(pumps: ReadonlyArray<Solid>, x: number, y: number, reach: number): Solid | undefined {
+	let best: Solid | undefined;
+	let bestD = reach;
+	for (const s of pumps) {
+		if (s.removed === true) continue;
+		const d = edgeDist(s, x, y);
+		if (d < bestD) {
+			bestD = d;
+			best = s;
+		}
+	}
+	return best;
+}
+
+/** every pump island of the town (static: listed once per world by whoever needs them) */
+export function pumpsOf(world: WorldData): Array<Solid> {
+	const out = new Array<Solid>();
+	for (const s of world.solids) if (isPump(s)) out.push(s);
+	return out;
+}
+
 /** wood repairs everything but iron doors, iron barricades, turrets, the other machines and vehicles (steel) */
 export function repairMaterial(s: Solid): { kind: number; index: number } {
 	if (s.kind === "iron_door" || STEEL_REPAIRED.includes(s.tags) || isVehicle(s)) {
@@ -228,10 +267,11 @@ export function bodiesOverlapRect(
 }
 
 /**
- * What E acts on, by priority: ground item → door / light / tree-car-bin / anything else in reach (repair) →
- * the loot of the building you stand in. A solid in reach always wins over the building: reaching through a wall
- * to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
- * after the loot: it can be ridden from anywhere around it, they cannot.
+ * What E acts on, by priority: ground item → door / light / tree-car-bin / pump island / anything else in reach
+ * (repair) → the loot of the building you stand in. A solid in reach always wins over the building: reaching through
+ * a wall to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
+ * after the loot: it can be ridden from anywhere around it, they cannot. A pump island is the target in reach whether
+ * or not it holds oil (a dry one does nothing, and the hint says nothing).
  */
 export type InteractTarget =
 	| { kind: "item"; item: GroundItem }
@@ -239,6 +279,7 @@ export type InteractTarget =
 	| { kind: "light"; solid: Solid }
 	| { kind: "mapItem"; solid: Solid }
 	| { kind: "vehicle"; solid: Solid }
+	| { kind: "pump"; solid: Solid }
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
@@ -263,6 +304,7 @@ export function interactTarget(
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };
+		if (isPump(s)) return { kind: "pump", solid: s };
 		return { kind: "solid", solid: s };
 	}
 	const b = buildingToSearch(world, x, y);

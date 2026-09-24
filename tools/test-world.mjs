@@ -2344,7 +2344,7 @@ section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma pr
 	}
 }
 
-section("y) andar por cima (ITM-07): o servidor pega o suprimento sob o corpo, sem mensagem do cliente, e todos sabem");
+section("z) andar por cima (ITM-07): o servidor pega o suprimento sob o corpo, sem mensagem do cliente, e todos sabem");
 {
 	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
 	const world = emptyWorld();
@@ -2380,6 +2380,135 @@ section("y) andar por cima (ITM-07): o servidor pega o suprimento sob o corpo, s
 // ---------------------------------------------------------------- verdict
 
 console.log("");
+section(
+	"y) a bomba do posto e um conteiner de oleo: rola perto, avisa pelo LootFlag, o primeiro E leva, volta em 12 h (EDI-16)",
+);
+{
+	const { PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+	const { gameHours } = require(join(SRC, "shared/sim/clock.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	const OIL = 48;
+	const island = extra => ({
+		kind: "wall_h",
+		x: 1000,
+		y: 1000,
+		w: 150,
+		h: 40,
+		hp: 999999,
+		hpMax: 999999,
+		destructible: false,
+		tags: "pump",
+		face: "top",
+		lootSlots: 1,
+		lootItems: [],
+		lootTimer: 0,
+		...extra,
+	});
+	// a static island (its id small, as a generated town's: the LootFlag carries it in a u16), then the server's world
+	const world = W.createWorld(8000, 8000);
+	const pump = W.addSolid(world, island());
+	W.serverWorld(world);
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	const sim = newSim(world, clock);
+	const sweep = Math.ceil(sim.simHz * 0.6);
+	// two survivors on its shop side (the street is "top"), both within reach of its edge
+	const a = addPlayer(sim, 0, 1060, 1062);
+	const b = addPlayer(sim, 1, 1100, 1064);
+	check(IQ.interactTarget(world, a.state.x, a.state.y)?.kind === "pump", "o alvo do E ali e a bomba");
+	run(sim, sweep);
+	const oil = pump.lootItems.reduce((n, d) => n + (d.kind === 4 && d.id === OIL ? d.count : 0), 0);
+	check(
+		pump.lootItems.length === 1 && oil >= PUMP_LOOT[0].min && oil <= PUMP_LOOT[0].max,
+		"a bomba rolou o combustivel quando alguem chegou perto: um slot de oleo, na faixa da tabela",
+		`${oil} Oil (${PUMP_LOOT[0].min}-${PUMP_LOOT[0].max})`,
+	);
+	const on = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag && d.ev.buildingId === pump.id && d.ev.hasLoot);
+	checkEq(
+		on
+			.map(d => d.slot)
+			.sort()
+			.join(","),
+		"0,1",
+		"o LootFlag da bomba foi para quem esta nela (o conteudo nunca viaja)",
+	);
+	{
+		// the same message, the same u16: the island's id survives the wire
+		const enc = P.encodeWorld({ tick: 3, events: [on[0].ev] });
+		const back = P.decodeWorld(enc.packets[0]);
+		checkEq(back?.events[0]?.buildingId, pump.id, "e o id da bomba atravessa o fio no LootFlag de sempre");
+	}
+	const before = [countItem(a.save, 4, OIL), countItem(b.save, 4, OIL)];
+	send(a, 1, 0, PRESS_E);
+	send(b, 1, 0, PRESS_E);
+	const seen = run(sim, 1);
+	const got = [countItem(a.save, 4, OIL) - before[0], countItem(b.save, 4, OIL) - before[1]];
+	checkEq(got[0] + got[1], oil, "todo o oleo foi para uma mochila");
+	check(got[0] === 0 || got[1] === 0, "e so para uma (o primeiro E leva tudo, MP-05)", `A +${got[0]}, B +${got[1]}`);
+	checkEq(seen.filter(s => s.outcome.kind === "pump").length, 1, "um so dreno na tick");
+	check(
+		seen.some(s => s.outcome.kind === "refused" && s.outcome.why === "empty"),
+		"e o segundo ouve do servidor por que nao levou nada: vazia",
+	);
+	checkEq(pump.lootItems.length, 0, "a bomba ficou seca");
+	check(
+		Math.abs(pump.lootTimer - (gameHours(1, 12) + DESIGN.ITEM_RESPAWN_HOURS)) < 0.05,
+		"e so volta depois de ITEM_RESPAWN_HOURS de jogo",
+		`lootTimer ${pump.lootTimer.toFixed(2)} h`,
+	);
+	run(sim, 1);
+	const off = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag && d.ev.buildingId === pump.id && !d.ev.hasLoot);
+	checkEq(off.length, 2, "o aviso cai para os dois, na tick seguinte");
+	const loser = got[0] > 0 ? b : a;
+	const had = countItem(loser.save, 4, OIL);
+	// past the press cooldown (PRESS_COOLDOWN_S), the loser tries again
+	run(sim, Math.ceil(sim.simHz * 0.3));
+	send(loser, 2, 0, PRESS_E);
+	const again = run(sim, 1);
+	checkEq(countItem(loser.save, 4, OIL), had, "E na bomba seca nao rende nada");
+	check(
+		again.some(s => s.outcome.kind === "refused" && s.outcome.why === "empty"),
+		"e o servidor diz por que: vazia",
+	);
+	// the respawn: once the world clock has passed it, the next sweep rolls the island again
+	run(sim, sweep);
+	checkEq(pump.lootItems.length, 0, "antes da hora, nada rola de novo");
+	clock.day = 2;
+	clock.dayTime = 1;
+	run(sim, sweep);
+	checkEq(pump.lootItems.length, 1, "12 h de jogo depois, a bomba tem combustivel de novo");
+	// reach is the server's: from across the forecourt, nothing
+	{
+		const far = W.createWorld(8000, 8000);
+		const p2 = W.addSolid(far, island({ lootItems: [{ kind: 4, id: OIL, count: 7 }] }));
+		W.serverWorld(far);
+		const sim2 = newSim(far);
+		const c = addPlayer(sim2, 0, 1075, 1200);
+		const had2 = countItem(c.save, 4, OIL);
+		send(c, 1, 0, PRESS_E);
+		run(sim2, 1);
+		checkEq(countItem(c.save, 4, OIL), had2, "a 160 u da bomba, o E nao drena nada (a distancia e a do servidor)");
+		checkEq(p2.lootItems.length, 1, "e a bomba continua cheia");
+	}
+	// the client: the flag leaves the placeholder the pill reads, the pill says what E does (LEG-01), a dry one says
+	// nothing, and a reset of the mirror dries every island again (the next flag names the one the survivor is at)
+	{
+		const cw = W.createWorld(8000, 8000);
+		const cp = W.addSolid(cw, island());
+		Mirror.forgetMirrorIndex();
+		const refs = { world: cw, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+		const by = { x: 1060, y: 1062 };
+		checkEq(CInter.interactHint(refs, by), undefined, "bomba seca: nenhuma pilula");
+		Mirror.applyMirrorEvent(cw, { t: P.WorldEv.LootFlag, buildingId: cp.id, hasLoot: true });
+		check(IQ.holdsLoot(cp), "o LootFlag da bomba chega ao espelho do cliente");
+		checkEq(CInter.interactHint(refs, by), "E: Siphon Oil", "e a pilula diz o que o E faz");
+		Mirror.resetMirror(cw);
+		check(!IQ.holdsLoot(cp), "um WorldInit novo seca a bomba no espelho ate o proximo aviso");
+		Mirror.forgetMirrorIndex();
+	}
+}
+
 if (failures > 0) {
 	console.log(`${failures} de ${checks} verificacao(oes) falharam`);
 	process.exit(1);

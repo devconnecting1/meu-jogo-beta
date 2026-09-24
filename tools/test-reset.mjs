@@ -1400,15 +1400,35 @@ section("8) New game never draws a living survivor the server holds dead (the ow
 		`netActive() check at ${liveAt}, fallback at ${fallAt}`,
 	);
 	const lang = readFileSync(join(SRC, "shared/data/lang.ts"), "utf8");
+	const gameOver = readFileSync(join(SRC, "client/onboarding/gameOver.ts"), "utf8");
+	// the death screen (UI-13) tells the two endings apart instead of hedging between them: somebody standing -> you
+	// wake at first light; nobody -> the town falls unless somebody pays, and a new town begins at day 1
 	check(
 		/"Rebirth wakes you now\. New game starts a new life at day 1,#which wakes at first light\./.test(lang) &&
-			/"You wake at first light\.#If nobody is left standing, a new town begins at day 1\."/.test(lang),
-		"the texts say what really happens: the new life wakes at first light, a new town if nobody is left (lang.ts)",
+			/"You wake at first light\."/.test(lang) &&
+			/"No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell\."/.test(lang) &&
+			/tr\("You wake at first light\."\)/.test(gameOver) &&
+			/tr\("No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell\."\)/.test(
+				gameOver,
+			),
+		"the texts say what really happens: first light while somebody stands, a new town at day 1 when nobody does " +
+			"(lang.ts, gameOver.ts)",
 	);
 	check(
-		!/The town is not yours to restart/.test(readFileSync(join(SRC, "client/onboarding/gameOver.ts"), "utf8")),
+		!/The town is not yours to restart/.test(gameOver),
 		"…and the wait no longer says the town cannot be restarted (it can: MP-22)",
 	);
+	{
+		// the death screen counts the town's fall itself (the server does not publish its window): the same 30 s. Read
+		// from the source: the client module needs the UI shims this suite does not load
+		const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+		const WORLD_WIPE_S = Number(gameOver.match(/export const WORLD_WIPE_S = (\d+(?:\.\d+)?);/)?.[1]);
+		check(
+			WORLD_WIPE_S === WIPE_DECISION_S,
+			"the death screen's count to the town's fall (gameOver.ts WORLD_WIPE_S) is the server's window (life.ts)",
+			`${WORLD_WIPE_S} s / ${WIPE_DECISION_S} s`,
+		);
+	}
 });
 
 // ================================================================ 9: once per wipe

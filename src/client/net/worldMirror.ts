@@ -9,8 +9,9 @@
  *   DoorSet / LightSet       a door opens or closes, a lamp or a fire goes on or off (static or built)
  *   SolidHp                  a construction's hp, as a fraction of its maximum
  *   ItemAdd / ItemRemove     a ground item appears (with the server's id and velocity) or is gone
- *   LootFlag                 the building this survivor stands in has something to search (the CONTENT never
- *                            travels, §4.3: the flag leaves a placeholder the "E: Search" hint can see)
+ *   LootFlag                 the building this survivor stands in -- or the gas pump island they stand at (EDI-16) --
+ *                            has something to search (the CONTENT never travels, §4.3: the flag leaves a placeholder
+ *                            the "E: Search" / "E: Siphon Oil" hint can see)
  *
  * Every delta is idempotent (an add of an id already here updates it; a removal of an id not here is ignored), so
  * the WorldInit a re-entry brings can be laid over a town that already holds some of it. `resetMirror` wipes what
@@ -160,8 +161,9 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		return;
 	}
 	if (e.t === WorldEv.LootFlag) {
+		// a building, or a gas station's pump island (EDI-16): the two containers the server flags (same message)
 		const b = ix.solids.get(e.buildingId);
-		if (b === undefined || b.kind !== "building") return;
+		if (b === undefined || (b.kind !== "building" && b.tags !== "pump")) return;
 		const had = (b.lootItems?.size() ?? 0) > 0;
 		b.lootItems = e.hasLoot ? lootPlaceholder() : [];
 		if (had && !e.hasLoot) lootGone();
@@ -179,7 +181,7 @@ export function resetMirror(world: WorldData): void {
 	for (const s of world.solids) {
 		if (s.id >= DYNAMIC_ID_BASE || s.placeable !== undefined) built.push(s);
 		else if (isDoor(s)) s.open = false;
-		else if (s.kind === "building" && s.lootItems !== undefined) s.lootItems = [];
+		else if ((s.kind === "building" || s.tags === "pump") && s.lootItems !== undefined) s.lootItems = [];
 	}
 	for (const s of built) {
 		ix.solids.delete(s.id);

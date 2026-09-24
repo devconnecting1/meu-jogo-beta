@@ -4,14 +4,16 @@ import type { PlayerState } from "shared/game/player";
 import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
-import { mapItemLoot, rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
+import { isContainer, mapItemLoot, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
 import {
 	bodiesOverlapRect,
 	canRepair,
 	edgeDist,
+	holdsLoot,
 	InteractTarget,
 	interactTarget,
 	isFire,
+	isPump,
 	nearestGroundItem,
 	repairMaterial,
 } from "shared/sim/interactQuery";
@@ -33,7 +35,8 @@ import { gained, pressed, survivorAt, took } from "./pickups";
 import { fxMessage, GameRefs } from "./types";
 
 /*
- * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, repair, loot a building.
+ * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, drain a gas pump, repair, loot a
+ * building.
  * WHAT is in reach is a pure query (shared/sim/interactQuery.ts); this file applies the effect on the world and the
  * backpack of the survivor that pressed E (docs/MULTIPLAYER.md §11.2 → server/sim/interaction.ts in F3).
  *
@@ -181,10 +184,17 @@ function takeItem(refs: GameRefs, it: GroundItem): number {
 	return take;
 }
 
-/** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes */
+/** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16) */
 function rollLoot(s: Solid): void {
-	s.lootItems = rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+	s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 }
+
+/**
+ * The pill at a gas station's pump island (EDI-16, LEG-01): what E does -- drain the fuel left in it into the backpack
+ * -- while this client knows it holds some (its own roll offline; the server's LootFlag, which reaches a survivor
+ * before they are at the island). A dry island does nothing, and says nothing: the same as an emptied building.
+ */
+export const PUMP_HINT = "E: Siphon Oil";
 
 function tryRepair(refs: GameRefs, s: Solid): boolean {
 	if (!canRepair(s)) return false;
@@ -275,6 +285,7 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		return s.tags === "car" ? "E: Search car" : "E: Search trash";
 	}
 	if (target.kind === "vehicle") return vehicleHint(refs, target.solid);
+	if (target.kind === "pump") return holdsLoot(target.solid) ? PUMP_HINT : undefined;
 	if (target.kind === "solid") {
 		const s = target.solid;
 		if (!canRepair(s)) return undefined;
@@ -340,6 +351,7 @@ export class Interaction {
 			// What it reached here is remembered, so the server's answer can be told for a pickup (./pickups.ts)
 			if (target.kind === "item") pressed("item", by.x, by.y);
 			else if (target.kind === "search") pressed("loot", by.x, by.y);
+			else if (target.kind === "pump" && holdsLoot(target.solid)) pressed("loot", by.x, by.y);
 			return;
 		}
 		if (target.kind === "vehicle") return;
@@ -364,6 +376,17 @@ export class Interaction {
 		}
 		if (target.kind === "mapItem") {
 			hitMapItem(refs, target.solid, false, by);
+			return;
+		}
+		if (target.kind === "pump") {
+			// the server's `drain`, offline: everything in it, the island dry until its respawn (no Thief: not a building)
+			const pump = target.solid;
+			const fuel = pump.lootItems;
+			if (fuel === undefined || fuel.size() === 0) return;
+			for (const drop of fuel) addItem(refs.save, drop.kind, drop.id, drop.count);
+			took();
+			pump.lootItems = [];
+			pump.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;
 			return;
 		}
 		if (target.kind === "solid") {
@@ -465,7 +488,7 @@ export class Interaction {
 		for (const p of refs.players) {
 			const found = querySolids(refs.world, p.x - radius, p.y - radius, p.x + radius, p.y + radius, this.lootBuf);
 			for (const s of found) {
-				if (s.kind !== "building") continue;
+				if (!isContainer(s)) continue;
 				const loot = s.lootItems;
 				if (loot === undefined || loot.size() > 0) continue;
 				if (now < (s.lootTimer ?? 0)) continue;
