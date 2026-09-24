@@ -16,11 +16,12 @@
  *      for one decal on a 336-sprite street.)
  *   3. WALKING WRITES NO ZIndex. 600 frames of panning with the horde walking and blood coming and going: not one
  *      ZIndex write, no Instance after the warm-up; the writes per frame are printed.
- *   4. RESERVE + WARM. `warm(n)` makes at most n sprites a call, hidden, at their ZIndex, rounded / outlined as
- *      reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no stroke left on).
+ *   4. RESERVE + WARM. `warm(n)` makes at most n sprites a call, hidden, at their ZIndex, rounded / outlined / with
+ *      a blank ImageLabel as reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no
+ *      stroke left on, a sheet cell drawn on a warmed image creates nothing).
  *   5. THE WARM-UP PROFILE. poolWarmup.ts reserves what the reference fight draws, flat and with the characters'
- *      art: on the warmed pool the fight creates no Frame, UICorner or UIStroke, and no layer is reserved far past
- *      what the fight shows.
+ *      art (the uploaded sheets' ids): on the warmed pool the fight creates no Frame, UICorner, UIStroke or
+ *      ImageLabel, and no layer is reserved far past what the fight shows.
  *   6. THE DRIVER. warmFightPool warms only while the lobby or its menus are up (not behind the boot logo, not
  *      during a run), WARM_PER_FRAME sprites a frame, and lets go of Heartbeat once the pool is warm.
  *   7. THE API. drawCount, poolSize, acquire, release and releaseAll across the buckets.
@@ -84,6 +85,7 @@ const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
 const HV = require(join(SRC, "client/view/humanoidView.ts"));
 const SV = require(join(SRC, "client/view/survivorView.ts"));
 const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
 const CA = require(join(SRC, "client/view/charArt.ts"));
 const PW = require(join(SRC, "client/view/poolWarmup.ts"));
 const { AudioTrack } = require(join(SRC, "client/audio/audio.ts"));
@@ -137,11 +139,11 @@ const top = (byProp, frames = 1, n = 5) =>
 		.map(([k, c]) => `${k} ${(c / frames).toFixed(1)}`)
 		.join(", ");
 
-/** every texture live under a fake id (the characters' sheets included) */
+/** every texture live (the characters' sheets included): its uploaded id, or a fake one while it has none */
 function allIds() {
 	const manifest = JSON.parse(readFileSync(join(ROOT, "design", "world-art", "manifest.json"), "utf8"));
 	const ids = {};
-	manifest.textures.forEach((t, i) => (ids[t.name] = `rbxassetid://${900000 + i}`));
+	manifest.textures.forEach((t, i) => (ids[t.name] = WORLD_ART[t.name]?.id || `rbxassetid://${900000 + i}`));
 	return ids;
 }
 
@@ -489,6 +491,54 @@ section("4) reserve + warm: built ahead, hidden, at their ZIndex, rounded / outl
 		"...and a rounded slot drawn square is square again",
 	);
 }
+{
+	// a layer of sheet cells (the characters' art): its ImageLabels are built ahead too, hidden and blank
+	const r = new Renderer(gui.make("Frame"), "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	r.reserve(Z.zombie, 8, 0, 0, 8);
+	const c0 = gui.stats.created;
+	while (r.warm(3) > 0);
+	const kids = r.layer.GetChildren();
+	const labels = kids.map(f => f.FindFirstChildOfClass("ImageLabel"));
+	check(
+		kids.length === 8 &&
+			gui.stats.created - c0 === 16 &&
+			labels.every(l => l !== undefined && l.Visible === false && !l.Image),
+		"a layer reserved with images: each sprite comes with its ImageLabel, hidden and blank",
+		`${kids.length} sprites, ${labels.filter(l => l !== undefined).length} ImageLabels, ${gui.stats.created - c0} Instances`,
+	);
+	const drawn = watch(() => {
+		r.beginFrame();
+		for (let i = 0; i < 8; i++) {
+			r.drawRect(cam, i * 40, 100, {
+				w: 32,
+				h: 32,
+				image: "rbxassetid://1",
+				rectX: i * 24,
+				rectY: 24,
+				rectW: 24,
+				rectH: 24,
+				zIndex: Z.zombie,
+			});
+		}
+		r.endFrame();
+	});
+	check(
+		drawn.created === 0 &&
+			labels.every(
+				(l, i) =>
+					l.Visible === true &&
+					l.Image === "rbxassetid://1" &&
+					l.ImageRectOffset.X === i * 24 &&
+					l.ImageRectOffset.Y === 24 &&
+					l.ImageRectSize.X === 24,
+			),
+		"...and a sheet cell drawn on it creates nothing and shows its picture and its cell",
+		`${drawn.created} created`,
+	);
+}
 
 // ================================================================ 5. the warm-up profile
 
@@ -523,9 +573,9 @@ for (const [label, ids] of [
 		`${label}: the characters' art is ${label === "art" ? "live" : "off"}, and the profile follows it`,
 	);
 	check(
-		made("Frame") + made("UICorner") + made("UIStroke") === 0,
-		`${label}: on the warmed pool the fight creates no Frame, UICorner or UIStroke`,
-		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes`,
+		made("Frame") + made("UICorner") + made("UIStroke") + made("ImageLabel") === 0,
+		`${label}: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel`,
+		`${made("Frame")} Frames, ${made("UICorner")} corners, ${made("UIStroke")} strokes, ${made("ImageLabel")} images`,
 	);
 	const over = [...reserved].filter(([z, n]) => n > (shown.get(z) ?? 0) * 1.25 + 2);
 	check(
@@ -534,7 +584,7 @@ for (const [label, ids] of [
 		over.map(([z, n]) => `z ${z}: ${n} reserved, ${shown.get(z) ?? 0} shown`).join("; "),
 	);
 	console.log(
-		`       ${label}: ${warmed} sprites (${instances} Instances) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}; the fight then made ${made("ImageLabel")} ImageLabels (born with their picture)`,
+		`       ${label}: ${warmed} sprites (${instances} Instances) warmed in ${frames} frames of ${PW.WARM_PER_FRAME}; the fight then made ${made("ImageLabel")} ImageLabels`,
 	);
 }
 {

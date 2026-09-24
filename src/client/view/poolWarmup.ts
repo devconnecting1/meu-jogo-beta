@@ -8,51 +8,53 @@
  *
  * The counts are a 1920 x 1080 night fight -- 40 walkers, 4 survivors, 40 blood decals, 60 sparks, 12 tracers --
  * per ZIndex, as the real drawers produce them (npm run test:pool draws that fight and holds these numbers to it),
- * flat or pixel art (client/view/charArt.ts) as the uploaded sheets decide. The town itself is not reserved: it is
- * drawn at the run's first frame, behind the mount of the HUD, not in the middle of a fight. An image's
- * ImageLabel is not either: it is born with its first picture (renderer.ts: applyImage).
+ * flat or pixel art (client/view/charArt.ts) as the uploaded sheets decide. With the sheets live a character is an
+ * image sprite, so its cell's ImageLabel is built here too (hidden, blank): otherwise the frame a horde walks in
+ * would still create one per walker. The town itself is not reserved: it is drawn at the run's first frame, behind
+ * the mount of the HUD, not in the middle of a fight, and its images are born with their first picture
+ * (renderer.ts: applyImage).
  */
 import { Z } from "shared/engine/colors";
 import { Renderer } from "shared/engine/renderer";
 import { GameContext } from "shared/game/context";
 import { survivorArtLive, zombieArtLive } from "./charArt";
 
-/** [ZIndex, sprites, how many of them are rounded (UICorner), how many outlined (UIStroke)] */
-export type PoolLayer = readonly [number, number, number, number];
+/** [ZIndex, sprites, how many of them are rounded (UICorner), how many outlined (UIStroke), how many images] */
+export type PoolLayer = readonly [number, number, number, number, number];
 
 /** what every look shares: blood on the ground, acid puddles, body shadows, tracers and sparks */
 export const FIGHT_FX: ReadonlyArray<PoolLayer> = [
-	[Z.decal, 40, 40, 0],
-	[Z.decal + 1, 4, 4, 4],
-	[Z.actorShadow, 44, 44, 0],
-	[Z.projectile, 12, 0, 0],
-	[Z.particle, 60, 60, 0],
+	[Z.decal, 40, 40, 0, 0],
+	[Z.decal + 1, 4, 4, 4, 0],
+	[Z.actorShadow, 44, 44, 0, 0],
+	[Z.projectile, 12, 0, 0, 0],
+	[Z.particle, 60, 60, 0, 0],
 ];
 
 /** 40 flat walkers (humanoidView.drawHumanoid): feet, arms, body, head */
 export const HORDE_FLAT: ReadonlyArray<PoolLayer> = [
-	[Z.zombie, 80, 80, 0],
-	[Z.zombie + 1, 80, 80, 80],
-	[Z.zombie + 2, 40, 40, 40],
-	[Z.zombie + 3, 40, 40, 0],
+	[Z.zombie, 80, 80, 0, 0],
+	[Z.zombie + 1, 80, 80, 80, 0],
+	[Z.zombie + 2, 40, 40, 40, 0],
+	[Z.zombie + 3, 40, 40, 0, 0],
 ];
 
-/** 40 walkers once the zombies' sheet is uploaded (charArt.drawZombieArt): one cell each */
-export const HORDE_ART: ReadonlyArray<PoolLayer> = [[Z.zombie, 40, 0, 0]];
+/** 40 walkers once the zombies' sheet is uploaded (charArt.drawZombieArt): one cell each, an ImageLabel each */
+export const HORDE_ART: ReadonlyArray<PoolLayer> = [[Z.zombie, 40, 0, 0, 40]];
 
 /** 4 flat survivors (survivorView.drawSurvivor, look.z = Z.player) */
 export const SURVIVORS_FLAT: ReadonlyArray<PoolLayer> = [
-	[Z.player - 1, 8, 8, 0],
-	[Z.player, 4, 0, 4],
-	[Z.player + 1, 4, 4, 4],
-	[Z.player + 3, 8, 8, 0],
-	[Z.player + 4, 4, 4, 4],
+	[Z.player - 1, 8, 8, 0, 0],
+	[Z.player, 4, 0, 4, 0],
+	[Z.player + 1, 4, 4, 4, 0],
+	[Z.player + 3, 8, 8, 0, 0],
+	[Z.player + 4, 4, 4, 4, 0],
 ];
 
-/** 4 survivors once their sheets are uploaded: the body's cell and the weapon's */
+/** 4 survivors once their sheets are uploaded: the body's cell and the weapon's, each an ImageLabel */
 export const SURVIVORS_ART: ReadonlyArray<PoolLayer> = [
-	[Z.player, 4, 0, 0],
-	[Z.player + 1, 4, 0, 0],
+	[Z.player, 4, 0, 0, 4],
+	[Z.player + 1, 4, 0, 0, 4],
 ];
 
 /** sprites (each with its modifiers) created per frame while warming: a 1080p fight in ~15 frames of the lobby */
@@ -74,8 +76,8 @@ export function reserveFightPool(
 ): void {
 	const k = math.clamp((viewW * viewH) / REF_AREA, 0.5, 1);
 	const add = (layers: ReadonlyArray<PoolLayer>): void => {
-		for (const [z, n, corners, strokes] of layers) {
-			r.reserve(z, math.ceil(n * k), math.ceil(corners * k), math.ceil(strokes * k));
+		for (const [z, n, corners, strokes, images] of layers) {
+			r.reserve(z, math.ceil(n * k), math.ceil(corners * k), math.ceil(strokes * k), math.ceil(images * k));
 		}
 	};
 	add(FIGHT_FX);
