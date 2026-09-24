@@ -8,6 +8,12 @@
  *   drawIcon(view, "skill_heart");                    // any icon or glyph by key
  *   drawIcon(view, "check", { ink: GAME.success });   // a one-colour glyph in a theme colour
  *
+ * Where the drawing sits in the square (IconFit): "cell" puts the whole 16 x 16 grid on it, as drawn; "drawn" moves
+ * the same pixels by whole screen pixels so the box of what is DRAWN is centred -- the art is rarely centred in its
+ * grid (the dagger is half a cell right and a cell and a half low), and an item shown in a tile belongs in its middle.
+ * Every item view uses "drawn" (the hotbar, the Bag's tiles and panel, the item card, the Survivor loadout); a layout
+ * that must know where those pixels land asks drawnRects (hudConsole.ts keeps the hotbar's icons off its key badge).
+ *
  * How a 16 x 16 grid becomes a few dozen Frames (decompose): the colours are painted one after the other in the
  * order of shared/engine/colors.ts ICON_ART_ORDER, and a Frame of one colour may cover pixels that a LATER colour
  * paints anyway. So the outline, painted first, is a handful of big rectangles under the whole silhouette; each colour
@@ -61,6 +67,8 @@ interface Decomposed {
 	n: number;
 	runs: Array<Run>;
 	mono: boolean;
+	/** the drawn box: the cells that paint anything, [x0, y0, x1, y1) (the art is rarely centred in its grid) */
+	box: [number, number, number, number];
 }
 
 /** position of each art colour in ICON_ART_ORDER */
@@ -96,6 +104,23 @@ function decompose(rows: Array<string>, mono: boolean): Decomposed {
 	}
 	const layers: Array<number> = [];
 	for (const r of rank) if (r >= 0 && !layers.includes(r)) layers.push(r);
+	const box: [number, number, number, number] = [n, n, 0, 0];
+	for (let i = 0; i < n * n; i++) {
+		if (rank[i] < 0) continue;
+		const x = i % n;
+		const y = math.floor(i / n);
+		box[0] = math.min(box[0], x);
+		box[1] = math.min(box[1], y);
+		box[2] = math.max(box[2], x + 1);
+		box[3] = math.max(box[3], y + 1);
+	}
+	// an empty grid: the whole cell
+	if (box[2] <= box[0]) {
+		box[0] = 0;
+		box[1] = 0;
+		box[2] = n;
+		box[3] = n;
+	}
 	layers.sort((a, b) => a < b);
 	const runs: Array<Run> = [];
 	for (let li = 0; li < layers.size(); li++) {
@@ -143,7 +168,7 @@ function decompose(rows: Array<string>, mono: boolean): Decomposed {
 			}
 		}
 	}
-	return { n, runs, mono };
+	return { n, runs, mono, box };
 }
 
 /** the runs of icon or glyph `key` (undefined: no such key) */
@@ -187,6 +212,51 @@ export function maxItemFrames(): number {
 export function iconRuns(key: string): Array<[number, number, number, number, string]> {
 	const out: Array<[number, number, number, number, string]> = [];
 	for (const r of runsOf(key)?.runs ?? []) out.push([r.x, r.y, r.w, r.h, r.ch]);
+	return out;
+}
+
+// ---------------------------------------------------------------- the drawn box
+
+/** where cell edge `c` of an `n` grid lands in a `side` px square: the drawer's rounding (every run is placed so) */
+function edge(c: number, n: number, side: number): number {
+	return math.round((c * side) / n);
+}
+
+/**
+ * The whole pixels that move the centre of `d`'s drawn box onto the centre of a `side` px square. Rounded half up
+ * (floor of x + 0.5) rather than with math.round, so Luau and the Node suites agree on a negative half.
+ */
+function shiftOf(d: Decomposed, side: number): [number, number] {
+	const [x0, y0, x1, y1] = d.box;
+	const sx = math.floor((side - edge(x0, d.n, side) - edge(x1, d.n, side)) / 2 + 0.5);
+	const sy = math.floor((side - edge(y0, d.n, side) - edge(y1, d.n, side)) / 2 + 0.5);
+	return [sx, sy];
+}
+
+/** the drawn box of icon or glyph `key`, [x0, y0, x1, y1) in its own cells (undefined: no such key) */
+export function drawnBox(key: string): [number, number, number, number] | undefined {
+	const d = runsOf(key);
+	return d === undefined ? undefined : [d.box[0], d.box[1], d.box[2], d.box[3]];
+}
+
+/**
+ * What a view of fit "drawn" paints for `key` in a `side` px square: each run as [x0, y0, x1, y1) in the square's
+ * pixels, with the drawer's rounding and its centring shift -- for a layout that must know where the drawing lands
+ * (hudConsole.ts keeps the hotbar's icons clear of the key badge). Empty for an unknown key.
+ */
+export function drawnRects(key: string, side: number): Array<[number, number, number, number]> {
+	const out: Array<[number, number, number, number]> = [];
+	const d = runsOf(key);
+	if (d === undefined || side <= 0) return out;
+	const [sx, sy] = shiftOf(d, side);
+	for (const r of d.runs) {
+		out.push([
+			sx + edge(r.x, d.n, side),
+			sy + edge(r.y, d.n, side),
+			sx + edge(r.x + r.w, d.n, side),
+			sy + edge(r.y + r.h, d.n, side),
+		]);
+	}
 	return out;
 }
 
@@ -246,6 +316,16 @@ function cellSize(n: number): Vector2 {
 
 // ---------------------------------------------------------------- the view
 
+/**
+ * How a drawing sits in its view's square:
+ *  - "cell": its whole grid fills the square, as drawn in itemIcons.ts (the art sits where its grid puts it: the
+ *    dagger's is half a cell right and a cell and a half low);
+ *  - "drawn": the same pixels at the same size, moved by whole screen pixels so the box of what is drawn is centred
+ *    in the square -- every item sits in the middle of its tile whatever the art's place in its grid (the hotbar,
+ *    the Bag's tiles and panel, the item card, the Survivor loadout).
+ */
+export type IconFit = "cell" | "drawn";
+
 export interface IconView {
 	/** the transparent square the icon fills; its "Icon" attribute names what it draws ("" = nothing) */
 	frame: Frame;
@@ -259,6 +339,14 @@ export interface IconView {
 	imagePx: number;
 	imageOx: number;
 	imageOy: number;
+	imageFx: number;
+	imageFy: number;
+	/** how the drawing sits in the square (IconFit), and the shift "drawn" puts on it now: px, or Scale before the size */
+	fit: IconFit;
+	sx: number;
+	sy: number;
+	fx: number;
+	fy: number;
 	/** the runs a view falling back to Frames builds up front (the constructor's `reserve`) */
 	reserve: number;
 	/** the pooled runs, and what each one shows now (a redraw writes only what changed) */
@@ -302,21 +390,40 @@ function newRun(view: IconView): Frame {
 function place(view: IconView, i: number, r: Run): void {
 	const n = view.n;
 	const S = view.px;
-	const sig = `${r.x},${r.y},${r.w},${r.h},${n},${S},${view.ox},${view.oy}`;
+	const sig = `${r.x},${r.y},${r.w},${r.h},${n},${S},${view.ox + view.sx},${view.oy + view.sy},${view.fx},${view.fy}`;
 	if (view.placed[i] === sig) return;
 	view.placed[i] = sig;
 	const f = view.runs[i];
 	if (S > 0) {
-		const x0 = math.round((r.x * S) / n);
-		const x1 = math.round(((r.x + r.w) * S) / n);
-		const y0 = math.round((r.y * S) / n);
-		const y1 = math.round(((r.y + r.h) * S) / n);
-		f.Position = UDim2.fromOffset(view.ox + x0, view.oy + y0);
+		const x0 = edge(r.x, n, S);
+		const x1 = edge(r.x + r.w, n, S);
+		const y0 = edge(r.y, n, S);
+		const y1 = edge(r.y + r.h, n, S);
+		f.Position = UDim2.fromOffset(view.ox + view.sx + x0, view.oy + view.sy + y0);
 		f.Size = UDim2.fromOffset(x1 - x0, y1 - y0);
 	} else {
-		f.Position = UDim2.fromScale(r.x / n, r.y / n);
+		f.Position = UDim2.fromScale(r.x / n + view.fx, r.y / n + view.fy);
 		f.Size = UDim2.fromScale(r.w / n, r.h / n);
 	}
+}
+
+/** the shift fit "drawn" puts on what the view draws now (none for "cell", or with nothing drawn) */
+function reshift(view: IconView): void {
+	let sx = 0;
+	let sy = 0;
+	let fx = 0;
+	let fy = 0;
+	const d = view.fit === "drawn" && view.key !== "" ? runsOf(view.key) : undefined;
+	if (d !== undefined && view.px > 0) {
+		[sx, sy] = shiftOf(d, view.px);
+	} else if (d !== undefined) {
+		fx = (d.n - d.box[0] - d.box[2]) / (2 * d.n);
+		fy = (d.n - d.box[1] - d.box[3]) / (2 * d.n);
+	}
+	view.sx = sx;
+	view.sy = sy;
+	view.fx = fx;
+	view.fy = fy;
 }
 
 /** the square's pixel size and offset from the view's size on screen (grid-snapped when it loses little) */
@@ -340,21 +447,34 @@ function measure(view: IconView): boolean {
 /** the image on the square the runs fill (offsets once the size is known, else the whole view in Scale) */
 function placeImage(view: IconView, img: ImageLabel): void {
 	const S = view.px;
-	if (S === view.imagePx && view.ox === view.imageOx && view.oy === view.imageOy) return;
+	const x = view.ox + view.sx;
+	const y = view.oy + view.sy;
+	if (
+		S === view.imagePx &&
+		x === view.imageOx &&
+		y === view.imageOy &&
+		view.fx === view.imageFx &&
+		view.fy === view.imageFy
+	) {
+		return;
+	}
 	view.imagePx = S;
-	view.imageOx = view.ox;
-	view.imageOy = view.oy;
+	view.imageOx = x;
+	view.imageOy = y;
+	view.imageFx = view.fx;
+	view.imageFy = view.fy;
 	if (S > 0) {
-		img.Position = UDim2.fromOffset(view.ox, view.oy);
+		img.Position = UDim2.fromOffset(x, y);
 		img.Size = UDim2.fromOffset(S, S);
 	} else {
-		img.Position = new UDim2();
+		img.Position = UDim2.fromScale(view.fx, view.fy);
 		img.Size = UDim2.fromScale(1, 1);
 	}
 }
 
 function relayout(view: IconView): void {
 	if (!measure(view)) return;
+	reshift(view);
 	for (let i = 0; i < view.current.size(); i++) place(view, i, view.current[i]);
 	const img = view.image;
 	if (img !== undefined && img.Visible) placeImage(view, img);
@@ -385,6 +505,8 @@ function newImage(view: IconView, id: string): void {
 	view.imagePx = 0;
 	view.imageOx = 0;
 	view.imageOy = 0;
+	view.imageFx = 0;
+	view.imageFy = 0;
 	atlasViews.add(view);
 	view.frame.Destroying.Connect(() => atlasViews.delete(view));
 }
@@ -417,7 +539,8 @@ onWorldArtChange(atlasChanged);
 /**
  * A view `size` design units square at (x, y) in `parent`'s design space. `reserve` runs are built up front, hidden
  * (a view that must never create one later: the hotbar's tiles take the most any weapon icon needs) -- unless the
- * atlas is live: then the view is its one ImageLabel, and never needs a run.
+ * atlas is live: then the view is its one ImageLabel, and never needs a run. `fit` (IconFit): "drawn" centres what is
+ * drawn in the square, "cell" (the default) keeps the art where its grid puts it.
  */
 export function IconView(
 	parent: Instance,
@@ -427,6 +550,7 @@ export function IconView(
 	size: number,
 	zIndex: number,
 	reserve = 0,
+	fit: IconFit = "cell",
 ): IconView {
 	const frame = makeFrame(parent, name, x, y, size, size, THEME.background, { transparency: 1, zIndex });
 	frame.SetAttribute("Icon", "");
@@ -440,6 +564,13 @@ export function IconView(
 		imagePx: -1,
 		imageOx: -1,
 		imageOy: -1,
+		imageFx: 0,
+		imageFy: 0,
+		fit,
+		sx: 0,
+		sy: 0,
+		fx: 0,
+		fy: 0,
 		reserve,
 		runs: [],
 		placed: [],
@@ -489,6 +620,7 @@ export function drawIcon(view: IconView, key: string, opts?: DrawOpts): void {
 		view.px = 0;
 		measure(view);
 	}
+	reshift(view);
 	const img = view.image;
 	// a glyph's colour is its ink, dimmed or not: its one cell
 	const offset = img !== undefined ? cellOffset(key, dim && !d.mono) : undefined;
