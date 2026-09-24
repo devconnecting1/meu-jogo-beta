@@ -234,7 +234,7 @@ function charDigest() {
 	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
 	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
 }
-// the bosses' draw calls with no boss sheet (§10f, ART-13), and --golden-bosses: record them from this src (run it
+// the bosses' draw calls with no boss sheet (§10f, ART-14), and --golden-bosses: record them from this src (run it
 // on the commit before the bosses' art, with PZ_SRC, and PZ_GOLDEN_FROM naming it)
 const GOLDEN_BOSSES = join(ROOT, "tools", "golden", "bosses-flat.json");
 /** where member `i` of the boss cast is drawn (far apart: nothing of one lands on another) */
@@ -1943,7 +1943,7 @@ section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost 
 		`${art.writes.toFixed(0)} vs ${flat.writes.toFixed(0)}`,
 	);
 
-	// ---- 10f. the bosses (ART-13): their sheets, the flat fallback of before, each on its own, the cost of a fight
+	// ---- 10f. the bosses (ART-14): their sheets, the flat fallback of before, each on its own, the cost of a fight
 	{
 		const BV = require(join(SRC, "client/view/bossView.ts"));
 		const { bossHitRadius, BOSS1_SEGMENT_RADIUS } = require(join(SRC, "shared/game/entities.ts"));

@@ -62,8 +62,8 @@ export const ACHIEVEMENTS: Array<AchievementDef> = [
 	{ id: 5, max: 200, key: "chef", title: "Camp Cook", androidId: "CgkIg6_npp8FEAIQBw" },
 	{ id: 6, max: 100, key: "blacksmith", title: "Metalworker", androidId: "CgkIg6_npp8FEAIQCA" },
 	{ id: 7, max: 100, key: "sniper", title: "Long Shot", androidId: "CgkIg6_npp8FEAIQCQ" },
-	// the bosses spawn at the town's anchors (shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies; if
-	// they are ever switched off (CON-03's "sem chefe"), these four go back to hidden in the same step
+	// the bosses spawn at the town's anchors (shared/sim/ai/population.ts spawnBoss) and drop ITM-05's trophies: they are
+	// ON (CON-03, 2026-09-24); if one is ever switched off, its achievement goes back to hidden in the same step
 	{ id: 8, max: 1, key: "centipede_slayer", title: "Centipede Down", androidId: "CgkIg6_npp8FEAIQCg" },
 	{ id: 9, max: 1, key: "rafflesia_slayer", title: "Rafflesia Down", androidId: "CgkIg6_npp8FEAIQCw" },
 	{ id: 10, max: 1, key: "giant_slayer", title: "Giant Down", androidId: "CgkIg6_npp8FEAIQDA" },

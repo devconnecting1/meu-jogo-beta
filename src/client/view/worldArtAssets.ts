@@ -376,25 +376,25 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
-	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-13) */
+	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14) */
 	bossGiant: { id: "", w: 640, h: 320 },
 	/** mask: bossGiant: white silhouettes of the same cells (tint: hit flash) */
 	bossGiantFill: { id: "", w: 640, h: 320 },
 	/** mask: bossGiant: white outlines of the same cells (tint: the hit outline) */
 	bossGiantRim: { id: "", w: 640, h: 320 },
-	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-13) */
+	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14) */
 	bossHedgehog: { id: "", w: 640, h: 240 },
 	/** mask: bossHedgehog: white silhouettes of the same cells (tint: hit flash) */
 	bossHedgehogFill: { id: "", w: 640, h: 240 },
 	/** mask: bossHedgehog: white outlines of the same cells (tint: the hit outline) */
 	bossHedgehogRim: { id: "", w: 640, h: 240 },
-	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-13) */
+	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14) */
 	bossCentipede: { id: "", w: 640, h: 480 },
 	/** mask: bossCentipede: white silhouettes of the same cells (tint: hit flash) */
 	bossCentipedeFill: { id: "", w: 640, h: 480 },
 	/** mask: bossCentipede: white outlines of the same cells (tint: the hit outline) */
 	bossCentipedeRim: { id: "", w: 640, h: 480 },
-	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-13) */
+	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14) */
 	bossRafflesia: { id: "", w: 816, h: 68 },
 	/** mask: bossRafflesia: white silhouettes of the same cells (tint: hit flash) */
 	bossRafflesiaFill: { id: "", w: 816, h: 68 },

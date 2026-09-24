@@ -1,5 +1,5 @@
 /*
- * The four bosses on screen (docs/DESIGN_RULES.md ART-13, P0-3): the centipede, the rafflesia, the giant and the
+ * The four bosses on screen (docs/DESIGN_RULES.md ART-14, P0-3): the centipede, the rafflesia, the giant and the
  * hedgehog -- from their pixel-art sheets once uploaded, and until then the flat drawing they always had.
  *
  * The flat drawing lived in actorsView.ts `drawBosses`; it moved here VERBATIM (tools/test-world-art.mjs §10f compares

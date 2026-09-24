@@ -947,7 +947,7 @@
 			"kind": "sheet",
 			"w": 640,
 			"h": 320,
-			"description": "boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-13)"
+			"description": "boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14)"
 		},
 		{
 			"name": "bossGiantFill",
@@ -971,7 +971,7 @@
 			"kind": "sheet",
 			"w": 640,
 			"h": 240,
-			"description": "boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-13)"
+			"description": "boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14)"
 		},
 		{
 			"name": "bossHedgehogFill",
@@ -995,7 +995,7 @@
 			"kind": "sheet",
 			"w": 640,
 			"h": 480,
-			"description": "boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-13)"
+			"description": "boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14)"
 		},
 		{
 			"name": "bossCentipedeFill",
@@ -1019,7 +1019,7 @@
 			"kind": "sheet",
 			"w": 816,
 			"h": 68,
-			"description": "boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-13)"
+			"description": "boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14)"
 		},
 		{
 			"name": "bossRafflesiaFill",
