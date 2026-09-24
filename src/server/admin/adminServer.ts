@@ -1,8 +1,9 @@
 import { GAME_NAME } from "shared/module";
 import type { PlayerSaveData } from "shared/game/save";
 import type { LoadStatus } from "shared/net/net";
-import { ADMIN_ATTRIBUTE, isAdminUserId } from "shared/admin/config";
+import { ADMIN_ATTRIBUTE, ADMIN_LABELS, isAdminUserId } from "shared/admin/config";
 import { AdminOp, describeOps, readAdminOps, safeText } from "shared/admin/ops";
+import { banMessage, kickMessage, langTypeOfLocale } from "shared/data/rules";
 import {
 	ADMIN_LIMITS,
 	AdminEvent,
@@ -18,6 +19,19 @@ import {
 	ServerInfo,
 } from "shared/admin/protocol";
 import { ADMIN_LOG_STORE } from "../save/stores";
+import {
+	appendAudit,
+	auditDayPrefix,
+	auditIdentity,
+	auditKey,
+	auditNeedsScrub,
+	AuditRecord,
+	BAN_NOTE_SUFFIX,
+	LEGACY_AUDIT_KEY,
+	readAuditList,
+	splitBanNote,
+	trimAudit,
+} from "./auditLog";
 
 /*
  * Server side of the admin panel.
@@ -25,8 +39,10 @@ import { ADMIN_LOG_STORE } from "../save/stores";
  *   nothing from the client is trusted (types, ranges and lengths are validated even for admins)
  * - rate limited per admin (token bucket) + a cooldown on announcements; denied callers are logged (throttled)
  * - audit: every action (allowed or refused) is printed with the "[PZ-ADMIN]" prefix, kept in a memory ring shown
- *   in the panel and persisted (best effort, pcall) to the "ProjectZ_AdminLog" DataStore
+ *   in the panel and persisted (best effort, pcall) to the "ProjectZ_AdminLog" DataStore -- UserIds and filtered
+ *   text only, one key per server per day (server/admin/auditLog.ts); names are looked up when the panel shows it
  * - save edits go through the host (main.server.ts), which owns the sessions, the invariants and the report gate
+ * - what a kicked or banned player reads comes from shared/data/rules.ts (lang.ts, and a pointer to the rules)
  */
 
 const Players = game.GetService("Players");
@@ -39,11 +55,19 @@ const Workspace = game.GetService("Workspace");
 const LOG_PREFIX = "[PZ-ADMIN]";
 /** suffixed in Studio, so a playtest never appends to the live audit log (server/save/stores.ts) */
 const AUDIT_STORE = ADMIN_LOG_STORE;
-const AUDIT_KEY = "recent";
-/** entries kept in memory (panel) and in the DataStore document */
+/** entries kept in memory (panel); each stored key keeps auditLog.ts AUDIT_PER_KEY */
 const AUDIT_MEMORY = 200;
-const AUDIT_STORED = 300;
+/** entries waiting for a write that keeps failing, at most */
+const AUDIT_UNSAVED_MAX = 300;
 const AUDIT_FLUSH_INTERVAL = 30;
+/** the panel's log reads the stored keys of the last this-many UTC days (today included) */
+const AUDIT_READ_DAYS = 2;
+/** stored keys read per day at most (one per server that logged something that day) */
+const AUDIT_READ_KEYS = 20;
+/** the stored log is read again (other servers' new entries) when the panel asks this long after the last read */
+const AUDIT_RELOAD_S = 60;
+/** names looked up (GetNameFromUserIdAsync) per log request at most; the rest show as #UserId */
+const NAME_LOOKUPS = 8;
 
 /** admin requests: token bucket (the panel polls the player list every ~2 s) */
 const REQ_BURST = 12;
@@ -151,115 +175,195 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	const denied = new Map<number, number>();
 	/** admin UserId → watched UserId */
 	const watching = new Map<number, number>();
-	const audit: Array<AuditEntry> = [];
-	const unsaved: Array<AuditEntry> = [];
-	let auditStatus = "loading";
+	const audit: Array<AuditRecord> = [];
+	const unsaved: Array<AuditRecord> = [];
+	/** what the last read of the stored log said, and the last write's error (undefined = the last write landed) */
+	let auditStatus = "not read yet (read when an admin opens the log)";
+	let auditWriteError: string | undefined;
 	const [storeOk, storeValue] = pcall((): unknown => DataStoreService.GetDataStore(AUDIT_STORE));
 	const auditStore = storeOk ? (storeValue as DataStore) : undefined;
 	if (auditStore === undefined) auditStatus = `unavailable (${tostring(storeValue)})`;
+	/** os.clock() of the last read of the stored log (-huge = never); `reading` while one is in flight */
+	let auditReadAt = -math.huge;
+	let reading = false;
+	/** UserId → name, looked up for the panel only (never stored) */
+	const names = new Map<number, string>();
 
 	// ------------------------------------------------------------ audit
 
-	/** `persist` false: memory + output only (refused non-admin calls must not flood the stored log) */
-	function record(admin: Player, action: string, target: string, details: string, ok: boolean, persist = true): void {
+	/**
+	 * `targetId`: the player acted on (0 = none); `target`: a place word when there is no player ("all", "own world",
+	 * "own run"); `details`: filtered or game-written text only (server/admin/auditLog.ts). `persist` false: memory +
+	 * output only (refused non-admin calls must not flood the stored log).
+	 */
+	function record(
+		admin: Player,
+		action: string,
+		targetId: number,
+		target: string,
+		details: string,
+		ok: boolean,
+		persist = true,
+	): void {
 		// every string is valid UTF-8 and bounded: one bad entry must never block the DataStore flush
-		const e: AuditEntry = {
+		const e: AuditRecord = {
 			t: os.time(),
 			adminId: admin.UserId,
-			admin: admin.Name,
 			action: safeText(action, ADMIN_LIMITS.LOG_ACTION + 8),
-			target: safeText(target, 80),
+			targetId,
+			target: safeText(target, 24),
 			details: safeText(details, ADMIN_LIMITS.LOG_DETAILS),
 			ok,
 		};
+		// the server output carries ids only, like the stored log
+		const on = targetId !== 0 ? tostring(targetId) : e.target !== "" ? e.target : "-";
 		print(
-			`${LOG_PREFIX} ${e.admin} (${e.adminId}) ${e.action} target=${e.target === "" ? "-" : e.target} ` +
+			`${LOG_PREFIX} admin ${e.adminId} ${e.action} target=${on} ` +
 				`${ok ? "OK" : "REFUSED"}${e.details !== "" ? ` — ${e.details}` : ""}`,
 		);
 		audit.push(e);
-		while (audit.size() > AUDIT_MEMORY) audit.remove(0);
+		trimAudit(audit, AUDIT_MEMORY);
 		if (auditStore !== undefined && persist) unsaved.push(e);
 	}
 
 	/** the entry survives a JSON round trip (a DataStore write fails on invalid UTF-8) */
-	function encodable(e: AuditEntry): boolean {
+	function encodable(e: AuditRecord): boolean {
 		const [ok] = pcall(() => HttpService.JSONEncode(e));
 		return ok;
 	}
 
-	function readStoredEntry(v: unknown): AuditEntry | undefined {
-		if (!typeIs(v, "table")) return undefined;
-		const r = v as Record<string, unknown>;
-		if (!typeIs(r.t, "number") || !typeIs(r.action, "string")) return undefined;
-		return {
-			t: r.t,
-			adminId: typeIs(r.adminId, "number") ? r.adminId : 0,
-			admin: typeIs(r.admin, "string") ? r.admin : "?",
-			action: r.action,
-			target: typeIs(r.target, "string") ? r.target : "",
-			details: typeIs(r.details, "string") ? r.details : "",
-			ok: r.ok === true,
-		};
-	}
-
+	/** writes what is waiting, each entry to its own day's key of THIS server (one writer per key: no contention) */
 	function flushAudit(): void {
 		const store = auditStore;
 		if (store === undefined || unsaved.size() === 0) return;
-		const batch: Array<AuditEntry> = [];
+		const byKey = new Map<string, Array<AuditRecord>>();
 		// an entry that cannot be encoded is dropped alone, never blocking the others
 		for (const e of unsaved) {
-			if (encodable(e)) batch.push(e);
+			if (!encodable(e)) continue;
+			const key = auditKey(e.t, host.jobId);
+			const list = byKey.get(key) ?? [];
+			list.push(e);
+			byKey.set(key, list);
 		}
 		unsaved.clear();
-		if (batch.size() === 0) return;
-		const [ok, err] = pcall(() => {
-			store.UpdateAsync<unknown, unknown>(AUDIT_KEY, old => {
-				const list: Array<AuditEntry> = [];
-				if (typeIs(old, "table")) {
-					for (const v of old as Array<unknown>) {
-						const e = readStoredEntry(v);
-						if (e !== undefined) list.push(e);
-					}
-				}
-				for (const e of batch) list.push(e);
-				while (list.size() > AUDIT_STORED) list.remove(0);
-				return $tuple(list);
+		for (const [key, batch] of byKey) {
+			const [ok, err] = pcall(() => {
+				store.UpdateAsync<unknown, unknown>(key, old => $tuple(appendAudit(old, batch)));
 			});
-		});
-		if (ok) {
-			auditStatus = "ok";
-		} else {
+			if (ok) {
+				auditWriteError = undefined;
+				continue;
+			}
 			// keep them for the next attempt (bounded)
 			for (const e of batch) unsaved.push(e);
-			while (unsaved.size() > AUDIT_STORED) unsaved.remove(0);
-			auditStatus = `write failed (${tostring(err)})`;
+			while (unsaved.size() > AUDIT_UNSAVED_MAX) unsaved.remove(0);
+			auditWriteError = `write failed (${tostring(err)})`;
 			warn(`${LOG_PREFIX} audit log not saved: ${tostring(err)}`);
 		}
 	}
 
-	task.spawn(() => {
+	/** one stored document, or undefined when it could not be read */
+	function readKey(store: DataStore, key: string): unknown {
+		const [ok, value] = pcall((): unknown => store.GetAsync<unknown>(key)[0]);
+		if (!ok) error(value, 0);
+		return value;
+	}
+
+	/**
+	 * The entries written before the per-server-per-day keys (auditLog.ts LEGACY_AUDIT_KEY): read through the
+	 * sanitizer, and the document rewritten once without names and raw text if it still has any. Nothing appends to it.
+	 */
+	function readLegacy(store: DataStore): Array<AuditRecord> {
+		const raw = readKey(store, LEGACY_AUDIT_KEY);
+		if (!typeIs(raw, "table")) return [];
+		if (auditNeedsScrub(raw)) {
+			pcall(() => {
+				// nothing left to scrub (another server did it meanwhile): no write
+				store.UpdateAsync<unknown, unknown>(LEGACY_AUDIT_KEY, old =>
+					$tuple(auditNeedsScrub(old) ? readAuditList(old) : undefined),
+				);
+			});
+		}
+		return readAuditList(raw);
+	}
+
+	/**
+	 * The stored log of the last AUDIT_READ_DAYS days, merged into the memory ring (what this server logged is in both
+	 * once flushed: shown once). Read when an admin opens the log, and again after AUDIT_RELOAD_S -- never at boot:
+	 * a server nobody administers never reads it. Yields.
+	 */
+	function readStoredLog(): void {
 		const store = auditStore;
-		if (store === undefined) return;
-		const [ok, value] = pcall((): unknown => store.GetAsync<unknown>(AUDIT_KEY)[0]);
-		if (!ok) {
+		if (store === undefined || reading || os.clock() - auditReadAt < AUDIT_RELOAD_S) return;
+		reading = true;
+		const [ok, err] = pcall(() => {
+			const found = readLegacy(store);
+			for (let d = AUDIT_READ_DAYS - 1; d >= 0; d--) {
+				const pages = store.ListKeysAsync(auditDayPrefix(os.time() - d * 86400), AUDIT_READ_KEYS);
+				// one page is enough: a key per server that logged something that day, and AUDIT_READ_KEYS of them at most
+				const keys = pages.GetCurrentPage() as unknown as Array<DataStoreKey>;
+				for (let i = 0; i < keys.size() && i < AUDIT_READ_KEYS; i++) {
+					for (const e of readAuditList(readKey(store, keys[i].KeyName))) found.push(e);
+				}
+			}
+			const seen = new Set<string>();
+			const merged: Array<AuditRecord> = [];
+			for (const list of [found, audit]) {
+				for (const e of list) {
+					const id = auditIdentity(e);
+					if (seen.has(id)) continue;
+					seen.add(id);
+					merged.push(e);
+				}
+			}
+			merged.sort((a, b) => a.t < b.t);
+			audit.clear();
+			for (const e of merged) audit.push(e);
+			trimAudit(audit, AUDIT_MEMORY);
+		});
+		reading = false;
+		auditReadAt = os.clock();
+		if (ok) {
+			auditStatus = "ok";
+		} else {
 			auditStatus = RunService.IsStudio()
-				? `unavailable in Studio (${tostring(value)})`
-				: `read failed (${tostring(value)})`;
-			return;
+				? `unavailable in Studio (${tostring(err)})`
+				: `read failed (${tostring(err)})`;
 		}
-		auditStatus = "ok";
-		if (!typeIs(value, "table")) return;
-		const older: Array<AuditEntry> = [];
-		for (const v of value as Array<unknown>) {
-			const e = readStoredEntry(v);
-			if (e !== undefined) older.push(e);
+	}
+
+	/** a player's name for the panel: online, an admin label, a cached lookup, or `#id` past the lookup budget */
+	function nameOf(userId: number, budget: { left: number }): string {
+		const online = Players.GetPlayerByUserId(userId);
+		if (online !== undefined) return online.Name;
+		const known = names.get(userId) ?? ADMIN_LABELS.get(userId);
+		if (known !== undefined) return known;
+		if (budget.left <= 0 || userId <= 0) return `#${userId}`;
+		budget.left -= 1;
+		const [ok, name] = pcall(() => Players.GetNameFromUserIdAsync(asUser(userId)));
+		const shown = ok && typeIs(name, "string") ? name : `#${userId}`;
+		names.set(userId, shown);
+		return shown;
+	}
+
+	/** the memory ring as the panel shows it, newest first, with names looked up now (and never written anywhere) */
+	function auditForPanel(): Array<AuditEntry> {
+		const budget = { left: NAME_LOOKUPS };
+		const list: Array<AuditEntry> = [];
+		for (let i = audit.size() - 1; i >= 0; i--) {
+			const e = audit[i];
+			list.push({
+				t: e.t,
+				adminId: e.adminId,
+				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : "?",
+				action: e.action,
+				target: e.targetId !== 0 ? `${nameOf(e.targetId, budget)} (${e.targetId})` : e.target,
+				details: e.details,
+				ok: e.ok,
+			});
 		}
-		// stored history first, then whatever was logged while loading
-		for (const e of audit) older.push(e);
-		audit.clear();
-		for (const e of older) audit.push(e);
-		while (audit.size() > AUDIT_MEMORY) audit.remove(0);
-	});
+		return list;
+	}
 
 	task.spawn(() => {
 		while (true) {
@@ -343,6 +447,16 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		return filtered;
 	}
 
+	/** stored text shown back to one admin, as the filter returns it for them (a failure hides it) */
+	function filterFor(text: string, viewer: Player): string {
+		const [ok, result] = pcall(() => TextService.FilterStringAsync(text, viewer.UserId));
+		if (ok) {
+			const [ok2, shown] = pcall(() => (result as TextFilterResult).GetNonChatStringForUserAsync(viewer.UserId));
+			if (ok2 && typeIs(shown, "string")) return shown;
+		}
+		return "(hidden: the text filter is unavailable)";
+	}
+
 	/** a UserId (digits) or a username → [userId, name] */
 	function resolveTarget(raw: unknown): [number, string] | string {
 		const t = trimText(raw, ADMIN_LIMITS.TARGET);
@@ -385,20 +499,14 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		return target;
 	}
 
-	function sendPatch(
-		target: Player,
-		outcome: AdminEditOutcome,
-		ops: Array<AdminOp>,
-		by: Player,
-		reset: boolean,
-	): void {
+	/** the edit reaches the edited player's client; it does not name the admin (the toast says "an administrator") */
+	function sendPatch(target: Player, outcome: AdminEditOutcome, ops: Array<AdminOp>, reset: boolean): void {
 		const ev: AdminEvent = {
 			kind: "patch",
 			rev: outcome.rev,
 			runRev: outcome.runRev,
 			ops: reset ? [] : ops,
 			reset: reset ? outcome.save : undefined,
-			by: by.Name,
 		};
 		remotes.event.FireClient(target, ev);
 		host.setPatchResend(target, outcome.rev, () => {
@@ -430,17 +538,22 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			const target = onlineTarget(caller, req.userId, "kick");
 			const reason = trimText(req.reason, ADMIN_LIMITS.KICK_REASON);
 			if (typeIs(target, "string")) {
-				record(caller, "kick", tostring(req.userId), target, false);
+				record(caller, "kick", isOnlineId(req.userId) ? req.userId : 0, "", target, false);
 				return fail(target);
 			}
 			if (reason === undefined) return fail(`reason: at most ${ADMIN_LIMITS.KICK_REASON} characters`);
+			// the player reads the reason only as the text filter returned it; the log keeps exactly that, never the
+			// typed text (a reason the filter could not check is neither shown nor stored)
 			const shown = reason !== "" ? filterText(reason, caller) : "";
-			const msg =
-				shown !== undefined && shown !== ""
-					? `You were kicked by an administrator: ${shown}`
-					: "You were kicked by an administrator.";
-			record(caller, "kick", `${target.Name} (${target.UserId})`, reason, true);
-			target.Kick(msg);
+			record(
+				caller,
+				"kick",
+				target.UserId,
+				"",
+				shown === undefined ? "reason not shown (text filter unavailable)" : shown,
+				true,
+			);
+			target.Kick(kickMessage(langTypeOfLocale(target.LocaleId), shown));
 			return { ok: true, message: `${target.Name} was kicked` };
 		}
 
@@ -450,11 +563,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			const [userId, name] = resolved;
 			const label = `${name} (${userId})`;
 			if (userId === caller.UserId) {
-				record(caller, "ban", label, "refused: self", false);
+				record(caller, "ban", userId, "", "refused: self", false);
 				return fail("you cannot ban yourself");
 			}
 			if (isAdminUserId(userId)) {
-				record(caller, "ban", label, "refused: target is an admin", false);
+				record(caller, "ban", userId, "", "refused: target is an admin", false);
 				return fail("you cannot ban another admin");
 			}
 			const dur = req.duration;
@@ -472,13 +585,19 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				return fail("invalid options");
 			}
 			const shown = display !== "" ? filterText(display, caller) : "";
-			const displayReason =
-				shown !== undefined && shown !== ""
-					? shown
-					: "You are banned from this experience by an administrator.";
-			// accountability: the private reason (only visible in the ban history) names the admin
+			// what the banned player reads (Roblox shows it on every attempt to join): the reason as the filter returned
+			// it, or the fixed line, and where the rules and the appeal are -- the experience page, the one place a
+			// banned player can still open (shared/data/rules.ts). In the target's language when they are online
+			const online = Players.GetPlayerByUserId(userId);
+			const displayReason = banMessage(
+				online !== undefined ? langTypeOfLocale(online.LocaleId) : 0,
+				shown,
+				ADMIN_LIMITS.DISPLAY_REASON,
+				safeText,
+			);
+			// accountability: the private reason (only visible in the ban history) names the admin by UserId
 			// the "| by admin" suffix is never cut: the note is trimmed to leave room for it
-			const suffix = ` | by ${caller.Name} (${caller.UserId})`;
+			const suffix = `${BAN_NOTE_SUFFIX}${caller.UserId}`;
 			const note = safeText(
 				privateReason !== "" ? privateReason : "(no private reason)",
 				ADMIN_LIMITS.PRIVATE_REASON - suffix.size(),
@@ -494,14 +613,19 @@ export function startAdminServer(host: AdminHost): AdminServer {
 					ExcludeAltAccounts: req.excludeAlts as boolean,
 				}),
 			);
-			const details = `${BAN_DURATION_LABEL[dur as BanDuration]}, universe=${tostring(req.applyToUniverse)}, excludeAlts=${tostring(req.excludeAlts)}, reason="${display}", private="${privateReason}"`;
+			// the log keeps the options and the reason AS SHOWN (filtered); the typed text and the private note never
+			// (the note lives in Roblox's ban history, read back through the filter: `banHistory` below)
+			const shownLog =
+				shown === undefined ? "not shown (text filter unavailable)" : shown === "" ? "none" : `"${shown}"`;
+			const details =
+				`${BAN_DURATION_LABEL[dur as BanDuration]}, universe=${tostring(req.applyToUniverse)}, ` +
+				`excludeAlts=${tostring(req.excludeAlts)}, shown reason ${shownLog}, private note ${privateReason !== "" ? "yes" : "no"}`;
 			if (!ok) {
-				record(caller, "ban", label, `FAILED ${tostring(err)} | ${details}`, false);
+				record(caller, "ban", userId, "", `FAILED ${tostring(err)} | ${details}`, false);
 				return fail(banApiError(err));
 			}
-			record(caller, "ban", label, details, true);
+			record(caller, "ban", userId, "", details, true);
 			// BanAsync removes a banned player who is online; make sure of it
-			const online = Players.GetPlayerByUserId(userId);
 			if (online !== undefined) {
 				task.delay(1, () => {
 					if (online.Parent !== undefined) online.Kick(displayReason);
@@ -520,10 +644,10 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				Players.UnbanAsync({ UserIds: [userId], ApplyToUniverse: req.applyToUniverse as boolean }),
 			);
 			if (!ok) {
-				record(caller, "unban", label, `FAILED ${tostring(err)}`, false);
+				record(caller, "unban", userId, "", `FAILED ${tostring(err)}`, false);
 				return fail(banApiError(err));
 			}
-			record(caller, "unban", label, `universe=${tostring(req.applyToUniverse)}`, true);
+			record(caller, "unban", userId, "", `universe=${tostring(req.applyToUniverse)}`, true);
 			return { ok: true, message: `${label} unbanned` };
 		}
 
@@ -535,6 +659,22 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			if (!ok) return fail(banApiError(pages));
 			const entries: Array<BanHistoryEntry> = [];
 			const bp = pages as BanHistoryPages;
+			// the reasons were typed by an admin (here, in the Creator Hub or through Open Cloud) and never went through
+			// the filter as a whole: each one is shown to the admin reading it as the filter returns it for them (F12)
+			const seen = new Map<string, string>();
+			const forViewer = (text: string): string => {
+				if (text === "") return "";
+				const hit = seen.get(text);
+				if (hit !== undefined) return hit;
+				const shown = filterFor(text, caller);
+				seen.set(text, shown);
+				return shown;
+			};
+			// the note's " | by admin <UserId>" was written by the game: only the typed part goes through the filter
+			const privateForViewer = (note: string): string => {
+				const [typed, suffix] = splitBanNote(note);
+				return `${forViewer(typed)}${suffix}`;
+			};
 			for (let page = 0; page < 5 && entries.size() < ADMIN_LIMITS.BAN_HISTORY_ENTRIES; page++) {
 				const [pok, list] = pcall(() => bp.GetCurrentPage());
 				if (!pok || !typeIs(list, "table")) break;
@@ -545,8 +685,8 @@ export function startAdminServer(host: AdminHost): AdminServer {
 						ban: r.Ban === true,
 						startTime: typeIs(r.StartTime, "string") ? r.StartTime : tostring(r.StartTime ?? "?"),
 						duration: typeIs(r.Duration, "number") ? r.Duration : 0,
-						displayReason: typeIs(r.DisplayReason, "string") ? r.DisplayReason : "",
-						privateReason: typeIs(r.PrivateReason, "string") ? r.PrivateReason : "",
+						displayReason: forViewer(typeIs(r.DisplayReason, "string") ? r.DisplayReason : ""),
+						privateReason: privateForViewer(typeIs(r.PrivateReason, "string") ? r.PrivateReason : ""),
 						placeId: typeIs(r.PlaceId, "number") ? r.PlaceId : 0,
 					});
 					if (entries.size() >= ADMIN_LIMITS.BAN_HISTORY_ENTRIES) break;
@@ -565,13 +705,12 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			const ops = readAdminOps(req.ops, ADMIN_LIMITS.OPS_PER_REQUEST);
 			if (ops === undefined) return fail("invalid edit");
 			const outcome = host.edit(target, ops);
-			const label = `${target.Name} (${target.UserId})`;
 			if (!outcome.ok) {
-				record(caller, "edit", label, `FAILED ${outcome.error ?? "?"}: ${describeOps(ops)}`, false);
+				record(caller, "edit", target.UserId, "", `FAILED ${outcome.error ?? "?"}: ${describeOps(ops)}`, false);
 				return fail(outcome.error ?? "edit failed");
 			}
-			record(caller, "edit", label, describeOps(ops), true);
-			sendPatch(target, outcome, ops, caller, false);
+			record(caller, "edit", target.UserId, "", describeOps(ops), true);
+			sendPatch(target, outcome, ops, false);
 			return {
 				ok: true,
 				message: outcome.persist ? undefined : "applied in memory only (this session is not saved)",
@@ -583,13 +722,12 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			const target = onlineTarget(caller, req.userId, "reset");
 			if (typeIs(target, "string")) return fail(target);
 			const outcome = host.edit(target, undefined);
-			const label = `${target.Name} (${target.UserId})`;
 			if (!outcome.ok) {
-				record(caller, "resetSave", label, `FAILED ${outcome.error ?? "?"}`, false);
+				record(caller, "resetSave", target.UserId, "", `FAILED ${outcome.error ?? "?"}`, false);
 				return fail(outcome.error ?? "reset failed");
 			}
-			record(caller, "resetSave", label, "save reset to a new player's", true);
-			sendPatch(target, outcome, [], caller, true);
+			record(caller, "resetSave", target.UserId, "", "save reset to a new player's", true);
+			sendPatch(target, outcome, [], true);
 			return { ok: true, data: outcome.save };
 		}
 
@@ -603,10 +741,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			}
 			const filtered = filterText(text, caller);
 			if (filtered === undefined) {
-				record(caller, "announce", "all", `FAILED text filter: "${text}"`, false);
+				// the text the filter could not check is neither sent nor stored
+				record(caller, "announce", 0, "all", "FAILED: text filter unavailable (the text was not sent)", false);
 				return fail("the text filter is unavailable right now; try again");
 			}
-			record(caller, "announce", "all", `"${filtered}"`, true);
+			record(caller, "announce", 0, "all", `"${filtered}"`, true);
 			const ev: AdminEvent = { kind: "announce", text: filtered, from: caller.DisplayName };
 			remotes.event.FireAllClients(ev);
 			return { ok: true, message: "announcement sent" };
@@ -622,15 +761,14 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				players: Players.GetPlayers().size(),
 				maxPlayers: Players.MaxPlayers,
 				dataStore: host.dataStoreStatus(),
-				auditStore: auditStatus,
+				auditStore: auditWriteError ?? auditStatus,
 			};
 			return { ok: true, data: info };
 		}
 
 		if (kind === "auditLog") {
-			const list: Array<AuditEntry> = [];
-			for (let i = audit.size() - 1; i >= 0; i--) list.push(audit[i]);
-			return { ok: true, data: list };
+			readStoredLog();
+			return { ok: true, data: auditForPanel() };
 		}
 
 		if (kind === "watch") {
@@ -649,6 +787,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				record(
 					caller,
 					"assist",
+					0,
 					"own run",
 					"world tools used: this run earns no coins / achievements / records",
 					true,
@@ -661,7 +800,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			const action = trimText(req.action, ADMIN_LIMITS.LOG_ACTION);
 			const details = trimText(req.details, ADMIN_LIMITS.LOG_DETAILS);
 			if (action === undefined || action === "" || details === undefined) return fail("invalid log entry");
-			record(caller, `local:${action}`, "own world", details, true);
+			record(caller, `local:${action}`, 0, "own world", details, true);
 			return { ok: true };
 		}
 
@@ -679,7 +818,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				const kind = typeIs(raw, "table") ? (raw as Record<string, unknown>).kind : undefined;
 				const k =
 					typeIs(kind, "string") && string.match(kind, "^[%w_]+$")[0] !== undefined ? kind.sub(1, 24) : "?";
-				record(player, "DENIED", "", `non-admin called the admin remote (request "${k}")`, false, false);
+				record(player, "DENIED", 0, "", `non-admin called the admin remote (request "${k}")`, false, false);
 			}
 			return fail("forbidden");
 		}

@@ -50,6 +50,7 @@ import { daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import type { ServerSimulation } from "./simulation";
+import * as Analytics from "../analytics/events";
 
 /**
  * §7.2: "O estado de mundo fica 5 min em memória" after a disconnect (seconds).
@@ -506,6 +507,7 @@ export class LifeKeeper {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
+		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count());
 	}
 
 	/**

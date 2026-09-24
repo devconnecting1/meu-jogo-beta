@@ -10,6 +10,11 @@
  *   npm run cloud -- upload-art [--dry-run] upload design/world-art/*.png (new or changed ones only), write their
  *                                           ids to design/world-art/assets.json and regenerate
  *                                           src/client/view/worldArtAssets.ts; --dry-run lists without a key
+ *   npm run cloud -- erase <userId> [--dry-run | --yes]
+ *                                           right to erasure: delete the player's key from every per-player store
+ *                                           (and their _studio copies) and take their entries out of the admin log;
+ *                                           prints the plan first and does it only with --yes; --dry-run reads no key;
+ *                                           any other argument refuses the whole command (tools/rtbf.mjs)
  *
  * THE KEY IS NEVER PRINTED. It is read from `.env` (gitignored), passed in a header, and scrubbed out of any
  * error body before anything reaches the terminal -- an API error that echoes the request would otherwise put
@@ -27,14 +32,30 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	AUDIT_KEY_PREFIX,
+	LEGACY_AUDIT_KEY,
+	SCOPE,
+	eraseAuditEntries,
+	erasePlan,
+	listedKey,
+	parseEraseArgs,
+} from "./rtbf.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const API = "https://apis.roblox.com";
+/**
+ * A test is running this (tools/test-save.mjs sets these): then nothing may reach the real Open Cloud -- the repo's
+ * `.env` on the owner's PC holds a real key. Only tools/fake-open-cloud.mjs, preloaded, may answer.
+ */
+const UNDER_TEST = ["PZ_CLOUD_ENV", "PZ_FAKE_CLOUD_STATE"].some(name => process.env[name] !== undefined);
 
 // ---------------------------------------------------------------- credentials
 
 /** reads `.env` and checks that `required` are set (each command asks only for what it uses) */
 function loadEnv(required) {
-	const path = join(ROOT, ".env");
+	// PZ_CLOUD_ENV: tools/test-save.mjs points this at a throwaway file with a fake key (and a fake Open Cloud)
+	const path = process.env.PZ_CLOUD_ENV ?? join(ROOT, ".env");
 	if (!existsSync(path)) {
 		fail(
 			"não achei o .env.\n" +
@@ -64,9 +85,17 @@ let KEY = "";
 let UNIVERSE = "";
 let PLACE = "";
 
-function useKey(required = ["ROBLOX_API_KEY", "ROBLOX_UNIVERSE_ID", "ROBLOX_PLACE_ID"]) {
+/**
+ * Reads the key and the ids. `keyName`: a command with its own, narrower key (erase: ROBLOX_ERASE_API_KEY, data
+ * stores only) uses it when set, and says so when it falls back to the general ROBLOX_API_KEY.
+ */
+function useKey(required = ["ROBLOX_API_KEY", "ROBLOX_UNIVERSE_ID", "ROBLOX_PLACE_ID"], keyName = "ROBLOX_API_KEY") {
 	env = loadEnv(required);
-	KEY = env.ROBLOX_API_KEY;
+	KEY = env[keyName] || env.ROBLOX_API_KEY || "";
+	if (KEY === "") fail(`falta ${keyName} (ou ROBLOX_API_KEY) no .env (veja .env.example)`);
+	if (keyName !== "ROBLOX_API_KEY" && !env[keyName]) {
+		console.log(`(sem ${keyName} no .env: usando ROBLOX_API_KEY; o recomendado é uma chave só para isto)`);
+	}
 	UNIVERSE = env.ROBLOX_UNIVERSE_ID ?? "";
 	PLACE = env.ROBLOX_PLACE_ID ?? "";
 }
@@ -84,6 +113,9 @@ function fail(msg) {
 // ---------------------------------------------------------------- transport
 
 async function call(url, { method = "GET", body, contentType } = {}) {
+	if (UNDER_TEST && globalThis.__PZ_FAKE_OPEN_CLOUD !== true) {
+		fail("ambiente de teste sem o Open Cloud falso (tools/fake-open-cloud.mjs): nada vai para apis.roblox.com");
+	}
 	const headers = { "x-api-key": KEY };
 	if (contentType !== undefined) headers["Content-Type"] = contentType;
 	const res = await fetch(url, { method, headers, body });
@@ -139,10 +171,7 @@ async function save(userId) {
 	if (!userId) fail("uso: npm run cloud -- save <userId>");
 	// the save is one entry per player, keyed by userId (src/server/main.server.ts)
 	const store = "ProjectZ_Save_v2";
-	const url =
-		`https://apis.roblox.com/cloud/v2/universes/${UNIVERSE}/data-stores/${store}` +
-		`/entries/${encodeURIComponent(userId)}`;
-	const r = await call(url);
+	const r = await call(entryUrl(store, userId));
 	if (!r.ok) {
 		if (r.status === 404) return console.log(`sem save para ${userId} em ${store} (jogador nunca salvou aqui)`);
 		fail(`${r.why}\n  ${r.body ?? ""}`);
@@ -163,6 +192,8 @@ async function bans() {
 
 async function publish(live) {
 	// rojo build is what CI already does, so what goes up is exactly what CI verified
+	// place properties a script cannot set (Players.BanningEnabled) ride on the build: refuse to publish without them
+	execFileSync(process.execPath, [join(ROOT, "tools", "check-place.mjs")], { cwd: ROOT, stdio: "inherit" });
 	const out = join(ROOT, "ProjectZ-cloud.rbxl");
 	console.log("montando o lugar com o rojo...");
 	execFileSync("rojo", ["build", "-o", out], { cwd: ROOT, stdio: "inherit" });
@@ -309,6 +340,151 @@ function regenerateArtModule() {
 	console.log("pronto: `npm run build` e a cidade sai texturizada (sem id, cada superfície continua lisa)");
 }
 
+// ---------------------------------------------------------------- right to erasure
+
+/**
+ * An entry of `store` in the default scope, by its key. Always the SCOPED path (`/scopes/global/entries/<key>`), the
+ * same one the listing uses: one path shape for read, update and delete, so no call can land on a different
+ * resource than the one listed (tools/fake-open-cloud.mjs refuses the unscoped form).
+ */
+const entryUrl = (store, key) =>
+	`${API}/cloud/v2/universes/${UNIVERSE}/data-stores/${encodeURIComponent(store)}` +
+	`/scopes/${SCOPE}/entries/${encodeURIComponent(key)}`;
+
+/** listing pages read at most (256 keys each); past that the listing is refused, never silently cut */
+const MAX_LIST_PAGES = 200;
+
+/** every key of `store` starting with `prefix` (the default scope); the prefix is matched here, not by the API */
+async function listKeys(store, prefix) {
+	const keys = [];
+	let token = "";
+	for (let page = 0; ; page++) {
+		if (page >= MAX_LIST_PAGES) {
+			throw new Error(`${store}: mais de ${MAX_LIST_PAGES} páginas de chaves; a listagem foi interrompida`);
+		}
+		const url =
+			`${API}/cloud/v2/universes/${UNIVERSE}/data-stores/${encodeURIComponent(store)}` +
+			`/scopes/${SCOPE}/entries?maxPageSize=256${token !== "" ? `&pageToken=${encodeURIComponent(token)}` : ""}`;
+		const r = await call(url);
+		if (!r.ok) {
+			if (r.status === 404) return keys;
+			throw new Error(`${store}: listar chaves: ${r.why}\n  ${r.body ?? ""}`);
+		}
+		for (const row of r.data.dataStoreEntries ?? []) {
+			const key = listedKey(row);
+			if (key.startsWith(prefix)) keys.push(key);
+		}
+		token = r.data.nextPageToken ?? "";
+		if (token === "") return keys;
+	}
+}
+
+/** one admin log document without `userId`'s entries; written back only when something was removed */
+async function scrubAuditKey(store, key, userId) {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const r = await call(entryUrl(store, key));
+		if (!r.ok) {
+			if (r.status === 404) return 0;
+			throw new Error(`${store}/${key}: ler: ${r.why}\n  ${r.body ?? ""}`);
+		}
+		const raw = r.data.value;
+		const doc = typeof raw === "string" ? JSON.parse(raw) : raw;
+		const [kept, removed] = eraseAuditEntries(doc, userId);
+		if (removed === 0) return 0;
+		// the whole value (partial updates do not exist; what stays is in the stored shape, with no name or typed
+		// text), and the etag, so a server that wrote meanwhile is not overwritten
+		const body = JSON.stringify({
+			value: kept,
+			etag: r.data.etag,
+			users: r.data.users,
+			attributes: r.data.attributes,
+		});
+		const w = await call(entryUrl(store, key), { method: "PATCH", body, contentType: "application/json" });
+		if (w.ok) return removed;
+		if (w.status !== 409 && w.status !== 412 && !(w.status === 400 && /etag/i.test(w.body ?? ""))) {
+			throw new Error(`${store}/${key}: gravar: ${w.why}\n  ${w.body ?? ""}`);
+		}
+		// a server appended to this key between the read and the write: read it again
+	}
+	throw new Error(`${store}/${key}: a chave mudou 3 vezes seguidas durante a limpeza; rode de novo`);
+}
+
+const ERASE_USAGE = "uso: npm run cloud -- erase <userId> [--dry-run | --yes]   (o UserId numérico, nunca o nome)";
+
+async function erase(args) {
+	const parsed = parseEraseArgs(args);
+	if (parsed.error !== undefined) fail(`${parsed.error}\n${ERASE_USAGE}\nnada foi feito.`);
+	const uid = parsed.userId;
+	console.log(`apagar os dados do jogador ${uid} (pedido de exclusão / RTBF):`);
+	for (const s of erasePlan(uid)) {
+		console.log(
+			s.kind === "delete"
+				? `  apagar a chave ${s.key} de ${s.store}`
+				: `  tirar as entradas do ${uid} do log de admin ${s.store} (${s.keys})`,
+		);
+	}
+	console.log(
+		"\nANTES: o jogador tem de estar FORA do jogo. Se estiver online, kick pelo painel de admin (ou ban, se ele não\n" +
+			"deve voltar) e espere 1 minuto: ao sair, o servidor dele ainda grava o registro de títulos, o save e o log\n" +
+			"de admin -- rodar antes disso recria as chaves que este comando apaga.",
+	);
+	if (parsed.dryRun) {
+		console.log("(dry run: nada foi apagado, nenhuma chave foi lida)");
+		return;
+	}
+	if (!parsed.yes)
+		fail("isto APAGA dados de verdade: confira o plano acima e rode de novo com --yes. Nada foi feito.");
+	// a key for this job only (data stores: read, list, update, delete entries), apart from publish / upload-art
+	useKey(["ROBLOX_UNIVERSE_ID"], "ROBLOX_ERASE_API_KEY");
+	let failed = 0;
+	let existed = 0;
+	for (const s of erasePlan(uid)) {
+		if (s.kind === "delete") {
+			const r = await call(entryUrl(s.store, s.key), { method: "DELETE" });
+			if (r.ok) {
+				existed++;
+				console.log(`  ok     ${s.store}/${s.key} apagada`);
+			} else if (r.status === 404) {
+				console.log(`  ok     ${s.store}/${s.key} não existia`);
+			} else {
+				failed++;
+				console.log(`  FALHOU ${s.store}/${s.key}: ${r.why}\n  ${r.body ?? ""}`);
+			}
+			continue;
+		}
+		// the admin log key by key: one that fails is reported and the others are still cleaned
+		let keys;
+		try {
+			keys = [LEGACY_AUDIT_KEY, ...(await listKeys(s.store, AUDIT_KEY_PREFIX))];
+		} catch (e) {
+			failed++;
+			console.log(`  FALHOU ${scrub(e instanceof Error ? e.message : e)}`);
+			continue;
+		}
+		let removed = 0;
+		for (const key of keys) {
+			try {
+				removed += await scrubAuditKey(s.store, key, uid);
+			} catch (e) {
+				failed++;
+				console.log(`  FALHOU ${scrub(e instanceof Error ? e.message : e)}`);
+			}
+		}
+		console.log(`  ok     ${s.store}: ${removed} entrada(s) removida(s) em ${keys.length} chave(s)`);
+	}
+	console.log(
+		"\no Roblox guarda versões antigas de uma chave por até 30 dias e só então as remove de vez; é o mesmo prazo\n" +
+			"das exclusões pelos modelos de RTBF do Creator Hub (docs/CREATOR_HUB.md).",
+	);
+	if (failed > 0) fail(`${failed} passo(s) falharam; rode de novo (o que já foi apagado continua apagado)`);
+	if (existed === 0) {
+		fail(
+			`nenhuma das seis chaves de ${uid} existia: confira o UserId e ROBLOX_UNIVERSE_ID (ou os modelos de RTBF já\n` +
+				"  apagaram tudo). O log de admin foi limpo mesmo assim.",
+		);
+	}
+}
+
 // ---------------------------------------------------------------- entry
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -319,10 +495,15 @@ const commands = {
 	save: () => save(rest[0]),
 	publish: () => publish(rest.includes("--live")),
 	"upload-art": () => uploadArt(rest.includes("--dry-run")),
+	erase: () => erase(rest),
 };
 if (!cmd || !(cmd in commands)) {
-	console.log("uso: npm run cloud -- <whoami|stores|save <userId>|bans|publish [--live]|upload-art [--dry-run]>");
+	console.log(
+		"uso: npm run cloud -- <whoami|stores|save <userId>|bans|publish [--live]|upload-art [--dry-run]|" +
+			"erase <userId> [--dry-run | --yes]>",
+	);
 	process.exit(cmd ? 1 : 0);
 }
-if (cmd !== "upload-art") useKey();
+// upload-art and erase ask for their own key (a dry run of either reads none)
+if (cmd !== "upload-art" && cmd !== "erase") useKey();
 await commands[cmd]();

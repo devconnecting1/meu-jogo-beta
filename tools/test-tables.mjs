@@ -1038,6 +1038,15 @@ check(
 			status.Size.Y.Scale === 1,
 		`Joao ${one.Position.Y.Scale}/${one.Size.Y.Scale}, Marta ${two.Position.Y.Scale.toFixed(2)}/${two.Size.Y.Scale.toFixed(2)}`,
 	);
+	// compliance F9: a player's name never lands in the localization table; the title under it is game text
+	check(
+		"o nome nao e capturado pela traducao automatica (AutoLocalize off); o titulo e a coluna Status sim",
+		one.AutoLocalize === false &&
+			two.AutoLocalize === false &&
+			byName("Marta").FindFirstChild("Sname").AutoLocalize !== false &&
+			status.AutoLocalize !== false,
+	);
+	check("...e a coluna de nome do admin tambem", PLAYERS.PLAYER_COLUMNS.find(c => c.key === "name")?.raw === true);
 }
 input.keyScoreboard = false;
 setClock(5002);
