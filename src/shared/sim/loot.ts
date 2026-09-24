@@ -5,12 +5,21 @@
  * tables and its own roll, and they had drifted (QA L1).
  *
  *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05)
+ *   rollPumpLoot       a gas station's pump island: the same, from its own table (EDI-16)
+ *   isContainer        what the two sides' lazy sweeps roll: a building or a pump island
  *   thiefFind          the Thief skill's extra: one more slot of the building's table, for the searcher alone
  *   rollMapItemDrop    one hit (or E) on a tree, a car or a bin
  *
  * Pure: no Instances, no services; every roll goes through the shared rng (a test seeds it and replays it).
  */
-import { BUILDING_SPAWNS, MAP_ITEM_LOOT, MapLootEntry, SpawnEntry } from "shared/data/spawns";
+import {
+	BUILDING_SPAWNS,
+	MAP_ITEM_LOOT,
+	MapLootEntry,
+	PUMP_LOOT,
+	PUMP_LOOT_SLOTS,
+	SpawnEntry,
+} from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
 import type { PlayerSaveData } from "shared/game/save";
@@ -40,15 +49,32 @@ function rollSlot(rows: Array<SpawnEntry>): LootDrop | undefined {
 	return { kind: e.kind, id: e.index, count: rndInt(e.min, e.max) };
 }
 
-/** the original's lazy loot: `slots` rolls of the building's table (an empty roll is an empty slot) */
-export function rollBuildingLoot(bt: number, slots: number): Array<LootDrop> {
-	const rows = buildingLootRows(bt);
+/** `slots` rolls of `rows` (an empty roll is an empty slot) */
+function rollSlots(rows: Array<SpawnEntry>, slots: number): Array<LootDrop> {
 	const out = new Array<LootDrop>();
 	for (let i = 0; i < slots; i++) {
 		const d = rollSlot(rows);
 		if (d !== undefined) out.push(d);
 	}
 	return out;
+}
+
+/** the original's lazy loot: `slots` rolls of the building's table (an empty roll is an empty slot) */
+export function rollBuildingLoot(bt: number, slots: number): Array<LootDrop> {
+	return rollSlots(buildingLootRows(bt), slots);
+}
+
+/** a pump island's fuel (shared/data/spawns.ts PUMP_LOOT): one slot, rolled like a building's (EDI-16) */
+export function rollPumpLoot(): Array<LootDrop> {
+	return rollSlots(PUMP_LOOT, PUMP_LOOT_SLOTS);
+}
+
+/**
+ * Is this solid a container the lazy sweeps roll (the client's MP_PHASE 2 one and the server's): a building, or a gas
+ * station's pump island (`rollPumpLoot`), as opposed to anything else in reach?
+ */
+export function isContainer(s: Solid): boolean {
+	return (s.kind === "building" || s.tags === "pump") && s.lootItems !== undefined;
 }
 
 /**

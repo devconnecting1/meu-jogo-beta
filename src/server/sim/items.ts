@@ -42,8 +42,8 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
-import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
-import { edgeDist, isMapItem } from "shared/sim/interactQuery";
+import { isContainer, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
+import { edgeDist, isMapItem, isPump } from "shared/sim/interactQuery";
 import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
@@ -398,11 +398,7 @@ export class ServerItems {
 		if (b === undefined) return { building: undefined, taken };
 		const loot = b.lootItems;
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
-		for (const drop of loot) {
-			addItem(save, drop.kind, drop.id, drop.count);
-			creditTaken(save, drop.kind, drop.id, drop.count);
-			taken.push(drop);
-		}
+		this.takeAll(save, b, hours, taken);
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
 		// building's own loot, the shared part, is exactly what anyone else would have found
 		const extra = thiefFind(save, b.buildingType ?? 0);
@@ -411,14 +407,46 @@ export class ServerItems {
 			creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
-		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is
-		// told the building is empty, which by then it is (§8.1 "o primeiro pedido processado leva tudo")
-		b.lootItems = [];
-		b.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
 		return { building: b, taken };
 	}
 
-	/** does this building still hold something? (what the `LootFlag` delta carries, §4.5) */
+	/**
+	 * A survivor drains a gas station's pump island (EDI-16): the same rules as a building's search (MP-05) -- the
+	 * first E takes everything, for everybody, and the island is dry until ITEM_RESPAWN_HOURS of game time have passed
+	 * -- minus the Thief's extra: the skill finds one more thing when SEARCHING A BUILDING ("Searching a building finds
+	 * one more item"), and a pump has nothing more to find than the fuel in it. The reach is the caller's
+	 * (server/sim/interaction.ts, at the SERVER's position, with a clear line to the island).
+	 */
+	drain(save: PlayerSaveData, pump: Solid, hours: number): Array<{ kind: number; id: number; count: number }> {
+		const taken = new Array<{ kind: number; id: number; count: number }>();
+		if (!isPump(pump) || pump.removed === true) return taken;
+		const loot = pump.lootItems;
+		if (loot === undefined || loot.size() === 0) return taken;
+		this.takeAll(save, pump, hours, taken);
+		return taken;
+	}
+
+	/**
+	 * Everything in container `c` into `save`, and the container empty until `hours` + ITEM_RESPAWN_HOURS. Emptied
+	 * before anything can yield: a second searcher this tick finds it empty, which by then it is (§8.1 "o primeiro
+	 * pedido processado leva tudo").
+	 */
+	private takeAll(
+		save: PlayerSaveData,
+		c: Solid,
+		hours: number,
+		taken: Array<{ kind: number; id: number; count: number }>,
+	): void {
+		for (const drop of c.lootItems ?? []) {
+			addItem(save, drop.kind, drop.id, drop.count);
+			creditTaken(save, drop.kind, drop.id, drop.count);
+			taken.push(drop);
+		}
+		c.lootItems = [];
+		c.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
+	}
+
+	/** does this building (or pump island) still hold something? (what the `LootFlag` delta carries, §4.5) */
 	hasLoot(b: Solid): boolean {
 		const loot = b.lootItems;
 		return loot !== undefined && loot.size() > 0;
@@ -427,7 +455,8 @@ export class ServerItems {
 	/**
 	 * The original's lazy loot, on a sweep instead of every frame: a building rolls its slots the first time
 	 * a survivor comes within LOOT_ROLL_RANGE, and again once its respawn timer has passed. Rolling at world
-	 * generation would mean rolling 140 buildings nobody will ever walk into.
+	 * generation would mean rolling 140 buildings nobody will ever walk into. A gas station's pump islands are
+	 * containers too (EDI-16) and roll the same way, from their own table.
 	 */
 	rollNearby(players: ReadonlyArray<{ x: number; y: number }>, hours: number, dt: number): void {
 		this.sweep -= dt;
@@ -443,7 +472,7 @@ export class ServerItems {
 				this.scratch,
 			);
 			for (const s of found) {
-				if (s.kind !== "building") continue;
+				if (!isContainer(s)) continue;
 				const loot = s.lootItems;
 				if (loot === undefined || loot.size() > 0) continue;
 				if (hours < (s.lootTimer ?? 0)) continue;
@@ -459,10 +488,11 @@ export class ServerItems {
 	 * client/systems/interaction.ts and put on the shared rng so a test can replay it).
 	 *
 	 * One function on purpose, and the roll itself is the SHARED one (shared/sim/loot.ts), the very roll the
-	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds.
+	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds. A pump island
+	 * rolls its fuel (EDI-16), a building its type's table.
 	 */
 	rollLoot(s: Solid): void {
-		s.lootItems = rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+		s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 	}
 
 	// ---------------------------------------------------------------- map items (§8.1)
