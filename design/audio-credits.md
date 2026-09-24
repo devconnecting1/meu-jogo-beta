@@ -1,4 +1,4 @@
-# Créditos e licença do áudio — Project Z
+# Créditos e licença do áudio — Last Town
 
 Registro de **todo** som que o jogo carrega: nome lógico (`src/shared/data/sounds.ts`), asset, criador e por que
 podemos usar. Regra da casa (CON-01/CON-02 de `docs/DESIGN_RULES.md`, estendida ao áudio):

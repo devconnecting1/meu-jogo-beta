@@ -1,5 +1,5 @@
 {
-	"name": "ProjectZ",
+	"name": "LastTown",
 	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
 	"tree": {
 		"$className": "DataModel",

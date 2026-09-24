@@ -28,7 +28,8 @@
  *      and a walker on grass must clear the bar the old outline missed (it measured 15; the lawn's own colour).
  *   6. THE PIPELINE. The manifest, the PNGs and worldArtAssets.ts agree; masks and roof tiles are greyscale (the
  *      roof keeps its type colour, EDI-03); each ground texture's mean colour stays within ΔE 6 of the flat colour
- *      it replaces (the art never repaints the palette); ids are "" or rbxassetid.
+ *      it replaces (the art never repaints the palette); ids are "" or rbxassetid. The game's name (`wordmark`, kind
+ *      "ui") is the store art's LAST TOWN in tools/title-font.mjs, greyscale, as its three cells (ink, LAST, TOWN).
  *   7. THE TOOLS RUN. tools/render-map.mjs renders a scene whose PNG decodes, with no missing texture (magenta);
  *      `npm run cloud -- upload-art --dry-run` lists every texture without reading any key.
  *   8. THE STOREFRONT SIGNS (EDI-03, ART-07, client/view/buildingSigns.ts). Every type that is not a house has its
@@ -86,6 +87,7 @@ import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
 import { castDrawer, characterCast } from "./character-cast.mjs";
 import { bossCast, bossDrawer } from "./boss-cast.mjs";
+import { dilate, layoutText } from "./title-font.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
 // --golden-chars: rewrites tools/golden/characters-flat.json from the CURRENT src (run it on the commit before the
@@ -1063,7 +1065,7 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 			const img = decodePNG(readFileSync(join(ART_DIR, t.file)));
 			decoded[t.name] = img;
 			if (img.w !== t.w || img.h !== t.h) decodeFail.push(`${t.name} size`);
-			if (t.kind === "mask" || t.kind === "tileTint") {
+			if (t.kind === "mask" || t.kind === "tileTint" || t.kind === "ui") {
 				for (let i = 0; i < img.w * img.h; i++) {
 					const [r, g, b] = [img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]];
 					if (img.data[i * 4 + 3] > 0 && (r !== g || g !== b)) {
@@ -1079,9 +1081,46 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 	check(decodeFail.length === 0, "every PNG decodes at its manifest size", decodeFail.slice(0, 3).join(", "));
 	check(
 		notGrey.length === 0,
-		"masks and roof tiles are greyscale: the tint keeps the type colour (EDI-03)",
+		"masks, roof tiles and the wordmark are greyscale: the tint keeps the type colour (EDI-03) / the theme's (UI-01)",
 		notGrey.join(", "),
 	);
+	// the game's name (client/ui/logo.ts): the store art's wordmark -- tools/title-font.mjs, LAST TOWN, the one-pixel
+	// outline and the hard shadow one pixel down and right -- as three stacked cells: the ink, LAST's fill, TOWN's fill
+	{
+		const wm = decoded.wordmark;
+		const m = layoutText("LAST TOWN");
+		const ring = dilate(m, 1);
+		const lastW = layoutText("LAST").w;
+		const cw = ring.w + 1;
+		const ch = ring.h + 1;
+		const alphaAt = (x, y) => wm.data[(y * wm.w + x) * 4 + 3];
+		const bad = [];
+		if (wm === undefined || wm.w !== cw || wm.h !== ch * 3) bad.push(`size ${wm?.w} x ${wm?.h}`);
+		else {
+			const inRing = (x, y) => x >= 0 && y >= 0 && x < ring.w && y < ring.h && ring.bits[y * ring.w + x] === 1;
+			const letter = (x, y) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.bits[y * m.w + x] === 1;
+			for (let y = 0; y < ch; y++) {
+				for (let x = 0; x < cw; x++) {
+					const ink = inRing(x, y) || inRing(x - 1, y - 1);
+					if (ink !== alphaAt(x, y) > 0) bad.push(`ink ${x},${y}`);
+					if (inRing(x, y) && alphaAt(x, y) !== 255) bad.push(`outline ${x},${y} not opaque`);
+					const l = letter(x - 1, y - 1);
+					if ((l && x - 1 < lastW) !== alphaAt(x, ch + y) > 0) bad.push(`LAST ${x},${y}`);
+					if ((l && x - 1 >= lastW) !== alphaAt(x, ch * 2 + y) > 0) bad.push(`TOWN ${x},${y}`);
+				}
+			}
+		}
+		check(
+			bad.length === 0,
+			"wordmark.png: LAST TOWN in the store art's pixel font (outline + hard shadow), ink / LAST / TOWN in three cells",
+			bad.slice(0, 4).join(", ") || `${cw} x ${ch} x 3`,
+		);
+		const wmTex = manifest.textures.find(t => t.name === "wordmark");
+		check(
+			wmTex?.kind === "ui" && /client\/ui\/logo\.ts/.test(wmTex.description),
+			'in the manifest as kind "ui" (uploaded with the town by CI, drawn by client/ui/logo.ts)',
+		);
+	}
 	const mean = img => {
 		let r = 0;
 		let g = 0;

@@ -1319,6 +1319,14 @@
 			"w": 96,
 			"h": 264,
 			"description": "combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)"
+		},
+		{
+			"name": "wordmark",
+			"file": "wordmark.png",
+			"kind": "ui",
+			"w": 86,
+			"h": 39,
+			"description": "the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts)"
 		}
 	]
 }

@@ -596,8 +596,9 @@ check(
 );
 const town = calls[1] ?? [];
 check(
-	"...depois o atlas dos icones (a hotbar da HUD, o Bag) e as texturas da cidade que o voo desenha e a partida pega",
+	"...depois o atlas dos icones (a hotbar da HUD, o Bag), o nome do jogo (o titulo do lobby) e as texturas da cidade que o voo desenha e a partida pega",
 	town[0] === WORLD_ART.itemIcons.id &&
+		town[1] === WORLD_ART.wordmark.id &&
 		town.length > 60 &&
 		["asphalt", "grass", "roofShingleH", "canopy0", "car0"].every(n => town.includes(WORLD_ART[n].id)) &&
 		laterIds.every(id => !town.includes(id)),

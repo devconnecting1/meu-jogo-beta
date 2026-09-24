@@ -3,7 +3,7 @@
 // regenerate: `npm run theme` (or `npm run theme -- <tweakcn registry url>`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Last Town extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 	background: Color3;
 	foreground: Color3;

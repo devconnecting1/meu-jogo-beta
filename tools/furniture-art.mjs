@@ -1,5 +1,5 @@
 /*
- * Project Z interiors: the pixel art of every piece of furniture, of the floor decoration and of the doorways and
+ * Last Town interiors: the pixel art of every piece of furniture, of the floor decoration and of the doorways and
  * windows (docs/DESIGN_RULES.md ART-12, EDI-08..EDI-12), baked into ONE atlas (design/world-art/furniture.png) that
  * client/view/interiorArt.ts draws a cell of per piece (ImageRectOffset / ImageRectSize, Pixelated). Written by
  * tools/gen-world-art.mjs with the rest of the town (`npm run art:world`) and uploaded with it (`upload-art`); until

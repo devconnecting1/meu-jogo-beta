@@ -448,8 +448,8 @@ test("codec: strings are cut on a UTF-8 boundary", () => {
 	const got2 = new codec.NetReader(w2.finish()).str(10);
 	eq("emoji truncation", got2, "🧟".repeat(2));
 	const w3 = new codec.NetWriter(128, 128);
-	w3.str("ProjectZ", 80);
-	eq("short string untouched", new codec.NetReader(w3.finish()).str(80), "ProjectZ");
+	w3.str("LastTown", 80);
+	eq("short string untouched", new codec.NetReader(w3.finish()).str(80), "LastTown");
 });
 
 // ---------------------------------------------------------------- 2. mpConfig / protocol constants

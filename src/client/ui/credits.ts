@@ -13,7 +13,7 @@ import { Button, autoFocus, makeFrame, makeLabel, makeScreen } from "./widgets";
  * Who made it and what inspired it, nothing else (the owner's decision, 2026-09-23): no studio, company or tool.
  */
 const CREDIT_LINES: Array<[string, boolean]> = [
-	["PROJECT Z", false],
+	["LAST TOWN", false],
 	["", false],
 	["Developed by", true],
 	[DEVELOPER, false],

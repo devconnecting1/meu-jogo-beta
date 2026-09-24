@@ -3,7 +3,7 @@ import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
 import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
-import { DEVELOPER, INSPIRED_BY } from "shared/module";
+import { DEVELOPER, GAME_NAME, INSPIRED_BY } from "shared/module";
 import { GAME_BUILD, GAME_VERSION } from "shared/version";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
@@ -663,7 +663,7 @@ export function showSettings(
 		});
 		const list = SettingsList(about.frame, "List", LIST_X, listY, LIST_W, aboutListH);
 		const valueW = LIST_W - 220;
-		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
+		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, GAME_NAME);
 		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
 		// CON-01: the original is credited by its name, never its studio (the owner's decision, 2026-09-23)
 		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, INSPIRED_BY);

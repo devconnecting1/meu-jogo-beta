@@ -144,8 +144,8 @@ check(withTexture > 0, "skin com textura", string.format("%d de %d imagens, %d v
 
 table.insert(lines, "4) audio")
 
-local audioRoot = SoundService:FindFirstChild("ProjectZAudio")
-check(audioRoot ~= nil, "mixer montado (ProjectZAudio)")
+local audioRoot = SoundService:FindFirstChild("LastTownAudio")
+check(audioRoot ~= nil, "mixer montado (LastTownAudio)")
 if audioRoot ~= nil then
 	local buses = {}
 	for _, g in ipairs(audioRoot:GetChildren()) do
@@ -161,7 +161,7 @@ if audioRoot ~= nil then
 			voices += 1
 		end
 	end
-	local emitter = Workspace:FindFirstChild("ProjectZAudioEmitters")
+	local emitter = Workspace:FindFirstChild("LastTownAudioEmitters")
 	if emitter ~= nil then
 		for _, a in ipairs(emitter:GetDescendants()) do
 			if a:IsA("Sound") then
