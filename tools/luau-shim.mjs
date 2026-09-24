@@ -122,6 +122,9 @@ function install() {
 	};
 	globalThis.debug = {
 		traceback: message => `${message ?? ""}\nstack traceback:\n\t[luau-shim: no Luau stack under Node]`,
+		// the client's MicroProfiler labels (client/gameLoop.ts, main.client.ts): no profiler under Node
+		profilebegin: () => {},
+		profileend: () => {},
 	};
 
 	class Color3 {

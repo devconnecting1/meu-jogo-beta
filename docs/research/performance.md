@@ -706,14 +706,161 @@ encontrado nela** — vale um item próprio antes da F2-2D.
 
 ---
 
+## 8. Instrumentação do cliente, o mapa de luz e o nível de qualidade (2026-09-24, auditoria M1, M5, M6)
+
+Fecha os itens 3 e 4 de "Faça agora" e o `STRIP_H` de "Faça quando doer". Números medidos com
+`npm run test:light` (a mesma cena da auditoria: duas lâmpadas, uma fogueira tremendo, o sobrevivente andando
+e atirando); o "antes" é o `2558ad0`.
+
+### 8.1 Rótulos do MicroProfiler
+
+`debug.profilebegin` / `debug.profileend` (API conferida no Context7: rótulo aparece na timeline com a duração
+do trecho; https://create.roblox.com/docs/performance-optimization/microprofiler). Todos dentro de
+`Heartbeat/RunService.Heartbeat`, aninhados:
+
+| Rótulo | O que cobre | Onde |
+|---|---|---|
+| `pz.update` | a simulação do quadro inteira (`loop.update`) | `client/main.client.ts`, laço da partida |
+| `pz.update` → `pz.net` | a sessão: snapshots que chegaram, predição, reconciliação, comandos enviados (`netUpdate`) | `client/gameLoop.ts` `stepNetPlayer` |
+| `pz.update` → `pz.mirror` | a horda e os chefes do snapshot escritos nas listas do cliente (`actors.sync`) | `client/gameLoop.ts` `update` |
+| `pz.render` | o desenho do mundo inteiro (`loop.render`) | `client/main.client.ts` |
+| `pz.render` → `pz.world` | o quadro do pool de sprites: chão, sólidos, horda, sobreviventes, efeitos | `client/gameLoop.ts` `render` |
+| `pz.render` → `pz.light` | o mapa de luz da noite (`drawLight`) | `client/gameLoop.ts` `render` |
+| `pz.hud` | o console da HUD (`pushHud`) | `client/main.client.ts` |
+
+Sob Node, `tools/luau-shim.mjs` dá `debug.profilebegin/profileend` vazios. O `main.client.ts` não ganhou
+nenhum local (`check:registers`).
+
+### 8.2 O card de Stats (só no painel de admin)
+
+F2 → Debug → **Stats card** (`client/admin/adminClient.ts`, 4 Hz). Além do que já tinha (FPS, zumbis, sprites,
+Instances das ScreenGuis), agora:
+
+- `graphics`: a configuração e o nível que ela dá (`Auto>High 16.7ms 0sw`: a média da última janela de 1 s,
+  quantas trocas o Auto fez; `held` quando o Auto desistiu do High nesta sessão);
+- `night`: tiras com gradiente / tiras na tela, reescritas de gradiente do último quadro e quantas o teto do
+  Low segurou;
+- do serviço `Stats`: `FrameTime` (ms), `RenderCPUFrameTime` e `RenderGPUFrameTime` (como o motor os dá: a
+  página de referência não diz a unidade), `UI2DDrawcallCount`, `UI2DTriangleCount`, `InstanceCount` e
+  `GetTotalMemoryUsageMb()`. Tudo num `pcall`: um contador que a plataforma não tenha não quebra o card.
+
+Nada disso existe para um jogador comum: o card só é construído para quem o servidor marcou como admin.
+
+### 8.3 O mapa de luz (M1)
+
+- **Tira sem luz não tem gradiente.** Uma tira cujas chaves são todas iguais (nenhuma luz chega, ou está toda
+  no miolo de uma luz) mostra essa transparência no próprio `BackgroundTransparency`, com o `UIGradient`
+  desligado (`Enabled = false`): nenhum `Process GuiEffect` e nada alocado. Uma tira que ainda carrega um
+  gradiente que virou uma cor só larga o gradiente na hora (uma escrita). `tools/gui-raster.mjs` respeita o
+  `Enabled`.
+- **Altura da tira pela altura da tela e pelo nível** (`lightStripHeight`): High 6 px, 8 px a partir de 900 px
+  de altura; Low 10 px, 12 px a partir de 900.
+- **Teto no Low:** no máximo 16 reescritas de gradiente por quadro, em rodízio; passado o teto, só espera a tira
+  que mudou pouco (até 4 passos de 64, ≈ 0,06 de opacidade). Uma mudança grande (explosão, lâmpada acendendo)
+  entra inteira no mesmo quadro — o teto nunca rasga uma luz ao meio.
+- **Memória de gradientes:** cada `NumberSequenceKeypoint` é feito uma vez por (coluna, valor quantizado) nesta
+  largura; cada `NumberSequence`, uma vez pelas suas chaves (até 512, depois recomeça).
+
+| 1920 × 1080, por quadro | Antes | High | Low |
+|---|---|---|---|
+| Andando: reescritas de gradiente | 49,7 | 37,5 | 18,3 |
+| Andando: keypoints alocados | 967 | 3,3 | 3,8 |
+| Andando: `NumberSequence` alocadas | 49,7 | 37,2 | 18,2 |
+| Parado, fogueira: reescritas / sequências novas | 11,0 / 11,0 | 8,3 / 5,5 | 5,4 / 3,0 |
+| Tiras / com gradiente (rua só com o sobrevivente) | 180 / 180 | 135 / 62 | 90 / 42 |
+
+A 720p o High continua em tiras de 6 px: o desenho é o de antes pixel a pixel, e o ganho é só de alocação
+(679 → 38 por quadro andando). A 1080p o High de 8 px fica a um fio do de 6 px com a câmera parada (média
+< 1/255, 99% dos pixels a até 2 passos) e tão longe da luz verdadeira quanto ele; `lightAt` (a regra que as
+marcas dos zumbis leem) concorda com o desenho nos dois níveis. Tudo isso é `npm run test:light`.
+
+### 8.4 O nível de qualidade (M6): Auto / High / Low
+
+`client/view/quality.ts`, a linha **Graphics** da Settings (General › Interface, um Segmented; campo
+`SettingsData.graphics`, 0 Auto, 1 High, 2 Low, salvo com o resto, validado 0..2 no servidor, `test:settings`
+§11). O `QualityLevel` do motor só escala o 3D, e este jogo não tem 3D: sem isto, nada cede num celular fraco
+ou quente.
+
+- **O que o Low muda:** o mapa de luz (acima) e metade das partículas e dos decalques vivos
+  (`client/systems/particles.ts`: 320 → 160 e 160 → 80). Nada que o jogo leia muda: contornos LEG-03, marcas
+  dos zumbis, alcance das luzes.
+- **Auto, com histerese:** média do tempo de quadro em janelas de 1 s (janela com um quadro acima de 0,25 s —
+  carregamento, GC, janela arrastada — é descartada); 3 janelas seguidas acima de 22 ms (abaixo de ~45 FPS)
+  descem para Low; no Low, 20 janelas seguidas abaixo de 18 ms (~55 FPS ou mais) tentam o High; uma tentativa
+  que fica lenta de novo em até 30 s falhou, a próxima espera o dobro, e depois de 2 falhas a sessão fica no Low.
+  Um aparelho rápido no Low e lento no High assenta no Low em no máximo 5 trocas, em vez de ir e voltar a cada
+  23 s. Só os quadros de uma partida contam, e só com a configuração em Auto.
+
+### 8.5 O que mais saiu junto (auditoria L7) e o que ficou
+
+- **L7, feito:** toasts (`widgets.ts` `showToast`) e linhas de mensagem da HUD (`hud.ts` `pushFeed`) expiram por
+  `expireAfter`: um `task.delay` por mensagem, rearmado só quando uma repetição renova o `Born`, em vez de uma
+  corrotina acordando a cada 0,2–0,25 s a vida inteira da mensagem.
+- **L3, não feito:** passar sobrevoo, créditos, guarda-roupa e lobby de `RenderStepped` para `Heartbeat` mexe em
+  quatro suítes que disparam e contam as conexões de `RenderStepped` (`test:lobby`, `test:backpack`, `test:cache`,
+  `test:screens`). Só menus, custo pequeno: fica para quando o MicroProfiler mostrar
+  `RunService.RenderStepped` alto nas cenas 6 do roteiro abaixo.
+
+### 8.6 Roteiro de profiling no Studio (para o dono)
+
+**Preparação**
+- Studio: Play Solo e Local Server com 2–6 jogadores. No desktop, gráficos em manual/máximo para tirar o
+  gerenciador de frame rate da frente.
+- No **celular de referência**: Settings do Roblox → MicroProfiler **On**, e `IP:1338/90` no navegador do PC na
+  mesma rede. Jogar 10–15 min para ver o aquecimento.
+- Abrir com `Ctrl+F6` (`Ctrl+Alt+F6` no Studio), pausar com `Ctrl+P` (modo detalhado) e **Dump** (HTML em
+  `%LOCALAPPDATA%\Roblox\logs`). Na interface web, **X-Ray** mostra as alocações e **Combine & Compare**
+  compara dois dumps.
+- Graphics em High e depois em Low (Settings › General) nas cenas de noite, e o card de Stats ligado (F2).
+
+**Cenas** (os mesmos 30–90 quadros cada)
+1. Meio-dia, parado no centro.
+2. Meio-dia, andando.
+3. Noite, andando entre as lâmpadas.
+4. Luta de noite com 40+ zumbis e sangue.
+5. A cena 4 com a aba Craft do Bag aberta.
+6. O sobrevoo do lobby.
+7. A cena 4 no celular.
+
+**Tags do MicroProfiler** (https://create.roblox.com/docs/performance-optimization/microprofiler/tag-table)
+
+| Tag | O que olhar | Expectativa |
+|---|---|---|
+| `Render/PreRender/UpdateUILayouts` → **Rebuild Z-order list** | Em quantos quadros aparece nas cenas 2–5 | Rara (um pool por ZIndex) |
+| `Render/PreRender/UpdateUILayouts` → **Layout** | Relayouts, Updates e Resizes | HUD e menus em ScreenGuis próprias, fora do mundo |
+| `Perform/fillGuiVertices` | Contagem de Gui e de **Process GuiEffect** | Noite × dia mede o mapa de luz: só as tiras com luz têm efeito |
+| `Prepare/Pass2d` | O preparo 2D inteiro | – |
+| `Heartbeat/RunService.Heartbeat` | O laço da partida: `pz.update` (`pz.net`, `pz.mirror`), `pz.render` (`pz.world`, `pz.light`), `pz.hud` | `pz.light` bem abaixo de `pz.world`; no Low, menor que no High |
+| `Render/PreRender/RunService.RenderStepped` | Só menus (sobrevoo, guarda-roupa, créditos) | – |
+| `GC` | Duração e frequência nas cenas 3–4 | Menor que antes (o mapa de luz quase não aloca) |
+| `WaitingHybridScriptJob`, `Render/PreRender/TweenService` | Menus e fades | Pequenos |
+
+**Stats** (o card do F2, ou `Shift+F5` / `Shift+F2` no cliente)
+- `FrameTime`; `RenderCPUFrameTime` × `RenderGPUFrameTime` (GPU presa no celular aponta para overdraw).
+- `UI2DDrawcallCount` e `UI2DTriangleCount`: a página de design usa menos de 1 000 draw calls como exemplo de
+  orçamento num aparelho de referência.
+- `InstanceCount` e a memória.
+
+**Console (F9) → Memory → PlaceMemory**
+- **Gui** deve estabilizar (o pool nunca encolhe: subir sem descer pede um corte).
+- **GraphicsTexture** pequeno.
+- **Instances**, **LuaHeap** (snapshot do heap antes e depois de uma luta) e **Signals**: estes devem ficar
+  planos abrindo e fechando o Bag e a Settings (vazamento de conexão).
+
+**A/B, nesta ordem**
+1. A mesma cena de noite em High e em Low: `pz.light`, `Process GuiEffect`, `GC`.
+2. A mesma luta com o Auto num celular quente: o card mostra se ele desceu e se ficou (`held`).
+
+---
+
 ## Faça agora
 
 | # | O quê | Arquivo:linha | Esforço |
 |---|---|---|---|
 | 1 | `if` antes de `darkLayer.BackgroundTransparency = 1` — invalida o `ScreenGui` inteiro todo frame, de graça | `src/client/gameLoop.ts:2053`, `:2103` | trivial |
 | 2 | `worldToScreenInto(out, …)`: mata ~1.500–3.000 tabelas por frame | `src/shared/engine/camera.ts:88-105` → `src/shared/engine/renderer.ts:160` | baixo |
-| 3 | Linhas de `Stats` no card de debug (`UI2DDrawcallCount`, `UI2DTriangleCount`, `RenderCPU/GPUFrameTime`, memória `Gui`/`LuaHeap`) | `src/client/admin/world.ts:733-751` + `src/client/admin/adminClient.ts:250-264` | baixo |
-| 4 | `debug.profilebegin` separando `update` / `render` / `pushHud` (arquivo client-only: sem shim) | `src/client/main.client.ts:514-546` | trivial |
+| 3 | ~~Linhas de `Stats` no card de debug~~ **feito (2026-09-24, §8.2)** | `src/client/admin/adminClient.ts` `engineLines` | – |
+| 4 | ~~`debug.profilebegin` separando `update` / `render` / `pushHud`~~ **feito (2026-09-24, §8.1)**, com `pz.net`, `pz.mirror`, `pz.world` e `pz.light` dentro | `src/client/main.client.ts`, `src/client/gameLoop.ts` | – |
 | 5 | Corrigir o p95: amostrar por tick, não a média por heartbeat | `src/server/net/mpHost.ts:398` + `src/server/sim/simulation.ts:179-196`, `:227` | baixo |
 | 6 | Ligar `horde.nowMs` no host e publicar as 6 fases como atributos (condicional a `sim.horde !== undefined`) | `src/server/net/mpHost.ts:396-405`; encaixe em `src/server/sim/zombies.ts:96-98`, `:248-255` | trivial |
 | 7 | Colocar `--tick` no `package.json` e asserir o alvo real de §3.2, não só `p95 < 16.7` | `package.json:15`, `tools/test-ai.mjs:1149` | trivial |
@@ -729,7 +876,7 @@ encontrado nela** — vale um item próprio antes da F2-2D.
 | Separar HUD/UI num `ScreenGui` próprio | O experimento 3.6 mostrar `UpdateUILayouts` caindo com a separação | `src/client/bootstrap.ts:55-101` |
 | Trocar `TextScaled` por `TextSize` calculado no resize | `UpdateUILayouts/Layout` aparecer alto | `src/client/ui/skin.ts:107-111`; padrão certo em `nameplate.ts:169-171` |
 | Tirar `AutomaticSize` de plaquetas e balões | idem | `nameplate.ts:53`, `:91`; `chatBubbles.ts:265`, `:301`, `:320` |
-| Subir `STRIP_H` do light map de 6 para 8–10 | `fillGuiVertices` alto, ou queixa em 1440p/4K | `src/shared/engine/renderer.ts:416` |
+| ~~Subir `STRIP_H` do light map de 6 para 8–10~~ **feito (2026-09-24, §8.3)**: 8 px a partir de 900 px no High, 10/12 no Low, e tira sem luz sem gradiente | – | `lightStripHeight` em `src/shared/engine/renderer.ts` |
 | `--!native` via passo pós-build em `out/` | A horda migrar para o servidor e o tick p95 real encostar em 6 ms | novo `tools/`, molde de `tools/check-registers.mjs` |
 | `moveActorInto` + out-param em `resolveCircle` | `pz_cost_zombies` dominar o tick | `src/shared/game/physics.ts:81`, `:116` |
 | Memoizar `zombieRadius` por tipo | idem | `src/shared/game/entities.ts:129-131`; chamadores `zombieBrain.ts:589`, `:595` |
@@ -739,7 +886,7 @@ encontrado nela** — vale um item próprio antes da F2-2D.
 | Tirar `sim.players()` e o `directed.size()` de dentro do laço de pacotes | `pz_out_Bps` ou o tick subirem com 6 clientes | `replication.ts:300`, `:306` |
 | Objetos de opção constantes por sítio de desenho (~47 sítios) | Depois de 2 e da memoização, se o `GC` ainda aparecer | `gameLoop.ts`, `survivorView.ts` |
 | `trim()` do pool de sprites fora de combate | `GetMemoryUsageMbForTag(Gui)` subir e nunca descer | `renderer.ts:288-293` |
-| Shim de `debug` nos 10 `tools/test-*.mjs`, liberando rótulos nos módulos puros | O item 6 apontar uma fase suspeita | `tools/test-*.mjs` |
+| ~~Shim de `debug` nos 10 `tools/test-*.mjs`, liberando rótulos nos módulos puros~~ **feito**: `tools/luau-shim.mjs` dá `profilebegin/profileend` a todas as suítes | – | `tools/luau-shim.mjs` |
 
 ## Não faça, e por quê
 

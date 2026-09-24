@@ -42,6 +42,9 @@
  *                      fades create is 0 s long and the nameplate does not pop; skin.ts motionTween is the only
  *                      TweenService.Create in src/; every periodic pulse of the interface is gated by it (the HUD's
  *                      own pulses are measured frame by frame in test:hud).
+ *  11. GRAPHICS        the Segmented (Auto / High / Low) writes the field and opens on it; High and Low are the tier
+ *                      the run draws with (client/view/quality.ts: the light map's strips, the particle budget), Auto
+ *                      is the measured one; the game loop reads it every frame (the hysteresis itself: test:light).
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -213,6 +216,7 @@ const ROWS = {
 	Bgm: { tab: 0, field: "bgm", effect: "2) mixer: bgm, a musica da noite" },
 	UiSize: { tab: 0, field: "uiSize", effect: "3) HUD montada 80%..120%" },
 	Motion: { tab: 0, field: undefined, effect: "9) segue o Reduce Motion do Roblox (so leitura)" },
+	Graphics: { tab: 0, field: "graphics", effect: "11) o nivel de qualidade: as tiras da noite e as particulas" },
 	LeftSize: { tab: 1, field: "leftSize", effect: "4) move.baseR" },
 	LeftPos: { tab: 1, field: "leftPos", effect: "4) move.homeY" },
 	RightSize: { tab: 1, field: "rightSize", effect: "4) aim.baseR e os quatro botoes" },
@@ -1136,6 +1140,7 @@ function scrambled() {
 		rightPos: 0.05,
 		mirror: true,
 		langType: 2,
+		graphics: 2,
 	};
 }
 closeSettings = showSettings(
@@ -1296,6 +1301,7 @@ console.log("\n8) persistencia: salvo com o progresso, de volta num reload, sane
 		rightPos: 0.3,
 		mirror: true,
 		langType: 1,
+		graphics: 1,
 	};
 	const client = defaultSave();
 	client.settings = { ...mine };
@@ -1316,7 +1322,7 @@ console.log("\n8) persistencia: salvo com o progresso, de volta num reload, sane
 	const d = defaultSettings();
 	for (const f of Object.keys(d)) {
 		const isBool = typeof d[f] === "boolean";
-		const max = f === "langType" ? 3 : 1;
+		const max = f === "langType" ? 3 : f === "graphics" ? 2 : 1;
 		const cases = isBool
 			? [
 					["texto", "yes", d[f]],
@@ -1546,11 +1552,98 @@ console.log("\n10) Reduce motion em todo o jogo: todo tween sem duracao, nenhum 
 	);
 }
 
+// ================================================================ 11. Graphics
+
+console.log("\n11) Graphics: Auto / High / Low e o nivel com que a partida desenha\n");
+
+{
+	const Q = require(join(SRC, "client/view/quality.ts"));
+	const { LightMap, lightStripHeight } = require(join(SRC, "shared/engine/renderer.ts"));
+	const { ParticleSystem } = require(join(SRC, "client/systems/particles.ts"));
+	const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+	s.graphics = 2;
+	closeSettings = showSettings(
+		ctx,
+		() => {},
+		() => {},
+	);
+	flush();
+	openTab(0);
+	const row = rowOf("Graphics");
+	const segs = [0, 1, 2].map(i => findIn(row, `Tab${i}`, "TextButton"));
+	const active = () => segs.findIndex(b => b?.GetAttribute("Variant") === "tabActive");
+	check(
+		"a linha Graphics e um Segmented de tres chapas, Auto / High / Low (pela lang.ts), e abre no valor salvo",
+		segs.every(b => b !== undefined) &&
+			segs.map(b => b.Text).join("/") === "Auto/High/Low" &&
+			Q.GRAPHICS_OPTIONS.join("/") === "Auto/High/Low" &&
+			active() === 2,
+		`${segs.map(b => b?.Text).join("/")}, ativa ${active()}`,
+	);
+	saves.length = 0;
+	delays.length = 0;
+	const picked = [];
+	for (const i of [1, 0, 2]) {
+		segs[i].Activated.Fire();
+		flush();
+		picked.push(`${s.graphics}:${active()}`);
+	}
+	advance(1.1);
+	check(
+		"tocar numa chapa escreve o campo (0 Auto, 1 High, 2 Low), acende ela e pede um save",
+		picked.join(",") === "1:1,0:0,2:2" && saves.includes("menu"),
+		`${picked.join(", ")}; saves ${saves.length}`,
+	);
+	// what each value draws with: the tier is what the run's light map and particles are given (gameLoop below)
+	const stripsAt = graphics => {
+		const lm = new LightMap(makeInstance("Frame", false), { R: 0, G: 0, B: 0 });
+		lm.setLowDetail(Q.lowDetail(graphics));
+		const cam = new Camera();
+		cam.setView(1920, 1080);
+		lm.update(cam, 0.85, [{ x: 0, y: 0, r: 250, inner: 0.4 }]);
+		return lm.stats.strips;
+	};
+	const bornAt = graphics => {
+		const p = new ParticleSystem();
+		p.lowDetail = Q.lowDetail(graphics);
+		for (let i = 0; i < 60; i++) p.bloodBurst(0, 0, 10, "zombie");
+		let n = 0;
+		p.forActive(() => n++);
+		return n;
+	};
+	const hi = { strips: stripsAt(1), born: bornAt(1) };
+	const lo = { strips: stripsAt(2), born: bornAt(2) };
+	const auto = { strips: stripsAt(0), born: bornAt(0) };
+	check(
+		"High: a noite em tiras de 8 px a 1080p (135) e ate 320 particulas; Low: tiras de 12 px (90) e ate 160",
+		hi.strips === Math.ceil(1080 / lightStripHeight(1080, false)) &&
+			hi.strips === 135 &&
+			lo.strips === 90 &&
+			hi.born === 320 &&
+			lo.born === 160,
+		`High ${hi.strips} tiras ${hi.born} particulas; Low ${lo.strips} tiras ${lo.born} particulas`,
+	);
+	check(
+		"Auto (sem quadro lento medido) desenha como High; o nivel medido e o de client/view/quality.ts (test:light)",
+		auto.strips === hi.strips && auto.born === hi.born && Q.lowDetail(0) === false,
+		`Auto ${auto.strips} tiras ${auto.born} particulas`,
+	);
+	const loopSrc = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+	check(
+		"...e a partida le o campo a cada quadro: update() mede e da o nivel as particulas, drawLight() ao mapa de luz",
+		/this\.particles\.lowDetail = Quality\.qualityFrame\(dt, ctx\.save\.settings\.graphics\)/.test(loopSrc) &&
+			/this\.lightMap\.setLowDetail\(Quality\.lowDetail\(save\.settings\.graphics\)\)/.test(loopSrc),
+	);
+	s.graphics = 0;
+	closeSettings();
+	flush();
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
 	process.exit(1);
 }
 console.log(
-	"OK: toda linha da Settings faz o que diz no jogo -- som, HUD, toque, teclas, padroes, fatos, save e Reduce Motion",
+	"OK: toda linha da Settings faz o que diz no jogo -- som, HUD, toque, teclas, padroes, fatos, save, Reduce Motion e Graphics",
 );

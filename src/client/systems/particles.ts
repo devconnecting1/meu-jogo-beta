@@ -31,6 +31,9 @@ export interface Decal {
 
 const MAX_PARTICLES = 320;
 const MAX_DECALS = 160;
+/** the low quality tier's budgets (client/view/quality.ts): half as many alive at once */
+const LOW_PARTICLES = 160;
+const LOW_DECALS = 80;
 export const DECAL_LIFE = 10;
 
 function bloodColor(source: BloodSource): Color3 {
@@ -40,6 +43,8 @@ function bloodColor(source: BloodSource): Color3 {
 }
 
 export class ParticleSystem {
+	/** the low quality tier (client/gameLoop.ts sets it each frame): the smaller budgets for what is born from now on */
+	lowDetail = false;
 	private pool: Array<Particle> = [];
 	/** ring buffer: when full the oldest decal is overwritten */
 	private decals: Array<Decal> = [];
@@ -97,18 +102,22 @@ export class ParticleSystem {
 	/** Add a ground splat directly (e.g. acid, oil). */
 	addDecal(x: number, y: number, size: number, color: Color3): void {
 		const d: Decal = { x, y, size, color, life: DECAL_LIFE, maxLife: DECAL_LIFE };
-		if (this.decals.size() < MAX_DECALS) {
+		// a ring over the first `cap` slots; after a drop to the low tier the slots past it just run out their life
+		const cap = this.lowDetail ? LOW_DECALS : MAX_DECALS;
+		if (this.decals.size() < cap) {
 			this.decals.push(d);
 		} else {
+			if (this.decalNext >= cap) this.decalNext = 0;
 			this.decals[this.decalNext] = d;
-			this.decalNext = (this.decalNext + 1) % MAX_DECALS;
+			this.decalNext = (this.decalNext + 1) % cap;
 		}
 	}
 
 	private spawn(p: Particle): void {
-		if (this.pool.size() >= MAX_PARTICLES) {
+		const cap = this.lowDetail ? LOW_PARTICLES : MAX_PARTICLES;
+		if (this.pool.size() >= cap) {
 			// drop a random live particle instead of shifting the whole array
-			this.pool[math.random(0, MAX_PARTICLES - 1)] = p;
+			this.pool[math.random(0, cap - 1)] = p;
 			return;
 		}
 		this.pool.push(p);

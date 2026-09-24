@@ -1954,6 +1954,23 @@ function toastStyle(kind: ToastKind): ToastStyle {
 	return { ...base, icon: GAME.info, glyph: "i" };
 }
 
+/**
+ * Runs `onExpire` once `host`'s "Born" attribute (os.clock) is `life` seconds old -- a repeat that refreshes "Born"
+ * pushes it back -- unless `host` has left the tree first. One delayed wake-up per message, re-armed only by a
+ * refresh, instead of a coroutine polling every 0.2 s for its whole life: the toasts and the HUD's message lines
+ * (hud.ts pushFeed) both expire through here.
+ */
+export function expireAfter(host: Instance, life: number, onExpire: () => void): void {
+	const check = (): void => {
+		if (host.Parent === undefined) return;
+		const born = host.GetAttribute("Born");
+		const left = typeIs(born, "number") ? born + life - os.clock() : 0;
+		if (left > 0) task.delay(left, check);
+		else onExpire();
+	};
+	task.delay(life, check);
+}
+
 function toastStack(layer: Instance): Frame {
 	const existing = layer.FindFirstChild("ToastStack");
 	if (existing !== undefined && existing.IsA("Frame")) return existing;
@@ -2035,17 +2052,10 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 	label.TextTransparency = 1;
 	tween(card, 0.2, { Position: UDim2.fromScale(0, 0) });
 	setFade(0, 0.2);
-	task.spawn(() => {
-		while (slot.Parent !== undefined) {
-			const born = slot.GetAttribute("Born");
-			if (typeIs(born, "number") && os.clock() - born >= TOAST_TIME) break;
-			task.wait(0.2);
-		}
-		if (slot.Parent === undefined) return;
+	expireAfter(slot, TOAST_TIME, () => {
 		tween(card, 0.25, { Position: UDim2.fromScale(0.06, 0) });
 		setFade(1, 0.25);
-		task.wait(0.25);
-		slot.Destroy();
+		task.delay(0.25, () => slot.Destroy());
 	});
 }
 
