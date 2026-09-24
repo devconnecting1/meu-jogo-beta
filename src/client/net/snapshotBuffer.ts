@@ -313,6 +313,10 @@ class ActorTrack {
 	drawnY = 0;
 	/** this track's render delay on top of the buffer's, in ticks: the mid ring's wider spacing; -1 = unset */
 	extra = -1;
+	/** where it stands in the buffer's draw order (`SnapshotBuffer.zOrder`), or -1 */
+	ix = -1;
+
+	constructor(readonly netId: number) {}
 
 	insert(s: ActorSample): boolean {
 		return insertSample(this.samples, s);
@@ -439,6 +443,15 @@ export class SnapshotBuffer {
 	/** one track per zombie netId and per boss netId (§4.4: identity comes from the snapshot itself) */
 	private readonly zombies = new Map<number, ActorTrack>();
 	private readonly bosses = new Map<number, ActorTrack>();
+	/**
+	 * The horde's DRAW order (perf audit M2): the view draws `zombieStates()` in this order and the renderer hands
+	 * out sprite slots by it, so the order of one frame has to be the order of the next. It used to be the iteration
+	 * order of `zombies` -- a Luau table keyed by sparse integers, whose order a recycled netId or a rehash could
+	 * reshuffle wholesale, moving every walker's seven sprites to other slots in one frame. Here a new body is
+	 * appended and a body that goes is replaced by the LAST one (`dropZombie`): a spawn writes one walker's sprites,
+	 * a death two walkers', whatever the horde's size (tools/test-pool.mjs 10).
+	 */
+	private readonly zOrder = new Array<ActorTrack>();
 	private readonly zOut = new Array<RemoteZombie>();
 	private readonly bOut = new Array<RemoteBoss>();
 	/** the view reads these every frame, so they are refilled in place instead of rebuilt */
@@ -489,6 +502,7 @@ export class SnapshotBuffer {
 	reset(): void {
 		this.tracks.clear();
 		this.zombies.clear();
+		this.zOrder.clear();
 		this.bosses.clear();
 		this.tombs.clear();
 		this.out.clear();
@@ -536,8 +550,31 @@ export class SnapshotBuffer {
 	 * netId at or before it is from the dead body, and is refused (`tombs`, audit M1).
 	 */
 	forgetZombie(netId: number, deathTick?: number): void {
-		this.zombies.delete(netId);
+		this.dropZombie(netId);
 		if (deathTick !== undefined) this.tombs.set(netId, wrapU16(deathTick));
+	}
+
+	/** a new zombie track, at the END of the draw order (`zOrder`) */
+	private addZombie(netId: number): ActorTrack {
+		const track = new ActorTrack(netId);
+		track.ix = this.zOrder.size();
+		this.zOrder.push(track);
+		this.zombies.set(netId, track);
+		return track;
+	}
+
+	/** a zombie track goes: the last one of the draw order takes its place, so nobody else moves (`zOrder`) */
+	private dropZombie(netId: number): void {
+		const track = this.zombies.get(netId);
+		if (track === undefined) return;
+		this.zombies.delete(netId);
+		const ix = track.ix;
+		track.ix = -1;
+		if (ix < 0 || this.zOrder[ix] !== track) return;
+		const last = this.zOrder.pop();
+		if (last === undefined || last === track) return;
+		this.zOrder[ix] = last;
+		last.ix = ix;
 	}
 
 	/** is this sample of `netId`, at wire tick `tick16`, from a body the reliable channel already buried? */
@@ -601,10 +638,7 @@ export class SnapshotBuffer {
 				continue;
 			}
 			let track = this.zombies.get(z.netId);
-			if (track === undefined) {
-				track = new ActorTrack();
-				this.zombies.set(z.netId, track);
-			}
+			if (track === undefined) track = this.addZombie(z.netId);
 			if (track.insert(zombieSample(tick, z))) {
 				track.lastSeen = arrival;
 				track.mid = z.mid;
@@ -613,7 +647,7 @@ export class SnapshotBuffer {
 		for (const b of part.bosses) {
 			let track = this.bosses.get(b.netId);
 			if (track === undefined) {
-				track = new ActorTrack();
+				track = new ActorTrack(b.netId);
 				this.bosses.set(b.netId, track);
 			}
 			if (track.insert(bossSample(tick, b))) track.lastSeen = arrival;
@@ -779,24 +813,26 @@ export class SnapshotBuffer {
 		this.bOut.clear();
 		const retire = this.retire;
 		retire.clear();
-		for (const [netId, track] of this.zombies) {
+		// the retirements first, then the drawing: a body that goes is replaced by the last one (`dropZombie`), and
+		// the frame that retires it already draws the order the next frames will
+		const order = this.zOrder;
+		for (const track of order) {
 			if (track.samples.size() === 0) {
-				retire.push(netId);
+				retire.push(track.netId);
 				continue;
 			}
 			const missing = now - track.lastSeen > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S);
 			track.alpha = math.clamp(track.alpha + (missing ? -dt / DESPAWN_FADE_S : dt * ALPHA_RATE), 0, 1);
-			if (missing && track.alpha <= 0) {
-				retire.push(netId);
-				continue;
-			}
+			if (missing && track.alpha <= 0) retire.push(track.netId);
+		}
+		for (const netId of retire) this.dropZombie(netId);
+		retire.clear();
+		for (const track of order) {
 			// the record says which ring it travels in (§4.2 `mid`): a mid-ring body is drawn one near interval
 			// further back, so its 10 Hz samples are interpolated instead of run past
 			track.extra = easeExtra(track.extra, track.mid ? midExtra : 0, extraStep);
-			this.zOut.push(this.zombieStateOf(netId, track, render - track.extra, dt, world));
+			this.zOut.push(this.zombieStateOf(track.netId, track, render - track.extra, dt, world));
 		}
-		for (const netId of retire) this.zombies.delete(netId);
-		retire.clear();
 		for (const [netId, track] of this.bosses) {
 			if (track.samples.size() === 0) {
 				retire.push(netId);
