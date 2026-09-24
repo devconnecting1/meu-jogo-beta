@@ -178,6 +178,12 @@ export function currentWeapon(p: PlayerState): WeaponDef {
 }
 
 /**
+ * §8.1: a usable every 0.25 s -- the server holds a faster one (server/sim/craft.ts `useItem`), and the HUD's quick plates
+ * sweep for it (client/systems/quickUse.ts, DESIGN_RULES ITM-07)
+ */
+export const USE_COOLDOWN_S = 0.25;
+
+/**
  * Would `itemUseEffect` do anything right now? The same test, without touching the body or the backpack: the
  * server's `useItem` and the client's prediction of it (client/net/bagPrediction.ts) ask the one question.
  */

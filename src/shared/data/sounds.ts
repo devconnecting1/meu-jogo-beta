@@ -403,6 +403,18 @@ export const SOUNDS = {
 		voices: 1,
 		priority: 4,
 	},
+	// a usable eaten or applied: the Bag's Use and the HUD's quick HEAL / EAT (DESIGN_RULES ITM-07). The pickup's engine
+	// click, lower and softer -- an already-checked take, the way uiClose is uiOpen's (design/audio-credits.md)
+	useItem: {
+		id: `${ENGINE}clickfast.wav`,
+		bus: "sfx",
+		category: "world",
+		volume: 0.24,
+		pitchMin: 0.72,
+		pitchMax: 0.8,
+		voices: 1,
+		priority: 4,
+	},
 
 	// --- footsteps: the most repeated sound in the game (a survivor plants a foot about twice a second, and
 	//     up to six of them are walking). So it is the quietest thing in the catalogue and the first to be

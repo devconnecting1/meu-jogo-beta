@@ -723,6 +723,15 @@ openTab(2);
 		SCHEMES.every((sc, i) => JSON.stringify(listed[i]) === JSON.stringify(sc.rows.map(r => r[0]))),
 		listed.map(l => l.length).join(" / "),
 	);
+	// the tenth row (ITM-07's quick heal / eat) fits the page without scrolling; an eleventh would not -- so the bound is
+	// real, and a row added past it fails here instead of hiding the last keys below the fold
+	const { keyListFits } = require(join(SRC, "client/ui/settings.ts"));
+	const most = Math.max(...SCHEMES.map(sc => sc.rows.length));
+	check(
+		`...e cabem sem rolar: ${most} linhas no dispositivo mais longo (a pagina tem lugar para ${most}, nao para ${most + 1})`,
+		most === 10 && SCHEMES.every(sc => keyListFits(sc.rows.length)) && !keyListFits(most + 1),
+		SCHEMES.map(sc => `${sc.title} ${sc.rows.length}`).join(", "),
+	);
 }
 closeSettings();
 flush();
@@ -839,6 +848,39 @@ const SCORE_HUD_STATE = {
 	hitFlash: 0,
 };
 
+/**
+ * (ITM-07) The quick-use chain after the field: `kind` read by the client's real press (client/systems/quickUse.ts
+ * pressQuick, a fresh state: no cooldown carried from another probe) through the Bag's own verb (backpackSync.useItem,
+ * offline here: the local rule) -- a hurt, hungry survivor with one Bandage and one Canned food is healed or fed by it.
+ */
+const QU = require(join(SRC, "client/systems/quickUse.ts"));
+const BagSync = require(join(SRC, "client/net/backpackSync.ts"));
+const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
+const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
+function quickChain(kind) {
+	if (kind < 0) return false;
+	const save = defaultSave();
+	for (let i = 0; i < save.invenUse.length; i++) save.invenUse[i] = 0;
+	const bandage = USABLES.findIndex(u => u.name === "Bandage");
+	const can = USABLES.findIndex(u => u.name === "Canned food");
+	save.invenUse[bandage] = 1;
+	save.invenUse[can] = 1;
+	const body = createPlayer(save, 0, 0);
+	body.hp = 50;
+	body.hungry = 30;
+	const said = [];
+	const res = QU.pressQuick(
+		kind,
+		body,
+		save,
+		1000,
+		{ send: id => BagSync.useItem(body, save, id), say: t => said.push(t), heard: () => {}, tr: t => t },
+		new QU.QuickUse(),
+	);
+	if (kind === 0) return res.used && body.hp === 70 && save.invenUse[bandage] === 0 && said[0] === "+20 HP";
+	return res.used && body.hungry === 55 && save.invenUse[can] === 0 && said[0] === "+25 FOOD · +5 HP";
+}
+
 const PROBES = {
 	// ---- keyboard & mouse
 	"W A S D": () => {
@@ -895,6 +937,17 @@ const PROBES = {
 			got.push(input.weaponSlotPressed);
 		}
 		return got.join() === "0,1,2,3,4";
+	},
+	// ITM-07: H heals and F eats, through the quick plates' press and the Bag's own verb
+	"H / F": () => {
+		fresh();
+		tap(key("H"));
+		const heal = input.quickUsePressed;
+		const healed = quickChain(heal);
+		fresh();
+		tap(key("F"));
+		const eat = input.quickUsePressed;
+		return heal === 0 && eat === 1 && healed && quickChain(eat);
 	},
 	B: () => {
 		fresh();
@@ -982,6 +1035,17 @@ const PROBES = {
 			tile?.Activated.Fire();
 			return input.weaponSlotPressed === 1;
 		}),
+	// ITM-07: the touch quick tiles (hudQuick.ts QuickDeck): a tap is H / F
+	"Tap heal / food": () =>
+		withTouchHud(() => {
+			fresh();
+			hudButton("QuickHeal").Activated.Fire();
+			const heal = input.quickUsePressed;
+			fresh();
+			hudButton("QuickEat").Activated.Fire();
+			const eat = input.quickUsePressed;
+			return heal === 0 && eat === 1 && quickChain(heal) && quickChain(eat);
+		}),
 	BAG: () =>
 		withTouchHud((h, calls) => {
 			hudButton("BagBtn").Activated.Fire();
@@ -1058,7 +1122,7 @@ const PROBES = {
 		}),
 	// ITM-06: in a match the D-pad steps through the weapons (left the previous, right the next: combat.ts cycleWeapon);
 	// with a menu holding the pad it is that menu's navigation and switches nothing
-	"D-pad": () => {
+	"D-pad left / right": () => {
 		fresh();
 		tap(pad("DPadLeft"));
 		const left = input.weaponCycle;
@@ -1075,6 +1139,27 @@ const PROBES = {
 		probe.Destroy();
 		fresh();
 		return left === -1 && right === 1 && inMenu === 0 && GuiService.GuiNavigationEnabled === true;
+	},
+	// ITM-07: up heals, down eats (the order of the HP and FOOD bars); in a menu the D-pad is its navigation
+	"D-pad up / down": () => {
+		fresh();
+		tap(pad("DPadUp"));
+		const up = input.quickUsePressed;
+		const healed = quickChain(up);
+		fresh();
+		tap(pad("DPadDown"));
+		const down = input.quickUsePressed;
+		const fed = quickChain(down);
+		fresh();
+		const probe = new Instance("TextButton");
+		probe.Selectable = true;
+		GuiService.SelectedObject = probe;
+		tap(pad("DPadUp"));
+		const inMenu = input.quickUsePressed;
+		GuiService.SelectedObject = undefined;
+		probe.Destroy();
+		fresh();
+		return up === 0 && down === 1 && healed && fed && inMenu === -1;
 	},
 };
 /**

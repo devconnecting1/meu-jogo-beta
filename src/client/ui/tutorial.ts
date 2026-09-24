@@ -62,6 +62,8 @@ export const SCHEMES: Array<Scheme> = [
 			["E", "Interact, search, loot"],
 			["R", "Reload"],
 			["1 – 5", "Switch weapon"],
+			// the HUD's HEAL and EAT plates (ITM-07, client/ui/hudQuick.ts): the best item, without opening the Bag
+			["H / F", "Quick heal / eat"],
 			["B", "Backpack"],
 			["P", "Menu"],
 			// the match scoreboard (MP-23): held, not toggled; Tab is the Roblox player list's (UI-02)
@@ -81,10 +83,12 @@ export const SCHEMES: Array<Scheme> = [
 			["RELOAD", "Reload"],
 			// the HUD's weapon hotbar: a tap on a tile does what the 1-5 keys do (client/ui/hudConsole.ts)
 			["Tap a weapon", "Switch weapon"],
+			// the two quick tiles over the console's bars (ITM-07): a tap is H / F
+			["Tap heal / food", "Quick heal / eat"],
 			["BAG", "Backpack"],
 			["MENU", "Menu"],
 			// (the match scoreboard, MP-23, is the survivors chip in the corner's row with MENU and BAG: on screen,
-			// with its icon and count, like them -- not a tenth row here, which Settings › Controls has no room for)
+			// with its icon and count, like them -- not an eleventh row here: Settings › Controls holds ten, settings.ts)
 		],
 		note: "Size, height, floating stick and left-handed: Settings › Touch controls.",
 	},
@@ -100,9 +104,11 @@ export const SCHEMES: Array<Scheme> = [
 			["Start", "Menu"],
 			// Back / Select opens and closes the scoreboard; the D-pad sorts it while it is open (MP-23)
 			["Back", "Survivors in town"],
-			// left / right: the previous / next weapon, drawn (ITM-06; client/systems/combat.ts cycleWeapon). No tenth
-			// row for putting it away: Settings › Controls has no room, and the Bag's Put away does it on the pad
-			["D-pad", "Switch weapon"],
+			// left / right: the previous / next weapon, drawn (ITM-06; client/systems/combat.ts cycleWeapon). Putting it
+			// away is the Bag's Put away on the pad: the tenth row went to the quick plates, which a fight needs more
+			["D-pad left / right", "Switch weapon"],
+			// up / down: the quick plates (ITM-07), in the order of the HP and FOOD bars they sit by
+			["D-pad up / down", "Quick heal / eat"],
 		],
 		// B backs out of the screen on top (client/ui/backStack.ts): the one line Settings > Controls has room for; in a
 		// menu the D-pad is the engine's navigation, as the stick is

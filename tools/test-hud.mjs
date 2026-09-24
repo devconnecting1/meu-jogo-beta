@@ -936,6 +936,70 @@ function checkSky(label, L, c, w, h, atHome, chipHome = atHome) {
 		`${px.toFixed(2)} px por unidade, largura ${Math.round(r[2] - r[0])} px (${SKY_PLATE_W} unidades)`,
 	);
 	checkChip(label, L, others, r, chipHome);
+	checkQuickDeck(label, L, c, r);
+}
+
+/** a frame's rect in screen pixels, from its Offset placement (the touch layer's frames are placed in pixels) */
+const offsetRect = f => [
+	f.Position.X.Offset,
+	f.Position.Y.Offset,
+	f.Position.X.Offset + f.Size.X.Offset,
+	f.Position.Y.Offset + f.Size.Y.Offset,
+];
+
+/**
+ * (ITM-07) The touch quick deck (hudQuick.ts QuickDeck, hudConsole.ts placeTouchQuick): the HEAL and EAT tiles, each a
+ * thumb target (>= MIN_TOUCH_PX on both sides, the hotbar tile's size), on screen under the Roblox bar, covering nothing
+ * -- the thumbs, Menu, Bag, the sky, the chip, the console --, and the prompt "E: ..." never over it.
+ */
+function checkQuickDeck(label, L, c, sky) {
+	const deckFrame = deep(hudRoot(), "QuickDeck");
+	check(`${label}: os ladrilhos rapidos (HEAL / EAT) tem a sua placa no toque`, deckFrame !== undefined);
+	if (deckFrame === undefined) return;
+	const d = offsetRect(deckFrame);
+	const slot = deep(hudRoot(), "ChipSlot");
+	const chip = slot !== undefined ? offsetRect(slot) : undefined;
+	const others = [
+		["o console", c],
+		["o analogico", circle(L.move.homeX, L.move.homeY, L.floating ? L.move.baseR : L.move.grabR)],
+		["o pad de mira", circle(L.aim.homeX, L.aim.homeY, L.aim.baseR)],
+		["RELOAD", circle(L.reload.x, L.reload.y, Math.max(L.reload.r, MIN_TOUCH_PX / 2))],
+		["USE", circle(L.use.x, L.use.y, Math.max(L.use.r, MIN_TOUCH_PX / 2))],
+		["Menu", circle(L.pause.x, L.pause.y, L.pause.r)],
+		["Bag", circle(L.bag.x, L.bag.y, L.bag.r)],
+		["o relogio", sky],
+		...(chip !== undefined ? [["o chip do placar", chip]] : []),
+	];
+	const hit = others.filter(([, o]) => overlaps(d, o)).map(([n]) => n);
+	if (process.env.PZ_DEBUG_QUICK) {
+		console.log(`    DEBUG ${label} view ${L.viewW}x${L.viewH} inset ${L.inset} deck ${fmt(d)}`);
+		for (const [n, o] of others) console.log(`      ${n} ${fmt(o)}`);
+	}
+	check(
+		`${label}: a placa rapida nao cobre nada: console, polegares, Menu, Bag, relogio, chip`,
+		hit.length === 0,
+		hit.length > 0 ? `sobre ${hit.join(", ")} ${fmt(d)}` : fmt(d),
+	);
+	// the tiles' size: the deck's pixels per design unit x the tile's design side (the hotbar tile's)
+	const scale = (d[2] - d[0]) / deckFrame.GetAttribute("DesignW");
+	const tilePx = scale * COMPACT_LAYOUT.tile;
+	check(
+		`${label}: na tela, abaixo da barra do Roblox, cada ladrilho um alvo de polegar (>= ${MIN_TOUCH_PX} px)`,
+		d[0] >= 0 &&
+			d[2] <= L.viewW + 0.5 &&
+			d[1] >= L.inset - 0.5 &&
+			d[3] <= L.viewH + 0.5 &&
+			tilePx >= MIN_TOUCH_PX - 0.5,
+		`ladrilho ${tilePx.toFixed(1)} px`,
+	);
+	// the prompt: centred over the console, anchored at its bottom, a box of 440 x 46 design units x the HUD size
+	const hint = deep(hudRoot(), "HintBox");
+	const k = 0.8 + 0.4 * settings.uiSize;
+	const s = Math.min(L.viewW / 1120, L.viewH / 630) * k;
+	const hx = hint.Position.X.Offset;
+	const hb = hint.Position.Y.Offset;
+	const hr = [hx - (440 * s) / 2, hb - 46 * s, hx + (440 * s) / 2, hb];
+	check(`${label}: a dica "E: ..." nunca fica sobre a placa rapida`, !overlaps(hr, d), `dica ${fmt(hr)}`);
 }
 
 /**
@@ -1448,18 +1512,22 @@ console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, n
 		hud.update(state());
 	});
 	const images = named("Atlas");
+	// the five hotbar tiles and the two quick tiles (ITM-07), one image each
+	const oneImage = b => {
+		const kids = deep(b, "ItemIcon")?.GetChildren() ?? [];
+		return kids.length === 1 && kids[0].ClassName === "ImageLabel";
+	};
+	const quickTiles = ["QuickHeal", "QuickEat"].map(n => deep(hudRoot(), n));
 	check(
-		"cada ladrilho da hotbar e UM ImageLabel, sem a reserva de Frames do icone mais caro",
+		"cada ladrilho da hotbar e cada ladrilho rapido (HEAL / EAT) e UM ImageLabel, sem a reserva de Frames",
 		named("Px") === 0 &&
-			images === 5 &&
-			[0, 1, 2, 3, 4].every(k => {
-				const kids = deep(tile(k), "ItemIcon")?.GetChildren() ?? [];
-				return kids.length === 1 && kids[0].ClassName === "ImageLabel";
-			}),
+			images === 7 &&
+			[0, 1, 2, 3, 4].every(k => oneImage(tile(k))) &&
+			quickTiles.every(b => b !== undefined && oneImage(b)),
 		`${images} imagens; sem atlas eram ${flatPx} Frames`,
 	);
 	check(
-		"montar custa so isso a menos: os Frames de icone viram 5 imagens, o resto da HUD e o mesmo",
+		"montar custa so isso a menos: os Frames de icone viram 7 imagens, o resto da HUD e o mesmo",
 		atlasMount.created === flatMount.created - flatPx + images &&
 			hudRoot().GetDescendants().length === flatAll - flatPx + images,
 		`${flatMount.created} -> ${atlasMount.created} Instances`,
@@ -1706,6 +1774,366 @@ console.log("\n7) o icone no ladrilho: no meio do que sobra, longe da tecla e da
 	hud.unmount();
 	setIconAtlas("");
 	own([AXE, PISTOL]);
+}
+
+// ---------------------------------------------------------------- 8) quick HEAL / EAT (ITM-07)
+
+console.log("\n8) uso rapido: HEAL e EAT no fim das barras de HP e FOOD, sem abrir o Bag (ITM-07)\n");
+{
+	const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
+	const QU = require(join(SRC, "client/systems/quickUse.ts"));
+	const { QUICK_W } = require(join(SRC, "client/ui/hudConsole.ts"));
+	const byName = n => USABLES.findIndex(u => u.name === n);
+	const BANDAGE = byName("Bandage");
+	const KIT = byName("First aid kit");
+	const CAN = byName("Canned food");
+	const APPLE = byName("Apple");
+	const useIcon = id => iconOf(3, id).key;
+	const gui = service("GuiService");
+	const deskUse = () => {
+		uis.TouchEnabled = false;
+		uis.MouseEnabled = true;
+		uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+		uis.PreferredInput = undefined;
+	};
+	const stock = (bandage, kit, can, apple) => {
+		for (let i = 0; i < save.invenUse.length; i++) save.invenUse[i] = 0;
+		save.invenUse[BANDAGE] = bandage;
+		save.invenUse[KIT] = kit;
+		save.invenUse[CAN] = can;
+		save.invenUse[APPLE] = apple;
+	};
+	hud.unmount();
+	setIconAtlas("");
+	deskUse();
+	setViewport(1365, 567, 36);
+	hud.mount();
+	stock(2, 1, 3, 2);
+	const q = new QU.QuickUse();
+	let now = 7000;
+	const body = (hp, hungry) => ({ hp, hpMax: 100, hungry, hungryMax: 100, dead: hp <= 0 });
+	/** a frame of the run: the HUD state with the runtime's two views (what main.client.ts pushes) */
+	let last = [60, 58];
+	const qframe = (hp, hunger, over = {}) => {
+		last = [hp, hunger];
+		setClock(now);
+		hud.update(state({ hp, hunger, quick: q.frame(body(hp, hunger), save, now), ...over }));
+	};
+	qframe(60, 58);
+	for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+	qframe(60, 58);
+	const plate = k => deep(consoleFrame(), k === 0 ? "QuickHeal" : "QuickEat");
+	const groove = k => deep(consoleFrame(), k === 0 ? "QuickHealGroove" : "QuickEatGroove");
+	const shown = k => deep(plate(k), "ItemIcon")?.GetAttribute("Icon");
+	const dimmed = k => deep(plate(k), "ItemIcon")?.GetAttribute("Dim") === true;
+	const countOf = k => deep(plate(k), "Count")?.Text;
+	const legendOf = k => {
+		const key = deep(plate(k), "Key");
+		return key?.Visible === true ? key.FindFirstChild("Legend")?.Text : undefined;
+	};
+	const tipText = () => {
+		const t = deep(consoleFrame(), "QuickTip");
+		return t?.Visible === true ? deep(t, "Text")?.Text : undefined;
+	};
+	/** the pointer enters / leaves plate k (the engine's GuiState), and the next frame runs: the tooltip is update's */
+	const hover = (k, on) => {
+		plate(k).GuiState = on ? Enum.GuiState.Hover : Enum.GuiState.Idle;
+		flush();
+		qframe(...last);
+	};
+
+	// ---- where: at the end of the HP and FOOD bars, in their rows; XP keeps the full width; the console does not grow
+	{
+		const [hpBar, foodBar, xpBar] = ["Hp", "Food", "Xp"].map(n => rectOf(deep(consoleFrame(), `${n}Bar`)));
+		const [heal, eat] = [0, 1].map(k => rectOf(groove(k)));
+		const vitals = rectOf(deep(consoleFrame(), "Vitals"));
+		const row = (p, bar) =>
+			Math.abs(p.y - bar.y) <= 1 &&
+			Math.abs(p.h - bar.h) <= 1 &&
+			p.x >= bar.x + bar.w &&
+			p.x - (bar.x + bar.w) <= 8;
+		check(
+			"HEAL fica no fim da barra de HP e EAT no da FOOD: a mesma fileira, a mesma altura, logo depois da barra",
+			row(heal, hpBar) && row(eat, foodBar),
+			`HP ${hpBar.x.toFixed(0)}+${hpBar.w.toFixed(0)} -> HEAL ${heal.x.toFixed(0)}; FOOD -> EAT ${eat.x.toFixed(0)}`,
+		);
+		check(
+			"...separadas da barra (outra chapa, fora do sulco dela), e a XP embaixo segue na largura inteira, ate onde elas acabam",
+			!deep(deep(consoleFrame(), "HpBar"), "QuickHeal") &&
+				!deep(deep(consoleFrame(), "FoodBar"), "QuickEat") &&
+				Math.abs(xpBar.x + xpBar.w - (heal.x + heal.w)) <= 1 &&
+				heal.x + heal.w <= vitals.x + vitals.w,
+			`XP ate ${(xpBar.x + xpBar.w).toFixed(0)}, HEAL ate ${(heal.x + heal.w).toFixed(0)} px`,
+		);
+		check(
+			`o console nao cresceu por elas: ${DESKTOP_LAYOUT.w} x ${DESKTOP_LAYOUT.h} unidades (cada placa ${QUICK_W} x ${DESKTOP_LAYOUT.barH})`,
+			DESKTOP_LAYOUT.w === 778 && DESKTOP_LAYOUT.h === 114,
+		);
+		check(
+			"o texto das barras encurtadas continua o mesmo",
+			barLabel("Hp")?.Text === "HP 60 / 100" && barLabel("Food")?.Text === "FOOD 58 / 100",
+			`${barLabel("Hp")?.Text} / ${barLabel("Food")?.Text}`,
+		);
+		// the icon on whole screen pixels, at a side itemIcon.ts draws evenly (16 / 32 / 48, or 24 / 40), on the owner's
+		// screen and at 1080p -- and the resize re-fits it in place
+		const crisp = () => {
+			const f = deep(plate(0), "ItemIcon");
+			const whole = u =>
+				u.X.Scale === 0 && u.Y.Scale === 0 && Number.isInteger(u.X.Offset) && Number.isInteger(u.Y.Offset);
+			return whole(f.Position) && whole(f.Size) && [16, 24, 32, 40, 48, 64].includes(f.Size.X.Offset)
+				? f.Size.X.Offset
+				: -1;
+		};
+		const small = crisp();
+		const resized = phase("placas rapidas: 1365x567 -> 1920x1080", () => {
+			setViewport(1920, 1080, 36);
+			for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+			qframe(60, 58);
+		});
+		const big = crisp();
+		check(
+			"o icone da placa em pixels inteiros, num lado nitido, e maior a 1080p sem criar Instance",
+			small > 0 && big > small && zero(resized),
+			`${small} px a 1365x567, ${big} px a 1920x1080`,
+		);
+		setViewport(1365, 567, 36);
+		for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+	}
+
+	// ---- what: the item a press uses (the shared pick), the count of the kind, raised iron when usable
+	check(
+		"HP 60 (faltam 40): HEAL mostra o First aid kit, a menor que cobre sem sobra alem dela (a Bandage, 20, nao cobre)",
+		shown(0) === useIcon(KIT) && !dimmed(0) && countOf(0) === "×3",
+		`${shown(0)}, ${countOf(0)}`,
+	);
+	check(
+		"FOOD 58 (faltam 42): nenhuma cobre, EAT mostra a maior (Canned food, 25); contagem 5",
+		shown(1) === useIcon(CAN) && countOf(1) === "×5",
+		`${shown(1)}, ${countOf(1)}`,
+	);
+	qframe(85, 80);
+	check(
+		"HP 85 e FOOD 80: a Bandage (20 cobre 15) e a Apple (20 cobre 20 exatos, antes do Canned food 25)",
+		shown(0) === useIcon(BANDAGE) && shown(1) === useIcon(APPLE),
+		`${shown(0)}, ${shown(1)}`,
+	);
+	check(
+		"usavel = ferro em relevo (UI-07: aperta-se), contagem clara",
+		[0, 1].every(k => sameColor(face(plate(k)), THEME.secondary) && raised(plate(k))) &&
+			sameColor(deep(plate(0), "Count").TextColor3, THEME.secondaryForeground),
+	);
+
+	// ---- disabled: none / full, the socket look, the icon grey, the count muted -- and the reason under the mouse
+	hover(0, true);
+	check(
+		'passar o mouse numa placa usavel diz o que ela faz: "Bandage: +15 HP"',
+		tipText() === "Bandage: +15 HP",
+		tipText(),
+	);
+	hover(0, false);
+	check("o mouse fora: a dica some", tipText() === undefined);
+	stock(0, 0, 3, 2);
+	qframe(85, 80);
+	hover(0, true);
+	check(
+		'sem cura nenhuma: HEAL apagada (o soquete escuro contornado, o icone cinza, "×0" mudo), e o motivo sob o mouse',
+		ringed(plate(0)) &&
+			sameColor(face(plate(0)), SURFACE.well) &&
+			dimmed(0) &&
+			shown(0) === useIcon(BANDAGE) &&
+			countOf(0) === "×0" &&
+			sameColor(deep(plate(0), "Count").TextColor3, THEME.mutedForeground) &&
+			tipText() === "No healing items",
+		`${tipText()}`,
+	);
+	hover(0, false);
+	stock(2, 1, 3, 2);
+	qframe(100, 100);
+	hover(0, true);
+	const fullHeal = tipText();
+	hover(0, false);
+	hover(1, true);
+	const fullEat = tipText();
+	hover(1, false);
+	check(
+		"barra cheia: as duas apagadas, e o motivo de cada uma (Already at full health / You're already full)",
+		ringed(plate(0)) &&
+			ringed(plate(1)) &&
+			dimmed(0) &&
+			dimmed(1) &&
+			fullHeal === "Already at full health" &&
+			fullEat === "You're already full",
+		`${fullHeal} / ${fullEat}`,
+	);
+	stock(2, 1, 0, 0);
+	qframe(85, 40);
+	hover(1, true);
+	check('sem comida: EAT apagada, "No food"', ringed(plate(1)) && tipText() === "No food", tipText());
+	hover(1, false);
+	stock(2, 1, 3, 2);
+
+	// ---- the keys: H / F on the keyboard (SCHEMES), the D-pad's arrows on a pad
+	qframe(85, 80);
+	check("com teclado: as teclas H e F nas placas (tutorial.ts SCHEMES)", legendOf(0) === "H" && legendOf(1) === "F");
+	uis.GetLastInputType = () => Enum.UserInputType.Gamepad1;
+	uis.PreferredInput = Enum.PreferredInput.Gamepad;
+	const toPad = phase("placas rapidas: o jogador pega o controle", () => qframe(85, 80));
+	const arrow = (k, n) => deep(deep(plate(k), "Key"), n)?.Visible === true;
+	check(
+		"com o controle: a seta do D-pad (para cima em HEAL, para baixo em EAT), sem letra, sem criar Instance",
+		deep(plate(0), "Key").Visible &&
+			arrow(0, "Up") &&
+			!arrow(0, "Down") &&
+			arrow(1, "Down") &&
+			!arrow(1, "Up") &&
+			deep(deep(plate(0), "Key"), "Legend").Text === "" &&
+			zero(toPad),
+		cost(toPad),
+	);
+	deskUse();
+	qframe(85, 80);
+
+	// ---- a click is the key: the same field (InputState.quickUsePressed) as H / F and the D-pad's up / down
+	{
+		const got = [];
+		for (const [inputObj, what] of [
+			[{ UserInputType: Enum.UserInputType.Keyboard, KeyCode: Enum.KeyCode.H }, "H"],
+			[{ UserInputType: Enum.UserInputType.Keyboard, KeyCode: Enum.KeyCode.F }, "F"],
+			[{ UserInputType: Enum.UserInputType.Gamepad1, KeyCode: Enum.KeyCode.DPadUp }, "D-pad up"],
+			[{ UserInputType: Enum.UserInputType.Gamepad1, KeyCode: Enum.KeyCode.DPadDown }, "D-pad down"],
+		]) {
+			input.beginFrame();
+			uis.InputBegan.Fire(inputObj, false);
+			got.push(`${what}=${input.quickUsePressed}`);
+		}
+		const clicks = [];
+		for (const k of [0, 1]) {
+			input.beginFrame();
+			plate(k).Activated.Fire();
+			flush();
+			clicks.push(input.quickUsePressed);
+		}
+		input.beginFrame();
+		check(
+			"H e o D-pad para cima escrevem 0 (HEAL), F e para baixo 1 (EAT); clicar na placa escreve o mesmo campo",
+			got.join(",") === "H=0,F=1,D-pad up=0,D-pad down=1" && clicks.join(",") === "0,1",
+			`${got.join(", ")}; cliques ${clicks.join(",")}`,
+		);
+		input.beginFrame();
+		uis.InputBegan.Fire({ UserInputType: Enum.UserInputType.Keyboard, KeyCode: Enum.KeyCode.H }, true);
+		const typing = input.quickUsePressed;
+		input.setHeld(true);
+		uis.InputBegan.Fire({ UserInputType: Enum.UserInputType.Keyboard, KeyCode: Enum.KeyCode.F }, false);
+		input.setHeld(true);
+		const held = input.quickUsePressed;
+		input.setHeld(false);
+		input.beginFrame();
+		check(
+			"H digitado no chat nao cura, e com uma tela aberta (UI-06: o sobrevivente parado) a tecla e largada",
+			typing === -1 && held === -1,
+			`chat ${typing}, tela ${held}`,
+		);
+	}
+
+	// ---- the cooldown sweep, the pulse, Reduce Motion
+	{
+		const veil = k => deep(plate(k), "Cooldown");
+		const iconY = k => deep(plate(k), "ItemIcon").Position.Y.Offset;
+		/** the plate's light band at the "hot" wash (plate.ts: foreground at 50%; at rest 30%) */
+		const hotBand = k => raised(plate(k)) && Math.abs(band(plate(k)).BackgroundTransparency - 0.5) < 1e-6;
+		const sent = [];
+		const press = (k, hp, hunger) => q.press(k, body(hp, hunger), save, now, id => (sent.push(id), true));
+		const r = press(0, 70, 80);
+		qframe(70, 80);
+		const at0 = veil(0).Visible ? veil(0).Size.Y.Scale : 0;
+		const eatVeil = veil(1).Visible;
+		const litIcon = iconY(0);
+		const lit = hotBand(0);
+		check(
+			"um uso (HP 70, faltam 30): o verbo do Bag recebe o First aid kit -- a menor que cobre 30 -- e o ganho e +30 HP",
+			r.used && sent[0] === KIT && r.hpGain === 30,
+			`usou ${USABLES[sent[0]]?.name}, +${r.hpGain} HP`,
+		);
+		check(
+			"e o tempo de uso (0,25 s, o mesmo do servidor) cobre AS DUAS placas com o veu, cheio no comeco",
+			at0 > 0.95 && eatVeil,
+			`veu ${at0.toFixed(2)}`,
+		);
+		now += 0.125;
+		qframe(70, 80);
+		const half = veil(0).Size.Y.Scale;
+		now += 0.2;
+		qframe(70, 80);
+		check(
+			"o veu escorre com o tempo e some quando pronto",
+			Math.abs(half - 0.5) < 0.05 && !veil(0).Visible && !veil(1).Visible,
+			`${half.toFixed(2)} na metade`,
+		);
+		const early = press(0, 70, 80);
+		check(
+			"a leitura da barra espera o snapshot: logo depois do kit (HP ainda 70 no cliente) o HEAL diz cheio, nao gasta outra",
+			!early.used && early.why === "full" && sent.length === 1,
+			`${early.why}`,
+		);
+		now += 2;
+		qframe(70, 80);
+		const idleIcon = iconY(0);
+		check(
+			"o pulso: a placa acende e o icone sobe logo depois do uso, e os dois voltam",
+			lit && litIcon < idleIcon && !hotBand(0),
+			`icone em y ${litIcon} -> ${idleIcon}`,
+		);
+		gui.ReducedMotionEnabled = true;
+		flush();
+		press(1, 70, 60);
+		qframe(70, 60);
+		const stillVeil = veil(1).Size.Y.Scale;
+		const stillIcon = iconY(1);
+		const stillLit = hotBand(1);
+		now += 0.125;
+		qframe(70, 60);
+		const stillVeil2 = veil(1).Size.Y.Scale;
+		gui.ReducedMotionEnabled = false;
+		flush();
+		now += 2;
+		qframe(70, 60);
+		check(
+			"com Reduzir Movimento: o veu fica inteiro enquanto espera (nao escorre) e o icone nao pula -- so a luz",
+			stillVeil === 1 && stillVeil2 === 1 && stillIcon === iconY(1) && stillLit,
+			`veu ${stillVeil} / ${stillVeil2}, icone ${stillIcon} / ${iconY(1)}`,
+		);
+	}
+
+	// ---- no churn: 600 frames of everything changing, and an idle frame writes nothing
+	{
+		const run = phase("600 quadros com as placas rapidas mudando (pick, contagem, veu, pulso, estados)", () => {
+			for (let i = 0; i < 600; i++) {
+				now += 1 / 60;
+				if (i % 40 === 0) stock(i % 120 === 0 ? 0 : 2, 1, i % 200 === 0 ? 0 : 3, 2);
+				const hp = 100 * Math.abs(Math.cos(i / 50));
+				const hunger = 100 * Math.abs(Math.sin(i / 70));
+				if (i % 25 === 0) q.press(i % 50 === 0 ? 0 : 1, body(hp, hunger), save, now, () => true);
+				if (i % 90 === 0) hover(i % 180 === 0 ? 0 : 1, true);
+				if (i % 90 === 45) hover(i % 180 === 45 ? 0 : 1, false);
+				qframe(hp, hunger);
+			}
+		});
+		check("600 quadros com HEAL / EAT mudando nao criam nem destroem Instance", zero(run), cost(run));
+		hover(0, false);
+		hover(1, false);
+		stock(2, 1, 3, 2);
+		now += 5;
+		qframe(80, 70);
+		const idle = phase("60 quadros identicos com as placas rapidas", () => {
+			for (let i = 0; i < 60; i++) {
+				now += 1 / 60;
+				qframe(80, 70);
+			}
+		});
+		check("quadros iguais: as placas nao escrevem nada", idle.writes === 0 && zero(idle), cost(idle));
+	}
+	hud.unmount();
+	setIconAtlas("");
 }
 
 // ---------------------------------------------------------------- report

@@ -485,6 +485,10 @@ function handleGamepadButton(key: Enum.KeyCode, down: boolean): void {
 		// the pad has no number keys: the D-pad steps through the weapons, drawn (combat.ts `cycleWeapon`, ITM-06). It
 		// only gets here with no menu holding the pad; the open scoreboard keeps it for its sort (main.client.ts)
 		input.weaponCycle = key === Enum.KeyCode.DPadLeft ? -1 : 1;
+	} else if (key === Enum.KeyCode.DPadUp || key === Enum.KeyCode.DPadDown) {
+		// the quick plates (ITM-07): up HEALs, down EATs -- the order of the HP and FOOD bars they sit by. Up and down
+		// were free in a run; in a menu the D-pad is the engine's navigation and never gets here
+		input.quickUsePressed = key === Enum.KeyCode.DPadUp ? 0 : 1;
 	} else if (key === Enum.KeyCode.ButtonL1) {
 		input.backpackPressed = true;
 	} else if (key === Enum.KeyCode.ButtonStart) {
@@ -542,6 +546,9 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 		} else if (k === Enum.KeyCode.Q) {
 			// held: the match scoreboard shows while Q is down (MP-23; Tab is the Roblox player list's, UI-02)
 			input.keyScoreboard = true;
+		} else if (k === Enum.KeyCode.H || k === Enum.KeyCode.F) {
+			// the quick plates (ITM-07): H heals, F eats (food) -- neither a Roblox default nor bound here before
+			input.quickUsePressed = k === Enum.KeyCode.H ? 0 : 1;
 		} else {
 			const slot = WEAPON_KEYS.indexOf(k);
 			if (slot >= 0) input.weaponSlotPressed = slot;

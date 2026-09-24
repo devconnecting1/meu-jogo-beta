@@ -27,7 +27,7 @@ import * as Rule from "shared/sim/craftRule";
 import type { CraftHeat } from "shared/sim/craftRule";
 import { Solid, WorldData } from "shared/game/world";
 import { equipSlotOf, ownsEquip, PlayerSaveData, SAVE_LIMITS, setEquipped } from "shared/game/save";
-import { itemUseEffect, PlayerState } from "shared/game/player";
+import { itemUseEffect, PlayerState, USE_COOLDOWN_S } from "shared/game/player";
 import { creditCraft } from "../save/achievements";
 import { ServerBuild } from "./build";
 
@@ -35,8 +35,8 @@ import { ServerBuild } from "./build";
 export const STATION_RANGE = Rule.STATION_RANGE;
 /** §8.1: up to 4 crafts per second */
 export const CRAFT_RATE = 4;
-/** §8.1: a usable item every 0.25 s */
-export const USE_COOLDOWN = 0.25;
+/** §8.1: a usable item every 0.25 s (shared: the HUD's quick plates sweep for the same limit, ITM-07) */
+export const USE_COOLDOWN = USE_COOLDOWN_S;
 
 export type CraftStation = Rule.CraftStation;
 

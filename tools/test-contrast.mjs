@@ -371,6 +371,19 @@ const PAIRS = [
 	["STAT.value", "SURFACE.groove", MIN_TEXT, "console: o pente no leitor da coluna da arma"],
 	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "console: o pente vazio no leitor"],
 	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "console: a reserva e o Reloading... no leitor"],
+	// --- the quick HEAL and EAT plates (ITM-07, client/ui/hudQuick.ts): each in its own groove at the end of the bar it
+	// fills (desktop) or on the touch deck's groove bed; usable = the iron plate in relief, else the ringed socket
+	["THEME.secondary", "SURFACE.groove", MIN_UI, "HEAL / EAT: a chapa de ferro (usavel) no sulco / no leito"],
+	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "HEAL / EAT: a contagem clara na chapa (desktop)"],
+	["THEME.foreground", "SURFACE.key", MIN_TEXT, "HEAL / EAT: a tecla H / F e a seta do D-pad"],
+	["SURFACE.line", "SURFACE.groove", MIN_UI, "HEAL / EAT apagada: o anel do soquete no sulco"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, 'HEAL / EAT apagada: a contagem muda ("0") no soquete'],
+	["STAT.value", "SURFACE.well", MIN_TEXT, "HEAL / EAT no toque: a contagem em amarelo no chip do ladrilho"],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'HEAL / EAT: a dica sob o mouse ("Bandage: +20 HP", o motivo)'],
+	// (touch: the deck is body -> section -> groove, the console's own pairs above; a groove straight on the body is the
+	// 1,15:1 the console's comment warns about)
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "toque: a secao dos ladrilhos rapidos sobre o corpo da placa"],
+	["SURFACE.groove", "SURFACE.section", MIN_RELIEF, "toque: o leito dos ladrilhos rapidos dentro da secao"],
 	// --- the sky (client/ui/hudSky.ts): the day clock, a section of the console (desktop) or its own plate in the touch
 	// controls' top row -- the same window body -> section -> groove either way. Every text and mark sits on the groove
 	["THEME.foreground", "SURFACE.groove", MIN_TEXT, 'ceu: "Day N" (o dia do MUNDO) e "Night in" / "Daybreak in"'],

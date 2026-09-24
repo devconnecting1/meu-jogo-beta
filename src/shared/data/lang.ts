@@ -593,6 +593,14 @@ export const LANG_TABLE: Array<string> = [
 	"Night in",
 	"Switch weapon",
 	"Tap a weapon",
+	// the quick HEAL and EAT plates (client/ui/hudQuick.ts, DESIGN_RULES ITM-07): their row of the controls reference
+	// (tutorial.ts SCHEMES) and why a plate does nothing -- on its tooltip, or in the feed when pressed anyway ("Already
+	// at full health" and "You're already full" are the Bag's, above). A use says "+20 HP" / "+25 FOOD" (the tags above)
+	"Quick heal / eat",
+	"Tap heal / food",
+	"No healing items",
+	"No food",
+	"Eating that would kill you",
 	// the lobby and the Survivor screen (client/ui/lobby.ts, survivor.ts, DESIGN_RULES UI-10). START opens the Survivor
 	// screen, which enters the city; "Day" frames the town's day ("Enter the city  ·  Day 7")
 	"Start",

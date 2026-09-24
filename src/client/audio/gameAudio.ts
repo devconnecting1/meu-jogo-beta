@@ -158,6 +158,11 @@ export class GameAudio {
 		audio.play("craftDone");
 	}
 
+	/** a usable was used: the Bag's Use or the HUD's quick HEAL / EAT (DESIGN_RULES ITM-07) */
+	used(): void {
+		audio.play("useItem");
+	}
+
 	// ------------------------------------------------------------ internals
 
 	private snapshot(refs: GameRefs): void {

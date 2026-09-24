@@ -36,3 +36,31 @@ export const USABLES: Array<UsableDef> = [
 	{ id: 18, name: "Berry", hp: 0, hunger: 15, speed: 0, calm: 0, pain: 0, cook: -1 },
 	{ id: 19, name: "Rotten meat", hp: -10, hunger: 20, speed: 0, calm: 0, pain: 0, cook: -1 },
 ];
+
+/*
+ * Quick use (DESIGN_RULES ITM-07, UI-09): what the HUD's HEAL and EAT plates -- H / F, the D-pad's up / down, a tap --
+ * may use without opening the Bag, as TIERS: the pick (shared/game/quickUse.ts `quickPick`) takes the first tier that
+ * holds something, and inside it the smallest item that fills the bar without waste, or the biggest when none does.
+ * A tie goes to the first in the tier. One list for every client, and the server applies whatever it sends by the
+ * rule of any use (server/sim/craft.ts `useItem`): the quick path is the Bag's UseItem verb, not a new one.
+ *
+ * Never here: what neither heals nor feeds (Pain killer, Adrenaline, Sedative). Their timed effect is the point of
+ * using them, and a plate that spent one to "heal" would burn a rare item for nothing -- they stay in the Bag.
+ */
+
+/** HEAL: the medicine that restores health, smallest first */
+export const QUICK_HEAL: ReadonlyArray<ReadonlyArray<number>> = [[12, 5]];
+
+/**
+ * EAT, in three tiers: (1) ready food; (2) raw food, only when there is nothing ready -- a fire makes it worth more
+ * (ITM-01: raw meat 20 -> cooked 30); (3) rotten meat, only when it is the last food, and never when its 10 hp of
+ * damage would end the survivor.
+ */
+export const QUICK_EAT: ReadonlyArray<ReadonlyArray<number>> = [
+	[1, 3, 4, 9, 11, 14, 16, 17, 18],
+	[0, 2, 10, 13, 15],
+	[19],
+];
+
+/** the icon a plate shows with none of its kind in the backpack (Bandage; Canned food): Núcleo 1, their own drawing */
+export const QUICK_ICON: ReadonlyArray<number> = [12, 9];

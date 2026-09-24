@@ -57,22 +57,23 @@ Tudo abaixo foi checado no Roblox Studio (modo **Edit**, sem Play, sem alterar o
 
 ### SFX — corpos, impactos e mundo
 
-| Nome lógico   | Asset                                                                    | Criador         | Duração | Observação                                                |
-| ------------- | ------------------------------------------------------------------------ | --------------- | ------- | --------------------------------------------------------- |
-| `hitFlesh`    | `rbxasset://sounds/splat.wav`                                            | Roblox (engine) | 0,50 s  |                                                           |
-| `zombieDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Grunhido, tocado 0,60–0,78× (grave).                      |
-| `zombieGrowl` | `rbxassetid://9114628598` — "Goliath Vocal Deep Growling Voice 20 (SFX)" | ProSoundEffects | 1,83 s  | Rosnado ambiente da horda próxima. Ver pendência B.       |
-| `zombieAlert` | `rbxassetid://9114628620` — "Goliath Vocal Deep Growling Voice 21 (SFX)" | ProSoundEffects | 2,26 s  | Um zumbi acabou de te ver.                                |
-| `bossRoar`    | `rbxassetid://9114628818` — "Goliath Vocal Deep Growling Voice 22 (SFX)" | ProSoundEffects | 2,12 s  | Tocado 0,58–0,68× (bem grave).                            |
-| `playerHurt`  | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Mesmo take do zumbi, 1,05–1,20× (agudo). Ver pendência C. |
-| `playerDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | 0,50–0,55×. Ver pendência C.                              |
-| `explosion`   | `rbxasset://sounds/impact_explosion_03.mp3`                              | Roblox (engine) | 2,59 s  | Zumbi-bomba e barris.                                     |
-| `debrisWood`  | `rbxasset://sounds/collide.wav`                                          | Roblox (engine) | 1,20 s  | Árvore, construção.                                       |
-| `debrisMetal` | `rbxasset://sounds/metal.ogg`                                            | Roblox (engine) | 0,60 s  | Carro, chefe, ricochete.                                  |
-| `debrisGlass` | `rbxasset://sounds/glassbreak.wav`                                       | Roblox (engine) | 1,58 s  | Reservado (ainda sem evento que o dispare).               |
-| `pickupItem`  | `rbxasset://sounds/clickfast.wav`                                        | Roblox (engine) | 0,29 s  |                                                           |
-| `pickupCoin`  | `rbxasset://sounds/electronicpingshort.wav`                              | Roblox (engine) | 0,72 s  |                                                           |
-| `craftDone`   | `rbxasset://sounds/switch3.wav`                                          | Roblox (engine) | 0,37 s  |                                                           |
+| Nome lógico   | Asset                                                                    | Criador         | Duração | Observação                                                                                   |
+| ------------- | ------------------------------------------------------------------------ | --------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `hitFlesh`    | `rbxasset://sounds/splat.wav`                                            | Roblox (engine) | 0,50 s  |                                                                                              |
+| `zombieDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Grunhido, tocado 0,60–0,78× (grave).                                                         |
+| `zombieGrowl` | `rbxassetid://9114628598` — "Goliath Vocal Deep Growling Voice 20 (SFX)" | ProSoundEffects | 1,83 s  | Rosnado ambiente da horda próxima. Ver pendência B.                                          |
+| `zombieAlert` | `rbxassetid://9114628620` — "Goliath Vocal Deep Growling Voice 21 (SFX)" | ProSoundEffects | 2,26 s  | Um zumbi acabou de te ver.                                                                   |
+| `bossRoar`    | `rbxassetid://9114628818` — "Goliath Vocal Deep Growling Voice 22 (SFX)" | ProSoundEffects | 2,12 s  | Tocado 0,58–0,68× (bem grave).                                                               |
+| `playerHurt`  | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | Mesmo take do zumbi, 1,05–1,20× (agudo). Ver pendência C.                                    |
+| `playerDeath` | `rbxasset://sounds/uuhhh.mp3`                                            | Roblox (engine) | 0,33 s  | 0,50–0,55×. Ver pendência C.                                                                 |
+| `explosion`   | `rbxasset://sounds/impact_explosion_03.mp3`                              | Roblox (engine) | 2,59 s  | Zumbi-bomba e barris.                                                                        |
+| `debrisWood`  | `rbxasset://sounds/collide.wav`                                          | Roblox (engine) | 1,20 s  | Árvore, construção.                                                                          |
+| `debrisMetal` | `rbxasset://sounds/metal.ogg`                                            | Roblox (engine) | 0,60 s  | Carro, chefe, ricochete.                                                                     |
+| `debrisGlass` | `rbxasset://sounds/glassbreak.wav`                                       | Roblox (engine) | 1,58 s  | Reservado (ainda sem evento que o dispare).                                                  |
+| `pickupItem`  | `rbxasset://sounds/clickfast.wav`                                        | Roblox (engine) | 0,29 s  |                                                                                              |
+| `pickupCoin`  | `rbxasset://sounds/electronicpingshort.wav`                              | Roblox (engine) | 0,72 s  |                                                                                              |
+| `craftDone`   | `rbxasset://sounds/switch3.wav`                                          | Roblox (engine) | 0,37 s  |                                                                                              |
+| `useItem`     | `rbxasset://sounds/clickfast.wav` (0,72–0,80×)                           | Roblox (engine) | 0,29 s  | Usar / comer (Bag e HEAL / EAT rápidos, ITM-07): o take do `pickupItem`, grave.              |
 | `footstepA`   | `rbxassetid://9114523345` — "Foot Stomp 3 (SFX)"                         | ProSoundEffects | 0,45 s  | Foley. O arquivo tem **vários** passos: `maxPlay` 0,22 s corta no primeiro. Ver pendência A. |
 | `footstepB`   | `rbxassetid://9114523358` — "Foot Stomp 4 (SFX)"                         | ProSoundEffects | 0,47 s  | Mesma série, alternado com o A (um id só vira metrônomo a 2 passos/s). Ver pendência A.      |
 

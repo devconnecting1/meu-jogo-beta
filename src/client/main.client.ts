@@ -49,6 +49,7 @@ import { interactHint } from "./systems/interaction";
 import { addItem } from "./systems/items";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
+import { pressQuick, quickUse } from "./systems/quickUse";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
@@ -572,6 +573,8 @@ function pushHud(): void {
 		reloadRatio,
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
+		// ITM-07: the HEAL and EAT plates -- the shared pick, the use cooldown's sweep, the pulse after a use
+		quick: quickUse.frame(p, save, os.clock()),
 	});
 	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
 	hud.updateNav(refs.world, p.x, p.y, save);
@@ -748,6 +751,8 @@ function mountRun(enterWorld = true): void {
 		ctx.input.actionPressed = true;
 	};
 	hud.mount();
+	// ITM-07: a new body carries no use cooldown and no pending heal of the last one
+	quickUse.reset();
 	deathShown = false;
 	saveTimer = 0;
 	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
@@ -782,6 +787,17 @@ function mountRun(enterWorld = true): void {
 		if (alive) {
 			warnNoAmmo();
 			trackBefore();
+		}
+		// ITM-07: a quick plate pressed -- H / F, the D-pad's up / down, a click or a tap (setHeld dropped it with a
+		// screen open or the survivor dead): the Bag's own Use, on the item the shared rule picks
+		if (alive && input.quickUsePressed >= 0) {
+			const p = refs.player;
+			pressQuick(input.quickUsePressed, p, ctx.save, os.clock(), {
+				send: id => Bag.useItem(p, ctx.save, id),
+				say: text => hud.showMessage(text),
+				heard: () => gameAudio.used(),
+				tr,
+			});
 		}
 		admin?.beforeUpdate(dt);
 		gameAudio.beforeUpdate(refs);
@@ -1115,7 +1131,15 @@ function playPressed(): void {
 // server's own rule, sent as an intent, and reconciled with the bag the server sends back (QA sweep NET-1..4).
 pack.onUse = id => {
 	if ((ctx.save.invenUse[id] ?? 0) <= 0) return;
-	if (Bag.useItem(loop.getRefs().player, ctx.save, id)) return;
+	const p = loop.getRefs().player;
+	const [hp, hunger] = [p.hp, p.hungry];
+	if (Bag.useItem(p, ctx.save, id)) {
+		// the use sound, and the HUD's quick plates learn of it: the use cooldown's sweep, and the bars as they will be
+		// (ITM-07) -- with the vitals from before the use, which offline is already applied
+		quickUse.noteUse(id, p, os.clock(), -1, hp, hunger);
+		gameAudio.used();
+		return;
+	}
 	// eight verbs still in flight: the click waits for their answers, and "already full" would be a lie
 	if (Bag.busy()) return;
 	// a use is only refused for a held, known item when it would do nothing (hp/hunger already
