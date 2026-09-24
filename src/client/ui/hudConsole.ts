@@ -70,6 +70,7 @@ import { pickupFlashTransparency } from "./pickupToast";
 import { PlateState, paintPlate, reliefPx } from "./plate";
 import { BAR, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
 import { HudSky, Px, SKY_STACK_H, SKY_STACK_W, pixelIcon, skySection } from "./hudSky";
+import { RegenCue } from "./hudRegen";
 import { SCHEMES, currentScheme } from "./tutorial";
 import { Groove, Section } from "./window";
 import * as W from "./widgets";
@@ -112,6 +113,12 @@ export interface HudState {
 	ammoPool: number;
 	/** 1 → 0 after taking damage */
 	hitFlash: number;
+	/**
+	 * Seconds since the body last lost hp (PlayerState.sinceHurt, DESIGN_RULES VIT-01): with hp and hunger, what the
+	 * vitals' cue reads (hudRegen.ts: the HP bar glows while healing, a fork on FOOD when only food stops it).
+	 * Undefined = not tracked: no glow.
+	 */
+	sinceHurt?: number;
 }
 
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
@@ -509,6 +516,7 @@ export function placeTouchChip(
 // ---------------------------------------------------------------- bars
 
 interface ConsoleBar {
+	groove: Frame;
 	fill: Frame;
 	label: TextLabel;
 	ratio: number;
@@ -698,6 +706,8 @@ export class HudConsole {
 	private readonly tags: [string, string, string];
 	private readonly texts: Array<ScaledText> = [];
 	private readonly bars: Array<ConsoleBar> = [];
+	/** the vitals' healing cue (hudRegen.ts) */
+	private readonly regen: RegenCue;
 	private readonly tiles: Array<HotbarTile> = [];
 	/** the key order of this frame (weaponKeyOrder fills it: no allocation per frame) */
 	private readonly order: Array<number> = [];
@@ -786,6 +796,9 @@ export class HudConsole {
 		for (let i = 0; i < 3; i++) {
 			this.bars.push(this.makeBar(vitals, names[i], L.inset, barY(i), faces[i], vitals.ZIndex + 1));
 		}
+		// VIT-01's cue on the same two bars: the HP glow while healing, the fork on FOOD when only food stops it
+		const hpAt = { x: L.inset, y: barY(0), barW: L.barW, barH: L.barH, barGap: L.barGap };
+		this.regen = new RegenCue(vitals, this.bars[1].groove, hpAt, vitals.ZIndex + 1);
 
 		// ---- middle: the hotbar on its groove bed, in its section
 		const hotbarX = vitalsX + vitalsW + L.colGap;
@@ -920,6 +933,7 @@ export class HudConsole {
 			zIndex: z + 3,
 		});
 		const bar: ConsoleBar = {
+			groove,
 			fill,
 			label,
 			ratio: 1,
@@ -1196,6 +1210,8 @@ export class HudConsole {
 			foodBar.label.Text = `${this.tags[1]} ${foodNow} / ${state.hungerMax}`;
 		}
 		this.setBar(foodBar, foodRatio, foodRatio < LOW_FOOD && (still || wave > 0) ? BAR.hp : BAR.food, "idle", true);
+		// VIT-01: the HP bar glows while the body heals, and FOOD shows a fork while only food stands in its way
+		this.regen.update(state.hp, state.hpMax, state.hunger, state.sinceHurt, now, still);
 
 		// XP, with the level written in it
 		const exp = math.max(0, math.floor(state.exp));

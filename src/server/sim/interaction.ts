@@ -39,6 +39,7 @@ import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
@@ -111,6 +112,11 @@ export interface ServerInteractionOptions {
 	 * shut, or round one that had been opened, until something else dirtied the tile.
 	 */
 	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	/**
+	 * §9.3: does the run of the survivor in `slot` still earn rewards? What a pickup or a search puts in an assisted
+	 * run's backpack is theirs, the achievement (Woodpile) is not. Left undefined, every run does -- what a test wants.
+	 */
+	paysRewards?: (slot: number) => boolean;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -132,6 +138,7 @@ export class ServerInteraction {
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly machines?: MachineActions;
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	private readonly paysRewards?: (slot: number) => boolean;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -152,6 +159,12 @@ export class ServerInteraction {
 		this.fx = options.fx;
 		this.machines = options.machines;
 		this.onSolidChanged = options.onSolidChanged;
+		this.paysRewards = options.paysRewards;
+	}
+
+	/** §9.3: the run of the survivor in `slot` still earns achievements */
+	private pays(slot: number): boolean {
+		return this.paysRewards?.(slot) ?? true;
 	}
 
 	/**
@@ -178,7 +191,7 @@ export class ServerInteraction {
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 
 		if (target.kind === "item") {
-			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
+			const got = this.items.pickup(ctx.save, p.x, p.y, target.item, ctx.slot, this.pays(ctx.slot));
 			if (got.ok) return { kind: "item", count: got.count };
 			if (got.why === "range" || got.why === "blocked" || got.why === "full") {
 				return { kind: "refused", why: got.why };
@@ -230,6 +243,11 @@ export class ServerInteraction {
 		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
 		// client predicts its own movement against it. A door somebody was not told about is a wall.
 		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });
+		// and it is HEARD where it turned (P0-4), by whoever is near: the unreliable Fx channel, interest-filtered
+		// like any effect -- a creak lost on the way costs nothing, the DoorSet above is the door
+		const iron = s.kind === "iron_door";
+		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
+		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
 		return { kind: "door", solid: s, open: willOpen };
 	}
 
@@ -311,7 +329,7 @@ export class ServerInteraction {
 	// ---------------------------------------------------------------- searching a building
 
 	private search(ctx: InteractContext, b: Solid): InteractOutcome {
-		const found = this.items.search(ctx.save, ctx.state.x, ctx.state.y, ctx.hours);
+		const found = this.items.search(ctx.save, ctx.state.x, ctx.state.y, ctx.hours, this.pays(ctx.slot));
 		if (found.building === undefined) return { kind: "refused", why: "range" };
 		if (found.taken.size() === 0) return { kind: "refused", why: "empty" };
 		// the flag for everyone standing in that house is refreshed by the sweep in `step`, on the next
@@ -328,7 +346,7 @@ export class ServerInteraction {
 	 */
 	private pump(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
-		const taken = this.items.drain(ctx.save, s, ctx.hours);
+		const taken = this.items.drain(ctx.save, s, ctx.hours, this.pays(ctx.slot));
 		if (taken.size() === 0) return { kind: "refused", why: "empty" };
 		return { kind: "pump", solid: s, taken: taken.size() };
 	}

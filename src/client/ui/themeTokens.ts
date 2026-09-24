@@ -40,6 +40,10 @@ export interface ThemeColors {
 	barHp: Color3;
 	barFood: Color3;
 	barXp: Color3;
+	coinShade: Color3;
+	coinShine: Color3;
+	medal: Color3;
+	medalShade: Color3;
 }
 
 export const THEME_NAME = "Meu tema global";
@@ -116,6 +120,14 @@ export const DARK: ThemeColors = {
 	barFood: Color3.fromRGB(188, 85, 0),
 	/** bar-xp: oklch(0.5564 0.0993 245.7394) #3c78aa */
 	barXp: Color3.fromRGB(60, 120, 170),
+	/** coin-shade: oklch(0.4800 0.1250 48.0000) #94430b */
+	coinShade: Color3.fromRGB(148, 67, 11),
+	/** coin-shine: oklch(0.8400 0.1300 72.0000) #ffbc64 */
+	coinShine: Color3.fromRGB(255, 188, 100),
+	/** medal: oklch(0.8300 0.1400 86.0000) #f0c04e */
+	medal: Color3.fromRGB(240, 192, 78),
+	/** medal-shade: oklch(0.5800 0.1100 78.0000) #9e711e */
+	medalShade: Color3.fromRGB(158, 113, 30),
 };
 
 /** :root (light) tokens */
@@ -190,6 +202,14 @@ export const LIGHT: ThemeColors = {
 	barFood: Color3.fromRGB(210, 105, 30),
 	/** bar-xp: var(--chart-2) #4c88bb */
 	barXp: Color3.fromRGB(76, 136, 187),
+	/** coin-shade: var(--chart-3) #d2691e */
+	coinShade: Color3.fromRGB(210, 105, 30),
+	/** coin-shine: var(--chart-3) #d2691e */
+	coinShine: Color3.fromRGB(210, 105, 30),
+	/** medal: var(--stat-value) #1a1a1a */
+	medal: Color3.fromRGB(26, 26, 26),
+	/** medal-shade: var(--stat-value) #1a1a1a */
+	medalShade: Color3.fromRGB(26, 26, 26),
 };
 
 /** sidebar (navigation) tokens: --sidebar-* without the prefix */

@@ -894,10 +894,12 @@ export class GameLoop {
 		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
-			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
+			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim -- or the motorcycle's headlight
+			// along the ride (VEI-05) -- to the unit and the degree
 			const radius = SurvivorLight.survivorLightRadius(save);
-			const cone = SurvivorLight.survivorCone(save);
-			addSurvivorLight(lights, p.x, p.y, p.angle, radius, cone?.radius);
+			const beam = SurvivorLight.survivorBeamReach(p, save);
+			const beamAt = SurvivorLight.survivorBeamAngle(p);
+			addSurvivorLight(lights, p.x, p.y, beamAt, radius, beam > 0 ? beam : undefined);
 		}
 		// every ally's, by the same shape and as far as the wire tells what they carry (playersView.collectLights)
 		if (allies.size() > 0) this.playersView.collectLights(allies, lights);

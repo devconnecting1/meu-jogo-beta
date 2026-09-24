@@ -203,7 +203,19 @@ const PAIRS = [
 	["THEME.foreground", "GAME.food", MIN_LARGE, "valor sobre a barra de fome (numeric Bold)"],
 	["THEME.foreground", "GAME.xp", MIN_LARGE, "valor sobre a barra de XP (numeric Bold)"],
 	["THEME.foreground", "THEME.primary", MIN_LARGE, "valor sobre uma barra de progresso padrao"],
-	["THEME.foreground", "GAME.coin", MIN_LARGE, 'glifo "$" do icone de moeda (CoinIcon) e do chip do toast de moeda'],
+	// the coin (MON-06): the round pixel coin of pixelArt.ts replaced the "$" on an orange chip. It is a picture, not
+	// text: its face owes 3:1 to every surface it sits on -- the dark chips (coin pill, a locked tile's price, Earn
+	// coins), a pack card, a panel (the coin toast, the end of a run) -- and its rim, face and shine tell it apart
+	[
+		"GAME.coin",
+		"SURFACE.well",
+		MIN_UI,
+		"moeda de pixel: a face sobre o chip escuro (pilula, preco do ladrilho, Earn coins)",
+	],
+	["GAME.coin", "SURFACE.window", MIN_UI, "moeda de pixel: a face sobre o cartao de pacote da loja (grafite)"],
+	["GAME.coin", "SURFACE.panel", MIN_UI, "moeda de pixel: a face sobre o painel (toast de moedas, fim de partida)"],
+	["GAME.coinShine", "GAME.coin", MIN_RELIEF, "moeda de pixel: o brilho no alto a esquerda, sobre a face"],
+	["GAME.coin", "GAME.coinShade", MIN_RELIEF, "moeda de pixel: a face contra a borda e a fenda"],
 	[
 		"THEME.foreground",
 		"GAME.info",
@@ -461,6 +473,16 @@ const PAIRS = [
 	],
 	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, "placar: o chip aceso enquanto o placar esta aberto"],
 
+	// --- the save indicator (SAV-01, client/ui/saveIndicator.ts): a sunk well in the top bar, text and a pixel floppy on
+	// it. Small text (TEXT.sm), so 4,5:1 for every word; the floppy is a non-text mark, 3:1
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, 'indicador de save: "Saving..." em cinza mudo'],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'indicador de save: "Saved"'],
+	["THEME.destructive", "SURFACE.well", MIN_TEXT, 'indicador de save: "Progress not saved — retrying" em vermelho'],
+	["THEME.mutedForeground", "SURFACE.well", MIN_UI, "indicador de save: o disquete de pixel gravando"],
+	["GAME.success", "SURFACE.well", MIN_UI, "indicador de save: o disquete verde de gravado"],
+	["THEME.destructive", "SURFACE.well", MIN_UI, "indicador de save: o disquete vermelho da falha"],
+	["SURFACE.line", "SURFACE.well", MIN_UI, "indicador de save: a borda do chip"],
+
 	// --- the death screen (UI-13, client/onboarding/gameOver.ts): a UI-07 window over the run. The hero and the life's
 	// strip are grooves in section plates (body -> section -> groove, the HUD sky's vocabulary); the choice is the kit's
 	// plates. Numbers speak in the card's voices (UI-08): the count and the stats in the numbers' yellow, the town's fall
@@ -483,14 +505,64 @@ const PAIRS = [
 	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'morte: o badge "New best!" (leito escuro)'],
 	["STAT.bonus", "SURFACE.groove", MIN_UI, 'morte: a borda verde do badge "New best!" sobre a faixa'],
 	["THEME.primaryForeground", "THEME.primary", MIN_LARGE, "morte: Rebirth now (a acao principal, aco-azul)"],
-	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "morte: o preco do Rebirth e o coracao sobre o azul"],
-	["THEME.foreground", "GAME.coin", MIN_LARGE, 'morte: o "$" da moeda do preco'],
+	["THEME.primaryForeground", "THEME.primary", MIN_TEXT, "morte: o coracao do Rebirth sobre o azul"],
+	// the Rebirth price is the round pixel coin (MON-06, not a "$" on an orange chip) and the number, on the dark price
+	// chip every coin amount sits on: straight on the steel-blue plate the orange coin is 1.37:1 (recorded below)
+	["SURFACE.well", "THEME.primary", MIN_UI, "morte: o chip escuro do preco sobre a chapa aco-azul do Rebirth"],
+	["GAME.coin", "SURFACE.well", MIN_UI, "morte: a moeda de pixel no chip do preco (e no Rebirth sem moedas)"],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, "morte: o preco do Rebirth no chip escuro"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "morte: o preco do Rebirth sem moedas (apagado)"],
 	["THEME.destructiveForeground", "THEME.destructive", MIN_LARGE, "morte: New game (vermelho, pergunta antes)"],
 	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "morte: Home (ferro) e o seu icone"],
 	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "morte: Rebirth sem moedas (o soquete escuro desabilitado)"],
 	["THEME.primary", "SURFACE.window", MIN_UI, "morte: a chapa azul sobre o corpo da janela"],
 	["THEME.destructive", "SURFACE.window", MIN_UI, "morte: a chapa vermelha sobre o corpo da janela"],
 	["THEME.secondary", "SURFACE.window", MIN_UI, "morte: a chapa de ferro sobre o corpo da janela"],
+
+	// --- the Achievements window (UI-14, client/ui/achievements.ts): rows on the groove -- in progress and unlocked on
+	// the graphite `row`, not started on the darker `well` -- the meter's light label on its steel-blue fill or on the
+	// empty groove, and GOLD for what is unlocked: the ring, the word, the medal (its check the page's near-black)
+	["THEME.foreground", "SURFACE.row", MIN_TEXT, "conquistas: o nome (Bold) na linha"],
+	["THEME.mutedForeground", "SURFACE.row", MIN_TEXT, "conquistas: o que a ganha, na linha"],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, "conquistas: o nome na linha nao comecada (mais escura)"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "conquistas: o que a ganha, na linha nao comecada"],
+	[
+		"THEME.foreground",
+		"THEME.primary",
+		MIN_TEXT,
+		'medidor do kit: "17 / 500" (Bold pequeno) sobre o preenchimento aco-azul',
+	],
+	["THEME.foreground", "SURFACE.groove", MIN_TEXT, 'medidor do kit: "0 / 500" sobre o sulco vazio'],
+	["THEME.primary", "SURFACE.groove", MIN_UI, "medidor do kit: o preenchimento contra o sulco em que corre"],
+	["GAME.medal", "SURFACE.row", MIN_TEXT, 'conquistas: "Unlocked" em ouro na linha desbloqueada'],
+	["GAME.medal", "SURFACE.groove", MIN_UI, "conquistas: o anel de ouro da linha desbloqueada sobre o leito"],
+	["GAME.medal", "SURFACE.row", MIN_UI, "conquistas: a medalha de ouro sobre a linha"],
+	["THEME.background", "GAME.medal", MIN_UI, "conquistas: o check escuro gravado na medalha"],
+	["GAME.medal", "GAME.medalShade", MIN_RELIEF, "conquistas: o ouro contra a borda da medalha"],
+	["THEME.ring", "SURFACE.groove", MIN_UI, "conquistas: o anel de foco da linha (controle) sobre o leito"],
+	["SURFACE.cellCaption", "SURFACE.section", MIN_TEXT, 'conquistas: "Unlocked" e a nota do resumo, no poco'],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, 'conquistas: "1 / 18" e o "In progress: 3" do resumo'],
+	[
+		"THEME.foreground",
+		"SURFACE.groove",
+		MIN_TEXT,
+		'conquistas: o cabecalho de cada grupo ("In progress · 3") no leito',
+	],
+
+	// --- the Shop (MON-03 / MON-06, client/ui/shop.ts): a UI-07 window; the cards are graphite (`window`) panels, the
+	// item tiles dark iron with the count on a key, a waiting pack an outlined chip; the Earn coins rows are the list's
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, "loja: nome e preco do pacote no cartao"],
+	["THEME.mutedForeground", "SURFACE.window", MIN_TEXT, "loja: os nomes do conteudo e a nota do pet no cartao"],
+	["THEME.foreground", "SURFACE.section", MIN_TEXT, "loja: a nota das entregas, no poco"],
+	["SURFACE.section", "SURFACE.window", MIN_RELIEF, "loja: o ladrilho do item sobre o cartao"],
+	["THEME.foreground", "SURFACE.key", MIN_TEXT, 'loja: a contagem "×20" na tecla do ladrilho'],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'loja: "Pending ×1" no chip escuro'],
+	["GAME.info", "SURFACE.well", MIN_UI, "loja: a borda azul do chip Pending"],
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, 'loja: o Buy desabilitado ("10 more needed", "Owned")'],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'Earn coins: o "+3" no chip escuro da moeda'],
+	["GAME.success", "SURFACE.row", MIN_UI, 'Earn coins: o check verde de "Received"'],
+	["THEME.foreground", "SURFACE.row", MIN_TEXT, "Earn coins: a fonte e o progresso do jogador, na linha"],
+	["THEME.mutedForeground", "SURFACE.row", MIN_TEXT, "Earn coins: como ela paga, na linha"],
 ];
 
 /**
@@ -510,6 +582,12 @@ const RECORDED_FAILS = [
 		"SURFACE.cellLabel",
 		MIN_TEXT,
 		"UI-12: o erro em vermelho na celula de rotulo -> o erro vai na voz clara (THEME.foreground) no lugar da descricao",
+	],
+	[
+		"GAME.coin",
+		"THEME.primary",
+		MIN_UI,
+		"MON-06: a moeda de pixel direto na chapa aco-azul do Rebirth (UI-13) -> o chip escuro do preco (SURFACE.well)",
 	],
 ];
 

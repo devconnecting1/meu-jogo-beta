@@ -102,7 +102,10 @@ const { ACHIEVEMENTS, AchievementId } = require(join(SRC, "shared/data/achieveme
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
+const { THEME } = require(join(SRC, "client/ui/theme.ts"));
 flush();
+const sameRgb = (a, b) =>
+	a !== undefined && b !== undefined && Math.abs(a.R - b.R) + Math.abs(a.G - b.G) + Math.abs(a.B - b.B) < 1e-6;
 
 // ---------------------------------------------------------------- checks
 
@@ -210,7 +213,8 @@ const SCREENS = [
 		control: "Close",
 		open: done => showWardrobe(ctx, { onBack: done, onEquip: noop, onUnequip: noop }),
 	},
-	{ name: "Shop", phase: "shop", root: "Shop", control: "Back", open: done => showShop(ctx, done, noop) },
+	// a UI-07 window since the shop's polish (MON-06): its red X is the way out, as on every window
+	{ name: "Shop", phase: "shop", root: "Shop", control: "Close", open: done => showShop(ctx, done, noop) },
 	{ name: "Credits", phase: "credits", root: "Credits", control: "Back", open: done => showCredits(ctx, done) },
 	{
 		name: "How to play",
@@ -250,7 +254,7 @@ const SCREENS = [
 		phase: "playing",
 		root: "Menu",
 		control: "Btn0",
-		open: done => showPause(ctx, 0, { onResume: done, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
+		open: done => showPause(ctx, 0, { onResume: done, onHome: noop, onShop: noop, onSettings: noop }),
 	},
 	{
 		name: "Bag",
@@ -473,8 +477,11 @@ for (const sc of SCREENS) {
 	pack.close();
 	flush();
 	ctx.save.invenWeapon = weaponsBefore;
-	// the shop: the cards' Buy buttons (3 to a row) and the rail beside them
+	// the shop: the cards' Buy buttons (3 to a row) and the tab bar over them. With coins for every pack, the plain
+	// grid; the sparse case (a card you cannot afford: its Buy is disabled, and the pad skips it) is checked below
 	ctx.phase = "shop";
+	const moneyBefore = ctx.save.money;
+	ctx.save.money = 99999;
 	const closeShop = showShop(ctx, noop, noop);
 	flush();
 	const shop = layer.FindFirstChild("Shop");
@@ -482,11 +489,14 @@ for (const sc of SCREENS) {
 		.filter(c => /^Pack\d+$/.test(c.Name))
 		.sort((a, b) => Number(a.Name.slice(4)) - Number(b.Name.slice(4)))
 		.map(c => findIn(c, "Buy"));
-	const rail = (findIn(shop, "Categories")?.GetChildren() ?? []).filter(c => /^Item\d+$/.test(c.Name));
-	counts.push(`loja ${buys.length}`, `trilho ${rail.length}`);
-	bad.push(...gridIssues("loja", buys, 3), ...gridIssues("trilho", rail, 1));
+	const rail = (findIn(shop, "Tabs")?.GetChildren() ?? [])
+		.filter(c => /^Tab\d+$/.test(c.Name))
+		.sort((a, b) => Number(a.Name.slice(3)) - Number(b.Name.slice(3)));
+	counts.push(`loja ${buys.length}`, `abas da loja ${rail.length}`);
+	bad.push(...gridIssues("loja", buys, 3), ...gridIssues("abas da loja", rail, rail.length));
 	closeShop();
 	flush();
+	ctx.save.money = moneyBefore;
 	// Settings: the tab bar is one row, Left / Right never drop into the page or the title strip
 	ctx.phase = "settings";
 	const closeSettings = showSettings(ctx, noop, noop);
@@ -512,11 +522,63 @@ for (const sc of SCREENS) {
 	layer.FindFirstChild("Wardrobe")?.Destroy();
 	flush();
 	check(
-		"o direcional anda nas grades uma celula por vez: Bag (fileira curta), abas do Bag, loja, trilho da loja, abas da Settings, guarda-roupa",
+		"o direcional anda nas grades uma celula por vez: Bag (fileira curta), abas do Bag, loja, abas da loja, abas da Settings, guarda-roupa",
 		bad.length === 0 && tiles.length > BAG_COLS && buys.length > 3 && rail.length > 1 && tabs.length > 1,
 		bad.length > 0 ? bad.slice(0, 6).join("; ") : counts.join(", "),
 	);
 	GuiService.SelectedObject = undefined;
+
+	// MON-06: a pack you cannot afford has its Buy disabled (it says how many coins are missing), so the pad skips it:
+	// every link of the shop's grid lands on a card it CAN buy, left / right stay in the row, up / down reach the
+	// nearest row with one, and a disabled card has no link at all -- the owner's 20 coins, the Medic Bag at 30
+	{
+		ctx.phase = "shop";
+		const before = ctx.save.money;
+		ctx.save.money = 20;
+		const close = showShop(ctx, noop, noop);
+		flush();
+		const cards = (findIn(layer.FindFirstChild("Shop"), "Content")?.GetChildren() ?? [])
+			.filter(c => /^Pack\d+$/.test(c.Name))
+			.sort((a, b) => Number(a.Name.slice(4)) - Number(b.Name.slice(4)));
+		const cells = cards.map(c => findIn(c, "Buy"));
+		const stops = cells.filter(b => b.Selectable === true);
+		const off = cells.filter(b => b.Selectable !== true);
+		const issues = [];
+		for (const b of off) {
+			for (const k of ["NextSelectionLeft", "NextSelectionRight", "NextSelectionUp", "NextSelectionDown"]) {
+				if (b[k] !== undefined) issues.push(`${b.Parent.Name}: desabilitado com ${k}`);
+			}
+		}
+		for (const b of stops) {
+			const i = cells.indexOf(b);
+			const row = Math.floor(i / 3);
+			for (const k of ["NextSelectionLeft", "NextSelectionRight", "NextSelectionUp", "NextSelectionDown"]) {
+				const t = b[k];
+				if (t === undefined) continue;
+				if (!stops.includes(t)) issues.push(`${b.Parent.Name} ${k} -> fora das paradas`);
+				const tr = Math.floor(cells.indexOf(t) / 3);
+				if ((k === "NextSelectionLeft" || k === "NextSelectionRight") && tr !== row)
+					issues.push(`${b.Parent.Name} ${k} sai da fileira`);
+			}
+		}
+		// Pantry Crate (1) -> Right skips the Medic Bag (2): the row has nothing more to buy; Down from the Medic Bag's
+		// column lands on the Electronics Box (5)
+		const pantry = cells[1];
+		const medic = cells[2];
+		check(
+			"loja com 20 moedas: o Medic Bag (30) fica fora do caminho do controle e os links so pousam no que da para comprar",
+			medic?.Selectable === false &&
+				issues.length === 0 &&
+				pantry?.NextSelectionRight === undefined &&
+				pantry?.NextSelectionDown === cells[4] &&
+				cells[5]?.NextSelectionUp === pantry,
+			issues.slice(0, 4).join("; ") || `${stops.length} paradas, ${off.length} fora`,
+		);
+		close();
+		flush();
+		ctx.save.money = before;
+		GuiService.SelectedObject = undefined;
+	}
 }
 
 // ================================================================ 2. the pad through a focused menu
@@ -562,7 +624,7 @@ ctx.phase = "playing";
 	input.beginFrame();
 	flush();
 
-	const close = showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop });
+	const close = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
 	flush();
 	tap(pad("ButtonStart"));
 	const startCloses = input.pausePressed;
@@ -570,10 +632,28 @@ ctx.phase = "playing";
 	close();
 	flush();
 	check("Menu da partida pelo controle: Start (que o abriu) chega ao jogo, que o fecha", startCloses === true);
+	// SAV-01: saving is automatic -- the Menu the pad walks through has no Save row
+	{
+		const c = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
+		flush();
+		const menu = layer.FindFirstChild("Menu");
+		const rows = menu.GetDescendants().filter(d => d.ClassName === "TextButton" && /^Btn\d$/.test(d.Name));
+		const labels = rows.map(b => b.FindFirstChild("Label")?.Text ?? b.Text);
+		const saves = menu
+			.GetDescendants()
+			.filter(d => (d.ClassName === "TextLabel" || d.ClassName === "TextButton") && d.Text === "Save");
+		c();
+		flush();
+		check(
+			"SAV-01: o Menu da partida tem 4 linhas (Back to game, Shop, Settings, Home) e nenhum Save",
+			labels.join(" | ") === "Back to game | Shop | Settings | Home" && saves.length === 0,
+			labels.join(" | "),
+		);
+	}
 	// the key on the Menu's title strip is the one that opens it on THIS device, as the HUD's Menu plate says
 	// (SCHEMES): P on a keyboard, Start on a pad, none on a touch screen (its MENU is a button, not a key)
 	const keyOnMenu = () => {
-		const c = showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop });
+		const c = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
 		flush();
 		const hint = findIn(layer.FindFirstChild("Menu"), "KeyHint");
 		const text = hint === undefined ? undefined : findIn(hint, "Text")?.Text;
@@ -1033,23 +1113,94 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		sub === `${done} / ${visible.length}` && done === 3 && visible.length === 18,
 		sub,
 	);
+	// a pad player opens it: the focus lands on the first row, so the D-pad can walk (and scroll) the list
+	lastInput.type = Enum.UserInputType.Gamepad1;
 	nav(2).Activated.Fire();
 	flush();
 	const dialog = layer.FindFirstChild("Achievements");
 	const rows = visible.map(a => findIn(dialog, `Ach${a.id}`));
+	const shownIn = (row, name) => {
+		const g = findIn(row, name);
+		return g !== undefined && shown(g, dialog);
+	};
+	// UI-14: each row -- its "cur / goal" on the meter while it is being earned, the medal and "Unlocked" once done
 	const wrong = visible.filter((a, i) => {
 		const cur = Math.min(save.achievements[a.id] ?? 0, a.max);
 		const v = findIn(rows[i], "Value")?.Text;
-		const check = findIn(rows[i], "Check") !== undefined;
-		return v !== `${cur.toLocaleString("en-US")} / ${a.max.toLocaleString("en-US")}` || check !== cur >= a.max;
+		const done = cur >= a.max;
+		return (
+			v !== `${cur.toLocaleString("en-US")} / ${a.max.toLocaleString("en-US")}` ||
+			shownIn(rows[i], "Medal") !== done ||
+			shownIn(rows[i], "Unlocked") !== done ||
+			shownIn(rows[i], "Meter") === done
+		);
 	});
 	check(
-		"a janela lista as 15 visiveis, cada uma com 'atual / meta' do save (sem passar da meta) e o check so nas feitas",
+		"a janela lista as 18 visiveis, cada uma com 'atual / meta' do save (sem passar da meta); a medalha e 'Unlocked' so nas feitas, o medidor nas outras",
 		rows.every(r => r !== undefined) &&
 			wrong.length === 0 &&
 			!ACHIEVEMENTS.some(a => a.hidden && findIn(dialog, `Ach${a.id}`)),
 		wrong.map(a => `${a.title}: ${findIn(rows[visible.indexOf(a)], "Value")?.Text}`).join("; "),
 	);
+	// each row has its picture (achievements.ts `icon`) and says what earns it (`howTo`, a lang.ts entry)
+	const bare = visible.filter((a, i) => {
+		const icon = findIn(rows[i], "Icon");
+		const how = findIn(rows[i], "HowTo")?.Text;
+		return icon?.GetAttribute("Icon") !== a.icon || how !== a.howTo || a.howTo === "";
+	});
+	check(
+		"cada conquista tem o seu desenho e a linha do que a ganha",
+		bare.length === 0,
+		bare.map(a => a.title).join(", ") || `${visible.length} com desenho e descricao`,
+	);
+	// the order: in progress (closest to done first; a tie by id), unlocked, not started -- under a header each
+	const listed = findIn(dialog, "List")
+		.GetDescendants()
+		.filter(d => /^Ach\d+$/.test(d.Name))
+		.sort((a, b) => a.LayoutOrder - b.LayoutOrder)
+		.map(d => Number(d.Name.slice(3)));
+	const group = a => {
+		const cur = Math.min(save.achievements[a.id] ?? 0, a.max);
+		return cur >= a.max ? 1 : cur > 0 ? 0 : 2;
+	};
+	const ratio = a => Math.min(save.achievements[a.id] ?? 0, a.max) / a.max;
+	const expected = [...visible]
+		.sort((a, b) => group(a) - group(b) || (group(a) === 0 ? ratio(b) - ratio(a) : 0) || a.id - b.id)
+		.map(a => a.id);
+	check(
+		"a ordem: em progresso (o mais perto de acabar primeiro, empate pelo id), depois as desbloqueadas, depois as nao comecadas",
+		JSON.stringify(listed) === JSON.stringify(expected),
+		listed.join(","),
+	);
+	// the pad: the focus starts on a row; the X goes down into the list; every row is a stop chained to the next, and
+	// the one in focus shows the kit's focus ring (its outline in `ring`), never a hidden selection
+	const sel = GuiService.SelectedObject;
+	const first = findIn(dialog, `Ach${expected[0]}`);
+	const closeBtn = findIn(dialog, "Close");
+	const chained = expected.every((id, i) => {
+		const r = findIn(dialog, `Ach${id}`);
+		const down = i + 1 < expected.length ? findIn(dialog, `Ach${expected[i + 1]}`) : undefined;
+		return r.Selectable === true && r.NextSelectionDown === down;
+	});
+	const ringColor = row => row.FindFirstChild("PlateBand")?.BackgroundColor3;
+	const second = findIn(dialog, `Ach${expected[1]}`);
+	GuiService.SelectedObject = second;
+	flush();
+	const ringOn = ringColor(second);
+	GuiService.SelectedObject = first;
+	flush();
+	const ringOff = ringColor(second);
+	check(
+		"controle: o foco abre na primeira linha, o X desce para a lista, cada linha e uma parada encadeada, e a linha em foco mostra o anel de foco",
+		sel === first &&
+			closeBtn?.NextSelectionDown === first &&
+			chained &&
+			sameRgb(ringOn, THEME.ring) &&
+			!sameRgb(ringOff, THEME.ring),
+		`foco ${sel?.Name}, X->${closeBtn?.NextSelectionDown?.Name}, encadeadas ${chained}, anel ${ringOn?.ToHex?.()} / ${ringOff?.ToHex?.()}`,
+	);
+	GuiService.SelectedObject = undefined;
+	lastInput.type = Enum.UserInputType.MouseMovement;
 	findIn(dialog, "Close").Activated.Fire();
 	flush();
 	nav(3).Activated.Fire();
@@ -1079,6 +1230,175 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 	check("...e a chapa Records diz o mesmo recorde", lobbySub === "Best day 12", lobbySub);
 	closeLobby();
 	save.achievements.fill(0);
+
+	// ---- the Shop (MON-03, MON-06): what a card says, and what the Earn coins page says -- from the save
+	{
+		const SHOP = require(join(SRC, "client/ui/shop.ts"));
+		const { SHOP_PACKS, COSTUMES, ECONOMY } = require(join(SRC, "shared/data/shop.ts"));
+		const packIndex = name => SHOP_PACKS.findIndex(p => p.name === name);
+		const medic = packIndex("Medic Bag");
+		const builders = packIndex("Builder's Basics");
+		const pigeonPack = packIndex("Pet Pigeon");
+		const pigeonCostume = COSTUMES.find(c => c.name === "Pigeon");
+		const keep = {
+			money: save.money,
+			bought: [...save.packsBought],
+			opened: [...save.packsOpened],
+			costumes: [...save.costumes],
+			bestDay: save.bestDay,
+			day: save.day,
+			bossKills: save.bossKills,
+		};
+		save.money = 20;
+		save.packsBought[builders] = (save.packsOpened[builders] ?? 0) + 1;
+		save.costumes[pigeonCostume.id] = 1;
+		save.bestDay = 1;
+		save.day = 1;
+		save.bossKills = 0;
+		ctx.phase = "shop";
+		// the Shop funnel (docs/ANALYTICS.md; the server's side is test:analytics): opening the shop asks for ONE
+		// `viewShop` (screen 0) per visit -- the tabs send nothing. The shim's task.spawn runs nothing; here what is
+		// spawned is caught and run against a stand-in for the remote
+		const spawned = [];
+		const shopCalls = [];
+		const realSpawn = globalThis.task.spawn;
+		const realInvoke = saveClient.invokeShopAction;
+		globalThis.task.spawn = (fn, ...a) => spawned.push(() => fn(...a));
+		saveClient.invokeShopAction = req => {
+			shopCalls.push(req);
+			return { ok: false, reason: "network" };
+		};
+		const runSpawned = () => {
+			for (const f of spawned.splice(0)) {
+				try {
+					f();
+				} catch {
+					// a spawned loop that waits (task.wait) is not simulated here
+				}
+			}
+		};
+		const views = screen => shopCalls.filter(q => q.kind === "viewShop" && q.screen === screen).length;
+		const close = SHOP.showShop(ctx, noop, noop);
+		flush();
+		runSpawned();
+		const root = layer.FindFirstChild("Shop");
+		const card = i => findIn(findIn(root, "Content"), `Pack${SHOP_PACKS[i].id}`);
+		const buyOf = i => findIn(card(i), "Buy");
+		const allText = d =>
+			d
+				.GetDescendants()
+				.filter(x => (x.ClassName === "TextLabel" || x.ClassName === "TextButton") && shown(x, layer))
+				.map(x => String(x.Text))
+				.join(" | ");
+		// the note says where a pack goes, and when -- never "your next game" (a pack bought from the run's menu arrives
+		// in the same run: the server opens it as soon as the survivor is in the city)
+		const packsText = allText(findIn(root, "Packs"));
+		check(
+			"loja: a nota diz que o pacote vai para a mochila ao entrar na cidade (nunca 'next game')",
+			/enter the city/.test(packsText) && !/next game/i.test(packsText),
+			packsText.slice(0, 120),
+		);
+		// can't afford it: the Buy is disabled and says how many coins are missing, in the same button every card has
+		const medicBuy = buyOf(medic);
+		const needed = SHOP_PACKS[medic].price - 20;
+		check(
+			"loja: sem moedas para o Medic Bag, o Buy desabilita e diz quanto falta ('10 more needed'); nada de contorno",
+			medicBuy.GetAttribute("Disabled") === true &&
+				medicBuy.Text === `${needed} more needed` &&
+				medicBuy.GetAttribute("Variant") === buyOf(0).GetAttribute("Variant") &&
+				buyOf(0).GetAttribute("Disabled") === false,
+			`${medicBuy.Text}, ${medicBuy.GetAttribute("Variant")}`,
+		);
+		// a refusal for coins says how many are missing, as the Rebirth does
+		check(
+			"loja: a recusa por moedas diz quanto falta: 'Not enough coins: 10 more needed'",
+			SHOP.fundsErrorText("funds", 10, 0) === "Not enough coins: 10 more needed" &&
+				SHOP.fundsErrorText("funds", 0, 0) === "Not enough coins" &&
+				SHOP.fundsErrorText("rate", 10, 0) === "Please wait a moment",
+			SHOP.fundsErrorText("funds", 10, 0),
+		);
+		// a pack bought and not delivered yet says so -- "Pending", never "owned"
+		const pending = findIn(card(builders), "Pending");
+		check(
+			"loja: um pacote comprado e ainda nao entregue diz 'Pending ×1' (nunca 'owned')",
+			pending !== undefined && shown(pending, layer) && findIn(pending, "Text")?.Text === "Pending ×1",
+			findIn(pending, "Text")?.Text,
+		);
+		// the pet of a pet pack is already yours: the card does not sell it again
+		check(
+			"loja: o Pet Pigeon de quem ja tem o pombo para sempre diz 'Owned' e nao vende",
+			buyOf(pigeonPack).Text === "Owned" && buyOf(pigeonPack).GetAttribute("Disabled") === true,
+			buyOf(pigeonPack).Text,
+		);
+		// what is inside: the Bag's icons, one tile per item, with the count; a pet pack draws the pet itself
+		const iconsOk = SHOP_PACKS.every((p, i) => {
+			const c = card(i);
+			if (p.name.startsWith("Pet ")) return findIn(c, "Pet") !== undefined && /New game/.test(allText(c));
+			return p.items.every(
+				(it, k) =>
+					findIn(findIn(c, `Item${k}`), "Icon")?.GetAttribute("Icon") !== "" &&
+					findIn(findIn(c, `Item${k}`), "Legend")?.Text === `×${it.count}`,
+			);
+		});
+		check("loja: cada cartao mostra os icones do Bag com a contagem, e o pet desenhado no pacote de pet", iconsOk);
+		// Earn coins: the four sources the server pays, each with its coin chip and the player's progress
+		const tabs = findIn(root, "Tabs");
+		const r = measure(() => {
+			tabs.FindFirstChild("Tab1").Activated.Fire();
+			flush();
+			tabs.FindFirstChild("Tab0").Activated.Fire();
+			flush();
+			tabs.FindFirstChild("Tab1").Activated.Fire();
+			flush();
+		});
+		const earn = findIn(root, "Earn");
+		const earnText = allText(earn);
+		const chips = [0, 1, 2, 3].map(i => findIn(findIn(earn, `Earn${i}`), "Amount")?.Text);
+		check(
+			"loja › Earn coins: as quatro fontes com o chip de moedas (+3, +10, +8, +20) e o progresso do jogador",
+			JSON.stringify(chips) ===
+				JSON.stringify([
+					`+${ECONOMY.COINS_PER_DAY}`,
+					`+${ECONOMY.MILESTONE_BONUS}`,
+					`+${ECONOMY.COINS_PER_BOSS}`,
+					`+${ECONOMY.STARTING_COINS}`,
+				]) &&
+				/Day 1 \/ 5/.test(earnText) &&
+				/4 days to go/.test(earnText) &&
+				/Bosses defeated: 0/.test(earnText) &&
+				/Received/.test(earnText),
+			`${chips.join(" ")} | ${earnText.slice(0, 160)}`,
+		);
+		check(
+			"loja: trocar de aba nao cria nem destroi Instance",
+			r.created === 0 && r.destroyed === 0,
+			`${r.created} / ${r.destroyed}`,
+		);
+		runSpawned();
+		const afterTabs = views(0);
+		close();
+		flush();
+		// a second visit is a second view; the wardrobe's screen is its own (screen 1), once per visit too
+		SHOP.showShop(ctx, noop, noop)();
+		flush();
+		runSpawned();
+		const closeWardrobeView = showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop });
+		flush();
+		runSpawned();
+		closeWardrobeView();
+		flush();
+		check(
+			"analytics: abrir a loja pede UM viewShop (tela 0) por visita -- as abas nao contam; o guarda-roupa, um (tela 1)",
+			afterTabs === 1 && views(0) === 2 && views(1) === 1 && shopCalls.every(q => q.kind === "viewShop"),
+			`loja ${afterTabs} depois das abas, ${views(0)} em 2 visitas; guarda-roupa ${views(1)}; ${shopCalls.length} chamadas`,
+		);
+		globalThis.task.spawn = realSpawn;
+		saveClient.invokeShopAction = realInvoke;
+		Object.assign(save, { money: keep.money, bestDay: keep.bestDay, day: keep.day, bossKills: keep.bossKills });
+		save.packsBought = keep.bought;
+		save.packsOpened = keep.opened;
+		save.costumes = keep.costumes;
+	}
 
 	// ---- who raises each achievement: ONLY the server (server/save/achievements.ts, CON-04 / ACH-2)
 	const achSrc = readFileSync(join(SRC, "server/save/achievements.ts"), "utf8");
@@ -1353,6 +1673,7 @@ const LANG_COUNT = [...LANG].length;
 	table("etcItems", "ETC_ITEMS", "name");
 	table("skills", "SKILLS", "name");
 	table("achievements", "ACHIEVEMENTS", "title", a => a.hidden !== true);
+	table("achievements", "ACHIEVEMENTS", "howTo", a => a.hidden !== true);
 	table("shop", "SHOP_PACKS", "name");
 	table("titles", "TITLES", "name");
 	for (const sc of SCHEMES) {
@@ -1502,6 +1823,32 @@ function textsIn(root, where) {
 	}
 	visit("Wardrobe", () => showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop }), "Wardrobe");
 	visit("Shop", () => showShop(ctx, noop, noop), "Shop");
+	visit(
+		"Shop › Earn coins",
+		() => {
+			const close = showShop(ctx, noop, noop);
+			flush();
+			findIn(layer.FindFirstChild("Shop"), "Tabs").FindFirstChild("Tab1").Activated.Fire();
+			return close;
+		},
+		"Shop",
+	);
+	visit(
+		"Achievements",
+		() => {
+			ctx.save.achievements[0] = 1;
+			ctx.save.achievements[12] = 17;
+			const h = showLobby(ctx, lobbyHandlers, lobbyStatus, "menu");
+			flush();
+			findIn(layer.FindFirstChild("Lobby"), "Nav2").Activated.Fire();
+			return () => {
+				layer.FindFirstChild("Achievements")?.Destroy();
+				h.close();
+				ctx.save.achievements.fill(0);
+			};
+		},
+		"Achievements",
+	);
 	visit("Credits", () => showCredits(ctx, noop), "Credits");
 	visit("How to play", () => showTutorial(ctx, noop), "HowToPlay");
 	// the game rules (compliance F3): How to play › Rules, the kit's popup over the card
@@ -1519,11 +1866,7 @@ function textsIn(root, where) {
 		"PopupOverlay",
 	);
 	ctx.phase = "playing";
-	visit(
-		"Menu",
-		() => showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
-		"Menu",
-	);
+	visit("Menu", () => showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop }), "Menu");
 	// the death screen (gameOver.ts, UI-13): its four epitaphs (a record, five days, a first death, the rest), with and
 	// without the coins for a Rebirth, and every state of the wait -- somebody standing (one, two), by day, the town
 	// falling, the town's window run out, a new life waiting, the count at zero

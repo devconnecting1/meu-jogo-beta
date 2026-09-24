@@ -47,6 +47,8 @@
  *                                         unconditionally in the run's Heartbeat; GameLoop.update never returns
  *                                         early (no more `if (p.dead) return`); netClient.ts predict() sends the
  *                                         very edges the copy below sends (a blocked button's release is none).
+ *   6. NO SAVE BUTTON (SAV-01)            the in-run menu's rows are Back to game, Shop, Settings and Home: saving is
+ *                                         automatic, so no handler, no "manual" report reason, no Save row.
  *
  * `netClient.ts` itself cannot load under Node (it talks to Roblox services), so its predict() -- four lines:
  * addEdges, readRawInput, sample, and the send -- is reproduced below; every module it calls is the real one.
@@ -1142,6 +1144,53 @@ section("5) source guards (UI-06): nothing left that pauses the world");
 		edgeArgs.join(", ") ===
 			"input.attackPressed, input.attackReleased && !input.attackBlocked, input.actionPressed, input.reloadPressed",
 		edgeArgs.join(", ") || "commands.addEdges(...) not found in predict()",
+	);
+}
+
+section("6) source guards (SAV-01): the in-run menu has no Save -- saving is automatic");
+{
+	const pause = parse("client/ui/pauseMenu.ts");
+	const handlers = find(pause.sf, n => ts.isInterfaceDeclaration(n) && n.name.text === "PauseHandlers")[0];
+	const members = handlers?.members.map(m => m.name?.getText(pause.sf)) ?? [];
+	check("PauseHandlers has no onSave", handlers !== undefined && !members.includes("onSave"), members.join(", "));
+	// the in-run menu's rows: the `key` of every object in the `items` array of showPause
+	const items = find(
+		pause.sf,
+		n => ts.isVariableDeclaration(n) && n.name.getText(pause.sf) === "items" && n.initializer !== undefined,
+	)[0];
+	const keys =
+		items !== undefined && ts.isArrayLiteralExpression(items.initializer)
+			? items.initializer.elements.map(e =>
+					ts.isObjectLiteralExpression(e)
+						? e.properties
+								.find(p => p.name?.getText(pause.sf) === "key")
+								?.initializer?.getText(pause.sf)
+								.replace(/"/g, "")
+						: undefined,
+				)
+			: [];
+	check(
+		"the in-run menu's rows are Back to game, Shop, Settings, Home -- no Save",
+		keys.join(" | ") === "Back to game | Shop | Settings | Home",
+		keys.join(" | "),
+	);
+	const main = parse("client/main.client.ts");
+	const onSave = find(main.sf, n => ts.isPropertyAssignment(n) && n.name.getText(main.sf) === "onSave");
+	const manual = find(
+		main.sf,
+		n => ts.isCallExpression(n) && /requestSave$/.test(main.text(n.expression)) && /"manual"/.test(main.text(n)),
+	);
+	check(
+		'main.client.ts hands the menu no onSave and never reports as "manual"',
+		onSave.length === 0 && manual.length === 0,
+		`${onSave.length} onSave, ${manual.length} manual`,
+	);
+	const client = parse("client/systems/saveClient.ts");
+	const reason = find(client.sf, n => ts.isTypeAliasDeclaration(n) && n.name.text === "SaveReason")[0];
+	check(
+		'saveClient.ts: "manual" is no SaveReason (a report is never a write: the server decides, SAV-01)',
+		reason !== undefined && !/"manual"/.test(client.text(reason)),
+		reason !== undefined ? client.text(reason).replace(/\s+/g, " ") : "SaveReason not found",
 	);
 }
 
