@@ -36,6 +36,10 @@ O que de fato é visível para os outros jogadores, hoje, no que já desenhamos:
 
 ### 1. Servidor privado — comece por aqui
 
+**Decidido (2026-09-24): grátis no lançamento** (Audience › Access Settings › Allow private servers, sem Requires
+Robux; `docs/CREATOR_HUB.md`). E os trajes e pets do guarda-roupa **também por Robux**, o mesmo item das moedas
+(49 / 149 / 349 R$): desenho em `docs/SHOP.md`, implementação depois da revisão de segurança.
+
 Assinatura mensal **nativa** do Roblox. Não exige código nenhum e é o melhor produto que este jogo tem, por
 três motivos que se somam:
 

@@ -99,7 +99,8 @@ O "jogar sozinho" que você pediu é o **Play solo** da tela Survivor: um servid
 (`TeleportService:ReserveServerAsync` + `TeleportAsync`), com as mesmas regras do público e a cidade no **dia da vida do
 dono** (MP-13; um save novo: dia 1; `docs/MULTIPLAYER.md` §7.4, MP-25). Não precisa de configuração nenhuma aqui, e **só funciona no jogo publicado**: no
 Studio a tela explica que não há teleporte. Teste numa experiência de teste separada (o roteiro está na §7.4). O
-servidor privado (VIP) é independente: ligue se quiser vendê-lo ou dá-lo; o jogo o reconhece sozinho
+servidor privado (VIP) é independente e **decidido: grátis** (2026-09-24): Audience › **Access Settings** › ligue
+**Allow private servers** e **desligue Requires Robux** › Save Changes; o jogo o reconhece sozinho
 (`pz_server_kind = private`). O que **não** pode acontecer continua sendo o solo virar um modo pior que o co-op — MP-14.
 
 ### Permissions / Collaborators — **só você, por enquanto**
@@ -264,9 +265,9 @@ A regra prática para qualquer item futuro: **se dá vantagem numa noite, não s
 
 **Hoje não há nada a criar aqui:** a loja é toda em moedas do jogo e nenhum passe, produto de desenvolvedor ou id
 existe no código. A tabela de todo produto (onde aparece, preço, o que dá, o que criar no Creator Hub), o modelo de
-horas de jogo por trás de cada preço e a proposta de preços em Robux (servidor privado 50 R$/mês ou grátis — decida
-antes de lançar: mudar o preço depois **cancela as assinaturas** —; cosmético também por Robux, se a MON-04 mudar)
-estão em `docs/SHOP.md`.
+horas de jogo por trás de cada preço e as decisões de Robux (2026-09-24: servidor privado **grátis**; trajes e pets
+também por Robux, 49 / 149 / 349 R$, um produto de desenvolvedor por traje, a criar quando o código chegar) estão em
+`docs/SHOP.md`.
 
 ---
 
@@ -465,5 +466,7 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
    `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova
    ("Mudou de conta").
-9. **Monetization**: nada a criar para a loja de hoje (moedas do jogo, sem id). Decidir o preço do **servidor
-   privado** (grátis ou 50 R$/mês) antes de lançar, e se a proposta de cosmético por Robux entra (`docs/SHOP.md`).
+9. **Private servers: Free** — Audience › Access Settings › Allow private servers ligado, Requires Robux desligado
+   (decisão de 2026-09-24). **Monetization:** nada a criar hoje; quando os trajes por Robux chegarem à `main`, criar os
+   9 produtos de desenvolvedor de `docs/SHOP.md` ("Os produtos que o dono cria": preço exato, Unlisted, sem "Allow
+   external purchases") e colar os ids em `src/shared/data/robuxProducts.ts`.

@@ -21,6 +21,8 @@ de jogo que o modelo dá ao seu tier. Regras de produto: DESIGN_RULES MON-01..07
   nunca é lido.
 - **Não existe venda** (trocar item por moeda) nem **nada em Robux** — nenhum passe, produto de desenvolvedor ou
   servidor pago no código (`MarketplaceService` não é chamado em lugar nenhum). Moedas só se ganham jogando (MON-01).
+  Decidido depois (2026-09-24): servidor privado **grátis**, e trajes e pets **também** por Robux (49 / 149 / 349 R$),
+  o mesmo item das moedas — desenho em "Robux: decisões e desenho"; a implementação espera a revisão de segurança.
 - **Estava errado e foi corrigido** (detalhe em "Achados"): o servidor cobrava um pacote de pet que o cartão dizia
   "Owned"; as moedas ganhas à meia-noite e nos chefes nunca eram avisadas; três textos tinham números fixos que
   mentiriam na próxima mudança; o conteúdo dos pacotes estava escrito duas vezes; e os preços eram fáceis demais para o
@@ -32,36 +34,36 @@ A coluna **Preço** é conferida linha a linha contra os dados pelo `test:shop` 
 `shop.ts` **e** esta tabela. **Horas** = horas de jogo de um jogador médio (18,5 moedas/h, modelo abaixo).
 **Roblox**: o que o dono cria no Creator Hub para este produto.
 
-| Produto               | Onde aparece                                                   | Faixa   | Preço                         | Moeda  | O que dá                                                                                           | Horas              | Roblox                     |
-| --------------------- | -------------------------------------------------------------- | ------- | ----------------------------- | ------ | -------------------------------------------------------------------------------------------------- | ------------------ | -------------------------- |
-| First Night Kit       | Loja › Packs (cartão)                                          | starter | 20                            | moedas | 1 × Cotton clothes, 1 × Axe, 1 × Flashlight — na mochila ao entrar na cidade                       | 1,1                | nada (moedas do jogo)      |
-| Pantry Crate          | Loja › Packs                                                   | supply  | 30                            | moedas | 3 × Cooked meat, 3 × Pizza, 3 × Cooked meal                                                        | 1,6                | nada                       |
-| Medic Bag             | Loja › Packs                                                   | supply  | 45                            | moedas | 2 × First aid kit, 3 × Bandage, 2 × Adrenaline                                                     | 2,4                | nada                       |
-| Builder's Basics      | Loja › Packs                                                   | starter | 15                            | moedas | 20 × Wood, 10 × Cloth, 20 × Stone                                                                  | 0,8                | nada                       |
-| Workshop Supplies     | Loja › Packs                                                   | supply  | 60                            | moedas | 5 × Blueprint, 20 × Steel, 10 × Machine parts                                                      | 3,2                | nada                       |
-| Electronics Box       | Loja › Packs                                                   | supply  | 60                            | moedas | 5 × Battery, 2 × Computer chip, 2 × Bulb                                                           | 3,2                | nada                       |
-| Ammo Makings          | Loja › Packs                                                   | supply  | 40                            | moedas | 10 × Steel, 10 × Gunpowder (matéria-prima; munição pronta nunca é vendida, MON-03)                 | 2,2                | nada                       |
-| Pet Pigeon            | Loja › Packs (o pet desenhado no cartão)                       | rental  | 20                            | moedas | 1 × Pigeon na mochila, até o próximo New game                                                      | 1,1                | nada                       |
-| Pet Carolina          | Loja › Packs                                                   | rental  | 20                            | moedas | 1 × Carolina na mochila, até o próximo New game                                                    | 1,1                | nada                       |
-| Pigeon                | Guarda-roupa › Pets (ladrilho, painel, "Buy for N coins")      | common  | 70                            | moedas | o pombo para sempre, visto por todos                                                               | 3,8                | nada                       |
-| White pigeon          | Guarda-roupa › Pets                                            | common  | 90                            | moedas | o pombo branco para sempre                                                                         | 4,9                | nada                       |
-| Carolina              | Guarda-roupa › Pets                                            | common  | 70                            | moedas | a cadela caramelo para sempre                                                                      | 3,8                | nada                       |
-| Malamute              | Guarda-roupa › Pets                                            | rare    | 220                           | moedas | o malamute (maior) para sempre                                                                     | 11,9               | nada                       |
-| Doberman              | Guarda-roupa › Pets                                            | rare    | 220                           | moedas | o doberman para sempre                                                                             | 11,9               | nada                       |
-| Santa                 | Guarda-roupa › Outfits                                         | rare    | 250                           | moedas | o traje para sempre, visto por todos                                                               | 13,5               | nada                       |
-| Cowboy                | Guarda-roupa › Outfits                                         | rare    | 250                           | moedas | o traje para sempre                                                                                | 13,5               | nada                       |
-| Zombie                | Guarda-roupa › Outfits                                         | top     | 600                           | moedas | o traje para sempre                                                                                | 32,4               | nada                       |
-| Eagle                 | Guarda-roupa › Pets                                            | top     | 600                           | moedas | a águia (asas sempre abertas) para sempre                                                          | 32,4               | nada                       |
-| Rebirth               | tela de morte, tela Survivor (lobby)                           | —       | 10 + 10·d² (10, 20, 50, 100…) | moedas | levanta agora, com a mochila; d = continues já pagos nesta vida (volta a 0 no New game)            | 0,5 o 1º; 9,2 o 5º | nada                       |
-| Welcome gift          | Loja › Earn coins ("+20"), o aviso de boas-vindas              | fonte   | 20                            | moedas | uma vez, a todo save novo                                                                          | —                  | nada                       |
-| Day survived          | Loja › Earn coins ("+3"), o aviso "+3 coins · Day survived ×1" | fonte   | 3                             | moedas | a cada meia-noite vivida (vivo à meia-noite, no mundo ≥ 50% do dia, sem AFK)                       | —                  | nada                       |
-| Record day            | Loja › Earn coins ("+10"), o aviso "Record day ×1"             | fonte   | 10                            | moedas | a primeira vez que uma vida chega a um recorde múltiplo de 5 (`MILESTONE_EVERY`)                   | —                  | nada                       |
-| Boss defeated         | Loja › Earn coins ("+8"), o aviso "Boss defeated ×1"           | fonte   | 8                             | moedas | a cada chefe derrubado com você na luta (≥ 3% do dano ou 20 s perto, MP-15)                        | —                  | nada                       |
-| Pacote de boas-vindas | cartão do pacote ("Pending ×1"), tela Survivor                 | —       | 0                             | —      | knob `pz_welcome_pack` (−1 = nenhum; 0–8 = o pacote): um save novo ganha aquele pacote, pendente   | —                  | Configs: `pz_welcome_pack` |
-| Títulos               | Guarda-roupa › Titles                                          | —       | nunca vendido                 | —      | ganhos jogando (MON-05)                                                                            | —                  | nada                       |
-| Conquistas            | Conquistas                                                     | —       | não pagam                     | —      | nada: "No coins or items: a record of what you did." (UI-14)                                       | —                  | nada                       |
-| Vender itens          | —                                                              | —       | não existe                    | —      | não há venda; o ouro do banco é material de fabricação, não moeda                                  | —                  | nada                       |
-| Robux                 | —                                                              | —       | —                             | Robux  | **Nenhum produto em Robux**: nenhum passe, produto de desenvolvedor ou servidor pago; plano abaixo | —                  | nada a criar hoje          |
+| Produto               | Onde aparece                                                   | Faixa   | Preço                         | Moeda  | O que dá                                                                                         | Horas              | Roblox                     |
+| --------------------- | -------------------------------------------------------------- | ------- | ----------------------------- | ------ | ------------------------------------------------------------------------------------------------ | ------------------ | -------------------------- |
+| First Night Kit       | Loja › Packs (cartão)                                          | starter | 20                            | moedas | 1 × Cotton clothes, 1 × Axe, 1 × Flashlight — na mochila ao entrar na cidade                     | 1,1                | nada (moedas do jogo)      |
+| Pantry Crate          | Loja › Packs                                                   | supply  | 30                            | moedas | 3 × Cooked meat, 3 × Pizza, 3 × Cooked meal                                                      | 1,6                | nada                       |
+| Medic Bag             | Loja › Packs                                                   | supply  | 45                            | moedas | 2 × First aid kit, 3 × Bandage, 2 × Adrenaline                                                   | 2,4                | nada                       |
+| Builder's Basics      | Loja › Packs                                                   | starter | 15                            | moedas | 20 × Wood, 10 × Cloth, 20 × Stone                                                                | 0,8                | nada                       |
+| Workshop Supplies     | Loja › Packs                                                   | supply  | 60                            | moedas | 5 × Blueprint, 20 × Steel, 10 × Machine parts                                                    | 3,2                | nada                       |
+| Electronics Box       | Loja › Packs                                                   | supply  | 60                            | moedas | 5 × Battery, 2 × Computer chip, 2 × Bulb                                                         | 3,2                | nada                       |
+| Ammo Makings          | Loja › Packs                                                   | supply  | 40                            | moedas | 10 × Steel, 10 × Gunpowder (matéria-prima; munição pronta nunca é vendida, MON-03)               | 2,2                | nada                       |
+| Pet Pigeon            | Loja › Packs (o pet desenhado no cartão)                       | rental  | 20                            | moedas | 1 × Pigeon na mochila, até o próximo New game                                                    | 1,1                | nada                       |
+| Pet Carolina          | Loja › Packs                                                   | rental  | 20                            | moedas | 1 × Carolina na mochila, até o próximo New game                                                  | 1,1                | nada                       |
+| Pigeon                | Guarda-roupa › Pets (ladrilho, painel, "Buy for N coins")      | common  | 70                            | moedas | o pombo para sempre, visto por todos                                                             | 3,8                | nada                       |
+| White pigeon          | Guarda-roupa › Pets                                            | common  | 90                            | moedas | o pombo branco para sempre                                                                       | 4,9                | nada                       |
+| Carolina              | Guarda-roupa › Pets                                            | common  | 70                            | moedas | a cadela caramelo para sempre                                                                    | 3,8                | nada                       |
+| Malamute              | Guarda-roupa › Pets                                            | rare    | 220                           | moedas | o malamute (maior) para sempre                                                                   | 11,9               | nada                       |
+| Doberman              | Guarda-roupa › Pets                                            | rare    | 220                           | moedas | o doberman para sempre                                                                           | 11,9               | nada                       |
+| Santa                 | Guarda-roupa › Outfits                                         | rare    | 250                           | moedas | o traje para sempre, visto por todos                                                             | 13,5               | nada                       |
+| Cowboy                | Guarda-roupa › Outfits                                         | rare    | 250                           | moedas | o traje para sempre                                                                              | 13,5               | nada                       |
+| Zombie                | Guarda-roupa › Outfits                                         | top     | 600                           | moedas | o traje para sempre                                                                              | 32,4               | nada                       |
+| Eagle                 | Guarda-roupa › Pets                                            | top     | 600                           | moedas | a águia (asas sempre abertas) para sempre                                                        | 32,4               | nada                       |
+| Rebirth               | tela de morte, tela Survivor (lobby)                           | —       | 10 + 10·d² (10, 20, 50, 100…) | moedas | levanta agora, com a mochila; d = continues já pagos nesta vida (volta a 0 no New game)          | 0,5 o 1º; 9,2 o 5º | nada                       |
+| Welcome gift          | Loja › Earn coins ("+20"), o aviso de boas-vindas              | fonte   | 20                            | moedas | uma vez, a todo save novo                                                                        | —                  | nada                       |
+| Day survived          | Loja › Earn coins ("+3"), o aviso "+3 coins · Day survived ×1" | fonte   | 3                             | moedas | a cada meia-noite vivida (vivo à meia-noite, no mundo ≥ 50% do dia, sem AFK)                     | —                  | nada                       |
+| Record day            | Loja › Earn coins ("+10"), o aviso "Record day ×1"             | fonte   | 10                            | moedas | a primeira vez que uma vida chega a um recorde múltiplo de 5 (`MILESTONE_EVERY`)                 | —                  | nada                       |
+| Boss defeated         | Loja › Earn coins ("+8"), o aviso "Boss defeated ×1"           | fonte   | 8                             | moedas | a cada chefe derrubado com você na luta (≥ 3% do dano ou 20 s perto, MP-15)                      | —                  | nada                       |
+| Pacote de boas-vindas | cartão do pacote ("Pending ×1"), tela Survivor                 | —       | 0                             | —      | knob `pz_welcome_pack` (−1 = nenhum; 0–8 = o pacote): um save novo ganha aquele pacote, pendente | —                  | Configs: `pz_welcome_pack` |
+| Títulos               | Guarda-roupa › Titles                                          | —       | nunca vendido                 | —      | ganhos jogando (MON-05)                                                                          | —                  | nada                       |
+| Conquistas            | Conquistas                                                     | —       | não pagam                     | —      | nada: "No coins or items: a record of what you did." (UI-14)                                     | —                  | nada                       |
+| Vender itens          | —                                                              | —       | não existe                    | —      | não há venda; o ouro do banco é material de fabricação, não moeda                                | —                  | nada                       |
+| Robux                 | —                                                              | —       | —                             | Robux  | **Nenhum produto em Robux** ainda; decidido: trajes e pets também por Robux (seção abaixo)       | —                  | servidor privado: grátis   |
 
 ## O modelo
 
@@ -151,37 +153,135 @@ costumeId}`, `{kind: "rebirth", runRev}`). Preço, posse e saldo são do servido
 de a gravação com a compra chegar ao DataStore (a exceção ao coalescimento, SAV-01), e o `PurchaseId` tem de ficar no
 save para que um recibo entregue duas vezes conceda uma.
 
-## Robux: o que não existe, o que se propõe, e por quê
+## Robux: decisões e desenho (a implementar)
 
-Hoje **não há produto em Robux**. O pedido de 2026-09-24 ("pacotes em Robux com preço de jogo de Roblox, sem
-pagar-para-vencer") esbarra em regras escritas; em vez de quebrá-las em silêncio, a proposta é esta — **nada aqui está
-implementado**, e cada linha pede a decisão do dono:
+Hoje **não há produto em Robux** (a tabela acima continua dizendo "Nenhum produto em Robux" até o código chegar). O
+pedido de 2026-09-24 ("pacotes em Robux com preço de jogo de Roblox, sem pagar-para-vencer") esbarrava em regras
+escritas; a proposta foi levada ao dono, que **delegou a decisão ao orquestrador** (2026-09-24). Decidido:
 
-| Proposta                                        | Preço sugerido                        | Por quê                                                                                               | Regra                                                                                  |
-| ----------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Servidor privado (VIP)                          | 50 R$ por mês (ou grátis)             | conveniência pura; o Play solo grátis continua existindo (MP-14); jogos do gênero cobram 0–100 R$/mês | MONETIZATION.md §1: "comece por aqui". Mudar o preço depois **cancela as assinaturas** |
-| Traje ou pet por Robux, o mesmo item das moedas | comum 49 R$, raro 149 R$, topo 349 R$ | ~12–13 R$ por hora de jogo médio poupada, nos degraus de preço comuns do Roblox (49/149/349)          | MON-01 permite (identidade); **a MON-04 diz "preço em moedas"**: emendar antes         |
-| Paleta do sobrevivente (passe)                  | 99 R$                                 | o primeiro passe cosmético que a MONETIZATION.md recomenda; precisa ser construída                    | MON-02, MONETIZATION.md §2                                                             |
-| Pacotes de itens por Robux                      | **não**                               | comida, remédio e material decidem uma noite: com Robux, cada pacote vira pagar-para-vencer           | MON-01, nota da MON-03                                                                 |
-| Moedas por Robux                                | **não**                               | compraria os pacotes e o Rebirth por Robux                                                            | MON-01                                                                                 |
-| Rebirth, XP, "pular a noite", craft mais rápido | **não**                               | capacidade; o Rebirth ainda é oferecido no momento da perda                                           | MON-01, BEM-02                                                                         |
+| Decisão                                                       | Preço                                 | Por quê                                                                                                   | Regra                                                                                     |
+| ------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Servidor privado (VIP) **grátis** no lançamento               | 0                                     | conveniência pura; o Play solo grátis continua existindo (MP-14); grátis agora evita mudar o preço depois | MONETIZATION.md §1. Mudar o preço mais tarde **cancela as assinaturas**                   |
+| Traje ou pet **também** por Robux: o mesmo item das moedas    | comum 49 R$, raro 149 R$, topo 349 R$ | ~11–13 R$ por hora de jogo médio poupada, nos degraus de preço comuns do Roblox                           | MON-01 (identidade, nunca capacidade); MON-04 emendada: moedas **ou** Robux, o mesmo item |
+| Paleta do sobrevivente (passe)                                | ainda não                             | precisa ser construída; entra como passe próprio, depois                                                  | MON-02, MONETIZATION.md §2                                                                |
+| Pacotes de itens, moedas, Rebirth, XP, caixa, pular o relógio | **nunca** por Robux                   | decidem uma noite (ou compram o que decide): pagar-para-vencer                                            | MON-01, nota da MON-03, BEM-02, BEM-03                                                    |
 
-Se o dono aprovar a linha 2, o trabalho é: um produto de desenvolvedor por faixa (ou um passe por item) no Creator Hub;
-`MarketplaceService.ProcessReceipt` no servidor, concedendo `costumes[id]` na sessão travada, gravando e só então
-`PurchaseGranted`, com os `PurchaseId` guardados no save (v7, aditivo); o botão "See Price" (BEM-02) ao lado do de
-moedas, nunca no lugar dele; o questionário de maturidade refeito; e o `test:shop` §7 trocado por testes do recibo
-(duplicado concede uma vez, falha de gravação não concede, reembolso impossível documentado).
+### O desenho
+
+A implementação espera a revisão de segurança de `de31f47` (a loja em moedas desta auditoria); o desenho abaixo é o que
+ela vai seguir. Fontes (Context7, `roblox/creator-docs`, 2026-09-24): `production/monetization/developer-products.md`,
+`cloud-services/data-stores/player-data-purchasing.md`, `reference/engine/classes/MarketplaceService.yaml`,
+`production/monetization/shop.md`, `production/monetization/private-servers.md`, `production/analytics/economy-events.md`.
+
+1. **Um produto de desenvolvedor por traje (9), não um por faixa.** O recibo do `ProcessReceipt` só diz `PlayerId`,
+   `ProductId`, `PurchaseId`, `CurrencySpent`, `PlaceIdWherePurchased` e `ProductPurchaseChannel` — nada do que o jogador
+   escolheu. Com um produto por faixa o servidor teria de **lembrar** qual traje foi pedido, e essa lembrança some
+   exatamente quando o recibo precisa dela: o jogador sai antes do recibo, o servidor cai, o Roblox entrega o recibo de
+   novo no próximo login **noutro servidor** ("tries again next time the user joins the game"), ou a compra veio de fora
+   do jogo (a aba Store / as superfícies da Shop, se um dia ligadas). Aí o item concedido seria o errado, ou nenhum, e o
+   jogador pagou. Com um produto por traje, **o `ProductId` sozinho decide o item**: a concessão é uma função pura do
+   recibo e idempotente por natureza (`costumes[id] = 1`), e o relatório de vendas do Creator Hub mostra cada traje.
+   Custo: 9 produtos a criar em vez de 3; o preço de cada um é o da sua faixa.
+2. **Quem abre o prompt é o servidor.** O guarda-roupa manda `ShopAction {kind: "robuxCostume", costumeId}`; o servidor
+   confere (sessão carregada e gravável, traje válido e desenhável, produto configurado e verificado, **não possuído**,
+   nenhum prompt de Robux aberto para o jogador, o balde de taxa) e só então chama
+   `MarketplaceService:PromptProductPurchase(player, productId)`. A posse é do servidor (MON-04: o cliente nunca declara
+   o que tem), então "não oferecer o que já é seu" é decidido onde a verdade mora. Enquanto um prompt de Robux do traje X
+   está aberto (até `PromptProductPurchaseFinished` com `isPurchased = false`, o recibo, ou 120 s), a compra **em
+   moedas** de X é recusada (`pending`): nenhuma corrida faz alguém pagar duas vezes pelo mesmo traje.
+3. **`ProcessReceipt`** (lógica pura em `server/save/robux.ts`, ligação em `main.server.ts`; a receita do Roblox para
+   sessão travada, "player-data-purchasing"):
+    1. `PlayerId` → o `Player` neste servidor; não está → `NotProcessedYet` (o Roblox tenta de novo no próximo login). Um
+       recibo de **outro** jogador nunca toca um save que não é o dele: o `PlayerId` escolhe o save, e nada vem do
+       cliente.
+    2. A sessão: espera o carregamento (até 30 s; desiste se o jogador sair); não carregada, só-leitura (`error`), sem
+       DataStore (`unavailable`, o Studio sem acesso à API) ou trava perdida → `NotProcessedYet`.
+    3. `ProductId` → traje pela configuração; desconhecido (produto que não vendemos, ou tirado) → `NotProcessedYet` e um
+       aviso, nunca uma concessão às cegas.
+    4. `PurchaseId` já no save (`robuxReceipts`): se uma gravação que o contém já chegou ao DataStore →
+       `PurchaseGranted`; se não, grava agora e só responde `PurchaseGranted` se a gravação chegar.
+    5. Concede: `costumes[id] = 1` e guarda `"<costumeId>:<PurchaseId>"` em `robuxReceipts` (os 64 mais novos).
+    6. **Grava agora** (`UpdateAsync` sob a trava da sessão, fora do coalescimento: a exceção já escrita na SAV-01),
+       esperando uma gravação que já estiver no ar; chegou → `PurchaseGranted`; falhou, sem orçamento ou trava perdida →
+       `NotProcessedYet`. A concessão fica na sessão (o custo que o próprio Roblox documenta: "free for the duration of
+       the session"), e o próximo `ProcessReceipt` acha o `PurchaseId` e tenta gravar de novo.
+    7. Carteira empurrada (o traje aparece no guarda-roupa na hora), o aviso "Unlocked: Santa", analytics (item 7).
+       **Nunca** o `isPurchased` do `PromptProductPurchaseFinished` concede algo (a documentação: pode ser falsificado e
+       não prova compra).
+4. **Já possuído.** Nunca oferecido: o botão some e o servidor recusa o prompt (`owned`). Se ainda assim um recibo chegar
+   para um traje que já é seu (uma compra de fora do jogo, se o dono um dia ligar; uma queda no meio), **não existe API
+   de reembolso** no Roblox: o `PurchaseId` é guardado, a resposta é `PurchaseGranted` (não há o que conceder) e o evento
+   `RobuxOwned` + a linha `[PZ-ROBUX]` (o `PurchaseId`, sem nome nem PII) avisam o dono, que compensa à mão pelo painel
+   de admin (outro traje da mesma faixa). **Nunca moedas**: seria vender moeda por Robux (MON-01) — e, com a aba Store
+   ligada, um jeito de comprar 600 moedas por 349 R$.
+5. **Save v7 (aditivo):** `robuxReceipts: Array<string>` (`"<costumeId>:<PurchaseId>"`, os 64 mais novos). Do servidor:
+   o relatório do cliente nunca o move (`sanitizeClientReport` copia) e ele não vai na carteira. Um servidor de volta ao
+   v6 o descarta ao gravar — inofensivo, porque a concessão é idempotente (`costumes[id] = 1`). Apagar o jogador (RTBF) o
+   leva junto (a mesma chave). O painel de admin **não** tira um traje pago em Robux (a operação `costume` com
+   `owned: false` recusa quando `robuxReceipts` tem aquele traje).
+6. **Configuração** (`src/shared/data/robuxProducts.ts`): o preço por faixa (`ROBUX_TIER_PRICE`: 49 / 149 / 349) e o id
+   de cada produto por **nome** do traje, todos `0` (= ainda não criado). Na partida o servidor confere cada id com
+   `GetProductInfo(id, Enum.InfoType.Product)`: `IsForSale` e `PriceInRobux` igual ao preço da faixa; o que não bate
+   **não é oferecido** (e avisa uma vez) — o mostrado é o cobrado também em Robux. Os verificados vão para o cliente num
+   atributo `pz_robux_products` na pasta `Net`; **sem id configurado o botão de Robux não aparece e o caminho em moedas
+   continua igual**. (A otimização de preços do Roblox mostraria preços diferentes a jogadores diferentes: não ligar para
+   estes produtos; o recibo traz o `CurrencySpent` real de qualquer forma.)
+7. **Analytics:** **nenhum** evento de economia em "Coins" (nenhuma moeda se move; o `IAP` da documentação é Robux →
+   recurso do jogo, e um Source de moedas inventaria moedas e quebraria a soma dos saldos). O Robux gasto já aparece no
+   painel de Monetization do Roblox. Nosso: o passo 3 "Bought" do funil Shop (o mesmo das moedas) e um evento custom
+   `RobuxPurchase` (valor = `CurrencySpent`; campos `Category - Costume`, `Tier - common/rare/top`, `Channel - …`),
+   **uma vez por `PurchaseId`**, na concessão — nunca no prompt, nunca num recibo repetido. `RobuxOwned` para o item 4.
+8. **Tela:** no guarda-roupa, o painel do traje bloqueado mostra os dois preços ("600 coins · 349 R$", tokens do tema,
+   textos na `lang.ts`); as ações: "Buy for 600 coins" (a principal, onde o foco do controle cai — BEM-02: a opção que se
+   ganha jogando vem primeiro) e, ao lado, sem destaque (variante secundária), "See Price", que abre o prompt do Roblox
+   (BEM-02: "See Price", nunca "GET IT NOW"). Sem moedas, o botão de moedas diz quanto falta, desabilitado, e o foco fica
+   na grade — nunca pula sozinho para o de Robux. Os ladrilhos continuam só com o preço em moedas (Robux em cada ladrilho
+   seria vitrine, não informação). **Nunca** na tela de morte, no menu da partida, na Loja de pacotes ou durante uma
+   noite (BEM-02, UI-13).
+9. **Testes** (`test:shop` §8, com um `MarketplaceService` falso): sem id → nenhum atributo, nenhum prompt, botão
+   escondido, moedas iguais; com ids → prompt só do que não é seu; possuído → `owned`, sem prompt; recibo → concede
+   **depois** de a gravação chegar (o documento guardado tem o traje e o `PurchaseId`); o mesmo recibo duas vezes → uma
+   concessão, `PurchaseGranted` nas duas, um `RobuxPurchase`; DataStore falhando → `NotProcessedYet`, e o mesmo recibo
+   depois da volta → `PurchaseGranted`; recibo de um `PlayerId` que não está no servidor → `NotProcessedYet`, nada muda;
+   recibo antes do carregamento → espera; `ProductId` desconhecido → `NotProcessedYet`; preço diferente na partida →
+   produto escondido; recibo de traje já possuído → `PurchaseGranted`, nada novo, `RobuxOwned`; compra em moedas com o
+   prompt aberto → `pending`; outro servidor → ainda seu; a tela real mostra os dois preços, iguais à configuração e ao
+   `GetProductInfo`, com o foco no botão de moedas; e o admin não tira um traje pago em Robux.
+
+### Os produtos que o dono cria (quando a implementação chegar à `main`)
+
+Creator Hub → a experiência → **Monetization › Developer Products** → Create. Em cada um: **não** marcar "Allow external
+purchases" e deixar **Unlisted** ("Hide from Shop"): o jogo só vende pelo seu próprio prompt. Depois, colar cada id em
+`src/shared/data/robuxProducts.ts` (`ROBUX_PRODUCT_IDS`, pelo nome do traje), `npm run build`, commit.
+
+| Nome do produto          | Preço (R$) | Faixa  | Descrição (inglês, a da página do produto)                                                      | Ícone sugerido                                  |
+| ------------------------ | ---------- | ------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Last Town — Pigeon       | 49         | common | Unlocks the Pigeon pet in the Wardrobe, for good. Cosmetic only: it changes nothing in a night. | o ladrilho do Pigeon no guarda-roupa, 512 × 512 |
+| Last Town — White pigeon | 49         | common | Unlocks the White pigeon pet in the Wardrobe, for good. Cosmetic only.                          | o ladrilho do White pigeon                      |
+| Last Town — Carolina     | 49         | common | Unlocks the Carolina dog in the Wardrobe, for good. Cosmetic only.                              | o ladrilho da Carolina                          |
+| Last Town — Malamute     | 149        | rare   | Unlocks the Malamute dog in the Wardrobe, for good. Cosmetic only.                              | o ladrilho do Malamute                          |
+| Last Town — Doberman     | 149        | rare   | Unlocks the Doberman dog in the Wardrobe, for good. Cosmetic only.                              | o ladrilho do Doberman                          |
+| Last Town — Santa        | 149        | rare   | Unlocks the Santa outfit in the Wardrobe, for good. Cosmetic only.                              | o sobrevivente de Santa, como na prévia         |
+| Last Town — Cowboy       | 149        | rare   | Unlocks the Cowboy outfit in the Wardrobe, for good. Cosmetic only.                             | o sobrevivente de Cowboy                        |
+| Last Town — Eagle        | 349        | top    | Unlocks the Eagle pet in the Wardrobe, for good. Cosmetic only.                                 | a águia de asas abertas                         |
+| Last Town — Zombie       | 349        | top    | Unlocks the Zombie outfit in the Wardrobe, for good. Cosmetic only.                             | o sobrevivente com o traje Zombie               |
+
+Os ícones podem sair do código real (a `SurvivorPreview` do guarda-roupa, pelo mesmo caminho de
+`tools/render-menus.mjs`); junto com a implementação, uma ferramenta os grava em `docs/promo/products/`.
 
 ## O que o dono faz no Creator Hub
 
-1. **Nada a criar para a loja de hoje.** Os preços estão no código; não há id de produto nem de passe, e nenhum deve
-   ser criado enquanto a tabela acima disser "Nenhum produto em Robux".
-2. **Monetization › Passes / Developer products:** deixar vazio. Se aprovar a proposta de Robux, criar os produtos com
-   **exatamente** os preços da tabela e mandar os ids para o código (uma constante em `shared/data/shop.ts`).
-3. **Servidor privado:** decidir grátis ou 50 R$/mês antes do lançamento (mudar depois cancela as assinaturas ativas).
+1. **Servidor privado: grátis (já).** Audience › **Access Settings** › ligar **Allow private servers** e **desligar
+   Requires Robux** › Save Changes. Não precisa de código: o jogo reconhece um servidor privado sozinho
+   (`pz_server_kind = private`). Mudar para pago depois é possível, mas mudar o preço cancela as assinaturas ativas.
+2. **Monetization › Developer Products:** nada ainda. Quando a implementação do Robux chegar à `main`, criar os 9
+   produtos da tabela "Os produtos que o dono cria" (preço **exato**, Unlisted, sem "Allow external purchases") e colar
+   os ids em `src/shared/data/robuxProducts.ts`. Sem id, nada muda no jogo.
+3. **Passes:** nenhum (a paleta do sobrevivente, quando existir, será o primeiro).
 4. **Configs:** `pz_welcome_pack` (Number, −1) já está no roteiro de `docs/ANALYTICS.md` §12; o valor 0 dá o First
    Night Kit a quem entra pela primeira vez.
-5. **Questionnaire:** "Paid random items: No" continua certo (pacotes de conteúdo fixo, em moedas do jogo).
+5. **Questionnaire:** "Paid random items: No" continua certo (pacotes de conteúdo fixo, em moedas do jogo; os trajes em
+   Robux, quando vierem, são itens fixos e declarados). Refazer o questionário quando o Robux entrar.
 6. **Depois de publicar:** comparar o painel Economy com o modelo (moedas por hora por jogador; quantos chegam ao
    primeiro cosmético) e ajustar `INCOME_PROFILES` se a realidade for outra.
 
