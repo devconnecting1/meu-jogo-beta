@@ -152,8 +152,9 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		if (it === undefined) return;
 		ix.items.delete(e.id);
 		removeGroundItem(world, it);
-		// half of what tells this survivor's pickup from a bag that grew for another reason (client/systems/pickups.ts)
-		itemGone(it.x, it.y);
+		// half of what tells this survivor's pickup from a bag that grew for another reason (client/systems/pickups.ts),
+		// and what it was, for the pickup's sound
+		itemGone(it.x, it.y, it.kind, it.itemId);
 		return;
 	}
 	if (e.t === WorldEv.LootFlag) {

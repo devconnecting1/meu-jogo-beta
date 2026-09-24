@@ -305,7 +305,7 @@ export class Interaction {
 		if (target.kind === "vehicle") return;
 		if (target.kind === "item") {
 			takeItem(refs, target.item);
-			took();
+			took(target.item.kind, target.item.itemId);
 			return;
 		}
 		if (target.kind === "door") {

@@ -17,6 +17,8 @@ import { audio, AudioTrack } from "./audio";
 const HEART_L1 = 0.35;
 const HEART_L2 = 0.22;
 const HEART_L3 = 0.1;
+/** how far above its threshold the HP has to climb before a heartbeat level is left */
+export const HEART_HYSTERESIS = 0.03;
 
 /** dawn bird layer: full between these hours, faded at the edges */
 const DAWN_FROM = 6;
@@ -68,12 +70,19 @@ export class GameMusic {
 		this.updateHeartbeat(s);
 	}
 
+	/**
+	 * A level is entered under its threshold and left only HEART_HYSTERESIS above it: the HP of a survivor regenerating
+	 * against a drain, or the server's HP interpolated between snapshots, wanders across 35 % for seconds, and every
+	 * crossing used to swap the heartbeat's clip.
+	 */
 	private updateHeartbeat(s: MusicState): void {
 		let level = 0;
 		if (!s.dead && s.hpRatio > 0) {
-			if (s.hpRatio < HEART_L3) level = 3;
-			else if (s.hpRatio < HEART_L2) level = 2;
-			else if (s.hpRatio < HEART_L1) level = 1;
+			const cur = this.heartLevel;
+			const edge = (threshold: number, lvl: number) => s.hpRatio < threshold + (cur >= lvl ? HEART_HYSTERESIS : 0);
+			if (edge(HEART_L3, 3)) level = 3;
+			else if (edge(HEART_L2, 2)) level = 2;
+			else if (edge(HEART_L1, 1)) level = 1;
 		}
 		if (level === this.heartLevel) return;
 		this.heartLevel = level;

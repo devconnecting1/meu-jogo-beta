@@ -22,6 +22,8 @@
  * Offline (no MP host, or below WORLD_SERVER_PHASE) the client's own interaction takes the item and says so directly
  * (`took`). Pure: no Instances, no services but os.clock.
  */
+import { ItemKind } from "shared/data/kinds";
+import { useSoundOf } from "shared/data/usables";
 import { DESIGN } from "shared/engine/constants";
 
 /** how long after the press the server's answer may take to arrive (a pickup on a 1 s round trip still counts) */
@@ -29,7 +31,34 @@ const PICKUP_WINDOW_S = 2;
 /** how far from the press point an item the server removed may have lain: the server's reach, plus the drift */
 const PICKUP_REACH = DESIGN.ITEM_GET_DISTANCE + 60;
 
+/**
+ * What the last pickup was, for its sound (client/audio/gameAudio.ts): ammo (and arrows and oil), food, a material,
+ * or anything else -- gear, a device, a medicine, a searched building's mixed loot.
+ */
+export type PickupKind = "item" | "ammo" | "food" | "material";
+
+/** ETC items 44..48: normal, shotgun and machine-gun ammo, arrows, oil (shared/sim/inventory.ts keeps them apart) */
+const ETC_AMMO_FIRST = 44;
+const ETC_AMMO_LAST = 48;
+/** ETC items 23..37, 41 and 43: wood, stone, steel, gold, parts, battery, bulb, gunpowder, cloth, chip, leather... */
+const ETC_MATERIAL_FIRST = 23;
+const ETC_MATERIAL_LAST = 37;
+const ETC_LEATHER = 41;
+const ETC_RADIOACTIVE = 43;
+
+/** what a ground item of `kind` / `itemId` sounds like when it goes into the bag */
+export function pickupKindOf(kind: number | undefined, itemId: number | undefined): PickupKind {
+	if (kind === undefined || itemId === undefined) return "item";
+	if (kind === ItemKind.Use) return useSoundOf(itemId) === "useEat" ? "food" : "item";
+	if (kind !== ItemKind.Etc) return "item";
+	if (itemId >= ETC_AMMO_FIRST && itemId <= ETC_AMMO_LAST) return "ammo";
+	if (itemId >= ETC_MATERIAL_FIRST && itemId <= ETC_MATERIAL_LAST) return "material";
+	if (itemId === ETC_LEATHER || itemId === ETC_RADIOACTIVE) return "material";
+	return "item";
+}
+
 let count = 0;
+let lastKind: PickupKind = "item";
 /** the E press waiting for the server's answer: "item", "loot", or "" for none */
 let waiting = "";
 let pressAt = 0;
@@ -37,15 +66,26 @@ let pressX = 0;
 let pressY = 0;
 let gone = false;
 let grew = false;
+/** what the ground item the server took away was (ItemRemove), until the pickup settles */
+let goneKind: PickupKind = "item";
 
 /** pickups so far, this session: a reader compares it with the value it last saw */
 export function pickupCount(): number {
 	return count;
 }
 
-/** the client's own game took something from the ground or a building (offline: nobody else decides) */
-export function took(): void {
+/** what the last counted pickup was (read together with pickupCount) */
+export function lastPickupKind(): PickupKind {
+	return lastKind;
+}
+
+/**
+ * The client's own game took something from the ground or a building (offline: nobody else decides). `kind` /
+ * `itemId`: the ground item's, for its sound; a building's loot is a mix and says nothing.
+ */
+export function took(kind?: number, itemId?: number): void {
 	count += 1;
+	lastKind = pickupKindOf(kind, itemId);
 }
 
 /**
@@ -59,15 +99,20 @@ export function pressed(kind: "item" | "loot", x: number, y: number): void {
 	pressY = y;
 	gone = false;
 	grew = false;
+	goneKind = "item";
 }
 
-/** the server took the ground item that lay at (x, y) out of the world (ItemRemove) */
-export function itemGone(x: number, y: number): void {
+/**
+ * The server took the ground item that lay at (x, y) out of the world (ItemRemove). `kind` / `itemId`: what it was, so
+ * the pickup is heard as what it is (ammo, food, a material).
+ */
+export function itemGone(x: number, y: number, kind?: number, itemId?: number): void {
 	if (waiting !== "item" || !fresh()) return;
 	const dx = x - pressX;
 	const dy = y - pressY;
 	if (dx * dx + dy * dy > PICKUP_REACH * PICKUP_REACH) return;
 	gone = true;
+	goneKind = pickupKindOf(kind, itemId);
 	settle();
 }
 
@@ -75,6 +120,7 @@ export function itemGone(x: number, y: number): void {
 export function lootGone(): void {
 	if (waiting !== "loot" || !fresh()) return;
 	gone = true;
+	goneKind = "item";
 	settle();
 }
 
@@ -94,5 +140,6 @@ function fresh(): boolean {
 function settle(): void {
 	if (!gone || !grew) return;
 	count += 1;
+	lastKind = goneKind;
 	waiting = "";
 }

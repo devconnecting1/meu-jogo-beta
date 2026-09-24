@@ -12,12 +12,25 @@
  *    with audio of doubtful origin just to avoid the silence.
  *  - `volume` is the base level BEFORE the bus gain (the Settings sliders). Keep every one of them <= 0.6:
  *    the player must never be hit by a sudden loud sound.
+ *  - OUR OWN SOUNDS (DESIGN_RULES SND-01): the UI, the pickups, the weapons, the impacts, the footsteps and the cues are
+ *    also synthesised by tools/gen-sfx.mjs into five banks (design/audio/). An event with a take in a bank that has an
+ *    asset id (the generated ./audioAssets.ts, `npm run cloud -- upload-audio`) plays OUR take -- a window of the bank
+ *    -- with the volume and pitch range the generator gave it; without the id, or once the client failed to load that
+ *    bank (`dropSoundAsset`), it plays the library take below exactly as before. The library entry is the fallback
+ *    and keeps the event's role (bus, voices, priority, range, spatial) in both cases.
  *
  * This file is data only: no Instances, no services. The client mixer (client/audio/audio.ts) reads it.
  */
+import { AUDIO_BANK_IDS, SYNTH_SOUNDS } from "./audioAssets";
 
 /** mixer bus; each one is a SoundGroup driven by a Settings slider */
 export type SoundBus = "sfx" | "ui" | "bgm";
+
+/** a window of the file: where it starts and how long it plays, in seconds OF THE FILE (whatever the pitch) */
+export interface SoundTake {
+	readonly startAt: number;
+	readonly maxPlay: number;
+}
 
 /** what a sound is, for tuning and for the credits table */
 export type SoundCategory = "weapon" | "impact" | "creature" | "world" | "ui" | "music" | "ambient";
@@ -53,10 +66,28 @@ export interface SoundDef {
 	/** skip this many seconds of the file (room tone before the take) */
 	startAt?: number;
 	/**
-	 * Stop the voice after this many seconds. Some library takes hold SEVERAL shots in one file
-	 * ("Multiple Shots" / "Various Shot Bursts"): a short window turns one of them into a single shot.
+	 * Play this many seconds OF THE FILE, then stop. Some library takes hold SEVERAL shots in one file
+	 * ("Multiple Shots" / "Various Shot Bursts"): a short window turns one of them into a single shot. It is file time:
+	 * at PlaybackSpeed 0.6 the window lasts 1/0.6 as long in real time (the mixer sets Sound.PlaybackRegion, and its own
+	 * deadline divides by the speed) -- a real-time cut would chop a pitched-down groan and let a pitched-up one run
+	 * into the next phrase of the same file.
 	 */
 	maxPlay?: number;
+	/**
+	 * Round-robin windows of the file (our own banks: several takes of one event): each trigger plays one of them,
+	 * never the one it played last. Overrides startAt / maxPlay.
+	 */
+	takes?: ReadonlyArray<SoundTake>;
+	/** each trigger's volume is scaled by 1 - random * volJitter (0..1): repeats never land at the same level */
+	volJitter?: number;
+	/**
+	 * The same sound again sooner than this (seconds) is the same event heard twice -- eight pellets, ten deaths in one
+	 * blast, two allies' steps in one frame -- and is dropped: identical samples started together only add up to a
+	 * louder, phasier copy. Default MIN_GAP (client/audio/audio.ts).
+	 */
+	minGap?: number;
+	/** where the asset comes from: the official library (the default) or our own synthesised bank */
+	source?: "library" | "synth";
 	/**
 	 * A held loop (client/audio/audio.ts `holdLoop`: an engine, a flamethrower) repeats only this window of the file,
 	 * in seconds (Sound.LoopRegion): a library take is a whole recording -- start, idle, revs, off -- and the steady
@@ -132,6 +163,7 @@ export const SOUNDS = {
 		priority: 6,
 		spatial: true,
 		maxPlay: 0.9,
+		volJitter: 0.12,
 	},
 	shotRifle: {
 		id: PSE_PISTOL_B,
@@ -144,6 +176,7 @@ export const SOUNDS = {
 		priority: 6,
 		spatial: true,
 		maxPlay: 0.9,
+		volJitter: 0.12,
 	},
 	/** machine guns fire in long strings: quieter, fewer voices, so a burst does not wall off everything else */
 	shotMg: {
@@ -157,6 +190,7 @@ export const SOUNDS = {
 		priority: 5,
 		spatial: true,
 		maxPlay: 0.45,
+		volJitter: 0.12,
 	},
 	/** "12 Gauge Shotgun 1" holds several blasts: maxPlay cuts it down to one */
 	shotShotgun: {
@@ -170,6 +204,7 @@ export const SOUNDS = {
 		priority: 7,
 		spatial: true,
 		maxPlay: 0.6,
+		volJitter: 0.12,
 	},
 	shotSniper: {
 		id: PSE_RIFLE,
@@ -182,6 +217,7 @@ export const SOUNDS = {
 		priority: 7,
 		spatial: true,
 		maxPlay: 0.35,
+		volJitter: 0.12,
 	},
 	/** arrow release: a dry whoosh, not a bang (bows are the quiet weapon of the daytime stealth) */
 	shotBow: {
@@ -217,6 +253,7 @@ export const SOUNDS = {
 		voices: 3,
 		priority: 4,
 		spatial: true,
+		volJitter: 0.1,
 	},
 	meleeHit: {
 		id: `${ENGINE}hit.wav`,
@@ -286,6 +323,8 @@ export const SOUNDS = {
 		voices: 4,
 		priority: 5,
 		spatial: true,
+		volJitter: 0.15,
+		minGap: 0.05,
 	},
 	zombieDeath: {
 		id: `${ENGINE}uuhhh.mp3`,
@@ -297,6 +336,8 @@ export const SOUNDS = {
 		voices: 3,
 		priority: 6,
 		spatial: true,
+		volJitter: 0.1,
+		minGap: 0.08,
 	},
 	// --- the horde's voice (P0-4). Four idle groans and two snarls, each a window of a HUMAN take of the library's
 	//     voice categories (a tracheotomy voice's gurgling grunts, a creature's wet breathing, a performer's growl):
@@ -316,6 +357,7 @@ export const SOUNDS = {
 		spatial: true,
 		startAt: 1.08,
 		maxPlay: 2.05,
+		volJitter: 0.15,
 	},
 	/** the same voice's short choke (3.46-4.36 s) */
 	zombieGroanB: {
@@ -330,6 +372,7 @@ export const SOUNDS = {
 		spatial: true,
 		startAt: 3.46,
 		maxPlay: 0.9,
+		volJitter: 0.15,
 	},
 	/** wet, heavy breathing through the nose: the idle zombie that is only standing there */
 	zombieGroanC: {
@@ -344,6 +387,7 @@ export const SOUNDS = {
 		spatial: true,
 		startAt: 0.15,
 		maxPlay: 1.95,
+		volJitter: 0.15,
 	},
 	/** a low grunt (Goblin Growl 9, a human-made growl), pitched down to a groan */
 	zombieGroanD: {
@@ -357,6 +401,7 @@ export const SOUNDS = {
 		priority: 3,
 		spatial: true,
 		maxPlay: 1.1,
+		volJitter: 0.15,
 	},
 	/** a zombie that just saw the survivor: a snarl (Monster Vocals 12) */
 	zombieAggroA: {
@@ -458,6 +503,7 @@ export const SOUNDS = {
 		voices: 2,
 		priority: 9,
 		spatial: true,
+		minGap: 0.12,
 	},
 
 	// --- world impacts (debris bursts)
@@ -471,6 +517,8 @@ export const SOUNDS = {
 		voices: 2,
 		priority: 3,
 		spatial: true,
+		volJitter: 0.15,
+		minGap: 0.06,
 	},
 	debrisMetal: {
 		id: `${ENGINE}metal.ogg`,
@@ -482,6 +530,8 @@ export const SOUNDS = {
 		voices: 2,
 		priority: 3,
 		spatial: true,
+		volJitter: 0.15,
+		minGap: 0.06,
 	},
 	debrisGlass: {
 		id: `${ENGINE}glassbreak.wav`,
@@ -493,6 +543,8 @@ export const SOUNDS = {
 		voices: 2,
 		priority: 4,
 		spatial: true,
+		volJitter: 0.15,
+		minGap: 0.06,
 	},
 
 	// --- inventory
@@ -505,6 +557,7 @@ export const SOUNDS = {
 		pitchMax: 1.1,
 		voices: 2,
 		priority: 4,
+		minGap: 0.08,
 	},
 	pickupCoin: {
 		id: `${ENGINE}electronicpingshort.wav`,
@@ -525,6 +578,74 @@ export const SOUNDS = {
 		pitchMax: 1.05,
 		voices: 1,
 		priority: 4,
+	},
+	// --- what was picked up, by kind (client/systems/pickups.ts `lastPickupKind`): ammo, food and materials each have
+	//     their own sound in our bank; until it has an id they fall back on the pickup click, pitched apart
+	pickupAmmo: {
+		id: `${ENGINE}clickfast.wav`,
+		bus: "sfx",
+		category: "world",
+		volume: 0.26,
+		pitchMin: 1.15,
+		pitchMax: 1.25,
+		voices: 2,
+		priority: 4,
+		minGap: 0.08,
+	},
+	pickupFood: {
+		id: `${ENGINE}clickfast.wav`,
+		bus: "sfx",
+		category: "world",
+		volume: 0.26,
+		pitchMin: 0.82,
+		pitchMax: 0.9,
+		voices: 2,
+		priority: 4,
+		minGap: 0.08,
+	},
+	pickupMaterial: {
+		id: `${ENGINE}clickfast.wav`,
+		bus: "sfx",
+		category: "world",
+		volume: 0.26,
+		pitchMin: 0.7,
+		pitchMax: 0.76,
+		voices: 2,
+		priority: 4,
+		minGap: 0.08,
+	},
+	/** the survivor levelled up (main.client.ts, with the "Level UP" message) */
+	levelUp: {
+		id: `${ENGINE}victory.wav`,
+		bus: "ui",
+		category: "ui",
+		volume: 0.3,
+		pitchMin: 1.12,
+		pitchMax: 1.12,
+		voices: 1,
+		priority: 7,
+	},
+	/** a construction set down (client/systems/build.ts), and one refused where the ghost is red */
+	buildPlace: {
+		id: `${ENGINE}snap.wav`,
+		bus: "sfx",
+		category: "world",
+		volume: 0.3,
+		pitchMin: 0.72,
+		pitchMax: 0.8,
+		voices: 1,
+		priority: 5,
+	},
+	buildDeny: {
+		id: `${ENGINE}bass.wav`,
+		bus: "ui",
+		category: "ui",
+		volume: 0.26,
+		pitchMin: 1.2,
+		pitchMax: 1.25,
+		voices: 1,
+		priority: 6,
+		minGap: 0.25,
 	},
 
 	// --- doors (EDI-13: the doors a survivor builds, and the doors of the map), played where the server says the door
@@ -644,9 +765,10 @@ export const SOUNDS = {
 		maxPlay: 1.2,
 	},
 	/**
-	 * The adrenaline injection. EMPTY SLOT on purpose: the official libraries have no syringe or injection take
-	 * ("syringe", "injection", "needle" find pressure blasts and robots), and no user upload is allowed
-	 * (design/audio-credits.md, pendency D). Silent until the owner finds one; the event already fires.
+	 * The adrenaline injection. EMPTY in the library on purpose: the official libraries have no syringe or injection
+	 * take ("syringe", "injection", "needle" find pressure blasts and robots), and no upload of doubtful origin is
+	 * allowed (design/audio-credits.md, pendency D). OUR bank has one (tools/gen-sfx.mjs `useInject`: a snap, a hiss,
+	 * a tink): silent until the "impacts" bank is uploaded, heard from then on.
 	 */
 	useInject: {
 		id: "",
@@ -753,6 +875,7 @@ export const SOUNDS = {
 		priority: 1,
 		spatial: true,
 		maxPlay: 0.22,
+		volJitter: 0.2,
 	},
 	footstepB: {
 		range: 900,
@@ -766,6 +889,7 @@ export const SOUNDS = {
 		priority: 1,
 		spatial: true,
 		maxPlay: 0.22,
+		volJitter: 0.2,
 	},
 	// --- UI (short, discreet, never a surprise)
 	uiClick: {
@@ -955,9 +1079,80 @@ export type SoundName = keyof typeof SOUNDS;
  */
 const CATALOGUE = SOUNDS as Record<SoundName, SoundDef>;
 
-/** the definition of `name`, or undefined when the slot does not exist */
+/** every event name, in the catalogue's order (built once) */
+const NAMES: ReadonlyArray<SoundName> = (() => {
+	const out: Array<SoundName> = [];
+	for (const [name] of pairs(SOUNDS)) out.push(name as SoundName);
+	return out;
+})();
+
+/** bank asset ids this client could not load (preload): their events are back on the library for the session */
+const droppedIds = new Set<string>();
+
+/**
+ * What `name` plays now: our own take when its bank has an id this client did not give up on, the library entry
+ * otherwise. The role (bus, voices, priority, range, spatial, minGap) is always the library entry's.
+ */
+function resolve(name: SoundName): SoundDef {
+	const lib = CATALOGUE[name];
+	const synth = SYNTH_SOUNDS[name];
+	if (synth === undefined) return lib;
+	const id = AUDIO_BANK_IDS[synth.bank];
+	if (id === undefined || id === "" || droppedIds.has(id)) return lib;
+	const looped = synth.loopStart !== undefined && synth.loopEnd !== undefined;
+	return {
+		...lib,
+		id,
+		source: "synth",
+		volume: synth.volume,
+		pitchMin: synth.pitchMin,
+		pitchMax: synth.pitchMax,
+		// a bank is many sounds: a one-shot plays one of its windows, a loop repeats its own region
+		startAt: undefined,
+		maxPlay: undefined,
+		takes: looped ? undefined : synth.takes,
+		loopStart: looped ? synth.loopStart : undefined,
+		loopEnd: looped ? synth.loopEnd : undefined,
+	};
+}
+
+/** the resolved catalogue: built at load, rebuilt only when a bank is dropped (never per trigger) */
+const RESOLVED = {} as Record<SoundName, SoundDef>;
+function rebuild(): void {
+	for (const name of NAMES) RESOLVED[name] = resolve(name);
+}
+rebuild();
+
+/** the definition of `name` as it plays now (ours or the library's), or undefined when the slot does not exist */
 export function soundDef(name: SoundName): SoundDef | undefined {
+	return RESOLVED[name];
+}
+
+/** the library entry of `name`, whatever plays now (the fallback; tests and the credits) */
+export function librarySoundDef(name: SoundName): SoundDef | undefined {
 	return CATALOGUE[name];
+}
+
+/** every event of the catalogue */
+export function soundNames(): ReadonlyArray<SoundName> {
+	return NAMES;
+}
+
+/**
+ * The client could not load `id` (client/audio/audio.ts preloadSounds). If it is one of our banks, every event on it
+ * goes back to its library take for the rest of the session -- a sound that does not load must not become a silence
+ * (SND-01, as ART-01 does for a texture). Answers whether anything changed.
+ */
+export function dropSoundAsset(id: string): boolean {
+	if (id === "" || droppedIds.has(id)) return false;
+	let bank = false;
+	for (const [, bankId] of pairs(AUDIO_BANK_IDS)) {
+		if (bankId === id) bank = true;
+	}
+	if (!bank) return false;
+	droppedIds.add(id);
+	rebuild();
+	return true;
 }
 
 /** an empty slot (id "") is silent on purpose: no asset was found that the game may legally use */
@@ -965,12 +1160,12 @@ export function isSilentSlot(def: SoundDef): boolean {
 	return def.id === "";
 }
 
-/** every distinct asset the catalogue references (for ContentProvider:PreloadAsync at boot) */
+/** every distinct asset the catalogue plays now (for ContentProvider:PreloadAsync at boot) */
 export function soundAssetIds(): Array<string> {
 	const seen = new Set<string>();
 	const ids: Array<string> = [];
-	for (const [, entry] of pairs(SOUNDS)) {
-		const def = entry as SoundDef;
+	for (const name of NAMES) {
+		const def = RESOLVED[name];
 		if (def.id === "" || seen.has(def.id)) continue;
 		seen.add(def.id);
 		ids.push(def.id);
