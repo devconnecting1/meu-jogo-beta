@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out; noTrees: the same with the trees' drawing stubbed out (VEG-06)",
-	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over 71ff847 (the everyday town, the weather and the entrances): every tree is one of eight kinds with its own crown size and green (the flat drawing unchanged, reading them), and a park's trees stand in groves -- with the trees' drawing stubbed out (noTrees) every scene is 71ff847's, draw call for draw call (recorded with PZ_SRC on 71ff847 and compared), so only the trees changed; the golden before it: the entrances (ART-17), re-recorded on c638602 with each doorway's flat entrance by its type; noSigns = the same without the signage hook",
+	"recordedFrom": "the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: each grove seated on the park's open lawn and of its own kind, spreading when its middle is packed, the trees it had no room for the kind of the grove nearest, the loners a fifth -- the flat drawing unchanged, only the park and overview scenes change (their park trees stand elsewhere); with the trees' drawing stubbed out (noTrees) every scene is the golden before's, call for call (unchanged), so only the trees moved; the golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602 with each doorway's flat entrance by its type; noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
 			"count": 1163,
@@ -27,11 +27,11 @@
 			}
 		},
 		"park": {
-			"count": 1679,
-			"sha1": "27465d79d53da87ccc13fef50bfe8d015beb76eb",
+			"count": 1631,
+			"sha1": "d66bb37c9e835a563475b4110c492424cd4a2d07",
 			"noSigns": {
-				"count": 1679,
-				"sha1": "27465d79d53da87ccc13fef50bfe8d015beb76eb"
+				"count": 1631,
+				"sha1": "d66bb37c9e835a563475b4110c492424cd4a2d07"
 			},
 			"noTrees": {
 				"count": 463,
@@ -75,11 +75,11 @@
 			}
 		},
 		"overview": {
-			"count": 4808,
-			"sha1": "29fc28d470de601d7d7b8a0cf71051fb58f949d0",
+			"count": 4616,
+			"sha1": "c10453f813a0e7ef25d335ecf5b8e2108ab91508",
 			"noSigns": {
-				"count": 4626,
-				"sha1": "bb326fa9ad4ba445fa4dedd1ef6d18b30dfdc0ae"
+				"count": 4434,
+				"sha1": "2c0ae661613be78ba224456ba5fe67451a1aa72a"
 			},
 			"noTrees": {
 				"count": 3624,

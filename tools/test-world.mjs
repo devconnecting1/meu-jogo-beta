@@ -24,9 +24,9 @@
  *      hundreds of ticks, at an item and at a looted house, ends with exactly what one press earns;
  *   e. DISTANCE IS THE SERVER'S: a client pressing E from across the street picks up nothing, whatever it
  *      believes about its own position (§8.3 — and there is no position field to lie in);
- *   f. CONSTRUCTION: a craft puts a placeable on the cursor, the attack edge places it where the SERVER says
- *      the survivor is aiming, the flow field is told which tiles changed (§3.3), the §8.1 caps hold, and a
- *      cancel gives the ingredients back;
+ *   f. CONSTRUCTION: a craft makes a kit the survivor owns and puts it on the cursor (ITM-09), the attack edge
+ *      places it where the SERVER says the survivor is aiming and spends the kit, the flow field is told which tiles
+ *      changed (§3.3), the §8.1 caps hold, and a cancel leaves the kit in the backpack (no ingredient refund);
  *   g. CRAFTING: a forged recipe id, a missing ingredient and a missing station are all refused, and a
  *      refused craft costs nothing (the client's version consumed before it checked);
  *   h. THE DELTAS REACH THE WIRE: everything the tick produced encodes through `encodeWorld` and decodes
@@ -35,6 +35,13 @@
  *   w. THE GROUND IS NOT A WAREHOUSE (security review of 5967a18, #3): items rot after GROUND_ITEM_LIFE_S, the town
  *      holds GROUND_ITEM_CAP (the oldest go first, every client told), the sweep and the E press read the item grid
  *      and give the scan's answers, and the population's cleanup no longer leaves a ghost on a client.
+ *   y. A KIT FROM THE BACKPACK (ITM-09, protocol.ts note 26): the Place verb, through the real decoder and queue, puts
+ *      a construction kit the backpack holds on the server's cursor without spending it; the attack places it and
+ *      spends it in the same step (the session told, onBuild); E, or leaving the world, gives nothing back because
+ *      nothing was taken (and never the recipe's ingredients); a second kit while one is held is "busy", one not owned
+ *      is "owned", a row that is not a kit (wood) is "unknown", an id past the ETC table does not decode, a kit gone
+ *      from the backpack while held builds nothing; dead or mounted, refused. A bicycle from the backpack is placed
+ *      and ridden (VEI-05).
  *   x. CONSTRUCTIONS (MP-24): the per-player cap follows the account through a leave and a rejoin; an abandoned
  *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
  *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
@@ -413,7 +420,9 @@ section("e) a distancia e medida na posicao do SERVIDOR (§8.3)");
 
 // ================================================================ f. construction
 
-section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.5, §8.1)");
+section(
+	"f) construcao: o servidor coloca e conta; o kit craftado e do sobrevivente e cancelar o guarda (§4.5, §8.1, ITM-09)",
+);
 {
 	const world = emptyWorld();
 	const sim = newSim(world);
@@ -429,6 +438,11 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 
 	checkEq(sim.craft.craft(0, p.state, p.save, recipe.id).kind, "holding", "craftar um placeavel poe no cursor");
 	checkEq(sim.build.placing(0), true, "e o servidor sabe que ele esta posicionando");
+	checkEq(
+		countItem(p.save, 4, recipe.resultIndex),
+		1,
+		"o kit craftado e do sobrevivente: esta na mochila (aba Build)",
+	);
 	for (let i = 0; i < recipe.ingredients.size(); i++) {
 		const ing = recipe.ingredients[i];
 		checkEq(countItem(p.save, ing.kind, ing.index), spent[i] - ing.count, `o ingrediente ${ing.index} foi gasto`);
@@ -443,6 +457,7 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 	checkEq(built.owner, 0, "e com dono");
 	checkEq(sim.build.countOf(0), 1, "que conta para o teto por jogador");
 	checkEq(sim.build.placing(0), false, "o cursor ficou livre");
+	checkEq(countItem(p.save, 4, recipe.resultIndex), 0, "e colocar gastou o kit");
 	const pending = drain(sim);
 	const adds = pending.filter(d => d.ev.t === P.WorldEv.SolidAdd);
 	checkEq(adds.length, 1, "um SolidAdd foi enfileirado");
@@ -457,15 +472,21 @@ section("f) construcao: o servidor coloca, conta e devolve os ingredientes (§4.
 		`(${built.x}, ${built.y}) vs (${p.state.x}, ${p.state.y})`,
 	);
 
-	// a cancel gives the ingredients back
+	// ITM-09: a cancel leaves the kit in the backpack -- the ingredients ARE the kit, they do not come back
+	sim.craft.step(1);
 	const before = recipe.ingredients.map(ing => countItem(p.save, ing.kind, ing.index));
-	sim.craft.craft(0, p.state, p.save, recipe.id);
+	checkEq(sim.craft.craft(0, p.state, p.save, recipe.id).kind, "holding", "um segundo, no cursor");
 	send(p, 2, 0, P.packEdges(0, 0, 1, 0));
 	run(sim, 1);
 	checkEq(sim.build.placing(0), false, "cancelar tira do cursor");
+	checkEq(countItem(p.save, 4, recipe.resultIndex), 1, "e o kit fica na mochila (aba Build): nada se perde");
 	for (let i = 0; i < recipe.ingredients.size(); i++) {
 		const ing = recipe.ingredients[i];
-		checkEq(countItem(p.save, ing.kind, ing.index), before[i], `o ingrediente ${ing.index} voltou`);
+		checkEq(
+			countItem(p.save, ing.kind, ing.index),
+			before[i] - ing.count,
+			`o ingrediente ${ing.index} nao volta (virou o kit)`,
+		);
 	}
 
 	// a destroyed construction gives its cap slot back and announces itself
@@ -1734,9 +1755,10 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	const aim = Math.atan2(n[1], n[0]);
 	const builder = addPlayer(live, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
 	builder.state.angle = aim;
-	// on the cursor the way a craft puts it there (server/sim/craft.ts hands a placeable to ServerBuild.hold; the craft
-	// itself wants a work desk near, which is not what this is about)
-	live.build.hold(0, recipe.resultIndex, recipe.id);
+	// on the cursor the way a craft puts it there (server/sim/craft.ts: the kit into the backpack, then ServerBuild.hold
+	// as a kit, ITM-09; the craft itself wants a work desk near, which is not what this is about)
+	addItem(builder.save, 4, recipe.resultIndex, 1);
+	live.build.hold(0, recipe.resultIndex, true);
 	check(live.build.placing(0), "a barricada esta no cursor do SERVIDOR");
 	drain(live);
 	send(builder, 1, aim, P.packEdges(1, 0, 0, 0));
@@ -3606,6 +3628,208 @@ section(
 		info(`todos os ${intact.length} vidros quebrados: ${total} B de WorldInit (${enc.packets.length} pacote(s))`);
 		check(enc.packets.length === 1 && total < 16384, "a cidade inteira quebrada cabe num lote do WorldInit");
 	}
+}
+
+section(
+	"y) ITM-09: um kit da mochila vai ao cursor pelo verbo Place (nota 26); so a colocacao o gasta, cancelar nao perde nada",
+);
+{
+	const TURRET = 2;
+	const BARRICADE = 10;
+	const BICYCLE = 21;
+	const WOOD = 23;
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const save = SAVE.defaultSave();
+	save.invenEtc[TURRET] = 1;
+	save.invenEtc[BARRICADE] = 2;
+	save.invenEtc[BICYCLE] = 1;
+	save.invenEtc[WOOD] = 30;
+	const p = addPlayer(sim, 0, 2000, 2000, save);
+	p.state.angle = 0;
+	const seen = [];
+	const built = [];
+	sim.onBackpack = (sp, o) => seen.push(o);
+	sim.onBuild = (sp, o) => built.push(o);
+	let seq = 0;
+	let nonce = 0;
+	/** one real command through the wire, then the tick that consumes it */
+	const tick = (edges = 0) => {
+		seq += 1;
+		send(p, seq, 0, edges, seq / CFG.SIM_HZ);
+		sim.step();
+	};
+	/** the verb as the client sends it: encoded, decoded by the server's own decoder, queued in the simulation */
+	const place = id => {
+		const msg = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Place, 0, id, ++nonce));
+		return msg !== undefined && sim.queueIntent(0, msg);
+	};
+	/** long enough for the craft's clock (4 a second) and the placement's (2 a second) to run out */
+	const wait = () => {
+		for (let i = 0; i < CFG.SIM_HZ; i++) tick();
+	};
+	tick();
+
+	check(place(TURRET), "o verbo Place entra na fila (uma torreta que a mochila tem)");
+	tick();
+	checkEq(seen.at(-1)?.kind, "holding", "o servidor poe a torreta no cursor");
+	checkEq(sim.build.pendingOf(0), TURRET, "o cursor do servidor tem a torreta");
+	checkEq(save.invenEtc[TURRET], 1, "e nada saiu da mochila: segurar nao gasta");
+	checkEq(sim.backpack.ackOf(p.userId), nonce, "confirmado pelo nonce");
+
+	// a second kit while the turret is held: one construction at a time (held on the craft's clock, then refused)
+	place(BARRICADE);
+	wait();
+	checkEq(seen.at(-1)?.why, "busy", "um segundo kit com a torreta no cursor: recusado por 'busy'");
+	checkEq(sim.build.pendingOf(0), TURRET, "e o cursor continua com a torreta");
+
+	// the attack edge places it where the SERVER says the survivor aims -- and spends it in the same step
+	const solids = world.solids.size();
+	tick(P.packEdges(1, 0, 0, 0));
+	checkEq(world.solids.size(), solids + 1, "o ataque coloca a torreta no mundo");
+	const turret = world.solids[world.solids.size() - 1];
+	checkEq(turret.placeable, TURRET, "com o placeavel certo");
+	checkEq(turret.tags, PLACEABLES[TURRET].tag, "a etiqueta da torreta");
+	checkEq(turret.owner, 0, "e com dono");
+	checkEq(save.invenEtc[TURRET], 0, "e a torreta saiu da mochila nesse mesmo passo");
+	checkEq(sim.build.placing(0), false, "o cursor ficou livre");
+	check(
+		built.some(o => o.kind === "placed" && o.kit === true),
+		"o save mudou e o servidor avisou (onBuild: a sessao marca o save para gravar)",
+	);
+
+	// none left: refused as not owned, nothing on the cursor, nothing built
+	wait();
+	place(TURRET);
+	wait();
+	checkEq(seen.at(-1)?.why, "owned", "sem torreta na mochila: recusado por 'owned'");
+	checkEq(sim.build.placing(0), false, "e nada vai para o cursor");
+
+	// a spoof: a row of the ETC table that is not a kit (wood), owned -- the server never puts it on a cursor
+	place(WOOD);
+	wait();
+	checkEq(seen.at(-1)?.why, "unknown", "madeira nao e construcao: recusado por 'unknown'");
+	checkEq(sim.build.placing(0), false, "e o cursor segue livre");
+	{
+		// the same 8 bytes a client sends, by hand: the verb, atSeq 0, arg 200 (past the ETC table), nonce 1
+		const raw = [96, P.IntentKind.Place, 0, 0, 200, 0, 1, 0];
+		const b = buffer.create(raw.length);
+		raw.forEach((v, i) => buffer.writeu8(b, i, v));
+		checkEq(P.decodeIntentMessage(b), undefined, "um id fora da tabela ETC nem decodifica (malformado)");
+		buffer.writeu8(b, 4, 10);
+		checkEq(P.decodeIntentMessage(b)?.arg, 10, "(e os mesmos bytes com um id da tabela decodificam)");
+	}
+
+	// E cancels: the barricade was never taken, so nothing comes back -- and never the wood its recipe costs
+	place(BARRICADE);
+	wait();
+	checkEq(sim.build.pendingOf(0), BARRICADE, "a barricada vai ao cursor");
+	const woodBefore = countItem(save, 4, WOOD);
+	built.length = 0;
+	tick(P.packEdges(0, 0, 1, 0));
+	checkEq(sim.build.placing(0), false, "E tira a barricada do cursor");
+	checkEq(save.invenEtc[BARRICADE], 2, "e as duas barricadas continuam na mochila: nada perdido");
+	checkEq(countItem(save, 4, WOOD), woodBefore, "e nenhum ingrediente da receita aparece do nada");
+	checkEq(built.length, 0, "um cancelamento que nao devolveu nada nao marca o save");
+
+	// the kit gone from the backpack while it was held (an admin's edit, a save laid over): the attack builds nothing
+	place(BARRICADE);
+	wait();
+	save.invenEtc[BARRICADE] = 0;
+	const before = world.solids.size();
+	tick(P.packEdges(1, 0, 0, 0));
+	checkEq(world.solids.size(), before, "sem o kit na mochila na hora de colocar: nada e construido");
+	checkEq(sim.build.placing(0), false, "e ele sai do cursor");
+	save.invenEtc[BARRICADE] = 2;
+
+	// leaving the world with a kit on the cursor gives nothing back (nothing was taken)
+	place(BARRICADE);
+	wait();
+	checkEq(sim.build.pendingOf(0), BARRICADE, "de novo no cursor");
+	sim.remove(0);
+	checkEq(save.invenEtc[BARRICADE], 2, "sair do mundo com o kit no cursor: a mochila continua com as duas");
+	checkEq(countItem(save, 4, WOOD), woodBefore, "e sem ingrediente de brinde");
+
+	// a dead or mounted survivor: the shared rule refuses it before the cursor (shared/sim/placement.ts kitRefusal)
+	const craft = sim.craft;
+	const body = { ...p.state };
+	checkEq(craft.placeKit(3, { ...body, dead: true }, save, BARRICADE).why, "dead", "morto: 'dead'");
+	checkEq(craft.placeKit(4, { ...body, ride: { kind: 1 } }, save, BARRICADE).why, "busy", "montado: 'busy'");
+	checkEq(craft.placeKit(5, body, save, BARRICADE).kind, "holding", "vivo e a pe: vai");
+
+	// ...and the craft of a construction too (the security review of 0a7561e, 1): on a vehicle the attack and E are the
+	// bell and the dismount, so the kit could be neither placed nor put back -- refused before anything is spent
+	{
+		const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === BARRICADE);
+		const s6 = SAVE.defaultSave();
+		for (const ing of recipe.ingredients) addItem(s6, ing.kind, ing.index, ing.count);
+		const had = recipe.ingredients.map(ing => countItem(s6, ing.kind, ing.index));
+		const out = craft.craft(6, { ...body, ride: { kind: 1 } }, s6, recipe.id);
+		checkEq(`${out.kind}/${out.why}`, "refused/busy", "craftar uma construcao montado: recusado por 'busy'");
+		check(
+			recipe.ingredients.every((ing, i) => countItem(s6, ing.kind, ing.index) === had[i]) &&
+				countItem(s6, 4, BARRICADE) === 0 &&
+				!sim.build.placing(6),
+			"e nada foi gasto, nenhum kit feito, nada no cursor",
+		);
+	}
+
+	// the kit leaves the backpack AFTER the construction entered the world (the review of 0a7561e, 4): a hook that throws
+	// inside `addSolid` leaves the kit where it was, never spent on a wall that is not there
+	{
+		const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
+		const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+		const w7 = emptyWorld();
+		const b7 = new ServerBuild({
+			world: w7,
+			out: new WorldOut(),
+			onSolid: (s, added) => {
+				if (added && s.placeable !== undefined) throw new Error("a hook that fails");
+			},
+		});
+		const s7 = SAVE.defaultSave();
+		s7.invenEtc[BARRICADE] = 1;
+		const body7 = { ...p.state, x: 2000, y: 2000, angle: 0 };
+		b7.hold(0, BARRICADE, true);
+		let threw = false;
+		try {
+			b7.place(0, body7, [body7], [], s7);
+		} catch {
+			threw = true;
+		}
+		check(threw && s7.invenEtc[BARRICADE] === 1, "um gancho que falha no addSolid: o kit continua na mochila");
+	}
+}
+
+section("y2) ITM-09: a bicicleta da mochila e colocada e se monta (VEI-05: o veiculo que se tem, se usa)");
+{
+	const BICYCLE = 21;
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const save = SAVE.defaultSave();
+	save.invenEtc[BICYCLE] = 1;
+	const p = addPlayer(sim, 0, 2000, 2000, save);
+	p.state.angle = 0;
+	let seq = 0;
+	const tick = (edges = 0) => {
+		seq += 1;
+		send(p, seq, 0, edges, seq / CFG.SIM_HZ);
+		sim.step();
+	};
+	tick();
+	sim.queueIntent(0, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Place, 0, BICYCLE, 1)));
+	tick();
+	checkEq(sim.build.pendingOf(0), BICYCLE, "Place: a bicicleta no cursor");
+	tick(P.packEdges(1, 0, 0, 0));
+	const bike = world.solids.find(s => s.placeable === BICYCLE);
+	check(bike !== undefined && bike.tags === "vehicle", "o ataque a estaciona na frente do sobrevivente");
+	checkEq(save.invenEtc[BICYCLE], 0, "e ela saiu da mochila");
+	// walk up to it and press E: it is a vehicle like one just crafted
+	p.state.x = bike.x + bike.w / 2 - 30;
+	p.state.y = bike.y + bike.h / 2;
+	for (let i = 0; i < 40; i++) tick();
+	tick(P.packEdges(0, 0, 1, 0));
+	check(p.state.ride !== undefined, "E perto dela: o sobrevivente monta", `ride ${JSON.stringify(p.state.ride)}`);
 }
 
 if (failures > 0) {

@@ -11,7 +11,7 @@ export const AUDIO_BANK_IDS: Record<AudioBank, string> = {
 	weapons: "rbxassetid://136697726232995",
 	impacts: "rbxassetid://84507833973337",
 	cues: "rbxassetid://114553192552247",
-	weather: "",
+	weather: "rbxassetid://78417234333702",
 };
 
 /** one take: a window of its bank, in seconds */

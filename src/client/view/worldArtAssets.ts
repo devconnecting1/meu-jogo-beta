@@ -232,7 +232,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** slice: soft rectangular drop shadow */
 	shadowBox: { id: "rbxassetid://126704842880759", w: 16, h: 16, slice: [6, 6, 10, 10] },
 	/** atlas: trees: 41 crowns of 8 kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts) */
-	trees: { id: "", w: 512, h: 266 },
+	trees: { id: "rbxassetid://108973533068703", w: 512, h: 266 },
 	/** mask: sedan: body (tint: paint) */
 	car0: { id: "rbxassetid://127118296635301", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
@@ -288,23 +288,23 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: manhole cover */
 	manhole: { id: "rbxassetid://96964095561833", w: 8, h: 8 },
 	/** sprite: rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo) */
-	puddle0: { id: "", w: 38, h: 11 },
+	puddle0: { id: "rbxassetid://133449956224871", w: 38, h: 11 },
 	/** sprite: rain puddle in a gutter: long, stepped edge, on a vertical road */
-	puddle0V: { id: "", w: 11, h: 38 },
+	puddle0V: { id: "rbxassetid://133768820371427", w: 11, h: 38 },
 	/** sprite: rain puddle in a gutter, a small pool past its end (sky streaks, lit rim, wet halo) */
-	puddle1: { id: "", w: 30, h: 10 },
+	puddle1: { id: "rbxassetid://118856175608293", w: 30, h: 10 },
 	/** sprite: rain puddle in a gutter, a small pool past its end, on a vertical road */
-	puddle1V: { id: "", w: 10, h: 30 },
+	puddle1V: { id: "rbxassetid://89354468515095", w: 10, h: 30 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt (sky streaks, lit rim, wet halo) */
-	puddle2: { id: "", w: 22, h: 14 },
+	puddle2: { id: "rbxassetid://82231774772497", w: 22, h: 14 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt, on a vertical road */
-	puddle2V: { id: "", w: 14, h: 22 },
+	puddle2V: { id: "rbxassetid://103817440914774", w: 14, h: 22 },
 	/** sprite: rain puddle in a lane, a small pool before it (sky streaks, lit rim, wet halo) */
-	puddle3: { id: "", w: 32, h: 15 },
+	puddle3: { id: "rbxassetid://130785761895865", w: 32, h: 15 },
 	/** sprite: rain puddle in a lane, a small pool before it, on a vertical road */
-	puddle3V: { id: "", w: 15, h: 32 },
+	puddle3V: { id: "rbxassetid://78848680608666", w: 15, h: 32 },
 	/** sprite: a drop's ring on a puddle (4 texels) */
-	puddleDrop: { id: "", w: 3, h: 3 },
+	puddleDrop: { id: "rbxassetid://126451428508632", w: 3, h: 3 },
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://96075237212369", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
@@ -465,8 +465,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaFill: { id: "rbxassetid://76796714766849", w: 816, h: 68 },
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
 	bossRafflesiaRim: { id: "rbxassetid://125105479176447", w: 816, h: 68 },
-	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://89487834990160", w: 288, h: 244 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 12 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "rbxassetid://87218977110707", w: 288, h: 244 },
 	/** atlas: interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
 	furniture: { id: "rbxassetid://107932658085342", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
@@ -474,7 +474,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
 	townProps: { id: "rbxassetid://112108955248177", w: 1024, h: 662 },
 	/** atlas: the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts) */
-	entrances: { id: "", w: 1024, h: 176 },
+	entrances: { id: "rbxassetid://133379865386550", w: 1024, h: 176 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
 	wordmark: { id: "rbxassetid://132745135799721", w: 86, h: 39 },
 };

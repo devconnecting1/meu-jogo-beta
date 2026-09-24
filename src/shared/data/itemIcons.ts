@@ -1832,8 +1832,8 @@ export const ITEM_ICONS: Record<string, Array<string>> = {
 
 /**
  * One-colour 8 x 8 glyphs ("#" = ink), painted in a THEME colour by the UI that uses them: they are interface marks,
- * not art. The Bag's tabs (weapons, gear, usables, materials, craft, skills), the craft stations on a recipe tile
- * (hand, desk, pro, fire) and the check of an equipped item.
+ * not art. The Bag's tabs (weapons, gear, usables, materials, build, craft, skills), the craft stations on a recipe
+ * tile (hand, desk, pro, fire) and the check of an equipped item.
  */
 export const ICON_GLYPHS: Record<string, Array<string>> = {
 	weapons: ["........", "########", "########", "###.#...", "##..##..", "##......", "##......", "........"],
@@ -1847,6 +1847,9 @@ export const ICON_GLYPHS: Record<string, Array<string>> = {
 	pro: ["....#...", "...###..", "....#...", "########", "########", ".#....#.", ".#....#.", "........"],
 	fire: ["...#....", "...##...", "..###.#.", ".#####..", ".######.", "########", "########", ".######."],
 	check: ["........", "......##", ".....##.", "#...##..", "##.##...", ".###....", "..#.....", "........"],
+	// the Build tab (ITM-09): a house and its door -- what the constructions make of a spot in town. Last, so the atlas's
+	// other glyph cells stay where they were (tools/icon-atlas.mjs lays the glyphs out in this order)
+	build: ["...##...", "..####..", ".######.", "########", ".######.", ".##..##.", ".##..##.", "........"],
 };
 
 // ---------------------------------------------------------------- which icon an item draws

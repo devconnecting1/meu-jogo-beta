@@ -186,7 +186,8 @@ const flat = flatDigests();
 if (GOLDEN_MODE) {
 	const golden = {
 		note: "digests of client/ui/itemIcon.ts drawing every icon, dimmed icon and glyph with Frames (no atlas id): tools/test-icons.mjs --golden",
-		recordedFrom: "the ART-13 icon art (2026-09-24), drawn by the Frame drawer of 38c363a (unchanged)",
+		recordedFrom:
+			"the ART-13 icon art (2026-09-24) and the Build tab's glyph (ITM-09), drawn by the Frame drawer of 38c363a (unchanged)",
 		digests: flat,
 	};
 	writeFileSync(GOLDEN, `${JSON.stringify(golden, undefined, "\t")}\n`);

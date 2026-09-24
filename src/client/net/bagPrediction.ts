@@ -1,8 +1,8 @@
 /*
  * The client's prediction of its own backpack, and the rebase on the server's bag (docs/MULTIPLAYER.md §4.8, §6.3).
  *
- * From WORLD_SERVER_PHASE the backpack is the server's: a verb (switch, use, equip, unequip, learn, craft) goes out
- * as an intent and the server's copy comes back in the wallet's `bag`. The Bag would feel dead if every click waited
+ * From WORLD_SERVER_PHASE the backpack is the server's: a verb (switch, use, equip, unequip, learn, craft, place) goes
+ * out as an intent and the server's copy comes back in the wallet's `bag`. The Bag would feel dead if every click waited
  * a round trip, so the client applies its own verb at once — the SAME rule the server will apply — and keeps it on a
  * list. Every bag that arrives is laid over the local copy, and what the server has not answered yet (its nonce is
  * newer than `bag.ack`) is replayed on top, in the order it was made. A verb the server refused simply is not in
@@ -26,14 +26,16 @@ import { HOLSTER_AWAY, HOLSTER_DRAW, IntentKind } from "shared/net/intentWire";
 import { applyBag, BagMirror, equipSlotOf, ownsEquip, ownsWeapon, PlayerSaveData, setEquipped } from "shared/game/save";
 import { itemUseWouldWork, PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
+import { kitRefusal } from "shared/sim/placement";
 
 /**
- * What the prediction writes besides the save: GameRefs' build cursor (`pendingPlace` / `pendingRecipe`) and its
+ * What the prediction writes besides the save: GameRefs' build cursor (`pendingPlace` / `pendingKit`) and its
  * survivor's hands (`player.holstered`, ITM-06). The lobby's cursor has no body: nothing there has hands.
  */
 export interface BagCursor {
 	pendingPlace: number;
-	pendingRecipe?: number;
+	/** the construction on the cursor is a kit of the backpack's (a craft, or the Place verb: ITM-09) */
+	pendingKit?: boolean;
 	player?: PlayerState;
 }
 
@@ -122,22 +124,51 @@ export function predictVerb(
 	if (kind === IntentKind.Craft) {
 		const r = recipeById(arg);
 		if (r === undefined) return false;
-		if (!replay && r.craftKind === 1 && cursor.pendingPlace >= 0) return false;
+		// a construction waits for a free cursor and a survivor on foot (server/sim/craft.ts `blocker`, ITM-09)
+		const rider = body ?? cursor.player;
+		if (!replay && r.craftKind === 1 && (cursor.pendingPlace >= 0 || rider?.ride !== undefined)) return false;
 		for (const ing of r.ingredients) {
 			if (countItem(save, ing.kind, ing.index) < ing.count) return false;
 		}
 		for (const ing of r.ingredients) removeItem(save, ing.kind, ing.index, ing.count);
 		unequipGone(save);
 		if (r.craftKind === 1) {
+			// ITM-09: the kit is the survivor's (the Build tab) and goes onto the cursor as one
+			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
 			cursor.pendingPlace = r.resultIndex;
-			cursor.pendingRecipe = r.id;
+			cursor.pendingKit = true;
 		} else {
 			// (the Dwarf's double smelt is the server's dice: the bag brings it)
 			addItem(save, r.resultKind, r.resultIndex, r.resultCount);
 		}
 		return true;
 	}
+	if (kind === IntentKind.Place) {
+		// ITM-09: the server's own rule (shared/sim/placement.ts `kitRefusal`, server/sim/craft.ts `placeKit`). A replay
+		// only asks that it is still a kit the backpack holds: the cursor and the body were asked at the click
+		const why = kitRefusal(
+			save,
+			arg,
+			!replay && cursor.pendingPlace >= 0,
+			replay ? undefined : (body ?? cursor.player),
+		);
+		if (why !== undefined) return false;
+		// nothing leaves the backpack: the placement spends it (the server's bag brings the count down)
+		cursor.pendingPlace = arg;
+		cursor.pendingKit = true;
+		return true;
+	}
 	return false;
+}
+
+/**
+ * Does this prediction put a construction on the cursor -- the Build tab's Place, a construction's craft (ITM-09)? While
+ * one is unanswered the cursor is the client's guess, and client/systems/build.ts holds the click (client/net/
+ * authority.ts `buildUnconfirmed`).
+ */
+export function holdsCursor(e: BagEntry): boolean {
+	if (e.kind === IntentKind.Place) return true;
+	return e.kind === IntentKind.Craft && recipeById(e.arg)?.craftKind === 1;
 }
 
 /** has the server answered this entry in `bag`? A verb by its nonce, an edge by the command it rode on */
@@ -159,7 +190,7 @@ export function rebase(
 ): void {
 	applyBag(save, bag);
 	cursor.pendingPlace = bag.place;
-	cursor.pendingRecipe = undefined;
+	cursor.pendingKit = undefined;
 	// ITM-06: the server's hands, under whatever Holster / SwitchWeapon it has not answered yet (replayed below)
 	if (cursor.player !== undefined) cursor.player.holstered = bag.holster === 1 ? true : undefined;
 	for (let i = entries.size() - 1; i >= 0; i--) {
@@ -169,7 +200,7 @@ export function rebase(
 	for (const e of entries) {
 		if (e.kind === EDGE_ENTRY) {
 			cursor.pendingPlace = -1;
-			cursor.pendingRecipe = undefined;
+			cursor.pendingKit = undefined;
 		} else {
 			predictVerb(save, cursor, e.kind, e.arg, undefined, true);
 		}

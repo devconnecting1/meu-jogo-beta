@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06)",
-	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over 71ff847 (the everyday town, the weather and the entrances): the interiors are untouched, the town round each building is not -- its trees' crowns are their kinds' sizes and greens, a park's trees in groves; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is 71ff847's, call for call (recorded with PZ_SRC on 71ff847 and compared). The golden before it: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
+	"recordedFrom": "the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: the interiors are untouched, the town round the college and the library is not -- the park beside the campus has its trees in groves seated on its open lawn; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is the golden before's, call for call (unchanged). The golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
 	"scenes": {
 		"type1": {
 			"building": 51,
@@ -127,8 +127,8 @@
 			"building": 1451,
 			"x": 15120,
 			"y": 3464,
-			"count": 2077,
-			"sha1": "bc5772e7018c2b1abd6256cbf7c1c1ac71eb67d6",
+			"count": 2065,
+			"sha1": "78749c354f5eb8da440f2a4688343db922fed127",
 			"noTrees": {
 				"count": 1929,
 				"sha1": "832eb39f1ac6cda6bc88190392cd2c3b13e90e02"
@@ -138,8 +138,8 @@
 			"building": 1454,
 			"x": 15528,
 			"y": 2704,
-			"count": 1890,
-			"sha1": "4f318474633710bb92c40fdd1a4d9445f7f0c84e",
+			"count": 1882,
+			"sha1": "cc1ea46948a59da2dfb1aab46bd1d7bc5fa21704",
 			"noTrees": {
 				"count": 1574,
 				"sha1": "91bbe12e48950594798fa670b8fd4ade3ed2f4c7"
