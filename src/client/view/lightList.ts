@@ -84,3 +84,32 @@ export function addSurvivorLight(
 	lights.circle(x, y, radius, SURVIVOR_INNER);
 	if (cone !== undefined) lights.cone(x, y, cone, FLASHLIGHT_INNER, aim, SurvivorLight.CONE_HALF_ANGLE);
 }
+
+/** what an ally's record says about their light (client/net/netTypes.ts RemotePlayerView) */
+export interface AllyLightSource {
+	x: number;
+	y: number;
+	angle: number;
+	dead: boolean;
+	flashlight: boolean;
+	/** VehicleKind they ride (0 on foot) and its heading */
+	ride: number;
+	rideHeading: number;
+}
+
+/**
+ * An ally's light, by the same shape as yours: whoever carries a light (`carriesLight`: the dead do not) lights their
+ * 250 u circle; riding a motorcycle, its headlight along the RIDE (SurvivorLight.survivorBeamReach: it replaces the
+ * flashlight, both hands are on the bars) -- the wire already says what they ride and where it points (VEI-05), so no
+ * bit is spent on it; otherwise the flashlight's cone along the aim when `PlayerFlag.Flashlight` says they hold one.
+ */
+export function addAllyLight(lights: LightList, rp: AllyLightSource): void {
+	if (!SurvivorLight.carriesLight(rp)) return;
+	const head = SurvivorLight.vehicleHeadlight(rp.ride);
+	if (head > 0) {
+		addSurvivorLight(lights, rp.x, rp.y, rp.rideHeading, SurvivorLight.SURVIVOR_LIGHT_R, head);
+		return;
+	}
+	const cone = rp.flashlight ? SurvivorLight.FLASHLIGHT_REACH : undefined;
+	addSurvivorLight(lights, rp.x, rp.y, rp.angle, SurvivorLight.SURVIVOR_LIGHT_R, cone);
+}

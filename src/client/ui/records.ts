@@ -8,6 +8,7 @@
  *   │ │ Best day                                               12 │ │
  *   │ │ Level                                                   7 │ │
  *   │ │ Zombies put down                                      137 │ │
+ *   │ │ Bosses defeated                                         2 │ │
  *   │ │ Titles earned                                       2 / 3 │ │
  *   │ └───────────────────────────────────────────────────────────┘ │
  *   │ ┌ This life ────────────────────────────────────────────────┐ │
@@ -21,12 +22,15 @@
  *   - Best day (`bestDay`), Level, and this life's day (`day`) -- the Survivor screen's Stats say the same (MP-13);
  *   - Zombies put down (`zombieKills`): the killing blows the SERVER credited, lifetime (MON-05's counter, the one
  *     Horde Breaker is earned on) -- server-owned, so the number here is the server's;
+ *   - Bosses defeated (`bossKills`): the bosses the server credited to this survivor -- every participant of a kill
+ *     (MP-15), never a machine's last blow alone (ELE-04). The bosses ARE in the game (CON-03, decided 2026-09-24:
+ *     they wake at their plazas from day 5 and drop the only Flamethrower and Plastic armor, ITM-05), so the record
+ *     shows them;
  *   - Titles earned: the titles the server granted, of the ones there are (MON-05);
  *   - Nights survived in this life (`lifeNights`): the midnights the server credited to this life (MP-13's count,
  *     Week One's progress) -- which can be fewer than the days, since a night spent AFK or away is not credited;
  *   - Rebirths (`deathCount`): the continues bought in this life (it is what the next one's price grows with).
- * NOT here: bosses (Núcleo 1 has none, CON-03, and a counter of something the game does not have only ever says 0),
- * achievements (their own window), anything a client counts on its own.
+ * NOT here: achievements (their own window), anything a client counts on its own.
  */
 import { GameContext } from "shared/game/context";
 import { PlayerSaveData, ownsTitle } from "shared/game/save";
@@ -56,6 +60,7 @@ export function recordRows(save: PlayerSaveData): Array<RecordRow> {
 		{ key: "bestDay", label: "Best day", value: fmtInt(save.bestDay), group: "allTime" },
 		{ key: "level", label: "Level", value: fmtInt(save.level), group: "allTime" },
 		{ key: "zombieKills", label: "Zombies put down", value: fmtInt(save.zombieKills), group: "allTime" },
+		{ key: "bossKills", label: "Bosses defeated", value: fmtInt(save.bossKills), group: "allTime" },
 		{ key: "titles", label: "Titles earned", value: `${titles} / ${TITLES.size()}`, group: "allTime" },
 		{ key: "lifeDay", label: "Life day", value: fmtInt(save.day), group: "thisLife" },
 		{ key: "lifeNights", label: "Nights survived in this life", value: fmtInt(save.lifeNights), group: "thisLife" },

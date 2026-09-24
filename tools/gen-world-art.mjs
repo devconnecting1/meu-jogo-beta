@@ -45,6 +45,7 @@ import { runInNewContext } from "node:vm";
 import { encodePNG } from "./png-lite.mjs";
 import { drawText } from "./pixel-font.mjs";
 import { characterArt } from "./character-art.mjs";
+import { bossArt } from "./boss-art.mjs";
 import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1764,6 +1765,8 @@ function build() {
 	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
+	// the four bosses, one sheet each (ART-13, tools/boss-art.mjs)
+	for (const t of bossArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the item icons (DESIGN_RULES UI-11): not the town, but uploaded with it
 	const atlas = buildIconAtlas(loadIconData(ROOT));
 	const icons = atlas.order.filter(k => atlas.cells[k].n === 16).length;

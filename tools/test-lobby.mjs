@@ -17,7 +17,7 @@
  *   1. THE MENU        no ticker and no survivor column; START (steel blue, bigger) then Shop, Wardrobe,
  *                      Achievements, Records, How to play, Settings and Credits (iron), each with a pixel icon and a
  *                      subtitle only where it says something; the stage draws the survivor (from the uploaded
- *                      characters' sheets, and flat without them); nothing counts bosses.
+ *                      characters' sheets, and flat without them); the menu counts no bosses (the Survivor's Stats do).
  *   2. THE SURVIVOR    START opens it; the texts of the three states the owner named -- a fresh save (Enter the city
  *      SCREEN          · Day 1), a run in memory (Continue · Day N), a run over (Rebirth · price + New game, in the
  *                      window, no popup) -- plus the new life waiting for first light; the first-run tutorial prompt;
@@ -650,8 +650,8 @@ const { survivorArtLive } = require(join(SRC, "client/view/charArt.ts"));
 const { SURVIVOR_CELL, SURVIVOR_ROWS_EACH } = require(join(SRC, "client/view/charSheets.ts"));
 flush();
 
-/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
-const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds, bosses) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds|boss)/.test(name);
 /**
  * The uploads as they are, with the characters' sheets on -- their uploaded ids, a stand-in for one not uploaded
  * yet -- or off (the flat drawing of before, ART-01)
@@ -934,8 +934,8 @@ check(
 	`${townCell(0).FindFirstChild("Value").Text} / ${townCell(1).FindFirstChild("Value").Text}`,
 );
 check(
-	"ninguem conta chefes (CON-03: o Nucleo 1 nao tem chefe)",
-	texts(lobbyRoot()).every(t => !/boss/i.test(t)),
+	"o menu nao conta chefes: eles moram nas Stats da tela Survivor e no Records (CON-03: os chefes estao no jogo)",
+	texts(menuPage()).every(t => !/boss/i.test(t)),
 );
 // the owner, 2026-09-23: the opaque band behind the header read as a black strip cut across the town
 check("nenhuma faixa opaca cortando a cidade no topo", lobbyRoot().FindFirstChild("HeaderBand") === undefined);
@@ -1014,10 +1014,22 @@ check(
 	"o ocupado e ferro, o vazio e o ladrilho escuro (UI-07)",
 	sameColor(face(slot(0)), THEME.secondary) && sameColor(face(slot(emptySlot)), SURFACE.section),
 );
-check(
-	"nada de chefes na tela Survivor",
-	texts(survivorPage()).every(t => !/boss/i.test(t)),
-);
+{
+	// CON-03 (2026-09-24): the bosses are in the game, so the Stats show them -- the server's count, not a client's
+	const was = save.bossKills;
+	save.bossKills = 3;
+	lobby.refresh(status());
+	flush();
+	const bossLabel = deep(deep(window_(), "Bosses"), "Label")?.Text;
+	check(
+		"as Stats contam os chefes derrubados (bossKills, o numero do servidor), na terceira linha",
+		bossLabel === "Bosses defeated" && statValue("Bosses") === "3",
+		`${bossLabel}: ${statValue("Bosses")}`,
+	);
+	save.bossKills = was;
+	lobby.refresh(status());
+	flush();
+}
 check(
 	"a janela nao usa o scrim do mundo nem cobre a cidade inteira: ha cidade em volta",
 	window_().Size.X.Scale < 0.9 && window_().Size.Y.Scale < 1,
