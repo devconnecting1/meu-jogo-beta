@@ -136,6 +136,13 @@ export class AdminWorldHost extends LocalAdminWorld {
 		return this.send({ op: "spawnStructure", structure: kind, x, y });
 	}
 
+	removeStructure(x: number, y: number): ActionResult {
+		if (!this.serverWorld()) return super.removeStructure(x, y);
+		if (!this.ready()) return { ok: false, message: "Start a run first" };
+		// the server looks for the construction itself (the preview's pick is this client's mirror of the same world)
+		return this.send({ op: "removeStructure", x, y });
+	}
+
 	// ------------------------------------------------------------ time & weather
 
 	setClock(hour: number): void {

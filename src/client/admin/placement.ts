@@ -23,6 +23,8 @@ export type PlacementSpec =
 	| { kind: "zombie"; spawn: SpawnKind; count: number; chase: boolean; label: string }
 	| { kind: "item"; group: ItemGroup; index: number; count: number; label: string }
 	| { kind: "structure"; structure: StructureKind; label: string }
+	/** takes down the construction nearest to the click, whoever built it */
+	| { kind: "remove"; label: string }
 	| { kind: "teleport"; label: string };
 
 function fmtPoint(p: WorldPoint): string {
@@ -135,6 +137,22 @@ export class Placement {
 				valid: this.world.canPlaceStructure(spec.structure, c.x, c.y),
 			};
 		}
+		if (spec.kind === "remove") {
+			// the footprint that would come down (red: nothing within reach of the cursor)
+			const s = this.world.structureNear(c.x, c.y);
+			return {
+				shape: s !== undefined ? "rect" : "circle",
+				x: s !== undefined ? s.x + s.w / 2 : c.x,
+				y: s !== undefined ? s.y + s.h / 2 : c.y,
+				cursorX: c.x,
+				cursorY: c.y,
+				r: 18,
+				w: s?.w ?? 0,
+				h: s?.h ?? 0,
+				count: 1,
+				valid: s !== undefined,
+			};
+		}
 		let r = 18;
 		let count = 1;
 		let range = math.huge;
@@ -189,6 +207,9 @@ export class Placement {
 		} else if (spec.kind === "structure") {
 			res = this.world.spawnStructure(spec.structure, c.x, c.y);
 			what = `structure ${spec.label} at ${fmtPoint(c)}`;
+		} else if (spec.kind === "remove") {
+			res = this.world.removeStructure(c.x, c.y);
+			what = `remove the construction near ${fmtPoint(c)}`;
 		} else {
 			res = this.world.teleport(c.x, c.y);
 			what = `teleport to ${fmtPoint(c)}`;

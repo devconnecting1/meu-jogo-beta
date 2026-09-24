@@ -198,13 +198,20 @@ export function auditIdentity(e: AuditRecord): string {
 
 /**
  * A world tool (a spawn, the clock, a teleport... in the admin's own world, "local:", or in the server's, "world:"),
- * the "assist" mark or a refused non-admin call: many, cheap, and mostly about nobody in particular. Everything else
- * (kick, ban, unban, a save edit or reset, an announcement, an automatic kick) is an action on players, and is what
- * the log is for.
+ * the "assist" mark, a refused non-admin call or the server's automatic kick of a flooder: many, cheap, and written
+ * by the game rather than decided by an admin -- a stream of flooders must never push an admin's kick or ban out of
+ * the log (the review of 8f50bc5, MEDIUM-4). Everything else (kick, ban, unban, a save edit or reset, an
+ * announcement) is an admin's action on players, and is what the log is for.
  */
 function isToolEntry(e: AuditRecord): boolean {
 	const head = e.action.sub(1, 6);
-	return head === "local:" || head === "world:" || e.action === "assist" || e.action === "DENIED";
+	return (
+		head === "local:" ||
+		head === "world:" ||
+		e.action === "assist" ||
+		e.action === "DENIED" ||
+		e.action === "auto-kick"
+	);
 }
 
 /**

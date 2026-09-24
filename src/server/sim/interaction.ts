@@ -157,7 +157,7 @@ export class ServerInteraction {
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 
 		if (target.kind === "item") {
-			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
+			const got = this.items.pickup(ctx.save, p.x, p.y, target.item, ctx.slot);
 			if (got.ok) return { kind: "item", count: got.count };
 			if (got.why === "range" || got.why === "blocked") return { kind: "refused", why: got.why };
 			return { kind: "refused", why: "taken" };

@@ -136,6 +136,11 @@ export interface GroundItem {
 	/** 0 when at rest, which is the common case and the one `updateGroundItems` skips */
 	vx: number;
 	vy: number;
+	/**
+	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire.
+	 */
+	unpaid?: boolean;
 }
 
 export interface Rect {

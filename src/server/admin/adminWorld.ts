@@ -1,15 +1,17 @@
 import { getDayPopulation } from "shared/data/spawns";
 import { zombieDef } from "shared/data/zombies";
 import { BossState, ZombieType, bossHitRadius, createBoss, createZombie } from "shared/game/entities";
+import type { PlayerState } from "shared/game/player";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
-import { spawnGroundItem } from "shared/game/world";
+import { GroundItem, removeSolid, spawnGroundItem } from "shared/game/world";
 import { MAX_BUILDS_PER_SERVER } from "shared/net/mpConfig";
 import * as Mind from "shared/sim/ai/memory";
 import { spawnAlpha } from "shared/sim/ai/zombieBrain";
 import type { AdminEvent, AdminResponse } from "shared/admin/protocol";
 import * as W from "shared/admin/worldOps";
 import type { MpHost } from "../net/mpHost";
-import type { ServerPlayer } from "../sim/players";
+import { stripAdminMods } from "../sim/life";
+import { ServerPlayer, findSpawnPoint } from "../sim/players";
 import type { ServerSimulation } from "../sim/simulation";
 
 /*
@@ -24,24 +26,30 @@ import type { ServerSimulation } from "../sim/simulation";
  *
  * Who a tool helps, and so whose run stops paying (§9.3 "assisted run"; server/main.server.ts `markAssisted`):
  *   - the admin's own body (god, noclip, infinite ammo, a heal of themselves, a teleport, the free camera's scouting)
- *     and what they drop for themselves (items, structures): the ADMIN's run;
+ *     and what they build or take down for themselves (items, structures, a construction removed): the ADMIN's run;
  *   - a heal of another survivor: THAT survivor's run;
- *   - whatever moves the world's clock (the hour, night, dawn, a wave) or clears its horde (kill all): EVERY run in the
- *     world -- a clock moved backwards across midnight lets it cross it again and pay that day twice
- *     (server/sim/waves.ts `onClockSet`), and a horde cleared at night is a night nobody had to survive;
+ *   - whatever moves the world's clock (the hour, night, dawn, a wave) or clears its horde (kill all): EVERY run on the
+ *     server, the lobby's kept runs included -- a clock moved backwards across midnight lets it cross it again and pay
+ *     that day twice (server/sim/waves.ts `onClockSet`), and a horde cleared at night is a night nobody had to survive;
  *   - what only adds danger or is cosmetic (a spawned zombie or boss, the rain, clearing the blood): nobody. A spawn
  *     pays nobody either (`unpaid`: no XP, no kill, no loot), so it is never a way to farm.
  *
  * The switches (god, noclip, infinite ammo) belong to the PERSON, not to a body: they are kept here by UserId and put
  * on whatever body the survivor has, every tick (`ServerSimulation.adminMods`), so a stand-up, a reset or a trip to
  * the lobby does not silently drop them while the panel still shows them on. They end when the admin leaves the server.
+ * A body that leaves the world sheds them (server/sim/life.ts `stripAdminMods`), so a switch turned off from the
+ * lobby, or a session that ended, never stays on a kept body. And while any switch or the free camera is on, the run
+ * of whatever body the admin stands in is marked, every tick: a new run (a reset, a New game) does not pay either.
+ *
+ * What an admin drops pays nobody but the item itself (`GroundItem.unpaid`): whoever picks it up gets no collector
+ * credit, and the pickup is logged (`world:taken`). Cosmetics (outfits, pets) are never dropped: the shop sells them.
  */
 
 const Players = game.GetService("Players");
 
 /** a free camera the panel stopped refreshing falls back to the body after this long (it refreshes every second) */
 const FREECAM_TTL_S = 4;
-/** the tools a panel repeats in bursts (the clock slider, Shift+click placing): one audit line per burst */
+/** the tools a panel repeats in bursts (Shift+click placing): the SAME line again counts on the last one ("×N") */
 const MERGED = new Set<string>(["clock", "spawn", "spawnItem", "spawnStructure"]);
 
 interface Mods {
@@ -58,7 +66,7 @@ export interface WorldAudit {
 	target: string;
 	details: string;
 	ok: boolean;
-	/** a repeat inside a couple of seconds counts on the last line ("×N") instead of adding one: a slider, Shift+click */
+	/** the same line again inside a couple of seconds counts on the last one ("×N"): Shift+click on one spot */
 	merge: boolean;
 }
 
@@ -75,6 +83,8 @@ export interface AdminWorldDeps {
 	markAssisted: (player: Player) => boolean;
 	/** an AdminEvent to every client of this server */
 	broadcast: (ev: AdminEvent) => void;
+	/** an audit line the SERVER writes, acting on `targetId` (a pickup of an admin's drop): no admin did it */
+	note: (action: string, targetId: number, details: string) => void;
 }
 
 export interface AdminWorldTools {
@@ -94,23 +104,58 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 
 	// ------------------------------------------------------------ the switches
 
-	function applyMods(sp: ServerPlayer): void {
-		const m = mods.get(sp.userId);
-		if (m === undefined) return;
-		const p = sp.state;
+	/** the switches `m` on body `p`; an infinite magazine switched off is emptied, whichever switch was toggled */
+	function putMods(p: PlayerState, m: Mods): void {
+		if (p.infiniteAmmo === true && !m.ammo) {
+			// the free magazine never becomes real ammo: emptied, and the weapon reloads from its pool
+			p.weapon.ammoCount = 0;
+			p.weapon.reloading = false;
+			p.weapon.reloadCount = 0;
+		}
 		p.godMode = m.god;
 		p.noclip = m.noclip;
 		p.infiniteAmmo = m.ammo;
-		// no bite lands on a god (applyPlayerDamage), and neither starvation nor poison may kill one: topped up before
-		// every step, so the step can never take a full body to 0
-		if (m.god && !p.dead) {
-			p.hp = p.hpMax;
-			p.buffs.poison = 0;
-		}
 	}
 
-	/** the simulation calls `applyMods` for every survivor before its step (a new town keeps the same simulation) */
+	function applyMods(sp: ServerPlayer): void {
+		const m = mods.get(sp.userId);
+		const cam = cams.has(sp.userId);
+		if (m === undefined && !cam) return;
+		if (m !== undefined) {
+			const p = sp.state;
+			putMods(p, m);
+			// no bite lands on a god (applyPlayerDamage), and neither starvation nor poison may kill one: topped up
+			// before every step, so the step can never take a full body to 0
+			if (m.god && !p.dead) {
+				p.hp = p.hpMax;
+				p.buffs.poison = 0;
+			}
+		}
+		// a switch (an entry exists only while one is on) or the free camera helps whatever run this body is in -- a
+		// new one included (a reset, a New game): marked every tick, a no-op once it is (the review of 8f50bc5, MEDIUM-2)
+		const player = Players.GetPlayerByUserId(sp.userId);
+		if (player !== undefined) deps.markAssisted(player);
+	}
+
+	/** who picked up an admin's drop (`GroundItem.unpaid`): one server-written audit line */
+	function taken(sim: ServerSimulation, slot: number, item: GroundItem): void {
+		const sp = sim.get(slot);
+		deps.note(
+			"world:taken",
+			sp?.userId ?? 0,
+			`kind ${item.kind} item ${item.itemId} ×${item.count} an admin dropped`,
+		);
+	}
+
+	/**
+	 * The simulation calls `applyMods` for every survivor before its step (a new town keeps the same simulation); the
+	 * items of the town (rebuilt with it) report the pickups of an admin's drops.
+	 */
 	function hook(sim: ServerSimulation): void {
+		const items = sim.items;
+		if (items !== undefined && items.onUnpaidTaken === undefined) {
+			items.onUnpaidTaken = (slot, item) => taken(sim, slot, item);
+		}
 		if (hooked === sim && sim.adminMods !== undefined) return;
 		hooked = sim;
 		sim.adminMods = sp => applyMods(sp);
@@ -198,17 +243,18 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		return best;
 	}
 
-	/** every run in the world is helped by this op: each one is marked (and the admin's own, in the world or not) */
-	function assistWorld(sim: ServerSimulation, caller: Player): [number, boolean] {
+	/**
+	 * Every run of this server is helped by this op: each one is marked -- in the world, and in the lobby too (a kept
+	 * run walks back into the clock that was moved: the review of 8f50bc5, L1). The caller's own included.
+	 */
+	function assistWorld(caller: Player): [number, boolean] {
 		let n = 0;
 		let mine = false;
-		for (const sp of sim.players()) {
-			const p = Players.GetPlayerByUserId(sp.userId);
-			if (p === undefined || !deps.markAssisted(p)) continue;
+		for (const p of Players.GetPlayers()) {
+			if (!deps.markAssisted(p)) continue;
 			n += 1;
 			if (p === caller) mine = true;
 		}
-		if (!mine && deps.markAssisted(caller)) mine = true;
 		return [n, mine];
 	}
 
@@ -240,11 +286,14 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (!info.boss && !nearSurvivor(sim, op.x, op.y, W.ZOMBIE_KEEP_RANGE)) {
 			return refuse(op.op, "too far from every survivor: the spawner would recycle it", what);
 		}
-		const room = info.boss ? L.BOSSES - horde.bossRoster.list.size() : L.ZOMBIES - horde.zombies.size();
+		// an admin's bosses have their own cap, beside the town's (population.ts counts only the town's own)
+		let adminBosses = 0;
+		for (const b of horde.bossRoster.list) if (b.unpaid === true) adminBosses += 1;
+		const room = info.boss ? L.BOSSES - adminBosses : L.ZOMBIES - horde.zombies.size();
 		if (room <= 0) {
 			return refuse(
 				op.op,
-				info.boss ? `at most ${L.BOSSES} bosses at once` : `at most ${L.ZOMBIES} zombies at once`,
+				info.boss ? `at most ${L.BOSSES} admin bosses at once` : `at most ${L.ZOMBIES} zombies at once`,
 				what,
 			);
 		}
@@ -311,7 +360,7 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 			bosses.remove(i);
 			n += 1;
 		}
-		const [runs, mine] = assistWorld(sim, caller);
+		const [runs, mine] = assistWorld(caller);
 		return done(caller, op, `Removed ${n} enemies`, mine, "all", joined(`removed ${n}`, runsText(runs)));
 	}
 
@@ -323,12 +372,16 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		const t = clock.dayTime;
 		let message: string;
 		let moved = true;
+		const population = sim.horde.population;
+		// a forced wave is as big as the natural one: the day table at the groups' ΣS(k) (`ServerPopulation.split`)
 		const refill = (i: number, always: boolean): void => {
 			const pop = getDayPopulation(clock.day);
 			const walkers = [pop.wave1, pop.wave2, pop.wave3];
 			const specials = [pop.specialWave1, pop.specialWave2, pop.specialWave3];
-			if (always || clock.waveQueues[i] <= 0) clock.waveQueues[i] = walkers[i];
-			if (always || clock.specialWaveQueues[i] <= 0) clock.specialWaveQueues[i] = specials[i];
+			if (always || clock.waveQueues[i] <= 0) clock.waveQueues[i] = population.scaled(walkers[i]);
+			if (always || clock.specialWaveQueues[i] <= 0) {
+				clock.specialWaveQueues[i] = population.scaled(specials[i]);
+			}
 		};
 		if (op.op === "rain") {
 			clock.setRain(op.on);
@@ -374,9 +427,9 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 			}
 		}
 		if (!moved) return done(caller, op, message, false, "all");
-		// the dead wait for the 06:00 the clock now shows, not the one it showed when they fell
+		// the dead wait for the 06:00 the clock now shows, not the one it showed when they fell (Dawn: none at all)
 		host.lives.clockMoved();
-		const [runs, mine] = assistWorld(sim, caller);
+		const [runs, mine] = assistWorld(caller);
 		return done(
 			caller,
 			op,
@@ -423,6 +476,31 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		);
 	}
 
+	/**
+	 * Out of a solid (noclip ended inside a wall, a car or a tree): to the nearest free ground within UNSTICK_SEARCH,
+	 * or, when there is none (deep inside a big building), to a spawn point -- never left stuck (the review of 8f50bc5,
+	 * L4). True when the body stands free.
+	 */
+	function unstick(sim: ServerSimulation, sp: ServerPlayer): boolean {
+		const p = sp.state;
+		const world = sim.world;
+		if (circleBlocked(world, p.x, p.y, PLAYER_RADIUS) === undefined) return true;
+		let at: { x: number; y: number } | undefined = W.freePointIn(
+			world,
+			p.x,
+			p.y,
+			PLAYER_RADIUS + 2,
+			W.ADMIN_WORLD_LIMITS.UNSTICK_SEARCH,
+		);
+		if (at === undefined) {
+			at = findSpawnPoint(world, { allies: [{ x: p.x, y: p.y }], zombies: sim.horde?.zombies ?? [] });
+		}
+		p.x = at.x;
+		p.y = at.y;
+		p.reactionSpeed = 0;
+		return circleBlocked(world, p.x, p.y, PLAYER_RADIUS) === undefined;
+	}
+
 	function toggle(
 		caller: Player,
 		host: MpHost,
@@ -431,32 +509,24 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		const key: keyof Mods = op.op;
 		const m = setMod(caller.UserId, key, op.on);
 		const sp = host.playerOf(caller);
+		let freed = "";
 		if (sp !== undefined) {
-			// on the body now, not at the next tick: the answer and the next snapshot agree
+			// on the body now, not at the next tick: the answer and the next snapshot agree (a magazine that was infinite
+			// is emptied here whichever switch this was: `putMods`)
 			const p = sp.state;
-			p.godMode = m.god;
-			p.noclip = m.noclip;
-			p.infiniteAmmo = m.ammo;
-			if (key === "ammo" && !op.on) {
-				// the free magazine never becomes real ammo: emptied, and the weapon reloads from its pool
-				p.weapon.ammoCount = 0;
-				p.weapon.reloading = false;
-				p.weapon.reloadCount = 0;
-			}
-			const world = host.simulation.world;
-			if (key === "noclip" && !op.on && !p.dead && circleBlocked(world, p.x, p.y, PLAYER_RADIUS) !== undefined) {
-				// noclip ended inside a wall, a car or a tree: out to the nearest free ground
-				const at = W.freePointIn(world, p.x, p.y, PLAYER_RADIUS + 2, W.ADMIN_WORLD_LIMITS.UNSTICK_SEARCH);
-				if (at !== undefined) {
-					p.x = at.x;
-					p.y = at.y;
-				}
+			const x0 = p.x;
+			const y0 = p.y;
+			putMods(p, m);
+			if (key === "noclip" && !op.on && !p.dead) {
+				// the answer says where the body really is (a spawn point always has room, so the last case is a guard)
+				if (!unstick(host.simulation, sp)) freed = ", but still inside something: teleport out";
+				else if (p.x !== x0 || p.y !== y0) freed = ", moved out to free ground";
 			}
 		}
 		const name = key === "god" ? "God mode" : key === "noclip" ? "Noclip" : "Infinite ammo";
 		const marked = op.on && deps.markAssisted(caller);
 		const later = sp === undefined ? " (from your next run)" : "";
-		return done(caller, op, `${name} ${op.on ? "on" : "off"}${later}`, marked, "own run");
+		return done(caller, op, `${name} ${op.on ? "on" : "off"}${later}${freed}`, marked, "own run");
 	}
 
 	function teleport(caller: Player, host: MpHost, op: W.AdminWorldOp & { op: "teleport" }): WorldOutcome {
@@ -497,8 +567,17 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		}
 		const at = W.freePointIn(s.world, op.x, op.y, 10);
 		if (at === undefined) return refuse(op.op, "no free space there", what);
-		// the world's own hook announces it to whoever is near (server/sim/items.ts), with a server id
-		spawnGroundItem(s.world, W.ITEM_GROUP_KIND[op.group], W.groundItemId(op.group, op.index), op.count, at.x, at.y);
+		// the world's own hook announces it to whoever is near (server/sim/items.ts), with a server id. An admin's gift:
+		// its pickup credits no collector achievement, and is logged (`GroundItem.unpaid`, `taken`)
+		const item = spawnGroundItem(
+			s.world,
+			W.ITEM_GROUP_KIND[op.group],
+			W.groundItemId(op.group, op.index),
+			op.count,
+			at.x,
+			at.y,
+		);
+		item.unpaid = true;
 		const marked = deps.markAssisted(caller);
 		return done(caller, op, "Item dropped", marked, "all", "", 0, at.x, at.y);
 	}
@@ -526,6 +605,27 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		}
 		const marked = deps.markAssisted(caller);
 		return done(caller, op, `${info.label} placed`, marked, "all");
+	}
+
+	/**
+	 * The construction nearest to the click (`nearestConstruction`), whoever built it -- a survivor's, or an admin's
+	 * (owner SLOT_NONE: no survivor can take one down, and nothing decays). `removeSolid` fires the world's hook: the
+	 * SolidRemove to everybody, the flow field, the grid and the server cap (server/sim/build.ts).
+	 */
+	function removeStructure(
+		caller: Player,
+		s: ServerSimulation,
+		op: W.AdminWorldOp & { op: "removeStructure" },
+	): WorldOutcome {
+		const what = W.describeWorldOp(op);
+		if (s.build === undefined) return refuse(op.op, "the server does not own the constructions here", what);
+		const reach = W.ADMIN_WORLD_LIMITS.REMOVE_REACH;
+		const best = W.nearestConstruction(s.world, op.x, op.y, reach);
+		if (best === undefined) return refuse(op.op, `no construction within ${reach} u of that point`, what);
+		const label = best.kind;
+		removeSolid(s.world, best);
+		const marked = deps.markAssisted(caller);
+		return done(caller, op, `Removed ${label}`, marked, "all", label, 0, best.x + best.w / 2, best.y + best.h / 2);
 	}
 
 	function freecam(caller: Player, host: MpHost, op: W.AdminWorldOp & { op: "freecam" }): WorldOutcome {
@@ -583,6 +683,7 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (op.op === "clearFx") return clearFx(caller, s, op);
 		if (op.op === "spawnItem") return spawnItem(caller, s, op);
 		if (op.op === "spawnStructure") return spawnStructure(caller, s, op);
+		if (op.op === "removeStructure") return removeStructure(caller, s, op);
 		return freecam(caller, host, op);
 	}
 
@@ -593,6 +694,10 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		left(userId: number): void {
 			mods.delete(userId);
 			cams.delete(userId);
+			// a body still in the world sheds them now (server/sim/life.ts strips a leaving one too)
+			const sim = deps.host()?.simulation;
+			if (sim === undefined) return;
+			for (const sp of sim.players()) if (sp.userId === userId) stripAdminMods(sp.state);
 		},
 		stateOf(userId: number): W.AdminWorldState {
 			return stateOf(userId);

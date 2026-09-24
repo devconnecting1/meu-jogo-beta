@@ -1,10 +1,13 @@
 import { DESIGN, TOWN } from "shared/engine/constants";
 import { zombieDef } from "shared/data/zombies";
 import { ItemKind } from "shared/data/kinds";
+import { EQUIPS } from "shared/data/equips";
 import { difficultyOfDay } from "shared/game/save";
 import { ZombieState } from "shared/game/entities";
 import { circleBlocked } from "shared/game/physics";
-import { WorldData } from "shared/game/world";
+import { Solid, WorldData } from "shared/game/world";
+import { VehicleKind } from "shared/data/buildings";
+import { vehicleKindOfSolid } from "shared/sim/vehicle";
 import { FREECAM_MAX_RANGE, MAX_BOSSES, MAX_ZOMBIES_ADMIN } from "shared/net/mpConfig";
 import { ItemGroup, isAmmoEtcId, itemGroupSize, itemMax } from "./ops";
 
@@ -101,7 +104,18 @@ export const ADMIN_WORLD_LIMITS = {
 	FREE_SEARCH: 500,
 	/** how far a body that noclip left inside something solid is carried to free ground */
 	UNSTICK_SEARCH: 800,
+	/** "Remove structure" takes the nearest construction whose footprint is this close to the click */
+	REMOVE_REACH: 96,
 } as const;
+
+/**
+ * An EQUIPS row that is a cosmetic (MON-04: an outfit or a pet, `kind` 4): it is sold for coins in the shop, never
+ * dropped by an admin -- a free one on the ground was a shop item for whoever picked it up (the review of 8f50bc5, L2).
+ */
+export function isCosmeticEquip(index: number): boolean {
+	const row = EQUIPS[index];
+	return row !== undefined && row.kind >= 4;
+}
 
 /** ammo index 5 (electricity) has no ground item; 0..4 are the ETC items 44..48 */
 export const AMMO_GROUND_MAX_INDEX = 4;
@@ -159,6 +173,8 @@ export type AdminWorldOp =
 	| { op: "clearFx" }
 	| { op: "spawnItem"; group: ItemGroup; index: number; count: number; x: number; y: number }
 	| { op: "spawnStructure"; structure: StructureKind; x: number; y: number }
+	/** the construction nearest to (x, y), whoever built it (a survivor or an admin) */
+	| { op: "removeStructure"; x: number; y: number }
 	/** the replication interest of the caller moves to (x, y) while `on` (§10); refreshed by the panel */
 	| { op: "freecam"; on: boolean; x: number; y: number };
 
@@ -181,6 +197,7 @@ const OP_NAMES = new Set<string>([
 	"clearFx",
 	"spawnItem",
 	"spawnStructure",
+	"removeStructure",
 	"freecam",
 ]);
 
@@ -254,6 +271,9 @@ export function readWorldOp(raw: Record<string, unknown>): AdminWorldOp | string
 		const group = g as ItemGroup;
 		if (!isInt(raw.index) || raw.index < 0 || raw.index >= itemGroupSize(group)) return "unknown item";
 		if (group === "etc" && isAmmoEtcId(raw.index)) return "unknown item";
+		if (group === "equip" && isCosmeticEquip(raw.index)) {
+			return "outfits and pets are sold in the shop, not dropped";
+		}
 		if (group === "ammo" && raw.index > AMMO_GROUND_MAX_INDEX) return "electricity cannot be dropped on the ground";
 		if (!isInt(raw.count) || raw.count < 1 || raw.count > itemMax(group)) return `count: 1 to ${itemMax(group)}`;
 		if (!isCoord(raw.x) || !isCoord(raw.y)) return "invalid point";
@@ -264,6 +284,10 @@ export function readWorldOp(raw: Record<string, unknown>): AdminWorldOp | string
 		if (info === undefined) return "unknown structure";
 		if (!isCoord(raw.x) || !isCoord(raw.y)) return "invalid point";
 		return { op, structure: info.kind, x: raw.x, y: raw.y };
+	}
+	if (op === "removeStructure") {
+		if (!isCoord(raw.x) || !isCoord(raw.y)) return "invalid point";
+		return { op, x: raw.x, y: raw.y };
 	}
 	// freecam
 	if (!typeIs(raw.on, "boolean")) return "invalid options";
@@ -286,12 +310,35 @@ export function describeWorldOp(o: AdminWorldOp): string {
 		return o.on ? "on" : "off";
 	}
 	if (o.op === "teleport") return `to ${at(o.x, o.y)}`;
+	if (o.op === "removeStructure") return `near ${at(o.x, o.y)}`;
 	if (o.op === "spawnItem") return `${o.group}[${o.index}] ×${o.count} at ${at(o.x, o.y)}`;
 	if (o.op === "spawnStructure") return `${structureInfo(o.structure)?.label ?? o.structure} at ${at(o.x, o.y)}`;
 	return "";
 }
 
 // ---------------------------------------------------------------- pure helpers (panel preview + server)
+
+/**
+ * The construction "Remove structure" takes for a click at (x, y): the one whose footprint is nearest, within
+ * `reach`, whoever built it (a survivor or an admin). Only constructions (`placeable`): the town's own walls,
+ * buildings and trees never are. Never a vehicle: somebody may be riding it. The panel's preview and the server ask
+ * the same question.
+ */
+export function nearestConstruction(world: WorldData, x: number, y: number, reach: number): Solid | undefined {
+	let best: Solid | undefined;
+	let bestD = reach * reach;
+	for (const s of world.solids) {
+		if (s.placeable === undefined || s.removed === true) continue;
+		if (vehicleKindOfSolid(s) !== VehicleKind.None) continue;
+		const qx = math.clamp(x, s.x, s.x + s.w);
+		const qy = math.clamp(y, s.y, s.y + s.h);
+		const d = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+		if (d > bestD) continue;
+		bestD = d;
+		best = s;
+	}
+	return best;
+}
 
 /** the town inside the border forest, shrunk by `r`: no tool puts anything outside it */
 export function townBounds(world: WorldData, r: number): [number, number, number, number] {

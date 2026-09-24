@@ -3,7 +3,7 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { AMMO_LABELS, ItemGroup, isAmmoEtcId } from "shared/admin/ops";
-import { ADMIN_WORLD_LIMITS } from "shared/admin/worldOps";
+import { ADMIN_WORLD_LIMITS, isCosmeticEquip } from "shared/admin/worldOps";
 import { TEXT, THEME, space } from "../ui/theme";
 import {
 	Button,
@@ -41,7 +41,10 @@ function itemEntries(group: ItemGroup): Array<[number, string]> {
 	if (group === "weapon") {
 		WEAPONS.forEach((w, i) => out.push([i, w.name]));
 	} else if (group === "equip") {
-		EQUIPS.forEach((e, i) => out.push([i, e.name]));
+		// outfits and pets are the shop's: never dropped (the server refuses them too)
+		EQUIPS.forEach((e, i) => {
+			if (!isCosmeticEquip(i)) out.push([i, e.name]);
+		});
 	} else if (group === "use") {
 		USABLES.forEach((u, i) => out.push([i, u.name]));
 	} else if (group === "etc") {
@@ -249,14 +252,22 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 			const info = STRUCTURE_KINDS.find(k => k.kind === memory.structure)!;
 			p.placement.begin({ kind: "structure", structure: memory.structure, label: info.label });
 		});
+		Button(body, "Remove", "Remove a structure", {
+			x: 0,
+			y: y0 + 48,
+			w: CONTENT_W,
+			h: 36,
+			variant: "outline",
+			onClick: () => p.placement.begin({ kind: "remove", label: "remove the construction under the cursor" }),
+		});
 		makeLabel(
 			body,
 			"Hint",
-			"Structures go exactly where you click (red = something is in the way). Lamps start off: press E next to them.",
+			`Structures go exactly where you click (red = something is in the way). Lamps start off: press E next to them. Remove takes down the construction nearest the click (within ${ADMIN_WORLD_LIMITS.REMOVE_REACH} u), whoever built it.`,
 			0,
-			y0 + 50,
+			y0 + 92,
 			CONTENT_W,
-			34,
+			48,
 			TEXT.xs,
 			THEME.mutedForeground,
 			{ align: "left", valign: "top" },

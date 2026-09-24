@@ -102,6 +102,11 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/**
+	 * §10: somebody (the survivor in `slot`) picked up an item an admin dropped (`GroundItem.unpaid`). The pickup pays
+	 * nothing beyond the item itself; server/admin/adminWorld.ts sets this to log who took it.
+	 */
+	onUnpaidTaken?: (slot: number, item: GroundItem) => void;
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
@@ -219,7 +224,7 @@ export class ServerItems {
 	 * the loser, who is credited nothing. Doing it the other way round would credit both and then remove
 	 * once, which is the duplication bug written out longhand.
 	 */
-	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined): PickupResult {
+	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined, slot = -1): PickupResult {
 		if (item === undefined) return { ok: false, why: "none" };
 		const dx = item.x - x;
 		const dy = item.y - y;
@@ -233,8 +238,13 @@ export class ServerItems {
 		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
-		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
-		creditTaken(save, item.kind, item.itemId, item.count);
+		if (item.unpaid === true) {
+			// an admin's drop is a gift, not a find: no collector credit (CON-04), and the audit learns who took it (§10)
+			this.onUnpaidTaken?.(slot, item);
+		} else {
+			// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
+			creditTaken(save, item.kind, item.itemId, item.count);
+		}
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 

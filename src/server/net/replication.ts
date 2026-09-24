@@ -24,6 +24,7 @@ import { titleToWire } from "shared/data/titles";
 import { quantPos, dequantPos } from "shared/net/codec";
 import {
 	INTEREST_EXIT,
+	MAX_BOSSES,
 	MAX_PLAYERS,
 	SLOT_NONE,
 	SNAP_NEAR_EVERY_TICKS,
@@ -1104,6 +1105,16 @@ export class Replicator {
 			const dy = b.y - vy;
 			if (dx * dx + dy * dy > FX_RANGE2) continue;
 			out.push(bossBlockOf(b, netId));
+		}
+		// the town's MAX_BOSSES and an admin's (§10) may stand together; the snapshot carries MAX_BOSSES, so the ones a
+		// viewer gets are the nearest (the encoder keeps the first ones; one left out fades like any boss out of sight)
+		if (out.size() > MAX_BOSSES) {
+			out.sort(
+				(a, b) =>
+					(a.x - vx) * (a.x - vx) + (a.y - vy) * (a.y - vy) <
+					(b.x - vx) * (b.x - vx) + (b.y - vy) * (b.y - vy),
+			);
+			while (out.size() > MAX_BOSSES) out.pop();
 		}
 		return out;
 	}

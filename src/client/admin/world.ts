@@ -5,7 +5,7 @@ import { zombieDef } from "shared/data/zombies";
 import { BossState, bossHitRadius, createBoss, createZombie, ZombieType } from "shared/game/entities";
 import { circleBlocked, PLAYER_RADIUS } from "shared/game/physics";
 import { currentWeapon } from "shared/game/player";
-import { addSolid, querySolids, Solid, spawnGroundItem, WorldData } from "shared/game/world";
+import { addSolid, querySolids, removeSolid, Solid, spawnGroundItem, WorldData } from "shared/game/world";
 import type { GameContext } from "shared/game/context";
 import type { ItemGroup } from "shared/admin/ops";
 import * as WO from "shared/admin/worldOps";
@@ -105,6 +105,10 @@ export interface AdminWorld {
 	structureSize(kind: StructureKind): [number, number];
 	canPlaceStructure(kind: StructureKind, x: number, y: number): boolean;
 	spawnStructure(kind: StructureKind, x: number, y: number): ActionResult;
+	/** the construction a "Remove structure" click at (x, y) would take (the preview), or undefined */
+	structureNear(x: number, y: number): Solid | undefined;
+	/** takes down the construction nearest to (x, y), whoever built it */
+	removeStructure(x: number, y: number): ActionResult;
 
 	// time & weather
 	clock(): ClockState;
@@ -303,6 +307,10 @@ export class LocalAdminWorld implements AdminWorld {
 
 	spawnItem(group: ItemGroup, index: number, count: number, x: number, y: number): ActionResult {
 		if (!this.ready()) return { ok: false, message: "Start a run first" };
+		// the shop sells outfits and pets: an admin never drops one (the server refuses them too, worldOps.ts)
+		if (group === "equip" && WO.isCosmeticEquip(index)) {
+			return { ok: false, message: "Outfits and pets are sold in the shop, not dropped" };
+		}
 		// ammo pools are ETC items 44..48; electricity has no ground item
 		if (group === "ammo" && index > WO.AMMO_GROUND_MAX_INDEX) {
 			return { ok: false, message: "Electricity cannot be dropped on the ground" };
@@ -370,9 +378,30 @@ export class LocalAdminWorld implements AdminWorld {
 			rot: 0,
 			open: def.kind === "door" || def.kind === "iron_door" ? false : undefined,
 			powered: def.powered,
+			// a construction like the server's (`placeable`): "Remove structure" can take it down again
+			placeable: info!.placeable,
 		});
 		this.onAssist("spawn");
 		return { ok: true, message: `${info!.label} placed` };
+	}
+
+	structureNear(x: number, y: number): Solid | undefined {
+		return WO.nearestConstruction(this.world(), x, y, WO.ADMIN_WORLD_LIMITS.REMOVE_REACH);
+	}
+
+	removeStructure(x: number, y: number): ActionResult {
+		if (!this.ready()) return { ok: false, message: "Start a run first" };
+		const s = this.structureNear(x, y);
+		if (s === undefined) {
+			return {
+				ok: false,
+				message: `No construction within ${WO.ADMIN_WORLD_LIMITS.REMOVE_REACH} u of that point`,
+			};
+		}
+		// like a placement (addSolid above): the local flow field reads the solids again on its own rebuild
+		removeSolid(this.world(), s);
+		this.onAssist("spawn");
+		return { ok: true, message: `Removed ${s.kind}` };
 	}
 
 	// ------------------------------------------------------------ time & weather

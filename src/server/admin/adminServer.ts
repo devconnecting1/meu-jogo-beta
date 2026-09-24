@@ -85,8 +85,10 @@ const DENY_LOG_INTERVAL = 60;
 /** the free camera's updates have a bucket of their own (§10: 5/s), so moving the camera never starves the panel */
 const CAM_BURST = ADMIN_WORLD_LIMITS.FREECAM_HZ;
 const CAM_PER_SECOND = ADMIN_WORLD_LIMITS.FREECAM_HZ;
-/** repeats of one world tool by one admin inside this window share one audit line ("×N"): a slider, Shift+click */
+/** the same world-tool line again by one admin inside this window counts on it ("×N"): Shift+click on one spot */
 const MERGE_S = 2;
+/** the lines the server writes itself (adminId 0): the panel names "server" as who did them */
+const SERVER_ACTIONS = new Set<string>(["auto-kick", "world:taken"]);
 
 /** what main.server.ts exposes of a player's session (read-only snapshot) */
 export interface AdminSessionView {
@@ -202,12 +204,19 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		host: () => activeMpHost(),
 		markAssisted: p => host.markAssisted(p),
 		broadcast: ev => remotes.event.FireAllClients(ev),
+		note: (action, targetId, details) => recordAs(0, action, targetId, "", details, true),
 	});
 	const buckets = new Map<number, Bucket>();
 	const camBuckets = new Map<number, Tokens>();
 	/** non-admins who called this remote: their flood bucket (ADMIN_RATE / ADMIN_BURST), and who was kicked for it */
 	const strangers = new Map<number, Tokens>();
 	const flooded = new Set<number>();
+	/**
+	 * Who has an auto-kick line in this server's log. Never cleared (a PlayerRemoving does not forget it): a flooder
+	 * rejoining to flood again is kicked again, but logged once per server, so no stream of them can push the admins'
+	 * own actions out of the log (the review of 8f50bc5, MEDIUM-4).
+	 */
+	const kickLogged = new Set<number>();
 	const denied = new Map<number, number>();
 	/** admin UserId → watched UserId */
 	const watching = new Map<number, number>();
@@ -227,14 +236,20 @@ export function startAdminServer(host: AdminHost): AdminServer {
 
 	// ------------------------------------------------------------ audit
 
-	/** the last merged world-tool line, so a repeat inside MERGE_S counts on it instead of adding one */
-	let lastMerge: { e: AuditRecord; n: number; at: number } | undefined;
+	/**
+	 * The last merged world-tool line, so the SAME line again inside MERGE_S counts on it instead of adding one:
+	 * `details` as the tool wrote it (without the count), compared whole.
+	 */
+	let lastMerge: { e: AuditRecord; details: string; n: number; at: number } | undefined;
 
 	/**
 	 * `targetId`: the player acted on (0 = none); `target`: a place word when there is no player ("all", "own world",
 	 * "own run"); `details`: filtered or game-written text only (server/admin/auditLog.ts). `persist` false: memory +
-	 * output only (refused non-admin calls must not flood the stored log). `merge`: the same tool again by the same
-	 * admin within MERGE_S (a slider, Shift+click) updates the last line ("×N") instead of adding one.
+	 * output only (refused non-admin calls must not flood the stored log). `merge`: the same tool with the same details
+	 * again by the same admin within MERGE_S (Shift+click on one spot) counts on the last line ("×N") instead of adding
+	 * one -- only while that line has not been written to the DataStore yet (a stored line is never rewritten), and
+	 * only an ADMIN's line ever takes part: a non-admin's refused call or the server's own line neither merges nor
+	 * breaks a merge (the review of 8f50bc5, MEDIUM-4 and L3).
 	 */
 	function record(
 		admin: Player,
@@ -246,17 +261,35 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		persist = true,
 		merge = false,
 	): void {
+		recordAs(admin.UserId, action, targetId, target, details, ok, persist, merge);
+	}
+
+	/** `record` by UserId: 0 is the SERVER itself (an automatic kick, the pickup of an admin's drop) */
+	function recordAs(
+		adminId: number,
+		action: string,
+		targetId: number,
+		target: string,
+		details: string,
+		ok: boolean,
+		persist = true,
+		merge = false,
+	): void {
+		const byAdmin = adminId !== 0 && isAdminUserId(adminId);
 		const last = lastMerge;
 		if (
+			byAdmin &&
 			merge &&
 			last !== undefined &&
 			os.clock() - last.at <= MERGE_S &&
-			last.e.adminId === admin.UserId &&
+			last.e.adminId === adminId &&
 			last.e.action === action &&
 			last.e.targetId === targetId &&
-			last.e.ok === ok
+			last.e.ok === ok &&
+			last.details === details &&
+			(auditStore === undefined || !persist || unsaved.includes(last.e))
 		) {
-			// the same tool again (a slider dragged, Shift+click placing): one line, the latest details and a count
+			// the same line again (Shift+click on one spot): one line and a count, not yet in the DataStore
 			last.n += 1;
 			last.at = os.clock();
 			last.e.details = safeText(`${details} (×${last.n})`, ADMIN_LIMITS.LOG_DETAILS);
@@ -265,7 +298,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		// every string is valid UTF-8 and bounded: one bad entry must never block the DataStore flush
 		const e: AuditRecord = {
 			t: os.time(),
-			adminId: admin.UserId,
+			adminId,
 			action: safeText(action, ADMIN_LIMITS.LOG_ACTION + 8),
 			targetId,
 			target: safeText(target, 24),
@@ -281,7 +314,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		audit.push(e);
 		trimAudit(audit, AUDIT_MEMORY);
 		if (auditStore !== undefined && persist) unsaved.push(e);
-		lastMerge = merge ? { e, n: 1, at: os.clock() } : undefined;
+		if (byAdmin) lastMerge = merge ? { e, details, n: 1, at: os.clock() } : undefined;
 	}
 
 	/** the entry survives a JSON round trip (a DataStore write fails on invalid UTF-8) */
@@ -413,7 +446,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			list.push({
 				t: e.t,
 				adminId: e.adminId,
-				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : "?",
+				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : SERVER_ACTIONS.has(e.action) ? "server" : "?",
 				action: e.action,
 				target: e.targetId !== 0 ? `${nameOf(e.targetId, budget)} (${e.targetId})` : e.target,
 				details: e.details,
@@ -902,14 +935,18 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		}
 		if (take(b, ADMIN_BURST, ADMIN_RATE, now)) return;
 		flooded.add(player.UserId);
-		record(
-			player,
-			"auto-kick",
-			player.UserId,
-			"",
-			`flooded the admin remote (over ${ADMIN_BURST} requests at more than ${ADMIN_RATE}/s) without being an admin`,
-			true,
-		);
+		// the SERVER did it, to this player: the flooder is the target, never the "admin" of the line (MEDIUM-4)
+		if (!kickLogged.has(player.UserId)) {
+			kickLogged.add(player.UserId);
+			recordAs(
+				0,
+				"auto-kick",
+				player.UserId,
+				"",
+				`flooded the admin remote (over ${ADMIN_BURST} requests at more than ${ADMIN_RATE}/s) without being an admin`,
+				true,
+			);
+		}
 		pcall(() => player.Kick(floodKickMessage(langTypeOfLocale(player.LocaleId))));
 	}
 

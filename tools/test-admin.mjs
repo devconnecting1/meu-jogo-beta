@@ -35,13 +35,23 @@
  *  10. ITEMS, STRUCTURES  through the server world (ItemAdd / SolidAdd to the clients), validated, capped.
  *  11. FREE CAMERA        the admin's interest follows the camera (a boss 2500 u away reaches their snapshot), kept
  *                         within FREECAM_MAX_RANGE, lapsing when not refreshed, on its own rate bucket.
- *  12. AUDIT              every tool leaves one line (repeats merged), refusals included; DENIED stays throttled.
+ *  12. AUDIT              every tool leaves one line (an identical repeat merged), refusals included; DENIED stays
+ *                         throttled.
  *  13. RATE               world tools share the admin's token bucket.
  *  14. BUG-1              a save reset drops the body the keeper held: no old hp or death banked into it, no magazine
  *                         refunded into the new reserve, a fresh body at a spawn point, alive.
  *  15. BUG-3              Studio messages: a negative UserId, and the ban history (production servers only).
  *  16. THE PANEL          (client) AdminWorldHost's answers ARE the server's: a refusal is never a success, a success
  *                         carries the server's words, nothing is logged twice, the switches show the server's state.
+ *  17-26. THE REVIEW      the independent review of 8f50bc5, one section per finding, each check a repro that failed
+ *                         before its fix (the probes of the review, turned into assertions of the right behaviour):
+ *                         17 HIGH-1 switches shed by a body leaving the world (P1, P2, P5); 18 MEDIUM-2 a new run
+ *                         under a switch stays assisted (P3); 19 MEDIUM-3 Dawn stands the dead up (P4); 20 MEDIUM-4
+ *                         flooders never push an admin's action out of the log (P9); 21 L1 the lobby's runs are
+ *                         assisted by a clock tool (P10); 22 L2 an admin's drop pays its taker nothing, no cosmetics;
+ *                         23 L3 a line keeps what it says, a stored one is never rewritten; 24 L4 noclip stays in the
+ *                         town (P11) and always ends on free ground; 25 L5 the two boss caps; 26 L6 forced waves at
+ *                         ΣS(k), and "Remove structure".
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the fake Roblox of test-body.
  */
@@ -630,6 +640,8 @@ function town() {
 	const s = bootServer();
 	const { ADMIN_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
 	const logStore = fakeStore(ADMIN_LOG_STORE);
+	// every town starts with an empty stored log (the fake store outlives a server): no section reads another's lines
+	logStore.data.clear();
 	logStore.ListKeysAsync = prefix => ({
 		GetCurrentPage: () => [...logStore.data.keys()].filter(k => k.startsWith(prefix)).map(k => ({ KeyName: k })),
 	});
@@ -701,6 +713,7 @@ function everyTool(t) {
 		{ op: "clearFx" },
 		{ op: "spawnItem", group: "weapon", index: 10, count: 1, x: a.x + 60, y: a.y },
 		{ op: "spawnStructure", structure: "barricade", x: a.x + 200, y: a.y + 200 },
+		{ op: "removeStructure", x: a.x + 200, y: a.y + 200 },
 		{ op: "freecam", on: true, x: a.x + 500, y: a.y },
 	];
 }
@@ -784,16 +797,31 @@ section(
 		);
 		for (let i = 0; i < 30; i++) t.RF.OnServerInvoke(mallory, { kind: "players" });
 		verify("...kicked ONCE however much more arrives before they are gone", kicks === 1, `kicks ${kicks}`);
+		// back on the server and flooding again: kicked again, but the log already has its one line for them
+		t.s.quit(mallory);
+		const again = t.s.join(mallory.UserId, "Mallory");
+		again.LocaleId = "en-us";
+		let kicksAgain = 0;
+		again.Kick = () => {
+			kicksAgain += 1;
+			again.kicked = true;
+		};
+		clockNow += 5;
+		for (let i = 0; i <= CFG.ADMIN_BURST; i++) t.RF.OnServerInvoke(again, { kind: "world", op: "state" });
+		verify("rejoined and flooding again: kicked again", kicksAgain === 1, `kicks ${kicksAgain}`);
 		const log = t.audit();
 		const autos = log.filter(e => e.action === "auto-kick");
 		verify(
-			"ONE audit entry for the automatic kick, naming the kicked player",
-			autos.length === 1 && autos[0].target.includes(String(mallory.UserId)),
+			"ONE audit entry for the automatic kick per player per server, the flooder as its TARGET and the server as who did it",
+			autos.length === 1 &&
+				autos[0].target.includes(String(mallory.UserId)) &&
+				autos[0].adminId === 0 &&
+				autos[0].admin === "server",
 			J(autos),
 		);
 		verify(
-			"the refused calls themselves stay throttled: one DENIED line per caller",
-			log.filter(e => e.action === "DENIED").length === 2,
+			"the refused calls themselves stay throttled: one DENIED line per caller and visit (Eve, Mallory twice)",
+			log.filter(e => e.action === "DENIED").length === 3,
 			J(log.filter(e => e.action === "DENIED").map(e => e.admin)),
 		);
 		t.s.shutdown();
@@ -971,7 +999,11 @@ section(
 			`${res.message} (${h.bossRoster.list.length})`,
 		);
 		res = t.tool(t.admin, { op: "spawn", spawn: "boss2", count: 1, x: bat.x, y: bat.y, chase: false });
-		verify("...and one more is refused", !res.ok && res.error.includes(`${CFG.MAX_BOSSES} bosses`), res.error);
+		verify(
+			"...and one more is refused",
+			!res.ok && res.error.includes(`${CFG.MAX_BOSSES} admin bosses`),
+			res.error,
+		);
 		const boss = h.bossRoster.list.find(b => b.unpaid === true);
 		const money = save.money;
 		const bossKills = save.bossKills;
@@ -1125,15 +1157,16 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		res.ok && Math.abs(c.dayTime - 3) < 1e-6 && c.waveQueues[2] > 0 && res.message === "Wave 3 refilled",
 		`${res.message} ${c.dayTime}`,
 	);
-	// a slider dragged: three sets in a row inside 2 s are ONE audit line
+	// a slider dragged: three DIFFERENT sets are three lines (a line keeps what it says: L3 of the review)
+	const clockLines = () => t.audit().filter(e => e.action === "world:clock");
+	const c0 = clockLines().length;
 	t.tool(t.admin, { op: "clock", hour: 10 });
 	t.tool(t.admin, { op: "clock", hour: 10.5 });
 	t.tool(t.admin, { op: "clock", hour: 11 });
-	const merged = t.audit().filter(e => e.action === "world:clock");
 	verify(
-		"three clock sets in a row share an audit line: the last value, ×3",
-		/set to 11:00/.test(merged[0]?.details) && /\(×3\)/.test(merged[0]?.details),
-		J(merged.map(e => e.details)),
+		"three different clock sets in a row: three audit lines, each with its own value",
+		clockLines().length === c0 + 3 && /set to 11:00/.test(clockLines()[0]?.details),
+		J(clockLines().map(e => e.details)),
 	);
 
 	// the dead wait for the 06:00 the clock shows now
@@ -1910,6 +1943,530 @@ section(
 			res.ok && res.audited !== true && sent.length === n1 && host.serverWorld() === false,
 		);
 		auth.setWorldAuthority(undefined);
+	},
+);
+
+// ================================================================ 17-26: the independent review of 8f50bc5
+
+/** reset `p`'s save as an admin, and the client's ack of the patch (what the panel does) */
+function resetAndAck(t, p) {
+	t.ask(t.admin, { kind: "resetSave", userId: p.UserId });
+	const ev = t.EV.sent.filter(e => e.to === p && e.args[0]?.kind === "patch").pop()?.args[0];
+	t.ACK.OnServerEvent.Fire(p, ev?.rev);
+	t.s.beat();
+}
+
+/** walks `who` in circles, a tick at a time, until `pred` holds (or `limit` seconds): the seconds it took, or -1 */
+function walkUntil(t, who, pred, limit) {
+	let s = 0;
+	while (s < limit) {
+		if (pred()) return s;
+		t.s.walk(who, (s * 0.7) % (Math.PI * 2));
+		t.s.beat();
+		s += 1 / 60;
+	}
+	return pred() ? s : -1;
+}
+
+/** the flush the admin server runs every AUDIT_FLUSH_INTERVAL (its BindToClose hook), run now */
+function flushAuditNow(t) {
+	const fn = t.s.env.closers.find(f => String(f).includes("flushAudit"));
+	if (fn === undefined) throw new Error("the admin server's audit flush was not found");
+	fn();
+}
+
+/** every entry of the stored audit log */
+function storedAudit(t) {
+	let out = [];
+	for (const [k, v] of t.logStore.data) if (k.startsWith("log_")) out = out.concat(Array.isArray(v) ? v : []);
+	return out;
+}
+
+section(
+	"17) review HIGH-1: a switch turned off from the lobby, or by leaving the server, is off on the BODY, and mints no rounds",
+	() => {
+		// P1: god on, to the lobby, god off there, back in
+		let t = town();
+		t.tool(t.admin, { op: "god", on: true });
+		t.tool(t.admin, { op: "noclip", on: true });
+		t.s.run(1.2);
+		t.s.exit(t.admin);
+		let res = t.tool(t.admin, { op: "god", on: false });
+		t.tool(t.admin, { op: "noclip", on: false });
+		verify("god off from the lobby: answered off", res.ok && res.data?.state?.god === false, J(res));
+		t.s.run(1.2);
+		let sp = t.s.enter(t.admin);
+		t.s.beat();
+		let a = sp.state;
+		verify(
+			"P1: back in the world, the resumed BODY is no god and walks into walls again (the kept body shed the switches)",
+			a.godMode === false && a.noclip === false,
+			`godMode ${a.godMode} noclip ${a.noclip}`,
+		);
+		const snap = lastSnapOf(t.s, t.admin);
+		verify(
+			"...and the self block says so (no God, no Noclip in modFlags)",
+			snap !== undefined && (snap.self.modFlags & (t.s.P.ModFlag.God | t.s.P.ModFlag.Noclip)) === 0,
+			J(snap?.self?.modFlags),
+		);
+		t.s.sim.combat.damageActor(sp.slot, a, t.s.save(t.admin), 5000, true);
+		verify("...a lethal blow lands", a.hp < a.hpMax && (a.dead || a.hp <= 0), `hp ${a.hp} dead ${a.dead}`);
+
+		// the other way: a switch still ON is put back on the body that comes back
+		t = town();
+		t.tool(t.admin, { op: "god", on: true });
+		t.s.run(1.2);
+		t.s.exit(t.admin);
+		t.s.run(1.2);
+		sp = t.s.enter(t.admin);
+		t.s.beat();
+		verify(
+			"a switch left ON through the lobby: the body that comes back is a god again",
+			sp.state.godMode === true,
+		);
+
+		// P2: the admin leaves the server and comes back within the 5 min the keeper holds the body
+		t = town();
+		t.tool(t.admin, { op: "god", on: true });
+		t.tool(t.admin, { op: "noclip", on: true });
+		t.s.run(1.2);
+		t.s.quit(t.admin);
+		t.s.run(3);
+		const back = t.s.join(t.admin.UserId, "Owner");
+		back.LocaleId = "en-us";
+		t.s.run(1.5);
+		sp = t.s.enter(back);
+		t.s.beat();
+		res = t.ask(back, { kind: "world", op: "state" });
+		verify(
+			"P2: rejoined within 5 min: the server says off AND the kept body is no god and no noclip",
+			sp !== undefined &&
+				res.data?.state?.god === false &&
+				sp.state.godMode === false &&
+				sp.state.noclip === false,
+			`state ${J(res.data?.state)} godMode ${sp?.state.godMode} noclip ${sp?.state.noclip}`,
+		);
+
+		// P5: infinite ammo on, to the lobby, off there, back in, another switch: no free magazine is ever banked
+		t = town();
+		armPistol(t.s.save(t.admin), 0);
+		t.s.run(1.2);
+		t.s.exit(t.admin);
+		t.s.run(1.2);
+		t.s.enter(t.admin);
+		const save = t.s.save(t.admin);
+		const r0 = save.ammoNormal;
+		const m0 = t.s.body(t.admin).state.weapon.ammoCount;
+		t.tool(t.admin, { op: "ammo", on: true });
+		t.s.beat();
+		const full = t.s.body(t.admin).state.weapon.ammoCount;
+		t.s.run(1.2);
+		t.s.exit(t.admin);
+		t.tool(t.admin, { op: "ammo", on: false });
+		t.s.run(1.2);
+		t.s.enter(t.admin);
+		t.s.beat();
+		a = t.s.body(t.admin).state;
+		const cameBack = { inf: a.infiniteAmmo, mag: a.weapon.ammoCount };
+		t.tool(t.admin, { op: "god", on: true });
+		t.s.beat();
+		t.s.run(1.2);
+		t.s.exit(t.admin);
+		t.s.run(0.5);
+		t.s.quit(t.admin);
+		verify(
+			"P5: the free magazine (full on the server) never reaches the reserve: not through the lobby, a switch or leaving",
+			full > 0 && cameBack.inf === false && cameBack.mag === 0 && save.ammoNormal <= r0 + m0,
+			`free magazine ${full}; back in: infinite ${cameBack.inf} magazine ${cameBack.mag}; reserve ${r0}+${m0} -> ${save.ammoNormal}`,
+		);
+
+		// any switch that finds an infinite magazine it does not hold empties it (whatever was toggled)
+		t = town();
+		a = t.s.body(t.admin).state;
+		a.infiniteAmmo = true;
+		a.weapon.ammoCount = 10;
+		t.tool(t.admin, { op: "god", on: true });
+		verify(
+			"a stale infinite magazine on the body: toggling GOD empties it, and the flag goes",
+			a.infiniteAmmo === false && a.weapon.ammoCount === 0,
+			`infinite ${a.infiniteAmmo} magazine ${a.weapon.ammoCount}`,
+		);
+	},
+);
+
+section("18) review MEDIUM-2: a switch or the free camera left on across a NEW run keeps that run assisted", () => {
+	let t = town();
+	t.tool(t.admin, { op: "god", on: true });
+	verify("god on: the admin's run is assisted", !t.pays(t.admin));
+	resetAndAck(t, t.admin);
+	t.s.beat();
+	const b = t.s.body(t.admin).state;
+	verify(
+		"P3: the admin's own save reset (a new run) with god still on: the new body is a god, and the new run does NOT pay",
+		b.godMode === true && t.pays(t.admin) === false,
+		`godMode ${b.godMode} pays ${t.pays(t.admin)}`,
+	);
+	t = town();
+	const a = t.s.body(t.admin).state;
+	t.tool(t.admin, { op: "freecam", on: true, x: a.x + 400, y: a.y });
+	resetAndAck(t, t.admin);
+	t.s.beat();
+	verify("the same with the free camera on", t.pays(t.admin) === false);
+	t.tool(t.admin, { op: "freecam", on: false, x: 0, y: 0 });
+	resetAndAck(t, t.admin);
+	t.s.beat();
+	verify("...and a new run with everything off pays again", t.pays(t.admin) === true);
+});
+
+section("19) review MEDIUM-3: Dawn stands the dead up, it never makes them wait longer", () => {
+	let t = town();
+	t.s.sim.clock.setClock(23);
+	t.s.immortal.delete(t.bob);
+	t.s.kill(t.bob);
+	const w0 = t.s.host.lives.daybreakIn(t.bob.UserId);
+	const res = t.tool(t.admin, { op: "dawn" });
+	const w1 = t.s.host.lives.daybreakIn(t.bob.UserId);
+	verify(
+		"P4: dead at 23:00, then Dawn (06:59): the wait is over at once, not a whole day longer",
+		res.ok && w0 > 0 && w1 === 0,
+		`before ${w0?.toFixed(1)} s, after ${w1?.toFixed(1)} s`,
+	);
+	t.s.run(0.5);
+	verify("...and the daybreak stands Bob up", t.s.body(t.bob).state.dead === false);
+	t = town();
+	t.s.sim.clock.setClock(2);
+	t.s.immortal.delete(t.bob);
+	t.s.kill(t.bob);
+	t.tool(t.admin, { op: "clock", hour: 6.5 });
+	verify(
+		"the clock slider into 06:00-07:00 is a daybreak too",
+		t.s.host.lives.daybreakIn(t.bob.UserId) === 0,
+		`${t.s.host.lives.daybreakIn(t.bob.UserId)}`,
+	);
+});
+
+section(
+	"20) review MEDIUM-4: flooders cannot push an admin's action out of the log, nor break an admin's merge",
+	() => {
+		// P9: one admin kick, then 320 different flooders
+		let t = town();
+		const carl = t.s.join(newUser(), "Carl");
+		carl.LocaleId = "en-us";
+		const kr = t.ask(t.admin, { kind: "kick", userId: carl.UserId, reason: "" });
+		verify("the admin kicks Carl", kr.ok === true, J(kr));
+		for (let i = 0; i < 320; i++) {
+			const u = t.s.join(newUser(), `flooder${i}`);
+			u.LocaleId = "en-us";
+			for (let k = 0; k < 12; k++) t.RF.OnServerInvoke(u, { kind: "players" });
+			t.s.quit(u);
+		}
+		const mem = t.audit();
+		verify(
+			"P9: after 320 auto-kicks the admin's kick is still in the panel's log",
+			mem.some(e => e.action === "kick") && mem.some(e => e.action === "auto-kick"),
+			`${mem.length} entries, ${mem.filter(e => e.action === "auto-kick").length} auto-kick`,
+		);
+		t.s.shutdown();
+		const stored = storedAudit(t);
+		verify(
+			"...and in the stored log (an automatic kick is trimmed before any admin action)",
+			stored.some(e => e.action === "kick"),
+			`${stored.length} stored, ${stored.filter(e => e.action === "auto-kick").length} auto-kick`,
+		);
+		verify(
+			"...where each auto-kick names the flooder as its target, never as its admin",
+			stored.filter(e => e.action === "auto-kick").every(e => e.adminId === 0 && e.targetId > 0),
+		);
+
+		// a non-admin's refused call between two identical admin lines does not break their merge
+		t = town();
+		const at = freeNear(t.s, t.spA, 80, 12);
+		const drop = { op: "spawnItem", group: "use", index: 0, count: 1, x: at.x, y: at.y };
+		t.tool(t.admin, drop);
+		const eve = t.s.join(newUser(), "Eve");
+		eve.LocaleId = "en-us";
+		t.RF.OnServerInvoke(eve, { kind: "players" });
+		t.tool(t.admin, drop);
+		const lines = t.audit().filter(e => e.action === "world:spawnItem");
+		verify(
+			"the same drop twice with a stranger's DENIED between them: one line ×2",
+			lines.length === 1 && /\(×2\)/.test(lines[0].details),
+			J(lines.map(e => e.details)),
+		);
+	},
+);
+
+section("21) review L1: a clock tool marks the runs waiting in the lobby too", () => {
+	const t = town();
+	const c = t.s.sim.clock;
+	const sv = t.s.save(t.bob);
+	c.setClock(23.97);
+	const d0 = c.day;
+	walkUntil(t, t.bob, () => c.day > d0, 30);
+	t.s.run(1.2);
+	t.s.exit(t.bob);
+	const res = t.tool(t.admin, { op: "clock", hour: 23.7 });
+	verify(
+		"P10: the clock rewound across midnight with Bob in the lobby: Bob's kept run is assisted",
+		res.ok &&
+			t.s.sim.paysRewards({ userId: t.bob.UserId }) === false &&
+			/2 runs now assisted/.test(t.audit()[0]?.details),
+		`pays(bob) ${t.s.sim.paysRewards({ userId: t.bob.UserId })}; ${t.audit()[0]?.details}`,
+	);
+	t.s.run(1.2);
+	t.s.enter(t.bob);
+	const d1 = c.day;
+	const money1 = sv.money;
+	walkUntil(t, t.bob, () => c.day > d1, 30);
+	verify(
+		"...so the midnight he crosses again pays him no coins",
+		c.day > d1 && sv.money === money1,
+		`${money1} -> ${sv.money}`,
+	);
+});
+
+section(
+	"22) review L2: an admin's drop pays its taker nothing but the item, is logged, and is never a cosmetic",
+	() => {
+		const t = town();
+		const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
+		const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+		const WOOD = ETC_ITEMS.findIndex(e => e.name === "Wood");
+		const WOODS = require(join(SRC, "shared/data/achievements.ts")).AchievementId.WoodsCollector;
+		const b = t.s.body(t.bob);
+		const bsave = t.s.save(t.bob);
+		const at = freeNear(t.s, b, 20, 12);
+		let res = t.tool(t.admin, { op: "spawnItem", group: "etc", index: WOOD, count: 5, x: at.x, y: at.y });
+		const wood = t.s.sim.world.items.find(it => it.kind === 4 && it.itemId === WOOD && it.count === 5);
+		verify(
+			"5 wood dropped by the admin, next to Bob, tagged as an admin's",
+			res.ok && wood?.unpaid === true,
+			J(wood),
+		);
+		const ach0 = bsave.achievements[WOODS] ?? 0;
+		const inv0 = bsave.invenEtc[WOOD] ?? 0;
+		const got = t.s.sim.items.pickup(bsave, wood.x, wood.y, wood, b.slot);
+		verify(
+			"Bob picks it up: the wood is his, the Woods collector credit is not",
+			got.ok && (bsave.invenEtc[WOOD] ?? 0) === inv0 + 5 && (bsave.achievements[WOODS] ?? 0) === ach0,
+			`inventory ${inv0}->${bsave.invenEtc[WOOD]} achievement ${ach0}->${bsave.achievements[WOODS]}`,
+		);
+		const taken = t.audit().find(e => e.action === "world:taken");
+		verify(
+			"...and the log says who took it (the server's line, Bob as its target)",
+			taken !== undefined && taken.target.includes(String(t.bob.UserId)) && taken.admin === "server",
+			J(taken),
+		);
+		const { spawnGroundItem } = require(join(SRC, "shared/game/world.ts"));
+		const found = spawnGroundItem(t.s.sim.world, 4, WOOD, 3, at.x, at.y);
+		t.s.sim.items.pickup(bsave, found.x, found.y, found, b.slot);
+		verify(
+			"a wood the town dropped still credits the collector (control)",
+			(bsave.achievements[WOODS] ?? 0) === ach0 + 3,
+			`${ach0} -> ${bsave.achievements[WOODS]}`,
+		);
+		const cosmetic = EQUIPS.findIndex(e => e.kind >= 4);
+		const n0 = t.s.sim.world.items.length;
+		res = t.tool(t.admin, { op: "spawnItem", group: "equip", index: cosmetic, count: 1, x: at.x, y: at.y });
+		verify(
+			`an outfit or a pet (EQUIPS ${cosmetic}): refused, nothing on the ground`,
+			cosmetic >= 0 && !res.ok && /shop/.test(res.error) && t.s.sim.world.items.length === n0,
+			res.error,
+		);
+	},
+);
+
+section("23) review L3: an audit line keeps what it says, and a stored line is never rewritten", () => {
+	const t = town();
+	const at = freeNear(t.s, t.spA, 80, 12);
+	const drop = { op: "spawnItem", group: "use", index: 0, count: 1, x: at.x, y: at.y };
+	const lines = () => t.audit().filter(e => e.action === "world:spawnItem");
+	t.tool(t.admin, drop);
+	t.tool(t.admin, { ...drop, x: at.x + 30 });
+	verify(
+		"two drops at different points: two lines, each with its own point",
+		lines().length === 2 && lines()[0].details !== lines()[1].details,
+		J(lines().map(e => e.details)),
+	);
+	t.tool(t.admin, { ...drop, x: at.x + 30 });
+	verify(
+		"the same drop again: one line ×2",
+		lines().length === 2 && /\(×2\)/.test(lines()[0].details),
+		J(lines().map(e => e.details)),
+	);
+	flushAuditNow(t);
+	t.tool(t.admin, { ...drop, x: at.x + 30 });
+	const stored = storedAudit(t).filter(e => e.action === "world:spawnItem");
+	verify(
+		"the line written to the DataStore is never merged into again: the next repeat is a new line",
+		lines().length === 3 && !/\(×3\)/.test(lines()[1].details) && stored.some(e => /\(×2\)/.test(e.details)),
+		`memory ${J(lines().map(e => e.details))} stored ${J(stored.map(e => e.details))}`,
+	);
+});
+
+section(
+	"24) review L4: noclip stays inside the town, and ending it deep inside a building always frees the body",
+	() => {
+		const t = town();
+		const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
+		t.tool(t.admin, { op: "noclip", on: true });
+		const sp = t.s.body(t.admin);
+		sp.state.x = TOWN.BORDER + 30;
+		for (let i = 0; i < 60 * 6; i++) {
+			t.s.walk(t.admin, Math.PI);
+			t.s.beat();
+		}
+		const x = t.s.body(t.admin).state.x;
+		verify(
+			"P11: walking west with noclip for 6 s: held at the town's edge, out of the border forest",
+			x >= TOWN.BORDER + PLAYER_RADIUS - 1e-6,
+			`x ${x.toFixed(0)} border ${TOWN.BORDER}`,
+		);
+		// no free ground within UNSTICK_SEARCH (a very big building): the body goes to a spawn point, never stays stuck
+		const wall = t.s.sim.world.solids.find(s => s.kind === "building" && s.w > 200 && s.h > 200);
+		const a = t.s.body(t.admin).state;
+		a.x = wall.x + wall.w / 2;
+		a.y = wall.y + wall.h / 2;
+		const real = WO.freePointIn;
+		WO.freePointIn = () => undefined;
+		let res;
+		try {
+			res = t.tool(t.admin, { op: "noclip", on: false });
+		} finally {
+			WO.freePointIn = real;
+		}
+		verify(
+			"noclip off with no free ground in reach: moved to a spawn point, standing free, and the answer says so",
+			res.ok &&
+				a.noclip === false &&
+				circleBlocked(t.s.sim.world, a.x, a.y, PLAYER_RADIUS) === undefined &&
+				/free ground/.test(res.message),
+			`${res.message} at ${Math.round(a.x)},${Math.round(a.y)}`,
+		);
+	},
+);
+
+section("25) review L5: an admin's bosses do not keep the town's asleep, and each side keeps its own cap", () => {
+	const t = town();
+	const h = t.s.sim.horde;
+	const a = t.s.body(t.admin).state;
+	const bat = freeNear(t.s, t.spA, 500, 60);
+	let res = t.tool(t.admin, { op: "spawn", spawn: "boss3", count: 2, x: bat.x, y: bat.y, chase: false });
+	verify(
+		"two admin bosses",
+		res.ok && h.bossRoster.list.filter(b => b.unpaid).length === 2,
+		res.message ?? res.error,
+	);
+	// an anchor due, next to the admin: the town's own boss wakes (population.ts spawnBoss)
+	const anchor = t.s.sim.world.bossAnchors[0];
+	anchor.x = a.x + 200;
+	anchor.y = a.y;
+	anchor.nextDay = 0;
+	h.population.population.spawnBoss(h.refs);
+	const natural = h.bossRoster.list.filter(b => b.unpaid !== true).length;
+	verify("P-L5: the town's boss still wakes beside two admin bosses", natural === 1, `${natural} natural`);
+	res = t.tool(t.admin, { op: "spawn", spawn: "boss2", count: 1, x: bat.x, y: bat.y, chase: false });
+	verify("...and a third admin boss is still refused", !res.ok && /admin bosses/.test(res.error), res.error);
+	const snap = lastSnapOf(t.s, t.admin);
+	verify(
+		`three bosses near the admin: the snapshot carries the nearest ${CFG.MAX_BOSSES} (and decodes)`,
+		snap !== undefined && snap.bosses.length === CFG.MAX_BOSSES,
+		`${snap?.bosses.length}`,
+	);
+});
+
+section(
+	"26) review L6: a forced wave 2 or 3 is as big as the natural one; an admin can take a construction down",
+	() => {
+		const t = town();
+		const h = t.s.sim.horde;
+		const c = t.s.sim.clock;
+		// two survivors apart: more than one survivor in the groups, ΣS(k) > 1
+		const b = t.s.body(t.bob).state;
+		const far = WO.freePointIn(t.s.sim.world, t.s.sim.world.width - b.x, t.s.sim.world.height - b.y, 30, 2000);
+		b.x = far.x;
+		b.y = far.y;
+		for (let i = 0; i < 30; i++) t.s.beat();
+		const total = h.population.scales().reduce((s, k) => s + k, 0);
+		const { getDayPopulation } = require(join(SRC, "shared/data/spawns.ts"));
+		t.tool(t.admin, { op: "clock", hour: 20 });
+		c.waveQueues[1] = 0;
+		c.specialWaveQueues[1] = 0;
+		let res = t.tool(t.admin, { op: "wave" });
+		const pop = getDayPopulation(c.day);
+		verify(
+			"P-L6: ΣS(k) > 1: the forced wave 2 queues the day table × ΣS(k), like a natural night",
+			res.ok &&
+				total > 1 &&
+				c.waveQueues[1] === Math.floor(pop.wave2 * total + 0.5) &&
+				c.waveQueues[1] > pop.wave2,
+			`ΣS ${total} queue ${c.waveQueues[1]} table ${pop.wave2}`,
+		);
+
+		// remove structure: an admin's barricade, then a survivor's, then nothing
+		const World = t.s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World");
+		const spot = freeNear(t.s, t.spA, 260, 90);
+		t.tool(t.admin, { op: "spawnStructure", structure: "barricade", x: spot.x, y: spot.y });
+		const wall = t.s.sim.world.solids.find(s => s.placeable === 10 && Math.abs(s.x + s.w / 2 - spot.x) < 1);
+		const count0 = t.s.sim.build.count();
+		World.sent.length = 0;
+		res = t.tool(t.admin, { op: "removeStructure", x: spot.x + 10, y: spot.y });
+		t.s.beat();
+		const removes = [];
+		for (const e of World.sent) {
+			if (e.to !== undefined) continue;
+			for (const ev of t.s.P.decodeWorld(e.args[0])?.events ?? [])
+				if (ev.t === t.s.P.WorldEv.SolidRemove) removes.push(ev);
+		}
+		verify(
+			"remove at the admin's own barricade: gone from the server's world, the cap counts it back, every client told",
+			res.ok &&
+				wall !== undefined &&
+				!t.s.sim.world.solids.includes(wall) &&
+				t.s.sim.build.count() === count0 - 1 &&
+				removes.some(ev => ev.id === wall.id),
+			`${res.message ?? res.error} count ${count0}->${t.s.sim.build.count()} removes ${removes.length}`,
+		);
+		const { addSolid } = require(join(SRC, "shared/game/world.ts"));
+		const { PLACEABLES, placedSolid } = require(join(SRC, "shared/sim/placement.ts"));
+		const def = PLACEABLES[10];
+		const bobs = addSolid(t.s.sim.world, {
+			...placedSolid(def, { x: spot.x - def.w / 2, y: spot.y - def.h / 2, w: def.w, h: def.h }, 0),
+			placeable: 10,
+			owner: t.s.body(t.bob).slot,
+		});
+		res = t.tool(t.admin, { op: "removeStructure", x: spot.x, y: spot.y });
+		verify(
+			"...and a survivor's construction too",
+			res.ok && !t.s.sim.world.solids.includes(bobs),
+			res.message ?? res.error,
+		);
+		const n = t.s.sim.world.solids.length;
+		res = t.tool(t.admin, { op: "removeStructure", x: spot.x, y: spot.y });
+		verify(
+			"nothing built there: refused, nothing removed",
+			!res.ok && /no construction/.test(res.error) && t.s.sim.world.solids.length === n,
+			res.error,
+		);
+		const house = t.s.sim.world.solids.find(s => s.kind === "building");
+		res = t.tool(t.admin, { op: "removeStructure", x: house.x + house.w / 2, y: house.y + house.h / 2 });
+		verify(
+			"the town's own building is never a construction",
+			!res.ok && t.s.sim.world.solids.includes(house),
+			res.error,
+		);
+		verify(
+			"one audit line per removal",
+			t.audit().filter(e => e.action === "world:removeStructure").length === 4,
+			J(
+				t
+					.audit()
+					.filter(e => e.action === "world:removeStructure")
+					.map(e => `${e.ok}:${e.details}`),
+			),
+		);
+		res = t.tool(t.bob, { op: "removeStructure", x: spot.x, y: spot.y });
+		verify("a non-admin: forbidden", !res.ok && res.error === "forbidden", J(res));
 	},
 );
 

@@ -46,7 +46,7 @@ import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/s
 import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
-import { daybreakWaitSeconds } from "shared/sim/clock";
+import { DAY_BREAK_HOUR, daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import type { ServerSimulation } from "./simulation";
@@ -100,6 +100,25 @@ export function unloadMagazine(state: PlayerState, save: PlayerSaveData): number
 	if (w === undefined || !usesMagazine(w) || isFuelWeapon(w) || rounds <= 0 || state.infiniteAmmo === true) return 0;
 	weaponSpendAmmo(save, w.ammoPool, -rounds);
 	return rounds;
+}
+
+/**
+ * The admin switches of §10 (god mode, noclip, infinite ammo) off a body. They belong to the PERSON, not to a body:
+ * server/admin/adminWorld.ts holds them by UserId and puts them back on whatever body that person has, every tick, for
+ * as long as they are on. Left on a KEPT body they outlived a switch turned off from the lobby, or the admin's whole
+ * session, and that run paid (the review of 8f50bc5, HIGH-1). An infinite-ammo magazine never becomes real rounds:
+ * emptied here with nothing back, before the flag that keeps `unloadMagazine` from refunding it is gone.
+ */
+export function stripAdminMods(state: PlayerState): void {
+	if (state.infiniteAmmo === true) {
+		const rt = state.weapon;
+		rt.ammoCount = 0;
+		rt.reloading = false;
+		rt.reloadCount = 0;
+	}
+	state.godMode = false;
+	state.noclip = false;
+	state.infiniteAmmo = false;
 }
 
 /**
@@ -446,6 +465,9 @@ export class LifeKeeper {
 		if (sp !== undefined) this.lethal(sp);
 		rec.slot = undefined;
 		if (sp !== undefined) {
+			// the admin switches are the person's, never the kept body's (`stripAdminMods`): back on the next entry while
+			// they are still on, and gone with the session otherwise
+			stripAdminMods(sp.state);
 			rec.body = sp.state;
 			rec.dead = sp.state.dead;
 			rec.save = sp.save;
@@ -643,12 +665,16 @@ export class LifeKeeper {
 
 	/**
 	 * An admin moved the world's clock (§10): a dead survivor's wait for daybreak is counted again from the new hour,
-	 * so "Dawn" stands them up at the 06:00 it shows and "Night" does not stand them up in the middle of it.
+	 * so "Night" does not stand them up in the middle of it. A clock set into the daybreak hour itself (06:00-07:00:
+	 * "Dawn" lands on 06:59) IS the daybreak: they stand up now -- counted from the hour, the next 06:00 was a whole
+	 * day away, and Dawn made the dead wait longer (the review of 8f50bc5, MEDIUM-3).
 	 */
 	clockMoved(): void {
 		const dayTime = this.sim.clock.dayTime;
+		const daybreak = dayTime >= DAY_BREAK_HOUR && dayTime < DAY_BREAK_HOUR + 1;
 		for (const [, rec] of this.records) {
-			if (rec.dead && rec.downFor !== undefined && rec.downFor > 0) rec.downFor = daybreakWaitSeconds(dayTime);
+			if (!rec.dead || rec.downFor === undefined || rec.downFor <= 0) continue;
+			rec.downFor = daybreak ? 0 : daybreakWaitSeconds(dayTime);
 		}
 	}
 
