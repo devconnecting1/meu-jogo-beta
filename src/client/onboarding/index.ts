@@ -3,11 +3,13 @@ import { AIM_ASSIST, AimTarget } from "shared/engine/input";
 import { ZOMBIE_RADIUS } from "shared/game/physics";
 import { PROGRESS_SERVER_PHASE } from "shared/game/save";
 import { MP_PHASE } from "shared/net/mpConfig";
+import { LifeState } from "shared/net/protocol";
 import { setAimTargets } from "../bootstrap";
+import { RosterView, netActive, netRoster } from "../net/netClient";
 import { requestSave } from "../systems/saveClient";
 import type { GameRefs } from "../systems/types";
 import { Coach } from "./coach";
-import { RunSummary } from "./gameOver";
+import { DaybreakWait, RunSummary, RunSummaryHandlers, showDaybreakWait as showDaybreakWaitScreen } from "./gameOver";
 
 /*
  * Everything a live run needs from this folder, behind two calls.
@@ -42,6 +44,21 @@ let killsAtStart = 0;
 const SERVER_KILLS = MP_PHASE >= PROGRESS_SERVER_PHASE;
 /** save.bossKills when the run was attached */
 let bossesAtStart = 0;
+/**
+ * The death screen's "New best!" (UI-13): the life whose best day `bestAtLife` holds, keyed `runRev - deathCount` (a
+ * paid Rebirth moves both and keeps the life; New game and a world's new life move only runRev), and the best day the
+ * player had when this client first saw that life. A life met mid-way (a reconnect) starts from the best it already
+ * set, so the screen may miss a record -- it never claims one that is not.
+ */
+let lifeKey = -1;
+let bestAtLife = 0;
+/**
+ * A survivor of this session stood back up after a death (the daybreak, an ally, a Rebirth): the next death is not
+ * the first. The save's own counters catch the rest -- runRev (a New game, a world's new life), deathCount (a paid
+ * Rebirth) and lifeDeaths (a death this life already had when it was loaded).
+ */
+let stoodUp = false;
+let wasDead = false;
 /** zombie id → its hp when we last saw it: a body that leaves the list at 0 hp was killed */
 const seen = new Map<number, number>();
 let killScan = 0;
@@ -96,6 +113,12 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	kills = 0;
 	killsAtStart = ctx.save.zombieKills;
 	bossesAtStart = ctx.save.bossKills;
+	const key = ctx.save.runRev - ctx.save.deathCount;
+	if (key !== lifeKey) {
+		lifeKey = key;
+		bestAtLife = ctx.save.bestDay;
+	}
+	wasDead = refs.player.dead;
 	seen.clear();
 	killScan = 0;
 	setAimTargets(aimTargets);
@@ -122,6 +145,9 @@ export function attachRun(ctx: GameContext, refs: GameRefs): void {
 	connection = RunService.Heartbeat.Connect(dt => {
 		const live = refsLive;
 		if (live === undefined) return;
+		const dead = live.player.dead;
+		if (wasDead && !dead) stoodUp = true;
+		wasDead = dead;
 		if (!SERVER_KILLS) scanKills(live, dt);
 		coach?.update(live, dt);
 	});
@@ -138,18 +164,53 @@ export function detachRun(): void {
 	seen.clear();
 }
 
-/** the numbers the end-of-run screen shows; safe to call after the run has been detached */
-export function runSummary(ctx: GameContext, first: boolean): RunSummary {
+/**
+ * The numbers the end-of-run screen shows; safe to call after the run has been detached. `first`: the save has never
+ * died before this death -- no New game, world's new life or paid Rebirth (runRev, deathCount), no earlier death in
+ * this life (lifeDeaths, as loaded) and no stand-up seen this session. `record`: this life went past the best day the
+ * player had when it began (UI-13: the only time "Best day" is highlighted).
+ */
+export function runSummary(ctx: GameContext): RunSummary {
+	const save = ctx.save;
 	return {
-		days: ctx.save.day,
-		bestDay: ctx.save.bestDay,
-		level: ctx.save.level,
-		kills: SERVER_KILLS ? math.max(ctx.save.zombieKills - killsAtStart, 0) : kills,
-		bosses: math.max(ctx.save.bossKills - bossesAtStart, 0),
-		first,
+		days: save.day,
+		bestDay: save.bestDay,
+		level: save.level,
+		kills: SERVER_KILLS ? math.max(save.zombieKills - killsAtStart, 0) : kills,
+		bosses: math.max(save.bossKills - bossesAtStart, 0),
+		first: save.runRev === 0 && save.deathCount === 0 && save.lifeDeaths === 0 && !stoodUp,
+		record: lifeKey === save.runRev - save.deathCount && save.day > bestAtLife,
 	};
 }
 
+const rosterBuf = new Array<RosterView>();
+
+/**
+ * MP-22, for the death screen: the OTHER survivors in town still up -- alive, or bleeding out and still revivable
+ * (MP-03) -- from the server's reliable roster (the one the match scoreboard reads). Undefined outside a session, or
+ * before the roster names this client: then nobody can say, and the screen promises the daybreak.
+ */
+export function othersStanding(): number | undefined {
+	if (!netActive()) return undefined;
+	let me = false;
+	let n = 0;
+	for (const v of netRoster(rosterBuf)) {
+		if (v.you) me = true;
+		else if (v.life !== LifeState.Dead) n += 1;
+	}
+	return me ? n : undefined;
+}
+
+/** the daybreak wait (gameOver.ts), told who is still standing in town */
+export function showDaybreakWait(
+	ctx: GameContext,
+	summary: RunSummary,
+	handlers: RunSummaryHandlers,
+	newLife = false,
+): DaybreakWait {
+	return showDaybreakWaitScreen(ctx, summary, handlers, newLife, othersStanding);
+}
+
 export { Coach } from "./coach";
-export { showDaybreakWait, showRunSummary } from "./gameOver";
+export { showRunSummary } from "./gameOver";
 export type { DaybreakWait, RunSummary, RunSummaryHandlers } from "./gameOver";

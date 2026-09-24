@@ -631,7 +631,7 @@ function openDeath(): void {
 	closeDawnWait();
 	ctx.save.runOver = true;
 	net.requestSave("death");
-	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx, ctx.save.deathCount <= 1);
+	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx);
 	// `serverDriven` is the one honest test for "somebody out there will stand me back up": the hour on this
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
@@ -654,7 +654,7 @@ function openDeath(): void {
 		);
 		return;
 	}
-	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
+	// nobody to stand this survivor up: the death screen's "over" state (client/onboarding/gameOver.ts, UI-13)
 	pauseCleanup = showRunSummary(ctx, summary, {
 		onRebirth: doRebirth,
 		onNewRun: doNewRun,
@@ -710,7 +710,8 @@ function updateDawnWait(dt: number): void {
 	// is the same capped wait the server armed, and it is what answers a death in broad daylight.
 	dawnBudget = math.max(0, dawnBudget - math.max(0, dt));
 	const left = math.min(refs.daynight.secondsUntilDayBreak(), dawnBudget);
-	wait.setRemaining(left);
+	// by night the wait ends at daybreak; a death in daylight waits one whole night and wakes in daylight (UI-13)
+	wait.setRemaining(left, refs.daynight.isNight);
 	if (left > 0) {
 		dawnOverdue = 0;
 		return;
@@ -721,7 +722,7 @@ function updateDawnWait(dt: number): void {
 	if (netActive()) return;
 	closeDawnWait();
 	warn("[PZ] daybreak passed without a revive and the session is gone; falling back to the end-of-run choice");
-	pauseCleanup = showRunSummary(ctx, runSummary(ctx, ctx.save.deathCount <= 1), {
+	pauseCleanup = showRunSummary(ctx, runSummary(ctx), {
 		onRebirth: doRebirth,
 		onNewRun: newLifeWaiting ? undefined : doNewRun,
 		onHome: goLobby,
@@ -1061,7 +1062,7 @@ function doNewRun(): void {
 			return;
 		}
 	}
-	if (hosted) endedLife = runSummary(ctx, ctx.save.deathCount <= 1);
+	if (hosted) endedLife = runSummary(ctx);
 	// same reset as the server (offline: local only, nothing is saved anyway)
 	resetRun(ctx.save);
 	if (hosted) {
