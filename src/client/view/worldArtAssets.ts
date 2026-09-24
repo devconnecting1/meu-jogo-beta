@@ -191,11 +191,11 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: board fence along y */
 	fenceV: { id: "rbxassetid://101826053299894", w: 2, h: 16 },
 	/** tile: house floors: boards */
-	floorWood: { id: "rbxassetid://101668958493756", w: 32, h: 32 },
+	floorWood: { id: "rbxassetid://110877921361918", w: 32, h: 32 },
 	/** tile: hospital / pharmacy floor: checker tiles */
-	floorTile: { id: "rbxassetid://138138688365178", w: 16, h: 16 },
+	floorTile: { id: "rbxassetid://79431377433219", w: 16, h: 16 },
 	/** tile: shop floor: vinyl tiles */
-	floorShop: { id: "rbxassetid://129815435078768", w: 32, h: 32 },
+	floorShop: { id: "rbxassetid://80429436261692", w: 32, h: 32 },
 	/** tileTint: walls: plaster (tint: the wall colour) */
 	wall: { id: "rbxassetid://122355100041127", w: 8, h: 8 },
 	/** tileTint: pitched roof shingles, courses along x (tint: roof colour) */
@@ -281,7 +281,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://140705036278395", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
-	dispenser: { id: "", w: 10, h: 13 },
+	dispenser: { id: "rbxassetid://105334383347349", w: 10, h: 13 },
 	/** sprite: rooftop air conditioner */
 	acUnit: { id: "rbxassetid://104235250371536", w: 13, h: 11 },
 	/** sprite: roof vent */
@@ -307,25 +307,25 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
 	/** sprite: storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon */
-	signCollege: { id: "", w: 24, h: 16 },
+	signCollege: { id: "rbxassetid://97269546399799", w: 24, h: 16 },
 	/** sprite: storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon */
-	signLibrary: { id: "", w: 24, h: 16 },
+	signLibrary: { id: "rbxassetid://133598523682983", w: 24, h: 16 },
 	/** sprite: storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon */
-	signLab: { id: "", w: 24, h: 16 },
+	signLab: { id: "rbxassetid://118327188936209", w: 24, h: 16 },
 	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
-	signDorm: { id: "", w: 24, h: 16 },
+	signDorm: { id: "rbxassetid://81449538718007", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyN: { id: "", w: 113, h: 29 },
+	gasCanopyN: { id: "rbxassetid://132546173882337", w: 113, h: 29 },
 	/** sprite: gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyS: { id: "", w: 113, h: 29 },
+	gasCanopyS: { id: "rbxassetid://132004573447997", w: 113, h: 29 },
 	/** sprite: gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyW: { id: "", w: 29, h: 113 },
+	gasCanopyW: { id: "rbxassetid://122371876471179", w: 29, h: 113 },
 	/** sprite: gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyE: { id: "", w: 29, h: 113 },
+	gasCanopyE: { id: "rbxassetid://125833645629229", w: 29, h: 113 },
 	/** sprite: gas station price sign: a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post */
-	signPrice: { id: "", w: 16, h: 25 },
+	signPrice: { id: "rbxassetid://93065346422856", w: 16, h: 25 },
 	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
 	bicycle: { id: "rbxassetid://127507461066870", w: 18, h: 7 },
 	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
@@ -363,11 +363,11 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: bedroom / office carpet: a low loop pile */
 	floorCarpet: { id: "rbxassetid://117022765804029", w: 16, h: 16 },
 	/** tile: kitchen floor: checker tiles */
-	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
+	floorKitchen: { id: "rbxassetid://118399822667752", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
-	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
+	floorBath: { id: "rbxassetid://106965413738558", w: 16, h: 16 },
 	/** slice: the shadow at the foot of an interior wall (round every wall) */
-	wallShade: { id: "", w: 7, h: 7, slice: [3, 3, 4, 4] },
+	wallShade: { id: "rbxassetid://120729739933297", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -393,33 +393,33 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
 	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14) */
-	bossGiant: { id: "", w: 640, h: 320 },
+	bossGiant: { id: "rbxassetid://95282298769358", w: 640, h: 320 },
 	/** mask: bossGiant: white silhouettes of the same cells (tint: hit flash) */
-	bossGiantFill: { id: "", w: 640, h: 320 },
+	bossGiantFill: { id: "rbxassetid://129758628519753", w: 640, h: 320 },
 	/** mask: bossGiant: white outlines of the same cells (tint: the hit outline) */
-	bossGiantRim: { id: "", w: 640, h: 320 },
+	bossGiantRim: { id: "rbxassetid://83535839220751", w: 640, h: 320 },
 	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14) */
-	bossHedgehog: { id: "", w: 640, h: 240 },
+	bossHedgehog: { id: "rbxassetid://107503368916093", w: 640, h: 240 },
 	/** mask: bossHedgehog: white silhouettes of the same cells (tint: hit flash) */
-	bossHedgehogFill: { id: "", w: 640, h: 240 },
+	bossHedgehogFill: { id: "rbxassetid://106047861481982", w: 640, h: 240 },
 	/** mask: bossHedgehog: white outlines of the same cells (tint: the hit outline) */
-	bossHedgehogRim: { id: "", w: 640, h: 240 },
+	bossHedgehogRim: { id: "rbxassetid://107128601154057", w: 640, h: 240 },
 	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14) */
-	bossCentipede: { id: "", w: 640, h: 480 },
+	bossCentipede: { id: "rbxassetid://119196418708646", w: 640, h: 480 },
 	/** mask: bossCentipede: white silhouettes of the same cells (tint: hit flash) */
-	bossCentipedeFill: { id: "", w: 640, h: 480 },
+	bossCentipedeFill: { id: "rbxassetid://74531948998395", w: 640, h: 480 },
 	/** mask: bossCentipede: white outlines of the same cells (tint: the hit outline) */
-	bossCentipedeRim: { id: "", w: 640, h: 480 },
+	bossCentipedeRim: { id: "rbxassetid://139138568435683", w: 640, h: 480 },
 	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14) */
-	bossRafflesia: { id: "", w: 816, h: 68 },
+	bossRafflesia: { id: "rbxassetid://108221250630981", w: 816, h: 68 },
 	/** mask: bossRafflesia: white silhouettes of the same cells (tint: hit flash) */
-	bossRafflesiaFill: { id: "", w: 816, h: 68 },
+	bossRafflesiaFill: { id: "rbxassetid://90583146522584", w: 816, h: 68 },
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
-	bossRafflesiaRim: { id: "", w: 816, h: 68 },
+	bossRafflesiaRim: { id: "rbxassetid://88546042032232", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "", w: 288, h: 244 },
+	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
 	/** atlas: interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "", w: 1024, h: 718 },
+	furniture: { id: "rbxassetid://122442706684073", w: 1024, h: 718 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */

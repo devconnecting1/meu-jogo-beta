@@ -17,6 +17,10 @@
  *                                 the match changed; a new seed (MP-22's new town) or a seed of 0 never reuses it; a
  *                                 town the flyover drew is field for field the one generateTown returns, and a copy that
  *                                 changed anyway (its fingerprint) is refused. Reports the generation time saved.
+ *                                 The menus' town is generated a slice per frame (`requestTown`, MP-26): a slice is
+ *                                 TOWN_SLICE_S of work; asked for, it is ready a frame later; a match that wants it
+ *                                 before its last slice FINISHES it in place (one generation, never two); another
+ *                                 seed abandons it; a generator that throws is not asked for again every frame.
  *   2. ONE PRELOAD PLAN           client/boot/preloadPlan.ts, over a fake ContentProvider that records every request:
  *                                 nothing waits for it; the skin, then the icon atlas and the lobby's town (signs last),
  *                                 then the character sheets and worldArt.ts's own pass, then the sounds bus by bus; only
@@ -236,12 +240,18 @@ check(
 
 // ---- a new seed never reuses the old town
 g = gen0();
+let abandoned0 = Cache.townCacheStats().abandoned;
 Fly.prewarmTown(S);
 const other = Cache.takeTown(T);
 check(
 	"outra semente (o InitBegin corrigiu o palpite): a partida gera a cidade DELA, nao pega a do lobby",
-	other !== Fly.townFor(S) && sameTown(other, World.generateTown(T)).length === 0 && gen0() === g + 3,
-	`${gen0() - g} geracoes: a do lobby, a da partida e a do lobby de novo`,
+	other !== Fly.townFor(S) && sameTown(other, World.generateTown(T)).length === 0 && gen0() === g + 2,
+	`${gen0() - g} geracoes: a da partida e a do lobby de novo`,
+);
+check(
+	"...e a cidade do lobby que ainda estava sendo gerada em fatias e abandonada, nao terminada a toa atras da partida",
+	Cache.townCacheStats().abandoned === abandoned0 + 1 && Cache.pendingTown() === undefined,
+	`${Cache.townCacheStats().abandoned - abandoned0} abandonada(s)`,
 );
 
 // ---- MP-22: the world ends
@@ -253,17 +263,25 @@ check(
 	"fim do mundo na rua: a partida reconstruida gera a cidade nova (semente nova), nada vem da velha",
 	reset1 !== matchTown2 && sameTown(reset1, World.generateTown(T)).length === 0 && gen0() === g + 1,
 );
-// (b) in the lobby: the lobby shows S, a WorldReset names T; the lobby's refresh pins T (lobby.ts refresh -> pinFlyover)
+// (b) in the lobby: the lobby shows S, a WorldReset names T; the lobby's refresh pins T (lobby.ts refresh -> pinFlyover,
+// or client/boot/serverTown.ts -> followTown): the SAME flyover cross-fades to it, in its own pool
+Fly.townFor(S);
 fly = Fly.pinFlyover(host, S);
 frame();
 const oldFly = fly;
+const townS = Fly.townFor(S);
 g = gen0();
 fly = Fly.pinFlyover(host, T);
-frame();
-const lobbyT = Fly.townFor(T);
 check(
-	"fim do mundo no lobby: o voo troca para a cidade nova (gerada uma vez) e solta a velha",
-	oldFly !== fly && oldFly.layer.Parent === undefined && fly.shows(lobbyT) && gen0() === g + 1,
+	"fim do mundo no lobby: a cidade nova e pedida em fatias; a velha continua na tela enquanto isso",
+	fly === oldFly && fly.shows(townS) && Cache.pendingTown() === T && gen0() === g,
+);
+for (let i = 0; i < 180; i++) frame();
+const lobbyT = Cache.readyTown(T);
+check(
+	"...pronta, o MESMO voo troca para ela (gerada uma vez), sem soltar o voo nem o pool",
+	oldFly === fly && oldFly.layer.Parent === host && lobbyT !== undefined && fly.shows(lobbyT) && gen0() === g + 1,
+	`${gen0() - g} geracao(oes)`,
 );
 const enterT = Cache.takeTown(T);
 check("...e a proxima entrada pega essa cidade nova", enterT === lobbyT && gen0() === g + 1);
@@ -310,6 +328,159 @@ check("semente 0 (cidade aleatoria) nunca vai para o cache", r1 !== r2 && r3 !==
 		flownPrint === Cache.townFingerprint(World.generateTown(S)),
 		flownPrint,
 	);
+}
+
+// ================================================================ 1b. a slice per frame (MP-26, UI-10)
+
+section("1b) a cidade do lobby e gerada em fatias, um pedaco por quadro, e a partida a pega sem gerar de novo");
+{
+	const stats = () => Cache.townCacheStats();
+	const renderConns = () => RunService.RenderStepped.conns.length;
+	Fly.releaseFlyover();
+	Cache.takeTown(S); // an empty cache, no job: a match took whatever the menus held
+	const conns0 = renderConns();
+
+	// (a) the cadence: a slice is a few ms of work -- TOWN_SLICE_IDLE_S with nothing on screen (the logo, the menus over
+	// the page colour), TOWN_SLICE_S with a town gliding (the next one generated behind it, MP-22). The generator's clock
+	// here moves 1 ms per call of os.clock, so it must yield about every budget-in-ms pace points -- and the yields never
+	// change the town
+	const cadence = (seed, host) => {
+		const realClock = globalThis.os.clock;
+		let fake = 5000;
+		globalThis.os.clock = () => (fake += 0.001);
+		let paces = 0;
+		const realGen = World.generateTown;
+		World.generateTown = (sd, pace) =>
+			realGen(sd, () => {
+				paces += 1;
+				pace?.();
+			});
+		const y0 = globalThis.coroutine.yields;
+		Cache.requestTown(seed);
+		frame();
+		const yields = globalThis.coroutine.yields - y0;
+		World.generateTown = realGen;
+		globalThis.os.clock = realClock;
+		return { paces, yields, perSlice: paces / Math.max(1, yields), host };
+	};
+	{
+		const idle = cadence(T);
+		const idleMs = Cache.TOWN_SLICE_IDLE_S * 1000;
+		check(
+			`nada na tela: uma fatia = TOWN_SLICE_IDLE_S (${idleMs} ms) de trabalho -- com 1 ms por leitura do relogio, ~${idleMs} pontos por fatia`,
+			idle.yields > 20 && Math.abs(idle.perSlice - idleMs) <= 2,
+			`${idle.paces} pontos de pausa, ${idle.yields} cessoes, ${idle.perSlice.toFixed(1)} pontos por fatia`,
+		);
+		check(
+			"...e a cidade em fatias e a de generateTown, campo a campo",
+			sameTown(Cache.readyTown(T), World.generateTown(T)).length === 0,
+			sameTown(Cache.readyTown(T), World.generateTown(T)).join("; ") || "igual",
+		);
+		// a town gliding on screen (the flyover draws T) while the next one (S) is generated: the smaller slice
+		const flying = Fly.pinFlyover(host, T);
+		frame();
+		const busy = cadence(S);
+		const busyMs = Cache.TOWN_SLICE_S * 1000;
+		check(
+			`com uma cidade deslizando na tela: a fatia menor, TOWN_SLICE_S (${busyMs} ms), para o desenho dela caber no quadro`,
+			flying.drawingTown() && busy.yields > 40 && Math.abs(busy.perSlice - busyMs) <= 1.5,
+			`${busy.paces} pontos de pausa, ${busy.yields} cessoes, ${busy.perSlice.toFixed(1)} pontos por fatia`,
+		);
+		Fly.releaseFlyover();
+		Cache.takeTown(S);
+	}
+
+	// (b) asked for, then ready a frame later: nothing is generated in the call, the frame does it
+	let g1 = gen0();
+	const paced0 = stats().paced;
+	Cache.requestTown(S);
+	check(
+		"pedir a cidade nao gera nada na hora: fica pendente, com um driver no quadro",
+		gen0() === g1 && Cache.pendingTown() === S && Cache.readyTown(S) === undefined && renderConns() === conns0 + 1,
+		`pendente ${Cache.pendingTown()}, ${renderConns() - conns0} conexao(oes)`,
+	);
+	Cache.requestTown(S);
+	check("pedir de novo a mesma nao recomeca nada", Cache.pendingTown() === S && gen0() === g1);
+	frame();
+	const readyS = Cache.readyTown(S);
+	check(
+		"no quadro seguinte ela fica pronta (o Node nao suspende a corrotina: a fatia vai ao fim), e o driver se desliga",
+		readyS !== undefined &&
+			gen0() === g1 + 1 &&
+			stats().paced === paced0 + 1 &&
+			Cache.pendingTown() === undefined &&
+			renderConns() === conns0,
+		`${renderConns() - conns0} conexao(oes) sobrando`,
+	);
+	logged.length = 0;
+	const tookS = Cache.takeTown(S);
+	check(
+		"entrar na cidade: a partida pega ESSA copia, geracao zero",
+		tookS === readyS && gen0() === g1 + 1 && logged.some(l => l.includes("taken from the lobby")),
+		`${gen0() - g1} geracao(oes)`,
+	);
+
+	// (c) the match wants the town before its last slice: it is finished in place, never started over
+	g1 = gen0();
+	const rushed0 = stats().rushed;
+	Cache.requestTown(T);
+	const tookT = Cache.takeTown(T);
+	check(
+		"a partida pede a cidade ainda em fatias: ela e TERMINADA ali (uma geracao so), nao gerada de novo",
+		gen0() === g1 + 1 && stats().rushed === rushed0 + 1 && sameTown(tookT, World.generateTown(T)).length === 0,
+		`${gen0() - g1} geracao(oes), ${stats().rushed - rushed0} terminada(s) na hora`,
+	);
+	check(
+		"...e nada continua sendo gerado atras da partida (nem job, nem driver)",
+		Cache.pendingTown() === undefined && renderConns() === conns0,
+	);
+	g1 = gen0();
+	Cache.requestTown(S);
+	const forS = Cache.townFor(S);
+	check(
+		"townFor (quem nao pode esperar) tambem termina a que esta em fatias, sem gerar outra",
+		gen0() === g1 + 1 && Cache.readyTown(S) === forS && Cache.pendingTown() === undefined,
+	);
+
+	// (d) another seed asked for: the unfinished one is given up; a seed of 0 is never asked for
+	Cache.takeTown(S);
+	abandoned0 = stats().abandoned;
+	Cache.requestTown(S);
+	Cache.requestTown(T);
+	check(
+		"outra semente pedida no meio: a anterior e abandonada, a nova segue",
+		stats().abandoned === abandoned0 + 1 && Cache.pendingTown() === T,
+	);
+	Cache.requestTown(0);
+	check("semente 0 (aleatoria) nunca e pedida em fatias", Cache.pendingTown() === T);
+	Cache.takeTown(S);
+
+	// (e) a generator that throws: one warning, nothing kept, and the menus do not ask for it again every frame
+	{
+		const warned = [];
+		const realWarn = globalThis.warn;
+		globalThis.warn = (...a) => warned.push(a.join(" "));
+		const realGen = World.generateTown;
+		World.generateTown = () => {
+			throw new Error("boom");
+		};
+		Cache.requestTown(99);
+		frame();
+		World.generateTown = realGen;
+		Cache.requestTown(99);
+		const again = Cache.pendingTown();
+		for (let i = 0; i < 5; i++) frame();
+		globalThis.warn = realWarn;
+		check(
+			"um gerador que lanca erro: uma linha [PZ-LOAD], nada no cache, e nenhum pedido de novo a cada quadro",
+			warned.filter(w => w.includes("the lobby's town could not be generated")).length === 1 &&
+				logged.some(l => l.includes("town 99: generation failed")) &&
+				Cache.readyTown(99) === undefined &&
+				again === undefined &&
+				renderConns() === conns0,
+			warned.join(" | "),
+		);
+	}
 }
 
 // ---- source guards: where the towns come from

@@ -1161,8 +1161,8 @@ function textFits(label) {
 		return main.slice(at, end);
 	};
 	check(
-		"main.client.ts: menuScreen() prende o voo da cidade do mundo (netTownSeed) atras da tela, na camada de fundo",
-		/Flyover\.pinFlyover\(ctx\.backdropLayer, netTownSeed\(\)\)/.test(fn("menuScreen")),
+		"main.client.ts: menuScreen() prende o voo da cidade do SERVIDOR (knownTownSeed, MP-26) atras da tela, na camada de fundo",
+		/Flyover\.pinFlyover\(ctx\.backdropLayer, Boot\.knownTownSeed\(\)\)/.test(fn("menuScreen")),
 	);
 	const opens = ["openShop", "openWardrobe", "openSettings", "openCredits", "openTutorial"];
 	const missing = opens.filter(n => !/menuScreen\("/.test(fn(n)));
