@@ -19,6 +19,7 @@ import { flinch } from "../view/solidFlinch";
 import { serverOwnsWorld } from "../net/authority";
 import { itemName } from "./craftSystem";
 import { machineHint } from "./machineHints";
+import { pressed, took } from "./pickups";
 import { fxMessage, GameRefs } from "./types";
 
 /*
@@ -237,7 +238,11 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	if (target.kind === "light") {
 		const s = target.solid;
 		const lamp = s.tags === "lamp" || s.tags === "lamp_drone";
+		// lit or not is the server's word in a server-owned world (LightSet mirrors `powered`, client/net/worldMirror.ts)
 		if (s.powered === true) return lamp ? "E: Turn off" : "E: Put out";
+		// ...but how much wood a fire has left is not on the wire (LightSet carries only on/off, and a fire the server put
+		// out for want of wood looks like one somebody put out): there `fuelOf` is the full fire it was built as, and a
+		// dry fire shows "E: Light" where relighting costs FIRE_WOOD. Needs a wire change (docs/MULTIPLAYER.md §4.5)
 		if (isFire(s) && fuelOf(s) <= 0) return `E: Light (${FIRE_WOOD} ${itemName(4, WOOD_INDEX)})`;
 		return lamp ? "E: Turn on" : "E: Light";
 	}
@@ -275,14 +280,21 @@ export class Interaction {
 	private readonly lootBuf: Array<Solid> = [];
 
 	tryInteract(refs: GameRefs, by: PlayerState = refs.player): void {
-		// F3: the press is already on its way in the command's action edge, and the server picks the target itself;
 		// mounted, E gets off -- and that, like getting on, is the server's (server/sim/vehicles.ts)
-		if (refs.pendingPlace >= 0 || serverOwnsWorld() || by.ride !== undefined) return;
+		if (refs.pendingPlace >= 0 || by.ride !== undefined) return;
 		const target = interactTarget(refs.world, by.x, by.y);
 		if (target === undefined) return;
+		if (serverOwnsWorld()) {
+			// F3: the press is already on its way in the command's action edge, and the server picks the target itself.
+			// What it reached here is remembered, so the server's answer can be told for a pickup (./pickups.ts)
+			if (target.kind === "item") pressed("item", by.x, by.y);
+			else if (target.kind === "search") pressed("loot", by.x, by.y);
+			return;
+		}
 		if (target.kind === "vehicle") return;
 		if (target.kind === "item") {
 			takeItem(refs, target.item);
+			took();
 			return;
 		}
 		if (target.kind === "door") {
@@ -314,6 +326,7 @@ export class Interaction {
 		// Thief: one more slot of this building's table, for this searcher alone (shared/sim/loot.ts)
 		const extra = thiefFind(refs.save, b.buildingType ?? 0);
 		if (extra !== undefined) addItem(refs.save, extra.kind, extra.id, extra.count);
+		if (loot.size() > 0 || extra !== undefined) took();
 		b.lootItems = [];
 		// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
 		b.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;

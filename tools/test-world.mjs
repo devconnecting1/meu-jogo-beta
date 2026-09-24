@@ -484,6 +484,66 @@ section("f2) uma construcao suja exatamente os tiles dela no flow field (§3.3)"
 	checkEq(dirtied.length, 2, "derruba-la tambem avisa");
 }
 
+section("f3) abrir uma porta com E suja o flow field da horda, e o caminho passa a ser por ela (§3.3)");
+{
+	const world = emptyWorld();
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	const sim = new ServerSimulation({ world, clock, zombies: true, interactive: true });
+	// a wall across the whole map, and ONE way through it: the door
+	const wallAt = (x, w) =>
+		W.addSolid(world, {
+			kind: "wall_h",
+			x,
+			y: 1000,
+			w,
+			h: 32,
+			hp: 1000,
+			hpMax: 1000,
+			destructible: false,
+			tags: "bwall",
+			rot: 0,
+		});
+	wallAt(0, 1000);
+	wallAt(1128, world.width - 1128);
+	const door = W.addSolid(world, {
+		kind: "door",
+		x: 1000,
+		y: 1000,
+		w: 128,
+		h: 32,
+		hp: 200,
+		hpMax: 200,
+		destructible: true,
+		tags: "door",
+		rot: 0,
+		open: false,
+		placeable: 11,
+		owner: 0,
+	});
+	const a = addPlayer(sim, 0, 1064, 980);
+	const dirtied = [];
+	const real = sim.horde.refs.onSolidChanged;
+	sim.horde.refs.onSolidChanged = (x, y, w, h) => {
+		dirtied.push({ x, y, w, h });
+		real(x, y, w, h);
+	};
+	run(sim, 90);
+	const field = sim.horde.field;
+	const closed = field.pathCells(1064, 1200);
+	const r0 = field.rebuilds;
+	run(sim, 60);
+	checkEq(field.rebuilds, r0, "com todo mundo parado, o campo nao e reconstruido (nada mudou)");
+	send(a, 1, 0, PRESS_E);
+	run(sim, 1);
+	checkEq(door.open, true, "a porta abriu");
+	checkEq(dirtied.length, 1, "e o flow field foi avisado");
+	checkEq(dirtied[0].x, door.x, "no retangulo da porta");
+	run(sim, 120);
+	check(field.rebuilds > r0, "o campo foi reconstruido", `${field.rebuilds - r0} vez(es)`);
+	const open = field.pathCells(1064, 1200);
+	check(open < closed, "e o caminho pela porta aberta ficou mais barato", `${closed} -> ${open} celulas`);
+}
+
 section("g) os tetos de construcao do §8.1 valem");
 {
 	const world = emptyWorld();

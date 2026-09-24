@@ -195,7 +195,7 @@ export function ItemCard(parent: Instance, name: string, props: ItemCardProps): 
 	// the icon on a small tile of dark iron (the Bag's tile face), as many Frames as any icon needs from the start
 	const iconTile = makeFrame(header, "IconTile", 0, 0, ICON, ICON, THEME.card, { transparency: 1, zIndex: z + 1 });
 	paintPlate(iconTile, SURFACE.section, "flat", 3);
-	const icon = IconView(iconTile, "ItemIcon", 4, 4, ICON - 8, z + 2, maxItemFrames());
+	const icon = IconView(iconTile, "ItemIcon", 4, 4, ICON - 8, z + 2, maxItemFrames(), "drawn");
 	const textX = ICON + space(3);
 	const title = makeLabel(header, "Name", "", textX, 0, innerW - textX, NAME_H, TEXT.lg, THEME.foreground, {
 		font: BOLD,

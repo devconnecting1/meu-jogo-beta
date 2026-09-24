@@ -473,7 +473,7 @@ const DEBUG_SWITCHES: Array<{ kind: OverlayKind; label: string; description: str
 		kind: "stats",
 		label: "Stats card",
 		description: "The frame's numbers in a card",
-		legend: "FPS, zombies, solids in view, sprites, GameGui instances",
+		legend: "FPS, zombies, sprites, GameGui instances · graphics tier, night strips · engine frame, draws, memory",
 	},
 ];
 

@@ -32,6 +32,8 @@ export class BossRoster {
 	readonly list: Array<BossState> = [];
 
 	private readonly ids = new Map<BossState, BossRecord>();
+	/** entries in `ids` (a roblox-ts Map's size() counts the whole map) */
+	private idCount = 0;
 	private readonly free: Array<number> = [];
 	private readonly deaths: Array<BossDeath> = [];
 	private nextId = 1;
@@ -61,13 +63,14 @@ export class BossRoster {
 			if (rec === undefined) {
 				rec = { netId: this.takeId(), x: b.x, y: b.y, type: b.type, tick };
 				this.ids.set(b, rec);
+				this.idCount += 1;
 			} else {
 				rec.x = b.x;
 				rec.y = b.y;
 				rec.tick = tick;
 			}
 		}
-		if (this.ids.size() === this.list.size()) return;
+		if (this.idCount === this.list.size()) return;
 		const gone = new Array<BossState>();
 		for (const [b, rec] of this.ids) {
 			if (rec.tick !== tick) gone.push(b);
@@ -75,6 +78,7 @@ export class BossRoster {
 		for (const b of gone) {
 			const rec = this.ids.get(b) as BossRecord;
 			this.ids.delete(b);
+			this.idCount -= 1;
 			// a boss id comes back into play at once: there are at most MAX_BOSSES and the death is reliable
 			this.free.push(rec.netId);
 			this.deaths.push({ netId: rec.netId, type: rec.type, x: rec.x, y: rec.y });

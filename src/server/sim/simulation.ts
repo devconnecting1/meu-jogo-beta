@@ -56,6 +56,7 @@ import { RideEvent, ServerVehicles, VehicleNoise } from "./vehicles";
 import { WorldClock } from "./waves";
 import { WorldOut } from "./worldOut";
 import { ZombieWorld } from "./zombies";
+import { newPhaseCosts, PhaseCosts, SIM_PHASES, SimPhase, SimProfiler } from "./metrics";
 
 /**
  * MP_PHASE from which the SERVER owns the interactive world too: ground items, loot, doors, lights,
@@ -264,6 +265,16 @@ export class ServerSimulation {
 	 * pure tests want.
 	 */
 	onFx?: (event: FxEvent) => void;
+	/**
+	 * Milliseconds each phase of the LAST tick took (§12.2, server/sim/metrics.ts SIM_PHASES), the horde's own phases
+	 * included. All zero until `instrument` hands the simulation a clock; `takeCosts` averages them over a window.
+	 */
+	readonly cost: PhaseCosts = newPhaseCosts();
+	/**
+	 * The MicroProfiler labels (`PZ.*`), or undefined. Set by `instrument`; the replicator labels its own phases with
+	 * it (server/net/replication.ts).
+	 */
+	profile?: SimProfiler;
 
 	private readonly bySlot = new Map<number, ServerPlayer>();
 	/** slots in ascending order: iteration is deterministic (a Luau Map is not ordered) */
@@ -286,6 +297,11 @@ export class ServerSimulation {
 	private resetBeat = false;
 	private readonly samples = new Array<number>();
 	private sampleAt = 0;
+	/** the clock of the per-phase costs (`instrument`), or undefined: then the tick measures nothing */
+	private nowMs?: () => number;
+	/** the costs summed since the last `takeCosts`, and how many ticks that is */
+	private readonly costSum: PhaseCosts = newPhaseCosts();
+	private costTicks = 0;
 	/** what the boot decided this server owns; a world that ends is rebuilt with the very same answers (MP-22) */
 	private readonly ownsHorde: boolean;
 	private readonly ownsInteractive: boolean;
@@ -390,6 +406,73 @@ export class ServerSimulation {
 		this.combat = systems.combat;
 		this.power = systems.power;
 		this.turrets = systems.turrets;
+		// a new town's horde is measured like the old one was
+		if (this.nowMs !== undefined || this.profile !== undefined) this.instrumentHorde();
+	}
+
+	// ---------------------------------------------------------------- metrics (§12.2, F6)
+
+	/**
+	 * Gives the tick a milliseconds clock for the per-phase costs and a MicroProfiler to label its phases with, down
+	 * into the horde (whose `nowMs` / `profile` this sets, now and for every new town). server/net/mpHost.ts passes
+	 * `os.clock` and `debug.profilebegin` / `profileend`; the pure tests pass nothing and the tick measures nothing.
+	 */
+	instrument(nowMs?: () => number, profile?: SimProfiler): void {
+		this.nowMs = nowMs;
+		this.profile = profile;
+		this.instrumentHorde();
+	}
+
+	private instrumentHorde(): void {
+		const horde = this.horde;
+		if (horde === undefined) return;
+		horde.nowMs = this.nowMs;
+		horde.profile = this.profile;
+	}
+
+	/**
+	 * The average milliseconds per tick of every phase since the previous call, written into `out`, which is
+	 * returned; the window starts over. Returns zeros while nothing was measured. The host publishes it once a second
+	 * next to `pz_tick_p95_ms` (server/net/mpHost.ts).
+	 */
+	takeCosts(out: PhaseCosts): PhaseCosts {
+		const n = this.costTicks;
+		for (const phase of SIM_PHASES) {
+			out[phase] = n > 0 ? this.costSum[phase] / n : 0;
+			this.costSum[phase] = 0;
+		}
+		this.costTicks = 0;
+		return out;
+	}
+
+	/** the time since `t0` goes to `phase`; returns the new reading (0, and nothing measured, without a clock) */
+	private lap(phase: SimPhase, t0: number): number {
+		const now = this.nowMs;
+		if (now === undefined) return 0;
+		const t1 = now();
+		this.cost[phase] = t1 - t0;
+		this.costSum[phase] += t1 - t0;
+		return t1;
+	}
+
+	/** the horde measured its own phases with the same clock: they stand in for its one entry */
+	private lapHorde(horde: ZombieWorld): number {
+		const now = this.nowMs;
+		if (now === undefined) return 0;
+		const c = horde.cost;
+		this.cost.clock = c.clock;
+		this.cost.population = c.population;
+		this.cost.field = c.field;
+		this.cost.zombies = c.zombies;
+		this.cost.bosses = c.bosses;
+		this.cost.book = c.book;
+		this.costSum.clock += c.clock;
+		this.costSum.population += c.population;
+		this.costSum.field += c.field;
+		this.costSum.zombies += c.zombies;
+		this.costSum.bosses += c.bosses;
+		this.costSum.book += c.book;
+		return now();
 	}
 
 	/**
@@ -446,6 +529,8 @@ export class ServerSimulation {
 				out: this.worldOut,
 				fx: event => this.onFx?.(event),
 				machines: power,
+				// a door is a way in or a wall to the horde (§3.3), exactly like a construction going up or down
+				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -744,7 +829,16 @@ export class ServerSimulation {
 		return this.bySlot.get(slot);
 	}
 
-	/** every survivor in the world, always in ascending slot order */
+	/**
+	 * The same survivors as `players()`, in the same order, WITHOUT the copy: the simulation's own roster. For the
+	 * loops that run every tick and cannot see anybody join or leave while they run (the replication's: a join or a
+	 * leave happens between two ticks, and rebuilds this array in place). Never keep it, never write it.
+	 */
+	survivors(): ReadonlyArray<ServerPlayer> {
+		return this.roster;
+	}
+
+	/** every survivor in the world, always in ascending slot order (a copy: see `survivors` for the per-tick loops) */
 	players(): Array<ServerPlayer> {
 		const out = new Array<ServerPlayer>();
 		for (const slot of this.order) {
@@ -856,9 +950,14 @@ export class ServerSimulation {
 	 * §7.3's downed crawl at 20 % is F4's, and will gate the command there, in the same one place.
 	 */
 	step(): void {
+		const prof = this.profile;
+		prof?.begin("PZ.step");
+		const now = this.nowMs;
+		let t0 = now !== undefined ? now() : 0;
 		this.tick += 1;
 		this.stats.ticks += 1;
 		this.dayTicks += 1;
+		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
 			this.adminMods?.(sp);
@@ -868,7 +967,9 @@ export class ServerSimulation {
 			// a skill) and its weapon machine (a switch) already see them, exactly as the client predicted them
 			this.backpack.beforeCommand(sp, cmd, this.tick);
 			const rode = sp.state.ride !== undefined;
+			// one shared table (shared/sim/playerMove.ts): what is read after other systems ran is copied first
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
+			const died = res.died;
 			// VEI-05: what the ride cost or caused this step (a crash, a zombie ahead, fuel, noise), on the same command
 			this.vehicles?.afterStep(sp, res, this.horde?.zombies ?? EMPTY_ZOMBIES, this.tickDt);
 			noteStep(sp, cmd, res.walking);
@@ -890,29 +991,53 @@ export class ServerSimulation {
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
 			this.stepWorldActions(sp, cmd);
-			if (res.died && this.onDeath !== undefined) this.onDeath(sp);
+			if (died && this.onDeath !== undefined) this.onDeath(sp);
 		}
+		prof?.end();
+		t0 = this.lap("players", t0);
 		// the horde walks in the SAME tick as the survivors: one world, one clock, one set of positions
-		if (this.horde !== undefined) {
+		const horde = this.horde;
+		if (horde !== undefined) {
 			if (this.roster.size() > 0) {
-				this.horde.step(this.roster, this.tickDt, this.tick);
+				prof?.begin("PZ.horde");
+				horde.step(this.roster, this.tickDt, this.tick);
+				prof?.end();
+				t0 = this.lapHorde(horde);
 				// after the bodies moved, so a flame burns what is in front of it NOW and not a tick ago
-				this.projectiles?.step(this.horde.refs, this.tickDt);
+				prof?.begin("PZ.projectiles");
+				this.projectiles?.step(horde.refs, this.tickDt);
+				prof?.end();
+				t0 = this.lap("projectiles", t0);
 				// §3.1 "torretas e armadilhas": after the projectiles, at the zombies where they stand now
+				prof?.begin("PZ.turrets");
 				this.turrets?.step(this.tick, this.tickDt);
+				prof?.end();
+				t0 = this.lap("turrets", t0);
 			} else {
 				// nobody is in the world: there is no source for the flow field, no light, nothing to hunt
 				// and nobody to see it. The clock keeps running (a server that empties at dusk must still be
 				// dark when somebody joins, §4.6) and everything else stands still, which also means an
 				// empty server costs nothing.
 				this.clock.step(this.tickDt);
+				t0 = this.lap("clock", t0);
 			}
 		}
+		prof?.begin("PZ.world");
 		this.stepInteractiveWorld();
+		prof?.end();
+		t0 = this.lap("world", t0);
 		// §3.1 step 3, and it MUST be here: the history a shot rewinds into is the world as it ended this
 		// tick, so recording it before the horde moved would compensate latency against stale positions
+		prof?.begin("PZ.combat");
 		this.combat?.afterWorld(this.tick);
+		prof?.end();
+		t0 = this.lap("combat", t0);
+		prof?.begin("PZ.replication");
 		if (this.onTick !== undefined) this.onTick(this.tick);
+		prof?.end();
+		this.lap("replication", t0);
+		if (now !== undefined) this.costTicks += 1;
+		prof?.end();
 	}
 
 	// ---------------------------------------------------------------- the interactive world (F3)

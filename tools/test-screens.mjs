@@ -778,6 +778,7 @@ function textFits(label) {
 		"Bgm",
 		"UiSize",
 		"Motion",
+		"Graphics",
 		"Defaults",
 		"LeftSize",
 		"LeftPos",

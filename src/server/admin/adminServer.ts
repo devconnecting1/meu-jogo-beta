@@ -21,6 +21,7 @@ import {
 	ServerInfo,
 } from "shared/admin/protocol";
 import { ADMIN_LOG_STORE } from "../save/stores";
+import { activeMpHost } from "../net/mpHost";
 import {
 	appendAudit,
 	auditDayPrefix,
@@ -35,7 +36,6 @@ import {
 	trimAudit,
 } from "./auditLog";
 import { startAdminWorld } from "./adminWorld";
-import { activeMpHost } from "../net/mpHost";
 
 /*
  * Server side of the admin panel.
@@ -834,6 +834,8 @@ export function startAdminServer(host: AdminHost): AdminServer {
 				maxPlayers: Players.MaxPlayers,
 				dataStore: host.dataStoreStatus(),
 				auditStore: auditWriteError ?? auditStatus,
+				// §12.2: the tick's cost as the host last published it (undefined with no simulation, MP_PHASE = 0)
+				sim: activeMpHost()?.metrics(),
 			};
 			return { ok: true, data: info };
 		}

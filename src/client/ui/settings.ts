@@ -8,6 +8,7 @@ import { GAME_BUILD, GAME_VERSION } from "shared/version";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
 import { requestSave } from "../systems/saveClient";
+import { GRAPHICS_OPTIONS } from "../view/quality";
 import { COMPACT_LAYOUT, placeTouchConsole } from "./hudConsole";
 import { popup } from "./popup";
 import { RADIUS, SURFACE, TEXT, THEME, TRANSPARENCY, space } from "./theme";
@@ -15,9 +16,11 @@ import { SCHEMES, currentScheme } from "./tutorial";
 import {
 	Button,
 	ScrollList,
+	Segmented,
 	Slider,
 	SliderHandle,
 	Tabs,
+	TabsHandle,
 	autoFocus,
 	cardHeaderHeight,
 	centredRect,
@@ -41,6 +44,7 @@ import {
 	Section,
 	Groove,
 	SettingAction,
+	SettingNote,
 	SettingRow,
 	SettingRowHandle,
 	SettingRowOpts,
@@ -100,6 +104,8 @@ const KEY_ROW_H = 34;
 const DEVICE_NOTE_H = 72;
 /** a slider row: the slider, then its value as a key at the right of the cell */
 const VALUE_KEY_W = 72;
+/** Graphics: the Segmented's plates (Auto, High, Low) and its height (the Switch's) */
+const GRAPHICS_SEG_W = 96;
 
 /** `n` form rows */
 function formRows(n: number): Array<number> {
@@ -108,16 +114,18 @@ function formRows(n: number): Array<number> {
 	return out;
 }
 
-/** General: Audio (SFX, BGM) and Interface (HUD size, Reduce motion, Defaults) */
+/** General: Audio (SFX, BGM) and Interface (HUD size, Reduce motion, Graphics, Defaults) */
 const AUDIO_LIST_H = settingsListHeight(formRows(2));
-const INTERFACE_LIST_H = settingsListHeight(formRows(3));
+const INTERFACE_LIST_H = settingsListHeight(formRows(4));
 const GENERAL_H = sectionHeight(AUDIO_LIST_H) + SECTION_GAP + sectionHeight(INTERFACE_LIST_H);
-/** Touch controls: six settings and Defaults, in one section beside the preview */
-const TOUCH_H = sectionHeight(settingsListHeight(formRows(7)));
+/** Touch controls: six settings, Defaults and the note under them (when the controls show), beside the preview */
+const TOUCH_NOTE_H = 40;
+const TOUCH_H = sectionHeight(settingsListHeight([...formRows(7), TOUCH_NOTE_H]));
 /**
  * The window is ONE fixed size for every tab (UI-07: it does not jump when a tab changes), that of the TALLEST page
- * -- General and Touch controls are within a few units of each other, so neither leaves a band of empty window
- * under its sections; Controls fills it with its key list, and About is a short list of facts.
+ * -- General (with its Graphics row) and Touch controls (with its note) are within a few units of each other, so
+ * neither leaves a band of empty window under its sections; Controls fills it with its key list, and About is a
+ * short list of facts.
  */
 const PAGE_H = math.max(GENERAL_H, TOUCH_H);
 /** where the pages start: under the header and the tab bar */
@@ -132,7 +140,7 @@ function pct(v: number): string {
 
 /** what the "?" of the window explains: what each tab is for, one line each ("#" = new line, see nl) */
 const HELP_TEXT = [
-	"General: how loud the sounds and the music are, and how big the panels of a run are.",
+	"General: how loud the sounds and the music are, how big the panels of a run are, and the graphics (Auto goes Low when the game runs slow).",
 	"Touch controls: size, height and side of the phone controls, with a preview of your screen.",
 	"Controls: every key and button the game listens to, on each device.",
 	"About: the game and its credits.",
@@ -392,17 +400,41 @@ export function showSettings(
 		);
 		const motionKey = ValueKey(motion.value, "Value", "", { x: SETTING_CONTROL_X, anchorX: 0, minW: VALUE_KEY_W });
 		onLayoutChange(motionKey, () => setValueKey(motionKey, tr(reducedMotion() ? "On" : "Off")));
+		// the client's quality tier (client/view/quality.ts): Auto follows this device's frame time, High and Low are
+		// fixed; Low draws a coarser night light and half the blood and debris (never what reads the game, LEG-03)
+		const graphics = SettingRow(
+			uiList,
+			"Graphics",
+			2,
+			tr("Graphics"),
+			form("Low: simpler night, fewer particles."),
+		);
+		const graphicsSeg: TabsHandle = Segmented(graphics.value, "Graphics", {
+			x: SETTING_CONTROL_X,
+			y: (ROW_H - SWITCH_H) / 2,
+			w: GRAPHICS_SEG_W * GRAPHICS_OPTIONS.size() + 6,
+			h: SWITCH_H,
+			items: GRAPHICS_OPTIONS.map(o => tr(o)),
+			value: s.graphics,
+			zIndex: graphics.value.ZIndex + 1,
+			onChange: (i: number): void => {
+				s.graphics = i;
+				persist();
+			},
+		});
+		generalRefreshers.push(() => graphicsSeg.setActive(s.graphics));
 		defaultsRow(
 			uiList,
-			2,
+			3,
 			GENERAL_LABEL_W,
-			"SFX, BGM and HUD size back to 50%.",
-			"SFX, BGM and HUD size go back to 50%.",
+			"SFX, BGM, HUD size to 50%, graphics Auto.",
+			"SFX, BGM and HUD size go back to 50%, and Graphics to Auto.",
 			(): void => {
 				const d = defaultSettings();
 				s.soundEffect = d.soundEffect;
 				s.bgm = d.bgm;
 				s.uiSize = d.uiSize;
+				s.graphics = d.graphics;
 				for (const fn of generalRefreshers) fn();
 				refreshPreview?.();
 				persist();
@@ -520,6 +552,14 @@ export function showSettings(
 				for (const fn of touchRefreshers) fn();
 				applyTouch();
 			},
+		);
+		// when these controls are there at all (client/ui/device.ts PreferredInput), and what the preview is
+		SettingNote(
+			list,
+			"Note",
+			7,
+			tr("They show when you play by touch. The preview is this screen, with the controls where they will sit."),
+			TOUCH_NOTE_H,
 		);
 		const previewX = LIST_X + TOUCH_LIST_W + space(4);
 		refreshPreview = buildPreview(ctx, tr, page, previewX, listY, SECTION_W - previewX - LIST_X, fullListH);

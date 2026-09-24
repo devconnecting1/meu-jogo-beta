@@ -16,7 +16,8 @@
  *
  *   1. THE MENU        no ticker and no survivor column; START (steel blue, bigger) then Shop, Wardrobe,
  *                      Achievements, Records, How to play, Settings and Credits (iron), each with a pixel icon and a
- *                      subtitle only where it says something; the stage draws the survivor; nothing counts bosses.
+ *                      subtitle only where it says something; the stage draws the survivor (from the uploaded
+ *                      characters' sheets, and flat without them); nothing counts bosses.
  *   2. THE SURVIVOR    START opens it; the texts of the three states the owner named -- a fresh save (Enter the city
  *      SCREEN          · Day 1), a run in memory (Continue · Day N), a run over (Rebirth · price + New game, in the
  *                      window, no popup) -- plus the new life waiting for first light; the first-run tutorial prompt;
@@ -643,7 +644,25 @@ const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
 const { darkAlphaAt, secondsUntilHour } = require(join(SRC, "shared/sim/clock.ts"));
 const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
 const { MAX_PLAYERS } = require(join(SRC, "shared/net/mpConfig.ts"));
+const WA = require(join(SRC, "client/view/worldArt.ts"));
+const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+const { survivorArtLive } = require(join(SRC, "client/view/charArt.ts"));
+const { SURVIVOR_CELL, SURVIVOR_ROWS_EACH } = require(join(SRC, "client/view/charSheets.ts"));
 flush();
+
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/**
+ * The uploads as they are, with the characters' sheets on -- their uploaded ids, a stand-in for one not uploaded
+ * yet -- or off (the flat drawing of before, ART-01)
+ */
+function setCharacterArt(on) {
+	const ids = {};
+	for (const [name, t] of Object.entries(WORLD_ART)) {
+		ids[name] = !isCharacterSheet(name) ? t.id : on ? t.id || `local:${name}` : "";
+	}
+	WA.overrideWorldArt(ids);
+}
 
 // ---------------------------------------------------------------- the player, the game's callbacks, the screen
 
@@ -875,10 +894,36 @@ check(
 	nav.map(b => subOf(b) ?? "-").join(" | "),
 );
 check("START de um save novo nao tem subtitulo", !shown(start.FindFirstChild("Sub")));
-frame();
-const stageSprites = () =>
-	(deep(deep(menuPage(), "Stage"), "Sprites")?.GetChildren() ?? []).filter(f => f.Visible).length;
-check("o palco desenha o sobrevivente (SurvivorPreview)", stageSprites() > 5, `${stageSprites()} sprites`);
+// the stage's survivor (SurvivorPreview), both ways the world draws one: from the characters' sheets (ART-09: the
+// body's cell of the outfit worn -- none, so the plain rows of survivorsA -- and the dagger's cell), and without them
+// (ART-01: the flat drawing of before, feet, torso, hands, head and the blade, more than 5 Frames)
+const stageSprites = () => (deep(deep(menuPage(), "Stage"), "Sprites")?.GetChildren() ?? []).filter(f => f.Visible);
+const stageCells = () =>
+	stageSprites()
+		.map(f => f.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible))
+		.filter(im => im !== undefined);
+{
+	setCharacterArt(true);
+	frame();
+	const cells = stageCells();
+	const body = cells.find(im => im.Image === WA.artId("survivorsA"));
+	const row = body === undefined ? -1 : (body.ImageRectOffset?.Y ?? 0) / SURVIVOR_CELL;
+	const weapon = cells.find(im => im.Image === WA.artId("weapons"));
+	check(
+		"o palco desenha o sobrevivente (SurvivorPreview) com a pixel art enviada: o corpo do traje vestido e a arma",
+		survivorArtLive() && body !== undefined && row >= 0 && row < SURVIVOR_ROWS_EACH && weapon !== undefined,
+		`${stageSprites().length} sprites; corpo ${body?.Image ?? "-"} linha ${row}; arma ${weapon?.Image ?? "-"}`,
+	);
+	setCharacterArt(false);
+	frame();
+	check(
+		"...e sem as folhas dos personagens, o desenho liso de antes",
+		!survivorArtLive() && stageCells().length === 0 && stageSprites().length > 5,
+		`${stageSprites().length} sprites`,
+	);
+	WA.overrideWorldArt(undefined);
+	frame();
+}
 const townCell = i => deep(deep(menuPage(), "Town"), `Cell${i}`);
 check(
 	"offline, a cidade e a sua: Day 1, Solo; sem cidade caida, duas celulas",

@@ -1,3 +1,4 @@
+//!native
 import { angleDiff } from "shared/engine/vec2";
 import { isBlocking, Solid } from "shared/game/world";
 import * as Light from "shared/sim/survivorLight";

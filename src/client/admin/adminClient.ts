@@ -6,6 +6,7 @@ import type { GameLoop } from "../gameLoop";
 import { InputDevice, inputDevice, onInputDeviceChanged } from "../ui/device";
 import { TEXT, THEME, space } from "../ui/theme";
 import { Button, Card, ToastKind, makeAnchored, makeLabel, showToast } from "../ui/widgets";
+import { qualityReadout } from "../view/quality";
 import { adminRequest, adminRequestAsync, logLocal, onAdminEvent, startAdminNet } from "./net";
 import { AdminPanel } from "./panel";
 import { PanelCtx, SectionId } from "./panelTypes";
@@ -28,6 +29,7 @@ import { AdminWorldHost } from "./serverWorld";
 
 const Players = game.GetService("Players");
 const RunService = game.GetService("RunService");
+const Stats = game.GetService("Stats");
 const UserInputService = game.GetService("UserInputService");
 
 const PANEL_KEYS = new Set<Enum.KeyCode>([Enum.KeyCode.F2, Enum.KeyCode.Backquote]);
@@ -43,6 +45,21 @@ const STATS_REFRESH = 0.25;
 const FREECAM_SPEED = 900;
 /** a frame not rendered for this long means the game screen is gone: hide the overlays */
 const RENDER_STALE = 0.25;
+
+/**
+ * The engine's own counters (the Stats service), what no Node test can measure: the frame, the render thread's CPU
+ * and GPU time as the engine reports them, the 2D draw calls and triangles, Instances and memory
+ * (docs/research/performance.md, the Studio checklist). pcall: a counter a platform does not offer never breaks the card.
+ */
+function engineLines(): Array<string> {
+	const [ok, lines] = pcall((): Array<string> => [
+		`frame        ${math.floor(Stats.FrameTime * 10000 + 0.5) / 10} ms`,
+		`render       cpu ${string.format("%.3g", Stats.RenderCPUFrameTime)} gpu ${string.format("%.3g", Stats.RenderGPUFrameTime)}`,
+		`ui2d         ${Stats.UI2DDrawcallCount} draws ${Stats.UI2DTriangleCount} tris`,
+		`instances    ${Stats.InstanceCount}  ${math.floor(Stats.GetTotalMemoryUsageMb())} MB`,
+	]);
+	return ok ? lines : ["engine stats unavailable"];
+}
 
 export interface AdminDeps {
 	ctx: GameContext;
@@ -215,8 +232,8 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	if (deviceConn !== undefined) conns.push(deviceConn);
 
 	// stats card (Debug → Stats card), right-middle
-	const statsW = 240;
-	const statsH = 168;
+	const statsW = 300;
+	const statsH = 272;
 	const statsBox = makeAnchored(gui, "AdminStats", 1, 0.5, statsW, statsH, 14, 0, false);
 	statsBox.Visible = false;
 	const statsCard = Card(statsBox, "Card", { x: 0, y: 0, w: statsW, h: statsH, variant: "hud", pad: space(3) });
@@ -329,7 +346,9 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 				statsAt = now;
 				if (inGame) {
 					const s = world.stats();
-					statsText.Text = [
+					// the night's light map and the quality tier (client/view/quality.ts) of this client
+					const light = loop.lightStats();
+					const lines = [
 						`FPS          ${math.floor(s.fps + 0.5)}`,
 						`zombies      ${s.zombies}  bosses ${s.bosses}`,
 						`items        ${s.items}  bullets ${s.bullets}`,
@@ -337,7 +356,13 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 						`sprites      ${s.sprites}`,
 						`GameGui inst ${s.guiInstances}`,
 						`zoom         ${string.format("%.2f", world.zoom())}${world.freeCam() ? " (free)" : ""}`,
-					].join("\n");
+						`graphics     ${qualityReadout(ctx.save.settings.graphics)}`,
+						light === undefined
+							? "night        -"
+							: `night        ${light.gradients}/${light.strips} grad ${light.gradientWrites} w ${light.deferred} held`,
+					];
+					for (const line of engineLines()) lines.push(line);
+					statsText.Text = lines.join("\n");
 				} else {
 					statsText.Text = "No run on screen.";
 				}
