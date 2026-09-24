@@ -2,7 +2,7 @@ import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN } from "shared/engine/constants";
-import { LightMap, LightSource, Renderer } from "shared/engine/renderer";
+import { LightMap, LightMapStats, LightSource, Renderer } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
 import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
@@ -73,6 +73,7 @@ import { WorldView } from "./view/worldView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
+import * as Quality from "./view/quality";
 import { reducedMotion } from "./ui/skin";
 
 const Players = game.GetService("Players");
@@ -587,7 +588,10 @@ export class GameLoop {
 		p.noclip = this.admin.noclip;
 		const fromX = p.x;
 		const fromY = p.y;
+		// the session's frame: snapshots in, prediction, reconciliation, commands out (MicroProfiler label)
+		debug.profilebegin("pz.net");
 		netUpdate(this.refs, dt);
+		debug.profileend();
 		const dx = p.x - fromX;
 		const dy = p.y - fromY;
 		const moved = math.sqrt(dx * dx + dy * dy);
@@ -638,6 +642,8 @@ export class GameLoop {
 		const input = ctx.input;
 		this.clock += dt;
 		this.lastDt = dt;
+		// the quality tier (client/view/quality.ts): the Graphics setting, or in Auto this client's own frame time
+		this.particles.lowDetail = Quality.qualityFrame(dt, ctx.save.settings.graphics);
 		const acting = !input.held && !p.dead;
 		if (acting) {
 			const handled = this.build.handleInput(refs, input);
@@ -657,7 +663,12 @@ export class GameLoop {
 		// just interpolated them for this frame's render time, and the mirror writes them into the very
 		// arrays the rest of the client already reads — canopies, audio, stuck arrows, the admin overlay.
 		const mirrored = SERVER_ACTORS && netActive();
-		if (mirrored) this.actors.sync(refs, dt, this.onZombieDeath);
+		if (mirrored) {
+			// the snapshot's horde and bosses written into the client's arrays (MicroProfiler label)
+			debug.profilebegin("pz.mirror");
+			this.actors.sync(refs, dt, this.onZombieDeath);
+			debug.profileend();
+		}
 		this.foot.advance(this.walkPhase, this.walkAmp, p.x, p.y, true);
 		this.fxView.decayTracers(dt);
 		// aim from the survivor's NEW position every frame, not only when the mouse moves -- unless they are held:
@@ -933,6 +944,8 @@ export class GameLoop {
 		this.playFx(ctx);
 		const renderer = ctx.renderer;
 		const cam = ctx.cam;
+		// MicroProfiler labels (docs/research/performance.md): the sprite pool's frame, then the night's light map
+		debug.profilebegin("pz.world");
 		renderer.beginFrame();
 		const view = cam.viewRect(32);
 		this.updateShadowDir();
@@ -967,7 +980,10 @@ export class GameLoop {
 		this.drawParticles(renderer, cam, view);
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
+		debug.profileend();
+		debug.profilebegin("pz.light");
 		this.drawLight(cam, view, allies);
+		debug.profileend();
 		this.drawAwareness(cam, view, allies);
 		this.drawNameplate(cam);
 		this.drawAllyPlates(cam, view, allies);
@@ -1067,6 +1083,7 @@ export class GameLoop {
 		}
 		// night vision (E2): the wearer's own screen sees the night lifted and green; the lit circle is the rule's
 		const save = ctx.save;
+		this.lightMap.setLowDetail(Quality.lowDetail(save.settings.graphics));
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
 		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
@@ -1137,6 +1154,11 @@ export class GameLoop {
 
 	getRefs(): GameRefs {
 		return this.refs;
+	}
+
+	/** what the night's light map did on its last frame (the admin panel's stats card); undefined before any night */
+	lightStats(): LightMapStats | undefined {
+		return this.lightMap?.stats;
 	}
 
 	/** admin panel "clear blood": particles and decals are view state, so the view clears them */

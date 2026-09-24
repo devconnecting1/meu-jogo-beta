@@ -785,10 +785,27 @@ const NO_CONE = -2;
 /** transparency is quantised so a strip is only rewritten when its light visibly changes */
 const LIGHT_STEPS = 64;
 /**
- * Height of one light-map strip (screen px). Along a strip the light is interpolated between its
- * gradient keys; across strips it steps by at most ~0.05 opacity at the steepest part of a falloff.
+ * Height of one light-map strip (screen px) on the high tier. Along a strip the light is interpolated between its
+ * gradient keys; across strips it steps by at most ~0.05 opacity at the steepest part of a falloff (0.07 at 8 px).
  */
 const STRIP_H = 6;
+/** ...on a view at least TALL_VIEW_H px high (1080p: 135 strips instead of 180, each step ~0.02 opacity more) */
+const STRIP_H_TALL = 8;
+/** ...on the low tier (client/view/quality.ts): a coarser night for a weak or throttled phone */
+const STRIP_H_LOW = 10;
+const STRIP_H_LOW_TALL = 12;
+const TALL_VIEW_H = 900;
+/**
+ * The low tier's cap on gradient rewrites per frame (the strips that allocate a NumberSequence and redo a GuiEffect),
+ * taken round-robin: past it, a strip that drifted only a little (LOW_FORCE_EPS) waits for a later frame -- a lamp
+ * the camera walks past lags a frame or two on some rows, invisible under the smoothstep falloff. A uniform strip
+ * is never capped: it is one BackgroundTransparency and no allocation (tools/test-light.mjs).
+ */
+const LOW_REWRITES = 16;
+/** memoised gradients kept at most (then the memo starts over): a fire's flicker and a muzzle flash repeat theirs */
+const SEQ_MEMO_MAX = 512;
+/** the hash of a gradient's keys (a prime under 2^32: every product below stays exact in a double) */
+const SEQ_HASH_MOD = 4294967291;
 /**
  * Spacing of the light samples (screen px). The light is sampled on this grid and interpolated
  * bilinearly: vertically when a strip is built, horizontally by its gradient. At 32 px the error is
@@ -806,8 +823,45 @@ const KEY_EPS = 0.25 / LIGHT_STEPS;
  * never drifts further than this from the computed light.
  */
 const WRITE_EPS = 2 / LIGHT_STEPS;
+/**
+ * The low tier's cap only holds back a strip within this of what it shows (4 steps, ≈ 0.06 opacity: about one
+ * strip's own step across a falloff); a bigger change is drawn at once, so the night never shows a seam.
+ */
+const LOW_FORCE_EPS = 4 / LIGHT_STEPS;
 /** a light that moved or resized less than this (screen px) since it was sampled keeps its samples */
 const MOVE_EPS = 0.35;
+
+/**
+ * Light-map strip height (screen px) for a view `viewH` px high on the high or the low tier: the strips are what
+ * the night costs (one Frame each, a GuiEffect while it carries a gradient), so a tall view and the low tier get
+ * fewer, taller ones.
+ */
+export function lightStripHeight(viewH: number, low: boolean): number {
+	const tall = viewH >= TALL_VIEW_H;
+	if (low) return tall ? STRIP_H_LOW_TALL : STRIP_H_LOW;
+	return tall ? STRIP_H_TALL : STRIP_H;
+}
+
+/** what the last `LightMap.update` did (the admin panel's stats card, tools/test-light.mjs) */
+export interface LightMapStats {
+	/** strips on screen, and how many of them carry a gradient (the rest are one flat colour: no GuiEffect) */
+	strips: number;
+	gradients: number;
+	/** gradient rewrites this frame (each one a NumberSequence), flat rewrites (one property, nothing allocated) */
+	gradientWrites: number;
+	flatWrites: number;
+	/** strips left for a later frame by the low tier's cap */
+	deferred: number;
+	/** NumberSequences and keypoints allocated this frame (the memo answers the rest) */
+	newSequences: number;
+	newKeypoints: number;
+}
+
+/** a memoised gradient: the key ids it was built from (column × (LIGHT_STEPS + 1) + step) and the sequence */
+interface SeqMemo {
+	ids: Array<number>;
+	seq: NumberSequence;
+}
 
 /** smoothstep falloff: 1 inside the lit core (r0), 0 at the radius */
 function falloff(d: number, r0: number, r: number): number {
@@ -864,18 +918,49 @@ export function lightAt(lights: ReadonlyArray<LightSource>, x: number, y: number
  *
  * Cost control: only sample rows reached by a light that changed since they were sampled are
  * resampled, and only the strips over them rebuilt (a still camera costs nothing); a rebuilt strip is
- * only rewritten when it would visibly differ from what it shows (WRITE_EPS).
+ * only rewritten when it would visibly differ from what it shows (WRITE_EPS). A strip no light reaches
+ * (or one inside a light's core) is ONE colour: it shows it as its BackgroundTransparency with the
+ * gradient switched off -- no GuiEffect to draw, nothing allocated -- until a light reaches it again.
+ * The gradients themselves are memoised: keypoints by (column, quantised value), whole sequences by
+ * their keys, so a fire's flicker or a muzzle flash reuses what it showed before. The strip height
+ * follows the view's height and the tier (`lightStripHeight`); the low tier also caps the gradient
+ * rewrites per frame (LOW_REWRITES).
  */
 export class LightMap {
 	readonly layer: Frame;
+	/** what the last update did (see LightMapStats), rewritten in place */
+	readonly stats: LightMapStats = {
+		strips: 0,
+		gradients: 0,
+		gradientWrites: 0,
+		flatWrites: 0,
+		deferred: 0,
+		newSequences: 0,
+		newKeypoints: 0,
+	};
 	private strips: Array<Frame> = [];
 	private grads: Array<UIGradient> = [];
 	/** keys last written to each strip: x (screen px) and transparency */
 	private lastX: Array<Array<number>> = [];
 	private lastT: Array<Array<number>> = [];
+	/** the strip shows one colour (gradient off), and the BackgroundTransparency it was given (0 under a gradient) */
+	private flat: Array<boolean> = [];
+	private flatT: Array<number> = [];
+	/** a strip the low tier's cap left for a later frame: rebuilt every frame until it is written */
+	private pending: Array<boolean> = [];
+	/** where the next frame's strips start (round-robin under the cap) */
+	private cursor = 0;
 	private rows = 0;
 	private builtW = 0;
 	private builtH = 0;
+	private stripH = STRIP_H;
+	private builtStripH = 0;
+	/** the low tier (client/view/quality.ts): taller strips and a cap on the rewrites */
+	private low = false;
+	/** a fixed strip height instead of `lightStripHeight` (tools: the look of another height, side by side) */
+	private readonly fixedStripH?: number;
+	/** this frame writes every strip it has to, cap or not: the first after a relayout or after being hidden */
+	private fullFrame = true;
 	private shown = false;
 	private color: Color3;
 	/** sample lattice: column x / row y positions (px, the last ones on the view's edge) */
@@ -910,12 +995,20 @@ export class LightMap {
 	private pco: Array<number> = [];
 	private pn = -1;
 	private pDark = -1;
-	/** keys of the strip being built: x and transparency */
+	/** keys of the strip being built: x, transparency, and the column and quantised step they come from */
 	private kx: Array<number> = [];
 	private kt: Array<number> = [];
+	private kc: Array<number> = [];
+	private ks: Array<number> = [];
+	/** keypoints by column × (LIGHT_STEPS + 1) + step, and gradients by the hash of their keys (for this width) */
+	private keyMemo = new Map<number, NumberSequenceKeypoint>();
+	private seqMemo = new Map<number, SeqMemo>();
+	private seqMemoSize = 0;
 
-	constructor(parent: GuiObject, color: Color3) {
+	/** @param stripH a fixed strip height (px) instead of the tier's (tools only: comparing two heights) */
+	constructor(parent: GuiObject, color: Color3, stripH?: number) {
 		this.color = color;
+		this.fixedStripH = stripH;
 		this.layer = new Instance("Frame");
 		this.layer.Name = "LightMap";
 		this.layer.Size = UDim2.fromScale(1, 1);
@@ -925,12 +1018,31 @@ export class LightMap {
 		this.layer.Parent = parent;
 	}
 
-	/** (re)build the strips and the sample lattice when the viewport size changes */
+	/**
+	 * The tier (client/view/quality.ts): the low one draws taller strips and caps the gradient rewrites per frame.
+	 * Changing it lays the strips out again on the next update (no Instance once both layouts have been seen).
+	 */
+	setLowDetail(low: boolean): void {
+		this.low = low;
+	}
+
+	/** (re)build the strips and the sample lattice when the viewport size or the strip height changes */
 	private ensureGrid(viewW: number, viewH: number): void {
-		if (viewW === this.builtW && viewH === this.builtH) return;
+		const stripH = this.fixedStripH ?? lightStripHeight(viewH, this.low);
+		if (viewW === this.builtW && viewH === this.builtH && stripH === this.builtStripH) return;
+		if (viewW !== this.builtW) {
+			// a key's time is its column's x over the width: every memoised key and gradient belongs to the old width
+			this.keyMemo.clear();
+			this.seqMemo.clear();
+			this.seqMemoSize = 0;
+		}
 		this.builtW = viewW;
 		this.builtH = viewH;
-		this.rows = math.ceil(viewH / STRIP_H);
+		this.builtStripH = stripH;
+		this.stripH = stripH;
+		this.rows = math.ceil(viewH / stripH);
+		this.cursor = 0;
+		this.fullFrame = true;
 		this.sx.clear();
 		this.sy.clear();
 		for (let x = 0; x < viewW; x += GRID) this.sx.push(x);
@@ -946,30 +1058,37 @@ export class LightMap {
 		this.pn = -1;
 		this.pDark = -1;
 		while (this.strips.size() < this.rows) {
+			// born flat and clear: the first update writes what it has to show
 			const f = new Instance("Frame");
 			f.Name = "L";
 			f.BorderSizePixel = 0;
 			f.BackgroundColor3 = this.color;
-			f.BackgroundTransparency = 0;
+			f.BackgroundTransparency = 1;
 			const g = new Instance("UIGradient");
+			g.Enabled = false;
 			g.Parent = f;
 			f.Parent = this.layer;
 			this.strips.push(f);
 			this.grads.push(g);
 			this.lastX.push([]);
 			this.lastT.push([]);
+			this.flat.push(true);
+			this.flatT.push(1);
+			this.pending.push(false);
 		}
 		for (let i = 0; i < this.strips.size(); i++) {
 			const f = this.strips[i];
-			// key times are fractions of the width: a new width invalidates every strip
+			// key times are fractions of the width, and a strip moved to another row shows another light:
+			// every strip is rewritten on the next update
 			this.lastX[i].clear();
+			this.pending[i] = false;
 			if (i >= this.rows) {
 				f.Visible = false;
 				continue;
 			}
-			const y = i * STRIP_H;
+			const y = i * stripH;
 			f.Position = UDim2.fromOffset(0, y);
-			f.Size = UDim2.fromOffset(viewW, math.min(STRIP_H, viewH - y));
+			f.Size = UDim2.fromOffset(viewW, math.min(stripH, viewH - y));
 			f.Visible = true;
 		}
 	}
@@ -1004,6 +1123,8 @@ export class LightMap {
 		if (!this.shown) {
 			this.shown = true;
 			this.layer.Visible = true;
+			// what the strips kept from before may be far from tonight's light: no cap on this first frame
+			this.fullFrame = true;
 		}
 		// lights → screen space once; skip the ones that cannot reach the viewport
 		let n = 0;
@@ -1049,15 +1170,36 @@ export class LightMap {
 			if (this.rowDirty[r] || this.rowDirty[r + 1]) this.selectKeys(r);
 		}
 		const viewW = this.builtW;
-		let r0 = 0;
-		for (let row = 0; row < this.rows; row++) {
-			const y = row * STRIP_H;
-			const cy = y + math.min(STRIP_H, this.builtH - y) * 0.5;
-			while (r0 < nRows - 2 && this.sy[r0 + 1] <= cy) r0++;
-			if (!darkMoved && !this.rowDirty[r0] && !this.rowDirty[r0 + 1]) continue;
-			this.writeStrip(row, this.buildStrip(r0, cy, maxDark), viewW);
+		const st = this.stats;
+		st.gradientWrites = 0;
+		st.flatWrites = 0;
+		st.deferred = 0;
+		st.newSequences = 0;
+		st.newKeypoints = 0;
+		const rows = this.rows;
+		const stripH = this.stripH;
+		// the low tier's cap, taken round-robin from where the last capped frame stopped
+		let budget = this.low && !this.fullFrame ? LOW_REWRITES : math.huge;
+		const start = this.cursor < rows ? this.cursor : 0;
+		let resume = -1;
+		for (let i = 0; i < rows; i++) {
+			const row = (start + i) % rows;
+			const y = row * stripH;
+			const cy = y + math.min(stripH, this.builtH - y) * 0.5;
+			// the sample rows around the strip's centre line (sy[r] = r × GRID, the last one on the view's edge)
+			const r0 = math.min(nRows - 2, math.floor(cy / GRID));
+			if (!darkMoved && !this.rowDirty[r0] && !this.rowDirty[r0 + 1] && !this.pending[row]) continue;
+			const wrote = this.writeStrip(row, this.buildStrip(r0, cy, maxDark), viewW, budget <= 0);
+			if (wrote) budget -= 1;
+			else if (this.pending[row] && resume < 0) resume = row;
 		}
+		if (resume >= 0) this.cursor = resume;
+		this.fullFrame = false;
 		for (let r = 0; r < nRows; r++) this.rowDirty[r] = false;
+		let gradients = 0;
+		for (let row = 0; row < rows; row++) if (!this.flat[row]) gradients++;
+		st.strips = rows;
+		st.gradients = gradients;
 	}
 
 	/**
@@ -1197,6 +1339,8 @@ export class LightMap {
 	private buildStrip(r0: number, cy: number, maxDark: number): number {
 		const kx = this.kx;
 		const kt = this.kt;
+		const kc = this.kc;
+		const ks = this.ks;
 		const s = this.samples;
 		const keys = this.pairKeys[r0];
 		const cols = this.sx.size();
@@ -1208,8 +1352,11 @@ export class LightMap {
 		for (let j = 0; j < m; j++) {
 			const c = keys[j];
 			const light = s[a + c] + (s[b + c] - s[a + c]) * f;
+			const step = math.floor((1 - maxDark * (1 - light)) * LIGHT_STEPS + 0.5);
 			kx[j] = this.sx[c];
-			kt[j] = math.floor((1 - maxDark * (1 - light)) * LIGHT_STEPS + 0.5) / LIGHT_STEPS;
+			kt[j] = step / LIGHT_STEPS;
+			kc[j] = c;
+			ks[j] = step;
 		}
 		return m;
 	}
@@ -1251,22 +1398,132 @@ export class LightMap {
 		return worst;
 	}
 
-	/** push the built keys to the strip's gradient, unless it already shows them within WRITE_EPS */
-	private writeStrip(row: number, m: number, viewW: number): void {
-		if (this.gap(row, m) <= WRITE_EPS) return;
+	/**
+	 * Push the built keys to the strip, unless it already shows them within WRITE_EPS: one flat colour when every key
+	 * is the same (the gradient off), else the gradient. `capped` (the low tier's cap is spent this frame): a gradient
+	 * within LOW_FORCE_EPS of what the strip shows waits for a later frame (`pending`); a bigger change -- a blast, a
+	 * lamp switched on -- is drawn now, whole, so the cap never tears a light in two. Returns whether a gradient was
+	 * written.
+	 */
+	private writeStrip(row: number, m: number, viewW: number, capped: boolean): boolean {
+		const ks = this.ks;
+		let uniform = true;
+		for (let j = 1; j < m; j++) {
+			if (ks[j] !== ks[0]) {
+				uniform = false;
+				break;
+			}
+		}
+		const gap = this.gap(row, m);
+		// a strip within WRITE_EPS keeps what it shows -- but one still carrying a gradient that has become one colour
+		// sheds it now (one write, nothing allocated), rather than drawing a GuiEffect for nothing all night
+		if (gap <= WRITE_EPS && (!uniform || this.flat[row])) {
+			this.pending[row] = false;
+			return false;
+		}
+		if (uniform) {
+			this.showFlat(row, this.kt[0], viewW);
+			this.pending[row] = false;
+			return false;
+		}
+		if (capped && gap <= LOW_FORCE_EPS) {
+			this.pending[row] = true;
+			this.stats.deferred += 1;
+			return false;
+		}
+		const f = this.strips[row];
+		const g = this.grads[row];
+		g.Transparency = this.sequence(m, viewW);
+		if (this.flat[row]) {
+			this.flat[row] = false;
+			if (this.flatT[row] !== 0) {
+				this.flatT[row] = 0;
+				f.BackgroundTransparency = 0;
+			}
+			g.Enabled = true;
+		}
 		const px = this.lastX[row];
 		const pt = this.lastT[row];
 		px.clear();
 		pt.clear();
-		const keys: Array<NumberSequenceKeypoint> = [];
 		for (let j = 0; j < m; j++) {
-			const x = this.kx[j];
-			const t = this.kt[j];
-			px.push(x);
-			pt.push(t);
-			// the ends are exactly 0 and 1 (x = 0 and x = viewW), as the engine requires
-			keys.push(new NumberSequenceKeypoint(x / viewW, t));
+			px.push(this.kx[j]);
+			pt.push(this.kt[j]);
 		}
-		this.grads[row].Transparency = new NumberSequence(keys);
+		this.pending[row] = false;
+		this.stats.gradientWrites += 1;
+		return true;
+	}
+
+	/** the strip as one colour: its gradient off and the transparency `t` on the Frame itself */
+	private showFlat(row: number, t: number, viewW: number): void {
+		const f = this.strips[row];
+		if (!this.flat[row]) {
+			this.flat[row] = true;
+			this.grads[row].Enabled = false;
+		}
+		if (this.flatT[row] !== t) {
+			this.flatT[row] = t;
+			f.BackgroundTransparency = t;
+		}
+		// what it shows, as two keys across the width, so `gap` measures it like any gradient
+		const px = this.lastX[row];
+		const pt = this.lastT[row];
+		px.clear();
+		pt.clear();
+		px.push(0);
+		px.push(viewW);
+		pt.push(t);
+		pt.push(t);
+		this.stats.flatWrites += 1;
+	}
+
+	/**
+	 * The NumberSequence of the built keys, memoised: the same keys (columns and quantised values) give the same
+	 * sequence, and every keypoint is made once per (column, value) for this width.
+	 */
+	private sequence(m: number, viewW: number): NumberSequence {
+		const kc = this.kc;
+		const ks = this.ks;
+		const span = LIGHT_STEPS + 1;
+		let h = m;
+		for (let j = 0; j < m; j++) h = (h * 4099 + kc[j] * span + ks[j] + 1) % SEQ_HASH_MOD;
+		const hit = this.seqMemo.get(h);
+		if (hit !== undefined && hit.ids.size() === m) {
+			let same = true;
+			for (let j = 0; j < m; j++) {
+				if (hit.ids[j] !== kc[j] * span + ks[j]) {
+					same = false;
+					break;
+				}
+			}
+			if (same) return hit.seq;
+		}
+		// a table of its own: only on a memo miss, and the Node shims keep the very array they are given
+		const keys: Array<NumberSequenceKeypoint> = [];
+		const ids: Array<number> = [];
+		for (let j = 0; j < m; j++) {
+			const id = kc[j] * span + ks[j];
+			ids.push(id);
+			let kp = this.keyMemo.get(id);
+			if (kp === undefined) {
+				// the ends are exactly 0 and 1 (x = 0 and x = viewW), as the engine requires
+				kp = new NumberSequenceKeypoint(this.kx[j] / viewW, this.kt[j]);
+				this.keyMemo.set(id, kp);
+				this.stats.newKeypoints += 1;
+			}
+			keys.push(kp);
+		}
+		const seq = new NumberSequence(keys);
+		this.stats.newSequences += 1;
+		if (hit === undefined) {
+			if (this.seqMemoSize >= SEQ_MEMO_MAX) {
+				this.seqMemo.clear();
+				this.seqMemoSize = 0;
+			}
+			this.seqMemoSize += 1;
+		}
+		this.seqMemo.set(h, { ids, seq });
+		return seq;
 	}
 }
