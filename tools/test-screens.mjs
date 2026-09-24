@@ -43,6 +43,16 @@
  *                      creates no Instance (nor does the touch preview it redraws); the Controls radio group; each
  *                      tab's Defaults asks first and resets only its fields to defaultSettings(); no Save / Cancel. And
  *                      the interface audio does not take the town under the menus for a screen.
+ *   7. THE DEATH       the death screen (client/onboarding/gameOver.ts, UI-13 / MP-21 / MP-22), centred like every
+ *      SCREEN          window in section 1: in each state -- dead until dawn (by night and by day), the town falling
+ *                      (nobody standing), a new life waiting, the end with nobody to wake you, no Rebirth money, a first
+ *                      death with a record -- on the six screens and a phone with touch: every text whole, nothing out
+ *                      of the window, the count the biggest text, the row Home | New game | Rebirth at the bottom, each
+ *                      a thumb (>= 44 px) on touch. The state on screen is the one the rule says (title, count, words,
+ *                      colours; the town's fall counted from the moment nobody stands, and back to the daybreak when
+ *                      somebody does or the estimate runs out); Rebirth pressable only when it can be paid; "New best!"
+ *                      only for a record; New game asks first; 600 frames of a wait create nothing, and a frame that
+ *                      changes nothing writes nothing. And the scrim is the world's (UI-06).
  *
  * Pure Node (>= 18) plus the project's TypeScript. No layout engine: the rects are computed here from the Scale /
  * Offset / AnchorPoint / aspect the kit writes, the way the engine does.
@@ -67,6 +77,7 @@ const { showTutorial, SCHEMES } = require(join(SRC, "client/ui/tutorial.ts"));
 const { showPause } = require(join(SRC, "client/ui/pauseMenu.ts"));
 const { popup } = require(join(SRC, "client/ui/popup.ts"));
 const { showRecords } = require(join(SRC, "client/ui/records.ts"));
+const GO = require(join(SRC, "client/onboarding/gameOver.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const skin = require(join(SRC, "client/ui/skin.ts"));
 const { THEME, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
@@ -192,6 +203,32 @@ const WINDOWS = [
 		name: "Records",
 		open: () => showRecords(ctx),
 		frame: () => layer.FindFirstChild("Records")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	// the death screen (UI-13) in its two builds: the wait for daybreak and the end of a run nobody wakes you from
+	{
+		name: "Morte (espera)",
+		open: () => {
+			const w = GO.showDaybreakWait(
+				ctx,
+				{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+				{ onRebirth: () => {}, onNewRun: () => {}, onHome: () => {} },
+				false,
+				() => 2,
+			);
+			w.setRemaining(197, true);
+			return () => w.close();
+		},
+		frame: () => layer.FindFirstChild("RunOver")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	{
+		name: "Morte (fim)",
+		open: () =>
+			GO.showRunSummary(
+				ctx,
+				{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+				{ onRebirth: () => {}, onNewRun: () => {}, onHome: () => {} },
+			),
+		frame: () => layer.FindFirstChild("RunOver")?.FindFirstChild("Body")?.FindFirstChild("Window"),
 	},
 ];
 
@@ -1075,6 +1112,375 @@ function textFits(label) {
 	);
 	const lobbySrc = readFileSync(join(SRC, "client/ui/lobby.ts"), "utf8");
 	check("lobby.ts: fechar o lobby nao tira o voo (so a partida o solta)", !/detachFlyover\(/.test(lobbySrc));
+}
+
+// ================================================================ 7. the death screen (UI-13)
+
+console.log(
+	"\n7) a tela de morte (UI-13): o estado, a contagem, a escolha e a vida -- em toda tela, sem cortar e sem churn\n",
+);
+{
+	const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
+	const { STAT } = require(join(SRC, "client/ui/theme.ts"));
+	const save = ctx.save;
+	const noop = () => {};
+	const deathRoot = () => layer.FindFirstChild("RunOver");
+	const deathWin = () => deathRoot()?.FindFirstChild("Body")?.FindFirstChild("Window");
+	const inDeath = name =>
+		deathRoot()
+			?.GetDescendants()
+			.find(d => d.Name === name);
+	const text = name => inDeath(name)?.Text;
+	const shownD = name => {
+		const g = inDeath(name);
+		return g !== undefined && shownIn(g, deathRoot());
+	};
+	const base = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false };
+	/** a state: what the save holds, and what the run loop and the roster tell the screen */
+	const CASES = [
+		{ name: "espera, alguem de pe", wait: true, standing: 2, seconds: 197, night: true, money: 99 },
+		{ name: "espera de dia", wait: true, standing: 1, seconds: 180, night: false, money: 99 },
+		{ name: "a cidade cai", wait: true, standing: 0, seconds: 150, night: true, money: 99, later: 6 },
+		{ name: "vida nova", wait: true, standing: 2, seconds: 120, night: true, money: 0, newLife: true },
+		{ name: "sem moedas", wait: true, standing: 1, seconds: 100, night: true, money: 0 },
+		{ name: "fim (ninguem te levanta)", wait: false, money: 99 },
+		{ name: "fim sem moedas", wait: false, money: 0 },
+		{
+			name: "primeira morte, recorde",
+			wait: true,
+			standing: 2,
+			seconds: 60,
+			night: true,
+			money: 20,
+			summary: { ...base, days: 13, bestDay: 13, first: true, record: true },
+		},
+	];
+	/** opens a case as main.client.ts does; returns { tick, close, calls, standing } */
+	function openCase(c) {
+		save.money = c.money;
+		save.deathCount = 0;
+		ctx.phase = "dead";
+		const calls = { rebirth: 0, newRun: 0, home: 0 };
+		const handlers = {
+			onRebirth: () => calls.rebirth++,
+			onNewRun: c.newLife ? undefined : () => calls.newRun++,
+			onHome: () => calls.home++,
+		};
+		const summary = c.summary ?? base;
+		const who = { standing: c.standing };
+		if (!c.wait) {
+			const close = GO.showRunSummary(ctx, summary, handlers);
+			flush();
+			return { tick: () => {}, close: () => (close(), flush()), calls, who };
+		}
+		const w = GO.showDaybreakWait(ctx, summary, handlers, c.newLife === true, () => who.standing);
+		const at = { seconds: c.seconds };
+		const tick = () => w.setRemaining(at.seconds, c.night);
+		tick();
+		if (c.later !== undefined) {
+			ui.setClock(ui.getClock() + c.later);
+			tick();
+		}
+		flush();
+		return { tick, close: () => (w.close(), flush()), calls, who, at, handle: w };
+	}
+
+	// ---- on every screen: whole texts, nothing out of the window, the count the biggest text, the row, thumbs on touch
+	const LAYOUTS = [...SCREENS.map(s => [...s, false]), [844, 390, 36, 104, "celular 844 x 390 com toque", true]];
+	for (const [w, h, bar, buttons, label, touch] of LAYOUTS) {
+		UIS.TouchEnabled = touch;
+		UIS.MouseEnabled = !touch;
+		setScreen(w, h, bar, buttons);
+		const clipped = [];
+		const outside = [];
+		const hierarchy = [];
+		const rows = [];
+		const thumbs = [];
+		let seen = 0;
+		for (const c of CASES) {
+			const s = openCase(c);
+			const win = deathWin();
+			const wr = rectOf(win);
+			for (const d of win.GetDescendants()) {
+				if (!d.IsA("GuiObject") || !shownIn(d, deathRoot()) || d.Name === "FocusRing") continue;
+				const r = rectOf(d);
+				if (r.w <= 0 || r.h <= 0) continue;
+				if (r.x < wr.x - 1 || r.y < wr.y - 1 || r.x + r.w > wr.x + wr.w + 1 || r.y + r.h > wr.y + wr.h + 1) {
+					outside.push(`${c.name}: ${d.Parent.Name}.${d.Name} ${fmt(r)} fora de ${fmt(wr)}`);
+				}
+				if (d.ClassName !== "TextLabel" || d.Text === "" || !d.TextScaled) continue;
+				seen++;
+				const fit = textFits(d);
+				if (!fit.ok) clipped.push(`${c.name} ${d.Parent.Name}.${d.Name}: ${fit.detail}`);
+			}
+			// the count is the hero: no text of the window is allowed a bigger size
+			const count = inDeath("Count");
+			const cap = g => g.FindFirstChildOfClass("UITextSizeConstraint")?.MaxTextSize ?? 0;
+			const bigger = win
+				.GetDescendants()
+				.filter(
+					d => d.ClassName === "TextLabel" && d !== count && shownIn(d, deathRoot()) && cap(d) > cap(count),
+				);
+			if (bigger.length > 0) hierarchy.push(`${c.name}: ${bigger.map(d => d.Name).join(", ")}`);
+			// the row: Home | New game | Rebirth, left to right, one height, the last thing in the window
+			const row = ["Home", "NewGame", "Rebirth"].map(n => inDeath(n)).filter(b => b !== undefined);
+			const rr = row.map(rectOf);
+			const ordered = rr.every((r, i) => i === 0 || r.x >= rr[i - 1].x + rr[i - 1].w - 0.5);
+			const level = rr.every(r => Math.abs(r.y - rr[0].y) < 0.5 && Math.abs(r.h - rr[0].h) < 0.5);
+			const last = win
+				.GetDescendants()
+				.filter(
+					d =>
+						d.IsA("GuiObject") && shownIn(d, deathRoot()) && !row.some(b => d === b || d.IsDescendantOf(b)),
+				)
+				.every(
+					d =>
+						rectOf(d).y + rectOf(d).h <= rr[0].y + 0.5 ||
+						d.Name.startsWith("Plate") ||
+						d.Name.startsWith("Skin"),
+				);
+			if (!ordered || !level || !last || rr.length !== (c.newLife ? 2 : 3)) {
+				rows.push(`${c.name}: ${row.map((b, i) => `${b.Name} ${fmt(rr[i])}`).join(" | ")}`);
+			}
+			if (touch) {
+				for (let i = 0; i < row.length; i++) {
+					if (rr[i].h < 44 - 1e-6 || rr[i].w < 44 - 1e-6)
+						thumbs.push(`${c.name} ${row[i].Name} ${fmt(rr[i])}`);
+				}
+			}
+			s.close();
+		}
+		check(
+			`${label}: todo texto da tela de morte cabe inteiro, em todo estado (${seen} textos em ${CASES.length} estados)`,
+			clipped.length === 0,
+			clipped.slice(0, 6).join("; "),
+		);
+		check(`${label}: nada sai da janela`, outside.length === 0, outside.slice(0, 6).join("; "));
+		check(`${label}: a contagem e o maior texto da janela (o heroi)`, hierarchy.length === 0, hierarchy.join("; "));
+		check(
+			`${label}: a fileira Home | New game | Rebirth embaixo, em ordem, da mesma altura (sem New game na vida nova)`,
+			rows.length === 0,
+			rows.join("; "),
+		);
+		if (touch) {
+			check(`${label}: cada botao da fileira e um polegar (>= 44 px)`, thumbs.length === 0, thumbs.join("; "));
+		}
+	}
+	UIS.TouchEnabled = false;
+	UIS.MouseEnabled = true;
+	setScreen(1120, 630);
+
+	// ---- the state on screen is the one the rule says
+	{
+		const s = openCase(CASES[0]);
+		check(
+			'espera com alguem de pe (MP-21): "Dead until dawn", "Daybreak in 3:17" no amarelo dos numeros, quem esta de pe e a primeira luz, a lua no arco',
+			text("Title") === "Dead until dawn" &&
+				text("Lead") === "Daybreak in" &&
+				text("Count") === "3:17" &&
+				sameColor(inDeath("Count").TextColor3, STAT.value) &&
+				text("Caption") === "2 survivors still standing. You wake at first light." &&
+				shownD("Moon") &&
+				shownD("Sun") &&
+				!shownD("Grave"),
+			`${text("Title")} / ${text("Lead")} ${text("Count")} / ${text("Caption")}`,
+		);
+		// the moon walks the night: 3:17 is early in it, a minute left is late
+		const x0 = inDeath("Moon").Position.X.Scale;
+		s.at.seconds = 60;
+		s.tick();
+		const x1 = inDeath("Moon").Position.X.Scale;
+		check("...a lua anda no arco com a noite (mais perto do sol com menos tempo)", x1 > x0, `${x0} -> ${x1}`);
+		s.who.standing = 1;
+		s.tick();
+		check('..."1 survivor still standing." no singular', text("Caption").startsWith("1 survivor still standing."));
+		s.close();
+	}
+	{
+		const s = openCase(CASES[1]);
+		check(
+			'morte de dia: a espera e uma noite inteira e acaba de dia -- "You wake in", sem prometer a primeira luz',
+			text("Lead") === "You wake in" && text("Caption") === "1 survivor still standing.",
+			`${text("Lead")} / ${text("Caption")}`,
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[2]);
+		check(
+			'ninguem de pe (MP-22): "Nobody is left standing", "Town falls in 0:24" em vermelho, a lapide vermelha no horizonte, a cidade nova no dia 1',
+			text("Title") === "Nobody is left standing" &&
+				text("Lead") === "Town falls in" &&
+				text("Count") === GO.countdown(GO.WORLD_WIPE_S - 6) &&
+				sameColor(inDeath("Count").TextColor3, STAT.penalty) &&
+				shownD("Grave") &&
+				!shownD("Moon") &&
+				/new town begins at day 1/.test(text("Caption")),
+			`${text("Title")} / ${text("Lead")} ${text("Count")}`,
+		);
+		// somebody pays a Rebirth (or an ally is stood up): the town is not falling any more
+		s.who.standing = 1;
+		s.tick();
+		const back =
+			text("Title") === "Dead until dawn" && shownD("Moon") && sameColor(inDeath("Count").TextColor3, STAT.value);
+		// the last one falls again: a new window, a whole one
+		s.who.standing = 0;
+		s.tick();
+		const again = text("Count") === GO.countdown(GO.WORLD_WIPE_S);
+		// the window runs out and no new town comes (a survivor the roster cannot see): "Any moment now", then the dawn
+		ui.setClock(ui.getClock() + GO.WORLD_WIPE_S + 1);
+		s.tick();
+		const moment = text("Lead") === "Any moment now" && text("Count") === "0:00";
+		ui.setClock(ui.getClock() + 30);
+		s.tick();
+		const dawn = text("Title") === "Dead until dawn" && text("Lead") === "Daybreak in";
+		check(
+			'...alguem levanta: volta ao amanhecer; o ultimo cai de novo: uma janela nova e inteira; a janela acaba sem cidade nova: "Any moment now" e depois o amanhecer',
+			back && again && moment && dawn,
+			JSON.stringify({ back, again, moment, dawn }),
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[3]);
+		check(
+			'vida nova esperando (MP-21): "New life at first light", sem um segundo New game',
+			text("Title") === "New life at first light" &&
+				inDeath("NewGame") === undefined &&
+				/Your new life starts at day 1\./.test(text("Caption")),
+			`${text("Title")} / ${text("Caption")}`,
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[5]);
+		check(
+			'fim sem ninguem para te levantar: "You died", o dia em que a vida acabou no lugar da contagem, a lapide cinza',
+			text("Title") === "You died" &&
+				text("Lead") === "This life ended on" &&
+				text("Count") === "Day 3" &&
+				shownD("Grave") &&
+				!shownD("Moon"),
+			`${text("Title")} / ${text("Lead")} ${text("Count")}`,
+		);
+		s.close();
+	}
+
+	// ---- Rebirth: the main action when it can be paid, with its price in coins; disabled with the reason when not
+	{
+		const price = rebirthPrice(0);
+		let s = openCase(CASES[0]);
+		const rb = () => inDeath("Rebirth");
+		const payable =
+			rb().Selectable === true &&
+			rb().GetAttribute("Disabled") === false &&
+			rb().GetAttribute("Variant") === "default" &&
+			text("Price") === `${price}` &&
+			inDeath("Coin") !== undefined &&
+			inDeath("NewGame").GetAttribute("Variant") === "destructive" &&
+			inDeath("Home").GetAttribute("Variant") === "secondary" &&
+			/You have 99 coins\./.test(text("Note"));
+		s.close();
+		s = openCase(CASES[4]);
+		const broke =
+			rb().Selectable === false &&
+			rb().GetAttribute("Disabled") === true &&
+			text("Note").includes(`Not enough coins: ${price} more needed.`);
+		check(
+			`Rebirth: com moedas e a chapa aco-azul (principal) com a moeda e o preco (${price}), New game vermelho, Home de ferro; sem moedas fica desabilitado e a nota diz quanto falta`,
+			payable && broke,
+			JSON.stringify({ payable, broke, note: text("Note") }),
+		);
+		// the coins arrive during the wait: the plate turns pressable in place, nothing made
+		const r = measure(() => {
+			save.money = 99;
+			s.tick();
+		});
+		check(
+			"...as moedas chegam durante a espera: o Rebirth vira pressionavel no lugar, sem criar Instance",
+			rb().Selectable === true && r.created === 0 && r.destroyed === 0,
+			`${r.created} criadas`,
+		);
+		s.close();
+	}
+
+	// ---- the life's strip: numbers in the numbers' yellow, the best day green and "New best!" only for a record
+	{
+		let s = openCase(CASES[0]);
+		const values = () => [1, 2, 3, 4].map(i => inDeath(`Value${i}`));
+		const plain = values().every(v => sameColor(v.TextColor3, STAT.value)) && inDeath("NewBest") === undefined;
+		const labels = [1, 2, 3, 4].map(i => text(`Key${i}`)).join(",");
+		s.close();
+		s = openCase(CASES[7]);
+		const record =
+			sameColor(inDeath("Value2").TextColor3, STAT.bonus) &&
+			[1, 3, 4].every(i => sameColor(inDeath(`Value${i}`).TextColor3, STAT.value)) &&
+			inDeath("NewBest") !== undefined &&
+			text("Epitaph") === "Everyone's first night ends this way. The second one goes better.";
+		s.close();
+		check(
+			'a faixa da vida: Life day, Best day, Level, Zombies killed no amarelo dos numeros; o melhor dia verde com "New best!" so num recorde; a primeira morte tem a linha do onboarding',
+			plain && record && labels === "Life day,Best day,Level,Zombies killed",
+			JSON.stringify({ plain, record, labels }),
+		);
+	}
+
+	// ---- New game asks first (UI-12), and closing the screen takes the question with it
+	{
+		const s = openCase(CASES[0]);
+		inDeath("NewGame").Activated.Fire();
+		flush();
+		const pop = layer.FindFirstChild("PopupOverlay");
+		const asked = pop !== undefined && s.calls.newRun === 0;
+		pop?.GetDescendants()
+			.find(d => d.Name === "PopupBtn1")
+			?.Activated.Fire();
+		flush();
+		const confirmed = s.calls.newRun === 1 && layer.FindFirstChild("PopupOverlay") === undefined;
+		inDeath("NewGame").Activated.Fire();
+		flush();
+		s.close();
+		const cleaned = layer.FindFirstChild("PopupOverlay") === undefined && deathRoot() === undefined;
+		check(
+			"New game pergunta antes (uma vida nova nao se desfaz): so a confirmacao chama o handler, e fechar a tela leva a pergunta junto",
+			asked && confirmed && cleaned,
+			JSON.stringify({ asked, confirmed, cleaned }),
+		);
+	}
+
+	// ---- no churn: a whole wait, with the roster and the coins moving, creates nothing; an idle frame writes nothing
+	{
+		const s = openCase({ ...CASES[0], money: 0 });
+		const r = measure(() => {
+			for (let f = 0; f < 600; f++) {
+				s.at.seconds = 197 - f / 60;
+				if (f === 120) s.who.standing = 0;
+				if (f === 300) s.who.standing = 1;
+				if (f === 400) save.money = 99;
+				ui.setClock(ui.getClock() + 1 / 60);
+				s.tick();
+			}
+		});
+		const idle = measure(() => {
+			for (let f = 0; f < 60; f++) s.tick();
+		});
+		check(
+			"600 quadros de espera (a cidade caindo e voltando, as moedas chegando): nenhuma Instance criada ou destruida",
+			r.created === 0 && r.destroyed === 0,
+			`${r.created} criadas, ${r.destroyed} destruidas, ${r.writes} escritas`,
+		);
+		check("...e 60 quadros sem nada mudando nao escrevem nada", idle.writes === 0, `${idle.writes} escritas`);
+		// UI-06: over the run, the scrim of the world -- never a page over it
+		const root = deathRoot();
+		check(
+			"a tela de morte fica sobre o MUNDO: o scrim que deixa a rua a vista (TRANSPARENCY.overWorld), sem a cidade do lobby",
+			Math.abs(root.BackgroundTransparency - skin.worldTransparency(TRANSPARENCY.overWorld)) < 1e-6,
+			`${root.BackgroundTransparency}`,
+		);
+		s.close();
+	}
+	save.money = 20;
+	ctx.phase = "lobby";
 }
 
 console.log("");

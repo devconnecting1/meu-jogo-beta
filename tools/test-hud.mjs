@@ -24,10 +24,13 @@
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
  *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
  *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
- *  4c. DESIGN_RULES VIT-01's cue (hudRegen.ts): a soft glow round the HP bar while the body heals (in with the ramp,
+ *  4c. a hit lights the HP bar's relief and the damage vignette -- in a server session (MP_PHASE 2) too, where the
+ *     bite is the server's: its own self block, over the wire format, read back by the client's prediction;
+ *  4d. DESIGN_RULES VIT-01's cue (hudRegen.ts): a soft glow round the HP bar while the body heals (in with the ramp,
  *     outside the groove so the label keeps its plate), nothing during the wait after a hit, a fork on the FOOD bar
- *     while only food stands in the way (in a fight too, and starving), popping once; Reduce Motion holds the glow and
- *     drops the pop; 600 frames through every phase create nothing, a steady frame writes nothing;
+ *     while only food stands in the way (in a fight too, and starving; it starts where the bar turns red), popping
+ *     once; Reduce Motion holds the glow and drops the pop; 600 frames through every phase create nothing, a steady
+ *     frame writes nothing;
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
@@ -547,6 +550,77 @@ const vignette = deep(hudRoot(), "VignetteTop");
 hud.update(state({ hitFlash: 1 }));
 check("a vinheta de dano continua", vignette.BackgroundTransparency < 1, `${vignette.BackgroundTransparency}`);
 hud.update(state());
+
+// ...and in a session on the server (MP_PHASE 2), where the hit is the SERVER's: the bite lands through its own entry
+// point (`applyPlayerDamage`), travels in its own self block (server/net/replication.ts) over the wire format, the
+// client's prediction reads it back (client/net/prediction.ts), the survivor fades it as client/systems/combat.ts does
+// and the HUD state takes it as main.client.ts does. Before, `hitFlash` never rose for the local survivor there: the
+// only writer of it ran on the server
+{
+	const Ply = require(join(SRC, "shared/game/player.ts"));
+	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+	const { createWorld } = require(join(SRC, "shared/game/world.ts"));
+	const { MP_PHASE, SIM_HZ, SNAP_NEAR_EVERY_TICKS } = require(join(SRC, "shared/net/mpConfig.ts"));
+	const { encodeSnapshot, decodeSnapshotPart } = require(join(SRC, "shared/net/protocol.ts"));
+	const { createServerPlayer } = require(join(SRC, "server/sim/players.ts"));
+	const REP = require(join(SRC, "server/net/replication.ts"));
+	const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+	const world = createWorld(4000, 4000);
+	const server = createServerPlayer({ slot: 0, userId: 7, name: "me" }, defaultSave(), 1000, 1000, 0, SIM_HZ);
+	const mySave = defaultSave();
+	const me = Ply.createPlayer(mySave, 1000, 1000);
+	const prediction = new Prediction();
+	prediction.attach(world, me, mySave);
+	const frameS = 1 / 60;
+	let tick = 0;
+	let now = 50;
+	/** one snapshot's self block, the server's own, through the encoder and the decoder, into the reconciliation */
+	const snapshot = () => {
+		tick += SNAP_NEAR_EVERY_TICKS;
+		const self = REP.selfBlockOf({ spawnShielded: () => false }, server);
+		const part = encodeSnapshot({ tick, self, players: [], zombies: [], bosses: [] }).parts[0];
+		prediction.reconcile(decodeSnapshotPart(part).self, [], now);
+	};
+	/** one client frame after the snapshots: combat.ts fades the flash, then the HUD reads the survivor */
+	const frame = () => {
+		now += frameS;
+		me.hitFlash = Math.max(0, (me.hitFlash ?? 0) - frameS);
+		hud.update(state({ hp: me.hp, hpMax: me.hpMax, hitFlash: me.hitFlash ?? 0 }));
+	};
+	const look = () => ({
+		vignette: vignette.BackgroundTransparency,
+		relief: band(barFill("Hp")).BackgroundTransparency,
+	});
+	snapshot();
+	frame();
+	const calm = look();
+	Ply.applyPlayerDamage(server.state, server.save, 10);
+	snapshot();
+	frame();
+	const bitten = look();
+	check(
+		"na sessao do servidor (MP_PHASE 2) a mordida que o servidor aplica acende a vinheta e o relevo do HP no cliente",
+		MP_PHASE >= 2 &&
+			calm.vignette === 1 &&
+			calm.relief === 0.7 &&
+			me.hp === 90 &&
+			bitten.vignette < 1 &&
+			bitten.relief === 0.5,
+		`MP_PHASE ${MP_PHASE}, HP ${me.hp}: vinheta ${calm.vignette} -> ${bitten.vignette}, relevo ${calm.relief} -> ${bitten.relief}`,
+	);
+	// a second later (the i-frames over, the snapshots still coming) both are back at rest, and nothing re-lit them
+	for (let i = 0; i < 60; i++) {
+		if (i % SNAP_NEAR_EVERY_TICKS === 0) snapshot();
+		frame();
+	}
+	const after = look();
+	check(
+		"e um segundo depois a vinheta e o relevo apagam, sem outro golpe",
+		after.vignette === 1 && after.relief === 0.7 && prediction.stats().flashes === 1,
+		`vinheta ${after.vignette}, relevo ${after.relief}, ${prediction.stats().flashes} flash(es)`,
+	);
+	hud.update(state());
+}
 blinkAt(true);
 hud.update(state({ hunger: 10 }));
 check("fome baixa pisca a barra de fome em vermelho", sameColor(face(barFill("Food")), BAR.hp));
@@ -628,9 +702,9 @@ check(
 	`${deep(consoleFrame(), "WeaponName")?.Text} / ${deep(consoleFrame(), "WeaponType")?.Text} / ${deep(consoleFrame(), "Magazine")?.Text}`,
 );
 
-// ---------------------------------------------------------------- 4c) VIT-01: the healing cue on the vitals bars
+// ---------------------------------------------------------------- 4d) VIT-01: the healing cue on the vitals bars
 
-console.log("\n4c) VIT-01: o HP brilha enquanto cura; um garfo na FOOD quando so a comida impede a cura\n");
+console.log("\n4d) VIT-01: o HP brilha enquanto cura; um garfo na FOOD quando so a comida impede a cura\n");
 {
 	const VIT = require(join(SRC, "shared/sim/vitals.ts"));
 	const gs = service("GuiService");
