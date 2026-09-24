@@ -80,6 +80,12 @@ export const SIGN_ART: Record<string, Color3> = {
 	i: Color3.fromRGB(226, 200, 150),
 	f: Color3.fromRGB(204, 168, 112),
 	F: Color3.fromRGB(158, 122, 76),
+	// the college's maroon (EDI-17): the four campus buildings' one plate, lit top row and grimy bottom row
+	M: Color3.fromRGB(170, 72, 96),
+	N: Color3.fromRGB(128, 36, 60),
+	D: Color3.fromRGB(86, 22, 40),
+	// and its gold: a tassel, a book's band
+	G: Color3.fromRGB(236, 196, 92),
 };
 
 export interface BuildingSign {
@@ -99,6 +105,12 @@ export interface BuildingSign {
  * One sign per building type that is not a house (shared/data/buildings.ts BuildingType), each its own pictogram
  * on its own board colour: no two alike. The market (7) and the small market (8) both sell food, so they share the
  * roof colour (EDI-03) and not the sign: the supermarket's cart, the corner grocery's paper bag.
+ *
+ * The campus (12-15, EDI-17) is one institution: its four buildings share the college's maroon plate (a campus's
+ * wayfinding signs all look alike) and the slate roof, and the pictogram says which one it is -- the mortarboard
+ * on the main hall, books on a shelf at the library, a flask at the science lab, a bunk bed at the dorm. The
+ * maroon is no other type's (not the market's red, not the diner's mustard), and the mortarboard is not the
+ * school's open book: a college is not a school.
  */
 export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 	3: {
@@ -325,7 +337,143 @@ export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 			"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
 		],
 	},
+	12: {
+		texture: "signCollege",
+		shows: "a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon",
+		order: "kNMDdgG",
+		rows: [
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+			"kMMMMMMMMMMMMMMMMMMMMMMk",
+			"kNNNNNNNNNkkkkNNNNNNNNNk",
+			"kNNNNNNkkkggggkkkNNNNNNk",
+			"kNNNkkkggggddddddkkkNNNk",
+			"kNkkggggggdGGGGGGGGGGkNk",
+			"kNNNkkkddddddddddkkkGNNk",
+			"kNNNNNNkkkddddkkkNNNGNNk",
+			"kNNNNNNkkkkkkkkkkNNNGNNk",
+			"kNNNNNNkgdddddddkNNNGNNk",
+			"kNNNNNNkgdddddddkNNGGGNk",
+			"kNNNNNNkkkkkkkkkkNNGGGNk",
+			"kNNNNNNNNNNNNNNNNNNGGGNk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kDDDDDDDDDDDDDDDDDDDDDDk",
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+		],
+	},
+	13: {
+		texture: "signLibrary",
+		shows: "books standing on a shelf, gold bands on their spines, on the college's maroon",
+		// this order keeps the flat drawing within 4 layers (client/view/buildingSigns.ts decompose)
+		order: "kDNGCRcErbefBM",
+		rows: [
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+			"kMMMMMMMMMMMMMMMMMMMMMMk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kNNNNNbbBNNNNNNNNNNNNNNk",
+			"kNNNrrbbBNNNNNNNNNNNNNNk",
+			"kNNNrrbbBccCNNNNNNNNNNNk",
+			"kNNNGGbbBccCeeENNNNNNNNk",
+			"kNNNrrGGGccCeeErrRNNNNNk",
+			"kNNNrrbbBccCeeErrRNNNNNk",
+			"kNNNrrbbBccCGGGrrRNNNNNk",
+			"kNNNrrbbBccCeeErrRNNNNNk",
+			"kNNNrrbbBccCeeErrRNNNNNk",
+			"kNNNffffffffffffffffffNk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kDDDDDDDDDDDDDDDDDDDDDDk",
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+		],
+	},
+	14: {
+		texture: "signLab",
+		shows: "a flask of green reagent and a test tube, on the college's maroon",
+		order: "kNMDwWavers",
+		rows: [
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+			"kMMMMMMMMMMMMMMMMMMMMMMk",
+			"kNNNNNNNNNwwwwNNNNNNNNNk",
+			"kNNNNNNNNNWaawNNNNNNNNNk",
+			"kNNNNNNNNNWaawNNNNNwwNNk",
+			"kNNNNNNNNNWaawNNNNNWsNNk",
+			"kNNNNNNNNNWaawNNNNNWsNNk",
+			"kNNNNNNNNWaaaawNNNNWsNNk",
+			"kNNNNNNNWaaaaaawNNNrrNNk",
+			"kNNNNNNWvvvvvvvvwNNrrNNk",
+			"kNNNNNWeeWeeeeeeewNrrNNk",
+			"kNNNNWeeeeeeWeeeeewrrNNk",
+			"kNNNNwwwwwwwwwwwwwwwwNNk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kDDDDDDDDDDDDDDDDDDDDDDk",
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+		],
+	},
+	15: {
+		texture: "signDorm",
+		shows: "a bunk bed, pillows and blankets on both bunks, on the college's maroon",
+		order: "kNMDfFcWbr",
+		rows: [
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+			"kMMMMMMMMMMMMMMMMMMMMMMk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kNNfNNNNNNNNNNNNNNNNFNNk",
+			"kNNfccWWWWWWWWWWWWWWFNNk",
+			"kNNfcbbbbbbbbbbbbbbbFNNk",
+			"kNNffffffffffffffffFFNNk",
+			"kNNfNNNNNNNNNNNNNNNNFNNk",
+			"kNNfNNNNNNNNNNNNNNNNFNNk",
+			"kNNfccWWWWWWWWWWWWWWFNNk",
+			"kNNfcrrrrrrrrrrrrrrrFNNk",
+			"kNNffffffffffffffffFFNNk",
+			"kNNfNNNNNNNNNNNNNNNNFNNk",
+			"kNNNNNNNNNNNNNNNNNNNNNNk",
+			"kDDDDDDDDDDDDDDDDDDDDDDk",
+			"kkkkkkkkkkkkkkkkkkkkkkkk",
+		],
+	},
 };
+
+/**
+ * A gas station's price sign (DESIGN_RULES EDI-16): the pylon on its footing at the street corner of the forecourt,
+ * drawn upright like the storefront signs and seen from both streets. The same pixel art (SIGN_TEXEL, SIGN_ART, the
+ * 1-texel outline): the charcoal board of the station's storefront sign with its pump pictogram on top, then three
+ * grades, each a coloured tab and a price panel -- dark: the power went a few days ago (ART-07), and a panel with no
+ * digits carries no text to translate and no brand to imitate (CON-02). Below the board, its steel post; the post's
+ * foot stands on the footing (world.ts `placeGas`, tags "gas_sign"). Texture `signPrice`; flat, its runs.
+ */
+export const PRICE_SIGN: BuildingSign = {
+	texture: "signPrice",
+	shows: "a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post",
+	order: "kzxXdWwrRgseEyQ",
+	rows: [
+		"kkkkkkkkkkkkkkkk",
+		"kzzzzzzzzzzzzzzk",
+		"kxxxxWWWWWxxxxxk",
+		"kxxxxWdddWxWxxxk",
+		"kxxxxWWWWWxWxxxk",
+		"kxxxxrrrrRxWxxxk",
+		"kxxxxWWWWWWWxxxk",
+		"kxxxxWWWWwxxxxxk",
+		"kxxxggggggxxxxxk",
+		"kXXXXXXXXXXXXXXk",
+		"keeEkddddddddddk",
+		"kEEEkddddddddddk",
+		"kXXXXXXXXXXXXXXk",
+		"kyyQkddddddddddk",
+		"kQQQkddddddddddk",
+		"kXXXXXXXXXXXXXXk",
+		"kWWwkddddddddddk",
+		"kwwwkddddddddddk",
+		"kkkkkkkkkkkkkkkk",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+	],
+};
+/** the rows of PRICE_SIGN that are its post, under the board (the rest is the board) */
+export const PRICE_SIGN_POST_ROWS = 6;
 
 /**
  * The hospital's roof marking, in texels: the heliport of a hospital as ICAO draws it -- a red H on a white cross

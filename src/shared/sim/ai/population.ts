@@ -1,6 +1,6 @@
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
-import { randomRingPoint, spawnGroundItem, WorldData } from "shared/game/world";
+import { randomRingPoint, removeGroundItemAt, spawnGroundItem, WorldData } from "shared/game/world";
 import { circleBlocked } from "shared/game/physics";
 import { createBoss, createZombie, ZombieState, ZombieType } from "shared/game/entities";
 import { BUILDING_SPAWNS, getDayPopulation } from "shared/data/spawns";
@@ -503,9 +503,9 @@ export class Population {
 		}
 		for (let i = refs.world.items.size() - 1; i >= 0; i--) {
 			const it = refs.world.items[i];
-			if (!this.nearAnyPlayer(refs, it.x, it.y, DESIGN.ITEM_SPAWN_MAX)) {
-				refs.world.items.remove(i);
-			}
+			// through the world's own removal: on the server that is the grid and the ItemRemove every client that was
+			// shown the item is owed -- splicing the list left it on their screens for good (a ghost E could not take)
+			if (!this.nearAnyPlayer(refs, it.x, it.y, DESIGN.ITEM_SPAWN_MAX)) removeGroundItemAt(refs.world, i);
 		}
 	}
 
@@ -514,7 +514,11 @@ export class Population {
 	 * MAX_BOSSES at once, and its HP scales with how many survivors are close enough to take part.
 	 */
 	private spawnBoss(refs: Ctx.AiRefs): void {
-		if (refs.bosses.size() >= MAX_BOSSES) return;
+		// the town's own bosses only: an admin's (`unpaid`, docs/MULTIPLAYER.md §10) has a cap of its own and must not
+		// keep the anchors asleep (the review of 8f50bc5, L5)
+		let natural = 0;
+		for (const b of refs.bosses) if (b.unpaid !== true) natural += 1;
+		if (natural >= MAX_BOSSES) return;
 		const day = refs.clock.day;
 		for (const anchor of refs.world.bossAnchors) {
 			if (day < anchor.nextDay) continue;

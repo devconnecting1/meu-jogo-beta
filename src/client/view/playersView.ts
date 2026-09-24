@@ -19,8 +19,6 @@
  */
 import { Camera, ViewRect } from "shared/engine/camera";
 import { Renderer } from "shared/engine/renderer";
-import * as SurvivorLight from "shared/sim/survivorLight";
-import { FLASHLIGHT_REACH, SURVIVOR_LIGHT_R } from "shared/sim/survivorLight";
 import { RemotePlayerView } from "../net/netTypes";
 import { FEET_CYCLE_PER_UNIT } from "../net/snapshotBuffer";
 import { AllyPlate } from "./allyPlate";
@@ -35,7 +33,7 @@ import {
 	drawSurvivor,
 	weaponById,
 } from "./survivorView";
-import { addSurvivorLight, LightList } from "./lightList";
+import { addAllyLight, LightList } from "./lightList";
 import { meleeReach } from "shared/data/weapons";
 import { WEAPON_HOLSTERED } from "shared/net/protocol";
 import { PetLook, petFlies } from "shared/data/cosmetics";
@@ -174,16 +172,14 @@ export class PlayersView {
 	 * Every ally's light, so the night map is lit by the whole group (§5.3, MP-08), by the shape and the rule the
 	 * local survivor's is drawn with (LUZ-04, lightList.addSurvivorLight): whoever carries a light
 	 * (`SurvivorLight.carriesLight`: the dead do not, the downed do, as on the server) lights their 250 u circle, and
-	 * the flashlight's cone along their aim when the server's `PlayerFlag.Flashlight` says they hold one.
+	 * the flashlight's cone along their aim when the server's `PlayerFlag.Flashlight` says they hold one -- or, riding
+	 * a motorcycle, its headlight along the ride (lightList.addAllyLight).
 	 *
 	 * What the wire does not say is not drawn: a torch, night vision or Nocturnal widen the circle on the server
 	 * (`survivorLightRadius`), and the record has no bit left for it (docs/DESIGN_RULES.md LUZ-04, pending).
 	 */
 	collectLights(list: ReadonlyArray<RemotePlayerView>, out: LightList): void {
-		for (const rp of list) {
-			if (!SurvivorLight.carriesLight(rp)) continue;
-			addSurvivorLight(out, rp.x, rp.y, rp.angle, SURVIVOR_LIGHT_R, rp.flashlight ? FLASHLIGHT_REACH : undefined);
-		}
+		for (const rp of list) addAllyLight(out, rp);
 	}
 
 	/** leaving the game screen: every plate off, the pool kept (rejoining the same session reuses it) */

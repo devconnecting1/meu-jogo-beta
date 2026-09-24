@@ -11,8 +11,26 @@ export const BuildingType = {
 	GunShop: 9,
 	ClothShop: 10,
 	Restaurant: 11,
+	// the college campus (docs/DESIGN_RULES.md EDI-17): four buildings round a quad on one block, at most one a town
+	CampusHall: 12,
+	CampusLibrary: 13,
+	CampusLab: 14,
+	CampusDorm: 15,
 } as const;
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
+
+/** the campus's building types, the main hall first (EDI-17) */
+export const CAMPUS_TYPES: ReadonlyArray<number> = [
+	BuildingType.CampusHall,
+	BuildingType.CampusLibrary,
+	BuildingType.CampusLab,
+	BuildingType.CampusDorm,
+];
+
+/** is this building type one of the campus's (EDI-17)? */
+export function isCampusType(bt: number): boolean {
+	return bt >= BuildingType.CampusHall && bt <= BuildingType.CampusDorm;
+}
 
 export const STRUCTURE_HP: Record<string, number> = {
 	WoodenBarricade: 700,
@@ -92,6 +110,11 @@ export interface VehicleDef {
 	noiseFull: number;
 	/** the bell (bicycle) or the horn (motorcycle), on the attack button */
 	hornRadius: number;
+	/**
+	 * The headlight's reach along the vehicle's heading (LUZ-04, shared/sim/survivorLight.ts `survivorBeam`), 0 = none.
+	 * The flashlight's cone (±45°) a little further: the road ahead of a rider at speed, not the aim of the hands.
+	 */
+	headlight: number;
 }
 
 export const VEHICLES: Array<VehicleDef> = [
@@ -118,6 +141,7 @@ export const VEHICLES: Array<VehicleDef> = [
 		noiseIdle: 0,
 		noiseFull: 0,
 		hornRadius: 250,
+		headlight: 0,
 	},
 	{
 		kind: VehicleKind.Motorcycle,
@@ -142,6 +166,7 @@ export const VEHICLES: Array<VehicleDef> = [
 		noiseIdle: 400,
 		noiseFull: 900,
 		hornRadius: 900,
+		headlight: 640,
 	},
 ];
 

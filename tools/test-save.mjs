@@ -1653,7 +1653,8 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 	// the source of the other callers: one line each, where the server decides
 	const src = f => readFileSync(join(SRC, f), "utf8");
 	check(
-		/creditTaken\(save, item\.kind, item\.itemId, item\.count\)/.test(src("server/sim/items.ts")) &&
+		// a pickup credits what went INTO the backpack: all of it, or what fitted under the save's ceiling (ITM-07)
+		/creditTaken\(save, item\.kind, item\.itemId, take\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, drop\.kind, drop\.id, drop\.count\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, extra\.kind, extra\.id, extra\.count\)/.test(src("server/sim/items.ts")),
 		"ServerItems: o que o servidor poe na mochila (pegar, revistar, o achado do Thief) passa pelo creditTaken",
@@ -2309,12 +2310,436 @@ section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para 
 		[0, 1, 2, 3, 0, 0],
 		"a lingua do jogador sai do LocaleId da conta",
 	);
-	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts"].map(f =>
+	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts", "server/net/backpackIntents.ts"].map(f =>
 		readFileSync(join(SRC, f), "utf8"),
 	);
 	check(
 		sources.every(s => !/\.Kick\(\s*"/.test(s) && !/You were kicked|You are banned|Network flood"/.test(s)),
 		"nenhum Kick com texto em ingles fixo no servidor",
+	);
+}
+
+// ---------------------------------------------------------------- SAV-01: saving is automatic
+
+section(
+	"32) SAV-01: so o servidor escolhe quando gravar -- eventos coalescidos, o piso do orcamento, nada sem mudanca",
+);
+{
+	const CAD = require(join(SRC, "server/save/saveCadence.ts"));
+	const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+	const { ItemKind: IK } = require(join(SRC, "shared/data/kinds.ts"));
+	const src = f => readFileSync(join(SRC, f), "utf8");
+
+	/**
+	 * The server's two loops over a pretend clock: `events` (s) ask for an early write (the event save), the scan runs
+	 * every EVENT_SCAN_S and starts the write that is due, and -- `autosave` -- the autosave comes every AUTOSAVE_INTERVAL
+	 * under the same gap. `changes` (s) only make the session dirty (XP, ammo: no event). The load's write happened at
+	 * `loadAt`. Answers when each write started.
+	 */
+	function simulate(events, horizon, { loadAt = -1000, autosave = false, changes = [] } = {}) {
+		const c = CAD.newCadence(loadAt);
+		const writes = [];
+		let next = 0;
+		let nextChange = 0;
+		let dirty = false;
+		const queue = [...events].sort((a, b) => a - b);
+		for (let t = 0; t <= horizon + 1e-9; t = Math.round((t + 0.05) * 100) / 100) {
+			while (next < queue.length && queue[next] <= t) {
+				CAD.scheduleSave(c, t, "level");
+				dirty = true;
+				next++;
+			}
+			while (nextChange < changes.length && changes[nextChange] <= t) {
+				dirty = true;
+				nextChange++;
+			}
+			if (autosave && t > 0 && Math.abs(t % CAD.AUTOSAVE_INTERVAL) < 1e-6) {
+				if (CAD.tooSoon(c, t)) {
+					if (dirty) CAD.scheduleSave(c, t, "auto");
+				} else if (dirty) {
+					CAD.writeStarted(c, t);
+					writes.push(t);
+					dirty = false;
+				}
+			}
+			if (Math.abs((t / CAD.EVENT_SCAN_S) % 1) < 1e-6 && CAD.saveDue(c, t)) {
+				CAD.writeStarted(c, t);
+				writes.push(t);
+				dirty = false;
+			}
+		}
+		return writes;
+	}
+	const gapsOf = w => w.slice(1).map((t, i) => t - w[i]);
+
+	// 10 events in 5 s: one write inside the burst, one more a gap later for what came after it
+	const burst = Array.from({ length: 10 }, (_, i) => i * 0.5);
+	const w1 = simulate(burst, 60);
+	check(
+		w1.filter(t => t <= 5).length === 1 && w1.length === 2 && w1[1] - w1[0] >= CAD.EVENT_SAVE_GAP,
+		`10 eventos em 5 s: 1 gravacao dentro deles (${CAD.EVENT_SAVE_DELAY} s depois do primeiro) e 1 so depois, ${CAD.EVENT_SAVE_GAP} s adiante`,
+		`gravacoes em ${w1.join(", ")} s`,
+	);
+	// a burst shorter than the delay is ONE write
+	const w2 = simulate(
+		Array.from({ length: 10 }, (_, i) => i * 0.25),
+		60,
+	);
+	check(
+		w2.length === 1,
+		`10 eventos em 2,5 s (menos que o atraso de ${CAD.EVENT_SAVE_DELAY} s): 1 gravacao`,
+		`${w2}`,
+	);
+	// a flood: an event every 0.1 s for 10 minutes (a client that spams whatever it can, a horde of level-ups)
+	const flood = Array.from({ length: 6000 }, (_, i) => i * 0.1);
+	const w3 = simulate(flood, 600, { autosave: true });
+	check(
+		w3.length <= Math.ceil(600 / CAD.EVENT_SAVE_GAP) + 1 && gapsOf(w3).every(g => g >= CAD.EVENT_SAVE_GAP - 1e-6),
+		`uma enxurrada (6000 eventos em 10 min, com o autosave): no maximo 1 gravacao a cada ${CAD.EVENT_SAVE_GAP} s`,
+		`${w3.length} gravacoes, menor intervalo ${Math.min(...gapsOf(w3)).toFixed(2)} s`,
+	);
+	// the autosave obeys the gap too: an event write 3 s before it leaves what came after for the gap's end
+	const w4 = simulate([54], 130, { autosave: true, loadAt: 0, changes: [58] });
+	checkArrayEq(
+		w4,
+		[57, 72],
+		"o autosave obedece ao mesmo intervalo: um evento gravou aos 57 s, o que mudou depois vai aos 72 s, nao aos 60",
+	);
+	// the load's own write counts: an event right after joining waits for the gap
+	const w5 = simulate([1], 40, { loadAt: 0 });
+	check(
+		w5.length === 1 && w5[0] === CAD.EVENT_SAVE_GAP,
+		"a carga (que pegou a trava) conta como gravacao: um evento 1 s depois de entrar grava aos 15 s",
+		`${w5}`,
+	);
+	check(
+		CAD.EVENT_SAVE_MIN_BUDGET >
+			Number(/const AUTOSAVE_MIN_BUDGET = (\d+);/.exec(src("server/main.server.ts"))?.[1]),
+		"o piso de orcamento dos eventos fica acima do do autosave (que guarda as entradas e saidas)",
+		`${CAD.EVENT_SAVE_MIN_BUDGET}`,
+	);
+	// failures back off (review M1): 15 s after the first, 30 s after the second, then AUTOSAVE_INTERVAL; a landing resets
+	{
+		const c = CAD.newCadence(0);
+		const seq = [];
+		for (let f = 0; f <= 5; f++) {
+			seq.push(CAD.gapOf(c));
+			CAD.writeFailed(c);
+		}
+		checkArrayEq(
+			seq,
+			[15, 15, 30, 60, 60, 60],
+			"o intervalo recua com as falhas: 15 s, 15 s depois da 1a, 30 s depois da 2a, 60 s (AUTOSAVE_INTERVAL) dai em diante",
+		);
+		CAD.writeStarted(c, 100);
+		check(CAD.tooSoon(c, 159) && !CAD.tooSoon(c, 160), "tooSoon respeita o recuo: 60 s depois de varias falhas");
+		CAD.scheduleSave(c, 101, "retry");
+		check(c.due === 160, "...e o pedido de gravacao tambem", `due ${c.due}`);
+		CAD.writeLanded(c, "{}");
+		check(
+			c.failures === 0 && CAD.gapOf(c) === CAD.EVENT_SAVE_GAP && c.lastJson === "{}",
+			"uma gravacao que chega zera o recuo",
+		);
+	}
+	// an outage in the pretend clock: every attempt fails, the save changes every 5 s, the autosave comes every minute
+	{
+		const c = CAD.newCadence(-1000);
+		let attempts = 0;
+		let dirty = false;
+		for (let t = 0; t <= 600; t = Math.round((t + 0.25) * 100) / 100) {
+			if (t % 5 === 0) {
+				dirty = true;
+				if (t % 10 === 0) CAD.scheduleSave(c, t, "level");
+			}
+			const auto = t > 0 && t % CAD.AUTOSAVE_INTERVAL === 0;
+			if (auto && CAD.tooSoon(c, t) && dirty) CAD.scheduleSave(c, t, "auto");
+			const run = (auto && !CAD.tooSoon(c, t) && dirty) || (t % CAD.EVENT_SCAN_S === 0 && CAD.saveDue(c, t));
+			if (!run) continue;
+			attempts++;
+			CAD.writeStarted(c, t);
+			CAD.writeFailed(c);
+			CAD.scheduleSave(c, t, "retry");
+		}
+		check(
+			attempts <= 12,
+			"uma queda de 10 min: no maximo ~1 tentativa por minuto por jogador (o autosave com 3 retentativas fazia 4)",
+			`${attempts} tentativas em 10 min`,
+		);
+	}
+	// the worst case, as the rule states it
+	const eventLoss = CAD.EVENT_SAVE_GAP + CAD.EVENT_SCAN_S;
+	const otherLoss = CAD.AUTOSAVE_INTERVAL + CAD.EVENT_SCAN_S;
+	console.log(
+		`        pior janela de perda numa queda sem BindToClose: ${eventLoss} s depois de um evento da lista, ` +
+			`${otherLoss} s para o resto (+ a latencia da escrita)`,
+	);
+
+	// which change of the save is an event, and which is not
+	const base = SAVE.defaultSave();
+	const marks = CAD.milestonesOf(base);
+	const moved = edit => {
+		const s = JSON.parse(JSON.stringify(base));
+		edit(s);
+		return CAD.milestoneEvent(marks, CAD.milestonesOf(s));
+	};
+	checkArrayEq(
+		[
+			moved(s => (s.level += 1)),
+			moved(s => (s.skillLevels[0] += 1)),
+			moved(s => (s.day += 1)),
+			moved(s => (s.bestDay += 1)),
+			moved(s => (s.titles[0] = 1)),
+			moved(s => (s.lifeDeaths += 1)),
+			moved(s => (s.runOver = true)),
+			moved(s => (s.runRev += 1)),
+		],
+		["level", "skill", "day", "day", "title", "death", "death", "life"],
+		"nivel, skill, dia, recorde, titulo, morte e vida nova sao eventos",
+	);
+	const dead = JSON.parse(JSON.stringify(base));
+	dead.runOver = true;
+	check(
+		CAD.milestoneEvent(CAD.milestonesOf(dead), CAD.milestonesOf(base)) === "revive",
+		"levantar (amanhecer, Rebirth) e evento",
+	);
+	checkArrayEq(
+		[
+			moved(s => (s.exp += 5)),
+			moved(s => (s.money += 5)),
+			moved(s => (s.ammoNormal += 5)),
+			moved(s => (s.settings.bgm = 0.1)),
+			moved(s => (s.zombieKills += 1)),
+			CAD.milestoneEvent(undefined, marks),
+		],
+		[undefined, undefined, undefined, undefined, undefined, undefined],
+		"XP, moedas, municao, ajustes e abates esperam o autosave; a primeira olhada so anota",
+	);
+
+	// a rare craft: a weapon or an armour made at a workbench -- not the hands' stick, ammunition, smelting, a meal, a
+	// bandage or a build
+	const rare = CRAFT_RECIPES.filter(r => CAD.isRareCraft(r.id));
+	const gear = r => r.resultKind === IK.Weapon || r.resultKind === IK.Equip;
+	const cooking = CRAFT_RECIPES.filter(r => r.needsCook === true);
+	check(
+		rare.length > 0 &&
+			rare.every(r => gear(r) && (r.needsDesk || r.needsPro) && r.craftKind !== 1) &&
+			CRAFT_RECIPES.filter(r => gear(r) && (r.needsDesk || r.needsPro)).length === rare.length &&
+			CRAFT_RECIPES.filter(r => r.needsCook || r.needsFire || r.craftKind === 1 || !gear(r)).every(
+				r => !CAD.isRareCraft(r.id),
+			),
+		"craft raro: arma ou equipamento de bancada; nunca comida, fundicao, municao, bandagem nem construcao",
+		`${rare.length} de ${CRAFT_RECIPES.length} receitas`,
+	);
+	const byHand = CRAFT_RECIPES.filter(r => gear(r) && !r.needsDesk && !r.needsPro);
+	check(
+		byHand.length > 0 && byHand.every(r => !CAD.isRareCraft(r.id)),
+		"...e o que se faz a mao com madeira e pedra (o graveto, o machado de pedra) espera o autosave",
+		`${byHand.length} receitas a mao`,
+	);
+	checkArrayEq(
+		[
+			CAD.backpackEvent({ kind: "learned", skill: 0, level: 1 }),
+			CAD.backpackEvent({ kind: "crafted", recipe: rare[0].id, count: 1, heat: undefined }),
+			CAD.backpackEvent({ kind: "crafted", recipe: cooking[0].id, count: 1, heat: "cook" }),
+			CAD.backpackEvent({ kind: "used", item: 0 }),
+			CAD.backpackEvent({ kind: "switched", weapon: 0 }),
+		],
+		["skill", "craft", undefined, undefined, undefined],
+		"da mochila: skill aprendida e craft raro pedem gravacao; o resto espera",
+	);
+
+	// no manual save, anywhere: the client never asks for a write
+	const main = src("server/main.server.ts");
+	const between = (from, to) => main.slice(main.indexOf(from), main.indexOf(to, main.indexOf(from)));
+	const reportPath =
+		between("function processReport(", "function processPending(") +
+		between(
+			"remotes.saveRequest.OnServerEvent.Connect(",
+			"// ---------------------------------------------------------------- shop",
+		);
+	check(
+		reportPath.length > 500 && !/flush\(|saveSoon\(|scheduleSave\(|UpdateAsync/.test(reportPath),
+		"o relatorio do cliente (SaveRequest) nunca grava nem pede gravacao: so marca a sessao suja",
+	);
+	// the review of a454292, in the code: one attempt for a write that is not the last (M1), an attempt that throws or
+	// is too large counts (L1), a notice never in the way of the write (L3), no retry sleep once the player is leaving (L4)
+	const flushFn = between("function flush(", "function writeSession(");
+	const writeFn = between(
+		"function writeSession(",
+		"// ---------------------------------------------------------------- load",
+	);
+	const lockFn = between("function writeWithLock(", "function handBackLock(");
+	const notifyFn = between("function notifyStore(", "function resetCredits(");
+	check(
+		/const tries = release \? delays : NO_RETRIES;/.test(flushFn) &&
+			/const NO_RETRIES: Array<number> = \[\];/.test(main),
+		"so a gravacao final repete no lugar; as outras fazem UMA tentativa (a cadencia repete, recuando) -- M1",
+	);
+	check(
+		/if \(!release\) Cadence\.writeStarted\(s\.cadence, os\.clock\(\)\);[^]*s\.writing = false;[^]*if \(!ran && !release\) writeFailedFor\(s, true\);/.test(
+			flushFn,
+		) &&
+			/MAX_STORED_LENGTH\)[^]*Cadence\.writeStarted\(c, os\.clock\(\)\);\s*writeFailedFor\(s, true\);/.test(
+				writeFn,
+			),
+		"a tentativa que lanca (encode) ou e grande demais conta: limpa o pedido e recua -- L1; o aviso vem depois de `writing` baixar -- L3",
+	);
+	check(
+		/pcall\(\(\) => remotes\.saveAck\.FireClient\(s\.player, push\)\)/.test(notifyFn),
+		"o aviso ao jogador nunca atrapalha a gravacao: FireClient dentro de pcall -- L3",
+	);
+	check(
+		/if \(!release && \(s\.closed \|\| shuttingDown\)\) return "failed";\s*task\.wait\(delays\[attempt\]\);/.test(
+			lockFn,
+		),
+		"uma gravacao que nao e a ultima desiste antes de dormir se o jogador sai ou o servidor fecha -- L4",
+	);
+	check(
+		/if \(c\.failingShown\) notifyStore\(s, "saved"\);/.test(writeFn) &&
+			/const told = !release && changed && wasDirty;/.test(writeFn),
+		'"Progress not saved" sai quando o save volta ao que o DataStore tem (L2); o refresh da trava nao e anunciado (L6)',
+	);
+	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 32)
+	check(
+		/Cadence\.backpackEvent\(outcome\)[^]*?saveSoon\(s, ev\)/.test(main) &&
+			/sim\.onDayCredit = [^]*?saveSoon\(s, "day"\)/.test(main) &&
+			/saveSoon\(s, req\.kind === "rebirth" \? "revive" : req\.kind === "newRun" \? "life" : "purchase"\)/.test(
+				main,
+			) &&
+			/Cadence\.noteMilestones\(s\.cadence, s\.save\)/.test(
+				between("function serveEventSaves(", "const WALLET_PUSH_S"),
+			),
+		"os eventos ligados: compra / Rebirth / New game na loja, dia na meia-noite, skill e craft raro na mochila, o resto pela olhada de 1 s",
+	);
+	check(
+		/export function createRemotes\(\)[^]*?return \{\s*loadRequest[^}]*shopAction[^}]*\};/.test(
+			src("shared/net/net.ts"),
+		) && (src("shared/net/net.ts").match(/ensureRemote\(net, /g) ?? []).length === 5,
+		"nenhum remote novo de salvar: os cinco de sempre (o SaveRequest e o relatorio)",
+	);
+	const pause = src("client/ui/pauseMenu.ts");
+	const client = src("client/main.client.ts") + src("client/systems/saveClient.ts");
+	check(
+		/key: "Back to game"/.test(pause) &&
+			!/key: "Save"|onSave\s*[?:(]|handlers\.onSave/.test(pause) &&
+			!/"manual"|manualQueued|manualInFlight|onSave\s*:/.test(client),
+		'sem o botao "Save" no menu da partida, sem o motivo "manual" e sem o handler no cliente',
+	);
+	const LANG = new Set(require(join(SRC, "shared/data/lang.ts")).LANG_TABLE);
+	check(
+		!LANG.has("Save") &&
+			!LANG.has("Progress saved") &&
+			["Saving...", "Saved", "Progress not saved — retrying", "Progress not saved"].every(k => LANG.has(k)),
+		'lang.ts: "Save" e "Progress saved" sairam; os textos do indicador estao la',
+	);
+}
+
+section(
+	"33) uma run assistida (§9.3) nao ganha Camp Cook, Metalworker nem Woodpile: a comida, o lingote e a madeira sim",
+);
+{
+	// the verification of 2026-09-24: the kill, the night, the boss and the lamp asked `paysRewards`, and these did not --
+	// an admin-assisted run still counted Chef (Camp Cook), Blacksmith (Metalworker) and Woods collector (Woodpile).
+	// Through the REAL simulation: its ServerCraft and its ServerInteraction (pickup, search) get the same check
+	const W2 = require(join(SRC, "shared/game/world.ts"));
+	const wood = ETC_ITEMS.findIndex(e => e.name === "Wood");
+	const plain = r => r.craftKind !== 1 && !r.needsDesk && !r.needsPro;
+	const cook = CRAFT_RECIPES.find(r => plain(r) && r.needsCook === true);
+	const smelt = CRAFT_RECIPES.find(r => plain(r) && r.needsFire === true && r.needsCook !== true);
+	const give = (s, recipe) => {
+		for (const ing of recipe.ingredients) {
+			if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
+			if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		}
+	};
+	const runOnce = assisted => {
+		const world = W2.serverWorld(createWorld(4000, 4000));
+		const clock = new WorldClock({ day: 1, dayTime: 12 });
+		const sim = new ServerSimulation({ world, clock, zombies: false, interactive: true });
+		sim.paysRewards = () => !assisted;
+		// a lit brazier beside the cook (it cooks and it smelts), a house with wood in it for the searcher
+		W2.addSolid(world, {
+			kind: "structure",
+			x: 1040,
+			y: 970,
+			w: 96,
+			h: 64,
+			hp: 200,
+			hpMax: 200,
+			destructible: false,
+			tags: "brazier",
+			powered: true,
+		});
+		W2.addSolid(world, {
+			kind: "building",
+			x: 2600,
+			y: 2600,
+			w: 400,
+			h: 400,
+			hp: 100,
+			hpMax: 100,
+			destructible: false,
+			tags: "house",
+			buildingType: 0,
+			passable: true,
+			lootSlots: 1,
+			lootItems: [{ kind: ItemKind.Etc, id: wood, count: 4 }],
+			lootTimer: 0,
+		});
+		const add = (slot, x, y) => {
+			const sp = createServerPlayer(
+				{ slot, userId: 900 + slot, name: `p${slot}` },
+				SAVE.defaultSave(),
+				x,
+				y,
+				0,
+				60,
+			);
+			sim.add(sp);
+			sp.state.x = x;
+			sp.state.y = y;
+			return sp;
+		};
+		const chef = add(0, 1000, 1000);
+		const picker = add(1, 3500, 1000);
+		const searcher = add(2, 2700, 2700);
+		const outs = [cook, smelt].map(recipe => {
+			give(chef.save, recipe);
+			sim.craft.step(1);
+			return sim.craft.craft(0, chef.state, chef.save, recipe.id);
+		});
+		W2.spawnGroundItem(world, ItemKind.Etc, wood, 3, 3510, 1000);
+		const act = sp =>
+			sim.interaction.act({ slot: sp.slot, state: sp.state, save: sp.save, players: [], zombies: [], hours: 12 });
+		const picked = act(picker);
+		const searched = act(searcher);
+		const a = s => s.achievements;
+		return {
+			got:
+				outs.every(o => o.kind === "crafted" && o.count > 0) &&
+				picked.kind === "item" &&
+				searched.kind === "search" &&
+				picker.save.invenEtc[wood] === 3 &&
+				searcher.save.invenEtc[wood] === 4,
+			chef: a(chef.save)[AID.Chef],
+			smith: a(chef.save)[AID.Blacksmith],
+			woods: a(picker.save)[AID.WoodsCollector] + a(searcher.save)[AID.WoodsCollector],
+			detail: `${outs.map(o => o.kind).join(",")} / ${picked.kind} / ${searched.kind}`,
+		};
+	};
+	const paid = runOnce(false);
+	const helped = runOnce(true);
+	check(
+		paid.got && paid.chef > 0 && paid.smith > 0 && paid.woods === 7,
+		"uma run que paga: cozinhar, fundir, pegar e revistar madeira movem Camp Cook, Metalworker e Woodpile",
+		`${paid.detail}; Chef ${paid.chef}, Blacksmith ${paid.smith}, Woods ${paid.woods}`,
+	);
+	check(
+		helped.got && helped.chef === 0 && helped.smith === 0 && helped.woods === 0,
+		"uma run assistida: a comida, o lingote e a madeira entram na mochila, e nenhuma dessas conquistas anda",
+		`${helped.detail}; Chef ${helped.chef}, Blacksmith ${helped.smith}, Woods ${helped.woods}`,
 	);
 }
 

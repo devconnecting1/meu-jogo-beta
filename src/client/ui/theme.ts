@@ -208,7 +208,7 @@ export const TRANSPARENCY = {
 	/** HUD cards / popovers drawn over the world: background at 85% */
 	hud: 0.15,
 	/**
-	 * DESIGN_RULES ITM-07: the use cooldown's veil over a quick plate (client/ui/hudQuick.ts), the dark well at 65%:
+	 * DESIGN_RULES ITM-08: the use cooldown's veil over a quick plate (client/ui/hudQuick.ts), the dark well at 65%:
 	 * the plate reads as "not yet" while its icon still shows under the veil draining away
 	 */
 	cooldown: 0.35,
@@ -251,8 +251,19 @@ export const GAME = {
 	success: TOKENS.chart1,
 	/** rare items, bosses: chart-4 */
 	rare: TOKENS.chart4,
-	/** coin icon: chart-3 (coin amounts are written in foreground) */
+	/** the coin (pixelArt.ts PixelCoin, MON-06): its face, chart-3 (coin amounts are written in foreground) */
 	coin: TOKENS.chart3,
+	/** the coin's rim and stamp: chart-3's hue, darker */
+	coinShade: TOKENS.coinShade,
+	/** the light on the coin's upper left: chart-3 towards gold, lighter */
+	coinShine: TOKENS.coinShine,
+	/**
+	 * an UNLOCKED achievement (UI-14): the medal's gold, the row's ring and its "Unlocked" -- gold means unlocked and
+	 * nothing else (numbers are STAT.value's yellow)
+	 */
+	medal: TOKENS.medal,
+	/** the medal's rim: the gold, darker */
+	medalShade: TOKENS.medalShade,
 	/** neutral information (info toasts, night): chart-2 */
 	info: TOKENS.chart2,
 	/** attention without danger (craft desk nearby, sun): chart-3 */

@@ -3,7 +3,9 @@ import type { PlayerSaveData } from "shared/game/save";
 import type { LoadStatus } from "shared/net/net";
 import { ADMIN_ATTRIBUTE, ADMIN_LABELS, isAdminUserId } from "shared/admin/config";
 import { AdminOp, describeOps, readAdminOps, safeText } from "shared/admin/ops";
-import { banMessage, kickMessage, langTypeOfLocale } from "shared/data/rules";
+import { banMessage, floodKickMessage, kickMessage, langTypeOfLocale } from "shared/data/rules";
+import { ADMIN_BURST, ADMIN_RATE } from "shared/net/mpConfig";
+import { ADMIN_WORLD_LIMITS } from "shared/admin/worldOps";
 import {
 	ADMIN_LIMITS,
 	AdminEvent,
@@ -33,6 +35,7 @@ import {
 	splitBanNote,
 	trimAudit,
 } from "./auditLog";
+import { startAdminWorld } from "./adminWorld";
 
 /*
  * Server side of the admin panel.
@@ -43,6 +46,9 @@ import {
  *   in the panel and persisted (best effort, pcall) to the "ProjectZ_AdminLog" DataStore -- UserIds and filtered
  *   text only, one key per server per day (server/admin/auditLog.ts); names are looked up when the panel shows it
  * - save edits go through the host (main.server.ts), which owns the sessions, the invariants and the report gate
+ * - world tools (`kind: "world"`, docs/MULTIPLAYER.md §10) run on the world the server owns (server/admin/adminWorld.ts)
+ *   and answer what really happened: the panel toasts success only on that OK
+ * - a NON-admin who floods this remote (ADMIN_RATE / ADMIN_BURST) is kicked, once, with one audit entry (§8.2, §9.2)
  * - what a kicked or banned player reads comes from shared/data/rules.ts (lang.ts, and a pointer to the rules)
  */
 
@@ -76,6 +82,15 @@ const REQ_PER_SECOND = 4;
 const ANNOUNCE_COOLDOWN = 3;
 /** a refused non-admin caller is logged at most this often (s) */
 const DENY_LOG_INTERVAL = 60;
+/** the free camera's updates have a bucket of their own (§10: 5/s), so moving the camera never starves the panel */
+const CAM_BURST = ADMIN_WORLD_LIMITS.FREECAM_HZ;
+const CAM_PER_SECOND = ADMIN_WORLD_LIMITS.FREECAM_HZ;
+/** the same world-tool line again by one admin inside this window counts on it ("×N"): Shift+click on one spot */
+const MERGE_S = 2;
+/** a line the server writes itself (adminId 0): an automatic one (`auto:`), or a pickup of an admin's drop */
+function serverLine(action: string): boolean {
+	return action.sub(1, 5) === "auto:" || action === "world:taken";
+}
 
 /** what main.server.ts exposes of a player's session (read-only snapshot) */
 export interface AdminSessionView {
@@ -131,17 +146,42 @@ export interface AdminHost {
 	 */
 	markAssisted(player: Player): boolean;
 	jobId: string;
+	/**
+	 * (§8.2, audit M2) One message on an admin remote, counted against the sender's flood limits (server/net/mpHost.ts
+	 * `noteRemote`): a non-admin calling the admin remote at all, or a patch acknowledgement that is not a number, is
+	 * a malformed one. True when the message must be dropped. Absent (MP_PHASE 0): nothing is counted.
+	 */
+	noteRemote?: (player: Player, malformed: boolean) => boolean;
 }
 
 export interface AdminServer {
 	/** a progress report of `player` was accepted (pushes live data to admins watching them) */
 	onReport(player: Player): void;
+	/**
+	 * (§8.2, audit L4) The server kicked `player` for a network flood: an entry of the audit log by the server itself
+	 * (adminId 0), the player by UserId and the counters the server wrote (MP-16: a human reviews every automatic kick).
+	 */
+	floodKick(player: Player, reason: string): void;
 }
 
 interface Bucket {
 	tokens: number;
 	at: number;
 	lastAnnounce: number;
+}
+
+/** a plain token bucket: `rate` tokens a second up to `burst` */
+interface Tokens {
+	tokens: number;
+	at: number;
+}
+
+function take(bucket: Tokens, burst: number, rate: number, now: number): boolean {
+	bucket.tokens = math.min(burst, bucket.tokens + math.max(0, now - bucket.at) * rate);
+	bucket.at = now;
+	if (bucket.tokens < 1) return false;
+	bucket.tokens -= 1;
+	return true;
 }
 
 function trimText(v: unknown, max: number): string | undefined {
@@ -172,7 +212,24 @@ function isUserId(v: unknown): v is number {
 
 export function startAdminServer(host: AdminHost): AdminServer {
 	const remotes = createAdminRemotes();
+	/** §10: the world tools, on the world the server owns (server/admin/adminWorld.ts) */
+	const world = startAdminWorld({
+		host: () => activeMpHost(),
+		markAssisted: p => host.markAssisted(p),
+		broadcast: ev => remotes.event.FireAllClients(ev),
+		note: (action, targetId, details) => recordAs(0, action, targetId, "", details, true),
+	});
 	const buckets = new Map<number, Bucket>();
+	const camBuckets = new Map<number, Tokens>();
+	/** non-admins who called this remote: their flood bucket (ADMIN_RATE / ADMIN_BURST), and who was kicked for it */
+	const strangers = new Map<number, Tokens>();
+	const flooded = new Set<number>();
+	/**
+	 * The automatic lines (`auto:<action>|<UserId>`) this server has written. Never cleared (a PlayerRemoving does not
+	 * forget it): a flooder rejoining to flood again is kicked again, but logged once per server (the review of 8f50bc5,
+	 * MEDIUM-4); auditLog.ts trims them like tool entries and a key keeps one per action and UserId (net review L6).
+	 */
+	const autoLogged = new Set<string>();
 	const denied = new Map<number, number>();
 	/** admin UserId → watched UserId */
 	const watching = new Map<number, number>();
@@ -193,9 +250,19 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	// ------------------------------------------------------------ audit
 
 	/**
+	 * The last merged world-tool line, so the SAME line again inside MERGE_S counts on it instead of adding one:
+	 * `details` as the tool wrote it (without the count), compared whole.
+	 */
+	let lastMerge: { e: AuditRecord; details: string; n: number; at: number } | undefined;
+
+	/**
 	 * `targetId`: the player acted on (0 = none); `target`: a place word when there is no player ("all", "own world",
 	 * "own run"); `details`: filtered or game-written text only (server/admin/auditLog.ts). `persist` false: memory +
-	 * output only (refused non-admin calls must not flood the stored log).
+	 * output only (refused non-admin calls must not flood the stored log). `merge`: the same tool with the same details
+	 * again by the same admin within MERGE_S (Shift+click on one spot) counts on the last line ("×N") instead of adding
+	 * one -- only while that line has not been written to the DataStore yet (a stored line is never rewritten), and
+	 * only an ADMIN's line ever takes part: a non-admin's refused call or the server's own line neither merges nor
+	 * breaks a merge (the review of 8f50bc5, MEDIUM-4 and L3).
 	 */
 	function record(
 		admin: Player,
@@ -205,11 +272,55 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		details: string,
 		ok: boolean,
 		persist = true,
+		merge = false,
 	): void {
+		recordAs(admin.UserId, action, targetId, target, details, ok, persist, merge);
+	}
+
+	/**
+	 * `record` by UserId: 0 is the SERVER itself (an automatic kick, audit L4; the pickup of an admin's drop). An
+	 * automatic line (`auto:`) is written once per action and UserId per server (`autoLogged`): a flooder rejoining to
+	 * flood again, or kicked by two rules at once (this remote's ADMIN_RATE and mpHost's limits), is one line.
+	 */
+	function recordAs(
+		adminId: number,
+		action: string,
+		targetId: number,
+		target: string,
+		details: string,
+		ok: boolean,
+		persist = true,
+		merge = false,
+	): void {
+		if (action.sub(1, 5) === "auto:") {
+			const key = `${action}|${targetId}`;
+			if (autoLogged.has(key)) return;
+			autoLogged.add(key);
+		}
+		const byAdmin = adminId !== 0 && isAdminUserId(adminId);
+		const last = lastMerge;
+		if (
+			byAdmin &&
+			merge &&
+			last !== undefined &&
+			os.clock() - last.at <= MERGE_S &&
+			last.e.adminId === adminId &&
+			last.e.action === action &&
+			last.e.targetId === targetId &&
+			last.e.ok === ok &&
+			last.details === details &&
+			(auditStore === undefined || !persist || unsaved.includes(last.e))
+		) {
+			// the same line again (Shift+click on one spot): one line and a count, not yet in the DataStore
+			last.n += 1;
+			last.at = os.clock();
+			last.e.details = safeText(`${details} (×${last.n})`, ADMIN_LIMITS.LOG_DETAILS);
+			return;
+		}
 		// every string is valid UTF-8 and bounded: one bad entry must never block the DataStore flush
 		const e: AuditRecord = {
 			t: os.time(),
-			adminId: admin.UserId,
+			adminId,
 			action: safeText(action, ADMIN_LIMITS.LOG_ACTION + 8),
 			targetId,
 			target: safeText(target, 24),
@@ -225,6 +336,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		audit.push(e);
 		trimAudit(audit, AUDIT_MEMORY);
 		if (auditStore !== undefined && persist) unsaved.push(e);
+		if (byAdmin) lastMerge = merge ? { e, details, n: 1, at: os.clock() } : undefined;
 	}
 
 	/** the entry survives a JSON round trip (a DataStore write fails on invalid UTF-8) */
@@ -356,7 +468,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			list.push({
 				t: e.t,
 				adminId: e.adminId,
-				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : "?",
+				admin: e.adminId !== 0 ? nameOf(e.adminId, budget) : serverLine(e.action) ? "server" : "?",
 				action: e.action,
 				target: e.targetId !== 0 ? `${nameOf(e.targetId, budget)} (${e.targetId})` : e.target,
 				details: e.details,
@@ -462,6 +574,11 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	function resolveTarget(raw: unknown): [number, string] | string {
 		const t = trimText(raw, ADMIN_LIMITS.TARGET);
 		if (t === undefined || t === "") return "enter a UserId or a username";
+		// Studio's Local Server test players have negative ids: they are not Roblox accounts, and the Ban API only
+		// takes real ones (it used to fall through to the username check and read "invalid username")
+		if (string.match(t, "^%-%d+$")[0] !== undefined) {
+			return "a negative UserId is a Studio test player, not a Roblox account: the Ban API cannot act on it";
+		}
 		if (string.match(t, "^%d+$")[0] !== undefined) {
 			const id = tonumber(t);
 			if (id === undefined || !isUserId(id)) return "invalid UserId";
@@ -478,10 +595,19 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		return [id, t];
 	}
 
-	function banApiError(err: unknown): string {
-		const hint = RunService.IsStudio()
-			? " — in Studio the Ban API needs a published place with Players.BanningEnabled on."
-			: " — check that Players.BanningEnabled is on for this place.";
+	/**
+	 * What to do about a failed Ban API call. BanAsync / UnbanAsync need Players.BanningEnabled (a place property that
+	 * script cannot set: default.project.json, `npm run check:place`). GetBanHistoryAsync ALSO only works on a live
+	 * (production) server -- never in Studio, published or not (creator-docs, Players:GetBanHistoryAsync) -- so no
+	 * setting fixes it there, and the hint used to send the admin publishing for nothing.
+	 */
+	function banApiError(err: unknown, history = false): string {
+		let hint = " — check that Players.BanningEnabled is on for this place.";
+		if (history && RunService.IsStudio()) {
+			hint = " — the ban history only works on a live server, never in Studio: no setting changes that.";
+		} else if (history) {
+			hint = " — check that Players.BanningEnabled is on (the ban history only works on live servers).";
+		}
 		return `Ban API failed: ${tostring(err)}${hint}`;
 	}
 
@@ -657,7 +783,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			if (typeIs(resolved, "string")) return fail(resolved);
 			const [userId, name] = resolved;
 			const [ok, pages] = pcall(() => Players.GetBanHistoryAsync(asUser(userId)));
-			if (!ok) return fail(banApiError(pages));
+			if (!ok) return fail(banApiError(pages, true));
 			const entries: Array<BanHistoryEntry> = [];
 			const bp = pages as BanHistoryPages;
 			// the reasons were typed by an admin (here, in the Creator Hub or through Open Cloud) and never went through
@@ -807,13 +933,62 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			return { ok: true };
 		}
 
+		if (kind === "world") {
+			const out = world.handle(caller, req);
+			const a = out.audit;
+			if (a !== undefined) record(caller, a.action, a.targetId, a.target, a.details, a.ok, true, a.merge);
+			return out.res;
+		}
+
 		return fail("unknown request");
 	}
 
+	/**
+	 * §8.2 / §9.2 level 2: a non-admin has no reason to call this remote at all (the panel is never built for them), so
+	 * one who calls it faster than ADMIN_RATE a second past a burst of ADMIN_BURST is flooding it -- kicked, once, with
+	 * the account-language line of shared/data/rules.ts and ONE audit entry (the refusals themselves stay throttled).
+	 */
+	function strangerFlood(player: Player, now: number): void {
+		if (flooded.has(player.UserId)) return;
+		let b = strangers.get(player.UserId);
+		if (b === undefined) {
+			b = { tokens: ADMIN_BURST, at: now };
+			strangers.set(player.UserId, b);
+		}
+		if (take(b, ADMIN_BURST, ADMIN_RATE, now)) return;
+		flooded.add(player.UserId);
+		// the SERVER did it, to this player: the flooder is the target, never the "admin" of the line (MEDIUM-4); the
+		// same `auto:flood` line mpHost's own flood rules write, once per UserId per server (`recordAs`)
+		recordAs(
+			0,
+			"auto:flood",
+			player.UserId,
+			"",
+			`flooded the admin remote (over ${ADMIN_BURST} requests at more than ${ADMIN_RATE}/s) without being an admin`,
+			true,
+		);
+		pcall(() => player.Kick(floodKickMessage(langTypeOfLocale(player.LocaleId))));
+	}
+
+	/** the free camera's own bucket (see CAM_BURST) */
+	function takeCamToken(userId: number): boolean {
+		const now = os.clock();
+		let b = camBuckets.get(userId);
+		if (b === undefined) {
+			b = { tokens: CAM_BURST, at: now };
+			camBuckets.set(userId, b);
+		}
+		return take(b, CAM_BURST, CAM_PER_SECOND, now);
+	}
+
 	remotes.request.OnServerInvoke = (player: Player, raw: unknown): AdminResponse => {
+		// 0) §8.2: every call counts toward the flood kick, and one from a non-admin is a malformed one (the panel is
+		// only ever shown to admins, so an honest client never makes it)
+		if (host.noteRemote?.(player, !isAdminUserId(player.UserId)) === true) return fail("forbidden");
 		// 1) authorization by UserId, before looking at the payload
 		if (!isAdminUserId(player.UserId)) {
 			const now = os.clock();
+			strangerFlood(player, now);
 			const last = denied.get(player.UserId) ?? -math.huge;
 			if (now - last >= DENY_LOG_INTERVAL) {
 				denied.set(player.UserId, now);
@@ -825,8 +1000,13 @@ export function startAdminServer(host: AdminHost): AdminServer {
 			}
 			return fail("forbidden");
 		}
-		// 2) rate limit, 3) payload shape
-		if (!takeToken(player.UserId)) return fail("too many requests; slow down");
+		// 2) rate limit (the free camera's moves on a bucket of their own), 3) payload shape
+		const cam =
+			typeIs(raw, "table") &&
+			(raw as Record<string, unknown>).kind === "world" &&
+			(raw as Record<string, unknown>).op === "freecam";
+		const allowed = cam ? takeCamToken(player.UserId) : takeToken(player.UserId);
+		if (!allowed) return fail("too many requests; slow down");
 		if (!typeIs(raw, "table")) return fail("invalid request");
 		const req = raw as Record<string, unknown>;
 		if (!typeIs(req.kind, "string")) return fail("invalid request");
@@ -842,6 +1022,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	};
 
 	remotes.patchAck.OnServerEvent.Connect((player, rev) => {
+		if (host.noteRemote?.(player, !typeIs(rev, "number")) === true) return;
 		if (typeIs(rev, "number")) host.ackPatch(player, rev);
 	});
 
@@ -855,6 +1036,10 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	for (const p of Players.GetPlayers()) markAdmin(p);
 	Players.PlayerRemoving.Connect(p => {
 		buckets.delete(p.UserId);
+		camBuckets.delete(p.UserId);
+		strangers.delete(p.UserId);
+		flooded.delete(p.UserId);
+		world.left(p.UserId);
 		denied.delete(p.UserId);
 		watching.delete(p.UserId);
 		for (const [adminId, watched] of watching) {
@@ -867,6 +1052,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	return {
 		onReport(player: Player): void {
 			pushWatch(player);
+		},
+		floodKick(player: Player, reason: string): void {
+			recordAs(0, "auto:flood", player.UserId, "", reason, true, true);
 		},
 	};
 }

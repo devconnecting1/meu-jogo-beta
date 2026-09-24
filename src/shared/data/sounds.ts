@@ -4,7 +4,10 @@
  * Rules (design/audio-credits.md has the licence table and the calibration):
  *  - Only audio the game may legally ship: engine content (`rbxasset://sounds/*`, shipped with the Roblox
  *    client) and assets from Roblox's own free library (Pro Sound Effects / APM Music, "courtesy of" the
- *    official catalogue, free for use inside experiences). Every id in here was loaded and checked in Studio.
+ *    official catalogue, free for use inside experiences). Every id in here was checked: the first ones loaded in
+ *    Studio, the P0-4 ones (horde voice, bite, doors, item use, flamethrower, motorcycle) through Roblox's public
+ *    asset details (creator ProSoundEffects, IsPublicDomain) and downloaded and decoded from the asset delivery --
+ *    which a private audio refuses (design/audio-credits.md, "Como cada id foi verificado").
  *  - `id: ""` is a legal, expected state: an empty slot plays NOTHING (silent fallback). Never fill a slot
  *    with audio of doubtful origin just to avoid the silence.
  *  - `volume` is the base level BEFORE the bus gain (the Settings sliders). Keep every one of them <= 0.6:
@@ -54,6 +57,13 @@ export interface SoundDef {
 	 * ("Multiple Shots" / "Various Shot Bursts"): a short window turns one of them into a single shot.
 	 */
 	maxPlay?: number;
+	/**
+	 * A held loop (client/audio/audio.ts `holdLoop`: an engine, a flamethrower) repeats only this window of the file,
+	 * in seconds (Sound.LoopRegion): a library take is a whole recording -- start, idle, revs, off -- and the steady
+	 * stretch is the only part that loops.
+	 */
+	loopStart?: number;
+	loopEnd?: number;
 }
 
 // ---------------------------------------------------------------- assets (see design/audio-credits.md)
@@ -72,9 +82,29 @@ const PSE_PISTOL_B = "rbxassetid://9114716907";
 const PSE_PISTOL_C = "rbxassetid://9114716928";
 const PSE_RIFLE = "rbxassetid://9113195119";
 const PSE_SHOTGUN = "rbxassetid://9112912106";
-const PSE_GROWL_A = "rbxassetid://9114628598";
-const PSE_GROWL_B = "rbxassetid://9114628620";
 const PSE_ROAR = "rbxassetid://9114628818";
+/** the horde's voice (P0-4): human takes of the library's "Voices" categories, not the robot of before */
+const PSE_TRACHEOTOMY = "rbxassetid://9120231499";
+const PSE_GROSS_BREATH = "rbxassetid://9114663862";
+const PSE_GOBLIN_GRUNT = "rbxassetid://9114625030";
+const PSE_GOBLIN_ROAR = "rbxassetid://9114624779";
+const PSE_MONSTER_SNARL = "rbxassetid://9116968474";
+const PSE_CREATURE_ATTACK = "rbxassetid://9113989593";
+const PSE_BUG_CHOMP = "rbxassetid://9114574294";
+/** doors, the survivor's hands, the flamethrower, the motorcycle */
+const PSE_DOOR_CREAK = "rbxassetid://9120839599";
+const PSE_DOOR_SHUT = "rbxassetid://9120839870";
+const PSE_IRON_CREAK = "rbxassetid://9116841392";
+const PSE_IRON_SLAM = "rbxassetid://9116835170";
+const PSE_APPLE_CHEW = "rbxassetid://9113138343";
+const PSE_CLOTH_RIP = "rbxassetid://9113827650";
+const PSE_BAG_ZIPPER = "rbxassetid://9113260699";
+const PSE_RATTLE = "rbxassetid://9114074235";
+const PSE_TORCH_FLAME = "rbxassetid://9120192302";
+const PSE_FIRE_BURST = "rbxassetid://9117988736";
+const PSE_KART_EXHAUST = "rbxassetid://9112787824";
+const PSE_MOTO_HORN = "rbxassetid://9120383448";
+const PSE_BIKE_BELL = "rbxassetid://9125390319";
 const PSE_NIGHT_BED = "rbxassetid://9114244977";
 const PSE_DAY_AMBIENCE = "rbxassetid://9112833822";
 const PSE_DAWN_BIRDS = "rbxassetid://9116969481";
@@ -268,31 +298,124 @@ export const SOUNDS = {
 		priority: 6,
 		spatial: true,
 	},
-	/** idle growl of a zombie near the survivor: the horde has to be heard before it is seen */
-	zombieGrowl: {
-		id: PSE_GROWL_A,
-		bus: "sfx",
-		category: "creature",
-		volume: 0.2,
-		pitchMin: 0.78,
-		pitchMax: 0.98,
-		voices: 2,
-		priority: 3,
-		spatial: true,
-		maxPlay: 1.6,
-	},
-	/** a zombie that just noticed the survivor */
-	zombieAlert: {
-		id: PSE_GROWL_B,
+	// --- the horde's voice (P0-4). Four idle groans and two snarls, each a window of a HUMAN take of the library's
+	//     voice categories (a tracheotomy voice's gurgling grunts, a creature's wet breathing, a performer's growl):
+	//     the "Goliath" robot voice of before is gone. client/audio/gameAudio.ts picks them without repeating the last,
+	//     bends the pitch by the zombie's type and meters them through one budget, so a horde of 60 is a few voices
+	//     and never a wall of them. Every one of them is spatial: the groan says WHERE the horde is.
+	/** a gurgling grunt with a laboured breath (Tracheotomy Voice 1, 1.08-3.13 s) */
+	zombieGroanA: {
+		id: PSE_TRACHEOTOMY,
 		bus: "sfx",
 		category: "creature",
 		volume: 0.26,
-		pitchMin: 0.85,
-		pitchMax: 1.05,
+		pitchMin: 0.88,
+		pitchMax: 1,
+		voices: 2,
+		priority: 3,
+		spatial: true,
+		startAt: 1.08,
+		maxPlay: 2.05,
+	},
+	/** the same voice's short choke (3.46-4.36 s) */
+	zombieGroanB: {
+		id: PSE_TRACHEOTOMY,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.24,
+		pitchMin: 0.9,
+		pitchMax: 1.02,
+		voices: 2,
+		priority: 3,
+		spatial: true,
+		startAt: 3.46,
+		maxPlay: 0.9,
+	},
+	/** wet, heavy breathing through the nose: the idle zombie that is only standing there */
+	zombieGroanC: {
+		id: PSE_GROSS_BREATH,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.22,
+		pitchMin: 0.8,
+		pitchMax: 0.92,
+		voices: 2,
+		priority: 3,
+		spatial: true,
+		startAt: 0.15,
+		maxPlay: 1.95,
+	},
+	/** a low grunt (Goblin Growl 9, a human-made growl), pitched down to a groan */
+	zombieGroanD: {
+		id: PSE_GOBLIN_GRUNT,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.2,
+		pitchMin: 0.72,
+		pitchMax: 0.82,
+		voices: 2,
+		priority: 3,
+		spatial: true,
+		maxPlay: 1.1,
+	},
+	/** a zombie that just saw the survivor: a snarl (Monster Vocals 12) */
+	zombieAggroA: {
+		id: PSE_MONSTER_SNARL,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.3,
+		pitchMin: 0.86,
+		pitchMax: 1,
 		voices: 2,
 		priority: 4,
 		spatial: true,
-		maxPlay: 1.4,
+		startAt: 0.3,
+		maxPlay: 1.05,
+	},
+	/** the other one: a rising growl (Goblin Growl 6) */
+	zombieAggroB: {
+		id: PSE_GOBLIN_ROAR,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.28,
+		pitchMin: 0.82,
+		pitchMax: 0.94,
+		voices: 2,
+		priority: 4,
+		spatial: true,
+		startAt: 0.12,
+		maxPlay: 1.65,
+	},
+	/** a group turning on you at once (IA-03's shout): one scream for all of them (Creature Vocals 1, 2.28-4.03 s) */
+	zombieShout: {
+		id: PSE_CREATURE_ATTACK,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.32,
+		pitchMin: 0.9,
+		pitchMax: 1,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		startAt: 2.28,
+		maxPlay: 1.75,
+	},
+	/**
+	 * The bite (LEG-04): the server says it landed (FxType.Sound, shared/net/fxWire.ts WIRE_SOUNDS), at the survivor it
+	 * landed on -- yours or an ally's. A wet crunch (Giant Bug Chomps 3, 0.2-0.9 s), the most important sound of the game.
+	 */
+	bite: {
+		id: PSE_BUG_CHOMP,
+		bus: "sfx",
+		category: "creature",
+		volume: 0.42,
+		pitchMin: 0.9,
+		pitchMax: 1.08,
+		voices: 2,
+		priority: 8,
+		spatial: true,
+		startAt: 0.2,
+		maxPlay: 0.7,
 	},
 	bossRoar: {
 		id: PSE_ROAR,
@@ -403,17 +526,211 @@ export const SOUNDS = {
 		voices: 1,
 		priority: 4,
 	},
-	// a usable eaten or applied: the Bag's Use and the HUD's quick HEAL / EAT (DESIGN_RULES ITM-07). The pickup's engine
-	// click, lower and softer -- an already-checked take, the way uiClose is uiOpen's (design/audio-credits.md)
-	useItem: {
-		id: `${ENGINE}clickfast.wav`,
+
+	// --- doors (EDI-13: the doors a survivor builds, and the doors of the map), played where the server says the door
+	//     turned (FxType.Sound). The takes are quiet foley, hence the higher base volumes; a door does not carry past a
+	//     street (range).
+	doorOpen: {
+		id: PSE_DOOR_CREAK,
 		bus: "sfx",
 		category: "world",
-		volume: 0.24,
-		pitchMin: 0.72,
-		pitchMax: 0.8,
-		voices: 1,
+		volume: 0.5,
+		pitchMin: 0.94,
+		pitchMax: 1.06,
+		voices: 2,
 		priority: 4,
+		spatial: true,
+		range: 1100,
+		startAt: 0.55,
+		maxPlay: 1.3,
+	},
+	doorClose: {
+		id: PSE_DOOR_SHUT,
+		bus: "sfx",
+		category: "world",
+		volume: 0.5,
+		pitchMin: 0.94,
+		pitchMax: 1.06,
+		voices: 2,
+		priority: 4,
+		spatial: true,
+		range: 1100,
+		startAt: 0.95,
+		maxPlay: 0.8,
+	},
+	ironDoorOpen: {
+		id: PSE_IRON_CREAK,
+		bus: "sfx",
+		category: "world",
+		volume: 0.5,
+		pitchMin: 0.92,
+		pitchMax: 1.02,
+		voices: 2,
+		priority: 4,
+		spatial: true,
+		range: 1100,
+		startAt: 0.68,
+		maxPlay: 0.9,
+	},
+	ironDoorClose: {
+		id: PSE_IRON_SLAM,
+		bus: "sfx",
+		category: "world",
+		volume: 0.3,
+		pitchMin: 0.92,
+		pitchMax: 1.02,
+		voices: 2,
+		priority: 4,
+		spatial: true,
+		range: 1100,
+		maxPlay: 1,
+	},
+
+	// --- using a usable (USABLES): the server accepted it (FxType.Sound at the survivor). Heard by whoever stands
+	//     near: a meal or a bandage is not a secret, and the range keeps it within a room.
+	useEat: {
+		id: PSE_APPLE_CHEW,
+		bus: "sfx",
+		category: "world",
+		volume: 0.36,
+		pitchMin: 0.92,
+		pitchMax: 1.08,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		range: 700,
+		maxPlay: 1.45,
+	},
+	useBandage: {
+		id: PSE_CLOTH_RIP,
+		bus: "sfx",
+		category: "world",
+		volume: 0.34,
+		pitchMin: 0.94,
+		pitchMax: 1.06,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		range: 700,
+		maxPlay: 0.6,
+	},
+	/** the first aid kit: its bag unzipped */
+	useMedkit: {
+		id: PSE_BAG_ZIPPER,
+		bus: "sfx",
+		category: "world",
+		volume: 0.3,
+		pitchMin: 0.95,
+		pitchMax: 1.05,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		range: 700,
+		maxPlay: 0.8,
+	},
+	/** pain killer, sedative: the pills rattling (a dice rattle stands in for the bottle: no pill take in the library) */
+	usePills: {
+		id: PSE_RATTLE,
+		bus: "sfx",
+		category: "world",
+		volume: 0.5,
+		pitchMin: 1.05,
+		pitchMax: 1.15,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		range: 700,
+		startAt: 0.3,
+		maxPlay: 1.2,
+	},
+	/**
+	 * The adrenaline injection. EMPTY SLOT on purpose: the official libraries have no syringe or injection take
+	 * ("syringe", "injection", "needle" find pressure blasts and robots), and no user upload is allowed
+	 * (design/audio-credits.md, pendency D). Silent until the owner finds one; the event already fires.
+	 */
+	useInject: {
+		id: "",
+		bus: "sfx",
+		category: "world",
+		volume: 0.34,
+		pitchMin: 1,
+		pitchMax: 1,
+		voices: 1,
+		priority: 5,
+		spatial: true,
+		range: 700,
+	},
+
+	// --- the flamethrower (weapons.ts id 25): a steady jet held while it fires (a looped window of a torch's flame,
+	//     pitched down to a roar) and a burst when it lights. The stun gun keeps shotElectric.
+	flameLoop: {
+		id: PSE_TORCH_FLAME,
+		bus: "sfx",
+		category: "weapon",
+		volume: 0.55,
+		pitchMin: 0.55,
+		pitchMax: 0.55,
+		voices: 1,
+		priority: 6,
+		spatial: true,
+		loop: true,
+		loopStart: 1.5,
+		loopEnd: 8.5,
+	},
+	flameIgnite: {
+		id: PSE_FIRE_BURST,
+		bus: "sfx",
+		category: "weapon",
+		volume: 0.36,
+		pitchMin: 0.85,
+		pitchMax: 1,
+		voices: 2,
+		priority: 6,
+		spatial: true,
+	},
+
+	// --- the motorcycle (VEI-05): the engine is a held loop -- the idle of a twin-cylinder four-stroke (Go Kart Exhaust
+	//     Constant 1, 28.5-42.5 s) whose pitch and level follow the speed (gameAudio.ts) -- and the horn; the bicycle
+	//     has its bell. The horn and the bell are the server's (FxType.Sound), like the noise the horde hears.
+	engineMoto: {
+		id: PSE_KART_EXHAUST,
+		bus: "sfx",
+		category: "world",
+		volume: 0.42,
+		pitchMin: 1,
+		pitchMax: 1,
+		voices: 1,
+		priority: 7,
+		spatial: true,
+		loop: true,
+		loopStart: 28.5,
+		loopEnd: 42.5,
+	},
+	hornMoto: {
+		id: PSE_MOTO_HORN,
+		bus: "sfx",
+		category: "world",
+		volume: 0.4,
+		pitchMin: 0.98,
+		pitchMax: 1.02,
+		voices: 2,
+		priority: 7,
+		spatial: true,
+		maxPlay: 0.5,
+	},
+	bellBike: {
+		id: PSE_BIKE_BELL,
+		bus: "sfx",
+		category: "world",
+		volume: 0.34,
+		pitchMin: 0.98,
+		pitchMax: 1.04,
+		voices: 2,
+		priority: 6,
+		spatial: true,
+		range: 1100,
+		startAt: 0.22,
+		maxPlay: 0.6,
 	},
 
 	// --- footsteps: the most repeated sound in the game (a survivor plants a foot about twice a second, and

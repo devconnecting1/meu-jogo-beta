@@ -27,7 +27,9 @@
  */
 import { isFiniteNumber } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
-import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
+import { EdgeShift, edgeCount, FxEvent, FxType, HeldBit, IntentMessage } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
+import { useSoundOf } from "shared/data/usables";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { applyPlayerDamage, currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -43,7 +45,7 @@ import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
-import { ServerItems } from "./items";
+import { PickupResult, ServerItems, WalkingSurvivor } from "./items";
 import { KEEP_AFTER_LEAVE_S } from "./life";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
 import { TitleId } from "shared/data/titles";
@@ -171,6 +173,19 @@ export class ServerSimulation {
 	 * sets it (server/net/replication.ts); unset, every body is near.
 	 */
 	zombieViewLag?: (slot: number, z: ZombieState, viewTick: number) => number;
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see the spot (x, y) -- not inside a building they are not in, and in
+	 * the dark only if it is lit or within earshot? A ground item that just fell there (ITEM_NEWS_S) is told to them
+	 * only then (a zombie's drop at the place it died in the dark handed a client the death it was never shown). Set by
+	 * the replication layer, which owns the rules (server/net/replication.ts); unset, everything in range is seen.
+	 */
+	itemVisible?: (slot: number, x: number, y: number) => boolean;
+	/**
+	 * Does server/sim/life.ts still keep a body for this UserId -- connected, in the world or waiting in the lobby, or
+	 * gone less than KEEP_AFTER_LEAVE_S? A survivor's ping is kept exactly that long (`setPing`). Set by the LifeKeeper;
+	 * unset (a simulation with no keeper), the ping goes by the age of its last sample.
+	 */
+	bodyKept?: (userId: number) => boolean;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -191,6 +206,12 @@ export class ServerSimulation {
 	 * undefined, every run pays — which is what a pure test wants.
 	 */
 	paysRewards?: (sp: ServerPlayer) => boolean;
+	/**
+	 * The admin's switches (docs/MULTIPLAYER.md §10: god, noclip, infinite ammo) onto this survivor's body, right
+	 * before its step. They belong to the PERSON, not to a body: a stand-up, a reset or a trip to the lobby builds a
+	 * new body, and the switch must still be on in it. server/admin/adminWorld.ts sets it; undefined = nobody has any.
+	 */
+	adminMods?: (sp: ServerPlayer) => void;
 	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
@@ -244,8 +265,20 @@ export class ServerSimulation {
 	turrets?: ServerTurrets;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
-	/** the result of a survivor's action press, for the caller's sounds and toasts */
+	/**
+	 * the result of a survivor's action press, for the caller's sounds and toasts -- and of a supply walked up
+	 * (ITM-07: `ServerItems.walkOver`), which is the press's `item` outcome without the press
+	 */
 	onInteract?: (sp: ServerPlayer, outcome: InteractOutcome) => void;
+	/** the walk-over's report, bound once (a closure per tick would be garbage): the same `item` outcome as E's */
+	private readonly walkTaken = (who: WalkingSurvivor, got: PickupResult): void => {
+		const sp = this.bySlot.get(who.slot);
+		if (sp !== undefined && got.ok && this.onInteract !== undefined) {
+			this.onInteract(sp, { kind: "item", count: got.count });
+		}
+	};
+	/** §9.3 for the walk-over, bound once: a supply walked up credits the collector only in a run that earns (as E's) */
+	private readonly walkPays = (slot: number): boolean => this.paysSlot(slot);
 	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
 	/**
@@ -332,7 +365,14 @@ export class ServerSimulation {
 			// client still delivers them into its own copy and reports it
 			deliversPacks: this.ownsInteractive,
 		});
-		this.backpack.onOutcome = (sp, msg, outcome) => this.onBackpack?.(sp, outcome);
+		this.backpack.onOutcome = (sp, msg, outcome) => {
+			// a usable the server accepted is heard where the survivor stands (P0-4): eaten, torn, unzipped, rattled
+			if (outcome.kind === "used") {
+				const sound = wireSoundId(useSoundOf(outcome.item));
+				this.onFx?.({ t: FxType.Sound, sound, x: sp.state.x, y: sp.state.y, volume: 1 });
+			}
+			this.onBackpack?.(sp, outcome);
+		};
 		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
 		this.adoptSystems(this.buildAround(this.world));
 	}
@@ -483,7 +523,11 @@ export class ServerSimulation {
 			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
 			// tell "the server made this" from "we both generated this from the seed"
 			serverWorld(world);
-			const items = new ServerItems({ world, out: this.worldOut });
+			const items = new ServerItems({
+				world,
+				out: this.worldOut,
+				visible: (slot, x, y) => this.itemVisible?.(slot, x, y) ?? true,
+			});
 			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
 			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
@@ -502,10 +546,7 @@ export class ServerSimulation {
 				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
 				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
 				// §9.3: an assisted run earns no achievement (Thomas Edison), as it earns no coins
-				paysRewards: slot => {
-					const sp = this.bySlot.get(slot);
-					return sp === undefined || this.pays(sp);
-				},
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			out.power = power;
 			const build = new ServerBuild({
@@ -515,6 +556,11 @@ export class ServerSimulation {
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				onSolid: (s, added) => power.note(s, added),
+				// MP-24: the caps and the rot of abandoned constructions go by the account, read live off the roster
+				userOf: slot => this.bySlot.get(slot)?.userId,
+				present: userId => this.roster.some(sp => sp.userId === userId),
+				// the MP-24 walk is a bar of its own in the MicroProfiler ("PZ.build.sealed")
+				profile: () => this.profile,
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({
@@ -525,6 +571,8 @@ export class ServerSimulation {
 				machines: power,
 				// a door is a way in or a wall to the horde (§3.3), exactly like a construction going up or down
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -546,21 +594,21 @@ export class ServerSimulation {
 					},
 					shove: (z, dir, knock, stun) => reactToHit(z, dir, knock, stun),
 				},
+				// §9.3: an assisted run rides, and earns no Road Trip point
+				paysRewards: sp => this.pays(sp),
 			});
 		}
 		// the backpack verbs work with or without the interactive world (server/sim/backpack.ts): only a build recipe
-		// needs `build`, and ServerCraft refuses one without it before anything is spent
-		out.craft = new ServerCraft({ world, build: out.build });
+		// needs `build`, and ServerCraft refuses one without it before anything is spent. An assisted run cooks and
+		// smelts, and earns no Camp Cook nor Metalworker (§9.3)
+		out.craft = new ServerCraft({ world, build: out.build, paysRewards: slot => this.paysSlot(slot) });
 
 		if (!this.ownsHorde) return out;
 		const horde = new ZombieWorld(world, this.clock);
 		out.horde = horde;
 		const progress = new Progress({
 			saveOf: slot => this.bySlot.get(slot)?.save,
-			paysRewards: slot => {
-				const sp = this.bySlot.get(slot);
-				return sp === undefined || this.pays(sp);
-			},
+			paysRewards: slot => this.paysSlot(slot),
 			// MON-05: the killing blow that made a Horde Breaker
 			titleUnlocked: (slot, titleId) => {
 				const sp = this.bySlot.get(slot);
@@ -659,6 +707,12 @@ export class ServerSimulation {
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
 	private pays(sp: ServerPlayer): boolean {
 		return this.paysRewards === undefined || this.paysRewards(sp);
+	}
+
+	/** the same, for the survivor in `slot` (nobody there: nothing to withhold) */
+	private paysSlot(slot: number): boolean {
+		const sp = this.bySlot.get(slot);
+		return sp === undefined || this.pays(sp);
 	}
 
 	/** §3.6 at the world's midnight: pay who earned the day (`dayRefusal`), then start counting the next one */
@@ -769,6 +823,8 @@ export class ServerSimulation {
 		this.bySlot.set(sp.slot, sp);
 		// the welcome that follows (server/sim/life.ts) hands this client every item around the spawn point
 		this.items?.welcomed(sp.slot, sp.state.x, sp.state.y);
+		// MP-24: what this account built is theirs again, in this slot, and stops rotting
+		this.build?.enter(sp.slot);
 		this.order.push(sp.slot);
 		let i = this.order.size() - 1;
 		while (i > 0 && this.order[i - 1] > sp.slot) {
@@ -878,20 +934,23 @@ export class ServerSimulation {
 	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, and a returning
 	 * survivor's first sample is filtered against it.
 	 *
-	 * For as long as their body is (life.ts KEEP_AFTER_LEAVE_S), not for as long as the server runs: someone gone
-	 * longer comes back as a newcomer, and the table holds the survivors measured lately instead of one entry for
-	 * everyone who ever played here (the second review of the zombie-motion branch, NIT 3). It is swept when a
-	 * survivor it has no recent sample of is measured -- the one moment it can grow.
+	 * For exactly as long as life.ts keeps their body (`bodyKept`): while they are connected -- in the world, or waiting
+	 * in the lobby, where nothing samples it -- and KEEP_AFTER_LEAVE_S after they left, when the keeper lets the body
+	 * go and this goes with it (`forgetPing`). Not for as long as the server runs: someone gone longer comes back as a
+	 * newcomer, and the table holds the survivors of lately instead of everyone who ever played here (the second review
+	 * of the zombie-motion branch, NIT 3). It used to go KEEP_AFTER_LEAVE_S after its last SAMPLE, and five minutes in
+	 * the lobby had a throttled re-entry's first sample taken raw (the review of the zombie-motion branch, S3 NIT 3).
+	 * Without a keeper, by the age of the last sample; swept when a survivor it has no valid entry for is measured.
 	 */
 	setPing(sp: ServerPlayer, seconds: number): void {
 		const combat = this.combat;
 		if (combat === undefined) return;
 		const oldest = this.tick - KEEP_AFTER_LEAVE_S * this.simHz;
 		let known = this.pings.get(sp.userId);
-		const recent = known !== undefined && known.at >= oldest;
-		if (known !== undefined && recent) combat.seedPing(sp.slot, known.pingS);
+		const valid = known !== undefined && (known.at >= oldest || this.bodyKept?.(sp.userId) === true);
+		if (known !== undefined && valid) combat.seedPing(sp.slot, known.pingS);
 		combat.setPing(sp.slot, seconds);
-		if (known === undefined || !recent) {
+		if (known === undefined || !valid) {
 			this.forgetPingsBefore(oldest);
 			known = { pingS: 0, at: 0 };
 			this.pings.set(sp.userId, known);
@@ -900,13 +959,18 @@ export class ServerSimulation {
 		known.at = this.tick;
 	}
 
-	/** drops every ping last sampled before tick `oldest` */
+	/** drops every ping last sampled before tick `oldest` whose survivor's body life.ts no longer keeps */
 	private forgetPingsBefore(oldest: number): void {
 		const gone = new Array<number>();
 		for (const [userId, p] of this.pings) {
-			if (p.at < oldest) gone.push(userId);
+			if (p.at < oldest && this.bodyKept?.(userId) !== true) gone.push(userId);
 		}
 		for (const userId of gone) this.pings.delete(userId);
+	}
+
+	/** life.ts let this survivor's body go (KEEP_AFTER_LEAVE_S after they left): their ping goes with it */
+	forgetPing(userId: number): void {
+		this.pings.delete(userId);
 	}
 
 	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */
@@ -954,6 +1018,7 @@ export class ServerSimulation {
 		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			this.adminMods?.(sp);
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,
@@ -1111,6 +1176,8 @@ export class ServerSimulation {
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
 		});
+		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
+		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);
 		if (this.onInteract !== undefined) this.onInteract(sp, outcome);
 	}
 
@@ -1123,11 +1190,15 @@ export class ServerSimulation {
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
+		// litter rots whether or not anybody is here to see it (GROUND_ITEM_LIFE_S)
+		items.upkeep(this.tickDt);
 		this.vehicles?.step(this.tickDt);
 		// the grid keeps running with nobody in town: the sun still charges the boxes (ELE-02)
 		this.power?.step(this.tickDt, this.tick);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		// ITM-07: the supplies under each survivor's body, by the E press's own checks; the save is dirty as after one
+		items.walkOver(this.roster, this.walkTaken, this.walkPays);
 		items.sweepInterest(this.tickDt);
 		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}

@@ -43,6 +43,19 @@
  *                      creates no Instance (nor does the touch preview it redraws); the Controls radio group; each
  *                      tab's Defaults asks first and resets only its fields to defaultSettings(); no Save / Cancel. And
  *                      the interface audio does not take the town under the menus for a screen.
+ *   7. THE DEATH       the death screen (client/onboarding/gameOver.ts, UI-13 / MP-21 / MP-22), centred like every
+ *      SCREEN          window in section 1: in each state -- dead until dawn (by night and by day), the town falling
+ *                      (nobody standing), a new life waiting, the end with nobody to wake you, no Rebirth money, a first
+ *                      death with a record -- on the six screens and a phone with touch: every text whole, nothing out
+ *                      of the window, the count the biggest text, the row Home | New game | Rebirth at the bottom, each
+ *                      a thumb (>= 44 px) on touch. The state on screen is the one the rule says (title, count, words,
+ *                      colours; the town's fall counted from the moment nobody stands, and back to the daybreak when
+ *                      somebody does or the estimate runs out); Rebirth pressable only when it can be paid; "New best!"
+ *                      only for a record; New game asks first; 600 frames of a wait create nothing, and a frame that
+ *                      changes nothing writes nothing. And the scrim is the world's (UI-06).
+ *   8. THE SHOP AND    the Shop (Packs, Earn coins; MON-06) and the Achievements (UI-14), UI-07 windows: on the four
+ *      ACHIEVEMENTS    screens of the owner's captures and two more, no text clipped and nothing out of the window; on a
+ *                      phone with touch, every Buy, tab and the Wardrobe door a thumb (>= 44 px).
  *
  * Pure Node (>= 18) plus the project's TypeScript. No layout engine: the rects are computed here from the Scale /
  * Offset / AnchorPoint / aspect the kit writes, the way the engine does.
@@ -67,6 +80,8 @@ const { showTutorial, SCHEMES } = require(join(SRC, "client/ui/tutorial.ts"));
 const { showPause } = require(join(SRC, "client/ui/pauseMenu.ts"));
 const { popup } = require(join(SRC, "client/ui/popup.ts"));
 const { showRecords } = require(join(SRC, "client/ui/records.ts"));
+const { showAchievements } = require(join(SRC, "client/ui/achievements.ts"));
+const GO = require(join(SRC, "client/onboarding/gameOver.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const skin = require(join(SRC, "client/ui/skin.ts"));
 const { THEME, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
@@ -193,6 +208,49 @@ const WINDOWS = [
 		open: () => showRecords(ctx),
 		frame: () => layer.FindFirstChild("Records")?.FindFirstChild("Body")?.FindFirstChild("Window"),
 	},
+	// the Shop and the Achievements, UI-07 windows since their polish (MON-06, UI-14): the shop's Back page and the
+	// achievements' dialog are gone
+	{
+		name: "Shop",
+		open: () =>
+			showShop(
+				ctx,
+				() => {},
+				() => {},
+			),
+		frame: () => layer.FindFirstChild("Shop")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	{
+		name: "Achievements",
+		open: () => showAchievements(ctx),
+		frame: () => layer.FindFirstChild("Achievements")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	// the death screen (UI-13) in its two builds: the wait for daybreak and the end of a run nobody wakes you from
+	{
+		name: "Morte (espera)",
+		open: () => {
+			const w = GO.showDaybreakWait(
+				ctx,
+				{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+				{ onRebirth: () => {}, onNewRun: () => {}, onHome: () => {} },
+				false,
+				() => 2,
+			);
+			w.setRemaining(197, true);
+			return () => w.close();
+		},
+		frame: () => layer.FindFirstChild("RunOver")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	{
+		name: "Morte (fim)",
+		open: () =>
+			GO.showRunSummary(
+				ctx,
+				{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+				{ onRebirth: () => {}, onNewRun: () => {}, onHome: () => {} },
+			),
+		frame: () => layer.FindFirstChild("RunOver")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
 ];
 
 const SCREENS = [
@@ -314,7 +372,7 @@ check(
 
 // ================================================================ 2. pages that reach the edges
 
-console.log("\n2) paginas que chegam a borda (o logo do lobby, o Back da loja) continuam longe dos botoes\n");
+console.log("\n2) paginas que chegam a borda (o logo e as moedas do lobby) continuam longe dos botoes\n");
 
 for (const [w, h, bar, buttons, label] of SCREENS) {
 	setScreen(w, h, bar, buttons);
@@ -336,16 +394,7 @@ for (const [w, h, bar, buttons, label] of SCREENS) {
 		JSON.stringify(rectOf(menu.FindFirstChild("Title"))) === JSON.stringify(logo),
 	);
 	handle.close();
-	const closeShop = showShop(
-		ctx,
-		() => {},
-		() => {},
-	);
-	flush();
-	const back = rectOf(layer.FindFirstChild("Shop").FindFirstChild("Body").FindFirstChild("Back"));
-	check(`loja, ${label}: o Back fora dos botoes`, !underButtons(back), fmt(back));
-	closeShop();
-	flush();
+	// (the shop was the other page here; it is a window now, centred in section 1)
 }
 
 // ================================================================ 3. the scale
@@ -1036,8 +1085,70 @@ function textFits(label) {
 		onPin.length === 0 && played.includes("uiOpen") && played.includes("uiClose"),
 		`ao prender: [${onPin}], Settings: [${played}]`,
 	);
+	// the coin toast shows the pixel coin and has no glyph (MON-06): it still sounds like coins, read from its Kind
+	const { showToast } = require(join(SRC, "client/ui/widgets.ts"));
+	// the shim fires ChildAdded only; the engine also fires the layer's DescendantAdded for the new toast (what
+	// uiAudio.ts listens to): fired here by hand, for the newest toast of the stack
+	const toastAdded = () => {
+		const stack = ctx.uiLayer.FindFirstChild("ToastStack");
+		const toasts = stack.GetChildren().filter(c => c.Name === "Toast");
+		const newest = toasts.reduce((a, c) => (a === undefined || c.LayoutOrder < a.LayoutOrder ? c : a), undefined);
+		ctx.uiLayer.DescendantAdded.Fire(newest);
+		flush();
+	};
+	played.length = 0;
+	showToast(ctx.uiLayer, "+3 coins", "coin");
+	toastAdded();
+	const onCoin = [...played];
+	played.length = 0;
+	showToast(ctx.uiLayer, "Not enough coins: 10 more needed", "error");
+	toastAdded();
+	check(
+		"audio da interface: o aviso de moedas (a moeda de pixel, sem glifo) toca o som de moedas; o de erro, o de erro",
+		onCoin.includes("pickupCoin") && played.includes("uiError") && !played.includes("pickupCoin"),
+		`moedas: [${onCoin}], erro: [${played}]`,
+	);
+	ctx.uiLayer.FindFirstChild("ToastStack")?.Destroy();
 	Fly.releaseFlyover();
 	flush();
+}
+
+// SAV-01: the in-run menu without its Save row (saving is automatic) -- four rows, all inside the panel, the note under
+// the last one, and no "Save" anywhere on it
+{
+	setScreen(1365, 567, 58, 160);
+	const noop = () => {};
+	const close = showPause(
+		ctx,
+		0,
+		{ onResume: noop, onHome: noop, onShop: noop, onSettings: noop },
+		{ note: "Saving is unavailable in this environment" },
+	);
+	flush();
+	const menu = layer.FindFirstChild("Menu");
+	const panel = menu.FindFirstChild("Body").FindFirstChild("Panel");
+	const rows = panel.GetChildren().filter(c => /^Btn\d$/.test(c.Name));
+	const saves = menu.GetDescendants().filter(d => d.Text === "Save");
+	const p = rectOf(panel);
+	const inside = g => {
+		const r = rectOf(g);
+		return r.x >= p.x - 0.5 && r.y >= p.y - 0.5 && r.x + r.w <= p.x + p.w + 0.5 && r.y + r.h <= p.y + p.h + 0.5;
+	};
+	const note = panel.FindFirstChild("Note");
+	const last = rows[rows.length - 1];
+	check(
+		'SAV-01: o menu da partida sem o Save -- 4 linhas dentro do painel, a nota abaixo da ultima, nenhum "Save"',
+		rows.length === 4 &&
+			saves.length === 0 &&
+			rows.every(inside) &&
+			note !== undefined &&
+			inside(note) &&
+			rectOf(note).y >= rectOf(last).y + rectOf(last).h,
+		`${rows.length} linhas, painel ${fmt(p)}`,
+	);
+	close();
+	flush();
+	setScreen(1120, 630);
 }
 
 // source guards: what main.client.ts does (it does not load under Node)
@@ -1077,11 +1188,576 @@ function textFits(label) {
 	check("lobby.ts: fechar o lobby nao tira o voo (so a partida o solta)", !/detachFlyover\(/.test(lobbySrc));
 }
 
+// ================================================================ 7. the death screen (UI-13)
+
+console.log(
+	"\n7) a tela de morte (UI-13): o estado, a contagem, a escolha e a vida -- em toda tela, sem cortar e sem churn\n",
+);
+{
+	const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
+	const { STAT } = require(join(SRC, "client/ui/theme.ts"));
+	const save = ctx.save;
+	const noop = () => {};
+	const deathRoot = () => layer.FindFirstChild("RunOver");
+	const deathWin = () => deathRoot()?.FindFirstChild("Body")?.FindFirstChild("Window");
+	const inDeath = name =>
+		deathRoot()
+			?.GetDescendants()
+			.find(d => d.Name === name);
+	const text = name => inDeath(name)?.Text;
+	const shownD = name => {
+		const g = inDeath(name);
+		return g !== undefined && shownIn(g, deathRoot());
+	};
+	const base = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false };
+	/** a state: what the save holds, and what the run loop and the roster tell the screen */
+	const CASES = [
+		{ name: "espera, alguem de pe", wait: true, standing: 2, seconds: 197, night: true, money: 99 },
+		{ name: "espera de dia", wait: true, standing: 1, seconds: 180, night: false, money: 99 },
+		{ name: "a cidade cai", wait: true, standing: 0, seconds: 150, night: true, money: 99, later: 6 },
+		{ name: "vida nova", wait: true, standing: 2, seconds: 120, night: true, money: 0, newLife: true },
+		{ name: "sem moedas", wait: true, standing: 1, seconds: 100, night: true, money: 0 },
+		{ name: "fim (ninguem te levanta)", wait: false, money: 99 },
+		{ name: "fim sem moedas", wait: false, money: 0 },
+		{
+			name: "primeira morte, recorde",
+			wait: true,
+			standing: 2,
+			seconds: 60,
+			night: true,
+			money: 20,
+			summary: { ...base, days: 13, bestDay: 13, first: true, record: true },
+		},
+	];
+	/** opens a case as main.client.ts does; returns { tick, close, calls, standing } */
+	function openCase(c) {
+		save.money = c.money;
+		save.deathCount = 0;
+		ctx.phase = "dead";
+		const calls = { rebirth: 0, newRun: 0, home: 0 };
+		const handlers = {
+			onRebirth: () => calls.rebirth++,
+			onNewRun: c.newLife ? undefined : () => calls.newRun++,
+			onHome: () => calls.home++,
+		};
+		const summary = c.summary ?? base;
+		const who = { standing: c.standing };
+		if (!c.wait) {
+			const close = GO.showRunSummary(ctx, summary, handlers);
+			flush();
+			return { tick: () => {}, close: () => (close(), flush()), calls, who };
+		}
+		const w = GO.showDaybreakWait(ctx, summary, handlers, c.newLife === true, () => who.standing);
+		const at = { seconds: c.seconds };
+		const tick = () => w.setRemaining(at.seconds, c.night);
+		tick();
+		if (c.later !== undefined) {
+			ui.setClock(ui.getClock() + c.later);
+			tick();
+		}
+		flush();
+		return { tick, close: () => (w.close(), flush()), calls, who, at, handle: w };
+	}
+
+	// ---- on every screen: whole texts, nothing out of the window, the count the biggest text, the row, thumbs on touch
+	const LAYOUTS = [...SCREENS.map(s => [...s, false]), [844, 390, 36, 104, "celular 844 x 390 com toque", true]];
+	for (const [w, h, bar, buttons, label, touch] of LAYOUTS) {
+		UIS.TouchEnabled = touch;
+		UIS.MouseEnabled = !touch;
+		setScreen(w, h, bar, buttons);
+		const clipped = [];
+		const outside = [];
+		const hierarchy = [];
+		const rows = [];
+		const thumbs = [];
+		let seen = 0;
+		for (const c of CASES) {
+			const s = openCase(c);
+			const win = deathWin();
+			const wr = rectOf(win);
+			for (const d of win.GetDescendants()) {
+				if (!d.IsA("GuiObject") || !shownIn(d, deathRoot()) || d.Name === "FocusRing") continue;
+				const r = rectOf(d);
+				if (r.w <= 0 || r.h <= 0) continue;
+				if (r.x < wr.x - 1 || r.y < wr.y - 1 || r.x + r.w > wr.x + wr.w + 1 || r.y + r.h > wr.y + wr.h + 1) {
+					outside.push(`${c.name}: ${d.Parent.Name}.${d.Name} ${fmt(r)} fora de ${fmt(wr)}`);
+				}
+				if (d.ClassName !== "TextLabel" || d.Text === "" || !d.TextScaled) continue;
+				seen++;
+				const fit = textFits(d);
+				if (!fit.ok) clipped.push(`${c.name} ${d.Parent.Name}.${d.Name}: ${fit.detail}`);
+			}
+			// the count is the hero: no text of the window is allowed a bigger size
+			const count = inDeath("Count");
+			const cap = g => g.FindFirstChildOfClass("UITextSizeConstraint")?.MaxTextSize ?? 0;
+			const bigger = win
+				.GetDescendants()
+				.filter(
+					d => d.ClassName === "TextLabel" && d !== count && shownIn(d, deathRoot()) && cap(d) > cap(count),
+				);
+			if (bigger.length > 0) hierarchy.push(`${c.name}: ${bigger.map(d => d.Name).join(", ")}`);
+			// the row: Home | New game | Rebirth, left to right, one height, the last thing in the window
+			const row = ["Home", "NewGame", "Rebirth"].map(n => inDeath(n)).filter(b => b !== undefined);
+			const rr = row.map(rectOf);
+			const ordered = rr.every((r, i) => i === 0 || r.x >= rr[i - 1].x + rr[i - 1].w - 0.5);
+			const level = rr.every(r => Math.abs(r.y - rr[0].y) < 0.5 && Math.abs(r.h - rr[0].h) < 0.5);
+			const last = win
+				.GetDescendants()
+				.filter(
+					d =>
+						d.IsA("GuiObject") && shownIn(d, deathRoot()) && !row.some(b => d === b || d.IsDescendantOf(b)),
+				)
+				.every(
+					d =>
+						rectOf(d).y + rectOf(d).h <= rr[0].y + 0.5 ||
+						d.Name.startsWith("Plate") ||
+						d.Name.startsWith("Skin"),
+				);
+			if (!ordered || !level || !last || rr.length !== (c.newLife ? 2 : 3)) {
+				rows.push(`${c.name}: ${row.map((b, i) => `${b.Name} ${fmt(rr[i])}`).join(" | ")}`);
+			}
+			if (touch) {
+				for (let i = 0; i < row.length; i++) {
+					if (rr[i].h < 44 - 1e-6 || rr[i].w < 44 - 1e-6)
+						thumbs.push(`${c.name} ${row[i].Name} ${fmt(rr[i])}`);
+				}
+			}
+			s.close();
+		}
+		check(
+			`${label}: todo texto da tela de morte cabe inteiro, em todo estado (${seen} textos em ${CASES.length} estados)`,
+			clipped.length === 0,
+			clipped.slice(0, 6).join("; "),
+		);
+		check(`${label}: nada sai da janela`, outside.length === 0, outside.slice(0, 6).join("; "));
+		check(`${label}: a contagem e o maior texto da janela (o heroi)`, hierarchy.length === 0, hierarchy.join("; "));
+		check(
+			`${label}: a fileira Home | New game | Rebirth embaixo, em ordem, da mesma altura (sem New game na vida nova)`,
+			rows.length === 0,
+			rows.join("; "),
+		);
+		if (touch) {
+			check(`${label}: cada botao da fileira e um polegar (>= 44 px)`, thumbs.length === 0, thumbs.join("; "));
+		}
+	}
+	UIS.TouchEnabled = false;
+	UIS.MouseEnabled = true;
+	setScreen(1120, 630);
+
+	// ---- the state on screen is the one the rule says
+	{
+		const s = openCase(CASES[0]);
+		check(
+			'espera com alguem de pe (MP-21): "Dead until dawn", "Daybreak in 3:17" no amarelo dos numeros, quem esta de pe e a primeira luz, a lua no arco',
+			text("Title") === "Dead until dawn" &&
+				text("Lead") === "Daybreak in" &&
+				text("Count") === "3:17" &&
+				sameColor(inDeath("Count").TextColor3, STAT.value) &&
+				text("Caption") === "2 survivors still standing. You wake at first light." &&
+				shownD("Moon") &&
+				shownD("Sun") &&
+				!shownD("Grave"),
+			`${text("Title")} / ${text("Lead")} ${text("Count")} / ${text("Caption")}`,
+		);
+		// the moon walks the night: 3:17 is early in it, a minute left is late
+		const x0 = inDeath("Moon").Position.X.Scale;
+		s.at.seconds = 60;
+		s.tick();
+		const x1 = inDeath("Moon").Position.X.Scale;
+		check("...a lua anda no arco com a noite (mais perto do sol com menos tempo)", x1 > x0, `${x0} -> ${x1}`);
+		s.who.standing = 1;
+		s.tick();
+		check('..."1 survivor still standing." no singular', text("Caption").startsWith("1 survivor still standing."));
+		s.close();
+	}
+	{
+		const s = openCase(CASES[1]);
+		check(
+			'morte de dia: a espera e uma noite inteira e acaba de dia -- "You wake in", sem prometer a primeira luz',
+			text("Lead") === "You wake in" && text("Caption") === "1 survivor still standing.",
+			`${text("Lead")} / ${text("Caption")}`,
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[2]);
+		check(
+			'ninguem de pe (MP-22): "Nobody is left standing", "Town falls in 0:24" em vermelho, a lapide vermelha no horizonte, a cidade nova no dia 1',
+			text("Title") === "Nobody is left standing" &&
+				text("Lead") === "Town falls in" &&
+				text("Count") === GO.countdown(GO.WORLD_WIPE_S - 6) &&
+				sameColor(inDeath("Count").TextColor3, STAT.penalty) &&
+				shownD("Grave") &&
+				!shownD("Moon") &&
+				/new town begins at day 1/.test(text("Caption")),
+			`${text("Title")} / ${text("Lead")} ${text("Count")}`,
+		);
+		// somebody pays a Rebirth (or an ally is stood up): the town is not falling any more
+		s.who.standing = 1;
+		s.tick();
+		const back =
+			text("Title") === "Dead until dawn" && shownD("Moon") && sameColor(inDeath("Count").TextColor3, STAT.value);
+		// the last one falls again: a new window, a whole one
+		s.who.standing = 0;
+		s.tick();
+		const again = text("Count") === GO.countdown(GO.WORLD_WIPE_S);
+		// the window runs out and no new town comes (a survivor the roster cannot see): "Any moment now", then the dawn
+		ui.setClock(ui.getClock() + GO.WORLD_WIPE_S + 1);
+		s.tick();
+		const moment = text("Lead") === "Any moment now" && text("Count") === "0:00";
+		ui.setClock(ui.getClock() + 30);
+		s.tick();
+		const dawn = text("Title") === "Dead until dawn" && text("Lead") === "Daybreak in";
+		check(
+			'...alguem levanta: volta ao amanhecer; o ultimo cai de novo: uma janela nova e inteira; a janela acaba sem cidade nova: "Any moment now" e depois o amanhecer',
+			back && again && moment && dawn,
+			JSON.stringify({ back, again, moment, dawn }),
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[3]);
+		check(
+			'vida nova esperando (MP-21): "New life at first light", sem um segundo New game',
+			text("Title") === "New life at first light" &&
+				inDeath("NewGame") === undefined &&
+				/Your new life starts at day 1\./.test(text("Caption")),
+			`${text("Title")} / ${text("Caption")}`,
+		);
+		s.close();
+	}
+	{
+		const s = openCase(CASES[5]);
+		check(
+			'fim sem ninguem para te levantar: "You died", o dia em que a vida acabou no lugar da contagem, a lapide cinza',
+			text("Title") === "You died" &&
+				text("Lead") === "This life ended on" &&
+				text("Count") === "Day 3" &&
+				shownD("Grave") &&
+				!shownD("Moon"),
+			`${text("Title")} / ${text("Lead")} ${text("Count")}`,
+		);
+		s.close();
+	}
+
+	// ---- Rebirth: the main action when it can be paid, with its price in coins; disabled with the reason when not
+	{
+		const price = rebirthPrice(0);
+		let s = openCase(CASES[0]);
+		const rb = () => inDeath("Rebirth");
+		const payable =
+			rb().Selectable === true &&
+			rb().GetAttribute("Disabled") === false &&
+			rb().GetAttribute("Variant") === "default" &&
+			text("Price") === `${price}` &&
+			inDeath("Coin") !== undefined &&
+			inDeath("NewGame").GetAttribute("Variant") === "destructive" &&
+			inDeath("Home").GetAttribute("Variant") === "secondary" &&
+			/You have 99 coins\./.test(text("Note"));
+		// the price's coin is the round pixel coin of every other coin (MON-06): pixel Frames on the dark price chip,
+		// never a "$" -- no text of the death screen is one
+		const coin = inDeath("Coin");
+		const coinPx = coin === undefined ? [] : coin.GetDescendants().filter(d => d.ClassName === "Frame");
+		const chip = inDeath("PriceChip");
+		const dollars = deathRoot()
+			.GetDescendants()
+			.filter(d => (d.ClassName === "TextLabel" || d.ClassName === "TextButton") && /\$/.test(String(d.Text)));
+		const cr = coin === undefined ? undefined : rectOf(coin);
+		const kr = chip === undefined ? undefined : rectOf(chip);
+		const onChip =
+			cr !== undefined &&
+			kr !== undefined &&
+			cr.x >= kr.x - 0.5 &&
+			cr.y >= kr.y - 0.5 &&
+			cr.x + cr.w <= kr.x + kr.w + 0.5 &&
+			cr.y + cr.h <= kr.y + kr.h + 0.5;
+		check(
+			'Rebirth: o preco e a moeda redonda de pixel (a mesma da Loja e da HUD) no chip escuro do preco, nenhum "$" na tela',
+			coinPx.length >= 5 && onChip && dollars.length === 0,
+			`${coinPx.length} pixels, no chip ${onChip}, "$" ${dollars.map(d => d.Name).join(", ") || "nenhum"}`,
+		);
+		s.close();
+		s = openCase(CASES[4]);
+		const broke =
+			rb().Selectable === false &&
+			rb().GetAttribute("Disabled") === true &&
+			text("Note").includes(`Not enough coins: ${price} more needed.`);
+		check(
+			`Rebirth: com moedas e a chapa aco-azul (principal) com a moeda e o preco (${price}), New game vermelho, Home de ferro; sem moedas fica desabilitado e a nota diz quanto falta`,
+			payable && broke,
+			JSON.stringify({ payable, broke, note: text("Note") }),
+		);
+		// the coins arrive during the wait: the plate turns pressable in place, nothing made
+		const r = measure(() => {
+			save.money = 99;
+			s.tick();
+		});
+		check(
+			"...as moedas chegam durante a espera: o Rebirth vira pressionavel no lugar, sem criar Instance",
+			rb().Selectable === true && r.created === 0 && r.destroyed === 0,
+			`${r.created} criadas`,
+		);
+		s.close();
+	}
+
+	// ---- the life's strip: numbers in the numbers' yellow, the best day green and "New best!" only for a record
+	{
+		let s = openCase(CASES[0]);
+		const values = () => [1, 2, 3, 4].map(i => inDeath(`Value${i}`));
+		const plain = values().every(v => sameColor(v.TextColor3, STAT.value)) && inDeath("NewBest") === undefined;
+		const labels = [1, 2, 3, 4].map(i => text(`Key${i}`)).join(",");
+		s.close();
+		s = openCase(CASES[7]);
+		const record =
+			sameColor(inDeath("Value2").TextColor3, STAT.bonus) &&
+			[1, 3, 4].every(i => sameColor(inDeath(`Value${i}`).TextColor3, STAT.value)) &&
+			inDeath("NewBest") !== undefined &&
+			text("Epitaph") === "Everyone's first night ends this way. The second one goes better.";
+		s.close();
+		check(
+			'a faixa da vida: Life day, Best day, Level, Zombies killed no amarelo dos numeros; o melhor dia verde com "New best!" so num recorde; a primeira morte tem a linha do onboarding',
+			plain && record && labels === "Life day,Best day,Level,Zombies killed",
+			JSON.stringify({ plain, record, labels }),
+		);
+	}
+
+	// ---- New game asks first (UI-12), and closing the screen takes the question with it
+	{
+		const s = openCase(CASES[0]);
+		inDeath("NewGame").Activated.Fire();
+		flush();
+		const pop = layer.FindFirstChild("PopupOverlay");
+		const asked = pop !== undefined && s.calls.newRun === 0;
+		pop?.GetDescendants()
+			.find(d => d.Name === "PopupBtn1")
+			?.Activated.Fire();
+		flush();
+		const confirmed = s.calls.newRun === 1 && layer.FindFirstChild("PopupOverlay") === undefined;
+		inDeath("NewGame").Activated.Fire();
+		flush();
+		s.close();
+		const cleaned = layer.FindFirstChild("PopupOverlay") === undefined && deathRoot() === undefined;
+		check(
+			"New game pergunta antes (uma vida nova nao se desfaz): so a confirmacao chama o handler, e fechar a tela leva a pergunta junto",
+			asked && confirmed && cleaned,
+			JSON.stringify({ asked, confirmed, cleaned }),
+		);
+	}
+
+	// ---- no churn: a whole wait, with the roster and the coins moving, creates nothing; an idle frame writes nothing
+	{
+		const s = openCase({ ...CASES[0], money: 0 });
+		const r = measure(() => {
+			for (let f = 0; f < 600; f++) {
+				s.at.seconds = 197 - f / 60;
+				if (f === 120) s.who.standing = 0;
+				if (f === 300) s.who.standing = 1;
+				if (f === 400) save.money = 99;
+				ui.setClock(ui.getClock() + 1 / 60);
+				s.tick();
+			}
+		});
+		const idle = measure(() => {
+			for (let f = 0; f < 60; f++) s.tick();
+		});
+		check(
+			"600 quadros de espera (a cidade caindo e voltando, as moedas chegando): nenhuma Instance criada ou destruida",
+			r.created === 0 && r.destroyed === 0,
+			`${r.created} criadas, ${r.destroyed} destruidas, ${r.writes} escritas`,
+		);
+		check("...e 60 quadros sem nada mudando nao escrevem nada", idle.writes === 0, `${idle.writes} escritas`);
+		// UI-06: over the run, the scrim of the world -- never a page over it
+		const root = deathRoot();
+		check(
+			"a tela de morte fica sobre o MUNDO: o scrim que deixa a rua a vista (TRANSPARENCY.overWorld), sem a cidade do lobby",
+			Math.abs(root.BackgroundTransparency - skin.worldTransparency(TRANSPARENCY.overWorld)) < 1e-6,
+			`${root.BackgroundTransparency}`,
+		);
+		s.close();
+	}
+	save.money = 20;
+	ctx.phase = "lobby";
+}
+
+// ================================================================ 8. the shop and the achievements
+
+console.log("\n8) a Loja (Packs, Earn coins) e as Conquistas: nada cortado, nada fora da janela, em toda tela\n");
+{
+	/**
+	 * Does `label`'s text fit its rect (laid out by tools/ui-layout.mjs, as the engine would) at a size its
+	 * UITextSizeConstraint allows? Multi-line text ("\n") is its longest line times its number of lines; a label that
+	 * does not wrap must fit on one line (a truncated "…" is a cut too).
+	 */
+	const fitsLaidOut = label => {
+		const r = layoutRect(label);
+		const c = label.FindFirstChildOfClass("UITextSizeConstraint");
+		const max = label.TextScaled ? (c?.MaxTextSize ?? label.TextSize) : label.TextSize;
+		const min = label.TextScaled ? (c?.MinTextSize ?? max) : max;
+		const bold = /Bold|Heavy|Black/.test(label.FontFace?.Weight?.Name ?? "");
+		const lines = String(label.Text).split("\n");
+		const longest = Math.max(...lines.map(l => Array.from(l).length));
+		for (let size = max; size >= min - 1e-9; size -= 0.5) {
+			const w = longest * size * (bold ? 0.6 : 0.55);
+			if (w > r.w + 0.5) continue;
+			if (lines.length * size * 1.05 <= r.h + 0.5) return { ok: true };
+		}
+		return { ok: false, detail: `"${String(label.Text).slice(0, 40)}" ${min}-${max} px em ${px(r.w)}x${px(r.h)}` };
+	};
+	const inside = (g, win) => {
+		const r = layoutRect(g);
+		return r.x >= win.x - 1 && r.y >= win.y - 1 && r.x + r.w <= win.x + win.w + 1 && r.y + r.h <= win.y + win.h + 1;
+	};
+	/** every text under `root` fits, and every shown piece stays inside the window (the focus ring and a thumb's Hit aside) */
+	const audit = (root, win, where, bad) => {
+		let texts = 0;
+		for (const d of root.GetDescendants()) {
+			if (!d.IsA("GuiObject") || !shownIn(d, root)) continue;
+			// the focus ring and a thumb's hit area stand outside on purpose; a drawing in a drawingBox is sized by its UIScale,
+			// which this layout leaves out (test:cosmetics checks the pet fits its bed)
+			if (d.Name === "FocusRing" || d.Name === "Hit" || d.Parent?.Name === "Hit") continue;
+			let scaled = false;
+			for (let p = d.Parent; p !== undefined && p !== root; p = p.Parent) if (p.Name === "Scaled") scaled = true;
+			if (scaled) continue;
+			if (d.ClassName === "TextLabel" && d.Text !== "" && d.AutomaticSize?.Name !== "X") {
+				texts++;
+				const fit = fitsLaidOut(d);
+				if (!fit.ok) bad.push(`${where} ${d.Parent.Name}.${d.Name}: ${fit.detail}`);
+			}
+			if (d.Size.X.Offset === 0 && d.Size.Y.Offset === 0 && !inside(d, win)) {
+				bad.push(`${where} ${d.Parent.Name}.${d.Name} fora da janela ${fmt(layoutRect(d))}`);
+			}
+		}
+		return texts;
+	};
+	const OWNER = [
+		[770, 554, 58, 160, "770 x 554 (a captura das conquistas)"],
+		[1030, 560, 58, 160, "1030 x 560 (a captura da loja)"],
+		[1920, 1080, 58, 160, "1920 x 1080"],
+		[844, 390, 36, 104, "celular 844 x 390"],
+		[1365, 567, 58, 160, "1365 x 567"],
+		[1360, 435, 58, 160, "1360 x 435"],
+	];
+	const save = ctx.save;
+	const keep = { money: save.money, achievements: [...save.achievements] };
+	save.money = 20;
+	save.achievements[0] = 1;
+	save.achievements[12] = 17;
+	save.achievements[2] = 17;
+	save.achievements[14] = 2;
+	for (const [w, h, bar, buttons, label] of OWNER) {
+		setScreen(w, h, bar, buttons);
+		const bad = [];
+		let texts = 0;
+		// the shop, both pages
+		ctx.phase = "shop";
+		const closeShop = showShop(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		const shopRoot = layer.FindFirstChild("Shop");
+		const shopWin = () => shopRoot.FindFirstChild("Body").FindFirstChild("Window");
+		layoutGame(ui, ctx);
+		texts += audit(shopWin(), layoutRect(shopWin()), "Packs", bad);
+		findIn(shopRoot, "Tabs").FindFirstChild("Tab1").Activated.Fire();
+		flush();
+		layoutGame(ui, ctx);
+		texts += audit(shopWin(), layoutRect(shopWin()), "Earn", bad);
+		// the cards: nine, in three rows, none over another, each inside the page
+		const cards = findIn(shopRoot, "Content")
+			.GetChildren()
+			.filter(c => /^Pack\d+$/.test(c.Name))
+			.map(c => layoutRect(c));
+		const overlap = (a, b) =>
+			a.x < b.x + b.w - 0.5 && b.x < a.x + a.w - 0.5 && a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5;
+		const crossed = cards.some((a, i) => cards.some((b, j) => j > i && overlap(a, b)));
+		if (cards.length !== 9 || crossed) bad.push(`cartoes: ${cards.length}, sobrepostos ${crossed}`);
+		closeShop();
+		flush();
+		// the achievements, over the lobby
+		ctx.phase = "lobby";
+		const closeAch = showAchievements(ctx);
+		flush();
+		const achRoot = layer.FindFirstChild("Achievements");
+		const achWin = achRoot.FindFirstChild("Body").FindFirstChild("Window");
+		layoutGame(ui, ctx);
+		// the list scrolls: its rows are checked against the list's width, not the window's height
+		const list = findIn(achWin, "List");
+		const listR = layoutRect(list);
+		texts += audit(
+			achWin,
+			{ x: layoutRect(achWin).x, y: -1e6, w: layoutRect(achWin).w, h: 2e6 },
+			"Conquistas",
+			bad,
+		);
+		const rowsOut = list
+			.GetDescendants()
+			.filter(d => /^Ach\d+$/.test(d.Name))
+			.filter(d => {
+				const r = layoutRect(d);
+				return r.x < listR.x - 1 || r.x + r.w > listR.x + listR.w + 1;
+			});
+		if (rowsOut.length > 0) bad.push(`conquistas: ${rowsOut.length} linhas mais largas que a lista`);
+		closeAch();
+		flush();
+		check(
+			`${label}: Loja (Packs, Earn coins) e Conquistas sem texto cortado nem peca fora da janela (${texts} textos)`,
+			bad.length === 0,
+			bad.slice(0, 5).join("; "),
+		);
+	}
+	// touch: every control of the shop a thumb presses is at least 44 px (MIN_TOUCH_PX) -- the Buy buttons and the tabs
+	// through their hit areas, the door and the X
+	{
+		const UIS = service("UserInputService");
+		const was = { touch: UIS.TouchEnabled, mouse: UIS.MouseEnabled, last: UIS.GetLastInputType };
+		UIS.TouchEnabled = true;
+		UIS.MouseEnabled = false;
+		UIS.GetLastInputType = () => Enum.UserInputType.Touch;
+		setScreen(844, 390, 36, 104);
+		const closeShop = showShop(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		layoutGame(ui, ctx);
+		const shopRoot = layer.FindFirstChild("Shop");
+		const small = [];
+		const buys = findIn(shopRoot, "Content")
+			.GetChildren()
+			.filter(c => /^Pack\d+$/.test(c.Name))
+			.map(c => findIn(c, "Buy"));
+		const tabBtns = findIn(shopRoot, "Tabs")
+			.GetChildren()
+			.filter(c => /^Tab\d+$/.test(c.Name));
+		for (const b of [...buys, ...tabBtns, findIn(shopRoot, "Wardrobe", "TextButton")]) {
+			const hit = b.FindFirstChild("Hit");
+			const r = layoutRect(hit ?? b);
+			if (r.w < 43.5 || r.h < 43.5) small.push(`${b.Parent.Name}.${b.Name} ${px(r.w)}x${px(r.h)}`);
+		}
+		check(
+			"toque, celular 844 x 390: todo Buy, as abas e a porta do guarda-roupa sao alvos de >= 44 px (a area de toque do botao)",
+			small.length === 0 && buys.length === 9,
+			small.join("; ") || `${buys.length + tabBtns.length + 1} alvos`,
+		);
+		closeShop();
+		flush();
+		UIS.TouchEnabled = was.touch;
+		UIS.MouseEnabled = was.mouse;
+		UIS.GetLastInputType = was.last;
+	}
+	save.money = keep.money;
+	save.achievements = keep.achievements;
+	setScreen(1365, 567, 58, 160);
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
 	process.exit(1);
 }
 console.log(
-	"OK: toda janela centrada na tela inteira e longe dos botoes do Roblox; a cidade atras de toda tela de menu, sem parar e sem criar Instance; sobre a partida, o mundo",
+	"OK: toda janela centrada na tela inteira e longe dos botoes do Roblox; a cidade atras de toda tela de menu, sem parar e sem criar Instance; sobre a partida, o mundo; a tela de morte em todo estado; Loja e Conquistas sem nada cortado",
 );

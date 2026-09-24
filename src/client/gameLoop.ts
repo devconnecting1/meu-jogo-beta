@@ -4,10 +4,6 @@ import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN } from "shared/engine/constants";
 import { LightMap, LightMapStats, Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
-import { ItemKind, WeaponKind } from "shared/data/kinds";
-import { EQUIPS } from "shared/data/equips";
-import { USABLES } from "shared/data/usables";
-import { isChoppingTool, WEAPONS } from "shared/data/weapons";
 import { expMaxInit, outfitLookOf, petLookOf, PlayerSaveData, titleWireOf } from "shared/game/save";
 import { PetLook, petFlies } from "shared/data/cosmetics";
 import { createPlayer, currentWeapon, PlayerState } from "shared/game/player";
@@ -21,6 +17,7 @@ import {
 	querySolids,
 	queryTown,
 	randomOpenPoint,
+	Rect,
 	rectHitsSolid,
 	updateGroundItems,
 	WorldData,
@@ -68,11 +65,13 @@ import { drawVehicle } from "./view/vehicleView";
 import { drawPet } from "./view/cosmeticsView";
 import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
-import { circleInView, part } from "./view/drawKit";
-import { WorldView } from "./view/worldView";
+import { circleInView } from "./view/drawKit";
+import { CANOPY_SEE_THROUGH, SHELTER_SEE_THROUGH, WorldView } from "./view/worldView";
+import { GroundItemsView } from "./view/groundItemsView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
 import { BodyGrid } from "./view/bodyGrid";
+import { priceSignRect } from "./view/buildingSigns";
 import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import * as Quality from "./view/quality";
@@ -97,8 +96,6 @@ const NAMEPLATE_GAP = 14;
 
 /** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
 const ROOF_LERP = 0.15;
-/** tree canopy opacity while someone stands under it (original obj_tree1 fades near the player) */
-const CANOPY_SEE_THROUGH = 0.35;
 /**
  * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
@@ -115,8 +112,6 @@ const FEET_CYCLE_PER_UNIT = 0.09;
 const NET_WALK_SPEED = 8;
 /** nothing to draw when the session is not server-simulated */
 const NO_REMOTES = new Array<RemotePlayerView>();
-const WHITE = COLORS.white;
-const BLACK = COLORS.shadow;
 
 /**
  * Target roof opacity for a building (0 = invisible, 1 = opaque), eased by the caller.
@@ -133,219 +128,13 @@ function ease(perFrame: number, dt: number): number {
 	return 1 - math.pow(1 - perFrame, dt * 60);
 }
 
-// ------------------------------------------------------------------ ground items
-
-/** one flat piece of a ground item, in the item's own frame (f along its heading, l to its right) */
-interface ItemPart {
-	f: number;
-	l: number;
-	w: number;
-	h: number;
-	color: Color3;
-	/** corner radius (world units); CIRCLE for a disc */
-	r: number;
-	/** extra turn relative to the item (radians) */
-	rot: number;
-	/** dark outline that separates the piece from any ground (off for insets such as labels) */
-	edge: boolean;
-}
-
-/** a ground item's silhouette: its pieces bottom → top and the footprint of its drop shadow */
-interface ItemLook {
-	parts: Array<ItemPart>;
-	shadowW: number;
-	shadowH: number;
-	shadowR: number;
-}
-
-const CIRCLE = -1;
-
-function piece(f: number, l: number, w: number, h: number, color: Color3, r = 2, edge = true, rot = 0): ItemPart {
-	return { f, l, w, h, color, r, rot, edge };
-}
-
-function look(shadowW: number, shadowH: number, shadowR: number, parts: Array<ItemPart>): ItemLook {
-	return { parts, shadowW, shadowH, shadowR };
-}
-
-/**
- * Item palette. Built from the world palette and kept clear of the fixed gameplay colours (LEG-02):
- * no zombie green, poison purple or electric yellow on loot. Red appears only as the medical cross
- * (it restores the player's health, the thing red stands for). Each look has one light, saturated
- * piece so it reads on dark asphalt and a dark outline so it reads on pale pavement.
- */
-const LOOT = {
-	steel: COLORS.blade,
-	gunmetal: COLORS.wallIron.Lerp(COLORS.weapon, 0.25),
-	grip: COLORS.weapon,
-	handle: COLORS.treeTrunk,
-	lumber: COLORS.arrow.Lerp(COLORS.treeTrunk, 0.25),
-	tin: COLORS.blade.Lerp(COLORS.wallIron, 0.4),
-	foodLabel: COLORS.campfire.Lerp(COLORS.blood, 0.15),
-	medCase: WHITE.Lerp(COLORS.wallHouse, 0.25),
-	medCross: COLORS.uiRed,
-	ammoBox: COLORS.treeLeafDark.Lerp(COLORS.fence, 0.6),
-	brass: COLORS.uiAccent.Lerp(WHITE, 0.2),
-	fuel: COLORS.car.Lerp(COLORS.fence, 0.3),
-	cloth: COLORS.wallHouse,
-	leather: COLORS.doormat.Lerp(COLORS.treeTrunk, 0.3),
-	steelBar: COLORS.wallIron.Lerp(WHITE, 0.2),
-	gold: COLORS.uiAccent,
-	stone: COLORS.curb.Lerp(WHITE, 0.12),
-	burlap: COLORS.dirtPath.Lerp(COLORS.wallHouse, 0.2),
-	/** machine parts are blue like every machine (LEG-02) */
-	parts: COLORS.uiBlue.Lerp(COLORS.wallIron, 0.45),
-	plastic: COLORS.wallShop,
-	lens: COLORS.uiBlue.Lerp(WHITE, 0.3),
-	fletch: WHITE.Lerp(COLORS.sidewalk, 0.2),
-};
-const LOOT_EDGE = COLORS.shadow.Lerp(COLORS.road, 0.25);
-
-/** two stacked long pieces: lumber, metal bars */
-function stackLook(color: Color3, len: number, thick: number, r: number): ItemLook {
-	return look(len + 4, thick * 2 + 6, r, [
-		piece(-2, -thick * 0.55, len, thick, color, r),
-		piece(2, thick * 0.55, len - 2, thick, color.Lerp(WHITE, 0.12), r),
-	]);
-}
-
-/** armour lying flat: a vest with its neck opening towards the item's heading */
-function vestLook(color: Color3): ItemLook {
-	return look(26, 30, 8, [
-		piece(0, 0, 26, 30, color, 8),
-		piece(9, 0, 9, 12, color.Lerp(COLORS.shadow, 0.45), 4, false),
-	]);
-}
-
-const ITEM_LOOKS = {
-	/** knives, swords, machetes, crowbars: handle + long steel head */
-	blade: look(34, 8, 3, [piece(-11, 0, 13, 7, LOOT.handle, 2), piece(6, 0, 23, 6, LOOT.steel, 3)]),
-	/** axes and saws: wooden haft + steel head across it */
-	axe: look(34, 18, 3, [piece(-2, 0, 32, 6, LOOT.lumber, 3), piece(11, -4, 9, 18, LOOT.steel, 2)]),
-	/** wooden stick / baseball bat */
-	club: look(34, 9, 4, [piece(2, 0, 30, 8, LOOT.lumber, 4), piece(-13, 0, 9, 6, LOOT.handle, 2)]),
-	/** pistols: slide + grip (an L) */
-	pistol: look(26, 24, 3, [piece(-7, 8, 9, 15, LOOT.grip, 2, true, 0.3), piece(1, -3, 24, 8, LOOT.gunmetal, 2)]),
-	/** rifles, shotguns, machine guns: wooden stock, grip, long receiver and barrel */
-	longGun: look(36, 14, 3, [
-		piece(-13, 0, 12, 10, LOOT.handle, 3),
-		piece(-3, 5, 7, 9, LOOT.grip, 2),
-		piece(4, 0, 30, 7, LOOT.gunmetal, 2),
-	]),
-	/** bows and the crossbow: two limbs in a shallow V + the string */
-	bow: look(18, 34, 6, [
-		piece(-4, 0, 2, 30, LOOT.fletch, 1, false),
-		piece(1, -8, 5, 19, LOOT.handle, 2, true, -0.35),
-		piece(1, 8, 5, 19, LOOT.handle, 2, true, 0.35),
-	]),
-	/** cartridges: an olive ammo box, open, brass showing */
-	ammo: look(26, 20, 3, [piece(0, 0, 26, 20, LOOT.ammoBox, 3), piece(1, 0, 18, 12, LOOT.brass, 2, false)]),
-	/** a bundle of arrows */
-	arrows: look(34, 12, 2, [
-		piece(0, -3, 32, 3, LOOT.lumber, 1),
-		piece(1, 3, 32, 3, LOOT.lumber, 1),
-		piece(-12, 0, 8, 12, LOOT.fletch, 2, false),
-	]),
-	/** oil: a jerrycan with its cap */
-	fuel: look(24, 28, 4, [piece(0, 0, 24, 28, LOOT.fuel, 4), piece(8, -7, 8, 8, LOOT.steel, CIRCLE)]),
-	/** food: a can lying on its side (tin ends, paper label) */
-	food: look(28, 18, 5, [piece(0, 0, 28, 18, LOOT.tin, 5), piece(0, 0, 16, 18, LOOT.foodLabel, 0, false)]),
-	/** medicine: a white case with a red cross */
-	medicine: look(28, 24, 4, [
-		piece(0, 0, 28, 24, LOOT.medCase, 4),
-		piece(0, 0, 16, 5, LOOT.medCross, 1, false),
-		piece(0, 0, 5, 16, LOOT.medCross, 1, false),
-	]),
-	lumber: stackLook(LOOT.lumber, 32, 8, 1),
-	steel: stackLook(LOOT.steelBar, 26, 10, 2),
-	gold: stackLook(LOOT.gold, 26, 10, 2),
-	cloth: stackLook(LOOT.cloth, 28, 11, 5),
-	leather: stackLook(LOOT.leather, 28, 11, 5),
-	stone: look(26, 20, 9, [
-		piece(-2, -1, 22, 18, LOOT.stone, 8),
-		piece(8, 6, 12, 10, LOOT.stone.Lerp(WHITE, 0.15), 5),
-	]),
-	/** gunpowder: a tied sack */
-	powder: look(24, 26, 8, [piece(-2, 0, 22, 24, LOOT.burlap, 8), piece(11, 0, 5, 12, LOOT.handle, 2)]),
-	/** machine parts and electronics: a big steel-blue washer */
-	parts: look(24, 24, 12, [piece(0, 0, 24, 24, LOOT.parts, CIRCLE), piece(0, 0, 9, 9, LOOT.grip, CIRCLE, false)]),
-	/** placeable kits (desks, turrets, barricades...): a braced wooden crate */
-	crate: look(28, 28, 2, [
-		piece(0, 0, 28, 28, LOOT.lumber.Lerp(COLORS.treeTrunk, 0.25), 2),
-		piece(0, 0, 34, 5, LOOT.lumber.Lerp(COLORS.treeTrunk, 0.55), 1, false, math.pi / 4),
-	]),
-	/** gadgets and attachments (flashlight, watch, scope...): a device with a blue lens */
-	gadget: look(24, 18, 4, [piece(0, 0, 24, 18, LOOT.plastic, 4), piece(5, 0, 8, 8, LOOT.lens, CIRCLE)]),
-};
-
-/** armour (equip kind 1) by material; the rest of the equipment is gadgets */
-const VEST_LOOKS: Record<number, ItemLook> = {
-	0: vestLook(LOOT.cloth),
-	1: vestLook(LOOT.leather),
-	2: vestLook(LOOT.leather),
-	3: vestLook(LOOT.lumber),
-	4: vestLook(LOOT.steelBar),
-	5: vestLook(LOOT.plastic),
-	14: vestLook(LOOT.parts),
-};
-
-/** usables that heal or treat (first aid, pain killer, adrenaline, sedative, bandage) vs food */
-function isMedicine(id: number): boolean {
-	const u = USABLES[id];
-	if (u === undefined) return false;
-	return u.pain > 0 || u.speed > 0 || u.calm > 0 || (u.hunger <= 0 && u.hp > 0);
-}
-
-/** silhouette of a ground item by category: weapon, ammo/fuel, food, medicine, material, equipment */
-function itemLook(kind: number, id: number): ItemLook {
-	if (kind === ItemKind.Weapon) {
-		const w = WEAPONS[id];
-		if (w === undefined) return ITEM_LOOKS.blade;
-		if (w.kind === WeaponKind.Melee) {
-			if (isChoppingTool(w)) return ITEM_LOOKS.axe;
-			return id === 1 || id === 6 ? ITEM_LOOKS.club : ITEM_LOOKS.blade;
-		}
-		if (w.kind === WeaponKind.Bow) return ITEM_LOOKS.bow;
-		return w.kind === WeaponKind.Pistol ? ITEM_LOOKS.pistol : ITEM_LOOKS.longGun;
-	}
-	if (kind === ItemKind.Equip) {
-		const e = EQUIPS[id];
-		if (e !== undefined && e.kind === 1) return VEST_LOOKS[id] ?? VEST_LOOKS[0];
-		return ITEM_LOOKS.gadget;
-	}
-	if (kind === ItemKind.Use) return isMedicine(id) ? ITEM_LOOKS.medicine : ITEM_LOOKS.food;
-	// etc items (etcItems.ts): kits 0–22, materials 23–43, ammo 44–47, oil 48
-	if (id >= 44 && id <= 46) return ITEM_LOOKS.ammo;
-	if (id === 47) return ITEM_LOOKS.arrows;
-	if (id === 48) return ITEM_LOOKS.fuel;
-	if (id === 23) return ITEM_LOOKS.lumber;
-	if (id === 24) return ITEM_LOOKS.stone;
-	if (id === 25 || id === 26) return ITEM_LOOKS.steel;
-	if (id === 27 || id === 28) return ITEM_LOOKS.gold;
-	if (id === 33) return ITEM_LOOKS.powder;
-	if (id === 34) return ITEM_LOOKS.cloth;
-	if (id === 41) return ITEM_LOOKS.leather;
-	if (id <= 22) return ITEM_LOOKS.crate;
-	return ITEM_LOOKS.parts;
-}
-
 /*
- * The loop's own option tables, one scratch per call site (M4): a literal per decal, particle, item piece and glint
- * was a table per sprite per frame. The keys that never change are written here; each draw writes the rest.
+ * The loop's own option tables, one scratch per call site (M4): a literal per decal and particle was a table per
+ * sprite per frame. The keys that never change are written here; each draw writes the rest.
  */
 const DECAL_O: SpriteOpts = { zIndex: Z.decal };
 const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.bloodZombie, zIndex: Z.decal + 1 };
 const PARTICLE_O: SpriteOpts = { zIndex: Z.particle };
-const ITEM_SHADOW_O: SpriteOpts = { color: BLACK, alpha: 0.3, zIndex: Z.actorShadow };
-const ITEM_PIECE_O: SpriteOpts = { strokeThickness: 1, strokeAlpha: 0.75 };
-const GLINT_O: SpriteOpts = { color: WHITE, zIndex: Z.item + 4 };
-
-/** how far a dropped item lies turned from the world axes (radians), fixed per item */
-const ITEM_TILT = 0.55;
-/** the glint that marks loot: once every period (s), lasting `len` (s), per item out of phase */
-const GLINT_PERIOD = 2.6;
-const GLINT_LEN = 0.45;
-const GLINT_ARM = 14;
 
 export class GameLoop {
 	/** empty placeholder; the town is generated once, in init() */
@@ -377,6 +166,8 @@ export class GameLoop {
 	private queryBuf: Array<Solid> = [];
 	/** this frame's standing zombies by position: what a tree's canopy asks (updateCanopy) */
 	private readonly underCanopy = new BodyGrid();
+	/** scratch: the price pylon's drawn rect, the one `updateCanopy` fades (no table per sign per frame) */
+	private readonly pylonRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 	/** player walk cycle (feet) */
 	private walkPhase = 0;
 	private walkAmp = 0;
@@ -421,6 +212,8 @@ export class GameLoop {
 		this.shadowOffset(x, y, len);
 	/** the town that stands still: ground, roads, buildings, trees, cars (client/view/worldView.ts) */
 	private readonly worldView = new WorldView(this.shadowFor);
+	/** what lies on the ground to be picked up (client/view/groundItemsView.ts) */
+	private readonly groundItems = new GroundItemsView(this.shadowFor);
 	/** the horde and the bosses: the mirror of the server's bodies (§4.2) and everything that draws them */
 	private readonly actors = new ActorsView();
 	/** blood, debris, shot lines, blasts and the projectiles the server flies (§4.1 Fx) */
@@ -736,7 +529,7 @@ export class GameLoop {
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);
-			} else if (s.kind === "tree") {
+			} else if (s.kind === "tree" || s.kind === "canopy" || s.tags === "gas_sign") {
 				this.updateCanopy(s, dt);
 			}
 		}
@@ -755,7 +548,20 @@ export class GameLoop {
 		}
 	}
 
+	/**
+	 * A tree's crown -- and a gas station's canopy and price sign, which are crowns of steel (EDI-16) -- turns
+	 * see-through while a body is under it: the same test, the same target, the same easing. A crown is a circle; the
+	 * canopy and the pylon (client/view/buildingSigns.ts `priceSignRect`) are rects.
+	 */
 	private updateCanopy(s: Solid, dt: number): void {
+		const crown = s.kind === "tree";
+		const under = crown ? this.underCrown(s) : this.underRect(s);
+		// a canopy opens further than a crown (worldView.ts SHELTER_SEE_THROUGH, LEG-03); the same easing
+		const target = under ? (crown ? CANOPY_SEE_THROUGH : SHELTER_SEE_THROUGH) : 1;
+		s.canopyAlpha = lerp(s.canopyAlpha ?? 1, target, ease(0.2, dt));
+	}
+
+	private underCrown(s: Solid): boolean {
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		// any part of a body (≈18 px radius) under the canopy counts: nobody hides half-covered
@@ -764,17 +570,29 @@ export class GameLoop {
 		const p = this.player;
 		// the survivor, then the standing zombies from the cells under the crown only (updateWorldFx filled the grid
 		// this frame), then the bosses
-		let under = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r);
-		if (!under) {
-			for (const b of this.bosses) {
-				if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
-					under = true;
-					break;
-				}
-			}
+		if ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r)) {
+			return true;
 		}
-		const target = under ? CANOPY_SEE_THROUGH : 1;
-		s.canopyAlpha = lerp(s.canopyAlpha ?? 1, target, ease(0.2, dt));
+		for (const b of this.bosses) {
+			if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) return true;
+		}
+		return false;
+	}
+
+	/** the rect version of `underCrown`: a body within 18 of the canopy's (or the pylon's) rect */
+	private underRect(s: Solid): boolean {
+		let q: Rect = s;
+		if (s.tags === "gas_sign") q = priceSignRect(s, this.pylonRect);
+		const x0 = q.x - 18;
+		const y0 = q.y - 18;
+		const x1 = q.x + q.w + 18;
+		const y1 = q.y + q.h + 18;
+		const p = this.player;
+		if ((p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1) || this.underCanopy.anyInRect(x0, y0, x1, y1)) return true;
+		for (const b of this.bosses) {
+			if (b.x > x0 && b.x < x1 && b.y > y0 && b.y < y1) return true;
+		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------ drawing helpers
@@ -838,59 +656,6 @@ export class GameLoop {
 				p.strokeAlpha = 0.6 * k;
 				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, p);
 			}
-		}
-	}
-
-	/**
-	 * Ground items lie flat where they fell (no floating bob), turned a little, with a short shadow
-	 * cast like every other object's. Each category has its own silhouette (see ITEM_LOOKS); a brief
-	 * glint every few seconds marks them as loot. The glint's two sprites exist only while it flashes: its ZIndex is
-	 * its own bucket in the renderer's pool (one sub-pool per ZIndex), so one appearing or going moves no other
-	 * sprite. It used to be drawn transparent between flashes to keep a single pool's order stable -- two sprites per
-	 * item on screen, about 83 % of the time for nothing.
-	 */
-	private drawItems(r: Renderer, cam: Camera, v: ViewRect): void {
-		for (const it of this.world.items) {
-			if (!circleInView(it.x, it.y, 26, v)) continue;
-			const lk = itemLook(it.kind, it.itemId);
-			const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
-			const so = this.shadowOffset(it.x, it.y, 4);
-			const sh = ITEM_SHADOW_O;
-			sh.w = lk.shadowW;
-			sh.h = lk.shadowH;
-			sh.cornerRadius = lk.shadowR;
-			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, sh);
-			const ca = math.cos(a);
-			const sa = math.sin(a);
-			const o = ITEM_PIECE_O;
-			for (let i = 0; i < lk.parts.size(); i++) {
-				const pc = lk.parts[i];
-				o.w = pc.w;
-				o.h = pc.h;
-				// a piece may be turned inside the item (bow limbs, crate brace)
-				o.rotation = a + pc.rot;
-				o.color = pc.color;
-				o.circle = pc.r === CIRCLE;
-				o.cornerRadius = pc.r;
-				o.stroke = pc.edge ? LOOT_EDGE : undefined;
-				o.zIndex = Z.item + i;
-				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, o);
-			}
-			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
-			const t = (this.clock + it.id * 0.61) % GLINT_PERIOD;
-			if (t >= GLINT_LEN) continue;
-			const s = math.sin((t / GLINT_LEN) * math.pi);
-			const gx = it.x - 10;
-			const gy = it.y - 11;
-			const arm = 3 + GLINT_ARM * s;
-			const g = GLINT_O;
-			g.w = arm;
-			g.h = 2;
-			g.alpha = 0.9 * s;
-			r.drawRect(cam, gx, gy, g);
-			g.w = 2;
-			g.h = arm;
-			r.drawRect(cam, gx, gy, g);
 		}
 	}
 
@@ -986,7 +751,9 @@ export class GameLoop {
 		town.clock = this.clock;
 		town.drawGround(renderer, cam, view, this.world);
 		this.drawDecals(renderer, cam, view);
-		this.drawItems(renderer, cam, view);
+		const items = this.groundItems;
+		items.reduceMotion = reducedMotion();
+		items.draw(renderer, cam, view, this.world.items, this.clock, this.lastDt);
 		this.machines.learn(this.world, this.fxView.shotLines(), this.clock, netServerSeconds(), this.lastDt);
 		town.drawSolids(renderer, cam, view, this.world);
 		this.machines.drawAir(
@@ -1127,10 +894,12 @@ export class GameLoop {
 		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
-			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
+			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim -- or the motorcycle's headlight
+			// along the ride (VEI-05) -- to the unit and the degree
 			const radius = SurvivorLight.survivorLightRadius(save);
-			const cone = SurvivorLight.survivorCone(save);
-			addSurvivorLight(lights, p.x, p.y, p.angle, radius, cone?.radius);
+			const beam = SurvivorLight.survivorBeamReach(p, save);
+			const beamAt = SurvivorLight.survivorBeamAngle(p);
+			addSurvivorLight(lights, p.x, p.y, beamAt, radius, beam > 0 ? beam : undefined);
 		}
 		// every ally's, by the same shape and as far as the wire tells what they carry (playersView.collectLights)
 		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
@@ -1169,6 +938,14 @@ export class GameLoop {
 		this.chat?.hide();
 		this.awareness?.hide();
 		ctx.darkLayer.BackgroundTransparency = 1;
+	}
+
+	/**
+	 * The ground item the E press would take now (client/systems/interaction.ts `hintedItem`, -1 for none): the one
+	 * that wears the brackets (ITM-07). client/main.client.ts sets it with the "E: …" hint, under the same conditions.
+	 */
+	setItemTarget(id: number): void {
+		this.groundItems.target = id;
 	}
 
 	getRefs(): GameRefs {

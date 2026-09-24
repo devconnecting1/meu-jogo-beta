@@ -264,6 +264,110 @@ export function Groove(parent: Instance, name: string, x: number, y: number, w: 
 	return groove;
 }
 
+// ---------------------------------------------------------------- Meter
+
+export interface MeterProps {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	/** the fill's plate: a colour the light label reads on at 4,5:1 (UI-05; test:contrast) */
+	face: Color3;
+	/** the label's design size (default TEXT.sm, Bold) */
+	textSize?: number;
+	zIndex?: number;
+}
+
+export interface MeterHandle {
+	frame: Frame;
+	fill: Frame;
+	label: TextLabel;
+	/** fills `ratio` (0..1) of the groove and writes `text` over it; only what changed is written */
+	set(ratio: number, text: string): void;
+	/** repaints the fill in another face (an achievement going gold) */
+	setFace(face: Color3): void;
+}
+
+/** relief of the meter's groove and of its fill, in design units (the HUD console's bars) */
+const METER_GROOVE_UNIT = 2;
+const METER_FILL_UNIT = 2;
+
+/**
+ * The HUD console's bar as a kit piece (DESIGN_RULES UI-09, UI-14): the dark notched groove, the fill a PLATE in relief
+ * inside it (its light band and lip), and the light Bold label centred over both -- "17 / 500" reads on the fill and
+ * on the empty groove alike (test:contrast measures both). Not the thin web progress line: a sliver of progress keeps
+ * its notched shape (the narrowest fill is its own relief), and nothing is drawn for zero.
+ */
+export function Meter(parent: Instance, name: string, props: MeterProps): MeterHandle {
+	const groove = Groove(parent, name, props.x, props.y, props.w, props.h);
+	const z = props.zIndex ?? groove.ZIndex;
+	groove.ZIndex = z;
+	const inner = new Instance("Frame");
+	inner.Name = "Inner";
+	inner.BackgroundTransparency = 1;
+	inner.BackgroundColor3 = THEME.background;
+	inner.BorderSizePixel = 0;
+	inner.ZIndex = z + 1;
+	inner.Parent = groove;
+	const fill = new Instance("Frame");
+	fill.Name = "Fill";
+	fill.BackgroundTransparency = 1;
+	fill.BackgroundColor3 = THEME.background;
+	fill.BorderSizePixel = 0;
+	fill.ZIndex = z + 1;
+	fill.Parent = inner;
+	let face = props.face;
+	paintPlate(fill, face, "idle", METER_FILL_UNIT);
+	const label = makeLabel(
+		groove,
+		"Value",
+		"",
+		space(2),
+		0,
+		props.w - space(4),
+		props.h,
+		props.textSize ?? TEXT.sm,
+		THEME.foreground,
+		{
+			font: BOLD,
+			zIndex: z + 3,
+		},
+	);
+	let ratio = -1;
+	let minPx = 0;
+	const size = (): void => {
+		const r = math.max(ratio, 0);
+		// from `minPx` at 0+ to the full width at 1 (UDim2 cannot take a max(): the offset fades out as it fills)
+		fill.Size = new UDim2(r, (1 - r) * minPx, 1, 0);
+		fill.Visible = r > 0;
+	};
+	onLayoutChange(inner, () => {
+		const u = reliefPx(METER_GROOVE_UNIT);
+		inner.Position = new UDim2(0, u, 0, u);
+		inner.Size = new UDim2(1, -2 * u, 1, -2 * u);
+		minPx = 2 * reliefPx(METER_FILL_UNIT) + 1;
+		size();
+	});
+	return {
+		frame: groove,
+		fill,
+		label,
+		set(r: number, text: string): void {
+			const v = math.clamp(r === r ? r : 0, 0, 1);
+			if (v !== ratio) {
+				ratio = v;
+				size();
+			}
+			if (label.Text !== text) label.Text = text;
+		},
+		setFace(c: Color3): void {
+			if (c === face) return;
+			face = c;
+			paintPlate(fill, face, "idle", METER_FILL_UNIT);
+		},
+	};
+}
+
 /** height a SettingsList needs to show items of these heights (rows, notes) without scrolling */
 export function settingsListHeight(items: Array<number>): number {
 	let h = LIST_PAD * 2 + GROOVE * math.max(items.size() - 1, 0);
@@ -957,10 +1061,17 @@ export function GridTile(parent: Instance, name: string, props: GridTileProps): 
 	});
 	drawPadlock(lock, THEME.foreground, THEME.background, z + 2);
 
-	// the price: the coin chip and the amount, along the bottom
+	// the price: the pixel coin and the amount on a dark chip along the bottom (MON-06): the chip is what holds the coin's
+	// contrast on every face of the tile -- the iron of a locked one and the blue of the selected one alike
 	const coinS = math.round(size * 0.18);
 	const priceY = size - coinS - space(2);
 	const price = makeFrame(b, "Price", 0, priceY, size, coinS, THEME.background, { transparency: 1, zIndex: z + 2 });
+	const chipW = math.round(size * 0.62);
+	const chip = makeFrame(price, "Chip", (size - chipW) / 2, -2, chipW, coinS + 4, THEME.background, {
+		transparency: 1,
+		zIndex: z + 2,
+	});
+	paintPlate(chip, SURFACE.well, "flat", 2);
 	CoinIcon(price, "Coin", size / 2 - coinS - space(1), 0, coinS, z + 3);
 	const amount = makeLabel(
 		price,

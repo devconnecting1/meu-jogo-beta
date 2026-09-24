@@ -41,14 +41,22 @@
 import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
-import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
+import {
+	PlayerState,
+	createPlayer,
+	damageIsServerOwned,
+	weaponAmmoPool,
+	weaponReserve,
+	weaponSpendAmmo,
+} from "shared/game/player";
 import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
 import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
-import { daybreakWaitSeconds } from "shared/sim/clock";
+import { DAY_BREAK_HOUR, daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
+import { canEscape } from "./enclosure";
 import type { ServerSimulation } from "./simulation";
 import * as Analytics from "../analytics/events";
 
@@ -63,6 +71,8 @@ import * as Analytics from "../analytics/events";
  * save still says dead). Closing it needs a world epoch in the save; nothing is persisted for it yet.
  */
 export const KEEP_AFTER_LEAVE_S = 300;
+/** spots `placeKept` asks for before it takes one as it comes: half near where the body was, half anywhere */
+const KEPT_SPOT_TRIES = 8;
 /**
  * The owner's rule (23 Sep 2026): once the last living survivor falls, how long the world waits for somebody to
  * pay a Rebirth before it counts as lost (seconds).
@@ -89,6 +99,10 @@ function equippedWeapon(save: PlayerSaveData): WeaponDef {
  * The rounds in the magazine go back to their pool (§6.1: "Pente atual: volta para a reserva ao sair", the same
  * rule as a weapon switch in combat.ts). Admin free ammo never turns into real ammo; a fuel weapon's "magazine" is
  * only a gate (each shot burns fuel), so it has nothing to give back. Returns the rounds returned.
+ *
+ * Up to the save's ceiling (SAVE_LIMITS.AMMO_MAX, DESIGN_RULES ITM-07): a reserve at the ceiling takes back only what
+ * fits. Past it the rounds used to be banked anyway and clamped away silently at the next load; now what is banked
+ * is what the save can hold (review of 1186a83, L2).
  */
 export function unloadMagazine(state: PlayerState, save: PlayerSaveData): number {
 	const rt = state.weapon;
@@ -98,8 +112,28 @@ export function unloadMagazine(state: PlayerState, save: PlayerSaveData): number
 	rt.reloading = false;
 	rt.reloadCount = 0;
 	if (w === undefined || !usesMagazine(w) || isFuelWeapon(w) || rounds <= 0 || state.infiniteAmmo === true) return 0;
-	weaponSpendAmmo(save, w.ammoPool, -rounds);
-	return rounds;
+	const back = math.min(rounds, math.max(0, SAVE_LIMITS.AMMO_MAX - weaponAmmoPool(save, w.ammoPool)));
+	if (back > 0) weaponSpendAmmo(save, w.ammoPool, -back);
+	return back;
+}
+
+/**
+ * The admin switches of §10 (god mode, noclip, infinite ammo) off a body. They belong to the PERSON, not to a body:
+ * server/admin/adminWorld.ts holds them by UserId and puts them back on whatever body that person has, every tick, for
+ * as long as they are on. Left on a KEPT body they outlived a switch turned off from the lobby, or the admin's whole
+ * session, and that run paid (the review of 8f50bc5, HIGH-1). An infinite-ammo magazine never becomes real rounds:
+ * emptied here with nothing back, before the flag that keeps `unloadMagazine` from refunding it is gone.
+ */
+export function stripAdminMods(state: PlayerState): void {
+	if (state.infiniteAmmo === true) {
+		const rt = state.weapon;
+		rt.ammoCount = 0;
+		rt.reloading = false;
+		rt.reloadCount = 0;
+	}
+	state.godMode = false;
+	state.noclip = false;
+	state.infiniteAmmo = false;
 }
 
 /**
@@ -246,8 +280,11 @@ export interface WipeReport {
 	dead: Array<number>;
 }
 
-/** why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22) */
-export type StandReason = "daybreak" | "rebirth" | "newWorld";
+/**
+ * why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22; "reset": an admin
+ * reset the save, and the body that belonged to the old one is gone with it)
+ */
+export type StandReason = "daybreak" | "rebirth" | "newWorld" | "reset";
 
 interface LifeRecord {
 	userId: number;
@@ -321,6 +358,8 @@ export class LifeKeeper {
 	constructor(sim: ServerSimulation, wire: LifeWire) {
 		this.sim = sim;
 		this.wire = wire;
+		// the ping the rewind ceiling filters is kept exactly as long as the body is (ServerSimulation.setPing)
+		sim.bodyKept = userId => this.records.has(userId);
 	}
 
 	// ------------------------------------------------------------ queries
@@ -446,6 +485,9 @@ export class LifeKeeper {
 		if (sp !== undefined) this.lethal(sp);
 		rec.slot = undefined;
 		if (sp !== undefined) {
+			// the admin switches are the person's, never the kept body's (`stripAdminMods`): back on the next entry while
+			// they are still on, and gone with the session otherwise
+			stripAdminMods(sp.state);
 			rec.body = sp.state;
 			rec.dead = sp.state.dead;
 			rec.save = sp.save;
@@ -580,6 +622,7 @@ export class LifeKeeper {
 				rec.goneFor += dt;
 				if (rec.goneFor >= KEEP_AFTER_LEAVE_S) {
 					this.records.delete(userId);
+					this.sim.forgetPing(userId);
 					continue;
 				}
 			}
@@ -593,6 +636,68 @@ export class LifeKeeper {
 			if (sp !== undefined && sp.state.dead) this.standUp(rec, sp, "daybreak");
 		}
 		this.stepWipe(dt);
+	}
+
+	// ------------------------------------------------------------ the admin (docs/MULTIPLAYER.md §10)
+
+	/**
+	 * An admin reset this survivor's save to a new player's (server/main.server.ts `adminEdit`), IN PLACE: the session
+	 * keeps one table for its whole life, so `recordFor` sees the same save and would never notice (BUG-1 of the admin
+	 * audit, 2026-09-24). Everything this record kept belonged to the save that is gone: the body out of the world and
+	 * its magazine, a death and its daybreak wait, the departure banked, a new life a world owed. Kept, the old body was
+	 * written back into the reset save on the way out, resumed on the next entry, and its magazine refunded into the new
+	 * reserve by `matchWeapon`.
+	 *
+	 * So the record starts over from the reset save. A body IN the world is replaced now by a fresh one from that save
+	 * at a safe point (rule 2: its magazine is paid out of the NEW reserve, and the old one is dropped, never refunded),
+	 * and whatever the old run had on the cursor goes with it. The admin switches (§10) belong to the person and are
+	 * put back on the new body by the simulation (`adminMods`). Returns whether a body was replaced.
+	 */
+	resetLife(userId: number, save: PlayerSaveData): boolean {
+		const rec = this.records.get(userId);
+		if (rec === undefined) return false;
+		rec.save = save;
+		rec.body = undefined;
+		rec.unloaded = false;
+		rec.dead = false;
+		rec.downFor = undefined;
+		rec.declined = false;
+		rec.fullNext = false;
+		rec.newLifeOwed = false;
+		rec.banked = undefined;
+		const sp = this.inWorld(rec);
+		if (sp === undefined) return false;
+		const sim = this.sim;
+		adoptSave(sp, save);
+		// the old run's construction is not the new save's (review R1): gone, not refunded
+		sim.build?.drop(sp.slot);
+		// the old body's magazine was the old save's rounds: they die with it
+		sp.state.weapon.ammoCount = 0;
+		// ...and the weapon machine forgets the old weapon, or its switch to the new save's would pay that magazine back
+		sim.combat?.remove(sp.slot);
+		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
+		sp.state = freshBody(save, spawn.x, spawn.y, true);
+		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
+		if (serverOwnsLife()) writeRunBody(save, sp.state);
+		this.wire.life(sp.slot, LifeState.Up);
+		this.onSaveChanged?.(userId);
+		this.onStandUp?.(sp, "reset");
+		return true;
+	}
+
+	/**
+	 * An admin moved the world's clock (§10): a dead survivor's wait for daybreak is counted again from the new hour,
+	 * so "Night" does not stand them up in the middle of it. A clock set into the daybreak hour itself (06:00-07:00:
+	 * "Dawn" lands on 06:59) IS the daybreak: they stand up now -- counted from the hour, the next 06:00 was a whole
+	 * day away, and Dawn made the dead wait longer (the review of 8f50bc5, MEDIUM-3).
+	 */
+	clockMoved(): void {
+		const dayTime = this.sim.clock.dayTime;
+		const daybreak = dayTime >= DAY_BREAK_HOUR && dayTime < DAY_BREAK_HOUR + 1;
+		for (const [, rec] of this.records) {
+			if (!rec.dead || rec.downFor === undefined || rec.downFor <= 0) continue;
+			rec.downFor = daybreak ? 0 : daybreakWaitSeconds(dayTime);
+		}
 	}
 
 	// ------------------------------------------------------------ the world ends (rule 6, MP-22)
@@ -855,14 +960,31 @@ export class LifeKeeper {
 		return { allies, zombies: this.sim.horde?.zombies ?? [] };
 	}
 
-	/** rule 3: back where it left; only a spot that has turned solid moves it, to the nearest safe ring around it */
+	/**
+	 * rule 3: back where it left; only a spot that has turned solid, or been walled in (MP-24), moves it -- to a safe
+	 * ring around it, or a newcomer's spot, that the body can walk away from
+	 */
 	private placeKept(state: PlayerState): void {
 		const world = this.sim.world;
-		if (circleBlocked(world, state.x, state.y, PLAYER_RADIUS - 1) === undefined) return;
-		const spot = findSpawnPoint(world, {
-			allies: [{ x: state.x, y: state.y }],
-			zombies: this.sim.horde?.zombies ?? [],
-		});
+		// MP-24: the spot is free ground AND a body there can walk away. The rule that refuses the piece closing a ring
+		// around a survivor sees the bodies IN the world; a kept one in the lobby is not there to see, so a ring closed
+		// while its survivor waited was a cell they came back into (the security review of the net hardening, M1)
+		if (
+			circleBlocked(world, state.x, state.y, PLAYER_RADIUS - 1) === undefined &&
+			canEscape(world, state.x, state.y)
+		) {
+			return;
+		}
+		const zombies = this.sim.horde?.zombies ?? [];
+		// near where they left first, as before; then anywhere a newcomer would be put -- and only a spot they can
+		// leave (the last resort of findSpawnPoint is taken as it is: it never fails to return a point)
+		let spot = findSpawnPoint(world, { allies: [{ x: state.x, y: state.y }], zombies });
+		for (let i = 0; i < KEPT_SPOT_TRIES && !canEscape(world, spot.x, spot.y); i++) {
+			spot = findSpawnPoint(
+				world,
+				i < KEPT_SPOT_TRIES / 2 ? { allies: [{ x: state.x, y: state.y }], zombies } : { zombies },
+			);
+		}
 		state.x = spot.x;
 		state.y = spot.y;
 	}

@@ -80,7 +80,7 @@ export type WorldArtName =
 	| "crack1"
 	| "manhole"
 	| "drain"
-	| "pump"
+	| "dispenser"
 	| "acUnit"
 	| "vent"
 	| "chimney"
@@ -93,7 +93,16 @@ export type WorldArtName =
 	| "signGuns"
 	| "signClothes"
 	| "signDiner"
+	| "signCollege"
+	| "signLibrary"
+	| "signLab"
+	| "signDorm"
 	| "helipad"
+	| "gasCanopyN"
+	| "gasCanopyS"
+	| "gasCanopyW"
+	| "gasCanopyE"
+	| "signPrice"
 	| "bicycle"
 	| "motorcycle"
 	| "machineTurret"
@@ -126,6 +135,18 @@ export type WorldArtName =
 	| "zombiesRim"
 	| "dogs"
 	| "birds"
+	| "bossGiant"
+	| "bossGiantFill"
+	| "bossGiantRim"
+	| "bossHedgehog"
+	| "bossHedgehogFill"
+	| "bossHedgehogRim"
+	| "bossCentipede"
+	| "bossCentipedeFill"
+	| "bossCentipedeRim"
+	| "bossRafflesia"
+	| "bossRafflesiaFill"
+	| "bossRafflesiaRim"
 	| "itemIcons";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
@@ -257,8 +278,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	manhole: { id: "rbxassetid://89997805152847", w: 8, h: 8 },
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://140705036278395", w: 8, h: 4 },
-	/** sprite: fuel dispenser */
-	pump: { id: "rbxassetid://125264841699354", w: 8, h: 6 },
+	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
+	dispenser: { id: "", w: 10, h: 13 },
 	/** sprite: rooftop air conditioner */
 	acUnit: { id: "rbxassetid://104235250371536", w: 13, h: 11 },
 	/** sprite: roof vent */
@@ -283,8 +304,26 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signClothes: { id: "rbxassetid://99147626160535", w: 24, h: 16 },
 	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
+	/** sprite: storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon */
+	signCollege: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon */
+	signLibrary: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon */
+	signLab: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
+	signDorm: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyN: { id: "", w: 113, h: 29 },
+	/** sprite: gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyS: { id: "", w: 113, h: 29 },
+	/** sprite: gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyW: { id: "", w: 29, h: 113 },
+	/** sprite: gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyE: { id: "", w: 29, h: 113 },
+	/** sprite: gas station price sign: a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post */
+	signPrice: { id: "", w: 16, h: 25 },
 	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
 	bicycle: { id: "rbxassetid://127507461066870", w: 18, h: 7 },
 	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
@@ -349,8 +388,32 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
-	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14) */
+	bossGiant: { id: "", w: 640, h: 320 },
+	/** mask: bossGiant: white silhouettes of the same cells (tint: hit flash) */
+	bossGiantFill: { id: "", w: 640, h: 320 },
+	/** mask: bossGiant: white outlines of the same cells (tint: the hit outline) */
+	bossGiantRim: { id: "", w: 640, h: 320 },
+	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14) */
+	bossHedgehog: { id: "", w: 640, h: 240 },
+	/** mask: bossHedgehog: white silhouettes of the same cells (tint: hit flash) */
+	bossHedgehogFill: { id: "", w: 640, h: 240 },
+	/** mask: bossHedgehog: white outlines of the same cells (tint: the hit outline) */
+	bossHedgehogRim: { id: "", w: 640, h: 240 },
+	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14) */
+	bossCentipede: { id: "", w: 640, h: 480 },
+	/** mask: bossCentipede: white silhouettes of the same cells (tint: hit flash) */
+	bossCentipedeFill: { id: "", w: 640, h: 480 },
+	/** mask: bossCentipede: white outlines of the same cells (tint: the hit outline) */
+	bossCentipedeRim: { id: "", w: 640, h: 480 },
+	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14) */
+	bossRafflesia: { id: "", w: 816, h: 68 },
+	/** mask: bossRafflesia: white silhouettes of the same cells (tint: hit flash) */
+	bossRafflesiaFill: { id: "", w: 816, h: 68 },
+	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
+	bossRafflesiaRim: { id: "", w: 816, h: 68 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -419,7 +482,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"crack1",
 	"manhole",
 	"drain",
-	"pump",
+	"dispenser",
 	"acUnit",
 	"vent",
 	"chimney",
@@ -432,7 +495,16 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signGuns",
 	"signClothes",
 	"signDiner",
+	"signCollege",
+	"signLibrary",
+	"signLab",
+	"signDorm",
 	"helipad",
+	"gasCanopyN",
+	"gasCanopyS",
+	"gasCanopyW",
+	"gasCanopyE",
+	"signPrice",
 	"bicycle",
 	"motorcycle",
 	"machineTurret",
@@ -465,5 +537,17 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"zombiesRim",
 	"dogs",
 	"birds",
+	"bossGiant",
+	"bossGiantFill",
+	"bossGiantRim",
+	"bossHedgehog",
+	"bossHedgehogFill",
+	"bossHedgehogRim",
+	"bossCentipede",
+	"bossCentipedeFill",
+	"bossCentipedeRim",
+	"bossRafflesia",
+	"bossRafflesiaFill",
+	"bossRafflesiaRim",
 	"itemIcons",
 ];

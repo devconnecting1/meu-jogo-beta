@@ -23,10 +23,21 @@ import {
 	SaveRejectReason,
 	ShopActionReason,
 	ShopActionResult,
+	StoreState,
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
 import { AdminOp, applyAdminOps } from "shared/admin/ops";
 import { MP_PHASE } from "shared/net/mpConfig";
+import {
+	isShopNonce,
+	keepReceipt,
+	newShopBucket,
+	receiptOf,
+	ShopBucket,
+	ShopReceipt,
+	takesShopToken,
+	takeShopToken,
+} from "shared/net/shopGuard";
 import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
 import { MpHost, startMpHost } from "./net/mpHost";
@@ -34,6 +45,7 @@ import { LEGACY_STORE, ownerTag, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
+import * as Cadence from "./save/saveCadence";
 import { serverOwnsProgress, stripClientProgress } from "./sim/progress";
 import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
@@ -49,6 +61,9 @@ import { grantWelcomePack } from "./config/experiments";
  * - progress reports from the client are schema-checked, clamped and rate/plausibility limited
  * - DataStore: UpdateAsync with a session lock, autosave every 60 s, save on leave and on shutdown,
  *   retries with backoff, and a read error NEVER turns into an overwrite (read-only session)
+ * - SAV-01: saving is automatic only. No client asks for a write (a report only marks the session dirty); the server
+ *   adds coalesced EVENT saves for the moments that matter, within the request budget (server/save/saveCadence.ts),
+ *   and tells the player when a write lands or fails (`notifyStore`, client/ui/saveIndicator.ts)
  */
 
 const Players = game.GetService("Players");
@@ -68,10 +83,13 @@ const DATA_STORE_NAME = SAVE_STORE;
 const LEGACY_STORE_NAME = LEGACY_STORE;
 /** v1 balances were written by the client (free "+5" buttons / exploit): cap what is carried over */
 const LEGACY_MONEY_CAP = 500;
-const AUTOSAVE_INTERVAL = 60;
+/** SAV-01: the cadence of the writes (autosave, event saves, their gap and budget) is server/save/saveCadence.ts's */
+const AUTOSAVE_INTERVAL = Cadence.AUTOSAVE_INTERVAL;
 /** waits between attempts of a DataStore call (4 attempts in total) */
 const RETRY_DELAYS = [1, 2, 4];
 const SHUTDOWN_RETRY_DELAYS = [0.5, 1];
+/** SAV-01: a write that is not the last one makes a single attempt (the cadence retries it, backing off) */
+const NO_RETRIES: Array<number> = [];
 const SHUTDOWN_BUDGET = 25;
 /** a DataStore value may hold up to 4 MB */
 const MAX_STORED_LENGTH = 3900000;
@@ -101,9 +119,18 @@ const LEVEL_SECONDS = 20;
 const LEVEL_CREDIT_MAX = 15;
 const LEVEL_CREDIT_START = 5;
 
-/** shop/rebirth requests: token bucket */
-const ACTION_BURST = 6;
-const ACTION_PER_SECOND = 2;
+/**
+ * The ShopAction kinds this server knows: anything else is a malformed request (§8.2). `viewShop` is one of them: the
+ * shop opening is the client's commonest ShopAction, and counting it malformed kicked a player who opened it 51 times
+ * in 10 s.
+ */
+const SHOP_KINDS = new Set<string>(["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun", "viewShop"]);
+/**
+ * A REJECTED report is answered at most this often (s; audit M2). An honest client reports once per
+ * SAVE_MIN_INTERVAL and retries an "outdated" one after 1 s, so it never sees this; a stream of junk SaveRequests
+ * used to be reflected one SaveAck (with a wallet) per message.
+ */
+const REJECT_ACK_INTERVAL = 1;
 
 /**
  * After an admin edit the player's reports are refused until their client confirms the patch (AdminPatchAck),
@@ -140,6 +167,14 @@ interface Session {
 	lastWrite: number;
 	ackRequested: boolean;
 	lastAck: number;
+	/** os.clock() of the last rejection answered (REJECT_ACK_INTERVAL) */
+	lastRejectAck: number;
+	/**
+	 * The newest rejection that came inside the window, answered when it ends (`rejectReport`): the client's last
+	 * report always gets its answer, only later. Undefined when nothing is held.
+	 */
+	heldReject: SaveRejectReason | undefined;
+	heldRejectWallet: boolean;
 	lastReport: number;
 	pending: string | undefined;
 	pendingToken: string | undefined;
@@ -148,8 +183,10 @@ interface Session {
 	lastLoadAttempt: number;
 	retryQueued: boolean;
 	credits: Credits;
-	actionTokens: number;
-	actionAt: number;
+	/** the ShopAction token bucket (shared/net/shopGuard.ts: the client keeps the same one) */
+	shopBucket: ShopBucket;
+	/** the last pack purchases accepted, by the client's nonce: the same nonce again is not charged twice */
+	receipts: Array<ShopReceipt>;
 	closed: boolean;
 	/** os.clock() when the player joined (admin panel) */
 	joinedAt: number;
@@ -183,6 +220,8 @@ interface Session {
 	 * write that lands.
 	 */
 	titleReplace: boolean;
+	/** SAV-01: when this session was last written, what landed, and the early write it has pending (saveCadence.ts) */
+	cadence: Cadence.Cadence;
 }
 
 interface StoredLock {
@@ -235,10 +274,67 @@ function sessionOfUserId(userId: number): Session | undefined {
 	return undefined;
 }
 
+/**
+ * §8.2 for the remotes this file owns (audit M2): every SaveRequest, LoadRequest, ShopAction and admin message counts
+ * toward the same flood limits as the MP channels, per connection (server/net/mpHost.ts `noteRemote`); `malformed`
+ * when the payload is not what the remote takes. True when the message must be dropped (the player is being kicked,
+ * or has left). With MP_PHASE 0 there is no host and nothing is counted: the old per-remote limits stand alone.
+ * `channel` "shop": a ShopAction that takes a token, counted toward that channel's own flood line as well (§8.2 "> 3×
+ * o limite por 5 s", shared/net/shopGuard.ts SHOP_FLOOD_CALLS).
+ */
+function floodDrop(player: Player, malformed: boolean, channel?: "shop"): boolean {
+	return mpHost?.noteRemote(player, malformed, channel) === true;
+}
+
 /** the server just wrote into this survivor's save: the next autosave must carry it */
 function markDirty(userId: number): void {
 	const s = sessionOfUserId(userId);
 	if (s !== undefined && !s.closed) s.dirty = true;
+}
+
+/**
+ * SAV-01: one of the moments that matter happened to this session's save, so it should reach the DataStore SOON --
+ * coalesced (saveCadence.ts `scheduleSave`: EVENT_SAVE_DELAY s from now, never inside EVENT_SAVE_GAP of the last write)
+ * and run by `serveEventSaves` within the request budget. Only the server calls it, on its own events: a client's
+ * progress report never does (it only marks the session dirty, for the next autosave).
+ */
+function saveSoon(s: Session, reason: Cadence.SaveEvent): void {
+	if (s.closed || !s.loaded || !persists(s)) return;
+	s.dirty = true;
+	Cadence.scheduleSave(s.cadence, os.clock(), reason);
+}
+
+/**
+ * SAV-01: what happened to a write of this player's save, pushed on SaveAck like the wallet (client/ui/saveIndicator.ts
+ * draws it: "Saving..." / "Saved", or "Progress not saved — retrying"). Never to a session on its way out, and never
+ * in the way of the write it tells about: a push that throws (a Player being torn down) is dropped, so it can neither
+ * leave `writing` up nor turn a write that landed into a failure.
+ */
+function notifyStore(s: Session, state: StoreState): void {
+	if (s.closed) return;
+	s.cadence.failingShown = state === "failing";
+	const push: SaveAckPayload = {
+		ok: true,
+		push: true,
+		earned: 0,
+		earnedDays: 0,
+		earnedBosses: 0,
+		clamped: false,
+		store: state,
+	};
+	pcall(() => remotes.saveAck.FireClient(s.player, push));
+}
+
+/**
+ * SAV-01: a write attempt of `s` failed before, during or after its UpdateAsync (the encode threw, the save is too
+ * large, the DataStore is down): the next one backs off (saveCadence.ts `gapOf`: 15, 30, then 60 s) and is asked for
+ * now, and the player hears it once -- "Progress not saved — retrying" stays up until a write lands. `told`: the attempt
+ * carried progress (a lock refresh of an unchanged save that fails is not news: the DataStore still has it all).
+ */
+function writeFailedFor(s: Session, told: boolean): void {
+	Cadence.writeFailed(s.cadence);
+	if (told && !s.cadence.failingShown) notifyStore(s, "failing");
+	Cadence.scheduleSave(s.cadence, os.clock(), "retry");
 }
 
 function resetCredits(s: Session): void {
@@ -388,6 +484,9 @@ function writeWithLock(s: Session, json: string | undefined, release: boolean, d
 			print(`[${GAME_NAME}] save write of ${s.key} failed`);
 			return "failed";
 		}
+		// SAV-01: a write that is not the last one gives up at once when the player leaves or the server closes, so the
+		// final write (which waits for this one) is not held behind its retries
+		if (!release && (s.closed || shuttingDown)) return "failed";
 		task.wait(delays[attempt]);
 	}
 }
@@ -459,24 +558,40 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 	if (!waitUntil(() => !s.writing, 30)) return false;
 	if (s.released) return true;
 	const refreshDue = os.clock() - s.lastWrite >= LOCK_REFRESH;
-	if (!release && !s.dirty && !refreshDue) return true;
+	if (!release && !s.dirty && !refreshDue) {
+		// nothing to write: an early write still pending has nothing to carry either
+		Cadence.settled(s.cadence);
+		return true;
+	}
+	// SAV-01: only the final write -- which releases the lock and gets no other try -- retries in place. Any other makes
+	// ONE attempt and the cadence tries again, backing off (saveCadence.ts `gapOf`: 15, 30, then 60 s): an outage costs
+	// about one UpdateAsync a minute per player, where the autosave's four attempts a minute used to
+	const tries = release ? delays : NO_RETRIES;
 	s.writing = true;
 	// the window runs protected, so `writing` always comes back down: a throw in it (the encode, say) used to leave it
 	// up for good, and every later flush of the session then waited 30 s and gave up -- never saved again (F5)
-	const [ran, written] = xpcall(() => writeSession(s, release, delays), traceback);
+	const [ran, written] = xpcall(() => writeSession(s, release, tries, refreshDue), traceback);
 	if (!ran) {
 		warn(`[${GAME_NAME}] save write threw: ${tostring(written)}`);
 		print(`[${GAME_NAME}] save write of ${s.key} threw`);
 		s.dirty = true;
 		// a session on its way out gets no other try
 		if (release && !s.released) handBackLock(s, delays);
+		// SAV-01: the attempt counts even when it threw before `writeStarted` (the encode): what was pending clears and
+		// the next one backs off, instead of being asked for again at every scan (review L1)
+		if (!release) Cadence.writeStarted(s.cadence, os.clock());
 	}
 	s.writing = false;
+	// told after `writing` came down: nothing about the notice can keep it up (review L3)
+	if (!ran && !release) writeFailedFor(s, true);
 	return ran && written === true;
 }
 
-/** the writing window of `flush`, which holds `s.writing` around it */
-function writeSession(s: Session, release: boolean, delays: Array<number>): boolean {
+/**
+ * The writing window of `flush`, which holds `s.writing` around it. `refreshDue`: the lock wants its refresh, so even
+ * an unchanged save is written.
+ */
+function writeSession(s: Session, release: boolean, delays: Array<number>, refreshDue: boolean): boolean {
 	// MON-05: what was earned also goes to the title record a rolled-back server cannot drop, by the session that
 	// believes it holds the lock and inside the same writing window. On release it goes FIRST: the save write below
 	// drops the lock, and from then on another server may load this player and own both documents -- a record
@@ -485,29 +600,58 @@ function writeSession(s: Session, release: boolean, delays: Array<number>): bool
 	// land over a later history (a reset made where the lock went).
 	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
+	const c = s.cadence;
 	if (json.size() > MAX_STORED_LENGTH) {
 		warn(`[${GAME_NAME}] save too large, not written`);
 		print(`[${GAME_NAME}] save of ${s.key} is ${json.size()} chars`);
-		if (release) handBackLock(s, delays);
+		if (release) {
+			handBackLock(s, delays);
+		} else {
+			// SAV-01: the attempt counts: what was pending clears, the next one backs off, the player is told (review L1)
+			Cadence.writeStarted(c, os.clock());
+			writeFailedFor(s, true);
+		}
 		return false;
 	}
 	const wasDirty = s.dirty;
 	s.dirty = false;
+	// SAV-01: what the DataStore already has is not written again -- only the lock's refresh (or the release) rewrites
+	// an unchanged save. `dirty` says something MAY have changed; the JSON says whether it did
+	const changed = json !== c.lastJson;
+	if (!release && !changed && !refreshDue) {
+		Cadence.settled(c);
+		// the DataStore holds exactly the live save: a failure still on the player's screen is over (review L2)
+		if (c.failingShown) notifyStore(s, "saved");
+		return true;
+	}
+	Cadence.writeStarted(c, os.clock());
+	// only a write that carries progress is announced: never the lock's refresh of an unchanged save -- the first one of
+	// a session included, before anything landed (review L6) -- and while "failing" is up a retry does not flicker back
+	// to "Saving..." (it stays red until a write lands)
+	const told = !release && changed && wasDirty;
+	if (told && !c.failingShown) notifyStore(s, "saving");
 	const outcome = writeWithLock(s, json, release, delays);
 	// every other write: right after the save, which just proved this session still holds the lock
 	if (outcome === "ok" && !release) syncTitleRecord(s, false);
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
+		const wasFailing = c.failingShown;
+		Cadence.writeLanded(c, json);
 		if (release) s.released = true;
+		if (told || wasFailing) notifyStore(s, "saved");
 		return true;
 	}
 	if (outcome === "lost") {
 		s.lockLost = true;
 		warn(`[${GAME_NAME}] session lock taken by another session; this copy is now read-only`);
 		print(`[${GAME_NAME}] session lock of ${s.key} lost`);
+		notifyStore(s, "stopped");
 		return false;
 	}
 	s.dirty = s.dirty || wasDirty;
+	// SAV-01: the DataStore is failing: the player is told the truth (once), and the write is tried again when the
+	// back-off allows -- 15, 30, then 60 s -- not sooner, the service is struggling already
+	if (!release) writeFailedFor(s, told);
 	return false;
 }
 
@@ -662,6 +806,10 @@ function readSession(s: Session): void {
 	s.pendingToken = undefined;
 	s.lastReport = -math.huge;
 	s.lastWrite = os.clock();
+	// SAV-01: the load's UpdateAsync was this session's first write (it took the lock); what the save holds now is the
+	// baseline the event saves compare against, and nothing of it has been written by this session yet
+	s.cadence = Cadence.newCadence(os.clock());
+	Cadence.noteMilestones(s.cadence, save);
 	resetCredits(s);
 	s.lastLoadAttempt = os.clock();
 	// a real save replaced the blank one: whatever the body lived through on the blank table (a death, a kept
@@ -703,6 +851,9 @@ function newSession(player: Player): Session {
 		lastWrite: 0,
 		ackRequested: false,
 		lastAck: -math.huge,
+		lastRejectAck: -math.huge,
+		heldReject: undefined,
+		heldRejectWallet: false,
 		lastReport: -math.huge,
 		pending: undefined,
 		pendingToken: undefined,
@@ -710,8 +861,8 @@ function newSession(player: Player): Session {
 		lastLoadAttempt: -math.huge,
 		retryQueued: false,
 		credits: { day: 0, boss: 0, level: 0, at: os.clock() },
-		actionTokens: ACTION_BURST,
-		actionAt: os.clock(),
+		shopBucket: newShopBucket(os.clock()),
+		receipts: [],
 		closed: false,
 		joinedAt: os.clock(),
 		patchRev: undefined,
@@ -724,6 +875,7 @@ function newSession(player: Player): Session {
 		titleMark: undefined,
 		titleStep: undefined,
 		titleReplace: false,
+		cadence: Cadence.newCadence(os.clock()),
 	};
 }
 
@@ -735,6 +887,7 @@ function onPlayerAdded(player: Player): void {
 }
 
 remotes.loadRequest.OnServerEvent.Connect(player => {
+	if (floodDrop(player, false)) return;
 	const s = sessions.get(player);
 	if (s === undefined || s.closed) return;
 	s.ackRequested = true;
@@ -856,6 +1009,32 @@ function sendSaveAck(s: Session, ack: SaveAckPayload): void {
 }
 
 function rejectReport(s: Session, reason: SaveRejectReason, withWallet = false): void {
+	// at most one answer per REJECT_ACK_INTERVAL: a rejection must not be a reflector (audit M2). One inside the window
+	// is not dropped: the newest waits for the window to end (the security review of the net hardening, L5) -- an
+	// honest client whose report was refused a second time in a second must still hear why, or it waits for nothing
+	const now = os.clock();
+	const wait = s.lastRejectAck + REJECT_ACK_INTERVAL - now;
+	if (wait > 0 && now >= s.lastRejectAck) {
+		const queued = s.heldReject !== undefined;
+		s.heldReject = reason;
+		s.heldRejectWallet = s.heldRejectWallet || withWallet;
+		if (!queued) task.delay(wait, () => answerHeldReject(s));
+		return;
+	}
+	answerReject(s, reason, withWallet || s.heldRejectWallet);
+}
+
+/** the rejection held inside the window, at its end (`rejectReport`) */
+function answerHeldReject(s: Session): void {
+	const reason = s.heldReject;
+	if (reason === undefined || s.closed) return;
+	answerReject(s, reason, s.heldRejectWallet);
+}
+
+function answerReject(s: Session, reason: SaveRejectReason, withWallet: boolean): void {
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
+	s.lastRejectAck = os.clock();
 	sendSaveAck(s, {
 		ok: false,
 		reason,
@@ -930,7 +1109,12 @@ function processReport(s: Session, json: string): void {
 	// `ServerPlayer.save`. Swapping the table would orphan it and lose every server-side write made
 	// between the swap and mpHost's next `adoptSave` pass.
 	copySaveInto(s.save, upd);
+	// SAV-01: dirty, and nothing more. A report is never a request to write: it rides with the next autosave (or with
+	// an event save the SERVER asks for), so no client can pick the moment the DataStore is written
 	s.dirty = true;
+	// the answer to a newer report: a rejection still held for an older one (`rejectReport`) is moot now
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
 	sendSaveAck(s, {
 		ok: true,
 		earned: reward.coins,
@@ -952,6 +1136,8 @@ function processPending(s: Session): void {
 }
 
 remotes.saveRequest.OnServerEvent.Connect((player, token, json) => {
+	const bad = !typeIs(token, "string") || !typeIs(json, "string") || json.size() > MAX_SAVE_PAYLOAD;
+	if (floodDrop(player, bad)) return;
 	const s = sessions.get(player);
 	if (s === undefined || s.closed) return;
 	if (!s.loaded) {
@@ -998,15 +1184,7 @@ function isIndex(v: unknown, size: number): v is number {
 	return typeIs(v, "number") && v % 1 === 0 && v >= 0 && v < size;
 }
 
-function takeActionToken(s: Session): boolean {
-	const now = os.clock();
-	s.actionTokens = math.min(ACTION_BURST, s.actionTokens + (now - s.actionAt) * ACTION_PER_SECOND);
-	s.actionAt = now;
-	if (s.actionTokens < 1) return false;
-	s.actionTokens -= 1;
-	return true;
-}
-
+/** `s` given: the wallet rides along, so the client re-syncs (never for "rate": see handleAction) */
 function fail(reason: ShopActionReason, s?: Session): ShopActionResult {
 	return { ok: false, reason, wallet: s !== undefined && s.loaded ? walletOf(s.save) : undefined };
 }
@@ -1020,7 +1198,9 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		Analytics.shopViewed(player, (raw as Record<string, unknown>).screen);
 		return { ok: true };
 	}
-	if (!takeActionToken(s)) return fail("rate", s);
+	// past the bucket: refused with no wallet -- a storm of these used to be answered with a whole wallet each (§8.2;
+	// the client keeps the same bucket and never sends one, and the flood line kicks well before a storm gets far)
+	if (!takeShopToken(s.shopBucket, os.clock())) return fail("rate");
 	if (isReadOnly(s)) return fail("readonly");
 	if (!typeIs(raw, "table")) return fail("invalid", s);
 	const req = raw as Record<string, unknown>;
@@ -1031,12 +1211,22 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	if (req.kind === "buyPack") {
 		if (!isIndex(req.packId, SHOP_PACKS.size())) return fail("invalid", s);
 		const id = req.packId;
+		const nonce = req.nonce;
+		if (nonce !== undefined && !isShopNonce(nonce)) return fail("invalid", s);
+		// the same purchase again (a replayed request): answered as the first time, charged once. The nonce names ONE
+		// purchase of one pack: the same nonce for another pack is no replay, and is refused
+		const receipt = nonce !== undefined ? receiptOf(s.receipts, nonce) : undefined;
+		if (receipt !== undefined) {
+			if (receipt.packId !== id) return fail("invalid", s);
+			return { ok: true, price: receipt.price, wallet: walletOf(save) };
+		}
 		const pending = (save.packsBought[id] ?? 0) - (save.packsOpened[id] ?? 0);
 		if (pending >= ECONOMY.MAX_PENDING_PACKS) return fail("limit", s);
 		price = SHOP_PACKS[id].price;
 		if (save.money < price) return fail("funds", s);
 		save.money -= price;
 		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
+		if (nonce !== undefined) keepReceipt(s.receipts, { nonce, packId: id, price });
 	} else if (req.kind === "buyCostume") {
 		// the wardrobe (MON-04): id, price, ownership and coins are all decided in server/save/costumes.ts -- the
 		// request carries nothing but the id, and a `price` field in it is never read
@@ -1140,10 +1330,20 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 	}
 	Analytics.shopAction(player, req, price);
 	s.dirty = true;
+	// SAV-01: coins spent, a run continued or a life given up reach the DataStore within one coalesced event save, not
+	// at the next minute's autosave. Showing a title is only a look: it waits for the autosave
+	if (req.kind !== "equipTitle") {
+		saveSoon(s, req.kind === "rebirth" ? "revive" : req.kind === "newRun" ? "life" : "purchase");
+	}
 	return { ok: true, price, wallet: walletOf(save) };
 }
 
-remotes.shopAction.OnServerInvoke = (player, request) => handleAction(player, request);
+remotes.shopAction.OnServerInvoke = (player, request) => {
+	const kind = typeIs(request, "table") ? (request as Record<string, unknown>).kind : undefined;
+	const malformed = !typeIs(kind, "string") || !SHOP_KINDS.has(kind);
+	if (floodDrop(player, malformed, takesShopToken(kind) ? "shop" : undefined)) return fail("rate");
+	return handleAction(player, request);
+};
 
 // ---------------------------------------------------------------- lifecycle
 
@@ -1210,6 +1410,12 @@ task.spawn(() => {
 			if (shuttingDown || s.closed) continue;
 			const budget = DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync);
 			if (budget < AUTOSAVE_MIN_BUDGET) break; // keep the budget for joins/leaves; retry next round
+			// SAV-01: one write per player per EVENT_SAVE_GAP -- an event save a few seconds ago already carried most of
+			// this; what came after it is served when the gap ends (serveEventSaves), not written twice in a row
+			if (Cadence.tooSoon(s.cadence, os.clock())) {
+				if (s.dirty) Cadence.scheduleSave(s.cadence, os.clock(), "auto");
+				continue;
+			}
 			// the body's hp and hunger as they are now (§6.1), so a crash does not hand out a heal on the next join.
 			// Guarded (F5): a throw here ended this loop, and every autosave on the server with it
 			if (guarded("settling the body", () => mpHost?.settle(s.player, s.save), s.key) === true) s.dirty = true;
@@ -1218,6 +1424,32 @@ task.spawn(() => {
 		}
 	}
 });
+
+/**
+ * SAV-01, once every EVENT_SCAN_S: the event saves. Each session's live save is looked at for the moments that matter
+ * (saveCadence.ts `noteMilestones`: a level, a skill, a day, a title, a death, a stand-up, a new life), and every early
+ * write that is due -- those, a purchase, a rare craft, a retry -- runs, while the UpdateAsync budget keeps
+ * EVENT_SAVE_MIN_BUDGET. Below that floor it waits (the autosave still comes); nothing is ever dropped, because the
+ * session stays dirty until a write lands.
+ */
+function serveEventSaves(): void {
+	const now = os.clock();
+	let budgetLeft = true;
+	for (const [, s] of sessions) {
+		if (s.closed || !s.loaded || !persists(s)) continue;
+		const ev = Cadence.noteMilestones(s.cadence, s.save);
+		if (ev !== undefined) saveSoon(s, ev);
+		if (!budgetLeft || s.writing || !Cadence.saveDue(s.cadence, now)) continue;
+		const budget = DataStoreService.GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync);
+		if (budget < Cadence.EVENT_SAVE_MIN_BUDGET) {
+			budgetLeft = false;
+			continue;
+		}
+		// the body as it is now, as the autosave does (§6.1)
+		if (guarded("settling the body", () => mpHost?.settle(s.player, s.save), s.key) === true) s.dirty = true;
+		task.spawn(() => flush(s, false));
+	}
+}
 
 /*
  * The simulation writes XP, levels and midnight's coins straight into the live save (server/sim/progress.ts),
@@ -1261,12 +1493,15 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 /**
  * Everything in the wallet the simulation can move on its own: a change in any of them is pushed. The achievement
  * counters (CON-04) ride here too: this push is how they -- and the "Achievement unlocked" toast -- reach the client.
+ * So do the packs the server opened (server/sim/backpack.ts `deliverPacks`): the client says "Delivered" when this
+ * wallet raises `packsOpened` (client/ui/packNotice.ts), even when the bag did not move (every item already at its cap).
  */
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
 	const achievements = save.achievements.join(",");
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}`;
+	const packs = save.packsOpened.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}`;
 }
 
 function pushWallets(): void {
@@ -1304,9 +1539,17 @@ function pushWallets(): void {
 }
 
 let walletPushAcc = 0;
+let eventScanAcc = 0;
 RunService.Heartbeat.Connect(dt => {
+	if (shuttingDown) return;
+	eventScanAcc += dt;
+	if (eventScanAcc >= Cadence.EVENT_SCAN_S) {
+		eventScanAcc = 0;
+		// guarded (F5): a throw here must not take the wallet push below with it, nor the next scan
+		guarded("event saves", serveEventSaves);
+	}
 	walletPushAcc += dt;
-	if (walletPushAcc < WALLET_PUSH_S || shuttingDown) return;
+	if (walletPushAcc < WALLET_PUSH_S) return;
 	walletPushAcc = 0;
 	pushWallets();
 });
@@ -1351,6 +1594,12 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
+	// ...which is exactly why the body keeper cannot see a reset by itself (same table): the kept body, its death and
+	// its magazine belonged to the save that is gone (server/sim/life.ts `resetLife`, BUG-1 of the admin audit)
+	const host = mpHost;
+	if (ops === undefined && host !== undefined) {
+		guarded(`${s.key}: resetting the body`, () => host.lives.resetLife(player.UserId, s.save));
+	}
 	s.dirty = true;
 	s.pending = undefined;
 	s.pendingToken = undefined;
@@ -1378,6 +1627,7 @@ function liveViewOf(player: Player): AdminLiveView | undefined {
 
 admin = startAdminServer({
 	jobId: JOB_ID,
+	noteRemote: (player, malformed) => floodDrop(player, malformed),
 	session(player) {
 		const s = sessions.get(player);
 		if (s === undefined) return undefined;
@@ -1459,6 +1709,8 @@ if (MP_PHASE >= 1) {
 		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
 		// is the record of the world that ended — persisted off this thread, the reset never waits for it
 		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
+		// §8.2 "registrado" (audit L4): every automatic kick into the admin audit log, by UserId
+		onFloodKick: (player, reason) => admin?.floodKick(player, reason),
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an
@@ -1474,6 +1726,8 @@ if (MP_PHASE >= 1) {
 		const s = sessionOfUserId(sp.userId);
 		if (s === undefined || s.closed) return;
 		s.dirty = true;
+		// SAV-01: a day survived -- the life's day, its coins, the record -- is on the DataStore within an event save
+		saveSoon(s, "day");
 		if (credit.coins > 0) admin?.onReport(s.player);
 	};
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
@@ -1482,6 +1736,11 @@ if (MP_PHASE >= 1) {
 		// a refused verb changed nothing, and the weapon put away (ITM-06) is the body's, never the save's: no write
 		if (outcome.kind !== "refused" && outcome.kind !== "holstered") markDirty(sp.userId);
 		Analytics.backpack(sp.save, outcome);
+		// SAV-01: a skill learned or a rare craft (a weapon or an armour made at a workbench) is on the DataStore within
+		// an event save (saveCadence.ts `backpackEvent`)
+		const ev = Cadence.backpackEvent(outcome);
+		const s = ev !== undefined ? sessionOfUserId(sp.userId) : undefined;
+		if (ev !== undefined && s !== undefined) saveSoon(s, ev);
 	};
 	sim.onInteract = sp => markDirty(sp.userId);
 	// VEI-05: a ride writes the save -- the motorcycle's oil, the Rider odometer -- and says so at least once a second

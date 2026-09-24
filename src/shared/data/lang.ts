@@ -268,6 +268,9 @@ export const LANG_TABLE: Array<string> = [
 	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
 	"Your progress was updated by an administrator",
 	"Your progress was reset by an administrator",
+	// the button that opens the admin panel (client/admin/adminClient.ts): only an admin ever sees it, on a mouse, a pad
+	// or a phone (the panel itself is English on purpose, UI-03)
+	"ADMIN",
 	// the lobby has no body, so nobody hears it (MP-18): the chat bar is off there, and this says why, once
 	"Chat reaches the survivors near you in town. Enter the city to talk.",
 	// "/w name ..." with whispers off (MP-17): said to nobody, and the sender is told why (client/chatInput.ts)
@@ -292,6 +295,31 @@ export const LANG_TABLE: Array<string> = [
 	"Unseen",
 	"Camp Cook",
 	"Sentry Builder",
+	// what earns each achievement (shared/data/achievements.ts `howTo`), under its name in the window (UI-14)
+	"Step into the city for the first time.",
+	"Switch on an electric lamp that has power.",
+	"Put down zombies with melee weapons.",
+	"Put down zombies with a bow.",
+	"Cook food over a fire or a stove.",
+	"Smelt metal in a brazier or a furnace.",
+	"Put down zombies with a sniper rifle.",
+	"Help bring down the Centipede boss.",
+	"Help bring down the Rafflesia boss.",
+	"Help bring down the Giant boss.",
+	"Help bring down the Hedgehog boss.",
+	"Put down zombies, any kind.",
+	"Put down special zombies (not walkers).",
+	"Gather wood into your backpack.",
+	"Live through a whole day in the city.",
+	"Ride a bicycle or a motorcycle.",
+	"Survive nights in one life without dying.",
+	"Put down a zombie with a turret you built.",
+	// the Achievements window (client/ui/achievements.ts, UI-14): the three states, the summary, the "?"
+	"Unlocked",
+	"In progress",
+	"Not started",
+	"No coins or items: a record of what you did.",
+	"Achievements count what you do in the city. The server keeps the count, as you play.#In progress comes first, the closest to done at the top; then what you have unlocked; then what is left.#They are a record of what you did: they give no coins and no items. Titles are earned their own way, in the Wardrobe.",
 	"Continue",
 	"New game",
 	"Shop",
@@ -404,24 +432,42 @@ export const LANG_TABLE: Array<string> = [
 	"Owned",
 	"Packs",
 	"Earn coins",
-	"Delivered when your next game starts",
+	// the Shop window (client/ui/shop.ts, MON-03 / MON-06): the note over the cards (a pack is delivered when the
+	// survivor is in the city: a New game is not needed), a pack waiting, a pet pack's truth, the "?"
+	"Fixed contents, shown in full. A pack goes into your backpack when you enter the city.",
+	"Pending",
+	"Stays until a New game",
+	"Every pack has fixed contents, shown in full on its card: what you see is what you get.#Packs go into your backpack the next time you enter the city.#A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.#Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
+	// Earn coins: how each source pays, and how far the player is from it
+	"Paid at every midnight your survivor lives through.",
+	"Next pay at midnight",
+	"Paid the first time a life reaches a new best day that is a multiple of 5.",
+	"day to go",
+	"days to go",
+	// "Help bring one down. Bosses wake at landmarks from day 5." (the first boss's world day follows)
+	"Help bring one down. Bosses wake at landmarks from day",
+	"Given once, to every new survivor.",
+	"Received",
 	"Progress not loaded",
 	"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving.",
 	"Retry",
 	"Play without saving",
 	"Saving is unavailable in this environment",
-	"Progress saved",
+	// SAV-01: saving is automatic only (no Save button); the corner indicator says what the server's writes did
+	// (client/ui/saveIndicator.ts)
 	"Saving...",
+	"Saved",
+	"Progress not saved — retrying",
+	"Progress not saved",
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
 	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
-	// "Menu" and "Backpack" are already listed (the settings' Controls tab)
+	// "Menu" and "Backpack" are already listed (the settings' Controls tab). No "Save": saving is automatic (SAV-01)
 	"Back to game",
-	"Save",
 	"Home",
 	"Game over",
-	// the end-of-run screen's epitaph (client/onboarding/gameOver.ts closingLine), one of four
+	// the death screen's epitaph (client/onboarding/gameOver.ts `epitaph`), one of four: the first is the first death's
 	"A new record. The town remembers.",
 	"Five days is more than most.",
 	"Everyone's first night ends this way. The second one goes better.",
@@ -467,7 +513,6 @@ export const LANG_TABLE: Array<string> = [
 	"Bosses",
 	"Continue this run",
 	"Daybreak in",
-	"Days survived",
 	"Everything the game listens to, on every device",
 	"Fire lights the night and cooks what you find. Build one when you can.",
 	"Getting started",
@@ -484,17 +529,43 @@ export const LANG_TABLE: Array<string> = [
 	"Reload",
 	"Skip",
 	"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it.",
-	// the wait for daybreak says what really happens (MP-21, MP-22): first light, or a new town if nobody is left
-	"You wake at first light.#If nobody is left standing, a new town begins at day 1.",
+	// the lobby's new life waiting for daybreak (client/ui/survivor.ts): first light, or a new town if nobody is left
 	"Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1.",
 	"You have",
-	"You survived",
-	"You survived a day",
 	"You're already full",
-	"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1.",
 	"Your progress changed, try again",
 	"Zombies killed",
-	"days",
+	// the death screen (client/onboarding/gameOver.ts, DESIGN_RULES UI-13). The title is the state: nobody wakes you
+	// (offline), dead until dawn (somebody is still standing, MP-21), nobody is left standing (the town falls unless
+	// somebody pays, MP-22), a New game's life waiting for first light
+	"You died",
+	"Dead until dawn",
+	"Nobody is left standing",
+	"New life at first light",
+	// the count, the hero of the screen ("Daybreak in" is above): a death in daylight waits one whole night
+	"You wake in",
+	"Town falls in",
+	"Any moment now",
+	"This life ended on",
+	// what the count ends in ("2 survivors still standing. You wake at first light.")
+	"survivor still standing.",
+	"survivors still standing.",
+	"You wake at first light.",
+	"Your new life starts at day 1.",
+	"No Rebirth in time: a new town begins at day 1, with a new life for everyone who fell.",
+	"Nobody wakes you here. Rebirth continues this life; New game starts a new one at day 1.",
+	"Nobody wakes you here. Rebirth continues this life.",
+	// the choice: what Rebirth does and what it costs ("You have 23 coins. Each Rebirth costs more than the last.")
+	"Rebirth now",
+	"Rebirth wakes you now, at full health, with your backpack.",
+	"Each Rebirth costs more than the last.",
+	// New game asks first (UI-12): a new life is not undone
+	"Start a new life?",
+	"Day 1 and the starter kit. Level, skills, coins and packs stay; this life's backpack does not.",
+	"It wakes at first light.",
+	"Nobody else is standing: this town ends now and a new one begins.",
+	// the life's strip: "Best day" is highlighted only for a record
+	"New best!",
 	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it)
 	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
 	// the item card (client/ui/itemCard.ts + itemInfo.ts, DESIGN_RULES UI-08): types, stat labels, notes and the
@@ -593,7 +664,7 @@ export const LANG_TABLE: Array<string> = [
 	"Night in",
 	"Switch weapon",
 	"Tap a weapon",
-	// the quick HEAL and EAT plates (client/ui/hudQuick.ts, DESIGN_RULES ITM-07): their row of the controls reference
+	// the quick HEAL and EAT plates (client/ui/hudQuick.ts, DESIGN_RULES ITM-08): their row of the controls reference
 	// (tutorial.ts SCHEMES) and why a plate does nothing -- on its tooltip, or in the feed when pressed anyway ("Already
 	// at full health" and "You're already full" are the Bag's, above). A use says "+20 HP" / "+25 FOOD" (the tags above)
 	"Quick heal / eat",
@@ -732,6 +803,17 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
+	// the ground items (client/systems/interaction.ts, client/ui/pickupToast.ts, DESIGN_RULES ITM-07): the prompt
+	// ("E: Pick up Shotgun ammo ×8"), an item the save already holds as many of as it can keep ("Wood full (9999)"),
+	// and the lesson that teaches the two ways -- walked up for supplies, E for weapons and gear. The feedback line is
+	// a number and an item's name ("+12 Wood"), both already here
+	"Pick up",
+	"full",
+	"Pick something up",
+	"Walk over food, ammo and materials. For weapons and gear, press use.",
+	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
+	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
+	"Siphon Oil",
 ];
 
 /**

@@ -1,5 +1,5 @@
 /*
- * The HUD's quick HEAL and EAT on this client (docs/DESIGN_RULES.md ITM-07, UI-09): the press, the shared use
+ * The HUD's quick HEAL and EAT on this client (docs/DESIGN_RULES.md ITM-08, UI-09): the press, the shared use
  * cooldown, and what the two plates draw. The pick itself is the shared rule (shared/game/quickUse.ts); the use is the
  * Bag's own verb (client/net/backpackSync.ts `useItem`: predicted as one fewer and sent, or eaten locally offline).
  *
@@ -220,8 +220,11 @@ export interface QuickHooks {
 	send: QuickSend;
 	/** a line of the HUD's feed (hud.ts showMessage) */
 	say: (text: string) => void;
-	/** the use sound */
-	heard: () => void;
+	/**
+	 * the use sound of usable `id` (shared/data/usables.ts `useSoundOf`: eaten, torn, unzipped, rattled) -- the server's
+	 * when it owns the backpack, so the caller plays it only offline: one sound per use (P0-4)
+	 */
+	heard: (id: number) => void;
 	tr: (key: string) => string;
 }
 
@@ -240,7 +243,7 @@ export function pressQuick(
 	const res = state.press(kind, body, save, now, hooks.send);
 	if (res.used) {
 		hooks.say(quickGainText(res, hooks.tr));
-		hooks.heard();
+		hooks.heard(res.id);
 		return res;
 	}
 	const reason = quickReason(kind, res.why);

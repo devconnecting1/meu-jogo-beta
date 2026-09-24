@@ -141,6 +141,13 @@ export function learned(skillId: number): void {
 	if (owned()) transmit(IntentKind.LearnSkill, skillId);
 }
 
+/*
+ * The HUD's quick HEAL / EAT plates (DESIGN_RULES ITM-08) ARE the Bag's Use: their press sends `useItem` above. They live
+ * in client/systems/quickUse.ts; main.client.ts reaches them through this module, which it already holds -- its chunk
+ * sits near Luau's 200-local ceiling (npm run check:registers), and a named import is a local each.
+ */
+export { pressQuick, quickUse } from "../systems/quickUse";
+
 // ---------------------------------------------------------------- boot
 
 /** once, at boot: the systems learn who owns the world, and the wallet's bag has somewhere to go */
@@ -170,7 +177,7 @@ export function start(): void {
 			save.runRev === bagRunRev &&
 			bagTotal(bag) > bagTotal(lastBag)
 		) {
-			bagGrew();
+			bagGrew(lastBag, bag);
 		}
 		lastBag = bag;
 		bagSave = save;

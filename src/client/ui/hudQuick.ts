@@ -1,5 +1,5 @@
 /*
- * The HUD's quick HEAL and EAT plates (docs/DESIGN_RULES.md ITM-07, UI-09): heal or eat in one press, without opening
+ * The HUD's quick HEAL and EAT plates (docs/DESIGN_RULES.md ITM-08, UI-09): heal or eat in one press, without opening
  * the Bag -- nothing pauses (UI-06), and the Bag covers ~80% of a 16:9 screen.
  *
  *   desktop ("row", in the console's vitals section, at the end of the bar each one fills):

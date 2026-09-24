@@ -8,9 +8,11 @@ import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTy
 import { ActionResult, BUILDING_KINDS, OverlayKind } from "./world";
 
 /*
- * World, Camera and Debug: tools for the admin's OWN world (every client simulates its own), all through AdminWorld.
- * They do not touch the save directly; the survivor's progress still reaches the server through the normal reports
- * (which the server trusts for admins: no time-based plausibility limits).
+ * World, Camera and Debug, all through AdminWorld. Where the server owns the world (MP_PHASE 2) every tool here is a
+ * request the SERVER validates and runs (client/admin/serverWorld.ts, docs/MULTIPLAYER.md §10): the toast is its
+ * answer -- success only on its OK -- and it writes the audit line and decides whose run becomes assisted. Where this
+ * client simulates its own world (offline, MP_PHASE < 2) they act on that copy, as they always did. None of them edits
+ * the save directly.
  */
 
 /** Ctrl+click teleport switch (read by adminClient) */
@@ -22,14 +24,15 @@ function hhmm(hour: number): string {
 	return string.format("%02d:%02d", h, m);
 }
 
+/** the toast is the answer (the server's, on a server-owned world); only a local tool is logged from here */
 function report(p: PanelCtx, res: ActionResult, action: string): void {
 	p.notify(res.message, res.ok ? "success" : "error");
-	if (res.ok) logLocal(action, res.message);
+	if (res.ok && res.audited !== true) logLocal(action, res.message);
 }
 
 function needRun(p: PanelCtx): boolean {
 	if (p.world.ready()) return true;
-	p.notify("Start a run first: world tools act on your own world", "error");
+	p.notify("Start a run first: world tools need your survivor in the town", "error");
 	return false;
 }
 
@@ -42,6 +45,8 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 	let slider: SliderHandle | undefined;
 	let statusLabel: TextLabel | undefined;
 	let rain: SwitchHandle | undefined;
+	/** a rain request on its way: the switch keeps the value asked for until the answer (and the clock) arrive */
+	let rainBusy = false;
 	let draggingHour: number | undefined;
 	const switches: Array<[SwitchHandle, () => boolean]> = [];
 
@@ -73,7 +78,8 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 				if (!needRun(p)) return;
 				draggingHour = math.clamp(v * 24, 0, 23.99);
 				p.world.setClock(draggingHour);
-				logLocal("clock", `set to ${hhmm(draggingHour)}`);
+				// a server-owned clock is logged by the server (one line for a whole drag)
+				if (!p.world.serverWorld()) logLocal("clock", `set to ${hhmm(draggingHour)}`);
 				task.delay(0.3, () => {
 					draggingHour = undefined;
 				});
@@ -108,8 +114,11 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 					rain?.set(!v);
 					return;
 				}
-				p.world.setRain(v);
-				logLocal("weather", v ? "rain on" : "rain off");
+				rainBusy = true;
+				const res = p.world.setRain(v);
+				rainBusy = false;
+				if (!res.ok) rain?.set(!v);
+				report(p, res, "weather");
 			},
 		});
 		const hw = (CONTENT_W - space(2)) / 2;
@@ -125,7 +134,9 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 				if (!needRun(p)) return;
 				confirmAction(p.layer, {
 					title: "Kill all zombies?",
-					body: "Every zombie and boss is removed outright: no XP, no loot, no exploder blasts. The run becomes assisted.",
+					body: p.world.serverWorld()
+						? "Every zombie and boss in the town is removed: no XP, no loot, no blasts. Every run in the town becomes assisted."
+						: "Every zombie and boss is removed outright: no XP, no loot, no exploder blasts. The run becomes assisted.",
 					action: "Kill all",
 					onConfirm: () => {
 						if (needRun(p)) report(p, p.world.killAll(), "killAll");
@@ -144,7 +155,9 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 				if (!needRun(p)) return;
 				confirmAction(p.layer, {
 					title: "Clear bodies and blood?",
-					body: "Every corpse and blood stain in your world is removed.",
+					body: p.world.serverWorld()
+						? "Every corpse, blood stain and acid puddle is removed, for everyone in this server."
+						: "Every corpse and blood stain in your world is removed.",
 					action: "Clear",
 					onConfirm: () => {
 						if (needRun(p)) report(p, p.world.clearCorpses(), "clear");
@@ -155,23 +168,26 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 		makeLabel(
 			body,
 			"KillHint",
-			"Kill all removes zombies and bosses outright: no XP, no loot, no exploder blasts.",
+			p.world.serverWorld()
+				? "These act on the whole server. The clock, a wave and Kill all make every run in the town assisted (no coins, titles or records)."
+				: "Kill all removes zombies and bosses outright: no XP, no loot, no exploder blasts.",
 			0,
 			250,
 			CONTENT_W,
-			30,
+			44,
 			TEXT.xs,
 			THEME.mutedForeground,
 			{ align: "left", valign: "top" },
 		);
 	};
 
+	/** `set` answers what happened (the server's word on a server-owned world); undefined = a panel preference */
 	const toggle = (
 		y: number,
 		label: string,
 		description: string,
 		get: () => boolean,
-		set: (v: boolean) => void,
+		set: (v: boolean) => ActionResult | undefined,
 		action: string,
 	): void => {
 		const s = Switch(body, `Switch${y}`, {
@@ -182,8 +198,14 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 			description,
 			value: get(),
 			onChange: v => {
-				set(v);
-				logLocal(action, v ? "on" : "off");
+				const res = set(v);
+				if (res === undefined) {
+					logLocal(action, v ? "on" : "off");
+					return;
+				}
+				// refused: the switch shows what is really on (the per-frame sync below keeps it there)
+				if (!res.ok) s.set(get());
+				report(p, res, action);
 			},
 		});
 		switches.push([s, get]);
@@ -233,6 +255,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 			() => worldPrefs.ctrlTeleport,
 			v => {
 				worldPrefs.ctrlTeleport = v;
+				return undefined;
 			},
 			"ctrlTeleport",
 		);
@@ -310,7 +333,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 					const phase = c.night ? "Night" : "Day";
 					const wave = c.wave > 0 ? ` · wave ${c.wave}` : "";
 					statusLabel.Text = `Day ${c.day} · ${hhmm(c.hour)} · ${phase}${wave} · ${c.raining ? "Rain" : "Clear"}`;
-					if (rain !== undefined && rain.get() !== c.raining) rain.set(c.raining);
+					if (rain !== undefined && !rainBusy && rain.get() !== c.raining) rain.set(c.raining);
 				} else {
 					statusLabel.Text = "No run on screen: start a run to use the world tools.";
 				}
@@ -350,7 +373,9 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 	makeLabel(
 		content,
 		"FreeCamNote",
-		"While it is on, the survivor is frozen and cannot be hurt.",
+		w.serverWorld()
+			? "Your survivor stands still meanwhile, and can still be hurt."
+			: "While it is on, the survivor is frozen and cannot be hurt.",
 		0,
 		Kit.SETTING_DESC_ROW_H + 4,
 		CONTENT_W,
@@ -393,7 +418,9 @@ export function buildCamera(p: PanelCtx, content: Frame): SectionHandle {
 	makeLabel(
 		content,
 		"Note",
-		"The camera only changes your own view. Watching another player's game is not possible yet: every client simulates its own world (see Players → Follow live).",
+		w.serverWorld()
+			? "The server sends you what is around the camera, up to 3000 u from your survivor (items stay around the survivor). Watching another player is not possible yet (see Players → Follow live)."
+			: "The camera only changes your own view. Watching another player's game is not possible yet: every client simulates its own world (see Players → Follow live).",
 		0,
 		188,
 		CONTENT_W,
@@ -455,7 +482,12 @@ const DEBUG_LEGEND_H = 28;
 const DEBUG_STRIDE = Kit.SETTING_DESC_ROW_H + 2 + DEBUG_LEGEND_H + 4;
 
 export function buildDebug(p: PanelCtx, content: Frame): SectionHandle {
-	DEBUG_SWITCHES.forEach((d, i) => {
+	// the pathfinding field only exists where this client runs the horde: on a server-owned world it is the server's,
+	// and a switch that draws nothing is not offered
+	const field = p.world.hasFlowField();
+	if (!field && p.world.overlay("flow")) p.world.setOverlay("flow", false);
+	const shown = DEBUG_SWITCHES.filter(d => d.kind !== "flow" || field);
+	shown.forEach((d, i) => {
 		const y = i * DEBUG_STRIDE;
 		Switch(content, `Debug${i}`, {
 			x: 0,
@@ -486,9 +518,11 @@ export function buildDebug(p: PanelCtx, content: Frame): SectionHandle {
 	makeLabel(
 		content,
 		"Note",
-		"Overlays are drawn above the night so they stay readable. They only exist on your screen.",
+		field
+			? "Overlays are drawn above the night so they stay readable. They only exist on your screen."
+			: "Overlays are drawn above the night and only exist on your screen. The zombies' pathfinding runs on the server: there is no field here to draw.",
 		0,
-		DEBUG_SWITCHES.size() * DEBUG_STRIDE,
+		shown.size() * DEBUG_STRIDE,
 		CONTENT_W,
 		34,
 		TEXT.xs,

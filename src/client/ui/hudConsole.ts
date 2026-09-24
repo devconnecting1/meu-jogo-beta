@@ -50,7 +50,7 @@
  *  - the Bag and Menu plates are the in-run actions that have a button today, each a pixel icon and its key on this
  *    device (B / LB, P / Start), and after them the third: the match scoreboard's survivors chip (MP-23,
  *    scoreboard.ts builds it in `chipSlot`: the people icon, how many are in town and Q / Back);
- *  - the quick HEAL and EAT plates (DESIGN_RULES ITM-07, hudQuick.ts): at the end of the HP and FOOD bars they fill,
+ *  - the quick HEAL and EAT plates (DESIGN_RULES ITM-08, hudQuick.ts): at the end of the HP and FOOD bars they fill,
  *    the item a press uses, how many of its kind are left and the key (H / F, the D-pad's up / down). Two plates for
  *    the two bars a fight drains, nothing more: not a quick-use bar of any item (the Bag stays the inventory);
  *  - the right column says what the old weapon card said: the weapon in hand, its type, and its magazine.
@@ -70,11 +70,13 @@ import { WEAPON_KEY_COUNT, weaponKeyOrder } from "shared/game/weaponSlots";
 import { iconKeys, iconOf } from "shared/data/itemIcons";
 import { IconView, drawItemIcon, drawnRects, maxFrameCount } from "./itemIcon";
 import { weaponKindName } from "./itemInfo";
+import { pickupFlashTransparency } from "./pickupToast";
 import { PlateState, paintPlate, reliefPx } from "./plate";
 import { BAR, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
 import { HudSky, Px, SKY_STACK_H, SKY_STACK_W, pixelIcon, skySection } from "./hudSky";
 import { QuickPlate, QuickTip, quickTipText, quickViewsOf } from "./hudQuick";
 import type { QuickView } from "../systems/quickUse";
+import { RegenCue, forkRoom } from "./hudRegen";
 import { SCHEMES, currentScheme } from "./tutorial";
 import { Groove, Section } from "./window";
 import * as W from "./widgets";
@@ -118,7 +120,13 @@ export interface HudState {
 	/** 1 → 0 after taking damage */
 	hitFlash: number;
 	/**
-	 * (ITM-07) the HEAL and EAT plates: what each would use, how many, why not, the use cooldown's sweep and the pulse
+	 * Seconds since the body last lost hp (PlayerState.sinceHurt, DESIGN_RULES VIT-01): with hp and hunger, what the
+	 * vitals' cue reads (hudRegen.ts: the HP bar glows while healing, a fork on FOOD when only food stops it).
+	 * Undefined = not tracked: no glow.
+	 */
+	sinceHurt?: number;
+	/**
+	 * (ITM-08) the HEAL and EAT plates: what each would use, how many, why not, the use cooldown's sweep and the pulse
 	 * (client/systems/quickUse.ts QuickUse.frame). Omitted: the shared pick on the vitals above, with no clocks.
 	 */
 	quick?: ReadonlyArray<QuickView>;
@@ -166,7 +174,7 @@ const READOUT_H = 40;
 /** the console's distance from the bottom of the screen on desktop */
 export const CONSOLE_MARGIN = 12;
 /**
- * (ITM-07) the quick plates at the end of the HP and FOOD bars (desktop): as tall as a bar, the width of an icon, a count
+ * (ITM-08) the quick plates at the end of the HP and FOOD bars (desktop): as tall as a bar, the width of an icon, a count
  * and a key; the two bars give up that much and the XP bar under them keeps the full width -- the console does not grow
  */
 export const QUICK_W = 56;
@@ -526,7 +534,7 @@ export function placeTouchChip(
 }
 
 /**
- * Where the touch quick deck goes (DESIGN_RULES ITM-07, hudQuick.ts QuickDeck: the HEAL and EAT tiles), at the console's
+ * Where the touch quick deck goes (DESIGN_RULES ITM-08, hudQuick.ts QuickDeck: the HEAL and EAT tiles), at the console's
  * own scale -- its tiles are the hotbar's size, a thumb's (>= MIN_TOUCH_PX). Its first free place, once the console
  * `deck`, the sky and the chip (`keepOut`) are placed:
  *  1. over the console, flush with its left end: over the bars the two tiles fill (HP, FOOD) -- the bottom centre stays
@@ -534,7 +542,10 @@ export function placeTouchChip(
  *  2. over the console's right end, then its middle; 3. under the console, left, right, middle (a console that floated
  *     up over the thumbs: a crowded or a small phone); 4. beside it, left then right.
  * "Free" = on screen, below the Roblox bar, TOUCH_GAP clear of the thumbs, of Menu / Bag, of the console and of
- * `keepOut`. The prompt "E: ..." rides over the deck where the two would meet (hud.ts placeConsole).
+ * `keepOut`. The prompt "E: ..." rides over the deck where the two would meet (hud.ts placeConsole), and the pickup
+ * chips over the prompt (ITM-07): a place over the console that the prompt meets is free only while that column
+ * (`prompt.need` px over the deck) still ends below the Roblox bar -- on a small phone whose console floated up, the
+ * tiles go under the console rather than push the prompt and the chips off the top of the screen.
  * Why not in the console: a bar is 18 units (15 px on a phone) and a thumb needs a tile, and the band between the
  * thumbs has no width to spare -- two more tiles in the console would float it over the thumbs on a 844 x 390 phone.
  */
@@ -546,6 +557,7 @@ export function placeTouchQuick(
 	plateW: number,
 	plateH: number,
 	keepOut: ReadonlyArray<PxRect> = [],
+	prompt?: QuickPrompt,
 ): ConsolePlacement {
 	const unit = math.max(L.scale, 0.5);
 	const gap = TOUCH_GAP * unit;
@@ -575,15 +587,28 @@ export function placeTouchQuick(
 	for (const [x, y] of spots) {
 		const r: PxRect = [x, y, x + w, y + h];
 		const onScreen = x >= edge - 0.001 && x + w <= L.viewW - edge + 0.001 && y >= L.inset && y + h <= L.viewH;
+		// over the console, where the prompt meets it: the prompt and its chips go over the tiles, and must still fit
+		const pushed =
+			prompt !== undefined && y < deck[1] && x < prompt.cx + prompt.half && prompt.cx - prompt.half < x + w;
+		if (pushed && y - prompt.need < L.inset) continue;
 		if (onScreen && !overlapsAny(r, obstacles)) return { x, y, w, h, scale };
 	}
 	// nothing free (no screen the tests know gets here): over the console's left end
 	return { x: spots[0][0], y: spots[0][1], w, h, scale };
 }
 
+/** the prompt "E: ..." as the quick deck's placement sees it (hud.ts placeConsole): centre, half-width, and what it
+ * needs over the deck when it rides there (its gap, and the pickup chips' column with the prompt in it), in px */
+export interface QuickPrompt {
+	cx: number;
+	half: number;
+	need: number;
+}
+
 // ---------------------------------------------------------------- bars
 
 interface ConsoleBar {
+	groove: Frame;
 	fill: Frame;
 	label: TextLabel;
 	ratio: number;
@@ -761,7 +786,7 @@ export interface ConsoleCallbacks {
 	onSlot: (k: number) => void;
 	onBag: () => void;
 	onMenu: () => void;
-	/** (ITM-07) quick plate `kind` clicked (desktop): the caller writes InputState.quickUsePressed, like H / F */
+	/** (ITM-08) quick plate `kind` clicked (desktop): the caller writes InputState.quickUsePressed, like H / F */
 	onQuick?: (kind: number) => void;
 }
 
@@ -775,6 +800,8 @@ export class HudConsole {
 	private readonly tags: [string, string, string];
 	private readonly texts: Array<ScaledText> = [];
 	private readonly bars: Array<ConsoleBar> = [];
+	/** the vitals' healing cue (hudRegen.ts) */
+	private readonly regen: RegenCue;
 	private readonly tiles: Array<HotbarTile> = [];
 	/** the key order of this frame (weaponKeyOrder fills it: no allocation per frame) */
 	private readonly order: Array<number> = [];
@@ -811,7 +838,10 @@ export class HudConsole {
 	 * its survivors chip (scoreboard.ts, MP-23). undefined on touch (hud.ts places the chip with Menu and Bag)
 	 */
 	readonly chipSlot: Frame | undefined;
-	/** (ITM-07, desktop) the HEAL and EAT plates at the end of the HP and FOOD bars, and their one tooltip */
+	/** desktop: the light over the Bag plate when something goes into the backpack (ITM-07), and its transparency now */
+	private bagFlash: Frame | undefined;
+	private bagFlashT = 1;
+	/** (ITM-08, desktop) the HEAL and EAT plates at the end of the HP and FOOD bars, and their one tooltip */
 	private readonly quick: Array<QuickPlate> = [];
 	private tip: QuickTip | undefined;
 
@@ -860,12 +890,26 @@ export class HudConsole {
 		const barY = (i: number): number => L.inset + (inner - L.inset * 2 - barsH(L)) / 2 + i * (L.barH + L.barGap);
 		const faces = [BAR.hp, BAR.food, BAR.xp];
 		const names = ["Hp", "Food", "Xp"];
-		// (ITM-07, desktop) HP and FOOD give the end of their row to the HEAL and EAT plates -- beside the bar each one
+		// (ITM-08, desktop) HP and FOOD give the end of their row to the HEAL and EAT plates -- beside the bar each one
 		// fills, separate from it -- and XP keeps the full width: the section, and the console, keep their size
 		const quickBarW = L.barW - QUICK_W - QUICK_GAP;
+		// on those two shorter bars the label is centred on what the fork (VIT-01, hudRegen.ts) leaves of FOOD's -- HP's
+		// the same, so the two numbers stay one above the other: "FOOD 14 / 100" and the fork at its pop never touch
+		const quickLabelW = quickBarW - forkRoom(L.barH);
 		for (let i = 0; i < 3; i++) {
-			const w = L.full && i < 2 ? quickBarW : L.barW;
-			this.bars.push(this.makeBar(vitals, names[i], L.inset, barY(i), faces[i], vitals.ZIndex + 1, w));
+			const short = L.full && i < 2;
+			const w = short ? quickBarW : L.barW;
+			const bar = this.makeBar(
+				vitals,
+				names[i],
+				L.inset,
+				barY(i),
+				faces[i],
+				vitals.ZIndex + 1,
+				w,
+				short ? quickLabelW : w,
+			);
+			this.bars.push(bar);
 		}
 		if (L.full) {
 			for (let q = 0; q < 2; q++) {
@@ -881,6 +925,10 @@ export class HudConsole {
 			// the tooltip over the vitals section, above the console's top edge (under the mouse only)
 			this.tip = new QuickTip(frame, vitalsX, -TIP_H - TIP_GAP, vitalsW, TIP_H, body.ZIndex + 6);
 		}
+		// VIT-01's cue on the same two bars: the HP glow while healing, the fork on FOOD when only food stops it -- at the
+		// bars' own width (on desktop the HEAL / EAT plates take their row's end: the glow and the fork stay on the bar)
+		const hpAt = { x: L.inset, y: barY(0), barW: L.full ? quickBarW : L.barW, barH: L.barH, barGap: L.barGap };
+		this.regen = new RegenCue(vitals, this.bars[1].groove, hpAt, vitals.ZIndex + 1);
 
 		// ---- middle: the hotbar on its groove bed, in its section
 		const hotbarX = vitalsX + vitalsW + L.colGap;
@@ -991,7 +1039,16 @@ export class HudConsole {
 	}
 
 	/** one bar `w` wide: the dark groove, the fill plate in relief inside it, the light label centred over both */
-	private makeBar(parent: Frame, name: string, x: number, y: number, face: Color3, z: number, w: number): ConsoleBar {
+	private makeBar(
+		parent: Frame,
+		name: string,
+		x: number,
+		y: number,
+		face: Color3,
+		z: number,
+		w: number,
+		labelW = w,
+	): ConsoleBar {
 		const L = this.layout;
 		const groove = Groove(parent, `${name}Bar`, x, y, w, L.barH);
 		groove.ZIndex = z;
@@ -1010,11 +1067,12 @@ export class HudConsole {
 		fill.ZIndex = z + 1;
 		fill.Parent = inner;
 		paintPlate(fill, face, "idle", FILL_UNIT);
-		const label = this.text(groove, "Value", "", 0, 0, w, L.barH, TEXT.sm, THEME.foreground, {
+		const label = this.text(groove, "Value", "", 0, 0, labelW, L.barH, TEXT.sm, THEME.foreground, {
 			font: BOLD,
 			zIndex: z + 3,
 		});
 		const bar: ConsoleBar = {
+			groove,
 			fill,
 			label,
 			ratio: 1,
@@ -1209,6 +1267,13 @@ export class HudConsole {
 			onClick,
 		});
 		b.Selectable = false;
+		if (name === "Bag") {
+			// ITM-07: the light that flashes over the Bag when something goes into it (client/ui/pickupToast.ts)
+			this.bagFlash = W.makeFrame(b, "PickupFlash", 0, 0, ICON_W, ICON_H, THEME.foreground, {
+				transparency: 1,
+				zIndex: b.ZIndex + 3,
+			});
+		}
 		const iconS = 12;
 		const host = W.makeFrame(b, "Icon", 10, (ICON_H - iconS) / 2, iconS, iconS, THEME.background, {
 			transparency: 1,
@@ -1222,6 +1287,16 @@ export class HudConsole {
 		});
 		this.legends.push(legend);
 		this.legendKeys.push(action);
+	}
+
+	/** the Bag plate's pickup flash, 0..1 (hud.ts, every frame): written only when its step changes */
+	setBagFlash(glow: number): void {
+		const f = this.bagFlash;
+		if (f === undefined) return;
+		const t = pickupFlashTransparency(glow);
+		if (t === this.bagFlashT) return;
+		this.bagFlashT = t;
+		f.BackgroundTransparency = t;
 	}
 
 	/**
@@ -1274,6 +1349,8 @@ export class HudConsole {
 			foodBar.label.Text = `${this.tags[1]} ${foodNow} / ${state.hungerMax}`;
 		}
 		this.setBar(foodBar, foodRatio, foodRatio < LOW_FOOD && (still || wave > 0) ? BAR.hp : BAR.food, "idle", true);
+		// VIT-01: the HP bar glows while the body heals, and FOOD shows a fork while only food stands in its way
+		this.regen.update(state.hp, state.hpMax, state.hunger, state.sinceHurt, now, still);
 
 		// XP, with the level written in it
 		const exp = math.max(0, math.floor(state.exp));
@@ -1295,7 +1372,7 @@ export class HudConsole {
 			}
 		}
 
-		// (ITM-07) the quick plates by the HP and FOOD bars, and the tooltip of the one under the mouse
+		// (ITM-08) the quick plates by the HP and FOOD bars, and the tooltip of the one under the mouse
 		if (this.quick.size() > 0) {
 			const views = state.quick ?? quickViewsOf(save, state.hp, state.hpMax, state.hunger, state.hungerMax);
 			let tip = "";

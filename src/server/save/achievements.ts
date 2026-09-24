@@ -37,7 +37,10 @@
  *     (`applyWallet`) -- the "Achievement unlocked" toast is that raise crossing the goal
  *     (client/ui/achievementNotice.ts);
  *   - a switched-off row (`hidden`, CON-04) is never credited;
- *   - an assisted run (§9.3) earns no kill and no night, as it earns no coins (the callers already gate those two).
+ *   - an assisted run (§9.3) earns no achievement at all, as it earns no coins: every caller asks the simulation's
+ *     `paysRewards` first -- the kill and the boss credit (progress.ts), the night (simulation.ts), the lamp (power.ts),
+ *     and the cooking, the smelting, the wood and the ride (craft.ts, items.ts through interaction.ts, vehicles.ts),
+ *     which counted in an assisted run until 2026-09-24 (Camp Cook, Metalworker, Woodpile, Road Trip).
  *
  * Pure: no Instances, no services, so tools/test-save.mjs drives it directly.
  */

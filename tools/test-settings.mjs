@@ -723,7 +723,7 @@ openTab(2);
 		SCHEMES.every((sc, i) => JSON.stringify(listed[i]) === JSON.stringify(sc.rows.map(r => r[0]))),
 		listed.map(l => l.length).join(" / "),
 	);
-	// the tenth row (ITM-07's quick heal / eat) fits the page without scrolling; an eleventh would not -- so the bound is
+	// the tenth row (ITM-08's quick heal / eat) fits the page without scrolling; an eleventh would not -- so the bound is
 	// real, and a row added past it fails here instead of hiding the last keys below the fold
 	const { keyListFits } = require(join(SRC, "client/ui/settings.ts"));
 	const most = Math.max(...SCHEMES.map(sc => sc.rows.length));
@@ -849,7 +849,7 @@ const SCORE_HUD_STATE = {
 };
 
 /**
- * (ITM-07) The quick-use chain after the field: `kind` read by the client's real press (client/systems/quickUse.ts
+ * (ITM-08) The quick-use chain after the field: `kind` read by the client's real press (client/systems/quickUse.ts
  * pressQuick, a fresh state: no cooldown carried from another probe) through the Bag's own verb (backpackSync.useItem,
  * offline here: the local rule) -- a hurt, hungry survivor with one Bandage and one Canned food is healed or fed by it.
  */
@@ -938,7 +938,7 @@ const PROBES = {
 		}
 		return got.join() === "0,1,2,3,4";
 	},
-	// ITM-07: H heals and F eats, through the quick plates' press and the Bag's own verb
+	// ITM-08: H heals and F eats, through the quick plates' press and the Bag's own verb
 	"H / F": () => {
 		fresh();
 		tap(key("H"));
@@ -1035,7 +1035,7 @@ const PROBES = {
 			tile?.Activated.Fire();
 			return input.weaponSlotPressed === 1;
 		}),
-	// ITM-07: the touch quick tiles (hudQuick.ts QuickDeck): a tap is H / F
+	// ITM-08: the touch quick tiles (hudQuick.ts QuickDeck): a tap is H / F
 	"Tap heal / food": () =>
 		withTouchHud(() => {
 			fresh();
@@ -1140,7 +1140,7 @@ const PROBES = {
 		fresh();
 		return left === -1 && right === 1 && inMenu === 0 && GuiService.GuiNavigationEnabled === true;
 	},
-	// ITM-07: up heals, down eats (the order of the HP and FOOD bars); in a menu the D-pad is its navigation
+	// ITM-08: up heals, down eats (the order of the HP and FOOD bars); in a menu the D-pad is its navigation
 	"D-pad up / down": () => {
 		fresh();
 		tap(pad("DPadUp"));

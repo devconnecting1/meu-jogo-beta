@@ -36,6 +36,9 @@
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
  *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
  *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
+ *  12. THE HORDE'S ORDER (perf audit M2). The real SnapshotBuffer, with its netId table walked in Luau's order: a
+ *      spawn under a recycled low netId moves no walker already drawn, and a death at the front moves one walker
+ *      into its place (it used to move the whole horde: 280 sprites, 867 writes for 40 walkers).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -373,8 +376,8 @@ section("2) a birth or a death costs O(1), and never a ZIndex");
 		`${death.writes} writes on ${death.touched.size()} sprites; the town, the blood and the survivors untouched`,
 	);
 	console.log(
-		"       (the horde's order is the snapshot's: a death at its front still moves every walker after it, in its own" +
-			" layers -- client/net/snapshotBuffer.ts decides that order, not the renderer)",
+		"       (this horde is a plain list, so a death at its front moves every walker after it, in its own layers; the" +
+			" game's order is client/net/snapshotBuffer.ts's, where a death moves one walker: section 12)",
 	);
 }
 
@@ -859,13 +862,10 @@ section("9) no write without a change");
 	globalThis.CFrame = hadCFrame;
 	globalThis.Vector3 = hadVector3;
 	globalThis.pcall = hadPcall;
-	const items = loop.slice(
-		loop.indexOf("private drawItems("),
-		loop.indexOf("// ---", loop.indexOf("private drawItems(")),
-	);
+	const items = readFileSync(join(SRC, "client", "view", "groundItemsView.ts"), "utf8");
 	check(
-		/if \(t >= GLINT_LEN\) continue;/.test(items) && !/t < GLINT_LEN \?/.test(items),
-		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (drawItems)",
+		/if \(t >= GLINT_LEN\) return;/.test(items) && !/t < GLINT_LEN \?/.test(items),
+		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (groundItemsView)",
 	);
 	check(
 		first === 1 && still === 0 && moving === 60 && calls === 61,
@@ -1051,6 +1051,339 @@ section("11) a tree's canopy asks the cells under its crown, not the whole horde
 		/this\.underCanopy\.anyWithin\(cx, cy, r\)/.test(canopy) && !/for \(const z of this\.zombies\)/.test(canopy),
 		"GameLoop.updateCanopy asks the grid, filled once a frame (it walked every zombie for every tree)",
 	);
+}
+
+// ================================================================ 12. the horde's own order
+
+section("12) the horde's draw order is the snapshot buffer's: a spawn or a death moves one walker, not the horde");
+{
+	/*
+	 * perf audit M2. The view draws `SnapshotBuffer.zombieStates()` in its order, and the renderer hands out sprite
+	 * slots by it. That order was the iteration order of the buffer's netId -> track table: in Luau a table keyed by
+	 * small integers walks them in key order (its array part), so a recycled LOW netId -- or a rehash -- put a new
+	 * body in front of the horde and moved every walker's sprites; a death at the front did the same. The Node Map
+	 * walks in insertion order, so the table is given Luau's order here (ascending keys) to measure what Roblox does.
+	 */
+	const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+	const root = gui.make("Frame");
+	const r = new Renderer(root, "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	cam.x = AT.x;
+	cam.y = AT.y;
+	const buf = new SnapshotBuffer();
+	buf.setRate(60);
+	const table = buf.zombies;
+	if (table instanceof Map) {
+		table[Symbol.iterator] = function* luauOrder() {
+			for (const k of [...Map.prototype.keys.call(this)].sort((a, b) => a - b)) yield [k, this.get(k)];
+		};
+	}
+	const bodies = new Map();
+	const place = id => ({
+		x: AT.x - 500 + ((id * 97) % 1000),
+		y: AT.y - 280 + ((id * 53) % 560),
+		angle: (id % 8) * 0.7,
+		type: 1 + (id % 5),
+	});
+	// netIds 2..41: netId 1 died a while ago and is free again (§4.4: reused after 2 s)
+	for (let id = 2; id <= 41; id++) bodies.set(id, place(id));
+	let tick = 3000;
+	let now = 0;
+	const feed = () => {
+		const zombies = [];
+		for (const [netId, b] of bodies) {
+			zombies.push({
+				netId,
+				x: b.x,
+				y: b.y,
+				angle: b.angle,
+				flags: 0,
+				type: b.type,
+				big: false,
+				mid: false,
+				aware: 0,
+			});
+		}
+		buf.receive({ tick: tick % 65536, part: 0, parts: 1, players: [], zombies, bosses: [] }, tick, now);
+	};
+	const frame = () => {
+		tick += 1;
+		now += 1 / 60;
+		if (tick % 3 === 0) feed();
+		buf.advance(1 / 60, tick, now);
+		r.beginFrame();
+		for (const z of buf.zombieStates()) {
+			r.drawCircle(cam, z.x + 3, z.y + 9, 38, {
+				color: COLORS.shadow,
+				alpha: 0.3 * z.alpha,
+				zIndex: Z.actorShadow,
+			});
+			HV.drawZombie(
+				r,
+				cam,
+				z.x,
+				z.y,
+				z.angle,
+				1,
+				z.type,
+				0,
+				z.alpha,
+				z.feetCycle,
+				Z.zombie,
+				0,
+				false,
+				false,
+				false,
+			);
+		}
+		r.endFrame();
+	};
+	const sprites = () => {
+		const out = new Set();
+		const walk = f => {
+			for (const c of f.GetChildren()) {
+				if (c.ClassName === "Frame") out.add(c);
+				walk(c);
+			}
+		};
+		walk(r.layer);
+		return out;
+	};
+	/** runs `fn` and counts the sprites that EXISTED before it and had a property changed */
+	const moved = fn => {
+		const before = sprites();
+		const w = watch(fn);
+		let n = 0;
+		for (const f of w.touched) if (before.has(f)) n += 1;
+		return { n, writes: w.writes, zWrites: w.zWrites };
+	};
+	for (let i = 0; i < 180; i++) frame(); // every body in, faded in, standing still
+	const perWalker = r.drawCount() / bodies.size();
+	const idle = moved(() => {
+		for (let i = 0; i < 30; i++) frame();
+	});
+	check(idle.writes === 0, "a still horde of 40 writes nothing", `${idle.writes} writes in 30 frames`);
+
+	// a spawn under the recycled netId 1: the lowest of all
+	bodies.set(1, place(1));
+	const spawn = moved(() => {
+		for (let i = 0; i < 3; i++) frame();
+	});
+	check(
+		spawn.n === 0 && spawn.zWrites === 0,
+		"a spawn under a recycled low netId moves no walker already drawn (it is drawn after them)",
+		`${spawn.n} existing sprites changed, ${spawn.writes} writes; one walker is ${perWalker.toFixed(0)} sprites`,
+	);
+	for (let i = 0; i < 60; i++) frame();
+
+	// a death at the front of the order: the reliable ZombieDied takes the body away at once
+	const first = buf.zombieStates()[0].netId;
+	bodies.delete(first);
+	const death = moved(() => {
+		buf.forgetZombie(first, tick);
+		frame();
+	});
+	check(
+		death.n <= 2 * perWalker && death.zWrites === 0,
+		"a death at the front moves one walker into its place (two walkers' sprites at most), not the horde",
+		`${death.n} existing sprites changed, ${death.writes} writes; the horde is ${r.drawCount()} sprites`,
+	);
+	const ids = buf.zombieStates().map(z => z.netId);
+	check(
+		ids.length === bodies.size() && new Set(ids).size() === ids.length && !ids.includes(first),
+		"and the order still holds every body once, and not the dead one",
+		`${ids.length} drawn`,
+	);
+}
+
+// ================================================================ 13. the ground items (ITM-07)
+
+section("13) ground items (ITM-07): drops, a pile, the target and the glint -- no Instance after the warm-up");
+{
+	const { GroundItemsView, hopHeight, HOP_TIME, PILE_SPREAD } = require(join(SRC, "client/view/groundItemsView.ts"));
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	/** a street's worth of loot: every kind, a boss's pile of six on one spot, and a drop every half second */
+	const street = () => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(1280, 720);
+		const cam = new Camera();
+		cam.setView(1280, 720);
+		cam.x = 3000;
+		cam.y = 3000;
+		const shadow = { x: 0, y: 0 };
+		const view = new GroundItemsView((x, y, len) => {
+			shadow.x = 0.7 * len;
+			shadow.y = 0.7 * len;
+			return shadow;
+		});
+		const kinds = [
+			[1, 0],
+			[1, 10],
+			[1, 16],
+			[2, 4],
+			[2, 13],
+			[3, 12],
+			[3, 17],
+			[4, 23],
+			[4, 44],
+			[4, 45],
+			[4, 48],
+			[4, 30],
+		];
+		let id = 100;
+		const items = [];
+		const drop = (k, x, y, moving) => {
+			id += 1;
+			const [kind, itemId] = kinds[k % kinds.length];
+			items.push({ id, kind, itemId, count: 3, x, y, vx: moving ? 120 : 0, vy: moving ? -40 : 0 });
+		};
+		for (let i = 0; i < 36; i++) drop(i, 2500 + (i % 12) * 80, 2800 + Math.floor(i / 12) * 90, false);
+		for (let i = 0; i < 6; i++) drop(i * 3, 3300, 3100, false);
+		let clock = 0;
+		let f = 0;
+		const frame = () => {
+			f += 1;
+			clock += 1 / 60;
+			// a drop lands every 30 frames and the oldest drop is picked up: six in play, on seven spots in turn (a
+			// steady street, so the warm-up has seen its busiest frame)
+			if (f % 30 === 0) {
+				const n = f / 30;
+				drop(n, 2600 + (n % 7) * 90, 3200, true);
+				if (items.length > 42 + 6) items.splice(42, 1);
+			}
+			for (const it of items) {
+				if (it.vx === 0 && it.vy === 0) continue;
+				it.x += it.vx / 60;
+				it.y += it.vy / 60;
+				it.vx *= 0.9;
+				it.vy *= 0.9;
+				if (it.vx * it.vx + it.vy * it.vy < 1) {
+					it.vx = 0;
+					it.vy = 0;
+				}
+			}
+			view.target = items[(Math.floor(f / 45) * 7) % items.length].id;
+			view.reduceMotion = f % 600 >= 450;
+			r.beginFrame();
+			view.draw(r, cam, cam.viewRect(32), items, clock, 1 / 60);
+			r.endFrame();
+		};
+		return { r, view, items, frame };
+	};
+	for (const [label, ids] of [
+		["flat looks (no atlas id)", {}],
+		["the icons' atlas", { itemIcons: "rbxassetid://4242" }],
+	]) {
+		WA.overrideWorldArt(ids);
+		const S = street();
+		for (let i = 0; i < 4200; i++) S.frame();
+		const w = watch(() => {
+			for (let i = 0; i < 600; i++) S.frame();
+		});
+		check(
+			w.created === 0,
+			`${label}: 600 frames of drops, pickups, a pile, the target moving and the glint create no Instance`,
+			`${w.created} created`,
+		);
+		check(
+			w.zWrites === 0,
+			`${label}: ...and write no ZIndex (glint and brackets have buckets of their own)`,
+			`${w.zWrites} ZIndex writes`,
+		);
+		console.log(
+			`       ${label}: ${S.r.drawCount()} sprites for ${S.items.length} items, ${(w.writes / 600).toFixed(0)} writes/frame [${top(w.byProp, 600)}]; pool ${S.r.poolSize()}`,
+		);
+	}
+	WA.overrideWorldArt({ itemIcons: "rbxassetid://4242" });
+	// what one item costs with the atlas: the icon and its shadow; gear adds its ring (2); the target its brackets (8)
+	const one = (kind, itemId, target) => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(200, 200);
+		const cam = new Camera();
+		cam.setView(200, 200);
+		cam.x = 1000;
+		cam.y = 1000;
+		const view = new GroundItemsView(() => ({ x: 1, y: 1 }));
+		view.reduceMotion = true;
+		view.target = target ? 5 : -1;
+		r.beginFrame();
+		view.draw(
+			r,
+			cam,
+			cam.viewRect(32),
+			[{ id: 5, kind, itemId, count: 1, x: 1000, y: 1000, vx: 0, vy: 0 }],
+			1.3,
+			0,
+		);
+		r.endFrame();
+		return r.drawCount();
+	};
+	const supply = one(4, 23, false);
+	const gear = one(1, 10, false);
+	const targeted = one(1, 10, true);
+	check(
+		supply === 2 && gear === 4 && targeted === 12,
+		`with the atlas an item is 2 sprites (icon + shadow), gear 4 (its ring), the target 12 (its brackets)`,
+		`${supply} / ${gear} / ${targeted}`,
+	);
+	// the hop: two arcs that land, and nothing with Reduce Motion
+	check(
+		hopHeight(0) === 0 &&
+			hopHeight(HOP_TIME * 0.3) > 4 &&
+			hopHeight(HOP_TIME) === 0 &&
+			hopHeight(HOP_TIME + 1) === 0,
+		`a drop hops twice and lands (${HOP_TIME.toFixed(2)} s)`,
+	);
+	// a pile fans out, every item off the spot, apart from each other
+	{
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(300, 300);
+		const cam = new Camera();
+		cam.setView(300, 300);
+		cam.x = 1000;
+		cam.y = 1000;
+		const at = [];
+		const draw = r.drawRect.bind(r);
+		r.drawRect = (c, x, y, o) => {
+			if (o.zIndex === Z.item) at.push([x, y]);
+			return draw(c, x, y, o);
+		};
+		const view = new GroundItemsView(() => ({ x: 0, y: 0 }));
+		view.reduceMotion = true;
+		const pile = [];
+		for (let i = 0; i < 6; i++)
+			pile.push({ id: 300 + i, kind: 4, itemId: 23 + i, count: 1, x: 1000, y: 1000, vx: 0, vy: 0 });
+		r.beginFrame();
+		view.draw(r, cam, cam.viewRect(32), pile, 1.3, 0);
+		r.endFrame();
+		// the icon is drawn centred on its drawn box: compare the boxes' centres, the icon offset taken back out
+		let closest = Infinity;
+		for (let i = 0; i < at.length; i++)
+			for (let j = 0; j < i; j++)
+				closest = Math.min(closest, Math.hypot(at[i][0] - at[j][0], at[i][1] - at[j][1]));
+		check(
+			at.length === 6 && closest >= 12,
+			`six items on one spot fan out (at least ${PILE_SPREAD} u off it), no two icons closer than 12 u`,
+			`${at.length} icons, closest ${closest.toFixed(1)} u`,
+		);
+	}
+	// the tiers
+	check(
+		RULE.groundTier(1, 25) === "rare" &&
+			RULE.groundTier(2, 14) === "rare" &&
+			RULE.groundTier(1, 28) === "rare" &&
+			RULE.groundTier(1, 10) === "gear" &&
+			RULE.groundTier(2, 13) === "gear" &&
+			RULE.groundTier(4, 23) === "supply" &&
+			RULE.groundTier(3, 12) === "supply",
+		"tiers: a boss's trophy or a golden weapon is rare, a weapon or equipment gear, the rest supplies",
+	);
+	WA.overrideWorldArt(undefined);
 }
 
 WA.overrideWorldArt(undefined);

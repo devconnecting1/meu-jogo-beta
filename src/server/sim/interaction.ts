@@ -26,15 +26,20 @@ import {
 	edgeDist,
 	interactTarget,
 	isFire,
+	nearestGroundItem,
+	nearestPump,
+	pumpsOf,
 	repairMaterial,
 	SOLID_REACH,
 } from "shared/sim/interactQuery";
+import { noRoomIn } from "shared/sim/pickupRule";
 import { segmentClear } from "shared/game/physics";
 import { buildingAt, isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
@@ -65,6 +70,13 @@ const SKILL_HANDY = 17;
  */
 export const PRESS_COOLDOWN_S = 0.2;
 export const TOGGLE_COOLDOWN_S = 0.25;
+/**
+ * A survivor outside every building is told about the pump island within this of its edge (EDI-16, the LootFlag of
+ * §4.5): wider than the reach of E (SOLID_REACH), so the flag is on this client before the survivor is at the island
+ * and the hint never lies for a moment; narrow enough that the two islands of a station (80 u apart) are told one at
+ * a time, the nearer first.
+ */
+export const PUMP_FLAG_REACH = 160;
 
 /** what the press did, for the caller's Fx and for the tests */
 export type InteractOutcome =
@@ -75,9 +87,11 @@ export type InteractOutcome =
 	| { kind: "mapItem"; solid: Solid; dropped: boolean }
 	| { kind: "repair"; solid: Solid }
 	| { kind: "search"; building: Solid; taken: number }
+	/** a gas station's pump island drained into the backpack (EDI-16): `taken` entries (its oil) */
+	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
 export interface MachineActions {
@@ -98,6 +112,11 @@ export interface ServerInteractionOptions {
 	 * shut, or round one that had been opened, until something else dirtied the tile.
 	 */
 	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	/**
+	 * §9.3: does the run of the survivor in `slot` still earn rewards? What a pickup or a search puts in an assisted
+	 * run's backpack is theirs, the achievement (Woodpile) is not. Left undefined, every run does -- what a test wants.
+	 */
+	paysRewards?: (slot: number) => boolean;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -119,6 +138,7 @@ export class ServerInteraction {
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly machines?: MachineActions;
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
+	private readonly paysRewards?: (slot: number) => boolean;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -129,6 +149,8 @@ export class ServerInteraction {
 	private readonly pressCd = new Map<number, number>();
 	/** seconds until this door or lamp can change again (TOGGLE_COOLDOWN_S) */
 	private readonly toggleCd = new Map<Solid, number>();
+	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
+	private pumps?: Array<Solid>;
 
 	constructor(options: ServerInteractionOptions) {
 		this.world = options.world;
@@ -137,6 +159,12 @@ export class ServerInteraction {
 		this.fx = options.fx;
 		this.machines = options.machines;
 		this.onSolidChanged = options.onSolidChanged;
+		this.paysRewards = options.paysRewards;
+	}
+
+	/** §9.3: the run of the survivor in `slot` still earns achievements */
+	private pays(slot: number): boolean {
+		return this.paysRewards?.(slot) ?? true;
 	}
 
 	/**
@@ -150,16 +178,24 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
-		const target = interactTarget(this.world, p.x, p.y);
-		if (target === undefined) return { kind: "none" };
+		// ITM-07: an item this save has no room for is passed over, so a full stack does not hide the door, the search
+		// or the repair behind it (review of 1186a83, M1); the client's hint passes the same check
+		const target = interactTarget(this.world, p.x, p.y, noRoomIn(ctx.save));
+		if (target === undefined) {
+			// nothing else in reach: say why the item did not come (spends no cooldown, changes nothing)
+			const full = nearestGroundItem(this.world, p.x, p.y);
+			return full !== undefined ? { kind: "refused", why: "full" } : { kind: "none" };
+		}
 		// only a press that reaches something spends the cooldown: an empty press used to eat it, so a door flipped every
 		// 0.4 s and a press right after an input hitch was dropped (re-review of f8ccaf0)
 		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
 
 		if (target.kind === "item") {
-			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
+			const got = this.items.pickup(ctx.save, p.x, p.y, target.item, ctx.slot, this.pays(ctx.slot));
 			if (got.ok) return { kind: "item", count: got.count };
-			if (got.why === "range" || got.why === "blocked") return { kind: "refused", why: got.why };
+			if (got.why === "range" || got.why === "blocked" || got.why === "full") {
+				return { kind: "refused", why: got.why };
+			}
 			return { kind: "refused", why: "taken" };
 		}
 
@@ -188,6 +224,7 @@ export class ServerInteraction {
 		}
 		if (target.kind === "light") return this.light(ctx, target.solid);
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
+		if (target.kind === "pump") return this.pump(ctx, target.solid);
 		if (target.kind === "solid") return this.repair(ctx, target.solid);
 		return this.search(ctx, target.building);
 	}
@@ -206,6 +243,11 @@ export class ServerInteraction {
 		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
 		// client predicts its own movement against it. A door somebody was not told about is a wall.
 		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });
+		// and it is HEARD where it turned (P0-4), by whoever is near: the unreliable Fx channel, interest-filtered
+		// like any effect -- a creak lost on the way costs nothing, the DoorSet above is the door
+		const iron = s.kind === "iron_door";
+		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
+		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
 		return { kind: "door", solid: s, open: willOpen };
 	}
 
@@ -259,6 +301,9 @@ export class ServerInteraction {
 				solidId: s.id,
 				angle: math.atan2(s.y + s.h / 2 - ctx.state.y, s.x + s.w / 2 - ctx.state.x),
 				strength: 1,
+				// server only: where it is, for the interest filter (§4.3)
+				x: s.x + s.w / 2,
+				y: s.y + s.h / 2,
 			});
 		}
 		return { kind: "mapItem", solid: s, dropped };
@@ -284,12 +329,26 @@ export class ServerInteraction {
 	// ---------------------------------------------------------------- searching a building
 
 	private search(ctx: InteractContext, b: Solid): InteractOutcome {
-		const found = this.items.search(ctx.save, ctx.state.x, ctx.state.y, ctx.hours);
+		const found = this.items.search(ctx.save, ctx.state.x, ctx.state.y, ctx.hours, this.pays(ctx.slot));
 		if (found.building === undefined) return { kind: "refused", why: "range" };
 		if (found.taken.size() === 0) return { kind: "refused", why: "empty" };
 		// the flag for everyone standing in that house is refreshed by the sweep in `step`, on the next
 		// tick: one place decides who is inside what, instead of two that can disagree
 		return { kind: "search", building: b, taken: found.taken.size() };
+	}
+
+	// ---------------------------------------------------------------- a gas station's pump
+
+	/**
+	 * E at a pump island (EDI-16): its oil into the backpack, the island dry for everybody until its respawn -- the
+	 * building search's rules (MP-05), at the SERVER's position, within SOLID_REACH of the island with a clear line to
+	 * it. The flag that it held something goes down on the next tick's sweep, for everyone told about it.
+	 */
+	private pump(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		const taken = this.items.drain(ctx.save, s, ctx.hours, this.pays(ctx.slot));
+		if (taken.size() === 0) return { kind: "refused", why: "empty" };
+		return { kind: "pump", solid: s, taken: taken.size() };
 	}
 
 	// ---------------------------------------------------------------- the world's own upkeep
@@ -341,12 +400,20 @@ export class ServerInteraction {
 	 *
 	 * One sweep instead of a flag pushed from `search`, because two survivors can be in the same house: the
 	 * one who did not press E has to watch the hint go out too.
+	 *
+	 * The container a survivor is AT: the building they stand in, or -- outside every building -- the gas station's
+	 * pump island within PUMP_FLAG_REACH (EDI-16). Same message, same rule: the island's static id (a town's pump ids
+	 * are small, like its buildings'; the wire's u16 holds them), "something here", never what.
 	 */
 	private publishLootFlags(players: ReadonlyArray<PlayerState>, slots: ReadonlyArray<number>): void {
 		for (let i = 0; i < players.size(); i++) {
 			const slot = slots[i] ?? i;
 			const p = players[i];
-			const b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
+			let b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
+			if (b === undefined && !p.dead) {
+				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
+				b = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH);
+			}
 			const has = b !== undefined && this.items.hasLoot(b);
 			const id = b !== undefined && has ? b.id : 0;
 			if (this.lootSeen.get(slot) === id) continue;

@@ -62,7 +62,7 @@ export const SCHEMES: Array<Scheme> = [
 			["E", "Interact, search, loot"],
 			["R", "Reload"],
 			["1 – 5", "Switch weapon"],
-			// the HUD's HEAL and EAT plates (ITM-07, client/ui/hudQuick.ts): the best item, without opening the Bag
+			// the HUD's HEAL and EAT plates (ITM-08, client/ui/hudQuick.ts): the best item, without opening the Bag
 			["H / F", "Quick heal / eat"],
 			["B", "Backpack"],
 			["P", "Menu"],
@@ -83,7 +83,7 @@ export const SCHEMES: Array<Scheme> = [
 			["RELOAD", "Reload"],
 			// the HUD's weapon hotbar: a tap on a tile does what the 1-5 keys do (client/ui/hudConsole.ts)
 			["Tap a weapon", "Switch weapon"],
-			// the two quick tiles over the console's bars (ITM-07): a tap is H / F
+			// the two quick tiles over the console's bars (ITM-08): a tap is H / F
 			["Tap heal / food", "Quick heal / eat"],
 			["BAG", "Backpack"],
 			["MENU", "Menu"],
@@ -107,7 +107,7 @@ export const SCHEMES: Array<Scheme> = [
 			// left / right: the previous / next weapon, drawn (ITM-06; client/systems/combat.ts cycleWeapon). Putting it
 			// away is the Bag's Put away on the pad: the tenth row went to the quick plates, which a fight needs more
 			["D-pad left / right", "Switch weapon"],
-			// up / down: the quick plates (ITM-07), in the order of the HP and FOOD bars they sit by
+			// up / down: the quick plates (ITM-08), in the order of the HP and FOOD bars they sit by
 			["D-pad up / down", "Quick heal / eat"],
 		],
 		// B backs out of the screen on top (client/ui/backStack.ts): the one line Settings > Controls has room for; in a

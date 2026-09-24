@@ -3,6 +3,8 @@ import { DESIGN, TOWN } from "shared/engine/constants";
 import { chance, rnd, rndInt, rndRange } from "shared/engine/rng";
 import { Vec2, v2 } from "shared/engine/vec2";
 import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
+import { campusLayout, campusQuad, CampusRng, campusSeed, CAMPUS_SETBACK, CAMPUS_SIDES } from "./campus";
+import type { CampusBuilding } from "./campus";
 import { buildingSeed, planBuilding } from "./interiors";
 import type { Decor, Opening, RoomRect } from "./interiors";
 import { gridInsert, gridOf, gridRemove, newGrid, pointInSolid, querySolids, rectOverlap } from "./solidGrid";
@@ -25,7 +27,17 @@ export type SolidKind =
 	/** a building's furniture (tags: the piece, shared/game/interiors.ts): blocks bodies; `low` ones let bullets by */
 	| "furniture"
 	/** a window's gap (passable, tags "window"): bodies climb through slowly, the horde's field prices it (EDI-10) */
-	| "window";
+	| "window"
+	/**
+	 * A gas station's canopy over its pump islands (tags "canopy", EDI-16): aerial like a tree's crown (COL-02),
+	 * passable, drawn over the actors and see-through while a body is under it (`canopyAlpha`, the crown's fade).
+	 */
+	| "canopy"
+	/**
+	 * a fixture of the town that belongs to no building (tags: what it is -- the campus quad's fountain, statue and
+	 * benches, EDI-17): blocks bodies; a `low` one lets bullets by; it never hides anyone from a zombie's eyes
+	 */
+	| "prop";
 
 export type DoorSide = "top" | "bottom" | "left" | "right";
 
@@ -86,11 +98,16 @@ export interface Solid {
 	inner?: boolean;
 	/** furniture: bullets fly over it (a table, a bed); a tall piece stops them (a shelf, a wardrobe) */
 	low?: boolean;
-	/** furniture: the side facing into the room, and a small number the drawing uses */
+	/**
+	 * furniture: the side facing into the room, and a small number the drawing uses. A pump island: the side its
+	 * street is on (where a car pulls up). A car at a pump (`placeGas`): PUMP_CAR_PARKED, or PUMP_CAR_FILLING when it
+	 * was abandoned mid-fill (the hose in its tank, the driver's door open).
+	 */
 	face?: DoorSide;
 	variant?: number;
-	/** tree only: visual canopy radius and the renderer-eased canopy opacity */
+	/** tree only: visual canopy radius */
 	canopyR?: number;
+	/** tree, a gas station's canopy and its price sign: the renderer-eased opacity (see-through with a body under it) */
 	canopyAlpha?: number;
 	/** visual tint picked at generation (car paint, tree foliage) */
 	tint?: Color3;
@@ -107,6 +124,12 @@ export interface Solid {
 	 */
 	placeable?: number;
 	owner?: number;
+	/**
+	 * Server only (MP-24): the UserId of the account that built it. `owner` is a slot, and a slot is only somebody's
+	 * while they are in the world; the per-player cap and the rot of an abandoned construction go by the account.
+	 * Never on the wire.
+	 */
+	builder?: number;
 	/** set by removeSolid, so stale references (AI targets, UI) can notice */
 	removed?: boolean;
 	/** internal: spatial-grid query stamp used to de-duplicate multi-cell solids */
@@ -116,15 +139,13 @@ export interface Solid {
 /**
  * Something lying on the ground, waiting to be picked up.
  *
- * There is no lifetime here, and that is a decision rather than an omission. The field used to exist
- * (`life: 120`), was written on every spawn and was never read by anything — an expiry somebody intended and
- * nobody built. Giving it a meaning now would mean deciding, for the whole game, that a pile of ammunition
- * a player deliberately left on the floor of their base evaporates while they are out scavenging, which is
- * the opposite of what a base is for. So: ground items are permanent, by design.
- *
- * If a lifetime is ever wanted, it has to distinguish WHO made the item — world litter (a zombie's drop, a
- * bin's contents, a tree's wood) may reasonably rot; anything a player put down may not — and that
- * distinction does not exist in this type yet. Until it does, the honest state is no field at all.
+ * On a client there is no lifetime here: items leave by being picked up, by the population's cleanup (nobody
+ * within ITEM_SPAWN_MAX) or, in a server session, when the server says so. On the SERVER every ground item is
+ * world litter — a zombie's drop, a bin's contents, a tree's wood, the population's scatter, a boss's trophy:
+ * there is no verb that puts a player's own item down — and litter rots: server/sim/items.ts expires it after
+ * GROUND_ITEM_LIFE_S and never holds more than GROUND_ITEM_CAP (the oldest go first), because a chainsaw at one
+ * car made 73 a minute that nothing ever took away (security review of 5967a18, #3). A drop verb, if one is ever
+ * added, must mark what it drops and be exempt: a player's stash in their base is not litter.
  */
 export interface GroundItem {
 	id: number;
@@ -136,7 +157,35 @@ export interface GroundItem {
 	/** 0 when at rest, which is the common case and the one `updateGroundItems` skips */
 	vx: number;
 	vy: number;
+	/** server only: the simulation time (s) it appeared at, for its lifetime (server/sim/items.ts) */
+	born?: number;
+	/**
+	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire. It is litter
+	 * like any other ground item (the lifetime and the cap of server/sim/items.ts apply to it too).
+	 */
+	unpaid?: boolean;
 }
+
+/**
+ * Server only (docs/MULTIPLAYER.md §4.5): the ground items filed in coarse square cells, so what asks "which items
+ * are near here" — the interest sweep of every survivor twice a second, the E press, a newcomer's WorldInit — reads
+ * the cells around it instead of every item in the town. Kept by the item functions below and nothing else: an item
+ * that moves is re-filed by `updateGroundItems`, one that goes is taken out by `removeGroundItem`/`removeGroundItemAt`.
+ * A world without it (every client) answers the same questions with a scan, exactly as before.
+ */
+export interface ItemGrid {
+	cell: number;
+	cols: number;
+	rows: number;
+	/** cell index -> the items filed there (a cell nobody filed into yet has no entry) */
+	cells: Map<number, Array<GroundItem>>;
+	/** the cell each item is filed under */
+	at: Map<GroundItem, number>;
+}
+
+/** the ground items' cell: an E press reads one to four of them, a 1800 u interest sweep 225 */
+export const ITEM_GRID_CELL = 256;
 
 export interface Rect {
 	x: number;
@@ -284,6 +333,8 @@ export interface WorldData {
 	onItemRemove?: (w: WorldData, item: GroundItem) => void;
 	onSolidAdd?: (w: WorldData, solid: Solid) => void;
 	onSolidRemove?: (w: WorldData, solid: Solid) => void;
+	/** server only: the ground items by cell (`ItemGrid`, `enableItemGrid`); undefined on every client */
+	itemGrid?: ItemGrid;
 }
 
 /**
@@ -292,6 +343,7 @@ export interface WorldData {
  */
 export function serverWorld(w: WorldData, from = DYNAMIC_ID_BASE): WorldData {
 	w.nextDynamicId = math.max(from, w.nextId + 1);
+	enableItemGrid(w);
 	return w;
 }
 
@@ -487,6 +539,51 @@ const HOSPITAL_DEF: BuildingDef = { type: 4, w: 1064, h: 812, slots: 4, name: "h
 const SCHOOLS = 3;
 const HOSPITALS = 3;
 const GAS_STATIONS = 5;
+/**
+ * Every town has at least this many gas stations (EDI-16): the pumps are where the motorcycle and the oil generator
+ * get their fuel. The lot picker has always placed all five on every seed the CI walks; if a picked lot ever turns one
+ * down, one of GAS_SPARE more lots (picked by the same shuffle, after the five) takes it -- only then, so a town that
+ * needs none is exactly the town it always was.
+ */
+export const GAS_MIN = 2;
+const GAS_SPARE = 4;
+
+// ---- the forecourt of a gas station (placeGas), along its street edge e1: `u` from the street corner, `v` from the
+// curb (the sidewalk is v 0..SIDEWALK, the shop's front wall at SIDEWALK + FORECOURT)
+
+/** a pump island: a raised concrete curb parallel to the street, two dispensers on it, the canopy's column between */
+export const PUMP_ISLAND_L = 150;
+export const PUMP_ISLAND_D = 40;
+/** where each island starts, from the corner */
+const PUMP_ISLAND_AT: ReadonlyArray<number> = [70, 300];
+/** each dispenser's centre, from the island's centre, as a share of its length */
+export const PUMP_DISPENSER_AT = 0.25;
+/** a car at a pump: on the island's street side, this far from its curb */
+export const PUMP_CAR_GAP = 12;
+/** `Solid.variant` of a car at a pump: parked there, or abandoned mid-fill (EDI-16) */
+export const PUMP_CAR_PARKED = 1;
+export const PUMP_CAR_FILLING = 2;
+/** share of the islands with a car at them, and of those cars left mid-fill (a hash of the island: every client) */
+const PUMP_CAR_SHARE = 0.55;
+const PUMP_FILLING_SHARE = 0.5;
+/**
+ * The canopy over both islands: its `u` span from the corner, and its depth from the islands' middle -- towards the
+ * street only to the eave over a pump car's flank (12 u of its 100: a car cut in half by a closed roof reads as a
+ * box), towards the shop over the lane where a survivor stands to drain the pump. It stops 88 u short of the shop's
+ * front wall: the shop's doors and windows are planned where the ground outside is really free (planInteriors), and a
+ * canopy touching that ground would change them. 452 x 116 u: the texture of its roof is 113 x 29 texels
+ * (tools/gen-world-art.mjs `gasCanopy`).
+ */
+const PUMP_CANOPY_U0 = 34;
+const PUMP_CANOPY_U1 = 486;
+export const PUMP_CANOPY_L = PUMP_CANOPY_U1 - PUMP_CANOPY_U0;
+const PUMP_CANOPY_STREET = PUMP_ISLAND_D / 2 + PUMP_CAR_GAP + 12;
+const PUMP_CANOPY_SHOP = 72;
+export const PUMP_CANOPY_D = PUMP_CANOPY_STREET + PUMP_CANOPY_SHOP;
+/** the price sign's concrete footing at the street corner of the forecourt (the pylon above it is aerial) */
+export const GAS_SIGN_SIZE = 24;
+const GAS_SIGN_U = 8;
+const GAS_SIGN_V = 8;
 const PARKS = 6;
 /** lots on each side of the avenue crossing (along each avenue) that are downtown */
 const DOWNTOWN_REACH = 2;
@@ -1047,9 +1144,9 @@ function freeFrontRect(grid: YardGrid, e: LotEdge, minAlong: number, minDepth: n
 	return best;
 }
 
-function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, heading: number): void {
+function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, heading: number): Solid {
 	const q = math.floor(heading / (math.pi / 2) + 0.5);
-	addSolid(w, {
+	return addSolid(w, {
 		kind: "car",
 		x,
 		y,
@@ -1151,7 +1248,13 @@ function addParking(g: Gen, lot: Lot, e: LotEdge, free: FrontRect): boolean {
 
 /**
  * Gas station on the corner where edge `e1` (forecourt + door) meets the cross street at its
- * `a` end (atA) or `b` end: shop at the back, pump islands on an open forecourt facing e1.
+ * `a` end (atA) or `b` end: shop at the back, pump islands on an open forecourt facing e1 (EDI-02, EDI-16).
+ *
+ * The forecourt says what it is at a glance: two pump islands (each a container of oil, searched like a building,
+ * MP-05) under a canopy on one column per island, a car pulled up at some of them -- half of those abandoned
+ * mid-fill -- and the price sign on its footing at the street corner. Everything new is laid inside the forecourt the
+ * station always reserved and decided by hashes of where it stands, never by the town's rng: the rest of the town is
+ * the one it always was.
  */
 function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boolean {
 	const b = GAS_DEF;
@@ -1169,12 +1272,17 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 	if (!g.placer.canPlace(apron.x, apron.y, apron.w, apron.h, 0)) return false;
 	const doorU = atA ? u0 + along - 130 : u0 + 130;
 	addBuilding(g, lot, b, r, e1, doorU, front);
-	// two pump islands parallel to the street, clear of the door approach
+	// [u0, u1] measured from the corner, as a span along e1 (the far side mirrors the near one)
+	const fromCorner = (o0: number, o1: number): [number, number] =>
+		atA ? [span.a + o0, span.a + o1] : [span.b - o1, span.b - o0];
+	// two pump islands parallel to the street, clear of the door approach: each one a container of oil (EDI-16,
+	// MP-05: searched like a building, shared, back after ITEM_RESPAWN_HOURS)
 	const vMid = TOWN.SIDEWALK + TOWN.FORECOURT / 2;
-	for (const off of [70, 300]) {
-		const a = atA ? span.a + off : span.b - off - 150;
-		const p = edgeRect(e1, a, a + 150, vMid - 20, vMid + 20);
-		addSolid(g.w, {
+	const half = PUMP_ISLAND_D / 2;
+	for (const off of PUMP_ISLAND_AT) {
+		const [a0, a1] = fromCorner(off, off + PUMP_ISLAND_L);
+		const p = edgeRect(e1, a0, a1, vMid - half, vMid + half);
+		const island = addSolid(g.w, {
 			kind: isAlongX(e1.side) ? "wall_h" : "wall_v",
 			x: p.x,
 			y: p.y,
@@ -1184,6 +1292,60 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 			hpMax: 999999,
 			destructible: false,
 			tags: "pump",
+			face: e1.side,
+			lootSlots: 1,
+			lootItems: [],
+			lootTimer: 0,
+		});
+		// a car pulled up on the street side, its right flank to the island, left there when the town fell: some
+		// with the nozzle still in the tank. A hash of the island (never the town's rng): the rest of the town is the
+		// one it always was
+		if (hash01(island.x, island.y, 83) < PUMP_CAR_SHARE) {
+			const c = edgeRect(e1, a0, a1, vMid - half - PUMP_CAR_GAP - TOWN.CAR_W, vMid - half - PUMP_CAR_GAP);
+			const mid = (a0 + a1) / 2;
+			const car = isAlongX(e1.side)
+				? { x: mid - TOWN.CAR_L / 2, y: c.y, w: TOWN.CAR_L, h: TOWN.CAR_W }
+				: { x: c.x, y: mid - TOWN.CAR_L / 2, w: TOWN.CAR_W, h: TOWN.CAR_L };
+			const heading = inwardHeading(e1) - math.pi / 2;
+			const parked = addCar(g.w, car.x, car.y, car.w, car.h, math.atan2(math.sin(heading), math.cos(heading)));
+			parked.variant = hash01(island.x, island.y, 84) < PUMP_FILLING_SHARE ? PUMP_CAR_FILLING : PUMP_CAR_PARKED;
+		}
+	}
+	// the canopy over the islands (aerial: nothing collides with it; its column stands on each island)
+	{
+		const [c0, c1] = fromCorner(PUMP_CANOPY_U0, PUMP_CANOPY_U1);
+		const q = edgeRect(e1, c0, c1, vMid - PUMP_CANOPY_STREET, vMid + PUMP_CANOPY_SHOP);
+		addSolid(g.w, {
+			kind: "canopy",
+			x: q.x,
+			y: q.y,
+			w: q.w,
+			h: q.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "canopy",
+			passable: true,
+			// the side its street is on: the roof's art is drawn for that side (its eave, its drains over the columns)
+			face: e1.side,
+			canopyAlpha: 1,
+		});
+	}
+	// the price sign on its footing at the street corner (its pylon is drawn over it, upright; no brand, no text)
+	{
+		const [s0, s1] = fromCorner(GAS_SIGN_U, GAS_SIGN_U + GAS_SIGN_SIZE);
+		const q = edgeRect(e1, s0, s1, TOWN.SIDEWALK + GAS_SIGN_V, TOWN.SIDEWALK + GAS_SIGN_V + GAS_SIGN_SIZE);
+		addSolid(g.w, {
+			kind: "wall_v",
+			x: q.x,
+			y: q.y,
+			w: q.w,
+			h: q.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "gas_sign",
+			canopyAlpha: 1,
 		});
 	}
 	lot.ground.push({ ...apron, kind: "apron" });
@@ -1539,6 +1701,336 @@ function parkCars(g: Gen): void {
 }
 
 // ---------------------------------------------------------------------------
+// the college campus (docs/DESIGN_RULES.md EDI-17, shared/game/campus.ts)
+
+/** the campus's buildings, by type (the footprint comes from the campus plan; w / h are only its bounds) */
+const CAMPUS_DEFS: Record<number, BuildingDef> = {
+	12: { type: 12, w: 760, h: 400, slots: 3, name: "college", weight: 1 },
+	13: { type: 13, w: 760, h: 352, slots: 2, name: "library", weight: 1 },
+	14: { type: 14, w: 760, h: 352, slots: 2, name: "lab", weight: 1 },
+	15: { type: 15, w: 760, h: 352, slots: 2, name: "dorm", weight: 1 },
+};
+/**
+ * One roof for the whole campus: the blue slate of an old college hall, a colour no other building has (EDI-03) --
+ * ΔE 27 from the nearest, the gun shop's grey and the clothes shop's violet, further than the school is from the
+ * market. The campus is one institution; which building is which, the storefront plate says (ART-07), as the two
+ * food stores share their roof and not their sign.
+ */
+export const CAMPUS_ROOF = Color3.fromRGB(64, 88, 140);
+/** the lot a campus takes stands at least this many blocks (Chebyshev) from a school or a hospital */
+const CAMPUS_CIVIC_SPACING = 2;
+/** how many of the campus curbs' parking places hold a car (the students' cars: the campus has no lot of its own) */
+const CAMPUS_CURB_PARKING = 0.4;
+/**
+ * where a campus building's main door may slide along its facade to miss a street tree (EDI-01, VEG-01): a little
+ * only, so every template's middle column still holds it (interiors.ts `fitMain`); failing that, the tree goes
+ */
+const CAMPUS_DOOR_OFFSETS: Array<number> = [0, -16, 16];
+/** a street tree this close (along the edge) to a door's centre stands in its approach (the validator's corridor) */
+const DOOR_TREE_CLEAR = TOWN.DOOR_W / 2 + 24 + TOWN.TREE_TRUNK / 2;
+
+/** (u along, v inward from the curb) of a point, relative to a lot edge */
+function edgeUV(e: LotEdge, x: number, y: number): { u: number; v: number } {
+	return isAlongX(e.side) ? { u: x, v: (y - e.curb) * e.inward } : { u: y, v: (x - e.curb) * e.inward };
+}
+
+/** the street trees in the service strip of edge `e` whose trunk would stand in front of a door at `doorU` */
+function treesAtDoor(g: Gen, e: LotEdge, doorU: number): Array<Solid> {
+	const out: Array<Solid> = [];
+	const band = edgeRect(e, doorU - DOOR_TREE_CLEAR, doorU + DOOR_TREE_CLEAR, 0, TOWN.SIDEWALK);
+	for (const s of querySolids(g.w, band.x, band.y, band.x + band.w, band.y + band.h)) {
+		if (s.kind !== "tree") continue;
+		const c = edgeUV(e, s.x + s.w / 2, s.y + s.h / 2);
+		if (c.v >= 0 && c.v <= TOWN.SIDEWALK && math.abs(c.u - doorU) < DOOR_TREE_CLEAR) out.push(s);
+	}
+	return out;
+}
+
+/** lots from the map's border to this one (0 = on the border): the campus prefers the town's outskirts */
+function lotRing(w: WorldData, lot: Lot): number {
+	const pitch = TOWN.LOT_TARGET + TOWN.ROAD_W;
+	const cx = lot.x + lot.w / 2;
+	const cy = lot.y + lot.h / 2;
+	const B = TOWN.BORDER;
+	return math.floor(math.min(cx - B, w.width - B - cx, cy - B, w.height - B - cy) / pitch);
+}
+
+/** the side of `lot` that looks towards the avenues' crossing (downtown): where the campus's main hall faces */
+function sideTowardsTown(w: WorldData, lot: Lot): DoorSide {
+	let ax = w.width / 2;
+	let ay = w.height / 2;
+	for (const r of w.roads) {
+		if (!r.avenue) continue;
+		if (r.vertical) ax = r.x + r.w / 2;
+		else ay = r.y + r.h / 2;
+	}
+	const dx = ax - (lot.x + lot.w / 2);
+	const dy = ay - (lot.y + lot.h / 2);
+	if (math.abs(dx) >= math.abs(dy)) return dx > 0 ? "right" : "left";
+	return dy > 0 ? "bottom" : "top";
+}
+
+/**
+ * The college campus (EDI-17): at most one a town, on a whole residential block of its outskirts (four streets
+ * round it, none of them an avenue, only houses on it, two blocks from any school or hospital) big enough for four
+ * buildings and a quad (shared/game/campus.ts). A town without such a block has no campus.
+ *
+ * Laid LAST, once the rest of the town stands (every tree, bin and car), from its own random stream: the block's
+ * houses, yard trees, bins and lawns give way to the campus, and nothing else in the town moves -- every other lot,
+ * street, tree and car is exactly the town this seed always made (the validated towns, the tests' and the goldens').
+ * That is also what happened in a real town: the college bought a block of houses and built on it.
+ */
+function placeCampus(g: Gen): void {
+	const w = g.w;
+	const rng = new CampusRng(campusSeed(g.townSeed));
+	const pitch = TOWN.LOT_TARGET + TOWN.ROAD_W;
+	// the schools and hospitals, to keep the campus apart from them
+	const civic: Array<Solid> = [];
+	for (const lot of w.lots) {
+		for (const p of g.placed.get(lot) ?? []) if (p.def.type === 3 || p.def.type === 4) civic.push(p.solid);
+	}
+	const eligible: Array<{ lot: Lot; ring: number }> = [];
+	for (const lot of w.lots) {
+		if (lot.kind !== "block" || lot.zone !== "residential" || lot.edges.size() !== 4) continue;
+		let ok = true;
+		for (const e of lot.edges) if (w.roads[e.road].avenue) ok = false;
+		for (const p of g.placed.get(lot) ?? []) if (p.def.type !== 1 && p.def.type !== 2) ok = false;
+		const cx = lot.x + lot.w / 2;
+		const cy = lot.y + lot.h / 2;
+		for (const c of civic) {
+			const d = math.max(math.abs(c.x + c.w / 2 - cx), math.abs(c.y + c.h / 2 - cy)) / pitch;
+			if (d < CAMPUS_CIVIC_SPACING - 0.5) ok = false;
+		}
+		if (ok) eligible.push({ lot, ring: lotRing(w, lot) });
+	}
+	if (eligible.size() === 0) return;
+	// the outskirts first (the fewest blocks to the forest), in the campus's own shuffled order within a ring
+	for (let i = eligible.size() - 1; i > 0; i--) {
+		const j = rng.int(0, i);
+		const t = eligible[i];
+		eligible[i] = eligible[j];
+		eligible[j] = t;
+	}
+	let best: { lot: Lot; plan: NonNullable<ReturnType<typeof campusLayout>> } | undefined;
+	let bestRing = math.huge;
+	for (const cand of eligible) {
+		if (cand.ring >= bestRing) continue;
+		// the hall faces the town, then the other sides; the pinwheel's turn and the side buildings from the seed
+		const toward = sideTowardsTown(w, cand.lot);
+		const i0 = CAMPUS_SIDES.indexOf(toward);
+		const cw = rng.chance(0.5);
+		const swap = rng.chance(0.5);
+		for (const k of [0, 1, 3, 2]) {
+			if (best !== undefined && best.lot === cand.lot) break;
+			for (const turn of [cw, !cw]) {
+				const plan = campusLayout(cand.lot.yard, CAMPUS_SIDES[(i0 + k) % 4], turn, swap);
+				if (plan === undefined) continue;
+				let clear = true;
+				for (const b of plan.buildings) {
+					for (const c of g.placer.bossClear) {
+						if (circleHitsRect(c, b.rect.x, b.rect.y, b.rect.w, b.rect.h)) clear = false;
+					}
+				}
+				if (!clear) continue;
+				best = { lot: cand.lot, plan };
+				bestRing = cand.ring;
+				break;
+			}
+		}
+	}
+	if (best === undefined) return;
+	buildCampus(g, best.lot, best.plan.buildings, best.plan.quad, best.plan.lanes, rng);
+}
+
+/** clears the block and lays the campus on it: buildings, lanes, the quad, bins at the entrances, cars at the curbs */
+function buildCampus(
+	g: Gen,
+	lot: Lot,
+	buildings: Array<CampusBuilding>,
+	quad: Rect,
+	lanes: Array<{ side: DoorSide; rect: Rect; a: number; b: number }>,
+	rng: CampusRng,
+): void {
+	const w = g.w;
+	// --- the block's houses, yard trees and bins go; its street trees and the street itself stay
+	for (const p of g.placed.get(lot) ?? []) removeSolid(w, p.solid);
+	g.placed.set(lot, []);
+	const gone: Array<Solid> = [];
+	for (const s of querySolids(w, lot.x, lot.y, lot.x + lot.w, lot.y + lot.h)) {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const inLot = cx >= lot.x && cx <= lot.x + lot.w && cy >= lot.y && cy <= lot.y + lot.h;
+		const inYard =
+			cx >= lot.yard.x && cx <= lot.yard.x + lot.yard.w && cy >= lot.yard.y && cy <= lot.yard.y + lot.yard.h;
+		if ((s.kind === "tree" && inYard) || (s.tags === "trash" && inLot)) gone.push(s);
+	}
+	for (const s of gone) removeSolid(w, s);
+	lot.ground.clear();
+	lot.patches.clear();
+	for (const e of lot.edges) g.cuts.set(e, []);
+	lot.zone = "civic";
+	// --- the four buildings, each with its main door on its street (slid along the facade to miss a street tree)
+	const front = TOWN.SIDEWALK + CAMPUS_SETBACK;
+	const doors: Array<{ e: LotEdge; u: number }> = [];
+	for (const b of buildings) {
+		let e: LotEdge | undefined;
+		for (const q of lot.edges) if (q.side === b.side) e = q;
+		if (e === undefined) continue;
+		const r = b.rect;
+		const mid = isAlongX(e.side) ? r.x + r.w / 2 : r.y + r.h / 2;
+		let doorU = mid;
+		let found = false;
+		for (const off of CAMPUS_DOOR_OFFSETS) {
+			if (treesAtDoor(g, e, mid + off).size() === 0) {
+				doorU = mid + off;
+				found = true;
+				break;
+			}
+		}
+		// no free place along it: the street tree in front of the door is not planted (an empty pit, VEG-02)
+		if (!found) for (const t of treesAtDoor(g, e, doorU)) removeSolid(w, t);
+		const rec = addBuilding(g, lot, CAMPUS_DEFS[b.type], r, e, doorU, front);
+		rec.roofColor = CAMPUS_ROOF;
+		doors.push({ e, u: doorU });
+	}
+	// --- nobody parks in front of a campus door (VEI-02): the cars the houses' street left there are towed
+	for (const d of doors) {
+		const z = edgeRect(d.e, d.u - 110, d.u + 110, -(TOWN.CURB_GAP + TOWN.CAR_W + 24), 0);
+		const towed: Array<Solid> = [];
+		for (const s of querySolids(w, z.x, z.y, z.x + z.w, z.y + z.h)) if (s.tags === "car") towed.push(s);
+		for (const s of towed) removeSolid(w, s);
+	}
+	// --- the lanes into the quad: a paved walk from the sidewalk, and the verge left open where it meets the street
+	for (const l of lanes) {
+		let e: LotEdge | undefined;
+		for (const q of lot.edges) if (q.side === l.side) e = q;
+		const inset = 16;
+		const along = l.side === "top" || l.side === "bottom";
+		const walk = along
+			? { x: l.rect.x + inset, y: l.rect.y, w: l.rect.w - inset * 2, h: l.rect.h }
+			: { x: l.rect.x, y: l.rect.y + inset, w: l.rect.w, h: l.rect.h - inset * 2 };
+		if (walk.w > 8 && walk.h > 8) lot.ground.push({ ...walk, kind: "walk" });
+		if (e !== undefined) cutsOf(g, e).push({ a: l.a + inset, b: l.b - inset, kind: "walk" });
+	}
+	// --- the quad: its walks and plaza, the centrepiece, benches and trees
+	const q = campusQuad(quad, rng);
+	for (const gr of q.ground) lot.ground.push({ x: gr.x, y: gr.y, w: gr.w, h: gr.h, kind: gr.kind });
+	for (const p of q.props) {
+		let clear = true;
+		for (const c of g.placer.bossClear) if (circleHitsRect(c, p.x, p.y, p.w, p.h)) clear = false;
+		if (!clear) continue;
+		addSolid(w, {
+			kind: "prop",
+			x: p.x,
+			y: p.y,
+			w: p.w,
+			h: p.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: p.kind,
+			low: p.kind !== "statue",
+			face: p.face,
+			variant: rng.int(0, 3),
+		});
+	}
+	for (const t of q.trees) {
+		let clear = true;
+		for (const c of g.placer.bossClear) if (circleHitsRect(c, t.x - 22, t.y - 22, 44, 44)) clear = false;
+		if (clear) addTree(w, t.x, t.y);
+	}
+	// --- the verges, ramps and paved cuts of the block's sidewalks, again, round the campus's own entrances
+	sidewalkGround(g, lot);
+	campusBins(g, doors, rng);
+	campusCurbParking(g, lot, doors, rng);
+	// --- a few lighter tufts on the lawns
+	const n = rng.int(3, 6);
+	for (let i = 0; i < n; i++) {
+		const pw = 80 + rng.int(0, 100);
+		const ph = 60 + rng.int(0, 80);
+		const p = {
+			x: lot.yard.x + rng.int(0, math.max(1, math.floor(lot.yard.w - pw))),
+			y: lot.yard.y + rng.int(0, math.max(1, math.floor(lot.yard.h - ph))),
+			w: pw,
+			h: ph,
+		};
+		if (!overlapsGround(lot, p)) lot.patches.push(p);
+	}
+}
+
+/** a bin at the curb beside most campus entrances (MOB-01), in the service strip, never in front of a door */
+function campusBins(g: Gen, doors: Array<{ e: LotEdge; u: number }>, rng: CampusRng): void {
+	const s = TOWN.TRASH;
+	for (const d of doors) {
+		if (!rng.chance(0.8)) continue;
+		const e = d.e;
+		const range = stripRange(e, TOWN.CORNER_CLEAR);
+		const dir = rng.chance(0.5) ? 1 : -1;
+		for (const sgn of [dir, -dir]) {
+			const u = d.u + sgn * (112 + rng.int(0, 38));
+			if (u - s / 2 < range.a || u + s / 2 > range.b) continue;
+			if (inCut(g, e, u - s / 2, u + s / 2, 8)) continue;
+			const r = edgeRect(e, u - s / 2, u + s / 2, TOWN.VERGE / 2 - s / 2, TOWN.VERGE / 2 + s / 2);
+			if (querySolids(g.w, r.x - 8, r.y - 8, r.x + r.w + 8, r.y + r.h + 8).size() > 0) continue;
+			addTrash(g.w, r.x, r.y);
+			break;
+		}
+	}
+}
+
+/**
+ * The campus has no parking lot of its own (the block is all buildings and quad): the students park on its four
+ * streets, parallel to the curb in the direction of traffic (VEI-01), a car length off every corner (CID-03), never
+ * in front of a door (VEI-02) and a stall apart from the next car.
+ */
+function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: number }>, rng: CampusRng): void {
+	const w = g.w;
+	const L = TOWN.CAR_L;
+	const W = TOWN.CAR_W;
+	for (const e of lot.edges) {
+		const road = w.roads[e.road];
+		const v = road.vertical;
+		// the lot lies on the road's high side when the road is above it or to its left
+		const high = e.side === "top" || e.side === "left";
+		const heading = v ? (high ? -math.pi / 2 : math.pi / 2) : high ? 0 : math.pi;
+		const across = v
+			? high
+				? road.x + road.w - TOWN.CURB_GAP - W
+				: road.x + TOWN.CURB_GAP
+			: high
+				? road.y + road.h - TOWN.CURB_GAP - W
+				: road.y + TOWN.CURB_GAP;
+		const lo = e.a + (e.cornerA ? TOWN.CORNER_CLEAR + 40 : 120);
+		const hi = e.b - (e.cornerB ? TOWN.CORNER_CLEAR + 40 : 120);
+		for (let t = lo; t + L <= hi; t += TOWN.PARK_SLOT) {
+			if (!rng.chance(CAMPUS_CURB_PARKING)) continue;
+			const at = math.floor(t + rng.int(0, 16));
+			let atDoor = false;
+			for (const d of doors) if (d.e === e && at < d.u + 110 && at + L > d.u - 110) atDoor = true;
+			if (atDoor) continue;
+			const x = v ? across : at;
+			const y = v ? at : across;
+			const cw = v ? W : L;
+			const ch = v ? L : W;
+			// nothing within 8 u, and no other car within a stall gap (40 u, VEI-01) plus a margin
+			let free = true;
+			for (const s of querySolids(w, x - 44, y - 44, x + cw + 44, y + ch + 44)) {
+				if (s.tags === "car" || rectOverlap(x - 8, y - 8, cw + 16, ch + 16, s.x, s.y, s.w, s.h)) free = false;
+			}
+			for (const c of g.placer.bossClear) if (circleHitsRect(c, x, y, cw, ch)) free = false;
+			if (!free) continue;
+			// VEI-03: a lane of 150 stays free across the street beside it, the cars parked and the wrecks left
+			// across the way counted (the campus's streets are never avenues: one carriageway, curb to curb)
+			const base = v ? road.x : road.y;
+			const size = v ? road.w : road.h;
+			const spans = laneSpans(w, road, at - 24, at + L + 24, base, base + size);
+			spans.push(v ? [x, x + cw] : [y, y + ch]);
+			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE) addCar(w, x, y, cw, ch, heading);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // interiors
 
 /**
@@ -1876,7 +2368,20 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	for (const l of schools) l.zone = "civic";
 	const hospitals = pickLots(HOSPITALS, l => residentialFree(l) && onAvenue(l), 3, []);
 	for (const l of hospitals) l.zone = "civic";
-	const gasLots = pickLots(GAS_STATIONS, l => l.kind === "block" && l.zone !== "civic" && onAvenue(l), 2, []);
+	// the five stations, then GAS_SPARE more lots from the same shuffle: the first five are the ones a pick of five
+	// always gave (the shuffle's draws do not depend on how many are taken), the rest stand by for GAS_MIN (EDI-16)
+	const gasPick = pickLots(
+		GAS_STATIONS + GAS_SPARE,
+		l => l.kind === "block" && l.zone !== "civic" && onAvenue(l),
+		2,
+		[],
+	);
+	const gasLots: Array<Lot> = [];
+	const gasSpare: Array<Lot> = [];
+	for (let i = 0; i < gasPick.size(); i++) (i < GAS_STATIONS ? gasLots : gasSpare).push(gasPick[i]);
+	/** stations standing, and picked lots not laid out yet: a spare lot is used only if these two cannot reach GAS_MIN */
+	let gasPlaced = 0;
+	let gasPending = gasLots.size();
 
 	// --- parks: dirt paths (kept free of trees) ---
 	for (const lot of w.lots) {
@@ -1928,7 +2433,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			const def = hospitals.includes(lot) ? HOSPITAL_DEF : SCHOOL_DEF;
 			if (!placeCivic(g, lot, def, edges)) lot.zone = "residential";
 		}
-		if (gasLots.includes(lot)) {
+		const gasPrimary = gasLots.includes(lot);
+		if (gasPrimary) gasPending -= 1;
+		if (gasPrimary || (gasSpare.includes(lot) && gasPlaced + gasPending < GAS_MIN)) {
 			let done = false;
 			for (const e1 of edges) {
 				if (done) break;
@@ -1941,6 +2448,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 					done = placeGas(g, lot, e1, e2, atA);
 				}
 			}
+			if (done) gasPlaced += 1;
 		}
 		if (lot.zone === "commercial") {
 			for (const e of edges) {
@@ -2057,10 +2565,97 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	border(0, t, t, w.height - t * 2, "wall_v");
 	border(w.width - t, t, t, w.height - t * 2, "wall_v");
 
+	// --- the college campus, last: one block's houses give way to it, and nothing else in the town moves ---
+	placeCampus(g);
+
 	// --- the inside of every building, now that nothing else will be placed ---
 	planInteriors(g);
 
 	return w;
+}
+
+// ---------------------------------------------------------------- ground items
+
+/** the cell of (x, y) in the item grid, clamped to it (an item in flight may be a little outside the map) */
+function itemCellOf(g: ItemGrid, x: number, y: number): number {
+	// a NaN or an infinity (a velocity gone wrong) files in cell 0 rather than make a NaN key, which Luau refuses (a
+	// NaN fails both comparisons)
+	const fx = x > -math.huge && x < math.huge ? x : 0;
+	const fy = y > -math.huge && y < math.huge ? y : 0;
+	const c = math.clamp(math.floor(fx / g.cell), 0, g.cols - 1);
+	const r = math.clamp(math.floor(fy / g.cell), 0, g.rows - 1);
+	return r * g.cols + c;
+}
+
+function fileItem(g: ItemGrid, item: GroundItem): void {
+	const ix = itemCellOf(g, item.x, item.y);
+	let list = g.cells.get(ix);
+	if (list === undefined) {
+		list = [];
+		g.cells.set(ix, list);
+	}
+	list.push(item);
+	g.at.set(item, ix);
+}
+
+function unfileItem(g: ItemGrid, item: GroundItem): void {
+	const ix = g.at.get(item);
+	if (ix === undefined) return;
+	g.at.delete(item);
+	const list = g.cells.get(ix);
+	if (list === undefined) return;
+	const i = list.indexOf(item);
+	if (i >= 0) list.unorderedRemove(i);
+}
+
+/**
+ * Server only: files the ground items by cell from here on (`ItemGrid`). `serverWorld` calls it; calling it again
+ * keeps the grid it has.
+ */
+export function enableItemGrid(w: WorldData, cell = ITEM_GRID_CELL): ItemGrid {
+	const have = w.itemGrid;
+	if (have !== undefined) return have;
+	const cols = math.max(1, math.ceil(w.width / cell));
+	const rows = math.max(1, math.ceil(w.height / cell));
+	const g: ItemGrid = { cell, cols, rows, cells: new Map(), at: new Map() };
+	for (const item of w.items) fileItem(g, item);
+	w.itemGrid = g;
+	return g;
+}
+
+/**
+ * Every ground item whose position is in [x0, x1] × [y0, y1], appended to `out` (in no particular order). With the
+ * item grid only the cells of the box are read; without it (a client) the whole list is scanned, as before.
+ */
+export function queryGroundItems(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<GroundItem>,
+): Array<GroundItem> {
+	const g = w.itemGrid;
+	if (g === undefined) {
+		for (const it of w.items) {
+			if (it.x >= x0 && it.x <= x1 && it.y >= y0 && it.y <= y1) out.push(it);
+		}
+		return out;
+	}
+	const c0 = math.clamp(math.floor(x0 / g.cell), 0, g.cols - 1);
+	const c1 = math.clamp(math.floor(x1 / g.cell), 0, g.cols - 1);
+	const r0 = math.clamp(math.floor(y0 / g.cell), 0, g.rows - 1);
+	const r1 = math.clamp(math.floor(y1 / g.cell), 0, g.rows - 1);
+	for (let r = r0; r <= r1; r++) {
+		for (let c = c0; c <= c1; c++) {
+			const list = g.cells.get(r * g.cols + c);
+			if (list === undefined) continue;
+			for (const it of list) {
+				if (it.x >= x0 && it.x <= x1 && it.y >= y0 && it.y <= y1) out.push(it);
+			}
+		}
+	}
+	return out;
 }
 
 export function spawnGroundItem(
@@ -2084,6 +2679,8 @@ export function spawnGroundItem(
 		vy,
 	};
 	w.items.push(item);
+	const g = w.itemGrid;
+	if (g !== undefined) fileItem(g, item);
 	if (w.onItemAdd !== undefined) w.onItemAdd(w, item);
 	return item;
 }
@@ -2099,9 +2696,33 @@ export function spawnGroundItem(
 export function removeGroundItem(w: WorldData, item: GroundItem): boolean {
 	const i = w.items.indexOf(item);
 	if (i < 0) return false;
-	w.items.remove(i);
-	if (w.onItemRemove !== undefined) w.onItemRemove(w, item);
+	removeGroundItemAt(w, i);
 	return true;
+}
+
+/**
+ * The item at index `i` of `w.items` leaves the world — through the grid and the `onItemRemove` hook, which is how a
+ * client that was told about it is told it is gone. Every removal goes through here or `removeGroundItem`: the
+ * population's cleanup used to splice the list itself, and on the server that left a ghost on every screen that had
+ * been shown the item (and would leave a stale entry in the grid).
+ */
+export function removeGroundItemAt(w: WorldData, i: number): GroundItem | undefined {
+	const item = w.items[i];
+	if (item === undefined) return undefined;
+	w.items.remove(i);
+	const g = w.itemGrid;
+	if (g !== undefined) unfileItem(g, item);
+	if (w.onItemRemove !== undefined) w.onItemRemove(w, item);
+	return item;
+}
+
+/** every ground item gone at once, WITHOUT the hooks (the client's mirror before a WorldInit, worldMirror.ts) */
+export function clearGroundItems(w: WorldData): void {
+	w.items.clear();
+	const g = w.itemGrid;
+	if (g === undefined) return;
+	g.cells.clear();
+	g.at.clear();
 }
 
 /**
@@ -2117,6 +2738,7 @@ export function removeGroundItem(w: WorldData, item: GroundItem): boolean {
  * well (server/sim/simulation.ts), which is the other reason it is worth being cheap.
  */
 export function updateGroundItems(w: WorldData, dt: number): void {
+	const g = w.itemGrid;
 	for (let i = w.items.size() - 1; i >= 0; i--) {
 		const it = w.items[i];
 		// at rest: it cannot move, and something that has not moved cannot have left the world
@@ -2130,8 +2752,13 @@ export function updateGroundItems(w: WorldData, dt: number): void {
 			it.vy = 0;
 		}
 		if (it.x < 0 || it.y < 0 || it.x > w.width || it.y > w.height) {
-			w.items.remove(i);
-			if (w.onItemRemove !== undefined) w.onItemRemove(w, it);
+			removeGroundItemAt(w, i);
+			continue;
+		}
+		// it slid into another cell: filed there now, or a query around it would miss it
+		if (g !== undefined && g.at.get(it) !== itemCellOf(g, it.x, it.y)) {
+			unfileItem(g, it);
+			fileItem(g, it);
 		}
 	}
 }
@@ -2158,7 +2785,7 @@ export function nearestInteractables(
 	const reach = DESIGN.ITEM_GET_DISTANCE + 20;
 	let item: GroundItem | undefined;
 	let bestI2 = reach * reach;
-	for (const it of w.items) {
+	for (const it of queryGroundItems(w, x - reach, y - reach, x + reach, y + reach, [])) {
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;

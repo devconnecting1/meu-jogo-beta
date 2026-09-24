@@ -1,5 +1,5 @@
 /*
- * Quick use: which item the HUD's HEAL and EAT plates use (docs/DESIGN_RULES.md ITM-07, UI-09).
+ * Quick use: which item the HUD's HEAL and EAT plates use (docs/DESIGN_RULES.md ITM-08, UI-09).
  *
  * Nothing pauses (UI-06) and the Bag covers ~80% of a 16:9 screen, so healing or eating mid-fight through it means
  * opening a window over the danger. The two plates by the vitals do it in one press -- H / F, the D-pad's up / down,
