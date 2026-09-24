@@ -2340,8 +2340,14 @@ section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma pr
 				`um patio de ${S} u fecha com alguem no meio: limite aceito (MP-24), a busca fica em ${2 * ENC.ESCAPE_RANGE} u`,
 			);
 		}
+	}
+}
+
+// ---------------------------------------------------------------- verdict
+
+console.log("");
 section(
-	"x) a bomba do posto e um conteiner de oleo: rola perto, avisa pelo LootFlag, o primeiro E leva, volta em 12 h (EDI-16)",
+	"y) a bomba do posto e um conteiner de oleo: rola perto, avisa pelo LootFlag, o primeiro E leva, volta em 12 h (EDI-16)",
 );
 {
 	const { PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
@@ -2469,9 +2475,6 @@ section(
 	}
 }
 
-// ---------------------------------------------------------------- verdict
-
-console.log("");
 if (failures > 0) {
 	console.log(`${failures} de ${checks} verificacao(oes) falharam`);
 	process.exit(1);
