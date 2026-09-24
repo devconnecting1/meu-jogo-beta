@@ -67,6 +67,7 @@ import { ownsWeapon } from "shared/game/save";
 import type { PlayerSaveData } from "shared/game/save";
 import { querySolids, Solid, WorldData } from "shared/game/world";
 import { SPEED_SCALE } from "shared/sim/types";
+import { meleeSweepLeftS, meleeSweepStep } from "shared/sim/meleeSweep";
 import { biteRewindCapS, judgedTick, PositionHistory, rewindCapS } from "./history";
 import type { Progress } from "./progress";
 import type { ServerPlayer } from "./players";
@@ -230,7 +231,11 @@ interface Swing {
 
 interface SlotState {
 	slot: number;
-	/** seconds until the next shot/swing may start (weapon_relaunch_time_count) */
+	/**
+	 * Seconds until the next shot/swing may start (weapon_relaunch_time_count): the SURVIVOR's "no new attack before"
+	 * clock, not the weapon's. Neither a switch nor putting the weapon away clears it, and a sweep they cut short pays
+	 * the rest of itself into it (`payCutSwing`, DESIGN_RULES ITM-06): an attack that started is paid in full.
+	 */
 	fireCd: number;
 	/** fractional fuel owed by the flamethrower / stun gun / chainsaw (paid in whole units) */
 	fuelDebt: number;
@@ -421,14 +426,14 @@ export class ServerCombat {
 
 		// the aim is the one `stepPlayer` already dequantised from this very command: one value, one source
 		const aim = p.angle;
-		const w = this.weaponOf(sp, st);
+		const w = this.weaponOf(sp, st, dt);
 
 		if (p.dead || p.holstered === true) {
 			// ITM-06: a weapon put away does nothing at all -- the sweep it was in stops there and pays its cadence as a
 			// finished one (putting it away and out again never restarts a swing early), the bow lets go, the chainsaw
 			// winds down and a reload does not go on in the holster. A body that dies drops the holster with it: the
 			// next one stands up drawn
-			if (st.swing.active && !p.dead) st.fireCd = math.max(st.fireCd, 0) + w.cooldown;
+			if (!p.dead) this.payCutSwing(st, w, dt);
 			st.swing.active = false;
 			st.drawTime = 0;
 			p.swingerActive = false;
@@ -574,8 +579,24 @@ export class ServerCombat {
 
 	// ---------------------------------------------------------------- weapon machine
 
-	/** the weapon the SERVER says this survivor holds: owned, or the starting blade (§8.1 switchWeapon) */
-	private weaponOf(sp: ServerPlayer, st: SlotState): Wp.WeaponDef {
+	/**
+	 * ITM-06's cadence rule: a sweep still in the air when the hands let go of it (the weapon put away, or switched)
+	 * pays the rest of its arc -- its hit pause included -- and `w`'s cooldown, as if it had finished. Nothing in the
+	 * air: nothing is added, and whatever the clock still owed stands.
+	 */
+	private payCutSwing(st: SlotState, w: Wp.WeaponDef, dt: number): void {
+		const s = st.swing;
+		if (!s.active) return;
+		st.fireCd = math.max(st.fireCd, 0) + meleeSweepLeftS(s.angle, s.limit, s.speed, s.delay, dt) + w.cooldown;
+	}
+
+	/**
+	 * The weapon the SERVER says this survivor holds: owned, or the starting blade (§8.1 switchWeapon). A switch never
+	 * clears the survivor's cadence (ITM-06): the sweep the old weapon was in pays in full (`payCutSwing`) and the time
+	 * still owed is kept -- a switch to the blade and back after each hit was ~5x the Axe. A switch with no attack in
+	 * progress and nothing owed adds nothing: the new weapon is ready at once.
+	 */
+	private weaponOf(sp: ServerPlayer, st: SlotState, dt: number): Wp.WeaponDef {
 		const id = sp.save.equipWeapon;
 		const owned = id >= 0 && id < Wp.WEAPONS.size() && ownsWeapon(sp.save, id);
 		const w = owned ? Wp.WEAPONS[id] : Wp.WEAPONS[0];
@@ -593,8 +614,10 @@ export class ServerCombat {
 			if (old !== undefined && Wp.usesMagazine(old) && !isFuelWeapon(old) && rt.ammoCount > 0) {
 				if (sp.state.infiniteAmmo !== true) Ply.weaponSpendAmmo(sp.save, old.ammoPool, -rt.ammoCount);
 			}
+			if (old !== undefined) this.payCutSwing(st, old, dt);
 			st.weaponId = w.id;
-			st.fireCd = 0;
+			// the carry of an automatic's sub-tick cadence (fireCd down to -dt) is the old weapon's: not handed over
+			st.fireCd = math.max(st.fireCd, 0);
 			st.drawTime = 0;
 			st.swing.active = false;
 			st.swing.hitIds.clear();
@@ -938,8 +961,7 @@ export class ServerCombat {
 			s.delay -= dt;
 		} else {
 			const prev = s.angle;
-			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
-			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			s.angle = meleeSweepStep(s.angle, s.limit, s.speed, dt);
 			this.sweep(sp, st, w, aim, prev, s.angle);
 		}
 		p.swingerActive = true;

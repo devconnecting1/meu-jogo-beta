@@ -876,6 +876,8 @@ export class LifeKeeper {
 		const spawn = findSpawnPoint(sim.world, this.spawnQuery(sp.slot));
 		sp.state.x = spawn.x;
 		sp.state.y = spawn.y;
+		// ITM-06: a new town is a new arrival -- the hands are the session's, and it stands with the weapon drawn
+		sp.state.holstered = undefined;
 		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
 		if (serverOwnsLife() && rec.save !== undefined && writeRunBody(rec.save, sp.state)) {
 			this.onSaveChanged?.(rec.userId);

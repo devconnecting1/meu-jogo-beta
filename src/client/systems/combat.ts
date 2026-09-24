@@ -16,6 +16,7 @@ import { took } from "./pickups";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
 import { isHitscan, predictedSpread, WeaponFx } from "../predict/weaponFx";
 import { HOLSTER_AWAY, HOLSTER_DRAW, IntentKind } from "shared/net/intentWire";
+import { meleeSweepLeftS, meleeSweepStep } from "shared/sim/meleeSweep";
 import { noteReserveSpent, sendBagVerb, serverOwnsWorld } from "../net/authority";
 
 /*
@@ -352,12 +353,17 @@ interface Swing {
 	reach: number;
 	hits: number;
 	delay: number;
+	/** the cooldown of the weapon that started it: what a sweep cut short still owes (ITM-06) */
+	cooldown: number;
 	hitIds: Set<number>;
 	solidIds: Set<number>;
 }
 
 export class Combat {
-	/** seconds until the next shot/swing may start (weapon_relaunch_time_count) */
+	/**
+	 * Seconds until the next shot/swing may start (weapon_relaunch_time_count): the survivor's "no new attack before"
+	 * clock, as the server keeps it (server/sim/combat.ts): neither a switch nor the holster clears it (ITM-06)
+	 */
 	private fireCd = 0;
 	/** fractional fuel owed by the flamethrower / stun gun / chainsaw (paid in whole units) */
 	private fuelDebt = 0;
@@ -375,6 +381,7 @@ export class Combat {
 		reach: 0,
 		hits: 0,
 		delay: 0,
+		cooldown: 0,
 		hitIds: new Set<number>(),
 		solidIds: new Set<number>(),
 	};
@@ -392,12 +399,25 @@ export class Combat {
 		return this.fx;
 	}
 
-	resetWeaponState(): void {
-		this.fireCd = 0;
+	/**
+	 * A switch (`switchSerial`): the bow's draw and the sweep go, but the cadence does not (ITM-06, the server's rule in
+	 * server/sim/combat.ts `weaponOf`): the sweep in the air pays the rest of itself, and what was still owed is kept.
+	 * With nothing in the air and nothing owed the new weapon is ready at once.
+	 */
+	resetWeaponState(dt = 1 / 60): void {
+		this.payCutSwing(dt);
+		this.fireCd = math.max(this.fireCd, 0);
 		this.drawTime = 0;
 		this.swing.active = false;
 		this.swing.hitIds.clear();
 		this.swing.solidIds.clear();
+	}
+
+	/** a sweep still in the air when the hands let go of it pays the rest of its arc and its cooldown (ITM-06) */
+	private payCutSwing(dt: number): void {
+		const s = this.swing;
+		if (!s.active) return;
+		this.fireCd = math.max(this.fireCd, 0) + meleeSweepLeftS(s.angle, s.limit, s.speed, s.delay, dt) + s.cooldown;
 	}
 
 	/**
@@ -418,12 +438,12 @@ export class Combat {
 
 	/**
 	 * The hands are busy or empty (a construction, the bars of a vehicle, death, a weapon put away): no sweep, no draw.
-	 * A sweep cut short by putting the blade away pays its cadence as a finished one -- the server's rule
-	 * (server/sim/combat.ts), so the predicted feel does not restart a swing the server will not.
+	 * A sweep cut short by putting the blade away pays the rest of itself and its cooldown -- the server's rule
+	 * (server/sim/combat.ts `payCutSwing`), so the predicted feel does not restart a swing the server will not.
 	 */
-	private holdFire(refs: GameRefs, w: WeaponDef): void {
+	private holdFire(refs: GameRefs, dt: number): void {
 		const p = refs.player;
-		if (this.swing.active && p.holstered === true) this.fireCd = math.max(this.fireCd, 0) + w.cooldown;
+		if (p.holstered === true) this.payCutSwing(dt);
 		this.swing.active = false;
 		this.drawTime = 0;
 		p.swingerActive = false;
@@ -677,6 +697,7 @@ export class Combat {
 		s.reach = meleeReach(w);
 		s.hits = 0;
 		s.delay = 0;
+		s.cooldown = w.cooldown;
 		s.hitIds.clear();
 		s.solidIds.clear();
 	}
@@ -693,8 +714,7 @@ export class Combat {
 			s.delay -= dt;
 		} else {
 			const prev = s.angle;
-			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
-			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			s.angle = meleeSweepStep(s.angle, s.limit, s.speed, dt);
 			this.sweep(refs, w, aim, prev, s.angle);
 		}
 		p.swingerActive = true;
@@ -1132,8 +1152,7 @@ export class Combat {
 			s.delay -= dt;
 		} else {
 			const prev = s.angle;
-			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
-			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			s.angle = meleeSweepStep(s.angle, s.limit, s.speed, dt);
 			for (const z of refs.zombies) {
 				if (z.hp <= 0 || s.hitIds.has(z.id)) continue;
 				const dx = z.x - p.x;
@@ -1174,7 +1193,7 @@ export class Combat {
 		this.readWeaponKeys(refs);
 		if (this.seenSwitch !== switchSerial) {
 			this.seenSwitch = switchSerial;
-			this.resetWeaponState();
+			this.resetWeaponState(dt);
 		}
 		const w = currentWeapon(p);
 		const rt = p.weapon;
@@ -1183,7 +1202,7 @@ export class Combat {
 		// a rider has both hands on the bars (VEI-05): the attack button is the bell or the horn, on the server. A weapon
 		// PUT AWAY (ITM-06) is predicted as the server runs it: nothing -- no sweep, no draw, no reload
 		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined || p.holstered === true) {
-			this.holdFire(refs, w);
+			this.holdFire(refs, dt);
 			return;
 		}
 		const blocked = input.attackBlocked;
@@ -1267,7 +1286,7 @@ export class Combat {
 
 		if (this.seenSwitch !== switchSerial) {
 			this.seenSwitch = switchSerial;
-			this.resetWeaponState();
+			this.resetWeaponState(dt);
 		}
 		const w = currentWeapon(p);
 		const rt = p.weapon;
@@ -1275,7 +1294,7 @@ export class Combat {
 		this.recoverRecoil(refs, dt);
 
 		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined || p.holstered === true) {
-			this.holdFire(refs, w);
+			this.holdFire(refs, dt);
 			return;
 		}
 

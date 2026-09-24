@@ -33,8 +33,8 @@
  *    keys 1-5 pick from (client/systems/combat.ts), in the same order. The weapon in hand is the raised BLUE tile
  *    ("what is chosen is blue", UI-07), another owned weapon is flat dark iron, a key with no weapon is an empty
  *    socket on the groove. Each tile shows the item's pixel icon (UI-11: the Bag's and the item card's), the key that
- *    picks it on this device (keyboard 1-5; the pad has no such key and touch taps the tile itself, so neither
- *    shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
+ *    picks it on this device (keyboard 1-5; the pad steps through them with the D-pad and touch taps the tile
+ *    itself, so neither shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
  *    reserve alone on the others (a gun you are not holding keeps its rounds in the pool: combat.ts switchWeapon
  *    empties the magazine back into it). A reload refills the tile in hand from the bottom up. With the weapon PUT
  *    AWAY (DESIGN_RULES ITM-06: empty hands) no tile is blue;
@@ -261,7 +261,8 @@ function keyFor(scheme: number, what: string): string {
 
 /**
  * The legend of hotbar tile `k` on `scheme`: the keyboard's "1 – 5" row gives each tile its digit; a scheme whose
- * "Switch weapon" row is not a digit (touch: "Tap a weapon") or that has no such row (the pad) shows no key.
+ * "Switch weapon" chip is not a digit shows no key -- touch taps the tile itself ("Tap a weapon"), and the pad steps
+ * through the weapons with the D-pad ("D-pad", ITM-06), which picks no tile in particular.
  */
 export function slotLegend(scheme: number, k: number): string {
 	const chip = keyFor(scheme, "Switch weapon");

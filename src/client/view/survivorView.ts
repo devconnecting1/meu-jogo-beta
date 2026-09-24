@@ -162,7 +162,6 @@ function holdWeapon(row: number, f: number, l: number, rel: number, grip: number
 	WEAPON.swinging = swinging;
 }
 
-
 /**
  * A survivor standing or crawling, weapon in hand, with their drop shadow.
  * `trail` is this survivor's melee-sweep memory and is updated in place.

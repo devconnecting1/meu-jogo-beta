@@ -1441,7 +1441,8 @@ if (MP_PHASE >= 1) {
 	// the server changed the backpack, so the DataStore has to hear about it (§6.3: the save is no longer
 	// something the client reports, it is something the server writes)
 	sim.onBackpack = (sp, outcome) => {
-		markDirty(sp.userId);
+		// a refused verb changed nothing, and the weapon put away (ITM-06) is the body's, never the save's: no write
+		if (outcome.kind !== "refused" && outcome.kind !== "holstered") markDirty(sp.userId);
 		Analytics.backpack(sp.save, outcome);
 	};
 	sim.onInteract = sp => markDirty(sp.userId);

@@ -687,9 +687,19 @@ console.log("9) ITM-06: um aliado que guarda a arma chega de maos vazias, sem pi
 		`${xs.length} quadros; maior diferenca ${worst} u`,
 	);
 
-	// the drawing: the very drawSurvivor every survivor goes through, on a renderer that only records
+	// the drawing: the very drawSurvivor every survivor goes through, on a renderer that only records -- in both of its
+	// looks (ART-01 / ART-09): the flat drawing (no ids) and the pixel art of the uploaded sheets
 	const SV = require(join(SRC, "client/view/survivorView.ts"));
+	const WA = require(join(SRC, "client/view/worldArt.ts"));
+	const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+	const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
 	const { COLORS } = require(join(SRC, "shared/engine/colors.ts"));
+	/** every texture with an id (`on`: a stand-in where none is uploaded yet), or none at all */
+	const artIds = on => {
+		const ids = {};
+		for (const [name, tex] of Object.entries(WORLD_ART)) ids[name] = on ? tex.id || `local:${name}` : "";
+		return ids;
+	};
 	const calls = [];
 	const rec = {
 		drawRect: (cam, x, y, o) => calls.push({ x, y, ...o }),
@@ -697,27 +707,42 @@ console.log("9) ITM-06: um aliado que guarda a arma chega de maos vazias, sem pi
 		drawSegment: (cam, x1, y1, x2, y2, o) =>
 			calls.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2, segment: true, ...o }),
 	};
-	const draw = weaponByte => {
+	const cam = new Camera();
+	cam.setView(800, 600);
+	const draw = (weaponByte, ids) => {
 		const look = SV.createLook();
 		// what client/view/playersView.ts fills from the interpolated state
 		look.weapon = SV.weaponById(weaponByte);
 		look.holstered = weaponByte === P.WEAPON_HOLSTERED;
 		calls.length = 0;
-		SV.drawSurvivor(rec, undefined, look, SV.createSwingTrail());
+		SV.drawSurvivor(rec, cam, look, SV.createSwingTrail());
 		const inHand = calls.filter(
 			c => c.zIndex === look.z && (c.color === COLORS.blade || c.color === COLORS.weapon),
 		);
 		const hands = calls.filter(c => c.circle === true && c.w === 10);
-		return { inHand: inHand.length, hands: hands.length };
+		const weaponCells = ids === undefined ? 0 : calls.filter(c => c.image === ids.weapons).length;
+		return { inHand: inHand.length, hands: hands.length, weaponCells };
 	};
+	WA.overrideWorldArt(artIds(false));
 	const armed = draw(AXE);
 	const empty = draw(P.WEAPON_HOLSTERED);
-	check("com a arma: o Axe e desenhado na mao", armed.inHand > 0, `${armed.inHand} partes`);
+	check("desenho liso, com a arma: o Axe e desenhado na mao", armed.inHand > 0, `${armed.inHand} partes`);
 	check(
-		"com as maos vazias (WEAPON_HOLSTERED): nenhuma arma desenhada, as duas maos em repouso",
+		"desenho liso, com as maos vazias (WEAPON_HOLSTERED): nenhuma arma desenhada, as duas maos em repouso",
 		empty.inHand === 0 && empty.hands === 2,
 		`${empty.inHand} partes de arma, ${empty.hands} maos`,
 	);
+	const lit = artIds(true);
+	WA.overrideWorldArt(lit);
+	const armedArt = draw(AXE, lit);
+	const emptyArt = draw(P.WEAPON_HOLSTERED, lit);
+	const armedAgain = draw(AXE, lit);
+	check(
+		"pixel art: armado, a celula da arma; de maos vazias, nenhuma -- logo depois de desenhar alguem armado",
+		armedArt.weaponCells === 1 && emptyArt.weaponCells === 0 && armedAgain.weaponCells === 1,
+		`${armedArt.weaponCells} / ${emptyArt.weaponCells} / ${armedAgain.weaponCells} celulas de arma`,
+	);
+	WA.overrideWorldArt(undefined);
 }
 console.log("");
 if (failures > 0) {

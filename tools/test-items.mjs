@@ -1242,6 +1242,245 @@ section(
 	},
 );
 
+section(
+	"A9. the cadence is the survivor's: no cancel -- holster or switch -- beats the weapon's own rate (ITM-06)",
+	() => {
+		// Review of 398bf95 (HIGH-1): putting the blade away mid-sweep and drawing it again restarted the swing early --
+		// 2.1-3.3x the DPS of the Dagger, the Axe and the Katana -- and a switch to the blade and back after each hit
+		// (pre-existing: `weaponOf` cleared the cadence) was ~5x the Axe. Now a sweep cut short pays the rest of itself and
+		// its cooldown (shared/sim/meleeSweep.ts), and a switch never clears what is owed. Measured through the REAL server
+		// simulation, every verb on the wire; the damage roll is pinned to the weapon's number so DPS is hits x damage.
+		const IK = P.IntentKind;
+		const MELEE_CASES = ["Dagger", "Axe", "Katana"].map(n => WEAPONS.find(w => w.name === n));
+		const DAGGER_ID = 0;
+		function rig(weaponId) {
+			const sim = new ServerSimulation({
+				world: W.serverWorld(W.createWorld(8000, 8000)),
+				clock: new WorldClock({ day: 1, dayTime: 12 }),
+				zombies: true,
+				interactive: true,
+			});
+			sim.combat.damageRoll = n => n;
+			const s = bareSave();
+			s.invenWeapon[weaponId] = 1;
+			s.equipWeapon = weaponId;
+			for (const f of ALL_POOLS) s[f] = 5000;
+			const sp = PL.createServerPlayer(
+				{ slot: 0, userId: 91, name: "cadence" },
+				s,
+				3000,
+				3000,
+				sim.tick,
+				sim.simHz,
+			);
+			sim.add(sp);
+			sp.state.x = 3000;
+			sp.state.y = 3000;
+			sp.state.godMode = true;
+			let seq = 0;
+			let nonce = 0;
+			const r = {
+				sim,
+				sp,
+				verb(kind, arg) {
+					nonce += 1;
+					sim.queueIntent(sp.slot, P.decodeIntentMessage(P.encodeIntentArgs(kind, seq + 1, arg, nonce)));
+				},
+				tick(aim, held, edges = 0) {
+					seq += 1;
+					const cmd = P.makeCommand(seq, 0, 0, aim, held ? P.HeldBit.Attack : 0, edges);
+					PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
+					sim.step();
+				},
+			};
+			for (let i = 0; i < 3; i++) r.tick(0, false);
+			return r;
+		}
+		/** what the hands do after each hit (or shot): nothing, put away and drawn, or switched to the blade and back */
+		const cancel = (r, mode, id) => {
+			if (mode === "holster") {
+				r.verb(IK.Holster, P.HOLSTER_AWAY);
+				r.verb(IK.Holster, P.HOLSTER_DRAW);
+			} else if (mode === "switch") {
+				r.verb(IK.SwitchWeapon, id === DAGGER_ID ? 2 : DAGGER_ID);
+				r.verb(IK.SwitchWeapon, id);
+			}
+		};
+		/** 10 s of the attack held at a zombie that stands still, the aim `offset` degrees off it: dmg/s and hit gaps */
+		function meleeRun(w, mode, offset) {
+			const r = rig(w.id);
+			if (mode === "switch" && w.id === DAGGER_ID) r.sp.save.invenWeapon[2] = 1;
+			else r.sp.save.invenWeapon[DAGGER_ID] = 1;
+			const z = createZombie(1, r.sp.state.x + 40, r.sp.state.y, 1);
+			z.hp = 1e12;
+			z.hpMax = 1e12;
+			r.sim.horde.zombies.push(z);
+			const hp0 = z.hp;
+			let last = z.hp;
+			const hits = [];
+			const n = 10 * CFG.SIM_HZ;
+			for (let i = 0; i < n; i++) {
+				z.x = r.sp.state.x + 40;
+				z.y = r.sp.state.y;
+				r.tick(Math.atan2(z.y - r.sp.state.y, z.x - r.sp.state.x) + (offset * Math.PI) / 180, true);
+				if (z.hp < last) {
+					last = z.hp;
+					hits.push(i);
+					cancel(r, mode, w.id);
+				}
+			}
+			const gaps = hits.slice(1).map((t, i) => t - hits[i]);
+			return {
+				dps: (hp0 - z.hp) / 10,
+				hits: hits.length,
+				minGap: gaps.length > 0 ? Math.min(...gaps) : Infinity,
+			};
+		}
+		const table = [];
+		for (const w of MELEE_CASES) {
+			for (const offset of [0, w.cone * 0.5, w.cone * 0.9]) {
+				const base = meleeRun(w, "none", offset);
+				const hol = meleeRun(w, "holster", offset);
+				const sw = meleeRun(w, "switch", offset);
+				table.push(
+					`${w.name} ${Math.round(offset)}°: ${base.dps.toFixed(1)} dmg/s, holster x${(hol.dps / base.dps).toFixed(2)}, switch x${(sw.dps / base.dps).toFixed(2)}`,
+				);
+				check(
+					base.hits >= 5 && hol.dps <= base.dps * 1.2 && sw.dps <= base.dps * 1.2,
+					`${w.name}, aim ${Math.round(offset)}° off: a holster-cancel and a switch-cancel after every hit stay within 1.2x of the plain swing's DPS`,
+					`plain ${base.dps.toFixed(1)} dmg/s (${base.hits} hits) | holster ${hol.dps.toFixed(1)} (x${(hol.dps / base.dps).toFixed(2)}) | switch ${sw.dps.toFixed(1)} (x${(sw.dps / base.dps).toFixed(2)})`,
+				);
+				check(
+					hol.minGap >= base.minGap && sw.minGap >= base.minGap,
+					`${w.name}, aim ${Math.round(offset)}° off: no hit ever comes sooner than the plain swing's cycle`,
+					`ticks between hits: plain ${base.minGap}, holster ${hol.minGap}, switch ${sw.minGap}`,
+				);
+			}
+		}
+		for (const line of table) info(line);
+
+		// guns: a shot, then the hands cancelled, can never beat the weapon's rate of fire
+		const shotGaps = (w, mode) => {
+			const r = rig(w.id);
+			r.sp.save.invenWeapon[w.id === DAGGER_ID ? 2 : DAGGER_ID] = 1;
+			r.sp.state.weapon.ammoCount = w.mag;
+			let shots = r.sim.combat.statsOf(0).shots;
+			const at = [];
+			for (let i = 0; i < 12 * CFG.SIM_HZ; i++) {
+				// every button every tick: the automatic holds, the semi-auto presses, the bolt action releases
+				r.tick(0, true, P.packEdges(1, 1, 0, 0));
+				const now = r.sim.combat.statsOf(0).shots;
+				if (now > shots) {
+					at.push(i);
+					shots = now;
+					cancel(r, mode, w.id);
+				}
+			}
+			const gaps = at.slice(1).map((t, i) => t - at[i]);
+			return { shots: at.length, minGap: gaps.length > 0 ? Math.min(...gaps) : Infinity };
+		};
+		checkRows(
+			"every gun: a shot, then the weapon put away and drawn, or switched away and back, never fires sooner than its cadence",
+			GUNS.filter(w => usesMagazine(w)),
+			w => {
+				const cadence = Math.max(1, Math.round(w.cooldown * CFG.SIM_HZ)) - 1;
+				const out = [];
+				for (const mode of ["none", "holster", "switch"]) {
+					const g = shotGaps(w, mode);
+					if (g.shots < 2) return `${mode}: only ${g.shots} shot(s) in 12 s`;
+					if (g.minGap < cadence)
+						out.push(`${mode}: ${g.minGap} ticks between shots, cadence ${cadence + 1}`);
+				}
+				return out.length === 0 || out.join("; ");
+			},
+		);
+
+		// a switch with no attack in progress and nothing owed stays instant: the new blade swings in the tick it lands
+		{
+			const r = rig(DAGGER_ID);
+			r.sp.save.invenWeapon[2] = 1;
+			for (let i = 0; i < 60; i++) r.tick(0, false);
+			r.verb(IK.SwitchWeapon, 2);
+			let swungAt = -1;
+			for (let i = 0; i < 30 && swungAt < 0; i++) {
+				r.tick(0, true, P.packEdges(i === 0 ? 1 : 0, 0, 0, 0));
+				if (r.sp.state.swingerActive) swungAt = i;
+			}
+			check(
+				swungAt === 0 && r.sp.state.weapon.pointer === 2,
+				"a fresh switch (nothing in the air, nothing owed) adds no delay: the Axe swings in the very tick it arrives",
+				`first sweep ${swungAt} ticks after the switch`,
+			);
+		}
+
+		// the client's feel runs the same rule (client/systems/combat.ts): a predicted cancel does not swing early either
+		{
+			const AXE_ID = 2;
+			const save = bareSave();
+			save.invenWeapon[AXE_ID] = 1;
+			const player = Ply.createPlayer(save, 1000, 1000);
+			const refs = {
+				world: W.createWorld(4000, 4000),
+				players: [player],
+				player,
+				save,
+				input: new InputState(),
+				zombies: [],
+				bosses: [],
+				bullets: [],
+				pendingPlace: -1,
+				fx: [],
+				onMessage: () => {},
+				onExp: () => {},
+			};
+			const combat = new CCombat.Combat();
+			CCombat.chooseWeapon(refs, AXE_ID);
+			/** the frames predicted sweeps start on, the attack held from frame 0; `cut(f)` may move the hands at frame f */
+			const startsOf = cut => {
+				const starts = [];
+				let was = false;
+				for (let f = 0; f < 240; f++) {
+					refs.input.beginFrame();
+					if (cut !== undefined) cut(f);
+					refs.input.attackHeld = true;
+					refs.input.attackPressed = f === 0;
+					combat.update(refs, 1 / 60);
+					const on = refs.player.swingerActive;
+					if (on && !was) starts.push(f);
+					was = on;
+				}
+				return starts;
+			};
+			/** the button let go for 2 s: the sweep in the air ends and every clock is spent before the next run */
+			const idle = () => {
+				for (let f = 0; f < 120; f++) {
+					refs.input.beginFrame();
+					refs.input.attackHeld = false;
+					combat.update(refs, 1 / 60);
+				}
+			};
+			const plain = startsOf();
+			idle();
+			// mid-sweep (frame 6) the Axe goes into the holster, and two frames later it comes out
+			const holster = startsOf(f => {
+				if (f === 6 || f === 8) CCombat.chooseWeapon(refs, AXE_ID);
+			});
+			idle();
+			// mid-sweep the blade is switched for the Dagger, and two frames later back to the Axe
+			const sw = startsOf(f => {
+				if (f === 6) CCombat.chooseWeapon(refs, DAGGER_ID);
+				if (f === 8) CCombat.chooseWeapon(refs, AXE_ID);
+			});
+			const second = s => (s.length > 1 ? s[1] - s[0] : Infinity);
+			check(
+				plain.length > 1 && second(holster) >= second(plain) && second(sw) >= second(plain) - 1,
+				"client prediction: a sweep cut by the holster or a switch does not start the next one sooner than a whole cycle",
+				`frames to the 2nd sweep: plain ${second(plain)}, holster ${second(holster)}, switch ${second(sw)}`,
+			);
+		}
+	},
+);
+
 // ================================================================ B. equipment
 
 /** the EQUIPS row of every slot, and the save field it lives in */
