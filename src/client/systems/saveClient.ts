@@ -15,7 +15,13 @@ import {
 } from "shared/net/net";
 import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
 import { REBIRTH_FREE_ATTR, rebirthCharge } from "shared/data/shop";
-import { decodeCostumeList, decodeRobuxOffer, ROBUX_OFFER_ATTR, ROBUX_PENDING_ATTR } from "shared/data/robuxProducts";
+import {
+	decodeCostumeList,
+	decodeRobuxOffer,
+	ROBUX_OFFER_ATTR,
+	ROBUX_PENDING_ATTR,
+	ROBUX_REJOIN_ATTR,
+} from "shared/data/robuxProducts";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -349,12 +355,22 @@ export function robuxPending(): Set<number> {
 	return decodeCostumeList(me?.GetAttribute(ROBUX_PENDING_ATTR));
 }
 
-/** `fn` runs when that list changes */
+/** of those, the ones only a rejoin can settle (ROBUX_REJOIN_ATTR): the wardrobe says "Rejoin to receive it" */
+export function robuxRejoin(): Set<number> {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return decodeCostumeList(me?.GetAttribute(ROBUX_REJOIN_ATTR));
+}
+
+/** `fn` runs when either list changes */
 export function onRobuxPendingChanged(fn: () => void): () => void {
 	const me = game.GetService("Players").LocalPlayer as Player | undefined;
 	if (me === undefined) return () => {};
-	const conn = me.GetAttributeChangedSignal(ROBUX_PENDING_ATTR).Connect(fn);
-	return () => conn.Disconnect();
+	const a = me.GetAttributeChangedSignal(ROBUX_PENDING_ATTR).Connect(fn);
+	const b = me.GetAttributeChangedSignal(ROBUX_REJOIN_ATTR).Connect(fn);
+	return () => {
+		a.Disconnect();
+		b.Disconnect();
+	};
 }
 
 /**

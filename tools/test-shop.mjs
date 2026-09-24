@@ -332,7 +332,7 @@ function robuxUi(input, d) {
 					status: deep(deep(dt, "Status"), "Legend")?.Text,
 					note: dt
 						?.GetDescendants()
-						.filter(x => x.ClassName === "TextLabel" && /on its way/.test(x.Text ?? ""))
+						.filter(x => x.ClassName === "TextLabel" && /on its way|Rejoin/.test(x.Text ?? ""))
 						.map(x => x.Text)[0],
 					action: btn(dt, "Action"),
 					coin: btn(dt, "CoinBuy"),
@@ -389,6 +389,10 @@ function robuxUi(input, d) {
 	me0.SetAttribute("pz_robux_pending", `${input.target}`);
 	flush();
 	out.pending = held.pick(input.target);
+	me0.SetAttribute("pz_robux_rejoin", `${input.target}`);
+	flush();
+	out.rejoin = held.pick(input.target);
+	me0.SetAttribute("pz_robux_rejoin", undefined);
 	me0.SetAttribute("pz_robux_pending", undefined);
 	flush();
 	out.unpending = held.pick(input.target);
@@ -2060,6 +2064,7 @@ function main() {
 				return lines.filter(l => /robux/i.test(l));
 			};
 			const pendingOf = p => RP.decodeCostumeList(p.GetAttribute(RP.ROBUX_PENDING_ATTR));
+			const rejoinOf = p => RP.decodeCostumeList(p.GetAttribute(RP.ROBUX_REJOIN_ATTR));
 
 			// ---- no product configured (the ids blanked: a costume whose product is not created yet): no offer, no
 			// GetProductInfo, no prompt, coins as ever
@@ -2303,6 +2308,8 @@ function main() {
 				decisions = [
 					market.ProcessReceipt(receipt(424242, eagle, "R-GONE")),
 					market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN"), ProductId: 9999 }),
+					market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN-2"), ProductId: 9999 }),
+					market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN-3"), ProductId: 9998 }),
 					market.ProcessReceipt({ ...receipt(buyerId, eagle, "x"), PurchaseId: undefined }),
 					market.ProcessReceipt(receipt(buyerId, eagle, "")),
 					market.ProcessReceipt(receipt(buyerId, eagle, "x".repeat(257))),
@@ -2319,7 +2326,8 @@ function main() {
 				decisions.join(","),
 			);
 			check(
-				refusedWarns.filter(l => l.includes("cannot be kept")).length === 4,
+				refusedWarns.filter(l => l.includes("cannot be kept")).length === 4 &&
+					refusedWarns.filter(l => l.includes("names a product no costume has")).length === 2,
 				"each receipt refused for its PlayerId or PurchaseId is a real warn (the id's length, never the id)",
 				refusedWarns.join(" | "),
 			);
@@ -2386,8 +2394,9 @@ function main() {
 					roCoins.reason === "pending" &&
 					bs.money === eagle.price + 5 &&
 					roAsk.reason === "pending" &&
-					market.prompts.length === roPrompts,
-				"a receipt answered NotProcessedYet with the buyer here holds the Eagle for the session: Pending, no coins, no prompt",
+					market.prompts.length === roPrompts &&
+					rejoinOf(buyer).has(eagle.id),
+				"a receipt answered NotProcessedYet with the buyer here holds the Eagle for the session: Pending (and 'rejoin'), no coins, no prompt",
 				`${ro}, ${roCoins.reason}, ${roAsk.reason}`,
 			);
 			const roAgain = market.ProcessReceipt(receipt(buyerId, eagle, oddId));
@@ -2395,7 +2404,8 @@ function main() {
 				roAgain === GRANTED &&
 					bs.costumes[eagle.id] === 1 &&
 					hasReceipt(bs.robuxReceipts, eagle, oddId) &&
-					!pendingOf(buyer).has(eagle.id),
+					!pendingOf(buyer).has(eagle.id) &&
+					!rejoinOf(buyer).has(eagle.id),
 				"…granted when the session can record it (a PurchaseId with ':' and 108 characters kept whole), and the hold is gone",
 			);
 
@@ -2514,6 +2524,29 @@ function main() {
 				`a throttled read keeps the Pigeon offered (warned once for the streak), and it is read again ${ROBUX.VERIFY_RETRY_S} s later`,
 				`${readWarns.join(" | ")}; ${pigeonCalls() - calls0} retry`,
 			);
+			// a prompt closed purchased whose receipt never comes: held no longer than AWAITING_HOLD_S, then freed, warned
+			s2.run(0.6);
+			const pAsk = s2.shop(back, { kind: "robuxCostume", costumeId: pigeon.id });
+			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(pigeon), true);
+			const heldThen = pendingOf(back).has(pigeon.id);
+			clockNow += ROBUX.AWAITING_HOLD_S - 5;
+			s2.beat();
+			const heldBefore = pendingOf(back).has(pigeon.id);
+			let neverWarns = [];
+			neverWarns = warnsOf(() => {
+				clockNow += 10;
+				s2.beat();
+			});
+			check(
+				pAsk.ok &&
+					heldThen &&
+					heldBefore &&
+					!pendingOf(back).has(pigeon.id) &&
+					!ROBUX.activeRobuxShop().holds(buyerId, pigeon.id) &&
+					neverWarns.filter(l => l.includes("receipt never came")).length === 2,
+				`a confirmed purchase whose receipt never comes is held ${ROBUX.AWAITING_HOLD_S / 60} min, then freed with a warning`,
+				neverWarns.join(" | "),
+			);
 
 			// ---- a receipt that comes before the save: waited for (never for one who left), then decided
 			const SAVE = require(join(SRC, "shared/game/save.ts"));
@@ -2535,19 +2568,19 @@ function main() {
 					"a receipt before the save loaded: waited for the load, then granted",
 					`${d1}, ${calls} looks`,
 				);
-				// a join after a crash: the other server's lock (22 s), the same server's last write (20 s), the retries --
-				// a load of a minute is waited for, the player still here (review of the Robux work, M1)
+				// a join after a crash -- the other server's lock (22 s), the same server's last write (20 s), the retries -- or
+				// a DataStore outage on top: a load of five minutes is waited for, the player still here (reviews M1, L2)
 				const tSlow = clockNow;
 				const minute = {
 					save: SAVE.defaultSave(),
-					state: () => (clockNow - tSlow < 60 ? "loading" : "ok"),
+					state: () => (clockNow - tSlow < 300 ? "loading" : "ok"),
 					commit: () => true,
 				};
 				const u0 = new ROBUX.RobuxShop(market, { net: undefined, session: () => minute });
 				const d0 = u0.processReceipt(receipt(buyerId, eagle, "R-MINUTE"));
 				check(
-					ROBUX.RECEIPT_LOAD_WAIT_S >= 60 && d0 === GRANTED && minute.save.costumes[eagle.id] === 1,
-					`a load that takes a minute is waited for (up to ${ROBUX.RECEIPT_LOAD_WAIT_S} s), then granted`,
+					ROBUX.RECEIPT_LOAD_WAIT_S >= 600 && d0 === GRANTED && minute.save.costumes[eagle.id] === 1,
+					`a load that takes five minutes is waited for (the cap: ${ROBUX.RECEIPT_LOAD_WAIT_S} s), then granted`,
 					`${d0} after ${(clockNow - tSlow).toFixed(1)} s`,
 				);
 				const never = { save: SAVE.defaultSave(), state: () => "loading", commit: () => true };
@@ -2589,11 +2622,28 @@ function main() {
 						u4.prompt(back, readonly.save, eagle.id, true) !== undefined,
 					"…a session that cannot record a purchase (read-only, no DataStore, the lock lost): NotProcessedYet, nothing granted, the Eagle held",
 				);
+				check(rejoinOf(back).has(eagle.id), "…and it is one only a rejoin settles (pz_robux_rejoin)");
 				u4.forget(buyerId);
 				check(!u4.holds(buyerId, eagle.id), "…and the player leaving takes the hold with them");
+				// grants whose own write failed: `landed` logs only the PurchaseIds the landed write carried
+				const failing = { save: SAVE.defaultSave(), state: () => "ok", commit: () => false };
+				const u5 = new ROBUX.RobuxShop(market, { net: undefined, session: () => failing });
+				u5.processReceipt(receipt(buyerId, eagle, "R-U5-A"));
+				const carried = u5.unloggedOf(back);
+				u5.processReceipt(receipt(buyerId, malamute, "R-U5-B"));
+				u5.landed(back, carried);
+				check(
+					JSON.stringify(carried) === JSON.stringify(["R-U5-A"]) &&
+						JSON.stringify(u5.unloggedOf(back)) === JSON.stringify(["R-U5-B"]),
+					"a landed write logs only the grants it carried (read before its encode); a later one still waits",
+					JSON.stringify(u5.unloggedOf(back)),
+				);
+				u5.forget(buyerId);
+				check(u5.unloggedOf(back).length === 0, "…and the player leaving clears what still waits");
 			} finally {
 				globalThis.task.wait = realWait;
 				back.SetAttribute(RP.ROBUX_PENDING_ATTR, undefined);
+				back.SetAttribute(RP.ROBUX_REJOIN_ATTR, undefined);
 			}
 
 			// ---- the real wardrobe with that offer
@@ -2700,7 +2750,9 @@ function main() {
 					!shown.pending.robux.visible &&
 					/on its way/.test(shown.pending.note ?? "") &&
 					shown.unpending.coin.visible &&
-					shown.unpending.robux.visible,
+					shown.unpending.robux.visible &&
+					/Rejoin to receive it/.test(shown.rejoin.note ?? "") &&
+					shown.rejoin.status === "Pending",
 				"a payment on its way (pz_robux_pending): the panel says Pending with nothing to buy, and goes back when it lands",
 				JSON.stringify({ pending: shown.pending, unpending: shown.unpending.status }),
 			);

@@ -28,6 +28,12 @@ export const ROBUX_OFFER_ATTR = "pz_robux_products";
  */
 export const ROBUX_PENDING_ATTR = "pz_robux_pending";
 
+/**
+ * Of those, the ones only a rejoin can settle ("3"): their receipt was answered NotProcessedYet with the player here --
+ * Roblox asks again at their next join, not before -- so the wardrobe says "Rejoin to receive it". Absent: none.
+ */
+export const ROBUX_REJOIN_ATTR = "pz_robux_rejoin";
+
 /** developer product id of each costume, by its COSTUMES name; 0 = not created yet */
 export const ROBUX_PRODUCT_IDS: { [costumeName: string]: number } = {
 	Pigeon: 3495866678,

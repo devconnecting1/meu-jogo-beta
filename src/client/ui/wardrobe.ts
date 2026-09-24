@@ -21,6 +21,7 @@ import {
 	requestSave,
 	robuxOffer,
 	robuxPending,
+	robuxRejoin,
 	sessionReady,
 } from "../systems/saveClient";
 import { askRobuxPrice, onRobuxPrice, robuxPriceShown } from "../systems/robuxPrices";
@@ -907,7 +908,10 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		else if (state === "equipped") status = tr("Equipped");
 		else if (fromPack) status = tr("From a pack");
 		Kit.setValueKey(statusKey, status);
-		if (pending) {
+		if (pending && robuxRejoin().has(c.id)) {
+			// Roblox asks about this receipt again only at the next join (the load failed, or the save could not be written)
+			note.Text = tr("Your Robux purchase is safe with Roblox. Rejoin to receive it.");
+		} else if (pending) {
 			note.Text = tr("Your Robux purchase is on its way. It shows here as soon as Roblox confirms it.");
 		} else if (locked && !affordable) {
 			const have = `${tr("You have")} ${fmtInt(save.money)}`;

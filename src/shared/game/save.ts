@@ -536,20 +536,26 @@ export function robuxPaid(save: PlayerSaveData, costumeId: number): boolean {
  * owned (a purchase from outside the game), and those always have a twin to drop.
  */
 export function trimReceipts(list: Array<RobuxReceipt>): void {
-	while (list.size() > ROBUX_RECEIPTS_MAX) {
-		let drop = -1;
-		for (let i = 0; i < list.size() && drop < 0; i++) {
-			const c = list[i].c;
-			for (let j = i + 1; j < list.size(); j++) {
-				if (list[j].c === c) {
-					drop = i;
-					break;
-				}
-			}
+	let excess = list.size() - ROBUX_RECEIPTS_MAX;
+	if (excess <= 0) return;
+	// one pass, oldest first (review of dbbb73c, L1: the old search was quadratic): an entry goes while the list is still
+	// over the cap and its costume has another receipt left -- which, scanning from the oldest, is a later one
+	const left = new Map<number, number>();
+	for (const e of list) left.set(e.c, (left.get(e.c) ?? 0) + 1);
+	const kept: Array<RobuxReceipt> = [];
+	for (const e of list) {
+		const n = left.get(e.c) ?? 0;
+		if (excess > 0 && n > 1) {
+			left.set(e.c, n - 1);
+			excess -= 1;
+			continue;
 		}
-		// every entry its costume's only one: more costumes than the cap, which COSTUMES never has -- the oldest goes
-		list.remove(drop >= 0 ? drop : 0);
+		kept.push(e);
 	}
+	// every entry left its costume's only one: more costumes than the cap, which COSTUMES never has -- the oldest go
+	const from = math.max(0, kept.size() - ROBUX_RECEIPTS_MAX);
+	list.clear();
+	for (let i = from; i < kept.size(); i++) list.push(kept[i]);
 }
 
 /** a copy of each entry (the receipts of two saves never share a table) */
@@ -569,14 +575,25 @@ export function carryRobuxPurchases(from: PlayerSaveData, to: PlayerSaveData): v
 }
 
 /**
- * A stored list, entry by entry: well-formed entries only, each PurchaseId once (the first kept), and at most
- * ROBUX_RECEIPTS_MAX of them (`trimReceipts`: never a costume's only receipt)
+ * The most raw entries a stored list is read for. A save never holds more than ROBUX_RECEIPTS_MAX (every write trims
+ * it), so a longer list is a hostile or broken document: it is read this far and no further, whatever its size (review
+ * of dbbb73c, L1: 200k entries used to stall the load).
+ */
+export const ROBUX_RECEIPTS_READ_MAX = 256;
+
+/**
+ * A stored list, entry by entry: at most ROBUX_RECEIPTS_READ_MAX raw entries looked at, well-formed ones only, each
+ * PurchaseId once (the first kept), and at most ROBUX_RECEIPTS_MAX of them (`trimReceipts`: never a costume's only
+ * receipt). Linear in what it reads.
  */
 function readReceipts(v: unknown): Array<RobuxReceipt> {
 	const out: Array<RobuxReceipt> = [];
 	if (!typeIs(v, "table")) return out;
 	const seen = new Set<string>();
+	let read = 0;
 	for (const entry of v as Array<unknown>) {
+		read += 1;
+		if (read > ROBUX_RECEIPTS_READ_MAX) break;
 		const c = receiptCostume(entry);
 		if (c < 0) continue;
 		const p = (entry as RobuxReceipt).p;

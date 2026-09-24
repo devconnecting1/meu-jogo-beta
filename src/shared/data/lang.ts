@@ -684,6 +684,7 @@ export const LANG_TABLE: Array<string> = [
 	"Robux",
 	"Waiting for your Robux purchase",
 	"Your Robux purchase is on its way. It shows here as soon as Roblox confirms it.",
+	"Your Robux purchase is safe with Roblox. Rejoin to receive it.",
 	"The price changed, try again",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
 	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Titles are never sold: each one is earned by playing, and shows under your name for everyone.#A title's colour says how rare it is, from Common to Legendary. A few are secret until you earn them.#Pick an item to try it on in the preview, then buy or wear it.",

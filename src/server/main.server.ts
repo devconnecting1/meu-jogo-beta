@@ -653,6 +653,10 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 	// answers it -- never one already in flight when the ask came (its push goes out without `answersDawn`)
 	const answer = !release && s.dawnAsks > s.dawnAnswered ? s.dawnAsks : undefined;
 	const asked = answer !== undefined;
+	// the Robux grants whose own write failed, read BEFORE the save is encoded: exactly the ones this write carries, whose
+	// events go out if it lands (server/save/robux.ts `unloggedOf`; review of dbbb73c, L4)
+	const shop = robux;
+	const robuxPending = shop !== undefined ? shop.unloggedOf(s.player) : [];
 	const json = HttpService.JSONEncode(s.save);
 	const c = s.cadence;
 	if (json.size() > MAX_STORED_LENGTH) {
@@ -692,9 +696,10 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 		s.lastWrite = os.clock();
 		const wasFailing = c.failingShown;
 		Cadence.writeLanded(c, json);
-		// a Robux grant whose own write failed is in this one: its analytics event goes out now (server/save/robux.ts)
-		const shop = robux;
-		if (shop !== undefined) guarded("Robux analytics", () => shop.landed(s.player), s.key);
+		// the Robux grants whose own write failed are in this one: their analytics events go out now, once
+		if (shop !== undefined && robuxPending.size() > 0) {
+			guarded("Robux analytics", () => shop.landed(s.player, robuxPending), s.key);
+		}
 		if (release) s.released = true;
 		if (told || wasFailing || asked) notifyStore(s, "saved", answer);
 		return true;

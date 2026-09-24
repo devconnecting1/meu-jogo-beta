@@ -202,14 +202,14 @@ ligação com a sessão) e `client/ui/wardrobe.ts` (a tela). Fontes (Context7, `
    `MarketplaceService:PromptProductPurchase(player, productId)`. A posse é do servidor (MON-04: o cliente nunca declara
    o que tem), então "não oferecer o que já é seu" é decidido onde a verdade mora. Enquanto um prompt de Robux do traje X
    está aberto (até `PromptProductPurchaseFinished` com `isPurchased = false`, o recibo, ou 120 s — e, se ele fechou
-   **comprado**, até o recibo chegar ou o jogador sair, sem prazo), a compra **em
+   **comprado**, até o recibo chegar ou o jogador sair, no máximo 15 min), a compra **em
    moedas** de X é recusada (`pending`): nenhuma corrida faz alguém pagar duas vezes pelo mesmo traje.
 3. **`ProcessReceipt`** (lógica pura em `server/save/robux.ts`, ligação em `main.server.ts`; a receita do Roblox para
    sessão travada, "player-data-purchasing"):
     1. `PlayerId` → o `Player` neste servidor; não está → `NotProcessedYet` (o Roblox tenta de novo no próximo login). Um
        recibo de **outro** jogador nunca toca um save que não é o dele: o `PlayerId` escolhe o save, e nada vem do
        cliente.
-    2. A sessão: espera o carregamento (até 90 s, o pior caso real do carregamento; desiste se o jogador sair); não
+    2. A sessão: espera o carregamento enquanto o jogador está aqui (a receita; teto de segurança de 10 min); não
        carregada, só-leitura (`error`), sem
        DataStore (`unavailable`, o Studio sem acesso à API) ou trava perdida → `NotProcessedYet`.
     3. `ProductId` → traje pela configuração; desconhecido (produto que não vendemos, ou tirado) → `NotProcessedYet` e um
@@ -296,23 +296,29 @@ ora, um print do guarda-roupa com o item selecionado serve.
   recibos com `PurchaseId` longo passariam do `MAX_SAVE_PAYLOAD` (8 KB) — o relatório seria recusado.
 - **O recibo guardado é `{ c, p }`** (revisão do Robux, L6–L7): o `PurchaseId` inteiro, com qualquer caractere, até 256
   (`PURCHASE_ID_MAX`, muito acima de um id real); um id recusado (vazio, longo demais) é um `warn` de verdade, com o
-  tamanho (nunca o id). Na leitura, cada `PurchaseId` uma vez (o primeiro); passando de 64, saem os mais velhos, mas
-  **nunca o único recibo de um traje** (`trimReceipts`) — é ele que mantém o traje pago do jogador.
+  tamanho (nunca o id). Na leitura, no máximo 256 entradas cruas (`ROBUX_RECEIPTS_READ_MAX`: um save nunca passa de
+  64, então mais que isso é documento hostil — 200 mil entradas são lidas em menos de um milissegundo), cada
+  `PurchaseId` uma vez (o primeiro); passando de 64, saem os mais velhos, mas **nunca o único recibo de um traje**
+  (`trimReceipts`, uma passada só) — é ele que mantém o traje pago do jogador.
 - **Admin:** a edição que tiraria um traje pago em Robux é **recusada inteira** (nem o save do servidor nem o cliente,
   que aplica as mesmas operações, se movem), e `applyAdminOps` e `enforceSaveInvariants` o mantêm de novo, por
   garantia; o **reset** do admin leva os recibos e os trajes pagos para o save novo (`carryRobuxPurchases`).
-- **A espera do carregamento** (revisão do Robux, M1): um recibo que chega antes do save espera em passos de 0,25 s
-  enquanto o jogador está aqui, até 90 s (`RECEIPT_LOAD_WAIT_S`: o pior caso real do carregamento — a última gravação
-  do mesmo servidor, 20 s; a trava do outro, 22 s; as tentativas e o store antigo, 1 + 2 + 4 s cada; a latência de cada
-  chamada), e desiste na hora se ele sai; o `ProcessReceipt` é ligado antes de qualquer jogador ser admitido.
+- **A espera do carregamento** (revisões do Robux, M1 e L2): um recibo que chega antes do save espera em passos de
+  0,25 s **enquanto o jogador está aqui e o carregamento anda** (a receita do Roblox: "wait for the player's data to
+  load"), e desiste na hora se ele sai. O pior caso real é cerca de um minuto (a última gravação do mesmo servidor,
+  20 s; a trava do outro, 22 s; as tentativas e o store antigo, 1 + 2 + 4 s cada), mas uma falha do DataStore o
+  estica: o teto (`RECEIPT_LOAD_WAIT_S`) é só de segurança, 10 min. O `ProcessReceipt` é ligado antes de qualquer
+  jogador ser admitido.
 - **Recibo respondido `NotProcessedYet` com o jogador aqui** (carregamento lento demais, sessão só-leitura, gravação
   falhando): o Roblox só pergunta de novo no próximo login, e um carregamento refeito pelo lobby mostraria o traje sem
   dono e vendável — o jogador pagaria duas vezes. Então **aquele traje fica retido pelo resto da sessão**: nem moedas nem
   outro prompt (`pending`), e o guarda-roupa mostra **Pending** (o servidor diz quais no atributo `pz_robux_pending` do
-  `Player`). A retenção sai quando aquele recibo é concedido, ou com o jogador.
+  `Player`) com a nota "Your Robux purchase is safe with Roblox. Rejoin to receive it." (esses estão também em
+  `pz_robux_rejoin`: só um novo login os resolve). A retenção sai quando aquele recibo é concedido, ou com o jogador.
 - **O prompt aberto** segura o traje por até 120 s (`PROMPT_HOLD_S`); o fechamento sem compra o solta. Fechado
-  **comprado**, o traje fica retido **até o recibo dele ser concedido ou o jogador sair**, sem prazo (revisão do Robux,
-  M2: um recibo pode demorar), e a concessão solta só a retenção daquele traje. Recusas: `invalid` (sem produto
+  **comprado**, o traje fica retido **até o recibo dele ser concedido ou o jogador sair** (revisão do Robux, M2: um
+  recibo pode demorar) — no máximo 15 min (`AWAITING_HOLD_S`): um recibo que nunca vem solta o traje, com um `warn` de
+  frase fixa —, e a concessão solta só a retenção daquele traje. Recusas: `invalid` (sem produto
   verificado, id quebrado), `readonly`, `owned`, `pending`.
 - **A verificação** (`GetProductInfoAsync`) roda na partida e a cada 10 min (`VERIFY_EVERY_S`): um preço mudado no
   Creator Hub tira o produto da oferta em até 10 min. Uma leitura que falha (limite de taxa, rede) **mantém o que o
@@ -324,8 +330,10 @@ ora, um print do guarda-roupa com o item selecionado serve.
   confere a faixa e o prompt do Roblox é o que cobra.
 - **Analytics:** o campo de canal é `Channel - In game` (`InExperience`) ou `Channel - Other` (nunca esperado: os
   produtos são Unlisted e sem compra externa). Um recibo concedido numa sessão cuja gravação falhou manda o evento
-  com a **próxima gravação daquela sessão que chegar** (qualquer uma: ela leva a concessão), uma vez; só se o jogador
-  sair antes de qualquer gravação chegar, ou o servidor cair, o evento daquela compra se perde (a compra não).
+  com a **próxima gravação daquela sessão que chegar**, uma vez: logo antes de codificar o save, `writeSession` anota
+  quais `PurchaseId` pendentes aquela gravação leva (`unloggedOf`), e só esses saem quando ela chega. Se o jogador sair
+  antes (o `forget` os limpa) ou o servidor cair, o evento daquela compra se perde (a compra não). Um recibo de produto
+  que nenhum traje tem é um `warn` de frase própria, uma vez por id (o id vai na linha de log).
 - **O Rebirth mostrado grátis** (revisão do Robux, L8): o pedido diz `expectFree`; se o amanhecer já não o paga (o
   mundo andou, uma morte nova), o servidor recusa com `price` e não cobra nada — nunca um preço que o jogador não viu.
 - **"See price"**, como a página Supporter (um texto só na `lang.ts`).
@@ -388,7 +396,7 @@ ora, um print do guarda-roupa com o item selecionado serve.
 ### Robux (segunda revisão)
 
 - **`ProcessReceipt`** (`server/save/robux.ts` `decide`): o `PlayerId` escolhe o save (nada vem do cliente); espera o
-  carregamento até 90 s com `task.wait` dentro do callback (permitido pelo Roblox), só com o jogador aqui;
+  carregamento com `task.wait` dentro do callback (permitido pelo Roblox), só com o jogador aqui (teto de 10 min);
   `PurchaseGranted` só com
   `commit()` verdadeiro — `flush(s, false)` sob a trava, e a sessão ainda aberta, sem `released` e persistente depois
   dele (uma saída que gravou no meio pode ter codificado o save **antes** da concessão). Toda outra saída é

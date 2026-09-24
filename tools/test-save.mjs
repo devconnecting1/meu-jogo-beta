@@ -3049,6 +3049,32 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 		`no maximo ${cap}: os mais velhos saem primeiro, mas o unico recibo de um traje fica`,
 		`${trimmed.length}: ${trimmed[0].p}, ${trimmed[1].p} .. ${trimmed.at(-1).p}`,
 	);
+	// a hostile oversized list (review of dbbb73c, L1: the old trim was quadratic, and 200k entries stalled a load for
+	// minutes): at most ROBUX_RECEIPTS_READ_MAX raw entries are read, and the trim is one pass
+	const huge = JSON.parse(JSON.stringify(up));
+	huge.robuxReceipts = filled(200000, i => ({ c: i % N, p: `H${i}` }));
+	const tHuge = performance.now();
+	const hugeRead = SAVE.sanitizeStoredSave(huge).robuxReceipts;
+	const msHuge = performance.now() - tHuge;
+	check(
+		msHuge < 250 && hugeRead.length === cap && hugeRead.at(-1).p === `H${SAVE.ROBUX_RECEIPTS_READ_MAX - 1}`,
+		`200.000 entradas num documento: lidas em ${msHuge.toFixed(1)} ms, so as primeiras ${SAVE.ROBUX_RECEIPTS_READ_MAX}, ${cap} guardadas`,
+	);
+	const past = JSON.parse(JSON.stringify(up));
+	past.robuxReceipts = [...filled(SAVE.ROBUX_RECEIPTS_READ_MAX, () => "junk"), { c: 5, p: "PAST" }];
+	checkEq(
+		SAVE.sanitizeStoredSave(past).robuxReceipts.length,
+		0,
+		"o que vem depois do limite de leitura nem e lido (so um documento hostil tem mais de 64)",
+	);
+	const bigList = filled(200000, i => ({ c: i % N, p: `B${i}` }));
+	const tTrim = performance.now();
+	SAVE.trimReceipts(bigList);
+	const msTrim = performance.now() - tTrim;
+	check(
+		msTrim < 250 && bigList.length === cap && bigList[0].p === `B${200000 - cap}` && bigList.at(-1).p === "B199999",
+		`e o corte e uma passada so: 200.000 recibos em ${msTrim.toFixed(1)} ms, os ${cap} mais novos`,
+	);
 	const g2 = SAVE.defaultSave();
 	for (let i = 0; i < cap + 3; i++) ROBUX.grantRobuxCostume(g2, i === 1 ? 6 : 0, `Q${i}`);
 	check(

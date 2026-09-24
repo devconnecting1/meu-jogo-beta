@@ -16,16 +16,17 @@
  *   THE HOLDS     a costume a Robux payment may be on its way for is sold neither for coins nor in a second prompt
  *                 ("pending"), so nobody pays twice for one costume:
  *                   - its prompt is open (at most PROMPT_HOLD_S, or until it closes unbought);
- *                   - its prompt closed PURCHASED: held until its receipt is granted or the player leaves -- no timer, a
- *                     receipt can take its time;
+ *                   - its prompt closed PURCHASED: held until its receipt is granted or the player leaves -- a receipt
+ *                     can take its time -- but at most AWAITING_HOLD_S: one that never comes frees the costume (warned);
  *                   - its receipt was answered NotProcessedYet while the player was here (the save not loaded, read-only,
  *                     or the write failing): held for the rest of the session -- Roblox asks again only at their next
  *                     join, and a load retried from the lobby would otherwise show the costume unowned and sellable.
- *                 The last two are published on the Player (`pz_robux_pending`): the wardrobe says Pending.
+ *                 The last two are published on the Player (`pz_robux_pending`): the wardrobe says Pending -- and, for
+ *                 the last, which only a rejoin can settle (`pz_robux_rejoin`), "Rejoin to receive it".
  *   THE RECEIPT   ProcessReceipt, the recipe of player-data-purchasing.md on our session lock: the player must be in this
  *                 server (else NotProcessedYet: Roblox tries again at their next join) with a save loaded and writable
- *                 (a load in progress is waited for while they stay, up to RECEIPT_LOAD_WAIT_S: the load's own worst
- *                 case); the PurchaseId is looked up in the save (`robuxReceipts`, save v8) -- already granted:
+ *                 (a load in progress is waited for while they stay -- the recipe's "wait for the player's data to
+ *                 load" -- with RECEIPT_LOAD_WAIT_S only as a safety cap); the PurchaseId is looked up in the save (`robuxReceipts`, save v8) -- already granted:
  *                 PurchaseGranted once a write holding it has landed; new: the costume and the PurchaseId go into the
  *                 save and the save is WRITTEN NOW (UpdateAsync under the lock, outside the coalesced cadence: SAV-01's
  *                 documented exception), and only a write that landed answers PurchaseGranted. Any failure answers
@@ -43,6 +44,7 @@ import { cosmeticSlotOf } from "shared/data/cosmetics";
 import {
 	ROBUX_OFFER_ATTR,
 	ROBUX_PENDING_ATTR,
+	ROBUX_REJOIN_ATTR,
 	costumeOfProduct,
 	encodeCostumeList,
 	encodeRobuxOffer,
@@ -56,12 +58,19 @@ import * as Analytics from "../analytics/events";
 /** an OPEN Robux prompt keeps its costume from being bought with coins at most this long (s), or until it closes */
 export const PROMPT_HOLD_S = 120;
 /**
- * ProcessReceipt waits at most this long for the buyer's save to load (s), and only while they are here. The load's own
- * worst case (server/main.server.ts `readSession`): a same-server rejoin waits for the last session's write (20 s), then
- * the other server's lock (LOCK_WAIT, 22 s, polled every 2 s), the UpdateAsync attempts and their backoff (1 + 2 + 4 s),
- * the legacy store's (1 + 2 + 4 s), and each call's own latency -- about 60 s, with room to spare.
+ * ProcessReceipt waits for the buyer's save to load while they are here (the recipe: "wait for the player's data to
+ * load", never for one who left), and gives up only past this safety cap (s). The load's own worst case
+ * (server/main.server.ts `readSession`: the same server's last write, 20 s; the other server's lock, LOCK_WAIT, 22 s;
+ * the attempts and their backoff) is about a minute, but a DataStore outage can stretch it: a cap far past it means a
+ * costume paid for is not left held all session by a load that was only slow (review of dbbb73c, L2).
  */
-export const RECEIPT_LOAD_WAIT_S = 90;
+export const RECEIPT_LOAD_WAIT_S = 600;
+/**
+ * A prompt closed PURCHASED holds its costume at most this long (s) waiting for the receipt: Roblox delivers one within
+ * moments, so one that never came (a purchase that did not go through after all) frees the costume, with a warning
+ * (review of dbbb73c, L3)
+ */
+export const AWAITING_HOLD_S = 900;
 /** the offer is checked against Roblox's prices again this often (s): a price changed in the Creator Hub is caught */
 export const VERIFY_EVERY_S = 600;
 /** a product whose info could not be read is asked again this soon (s); what it last was stands meanwhile */
@@ -193,12 +202,17 @@ export class RobuxShop {
 	private readonly retrying = new Set<number>();
 	/** user id -> the prompt open now (unconfirmed) */
 	private readonly prompts = new Map<number, OpenPrompt>();
-	/** user id -> costumes whose prompt closed purchased: held until the receipt is granted or the player leaves */
-	private readonly awaiting = new Map<number, Set<number>>();
+	/**
+	 * user id -> costume -> when its prompt closed purchased: held until the receipt is granted, the player leaves, or
+	 * AWAITING_HOLD_S pass
+	 */
+	private readonly awaiting = new Map<number, Map<number, number>>();
 	/** user id -> costumes whose receipt was answered NotProcessedYet while they were here: held for the session */
 	private readonly unanswered = new Map<number, Set<number>>();
 	/** PurchaseId -> a grant whose event waits for a write that lands (once) */
 	private readonly unlogged = new Map<string, Unlogged>();
+	/** product ids a receipt named that no costume has, warned once each */
+	private readonly unknownWarned = new Set<number>();
 	/** the last receipts handled, newest last (the admin log and the tests) */
 	readonly results = new Array<ReceiptResult>();
 
@@ -289,23 +303,32 @@ export class RobuxShop {
 		return p;
 	}
 
+	/** is this costume's confirmed payment still awaited (and not past AWAITING_HOLD_S) */
+	private awaited(userId: number, costumeId: number): boolean {
+		const at = this.awaiting.get(userId)?.get(costumeId);
+		return at !== undefined && os.clock() - at <= AWAITING_HOLD_S;
+	}
+
 	/** is COSTUMES[costumeId] held for this player: its prompt open, its payment confirmed, or its receipt unanswered */
 	holds(userId: number, costumeId: unknown): boolean {
 		if (!typeIs(costumeId, "number")) return false;
 		if (this.openPrompt(userId)?.costumeId === costumeId) return true;
-		return (
-			this.awaiting.get(userId)?.has(costumeId) === true || this.unanswered.get(userId)?.has(costumeId) === true
-		);
+		return this.awaited(userId, costumeId) || this.unanswered.get(userId)?.has(costumeId) === true;
 	}
 
 	/** the costumes held for this player past their prompt (what the wardrobe shows as Pending), in COSTUMES order */
 	heldCostumes(userId: number): Array<number> {
 		const out: Array<number> = [];
 		for (const c of COSTUMES) {
-			if (this.awaiting.get(userId)?.has(c.id) === true || this.unanswered.get(userId)?.has(c.id) === true) {
-				out.push(c.id);
-			}
+			if (this.awaited(userId, c.id) || this.unanswered.get(userId)?.has(c.id) === true) out.push(c.id);
 		}
+		return out;
+	}
+
+	/** of those, the ones only a rejoin can settle (their receipt answered NotProcessedYet: Roblox asks at the next join) */
+	rejoinCostumes(userId: number): Array<number> {
+		const out: Array<number> = [];
+		for (const c of COSTUMES) if (this.unanswered.get(userId)?.has(c.id) === true) out.push(c.id);
 		return out;
 	}
 
@@ -315,6 +338,9 @@ export class RobuxShop {
 		const held = this.heldCostumes(userId);
 		const text = held.size() > 0 ? encodeCostumeList(held) : undefined;
 		if (player.GetAttribute(ROBUX_PENDING_ATTR) !== text) player.SetAttribute(ROBUX_PENDING_ATTR, text);
+		const rejoin = this.rejoinCostumes(userId);
+		const rejoinText = rejoin.size() > 0 ? encodeCostumeList(rejoin) : undefined;
+		if (player.GetAttribute(ROBUX_REJOIN_ATTR) !== rejoinText) player.SetAttribute(ROBUX_REJOIN_ATTR, rejoinText);
 	}
 
 	/** ShopAction `robuxCostume`: opens Roblox's prompt, or says why not */
@@ -336,8 +362,9 @@ export class RobuxShop {
 
 	/**
 	 * The prompt closed. Cancelled (or errored): the costume is free for coins again. Purchased: it is held until its
-	 * receipt is granted or the player leaves, however long that takes -- and `isPurchased` itself grants nothing (the
-	 * docs: it proves no purchase). A receipt granted before this arrives already closed the prompt: nothing is held.
+	 * receipt is granted or the player leaves -- or AWAITING_HOLD_S pass with no receipt at all, when it is freed and
+	 * warned -- and `isPurchased` itself grants nothing (the docs: it proves no purchase). A receipt granted before this
+	 * arrives already closed the prompt: nothing is held.
 	 */
 	promptFinished(userId: unknown, productId: unknown, isPurchased: unknown): void {
 		if (!typeIs(userId, "number")) return;
@@ -348,8 +375,23 @@ export class RobuxShop {
 		const player = game.GetService("Players").GetPlayerByUserId(userId);
 		const session = player !== undefined ? this.deps.session(player) : undefined;
 		if (session !== undefined && (session.save.costumes[p.costumeId] ?? 0) > 0) return;
-		addTo(this.awaiting, userId, p.costumeId);
+		const costumeId = p.costumeId;
+		const at = os.clock();
+		let mine = this.awaiting.get(userId);
+		if (mine === undefined) {
+			mine = new Map<number, number>();
+			this.awaiting.set(userId, mine);
+		}
+		mine.set(costumeId, at);
 		this.publishHeld(userId);
+		task.delay(AWAITING_HOLD_S, () => {
+			// this very hold, still there: its receipt never came
+			if (this.awaiting.get(userId)?.get(costumeId) !== at) return;
+			this.awaiting.get(userId)?.delete(costumeId);
+			warn(`[${GAME_NAME}] Robux: a confirmed purchase's receipt never came; its costume is free again`);
+			print(`[PZ-ROBUX] awaited receipt never came: costume ${costumeId}`);
+			this.publishHeld(userId);
+		});
 	}
 
 	/** is this player still in this server (a hold is for their session; one who left takes nothing with them) */
@@ -358,11 +400,17 @@ export class RobuxShop {
 		return player !== undefined && player.Parent !== undefined;
 	}
 
-	/** the player left: everything held for them goes (a receipt still reaches them at their next join) */
+	/**
+	 * The player left: everything held for them goes (a receipt still reaches them at their next join), and so do their
+	 * grants still waiting for an event -- the purchase is in the save; only its event is lost (review of dbbb73c, L4)
+	 */
 	forget(userId: number): void {
 		this.prompts.delete(userId);
 		this.awaiting.delete(userId);
 		this.unanswered.delete(userId);
+		const gone = new Array<string>();
+		for (const [purchaseId, u] of this.unlogged) if (u.player.UserId === userId) gone.push(purchaseId);
+		for (const purchaseId of gone) this.unlogged.delete(purchaseId);
 	}
 
 	/** the receipt of this costume was granted: only ITS holds go (another costume's confirmed payment stays held) */
@@ -413,8 +461,12 @@ export class RobuxShop {
 		const costumeId = costumeOfProduct(info.ProductId);
 		const base = { userId, purchaseId, costumeId };
 		if (costumeId < 0) {
-			if (typeIs(info.ProductId, "number")) {
-				this.warnLine(info.ProductId, "a receipt names a product no costume has");
+			// its own fixed sentence, once per product id (the id in the log line after it)
+			const productId = info.ProductId;
+			if (typeIs(productId, "number") && !this.unknownWarned.has(productId)) {
+				this.unknownWarned.add(productId);
+				warn(`[${GAME_NAME}] Robux: a receipt names a product no costume has`);
+				print(`[PZ-ROBUX] unknown product ${productId}`);
 			}
 			return { ...base, granted: false, outcome: "unknown" };
 		}
@@ -454,14 +506,24 @@ export class RobuxShop {
 	}
 
 	/**
-	 * A write of this player's session landed (server/main.server.ts `writeSession`): every grant of theirs whose own write
-	 * failed is in it -- the grant went into the live save before that failed write, so any later write carries it -- and
-	 * its event goes out now, once. (A player who left before any write landed takes it with them: the purchase is in the
-	 * save, only the event is lost.)
+	 * The grants of this player whose own write failed and whose event still waits: server/main.server.ts `writeSession`
+	 * reads them just before it encodes the save -- so these are exactly the ones that write carries (each went into
+	 * the live save before its failed write) -- and hands them back to `landed` if that write lands.
 	 */
-	landed(player: Player): void {
-		for (const [purchaseId, u] of this.unlogged) {
-			if (u.player === player) this.logPending(purchaseId);
+	unloggedOf(player: Player): Array<string> {
+		const out = new Array<string>();
+		for (const [purchaseId, u] of this.unlogged) if (u.player === player) out.push(purchaseId);
+		return out;
+	}
+
+	/**
+	 * A write of this player's session landed, carrying `purchaseIds` (`unloggedOf`, read before it was encoded): their
+	 * events go out now, once. (A player who leaves before any write lands takes them with them -- `forget`: the purchase
+	 * is in the save, only the event is lost.)
+	 */
+	landed(player: Player, purchaseIds: ReadonlyArray<string>): void {
+		for (const purchaseId of purchaseIds) {
+			if (this.unlogged.get(purchaseId)?.player === player) this.logPending(purchaseId);
 		}
 	}
 
