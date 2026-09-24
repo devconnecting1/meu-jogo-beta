@@ -15,7 +15,8 @@ import { onAdminEvent, sendPatchAck } from "./net";
 
 /*
  * Runs on EVERY player's client (not only admins): applies admin save patches to ctx.save and to the running game at
- * once (no trip to the lobby), confirms them to the server, and shows server announcements.
+ * once (no trip to the lobby), confirms them to the server, shows server announcements, and drops the blood and the
+ * bodies when an admin clears them for the whole server.
  * No panel instance is created here; the announcement banner only exists while an announcement is on screen.
  */
 
@@ -203,6 +204,9 @@ export function startAdminListeners(deps: PatchDeps): void {
 			applyPatch(deps, ev);
 		} else if (ev.kind === "announce") {
 			if (typeIs(ev.text, "string") && typeIs(ev.from, "string")) showAnnouncement(deps.ctx, ev.text, ev.from);
+		} else if (ev.kind === "clearFx") {
+			// an admin cleared the blood and the bodies (docs/MULTIPLAYER.md §10): they are this screen's decals
+			deps.loop.clearEffects();
 		}
 	});
 }

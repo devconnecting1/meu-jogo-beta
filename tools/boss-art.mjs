@@ -1,5 +1,5 @@
 /*
- * The bosses' pixel art (docs/DESIGN_RULES.md ART-13): tools/boss-model.mjs rasterised by the characters' own
+ * The bosses' pixel art (docs/DESIGN_RULES.md ART-14): tools/boss-model.mjs rasterised by the characters' own
  * rasteriser (tools/character-art.mjs rasterCell: the outline, the ramps, the light from the top left, the clean-up)
  * into one sheet per boss, laid out by src/client/view/charSheets.ts (BOSS_BAND: the 32 headings in two bands of 16,
  * or the rafflesia's vine beats), each with its white Fill and Rim masks for the hit flash. Called by
@@ -62,11 +62,11 @@ export function bossSpecs() {
 }
 
 const DESCRIPTIONS = {
-	bossGiant: "boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-13)",
-	bossHedgehog: "boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-13)",
+	bossGiant: "boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14)",
+	bossHedgehog: "boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14)",
 	bossCentipede:
-		"boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-13)",
-	bossRafflesia: "boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-13)",
+		"boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14)",
+	bossRafflesia: "boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14)",
 };
 
 /**

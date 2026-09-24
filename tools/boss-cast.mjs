@@ -1,5 +1,5 @@
 /*
- * A fixed cast of bosses (docs/DESIGN_RULES.md ART-13), drawn through the function the client calls: the centipede
+ * A fixed cast of bosses (docs/DESIGN_RULES.md ART-14), drawn through the function the client calls: the centipede
  * as a whole chain (head and 50 segments, coiled into a curve), the rafflesia at several beats of its vines, the
  * giant and the hedgehog facing every way, each also mid hit flash. tools/test-world-art.mjs §10 draws it to check the
  * flat fallback against tools/golden/bosses-flat.json (recorded from the commit before the bosses' art) and the art

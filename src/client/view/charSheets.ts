@@ -261,7 +261,7 @@ export function birdRow(pet: number, spread: number): number {
 	return b * BIRD_ROWS_EACH + best;
 }
 
-// ---------------------------------------------------------------- bosses (ART-13)
+// ---------------------------------------------------------------- bosses (ART-14)
 
 /**
  * A boss is too big for 32 headings across one 1024-texel sheet, so each boss sheet puts the 32 headings in two bands

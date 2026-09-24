@@ -1037,6 +1037,29 @@ section(
 		d.ticks(60 * 3, 1, 0);
 		d.tick(0, 0, PRESS_E);
 		checkEq(sp.save.achievements[RIDER], max, `...and it stops at its goal (${max})`);
+		sim.remove(0);
+		for (const s of vehiclesIn(world)) W.removeSolid(world, s);
+		// §9.3 (the verification of 2026-09-24): an assisted run rides as far as it likes and earns no Road Trip point,
+		// as it earns no coins -- the ride's odometer still turns (the `distance` events), the achievement does not
+		sim.paysRewards = () => false;
+		const helped = addPlayer(sim, 0, 1000, 2000, fueled(20));
+		helped.save.achievements[RIDER] = 0;
+		park(world, 22, 1000, 2040);
+		const dh = driver(sim, helped);
+		dh.tick(0, 0, PRESS_E);
+		const from = events.length;
+		dh.ticks(60 * 4, 1, 0);
+		dh.tick(0, 0, PRESS_E);
+		const ridden = events
+			.slice(from)
+			.filter(e => e.kind === "distance")
+			.reduce((a, e) => a + e.units, 0);
+		check(
+			ridden > 500 && helped.save.achievements[RIDER] === 0,
+			"an assisted run: ridden, and no Road Trip point (§9.3)",
+			`${f1(ridden)} u, Rider ${helped.save.achievements[RIDER]}`,
+		);
+		sim.paysRewards = undefined;
 	},
 );
 

@@ -1,5 +1,5 @@
 /*
- * The four bosses as shapes (docs/DESIGN_RULES.md ART-13): the centipede, the rafflesia, the giant and the hedgehog,
+ * The four bosses as shapes (docs/DESIGN_RULES.md ART-14): the centipede, the rafflesia, the giant and the hedgehog,
  * in the same pixel art as the horde (ART-08, ART-10): 4 world units per texel, a one-texel near-black outline, ramps
  * lit from the top left, a selective line round a head. tools/boss-art.mjs rasterises them into their sheets.
  *

@@ -16,7 +16,7 @@
  * Scenes: the survivor in eight facings with each outfit; the weapons in the hands (idle and mid-swing); hit, poison
  * and downed; each pet standing and on the move; each zombie variant in eight facings and in its special poses; a
  * horde of 60 by day and the same street at night, lit only by the survivors (LUZ-02); a fight with hit flashes; and
- * each boss (ART-13, client/view/bossView.ts) in its poses and on its plaza (`--only boss-giant,boss-hedgehog,...`).
+ * each boss (ART-14, client/view/bossView.ts) in its poses and on its plaza (`--only boss-giant,boss-hedgehog,...`).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -436,7 +436,7 @@ function sceneZombies() {
 	return finish(st, labels);
 }
 
-// ---------------------------------------------------------------- the bosses (ART-13)
+// ---------------------------------------------------------------- the bosses (ART-14)
 
 const BC = await import("./boss-cast.mjs");
 

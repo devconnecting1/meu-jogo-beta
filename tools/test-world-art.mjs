@@ -234,7 +234,7 @@ function charDigest() {
 	const sha1 = createHash("sha1").update(JSON.stringify(calls)).digest("hex");
 	return { count: calls.length, sha1, images: countSprites(st.r.layer).images };
 }
-// the bosses' draw calls with no boss sheet (§10f, ART-13), and --golden-bosses: record them from this src (run it
+// the bosses' draw calls with no boss sheet (§10f, ART-14), and --golden-bosses: record them from this src (run it
 // on the commit before the bosses' art, with PZ_SRC, and PZ_GOLDEN_FROM naming it)
 const GOLDEN_BOSSES = join(ROOT, "tools", "golden", "bosses-flat.json");
 /** where member `i` of the boss cast is drawn (far apart: nothing of one lands on another) */
@@ -952,7 +952,10 @@ const SD = require(join(SRC, "shared/data/buildingSigns.ts"));
 const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
 const { LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
 const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
-const SIGN_TYPES = [3, 4, 5, 6, 7, 8, 9, 10, 11];
+const SIGN_TYPES = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+/** the college campus's four buildings (DESIGN_RULES EDI-17): one institution, one plate colour and one roof */
+const CAMPUS_SIGNS = [12, 13, 14, 15];
+const sameFamily = (a, b) => CAMPUS_SIGNS.includes(a) && CAMPUS_SIGNS.includes(b);
 const TX = SD.SIGN_TEXEL;
 const rgb255 = c => [c.R * 255, c.G * 255, c.B * 255];
 const dE = (p, q) => {
@@ -1022,7 +1025,10 @@ function frameOf(sign) {
 			const b = SD.BUILDING_SIGNS[SIGN_TYPES[j]];
 			const fa = frameOf(a);
 			const fb = frameOf(b);
-			const face = dE(rgb255(SD.SIGN_ART[fa.face]), rgb255(SD.SIGN_ART[fb.face]));
+			// the campus's four plates are one maroon (its pictograms tell them apart, checked below)
+			const face = sameFamily(SIGN_TYPES[i], SIGN_TYPES[j])
+				? Infinity
+				: dE(rgb255(SD.SIGN_ART[fa.face]), rgb255(SD.SIGN_ART[fb.face]));
 			let picture = 1;
 			if (fa.w === fb.w && fa.h === fb.h) {
 				let diff = 0;
@@ -1045,7 +1051,11 @@ function frameOf(sign) {
 			}
 		}
 	}
-	check(minFace >= 10, "no two boards share a face colour", `closest faces ΔE ${minFace.toFixed(1)} (types ${pair})`);
+	check(
+		minFace >= 10,
+		"no two boards share a face colour (the campus's four share the college's)",
+		`closest faces ΔE ${minFace.toFixed(1)} (types ${pair})`,
+	);
 	check(
 		minPicture >= 0.1,
 		"no two pictograms share a shape",
@@ -1448,7 +1458,7 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 		for (let j = i + 1; j < SIGN_TYPES.length; j++) {
 			const a = SIGN_TYPES[i];
 			const b = SIGN_TYPES[j];
-			if (a === 7 && b === 8) continue;
+			if ((a === 7 && b === 8) || sameFamily(a, b)) continue;
 			const d = dE(roofs[a], roofs[b]);
 			if (d < minRoof) {
 				minRoof = d;
@@ -1458,7 +1468,7 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 	}
 	check(
 		minRoof >= 10,
-		"the textured roofs keep their type colours apart (market and grocery share theirs)",
+		"the textured roofs keep their type colours apart (market and grocery share theirs, and the campus)",
 		`closest ΔE ${minRoof.toFixed(1)} (types ${roofPair})`,
 	);
 	setArt({});
@@ -1943,7 +1953,7 @@ section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost 
 		`${art.writes.toFixed(0)} vs ${flat.writes.toFixed(0)}`,
 	);
 
-	// ---- 10f. the bosses (ART-13): their sheets, the flat fallback of before, each on its own, the cost of a fight
+	// ---- 10f. the bosses (ART-14): their sheets, the flat fallback of before, each on its own, the cost of a fight
 	{
 		const BV = require(join(SRC, "client/view/bossView.ts"));
 		const { bossHitRadius, BOSS1_SEGMENT_RADIUS } = require(join(SRC, "shared/game/entities.ts"));

@@ -207,6 +207,12 @@ export class ServerSimulation {
 	 */
 	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
+	 * The admin's switches (docs/MULTIPLAYER.md §10: god, noclip, infinite ammo) onto this survivor's body, right
+	 * before its step. They belong to the PERSON, not to a body: a stand-up, a reset or a trip to the lobby builds a
+	 * new body, and the switch must still be on in it. server/admin/adminWorld.ts sets it; undefined = nobody has any.
+	 */
+	adminMods?: (sp: ServerPlayer) => void;
+	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
 	 * town (combat, progress, projectiles and the F3 world below) it is rebuilt when a world ends (MP-22).
@@ -528,10 +534,7 @@ export class ServerSimulation {
 				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
 				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
 				// §9.3: an assisted run earns no achievement (Thomas Edison), as it earns no coins
-				paysRewards: slot => {
-					const sp = this.bySlot.get(slot);
-					return sp === undefined || this.pays(sp);
-				},
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			out.power = power;
 			const build = new ServerBuild({
@@ -556,6 +559,8 @@ export class ServerSimulation {
 				machines: power,
 				// a door is a way in or a wall to the horde (§3.3), exactly like a construction going up or down
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -577,21 +582,21 @@ export class ServerSimulation {
 					},
 					shove: (z, dir, knock, stun) => reactToHit(z, dir, knock, stun),
 				},
+				// §9.3: an assisted run rides, and earns no Road Trip point
+				paysRewards: sp => this.pays(sp),
 			});
 		}
 		// the backpack verbs work with or without the interactive world (server/sim/backpack.ts): only a build recipe
-		// needs `build`, and ServerCraft refuses one without it before anything is spent
-		out.craft = new ServerCraft({ world, build: out.build });
+		// needs `build`, and ServerCraft refuses one without it before anything is spent. An assisted run cooks and
+		// smelts, and earns no Camp Cook nor Metalworker (§9.3)
+		out.craft = new ServerCraft({ world, build: out.build, paysRewards: slot => this.paysSlot(slot) });
 
 		if (!this.ownsHorde) return out;
 		const horde = new ZombieWorld(world, this.clock);
 		out.horde = horde;
 		const progress = new Progress({
 			saveOf: slot => this.bySlot.get(slot)?.save,
-			paysRewards: slot => {
-				const sp = this.bySlot.get(slot);
-				return sp === undefined || this.pays(sp);
-			},
+			paysRewards: slot => this.paysSlot(slot),
 			// MON-05: the killing blow that made a Horde Breaker
 			titleUnlocked: (slot, titleId) => {
 				const sp = this.bySlot.get(slot);
@@ -690,6 +695,12 @@ export class ServerSimulation {
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
 	private pays(sp: ServerPlayer): boolean {
 		return this.paysRewards === undefined || this.paysRewards(sp);
+	}
+
+	/** the same, for the survivor in `slot` (nobody there: nothing to withhold) */
+	private paysSlot(slot: number): boolean {
+		const sp = this.bySlot.get(slot);
+		return sp === undefined || this.pays(sp);
 	}
 
 	/** §3.6 at the world's midnight: pay who earned the day (`dayRefusal`), then start counting the next one */
@@ -995,6 +1006,7 @@ export class ServerSimulation {
 		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			this.adminMods?.(sp);
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,

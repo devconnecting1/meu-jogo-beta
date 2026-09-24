@@ -75,11 +75,20 @@ function paintImage(img, view, e, resolve) {
 	const rw = e.rectSize[0] > 0 ? e.rectSize[0] : src.w;
 	const rh = e.rectSize[1] > 0 ? e.rectSize[1] : src.h;
 	const sliced = e.slice[2] > e.slice[0] && e.slice[3] > e.slice[1];
+	const tiled = e.tile !== undefined && e.tile[0] > 0 && e.tile[1] > 0;
 	eachPixel(img, view, e, (x, y, i) => {
 		const u = x + view.x + 0.5 - e.x;
 		const v = y + view.y + 0.5 - e.y;
-		const fu = sliced ? sliceMap(u, e.w, e.slice[0], e.slice[2], rw, e.sliceScale) : (u / e.w) * rw;
-		const fv = sliced ? sliceMap(v, e.h, e.slice[1], e.slice[3], rh, e.sliceScale) : (v / e.h) * rh;
+		let fu;
+		let fv;
+		if (tiled) {
+			// ScaleType.Tile: the image repeats every tile[0] x tile[1] px from the label's corner
+			fu = ((((u % e.tile[0]) + e.tile[0]) % e.tile[0]) / e.tile[0]) * rw;
+			fv = ((((v % e.tile[1]) + e.tile[1]) % e.tile[1]) / e.tile[1]) * rh;
+		} else {
+			fu = sliced ? sliceMap(u, e.w, e.slice[0], e.slice[2], rw, e.sliceScale) : (u / e.w) * rw;
+			fv = sliced ? sliceMap(v, e.h, e.slice[1], e.slice[3], rh, e.sliceScale) : (v / e.h) * rh;
+		}
 		const tx = Math.min(ox + rw - 1, Math.max(ox, ox + Math.floor(fu)));
 		const ty = Math.min(oy + rh - 1, Math.max(oy, oy + Math.floor(fv)));
 		const s = (Math.min(src.h - 1, ty) * src.w + Math.min(src.w - 1, tx)) * 4;
@@ -95,17 +104,25 @@ function paintImage(img, view, e, resolve) {
 }
 
 function paintText(img, view, e) {
-	const text = String(e.text).toUpperCase();
-	// font pixels per glyph pixel: the 7-row glyph about as tall as the label's cap height
-	const g = Math.max(1, Math.round((e.px * 0.72) / 7));
-	const tw = text.length * 6 * g - g;
-	const th = 7 * g;
-	const bx = e.x - view.x;
+	const lines = String(e.text).toUpperCase().split("\n");
+	// font pixels per glyph pixel: the 7-row glyph about as tall as the label's cap height -- one step smaller when the
+	// longest line would not fit the label's width with it (this font is wider than the engine's; a scaled label shrinks)
+	let g = Math.max(1, Math.round((e.px * 0.72) / 7));
+	const longest = Math.max(...lines.map(l => l.length));
+	while (g > 1 && longest * 6 * g - g > e.w + 1) g--;
+	// a line is as tall as the label's text size, and the block of lines is aligned as one (a "\n" is a line break)
+	const lineH = Math.max(8 * g, Math.round(e.px * 1.1));
+	const blockH = (lines.length - 1) * lineH + 7 * g;
 	const by = e.y - view.y;
+	const top = e.alignY === "Top" ? by : e.alignY === "Bottom" ? by + e.h - blockH : by + (e.h - blockH) / 2;
+	lines.forEach((text, li) => paintLine(img, view, e, text, g, Math.round(top + li * lineH)));
+}
+
+function paintLine(img, view, e, text, g, Y) {
+	const tw = text.length * 6 * g - g;
+	const bx = e.x - view.x;
 	const x = e.alignX === "Left" ? bx : e.alignX === "Right" ? bx + e.w - tw : bx + (e.w - tw) / 2;
-	const y = e.alignY === "Top" ? by : e.alignY === "Bottom" ? by + e.h - th : by + (e.h - th) / 2;
 	const X = Math.round(x);
-	const Y = Math.round(y);
 	for (let c = 0; c < text.length; c++) {
 		const glyph = FONT[text[c]] ?? FONT[" "];
 		for (let r = 0; r < 7; r++) {

@@ -97,16 +97,23 @@ export interface ServerCraftOptions {
 	 * (server/sim/backpack.ts), and a build recipe is refused before anything is spent.
 	 */
 	build?: ServerBuild;
+	/**
+	 * §9.3: does the run of the survivor in `slot` still earn rewards? An assisted run earns no achievement (Camp Cook,
+	 * Metalworker), as it earns no coins. Left undefined, every run does -- what a pure test wants.
+	 */
+	paysRewards?: (slot: number) => boolean;
 }
 
 export class ServerCraft {
 	private readonly world: WorldData;
 	private readonly build?: ServerBuild;
+	private readonly paysRewards?: (slot: number) => boolean;
 	private readonly limits = new Map<number, Limits>();
 
 	constructor(options: ServerCraftOptions) {
 		this.world = options.world;
 		this.build = options.build;
+		this.paysRewards = options.paysRewards;
 	}
 
 	/** decays the per-survivor cooldowns */
@@ -158,8 +165,8 @@ export class ServerCraft {
 		addItem(save, r.resultKind, r.resultIndex, count);
 		const heat = Rule.craftHeat(r);
 		// CON-04 / ITM-01: what a cooking made is Chef's, what a smelting made Blacksmith's -- counted where the server
-		// crafts, from the recipe's own heat
-		creditCraft(save, heat, count);
+		// crafts, from the recipe's own heat; never in an assisted run (§9.3)
+		if (this.paysRewards?.(slot) ?? true) creditCraft(save, heat, count);
 		return { kind: "crafted", recipe: r.id, count, heat };
 	}
 

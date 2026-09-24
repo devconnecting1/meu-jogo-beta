@@ -9,8 +9,10 @@ import {
 	ShopActionReason,
 	ShopActionRequest,
 	ShopActionResult,
+	StoreState,
 	waitRemotes,
 } from "shared/net/net";
+import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -18,6 +20,8 @@ import {
  *   8 s fallback save can never overwrite the real one
  * - reports are throttled to the server window, coalesced (latest state wins) and skipped when unchanged
  * - coins are display-only here: wallets from the server replace the local copy
+ * - a report is NOT a save: the server alone decides when the DataStore is written (DESIGN_RULES SAV-01: saving is
+ *   automatic, there is no Save button), and says so with a `store` push (`onStoreState`, client/ui/saveIndicator.ts)
  */
 
 const HttpService = game.GetService("HttpService");
@@ -25,8 +29,11 @@ const HttpService = game.GetService("HttpService");
 const REMOTE_TIMEOUT = 30;
 const SEND_INTERVAL = SAVE_MIN_INTERVAL + 0.5;
 
-/** "equip": an outfit or a pet changed — what the other survivors see (MON-04), so it should not wait a minute */
-export type SaveReason = "auto" | "manual" | "death" | "lobby" | "day" | "boss" | "packs" | "menu" | "equip";
+/**
+ * Why a report is sent (the server treats them all alike: dirty, never an immediate write). "equip": an outfit or a pet
+ * changed — what the other survivors see (MON-04), so it should not wait a minute.
+ */
+export type SaveReason = "auto" | "death" | "lobby" | "day" | "boss" | "packs" | "menu" | "equip";
 
 export interface LoadInfo {
 	status: LoadStatus;
@@ -46,18 +53,20 @@ let persistEnabled = false;
 let lastSentAt = -math.huge;
 let lastSentJson = "";
 let sendScheduled = false;
-let manualQueued = false;
-let manualInFlight = false;
 let retryScheduled = false;
+/** what the last report was asked for (the log line of a report too large to send) */
+let lastReason: SaveReason = "auto";
 
 /** progress the server held back (time limits) or a stale report: report the current state again later */
 const RETRY_CLAMPED_SEC = 45;
 const RETRY_OUTDATED_SEC = 1;
 
 const loadListeners = new Set<(info: LoadInfo) => void>();
-const ackListeners = new Set<(ack: SaveAckPayload, manual: boolean) => void>();
+const ackListeners = new Set<(ack: SaveAckPayload) => void>();
 const walletListeners = new Set<() => void>();
 const activateListeners = new Set<() => void>();
+const storeListeners = new Set<(state: StoreState) => void>();
+const STORE_STATES = new Set<string>(["saving", "saved", "failing", "stopped"]);
 
 function subscribe<T>(set: Set<T>, fn: T): () => void {
 	set.add(fn);
@@ -68,9 +77,14 @@ export function onLoad(fn: (info: LoadInfo) => void): () => void {
 	return subscribe(loadListeners, fn);
 }
 
-/** `manual` = the ack answers a report the player asked for (pause → Save) */
-export function onSaveAck(fn: (ack: SaveAckPayload, manual: boolean) => void): () => void {
+/** the server's answer to a report (coins earned, a refusal) */
+export function onSaveAck(fn: (ack: SaveAckPayload) => void): () => void {
 	return subscribe(ackListeners, fn);
+}
+
+/** SAV-01: what happened to a DataStore write of this player's save, as the server tells it */
+export function onStoreState(fn: (state: StoreState) => void): () => void {
+	return subscribe(storeListeners, fn);
 }
 
 /** coins / packs / costumes changed (server wallet applied to the local save) */
@@ -136,6 +150,7 @@ function parseAck(raw: unknown): SaveAckPayload | undefined {
 		clamped: r.clamped === true,
 		wallet: r.wallet as SaveAckPayload["wallet"],
 		push: r.push === true,
+		store: typeIs(r.store, "string") && STORE_STATES.has(r.store) ? (r.store as StoreState) : undefined,
 	};
 }
 
@@ -165,13 +180,14 @@ export function startNet(): void {
 		r.saveAck.OnClientEvent.Connect((raw: unknown) => {
 			const ack = parseAck(raw);
 			if (ack === undefined) return;
-			// the server pushed its wallet on its own (XP, a level, midnight's coins): no report is being answered
+			// the server pushed its wallet on its own (XP, a level, midnight's coins), or news of a write of the save
+			// (SAV-01): no report is being answered
 			if (ack.push === true) {
 				if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
+				const store = ack.store;
+				if (store !== undefined) for (const fn of storeListeners) task.spawn(fn, store);
 				return;
 			}
-			const manual = manualInFlight;
-			manualInFlight = false;
 			if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
 			if (!ack.ok) {
 				if (ack.reason === "readonly" || ack.reason === "stale") {
@@ -186,7 +202,7 @@ export function startNet(): void {
 				lastSentJson = "";
 				scheduleRetry(RETRY_CLAMPED_SEC);
 			}
-			for (const fn of ackListeners) task.spawn(fn, ack, manual);
+			for (const fn of ackListeners) task.spawn(fn, ack);
 		});
 		r.loadRequest.FireServer();
 	});
@@ -236,29 +252,17 @@ export function savingPersistent(): boolean {
 function sendNow(): void {
 	const r = remotes;
 	const token = activeToken;
-	if (!savingEnabled() || r === undefined || token === undefined || getSave === undefined) {
-		manualQueued = false;
-		return;
-	}
+	if (!savingEnabled() || r === undefined || token === undefined || getSave === undefined) return;
 	const json = HttpService.JSONEncode(getSave());
-	const manual = manualQueued;
-	manualQueued = false;
-	if (json === lastSentJson) {
-		// nothing new since the last report: the server already has it
-		if (manual) {
-			const ack: SaveAckPayload = { ok: true, earned: 0, earnedDays: 0, earnedBosses: 0, clamped: false };
-			for (const fn of ackListeners) task.spawn(fn, ack, true);
-		}
-		return;
-	}
+	// nothing new since the last report: the server already has it
+	if (json === lastSentJson) return;
 	if (json.size() > MAX_SAVE_PAYLOAD) {
 		warn("[saveClient] save too large to report");
-		print(`[saveClient] the report is ${json.size()} chars`);
+		print(`[saveClient] the report is ${json.size()} chars (last asked for: ${lastReason})`);
 		return;
 	}
 	lastSentJson = json;
 	lastSentAt = os.clock();
-	manualInFlight = manualInFlight || manual;
 	r.saveRequest.FireServer(token, json);
 }
 
@@ -274,10 +278,11 @@ function scheduleRetry(delay: number): void {
 /**
  * Report progress to the server. Throttled to one report per server window; calls inside the
  * window are merged into one report of the latest state. Returns false when saving is off.
+ * (The name is historical: this REPORTS; the server writes the DataStore on its own schedule, SAV-01.)
  */
 export function requestSave(reason: SaveReason): boolean {
 	if (!savingEnabled()) return false;
-	if (reason === "manual") manualQueued = true;
+	lastReason = reason;
 	const wait = lastSentAt + SEND_INTERVAL - os.clock();
 	if (wait <= 0) {
 		sendNow();
@@ -303,11 +308,28 @@ const ACTION_REASONS = new Set<string>([
 	"network",
 ]);
 
-/** shop purchase / rebirth. YIELDS until the server answers; call from a click handler or task. */
+/**
+ * The server's ShopAction bucket, kept here too (shared/net/shopGuard.ts): what it would only refuse is refused here
+ * without being sent, so a player clicking Buy as fast as they can never reaches the §8.2 flood line.
+ */
+const shopBucket = newShopBucket(os.clock());
+/** the last purchase nonce handed out (shared/net/shopGuard.ts): the server charges one nonce once */
+let buyNonce = 0;
+
+/**
+ * shop purchase / rebirth. YIELDS until the server answers; call from a click handler or task. A pack purchase is
+ * numbered here (`nonce`): the same request again -- replayed, or sent twice -- is answered as the first, charged once.
+ */
 export function invokeShopAction(request: ShopActionRequest): ShopActionResult {
 	const r = remotes;
 	if (r === undefined) return { ok: false, reason: "network" };
-	const [ok, raw] = pcall(() => r.shopAction.InvokeServer(request));
+	if (takesShopToken(request.kind) && !takeShopToken(shopBucket, os.clock())) return { ok: false, reason: "rate" };
+	let sent = request;
+	if (request.kind === "buyPack" && request.nonce === undefined) {
+		buyNonce = buyNonce >= SHOP_NONCE_MAX ? 1 : buyNonce + 1;
+		sent = { kind: "buyPack", packId: request.packId, nonce: buyNonce };
+	}
+	const [ok, raw] = pcall(() => r.shopAction.InvokeServer(sent));
 	if (!ok || !typeIs(raw, "table")) return { ok: false, reason: "network" };
 	const res = raw as Record<string, unknown>;
 	if (res.wallet !== undefined) applyServerWallet(res.wallet);

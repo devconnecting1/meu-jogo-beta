@@ -1,5 +1,6 @@
 import type { LoadStatus } from "shared/net/net";
 import type { AdminOp } from "./ops";
+import type { AdminWorldOp } from "./worldOps";
 
 /*
  * Admin protocol (ReplicatedStorage/PZAdminNet). Every request is authorized on the server by the caller's
@@ -7,7 +8,7 @@ import type { AdminOp } from "./ops";
  *
  *   AdminRequest   C→S  RemoteFunction  (AdminRequest) → AdminResponse   admins only (others get "forbidden")
  *   AdminEvent     S→C  RemoteEvent     (AdminEvent)                     patch (to the edited player),
- *                                                                        announce (everyone), watch (admins)
+ *                                                                        announce and clearFx (everyone), watch (admins)
  *   AdminPatchAck  C→S  RemoteEvent     (rev)                            "patch `rev` applied" from the edited
  *                                                                        player (any player, own session only)
  *
@@ -79,10 +80,18 @@ export type AdminRequest =
 	| { kind: "auditLog" }
 	/** live data of a player on every progress report (0 = stop) */
 	| { kind: "watch"; userId: number }
-	/** the admin used a world tool in the current run: the server stops crediting it (coins, achievements...) */
+	/**
+	 * A client-simulated world only (MP_PHASE < 2, or offline): the admin used a world tool in the current run, so the
+	 * server stops crediting it (coins, achievements...). A server-owned world never needs it: `world` marks the runs.
+	 */
 	| { kind: "assist" }
 	/** audit entry for a tool that runs in the admin's own (client-simulated) world */
-	| { kind: "logLocal"; action: string; details: string };
+	| { kind: "logLocal"; action: string; details: string }
+	/**
+	 * §10 (F6-6B): a world tool, run by the SERVER on the world it owns (server/admin/adminWorld.ts), validated by
+	 * shared/admin/worldOps.ts `readWorldOp`, audited, and answered with AdminWorldData
+	 */
+	| ({ kind: "world" } & AdminWorldOp);
 
 export interface AdminResponse {
 	ok: boolean;
@@ -214,7 +223,9 @@ export type AdminEvent =
 			// (no admin name: the player is told "an administrator", client/admin/patches.ts)
 	  }
 	| { kind: "announce"; text: string; from: string }
-	| { kind: "watch"; row: PlayerRow };
+	| { kind: "watch"; row: PlayerRow }
+	/** an admin cleared the blood, the acid and the corpses (§10): every client drops its decals (client/admin/patches.ts) */
+	| { kind: "clearFx" };
 
 export interface AdminRemotes {
 	request: RemoteFunction;

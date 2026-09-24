@@ -127,6 +127,11 @@ export interface ServerVehiclesOptions {
 	/** everything that happened to a ride (RideEvent) */
 	event?: (sp: ServerPlayer, e: RideEvent) => void;
 	hooks?: VehicleHooks;
+	/**
+	 * §9.3: does this rider's run still earn rewards? An assisted run rides as far as it likes and earns no Road Trip
+	 * point, as it earns no coins. Left undefined, every run does -- what a pure test wants.
+	 */
+	paysRewards?: (sp: ServerPlayer) => boolean;
 }
 
 /** the vehicle under a rider: what the parked solid was, carried while it is out of the world */
@@ -159,6 +164,7 @@ export class ServerVehicles {
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly event?: (sp: ServerPlayer, e: RideEvent) => void;
 	private readonly hooks: VehicleHooks;
+	private readonly paysRewards?: (sp: ServerPlayer) => boolean;
 	private readonly riders = new Map<number, Ridden>();
 	/** seconds until this slot may get on or off again */
 	private readonly cooldown = new Map<number, number>();
@@ -175,6 +181,7 @@ export class ServerVehicles {
 		this.fx = options.fx;
 		this.event = options.event;
 		this.hooks = options.hooks ?? {};
+		this.paysRewards = options.paysRewards;
 	}
 
 	/** is this slot on a vehicle? */
@@ -509,7 +516,8 @@ export class ServerVehicles {
 		const points = math.floor(rec.riderCarry / RIDER_UNITS_PER_POINT);
 		if (points > 0) {
 			rec.riderCarry -= points * RIDER_UNITS_PER_POINT;
-			creditRide(sp.save, points);
+			// never in an assisted run (§9.3): the odometer still turns, the achievement does not
+			if (this.paysRewards?.(sp) ?? true) creditRide(sp.save, points);
 		}
 		this.tell(sp, { kind: "distance", vehicle: rec.def.kind, units });
 	}

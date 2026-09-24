@@ -433,7 +433,7 @@ check(
 	`${signIds.length} letreiros`,
 );
 check(
-	"2o as folhas dos personagens (charSheets.ts: sobreviventes, armas, zumbis, cachorros, passaros e os chefes, ART-13)",
+	"2o as folhas dos personagens (charSheets.ts: sobreviventes, armas, zumbis, cachorros, passaros e os chefes, ART-14)",
 	laterNames.length === 24 &&
 		["survivorsA", "weapons", "zombies", "dogs", "birds", "bossGiant", "bossCentipedeRim"].every(n =>
 			laterNames.includes(n),

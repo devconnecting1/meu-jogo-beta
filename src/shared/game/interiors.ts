@@ -52,7 +52,16 @@ export type RoomKind =
 	| "ward"
 	| "treatment"
 	| "diner"
-	| "galley";
+	| "galley"
+	// the college campus (EDI-17)
+	| "foyer"
+	| "lecture"
+	| "stacks"
+	| "reading"
+	| "lab"
+	| "chemstore"
+	| "dormroom"
+	| "common";
 
 export type FloorKind = "wood" | "tile" | "shop" | "carpet" | "kitchen" | "bath" | "concrete";
 
@@ -90,9 +99,28 @@ export type FurnitureKind =
 	| "prep"
 	| "booth"
 	| "safe"
-	| "bench";
+	| "bench"
+	// the college campus (EDI-17)
+	| "lectern"
+	| "seats"
+	| "labbench"
+	| "fumehood"
+	| "chemshelf"
+	| "bunk"
+	| "vending";
 
-export type DecorKind = "rug" | "mat" | "blood" | "papers" | "glass" | "chair" | "chairDown" | "board" | "curtain";
+export type DecorKind =
+	| "rug"
+	| "mat"
+	| "blood"
+	| "papers"
+	| "glass"
+	| "chair"
+	| "chairDown"
+	| "board"
+	| "curtain"
+	/** a cork notice board on a wall (the campus's lobbies and halls) */
+	| "notice";
 
 export type OpeningKind = "door" | "window" | "inner";
 
@@ -156,7 +184,10 @@ export interface BuildingPlan {
 }
 
 export interface PlanInput {
-	/** building type (1/2 house, 3 school, 4 hospital, 5 gas, 6 pharmacy, 7/8 market, 9 gun shop, 10 cloth, 11 restaurant) */
+	/**
+	 * building type (1/2 house, 3 school, 4 hospital, 5 gas, 6 pharmacy, 7/8 market, 9 gun shop, 10 cloth, 11 restaurant;
+	 * the campus: 12 main hall, 13 library, 14 science lab, 15 dorm)
+	 */
 	type: number;
 	/** the footprint's bounding box (world) */
 	rect: Rect;
@@ -269,8 +300,11 @@ interface Template {
 	doors: Array<[number, number, LSide, number]>;
 	/** at most this many secondary doors */
 	extra: number;
-	/** interior openings between adjacent cells: c1, r1, c2, r2, wide (1: open plan, most of the wall) */
-	links: Array<[number, number, number, number, number]>;
+	/**
+	 * interior openings between adjacent cells: c1, r1, c2, r2, wide (1: open plan, most of the wall), and where along
+	 * the wall (a share of it, 0.5 when left out: the middle) -- off the middle, the rest of the wall is free for a piece
+	 */
+	links: Array<[number, number, number, number, number, number?]>;
 }
 
 const HOUSE_ROOMS: Record<string, RoomKind> = {
@@ -830,6 +864,220 @@ const HOSPITAL: Array<Template> = [
 	},
 ];
 
+// ---------------------------------------------------------------------------------------------- the campus (EDI-17)
+//
+// Four buildings of 600-760 along their street round a quad (shared/game/campus.ts): the main hall 400 deep, the
+// others 352. Each faces its own street (the main door, EDI-01) and has its back on the quad or on a lane, where the
+// secondary doors go (EDI-09). The main door is in the middle column of every template. None is a box (EDI-14): the
+// hall is a U round its entrance court, the library a front pavilion between set-back stacks, the lab an L round the
+// chemicals' delivery bay (or a T), the dorm a T whose common room runs on to the quad. Each notch is shallow enough
+// to leave the rooms either side of it their furniture (a deeper one leaves the dorm's common room no wall for the
+// sofa, the library's stacks no room for their rows).
+//
+// What makes these rooms furnishable at this size is where the doorways are: a doorway in the middle of every wall
+// of a 200-unit room leaves no wall for anything (EDI-12 keeps 72 u clear in front of each). So the room of the
+// middle column is a foyer that passes people through (tiled, a notice board on a wall, nothing that must fit), the
+// rooms either side are entered off it, and a link that must share a wall with a piece sits off the middle (the 6th
+// number of a link).
+
+const CAMPUS_ROOMS: Record<string, RoomKind> = {
+	A: "lecture",
+	a: "lecture",
+	E: "foyer",
+	H: "corridor",
+	O: "office",
+	S: "stacks",
+	s: "stacks",
+	R: "reading",
+	L: "lab",
+	l: "lab",
+	C: "chemstore",
+	B: "dormroom",
+	b: "dormroom",
+	M: "common",
+	W: "bath",
+};
+
+/**
+ * The main hall (~700 × 400), an L on the quad (EDI-14): the foyer at the door, a lecture room either side of it
+ * (or a lecture room and the faculty office), the back corridor with its lockers along two thirds of the building,
+ * an exit at its end and the door onto the quad; a paved patio on the quad behind the third room. The street front
+ * stays whole: the sign goes beside the door (ART-07).
+ */
+const CAMPUS_HALL: Array<Template> = [
+	{
+		cols: [36, 28, 36],
+		rows: [60, 40],
+		map: [
+			["A", "E", "a"],
+			["H", "H", "."],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		// the corridor's door onto the quad, then its two ends (the near one onto the patio)
+		doors: [
+			[1, 1, "K", 0.5],
+			[0, 1, "L", 0.5],
+			[1, 1, "R", 0.5],
+		],
+		extra: 2,
+		// the lecture rooms off the foyer, towards the front: the back wall is the seats'
+		links: [
+			[1, 0, 0, 0, 0, 0.15],
+			[1, 0, 2, 0, 0, 0.15],
+			[1, 0, 1, 1, 0],
+		],
+	},
+	{
+		cols: [38, 26, 36],
+		rows: [60, 40],
+		map: [
+			["A", "E", "O"],
+			[".", "H", "H"],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		doors: [
+			[1, 1, "K", 0.5],
+			[2, 1, "R", 0.5],
+			[1, 1, "L", 0.5],
+		],
+		extra: 2,
+		links: [
+			[1, 0, 0, 0, 0, 0.15],
+			[1, 0, 2, 0, 0, 0.15],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/**
+ * The library (~700 × 352), an L on the quad (EDI-14): the reading room with the front desk at the door, the stacks
+ * either side of it (or behind one wall of it), entered at the back of the reading room so its front stays the
+ * desk's; one wing of stacks stops short of the back, a paved patio behind it. The second door is a fire exit of the
+ * stacks (onto the lane, or the patio): a door at the back of the reading room as well would leave its walls no room
+ * for the desk and the tables.
+ */
+const CAMPUS_LIBRARY: Array<Template> = [
+	{
+		cols: [30, 40, 30],
+		rows: [80, 20],
+		map: [
+			["S", "R", "s"],
+			["S", ".", "s"],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		doors: [
+			[0, 0, "L", 0.5],
+			[2, 0, "R", 0.5],
+			[0, 1, "K", 0.5],
+			[2, 1, "K", 0.5],
+		],
+		extra: 1,
+		// as far back as the front row goes: its side walls ahead of them are the desk's
+		links: [
+			[1, 0, 0, 0, 0, 1],
+			[1, 0, 2, 0, 0, 1],
+		],
+	},
+	{
+		cols: [56, 44],
+		rows: [72, 28],
+		map: [
+			["R", "S"],
+			[".", "S"],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [0, 0],
+		doors: [
+			[1, 0, "R", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 1,
+		links: [[0, 0, 1, 0, 0, 0.85]],
+	},
+];
+
+/**
+ * The science lab (~700 × 352), an L or a T on the quad (EDI-14): the prep hall at the door with the door onto the
+ * quad, a teaching lab on one side and the windowless chemicals store on the other, which stops short of the back
+ * where the deliveries came (a paved bay) -- or two labs either side of the prep hall, which runs on to the quad
+ * between their two back notches.
+ */
+const CAMPUS_LAB: Array<Template> = [
+	{
+		cols: [40, 26, 34],
+		rows: [72, 28],
+		map: [
+			["L", "E", "C"],
+			["L", "E", "."],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		doors: [
+			[1, 1, "K", 0.5],
+			[0, 0, "L", 0.5],
+		],
+		extra: 2,
+		links: [
+			[1, 0, 0, 0, 0, 0.3],
+			[1, 0, 2, 0, 0, 0.3],
+		],
+	},
+	{
+		cols: [37, 26, 37],
+		rows: [72, 28],
+		map: [
+			["L", "E", "l"],
+			[".", "E", "."],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		doors: [
+			[1, 1, "K", 0.5],
+			[0, 0, "L", 0.5],
+			[2, 0, "R", 0.5],
+		],
+		extra: 2,
+		links: [
+			[1, 0, 0, 0, 0, 0.3],
+			[1, 0, 2, 0, 0, 0.3],
+		],
+	},
+];
+
+/**
+ * The dorm (~700 × 352), a T on the quad (EDI-14): the common room from the street door to the door onto the quad,
+ * a bunk room either side entered at its front, so each keeps its walls for the bunk beds (a bunk room with a door
+ * of its own as well has none left), stopping short of the back (a paved notch behind each). No washroom: at this
+ * size one would leave a bunk room no wall for a bed -- the showers are down the hall, off the map.
+ */
+const CAMPUS_DORM: Array<Template> = [
+	{
+		cols: [36, 28, 36],
+		rows: [78, 22],
+		map: [
+			["B", "M", "b"],
+			[".", "M", "."],
+		],
+		rooms: CAMPUS_ROOMS,
+		main: [1, 0],
+		doors: [
+			[1, 1, "K", 0.5],
+			[0, 0, "L", 0.5],
+			[2, 0, "R", 0.5],
+		],
+		extra: 1,
+		// the bunk rooms' doorways as far to the front as they go: the back of the common room's side walls is the
+		// sofa's and the TV's
+		links: [
+			[1, 0, 0, 0, 0, 0],
+			[1, 0, 2, 0, 0, 0],
+		],
+	},
+];
+
 /** the templates that fit a footprint of this type, `along` × `depth` */
 function templatesFor(bt: number, along: number, depth: number): Array<Template> {
 	if (bt === 1 || bt === 2) {
@@ -849,6 +1097,10 @@ function templatesFor(bt: number, along: number, depth: number): Array<Template>
 	if (bt === 8) return SMALL_MARKET;
 	if (bt === 11) return RESTAURANT;
 	if (bt === 9) return smallShop("X");
+	if (bt === 12) return CAMPUS_HALL;
+	if (bt === 13) return CAMPUS_LIBRARY;
+	if (bt === 14) return CAMPUS_LAB;
+	if (bt === 15) return CAMPUS_DORM;
 	return smallShop("R");
 }
 
@@ -876,7 +1128,18 @@ const HOUSE_FALLBACK: Template = {
 /** anything else's last resort: one room (never seen on the validated seeds: every template fits a centred door) */
 function fallbackFor(bt: number): Template {
 	if (bt === 1 || bt === 2) return HOUSE_FALLBACK;
-	const kind: RoomKind = bt === 3 || bt === 4 ? "lobby" : bt === 11 ? "diner" : "sales";
+	const kind: RoomKind =
+		bt === 3 || bt === 4 || bt === 12
+			? "lobby"
+			: bt === 11
+				? "diner"
+				: bt === 13
+					? "reading"
+					: bt === 14
+						? "lab"
+						: bt === 15
+							? "common"
+							: "sales";
 	return { cols: [1], rows: [1], map: [["A"]], rooms: { A: kind }, main: [0, 0], doors: [], extra: 0, links: [] };
 }
 
@@ -916,6 +1179,18 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	treatment: { floor: "tile", win: 0, early: false },
 	diner: { floor: "wood", win: 1, early: true },
 	galley: { floor: "kitchen", win: 0, early: false },
+	// the campus (EDI-17): the reading room, a lab and a bunk room are furnished round their window (a dorm room's
+	// window is the one thing it is sure of); a lecture room, the stacks and the common room get theirs where the
+	// seats, the shelves and the sofa leave wall (a lecture room's seats need its back wall, and on the quad side of
+	// the hall that wall is outside); the chemicals store has none (a real one is a locked, windowless room)
+	foyer: { floor: "tile", win: 0, early: false },
+	lecture: { floor: "shop", win: 1, early: false },
+	stacks: { floor: "carpet", win: 1, early: false },
+	reading: { floor: "carpet", win: 1, early: true },
+	lab: { floor: "tile", win: 1, early: true },
+	chemstore: { floor: "concrete", win: 0, early: false },
+	dormroom: { floor: "carpet", win: 1, early: true },
+	common: { floor: "wood", win: 1, early: false },
 };
 
 // ---------------------------------------------------------------------------------------------- local geometry
@@ -1347,13 +1622,13 @@ class Planner {
 			this.openings.push(o);
 			extra++;
 		}
-		for (const [i1, j1, i2, j2, wide] of tpl.links) {
+		for (const [i1, j1, i2, j2, wide, at] of tpl.links) {
 			const s: LSide = i2 > i1 ? "R" : i2 < i1 ? "L" : j2 > j1 ? "K" : "F";
 			const e = this.edgeOf(i1, j1, s);
 			if (e.out !== undefined) continue;
 			const len = e.b - e.a - TI - 32;
 			const w = wide === 1 ? math.max(INNER_DOOR_W, math.floor(len * 0.8)) : INNER_DOOR_W;
-			const o = this.cutIn(e, w, 0.5, "inner", false);
+			const o = this.cutIn(e, w, at ?? 0.5, "inner", false);
 			if (o === undefined) continue;
 			this.openings.push(o);
 			this.join(this.at(i1, j1), this.at(i2, j2));
@@ -1584,6 +1859,28 @@ class Planner {
 		}
 	}
 
+	/**
+	 * The outside wall of cell (i, j) on side s run on through the cells of the same room whose same side is outside
+	 * too: a campus lecture room's side wall is one wall however many rows cut it (the window pass, EDI-17).
+	 */
+	sideRun(i: number, j: number, s: LSide): Edge {
+		const e = this.edgeOf(i, j, s);
+		if (e.out === undefined) return e;
+		const id = this.at(i, j);
+		const alongU = e.alongU;
+		const same = (k: number) => {
+			const ci = alongU ? k : i;
+			const cj = alongU ? j : k;
+			return this.at(ci, cj) === id && this.edgeOf(ci, cj, s).out !== undefined;
+		};
+		let lo = alongU ? i : j;
+		let hi = lo;
+		while (same(lo - 1)) lo--;
+		while (same(hi + 1)) hi++;
+		const line = alongU ? this.us : this.vs;
+		return { alongU, at: e.at, a: line[lo], b: line[hi + 1], out: e.out };
+	}
+
 	/** a window on edge e at fraction k (nudged along if blocked); `added` collects it when walls exist already */
 	tryWindow(e: Edge, k: number, added: Array<LOpening> | undefined): boolean {
 		for (const nudge of WINDOW_NUDGE) {
@@ -1608,6 +1905,9 @@ class Planner {
 	 */
 	cutWindows(): void {
 		const isHouse = this.inp.type === 1 || this.inp.type === 2;
+		// the campus's rooms span the rows its notches cut (EDI-17): each of their outside walls is taken whole
+		const campus = this.inp.type >= 12 && this.inp.type <= 15;
+		const runs: Array<string> = [];
 		// the windows the rooms took while being furnished are cut out of the walls with these
 		const added: Array<LOpening> = [...this.late];
 		for (let j = 0; j < this.nr; j++) {
@@ -1617,9 +1917,14 @@ class Planner {
 				const info = ROOM_INFO[this.kinds[room]];
 				if (info.win === 0) continue;
 				for (const s of LSIDES) {
-					const e = this.edgeOf(i, j, s);
+					const e = campus ? this.sideRun(i, j, s) : this.edgeOf(i, j, s);
 					// a shop's front row is done; its side walls get a window where the wall is free
 					if (e.out === undefined || (info.win === 2 && s === "F")) continue;
+					if (campus) {
+						const key = `${s}:${e.at}:${e.a}`;
+						if (runs.includes(key)) continue;
+						runs.push(key);
+					}
 					const len = e.b - e.a - END_MARGIN * 2;
 					if (len < WINDOW_W + 40) continue;
 					// "not every wall": a house keeps a side window two times in three
@@ -2723,6 +3028,15 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	booth: { low: true, loot: false },
 	safe: { low: false, loot: true },
 	bench: { low: true, loot: false },
+	// the campus (EDI-17): the loot is where it was kept -- the chemicals shelf, the vending machine (and the stacks'
+	// bookcases, the dorm's wardrobes, above); a bunk bed is two beds high and stops a bullet, a lab bench does not
+	lectern: { low: true, loot: false },
+	seats: { low: true, loot: false },
+	labbench: { low: true, loot: false },
+	fumehood: { low: false, loot: false },
+	chemshelf: { low: false, loot: true },
+	bunk: { low: false, loot: false },
+	vending: { low: false, loot: true },
 };
 
 /** the pieces that say what a room is: a window takes their place only as a last resort (`forceWindow`) */
@@ -2742,6 +3056,10 @@ const DEFINING: Array<FurnitureKind> = [
 	"checkout",
 	"reception",
 	"safe",
+	"seats",
+	"lectern",
+	"fumehood",
+	"bunk",
 ];
 
 // ---------------------------------------------------------------------------------------------- furnishing by room
@@ -2857,6 +3175,10 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 			pl.againstWall(ctx, "lockers", 160, 32);
 			pl.againstWall(ctx, "lockers", 160, 32);
 			pl.againstWall(ctx, "lockers", 128, 32);
+		} else if (bt === 12) {
+			// the campus hall's back hall: a bank of lockers and a bench by the door to the quad
+			pl.againstWall(ctx, "lockers", 128, 32);
+			pl.againstWall(ctx, "bench", 112, 36);
 		} else {
 			pl.againstWall(ctx, "bench", 112, 36);
 		}
@@ -2865,6 +3187,11 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 			pl.island(ctx, "reception", 168, 52, true);
 			pl.againstWall(ctx, "bench", 128, 36);
 			pl.againstWall(ctx, "cabinet", 56, 36);
+		} else if (bt === 12) {
+			// the campus hall's lobby: the vending machine the students lived on, a bench, the trophy cabinet
+			pl.againstWall(ctx, "vending", 56, 44);
+			pl.againstWall(ctx, "bench", 112, 36);
+			pl.againstWall(ctx, "cabinet", 72, 36);
 		} else {
 			pl.againstWall(ctx, "cabinet", 72, 36);
 			pl.againstWall(ctx, "bench", 128, 36);
@@ -2886,6 +3213,76 @@ function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
 		pl.againstWall(ctx, "counter", 160, 44);
 		pl.againstWall(ctx, "fridge", 64, 48);
 		pl.island(ctx, "prep", 128, 56, true);
+	} else {
+		furnishCampus(pl, ctx);
+	}
+}
+
+/**
+ * The campus's rooms (EDI-17), each with the piece that says what it is (EDI-08): tiered seats and a lectern in a
+ * lecture room, the stacks' shelves, the front desk and reading tables, the lab benches and a fume hood, the chemicals
+ * shelves, the bunk beds, the common room's sofa. Every rule of `fits` holds (paths two bodies wide, nothing in front
+ * of an opening), so a room too small for a piece simply goes without it (the validator names such a room).
+ */
+function furnishCampus(pl: Planner, ctx: RoomCtx): void {
+	const k = ctx.kind;
+	const rng = pl.rng;
+	if (k === "lecture") {
+		// two tiers of seats rising to the back wall, facing the lectern at the front (the room is ~200 deep: the
+		// lectern keeps a path's width from the seats); a wide room gets a second block with an aisle between
+		const seats =
+			pl.againstWall(ctx, "seats", 176, 72, "K", true) ||
+			pl.againstWall(ctx, "seats", 144, 64, "K", true) ||
+			pl.againstWall(ctx, "seats", 144, 64);
+		if (seats) pl.againstWall(ctx, "seats", 144, 72, "K", true);
+		if (!pl.againstWall(ctx, "lectern", 56, 40, "F", true)) pl.againstWall(ctx, "lectern", 56, 40);
+		if (rng.chance(0.5)) pl.againstWall(ctx, "cabinet", 56, 36);
+	} else if (k === "stacks") {
+		// free-standing ranges first, front to back with aisles two bodies wide, then shelves along the walls
+		if (pl.grid(ctx, "bookcase", 112, 28, false, 3, 1, 0, 1, PATH) === 0) pl.island(ctx, "bookcase", 96, 28, true);
+		if (!pl.againstWall(ctx, "bookcase", 140, 28, "K")) pl.againstWall(ctx, "bookcase", 112, 28);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bookcase", 120, 28);
+		pl.againstWall(ctx, "bookcase", 120, 28);
+		pl.againstWall(ctx, "bookcase", 96, 28);
+	} else if (k === "reading") {
+		// the front desk by a side wall near the door, reading tables in the middle, a shelf of new books
+		const desk =
+			pl.againstWall(ctx, "reception", 128, 44, "L", true) ||
+			pl.againstWall(ctx, "reception", 128, 44, "R", true) ||
+			pl.againstWall(ctx, "reception", 112, 44, "L", true) ||
+			pl.againstWall(ctx, "reception", 112, 44, "R", true) ||
+			pl.againstWall(ctx, "reception", 112, 44);
+		if (!desk) pl.againstWall(ctx, "reception", 88, 40);
+		if (pl.grid(ctx, "table", 112, 64, true, 2, 2, 0.3, 1, PATH) === 0) {
+			if (!pl.againstWall(ctx, "table", 112, 64, "K", true)) pl.againstWall(ctx, "table", 96, 60);
+		}
+		pl.againstWall(ctx, "bookcase", 96, 28);
+	} else if (k === "lab") {
+		// the fume hood on the back wall, benches along the walls and one in the middle, the reagents' shelf
+		if (!pl.againstWall(ctx, "fumehood", 96, 44, "K")) pl.againstWall(ctx, "fumehood", 80, 40);
+		const island = pl.island(ctx, "labbench", 136, 48, false) || pl.island(ctx, "labbench", 112, 48, true);
+		pl.againstWall(ctx, "labbench", 136, 48);
+		if (!island) pl.againstWall(ctx, "labbench", 112, 48);
+		if (!pl.againstWall(ctx, "chemshelf", 112, 32)) pl.againstWall(ctx, "chemshelf", 80, 32);
+	} else if (k === "chemstore") {
+		if (!pl.againstWall(ctx, "chemshelf", 136, 36, "K")) pl.againstWall(ctx, "chemshelf", 96, 32);
+		pl.againstWall(ctx, "chemshelf", 96, 32);
+	} else if (k === "dormroom") {
+		// two bunk beds (head to a wall), the window, a wardrobe and a desk
+		const bunk = pl.againstWall(ctx, "bunk", 64, 124) || pl.againstWall(ctx, "bunk", 124, 64);
+		pl.roomWindow(ctx);
+		if (bunk) pl.againstWall(ctx, "bunk", 64, 124);
+		pl.againstWall(ctx, "wardrobe", 72, 40);
+		pl.againstWall(ctx, "desk", 88, 44);
+	} else if (k === "common") {
+		// the common room: a sofa on the back wall, the window, the TV, a table if there is room. No fridge: in a
+		// room this narrow it ends up beside a doorway and closes it to the horde (EDI-11); the food the students
+		// kept is in their rooms, where the dorm is searched
+		if (!pl.againstWall(ctx, "sofa", 136, 52, "K")) pl.againstWall(ctx, "sofa", 100, 48);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "tv", 96, 28);
+		if (rng.chance(0.6)) pl.island(ctx, "table", 88, 64, true);
 	}
 }
 
@@ -2908,6 +3305,18 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 		if (rng.chance(0.5)) pl.decorAt("papers", cu + (rng.next() - 0.5) * w * 0.5, cv + h * 0.2, 40, 32, rng.next());
 	} else if (k === "office" || k === "lobby") {
 		pl.decorAt("papers", cu + (rng.next() - 0.5) * w * 0.4, cv, 44, 34, rng.next());
+	} else if (k === "lecture") {
+		// the projection screen / whiteboard on the front wall, facing the seats
+		pl.decorAt("board", cu, c.v0 + 6, math.min(180, w * 0.6), 8, 0);
+		if (rng.chance(0.6)) pl.decorAt("papers", cu + (rng.next() - 0.5) * w * 0.5, cv, 40, 32, rng.next());
+	} else if (k === "reading" || k === "stacks" || k === "dormroom") {
+		if (k !== "stacks") pl.decorAt("rug", cu, cv, math.min(140, w * 0.4), math.min(96, h * 0.35), 0);
+		if (rng.chance(0.7)) pl.decorAt("papers", cu + (rng.next() - 0.5) * w * 0.5, cv + h * 0.15, 44, 34, rng.next());
+	} else if (k === "lab") {
+		// broken glassware on the floor (the lab was left in a hurry)
+		if (rng.chance(0.6)) pl.decorAt("glass", cu + (rng.next() - 0.5) * w * 0.4, cv, 60, 28, 0);
+	} else if (k === "common") {
+		pl.decorAt("rug", cu, cv, math.min(150, w * 0.45), math.min(104, h * 0.4), 0);
 	} else if (k === "ward") {
 		// curtains between the beds
 		for (const p of pl.pieces) {
@@ -2922,10 +3331,23 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			}
 		}
 	}
+	// the campus's notice boards: flyers for the last classes, on a wall of the halls and the lobby (EDI-17)
+	const bt = pl.inp.type;
+	if (bt >= 12 && bt <= 15 && (k === "foyer" || k === "corridor" || k === "common")) {
+		noticeBoard(pl, ctx);
+	}
 	// chairs round every table and desk (flat, EDI-12: a chair is clutter, not a wall), a few knocked over
 	for (const p of pl.pieces) {
 		if (p.room !== ctx.id) continue;
-		if (p.kind !== "table" && p.kind !== "schooldesk" && p.kind !== "desk" && p.kind !== "teacherdesk") continue;
+		if (
+			p.kind !== "table" &&
+			p.kind !== "schooldesk" &&
+			p.kind !== "desk" &&
+			p.kind !== "teacherdesk" &&
+			p.kind !== "labbench"
+		) {
+			continue;
+		}
 		const wall = p.kind === "desk" || p.kind === "teacherdesk";
 		const along = p.u1 - p.u0 >= p.v1 - p.v0;
 		const sides: Array<LSide> = wall ? [p.face] : along ? ["F", "K"] : ["L", "R"];
@@ -2950,6 +3372,34 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			48,
 			rng.next() * 6,
 		);
+	}
+}
+
+/**
+ * A notice board flat on a wall of the room (decoration: it blocks nothing), the back wall first: never across a
+ * doorway or a window, never under a piece. A room whose walls are all taken goes without.
+ */
+function noticeBoard(pl: Planner, ctx: RoomCtx): void {
+	const c = biggest(ctx).inner;
+	const cu = (c.u0 + c.u1) / 2;
+	const cv = (c.v0 + c.v1) / 2;
+	const along = math.min(96, (c.u1 - c.u0) * 0.5);
+	const across = math.min(96, (c.v1 - c.v0) * 0.5);
+	const t = 8;
+	const spots: Array<LR> = [
+		lr(cu - along / 2, cu + along / 2, c.v1 - 2 - t, c.v1 - 2),
+		lr(c.u0 + 2, c.u0 + 2 + t, cv - across / 2, cv + across / 2),
+		lr(c.u1 - 2 - t, c.u1 - 2, cv - across / 2, cv + across / 2),
+		lr(cu - along / 2, cu + along / 2, c.v0 + 2, c.v0 + 2 + t),
+	];
+	for (const q of spots) {
+		if (!pl.freeFloor(q)) continue;
+		const grown = lr(q.u0 - 24, q.u1 + 24, q.v0 - 24, q.v1 + 24);
+		let clear = true;
+		for (const o of pl.openings) if (overlapLR(grown, o.band)) clear = false;
+		if (!clear) continue;
+		pl.decorAt("notice", (q.u0 + q.u1) / 2, (q.v0 + q.v1) / 2, q.u1 - q.u0, q.v1 - q.v0, 0);
+		return;
 	}
 }
 

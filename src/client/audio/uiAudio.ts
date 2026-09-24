@@ -8,7 +8,8 @@
  *    the full-screen `InputBlocker` and the slider hit areas have no Variant attribute, so they stay silent;
  *  - a screen or dialog added to `ctx.uiLayer` is a panel opening; the last one leaving is it closing. A screen
  *    kept built between uses (the backpack) is shown and hidden instead, and counts the same way;
- *  - a toast is read from its own glyph ("!" error, "✓" success, "$" coins) and answered accordingly.
+ *  - a toast is read from its "Kind" (the coin toast: the pixel coin, no glyph) or its glyph ("!" error, "✓"
+ *    success) and answered accordingly.
  *
  * Everything here is on the UI bus, short and quiet: hover is barely audible (0.11 base), and no UI sound
  * is ever louder than the click.
@@ -68,9 +69,16 @@ function panelClosed(layer: Instance): void {
 	});
 }
 
-/** toasts say what they are with their glyph: read it instead of guessing from the text */
+/**
+ * toasts say what they are: the "Kind" the toast stamps on itself (widgets.showToast) -- the coin toast shows the
+ * pixel coin and has no glyph (MON-06) -- or else their glyph; read it instead of guessing from the text
+ */
 function hookToast(slot: Frame): void {
 	task.defer(() => {
+		if (slot.GetAttribute("Kind") === "coin") {
+			audio.play("pickupCoin");
+			return;
+		}
 		const card = slot.FindFirstChild("Card");
 		const icon = card?.FindFirstChild("Icon");
 		const glyph = icon?.FindFirstChild("Glyph");
@@ -78,7 +86,6 @@ function hookToast(slot: Frame): void {
 		const g = glyph.Text;
 		if (g === "!") audio.play("uiError");
 		else if (g === "✓") audio.play("uiBuy");
-		else if (g === "$") audio.play("pickupCoin");
 		// "i" (plain information) stays silent: those appear often and deserve no attention
 	});
 }

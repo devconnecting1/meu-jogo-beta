@@ -129,6 +129,15 @@ const CANOPY_LIFT = 44;
 /** the pump's hose and nozzle, left in the tank of a car abandoned mid-fill */
 const HOSE = Color3.fromRGB(30, 30, 34);
 
+/** the campus quad's fountain, statue and benches (EDI-17): stone, water, weathered bronze, iron */
+const PROP = {
+	stone: COLORS.sidewalk.Lerp(WHITE, 0.28),
+	water: COLORS.glassCold.Lerp(COLORS.roofBlue, 0.45),
+	ripple: COLORS.glassCold.Lerp(WHITE, 0.5),
+	bronze: COLORS.treeLeafDark.Lerp(COLORS.metal, 0.45),
+	iron: COLORS.metalDark,
+};
+
 /** road markings: dash period/length, crosswalk stripe width/period */
 const DASH_PERIOD = 160;
 const DASH_LEN = 64;
@@ -654,6 +663,8 @@ export class WorldView {
 					// a parked bicycle or motorcycle (VEI-05): drawn by the same code as a ridden one
 					const so = this.shadow(s.x + s.w / 2, s.y + s.h / 2, 6);
 					drawParkedVehicle(r, cam, s, so.x, so.y);
+				} else if (s.kind === "prop") {
+					this.drawProp(r, cam, s);
 				} else if (this.machines === undefined || !this.machines.draw(r, cam, s)) {
 					this.drawStructure(r, cam, s);
 				}
@@ -1265,6 +1276,93 @@ export class WorldView {
 			});
 		}
 		drawPriceSign(r, cam, v, s, s.canopyAlpha ?? 1, this.shadow);
+	}
+
+	/**
+	 * What stands on the campus quad (EDI-17), lit from the top left like the town and with its shadow on the sun's
+	 * side (LUZ-01): the fountain's stone basin and its water, the founder in weathered bronze on a stone plinth, a
+	 * bench of wooden slats on iron ends with its back away from the plaza. Frames only, the same with or without the
+	 * town's textures, like a building's furniture (ART-12).
+	 */
+	private drawProp(r: Renderer, cam: Camera, s: Solid): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const t = s.tags;
+		const so = this.shadow(cx, cy, t === "statue" ? 14 : 6);
+		const round = t === "fountain";
+		r.drawRect(cam, cx + so.x, cy + so.y, {
+			w: s.w,
+			h: s.h,
+			color: BLACK,
+			alpha: 0.3,
+			cornerRadius: round ? s.w / 2 : 4,
+			zIndex: Z.shadow,
+		});
+		if (t === "fountain") {
+			// the basin's stone rim, the water, the spout's column and the ripple it makes
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: PROP.stone,
+				cornerRadius: s.w / 2,
+				stroke: PROP.stone.Lerp(BLACK, 0.45),
+				strokeThickness: 2,
+				zIndex: Z.structure,
+			});
+			r.drawRect(cam, cx, cy, {
+				w: s.w - 16,
+				h: s.h - 16,
+				color: PROP.water,
+				cornerRadius: (s.w - 16) / 2,
+				zIndex: Z.structure + 1,
+			});
+			r.drawRect(cam, cx, cy, {
+				w: 28,
+				h: 28,
+				color: PROP.ripple,
+				cornerRadius: 14,
+				alpha: 0.6,
+				zIndex: Z.structure + 2,
+			});
+			r.drawRect(cam, cx, cy, { w: 14, h: 14, color: PROP.stone, cornerRadius: 7, zIndex: Z.structure + 3 });
+			return;
+		}
+		if (t === "statue") {
+			// the plinth, and the figure on it seen from above: shoulders and a head, verdigris lit from the top left
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: PROP.stone,
+				stroke: PROP.stone.Lerp(BLACK, 0.45),
+				strokeThickness: 2,
+				zIndex: Z.structure,
+			});
+			r.drawRect(cam, cx, cy + 2, { w: 30, h: 16, color: PROP.bronze, cornerRadius: 6, zIndex: Z.structure + 1 });
+			r.drawRect(cam, cx, cy - 2, {
+				w: 16,
+				h: 16,
+				color: PROP.bronze.Lerp(WHITE, 0.2),
+				cornerRadius: 8,
+				zIndex: Z.structure + 2,
+			});
+			return;
+		}
+		// a bench: the iron ends, the slats, the back rest on the side away from where it faces
+		const n = sideNormal(s.face);
+		const horizontal = s.w >= s.h;
+		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: PROP.iron, cornerRadius: 2, zIndex: Z.structure });
+		r.drawRect(cam, cx + n.x * 3, cy + n.y * 3, {
+			w: horizontal ? s.w - 8 : s.w - 10,
+			h: horizontal ? s.h - 10 : s.h - 8,
+			color: COLORS.furnWood,
+			zIndex: Z.structure + 1,
+		});
+		r.drawRect(cam, cx - n.x * (s.w / 2 - 4), cy - n.y * (s.h / 2 - 4), {
+			w: horizontal ? s.w - 4 : 5,
+			h: horizontal ? 5 : s.h - 4,
+			color: COLORS.furnDark,
+			zIndex: Z.structure + 2,
+		});
 	}
 
 	private drawTrash(r: Renderer, cam: Camera, s: Solid): void {

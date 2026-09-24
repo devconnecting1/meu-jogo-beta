@@ -80,7 +80,7 @@ function isCharacterSheet(name: WorldArtName): boolean {
 		name === "dogs" ||
 		name === "birds" ||
 		name.sub(1, 9) === "survivors" ||
-		// the bosses' sheets and masks (ART-13): a boss that never arrives would be an invisible boss
+		// the bosses' sheets and masks (ART-14): a boss that never arrives would be an invisible boss
 		name.sub(1, 4) === "boss"
 	);
 }
