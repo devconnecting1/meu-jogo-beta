@@ -1,10 +1,19 @@
 import { DESIGN } from "shared/engine/constants";
+import type { InputState } from "shared/engine/input";
 import { rndRange } from "shared/engine/rng";
 import type { PlayerState } from "shared/game/player";
 import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
-import { isContainer, mapItemLoot, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
+import {
+	isContainer,
+	lootRespawnHours,
+	mapItemLoot,
+	rollBuildingLoot,
+	rollMapItemDrop,
+	rollYardLoot,
+	thiefFind,
+} from "shared/sim/loot";
 import {
 	bodiesOverlapRect,
 	canRepair,
@@ -14,10 +23,20 @@ import {
 	interactTarget,
 	isFire,
 	isPump,
+	isYardContainer,
 	nearestGroundItem,
 	nearestIntactWindow,
+	nearestUsableSolid,
 	repairMaterial,
 } from "shared/sim/interactQuery";
+import {
+	hasVaultTool,
+	isVaultDoor,
+	VAULT_CRACK_S,
+	VAULT_GRACE_S,
+	VAULT_TOOL_INDEX,
+	VAULT_TOOL_KIND,
+} from "shared/sim/vault";
 import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
 import {
 	itemCap,
@@ -186,9 +205,77 @@ function takeItem(refs: GameRefs, it: GroundItem): number {
 	return take;
 }
 
-/** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16) */
+/**
+ * the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16), a market
+ * stall, a pile or a shed its own table (EDI-21..MOB-06)
+ */
 function rollLoot(s: Solid): void {
-	s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+	s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+}
+
+/**
+ * The pill at the everyday town's searchable fixtures (EDI-21, EDI-22, MOB-06; LEG-01): what E does there, while this
+ * client knows it holds something -- the same rule as a pump island's.
+ */
+const YARD_HINTS: Record<string, string> = {
+	stall: "E: Search stall",
+	foodtruck: "E: Search food truck",
+	pile: "E: Search pile",
+	shed: "E: Search shed",
+	// the bank's vault, once cracked (EDI-24)
+	vault: "E: Open deposit boxes",
+};
+
+// --- the bank's vault (EDI-24, shared/sim/vault.ts) ------------------------------------------------------------
+
+/**
+ * This client's own view of the work at a vault door: the door it is at, the seconds of work so far, and the seconds
+ * since E was last held or pressed there. The SERVER counts the real work (server/sim/vault.ts) by the same rules --
+ * E held, or pressed again within VAULT_GRACE_S, with a crowbar, at the door -- so the two agree to a few ticks; the
+ * door opening is the server's DoorSet, never this.
+ */
+let vaultAt: Solid | undefined;
+let vaultWork = 0;
+let vaultSince = math.huge;
+
+/** the pill at the vault door: what it needs, what E does, how far the work has gone */
+function vaultHint(refs: GameRefs, s: Solid): string | undefined {
+	// cracked: it hangs open for good, and E there does nothing
+	if (s.open === true) return undefined;
+	// the words through lang.ts (the item's name too), the numbers as they are: "Vault: needs Crowbar", "Cracking
+	// vault 40%" read in the survivor's language like "E: Pick up Wood"
+	const lang = refs.save.settings.langType;
+	if (!hasVaultTool(refs.save)) {
+		return `${langGet("Vault: needs", lang)} ${langGet(itemName(VAULT_TOOL_KIND, VAULT_TOOL_INDEX), lang)}`;
+	}
+	if (vaultAt === s && vaultSince <= VAULT_GRACE_S) {
+		const pct = math.floor(math.min(1, vaultWork / VAULT_CRACK_S) * 100);
+		return `E: ${langGet("Cracking vault", lang)} ${pct}%`;
+	}
+	return "E: Crack vault (hold)";
+}
+
+/** the work at a vault door, as this client sees it: E held (or pressed: `tryInteract`), at the door, with the tool */
+function stepVaultWork(refs: GameRefs, dt: number): void {
+	// (a system run on its own -- a Node suite -- may hand in refs without the input or the body)
+	const input = refs.input as InputState | undefined;
+	if (input !== undefined && input.keyE) vaultSince = 0;
+	else vaultSince += dt;
+	const p = refs.player as PlayerState | undefined;
+	const s =
+		vaultSince <= VAULT_GRACE_S && p !== undefined && !p.dead
+			? nearestUsableSolid(refs.world, p.x, p.y)
+			: undefined;
+	if (s === undefined || !isVaultDoor(s) || s.open === true || !hasVaultTool(refs.save)) {
+		vaultAt = undefined;
+		vaultWork = 0;
+		return;
+	}
+	if (vaultAt !== s) {
+		vaultAt = s;
+		vaultWork = 0;
+	}
+	vaultWork += dt;
 }
 
 /**
@@ -239,6 +326,18 @@ const BUILDING_NAMES: Record<string, string> = {
 	library: "library",
 	lab: "science lab",
 	dorm: "dorm",
+	// the everyday town (EDI-19)
+	hardware: "hardware store",
+	autorepair: "auto repair shop",
+	electronics: "electronics store",
+	bakery: "bakery",
+	pawn: "pawn shop",
+	postoffice: "post office",
+	bank: "bank",
+	townhall: "town hall",
+	firestation: "fire station",
+	police: "police station",
+	office: "offices",
 };
 
 /** "E: Repair (Steel)", or what is missing for it */
@@ -281,6 +380,7 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	}
 	if (target.kind === "door") {
 		const s = target.solid;
+		if (isVaultDoor(s)) return vaultHint(refs, s);
 		if (s.open === true) {
 			return bodiesOverlapRect(s, refs.players, refs.zombies) ? undefined : "E: Close door";
 		}
@@ -308,7 +408,10 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		return s.tags === "car" ? "E: Search car" : "E: Search trash";
 	}
 	if (target.kind === "vehicle") return vehicleHint(refs, target.solid);
-	if (target.kind === "pump") return holdsLoot(target.solid) ? PUMP_HINT : undefined;
+	if (target.kind === "pump") {
+		if (!holdsLoot(target.solid)) return undefined;
+		return isPump(target.solid) ? PUMP_HINT : (YARD_HINTS[target.solid.tags] ?? "E: Search");
+	}
 	if (target.kind === "solid") {
 		const s = target.solid;
 		if (!canRepair(s)) return undefined;
@@ -381,6 +484,8 @@ export class Interaction {
 			}
 			return;
 		}
+		// a press at a bank's vault door keeps the work going, as E held does (EDI-24: a touch screen taps)
+		if (target.kind === "door" && isVaultDoor(target.solid)) vaultSince = 0;
 		if (serverOwnsWorld()) {
 			// F3: the press is already on its way in the command's action edge, and the server picks the target itself.
 			// What it reached here is remembered, so the server's answer can be told for a pickup (./pickups.ts)
@@ -399,6 +504,8 @@ export class Interaction {
 		}
 		if (target.kind === "door") {
 			const s = target.solid;
+			// the vault is the server's (EDI-24, server/sim/vault.ts): offline it stays shut
+			if (isVaultDoor(s)) return;
 			const willOpen = !(s.open ?? false);
 			if (!willOpen && bodiesOverlapRect(s, refs.players, refs.zombies)) return;
 			s.open = willOpen;
@@ -425,7 +532,7 @@ export class Interaction {
 			for (const drop of fuel) addItem(refs.save, drop.kind, drop.id, drop.count);
 			took();
 			pump.lootItems = [];
-			pump.lootTimer = worldHours(refs) + DESIGN.ITEM_RESPAWN_HOURS;
+			pump.lootTimer = worldHours(refs) + lootRespawnHours(pump);
 			return;
 		}
 		if (target.kind === "solid") {
@@ -454,6 +561,8 @@ export class Interaction {
 	update(refs: GameRefs, dt: number): void {
 		// where this survivor is: a supply the server takes from under their feet is theirs (./pickups.ts)
 		survivorAt(refs.player.x, refs.player.y);
+		// the work at a bank's vault door, for the pill (EDI-24)
+		stepVaultWork(refs, dt);
 		// F3: the fires burn on the server (LightSet), and the loot is rolled there (LootFlag); the walk-over too
 		if (serverOwnsWorld()) return;
 		this.walkOver(refs, dt);

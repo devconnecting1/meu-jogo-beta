@@ -6,11 +6,11 @@ export type AudioBank = "ui" | "items" | "weapons" | "impacts" | "cues" | "weath
 
 /** "rbxassetid://...", or "" until the bank is uploaded (or while the upload is not this bank's WAV) */
 export const AUDIO_BANK_IDS: Record<AudioBank, string> = {
-	ui: "rbxassetid://116079438683462",
-	items: "rbxassetid://130573583440294",
-	weapons: "rbxassetid://76545253843547",
-	impacts: "rbxassetid://115700679159660",
-	cues: "rbxassetid://71565263542164",
+	ui: "rbxassetid://131940143522051",
+	items: "rbxassetid://86393895691078",
+	weapons: "rbxassetid://136697726232995",
+	impacts: "rbxassetid://84507833973337",
+	cues: "rbxassetid://114553192552247",
 	weather: "",
 };
 

@@ -6,7 +6,8 @@
  *
  *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05)
  *   rollPumpLoot       a gas station's pump island: the same, from its own table (EDI-16)
- *   isContainer        what the two sides' lazy sweeps roll: a building or a pump island
+ *   rollYardLoot       any container out in the open: a pump island, a market stall, a pile, a shed (EDI-21..MOB-06)
+ *   isContainer        what the two sides' lazy sweeps roll: a building or a container out in the open
  *   thiefFind          the Thief skill's extra: one more slot of the building's table, for the searcher alone
  *   rollMapItemDrop    one hit (or E) on a tree, a car or a bin
  *
@@ -19,11 +20,17 @@ import {
 	PUMP_LOOT,
 	PUMP_LOOT_SLOTS,
 	SpawnEntry,
+	spawnRows,
+	VAULT_LOOT,
+	YARD_LOOT,
+	YARD_TAGS,
+	yardLootKey,
 } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
 import type { PlayerSaveData } from "shared/game/save";
 import type { Solid } from "shared/game/world";
+import { isYardContainer } from "./interactQuery";
 
 /** one thing a roll produced (the shape a building's `lootItems` holds) */
 export interface LootDrop {
@@ -39,7 +46,7 @@ const WOOD_INDEX = 23;
 
 /** the table a building of type `bt` rolls from (the general table for a type that has none) */
 export function buildingLootRows(bt: number): Array<SpawnEntry> {
-	return bt >= 0 && bt < BUILDING_SPAWNS.size() ? BUILDING_SPAWNS[bt] : BUILDING_SPAWNS[0];
+	return spawnRows(bt) ?? BUILDING_SPAWNS[0];
 }
 
 /** one slot: a line of the table, then its chance (min = max < 1) or its range (min..max); undefined = empty */
@@ -70,11 +77,58 @@ export function rollPumpLoot(): Array<LootDrop> {
 }
 
 /**
- * Is this solid a container the lazy sweeps roll (the client's MP_PHASE 2 one and the server's): a building, or a gas
- * station's pump island (`rollPumpLoot`), as opposed to anything else in reach?
+ * The table of a searchable fixture out in the open (shared/data/spawns.ts YARD_LOOT, EDI-21, EDI-22, MOB-06): a
+ * market stall's by what it displays, a pile's by what it is; undefined for anything else.
+ */
+export function yardLootRows(s: Solid): Array<SpawnEntry> | undefined {
+	if (!YARD_TAGS.includes(s.tags)) return undefined;
+	if (s.tags === "vault") return VAULT_LOOT;
+	return YARD_LOOT[yardLootKey(s.tags, s.variant)];
+}
+
+/**
+ * The bank vault's deposit boxes (EDI-24, spawns.ts VAULT_LOOT): every line once -- a chance line comes or not, a
+ * range line gives its amount -- not a slot's random line: the vault is the best of the bank, whatever the dice.
+ */
+export function rollVaultLoot(): Array<LootDrop> {
+	const out = new Array<LootDrop>();
+	for (const e of VAULT_LOOT) {
+		if (e.max < 1) {
+			if (chance(e.max * 100)) out.push({ kind: e.kind, id: e.index, count: 1 });
+		} else {
+			out.push({ kind: e.kind, id: e.index, count: rndInt(e.min, e.max) });
+		}
+	}
+	return out;
+}
+
+/**
+ * What a container out in the open holds: a pump island its fuel (`rollPumpLoot`), a market stall, the food truck, a
+ * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's; the bank's vault
+ * every box it has (`rollVaultLoot`).
+ */
+export function rollYardLoot(s: Solid): Array<LootDrop> {
+	if (s.tags === "pump") return rollPumpLoot();
+	if (s.tags === "vault") return rollVaultLoot();
+	const rows = yardLootRows(s);
+	return rows === undefined ? [] : rollSlots(rows, s.lootSlots ?? 1);
+}
+
+/**
+ * Game hours until an emptied container fills again (MP-05): ITEM_RESPAWN_HOURS for a building, a pump island, a
+ * stall; never for the bank's vault (EDI-24: once a town -- a new town, MP-22, has a new vault).
+ */
+export function lootRespawnHours(s: Solid): number {
+	return s.tags === "vault" && s.kind === "prop" ? math.huge : DESIGN.ITEM_RESPAWN_HOURS;
+}
+
+/**
+ * Is this solid a container the lazy sweeps roll (the client's MP_PHASE 2 one and the server's): a building, a gas
+ * station's pump island, or one of the everyday town's searchable fixtures (`rollYardLoot`), as opposed to anything
+ * else in reach?
  */
 export function isContainer(s: Solid): boolean {
-	return (s.kind === "building" || s.tags === "pump") && s.lootItems !== undefined;
+	return (s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined;
 }
 
 /**

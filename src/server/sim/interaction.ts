@@ -44,8 +44,10 @@ import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
 import { WINDOW_REACH } from "shared/game/windows";
 import * as Noise from "shared/sim/ai/noise";
+import { inVault, isVaultBox, isVaultDoor } from "shared/sim/vault";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
+import { ServerVaults } from "./vault";
 import { ServerWindows, WINDOW_REACH_SLACK } from "./windows";
 import { WorldOut } from "./worldOut";
 
@@ -95,6 +97,8 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
+	/** the bank's vault door is being worked (EDI-24, server/sim/vault.ts): `progress` seconds of the crack so far */
+	| { kind: "vault"; solid: Solid; progress: number }
 	/** a window's glass broken on purpose (EDI-18): the crash, the open frame (server/sim/windows.ts) */
 	| { kind: "window"; solid: Solid }
 	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" | "rate" };
@@ -126,10 +130,13 @@ export interface ServerInteractionOptions {
 	/** the town's window glass (EDI-18): E at an intact pane breaks it, through its reach, line and rate */
 	windows?: ServerWindows;
 	/**
-	 * A noise the horde hears (IA-02): a door turning (Noise.DOOR). Passed in, so the module stays pure; left undefined
-	 * (no horde, a test), nobody hears it.
+	 * A noise the horde hears (IA-02, zombieBrain's emitSound): a door turning (Noise.DOOR); the bank vault's work, its
+	 * door giving way and its alarm (EDI-24, server/sim/vault.ts; `shot`: heard as a shot). Passed in, so the module
+	 * stays pure; left undefined (no horde, a test), nobody hears it.
 	 */
-	noise?: (x: number, y: number, radius: number) => void;
+	noise?: (x: number, y: number, radius: number, shot?: boolean) => void;
+	/** a bank vault gave way, cracked by the survivor in `slot` (EDI-24) */
+	onVaultCracked?: (door: Solid, slot: number) => void;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -158,7 +165,7 @@ export class ServerInteraction {
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 	private readonly paysRewards?: (slot: number) => boolean;
 	private readonly windows?: ServerWindows;
-	private readonly noise?: (x: number, y: number, radius: number) => void;
+	private readonly noise?: (x: number, y: number, radius: number, shot?: boolean) => void;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -169,8 +176,16 @@ export class ServerInteraction {
 	private readonly pressCd = new Map<number, number>();
 	/** seconds until this door or lamp can change again (TOGGLE_COOLDOWN_S) */
 	private readonly toggleCd = new Map<Solid, number>();
-	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
+	/**
+	 * The town's containers out in the open -- pump islands, stalls, piles, sheds -- listed the first time the loot flags
+	 * need them (static: the world is this one's); a bank's deposit boxes are not among them (they are told only inside
+	 * the vault: `vaultBoxes`, EDI-24)
+	 */
 	private pumps?: Array<Solid>;
+	/** each bank's deposit boxes, by the bank's id (listed with `pumps`) */
+	private readonly vaultBoxes = new Map<number, Solid>();
+	/** the bank's vault: the work at its door, the door giving way, the alarm (EDI-24) */
+	readonly vaults: ServerVaults;
 
 	constructor(options: ServerInteractionOptions) {
 		this.world = options.world;
@@ -182,6 +197,23 @@ export class ServerInteraction {
 		this.paysRewards = options.paysRewards;
 		this.windows = options.windows;
 		this.noise = options.noise;
+		this.vaults = new ServerVaults({
+			world: options.world,
+			out: options.out,
+			fx: options.fx,
+			noise: options.noise,
+			onSolidChanged: options.onSolidChanged,
+			reach: (body, door) => this.inReach(body, door, DOOR_REACH),
+			onCracked: options.onVaultCracked,
+		});
+	}
+
+	/**
+	 * One command of the survivor in `slot` (the simulation's `stepWorldActions`): E HELD down keeps the work at a
+	 * bank's vault door going (EDI-24: the command's `held` Action bit). Nothing else holds E.
+	 */
+	hold(slot: number, body: PlayerState, save: PlayerSaveData, held: boolean): void {
+		this.vaults.hold(slot, body, save, held);
 	}
 
 	/** §9.3: the run of the survivor in `slot` still earns achievements */
@@ -284,6 +316,8 @@ export class ServerInteraction {
 
 	private door(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, DOOR_REACH)) return { kind: "refused", why: "range" };
+		// the bank's vault door does not swing on a press: it is cracked, with a crowbar and time (EDI-24)
+		if (isVaultDoor(s)) return this.vault(ctx, s);
 		if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
 		const willOpen = !(s.open ?? false);
 		// §8.1: closing a door on a body is refused — otherwise a door is a weapon, and a griefing tool
@@ -302,6 +336,17 @@ export class ServerInteraction {
 		// ...and by the horde, as the next zombie over hears a blow (IA-02: a door is LOW, 150 u)
 		this.noise?.(s.x + s.w / 2, s.y + s.h / 2, Noise.DOOR);
 		return { kind: "door", solid: s, open: willOpen };
+	}
+
+	/**
+	 * E at the bank's vault door (EDI-24): with a crowbar in the backpack, the work starts or goes on (server/sim/vault.ts
+	 * counts it while E is held or pressed again); without one, nothing ("material", as a repair without its wood). An
+	 * open vault door stays open: E there does nothing.
+	 */
+	private vault(ctx: InteractContext, s: Solid): InteractOutcome {
+		const r = this.vaults.press(ctx.slot, ctx.save, s);
+		if (r.kind === "refused") return r.why === "tool" ? { kind: "refused", why: "material" } : { kind: "none" };
+		return { kind: "vault", solid: s, progress: r.progress };
 	}
 
 	// ---------------------------------------------------------------- lamps and fires
@@ -415,6 +460,7 @@ export class ServerInteraction {
 		this.items.step(dt);
 		decay(this.pressCd, dt);
 		decay(this.toggleCd, dt);
+		this.vaults.step(dt);
 		this.publishLootFlags(players, slots);
 		this.fireTick += dt;
 		if (this.fireTick < FIRE_STEP_S) return;
@@ -463,9 +509,17 @@ export class ServerInteraction {
 			const slot = slots[i] ?? i;
 			const p = players[i];
 			let b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
-			if (b === undefined && !p.dead) {
-				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
-				b = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH);
+			if (!p.dead && (b === undefined || inVault(b, p.x, p.y))) {
+				const pumps = this.containers();
+				if (b === undefined) {
+					// outside: the pump island (or the stall, the pile, the shed) in reach -- never a bank's deposit boxes,
+					// even with only the vault's wall between (EDI-24)
+					const near = nearestPump(pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
+					b = near !== undefined && edgeDist(near, p.x, p.y) < PUMP_FLAG_REACH ? near : undefined;
+				} else {
+					// inside the bank's vault: its deposit boxes, not the bank's own drawers
+					b = this.vaultBoxes.get(b.id) ?? b;
+				}
 			}
 			const has = b !== undefined && this.items.hasLoot(b);
 			const id = b !== undefined && has ? b.id : 0;
@@ -480,10 +534,25 @@ export class ServerInteraction {
 		}
 	}
 
+	/** the town's containers out in the open, and each bank's deposit boxes (listed once: the town is static) */
+	private containers(): Array<Solid> {
+		let pumps = this.pumps;
+		if (pumps === undefined) {
+			pumps = [];
+			for (const s of pumpsOf(this.world)) {
+				if (!isVaultBox(s)) pumps.push(s);
+				else if (s.bankId !== undefined) this.vaultBoxes.set(s.bankId, s);
+			}
+			this.pumps = pumps;
+		}
+		return pumps;
+	}
+
 	/** the survivor left: forget which building they were told about (§4.4, a slot is per session) */
 	remove(slot: number): void {
 		this.lootSeen.delete(slot);
 		this.pressCd.delete(slot);
+		this.vaults.remove(slot);
 	}
 
 	// ---------------------------------------------------------------- internals

@@ -7,6 +7,7 @@ import { isBlocking, querySolids, Solid } from "shared/game/world";
 import type { GameContext } from "shared/game/context";
 import type { GameRefs } from "../systems/types";
 import { debugFlowField } from "../systems/zombieAI";
+import { STRUCTURE_LIGHT_R } from "shared/sim/ai/zombieTuning";
 
 /*
  * Debug overlays of the admin panel, drawn with their own pooled Renderer in a layer above the game world (and above
@@ -41,9 +42,9 @@ export interface PlacementPreview {
 	valid: boolean;
 }
 
-/** light radii used by the game (gameLoop PLAYER_LIGHT_R / LIGHT_R, zombieAI STRUCTURE_LIGHT_R) */
+/** light radii used by the game: the survivor's circle, and the lit sources' one table (zombieTuning STRUCTURE_LIGHT_R) */
 const PLAYER_LIGHT_R = 250;
-const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+const LIGHT_R = STRUCTURE_LIGHT_R;
 
 const FLOW_STEP = 2;
 const FLOW_REFRESH = 0.3;

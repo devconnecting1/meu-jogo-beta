@@ -39,6 +39,7 @@ import { stepPlayer } from "shared/sim/playerMove";
 import { rideHeading } from "shared/sim/rideKey";
 import * as SurvivorLight from "shared/sim/survivorLight";
 import { FLASH_LIFT, Weather } from "shared/sim/weather";
+import { STRUCTURE_LIGHT_R } from "shared/sim/ai/zombieTuning";
 import { FxEvent, InputCommand, makeCommand, packEdges, SEQ_MOD } from "shared/sim/types";
 import { Nameplate, profileOf } from "./ui/nameplate";
 import {
@@ -100,10 +101,12 @@ const NAMEPLATE_GAP = 14;
 /** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
 const ROOF_LERP = 0.15;
 /**
- * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
- * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
+ * Night light radii (world units) of built light sources -- and of a bank's portico while its alarm bell rings (EDI-24):
+ * the SERVER's table (shared/sim/ai/zombieTuning.ts STRUCTURE_LIGHT_R), the very object, so a light the horde sees by
+ * is a light the survivor sees and the other way round (LUZ-04; one table cannot drift from the other). The survivor's
+ * own light (its circle and the flashlight's cone) is shared/sim/survivorLight.ts, the same rule on both sides.
  */
-const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+export const LIGHT_R: Record<string, number> = STRUCTURE_LIGHT_R;
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -942,6 +945,11 @@ export class GameLoop {
 			if (r === undefined || s.powered !== true) continue;
 			const fire = s.tags === "campfire" || s.tags === "brazier";
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
+			// the alarm's lamp flashes, four times a second (the same beat as townView's drawing of it)
+			if (s.tags === "portico") {
+				lights.circle(s.x + s.w / 2, s.y + s.h / 2, r, 0.3, math.floor(this.clock * 8) % 2 === 0 ? 0.8 : 0.25);
+				continue;
+			}
 			lights.circle(s.x + s.w / 2, s.y + s.h / 2, r * flicker, 0.5);
 		}
 		this.machines.collectLights(lights.items);

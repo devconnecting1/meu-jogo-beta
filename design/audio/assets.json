@@ -1,12 +1,13 @@
 {
 	"uploadedAt": "2026-09-24",
 	"source": "tools/gen-sfx.mjs + npm run cloud -- upload-audio (Open Cloud Assets API, assetType Audio)",
+	"owner": "user:8424325451",
 	"ids": {
-		"ui": "rbxassetid://116079438683462",
-		"weapons": "rbxassetid://76545253843547",
-		"impacts": "rbxassetid://115700679159660",
-		"items": "rbxassetid://130573583440294",
-		"cues": "rbxassetid://71565263542164"
+		"ui": "rbxassetid://131940143522051",
+		"weapons": "rbxassetid://136697726232995",
+		"impacts": "rbxassetid://84507833973337",
+		"items": "rbxassetid://86393895691078",
+		"cues": "rbxassetid://114553192552247"
 	},
 	"sha1": {
 		"ui": "7b10e2b85ad8678986dfea45008cc55f37d043e4",
@@ -14,5 +15,12 @@
 		"impacts": "ca7855cee3cc637d1f3e190ccb798e7e49c73b49",
 		"items": "4b345798f3f8a4567392d28eef0c9a0667236253",
 		"cues": "cf32467032f7dd746bd4279d1f097814cb6a0502"
+	},
+	"creator": {
+		"ui": "user:8424325451",
+		"weapons": "user:8424325451",
+		"impacts": "user:8424325451",
+		"items": "user:8424325451",
+		"cues": "user:8424325451"
 	}
 }

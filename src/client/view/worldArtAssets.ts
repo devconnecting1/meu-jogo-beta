@@ -106,6 +106,17 @@ export type WorldArtName =
 	| "signLibrary"
 	| "signLab"
 	| "signDorm"
+	| "signHardware"
+	| "signAutoRepair"
+	| "signElectronics"
+	| "signBakery"
+	| "signPawn"
+	| "signPost"
+	| "signBank"
+	| "signTownHall"
+	| "signFire"
+	| "signPolice"
+	| "signOffice"
 	| "helipad"
 	| "gasCanopyN"
 	| "gasCanopyS"
@@ -160,135 +171,136 @@ export type WorldArtName =
 	| "itemIcons"
 	| "furniture"
 	| "blood"
+	| "townProps"
 	| "wordmark";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
-	asphalt: { id: "rbxassetid://136696200865006", w: 64, h: 64 },
+	asphalt: { id: "rbxassetid://139947187986320", w: 64, h: 64 },
 	/** tile: parking-lot asphalt, a little more worn */
-	asphaltLot: { id: "rbxassetid://101623737123119", w: 64, h: 64 },
+	asphaltLot: { id: "rbxassetid://131239107246922", w: 64, h: 64 },
 	/** tile: sidewalk: 64-unit concrete slabs with joints */
-	concrete: { id: "rbxassetid://125417248338973", w: 64, h: 64 },
+	concrete: { id: "rbxassetid://111427358755563", w: 64, h: 64 },
 	/** tile: downtown paving: 32-unit pavers */
-	plaza: { id: "rbxassetid://71646231282470", w: 32, h: 32 },
+	plaza: { id: "rbxassetid://102643064267008", w: 32, h: 32 },
 	/** tile: footpaths to the doors: running-bond pavers */
-	pavers: { id: "rbxassetid://122346741168951", w: 16, h: 16 },
+	pavers: { id: "rbxassetid://132631299646338", w: 16, h: 16 },
 	/** tile: gas forecourt / ambulance bay: poured concrete panels */
-	apron: { id: "rbxassetid://96060481248281", w: 64, h: 64 },
+	apron: { id: "rbxassetid://100267191209422", w: 64, h: 64 },
 	/** tile: mowed lawn */
-	grass: { id: "rbxassetid://128959353163283", w: 64, h: 64 },
+	grass: { id: "rbxassetid://80427374458004", w: 64, h: 64 },
 	/** tile: a yard nobody mowed for a week or two */
-	grassLong: { id: "rbxassetid://109833880147310", w: 64, h: 64 },
+	grassLong: { id: "rbxassetid://81388953288097", w: 64, h: 64 },
 	/** tile: packed earth: park paths, the school yard */
-	dirt: { id: "rbxassetid://88069669305202", w: 32, h: 32 },
+	dirt: { id: "rbxassetid://125755328792312", w: 32, h: 32 },
 	/** tile: tree pits: bark mulch */
-	soil: { id: "rbxassetid://138928866784074", w: 16, h: 16 },
+	soil: { id: "rbxassetid://94646897957737", w: 16, h: 16 },
 	/** tile: tactile paving where a crosswalk lands */
-	tactile: { id: "rbxassetid://106111012873721", w: 4, h: 4 },
+	tactile: { id: "rbxassetid://100166413819970", w: 4, h: 4 },
 	/** tile: road paint, worn (tinted: white zebras, yellow line) */
-	paint: { id: "rbxassetid://88659727099879", w: 16, h: 16 },
+	paint: { id: "rbxassetid://92406295373977", w: 16, h: 16 },
 	/** tile: kerb on a road's north edge (its shadow on the asphalt below) */
-	kerbN: { id: "rbxassetid://88114414655458", w: 16, h: 4 },
+	kerbN: { id: "rbxassetid://101511421124634", w: 16, h: 4 },
 	/** tile: kerb on a road's south edge */
-	kerbS: { id: "rbxassetid://104343748202093", w: 16, h: 4 },
+	kerbS: { id: "rbxassetid://89951142651915", w: 16, h: 4 },
 	/** tile: kerb on a road's west edge */
-	kerbW: { id: "rbxassetid://91701233722319", w: 4, h: 16 },
+	kerbW: { id: "rbxassetid://124833248981056", w: 4, h: 16 },
 	/** tile: kerb on a road's east edge */
-	kerbE: { id: "rbxassetid://71264148250002", w: 4, h: 16 },
+	kerbE: { id: "rbxassetid://78814696375156", w: 4, h: 16 },
 	/** tile: the forest outside the town fence */
-	forest: { id: "rbxassetid://85144802348141", w: 64, h: 64 },
+	forest: { id: "rbxassetid://91326499958479", w: 64, h: 64 },
 	/** tile: board fence along x */
-	fenceH: { id: "rbxassetid://119203758037793", w: 16, h: 2 },
+	fenceH: { id: "rbxassetid://138412336317689", w: 16, h: 2 },
 	/** tile: board fence along y */
-	fenceV: { id: "rbxassetid://101826053299894", w: 2, h: 16 },
+	fenceV: { id: "rbxassetid://75712248326810", w: 2, h: 16 },
 	/** tile: house floors: boards */
-	floorWood: { id: "rbxassetid://110877921361918", w: 32, h: 32 },
+	floorWood: { id: "rbxassetid://136167035387400", w: 32, h: 32 },
 	/** tile: hospital / pharmacy floor: checker tiles */
-	floorTile: { id: "rbxassetid://79431377433219", w: 16, h: 16 },
+	floorTile: { id: "rbxassetid://117700490808662", w: 16, h: 16 },
 	/** tile: shop floor: vinyl tiles */
-	floorShop: { id: "rbxassetid://80429436261692", w: 32, h: 32 },
+	floorShop: { id: "rbxassetid://98147886555678", w: 32, h: 32 },
 	/** tileTint: walls: plaster (tint: the wall colour) */
-	wall: { id: "rbxassetid://122355100041127", w: 8, h: 8 },
+	wall: { id: "rbxassetid://91890690308632", w: 8, h: 8 },
 	/** tileTint: pitched roof shingles, courses along x (tint: roof colour) */
-	roofShingleH: { id: "rbxassetid://135793779204378", w: 32, h: 32 },
+	roofShingleH: { id: "rbxassetid://121254808626668", w: 32, h: 32 },
 	/** tileTint: pitched roof shingles, courses along y */
-	roofShingleV: { id: "rbxassetid://90130399432236", w: 32, h: 32 },
+	roofShingleV: { id: "rbxassetid://87243143362861", w: 32, h: 32 },
 	/** tileTint: flat roof: tar and gravel (shops) */
-	roofGravel: { id: "rbxassetid://100979575455672", w: 32, h: 32 },
+	roofGravel: { id: "rbxassetid://74993087626157", w: 32, h: 32 },
 	/** tileTint: flat roof: welded membrane (school, hospital, gas) */
-	roofMembrane: { id: "rbxassetid://79521293665666", w: 64, h: 64 },
+	roofMembrane: { id: "rbxassetid://125463832458495", w: 64, h: 64 },
 	/** slice: pitched roof rim: drip edge and fascia */
-	eaves: { id: "rbxassetid://86266945168441", w: 12, h: 12, slice: [4, 4, 8, 8] },
+	eaves: { id: "rbxassetid://129151899583010", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: flat roof rim: parapet, coping, inner face */
-	parapet: { id: "rbxassetid://77285850845081", w: 12, h: 12, slice: [4, 4, 8, 8] },
+	parapet: { id: "rbxassetid://106192217360435", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: soft rectangular drop shadow */
-	shadowBox: { id: "rbxassetid://100011874413072", w: 16, h: 16, slice: [6, 6, 10, 10] },
+	shadowBox: { id: "rbxassetid://126704842880759", w: 16, h: 16, slice: [6, 6, 10, 10] },
 	/** mask: tree crown 1: silhouette + leaves (tint: foliage) */
-	canopy0: { id: "rbxassetid://73465981877902", w: 40, h: 40 },
+	canopy0: { id: "rbxassetid://135695969741387", w: 40, h: 40 },
 	/** overlay: tree crown 1: light, shadow and outline */
-	canopyShade0: { id: "rbxassetid://79729616067760", w: 40, h: 40 },
+	canopyShade0: { id: "rbxassetid://112795457788106", w: 40, h: 40 },
 	/** mask: tree crown 2: silhouette + leaves (tint: foliage) */
-	canopy1: { id: "rbxassetid://89590010697770", w: 40, h: 40 },
+	canopy1: { id: "rbxassetid://94759302502078", w: 40, h: 40 },
 	/** overlay: tree crown 2: light, shadow and outline */
-	canopyShade1: { id: "rbxassetid://78267299787002", w: 40, h: 40 },
+	canopyShade1: { id: "rbxassetid://124845124258321", w: 40, h: 40 },
 	/** mask: tree crown 3: silhouette + leaves (tint: foliage) */
-	canopy2: { id: "rbxassetid://100206983226107", w: 40, h: 40 },
+	canopy2: { id: "rbxassetid://91170123216072", w: 40, h: 40 },
 	/** overlay: tree crown 3: light, shadow and outline */
-	canopyShade2: { id: "rbxassetid://87939293634230", w: 40, h: 40 },
+	canopyShade2: { id: "rbxassetid://93088950930991", w: 40, h: 40 },
 	/** mask: sedan: body (tint: paint) */
-	car0: { id: "rbxassetid://90907187103557", w: 50, h: 25 },
+	car0: { id: "rbxassetid://127118296635301", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
-	carTrim0: { id: "rbxassetid://101227547206373", w: 50, h: 25 },
+	carTrim0: { id: "rbxassetid://136877247095838", w: 50, h: 25 },
 	/** overlay: sedan: smashed windshield, scratches */
-	carDamage0: { id: "rbxassetid://91358709281295", w: 50, h: 25 },
+	carDamage0: { id: "rbxassetid://122941375766700", w: 50, h: 25 },
 	/** overlay: sedan: burnt out */
-	carWreck0: { id: "rbxassetid://116358795706916", w: 50, h: 25 },
+	carWreck0: { id: "rbxassetid://81238785313822", w: 50, h: 25 },
 	/** mask: hatch: body (tint: paint) */
-	car1: { id: "rbxassetid://93097391290703", w: 50, h: 25 },
+	car1: { id: "rbxassetid://117984683875354", w: 50, h: 25 },
 	/** overlay: hatch: glass, lights, wheels, outline */
-	carTrim1: { id: "rbxassetid://91017473943960", w: 50, h: 25 },
+	carTrim1: { id: "rbxassetid://135220244687740", w: 50, h: 25 },
 	/** overlay: hatch: smashed windshield, scratches */
-	carDamage1: { id: "rbxassetid://77340649568922", w: 50, h: 25 },
+	carDamage1: { id: "rbxassetid://84660138593018", w: 50, h: 25 },
 	/** overlay: hatch: burnt out */
-	carWreck1: { id: "rbxassetid://137645395462651", w: 50, h: 25 },
+	carWreck1: { id: "rbxassetid://94089899562906", w: 50, h: 25 },
 	/** mask: pickup: body (tint: paint) */
-	car2: { id: "rbxassetid://119189575734127", w: 50, h: 25 },
+	car2: { id: "rbxassetid://78626762304650", w: 50, h: 25 },
 	/** overlay: pickup: glass, lights, wheels, outline */
-	carTrim2: { id: "rbxassetid://121720458024309", w: 50, h: 25 },
+	carTrim2: { id: "rbxassetid://129271563156608", w: 50, h: 25 },
 	/** overlay: pickup: smashed windshield, scratches */
-	carDamage2: { id: "rbxassetid://75808892601718", w: 50, h: 25 },
+	carDamage2: { id: "rbxassetid://98615341526064", w: 50, h: 25 },
 	/** overlay: pickup: burnt out */
-	carWreck2: { id: "rbxassetid://135701189659216", w: 50, h: 25 },
+	carWreck2: { id: "rbxassetid://74099595483767", w: 50, h: 25 },
 	/** mask: suv: body (tint: paint) */
-	car3: { id: "rbxassetid://75904740720087", w: 50, h: 25 },
+	car3: { id: "rbxassetid://123263422642170", w: 50, h: 25 },
 	/** overlay: suv: glass, lights, wheels, outline */
-	carTrim3: { id: "rbxassetid://124630657972919", w: 50, h: 25 },
+	carTrim3: { id: "rbxassetid://104792167977459", w: 50, h: 25 },
 	/** overlay: suv: smashed windshield, scratches */
-	carDamage3: { id: "rbxassetid://82829722323934", w: 50, h: 25 },
+	carDamage3: { id: "rbxassetid://117701098851376", w: 50, h: 25 },
 	/** overlay: suv: burnt out */
-	carWreck3: { id: "rbxassetid://110973168366486", w: 50, h: 25 },
+	carWreck3: { id: "rbxassetid://118498588242035", w: 50, h: 25 },
 	/** sprite: wheelie bin */
-	bin: { id: "rbxassetid://77342012293829", w: 9, h: 9 },
+	bin: { id: "rbxassetid://140632839899508", w: 9, h: 9 },
 	/** sprite: spilled litter (flat) */
-	litter0: { id: "rbxassetid://77488859025992", w: 12, h: 12 },
+	litter0: { id: "rbxassetid://81384883889550", w: 12, h: 12 },
 	/** sprite: spilled litter (flat) */
-	litter1: { id: "rbxassetid://130241590136140", w: 12, h: 12 },
+	litter1: { id: "rbxassetid://106240577299149", w: 12, h: 12 },
 	/** sprite: spilled litter (flat) */
-	litter2: { id: "rbxassetid://80452263452415", w: 12, h: 12 },
+	litter2: { id: "rbxassetid://108989596532824", w: 12, h: 12 },
 	/** sprite: dried blood */
-	blood0: { id: "rbxassetid://114594767797040", w: 16, h: 12 },
+	blood0: { id: "rbxassetid://78229349933249", w: 16, h: 12 },
 	/** sprite: dried blood */
-	blood1: { id: "rbxassetid://93633145448572", w: 16, h: 12 },
+	blood1: { id: "rbxassetid://107297349179269", w: 16, h: 12 },
 	/** sprite: oil stain */
-	oil0: { id: "rbxassetid://102216726173704", w: 16, h: 12 },
+	oil0: { id: "rbxassetid://81641439232774", w: 16, h: 12 },
 	/** sprite: oil stain */
-	oil1: { id: "rbxassetid://90928154923991", w: 16, h: 12 },
+	oil1: { id: "rbxassetid://132324497387006", w: 16, h: 12 },
 	/** sprite: asphalt crack */
-	crack0: { id: "rbxassetid://99972894255656", w: 24, h: 8 },
+	crack0: { id: "rbxassetid://106669207312072", w: 24, h: 8 },
 	/** sprite: asphalt crack */
-	crack1: { id: "rbxassetid://108565198333064", w: 24, h: 8 },
+	crack1: { id: "rbxassetid://79739241366295", w: 24, h: 8 },
 	/** sprite: manhole cover */
-	manhole: { id: "rbxassetid://89997805152847", w: 8, h: 8 },
+	manhole: { id: "rbxassetid://96964095561833", w: 8, h: 8 },
 	/** sprite: rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo) */
 	puddle0: { id: "", w: 38, h: 11 },
 	/** sprite: rain puddle in a gutter: long, stepped edge, on a vertical road */
@@ -308,151 +320,175 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: a drop's ring on a puddle (4 texels) */
 	puddleDrop: { id: "", w: 3, h: 3 },
 	/** sprite: storm drain */
-	drain: { id: "rbxassetid://140705036278395", w: 8, h: 4 },
+	drain: { id: "rbxassetid://96075237212369", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
-	dispenser: { id: "rbxassetid://105334383347349", w: 10, h: 13 },
+	dispenser: { id: "rbxassetid://80245658163921", w: 10, h: 13 },
 	/** sprite: rooftop air conditioner */
-	acUnit: { id: "rbxassetid://104235250371536", w: 13, h: 11 },
+	acUnit: { id: "rbxassetid://136406701811442", w: 13, h: 11 },
 	/** sprite: roof vent */
-	vent: { id: "rbxassetid://112712506613304", w: 7, h: 7 },
+	vent: { id: "rbxassetid://137900443333837", w: 7, h: 7 },
 	/** sprite: brick chimney on a house roof */
-	chimney: { id: "rbxassetid://113951165389471", w: 8, h: 8 },
+	chimney: { id: "rbxassetid://101480024173884", w: 8, h: 8 },
 	/** sprite: storefront sign (type 3): an open book on a chalkboard */
-	signSchool: { id: "rbxassetid://98558286094610", w: 32, h: 20 },
+	signSchool: { id: "rbxassetid://114639792286723", w: 32, h: 20 },
 	/** sprite: storefront sign (type 4): the white H of the hospital road sign, on blue */
-	signHospital: { id: "rbxassetid://72752078983539", w: 32, h: 20 },
+	signHospital: { id: "rbxassetid://138502146199770", w: 32, h: 20 },
 	/** sprite: storefront sign (type 5): a fuel pump, its hose and nozzle hanging on its side */
-	signGas: { id: "rbxassetid://102981392384732", w: 24, h: 16 },
+	signGas: { id: "rbxassetid://108554848118783", w: 24, h: 16 },
 	/** sprite: storefront sign (type 6): a green cross lightbox */
-	signPharmacy: { id: "rbxassetid://103233203209784", w: 24, h: 16 },
+	signPharmacy: { id: "rbxassetid://96112656262295", w: 24, h: 16 },
 	/** sprite: storefront sign (type 7): a shopping cart */
-	signMarket: { id: "rbxassetid://96888495851566", w: 32, h: 20 },
+	signMarket: { id: "rbxassetid://93005756413658", w: 32, h: 20 },
 	/** sprite: storefront sign (type 8): a paper grocery bag with a baguette and an apple */
-	signGrocery: { id: "rbxassetid://122210622314467", w: 24, h: 16 },
+	signGrocery: { id: "rbxassetid://72537450007132", w: 24, h: 16 },
 	/** sprite: storefront sign (type 9): a pistol */
-	signGuns: { id: "rbxassetid://81619965285369", w: 24, h: 16 },
+	signGuns: { id: "rbxassetid://117357221086062", w: 24, h: 16 },
 	/** sprite: storefront sign (type 10): a T-shirt */
-	signClothes: { id: "rbxassetid://99147626160535", w: 24, h: 16 },
+	signClothes: { id: "rbxassetid://112674003076505", w: 24, h: 16 },
 	/** sprite: storefront sign (type 11): a plate between a fork and a knife */
-	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
+	signDiner: { id: "rbxassetid://128089711622782", w: 32, h: 20 },
 	/** sprite: storefront sign (type 12): a mortarboard, its lit top and its cap, the gold tassel hanging off its corner, on the college's maroon */
-	signCollege: { id: "rbxassetid://97269546399799", w: 24, h: 16 },
+	signCollege: { id: "rbxassetid://80455916168349", w: 24, h: 16 },
 	/** sprite: storefront sign (type 13): books standing on a shelf, gold bands on their spines, on the college's maroon */
-	signLibrary: { id: "rbxassetid://133598523682983", w: 24, h: 16 },
+	signLibrary: { id: "rbxassetid://118093291454515", w: 24, h: 16 },
 	/** sprite: storefront sign (type 14): a flask of green reagent and a test tube, on the college's maroon */
-	signLab: { id: "rbxassetid://118327188936209", w: 24, h: 16 },
+	signLab: { id: "rbxassetid://118500150708359", w: 24, h: 16 },
 	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
-	signDorm: { id: "rbxassetid://81449538718007", w: 24, h: 16 },
+	signDorm: { id: "rbxassetid://101587899989297", w: 24, h: 16 },
+	/** sprite: storefront sign (type 16): a claw hammer, its steel head over a wooden handle, on hardware orange */
+	signHardware: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 17): a wheel: the black tyre, its white rim and the hub, on slate blue */
+	signAutoRepair: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 18): a yellow lightning bolt, on indigo */
+	signElectronics: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 19): a scored loaf of bread, on rose */
+	signBakery: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 20): the pawnbroker's three gold balls hanging from their bar, on dark brown */
+	signPawn: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 21): an envelope, its flap folded down, on post blue */
+	signPost: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze */
+	signBank: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 23): the town hall: a clock tower over its two wings and the front door, on lavender */
+	signTownHall: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 24): a yellow flame, its white-hot heart, on fire-engine red */
+	signFire: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 25): a navy shield with a gold star, on pale blue */
+	signPolice: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 26): a briefcase, its brass clasp, on sea-glass green */
+	signOffice: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
-	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	helipad: { id: "rbxassetid://94643764245261", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyN: { id: "rbxassetid://132546173882337", w: 113, h: 29 },
+	gasCanopyN: { id: "rbxassetid://125205539029145", w: 113, h: 29 },
 	/** sprite: gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyS: { id: "rbxassetid://132004573447997", w: 113, h: 29 },
+	gasCanopyS: { id: "rbxassetid://108385533523804", w: 113, h: 29 },
 	/** sprite: gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyW: { id: "rbxassetid://122371876471179", w: 29, h: 113 },
+	gasCanopyW: { id: "rbxassetid://115098962444579", w: 29, h: 113 },
 	/** sprite: gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
-	gasCanopyE: { id: "rbxassetid://125833645629229", w: 29, h: 113 },
+	gasCanopyE: { id: "rbxassetid://121551836533975", w: 29, h: 113 },
 	/** sprite: gas station price sign: a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post */
-	signPrice: { id: "rbxassetid://93065346422856", w: 16, h: 25 },
+	signPrice: { id: "rbxassetid://128067960365536", w: 16, h: 25 },
 	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
-	bicycle: { id: "rbxassetid://127507461066870", w: 18, h: 7 },
+	bicycle: { id: "rbxassetid://109042532253105", w: 18, h: 7 },
 	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
-	motorcycle: { id: "rbxassetid://118066543253609", w: 22, h: 8 },
+	motorcycle: { id: "rbxassetid://82910695205219", w: 22, h: 8 },
 	/** sprite: the turret's mount: an octagonal steel plate, the ring the head turns on, four bolts */
-	machineTurret: { id: "rbxassetid://77702840432849", w: 16, h: 16 },
+	machineTurret: { id: "rbxassetid://83961163882556", w: 16, h: 16 },
 	/** sprite: the turret's head: a blue dome and the barrel, pointing +x (it turns) */
-	machineTurretHead: { id: "rbxassetid://139719724770466", w: 13, h: 8 },
+	machineTurretHead: { id: "rbxassetid://105237041592826", w: 13, h: 8 },
 	/** sprite: the electric turret: copper coil rings round a steel terminal */
-	machineShock: { id: "rbxassetid://85931966978105", w: 16, h: 16 },
+	machineShock: { id: "rbxassetid://136617266292268", w: 16, h: 16 },
 	/** sprite: the battery box: blue case, the gauge window, the two posts */
-	machineBattery: { id: "rbxassetid://93415037254225", w: 10, h: 10 },
+	machineBattery: { id: "rbxassetid://99032517010832", w: 10, h: 10 },
 	/** sprite: the solar generator: nine blue cells in a steel frame */
-	machineSolar: { id: "rbxassetid://81585056146802", w: 18, h: 18 },
+	machineSolar: { id: "rbxassetid://71820992740459", w: 18, h: 18 },
 	/** sprite: the nuclear reactor: the vessel, its hazard band, the dome and the core */
-	machineReactor: { id: "rbxassetid://109888181688982", w: 20, h: 20 },
+	machineReactor: { id: "rbxassetid://124251372179356", w: 20, h: 20 },
 	/** sprite: the oil generator: the radiator grille, the red tank and its cap, the exhaust */
-	machineOil: { id: "rbxassetid://133256451135024", w: 18, h: 18 },
+	machineOil: { id: "rbxassetid://121680069491151", w: 18, h: 18 },
 	/** sprite: the lamp: a floodlight head on its plate */
-	machineLamp: { id: "rbxassetid://112993322544570", w: 12, h: 12 },
+	machineLamp: { id: "rbxassetid://121600531471634", w: 12, h: 12 },
 	/** sprite: the turret drone's pad: the charging ring and its contacts */
-	machinePadTurret: { id: "rbxassetid://71846499506269", w: 12, h: 12 },
+	machinePadTurret: { id: "rbxassetid://95516115101180", w: 12, h: 12 },
 	/** sprite: the lamp drone's pad */
-	machinePadLamp: { id: "rbxassetid://72511532613161", w: 10, h: 10 },
+	machinePadLamp: { id: "rbxassetid://106435819341933", w: 10, h: 10 },
 	/** sprite: the turret drone: four rotors, the body and its gun, pointing +x (it turns) */
-	machineDroneTurret: { id: "rbxassetid://107258930226126", w: 11, h: 11 },
+	machineDroneTurret: { id: "rbxassetid://95984277760340", w: 11, h: 11 },
 	/** sprite: the lamp drone: four rotors and the lamp */
-	machineDroneLamp: { id: "rbxassetid://111632950471492", w: 11, h: 11 },
+	machineDroneLamp: { id: "rbxassetid://139066066075741", w: 11, h: 11 },
 	/** sprite: the signal generator's base: the plate and the mast */
-	machineBeacon: { id: "rbxassetid://75004383486636", w: 12, h: 12 },
+	machineBeacon: { id: "rbxassetid://84669381930230", w: 12, h: 12 },
 	/** sprite: the signal generator's dish, facing +x (it turns) */
-	machineBeaconDish: { id: "rbxassetid://109444816234415", w: 6, h: 7 },
+	machineBeaconDish: { id: "rbxassetid://114854108137842", w: 6, h: 7 },
 	/** sprite: the cooker: a steel top with two plates and the knobs */
-	machineCooker: { id: "rbxassetid://85559123932840", w: 14, h: 12 },
+	machineCooker: { id: "rbxassetid://100036293760025", w: 14, h: 12 },
 	/** tile: bedroom / office carpet: a low loop pile */
-	floorCarpet: { id: "rbxassetid://117022765804029", w: 16, h: 16 },
+	floorCarpet: { id: "rbxassetid://76218697454378", w: 16, h: 16 },
 	/** tile: kitchen floor: checker tiles */
-	floorKitchen: { id: "rbxassetid://118399822667752", w: 16, h: 16 },
+	floorKitchen: { id: "rbxassetid://118028356616797", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
-	floorBath: { id: "rbxassetid://106965413738558", w: 16, h: 16 },
-	/** slice: the shadow at the foot of an interior wall (round every wall) */
-	wallShade: { id: "rbxassetid://120729739933297", w: 7, h: 7, slice: [3, 3, 4, 4] },
+	floorBath: { id: "rbxassetid://114108861727270", w: 16, h: 16 },
+	/** slice: an interior wall's outline (its centre, tinted) and the shadow at its foot */
+	wallShade: { id: "rbxassetid://115914959931221", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
-	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
+	survivorsA: { id: "rbxassetid://72971918566679", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
-	survivorsAFill: { id: "rbxassetid://90981359121327", w: 640, h: 800 },
+	survivorsAFill: { id: "rbxassetid://130233128777158", w: 640, h: 800 },
 	/** mask: survivorsA: white outlines of the same cells (tint: the red hit outline, LEG-02) */
-	survivorsARim: { id: "rbxassetid://103853913468166", w: 640, h: 800 },
+	survivorsARim: { id: "rbxassetid://119464774075098", w: 640, h: 800 },
 	/** sheet: survivors, Zombie costume and Cowboy: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms (ART-09) */
-	survivorsB: { id: "rbxassetid://128834771669145", w: 640, h: 800 },
+	survivorsB: { id: "rbxassetid://86243325431728", w: 640, h: 800 },
 	/** mask: survivorsB: white silhouettes of the same cells (tint: hit flash, poison) */
-	survivorsBFill: { id: "rbxassetid://112608563310329", w: 640, h: 800 },
+	survivorsBFill: { id: "rbxassetid://92264708269652", w: 640, h: 800 },
 	/** mask: survivorsB: white outlines of the same cells (tint: the red hit outline, LEG-02) */
-	survivorsBRim: { id: "rbxassetid://124359190731973", w: 640, h: 800 },
+	survivorsBRim: { id: "rbxassetid://71330821045410", w: 640, h: 800 },
 	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows (ART-09) */
-	weapons: { id: "rbxassetid://104466895843019", w: 768, h: 840 },
+	weapons: { id: "rbxassetid://90202612381580", w: 768, h: 840 },
 	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 3 strides; spitter wind-ups, jumper in the air, charger charging (ART-10) */
-	zombies: { id: "rbxassetid://130560833722758", w: 768, h: 504 },
+	zombies: { id: "rbxassetid://138455388765953", w: 768, h: 504 },
 	/** mask: zombies: white silhouettes of the same cells (tint: hit flash, lit fuse) */
-	zombiesFill: { id: "rbxassetid://136810778237987", w: 768, h: 504 },
+	zombiesFill: { id: "rbxassetid://121468047822975", w: 768, h: 504 },
 	/** mask: zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow) */
-	zombiesRim: { id: "rbxassetid://108475964294260", w: 768, h: 504 },
+	zombiesRim: { id: "rbxassetid://125308639707087", w: 768, h: 504 },
 	/** sheet: pets: Carolina, Malamute, Doberman x 3 trot strides + 3 tail wags (ART-11) */
-	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
+	dogs: { id: "rbxassetid://90855133643247", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
-	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
+	birds: { id: "rbxassetid://103677264883916", w: 768, h: 360 },
 	/** sheet: boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-14) */
-	bossGiant: { id: "rbxassetid://95282298769358", w: 640, h: 320 },
+	bossGiant: { id: "rbxassetid://119328056365175", w: 640, h: 320 },
 	/** mask: bossGiant: white silhouettes of the same cells (tint: hit flash) */
-	bossGiantFill: { id: "rbxassetid://129758628519753", w: 640, h: 320 },
+	bossGiantFill: { id: "rbxassetid://97770426653085", w: 640, h: 320 },
 	/** mask: bossGiant: white outlines of the same cells (tint: the hit outline) */
-	bossGiantRim: { id: "rbxassetid://83535839220751", w: 640, h: 320 },
+	bossGiantRim: { id: "rbxassetid://80843211195047", w: 640, h: 320 },
 	/** sheet: boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-14) */
-	bossHedgehog: { id: "rbxassetid://107503368916093", w: 640, h: 240 },
+	bossHedgehog: { id: "rbxassetid://73507768340942", w: 640, h: 240 },
 	/** mask: bossHedgehog: white silhouettes of the same cells (tint: hit flash) */
-	bossHedgehogFill: { id: "rbxassetid://106047861481982", w: 640, h: 240 },
+	bossHedgehogFill: { id: "rbxassetid://79135650137095", w: 640, h: 240 },
 	/** mask: bossHedgehog: white outlines of the same cells (tint: the hit outline) */
-	bossHedgehogRim: { id: "rbxassetid://107128601154057", w: 640, h: 240 },
+	bossHedgehogRim: { id: "rbxassetid://119127789280354", w: 640, h: 240 },
 	/** sheet: boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-14) */
-	bossCentipede: { id: "rbxassetid://119196418708646", w: 640, h: 480 },
+	bossCentipede: { id: "rbxassetid://136951627821617", w: 640, h: 480 },
 	/** mask: bossCentipede: white silhouettes of the same cells (tint: hit flash) */
-	bossCentipedeFill: { id: "rbxassetid://74531948998395", w: 640, h: 480 },
+	bossCentipedeFill: { id: "rbxassetid://96385645324175", w: 640, h: 480 },
 	/** mask: bossCentipede: white outlines of the same cells (tint: the hit outline) */
-	bossCentipedeRim: { id: "rbxassetid://139138568435683", w: 640, h: 480 },
+	bossCentipedeRim: { id: "rbxassetid://121384731032432", w: 640, h: 480 },
 	/** sheet: boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-14) */
-	bossRafflesia: { id: "rbxassetid://108221250630981", w: 816, h: 68 },
+	bossRafflesia: { id: "rbxassetid://104897167530631", w: 816, h: 68 },
 	/** mask: bossRafflesia: white silhouettes of the same cells (tint: hit flash) */
-	bossRafflesiaFill: { id: "rbxassetid://90583146522584", w: 816, h: 68 },
+	bossRafflesiaFill: { id: "rbxassetid://76796714766849", w: 816, h: 68 },
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
-	bossRafflesiaRim: { id: "rbxassetid://88546042032232", w: 816, h: 68 },
+	bossRafflesiaRim: { id: "rbxassetid://125105479176447", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
-	/** atlas: interiors: 1343 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "", w: 1024, h: 718 },
+	itemIcons: { id: "rbxassetid://89487834990160", w: 288, h: 244 },
+	/** atlas: interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
-	blood: { id: "rbxassetid://115387837711444", w: 96, h: 264 },
+	blood: { id: "rbxassetid://138018740222052", w: 96, h: 264 },
+	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
+	townProps: { id: "", w: 1024, h: 662 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
-	wordmark: { id: "", w: 86, h: 39 },
+	wordmark: { id: "rbxassetid://132745135799721", w: 86, h: 39 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -547,6 +583,17 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signLibrary",
 	"signLab",
 	"signDorm",
+	"signHardware",
+	"signAutoRepair",
+	"signElectronics",
+	"signBakery",
+	"signPawn",
+	"signPost",
+	"signBank",
+	"signTownHall",
+	"signFire",
+	"signPolice",
+	"signOffice",
 	"helipad",
 	"gasCanopyN",
 	"gasCanopyS",
@@ -601,5 +648,6 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"itemIcons",
 	"furniture",
 	"blood",
+	"townProps",
 	"wordmark",
 ];

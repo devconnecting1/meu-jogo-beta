@@ -1874,6 +1874,35 @@ section(
 				/cues: ""/.test(stale) && stale.includes(before.ids.ui),
 				"um id cujo sha1 nao e o do WAV de hoje fica de fora do modulo (o banco volta a biblioteca ate subir de novo)",
 			);
+			// troca de conta: o audio e privado de quem sobe; um id de outro criador que o `owner` (gravado pela CI)
+			// tocaria silencio no jogo da conta nova, entao sai do modulo e o banco toca a biblioteca (SND-01)
+			const regen = assets => {
+				writeFileSync(join(dir, "assets.json"), JSON.stringify(assets));
+				spawnSync(process.execPath, [join(ROOT, "tools", "gen-sfx.mjs"), "--assets"], {
+					encoding: "utf8",
+					env: { ...process.env, PZ_AUDIO_DIR: dir, PZ_AUDIO_TS: tsOut },
+				});
+				return readFileSync(tsOut, "utf8");
+			};
+			const owned = JSON.parse(JSON.stringify(before));
+			owned.sha1.cues = assets.sha1.cues;
+			owned.creator = Object.fromEntries(SFX.BANKS.map(b => [b, "user:4242"]));
+			owned.creator.items = "user:111";
+			delete owned.creator.weapons;
+			const withOwner = regen({ ...owned, owner: "user:4242" });
+			check(
+				/items: ""/.test(withOwner) &&
+					/weapons: ""/.test(withOwner) &&
+					withOwner.includes(owned.ids.ui) &&
+					withOwner.includes(owned.ids.cues),
+				"conta nova (owner no assets.json): o id de outro criador, ou sem criador gravado, sai do modulo " +
+					"(a biblioteca toca, nao o silencio); os do dono ficam",
+			);
+			const legacy = regen(owned);
+			check(
+				legacy.includes(owned.ids.items) && legacy.includes(owned.ids.weapons),
+				"sem owner (antes da troca de conta), nada muda: todo id do WAV de hoje entra",
+			);
 			// moderation: a rejected bank keeps no id
 			rmSync(join(dir, "assets.json"));
 			const rejected = run({ PZ_FAKE_ASSETS: JSON.stringify({ weapons: "reject" }) });

@@ -920,6 +920,18 @@ export const LANG_TABLE: Array<string> = [
 	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
 	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
 	"Siphon Oil",
+	// the everyday town's searchable fixtures (client/systems/interaction.ts YARD_HINTS, DESIGN_RULES EDI-21, EDI-22,
+	// MOB-06) and the bank's vault (EDI-24): what E does there, the text after "E: "
+	"Search stall",
+	"Search food truck",
+	"Search pile",
+	"Search shed",
+	"Open deposit boxes",
+	"Crack vault (hold)",
+	// the vault door's pill while its work goes on ("E: Cracking vault 40%") and without the tool it needs ("Vault: needs
+	// Crowbar"): the words here, the number and the item's name added by client/systems/interaction.ts vaultHint
+	"Cracking vault",
+	"Vault: needs",
 	// an intact window at hand: E breaks its glass, the loud way in or out (client/systems/interaction.ts WINDOW_HINT,
 	// DESIGN_RULES EDI-18; the HUD shows the text after "E: ")
 	"Break window",

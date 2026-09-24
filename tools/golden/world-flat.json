@@ -1,69 +1,69 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the window glass (EDI-18, 2026-09-24): a window born broken is the dark empty frame with two stubs of glass on the roof's edge and its shards on the ground outside (in the ground's detail layer, under the blood), an intact one draws exactly as before -- with every window intact each scene is the golden before it, draw call for draw call (checked by forcing brokenShare to 0), so only downtown, gas, overview and border (a window born broken in view) change; the golden before it: the gas station's forecourt (EDI-16) over the interiors branch after the review of ea5cf71, the ART-07 signs and the furnishing of 1d98ae5; noSigns = the same without the signage hook",
+	"recordedFrom": "the everyday town with the window glass (780f2b5), re-recorded on purpose after the review of e9b0fbb (L5): the flat fallback of the town's fixtures is lean -- at most two Frames each (a lamp and a bus stop their pole and head, the food truck its awning too, a standing tent its canvas and three stripes), a bench two Frames with no shadow, a court its acrylic and keys, the bank's steps their risers, and the market's litter none (a decorative extra of the pixel art, ART-04); everything else is 780f2b5's golden",
 	"scenes": {
 		"street": {
-			"count": 1234,
-			"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368",
+			"count": 1147,
+			"sha1": "7d605b1cfb7659da453dc8a64cb4fc6f6e533550",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368"
+				"count": 1147,
+				"sha1": "7d605b1cfb7659da453dc8a64cb4fc6f6e533550"
 			}
 		},
 		"downtown": {
-			"count": 1592,
-			"sha1": "0e0f3093f717bca7e1583b63b4da134cc2fc27a5",
+			"count": 1832,
+			"sha1": "206369aaa1bc5820d7ea91d69ad58bfa31931714",
 			"noSigns": {
-				"count": 1397,
-				"sha1": "71a6215dc4095041fb85668394d9f15ebffe910a"
+				"count": 1481,
+				"sha1": "2510f32990fac8bee930b1b1a43e913977abfe00"
 			}
 		},
 		"park": {
-			"count": 956,
-			"sha1": "345e4532d863d70f29f82f4839fb06e5c5f8ac08",
+			"count": 1551,
+			"sha1": "11d3c1ccd9d1723e5477457b9bc3697f80abe16a",
 			"noSigns": {
-				"count": 956,
-				"sha1": "345e4532d863d70f29f82f4839fb06e5c5f8ac08"
+				"count": 1551,
+				"sha1": "11d3c1ccd9d1723e5477457b9bc3697f80abe16a"
 			}
 		},
 		"school": {
-			"count": 841,
-			"sha1": "2b931cc814b5a43d5bc5b6e9c1d51a99222559d3",
+			"count": 1157,
+			"sha1": "cbebf1c7a5afaa3b454f7574444c7d3ab266beae",
 			"noSigns": {
-				"count": 568,
-				"sha1": "3bac9f586cdfdf61eb529c7371b44231a871bc5d"
+				"count": 845,
+				"sha1": "9f5958b9fa50a33eaac2bb8c88918d0e0ac83adb"
 			}
 		},
 		"gas": {
-			"count": 2229,
-			"sha1": "0db807d5727fe3dd309c46348492a5b16e8b93ad",
+			"count": 2509,
+			"sha1": "d15789d67445ebf0ac1c54f8ba9cbaca198aad9b",
 			"noSigns": {
-				"count": 1969,
-				"sha1": "aaa0b9b680826d1344b32c09352dd66abc064587"
+				"count": 2262,
+				"sha1": "68659f6bab75516191347db2df5ea9c99469e1bb"
 			}
 		},
 		"street-night": {
-			"count": 1234,
-			"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe",
+			"count": 1142,
+			"sha1": "50a212f73810c972556e5b473ff4acc7810865f1",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe"
+				"count": 1142,
+				"sha1": "50a212f73810c972556e5b473ff4acc7810865f1"
 			}
 		},
 		"overview": {
-			"count": 5048,
-			"sha1": "a60b8926ec08e94e4055384057c4ca36f236f933",
+			"count": 4747,
+			"sha1": "1df945f6f144a494e97eaadcf84b923981f47710",
 			"noSigns": {
-				"count": 4736,
-				"sha1": "057cf581d2a4373b8ef392d39a0313f4b4f5b851"
+				"count": 4565,
+				"sha1": "f2fd7a1cbe882203368668deef599f5b2c1f3103"
 			}
 		},
 		"border": {
-			"count": 553,
-			"sha1": "2c837e29d47c2e1020ff22af50f47968b39da412",
+			"count": 845,
+			"sha1": "01eb46d43d8c41c4ce0c65d1826d96bd2b01667f",
 			"noSigns": {
-				"count": 553,
-				"sha1": "2c837e29d47c2e1020ff22af50f47968b39da412"
+				"count": 845,
+				"sha1": "01eb46d43d8c41c4ce0c65d1826d96bd2b01667f"
 			}
 		}
 	}
