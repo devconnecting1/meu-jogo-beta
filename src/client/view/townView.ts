@@ -72,8 +72,9 @@ const STEP = 24;
  */
 export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): boolean {
 	const k = g.kind;
-	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site")
+	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site") {
 		return false;
+	}
 	if (!overlaps(g.x, g.y, g.w, g.h, v)) return true;
 	const cx = g.x + g.w / 2;
 	const cy = g.y + g.h / 2;
@@ -457,8 +458,9 @@ export function drawBankRoof(r: Renderer, cam: Camera, v: ViewRect, s: Solid, a:
 		zIndex: z,
 	});
 	let hall: Rect | undefined;
-	for (const q of s.rooms ?? [])
+	for (const q of s.rooms ?? []) {
 		if (q.kind === "lobby" && (hall === undefined || q.w * q.h > hall.w * hall.h)) hall = q;
+	}
 	if (hall === undefined) return;
 	const hx = hall.x + hall.w / 2;
 	const hy = hall.y + hall.h / 2;
@@ -550,7 +552,6 @@ const BOARD_WHITE = Color3.fromRGB(232, 232, 226);
 const RIM_ORANGE = Color3.fromRGB(222, 110, 38);
 /** the street: a lamp's pole and head, a hydrant, a mailbox, the blue collection box, a bus stop's sign */
 const LAMP_HEAD = Color3.fromRGB(88, 92, 98);
-const LAMP_GLASS = Color3.fromRGB(160, 164, 150);
 const HYDRANT_RED = Color3.fromRGB(190, 52, 42);
 const HYDRANT_CAP = Color3.fromRGB(226, 196, 70);
 const MAIL_FLAG = Color3.fromRGB(200, 50, 44);
@@ -636,11 +637,6 @@ function box(
 			zIndex: z + 1,
 		});
 	}
-}
-
-/** a rect `w` × `h` centred at (x, y) */
-function at(x: number, y: number, w: number, h: number): Rect {
-	return { x: x - w / 2, y: y - h / 2, w, h };
 }
 
 /** the outward normal of a side */
@@ -901,48 +897,29 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		return true;
 	}
 	// ---- the street (MOB-04)
+	// the street's most numerous fixtures are two sprites each, and no outline (a town holds hundreds: the flyover's pool
+	// and the frame budget of a street, test:lobby and test:world-art §4)
 	if (t === "streetlight") {
 		// the pole's foot, and its dark lamp head out over the curb (the power is out: LUZ-02), high above the street
-		r.drawCircle(cam, cx, cy, s.w, { color: IRON, stroke: INK, strokeThickness: 2, zIndex: Z.structure });
+		r.drawCircle(cam, cx, cy, s.w, { color: INK, zIndex: Z.structure });
 		const n = sideN(s.face);
-		r.drawRect(cam, cx + n.x * 34, cy + n.y * 34, {
-			w: n.x !== 0 ? 44 : 14,
-			h: n.x !== 0 ? 14 : 44,
+		r.drawRect(cam, cx + n.x * 36, cy + n.y * 36, {
+			w: n.x !== 0 ? 48 : 14,
+			h: n.x !== 0 ? 14 : 48,
 			color: LAMP_HEAD,
-			stroke: INK,
-			strokeThickness: 1,
 			cornerRadius: 4,
 			zIndex: Z.roof - 1,
-		});
-		r.drawRect(cam, cx + n.x * 44, cy + n.y * 44, {
-			w: 10,
-			h: 10,
-			color: LAMP_GLASS,
-			cornerRadius: 3,
-			zIndex: Z.roof,
 		});
 		return true;
 	}
 	if (t === "hydrant") {
-		const so = shadow(cx, cy, 6);
-		r.drawCircle(cam, cx + so.x, cy + so.y, s.w, { color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
-		r.drawCircle(cam, cx, cy, s.w, { color: HYDRANT_RED, stroke: INK, strokeThickness: 2, zIndex: Z.structure });
+		r.drawCircle(cam, cx, cy, s.w, { color: HYDRANT_RED, zIndex: Z.structure });
 		r.drawCircle(cam, cx - 1, cy - 1, s.w - 10, { color: HYDRANT_CAP, zIndex: Z.structure + 1 });
 		return true;
 	}
 	if (t === "mailbox") {
 		// the box on its post, the red flag up on its side
-		const so = shadow(cx, cy, 8);
-		r.drawRect(cam, cx + so.x, cy + so.y, { w: 14, h: 22, color: BLACK, alpha: SHADOW_A, zIndex: Z.shadow });
-		r.drawRect(cam, cx, cy, {
-			w: 14,
-			h: 22,
-			color: IRON,
-			stroke: INK,
-			strokeThickness: 1,
-			cornerRadius: 5,
-			zIndex: Z.structure,
-		});
+		r.drawRect(cam, cx, cy, { w: 14, h: 22, color: IRON, cornerRadius: 5, zIndex: Z.structure });
 		r.drawRect(cam, cx + 8, cy - 4, { w: 4, h: 10, color: MAIL_FLAG, zIndex: Z.structure + 1 });
 		return true;
 	}

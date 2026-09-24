@@ -803,8 +803,8 @@ function inVerge(e: LotEdge, u: number, along: number, deep: number): Rect {
 
 /**
  * The street furniture of one lot's sidewalks (MOB-04, CID-02), laid last, once every building, tree, bin and car
- * stands: street lamps between the street trees (every lattice step on an avenue and downtown, every second one on a
- * residential street; dark: the power is out, LUZ-02), a fire hydrant near a corner of each face, a mailbox at the
+ * stands: street lamps between the street trees (every lattice step on an avenue, every second one on any other
+ * street; dark: the power is out, LUZ-02), a fire hydrant near a corner of most faces, a mailbox at the
  * curb beside the path of most houses, a bench on a downtown face, a blue collection box on some downtown blocks, and
  * on the avenues a bus stop -- the sign, the bench, the shelter's roof. All in the service strip, never in a cut
  * (a path, a driveway), never within a car length of a corner, and pinching no slot (EDI-11).
@@ -818,7 +818,7 @@ export function furnishStreets(kit: TownKit, lot: Lot): void {
 		if (range.b - range.a < 200) continue;
 		// street lamps: halfway between two street trees (both sides of a street line up on the lattice)
 		const lat = kit.treeLattice(e.road);
-		const every = road.avenue || downtown ? 1 : 2;
+		const every = road.avenue ? 1 : 2;
 		let k = math.ceil((range.a - lat.phase) / lat.pitch - 0.5);
 		while (lat.phase + (k + 0.5) * lat.pitch <= range.b) {
 			const u = snap8(lat.phase + (k + 0.5) * lat.pitch);
@@ -968,8 +968,9 @@ export function furnishBackyards(kit: TownKit, lot: Lot): void {
 		for (const [tags, along, deep, low, share, box] of YARD_THINGS) {
 			if (!kit.rng.chance(share)) continue;
 			const r = tryAt(along, deep);
-			if (r !== undefined)
+			if (r !== undefined) {
 				prop(kit, tags, r, low, box ? { face: inwardSide(e.side), ...holds() } : { face: inwardSide(e.side) });
+			}
 		}
 		if (kit.rng.chance(GARDEN_SHARE)) {
 			const r = tryAt(GARDEN_W, GARDEN_H);

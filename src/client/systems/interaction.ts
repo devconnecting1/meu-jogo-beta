@@ -1,4 +1,5 @@
 import { DESIGN } from "shared/engine/constants";
+import type { InputState } from "shared/engine/input";
 import { rndRange } from "shared/engine/rng";
 import type { PlayerState } from "shared/game/player";
 import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
@@ -249,10 +250,15 @@ function vaultHint(refs: GameRefs, s: Solid): string | undefined {
 
 /** the work at a vault door, as this client sees it: E held (or pressed: `tryInteract`), at the door, with the tool */
 function stepVaultWork(refs: GameRefs, dt: number): void {
-	if (refs.input.keyE) vaultSince = 0;
+	// (a system run on its own -- a Node suite -- may hand in refs without the input or the body)
+	const input = refs.input as InputState | undefined;
+	if (input !== undefined && input.keyE) vaultSince = 0;
 	else vaultSince += dt;
-	const p = refs.player;
-	const s = vaultSince <= VAULT_GRACE_S && !p.dead ? nearestUsableSolid(refs.world, p.x, p.y) : undefined;
+	const p = refs.player as PlayerState | undefined;
+	const s =
+		vaultSince <= VAULT_GRACE_S && p !== undefined && !p.dead
+			? nearestUsableSolid(refs.world, p.x, p.y)
+			: undefined;
 	if (s === undefined || !isVaultDoor(s) || s.open === true || !hasVaultTool(refs.save)) {
 		vaultAt = undefined;
 		vaultWork = 0;
