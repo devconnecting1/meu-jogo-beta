@@ -381,8 +381,8 @@ const { SOUNDS } = require(join(SRC, "shared/data/sounds.ts"));
 const Plan = require(join(SRC, "client/boot/preloadPlan.ts"));
 const WorldArt = require(join(SRC, "client/view/worldArt.ts"));
 
-// the character sheets and the icon atlas have no id until the owner uploads them: fake ids for this section, so the
-// plan is seen with every step in it (put back afterwards; section 3 measures the Bag both ways)
+// a texture with no id yet (a character sheet, the icon atlas, before the owner uploads it) gets a fake id for this
+// section, so the plan is seen with every step in it (put back afterwards; section 3 measures the Bag both ways)
 const pendingUpload = WORLD_ART_NAMES.filter(n => WORLD_ART[n].id === "");
 pendingUpload.forEach((n, i) => (WORLD_ART[n].id = `rbxassetid://900000${i}`));
 const skinIds = SKIN_TEXTURE_NAMES.map(n => SKIN_TEXTURES[n].id).filter(id => id !== "");
@@ -592,6 +592,16 @@ const newPack = () => {
 const created = r => r.created;
 const measure = ui.measure;
 
+/** the uploads as they are, with the item icon atlas's id set to `id` ("" = none: the icons are Frames) */
+function setIconAtlas(id) {
+	const ids = {};
+	for (const name of WORLD_ART_NAMES) ids[name] = WORLD_ART[name].id;
+	ids.itemIcons = id;
+	WorldArt.overrideWorldArt(ids);
+}
+// the Bag with its icons drawn as Frames, whatever has been uploaded; the atlas is measured further down
+setIconAtlas("");
+
 // ---- before: the Bag of today, built on the first B press
 const control = newPack();
 const firstOpen = measure(() => control.open());
@@ -696,7 +706,9 @@ pack.close();
 // ---- with the icon atlas uploaded (client/ui/itemIcon.ts: an icon is one ImageLabel): what the warm-up still saves
 let atlasLine = "";
 {
-	WorldArt.overrideWorldArt({ itemIcons: "rbxassetid://1" });
+	// the uploaded atlas (a stand-in id while it has none)
+	const atlasId = WORLD_ART.itemIcons.id !== "" ? WORLD_ART.itemIcons.id : "rbxassetid://1";
+	setIconAtlas(atlasId);
 	const coldA = newPack();
 	const openA = measure(() => coldA.open()).created;
 	const tabsA = [];
@@ -719,11 +731,12 @@ let atlasLine = "";
 	warmA.close();
 	warmA.root?.Destroy();
 	flush();
-	WorldArt.overrideWorldArt(undefined);
+	setIconAtlas("");
 	const beforeA = openA + tabsA.reduce((a, b) => a + b, 0);
 	atlasLine =
-		`com o atlas: antes ${beforeA} Instances no clique (abertura ${openA} + abas ${tabsA.join("/")}); ` +
-		`depois 0, em ${framesA.length} quadros (pior ${Math.max(...framesA)} Instances/quadro)`;
+		`com o atlas${atlasId === WORLD_ART.itemIcons.id ? " enviado" : ""}: antes ${beforeA} Instances no clique ` +
+		`(abertura ${openA} + abas ${tabsA.join("/")}); depois ${firstA.created}, em ${framesA.length} quadros ` +
+		`(pior ${Math.max(...framesA)} Instances/quadro)`;
 	check(
 		"com o atlas dos icones no ar (um ImageLabel por icone) o aquecimento tambem deixa a 1a abertura sem Instance",
 		firstA.created === 0 && firstA.destroyed === 0 && beforeA < beforeTotal,

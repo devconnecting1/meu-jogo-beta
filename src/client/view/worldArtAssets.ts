@@ -286,71 +286,71 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
-	bicycle: { id: "", w: 18, h: 7 },
+	bicycle: { id: "rbxassetid://127507461066870", w: 18, h: 7 },
 	/** sprite: a motorcycle from above, nose to +x: tank, seat, engine, exhaust, lamp */
-	motorcycle: { id: "", w: 22, h: 8 },
+	motorcycle: { id: "rbxassetid://118066543253609", w: 22, h: 8 },
 	/** sprite: the turret's mount: an octagonal steel plate, the ring the head turns on, four bolts */
-	machineTurret: { id: "", w: 16, h: 16 },
+	machineTurret: { id: "rbxassetid://77702840432849", w: 16, h: 16 },
 	/** sprite: the turret's head: a blue dome and the barrel, pointing +x (it turns) */
-	machineTurretHead: { id: "", w: 13, h: 8 },
+	machineTurretHead: { id: "rbxassetid://139719724770466", w: 13, h: 8 },
 	/** sprite: the electric turret: copper coil rings round a steel terminal */
-	machineShock: { id: "", w: 16, h: 16 },
+	machineShock: { id: "rbxassetid://85931966978105", w: 16, h: 16 },
 	/** sprite: the battery box: blue case, the gauge window, the two posts */
-	machineBattery: { id: "", w: 10, h: 10 },
+	machineBattery: { id: "rbxassetid://93415037254225", w: 10, h: 10 },
 	/** sprite: the solar generator: nine blue cells in a steel frame */
-	machineSolar: { id: "", w: 18, h: 18 },
+	machineSolar: { id: "rbxassetid://81585056146802", w: 18, h: 18 },
 	/** sprite: the nuclear reactor: the vessel, its hazard band, the dome and the core */
-	machineReactor: { id: "", w: 20, h: 20 },
+	machineReactor: { id: "rbxassetid://109888181688982", w: 20, h: 20 },
 	/** sprite: the oil generator: the radiator grille, the red tank and its cap, the exhaust */
-	machineOil: { id: "", w: 18, h: 18 },
+	machineOil: { id: "rbxassetid://133256451135024", w: 18, h: 18 },
 	/** sprite: the lamp: a floodlight head on its plate */
-	machineLamp: { id: "", w: 12, h: 12 },
+	machineLamp: { id: "rbxassetid://112993322544570", w: 12, h: 12 },
 	/** sprite: the turret drone's pad: the charging ring and its contacts */
-	machinePadTurret: { id: "", w: 12, h: 12 },
+	machinePadTurret: { id: "rbxassetid://71846499506269", w: 12, h: 12 },
 	/** sprite: the lamp drone's pad */
-	machinePadLamp: { id: "", w: 10, h: 10 },
+	machinePadLamp: { id: "rbxassetid://72511532613161", w: 10, h: 10 },
 	/** sprite: the turret drone: four rotors, the body and its gun, pointing +x (it turns) */
-	machineDroneTurret: { id: "", w: 11, h: 11 },
+	machineDroneTurret: { id: "rbxassetid://107258930226126", w: 11, h: 11 },
 	/** sprite: the lamp drone: four rotors and the lamp */
-	machineDroneLamp: { id: "", w: 11, h: 11 },
+	machineDroneLamp: { id: "rbxassetid://111632950471492", w: 11, h: 11 },
 	/** sprite: the signal generator's base: the plate and the mast */
-	machineBeacon: { id: "", w: 12, h: 12 },
+	machineBeacon: { id: "rbxassetid://75004383486636", w: 12, h: 12 },
 	/** sprite: the signal generator's dish, facing +x (it turns) */
-	machineBeaconDish: { id: "", w: 6, h: 7 },
+	machineBeaconDish: { id: "rbxassetid://109444816234415", w: 6, h: 7 },
 	/** sprite: the cooker: a steel top with two plates and the knobs */
-	machineCooker: { id: "", w: 14, h: 12 },
+	machineCooker: { id: "rbxassetid://85559123932840", w: 14, h: 12 },
 	/** tile: bedroom / office carpet: a low loop pile */
-	floorCarpet: { id: "", w: 16, h: 16 },
+	floorCarpet: { id: "rbxassetid://117022765804029", w: 16, h: 16 },
 	/** tile: kitchen floor: checker tiles */
-	floorKitchen: { id: "", w: 16, h: 16 },
+	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
-	floorBath: { id: "", w: 16, h: 16 },
+	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
-	survivorsA: { id: "", w: 640, h: 800 },
+	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
-	survivorsAFill: { id: "", w: 640, h: 800 },
+	survivorsAFill: { id: "rbxassetid://90981359121327", w: 640, h: 800 },
 	/** mask: survivorsA: white outlines of the same cells (tint: the red hit outline, LEG-02) */
-	survivorsARim: { id: "", w: 640, h: 800 },
+	survivorsARim: { id: "rbxassetid://103853913468166", w: 640, h: 800 },
 	/** sheet: survivors, Zombie costume and Cowboy: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms (ART-09) */
-	survivorsB: { id: "", w: 640, h: 800 },
+	survivorsB: { id: "rbxassetid://128834771669145", w: 640, h: 800 },
 	/** mask: survivorsB: white silhouettes of the same cells (tint: hit flash, poison) */
-	survivorsBFill: { id: "", w: 640, h: 800 },
+	survivorsBFill: { id: "rbxassetid://112608563310329", w: 640, h: 800 },
 	/** mask: survivorsB: white outlines of the same cells (tint: the red hit outline, LEG-02) */
-	survivorsBRim: { id: "", w: 640, h: 800 },
+	survivorsBRim: { id: "rbxassetid://124359190731973", w: 640, h: 800 },
 	/** sheet: weapons in hand: each melee weapon swung and held, then the guns and bows (ART-09) */
-	weapons: { id: "", w: 768, h: 840 },
+	weapons: { id: "rbxassetid://104466895843019", w: 768, h: 840 },
 	/** sheet: zombies: walker, spitter, exploder, charger, jumper x 3 strides; spitter wind-ups, jumper in the air, charger charging (ART-10) */
-	zombies: { id: "", w: 768, h: 504 },
+	zombies: { id: "rbxassetid://130560833722758", w: 768, h: 504 },
 	/** mask: zombies: white silhouettes of the same cells (tint: hit flash, lit fuse) */
-	zombiesFill: { id: "", w: 768, h: 504 },
+	zombiesFill: { id: "rbxassetid://136810778237987", w: 768, h: 504 },
 	/** mask: zombies: white outlines of the same cells (tint: the hit outline, the lit fuse's yellow) */
-	zombiesRim: { id: "", w: 768, h: 504 },
+	zombiesRim: { id: "rbxassetid://108475964294260", w: 768, h: 504 },
 	/** sheet: pets: Carolina, Malamute, Doberman x 3 trot strides + 3 tail wags (ART-11) */
-	dogs: { id: "", w: 576, h: 324 },
+	dogs: { id: "rbxassetid://108866717754202", w: 576, h: 324 },
 	/** sheet: pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11) */
-	birds: { id: "", w: 768, h: 360 },
+	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
 	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "", w: 288, h: 244 },
+	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
