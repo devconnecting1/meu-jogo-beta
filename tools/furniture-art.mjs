@@ -110,6 +110,9 @@ function materials(C) {
 	add("counter", C.counterTop);
 	add("glass", C.glassCold, { shine: true });
 	add("glassDark", mix(C.glassCold, C.metalDark, 0.45), { shine: true });
+	// what is left of a window pane: glass the floor shows through (drawn at `alpha`)
+	m.pane = { ...ramp(mix(C.glassCold, WHITE, 0.25), { shine: true }), alpha: 130 };
+	add("fabricGrey", [118, 118, 126], { soft: true });
 	add("screen", [36, 40, 50], { shine: true });
 	add("paper", C.paper, { soft: true });
 	add("chalk", C.chalkboard);
@@ -139,6 +142,9 @@ function materials(C) {
 	add("rugCream", [192, 176, 142], { soft: true });
 	add("matBlue", mix(C.glassCold, C.porcelain, 0.4), { soft: true });
 	add("food", [196, 150, 96]);
+	// the campus (EDI-17): a lab bench's black epoxy top, a notice board's cork
+	add("epoxy", mix(C.metalDark, BLACK, 0.3), { shine: true });
+	add("cork", mix(C.furnWood, C.goodsC, 0.35));
 	return m;
 }
 
@@ -154,6 +160,8 @@ function inks(C) {
 		coin: [196, 170, 84],
 		red: C.goodsA,
 		green: [96, 150, 88],
+		/** a chemical spill: the acid green of the game's acid (LEG-02: green is not blood) */
+		acid: mix(C.acid, BLACK, 0.3),
 	};
 }
 
@@ -216,7 +224,6 @@ class Canvas {
 			]) {
 				this.shadeAt(cx, cy, -1);
 			}
-			this.shadeAt(x + 1, y + 1, 1);
 		}
 	}
 	/** an irregular blotch (a stain, a spill): `n` texels grown from (x, y) with the stream `r`, in ink `c` */
@@ -355,6 +362,10 @@ function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
 			}
 		}
 	}
+	const empty = (x, y) => zAt(x, y) === -99;
+	const rim = (x, y) => !empty(x, y) && (empty(x - 1, y) || empty(x + 1, y) || empty(x, y - 1) || empty(x, y + 1));
+	// the silhouette's edge, as the texel next to it sees it: the outline ring, or (no outline) the outside itself
+	const edge = outline ? rim : empty;
 	for (let y = 0; y < H; y++) {
 		for (let x = 0; x < W; x++) {
 			const i = y * W + x;
@@ -374,11 +385,15 @@ function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
 				if ((zu !== -99 && zu < z) || (zl !== -99 && zl < z)) lv = 1;
 				else if ((zd !== -99 && zd < z) || (zr !== -99 && zr < z)) lv = -1;
 				if (zu >= z + 2 || zl >= z + 2) lv = -1;
+				// the bevel inside the silhouette, in the world's frame (after the piece was turned): lit along its top
+				// and left edge, in shade along its bottom and right one -- the light never turns with the furniture
+				if (edge(x, y - 1) || edge(x - 1, y)) lv += 1;
+				else if (edge(x, y + 1) || edge(x + 1, y)) lv -= 1;
 				lv = Math.max(-2, Math.min(2, lv + cv.tone[i]));
 				c = lv === -2 ? R.dd : lv === -1 ? R.d : lv === 1 ? R.l : lv === 2 ? R.h : R.m;
 			}
 			if (cv.ink[i] !== null) c = cv.ink[i];
-			put(x, y, c, 255);
+			put(x, y, c, cv.ink[i] !== null ? 255 : (R.alpha ?? 255));
 		}
 	}
 	return out;
@@ -416,33 +431,36 @@ function burner(c, x, y) {
 	c.inkAt(Math.round(x), Math.round(y), [110, 112, 120]);
 }
 
+/**
+ * A sofa (an armchair is a short one): the back rest along the wall and the arms standing higher than the seat --
+ * the seat lies in their shadow along the back and the left arm (light from the top left) -- the seat cushions each
+ * lit along their top and parted by a seam, a throw pillow against an arm; a cushion a little out of place.
+ */
 function sofa(c, L, D, look, r) {
-	const cloth = ["fabric", "fabricBrown", "fabricGreen"][look % 3];
-	const back = Math.max(2, Math.round(D * 0.26));
+	const cloth = ["fabric", "fabricGreen", "fabricGrey"][look % 3];
+	const back = Math.max(3, Math.round(D * 0.3));
 	const arm = L >= 20 ? 3 : 2;
 	c.box(0, 0, L, D, cloth, 2);
-	c.box(0, 0, L, back, cloth, 3);
-	c.box(0, 0, arm, D, cloth, 3);
-	c.box(L - arm, 0, arm, D, cloth, 3);
-	// the arms' rolled tops, a highlight along their length
-	c.shadeBox(1, 1, 1, D - 2, 1);
-	c.shadeBox(L - arm + 1, 1, 1, D - 2, 1);
+	// the back rest and the arms: two steps above the seat
+	c.box(0, 0, L, back, cloth, 5);
+	c.round(0, 0, arm, D, cloth, 5);
+	c.round(L - arm, 0, arm, D, cloth, 5);
+	// the seat cushions: seams between them, each cushion's front edge rounded down
 	const inner = L - 2 * arm;
 	const n = inner >= 24 ? 3 : inner >= 12 ? 2 : 1;
-	for (let k = 1; k < n; k++) {
-		const x = arm + Math.round((inner * k) / n);
-		for (let y = 1; y < D - 1; y++) c.shadeAt(x, y, -1);
+	for (let k = 0; k < n; k++) {
+		const x0 = arm + Math.round((inner * k) / n);
+		const x1 = arm + Math.round((inner * (k + 1)) / n);
+		c.box(x0 + (k > 0 ? 1 : 0), back, x1 - x0 - (k > 0 ? 1 : 0), D - back - 1, cloth, 3);
 	}
-	// the seat cushions' fronts, rounded down
-	c.shadeBox(arm, D - 2, inner, 1, -1);
 	// a throw pillow in a colour of its own against one arm
 	if (inner >= 8) {
 		const px = r() < 0.5 ? arm : L - arm - 4;
-		const pillow = cloth === "fabricMustard" ? "bedding" : look === 1 ? "fabricMustard" : "fabricRed";
-		c.round(px, back - 1, 4, 4, pillow, 4);
+		const pillow = look === 1 ? "fabricMustard" : look === 2 ? "fabricRed" : "bedding";
+		c.round(px, back - 1, 4, 4, pillow, 6);
 	}
-	// a few days: a cushion out of place, a dark stain
-	if (inner >= 12 && r() < 0.5) c.shadeBox(arm + 1 + Math.floor(r() * (inner - 4)), back + 1, 2, 2, -1);
+	// a few days: a cushion knocked askew, pushed half off the seat
+	if (inner >= 12 && r() < 0.5) c.shadeBox(arm + 1 + Math.floor(r() * (inner - 4)), D - 3, 3, 1, -1);
 }
 
 function booth(c, L, D, look, r, K) {
@@ -470,7 +488,6 @@ function booth(c, L, D, look, r, K) {
 
 function tv(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "woodDark", 2);
-	c.shadeBox(1, 1, L - 2, 1, 1);
 	const tw = Math.round(L * 0.66);
 	const x0 = Math.floor((L - tw) / 2);
 	if (look === 2) {
@@ -480,7 +497,6 @@ function tv(c, L, D, look, r, K) {
 	} else {
 		// the flat screen seen from above: its top edge catching the light, the bezel, the foot
 		c.box(x0, 1, tw, 3, "screen", 4);
-		c.shadeBox(x0 + 1, 1, tw - 2, 1, 2);
 		c.shadeBox(x0 + 1, 3, tw - 2, 1, -1);
 		c.box(x0 + Math.floor(tw / 2) - 2, 4, 4, 1, "steelDark", 3);
 	}
@@ -548,7 +564,14 @@ function counter(c, L, D, look, r, K, steel = false) {
 		c.disc(other + (leftSink ? -4 : 8), 4, 3, "steelDark", 3);
 	}
 	if (L >= 12 && r() < 0.7) c.dot(leftSink ? L - 3 : 2, D - 3, "porcelain", 3);
-	if (r() < 0.5) c.inkBox(Math.floor(r() * (L - 4)) + 1, D - 3, 2, 1, mix(steel ? [120, 124, 130] : [150, 144, 130], BLACK, 0.12));
+	if (r() < 0.5)
+		c.inkBox(
+			Math.floor(r() * (L - 4)) + 1,
+			D - 3,
+			2,
+			1,
+			mix(steel ? [120, 124, 130] : [150, 144, 130], BLACK, 0.12),
+		);
 }
 
 function stove(c, L, D, look, r, K) {
@@ -602,8 +625,6 @@ function stove(c, L, D, look, r, K) {
 function fridge(c, L, D, look, r, K, steel = false) {
 	const body = steel || L >= 15 ? "steel" : "porcelain";
 	c.box(0, 0, L, D, body, 5);
-	c.shadeBox(1, 1, L - 2, 1, 1);
-	c.shadeBox(1, 1, 1, D - 2, 1);
 	// the door's top edge along the front, and its handle
 	c.shadeBox(1, D - 3, L - 2, 1, -1);
 	if (body === "steel") c.shadeBox(Math.floor(L / 2), 1, 1, D - 3, -1);
@@ -628,7 +649,8 @@ function table(c, L, D, look, r, K) {
 	} else {
 		for (let x = 3; x < L - 1; x += 4) c.shadeBox(x, 1, 1, D - 2, -1);
 	}
-	for (let k = 0; k < (L * D) / 30; k++) c.shadeAt(1 + Math.floor(r() * (L - 2)), 1 + Math.floor(r() * (D - 2)), r() < 0.5 ? 1 : -1);
+	for (let k = 0; k < (L * D) / 30; k++)
+		c.shadeAt(1 + Math.floor(r() * (L - 2)), 1 + Math.floor(r() * (D - 2)), r() < 0.5 ? 1 : -1);
 	// the table as it was left: plates at the places, a vase, a knocked-over glass
 	const places = alongX
 		? [
@@ -698,7 +720,6 @@ function bed(c, L, D, look, r, K) {
 		for (let k = 0; k < n; k++) {
 			const px = 1 + k * (pw + 1);
 			cv.round(px, 3, pw, 4, "pillow", 3);
-			cv.shadeBox(px + 1, 4, pw - 2, 1, 1);
 			cv.shadeBox(px + 1, 6, pw - 2, 1, -1);
 		}
 		const yb = 9;
@@ -717,11 +738,19 @@ function bed(c, L, D, look, r, K) {
 		}
 		if (thrown) cv.shadeBox(bx, yb, 1, h - yb, -1);
 	};
+	headToWall(c, L, D, look, paint);
+}
+
+/**
+ * A bed-like piece painted head at the top of a w x h box by `paint(cv, w, h)`: as is when its head is on the wall
+ * (deeper than long), else laid along the wall with the head at one end (the look decides which) -- the right-hand
+ * side of the painted box is then the side facing the room.
+ */
+function headToWall(c, L, D, look, paint) {
 	if (D >= L * 0.9) {
 		paint(c, L, D);
 		return;
 	}
-	// the side is on the wall: the head at one end (the look decides which)
 	const cv = new Canvas(D, L);
 	paint(cv, D, L);
 	const t = cv.transposed();
@@ -739,12 +768,276 @@ function bed(c, L, D, look, r, K) {
 	}
 }
 
+// ---------------------------------------------------------------- the campus (EDI-17)
+
+/** tiered lecture seats: the rows rise to the back wall, each a platform and its seats, the backs to the wall */
+function seats(c, L, D, look, r, K) {
+	const tiers = Math.max(2, Math.floor(D / 8));
+	const step = Math.floor(D / tiers);
+	const pitch = 5;
+	const n = Math.floor((L - 2) / pitch);
+	const x0 = Math.floor((L - n * pitch) / 2);
+	for (let t = 0; t < tiers; t++) {
+		// tier 0 is the front row (the bottom), each one a step higher towards the wall
+		const y0 = t === tiers - 1 ? 0 : D - (t + 1) * step;
+		const h = t === tiers - 1 ? D - t * step : step;
+		const z = 2 + t * 2;
+		c.box(0, y0, L, h, "woodDark", z);
+		for (let i = 0; i < n; i++) {
+			const sx = x0 + i * pitch;
+			// a seat folded up (nobody sat since) or down, some knocked about; its back against the step behind
+			const folded = r() < 0.35;
+			const sy = y0 + 1;
+			c.box(sx, sy, 4, 1, "fabric", z + 2, -1);
+			if (folded) c.box(sx, sy + 1, 4, 1, "fabric", z + 1);
+			else c.round(sx, sy + 1, 4, Math.max(2, h - 3), "fabric", z + 1);
+			if (!folded && r() < 0.12) c.box(sx + 1, sy + 2, 2, 2, look === 1 ? "paper" : "fabricBrown", z + 2);
+		}
+		// the writing tablet's rail along the front of each row
+		c.box(0, y0 + h - 1, L, 1, "wood", z + 1);
+	}
+	if (look === 2) c.blotch(x0 + Math.floor(r() * Math.max(1, L - 8)), D - 3, 7, K.blood, r);
+}
+
+/** a lectern: the sloped reading top (lit), the notes left on it, the microphone on its gooseneck */
+function lectern(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "wood", 3);
+	c.box(1, 1, L - 2, D - 3, "wood", 4);
+	c.shadeBox(1, D - 3, L - 2, 1, -1);
+	c.box(3, 2, 6, 4, "paper", 5);
+	c.box(4, 3, 6, 4, "paper", 5);
+	c.inkBox(5, 4, 3, 1, K.text);
+	c.inkBox(5, 6, 2, 1, K.text);
+	c.box(L - 4, 1, 1, 4, "steelDark", 5);
+	c.dot(L - 4, 5, "rubber", 6);
+	if (look === 1) c.box(2, D - 4, 4, 2, "steel", 5);
+}
+
+/** a lab bench: black epoxy top, the sink and its gooseneck tap, a gas tap, glassware, a notebook (a spill) */
+function labbench(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "epoxy", 2);
+	c.shadeBox(0, D - 2, L, 1, 1);
+	const left = look % 2 === 0;
+	const sx = left ? 2 : L - 9;
+	c.box(sx, 2, 7, D - 5, "steel", 1);
+	c.box(sx + 1, 3, 5, D - 7, "steelDark", 1);
+	c.box(sx + 3, 1, 1, 2, "steel", 4);
+	c.dot(sx + 3, 3, "steel", 3);
+	// the gas taps along the middle, the glassware on the other end
+	const gx = left ? sx + 10 : 3;
+	for (let k = 0; k < 3; k++) c.dot(gx + k * 4, 2, "goodsC", 3);
+	const ox = left ? L - 12 : 12;
+	c.disc(ox, D / 2, 3, "glass", 4);
+	c.dot(ox, D / 2 - 1, "glass", 5, 1);
+	c.box(ox + 3, D / 2 - 1, 2, 2, "glass", 4);
+	c.box(ox - 5, 3, 4, 2, "woodLight", 3);
+	for (let k = 0; k < 3; k++) c.dot(ox - 5 + k, 2, k === 1 ? "goodsD" : "glass", 4);
+	if (L >= 30) {
+		c.box(Math.floor(L / 2) - 2, D - 5, 5, 3, "paper", 3);
+		c.inkBox(Math.floor(L / 2) - 1, D - 4, 3, 1, K.text);
+	}
+	if (look === 2) {
+		// a beaker knocked over and what it spilled
+		c.box(ox - 1, D - 4, 3, 1, "glass", 3);
+		c.blotch(ox + 3, D - 4, 8, K.acid, r);
+	}
+}
+
+/** a fume hood: the steel cabinet, its glass sash along the front with the dark chamber behind, a flask inside */
+function fumehood(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "steel", 5);
+	// the exhaust duct's collar on top, towards the wall
+	c.disc(Math.floor(L / 2), 3, 4, "steelDark", 6);
+	c.box(2, 6, L - 4, D - 8, "screen", 4);
+	c.box(2, D - 3, L - 4, 2, "glass", 5);
+	c.dot(Math.floor(L / 3), D - 5, "glass", 4);
+	c.dot(Math.floor(L / 3), D - 6, "goodsD", 4);
+	for (let x = 3; x < L - 3; x += 3) c.inkAt(x, 6, [78, 82, 90]);
+	if (look === 1) {
+		for (let k = 0; k < 4; k++) c.inkAt(3 + Math.floor(r() * (L - 6)), D - 3 + (k % 2), K.shard);
+	}
+}
+
+/** the reagents' shelf: brown, clear, green and blue bottles with their caps and hazard labels; a spill */
+function chemshelf(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "steel", 4);
+	c.box(1, 1, L - 2, D - 2, "steelDark", 2);
+	for (let x = 12; x < L - 2; x += 12) c.box(x, 0, 1, D, "steel", 4);
+	const bottles = ["amber", "amber", "glass", "goodsD", "goodsB", "goodsE"];
+	let x = 1;
+	while (x < L - 2) {
+		if (x % 12 === 0 || r() < 0.18) {
+			x++;
+			continue;
+		}
+		const mat = bottles[Math.floor(r() * bottles.length)];
+		const y = 2 + Math.floor(r() * Math.max(1, D - 5));
+		const w = mat === "goodsE" ? 2 : 1;
+		c.box(x, y, w, 2, mat, 3);
+		c.dot(x, y, mat === "goodsE" ? "steel" : "rubber", 4);
+		if (r() < 0.2) c.inkAt(x, y + 1, r() < 0.5 ? [214, 180, 70] : [196, 84, 60]);
+		x += w + (r() < 0.5 ? 1 : 0);
+	}
+	if (look === 1) {
+		// a bottle on its side and what leaked from it
+		const bx = 2 + Math.floor(r() * Math.max(1, L - 8));
+		c.box(bx, D - 3, 3, 1, "amber", 3);
+		c.blotch(bx + 3, D - 3, 6, K.acid, r);
+	}
+}
+
+/** a bunk bed from above: the top bunk's steel frame and mattress, blanket and pillow, the ladder on the room side */
+function bunk(c, L, D, look, r) {
+	const cloth = ["fabric", "fabricGreen", "fabricMustard"][look % 3];
+	headToWall(c, L, D, look, (cv, w, h) => {
+		cv.box(0, 0, w, h, "steelDark", 4);
+		cv.box(1, 1, w - 2, h - 2, "bedding", 3);
+		cv.round(2, 2, w - 4, 4, "pillow", 4);
+		const yb = 7;
+		const thrown = look === 1;
+		const bw = thrown ? Math.max(3, Math.round((w - 2) * 0.6)) : w - 2;
+		cv.box(1, yb, bw, h - yb - 1, cloth, 4);
+		cv.box(1, yb, bw, 1, "bedding", 5);
+		for (let k = 0; k < 3; k++)
+			cv.shadeAt(
+				2 + Math.floor(r() * Math.max(1, bw - 3)),
+				yb + 3 + Math.floor(r() * Math.max(1, h - yb - 5)),
+				-1,
+			);
+		// the ladder hooked over the rail on the room side (the right of the painted box): two rails, the rungs
+		const ly = Math.floor(h * 0.5);
+		for (let y = ly; y < Math.min(h - 1, ly + 9); y++) {
+			cv.dot(w - 3, y, "steel", 6, y === ly ? 1 : 0);
+			cv.dot(w - 1, y, "steel", 6, y === ly ? 1 : 0);
+			cv.dot(w - 2, y, y % 2 === 0 ? "steel" : cloth, y % 2 === 0 ? 6 : 4, y % 2 === 0 ? 1 : 0);
+		}
+		// the corner posts
+		for (const [px, py] of [
+			[0, 0],
+			[w - 1, 0],
+			[0, h - 1],
+			[w - 1, h - 1],
+		]) {
+			cv.dot(px, py, "steel", 6);
+		}
+	});
+}
+
+/** a snack machine: the red cabinet, the glass front with its spiral rows of snacks, the coin panel */
+function vending(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "vinyl", 5);
+	const gw = Math.max(4, L - 5);
+	c.box(1, D - 5, gw, 4, "glassDark", 4);
+	const snacks = [K.red, [214, 180, 70], [70, 130, 170], [98, 150, 88], [222, 220, 210]];
+	const smashed = look === 1;
+	for (let x = 2; x < 1 + gw - 1; x++) {
+		for (let y = D - 4; y < D - 2; y++) {
+			if (smashed && r() < 0.6) continue;
+			if (r() < 0.15) continue;
+			c.inkAt(x, y, mix(snacks[(x + y * 3) % snacks.length], [110, 140, 156], smashed ? 0 : 0.35));
+		}
+	}
+	if (smashed) for (let k = 0; k < 4; k++) c.inkAt(1 + Math.floor(r() * gw), D - 5 + Math.floor(r() * 4), K.shard);
+	c.box(L - 4, D - 5, 3, 4, "steelDark", 5);
+	c.dot(L - 3, D - 4, "goodsC", 6);
+	c.box(2, 2, L - 7, 2, "vinyl", 6);
+}
+
+/** a library's stacks: a steel range, books tight on it with their call-number labels, gaps where some were taken */
+function stacksShelf(c, L, D, look, r) {
+	c.box(0, 0, L, D, "steel", 5);
+	c.box(1, 1, L - 2, D - 2, "steelDark", 3);
+	for (let x = 13; x < L - 2; x += 13) c.box(x, 0, 1, D, "steel", 5);
+	const colours = ["goodsA", "goodsB", "fabricGreen", "fabricRed", "fabric", "goodsE", "woodDark", "goodsC"];
+	let x = 1;
+	while (x < L - 1) {
+		if (x % 13 === 0) {
+			x++;
+			continue;
+		}
+		if (r() < 0.1) {
+			x += 2;
+			continue;
+		}
+		const mat = colours[Math.floor(r() * colours.length)];
+		const depth = D - 3 + (r() < 0.3 ? 1 : 0);
+		c.box(x, D - 1 - depth, 1, depth, mat, 4);
+		if (r() < 0.5) c.inkAt(x, D - 3, [236, 232, 220]);
+		x++;
+	}
+	if (look === 1 && L >= 12) c.box(Math.floor(L / 3), 1, 4, 2, "goodsB", 5);
+}
+
+/** a library table: open books, a stack, a green-shaded reading lamp in the middle */
+function tableLibrary(c, L, D, look, r, K) {
+	table(c, L, D, 2, r, K);
+	// clear what the house table put down, keep the wood
+	for (let i = 0; i < L * D; i++) {
+		if (c.mat[i] !== null && c.mat[i] !== "wood") {
+			c.mat[i] = "wood";
+			c.z[i] = 2;
+			c.ink[i] = null;
+			c.tone[i] = 0;
+		}
+	}
+	const alongX = L >= D;
+	const cx = Math.floor(L / 2);
+	const cy = Math.floor(D / 2);
+	c.disc(cx, cy, 3, "fabricGreen", 4);
+	c.dot(cx - 1, cy - 1, "fabricGreen", 4, 2);
+	const spots = alongX
+		? [
+				[3, 2],
+				[L - 9, D - 7],
+				[L - 8, 2],
+			]
+		: [
+				[2, 3],
+				[D > 12 ? L - 7 : 2, D - 9],
+			];
+	for (const [x, y] of spots) {
+		if (r() < 0.2) continue;
+		// an open book: two pages and the gutter
+		c.box(x, y, 6, 4, "paper", 3);
+		c.shadeBox(x + 3, y, 1, 4, -1);
+		c.inkBox(x + 1, y + 1, 1, 1, K.text);
+		c.inkBox(x + 4, y + 2, 1, 1, K.text);
+	}
+	if (look !== 0) {
+		c.box(alongX ? L - 6 : 2, alongX ? 2 : D - 6, 4, 3, "goodsB", 3);
+		c.box(alongX ? L - 6 : 2, alongX ? 2 : D - 6, 4, 1, "goodsA", 4);
+	}
+}
+
+/** a library's circulation desk: the front desk with the returns piled on it, a book stamp, the terminal */
+function circulation(c, L, D, look, r, K) {
+	reception(c, L, D, look, r, K);
+	for (let k = 0; k < 3; k++) {
+		const x = 4 + k * 3;
+		c.box(x, D - 7, 3, 3, ["goodsA", "goodsB", "fabricGreen"][(k + look) % 3], 5 + k);
+	}
+	c.dot(L - 12, 3, "rubber", 5);
+}
+
+/** a cork notice board on the wall seen from above: its frame's top edge and the flyers pinned to it */
+function notice(c, L, r) {
+	c.box(0, 0, L, 1, "wood", 3);
+	c.box(0, 1, L, 2, "cork", 2);
+	// the flyers: pinned sheets hanging off the cork, some torn down
+	for (let x = 2; x < L - 2; x += 3) {
+		if (r() < 0.25) continue;
+		const mat = r() < 0.2 ? "goodsC" : r() < 0.2 ? "goodsB" : "paper";
+		c.box(x, 1, 2, 2, mat, 3);
+		c.dot(x, 1, "goodsA", 4);
+	}
+}
+
 function hospbed(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "steel", 2);
 	c.box(1, 0, L - 2, 2, "steel", 4);
 	c.box(1, 2, L - 2, D - 4, "bedding", 2);
 	// the head section raised (lit), the pillow, the sheet, the rails and the foot
-	c.shadeBox(1, 2, L - 2, 8, 1);
+	c.box(1, 2, L - 2, 8, "bedding", 3);
 	c.round(3, 3, L - 6, 4, "pillow", 3);
 	const thrown = look === 1;
 	const sw = thrown ? Math.round((L - 2) * 0.6) : L - 2;
@@ -763,7 +1056,6 @@ function hospbed(c, L, D, look, r, K) {
 
 function nightstand(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "wood", 2);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	if (look === 1) {
 		// the lamp knocked over, its shade on its side
 		c.box(1, 2, 4, 2, "shade", 3);
@@ -778,9 +1070,7 @@ function nightstand(c, L, D, look, r, K) {
 
 function wardrobe(c, L, D, look, r) {
 	c.box(0, 0, L, D, "wood", 5);
-	c.shadeBox(1, 1, L - 2, 1, 1);
 	c.shadeBox(Math.floor(L / 2), 2, 1, D - 3, -1);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	if (look === 1) {
 		c.round(3, 2, Math.min(9, L - 6), D - 4, "fabricBrown", 6);
 		c.box(3 + Math.floor(Math.min(9, L - 6) / 2) - 1, 2, 2, 1, "rubber", 7);
@@ -792,7 +1082,6 @@ function wardrobe(c, L, D, look, r) {
 
 function desk(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "wood", 2);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	const mx = Math.round(L * 0.42);
 	if (look === 1) {
 		// the monitor knocked flat on its face
@@ -819,7 +1108,6 @@ function desk(c, L, D, look, r, K) {
 
 function teacherdesk(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "woodDark", 2);
-	c.shadeBox(1, 1, L - 2, 1, 1);
 	// a stack of marked papers, the register, an apple, a mug of pens
 	c.box(3, 3, 5, 6, "paper", 3);
 	c.box(4, 2, 5, 6, "paper", 4);
@@ -856,7 +1144,6 @@ function schooldesk(c, L, D, look, r, K) {
 function cabinet(c, L, D, look, r) {
 	// a filing cabinet: steel, its drawers' tops along the front
 	c.box(0, 0, L, D, "steel", 4);
-	c.shadeBox(1, 1, L - 2, 1, 1);
 	c.shadeBox(1, D - 3, L - 2, 1, -1);
 	for (let x = Math.round(L / 3); x < L - 1; x += Math.round(L / 3)) c.shadeBox(x, 2, 1, D - 4, -1);
 	if (look === 1) {
@@ -870,8 +1157,6 @@ function cabinet(c, L, D, look, r) {
 
 function sideboard(c, L, D, look, r, K) {
 	c.box(0, 0, L, D, "woodDark", 3);
-	c.shadeBox(1, 1, L - 2, 1, 1);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	// a vase of flowers, a stack of plates, a framed photo face down
 	c.disc(4, Math.floor(D / 2), 2, "glass", 4);
 	c.dot(3, D / 2 - 1.5, "goodsA", 5);
@@ -897,17 +1182,14 @@ function cabinetMed(c, L, D, look, r, K) {
 function toilet(c, L, D, look, r) {
 	// the cistern against the wall, the bowl in front of it with its seat, the water (or the lid down)
 	c.box(0, 0, L, 3, "porcelain", 4);
-	c.shadeBox(1, 1, L - 2, 1, 1);
 	c.dot(Math.floor(L / 2), 1, "steel", 5);
 	const bw = Math.max(4, L - 2);
 	const bx = Math.floor((L - bw) / 2);
 	c.round(bx, 3, bw, D - 3, "porcelain", 2);
 	if (look === 1) {
 		c.round(bx + 1, 3, bw - 2, D - 4, "porcelain", 3);
-		c.shadeBox(bx + 1, 3, bw - 2, 1, 1);
 	} else {
 		c.round(bx + 1, 4, bw - 2, D - 6, "matBlue", 1);
-		c.shadeBox(bx + 2, 5, bw - 4, 1, 1);
 	}
 }
 
@@ -972,14 +1254,17 @@ function shelf(c, L, D, look, r, K, stock = "mixed") {
 					x += 5;
 					continue;
 				}
-				const mat = ["fabric", "fabricRed", "fabricGreen", "fabricMustard", "bedding", "fabricBrown"][Math.floor(r() * 6)];
+				const mat = ["fabric", "fabricRed", "fabricGreen", "fabricMustard", "bedding", "fabricBrown"][
+					Math.floor(r() * 6)
+				];
 				c.box(x, 2, 4, D - 3, mat, 3);
 				c.shadeBox(x, 2 + Math.floor((D - 3) / 2), 4, 1, -1);
-				c.shadeBox(x, 2, 4, 1, 1);
 				x += 5;
 			}
 		} else if (stock === "meds") {
-			products(c, b, x1, 2, D - 3, ["goodsE", "goodsE", "goodsB", "goodsD", "amber", "goodsA"], r, 3, { gap: 0.2 });
+			products(c, b, x1, 2, D - 3, ["goodsE", "goodsE", "goodsB", "goodsD", "amber", "goodsA"], r, 3, {
+				gap: 0.2,
+			});
 		} else {
 			products(c, b, x1, 2, D - 3, ["goodsA", "goodsB", "goodsC", "goodsD", "goodsE"], r, 3);
 		}
@@ -1005,7 +1290,6 @@ function gondola(c, L, D, look, r) {
 	c.box(0, 0, L, D, "steel", 2);
 	const mid = Math.floor(D / 2);
 	c.box(0, mid - 1, L, 2, "steelDark", 5);
-	c.shadeBox(0, mid - 1, L, 1, 1);
 	const bay = 14;
 	const pals = [
 		["goodsA", "goodsC", "goodsE"],
@@ -1051,7 +1335,13 @@ function coldcase(c, L, D, look, r, K) {
 	const sec = 18;
 	for (let x = sec; x < L - 2; x += sec) c.box(x, 0, 1, D - 1, "steel", 4);
 	// the products under the glass, cold, and the frost on it
-	const pal = [[196, 84, 60], [70, 130, 170], [222, 220, 210], [214, 180, 70], [98, 150, 88]];
+	const pal = [
+		[196, 84, 60],
+		[70, 130, 170],
+		[222, 220, 210],
+		[214, 180, 70],
+		[98, 150, 88],
+	];
 	const glass = [150, 196, 214];
 	let broken = look === 1 ? Math.floor(r() * Math.max(1, L - 10)) + 2 : -99;
 	// rows of bottles and cartons, two texels a facing, in runs of one product; the gaps are what was taken
@@ -1069,7 +1359,8 @@ function coldcase(c, L, D, look, r, K) {
 		}
 		x += r() < 0.4 ? 1 : 0;
 	}
-	for (let k = 0; k < L / 6; k++) c.inkAt(2 + Math.floor(r() * (L - 4)), 1 + Math.floor(r() * 2), mix(glass, WHITE, 0.6));
+	for (let k = 0; k < L / 6; k++)
+		c.inkAt(2 + Math.floor(r() * (L - 4)), 1 + Math.floor(r() * 2), mix(glass, WHITE, 0.6));
 	if (broken > 0) {
 		for (let k = 0; k < 5; k++) c.inkAt(broken + Math.floor(r() * 7), 2 + Math.floor(r() * (D - 5)), K.shard);
 	}
@@ -1157,7 +1448,10 @@ function displayCase(c, L, D, look, r, K, stock = "guns") {
 
 function clothesrack(c, L, D, look, r) {
 	const mid = Math.floor(D / 2);
-	const pal = look === 1 ? ["fabric", "fabricGreen", "bedding", "fabric"] : ["fabricRed", "fabricMustard", "fabricBrown", "fabric"];
+	const pal =
+		look === 1
+			? ["fabric", "fabricGreen", "bedding", "fabric"]
+			: ["fabricRed", "fabricMustard", "fabricBrown", "fabric"];
 	// the garments on their hangers across the rail, in runs of a colour; a gap where some were taken
 	let x = 2;
 	while (x < L - 2) {
@@ -1191,7 +1485,6 @@ function reception(c, L, D, look, r, K) {
 	// the desk behind, the raised counter the visitors lean on along the front, a return at each end
 	c.box(0, 0, L, D, "laminate", 2);
 	c.box(0, D - 4, L, 4, "wood", 4);
-	c.shadeBox(0, D - 4, L, 1, 1);
 	c.box(0, 0, 3, D, "wood", 4);
 	c.box(L - 3, 0, 3, D, "wood", 4);
 	const mx = Math.round(L * 0.35);
@@ -1212,7 +1505,6 @@ function lockers(c, L, D, look, r) {
 	for (let x = 4; x < L; x += 4) c.shadeBox(x, 0, 1, D, -1);
 	// the vents along each top, a dent here and there
 	for (let x = 1; x < L - 1; x++) if (x % 4 !== 0 && x % 4 !== 3) c.shadeAt(x, 2, -1);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	for (let k = 0; k < L / 10; k++) c.shadeAt(1 + Math.floor(r() * (L - 2)), 3 + Math.floor(r() * (D - 5)), -1);
 	if (L >= 16 && r() < 0.6) c.box(Math.floor(r() * (L / 4 - 1)) * 4 + 1, 3, 3, 3, "fabricRed", 6);
 }
@@ -1228,17 +1520,20 @@ function prep(c, L, D, look, r, K) {
 	c.box(L - 7, 3, 2, 2, "food", 3);
 	c.disc(L / 2, D - 5, 3, "porcelain", 3);
 	c.box(Math.round(L / 2) + 3, D - 6, 6, 4, "steelDark", 3);
-	for (let k = 0; k < 4; k++) c.dot(Math.round(L / 2) + 4 + Math.floor(r() * 4), D - 5 + Math.floor(r() * 2), "food", 4);
+	for (let k = 0; k < 4; k++)
+		c.dot(Math.round(L / 2) + 4 + Math.floor(r() * 4), D - 5 + Math.floor(r() * 2), "food", 4);
 	if (look === 1) c.inkBox(5, D - 4, 3, 2, K.blood);
 }
 
 function safe(c, L, D, look, r) {
 	c.box(0, 0, L, D, "steelDark", 5);
-	c.shadeBox(1, 1, L - 2, 1, 1);
-	c.shadeBox(1, 1, 1, D - 2, 1);
-	c.shadeBox(2, D - 2, L - 3, 1, -1);
-	c.shadeBox(L - 2, 2, 1, D - 3, -1);
-	for (const [x, y] of [[2, 2], [L - 3, 2], [2, D - 3], [L - 3, D - 3]]) c.dot(x, y, "steel", 6);
+	for (const [x, y] of [
+		[2, 2],
+		[L - 3, 2],
+		[2, D - 3],
+		[L - 3, D - 3],
+	])
+		c.dot(x, y, "steel", 6);
 	// the door's wheel and dial along the front, the hinges on one side
 	c.ellipse(L / 2 - 0.5, D - 4.5, 2.3, 2.3, "steel", 6);
 	c.ellipse(L / 2 - 0.5, D - 4.5, 1, 1, "steelDark", 6);
@@ -1255,7 +1550,6 @@ function bench(c, L, D, look, r) {
 		c.box(0, y, L, Math.max(1, Math.floor((D - 1) / 3) - 1), "wood", 2);
 	}
 	for (const x of [1, Math.floor(L / 2), L - 2]) c.box(x, 0, 1, D, "steelDark", 3);
-	c.shadeBox(0, 1, L, 1, 1);
 }
 
 function benchSeats(c, L, D, look, r) {
@@ -1278,8 +1572,6 @@ function armchair(c, L, D, look, r, K) {
 /** a kind with no drawer of its own (a new room type): a plain wooden cabinet, outlined and lit like the rest */
 function generic(c, L, D) {
 	c.box(0, 0, L, D, "wood", 3);
-	c.shadeBox(1, 1, L - 2, 1, 1);
-	c.shadeBox(1, D - 2, L - 2, 1, -1);
 	if (L >= 8) c.shadeBox(Math.floor(L / 2), 2, 1, Math.max(1, D - 4), -1);
 }
 
@@ -1314,7 +1606,12 @@ const KINDS = {
 	tub: { draw: tub, looks: 3 },
 	shelf: { draw: shelf, looks: 1, tall: true },
 	shelfMeds: { draw: (c, L, D, l, r, K) => shelf(c, L, D, l, r, K, "meds"), looks: 2, tall: true, from: "shelf" },
-	shelfClothes: { draw: (c, L, D, l, r, K) => shelf(c, L, D, l, r, K, "clothes"), looks: 1, tall: true, from: "shelf" },
+	shelfClothes: {
+		draw: (c, L, D, l, r, K) => shelf(c, L, D, l, r, K, "clothes"),
+		looks: 1,
+		tall: true,
+		from: "shelf",
+	},
 	gondola: { draw: gondola, looks: 2, tall: true, faceless: true },
 	checkout: { draw: checkout, looks: 3 },
 	coldcase: { draw: coldcase, looks: 2, tall: true },
@@ -1330,6 +1627,17 @@ const KINDS = {
 	safe: { draw: safe, looks: 2, tall: true },
 	bench: { draw: bench, looks: 1 },
 	benchSeats: { draw: benchSeats, looks: 1, from: "bench" },
+	// the campus (EDI-17)
+	seats: { draw: seats, looks: 3 },
+	lectern: { draw: lectern, looks: 2 },
+	labbench: { draw: labbench, looks: 3 },
+	fumehood: { draw: fumehood, looks: 2, tall: true },
+	chemshelf: { draw: chemshelf, looks: 2, tall: true },
+	bunk: { draw: bunk, looks: 3, tall: true },
+	vending: { draw: vending, looks: 2, tall: true },
+	stacks: { draw: stacksShelf, looks: 2, tall: true, from: "bookcase" },
+	tableLibrary: { draw: tableLibrary, looks: 2, from: "table" },
+	circulation: { draw: circulation, looks: 3, from: "reception" },
 };
 
 /**
@@ -1342,7 +1650,10 @@ export const ART_KIND_BY_TYPE = {
 	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed" },
 	bench: { 4: "benchSeats" },
 	counter: { 11: "counterSteel" },
-	table: { 11: "tableDiner" },
+	table: { 11: "tableDiner", 13: "tableLibrary" },
+	// the campus's library (EDI-17): its shelves are the stacks, its front desk the circulation desk
+	bookcase: { 13: "stacks" },
+	reception: { 13: "circulation" },
 };
 
 // ---------------------------------------------------------------- decoration and openings (face-free cells)
@@ -1350,7 +1661,6 @@ export const ART_KIND_BY_TYPE = {
 function chair(c) {
 	// the seat towards the table (the bottom), the back rest away from it
 	c.box(1, 1, 5, 5, "wood", 2);
-	c.shadeBox(2, 2, 3, 1, 1);
 	c.box(1, 0, 5, 2, "woodDark", 3);
 	c.dot(1, 6, "woodDark", 1);
 	c.dot(5, 6, "woodDark", 1);
@@ -1394,7 +1704,8 @@ function glassShards(c, L, D, r, K) {
 
 function bathMat(c, L, D, r) {
 	c.round(0, 1, L, D - 2, "matBlue", 1);
-	for (let k = 0; k < L * 1.5; k++) c.shadeAt(1 + Math.floor(r() * (L - 2)), 2 + Math.floor(r() * (D - 4)), r() < 0.5 ? 1 : -1);
+	for (let k = 0; k < L * 1.5; k++)
+		c.shadeAt(1 + Math.floor(r() * (L - 2)), 2 + Math.floor(r() * (D - 4)), r() < 0.5 ? 1 : -1);
 	for (let x = 1; x < L - 1; x += 2) {
 		c.dot(x, 0, "matBlue", 1, 1);
 		c.dot(x, D - 1, "matBlue", 1, 1);
@@ -1410,16 +1721,18 @@ function curtain(c, L) {
 	}
 }
 
-function board(c, L) {
-	// the chalkboard on the wall seen from above: its wooden top edge and the aluminium chalk tray, with chalk and a
-	// duster left in it
-	c.box(0, 0, L, 1, "wood", 3, 1);
-	c.box(0, 1, L, 1, "steel", 2, 1);
-	c.dot(0, 0, "woodDark", 3);
-	c.dot(L - 1, 0, "woodDark", 3);
-	c.dot(Math.floor(L * 0.3), 1, "goodsE", 3, 1);
-	c.dot(Math.floor(L * 0.3) + 2, 1, "goodsE", 3, 1);
-	c.box(Math.floor(L * 0.7), 1, 3, 1, "rubber", 3);
+/**
+ * The chalkboard on the front wall, seen from above and a little from the room: its wooden frame against the wall,
+ * the green slate with the last lesson's chalk on it, the aluminium tray with chalk and a duster left in it.
+ */
+function board(c, L, r) {
+	c.box(0, 0, L, 1, "woodDark", 3);
+	c.box(0, 1, L, 1, "chalk", 3);
+	for (let x = 2; x < L - 2; x++) if (r() < 0.35) c.dot(x, 1, "chalk", 3, 2);
+	c.box(0, 2, L, 1, "steel", 2);
+	c.dot(Math.floor(L * 0.3), 2, "goodsE", 3);
+	c.dot(Math.floor(L * 0.3) + 2, 2, "goodsE", 3);
+	c.box(Math.floor(L * 0.7), 2, 3, 1, "rubber", 3);
 }
 
 /** a rug: fringe on the short ends, a dark border, a light line, the field with a small lattice (crop-friendly) */
@@ -1454,37 +1767,44 @@ function rug(c, L, D, colour) {
 function doorway(c, L, D, outside) {
 	const jamb = 2;
 	for (let y = 0; y < D; y++) {
-		c.dot(0, y, "trim", 4, -2);
-		c.dot(1, y, "trim", 4, 1);
-		c.dot(L - 2, y, "trim", 4, -1);
-		c.dot(L - 1, y, "trim", 4, -2);
+		c.dot(0, y, "trim", 4, -1);
+		c.dot(1, y, "trim", 4, 0);
+		c.dot(L - 2, y, "trim", 4, 0);
+		c.dot(L - 1, y, "trim", 4, -1);
 	}
-	c.shadeBox(1, 0, 1, 1, 1);
-	c.shadeBox(L - 2, D - 1, 1, 1, -1);
 	const y = Math.floor((D - 1) / 2);
 	const t = outside ? 2 : 1;
 	c.box(jamb, y, L - 2 * jamb, t, outside ? "counter" : "woodLight", 1);
-	c.shadeBox(jamb, y, L - 2 * jamb, 1, 1);
-	if (outside) c.shadeBox(jamb, y + 1, L - 2 * jamb, 1, -1);
 }
 
-/** a window seen from above with its glass broken (EDI-10): frame, sills, what is left of the pane round the edge */
+/**
+ * A window seen from above, its glass broken (EDI-10): the painted frame capping the wall's ends, the inside sill
+ * (oak) and the outside one (stone), and between them what is left of the pane -- translucent glass still in the
+ * frame at both ends and along the edges, jagged, the middle gone: the horde climbs through there.
+ */
 function windowFrame(c, L, D, r, K) {
 	const jamb = 3;
-	c.box(0, 0, jamb, D, "porcelain", 4);
-	c.box(L - jamb, 0, jamb, D, "porcelain", 4);
-	// the outside sill (the bottom: the canonical outside) and the inside one
-	c.box(jamb, D - 1, L - 2 * jamb, 1, "counter", 2);
-	c.box(jamb, 0, L - 2 * jamb, 1, "woodLight", 2);
-	// the pane's line: shards still in the frame at both ends, the middle open
-	const y = Math.floor(D / 2);
-	const left = 2 + Math.floor(r() * 3);
-	const right = 2 + Math.floor(r() * 3);
-	c.box(jamb, y, left, 1, "glass", 3, 1);
-	c.box(L - jamb - right, y, right, 1, "glass", 3, 1);
-	c.dot(jamb, y - 1, "glass", 3, 1);
-	c.dot(L - jamb - 1, y + 1, "glass", 3, 1);
-	for (let k = 0; k < 3; k++) c.inkAt(jamb + 1 + Math.floor(r() * (L - 2 * jamb - 2)), D - 1, K.shard);
+	for (let y = 0; y < D; y++) {
+		c.dot(0, y, "trim", 4, -1);
+		c.dot(1, y, "trim", 4, 0);
+		c.dot(2, y, "trim", 4, 0);
+		c.dot(L - 3, y, "trim", 4, 0);
+		c.dot(L - 2, y, "trim", 4, 0);
+		c.dot(L - 1, y, "trim", 4, -1);
+	}
+	const w = L - 2 * jamb;
+	c.box(jamb, 0, w, 1, "woodLight", 3);
+	c.box(jamb, D - 1, w, 1, "counter", 3);
+	// the pane between the sills: gone in the middle, jagged remnants at the ends and a sliver along each sill
+	for (let y = 1; y < D - 1; y++) {
+		const left = 2 + Math.floor(r() * 4) - (y === 2 ? 1 : 0);
+		const right = 2 + Math.floor(r() * 4) - (y === 2 ? 1 : 0);
+		for (let x = jamb; x < jamb + w; x++) {
+			const kept = x < jamb + left || x >= jamb + w - right || (y !== 2 && r() < 0.18);
+			if (kept) c.dot(x, y, "pane", 2);
+		}
+	}
+	for (let k = 0; k < 3; k++) c.inkAt(jamb + 2 + Math.floor(r() * (w - 4)), D - 1, K.shard);
 }
 
 // ---------------------------------------------------------------- what the planner makes
@@ -1522,7 +1842,8 @@ function pack(entries) {
 	for (const e of entries) {
 		const bytes = Buffer.alloc(e.img.w * e.img.h * 4);
 		for (let i = 0; i < bytes.length; i++) bytes[i] = Math.max(0, Math.min(255, Math.round(e.img.d[i])));
-		for (let i = 0; i < e.img.w * e.img.h; i++) if (bytes[i * 4 + 3] === 0) bytes[i * 4] = bytes[i * 4 + 1] = bytes[i * 4 + 2] = 0;
+		for (let i = 0; i < e.img.w * e.img.h; i++)
+			if (bytes[i * 4 + 3] === 0) bytes[i * 4] = bytes[i * 4 + 1] = bytes[i * 4 + 2] = 0;
 		const h = `${e.img.w}x${e.img.h}:${hashStr(bytes.toString("latin1"))}:${bytes.length}`;
 		let u = byHash.get(h);
 		if (u === undefined) {
@@ -1551,12 +1872,14 @@ function pack(entries) {
 		width = Math.max(width, x);
 	}
 	const height = y + rowH;
-	if (width > MAX_SIDE || height > MAX_SIDE) throw new Error(`furniture atlas ${width} x ${height} is over ${MAX_SIDE}`);
+	if (width > MAX_SIDE || height > MAX_SIDE)
+		throw new Error(`furniture atlas ${width} x ${height} is over ${MAX_SIDE}`);
 	const W = width;
 	const H = height;
 	const data = Buffer.alloc(W * H * 4);
 	for (const u of order) {
-		for (let yy = 0; yy < u.h; yy++) u.bytes.copy(data, ((u.y + yy) * W + u.x) * 4, yy * u.w * 4, (yy + 1) * u.w * 4);
+		for (let yy = 0; yy < u.h; yy++)
+			u.bytes.copy(data, ((u.y + yy) * W + u.x) * 4, yy * u.w * 4, (yy + 1) * u.w * 4);
 	}
 	const cells = {};
 	for (const u of order) for (const e of u.keys) cells[e.key] = [u.x, u.y, u.w, u.h, e.shadow];
@@ -1651,8 +1974,11 @@ export function furnitureArt({ C, ROOT }) {
 	deco("mat:v", 14, 9, (cv, L, D, r) => bathMat(cv, L, D, r), { face: "left" });
 	deco("curtain:h", 30, 2, cv => curtain(cv, 30), { shadow: 1, outline: false });
 	deco("curtain:v", 30, 2, cv => curtain(cv, 30), { face: "left", shadow: 1, outline: false });
-	deco("board:h", 46, 2, cv => board(cv, 46), { outline: false });
-	deco("board:v", 46, 2, cv => board(cv, 46), { face: "right", outline: false });
+	// a board on a wall faces the room: one cell per side the room is on (the wall's edge away from it)
+	for (const face of FACES) {
+		deco(`board:${face}`, 46, 3, (cv, L, D, r) => board(cv, 46, r), { face, outline: false });
+		deco(`notice:${face}`, 26, 3, (cv, L, D, r) => notice(cv, 26, r), { face, outline: false });
+	}
 	const RUGS = ["rugRed", "rugBlue", "rugCream"];
 	RUGS.forEach((colour, i) => {
 		deco(`rug:${i}:h`, 40, 28, cv => rug(cv, 40, 28, colour), { outline: false });
@@ -1665,7 +1991,8 @@ export function furnitureArt({ C, ROOT }) {
 	const OL = Math.round(OPENING_LEN / U) + 4;
 	deco("inner:h", OL, 4, cv => doorway(cv, OL, 4, false), { outline: false });
 	deco("inner:v", OL, 4, cv => doorway(cv, OL, 4, false), { face: "left", outline: false });
-	for (const side of FACES) deco(`window:${side}`, 24, 5, (cv, L, D, r) => windowFrame(cv, L, D, r, K), { face: side });
+	for (const side of FACES)
+		deco(`window:${side}`, 24, 5, (cv, L, D, r) => windowFrame(cv, L, D, r, K), { face: side, outline: false });
 	const packed = pack(entries);
 	report.cells = entries.length;
 	report.unique = packed.unique;
@@ -1701,7 +2028,12 @@ export function furnitureSheet(art, drawText) {
 		const id = `${a}:${look}`;
 		if (best[id] === undefined || w * h > best[id].area) best[id] = { k, area: w * h };
 	}
-	const pick = [...Object.values(best).map(b => b.k).sort(), ...rest.filter(k => !k.startsWith("inner"))];
+	const pick = [
+		...Object.values(best)
+			.map(b => b.k)
+			.sort(),
+		...rest.filter(k => !k.startsWith("inner")),
+	];
 	const W = 1600;
 	const places = [];
 	let x = 8;
@@ -1740,7 +2072,8 @@ export function furnitureSheet(art, drawText) {
 				const si = ((cy + Math.floor(yy / Z)) * canvas.w + cx + Math.floor(xx / Z)) * 4;
 				const a = canvas.data[si + 3] / 255;
 				const di = ((p.y + 16 + yy) * W + p.x + xx) * 4;
-				for (let k = 0; k < 3; k++) img.data[di + k] = Math.round(canvas.data[si + k] * a + img.data[di + k] * (1 - a));
+				for (let k = 0; k < 3; k++)
+					img.data[di + k] = Math.round(canvas.data[si + k] * a + img.data[di + k] * (1 - a));
 			}
 		}
 		const label = p.k.replace(":bottom", "");
@@ -1766,10 +2099,16 @@ export function furnitureAtlasModule(art, name) {
 	for (const [k, n] of Object.entries(art.looks).sort()) L.push(`\t${k}: ${n},`);
 	L.push("};");
 	L.push("");
-	L.push("/** the art kind a planner kind takes in a building of a type (shared/game/world.ts types); else its own */");
+	L.push(
+		"/** the art kind a planner kind takes in a building of a type (shared/game/world.ts types); else its own */",
+	);
 	L.push("export const FURNITURE_ART_KIND: Record<string, Record<number, string>> = {");
 	for (const [k, m] of Object.entries(art.artKinds)) {
-		L.push(`\t${k}: { ${Object.entries(m).map(([t, a]) => `[${t}]: "${a}"`).join(", ")} },`);
+		L.push(
+			`\t${k}: { ${Object.entries(m)
+				.map(([t, a]) => `[${t}]: "${a}"`)
+				.join(", ")} },`,
+		);
 	}
 	L.push("};");
 	L.push("");
@@ -1777,16 +2116,24 @@ export function furnitureAtlasModule(art, name) {
 	L.push(`export const RUG_COLOURS = ${art.rugs};`);
 	L.push("");
 	L.push("/**");
-	L.push(" * Every cell: [x, y, w, h, shadow] in texels, w and h with the `shadow` texels of baked shadow on the right and");
-	L.push(' * bottom. Furniture: "<art kind>:<w>x<h>:<face>:<look>" (w, h the piece in world units). Decoration and openings:');
-	L.push(' * "chair:<side of its table>", "chairDown:<n>", "papers:<n>", "glass:h", "mat:v", "curtain:h", "board:h", "rug:<n>:h",');
+	L.push(
+		" * Every cell: [x, y, w, h, shadow] in texels, w and h with the `shadow` texels of baked shadow on the right and",
+	);
+	L.push(
+		' * bottom. Furniture: "<art kind>:<w>x<h>:<face>:<look>" (w, h the piece in world units). Decoration and openings:',
+	);
+	L.push(
+		' * "chair:<side of its table>", "chairDown:<n>", "papers:<n>", "glass:h", "mat:v", "curtain:h", "board:h", "rug:<n>:h",',
+	);
 	L.push(' * "door:h", "inner:v" (cropped to the width), "window:<the side it looks out of>".');
 	L.push(" */");
 	L.push("export const FURNITURE_CELLS: Record<string, readonly [number, number, number, number, number]> = {");
 	for (const [k, c] of Object.entries(art.cells)) L.push(`\t"${k}": [${c.join(", ")}],`);
 	L.push("};");
 	L.push("");
-	L.push('/** "<art kind>:<face>:<look>:<h|v>" -> the key of its largest cell, cropped for a piece of a size not in the atlas */');
+	L.push(
+		'/** "<art kind>:<face>:<look>:<h|v>" -> the key of its largest cell, cropped for a piece of a size not in the atlas */',
+	);
 	L.push("export const FURNITURE_TEMPLATES: Record<string, string> = {");
 	for (const [k, v] of Object.entries(art.templates)) L.push(`\t"${k}": "${v}",`);
 	L.push("};");

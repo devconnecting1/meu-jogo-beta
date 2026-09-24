@@ -57,7 +57,13 @@ const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
 const PAPERS = 3;
 const FALLEN = 4;
 /** the kinds a chair is pulled up to */
-const SEATED: Record<string, boolean> = { table: true, desk: true, schooldesk: true, teacherdesk: true };
+const SEATED: Record<string, boolean> = {
+	table: true,
+	desk: true,
+	schooldesk: true,
+	teacherdesk: true,
+	labbench: true,
+};
 
 /**
  * The sprites of one thing, worked out once: [centre x, centre y, w, h (world), rect x, y, w, h (texels)] per
@@ -232,6 +238,17 @@ export class InteriorArt {
 		if (looks === undefined) return NONE;
 		const face = s.face ?? "bottom";
 		const look = (s.variant ?? 0) % looks;
+		const plan = this.planFacing(art, s, face, look);
+		if (plan.size() > 0) return plan;
+		// a free-standing piece laid crosswise to its front (a range of the library's stacks, set in rows across the
+		// room) that its kind has no cell for: its front is one of its long sides, the one the variant picks
+		const across = face === "left" || face === "right";
+		if (!(across ? s.w > s.h : s.h > s.w)) return NONE;
+		const k = (s.variant ?? 0) % 2 === 0;
+		return this.planFacing(art, s, across ? (k ? "bottom" : "top") : k ? "right" : "left", look);
+	}
+
+	private planFacing(art: string, s: Solid, face: string, look: number): Plan {
 		const key = `${art}:${s.w}x${s.h}:${face}:${look}`;
 		const template = FURNITURE_TEMPLATES[`${art}:${face}:${look}:${s.w >= s.h ? "h" : "v"}`];
 		return planCell(key, template, s.x, s.y, s.w, s.h);
@@ -241,7 +258,7 @@ export class InteriorArt {
 
 	/** one piece of floor decoration of building `b`; false = draw it flat */
 	decor(r: Renderer, cam: Camera, b: Solid, d: Decor): boolean {
-		const k = d.kind;
+		const k: string = d.kind;
 		if (k === "blood") {
 			// the town's own dried blood (ART-05), one of its two shapes by where it lies
 			const id = artId(BLOOD[math.floor(hash01(d.x, d.y, 29) * 2) % 2]);
@@ -257,27 +274,34 @@ export class InteriorArt {
 			this.plans.set(d, plan);
 		}
 		if (plan.size() === 0) return false;
-		this.draw(r, cam, id, plan, k === "rug" || k === "mat" || k === "board" || k === "curtain" ? Z.floorDetail : Z.decal);
+		const floor = k === "rug" || k === "mat" || k === "board" || k === "curtain" || k === "notice";
+		this.draw(r, cam, id, plan, floor ? Z.floorDetail : Z.decal);
 		return true;
 	}
 
 	private planDecor(b: Solid, d: Decor): Plan {
-		const k = d.kind;
+		const k: string = d.kind;
 		const cx = d.x + d.w / 2;
 		const cy = d.y + d.h / 2;
 		const along = d.w >= d.h ? "h" : "v";
 		const T = WORLD_TEXEL;
 		if (k === "chair") return this.centred(`chair:${this.tableSide(b, cx, cy)}`, cx, cy);
-		if (k === "chairDown") return this.centred(`chairDown:${math.floor(hash01(d.x, d.y, 31) * FALLEN) % FALLEN}`, cx, cy);
+		if (k === "chairDown")
+			return this.centred(`chairDown:${math.floor(hash01(d.x, d.y, 31) * FALLEN) % FALLEN}`, cx, cy);
 		if (k === "papers") return this.centred(`papers:${math.floor(hash01(d.x, d.y, 33) * PAPERS) % PAPERS}`, cx, cy);
 		if (k === "glass") return this.centred(`glass:${along}`, cx, cy);
 		if (k === "mat") return this.centred(`mat:${along}`, cx, cy);
 		if (k === "curtain") return this.centred(`curtain:${along}`, cx, cy);
-		if (k === "board") {
-			// the board on the front wall: two texels thick, as long as the decoration says (cropped from the longest)
-			const w = along === "h" ? d.w : 2 * T;
-			const h = along === "h" ? 2 * T : d.h;
-			return planCell("", `board:${along}`, cx - w / 2, cy - h / 2, w, h);
+		if (k === "board" || k === "notice") {
+			// a board on a wall: three texels from the wall side of its decoration into the room (a board is flat on
+			// the wall; decoration, it blocks nothing), as long as the decoration says (cropped from the longest)
+			const side = this.roomSide(b, d, along === "h");
+			const t = 3 * T;
+			const w = along === "h" ? d.w : t;
+			const h = along === "h" ? t : d.h;
+			const x = side === "left" ? d.x + d.w - t : d.x;
+			const y = side === "top" ? d.y + d.h - t : d.y;
+			return planCell("", `${k}:${side}`, x, y, w, h);
 		}
 		if (k === "rug") {
 			const c = math.floor(hash01(d.x, d.y, 37) * RUG_COLOURS) % RUG_COLOURS;
@@ -293,6 +317,21 @@ export class InteriorArt {
 		const w = (c[2] - c[4]) * WORLD_TEXEL;
 		const h = (c[3] - c[4]) * WORLD_TEXEL;
 		return planCell(key, undefined, cx - w / 2, cy - h / 2, w, h);
+	}
+
+	/**
+	 * Which way a board hung on a wall faces (the side of the wall its room is on): the room rect it lies in, and the
+	 * nearer of that rect's two edges along it -- the wall is there, the room the other way.
+	 */
+	private roomSide(b: Solid, d: Decor, alongX: boolean): string {
+		const cx = d.x + d.w / 2;
+		const cy = d.y + d.h / 2;
+		for (const q of b.rooms ?? []) {
+			if (cx < q.x || cx > q.x + q.w || cy < q.y || cy > q.y + q.h) continue;
+			if (alongX) return cy - q.y <= q.y + q.h - cy ? "bottom" : "top";
+			return cx - q.x <= q.x + q.w - cx ? "right" : "left";
+		}
+		return alongX ? "bottom" : "right";
 	}
 
 	/**
@@ -341,9 +380,12 @@ export class InteriorArt {
 		const w = along ? o.w + 2 * JAMB : o.w;
 		const h = along ? o.h : o.h + 2 * JAMB;
 		const a = along ? "h" : "v";
-		if (o.kind === "door") return len === DOOR_GAP && thick === OUTER_WALL ? planCell(`door:${a}`, undefined, x, y, w, h) : NONE;
+		if (o.kind === "door")
+			return len === DOOR_GAP && thick === OUTER_WALL ? planCell(`door:${a}`, undefined, x, y, w, h) : NONE;
 		if (o.kind === "window") {
-			return len === WINDOW_GAP && thick === OUTER_WALL ? planCell(`window:${o.side}`, undefined, x, y, w, h) : NONE;
+			return len === WINDOW_GAP && thick === OUTER_WALL
+				? planCell(`window:${o.side}`, undefined, x, y, w, h)
+				: NONE;
 		}
 		return thick === INNER_WALL ? planCell("", `inner:${a}`, x, y, w, h) : NONE;
 	}

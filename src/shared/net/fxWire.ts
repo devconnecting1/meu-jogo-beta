@@ -15,9 +15,43 @@
  *
  * Pure module: no Instances, no services. Both sides import it, so tools/ tests it in Node.
  */
-import { BloodSource, DebrisMaterial, FxEvent as SimFx, TracerKind } from "shared/sim/types";
+import { BloodSource, DebrisMaterial, FxEvent as SimFx, TracerKind, WorldSound } from "shared/sim/types";
 import { BloodKind, FxEvent as WireFx, FxType, TRACER_KIND_MAX } from "./protocol";
 import { SLOT_NONE } from "./mpConfig";
+
+/**
+ * The sounds the SERVER decides (§4.2 `Sound`: a u8 id, a position and a volume), P0-4: id = index + 1, 0 is never
+ * sent. APPEND ONLY -- an id is the wire contract between a server and every client of a different build. The client
+ * plays each by its catalogue name (shared/data/sounds.ts), which is the same string.
+ */
+export const WIRE_SOUNDS: ReadonlyArray<WorldSound> = [
+	"bite",
+	"doorOpen",
+	"doorClose",
+	"ironDoorOpen",
+	"ironDoorClose",
+	"useEat",
+	"useBandage",
+	"useMedkit",
+	"usePills",
+	"useInject",
+	"hornMoto",
+	"bellBike",
+];
+
+/** the u8 a world sound travels as (1..WIRE_SOUNDS.size()) */
+export function wireSoundId(sound: WorldSound): number {
+	for (let i = 0; i < WIRE_SOUNDS.size(); i++) {
+		if (WIRE_SOUNDS[i] === sound) return i + 1;
+	}
+	return 0;
+}
+
+/** the world sound of a wire id, or undefined for an id this build does not know (a newer server: stays silent) */
+export function wireSoundOf(id: number): WorldSound | undefined {
+	if (id < 1 || id !== math.floor(id)) return undefined;
+	return WIRE_SOUNDS[id - 1];
+}
 
 /** debris material ids on the wire (the u8 of §4.2's Debris event); 0 is the fallback, never a hole */
 const DEBRIS_IDS: ReadonlyArray<DebrisMaterial> = ["impact", "tree", "car", "structure", "exploder", "boss"];
@@ -99,6 +133,11 @@ export function toWireFx(e: SimFx, slotOf: (index: number) => number): WireFx | 
 			life: e.life,
 		};
 	}
+	if (e.kind === "sound") {
+		const id = wireSoundId(e.sound);
+		if (id === 0) return undefined;
+		return { t: FxType.Sound, sound: id, x: e.x, y: e.y, volume: 1 };
+	}
 	// "message": the client writes its own HUD text (§4.5 Announce)
 	return undefined;
 }
@@ -126,6 +165,11 @@ export function fromWireFx(e: WireFx): SimFx | undefined {
 			tracer: tracerKindOf(e.kind),
 			life: e.life,
 		};
+	}
+	if (e.t === FxType.Sound) {
+		const sound = wireSoundOf(e.sound);
+		if (sound === undefined) return undefined;
+		return { kind: "sound", sound, x: e.x, y: e.y };
 	}
 	return undefined;
 }

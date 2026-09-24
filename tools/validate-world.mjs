@@ -141,6 +141,9 @@ const physics = require(join(SRC, "shared/game/physics.ts"));
 const { BUILDING_SPAWNS, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
+/** the campus (EDI-17): its planner, when this checkout has one (an older one, through PZ_SRC, has no campus) */
+const CAMPUS_MODULE = join(SRC, "shared/game/campus.ts");
+const CAMPUS = existsSync(CAMPUS_MODULE) ? require(CAMPUS_MODULE) : undefined;
 
 // ---------------------------------------------------------------- CLI
 
@@ -203,8 +206,15 @@ const TYPE_TAG = {
 	9: "gunshop",
 	10: "cloth",
 	11: "restaurant",
+	12: "college",
+	13: "library",
+	14: "lab",
+	15: "dorm",
 };
 const SHOPS = [6, 7, 8, 9, 10, 11];
+/** the campus's four buildings (EDI-17): the main hall, the library, the science lab, the dorm */
+const CAMPUS_TYPES = [12, 13, 14, 15];
+const isCampus = t => CAMPUS_TYPES.includes(t);
 
 // ---------------------------------------------------------------- geometry helpers
 
@@ -338,7 +348,7 @@ function reachability(w, start) {
 // ---------------------------------------------------------------- interiors (EDI-08..EDI-14)
 
 /** the doors a type is meant to have (front + back / service / exits), EDI-09 */
-const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2 };
+const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2, 12: 3, 13: 2, 14: 2, 15: 2 };
 /**
  * share of a type's buildings that must reach DOOR_TARGET (a secondary door is dropped where the ground outside is
  * taken), over all the towns of a run: per town it is noise (3-9 pharmacies or gun shops a town)
@@ -347,7 +357,18 @@ const DOOR_SHARE = 0.6;
 /** type → buildings and those with all their doors, summed over every seed of the run */
 const DOOR_RUN = {};
 /** rooms that never get a window (EDI-10): a bathroom, a hall, the back rooms, the gun shop's secure room */
-const NO_WINDOW = new Set(["bath", "hall", "stock", "cold", "secure", "corridor", "treatment", "galley"]);
+const NO_WINDOW = new Set([
+	"bath",
+	"hall",
+	"stock",
+	"cold",
+	"secure",
+	"corridor",
+	"treatment",
+	"galley",
+	"chemstore",
+	"foyer",
+]);
 /** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
 const APPROACH = 80;
 /** walker speed (u/s): 3 px/frame at 30 fps, shared/data/zombies.ts */
@@ -378,6 +399,14 @@ const DEFINING = {
 	diner: ["table", "booth"],
 	galley: ["stove", "counter", "prep"],
 	lobby: ["reception", "bench", "cabinet"],
+	// the campus (EDI-17)
+	lecture: ["seats"],
+	stacks: ["bookcase"],
+	reading: ["reception", "table"],
+	lab: ["labbench", "fumehood"],
+	chemstore: ["chemshelf"],
+	dormroom: ["bunk"],
+	common: ["sofa", "table", "tv"],
 };
 
 /**
@@ -855,8 +884,27 @@ const CATEGORY = {
 	food: /bread|canned|meat|potato|pizza|meal|mushroom|apple|berry|soup/i,
 	oil: /^oil$/i,
 	cloth: /cloth|leather/i,
+	// the campus (EDI-17): paper (plans, maps), cells for the lamps, the lab's "tech"
+	paper: /blueprint/i,
+	battery: /battery/i,
+	tech: /computer chip|voltage circuit|machine parts/i,
 };
-const REQUIRED = { 4: "medical", 6: "medical", 9: "ammo", 7: "food", 8: "food", 11: "food", 5: "oil", 10: "cloth" };
+/** what a type's table must hold (EDI-03); the campus: the hall and the library paper, the library cells too, the
+ * lab its tech and its first aid, the dorm its food and clothes */
+const REQUIRED = {
+	4: "medical",
+	6: "medical",
+	9: "ammo",
+	7: "food",
+	8: "food",
+	11: "food",
+	5: "oil",
+	10: "cloth",
+	12: ["paper"],
+	13: ["paper", "battery"],
+	14: ["tech", "medical"],
+	15: ["food", "cloth"],
+};
 
 /**
  * How each type says what it is from outside (EDI-03): the storefront signs of shared/data/buildingSigns.ts
@@ -898,6 +946,126 @@ function emblemTypes() {
 	if (!def) return undefined;
 	const body = src.slice(def.index, src.indexOf("\n\t}\n", def.index));
 	return new Set([...body.matchAll(/bt === (\d+)/g)].map(m => Number(m[1])));
+}
+
+// ---------------------------------------------------------------- the campus (EDI-17)
+
+/** two standing things leave a gap one body fits in and two do not (EDI-11, outdoors): diagonal neighbours never do */
+function pinches(a, b) {
+	const du = Math.max(0, b.x - (a.x + a.w), a.x - (b.x + b.w));
+	const dv = Math.max(0, b.y - (a.y + a.h), a.y - (b.y + b.h));
+	if (du > 0 && dv > 0) return false;
+	const gap = Math.max(du, dv);
+	return gap >= 30 && gap < 88;
+}
+
+/**
+ * The block the generator would have given a campus (world.ts placeCampus), asked again of a town that has none:
+ * a whole residential block (four streets, none an avenue) with only houses on it, two blocks from any school or
+ * hospital, where some way round of the campus plan (shared/game/campus.ts) fits clear of the boss plazas.
+ */
+function campusBlock(w, buildings) {
+	if (CAMPUS === undefined) return undefined;
+	const civic = buildings.filter(b => b.buildingType === 3 || b.buildingType === 4);
+	const pitch = TOWN.LOT_TARGET + TOWN.ROAD_W;
+	for (const lot of w.lots) {
+		if (lot.kind !== "block" || lot.zone !== "residential" || lotEdges(w, lot).length !== 4) continue;
+		if (lotEdges(w, lot).some(e => w.roads[e.road]?.avenue)) continue;
+		if (buildings.some(b => b.buildingType > 2 && overlap(b, lot))) continue;
+		const lx = lot.x + lot.w / 2;
+		const ly = lot.y + lot.h / 2;
+		if (civic.some(c => Math.max(Math.abs(cx(c) - lx), Math.abs(cy(c) - ly)) / pitch < 1.5)) continue;
+		for (const side of CAMPUS.CAMPUS_SIDES) {
+			for (const cw of [true, false]) {
+				const plan = CAMPUS.campusLayout(lot.yard, side, cw, false);
+				if (plan === undefined) continue;
+				const clear = plan.buildings.every(b =>
+					w.bossAnchors.every(a => ptRectDist(a.x, a.y, b.rect) >= TOWN.BOSS_CLEAR),
+				);
+				if (clear) return `the block at (${fmt(lot.x)},${fmt(lot.y)})`;
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * EDI-17: at most one campus a town -- a main hall, a library, a science lab and a dorm, one of each, on one whole
+ * block, each facing its own street -- where a block can hold one; its quad reached on foot, with one centrepiece
+ * (a fountain or a statue), and whatever stands on it (the centrepiece, benches, trees) a body's path from the
+ * buildings (their back doors and windows open onto it) and pinching no slot (EDI-11, outdoors). Rooms, doors,
+ * windows, loot and the no-safe-spot rule are every building's (EDI-03, EDI-08..EDI-14 above).
+ */
+function campusChecks(w, buildings, reach, fail, stats) {
+	const campus = buildings.filter(b => isCampus(b.buildingType));
+	stats.present = campus.length > 0;
+	if (campus.length === 0) {
+		const block = campusBlock(w, buildings);
+		if (block !== undefined) fail("EDI-17", `no campus, though ${block} could hold one`, 0, 0);
+		return;
+	}
+	for (const t of CAMPUS_TYPES) {
+		const n = campus.filter(b => b.buildingType === t).length;
+		if (n !== 1) fail("EDI-17", `${n} ${TYPE_TAG[t]} building(s): one campus a town, one of each`, 0, 0);
+	}
+	const hall = campus.find(b => b.buildingType === 12) ?? campus[0];
+	const lot = w.lots.find(l => inside(hall, l.yard));
+	if (lot === undefined) {
+		fail("EDI-17", `the campus hall #${hall.id} is not inside a block's yard`, cx(hall), cy(hall));
+		return;
+	}
+	stats.block = `${fmt(lot.x)},${fmt(lot.y)}`;
+	if (lotEdges(w, lot).length !== 4)
+		fail("EDI-17", "the campus block is not a whole block (four streets)", cx(hall), cy(hall));
+	for (const b of campus) {
+		if (!inside(b, lot.yard)) fail("EDI-17", `${b.tags} #${b.id} is off the campus block`, cx(b), cy(b));
+	}
+	if (new Set(campus.map(b => b.doorSide)).size !== campus.length) {
+		fail("EDI-17", "two campus buildings face the same street", cx(hall), cy(hall));
+	}
+	for (const o of buildings) {
+		if (!isCampus(o.buildingType) && overlap(o, lot)) {
+			fail("EDI-17", `${o.tags} #${o.id} is left on the campus block`, cx(o), cy(o));
+		}
+	}
+	// the quad and what stands on it
+	const props = w.solids.filter(s => s.kind === "prop" && overlap(s, lot.yard));
+	const trees = w.solids.filter(s => s.kind === "tree" && inside(s, lot.yard));
+	const centre = props.filter(p => p.tags === "fountain" || p.tags === "statue");
+	if (centre.length !== 1)
+		fail("EDI-17", `${centre.length} centrepieces on the quad (a fountain or a statue)`, cx(hall), cy(hall));
+	const standing = [...props, ...trees];
+	for (const p of standing) {
+		for (const b of campus) {
+			const d = rectDist(p, b);
+			if (d < 88)
+				fail(
+					"EDI-17",
+					`${p.tags} #${p.id} ${fmt(d)} u from the ${b.tags} (< 88: its doors and windows)`,
+					cx(p),
+					cy(p),
+				);
+		}
+		for (const q of standing) {
+			if (q.id > p.id && pinches(p, q))
+				fail("EDI-17", `${p.tags} #${p.id} and ${q.tags} #${q.id} pinch a slot`, cx(p), cy(p));
+		}
+		if (p.kind === "prop" && p.tags !== "statue" && p.low !== true)
+			fail("EDI-17", `the ${p.tags} #${p.id} stops bullets`, cx(p), cy(p));
+	}
+	// on foot from the spawn: the ground round the centrepiece
+	for (const c of centre) {
+		const round = [
+			[cx(c), c.y - 40],
+			[cx(c), c.y + c.h + 40],
+			[c.x - 40, cy(c)],
+			[c.x + c.w + 40, cy(c)],
+		];
+		if (!round.some(([x, y]) => reach.at(x, y).reached))
+			fail("EDI-17", "the quad is not reachable on foot", cx(c), cy(c));
+	}
+	stats.props = props.map(p => p.tags).join("+");
+	stats.trees = trees.length;
 }
 
 // ---------------------------------------------------------------- the checks
@@ -1248,6 +1416,10 @@ function validate(seed) {
 				fail("EDI-02", `${b.tags} #${b.id}: no school yard / parking lot on its lot`, cx(b), cy(b));
 			}
 		}
+		// the campus (EDI-17): a strip of lawn between the sidewalk and every facade, like a civic building
+		if (isCampus(t) && (front < 32 || front > 112)) {
+			fail("EDI-02", `${b.tags} #${b.id}: campus lawn ${fmt(front)} u deep (expected 32–112)`, b.doorX, b.doorY);
+		}
 	}
 
 	// --- EDI-03: type ↔ tag ↔ loot table ↔ roof colour ↔ storefront sign (ART-07)
@@ -1264,8 +1436,14 @@ function validate(seed) {
 		const table = BUILDING_SPAWNS[t];
 		if (!table) {
 			fail("EDI-03", `building #${b.id}: no loot table for type ${t}`, cx(b), cy(b));
-		} else if (REQUIRED[t] && !table.some(e => CATEGORY[REQUIRED[t]].test(itemName(e.kind, e.index)))) {
-			fail("EDI-03", `${b.tags} #${b.id}: loot table has no ${REQUIRED[t]}`, cx(b), cy(b));
+		} else {
+			for (const cat of [REQUIRED[t] ?? []].flat()) {
+				if (!table.some(e => CATEGORY[cat].test(itemName(e.kind, e.index))))
+					fail("EDI-03", `${b.tags} #${b.id}: loot table has no ${cat}`, cx(b), cy(b));
+			}
+			// a campus never held a gun or a round (EDI-17): those come from the gun shop and the dead
+			if (isCampus(t) && table.some(e => e.kind === 1 || (e.kind === 4 && e.index >= 44 && e.index <= 47)))
+				fail("EDI-03", `${b.tags} #${b.id}: a campus table holds a gun or ammunition`, cx(b), cy(b));
 		}
 		if (t >= 3 && b.roofColor) {
 			const key = `${b.roofColor.R.toFixed(3)},${b.roofColor.G.toFixed(3)},${b.roofColor.B.toFixed(3)}`;
@@ -1286,7 +1464,9 @@ function validate(seed) {
 	const seenRoof = new Map();
 	for (const [t, key] of roofByType) {
 		const other = seenRoof.get(key);
-		if (other !== undefined && !(TYPE_TAG[other] === "market" && TYPE_TAG[t] === "market")) {
+		// the two food stores share their roof, and so do the campus's four buildings (one institution, EDI-17)
+		const family = (TYPE_TAG[other] === "market" && TYPE_TAG[t] === "market") || (isCampus(other) && isCampus(t));
+		if (other !== undefined && !family) {
 			fail("EDI-03", `types ${other} and ${t} share a roof colour`, 0, 0);
 		}
 		seenRoof.set(key, t);
@@ -1430,6 +1610,10 @@ function validate(seed) {
 	// --- EDI-08..EDI-14: interiors, entrances, windows, furniture, no safe spot
 	const interior = {};
 	interiorChecks(w, buildings, kidsOf, reach, fail, interior);
+
+	// --- EDI-17: the college campus
+	const campus = {};
+	campusChecks(w, buildings, reach, fail, campus);
 
 	// --- VEG-01 (rest): trunk on a carriageway, in front of a door or on a driveway
 	for (const s of trees) {
@@ -1740,12 +1924,15 @@ function validate(seed) {
 		trash: trash.length,
 		crossings: crossings.length,
 		interior,
+		campus,
 	};
 	return { fails, stats };
 }
 
 // ---------------------------------------------------------------- run
 
+/** EDI-17 over the run: towns with a campus */
+const CAMPUS_RUN = { towns: 0, campus: 0 };
 let seedState = 12345;
 Math.random = () => (seedState = (seedState * 48271) % 2147483647) / 2147483647;
 const all = [];
@@ -1768,6 +1955,11 @@ for (const seed of seeds) {
 			`${stats.solids} solids, ${stats.buildings} buildings (${tp}) | trees ${stats.trees} (street ${stats.streetTrees}) | ` +
 			`cars ${stats.cars} (parked ${stats.parked}, abandoned ${stats.abandoned}, in lots ${stats.lotCars}) | bins ${stats.trash} | crossings ${stats.crossings}`,
 	);
+	if (stats.campus?.present) {
+		console.log(`  campus: block ${stats.campus.block} | quad: ${stats.campus.props}, ${stats.campus.trees} trees`);
+	}
+	CAMPUS_RUN.towns++;
+	if (stats.campus?.present) CAMPUS_RUN.campus++;
 	const it = stats.interior;
 	console.log(
 		`  interiors: ${it.compound}/${stats.buildings} footprints not a box | worst walker reach ${it.worstReach.toFixed(1)} s (${it.worstRoom}) | doors/windows per building: ` +
@@ -1796,6 +1988,7 @@ for (const [t, run] of Object.entries(DOOR_RUN)) {
 	}
 }
 console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all their doors): ${shares.join(", ")}`);
+if (CAMPUS !== undefined) console.log(`  campus (EDI-17): in ${CAMPUS_RUN.campus} of ${CAMPUS_RUN.towns} towns`);
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));
 console.log(
 	`${total === 0 ? "PASS" : "FAIL"}: ${seeds.length} seed(s), ${total} failure(s), ${fmt(performance.now() - t0)} ms`,

@@ -882,6 +882,25 @@ section("4) every coin the server moved is one economy event, and they add up to
 		buys[0]?.sku === SHOP_PACKS[craftKit].name && buys[0].amount === SHOP_PACKS[craftKit].price,
 		"…the SKU is the pack's catalogue name and the amount its catalogue price",
 	);
+	// a purchase replayed (the same client nonce, shared/net/shopGuard.ts): answered as the first, charged once -- and
+	// logged once, or the sinks would add up to more than the coins that left
+	s.run(1.2);
+	const nr = s.log.length;
+	const moneyBefore = s.live(p.lobby).money;
+	const once = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	s.run(1.2);
+	const replay = s.shop(p.lobby, { kind: "buyPack", packId: craftKit, nonce: 41 });
+	const replaySinks = s.log.slice(nr).filter(r => r.kind === "economy");
+	check(
+		once.ok &&
+			replay.ok &&
+			replay.price === once.price &&
+			s.live(p.lobby).money === moneyBefore - SHOP_PACKS[craftKit].price &&
+			replaySinks.length === 1 &&
+			replaySinks[0].amount === SHOP_PACKS[craftKit].price,
+		"a replayed purchase (the same nonce): answered ok, charged once, one Sink",
+		JSON.stringify(replaySinks.map(r => [r.sku, r.amount, r.balance])),
+	);
 	// a costume: bought, refused for funds, refused as owned
 	const eagle = costumeId("Eagle");
 	const r3 = s.shop(p.veteran, { kind: "buyCostume", costumeId: eagle, price: 0 });

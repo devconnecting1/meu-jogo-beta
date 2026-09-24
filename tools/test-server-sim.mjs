@@ -2095,6 +2095,100 @@ section("(l) the horde's AI with 60 and 100 zombies, day and night (DESIGN_RULES
 	info("Node timings: a regression guard and a before/after comparison (PZ_SRC), not the Luau verdict");
 }
 
+// ---------------------------------------------------------------- (m) VIT-01: the wait before healing is the server's
+
+section("(m) VIT-01: next to a walker the body does not heal, whatever it wears or knows; out of reach, it does");
+
+{
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+	const { EQUIPS } = require(join(SRC, "shared/data/equips.ts"));
+	/**
+	 * A survivor standing (no commands: the queue stands them still) next to ONE walker of the real horde, through
+	 * whole server ticks: the bite goes through the combat's damage sink into `applyPlayerDamage`, and the body's step
+	 * is the tick's `stepPlayer`. Only the survivor's own walker is kept: the ambient spawner's are another test's.
+	 */
+	function standoff({ skills = {}, cloth = -1, seconds = 20 } = {}) {
+		const sim = new ServerSimulation({ world, zombies: true });
+		const save = defaultSave();
+		for (const [id, lv] of Object.entries(skills)) save.skillLevels[Number(id)] = lv;
+		save.equipCloth = cloth;
+		const sp = PL.createServerPlayer(
+			{ slot: 0, userId: 9100, name: "vit" },
+			save,
+			spawnA.x,
+			spawnA.y,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		sp.spawnShieldUntil = sim.tick;
+		const horde = sim.horde;
+		const z = createZombie(1, sp.state.x + 40, sp.state.y, 1);
+		z.detect = true;
+		const keep = () => {
+			for (let k = horde.zombies.length - 1; k >= 0; k--) if (horde.zombies[k] !== z) horde.zombies.splice(k, 1);
+		};
+		horde.zombies.length = 0;
+		horde.zombies.push(z);
+		const trace = [];
+		for (let i = 0; i < Math.round(seconds * sim.simHz); i++) {
+			keep();
+			const before = sp.state.hp;
+			sim.step();
+			trace.push({ hp: sp.state.hp, bit: sp.state.hp < before - 1 });
+		}
+		return { sim, sp, z, trace, keep };
+	}
+	/** ticks in which the hp went UP between the first and the last bite */
+	function risesInFight(trace) {
+		const bites = trace.map((t, i) => (t.bit ? i : -1)).filter(i => i >= 0);
+		let rises = 0;
+		for (let i = (bites[0] ?? 0) + 1; i <= (bites[bites.length - 1] ?? -1); i++) {
+			if (trace[i].hp > trace[i - 1].hp + 1e-12) rises += 1;
+		}
+		return { bites: bites.length, rises, last: bites[bites.length - 1] };
+	}
+	const bare = standoff();
+	const b = risesInFight(bare.trace);
+	check(
+		b.bites >= 8 && b.rises === 0,
+		`a bare survivor, fed, next to a walker for 20 s: ${b.bites} bites, ${(100 - bare.sp.state.hp).toFixed(0)} hp ` +
+			`lost, and not one tick of healing between them`,
+	);
+	const steel = EQUIPS.findIndex(e => e.name === "Steel armor");
+	const best = standoff({ skills: { 1: 3 }, cloth: steel });
+	const w = risesInFight(best.trace);
+	check(
+		w.bites >= 8 && w.rises === 0 && best.sp.state.hp < 100,
+		`Recovery 3 + steel armour (the most healing and the most armour there is): ${w.bites} bites of ` +
+			`${10 - EQUIPS[steel].def}, ${best.sp.state.hp.toFixed(0)} hp left after 20 s and never a tick of healing ` +
+			`(the original's 4,8 hp/s, bite or no bite, out-healed this walker)`,
+	);
+	// the walker goes; the same survivor rests on the server's clock
+	best.sim.horde.zombies.length = 0;
+	const sinceLast = best.trace.length - 1 - w.last;
+	const hp0 = best.sp.state.hp;
+	const food0 = best.sp.state.hungry;
+	let firstRise;
+	const rest = Math.round(12 * best.sim.simHz);
+	for (let i = 0; i < rest; i++) {
+		best.sim.horde.zombies.length = 0;
+		const before = best.sp.state.hp;
+		best.sim.step();
+		if (firstRise === undefined && best.sp.state.hp > before) firstRise = sinceLast + i + 1;
+	}
+	const waited = (firstRise ?? Infinity) / best.sim.simHz;
+	check(
+		waited >= VIT.REGEN_DELAY_S && waited <= VIT.REGEN_DELAY_S + 2 / best.sim.simHz,
+		`out of reach, the server's body heals ${waited.toFixed(3)} s after the last bite (the wait: ${VIT.REGEN_DELAY_S} s)`,
+	);
+	const healed = best.sp.state.hp - hp0;
+	const idle = (0.3 * rest) / best.sim.simHz;
+	const spent = food0 - best.sp.state.hungry - idle;
+	checkNear(spent, healed * VIT.REGEN_FOOD_PER_HP, 1e-6, `…${healed.toFixed(1)} hp healed, paid for in food`);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

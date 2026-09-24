@@ -34,7 +34,13 @@
  *      sprite): a bite, a bite the armour absorbed whole, an explosion inside the i-frames, a bite the tick the
  *      i-frames ran out; contact damage re-lights it at most every HIT_ALARM.GAP_S (2,5/s); poison and hunger
  *      never light it, not even across a 4 s blackout; nothing else does either. The self block is the server's
- *      own (`server/net/replication.ts` selfBlockOf), not a copy.
+ *      own (`server/net/replication.ts` selfBlockOf), not a copy;
+ *   6. [vitals] DESIGN_RULES VIT-01: with the server biting and poisoning through its own damage entry point, and
+ *      the wait before healing on nobody's wire, the HP the client draws is the server's: through a fight it never
+ *      rises between hits, once healing it never falls back, per command it is never above the server's (but for
+ *      one step of healing per command the server skipped, until the next ack), at a walker's rhythm, into the food
+ *      gate, with Recovery 3, under a crowd that bites the tick each guard ends, and on a link past the server's
+ *      input queue.
  *
  * Exit code 1 on any failure. Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the
  * fly, with the Luau / roblox-ts shims of tools/test-sim.mjs and the strict `buffer` of tools/test-net.mjs.
@@ -230,6 +236,13 @@ shim("remove", function (i) {
 shim("clear", function () {
 	this.length = 0;
 });
+// swap-with-last removal (the solid grid when the campus clears its block, EDI-17)
+shim("unorderedRemove", function (i) {
+	const v = this[i];
+	const last = this.pop();
+	if (i < this.length) this[i] = last;
+	return v;
+});
 const jsSort = AP.sort;
 shim("sort", function (cmp) {
 	if (!cmp) return jsSort.call(this);
@@ -282,7 +295,9 @@ Module._extensions[".ts"] = function (m, filename) {
 const W = require(join(SRC, "shared/game/world.ts"));
 const physics = require(join(SRC, "shared/game/physics.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
-const { applyPlayerDamage, createPlayer } = require(join(SRC, "shared/game/player.ts"));
+const Ply = require(join(SRC, "shared/game/player.ts"));
+const { applyPlayerDamage, createPlayer } = Ply;
+const VIT = require(join(SRC, "shared/sim/vitals.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const SIM = require(join(SRC, "shared/sim/types.ts"));
@@ -294,7 +309,8 @@ const REP = require(join(SRC, "server/net/replication.ts"));
 const { HIT_ALARM } = require(join(SRC, "client/ui/hitAlarm.ts"));
 const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
 const { CommandStream, MAX_PENDING } = require(join(SRC, "client/net/commands.ts"));
-const { Prediction, CORRECTION_DIST } = require(join(SRC, "client/net/prediction.ts"));
+const PR = require(join(SRC, "client/net/prediction.ts"));
+const { Prediction, CORRECTION_DIST } = PR;
 const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
 
 // ---------------------------------------------------------------- CLI
@@ -581,7 +597,10 @@ function clientFrame(cl, dt, now, down, up, serverNow) {
 
 	cl.sampled.length = 0;
 	cl.commands.sample(dt, cl.raw, cl.sampled);
-	for (const cmd of cl.sampled) cl.prediction.step(cmd);
+	for (const cmd of cl.sampled) {
+		cl.prediction.step(cmd);
+		cl.onStep?.(cmd);
+	}
 
 	cl.snapshots.advance(dt, tick, now, cl.world);
 
@@ -618,6 +637,24 @@ function run(opts) {
 	const me = makeServerPlayer(0, scene.start.x, scene.start.y);
 	const ally = makeServerPlayer(1, scene.lane.x, scene.lane.y);
 	const client = makeClient(scene);
+	// VIT-01: both bodies start from the same vitals (a join sends nothing else: the first snapshot is the truth)
+	const vit = opts.vitals;
+	/** VIT-01, per command seq: the hp the client FIRST drew for it, and the server's once it simulated it */
+	const clientFirst = new Map();
+	const serverBySeq = new Map();
+	if (vit !== undefined) {
+		for (const [p, save] of [
+			[me.state, me.save],
+			[client.state, client.save],
+		]) {
+			for (const [id, lv] of Object.entries(vit.skills ?? {})) save.skillLevels[Number(id)] = lv;
+			p.hp = vit.hp;
+			p.hungry = vit.hunger;
+		}
+		client.onStep = cmd => {
+			if (!clientFirst.has(cmd.seq)) clientFirst.set(cmd.seq, client.state.hp);
+		};
+	}
 
 	const up = new Link({
 		name: "up",
@@ -655,6 +692,12 @@ function run(opts) {
 		allyTravel: 0,
 		allySeen: 0,
 		knockbacks: 0,
+		/** VIT-01: [wall time, hp] of the server's body after each tick, and of what the client drew each frame */
+		serverHp: [],
+		clientHp: [],
+		hungerGap: 0,
+		/** VIT-01: [server time, commands] the server's queue jumped over (every copy of them came too late) */
+		skipped: [],
 		/** client time of every hit flash the reconciliation started */
 		flashAt: [],
 		/** the scenario's own bookkeeping (`hurt`) */
@@ -700,7 +743,12 @@ function run(opts) {
 			// ever come from the interpolation itself
 			allySeq = (allySeq + 1) % 65536;
 			serverStep(scene.world, ally, SIM.makeCommand(allySeq, 1, 0, 1, 0, 0, 0));
+			const ackBefore = me.ackSeq;
 			serverStep(scene.world, me, PL.takeCommand(me));
+			// a command the queue jumped over (every copy of it came too late): the body ran one step fewer for it
+			const jump = (me.ackSeq - ackBefore + 65536) % 65536;
+			if (me.counters.consumed > 1 && jump > 1 && jump < 1000)
+				report.skipped.push([T0 + serverTick / SIM_HZ, jump - 1]);
 			// the horde's half of the tick (§3.1): whatever the scenario lands on the survivor, through the server's
 			// own entry point (`applyPlayerDamage`, what ServerCombat.damageActor calls)
 			opts.hurt?.(me, serverTick, report);
@@ -710,6 +758,13 @@ function run(opts) {
 				me.state.reactionSpeed = 8;
 				me.state.reactionDir = (serverTick % 7) * 0.9;
 				report.knockbacks += 1;
+			}
+			if (vit !== undefined) {
+				// the body after the whole tick (the scenario's `hurt` included)
+				const t = serverTick / SIM_HZ;
+				report.serverHp.push([T0 + t, me.state.hp]);
+				// the tick that CONSUMED a command (a filled tick repeats the ack: the first one is that command's)
+				if (!serverBySeq.has(me.ackSeq)) serverBySeq.set(me.ackSeq, { hp: me.state.hp, t: T0 + t });
 			}
 			serverTick += 1;
 			if (serverTick % SNAP_EVERY === 0) {
@@ -743,6 +798,11 @@ function run(opts) {
 		// the way client/systems/combat.ts fades it, once a frame, after netUpdate
 		if ((client.state.hitFlash ?? 0) > flashBefore) report.flashAt.push(now);
 		client.state.hitFlash = Math.max(0, (client.state.hitFlash ?? 0) - frameDt);
+		if (vit !== undefined) {
+			report.clientHp.push([now, client.state.hp]);
+			if (now - T0 > 2)
+				report.hungerGap = Math.max(report.hungerGap, Math.abs(client.state.hungry - me.state.hungry));
+		}
 		if (report.stalledAt > 0 && report.consumedAtStall === undefined) report.consumedAtStall = me.counters.consumed;
 		if (report.stalledAt > 0 && now >= report.stalledAt + 1 && report.afterStall === undefined) {
 			report.afterStall = { x: me.state.x, y: me.state.y };
@@ -774,6 +834,8 @@ function run(opts) {
 	}
 
 	report.allyTravel = ally.state.x - allyStart;
+	report.clientFirst = clientFirst;
+	report.serverBySeq = serverBySeq;
 	report.predictionStats = client.prediction.stats(now);
 	report.commandStats = client.commands.stats();
 	report.interpDelay = client.snapshots.delay();
@@ -1272,6 +1334,170 @@ console.log(`\n[hit flash, attach] a new body's first block is no hit, whatever 
 	prediction.reconcile(block(), [], 1.07);
 	if (p2.hitFlash === 1) ok(`…and its first bite lights it`);
 	else fail(`the new body's first bite did not light the flash (${p2.hitFlash})`);
+}
+
+// ---- VIT-01: the HP bar the client draws is the server's -- no healing it has to take back, none held back
+//
+// The server bites (through `applyPlayerDamage`, as the horde does, in the scenario's `hurt`) and poisons; the wait
+// before healing is on nobody's wire: the client derives it from the self block (client/net/prediction.ts). What must
+// hold, per COMMAND, is that the hp the client drew first for it is never above what the server then computed for it --
+// a drawn hp above the server's is one the next snapshot takes back -- except for a bite it could not know about yet.
+// On the screen: the bar never rises in a fight, and never falls while it heals. (The flash those bites light is the
+// [hit flash] sections' above.)
+console.log(`\n[vitals] VIT-01: the client draws the server's HP -- no healing to take back, none held back`);
+{
+	/**
+	 * The scenario's hits, on the server's tick (`run`'s `hurt`): bites at `biteAt` seconds, a crowd (LEG-04) that
+	 * tries every tick of `crowd` and so lands the tick each guard ends, and poison from `poisonAt` for `poisonS`
+	 */
+	const vitalsHurt = vit => (me, tick, report) => {
+		const t = tick / SIM_HZ;
+		const crowd = vit.crowd !== undefined && t >= vit.crowd[0] && t < vit.crowd[1];
+		if (crowd || vit.biteAt?.some(b => Math.abs(b - t) < TICK / 2)) {
+			if (applyPlayerDamage(me.state, me.save, vit.bite ?? 10, false)) report.hits.push({ tick, at: T0 + t });
+		}
+		if (vit.poisonAt !== undefined && Math.abs(vit.poisonAt - t) < TICK / 2) me.state.buffs.poison = vit.poisonS;
+	};
+	const OVER_EPS = 0.02;
+	const runs = [
+		{ label: "a walker's bites, 100 ms RTT", rtt: 0.1, vitals: { hp: 70, hunger: 90, biteAt: [2, 3.4, 4.8, 6.2] } },
+		{
+			label: "bites then poison, 200 ms RTT ±35 ms (the server fills and skips commands)",
+			rtt: 0.2,
+			jitter: 0.035,
+			vitals: { hp: 70, hunger: 90, biteAt: [2, 3.4, 4.8], poisonAt: 5.5, poisonS: 1.5 },
+		},
+		{
+			label: `healing into the food gate (FOOD ${VIT.REGEN_FOOD_MIN} -> ${VIT.REGEN_FOOD_MIN - 1}), 150 ms RTT`,
+			rtt: 0.15,
+			vitals: { hp: 40, hunger: VIT.REGEN_FOOD_MIN + 0.4 },
+		},
+		{
+			label: "a crowd biting the tick each guard ends (the Hit flag never drops), 100 ms RTT",
+			rtt: 0.1,
+			vitals: { hp: 100, hunger: 90, crowd: [2, 5.2] },
+		},
+		{
+			label: "Recovery 3 (6 hp/s) after bites, 150 ms RTT",
+			rtt: 0.15,
+			vitals: { hp: 30, hunger: 90, biteAt: [2, 3.4], skills: { 1: 3 } },
+		},
+	];
+	for (const v of runs) {
+		const jitter = v.jitter ?? Math.min(v.rtt * JITTER_FRACTION, JITTER_CAP_S);
+		const vit = v.vitals;
+		const r = run({ rtt: v.rtt, jitter, loss: LOSS, seed: SEED + 71, vitals: vit, hurt: vitalsHurt(vit) });
+		const bites = r.hits.map(h => h.at);
+		// a command the server jumped over (every copy of it came too late) is one step of healing its body never did
+		// for that seq: until the next ack the client, which did it, is that far ahead. The only excuse accepted
+		const skipStep = VIT.regenRate(r.client.save) * TICK;
+		const skippedNear = t => r.skipped.some(([ts]) => t >= ts - TICK && t <= ts + 0.6);
+		console.log(
+			`  [${v.label}] ${bites.length} hits · filled ticks ${r.me.counters.filled} · ` +
+				`commands the server skipped ${r.skipped.reduce((a, [, n]) => a + n, 0)}`,
+		);
+		const poisonEnd = vit.poisonAt !== undefined ? T0 + vit.poisonAt + vit.poisonS : -Infinity;
+		if (vit.crowd !== undefined) {
+			const gaps = bites.slice(1).map((b, i) => b - bites[i]);
+			const tight = gaps.every(g => g <= DESIGN.IFRAMES + 1.5 * TICK);
+			if (bites.length >= 5 && tight) {
+				ok(`the crowd landed ${bites.length} bites, each the tick the last one's guard ended`);
+			} else fail(`the crowd landed ${bites.length} bites, gaps ${gaps.map(g => g.toFixed(3)).join(", ")} s`);
+		}
+		const hurtUntil = Math.max(bites.length > 0 ? bites[bites.length - 1] : -Infinity, poisonEnd);
+		// a hit the client could not know about yet: for about a round trip it drew the hp from before it
+		const unforeseen = t =>
+			bites.some(b => t >= b - TICK && t <= b + 0.6) ||
+			(vit.poisonAt !== undefined && t >= T0 + vit.poisonAt - TICK && t <= poisonEnd + 0.6);
+
+		// (1) per command: never above the server, outside the hits it could not foresee
+		let compared = 0;
+		let over = 0;
+		let worstOver = 0;
+		let skipOver = 0;
+		let worstSkip = 0;
+		let lastGap = 0;
+		for (const [seq, s] of r.serverBySeq) {
+			const c = r.clientFirst.get(seq);
+			if (c === undefined || s.t - T0 < 1) continue;
+			lastGap = c - s.hp;
+			if (unforeseen(s.t)) continue;
+			compared += 1;
+			const e = c - s.hp;
+			if (e <= OVER_EPS) continue;
+			if (skippedNear(s.t) && e <= 2 * skipStep + OVER_EPS) {
+				skipOver += 1;
+				worstSkip = Math.max(worstSkip, e);
+			} else {
+				over += 1;
+				worstOver = Math.max(worstOver, e);
+			}
+		}
+		if (compared < 300) fail(`only ${compared} commands compared: the run never got going`);
+		else if (over === 0) {
+			const skips =
+				skipOver > 0
+					? ` -- but ${skipOver}, by ${worstSkip.toFixed(3)} at most, right after a command the server skipped`
+					: "";
+			ok(
+				`${compared} commands: the hp the client drew first was never above the server's (by > ${OVER_EPS})${skips}`,
+			);
+		} else fail(`${over}/${compared} commands drawn above the server's hp (worst +${worstOver.toFixed(3)} hp)`);
+
+		// (2) on the screen: flat through the fight, then only up while it heals
+		let fightRises = 0;
+		let healDrops = 0;
+		let worstDrop = 0;
+		let firstRise;
+		let learned = bites.length === 0;
+		for (let i = 1; i < r.clientHp.length; i++) {
+			const [t, hp] = r.clientHp[i];
+			const d = hp - r.clientHp[i - 1][1];
+			if (!learned && d < -1) learned = true;
+			if (learned && t <= hurtUntil + v.rtt + 0.3 && d > 1e-9) fightRises += 1;
+			if (t > hurtUntil && firstRise === undefined && d > 1e-9) firstRise = t;
+			if (firstRise !== undefined && d < -1e-6) {
+				healDrops += 1;
+				worstDrop = Math.max(worstDrop, -d);
+			}
+		}
+		if (bites.length > 0) {
+			if (fightRises === 0)
+				ok("through the fight the bar never rose between hits (the wait, derived client-side)");
+			else fail(`the bar rose on ${fightRises} frames in the middle of the fight`);
+		}
+		if (firstRise === undefined) fail("the client never drew the body healing");
+		else if (healDrops === 0) {
+			const after = bites.length > 0 ? `, ${(firstRise - hurtUntil).toFixed(2)} s after the last hp lost` : "";
+			ok(`once healing, the bar only went up: not one frame pulled back${after}`);
+		} else fail(`while healing the bar fell back on ${healDrops} frames (worst ${worstDrop.toFixed(4)} hp)`);
+
+		// (3) and it ends where the server is: at the last command both simulated, and the stomach with it
+		if (Math.abs(lastGap) <= 0.2)
+			ok(`the last command: client ${lastGap >= 0 ? "+" : ""}${lastGap.toFixed(3)} hp from the server`);
+		else fail(`the last command: the client is ${lastGap.toFixed(3)} hp from the server`);
+		if (r.hungerGap <= 0.5)
+			ok(`the stomach tracks the server within ${r.hungerGap.toFixed(3)} food (a u8 on the wire)`);
+		else fail(`the client's stomach wandered ${r.hungerGap.toFixed(3)} food from the server's`);
+	}
+	// the u8 of hunger: the prediction at the ack is moved as little as the rounding allows, keeping its fraction
+	const cases = [
+		[40.3, 40, 100, 40.3],
+		[40.7, 40, 100, 40.499],
+		[39.2, 40, 100, 39.5],
+		[20.3, 45, 100, 45.3],
+		[90.3, 100, 100, 100],
+		[0.8, 0, 100, 0.499],
+	];
+	const bad = cases.filter(([p, w, m, want]) => Math.abs(PR.hungerAtAck(p, w, m) - want) > 1e-9);
+	if (bad.length === 0) {
+		ok("the self block's hunger: nudged into its rounding, a meal shifted by whole numbers (the fraction kept)");
+	} else
+		fail(`hungerAtAck: ${bad.map(([p, w, m, want]) => `${p}/${w} -> ${PR.hungerAtAck(p, w, m)} (want ${want})`)}`);
+	const gate = VIT.REGEN_FOOD_MIN - 0.5;
+	if (VIT.fedEnough(gate) && !VIT.fedEnough(gate - 0.001))
+		ok(`the food gate is the rounding the bar and the wire use: ${gate} reads ${VIT.REGEN_FOOD_MIN}`);
+	else fail("the food gate is not the FOOD bar's rounding");
 }
 
 const secs = ((Date.now() - started) / 1000).toFixed(1);

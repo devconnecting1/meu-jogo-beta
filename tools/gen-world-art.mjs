@@ -48,6 +48,7 @@ import { runInNewContext } from "node:vm";
 import { encodePNG } from "./png-lite.mjs";
 import { drawText } from "./pixel-font.mjs";
 import { characterArt } from "./character-art.mjs";
+import { bossArt } from "./boss-art.mjs";
 import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
 
@@ -1725,12 +1726,7 @@ function build() {
 	add_("fenceV", "tile", transpose(fence(16, C.fence, 38)), "board fence along y");
 	add_("floorWood", "tile", planks(32, C.floorWood, 41), "house floors: boards");
 	add_("floorTile", "tile", floorTiles(16, 8, C.floorTile, 42, true), "hospital / pharmacy floor: checker tiles");
-	add_(
-		"floorShop",
-		"tile",
-		floorTiles(32, 8, C.floorShop, 43, false, { chips: 0.05 }),
-		"shop floor: vinyl tiles",
-	);
+	add_("floorShop", "tile", floorTiles(32, 8, C.floorShop, 43, false, { chips: 0.05 }), "shop floor: vinyl tiles");
 	add_("wall", "tileTint", plaster(8, 44), "walls: plaster (tint: the wall colour)");
 	add_("roofShingleH", "tileTint", shingles(32, 51), "pitched roof shingles, courses along x (tint: roof colour)");
 	add_("roofShingleV", "tileTint", transpose(shingles(32, 51)), "pitched roof shingles, courses along y");
@@ -1821,6 +1817,8 @@ function build() {
 	});
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
+	// the four bosses, one sheet each (ART-14, tools/boss-art.mjs)
+	for (const t of bossArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the item icons (DESIGN_RULES UI-11): not the town, but uploaded with it
 	const atlas = buildIconAtlas(loadIconData(ROOT));
 	const icons = atlas.order.filter(k => atlas.cells[k].n === 16).length;
@@ -1987,7 +1985,9 @@ function writeIconAtlasModule() {
 function writeFurnitureModule() {
 	const t = textures.find(x => x.furniture !== undefined);
 	writeFileSync(FURNITURE_TS_OUT, furnitureAtlasModule(t.furniture, t.name));
-	console.log(`wrote ${FURNITURE_TS_OUT} (${Object.keys(t.furniture.cells).length} cells, atlas ${t.tex.w} x ${t.tex.h})`);
+	console.log(
+		`wrote ${FURNITURE_TS_OUT} (${Object.keys(t.furniture.cells).length} cells, atlas ${t.tex.w} x ${t.tex.h})`,
+	);
 	if (process.argv.includes("--no-sheet")) return;
 	const sheet = furnitureSheet(t.furniture, drawText);
 	mkdirSync(dirname(FURNITURE_SHEET), { recursive: true });

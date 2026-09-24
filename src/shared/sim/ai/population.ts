@@ -514,7 +514,11 @@ export class Population {
 	 * MAX_BOSSES at once, and its HP scales with how many survivors are close enough to take part.
 	 */
 	private spawnBoss(refs: Ctx.AiRefs): void {
-		if (refs.bosses.size() >= MAX_BOSSES) return;
+		// the town's own bosses only: an admin's (`unpaid`, docs/MULTIPLAYER.md §10) has a cap of its own and must not
+		// keep the anchors asleep (the review of 8f50bc5, L5)
+		let natural = 0;
+		for (const b of refs.bosses) if (b.unpaid !== true) natural += 1;
+		if (natural >= MAX_BOSSES) return;
 		const day = refs.clock.day;
 		for (const anchor of refs.world.bossAnchors) {
 			if (day < anchor.nextDay) continue;

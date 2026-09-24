@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "21aab2a (main before the interiors' pixel art): the flat interiors, Frames only",
+	"recordedFrom": "6d21f20 (the campus branch before the interiors' pixel art, main 21aab2a + EDI-17): the flat interiors, Frames only",
 	"scenes": {
 		"type1": {
 			"building": 1,
@@ -78,6 +78,34 @@
 			"y": 2744,
 			"count": 1448,
 			"sha1": "83769cee059a77898097caa766cd84fbb6e81341"
+		},
+		"type12": {
+			"building": 1275,
+			"x": 18488,
+			"y": 2704,
+			"count": 1978,
+			"sha1": "d1b37de0ad61f841a823a9ab40669f65b12d2820"
+		},
+		"type13": {
+			"building": 1276,
+			"x": 19000,
+			"y": 2704,
+			"count": 1848,
+			"sha1": "931cb08e23c3b0131a4eb6fa5d9368e7fec24d79"
+		},
+		"type14": {
+			"building": 1278,
+			"x": 18488,
+			"y": 3512,
+			"count": 1679,
+			"sha1": "a0e65468d8794033c3e213fc15901eae3d9f0df5"
+		},
+		"type15": {
+			"building": 1277,
+			"x": 19368,
+			"y": 3168,
+			"count": 1897,
+			"sha1": "7c86f1f18b7d99263f1f760d8042c387d1b8dbce"
 		}
 	}
 }

@@ -449,8 +449,8 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 
 		// ---- the row actions: select a row, then act (no per-row menu, DESIGN_RULES UI-12)
 		const actionsY = bodyH - 36;
-		const bw = (CONTENT_W - space(2) * 2) / 3;
-		const edit = Button(body, "Edit", "Edit progress", {
+		const bw = (CONTENT_W - space(2) * 3) / 4;
+		const edit = Button(body, "Edit", "Edit…", {
 			x: 0,
 			y: actionsY,
 			w: bw,
@@ -463,8 +463,26 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 				p.goTo("progress");
 			},
 		});
-		const kick = Button(body, "Kick", "Kick…", {
+		// a survivor in the town, healed and fed by the SERVER (docs/MULTIPLAYER.md §10): their run becomes assisted
+		const heal = Button(body, "Heal", "Heal", {
 			x: bw + space(2),
+			y: actionsY,
+			w: bw,
+			h: 36,
+			size: "sm",
+			variant: "outline",
+			onClick: () => {
+				const id = selected;
+				if (id === undefined) return;
+				task.spawn(() => {
+					const res = p.request({ kind: "world", op: "heal", userId: id });
+					if (res.ok) p.notify(res.message ?? "Healed", "success");
+					p.refreshPlayers();
+				});
+			},
+		});
+		const kick = Button(body, "Kick", "Kick…", {
+			x: (bw + space(2)) * 2,
 			y: actionsY,
 			w: bw,
 			h: 36,
@@ -476,7 +494,7 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 			},
 		});
 		const ban = Button(body, "Ban", "Ban…", {
-			x: (bw + space(2)) * 2,
+			x: (bw + space(2)) * 3,
 			y: actionsY,
 			w: bw,
 			h: 36,
@@ -487,6 +505,7 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 				if (row !== undefined) openBanDialog(p, tostring(row.userId), `${row.name} (${row.userId})`);
 			},
 		});
+		attachTooltip(heal, "Only a living survivor in the town; their run becomes assisted");
 		attachTooltip(kick, "Admins (you included) cannot be kicked or banned");
 		attachTooltip(ban, "Admins (you included) cannot be kicked or banned");
 
@@ -494,6 +513,7 @@ export function buildPlayers(p: PanelCtx, content: Frame): SectionHandle {
 			const row = live ?? p.players.find(r => r.userId === selected);
 			const locked = row === undefined || row.userId === p.selfUserId || row.isAdmin;
 			setButtonEnabled(edit, row !== undefined);
+			setButtonEnabled(heal, row !== undefined && row.inWorld && !row.dead);
 			setButtonEnabled(kick, !locked);
 			setButtonEnabled(ban, !locked);
 			if (row === undefined) {

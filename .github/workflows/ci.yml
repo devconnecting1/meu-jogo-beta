@@ -145,6 +145,9 @@ jobs:
       - name: The body is the server's (Leave/Enter, reconnect, Rebirth, New game, daybreak, the world wipe)
         run: npm run test:body
 
+      - name: Admin world tools on the server (auth, validation, every op, audit, flood kick, reset body, the panel)
+        run: npm run test:admin
+
       - name: The world ends when everyone is dead (MP-22 -- a new town on day 1, the world log; New game is a new life)
         run: npm run test:reset
 

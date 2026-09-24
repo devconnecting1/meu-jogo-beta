@@ -256,6 +256,7 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Disconnected for sending too many network messages
 ,,,Your progress was updated by an administrator
 ,,,Your progress was reset by an administrator
+,,,ADMIN
 ,,,Chat reaches the survivors near you in town. Enter the city to talk.
 ,,,Whispers are off. Only survivors near you in town hear the chat.
 ,,,Arrival
@@ -278,6 +279,31 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Unseen
 ,,,Camp Cook
 ,,,Sentry Builder
+,,,Step into the city for the first time.
+,,,Switch on an electric lamp that has power.
+,,,Put down zombies with melee weapons.
+,,,Put down zombies with a bow.
+,,,Cook food over a fire or a stove.
+,,,Smelt metal in a brazier or a furnace.
+,,,Put down zombies with a sniper rifle.
+,,,Help bring down the Centipede boss.
+,,,Help bring down the Rafflesia boss.
+,,,Help bring down the Giant boss.
+,,,Help bring down the Hedgehog boss.
+,,,"Put down zombies, any kind."
+,,,Put down special zombies (not walkers).
+,,,Gather wood into your backpack.
+,,,Live through a whole day in the city.
+,,,Ride a bicycle or a motorcycle.
+,,,Survive nights in one life without dying.
+,,,Put down a zombie with a turret you built.
+,,,Unlocked
+,,,In progress
+,,,Not started
+,,,No coins or items: a record of what you did.
+,,,"Achievements count what you do in the city. The server keeps the count, as you play.
+In progress comes first, the closest to done at the top; then what you have unlocked; then what is left.
+They are a record of what you did: they give no coins and no items. Titles are earned their own way, in the Wardrobe."
 ,,,Continue
 ,,,New game
 ,,,Shop
@@ -387,7 +413,21 @@ A change applies at once and is saved with your progress. Defaults puts a tab ba
 ,,,Owned
 ,,,Packs
 ,,,Earn coins
-,,,Delivered when your next game starts
+,,,"Fixed contents, shown in full. A pack goes into your backpack when you enter the city."
+,,,Pending
+,,,Stays until a New game
+,,,"Every pack has fixed contents, shown in full on its card: what you see is what you get.
+Packs go into your backpack the next time you enter the city.
+A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.
+Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones."
+,,,Paid at every midnight your survivor lives through.
+,,,Next pay at midnight
+,,,Paid the first time a life reaches a new best day that is a multiple of 5.
+,,,day to go
+,,,days to go
+,,,Help bring one down. Bosses wake at landmarks from day
+,,,"Given once, to every new survivor."
+,,,Received
 ,,,Progress not loaded
 ,,,"Your progress could not be loaded.
 Nothing will be overwritten: retry,
@@ -395,12 +435,13 @@ or play without saving."
 ,,,Retry
 ,,,Play without saving
 ,,,Saving is unavailable in this environment
-,,,Progress saved
 ,,,Saving...
+,,,Saved
+,,,Progress not saved — retrying
+,,,Progress not saved
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
 ,,,Back to game
-,,,Save
 ,,,Home
 ,,,Game over
 ,,,A new record. The town remembers.
@@ -706,4 +747,8 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Launch drone
 ,,,Call back drone
 ,,,Drone charging
+,,,Pick up
+,,,full
+,,,Pick something up
+,,,"Walk over food, ammo and materials. For weapons and gear, press use."
 ,,,Siphon Oil

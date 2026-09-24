@@ -25,7 +25,10 @@ import { buildProgress } from "./sectionProgress";
 import { buildSpawn } from "./sectionSpawn";
 import { buildCamera, buildDebug, buildWorld } from "./sectionWorld";
 import { buildServer } from "./sectionServer";
+import { registerBack } from "../ui/backStack";
 import type { PlayerRow } from "shared/admin/protocol";
+
+const GuiService = game.GetService("GuiService");
 
 /*
  * Admin panel shell: a Card docked at the left of the screen (the world stays visible and clickable for the
@@ -61,6 +64,7 @@ const BUILDERS: Record<SectionId, SectionBuilder> = {
 
 export class AdminPanel {
 	private box?: Frame;
+	private closeButton?: TextButton;
 	private content?: Frame;
 	private sidebar?: SidebarHandle;
 	private section?: SectionHandle;
@@ -86,12 +90,30 @@ export class AdminPanel {
 		this.box!.Visible = true;
 		this.show(this.sectionId);
 		this.p.refreshPlayers();
+		// B on a pad, Backspace on a keyboard close it like any screen of the kit (the X is its way out)
+		const close = this.closeButton;
+		if (close !== undefined) registerBack(close, () => this.close());
 	}
 
 	close(): void {
 		if (this.box === undefined) return;
+		// a pad's selection must not stay on a control that is no longer on screen
+		const sel = GuiService.SelectedObject;
+		if (sel !== undefined && sel.IsDescendantOf(this.box)) GuiService.SelectedObject = undefined;
 		this.box.Visible = false;
 		this.dropSection();
+	}
+
+	/** opened from a gamepad (R3, or the ADMIN button through the pad): a control is selected, so the pad can move */
+	focusFirst(): void {
+		const box = this.box;
+		if (box === undefined || !box.Visible) return;
+		for (const d of box.GetDescendants()) {
+			if (d.IsA("GuiButton") && d.Selectable && d.Visible && d !== this.closeButton) {
+				GuiService.SelectedObject = d;
+				return;
+			}
+		}
 	}
 
 	/** opens the panel on a section */
@@ -146,7 +168,7 @@ export class AdminPanel {
 			action: CLOSE_W + space(2),
 		});
 		// closing is a destructive action: the red plate of the kit, over the strip at its right
-		Button(card, "Close", "X", {
+		this.closeButton = Button(card, "Close", "X", {
 			x: PANEL_W - STRIP_INSET - space(1) - CLOSE_W,
 			y: STRIP_INSET + (STRIP_H - CLOSE_W) / 2,
 			w: CLOSE_W,

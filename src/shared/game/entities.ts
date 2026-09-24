@@ -152,6 +152,11 @@ export interface ZombieState {
 	jumpTravel?: number;
 	jumpAir?: number;
 	special: boolean;
+	/**
+	 * An admin's spawn (docs/MULTIPLAYER.md §10): its death pays nobody -- no XP, no kill credit, no achievement, no
+	 * loot -- so spawning a horde is never a way to level anyone up (server/sim/combat.ts, zombieBrain.ts `dropLoot`).
+	 */
+	unpaid?: boolean;
 }
 
 /** base zombie collision radius; the renderer should draw bodies about this big (× scale) */
@@ -189,6 +194,8 @@ export interface BossState {
 	moveCount?: number;
 	moveDir?: number;
 	attack?: boolean;
+	/** an admin's spawn (§10): its death pays nobody -- no XP, no boss credit or coins, no loot, no trophy */
+	unpaid?: boolean;
 }
 
 /** hit radius of the centipede (boss 1) body segments — original body_width 120 → 60, trimmed */

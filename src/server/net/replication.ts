@@ -520,6 +520,13 @@ export class Replicator {
 	private seed: number;
 	/** (MP-23) the tick at which every tally goes out again (a survivor joined), or undefined */
 	private tallyRound: number | undefined;
+	/**
+	 * §10 (F6-6B): an admin's free camera. The slot's interest -- the survivors, the horde, the bosses, the effects and
+	 * the world deltas it is sent -- is centred on this point instead of its body up to tick `expires` (the panel
+	 * refreshes it; a client that stops asking falls back to its body by itself). server/admin/adminWorld.ts sets it,
+	 * already validated and kept within FREECAM_MAX_RANGE of the body; ground items keep following the body.
+	 */
+	private readonly views = new Map<number, { x: number; y: number; expires: number }>();
 
 	constructor(
 		private readonly sim: ServerSimulation,
@@ -715,6 +722,7 @@ export class Replicator {
 	 * notice) to a stranger.
 	 */
 	closeTown(): void {
+		this.views.clear();
 		this.flushWorld(this.sim.tick);
 		this.hordeRings.clear();
 		this.fxQueue.clear();
@@ -746,7 +754,36 @@ export class Replicator {
 		this.flushWorld(this.sim.tick);
 	}
 
+	/** §10: the admin in `slot` looks at (x, y) up to tick `expires` (see `views`) */
+	setView(slot: number, x: number, y: number, expires: number): void {
+		this.views.set(slot, { x, y, expires });
+	}
+
+	/** §10: back to the body */
+	clearView(slot: number): void {
+		this.views.delete(slot);
+	}
+
+	/** the free camera of `slot` while it is live, or undefined (the body is the centre); allocates nothing */
+	private liveView(slot: number): { x: number; y: number; expires: number } | undefined {
+		if (this.views.size() === 0) return undefined;
+		const v = this.views.get(slot);
+		if (v === undefined) return undefined;
+		if (this.sim.tick > v.expires) {
+			this.views.delete(slot);
+			return undefined;
+		}
+		return v;
+	}
+
+	/** the point `viewer`'s interest is centred on: its body, or its admin free camera while that is live */
+	viewCenter(viewer: ServerPlayer): Positioned {
+		const v = this.liveView(viewer.slot);
+		return v !== undefined ? { slot: viewer.slot, x: v.x, y: v.y } : interestPoint(viewer);
+	}
+
 	left(slot: number): void {
+		this.views.delete(slot);
 		this.rings.forget(slot);
 		this.hordeRings.forgetViewer(slot);
 		this.directed.delete(slot);
@@ -862,9 +899,10 @@ export class Replicator {
 			}
 			const r2 = p.range * p.range;
 			for (const viewer of this.sim.survivors()) {
-				// the viewer's interest point is where their body is (`interestPoint`)
-				const dx = viewer.state.x - p.x;
-				const dy = viewer.state.y - p.y;
+				// the viewer's interest point is where their body is (`interestPoint`), or an admin's free camera
+				const v = this.liveView(viewer.slot);
+				const dx = (v !== undefined ? v.x : viewer.state.x) - p.x;
+				const dy = (v !== undefined ? v.y : viewer.state.y) - p.y;
 				if (dx * dx + dy * dy <= r2) this.queueFor(viewer.slot, p.ev);
 			}
 		}
@@ -977,8 +1015,10 @@ export class Replicator {
 		for (const viewer of this.sim.survivors()) {
 			const list = this.fxForViewer;
 			list.clear();
-			const vx = viewer.state.x;
-			const vy = viewer.state.y;
+			// the viewer's interest point: the body, or an admin's free camera while it is live (§10)
+			const view = this.liveView(viewer.slot);
+			const vx = view !== undefined ? view.x : viewer.state.x;
+			const vy = view !== undefined ? view.y : viewer.state.y;
 			const vb = this.buildingIdAt(vx, vy);
 			// this viewer's copies of the shots (`shotFor`) are encoded below, before the next viewer's are made
 			this.shotsUsed = 0;
@@ -1354,7 +1394,7 @@ export class Replicator {
 	/** the snapshot one viewer gets this round (§4.2, §4.3) */
 	private snapshotFor(viewer: ServerPlayer, snapIndex: number, points: ReadonlyArray<Positioned>): Snapshot {
 		const others = new Array<PlayerSnap>();
-		const entries = classify(this.rings, interestPoint(viewer), points);
+		const entries = classify(this.rings, this.viewCenter(viewer), points);
 		for (const e of entries) {
 			if (!inSnapshot(e, snapIndex)) continue;
 			const sp = this.sim.get(e.slot);
@@ -1381,8 +1421,9 @@ export class Replicator {
 		out.clear();
 		if (this.horde.size() === 0) return out;
 		const dark = worldIsDark(this.sim.clock.darkAlpha);
-		const vx = viewer.state.x;
-		const vy = viewer.state.y;
+		const view = this.liveView(viewer.slot);
+		const vx = view !== undefined ? view.x : viewer.state.x;
+		const vy = view !== undefined ? view.y : viewer.state.y;
 		const inside = buildingAt(this.sim.world, vx, vy);
 		const viewerBuilding = inside !== undefined ? inside.id : 0;
 		const picks = this.picks;
@@ -1436,8 +1477,9 @@ export class Replicator {
 		out.clear();
 		const horde = this.sim.horde;
 		if (horde === undefined) return out;
-		const vx = viewer.state.x;
-		const vy = viewer.state.y;
+		const view = this.liveView(viewer.slot);
+		const vx = view !== undefined ? view.x : viewer.state.x;
+		const vy = view !== undefined ? view.y : viewer.state.y;
 		for (const b of horde.bossRoster.list) {
 			const netId = horde.bossRoster.netIdOf(b);
 			if (netId < 1) continue;
@@ -1445,6 +1487,16 @@ export class Replicator {
 			const dy = b.y - vy;
 			if (dx * dx + dy * dy > FX_RANGE2) continue;
 			out.push(bossBlockOf(b, netId));
+		}
+		// the town's MAX_BOSSES and an admin's (§10) may stand together; the snapshot carries MAX_BOSSES, so the ones a
+		// viewer gets are the nearest (the encoder keeps the first ones; one left out fades like any boss out of sight)
+		if (out.size() > MAX_BOSSES) {
+			out.sort(
+				(a, b) =>
+					(a.x - vx) * (a.x - vx) + (a.y - vy) * (a.y - vy) <
+					(b.x - vx) * (b.x - vx) + (b.y - vy) * (b.y - vy),
+			);
+			while (out.size() > MAX_BOSSES) out.pop();
 		}
 		return out;
 	}

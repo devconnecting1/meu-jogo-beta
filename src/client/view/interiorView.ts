@@ -46,6 +46,9 @@ const GLASS_DARK = COLORS.carGlass;
 const BLOOD_DRY = COLORS.blood.Lerp(BLACK, 0.35);
 const MAT = COLORS.doormat;
 const RUG_BORDER = COLORS.rug.Lerp(COLORS.goodsC, 0.35);
+/** a notice board's cork, and the reagent bottles on a lab's shelves (EDI-17) */
+const CORK = COLORS.furnWood.Lerp(COLORS.goodsC, 0.35);
+const BOTTLES: Array<Color3> = [COLORS.furnWood, COLORS.acid, COLORS.goodsB];
 
 const O: SpriteOpts = {};
 
@@ -327,7 +330,137 @@ export class InteriorView {
 			}
 			return;
 		}
+		if (this.drawCampusPiece(r, cam, s, cx, cy, w, h, fx, fy, wide, k)) return;
 		r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.furnWood, z), BLACK, 0.6));
+	}
+
+	/**
+	 * The campus's furniture (EDI-17), in the same palette and light as the rest: tiered seats, a lectern, lab
+	 * benches with their black epoxy tops, a fume hood behind its glass sash, the reagents' shelves, bunk beds with
+	 * their ladder, a vending machine. Answers false for anything else.
+	 */
+	private drawCampusPiece(
+		r: Renderer,
+		cam: Camera,
+		s: Solid,
+		cx: number,
+		cy: number,
+		w: number,
+		h: number,
+		fx: number,
+		fy: number,
+		wide: boolean,
+		k: number,
+	): boolean {
+		const t = s.tags;
+		const z = Z.structure;
+		if (t === "seats") {
+			// tiers of seats rising away from the lectern: a row of seats per tier, darker (higher) towards the wall
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.furnDark, z), BLACK, 0.55));
+			const across = fy !== 0;
+			const depth = across ? h : w;
+			const len = across ? w : h;
+			const tiers = math.max(2, math.floor(depth / 32));
+			const step = depth / tiers;
+			const n = math.max(3, math.floor((len - 8) / 22));
+			const pitch = (len - 8) / n;
+			for (let q = 0; q < tiers; q++) {
+				// from the front (the face side) back to the wall
+				const off = depth / 2 - step * (q + 0.5);
+				const seat = COLORS.fabric.Lerp(BLACK, q * 0.14);
+				for (let i = 0; i < n; i++) {
+					const along = -(len - 8) / 2 + pitch * (i + 0.5);
+					const sx = across ? along : fx * off;
+					const sy = across ? fy * off : along;
+					const o = flat(across ? pitch - 4 : step - 8, across ? step - 8 : pitch - 4, seat, z + 1);
+					o.cornerRadius = 3;
+					r.drawRect(cam, cx + sx, cy + sy, o);
+				}
+			}
+			return true;
+		}
+		if (t === "lectern") {
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.furnWood, z), BLACK, 0.55));
+			r.drawRect(cam, cx - fx * 4, cy - fy * 4, flat(w * 0.55, h * 0.45, COLORS.paper, z + 1));
+			return true;
+		}
+		if (t === "labbench") {
+			const top = COLORS.metalDark.Lerp(BLACK, 0.35);
+			r.drawRect(cam, cx, cy, edged(flat(w, h, top, z), BLACK, 0.6));
+			// the sink at one end, a flask and a beaker on the other
+			const tip = (k % 2 === 0 ? 1 : -1) * (wide ? w : h) * 0.3;
+			r.drawRect(cam, cx + (wide ? tip : 0), cy + (wide ? 0 : tip), flat(18, 18, COLORS.metal, z + 1));
+			const glass = flat(8, 8, COLORS.glassCold, z + 1);
+			glass.circle = true;
+			r.drawRect(cam, cx - (wide ? tip : 0), cy - (wide ? 0 : tip), glass);
+			return true;
+		}
+		if (t === "fumehood") {
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.metal, z), BLACK, 0.6));
+			// the glass sash on its front, the dark cabinet behind it
+			const sash = flat(fx !== 0 ? 8 : w - 12, fy !== 0 ? 8 : h - 12, COLORS.glassCold, z + 1);
+			r.drawRect(cam, cx + fx * ((fx !== 0 ? w : h) / 2 - 6), cy + fy * ((fy !== 0 ? h : w) / 2 - 6), sash);
+			r.drawRect(cam, cx - fx * 4, cy - fy * 4, flat(w * 0.5, h * 0.4, COLORS.metalDark, z + 1));
+			return true;
+		}
+		if (t === "chemshelf") {
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.metal, z), BLACK, 0.6));
+			// rows of bottles: brown, green, blue
+			const n = math.max(2, math.floor((wide ? w : h) / 22));
+			for (let q = 0; q < n; q++) {
+				const along = -((wide ? w : h) / 2) + ((wide ? w : h) / n) * (q + 0.5);
+				const b = flat(10, 10, BOTTLES[(q + k) % 3], z + 1);
+				b.circle = true;
+				r.drawRect(cam, cx + (wide ? along : 0), cy + (wide ? 0 : along), b);
+			}
+			return true;
+		}
+		if (t === "bunk") {
+			// from above, the top bunk: the frame, the blanket, the pillow at the head, the ladder down one side
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.furnDark, z), BLACK, 0.55));
+			const headAt = k % 2 === 0 ? 1 : -1;
+			const hx = wide ? headAt : 0;
+			const hy = wide ? 0 : headAt;
+			r.drawRect(
+				cam,
+				cx - hx * 8,
+				cy - hy * 8,
+				flat(w - 8 - math.abs(hx) * 16, h - 8 - math.abs(hy) * 16, COLORS.fabric, z + 1),
+			);
+			const pillow = flat(hx !== 0 ? 16 : w - 16, hy !== 0 ? 16 : h - 16, COLORS.bedding, z + 2);
+			pillow.cornerRadius = 4;
+			r.drawRect(cam, cx + hx * ((w - 20) / 2), cy + hy * ((h - 20) / 2), pillow);
+			// the ladder: two rails and a rung on the long side facing into the room
+			const lx = fx !== 0 ? fx * (w / 2 - 3) : 0;
+			const ly = fy !== 0 ? fy * (h / 2 - 3) : 0;
+			r.drawRect(
+				cam,
+				cx + lx,
+				cy + ly,
+				flat(fx !== 0 ? 4 : w * 0.3, fy !== 0 ? 4 : h * 0.3, COLORS.furnWood, z + 3),
+			);
+			return true;
+		}
+		if (t === "vending") {
+			r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.fabricRed, z), BLACK, 0.6));
+			// the glass front with the snacks behind it, on the side facing the room
+			const gx = fx * ((fx !== 0 ? w : h) / 2 - 7);
+			const gy = fy * ((fy !== 0 ? h : w) / 2 - 7);
+			r.drawRect(
+				cam,
+				cx + gx,
+				cy + gy,
+				flat(fx !== 0 ? 10 : w - 12, fy !== 0 ? 10 : h - 12, COLORS.glassCold, z + 1),
+			);
+			r.drawRect(
+				cam,
+				cx - fx * 6,
+				cy - fy * 6,
+				flat(fx !== 0 ? 8 : w * 0.5, fy !== 0 ? 8 : h * 0.5, COLORS.goodsC, z + 1),
+			);
+			return true;
+		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------ the record: decoration, openings, marks
@@ -356,6 +489,19 @@ export class InteriorView {
 			r.drawRect(cam, cx, cy, o);
 		} else if (k === "board") {
 			r.drawRect(cam, cx, cy, edged(flat(d.w, d.h, COLORS.chalkboard, Z.floorDetail), COLORS.furnWood, 1, 2));
+		} else if (k === "notice") {
+			// a cork board on the wall with the last flyers pinned to it (the campus's halls, EDI-17)
+			r.drawRect(cam, cx, cy, edged(flat(d.w, d.h, CORK, Z.floorDetail), COLORS.furnWood, 1, 1));
+			const along = d.w >= d.h;
+			for (let q = 0; q < 3; q++) {
+				const off = (q - 1) * (along ? d.w : d.h) * 0.3;
+				r.drawRect(
+					cam,
+					cx + (along ? off : 0),
+					cy + (along ? 0 : off),
+					flat(8, 8, COLORS.paper, Z.floorDetail + 1),
+				);
+			}
 		} else if (k === "curtain") {
 			const o = flat(d.w, d.h, COLORS.curtain, Z.floorDetail);
 			o.alpha = 0.85;

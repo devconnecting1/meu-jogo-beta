@@ -23,9 +23,12 @@ import {
 	nl,
 } from "./widgets";
 
+/**
+ * No `onSave`: saving is automatic only (DESIGN_RULES SAV-01, the owner's decision of 2026-09-24). The server writes on
+ * its own schedule and events, and the corner indicator (client/ui/saveIndicator.ts) says when a write lands.
+ */
 export interface PauseHandlers {
 	onResume?: () => void;
-	onSave?: () => void;
 	onHome?: () => void;
 	onShop?: () => void;
 	onSettings?: () => void;
@@ -41,7 +44,8 @@ export interface PauseInfo {
 const GAME_OVER_W = 460;
 const GAME_OVER_H = 440;
 const PAUSE_W = 360;
-const PAUSE_H = 470;
+/** four buttons (Back to game, Shop, Settings, Home): the Save row went with SAV-01 */
+const PAUSE_H = 410;
 /** the "P" key cap on the menu's title strip */
 const KEY_BADGE = 30;
 
@@ -179,7 +183,7 @@ export function showPause(ctx: GameContext, kind: number, handlers: PauseHandler
 		const items: Array<{ key: string; fn: (() => void) | undefined; variant: ButtonVariant }> = [
 			// "Back to game", not "Resume": nothing was suspended, the survivor only stood still (UI-06)
 			{ key: "Back to game", fn: handlers.onResume, variant: "default" },
-			{ key: "Save", fn: handlers.onSave, variant: "secondary" },
+			// no "Save" (SAV-01): a button that asks for a write would let a client pick when the DataStore is written
 			{ key: "Shop", fn: handlers.onShop, variant: "secondary" },
 			{ key: "Settings", fn: handlers.onSettings, variant: "secondary" },
 			{ key: "Home", fn: handlers.onHome, variant: "secondary" },

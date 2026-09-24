@@ -12,7 +12,9 @@
  * Pure, and allocation-free (the client asks every frame).
  */
 import { EQUIP_LIGHTS, EquipLight } from "shared/data/equips";
+import { vehicleDef } from "shared/data/buildings";
 import type { PlayerSaveData } from "shared/game/save";
+import { rideHeading, RideState } from "shared/sim/rideKey";
 
 /** everyone's own light: ~250 u around the survivor (LUZ-02, LUZ-03) */
 export const SURVIVOR_LIGHT_R = 250;
@@ -73,6 +75,39 @@ export function survivorCone(save: PlayerSaveData): EquipLight | undefined {
 	const gun = lightOf(save.equipGun);
 	if (gun !== undefined && gun.coneDeg !== undefined) return gun;
 	return undefined;
+}
+
+/**
+ * The motorcycle's headlight (VEI-05, LUZ-04): the reach of the beam a vehicle of `kind` throws along its heading, 0
+ * for none (on foot, the bicycle). The same shape as the flashlight's -- ±CONE_HALF_ANGLE, full to 35 % of the reach --
+ * so the horde's `isLit`, the light map and an ally's view keep ONE cone geometry.
+ */
+export function vehicleHeadlight(kind: number): number {
+	return vehicleDef(kind)?.headlight ?? 0;
+}
+
+/** a mounted survivor's headlight reach (0 on foot, on a bicycle, or dead: a body lights nothing) */
+function headlightOf(p: { ride?: RideState }): number {
+	const ride = p.ride;
+	return ride !== undefined ? vehicleHeadlight(ride.kind) : 0;
+}
+
+/**
+ * The BEAM a survivor casts (LUZ-04): the motorcycle's headlight along the ride while they ride one -- both hands are
+ * on the handlebars (VEI-05), so it replaces the flashlight's cone -- or else the flashlight's along the aim. Its reach,
+ * 0 for none; `survivorBeamAngle` is where it points. The horde's visibility (zombieBrain `collectLights`), its eyes
+ * (the beacon of `updateSenses`, IA-01) and the light map (gameLoop `drawLight`) all read these two.
+ */
+export function survivorBeamReach(p: { ride?: RideState }, save: PlayerSaveData): number {
+	const head = headlightOf(p);
+	if (head > 0) return head;
+	return survivorCone(save)?.radius ?? 0;
+}
+
+/** where the beam of `survivorBeamReach` points: the ride's heading, or the aim */
+export function survivorBeamAngle(p: { angle: number; ride?: RideState }): number {
+	const ride = p.ride;
+	return ride !== undefined && headlightOf(p) > 0 ? rideHeading(ride) : p.angle;
 }
 
 /**

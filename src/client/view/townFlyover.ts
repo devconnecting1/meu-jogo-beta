@@ -6,9 +6,10 @@
  *     client/view/worldView.ts -- the very code the run draws with -- through a Renderer (pooled Frames) and a
  *     Camera of its own. It never touches the run's renderer, camera or night layer.
  *   - A SHOT is a straight, eased glide along the facade of a landmark (the gas station, the hospital, a shop
- *     with its rooftop sign...), about SHOT_LEN long at 26-38 u/s on average (57 at the fastest). The last FADE_S of a shot dips to
- *     the page colour, the camera cuts to the next landmark there, and the next shot fades in: nothing ever
- *     jumps while the town is on screen.
+ *     with its rooftop sign, the college...), about SHOT_LEN long at 26-38 u/s on average (57 at the fastest). It
+ *     OPENS on its landmark (SHOT_LEAD before it, in frame on a vertical street too) and glides on past it. The last
+ *     FADE_S of a shot dips to the page colour, the camera cuts to the next landmark there, and the next shot fades
+ *     in: nothing ever jumps while the town is on screen.
  *   - The mood is the world's own hour (`setDayTime`, from the server's clock) or a fixed dusk, with the night
  *     tint of the run when it is dark, capped so the town stays a shape behind the menus instead of a black page.
  *   - A handful of idle zombies shamble near the path, drawn with the horde's own body (humanoidView.ts). They
@@ -34,6 +35,7 @@
  * match TAKES that copy instead of generating the same town again (client/boot/townCache.ts): it moves to the match,
  * this flyover lets go of it first, and the next menu draws a freshly generated one -- never a street the match changed.
  */
+import { BuildingType, isCampusType } from "shared/data/buildings";
 import { Camera } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
@@ -52,6 +54,12 @@ const RunService = game.GetService("RunService");
 
 /** length of one shot along a facade (world units) */
 const SHOT_LEN = 1300;
+/**
+ * Where a shot starts: this far before its landmark, so its first frame shows it. A glide centred on the landmark
+ * started 650 u from it, off a 1080-high frame on a vertical street (half of it 540): the lobby opened on a plain
+ * street one time in two.
+ */
+const SHOT_LEAD = 455;
 /**
  * Average glide speed (u/s): desktop, and a phone (a small view crosses its own width faster). The eased glide peaks
  * at 1,5x the average, so 38 tops out at 57 u/s.
@@ -114,11 +122,17 @@ interface Landmark {
 	dy: number;
 }
 
-/** the landmarks of a town, in a shuffled order: every building that is not a plain house, seen from its street */
+/**
+ * The landmarks of a town, in a shuffled order: every building that is not a plain house, seen from its street. The
+ * college campus is ONE landmark, its main hall (EDI-17): four shots of one block in every loop would be the campus
+ * over and over.
+ */
 function landmarksOf(world: WorldData): Array<Landmark> {
 	const out: Array<Landmark> = [];
 	for (const s of world.solids) {
-		if (s.kind !== "building" || (s.buildingType ?? 1) < 3) continue;
+		const bt = s.buildingType ?? 1;
+		if (s.kind !== "building" || bt < 3) continue;
+		if (isCampusType(bt) && bt !== BuildingType.CampusHall) continue;
 		const side = s.doorSide ?? "bottom";
 		const doorX = s.doorX ?? s.x + s.w / 2;
 		const doorY = s.doorY ?? s.y + s.h;
@@ -190,6 +204,11 @@ export class TownFlyover {
 	private fromY = 0;
 	private toX = 0;
 	private toY = 0;
+	/** the landmark of this shot (the still frame of Reduce Motion) */
+	private lmX = 0;
+	private lmY = 0;
+	/** the pool's Instance count when its modifiers were last completed (Renderer.warmModifiers): see draw() */
+	private madeSeen = -1;
 	private clock = 0;
 	private dayTime: number | undefined;
 	private small = false;
@@ -309,18 +328,22 @@ export class TownFlyover {
 	private nextShot(): void {
 		this.shot = (this.shot + 1) % this.landmarks.size();
 		const lm = this.landmarks[this.shot];
-		// every other shot runs the other way along its street
+		// every other shot runs the other way along its street; each opens on its landmark and glides on past it
 		const sign = this.shot % 2 === 0 ? 1 : -1;
-		const half = SHOT_LEN / 2;
+		const after = SHOT_LEN - SHOT_LEAD;
 		const w = this.world;
-		this.fromX = math.clamp(lm.x - lm.dx * half * sign, 0, w.width);
-		this.fromY = math.clamp(lm.y - lm.dy * half * sign, 0, w.height);
-		this.toX = math.clamp(lm.x + lm.dx * half * sign, 0, w.width);
-		this.toY = math.clamp(lm.y + lm.dy * half * sign, 0, w.height);
+		this.fromX = math.clamp(lm.x - lm.dx * SHOT_LEAD * sign, 0, w.width);
+		this.fromY = math.clamp(lm.y - lm.dy * SHOT_LEAD * sign, 0, w.height);
+		this.toX = math.clamp(lm.x + lm.dx * after * sign, 0, w.width);
+		this.toY = math.clamp(lm.y + lm.dy * after * sign, 0, w.height);
+		this.lmX = lm.x;
+		this.lmY = lm.y;
 		this.shotT = 0;
 		this.shotDur = SHOT_LEN / (this.small ? SPEED_SMALL : SPEED);
 		this.place(0);
-		this.scatter(lm);
+		// the walkers along the whole glide: round its middle
+		const mid = (after - SHOT_LEAD) / 2;
+		this.scatter(lm.x + lm.dx * mid * sign, lm.y + lm.dy * mid * sign, lm);
 	}
 
 	/** the camera at time t of the shot (eased) */
@@ -330,8 +353,8 @@ export class TownFlyover {
 		this.cam.y = this.fromY + (this.toY - this.fromY) * k;
 	}
 
-	/** puts the walkers on open ground near this shot's street (a walker with no room is left out) */
-	private scatter(lm: Landmark): void {
+	/** puts the walkers on open ground near this shot's street, round (cx, cy) (a walker with no room is left out) */
+	private scatter(cx: number, cy: number, lm: Landmark): void {
 		const count = this.small ? WALKERS_SMALL : WALKERS;
 		for (let i = 0; i < this.walkers.size(); i++) {
 			const wk = this.walkers[i];
@@ -340,8 +363,8 @@ export class TownFlyover {
 			for (let tries = 0; tries < 6 && !wk.on; tries++) {
 				const along = (math.random() - 0.5) * SHOT_LEN * 0.9;
 				const across = (math.random() - 0.5) * 520;
-				const x = lm.x + lm.dx * along + lm.dy * across;
-				const y = lm.y + lm.dy * along + lm.dx * across;
+				const x = cx + lm.dx * along + lm.dy * across;
+				const y = cy + lm.dy * along + lm.dx * across;
 				if (this.blocked(x, y)) continue;
 				wk.on = true;
 				wk.x = x;
@@ -391,9 +414,9 @@ export class TownFlyover {
 		if (still) {
 			if (this.stillDrawn) return;
 			this.stillDrawn = true;
-			// the still frame is the landmark itself, square in the middle of the shot
-			this.cam.x = (this.fromX + this.toX) / 2;
-			this.cam.y = (this.fromY + this.toY) / 2;
+			// the still frame is the landmark itself, square in the middle of the frame
+			this.cam.x = math.clamp(this.lmX, 0, this.world.width);
+			this.cam.y = math.clamp(this.lmY, 0, this.world.height);
 			this.fade.BackgroundTransparency = 1;
 		} else {
 			this.clock += dt;
@@ -456,6 +479,15 @@ export class TownFlyover {
 			);
 		}
 		r.endFrame();
+		// modifiers ahead of need (no Instance after the warm-up, UI-10): a frame that created anything (a sprite, or a
+		// modifier on an old one) completes its layers there and then -- every slot of a layer that draws rounded,
+		// outlined or image sprites (the roofs, a flat roof's a/c box, the lawns) gets them. The slot such a sprite
+		// lands on shifts with the view: without this a quiet glide, long after the warm-up, still made a UICorner or
+		// a UIStroke now and then. What it creates lands in frames that were creating anyway.
+		if (r.instancesMade() !== this.madeSeen) {
+			r.warmModifiers(math.huge);
+			this.madeSeen = r.instancesMade();
+		}
 		const dark = math.min(darkAlphaAt(hour, false, false), NIGHT_CAP);
 		const tint = 1 - dark;
 		const lit = dark > 0.004;
