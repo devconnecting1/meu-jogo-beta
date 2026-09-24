@@ -1888,6 +1888,70 @@ function testServerHorde() {
 		for (let t = 0; t < 30; t++) sim.step();
 		check(field.rebuilds === r0 + 1, `one of them two cells further: one rebuild (${field.rebuilds - r0})`);
 	}
+
+	// (g) F3: `downhill` is memoised per complete field -- and no heading changes for it, even while a rebuild
+	// re-rasterises a tile the complete field still answers with
+	{
+		setSeed(SEED);
+		const world = W.generateTown(DESIGN.TOWN_SEED);
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		const sources = [];
+		for (let i = 0; i < 6; i++) {
+			const a = (i / 6) * Math.PI * 2;
+			const spot = serverPlayers.findSpawnPoint(world, {
+				allies: [{ x: cx + Math.cos(a) * 1500, y: cy + Math.sin(a) * 1500 }],
+			});
+			sources.push({ x: spot.x, y: spot.y, index: i, seed: 0 });
+		}
+		const memo = new flowFieldMod.MultiFlowField();
+		const plain = new flowFieldMod.MultiFlowField(false);
+		memo.rebuild(world, sources);
+		plain.rebuild(world, sources);
+		/** headings of both fields over a lattice round every source; twice, so the second pass reads the memo */
+		const compare = () => {
+			let n = 0;
+			let differ = 0;
+			for (let pass = 0; pass < 2; pass++) {
+				for (const s of sources) {
+					for (let dy = -1200; dy <= 1200; dy += 37) {
+						for (let dx = -1200; dx <= 1200; dx += 37) {
+							n++;
+							if (memo.heading(s.x + dx, s.y + dy) !== plain.heading(s.x + dx, s.y + dy)) differ++;
+						}
+					}
+				}
+			}
+			return { n, differ };
+		};
+		const fresh = compare();
+		check(fresh.differ === 0, `memoised headings = computed ones (${fresh.differ} of ${fresh.n} differ)`);
+		// a construction goes up next to survivor 0 -- an indestructible one, HARD in the field, so `downhill` really
+		// answers differently round it -- and the next rebuild re-rasterises that tile while the old field is live
+		const s0 = sources[0];
+		const bar = W.addSolid(world, {
+			kind: "barricade",
+			x: s0.x + 60,
+			y: s0.y - 64,
+			w: 32,
+			h: 128,
+			hp: 300,
+			hpMax: 300,
+			destructible: false,
+			tags: "barricade",
+			rot: 0,
+		});
+		memo.dirtyRect(bar.x, bar.y, bar.w, bar.h);
+		plain.dirtyRect(bar.x, bar.y, bar.w, bar.h);
+		memo.startRebuild(world, sources);
+		plain.startRebuild(world, sources);
+		const during = compare();
+		check(during.differ === 0, `...while a rebuild re-rasterised a live tile (${during.differ} differ)`);
+		memo.step(1e9);
+		plain.step(1e9);
+		const after = compare();
+		check(after.differ === 0, `...and once the new field landed (${after.differ} differ)`);
+	}
 }
 
 // ---------------------------------------------------------------- 11. the §3.2 tick budget

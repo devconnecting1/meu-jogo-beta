@@ -36,6 +36,9 @@ const VAULT = 1;
 const SOFT = 2;
 const HARD = 3;
 const INF = 1e9;
+/** the downhill memo (Tile.down): not asked yet this generation, and asked but a local minimum */
+const DOWN_UNKNOWN = -2;
+const DOWN_NONE = -1;
 const COST_ORTHO = 10;
 const COST_DIAG = 14;
 /** extra cost to go through a player construction (zombies would rather walk around it) */
@@ -98,6 +101,12 @@ interface Tile {
 	bOwner?: Array<number>;
 	backIdx: number;
 	backGen: number;
+	/**
+	 * `downhill` of each cell of this tile in the COMPLETE field (F3): DOWN_UNKNOWN until asked, DOWN_NONE for a
+	 * local minimum, else the packed front cell. Taken from the pool on the first query of a generation and given back
+	 * when the field changes (`swap`) or a grid under it does (`forgetDownhill`).
+	 */
+	down?: Array<number>;
 }
 
 export class MultiFlowField {
@@ -138,7 +147,8 @@ export class MultiFlowField {
 	/** bumped by every `dirtyRect` / `dirtyAll`: the grid a rebuild would read is not the one the field was built on */
 	private dirtyGen = 0;
 
-	constructor() {
+	/** `memoDownhill` false turns the F3 memo off (the tests check that it changes no heading) */
+	constructor(private readonly memoDownhill = true) {
 		for (let i = 0; i < BUCKETS; i++) this.buckets.push([]);
 	}
 
@@ -243,7 +253,12 @@ export class MultiFlowField {
 	}
 
 	private ensureGrid(world: WorldData, t: Tile): void {
-		if (t.statGen !== this.staticGen) {
+		const stale = t.statGen !== this.staticGen;
+		if (!stale && !t.dirty) return;
+		// the complete field still answers queries on this tile's grid until the rebuild lands, and the downhill memo
+		// was read off the grid it is about to replace
+		if (t.frontGen === this.frontGen) this.forgetDownhill();
+		if (stale) {
 			this.rasterizeStatic(world, t);
 			t.dirty = true;
 		}
@@ -538,6 +553,8 @@ export class MultiFlowField {
 	/** the back buffers become the field every query reads */
 	private swap(): void {
 		const gen = this.backGen;
+		// a new field: every step down that was memoised is an answer about the old one
+		this.forgetDownhill();
 		// tiles that leave the active set give their buffers back
 		for (const t of this.frontTiles) {
 			if (t.backGen === gen) continue;
@@ -633,11 +650,36 @@ export class MultiFlowField {
 		return t.oy + math.floor(cellIx / TILE) * CELL + CELL / 2;
 	}
 
-	/** lowest-distance walkable neighbour of cell c (undefined when c is a cellIx minimum) */
+	/** drops the downhill memo of every tile of the complete field (it changed, or a grid under it did) */
+	private forgetDownhill(): void {
+		for (const t of this.frontTiles) {
+			if (t.down === undefined) continue;
+			this.release(t.down);
+			t.down = undefined;
+		}
+	}
+
+	/**
+	 * Lowest-distance walkable neighbour of cell c (undefined when c is a local minimum).
+	 *
+	 * A pure function of the complete field, so it is memoised per cell until the field changes (F3): `heading` walks
+	 * up to four of these per zombie that re-plans, 24 neighbour lookups each, and a crowd following the same street
+	 * asks the same cells over and over -- it was a quarter of the server tick. `memoDownhill` false computes every
+	 * call (the tests compare the two).
+	 */
 	private downhill(c: number): number | undefined {
 		const ti = math.floor(c / TILE_CELLS);
 		const t = this.frontTiles[ti];
 		const cellIx = c % TILE_CELLS;
+		let memo = t.down;
+		if (this.memoDownhill) {
+			if (memo === undefined) {
+				memo = this.acquire(DOWN_UNKNOWN);
+				t.down = memo;
+			}
+			const known = memo[cellIx];
+			if (known !== DOWN_UNKNOWN) return known === DOWN_NONE ? undefined : known;
+		}
 		const lx = cellIx % TILE;
 		const ly = (cellIx - lx) / TILE;
 		const gcx = t.tx * TILE + lx;
@@ -659,6 +701,7 @@ export class MultiFlowField {
 				bestI = ni;
 			}
 		}
+		if (memo !== undefined) memo[cellIx] = bestI ?? DOWN_NONE;
 		return bestI;
 	}
 
