@@ -429,7 +429,9 @@ function run(scn, profileName) {
 		for (const packet of rel.poll(now)) {
 			const batch = P.decodeWorld(packet);
 			if (batch === undefined) continue;
-			for (const e of batch.events) if (e.t === P.WorldEv.ZombieDied) cl.snapshots.forgetZombie(e.netId);
+			// as client/net/netClient.ts: the batch's tick buries the netId against older parts still in flight (M1)
+			for (const e of batch.events)
+				if (e.t === P.WorldEv.ZombieDied) cl.snapshots.forgetZombie(e.netId, batch.tick);
 		}
 		for (const payload of down.poll(now)) {
 			const part = P.decodeSnapshotPart(payload);

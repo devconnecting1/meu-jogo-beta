@@ -47,7 +47,7 @@
  * Pure: no Roblox service and no Instance (the world is only used for the extrapolation's wall check).
  */
 import { angleLerp, lerp } from "shared/engine/vec2";
-import { unwrapTick } from "shared/net/codec";
+import { seqDiff, unwrapTick, wrapU16 } from "shared/net/codec";
 import {
 	DESPAWN_FADE_S,
 	DESPAWN_MID_S,
@@ -56,6 +56,7 @@ import {
 	INTERP_DEFAULT_S,
 	INTERP_MAX_S,
 	INTERP_MIN_S,
+	NET_ID_REUSE_DELAY_S,
 	RENDER_DELAY_RATE,
 	SIM_HZ,
 	SNAP_NEAR_HZ,
@@ -371,6 +372,8 @@ export interface SnapshotStats {
 	/** zombies and bosses currently tracked (§11.3 F2: the horde must be the same on every screen) */
 	zombies: number;
 	bosses: number;
+	/** zombie samples refused because the reliable `ZombieDied` had already buried that netId (§4.4, audit M1) */
+	ghosts: number;
 	/** frames whose render time had to be held because it would have gone backwards */
 	stalls: number;
 	/** times the delay was (re)locked from a median: once after a reset, then once per resync */
@@ -442,6 +445,16 @@ export class SnapshotBuffer {
 	private readonly zPool = new Array<RemoteZombie>();
 	private readonly bPool = new Array<RemoteBoss>();
 	private readonly retire = new Array<number>();
+	/**
+	 * netId → the wire tick (u16) of the batch that carried its `ZombieDied` (§4.4, audit M1). `Snap` is unreliable and
+	 * unordered against the reliable `World`: a part carrying that zombie ALIVE, from a tick before the death, can land
+	 * after the death did -- by jitter, or because it was still sitting in netClient's queue -- and used to build a new
+	 * track: the body stood up again for its ring's despawn timeout, 300 or 600 ms. A zombie sample of a buried netId
+	 * at or before its death tick is refused. The server hands a netId out again only NET_ID_REUSE_DELAY_S later, so
+	 * a newer sample is a new zombie and ends the tomb; `pruneTombs` drops the ones no sample can reach any more.
+	 */
+	private readonly tombs = new Map<number, number>();
+	private ghosts = 0;
 	private simHz = SIM_HZ;
 	private delayS = INTERP_DEFAULT_S;
 	private targetS = INTERP_DEFAULT_S;
@@ -477,6 +490,7 @@ export class SnapshotBuffer {
 		this.tracks.clear();
 		this.zombies.clear();
 		this.bosses.clear();
+		this.tombs.clear();
 		this.out.clear();
 		this.zOut.clear();
 		this.bOut.clear();
@@ -517,9 +531,37 @@ export class SnapshotBuffer {
 	 * `ZombieDied` (§4.4): the body is gone NOW, at the position the reliable event carries, and the view
 	 * draws the blood and the corpse there. Letting the despawn timeout retire it instead would leave it
 	 * standing for another 300 ms and then fade it out somewhere else entirely.
+	 *
+	 * `deathTick` is the wire tick (u16) of the World batch that carried the death: from here on a sample of this
+	 * netId at or before it is from the dead body, and is refused (`tombs`, audit M1).
 	 */
-	forgetZombie(netId: number): void {
+	forgetZombie(netId: number, deathTick?: number): void {
 		this.zombies.delete(netId);
+		if (deathTick !== undefined) this.tombs.set(netId, wrapU16(deathTick));
+	}
+
+	/** is this sample of `netId`, at wire tick `tick16`, from a body the reliable channel already buried? */
+	private buried(netId: number, tick16: number): boolean {
+		const tomb = this.tombs.get(netId);
+		if (tomb === undefined) return false;
+		if (seqDiff(tick16, tomb) <= 0) return true;
+		// newer than the death: the server gave the netId to a new zombie (never before NET_ID_REUSE_DELAY_S)
+		this.tombs.delete(netId);
+		return false;
+	}
+
+	/** tombs no sample can reach any more: past the reuse delay and the reorder window, relative to the newest tick */
+	private pruneTombs(): void {
+		if (this.tombs.size() === 0 || this.newest === -math.huge) return;
+		const newest16 = wrapU16(this.newest);
+		const keep = NET_ID_REUSE_DELAY_S * this.simHz + MAX_REORDER_TICKS;
+		const gone = this.retire;
+		gone.clear();
+		for (const [netId, tomb] of this.tombs) {
+			if (seqDiff(newest16, tomb) > keep) gone.push(netId);
+		}
+		for (const netId of gone) this.tombs.delete(netId);
+		gone.clear();
 	}
 
 	forgetBoss(netId: number): void {
@@ -551,7 +593,13 @@ export class SnapshotBuffer {
 		}
 		// §4.4 "implícitos pelo snapshot": a body the client has never seen IS its spawn, and the record
 		// carries the type and the variant it needs to draw it — there is no reliable spawn event to wait for
+		const tick16 = wrapU16(tick);
 		for (const z of part.zombies) {
+			// ...except a body whose death already came in on the reliable channel: this part is older than it (M1)
+			if (this.buried(z.netId, tick16)) {
+				this.ghosts += 1;
+				continue;
+			}
 			let track = this.zombies.get(z.netId);
 			if (track === undefined) {
 				track = new ActorTrack();
@@ -704,6 +752,7 @@ export class SnapshotBuffer {
 			this.out.push(this.stateOf(slot, track, render - track.extra, step, world));
 		}
 		for (const slot of gone) this.tracks.delete(slot);
+		this.pruneTombs();
 		this.advanceActors(render, step, now, world, extraStep, midExtra);
 	}
 
@@ -715,7 +764,8 @@ export class SnapshotBuffer {
 	 *        and all three are covered by easing the alpha up instead of popping a body into frame.
 	 *   out  a body that stops arriving for its ring's timeout (300 ms near, 600 ms mid) is retired over
 	 *        DESPAWN_FADE_S. A body that DIED never comes through here: `ZombieDied` is reliable and takes
-	 *        it away at once, at the place it fell.
+	 *        it away at once, at the place it fell -- and a late part from before the death cannot stand it
+	 *        up again (`tombs`).
 	 */
 	private advanceActors(
 		render: number,
@@ -1029,6 +1079,7 @@ export class SnapshotBuffer {
 			tracked: this.tracks.size(),
 			zombies: this.zombies.size(),
 			bosses: this.bosses.size(),
+			ghosts: this.ghosts,
 			stalls: this.stalls,
 			relocks: this.relocks,
 			absorbedS: this.absorbedTicks / this.simHz,

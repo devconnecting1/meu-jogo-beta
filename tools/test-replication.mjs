@@ -24,6 +24,8 @@
  *      being a wallhack, and is measured here rather than asserted in a comment.
  *   c. DEATH IS RELIABLE (§4.4). A killed zombie leaves through `ZombieDied` with its position, and the
  *      client's interpolation drops it at once instead of letting it walk on for another 300 ms.
+ *  c3. DEATH IS FINAL (audit M1). With the Snap parts late and reordered by jitter and the deaths overtaking them,
+ *      no part from before a death stands the body up again on the client.
  *   d. BANDWIDTH (§4.7, §12.2). Six survivors, night, the horde at its ceiling, everybody shooting: the
  *      per-second downstream of each client is measured and its p95 compared with the 23 kB/s budget.
  *   e. XP COMES FROM THE SERVER (§3.6, §11.3 F2). The kill pays the killer and the assist, into the live
@@ -476,6 +478,8 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		/** packets still in flight towards this client: [releaseTick, part] */
 		inbox: [],
 		lag: CLIENT_LAG_TICKS[slot % CLIENT_LAG_TICKS.length],
+		/** extra random delay per Snap part, 0..jitter ticks: parts overtake one another (0 = in order) */
+		jitter: 0,
 		loss: CLIENT_LOSS[slot % CLIENT_LOSS.length],
 		parts: 0,
 		fxEvents: 0,
@@ -576,15 +580,20 @@ function tickServer(server, opts = {}) {
 			}
 			// an unreliable packet that is lost is simply never handed over (§4.1: the next one supersedes it)
 			if (client.loss > 0 && nextRandom() < client.loss) continue;
-			client.inbox.push([server.sim.tick + client.lag, part]);
+			const late = client.jitter > 0 ? Math.floor(nextRandom() * (client.jitter + 1)) : 0;
+			client.inbox.push([server.sim.tick + client.lag + late, part]);
 		}
 		list.length = 0;
 	}
 	// everything whose flight time is up is handed to the real client-side buffer, with the clock estimate
-	// that client would have: the server's tick minus its own latency (§4.6 gives it the same anchor)
+	// that client would have: the server's tick minus its own latency (§4.6 gives it the same anchor). With jitter
+	// the inbox is out of order, and so is the delivery: exactly the unordered channel §1.1 describes
 	for (const [, client] of server.clients) {
-		while (client.inbox.length > 0 && client.inbox[0][0] <= server.sim.tick) {
-			const part = client.inbox.shift()[1];
+		const due = [];
+		const kept = [];
+		for (const entry of client.inbox) (entry[0] <= server.sim.tick ? due : kept).push(entry);
+		client.inbox = kept;
+		for (const [, part] of due) {
 			client.buffer.receive(part, server.sim.tick, server.now);
 			client.parts += 1;
 			if (part.part === 0) client.snapshots += 1;
@@ -644,9 +653,10 @@ function tickServer(server, opts = {}) {
 			if (e.t !== P.WorldEv.ZombieDied) continue;
 			const client = server.clients.get(slot);
 			if (client === undefined) continue;
-			client.deaths.push(e);
-			// exactly what client/net/netClient.ts does with it: the body leaves the interpolation NOW
-			client.buffer.forgetZombie(e.netId);
+			client.deaths.push({ ...e, at: server.sim.tick });
+			// exactly what client/net/netClient.ts does with it: the body leaves the interpolation NOW, and the
+			// batch's tick buries the netId against older parts still in flight (audit M1)
+			client.buffer.forgetZombie(e.netId, batch.tick);
 		}
 	}
 	return ms;
@@ -1154,6 +1164,65 @@ section("(c) a killed zombie leaves through the reliable channel (§4.4)");
 		checkNear(died[0].x, victim.x, 1, "and it carries the place the body fell");
 	}
 	check(!drawClients(server).get(0).has(netId), "the body left the client's horde at once");
+}
+
+// ================================================================ (c3) a death overtaken by nothing (audit M1)
+
+section("(c3) under jitter and reordering, a late Snap part never stands a dead zombie up again (§4.4, audit M1)");
+{
+	/*
+	 * `ZombieDied` is reliable and `Snap` is not, and the two are not ordered against each other (§1.1): a part that
+	 * carried the zombie alive, from a tick before the death, can land after the death did. It used to build a new
+	 * track, and the body stood up for its ring's despawn timeout (300/600 ms). Here the deaths land at once and every
+	 * part is 50 ms late plus 0-133 ms of jitter, which reorders them: exactly the Network Simulator case of §12.1.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 3;
+	client.jitter = 8;
+	client.loss = 0;
+	const horde = server.sim.horde;
+	server.sim.clock.setClock(12);
+	const bodies = [];
+	for (let i = 0; i < 24; i++) {
+		const a = (i / 24) * Math.PI * 2;
+		const z = createZombie(1, cx + Math.cos(a) * 260, cy + Math.sin(a) * 260, 5, false);
+		z.alpha = 1;
+		horde.zombies.push(z);
+		bodies.push(z);
+	}
+	for (let i = 0; i < 40; i++) {
+		tickServer(server);
+		drawClients(server);
+	}
+	const drawnBefore = drawClients(server).get(0).size();
+	let ghostFrames = 0;
+	const ghostIds = new Set();
+	let killed = 0;
+	for (let i = 0; i < 24 * 9 + 60; i++) {
+		// one kill every 9 ticks: always something in flight around a death
+		if (i % 9 === 0 && killed < bodies.length) bodies[killed++].hp = 0;
+		tickServer(server);
+		const drawn = drawClients(server).get(0);
+		for (const d of client.deaths) {
+			// the netId is only handed out again NET_ID_REUSE_DELAY_S later: until then it is the dead body
+			if (server.sim.tick - d.at > CFG.NET_ID_REUSE_DELAY_S * CFG.SIM_HZ) continue;
+			if (drawn.has(d.netId)) {
+				ghostFrames += 1;
+				ghostIds.add(d.netId);
+			}
+		}
+	}
+	info(
+		`${drawnBefore} drawn, ${killed} killed, ${client.deaths.length} ZombieDied received; ` +
+			`${client.buffer.stats().ghosts} late samples of a buried netId refused`,
+	);
+	checkEq(client.deaths.length, killed, "every kill reached the client as one ZombieDied");
+	checkEq(ghostFrames, 0, `no frame draws a zombie after its death arrived (${ghostIds.size()} ghost netIds)`);
+	check(client.buffer.stats().ghosts > 0, "and the late parts were really there: the buffer refused some");
 }
 
 // ================================================================ (c2) the mid ring costs half as much

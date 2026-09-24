@@ -516,8 +516,10 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 	}
 	if (e.t === WorldEv.ZombieDied) {
 		// reliable, so it can be acted on at once: the body leaves the interpolation NOW and the view plays
-		// the blood, the corpse and the drop at the position this event carries, not at the last one guessed
-		snapshots.forgetZombie(e.netId);
+		// the blood, the corpse and the drop at the position this event carries, not at the last one guessed.
+		// The batch's tick buries the netId: a Snap part from before it, overtaken by this event or still in
+		// `queue`, cannot stand the body up again (audit M1)
+		snapshots.forgetZombie(e.netId, batchTick);
 		if (deaths.size() >= MAX_QUEUED_DEATHS) deaths.remove(0);
 		deaths.push({ netId: e.netId, x: e.x, y: e.y, cause: e.cause });
 		return;
