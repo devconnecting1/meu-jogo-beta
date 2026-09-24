@@ -30,6 +30,8 @@ import { DESIGN } from "shared/engine/constants";
 import { TITLES } from "shared/data/titles";
 import { floodKickMessage, langTypeOfLocale } from "shared/data/rules";
 import {
+	FLOOD_MALFORMED,
+	FLOOD_MALFORMED_WINDOW_S,
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
 	MAX_PLAYERS,
@@ -37,7 +39,7 @@ import {
 	TIME_SYNC_RATE,
 	WORLD_SEED_ATTRIBUTE,
 } from "shared/net/mpConfig";
-import { IntentKind, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
+import { IntentKind, decodeIntentMessage, decodeTimePing, encodeTimePong, isBackpackIntent } from "shared/net/protocol";
 import { PlayerSaveData } from "shared/game/save";
 import type { SimMetrics } from "shared/admin/protocol";
 import { WorldData, generateTown } from "shared/game/world";
@@ -120,6 +122,12 @@ export interface MpHostOptions {
 	 * (server/save/worldLog.ts). Fired once per world.
 	 */
 	onWorldWiped?: (report: WipeReport, outcome: WorldEnd) => void;
+	/**
+	 * (§8.2, audit L4) The host just kicked this player for a network flood, for `reason` (the counters that crossed,
+	 * written by the server). server/main.server.ts writes it to the admin audit log -- by UserId only, like the rest
+	 * of that log -- so a human can review every automatic kick after the fact (MP-16).
+	 */
+	onFloodKick?: (player: Player, reason: string) => void;
 }
 
 /** one line of the §9.3 / F6 admin view: who the player is and what their counters say */
@@ -185,6 +193,13 @@ export interface MpHost {
 
 	/** every survivor's anomaly counters, ready for the F6 admin panel (§9.3) */
 	anomalies(): Array<MpAnomalyRow>;
+	/**
+	 * (§8.2, audit M2) One message from `player` on a remote this host does not own -- SaveRequest, LoadRequest,
+	 * ShopAction, the admin remotes -- counted against the same flood limits as its own (`malformed`: a payload that is
+	 * not what that remote takes). True when the message must be dropped: the player is being kicked, or has left.
+	 * Call it FIRST in every handler, before the payload is read.
+	 */
+	noteRemote(player: Player, malformed: boolean): boolean;
 	/** the §12.2 numbers as last published (once a second): the admin panel's Server info shows them */
 	metrics(): SimMetrics;
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
@@ -211,6 +226,9 @@ interface Link {
 	/** messages from a player who is not in the world (flood protection before they even spawn) */
 	strangerStart: number;
 	strangerCount: number;
+	/** ...and the malformed ones among them (§8.2's second limit; in the world the ServerPlayer counts both) */
+	strangerBadStart: number;
+	strangerBadCount: number;
 	/**
 	 * The client asked to be IN the world (IntentKind.EnterWorld) and has not asked to leave.
 	 *
@@ -263,7 +281,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				sendWorldAll(remotes, packet);
 			},
 		},
-		{ tick0Time, mapHash: mapHashOf(world), seed: town.seed },
+		// the real clock: a client retires a track by real time, and ticks are not real time on a slow server
+		{ tick0Time, mapHash: mapHashOf(world), seed: town.seed, now: () => os.clock() },
 	);
 	sim.onTick = tick => replicator.afterTick(tick);
 	// every cosmetic the simulation asks for goes out on the Fx channel, filtered by interest (§4.1, §4.3)
@@ -310,6 +329,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				timeAt: os.clock(),
 				strangerStart: 0,
 				strangerCount: 0,
+				strangerBadStart: 0,
+				strangerBadCount: 0,
 				wantsWorld: false,
 				worldAt: 0,
 				kicked: false,
@@ -346,10 +367,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (link.kicked) return;
 		link.kicked = true;
 		const player = link.player;
-		warn(`[${GAME_NAME}] kicking ${player.Name} (${player.UserId}): network flood — ${reason}`);
+		// one Error Report row for every flood kick (docs/ANALYTICS.md §10): who, and the counts, go to the log line
+		warn(`[${GAME_NAME}] kicking a player: network flood`);
+		print(`[${GAME_NAME}] flood kick: ${player.Name} (${player.UserId}), ${reason}`);
 		// what the player reads, in their account's language (lang.ts, shared/data/rules.ts)
 		const message = floodKickMessage(langTypeOfLocale(player.LocaleId));
 		pcall(() => player.Kick(message));
+		// §8.2 "registrado" (audit L4): into the admin audit log, for a human to review (MP-16)
+		const audit = options.onFloodKick;
+		if (audit !== undefined) pcall(() => audit(player, reason));
 	}
 
 	/** §8.2: the automatic kick, checked after EVERY message, accepted or not */
@@ -430,6 +456,38 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		return link.strangerCount > FLOOD_MESSAGES;
 	}
 
+	/** a malformed payload from a player who is not in the world yet (§8.2: > 50 in 10 s) */
+	function strangerMalformed(link: Link, now: number): boolean {
+		if (now - link.strangerBadStart >= FLOOD_MALFORMED_WINDOW_S || now < link.strangerBadStart) {
+			link.strangerBadStart = now;
+			link.strangerBadCount = 0;
+		}
+		link.strangerBadCount += 1;
+		return link.strangerBadCount > FLOOD_MALFORMED;
+	}
+
+	/**
+	 * §8.2 for one message on any remote (audit M2): in the world it is the survivor's counters, the same the Input
+	 * and the TimeSync feed (so the limits are for the whole connection, not one channel); out of it, the link's own
+	 * windows. Crossing either limit is the automatic kick. True when the message must be dropped (kicked).
+	 */
+	function noteMessageOf(link: Link, now: number, malformed: boolean): boolean {
+		if (link.kicked) return true;
+		const sp = link.slot !== undefined ? sim.get(link.slot) : undefined;
+		if (sp !== undefined) {
+			noteMessage(sp, now);
+			if (malformed) noteMalformed(sp, now);
+			guardFlood(link, sp);
+			return link.kicked;
+		}
+		if (strangerFlood(link, now)) {
+			kick(link, `${link.strangerCount} messages in ${FLOOD_MESSAGES_WINDOW_S}s outside the world`);
+		} else if (malformed && strangerMalformed(link, now)) {
+			kick(link, `${link.strangerBadCount} malformed payloads in ${FLOOD_MALFORMED_WINDOW_S}s outside the world`);
+		}
+		return link.kicked;
+	}
+
 	/** os.clock() when the last Heartbeat began: how late the next one is, for the input queue's grace */
 	let beatAt = os.clock();
 
@@ -463,12 +521,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (departed(player)) return;
 		const link = linkOf(player);
 		const now = os.clock();
-		if (link.slot === undefined && strangerFlood(link, now)) {
-			kick(link, "intent flood before joining the world");
-			return;
-		}
-		const kind = decodeIntent(payload);
-		if (kind === undefined) return;
+		// EVERY Intent is counted here, presence or backpack verb, in the world or not (§8.2; the backpack's own handler,
+		// server/net/backpackIntents.ts, only rate-limits and applies its verbs)
+		const msg = decodeIntentMessage(payload);
+		if (noteMessageOf(link, now, msg === undefined)) return;
+		if (msg === undefined || isBackpackIntent(msg.kind)) return;
+		const kind = msg.kind;
 		const wants = kind === IntentKind.EnterWorld;
 		if (wants === link.wantsWorld) return;
 		/*
@@ -556,7 +614,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			link.reportedOverflow = c.inputOverflow;
 			link.reportedMalformed = c.malformed;
 			link.reportedClamped = clamped;
-			warn(
+			// the Error Report counts how often; the counts themselves are the log line after it (docs/ANALYTICS.md §10)
+			warn(`[${GAME_NAME}] input anomaly: overflow, malformed or clamped input`);
+			print(
 				`[${GAME_NAME}] input anomaly ${player.Name} (${player.UserId}): ` +
 					`+${newOverflow} overflow, +${newMalformed} malformed, ` +
 					`+${c.rateDropped} rate-dropped, depth ${sp.queue.size()}, filled ${c.filled}, ` +
@@ -685,7 +745,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const message = tostring(err);
 			if (message !== lastError) {
 				lastError = message;
-				warn(`[${GAME_NAME}] simulation tick failed (${tickErrors} so far): ${message}`);
+				// the running count is `pz_tick_errors` and the admin's metrics, never the message (one row per failure)
+				warn(`[${GAME_NAME}] simulation tick failed: ${message}`);
 			}
 			// a tick that fails every time never reaches `publishTick`: the count goes out from here, once a second
 			if (options.metrics !== false && now - tickErrorsAt >= METRIC_INTERVAL) {
@@ -741,6 +802,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		forgetUnsaved(player, blank) {
 			return lives.forgetUnsaved(player.UserId, blank);
 		},
+		noteRemote(player, malformed) {
+			if (departed(player)) return true;
+			return noteMessageOf(linkOf(player), os.clock(), malformed);
+		},
 		metrics() {
 			// the counter moves between two publications (a tick that keeps failing never reaches `publishTick`)
 			published.tickErrors = tickErrors;
@@ -778,14 +843,35 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			for (const player of everyone) {
 				// one body that cannot be banked leaves the others to be (F5)
 				const [ok, err] = xpcall(() => release(player), tickTrace);
-				if (!ok) warn(`[${GAME_NAME}] banking ${player.Name} at shutdown failed: ${tostring(err)}`);
+				if (!ok) warn(`[${GAME_NAME}] banking a body at shutdown failed: ${tostring(err)}`);
 			}
 			links.clear();
 			bySlot.clear();
 			destroyMpRemotes(remotes);
-			if (active === host) active = undefined;
+			if (active === host) {
+				active = undefined;
+				Analytics.bindWorld(undefined);
+			}
 		},
 	};
+	// the clock the Night funnel follows and where each player stands (docs/ANALYTICS.md): read once a second, inside
+	// analytics' own guard -- nothing here is asked for on the tick
+	Analytics.bindWorld({
+		dayTime() {
+			return sim.clock.dayTime;
+		},
+		day() {
+			return sim.clock.day;
+		},
+		bodyOf(player) {
+			return host.playerOf(player)?.state;
+		},
+		standing() {
+			let n = 0;
+			for (const sp of sim.players()) if (!sp.state.dead) n += 1;
+			return n;
+		},
+	});
 
 	/**
 	 * The live, LOADED save of a connected player by UserId (the session's), or undefined. A user can have two links
@@ -806,7 +892,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	function worldWiped(report: WipeReport): void {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
 		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell
-		warn(
+		// a world ending is the game (MP-22), not a fault: the log, not the Error Report
+		print(
 			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
 				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
 		);
@@ -847,10 +934,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			// endWorld builds everything before it changes anything (review of f851ad2, M2): the old world is intact,
 			// and it goes on under the rule that held before MP-22 — the dead stand up at daybreak, a Rebirth still
 			// works, and the next fall of the last survivor tries again
-			warn(
-				`[${GAME_NAME}] the new town could not be made (${returned ? "no new town" : tostring(result)}): ` +
-					`this world goes on until daybreak`,
-			);
+			const why = returned ? "no new town" : tostring(result);
+			warn(`[${GAME_NAME}] the new town could not be made (${why}): this world goes on until daybreak`);
 			return;
 		}
 		if (!returned) {

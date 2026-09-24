@@ -171,6 +171,19 @@ export class ServerSimulation {
 	 * sets it (server/net/replication.ts); unset, every body is near.
 	 */
 	zombieViewLag?: (slot: number, z: ZombieState, viewTick: number) => number;
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see the spot (x, y) -- not inside a building they are not in, and in
+	 * the dark only if it is lit or within earshot? A ground item that just fell there (ITEM_NEWS_S) is told to them
+	 * only then (a zombie's drop at the place it died in the dark handed a client the death it was never shown). Set by
+	 * the replication layer, which owns the rules (server/net/replication.ts); unset, everything in range is seen.
+	 */
+	itemVisible?: (slot: number, x: number, y: number) => boolean;
+	/**
+	 * Does server/sim/life.ts still keep a body for this UserId -- connected, in the world or waiting in the lobby, or
+	 * gone less than KEEP_AFTER_LEAVE_S? A survivor's ping is kept exactly that long (`setPing`). Set by the LifeKeeper;
+	 * unset (a simulation with no keeper), the ping goes by the age of its last sample.
+	 */
+	bodyKept?: (userId: number) => boolean;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -483,7 +496,11 @@ export class ServerSimulation {
 			// from here on everything this world creates takes a dynamic id (§4.5), so a client's mirror can
 			// tell "the server made this" from "we both generated this from the seed"
 			serverWorld(world);
-			const items = new ServerItems({ world, out: this.worldOut });
+			const items = new ServerItems({
+				world,
+				out: this.worldOut,
+				visible: (slot, x, y) => this.itemVisible?.(slot, x, y) ?? true,
+			});
 			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
 			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
@@ -515,6 +532,11 @@ export class ServerSimulation {
 				// (§3.3) whether or not there is a horde walking it yet
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				onSolid: (s, added) => power.note(s, added),
+				// MP-24: the caps and the rot of abandoned constructions go by the account, read live off the roster
+				userOf: slot => this.bySlot.get(slot)?.userId,
+				present: userId => this.roster.some(sp => sp.userId === userId),
+				// the MP-24 walk is a bar of its own in the MicroProfiler ("PZ.build.sealed")
+				profile: () => this.profile,
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({
@@ -769,6 +791,8 @@ export class ServerSimulation {
 		this.bySlot.set(sp.slot, sp);
 		// the welcome that follows (server/sim/life.ts) hands this client every item around the spawn point
 		this.items?.welcomed(sp.slot, sp.state.x, sp.state.y);
+		// MP-24: what this account built is theirs again, in this slot, and stops rotting
+		this.build?.enter(sp.slot);
 		this.order.push(sp.slot);
 		let i = this.order.size() - 1;
 		while (i > 0 && this.order[i - 1] > sp.slot) {
@@ -878,20 +902,23 @@ export class ServerSimulation {
 	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, and a returning
 	 * survivor's first sample is filtered against it.
 	 *
-	 * For as long as their body is (life.ts KEEP_AFTER_LEAVE_S), not for as long as the server runs: someone gone
-	 * longer comes back as a newcomer, and the table holds the survivors measured lately instead of one entry for
-	 * everyone who ever played here (the second review of the zombie-motion branch, NIT 3). It is swept when a
-	 * survivor it has no recent sample of is measured -- the one moment it can grow.
+	 * For exactly as long as life.ts keeps their body (`bodyKept`): while they are connected -- in the world, or waiting
+	 * in the lobby, where nothing samples it -- and KEEP_AFTER_LEAVE_S after they left, when the keeper lets the body
+	 * go and this goes with it (`forgetPing`). Not for as long as the server runs: someone gone longer comes back as a
+	 * newcomer, and the table holds the survivors of lately instead of everyone who ever played here (the second review
+	 * of the zombie-motion branch, NIT 3). It used to go KEEP_AFTER_LEAVE_S after its last SAMPLE, and five minutes in
+	 * the lobby had a throttled re-entry's first sample taken raw (the review of the zombie-motion branch, S3 NIT 3).
+	 * Without a keeper, by the age of the last sample; swept when a survivor it has no valid entry for is measured.
 	 */
 	setPing(sp: ServerPlayer, seconds: number): void {
 		const combat = this.combat;
 		if (combat === undefined) return;
 		const oldest = this.tick - KEEP_AFTER_LEAVE_S * this.simHz;
 		let known = this.pings.get(sp.userId);
-		const recent = known !== undefined && known.at >= oldest;
-		if (known !== undefined && recent) combat.seedPing(sp.slot, known.pingS);
+		const valid = known !== undefined && (known.at >= oldest || this.bodyKept?.(sp.userId) === true);
+		if (known !== undefined && valid) combat.seedPing(sp.slot, known.pingS);
 		combat.setPing(sp.slot, seconds);
-		if (known === undefined || !recent) {
+		if (known === undefined || !valid) {
 			this.forgetPingsBefore(oldest);
 			known = { pingS: 0, at: 0 };
 			this.pings.set(sp.userId, known);
@@ -900,13 +927,18 @@ export class ServerSimulation {
 		known.at = this.tick;
 	}
 
-	/** drops every ping last sampled before tick `oldest` */
+	/** drops every ping last sampled before tick `oldest` whose survivor's body life.ts no longer keeps */
 	private forgetPingsBefore(oldest: number): void {
 		const gone = new Array<number>();
 		for (const [userId, p] of this.pings) {
-			if (p.at < oldest) gone.push(userId);
+			if (p.at < oldest && this.bodyKept?.(userId) !== true) gone.push(userId);
 		}
 		for (const userId of gone) this.pings.delete(userId);
+	}
+
+	/** life.ts let this survivor's body go (KEEP_AFTER_LEAVE_S after they left): their ping goes with it */
+	forgetPing(userId: number): void {
+		this.pings.delete(userId);
 	}
 
 	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */
@@ -976,9 +1008,14 @@ export class ServerSimulation {
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
 			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção"). On a
-			// vehicle both hands are on the bars (VEI-05): holstered too, and the attack button is the bell or horn
+			// vehicle both hands are on the bars (VEI-05): holstered too, and the attack button is the bell or horn. And a
+			// weapon the survivor PUT AWAY (ITM-06, the Holster verb) is holstered by choice: no shot, no swing, no reload
+			// -- while this very command's E, build edges and horn still reach `stepWorldActions` below, untouched
 			this.swinger = sp;
-			const holster = this.build?.placing(sp.slot) === true || this.vehicles?.riding(sp.slot) === true;
+			const holster =
+				sp.state.holstered === true ||
+				this.build?.placing(sp.slot) === true ||
+				this.vehicles?.riding(sp.slot) === true;
 			this.combat?.stepPlayer(sp, holster ? holstered(cmd) : cmd, this.tick, this.tickDt);
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
@@ -1106,6 +1143,8 @@ export class ServerSimulation {
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
 		});
+		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
+		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);
 		if (this.onInteract !== undefined) this.onInteract(sp, outcome);
 	}
 
@@ -1118,6 +1157,8 @@ export class ServerSimulation {
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
+		// litter rots whether or not anybody is here to see it (GROUND_ITEM_LIFE_S)
+		items.upkeep(this.tickDt);
 		this.vehicles?.step(this.tickDt);
 		// the grid keeps running with nobody in town: the sun still charges the boxes (ELE-02)
 		this.power?.step(this.tickDt, this.tick);

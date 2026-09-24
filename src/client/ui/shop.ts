@@ -125,6 +125,9 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 	// a menu page: see-through, over the town flyover behind the menus (UI-10); its layout reaches the screen's
 	// edges (Back, the coins), so it keeps clear of the Roblox buttons as a whole (makeScreen's default content)
 	const { root, body } = makeScreen(ctx.uiLayer, "Shop", { transparency: 1 });
+	// the Shop funnel's first step (docs/ANALYTICS.md): fired and forgotten -- the answer carries nothing, the screen
+	// never waits on it, and the server decides what it is worth (server/analytics/events.ts `shopViewed`)
+	task.spawn(() => invokeShopAction({ kind: "viewShop", screen: 0 }));
 
 	const back = Button(body, "Back", `‹  ${tr("Back")}`, {
 		x: MARGIN_X,

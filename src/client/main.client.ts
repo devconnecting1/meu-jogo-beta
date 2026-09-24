@@ -374,9 +374,9 @@ function openShop(back: () => void = goLobby): void {
 }
 
 /** MON-04: outfits and pets, tried on, bought (by the server) and worn -- from the lobby or from the shop */
-function openWardrobe(back: () => void): void {
+function openWardrobe(back: () => void, slot?: number): void {
 	menuScreen("shop");
-	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot });
+	cleanup = showWardrobe(ctx, { onBack: back, onEquip: equipItem, onUnequip: unequipSlot, slot });
 }
 
 function openSettings(): void {
@@ -452,8 +452,9 @@ function goLobby(page: LobbyPage = "menu"): void {
 			},
 			onNewRun: doNewRun,
 			onShop: () => openShop(),
-			// the wardrobe's X comes back to the page it was opened from
-			onWardrobe: (from: LobbyPage) => openWardrobe(() => goLobby(from)),
+			// the wardrobe's X comes back to the page it was opened from; the Survivor screen's OUTFIT / PET tile opens it
+			// on that slot's tab
+			onWardrobe: (from: LobbyPage, slot?: number) => openWardrobe(() => goLobby(from), slot),
 			onSettings: openSettings,
 			onCredits: openCredits,
 			onTutorial: (thenPlay?: boolean) => openTutorial(thenPlay === true),
@@ -560,8 +561,10 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
-		// the hotbar's blue tile; the tiles themselves are the list keys 1-5 pick from (shared/game/weaponSlots.ts)
-		weaponId: rt.pointer,
+		// the hotbar's blue tile (the blade for a hand that chose nothing, -1); the tiles themselves are the list keys 1-5
+		// pick from (shared/game/weaponSlots.ts) -- and none while the weapon is put away (ITM-06)
+		weaponId: w.id,
+		holstered: p.holstered === true,
 		weaponName: tr(w.name),
 		mag: rt.ammoCount,
 		magSize: w.mag,
@@ -585,7 +588,8 @@ function warnNoAmmo(): void {
 	const p = refs.player;
 	const w = currentWeapon(p);
 	const input = ctx.input;
-	if (w.mag <= 0 || p.weapon.reloading) return;
+	// (ITM-06) a weapon put away fires nothing, so it has nothing to be out of
+	if (w.mag <= 0 || p.weapon.reloading || p.holstered === true) return;
 	if (!input.reloadPressed && !(input.attackPressed && p.weapon.ammoCount <= 0)) return;
 	if (weaponReserve(ctx.save, w) > 0) return;
 	if (input.reloadPressed && p.weapon.ammoCount >= w.mag) return;
@@ -759,8 +763,10 @@ function mountRun(enterWorld = true): void {
 	heartbeat = RunService.Heartbeat.Connect(dt => {
 		const input = ctx.input;
 		if (input.backpackPressed) toggleBackpack();
-		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own)
+		// the pad's Back / Select: the match scoreboard (MP-23; Q held and the HUD's chip are the HUD's own). While it is
+		// up the D-pad sorts it (scoreboard.ts), so it switches no weapon (ITM-06: the D-pad cycles them otherwise)
 		if (input.scoreboardPressed) hud.toggleScoreboard();
+		if (hud.scoreboard()?.isOpen() === true) input.weaponCycle = 0;
 		if (input.pausePressed && ctx.phase === "playing") {
 			if (pauseCleanup === undefined) openPause();
 			else closePause();
@@ -1139,8 +1145,10 @@ pack.craftCheck = id => {
 
 pack.onEquipWeapon = id => {
 	if (!ownsWeapon(ctx.save, id)) return;
+	// ITM-06: the weapon in hand, chosen again, is put away or drawn back (combat.ts `chooseWeapon`)
 	chooseWeapon(loop.getRefs(), id);
 };
+pack.weaponAway = () => loop.getRefs().player.holstered === true;
 
 // 1 cloth, 2 hand, 3 gun, 4 outfit, 5 pet (EquipSlot). An outfit or a pet is what OTHER people see (MON-04), so
 // changing one asks for a report now: the server re-checks ownership and replicates the look (PlayerProfile)

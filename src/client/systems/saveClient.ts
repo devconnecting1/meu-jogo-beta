@@ -252,7 +252,8 @@ function sendNow(): void {
 		return;
 	}
 	if (json.size() > MAX_SAVE_PAYLOAD) {
-		warn(`[saveClient] save too large to report (${json.size()} chars)`);
+		warn("[saveClient] save too large to report");
+		print(`[saveClient] the report is ${json.size()} chars`);
 		return;
 	}
 	lastSentJson = json;

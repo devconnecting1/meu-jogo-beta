@@ -37,6 +37,7 @@ import {
 } from "./survivorView";
 import { addSurvivorLight, LightList } from "./lightList";
 import { meleeReach } from "shared/data/weapons";
+import { WEAPON_HOLSTERED } from "shared/net/protocol";
 import { PetLook, petFlies } from "shared/data/cosmetics";
 import { drawPet } from "./cosmeticsView";
 import { drawVehicle } from "./vehicleView";
@@ -113,6 +114,8 @@ export class PlayersView {
 			look.angle = rp.angle;
 			look.outfit = rp.outfit;
 			look.weapon = weaponById(rp.weaponId);
+			// ITM-06: an ally whose weapon is put away is drawn empty-handed (the wire's reserved byte, note 20)
+			look.holstered = rp.weaponId === WEAPON_HOLSTERED;
 			look.feetPhase = rp.feetCycle;
 			look.feetAmp = slot.amp;
 			// F1's wire carries no hit flash and no poison for an ally (§4.2: 12 bytes, flags only); F2 fills them

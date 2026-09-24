@@ -1056,7 +1056,26 @@ const PROBES = {
 			h.update(SCORE_HUD_STATE);
 			return openedOnPress && !board.isOpen();
 		}),
-	"D-pad": () => GuiService.GuiNavigationEnabled === true,
+	// ITM-06: in a match the D-pad steps through the weapons (left the previous, right the next: combat.ts cycleWeapon);
+	// with a menu holding the pad it is that menu's navigation and switches nothing
+	"D-pad": () => {
+		fresh();
+		tap(pad("DPadLeft"));
+		const left = input.weaponCycle;
+		fresh();
+		tap(pad("DPadRight"));
+		const right = input.weaponCycle;
+		fresh();
+		const probe = new Instance("TextButton");
+		probe.Selectable = true;
+		GuiService.SelectedObject = probe;
+		tap(pad("DPadRight"));
+		const inMenu = input.weaponCycle;
+		GuiService.SelectedObject = undefined;
+		probe.Destroy();
+		fresh();
+		return left === -1 && right === 1 && inMenu === 0 && GuiService.GuiNavigationEnabled === true;
+	},
 };
 /**
  * NAV-B: `inputObj` (the pad's B, the keyboard's Backspace) backs out of the screen on top through the bootstrap's
@@ -1087,7 +1106,7 @@ const NOTE_PROBES = {
 		const rightClick = input.actionPressed;
 		return rightClick && backsOut(key("Backspace"));
 	},
-	"Menus: the stick moves the focus ring, B goes back.": () =>
+	"Menus: the stick or D-pad moves the focus ring, B goes back.": () =>
 		GuiService.GuiNavigationEnabled === true && backsOut(pad("ButtonB")),
 };
 {
@@ -1105,6 +1124,8 @@ const NOTE_PROBES = {
 			if (!probe()) broken.push(`${sc.title}: "${chip}" -> ${what}`);
 		}
 		const noteProbe = NOTE_PROBES[sc.note];
+		// a note that names a device's keys is probed too: one with no probe here is a promise nobody checks
+		if (noteProbe === undefined && sc.title !== "Touch") missing.push(`${sc.title}: nota "${sc.note}"`);
 		if (noteProbe !== undefined) {
 			probed++;
 			if (!noteProbe()) broken.push(`${sc.title}: nota "${sc.note}"`);

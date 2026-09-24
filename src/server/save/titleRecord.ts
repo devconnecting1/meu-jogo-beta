@@ -254,7 +254,9 @@ export function loadTitleRecord(key: string): TitleRecordRead {
 	const [ok, value] = pcall((): unknown => s.GetAsync<unknown>(key)[0]);
 	noteCall(started, ok);
 	if (ok) return { ok: true, record: readTitleRecord(value) };
-	warn(`[${GAME_NAME}] ${key}: title record not read (${tostring(value)}); this session merges it instead`);
+	// the key is a UserId: one Error Report row per player otherwise (docs/ANALYTICS.md §10)
+	warn(`[${GAME_NAME}] title record not read (${tostring(value)}); this session merges it instead`);
+	print(`[${GAME_NAME}] title record of ${key} not read`);
 	return { ok: false };
 }
 
@@ -286,6 +288,7 @@ export function storeTitleRecord(
 	});
 	noteCall(started, ok);
 	if (ok && written !== undefined) return written;
-	warn(`[${GAME_NAME}] ${key}: title record not saved (${tostring(err)}); retried on the next save`);
+	warn(`[${GAME_NAME}] title record not saved (${tostring(err)}); retried on the next save`);
+	print(`[${GAME_NAME}] title record of ${key} not saved`);
 	return undefined;
 }

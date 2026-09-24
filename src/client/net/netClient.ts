@@ -18,8 +18,9 @@
  *   remotePlayers()        the other survivors, interpolated for the current render time
  *   remoteZombies()        the horde, interpolated: from F2 the client draws it and simulates none of it
  *   remoteBosses()         the same for bosses (the centipede's body is rebuilt by the view from its head)
- *   takeNetFx(out)         the cosmetic effects of the ticks since the last frame (§4.1 Fx)
- *   takeZombieDeaths(out)  the reliable deaths of §4.4: blood, a corpse and a drop, where the body fell
+ *   takeNetFx(out)         the cosmetic effects the drawing has reached (§4.1 Fx; client/net/fxTimeline.ts, audit M3)
+ *   takeZombieDeaths(out)  the reliable deaths of §4.4: blood, a corpse and a drop, where the body fell -- when the
+ *                          drawing reaches them, like the effects
  *   netTownSeed()          (MP-22) the seed of the server's town, for GameLoop.init; `netOnTown(fn)` hears the
  *                          InitBegin that confirms it and the WorldReset that replaces it when a world ends
  *   netRoster(out)         (MP-23) the survivors in the world as the reliable roster has them, for the scoreboard
@@ -49,6 +50,7 @@ import { ClockSync } from "./clockSync";
 import { CommandStream, RawInput } from "./commands";
 import { Prediction } from "./prediction";
 import { RemoteBoss, RemoteState, RemoteZombie, SnapshotBuffer } from "./snapshotBuffer";
+import { FxTimeline } from "./fxTimeline";
 import { createRawInput, readRawInput } from "./localInput";
 import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
@@ -110,9 +112,7 @@ const TIME_SYNC_PERIOD = 1 / math.max(1, TIME_SYNC_RATE / 2);
  * than a fresh one, so the oldest is the one to drop.
  */
 const MAX_QUEUED_PARTS = 96;
-/** effects waiting for the next frame; a second of a heavy firefight, and the oldest is the one to drop */
-const MAX_QUEUED_FX = 256;
-/** deaths waiting for the next frame: reliable, so they are never dropped in flight, only if nobody draws */
+/** deaths waiting for the drawing: reliable, so they are never dropped in flight, only if nobody draws */
 const MAX_QUEUED_DEATHS = 256;
 /** how long the handshake may take before it is worth a line in the log (seconds) */
 const RunService = game.GetService("RunService");
@@ -270,9 +270,14 @@ const zombieHitches = new HitchMeter(ZOMBIE_MOVING_UPS);
 let zombieVisibleS = 0;
 /** world units of margin around the view: a body half inside the screen is on it */
 const ZOMBIE_VIEW_PAD = 32;
-/** effects and deaths that arrived since the last frame; the view drains both (see `netUpdate`) */
-const fxQueue = new Array<FxEvent>();
+/**
+ * Effects waiting for the drawing to reach their tick (audit M3), and deaths: waiting in `pendingDeaths` until the
+ * buffer releases them (`SnapshotBuffer.zombieDied`), then in `deaths` until the view drains them (see `netUpdate`)
+ */
+const fxTimeline = new FxTimeline();
+const pendingDeaths = new Map<number, ZombieDeathEvent>();
 const deaths = new Array<ZombieDeathEvent>();
+const released = new Array<number>();
 const pendingAnnounce = new Array<string>();
 const mirrorQueue = new Array<WorldEvent>();
 /** an InitBegin came: the mirror is wiped before the queue (its WorldInit) is laid down */
@@ -315,7 +320,6 @@ const TOWN_GUARD_S = 2;
 const townListeners = new Array<(notice: TownNotice) => void>();
 const titleListeners = new Array<(titleId: number) => void>();
 let queueDropped = 0;
-let fxDropped = 0;
 let malformed = 0;
 let lastSelfTick = -math.huge;
 /** the local survivor's last reliable life state (§7.3), and whether it still has to reach refs.player */
@@ -515,11 +519,13 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		return;
 	}
 	if (e.t === WorldEv.ZombieDied) {
-		// reliable, so it can be acted on at once: the body leaves the interpolation NOW and the view plays
-		// the blood, the corpse and the drop at the position this event carries, not at the last one guessed
-		snapshots.forgetZombie(e.netId);
-		if (deaths.size() >= MAX_QUEUED_DEATHS) deaths.remove(0);
-		deaths.push({ netId: e.netId, x: e.x, y: e.y, cause: e.cause });
+		// reliable, so it is never lost: the body leaves the interpolation when the drawing reaches the death (audit M3:
+		// with its own blood, not ahead of it), and the view plays the blood, the corpse and the drop at the position
+		// this event carries, not at the last one guessed. The batch's tick buries the netId: a Snap part from before
+		// it, overtaken by this event or still in `queue`, cannot stand the body up again (audit M1)
+		snapshots.zombieDied(e.netId, batchTick, os.clock());
+		if (pendingDeaths.size() >= MAX_QUEUED_DEATHS) pendingDeaths.clear();
+		pendingDeaths.set(e.netId, { netId: e.netId, x: e.x, y: e.y, cause: e.cause });
 		return;
 	}
 	if (e.t === WorldEv.Clock) {
@@ -576,7 +582,9 @@ function checkMapHash(): void {
 	if (serverHash === undefined || mapHash === 0 || mapMismatch) return;
 	if (serverHash === mapHash) return;
 	mapMismatch = true;
-	warn(`[${GAME_NAME}] map hash mismatch: server ${serverHash}, client ${mapHash} — the worlds are not the same`);
+	// the hashes differ per town: one Error Report row only if they stay out of the message (docs/ANALYTICS.md §10)
+	warn(`[${GAME_NAME}] map hash mismatch: the worlds are not the same`);
+	print(`[${GAME_NAME}] map hash: server ${serverHash}, client ${mapHash}`);
 }
 
 /** tells every town listener, each on its own: one that fails must not cost the rest of the World batch */
@@ -612,9 +620,9 @@ function onSnap(payload: unknown): void {
 
 /**
  * One `Fx` batch (§4.1). Unreliable and ephemeral by design: a lost batch is a blood spurt nobody saw, which
- * is worth far less than the head-of-line delay reliability would put on every packet behind it. The queue is
- * drained by the game loop once a frame, and it is capped because a client that is not drawing (a menu, a
- * load) must not grow a table of effects it will never play.
+ * is worth far less than the head-of-line delay reliability would put on every packet behind it. Each effect waits
+ * in the timeline for the drawing to reach the batch's tick (client/net/fxTimeline.ts, audit M3), and the timeline
+ * is capped because a client that is not drawing (a menu, a load) must not grow a table of effects it will never play.
  */
 function onFx(payload: unknown): void {
 	const batch = decodeFx(payload);
@@ -622,13 +630,9 @@ function onFx(payload: unknown): void {
 		malformed += 1;
 		return;
 	}
-	for (const e of batch.events) {
-		if (fxQueue.size() >= MAX_QUEUED_FX) {
-			fxQueue.remove(0);
-			fxDropped += 1;
-		}
-		fxQueue.push(e);
-	}
+	const tick = unwrapTick(batch.tick, math.floor(clock.tickNow()));
+	const now = os.clock();
+	for (const e of batch.events) fxTimeline.push(e, tick, now);
 }
 
 function onTimeSync(payload: unknown): void {
@@ -664,9 +668,8 @@ export function netActive(): boolean {
 	const live = hasEpoch && mySlot >= 0;
 	if (!live && !warnedSlow && startedAt > 0 && os.clock() - startedAt > HANDSHAKE_WARN_S) {
 		warnedSlow = true;
-		warn(
-			`[${GAME_NAME}] MP handshake still pending after ${HANDSHAKE_WARN_S}s (epoch ${hasEpoch}, slot ${mySlot})`,
-		);
+		warn(`[${GAME_NAME}] MP handshake still pending after ${HANDSHAKE_WARN_S}s`);
+		print(`[${GAME_NAME}] MP handshake: epoch ${hasEpoch}, slot ${mySlot}`);
 	}
 	return live;
 }
@@ -693,6 +696,7 @@ export function netUpdate(refs: GameRefs, dt: number): void {
 	reconcile(now);
 	predict(refs, dt);
 	snapshots.advance(dt, tick, now, refs.world);
+	releaseDeaths();
 	rebuildViews();
 	allyHitches.beginFrame(dt);
 	for (const v of views) allyHitches.observe(v.slot, v.x, v.y, dt);
@@ -860,11 +864,26 @@ export function netRoster(out: Array<RosterView>): Array<RosterView> {
 	return out;
 }
 
-/** the effects received since the last call, appended to `out` and cleared here (§4.1 Fx) */
+/**
+ * The effects the drawing has reached (§4.1 Fx, audit M3), appended to `out`: every one whose batch tick the render
+ * time has passed, and this survivor's own at once (client/net/fxTimeline.ts).
+ */
 export function takeNetFx(out: Array<FxEvent>): Array<FxEvent> {
-	for (const e of fxQueue) out.push(e);
-	fxQueue.clear();
-	return out;
+	return fxTimeline.take(out, snapshots.renderNow(), os.clock(), mySlot);
+}
+
+/** the deaths the buffer let go this frame (the drawing reached them), into `deaths` for the view */
+function releaseDeaths(): void {
+	released.clear();
+	snapshots.takeDied(released);
+	for (const netId of released) {
+		const d = pendingDeaths.get(netId);
+		if (d === undefined) continue;
+		pendingDeaths.delete(netId);
+		if (deaths.size() >= MAX_QUEUED_DEATHS) deaths.remove(0);
+		deaths.push(d);
+	}
+	released.clear();
 }
 
 /** the zombie deaths received since the last call (§4.4), appended to `out` and cleared here */
@@ -920,7 +939,8 @@ export function netReset(): void {
 	snapshots.reset();
 	queue.clear();
 	views.clear();
-	fxQueue.clear();
+	fxTimeline.clear();
+	pendingDeaths.clear();
 	deaths.clear();
 	pendingAnnounce.clear();
 	pendingClock = undefined;
@@ -974,7 +994,7 @@ export function netStats(): NetStats {
 		tracked: sb.tracked,
 		zombies: sb.zombies,
 		bosses: sb.bosses,
-		fxDropped,
+		fxDropped: fxTimeline.dropped,
 		pending: c.pending,
 		sampleHz: c.sampleHz,
 	};
@@ -1098,7 +1118,8 @@ function bind(refs: GameRefs): boolean {
 	snapshots.reset();
 	queue.clear();
 	views.clear();
-	fxQueue.clear();
+	fxTimeline.clear();
+	pendingDeaths.clear();
 	deaths.clear();
 	lastSelfTick = -math.huge;
 	return true;
