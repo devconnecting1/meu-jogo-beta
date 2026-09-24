@@ -10,6 +10,7 @@
 		"art:world": "node tools/gen-world-art.mjs",
 		"audio:sfx": "node tools/gen-sfx.mjs",
 		"render:map": "node tools/render-map.mjs",
+		"promo": "node tools/render-promo.mjs",
 		"cloud": "node tools/cloud.mjs",
 		"locale": "node tools/gen-locale.mjs",
 		"stamp": "node tools/gen-version.mjs",
