@@ -367,14 +367,18 @@ Cada id em `design/world-art/assets.json` e `design/audio/assets.json` guarda **
    hoje, as 135 texturas e os 5 bancos de som. Valem as regras de sempre: só id **aprovado** entra; em análise
    depois da espera → `pending` (consultado no próximo run, nunca reenviado); recusado → `rejected` (não reenvia os
    mesmos bytes; o run fica vermelho); falhou → o próximo run tenta de novo.
-4. **O id antigo fica até o novo ser aprovado.** Um arquivo que falhou, foi recusado ou segue em análise continua
-   com o id da conta antiga no `assets.json` e no place (nunca fica em branco); o Summary conta "N ainda com o id
-   de outro criador" e o run avisa (`::warning`) até o último ser trocado. Aprovado, o id novo substitui o antigo
-   no mesmo commit do bot.
+4. **Até o novo ser aprovado.** Um arquivo que falhou, foi recusado ou segue em análise continua com o id da conta
+   antiga no `assets.json`. No jogo: a **textura** fica com o id antigo (uma imagem pode ser Open Use, então pode
+   seguir aparecendo); o **banco de som** fica **sem id** no `audioAssets.ts` — o `assets.json` grava `owner` (a
+   conta dos secrets) e o `tools/gen-sfx.mjs` deixa de fora todo banco de outro criador, porque o id antigo tocaria
+   silêncio numa experiência da conta nova e sem id cada som toca a biblioteca (SND-01). O Summary conta "N ainda
+   com o id de outro criador" e o run avisa (`::warning`) até o último ser trocado. Aprovado, o id novo entra no
+   mesmo commit do bot.
 5. O job tem 60 minutos: ~140 uploads (700 ms entre um e outro, abaixo do limite de 120 por minuto) e até
    10 minutos de moderação na arte e mais 10 no áudio. O que passar disso fica `pending` para o próximo run.
-6. No PC, `npm run cloud -- upload-art` / `upload-audio` **não** troca ids de conta sozinho: só avisa quando o
-   `.env` é de outro criador que os ids. Com o `.env` da conta nova, `-- upload-art --reupload-all` (e
+6. No PC, `npm run cloud -- upload-art` / `upload-audio` **não** troca ids de conta sozinho nem muda o `owner`: só
+   avisa quando o `.env` é de outro criador que os ids (ou que o `owner`: um banco subido daqui não entraria no
+   `audioAssets.ts`). Com o `.env` da conta nova, `-- upload-art --reupload-all` (e
    `upload-audio --reupload-all`) reenvia tudo como ela; depois `npm run build` e commit dos mesmos arquivos. Se o
    `.env` do PC ainda for da conta antiga, troque a chave e o `ROBLOX_CREATOR_USER_ID` lá também.
 

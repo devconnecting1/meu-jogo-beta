@@ -1600,15 +1600,29 @@ const sha1 = bytes => createHash("sha1").update(bytes).digest("hex");
 
 // ---------------------------------------------------------------- the generated module
 
-/** the uploaded ids (design/audio/assets.json), each kept only while it is the upload of THIS bank file */
+/**
+ * The uploaded ids (design/audio/assets.json), each kept only while it is the upload of THIS bank file -- and, once
+ * assets.json names the creator the game's assets belong to (`owner`, written by `upload-audio --ci`), only while that
+ * creator uploaded it. Audio is private to its uploader (docs/CREATOR_HUB.md, "Mudou de conta"): after a change of
+ * account the old account's id would play SILENCE in the new account's experience, while no id plays the library take
+ * (DESIGN_RULES SND-01) until the new upload is approved. (The art keeps its old ids: an image may be Open Use.)
+ */
 export function liveBankIds(manifest, assets) {
 	const ids = {};
+	const owner = assets.owner;
 	for (const b of manifest.banks) {
 		const id = assets.ids?.[b.name] ?? "";
-		ids[b.name] = id !== "" && assets.sha1?.[b.name] === b.sha1 ? id : "";
-		if (id !== "" && ids[b.name] === "") {
+		const same = id !== "" && assets.sha1?.[b.name] === b.sha1;
+		const theirs = owner === undefined || assets.creator?.[b.name] === owner;
+		ids[b.name] = same && theirs ? id : "";
+		if (id !== "" && !same) {
 			console.log(
 				`${b.name}: the uploaded bank is not this WAV (run npm run cloud -- upload-audio); its id is left out`,
+			);
+		} else if (id !== "" && !theirs) {
+			console.log(
+				`${b.name}: its id was uploaded by ${assets.creator?.[b.name] ?? "an unrecorded creator"}, not ${owner} ` +
+					"(audio is private to its uploader); left out until the new upload is approved: the library plays",
 			);
 		}
 	}

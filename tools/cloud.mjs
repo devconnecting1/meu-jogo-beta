@@ -402,11 +402,14 @@ function fromOperation(op) {
 /**
  * assets.json: `ids` + `sha1` (what the game uses), `creator` (who uploaded each id: "user:<id>" | "group:<id>"),
  * `pending` (uploaded, not approved yet) and `rejected`. An id without `creator` was uploaded before creators were
- * recorded (2026-09-24), by the account the project had then: it counts as ANOTHER creator's.
+ * recorded (2026-09-24), by the account the project had then: it counts as ANOTHER creator's. `owner`: the creator
+ * the game's assets belong to, written by a --ci (or --reupload-all) run; tools/gen-sfx.mjs leaves out of
+ * audioAssets.ts every bank id another creator uploaded (audio is private to its uploader).
  */
 function readBook(path) {
 	const raw = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
 	return {
+		owner: raw.owner,
 		ids: { ...(raw.ids ?? {}) },
 		sha1: { ...(raw.sha1 ?? {}) },
 		creator: { ...(raw.creator ?? {}) },
@@ -419,7 +422,9 @@ function writeBook(path, book, source) {
 	// one creator per id the game uses, in the order of `ids` (an entry of a name without an id is dropped)
 	const creator = {};
 	for (const name of Object.keys(book.ids)) if (book.creator[name] !== undefined) creator[name] = book.creator[name];
-	const out = { uploadedAt: today(), source, ids: book.ids, sha1: book.sha1 };
+	const out = { uploadedAt: today(), source };
+	if (book.owner !== undefined) out.owner = book.owner;
+	Object.assign(out, { ids: book.ids, sha1: book.sha1 });
 	if (Object.keys(creator).length > 0) out.creator = creator;
 	if (Object.keys(book.pending).length > 0) out.pending = book.pending;
 	if (Object.keys(book.rejected).length > 0) out.rejected = book.rejected;
@@ -509,7 +514,7 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 	const extra = [
 		replacing.size > 0
 			? `; ${replacing.size} delas reenviadas como ${me || "o criador configurado"} ` +
-				`(${reuploadAll ? "--reupload-all" : "o id no ar é de outro criador"}; o id antigo fica até o novo ser aprovado)`
+				`(${reuploadAll ? "--reupload-all" : "o id no ar é de outro criador"}; ${spec.meanwhile})`
 			: "",
 		recheck.length > 0 ? `; ${recheck.length} em análise na moderação (só consultadas)` : "",
 		blocked.length > 0 ? `; ${blocked.length} recusada(s) antes com os mesmos bytes (não reenviadas)` : "",
@@ -522,6 +527,12 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 		console.log(
 			`  atenção: ${others.length} ${spec.noun} no ar são de outro criador (${who}), não de ${me}: ` +
 				"a CI (--ci) reenvia sozinha; daqui, só com --reupload-all",
+		);
+	}
+	if (spec.privateToCreator && !CI && !reuploadAll && me !== "" && book.owner !== undefined && book.owner !== me) {
+		console.log(
+			`  atenção: o jogo é de ${book.owner} (assets.json, gravado pela CI) e este .env sobe como ${me}: ` +
+				`um ${spec.nounOne} enviado daqui fica fora do módulo gerado (áudio é privado de quem sobe)`,
 		);
 	}
 	if (dryRun) {
@@ -579,12 +590,18 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 	if (me === "") fail("falta ROBLOX_CREATOR_USER_ID (ou ROBLOX_CREATOR_GROUP_ID) no .env: de quem é o asset");
 	const creator = creatorOf(me);
 	console.log(`criador dos uploads: ${me}`);
+	// the account the game's assets belong to from now on: the CI's secrets (or an explicit --reupload-all), never
+	// a plain run on the PC, whose .env may still be another account's
+	if ((CI || reuploadAll) && book.owner !== me) {
+		book.owner = me;
+		dirty = true;
+	}
 	if (replacing.size > 0) {
 		annotate(
 			"notice",
 			`${spec.title}: reenvio como ${me}`,
 			`${replacing.size} ${spec.noun} no ar ${reuploadAll ? "reenviadas (--reupload-all)" : "são de outro criador"}: ` +
-				`sobem de novo como ${me}. Cada id antigo fica no assets.json (e no place) até o novo ser aprovado.`,
+				`sobem de novo como ${me}; ${spec.meanwhile}.`,
 		);
 	}
 
@@ -629,6 +646,14 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 			: { state: "done", assetId: p.id, ...m };
 	};
 
+	/** what the game uses meanwhile for an item whose new upload is not in yet (a table cell's tail) */
+	const kept = name => {
+		if (book.ids[name] === undefined || !same(name)) return "";
+		return spec.privateToCreator && foreign(name)
+			? "; até lá, no jogo, a biblioteca (o id antigo é de outro criador)"
+			: `; até lá fica ${book.ids[name]}`;
+	};
+
 	/** what one answer means for the book (written at once); "pending" when it is still to be decided */
 	const resolve = (it, got, fresh) => {
 		const name = it.name;
@@ -659,8 +684,7 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 			delete book.pending[name];
 			book.rejected[name] = { sha1: it.hash, id, creator: by, at: today() };
 			count.rejected++;
-			const kept = book.ids[name] !== undefined ? ` (fica o id antigo, ${book.ids[name]})` : "";
-			rows.set(name, [`RECUSADO pela moderação: o id não entra; mude o arquivo${kept}`, id]);
+			rows.set(name, [`RECUSADO pela moderação: o id não entra; mude o arquivo${kept(name)}`, id]);
 			console.log(`  ${label} recusado pela moderação (asset ${id})`);
 			annotate(
 				"error",
@@ -694,8 +718,7 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 			return "done";
 		}
 		book.pending[name] = { sha1: it.hash, id, creator: by, since: book.pending[name]?.since ?? today() };
-		const kept = book.ids[name] !== undefined ? `; até lá fica ${book.ids[name]}` : "";
-		rows.set(name, [`em análise: fica para o próximo run (não será reenviado)${kept}`, id]);
+		rows.set(name, [`em análise: fica para o próximo run (não será reenviado)${kept(name)}`, id]);
 		persist();
 		return "pending";
 	};
@@ -805,22 +828,23 @@ async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) 
 	].filter(Boolean);
 	// ids the game still takes from another creator after this run (a replacement in review, rejected or failed)
 	const stillOld = CI ? spec.items.filter(it => foreign(it.name)).length : 0;
-	const tail = stillOld > 0 ? ` **${stillOld} ainda com o id de outro criador** (o antigo segue no place).` : "";
+	const tail = stillOld > 0 ? ` **${stillOld} ainda com o id de outro criador** (${spec.meanwhile}).` : "";
 	stepSummary(table(`${spec.items.length} ${spec.noun}: ${parts.join(" · ")}.${tail}`));
 	if (count.pending > 0 && CI) {
 		annotate(
 			"warning",
 			`${spec.title}: em análise`,
 			`${count.pending} ${spec.noun} ainda em análise na moderação depois da espera: ficam sem o id novo neste ` +
-				"place (sem id, ou com o antigo quando há um) e entram no próximo run, sem novo upload.",
+				`place (${spec.privateToCreator ? "a biblioteca toca no lugar" : "sem id, ou com o antigo quando há um"}) ` +
+				"e entram no próximo run, sem novo upload.",
 		);
 	}
 	if (stillOld > 0) {
 		annotate(
 			"warning",
 			`${spec.title}: ids de outro criador`,
-			`${stillOld} ${spec.noun} ainda usam um id de outro criador (não de ${me}): o antigo fica até o novo ser ` +
-				"aprovado. Em análise: o próximo run consulta; recusado: mude o arquivo; falhou: o próximo run reenvia.",
+			`${stillOld} ${spec.noun} ainda têm só um id de outro criador (não de ${me}); ${spec.meanwhile}. ` +
+				"Em análise: o próximo run consulta; recusado: mude o arquivo; falhou: o próximo run reenvia.",
 		);
 	}
 	// locally an operation that never finished is a failure too: `exit 0` there has always meant "every id written"
@@ -870,6 +894,8 @@ async function uploadArt(flags) {
 			assetType: "Image",
 			fallbackAssetType: "Decal",
 			mime: "image/png",
+			// an image may be Open Use: the old account's id stays in the place until the new one is approved
+			meanwhile: "o id antigo fica no assets.json e no place até o novo ser aprovado",
 			displayName: it => `ProjectZ world ${it.name}`,
 			description: it => `Project Z town art: ${it.description} (tools/gen-world-art.mjs)`,
 			regenerate: regenerateArtModule,
@@ -933,6 +959,11 @@ async function uploadAudio(flags) {
 			items,
 			assetType: "Audio",
 			mime: "audio/wav",
+			// audio is private to its uploader: another account's id would play silence, so gen-sfx leaves it out
+			privateToCreator: true,
+			meanwhile:
+				"o id antigo fica no assets.json, mas sai do audioAssets.ts (áudio é privado de quem sobe): " +
+				"cada som toca a biblioteca (SND-01) até o novo ser aprovado",
 			displayName: it => `ProjectZ sfx ${it.name}`,
 			description: it =>
 				`Project Z sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,

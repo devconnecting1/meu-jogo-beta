@@ -42,7 +42,9 @@
  *      old id in assets.json and in the module (the place never goes blank); the next run sends the failed one again,
  *      reads the one in review (never re-uploaded) and does not re-send the rejected bytes. The owner's run with
  *      another creator in its .env only reports it; --reupload-all (CI or PC) sends everything again. The sound
- *      banks the same way.
+ *      banks the same way, except in the module: audio is private to its uploader, so the REAL audioAssets.ts gives
+ *      a bank whose id is another creator's than assets.json's `owner` no id at all (the library plays, SND-01)
+ *      until the new one is approved, while a texture keeps its old id in worldArtAssets.ts (an image may be Open Use).
  *   7. GIT. `assets-ci.mjs drift` passes a PNG whose bytes changed but not its pixels (put back as committed) and
  *      catches real drift; `untouched` catches a changed tool; `commit` commits only assets.json and generated
  *      modules (anything else refuses it), with [skip ci] as github-actions[bot]; when main moved it rebases,
@@ -599,6 +601,9 @@ try {
 					PZ_CLOUD_ENV: join(TMP, "missing.env"),
 					PZ_FAKE_CLOUD_STATE: fakeCloudPath,
 					PZ_FAKE_ASSETS_STATE: fakeAssetsPath,
+					// one texture's re-upload stays in review: an image keeps its old id meanwhile (it may be Open Use)
+					PZ_FAKE_ASSETS: JSON.stringify({ grass: "review" }),
+					PZ_MODERATION_WAIT_S: "0",
 					ROBLOX_API_KEY: KEY,
 					ROBLOX_CREATOR_USER_ID: NEW_ACCOUNT,
 					GITHUB_STEP_SUMMARY: summaryPath,
@@ -616,10 +621,20 @@ try {
 			"the committed assets.json with a new account: every texture it did not upload goes up again, as the new account",
 			`${movedUp.length} of ${manifest.textures.length}; exit ${moved.status}`,
 		);
+		const approvedUp = movedUp.filter(u => u.name !== "grass");
 		check(
-			movedUp.every(u => movedId(u.name) === `rbxassetid://${u.id}`) &&
-				manifest.textures.every(t => movedBook.creator?.[t.name] === `user:${NEW_ACCOUNT}`),
-			"worldArtAssets.ts (the real generator) has only the new account's ids, and assets.json records it for each",
+			approvedUp.every(u => movedId(u.name) === `rbxassetid://${u.id}`) &&
+				manifest.textures.every(
+					t => t.name === "grass" || movedBook.creator?.[t.name] === `user:${NEW_ACCOUNT}`,
+				) &&
+				movedBook.owner === `user:${NEW_ACCOUNT}`,
+			"worldArtAssets.ts (the real generator) has the new account's approved ids, and assets.json records it for each",
+		);
+		check(
+			committed.ids.grass !== undefined &&
+				movedId("grass") === committed.ids.grass &&
+				movedBook.pending?.grass?.creator === `user:${NEW_ACCOUNT}`,
+			"the texture still in review keeps the OLD account's id in worldArtAssets.ts (an image may be Open Use)",
 		);
 	}
 
@@ -770,9 +785,16 @@ try {
 		check(
 			b4.ids.cues === oldBanks.cues &&
 				b4.creator?.cues === `user:${USER}` &&
+				b4.owner === "user:777000111" &&
 				b4.pending?.cues?.creator === "user:777000111" &&
 				audioRegens().at(-1).ids.cues === oldBanks.cues,
-			"the bank still in review keeps its old id in assets.json and in the module until the new one is approved",
+			"the bank still in review: assets.json keeps its old id (and its creator) and names the new owner",
+		);
+		check(
+			/\| cues \| em análise.*até lá, no jogo, a biblioteca/.test(moved.summary) &&
+				/sai do audioAssets\.ts/.test(moved.summary) &&
+				/^::warning title=.*ids de outro criador::1 /m.test(moved.stdout),
+			"the summary says the library plays for it meanwhile (not its old id), and a ::warning counts it",
 		);
 		editFakeAssets(s => {
 			for (const a of Object.values(s.byId)) if (a.name === "cues") a.reviews = 0;
@@ -848,6 +870,55 @@ try {
 			isUploadOutput(FULL, { code: " M", path: "src/shared/data/audioAssets.ts" }) &&
 				isUploadOutput(FULL, { code: " M", path: "design/audio/assets.json" }),
 			"`commit` takes design/audio/assets.json and src/shared/data/audioAssets.ts",
+		);
+
+		// the account changed, with the REAL generator: a bank whose re-upload is still in review keeps its old id in
+		// assets.json but NOT in audioAssets.ts -- the old account's audio would play silence; no id plays the library
+		const fullAudio = (user, plans = {}) =>
+			spawnSync(process.execPath, ["--import", FAKE, join(FULL, "tools", "cloud.mjs"), "upload-audio", "--ci"], {
+				encoding: "utf8",
+				timeout: 180_000,
+				env: {
+					...baseEnv,
+					PZ_CLOUD_ENV: join(TMP, "missing.env"),
+					PZ_FAKE_CLOUD_STATE: fakeCloudPath,
+					PZ_FAKE_ASSETS_STATE: fakeAssetsPath,
+					PZ_FAKE_ASSETS: JSON.stringify(plans),
+					PZ_MODERATION_WAIT_S: "0",
+					ROBLOX_API_KEY: KEY,
+					ROBLOX_CREATOR_USER_ID: user,
+					GITHUB_STEP_SUMMARY: summaryPath,
+				},
+			});
+		const before = JSON.parse(readFileSync(assetsJson, "utf8")).ids;
+		const switched = fullAudio("777000111", { weapons: "review" });
+		const ts2 = readFileSync(audioTs, "utf8");
+		const idOf2 = bank => new RegExp(`\\b${bank}: "(rbxassetid://\\d+)?"`).exec(ts2)?.[1] ?? "";
+		const book2 = JSON.parse(readFileSync(assetsJson, "utf8"));
+		check(
+			switched.status === 0 &&
+				book2.ids.weapons === before.weapons &&
+				idOf2("weapons") === "" &&
+				/weapons: ""/.test(ts2),
+			"real audioAssets.ts: the bank still in review on the new account gets NO id (the library plays, SND-01), " +
+				"though assets.json keeps the old one",
+			`weapons in ts: "${idOf2("weapons")}"`,
+		);
+		check(
+			["ui", "items", "impacts", "cues"].every(
+				n => idOf2(n) === book2.ids[n] && book2.ids[n] !== before[n] && book2.creator[n] === "user:777000111",
+			),
+			"the 4 approved banks: the new account's ids, in assets.json and in the module",
+		);
+		editFakeAssets(s => {
+			for (const a of Object.values(s.byId)) if (a.name === "weapons") a.reviews = 0;
+		});
+		fullAudio("777000111");
+		const ts3 = readFileSync(audioTs, "utf8");
+		check(
+			new RegExp(`\\bweapons: "${JSON.parse(readFileSync(assetsJson, "utf8")).ids.weapons}"`).test(ts3) &&
+				!ts3.includes(before.weapons),
+			"approved on the next run: its new id enters the module",
 		);
 	}
 
@@ -965,7 +1036,7 @@ try {
 			/^::warning title=.*ids de outro criador::3 /m.test(part.stdout) &&
 				/3 ainda com o id de outro criador/.test(part.summary) &&
 				/\| car \| em análise.*até lá fica rbxassetid:\/\/105/.test(part.summary) &&
-				/\| sign \| RECUSADO.*fica o id antigo, rbxassetid:\/\/104/.test(part.summary),
+				/\| sign \| RECUSADO.*até lá fica rbxassetid:\/\/104/.test(part.summary),
 			"a ::warning and the summary count the 3 still on the old account, and say which old id stays",
 		);
 		editFakeAssets(s => {
