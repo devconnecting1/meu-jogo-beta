@@ -121,4 +121,5 @@ export const ICON_ATLAS_CELLS: Record<string, readonly [number, number, number, 
 	pro: [80, 234, 8, 80, 234],
 	fire: [90, 234, 8, 90, 234],
 	check: [100, 234, 8, 100, 234],
+	build: [110, 234, 8, 110, 234],
 };

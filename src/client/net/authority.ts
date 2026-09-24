@@ -20,6 +20,11 @@ export interface WorldAuthority {
 	buildEdge: () => void;
 	/** a predicted reload spent this client's copy of the reserve: an older bag must not hand the rounds back */
 	reserveSpent: () => void;
+	/**
+	 * Is a verb that puts a construction on the cursor -- the Build tab's Place, a construction's craft (ITM-09) -- still
+	 * waiting for the server's answer? Until it comes, the cursor drawn here may be one the server refused.
+	 */
+	cursorPending?: () => boolean;
 }
 
 let current: WorldAuthority | undefined;
@@ -45,4 +50,12 @@ export function noteBuildEdge(): void {
 
 export function noteReserveSpent(): void {
 	current?.reserveSpent();
+}
+
+/**
+ * The build cursor drawn here is a prediction the server has not answered yet (false offline): client/systems/build.ts
+ * sends no click and no E for it until the answer comes (the security review of 0a7561e, 6).
+ */
+export function buildUnconfirmed(): boolean {
+	return current !== undefined && current.owned() && current.cursorPending?.() === true;
 }

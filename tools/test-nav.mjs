@@ -19,7 +19,9 @@
  *                       rail, the Settings tabs, the wardrobe: GuiObject.NextSelection*, widgets.linkGrid).
  *   2. THE PAD          with a menu holding the pad's focus, the buttons that would act in the world (A, X, Y, RT)
  *                       stay the menu's; the two toggles still reach the game: Start (the menu) and LB (the Bag -- the
- *                       button that opens it closes it, UI-11).
+ *                       button that opens it closes it, UI-11). The Bag's Build tab (ITM-09) on the pad: the D-pad
+ *                       walks the tab bar through it, the focus lands on its kit (or on Open Craft when it is empty),
+ *                       and LB closes the Bag from there.
  *   2b. B / BACKSPACE   back out of the screen on top (client/ui/backStack.ts, NAV-B): every screen of section 1, by
  *                       both keys, through the same handler as its own control; a help popup closes alone and gives
  *                       the pad back to its "?"; a question is dismissed, never answered; never the lobby's own menu,
@@ -788,6 +790,56 @@ ctx.phase = "playing";
 	pack.close();
 	input.beginFrame();
 	flush();
+
+	// ITM-09: the Build tab on the pad. The D-pad walks the tab bar through it (Materials -> Build -> Craft); choosing it
+	// lands the focus inside it -- on its selected kit, or on the panel's Open Craft when the backpack holds none; and
+	// LB, pressed there, still closes the Bag
+	{
+		const { PLACEABLE_IDS } = require(join(SRC, "shared/sim/placement.ts"));
+		const etcBefore = [...ctx.save.invenEtc];
+		for (const id of PLACEABLE_IDS) ctx.save.invenEtc[id] = 0;
+		pack.open();
+		flush();
+		const tabsBar = findIn(layer.FindFirstChild("Backpack"), "Tabs");
+		const tabN = i => tabsBar?.FindFirstChild(`Tab${i}`);
+		const walks =
+			tabN(4)?.Text === "Build" &&
+			tabN(3)?.NextSelectionRight === tabN(4) &&
+			tabN(4)?.NextSelectionRight === tabN(5) &&
+			tabN(4)?.NextSelectionLeft === tabN(3) &&
+			tabN(5)?.NextSelectionLeft === tabN(4);
+		GuiService.SelectedObject = tabN(4);
+		tabN(4).Activated.Fire();
+		flush();
+		// (read now: the same panel button says Place a moment later)
+		const empty = GuiService.SelectedObject;
+		const emptyName = empty?.Name;
+		const emptyText = empty?.Text;
+		ctx.save.invenEtc[2] = 1;
+		tabN(0).Activated.Fire();
+		flush();
+		tabN(4).Activated.Fire();
+		flush();
+		const onKit = GuiService.SelectedObject;
+		input.beginFrame();
+		tap(pad("ButtonL1"));
+		const lb = input.backpackPressed;
+		if (input.backpackPressed && pack.isOpen()) pack.close();
+		flush();
+		check(
+			"aba Build pelo controle: o direcional passa por ela (Materials > Build > Craft), o foco cai no kit (ou no Open Craft vazia) e LB fecha dali",
+			walks &&
+				emptyName === "Action" &&
+				emptyText === "Open Craft" &&
+				onKit?.GetAttribute("Key") === "4:2" &&
+				lb &&
+				!pack.isOpen(),
+			`walks ${walks}, vazia ${emptyName}:${emptyText}, com kit ${onKit?.GetAttribute("Key")}, LB ${lb}`,
+		);
+		ctx.save.invenEtc = etcBefore;
+		input.beginFrame();
+		flush();
+	}
 
 	const close = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
 	flush();
@@ -2431,7 +2483,8 @@ function textsIn(root, where) {
 		},
 		"PopupOverlay",
 	);
-	for (let t = 0; t < 6; t++) {
+	// the seven tabs of the Bag (ITM-09 put Build between Materials and Craft)
+	for (let t = 0; t < 7; t++) {
 		visit(
 			`Bag aba ${t}`,
 			() => {

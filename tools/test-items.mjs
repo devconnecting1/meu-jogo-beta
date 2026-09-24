@@ -25,6 +25,10 @@
  *   D. CRAFTING    every recipe, through the client's craft (the path MP_PHASE 2 ships) AND the server's: the
  *                  station holds, the ingredients go exactly, MAKES ×N comes out, nothing without ingredients or
  *                  station, no double craft from a double click; every placeable is placed by the server world.
+ *                  (ITM-09) Every construction kit IN the backpack is on the Bag's Build tab with Place, goes onto
+ *                  the cursor through the client and the server's Place verb, and is spent only where it stands; and
+ *                  every row the save can hold -- weapon, gear, usable, material, kit, round, Oil -- is on exactly
+ *                  one tab with an action that makes sense (D9, D10; G12 on the real server).
  *   E. SKILLS      every skill: one point per level, never past its maximum, points = level − 1 − spent; and the
  *                  effect each one promises is measured where the game applies it.
  *   F. LOOT        every building type's table (EDI-03) and every roll lands in the backpack.
@@ -3037,7 +3041,7 @@ section(
 			return true;
 		});
 		checkRows(
-			"with them: every ingredient goes exactly, and MAKES ×N comes out (a build goes on the cursor)",
+			"with them: every ingredient goes exactly, and MAKES ×N comes out (a build: the kit is owned, and on the cursor)",
 			CRAFT_RECIPES,
 			r => {
 				const save = stocked(r);
@@ -3046,12 +3050,10 @@ section(
 				if (!CCraft.craft(refs, r.id)) return `refused: ${CCraft.craftBlocker(refs, r)}`;
 				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
 					return `left over ${ingredientsLeft(save, r)}`;
-				if (r.craftKind === 1)
-					return (
-						(refs.pendingPlace === r.resultIndex && refs.pendingRecipe === r.id) ||
-						`cursor ${refs.pendingPlace}`
-					);
 				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				// ITM-09: a construction is a kit the survivor owns (the Build tab), held on the cursor as one
+				if (r.craftKind === 1 && (refs.pendingPlace !== r.resultIndex || refs.pendingKit !== true))
+					return `cursor ${refs.pendingPlace} kit ${refs.pendingKit}`;
 				return got === r.resultCount || `made ${got}, MAKES ×${r.resultCount}`;
 			},
 		);
@@ -3062,11 +3064,7 @@ section(
 			const first = CCraft.craft(refs, r.id);
 			const second = CCraft.craft(refs, r.id);
 			if (!first || second) return `first ${first}, second ${second}`;
-			return (
-				r.craftKind === 1 ||
-				INV.countItem(save, r.resultKind, r.resultIndex) - had === r.resultCount ||
-				"made twice"
-			);
+			return INV.countItem(save, r.resultKind, r.resultIndex) - had === r.resultCount || "made twice";
 		});
 		checkRows(
 			"a desk recipe also works at a pro desk, and smelting at the electric furnace",
@@ -3138,7 +3136,7 @@ section(
 			);
 		});
 		checkRows(
-			"with them: exact ingredients out, MAKES ×N in (a build is held for the cursor)",
+			"with them: exact ingredients out, MAKES ×N in (a build: the kit is owned, and held for the cursor)",
 			CRAFT_RECIPES,
 			r => {
 				const save = stocked(r);
@@ -3147,9 +3145,12 @@ section(
 				const out = c.craft(0, p, save, r.id);
 				if (ingredientsLeft(save, r) !== r.ingredients.map(() => 0).join(","))
 					return `left over ${ingredientsLeft(save, r)}`;
-				if (r.craftKind === 1)
-					return (out.kind === "holding" && out.placeable === r.resultIndex) || JSON.stringify(out);
 				const got = INV.countItem(save, r.resultKind, r.resultIndex) - had;
+				if (r.craftKind === 1)
+					return (
+						(out.kind === "holding" && out.placeable === r.resultIndex && got === r.resultCount) ||
+						`${JSON.stringify(out)}, kit ${got}`
+					);
 				return (
 					(out.kind === "crafted" && got === r.resultCount && out.count === r.resultCount) ||
 					`${JSON.stringify(out)}, made ${got}`
@@ -3266,7 +3267,7 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 	const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
 	const PRESS_E = P.packEdges(0, 0, 1, 0);
 	checkRows(
-		"craft → cursor → the attack places it, with the placeable's tag, owner and hp; E cancels and refunds",
+		"craft → the kit owned and on the cursor → the attack places it (tag, owner, hp) and spends it; E keeps the kit, no refund (ITM-09)",
 		CRAFT_RECIPES.filter(r => r.craftKind === 1),
 		r => {
 			const world = W.serverWorld(W.createWorld(8000, 8000));
@@ -3297,8 +3298,10 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 					P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, 0, 0, edges)] }),
 					0,
 				);
+			const kits = () => INV.countItem(save, ItemKind.Etc, r.resultIndex);
 			const held = sim.craft.craft(0, sp.state, save, r.id);
 			if (held.kind !== "holding") return `craft: ${JSON.stringify(held)}`;
+			if (kits() !== 1) return `the craft left ${kits()} kits in the backpack`;
 			const solids = world.solids.length;
 			send(PRESS_ATTACK);
 			sim.step();
@@ -3307,15 +3310,17 @@ section("D5. every build recipe, placed through the SERVER world (server/sim/bui
 			const def = PLACEABLES[r.resultIndex];
 			if (built.tags !== def.tag || built.hp !== def.hp || built.owner !== 0)
 				return `placed ${built.tags} hp ${built.hp} owner ${built.owner}`;
-			// the second one: on the cursor, then cancelled -- the ingredients come back
+			if (kits() !== 0) return "placing did not spend the kit";
+			// the second one: on the cursor, then cancelled -- the kit stays in the Build tab, the ingredients stay spent
 			sim.craft.step(1);
 			sim.craft.craft(0, sp.state, save, r.id);
 			const spent = ingredientsLeft(save, r);
 			send(PRESS_E);
 			sim.step();
 			if (sim.build.placing(0)) return "E did not cancel";
-			const back = ingredientsLeft(save, r);
-			return back === r.ingredients.map(i => i.count).join(",") || `after the cancel: ${spent} -> ${back}`;
+			const after = ingredientsLeft(save, r);
+			if (after !== spent) return `the cancel refunded ingredients: ${spent} -> ${after}`;
+			return kits() === 1 || `after the cancel: ${kits()} kits`;
 		},
 	);
 	{
@@ -3668,6 +3673,436 @@ section(
 );
 
 // ================================================================ E. skills
+
+section(
+	"D9. every construction kit IN the backpack: the Build tab, Place, the cursor, placed and spent (ITM-09; was a hole: ETC 0-22 never shown, nothing placed them)",
+	() => {
+		const PLC = require(join(SRC, "shared/sim/placement.ts"));
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+		const KITS = PLC.PLACEABLE_IDS.map(id => ({ id, name: ETC_ITEMS[id].name }));
+		const BUILD_TAB = 4;
+		const MATERIALS_TAB = 3;
+		const PRESS_ATTACK = P.packEdges(1, 0, 0, 0);
+		const PRESS_E = P.packEdges(0, 0, 1, 0);
+		check(
+			KITS.length === Object.keys(PLACEABLES).length && KITS.every(k => ETC_ITEMS[k.id] !== undefined),
+			`the kits are every PLACEABLES key, each a row of ETC_ITEMS (${KITS.length}: 0-22 and the night desks 39, 40)`,
+		);
+		/** a survivor holding one of kit `id` and nothing else of it */
+		const holding = id => {
+			const save = bareSave();
+			INV.addItem(save, ItemKind.Etc, id, 1);
+			return save;
+		};
+		checkRows("the Bag's Build tab lists it (never Materials), with its icon, x1 and an enabled Place", KITS, k => {
+			const bag = bagFor(holding(k.id));
+			const placed = [];
+			bag.onPlace = id => placed.push(id);
+			bag.placeCheck = () => undefined;
+			const key = `4:${k.id}`;
+			const tile = bag.models(BUILD_TAB).find(m => m.key === key);
+			if (tile === undefined) return "not in Build";
+			if (bag.models(MATERIALS_TAB).some(m => m.key === key)) return "also in Materials";
+			if (tile.icon !== iconOf(ItemKind.Etc, k.id).key || tile.count !== "×1")
+				return `tile ${tile.icon} ${tile.count}`;
+			const d = bag.itemDetail(ItemKind.Etc, k.id);
+			if (d?.act === undefined || d.act.text !== "Place" || !d.act.enabled)
+				return `action ${d?.act?.text} ${d?.act?.enabled}`;
+			d.act.run();
+			return placed.join(",") === String(k.id) || `onPlace got ${placed.join(",")}`;
+		});
+		checkRows("its card says what it is and what it does, every word in lang.ts (UI-03)", KITS, k => {
+			const card = Info.describeItem(holding(k.id), ItemKind.Etc, k.id);
+			if (card === undefined) return "no card";
+			if (card.type !== "Buildable" && card.type !== "Vehicle") return `type ${card.type}`;
+			if (card.notes === "" || !inLang(card.notes)) return `notes "${card.notes}"`;
+			// (the number in the card's grouping: 1,700 for a steel barricade)
+			const hp = card.stats.find(s => s.label === "Health")?.value.replace(/[^0-9]/g, "");
+			if (hp !== String(PLACEABLES[k.id].hp)) return `Health ${hp}`;
+			return card.hints.some(h => h.text === "Place") || "no Place key";
+		});
+		checkRows(
+			"the client's Place (offline: its own cursor; online: the verb's prediction) puts it on the cursor and spends nothing",
+			KITS,
+			k => {
+				const save = holding(k.id);
+				const player = Ply.createPlayer(save, 1000, 1000);
+				const refs = {
+					save,
+					player,
+					pendingPlace: -1,
+					fx: [],
+					world: W.createWorld(2000, 2000),
+					players: [player],
+				};
+				if (CCraft.placeBlocker(refs, k.id) !== undefined) return `blocked: ${CCraft.placeBlocker(refs, k.id)}`;
+				if (!CCraft.placeKit(refs, k.id)) return "placeKit refused";
+				if (refs.pendingPlace !== k.id || refs.pendingKit !== true) return `cursor ${refs.pendingPlace}`;
+				if (INV.countItem(save, ItemKind.Etc, k.id) !== 1) return "spent on the cursor";
+				if (CCraft.placeBlocker(refs, k.id) !== "Finish the current build first")
+					return "a second one not blocked";
+				const cursor = { pendingPlace: -1, player };
+				if (!BP.predictVerb(save, cursor, P.IntentKind.Place, k.id, player)) return "prediction refused";
+				return (
+					(cursor.pendingPlace === k.id && cursor.pendingKit === true) || `predicted ${cursor.pendingPlace}`
+				);
+			},
+		);
+		checkRows(
+			"the SERVER: the Place verb holds it, the attack places it (its tag and hp) and spends it; E before that gives nothing back and loses nothing",
+			KITS,
+			k => {
+				const world = W.serverWorld(W.createWorld(8000, 8000));
+				const sim = new ServerSimulation({
+					world,
+					clock: new WorldClock({ day: 1, dayTime: 12 }),
+					zombies: false,
+					interactive: true,
+				});
+				const save = holding(k.id);
+				const sp = PL.createServerPlayer(
+					{ slot: 0, userId: 900, name: "p0" },
+					save,
+					3000,
+					3000,
+					sim.tick,
+					sim.simHz,
+				);
+				sim.add(sp);
+				sp.state.x = 3000;
+				sp.state.y = 3000;
+				let seq = 0;
+				let nonce = 0;
+				const tick = edges => {
+					PL.ingestInput(
+						sp,
+						P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(++seq, 0, 0, 0, 0, edges)] }),
+						seq / CFG.SIM_HZ,
+					);
+					sim.step();
+				};
+				const place = () => {
+					sim.queueIntent(0, P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Place, 0, k.id, ++nonce)));
+					for (let i = 0; i < CFG.SIM_HZ / 2; i++) tick(0);
+				};
+				place();
+				if (sim.build.pendingOf(0) !== k.id) return "the verb did not hold it";
+				tick(PRESS_E);
+				if (sim.build.placing(0) || INV.countItem(save, ItemKind.Etc, k.id) !== 1)
+					return `after E: cursor ${sim.build.pendingOf(0)}, count ${INV.countItem(save, ItemKind.Etc, k.id)}`;
+				place();
+				const solids = world.solids.length;
+				tick(PRESS_ATTACK);
+				if (world.solids.length !== solids + 1) return "the attack placed nothing";
+				const built = world.solids[world.solids.length - 1];
+				const def = PLACEABLES[k.id];
+				if (built.placeable !== k.id || built.tags !== def.tag || built.hp !== def.hp || built.owner !== 0)
+					return `placed ${built.placeable} ${built.tags} hp ${built.hp}`;
+				return INV.countItem(save, ItemKind.Etc, k.id) === 0 || "not spent";
+			},
+		);
+		checkRows(
+			"offline, this client's own build mode (client/systems/build.ts): E keeps it, the attack builds it and spends it",
+			KITS,
+			k => {
+				const { BuildSystem } = require(join(SRC, "client/systems/build.ts"));
+				const save = holding(k.id);
+				const world = W.createWorld(8000, 8000);
+				const player = Ply.createPlayer(save, 3000, 3000);
+				player.angle = 0;
+				const refs = { save, player, world, players: [player], zombies: [], pendingPlace: -1, fx: [] };
+				const build = new BuildSystem();
+				const press = what => {
+					const input = new InputState();
+					input[what] = true;
+					build.update(refs);
+					build.handleInput(refs, input);
+				};
+				if (!CCraft.placeKit(refs, k.id)) return "placeKit refused";
+				press("actionPressed");
+				if (refs.pendingPlace !== -1 || INV.countItem(save, ItemKind.Etc, k.id) !== 1)
+					return `after E: cursor ${refs.pendingPlace}, count ${INV.countItem(save, ItemKind.Etc, k.id)}`;
+				// and never the ingredients of the recipe that makes it
+				const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === k.id);
+				if (recipe?.ingredients.some(i => INV.countItem(save, i.kind, i.index) > 0)) return "refunded a recipe";
+				CCraft.placeKit(refs, k.id);
+				const solids = world.solids.length;
+				press("attackPressed");
+				if (world.solids.length !== solids + 1) return "nothing built";
+				return (
+					(INV.countItem(save, ItemKind.Etc, k.id) === 0 && refs.pendingPlace === -1) ||
+					`count ${INV.countItem(save, ItemKind.Etc, k.id)}, cursor ${refs.pendingPlace}`
+				);
+			},
+		);
+		checkRows(
+			"on the ground: walked up like a material (ITM-07), its own icon, and the prompt names it",
+			KITS,
+			k => {
+				if (!RULE.walkPickup(ItemKind.Etc, k.id) || RULE.groundTier(ItemKind.Etc, k.id) !== "supply")
+					return "not a walked-up supply";
+				if (iconOf(ItemKind.Etc, k.id).key === "cat_item") return "the generic icon";
+				const world = W.createWorld(4000, 4000);
+				const save = bareSave();
+				const player = Ply.createPlayer(save, 1000, 1000);
+				const refs = { world, players: [player], player, save, zombies: [], pendingPlace: -1, fx: [] };
+				W.spawnGroundItem(world, ItemKind.Etc, k.id, 1, 1030, 1000);
+				const hint = CInter.interactHint(refs);
+				return hint === `E: Pick up ${k.name}` || hint;
+			},
+		);
+		{
+			// on a vehicle (the security review of 0a7561e, 1): the Bag greys a construction's craft with the game's reason
+			// and the prediction refuses it -- the server's rule (server/sim/craft.ts `blocker`), as for Place
+			const recipe = CRAFT_RECIPES.find(
+				r => r.craftKind === 1 && r.resultIndex === 14 && !r.needsDesk && !r.needsPro,
+			);
+			const save = bareSave();
+			for (const ing of recipe.ingredients) INV.addItem(save, ing.kind, ing.index, ing.count);
+			const player = Ply.createPlayer(save, 1000, 1000);
+			const refs = {
+				save,
+				player,
+				world: W.createWorld(4000, 4000),
+				players: [player],
+				zombies: [],
+				pendingPlace: -1,
+				fx: [],
+			};
+			player.ride = { kind: 1 };
+			const why = CCraft.craftBlocker(refs, recipe);
+			const cursor = { pendingPlace: -1, player };
+			const predicted = BP.predictVerb(save, cursor, P.IntentKind.Craft, recipe.id, player);
+			player.ride = undefined;
+			const onFoot = CCraft.craftBlocker(refs, recipe);
+			check(
+				why === "Get off the vehicle first" &&
+					inLang(why) &&
+					!predicted &&
+					cursor.pendingPlace === -1 &&
+					INV.countItem(save, ItemKind.Etc, 14) === 0 &&
+					onFoot === undefined,
+				'riding, a construction\'s craft is greyed "Get off the vehicle first" and not predicted; on foot it goes (the campfire)',
+				`riding: ${why}, predicted ${predicted}; on foot: ${onFoot}`,
+			);
+		}
+		{
+			// where a kit comes from besides the craft: only the BASIC ones, a small chance in the containers that would
+			// have had them, ON TOP of their loot; the rest (turrets, drones, generators, reactor, vehicles, desks...) is
+			// the craft's progression
+			const tables = [
+				...BUILDING_SPAWNS.map((rows, i) => [`BUILDING_SPAWNS[${i}]`, rows]),
+				...Object.entries(SPAWNS.TOWN_SPAWNS).map(([k, rows]) => [`TOWN_SPAWNS[${k}]`, rows]),
+				...Object.entries(SPAWNS.YARD_LOOT).map(([k, rows]) => [`YARD_LOOT.${k}`, rows]),
+				["VAULT_LOOT", SPAWNS.VAULT_LOOT],
+				["PUMP_LOOT", SPAWNS.PUMP_LOOT],
+				...Object.entries(SPAWNS.MAP_ITEM_LOOT).map(([k, rows]) => [`MAP_ITEM_LOOT.${k}`, rows]),
+				...Object.entries(SPAWNS.BOSS_TROPHIES).map(([k, rows]) => [`BOSS_TROPHIES[${k}]`, rows]),
+			];
+			const kitTables = [
+				...Object.entries(SPAWNS.BUILDING_KITS ?? {}).map(([k, rows]) => [`BUILDING_KITS[${k}]`, rows]),
+				...Object.entries(SPAWNS.YARD_KITS ?? {}).map(([k, rows]) => [`YARD_KITS.${k}`, rows]),
+			];
+			const kitLines = list => {
+				const out = [];
+				for (const [where, rows] of list) {
+					for (const e of rows) {
+						if (e.kind === ItemKind.Etc && PLACEABLES[e.index] !== undefined) out.push({ where, e });
+					}
+				}
+				return out;
+			};
+			const diluting = kitLines(tables);
+			const lines = kitLines(kitTables);
+			const BASIC = SPAWNS.BASIC_KITS;
+			const at = (where, id, p) => lines.some(l => l.where === where && l.e.index === id && l.e.max === p);
+			const names = BASIC.map(id => ETC_ITEMS[id].name).join(", ");
+			check(
+				names === "Wooden barricade, Wooden door, Campfire, Lamp, Trap",
+				`the basic kits are the five of the decision: ${names}`,
+			);
+			check(
+				diluting.length === 0,
+				"no container's own table holds a kit: a kit never takes a slot's place, so no loot is diluted (the security review of 0a7561e, 2)",
+				diluting.map(l => `${l.where}: ${ETC_ITEMS[l.e.index].name}`).join("; "),
+			);
+			check(
+				lines.length > 0 &&
+					kitTables.every(([, rows]) =>
+						rows.every(e => e.kind === ItemKind.Etc && PLACEABLES[e.index] !== undefined),
+					),
+				"the kit tables hold kits only",
+			);
+			check(
+				lines.every(l => BASIC.includes(l.e.index)),
+				"no kit table holds a kit that is not basic: turrets, drones, generators, reactor, vehicles and desks are only crafted",
+				lines
+					.filter(l => !BASIC.includes(l.e.index))
+					.map(l => `${l.where}: ${ETC_ITEMS[l.e.index].name}`)
+					.join("; "),
+			);
+			check(
+				lines.every(l => l.e.min === l.e.max && l.e.max < 1),
+				"every kit line is a small chance of exactly one (bounded: never a stack)",
+				lines.map(l => `${l.where} ${ETC_ITEMS[l.e.index].name} ${l.e.min}-${l.e.max}`).join("; "),
+			);
+			check(
+				at("BUILDING_KITS[16]", 10, 0.25) &&
+					at("BUILDING_KITS[16]", 11, 0.25) &&
+					at("BUILDING_KITS[16]", 17, 0.2) &&
+					at("BUILDING_KITS[25]", 10, 0.25) &&
+					at("YARD_KITS.pile0", 10, 0.3) &&
+					at("YARD_KITS.shed", 14, 0.04) &&
+					at("YARD_KITS.shed", 4, 0.02) &&
+					lines.length === 7,
+				"where they are, at the odds DESIGN_RULES ITM-09 writes: the hardware store (barricade 25 %, door 25 %, trap 20 %), the police station's lockers (barricade 25 %), the construction site's lumber (barricade 30 %), the garden sheds (campfire 4 %, lamp 2 %)",
+				lines.map(l => `${l.where}: ${ETC_ITEMS[l.e.index].name} ${l.e.max}`).join("; "),
+			);
+			// the written chance IS the odds, and the container's own loot is what it was: the shared roll (shared/sim/
+			// loot.ts, both sides') over many fills, as a town's respawns roll it
+			const { rollBuildingLoot, rollYardLoot } = require(join(SRC, "shared/sim/loot.ts"));
+			const N = 4000;
+			const freq = (roll, rows) => {
+				const got = new Map(rows.map(e => [e.index, 0]));
+				let rest = 0;
+				setSeed(20260924);
+				for (let i = 0; i < N; i++) {
+					for (const d of roll()) {
+						if (d.kind === ItemKind.Etc && got.has(d.id)) got.set(d.id, got.get(d.id) + 1);
+						else rest += 1;
+					}
+				}
+				return { odds: rows.map(e => [e, got.get(e.index) / N]), rest: rest / N };
+			};
+			const within = ({ odds }) => odds.every(([e, f]) => Math.abs(f - e.max) < 0.03);
+			const show = ({ odds, rest }) =>
+				`${odds.map(([e, f]) => `${ETC_ITEMS[e.index].name} ${(f * 100).toFixed(1)} %`).join(", ")}; other drops ${rest.toFixed(2)} a fill`;
+			const hw = freq(() => rollBuildingLoot(BuildingType.Hardware, 3), SPAWNS.BUILDING_KITS[16]);
+			// the slots alone: what a hardware store's 3 slots give by its own table (a chance line 0 or 1, a range 1)
+			const own = SPAWNS.TOWN_SPAWNS[16];
+			const perSlot = own.reduce((n, e) => n + (e.max < 1 ? e.max : 1), 0) / own.length;
+			check(
+				within(hw) && Math.abs(hw.rest - perSlot * 3) < 0.1,
+				`a hardware store over ${N} fills: each kit at its written odds (±3 pp), and its own loot what its 3 slots give (${(perSlot * 3).toFixed(2)} drops a fill)`,
+				show(hw),
+			);
+			const police = freq(() => rollBuildingLoot(25, 2), SPAWNS.BUILDING_KITS[25]);
+			check(within(police), `the police station over ${N} fills: the barricade at 25 %`, show(police));
+			const lumber = { kind: "prop", tags: "pile", variant: 0, lootSlots: 1, x: 0, y: 0, w: 64, h: 64 };
+			let woodEvery = true;
+			setSeed(7);
+			for (let i = 0; i < N && woodEvery; i++) {
+				const wood = rollYardLoot(lumber).find(d => d.kind === ItemKind.Etc && d.id === 23);
+				woodEvery = wood !== undefined && wood.count >= 2 && wood.count <= 4;
+			}
+			const pile = freq(() => rollYardLoot(lumber), SPAWNS.YARD_KITS.pile0);
+			check(
+				woodEvery && within(pile),
+				`the construction site's lumber ALWAYS gives its 2-4 wood (${N} fills), and a barricade on top at 30 %`,
+				show(pile),
+			);
+			const shed = { kind: "prop", tags: "shed", lootSlots: 1, x: 0, y: 0, w: 64, h: 64 };
+			const sheds = freq(() => rollYardLoot(shed), SPAWNS.YARD_KITS.shed);
+			check(within(sheds), `a garden shed over ${N} fills: the campfire at 4 %, the lamp at 2 %`, show(sheds));
+			// and one found is one owned: in the backpack it is on the Build tab with Place (the rows above)
+			let found;
+			for (let seed = 1; seed < 400 && found === undefined; seed++) {
+				setSeed(seed);
+				found = rollBuildingLoot(BuildingType.Hardware, 3).find(
+					d => d.kind === ItemKind.Etc && BASIC.includes(d.id),
+				);
+			}
+			const save = bareSave();
+			if (found !== undefined) INV.addItem(save, found.kind, found.id, found.count);
+			check(
+				found !== undefined &&
+					found.count === 1 &&
+					bagFor(save)
+						.models(4)
+						.some(m => m.key === `4:${found.id}`),
+				"a hardware store search turns up a basic kit now and then (one), and it is on the Build tab",
+				found === undefined ? "none in 400 searches" : ETC_ITEMS[found.id].name,
+			);
+		}
+		{
+			// build mode says how to get out of it -- the pill's "E:" is also the touch USE button (hud.ts)
+			const save = holding(10);
+			const player = Ply.createPlayer(save, 1000, 1000);
+			const refs = { world: W.createWorld(4000, 4000), players: [player], player, save, zombies: [], fx: [] };
+			refs.pendingPlace = 10;
+			check(
+				CInter.interactHint(refs) === "E: Cancel build" && inLang("Cancel build"),
+				'build mode\'s pill is "E: Cancel build" (touch gets its USE button to leave build mode)',
+				CInter.interactHint(refs),
+			);
+		}
+	},
+);
+
+section(
+	"D10. every row the save can hold is on a tab of the Bag with an action that makes sense (ITM-09 audit; was: kits, the night desks and every round and the Oil hidden or dead)",
+	() => {
+		const PLC = require(join(SRC, "shared/sim/placement.ts"));
+		const ITEM_TABS = [0, 1, 2, 3, 4];
+		const TAB_OF = { [ItemKind.Weapon]: 0, [ItemKind.Equip]: 1, [ItemKind.Use]: 2 };
+		const OIL = 48;
+		const rows = [
+			...WEAPONS.map(w => ({ id: w.id, kind: ItemKind.Weapon, name: w.name })),
+			...EQUIPS.map(e => ({ id: e.id, kind: ItemKind.Equip, name: e.name })),
+			...USABLES.map(u => ({ id: u.id, kind: ItemKind.Use, name: u.name })),
+			...ETC_ITEMS.map(e => ({ id: e.id, kind: ItemKind.Etc, name: e.name })),
+		];
+		/** the action each kind of row offers (the Bag's own verbs; UI-11) */
+		const wanted = r => {
+			if (r.kind === ItemKind.Weapon) return ["Equip", "Put away"];
+			if (r.kind === ItemKind.Equip) return ["Equip", "Unequip"];
+			if (r.kind === ItemKind.Use) return ["Eat", "Use"];
+			if (PLC.isPlaceable(r.id)) return ["Place"];
+			return ["Open Craft"];
+		};
+		checkRows("on exactly one item tab (the one of its kind), with its count and an enabled action", rows, r => {
+			const save = bareSave();
+			INV.addItem(save, r.kind, r.id, 3);
+			const bag = bagFor(save);
+			// what main.client wires: the weapon's Equip / Put away, the gear's Unequip, the kit's Place
+			bag.onEquipWeapon = () => {};
+			bag.onUnequipItem = () => {};
+			bag.onPlace = () => {};
+			bag.placeCheck = () => undefined;
+			const key = `${r.kind}:${r.id}`;
+			const tabs = ITEM_TABS.filter(t => bag.models(t).some(m => m.key === key));
+			const want = r.kind === ItemKind.Etc ? (PLC.isPlaceable(r.id) ? 4 : 3) : TAB_OF[r.kind];
+			if (tabs.length !== 1 || tabs[0] !== want) return `on tabs [${tabs}], want ${want}`;
+			const tile = bag.models(want).find(m => m.key === key);
+			if (tile.count !== "×3" && !(r.kind === ItemKind.Weapon || r.kind === ItemKind.Equip))
+				return `count ${tile.count}`;
+			const d = bag.itemDetail(r.kind, r.id);
+			if (d === undefined) return "no panel";
+			// the one row with no button: the Oil -- no recipe makes or takes it; its card says what burns it
+			if (r.kind === ItemKind.Etc && r.id === OIL) {
+				return (d.act === undefined && d.card.notes.startsWith("Burned by")) || `Oil: ${d.act?.text}`;
+			}
+			if (d.act === undefined) return "no action";
+			return (wanted(r).includes(d.act.text) && d.act.enabled) || `"${d.act.text}" enabled ${d.act.enabled}`;
+		});
+		check(
+			"the rounds and the Oil are counted where the save keeps them (the ammo fields), not in invenEtc",
+			(() => {
+				const save = bareSave();
+				save.ammoNormal = 41;
+				save.oil = 7;
+				const tiles = bagFor(save).models(3);
+				return (
+					tiles.find(m => m.key === "4:44")?.count === "×41" &&
+					tiles.find(m => m.key === "4:48")?.count === "×7" &&
+					save.invenEtc[44] === 0
+				);
+			})(),
+		);
+	},
+);
 
 section("E1. learning: a point a level, never past the maximum, on the server and in the Bag", () => {
 	checkRows(
@@ -4334,7 +4769,8 @@ section("F3. rolled loot comes from the table, in its ranges, and lands in the b
 				lootItems: [],
 				lootTimer: 0,
 			});
-			const table = rowsOf(t.id);
+			// its table, and the basic construction kits it holds on top of it (ITM-09, spawns.ts BUILDING_KITS)
+			const table = [...rowsOf(t.id), ...(SPAWNS.BUILDING_KITS?.[t.id] ?? [])];
 			let got = 0;
 			for (let i = 0; i < 500; i++) {
 				items.rollLoot(b);
@@ -6043,7 +6479,13 @@ section(
 			// R1 (security review): a construction held through a death and a New game
 			const pl = s.join(newUser(), "carrier");
 			const save = s.save(pl);
-			const cnt = () => recipe.ingredients.map(i => INV2.countItem(save, i.kind, i.index)).join(",");
+			// ITM-09: what the craft made is a kit the survivor owns -- the backpack holds it the whole time
+			const of = sv =>
+				[
+					...recipe.ingredients.map(i => INV2.countItem(sv, i.kind, i.index)),
+					INV2.countItem(sv, ItemKind.Etc, recipe.resultIndex),
+				].join(",");
+			const cnt = () => of(save);
 			for (const ing of recipe.ingredients) INV2.addItem(save, ing.kind, ing.index, ing.count);
 			s.immortal.add(pl);
 			const sp = s.enter(pl);
@@ -6052,24 +6494,26 @@ section(
 			s.run(0.2);
 			const held = s.sim.build.pendingOf(sp.slot) === recipe.resultIndex;
 			const spent = cnt();
+			const kitOwned = INV2.countItem(save, ItemKind.Etc, recipe.resultIndex) === 1;
 			s.immortal.delete(pl);
 			s.kill(pl);
 			check(
-				held && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === paid,
-				"[R1] a death with a construction on the cursor refunds it into the DYING run (the body keeps its backpack through a Rebirth)",
-				`held ${held}; ingredients ${paid} -> ${spent} -> ${cnt()}`,
+				held && kitOwned && spent !== paid && s.sim.build.pendingOf(sp.slot) === -1 && cnt() === spent,
+				"[R1] a death with a construction on the cursor takes it off; the kit stays in the DYING run's backpack (the body keeps it through a Rebirth), nothing refunded",
+				`held ${held}; ingredients + kit ${paid} -> ${spent} -> ${cnt()}`,
 			);
 			s.run(0.6);
 			const fresh = s.shop(pl, { kind: "newRun", runRev: save.runRev });
 			const newLife = cnt();
-			s.exit(pl); // Home: sim.remove -> build.remove(slot, save), which used to refund into the NEW life
+			s.exit(pl); // Home: sim.remove -> build.remove(slot), which used to refund into the NEW life
 			s.run(1);
 			s.quit(pl);
 			const stored = s.stored(pl.UserId);
-			const persisted = recipe.ingredients.map(i => INV2.countItem(stored, i.kind, i.index)).join(",");
+			const persisted = of(stored);
+			const none = recipe.ingredients.map(() => 0).join(",") + ",0";
 			check(
-				fresh.ok === true && cnt() === newLife && persisted === newLife,
-				"[R1] ...and New game + Home refund nothing into the new life (nor into the DataStore)",
+				fresh.ok === true && newLife === none && cnt() === newLife && persisted === newLife,
+				"[R1] ...and New game + Home: the kit went with the old run, nothing lands in the new life (nor in the DataStore)",
 				`new life ${newLife}, after Home ${cnt()}, stored ${persisted}`,
 			);
 		}
@@ -7431,6 +7875,272 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 		);
 	}
 });
+
+section(
+	"G12. ITM-09 on the real server: the Build tab's Place verb, the kit spent where it stands, the bag and the DataStore",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const PLC2 = require(join(SRC, "shared/sim/placement.ts"));
+		const TURRET = 2;
+		let seq = 0;
+		let nonce = 0;
+		const press = (pl, edges) => {
+			seq += 1;
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P2.makeCommand(seq - k, 0, 0, 0, 0, edges));
+			s.remote("Input").OnServerEvent.Fire(pl, P2.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+		};
+		const untilConsumed = sp => {
+			for (let i = 0; i < 90 && sp.ackSeq < seq; i++) s.beat();
+			return sp.ackSeq >= seq;
+		};
+		/** the Bag's Place: the verb for the NEXT command, with a fresh nonce (client/net/backpackSync.ts) */
+		const placeVerb = (pl, id) => {
+			nonce += 1;
+			s.verb(pl, IK.Place, id, seq + 1, nonce);
+			return nonce;
+		};
+		const pl = s.join(newUser(), "turret owner");
+		s.immortal.add(pl);
+		const save = s.save(pl);
+		INV2.addItem(save, ItemKind.Etc, TURRET, 1);
+		const sp = s.enter(pl);
+		// an open patch of street, as G4 finds one: the server's rule is what is measured, not a car in the way
+		const world = s.sim.world;
+		const def = PLC2.PLACEABLES[TURRET];
+		const clear = (x, y) =>
+			x > 400 &&
+			y > 400 &&
+			x < world.width - 400 &&
+			y < world.height - 400 &&
+			W2.querySolids(world, x - 260, y - 260, x + 260, y + 260, []).every(q => q.passable === true) &&
+			(s.sim.horde?.zombies ?? []).every(z => Math.hypot(z.x - x, z.y - y) > 500) &&
+			PLC2.placementValid(world, PLC2.ghostRect(def, x, y, 0, 0), [{ x, y }], []);
+		let spot;
+		for (let r = 1; r < 60 && spot === undefined; r++) {
+			for (let a = 0; a < 8 && spot === undefined; a++) {
+				const x = Math.round(sp.state.x + Math.cos((a * Math.PI) / 4) * r * 160);
+				const y = Math.round(sp.state.y + Math.sin((a * Math.PI) / 4) * r * 160);
+				if (clear(x, y)) spot = [x, y];
+			}
+		}
+		sp.state.x = spot[0];
+		sp.state.y = spot[1];
+		press(pl, 0);
+		untilConsumed(sp);
+		const n1 = placeVerb(pl, TURRET);
+		press(pl, 0);
+		untilConsumed(sp);
+		s.run(0.3);
+		const held = SAVE2.readBag(s.lastBag(pl));
+		check(
+			s.sim.build.pendingOf(sp.slot) === TURRET && held?.place === TURRET && held?.ack === n1,
+			"the Place verb puts the turret on the SERVER's cursor, and the bag says so (place, ack)",
+			`cursor ${s.sim.build.pendingOf(sp.slot)}, bag place ${held?.place} ack ${held?.ack}/${n1}`,
+		);
+		check(
+			INV2.countItem(save, ItemKind.Etc, TURRET) === 1 && held?.invenEtc[TURRET] === 1,
+			"...and the backpack still holds it: holding spends nothing",
+		);
+		press(pl, P2.packEdges(1, 0, 0, 0));
+		untilConsumed(sp);
+		s.run(0.3);
+		const built = world.solids.find(q => q.placeable === TURRET && q.owner === sp.slot);
+		const after = SAVE2.readBag(s.lastBag(pl));
+		check(
+			built !== undefined && s.sim.build.pendingOf(sp.slot) === -1,
+			"the click places it in the server's world and frees the cursor",
+		);
+		check(
+			INV2.countItem(save, ItemKind.Etc, TURRET) === 0 && after?.invenEtc[TURRET] === 0 && after?.place === -1,
+			"...and it left the server's backpack in that step: the bag pushed says 0, no cursor",
+			`save ${INV2.countItem(save, ItemKind.Etc, TURRET)}, bag ${after?.invenEtc[TURRET]}`,
+		);
+		// a forged second Place with none left: refused, answered, nothing held
+		const n2 = placeVerb(pl, TURRET);
+		press(pl, 0);
+		untilConsumed(sp);
+		s.run(0.3);
+		const refused = SAVE2.readBag(s.lastBag(pl));
+		check(
+			s.sim.build.pendingOf(sp.slot) === -1 && refused?.ack === n2 && refused?.place === -1,
+			"a Place with none left is refused and answered by its nonce (the client's prediction is undone)",
+			`cursor ${s.sim.build.pendingOf(sp.slot)}, ack ${refused?.ack}/${n2}`,
+		);
+		s.quit(pl);
+		s.run(1);
+		const stored = s.stored(pl.UserId);
+		check(
+			stored !== undefined && INV2.countItem(stored, ItemKind.Etc, TURRET) === 0,
+			"the DataStore has the kit spent (the save written with it gone)",
+			`stored ${stored === undefined ? "none" : INV2.countItem(stored, ItemKind.Etc, TURRET)}`,
+		);
+
+		// (the security review of 0a7561e, 6) a cursor the server has not answered yet may be one it REFUSED -- and there
+		// the click would be a shot. The client's build mode holds the click and E until the bag answers (client/systems/
+		// build.ts, client/net/authority.ts buildUnconfirmed): the real client modules against this real server
+		{
+			const AUTH = require(join(SRC, "client/net/authority.ts"));
+			const BP2 = require(join(SRC, "client/net/bagPrediction.ts"));
+			const { BuildSystem } = require(join(SRC, "client/systems/build.ts"));
+			const { InputState: Input2 } = require(join(SRC, "shared/engine/input.ts"));
+			const PISTOL = WEAPONS.find(w => w.name === "Pistol").id;
+			const p3 = s.join(newUser(), "stale cursor");
+			s.immortal.add(p3);
+			const server3 = s.save(p3);
+			server3.invenWeapon[PISTOL] = 1;
+			server3.equipWeapon = PISTOL;
+			server3.ammoNormal = 90;
+			const sp3 = s.enter(p3);
+			press(p3, 0);
+			untilConsumed(sp3);
+			s.run(2);
+			// the client's copy says it has a turret (a stale bag: the server's has none) -- the prediction puts it up
+			const mine = JSON.parse(JSON.stringify(server3));
+			INV2.addItem(mine, ItemKind.Etc, TURRET, 1);
+			const body = Ply.createPlayer(mine, sp3.state.x, sp3.state.y);
+			const refs = { save: mine, player: body, world, players: [body], zombies: [], pendingPlace: -1, fx: [] };
+			const entries = [];
+			const edges = [];
+			AUTH.setWorldAuthority({
+				owned: () => true,
+				send: () => false,
+				buildEdge: () => edges.push(seq + 1),
+				reserveSpent: () => {},
+				cursorPending: () => entries.some(BP2.holdsCursor),
+			});
+			const build = new BuildSystem();
+			/** one frame of the client: its build mode first, then the command that frame sends (netClient's edges) */
+			const frame = what => {
+				const input = new Input2();
+				if (what !== undefined) input[what] = true;
+				build.update(refs);
+				build.handleInput(refs, input);
+				press(p3, P2.packEdges(input.attackPressed ? 1 : 0, 0, input.actionPressed ? 1 : 0, 0));
+				untilConsumed(sp3);
+				return input;
+			};
+			const presses = () => {
+				const st = s.sim.combat.statsOf(sp3.slot);
+				return st.shots + st.blockedAmmo + st.blockedCadence;
+			};
+			check(BP2.predictVerb(mine, refs, IK.Place, TURRET, body), "(the stale prediction puts the turret up)");
+			const n3 = placeVerb(p3, TURRET);
+			entries.push({ kind: IK.Place, arg: TURRET, nonce: n3, seq: 0, at: 0 });
+			const before = presses();
+			const click = frame("attackPressed");
+			const e = frame("actionPressed");
+			check(
+				s.sim.build.pendingOf(sp3.slot) === -1 &&
+					presses() === before &&
+					!click.attackPressed &&
+					click.attackBlocked &&
+					!e.actionPressed &&
+					refs.pendingPlace === TURRET &&
+					edges.length === 0,
+				"the server refused that Place; the click on the cursor it never confirmed is no shot there (nor E a pickup): the client sent neither, and kept the cursor",
+				`server cursor ${s.sim.build.pendingOf(sp3.slot)}, presses ${presses() - before}, client cursor ${refs.pendingPlace}`,
+			);
+			s.run(0.3);
+			const bag3 = SAVE2.readBag(s.lastBag(p3));
+			BP2.rebase(mine, refs, bag3, entries, 0);
+			check(
+				bag3?.ack === n3 && entries.length === 0 && refs.pendingPlace === -1,
+				"the bag answers it (ack, no cursor): the prediction is undone and build mode ends",
+				`ack ${bag3?.ack}/${n3}, entries ${entries.length}, cursor ${refs.pendingPlace}`,
+			);
+			const shot = frame("attackPressed");
+			check(
+				shot.attackPressed && presses() === before + 1,
+				"...and only now the click is the gun's -- on this client and on the server alike",
+				`presses ${presses() - before}`,
+			);
+			// the server says yes: the click is held only until the bag says so, then it is the build's
+			INV2.addItem(server3, ItemKind.Etc, TURRET, 1);
+			INV2.addItem(mine, ItemKind.Etc, TURRET, 1);
+			s.run(0.5);
+			BP2.predictVerb(mine, refs, IK.Place, TURRET, body);
+			const n4 = placeVerb(p3, TURRET);
+			entries.push({ kind: IK.Place, arg: TURRET, nonce: n4, seq: 0, at: 0 });
+			const turns = s.sim.build.turnsOf(sp3.slot);
+			const early = frame("attackPressed");
+			check(
+				s.sim.build.pendingOf(sp3.slot) === TURRET &&
+					s.sim.build.turnsOf(sp3.slot) === turns &&
+					!early.attackPressed &&
+					refs.pendingPlace === TURRET,
+				"accepted: a click before the answer is held too (the server's cursor untouched), the ghost still up",
+			);
+			s.run(0.3);
+			BP2.rebase(mine, refs, SAVE2.readBag(s.lastBag(p3)), entries, 0);
+			const sure = frame("attackPressed");
+			check(
+				entries.length === 0 &&
+					sure.attackPressed &&
+					s.sim.build.turnsOf(sp3.slot) === turns + 1 &&
+					presses() === before + 1,
+				"...and once the bag confirms it, the next click reaches the server's cursor: a placement tried, no shot",
+				`turns ${s.sim.build.turnsOf(sp3.slot) - turns}, presses ${presses() - before}`,
+			);
+			AUTH.setWorldAuthority(undefined);
+		}
+
+		// (the security review of 0a7561e, 3) a construction crafted at the pro desk -- the turret eats a gun -- is a kit
+		// the backpack keeps: it is on the DataStore within an event save (SAV-01 "craft"), the survivor still in the
+		// world. A hand-made one (the campfire) waits for the autosave, like the stick
+		{
+			const recipe = CRAFT_RECIPES.find(r => r.craftKind === 1 && r.resultIndex === TURRET);
+			const hand = CRAFT_RECIPES.find(
+				r => r.craftKind === 1 && !r.needsDesk && !r.needsPro && r.resultIndex === 14,
+			);
+			const maker = s.join(newUser(), "turret maker");
+			const camper = s.join(newUser(), "campfire maker");
+			s.immortal.add(maker);
+			s.immortal.add(camper);
+			const mSave = s.save(maker);
+			const cSave = s.save(camper);
+			for (const ing of recipe.ingredients) INV2.addItem(mSave, ing.kind, ing.index, ing.count);
+			for (const ing of hand.ingredients) INV2.addItem(cSave, ing.kind, ing.index, ing.count);
+			const mp = s.enter(maker);
+			const cp = s.enter(camper);
+			W2.addSolid(world, {
+				...PLC2.placedSolid(PLC2.PLACEABLES[1], { x: mp.state.x + 40, y: mp.state.y - 40, w: 112, h: 80 }, 0),
+				placeable: 1,
+				owner: mp.slot,
+			});
+			const stored = (pl2, id) => {
+				const doc = s.stored(pl2.UserId);
+				return doc === undefined ? 0 : INV2.countItem(doc, ItemKind.Etc, id);
+			};
+			nonce += 1;
+			s.verb(maker, IK.Craft, recipe.id, seq + 1, nonce);
+			nonce += 1;
+			s.verb(camper, IK.Craft, hand.id, seq + 1, nonce);
+			press(maker, 0);
+			press(camper, 0);
+			for (let i = 0; i < 90 && (mp.ackSeq < seq - 1 || cp.ackSeq < seq); i++) s.beat();
+			check(
+				s.sim.build.pendingOf(mp.slot) === TURRET &&
+					INV2.countItem(mSave, ItemKind.Etc, TURRET) === 1 &&
+					s.sim.build.pendingOf(cp.slot) === 14 &&
+					INV2.countItem(cSave, ItemKind.Etc, 14) === 1,
+				"(both crafted: the turret at the pro desk, the campfire by hand -- each kit in the backpack and on the cursor)",
+				`turret cursor ${s.sim.build.pendingOf(mp.slot)}, campfire cursor ${s.sim.build.pendingOf(cp.slot)}`,
+			);
+			const t = s.runUntil(() => stored(maker, TURRET) === 1, 30);
+			check(
+				t >= 0 && stored(camper, 14) === 0,
+				"the turret kit is on the DataStore within an event save, the survivor still in the world; the campfire waits for the autosave",
+				`turret after ${t.toFixed(1)} s, campfire stored ${stored(camper, 14)}`,
+			);
+		}
+	},
+);
 
 // ---------------------------------------------------------------- verdict
 

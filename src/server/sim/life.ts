@@ -593,17 +593,14 @@ export class LifeKeeper {
 		rec.dead = true;
 		rec.declined = false;
 		rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
-		// A construction still on the cursor goes back into the backpack that paid for it -- the dying run's, which
+		// A construction still on the cursor comes off it here: the kit is in the dying run's backpack (ITM-09), which
 		// the body keeps through the death, the daybreak and a Rebirth (MP-21; nothing else in the backpack is lost to
-		// a death either). Refunding HERE is what makes it safe: the run that paid gets it back, and a New game then
-		// wipes it with the rest of that run instead of a later refund landing it in the new life (review R1).
-		const refunded = this.sim.build?.cancel(sp.slot, sp.save).kind === "cancelled";
+		// a death either), and a New game wipes it with the rest of that run -- it never lands in the new life (R1)
+		this.sim.build?.cancel(sp.slot);
 		if (serverOwnsLife()) {
 			// EVERY death of this life, whatever answers it (CON-04: Never die; `deathCount` only counts paid Rebirths)
 			countLifeDeath(sp.save);
 			writeRunBody(sp.save, sp.state);
-			this.onSaveChanged?.(sp.userId);
-		} else if (refunded) {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
@@ -657,7 +654,7 @@ export class LifeKeeper {
 		rec.declined = true;
 		if (sp !== undefined) {
 			sp.state.weapon.ammoCount = 0;
-			// the old run's construction is not the new life's (review R1): gone, not refunded
+			// the old run's construction is not the new life's (review R1): off the cursor, the kit wiped with that run
 			this.sim.build?.drop(sp.slot);
 		} else {
 			rec.body = undefined;
@@ -733,7 +730,7 @@ export class LifeKeeper {
 		if (sp === undefined) return false;
 		const sim = this.sim;
 		adoptSave(sp, save);
-		// the old run's construction is not the new save's (review R1): gone, not refunded
+		// the old run's construction is not the new save's (review R1): off the cursor, the kit wiped with that run
 		sim.build?.drop(sp.slot);
 		// the old body's magazine was the old save's rounds: they die with it
 		sp.state.weapon.ammoCount = 0;

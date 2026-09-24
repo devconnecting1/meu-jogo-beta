@@ -1209,7 +1209,7 @@
 			"kind": "atlas",
 			"w": 288,
 			"h": 244,
-			"description": "item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts)",
+			"description": "item icons: 99 icons, their dimmed copies and 12 glyphs (client/ui/itemIcon.ts)",
 			"cells": {
 				"dagger": [0, 0, 16, 16],
 				"axe": [18, 0, 16, 16],
@@ -1320,7 +1320,8 @@
 				"desk": [70, 234, 8, 8],
 				"pro": [80, 234, 8, 8],
 				"fire": [90, 234, 8, 8],
-				"check": [100, 234, 8, 8]
+				"check": [100, 234, 8, 8],
+				"build": [110, 234, 8, 8]
 			},
 			"dim": {
 				"dagger": [54, 108, 16, 16],

@@ -39,6 +39,8 @@ function categoryOf(e) {
 	if (e.index >= 44 && e.index <= 47) return "ammo";
 	if (e.index === 33) return "ammo";
 	if (e.index === 48) return "oil";
+	// the construction kits (ITM-09): ETC 0-22 and the two night desks
+	if (e.index <= 22 || e.index === 39 || e.index === 40) return "kits";
 	if ([23, 24, 25, 26, 27, 28, 34, 41].includes(e.index)) return "materials";
 	return "parts";
 }
@@ -116,6 +118,15 @@ function census(seed) {
 		if (rows === undefined || slots <= 0) continue;
 		const per = perSlot(rows);
 		for (const [c, n] of Object.entries(per)) bump(out.loot, c, n * slots);
+		// ITM-09: the basic kits ON TOP of the slots, each line its own chance once per fill (spawns.ts BUILDING_KITS /
+		// YARD_KITS, shared/sim/loot.ts `rollKits`)
+		const kits =
+			s.kind === "building"
+				? SP.BUILDING_KITS?.[s.buildingType ?? 0]
+				: s.tags === "pump"
+					? undefined
+					: SP.YARD_KITS?.[SP.yardLootKey !== undefined ? SP.yardLootKey(s.tags, s.variant) : s.tags];
+		for (const e of kits ?? []) bump(out.loot, categoryOf(e), e.max);
 	}
 	// the lot grid (column / row of every lot: Chebyshev "blocks" between two buildings)
 	const xs = [...new Set(w.lots.map(l => l.x))].sort((a, b) => a - b);
