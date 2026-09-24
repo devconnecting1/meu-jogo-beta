@@ -7,7 +7,7 @@ import { DESIGN } from "shared/engine/constants";
 import type { ZombieState } from "shared/game/entities";
 import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
-import { buildingAt, GroundItem, querySolids, Solid, WorldData } from "shared/game/world";
+import { buildingAt, GroundItem, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
 import { rectCircleOverlap } from "./placement";
 import { vehicleBroken } from "./vehicle";
 
@@ -84,6 +84,45 @@ export function isVehicle(s: Solid): boolean {
 	return s.tags === "vehicle";
 }
 
+/**
+ * A gas station's pump island (EDI-16): a container of oil, searched like a building (MP-05) -- rolled lazily by
+ * whoever comes near, shared, taken whole by the first E, back after ITEM_RESPAWN_HOURS.
+ */
+export function isPump(s: Solid): boolean {
+	return s.tags === "pump";
+}
+
+/** does this container (a building, a pump island) hold something, as far as this side knows? */
+export function holdsLoot(s: Solid): boolean {
+	const loot = s.lootItems;
+	return loot !== undefined && loot.size() > 0;
+}
+
+/**
+ * The pump island nearest (x, y) within `reach` of its edge, out of `pumps` (the town's islands, listed once by the
+ * caller: a town has ten). What the server's LootFlag tells a survivor standing outside (server/sim/interaction.ts).
+ */
+export function nearestPump(pumps: ReadonlyArray<Solid>, x: number, y: number, reach: number): Solid | undefined {
+	let best: Solid | undefined;
+	let bestD = reach;
+	for (const s of pumps) {
+		if (s.removed === true) continue;
+		const d = edgeDist(s, x, y);
+		if (d < bestD) {
+			bestD = d;
+			best = s;
+		}
+	}
+	return best;
+}
+
+/** every pump island of the town (static: listed once per world by whoever needs them) */
+export function pumpsOf(world: WorldData): Array<Solid> {
+	const out = new Array<Solid>();
+	for (const s of world.solids) if (isPump(s)) out.push(s);
+	return out;
+}
+
 /** wood repairs everything but iron doors, iron barricades, turrets, the other machines and vehicles (steel) */
 export function repairMaterial(s: Solid): { kind: number; index: number } {
 	if (s.kind === "iron_door" || STEEL_REPAIRED.includes(s.tags) || isVehicle(s)) {
@@ -98,26 +137,34 @@ export function canRepair(s: Solid): boolean {
 	return s.hp < s.hpMax && REPAIRABLE.includes(s.tags);
 }
 
+/** reused by every `nearestGroundItem`: the E hint asks every frame, and a table per answer would be garbage */
+const ITEM_SCRATCH = new Array<GroundItem>();
+
 /**
  * Nearest ground item within reach (DESIGN.ITEM_GET_DISTANCE).
  *
- * This runs every frame, for the "E: pick up" hint, over every item in the world — and the world's item
- * count only grows as a run explores. It used to take a square root for each one. Two things fix that
- * without a new index: reject on the bounding box first (two subtractions and two compares kill everything
- * that is not within 40 u), and then compare SQUARED distances, since `a < b` and `a² < b²` agree for
- * non-negative numbers. The answer is identical; the arithmetic is not.
+ * This runs every frame, for the "E: pick up" hint, and on the server for every E press. It used to take a
+ * square root for each item in the world. Now: only the items in the reach's box (on the server the item grid
+ * reads one to four cells of it, shared/game/world.ts `queryGroundItems`; a client scans its own short list), then
+ * SQUARED distances, since `a < b` and `a² < b²` agree for non-negative numbers. The answer is identical; the
+ * arithmetic is not.
  */
 export function nearestGroundItem(world: WorldData, x: number, y: number): GroundItem | undefined {
 	const reach = DESIGN.ITEM_GET_DISTANCE;
 	let best: GroundItem | undefined;
 	let bestD2 = reach * reach;
-	for (const it of world.items) {
+	const found = ITEM_SCRATCH;
+	found.clear();
+	queryGroundItems(world, x - reach, y - reach, x + reach, y + reach, found);
+	for (const it of found) {
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;
 		if (dy > reach || dy < -reach) continue;
 		const d2 = dx * dx + dy * dy;
-		if (d2 < bestD2) {
+		// a tie (a boss's trophies land on one spot) goes to the oldest id: the grid's cells and a client's list are
+		// in different orders, and the item the hint names must be the one the server hands over
+		if (d2 < bestD2 || (d2 === bestD2 && best !== undefined && it.id < best.id)) {
 			bestD2 = d2;
 			best = it;
 		}
@@ -211,10 +258,11 @@ export function bodiesOverlapRect(
 }
 
 /**
- * What E acts on, by priority: ground item → door / light / tree-car-bin / anything else in reach (repair) →
- * the loot of the building you stand in. A solid in reach always wins over the building: reaching through a wall
- * to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
- * after the loot: it can be ridden from anywhere around it, they cannot.
+ * What E acts on, by priority: ground item → door / light / tree-car-bin / pump island / anything else in reach
+ * (repair) → the loot of the building you stand in. A solid in reach always wins over the building: reaching through
+ * a wall to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
+ * after the loot: it can be ridden from anywhere around it, they cannot. A pump island is the target in reach whether
+ * or not it holds oil (a dry one does nothing, and the hint says nothing).
  */
 export type InteractTarget =
 	| { kind: "item"; item: GroundItem }
@@ -222,6 +270,7 @@ export type InteractTarget =
 	| { kind: "light"; solid: Solid }
 	| { kind: "mapItem"; solid: Solid }
 	| { kind: "vehicle"; solid: Solid }
+	| { kind: "pump"; solid: Solid }
 	| { kind: "solid"; solid: Solid }
 	| { kind: "search"; building: Solid };
 
@@ -240,6 +289,7 @@ export function interactTarget(world: WorldData, x: number, y: number): Interact
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };
+		if (isPump(s)) return { kind: "pump", solid: s };
 		return { kind: "solid", solid: s };
 	}
 	const b = buildingToSearch(world, x, y);

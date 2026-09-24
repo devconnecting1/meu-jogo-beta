@@ -21,6 +21,7 @@ import {
 	querySolids,
 	queryTown,
 	randomOpenPoint,
+	Rect,
 	rectHitsSolid,
 	updateGroundItems,
 	WorldData,
@@ -69,10 +70,11 @@ import { drawPet } from "./view/cosmeticsView";
 import { createPetFollower, stepPetFollower } from "./view/petFollow";
 import { FootCycle } from "./view/footsteps";
 import { circleInView, part } from "./view/drawKit";
-import { WorldView } from "./view/worldView";
+import { CANOPY_SEE_THROUGH, SHELTER_SEE_THROUGH, WorldView } from "./view/worldView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
 import { BodyGrid } from "./view/bodyGrid";
+import { priceSignRect } from "./view/buildingSigns";
 import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import * as Quality from "./view/quality";
@@ -97,8 +99,6 @@ const NAMEPLATE_GAP = 14;
 
 /** roof easing per 60 fps frame (the original lerp), applied frame-rate independently */
 const ROOF_LERP = 0.15;
-/** tree canopy opacity while someone stands under it (original obj_tree1 fades near the player) */
-const CANOPY_SEE_THROUGH = 0.35;
 /**
  * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
@@ -377,6 +377,8 @@ export class GameLoop {
 	private queryBuf: Array<Solid> = [];
 	/** this frame's standing zombies by position: what a tree's canopy asks (updateCanopy) */
 	private readonly underCanopy = new BodyGrid();
+	/** scratch: the price pylon's drawn rect, the one `updateCanopy` fades (no table per sign per frame) */
+	private readonly pylonRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 	/** player walk cycle (feet) */
 	private walkPhase = 0;
 	private walkAmp = 0;
@@ -736,7 +738,7 @@ export class GameLoop {
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);
-			} else if (s.kind === "tree") {
+			} else if (s.kind === "tree" || s.kind === "canopy" || s.tags === "gas_sign") {
 				this.updateCanopy(s, dt);
 			}
 		}
@@ -755,7 +757,20 @@ export class GameLoop {
 		}
 	}
 
+	/**
+	 * A tree's crown -- and a gas station's canopy and price sign, which are crowns of steel (EDI-16) -- turns
+	 * see-through while a body is under it: the same test, the same target, the same easing. A crown is a circle; the
+	 * canopy and the pylon (client/view/buildingSigns.ts `priceSignRect`) are rects.
+	 */
 	private updateCanopy(s: Solid, dt: number): void {
+		const crown = s.kind === "tree";
+		const under = crown ? this.underCrown(s) : this.underRect(s);
+		// a canopy opens further than a crown (worldView.ts SHELTER_SEE_THROUGH, LEG-03); the same easing
+		const target = under ? (crown ? CANOPY_SEE_THROUGH : SHELTER_SEE_THROUGH) : 1;
+		s.canopyAlpha = lerp(s.canopyAlpha ?? 1, target, ease(0.2, dt));
+	}
+
+	private underCrown(s: Solid): boolean {
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		// any part of a body (≈18 px radius) under the canopy counts: nobody hides half-covered
@@ -764,17 +779,29 @@ export class GameLoop {
 		const p = this.player;
 		// the survivor, then the standing zombies from the cells under the crown only (updateWorldFx filled the grid
 		// this frame), then the bosses
-		let under = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r);
-		if (!under) {
-			for (const b of this.bosses) {
-				if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
-					under = true;
-					break;
-				}
-			}
+		if ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r)) {
+			return true;
 		}
-		const target = under ? CANOPY_SEE_THROUGH : 1;
-		s.canopyAlpha = lerp(s.canopyAlpha ?? 1, target, ease(0.2, dt));
+		for (const b of this.bosses) {
+			if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) return true;
+		}
+		return false;
+	}
+
+	/** the rect version of `underCrown`: a body within 18 of the canopy's (or the pylon's) rect */
+	private underRect(s: Solid): boolean {
+		let q: Rect = s;
+		if (s.tags === "gas_sign") q = priceSignRect(s, this.pylonRect);
+		const x0 = q.x - 18;
+		const y0 = q.y - 18;
+		const x1 = q.x + q.w + 18;
+		const y1 = q.y + q.h + 18;
+		const p = this.player;
+		if ((p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1) || this.underCanopy.anyInRect(x0, y0, x1, y1)) return true;
+		for (const b of this.bosses) {
+			if (b.x > x0 && b.x < x1 && b.y > y0 && b.y < y1) return true;
+		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------ drawing helpers

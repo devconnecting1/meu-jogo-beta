@@ -181,10 +181,12 @@ export function noticeTime(dist: number, sight: number): number {
  * parked car was a hiding spot the original never had and we do not want (DESIGN_RULES IA-01). Not a wooden
  * barricade or a player structure either: planks have gaps, and a fortified house must not be an invisible one
  * (the interiors rule: no safe spots inside). A solid tagged "window" (the interiors work) is glass: it stops
- * a body, not the eyes.
+ * a body, not the eyes. A gas station's pump island and the footing of its price sign are laid as walls (they stop
+ * bodies and bullets) but are waist-high: they never stopped the eyes in the rule, and now not in the code either
+ * (EDI-16, 2026-09-24: the island's wall kind hid a survivor crouching behind it).
  */
 export function blocksSight(s: Solid): boolean {
-	if (!isBlocking(s) || s.tags === "window") return false;
+	if (!isBlocking(s) || s.tags === "window" || s.tags === "pump" || s.tags === "gas_sign") return false;
 	const k = s.kind;
 	return (
 		k === "wall_h" ||
