@@ -69,6 +69,8 @@
  *                           §8.2 flood kick, in the world and out of it; 30 s of an honest client is never kicked; a
  *                           storm of rejected reports is answered once a second; every automatic kick is in the stored
  *                           admin audit log by UserId.
+ *  31. THE LOBBY'S PING      (S3 NIT 3) the filtered ping the rewind ceiling uses survives five minutes in the lobby
+ *                           (a throttled re-entry is filtered, not taken raw), and goes when life.ts lets the body go.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -3080,6 +3082,49 @@ section(
 			!/junkSaver|loadStorm|shopStorm|notAnAdmin|ackStorm/.test(json),
 			"with UserIds only: no name is stored",
 			json,
+		);
+	},
+);
+
+// ================================================================ 31: the ping of a survivor waiting in the lobby
+
+section(
+	"31) the rewind ceiling's ping stays while its survivor waits in the lobby, and goes with the body (S3 NIT 3)",
+	() => {
+		/*
+		 * The simulation keeps each survivor's filtered ping across a leave/enter (ServerSimulation.setPing), so a link
+		 * throttled at the moment of re-entry does not set the rewind ceiling at once (the review of dee095a, N4). It went
+		 * KEEP_AFTER_LEAVE_S after its last SAMPLE -- and nothing samples a survivor in the lobby, whose body life.ts keeps
+		 * for as long as they are connected: five minutes there, and the first sample of the next entry was taken raw.
+		 */
+		const { KEEP_AFTER_LEAVE_S } = require(join(SRC, "server/sim/life.ts"));
+		const s = bootServer();
+		const p = s.join(newUser(), "waiter");
+		s.immortal.add(p);
+		p.GetNetworkPing = () => 0.05;
+		s.enter(p);
+		s.run(5);
+		s.exit(p);
+		// six minutes in the lobby, connected the whole time. A heartbeat at 30 Hz owes 2 ticks and pays both (§3.1):
+		// a slower one drops the surplus, and six real minutes would be two of ticks -- inside the old sample window
+		s.run(KEEP_AFTER_LEAVE_S + 60, 1 / 30);
+		check(s.sim.pings.has(p.UserId), "after six minutes in the lobby the server still has the survivor's ping");
+		// back in, on a link throttled for the occasion
+		p.GetNetworkPing = () => 0.3;
+		const sp = s.enter(p);
+		s.run(1.1);
+		const ping = sp === undefined ? -1 : s.sim.combat.pingOf(sp.slot);
+		check(
+			ping > 0 && ping < 0.15,
+			"the re-entry's 300 ms sample moves the rewind ceiling a tenth of the way, not all of it",
+			`${(ping * 1000).toFixed(0)} ms`,
+		);
+		// the body's memory is the ping's: gone from the server for KEEP_AFTER_LEAVE_S, both go
+		s.quit(p);
+		s.run(KEEP_AFTER_LEAVE_S + 5, 1 / 10);
+		check(
+			!s.sim.pings.has(p.UserId),
+			"KEEP_AFTER_LEAVE_S after they left the server, the body and its ping are gone",
 		);
 	},
 );

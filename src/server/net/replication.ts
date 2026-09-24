@@ -25,6 +25,7 @@ import { titleToWire } from "shared/data/titles";
 import { quantPos, dequantPos } from "shared/net/codec";
 import {
 	INTEREST_EXIT,
+	MAX_BOSSES,
 	MAX_PLAYERS,
 	SLOT_NONE,
 	SNAP_NEAR_EVERY_TICKS,
@@ -143,8 +144,10 @@ export interface ReplicationStats {
 	fxBytes: number;
 	worldPackets: number;
 	worldBytes: number;
-	/** entities that did not fit in SNAP_MAX_PARTS, or were cut by SNAP_ZOMBIE_CAP */
+	/** entities that did not fit in SNAP_MAX_PARTS, were cut by SNAP_ZOMBIE_CAP, or rode a part over the limit */
 	droppedEntities: number;
+	/** Snap parts over the unreliable limit, never sent (the encoder keeps them under it: the alarm, not a path) */
+	droppedParts: number;
 	/** World/Fx events that could not fit in a packet even alone */
 	droppedEvents: number;
 }
@@ -156,6 +159,12 @@ export interface ReplicatorOptions {
 	mapHash: number;
 	/** (MP-22) the seed the town was generated from; DESIGN.TOWN_SEED, the town every server opens with, if omitted */
 	seed?: number;
+	/**
+	 * The server's real clock in seconds (the host passes os.clock): when the interest decides whether a client still
+	 * has a track for a body, it asks it in the time the client retires tracks in (server/net/interest.ts, S3 NIT 1).
+	 * Omitted (a test with no real time), the simulation's own time: tick / simHz.
+	 */
+	now?: () => number;
 }
 
 /** (MP-22) what the replicator tells the clients when a world ends: server/sim/worldReset.ts */
@@ -403,6 +412,11 @@ function maskHas(mask: number, slot: number): boolean {
 	return math.floor(mask / 2 ** slot) % 2 === 1;
 }
 
+/** the survivors and bosses part 0 of a snapshot carries (shared/net/protocol.ts `encodeSnapshot`: the caps) */
+function partZeroActors(snap: Snapshot): number {
+	return math.min(snap.players.size(), MAX_PLAYERS) + math.min(snap.bosses.size(), MAX_BOSSES);
+}
+
 /** the debris a boss throws: a boss is sent in range whatever the light, so is its debris */
 const BOSS_DEBRIS = debrisMaterialId("boss");
 /** projectiles whose spawn is still waiting for its end, at most (the map is a safety net, not a store) */
@@ -427,6 +441,7 @@ export class Replicator {
 		worldPackets: 0,
 		worldBytes: 0,
 		droppedEntities: 0,
+		droppedParts: 0,
 		droppedEvents: 0,
 	};
 	/** bytes sent to each slot since the last `takeBytes` (§12.2 `pz_out_Bps`) */
@@ -471,6 +486,8 @@ export class Replicator {
 	private readonly projSeen = new Map<number, number>();
 	/** a World event that cannot wait for the cadence was queued (`urgentEvent`) */
 	private urgent = false;
+	/** the server's clock, s (`ReplicatorOptions.now`) */
+	private readonly now: () => number;
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
 	private mapHash: number;
 	private seed: number;
@@ -484,6 +501,7 @@ export class Replicator {
 	) {
 		this.mapHash = options.mapHash;
 		this.seed = options.seed ?? DESIGN.TOWN_SEED;
+		this.now = options.now ?? (() => this.sim.tick / this.sim.simHz);
 		// the shot's rewind needs what only this layer knows: which ring a zombie is in for which viewer (§2.3)
 		sim.zombieViewLag = (slot, z, viewTick) => this.viewLagOf(slot, z, viewTick);
 		// ...and the ground items are shown by the same sight rules the horde is (audit L2)
@@ -843,8 +861,9 @@ export class Replicator {
 	 * range and never sent, and its death told them where it had been.
 	 */
 	private announceZombieDeath(d: ZombieDeath): void {
+		const now = this.now();
 		for (const viewer of this.sim.players()) {
-			if (!this.hordeRings.hasTrack(viewer.slot, d.netId, this.sim.tick, this.sim.simHz)) continue;
+			if (!this.hordeRings.hasTrack(viewer.slot, d.netId, now)) continue;
 			this.queueFor(viewer.slot, {
 				t: WorldEv.ZombieDied,
 				netId: d.netId,
@@ -1120,6 +1139,7 @@ export class Replicator {
 		// one interest point per survivor, shared by every viewer of this round (§4.3)
 		const points = interestPoints(everyone);
 		this.prepareHorde();
+		const now = this.now();
 		for (const viewer of everyone) {
 			const snap = this.snapshotFor(viewer, index, points);
 			const res = encodeSnapshot(snap);
@@ -1130,9 +1150,11 @@ export class Replicator {
 				const part = res.parts[i];
 				const carried = res.partZombies[i];
 				const len = buffer.len(part);
-				// the engine silently drops anything above the limit: never let it get that far unnoticed
+				// the engine silently drops anything above the limit: never let it get that far unnoticed. What the part
+				// carried is what is lost -- its zombies, and on part 0 the survivors and the bosses too (it counted one)
 				if (len > UNRELIABLE_PAYLOAD_LIMIT || len > SNAP_MAX_BYTES) {
-					this.stats.droppedEntities += 1;
+					this.stats.droppedEntities += carried + (i === 0 ? partZeroActors(snap) : 0);
+					this.stats.droppedParts += 1;
 					first += carried;
 					continue;
 				}
@@ -1140,7 +1162,7 @@ export class Replicator {
 				this.stats.snapParts += 1;
 				this.stats.snapBytes += len;
 				this.addBytes(viewer.slot, len + REMOTE_OVERHEAD_BYTES);
-				this.noteCarried(viewer.slot, snap.zombies, first, carried, snap.tick);
+				this.noteCarried(viewer.slot, snap.zombies, first, carried, snap.tick, now);
 				first += carried;
 			}
 		}
@@ -1158,12 +1180,12 @@ export class Replicator {
 		from: number,
 		count: number,
 		tick: number,
+		now: number,
 	): void {
-		const hz = this.sim.simHz;
-		const midExtra = midViewExtraTicks(hz);
+		const midExtra = midViewExtraTicks(this.sim.simHz);
 		for (let k = from; k < from + count; k++) {
 			const z = zombies[k];
-			if (z !== undefined) this.hordeRings.noteSent(slot, z.netId, z.mid, tick, midExtra, hz);
+			if (z !== undefined) this.hordeRings.noteSent(slot, z.netId, z.mid, tick, midExtra, now);
 		}
 	}
 

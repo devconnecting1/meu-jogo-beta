@@ -265,7 +265,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 				sendWorldAll(remotes, packet);
 			},
 		},
-		{ tick0Time, mapHash: mapHashOf(world), seed: town.seed },
+		// the real clock: a client retires a track by real time, and ticks are not real time on a slow server
+		{ tick0Time, mapHash: mapHashOf(world), seed: town.seed, now: () => os.clock() },
 	);
 	sim.onTick = tick => replicator.afterTick(tick);
 	// every cosmetic the simulation asks for goes out on the Fx channel, filtered by interest (§4.1, §4.3)

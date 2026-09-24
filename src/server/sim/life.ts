@@ -321,6 +321,8 @@ export class LifeKeeper {
 	constructor(sim: ServerSimulation, wire: LifeWire) {
 		this.sim = sim;
 		this.wire = wire;
+		// the ping the rewind ceiling filters is kept exactly as long as the body is (ServerSimulation.setPing)
+		sim.bodyKept = userId => this.records.has(userId);
 	}
 
 	// ------------------------------------------------------------ queries
@@ -576,6 +578,7 @@ export class LifeKeeper {
 				rec.goneFor += dt;
 				if (rec.goneFor >= KEEP_AFTER_LEAVE_S) {
 					this.records.delete(userId);
+					this.sim.forgetPing(userId);
 					continue;
 				}
 			}

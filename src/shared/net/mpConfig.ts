@@ -228,6 +228,11 @@ export const FREECAM_MAX_RANGE = 3000;
 export const DESPAWN_NEAR_S = 0.3;
 export const DESPAWN_MID_S = 0.6;
 export const DESPAWN_FADE_S = 0.15;
+/**
+ * A received body's fade-in, alpha per second (client/net/snapshotBuffer.ts). The server needs it too: a track that
+ * never fully appeared fades out sooner, and server/net/interest.ts has to know when the client's track is gone.
+ */
+export const TRACK_FADE_IN_RATE = 3;
 
 // ---------------------------------------------------------------- packet sizes (§1.1, §4.1, §4.2, §4.5)
 

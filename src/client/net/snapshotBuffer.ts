@@ -61,6 +61,7 @@ import {
 	RENDER_DELAY_RATE,
 	SIM_HZ,
 	SNAP_NEAR_HZ,
+	TRACK_FADE_IN_RATE,
 	midViewExtraTicks,
 	ticksPer,
 } from "shared/net/mpConfig";
@@ -105,9 +106,10 @@ const RENDER_RESET_S = DELAY_SNAP_S;
  * How fast a received body fades in and out, per second. It is the very rate the horde's own `updateAlpha`
  * used before F2 (shared/sim/ai/zombieBrain.ts), and §4.3 leans on it: with the interest hiding whatever is
  * outside every light at night, a zombie stepping into a lamp's circle appears — and this is what stops it
- * appearing as a pop. §4.4's despawn fade rides the same number.
+ * appearing as a pop. §4.4's despawn fade rides the same number. Shared with the server (TRACK_FADE_IN_RATE), which
+ * has to know when a track that never fully appeared is gone (server/net/interest.ts `retiredAfterS`).
  */
-const ALPHA_RATE = 3;
+const ALPHA_RATE = TRACK_FADE_IN_RATE;
 
 /** one survivor as the interpolation sees them right now */
 export interface RemoteState {

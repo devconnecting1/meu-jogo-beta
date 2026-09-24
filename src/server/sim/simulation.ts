@@ -177,6 +177,12 @@ export class ServerSimulation {
 	 * the replication layer, which owns the rules (server/net/replication.ts); unset, everything in range is seen.
 	 */
 	itemVisible?: (slot: number, x: number, y: number) => boolean;
+	/**
+	 * Does server/sim/life.ts still keep a body for this UserId -- connected, in the world or waiting in the lobby, or
+	 * gone less than KEEP_AFTER_LEAVE_S? A survivor's ping is kept exactly that long (`setPing`). Set by the LifeKeeper;
+	 * unset (a simulation with no keeper), the ping goes by the age of its last sample.
+	 */
+	bodyKept?: (userId: number) => boolean;
 	/** called when a survivor's hp reached 0 during a tick (F4 turns this into downed/dead) */
 	onDeath?: (sp: ServerPlayer) => void;
 	/**
@@ -800,20 +806,23 @@ export class ServerSimulation {
 	 * the ceiling at once (the review of dee095a, N4). So the filtered value is kept here, by UserId, and a returning
 	 * survivor's first sample is filtered against it.
 	 *
-	 * For as long as their body is (life.ts KEEP_AFTER_LEAVE_S), not for as long as the server runs: someone gone
-	 * longer comes back as a newcomer, and the table holds the survivors measured lately instead of one entry for
-	 * everyone who ever played here (the second review of the zombie-motion branch, NIT 3). It is swept when a
-	 * survivor it has no recent sample of is measured -- the one moment it can grow.
+	 * For exactly as long as life.ts keeps their body (`bodyKept`): while they are connected -- in the world, or waiting
+	 * in the lobby, where nothing samples it -- and KEEP_AFTER_LEAVE_S after they left, when the keeper lets the body
+	 * go and this goes with it (`forgetPing`). Not for as long as the server runs: someone gone longer comes back as a
+	 * newcomer, and the table holds the survivors of lately instead of everyone who ever played here (the second review
+	 * of the zombie-motion branch, NIT 3). It used to go KEEP_AFTER_LEAVE_S after its last SAMPLE, and five minutes in
+	 * the lobby had a throttled re-entry's first sample taken raw (the review of the zombie-motion branch, S3 NIT 3).
+	 * Without a keeper, by the age of the last sample; swept when a survivor it has no valid entry for is measured.
 	 */
 	setPing(sp: ServerPlayer, seconds: number): void {
 		const combat = this.combat;
 		if (combat === undefined) return;
 		const oldest = this.tick - KEEP_AFTER_LEAVE_S * this.simHz;
 		let known = this.pings.get(sp.userId);
-		const recent = known !== undefined && known.at >= oldest;
-		if (known !== undefined && recent) combat.seedPing(sp.slot, known.pingS);
+		const valid = known !== undefined && (known.at >= oldest || this.bodyKept?.(sp.userId) === true);
+		if (known !== undefined && valid) combat.seedPing(sp.slot, known.pingS);
 		combat.setPing(sp.slot, seconds);
-		if (known === undefined || !recent) {
+		if (known === undefined || !valid) {
 			this.forgetPingsBefore(oldest);
 			known = { pingS: 0, at: 0 };
 			this.pings.set(sp.userId, known);
@@ -822,13 +831,18 @@ export class ServerSimulation {
 		known.at = this.tick;
 	}
 
-	/** drops every ping last sampled before tick `oldest` */
+	/** drops every ping last sampled before tick `oldest` whose survivor's body life.ts no longer keeps */
 	private forgetPingsBefore(oldest: number): void {
 		const gone = new Array<number>();
 		for (const [userId, p] of this.pings) {
-			if (p.at < oldest) gone.push(userId);
+			if (p.at < oldest && this.bodyKept?.(userId) !== true) gone.push(userId);
 		}
 		for (const userId of gone) this.pings.delete(userId);
+	}
+
+	/** life.ts let this survivor's body go (KEEP_AFTER_LEAVE_S after they left): their ping goes with it */
+	forgetPing(userId: number): void {
+		this.pings.delete(userId);
 	}
 
 	/** the Heartbeat debt still owed to the world, in seconds (§12.2 `pz_backlog_ms`) */

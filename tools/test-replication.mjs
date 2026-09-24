@@ -19,6 +19,11 @@
  *   a3. COMING BACK (the second review of the zombie-motion branch, S3). A body not sent for longer than its ring's
  *      client timeout (the dark, a building, the snapshot cap) is a new track when it is sent again, drawn at its
  *      ring's delay at once, and judged there; a shorter gap keeps easing on both sides.
+ *  a5. A STALLED SERVER (the review of the zombie-motion branch, S3 NIT 1, 2). The client retires a track by real
+ *      time; the server's idea of it now does too, so a body the client dropped during a 0.9 s stall is a new track on
+ *      both sides, and a body shown for one snapshot is retired within a frame of each other on both sides.
+ *  a6. A PART OVER THE LIMIT (S3 NIT 4). It never goes out, what it carried counts as dropped entity by entity, and the
+ *      bodies of the parts after it are still the ones taken as drawn.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
  *      every light is not sent either, unless it is within DARK_SENSE_RANGE — which is what stops the wire
  *      being a wallhack, and is measured here rather than asserted in a comment.
@@ -443,15 +448,29 @@ function newWorldServer() {
 	resetEntityIds();
 	const sim = new ServerSimulation({ world, zombies: true });
 	const transport = recordingTransport();
-	const replicator = new Replicator(sim, transport, { tick0Time: 0, mapHash: mapHashOf(world) });
-	sim.onTick = tick => replicator.afterTick(tick);
-	sim.onFx = event => replicator.queueFx(event);
 	const clients = new Map();
 	/** where every zombie was at each recent tick (netId -> {x, y}), to judge a screen against its own render tick */
 	const hist = new Map();
 	/** (audit L1) the largest packet of each unreliable kind, and how many snapshots needed more than one part */
 	const wire = { snapMax: 0, fxMax: 0, snapshots: 0, split: 0 };
-	return { sim, transport, replicator, clients, hist, wire, now: 0 };
+	const server = { sim, transport, replicator: undefined, clients, hist, wire, now: 0 };
+	// the host's os.clock: the harness's real time, which a stall (a5) moves without a tick
+	server.replicator = new Replicator(sim, transport, {
+		tick0Time: 0,
+		mapHash: mapHashOf(world),
+		now: () => server.now,
+	});
+	sim.onTick = tick => server.replicator.afterTick(tick);
+	sim.onFx = event => server.replicator.queueFx(event);
+	return server;
+}
+
+/** does the server take `slot`'s client as holding a track for `netId`? (an older src asks in ticks) */
+function serverHasTrack(server, slot, netId) {
+	const rings = server.replicator.hordeRings;
+	return rings.hasTrack.length === 3
+		? rings.hasTrack(slot, netId, server.now)
+		: rings.hasTrack(slot, netId, server.sim.tick, server.sim.simHz);
 }
 
 /** the server's position of `netId` at a fractional tick, from the recent history, or undefined */
@@ -1204,6 +1223,209 @@ section("(a4) the server takes a body as drawn only if a part that went out carr
 		checkEq(notedNotCarried, 0, "no body the parts left out is taken as drawn by the client");
 		checkEq(carriedNotNoted, 0, "and every body they carried is");
 	} finally {
+		CFG.SNAP_ZOMBIE_CAP = cap;
+	}
+}
+
+// ================================================================ (a5) a stalled server, and a body shown once
+
+section("(a5) a stalled server knows its client retired a body, by the client's clock: real time (S3 NIT 1, 2)");
+{
+	/*
+	 * The client retires a zombie track 0.3/0.6 s after the last part that carried it (then a 0.15 s fade), by its REAL
+	 * clock. The server counted that in ticks, and ticks are not real time on a server that stalls: past the
+	 * Heartbeat's debt ceiling the surplus is dropped (§3.1). Here the server stops for 0.9 s while its client keeps
+	 * drawing: the client retires the mid-ring body; the server, with no tick run, eased it on as the same track, and
+	 * a shot at the body running in the near ring after the stall was judged its old ring's 3 ticks off it.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 0;
+	client.loss = 0;
+	server.sim.clock.setClock(12);
+	const horde = server.sim.horde;
+	const SPEED = 200 / CFG.SIM_HZ;
+	let r = 1000;
+	let ang = 0;
+	const z = createZombie(1, cx + r, cy, 5, false);
+	z.alpha = 1;
+	horde.zombies.push(z);
+	const place = () => {
+		z.x = cx + Math.cos(ang) * r;
+		z.y = cy + Math.sin(ang) * r;
+		z.alpha = 1;
+	};
+	for (let i = 0; i < 90; i++) {
+		ang += SPEED / r;
+		place();
+		tickServer(server);
+		drawClients(server);
+	}
+	const netId = horde.netIdOf(z);
+	const drawnBefore = client.buffer.zombies.has(netId);
+	// the stall: 0.9 s of the client's frames, and not one tick on the server
+	r = 700;
+	for (let i = 0; i < 54; i++) {
+		server.now += TICK_DT;
+		drawClients(server);
+	}
+	check(
+		drawnBefore && !client.buffer.zombies.has(netId),
+		"the client drew the mid-ring body, and retired it in the stall",
+	);
+	check(
+		!serverHasTrack(server, 0, netId),
+		"the server knows: no track, by the 0.9 s that passed, not the 0 ticks that ran",
+	);
+	let worst = 0;
+	let frames = 0;
+	for (let i = 0; i < 90; i++) {
+		ang += SPEED / r;
+		place();
+		tickServer(server);
+		const b = drawClients(server).get(0).get(netId);
+		if (b === undefined) continue;
+		const view = client.buffer.renderNow();
+		const truth = serverAt(server, netId, b.tick);
+		const judged = serverAt(server, netId, view - server.replicator.viewLagOf(0, z, view));
+		if (truth === undefined || judged === undefined) continue;
+		frames += 1;
+		worst = Math.max(worst, Math.hypot(truth.x - judged.x, truth.y - judged.y));
+	}
+	info(
+		`after the stall, running in the near ring: ${frames} body-frames, judged vs drawn worst ${worst.toFixed(2)} u`,
+	);
+	check(frames >= 60, `the client draws it again after the stall (${frames} body-frames)`);
+	check(worst <= 1, `a shot at it is judged within 1 u of where it is drawn (worst ${worst.toFixed(2)} u)`);
+}
+{
+	/*
+	 * S3 NIT 2: a track's fade out starts from the alpha its fade-in reached, and a body sent once never reached 1. The
+	 * server took the longest fade for every track. The fade-in keeps running through the ring's timeout, though, so a
+	 * near body sent once is at 0.95 when it starts to fade and the gap was 15 ms, under a frame at 60 Hz: the server's
+	 * model is now the client's own (`retiredAfterS`), and this pins it. Lag 0, so the client's `lastSeen` is the
+	 * server's send: a near body lit for one snapshot, then dark, and one lit for a second, leave the client and the
+	 * server's idea of it within a frame of each other (the frame they land on is a question of rounding at 1/60 s).
+	 */
+	for (const shown of [1, CFG.SNAP_NEAR_HZ]) {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		const client = server.clients.get(0);
+		client.lag = 0;
+		client.loss = 0;
+		server.sim.clock.setClock(23);
+		const horde = server.sim.horde;
+		const z = createZombie(1, cx + 500, cy, 5, false);
+		horde.zombies.push(z);
+		let netId = -1;
+		let lit = 0;
+		let clientGone = -1;
+		let serverGone = -1;
+		for (let i = 0; i < shown * CFG.SNAP_NEAR_EVERY_TICKS + 120 && (clientGone < 0 || serverGone < 0); i++) {
+			z.x = cx + 500;
+			z.y = cy;
+			// lit until `shown` snapshots carried it, then outside every light (§4.3 rule 2) past DARK_SENSE_RANGE
+			z.alpha = lit < shown ? 1 : 0;
+			tickServer(server);
+			drawClients(server);
+			netId = horde.netIdOf(z);
+			const has = client.buffer.zombies.has(netId);
+			if (lit < shown) {
+				lit = client.counts.get(netId) ?? 0;
+				continue;
+			}
+			if (clientGone < 0 && !has) clientGone = i;
+			if (serverGone < 0 && !serverHasTrack(server, 0, netId)) serverGone = i;
+		}
+		info(
+			`shown in ${shown} snapshot(s): the client retired it on frame ${clientGone}, the server on ${serverGone}`,
+		);
+		check(
+			clientGone > 0 && serverGone > 0 && Math.abs(clientGone - serverGone) <= 1,
+			`shown in ${shown} snapshot(s), the track goes within a frame on both sides`,
+		);
+	}
+}
+
+// ================================================================ (a6) a part over the unreliable limit
+
+section("(a6) a Snap part over the limit never goes out, and what it carried is counted, entity by entity (S3 NIT 4)");
+{
+	/*
+	 * The encoder keeps every part under SNAP_MAX_BYTES, so the replicator's own guard never fired and no test reached
+	 * it; it also counted a dropped part as ONE dropped entity. Here the encoder's output is tampered with: part 0 of
+	 * every other snapshot and part 1 of the rest go over the limit. The a4 horde (600 zombies, the cap lifted) fills
+	 * four parts.
+	 */
+	const cap = CFG.SNAP_ZOMBIE_CAP;
+	const encode = P.encodeSnapshot;
+	CFG.SNAP_ZOMBIE_CAP = 1000;
+	let tampered = 0;
+	let expected = 0;
+	try {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		server.sim.clock.setClock(12);
+		seedHorde(server, 600, cx, cy, 780);
+		for (let i = 0; i < 6; i++) tickServer(server);
+		const client = server.clients.get(0);
+		client.counts.clear();
+		server.replicator.hordeRings.clear();
+		const stats = server.replicator.stats;
+		const dropped0 = stats.droppedEntities;
+		P.encodeSnapshot = snap => {
+			const res = encode(snap);
+			const k = tampered % 2 === 0 ? 0 : 1;
+			if (res.parts.length > 2) {
+				expected += res.dropped + res.partZombies[k];
+				if (k === 0)
+					expected +=
+						Math.min(snap.players.length, CFG.MAX_PLAYERS) + Math.min(snap.bosses.length, CFG.MAX_BOSSES);
+				res.parts[k] = buffer.create(CFG.SNAP_MAX_BYTES + 1);
+				tampered += 1;
+			} else {
+				expected += res.dropped;
+			}
+			return res;
+		};
+		for (let i = 0; i < 12; i++) tickServer(server);
+		P.encodeSnapshot = encode;
+		const horde = server.sim.horde;
+		let notedNotCarried = 0;
+		let carriedNotNoted = 0;
+		let carried = 0;
+		for (const z of horde.zombies) {
+			const netId = horde.netIdOf(z);
+			const pair = server.replicator.hordeRings.rings.get(netId);
+			const got = client.counts.has(netId);
+			if (got) carried += 1;
+			if (pair?.sent === true && !got) notedNotCarried += 1;
+			if (pair?.sent !== true && got) carriedNotNoted += 1;
+		}
+		info(
+			`${tampered} snapshots with a part over the limit; ${server.wire.snapMax} B the largest part the client got; ` +
+				`${stats.droppedEntities - dropped0} entities counted dropped (expected ${expected})`,
+		);
+		check(tampered >= 3, `the guard was reached (${tampered} parts over the limit)`);
+		check(server.wire.snapMax <= CFG.SNAP_MAX_BYTES, "no part over SNAP_MAX_BYTES reached the client");
+		checkEq(stats.droppedParts ?? 0, tampered, "each is counted as a dropped part");
+		checkEq(
+			stats.droppedEntities - dropped0,
+			expected,
+			"and everything it carried as dropped entities, one by one",
+		);
+		check(carried > 0, `the parts around it still went out (${carried} bodies)`);
+		checkEq(notedNotCarried, 0, "no body of a dropped part is taken as drawn");
+		checkEq(carriedNotNoted, 0, "and every body of the parts after it is (the offset skips the dropped part)");
+	} finally {
+		P.encodeSnapshot = encode;
 		CFG.SNAP_ZOMBIE_CAP = cap;
 	}
 }
