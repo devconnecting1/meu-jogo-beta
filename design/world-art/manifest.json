@@ -1310,7 +1310,7 @@
 			"kind": "atlas",
 			"w": 1024,
 			"h": 718,
-			"description": "interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
+			"description": "interiors: 1343 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
 		},
 		{
 			"name": "blood",

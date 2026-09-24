@@ -12,8 +12,10 @@
  *      calls of drawGround + drawSolids over seven scenes (day, night, overview, the map border) and a camera pan
  *      hashes to tools/golden/world-flat.json, recorded from the flat drawing of e097eb3 (the commit before the
  *      art) and re-recorded on purpose only when the flat drawing changes: the storefront signs (ART-07) replaced
- *      the rooftop emblems in downtown, school, gas and overview. A second digest per scene, with the signage hook
- *      stubbed out, still equals 8725b0b's with its emblem stubbed out: the signs are the only change. And not one
+ *      the rooftop emblems in downtown, school, gas and overview; the window glass (EDI-18) put the open frames'
+ *      marks and shards on the windows born broken (with none born broken, every scene was the old golden's). A
+ *      second digest per scene, with the signage hook stubbed out, still equals 8725b0b's with its emblem stubbed
+ *      out: the signs are the only change. And not one
  *      sprite shows an image.
  *   2. WITH ART, THE SURFACES ARE TEXTURES. With a fake id for every texture: the ground, the roads, the roofs and
  *      the props draw as ImageLabels, pixelated, tiles at their texel size (4 units per texel), no flat asphalt /
@@ -54,7 +56,8 @@
  *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
  *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
  *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
- *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
+ *      `--golden-interiors` with PZ_SRC on the commit before the art; re-recorded with the window glass, EDI-18, which
+ *      is its only change: the calls away from the windows are 6d21f20's); in 5 towns every piece of furniture is drawn
  *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
  *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
  *      every rug, §6 the floors' mean colours.
@@ -73,6 +76,12 @@
  *      fainter, darker where it soaks in (asphalt, grass, soil: checked against 4000 points of the town); droplets on
  *      one spot join, and a full ring keeps the newest; an item lying in blood (wet, drying, dry) still reads.
  *      The pictures: node tools/render-blood.mjs --out <dir> (docs/art/blood).
+ *  14. THE WINDOW GLASS (EDI-18, client/view/interiorView.ts). On the building with the most windows of both states:
+ *      from the street, glass is the dark strip it always was and an open frame the darker hole with two stubs of
+ *      glass (70 ΔE apart) over three shards on the ground outside; inside, the pane with its streak of light or the
+ *      sill tint and the glass on the floor; with the interiors' atlas, its cells: `windowGlass:<side>` for the pane,
+ *      `window:<side>` for the empty frame and `glass:h|v` for the shards, outside and in. No
+ *      sprite of the glass is over a body in the frame or an item; panes breaking in view create no Instance.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -3440,6 +3449,207 @@ section(
 				: `weakest ${weakest.ratio.toFixed(2)}:1 / ${weakest.dE.toFixed(0)} ΔE (${weakest.where})`,
 		);
 	}
+}
+
+// ================================================================ 14. window glass (EDI-18)
+
+section("14) window glass (EDI-18): intact and broken read apart from the street, the shards are a decal, no churn");
+{
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const panesOf = s => (s.openings ?? []).filter(o => o.kind === "window" && o.glass !== undefined);
+	// the building on a 1920 x 1080 screen with the most of both: glass in some windows, open frames in others
+	let b;
+	let most = 0;
+	for (const s of world.solids) {
+		if (s.kind !== "building" || s.w > 1600 || s.h > 900) continue;
+		const ws = panesOf(s);
+		const both = Math.min(
+			ws.filter(o => WIN.windowIntact(o.glass)).length,
+			ws.filter(o => !WIN.windowIntact(o.glass)).length,
+		);
+		if (both > most) ((b = s), (most = both));
+	}
+	const at = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+	const panes = panesOf(b);
+	const intact = panes.filter(o => WIN.windowIntact(o.glass));
+	const broken = panes.filter(o => !WIN.windowIntact(o.glass));
+	console.log(
+		`       ${b.tags} #${b.id} (${b.w} x ${b.h}): ${intact.length} windows with glass, ${broken.length} open frames`,
+	);
+	/** the shards' layer: the ground's detail, under the blood (interiorView Z_SHARDS) */
+	const ZS = Z.floorDetail + 1;
+	const key = c => JSON.stringify(rgb(c));
+	const GLASS = key(COLORS.glassCold);
+	const HOLE = key(COLORS.carGlass.Lerp(Color3.fromRGB(0, 0, 0), 0.55));
+	const DARK = key(COLORS.carGlass);
+	/** one frame of the town on the building, its draw calls: [x, y, w, h, rot, rgb, alpha, z, ..., image] */
+	const frameCalls = (ids, roofAlpha) => {
+		setArt(ids);
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		b.roofAlpha = roofAlpha;
+		drawTown(st, view, at.x, at.y);
+		calls.length = 0;
+		capturing = true;
+		drawTown(st, view, at.x, at.y);
+		capturing = false;
+		b.roofAlpha = undefined;
+		setArt({});
+		return calls.slice();
+	};
+	const near = (c, o, d) => Math.hypot(c[0] - (o.x + o.w / 2), c[1] - (o.y + o.h / 2)) <= d;
+	/** is call `c` on the street side of window `o`'s wall? (a wing's wall can stand inside the building's rect) */
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	const outside = (c, o) =>
+		(c[0] - (o.x + o.w / 2)) * NORMAL[o.side][0] + (c[1] - (o.y + o.h / 2)) * NORMAL[o.side][1] > 0;
+	const colour = c => JSON.stringify(c[5]);
+	/** the calls of window `o`'s neighbourhood that pass `f` */
+	const around = (cs, o, d, f) => cs.filter(c => near(c, o, d) && f(c));
+	const every = (list, f) => list.length > 0 && list.every(f);
+
+	// flat, every roof on: the street's view of the building
+	{
+		const cs = frameCalls({}, undefined);
+		const chipsOut = o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS && outside(c, o)).length;
+		check(
+			every(broken, o => chipsOut(o) === 3) &&
+				intact.every(o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS).length === 0),
+			"flat, roof on: three shards of glass on the ground outside every open frame, nothing on the ground under glass",
+			`${broken.map(chipsOut).join(",")} shards outside the open frames`,
+		);
+		const mark = (o, col) => around(cs, o, 30, c => c[7] === Z.roof + 2 && colour(c) === col).length;
+		const stubs = o => around(cs, o, 40, c => c[7] === Z.roof + 3 && colour(c) === GLASS).length;
+		check(
+			every(intact, o => mark(o, DARK) === 1 && stubs(o) === 0) &&
+				every(broken, o => mark(o, HOLE) === 1 && stubs(o) === 2),
+			"flat, roof on: on the roof's edge, glass is the dark glass it always was, an open frame the darker hole with two stubs of glass",
+			`${intact.length} + ${broken.length} windows`,
+		);
+		const glass = rgb255(COLORS.glassCold);
+		const hole = rgb255(COLORS.carGlass.Lerp(Color3.fromRGB(0, 0, 0), 0.55));
+		check(
+			dE(glass, hole) >= 35,
+			"the stubs step off the hole (the survivor's bar, 35 ΔE): an open frame reads from the street",
+			`${dE(glass, hole).toFixed(1)} ΔE`,
+		);
+	}
+
+	// flat, the roof off: inside the building
+	{
+		const cs = frameCalls({}, 0);
+		const pane = (o, alpha) =>
+			around(cs, o, 12, c => c[7] === Z.structure && colour(c) === GLASS && Math.abs(c[6] - alpha) < 1e-3).length;
+		const glint = o => around(cs, o, 40, c => c[7] === Z.structure + 2 && colour(c) !== GLASS).length;
+		const chipsIn = o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS && !outside(c, o)).length;
+		check(
+			every(intact, o => pane(o, 0.62) === 1 && glint(o) === 1 && chipsIn(o) === 0),
+			"flat, inside: an intact window is the pane (a more solid glass) with its streak of light",
+		);
+		check(
+			every(broken, o => pane(o, 0.35) === 1 && glint(o) === 0 && chipsIn(o) === 3),
+			"flat, inside: an open frame is the old sill tint and its glass on the floor inside",
+			`${broken.map(chipsIn).join(",")} shards inside`,
+		);
+	}
+
+	// with the art: the interiors' atlas (client/view/interiorArt.ts) -- the frame with the pane or with what is left of
+	// it, and the broken-glass cell for the shards -- each cell read off the image's rect
+	{
+		const { FURNITURE_CELLS } = require(join(SRC, "client/view/furnitureAtlas.ts"));
+		const atlas = ALL.ids.furniture;
+		/** one frame's images, [x, y, z, rectX, rectY] each */
+		const imageCalls = roofAlpha => {
+			const out = [];
+			const inner = Renderer.prototype.drawRect;
+			Renderer.prototype.drawRect = function (cam, wx, wy, o) {
+				if (capturing && o.image === atlas) out.push([wx, wy, o.zIndex, o.rectX, o.rectY]);
+				return inner.call(this, cam, wx, wy, o);
+			};
+			try {
+				frameCalls(ALL.ids, roofAlpha);
+			} finally {
+				Renderer.prototype.drawRect = inner;
+			}
+			return out;
+		};
+		const cellIs = (c, key) =>
+			FURNITURE_CELLS[key] !== undefined && c[3] === FURNITURE_CELLS[key][0] && c[4] === FURNITURE_CELLS[key][1];
+		const nearI = (c, o, d) => Math.hypot(c[0] - (o.x + o.w / 2), c[1] - (o.y + o.h / 2)) <= d;
+		const outsideI = (c, o) =>
+			(c[0] - (o.x + o.w / 2)) * NORMAL[o.side][0] + (c[1] - (o.y + o.h / 2)) * NORMAL[o.side][1] > 0;
+		const shardsCell = o => `glass:${o.w >= o.h ? "h" : "v"}`;
+		const shardsAt = (cs, o, out) =>
+			cs.filter(c => nearI(c, o, 60) && c[2] === ZS && cellIs(c, shardsCell(o)) && outsideI(c, o) === out).length;
+		const roofOn = imageCalls(undefined);
+		const cs = frameCalls(ALL.ids, undefined);
+		const glintRoof = o => around(cs, o, 40, c => c[7] === Z.roof + 3 && colour(c) !== GLASS).length;
+		check(
+			every(broken, o => shardsAt(roofOn, o, true) === 1) &&
+				every(intact, o => glintRoof(o) === 1 && shardsAt(roofOn, o, true) === 0),
+			"art, roof on: the atlas's broken glass outside every open frame, a glint on the roof's edge over the glass",
+			`${broken.map(o => shardsAt(roofOn, o, true)).join(",")} outside the open frames`,
+		);
+		const inside = imageCalls(0);
+		const frameCell = (o, key) =>
+			inside.filter(c => nearI(c, o, 12) && c[2] === Z.structure + 2 && cellIs(c, `${key}:${o.side}`)).length;
+		check(
+			every(intact, o => frameCell(o, "windowGlass") === 1 && frameCell(o, "window") === 0) &&
+				every(
+					broken,
+					o =>
+						frameCell(o, "window") === 1 &&
+						frameCell(o, "windowGlass") === 0 &&
+						shardsAt(inside, o, false) === 1,
+				),
+			"art, inside: the frame with the whole pane (windowGlass), or with what is left of it (window) and the glass on the floor",
+		);
+	}
+
+	// legibility: nothing of the glass is ever drawn over a body or an item
+	{
+		const all = [...frameCalls({}, 0), ...frameCalls(ALL.ids, 0)];
+		const glassZ = [];
+		for (const o of panes) for (const c of around(all, o, 70, c => c[7] < Z.roof)) glassZ.push(c[7]);
+		check(
+			glassZ.length > 0 && Math.max(...glassZ) < Z.zombie && ZS < Z.decal,
+			"a body in the frame is drawn over the glass, and the shards lie under the blood and every item (the ground's detail layer)",
+			`highest ${Math.max(...glassZ)} (the horde ${Z.zombie}); shards at ${ZS}, the blood at ${Z.decal}, items at ${Z.item}`,
+		);
+	}
+
+	// a pane breaking in view (and, to measure it again and again, going back in): no Instance after the first break
+	for (const [label, ids] of [
+		["flat", {}],
+		["art", ALL.ids],
+	]) {
+		setArt(ids);
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		const flip = on => intact.forEach(o => WIN.setWindowGlass(o.glass, !on));
+		const run = frames => {
+			for (let f = 0; f < frames; f++) {
+				if (f % 10 === 0) flip(f % 20 === 0);
+				b.roofAlpha = f % 40 < 20 ? undefined : 0;
+				drawTown(st, view, at.x + (f % 7) * 3, at.y);
+			}
+		};
+		run(40);
+		const created = gui.stats.created;
+		const w0 = gui.stats.writes;
+		run(200);
+		check(
+			gui.stats.created === created,
+			`${label}: all ${intact.length} panes breaking and the roof lifting, 200 frames after one of each: no Instance created`,
+			`${gui.stats.created - created} created, ${((gui.stats.writes - w0) / 200).toFixed(0)} writes a frame`,
+		);
+		flip(false);
+		b.roofAlpha = undefined;
+		setArt({});
+	}
+	check(
+		intact.every(o => WIN.windowIntact(o.glass)) && broken.every(o => !WIN.windowIntact(o.glass)),
+		"the town is left as generated",
+	);
 }
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);

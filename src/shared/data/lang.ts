@@ -915,6 +915,9 @@ export const LANG_TABLE: Array<string> = [
 	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
 	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
 	"Siphon Oil",
+	// an intact window at hand: E breaks its glass, the loud way in or out (client/systems/interaction.ts WINDOW_HINT,
+	// DESIGN_RULES EDI-18; the HUD shows the text after "E: ")
+	"Break window",
 ];
 
 /**

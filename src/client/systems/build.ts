@@ -112,7 +112,7 @@ export class BuildSystem {
 		this.ghostW = g.w;
 		this.ghostH = g.h;
 		this.hasGhost = true;
-		this.ghostValid = placementValid(refs.world, g, refs.players, refs.zombies);
+		this.ghostValid = placementValid(refs.world, g, refs.players, refs.zombies, def);
 	}
 
 	private confirm(refs: GameRefs): void {

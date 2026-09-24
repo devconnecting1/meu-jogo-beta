@@ -420,8 +420,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaRim: { id: "rbxassetid://88546042032232", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
 	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
-	/** atlas: interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
-	furniture: { id: "rbxassetid://122442706684073", w: 1024, h: 718 },
+	/** atlas: interiors: 1343 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 718 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
 	blood: { id: "rbxassetid://115387837711444", w: 96, h: 264 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */

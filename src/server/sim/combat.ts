@@ -66,6 +66,7 @@ import { isFiniteNumber, unwrapTick } from "shared/net/codec";
 import { ownsWeapon } from "shared/game/save";
 import type { PlayerSaveData } from "shared/game/save";
 import { querySolids, Solid, WorldData } from "shared/game/world";
+import { windowIntact } from "shared/game/windows";
 import { SPEED_SCALE } from "shared/sim/types";
 import { meleeSweepLeftS, meleeSweepStep } from "shared/sim/meleeSweep";
 import { biteRewindCapS, judgedTick, PositionHistory, rewindCapS } from "./history";
@@ -177,6 +178,12 @@ export interface CombatHooks {
 	noise?: (x: number, y: number, radius: number, shot: boolean, gun?: Wp.WeaponDef) => void;
 	/** a blade crossed a tree/car/bin: true when it gave something (F3's server/sim/interaction.ts) */
 	chop?: (s: Solid, chopping: boolean) => boolean;
+	/**
+	 * (EDI-18) A bullet stopped at an intact pane (`melee` false: the ray was its line and its reach), or a blade's arc
+	 * crossed one within `reach` (`melee`: the swinger's reach, line and rate are the window's own checks,
+	 * server/sim/windows.ts). True when the glass broke.
+	 */
+	glass?: (s: Solid, melee: boolean, reach: number) => boolean;
 	projectile?: (request: ProjectileRequest) => void;
 	/** cosmetics for the Fx channel (§4.1); this module never draws anything itself */
 	fx?: (event: Net.FxEvent) => void;
@@ -818,6 +825,8 @@ export class ServerCombat {
 			} else if (h.solid !== undefined) {
 				kind = h.solid.kind === "car" || h.solid.kind === "tree" ? Net.HitKind.MapItem : Net.HitKind.Solid;
 				if (h.solid.kind === "car" && h.solid.tags === "car") this.hooks.chop?.(h.solid, false);
+				// a pane stops the bullet and breaks (EDI-18): the pellets after it fly through the open frame
+				else if (windowIntact(h.solid)) this.hooks.glass?.(h.solid, false, 0);
 			}
 			hits.push({ x: h.x, y: h.y, hit: kind });
 		}
@@ -1105,7 +1114,10 @@ export class ServerCombat {
 		this.chopMapItems(sp, w, aim, -CHAINSAW_ARC / DEG, CHAINSAW_ARC / DEG, reach, true);
 	}
 
-	/** trees / cars / bins the blade passes over shake and may drop an item (once per swing) */
+	/**
+	 * Trees / cars / bins the blade passes over shake and may drop an item (once per swing); an intact pane it crosses
+	 * breaks (EDI-18, `glass`: reach, line and rate are the window's checks)
+	 */
 	private chopMapItems(
 		sp: ServerPlayer,
 		w: Wp.WeaponDef,
@@ -1115,14 +1127,15 @@ export class ServerCombat {
 		reach: number,
 		continuous: boolean,
 	): void {
-		if (this.hooks.chop === undefined) return;
+		if (this.hooks.chop === undefined && this.hooks.glass === undefined) return;
 		const p = sp.state;
 		const st = this.slotOf(sp.slot);
 		const buf = this.solidBuf;
 		buf.clear();
 		querySolids(this.world, p.x - reach - 8, p.y - reach - 8, p.x + reach + 8, p.y + reach + 8, buf);
 		for (const s of buf) {
-			if (s.kind !== "tree" && s.kind !== "car") continue;
+			const pane = windowIntact(s);
+			if (s.kind !== "tree" && s.kind !== "car" && !pane) continue;
 			if (!continuous && st.swing.solidIds.has(s.id)) continue;
 			const qx = math.clamp(p.x, s.x, s.x + s.w);
 			const qy = math.clamp(p.y, s.y, s.y + s.h);
@@ -1135,7 +1148,11 @@ export class ServerCombat {
 			const pad = cd > half ? math.deg(math.asin(half / cd)) : 90;
 			if (rel + pad < fromDeg || rel - pad > toDeg) continue;
 			if (!continuous) st.swing.solidIds.add(s.id);
-			if (this.hooks.chop(s, Wp.isChoppingTool(w))) {
+			if (pane) {
+				this.hooks.glass?.(s, true, reach);
+				continue;
+			}
+			if (this.hooks.chop !== undefined && this.hooks.chop(s, Wp.isChoppingTool(w))) {
 				this.hooks.fx?.({ t: Net.FxType.SolidShake, solidId: s.id, angle: aim, strength: 1, x: cx, y: cy });
 			}
 		}

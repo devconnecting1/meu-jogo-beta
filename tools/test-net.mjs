@@ -1841,6 +1841,49 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	eq("a truncated PowerSet", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
 });
 
+test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new message (EDI-18, note 23)", () => {
+	const FXW = require(join(SRC, "shared/net/fxWire.ts"));
+	// a window of the generated map: a static id (a town's are < 6000), its frame "open" = the glass broken
+	const broken = { t: P.WorldEv.DoorSet, id: 4321, state: P.SolidState.Open };
+	const pkt = P.encodeWorld({ tick: 9, events: [broken] }).packets[0];
+	// header 5 B + tag 1 B + id u32 + state u8: 6 B a pane
+	eq("a broken pane on the wire", buffer.len(pkt), 5 + 6);
+	sizes.push(["World DoorSet of a window (EDI-18)", "6 B", "static window id, state Open = the glass broken"]);
+	const d = P.decodeWorld(pkt);
+	ok(d !== undefined && d.events[0].id === 4321 && d.events[0].state === P.SolidState.Open, "it decodes as it went");
+	// a whole town smashed (~370 panes) is one WorldInit block
+	const town = [];
+	for (let i = 0; i < 370; i++) town.push({ t: P.WorldEv.DoorSet, id: 1300 + i * 11, state: P.SolidState.Open });
+	const all = P.encodeWorld({ tick: 1, events: town });
+	eq("370 panes: one block", all.packets.length, 1);
+	ok(buffer.len(all.packets[0]) <= 5 + 370 * 6, "at 6 B each");
+	// the crash: a Debris of material "glass", appended at the end of the table (an older client reads "impact")
+	eq("the glass material id", FXW.debrisMaterialId("glass"), FXW.GLASS_DEBRIS);
+	eq("appended, never renumbered (impact stays 0, boss 5)", FXW.debrisMaterialId("boss"), 5);
+	const wire = FXW.toWireFx({ kind: "debris", x: 1000, y: 2000, count: 12, material: "glass" }, i => i);
+	const back = P.decodeFx(P.encodeFx({ tick: 1, events: [wire] }).packets[0]);
+	const sim = back !== undefined ? FXW.fromWireFx(back.events[0]) : undefined;
+	ok(
+		sim !== undefined && sim.kind === "debris" && sim.material === "glass" && sim.count === 12,
+		"it comes back as glass",
+	);
+	eq("a material a build does not know falls back to impact", FXW.debrisMaterialOf(FXW.GLASS_DEBRIS + 1), "impact");
+	// C→S (the review of ef98768, M1): breaking glass with E is the command's own bit, never a guess of the server's
+	const cmd = held => ({
+		viewTick: 1,
+		viewFrac: 0,
+		cmds: [P.makeCommand(7, 0, 0, 0, held, P.packEdges(0, 0, 1, 0))],
+	});
+	const glassE = P.decodeInput(P.encodeInput(cmd(P.HeldBit.Glass)));
+	ok(
+		glassE !== undefined && (glassE.cmds[0].held & P.HeldBit.Glass) !== 0 && P.HELD_MASK === 15,
+		"an E press for the glass carries HeldBit.Glass (8) through the wire, inside HELD_MASK",
+	);
+	const forged = P.encodeInput(cmd(0));
+	buffer.writeu8(forged, 4 + 6, 16);
+	eq("a held bit above HELD_MASK is still malformed", P.decodeInput(forged), undefined);
+});
+
 test("World: WorldInit in blocks of ≤ 16 KB", () => {
 	const events = [randWorldEvent(P.WorldEv.InitBegin)];
 	for (let i = 0; i < 2000; i++) events.push(randWorldEvent(P.WorldEv.SolidAdd));
