@@ -98,7 +98,11 @@ const TOUCH_LABEL_W = 330;
 /** Controls: the device (radio group) on the left, its keys on the right */
 const DEVICE_W = 320;
 const KEYS_LABEL_W = 280;
-/** the key rows: a key (28) with a hair of room, so the longest scheme (Touch, nine rows) fits without scrolling */
+/**
+ * the key rows: a key (28) with a hair of room, so the longest scheme fits without scrolling -- ten rows each since the
+ * quick plates (ITM-08): 10 x 34 + 9 grooves + the list's padding = 392 of the page's 408 (the Graphics row made the
+ * page 50 taller, 2026-09-24; nine rows left 54 empty, ten leave 16, an eleventh would need 34 more and scroll)
+ */
 const KEY_ROW_H = 34;
 /** the device's note under the radio group: three lines of TEXT.sm, down to a phone */
 const DEVICE_NOTE_H = 72;
@@ -128,6 +132,16 @@ const TOUCH_H = sectionHeight(settingsListHeight([...formRows(7), TOUCH_NOTE_H])
  * short list of facts.
  */
 const PAGE_H = math.max(GENERAL_H, TOUCH_H);
+
+/**
+ * Does a device's key list of `rows` rows (tutorial.ts SCHEMES) fit the Controls page without scrolling? A key list
+ * that scrolls hides its last keys below the fold (tools/test-settings.mjs holds every scheme to it).
+ */
+export function keyListFits(rows: number): boolean {
+	const items: Array<number> = [];
+	for (let i = 0; i < rows; i++) items.push(KEY_ROW_H);
+	return settingsListHeight(items) <= PAGE_H - sectionHeight(0);
+}
 /** where the pages start: under the header and the tab bar */
 const SECTION_Y = cardHeaderHeight(TEXT.xl3) + space(1) + TAB_H + space(4);
 const WIN_H = SECTION_Y + PAGE_H + space(5);

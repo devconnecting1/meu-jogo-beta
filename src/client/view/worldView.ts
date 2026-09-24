@@ -626,6 +626,7 @@ export class WorldView {
 		const x1 = v.maxX + 140;
 		const y1 = v.maxY + 140;
 		queryTown(world, x0, y0, x1, y1, list);
+		this.interior.useWorld(world);
 		let open = false;
 		if (world !== this.shadesFor) {
 			this.roofShades.clear();
@@ -684,8 +685,11 @@ export class WorldView {
 			if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) continue;
 			const bt = home?.buildingType ?? 1;
 			const house = bt === 1 || bt === 2;
-			if (s.kind === "furniture") this.interior.drawFurniture(r, cam, s);
-			else if (!this.drawWallArt(r, cam, s, house)) this.interior.drawWall(r, cam, s, house);
+			if (s.kind === "furniture") {
+				this.interior.drawFurniture(r, cam, s, bt);
+			} else if (!this.interior.drawWallArt(r, cam, s, house) && !this.drawWallArt(r, cam, s, house)) {
+				this.interior.drawWall(r, cam, s, house);
+			}
 		}
 	}
 

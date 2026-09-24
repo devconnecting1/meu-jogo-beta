@@ -878,6 +878,20 @@
 			"description": "bathroom / cold room: small tiles"
 		},
 		{
+			"name": "wallShade",
+			"file": "wallShade.png",
+			"kind": "slice",
+			"w": 7,
+			"h": 7,
+			"slice": [
+				3,
+				3,
+				4,
+				4
+			],
+			"description": "the shadow at the foot of an interior wall (round every wall)"
+		},
+		{
 			"name": "survivorsA",
 			"file": "survivorsA.png",
 			"kind": "sheet",
@@ -1289,6 +1303,14 @@
 				"skill_skull": [72, 216, 16, 16],
 				"skill_antidote": [90, 216, 16, 16]
 			}
+		},
+		{
+			"name": "furniture",
+			"file": "furniture.png",
+			"kind": "atlas",
+			"w": 1024,
+			"h": 718,
+			"description": "interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
 		}
 	]
 }

@@ -7,8 +7,10 @@
  *   npm run test:awareness -- --out <dir>          # ...and the PNGs: every state on every ground, and the story
  *
  *   1. SHAPES     dot / "?" / "!" are different silhouettes, not only different colours, and each costs a few Frames;
- *   2. LEG-03     every mark reads on light pavers, asphalt, grass, a shop floor and in the dark: some part of its edge
- *                 is ≥ 3:1 against the ground (WCAG 1.4.11), and the fill is ≥ 3:1 against its own outline;
+ *   2. LEG-03     every mark reads on light pavers, asphalt, grass, every room floor (its flat colour, the darkest and
+ *                 the lightest texel of its texture, the shadow at a wall's foot), every rug of the interiors' art and in
+ *                 the dark: some part of its edge is ≥ 3:1 against the ground (WCAG 1.4.11), and the fill is ≥ 3:1
+ *                 against its own outline;
  *   3. PLACEMENT  above the head, and never over a survivor: a zombie right under you slides its mark aside;
  *   4. WHO        the idle dot only near you; nothing for a zombie the dark hides; nothing under a closed roof;
  *   5. MOTION     a change pops in (a bigger first frame and a white rim); Reduce Motion never moves (no pop, no
@@ -158,7 +160,51 @@ const GROUNDS = {
 	"park grass": rgb(COLORS.parkGrass),
 	"shop floor": rgb(COLORS.floorTile),
 	"wood floor": rgb(COLORS.floorWood),
+	// the rest of the rooms' floors (ART-12): vinyl, carpet, a kitchen's and a bathroom's tiles, a back room's concrete
+	"vinyl floor": rgb(COLORS.floorShop),
+	carpet: rgb(COLORS.floorCarpet),
+	"kitchen floor": rgb(COLORS.floorKitchen),
+	"bath floor": rgb(COLORS.floorBath),
+	"back-room concrete": rgb(COLORS.floorConcrete),
+	// the floor in the shadow at a wall's foot (wallShade: at most 30 % black)
+	"wood floor by a wall": mix(rgb(COLORS.floorWood), [0, 0, 0], 0.3),
 };
+{
+	// with the art, every floor texture's darkest and lightest texel, and every rug's (the interiors' atlas)
+	const extremes = (name, img, keep) => {
+		let lo;
+		let hi;
+		for (let i = 0; i < img.w * img.h; i++) {
+			if (img.data[i * 4 + 3] < 255 || (keep !== undefined && !keep(i % img.w, Math.floor(i / img.w)))) continue;
+			const c = [img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]];
+			if (lo === undefined || lum(c) < lum(lo)) lo = c;
+			if (hi === undefined || lum(c) > lum(hi)) hi = c;
+		}
+		if (lo !== undefined) GROUNDS[`${name} (art, darkest)`] = lo;
+		if (hi !== undefined) GROUNDS[`${name} (art, lightest)`] = hi;
+	};
+	for (const [name, file] of [
+		["wood floor", "floorWood"],
+		["tile floor", "floorTile"],
+		["vinyl floor", "floorShop"],
+		["carpet", "floorCarpet"],
+		["kitchen floor", "floorKitchen"],
+		["bath floor", "floorBath"],
+	]) {
+		const p = join(ART_DIR, `${file}.png`);
+		if (existsSync(p)) extremes(name, decodePNG(readFileSync(p)));
+	}
+	const FA = join(SRC, "client/view/furnitureAtlas.ts");
+	const atlas = join(ART_DIR, "furniture.png");
+	if (existsSync(FA) && existsSync(atlas)) {
+		const { FURNITURE_CELLS, RUG_COLOURS } = require(FA);
+		const img = decodePNG(readFileSync(atlas));
+		for (let n = 0; n < RUG_COLOURS; n++) {
+			const [x0, y0, w, h] = FURNITURE_CELLS[`rug:${n}:h`];
+			extremes(`rug ${n}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
+		}
+	}
+}
 // the night: the deepest overlay the clock ever draws (clock.ts MAX_DARK), over each ground
 const NIGHT = darkAlphaAt(23, false, false);
 for (const [name, g] of Object.entries({ ...GROUNDS }))

@@ -27,7 +27,7 @@ Referências: as páginas oficiais `production/analytics` (índice, `get-started
 3. **Cardinalidade baixa.** Os campos customizados são poucos textos fixos ("Life day - 4-7", "Time - Night"):
    nada de texto livre, nome ou UserId. Os SKUs são os nomes do catálogo (9 pacotes, 9 trajes) e mais 7 fixos. O
    teste (§13 da suíte) prova que cada valor visto é de um conjunto fechado e que o teto de combinações dos três
-   campos é **350**, contra o limite de **8.000** por experiência.
+   campos é **536**, contra o limite de **8.000** por experiência.
 4. **Abaixo do limite.** O limite documentado é **120 + 20 × CCU chamadas por minuto** por servidor. O módulo usa no
    máximo **75 %** disso em qualquer janela de 60 s (`RATE_SHARE`); o que não cabe espera numa fila limitada (512) e
    sai quando a janela abre. Um evento de economia que precisa esperar é **somado** ao último evento de economia do
@@ -208,22 +208,48 @@ Sem `funnelSessionId` (repetição ignorada pela plataforma). Passos nos níveis
 50, 75 e 100. Cada sessão que entra na cidade manda o degrau atual uma vez e depois cada degrau novo; um nível posto
 por admin não é mandado. **Pergunta:** quantos jogadores chegam a cada nível?
 
+### 4.6 NewTown — um funil por **viagem a uma cidade própria**
+
+O Play solo e o New town da oferta de cidade nova (`docs/MULTIPLAYER.md` §7.4, MP-25; `server/match/*`).
+`funnelSessionId` = um GUID sorteado pelo servidor de origem quando aceita o pedido, levado no bilhete do teleporte
+(o TeleportData): o **mesmo** id fecha o funil no servidor de destino, como a chave natural do Rebirth vale em qualquer
+servidor.
+
+| Passo | Nome       | Quando                                                                                         | Onde                        |
+| ----- | ---------- | ---------------------------------------------------------------------------------------------- | --------------------------- |
+| 1     | Asked      | o servidor **aceitou** o pedido (limites e recusas: lobby, vivo, sem perigo, sem outra viagem) | `server/match/travel.ts`    |
+| 2     | Teleported | `TeleportAsync` voltou sem erro (a viagem saiu; `TeleportInitFailed` ainda pode derrubá-la)    | `server/match/travel.ts`    |
+| 3     | Arrived    | o **destino** leu o bilhete: deste place, da nossa forma, emitido para este jogador            | `server/match/matchHost.ts` |
+
+- **Campos do passo 1**, todos do servidor: `Route - Play solo` / `Offer`, `World day - …` (o dia do mundo que ele
+  deixa) e `Life day - …`.
+- O pedido vem do cliente, mas o passo 1 é a **decisão** do servidor (como o "Tried to buy" da loja), e o passo 3 lê um
+  bilhete que passou pelo cliente (a documentação avisa): ele só fecha o funil do **próprio** jogador, com um id de
+  forma GUID, e só num servidor reservado — o pior que um cliente adulterado faz é mexer no próprio funil.
+- Testado por `npm run test:match` (§3 a §5: o servidor real com os serviços falsos, os campos no conjunto fechado,
+  nenhum UserId, nome ou código de acesso) e pelo conjunto fechado da §13 de `test:analytics`.
+- **Pergunta:** quem aperta Play solo chega? Entre 2 e 3 está o teleporte que falha no fim (o `TripFailed` diz por
+  quê). A oferta converte? (`Route - Offer` no passo 1 contra o `TownOffered`, §5.) Quem vai para a cidade própria
+  vinha de que dia do mundo?
+
 ## 5. Eventos custom (`LogCustomEvent`) — todos agregados
 
-| Evento         | Valor                     | Campos                                                                        | Quando                                                                                                            | Pergunta                                                |
-| -------------- | ------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| TutorialChoice | —                         | `Choice - Accepted` / `Declined`                                              | a resposta chegou ao save do servidor (jogador novo)                                                              | quantos aceitam o tutorial?                             |
-| Died           | dia da vida               | `Life day - …`; `Time - Night` / `Day`; `Cause - Hunger/Poison/Boss/Horde`    | o servidor matou o sobrevivente (`life.ts` `died`)                                                                | onde, quando e **de quê** se morre                      |
-| LifeEnded      | dia que a vida alcançou   | `End - New game` / `World end`; `Life day - …`; `Rebirths - 0/1/2/3+`         | New game aceito, ou o mundo acabou (MP-22)                                                                        | quanto dura uma vida; quem paga Rebirth vai mais longe? |
-| WorldEnded     | dias que o mundo durou    | `Reason - Timeout` / `Declined`; `Fallen - 1/2/3+`; `World day - …`           | uma vez por mundo, no primeiro sobrevivente conectado que caiu com ele (`worldLog.ts` guarda o registro completo) | quanto dura um mundo; solo desiste mais que grupo?      |
-| TitleEarned    | —                         | `Title - Survivor` / `Horde Breaker` / `Week One`                             | o servidor concedeu o título (MON-05), uma vez por save                                                           | quantos ganham cada título por dia?                     |
-| SessionEnded   | minutos jogados na sessão | `Where - Lobby/City/Dead`; `Time - Night/Dawn/Day`; `Visit - First/Returning` | ao sair do servidor, **toda** sessão gravável (inclusive quem nunca entrou na cidade)                             | **onde se desiste**: no lobby, na cidade, morto?        |
-| SessionLength  | minutos jogados na sessão | `Length - 0-14 min/15-59 min/1-2 h/2-3 h/3 h+`                                | junto do SessionEnded, **toda** sessão gravável                                                                   | a cauda da sessão (guarda da BEM-07, §15)               |
-| BreakNudge     | —                         | `Left - Yes` / `No`                                                           | uma vez por sessão: o amanhecer que deu a linha da pausa (§15); sai na saída ou 2 min depois                      | a linha da pausa é ouvida? (BEM-04)                     |
-| SessionKills   | golpes finais na sessão   | `Kills - 0/1-9/10-49/50-199/200+`                                             | ao sair do servidor, se entrou na cidade                                                                          | quanto se luta por sessão                               |
-| WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`     | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
-| Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                       | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
-| ItemsUsed      | itens usados na sessão    | —                                                                             | ao sair, se > 0                                                                                                   | consumo por sessão                                      |
+| Evento         | Valor                     | Campos                                                                                                                        | Quando                                                                                                            | Pergunta                                                |
+| -------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| TutorialChoice | —                         | `Choice - Accepted` / `Declined`                                                                                              | a resposta chegou ao save do servidor (jogador novo)                                                              | quantos aceitam o tutorial?                             |
+| Died           | dia da vida               | `Life day - …`; `Time - Night` / `Day`; `Cause - Hunger/Poison/Boss/Horde`                                                    | o servidor matou o sobrevivente (`life.ts` `died`)                                                                | onde, quando e **de quê** se morre                      |
+| LifeEnded      | dia que a vida alcançou   | `End - New game` / `World end`; `Life day - …`; `Rebirths - 0/1/2/3+`                                                         | New game aceito, ou o mundo acabou (MP-22)                                                                        | quanto dura uma vida; quem paga Rebirth vai mais longe? |
+| WorldEnded     | dias que o mundo durou    | `Reason - Timeout` / `Declined`; `Fallen - 1/2/3+`; `World day - …`                                                           | uma vez por mundo, no primeiro sobrevivente conectado que caiu com ele (`worldLog.ts` guarda o registro completo) | quanto dura um mundo; solo desiste mais que grupo?      |
+| TitleEarned    | —                         | `Title - Survivor` / `Horde Breaker` / `Week One`                                                                             | o servidor concedeu o título (MON-05), uma vez por save                                                           | quantos ganham cada título por dia?                     |
+| SessionEnded   | minutos jogados na sessão | `Where - Lobby/City/Dead`; `Time - Night/Dawn/Day`; `Visit - First/Returning`                                                 | ao sair do servidor, **toda** sessão gravável (inclusive quem nunca entrou na cidade)                             | **onde se desiste**: no lobby, na cidade, morto?        |
+| SessionLength  | minutos jogados na sessão | `Length - 0-14 min/15-59 min/1-2 h/2-3 h/3 h+`                                                                                | junto do SessionEnded, **toda** sessão gravável                                                                   | a cauda da sessão (guarda da BEM-07, §15)               |
+| BreakNudge     | —                         | `Left - Yes` / `No`                                                                                                           | uma vez por sessão: o amanhecer que deu a linha da pausa (§15); sai na saída ou 2 min depois                      | a linha da pausa é ouvida? (BEM-04)                     |
+| SessionKills   | golpes finais na sessão   | `Kills - 0/1-9/10-49/50-199/200+`                                                                                             | ao sair do servidor, se entrou na cidade                                                                          | quanto se luta por sessão                               |
+| WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`                                                     | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
+| Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                                                                       | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
+| ItemsUsed      | itens usados na sessão    | —                                                                                                                             | ao sair, se > 0                                                                                                   | consumo por sessão                                      |
+| TownOffered    | dia do mundo              | `World day - …`; `Best day - …` (o recorde); `Visit - First` / `Returning`                                                    | um jogador **novo** (recorde ≤ 5) num servidor público de dia bem além do recorde recebeu a oferta (MP-25)        | quantos novatos caem em mundos de dia alto (P0-1)?      |
+| TripFailed     | teleportes tentados       | `Stage - Reserve/Teleport/Init`; `Result - reserve/teleport/full/flooded/denied/timeout/cancelled`; `Route - Play solo/Offer` | uma viagem a uma cidade própria acabou com o jogador ainda aqui (`cancelled` = ele entrou na cidade)              | o teleporte falha onde e por quê?                       |
 
 Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificuldade, não um valor por dia).
 
@@ -266,8 +292,8 @@ Uma New game que nunca ficou de pé e é engolida por um fim de mundo não conta
   16); o minuto mais cheio tem **66 = 28 % do limite**. Nada esperou na fila.
 - **Enxurrada** (§8: 6 jogadores ricos comprando 150 pacotes cada em 10 s, muito além do balde do ShopAction):
   nenhum minuto passa de 180, nada é descartado, cada moeda chega (900 compras viram 186 eventos somados).
-- Por tipo, também longe dos tetos: 1 moeda (limite 5), 5 transactionTypes (20), 25 SKUs (100), 6 funis com o
-  Onboarding (10), 13 passos no maior (100), 12 nomes custom (100), teto de 350 combinações de campos (8.000).
+- Por tipo, também longe dos tetos: 1 moeda (limite 5), 5 transactionTypes (20), 25 SKUs (100), 7 funis com o
+  Onboarding (10), 13 passos no maior (100), 14 nomes custom (100), teto de 536 combinações de campos (8.000).
 
 ## 7. O que o dono vê no Creator Hub, e quando
 
@@ -279,7 +305,7 @@ Uma New game que nunca ficou de pé e é engolida por um fim de mundo não conta
     - **Economy:** fontes × sumidouros de `Coins` por transactionType e por SKU, saldo médio, com quebra pelos campos
       (`Category`, `Continue`).
     - **Funnels:** a aba **Onboarding** (o funil embutido) e abas para **NightSurvival**, **Night**, **Rebirth**,
-      **Shop** e **Levels** (até 10 abas): conversão e abandono por passo, com breakdown pelos campos do passo 1.
+      **Shop**, **Levels** e **NewTown** (até 10 abas): conversão e abandono por passo, com breakdown pelos campos do passo 1.
       Ao mudar um passo, ajuste o intervalo de datas para depois da mudança (funnel-events.md, "Modify funnels").
     - **Custom events / Explore:** cada evento com contagem, usuários únicos, soma, média, mínimo, máximo e média por
       usuário do valor, fatiado pelos campos. Dá para montar um **Custom dashboard** com os que importam (Died por
@@ -443,7 +469,7 @@ Onze de 20. O save do jogo é DataStore com trava de sessão: uma falha de data 
 ## 14. Checklist do dono no Creator Hub
 
 1. **Publicar** e, em minutos, conferir **View Events** em Economy, Funnels e Custom: os 6 funis (Onboarding,
-   NightSurvival, Night, Rebirth, Shop, Levels) e os 12 eventos custom.
+   NightSurvival, Night, Rebirth, Shop, Levels) e os 14 eventos custom.
 2. **Funnels:** criar as abas (até 10); usar o breakdown pelos campos customizados (são os do passo 1).
 3. **Custom dashboard:** Died por `Cause`; SessionEnded (contagem) por `Where`; WeaponKills (soma e usuários únicos)
    por `Weapon`; LifeEnded (média) por `Rebirths`; Shop por `Coins`.

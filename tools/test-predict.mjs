@@ -296,8 +296,9 @@ const W = require(join(SRC, "shared/game/world.ts"));
 const physics = require(join(SRC, "shared/game/physics.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const Ply = require(join(SRC, "shared/game/player.ts"));
-const { applyPlayerDamage, createPlayer } = Ply;
+const { applyPlayerDamage, createPlayer, itemUseEffect } = Ply;
 const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+const QUICK = require(join(SRC, "shared/game/quickUse.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const SIM = require(join(SRC, "shared/sim/types.ts"));
@@ -712,6 +713,13 @@ function run(opts) {
 	let now = T0;
 	let serverTick = 0;
 	let allySeq = 0;
+	// (ITM-08) quick HEAL / EAT presses: the client's pick (shared/game/quickUse.ts) sent as the Bag's UseItem verb, which
+	// rides the uplink and is applied by the server right BEFORE the command it was made during (§2.4 `atSeq`,
+	// server/sim/backpack.ts `due`) -- the vitals then come back in the self block, as in the game
+	const quickPlan = [...(opts.quickUse ?? [])];
+	const verbs = [];
+	report.quickSent = [];
+	report.quickApplied = [];
 	let lastAllyX = -Infinity;
 	let waypointAt = 0;
 	let heading = 0;
@@ -744,7 +752,18 @@ function run(opts) {
 			allySeq = (allySeq + 1) % 65536;
 			serverStep(scene.world, ally, SIM.makeCommand(allySeq, 1, 0, 1, 0, 0, 0));
 			const ackBefore = me.ackSeq;
-			serverStep(scene.world, me, PL.takeCommand(me));
+			const cmd = PL.takeCommand(me);
+			for (let v = verbs.length - 1; v >= 0; v--) {
+				const verb = verbs[v];
+				if (verb.arrive > now || cmd === undefined || codec.seqDiff(verb.atSeq, cmd.seq) > 0) continue;
+				verbs.splice(v, 1);
+				const before = { hp: me.state.hp, hungry: me.state.hungry };
+				if (itemUseEffect(me.state, me.save, verb.id)) {
+					const after = { hp: me.state.hp, hungry: me.state.hungry };
+					report.quickApplied.push({ ...verb, before, after, tick: serverTick });
+				}
+			}
+			serverStep(scene.world, me, cmd);
 			// a command the queue jumped over (every copy of it came too late): the body ran one step fewer for it
 			const jump = (me.ackSeq - ackBefore + 65536) % 65536;
 			if (me.counters.consumed > 1 && jump > 1 && jump < 1000)
@@ -802,6 +821,22 @@ function run(opts) {
 			report.clientHp.push([now, client.state.hp]);
 			if (now - T0 > 2)
 				report.hungerGap = Math.max(report.hungerGap, Math.abs(client.state.hungry - me.state.hungry));
+		}
+		// a quick plate pressed this frame: the shared pick on the client's own bars, one fewer predicted in its backpack
+		// (client/net/bagPrediction.ts: the vitals are the snapshot's), the verb made during the next command
+		while (quickPlan.length > 0 && now - T0 >= quickPlan[0].at) {
+			const plan = quickPlan.shift();
+			const b = client.state;
+			const v = { hp: b.hp, hpMax: b.hpMax, hunger: b.hungry, hungerMax: b.hungryMax, dead: b.dead };
+			const pick = QUICK.quickPick(plan.kind, client.save, v);
+			if (pick.why !== "ok") {
+				report.quickSent.push({ ...plan, refused: pick.why });
+				continue;
+			}
+			client.save.invenUse[pick.id] -= 1;
+			const atSeq = client.commands.nextSeq();
+			verbs.push({ id: pick.id, atSeq, arrive: now + opts.rtt / 2 });
+			report.quickSent.push({ ...plan, id: pick.id, atSeq, hp: b.hp, hungry: b.hungry });
 		}
 		if (report.stalledAt > 0 && report.consumedAtStall === undefined) report.consumedAtStall = me.counters.consumed;
 		if (report.stalledAt > 0 && now >= report.stalledAt + 1 && report.afterStall === undefined) {
@@ -1046,6 +1081,58 @@ console.log(`\n[knockback] 200 ms RTT, a bite every 0.5 s — the correction the
 	if (p.snaps === 0) ok(`the visual offset was always eased, never snapped (< ${CFG.VISUAL_SNAP_DIST} u)`);
 	else if (LOSS > STRICT_LOSS) console.log(`  note  ${p.snaps} visual snap(s) at ${pct(LOSS, 1)} loss (reported)`);
 	else fail(`${p.snaps} visual snap(s): a correction above ${CFG.VISUAL_SNAP_DIST} u had to teleport the survivor`);
+}
+
+// ---- quick use (ITM-08): HEAL and EAT pressed mid-walk, no rubber band
+//
+// The plates send the Bag's UseItem verb; the server applies it right before the command it was made during and the
+// vitals come back in the self block (the client never predicts them: bagPrediction.ts). Eating while STARVING is the
+// one use that moves the survivor -- under 25% food the walk is slower (shared/game/player.ts recalcMoveSpeed) -- so the
+// commands between the verb and the snapshot that brings the food back were predicted slow and simulated fast. That gap
+// must stay a small eased correction, never a snap back, and the heal must not move the survivor at all.
+console.log(`\n[quick use] 200 ms RTT, a starving, hurt survivor walks and presses F, then H (ITM-08)`);
+{
+	const at = Math.max(2, SECONDS * 0.3);
+	const r = run({
+		rtt: 0.2,
+		jitter: 0.03,
+		loss: LOSS,
+		seed: SEED + 67,
+		vitals: { hp: 45, hunger: 6 },
+		quickUse: [
+			{ at, kind: QUICK.QUICK_EAT_KIND },
+			{ at: at + 1.5, kind: QUICK.QUICK_HEAL_KIND },
+		],
+	});
+	const p = r.predictionStats;
+	const eat = r.quickApplied.find(a => a.id === r.quickSent[0]?.id);
+	const heal = r.quickApplied.find(a => a.id === r.quickSent[1]?.id);
+	const body = r.client.state;
+	console.log(
+		`  sent ${r.quickSent.map(s => s.refused ?? `${s.id}@${s.atSeq}`).join(", ")} · applied ${r.quickApplied.length} · ` +
+			`client food ${body.hungry.toFixed(1)}, hp ${body.hp.toFixed(1)} · divergence p50 ${p.p50.toFixed(3)} u, ` +
+			`p99 ${p.p99.toFixed(3)} u · ${p.corrections} correction(s) above ${CORRECTION_DIST} u · ${p.snaps} snap(s)`,
+	);
+	// (the meal's own tick: the body's healing then spends food as it goes, VIT-01, so the end of the run reads less)
+	if (eat !== undefined && heal !== undefined && eat.before.hungry < 25 && eat.after.hungry >= 25) {
+		ok(
+			`the server ate while starving (${eat.before.hungry.toFixed(1)} -> ${eat.after.hungry.toFixed(1)}) and healed, each before its command`,
+		);
+	} else fail(`the quick presses did not both land on the server (${JSON.stringify(r.quickSent)})`);
+	if (Math.abs(body.hungry - r.me.state.hungry) <= 1.5 && Math.abs(body.hp - r.me.state.hp) <= 0.5) {
+		ok(
+			`the self block brought both back: the client's bars are the server's (food ${body.hungry.toFixed(1)}, hp ${body.hp.toFixed(1)})`,
+		);
+	} else
+		fail(
+			`the client's bars (${body.hungry}, ${body.hp}) are not the server's (${r.me.state.hungry}, ${r.me.state.hp})`,
+		);
+	if (p.corrections === 0) ok(`no correction above ${CORRECTION_DIST} u: the faster walk after the meal is eased in`);
+	else fail(`${p.corrections} correction(s) above ${CORRECTION_DIST} u around a quick use`);
+	if (p.snaps === 0) ok(`never snapped (< ${CFG.VISUAL_SNAP_DIST} u): no rubber band`);
+	else fail(`${p.snaps} visual snap(s) around a quick use: a rubber band`);
+	if (p.last <= ONE_TICK_U) ok(`and the prediction is back within ${p.last.toFixed(3)} u of the server`);
+	else fail(`the prediction ends ${p.last.toFixed(3)} u away from the server`);
 }
 
 // ---- dead: the prediction goes nowhere, exactly like the server's body (shared/sim/playerMove.ts)

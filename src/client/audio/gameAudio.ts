@@ -31,6 +31,7 @@
 import { VehicleKind, vehicleDef } from "shared/data/buildings";
 import { WeaponKind } from "shared/data/kinds";
 import type { SoundName } from "shared/data/sounds";
+import { useSoundOf } from "shared/data/usables";
 import { currentWeapon } from "shared/game/player";
 import { CLOCK_ANNOUNCEMENTS } from "shared/sim/clock";
 import { rideSpeed } from "shared/sim/rideKey";
@@ -307,6 +308,15 @@ export class GameAudio {
 	levelUp(): void {
 		if (!this.running) return;
 		audio.play("levelUp");
+	}
+
+	/**
+	 * Usable `id` used where no server hears it (offline: the local rule ate it) -- the Bag's Use or a quick HEAL / EAT
+	 * (DESIGN_RULES ITM-08). Hosted, the server plays this same sound where the survivor stands when it accepts the use
+	 * (server/sim/simulation.ts, `useSoundOf`): the caller asks only offline, so a use is always heard once (P0-4).
+	 */
+	used(id: number, x: number, y: number): void {
+		audio.play(useSoundOf(id), { x, y });
 	}
 
 	// ------------------------------------------------------------ internals
