@@ -859,13 +859,10 @@ section("9) no write without a change");
 	globalThis.CFrame = hadCFrame;
 	globalThis.Vector3 = hadVector3;
 	globalThis.pcall = hadPcall;
-	const items = loop.slice(
-		loop.indexOf("private drawItems("),
-		loop.indexOf("// ---", loop.indexOf("private drawItems(")),
-	);
+	const items = readFileSync(join(SRC, "client", "view", "groundItemsView.ts"), "utf8");
 	check(
 		/if \(t >= GLINT_LEN\) continue;/.test(items) && !/t < GLINT_LEN \?/.test(items),
-		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (drawItems)",
+		"a ground item's two glint sprites are drawn only while it flashes, not transparent between flashes (groundItemsView)",
 	);
 	check(
 		first === 1 && still === 0 && moving === 60 && calls === 61,
