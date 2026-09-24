@@ -179,20 +179,27 @@ export const BANK_ALONG = 808;
 export const BANK_DEPTH = 620;
 /** the broad stone steps between the sidewalk and the bank's facade: the one shop that stands back (EDI-02) */
 export const BANK_STEPS = 96;
-/** a column of the portico: its side, and its centre's distances from the main door along the facade */
+/**
+ * A column of the portico: its side, and its centre's distances from the main door along the facade -- four columns,
+ * a tetrastyle front two thirds of the facade wide, the door between the middle pair
+ */
 export const BANK_COLUMN = 40;
-export const BANK_COLUMN_AT: ReadonlyArray<number> = [104, 232, 360];
+export const BANK_COLUMN_AT: ReadonlyArray<number> = [104, 232];
 /**
  * The column row stands this far in front of the facade: a sealed gap (narrower than the slimmest body, EDI-11) --
  * nobody is cornered behind a column. Between two columns there are 88 u (PATH): two bodies walk through.
  */
 export const BANK_COLUMN_GAP = 16;
-/** the portico's roof reaches this much past the outer columns and in front of the column row */
+/**
+ * The portico's roof reaches this much past the outer columns; towards the street it stops BANK_PORTICO_SHOW short of
+ * the columns' front: the front of each column stands out under the cornice, seen from above
+ */
 export const BANK_PORTICO_EAVE = 24;
+export const BANK_PORTICO_SHOW = 14;
 
 /**
  * The bank (EDI-23): Main Street's landmark, at the end of an avenue face towards the avenues' crossing (`towardA`:
- * the edge's `a` end), standing back behind its broad stone steps, a portico of six stone columns before its facade
+ * the edge's `a` end), standing back behind its broad stone steps, a portico of four stone columns before its facade
  * under a pediment roof (a "canopy" solid, tags "portico": aerial, see-through with a body under it). The portico
  * carries the alarm bell: while it rings its `powered` is on (server/sim/vault.ts; the LightSet of any light). The
  * inside -- the banking hall, the offices and the vault -- is shared/game/interiors.ts's; the vault door and its boxes
@@ -242,7 +249,7 @@ export function placeBank(kit: TownKit, lot: Lot, e: LotEdge, towardA: boolean):
 		}
 	}
 	// the portico's roof over the columns and the top step, up to the facade (its pediment faces the street)
-	const roof = edgeRect(e, lo - BANK_PORTICO_EAVE, hi + BANK_PORTICO_EAVE, c0 - BANK_PORTICO_EAVE, face);
+	const roof = edgeRect(e, lo - BANK_PORTICO_EAVE, hi + BANK_PORTICO_EAVE, c0 + BANK_PORTICO_SHOW, face);
 	kit.add({
 		kind: "canopy",
 		x: roof.x,

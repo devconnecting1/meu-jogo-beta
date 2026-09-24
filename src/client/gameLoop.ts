@@ -100,7 +100,8 @@ const ROOF_LERP = 0.15;
  * Night light radii (world units) of built light sources. The survivor's own light (its circle and the flashlight's
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
  */
-const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/** a bank's portico, while its alarm bell rings (EDI-23): the bell's lamp, flashing */
+const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330, portico: 220 };
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -911,6 +912,11 @@ export class GameLoop {
 			if (r === undefined || s.powered !== true) continue;
 			const fire = s.tags === "campfire" || s.tags === "brazier";
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
+			// the alarm's lamp flashes, four times a second (the same beat as townView's drawing of it)
+			if (s.tags === "portico") {
+				lights.circle(s.x + s.w / 2, s.y + s.h / 2, r, 0.3, math.floor(this.clock * 8) % 2 === 0 ? 0.8 : 0.25);
+				continue;
+			}
 			lights.circle(s.x + s.w / 2, s.y + s.h / 2, r * flicker, 0.5);
 		}
 		this.machines.collectLights(lights.items);

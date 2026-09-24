@@ -1026,7 +1026,7 @@ function bankChecks(w, buildings, fail) {
 		cols.sort((p, q) => (ax ? p.x - q.x : p.y - q.y));
 		for (let i = 0; i < cols.length; i++) {
 			const c = cols[i];
-			if (portico !== undefined && !inside(c, portico, 1)) fail("EDI-23", `${where}: a column outside the portico`, cx(c), cy(c));
+			if (portico !== undefined && !overlap(c, portico)) fail("EDI-23", `${where}: a column outside the portico`, cx(c), cy(c));
 			if (rectDist(c, b) >= SEALED) fail("EDI-23", `${where}: a body fits behind a column`, cx(c), cy(c));
 			const next = cols[i + 1];
 			if (next !== undefined && rectDist(c, next) < PATH) {

@@ -49,6 +49,7 @@ import {
 } from "shared/game/world";
 import { drawBuildingSign, drawPriceSign } from "./buildingSigns";
 import { drawParkedVehicle } from "./vehicleView";
+import { drawBankRoof, drawPortico, drawTownGround, drawTownProp, drawVaultDoor, vaultDoorSolid } from "./townView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
@@ -435,6 +436,8 @@ export class WorldView {
 	}
 
 	private drawGroundRect(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): void {
+		// the everyday town's own ground (the bank's steps, a court, a sand pit...): ./townView.ts, both drawings
+		if (drawTownGround(r, cam, g, v)) return;
 		if (this.drawGroundRectArt(r, cam, g, v)) return;
 		const k = g.kind;
 		if (k === "stall") {
@@ -644,8 +647,10 @@ export class WorldView {
 			} else if (s.kind === "tree") {
 				if (!this.drawTreeArt(r, cam, s, v)) this.drawTree(r, cam, s, v);
 			} else if (s.kind === "canopy") {
-				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect)
-				this.drawCanopy(r, cam, s, v);
+				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect); the
+				// bank's portico and the everyday town's other roofs on posts: ./townView.ts
+				if (s.tags === "portico") drawPortico(r, cam, s, v, this.shadow, this.clock);
+				else this.drawCanopy(r, cam, s, v);
 			} else if (s.tags === "gas_sign") {
 				// its footing, and the price pylon standing on it (upright: it reaches past the footing's rect)
 				this.drawGasSign(r, cam, s, v);
@@ -664,7 +669,11 @@ export class WorldView {
 					const so = this.shadow(s.x + s.w / 2, s.y + s.h / 2, 6);
 					drawParkedVehicle(r, cam, s, so.x, so.y);
 				} else if (s.kind === "prop") {
-					this.drawProp(r, cam, s);
+					// the everyday town's fixtures first (./townView.ts), the campus quad's here
+					if (!drawTownProp(r, cam, s, world, this.shadow)) this.drawProp(r, cam, s);
+				} else if (vaultDoorSolid(s)) {
+					// the bank's vault door (EDI-23): a steel slab, not a built door
+					drawVaultDoor(r, cam, s, world);
 				} else if (this.machines === undefined || !this.machines.draw(r, cam, s)) {
 					this.drawStructure(r, cam, s);
 				}
@@ -910,6 +919,8 @@ export class WorldView {
 			a,
 			this.shadow,
 		);
+		// the bank's stone parapet and the laylight over its hall (EDI-23, ./townView.ts)
+		if (s.buildingType === 22) drawBankRoof(r, cam, v, s, a);
 	}
 
 	private drawWall(r: Renderer, cam: Camera, s: Solid): void {

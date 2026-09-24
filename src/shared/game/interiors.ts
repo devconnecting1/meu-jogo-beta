@@ -3716,8 +3716,9 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			pl.decorAt(down ? "chairDown" : "chair", u, v, 26, 26, down ? rng.next() * 1.4 : 0);
 		}
 	}
-	// a few days after the outbreak (APO-01): dried blood in some rooms
-	if (rng.chance(0.22)) {
+	// a few days after the outbreak (APO-01): dried blood in some rooms -- never in the bank's vault, shut since the
+	// town fell (EDI-23)
+	if (rng.chance(0.22) && k !== "vault") {
 		pl.decorAt(
 			"blood",
 			cu + (rng.next() - 0.5) * w * 0.5,
