@@ -64,7 +64,13 @@ const VOICE_GAP = space(1);
 export const LINE_GAP = space(0.25);
 /** "@Name" only when it adds information and stays short */
 const MAX_BOTH_CHARS = 26;
-/** MON-07: the Supporter mark, a heart before the name (a shape, so it never needs its colour to be read) */
+/**
+ * MON-07: the Supporter mark, a heart before the name (a shape, so it never needs its colour to be read). A GLYPH here,
+ * where the menus draw the pixel heart (client/ui/pixelIcon.ts; the wardrobe's Supporter page does): the plate is
+ * text only, every line on its pixel shadow with no surface behind it, redrawn in the world every frame -- nine opaque
+ * Frames per plate and a shadow of their own would break the plate's rule, its contrast measure and its pool for one
+ * heart (review of 97cd734, LOW5)
+ */
 export const SUPPORTER_MARK = "♥";
 
 /** the text transparency of a plate giving way to another it overlaps */

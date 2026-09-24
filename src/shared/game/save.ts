@@ -308,6 +308,11 @@ export interface Wallet {
 	/** v7 (MON-05): the title counters (`TitleStat`), a locked title's progress. Optional: older servers */
 	titleStats?: Array<number>;
 	/**
+	 * v6 (CON-04): the deaths of this life the server decided -- a locked Unbroken's progress in the wardrobe reads it
+	 * (review of 97cd734, LOW1). Optional: older servers
+	 */
+	lifeDeaths?: number;
+	/**
 	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
 	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
 	 */
@@ -901,6 +906,7 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		lifeNights: save.lifeNights,
 		achievements: copyArray(save.achievements),
 		titleStats: copyArray(save.titleStats),
+		lifeDeaths: save.lifeDeaths,
 		day: save.day,
 		level: save.level,
 		exp: save.exp,
@@ -1317,6 +1323,11 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	// one: a push from the old life landing after the New game's reply (another remote) would hand its day back
 	if (thisLife && isFiniteNumber(w.lifeNights)) {
 		save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
+	}
+	// the life's deaths (CON-04), the same way: the server's, back to 0 with a new life, so replaced by a wallet of this
+	// life or a newer one -- the wardrobe's Unbroken reads them (review of 97cd734, LOW1)
+	if (thisLife && isFiniteNumber(w.lifeDeaths)) {
+		save.lifeDeaths = readInt(w.lifeDeaths, save.lifeDeaths, 0, L.COUNTER_MAX);
 	}
 	if (thisLife && MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) {
 		save.day = readInt(w.day, save.day, 1, L.DAY_MAX);

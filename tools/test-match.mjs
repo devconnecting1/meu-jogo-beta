@@ -1923,8 +1923,21 @@ section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight 
 		s = bootServer({ memoryStore: sorted });
 		s.run(12);
 		const OTHER = "00000000-aaaa-bbbb-cccc-000000000001";
+		// an entry of this very build (serverList.ts: game.PlaceVersion 1 here, and this SAVE_VERSION)
+		const { SAVE_VERSION } = require(join(SRC, "shared/game/save.ts"));
+		const { ENTRY_VERSION } = require(join(SRC, "server/match/serverList.ts"));
+		const build = { v: ENTRY_VERSION, pv: 1, sv: SAVE_VERSION };
 		const listed = () =>
-			entries.set(OTHER, { v: 1, kind: "public", place: 4242, seed: 777, day: 3, n: 1, max: 6, t: os.time() });
+			entries.set(OTHER, {
+				...build,
+				kind: "public",
+				place: 4242,
+				seed: 777,
+				day: 3,
+				n: 1,
+				max: 6,
+				t: os.time(),
+			});
 		const town = s.env.services.ReplicatedStorage.FindFirstChild("PZTownNet").FindFirstChild("TownRequest");
 		const joinList = p => town.OnServerInvoke(p, { kind: "join", jobId: OTHER });
 		// a join from the list in flight: Play solo says "joining" and reserves nothing

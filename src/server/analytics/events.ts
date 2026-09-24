@@ -1220,13 +1220,6 @@ export class ServerAnalytics {
 	}
 
 	/**
-	 * The client says the shop (screen 0, packs) or the wardrobe (1) just opened (server/main.server.ts `viewShop`):
-	 * a new visit, and the Shop funnel's first step. Everything the step carries is the server's -- the coins in the
-	 * save, whether a body is in the city -- and the guard below is what the docs ask of a client-fired step
-	 * (funnel-events.md "Protect your funnels from exploiters"): a known screen, one visit per SHOP_OPEN_MIN_S, at
-	 * most SHOP_VISITS_MAX a session. A client that lies moves its own funnel and nothing else.
-	 */
-	/**
 	 * MON-07: a Supporter subscription started (`active`) or ended during this session, as the server's own ask found it
 	 * (never a first answer at the join: the platform already counts subscribers). One custom event per flip, no value;
 	 * `Status - Started` / `Status - Ended` and where the player was.
@@ -1241,6 +1234,13 @@ export class ServerAnalytics {
 		});
 	}
 
+	/**
+	 * The client says the shop (screen 0, packs) or the wardrobe (1) just opened (server/main.server.ts `viewShop`):
+	 * a new visit, and the Shop funnel's first step. Everything the step carries is the server's -- the coins in the
+	 * save, whether a body is in the city -- and the guard below is what the docs ask of a client-fired step
+	 * (funnel-events.md "Protect your funnels from exploiters"): a known screen, one visit per SHOP_OPEN_MIN_S, at
+	 * most SHOP_VISITS_MAX a session. A client that lies moves its own funnel and nothing else.
+	 */
 	shopViewed(player: Player, screen: unknown): void {
 		const e = this.entries.get(player);
 		if (e === undefined || e.ephemeral || e.leftAt !== undefined) return;

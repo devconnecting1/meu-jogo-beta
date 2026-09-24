@@ -194,6 +194,21 @@ Cada gravação do save e do registro de títulos leva o UserId do dono (`Update
 o próprio Data Stores Manager mostra de quem é cada chave. O sufixo `_studio` (feito) separa os playtests do
 Studio dos saves de produção.
 
+### Publicar uma versão que muda o save — **sempre reiniciando os servidores**
+
+Quando uma versão sobe o `SAVE_VERSION` (`src/shared/game/save.ts`; o PR diz "save vN"), **publique e reinicie
+todos os servidores na hora**: Creator Hub → a experiência → **Restart servers** (o antigo "Migrate to latest
+update"; basta "só os desatualizados", **sem** bleed-off) ou **Shut down all servers**. Nunca "deixe esvaziar".
+
+Por quê: um servidor antigo que continua no ar não conhece os campos novos. Quem jogou num servidor novo e entra
+num antigo (pelo amigo, por um servidor que ainda não esvaziou) tem o save **e** o registro de títulos
+(`ProjectZ_Titles`) reescritos sem eles — no v7, os títulos novos e os contadores deles somem. Não é só um risco de
+rollback. Do v7 em diante o próprio código se defende (revisão de 97cd734, H1): um servidor que carrega um save mais
+novo que o dele não escreve nada daquele jogador e o manda entrar de novo ("This server is out of date. Rejoin to
+play."), e a lista de servidores do lobby só mostra servidores do mesmo build. Mas o servidor que já está no ar é o
+código **anterior**, e esse não sabe disso: só o reinício o tira do caminho. Detalhes: `docs/MULTIPLAYER.md` §6.7b,
+`docs/DESIGN_RULES.md` MON-05 ("Save v7").
+
 ### Leaderboard — **depois da F2**
 
 Recorde de dias sobrevividos, via `OrderedDataStore`. Depende do XP e do progresso já serem do servidor
@@ -495,7 +510,9 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
 4. **Server management**: decidir como será o "jogar sozinho".
 5. **Alerts**: ligar assim que tiver 100+ DAU (lista na §13 de `docs/ANALYTICS.md`).
 6. **Access settings**: manter privado até a F2 fechar.
-7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
+7. **Publish que muda o save** (sobe o `SAVE_VERSION`, como o do v7): publicar e logo **Restart servers** ou **Shut
+   down all servers** (seção "Publicar uma versão que muda o save"). Depois do próximo publish: conferir o **Ban
+   history** no painel de admin (bans ligados).
 8. **Open Cloud na CI**: a chave só de Assets (IP `0.0.0.0/0`, 90 dias) e os secrets `ROBLOX_API_KEY` +
    `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova

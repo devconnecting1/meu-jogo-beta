@@ -270,6 +270,8 @@ export const LANG_TABLE: Array<string> = [
 	"You are banned from this experience for breaking its rules",
 	"The rules and how to appeal are on this experience's page",
 	"Disconnected for sending too many network messages",
+	// a server older than the player's save lets them go instead of writing it (server/save/newerSave.ts)
+	"This server is out of date. Rejoin to play.",
 	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
 	"Your progress was updated by an administrator",
 	"Your progress was reset by an administrator",

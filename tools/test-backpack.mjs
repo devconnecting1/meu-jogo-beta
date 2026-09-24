@@ -2629,6 +2629,23 @@ console.log(
 	const market = service("MarketplaceService");
 	market.PromptSubscriptionPurchase = (p, id) => prompts.push(["buy", p.UserId, id]);
 	market.PromptCancelSubscription = (p, id) => prompts.push(["cancel", p.UserId, id]);
+	// the platform's product info (LOW5): no answer yet, then the one it gives. The page asks it on a thread of its own
+	// (task.spawn, which this fake does not run): that one thread is caught here and run when the test says so
+	let productInfo;
+	market.GetSubscriptionProductInfoAsync = id => {
+		if (productInfo === undefined) throw new Error("HTTP 503 (Service Unavailable)");
+		return { ...productInfo, askedFor: id };
+	};
+	const realSpawn = globalThis.task.spawn;
+	const asks = [];
+	globalThis.task.spawn = (fn, ...a) => {
+		if (String(fn).includes("GetSubscriptionProductInfoAsync")) asks.push(() => fn(...a));
+		else return realSpawn(fn, ...a);
+	};
+	const answer = () => {
+		for (const f of asks.splice(0)) f();
+		flush();
+	};
 	close = showWardrobe(ctx, handlers);
 	flush();
 	check(
@@ -2649,9 +2666,11 @@ console.log(
 			!deep(screen(), "Page0").Visible &&
 			!deep(screen(), "Details").Visible,
 	);
+	const heartIcon = deep(page(), "Heart");
+	const heartPx = heartIcon?.GetChildren().filter(c => c.Name === "Px") ?? [];
 	check(
 		"diz o que da, o que NUNCA da, que renova todo mes e que se cancela",
-		text("GetsHeart") === "♥  A heart beside your name, for everyone to see." &&
+		text("GetsHeart") === "A heart beside your name, for everyone to see." &&
 			sameColorOf(deep(page(), "GetsHeart").TextColor3, OVER_WORLD.supporter) &&
 			text("GetsTrail") === "Your melee swing trail in the Supporter rose." &&
 			text("Never") === "No coins, XP, items or titles: nothing that changes a night." &&
@@ -2659,9 +2678,33 @@ console.log(
 			text("Price") === "Roblox shows the price before you confirm.",
 	);
 	check(
-		'nao assinante: NOT SUBSCRIBED e o botao "See price" (BEM-02: nunca "BUY NOW")',
-		status() === "NOT SUBSCRIBED" && action().Text === "See price" && action().GetAttribute("Disabled") !== true,
-		`${status()} / ${action().Text}`,
+		"LOW5: o coracao da pagina e o coracao de pixel dos menus (pixelIcon 'heart'), na cor Supporter -- nao o glifo",
+		heartPx.length > 0 && heartPx.every(px => sameColorOf(px.BackgroundColor3, OVER_WORLD.supporter)),
+		`${heartPx.length} pixels`,
+	);
+	// LOW5: until the platform has stated the price here, there is nothing to press
+	check(
+		'nao assinante, antes do preco: NOT SUBSCRIBED e "See price" DESABILITADO (BEM-02: nunca "BUY NOW")',
+		status() === "NOT SUBSCRIBED" && action().Text === "See price" && action().GetAttribute("Disabled") === true,
+		`${status()} / ${action().Text} / Disabled ${action().GetAttribute("Disabled")}`,
+	);
+	click(action(), "See price (sem preco)");
+	answer();
+	check(
+		"um clique sem preco nao abre prompt nenhum; a pergunta que falhou deixa tudo como estava",
+		prompts.length === 0 && action().GetAttribute("Disabled") === true && asks.length === 0,
+		JSON.stringify(prompts),
+	);
+	// the next time the tab opens, the page asks again; this time the platform answers
+	productInfo = { DisplayPrice: "R$ 99", DisplaySubscriptionPeriod: "/month", IsForSale: true };
+	click(deep(screen(), "Tabs").FindFirstChild("Tab2"), "Titles");
+	click(deep(screen(), "Tabs").FindFirstChild("Tab3"), "Supporter");
+	const asked = asks.length;
+	answer();
+	check(
+		'reaberta a aba, pergunta de novo; com a resposta: o preco e o periodo DA PLATAFORMA, e "See price" habilitado',
+		asked === 1 && text("Price") === "R$ 99/month" && action().GetAttribute("Disabled") !== true,
+		`${asked} pergunta(s); ${text("Price")}`,
 	);
 	check(
 		"a previa e a placa da rua COM o coracao (o que todos vao ver)",
@@ -2700,6 +2743,41 @@ console.log(
 	check("fechar remove a tela (e a pagina com ela)", screen() === undefined);
 	me.attrs.delete("pz_supporter");
 	changed.Fire();
+
+	// LOW5: the platform says the subscription is not for sale -- nothing is offered, and a subscriber can still cancel
+	productInfo = { DisplayPrice: "R$ 99", DisplaySubscriptionPeriod: "/month", IsForSale: false };
+	close = showWardrobe(ctx, handlers);
+	flush();
+	click(deep(screen(), "Tabs").FindFirstChild("Tab3"), "Supporter");
+	answer();
+	check(
+		"fora de venda (IsForSale false): o botao some e a linha do preco diz que nao ha assinatura agora",
+		action().Visible === false &&
+			action().GetAttribute("Disabled") === true &&
+			text("Price") === "Subscriptions are not available right now.",
+		`${action().Visible} / ${text("Price")}`,
+	);
+	const before = prompts.length;
+	click(action(), "See price (fora de venda)");
+	check(
+		"e um clique ali nao pede nada a plataforma",
+		prompts.length === before,
+		JSON.stringify(prompts.slice(before)),
+	);
+	me.attrs.set("pz_supporter", true);
+	changed.Fire();
+	flush();
+	check(
+		"...mas quem ja assina ainda ve e alcanca o Cancel subscription",
+		action().Visible === true &&
+			action().Text === "Cancel subscription" &&
+			action().GetAttribute("Disabled") !== true,
+		`${action().Visible} / ${action().Text}`,
+	);
+	close();
+	me.attrs.delete("pz_supporter");
+	changed.Fire();
+	globalThis.task.spawn = realSpawn;
 	SUP.SUPPORTER_SUBSCRIPTION_ID = "";
 }
 

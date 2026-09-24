@@ -158,18 +158,9 @@ export class SupporterStatusBook<P extends SupporterPlayer> {
 	}
 }
 
-/** the sweep's period, re-exported for the Script that schedules it */
+/**
+ * The sweep's period, re-exported for the Script that schedules it. The book itself lives in that Script alone
+ * (server/supporter.server.ts): nothing else on the server asks who is a Supporter, because nothing else may depend
+ * on it (MON-07; review of 97cd734, LOW4 -- tools/test-titles.mjs §5 fails if anything else reads the mark)
+ */
 export { SUPPORTER_REFRESH_S };
-
-/** the book the Script uses (server/supporter.server.ts), so other server code can ask `isSupporter` */
-let book: SupporterStatusBook<Player> | undefined;
-
-/** the server's book, once server/supporter.server.ts started it (undefined with no subscription configured) */
-export function supporterBook(): SupporterStatusBook<Player> | undefined {
-	return book;
-}
-
-/** kept for the Script: it builds the book with the real services and hands it here */
-export function setSupporterBook(b: SupporterStatusBook<Player> | undefined): void {
-	book = b;
-}

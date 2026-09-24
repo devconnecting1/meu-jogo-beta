@@ -31,7 +31,7 @@ import {
 	StoreState,
 } from "shared/net/net";
 import { isAdminUserId } from "shared/admin/config";
-import { AdminOp, applyAdminOps } from "shared/admin/ops";
+import { AdminOp, adminEditHelps, applyAdminOps } from "shared/admin/ops";
 import { MP_PHASE } from "shared/net/mpConfig";
 import {
 	isShopNonce,
@@ -56,6 +56,7 @@ import { Income, onIncome, serverOwnsProgress, stripClientProgress } from "./sim
 import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
+import { kickOutOfDate, newerSaveVersion } from "./save/newerSave";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 import { keepPrivateTown } from "./save/privateTown";
@@ -189,6 +190,11 @@ interface Session {
 	dirty: boolean;
 	writing: boolean;
 	released: boolean;
+	/**
+	 * The stored save is NEWER than this build (review of 97cd734, H1; server/save/newerSave.ts): nothing of it is ever
+	 * written here, and the load is never retried -- the player is let go to a server of the new build
+	 */
+	outdated: boolean;
 	lastWrite: number;
 	ackRequested: boolean;
 	lastAck: number;
@@ -460,7 +466,21 @@ function decodeData(data: unknown): [boolean, unknown] {
 	return [typeIs(data, "table"), data];
 }
 
-type LoadOutcome = { kind: "found"; data: unknown } | { kind: "empty" } | { kind: "failed"; err: string };
+type LoadOutcome =
+	| { kind: "found"; data: unknown }
+	| { kind: "empty" }
+	| { kind: "failed"; err: string }
+	/** the stored save is NEWER than this build (H1): nothing was written, not even the lock */
+	| { kind: "newer"; version: number };
+/** a load this build may go on with (a v1 save is never newer) */
+type ReadOutcome = Exclude<LoadOutcome, { kind: "newer" }>;
+
+/** the version of stored data a newer build wrote (server/save/newerSave.ts); undefined: none, or not readable */
+function newerStored(data: unknown): number | undefined {
+	if (data === undefined) return undefined;
+	const [decoded, value] = decodeData(data);
+	return decoded ? newerSaveVersion(value) : undefined;
+}
 
 /** reads the save and takes the session lock in one UpdateAsync (retries with backoff) */
 function loadWithLock(s: Session): LoadOutcome {
@@ -469,11 +489,20 @@ function loadWithLock(s: Session): LoadOutcome {
 	const deadline = os.clock() + LOCK_WAIT;
 	let attempt = 0;
 	while (true) {
-		let result = "empty" as "found" | "empty" | "locked";
+		let result = "empty" as "found" | "empty" | "locked" | "newer";
 		let data: unknown;
+		let newer = 0;
 		const [ok, err] = pcall(() => {
 			store.UpdateAsync<unknown, unknown>(s.key, old => {
 				const doc = readDoc(old);
+				// review of 97cd734, H1: a save a NEWER build wrote is never this server's to write -- not even its lock
+				// is taken (whoever holds it, the write is cancelled), and the session never writes it after
+				const version = newerStored(doc?.data);
+				if (version !== undefined) {
+					result = "newer";
+					newer = version;
+					return $tuple(undefined);
+				}
 				const now = os.time();
 				const lock = doc?.lock;
 				const foreign =
@@ -495,6 +524,7 @@ function loadWithLock(s: Session): LoadOutcome {
 				task.wait(2);
 				continue;
 			}
+			if (result === "newer") return { kind: "newer", version: newer };
 			return result === "found" ? { kind: "found", data } : { kind: "empty" };
 		}
 		if (attempt >= RETRY_DELAYS.size()) return { kind: "failed", err: tostring(err) };
@@ -743,7 +773,7 @@ function freshSave(withGift: boolean): PlayerSaveData {
 }
 
 /** reads a v1 save (raw JSON string) from the legacy store, with retries */
-function readLegacy(key: string): LoadOutcome {
+function readLegacy(key: string): ReadOutcome {
 	const store = legacyStore;
 	if (store === undefined) return { kind: "failed", err: "no legacy DataStore" };
 	for (let attempt = 0; ; attempt++) {
@@ -788,7 +818,12 @@ function readSession(s: Session): void {
 	let migrated = false;
 	/** what an experiment decided for a save created now (server/config/experiments.ts), for the onboarding funnel */
 	let arm: string | undefined;
-	let outcome: LoadOutcome = dataStore === undefined ? { kind: "failed", err: "no DataStore" } : loadWithLock(s);
+	const loaded: LoadOutcome = dataStore === undefined ? { kind: "failed", err: "no DataStore" } : loadWithLock(s);
+	if (loaded.kind === "newer") {
+		refuseNewerSave(s, loaded.version);
+		return;
+	}
+	let outcome: ReadOutcome = loaded;
 	if (outcome.kind === "empty") {
 		// no v2 save yet: migrate the v1 one if there is one (a failed read must NOT look like a new player)
 		outcome = readLegacy(s.key);
@@ -900,6 +935,31 @@ function readSession(s: Session): void {
 	if (s.ackRequested) sendLoadAck(s);
 }
 
+/**
+ * Review of 97cd734, H1: the stored save is NEWER than this build (server/save/newerSave.ts). This server would write
+ * it back without what it does not know, so nothing of this player is ever written here: the load took no lock (its
+ * UpdateAsync cancelled its own write), `released` stops every flush before it starts -- the autosave, an event save,
+ * the leave's, BindToClose's -- the title record is never opened, `outdated` refuses a Retry, and the session is
+ * read-only (`status` "error": no report, no purchase, no admin edit). The player is let go, told to rejoin.
+ */
+function refuseNewerSave(s: Session, version: number): void {
+	warn(`[${GAME_NAME}] stored save is newer than this server; not loaded, player sent to rejoin`);
+	print(`[${GAME_NAME}] save of ${s.key} is v${version}: newer than this server`);
+	s.outdated = true;
+	s.released = true;
+	s.status = "error";
+	s.save = defaultSave();
+	s.lockLost = false;
+	s.dirty = false;
+	s.token = HttpService.GenerateGUID(false);
+	s.pending = undefined;
+	s.pendingToken = undefined;
+	s.lastLoadAttempt = os.clock();
+	s.loaded = true;
+	s.loading = false;
+	kickOutOfDate(s.player);
+}
+
 function newSession(player: Player): Session {
 	return {
 		player,
@@ -914,6 +974,7 @@ function newSession(player: Player): Session {
 		dirty: false,
 		writing: false,
 		released: false,
+		outdated: false,
 		lastWrite: 0,
 		ackRequested: false,
 		lastAck: -math.huge,
@@ -963,8 +1024,9 @@ remotes.loadRequest.OnServerEvent.Connect(player => {
 	s.ackRequested = true;
 	if (!s.loaded) return; // the ack goes out as soon as the load finishes
 	if (s.status === "error") {
-		// the player asked to retry a failed load: run it once the cooldown has passed
-		if (s.loading || s.retryQueued) return;
+		// the player asked to retry a failed load: run it once the cooldown has passed -- never a save newer than this
+		// server (H1): that one is not a failure to retry, and the player is on the way out
+		if (s.loading || s.retryQueued || s.outdated) return;
 		// never under a body in the world (review of de4ba1e, R3b/N4): it was built on the blank table, and the real
 		// save must not be swapped in beneath it — its death, or its being alive, would become the real save's. The
 		// client offers Retry only from the lobby; from the street the request is dropped, and can be sent again there
@@ -1672,7 +1734,8 @@ function bagFor(player: Player, save: PlayerSaveData): BagNow | undefined {
 function walletSignature(save: PlayerSaveData): string {
 	let titles = "";
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
-	const achievements = save.achievements.join(",");
+	// with the life's deaths (CON-04), which the achievements' Never die and the wardrobe's Unbroken read (LOW1)
+	const achievements = save.achievements.join(",") + `|${save.lifeDeaths}`;
 	const packs = save.packsOpened.join(",");
 	// v7 (MON-05): the title counters, a locked title's progress in the wardrobe
 	const stats = save.titleStats.join(",");
@@ -1799,9 +1862,12 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	}
 	edited.runRev = math.min(before.runRev + 1, SAVE_LIMITS.COUNTER_MAX);
 	// an edit keeps the run (still assisted if it was); a reset starts a new one. An edit that moves the life's DAY
-	// is an admin living days for the player (§9.3, MP-13): from here the run is assisted, like a world tool's
+	// is an admin living days for the player (§9.3, MP-13): from here the run is assisted, like a world tool's -- and
+	// so is one that raises an item, the level, the skill points or the coins (review of 97cd734, M1: an admin's
+	// weapon or coins made the nights that paid easier; shared/admin/ops.ts `adminEditHelps`)
 	const dayMoved = ops !== undefined && edited.day !== before.day;
-	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved);
+	const helped = ops !== undefined && adminEditHelps(before, edited);
+	const assisted = ops !== undefined && (s.assistedRunRev === before.runRev || dayMoved || helped);
 	s.assistedRunRev = assisted ? edited.runRev : undefined;
 	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
