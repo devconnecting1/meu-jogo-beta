@@ -27,7 +27,7 @@ export const LEGACY_AUDIT_KEY = "recent";
 export const AUDIT_PER_KEY = 300;
 
 /** targets that are not a player, and therefore may be stored as words */
-const PLACE_TARGETS: ReadonlyArray<string> = ["", "all", "own world", "own run"];
+const PLACE_TARGETS: ReadonlyArray<string> = ["", "all", "own world", "own run", "own town"];
 
 /** one stored entry */
 export interface AuditRecord {

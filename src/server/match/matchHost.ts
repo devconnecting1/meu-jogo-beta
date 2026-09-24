@@ -63,6 +63,8 @@ export interface MatchHostOptions {
 	keptInDanger: (player: Player) => boolean;
 	/** banks the body and writes the save now, KEEPING the session lock (it yields) */
 	prepare: (player: Player) => void;
+	/** a join from the lobby's Servers list is taking this player elsewhere (MP-26): one teleport at a time */
+	joining?: (player: Player) => boolean;
 	/**
 	 * A solo or private town opens on its owner's life day (MP-13): restart the world's clock on `day`, before anybody
 	 * has entered (server/net/mpHost.ts `startTownOn`). False when it is too late (a body already stood in the town).
@@ -195,6 +197,7 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 		if (options.inWorld(player)) return "inWorld";
 		if (options.isDead(player, s.save)) return "dead";
 		if (options.keptInDanger(player)) return "danger";
+		if (options.joining?.(player) === true) return "joining";
 		return undefined;
 	};
 

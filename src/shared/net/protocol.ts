@@ -125,6 +125,11 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
+ * 21. (MP-26, the town restarted by its keeper) `WorldReset` has one more byte, `cause` (u8, after `endedDay`):
+ *     WorldResetCause.Fell (0, MP-22: nobody was left standing) or Restarted (1: the private server's owner, or an
+ *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
+ *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
+ *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
  */
 import {
 	NetReader,
@@ -1445,6 +1450,12 @@ export const SOLID_HP_MAX_ENTRIES = 255;
 const MAX_SAFE_INT = 9007199254740991;
 /** UserIds one WorldReset can name (its count is a u8; a server holds far fewer players than this) */
 export const WORLD_RESET_MAX_LIVES = 255;
+/** (note 21) why a world ended: nobody was left standing (MP-22), or its keeper restarted it (MP-26) */
+export const WorldResetCause = {
+	Fell: 0,
+	Restarted: 1,
+} as const;
+export const WORLD_RESET_CAUSE_MAX = 1;
 /** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
 const RUN_REV_MAX = 4294967295;
 /** (MP-23) the largest life day PlayerTally carries (a u16; the save's own ceiling is higher and is clamped) */
@@ -1684,8 +1695,8 @@ export interface WorldResetLife {
 }
 
 /**
- * (MP-22) Nobody was left alive and nobody paid a Rebirth: the world ended on `endedDay` and a new town was born from
- * `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
+ * (MP-22) Nobody was left alive and nobody paid a Rebirth -- or (note 21) the town's keeper restarted it: the world
+ * ended on `endedDay` and a new town was born from `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
  * and a client named in `lives` mirrors the new life the server gave it (the same reset as New game).
  */
 export interface WWorldReset {
@@ -1694,6 +1705,8 @@ export interface WWorldReset {
 	seed: number;
 	/** the world day the old town fell on (≥ 1) */
 	endedDay: number;
+	/** (note 21) WorldResetCause: it fell (MP-22), or it was restarted by its keeper (MP-26) */
+	cause: number;
 	/** the survivors whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
 	lives: Array<WorldResetLife>;
 }
@@ -1838,6 +1851,7 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 		case WorldEv.WorldReset: {
 			w.u32(clampInt(e.seed, 1, TOWN_SEED_MAX));
 			w.u16(clampInt(e.endedDay, 1, 65535));
+			w.u8(clampInt(e.cause, 0, WORLD_RESET_CAUSE_MAX));
 			const n = math.min(e.lives.size(), WORLD_RESET_MAX_LIVES);
 			w.u8(n);
 			for (let i = 0; i < n; i++) {
@@ -1985,8 +1999,11 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 	} else if (t === WorldEv.WorldReset) {
 		const seed = r.u32();
 		const endedDay = r.u16();
+		const cause = r.u8();
 		const n = r.u8();
-		if (!validTownSeed(seed) || endedDay < 1 || n * 12 > r.remaining()) return undefined;
+		if (!validTownSeed(seed) || endedDay < 1 || cause > WORLD_RESET_CAUSE_MAX || n * 12 > r.remaining()) {
+			return undefined;
+		}
 		const lives = new Array<WorldResetLife>();
 		for (let i = 0; i < n; i++) {
 			const userId = r.f64();
@@ -1994,7 +2011,7 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 			if (userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
 			lives.push({ userId, runRev });
 		}
-		return { t: WorldEv.WorldReset, seed, endedDay, lives };
+		return { t: WorldEv.WorldReset, seed, endedDay, cause, lives };
 	}
 	return undefined;
 }

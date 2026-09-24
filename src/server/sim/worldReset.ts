@@ -5,7 +5,11 @@
  *
  * WHEN is not decided here: server/sim/life.ts rule 6 fires `onWorldWiped` once, after the last living survivor fell
  * and nobody paid a Rebirth in WIPE_DECISION_S (or everybody declined sooner). server/net/mpHost.ts answers that
- * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts).
+ * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts). The one other caller is
+ * the keeper's restart (MP-26: a private server's owner, or an admin on it; server/match/townRestart.ts), which hands
+ * the host a report of reason "restart" -- the same end of the world, run through the same steps, and for EVERY
+ * survivor of the town: standing or down, each starts a new life on day 1 in the new one (`LifeKeeper.survivorsNow`,
+ * read at the commit, and `restartWorld` with `everyone`). Its record stays in this server's memory.
  *
  * WHAT happens, in this order — the order is the contract:
  *
@@ -37,7 +41,7 @@ import { rndInt } from "shared/engine/rng";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import { TOWN_SEED_MAX } from "shared/net/mpConfig";
-import { WorldResetLife } from "shared/net/protocol";
+import { WorldResetCause, WorldResetLife } from "shared/net/protocol";
 import { mapHashOf, Replicator } from "../net/replication";
 import { LifeKeeper, WipeReport } from "./life";
 import { ServerSimulation } from "./simulation";
@@ -58,7 +62,11 @@ export interface EndedWorld {
 	/** os.time() when it began (the server's boot, or the previous world's end) and when it ended */
 	startedAt: number;
 	endedAt: number;
-	/** WipeReport.reason: "timeout" (nobody paid in the window) or "declined" (every dead survivor chose not to) */
+	/**
+	 * WipeReport.reason: "timeout" (nobody paid in the window), "declined" (every dead survivor chose not to) or
+	 * "restart" (its keeper asked for a new town, MP-26 -- server/match/townRestart.ts). A restart is kept in this
+	 * server's memory only, never in the shared document (review of 0b44458, M4): the stored list is MP-22's
+	 */
 	reason: string;
 	/** survivors who fell with it (the ones the window waited on) */
 	fallen: number;
@@ -147,6 +155,24 @@ export function pickTownSeed(previous: number, roll: () => number = () => rndInt
 }
 
 /**
+ * The seed of a server's FIRST town (the owner, 2026-09-24: "the map must be made when the player enters the match
+ * (if they entered alone/first) … generated exclusively by the server, as a seed"). The server is the one authority
+ * on its town: it picks a fresh seed at boot -- which, for the first survivor to arrive, is the same thing as picking
+ * it when they arrive -- and every later joiner gets that town; it changes only when the world ends (MP-22,
+ * `endWorld`) or the server shuts down. Until this, every server opened on DESIGN.TOWN_SEED: the same streets in
+ * every server, and a new town only after a world ended.
+ *
+ * `pinned` is a seed a developer set on the server itself (server/main.server.ts reads ServerStorage's
+ * TOWN_SEED_PIN_ATTRIBUTE, which no client can see or write): a town reproduced in Studio, and the node suites that
+ * play on the validated town. Anything that is not a whole 1 … TOWN_SEED_MAX is no pin. Nothing a client sends is
+ * ever an input here.
+ */
+export function bootTownSeed(pinned: unknown, roll?: () => number): number {
+	if (wholeIn(pinned, 1, TOWN_SEED_MAX)) return pinned;
+	return pickTownSeed(0, roll);
+}
+
+/**
  * The world `current` ends, as `report` (life.ts rule 6) says, and a new one begins — the five steps at the top of
  * this file, in that order. Returns what happened; nothing here waits for anything but `options.pace`, while the new
  * town is generated and before anything has changed.
@@ -157,11 +183,13 @@ export function endWorld(
 	current: TownState,
 	options: EndWorldOptions,
 ): WorldEnd {
+	// how many days it LASTED, its first one counted: a town that opened on the owner's day 23 (MP-13) and fell on day
+	// 24 lasted 2
+	const lasted = (day: number): number =>
+		math.max(1, math.floor(day) - math.max(0, math.floor(current.startDay ?? 1) - 1));
 	const ended: EndedWorld = {
 		seed: current.seed,
-		// how many days it LASTED, its first one counted: a town that opened on the owner's day 23 (MP-13) and fell on
-		// day 24 lasted 2
-		days: math.max(1, math.floor(report.day) - math.max(0, math.floor(current.startDay ?? 1) - 1)),
+		days: lasted(report.day),
 		startedAt: current.startedAt,
 		endedAt: options.now,
 		reason: report.reason,
@@ -176,6 +204,11 @@ export function endWorld(
 	const world = generateTown(seed, options.pace);
 	const generateMs = clock !== undefined ? math.floor((clock() - t0) * 1000 + 0.5) : 0;
 	const mapHash = mapHashOf(world);
+	const restart = report.reason === "restart";
+	// MP-26: a keeper's restart ends EVERY life of the town -- read at the commit, not when it was asked: the new town
+	// takes frames to generate, and whoever entered, left or paid a Rebirth meanwhile is judged as the town ends
+	// (review of 0b44458, L1; a Rebirth is refused while a world is ending, server/main.server.ts)
+	if (restart) ended.days = lasted(parts.sim.clock.day);
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
 	// here out leaves the old world exactly as it was
 	parts.sim.restartWorld(world);
@@ -193,9 +226,13 @@ export function endWorld(
 	contain("closeTown", () => parts.replicator?.closeTown());
 	let fallen = new Array<number>();
 	contain("fallenOf", () => {
+		if (restart) {
+			report.dead = parts.lives.survivorsNow();
+			ended.fallen = report.dead.size();
+		}
 		fallen = parts.lives.fallenOf(report.dead, options.saveOf);
 	});
-	if (!contain("lives", () => parts.lives.restartWorld(fallen, options.saveOf))) {
+	if (!contain("lives", () => parts.lives.restartWorld(fallen, options.saveOf, restart))) {
 		// whatever it got done, nobody who fell stays down in a town nobody else can end the window of
 		contain("lives (fallback)", () => parts.lives.settleFallen(fallen, options.saveOf));
 	}
@@ -203,7 +240,9 @@ export function endWorld(
 	contain("lives list", () => {
 		for (const userId of fallen) lives.push({ userId, runRev: options.saveOf(userId)?.runRev ?? 0 });
 	});
-	contain("openTown", () => parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, lives }));
+	// the clients word the news by why it ended: a town its keeper restarted did not fall (protocol note 21)
+	const cause = report.reason === "restart" ? WorldResetCause.Restarted : WorldResetCause.Fell;
+	contain("openTown", () => parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, cause, lives }));
 	return { ended, world, seed, mapHash, startedAt: options.now, lives, generateMs, failures };
 }
 
