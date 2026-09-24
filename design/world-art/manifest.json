@@ -902,6 +902,102 @@
 			"description": "pets: Pigeon, White pigeon, Eagle x landed + 4 wing spreads (ART-11)"
 		},
 		{
+			"name": "bossGiant",
+			"file": "bossGiant.png",
+			"kind": "sheet",
+			"w": 640,
+			"h": 320,
+			"description": "boss 3, the giant: 3 strides + the lunge x 32 headings (two bands of 16) (ART-13)"
+		},
+		{
+			"name": "bossGiantFill",
+			"file": "bossGiantFill.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 320,
+			"description": "bossGiant: white silhouettes of the same cells (tint: hit flash)"
+		},
+		{
+			"name": "bossGiantRim",
+			"file": "bossGiantRim.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 320,
+			"description": "bossGiant: white outlines of the same cells (tint: the hit outline)"
+		},
+		{
+			"name": "bossHedgehog",
+			"file": "bossHedgehog.png",
+			"kind": "sheet",
+			"w": 640,
+			"h": 240,
+			"description": "boss 4, the hedgehog: 3 strides x 32 headings (two bands of 16) (ART-13)"
+		},
+		{
+			"name": "bossHedgehogFill",
+			"file": "bossHedgehogFill.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 240,
+			"description": "bossHedgehog: white silhouettes of the same cells (tint: hit flash)"
+		},
+		{
+			"name": "bossHedgehogRim",
+			"file": "bossHedgehogRim.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 240,
+			"description": "bossHedgehog: white outlines of the same cells (tint: the hit outline)"
+		},
+		{
+			"name": "bossCentipede",
+			"file": "bossCentipede.png",
+			"kind": "sheet",
+			"w": 640,
+			"h": 480,
+			"description": "boss 1, the centipede: head (fangs shut, open), body segment x 3 leg beats, tail x 32 headings (ART-13)"
+		},
+		{
+			"name": "bossCentipedeFill",
+			"file": "bossCentipedeFill.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 480,
+			"description": "bossCentipede: white silhouettes of the same cells (tint: hit flash)"
+		},
+		{
+			"name": "bossCentipedeRim",
+			"file": "bossCentipedeRim.png",
+			"kind": "mask",
+			"w": 640,
+			"h": 480,
+			"description": "bossCentipede: white outlines of the same cells (tint: the hit outline)"
+		},
+		{
+			"name": "bossRafflesia",
+			"file": "bossRafflesia.png",
+			"kind": "sheet",
+			"w": 816,
+			"h": 68,
+			"description": "boss 2, the rafflesia: 12 beats of its six vines sweeping round (it never turns) (ART-13)"
+		},
+		{
+			"name": "bossRafflesiaFill",
+			"file": "bossRafflesiaFill.png",
+			"kind": "mask",
+			"w": 816,
+			"h": 68,
+			"description": "bossRafflesia: white silhouettes of the same cells (tint: hit flash)"
+		},
+		{
+			"name": "bossRafflesiaRim",
+			"file": "bossRafflesiaRim.png",
+			"kind": "mask",
+			"w": 816,
+			"h": 68,
+			"description": "bossRafflesia: white outlines of the same cells (tint: the hit outline)"
+		},
+		{
 			"name": "itemIcons",
 			"file": "itemIcons.png",
 			"kind": "atlas",

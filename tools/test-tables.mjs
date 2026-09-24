@@ -23,7 +23,7 @@
  *  3. PLAYERS (ADMIN)  a Data table of the server's rows: status from the live fields (Alive / AFK / Dead / Lobby /
  *                      Loading), the name filter, header sorting, select-then-act (kick and ban off for admins), no
  *                      churn on the 2 s poll.
- *  4. RECORDS          only what the game keeps (no bosses, CON-03), the server-owned kills and titles, the numbers
+ *  4. RECORDS          only what the game keeps (the bosses too, CON-03), the server-owned kills and titles, the numbers
  *                      right-aligned; the lobby's Records plate opens this window.
  *  5. SCOREBOARD       opens with Q held / the pad's Back / the chip, and never holds the survivor (UI-06); the
  *                      replicated values (roster + PlayerTally) are what it shows, sorted by life day, re-sorted by
@@ -761,6 +761,7 @@ rs.bestDay = 12;
 rs.level = 7;
 rs.day = 3;
 rs.zombieKills = 137;
+rs.bossKills = 2;
 rs.lifeNights = 2;
 rs.deathCount = 1;
 rs.titles[TIT.TitleId.Survivor] = 1;
@@ -768,12 +769,14 @@ rs.titles[TIT.TitleId.HordeBreaker] = 1;
 const recs = REC.recordRows(rs);
 check(
 	"as linhas sao exatamente as que o jogo guarda",
-	recs.map(r => r.key).join(",") === "bestDay,level,zombieKills,titles,lifeDay,lifeNights,rebirths",
+	recs.map(r => r.key).join(",") === "bestDay,level,zombieKills,bossKills,titles,lifeDay,lifeNights,rebirths",
 	recs.map(r => r.key).join(","),
 );
 check(
-	"nenhuma linha de chefe (o Nucleo 1 nao tem, CON-03)",
-	recs.every(r => !/boss/i.test(r.key + r.label)),
+	"chefes derrubados = bossKills, o numero do servidor (CON-03: os chefes estao no jogo desde o dia 5)",
+	recs.find(r => r.key === "bossKills")?.value === "2" &&
+		recs.find(r => r.key === "bossKills")?.label === "Bosses defeated" &&
+		recs.find(r => r.key === "bossKills")?.group === "allTime",
 );
 check(
 	"zumbis postos no chao = zombieKills (o contador do servidor, MON-05)",
@@ -806,10 +809,7 @@ check(
 	"a janela mostra cada rotulo e cada valor",
 	recs.every(r => recTexts.includes(r.label) && recTexts.includes(r.value)),
 );
-check(
-	"nenhum texto fala de chefe",
-	recTexts.every(t => !/boss/i.test(t)),
-);
+check("a janela mostra os chefes derrubados", recTexts.includes("Bosses defeated"));
 const valueCells = recRoot.GetDescendants().filter(d => d.Name === "Cvalue" && shown(d));
 check(
 	"valores: fonte numerica, alinhados a direita (a coluna se alinha)",

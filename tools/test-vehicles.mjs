@@ -1252,7 +1252,11 @@ section(
 section("B12. the motorcycle's headlight (LUZ-04): ONE cone for the horde, the light map and an ally's view", () => {
 	const Light = require(join(SRC, "shared/sim/survivorLight.ts"));
 	const MOTO_DEF = vehicleDef(VehicleKind.Motorcycle);
-	check(MOTO_DEF.headlight > Light.FLASHLIGHT_REACH, "the headlight reaches further than the flashlight", `${MOTO_DEF.headlight} u`);
+	check(
+		MOTO_DEF.headlight > Light.FLASHLIGHT_REACH,
+		"the headlight reaches further than the flashlight",
+		`${MOTO_DEF.headlight} u`,
+	);
 	checkEq(vehicleDef(VehicleKind.Bicycle).headlight, 0, "the bicycle has none");
 	// the rule: riding a motorcycle, the beam is the headlight along the RIDE (not the aim); on foot, the flashlight
 	const save = fueled(20);
@@ -1287,9 +1291,17 @@ section("B12. the motorcycle's headlight (LUZ-04): ONE cone for the horde, the l
 		return { ahead: ahead.alpha, behind: behind.alpha };
 	};
 	const moto = lit(22);
-	check(moto.ahead > 0.9 && moto.behind < 0.1, "night, on the motorcycle: the walker ahead is lit, the one behind is not", `${moto.ahead.toFixed(2)} / ${moto.behind.toFixed(2)}`);
+	check(
+		moto.ahead > 0.9 && moto.behind < 0.1,
+		"night, on the motorcycle: the walker ahead is lit, the one behind is not",
+		`${moto.ahead.toFixed(2)} / ${moto.behind.toFixed(2)}`,
+	);
 	const bike = lit(21);
-	check(bike.ahead < 0.1, "on the bicycle (no headlight), the same walker stays in the dark", `${bike.ahead.toFixed(2)}`);
+	check(
+		bike.ahead < 0.1,
+		"on the bicycle (no headlight), the same walker stays in the dark",
+		`${bike.ahead.toFixed(2)}`,
+	);
 
 	// the screen: an ally riding a motorcycle lights their headlight's cone along the ride (playersView.collectLights)
 	const { LightList, addAllyLight } = require(join(SRC, "client/view/lightList.ts"));
@@ -1307,7 +1319,10 @@ section("B12. the motorcycle's headlight (LUZ-04): ONE cone for the horde, the l
 	addAllyLight(lights, ally);
 	const cone = lights.items.find(l => l.cone !== undefined);
 	check(
-		cone !== undefined && cone.r === MOTO_DEF.headlight && Math.abs(cone.angle - 0.5) < 1e-9 && cone.cone === Light.CONE_HALF_ANGLE,
+		cone !== undefined &&
+			cone.r === MOTO_DEF.headlight &&
+			Math.abs(cone.angle - 0.5) < 1e-9 &&
+			cone.cone === Light.CONE_HALF_ANGLE,
 		"an ally on a motorcycle: the headlight's cone, along their ride, as wide as the server's",
 		cone === undefined ? "no cone" : `${cone.r} u at ${cone.angle}`,
 	);

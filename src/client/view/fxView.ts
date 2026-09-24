@@ -179,7 +179,8 @@ export class FxView {
 			} else if (e.t === Net.FxType.ProjSpawn) {
 				this.playProjSpawn(refs, e);
 				// somebody else's arrow or flame is heard from where it left (P0-4; ours is heard by the weapon watcher)
-				if (e.owner !== SLOT_NONE && e.owner !== opts.localSlot) remoteProjectileSound(e.kind, e.owner, e.x, e.y);
+				if (e.owner !== SLOT_NONE && e.owner !== opts.localSlot)
+					remoteProjectileSound(e.kind, e.owner, e.x, e.y);
 			} else if (e.t === Net.FxType.ProjEnd) {
 				this.playProjEnd(refs, e);
 			}

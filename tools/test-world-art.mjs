@@ -572,7 +572,7 @@ const S = 160;
  */
 const CHAR_SHEETS = new Set(
 	ALL.manifest.textures
-		.filter(t => t.kind === "sheet" || /^(survivors[A-Z]|zombies)(Fill|Rim)$/.test(t.name))
+		.filter(t => t.kind === "sheet" || /^(survivors[A-Z]|zombies|boss[A-Z][a-z]+)(Fill|Rim)$/.test(t.name))
 		.map(t => t.name),
 );
 const TOWN_IDS = Object.fromEntries(Object.entries(ALL.ids).filter(([name]) => !CHAR_SHEETS.has(name)));
@@ -635,6 +635,8 @@ const REACH = 5;
  * within REACH px -- a dark rim, a bright body or both. Averaged along the whole outline.
  */
 function silhouette(ground, withBody) {
+	// square shots: S x S for a walker and the survivor, bigger for a boss (§10f)
+	const S = ground.w;
 	const n = S * S;
 	const mask = new Uint8Array(n);
 	const L = new Array(n);
@@ -1884,6 +1886,234 @@ section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost 
 		"and writes no more properties per frame",
 		`${art.writes.toFixed(0)} vs ${flat.writes.toFixed(0)}`,
 	);
+
+	// ---- 10f. the bosses (ART-13): their sheets, the flat fallback of before, each on its own, the cost of a fight
+	{
+		const BV = require(join(SRC, "client/view/bossView.ts"));
+		const { bossHitRadius, BOSS1_SEGMENT_RADIUS } = require(join(SRC, "shared/game/entities.ts"));
+		const bossSheets = [
+			["bossGiant", CS.GIANT_CELL, CS.BOSS_BAND, CS.GIANT_POSES * CS.BOSS_BANDS],
+			["bossHedgehog", CS.HEDGEHOG_CELL, CS.BOSS_BAND, CS.HEDGEHOG_POSES * CS.BOSS_BANDS],
+			["bossCentipede", CS.CENTIPEDE_CELL, CS.BOSS_BAND, CS.CENTIPEDE_POSES * CS.BOSS_BANDS],
+			["bossRafflesia", CS.RAFFLESIA_CELL, CS.RAFFLESIA_FRAMES, 1],
+		];
+		const bad = [];
+		const extent = {};
+		for (const [name, cell, cols, rows] of bossSheets) {
+			const t = byName[name];
+			if (t === undefined || byName[`${name}Fill`] === undefined || byName[`${name}Rim`] === undefined) {
+				bad.push(`${name} (or a mask) missing`);
+				continue;
+			}
+			if (t.w !== cols * cell || t.h !== rows * cell || t.w > 1024 || t.h > 1024)
+				bad.push(`${name} is ${t.w}x${t.h}`);
+			const colour = img(name);
+			const fill = img(`${name}Fill`);
+			const rim = img(`${name}Rim`);
+			let empty = 0;
+			let margin = 0;
+			let mismatch = 0;
+			let maxR = 0;
+			for (let r = 0; r < rows; r++) {
+				for (let c = 0; c < cols; c++) {
+					let any = false;
+					for (let y = 0; y < cell; y++) {
+						for (let x = 0; x < cell; x++) {
+							const i = ((r * cell + y) * colour.w + c * cell + x) * 4;
+							if (colour.data[i + 3] === 0) {
+								if (fill.data[i + 3] > 0 || rim.data[i + 3] > 0) mismatch++;
+								continue;
+							}
+							any = true;
+							if (x === 0 || y === 0 || x === cell - 1 || y === cell - 1) margin++;
+							if (fill.data[i + 3] > 0 === rim.data[i + 3] > 0) mismatch++;
+							maxR = Math.max(maxR, Math.hypot(x + 0.5 - cell / 2, y + 0.5 - cell / 2) * 4);
+						}
+					}
+					if (!any) empty++;
+				}
+			}
+			extent[name] = maxR;
+			if (empty > 0) bad.push(`${name}: ${empty} empty cells`);
+			if (margin > 0) bad.push(`${name}: ${margin} texels on a cell's border`);
+			if (mismatch > 0) bad.push(`${name}: ${mismatch} texels where Fill + Rim != the cell`);
+		}
+		check(
+			bad.length === 0,
+			"10f. every boss sheet has charSheets.ts's layout (32 headings in two bands; the rafflesia's vine beats), within 1024, no empty cell, a clear margin, Fill + Rim = the cell",
+			bad.slice(0, 4).join("; "),
+		);
+		// the size of what you hit, and a boss fits its plaza (TOWN.BOSS_CLEAR: the circle kept free round an anchor)
+		const { TOWN } = require(join(SRC, "shared/engine/constants.ts"));
+		const hit = { bossGiant: 45, bossHedgehog: 38, bossRafflesia: 65 };
+		const sized = Object.entries(hit).every(([n, r]) => extent[n] >= r * 1.05 && extent[n] <= r * 2.2);
+		check(
+			sized && bossHitRadius({ type: 3 }) === 45 && BOSS1_SEGMENT_RADIUS === 34,
+			"each is drawn round the body it is hit at (hit radius <= its reach <= 2.2x: fists, needles, vines past the body)",
+			Object.entries(extent)
+				.map(([n, r]) => `${n.slice(4)} ${r.toFixed(0)} u`)
+				.join(", "),
+		);
+		check(
+			Math.max(...Object.values(extent)) * 2 < TOWN.BOSS_CLEAR,
+			`and the biggest (the rafflesia with its vines) fits its plaza many times over (${TOWN.BOSS_CLEAR} u kept free)`,
+		);
+
+		// without their ids the bosses are drawn exactly as before (ART-01), with them each from its own cell
+		setArt(TOWN_IDS);
+		const d = bossDigest();
+		const g = JSON.parse(readFileSync(GOLDEN_BOSSES, "utf8"));
+		check(
+			d.count === g.count && d.sha1 === g.sha1 && d.images === 0,
+			`no boss id: the ${bossCast().length} bosses make the same ${d.count} draw calls as ${g.recordedFrom.split(" ")[0]}, no image`,
+			`${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}, ${g.count} calls`,
+		);
+		const drawBossList = bossDrawer(require, SRC, shadowFn(false));
+		const usedBy = ids => {
+			setArt(ids);
+			const st = stage(1400, 1400, 1);
+			st.cam.x = 600;
+			st.cam.y = 600;
+			st.r.beginFrame();
+			bossCast().forEach((m, i) => drawBossList(st, m, ...bossAt(i)));
+			st.r.endFrame();
+			const used = {};
+			for (const f of st.r.layer.GetChildren()) {
+				if (f.Visible === false) continue;
+				const im = f.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible !== false);
+				if (im !== undefined)
+					used[nameOf[im.Image] ?? im.Image] = (used[nameOf[im.Image] ?? im.Image] ?? 0) + 1;
+			}
+			return { used, counts: countSprites(st.r.layer) };
+		};
+		const giantOnly = usedBy(only(["bossGiant", "bossGiantFill", "bossGiantRim"]));
+		const cast = bossCast();
+		const giants = cast.filter(m => m.type === 3);
+		check(
+			giantOnly.used.bossGiant === giants.length &&
+				giantOnly.used.bossHedgehog === undefined &&
+				giantOnly.used.bossCentipede === undefined,
+			"each boss falls back on its own: only the giant uploaded, only the giant is its cells",
+			JSON.stringify(giantOnly.used),
+		);
+		check(
+			!BV.bossArtLive(3) || giantOnly.used.bossGiantFill === giants.filter(m => m.flash > 0).length,
+			"...and a hit giant wears its Fill and Rim masks",
+		);
+		const allBoss = usedBy(ALL.ids);
+		const segments = cast.filter(m => m.type === 1).length * 50;
+		const wantBoss = {
+			bossGiant: giants.length,
+			bossHedgehog: cast.filter(m => m.type === 4).length,
+			bossRafflesia: cast.filter(m => m.type === 2).length,
+			bossCentipede: segments,
+		};
+		check(
+			Object.entries(wantBoss).every(([n, k]) => allBoss.used[n] === k) && allBoss.counts.strokes === 0,
+			"with every sheet: the giant, the hedgehog and the rafflesia one cell each, the centipede one a segment, no UIStroke",
+			JSON.stringify(allBoss.used),
+		);
+		const flatBoss = usedBy(TOWN_IDS);
+		check(
+			allBoss.counts.sprites < flatBoss.counts.sprites,
+			"and fewer sprites than the flat bosses",
+			`${allBoss.counts.sprites} vs ${flatBoss.counts.sprites}`,
+		);
+
+		// a boss fight: the four of them moving, hit and flashing, 300 frames: no Instance after the warm-up
+		const fight = ids => {
+			setArt(ids);
+			const st = stage(1280, 800, 0.5);
+			st.cam.x = 0;
+			st.cam.y = 0;
+			const frame = f => {
+				st.r.beginFrame();
+				const list = [
+					{ type: 3, angle: f * 0.02, moveCycle: (f * 1) % 360, flash: f % 40 < 5 ? 1 : 0 },
+					{ type: 4, angle: -f * 0.03, flash: f % 55 < 4 ? 0.7 : 0 },
+					{ type: 2, angle: 0, clock: f / 60, flash: f % 70 < 5 ? 1 : 0 },
+					{ type: 1, angle: f * 0.01, clock: f / 60, flash: f % 90 < 6 ? 0.8 : 0 },
+				];
+				list.forEach((m, i) =>
+					drawBossList(st, m, (i - 1.5) * 600 + Math.sin(f * 0.02) * 40, (i % 2) * 300 - 150),
+				);
+				st.r.endFrame();
+			};
+			for (let f = 0; f < 90; f++) frame(f);
+			const created0 = gui.stats.created;
+			for (let f = 90; f < 390; f++) frame(f);
+			return { created: gui.stats.created - created0, counts: countSprites(st.r.layer) };
+		};
+		const fFlat = fight(TOWN_IDS);
+		const fArt = fight(ALL.ids);
+		console.log(
+			`       bosses: flat ${fFlat.counts.sprites} sprites (${fFlat.counts.strokes} strokes), art ${fArt.counts.sprites} sprites (${fArt.counts.images} images)`,
+		);
+		check(
+			fFlat.created === 0 && fArt.created === 0,
+			"a boss fight, 300 frames: no Instance created after the warm-up, flat or art",
+			`${fFlat.created}, ${fArt.created}`,
+		);
+
+		// LEG-03: each boss stands out on every ground (section 5's measure, on a shot big enough for the rafflesia);
+		// its round shadow is part of the ground in both pictures, so only the body is compared
+		const BS = 300;
+		const bossShot = (p, m, look, withBody) => {
+			setArt(look === "chars" ? ALL.ids : TOWN_IDS);
+			const st = stage(BS, BS, 1);
+			const sun = shadowFn(false);
+			const view = new WorldView(sun);
+			st.cam.x = p.x;
+			st.cam.y = p.y;
+			const v = st.cam.viewRect(32);
+			st.r.beginFrame();
+			view.drawGround(st.r, st.cam, v, world);
+			view.drawSolids(st.r, st.cam, v, world);
+			if (withBody) drawBossList(st, m, p.x, p.y);
+			else if (m.type !== 1) {
+				const so = sun(p.x, p.y, 14);
+				st.r.drawCircle(st.cam, p.x + so.x, p.y + so.y, bossHitRadius(m) * 2 * 1.05, {
+					color: COLORS.shadow,
+					alpha: 0.35,
+					zIndex: Z.actorShadow,
+				});
+			}
+			st.r.endFrame();
+			return rasterise({ layer: st.r.layer, vw: BS, vh: BS }, COLORS.bg, localImage);
+		};
+		const legible = [
+			["giant", { type: 3, angle: 0.7, moveCycle: 200 }],
+			["hedgehog", { type: 4, angle: 0.7, clock: 0.2 }],
+			["centipede", { type: 1, angle: 0.7, clock: 0.2 }],
+			["rafflesia", { type: 2, angle: 0, clock: 0.3 }],
+		];
+		const worst = {};
+		const rows = [];
+		for (const kind of ["grass", "park", "grassLong", "road", "plaza", "apron", "parking"]) {
+			const p = spotOn(kind);
+			if (p === undefined) continue;
+			const cells = [];
+			for (const [name, m] of legible) {
+				const res = {};
+				for (const look of ["flat", "chars"]) {
+					res[look] = silhouette(bossShot(p, m, look, false), bossShot(p, m, look, true));
+				}
+				worst[name] = Math.min(worst[name] ?? Infinity, res.chars);
+				cells.push(`${name} ${res.flat.toFixed(0)}->${res.chars.toFixed(0)}`);
+			}
+			rows.push(`${kind}: ${cells.join(", ")}`);
+		}
+		for (const r of rows) console.log(`       ${r}`);
+		// the bar the survivor's art clears in section 5; a boss is bigger than a survivor and must not read less
+		check(
+			Object.keys(worst).length === legible.length && Object.values(worst).every(w => w >= 35),
+			"LEG-03: with their art, every boss stands out on the worst ground (the survivor's bar, 35 ΔE)",
+			Object.entries(worst)
+				.map(([n, w]) => `${n} ${w.toFixed(1)}`)
+				.join(", "),
+		);
+		setArt(TOWN_IDS);
+	}
 }
 setArt({});
 

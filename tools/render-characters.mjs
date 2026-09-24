@@ -15,7 +15,8 @@
  *
  * Scenes: the survivor in eight facings with each outfit; the weapons in the hands (idle and mid-swing); hit, poison
  * and downed; each pet standing and on the move; each zombie variant in eight facings and in its special poses; a
- * horde of 60 by day and the same street at night, lit only by the survivors (LUZ-02); a fight with hit flashes.
+ * horde of 60 by day and the same street at night, lit only by the survivors (LUZ-02); a fight with hit flashes; and
+ * each boss (ART-13, client/view/bossView.ts) in its poses and on its plaza (`--only boss-giant,boss-hedgehog,...`).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -435,6 +436,178 @@ function sceneZombies() {
 	return finish(st, labels);
 }
 
+// ---------------------------------------------------------------- the bosses (ART-13)
+
+const BC = await import("./boss-cast.mjs");
+
+/** images side by side (or one under the other), on the page's dark grey, the counts summed */
+function joinShots(shots, across, gap = 8) {
+	const W = across
+		? shots.reduce((s, x) => s + x.img.w, 0) + gap * (shots.length - 1)
+		: Math.max(...shots.map(x => x.img.w));
+	const H = across
+		? Math.max(...shots.map(x => x.img.h))
+		: shots.reduce((s, x) => s + x.img.h, 0) + gap * (shots.length - 1);
+	const img = { w: W, h: H, data: Buffer.alloc(W * H * 4) };
+	for (let i = 0; i < W * H; i++) img.data.writeUInt32BE(0x18181cff, i * 4);
+	let at = 0;
+	const counts = { sprites: 0, images: 0, strokes: 0 };
+	for (const s of shots) {
+		for (let y = 0; y < s.img.h; y++) {
+			const x0 = across ? at : 0;
+			const y0 = across ? 0 : at;
+			s.img.data.copy(img.data, ((y0 + y) * W + x0) * 4, y * s.img.w * 4, (y + 1) * s.img.w * 4);
+		}
+		at += (across ? s.img.w : s.img.h) + gap;
+		for (const k of Object.keys(counts)) counts[k] += s.counts[k] ?? 0;
+	}
+	return { img, counts };
+}
+
+/** a boss in eight facings, one row a pose, over the four grounds */
+function bossLineup(type, rows, gap, zoom) {
+	const w = gap * FACINGS.length;
+	const h = gap * rows.length + 20;
+	const st = stage(w * zoom, h * zoom, zoom, LINEUP.x + w / 2, LINEUP.y + h / 2);
+	const draw = BC.bossDrawer(require, SRC, shadowFn(10, []));
+	st.r.beginFrame();
+	drawBands(st, LINEUP.x, LINEUP.y, w, h, 4);
+	const labels = [];
+	rows.forEach(([name, m], j) => {
+		FACINGS.forEach((a, i) => {
+			draw(st, { type, angle: a, ...m }, LINEUP.x + gap * (i + 0.5), LINEUP.y + 20 + gap * (j + 0.5));
+		});
+		labels.push([name, 6, (20 + gap * j) * zoom + 4, 2]);
+	});
+	FACING_NAMES.forEach((n, i) => labels.push([n, gap * (i + 0.5) * zoom - 6, 6, 2]));
+	return finish(st, labels);
+}
+
+/**
+ * The boss where the game puts it: its plaza (world.bossAnchors) at the game's zoom, 10:00 or 22:00, a survivor and
+ * a few zombies closing in for scale. At night only the survivor's light shows it (LUZ-02), as in the game.
+ */
+function bossPlaza(type, m, hour) {
+	const a = world.bossAnchors.find(x => x.type === type);
+	const w = 960;
+	const h = 600;
+	const st = stage(w, h, 1, a.x, a.y);
+	const you = { x: a.x - 190, y: a.y + 120 };
+	const lights = [{ x: you.x, y: you.y, r: 250, inner: 0.4 }];
+	const shadow = shadowFn(hour, lights);
+	const view = new WorldView(shadow);
+	view.clock = 0;
+	for (const s of world.solids) if (s.kind === "tree") s.canopyAlpha = 1;
+	st.r.beginFrame();
+	const v = st.cam.viewRect(32);
+	view.drawGround(st.r, st.cam, v, world);
+	view.drawSolids(st.r, st.cam, v, world);
+	const draw = BC.bossDrawer(require, SRC, shadow);
+	draw(st, { type, ...m }, a.x, a.y);
+	[
+		[a.x + 250, a.y - 150, 1],
+		[a.x - 330, a.y - 170, 4],
+		[a.x + 300, a.y + 170, 1],
+	].forEach(([x, y, t], i) => {
+		if (surfaceFree(x, y))
+			drawZombieAt(st, { x, y, type: t, angle: Math.atan2(you.y - y, you.x - x), phase: i }, shadow);
+	});
+	const look = survivorLook(you.x, you.y, Math.atan2(a.y - you.y, a.x - you.x), { weapon: 13, phase: 1, amp: 1 });
+	drawLook(st, look, shadow);
+	const res = finish(st, [[`${hour}:00, its plaza at the game zoom`, 8, 8, 2]], hour, lights);
+	return res;
+}
+
+/** the centipede's 50 segments coiled into a spiral (head outside), so the whole chain fits one frame */
+function coiledCentipede(cx, cy, turn) {
+	const bodyX = [];
+	const bodyY = [];
+	let phi = turn;
+	for (let i = 0; i < BC.SEGMENTS; i++) {
+		const r = 330 - (220 * i) / (BC.SEGMENTS - 1);
+		bodyX.push(cx + Math.cos(phi) * r);
+		bodyY.push(cy + Math.sin(phi) * r);
+		phi += BC.SPACING / r;
+	}
+	return { bodyX, bodyY, angle: Math.atan2(bodyY[0] - bodyY[1], bodyX[0] - bodyX[1]) };
+}
+
+function sceneBossCentipede() {
+	const zoom = 1.25;
+	const span = 760;
+	const st = stage(span * 2 * zoom, span * zoom, zoom, LINEUP.x + span, LINEUP.y + span / 2);
+	const draw = BC.bossDrawer(require, SRC, shadowFn(10, []));
+	st.r.beginFrame();
+	drawBands(st, LINEUP.x, LINEUP.y, span * 2, span, 2);
+	const a = coiledCentipede(LINEUP.x + span / 2, LINEUP.y + span / 2, 0.4);
+	draw(st, { type: 1, clock: 0.2, ...a }, a.bodyX[0], a.bodyY[0]);
+	const b = coiledCentipede(LINEUP.x + span * 1.5, LINEUP.y + span / 2, 2.6);
+	draw(st, { type: 1, clock: 0.55, flash: 1, ...b }, b.bodyX[0], b.bodyY[0]);
+	const coil = finish(st, [
+		["the whole chain, head outside", 8, 8, 2],
+		["hit", span * zoom + 8, 8, 2],
+	]);
+	return joinShots([coil, bossPlaza(1, { angle: 2.6, clock: 0.3 }, 10)], false);
+}
+
+function sceneBossRafflesia() {
+	const zoom = 1.25;
+	const gap = 300;
+	// the vines' beats: frame f of charSheets.rafflesiaFrame is clock (f + 0.5) * (pi / 3) / 12 / 0.6
+	const beat = f => ((f + 0.5) * (Math.PI / 3)) / 12 / 0.6;
+	const list = [
+		["beat 0", { clock: beat(0) }],
+		["beat 3", { clock: beat(3) }],
+		["beat 6", { clock: beat(6) }],
+		["beat 9", { clock: beat(9) }],
+		["hit", { clock: beat(2), flash: 1 }],
+		["fading hit", { clock: beat(7), flash: 0.4 }],
+	];
+	const cols = 3;
+	const w = gap * cols;
+	const h = gap * 2;
+	const st = stage(w * zoom, h * zoom, zoom, LINEUP.x + w / 2, LINEUP.y + h / 2);
+	const draw = BC.bossDrawer(require, SRC, shadowFn(10, []));
+	st.r.beginFrame();
+	drawBands(st, LINEUP.x, LINEUP.y, w, h, 3);
+	const labels = [];
+	list.forEach(([name, m], k) => {
+		const i = k % cols;
+		const j = Math.floor(k / cols);
+		draw(st, { type: 2, angle: 0, ...m }, LINEUP.x + gap * (i + 0.5), LINEUP.y + gap * (j + 0.5));
+		labels.push([name, gap * i * zoom + 6, gap * j * zoom + 6, 2]);
+	});
+	return joinShots([finish(st, labels), bossPlaza(2, { angle: 0, clock: 0.3 }, 10)], false);
+}
+
+function sceneBossGiant() {
+	const rows = [
+		["stride", { moveCycle: 160 }],
+		["mid-step", { moveCycle: 180 }],
+		["other foot", { moveCycle: 270 }],
+		["lunging", { moveCycle: 90 }],
+		["hit", { moveCycle: 270, flash: 1 }],
+	];
+	const lineup = bossLineup(3, rows, 150, 2);
+	return joinShots(
+		[lineup, bossPlaza(3, { angle: 2.7, moveCycle: 90 }, 10), bossPlaza(3, { angle: 2.7, moveCycle: 200 }, 22)],
+		false,
+	);
+}
+
+function sceneBossHedgehog() {
+	// stepRow(sin(clock * 5 + id)), id 1
+	const step = s => (Math.asin(s) - 1) / 5;
+	const rows = [
+		["step", { clock: step(-1) }],
+		["mid-step", { clock: step(0) }],
+		["other foot", { clock: step(1) }],
+		["hit", { clock: step(1), flash: 1 }],
+	];
+	const lineup = bossLineup(4, rows, 140, 2);
+	return joinShots([lineup, bossPlaza(4, { angle: 2.7, clock: 0.1 }, 10)], false);
+}
+
 // ---------------------------------------------------------------- the street scenes
 
 function surfaceFree(x, y) {
@@ -551,6 +724,10 @@ const SCENES = {
 		draw: () => drawStreet(22, false),
 	},
 	fight: { title: "A fight: hit flashes, a lit fuse, a swing, a hit survivor", draw: () => drawStreet(10, true) },
+	"boss-giant": { title: "The giant: eight facings, its stride, the lunge, a hit; its plaza", draw: sceneBossGiant },
+	"boss-hedgehog": { title: "The hedgehog: eight facings, its steps, a hit; its plaza", draw: sceneBossHedgehog },
+	"boss-centipede": { title: "The centipede: the whole chain coiled, a hit; its plaza", draw: sceneBossCentipede },
+	"boss-rafflesia": { title: "The rafflesia: its vines' beats, a hit; its plaza", draw: sceneBossRafflesia },
 };
 
 // ---------------------------------------------------------------- main
@@ -580,7 +757,9 @@ function stack(title, before, after) {
 }
 
 const names = ONLY !== undefined ? ONLY.split(",") : Object.keys(SCENES);
-const report = {};
+// `--only` updates its scenes' lines of the report and keeps the others'
+const REPORT = join(OUT, "scenes.json");
+const report = ONLY !== undefined && existsSync(REPORT) ? JSON.parse(readFileSync(REPORT, "utf8")) : {};
 for (const name of names) {
 	const scene = SCENES[name];
 	if (scene === undefined) {
@@ -605,5 +784,5 @@ for (const name of names) {
 	writeFileSync(file, encodePNG(stack(scene.title, out.before.img, out.after.img), true));
 	report[name] = { title: scene.title, before: out.before.counts, after: out.after.counts };
 }
-writeFileSync(join(OUT, "scenes.json"), `${JSON.stringify(report, undefined, "\t")}\n`);
+writeFileSync(REPORT, `${JSON.stringify(report, undefined, "\t")}\n`);
 WA.overrideWorldArt(undefined);

@@ -19,17 +19,11 @@
  * Nothing here allocates per frame after the warm-up: one `ZombieState` per netId, one `BossState` per boss,
  * reused until the body stops arriving.
  */
-import {
-	BossState,
-	BOSS1_SEGMENT_RADIUS,
-	bossHitRadius,
-	ZombieState,
-	ZombieType,
-	zombieRadius,
-} from "shared/game/entities";
+import { BossState, ZombieState, ZombieType, zombieRadius } from "shared/game/entities";
 import { Camera, ViewRect } from "shared/engine/camera";
-import { circleInView, mix, part, quantize, SIDES } from "./drawKit";
-import { drawHumanoid, drawZombie } from "./humanoidView";
+import { circleInView, mix, part } from "./drawKit";
+import { drawZombie } from "./humanoidView";
+import { drawBoss } from "./bossView";
 import { COLORS, Z } from "shared/engine/colors";
 import { GameRefs, SPEED_SCALE } from "../systems/types";
 import { remoteBosses, remoteZombies, takeZombieDeaths, ZombieDeathEvent } from "../net/netClient";
@@ -39,9 +33,7 @@ import { FUSE_TIME } from "shared/sim/ai/zombieTuning";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { ZombieFlag } from "shared/net/protocol";
 
-const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
-const BOSS_DARK = mix(COLORS.boss, BLACK, 0.4);
 const NEEDLE = mix(COLORS.blade, COLORS.parcel, 0.4);
 
 /*
@@ -50,14 +42,6 @@ const NEEDLE = mix(COLORS.blade, COLORS.parcel, 0.4);
  * had, so nothing carries over from one draw to the next.
  */
 const Z_SHADOW: SpriteOpts = { color: BLACK, zIndex: Z.actorShadow };
-const BOSS_SHADOW: SpriteOpts = { color: BLACK, alpha: 0.35, zIndex: Z.actorShadow };
-const BOSS_LEG: SpriteOpts = { h: 7, color: BOSS_DARK, cornerRadius: 3, zIndex: Z.boss - 1 };
-const BOSS_SEGMENT: SpriteOpts = { stroke: BOSS_DARK, strokeThickness: 2 };
-const BOSS_EYE: SpriteOpts = { circle: true, color: COLORS.detect };
-const BOSS_MANDIBLE: SpriteOpts = { h: 8, color: BOSS_DARK, cornerRadius: 3, zIndex: Z.boss + 1 };
-const BOSS_TENTACLE: SpriteOpts = { w: 80, h: 16, color: BOSS_DARK, cornerRadius: 8, zIndex: Z.boss };
-const BOSS_NEEDLE: SpriteOpts = { w: 30, h: 8, color: BOSS_DARK, zIndex: Z.boss };
-const BOSS_BODY: SpriteOpts = { zIndex: Z.boss + 1 };
 const SPIT_MARK: SpriteOpts = { color: COLORS.acid, stroke: COLORS.acid, strokeThickness: 2, zIndex: Z.decal + 2 };
 const SPIT_SHADOW: SpriteOpts = { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow };
 const SPIT_BLOB: SpriteOpts = {
@@ -399,105 +383,9 @@ export class ActorsView {
 		}
 	}
 
+	/** the bosses: their pixel art once uploaded, the flat drawing of before until then (client/view/bossView.ts) */
 	drawBosses(r: Renderer, cam: Camera, v: ViewRect, refs: GameRefs, opts: ActorDrawOpts): void {
-		for (const b of refs.bosses) {
-			const flash = clamp(b.hitFlash ?? 0, 0, 1);
-			// memoised blends (drawKit.mix): the same Color3 every frame, the flash on its 1/40 grid
-			const color = flash > 0 ? mix(COLORS.boss, WHITE, 0.7 * quantize(flash)) : COLORS.boss;
-			const dark = BOSS_DARK;
-			if (b.type === 1) {
-				const bodyX = b.bodyX;
-				const bodyY = b.bodyY;
-				if (bodyX === undefined || bodyY === undefined) continue;
-				// centipede: every segment is drawn at its hit radius, the head at bossHitRadius
-				const n = bodyX.size();
-				const seg = BOSS1_SEGMENT_RADIUS * 2;
-				const head = bossHitRadius(b) * 2;
-				for (let i = bodyX.size() - 1; i >= 0; i--) {
-					const size = i === 0 ? head : seg;
-					if (!circleInView(bodyX[i], bodyY[i], size, v)) continue;
-					if (i > 0 && i % 3 === 0) {
-						// legs on every third segment, across the local body direction
-						const j0 = math.max(0, i - 1);
-						const j1 = math.min(n - 1, i + 1);
-						const da = math.atan2(bodyY[j0] - bodyY[j1], bodyX[j0] - bodyX[j1]);
-						const swing = math.sin(opts.clock * 12 + i) * 0.35;
-						BOSS_LEG.w = seg * 0.5;
-						for (const side of SIDES) {
-							part(
-								r,
-								cam,
-								bodyX[i],
-								bodyY[i],
-								da + side * (math.pi / 2 + swing),
-								seg * 0.55,
-								0,
-								BOSS_LEG,
-							);
-						}
-					}
-					BOSS_SEGMENT.color = i === 0 || i % 2 === 0 ? color : mix(color, BLACK, 0.2);
-					BOSS_SEGMENT.zIndex = Z.boss + (i === 0 ? 2 : 0);
-					r.drawCircle(cam, bodyX[i], bodyY[i], size, BOSS_SEGMENT);
-				}
-				if (n > 1) {
-					const ha = math.atan2(bodyY[0] - bodyY[1], bodyX[0] - bodyX[1]);
-					for (const side of SIDES) {
-						BOSS_EYE.w = head * 0.12;
-						BOSS_EYE.h = head * 0.12;
-						BOSS_EYE.zIndex = Z.boss + 3;
-						part(r, cam, bodyX[0], bodyY[0], ha, head * 0.22, side * head * 0.2, BOSS_EYE);
-						// mandibles
-						BOSS_MANDIBLE.w = head * 0.3;
-						part(r, cam, bodyX[0], bodyY[0], ha + side * 0.35, head * 0.55, 0, BOSS_MANDIBLE);
-					}
-				}
-				continue;
-			}
-			// types 2-4: drawn at their hit radius so what you see is what you hit
-			const size = bossHitRadius(b) * 2;
-			if (!circleInView(b.x, b.y, size + 60, v)) continue;
-			const so = opts.shadow(b.x, b.y, 14);
-			r.drawCircle(cam, b.x + so.x, b.y + so.y, size * 1.05, BOSS_SHADOW);
-			if (b.type === 3) {
-				drawHumanoid(
-					r,
-					cam,
-					b.x,
-					b.y,
-					b.angle,
-					size / 2 / HUMANOID_HALF_WIDTH,
-					color,
-					flash,
-					1,
-					math.rad(b.moveCycle ?? 0),
-					Z.boss,
-				);
-				continue;
-			}
-			if (b.type === 2) {
-				// tentacles slowly sweeping around the stationary body
-				for (let i = 0; i < 6; i++) {
-					const ta = opts.clock * 0.6 + (i * math.pi) / 3;
-					part(r, cam, b.x, b.y, ta, size * 0.62, 0, BOSS_TENTACLE);
-				}
-			} else {
-				// needles
-				for (let i = 0; i < 8; i++) {
-					part(r, cam, b.x, b.y, b.angle + (i * math.pi) / 4, size * 0.55, 0, BOSS_NEEDLE);
-				}
-			}
-			BOSS_BODY.color = color;
-			BOSS_BODY.stroke = flash > 0 ? WHITE : dark;
-			BOSS_BODY.strokeThickness = flash > 0 ? 4 : 2;
-			r.drawCircle(cam, b.x, b.y, size, BOSS_BODY);
-			for (const side of SIDES) {
-				BOSS_EYE.w = size * 0.12;
-				BOSS_EYE.h = size * 0.12;
-				BOSS_EYE.zIndex = Z.boss + 2;
-				part(r, cam, b.x, b.y, b.angle, size * 0.3, side * size * 0.16, BOSS_EYE);
-			}
-		}
+		for (const b of refs.bosses) drawBoss(r, cam, v, b, opts.clock, opts.shadow);
 	}
 
 	drawBullets(r: Renderer, cam: Camera, v: ViewRect, refs: GameRefs, opts: ActorDrawOpts): void {

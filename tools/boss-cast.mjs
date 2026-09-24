@@ -15,8 +15,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /** the centipede's chain (actorsView BOSS1_SEGMENTS, BOSS1_SPACING) */
-const SEGMENTS = 50;
-const SPACING = 30;
+export const SEGMENTS = 50;
+export const SPACING = 30;
 
 /** a centipede's body: head at (x, y) heading `angle`, the chain trailing behind it in a gentle S */
 export function centipedeBody(x, y, angle, bend = 0.9) {
@@ -55,7 +55,9 @@ export function bossSpan(m) {
 
 /** a function drawing one boss of a cast at (x, y) on a stage { r, cam }, with the shadows of `sun` */
 export function bossDrawer(require, SRC, sun) {
-	const BV = existsSync(join(SRC, "client/view/bossView.ts")) ? require(join(SRC, "client/view/bossView.ts")) : undefined;
+	const BV = existsSync(join(SRC, "client/view/bossView.ts"))
+		? require(join(SRC, "client/view/bossView.ts"))
+		: undefined;
 	if (BV === undefined) {
 		// the old path draws through actorsView.ts, whose mirror half imports the network layer (and through it the
 		// client's bootstrap): a drawing needs none of it, so it gets an inert stand-in
@@ -85,10 +87,11 @@ export function bossDrawer(require, SRC, sun) {
 			moveCycle: m.moveCycle ?? 0,
 		};
 		if (m.type === 1) {
-			const body = centipedeBody(x, y, m.angle);
+			// a member may bring its own chain (tools/render-characters.mjs coils one); otherwise the gentle S
+			const body = m.bodyX !== undefined ? m : centipedeBody(x, y, m.angle);
 			b.bodyX = body.bodyX;
 			b.bodyY = body.bodyY;
-			b.bodyNumber = SEGMENTS;
+			b.bodyNumber = body.bodyX.length;
 		}
 		const clock = m.clock ?? 0.25;
 		if (BV !== undefined) BV.drawBoss(st.r, st.cam, all, b, clock, sun);

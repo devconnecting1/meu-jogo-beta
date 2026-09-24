@@ -121,57 +121,76 @@ const P04 = {
 	use: ["useEat", "useBandage", "useMedkit", "usePills", "useInject"],
 	flamethrower: ["flameLoop", "flameIgnite"],
 	motorcycle: ["engineMoto", "hornMoto", "bellBike"],
-	horde: ["zombieGroanA", "zombieGroanB", "zombieGroanC", "zombieGroanD", "zombieAggroA", "zombieAggroB", "zombieShout"],
+	horde: [
+		"zombieGroanA",
+		"zombieGroanB",
+		"zombieGroanC",
+		"zombieGroanD",
+		"zombieAggroA",
+		"zombieAggroB",
+		"zombieShout",
+	],
 };
 const ALL = Object.values(P04).flat();
 
 // ================================================================ A. the catalogue
 
-section("A. o catalogo: cada evento do P0-4 tem entrada, de biblioteca oficial, com volume e janela que fazem sentido", () => {
-	const missing = ALL.filter(n => SOUNDS[n] === undefined);
-	check(missing.length === 0, `os ${ALL.length} sons do P0-4 estao no catalogo`, missing.join(", "));
-	const bad = [];
-	for (const [name, d] of Object.entries(SOUNDS)) {
-		if (d.id !== "" && !/^rbxassetid:\/\/\d+$|^rbxasset:\/\/sounds\//.test(d.id)) bad.push(`${name}: ${d.id}`);
-		if (d.volume > 0.6) bad.push(`${name}: volume ${d.volume}`);
-		if (d.pitchMax < d.pitchMin) bad.push(`${name}: pitch`);
-		if ((d.loopStart === undefined) !== (d.loopEnd === undefined)) bad.push(`${name}: meia regiao de loop`);
-		if (d.loopStart !== undefined && !(d.loopEnd > d.loopStart + 1)) bad.push(`${name}: regiao de loop curta`);
-		if (d.maxPlay !== undefined && d.maxPlay <= 0) bad.push(`${name}: maxPlay`);
-	}
-	check(bad.length === 0, "todo id e rbxassetid ou conteudo do motor, volume base <= 0,6, janelas coerentes", bad.join("; "));
-	check(
-		SOUNDS.engineMoto.loop === true && SOUNDS.flameLoop.loop === true && SOUNDS.engineMoto.loopStart !== undefined,
-		"o motor e o jato sao loops com a sua janela estavel (LoopRegion)",
-	);
-	const empties = Object.entries(SOUNDS)
-		.filter(([, d]) => d.id === "")
-		.map(([n]) => n);
-	check(
-		empties.join() === "useInject",
-		"um slot vazio so, o da injecao (adrenalina): silencio de proposito",
-		empties.join(", "),
-	);
-	const credits = readFileSync(join(ROOT, "design", "audio-credits.md"), "utf8");
-	const ids = Object.values(SOUNDS).map(d => d.id).filter((id, i, a) => id.startsWith("rbxassetid://") && a.indexOf(id) === i);
-	const undocumented = ids.filter(id => !credits.includes(id.replace("rbxassetid://", "")));
-	check(
-		undocumented.length === 0,
-		`design/audio-credits.md registra cada um dos ${ids.length} assets da biblioteca que o catalogo usa`,
-		undocumented.join(", "),
-	);
-	for (const n of ALL) {
-		if (SOUNDS[n].id === "") continue;
-		if (!credits.includes(`\`${n}\``)) check(false, `o credito cita ${n}`);
-	}
-	check(credits.includes("`useInject`"), "e o slot vazio esta documentado como pendencia para o dono");
-	const horde = P04.horde.filter(n => SOUNDS[n].spatial === true && SOUNDS[n].bus === "sfx");
-	check(horde.length === P04.horde.length, "a voz da horda: toda ela espacial, no grupo SFX");
-	check(
-		!Object.keys(SOUNDS).includes("zombieGrowl") && !Object.keys(SOUNDS).includes("zombieAlert"),
-		"o rosnado de robo (Goliath) saiu da voz dos zumbis (fica so no rugido de chefe)",
-	);
-});
+section(
+	"A. o catalogo: cada evento do P0-4 tem entrada, de biblioteca oficial, com volume e janela que fazem sentido",
+	() => {
+		const missing = ALL.filter(n => SOUNDS[n] === undefined);
+		check(missing.length === 0, `os ${ALL.length} sons do P0-4 estao no catalogo`, missing.join(", "));
+		const bad = [];
+		for (const [name, d] of Object.entries(SOUNDS)) {
+			if (d.id !== "" && !/^rbxassetid:\/\/\d+$|^rbxasset:\/\/sounds\//.test(d.id)) bad.push(`${name}: ${d.id}`);
+			if (d.volume > 0.6) bad.push(`${name}: volume ${d.volume}`);
+			if (d.pitchMax < d.pitchMin) bad.push(`${name}: pitch`);
+			if ((d.loopStart === undefined) !== (d.loopEnd === undefined)) bad.push(`${name}: meia regiao de loop`);
+			if (d.loopStart !== undefined && !(d.loopEnd > d.loopStart + 1)) bad.push(`${name}: regiao de loop curta`);
+			if (d.maxPlay !== undefined && d.maxPlay <= 0) bad.push(`${name}: maxPlay`);
+		}
+		check(
+			bad.length === 0,
+			"todo id e rbxassetid ou conteudo do motor, volume base <= 0,6, janelas coerentes",
+			bad.join("; "),
+		);
+		check(
+			SOUNDS.engineMoto.loop === true &&
+				SOUNDS.flameLoop.loop === true &&
+				SOUNDS.engineMoto.loopStart !== undefined,
+			"o motor e o jato sao loops com a sua janela estavel (LoopRegion)",
+		);
+		const empties = Object.entries(SOUNDS)
+			.filter(([, d]) => d.id === "")
+			.map(([n]) => n);
+		check(
+			empties.join() === "useInject",
+			"um slot vazio so, o da injecao (adrenalina): silencio de proposito",
+			empties.join(", "),
+		);
+		const credits = readFileSync(join(ROOT, "design", "audio-credits.md"), "utf8");
+		const ids = Object.values(SOUNDS)
+			.map(d => d.id)
+			.filter((id, i, a) => id.startsWith("rbxassetid://") && a.indexOf(id) === i);
+		const undocumented = ids.filter(id => !credits.includes(id.replace("rbxassetid://", "")));
+		check(
+			undocumented.length === 0,
+			`design/audio-credits.md registra cada um dos ${ids.length} assets da biblioteca que o catalogo usa`,
+			undocumented.join(", "),
+		);
+		for (const n of ALL) {
+			if (SOUNDS[n].id === "") continue;
+			if (!credits.includes(`\`${n}\``)) check(false, `o credito cita ${n}`);
+		}
+		check(credits.includes("`useInject`"), "e o slot vazio esta documentado como pendencia para o dono");
+		const horde = P04.horde.filter(n => SOUNDS[n].spatial === true && SOUNDS[n].bus === "sfx");
+		check(horde.length === P04.horde.length, "a voz da horda: toda ela espacial, no grupo SFX");
+		check(
+			!Object.keys(SOUNDS).includes("zombieGrowl") && !Object.keys(SOUNDS).includes("zombieAlert"),
+			"o rosnado de robo (Goliath) saiu da voz dos zumbis (fica so no rugido de chefe)",
+		);
+	},
+);
 
 // ================================================================ B. the wire
 
@@ -213,7 +232,12 @@ const { USABLES, useSoundOf } = require(join(SRC, "shared/data/usables.ts"));
 function server({ zombies = false } = {}) {
 	resetEntityIds();
 	const world = W.serverWorld(W.createWorld(8000, 8000));
-	const sim = new ServerSimulation({ world, clock: new WorldClock({ day: 1, dayTime: 12 }), zombies, interactive: true });
+	const sim = new ServerSimulation({
+		world,
+		clock: new WorldClock({ day: 1, dayTime: 12 }),
+		zombies,
+		interactive: true,
+	});
 	const fx = [];
 	sim.onFx = e => fx.push(e);
 	return { world, sim, fx };
@@ -285,7 +309,11 @@ section("C. o servidor decide: mordida, porta, item usado, buzina e campainha vi
 	]) {
 		const { world, sim, fx } = server();
 		const def = PLACEABLES[item];
-		const door = W.addSolid(world, { ...placedSolid(def, { x: 2000, y: 2000, w: def.w, h: def.h }, 0), placeable: item, owner: 0 });
+		const door = W.addSolid(world, {
+			...placedSolid(def, { x: 2000, y: 2000, w: def.w, h: def.h }, 0),
+			placeable: item,
+			owner: 0,
+		});
 		const sp = addPlayer(sim, 0, 2000 + def.w / 2, 2000 + def.h + 22);
 		const d = driver(sim, sp);
 		d.ticks(5);
@@ -312,7 +340,11 @@ section("C. o servidor decide: mordida, porta, item usado, buzina e campainha vi
 		const verb = (kind, arg, nonce) => P.decodeIntentMessage(P.encodeIntentArgs(kind, 0, arg, nonce));
 		const tick = () => {
 			seq += 1;
-			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(seq, 0, 0, 0, 0, 0)] }), sim.tick);
+			PL.ingestInput(
+				sp,
+				P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [P.makeCommand(seq, 0, 0, 0, 0, 0)] }),
+				sim.tick,
+			);
 			sim.step();
 		};
 		for (let i = 0; i < 5; i++) tick();
@@ -350,7 +382,11 @@ section("C. o servidor decide: mordida, porta, item usado, buzina e campainha vi
 		save.oil = 40;
 		const sp = addPlayer(sim, 0, 3000, 3000, save);
 		const vdef = vehicleDef(vehicleKindOfItem(item));
-		W.addSolid(world, { ...placedSolid(PLACEABLES[item], V.parkedRect(vdef, 3000, 3040, 0), 0), placeable: item, owner: 0 });
+		W.addSolid(world, {
+			...placedSolid(PLACEABLES[item], V.parkedRect(vdef, 3000, 3040, 0), 0),
+			placeable: item,
+			owner: 0,
+		});
 		const d = driver(sim, sp);
 		d.tick(0, 0, PRESS_E);
 		d.ticks(40);
@@ -391,83 +427,108 @@ section("D. o cliente toca cada um no grupo SFX, onde aconteceu; com o SFX em 0,
 		else if (p.sound.Parent?.ClassName !== "Attachment") bad.push(`${s}: nao espacial`);
 		else if (Math.abs(p.sound.Parent.Position.X - 200 / 16) > 0.01) bad.push(`${s}: fora do lugar`);
 	}
-	check(bad.length === 0, "cada som do mundo toca o seu asset, no grupo SFX, preso ao emissor no lugar dele", bad.join("; "));
+	check(
+		bad.length === 0,
+		"cada som do mundo toca o seu asset, no grupo SFX, preso ao emissor no lugar dele",
+		bad.join("; "),
+	);
 	settings.soundEffect = 0;
 	frame();
 	plays.length = 0;
 	for (const s of FW.WIRE_SOUNDS) FA.playFxEvent({ kind: "sound", sound: s, x: 10, y: 10 });
-	check(plays.length === 0 && group("sfx").Volume === 0, "SFX em 0: nenhum deles toca (nem stream)", `${plays.length}`);
+	check(
+		plays.length === 0 && group("sfx").Volume === 0,
+		"SFX em 0: nenhum deles toca (nem stream)",
+		`${plays.length}`,
+	);
 	settings.soundEffect = 0.5;
 	frame();
 });
 
 // ================================================================ E. held loops
 
-section("E. loops presos: um motor por piloto, segue, sobe com a velocidade, some solto; seis no maximo; sem Instance", () => {
-	const engine = soundDef("engineMoto");
-	plays.length = 0;
-	for (let i = 0; i < 30; i++) {
-		audio.holdLoop(1001, "engineMoto", 100 + i * 5, 0, 0.55, 0.8);
+section(
+	"E. loops presos: um motor por piloto, segue, sobe com a velocidade, some solto; seis no maximo; sem Instance",
+	() => {
+		const engine = soundDef("engineMoto");
+		plays.length = 0;
+		for (let i = 0; i < 30; i++) {
+			audio.holdLoop(1001, "engineMoto", 100 + i * 5, 0, 0.55, 0.8);
+			frame();
+		}
+		const started = plays.filter(p => p.id === engine.id);
+		const voice = started[0]?.sound;
+		check(
+			started.length === 1 && voice.Looped === true,
+			"segurar 30 quadros: UMA voz, em loop",
+			`${started.length} Play()`,
+		);
+		check(
+			voice?.PlaybackRegionsEnabled === true &&
+				voice.LoopRegion?.Min === engine.loopStart &&
+				voice.LoopRegion?.Max === engine.loopEnd,
+			`so a janela estavel do take faz o loop (${engine.loopStart}-${engine.loopEnd} s)`,
+		);
+		check(voice?.SoundGroup?.Name === "sfx" && voice.Parent?.ClassName === "Attachment", "no grupo SFX, espacial");
+		check(
+			Math.abs(voice.Parent.Position.X - (100 + 29 * 5) / 16) < 0.2,
+			"o emissor segue o piloto",
+			`${voice.Parent.Position.X.toFixed(2)} studs`,
+		);
+		const quiet = voice.Volume;
+		for (let i = 0; i < 60; i++) {
+			audio.holdLoop(1001, "engineMoto", 300, 0, 1, 1.8);
+			frame();
+		}
+		check(
+			voice.Volume > quiet * 1.5 && voice.PlaybackSpeed > 1.7,
+			"na maxima: mais alto e mais agudo (o giro), sem salto (a altura anda ate la)",
+			`volume ${quiet.toFixed(3)} -> ${voice.Volume.toFixed(3)}, pitch ${voice.PlaybackSpeed.toFixed(2)}`,
+		);
+		let off = -1;
+		for (let i = 0; i < 40; i++) {
+			frame();
+			if (off < 0 && !voice.IsPlaying) off = i + 1;
+		}
+		check(off > 0 && off <= 20, "solto: esvai e para sozinho (e a voz volta ao pool)", `${off} quadros`);
+		check(!audio.loopActive(1001), "...e ninguem mais o segura");
+		// six sources: six voices; a seventh is not heard
+		plays.length = 0;
+		for (let i = 0; i < 10; i++) {
+			for (let k = 0; k < 7; k++) audio.holdLoop(2000 + k, "engineMoto", k * 50, 0, 1, 1);
+			frame();
+		}
+		const six = [0, 1, 2, 3, 4, 5, 6].filter(k => audio.loopActive(2000 + k)).length;
+		check(
+			six === 6 && !audio.loopActive(2006),
+			"seis motores ao mesmo tempo; o setimo nao e ouvido (o pool nao cresce)",
+			`${six}`,
+		);
+		settings.soundEffect = 0;
 		frame();
-	}
-	const started = plays.filter(p => p.id === engine.id);
-	const voice = started[0]?.sound;
-	check(started.length === 1 && voice.Looped === true, "segurar 30 quadros: UMA voz, em loop", `${started.length} Play()`);
-	check(
-		voice?.PlaybackRegionsEnabled === true && voice.LoopRegion?.Min === engine.loopStart && voice.LoopRegion?.Max === engine.loopEnd,
-		`so a janela estavel do take faz o loop (${engine.loopStart}-${engine.loopEnd} s)`,
-	);
-	check(voice?.SoundGroup?.Name === "sfx" && voice.Parent?.ClassName === "Attachment", "no grupo SFX, espacial");
-	check(
-		Math.abs(voice.Parent.Position.X - (100 + 29 * 5) / 16) < 0.2,
-		"o emissor segue o piloto",
-		`${voice.Parent.Position.X.toFixed(2)} studs`,
-	);
-	const quiet = voice.Volume;
-	for (let i = 0; i < 60; i++) {
-		audio.holdLoop(1001, "engineMoto", 300, 0, 1, 1.8);
+		check(
+			[0, 1, 2, 3, 4, 5].every(k => !audio.loopActive(2000 + k)),
+			"SFX em 0: todos param (nada em stream)",
+		);
+		settings.soundEffect = 0.5;
+		for (let i = 0; i < 30; i++) frame();
+		// no churn: 600 frames of engines coming and going
+		const c0 = created;
+		for (let f = 0; f < 600; f++) {
+			for (let k = 0; k < 4; k++)
+				if ((f + k * 37) % 200 < 120) audio.holdLoop(3000 + k, "engineMoto", f, k * 100, 0.7, 1 + k * 0.2);
+			if (f % 90 < 30) audio.holdLoop(4000, "flameLoop", 0, 0, 1, 0.55);
+			frame();
+		}
+		check(created === c0, "600 quadros de motores e jato indo e vindo: nenhuma Instance criada", `${created - c0}`);
+		// out of earshot: never started
+		plays.length = 0;
+		audio.holdLoop(5000, "engineMoto", 50000, 0, 1, 1);
 		frame();
-	}
-	check(
-		voice.Volume > quiet * 1.5 && voice.PlaybackSpeed > 1.7,
-		"na maxima: mais alto e mais agudo (o giro), sem salto (a altura anda ate la)",
-		`volume ${quiet.toFixed(3)} -> ${voice.Volume.toFixed(3)}, pitch ${voice.PlaybackSpeed.toFixed(2)}`,
-	);
-	let off = -1;
-	for (let i = 0; i < 40; i++) {
-		frame();
-		if (off < 0 && !voice.IsPlaying) off = i + 1;
-	}
-	check(off > 0 && off <= 20, "solto: esvai e para sozinho (e a voz volta ao pool)", `${off} quadros`);
-	check(!audio.loopActive(1001), "...e ninguem mais o segura");
-	// six sources: six voices; a seventh is not heard
-	plays.length = 0;
-	for (let i = 0; i < 10; i++) {
-		for (let k = 0; k < 7; k++) audio.holdLoop(2000 + k, "engineMoto", k * 50, 0, 1, 1);
-		frame();
-	}
-	const six = [0, 1, 2, 3, 4, 5, 6].filter(k => audio.loopActive(2000 + k)).length;
-	check(six === 6 && !audio.loopActive(2006), "seis motores ao mesmo tempo; o setimo nao e ouvido (o pool nao cresce)", `${six}`);
-	settings.soundEffect = 0;
-	frame();
-	check([0, 1, 2, 3, 4, 5].every(k => !audio.loopActive(2000 + k)), "SFX em 0: todos param (nada em stream)");
-	settings.soundEffect = 0.5;
-	for (let i = 0; i < 30; i++) frame();
-	// no churn: 600 frames of engines coming and going
-	const c0 = created;
-	for (let f = 0; f < 600; f++) {
-		for (let k = 0; k < 4; k++) if ((f + k * 37) % 200 < 120) audio.holdLoop(3000 + k, "engineMoto", f, k * 100, 0.7, 1 + k * 0.2);
-		if (f % 90 < 30) audio.holdLoop(4000, "flameLoop", 0, 0, 1, 0.55);
-		frame();
-	}
-	check(created === c0, "600 quadros de motores e jato indo e vindo: nenhuma Instance criada", `${created - c0}`);
-	// out of earshot: never started
-	plays.length = 0;
-	audio.holdLoop(5000, "engineMoto", 50000, 0, 1, 1);
-	frame();
-	check(plays.length === 0 && !audio.loopActive(5000), "longe demais: nem comeca");
-	for (let i = 0; i < 30; i++) frame();
-});
+		check(plays.length === 0 && !audio.loopActive(5000), "longe demais: nem comeca");
+		for (let i = 0; i < 30; i++) frame();
+	},
+);
 
 // ================================================================ F / G. the run's watcher
 
@@ -500,59 +561,69 @@ function runFrame(ga, refs, dt = 1 / 60, mutate) {
 const idOf = n => soundDef(n).id;
 const named = p => Object.keys(SOUNDS).find(n => SOUNDS[n].id === p.id && SOUNDS[n].startAt === undefined) ?? p.id;
 
-section("F. o lanca-chamas: um jato preso com uma ignicao, nunca o 'ping' da arma de choque; para com o gatilho", () => {
-	const ga = new GameAudio();
-	const refs = runRefs();
-	const p = refs.player;
-	p.weapon.pointer = 25;
-	p.weapon.ammoCount = 100;
-	ga.startRun(refs);
-	plays.length = 0;
-	for (let f = 0; f < 60; f++) runFrame(ga, refs, 1 / 60, () => (p.weapon.ammoCount -= f % 4 === 0 ? 1 : 0));
-	const ignite = plays.filter(q => q.id === idOf("flameIgnite")).length;
-	const jet = plays.filter(q => q.id === idOf("flameLoop")).length;
-	const ping = plays.filter(q => q.id === idOf("shotElectric")).length;
-	check(WEAPONS[25].name === "Flamethrower", "a arma 25 e o lanca-chamas");
-	check(ignite === 1 && jet === 1 && ping === 0, "um segundo de fogo: uma ignicao, um jato, zero 'ping'", `${ignite} / ${jet} / ${ping}`);
-	let stopped = -1;
-	const jetSound = plays.find(q => q.id === idOf("flameLoop"))?.sound;
-	for (let f = 0; f < 60; f++) {
-		runFrame(ga, refs);
-		if (stopped < 0 && jetSound !== undefined && !jetSound.IsPlaying) stopped = f + 1;
-	}
-	check(stopped > 0 && stopped <= 40, "soltou o gatilho: o jato para em menos de 0,7 s", `${stopped} quadros`);
-	ga.stopRun();
-});
+section(
+	"F. o lanca-chamas: um jato preso com uma ignicao, nunca o 'ping' da arma de choque; para com o gatilho",
+	() => {
+		const ga = new GameAudio();
+		const refs = runRefs();
+		const p = refs.player;
+		p.weapon.pointer = 25;
+		p.weapon.ammoCount = 100;
+		ga.startRun(refs);
+		plays.length = 0;
+		for (let f = 0; f < 60; f++) runFrame(ga, refs, 1 / 60, () => (p.weapon.ammoCount -= f % 4 === 0 ? 1 : 0));
+		const ignite = plays.filter(q => q.id === idOf("flameIgnite")).length;
+		const jet = plays.filter(q => q.id === idOf("flameLoop")).length;
+		const ping = plays.filter(q => q.id === idOf("shotElectric")).length;
+		check(WEAPONS[25].name === "Flamethrower", "a arma 25 e o lanca-chamas");
+		check(
+			ignite === 1 && jet === 1 && ping === 0,
+			"um segundo de fogo: uma ignicao, um jato, zero 'ping'",
+			`${ignite} / ${jet} / ${ping}`,
+		);
+		let stopped = -1;
+		const jetSound = plays.find(q => q.id === idOf("flameLoop"))?.sound;
+		for (let f = 0; f < 60; f++) {
+			runFrame(ga, refs);
+			if (stopped < 0 && jetSound !== undefined && !jetSound.IsPlaying) stopped = f + 1;
+		}
+		check(stopped > 0 && stopped <= 40, "soltou o gatilho: o jato para em menos de 0,7 s", `${stopped} quadros`);
+		ga.stopRun();
+	},
+);
 
-section("F2. o motor da moto: o do proprio piloto, sobe com a velocidade; sem oleo, mudo; a bicicleta nao tem motor", () => {
-	const ga = new GameAudio();
-	const refs = runRefs();
-	const p = refs.player;
-	refs.save.oil = 10;
-	ga.startRun(refs);
-	plays.length = 0;
-	p.ride = { kind: VehicleKind.Motorcycle, heading: 0, speed: 0 };
-	for (let f = 0; f < 60; f++) runFrame(ga, refs);
-	const eng = plays.find(q => q.id === idOf("engineMoto"))?.sound;
-	const idle = eng?.PlaybackSpeed ?? 0;
-	p.ride.speed = 255;
-	for (let f = 0; f < 90; f++) runFrame(ga, refs);
-	check(
-		eng !== undefined && idle < 0.9 && eng.PlaybackSpeed > 1.6,
-		"parado em ponto morto, grave; na maxima, o giro sobe",
-		`${idle.toFixed(2)} -> ${eng?.PlaybackSpeed.toFixed(2)}`,
-	);
-	refs.save.oil = 0;
-	for (let f = 0; f < 60; f++) runFrame(ga, refs);
-	check(eng !== undefined && !eng.IsPlaying, "sem oleo o motor nao liga (VEI-05): o som para");
-	refs.save.oil = 10;
-	p.ride = { kind: VehicleKind.Bicycle, heading: 0, speed: 100 };
-	plays.length = 0;
-	for (let f = 0; f < 60; f++) runFrame(ga, refs);
-	check(!plays.some(q => q.id === idOf("engineMoto")), "de bicicleta, nenhum motor");
-	p.ride = undefined;
-	ga.stopRun();
-});
+section(
+	"F2. o motor da moto: o do proprio piloto, sobe com a velocidade; sem oleo, mudo; a bicicleta nao tem motor",
+	() => {
+		const ga = new GameAudio();
+		const refs = runRefs();
+		const p = refs.player;
+		refs.save.oil = 10;
+		ga.startRun(refs);
+		plays.length = 0;
+		p.ride = { kind: VehicleKind.Motorcycle, heading: 0, speed: 0 };
+		for (let f = 0; f < 60; f++) runFrame(ga, refs);
+		const eng = plays.find(q => q.id === idOf("engineMoto"))?.sound;
+		const idle = eng?.PlaybackSpeed ?? 0;
+		p.ride.speed = 255;
+		for (let f = 0; f < 90; f++) runFrame(ga, refs);
+		check(
+			eng !== undefined && idle < 0.9 && eng.PlaybackSpeed > 1.6,
+			"parado em ponto morto, grave; na maxima, o giro sobe",
+			`${idle.toFixed(2)} -> ${eng?.PlaybackSpeed.toFixed(2)}`,
+		);
+		refs.save.oil = 0;
+		for (let f = 0; f < 60; f++) runFrame(ga, refs);
+		check(eng !== undefined && !eng.IsPlaying, "sem oleo o motor nao liga (VEI-05): o som para");
+		refs.save.oil = 10;
+		p.ride = { kind: VehicleKind.Bicycle, heading: 0, speed: 100 };
+		plays.length = 0;
+		for (let f = 0; f < 60; f++) runFrame(ga, refs);
+		check(!plays.some(q => q.id === idOf("engineMoto")), "de bicicleta, nenhum motor");
+		p.ride = undefined;
+		ga.stopRun();
+	},
+);
 
 section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; um grupo que vira e UM grito", () => {
 	const { VOICE_TOKENS, VOICE_REFILL, GROAN_MIN_GAP, GROAN_REPEAT } = require(join(SRC, "client/audio/gameAudio.ts"));
@@ -564,7 +635,15 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 		const refs = runRefs();
 		for (let i = 0; i < n; i++) {
 			const a = (i / n) * Math.PI * 2;
-			refs.zombies.push({ id: i + 1, type: [1, 1, 4, 2, 5, 3][i % 6], x: Math.cos(a) * 500, y: Math.sin(a) * 400, hp: 1, detect: false, scale: 1 });
+			refs.zombies.push({
+				id: i + 1,
+				type: [1, 1, 4, 2, 5, 3][i % 6],
+				x: Math.cos(a) * 500,
+				y: Math.sin(a) * 400,
+				hp: 1,
+				detect: false,
+				scale: 1,
+			});
 		}
 		ga.startRun(refs);
 		plays.length = 0;
@@ -576,20 +655,32 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 	const one = horde(1, 60);
 	const sixty = horde(60, 60);
 	const cap = VOICE_TOKENS + 60 / VOICE_REFILL;
-	check(one.length >= 5 && one.length <= 16, "um zumbi perto: um gemido a cada poucos segundos", `${one.length} em 60 s`);
+	check(
+		one.length >= 5 && one.length <= 16,
+		"um zumbi perto: um gemido a cada poucos segundos",
+		`${one.length} em 60 s`,
+	);
 	check(
 		sixty.length <= cap && sixty.length <= 60 / GROAN_MIN_GAP + VOICE_TOKENS,
 		`sessenta: no maximo o orcamento (${cap.toFixed(0)}) e o intervalo minimo permitem, nunca um por zumbi`,
 		`${sixty.length} em 60 s`,
 	);
-	check(sixty.length > one.length, "...mas mais que um zumbi so (a horda se ouve maior)", `${one.length} -> ${sixty.length}`);
+	check(
+		sixty.length > one.length,
+		"...mas mais que um zumbi so (a horda se ouve maior)",
+		`${one.length} -> ${sixty.length}`,
+	);
 	let gapMin = Infinity;
 	for (let i = 1; i < sixty.length; i++) gapMin = Math.min(gapMin, sixty[i].at - sixty[i - 1].at);
 	check(gapMin >= GROAN_MIN_GAP * 0.7 - 1e-6, "nunca dois gemidos colados", `menor intervalo ${gapMin.toFixed(2)} s`);
 	const names = sixty.map(nameOfPlay);
 	let repeats = 0;
 	for (let i = 1; i < names.length; i++) if (names[i] === names[i - 1]) repeats++;
-	check(repeats === 0 && uniq(names) >= 3, "nunca o mesmo take duas vezes seguidas; pelo menos tres takes", `${uniq(names)} takes, ${repeats} repeticoes`);
+	check(
+		repeats === 0 && uniq(names) >= 3,
+		"nunca o mesmo take duas vezes seguidas; pelo menos tres takes",
+		`${uniq(names)} takes, ${repeats} repeticoes`,
+	);
 	const pitches = uniq(sixty.map(q => q.speed.toFixed(2)));
 	check(pitches >= 5, "e a altura varia (sorteio e tipo)", `${pitches} alturas`);
 	// the type's voice: a charger lower than a spitter, on average
@@ -607,7 +698,11 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 		for (let f = 0; f < 60 * 40; f++) runFrame(ga, refs);
 		const spitter = plays.filter(q => vocal.has(q.id)).map(q => q.speed);
 		const avg = a => a.reduce((s, v) => s + v, 0) / Math.max(1, a.length);
-		check(avg(charger) < avg(spitter) * 0.85, "a voz do tipo: o charger mais grave que o cuspidor", `${avg(charger).toFixed(2)} vs ${avg(spitter).toFixed(2)}`);
+		check(
+			avg(charger) < avg(spitter) * 0.85,
+			"a voz do tipo: o charger mais grave que o cuspidor",
+			`${avg(charger).toFixed(2)} vs ${avg(spitter).toFixed(2)}`,
+		);
 		ga.stopRun();
 	}
 	// one zombie never twice within GROAN_REPEAT
@@ -621,7 +716,11 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 		const v = plays.filter(q => vocal.has(q.id));
 		let min = Infinity;
 		for (let i = 1; i < v.length; i++) min = Math.min(min, v[i].at - v[i - 1].at);
-		check(min >= GROAN_REPEAT - 1e-6, `o mesmo zumbi nunca geme duas vezes em ${GROAN_REPEAT} s`, `menor ${min.toFixed(2)} s`);
+		check(
+			min >= GROAN_REPEAT - 1e-6,
+			`o mesmo zumbi nunca geme duas vezes em ${GROAN_REPEAT} s`,
+			`menor ${min.toFixed(2)} s`,
+		);
 		ga.stopRun();
 	}
 	// aggro: a lone zombie snarls; ten turning at once are ONE shout
@@ -631,7 +730,8 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 	]) {
 		const ga = new GameAudio();
 		const refs = runRefs();
-		for (let i = 0; i < n; i++) refs.zombies.push({ id: 100 + i, type: 1, x: 300 + i * 20, y: 0, hp: 1, detect: false, scale: 1 });
+		for (let i = 0; i < n; i++)
+			refs.zombies.push({ id: 100 + i, type: 1, x: 300 + i * 20, y: 0, hp: 1, detect: false, scale: 1 });
 		ga.startRun(refs);
 		for (let f = 0; f < 5; f++) runFrame(ga, refs);
 		plays.length = 0;
@@ -639,7 +739,11 @@ section("G. a horda: sessenta zumbis sao poucas vozes, variadas, com orcamento; 
 		for (let f = 0; f < 10; f++) runFrame(ga, refs);
 		const v = plays.filter(q => vocal.has(q.id)).map(nameOfPlay);
 		const ok = want === "aggro" ? v.length === 1 && /^zombieAggro/.test(v[0]) : v.join() === "zombieShout";
-		check(ok, n === 1 ? "um zumbi que te viu: um rosnado" : "dez que viram juntos: UM grito, nao dez", v.join(", "));
+		check(
+			ok,
+			n === 1 ? "um zumbi que te viu: um rosnado" : "dez que viram juntos: UM grito, nao dez",
+			v.join(", "),
+		);
 		ga.stopRun();
 	}
 });

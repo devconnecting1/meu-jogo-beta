@@ -63,8 +63,9 @@ export function remoteProjectileSound(kind: number, owner: number, x: number, y:
 	}
 	if (kind !== ProjKind.Fire) return;
 	const f = flames.get(owner);
-	if (f === undefined) flames.set(owner, { x, y, at: os.clock() });
-	else {
+	if (f === undefined) {
+		flames.set(owner, { x, y, at: os.clock() });
+	} else {
 		f.x = x;
 		f.y = y;
 		f.at = os.clock();

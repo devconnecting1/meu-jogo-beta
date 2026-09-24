@@ -295,7 +295,8 @@ export class GameAudio {
 		// the flamethrower is a jet, held while it spits (holdFlames), not a shot per round: before P0-4 it played the
 		// stun gun's ping fifteen times a second
 		if (w.id === FLAMETHROWER_ID) {
-			if (this.flameHeld <= 0 && !audio.loopActive(KEY_LOCAL_FLAME)) audio.play("flameIgnite", { x: p.x, y: p.y });
+			if (this.flameHeld <= 0 && !audio.loopActive(KEY_LOCAL_FLAME))
+				audio.play("flameIgnite", { x: p.x, y: p.y });
 			this.flameHeld = FLAME_HOLD;
 			return;
 		}
