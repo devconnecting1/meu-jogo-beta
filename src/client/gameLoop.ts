@@ -2,7 +2,7 @@ import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN } from "shared/engine/constants";
-import { LightMap, LightSource, Renderer, SpriteOpts } from "shared/engine/renderer";
+import { LightMap, Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
 import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
@@ -73,6 +73,7 @@ import { WorldView } from "./view/worldView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
 import { BodyGrid } from "./view/bodyGrid";
+import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import { reducedMotion } from "./ui/skin";
 
@@ -102,8 +103,6 @@ const CANOPY_SEE_THROUGH = 0.35;
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
  */
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
-/** the flashlight's beam is fully bright to this fraction of its reach, then fades to 0 at its end */
-const FLASHLIGHT_INNER = 0.35;
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -389,7 +388,8 @@ export class GameLoop {
 	private clock = 0;
 	private lightMap?: LightMap;
 	private nameplate?: Nameplate;
-	private lights: Array<LightSource> = [];
+	/** this frame's lights of the night map (and of the awareness marks), refilled in place */
+	private readonly lights = new LightList();
 	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
 	private seq = 0;
 	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
@@ -408,7 +408,7 @@ export class GameLoop {
 	/** the bodies a mark must never cover, refilled in place: the local survivor first, then the allies */
 	private readonly markAvoid = new Array<MarkAvoid>();
 	/** the night the light map drew this frame: a mark is only as bright as the ground under its zombie (IA-05) */
-	private readonly markNight: MarkNight = { dark: 0, lights: this.lights };
+	private readonly markNight: MarkNight = { dark: 0, lights: this.lights.items };
 	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
 	private readonly selfBody = { x: 0, y: 0 };
 	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
@@ -1102,25 +1102,18 @@ export class GameLoop {
 			this.lightMap.hide();
 			return;
 		}
+		// refilled from its pool of records: no table per light per frame (M4)
 		const lights = this.lights;
 		lights.clear();
 		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
-			lights.push({ x: p.x, y: p.y, r: SurvivorLight.survivorLightRadius(save), inner: 0.4 });
+			const radius = SurvivorLight.survivorLightRadius(save);
 			const cone = SurvivorLight.survivorCone(save);
-			if (cone !== undefined) {
-				lights.push({
-					x: p.x,
-					y: p.y,
-					r: cone.radius,
-					inner: FLASHLIGHT_INNER,
-					angle: p.angle,
-					cone: SurvivorLight.CONE_HALF_ANGLE,
-				});
-			}
+			addSurvivorLight(lights, p.x, p.y, p.angle, radius, cone?.radius);
 		}
+		// every ally's, by the same shape and as far as the wire tells what they carry (playersView.collectLights)
 		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
 		const list = this.queryBuf;
 		list.clear();
@@ -1130,23 +1123,21 @@ export class GameLoop {
 			if (r === undefined || s.powered !== true) continue;
 			const fire = s.tags === "campfire" || s.tags === "brazier";
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
-			lights.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: r * flicker, inner: 0.5 });
+			lights.circle(s.x + s.w / 2, s.y + s.h / 2, r * flicker, 0.5);
 		}
-		this.machines.collectLights(lights);
+		this.machines.collectLights(lights.items);
 		for (const t of this.fxView.shotLines()) {
 			const k = clamp(t.life * 5, 0, 1);
-			if (k > 0.05) lights.push({ x: t.x1, y: t.y1, r: 150, k: 0.85 * k, inner: 0.2 });
+			if (k > 0.05) lights.circle(t.x1, t.y1, 150, 0.2, 0.85 * k);
 		}
 		for (const b of this.bullets) {
-			if (b.kind === "fire") lights.push({ x: b.x, y: b.y, r: 110, k: 0.7, inner: 0.2 });
+			if (b.kind === "fire") lights.circle(b.x, b.y, 110, 0.2, 0.7);
 		}
 		const blasts = this.refs.explosions;
 		if (blasts !== undefined) {
-			for (const e of blasts) {
-				lights.push({ x: e.x, y: e.y, r: e.rMax * 1.8, k: explosionFade(e), inner: 0.35 });
-			}
+			for (const e of blasts) lights.circle(e.x, e.y, e.rMax * 1.8, 0.35, explosionFade(e));
 		}
-		this.lightMap.update(cam, dark, lights);
+		this.lightMap.update(cam, dark, lights.items);
 	}
 
 	/** Hide every world sprite and the night overlay (call when leaving the game screen). */

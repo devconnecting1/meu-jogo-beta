@@ -53,7 +53,8 @@ const ROOF_HIDES = 0.5;
  * At night a mark is only as bright as the ground under its zombie on THIS screen (`lightAt` over the light map's own
  * lights): from NIGHT_FROM darkness it starts to follow the light, from NIGHT_FULL it is the light, and below
  * NIGHT_MIN it is not drawn. The body's `alpha` alone is not enough in multiplayer: there it only says the server
- * sent the zombie, and an ally's flashlight 450 u away sends one that is dark here (IA-05, the review of 66f6373).
+ * sent the zombie, and an ally's torch 350 u away sends one that is dark here (IA-05, the review of 66f6373; an ally's
+ * flashlight cone is drawn since LUZ-04's wire bit, their wider circle is not: docs/DESIGN_RULES.md LUZ-04).
  */
 export const NIGHT_FROM = 0.3;
 export const NIGHT_FULL = 0.6;
