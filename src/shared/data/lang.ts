@@ -806,6 +806,14 @@ export const LANG_TABLE: Array<string> = [
 	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
 	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
 	"Siphon Oil",
+	// the everyday town's searchable fixtures (client/systems/interaction.ts YARD_HINTS, DESIGN_RULES EDI-20, EDI-21,
+	// MOB-06) and the bank's vault (EDI-23): what E does there, the text after "E: "
+	"Search stall",
+	"Search food truck",
+	"Search pile",
+	"Search shed",
+	"Open deposit boxes",
+	"Crack vault (hold)",
 ];
 
 /**

@@ -26,8 +26,9 @@ const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 
 /** the table a building type rolls (spawns.ts `spawnRows` where the version has it) */
 const rowsOf = bt => (SP.spawnRows !== undefined ? SP.spawnRows(bt) : SP.BUILDING_SPAWNS[bt]) ?? SP.BUILDING_SPAWNS[0];
-/** what a searchable fixture rolls (shared/data/spawns.ts YARD_LOOT, where the version has it) */
-const yardRows = tag => SP.YARD_LOOT?.[tag];
+/** what a searchable fixture rolls (shared/data/spawns.ts YARD_LOOT: a stall's by what it sells, a pile's by what it is) */
+const yardRows = (tag, variant) =>
+	SP.YARD_LOOT?.[SP.yardLootKey !== undefined ? SP.yardLootKey(tag, variant) : tag] ?? SP.YARD_LOOT?.[tag];
 const nameOf = (kind, index) => (kind === 3 ? USABLES[index]?.name : kind === 4 ? ETC_ITEMS[index]?.name : "") ?? "";
 /** the loot categories of the economy (EDI-18): what a line of a table is */
 function categoryOf(e) {
@@ -96,15 +97,22 @@ function census(seed) {
 	const w = W.generateTown(seed);
 	const S = w.solids;
 	const buildings = S.filter(s => s.kind === "building");
-	const out = { seed, types: {}, houses: {}, lots: {}, ground: {}, props: {}, rep: {}, loot: {} };
+	const out = { seed, types: {}, houses: {}, lots: {}, ground: {}, props: {}, rep: {}, loot: {}, vault: {} };
 	const bump = (o, k, n = 1) => (o[k] = (o[k] ?? 0) + n);
 	// the loot a whole town holds at once (every building searched, every pump drained: one respawn, 12 game hours)
 	for (const s of S) {
 		let rows;
-		let slots = s.lootSlots ?? 0;
+		const slots = s.lootSlots ?? 0;
+		// the bank's vault (EDI-23): every box once, and once a world -- counted apart, not in the respawn's loot
+		if (s.kind === "prop" && s.tags === "vault") {
+			for (const e of SP.VAULT_LOOT ?? []) {
+				bump(out.vault, categoryOf(e), e.max < 1 ? e.max : (e.min + e.max) / 2);
+			}
+			continue;
+		}
 		if (s.kind === "building") rows = rowsOf(s.buildingType ?? 0);
 		else if (s.tags === "pump") rows = SP.PUMP_LOOT;
-		else if (s.lootSlots !== undefined) rows = yardRows(s.tags);
+		else if (s.lootSlots !== undefined) rows = yardRows(s.tags, s.variant);
 		if (rows === undefined || slots <= 0) continue;
 		const per = perSlot(rows);
 		for (const [c, n] of Object.entries(per)) bump(out.loot, c, n * slots);
@@ -235,6 +243,14 @@ for (const k of keysOf(c => c.loot)) {
 	console.log(`  ${k.padEnd(28)} ${s.mean.toFixed(1).padStart(6)}  (${s.min.toFixed(1)}–${s.max.toFixed(1)})`);
 }
 console.log("");
+if (keysOf(c => c.vault).length > 0) {
+	console.log("the bank's vault, once a world (expected items: every box rolled once, EDI-23)");
+	for (const k of keysOf(c => c.vault)) {
+		const s = stats(c => c.vault, k);
+		console.log(`  ${k.padEnd(28)} ${s.mean.toFixed(2).padStart(6)}`);
+	}
+	console.log("");
+}
 console.log("repetition of the non-house buildings (over every town; distances centre to centre, in world units)");
 console.log(
 	"  type          n/town   nearest same min  median   blocks min/med   same block  same face  across street  same corner",
