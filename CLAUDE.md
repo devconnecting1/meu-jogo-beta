@@ -18,6 +18,7 @@ npm run lint
 npm run format:check
 npm run validate:world   # regras [auto] da bíblia de ambientação
 npm run check:registers  # limite de 200 locais por chunk do Luau (invisível ao tsc; o cliente não sobe)
+npm run check:luau       # roda o compilador oficial do Luau (baixado e travado por SHA-256) em out/**/*.luau: os limites reais de carregamento
 npm run check:place      # propriedades de place que script não muda (Players.BanningEnabled) fixas no default.project.json
 npm run theme            # design/tweakcn-theme.json -> src/client/ui/themeTokens.ts (nunca edite o gerado)
 npm run locale           # exporta lang.ts para o CSV da tabela de localização do Roblox
