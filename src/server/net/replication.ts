@@ -61,6 +61,7 @@ import {
 	WItemAdd,
 	WorldEv,
 	WorldEvent,
+	WorldResetCause,
 	WorldResetLife,
 	ZombieFlag,
 	ZombieSnap,
@@ -182,6 +183,8 @@ export interface TownChange {
 	mapHash: number;
 	/** the world day the old town fell on */
 	endedDay: number;
+	/** WorldResetCause (protocol note 21): it fell (MP-22, the default) or its keeper restarted it (MP-26) */
+	cause?: number;
 	/** the survivors whose life the server reset to day 1, with the runRev that left in their saves */
 	lives: ReadonlyArray<WorldResetLife>;
 }
@@ -744,7 +747,13 @@ export class Replicator {
 		this.seed = change.seed;
 		const lives = new Array<WorldResetLife>();
 		for (const life of change.lives) lives.push({ userId: life.userId, runRev: life.runRev });
-		this.broadcast.unshift({ t: WorldEv.WorldReset, seed: change.seed, endedDay: change.endedDay, lives });
+		this.broadcast.unshift({
+			t: WorldEv.WorldReset,
+			seed: change.seed,
+			endedDay: change.endedDay,
+			cause: change.cause ?? WorldResetCause.Fell,
+			lives,
+		});
 		for (const sp of this.sim.players()) this.queueFor(sp.slot, this.initBegin());
 		this.flushWorld(this.sim.tick);
 	}

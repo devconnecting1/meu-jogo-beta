@@ -23,8 +23,9 @@
  * guessed town that then swaps is what this replaced.
  */
 import { DESIGN } from "shared/engine/constants";
+import { townNameOf } from "shared/data/townNames";
 import { MP_PHASE, TOWN_SEED_MAX, WORLD_SEED_ATTRIBUTE } from "shared/net/mpConfig";
-import { netOnTown } from "../net/netClient";
+import { TownNotice, netOnTown } from "../net/netClient";
 import { followTown } from "../view/townFlyover";
 import * as TownCache from "./townCache";
 
@@ -72,4 +73,22 @@ export function startServerTown(): void {
 		});
 	}
 	changed();
+}
+
+/**
+ * The news of a world that ended (MP-22) or was restarted by its keeper (MP-26), with the towns' NAMES
+ * (shared/data/townNames.ts): "Millbrook fell on day 4. Cedarford rises: day 1". `oldSeed` is the town the run stood in
+ * when the client knows it (a run in the street); without it the old town is "The town". The new one is always the
+ * notice's seed -- the server's.
+ */
+export function townEndText(tr: (key: string) => string, notice: TownNotice, oldSeed: number | undefined): string {
+	const day = math.max(1, math.floor(notice.endedDay ?? 1));
+	const named = oldSeed !== undefined && isTownSeed(oldSeed) && oldSeed !== notice.seed;
+	let ended: string;
+	if (notice.restarted === true) {
+		ended = named ? `${townNameOf(oldSeed)} ${tr("was restarted.")}` : tr("The town was restarted.");
+	} else {
+		ended = named ? `${townNameOf(oldSeed)} ${tr("fell on day")} ${day}.` : `${tr("The town fell on day")} ${day}.`;
+	}
+	return `${ended} ${townNameOf(notice.seed)} ${tr("rises: day 1")}`;
 }

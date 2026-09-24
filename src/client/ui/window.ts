@@ -197,6 +197,8 @@ export interface SectionProps {
 	h: number;
 	/** bold title at the top left ("Keybinds"); omitted = no title */
 	title?: string;
+	/** the title's width (default: the whole line, less the margins) -- less when controls share the title's line */
+	titleW?: number;
 	zIndex?: number;
 }
 
@@ -236,7 +238,7 @@ export function Section(parent: Instance, name: string, props: SectionProps): Se
 			props.title,
 			space(5),
 			SECTION_TITLE_Y,
-			props.w - space(10),
+			props.titleW ?? props.w - space(10),
 			SECTION_TITLE_H,
 			TEXT.xl2,
 			THEME.foreground,

@@ -838,11 +838,6 @@ function buildRun(): void {
 	lastLevel = ctx.save.level;
 }
 
-/** MP-22: "The town fell on day N. A new town rises: day 1." */
-function townFellText(day: number): string {
-	return `${tr("The town fell on day")} ${fmtInt(day)}. ${tr("A new town rises: day 1")}`;
-}
-
 /**
  * MP-22: what the server says about its town (client/net/netClient.ts `netOnTown`) — the InitBegin of every entry,
  * and the WorldReset of a world that ended because nobody was left alive in it.
@@ -860,6 +855,9 @@ function townFellText(day: number): string {
  */
 function onTown(notice: TownNotice): void {
 	const fellOn = notice.endedDay;
+	// MP-22 / MP-26, named (client/boot/serverTown.ts): the town a run in the street stood in, and the notice's new one
+	const news =
+		fellOn !== undefined ? Boot.townEndText(tr, notice, heartbeat !== undefined ? loop.townSeed : undefined) : "";
 	if (fellOn !== undefined) {
 		worldResets += 1;
 		lobbyNav.fellOn = fellOn;
@@ -884,7 +882,7 @@ function onTown(notice: TownNotice): void {
 	if (heartbeat === undefined) {
 		if (fellOn === undefined) return;
 		runActive = false;
-		if (ctx.phase !== "boot") toast(ctx, townFellText(fellOn));
+		if (ctx.phase !== "boot") toast(ctx, news);
 		// the lobby on screen shows the new town (its flyover, its day) and the new life, not a death that is over
 		lobbyNav.handle?.refresh(lobbyStatus());
 		return;
@@ -906,7 +904,7 @@ function onTown(notice: TownNotice): void {
 		p.hp = 0;
 		setPhase("dead");
 	}
-	if (fellOn !== undefined) hud.showMessage(townFellText(fellOn));
+	if (fellOn !== undefined) hud.showMessage(news);
 }
 
 netOnTown(onTown);

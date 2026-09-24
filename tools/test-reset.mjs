@@ -78,6 +78,12 @@
  *  20. A PRIVATE SERVER KEEPS  a private server with an owner reopens on the town and the world day its last session
  *      ITS TOWN                left (MP-22's new town once the world ended); a public or reserved server never reads or
  *                              writes that store; a record that is not a town, or a read that fails, costs nothing.
+ *  21. RESTART TOWN            through the real TownRequest remote: only the private server's owner (and an admin)
+ *                              is marked and may; friends, public and reserved servers are refused and audited; the
+ *                              owner's restart is a real world end -- a new seed (never one the client sent) on day 1,
+ *                              one WorldReset of cause Restarted, the fallen given a new life, the standing keeping
+ *                              theirs, the private store and the world log written -- then the cooldown, the
+ *                              per-player bucket, and the Servers list answering unavailable / studio.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
@@ -1112,6 +1118,8 @@ section("6) the wire and the record", () => {
 		t: P.WorldEv.WorldReset,
 		seed: 2147483646,
 		endedDay: 17,
+		// MP-26 (protocol note 21): why it ended -- here, its keeper restarted it
+		cause: P.WorldResetCause.Restarted,
 		lives: [
 			{ userId: 123456789, runRev: 12 },
 			{ userId: -3, runRev: 0 },
@@ -1131,7 +1139,7 @@ section("6) the wire and the record", () => {
 	const got = P.decodeWorld(pkt);
 	check(
 		got !== undefined && JSON.stringify(got.events[0]) === JSON.stringify(reset),
-		"WorldReset round-trips: seed, the day it fell on, the new lives",
+		"WorldReset round-trips: seed, the day it fell on, why (MP-26), the new lives",
 		got !== undefined ? JSON.stringify(got.events[0]) : "did not decode",
 	);
 	check(
@@ -1156,8 +1164,12 @@ section("6) the wire and the record", () => {
 		noDay[10] = 0;
 		noDay[11] = 0;
 		check(P.decodeWorld(bufOf(noDay)) === undefined, "…and one that fell on day 0");
+		// MP-26 (protocol note 21): the cause byte follows the day, then the count of lives
+		const badCause = bytes.slice();
+		badCause[12] = P.WORLD_RESET_CAUSE_MAX + 1;
+		check(P.decodeWorld(bufOf(badCause)) === undefined, "…and one with a cause the protocol does not have");
 		const tooMany = bytes.slice();
-		tooMany[12] = 200;
+		tooMany[13] = 200;
 		check(P.decodeWorld(bufOf(tooMany)) === undefined, "…and one that names more lives than it carries");
 	}
 	let same = 0;
@@ -2460,6 +2472,202 @@ section("20) a private server keeps its town across its sessions; a public one n
 		"a read that fails: a fresh town for that session, a warning, and NOTHING written over the kept town",
 		`${JSON.stringify(record("vip-A"))}`,
 	);
+});
+
+// ================================================================ 21: the keeper restarts the town (MP-26)
+
+section("21) Restart town: only the private server's owner (or an admin), a real world end, kept, audited", () => {
+	const STORE = "ProjectZ_PrivateTowns";
+	const record = id => fakeStore(STORE).data.get(id);
+	const { RESTART_COOLDOWN_S, RestartGate, restartRightOf } = require(join(SRC, "server/match/townRestart.ts"));
+	const { REQ_BURST } = require(join(SRC, "server/match/townServices.ts"));
+	const { ADMIN_USER_IDS } = require(join(SRC, "shared/admin/config.ts"));
+	const { townNameOf } = require(join(SRC, "shared/data/townNames.ts"));
+	const townRemote = s => s.env.services.ReplicatedStorage.FindFirstChild("PZTownNet")?.FindFirstChild("TownRequest");
+	const ask = (s, p, req) => townRemote(s).OnServerInvoke(p, req);
+	const reason = r => (r?.ok ? "ok" : r?.reason);
+
+	// ---- the rule itself
+	check(
+		restartRightOf(7, "vip", 7, () => false) === "owner" &&
+			restartRightOf(8, "vip", 7, () => false) === undefined &&
+			restartRightOf(7, "", 7, () => false) === undefined &&
+			restartRightOf(0, "reserved", 0, () => false) === undefined &&
+			restartRightOf(9, "", 0, id => id === 9) === "admin",
+		"who may: the owner on THEIR private server, an admin anywhere; nobody on a public or a reserved server",
+	);
+	const gate = new RestartGate();
+	gate.started(100);
+	check(
+		gate.waitFor(100 + RESTART_COOLDOWN_S - 1) > 0 && gate.waitFor(100 + RESTART_COOLDOWN_S) === 0,
+		`one restart per ${RESTART_COOLDOWN_S} s per server`,
+	);
+
+	// ---- a private server: the owner, a friend down in the street, a friend in the lobby
+	const OWNER = newUser();
+	const vip = { privateId: "vip-R", privateOwner: OWNER };
+	const s = bootServer(vip);
+	const owner = s.join(OWNER, "owner");
+	const down = s.join(newUser(), "down");
+	const lobbyOnly = s.join(newUser(), "lobby");
+	s.enter(owner);
+	s.enter(down);
+	s.immortal.add(owner);
+	s.sim.clock.setClock(12, 6);
+	s.run(0.5);
+	s.kill(down);
+	check(s.body(down)?.state.dead === true, "(the friend is down, waiting for daybreak)");
+	check(
+		owner.GetAttribute("pz_town_keeper") === true &&
+			down.GetAttribute("pz_town_keeper") === undefined &&
+			lobbyOnly.GetAttribute("pz_town_keeper") === undefined,
+		"the server marks the owner, and only them: the lobby shows Restart town to them alone",
+	);
+	const oldSeed = s.host.seed;
+	const ownerRev = s.body(owner).save.runRev;
+	const ownerDay = s.body(owner).save.day;
+
+	// ---- refusals first: nothing changes
+	const refusals = [
+		["a friend on the owner's server", reason(ask(s, lobbyOnly, { kind: "restart" })), "forbidden"],
+		["a friend who is down", reason(ask(s, down, { kind: "restart" })), "forbidden"],
+		["a request that is not one", reason(ask(s, owner, { kind: "restartTown" })), "invalid"],
+	];
+	const wrong = refusals.filter(([, got, want]) => got !== want);
+	check(
+		wrong.length === 0 && s.host.seed === oldSeed && s.sim.clock.day === 6,
+		"refused: " + refusals.map(([w, , want]) => `${w} -> ${want}`).join("; ") + "; the town unchanged",
+		wrong.map(([w, got]) => `${w}: ${got}`).join("; "),
+	);
+	check(
+		s.printed.some(l => l.includes(`[PZ-ADMIN] admin ${lobbyOnly.UserId} town:restart target=own town REFUSED`)),
+		"every refusal is in the audit log (memory and output), by UserId",
+	);
+
+	// ---- the owner restarts: a real world end
+	const wipes = s.wipes();
+	s.clearWorldLog();
+	const res = ask(s, owner, { kind: "restart", seed: 12345, day: 99 });
+	s.beat();
+	const newSeed = s.host.seed;
+	check(
+		reason(res) === "ok" && wipes.length === 0 && s.host.seed !== oldSeed,
+		"the owner's Restart town: ok, and the host ends the world at once (not rule 6: nobody had to die)",
+		JSON.stringify(res),
+	);
+	check(
+		newSeed !== oldSeed &&
+			newSeed !== 12345 &&
+			s.sim.clock.day === 1 &&
+			s.Workspace.GetAttribute("pz_world_seed") === newSeed,
+		"a NEW seed (never the old one, never anything the client sent), day 1, and the attribute every lobby reads",
+		`${oldSeed} (${townNameOf(oldSeed)}) -> ${newSeed} (${townNameOf(newSeed)})`,
+	);
+	const resets = s
+		.worldLog()
+		.flatMap(b => b.events.filter(e => e.t === s.P.WorldEv.WorldReset).map(e => ({ to: b.to, e })));
+	check(
+		resets.length === 1 &&
+			resets[0].to === undefined &&
+			resets[0].e.cause === s.P.WorldResetCause.Restarted &&
+			resets[0].e.seed === newSeed &&
+			resets[0].e.endedDay === 6,
+		"ONE WorldReset to every client, the lobby too, cause Restarted (the town did not fall), ended on day 6",
+		JSON.stringify(resets.map(r => ({ to: r.to?.Name, cause: r.e.cause, day: r.e.endedDay }))),
+	);
+	const lives = resets[0]?.e.lives.map(l => l.userId) ?? [];
+	check(
+		lives.length === 1 && lives[0] === down.UserId && s.body(down)?.state.dead === false,
+		"the friend who was down falls with the town: a new life, standing in the new one",
+		JSON.stringify(lives),
+	);
+	const ownerBody = s.body(owner);
+	check(
+		ownerBody !== undefined &&
+			!ownerBody.state.dead &&
+			ownerBody.save.runRev === ownerRev &&
+			ownerBody.save.day === ownerDay &&
+			!lives.includes(OWNER),
+		"the owner, standing, keeps their life (same run, same life day) and is moved into the new town",
+		`runRev ${ownerRev} -> ${ownerBody?.save.runRev}, day ${ownerDay} -> ${ownerBody?.save.day}`,
+	);
+	const kept = record("vip-R");
+	check(
+		kept?.seed === newSeed && kept?.day === 1,
+		"the private-town store has the NEW town on day 1 at once: the next session opens on it",
+		JSON.stringify(kept),
+	);
+	const ended = s.endedWorlds();
+	const last = Array.isArray(ended) ? ended[ended.length - 1] : undefined;
+	check(
+		last?.seed === oldSeed && last?.days === 6 && last?.reason === "restart" && last?.fallen === 1,
+		"the world log keeps the town that ended: its seed, 6 days, reason restart, 1 down with it",
+		JSON.stringify(last),
+	);
+	check(
+		s.printed.some(l => l.includes(`[PZ-ADMIN] admin ${OWNER} town:restart target=own town OK`)) &&
+			s.printed.some(l =>
+				l.includes(`${townNameOf(oldSeed)} (seed ${oldSeed}) is restarted on day 6 by ${OWNER}`),
+			),
+		"the audit log has the owner's restart (by UserId), and the server log names the town",
+	);
+
+	// ---- again at once: the server's cooldown
+	const again = ask(s, owner, { kind: "restart" });
+	check(
+		reason(again) === "rate" && s.host.seed === newSeed,
+		`a second restart inside ${RESTART_COOLDOWN_S} s: rate, the town stays`,
+	);
+	// ---- the per-player bucket: a burst, then refused
+	const burst = [];
+	for (let i = 0; i < REQ_BURST + 3; i++) burst.push(reason(ask(s, lobbyOnly, { kind: "servers" })));
+	check(
+		burst.slice(REQ_BURST).every(r => r === "rate"),
+		`more than ${REQ_BURST} requests at once from one player: the rest are refused (rate)`,
+		burst.join(","),
+	);
+	// ---- no MemoryStore in the harness: the list says so, it never throws
+	check(
+		reason(ask(s, owner, { kind: "servers" })) === "unavailable" &&
+			reason(ask(s, owner, { kind: "join", jobId: "job-x" })) === "unavailable",
+		"with no MemoryStoreService the Servers list and the join answer unavailable",
+	);
+	s.shutdown();
+
+	// ---- a public server and a reserved one (Play solo): nobody may, the admin still may
+	const pub = bootServer();
+	const stranger = pub.join(newUser(), "stranger");
+	const pubSeed = pub.host.seed;
+	check(
+		reason(ask(pub, stranger, { kind: "restart" })) === "forbidden" && pub.host.seed === pubSeed,
+		"a public server: a player's restart is refused (forbidden), the town stays",
+	);
+	const admin = pub.join(ADMIN_USER_IDS[0], "admin");
+	check(admin.GetAttribute("pz_town_keeper") === true, "an admin is marked on any server (the developer's tool)");
+	check(
+		reason(ask(pub, admin, { kind: "restart" })) === "ok" && pub.host.seed !== pubSeed,
+		"...and an admin's restart goes through, audited like the owner's",
+	);
+	pub.shutdown();
+	const solo = bootServer({ privateId: "reserved-R", privateOwner: 0 });
+	const alone = solo.join(newUser(), "alone");
+	const soloSeed = solo.host.seed;
+	check(
+		reason(ask(solo, alone, { kind: "restart" })) === "forbidden" &&
+			solo.host.seed === soloSeed &&
+			alone.GetAttribute("pz_town_keeper") === undefined,
+		"a reserved server (Play solo, owner 0): refused, and nobody is marked",
+	);
+	solo.shutdown();
+	// ---- Studio: no list, no teleport
+	const studio = bootServer({ studio: true });
+	const dev = studio.join(newUser(), "dev");
+	check(
+		reason(ask(studio, dev, { kind: "servers" })) === "studio" &&
+			reason(ask(studio, dev, { kind: "join", jobId: "job-x" })) === "studio",
+		"in Studio: the Servers list and the join answer studio (the window says so)",
+	);
+	studio.shutdown();
 });
 
 // ================================================================

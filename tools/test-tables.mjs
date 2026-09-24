@@ -57,6 +57,8 @@ const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const TIT = require(join(SRC, "shared/data/titles.ts"));
 const { LifeState } = require(join(SRC, "shared/net/protocol.ts"));
 const { MAX_PLAYERS } = require(join(SRC, "shared/net/mpConfig.ts"));
+const TOWNS = require(join(SRC, "shared/data/townNames.ts"));
+const NET = require(join(SRC, "client/net/netClient.ts"));
 const { MIN_TOUCH_PX, computeTouchLayout } = require(join(SRC, "shared/engine/input.ts"));
 const OPS = require(join(SRC, "shared/admin/ops.ts"));
 const AP = require(join(SRC, "shared/admin/protocol.ts"));
@@ -1010,11 +1012,15 @@ check(
 		cellText(byName("Ana"), "status") === "Dead" &&
 		subText(byName("Ana"), "status") === "until dawn",
 );
-check(
-	"o titulo da janela conta quem esta na cidade",
-	deep(board.panel, "Title").Text === `Survivors · 5 / ${MAX_PLAYERS}`,
-	deep(board.panel, "Title").Text,
-);
+{
+	// MP-26: the town's NAME first -- derived from the seed the match runs (netTownSeed), the same one every side names
+	const town = TOWNS.townNameOf(NET.netTownSeed());
+	check(
+		"o titulo da janela diz a cidade (o nome dela, da semente) e conta quem esta nela",
+		deep(board.panel, "Title").Text === `${town} · Survivors · 5 / ${MAX_PLAYERS}`,
+		deep(board.panel, "Title").Text,
+	);
+}
 check(
 	"sem PlayerTally ainda: um traco, nunca 0",
 	cellText(byName("NewOne"), "lifeDay") === "–" && cellText(byName("NewOne"), "kills") === "–",

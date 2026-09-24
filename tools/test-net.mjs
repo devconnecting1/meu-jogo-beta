@@ -1358,7 +1358,14 @@ function randWorldEvent(kind = rint(1, 19)) {
 			for (let i = rint(0, 6); i > 0; i--) {
 				lives.push({ userId: rbool() ? rint(1, 9000000000) : -rint(1, 8), runRev: rint(0, 10000000) });
 			}
-			return { t: kind, seed: rint(1, CFG.TOWN_SEED_MAX), endedDay: rint(1, 400), lives };
+			// MP-26 (protocol note 21): why it ended -- it fell, or its keeper restarted it
+			return {
+				t: kind,
+				seed: rint(1, CFG.TOWN_SEED_MAX),
+				endedDay: rint(1, 400),
+				cause: rint(0, P.WORLD_RESET_CAUSE_MAX),
+				lives,
+			};
 		}
 		default:
 			return {
@@ -1470,6 +1477,7 @@ function compareWorldEvent(a, b) {
 		case P.WorldEv.WorldReset:
 			eq("reset seed", b.seed, a.seed);
 			eq("reset endedDay", b.endedDay, a.endedDay);
+			eq("reset cause", b.cause, a.cause);
 			eq("reset lives", JSON.stringify(b.lives), JSON.stringify(a.lives));
 			break;
 		case P.WorldEv.InitBegin:
@@ -1519,14 +1527,21 @@ test("World: round trip of every delta", () => {
 		t: P.WorldEv.WorldReset,
 		seed: 12345,
 		endedDay: 9,
+		cause: P.WorldResetCause.Restarted,
 		lives: [
 			{ userId: 1, runRev: 4 },
 			{ userId: 2, runRev: 9 },
 		],
 	};
 	const resetBytes = buffer.len(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
-	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 2 * (8 + 4));
-	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, lives (MP-22)"]);
+	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 1 + 2 * (8 + 4));
+	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, cause, lives (MP-22, MP-26)"]);
+	// MP-26 (note 21): a cause the protocol does not have drops the event, like a bad seed
+	const raw = bytesOf(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
+	// the cause byte: after the 5 B header, the tag, the seed (u32) and endedDay (u16)
+	eq("the cause byte is where note 21 puts it", raw[5 + 1 + 4 + 2], P.WorldResetCause.Restarted);
+	raw[5 + 1 + 4 + 2] = P.WORLD_RESET_CAUSE_MAX + 1;
+	eq("a WorldReset with an unknown cause is refused", P.decodeWorld(bufOf(raw)), undefined);
 });
 
 test("World: the roster carries outfit and pet, and refuses looks that do not exist (MON-04)", () => {
@@ -2223,7 +2238,13 @@ test("the town's seed (MP-26): only the server says it, S→C; no client message
 		chunk: 0,
 		chunks: 1,
 	};
-	const reset = { t: P.WorldEv.WorldReset, seed: 2147483646, endedDay: 7, lives: [{ userId: 5, runRev: 3 }] };
+	const reset = {
+		t: P.WorldEv.WorldReset,
+		seed: 2147483646,
+		endedDay: 7,
+		cause: P.WorldResetCause.Fell,
+		lives: [{ userId: 5, runRev: 3 }],
+	};
 	const back = P.decodeWorld(P.encodeWorld({ tick: 3, events: [init, reset] }).packets[0])?.events ?? [];
 	eq("InitBegin carries the seed", back[0]?.seed, 99991);
 	eq("WorldReset carries the new seed", back[1]?.seed, 2147483646);

@@ -27,6 +27,7 @@
  */
 import { GAME_NAME } from "shared/module";
 import { TITLES } from "shared/data/titles";
+import { townNameOf } from "shared/data/townNames";
 import { floodKickMessage, langTypeOfLocale } from "shared/data/rules";
 import {
 	FLOOD_MALFORMED,
@@ -139,6 +140,12 @@ export interface MpHostOptions {
 	 * of that log -- so a human can review every automatic kick after the fact (MP-16).
 	 */
 	onFloodKick?: (player: Player, reason: string) => void;
+	/**
+	 * (MP-26) May this lobby player be stood in the world now? False while a join to another server is under way
+	 * (server/match/serverList.ts `joining`): the teleport must never take a survivor out of a fight. The periodic
+	 * admit pass asks again, so they enter as soon as it is over. Omitted: always.
+	 */
+	mayEnter?: (player: Player) => boolean;
 }
 
 /** one line of the §9.3 / F6 admin view: who the player is and what their counters say */
@@ -215,6 +222,15 @@ export interface MpHost {
 	noteRemote(player: Player, malformed: boolean): boolean;
 	/** the §12.2 numbers as last published (once a second): the admin panel's Server info shows them */
 	metrics(): SimMetrics;
+	/**
+	 * MP-26: the town's keeper asked for a new town -- server/match/townRestart.ts has already decided they may (a
+	 * private server's owner, or an admin) and let the request through its rate limit. The same end of the world as
+	 * MP-22's (server/sim/worldReset.ts), of reason "restart": a new seed on day 1, the survivors down in the town given
+	 * a new life, everybody standing moved into the new town with theirs, every client told (WorldReset, cause
+	 * Restarted), the record kept and `onWorldWiped` fired. Answers at once: "started" (the new town is generated a
+	 * slice per frame in its own thread) or "busy" (a reset is already under way, or the host has stopped).
+	 */
+	restartTown: (by: number) => "started" | "busy";
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
 	stop(): void;
 }
@@ -426,6 +442,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// nobody enters the world by merely being connected: the client asks (IntentKind.EnterWorld)
 		if (!link.wantsWorld) return;
 		const save = options.saveOf(player);
+		// MP-26: a join to another server under way keeps the player out of the city until it is over
+		if (link.slot === undefined && options.mayEnter?.(player) === false) return;
 		if (link.slot !== undefined) {
 			// already in the world: the session may have swapped the save table (admin edit, reload)
 			const sp = sim.get(link.slot);
@@ -815,6 +833,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		seed: town.seed,
 		startedAt: town.startedAt,
 		lives,
+		// replaced below, once the reset it starts is defined
+		restartTown: () => "busy",
 		playerOf(player) {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;
@@ -929,12 +949,20 @@ export function startMpHost(options: MpHostOptions): MpHost {
 
 	function worldWiped(report: WipeReport): void {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of
-		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell
+		// 23 Sep 2026): that world is over. A new town from a new seed, day 1, and a new life for everyone who fell.
+		// Or MP-26: its keeper asked for a new one (`restartTown` below), and the same steps run.
 		// a world ending is the game (MP-22), not a fault: the log, not the Error Report
-		print(
-			`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
-				`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
-		);
+		if (report.reason === "restart") {
+			print(
+				`[${GAME_NAME}] ${townNameOf(town.seed)} (seed ${town.seed}) is restarted on day ${report.day} by ` +
+					`${report.by ?? 0}: ${report.dead.size()} survivor(s) down start a new life`,
+			);
+		} else {
+			print(
+				`[${GAME_NAME}] the world is lost on day ${report.day} (${report.reason}): ` +
+					`${report.dead.size()} survivor(s) down and nobody paid a Rebirth`,
+			);
+		}
 		const previous = sim.world;
 		const now = os.time();
 		// the generator calls this between two buildings: past RESET_SLICE_S of work in this frame it waits for the
@@ -988,9 +1016,10 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			warn(`[${GAME_NAME}] the new world went on past a failure (${failure})`);
 		}
 		print(
-			`[${GAME_NAME}] the town of seed ${outcome.ended.seed} lasted ${outcome.ended.days} day(s); a new one rises from ` +
-				`seed ${outcome.seed} (map hash ${outcome.mapHash}, generated in ${outcome.generateMs} ms over ` +
-				`${frames} frame(s)) on day 1, and ${outcome.lives.size()} survivor(s) start a new life`,
+			`[${GAME_NAME}] ${townNameOf(outcome.ended.seed)} (seed ${outcome.ended.seed}) lasted ${outcome.ended.days} ` +
+				`day(s); ${townNameOf(outcome.seed)} rises from seed ${outcome.seed} (map hash ${outcome.mapHash}, ` +
+				`generated in ${outcome.generateMs} ms over ${frames} frame(s)) on day 1, and ${outcome.lives.size()} ` +
+				`survivor(s) start a new life`,
 		);
 		Analytics.worldEnded(report, outcome);
 		options.onWorldWiped?.(report, outcome);
@@ -998,8 +1027,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 
 	/** a world reset under way (its new town is being generated, a slice per frame): a second report waits for it */
 	let resetting = false;
-	lives.onWorldWiped = report => {
-		if (resetting) return;
+	/** one reset at a time, whoever asked -- rule 6 or the keeper. False when one is already under way */
+	function beginReset(report: WipeReport): boolean {
+		if (resetting || stopped) return false;
 		resetting = true;
 		// in its own thread, so the new town can be generated a slice per frame (`pace` below) while this tick, and
 		// the ones after it, go on in the old world
@@ -1008,6 +1038,16 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			resetting = false;
 			if (!ok) warn(`[${GAME_NAME}] the world reset failed: ${tostring(err)}`);
 		});
+		return true;
+	}
+	lives.onWorldWiped = report => {
+		beginReset(report);
+	};
+	// MP-26: the keeper's restart. Whoever is down right now falls with the town (a new life, as MP-22 gives); everybody
+	// standing keeps theirs and is moved into the new one (LifeKeeper.restartWorld)
+	host.restartTown = by => {
+		const report: WipeReport = { day: sim.clock.day, reason: "restart", dead: lives.downNow(), by };
+		return beginReset(report) ? "started" : "busy";
 	};
 
 	active = host;

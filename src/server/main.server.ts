@@ -41,6 +41,7 @@ import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 import { keepPrivateTown } from "./save/privateTown";
+import { TownServices, startTownServices } from "./match/townServices";
 import * as Analytics from "./analytics/events";
 import { grantWelcomePack } from "./config/experiments";
 
@@ -1507,6 +1508,8 @@ admin = startAdminServer({
  * The host never reads or writes the DataStore: it only borrows the live save table of a loaded session, which
  * is what `stepPlayer` reads the skill levels from.
  */
+/** MP-26: the Servers list and Restart town (server/match/townServices.ts), started with the host */
+let townServices: TownServices | undefined;
 if (MP_PHASE >= 1) {
 	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
 	const worldLog = startWorldLog();
@@ -1544,6 +1547,8 @@ if (MP_PHASE >= 1) {
 		},
 		// §8.2 "registrado" (audit L4): every automatic kick into the admin audit log, by UserId
 		onFloodKick: (player, reason) => admin?.floodKick(player, reason),
+		// MP-26: never stood in the city while a join from the Servers list is taking them elsewhere
+		mayEnter: player => townServices?.list.joining(player) !== true,
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an
@@ -1586,6 +1591,37 @@ if (MP_PHASE >= 1) {
 			const s = sessions.get(player);
 			if (s !== undefined && !s.closed) s.dirty = true;
 		},
+	});
+	// MP-26: the lobby's Servers list and join (MemoryStore + TeleportService), and the keeper's "Restart town"
+	// (server/match/townServices.ts). The host, the sessions and the audit log are all this file's
+	const host = mpHost;
+	townServices = startTownServices({
+		town: () => ({ seed: host.seed, day: host.simulation.clock.day }),
+		players: () => Players.GetPlayers().size(),
+		capacity: () => Players.MaxPlayers,
+		inWorld: player => host.playerOf(player) !== undefined,
+		loading: player => {
+			const s = sessions.get(player);
+			return s === undefined || !s.loaded || s.closed;
+		},
+		connected: player => sessions.has(player),
+		bestDay: player => {
+			const s = sessions.get(player);
+			return s !== undefined && s.loaded ? s.save.bestDay : undefined;
+		},
+		joined: (player, row) => Analytics.joinedFromList(player, row.day, row.players),
+		log: line => print(`[${GAME_NAME}] ${line}`),
+		warn: (what, detail) => {
+			// a fixed sentence for the Error Report, the error text in the line after it (docs/ANALYTICS.md §10)
+			warn(`[${GAME_NAME}] ${what}`);
+			print(`[${GAME_NAME}] ${what}: ${detail}`);
+		},
+		restart: by => host.restartTown(by),
+		audit: (userId, ok, details, persist) => {
+			if (admin !== undefined) admin.townAudit(userId, ok, details, persist);
+			else print(`[${GAME_NAME}] town restart by ${userId}: ${ok ? "OK" : "REFUSED"} (${details})`);
+		},
+		noteRemote: (player, malformed) => floodDrop(player, malformed),
 	});
 	// the host is stopped by the BindToClose above, BEFORE the final writes: it banks every body into its save
 }

@@ -243,10 +243,15 @@ export interface LifeWire {
 export interface WipeReport {
 	/** the world's day on which it was lost */
 	day: number;
-	/** "timeout": the window closed with nobody standing; "declined": every dead survivor chose not to pay */
-	reason: "timeout" | "declined";
-	/** the UserIds of the dead the window waited on */
+	/**
+	 * "timeout": the window closed with nobody standing; "declined": every dead survivor chose not to pay; "restart":
+	 * the town's keeper (a private server's owner, or an admin) asked for a new town (MP-26, `downNow` below)
+	 */
+	reason: "timeout" | "declined" | "restart";
+	/** the UserIds of the dead the window waited on (a restart: the survivors down in the town at that moment) */
 	dead: Array<number>;
+	/** "restart" only: the UserId of who asked for it */
+	by?: number;
 }
 
 /** why a body stood back up ("newWorld": the world ended and a new life began in the next one, MP-22) */
@@ -946,6 +951,23 @@ export class LifeKeeper {
 		}
 		rec.banked = { runHp: save.runHp, runHunger: save.runHunger, runOver: save.runOver, runRev: save.runRev };
 		if (changed) this.onSaveChanged?.(rec.userId);
+	}
+
+	/**
+	 * MP-26, the town restarted by its keeper (server/match/townRestart.ts): the survivors DOWN in this world right now
+	 * -- the ones rule 6 would count as fallen (they had a body in it, are still on the server, and their save is
+	 * here): the restart's `WipeReport.dead`. Their deaths end with the town, as MP-22's do, so they start the new
+	 * one with a new life; everybody standing keeps their life and is moved into it (`restartWorld`).
+	 */
+	downNow(): Array<number> {
+		const out = new Array<number>();
+		for (const [userId, rec] of this.records) {
+			if (rec.goneFor !== undefined || !rec.entered) continue;
+			if (this.liveSave !== undefined && this.liveSave(userId) === undefined) continue;
+			const sp = this.inWorld(rec);
+			if (sp !== undefined ? sp.state.dead : rec.dead) out.push(userId);
+		}
+		return out;
 	}
 
 	/** rule 6, once per step */

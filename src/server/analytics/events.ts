@@ -173,6 +173,8 @@ export const EVENT = {
 	SessionEnded: "SessionEnded",
 	/** a session's killing blows with one kind of weapon (one per kind used, on leaving) */
 	WeaponKills: "WeaponKills",
+	/** MP-26: the lobby's Servers list sent this player to another public town (server/match/serverList.ts) */
+	JoinedFromList: "JoinedFromList",
 } as const;
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
@@ -1119,7 +1121,8 @@ export class ServerAnalytics {
 	/**
 	 * MP-22: a world ended and a new one stands (server/net/mpHost.ts, after `endWorld` succeeded). Every fallen
 	 * survivor given a new life ended the old one here; the world itself is one event, on the first of them still
-	 * connected (a world is nobody's, but LogCustomEvent needs a player).
+	 * connected (a world is nobody's, but LogCustomEvent needs a player). A keeper's restart (MP-26, reason "restart")
+	 * may have nobody down: the event then goes on the keeper who asked, "Reason - Restarted".
 	 */
 	worldEnded(report: WipeReport, outcome: WorldEnd): void {
 		let first: Entry | undefined;
@@ -1136,12 +1139,37 @@ export class ServerAnalytics {
 				if (first !== undefined) break;
 			}
 		}
+		if (first === undefined && report.by !== undefined) first = this.entryOfUser(report.by);
 		if (first === undefined) return;
 		const fallen = outcome.ended.fallen;
+		const reason =
+			report.reason === "declined"
+				? "Reason - Declined"
+				: report.reason === "restart"
+					? "Reason - Restarted"
+					: "Reason - Timeout";
 		this.custom(first, EVENT.WorldEnded, outcome.ended.days, {
-			CustomField01: report.reason === "declined" ? "Reason - Declined" : "Reason - Timeout",
-			CustomField02: fallen <= 1 ? "Fallen - 1" : fallen === 2 ? "Fallen - 2" : "Fallen - 3+",
+			CustomField01: reason,
+			// a restart can end a town nobody fell in
+			CustomField02:
+				fallen <= 0 ? "Fallen - 0" : fallen === 1 ? "Fallen - 1" : fallen === 2 ? "Fallen - 2" : "Fallen - 3+",
 			CustomField03: `World day - ${dayBucket(outcome.ended.days)}`,
+		});
+	}
+
+	/**
+	 * MP-26: the lobby's Servers list sent this player to another public town -- TeleportAsync went through
+	 * (server/match/serverList.ts `join`; at most one a JOIN_GAP_S per player there). The value is the destination's
+	 * world day; the fields are what the choice was made on: how full it was, how old, and this player's best day
+	 * (the list sorts by the day closest to it). All of it the server's: the list entry it checked, and the save.
+	 */
+	joinedFromList(player: Player, day: number, players: number): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.leftAt !== undefined) return;
+		this.custom(e, EVENT.JoinedFromList, math.max(1, math.floor(day)), {
+			CustomField01: players <= 1 ? "Players - 1" : players <= 3 ? "Players - 2-3" : "Players - 4+",
+			CustomField02: `World day - ${dayBucket(day)}`,
+			CustomField03: `Best day - ${dayBucket(e.save.bestDay)}`,
 		});
 	}
 
@@ -1350,6 +1378,11 @@ export function titleEarned(save: PlayerSaveData, titleId: number): void {
 /** server/net/mpHost.ts `onWorldWiped`, once the new town stands */
 export function worldEnded(report: WipeReport, outcome: WorldEnd): void {
 	guard(c => c.worldEnded(report, outcome));
+}
+
+/** server/match/serverList.ts: the Servers list sent `player` to another public town (MP-26) */
+export function joinedFromList(player: Player, day: number, players: number): void {
+	guard(c => c.joinedFromList(player, day, players));
 }
 
 /** server/main.server.ts `sim.onBackpack`: a craft, a use, an equip the server applied */

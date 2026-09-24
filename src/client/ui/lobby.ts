@@ -4,7 +4,9 @@ import { ACHIEVEMENTS } from "shared/data/achievements";
 import { COSTUMES } from "shared/data/shop";
 import { cosmeticSlotOf, PetLook } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
+import { townNameOf } from "shared/data/townNames";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
+import { TOWN_KEEPER_ATTR } from "shared/net/townNet";
 import { onWalletChanged } from "../systems/saveClient";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { pinFlyover, TownFlyover } from "../view/townFlyover";
@@ -12,6 +14,7 @@ import { Wordmark } from "./logo";
 import { paintPlate } from "./plate";
 import { PixelIcon, PixelIconKind } from "./pixelIcon";
 import { showRecords } from "./records";
+import { askRestartTown, showServers } from "./servers";
 import { RunState, SURVIVOR_WINDOW, SurvivorScreen } from "./survivor";
 import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
@@ -48,12 +51,16 @@ export type { RunState } from "./survivor";
  *   │    Continue this run      │   │   the survivor, outfit and pet     │
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
- *   [👕 Wardrobe             2 / 9]   ┌ Town ──────────────────────────────┐
- *   [🏆 Achievements        3 / 15]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12] │
- *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell │
- *   [? How to play               ]   └────────────────────────────────────┘
+ *   [👕 Wardrobe             2 / 9]   ┌ Millbrook ─── [Restart town] [Servers] ┐
+ *   [🏆 Achievements        3 / 15]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12]      │
+ *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell      │
+ *   [? How to play               ]   └──────────────────────────────────────────┘
  *   [⚙ Settings                  ]
  *   [★ Credits                   ]
+ *
+ * The Town section is titled with the town's NAME (MP-26: derived from the server's seed, shared/data/townNames.ts;
+ * "Town" until the seed is heard). Hosted, its title line carries Servers (the public towns to join, client/ui/servers.ts)
+ * and, for the town's keeper only -- the private server's owner, or an admin, as the server marks them -- Restart town.
  *
  * No tips ticker: the tips live in How to play. The left survivor card is gone too: who the survivor is and what
  * they carry is the Survivor screen's, where the city is entered from; the menu keeps the survivor as a picture.
@@ -240,6 +247,13 @@ const CELL_PAD = 8;
 const TOWN_GROOVE_H = CELL_H + CELL_PAD * 2;
 const TOWN_H = Kit.sectionHeight(TOWN_GROOVE_H);
 const TOWN_GROOVE_W = RIGHT_W - INSET * 2;
+/** the Town section's title-line buttons: Servers at the right edge, Restart town left of it (MP-26) */
+const TOWN_BTN_H = 30;
+const SERVERS_W = 120;
+const RESTART_W = 160;
+const SERVERS_X = RIGHT_W - space(5) - SERVERS_W;
+const RESTART_X = SERVERS_X - space(2) - RESTART_W;
+const TOWN_TITLE_W = RESTART_X - space(3) - space(5);
 /** the loading / offline note under the coins: a small panel plate of its own, so the red reads on a fixed colour */
 const NOTE_X = 760;
 const NOTE_Y = 86;
@@ -281,6 +295,12 @@ class MenuPage {
 	private readonly cells: Array<TownCell> = [];
 	private readonly sun: Frame;
 	private readonly moon: Frame;
+	/** the Town section's title (the town's name) and its two buttons (MP-26) */
+	private readonly townTitle: TextLabel | undefined;
+	readonly serversButton: TextButton;
+	readonly restartButton: TextButton;
+	/** the town the title names (the server's seed; undefined while not heard) */
+	private seed: number | undefined;
 	/** how many town cells are laid out (-1: none yet) */
 	private cellCount = -1;
 	/** START's title sits high (a subtitle under it) or centred */
@@ -437,7 +457,41 @@ class MenuPage {
 		this.preview = new SurvivorPreview(box, { w: bedW, h: bedH, scale: 4, subject, zIndex: box.ZIndex });
 
 		// ---- the town: its day and hour, who is in it, and the last one that fell (MP-20, MP-22)
-		const town = Kit.Section(frame, "Town", { x: RIGHT_X, y: TOWN_Y, w: RIGHT_W, h: TOWN_H, title: tr("Town") });
+		const town = Kit.Section(frame, "Town", {
+			x: RIGHT_X,
+			y: TOWN_Y,
+			w: RIGHT_W,
+			h: TOWN_H,
+			title: tr("Town"),
+			titleW: TOWN_TITLE_W,
+		});
+		this.townTitle = town.title;
+		const bz = town.frame.ZIndex + 1;
+		const btnY = Kit.SECTION_TITLE_MID - TOWN_BTN_H / 2;
+		this.serversButton = Button(town.frame, "Servers", tr("Servers"), {
+			x: SERVERS_X,
+			y: btnY,
+			w: SERVERS_W,
+			h: TOWN_BTN_H,
+			size: "sm",
+			variant: "secondary",
+			zIndex: bz,
+			onClick: (): void => {
+				showServers(ctx);
+			},
+		});
+		this.restartButton = Button(town.frame, "RestartTown", tr("Restart town"), {
+			x: RESTART_X,
+			y: btnY,
+			w: RESTART_W,
+			h: TOWN_BTN_H,
+			size: "sm",
+			variant: "destructive",
+			zIndex: bz,
+			onClick: (): void => askRestartTown(ctx, this.seed),
+		});
+		setVisible(this.serversButton, false);
+		setVisible(this.restartButton, false);
 		const groove = Kit.Groove(town.frame, "Cells", INSET, Kit.SECTION_CONTENT_Y, TOWN_GROOVE_W, TOWN_GROOVE_H);
 		const kinds: Array<PixelIconKind> = ["sun", "people", "grave"];
 		for (let i = 0; i < 3; i++) {
@@ -557,6 +611,18 @@ class MenuPage {
 	/** the town's cells, from the server's live numbers (hosted) or this life's own town (offline) */
 	refreshTown(status: LobbyStatus): void {
 		const tr = this.tr;
+		// MP-26: the town's name (a proper noun, never auto-translated), "Town" until the server's seed is heard
+		this.seed = status.seed;
+		const title = this.townTitle;
+		if (title !== undefined) {
+			const named = status.seed !== undefined;
+			this.write(title, named ? townNameOf(status.seed!) : tr("Town"));
+			if (title.AutoLocalize !== !named) title.AutoLocalize = !named;
+		}
+		// the public towns are a hosted thing; Restart town only for its keeper, as the server marked them
+		const me = game.GetService("Players").LocalPlayer as Player | undefined;
+		setVisible(this.serversButton, status.hosted);
+		setVisible(this.restartButton, status.hosted && me?.GetAttribute(TOWN_KEEPER_ATTR) === true);
 		const hour = status.hosted ? numberAttr(DAY_TIME_ATTR) : undefined;
 		const day = status.hosted ? numberAttr(WORLD_DAY_ATTR) : this.ctx.save.day;
 		const inTown = status.hosted ? numberAttr(IN_WORLD_ATTR) : undefined;
@@ -713,6 +779,9 @@ export function showLobby(
 		Workspace.GetAttributeChangedSignal(DAY_TIME_ATTR).Connect(onWorld),
 		Workspace.GetAttributeChangedSignal(IN_WORLD_ATTR).Connect(onWorld),
 	];
+	// the server marks the town's keeper (MP-26): Restart town shows the moment it does
+	const localPlayer = game.GetService("Players").LocalPlayer as Player | undefined;
+	if (localPlayer !== undefined) conns.push(localPlayer.GetAttributeChangedSignal(TOWN_KEEPER_ATTR).Connect(onWorld));
 	// the survivor previews breathe (a dog's tail); only the page on screen is drawn
 	const t0 = os.clock();
 	conns.push(

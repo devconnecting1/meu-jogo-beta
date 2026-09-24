@@ -102,6 +102,9 @@ const { ACHIEVEMENTS, AchievementId } = require(join(SRC, "shared/data/achieveme
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
+const TOWNS = require(join(SRC, "shared/data/townNames.ts"));
+const { showServers, askRestartTown } = require(join(SRC, "client/ui/servers.ts"));
+const TownNet = require(join(SRC, "client/net/townNet.ts"));
 flush();
 
 // ---------------------------------------------------------------- checks
@@ -246,6 +249,20 @@ const SCREENS = [
 		needsLobby: true,
 	},
 	{
+		// MP-26: the lobby's Servers window (client/ui/servers.ts), opened by its button on a hosted lobby's Town section
+		name: "Servers (lobby)",
+		phase: "lobby",
+		root: "Servers",
+		control: "Close",
+		open: () => {
+			findIn(layer.FindFirstChild("Lobby"), "Servers", "TextButton").Activated.Fire();
+			flush();
+		},
+		selfClosing: true,
+		needsLobby: true,
+		status: "hosted",
+	},
+	{
 		name: "Menu da partida",
 		phase: "playing",
 		root: "Menu",
@@ -263,9 +280,26 @@ const SCREENS = [
 	},
 ];
 
+/**
+ * MP-26: the town's remote, answered here: three public towns (one full) for the Servers window, and every request
+ * kept, so a question dismissed by B can be shown to have sent nothing (client/net/townNet.ts `setTownRequester`)
+ */
+const townRequests = [];
+const SERVER_ROWS = [
+	{ jobId: "job-a", seed: 11, day: 6, players: 3, max: 6 },
+	{ jobId: "job-b", seed: 22, day: 12, players: 2, max: 6 },
+	{ jobId: "job-c", seed: 33, day: 4, players: 6, max: 6 },
+];
+TownNet.setTownRequester(req => {
+	townRequests.push(req);
+	if (req.kind === "servers") return { ok: true, servers: SERVER_ROWS };
+	return { ok: true };
+});
+const hostedStatus = { ...lobbyStatus, hosted: true };
+
 let lobby;
-function openLobby() {
-	lobby = showLobby(ctx, lobbyHandlers, lobbyStatus, "menu");
+function openLobby(status) {
+	lobby = showLobby(ctx, lobbyHandlers, status === "hosted" ? hostedStatus : lobbyStatus, "menu");
 	flush();
 }
 function closeLobby() {
@@ -320,7 +354,7 @@ function cycle(sc) {
 Fly.pinFlyover(ctx.backdropLayer, SEED);
 flush();
 for (const sc of SCREENS) {
-	if (sc.needsLobby) openLobby();
+	if (sc.needsLobby) openLobby(sc.status);
 	lastInput.type = Enum.UserInputType.Gamepad1;
 	const first = cycle(sc);
 	check(
@@ -350,6 +384,76 @@ for (const sc of SCREENS) {
 	if (sc.needsLobby) closeLobby();
 	GuiService.SelectedObject = undefined;
 	flush();
+}
+
+// MP-26: the Servers window with a pad, and the keeper's Restart town -- asked first, B leaves it unanswered
+{
+	ctx.phase = "lobby";
+	lastInput.type = Enum.UserInputType.Gamepad1;
+	const player = service("Players").LocalPlayer;
+	townRequests.length = 0;
+	const win = showServers(ctx);
+	flush();
+	const root = layer.FindFirstChild("Servers");
+	const rowsShown = root
+		?.GetDescendants()
+		.filter(d => d.Name.startsWith("Row") && d.IsA("GuiButton") && shown(d, layer));
+	const firstRow = rowsShown?.[0];
+	const focusOnRow = firstRow !== undefined && GuiService.SelectedObject === firstRow;
+	const join = findIn(root, "Join", "TextButton");
+	const joinOffBefore = join?.Interactable === false;
+	// the full town (third row) never enables Join; an open one does, and Join asks the server for THAT server
+	const pickRow = i => {
+		rowsShown?.[i]?.Activated.Fire();
+		flush();
+	};
+	pickRow(2);
+	const fullStaysOff = join?.Interactable === false;
+	pickRow(0);
+	const openTurnsOn = join?.Interactable === true && join?.Selectable === true;
+	join?.Activated.Fire();
+	flush();
+	const sent = townRequests.map(r => (r.kind === "join" ? `join:${r.jobId}` : r.kind));
+	win.close();
+	flush();
+	check(
+		"Servers: o controle cai na primeira cidade; Join so com uma cidade aberta escolhida, e pede ESSE servidor",
+		focusOnRow && joinOffBefore && fullStaysOff && openTurnsOn && sent.join(",") === "servers,join:job-a",
+		JSON.stringify({ focusOnRow, joinOffBefore, fullStaysOff, openTurnsOn, sent }),
+	);
+
+	// Restart town: nobody but the keeper the server marked sees it
+	openLobby("hosted");
+	const lobbyRoot = layer.FindFirstChild("Lobby");
+	const restart = findIn(lobbyRoot, "RestartTown", "TextButton");
+	const hiddenForGuest = restart !== undefined && !shown(restart, layer);
+	closeLobby();
+	player.SetAttribute("pz_town_keeper", true);
+	openLobby("hosted");
+	const restart2 = findIn(layer.FindFirstChild("Lobby"), "RestartTown", "TextButton");
+	const shownForKeeper = restart2 !== undefined && shown(restart2, layer) && restart2.Selectable === true;
+	townRequests.length = 0;
+	restart2?.Activated.Fire();
+	flush();
+	const popupUp = layer.FindFirstChild("PopupOverlay") !== undefined;
+	const onCancel = GuiService.SelectedObject?.Name === "PopupBtn1";
+	tap(pad("ButtonB"), true);
+	const dismissed = layer.FindFirstChild("PopupOverlay") === undefined && townRequests.length === 0;
+	restart2?.Activated.Fire();
+	flush();
+	findIn(layer.FindFirstChild("PopupOverlay"), "PopupBtn0")?.Activated.Fire();
+	flush();
+	const asked = townRequests.map(r => r.kind).join(",");
+	closeLobby();
+	player.SetAttribute("pz_town_keeper", undefined);
+	GuiService.SelectedObject = undefined;
+	lastInput.type = Enum.UserInputType.MouseMovement;
+	flush();
+	check(
+		"Restart town: escondido para quem nao e o dono; o dono ve, a pergunta abre no Cancel, o B fecha sem pedir nada e so o Restart pede",
+		hiddenForGuest && shownForKeeper && popupUp && onCancel && dismissed && asked === "restart",
+		JSON.stringify({ hiddenForGuest, shownForKeeper, popupUp, onCancel, dismissed, asked }),
+	);
 }
 
 // the "?" of every window: a pad player who opens the help lands on its Close -- not on the "?" left behind the
@@ -640,7 +744,7 @@ console.log(
 	];
 	for (const sc of SCREENS) {
 		for (const [label, key, gpe, device] of keys) {
-			if (sc.needsLobby) openLobby();
+			if (sc.needsLobby) openLobby(sc.status);
 			lastInput.type = device;
 			const r = backCycle(sc, key, gpe);
 			if (!(r.opened && r.gone && r.handled)) bad.push(`${sc.name} / ${label}: ${JSON.stringify(r)}`);
@@ -1367,9 +1471,15 @@ const LANG_COUNT = [...LANG].length;
 	);
 }
 
+/** every name a town can have (MP-26, shared/data/townNames.ts): proper nouns, like a player's */
+const TOWN_NAMES = [];
+for (const p of TOWNS.TOWN_PREFIXES) {
+	for (const s of TOWNS.TOWN_SUFFIXES) if (TOWNS.townNameAllowed(p, s)) TOWN_NAMES.push(p + s);
+}
 /** proper nouns a translator leaves alone (UI-03: the English of a name IS the name), and the kit's glyphs */
 const PROPER = new Set([
 	GAME_NAME,
+	...TOWN_NAMES,
 	"PROJECT Z",
 	// the credits (credits.ts, Settings › About): who made it and what inspired it (shared/module.ts)
 	"Luvitlua",
@@ -1458,6 +1568,79 @@ function textsIn(root, where) {
 		},
 		"Lobby",
 	);
+	// MP-26: a hosted lobby seen by the town's keeper (Servers, Restart town), the Servers window in each of its states,
+	// and the Restart town question
+	{
+		const player = service("Players").LocalPlayer;
+		player.SetAttribute("pz_town_keeper", true);
+		visit(
+			"Lobby (servidor, dono)",
+			() => {
+				const h = showLobby(ctx, lobbyHandlers, hostedStatus, "menu");
+				return () => h.close();
+			},
+			"Lobby",
+		);
+		visit(
+			"Restart town?",
+			() => {
+				askRestartTown(ctx, SEED);
+				return () => layer.FindFirstChild("PopupOverlay")?.Destroy();
+			},
+			"PopupOverlay",
+		);
+		player.SetAttribute("pz_town_keeper", undefined);
+		const answers = [
+			["lista", { ok: true, servers: SERVER_ROWS }],
+			["uma so", { ok: true, servers: [SERVER_ROWS[0]] }],
+			["vazia", { ok: true, servers: [] }],
+			...["studio", "unavailable", "rate"].map(r => [r, { ok: false, reason: r }]),
+		];
+		for (const [label, answer] of answers) {
+			TownNet.setTownRequester(() => answer);
+			visit(
+				`Servers (${label})`,
+				() => {
+					const w = showServers(ctx);
+					return () => w.close();
+				},
+				"Servers",
+			);
+		}
+		// a join refused, then one on its way: the status line says each
+		for (const reason of ["full", "gone", "same", "inWorld", "busy", "loading", "failed"]) {
+			TownNet.setTownRequester(req =>
+				req.kind === "servers" ? { ok: true, servers: SERVER_ROWS } : { ok: false, reason },
+			);
+			visit(
+				`Servers (join: ${reason})`,
+				() => {
+					const w = showServers(ctx);
+					flush();
+					const root = layer.FindFirstChild("Servers");
+					findIn(root, "Row0", "TextButton")?.Activated.Fire();
+					flush();
+					findIn(root, "Join", "TextButton")?.Activated.Fire();
+					return () => w.close();
+				},
+				"Servers",
+			);
+		}
+		TownNet.setTownRequester(req => (req.kind === "servers" ? { ok: true, servers: SERVER_ROWS } : { ok: true }));
+		visit(
+			"Servers (a caminho)",
+			() => {
+				const w = showServers(ctx);
+				flush();
+				const root = layer.FindFirstChild("Servers");
+				findIn(root, "Row0", "TextButton")?.Activated.Fire();
+				flush();
+				findIn(root, "Join", "TextButton")?.Activated.Fire();
+				return () => w.close();
+			},
+			"Servers",
+		);
+	}
 	visit(
 		"Survivor",
 		() => {

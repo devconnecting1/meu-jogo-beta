@@ -165,6 +165,10 @@ jobs:
       - name: The lobby's town goes to the match (sliced generation, zero regeneration, preload plan, warm-up)
         run: npm run test:cache
 
+      # MP-26: the lobby's Servers list -- MemoryStore publish / read / join validation and the quota, on fakes
+      - name: The Servers list (who publishes, the list, the join checks, the MemoryStore quota)
+        run: npm run test:serverlist
+
       - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
         run: npm run test:save
 

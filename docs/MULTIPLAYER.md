@@ -72,6 +72,8 @@ Estimativa total: **~22–28 agente-dias** em 7 fases (F0–F6). Cada fase deixa
 | Banda por cliente                                                              | A documentação consultada **não fixa um número**. Recomenda enviar só o essencial, por mudança de estado, e testar com simulação de rede.                                                                                                                                 | Referência prática da comunidade: ~50 KB/s por cliente (**não oficial**). Alvo: ≤ 20 KB/s no pior caso, medido na F2.   |
 | `buffer` (Luau)                                                                | Armazenamento binário de tamanho fixo (`writeu8/u16/f32`, `readbits/writebits`…). Passa por RemoteEvents **como cópia**. Tipado em `@rbxts/types` (`roblox.d.ts`, `declare namespace buffer`).                                                                            | Codec binário compartilhado (`shared/net/codec.ts`).                                                                    |
 | `TeleportService:TeleportAsync` + `TeleportOptions.ShouldReserveServer = true` | Cria um servidor reservado novo. `ReservedServerAccessCode` leva a um reservado existente. Chamado **só no servidor**. Recomenda-se `pcall` + retentativa e `TeleportInitFailed`. **Não funciona em playtest do Studio** (é preciso publicar e testar no cliente Roblox). | Botão "Play solo" (seção 7.4).                                                                                          |
+| `TeleportOptions.ServerInstanceId`                                             | Leva o `TeleportAsync` a um servidor **público específico** (o `JobId` dele). Falha ao começar → `TeleportInitFailed` (o jogador fica; as opções servem para tentar de novo). Não funciona no Studio. | Join da lista Servers (§4.10).                                                                                          |
+| `MemoryStoreSortedMap` (`SetAsync`/`GetAsync`/`GetRangeAsync`/`RemoveAsync`)   | Expiração ≤ 3 888 000 s; `GetRangeAsync` ≤ 200 itens, em ordem de chave de ordem e chave. Cota da experiência **1000 + 120 × usuários** unidades/min (`GetRangeAsync` custa 1 por item); **100 000**/min por estrutura. No Studio, dados isolados do jogo ao vivo. | Lista Servers (§4.10): ≤ 104 + 12 × jogadores unidades/min por servidor.                                               |
 | `game.PrivateServerOwnerId`                                                    | **0 em servidores públicos e reservados**; UserId do dono em servidor privado (VIP)                                                                                                                                                                                       | Detecção do tipo de servidor (junto com `PrivateServerId` ≠ "").                                                        |
 | Servidores privados                                                            | Habilitados no Creator Dashboard (Audience/Access), grátis ou pagos em Robux. Mudar o preço cancela as assinaturas.                                                                                                                                                       | Seção 7.5.                                                                                                              |
 | `Players.MaxPlayers`                                                           | **Só configurável** nas configurações do place no Creator Dashboard, não por script                                                                                                                                                                                       | O autor ajusta para **6** manualmente (F5).                                                                             |
@@ -568,13 +570,101 @@ A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.
 
 **Recomendações (para o dono decidir):**
 
-1. **Recomeçar a cidade do VIP pelo dono** (não implementado): uma operação `{kind: "world", op: "newTown"}` no protocolo de admin que já existe (§10), autorizada quando `player.UserId === game.PrivateServerOwnerId` (ou admin), com confirmação na UI, no máximo 1 a cada 10 min e registro no log de admin; o servidor a executa pelo mesmo `endWorld` da MP-22 (motivo `"owner"`: quem estava vivo continua a vida, só a cidade e o dia voltam ao 1) e grava o registro do VIP. Nunca em servidor público.
-2. **Nome da cidade derivado da semente** (não implementado): um nome curto gerado da semente ("Millbrook") na seção Town do lobby e na HUD, para o jogador reconhecer "a mesma cidade" e o dono conferir num playtest que o lobby e a partida mostram a mesma; nome próprio, fora da tradução (`AutoLocalize = false`).
-3. **Lista de servidores por cidade/dia** (fora do escopo, já em §6.2): `MemoryStore` com `{jobId, seed, worldDay, jogadores}` por servidor, para escolher um mundo novo ou um veterano antes de entrar.
+1. **Recomeçar a cidade do VIP pelo dono** (feito, §4.10): o botão Restart town do lobby, só para o dono do servidor privado e os admins, num remote próprio (`PZTownNet/TownRequest`, não o do admin: o dono não é admin), com confirmação, 1 a cada 2 min por servidor, o balde por jogador e o log de admin; o mesmo `endWorld` da MP-22 (motivo `"restart"`: quem estava de pé continua a vida, quem estava caído ganha vida nova) e o registro do VIP gravado na hora. Nunca em servidor público nem reservado.
+2. **Nome da cidade derivado da semente** (feito, §4.10): `townNameOf(seed)` na seção Town do lobby, no placar da partida, na notícia do fim do mundo e na lista Servers; nome próprio, fora da tradução.
+3. **Lista de servidores por cidade/dia** (feito, §4.10): `MemoryStoreSortedMap` `ProjectZ_Servers` com `{seed, day, n, max, t}` por servidor público, a janela Servers do lobby e o Join por `TeleportOptions.ServerInstanceId`, validado pelo servidor.
 4. **Guardar a rua do VIP** (construções, portas): só com um save de mundo por VIP e um orçamento de DataStore próprio; hoje nenhum servidor guarda a rua (§6.1). Medir antes.
 5. **A semente fixa (`pz_town_seed`) nunca no place publicado** (feito): o `npm run check:place` (no CI) falha se o `default.project.json` a define — o place publicado é sempre um `rojo build` dele, então uma fixação feita só no Studio não sobe.
 6. **Studio:** cada playtest é um servidor novo, logo uma cidade nova; para repetir uma cidade, `pz_town_seed` no ServerStorage (a linha `MP host up: … town seed N` do log diz qual foi).
 7. **Playtest no Studio (o que o Node não vê):** a geração em fatias roda numa corrotina retomada pelo `RenderStepped`; conferir no MicroProfiler que nenhum quadro do lobby passa de ~20 ms enquanto a cidade é gerada, e que a transição de um fim de mundo com o lobby aberto não pisca.
+
+### 4.10 O nome da cidade, o Restart town e a lista Servers (MP-26, 2026-09-24)
+
+As três recomendações de §4.9 que o dono aprovou ("Pode fazer"). Cada uma fica no seu módulo; `main.client.ts` e `netClient.ts`, perto do limite de 200 locais, ganharam só uma chamada.
+
+**1. O nome da cidade, da semente.** `shared/data/townNames.ts` `townNameOf(seed)`: 37 prefixos (árvores, aves, pedras, ofícios) × 24 sufixos de lugar do inglês antigo; um passo MINSTD da semente (48271 × semente mod 2³¹ − 1, exato num double) escolhe a combinação, e uma combinação proibida é hasheada de novo. Uma combinação é proibida quando está na lista de bloqueio (cidades conhecidas e marcas, CON-02: Hollywood, Oakville, Ashford, Stonehaven…) ou dobra a letra da junção. Servidor e cliente chamam a **mesma** função compartilhada, e o fio não muda: o nome não é mandado, é derivado. A função não toca no `TownRng` do gerador. Onde aparece: o título da seção Town do lobby (nome próprio, `AutoLocalize` desligado; "Town", traduzível, até a semente chegar), o título do placar ("Millbrook · Survivors · 3 / 6"), a notícia do fim do mundo (`client/boot/serverTown.ts` `townEndText`: "Millbrook fell on day 4. Cedarford rises: day 1"), a lista Servers e o log do servidor. `npm run test:seed` §5 confere o nome sob relógio, sorteio e serviços envenenados, que servidor e cliente usam a mesma função, que o nome não mexe na cidade, e 20 000 sementes (todo nome das listas, nenhum bloqueado, espalhados). `test:nav` trata os nomes como nomes próprios.
+
+**2. Restart town (o dono do VIP recomeça a cidade)** (`server/match/townRestart.ts` e `townServices.ts`, `MpHost.restartTown`):
+
+- **Quem pode.** O dono do servidor privado (`game.PrivateServerOwnerId`, no servidor dele) e os admins (`shared/admin/config.ts`), em qualquer servidor. O servidor marca quem pode com o atributo `pz_town_keeper` no Player, e só essa pessoa vê o botão. Um cliente que force o atributo em si mesmo ganha um botão que o servidor recusa. Recusado: um amigo no VIP do dono, qualquer jogador de servidor público, o servidor reservado do Play solo (dono 0).
+- **O caminho.** Um RemoteFunction próprio: `ReplicatedStorage/PZTownNet/TownRequest` `{kind: "restart"}`, sem nenhum outro campo lido. Ele passa pela contabilidade de flood do host (§8.2), por um balde por jogador (6 de uma vez, 1/s) e pela regra de quem pode. Depois vêm o limite de 1 por 120 s por servidor (`RestartGate`) e o `restartTown` do host, que diz "busy" se uma cidade nova já está sendo feita.
+- **O que acontece.** O mesmo `endWorld` da MP-22, com `WipeReport{reason: "restart", by, dead: lives.downNow()}`:
+    - uma semente nova, sorteada por dentro;
+    - quem estava caído ganha vida nova;
+    - quem estava de pé continua a vida e é levado a um ponto seguro da cidade nova (`LifeKeeper.restartWorld` já cobria esse ramo);
+    - o `WorldReset` vai a todos com a causa **Restarted**. É um byte a mais no protocolo, a nota 21 de `shared/net/protocol.ts`, para o cliente não dizer "fell";
+    - o `onWorldWiped` de sempre grava o registro do mundo (`reason: "restart"`) e o `ProjectZ_PrivateTowns`, com a semente nova e o dia 1, na hora.
+- **Auditoria.** Todo pedido que passa do balde entra no log de admin por UserId: `town:restart`, alvo "own town". Os permitidos são gravados no DataStore; as recusas ficam em memória e no output.
+- **A UI.** O lobby pergunta antes ("Restart town?", o destrutivo à esquerda, o controle cai no Cancel, o B fecha sem pedir nada). O resultado chega como qualquer fim de mundo.
+- **Testes.** `npm run test:reset` §21 (pelo servidor real e pelo remote), `test:nav`, `test:lobby`.
+
+**3. A lista Servers** (`server/match/serverList.ts`, `client/ui/servers.ts`):
+
+- **Publicar.** Só um servidor **público e ao vivo** publica: nunca um privado, um reservado ou o Studio (`JobId` vazio).
+    - A entrada vai para um `MemoryStoreSortedMap` `ProjectZ_Servers`, com a chave = `JobId` e o valor `{v, kind, seed, day, n, max, t}`. Nenhum UserId, nenhum nome.
+    - A chave de ordem é 0 aberto ou 1 cheio, então uma leitura traz os abertos primeiro.
+    - O TTL é de 90 s: um servidor que morre sai sozinho.
+    - O servidor escreve quando algo muda, no máximo a cada 15 s, e a cada 30 s de qualquer jogo. Uma tentativa que falha também conta, para não martelar uma loja com problema.
+    - O servidor remove a entrada quando esvazia e no `BindToClose`.
+- **Ler.** A leitura é preguiçosa: só quando um jogador abre a lista.
+    - Ela faz `GetRangeAsync(Ascending, 50)` e serve o servidor inteiro por 30 s, inclusive uma leitura que falhou.
+    - Ficam de fora: o próprio servidor, entradas velhas (mais de 90 s), malformadas ou não públicas.
+    - Ordem: abertos primeiro, depois o dia mais perto do recorde do jogador, depois o mais cheio. São no máximo 20 linhas.
+- **Entrar.** A decisão é do servidor.
+    - Pré-condições: o jogador está no lobby (nunca dentro da cidade), com o save carregado, sem outro teleporte a caminho, e no máximo uma entrada a cada 5 s.
+    - O servidor lê de novo a entrada (`GetAsync`, nunca o cache nem a palavra do cliente) e recusa:
+        - `gone`: sumiu, está velha, não é pública ou está malformada;
+        - `full`: está cheia;
+        - `same`: é o próprio servidor;
+        - `invalid`: um `JobId` que não é GUID.
+    - Aceita, a entrada segue o SafeTeleport da documentação: `TeleportAsync(game.PlaceId, {player}, TeleportOptions{ServerInstanceId = jobId})` em `pcall`, até 3 tentativas a 1 s. A cada tentativa o servidor pergunta de novo se o jogador ainda está no lobby.
+    - Um `TeleportInitFailed` depois disso vira o `TownNotice{k: "joinFailed", why}`: `GameFull` dá `full`, `GameEnded` dá `gone`, `Flooded` dá `rate`. A janela o mostra, e o jogador fica onde está.
+    - Enquanto o teleporte está a caminho (no máximo 30 s), o host não põe o jogador na cidade (`MpHostOptions.mayEnter` ← `joining`): nunca um teleporte no meio de uma luta.
+    - A trava de sessão do save é a de sempre: o `PlayerRemoving` da origem grava e solta, e o destino espera até `LOCK_WAIT` (15 s).
+    - O evento `JoinedFromList` (docs/ANALYTICS.md §5) sai quando o teleporte é aceito.
+- **Ping e região: não.** O `Player:GetNetworkPing()` é o RTT do jogador para o servidor **em que ele está**, e nenhuma API do motor diz a região de um servidor (só as APIs de Open Cloud, fora do jogo). A janela mostra só o que o servidor publicou.
+- **Studio.** O `TeleportService` não funciona em playtest do Studio, e o MemoryStore do Studio é separado do jogo ao vivo. O servidor nem pede os dois serviços (`serverKindOf` → "studio"), e a janela diz "The server list works in the published game, not in Studio".
+
+**APIs usadas** (Context7 `/websites/create_roblox` e as tipagens `@rbxts/types`):
+
+- `MemoryStoreService:GetSortedMap(name)`: o nome é global na experiência (cloud-services/memory-stores/sorted-map).
+- `MemoryStoreSortedMap:SetAsync(key, value, expiration, sortKey?)`: expiração de no máximo 3 888 000 s (45 dias), na referência da classe.
+- `MemoryStoreSortedMap:GetAsync(key)`: devolve `(value, sortKey)`.
+- `MemoryStoreSortedMap:GetRangeAsync(direction, count, lower?, upper?)`: devolve `{key, value, sortKey}`, no máximo 200 itens.
+- `MemoryStoreSortedMap:RemoveAsync(key)`.
+- `Enum.SortDirection.Ascending`.
+- Limites de uma estrutura (memory-stores, "Observability"): 100 MB, 1 milhão de itens, valor ≤ 32 KB e **100 000 unidades de requisição por minuto**.
+- Cota da experiência (memory-stores, "Limits and quotas"): **1000 + 120 × usuários simultâneos** unidades por minuto. `GetRangeAsync` custa um por item devolvido (um se vazio); `SetAsync`, `GetAsync` e `RemoveAsync` custam um cada. A memória é de 64 KB + 1,2 KB × usuários, e ~150 B por servidor é nada.
+- Studio: os dados do MemoryStore ficam isolados do jogo ao vivo, e a cota por usuário é bem menor ("Test and debug in Studio").
+- `TeleportService:TeleportAsync(placeId, players, teleportOptions)`: só no servidor (projects/teleporting).
+- `TeleportOptions.ServerInstanceId`: leva a um servidor público específico (projects/teleport, "Teleport to specific servers").
+- `TeleportService.TeleportInitFailed(player, teleportResult, errorMessage, placeId, teleportOptions)`: um teleporte que falha ao começar deixa o jogador no servidor, e as opções servem para tentar de novo (projects/teleporting, "Handle failed teleports").
+- `DataModel.JobId`, `PrivateServerId` e `PrivateServerOwnerId`, pelas tipagens.
+- O motor não tem API da região de um servidor. O que existe é `GET /server-management/v1/…/game-servers` do Open Cloud, fora do jogo.
+
+**Cota, as contas** (`quotaPerMinute`, conferidas por `npm run test:serverlist` §6):
+
+| Por servidor, no pior caso            | Unidades/min                                 |
+| ------------------------------------- | -------------------------------------------- |
+| Escritas (a entrada muda sem parar)   | 60 / 15 = **4** (2 com o servidor parado)    |
+| Leituras (alguém sempre com a lista aberta) | 60 / 30 × 50 = **100**                 |
+| Entradas (`GetAsync`), por jogador    | 60 / 5 = **12**                              |
+| **Total com p jogadores**             | **104 + 12p ≤ 120p** para todo p ≥ 1         |
+
+- **Um servidor.** Um servidor nunca gasta mais que as 120 que cada jogador dele soma à cota. A base de 1000 fica livre, qualquer que seja o número de servidores.
+- **A estrutura inteira.** O teto de 100 000/min só apertaria com ~860 servidores de 1 jogador lendo e entrando no pior ritmo ao mesmo tempo.
+- **A simulação da suíte.** Uma hora de 40 servidores e 136 jogadores, todos com a lista aberta o tempo todo e tentando uma entrada por minuto. O pior minuto gastou **3 416** unidades, contra 1000 + 120 × 136 = **17 320**. Por servidor, o pior caso foi 83 unidades/min por jogador.
+- **No uso real.** A leitura só acontece com a janela aberta, então o gasto real é uma fração disso.
+
+**O que só um teste ao vivo mostra** (o Node usa um MemoryStore e um TeleportService falsos):
+
+1. Dois servidores públicos do place publicado se veem na lista.
+2. O Join leva ao servidor escolhido, e o save chega pela trava de sessão.
+3. `GameFull` numa corrida pela última vaga volta como aviso.
+4. O `BindToClose` tira a entrada.
+5. A latência do `GetRangeAsync` com a janela aberta.
+6. No VIP, com a conta do dono: Restart town aparece só para o dono e troca a cidade de todos, inclusive de quem está no lobby. A próxima sessão abre na cidade nova.
+7. No Studio: a janela diz que a lista é do jogo publicado, e um admin consegue o Restart town para testar.
 
 ---
 
@@ -648,7 +738,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 - O **dia da vida** (`save.day`) conta dias sobrevividos por aquele jogador desde o último New game. Cresce na virada 0h do mundo pelas regras da seção 3.6 e alimenta `bestDay`, marcos e moedas por dia.
 - **Servidor novo:** ~~`worldDay` = `save.day` do **primeiro jogador que entra no mundo**~~ _(implementado de outro jeito)_: todo servidor abre numa **cidade sorteada por ele** (MP-26) no **dia 1**, 07:00; o dia da vida de cada um é pessoal (MP-13, MP-20). A exceção é o **servidor privado com dono**, que volta à cidade e ao dia do mundo em que a sessão anterior dele fechou (§4.9).
 - **Fim do mundo (MP-22):** quando todos os sobreviventes do mundo morrem e ninguém paga Rebirth em 30 s, o mundo acaba naquele dia: `worldDay` volta a **1** numa **cidade nova** (outra semente), quem caiu com ele ganha uma vida nova (dia da vida 1) e o mundo que acabou fica registrado (semente e quantos dias durou) no documento `ended` do DataStore `ProjectZ_Worlds` — compartilhado por todos os servidores, os 50 últimos, fora da tabela de §6.1 por não ser de jogador nenhum. Detalhes em `docs/DESIGN_RULES.md` MP-22 e `server/sim/worldReset.ts`.
-- **Custo aceito:** um jogador de dia 1 que entra num servidor de dia 40 enfrenta dificuldade 2. Mitigações: o lobby mostra o dia do mundo antes de entrar, e o Play solo está sempre disponível. Futuro (fora do escopo): lista de servidores por faixa de dia via MemoryStore/MessagingService.
+- **Custo aceito:** um jogador de dia 1 que entra num servidor de dia 40 enfrenta dificuldade 2. Mitigações: o lobby mostra o dia do mundo antes de entrar, o Play solo está sempre disponível, e a lista **Servers** (MP-26, §4.10) mostra o dia de cada cidade pública, ordenada pelo mais perto do recorde do jogador.
 
 ### 6.3 Fim dos relatórios de progresso
 
@@ -755,7 +845,7 @@ A predição também cobre, só para a HUD: pente (−1 por tiro previsto), barr
 
 - O autor habilita no Creator Dashboard (Audience/Access), grátis ou pago. Um servidor VIP tem `PrivateServerOwnerId ≠ 0`.
 - **Regras iguais às públicas** (6 jogadores, S(k), sem PvP). Proposta de comunidade (P2): o dono do VIP pode **expulsar do próprio servidor** (não banir), com registro no log de admin.
-- **A cidade do VIP continua entre as sessões** (MP-26, §4.9): a mesma semente e o mesmo dia do mundo, lidos no boot antes de gerar a cidade (`server/save/privateTown.ts`); a MP-22 ainda a troca. Recomendação: o dono poder recomeçá-la pelo painel (§4.9, recomendação 1).
+- **A cidade do VIP continua entre as sessões** (MP-26, §4.9): a mesma semente e o mesmo dia do mundo, lidos no boot antes de gerar a cidade (`server/save/privateTown.ts`); a MP-22 ainda a troca, e o **dono a recomeça** pelo Restart town do lobby (§4.10).
 
 ### 7.6 Pausa
 

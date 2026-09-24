@@ -13,4 +13,4 @@
  */
 export { startPreload } from "./preloadPlan";
 export { warmLobby, warmRun } from "./warmup";
-export { knownTownSeed, startServerTown } from "./serverTown";
+export { knownTownSeed, startServerTown, townEndText } from "./serverTown";

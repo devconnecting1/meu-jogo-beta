@@ -147,6 +147,12 @@ export interface AdminServer {
 	 * (adminId 0), the player by UserId and the counters the server wrote (MP-16: a human reviews every automatic kick).
 	 */
 	floodKick(player: Player, reason: string): void;
+	/**
+	 * (MP-26) A "Restart town" request that reached the server's rules (server/match/townServices.ts): by UserId, the
+	 * decision and why. `persist` false (a refusal) stays in memory and the output: a client spamming the remote cannot
+	 * fill the stored log; an allowed restart is stored like every admin action.
+	 */
+	townAudit(userId: number, ok: boolean, details: string, persist: boolean): void;
 }
 
 interface Bucket {
@@ -898,6 +904,9 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		},
 		floodKick(player: Player, reason: string): void {
 			recordAs(0, "auto:flood", player.UserId, "", reason, true, true);
+		},
+		townAudit(userId: number, ok: boolean, details: string, persist: boolean): void {
+			recordAs(userId, "town:restart", 0, "own town", details, ok, persist);
 		},
 	};
 }

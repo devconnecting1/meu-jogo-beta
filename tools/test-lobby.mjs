@@ -613,6 +613,11 @@ function service(name) {
 	} else if (name === "RunService") {
 		s.IsStudio = () => false;
 		s.IsClient = () => true;
+	} else if (name === "Players") {
+		// the local player: its name on the stage, and the town keeper's mark the server sets (MP-26)
+		const player = makeInstance("Player", false);
+		Object.assign(player, { Name: "Tester", DisplayName: "Tester", UserId: 1 });
+		s.LocalPlayer = player;
 	}
 	services.set(name, s);
 	return s;
@@ -647,6 +652,7 @@ const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
 const { THEME, SURFACE, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+const TOWNS = require(join(SRC, "shared/data/townNames.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
 const { darkAlphaAt, secondsUntilHour } = require(join(SRC, "shared/sim/clock.ts"));
 const { countdown } = require(join(SRC, "client/onboarding/gameOver.ts"));
@@ -1138,6 +1144,50 @@ check(
 	`${townCell(0).FindFirstChild("Value").Text} ${townCell(0).FindFirstChild("Caption").Text} / ${townCell(1).FindFirstChild("Value").Text} ${townCell(1).FindFirstChild("Caption").Text}`,
 );
 
+// MP-26: the Town section is titled with the town's NAME, from the server's seed; Servers when hosted; Restart town
+// only for the keeper the server marked -- and none of it creates an Instance
+{
+	const townSection = deep(menuPage(), "Town");
+	const title = townSection.FindFirstChild("Title");
+	const servers = townSection.FindFirstChild("Servers");
+	const restart = townSection.FindFirstChild("RestartTown");
+	const player = service("Players").LocalPlayer;
+	// the town already on screen (a new seed would start generating one: section 8b covers that)
+	const seed = DESIGN.TOWN_SEED;
+	const named = measure(() => lobby.refresh(status({ hosted: true, seed })));
+	check(
+		"o painel da cidade leva o NOME dela (da semente do servidor), nunca capturado pela traducao automatica",
+		title?.Text === TOWNS.townNameOf(seed) && title?.AutoLocalize === false,
+		`${title?.Text} (AutoLocalize ${title?.AutoLocalize})`,
+	);
+	check("...sem criar Instance", zero(named), cost(named));
+	lobby.refresh(status({ hosted: true, seed: undefined }));
+	check(
+		'...e "Town" (texto do jogo, traduzivel) enquanto a semente nao chegou',
+		title?.Text === "Town" && title?.AutoLocalize === true,
+		`${title?.Text}`,
+	);
+	lobby.refresh(status({ hosted: true, seed }));
+	check(
+		"com servidor: Servers no titulo do painel, selecionavel; Restart town escondido de quem nao e o dono",
+		shownIn(servers, menuPage()) && servers.Selectable === true && !shownIn(restart, menuPage()),
+	);
+	const marked = measure(() => player.SetAttribute("pz_town_keeper", true));
+	check(
+		"o servidor marca o dono: Restart town aparece na hora, selecionavel, sem criar Instance",
+		shownIn(restart, menuPage()) && restart.Selectable === true && zero(marked),
+		cost(marked),
+	);
+	lobby.refresh(status({ hosted: false }));
+	check(
+		"offline: nem Servers nem Restart town (nao ha servidor)",
+		!shownIn(servers, menuPage()) && !shownIn(restart, menuPage()),
+	);
+	player.SetAttribute("pz_town_keeper", undefined);
+	lobby.refresh(status({ hosted: true }));
+	check("desmarcado: Restart town some de novo", !shownIn(restart, menuPage()));
+}
+
 // MP-21: the run is over -- the choice lives in the window, with every way out the server honours
 save.runOver = true;
 save.deathCount = 1;
@@ -1414,6 +1464,14 @@ function floatingText(page) {
 		.map(c => c.Name);
 }
 
+/** the seed whose town has the longest name (the Town section's title must fit it next to its two buttons) */
+const LONGEST_NAME_SEED = (() => {
+	let best = 1;
+	for (let seed = 1; seed <= 4000; seed++) {
+		if (TOWNS.townNameOf(seed).length > TOWNS.townNameOf(best).length) best = seed;
+	}
+	return best;
+})();
 const SCREENS = [
 	[1120, 630, 0, "1120 x 630 (o espaco de desenho)"],
 	[1360, 435, 0, "1360 x 435 (largo e baixo)"],
@@ -1421,22 +1479,25 @@ const SCREENS = [
 ];
 const LAYOUT_STATES = [
 	["menu", status({ hosted: true, fellOn: 12, run: "suspended", loading: true })],
+	// MP-26: the keeper's lobby -- the town's longest name, Servers and Restart town on the Town section's title line
+	["menu, dono do servidor", status({ hosted: true, fellOn: 12, seed: LONGEST_NAME_SEED }), true],
 	["survivor", status({ hosted: true, fellOn: 12, run: "suspended", loading: true })],
 	["survivor, fim de partida com a espera", status({ hosted: true, run: "over", clockDriven: true })],
 ];
 for (const [w, h, inset, label] of SCREENS) {
 	setScreen(w, h, inset);
-	for (const [page, st] of LAYOUT_STATES) {
+	for (const [page, st, keeper] of LAYOUT_STATES) {
+		service("Players").LocalPlayer.SetAttribute("pz_town_keeper", keeper === true ? true : undefined);
 		save.runOver = st.run === "over";
 		save.money = st.run === "over" ? 5 : 40;
 		lobby.refresh(st);
-		lobby.show(page === "menu" ? "menu" : "survivor");
-		const root = page === "menu" ? menuPage() : survivorPage();
+		lobby.show(page.startsWith("menu") ? "menu" : "survivor");
+		const root = page.startsWith("menu") ? menuPage() : survivorPage();
 		const lay = layoutProblems(root);
 		check(`${label}, ${page}: nada se sobrepoe nem sai do seu lugar`, lay.length === 0, lay.slice(0, 6).join("; "));
 		const tp = textProblems(root, w === 1120);
 		check(`${label}, ${page}: nenhum texto cortado`, tp.length === 0, tp.slice(0, 6).join("; "));
-		if (page === "menu") {
+		if (page.startsWith("menu")) {
 			const fl = floatingText(root);
 			check(
 				`${label}: nenhum texto do menu solto sobre a cidade fora da cor clara (as outras cores em plaquinha)`,
@@ -1452,10 +1513,16 @@ for (const [w, h, inset, label] of SCREENS) {
 	}
 }
 setScreen(1120, 630);
+service("Players").LocalPlayer.SetAttribute("pz_town_keeper", undefined);
 save.runOver = false;
 save.money = 40;
 lobby.show("menu");
 lobby.refresh(status());
+// the longest name's town was asked for by its layout state: its generation (a frame connection) runs out here
+{
+	const TownCache = require(join(SRC, "client/boot/townCache.ts"));
+	for (let i = 0; i < 600 && TownCache.pendingTown() !== undefined; i++) frame();
+}
 
 // ================================================================ 7. closing, and five whole lobbies
 

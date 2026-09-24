@@ -81,6 +81,7 @@ import {
 	REMOTE_WORLD,
 	SnapshotPart,
 	WorldEv,
+	WorldResetCause,
 	WorldEvent,
 	decodeFx,
 	decodeSnapshotPart,
@@ -193,6 +194,8 @@ export interface TownNotice {
 	 * that already carried it would have made that one too many, and every report "outdated" — review B2).
 	 */
 	runRev?: number;
+	/** WorldReset only: the town did not fall, its keeper restarted it (MP-26; protocol note 21) */
+	restarted?: boolean;
 }
 
 export interface NetStats {
@@ -460,7 +463,13 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		townSeed = e.seed;
 		serverMapHash = undefined;
 		const me = e.lives.find(life => life.userId === Players.LocalPlayer.UserId);
-		noticeTown({ seed: e.seed, endedDay: e.endedDay, newLife: me !== undefined, runRev: me?.runRev });
+		noticeTown({
+			seed: e.seed,
+			endedDay: e.endedDay,
+			newLife: me !== undefined,
+			runRev: me?.runRev,
+			restarted: e.cause === WorldResetCause.Restarted,
+		});
 		// AFTER the listeners: their rebuild runs `netReset`, which drops any guard of an earlier town
 		townResetTick = batchTick;
 		return;

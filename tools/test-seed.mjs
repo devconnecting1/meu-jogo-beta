@@ -32,6 +32,9 @@
  *                          (world.ts smallSin/smallCos now). The one solid decision left on math.sin -- a car at a gas
  *                          pump (EDI-16), through hash01 -- is measured: its nearest hash to the threshold, against
  *                          what a one-ulp libm difference can move it by.
+ *   5. THE NAME            the town's name (shared/data/townNames.ts) is the seed's alone: the same under poisoned
+ *                          clocks, random and services, the one shared function on the server and the client, never
+ *                          touching the town's own random stream; every name from the lists, none blocked (CON-02).
  *
  * Pure Node (>= 18) plus the project's TypeScript, on the shims of tools/ui-shim.mjs.
  */
@@ -568,6 +571,120 @@ section(
 		Number.isFinite(carShare) && Number.isFinite(fillShare) && islands > SEEDS.length && nearest > 1e-6,
 		`${islands} ilhas; a mais perto a ${nearest.toExponential(2)} do limiar, ${(nearest / oneUlpShift).toExponential(1)}` +
 			" vezes o que um ulp move o hash (limite aceito, MULTIPLAYER.md §4.9)",
+	);
+}
+
+// ================================================================ 5. the town's name
+
+section("5) o nome da cidade (MP-26): da semente, o mesmo no servidor e em todo cliente, sem mexer na cidade");
+{
+	const { readFileSync } = require("node:fs");
+	const TN = require(join(SRC, "shared/data/townNames.ts"));
+	const names = SEEDS.map(seed => TN.townNameOf(seed));
+	// the same name every time, whatever the engine's clocks, random numbers and services say: they are never read
+	const poison = what => () => {
+		throw new Error(`o nome leu ${what}`);
+	};
+	let poisoned;
+	try {
+		poisoned = withGlobals(
+			[
+				[globalThis.math, "random", poison("math.random")],
+				[globalThis.os, "clock", poison("os.clock")],
+				[globalThis.os, "time", poison("os.time")],
+				[globalThis, "tick", poison("tick()")],
+				[globalThis, "Random", poison("Random")],
+				[globalThis, "game", { GetService: poison("game:GetService") }],
+			],
+			() => SEEDS.map(seed => TN.townNameOf(seed)),
+		);
+	} catch (e) {
+		poisoned = [String(e?.message ?? e)];
+	}
+	check(
+		`${SEEDS.length} sementes: o nome e so da semente (relogio, sorteio e servicos envenenados: nada lido)`,
+		JSON.stringify(poisoned) === JSON.stringify(names),
+		names.slice(0, 6).join(", "),
+	);
+	// the server and every client call the ONE function, from the shared module: nothing to drift apart
+	const users = [
+		"server/net/mpHost.ts",
+		"server/match/townServices.ts",
+		"client/ui/lobby.ts",
+		"client/ui/scoreboard.ts",
+		"client/ui/servers.ts",
+		"client/boot/serverTown.ts",
+	];
+	const bad = users.filter(f => {
+		const src = readFileSync(join(SRC, f), "utf8");
+		return !/import \{[^}]*\btownNameOf\b[^}]*\} from "shared\/data\/townNames"/.test(src);
+	});
+	check(
+		"servidor (log, auditoria) e cliente (lobby, placar, Servers, fim do mundo) tiram o nome da mesma funcao compartilhada",
+		bad.length === 0,
+		bad.join(", ") || `${users.length} arquivos`,
+	);
+	// naming never touches the town: the same town whether it was named before it was generated or not
+	const seed = SEEDS[3];
+	const plain = canon(W.generateTown(seed));
+	TN.townNameOf(seed);
+	const afterName = canon(W.generateTown(seed));
+	check("dar nome nao muda a cidade (nao usa o sorteio do gerador)", plain === afterName);
+	// every name is a prefix and a suffix of the lists, never a blocked one, never a letter doubled at the join
+	const many = [];
+	for (let i = 0; i < 20000; i++) many.push(TN.townNameOf(pickTownSeed(i)));
+	const combos = new Set();
+	for (const p of TN.TOWN_PREFIXES) for (const x of TN.TOWN_SUFFIXES) combos.add(p + x);
+	const blocked = new Set(TN.TOWN_NAME_BLOCKLIST);
+	const offList = many.filter(n => !combos.has(n));
+	const onBlock = many.filter(n => blocked.has(n));
+	const doubled = many.filter(n => {
+		const p = TN.TOWN_PREFIXES.find(
+			x => n.startsWith(x) && combos.has(n) && TN.TOWN_SUFFIXES.includes(n.slice(x.length)),
+		);
+		return p !== undefined && p.slice(-1) === n.slice(p.length, p.length + 1);
+	});
+	check(
+		"20 000 sementes: todo nome e prefixo + sufixo das listas, nenhum da lista de bloqueio (cidades conhecidas, marcas: CON-02), nenhuma letra dobrada na juncao",
+		offList.length === 0 && onBlock.length === 0 && doubled.length === 0,
+		`${offList.length} fora, ${onBlock.length} bloqueados, ${doubled.length} dobrados`,
+	);
+	const counts = new Map();
+	for (const n of many) counts.set(n, (counts.get(n) ?? 0) + 1);
+	// (a Map's / Set's size is a method under the Luau shims)
+	const distinct = [...counts.keys()].length;
+	const possible = [...combos].length;
+	const most = Math.max(...counts.values());
+	check(
+		"...e espalhados: a maioria dos nomes possiveis aparece, nenhum domina",
+		distinct > possible * 0.8 && most < (many.length / distinct) * 3,
+		`${distinct} nomes distintos de ${possible} possiveis; o mais comum ${most} vezes`,
+	);
+	// no real brand as the word a name starts with, nor as a whole name (CON-02); "-ford" as a place suffix is English
+	const BRANDS = [
+		"coca",
+		"pepsi",
+		"shell",
+		"exxon",
+		"texaco",
+		"walmart",
+		"target",
+		"disney",
+		"nike",
+		"ford",
+		"apple",
+	];
+	check(
+		"nenhum prefixo nem nome inteiro e uma marca (CON-02)",
+		TN.TOWN_PREFIXES.every(p => !BRANDS.includes(p.toLowerCase())) &&
+			[...counts.keys()].every(n => !BRANDS.includes(n.toLowerCase())),
+	);
+	// what is not a seed still gets a name (a label never shows nothing), and it is seed 1's
+	const odd = [0, -5, 1.5, Number.NaN, Infinity, CFG.TOWN_SEED_MAX + 10];
+	check(
+		"o que nao e semente ganha o nome da semente 1 (um rotulo nunca fica vazio)",
+		odd.every(v => TN.townNameOf(v) === TN.townNameOf(1)),
+		TN.townNameOf(1),
 	);
 }
 

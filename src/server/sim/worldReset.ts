@@ -5,7 +5,10 @@
  *
  * WHEN is not decided here: server/sim/life.ts rule 6 fires `onWorldWiped` once, after the last living survivor fell
  * and nobody paid a Rebirth in WIPE_DECISION_S (or everybody declined sooner). server/net/mpHost.ts answers that
- * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts).
+ * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts). The one other caller is
+ * the keeper's restart (MP-26: a private server's owner, or an admin; server/match/townRestart.ts), which hands the
+ * host a report of reason "restart" -- the same end of the world, run through the same steps, with the survivors
+ * still standing moved into the new town with their lives (`LifeKeeper.restartWorld`).
  *
  * WHAT happens, in this order — the order is the contract:
  *
@@ -37,7 +40,7 @@ import { rndInt } from "shared/engine/rng";
 import { PlayerSaveData } from "shared/game/save";
 import { WorldData, generateTown } from "shared/game/world";
 import { TOWN_SEED_MAX } from "shared/net/mpConfig";
-import { WorldResetLife } from "shared/net/protocol";
+import { WorldResetCause, WorldResetLife } from "shared/net/protocol";
 import { mapHashOf, Replicator } from "../net/replication";
 import { LifeKeeper, WipeReport } from "./life";
 import { ServerSimulation } from "./simulation";
@@ -58,7 +61,10 @@ export interface EndedWorld {
 	/** os.time() when it began (the server's boot, or the previous world's end) and when it ended */
 	startedAt: number;
 	endedAt: number;
-	/** WipeReport.reason: "timeout" (nobody paid in the window) or "declined" (every dead survivor chose not to) */
+	/**
+	 * WipeReport.reason: "timeout" (nobody paid in the window), "declined" (every dead survivor chose not to) or
+	 * "restart" (its keeper asked for a new town, MP-26 -- server/match/townRestart.ts)
+	 */
 	reason: string;
 	/** survivors who fell with it (the ones the window waited on) */
 	fallen: number;
@@ -214,7 +220,9 @@ export function endWorld(
 	contain("lives list", () => {
 		for (const userId of fallen) lives.push({ userId, runRev: options.saveOf(userId)?.runRev ?? 0 });
 	});
-	contain("openTown", () => parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, lives }));
+	// the clients word the news by why it ended: a town its keeper restarted did not fall (protocol note 21)
+	const cause = report.reason === "restart" ? WorldResetCause.Restarted : WorldResetCause.Fell;
+	contain("openTown", () => parts.replicator?.openTown({ seed, mapHash, endedDay: ended.days, cause, lives }));
 	return { ended, world, seed, mapHash, startedAt: options.now, lives, generateMs, failures };
 }
 
@@ -241,7 +249,7 @@ export function readEndedWorld(v: unknown): EndedWorld | undefined {
 		days: r.days,
 		startedAt: r.startedAt,
 		endedAt: r.endedAt,
-		reason: r.reason === "declined" ? "declined" : "timeout",
+		reason: r.reason === "declined" || r.reason === "restart" ? r.reason : "timeout",
 		fallen: wholeIn(r.fallen, 0, 1000) ? r.fallen : 0,
 		job: typeIs(r.job, "string") && r.job.size() <= JOB_MAX ? r.job : "",
 	};
